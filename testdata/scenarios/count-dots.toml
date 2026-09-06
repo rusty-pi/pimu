@@ -1,0 +1,20 @@
+# M1 control-flow test: exercises a cmp / b<ne> loop on the VPU core.
+
+name = "count-dots"
+description = "VPU payload prints '.' five times using a compare-and-branch loop."
+
+[payload]
+kind = "builtin"
+source = "count-dots"
+load_addr = 0x00010000
+
+[machine]
+ram_mb = 16
+console = "mini-uart"
+
+[run]
+max_steps = 10_000
+unimpl = "fault"
+
+[golden]
+path = "../golden/count-dots.txt"

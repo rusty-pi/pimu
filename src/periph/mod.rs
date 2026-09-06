@@ -1,0 +1,15 @@
+//! Memory-mapped peripheral models.
+//!
+//! Everything here implements [`MmioDevice`](crate::bus::MmioDevice). Devices are
+//! self-contained: they never reference each other or the bus. Anything one
+//! device needs from another is routed by [`Machine`](crate::machine::Machine).
+
+pub mod aux;
+pub mod stub;
+pub mod systimer;
+pub mod uart_pl011;
+
+pub use aux::Aux;
+pub use stub::StubRegion;
+pub use systimer::SysTimer;
+pub use uart_pl011::Pl011;

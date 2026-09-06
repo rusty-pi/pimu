@@ -1,0 +1,75 @@
+//! BCM2711 (Raspberry Pi 4 / 400 / CM4) memory map, from the VPU's point of view.
+//!
+//! The VPU addresses peripherals through the "legacy" alias at `0x7E00_0000`,
+//! which the ARM cores see at `0xFE00_0000` in low-peripheral mode. All the
+//! constants here are VPU-side (`0x7Exx_xxxx`).
+//!
+//! Sources: BCM2711 ARM Peripherals datasheet; Raspberry Pi firmware
+//! `hardware/` headers; `librerpi/rpi-open-firmware`.
+
+/// Base of the peripheral window as seen by the VPU.
+pub const PERIPH_BASE: u32 = 0x7E00_0000;
+pub const PERIPH_SIZE: u32 = 0x0200_0000; // 32 MiB window (0x7E00_0000..0x8000_0000)
+
+/// System timer (1 MHz free-running).
+pub const SYSTIMER_BASE: u32 = 0x7E00_3000;
+pub const SYSTIMER_SIZE: u32 = 0x1000;
+
+/// ARM control block: mailboxes, doorbells, IRQ routing (`0x7E00_B000`).
+pub const ARMCTRL_BASE: u32 = 0x7E00_B000;
+pub const ARMCTRL_SIZE: u32 = 0x1000;
+
+/// VideoCore mailbox peripheral (property interface), `0x7E00_B880`.
+pub const MBOX_BASE: u32 = 0x7E00_B880;
+pub const MBOX_SIZE: u32 = 0x40;
+
+/// Clock manager (`0x7E10_1000`).
+pub const CM_BASE: u32 = 0x7E10_1000;
+pub const CM_SIZE: u32 = 0x2000;
+
+/// GPIO (`0x7E20_0000`).
+pub const GPIO_BASE: u32 = 0x7E20_0000;
+pub const GPIO_SIZE: u32 = 0x1000;
+
+/// PL011 UART0 (`0x7E20_1000`). Primary firmware debug console when
+/// `BOOT_UART=1` and the console is routed to the PL011.
+pub const UART0_BASE: u32 = 0x7E20_1000;
+pub const UART0_SIZE: u32 = 0x1000;
+
+/// AUX peripheral: mini-UART + two SPI masters (`0x7E21_5000`). The mini-UART at
+/// offset `0x40` is the other common early console.
+pub const AUX_BASE: u32 = 0x7E21_5000;
+pub const AUX_SIZE: u32 = 0x100;
+
+/// EMMC2 (SD card controller used for boot on Pi 4), `0x7E34_0000`.
+pub const EMMC2_BASE: u32 = 0x7E34_0000;
+pub const EMMC2_SIZE: u32 = 0x1000;
+
+/// Main SDRAM as seen by the VPU (cached alias at 0, uncached at 0xC000_0000).
+pub const SDRAM_CACHED_BASE: u32 = 0x0000_0000;
+pub const SDRAM_UNCACHED_BASE: u32 = 0xC000_0000;
+
+/// Where the boot ROM parks the second-stage bootloader extracted from
+/// `pieeprom.bin` before jumping to it. This is an approximation for the model;
+/// the real BCM2711 boot ROM runs the recovery/bootloader from L2-as-SRAM.
+///
+/// TODO(pieeprom milestone): confirm the real load/entry address.
+pub const BOOTLOADER_LOAD_ADDR: u32 = 0x6000_0000;
+
+/// Region kinds the [`Machine`](crate::machine::Machine) address decoder knows about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Region {
+    Sdram,
+    SysTimer,
+    ArmCtrl,
+    Mailbox,
+    ClockManager,
+    Gpio,
+    Uart0,
+    Aux,
+    Emmc2,
+    /// Somewhere inside the peripheral window but not a device we model yet.
+    UnmappedPeripheral,
+    /// Outside anything we know.
+    Unmapped,
+}
