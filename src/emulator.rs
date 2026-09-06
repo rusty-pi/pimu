@@ -80,6 +80,8 @@ pub struct RunReport {
     pub core1_pc: Option<u32>,
     pub core1_retired: Option<u64>,
     pub core1_end: Option<RunEnd>,
+    /// `start4.elf` boot-progress tags (`0xCEC0_2000`), in order.
+    pub phase_tags: Vec<u32>,
 }
 
 impl Emulator {
@@ -261,6 +263,7 @@ impl Emulator {
             core1_pc: self.cpu1.as_ref().map(|c| c.pc()),
             core1_retired: self.cpu1.as_ref().map(|c| c.retired),
             core1_end,
+            phase_tags: self.machine.phase_tags.clone(),
         }
     }
 }

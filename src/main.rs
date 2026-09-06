@@ -194,6 +194,21 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         println!("{}", String::from_utf8_lossy(&report.console));
     }
 
+    if !report.phase_tags.is_empty() {
+        let tags: Vec<String> = report
+            .phase_tags
+            .iter()
+            .map(|&v| {
+                v.to_le_bytes()
+                    .iter()
+                    .map(|&c| if (0x20..0x7f).contains(&c) { c as char } else { '.' })
+                    .collect()
+            })
+            .collect();
+        println!("\n--- start4 boot-progress tags (0xcec02000) ---");
+        println!("  {}", tags.join(" -> "));
+    }
+
     if trace {
         println!(
             "\n--- instruction trace ({} lines) ---",
