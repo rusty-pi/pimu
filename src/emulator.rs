@@ -12,9 +12,12 @@ pub struct Emulator {
     /// a start vector to the core-control block; then the run loop interleaves
     /// it with core 0 over the shared bus.
     pub cpu1: Option<Vpu>,
-    /// Override for core 1's reset PC. `None` → core 1 starts at the address the
-    /// firmware wrote to the core-control block (`0x7E00_2030`).
+    /// Reset PC for VPU core 1 when the firmware releases it via the core-control
+    /// block. Defaults to core 0's entry (the shared trampoline); set explicitly
+    /// while the exact reset behaviour is still being pinned down.
     pub core1_entry: Option<u32>,
+    /// Core 0's entry — used as core 1's default reset PC.
+    entry: u32,
     pub machine: Machine,
 }
 
@@ -90,22 +93,18 @@ impl Emulator {
             cpu: Vpu::new(entry),
             cpu1: None,
             core1_entry: None,
+            entry,
             machine,
         }
     }
 
-    /// Release VPU core 1 at `vec`, inheriting core 0's unimpl policy. Its
-    /// exception-vector base is the start vector itself (that is what the
-    /// trampoline hands the hardware).
-    fn spawn_core1(&mut self, vec: u32) {
-        // The firmware writes core 1's *vector base* to the core-control block;
-        // the core itself resets to the shared ELF entry (the same trampoline
-        // core 0 ran) and branches on `version` bit 16 from there.
-        let entry = self.core1_entry.unwrap_or(vec);
+    /// Release VPU core 1 at `entry` (the shared trampoline), inheriting core 0's
+    /// unimpl policy. Core 1 sets its own exception-vector base from the
+    /// trampoline, so leave `exc_vbase` at 0 here.
+    fn spawn_core1(&mut self, entry: u32) {
         let mut c1 = Vpu::new(entry);
         c1.core_id = 1;
         c1.on_unimpl = self.cpu.on_unimpl;
-        c1.exc_vbase = vec;
         c1.trace = self.cpu.trace;
         c1.trace_cf_only = self.cpu.trace_cf_only;
         c1.trace_cap = self.cpu.trace_cap;
@@ -171,14 +170,10 @@ impl Emulator {
             let step = self.cpu.step(&mut self.machine);
             self.machine.tick(1);
 
-            // The trampoline (running on core 0) may have just set core 1's
-            // vector base. Only actually bring core 1 up once we know where it
-            // should reset to (`core1_entry` — its semantics are still being
-            // reverse-engineered, so it is opt-in).
-            if self.cpu1.is_none() && self.core1_entry.is_some() {
-                if let Some(vec) = self.machine.corectl.take_core1_start() {
-                    self.spawn_core1(vec);
-                }
+            // Core 0 arms core 1's run-state once the shared globals are ready.
+            if self.cpu1.is_none() && self.machine.corectl.take_core1_release() {
+                let entry = self.core1_entry.unwrap_or(self.entry);
+                self.spawn_core1(entry);
             }
             // Interleave one core-1 step per core-0 step over the shared bus.
             if let Some(c1) = self.cpu1.as_mut() {

@@ -1,30 +1,32 @@
 //! VPU core-control block at `0x7E00_2000`.
 //!
-//! `start4.elf`'s entry trampoline runs on VPU core 0 and brings up core 1 by
-//! writing core 1's start vector to offset `0x30` (core 0 writes `0x30`, a core-1
-//! copy would write `0x38`). A separate 2-bit-per-lane run-state field lives in
-//! the four words at `0x10..0x20`; the firmware pokes `0b11` there to release a
-//! core. We don't model the exact bitfield semantics — we treat *any* nonzero
-//! start-vector write as "release core 1 at this address" and let the emulator's
-//! run loop pick it up.
+//! `start4.elf`'s entry trampoline runs on both VPU cores; they diverge on
+//! `version` bit 16. Core 0 writes its vector base to offset `0x30` (core 1's
+//! copy would use `0x38`) early on, then continues the main boot. Much later
+//! (~250k instructions in, after the shared globals are set up) it pokes a
+//! per-lane run-state field in the words at `0x10..0x20` to actually **release**
+//! core 1.
 //!
-//! Everything is sticky read/write storage so the firmware's read-modify-write
-//! sequences behave; the only special case is latching the start vector.
+//! We model that: a nonzero write to `0x10`/`0x14` latches "release core 1", and
+//! the run loop then starts it at `entry` (the shared ELF entry — it re-runs the
+//! trampoline, takes the bit-16 path, and resumes at its own target). Storage is
+//! otherwise sticky so the firmware's read-modify-write sequences behave.
 
 use std::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
-/// Offset (within the `0x7E00_2000` block) of core 1's start-vector register.
-const CORE1_START_VECTOR: u32 = 0x30;
+/// Run-state field words. A nonzero write here releases core 1.
+const RUNSTATE_LO: u32 = 0x10;
+const RUNSTATE_HI: u32 = 0x14;
 
 #[derive(Default)]
 pub struct CoreCtl {
     storage: BTreeMap<u32, u32>,
-    /// Set when the firmware writes a nonzero start vector for core 1 and not
-    /// yet consumed by the run loop.
-    pending_core1_start: Option<u32>,
-    /// Latches so a rewrite of the same vector doesn't re-spawn the core.
+    /// Set once the firmware arms core 1's run-state; cleared by the run loop
+    /// when it actually brings the core up.
+    pending_core1_release: bool,
+    /// Latches so repeated pokes don't re-spawn the core.
     core1_started: bool,
 }
 
@@ -33,9 +35,9 @@ impl CoreCtl {
         CoreCtl::default()
     }
 
-    /// Consume a pending "release core 1 at <addr>" request, if any.
-    pub fn take_core1_start(&mut self) -> Option<u32> {
-        self.pending_core1_start.take()
+    /// True once (and only once) after the firmware arms core 1's run-state.
+    pub fn take_core1_release(&mut self) -> bool {
+        std::mem::take(&mut self.pending_core1_release)
     }
 }
 
@@ -50,9 +52,9 @@ impl MmioDevice for CoreCtl {
 
     fn write(&mut self, offset: u32, _width: Width, value: u32) -> BusResult<()> {
         self.storage.insert(offset, value);
-        if offset == CORE1_START_VECTOR && value != 0 && !self.core1_started {
+        if matches!(offset, RUNSTATE_LO | RUNSTATE_HI) && value != 0 && !self.core1_started {
             self.core1_started = true;
-            self.pending_core1_start = Some(value);
+            self.pending_core1_release = true;
         }
         Ok(())
     }
