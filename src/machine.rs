@@ -31,7 +31,16 @@ pub struct Machine {
     /// Total store operations (any address). A liveness signal for the run loop:
     /// a loop that keeps writing memory is making progress, not spinning.
     pub ram_writes: u64,
+
+    /// `start4.elf` logs boot progress by writing 4-char ASCII tags (`_msh`,
+    /// `_osh`, `bfsp`, ...) to a register at `0xCEC0_2000`. We capture the
+    /// sequence — it is the closest thing to an early-boot log before any UART
+    /// is up.
+    pub phase_tags: Vec<u32>,
 }
+
+/// Folded address of the `start4.elf` boot-progress register (`0xCEC0_2000`).
+const PHASE_TAG_ADDR: u32 = 0xCEC0_2000 & 0x3FFF_FFFF;
 
 impl Machine {
     pub fn new(ram_bytes: usize) -> Machine {
@@ -46,6 +55,7 @@ impl Machine {
             stub_hits: 0,
             bus_errors: 0,
             ram_writes: 0,
+            phase_tags: Vec::new(),
         }
     }
 
@@ -141,6 +151,11 @@ impl Bus for Machine {
         if !Machine::in_periph_window(addr) {
             let phys = Machine::fold_ram_addr(addr);
             if self.ram.contains(phys) {
+                if phys == PHASE_TAG_ADDR && width == Width::Word {
+                    if self.phase_tags.last() != Some(&value) {
+                        self.phase_tags.push(value);
+                    }
+                }
                 return self.ram.store(phys, width, value);
             }
         }
