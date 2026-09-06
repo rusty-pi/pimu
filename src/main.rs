@@ -73,6 +73,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     let mut trace = false;
     let mut trace_full = false;
     let mut exc_vbase: u32 = 0;
+    let mut trace_from: u32 = 0;
     let mut patches: Vec<(u32, u32)> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -88,6 +89,10 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
             }
             "--exc-vbase" => {
                 exc_vbase = parse_u32(it.next().context("--exc-vbase needs a value")?)?
+            }
+            "--trace-from" => {
+                trace = true;
+                trace_from = parse_u32(it.next().context("--trace-from needs a value")?)?
             }
             "--patch" => {
                 let spec = it.next().context("--patch needs <hexaddr>=<hexval>")?;
@@ -120,8 +125,13 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     emu.set_unimpl_policy(UnimplPolicy::Skip);
     emu.cpu.trace = trace;
     emu.cpu.exc_vbase = exc_vbase;
-    emu.cpu.trace_cf_only = trace && !trace_full;
-    emu.cpu.trace_cap = if trace_full { 40_000 } else { 4_000_000 };
+    emu.cpu.trace_cf_only = trace && !trace_full && trace_from == 0;
+    emu.cpu.trace_cap = if trace_full || trace_from != 0 {
+        200_000
+    } else {
+        4_000_000
+    };
+    emu.cpu.trace_from = trace_from;
     let report = emu.run(&RunLimits {
         max_steps,
         max_wall: Some(std::time::Duration::from_secs(120)),
