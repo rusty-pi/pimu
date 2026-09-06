@@ -31,7 +31,9 @@ Working:
 Not done: the fuller VPU ISA (48-bit branches, `ldm`/`stm`, float, vector),
 SDRAM/DDR training, SPI/OTP/mailbox, the boot-ROM step, ARM hand-off. Peripheral
 scope is deliberately narrow — USB3 (boot disk), Ethernet, serial; no SD/EMMC,
-display, or 3D. See [`docs/boot-chain.md`](docs/boot-chain.md) for the M2/M3 plan.
+display, or 3D. See [`docs/boot-chain.md`](docs/boot-chain.md) for the M2/M3
+plan and [`docs/vision.md`](docs/vision.md) for the longer-term direction
+(single `boot` command, disk-image mode, QEMU hand-off).
 
 ## Quick start
 
