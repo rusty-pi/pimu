@@ -74,6 +74,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     let mut trace_full = false;
     let mut exc_vbase: u32 = 0;
     let mut trace_from: u32 = 0;
+    let mut core1_entry: Option<u32> = None;
     let mut patches: Vec<(u32, u32)> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -89,6 +90,10 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
             }
             "--exc-vbase" => {
                 exc_vbase = parse_u32(it.next().context("--exc-vbase needs a value")?)?
+            }
+            "--core1-entry" => {
+                core1_entry =
+                    Some(parse_u32(it.next().context("--core1-entry needs a value")?)?)
             }
             "--trace-from" => {
                 trace = true;
@@ -132,6 +137,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         4_000_000
     };
     emu.cpu.trace_from = trace_from;
+    emu.core1_entry = core1_entry;
     let report = emu.run(&RunLimits {
         max_steps,
         max_wall: Some(std::time::Duration::from_secs(120)),
@@ -161,6 +167,14 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         report.stub_hits, report.bus_errors
     );
     println!("wall       {:?}", report.wall);
+    if let Some(pc1) = report.core1_pc {
+        println!(
+            "core1      pc {:#010x}  retired {}  end {:?}",
+            pc1,
+            report.core1_retired.unwrap_or(0),
+            report.core1_end
+        );
+    }
     print!("regs      ");
     for (i, r) in report.regs.iter().enumerate() {
         if i % 8 == 0 {
@@ -194,6 +208,34 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
                 String::new()
             };
             println!("  {from:#010x}  ->  {to:#010x}{tag}");
+        }
+    }
+
+    {
+        let log = &emu.machine.periph_stub.log;
+        if !log.is_empty() {
+            use std::collections::BTreeMap;
+            let mut per: BTreeMap<u32, (u32, u32, u32)> = BTreeMap::new(); // off -> (reads, writes, last_val)
+            for a in log {
+                let e = per.entry(a.offset).or_insert((0, 0, 0));
+                if a.write {
+                    e.1 += 1;
+                } else {
+                    e.0 += 1;
+                }
+                e.2 = a.value;
+            }
+            println!(
+                "\n--- peripheral-window stub: {} distinct offsets ({} accesses logged) ---",
+                per.len(),
+                log.len()
+            );
+            for (off, (r, w, v)) in &per {
+                println!(
+                    "  0x7e00_{:04x}  r={:<5} w={:<5} last={:#010x}",
+                    off, r, w, v
+                );
+            }
         }
     }
 

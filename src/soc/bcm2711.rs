@@ -15,6 +15,11 @@ pub const PERIPH_SIZE: u32 = 0x0200_0000; // 32 MiB window (0x7E00_0000..0x8000_
 pub const SYSTIMER_BASE: u32 = 0x7E00_3000;
 pub const SYSTIMER_SIZE: u32 = 0x1000;
 
+/// VPU core-control block (`0x7E00_2000`): per-core start vectors and run-state.
+/// `start4.elf` releases VPU core 1 through here.
+pub const CORECTL_BASE: u32 = 0x7E00_2000;
+pub const CORECTL_SIZE: u32 = 0x100;
+
 /// ARM control block: mailboxes, doorbells, IRQ routing (`0x7E00_B000`).
 pub const ARMCTRL_BASE: u32 = 0x7E00_B000;
 pub const ARMCTRL_SIZE: u32 = 0x1000;

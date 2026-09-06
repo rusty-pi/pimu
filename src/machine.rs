@@ -2,7 +2,7 @@
 
 use crate::bus::{Bus, BusError, BusResult, MmioDevice, Width};
 use crate::mem::Ram;
-use crate::periph::{Aux, Pl011, StubRegion, SysTimer};
+use crate::periph::{Aux, CoreCtl, Pl011, StubRegion, SysTimer};
 use crate::soc::bcm2711 as map;
 
 /// Which UART the harness captures as "the console".
@@ -18,6 +18,8 @@ pub struct Machine {
     pub systimer: SysTimer,
     pub uart0: Pl011,
     pub aux: Aux,
+    /// VPU core-control block (`0x7E00_2000`) — brings up VPU core 1.
+    pub corectl: CoreCtl,
     /// Catch-all for the rest of the peripheral window.
     pub periph_stub: StubRegion,
     pub console: Console,
@@ -38,6 +40,7 @@ impl Machine {
             systimer: SysTimer::new(),
             uart0: Pl011::new(),
             aux: Aux::new(),
+            corectl: CoreCtl::new(),
             periph_stub: StubRegion::new("periph-window"),
             console: Console::default(),
             stub_hits: 0,
@@ -101,6 +104,9 @@ impl Machine {
         }
         if let Some(off) = hit(map::AUX_BASE, map::AUX_SIZE) {
             return Some((&mut self.aux, off));
+        }
+        if let Some(off) = hit(map::CORECTL_BASE, map::CORECTL_SIZE) {
+            return Some((&mut self.corectl, off));
         }
 
         if (map::PERIPH_BASE..map::PERIPH_BASE + map::PERIPH_SIZE).contains(&a) {
