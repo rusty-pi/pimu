@@ -43,6 +43,18 @@ binary plus a text config block (`BOOT_UART`, `BOOT_ORDER`, `BOOT_WATCHDOG_*`,
 `"BOOTMODE: 0x%02x partition %d build-ts %s serial %08x boardrev %x stc %u"` —
 that line is the natural first regression target for M2.
 
+## Peripheral scope
+
+Only what boot needs:
+
+1. **USB3** — VL805 XHCI (PCIe-attached) for the boot disk
+2. **Ethernet** — BCM GENET v5 (`0x7d58_0000`) for netboot
+3. **Serial** — PL011 + mini-UART (done in M1)
+
+Explicitly out: SD/EMMC, HDMI/display, camera, the 3D/QPU vector-graphics unit.
+(The VPU *scalar* vector ALU ops may still need modelling if firmware uses them
+for `memcpy`-style work — that is an ISA question, not a peripheral.)
+
 ## Milestones
 
 - **M1 (done):** VPU scalar interpreter (subset) + UART/timer + regression
@@ -51,5 +63,5 @@ that line is the natural first regression target for M2.
   boot-ROM approximation, fuller VPU ISA, SPI/OTP + mailbox stubs, SDRAM-training
   fast-path.
 - **M3:** `start4.elf` to ARM hand-off. Needs: SDRAM alias mapping, `fixup4.dat`
-  apply, EMMC/SD, clock manager, mailbox property interface, VC4 vector ops as
-  they turn up.
+  apply, clock manager, mailbox property interface, and the scoped peripherals
+  (USB3 boot disk / GENET netboot), plus VC4 vector ops as they turn up.

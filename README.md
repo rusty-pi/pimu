@@ -29,8 +29,9 @@ Working:
 - Runs on the real `start4.elf` (loads, decodes) — just doesn't get far yet.
 
 Not done: the fuller VPU ISA (48-bit branches, `ldm`/`stm`, float, vector),
-SDRAM/DDR training, SPI/EMMC/mailbox, the boot-ROM step, ARM hand-off. See
-[`docs/boot-chain.md`](docs/boot-chain.md) for the M2/M3 plan.
+SDRAM/DDR training, SPI/OTP/mailbox, the boot-ROM step, ARM hand-off. Peripheral
+scope is deliberately narrow — USB3 (boot disk), Ethernet, serial; no SD/EMMC,
+display, or 3D. See [`docs/boot-chain.md`](docs/boot-chain.md) for the M2/M3 plan.
 
 ## Quick start
 
