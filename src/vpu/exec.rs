@@ -216,7 +216,18 @@ impl Vpu {
                         self.in_exception = self.in_exception.wrapping_add(1);
                         self.regs.pc = h;
                     }
-                    None => return self.stop(Stop::Halt(HaltReason::Swi(vector))),
+                    None => {
+                        // No handler installed. In recon (skip) mode, treat the
+                        // trap as a no-op so exploration continues past syscall
+                        // stubs (start4's atomic/priv helpers) — it is counted
+                        // like a skipped instruction. Otherwise halt.
+                        if matches!(self.on_unimpl, UnimplPolicy::Skip) {
+                            self.skipped += 1;
+                            self.regs.pc = next;
+                        } else {
+                            return self.stop(Stop::Halt(HaltReason::Swi(vector)));
+                        }
+                    }
                 }
             }
 
