@@ -37,6 +37,7 @@ pub struct Machine {
     /// Total store operations (any address). A liveness signal for the run loop:
     /// a loop that keeps writing memory is making progress, not spinning.
     pub ram_writes: u64,
+    pub mmio_writes: u64,
 
     /// `start4.elf` logs boot progress by writing 4-char ASCII tags (`_msh`,
     /// `_osh`, `bfsp`, ...) to a register at `0xCEC0_2000`. We capture the
@@ -64,6 +65,7 @@ impl Machine {
             stub_hits: 0,
             bus_errors: 0,
             ram_writes: 0,
+            mmio_writes: 0,
             phase_tags: Vec::new(),
         }
     }
@@ -177,9 +179,11 @@ impl Bus for Machine {
                 return self.ram.store(phys, width, value);
             }
         }
+        self.mmio_writes = self.mmio_writes.wrapping_add(1);
         if let Some((dev, off)) = self.device_for(addr) {
             return dev.write(off, width, value);
         }
+        self.mmio_writes = self.mmio_writes.wrapping_sub(1);
         self.bus_errors += 1;
         Err(BusError::Unmapped {
             addr,
