@@ -12,6 +12,7 @@ Nothing executes the real Pi 4 VPU boot blobs. The relevant prior art:
 | [`hermanhermitage/videocoreiv`](https://github.com/hermanhermitage/videocoreiv) | ISA docs + JS disassembler | encoding source |
 | [`ptesarik/vc4boot`](https://github.com/ptesarik/vc4boot) | small VC4 asm boot programs (MIT) | future test payloads |
 | [binutils-vc4](https://github.com/poizan42/binutils-vc4) | assembler/disassembler (GPL) | opcode-table cross-check |
+| [`Idein/py-videocore6`](https://github.com/Idein/py-videocore6) | Python library for GPGPU programming on Raspberry Pi 4 (GPL) | RPi4 GPU stuff |
 
 ## ISA / hardware
 

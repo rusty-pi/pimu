@@ -8,3 +8,5 @@
 # Regression run artifacts.
 /testdata/out/
 *.actual.txt
+docs/*.pdf
+

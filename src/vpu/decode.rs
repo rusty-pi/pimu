@@ -109,13 +109,22 @@ fn decode16(p0: u16, pc: u32) -> Op {
         };
     }
     // 0000 001X Ybb nnnnn : ldm/stm    (0x0200 ldm, 0x0280 stm, 0x0300 ldm+pc,
-    //                                   0x0380 stm+lr; bb=bank, n=count-1)
+    //                                   0x0380 stm+lr; bb=bank, n=width-1)
     if (0x0200..0x0400).contains(&p) {
         let kind = (p >> 7) & 3;
-        let bank = (p >> 5) & 3;
+        let val = p & 0x7F; // 7-bit operand field
+        let bank = (val >> 5) & 3;
         let first = [0u8, 6, 16, 24][bank as usize];
-        // `(n + b*8) & 31` — the register list wraps past r31 back to r0.
-        let count = (p & 0x1F) as u8 + 1;
+        // Register list is `first ..= first + regw` (inclusive), wrapping past
+        // r31 back to r0. The width itself is bank-dependent — see the
+        // `regW` computation in Hermitage's `vciv.py` push/pop renderer:
+        // bank 1 adds a fixed +6, the others fold in `bank*8`.
+        let regw = if bank == 1 {
+            (val & 0x1F) + 6
+        } else {
+            ((val & 0x1F) + bank * 8) & 0x1F
+        };
+        let count = regw as u8 + 1;
         return match kind {
             0 => Op::PopMulti {
                 first,
@@ -198,10 +207,12 @@ fn decode16(p0: u16, pc: u32) -> Op {
             set_flags: op.is_compare(),
         };
     }
-    // 011q qqqu uuuu dddd : rd = rd <q> #sext5(u)
+    // 011q qqqu uuuu dddd : rd = rd <q> #u   (u is an unsigned 5-bit literal,
+    // 0..31 — per Hermitage's `vciv.py`, which types it `o_imm`; the small
+    // negative-constant forms use the 32-bit `add rd, #simm` encoding instead)
     if p & 0xE000 == 0x6000 {
         let op = AluOp::from_q((p >> 9) & 0xF);
-        let imm = sext((p >> 4) & 0x1F, 5);
+        let imm = ((p >> 4) & 0x1F) as i32;
         return Op::AluImm {
             op,
             rd: rd4,
@@ -309,9 +320,10 @@ fn decode32(p0: u16, p1: u16, pc: u32) -> Op {
             set_flags: op.is_compare(),
         };
     }
-    // 1011 01nn nnnd dddd <o16>  : lea rd, (rN + sext16(o))
-    //   rN = hw0 bits 5..9;  N == 31 means PC  (the 0xBFE0 "add rd,pc,#o" form).
-    if hw0 & 0xFC00 == 0xB400 {
+    // 1011 01nn nnnd dddd <o16>  : lea rd, (rN + sext16(o))   (0xB400..0xB7FF)
+    // 1011 1111 111d dddd <o16>  : lea rd, (pc + sext16(o))   (0xBFE0, N == 31)
+    //   rN = hw0 bits 5..9;  N == 31 means PC.
+    if hw0 & 0xFC00 == 0xB400 || hw0 & 0xFFE0 == 0xBFE0 {
         let n = (hw0 >> 5) & 0x1F;
         let base = if n == 31 {
             Base::Pc
