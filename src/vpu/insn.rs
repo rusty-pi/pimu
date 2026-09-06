@@ -228,6 +228,30 @@ pub enum Op {
         rd: u8,
         addr: AddrMode,
     },
+    /// `version rd` — read the chip/VPU version register.
+    Version {
+        rd: u8,
+    },
+    /// `addcmpb`: `rd = rd + a; compare rd with b; if <cond> branch to target`.
+    AddCmpB {
+        cond: Cond,
+        rd: u8,
+        a: RegOrImm,
+        b: RegOrImm,
+        target: u32,
+    },
+    /// `stm` — push `r[first ..= last]` (+ optional `lr`) to `(--sp)`.
+    PushMulti {
+        first: u8,
+        last: u8,
+        include_lr: bool,
+    },
+    /// `ldm` — pop `r[first ..= last]` (+ optional `pc`) from `(sp++)`.
+    PopMulti {
+        first: u8,
+        last: u8,
+        include_pc: bool,
+    },
     /// Correctly sized but not decoded to semantics.
     Unimpl {
         raw: u64,

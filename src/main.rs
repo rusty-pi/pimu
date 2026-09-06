@@ -5,9 +5,13 @@ use std::process::ExitCode;
 
 use anyhow::{bail, Context, Result};
 
+use rpi_virt_fw::emulator::{Emulator, RunLimits};
+use rpi_virt_fw::firmware::Payload;
 use rpi_virt_fw::harness::{self, GoldenOutcome};
+use rpi_virt_fw::machine::Machine;
 use rpi_virt_fw::vpu::decode::decode;
 use rpi_virt_fw::vpu::length::insn_len_bytes;
+use rpi_virt_fw::vpu::UnimplPolicy;
 
 const USAGE: &str = "\
 rpi-virt-fw — virtual bench for Raspberry Pi VideoCore boot firmware
@@ -15,12 +19,15 @@ rpi-virt-fw — virtual bench for Raspberry Pi VideoCore boot firmware
 USAGE:
     rpi-virt-fw run <scenario.toml> [--update] [-v]
     rpi-virt-fw run-all [<dir>] [--update] [-v]
-    rpi-virt-fw disasm <file> [--base <hex>] [--count <n>]
+    rpi-virt-fw recon <file> [--entry <hex>] [--ram-mb <n>] [--max-steps <n>] [--eeprom]
+    rpi-virt-fw disasm <file> [--base <hex>] [--count <n>] [--vaddr <hex>]
 
 COMMANDS:
     run       Run one scenario and check it against its golden transcript.
     run-all   Run every *.toml scenario in <dir> (default: testdata/scenarios).
-    disasm    Disassemble a flat binary with the (partial) VPU decoder.
+    recon     Load an ELF (or --eeprom image) and run it in skip-on-unimplemented
+              mode, reporting how far it got and which instructions it needs.
+    disasm    Disassemble a flat binary / ELF with the (partial) VPU decoder.
 
 FLAGS:
     --update  Rewrite golden files instead of failing on mismatch.
@@ -47,6 +54,7 @@ fn run(args: &[String]) -> Result<ExitCode> {
     match cmd.as_str() {
         "run" => cmd_run(&args[1..]),
         "run-all" => cmd_run_all(&args[1..]),
+        "recon" => cmd_recon(&args[1..]),
         "disasm" => cmd_disasm(&args[1..]),
         "-h" | "--help" | "help" => {
             print!("{USAGE}");
@@ -54,6 +62,87 @@ fn run(args: &[String]) -> Result<ExitCode> {
         }
         other => bail!("unknown command '{other}' (try --help)"),
     }
+}
+
+fn cmd_recon(args: &[String]) -> Result<ExitCode> {
+    let mut path: Option<PathBuf> = None;
+    let mut entry: Option<u32> = None;
+    let mut ram_mb: u32 = 512;
+    let mut max_steps: u64 = 20_000_000;
+    let mut eeprom = false;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--entry" => entry = Some(parse_u32(it.next().context("--entry needs a value")?)?),
+            "--ram-mb" => ram_mb = it.next().context("--ram-mb needs a value")?.parse()?,
+            "--max-steps" => max_steps = it.next().context("--max-steps needs a value")?.parse()?,
+            "--eeprom" => eeprom = true,
+            s if !s.starts_with('-') => path = Some(PathBuf::from(s)),
+            s => bail!("unexpected argument '{s}'"),
+        }
+    }
+    let path = path.context("recon: missing <file>")?;
+    let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+
+    let payload = if eeprom {
+        Payload::from_eeprom_bytes(&bytes)?
+    } else {
+        Payload::from_elf_bytes(&bytes)?
+    };
+
+    let mut machine = Machine::new(ram_mb as usize * 1024 * 1024);
+    payload.load_into(&mut machine)?;
+    let start = entry.unwrap_or(payload.entry());
+
+    let mut emu = Emulator::new(machine, start);
+    emu.set_unimpl_policy(UnimplPolicy::Skip);
+    let report = emu.run(&RunLimits {
+        max_steps,
+        max_wall: Some(std::time::Duration::from_secs(120)),
+        stop_pc: None,
+        idle_spin_limit: 200_000,
+    });
+
+    println!("entry      {start:#010x}");
+    println!("end        {:?}", report.end);
+    println!("final pc   {:#010x}", report.pc);
+    println!(
+        "retired    {}  (skipped {}, cycles {})",
+        report.retired, report.skipped, report.cycles
+    );
+    println!(
+        "stub hits  {}   bus errors {}",
+        report.stub_hits, report.bus_errors
+    );
+    println!("wall       {:?}", report.wall);
+
+    if !report.console.is_empty() {
+        println!("\n--- console ({} bytes) ---", report.console.len());
+        println!("{}", String::from_utf8_lossy(&report.console));
+    }
+
+    if !report.unimpl.is_empty() {
+        println!(
+            "\n--- distinct unimplemented instructions ({}, top 40 by hit count) ---",
+            report.unimpl.len()
+        );
+        for h in report.unimpl.iter().take(40) {
+            println!(
+                "  {:>9}x  pc={:#010x}  {:>2}-bit  raw={:012x}  {:?}",
+                h.count,
+                h.pc,
+                h.len * 8,
+                h.raw,
+                h.class
+            );
+        }
+        println!(
+            "\n(disassemble any of these with:  rpi-virt-fw disasm {} --vaddr <pc> --count 1)",
+            path.display()
+        );
+    }
+
+    Ok(ExitCode::SUCCESS)
 }
 
 fn cmd_run(args: &[String]) -> Result<ExitCode> {
@@ -152,23 +241,36 @@ fn cmd_disasm(args: &[String]) -> Result<ExitCode> {
     let mut path: Option<PathBuf> = None;
     let mut base: u32 = 0;
     let mut count: usize = 64;
+    let mut vaddr: Option<u32> = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
-            "--base" => {
-                base = parse_u32(it.next().context("--base needs a value")?)?;
-            }
-            "--count" => {
-                count = it.next().context("--count needs a value")?.parse()?;
-            }
+            "--base" => base = parse_u32(it.next().context("--base needs a value")?)?,
+            "--count" => count = it.next().context("--count needs a value")?.parse()?,
+            "--vaddr" => vaddr = Some(parse_u32(it.next().context("--vaddr needs a value")?)?),
             s if !s.starts_with('-') => path = Some(PathBuf::from(s)),
             s => bail!("unexpected argument '{s}'"),
         }
     }
     let path = path.context("disasm: missing <file>")?;
-    let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+    let raw = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
 
-    let mut pc = base;
+    // ELF: locate the segment containing `vaddr` (or the entry) and disassemble
+    // from there. Flat binary: disassemble from file offset 0 at `--base`.
+    let (bytes, mut pc): (Vec<u8>, u32) = if raw.starts_with(b"\x7fELF") {
+        let elf = rpi_virt_fw::firmware::elf32::Elf32::parse(&raw)?;
+        let target = vaddr.unwrap_or(elf.entry);
+        let seg = elf
+            .segments
+            .iter()
+            .find(|s| target >= s.vaddr && (target as u64) < s.vaddr as u64 + s.data.len() as u64)
+            .with_context(|| format!("no loadable segment contains vaddr {target:#x}"))?;
+        let skip = (target - seg.vaddr) as usize;
+        (seg.data[skip..].to_vec(), target)
+    } else {
+        (raw, vaddr.unwrap_or(base))
+    };
+
     let mut off = 0usize;
     for _ in 0..count {
         if off + 2 > bytes.len() {
@@ -181,11 +283,11 @@ fn cmd_disasm(args: &[String]) -> Result<ExitCode> {
             break;
         }
         let insn = decode(&bytes[off..off + len], pc);
-        let raw: String = bytes[off..off + len]
+        let hex: String = bytes[off..off + len]
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect();
-        println!("{pc:#010x}:  {raw:<20}  {:?}", insn.op);
+        println!("{pc:#010x}:  {hex:<20}  {:?}", insn.op);
         pc = pc.wrapping_add(len as u32);
         off += len;
     }
