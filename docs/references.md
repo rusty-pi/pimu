@@ -42,3 +42,8 @@ DTB boot path never touches the QPU.
 - `raspberrypi/rpi-eeprom` — `rpi-eeprom-config`, `firmware-2711/` images,
   `release-notes.md`
 - Raspberry Pi bootloader configuration docs (`BOOT_ORDER`, `BOOT_UART`, ...)
+- [`nstarke/raspberrypi4-bootloader-analysis`](https://github.com/nstarke/raspberrypi4-bootloader-analysis)
+  — Ghidra decompiler (`haruspex`) dump of the Pi 4 VideoCore IV boot ROM /
+  early EEPROM stage (455 `FUN_xxxx.c` files, low addresses ~`0x000000a8+`).
+  Reference for the boot-ROM approximation (M2) — how stage 0 sets up before
+  the EEPROM bootloader. Not start4.elf.
