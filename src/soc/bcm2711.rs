@@ -15,6 +15,10 @@ pub const PERIPH_SIZE: u32 = 0x0200_0000; // 32 MiB window (0x7E00_0000..0x8000_
 pub const SYSTIMER_BASE: u32 = 0x7E00_3000;
 pub const SYSTIMER_SIZE: u32 = 0x1000;
 
+/// Multicore-sync block (`0x7E00_0000`): inter-core doorbells / semaphores.
+pub const MCSYNC_BASE: u32 = 0x7E00_0000;
+pub const MCSYNC_SIZE: u32 = 0x1000;
+
 /// VPU core-control block (`0x7E00_2000`): per-core start vectors and run-state.
 /// `start4.elf` releases VPU core 1 through here.
 pub const CORECTL_BASE: u32 = 0x7E00_2000;

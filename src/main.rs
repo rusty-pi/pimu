@@ -76,6 +76,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     let mut trace_from: u32 = 0;
     let mut core1_entry: Option<u32> = None;
     let mut smp = false;
+    let mut as_core1 = false;
     let mut patches: Vec<(u32, u32)> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -93,6 +94,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
                 exc_vbase = parse_u32(it.next().context("--exc-vbase needs a value")?)?
             }
             "--smp" => smp = true,
+            "--as-core1" => as_core1 = true,
             "--core1-entry" => {
                 core1_entry =
                     Some(parse_u32(it.next().context("--core1-entry needs a value")?)?)
@@ -140,6 +142,9 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     };
     emu.cpu.trace_from = trace_from;
     emu.core1_entry = core1_entry;
+    if as_core1 {
+        emu.cpu.core_id = 1;
+    }
     if smp {
         emu.start_smp(start);
     }
