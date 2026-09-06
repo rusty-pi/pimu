@@ -336,9 +336,13 @@ fn decode32(p0: u16, p1: u16, pc: u32) -> Op {
         };
     }
 
-    // 1100 00pp pppd dddd | aaaaa CCCC {C0 bbbbb | C1 iiiiii} : rd = ra <p> b [c]
-    if hw0 & 0xFC00 == 0xC000 {
-        let op = AluOp::from_p((hw0 >> 5) & 0x1F);
+    // 1100 0ppp pppd dddd | aaaaa 0 CCCC {0 bbbbb | 1 iiiiii} :
+    //   rd = ra <p> b  if <cond>          (`0xC000..=0xC7FF` triadic ALU)
+    // The 6-bit `p` selects the op (mov/add/.../mulhd/div/count/subscale);
+    // w1 bit 6 picks reg vs. signed-6-bit-imm; w1 bits 7..10 are the condition.
+    if hw0 & 0xF800 == 0xC000 {
+        let idx6 = (hw0 >> 5) & 0x3F;
+        let op = AluOp::from_c_triadic(idx6);
         let rd = (hw0 & 0x1F) as u8;
         let ra = ((hw1 >> 11) & 0x1F) as u8;
         let cond = Cond::from_bits((hw1 >> 7) & 0xF);
@@ -347,40 +351,15 @@ fn decode32(p0: u16, p1: u16, pc: u32) -> Op {
         } else {
             RegOrImm::Reg((hw1 & 0x1F) as u8)
         };
+        // `adds`/`subs`/`shls` (idx 0x28..0x2a) set flags; so do the compares.
+        let set_flags = op.is_compare() || (0x28..=0x2a).contains(&idx6);
         return Op::Alu3 {
             op,
             cond,
             rd,
             ra,
             b,
-            set_flags: op.is_compare(),
-        };
-    }
-
-    // 1100 0101 000d dddd | aaaaa CCCC C{0 bbbbb|1 iiiiii} : adds / subs / shls
-    if hw0 & 0xFF00 == 0xC500 {
-        let sub = (hw0 >> 5) & 7;
-        let op = match sub {
-            0 => AluOp::Add,
-            1 => AluOp::Sub,
-            2 => AluOp::Shl,
-            _ => AluOp::Unimpl("clip/scale"),
-        };
-        let rd = (hw0 & 0x1F) as u8;
-        let ra = ((hw1 >> 11) & 0x1F) as u8;
-        let cond = Cond::from_bits((hw1 >> 7) & 0xF);
-        let b = if hw1 & 0x40 != 0 {
-            RegOrImm::Imm(sext(hw1 & 0x3F, 6))
-        } else {
-            RegOrImm::Reg((hw1 & 0x1F) as u8)
-        };
-        return Op::Alu3 {
-            op,
-            cond,
-            rd,
-            ra,
-            b,
-            set_flags: true,
+            set_flags,
         };
     }
 

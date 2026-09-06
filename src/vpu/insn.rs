@@ -40,7 +40,18 @@ pub enum AluOp {
     Bitrev,
     Asr,
     Abs,
-    AddScale(u8), // add with ra shifted left by n
+    AddScale(u8),  // ra + (b << n)  — field is the shift amount n
+    SubScale(u8),  // ra - (b << n)  — field is the shift amount n
+    Count,         // popcount(b)
+    MulhdSS,       // high word of ra * b, signed*signed
+    MulhdSU,       // signed*unsigned
+    MulhdUS,       // unsigned*signed
+    MulhdUU,       // unsigned*unsigned
+    DivS,          // ra / b, signed
+    DivSU,         // signed ra / unsigned b
+    DivUS,         // unsigned ra / signed b
+    DivU,          // unsigned / unsigned
+    Clamp16,       // clamp ra to the signed 16-bit range
     /// Recognised mnemonic, semantics not implemented yet.
     Unimpl(&'static str),
 }
@@ -70,11 +81,11 @@ impl AluOp {
             16 => Bitset,
             17 => Min,
             18 => Bitclear,
-            19 => AddScale(2),
+            19 => AddScale(1),
             20 => Bitflip,
-            21 => AddScale(4),
-            22 => AddScale(8),
-            23 => AddScale(16),
+            21 => AddScale(2),
+            22 => AddScale(3),
+            23 => AddScale(4),
             24 => Signext,
             25 => Neg,
             26 => Lsr,
@@ -83,6 +94,43 @@ impl AluOp {
             29 => Bitrev,
             30 => Asr,
             _ => Abs,
+        }
+    }
+
+    /// The 6-bit sub-op field of the triadic conditional ALU (`1100 0ppp pppd
+    /// dddd`), covering `0xC000..=0xC7E0`. Extends `from_p` past index 31 with
+    /// the wide-ALU ops (mulhd / div / count / adds / subscale). Source:
+    /// `vciv.py` ISACC 0xC group.
+    pub fn from_c_triadic(idx6: u32) -> AluOp {
+        use AluOp::*;
+        match idx6 & 0x3f {
+            0x20 => MulhdSS,
+            0x21 => MulhdSU,
+            0x22 => MulhdUS,
+            0x23 => MulhdUU,
+            0x24 => DivS,
+            0x25 => DivSU,
+            0x26 => DivUS,
+            0x27 => DivU,
+            0x28 => Add,     // adds
+            0x29 => Sub,     // subs
+            0x2a => Shl,     // shls
+            0x2b => Clamp16,
+            0x2c => AddScale(5),
+            0x2d => AddScale(6),
+            0x2e => AddScale(7),
+            0x2f => AddScale(8),
+            0x30 => Count,
+            0x31 => SubScale(1),
+            0x32 => SubScale(2),
+            0x33 => SubScale(3),
+            0x34 => SubScale(4),
+            0x35 => SubScale(5),
+            0x36 => SubScale(6),
+            0x37 => SubScale(7),
+            0x38 => SubScale(8),
+            n if n < 0x20 => Self::from_p(n),
+            _ => Unimpl("c-triadic"),
         }
     }
 
@@ -332,6 +380,11 @@ impl AluOp {
             Asr => "asr",
             Abs => "abs",
             AddScale(_) => "addscale",
+            SubScale(_) => "subscale",
+            Count => "count",
+            MulhdSS | MulhdSU | MulhdUS | MulhdUU => "mulhd",
+            DivS | DivSU | DivUS | DivU => "div",
+            Clamp16 => "clamp16",
             Unimpl(n) => n,
         }
     }
