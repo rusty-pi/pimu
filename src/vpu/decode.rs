@@ -43,6 +43,7 @@ pub fn decode(bytes: &[u8], pc: u32) -> Insn {
     let op = match class {
         InsnClass::Scalar16 => decode16(p0, pc),
         InsnClass::Scalar32 => decode32(p0, parcel(bytes, 1), pc),
+        InsnClass::Scalar48 => decode48(bytes, pc),
         _ => {
             let mut raw = 0u64;
             for i in 0..(len as usize / 2) {
@@ -53,6 +54,110 @@ pub fn decode(bytes: &[u8], pc: u32) -> Insn {
     };
 
     Insn { op, len }
+}
+
+/// Combine the three parcels of a 48-bit instruction. Per `videocoreiv.arch`
+/// (`set-byte-order 1 0 5 4 3 2`, "short0 short2 short1"): the opcode halfword is
+/// `bytes[0..2]`, and the trailing 32-bit field is
+/// `LE(bytes[4..6]) << 16 | LE(bytes[2..4])`.
+fn imm32_of_48(bytes: &[u8]) -> u32 {
+    ((parcel(bytes, 2) as u32) << 16) | parcel(bytes, 1) as u32
+}
+
+fn decode48(bytes: &[u8], pc: u32) -> Op {
+    let hw0 = parcel(bytes, 0) as u32;
+    let imm = imm32_of_48(bytes);
+
+    // 1110 00xx 0000 0000 <abs32|off32> : j / b / jl / bl
+    match hw0 {
+        0xE000 => {
+            return Op::BranchImm {
+                cond: Cond::Al,
+                link: false,
+                target: imm,
+            }; // j abs
+        }
+        0xE100 => {
+            return Op::BranchImm {
+                cond: Cond::Al,
+                link: false,
+                target: pc.wrapping_add(imm),
+            };
+        }
+        0xE200 => {
+            return Op::BranchImm {
+                cond: Cond::Al,
+                link: true,
+                target: imm,
+            }; // jl abs
+        }
+        0xE300 => {
+            return Op::BranchImm {
+                cond: Cond::Al,
+                link: true,
+                target: pc.wrapping_add(imm),
+            };
+        }
+        _ => {}
+    }
+
+    // 1110 0101 000d dddd <off32> : add rd, pc, #off32
+    if hw0 & 0xFFE0 == 0xE500 {
+        return Op::AddRegPc {
+            rd: (hw0 & 0x1F) as u8,
+            imm: imm as i32,
+        };
+    }
+
+    // 1110 011x wwXd dddd  <rs(5) off(27)> : ld/st (rs + off27) / (pc + off27)
+    if hw0 & 0xFE00 == 0xE600 {
+        let ww = MemWidth::from_ww((hw0 >> 6) & 3);
+        let store = hw0 & 0x20 != 0;
+        let rd = (hw0 & 0x1F) as u8;
+        let rs = ((imm >> 27) & 0x1F) as u8;
+        let off = sext(imm & 0x07FF_FFFF, 27);
+        let pc_relative = hw0 & 0x0100 != 0; // 1110 0111 -> (pc + off)
+        let addr = AddrMode {
+            base: if pc_relative { Base::Pc } else { Base::Reg(rs) },
+            offset: off,
+        };
+        return if store {
+            Op::Store { w: ww, rd, addr }
+        } else {
+            Op::Load { w: ww, rd, addr }
+        };
+    }
+
+    // 1110 10pp pppd dddd <imm32> : rd = rd <p> #imm32
+    if hw0 & 0xFC00 == 0xE800 {
+        let op = AluOp::from_p((hw0 >> 5) & 0x1F);
+        let rd = (hw0 & 0x1F) as u8;
+        return Op::AluImm {
+            op,
+            rd,
+            imm: imm as i32,
+            set_flags: op.is_compare(),
+        };
+    }
+    // 1110 11ss sssd dddd <imm32> : add rd, rs, #imm32
+    if hw0 & 0xFC00 == 0xEC00 {
+        let rs = ((hw0 >> 5) & 0x1F) as u8;
+        let rd = (hw0 & 0x1F) as u8;
+        return Op::Alu3 {
+            op: AluOp::Add,
+            cond: Cond::Al,
+            rd,
+            ra: rs,
+            b: RegOrImm::Imm(imm as i32),
+            set_flags: false,
+        };
+    }
+
+    Op::Unimpl {
+        raw: ((hw0 as u64) << 32) | imm as u64,
+        len: 6,
+        class: InsnClass::Scalar48,
+    }
 }
 
 fn decode16(p0: u16, pc: u32) -> Op {
@@ -197,6 +302,33 @@ fn decode16(p0: u16, pc: u32) -> Op {
             set_flags: op.is_compare(),
         };
     }
+    // 0000 0000 111d dddd : version rd
+    if p & 0xFFE0 == 0x00E0 {
+        return Op::Version { rd: rd5 };
+    }
+    // 0000 001X Ybb nnnnn : ldm/stm  (X=+lr/pc, Y=store, bb=bank, n=count-1)
+    if p & 0xFE00 == 0x0200 {
+        let include_extra = p & 0x0100 != 0;
+        let is_store = p & 0x0080 != 0;
+        let bank = (p >> 5) & 3;
+        // Bank 1 conventionally starts at r6 (the classic GP/first-saved reg),
+        // not r8; the other banks are b*8. Verify against real traces.
+        let first = [0u8, 6, 16, 24][bank as usize];
+        let last = first.saturating_add((p & 0x1F) as u8).min(31);
+        return if is_store {
+            Op::PushMulti {
+                first,
+                last,
+                include_lr: include_extra,
+            }
+        } else {
+            Op::PopMulti {
+                first,
+                last,
+                include_pc: include_extra,
+            }
+        };
+    }
 
     Op::Unimpl {
         raw: p as u64,
@@ -207,6 +339,47 @@ fn decode16(p0: u16, pc: u32) -> Op {
 
 fn decode32(p0: u16, p1: u16, pc: u32) -> Op {
     let w = ((p0 as u32) << 16) | p1 as u32;
+
+    // 1000 cccc AAAA DDDD  SS ffffff oooooooo : addcmpb<c>
+    //   SS=00: a=rA,  b=rS       , 10-bit offset
+    //   SS=01: a=#i4, b=rS       , 10-bit offset
+    //   SS=10: a=rA,  b=#u6      , 8-bit offset
+    //   SS=11: a=#i4, b=#u6      , 8-bit offset
+    if w & 0xF000_0000 == 0x8000_0000 {
+        let cond = Cond::from_bits((w >> 24) & 0xF);
+        let f1 = (w >> 20) & 0xF; // rA or #i4
+        let rd = ((w >> 16) & 0xF) as u8;
+        let sel = (w >> 14) & 3;
+        let (a, b, off) = match sel {
+            0 => (
+                RegOrImm::Reg(f1 as u8),
+                RegOrImm::Reg(((w >> 10) & 0xF) as u8),
+                sext(w & 0x3FF, 10),
+            ),
+            1 => (
+                RegOrImm::Imm(sext(f1, 4)),
+                RegOrImm::Reg(((w >> 10) & 0xF) as u8),
+                sext(w & 0x3FF, 10),
+            ),
+            2 => (
+                RegOrImm::Reg(f1 as u8),
+                RegOrImm::Imm(((w >> 8) & 0x3F) as i32),
+                sext(w & 0xFF, 8),
+            ),
+            _ => (
+                RegOrImm::Imm(sext(f1, 4)),
+                RegOrImm::Imm(((w >> 8) & 0x3F) as i32),
+                sext(w & 0xFF, 8),
+            ),
+        };
+        return Op::AddCmpB {
+            cond,
+            rd,
+            a,
+            b,
+            target: pc.wrapping_add((off * 2) as u32),
+        };
+    }
 
     // 1001 cccc 0ooo... : b<cond>    /    1001 oooo 1ooo... : bl
     if w & 0xF000_0000 == 0x9000_0000 {
@@ -458,10 +631,35 @@ mod tests {
 
     #[test]
     fn unknown_48bit_is_sized() {
-        let bytes = [0x00, 0xE0, 0, 0, 0, 0]; // 0xE000 class -> 48-bit
+        // 0xE400 is an "undefined" 48-bit scalar encoding (videocoreiv.arch).
+        let bytes = [0x00, 0xE4, 0, 0, 0, 0];
         let insn = decode(&bytes, 0);
         assert_eq!(insn.len, 6);
         assert!(matches!(insn.op, Op::Unimpl { len: 6, .. }));
+    }
+
+    #[test]
+    fn j_absolute_48bit() {
+        // 1110 0000 0000 0000  <imm32 = 0x0ec0_1234>
+        // imm32 packing: LE(bytes[4..6]) << 16 | LE(bytes[2..4])
+        let bytes = [0x00, 0xE0, 0x34, 0x12, 0xC0, 0x0E];
+        assert_eq!(
+            decode(&bytes, 0xCEC0_0000).op,
+            Op::BranchImm {
+                cond: Cond::Al,
+                link: false,
+                target: 0x0EC0_1234
+            }
+        );
+    }
+
+    #[test]
+    fn version_16bit() {
+        // 0000 0000 111d dddd, d = 5
+        assert_eq!(
+            decode(&0x00E5u16.to_le_bytes(), 0).op,
+            Op::Version { rd: 5 }
+        );
     }
 
     #[test]

@@ -48,6 +48,22 @@ pub enum Step {
     Stopped,
 }
 
+/// One distinct instruction the model does not implement, with a hit count.
+/// Collected for reconnaissance runs ([`UnimplPolicy::Skip`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnimplHit {
+    pub pc: u32,
+    pub raw: u64,
+    pub len: u8,
+    pub class: InsnClass,
+    pub count: u64,
+}
+
+/// Default chip-version value returned by `version rd` when a scenario does not
+/// override it. `0x0004_0000` reads as "VideoCore IV" in several community
+/// tools; the true value is board-specific and unverified.
+pub const DEFAULT_VERSION: u32 = 0x0004_0000;
+
 #[derive(Default)]
 pub struct Vpu {
     pub regs: Regs,
@@ -57,13 +73,32 @@ pub struct Vpu {
     pub on_unimpl: UnimplPolicy,
     /// Count of instructions skipped under [`UnimplPolicy::Skip`].
     pub skipped: u64,
+    /// Distinct unimplemented instructions seen (bounded).
+    pub unimpl: Vec<UnimplHit>,
+    /// Value returned by `version rd`.
+    pub version_value: u32,
 }
 
 impl Vpu {
     pub fn new(entry: u32) -> Vpu {
         let mut v = Vpu::default();
         v.regs.pc = entry;
+        v.version_value = DEFAULT_VERSION;
         v
+    }
+
+    fn note_unimpl(&mut self, pc: u32, raw: u64, len: u8, class: InsnClass) {
+        if let Some(h) = self.unimpl.iter_mut().find(|h| h.pc == pc && h.raw == raw) {
+            h.count += 1;
+        } else if self.unimpl.len() < 512 {
+            self.unimpl.push(UnimplHit {
+                pc,
+                raw,
+                len,
+                class,
+                count: 1,
+            });
+        }
     }
 
     #[inline]
@@ -235,21 +270,107 @@ impl Vpu {
                 }
             }
 
-            Op::Unimpl { raw, class, .. } => match self.on_unimpl {
-                UnimplPolicy::Fault => {
-                    return self.stop(Stop::Fault(Fault::Unimplemented { pc, raw, class }))
+            Op::Version { rd } => {
+                self.regs.set(rd as usize, self.version_value);
+                self.regs.pc = next;
+            }
+
+            Op::AddCmpB {
+                cond,
+                rd,
+                a,
+                b,
+                target,
+            } => {
+                let av = self.reg_or_imm(a);
+                let sum = self.regs.get(rd as usize).wrapping_add(av);
+                self.regs.set(rd as usize, sum);
+                let bv = self.reg_or_imm(b);
+                let (_, c, v) = add_with_carry(sum, !bv, 1);
+                let flags = nz(sum.wrapping_sub(bv), c, v);
+                self.regs.flags = flags;
+                self.regs.pc = if flags.test(cond) { target } else { next };
+            }
+
+            Op::PushMulti {
+                first,
+                last,
+                include_lr,
+            } => {
+                let mut regs: Vec<usize> = (first..=last).map(|r| r as usize).collect();
+                if include_lr {
+                    regs.push(LR);
                 }
-                UnimplPolicy::Skip => {
-                    self.skipped += 1;
-                    self.regs.pc = next;
+                let mut sp = self.regs.get(SP);
+                // Full-descending, lowest register at the lowest address.
+                sp = sp.wrapping_sub(4 * regs.len() as u32);
+                let base = sp;
+                for (i, &r) in regs.iter().enumerate() {
+                    let v = self.regs.get(r);
+                    if let Err(err) = bus.store32(base.wrapping_add(4 * i as u32), v) {
+                        return self.stop(Stop::Fault(Fault::Bus { pc, err }));
+                    }
                 }
-            },
+                self.regs.set(SP, sp);
+                self.regs.pc = next;
+            }
+
+            Op::PopMulti {
+                first,
+                last,
+                include_pc,
+            } => {
+                let mut regs: Vec<usize> = (first..=last).map(|r| r as usize).collect();
+                let mut sp = self.regs.get(SP);
+                let mut new_pc = next;
+                for &r in &regs {
+                    match bus.load32(sp) {
+                        Ok(v) => self.regs.set(r, v),
+                        Err(err) => return self.stop(Stop::Fault(Fault::Bus { pc, err })),
+                    }
+                    sp = sp.wrapping_add(4);
+                }
+                if include_pc {
+                    match bus.load32(sp) {
+                        Ok(v) => new_pc = v,
+                        Err(err) => return self.stop(Stop::Fault(Fault::Bus { pc, err })),
+                    }
+                    sp = sp.wrapping_add(4);
+                }
+                regs.clear();
+                self.regs.set(SP, sp);
+                self.regs.pc = new_pc;
+            }
+
+            Op::Unimpl {
+                raw,
+                class,
+                len: ilen,
+            } => {
+                self.note_unimpl(pc, raw, ilen, class);
+                match self.on_unimpl {
+                    UnimplPolicy::Fault => {
+                        return self.stop(Stop::Fault(Fault::Unimplemented { pc, raw, class }))
+                    }
+                    UnimplPolicy::Skip => {
+                        self.skipped += 1;
+                        self.regs.pc = next;
+                    }
+                }
+            }
         }
 
         if !self.is_stopped() {
             self.retired += 1;
         }
         Step::Ran
+    }
+
+    fn reg_or_imm(&self, x: RegOrImm) -> u32 {
+        match x {
+            RegOrImm::Reg(r) => self.regs.get(r as usize),
+            RegOrImm::Imm(i) => i as u32,
+        }
     }
 
     fn effective_addr(&self, pc: u32, addr: AddrMode) -> u32 {

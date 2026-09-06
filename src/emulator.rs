@@ -62,6 +62,8 @@ pub struct RunReport {
     pub pc: u32,
     /// Everything the console UART transmitted during the run.
     pub console: Vec<u8>,
+    /// Distinct unimplemented instructions encountered (reconnaissance).
+    pub unimpl: Vec<crate::vpu::exec::UnimplHit>,
 }
 
 impl Emulator {
@@ -135,6 +137,9 @@ impl Emulator {
 
         console.extend_from_slice(&self.machine.take_console_output());
 
+        let mut unimpl = self.cpu.unimpl.clone();
+        unimpl.sort_by(|a, b| b.count.cmp(&a.count).then(a.pc.cmp(&b.pc)));
+
         RunReport {
             end,
             retired: self.cpu.retired,
@@ -145,6 +150,7 @@ impl Emulator {
             wall: start.elapsed(),
             pc: self.cpu.pc(),
             console,
+            unimpl,
         }
     }
 }
