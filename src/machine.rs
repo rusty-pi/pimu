@@ -26,6 +26,9 @@ pub struct Machine {
     /// stub). A quick health signal for how much firmware behaviour is faked.
     pub stub_hits: u64,
     pub bus_errors: u64,
+    /// Total store operations (any address). A liveness signal for the run loop:
+    /// a loop that keeps writing memory is making progress, not spinning.
+    pub ram_writes: u64,
 }
 
 impl Machine {
@@ -39,6 +42,7 @@ impl Machine {
             console: Console::default(),
             stub_hits: 0,
             bus_errors: 0,
+            ram_writes: 0,
         }
     }
 
@@ -127,6 +131,7 @@ impl Bus for Machine {
     }
 
     fn store(&mut self, addr: u32, width: Width, value: u32) -> BusResult<()> {
+        self.ram_writes = self.ram_writes.wrapping_add(1);
         if !Machine::in_periph_window(addr) {
             let phys = Machine::fold_ram_addr(addr);
             if self.ram.contains(phys) {

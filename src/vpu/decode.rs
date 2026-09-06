@@ -150,9 +150,9 @@ fn decode16(p0: u16, pc: u32) -> Op {
         let (store, w) = ldst_suffix(sub);
         return ldst(store, w, rd4, AddrMode::simple(Base::Reg(rs), 0), Cond::Al);
     }
-    // 0001 0ooo oood dddd : lea rd, (sp + o*4)
+    // 0001 0ooo oood dddd : lea rd, (sp + sext6(o)*4)
     if p & 0xF800 == 0x1000 {
-        let o = ((p >> 5) & 0x3F) as i32 * 4;
+        let o = sext((p >> 5) & 0x3F, 6) * 4;
         return Op::Lea {
             rd: rd5,
             addr: AddrMode::simple(Base::Sp, o),
