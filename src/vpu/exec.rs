@@ -564,10 +564,15 @@ impl Vpu {
             Base::Gp => self.regs.get(GP),
             Base::R0 => self.regs.get(0),
             Base::Pc => pc,
-            Base::RegReg(a, b) => self
-                .regs
-                .get(a as usize)
-                .wrapping_add(self.regs.get(b as usize)),
+            // `ld{w} rd, (ra + rb)` — the index register is scaled by the
+            // access size (word → *4, half → *2, byte → *1), per the VC4 ISA
+            // note ("#todo rb<<size" in Hermitage's `videocoreiv.arch`).
+            Base::RegReg(a, b) => {
+                let scale = size.trailing_zeros();
+                self.regs
+                    .get(a as usize)
+                    .wrapping_add(self.regs.get(b as usize).wrapping_shl(scale))
+            }
         };
 
         match addr.writeback {
