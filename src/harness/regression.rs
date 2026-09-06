@@ -60,6 +60,16 @@ pub fn build_payload(scn: &Scenario) -> Result<Payload> {
             }
             Ok(p)
         }
+        PayloadKind::Eeprom => {
+            let bytes = std::fs::read(scn.payload_path()).with_context(|| {
+                format!("reading EEPROM image {}", scn.payload_path().display())
+            })?;
+            let mut p = Payload::from_eeprom_bytes(&bytes)?;
+            if let (Some(e), Payload::RawBinary { entry, .. }) = (scn.payload.entry, &mut p) {
+                *entry = e; // scenario entry override
+            }
+            Ok(p)
+        }
     }
 }
 

@@ -34,6 +34,8 @@ pub enum PayloadKind {
     Elf,
     /// A flat binary on disk.
     Raw,
+    /// A `pieeprom.bin` image; the bootcode section is staged at `0x8000_0000`.
+    Eeprom,
 }
 
 #[derive(Debug, Clone, Deserialize)]
