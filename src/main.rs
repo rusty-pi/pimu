@@ -75,6 +75,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     let mut exc_vbase: u32 = 0;
     let mut trace_from: u32 = 0;
     let mut core1_entry: Option<u32> = None;
+    let mut smp = false;
     let mut patches: Vec<(u32, u32)> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -91,6 +92,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
             "--exc-vbase" => {
                 exc_vbase = parse_u32(it.next().context("--exc-vbase needs a value")?)?
             }
+            "--smp" => smp = true,
             "--core1-entry" => {
                 core1_entry =
                     Some(parse_u32(it.next().context("--core1-entry needs a value")?)?)
@@ -138,6 +140,9 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     };
     emu.cpu.trace_from = trace_from;
     emu.core1_entry = core1_entry;
+    if smp {
+        emu.start_smp(start);
+    }
     let report = emu.run(&RunLimits {
         max_steps,
         max_wall: Some(std::time::Duration::from_secs(120)),
@@ -196,6 +201,15 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         );
         for l in &emu.cpu.trace_log {
             println!("{l}");
+        }
+    }
+
+    if let Some(c1) = &emu.cpu1 {
+        if !c1.trace_log.is_empty() {
+            println!("\n--- core 1 instruction trace ({} lines) ---", c1.trace_log.len());
+            for l in &c1.trace_log {
+                println!("{l}");
+            }
         }
     }
 

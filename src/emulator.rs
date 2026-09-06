@@ -111,6 +111,20 @@ impl Emulator {
         self.cpu1 = Some(c1);
     }
 
+    /// Bring up VPU core 1 immediately at `entry` (same as core 0). The BCM2711
+    /// boot ROM releases both VPU cores at `start4.elf`'s entry at once; they
+    /// diverge on `version` bit 16 inside the trampoline.
+    pub fn start_smp(&mut self, entry: u32) {
+        let mut c1 = Vpu::new(entry);
+        c1.core_id = 1;
+        c1.on_unimpl = self.cpu.on_unimpl;
+        c1.trace = self.cpu.trace;
+        c1.trace_cf_only = self.cpu.trace_cf_only;
+        c1.trace_cap = self.cpu.trace_cap;
+        c1.trace_from = self.cpu.trace_from;
+        self.cpu1 = Some(c1);
+    }
+
     pub fn set_console(&mut self, c: Console) {
         self.machine.console = c;
     }
