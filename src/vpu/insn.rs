@@ -252,6 +252,23 @@ pub enum Op {
     Version {
         rd: u8,
     },
+    /// `switch`/`switch.b rd` — indexed jump through a table that starts right
+    /// after the instruction. `byte` selects 8-bit vs 16-bit table entries;
+    /// each entry is a halfword displacement from the table base.
+    Switch {
+        rd: u8,
+        byte: bool,
+    },
+    /// `mov p<preg>, r<rs>` — write a system-coprocessor register.
+    MovToCoproc {
+        preg: u8,
+        rs: u8,
+    },
+    /// `mov r<rd>, p<preg>` — read a system-coprocessor register.
+    MovFromCoproc {
+        rd: u8,
+        preg: u8,
+    },
     /// `addcmpb`: `rd = rd + a; compare rd with b; if <cond> branch to target`.
     AddCmpB {
         cond: Cond,
@@ -355,6 +372,8 @@ impl Op {
             Load { w, cond, .. } => format!("ld{}{}", w.suffix(), cond.mnemonic()),
             Store { w, cond, .. } => format!("st{}{}", w.suffix(), cond.mnemonic()),
             Version { .. } => "version".into(),
+            Switch { byte, .. } => if *byte { "switch.b" } else { "switch" }.into(),
+            MovToCoproc { .. } | MovFromCoproc { .. } => "mov".into(),
             AddCmpB { cond, .. } => format!("addcmpb{}", cond.mnemonic()),
             PushMulti { .. } => "stm".into(),
             PopMulti { .. } => "ldm".into(),

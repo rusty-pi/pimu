@@ -91,6 +91,13 @@ fn decode16(p0: u16, pc: u32) -> Op {
             rd: rd5,
         };
     }
+    // 0000 0000 100d dddd : switch.b rd   /   101d dddd : switch rd
+    if p & 0xFFC0 == 0x0080 {
+        return Op::Switch {
+            rd: rd5,
+            byte: p & 0x20 == 0,
+        };
+    }
     // 0000 0000 111d dddd : version rd
     if p & 0xFFE0 == 0x00E0 {
         return Op::Version { rd: rd5 };
@@ -365,9 +372,16 @@ fn decode32(p0: u16, p1: u16, pc: u32) -> Op {
         };
     }
 
-    // 1100 1100 00Xd dddd | ... : mov p<n>,r<n> / mov r<n>,p<n>  (coproc moves)
+    // 1100 1100 000d dddd | ...000a aaaa : mov p<a>, r<d>   (write coproc)
+    // 1100 1100 001d dddd | ...000a aaaa : mov r<d>, p<a>   (read coproc)
     if hw0 & 0xFFC0 == 0xCC00 {
-        return Op::Nop; // peripheral-register file not modelled
+        let d = (hw0 & 0x1F) as u8;
+        let a = (hw1 & 0x1F) as u8;
+        return if hw0 & 0x20 == 0 {
+            Op::MovToCoproc { preg: a, rs: d }
+        } else {
+            Op::MovFromCoproc { rd: d, preg: a }
+        };
     }
 
     Op::Unimpl {

@@ -64,6 +64,8 @@ pub struct RunReport {
     pub console: Vec<u8>,
     /// Distinct unimplemented instructions encountered (reconnaissance).
     pub unimpl: Vec<crate::vpu::exec::UnimplHit>,
+    /// Final register file (r0..r31).
+    pub regs: [u32; 32],
 }
 
 impl Emulator {
@@ -185,6 +187,7 @@ impl Emulator {
             pc: self.cpu.pc(),
             console,
             unimpl,
+            regs: std::array::from_fn(|i| self.cpu.regs.get(i)),
         }
     }
 }

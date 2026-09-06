@@ -80,11 +80,23 @@ pub struct Vpu {
     pub unimpl: Vec<UnimplHit>,
     /// Value returned by `version rd`.
     pub version_value: u32,
+    /// Base of the 64-entry exception vector table (`.isr_vectors`). `swi #u`
+    /// raises exception `0x20 + u` and jumps to `*(exc_vbase + exc*8)`, after
+    /// pushing SR and the return address (so the handler's `rti` unwinds).
+    pub exc_vbase: u32,
+    /// True while executing inside an exception handler (before `rti`).
+    pub in_exception: u32,
+    /// System-coprocessor register file (`mov p<n>,r` / `mov r,p<n>`). Not real
+    /// hardware behaviour — reads return the last written value (0 at reset),
+    /// which is enough to clear the early-boot "wait for p16 == 0" loops.
+    pub coproc: [u32; 32],
     /// Ring of recent taken control transfers `(from_pc, to_pc)`.
     pub cf_trace: Vec<(u32, u32)>,
     /// When set, `step` pushes a one-line disassembly + delta of every
-    /// instruction it retires (bounded) into `trace_log`.
+    /// instruction it retires (bounded by `trace_cap`) into `trace_log`.
     pub trace: bool,
+    pub trace_cf_only: bool,
+    pub trace_cap: usize,
     pub trace_log: Vec<String>,
 }
 
@@ -94,6 +106,7 @@ impl Vpu {
         v.regs.pc = entry;
         v.version_value = DEFAULT_VERSION;
         v.cf_trace = Vec::with_capacity(512);
+        v.trace_cap = 20_000;
         v
     }
 
@@ -155,7 +168,7 @@ impl Vpu {
 
         self.cycles += 1;
 
-        let trace_before = if self.trace && self.trace_log.len() < 20_000 {
+        let trace_before = if self.trace && self.trace_log.len() < self.trace_cap {
             Some(self.regs.clone())
         } else {
             None
@@ -165,7 +178,34 @@ impl Vpu {
             Op::Nop => self.regs.pc = next,
             Op::Sleep => return self.stop(Stop::Halt(HaltReason::Sleep)),
             Op::Bkpt => return self.stop(Stop::Halt(HaltReason::Breakpoint)),
-            Op::Swi { vector } => return self.stop(Stop::Halt(HaltReason::Swi(vector))),
+            Op::Swi { vector } => {
+                // `vector` is already `0x20 + u`. With a vector table configured,
+                // trap to `*(exc_vbase + vector*8)` after pushing SR + return
+                // address (so the handler's `rti` unwinds). Otherwise halt — the
+                // test payloads use `swi` as a clean "done".
+                let handler = if self.exc_vbase != 0 {
+                    bus.load32(self.exc_vbase.wrapping_add(vector.wrapping_mul(8)))
+                        .ok()
+                        .filter(|&h| h != 0)
+                } else {
+                    None
+                };
+                match handler {
+                    Some(h) => {
+                        let sp = self.regs.get(SP).wrapping_sub(8);
+                        let sr = self.regs.sr;
+                        if bus.store32(sp, sr).is_err()
+                            || bus.store32(sp.wrapping_add(4), next).is_err()
+                        {
+                            return self.stop(Stop::Halt(HaltReason::Swi(vector)));
+                        }
+                        self.regs.set(SP, sp);
+                        self.in_exception = self.in_exception.wrapping_add(1);
+                        self.regs.pc = h;
+                    }
+                    None => return self.stop(Stop::Halt(HaltReason::Swi(vector))),
+                }
+            }
 
             Op::Rti => {
                 let sp = self.regs.get(SP);
@@ -180,6 +220,7 @@ impl Vpu {
                 self.regs.sr = sr;
                 self.regs.set(SP, sp.wrapping_add(8));
                 self.regs.pc = ret;
+                self.in_exception = self.in_exception.saturating_sub(1);
             }
 
             Op::BranchReg { link, rd } => {
@@ -302,6 +343,35 @@ impl Vpu {
                 self.regs.pc = next;
             }
 
+            Op::MovToCoproc { preg, rs } => {
+                self.coproc[preg as usize & 31] = self.regs.get(rs as usize);
+                self.regs.pc = next;
+            }
+            Op::MovFromCoproc { rd, preg } => {
+                let v = self.coproc[preg as usize & 31];
+                self.regs.set(rd as usize, v);
+                self.regs.pc = next;
+            }
+
+            Op::Switch { rd, byte } => {
+                // Table starts at `next` (right after the 2-byte instruction);
+                // entry[idx] is a halfword displacement from that base.
+                let idx = self.regs.get(rd as usize);
+                let entry_addr = next.wrapping_add(if byte { idx } else { idx * 2 });
+                let disp = if byte {
+                    match bus.load8(entry_addr) {
+                        Ok(v) => v as u32,
+                        Err(err) => return self.stop(Stop::Fault(Fault::Bus { pc, err })),
+                    }
+                } else {
+                    match bus.load16(entry_addr) {
+                        Ok(v) => v as u32,
+                        Err(err) => return self.stop(Stop::Fault(Fault::Bus { pc, err })),
+                    }
+                };
+                self.regs.pc = next.wrapping_add(disp * 2);
+            }
+
             Op::AddCmpB {
                 cond,
                 rd,
@@ -309,12 +379,13 @@ impl Vpu {
                 b,
                 target,
             } => {
+                // `rd += a; compare (rd) with b; branch if <cond>`.
                 let av = self.reg_or_imm(a);
                 let sum = self.regs.get(rd as usize).wrapping_add(av);
                 self.regs.set(rd as usize, sum);
                 let bv = self.reg_or_imm(b);
-                let (_, c, v) = add_with_carry(sum, !bv, 1);
-                let flags = nz(sum.wrapping_sub(bv), c, v);
+                let (diff, no_borrow, v) = add_with_carry(sum, !bv, 1);
+                let flags = nz(diff, !no_borrow, v);
                 self.regs.flags = flags;
                 self.regs.pc = if flags.test(cond) { target } else { next };
             }
@@ -324,7 +395,8 @@ impl Vpu {
                 count,
                 include_lr,
             } => {
-                // Slots low->high: [lr]?, r[first], r[first+1], ... (wrapping).
+                // Slots low->high: r[first], r[first+1], ... (wrapping), then
+                // `lr` last at the highest slot (per `stm rX-rY, lr, (--sp)`).
                 let total = count as u32 + include_lr as u32;
                 let sp = self.regs.get(SP).wrapping_sub(4 * total);
                 let mut slot = sp;
@@ -338,18 +410,15 @@ impl Vpu {
                         }
                     }
                 };
-                if include_lr {
-                    if !put(self, bus, LR, slot) {
-                        return Step::Stopped;
-                    }
-                    slot = slot.wrapping_add(4);
-                }
                 for i in 0..count {
                     let r = ((first as usize) + i as usize) & 31;
                     if !put(self, bus, r, slot) {
                         return Step::Stopped;
                     }
                     slot = slot.wrapping_add(4);
+                }
+                if include_lr && !put(self, bus, LR, slot) {
+                    return Step::Stopped;
                 }
                 self.regs.set(SP, sp);
                 self.regs.pc = next;
@@ -364,13 +433,6 @@ impl Vpu {
                 let mut slot = self.regs.get(SP);
                 let sp_after = slot.wrapping_add(4 * total);
                 let mut new_pc = next;
-                if include_pc {
-                    match bus.load32(slot) {
-                        Ok(v) => new_pc = v,
-                        Err(err) => return self.stop(Stop::Fault(Fault::Bus { pc, err })),
-                    }
-                    slot = slot.wrapping_add(4);
-                }
                 for i in 0..count {
                     let r = ((first as usize) + i as usize) & 31;
                     match bus.load32(slot) {
@@ -378,6 +440,12 @@ impl Vpu {
                         Err(err) => return self.stop(Stop::Fault(Fault::Bus { pc, err })),
                     }
                     slot = slot.wrapping_add(4);
+                }
+                if include_pc {
+                    match bus.load32(slot) {
+                        Ok(v) => new_pc = v,
+                        Err(err) => return self.stop(Stop::Fault(Fault::Bus { pc, err })),
+                    }
                 }
                 self.regs.set(SP, sp_after);
                 self.regs.pc = new_pc;
@@ -402,26 +470,50 @@ impl Vpu {
         }
 
         if let Some(before) = trace_before {
-            let mut line = format!("{pc:#010x}  {:<22}", format!("{:?}", insn.op));
-            for r in 0..32 {
-                if before.get(r) != self.regs.get(r) {
-                    line.push_str(&format!("  r{r}={:#x}", self.regs.get(r)));
+            let took_branch = before.pc.wrapping_add(insn.len as u32) != self.regs.pc;
+            let notable = matches!(
+                insn.op,
+                Op::Swi { .. }
+                    | Op::MovFromCoproc { .. }
+                    | Op::MovToCoproc { .. }
+                    | Op::Version { .. }
+                    | Op::Unimpl { .. }
+                    | Op::Rti
+            );
+            // Control-flow trace: skip the millions of straight-line ops inside
+            // memset/memcpy, keep every transfer and every notable op.
+            if !self.trace_cf_only || took_branch || notable || self.is_stopped() {
+                let mut line = format!("{pc:#010x}  {:<26}", format!("{:?}", insn.op));
+                for r in 0..32 {
+                    if before.get(r) != self.regs.get(r) {
+                        line.push_str(&format!("  r{r}={:#x}", self.regs.get(r)));
+                    }
                 }
+                if took_branch && !self.is_stopped() {
+                    line.push_str(&format!("  -> {:#010x}", self.regs.pc));
+                }
+                self.trace_log.push(line);
             }
-            if before.pc.wrapping_add(insn.len as u32) != self.regs.pc && !self.is_stopped() {
-                line.push_str(&format!("  -> {:#010x}", self.regs.pc));
-            }
-            self.trace_log.push(line);
         }
 
         if !self.is_stopped() {
             self.retired += 1;
             if self.regs.pc != next {
-                // A taken control transfer. Keep a bounded ring for tracing.
-                if self.cf_trace.len() == self.cf_trace.capacity() && !self.cf_trace.is_empty() {
-                    self.cf_trace.remove(0);
+                // A taken control transfer. Keep a bounded ring for tracing;
+                // collapse an immediately-repeating transfer (tight loop /
+                // memset) into a single entry with a count so the ring keeps
+                // the history that led into it.
+                match self.cf_trace.last_mut() {
+                    Some((f, t)) if *f == pc && *t == self.regs.pc => {}
+                    _ => {
+                        if self.cf_trace.len() == self.cf_trace.capacity()
+                            && !self.cf_trace.is_empty()
+                        {
+                            self.cf_trace.remove(0);
+                        }
+                        self.cf_trace.push((pc, self.regs.pc));
+                    }
                 }
-                self.cf_trace.push((pc, self.regs.pc));
             }
         }
         Step::Ran
@@ -553,17 +645,20 @@ pub fn alu(op: AluOp, a: u32, b: u32, cin: bool) -> Option<(u32, Flags)> {
             let (r, c, v) = add_with_carry(a, b, 0);
             return Some((r, nz(r, c, v)));
         }
+        // VC4 sets the carry flag to *borrow* on subtraction (x86-style, and
+        // per the arch's `cs/lo` + `cc/hs` aliasing), so `carry` here is the
+        // negation of the ARM-style no-borrow result.
         Sub | Cmp => {
             let (r, c, v) = add_with_carry(a, !b, 1);
-            return Some((r, nz(r, c, v)));
+            return Some((r, nz(r, !c, v)));
         }
         Rsub => {
             let (r, c, v) = add_with_carry(b, !a, 1);
-            return Some((r, nz(r, c, v)));
+            return Some((r, nz(r, !c, v)));
         }
         Neg => {
             let (r, c, v) = add_with_carry(0, !b, 1);
-            return Some((r, nz(r, c, v)));
+            return Some((r, nz(r, !c, v)));
         }
         And => a & b,
         Or => a | b,
