@@ -412,8 +412,10 @@ impl Vpu {
                 count,
                 include_lr,
             } => {
-                // Slots low->high: r[first], r[first+1], ... (wrapping), then
-                // `lr` last at the highest slot (per `stm rX-rY, lr, (--sp)`).
+                // `stm {rlist, lr}, (--sp)`: `lr` goes at the lowest slot,
+                // `rlist` ascending above it. The boot trampolines (start4.elf
+                // and pieeprom.bin) recover their return address as slot 0 via
+                // `stm {r24-r31,lr}; ldm {r0}` / `... ld r26,(sp)`.
                 let total = count as u32 + include_lr as u32;
                 let sp = self.regs.get(SP).wrapping_sub(4 * total);
                 let mut slot = sp;
@@ -427,15 +429,18 @@ impl Vpu {
                         }
                     }
                 };
+                if include_lr {
+                    if !put(self, bus, LR, slot) {
+                        return Step::Stopped;
+                    }
+                    slot = slot.wrapping_add(4);
+                }
                 for i in 0..count {
                     let r = ((first as usize) + i as usize) & 31;
                     if !put(self, bus, r, slot) {
                         return Step::Stopped;
                     }
                     slot = slot.wrapping_add(4);
-                }
-                if include_lr && !put(self, bus, LR, slot) {
-                    return Step::Stopped;
                 }
                 self.regs.set(SP, sp);
                 self.regs.pc = next;
@@ -446,10 +451,18 @@ impl Vpu {
                 count,
                 include_pc,
             } => {
+                // Mirror of `PushMulti`: `pc` from the lowest slot, `rlist` above.
                 let total = count as u32 + include_pc as u32;
                 let mut slot = self.regs.get(SP);
                 let sp_after = slot.wrapping_add(4 * total);
                 let mut new_pc = next;
+                if include_pc {
+                    match bus.load32(slot) {
+                        Ok(v) => new_pc = v,
+                        Err(err) => return self.stop(Stop::Fault(Fault::Bus { pc, err })),
+                    }
+                    slot = slot.wrapping_add(4);
+                }
                 for i in 0..count {
                     let r = ((first as usize) + i as usize) & 31;
                     match bus.load32(slot) {
@@ -457,12 +470,6 @@ impl Vpu {
                         Err(err) => return self.stop(Stop::Fault(Fault::Bus { pc, err })),
                     }
                     slot = slot.wrapping_add(4);
-                }
-                if include_pc {
-                    match bus.load32(slot) {
-                        Ok(v) => new_pc = v,
-                        Err(err) => return self.stop(Stop::Fault(Fault::Bus { pc, err })),
-                    }
                 }
                 self.regs.set(SP, sp_after);
                 self.regs.pc = new_pc;
