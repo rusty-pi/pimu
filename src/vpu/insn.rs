@@ -326,18 +326,21 @@ pub enum Op {
         target: u32,
     },
     /// `stm` — push `count` registers starting at `first` (wrapping r31->r0),
-    /// plus optional `lr`, to `(--sp)`. `lr` sits at the lowest address.
+    /// plus optional `lr`, to `(--sp)`. `lr_slot` is the word index `lr`
+    /// occupies (`0..=count`); the register list fills the other slots in order.
     PushMulti {
         first: u8,
         count: u8,
         include_lr: bool,
+        lr_slot: u8,
     },
     /// `ldm` — pop `count` registers starting at `first` (wrapping), plus
-    /// optional `pc` (from the lowest address), from `(sp++)`.
+    /// optional `pc` (from `lr_slot`), from `(sp++)`.
     PopMulti {
         first: u8,
         count: u8,
         include_pc: bool,
+        lr_slot: u8,
     },
     /// Correctly sized but not decoded to semantics.
     Unimpl {

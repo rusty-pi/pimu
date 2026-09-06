@@ -411,14 +411,13 @@ impl Vpu {
                 first,
                 count,
                 include_lr,
+                lr_slot,
             } => {
-                // `stm {rlist, lr}, (--sp)`: `lr` goes at the lowest slot,
-                // `rlist` ascending above it. The boot trampolines (start4.elf
-                // and pieeprom.bin) recover their return address as slot 0 via
-                // `stm {r24-r31,lr}; ldm {r0}` / `... ld r26,(sp)`.
+                // `stm {rlist, lr}, (--sp)`: `lr` occupies word `lr_slot` in the
+                // frame; the register list fills the remaining words in order.
+                // (The slot is bank-dependent — see `decode.rs`.)
                 let total = count as u32 + include_lr as u32;
                 let sp = self.regs.get(SP).wrapping_sub(4 * total);
-                let mut slot = sp;
                 let put = |exec: &mut Self, bus: &mut dyn Bus, r: usize, at: u32| -> bool {
                     let v = exec.regs.get(r);
                     match bus.store32(at, v) {
@@ -429,18 +428,19 @@ impl Vpu {
                         }
                     }
                 };
-                if include_lr {
-                    if !put(self, bus, LR, slot) {
+                let mut reg_i = 0usize;
+                for w in 0..total {
+                    let at = sp.wrapping_add(4 * w);
+                    let ok = if include_lr && w == lr_slot as u32 {
+                        put(self, bus, LR, at)
+                    } else {
+                        let r = ((first as usize) + reg_i) & 31;
+                        reg_i += 1;
+                        put(self, bus, r, at)
+                    };
+                    if !ok {
                         return Step::Stopped;
                     }
-                    slot = slot.wrapping_add(4);
-                }
-                for i in 0..count {
-                    let r = ((first as usize) + i as usize) & 31;
-                    if !put(self, bus, r, slot) {
-                        return Step::Stopped;
-                    }
-                    slot = slot.wrapping_add(4);
                 }
                 self.regs.set(SP, sp);
                 self.regs.pc = next;
@@ -450,28 +450,37 @@ impl Vpu {
                 first,
                 count,
                 include_pc,
+                lr_slot,
             } => {
-                // Mirror of `PushMulti`: `pc` from the lowest slot, `rlist` above.
+                // Mirror of `PushMulti`: `pc` comes from word `lr_slot`.
+                let sp = self.regs.get(SP);
                 let total = count as u32 + include_pc as u32;
-                let mut slot = self.regs.get(SP);
-                let sp_after = slot.wrapping_add(4 * total);
+                let sp_after = sp.wrapping_add(4 * total);
                 let mut new_pc = next;
-                if include_pc {
-                    match bus.load32(slot) {
-                        Ok(v) => new_pc = v,
+                let mut reg_i = 0usize;
+                let mut popped_sp = false;
+                for w in 0..total {
+                    let at = sp.wrapping_add(4 * w);
+                    let v = match bus.load32(at) {
+                        Ok(v) => v,
                         Err(err) => return self.stop(Stop::Fault(Fault::Bus { pc, err })),
+                    };
+                    if include_pc && w == lr_slot as u32 {
+                        new_pc = v;
+                    } else {
+                        let r = ((first as usize) + reg_i) & 31;
+                        reg_i += 1;
+                        self.regs.set(r, v);
+                        if r == SP {
+                            popped_sp = true;
+                        }
                     }
-                    slot = slot.wrapping_add(4);
                 }
-                for i in 0..count {
-                    let r = ((first as usize) + i as usize) & 31;
-                    match bus.load32(slot) {
-                        Ok(v) => self.regs.set(r, v),
-                        Err(err) => return self.stop(Stop::Fault(Fault::Bus { pc, err })),
-                    }
-                    slot = slot.wrapping_add(4);
+                // A context-restore `ldm {…, sp, …}` loads sp from the stack;
+                // that value wins over the auto-increment.
+                if !popped_sp {
+                    self.regs.set(SP, sp_after);
                 }
-                self.regs.set(SP, sp_after);
                 self.regs.pc = new_pc;
             }
 

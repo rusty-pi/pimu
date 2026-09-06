@@ -119,32 +119,47 @@ fn decode16(p0: u16, pc: u32) -> Op {
         // r31 back to r0. The width itself is bank-dependent — see the
         // `regW` computation in Hermitage's `vciv.py` push/pop renderer:
         // bank 1 adds a fixed +6, the others fold in `bank*8`.
+        let n_raw = val & 0x1F;
         let regw = if bank == 1 {
-            (val & 0x1F) + 6
+            n_raw + 6
         } else {
-            ((val & 0x1F) + bank * 8) & 0x1F
+            (n_raw + bank * 8) & 0x1F
         };
         let count = regw as u8 + 1;
+        // `lr`/`pc` slot inside the frame. Empirically (from start4.elf +
+        // pieeprom.bin return sequences): it sits at `n_raw + 1` when that fits
+        // within the register list, otherwise at slot 0. bank 0 `{r0-r5,lr}`
+        // -> slot 6 (appended); bank 1 `{r6-r16,lr}` -> slot 5; bank 3
+        // `{r24-r31,lr}` -> slot 0.
+        let lr_slot = if (n_raw as u8) + 1 <= count {
+            (n_raw as u8) + 1
+        } else {
+            0
+        };
         return match kind {
             0 => Op::PopMulti {
                 first,
                 count,
                 include_pc: false,
+                lr_slot,
             },
             1 => Op::PushMulti {
                 first,
                 count,
                 include_lr: false,
+                lr_slot,
             },
             2 => Op::PopMulti {
                 first,
                 count,
                 include_pc: true,
+                lr_slot,
             },
             _ => Op::PushMulti {
                 first,
                 count,
                 include_lr: true,
+                lr_slot,
             },
         };
     }
