@@ -301,6 +301,71 @@ impl Vpu {
                 }
             }
 
+            Op::FpAlu3 {
+                op,
+                cond,
+                rd,
+                ra,
+                b,
+            } => {
+                if !self.regs.flags.test(cond) {
+                    self.regs.pc = next;
+                } else {
+                    use super::insn::FpOp::*;
+                    let a = f32::from_bits(self.regs.get(ra as usize));
+                    // Register operands are float bit-patterns; immediates are
+                    // small integers used as literal float values / shift counts.
+                    let (bv, bf) = match b {
+                        RegOrImm::Reg(r) => {
+                            let raw = self.regs.get(r as usize);
+                            (raw, f32::from_bits(raw))
+                        }
+                        RegOrImm::Imm(i) => (i as u32, i as f32),
+                    };
+                    let scale = |sh: u32| 2f32.powi(sh as i32);
+                    let rai = self.regs.get(ra as usize);
+                    let res: Option<u32> = match op {
+                        Fadd => Some((a + bf).to_bits()),
+                        Fsub => Some((a - bf).to_bits()),
+                        Fmul => Some((a * bf).to_bits()),
+                        Fdiv => Some((a / bf).to_bits()),
+                        Fabs => Some(a.abs().to_bits()),
+                        Frsub => Some((bf - a).to_bits()),
+                        Fmax => Some(a.max(bf).to_bits()),
+                        Fmin => Some(a.min(bf).to_bits()),
+                        Frcp => Some((1.0 / bf).to_bits()),
+                        Frsqrt => Some((1.0 / bf.sqrt()).to_bits()),
+                        Fnmul => Some((-(a * bf)).to_bits()),
+                        Fceil => Some(bf.ceil().to_bits()),
+                        Ffloor => Some(bf.floor().to_bits()),
+                        Flog2 => Some(bf.log2().to_bits()),
+                        Fexp2 => Some(bf.exp2().to_bits()),
+                        Ftrunc => Some(((a * scale(bv)) as i64 as i32) as u32),
+                        FtruncFloor => Some((((a * scale(bv)).floor()) as i64 as i32) as u32),
+                        Flts => Some(((rai as i32 as f32) / scale(bv)).to_bits()),
+                        Fltu => Some(((rai as f32) / scale(bv)).to_bits()),
+                        Fcmp => {
+                            let lt = a < bf;
+                            self.regs.flags.n = lt;
+                            self.regs.flags.c = lt;
+                            self.regs.flags.z = a == bf;
+                            self.regs.flags.v = false;
+                            None
+                        }
+                    };
+                    if let Some(v) = res {
+                        self.regs.set(rd as usize, v);
+                        // FP ALU ops update N/Z from the (float) result.
+                        let fv = f32::from_bits(v);
+                        self.regs.flags.n = fv.is_sign_negative() && fv != 0.0;
+                        self.regs.flags.z = fv == 0.0;
+                        self.regs.flags.c = false;
+                        self.regs.flags.v = false;
+                    }
+                    self.regs.pc = next;
+                }
+            }
+
             Op::Lea { rd, addr } => {
                 // Address arithmetic only — never touches memory or writeback.
                 let base = match addr.base {
@@ -411,11 +476,9 @@ impl Vpu {
                 first,
                 count,
                 include_lr,
-                lr_slot,
             } => {
-                // `stm {rlist, lr}, (--sp)`: `lr` occupies word `lr_slot` in the
-                // frame; the register list fills the remaining words in order.
-                // (The slot is bank-dependent — see `decode.rs`.)
+                // `stm {rlist, lr}, (--sp)`: register list in ascending memory
+                // order, then `lr` at the top word of the frame.
                 let total = count as u32 + include_lr as u32;
                 let sp = self.regs.get(SP).wrapping_sub(4 * total);
                 let put = |exec: &mut Self, bus: &mut dyn Bus, r: usize, at: u32| -> bool {
@@ -428,19 +491,17 @@ impl Vpu {
                         }
                     }
                 };
-                let mut reg_i = 0usize;
-                for w in 0..total {
-                    let at = sp.wrapping_add(4 * w);
-                    let ok = if include_lr && w == lr_slot as u32 {
-                        put(self, bus, LR, at)
-                    } else {
-                        let r = ((first as usize) + reg_i) & 31;
-                        reg_i += 1;
-                        put(self, bus, r, at)
-                    };
-                    if !ok {
+                // Register list in ascending memory order, then `lr` at the top
+                // word of the frame. (`count == 0` is the `stm lr` / `ldm pc`
+                // form — see `decode.rs`.)
+                for w in 0..count as u32 {
+                    let r = ((first as usize) + w as usize) & 31;
+                    if !put(self, bus, r, sp.wrapping_add(4 * w)) {
                         return Step::Stopped;
                     }
+                }
+                if include_lr && !put(self, bus, LR, sp.wrapping_add(4 * count as u32)) {
+                    return Step::Stopped;
                 }
                 self.regs.set(SP, sp);
                 self.regs.pc = next;
@@ -450,30 +511,29 @@ impl Vpu {
                 first,
                 count,
                 include_pc,
-                lr_slot,
             } => {
-                // Mirror of `PushMulti`: `pc` comes from word `lr_slot`.
+                // Mirror of `PushMulti`: `pc` comes from the top word.
                 let sp = self.regs.get(SP);
                 let total = count as u32 + include_pc as u32;
                 let sp_after = sp.wrapping_add(4 * total);
                 let mut new_pc = next;
-                let mut reg_i = 0usize;
                 let mut popped_sp = false;
-                for w in 0..total {
+                for w in 0..count as u32 {
                     let at = sp.wrapping_add(4 * w);
                     let v = match bus.load32(at) {
                         Ok(v) => v,
                         Err(err) => return self.stop(Stop::Fault(Fault::Bus { pc, err })),
                     };
-                    if include_pc && w == lr_slot as u32 {
-                        new_pc = v;
-                    } else {
-                        let r = ((first as usize) + reg_i) & 31;
-                        reg_i += 1;
-                        self.regs.set(r, v);
-                        if r == SP {
-                            popped_sp = true;
-                        }
+                    let r = ((first as usize) + w as usize) & 31;
+                    self.regs.set(r, v);
+                    if r == SP {
+                        popped_sp = true;
+                    }
+                }
+                if include_pc {
+                    match bus.load32(sp.wrapping_add(4 * count as u32)) {
+                        Ok(v) => new_pc = v,
+                        Err(err) => return self.stop(Stop::Fault(Fault::Bus { pc, err })),
                     }
                 }
                 // A context-restore `ldm {…, sp, …}` loads sp from the stack;

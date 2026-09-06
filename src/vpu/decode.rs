@@ -5,7 +5,7 @@
 //! cross-checked against a sweep of real `start4.elf`. Coverage is the scalar
 //! integer ISA; the vector unit (0xF000+) is decoded to length only.
 
-use super::insn::{AddrMode, AluOp, Base, Insn, MemWidth, Op, RegOrImm, Writeback};
+use super::insn::{AddrMode, AluOp, Base, FpOp, Insn, MemWidth, Op, RegOrImm, Writeback};
 use super::length::{insn_class, insn_len_bytes, InsnClass};
 use super::reg::Cond;
 
@@ -111,56 +111,35 @@ fn decode16(p0: u16, pc: u32) -> Op {
     // 0000 001X Ybb nnnnn : ldm/stm    (0x0200 ldm, 0x0280 stm, 0x0300 ldm+pc,
     //                                   0x0380 stm+lr; bb=bank, n=width-1)
     if (0x0200..0x0400).contains(&p) {
-        let kind = (p >> 7) & 3;
-        let val = p & 0x7F; // 7-bit operand field
-        let bank = (val >> 5) & 3;
+        // Per Hermitage's `videocoreiv.arch`:
+        //   0000 001L Sbb nnnnn
+        // L (bit 8) = include lr/pc; S (bit 7) = store(1)/load(0); bb = bank;
+        // n = (register count - 1). The list is `r{bank*8} ..= r{(bank*8+n)&31}`
+        // (bank 1 is special-cased to start at r6, not r8). `lr`/`pc`, when
+        // present, occupies the top (highest-address) word of the frame.
+        let with_ret = p & 0x0100 != 0;
+        let is_store = p & 0x0080 != 0;
+        let bank = (p >> 5) & 3;
         let first = [0u8, 6, 16, 24][bank as usize];
-        // Register list is `first ..= first + regw` (inclusive), wrapping past
-        // r31 back to r0. The width itself is bank-dependent — see the
-        // `regW` computation in Hermitage's `vciv.py` push/pop renderer:
-        // bank 1 adds a fixed +6, the others fold in `bank*8`.
-        let n_raw = val & 0x1F;
-        let regw = if bank == 1 {
-            n_raw + 6
+        let m = p & 0x1F;
+        // Per the VC4 Programmers Manual: "If mmmmm is 31 and pc/lr are
+        // stored/loaded, then no register but pc/lr is stored/loaded" — and the
+        // same holds once the `rb..rm` range wraps past r31 (e.g.
+        // `stm r24-r7, lr`). Those forms push/pop `lr`/`pc` alone.
+        let ret_only = with_ret && (m == 31 || first as u32 + m >= 32);
+        let count = if ret_only { 0 } else { (m as u8) + 1 };
+        return if is_store {
+            Op::PushMulti {
+                first,
+                count,
+                include_lr: with_ret,
+            }
         } else {
-            (n_raw + bank * 8) & 0x1F
-        };
-        let count = regw as u8 + 1;
-        // `lr`/`pc` slot inside the frame. Empirically (from start4.elf +
-        // pieeprom.bin return sequences): it sits at `n_raw + 1` when that fits
-        // within the register list, otherwise at slot 0. bank 0 `{r0-r5,lr}`
-        // -> slot 6 (appended); bank 1 `{r6-r16,lr}` -> slot 5; bank 3
-        // `{r24-r31,lr}` -> slot 0.
-        let lr_slot = if (n_raw as u8) + 1 <= count {
-            (n_raw as u8) + 1
-        } else {
-            0
-        };
-        return match kind {
-            0 => Op::PopMulti {
+            Op::PopMulti {
                 first,
                 count,
-                include_pc: false,
-                lr_slot,
-            },
-            1 => Op::PushMulti {
-                first,
-                count,
-                include_lr: false,
-                lr_slot,
-            },
-            2 => Op::PopMulti {
-                first,
-                count,
-                include_pc: true,
-                lr_slot,
-            },
-            _ => Op::PushMulti {
-                first,
-                count,
-                include_lr: true,
-                lr_slot,
-            },
+                include_pc: with_ret,
+            }
         };
     }
     // 0000 01Xu uuuu dddd : ld/st rd, (sp + u*4)
@@ -375,6 +354,38 @@ fn decode32(p0: u16, p1: u16, pc: u32) -> Op {
             ra,
             b,
             set_flags,
+        };
+    }
+
+    // 1100 100f fffd dddd | aaaaa CCCC {0 bbbbb | 1 iiiiii} :
+    //   scalar FP triadic  (`0xC800..=0xC9FF`) — f selects the `f` table op.
+    // 1100 1010 0ttd dddd | ... : FP convert (`0xCA00..=0xCA7F`) —
+    //   tt = 00 ftrunc, 01 floor, 10 flts, 11 fltu; operand is the shift.
+    if hw0 & 0xFE00 == 0xC800 || hw0 & 0xFF80 == 0xCA00 {
+        let rd = (hw0 & 0x1F) as u8;
+        let ra = ((hw1 >> 11) & 0x1F) as u8;
+        let cond = Cond::from_bits((hw1 >> 7) & 0xF);
+        let b = if hw1 & 0x40 != 0 {
+            RegOrImm::Imm(sext(hw1 & 0x3F, 6))
+        } else {
+            RegOrImm::Reg((hw1 & 0x1F) as u8)
+        };
+        let op = if hw0 & 0xFE00 == 0xC800 {
+            FpOp::from_f_table((hw0 >> 5) & 0xF)
+        } else {
+            match (hw0 >> 5) & 3 {
+                0 => FpOp::Ftrunc,
+                1 => FpOp::FtruncFloor,
+                2 => FpOp::Flts,
+                _ => FpOp::Fltu,
+            }
+        };
+        return Op::FpAlu3 {
+            op,
+            cond,
+            rd,
+            ra,
+            b,
         };
     }
 

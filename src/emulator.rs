@@ -200,16 +200,21 @@ impl Emulator {
 
             if limits.idle_spin_limit > 0 {
                 if let Some(&cf) = self.cpu.cf_trace.last() {
-                    let progressing = self.machine.ram_writes != writes_at_cf;
+                    // "Progress" = memory or peripheral writes advancing. A bare
+                    // read-only poll counts as a spin, but firmware delay/lock
+                    // loops legitimately iterate 10k+ times before giving up, so
+                    // the threshold is generous.
+                    let progress = self.machine.ram_writes.wrapping_add(self.machine.mmio_writes);
+                    let progressing = progress != writes_at_cf;
                     if cf == last_cf && !had_output && !progressing {
                         cf_repeat += 1;
-                        if cf_repeat >= 4000 {
+                        if cf_repeat >= 200_000 {
                             break RunEnd::IdleSpin(cf.0);
                         }
                     } else {
                         cf_repeat = 0;
                         last_cf = cf;
-                        writes_at_cf = self.machine.ram_writes;
+                        writes_at_cf = progress;
                     }
                 }
 

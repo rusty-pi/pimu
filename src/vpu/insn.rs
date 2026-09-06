@@ -56,6 +56,72 @@ pub enum AluOp {
     Unimpl(&'static str),
 }
 
+/// Scalar floating-point op (`define-table f` in `videocoreiv.arch`, plus the
+/// `0xCA00` convert block).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FpOp {
+    Fadd,
+    Fsub,
+    Fmul,
+    Fdiv,
+    Fcmp,
+    Fabs,
+    Frsub,
+    Fmax,
+    Frcp,
+    Frsqrt,
+    Fnmul,
+    Fmin,
+    Fceil,
+    Ffloor,
+    Flog2,
+    Fexp2,
+    /// float -> int, truncating, after `<< shift` (`b` is the shift amount).
+    Ftrunc,
+    /// float -> int, flooring, after `<< shift`.
+    FtruncFloor,
+    /// signed int -> float, then `>> shift` (scale by 2^-shift).
+    Flts,
+    /// unsigned int -> float, then `>> shift`.
+    Fltu,
+}
+
+impl FpOp {
+    pub fn mnemonic(self) -> &'static str {
+        use FpOp::*;
+        match self {
+            Fadd => "fadd",
+            Fsub => "fsub",
+            Fmul => "fmul",
+            Fdiv => "fdiv",
+            Fcmp => "fcmp",
+            Fabs => "fabs",
+            Frsub => "frsub",
+            Fmax => "fmax",
+            Frcp => "frcp",
+            Frsqrt => "frsqrt",
+            Fnmul => "fnmul",
+            Fmin => "fmin",
+            Fceil => "fceil",
+            Ffloor => "ffloor",
+            Flog2 => "flog2",
+            Fexp2 => "fexp2",
+            Ftrunc => "ftrunc",
+            FtruncFloor => "floor",
+            Flts => "flts",
+            Fltu => "fltu",
+        }
+    }
+
+    pub fn from_f_table(idx: u32) -> FpOp {
+        use FpOp::*;
+        [
+            Fadd, Fsub, Fmul, Fdiv, Fcmp, Fabs, Frsub, Fmax, Frcp, Frsqrt, Fnmul, Fmin, Fceil,
+            Ffloor, Flog2, Fexp2,
+        ][(idx & 0xF) as usize]
+    }
+}
+
 impl AluOp {
     /// The 32-entry `p` table (`010p pppp` 16-bit reg/reg and `1011 00pp ppp`
     /// 16-bit-imm16 and `1100 00pp ppp` triadic forms).
@@ -278,6 +344,16 @@ pub enum Op {
         b: RegOrImm,
         set_flags: bool,
     },
+    /// Scalar floating-point triadic (`0xC800..=0xCA7F`): `rd = ra fop b`,
+    /// predicated on `cond`. `fcmp` sets flags. For the convert ops
+    /// (`ftrunc`/`ffloor`/`flts`/`fltu`) `b` is the shift amount.
+    FpAlu3 {
+        op: FpOp,
+        cond: Cond,
+        rd: u8,
+        ra: u8,
+        b: RegOrImm,
+    },
     /// `rd = <effective address of `addr`>` — `lea` / `add rd, base, #imm`.
     /// With `rd == sp` and a `Sp` base this is the stack-adjust form.
     Lea {
@@ -325,22 +401,20 @@ pub enum Op {
         b: RegOrImm,
         target: u32,
     },
-    /// `stm` — push `count` registers starting at `first` (wrapping r31->r0),
-    /// plus optional `lr`, to `(--sp)`. `lr_slot` is the word index `lr`
-    /// occupies (`0..=count`); the register list fills the other slots in order.
+    /// `stm` — push `count` registers starting at `first` (wrapping r31->r0)
+    /// to `(--sp)` in ascending memory order, then `lr` (if `include_lr`) at
+    /// the top word of the frame.
     PushMulti {
         first: u8,
         count: u8,
         include_lr: bool,
-        lr_slot: u8,
     },
-    /// `ldm` — pop `count` registers starting at `first` (wrapping), plus
-    /// optional `pc` (from `lr_slot`), from `(sp++)`.
+    /// `ldm` — pop `count` registers starting at `first` (wrapping) from
+    /// `(sp++)`, then `pc` (if `include_pc`) from the top word of the frame.
     PopMulti {
         first: u8,
         count: u8,
         include_pc: bool,
-        lr_slot: u8,
     },
     /// Correctly sized but not decoded to semantics.
     Unimpl {
@@ -424,6 +498,7 @@ impl Op {
             Alu2 { op, .. } => op.mnemonic().into(),
             AluImm { op, .. } => op.mnemonic().into(),
             Alu3 { op, cond, .. } => format!("{}{}", op.mnemonic(), cond.mnemonic()),
+            FpAlu3 { op, cond, .. } => format!("{}{}", op.mnemonic(), cond.mnemonic()),
             Lea { .. } => "lea".into(),
             Load { w, cond, .. } => format!("ld{}{}", w.suffix(), cond.mnemonic()),
             Store { w, cond, .. } => format!("st{}{}", w.suffix(), cond.mnemonic()),
