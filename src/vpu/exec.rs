@@ -728,7 +728,42 @@ pub fn alu(op: AluOp, a: u32, b: u32, cin: bool) -> Option<(u32, Flags)> {
         }
         Bitrev => b.reverse_bits(),
         Abs => (b as i32).unsigned_abs(),
-        AddScale(m) => a.wrapping_add(b.wrapping_mul(m as u32)),
+        AddScale(s) => a.wrapping_add(b.wrapping_shl(s as u32)),
+        SubScale(s) => a.wrapping_sub(b.wrapping_shl(s as u32)),
+        Count => b.count_ones(),
+        MulhdSS => (((a as i32 as i64) * (b as i32 as i64)) >> 32) as u32,
+        MulhdSU => (((a as i32 as i64) * (b as i64)) >> 32) as u32,
+        MulhdUS => (((a as i64) * (b as i32 as i64)) >> 32) as u32,
+        MulhdUU => (((a as u64) * (b as u64)) >> 32) as u32,
+        DivS => {
+            if b == 0 {
+                0
+            } else {
+                (a as i32).wrapping_div(b as i32) as u32
+            }
+        }
+        DivSU => {
+            if b == 0 {
+                0
+            } else {
+                ((a as i32 as i64) / (b as i64)) as u32
+            }
+        }
+        DivUS => {
+            if b == 0 {
+                0
+            } else {
+                ((a as i64) / (b as i32 as i64)) as u32
+            }
+        }
+        DivU => {
+            if b == 0 {
+                0
+            } else {
+                a / b
+            }
+        }
+        Clamp16 => (a as i32).clamp(-32768, 32767) as u32,
         Unimpl(_) => return None,
     };
     Some((r, nz(r, cin, false)))
