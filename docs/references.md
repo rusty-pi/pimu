@@ -12,7 +12,21 @@ Nothing executes the real Pi 4 VPU boot blobs. The relevant prior art:
 | [`hermanhermitage/videocoreiv`](https://github.com/hermanhermitage/videocoreiv) | ISA docs + JS disassembler | encoding source |
 | [`ptesarik/vc4boot`](https://github.com/ptesarik/vc4boot) | small VC4 asm boot programs (MIT) | future test payloads |
 | [binutils-vc4](https://github.com/poizan42/binutils-vc4) | assembler/disassembler (GPL) | opcode-table cross-check |
-| [`Idein/py-videocore6`](https://github.com/Idein/py-videocore6) | Python library for GPGPU programming on Raspberry Pi 4 (GPL) | RPi4 GPU stuff |
+| [`Idein/py-videocore6`](https://github.com/Idein/py-videocore6) | Python library for GPGPU programming on Raspberry Pi 4 (GPL) | QPU only — not the boot VPU (see note below) |
+| [`Terminus-IMRC/vc6qpudisas`](https://github.com/Terminus-IMRC/vc6qpudisas) | VideoCore VI **QPU** shader disassembler | QPU only — not the boot VPU (see note below) |
+
+### "VC6" vs the boot VPU
+
+The Pi 4 (BCM2711) 3D block is *VideoCore VI*, and its **QPU** (vector shader)
+ISA did change from VC4. `py-videocore6` and `vc6qpudisas` target that QPU —
+GPGPU compute kernels, not firmware.
+
+The **scalar VPU** that executes `start4.elf` / `bootcode` is unchanged from the
+VC4 lineage: `start4.elf` is built with the vc4 toolchain and disassembles
+cleanly against Hermitage's VC4 tables (our decoder cross-checks 0 length
+mismatches over the whole binary). So the QPU references only become relevant if
+this bench ever needs to emulate GPU compute shaders — the machine-id / crypto /
+DTB boot path never touches the QPU.
 
 ## ISA / hardware
 

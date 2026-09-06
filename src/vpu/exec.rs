@@ -98,6 +98,11 @@ pub struct Vpu {
     pub trace_cf_only: bool,
     pub trace_cap: usize,
     pub trace_log: Vec<String>,
+    /// If non-zero, tracing stays dormant until `pc` first reaches this address
+    /// (lets a run skip past millions of uninteresting early instructions).
+    pub trace_from: u32,
+    /// Flips true once `trace_from` has been reached (always true when it is 0).
+    pub trace_armed: bool,
 }
 
 impl Vpu {
@@ -168,7 +173,11 @@ impl Vpu {
 
         self.cycles += 1;
 
-        let trace_before = if self.trace && self.trace_log.len() < self.trace_cap {
+        if !self.trace_armed && (self.trace_from == 0 || pc == self.trace_from) {
+            self.trace_armed = true;
+        }
+        let trace_before = if self.trace && self.trace_armed && self.trace_log.len() < self.trace_cap
+        {
             Some(self.regs.clone())
         } else {
             None
