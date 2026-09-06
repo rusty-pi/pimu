@@ -3,7 +3,7 @@
 use crate::bus::{Bus, BusError, Width};
 
 use super::decode::decode;
-use super::insn::{AddrMode, AluOp, Base, MemWidth, Op, RegOrImm};
+use super::insn::{AddrMode, AluOp, Base, MemWidth, Op, RegOrImm, Writeback};
 use super::length::{insn_len_bytes, InsnClass};
 use super::reg::{Cond, Flags, Regs, GP, LR, SP};
 
@@ -59,10 +59,13 @@ pub struct UnimplHit {
     pub count: u64,
 }
 
-/// Default chip-version value returned by `version rd` when a scenario does not
-/// override it. `0x0004_0000` reads as "VideoCore IV" in several community
-/// tools; the true value is board-specific and unverified.
-pub const DEFAULT_VERSION: u32 = 0x0004_0000;
+/// Default chip-version value returned by `version rd`.
+///
+/// The `start4.elf` entry trampoline (`.crypto`) compares `version` (after
+/// masking bits 3 and 16) against one of `{0x0400_0162, 0x0400_0161,
+/// 0x0400_0160, 0x0400_0140, 0x0400_0104}` and `bkpt`s otherwise. `0x0400_0162`
+/// is the newest accepted revision — the BCM2711 VPU value.
+pub const DEFAULT_VERSION: u32 = 0x0400_0162;
 
 #[derive(Default)]
 pub struct Vpu {
@@ -77,6 +80,12 @@ pub struct Vpu {
     pub unimpl: Vec<UnimplHit>,
     /// Value returned by `version rd`.
     pub version_value: u32,
+    /// Ring of recent taken control transfers `(from_pc, to_pc)`.
+    pub cf_trace: Vec<(u32, u32)>,
+    /// When set, `step` pushes a one-line disassembly + delta of every
+    /// instruction it retires (bounded) into `trace_log`.
+    pub trace: bool,
+    pub trace_log: Vec<String>,
 }
 
 impl Vpu {
@@ -84,6 +93,7 @@ impl Vpu {
         let mut v = Vpu::default();
         v.regs.pc = entry;
         v.version_value = DEFAULT_VERSION;
+        v.cf_trace = Vec::with_capacity(512);
         v
     }
 
@@ -144,6 +154,12 @@ impl Vpu {
         let next = pc.wrapping_add(insn.len as u32);
 
         self.cycles += 1;
+
+        let trace_before = if self.trace && self.trace_log.len() < 20_000 {
+            Some(self.regs.clone())
+        } else {
+            None
+        };
 
         match insn.op {
             Op::Nop => self.regs.pc = next,
@@ -231,42 +247,53 @@ impl Vpu {
                 }
             }
 
-            Op::AddSp { imm } => {
-                let v = self.regs.get(SP).wrapping_add(imm as u32);
-                self.regs.set(SP, v);
-                self.regs.pc = next;
-            }
-            Op::AddRegSp { rd, imm } => {
-                let v = self.regs.get(SP).wrapping_add(imm as u32);
-                self.regs.set(rd as usize, v);
-                self.regs.pc = next;
-            }
-            Op::AddRegPc { rd, imm } => {
-                self.regs.set(rd as usize, pc.wrapping_add(imm as u32));
+            Op::Lea { rd, addr } => {
+                // Address arithmetic only — never touches memory or writeback.
+                let base = match addr.base {
+                    Base::Reg(r) => self.regs.get(r as usize),
+                    Base::Sp => self.regs.get(SP),
+                    Base::Gp => self.regs.get(GP),
+                    Base::R0 => self.regs.get(0),
+                    Base::Pc => pc,
+                    Base::RegReg(a, b) => self
+                        .regs
+                        .get(a as usize)
+                        .wrapping_add(self.regs.get(b as usize)),
+                };
+                self.regs
+                    .set(rd as usize, base.wrapping_add(addr.offset as u32));
                 self.regs.pc = next;
             }
 
-            Op::Load { w, rd, addr } => {
-                let ea = self.effective_addr(pc, addr);
-                match self.load_width(bus, ea, w) {
-                    Ok(v) => {
-                        self.regs.set(rd as usize, v);
-                        self.regs.pc = next;
+            Op::Load { w, rd, addr, cond } => {
+                if !self.regs.flags.test(cond) {
+                    self.regs.pc = next;
+                } else {
+                    let ea = self.resolve_addr(pc, addr, w);
+                    match self.load_width(bus, ea, w) {
+                        Ok(v) => {
+                            self.regs.set(rd as usize, v);
+                            self.regs.pc = next;
+                        }
+                        Err(err) => return self.stop(Stop::Fault(Fault::Bus { pc, err })),
                     }
-                    Err(err) => return self.stop(Stop::Fault(Fault::Bus { pc, err })),
                 }
             }
-            Op::Store { w, rd, addr } => {
-                let ea = self.effective_addr(pc, addr);
-                let v = self.regs.get(rd as usize);
-                let width = match w {
-                    MemWidth::Word => Width::Word,
-                    MemWidth::Half | MemWidth::SignedHalf => Width::Half,
-                    MemWidth::Byte => Width::Byte,
-                };
-                match bus.store(ea, width, v) {
-                    Ok(()) => self.regs.pc = next,
-                    Err(err) => return self.stop(Stop::Fault(Fault::Bus { pc, err })),
+            Op::Store { w, rd, addr, cond } => {
+                if !self.regs.flags.test(cond) {
+                    self.regs.pc = next;
+                } else {
+                    let ea = self.resolve_addr(pc, addr, w);
+                    let v = self.regs.get(rd as usize);
+                    let width = match w {
+                        MemWidth::Word => Width::Word,
+                        MemWidth::Half | MemWidth::SignedHalf => Width::Half,
+                        MemWidth::Byte => Width::Byte,
+                    };
+                    match bus.store(ea, width, v) {
+                        Ok(()) => self.regs.pc = next,
+                        Err(err) => return self.stop(Stop::Fault(Fault::Bus { pc, err })),
+                    }
                 }
             }
 
@@ -294,22 +321,35 @@ impl Vpu {
 
             Op::PushMulti {
                 first,
-                last,
+                count,
                 include_lr,
             } => {
-                let mut regs: Vec<usize> = (first..=last).map(|r| r as usize).collect();
-                if include_lr {
-                    regs.push(LR);
-                }
-                let mut sp = self.regs.get(SP);
-                // Full-descending, lowest register at the lowest address.
-                sp = sp.wrapping_sub(4 * regs.len() as u32);
-                let base = sp;
-                for (i, &r) in regs.iter().enumerate() {
-                    let v = self.regs.get(r);
-                    if let Err(err) = bus.store32(base.wrapping_add(4 * i as u32), v) {
-                        return self.stop(Stop::Fault(Fault::Bus { pc, err }));
+                // Slots low->high: [lr]?, r[first], r[first+1], ... (wrapping).
+                let total = count as u32 + include_lr as u32;
+                let sp = self.regs.get(SP).wrapping_sub(4 * total);
+                let mut slot = sp;
+                let put = |exec: &mut Self, bus: &mut dyn Bus, r: usize, at: u32| -> bool {
+                    let v = exec.regs.get(r);
+                    match bus.store32(at, v) {
+                        Ok(()) => true,
+                        Err(err) => {
+                            exec.stop(Stop::Fault(Fault::Bus { pc, err }));
+                            false
+                        }
                     }
+                };
+                if include_lr {
+                    if !put(self, bus, LR, slot) {
+                        return Step::Stopped;
+                    }
+                    slot = slot.wrapping_add(4);
+                }
+                for i in 0..count {
+                    let r = ((first as usize) + i as usize) & 31;
+                    if !put(self, bus, r, slot) {
+                        return Step::Stopped;
+                    }
+                    slot = slot.wrapping_add(4);
                 }
                 self.regs.set(SP, sp);
                 self.regs.pc = next;
@@ -317,28 +357,29 @@ impl Vpu {
 
             Op::PopMulti {
                 first,
-                last,
+                count,
                 include_pc,
             } => {
-                let mut regs: Vec<usize> = (first..=last).map(|r| r as usize).collect();
-                let mut sp = self.regs.get(SP);
+                let total = count as u32 + include_pc as u32;
+                let mut slot = self.regs.get(SP);
+                let sp_after = slot.wrapping_add(4 * total);
                 let mut new_pc = next;
-                for &r in &regs {
-                    match bus.load32(sp) {
-                        Ok(v) => self.regs.set(r, v),
-                        Err(err) => return self.stop(Stop::Fault(Fault::Bus { pc, err })),
-                    }
-                    sp = sp.wrapping_add(4);
-                }
                 if include_pc {
-                    match bus.load32(sp) {
+                    match bus.load32(slot) {
                         Ok(v) => new_pc = v,
                         Err(err) => return self.stop(Stop::Fault(Fault::Bus { pc, err })),
                     }
-                    sp = sp.wrapping_add(4);
+                    slot = slot.wrapping_add(4);
                 }
-                regs.clear();
-                self.regs.set(SP, sp);
+                for i in 0..count {
+                    let r = ((first as usize) + i as usize) & 31;
+                    match bus.load32(slot) {
+                        Ok(v) => self.regs.set(r, v),
+                        Err(err) => return self.stop(Stop::Fault(Fault::Bus { pc, err })),
+                    }
+                    slot = slot.wrapping_add(4);
+                }
+                self.regs.set(SP, sp_after);
                 self.regs.pc = new_pc;
             }
 
@@ -360,8 +401,28 @@ impl Vpu {
             }
         }
 
+        if let Some(before) = trace_before {
+            let mut line = format!("{pc:#010x}  {:<22}", format!("{:?}", insn.op));
+            for r in 0..32 {
+                if before.get(r) != self.regs.get(r) {
+                    line.push_str(&format!("  r{r}={:#x}", self.regs.get(r)));
+                }
+            }
+            if before.pc.wrapping_add(insn.len as u32) != self.regs.pc && !self.is_stopped() {
+                line.push_str(&format!("  -> {:#010x}", self.regs.pc));
+            }
+            self.trace_log.push(line);
+        }
+
         if !self.is_stopped() {
             self.retired += 1;
+            if self.regs.pc != next {
+                // A taken control transfer. Keep a bounded ring for tracing.
+                if self.cf_trace.len() == self.cf_trace.capacity() && !self.cf_trace.is_empty() {
+                    self.cf_trace.remove(0);
+                }
+                self.cf_trace.push((pc, self.regs.pc));
+            }
         }
         Step::Ran
     }
@@ -373,15 +434,49 @@ impl Vpu {
         }
     }
 
-    fn effective_addr(&self, pc: u32, addr: AddrMode) -> u32 {
-        let base = match addr.base {
+    /// Compute the effective address for a load/store and apply any base-register
+    /// writeback. `w` gives the access size, used by pre-dec / post-inc.
+    fn resolve_addr(&mut self, pc: u32, addr: AddrMode, w: MemWidth) -> u32 {
+        let size = match w {
+            MemWidth::Word => 4u32,
+            MemWidth::Half | MemWidth::SignedHalf => 2,
+            MemWidth::Byte => 1,
+        };
+        let base_reg = match addr.base {
+            Base::Reg(r) => Some(r as usize),
+            Base::Sp => Some(SP),
+            Base::Gp => Some(GP),
+            Base::R0 => Some(0),
+            Base::Pc | Base::RegReg(..) => None,
+        };
+        let base_val = match addr.base {
             Base::Reg(r) => self.regs.get(r as usize),
             Base::Sp => self.regs.get(SP),
             Base::Gp => self.regs.get(GP),
             Base::R0 => self.regs.get(0),
             Base::Pc => pc,
+            Base::RegReg(a, b) => self
+                .regs
+                .get(a as usize)
+                .wrapping_add(self.regs.get(b as usize)),
         };
-        base.wrapping_add(addr.offset as u32)
+
+        match addr.writeback {
+            Writeback::None => base_val.wrapping_add(addr.offset as u32),
+            Writeback::PreDec => {
+                let ea = base_val.wrapping_sub(size);
+                if let Some(r) = base_reg {
+                    self.regs.set(r, ea);
+                }
+                ea
+            }
+            Writeback::PostInc => {
+                if let Some(r) = base_reg {
+                    self.regs.set(r, base_val.wrapping_add(size));
+                }
+                base_val
+            }
+        }
     }
 
     fn load_width(&self, bus: &mut dyn Bus, ea: u32, w: MemWidth) -> Result<u32, BusError> {

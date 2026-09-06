@@ -70,6 +70,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     let mut ram_mb: u32 = 512;
     let mut max_steps: u64 = 20_000_000;
     let mut eeprom = false;
+    let mut trace = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -77,6 +78,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
             "--ram-mb" => ram_mb = it.next().context("--ram-mb needs a value")?.parse()?,
             "--max-steps" => max_steps = it.next().context("--max-steps needs a value")?.parse()?,
             "--eeprom" => eeprom = true,
+            "--trace" => trace = true,
             s if !s.starts_with('-') => path = Some(PathBuf::from(s)),
             s => bail!("unexpected argument '{s}'"),
         }
@@ -96,12 +98,23 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
 
     let mut emu = Emulator::new(machine, start);
     emu.set_unimpl_policy(UnimplPolicy::Skip);
+    emu.cpu.trace = trace;
     let report = emu.run(&RunLimits {
         max_steps,
         max_wall: Some(std::time::Duration::from_secs(120)),
         stop_pc: None,
         idle_spin_limit: 200_000,
     });
+    // Collapse consecutive-identical transfers so a spin doesn't hide the
+    // history that led into it.
+    let mut cf_tail: Vec<(u32, u32, u32)> = Vec::new();
+    for &(f, t) in &emu.cpu.cf_trace {
+        match cf_tail.last_mut() {
+            Some((lf, lt, n)) if *lf == f && *lt == t => *n += 1,
+            _ => cf_tail.push((f, t, 1)),
+        }
+    }
+    let cf_tail: Vec<(u32, u32, u32)> = cf_tail.into_iter().rev().take(30).collect();
 
     println!("entry      {start:#010x}");
     println!("end        {:?}", report.end);
@@ -119,6 +132,28 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     if !report.console.is_empty() {
         println!("\n--- console ({} bytes) ---", report.console.len());
         println!("{}", String::from_utf8_lossy(&report.console));
+    }
+
+    if trace {
+        println!(
+            "\n--- instruction trace ({} lines) ---",
+            emu.cpu.trace_log.len()
+        );
+        for l in &emu.cpu.trace_log {
+            println!("{l}");
+        }
+    }
+
+    if !cf_tail.is_empty() {
+        println!("\n--- last control transfers (newest first, repeats collapsed) ---");
+        for (from, to, n) in &cf_tail {
+            let tag = if *n > 1 {
+                format!("  (x{n})")
+            } else {
+                String::new()
+            };
+            println!("  {from:#010x}  ->  {to:#010x}{tag}");
+        }
     }
 
     if !report.unimpl.is_empty() {
@@ -242,12 +277,14 @@ fn cmd_disasm(args: &[String]) -> Result<ExitCode> {
     let mut base: u32 = 0;
     let mut count: usize = 64;
     let mut vaddr: Option<u32> = None;
+    let mut lengths_only = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--base" => base = parse_u32(it.next().context("--base needs a value")?)?,
             "--count" => count = it.next().context("--count needs a value")?.parse()?,
             "--vaddr" => vaddr = Some(parse_u32(it.next().context("--vaddr needs a value")?)?),
+            "--lengths" => lengths_only = true,
             s if !s.starts_with('-') => path = Some(PathBuf::from(s)),
             s => bail!("unexpected argument '{s}'"),
         }
@@ -283,11 +320,15 @@ fn cmd_disasm(args: &[String]) -> Result<ExitCode> {
             break;
         }
         let insn = decode(&bytes[off..off + len], pc);
-        let hex: String = bytes[off..off + len]
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect();
-        println!("{pc:#010x}:  {hex:<20}  {:?}", insn.op);
+        if lengths_only {
+            println!("{pc:#010x} {len} {}", insn.op.mnemonic());
+        } else {
+            let hex: String = bytes[off..off + len]
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            println!("{pc:#010x}:  {hex:<20}  {:?}", insn.op);
+        }
         pc = pc.wrapping_add(len as u32);
         off += len;
     }

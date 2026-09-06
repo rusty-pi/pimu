@@ -85,9 +85,20 @@ impl Emulator {
     pub fn run(&mut self, limits: &RunLimits) -> RunReport {
         let start = Instant::now();
         let mut console = Vec::new();
-        let mut last_pc = u32::MAX;
-        let mut same_pc_run = 0u64;
         let mut wall_check = 0u64;
+
+        // Spin detection: over a sliding window of steps, track the min/max PC
+        // and whether any console output happened. If the PC stays within a
+        // small window for the whole window length with no output, call it a
+        // spin (a peripheral poll our stubs never satisfy).
+        let win = limits.idle_spin_limit.max(1);
+        let mut w_lo = u32::MAX;
+        let mut w_hi = 0u32;
+        let mut w_steps = 0u64;
+        let mut w_output = false;
+        // Fast path: the exact same taken transfer repeating is a tight spin.
+        let mut last_cf = (u32::MAX, u32::MAX);
+        let mut cf_repeat = 0u64;
 
         let end = loop {
             if self.cpu.retired >= limits.max_steps {
@@ -116,15 +127,31 @@ impl Emulator {
             }
 
             if limits.idle_spin_limit > 0 {
-                if pc_before == last_pc && !had_output {
-                    same_pc_run += 1;
-                    if same_pc_run >= limits.idle_spin_limit {
-                        break RunEnd::IdleSpin(pc_before);
+                if let Some(&cf) = self.cpu.cf_trace.last() {
+                    if cf == last_cf && !had_output {
+                        cf_repeat += 1;
+                        if cf_repeat >= 200 {
+                            break RunEnd::IdleSpin(cf.0);
+                        }
+                    } else {
+                        cf_repeat = 0;
+                        last_cf = cf;
                     }
-                } else {
-                    same_pc_run = 0;
                 }
-                last_pc = pc_before;
+
+                w_lo = w_lo.min(pc_before);
+                w_hi = w_hi.max(pc_before);
+                w_output |= had_output;
+                w_steps += 1;
+                if w_steps >= win {
+                    if !w_output && w_hi.wrapping_sub(w_lo) <= 4096 {
+                        break RunEnd::IdleSpin(w_lo);
+                    }
+                    w_lo = u32::MAX;
+                    w_hi = 0;
+                    w_steps = 0;
+                    w_output = false;
+                }
             }
 
             wall_check += 1;
