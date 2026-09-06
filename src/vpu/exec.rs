@@ -78,8 +78,12 @@ pub struct Vpu {
     pub skipped: u64,
     /// Distinct unimplemented instructions seen (bounded).
     pub unimpl: Vec<UnimplHit>,
-    /// Value returned by `version rd`.
+    /// Value returned by `version rd` (before the core-id bit is OR'd in).
     pub version_value: u32,
+    /// VPU core index (0 or 1). Reported in bit 16 of `version` — `start4.elf`
+    /// keys its per-core branches (which control register to poke, which stack
+    /// to use) off that bit.
+    pub core_id: u32,
     /// Base of the 64-entry exception vector table (`.isr_vectors`). `swi #u`
     /// raises exception `0x20 + u` and jumps to `*(exc_vbase + exc*8)`, after
     /// pushing SR and the return address (so the handler's `rti` unwinds).
@@ -348,7 +352,8 @@ impl Vpu {
             }
 
             Op::Version { rd } => {
-                self.regs.set(rd as usize, self.version_value);
+                self.regs
+                    .set(rd as usize, self.version_value | (self.core_id << 16));
                 self.regs.pc = next;
             }
 
@@ -388,14 +393,17 @@ impl Vpu {
                 b,
                 target,
             } => {
-                // `rd += a; compare (rd) with b; branch if <cond>`.
+                // `rd += a; compare (rd) with b; branch if <cond>`. The compare
+                // is internal to the instruction — `addcmpb` writes `rd` and the
+                // PC but does *not* commit N/Z/C/V (per `vciv.py`: `CF_CHG1`
+                // only, no flag change). Firmware relies on this: a `btest` /
+                // `cmp` result survives across intervening `addcmpb` loops.
                 let av = self.reg_or_imm(a);
                 let sum = self.regs.get(rd as usize).wrapping_add(av);
                 self.regs.set(rd as usize, sum);
                 let bv = self.reg_or_imm(b);
                 let (diff, no_borrow, v) = add_with_carry(sum, !bv, 1);
                 let flags = nz(diff, !no_borrow, v);
-                self.regs.flags = flags;
                 self.regs.pc = if flags.test(cond) { target } else { next };
             }
 

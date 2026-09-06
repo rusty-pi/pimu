@@ -8,6 +8,13 @@ use crate::vpu::{Stop, UnimplPolicy, Vpu};
 
 pub struct Emulator {
     pub cpu: Vpu,
+    /// VPU core 1. `None` until `start4.elf`'s trampoline releases it by writing
+    /// a start vector to the core-control block; then the run loop interleaves
+    /// it with core 0 over the shared bus.
+    pub cpu1: Option<Vpu>,
+    /// Override for core 1's reset PC. `None` → core 1 starts at the address the
+    /// firmware wrote to the core-control block (`0x7E00_2030`).
+    pub core1_entry: Option<u32>,
     pub machine: Machine,
 }
 
@@ -48,6 +55,9 @@ pub enum RunEnd {
     TimeLimit,
     /// Detected a tight spin with no output.
     IdleSpin(u32),
+    /// VPU core 1 halted (swi/sleep/breakpoint/fault). Core 0 may still have
+    /// been running; check the report's `pc` and `core1_pc`.
+    Core1Halted(Stop),
 }
 
 #[derive(Debug, Clone)]
@@ -64,16 +74,41 @@ pub struct RunReport {
     pub console: Vec<u8>,
     /// Distinct unimplemented instructions encountered (reconnaissance).
     pub unimpl: Vec<crate::vpu::exec::UnimplHit>,
-    /// Final register file (r0..r31).
+    /// Final register file (r0..r31) of core 0.
     pub regs: [u32; 32],
+    /// Core 1 state, once it was released.
+    pub core1_pc: Option<u32>,
+    pub core1_retired: Option<u64>,
+    pub core1_end: Option<RunEnd>,
 }
 
 impl Emulator {
     pub fn new(machine: Machine, entry: u32) -> Emulator {
         Emulator {
             cpu: Vpu::new(entry),
+            cpu1: None,
+            core1_entry: None,
             machine,
         }
+    }
+
+    /// Release VPU core 1 at `vec`, inheriting core 0's unimpl policy. Its
+    /// exception-vector base is the start vector itself (that is what the
+    /// trampoline hands the hardware).
+    fn spawn_core1(&mut self, vec: u32) {
+        // The firmware writes core 1's *vector base* to the core-control block;
+        // the core itself resets to the shared ELF entry (the same trampoline
+        // core 0 ran) and branches on `version` bit 16 from there.
+        let entry = self.core1_entry.unwrap_or(vec);
+        let mut c1 = Vpu::new(entry);
+        c1.core_id = 1;
+        c1.on_unimpl = self.cpu.on_unimpl;
+        c1.exc_vbase = vec;
+        c1.trace = self.cpu.trace;
+        c1.trace_cf_only = self.cpu.trace_cf_only;
+        c1.trace_cap = self.cpu.trace_cap;
+        c1.trace_from = self.cpu.trace_from;
+        self.cpu1 = Some(c1);
     }
 
     pub fn set_console(&mut self, c: Console) {
@@ -105,8 +140,9 @@ impl Emulator {
         let mut cf_repeat = 0u64;
         let mut writes_at_cf = self.machine.ram_writes;
 
+        let mut core1_end: Option<RunEnd> = None;
         let end = loop {
-            if self.cpu.retired >= limits.max_steps {
+            if self.cpu.retired + self.cpu1.as_ref().map_or(0, |c| c.retired) >= limits.max_steps {
                 break RunEnd::StepLimit;
             }
             if let Some(pc) = limits.stop_pc {
@@ -119,6 +155,25 @@ impl Emulator {
             let step = self.cpu.step(&mut self.machine);
             self.machine.tick(1);
 
+            // The trampoline (running on core 0) may have just set core 1's
+            // vector base. Only actually bring core 1 up once we know where it
+            // should reset to (`core1_entry` — its semantics are still being
+            // reverse-engineered, so it is opt-in).
+            if self.cpu1.is_none() && self.core1_entry.is_some() {
+                if let Some(vec) = self.machine.corectl.take_core1_start() {
+                    self.spawn_core1(vec);
+                }
+            }
+            // Interleave one core-1 step per core-0 step over the shared bus.
+            if let Some(c1) = self.cpu1.as_mut() {
+                if !c1.is_stopped() {
+                    if let crate::vpu::Step::Stopped = c1.step(&mut self.machine) {
+                        core1_end =
+                            Some(RunEnd::Core1Halted(c1.stopped.clone().expect("stop reason")));
+                    }
+                }
+            }
+
             let fresh = self.machine.take_console_output();
             let had_output = !fresh.is_empty();
             console.extend_from_slice(&fresh);
@@ -130,6 +185,7 @@ impl Emulator {
                 }
                 crate::vpu::Step::Ran => {}
             }
+            // Core 1 halting does not stop core 0 — record it and carry on.
 
             if limits.idle_spin_limit > 0 {
                 if let Some(&cf) = self.cpu.cf_trace.last() {
@@ -188,6 +244,9 @@ impl Emulator {
             console,
             unimpl,
             regs: std::array::from_fn(|i| self.cpu.regs.get(i)),
+            core1_pc: self.cpu1.as_ref().map(|c| c.pc()),
+            core1_retired: self.cpu1.as_ref().map(|c| c.retired),
+            core1_end,
         }
     }
 }

@@ -5,11 +5,13 @@
 //! device needs from another is routed by [`Machine`](crate::machine::Machine).
 
 pub mod aux;
+pub mod corectl;
 pub mod stub;
 pub mod systimer;
 pub mod uart_pl011;
 
 pub use aux::Aux;
+pub use corectl::CoreCtl;
 pub use stub::StubRegion;
 pub use systimer::SysTimer;
 pub use uart_pl011::Pl011;
