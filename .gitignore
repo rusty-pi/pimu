@@ -1,0 +1,10 @@
+/target
+
+# Firmware blobs are fetched by scripts/fetch-firmware.sh, never committed.
+/firmware/*
+!/firmware/.gitkeep
+!/firmware/README.md
+
+# Regression run artifacts.
+/testdata/out/
+*.actual.txt
