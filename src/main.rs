@@ -71,6 +71,8 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     let mut max_steps: u64 = 20_000_000;
     let mut eeprom = false;
     let mut trace = false;
+    let mut trace_full = false;
+    let mut exc_vbase: u32 = 0;
     let mut patches: Vec<(u32, u32)> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -80,6 +82,13 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
             "--max-steps" => max_steps = it.next().context("--max-steps needs a value")?.parse()?,
             "--eeprom" => eeprom = true,
             "--trace" => trace = true,
+            "--trace-full" => {
+                trace = true;
+                trace_full = true;
+            }
+            "--exc-vbase" => {
+                exc_vbase = parse_u32(it.next().context("--exc-vbase needs a value")?)?
+            }
             "--patch" => {
                 let spec = it.next().context("--patch needs <hexaddr>=<hexval>")?;
                 let (a, v) = spec.split_once('=').context("--patch: expected addr=val")?;
@@ -110,6 +119,9 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     let mut emu = Emulator::new(machine, start);
     emu.set_unimpl_policy(UnimplPolicy::Skip);
     emu.cpu.trace = trace;
+    emu.cpu.exc_vbase = exc_vbase;
+    emu.cpu.trace_cf_only = trace && !trace_full;
+    emu.cpu.trace_cap = if trace_full { 40_000 } else { 4_000_000 };
     let report = emu.run(&RunLimits {
         max_steps,
         max_wall: Some(std::time::Duration::from_secs(120)),
@@ -139,6 +151,14 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         report.stub_hits, report.bus_errors
     );
     println!("wall       {:?}", report.wall);
+    print!("regs      ");
+    for (i, r) in report.regs.iter().enumerate() {
+        if i % 8 == 0 {
+            print!("\n  r{i:<2}");
+        }
+        print!(" {r:08x}");
+    }
+    println!();
 
     if !report.console.is_empty() {
         println!("\n--- console ({} bytes) ---", report.console.len());

@@ -95,20 +95,22 @@ pub struct Flags {
 }
 
 impl Flags {
-    /// Evaluate a condition code against the current flags (ARM semantics).
+    /// Evaluate a condition code. Note the VC4 carry convention: `c` is *borrow*
+    /// on subtraction, so `cs` aliases `lo` (unsigned below) and `cc` aliases
+    /// `hs` (unsigned higher-or-same) — the opposite of ARM.
     pub fn test(&self, cond: Cond) -> bool {
         use Cond::*;
         match cond {
             Eq => self.z,
             Ne => !self.z,
-            Cs => self.c,
-            Cc => !self.c,
+            Cs => self.c,  // == lo  (unsigned <)
+            Cc => !self.c, // == hs  (unsigned >=)
             Mi => self.n,
             Pl => !self.n,
             Vs => self.v,
             Vc => !self.v,
-            Hi => self.c && !self.z,
-            Ls => !self.c || self.z,
+            Hi => !self.c && !self.z, // unsigned >
+            Ls => self.c || self.z,   // unsigned <=
             Ge => self.n == self.v,
             Lt => self.n != self.v,
             Gt => !self.z && (self.n == self.v),
