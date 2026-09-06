@@ -143,12 +143,38 @@ pub enum Base {
     Pc,
     Gp,
     R0,
+    /// `(rA + rB)` — two-register addressing (16-bit `0xA000` / 48-bit forms).
+    RegReg(u8, u8),
+}
+
+/// Base-register update for an addressing mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Writeback {
+    #[default]
+    None,
+    /// `(--rN)`: decrement the base by the access size *before* the access,
+    /// write it back.
+    PreDec,
+    /// `(rN++)`: use the base, then increment it by the access size and write
+    /// it back.
+    PostInc,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AddrMode {
     pub base: Base,
     pub offset: i32,
+    pub writeback: Writeback,
+}
+
+impl AddrMode {
+    pub fn simple(base: Base, offset: i32) -> AddrMode {
+        AddrMode {
+            base,
+            offset,
+            writeback: Writeback::None,
+        }
+    }
 }
 
 /// Right-hand operand of a triadic ALU op: register or 6-bit immediate.
@@ -204,29 +230,23 @@ pub enum Op {
         b: RegOrImm,
         set_flags: bool,
     },
-    /// `sp = sp + imm`.
-    AddSp {
-        imm: i32,
-    },
-    /// `rd = sp + imm`.
-    AddRegSp {
+    /// `rd = <effective address of `addr`>` — `lea` / `add rd, base, #imm`.
+    /// With `rd == sp` and a `Sp` base this is the stack-adjust form.
+    Lea {
         rd: u8,
-        imm: i32,
-    },
-    /// `rd = pc + imm`.
-    AddRegPc {
-        rd: u8,
-        imm: i32,
+        addr: AddrMode,
     },
     Load {
         w: MemWidth,
         rd: u8,
         addr: AddrMode,
+        cond: Cond,
     },
     Store {
         w: MemWidth,
         rd: u8,
         addr: AddrMode,
+        cond: Cond,
     },
     /// `version rd` — read the chip/VPU version register.
     Version {
@@ -240,16 +260,18 @@ pub enum Op {
         b: RegOrImm,
         target: u32,
     },
-    /// `stm` — push `r[first ..= last]` (+ optional `lr`) to `(--sp)`.
+    /// `stm` — push `count` registers starting at `first` (wrapping r31->r0),
+    /// plus optional `lr`, to `(--sp)`. `lr` sits at the lowest address.
     PushMulti {
         first: u8,
-        last: u8,
+        count: u8,
         include_lr: bool,
     },
-    /// `ldm` — pop `r[first ..= last]` (+ optional `pc`) from `(sp++)`.
+    /// `ldm` — pop `count` registers starting at `first` (wrapping), plus
+    /// optional `pc` (from the lowest address), from `(sp++)`.
     PopMulti {
         first: u8,
-        last: u8,
+        count: u8,
         include_pc: bool,
     },
     /// Correctly sized but not decoded to semantics.
@@ -258,6 +280,87 @@ pub enum Op {
         len: u8,
         class: InsnClass,
     },
+}
+
+impl AluOp {
+    pub fn mnemonic(self) -> &'static str {
+        use AluOp::*;
+        match self {
+            Mov => "mov",
+            Cmn => "cmn",
+            Add => "add",
+            Bic => "bic",
+            Mul => "mul",
+            Eor => "eor",
+            Sub => "sub",
+            And => "and",
+            Not => "not",
+            Ror => "ror",
+            Cmp => "cmp",
+            Rsub => "rsub",
+            Btest => "btest",
+            Or => "or",
+            Bmask => "bmask",
+            Max => "max",
+            Bitset => "bitset",
+            Min => "min",
+            Bitclear => "bitclear",
+            Bitflip => "bitflip",
+            Signext => "signext",
+            Neg => "neg",
+            Lsr => "lsr",
+            Msb => "msb",
+            Shl => "shl",
+            Bitrev => "bitrev",
+            Asr => "asr",
+            Abs => "abs",
+            AddScale(_) => "addscale",
+            Unimpl(n) => n,
+        }
+    }
+}
+
+impl MemWidth {
+    /// `ld`/`st` mnemonic suffix.
+    pub fn suffix(self) -> &'static str {
+        match self {
+            MemWidth::Word => "",
+            MemWidth::Half => "h",
+            MemWidth::Byte => "b",
+            MemWidth::SignedHalf => "s",
+        }
+    }
+}
+
+impl Op {
+    /// A canonical short mnemonic, for cross-checking against a reference
+    /// disassembler. Not a full textual form — no operands.
+    pub fn mnemonic(&self) -> String {
+        use Op::*;
+        match self {
+            Nop => "nop".into(),
+            Bkpt => "bkpt".into(),
+            Sleep => "sleep".into(),
+            Rti => "rti".into(),
+            Swi { .. } => "swi".into(),
+            BranchReg { link, .. } => if *link { "bl" } else { "b" }.into(),
+            BranchImm { cond, link, .. } => {
+                let base = if *link { "bl" } else { "b" };
+                format!("{base}{}", cond.mnemonic())
+            }
+            Alu2 { op, .. } => op.mnemonic().into(),
+            AluImm { op, .. } => op.mnemonic().into(),
+            Alu3 { op, cond, .. } => format!("{}{}", op.mnemonic(), cond.mnemonic()),
+            Lea { .. } => "lea".into(),
+            Load { w, cond, .. } => format!("ld{}{}", w.suffix(), cond.mnemonic()),
+            Store { w, cond, .. } => format!("st{}{}", w.suffix(), cond.mnemonic()),
+            Version { .. } => "version".into(),
+            AddCmpB { cond, .. } => format!("addcmpb{}", cond.mnemonic()),
+            PushMulti { .. } => "stm".into(),
+            PopMulti { .. } => "ldm".into(),
+            Unimpl { .. } => "??".into(),
+        }
+    }
 }
 
 /// A fully decoded instruction plus its byte length.

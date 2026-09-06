@@ -1,15 +1,13 @@
-//! Instruction decoder for the implemented VPU subset.
+//! Instruction decoder for the VideoCore IV scalar VPU.
 //!
-//! Coverage is deliberately partial (milestone M1): enough 16- and 32-bit scalar
-//! forms to run hand-written console payloads and simple control flow. Every
-//! instruction is still *sized* correctly, so unknown ones become
-//! [`Op::Unimpl`] with the right length and the PC keeps its footing.
-//!
-//! Bit patterns are transcribed from Herman Hermitage's `videocoreiv.arch`.
+//! Bit patterns are transcribed from Herman Hermitage's `videocoreiv.arch` and
+//! the `vciv.py` IDA processor module (both in `hermanhermitage/videocoreiv`),
+//! cross-checked against a sweep of real `start4.elf`. Coverage is the scalar
+//! integer ISA; the vector unit (0xF000+) is decoded to length only.
 
-use super::insn::{AddrMode, AluOp, Base, Insn, MemWidth, Op, RegOrImm};
+use super::insn::{AddrMode, AluOp, Base, Insn, MemWidth, Op, RegOrImm, Writeback};
 use super::length::{insn_class, insn_len_bytes, InsnClass};
-use super::reg::{Cond, SP};
+use super::reg::Cond;
 
 #[inline]
 fn sext(value: u32, bits: u32) -> i32 {
@@ -56,10 +54,403 @@ pub fn decode(bytes: &[u8], pc: u32) -> Insn {
     Insn { op, len }
 }
 
-/// Combine the three parcels of a 48-bit instruction. Per `videocoreiv.arch`
-/// (`set-byte-order 1 0 5 4 3 2`, "short0 short2 short1"): the opcode halfword is
-/// `bytes[0..2]`, and the trailing 32-bit field is
-/// `LE(bytes[4..6]) << 16 | LE(bytes[2..4])`.
+fn ldst(store: bool, w: MemWidth, rd: u8, addr: AddrMode, cond: Cond) -> Op {
+    if store {
+        Op::Store { w, rd, addr, cond }
+    } else {
+        Op::Load { w, rd, addr, cond }
+    }
+}
+
+fn decode16(p0: u16, pc: u32) -> Op {
+    let p = p0 as u32;
+    let rd4 = (p & 0xF) as u8;
+    let rd5 = (p & 0x1F) as u8;
+
+    // Fixed system encodings 0x0000..=0x000A. ei/di/cb* affect state the model
+    // does not track yet -> treated as nop.
+    match p0 {
+        0x0000 => return Op::Bkpt,
+        0x0001 => return Op::Nop,
+        0x0002 => return Op::Sleep,
+        0x0003..=0x0009 => return Op::Nop, // user / ei / di / cbclr / cbadd{1,2,3}
+        0x000A => return Op::Rti,
+        _ => {}
+    }
+
+    // 0000 0000 001d dddd : swi rd
+    if p & 0xFFE0 == 0x0020 {
+        return Op::Swi {
+            vector: 0x20 + (p & 0x1F),
+        };
+    }
+    // 0000 0000 010d dddd : b rd     /     011d dddd : bl rd
+    if p & 0xFFC0 == 0x0040 {
+        return Op::BranchReg {
+            link: p & 0x20 != 0,
+            rd: rd5,
+        };
+    }
+    // 0000 0000 111d dddd : version rd
+    if p & 0xFFE0 == 0x00E0 {
+        return Op::Version { rd: rd5 };
+    }
+    // 0000 0001 11uu uuuu : swi #u
+    if p & 0xFFC0 == 0x01C0 {
+        return Op::Swi {
+            vector: 0x20 + (p & 0x3F),
+        };
+    }
+    // 0000 001X Ybb nnnnn : ldm/stm    (0x0200 ldm, 0x0280 stm, 0x0300 ldm+pc,
+    //                                   0x0380 stm+lr; bb=bank, n=count-1)
+    if (0x0200..0x0400).contains(&p) {
+        let kind = (p >> 7) & 3;
+        let bank = (p >> 5) & 3;
+        let first = [0u8, 6, 16, 24][bank as usize];
+        // `(n + b*8) & 31` — the register list wraps past r31 back to r0.
+        let count = (p & 0x1F) as u8 + 1;
+        return match kind {
+            0 => Op::PopMulti {
+                first,
+                count,
+                include_pc: false,
+            },
+            1 => Op::PushMulti {
+                first,
+                count,
+                include_lr: false,
+            },
+            2 => Op::PopMulti {
+                first,
+                count,
+                include_pc: true,
+            },
+            _ => Op::PushMulti {
+                first,
+                count,
+                include_lr: true,
+            },
+        };
+    }
+    // 0000 01Xu uuuu dddd : ld/st rd, (sp + u*4)
+    if p & 0xFC00 == 0x0400 {
+        let u = ((p >> 4) & 0x1F) as i32 * 4;
+        return ldst(
+            p & 0x200 != 0,
+            MemWidth::Word,
+            rd4,
+            AddrMode::simple(Base::Sp, u),
+            Cond::Al,
+        );
+    }
+    // 0000 1sss ssss dddd : ld/st{w} rd, (rs)   (sub-op 0..7)
+    if p & 0xF800 == 0x0800 {
+        let sub = (p >> 8) & 7;
+        let rs = ((p >> 4) & 0xF) as u8;
+        let (store, w) = ldst_suffix(sub);
+        return ldst(store, w, rd4, AddrMode::simple(Base::Reg(rs), 0), Cond::Al);
+    }
+    // 0001 0ooo oood dddd : lea rd, (sp + o*4)
+    if p & 0xF800 == 0x1000 {
+        let o = ((p >> 5) & 0x3F) as i32 * 4;
+        return Op::Lea {
+            rd: rd5,
+            addr: AddrMode::simple(Base::Sp, o),
+        };
+    }
+    // 0001 1ccc cooo oooo : b<cond>  (pc + sext7(o)*2)
+    if p & 0xF800 == 0x1800 {
+        let cond = Cond::from_bits((p >> 7) & 0xF);
+        let off = sext(p & 0x7F, 7) * 2;
+        return Op::BranchImm {
+            cond,
+            link: false,
+            target: pc.wrapping_add(off as u32),
+        };
+    }
+    // 0010 uuuu ssss dddd : ld / 0011 .... : st  rd, (rs + u*4)
+    if p & 0xE000 == 0x2000 {
+        let u = ((p >> 8) & 0xF) as i32 * 4;
+        let rs = ((p >> 4) & 0xF) as u8;
+        return ldst(
+            p & 0x1000 != 0,
+            MemWidth::Word,
+            rd4,
+            AddrMode::simple(Base::Reg(rs), u),
+            Cond::Al,
+        );
+    }
+    // 010p pppp ssss dddd : rd = rd <p> rs
+    if p & 0xE000 == 0x4000 {
+        let op = AluOp::from_p((p >> 8) & 0x1F);
+        let rs = ((p >> 4) & 0xF) as u8;
+        return Op::Alu2 {
+            op,
+            rd: rd4,
+            rs,
+            set_flags: op.is_compare(),
+        };
+    }
+    // 011q qqqu uuuu dddd : rd = rd <q> #sext5(u)
+    if p & 0xE000 == 0x6000 {
+        let op = AluOp::from_q((p >> 9) & 0xF);
+        let imm = sext((p >> 4) & 0x1F, 5);
+        return Op::AluImm {
+            op,
+            rd: rd4,
+            imm,
+            set_flags: op.is_compare(),
+        };
+    }
+
+    Op::Unimpl {
+        raw: p as u64,
+        len: 2,
+        class: InsnClass::Scalar16,
+    }
+}
+
+/// Map a 3-bit load/store sub-op (`0000 1sss ...` and `1010 xxxs ss...`) to
+/// `(is_store, width)`: 0 ld, 1 st, 2 ldh, 3 sth, 4 ldb, 5 stb, 6 lds, 7 sts.
+fn ldst_suffix(sub: u32) -> (bool, MemWidth) {
+    let store = sub & 1 != 0;
+    let w = match sub >> 1 {
+        0 => MemWidth::Word,
+        1 => MemWidth::Half,
+        2 => MemWidth::Byte,
+        _ => MemWidth::SignedHalf,
+    };
+    (store, w)
+}
+
+fn decode32(p0: u16, p1: u16, pc: u32) -> Op {
+    let hw0 = p0 as u32;
+    let hw1 = p1 as u32;
+    let w = (hw0 << 16) | hw1;
+
+    // 1000 cccc <a4> <d4>  SS ...  : addcmpb<c>
+    if hw0 & 0xF000 == 0x8000 {
+        let cond = Cond::from_bits((hw0 >> 8) & 0xF);
+        let f1 = (hw0 >> 4) & 0xF;
+        let rd = (hw0 & 0xF) as u8;
+        let sel = (hw1 >> 14) & 3;
+        let (a, b, off) = match sel {
+            0 => (
+                RegOrImm::Reg(f1 as u8),
+                RegOrImm::Reg(((hw1 >> 10) & 0xF) as u8),
+                sext(hw1 & 0x3FF, 10),
+            ),
+            1 => (
+                RegOrImm::Imm(sext(f1, 4)),
+                RegOrImm::Reg(((hw1 >> 10) & 0xF) as u8),
+                sext(hw1 & 0x3FF, 10),
+            ),
+            2 => (
+                RegOrImm::Reg(f1 as u8),
+                RegOrImm::Imm(((hw1 >> 8) & 0x3F) as i32),
+                sext(hw1 & 0xFF, 8),
+            ),
+            _ => (
+                RegOrImm::Imm(sext(f1, 4)),
+                RegOrImm::Imm(((hw1 >> 8) & 0x3F) as i32),
+                sext(hw1 & 0xFF, 8),
+            ),
+        };
+        return Op::AddCmpB {
+            cond,
+            rd,
+            a,
+            b,
+            target: pc.wrapping_add((off * 2) as u32),
+        };
+    }
+
+    // 1001 cccc 0 <off23>  : b<cond>    /    1001 <hi4> 1 <off23> : bl (27-bit)
+    if hw0 & 0xF000 == 0x9000 {
+        return if w & 0x0080_0000 == 0 {
+            let cond = Cond::from_bits((w >> 24) & 0xF);
+            let target = pc.wrapping_add((sext(w & 0x007F_FFFF, 23) * 2) as u32);
+            Op::BranchImm {
+                cond,
+                link: false,
+                target,
+            }
+        } else {
+            let o = (((w >> 24) & 0xF) << 23) | (w & 0x007F_FFFF);
+            let target = pc.wrapping_add((sext(o, 27) * 2) as u32);
+            Op::BranchImm {
+                cond: Cond::Al,
+                link: true,
+                target,
+            }
+        };
+    }
+
+    // 1010 xxxx ... : the load/store block
+    if hw0 & 0xF000 == 0xA000 {
+        return decode_ldst32(hw0, hw1);
+    }
+
+    // 1011 00pp pppd dddd <i16>       : rd = rd <p> #sext16(i)   (0xB000..0xB3E0)
+    if hw0 & 0xFC00 == 0xB000 {
+        let op = AluOp::from_p((hw0 >> 5) & 0x1F);
+        let rd = (hw0 & 0x1F) as u8;
+        return Op::AluImm {
+            op,
+            rd,
+            imm: sext(hw1, 16),
+            set_flags: op.is_compare(),
+        };
+    }
+    // 1011 01nn nnnd dddd <o16>  : lea rd, (rN + sext16(o))
+    //   rN = hw0 bits 5..9;  N == 31 means PC  (the 0xBFE0 "add rd,pc,#o" form).
+    if hw0 & 0xFC00 == 0xB400 {
+        let n = (hw0 >> 5) & 0x1F;
+        let base = if n == 31 {
+            Base::Pc
+        } else {
+            Base::Reg(n as u8)
+        };
+        return Op::Lea {
+            rd: (hw0 & 0x1F) as u8,
+            addr: AddrMode::simple(base, sext(hw1, 16)),
+        };
+    }
+
+    // 1100 00pp pppd dddd | aaaaa CCCC {C0 bbbbb | C1 iiiiii} : rd = ra <p> b [c]
+    if hw0 & 0xFC00 == 0xC000 {
+        let op = AluOp::from_p((hw0 >> 5) & 0x1F);
+        let rd = (hw0 & 0x1F) as u8;
+        let ra = ((hw1 >> 11) & 0x1F) as u8;
+        let cond = Cond::from_bits((hw1 >> 7) & 0xF);
+        let b = if hw1 & 0x40 != 0 {
+            RegOrImm::Imm(sext(hw1 & 0x3F, 6))
+        } else {
+            RegOrImm::Reg((hw1 & 0x1F) as u8)
+        };
+        return Op::Alu3 {
+            op,
+            cond,
+            rd,
+            ra,
+            b,
+            set_flags: op.is_compare(),
+        };
+    }
+
+    // 1100 0101 000d dddd | aaaaa CCCC C{0 bbbbb|1 iiiiii} : adds / subs / shls
+    if hw0 & 0xFF00 == 0xC500 {
+        let sub = (hw0 >> 5) & 7;
+        let op = match sub {
+            0 => AluOp::Add,
+            1 => AluOp::Sub,
+            2 => AluOp::Shl,
+            _ => AluOp::Unimpl("clip/scale"),
+        };
+        let rd = (hw0 & 0x1F) as u8;
+        let ra = ((hw1 >> 11) & 0x1F) as u8;
+        let cond = Cond::from_bits((hw1 >> 7) & 0xF);
+        let b = if hw1 & 0x40 != 0 {
+            RegOrImm::Imm(sext(hw1 & 0x3F, 6))
+        } else {
+            RegOrImm::Reg((hw1 & 0x1F) as u8)
+        };
+        return Op::Alu3 {
+            op,
+            cond,
+            rd,
+            ra,
+            b,
+            set_flags: true,
+        };
+    }
+
+    // 1100 1100 00Xd dddd | ... : mov p<n>,r<n> / mov r<n>,p<n>  (coproc moves)
+    if hw0 & 0xFFC0 == 0xCC00 {
+        return Op::Nop; // peripheral-register file not modelled
+    }
+
+    Op::Unimpl {
+        raw: w as u64,
+        len: 4,
+        class: InsnClass::Scalar32,
+    }
+}
+
+fn decode_ldst32(hw0: u32, hw1: u32) -> Op {
+    let rd = (hw0 & 0x1F) as u8;
+    let store = hw0 & 0x20 != 0;
+    let w = MemWidth::from_ww((hw0 >> 6) & 3);
+    let hi = (hw0 >> 8) & 0xFF; // 0xA0..0xAB
+
+    match hi {
+        // 1010 0000 : ld/st{w}{C} rd, (ra + rb)
+        0xA0 => {
+            let ra = ((hw1 >> 11) & 0x1F) as u8;
+            let cond = Cond::from_bits((hw1 >> 7) & 0xF);
+            let rb = (hw1 & 0x1F) as u8;
+            ldst(
+                store,
+                w,
+                rd,
+                AddrMode::simple(Base::RegReg(ra, rb), 0),
+                cond,
+            )
+        }
+        // 1010 0010 : ld/st{w} rd, (rs + u11)        (unsigned 11-bit displ)
+        // 1010 0011 : ld/st{w} rd, (pc + (u11 - 2048))
+        0xA2 | 0xA3 => {
+            let rs = ((hw1 >> 11) & 0x1F) as u8;
+            let u11 = (hw1 & 0x7FF) as i32;
+            let (base, off) = if hi == 0xA2 {
+                (Base::Reg(rs), u11)
+            } else {
+                (Base::Pc, u11 - 2048)
+            };
+            ldst(store, w, rd, AddrMode::simple(base, off), Cond::Al)
+        }
+        // 1010 0100 : ld/st{w}{C} rd, (--rs)   /   1010 0101 : (rs++)
+        0xA4 | 0xA5 => {
+            let rs = ((hw1 >> 11) & 0x1F) as u8;
+            let cond = Cond::from_bits((hw1 >> 7) & 0xF);
+            let wb = if hi == 0xA4 {
+                Writeback::PreDec
+            } else {
+                Writeback::PostInc
+            };
+            let addr = AddrMode {
+                base: Base::Reg(rs),
+                offset: 0,
+                writeback: wb,
+            };
+            ldst(store, w, rd, addr, cond)
+        }
+        // 1010 10bb : ld/st{w} rd, (base + sext16(o))   base: r24 / sp / pc / r0
+        0xA8..=0xAB => {
+            let base = match hi & 3 {
+                0 => Base::Gp,
+                1 => Base::Sp,
+                2 => Base::Pc,
+                _ => Base::R0,
+            };
+            ldst(
+                store,
+                w,
+                rd,
+                AddrMode::simple(base, sext(hw1, 16)),
+                Cond::Al,
+            )
+        }
+        _ => Op::Unimpl {
+            raw: ((hw0 << 16) | hw1) as u64,
+            len: 4,
+            class: InsnClass::Scalar32,
+        },
+    }
+}
+
+/// Combine the three parcels of a 48-bit instruction: opcode halfword is
+/// `bytes[0..2]`, trailing 32-bit field is `LE(bytes[4..6]) << 16 | LE(bytes[2..4])`.
 fn imm32_of_48(bytes: &[u8]) -> u32 {
     ((parcel(bytes, 2) as u32) << 16) | parcel(bytes, 1) as u32
 }
@@ -68,86 +459,78 @@ fn decode48(bytes: &[u8], pc: u32) -> Op {
     let hw0 = parcel(bytes, 0) as u32;
     let imm = imm32_of_48(bytes);
 
-    // 1110 00xx 0000 0000 <abs32|off32> : j / b / jl / bl
     match hw0 {
         0xE000 => {
             return Op::BranchImm {
                 cond: Cond::Al,
                 link: false,
                 target: imm,
-            }; // j abs
+            }
         }
         0xE100 => {
             return Op::BranchImm {
                 cond: Cond::Al,
                 link: false,
                 target: pc.wrapping_add(imm),
-            };
+            }
         }
         0xE200 => {
             return Op::BranchImm {
                 cond: Cond::Al,
                 link: true,
                 target: imm,
-            }; // jl abs
+            }
         }
         0xE300 => {
             return Op::BranchImm {
                 cond: Cond::Al,
                 link: true,
                 target: pc.wrapping_add(imm),
-            };
+            }
         }
         _ => {}
     }
 
-    // 1110 0101 000d dddd <off32> : add rd, pc, #off32
+    // 1110 0101 000d dddd <off32> : lea rd, (pc + off32)
     if hw0 & 0xFFE0 == 0xE500 {
-        return Op::AddRegPc {
+        return Op::Lea {
             rd: (hw0 & 0x1F) as u8,
-            imm: imm as i32,
+            addr: AddrMode::simple(Base::Pc, imm as i32),
         };
     }
 
-    // 1110 011x wwXd dddd  <rs(5) off(27)> : ld/st (rs + off27) / (pc + off27)
+    // 1110 011s ss.d dddd <rs:5 off:27> : ld/st{w} rd, (rs + off27)
     if hw0 & 0xFE00 == 0xE600 {
-        let ww = MemWidth::from_ww((hw0 >> 6) & 3);
+        let w = MemWidth::from_ww((hw0 >> 6) & 3);
         let store = hw0 & 0x20 != 0;
         let rd = (hw0 & 0x1F) as u8;
         let rs = ((imm >> 27) & 0x1F) as u8;
         let off = sext(imm & 0x07FF_FFFF, 27);
-        let pc_relative = hw0 & 0x0100 != 0; // 1110 0111 -> (pc + off)
-        let addr = AddrMode {
-            base: if pc_relative { Base::Pc } else { Base::Reg(rs) },
-            offset: off,
-        };
-        return if store {
-            Op::Store { w: ww, rd, addr }
+        let base = if hw0 & 0x0100 != 0 {
+            Base::Pc
         } else {
-            Op::Load { w: ww, rd, addr }
+            Base::Reg(rs)
         };
+        return ldst(store, w, rd, AddrMode::simple(base, off), Cond::Al);
     }
 
     // 1110 10pp pppd dddd <imm32> : rd = rd <p> #imm32
     if hw0 & 0xFC00 == 0xE800 {
         let op = AluOp::from_p((hw0 >> 5) & 0x1F);
-        let rd = (hw0 & 0x1F) as u8;
         return Op::AluImm {
             op,
-            rd,
+            rd: (hw0 & 0x1F) as u8,
             imm: imm as i32,
             set_flags: op.is_compare(),
         };
     }
     // 1110 11ss sssd dddd <imm32> : add rd, rs, #imm32
     if hw0 & 0xFC00 == 0xEC00 {
-        let rs = ((hw0 >> 5) & 0x1F) as u8;
-        let rd = (hw0 & 0x1F) as u8;
         return Op::Alu3 {
             op: AluOp::Add,
             cond: Cond::Al,
-            rd,
-            ra: rs,
+            rd: (hw0 & 0x1F) as u8,
+            ra: ((hw0 >> 5) & 0x1F) as u8,
             b: RegOrImm::Imm(imm as i32),
             set_flags: false,
         };
@@ -160,347 +543,6 @@ fn decode48(bytes: &[u8], pc: u32) -> Op {
     }
 }
 
-fn decode16(p0: u16, pc: u32) -> Op {
-    let p = p0 as u32;
-
-    // Fixed 16-bit encodings.
-    match p0 {
-        0x0000 => return Op::Bkpt,
-        0x0001 => return Op::Nop,
-        0x0002 => return Op::Sleep,
-        0x000A => return Op::Rti,
-        _ => {}
-    }
-
-    let rd4 = (p & 0xF) as u8;
-    let rd5 = (p & 0x1F) as u8;
-
-    // 0000 0000 001d dddd : swi rd  (vector 0x20 + d)
-    if p & 0xFFE0 == 0x0020 {
-        return Op::Swi {
-            vector: 0x20 + (p & 0x1F),
-        };
-    }
-    // 0000 0000 010d dddd : b rd
-    if p & 0xFFE0 == 0x0040 {
-        return Op::BranchReg {
-            link: false,
-            rd: rd5,
-        };
-    }
-    // 0000 0000 011d dddd : bl rd
-    if p & 0xFFE0 == 0x0060 {
-        return Op::BranchReg {
-            link: true,
-            rd: rd5,
-        };
-    }
-    // 0000 0001 11uu uuuu : swi #u
-    if p & 0xFFC0 == 0x01C0 {
-        return Op::Swi {
-            vector: 0x20 + (p & 0x3F),
-        };
-    }
-    // 0000 010u uuuu dddd : ld rd,(sp + u*4)
-    if p & 0xFE00 == 0x0400 {
-        let u = (p >> 4) & 0x1F;
-        return Op::Load {
-            w: MemWidth::Word,
-            rd: rd4,
-            addr: AddrMode {
-                base: Base::Sp,
-                offset: (u * 4) as i32,
-            },
-        };
-    }
-    // 0000 011u uuuu dddd : st rd,(sp + u*4)
-    if p & 0xFE00 == 0x0600 {
-        let u = (p >> 4) & 0x1F;
-        return Op::Store {
-            w: MemWidth::Word,
-            rd: rd4,
-            addr: AddrMode {
-                base: Base::Sp,
-                offset: (u * 4) as i32,
-            },
-        };
-    }
-    // 0000 1ww0 ssss dddd : ld{w} rd,(rs)   /   0000 1ww1 ... : st{w}
-    if p & 0xF800 == 0x0800 {
-        let w = MemWidth::from_ww((p >> 9) & 3);
-        let rs = ((p >> 4) & 0xF) as u8;
-        let addr = AddrMode {
-            base: Base::Reg(rs),
-            offset: 0,
-        };
-        return if p & 0x0100 == 0 {
-            Op::Load { w, rd: rd4, addr }
-        } else {
-            Op::Store { w, rd: rd4, addr }
-        };
-    }
-    // 0001 0ooo oood dddd : add rd,sp,#o*4   (d == 25 => add sp,#o*4)
-    if p & 0xF800 == 0x1000 {
-        let o = ((p >> 5) & 0x3F) as i32 * 4;
-        return if rd5 as usize == SP {
-            Op::AddSp { imm: o }
-        } else {
-            Op::AddRegSp { rd: rd5, imm: o }
-        };
-    }
-    // 0001 1ccc cooo oooo : b<cond> pc-relative
-    if p & 0xF800 == 0x1800 {
-        let cond = Cond::from_bits((p >> 7) & 0xF);
-        let off = sext(p & 0x7F, 7) * 2;
-        return Op::BranchImm {
-            cond,
-            link: false,
-            target: pc.wrapping_add(off as u32),
-        };
-    }
-    // 0010 uuuu ssss dddd : ld rd,(rs + u*4)   /   0011 .... : st
-    if p & 0xE000 == 0x2000 {
-        let u = ((p >> 8) & 0xF) as i32 * 4;
-        let rs = ((p >> 4) & 0xF) as u8;
-        let addr = AddrMode {
-            base: Base::Reg(rs),
-            offset: u,
-        };
-        return if p & 0x1000 == 0 {
-            Op::Load {
-                w: MemWidth::Word,
-                rd: rd4,
-                addr,
-            }
-        } else {
-            Op::Store {
-                w: MemWidth::Word,
-                rd: rd4,
-                addr,
-            }
-        };
-    }
-    // 010p pppp ssss dddd : rd = rd op rs
-    if p & 0xE000 == 0x4000 {
-        let op = AluOp::from_p((p >> 8) & 0x1F);
-        let rs = ((p >> 4) & 0xF) as u8;
-        return Op::Alu2 {
-            op,
-            rd: rd4,
-            rs,
-            set_flags: op.is_compare(),
-        };
-    }
-    // 011q qqqu uuuu dddd : rd = rd op #sext5(u)
-    if p & 0xE000 == 0x6000 {
-        let op = AluOp::from_q((p >> 9) & 0xF);
-        let imm = sext((p >> 4) & 0x1F, 5);
-        return Op::AluImm {
-            op,
-            rd: rd4,
-            imm,
-            set_flags: op.is_compare(),
-        };
-    }
-    // 0000 0000 111d dddd : version rd
-    if p & 0xFFE0 == 0x00E0 {
-        return Op::Version { rd: rd5 };
-    }
-    // 0000 001X Ybb nnnnn : ldm/stm  (X=+lr/pc, Y=store, bb=bank, n=count-1)
-    if p & 0xFE00 == 0x0200 {
-        let include_extra = p & 0x0100 != 0;
-        let is_store = p & 0x0080 != 0;
-        let bank = (p >> 5) & 3;
-        // Bank 1 conventionally starts at r6 (the classic GP/first-saved reg),
-        // not r8; the other banks are b*8. Verify against real traces.
-        let first = [0u8, 6, 16, 24][bank as usize];
-        let last = first.saturating_add((p & 0x1F) as u8).min(31);
-        return if is_store {
-            Op::PushMulti {
-                first,
-                last,
-                include_lr: include_extra,
-            }
-        } else {
-            Op::PopMulti {
-                first,
-                last,
-                include_pc: include_extra,
-            }
-        };
-    }
-
-    Op::Unimpl {
-        raw: p as u64,
-        len: 2,
-        class: InsnClass::Scalar16,
-    }
-}
-
-fn decode32(p0: u16, p1: u16, pc: u32) -> Op {
-    let w = ((p0 as u32) << 16) | p1 as u32;
-
-    // 1000 cccc AAAA DDDD  SS ffffff oooooooo : addcmpb<c>
-    //   SS=00: a=rA,  b=rS       , 10-bit offset
-    //   SS=01: a=#i4, b=rS       , 10-bit offset
-    //   SS=10: a=rA,  b=#u6      , 8-bit offset
-    //   SS=11: a=#i4, b=#u6      , 8-bit offset
-    if w & 0xF000_0000 == 0x8000_0000 {
-        let cond = Cond::from_bits((w >> 24) & 0xF);
-        let f1 = (w >> 20) & 0xF; // rA or #i4
-        let rd = ((w >> 16) & 0xF) as u8;
-        let sel = (w >> 14) & 3;
-        let (a, b, off) = match sel {
-            0 => (
-                RegOrImm::Reg(f1 as u8),
-                RegOrImm::Reg(((w >> 10) & 0xF) as u8),
-                sext(w & 0x3FF, 10),
-            ),
-            1 => (
-                RegOrImm::Imm(sext(f1, 4)),
-                RegOrImm::Reg(((w >> 10) & 0xF) as u8),
-                sext(w & 0x3FF, 10),
-            ),
-            2 => (
-                RegOrImm::Reg(f1 as u8),
-                RegOrImm::Imm(((w >> 8) & 0x3F) as i32),
-                sext(w & 0xFF, 8),
-            ),
-            _ => (
-                RegOrImm::Imm(sext(f1, 4)),
-                RegOrImm::Imm(((w >> 8) & 0x3F) as i32),
-                sext(w & 0xFF, 8),
-            ),
-        };
-        return Op::AddCmpB {
-            cond,
-            rd,
-            a,
-            b,
-            target: pc.wrapping_add((off * 2) as u32),
-        };
-    }
-
-    // 1001 cccc 0ooo... : b<cond>    /    1001 oooo 1ooo... : bl
-    if w & 0xF000_0000 == 0x9000_0000 {
-        return if w & 0x0080_0000 == 0 {
-            let cond = Cond::from_bits((w >> 24) & 0xF);
-            let target = pc.wrapping_add((sext(w & 0x07FF_FFFF, 27) * 2) as u32);
-            Op::BranchImm {
-                cond,
-                link: false,
-                target,
-            }
-        } else {
-            let o = ((w >> 24) & 0xF) << 23 | (w & 0x007F_FFFF);
-            let target = pc.wrapping_add((sext(o, 27) * 2) as u32);
-            Op::BranchImm {
-                cond: Cond::Al,
-                link: true,
-                target,
-            }
-        };
-    }
-
-    // 1011 1111 111d dddd oooo... : add rd, pc, #o
-    if w & 0xFFE0_0000 == 0xBFE0_0000 {
-        let rd = ((w >> 16) & 0x1F) as u8;
-        return Op::AddRegPc {
-            rd,
-            imm: sext(w & 0xFFFF, 16),
-        };
-    }
-    // 1011 00pp pppd dddd i16 : rd = rd op #sext16(i)
-    if w & 0xFC00_0000 == 0xB000_0000 {
-        let op = AluOp::from_p((w >> 21) & 0x1F);
-        let rd = ((w >> 16) & 0x1F) as u8;
-        return Op::AluImm {
-            op,
-            rd,
-            imm: sext(w & 0xFFFF, 16),
-            set_flags: op.is_compare(),
-        };
-    }
-    // 1011 01ss sssd dddd i16 : add rd, rs, #sext16(i)
-    if w & 0xFC00_0000 == 0xB400_0000 {
-        let rs = ((w >> 21) & 0x1F) as u8;
-        let rd = ((w >> 16) & 0x1F) as u8;
-        return Op::Alu3 {
-            op: AluOp::Add,
-            cond: Cond::Al,
-            rd,
-            ra: rs,
-            b: RegOrImm::Imm(sext(w & 0xFFFF, 16)),
-            set_flags: false,
-        };
-    }
-
-    // 1010 1000/1001/1010/1011 wwXd dddd o16 : ld/st with base + 16-bit offset
-    if w & 0xFC00_0000 == 0xA800_0000 {
-        let base = match (w >> 24) & 0x3 {
-            0 => Base::Gp,
-            1 => Base::Sp,
-            2 => Base::Pc,
-            _ => Base::R0,
-        };
-        let ww = MemWidth::from_ww((w >> 22) & 3);
-        let rd = ((w >> 16) & 0x1F) as u8;
-        let addr = AddrMode {
-            base,
-            offset: sext(w & 0xFFFF, 16),
-        };
-        return if w & 0x0020_0000 == 0 {
-            Op::Load { w: ww, rd, addr }
-        } else {
-            Op::Store { w: ww, rd, addr }
-        };
-    }
-    // 1010 001o wwXd dddd sssss o11 : ld/st rd,(rs + sext12(o))
-    if w & 0xFE00_0000 == 0xA200_0000 {
-        let ww = MemWidth::from_ww((w >> 22) & 3);
-        let rd = ((w >> 16) & 0x1F) as u8;
-        let rs = ((w >> 11) & 0x1F) as u8;
-        let off = (((w >> 24) & 1) << 11) | (w & 0x7FF);
-        let addr = AddrMode {
-            base: Base::Reg(rs),
-            offset: sext(off, 12),
-        };
-        return if w & 0x0020_0000 == 0 {
-            Op::Load { w: ww, rd, addr }
-        } else {
-            Op::Store { w: ww, rd, addr }
-        };
-    }
-
-    // 1100 00pp pppd dddd aaaaa CCCC {00bbbbb | 1iiiiii} : rd = ra op b [cond]
-    if w & 0xFC00_0000 == 0xC000_0000 {
-        let op = AluOp::from_p((w >> 21) & 0x1F);
-        let rd = ((w >> 16) & 0x1F) as u8;
-        let ra = ((w >> 11) & 0x1F) as u8;
-        let cond = Cond::from_bits((w >> 7) & 0xF);
-        let b = if w & 0x40 != 0 {
-            RegOrImm::Imm(sext(w & 0x3F, 6))
-        } else {
-            RegOrImm::Reg((w & 0x1F) as u8)
-        };
-        return Op::Alu3 {
-            op,
-            cond,
-            rd,
-            ra,
-            b,
-            set_flags: op.is_compare(),
-        };
-    }
-
-    let _ = p1;
-    Op::Unimpl {
-        raw: w as u64,
-        len: 4,
-        class: InsnClass::Scalar32,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -509,17 +551,23 @@ mod tests {
         decode(bytes, 0x8000_0000).op
     }
 
+    fn dec32(w: u32, pc: u32) -> Op {
+        let mut raw = [0u8; 4];
+        raw[..2].copy_from_slice(&((w >> 16) as u16).to_le_bytes());
+        raw[2..].copy_from_slice(&(w as u16).to_le_bytes());
+        decode(&raw, pc).op
+    }
+
     #[test]
     fn nop_and_friends() {
         assert_eq!(dec(&[0x01, 0x00]), Op::Nop);
         assert_eq!(dec(&[0x00, 0x00]), Op::Bkpt);
-        assert_eq!(dec(&[0x02, 0x00]), Op::Sleep);
         assert_eq!(dec(&[0x0A, 0x00]), Op::Rti);
+        assert_eq!(dec(&0x00E5u16.to_le_bytes()), Op::Version { rd: 5 });
     }
 
     #[test]
-    fn mov_imm5() {
-        // 011q qqqu uuuu dddd, q=mov(0), u=7, d=3  => 0x6073
+    fn mov_imm5_and_add_reg() {
         assert_eq!(
             dec(&0x6073u16.to_le_bytes()),
             Op::AluImm {
@@ -529,11 +577,6 @@ mod tests {
                 set_flags: false
             }
         );
-    }
-
-    #[test]
-    fn add_reg() {
-        // 010p pppp ssss dddd, p=add(2), s=1, d=0 => 0b010_00010_0001_0000 = 0x4210
         assert_eq!(
             dec(&0x4210u16.to_le_bytes()),
             Op::Alu2 {
@@ -546,41 +589,23 @@ mod tests {
     }
 
     #[test]
-    fn cmp_sets_flags() {
-        // p=cmp(10) => 0b010_01010_ssss_dddd
-        let bits = 0x4000u16 | (10 << 8) | (2 << 4) | 3;
-        assert_eq!(
-            dec(&bits.to_le_bytes()),
-            Op::Alu2 {
-                op: AluOp::Cmp,
-                rd: 3,
-                rs: 2,
-                set_flags: true
-            }
-        );
-    }
-
-    #[test]
-    fn store_byte_indirect() {
-        // 0000 1ww1 ssss dddd, ww=byte(2), s=4, d=5
-        let bits = 0x0800u16 | (2 << 9) | 0x0100 | (4 << 4) | 5;
+    fn ldst_indirect_widths() {
+        // 0000 1sss ssss dddd, sub=5 (stb), rs=4, rd=5
+        let bits = 0x0800u16 | (5 << 8) | (4 << 4) | 5;
         assert_eq!(
             dec(&bits.to_le_bytes()),
             Op::Store {
                 w: MemWidth::Byte,
                 rd: 5,
-                addr: AddrMode {
-                    base: Base::Reg(4),
-                    offset: 0
-                },
+                addr: AddrMode::simple(Base::Reg(4), 0),
+                cond: Cond::Al,
             }
         );
     }
 
     #[test]
     fn cond_branch_16_backwards() {
-        // 0001 1ccc cooo oooo, cond=ne(1), o=-2 (0x7E) => target = pc - 4
-        let bits = 0x1800u16 | (1 << 7) | 0x7E;
+        let bits = 0x1800u16 | (1 << 7) | 0x7E; // ne, -2
         assert_eq!(
             decode(&bits.to_le_bytes(), 0x8000_0010).op,
             Op::BranchImm {
@@ -592,56 +617,40 @@ mod tests {
     }
 
     #[test]
-    fn bl_32() {
-        // 1001 oooo 1ooo ... ; encode a small positive offset of +4 (o=2)
-        let w = 0x9000_0000u32 | 0x0080_0000 | 2;
-        let bytes = [(w >> 16) as u16, w as u16];
-        let mut raw = [0u8; 4];
-        raw[..2].copy_from_slice(&bytes[0].to_le_bytes());
-        raw[2..].copy_from_slice(&bytes[1].to_le_bytes());
+    fn branch_32_is_23bit() {
+        // 1001 1110 0 <off23=0x543> -> pc + 0x543*2
         assert_eq!(
-            decode(&raw, 0x8000_0000).op,
+            dec32(0x9E00_0543, 0xCEC0_02F0),
             Op::BranchImm {
                 cond: Cond::Al,
-                link: true,
-                target: 0x8000_0004
+                link: false,
+                target: 0xCEC0_0D76
             }
         );
     }
 
     #[test]
-    fn triadic_add_reg() {
-        // 1100 00pp pppd dddd aaaaa CCCC 00 bbbbb ; p=add(2) d=1 a=2 cond=al(0xe) b=3
-        let w = 0xC000_0000u32 | (2 << 21) | (1 << 16) | (2 << 11) | (0xE << 7) | 3;
-        let mut raw = [0u8; 4];
-        raw[..2].copy_from_slice(&((w >> 16) as u16).to_le_bytes());
-        raw[2..].copy_from_slice(&(w as u16).to_le_bytes());
+    fn predecrement_store_conditional() {
+        // 1010 0100 ww1d dddd | sssss CCCC 0000000 ; ww=word, st, rd=26, rs=25, al
+        let hw0 = 0xA400u32 | 0x20 | 26;
+        let hw1 = (25u32 << 11) | (0xE << 7);
         assert_eq!(
-            decode(&raw, 0).op,
-            Op::Alu3 {
-                op: AluOp::Add,
+            dec32((hw0 << 16) | hw1, 0),
+            Op::Store {
+                w: MemWidth::Word,
+                rd: 26,
+                addr: AddrMode {
+                    base: Base::Reg(25),
+                    offset: 0,
+                    writeback: Writeback::PreDec
+                },
                 cond: Cond::Al,
-                rd: 1,
-                ra: 2,
-                b: RegOrImm::Reg(3),
-                set_flags: false,
             }
         );
-    }
-
-    #[test]
-    fn unknown_48bit_is_sized() {
-        // 0xE400 is an "undefined" 48-bit scalar encoding (videocoreiv.arch).
-        let bytes = [0x00, 0xE4, 0, 0, 0, 0];
-        let insn = decode(&bytes, 0);
-        assert_eq!(insn.len, 6);
-        assert!(matches!(insn.op, Op::Unimpl { len: 6, .. }));
     }
 
     #[test]
     fn j_absolute_48bit() {
-        // 1110 0000 0000 0000  <imm32 = 0x0ec0_1234>
-        // imm32 packing: LE(bytes[4..6]) << 16 | LE(bytes[2..4])
         let bytes = [0x00, 0xE0, 0x34, 0x12, 0xC0, 0x0E];
         assert_eq!(
             decode(&bytes, 0xCEC0_0000).op,
@@ -654,31 +663,24 @@ mod tests {
     }
 
     #[test]
-    fn version_16bit() {
-        // 0000 0000 111d dddd, d = 5
+    fn alu_imm32_48bit_peripheral_addr() {
+        // 1110 1000 000d dddd <imm32 = 0x7E002030> ; mov r1, #0x7E002030
+        let bytes = [0x01, 0xE8, 0x30, 0x20, 0x00, 0x7E];
         assert_eq!(
-            decode(&0x00E5u16.to_le_bytes(), 0).op,
-            Op::Version { rd: 5 }
+            decode(&bytes, 0).op,
+            Op::AluImm {
+                op: AluOp::Mov,
+                rd: 1,
+                imm: 0x7E00_2030u32 as i32,
+                set_flags: false
+            }
         );
     }
 
     #[test]
-    fn ld_gp_relative() {
-        // 1010 1000 ww0d dddd o16 : ld rd,(gp + o).  ww=word, d=7, o=0x20
-        let w = 0xA800_0000u32 | (7 << 16) | 0x20;
-        let mut raw = [0u8; 4];
-        raw[..2].copy_from_slice(&((w >> 16) as u16).to_le_bytes());
-        raw[2..].copy_from_slice(&(w as u16).to_le_bytes());
-        assert_eq!(
-            decode(&raw, 0).op,
-            Op::Load {
-                w: MemWidth::Word,
-                rd: 7,
-                addr: AddrMode {
-                    base: Base::Gp,
-                    offset: 0x20
-                },
-            }
-        );
+    fn unknown_48bit_is_sized() {
+        let insn = decode(&[0x00, 0xE4, 0, 0, 0, 0], 0);
+        assert_eq!(insn.len, 6);
+        assert!(matches!(insn.op, Op::Unimpl { len: 6, .. }));
     }
 }
