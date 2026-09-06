@@ -71,6 +71,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     let mut max_steps: u64 = 20_000_000;
     let mut eeprom = false;
     let mut trace = false;
+    let mut patches: Vec<(u32, u32)> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -79,6 +80,11 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
             "--max-steps" => max_steps = it.next().context("--max-steps needs a value")?.parse()?,
             "--eeprom" => eeprom = true,
             "--trace" => trace = true,
+            "--patch" => {
+                let spec = it.next().context("--patch needs <hexaddr>=<hexval>")?;
+                let (a, v) = spec.split_once('=').context("--patch: expected addr=val")?;
+                patches.push((parse_u32(a)?, parse_u32(v)?));
+            }
             s if !s.starts_with('-') => path = Some(PathBuf::from(s)),
             s => bail!("unexpected argument '{s}'"),
         }
@@ -94,6 +100,11 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
 
     let mut machine = Machine::new(ram_mb as usize * 1024 * 1024);
     payload.load_into(&mut machine)?;
+    for &(a, v) in &patches {
+        use rpi_virt_fw::bus::Bus;
+        machine.store32(a, v).ok();
+        println!("patch [{a:#010x}] = {v:#010x}");
+    }
     let start = entry.unwrap_or(payload.entry());
 
     let mut emu = Emulator::new(machine, start);

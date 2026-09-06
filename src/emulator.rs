@@ -96,9 +96,12 @@ impl Emulator {
         let mut w_hi = 0u32;
         let mut w_steps = 0u64;
         let mut w_output = false;
-        // Fast path: the exact same taken transfer repeating is a tight spin.
+        let mut writes_at_window = self.machine.ram_writes;
+        // Fast path: the exact same taken transfer repeating is a tight spin —
+        // *unless* memory writes keep advancing (that's a memset/memcpy loop).
         let mut last_cf = (u32::MAX, u32::MAX);
         let mut cf_repeat = 0u64;
+        let mut writes_at_cf = self.machine.ram_writes;
 
         let end = loop {
             if self.cpu.retired >= limits.max_steps {
@@ -128,14 +131,16 @@ impl Emulator {
 
             if limits.idle_spin_limit > 0 {
                 if let Some(&cf) = self.cpu.cf_trace.last() {
-                    if cf == last_cf && !had_output {
+                    let progressing = self.machine.ram_writes != writes_at_cf;
+                    if cf == last_cf && !had_output && !progressing {
                         cf_repeat += 1;
-                        if cf_repeat >= 200 {
+                        if cf_repeat >= 4000 {
                             break RunEnd::IdleSpin(cf.0);
                         }
                     } else {
                         cf_repeat = 0;
                         last_cf = cf;
+                        writes_at_cf = self.machine.ram_writes;
                     }
                 }
 
@@ -144,13 +149,15 @@ impl Emulator {
                 w_output |= had_output;
                 w_steps += 1;
                 if w_steps >= win {
-                    if !w_output && w_hi.wrapping_sub(w_lo) <= 4096 {
+                    let stalled = self.machine.ram_writes == writes_at_window;
+                    if !w_output && stalled && w_hi.wrapping_sub(w_lo) <= 4096 {
                         break RunEnd::IdleSpin(w_lo);
                     }
                     w_lo = u32::MAX;
                     w_hi = 0;
                     w_steps = 0;
                     w_output = false;
+                    writes_at_window = self.machine.ram_writes;
                 }
             }
 
