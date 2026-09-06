@@ -24,6 +24,10 @@ pub const MCSYNC_SIZE: u32 = 0x1000;
 pub const CORECTL_BASE: u32 = 0x7E00_2000;
 pub const CORECTL_SIZE: u32 = 0x100;
 
+/// SPI0 master (`0x7E20_4000`).
+pub const SPI0_BASE: u32 = 0x7E20_4000;
+pub const SPI0_SIZE: u32 = 0x18;
+
 /// Unmodelled FIFO/crypto block at `0x7E20_F000` the EEPROM bootloader polls.
 pub const FIFO_STUB_BASE: u32 = 0x7E20_F000;
 pub const FIFO_STUB_SIZE: u32 = 0x1000;
