@@ -7,6 +7,7 @@
 pub mod aux;
 pub mod corectl;
 pub mod mcsync;
+pub mod readystub;
 pub mod stub;
 pub mod systimer;
 pub mod uart_pl011;
@@ -14,6 +15,7 @@ pub mod uart_pl011;
 pub use aux::Aux;
 pub use corectl::CoreCtl;
 pub use mcsync::McSync;
+pub use readystub::ReadyStub;
 pub use stub::StubRegion;
 pub use systimer::SysTimer;
 pub use uart_pl011::Pl011;

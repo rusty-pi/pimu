@@ -67,7 +67,7 @@ fn run(args: &[String]) -> Result<ExitCode> {
 fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     let mut path: Option<PathBuf> = None;
     let mut entry: Option<u32> = None;
-    let mut ram_mb: u32 = 512;
+    let mut ram_mb: Option<u32> = None;
     let mut max_steps: u64 = 20_000_000;
     let mut eeprom = false;
     let mut trace = false;
@@ -82,7 +82,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     while let Some(a) = it.next() {
         match a.as_str() {
             "--entry" => entry = Some(parse_u32(it.next().context("--entry needs a value")?)?),
-            "--ram-mb" => ram_mb = it.next().context("--ram-mb needs a value")?.parse()?,
+            "--ram-mb" => ram_mb = Some(it.next().context("--ram-mb needs a value")?.parse()?),
             "--max-steps" => max_steps = it.next().context("--max-steps needs a value")?.parse()?,
             "--eeprom" => eeprom = true,
             "--trace" => trace = true,
@@ -121,6 +121,9 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         Payload::from_elf_bytes(&bytes)?
     };
 
+    // The EEPROM bootloader touches the 0x6000_0000 L2-SRAM window, which
+    // our model folds into DRAM past the 512 MiB mark — give it room by default.
+    let ram_mb = ram_mb.unwrap_or(if eeprom { 2048 } else { 512 });
     let mut machine = Machine::new(ram_mb as usize * 1024 * 1024);
     payload.load_into(&mut machine)?;
     for &(a, v) in &patches {
@@ -395,6 +398,7 @@ fn cmd_disasm(args: &[String]) -> Result<ExitCode> {
     let mut count: usize = 64;
     let mut vaddr: Option<u32> = None;
     let mut lengths_only = false;
+    let mut eeprom = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -402,6 +406,7 @@ fn cmd_disasm(args: &[String]) -> Result<ExitCode> {
             "--count" => count = it.next().context("--count needs a value")?.parse()?,
             "--vaddr" => vaddr = Some(parse_u32(it.next().context("--vaddr needs a value")?)?),
             "--lengths" => lengths_only = true,
+            "--eeprom" => eeprom = true,
             s if !s.starts_with('-') => path = Some(PathBuf::from(s)),
             s => bail!("unexpected argument '{s}'"),
         }
@@ -411,7 +416,14 @@ fn cmd_disasm(args: &[String]) -> Result<ExitCode> {
 
     // ELF: locate the segment containing `vaddr` (or the entry) and disassemble
     // from there. Flat binary: disassemble from file offset 0 at `--base`.
-    let (bytes, mut pc): (Vec<u8>, u32) = if raw.starts_with(b"\x7fELF") {
+    let (bytes, mut pc): (Vec<u8>, u32) = if eeprom {
+        use rpi_virt_fw::firmware::eeprom::{EepromImage, BOOTCODE_ENTRY_OFFSET, BOOTCODE_LOAD_ADDR};
+        let img = EepromImage::parse(&raw)?;
+        let bc = img.bootcode().context("EEPROM image has no bootcode section")?;
+        let target = vaddr.unwrap_or(BOOTCODE_LOAD_ADDR + BOOTCODE_ENTRY_OFFSET);
+        let skip = (target - BOOTCODE_LOAD_ADDR) as usize;
+        (bc.body[skip..].to_vec(), target)
+    } else if raw.starts_with(b"\x7fELF") {
         let elf = rpi_virt_fw::firmware::elf32::Elf32::parse(&raw)?;
         let target = vaddr.unwrap_or(elf.entry);
         let seg = elf
