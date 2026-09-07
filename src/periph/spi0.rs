@@ -5,11 +5,13 @@
 //! then reads the miso byte back out of `FIFO`. `CS.TA` stays asserted for the
 //! whole command; deasserting it ends the transaction.
 //!
-//! We model just enough of a serial-NOR flash for the bootloader to scan the
-//! `pieeprom.bin` image it was itself loaded from: `READ` (0x03) / `FAST_READ`
-//! (0x0B) stream image bytes, `RDID` (0x9F) returns a JEDEC id, `RDSR` (0x05)
-//! reports "not busy". Everything else (and every read when no image is
-//! attached) returns `0xFF`.
+//! We model enough of a serial-NOR flash for the bootloader to scan the
+//! `pieeprom.bin` image it was itself loaded from and to apply an EEPROM
+//! self-update: `READ` (0x03) / `FAST_READ` (0x0B) stream image bytes, `RDID`
+//! (0x9F) returns a JEDEC id, `RDSR` (0x05) reports the WIP bit, `WREN` (0x06)
+//! sets the write-enable latch, `SE` (0x20) erases a 4 KiB sector to `0xFF`,
+//! `PP` (0x02) programs up to a page. Erase/program are instantaneous in the
+//! model (WIP always reads clear). Everything else returns `0xFF`.
 
 use std::collections::VecDeque;
 
@@ -52,10 +54,15 @@ pub struct Spi0 {
     beat: u64,
     /// Command byte (first beat of the transaction).
     cmd: u8,
-    /// Address accumulator for read commands.
+    /// Address accumulator for read/erase/program commands.
     addr: u32,
+    /// Write-enable latch (set by `WREN`, cleared after an erase / program).
+    wel: bool,
     /// Response bytes queued for the CPU to read back out of the FIFO.
     rx: VecDeque<u8>,
+    /// `true` once anything wrote to `flash` — a signal to the run loop that an
+    /// EEPROM self-update landed and a re-run from the new image is due.
+    pub dirty: bool,
 }
 
 impl Spi0 {
@@ -118,11 +125,63 @@ impl Spi0 {
             (_, 0x0B) => self.read_flash_byte(),
             // RDID (0x9F): three id bytes then 0xFF.
             (1..=3, 0x9F) => JEDEC_ID[(n - 1) as usize],
-            // RDSR (0x05): status register — never busy.
-            (_, 0x05) => 0x00,
+            // RDSR (0x05): status register. Bit 0 = WIP (always clear — erase /
+            // program complete instantly); bit 1 = WEL.
+            (_, 0x05) => u8::from(self.wel) << 1,
+            // WREN (0x06): set the write-enable latch. No data phase.
+            (_, 0x06) => {
+                self.wel = true;
+                MISO_IDLE
+            }
+            // WRDI (0x04): clear it.
+            (_, 0x04) => {
+                self.wel = false;
+                MISO_IDLE
+            }
+            // SE (0x20): 3 address bytes, then erase the enclosing 4 KiB sector.
+            (1..=3, 0x20) => {
+                self.addr = (self.addr << 8) | mosi as u32;
+                if n == 3 {
+                    self.erase_sector();
+                }
+                MISO_IDLE
+            }
+            // PP (0x02): 3 address bytes, then a stream of data bytes to program.
+            (1..=3, 0x02) => {
+                self.addr = (self.addr << 8) | mosi as u32;
+                MISO_IDLE
+            }
+            (_, 0x02) => {
+                self.program_byte(mosi);
+                MISO_IDLE
+            }
             _ => MISO_IDLE,
         };
         self.rx.push_back(miso);
+    }
+
+    /// Erase the 4 KiB sector containing `self.addr` to all-`0xFF`.
+    fn erase_sector(&mut self) {
+        if !self.wel {
+            return;
+        }
+        let base = (self.addr & !0xFFF) as usize;
+        if let Some(sector) = self.flash.get_mut(base..base + 0x1000) {
+            sector.fill(0xFF);
+            self.dirty = true;
+        }
+        self.wel = false;
+    }
+
+    /// Program one byte (NOR: bits can only 1→0, so AND into place).
+    fn program_byte(&mut self, b: u8) {
+        if self.wel {
+            if let Some(cell) = self.flash.get_mut(self.addr as usize) {
+                *cell &= b;
+                self.dirty = true;
+            }
+        }
+        self.addr = self.addr.wrapping_add(1);
     }
 
     fn read_flash_byte(&mut self) -> u8 {
@@ -159,6 +218,13 @@ impl MmioDevice for Spi0 {
                 }
                 if !was_ta && value & CS_TA != 0 {
                     self.begin();
+                }
+                if was_ta && value & CS_TA == 0 {
+                    // Transaction ended: a page-program run completes here and
+                    // clears the write-enable latch (erase clears it inline).
+                    if self.cmd == 0x02 {
+                        self.wel = false;
+                    }
                 }
             }
             FIFO => self.shift(value as u8),
