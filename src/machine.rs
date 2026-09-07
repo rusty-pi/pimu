@@ -2,7 +2,7 @@
 
 use crate::bus::{Bus, BusError, BusResult, MmioDevice, Width};
 use crate::mem::Ram;
-use crate::periph::{Aux, CoreCtl, McSync, Pl011, ReadyStub, Spi0, StubRegion, SysTimer};
+use crate::periph::{Aux, ClockManager, CoreCtl, McSync, Pl011, ReadyStub, Spi0, StubRegion, SysTimer};
 use crate::soc::bcm2711 as map;
 
 /// Which UART the harness captures as "the console".
@@ -22,6 +22,8 @@ pub struct Machine {
     pub mcsync: McSync,
     /// VPU core-control block (`0x7E00_2000`) — brings up VPU core 1.
     pub corectl: CoreCtl,
+    /// Clock manager (`0x7E10_1000`) — PLL locks always report ready.
+    pub clockman: ClockManager,
     /// SPI0 master (`0x7E20_4000`) — minimal model for the EEPROM bootloader.
     pub spi0: Spi0,
     /// "Always ready" stub for the EEPROM bootloader's FIFO at 0x7E20_F000.
@@ -58,6 +60,7 @@ impl Machine {
             aux: Aux::new(),
             mcsync: McSync::new(),
             corectl: CoreCtl::new(),
+            clockman: ClockManager::new(),
             spi0: Spi0::new(),
             fifo_stub: ReadyStub::new("fifo-stub"),
             periph_stub: StubRegion::new("periph-window"),
@@ -131,6 +134,9 @@ impl Machine {
         }
         if let Some(off) = hit(map::CORECTL_BASE, map::CORECTL_SIZE) {
             return Some((&mut self.corectl, off));
+        }
+        if let Some(off) = hit(map::CM_BASE, map::CM_SIZE) {
+            return Some((&mut self.clockman, off));
         }
         if let Some(off) = hit(map::SPI0_BASE, map::SPI0_SIZE) {
             return Some((&mut self.spi0, off));
