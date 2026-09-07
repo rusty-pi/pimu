@@ -202,6 +202,10 @@ impl Vpu {
                     bus.load32(self.exc_vbase.wrapping_add(vector.wrapping_mul(4)))
                         .ok()
                         .filter(|&h| h != 0)
+                        // Vector-table entries carry a flag in bit 0 (start4's
+                        // dynamically-installed `swi` dispatcher is stored as
+                        // `addr | 1`); the entry PC is the even address.
+                        .map(|h| h & !1)
                 } else {
                     None
                 };
