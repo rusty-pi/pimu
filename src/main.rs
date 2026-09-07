@@ -204,14 +204,25 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         }
         let report = emu.run(&limits);
 
+        // `RVF_DUMP_FLASH=<path>` writes the (self-update-modified) EEPROM image
+        // after every run segment — `<path>.<n>` — so a run that reaches
+        // "BOOT-EEPROM: UPDATED" but stops before RESET still yields the burned
+        // image. Feed it back as `recon <path>.<n> --eeprom` for a fast, already
+        // provisioned boot (no self-update, no reboot).
+        if eeprom {
+            if let Ok(p) = std::env::var("RVF_DUMP_FLASH") {
+                let cur = emu.machine.spi0.flash_bytes();
+                if cur != flash.as_slice() {
+                    let _ = std::fs::write(format!("{p}.{}", reboots + 1), cur);
+                    eprintln!("wrote {p}.{} ({} bytes)", reboots + 1, cur.len());
+                }
+            }
+        }
+
         if report.end == rpi_virt_fw::emulator::RunEnd::Reset {
             reboots += 1;
             print!("{}", String::from_utf8_lossy(&report.console));
             flash = emu.machine.spi0.flash_bytes().to_vec();
-            if let Ok(p) = std::env::var("RVF_DUMP_FLASH") {
-                let _ = std::fs::write(format!("{p}.{reboots}"), &flash);
-                eprintln!("wrote {p}.{reboots} ({} bytes)", flash.len());
-            }
             if reboots <= 4 {
                 println!("\n=== RESET (reboot {reboots}) — re-running from updated flash ===\n");
                 continue 'boot;
