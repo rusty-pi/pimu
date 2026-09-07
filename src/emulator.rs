@@ -153,6 +153,11 @@ impl Emulator {
         if mmio_from.is_some() {
             self.machine.mmio_trace = false;
         }
+        // `RVF_TRACE_ON_CONSOLE=<substr>` arms the instruction trace the moment
+        // that substring appears in the console — for pinning down a code path
+        // by the log line that precedes it.
+        let trace_on_console = std::env::var("RVF_TRACE_ON_CONSOLE").ok();
+        let mut console_seen = 0usize;
 
         // Spin detection: over a sliding window of steps, track the min/max PC
         // and whether any console output happened. If the PC stays within a
@@ -250,6 +255,18 @@ impl Emulator {
                 let _ = std::io::stderr().write_all(&fresh);
             }
             console.extend_from_slice(&fresh);
+            if let Some(needle) = &trace_on_console {
+                if !self.cpu.trace && console.len() > console_seen {
+                    let from = console_seen.saturating_sub(needle.len());
+                    if String::from_utf8_lossy(&console[from..]).contains(needle.as_str()) {
+                        self.cpu.trace = true;
+                        self.cpu.trace_armed = true;
+                        self.cpu.trace_cf_only = false;
+                        self.cpu.trace_cap = 300_000;
+                    }
+                    console_seen = console.len();
+                }
+            }
 
             match step {
                 crate::vpu::Step::Stopped => {
