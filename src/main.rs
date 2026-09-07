@@ -20,8 +20,8 @@ USAGE:
     rpi-virt-fw run <scenario.toml> [--update] [-v]
     rpi-virt-fw run-all [<dir>] [--update] [-v]
     rpi-virt-fw recon <file> [--entry <hex>] [--ram-mb <n>] [--max-steps <n>] [--eeprom]
-                             [--sd <img>] [--dump <hex>:<len>] [--disasm <hex>:<count>]
-                             [--patch <hex>=<hex>]
+                             [--max-wall <secs>] [--sd <img>] [--dump <hex>:<len>]
+                             [--disasm <hex>:<count>] [--patch <hex>=<hex>]
     rpi-virt-fw disasm <file> [--base <hex>] [--count <n>] [--vaddr <hex>]
 
 COMMANDS:
@@ -71,6 +71,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     let mut entry: Option<u32> = None;
     let mut ram_mb: Option<u32> = None;
     let mut max_steps: u64 = 20_000_000;
+    let mut max_wall_secs: u64 = 120;
     let mut eeprom = false;
     let mut trace = false;
     let mut trace_full = false;
@@ -90,6 +91,9 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
             "--entry" => entry = Some(parse_u32(it.next().context("--entry needs a value")?)?),
             "--ram-mb" => ram_mb = Some(it.next().context("--ram-mb needs a value")?.parse()?),
             "--max-steps" => max_steps = it.next().context("--max-steps needs a value")?.parse()?,
+            "--max-wall" => {
+                max_wall_secs = it.next().context("--max-wall needs seconds")?.parse()?
+            }
             "--eeprom" => eeprom = true,
             "--trace" => trace = true,
             "--trace-full" => {
@@ -182,7 +186,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     }
     let report = emu.run(&RunLimits {
         max_steps,
-        max_wall: Some(std::time::Duration::from_secs(120)),
+        max_wall: Some(std::time::Duration::from_secs(max_wall_secs)),
         stop_pc: None,
         idle_spin_limit: 200_000,
     });
