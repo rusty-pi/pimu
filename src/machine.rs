@@ -136,7 +136,7 @@ impl Machine {
     }
 
     pub fn irq_pending(&self) -> bool {
-        self.uart0.irq_pending() || self.aux.irq_pending() || self.systimer.irq_pending()
+        self.uart0.irq_pending() || self.aux.irq_pending()
     }
 
     /// The VPU addresses peripherals only through the `0x7E00_0000` window (no
@@ -259,7 +259,27 @@ impl Machine {
     }
 }
 
+impl Machine {
+    /// `sleep` support: jump to the next armed system-timer compare, fire it, and
+    /// return the interrupt vector-table slot if the firmware has enabled that
+    /// timer source (`enable_irq_source(SYS_IRQ_SRC + channel, prio)`).
+    fn timer_wake_impl(&mut self) -> Option<u32> {
+        let ch = self.systimer.wake_to_next_match()?;
+        let src = crate::periph::corectl::SYS_IRQ_SRC + ch as u32;
+        let prio = self.corectl.irq_priority(src);
+        if prio == 0 {
+            None
+        } else {
+            Some(prio as u32)
+        }
+    }
+}
+
 impl Bus for Machine {
+    fn timer_wake(&mut self) -> Option<u32> {
+        self.timer_wake_impl()
+    }
+
     fn load(&mut self, addr: u32, width: Width) -> BusResult<u32> {
         if !Machine::in_mmio(addr) {
             let phys = Machine::fold_ram_addr(addr);
