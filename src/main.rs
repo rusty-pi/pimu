@@ -79,6 +79,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     let mut smp = false;
     let mut as_core1 = false;
     let mut patches: Vec<(u32, u32)> = Vec::new();
+    let mut dumps: Vec<(u32, u32)> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -105,6 +106,11 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
                 trace_from = parse_u32(it.next().context("--trace-from needs a value")?)?
             }
             "--trace-mmio" => trace_mmio = true,
+            "--dump" => {
+                let spec = it.next().context("--dump needs <hexaddr>:<len>")?;
+                let (a, n) = spec.split_once(':').context("--dump: expected addr:len")?;
+                dumps.push((parse_u32(a)?, parse_u32(n)?));
+            }
             "--patch" => {
                 let spec = it.next().context("--patch needs <hexaddr>=<hexval>")?;
                 let (a, v) = spec.split_once('=').context("--patch: expected addr=val")?;
@@ -207,6 +213,18 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     if !report.console.is_empty() {
         println!("\n--- console ({} bytes) ---", report.console.len());
         println!("{}", String::from_utf8_lossy(&report.console));
+    }
+
+    for &(a, n) in &dumps {
+        use rpi_virt_fw::bus::Bus;
+        print!("dump {a:#010x}:");
+        for i in 0..n {
+            if i % 32 == 0 {
+                print!("\n  {:#010x} ", a + i);
+            }
+            print!("{:02x}", emu.machine.load(a + i, rpi_virt_fw::bus::Width::Byte).unwrap_or(0) as u8);
+        }
+        println!();
     }
 
     if !report.phase_tags.is_empty() {
