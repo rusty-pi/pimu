@@ -3,7 +3,7 @@
 use crate::bus::{Bus, BusError, BusResult, MmioDevice, Width};
 use crate::mem::Ram;
 use crate::periph::{
-    Aux, ClockManager, ConfigOtp, CoreCtl, McSync, Pl011, Spi0, StubRegion, SysTimer,
+    Aux, ClockManager, ConfigOtp, CoreCtl, McSync, Pl011, Sdramc, Spi0, StubRegion, SysTimer,
 };
 use crate::soc::bcm2711 as map;
 
@@ -30,6 +30,9 @@ pub struct Machine {
     pub spi0: Spi0,
     /// Always-on config / OTP engine (`0x7E20_F000`) — board identity reads.
     pub config_otp: ConfigOtp,
+    /// LPDDR4 controller + PHY (`0x7DC0_0000`, below the peripheral window) —
+    /// the `init_sdram_*` training path drives this.
+    pub sdramc: Sdramc,
     /// Catch-all for the rest of the peripheral window.
     pub periph_stub: StubRegion,
     pub console: Console,
@@ -71,6 +74,7 @@ impl Machine {
             clockman: ClockManager::new(),
             spi0: Spi0::new(),
             config_otp: ConfigOtp::new(),
+            sdramc: Sdramc::new(),
             periph_stub: StubRegion::new("periph-window"),
             console: Console::default(),
             stub_hits: 0,
@@ -106,9 +110,12 @@ impl Machine {
     }
 
     /// The VPU addresses peripherals only through the `0x7E00_0000` window (no
-    /// cache aliasing, unlike RAM).
-    fn in_periph_window(addr: u32) -> bool {
+    /// cache aliasing, unlike RAM) — plus the LPDDR4 controller/PHY, which is
+    /// mapped just *below* that window at `0x7DC0_0000`. Both must be decoded
+    /// before the cache-alias fold, or their (aliased) addresses land in DRAM.
+    fn in_mmio(addr: u32) -> bool {
         (map::PERIPH_BASE..map::PERIPH_BASE + map::PERIPH_SIZE).contains(&addr)
+            || (map::SDRAMC_BASE..map::SDRAMC_BASE + map::SDRAMC_SIZE).contains(&addr)
     }
 
     /// Fold the four VC4 cache aliases (`0x0`, `0x4000_0000`, `0x8000_0000`,
@@ -154,6 +161,9 @@ impl Machine {
         if let Some(off) = hit(map::FIFO_STUB_BASE, map::FIFO_STUB_SIZE) {
             return Some((&mut self.config_otp, off));
         }
+        if let Some(off) = hit(map::SDRAMC_BASE, map::SDRAMC_SIZE) {
+            return Some((&mut self.sdramc, off));
+        }
 
         if (map::PERIPH_BASE..map::PERIPH_BASE + map::PERIPH_SIZE).contains(&a) {
             self.stub_hits += 1;
@@ -165,7 +175,7 @@ impl Machine {
 
 impl Bus for Machine {
     fn load(&mut self, addr: u32, width: Width) -> BusResult<u32> {
-        if !Machine::in_periph_window(addr) {
+        if !Machine::in_mmio(addr) {
             let phys = Machine::fold_ram_addr(addr);
             if self.ram.contains(phys) {
                 return self.ram.load(phys, width);
@@ -191,7 +201,7 @@ impl Bus for Machine {
 
     fn store(&mut self, addr: u32, width: Width, value: u32) -> BusResult<()> {
         self.ram_writes = self.ram_writes.wrapping_add(1);
-        if !Machine::in_periph_window(addr) {
+        if !Machine::in_mmio(addr) {
             let phys = Machine::fold_ram_addr(addr);
             if self.ram.contains(phys) {
                 if phys == PHASE_TAG_ADDR && width == Width::Word {

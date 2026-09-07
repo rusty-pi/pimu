@@ -22,6 +22,10 @@ pub struct SysTimer {
     cycles_per_us: u64,
     cs: u32,
     cmp: [u32; 4],
+    /// Count of CLO/CHI reads. The run loop uses this to tell a firmware
+    /// `usleep` (polls the counter, is time-bounded) apart from a hung
+    /// peripheral poll (never terminates) — the former deserves patience.
+    pub clo_reads: u64,
 }
 
 impl SysTimer {
@@ -32,6 +36,7 @@ impl SysTimer {
             cycles_per_us: VPU_HZ_DEFAULT / 1_000_000,
             cs: 0,
             cmp: [0; 4],
+            clo_reads: 0,
         }
     }
 
@@ -60,8 +65,14 @@ impl MmioDevice for SysTimer {
     fn read(&mut self, offset: u32, _width: Width) -> BusResult<u32> {
         Ok(match offset {
             CS => self.cs,
-            CLO => self.micros as u32,
-            CHI => (self.micros >> 32) as u32,
+            CLO => {
+                self.clo_reads += 1;
+                self.micros as u32
+            }
+            CHI => {
+                self.clo_reads += 1;
+                (self.micros >> 32) as u32
+            }
             C0 => self.cmp[0],
             C1 => self.cmp[1],
             C2 => self.cmp[2],
