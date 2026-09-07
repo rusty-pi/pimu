@@ -236,8 +236,10 @@ impl Vpu {
                 // "unreachable" guards inside functions and at the head of its
                 // exception stubs — real VC4 slides through it. A test payload
                 // uses `bkpt` as a deliberate stop, so only step over it in
-                // reconnaissance mode.
-                if matches!(self.on_unimpl, UnimplPolicy::Skip) {
+                // reconnaissance mode, and only on core 0 (a mis-entered core 1
+                // hitting `0x0000` should still halt rather than nop-slide
+                // through DRAM).
+                if matches!(self.on_unimpl, UnimplPolicy::Skip) && self.core_id == 0 {
                     self.skipped += 1;
                     self.regs.pc = next;
                 } else {
