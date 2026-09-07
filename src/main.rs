@@ -20,7 +20,8 @@ USAGE:
     rpi-virt-fw run <scenario.toml> [--update] [-v]
     rpi-virt-fw run-all [<dir>] [--update] [-v]
     rpi-virt-fw recon <file> [--entry <hex>] [--ram-mb <n>] [--max-steps <n>] [--eeprom]
-                             [--dump <hex>:<len>] [--disasm <hex>:<count>] [--patch <hex>=<hex>]
+                             [--sd <img>] [--dump <hex>:<len>] [--disasm <hex>:<count>]
+                             [--patch <hex>=<hex>]
     rpi-virt-fw disasm <file> [--base <hex>] [--count <n>] [--vaddr <hex>]
 
 COMMANDS:
@@ -82,6 +83,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     let mut patches: Vec<(u32, u32)> = Vec::new();
     let mut dumps: Vec<(u32, u32)> = Vec::new();
     let mut disasms: Vec<(u32, u32)> = Vec::new();
+    let mut sd_image: Option<PathBuf> = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -108,6 +110,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
                 trace_from = parse_u32(it.next().context("--trace-from needs a value")?)?
             }
             "--trace-mmio" => trace_mmio = true,
+            "--sd" => sd_image = Some(PathBuf::from(it.next().context("--sd needs a path")?)),
             "--dump" => {
                 let spec = it.next().context("--dump needs <hexaddr>:<len>")?;
                 let (a, n) = spec.split_once(':').context("--dump: expected addr:len")?;
@@ -143,6 +146,12 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     if eeprom {
         // The bootloader scans the SPI flash it was itself loaded from.
         machine.spi0.attach_flash(bytes.clone());
+    }
+    if let Some(sd_path) = &sd_image {
+        let img = std::fs::read(sd_path)
+            .with_context(|| format!("reading SD image {}", sd_path.display()))?;
+        println!("sd image   {} ({} blocks)", sd_path.display(), img.len() / 512);
+        machine.emmc2.insert_card(img);
     }
     machine.mmio_trace = trace_mmio;
     payload.load_into(&mut machine)?;
