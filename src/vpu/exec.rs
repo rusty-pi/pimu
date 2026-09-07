@@ -191,7 +191,17 @@ impl Vpu {
 
         match insn.op {
             Op::Nop => self.regs.pc = next,
-            Op::Sleep => return self.stop(Stop::Halt(HaltReason::Sleep)),
+            Op::Sleep => {
+                // `sleep` waits for an interrupt. We model no async wakeups, so
+                // in recon (skip) mode treat it as a nop — firmware idle/dispatch
+                // loops (`sleep; b loop`) then just spin and the run's step limit
+                // or spin detector ends things cleanly. Otherwise halt.
+                if matches!(self.on_unimpl, UnimplPolicy::Skip) {
+                    self.regs.pc = next;
+                } else {
+                    return self.stop(Stop::Halt(HaltReason::Sleep));
+                }
+            }
             Op::Bkpt => return self.stop(Stop::Halt(HaltReason::Breakpoint)),
             Op::Swi { vector } => {
                 // `vector` is already `0x20 + u`. With a vector table configured,

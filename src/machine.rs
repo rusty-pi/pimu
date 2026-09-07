@@ -76,8 +76,12 @@ pub struct Machine {
     pub phase_tags: Vec<u32>,
 }
 
-/// Folded address of the `start4.elf` boot-progress register (`0xCEC0_2000`).
-const PHASE_TAG_ADDR: u32 = 0xCEC0_2000 & 0x3FFF_FFFF;
+/// `start4.elf` writes 4-char boot-progress tags to `0x?EC0_2000`. Direct-ELF
+/// load runs it at `0xCEC0_0000` (tags `0xCEC0_2000`); the real bootloader
+/// relocates it to `0xFEC0_0000` (tags `0xFEC0_2000`). Both share the low-26-bit
+/// signature `0x02C0_2000` (each `0x?C00_0000` alias is 64 MiB), so match on
+/// that regardless of which alias the write used.
+const PHASE_TAG_SIG: u32 = 0x02C0_2000;
 
 impl Machine {
     pub fn new(ram_bytes: usize) -> Machine {
@@ -281,7 +285,7 @@ impl Bus for Machine {
         if !Machine::in_mmio(addr) {
             let phys = Machine::fold_ram_addr(addr);
             if self.ram.contains(phys) {
-                if phys == PHASE_TAG_ADDR && width == Width::Word {
+                if addr & 0x03FF_FFFF == PHASE_TAG_SIG && width == Width::Word {
                     if self.phase_tags.last() != Some(&value) {
                         self.phase_tags.push(value);
                     }
