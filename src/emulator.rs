@@ -31,8 +31,6 @@ pub struct Emulator {
     /// ROM releases *both* cores at; core 1 runs start4's trampoline from there
     /// and diverges on `version` bit 16. Override for tests / direct-load runs.
     pub core1_entry: Option<u32>,
-    /// Core 0's entry — used as core 1's default reset PC.
-    entry: u32,
     /// Latched once the firmware signals it wants core 1 up (a code-address
     /// write to the CoreCtl run-state words). The actual spawn is deferred
     /// until [`SMP_DISPATCH_GLOBAL`] is populated — see there.
@@ -115,7 +113,6 @@ impl Emulator {
             cpu: Vpu::new(entry),
             cpu1: None,
             core1_entry: None,
-            entry,
             core1_release_armed: false,
             machine,
         }
