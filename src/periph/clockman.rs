@@ -20,6 +20,9 @@ use crate::bus::{BusResult, MmioDevice, Width};
 const CM_LOCK: u32 = 0x114;
 /// `BUSY` bit in every `CM_*_CTL` register.
 const CTL_BUSY: u32 = 1 << 7;
+/// `KILL` bit — a write with it set stops the clock at once; the firmware then
+/// polls the register for 0 (`0x00081dc0` gates a display clock this way).
+const CTL_KILL: u32 = 1 << 5;
 /// Password byte the firmware ORs into every clock-manager write.
 const PASSWD: u32 = 0x5A00_0000;
 
@@ -52,7 +55,9 @@ impl MmioDevice for ClockManager {
     }
 
     fn write(&mut self, offset: u32, _width: Width, value: u32) -> BusResult<()> {
-        self.storage.insert(offset & !3, value);
+        // A KILL write stops the clock immediately — read-back is 0.
+        let stored = if value & CTL_KILL != 0 { 0 } else { value };
+        self.storage.insert(offset & !3, stored);
         Ok(())
     }
 }
