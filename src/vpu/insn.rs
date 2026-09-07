@@ -215,7 +215,10 @@ impl AluOp {
             8 => Bitset,
             9 => Bitclear,
             10 => Bitflip,
-            11 => AddScale(8),
+            // `rd += #imm << 3` (imm scaled by 8 = one 64-byte block / 16 words).
+            // The bootcode's SHA-256 schedule uses `r += 64` and this form
+            // interchangeably (e.g. `0x80004632`, `0x80006214`).
+            11 => AddScale(3),
             12 => Signext,
             13 => Lsr,
             14 => Shl,
