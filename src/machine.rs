@@ -2,7 +2,9 @@
 
 use crate::bus::{Bus, BusError, BusResult, MmioDevice, Width};
 use crate::mem::Ram;
-use crate::periph::{Aux, ClockManager, CoreCtl, McSync, Pl011, ReadyStub, Spi0, StubRegion, SysTimer};
+use crate::periph::{
+    Aux, ClockManager, ConfigOtp, CoreCtl, McSync, Pl011, Spi0, StubRegion, SysTimer,
+};
 use crate::soc::bcm2711 as map;
 
 /// Which UART the harness captures as "the console".
@@ -26,8 +28,8 @@ pub struct Machine {
     pub clockman: ClockManager,
     /// SPI0 master (`0x7E20_4000`) — minimal model for the EEPROM bootloader.
     pub spi0: Spi0,
-    /// "Always ready" stub for the EEPROM bootloader's FIFO at 0x7E20_F000.
-    pub fifo_stub: ReadyStub,
+    /// Always-on config / OTP engine (`0x7E20_F000`) — board identity reads.
+    pub config_otp: ConfigOtp,
     /// Catch-all for the rest of the peripheral window.
     pub periph_stub: StubRegion,
     pub console: Console,
@@ -62,7 +64,7 @@ impl Machine {
             corectl: CoreCtl::new(),
             clockman: ClockManager::new(),
             spi0: Spi0::new(),
-            fifo_stub: ReadyStub::new("fifo-stub"),
+            config_otp: ConfigOtp::new(),
             periph_stub: StubRegion::new("periph-window"),
             console: Console::default(),
             stub_hits: 0,
@@ -142,7 +144,7 @@ impl Machine {
             return Some((&mut self.spi0, off));
         }
         if let Some(off) = hit(map::FIFO_STUB_BASE, map::FIFO_STUB_SIZE) {
-            return Some((&mut self.fifo_stub, off));
+            return Some((&mut self.config_otp, off));
         }
 
         if (map::PERIPH_BASE..map::PERIPH_BASE + map::PERIPH_SIZE).contains(&a) {
