@@ -198,6 +198,35 @@ impl Vpu {
                 // or spin detector ends things cleanly. Otherwise halt.
                 if matches!(self.on_unimpl, UnimplPolicy::Skip) {
                     self.regs.pc = next;
+                    // `sleep` = wait for an interrupt. Ask the bus to advance to
+                    // the next armed timer compare; if that raises an enabled
+                    // interrupt source, dispatch through the firmware's vector
+                    // table (same stack frame convention as `swi`: push SR then
+                    // the resume address, so the handler's `rti` unwinds).
+                    if self.in_exception == 0 && self.exc_vbase != 0 {
+                        if let Some(slot) = bus.timer_wake() {
+                            let handler = bus
+                                .load32(self.exc_vbase.wrapping_add(slot.wrapping_mul(4)))
+                                .ok()
+                                .filter(|&h| h != 0)
+                                .map(|h| h & !1);
+                            if let Some(mut h) = handler {
+                                // start4's dispatching vector stubs begin with a
+                                // `0x0000` guard parcel; the stub body follows.
+                                if bus.load16(h) == Ok(0x0000) {
+                                    h = h.wrapping_add(2);
+                                }
+                                let sp = self.regs.get(SP).wrapping_sub(8);
+                                if bus.store32(sp, self.regs.sr).is_ok()
+                                    && bus.store32(sp.wrapping_add(4), next).is_ok()
+                                {
+                                    self.regs.set(SP, sp);
+                                    self.in_exception = self.in_exception.wrapping_add(1);
+                                    self.regs.pc = h;
+                                }
+                            }
+                        }
+                    }
                 } else {
                     return self.stop(Stop::Halt(HaltReason::Sleep));
                 }

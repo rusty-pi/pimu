@@ -101,6 +101,14 @@ pub trait Bus {
     fn store32(&mut self, addr: u32, v: u32) -> BusResult<()> {
         self.store(addr, Width::Word, v)
     }
+
+    /// Model of `sleep` = "wait for the next interrupt". Advances time to the
+    /// earliest armed timer compare, fires it, and — if the firmware has enabled
+    /// the matching interrupt source — returns the vector-table slot to dispatch
+    /// through. `None` means nothing is pending and `sleep` is just a nop.
+    fn timer_wake(&mut self) -> Option<u32> {
+        None
+    }
 }
 
 /// A memory-mapped peripheral. Offsets are relative to the device's base.
