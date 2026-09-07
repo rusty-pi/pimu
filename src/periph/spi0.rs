@@ -75,6 +75,11 @@ impl Spi0 {
         self.flash = image;
     }
 
+    /// The current flash contents — reflects any EEPROM self-update writes.
+    pub fn flash_bytes(&self) -> &[u8] {
+        &self.flash
+    }
+
     fn status(&self) -> u32 {
         let mut cs = self.cs & !(CS_DONE | CS_RXD | CS_TXD | CS_RXR | CS_RXF);
         cs |= CS_TXD; // always room to write

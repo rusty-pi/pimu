@@ -56,6 +56,10 @@ pub const ARMCTRL_SIZE: u32 = 0x1000;
 pub const MBOX_BASE: u32 = 0x7E00_B880;
 pub const MBOX_SIZE: u32 = 0x40;
 
+/// Power-management block (`0x7E10_0000`): reset control + watchdog.
+pub const PM_BASE: u32 = 0x7E10_0000;
+pub const PM_SIZE: u32 = 0x1000;
+
 /// Clock manager (`0x7E10_1000`).
 pub const CM_BASE: u32 = 0x7E10_1000;
 pub const CM_SIZE: u32 = 0x2000;
