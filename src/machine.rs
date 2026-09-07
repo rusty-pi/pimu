@@ -264,14 +264,29 @@ impl Machine {
     /// return the interrupt vector-table slot if the firmware has enabled that
     /// timer source (`enable_irq_source(SYS_IRQ_SRC + channel, prio)`).
     fn timer_wake_impl(&mut self) -> Option<u32> {
-        let ch = self.systimer.wake_to_next_match()?;
-        let src = crate::periph::corectl::SYS_IRQ_SRC + ch as u32;
-        let prio = self.corectl.irq_priority(src);
-        if prio == 0 {
-            None
-        } else {
-            Some(prio as u32)
+        // Don't stack a second tick while the handler is still working through
+        // the last one.
+        if self.bootbox.irq_pending() {
+            return None;
         }
+        let _ch = self.systimer.wake_to_next_match()?;
+        // start4 routes the ThreadX tick to interrupt source 66 (its handler at
+        // 0x3ED6583A acks system-timer CS and calls the tick with source id 66).
+        let src = crate::periph::corectl::SYS_IRQ_SRC + 2;
+        if self.corectl.irq_priority(src) == 0 {
+            return None;
+        }
+        self.bootbox.raise_irq(src, 0);
+        // start4 traps this interrupt through exception vector 3: only slots 3
+        // and 10 make its ISR run the real source dispatch (0x3EDA2594) that
+        // calls into ThreadX; vector 12's handler reads the source from the
+        // bootbox window instead. `RVF_IRQ_SLOT` overrides for experiments.
+        Some(
+            std::env::var("RVF_IRQ_SLOT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(3),
+        )
     }
 }
 

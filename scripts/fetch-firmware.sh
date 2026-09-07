@@ -34,6 +34,11 @@ fetch() {
 echo "raspberrypi/firmware @ $FIRMWARE_REF"
 fetch "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/start4.elf" "start4.elf"
 fetch "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/fixup4.dat" "fixup4.dat"
+# Debug build: identical function, far more verbose UART logging (MESS: lines).
+# Embed it in the boot medium with `START4=start4db make-sd.sh` to see where
+# start4 gets stuck.
+fetch "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/start4db.elf" "start4db.elf"
+fetch "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/fixup4db.dat" "fixup4db.dat"
 
 echo "raspberrypi/rpi-eeprom @ $EEPROM_REF ($EEPROM_CHANNEL/$EEPROM_DATE)"
 fetch "$raw/raspberrypi/rpi-eeprom/$EEPROM_REF/firmware-2711/$EEPROM_CHANNEL/pieeprom-$EEPROM_DATE.bin" "pieeprom.bin"
