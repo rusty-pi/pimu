@@ -30,9 +30,10 @@ const REG_STATUS: u32 = 0x10;
 const REG_DATA: u32 = 0x18;
 const REG_KEY: u32 = 0x1C;
 
-/// `+0x08` bit 0 kicks off a transaction; `+0x10` bit 0 reports completion.
+/// `+0x08` bit 0 kicks off a transaction; `+0x10` **bit 1** reports completion
+/// (the poll at `0x8000760e` is `btest [+0x10], #1`).
 const GO: u32 = 1 << 0;
-const DONE: u32 = 1 << 0;
+const DONE: u32 = 1 << 1;
 
 /// Status bits unrelated firmware paths poll for on this block.
 const READY: u32 = (1 << 17) | (1 << 18) | (1 << 7);
