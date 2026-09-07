@@ -24,6 +24,10 @@ pub const MCSYNC_SIZE: u32 = 0x1000;
 pub const CORECTL_BASE: u32 = 0x7E00_2000;
 pub const CORECTL_SIZE: u32 = 0x100;
 
+/// DMA4 ("dma40") channel the main bootloader uses to scrub / move DRAM.
+pub const DMA4_BASE: u32 = 0x7E00_7B00;
+pub const DMA4_SIZE: u32 = 0x100;
+
 /// Boot-info handoff doorbells (`0x7EE0_0000` region: `0x7EE0_1000`,
 /// `0x7EE0_2000`, `0x7EE0_2100`) — the bootloader stages a version/OTP block
 /// into DRAM and rings these; their control bits self-clear. Kept below DMA4
