@@ -14,6 +14,7 @@ pub mod emmc2;
 pub mod mcsync;
 pub mod readystub;
 pub mod sdc;
+pub mod sdcard;
 pub mod sdramc;
 pub mod spi0;
 pub mod stub;
