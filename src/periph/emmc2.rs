@@ -1,9 +1,14 @@
 //! BCM2711 EMMC2 — the SD Host Controller (SDHCI v3) the main bootloader uses
 //! once it picks "Boot mode: SD". Register block at `0x7E34_0000`.
 //!
-//! Built out incrementally as the bootloader's SD driver exercises it. Right
-//! now: enough of the clock / reset / present-state plumbing for the init
-//! handshake to complete. Command dispatch + a card model come next.
+//! **Stub only, on purpose.** This models just the clock / reset /
+//! present-state plumbing so SD init gets to `SD HOST: ... 390625 HZ`. It does
+//! *not* dispatch commands or back a card — the driver then sends CMD0 and
+//! spins forever waiting for command-complete. A full SD stack (SDHCI command
+//! engine + an SD card state machine + a FAT image with a real `start4.elf`)
+//! is deferred; see the `bootloader-stage-peripherals` note. The alternative
+//! path to `start4.elf` is to load it into DRAM directly and jump, skipping
+//! the boot-media read entirely.
 
 use std::collections::BTreeMap;
 
