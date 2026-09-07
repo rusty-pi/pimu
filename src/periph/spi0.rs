@@ -108,6 +108,12 @@ impl Spi0 {
         let miso = match (n, self.cmd) {
             (0, _) => {
                 self.cmd = mosi;
+                // Single-byte commands act now — there is no later beat.
+                match mosi {
+                    0x06 => self.wel = true,  // WREN
+                    0x04 => self.wel = false, // WRDI
+                    _ => {}
+                }
                 MISO_IDLE
             }
             // READ (0x03): 3 address bytes, then a stream of data.
@@ -128,16 +134,6 @@ impl Spi0 {
             // RDSR (0x05): status register. Bit 0 = WIP (always clear — erase /
             // program complete instantly); bit 1 = WEL.
             (_, 0x05) => u8::from(self.wel) << 1,
-            // WREN (0x06): set the write-enable latch. No data phase.
-            (_, 0x06) => {
-                self.wel = true;
-                MISO_IDLE
-            }
-            // WRDI (0x04): clear it.
-            (_, 0x04) => {
-                self.wel = false;
-                MISO_IDLE
-            }
             // SE (0x20): 3 address bytes, then erase the enclosing 4 KiB sector.
             (1..=3, 0x20) => {
                 self.addr = (self.addr << 8) | mosi as u32;
