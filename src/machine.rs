@@ -3,7 +3,7 @@
 use crate::bus::{Bus, BusError, BusResult, MmioDevice, Width};
 use crate::mem::Ram;
 use crate::periph::{
-    Aux, ClockManager, ConfigOtp, CoreCtl, McSync, Pl011, Sdramc, Spi0, StubRegion, SysTimer,
+    Aux, BootBox, ClockManager, ConfigOtp, CoreCtl, McSync, Pl011, Sdc, Sdramc, Spi0, StubRegion, SysTimer,
 };
 use crate::soc::bcm2711 as map;
 
@@ -33,6 +33,11 @@ pub struct Machine {
     /// LPDDR4 controller + PHY (`0x7DC0_0000`, below the peripheral window) —
     /// the `init_sdram_*` training path drives this.
     pub sdramc: Sdramc,
+    /// Legacy SDRAM-controller register interface (`0x7E00_1000`) — DRAM timing
+    /// table plus lock/ready bits polled after PHY training.
+    pub sdc: Sdc,
+    /// Boot-info handoff doorbell (`0x7EE0_2000`).
+    pub bootbox: BootBox,
     /// Catch-all for the rest of the peripheral window.
     pub periph_stub: StubRegion,
     pub console: Console,
@@ -45,6 +50,10 @@ pub struct Machine {
     /// a loop that keeps writing memory is making progress, not spinning.
     pub ram_writes: u64,
     pub mmio_writes: u64,
+    /// Loads that resolved to RAM. Lets the run loop tell a bounded memory scan
+    /// (a DRAM memtest read-back walks fresh addresses, no writes) from a hung
+    /// poll (re-reads one MMIO register forever).
+    pub ram_reads: u64,
 
     /// When set, every peripheral (non-RAM) access is appended to `mmio_events`
     /// as `(addr, width_bytes, value, is_write)`. The run loop drains and prints
@@ -75,12 +84,15 @@ impl Machine {
             spi0: Spi0::new(),
             config_otp: ConfigOtp::new(),
             sdramc: Sdramc::new(),
+            sdc: Sdc::new(),
+            bootbox: BootBox::new(),
             periph_stub: StubRegion::new("periph-window"),
             console: Console::default(),
             stub_hits: 0,
             bus_errors: 0,
             ram_writes: 0,
             mmio_writes: 0,
+            ram_reads: 0,
             mmio_trace: false,
             mmio_events: Vec::new(),
             phase_tags: Vec::new(),
@@ -152,6 +164,12 @@ impl Machine {
         if let Some(off) = hit(map::CORECTL_BASE, map::CORECTL_SIZE) {
             return Some((&mut self.corectl, off));
         }
+        if let Some(off) = hit(map::SDC_BASE, map::SDC_SIZE) {
+            return Some((&mut self.sdc, off));
+        }
+        if let Some(off) = hit(map::BOOTBOX_BASE, map::BOOTBOX_SIZE) {
+            return Some((&mut self.bootbox, off));
+        }
         if let Some(off) = hit(map::CM_BASE, map::CM_SIZE) {
             return Some((&mut self.clockman, off));
         }
@@ -178,6 +196,7 @@ impl Bus for Machine {
         if !Machine::in_mmio(addr) {
             let phys = Machine::fold_ram_addr(addr);
             if self.ram.contains(phys) {
+                self.ram_reads = self.ram_reads.wrapping_add(1);
                 return self.ram.load(phys, width);
             }
         }

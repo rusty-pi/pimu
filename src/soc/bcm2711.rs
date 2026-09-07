@@ -24,6 +24,18 @@ pub const MCSYNC_SIZE: u32 = 0x1000;
 pub const CORECTL_BASE: u32 = 0x7E00_2000;
 pub const CORECTL_SIZE: u32 = 0x100;
 
+/// Boot-info handoff doorbells (`0x7EE0_0000` region: `0x7EE0_1000`,
+/// `0x7EE0_2000`, `0x7EE0_2100`) — the bootloader stages a version/OTP block
+/// into DRAM and rings these; their control bits self-clear. Kept below DMA4
+/// at `0x7EE0_5000`.
+pub const BOOTBOX_BASE: u32 = 0x7EE0_0000;
+pub const BOOTBOX_SIZE: u32 = 0x4000;
+
+/// Legacy SDRAM-controller register interface (`0x7E00_1000`): DRAM timing
+/// words plus per-sub-controller lock/ready status the bootloader polls.
+pub const SDC_BASE: u32 = 0x7E00_1000;
+pub const SDC_SIZE: u32 = 0x1000;
+
 /// SPI0 master (`0x7E20_4000`).
 pub const SPI0_BASE: u32 = 0x7E20_4000;
 pub const SPI0_SIZE: u32 = 0x18;
