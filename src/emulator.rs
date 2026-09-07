@@ -3,8 +3,22 @@
 
 use std::time::{Duration, Instant};
 
+use crate::bus::{Bus, Width};
 use crate::machine::{Console, Machine};
 use crate::vpu::{Stop, UnimplPolicy, Vpu};
+
+/// The VPU reset vector `start4.elf` is entered at (`.crypto` region). The
+/// BCM2711 boot ROM releases both VPU cores here; the bootloader also jumps
+/// here after loading the image. Used as core 1's default entry.
+pub const START4_ENTRY: u32 = 0xFEC0_0200;
+
+/// `start4.elf`'s ThreadX-SMP dispatch-module global (`[gp+3672]`, gp = start
+/// of `.sdata` = `0x3EE0_2D20`). It holds a pointer to the per-core scheduler
+/// object once `_tx_thread_smp` init has registered it. Core 1's very first
+/// instructions after the trampoline (`0x3EC2_CC28` → `0x3ED6_50B4`) do
+/// `b *([[gp+3672]] + 24)`, so releasing core 1 before this is populated
+/// jumps it through a null vtable. We gate the core-1 spawn on it being set.
+const SMP_DISPATCH_GLOBAL: u32 = 0x3EE0_3B78;
 
 pub struct Emulator {
     pub cpu: Vpu,
@@ -13,11 +27,16 @@ pub struct Emulator {
     /// it with core 0 over the shared bus.
     pub cpu1: Option<Vpu>,
     /// Reset PC for VPU core 1 when the firmware releases it via the core-control
-    /// block. Defaults to core 0's entry (the shared trampoline); set explicitly
-    /// while the exact reset behaviour is still being pinned down.
+    /// block. Defaults to [`START4_ENTRY`] — the shared VPU reset vector the boot
+    /// ROM releases *both* cores at; core 1 runs start4's trampoline from there
+    /// and diverges on `version` bit 16. Override for tests / direct-load runs.
     pub core1_entry: Option<u32>,
     /// Core 0's entry — used as core 1's default reset PC.
     entry: u32,
+    /// Latched once the firmware signals it wants core 1 up (a code-address
+    /// write to the CoreCtl run-state words). The actual spawn is deferred
+    /// until [`SMP_DISPATCH_GLOBAL`] is populated — see there.
+    core1_release_armed: bool,
     pub machine: Machine,
 }
 
@@ -97,6 +116,7 @@ impl Emulator {
             cpu1: None,
             core1_entry: None,
             entry,
+            core1_release_armed: false,
             machine,
         }
     }
@@ -230,10 +250,29 @@ impl Emulator {
                 break RunEnd::Reset;
             }
 
-            // Core 0 arms core 1's run-state once the shared globals are ready.
-            if self.cpu1.is_none() && self.machine.corectl.take_core1_release() {
-                let entry = self.core1_entry.unwrap_or(self.entry);
-                self.spawn_core1(entry);
+            // Core 1 (re)enters at the shared start4 reset vector, not core 0's
+            // `entry` — which on the EEPROM path is the *bootcode*, long gone by
+            // the time start4 brings its sibling up.
+            //
+            // The CoreCtl run-state write the model keys on also overlaps the
+            // interrupt-priority words, so it fires early (during driver
+            // bring-up) — well before start4's ThreadX-SMP init registers the
+            // per-core scheduler object that core 1 immediately dereferences.
+            // Latch the intent, but defer the spawn until that object exists.
+            if self.cpu1.is_none() {
+                if self.machine.corectl.take_core1_release() {
+                    self.core1_release_armed = true;
+                }
+                if self.core1_release_armed
+                    && self
+                        .machine
+                        .load(SMP_DISPATCH_GLOBAL, Width::Word)
+                        .unwrap_or(0)
+                        != 0
+                {
+                    let entry = self.core1_entry.unwrap_or(START4_ENTRY);
+                    self.spawn_core1(entry);
+                }
             }
             // Interleave one core-1 step per core-0 step over the shared bus.
             if let Some(c1) = self.cpu1.as_mut() {
