@@ -20,6 +20,7 @@ USAGE:
     rpi-virt-fw run <scenario.toml> [--update] [-v]
     rpi-virt-fw run-all [<dir>] [--update] [-v]
     rpi-virt-fw recon <file> [--entry <hex>] [--ram-mb <n>] [--max-steps <n>] [--eeprom]
+                             [--dump <hex>:<len>] [--disasm <hex>:<count>] [--patch <hex>=<hex>]
     rpi-virt-fw disasm <file> [--base <hex>] [--count <n>] [--vaddr <hex>]
 
 COMMANDS:
@@ -80,6 +81,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     let mut as_core1 = false;
     let mut patches: Vec<(u32, u32)> = Vec::new();
     let mut dumps: Vec<(u32, u32)> = Vec::new();
+    let mut disasms: Vec<(u32, u32)> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -110,6 +112,11 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
                 let spec = it.next().context("--dump needs <hexaddr>:<len>")?;
                 let (a, n) = spec.split_once(':').context("--dump: expected addr:len")?;
                 dumps.push((parse_u32(a)?, parse_u32(n)?));
+            }
+            "--disasm" => {
+                let spec = it.next().context("--disasm needs <hexaddr>:<count>")?;
+                let (a, n) = spec.split_once(':').context("--disasm: expected addr:count")?;
+                disasms.push((parse_u32(a)?, parse_u32(n)?));
             }
             "--patch" => {
                 let spec = it.next().context("--patch needs <hexaddr>=<hexval>")?;
@@ -225,6 +232,26 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
             print!("{:02x}", emu.machine.load(a + i, rpi_virt_fw::bus::Width::Byte).unwrap_or(0) as u8);
         }
         println!();
+    }
+
+    for &(a, count) in &disasms {
+        use rpi_virt_fw::bus::Bus;
+        println!("disasm {a:#010x}:");
+        let mut pc = a;
+        let mut buf = [0u8; 10];
+        for _ in 0..count {
+            for (i, b) in buf.iter_mut().enumerate() {
+                *b = emu
+                    .machine
+                    .load(pc + i as u32, rpi_virt_fw::bus::Width::Byte)
+                    .unwrap_or(0) as u8;
+            }
+            let len = insn_len_bytes(u16::from_le_bytes([buf[0], buf[1]])) as usize;
+            let insn = decode(&buf[..len], pc);
+            let hex: String = buf[..len].iter().map(|b| format!("{b:02x}")).collect();
+            println!("  {pc:#010x}:  {hex:<20}  {:?}", insn.op);
+            pc = pc.wrapping_add(len as u32);
+        }
     }
 
     if !report.phase_tags.is_empty() {
