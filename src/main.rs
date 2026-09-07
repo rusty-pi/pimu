@@ -125,6 +125,10 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     // our model folds into DRAM past the 512 MiB mark — give it room by default.
     let ram_mb = ram_mb.unwrap_or(if eeprom { 2048 } else { 512 });
     let mut machine = Machine::new(ram_mb as usize * 1024 * 1024);
+    if eeprom {
+        // The bootloader scans the SPI flash it was itself loaded from.
+        machine.spi0.attach_flash(bytes.clone());
+    }
     payload.load_into(&mut machine)?;
     for &(a, v) in &patches {
         use rpi_virt_fw::bus::Bus;
