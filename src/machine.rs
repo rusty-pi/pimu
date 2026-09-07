@@ -43,6 +43,12 @@ pub struct Machine {
     pub ram_writes: u64,
     pub mmio_writes: u64,
 
+    /// When set, every peripheral (non-RAM) access is appended to `mmio_events`
+    /// as `(addr, width_bytes, value, is_write)`. The run loop drains and prints
+    /// it tagged with the current PC. A reconnaissance aid for unmodelled blocks.
+    pub mmio_trace: bool,
+    pub mmio_events: Vec<(u32, u8, u32, bool)>,
+
     /// `start4.elf` logs boot progress by writing 4-char ASCII tags (`_msh`,
     /// `_osh`, `bfsp`, ...) to a register at `0xCEC0_2000`. We capture the
     /// sequence — it is the closest thing to an early-boot log before any UART
@@ -71,6 +77,8 @@ impl Machine {
             bus_errors: 0,
             ram_writes: 0,
             mmio_writes: 0,
+            mmio_trace: false,
+            mmio_events: Vec::new(),
             phase_tags: Vec::new(),
         }
     }
@@ -163,8 +171,15 @@ impl Bus for Machine {
                 return self.ram.load(phys, width);
             }
         }
+        let trace = self.mmio_trace;
         if let Some((dev, off)) = self.device_for(addr) {
-            return dev.read(off, width);
+            let v = dev.read(off, width);
+            let got = *v.as_ref().unwrap_or(&0);
+            if trace {
+                self.mmio_events
+                    .push((addr, width.bytes() as u8, got, false));
+            }
+            return v;
         }
         self.bus_errors += 1;
         Err(BusError::Unmapped {
@@ -188,8 +203,14 @@ impl Bus for Machine {
             }
         }
         self.mmio_writes = self.mmio_writes.wrapping_add(1);
+        let trace = self.mmio_trace;
         if let Some((dev, off)) = self.device_for(addr) {
-            return dev.write(off, width, value);
+            let r = dev.write(off, width, value);
+            if trace {
+                self.mmio_events
+                    .push((addr, width.bytes() as u8, value, true));
+            }
+            return r;
         }
         self.mmio_writes = self.mmio_writes.wrapping_sub(1);
         self.bus_errors += 1;

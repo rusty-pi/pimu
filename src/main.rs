@@ -72,6 +72,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     let mut eeprom = false;
     let mut trace = false;
     let mut trace_full = false;
+    let mut trace_mmio = false;
     let mut exc_vbase: u32 = 0;
     let mut trace_from: u32 = 0;
     let mut core1_entry: Option<u32> = None;
@@ -103,6 +104,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
                 trace = true;
                 trace_from = parse_u32(it.next().context("--trace-from needs a value")?)?
             }
+            "--trace-mmio" => trace_mmio = true,
             "--patch" => {
                 let spec = it.next().context("--patch needs <hexaddr>=<hexval>")?;
                 let (a, v) = spec.split_once('=').context("--patch: expected addr=val")?;
@@ -129,6 +131,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         // The bootloader scans the SPI flash it was itself loaded from.
         machine.spi0.attach_flash(bytes.clone());
     }
+    machine.mmio_trace = trace_mmio;
     payload.load_into(&mut machine)?;
     for &(a, v) in &patches {
         use rpi_virt_fw::bus::Bus;
