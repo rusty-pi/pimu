@@ -3,7 +3,7 @@
 use crate::bus::{Bus, BusError, BusResult, MmioDevice, Width};
 use crate::mem::Ram;
 use crate::periph::{
-    Aux, BootBox, ClockManager, ConfigOtp, CoreCtl, Dma4, McSync, Pl011, Sdc, Sdramc, Spi0,
+    Aux, BootBox, ClockManager, ConfigOtp, CoreCtl, Dma4, Emmc2, McSync, Pl011, Sdc, Sdramc, Spi0,
     StubRegion, SysTimer,
 };
 use crate::soc::bcm2711 as map;
@@ -42,6 +42,8 @@ pub struct Machine {
     /// DMA4 channel (`0x7E00_7B00`) — the bootloader scrubs / moves DRAM through
     /// it; [`Machine::store`] runs the control-block chain after a `CS` write.
     pub dma4: Dma4,
+    /// EMMC2 SD host controller (`0x7E34_0000`).
+    pub emmc2: Emmc2,
     /// Catch-all for the rest of the peripheral window.
     pub periph_stub: StubRegion,
     pub console: Console,
@@ -91,6 +93,7 @@ impl Machine {
             sdc: Sdc::new(),
             bootbox: BootBox::new(),
             dma4: Dma4::new(),
+            emmc2: Emmc2::new(),
             periph_stub: StubRegion::new("periph-window"),
             console: Console::default(),
             stub_hits: 0,
@@ -174,6 +177,9 @@ impl Machine {
         }
         if let Some(off) = hit(map::DMA4_BASE, map::DMA4_SIZE) {
             return Some((&mut self.dma4, off));
+        }
+        if let Some(off) = hit(map::EMMC2_BASE, map::EMMC2_SIZE) {
+            return Some((&mut self.emmc2, off));
         }
         if let Some(off) = hit(map::BOOTBOX_BASE, map::BOOTBOX_SIZE) {
             return Some((&mut self.bootbox, off));
