@@ -20,8 +20,8 @@ USAGE:
     rpi-virt-fw run <scenario.toml> [--update] [-v]
     rpi-virt-fw run-all [<dir>] [--update] [-v]
     rpi-virt-fw recon <file> [--entry <hex>] [--ram-mb <n>] [--max-steps <n>] [--eeprom]
-                             [--max-wall <secs>] [--sd <img>] [--dump <hex>:<len>]
-                             [--disasm <hex>:<count>] [--patch <hex>=<hex>]
+                             [--max-wall <secs>] [--sd <img>] [--skip-signed-boot]
+                             [--dump <hex>:<len>] [--disasm <hex>:<count>] [--patch <hex>=<hex>]
     rpi-virt-fw disasm <file> [--base <hex>] [--count <n>] [--vaddr <hex>]
 
 COMMANDS:
@@ -85,6 +85,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     let mut dumps: Vec<(u32, u32)> = Vec::new();
     let mut disasms: Vec<(u32, u32)> = Vec::new();
     let mut sd_image: Option<PathBuf> = None;
+    let mut skip_signed_boot = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -115,6 +116,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
             }
             "--trace-mmio" => trace_mmio = true,
             "--sd" => sd_image = Some(PathBuf::from(it.next().context("--sd needs a path")?)),
+            "--skip-signed-boot" => skip_signed_boot = true,
             "--dump" => {
                 let spec = it.next().context("--dump needs <hexaddr>:<len>")?;
                 let (a, n) = spec.split_once(':').context("--dump: expected addr:len")?;
@@ -150,9 +152,31 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         None => None,
     };
 
+    // `--skip-signed-boot`: flip `SIGNED_BOOT=1` -> `=0` in the EEPROM's
+    // `bootconf.txt`. That flag gates the bootloader's signature enforcement, so
+    // clearing it skips the (very slow, ~0.5 G interpreted instructions) SHA-256
+    // + RSA-2048 verify of `boot.img`. Same length, so the byte layout is
+    // preserved; the now-stale `bootconf.sig` is not checked once the flag is 0.
+    // Re-applied after every EEPROM self-update (which restores `SIGNED_BOOT=1`).
+    let unsign = |flash: &mut Vec<u8>, announce: bool| {
+        if !(skip_signed_boot && eeprom) {
+            return;
+        }
+        let needle = b"SIGNED_BOOT=1";
+        if let Some(i) = flash.windows(needle.len()).position(|w| w == needle) {
+            flash[i + needle.len() - 1] = b'0';
+            if announce {
+                println!("skip-signed-boot: patched bootconf SIGNED_BOOT=0 @ {i:#x}");
+            }
+        } else if announce {
+            eprintln!("skip-signed-boot: 'SIGNED_BOOT=1' not found in EEPROM image");
+        }
+    };
+
     // `flash` may be rewritten by an EEPROM self-update; on a firmware-requested
     // reset we rebuild from the updated image and run again.
     let mut flash = bytes.clone();
+    unsign(&mut flash, true);
     let limits = RunLimits {
         max_steps,
         max_wall: Some(std::time::Duration::from_secs(max_wall_secs)),
@@ -223,6 +247,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
             reboots += 1;
             print!("{}", String::from_utf8_lossy(&report.console));
             flash = emu.machine.spi0.flash_bytes().to_vec();
+            unsign(&mut flash, false); // self-update restored SIGNED_BOOT=1
             if reboots <= 4 {
                 println!("\n=== RESET (reboot {reboots}) — re-running from updated flash ===\n");
                 continue 'boot;
@@ -323,7 +348,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         println!("  {}", tags.join(" -> "));
     }
 
-    if trace {
+    if trace || !emu.cpu.trace_log.is_empty() {
         println!(
             "\n--- instruction trace ({} lines) ---",
             emu.cpu.trace_log.len()
