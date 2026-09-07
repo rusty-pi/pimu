@@ -149,11 +149,13 @@ impl Emulator {
         let mut w_steps = 0u64;
         let mut w_output = false;
         let mut writes_at_window = self.machine.ram_writes;
+        let mut clo_reads_at_window = self.machine.systimer.clo_reads;
         // Fast path: the exact same taken transfer repeating is a tight spin —
         // *unless* memory writes keep advancing (that's a memset/memcpy loop).
         let mut last_cf = (u32::MAX, u32::MAX);
         let mut cf_repeat = 0u64;
         let mut writes_at_cf = self.machine.ram_writes;
+        let mut clo_reads_at_cf = self.machine.systimer.clo_reads;
 
         let mut core1_end: Option<RunEnd> = None;
         let end = loop {
@@ -223,13 +225,18 @@ impl Emulator {
             // Core 1 halting does not stop core 0 — record it and carry on.
 
             if limits.idle_spin_limit > 0 {
+                // A loop that keeps reading the free-running system timer is a
+                // firmware `usleep` — time-bounded, so not a hung spin however
+                // many iterations it takes. `max_steps` / `max_wall` still cap
+                // a pathological one.
+                let timer_polling = self.machine.systimer.clo_reads != clo_reads_at_cf;
                 if let Some(&cf) = self.cpu.cf_trace.last() {
                     // "Progress" = memory or peripheral writes advancing. A bare
                     // read-only poll counts as a spin, but firmware delay/lock
                     // loops legitimately iterate 10k+ times before giving up, so
                     // the threshold is generous.
                     let progress = self.machine.ram_writes.wrapping_add(self.machine.mmio_writes);
-                    let progressing = progress != writes_at_cf;
+                    let progressing = progress != writes_at_cf || timer_polling;
                     if cf == last_cf && !had_output && !progressing {
                         cf_repeat += 1;
                         if cf_repeat >= 200_000 {
@@ -241,16 +248,19 @@ impl Emulator {
                         writes_at_cf = progress;
                     }
                 }
+                clo_reads_at_cf = self.machine.systimer.clo_reads;
 
                 w_lo = w_lo.min(pc_before);
                 w_hi = w_hi.max(pc_before);
                 w_output |= had_output;
                 w_steps += 1;
                 if w_steps >= win {
-                    let stalled = self.machine.ram_writes == writes_at_window;
+                    let stalled = self.machine.ram_writes == writes_at_window
+                        && self.machine.systimer.clo_reads == clo_reads_at_window;
                     if !w_output && stalled && w_hi.wrapping_sub(w_lo) <= 4096 {
                         break RunEnd::IdleSpin(w_lo);
                     }
+                    clo_reads_at_window = self.machine.systimer.clo_reads;
                     w_lo = u32::MAX;
                     w_hi = 0;
                     w_steps = 0;

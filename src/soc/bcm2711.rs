@@ -62,6 +62,15 @@ pub const AUX_SIZE: u32 = 0x100;
 pub const EMMC2_BASE: u32 = 0x7E34_0000;
 pub const EMMC2_SIZE: u32 = 0x1000;
 
+/// BCM2711 LPDDR4 controller + PHY, mapped *below* the legacy peripheral
+/// window: the `init_sdram_*` path pokes `0x7DC2_0000` (command/status at
+/// `+0x10`..`+0x28`) and per-byte-lane PHY blocks at `0x7DC2_0400`,
+/// `+0x0600`, `+0x0A00`, `+0x0C00`, plus more blocks at `0x7DC3_0000` /
+/// `0x7DC3_4000` / `0x7DC3_8000`. This window must be decoded *before* the
+/// cache-alias fold, or the writes vanish into DRAM at `0x3DC2_0000`.
+pub const SDRAMC_BASE: u32 = 0x7DC0_0000;
+pub const SDRAMC_SIZE: u32 = 0x0004_0000; // 0x7DC0_0000..0x7DC4_0000
+
 /// Main SDRAM as seen by the VPU (cached alias at 0, uncached at 0xC000_0000).
 pub const SDRAM_CACHED_BASE: u32 = 0x0000_0000;
 pub const SDRAM_UNCACHED_BASE: u32 = 0xC000_0000;
