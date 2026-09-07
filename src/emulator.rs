@@ -177,6 +177,20 @@ impl Emulator {
             let step = self.cpu.step(&mut self.machine);
             self.machine.tick(1);
 
+            if self.machine.mmio_trace && !self.machine.mmio_events.is_empty() {
+                for (addr, w, val, write) in self.machine.mmio_events.drain(..) {
+                    eprintln!(
+                        "mmio {:#010x}  {}{}  {:#010x} <- {:#0width$x}",
+                        pc_before,
+                        if write { "W" } else { "R" },
+                        w,
+                        addr,
+                        val,
+                        width = (w as usize) * 2 + 2,
+                    );
+                }
+            }
+
             // Core 0 arms core 1's run-state once the shared globals are ready.
             if self.cpu1.is_none() && self.machine.corectl.take_core1_release() {
                 let entry = self.core1_entry.unwrap_or(self.entry);
