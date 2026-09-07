@@ -3,7 +3,8 @@
 use crate::bus::{Bus, BusError, BusResult, MmioDevice, Width};
 use crate::mem::Ram;
 use crate::periph::{
-    Aux, BootBox, ClockManager, ConfigOtp, CoreCtl, McSync, Pl011, Sdc, Sdramc, Spi0, StubRegion, SysTimer,
+    Aux, BootBox, ClockManager, ConfigOtp, CoreCtl, Dma4, McSync, Pl011, Sdc, Sdramc, Spi0,
+    StubRegion, SysTimer,
 };
 use crate::soc::bcm2711 as map;
 
@@ -38,6 +39,9 @@ pub struct Machine {
     pub sdc: Sdc,
     /// Boot-info handoff doorbell (`0x7EE0_2000`).
     pub bootbox: BootBox,
+    /// DMA4 channel (`0x7E00_7B00`) — the bootloader scrubs / moves DRAM through
+    /// it; [`Machine::store`] runs the control-block chain after a `CS` write.
+    pub dma4: Dma4,
     /// Catch-all for the rest of the peripheral window.
     pub periph_stub: StubRegion,
     pub console: Console,
@@ -86,6 +90,7 @@ impl Machine {
             sdramc: Sdramc::new(),
             sdc: Sdc::new(),
             bootbox: BootBox::new(),
+            dma4: Dma4::new(),
             periph_stub: StubRegion::new("periph-window"),
             console: Console::default(),
             stub_hits: 0,
@@ -167,6 +172,9 @@ impl Machine {
         if let Some(off) = hit(map::SDC_BASE, map::SDC_SIZE) {
             return Some((&mut self.sdc, off));
         }
+        if let Some(off) = hit(map::DMA4_BASE, map::DMA4_SIZE) {
+            return Some((&mut self.dma4, off));
+        }
         if let Some(off) = hit(map::BOOTBOX_BASE, map::BOOTBOX_SIZE) {
             return Some((&mut self.bootbox, off));
         }
@@ -188,6 +196,44 @@ impl Machine {
             return Some((&mut self.periph_stub, a - map::PERIPH_BASE));
         }
         None
+    }
+
+    /// Run the DMA4 control-block chain the channel was just armed with. A word
+    /// in RAM (`+0x08` `SRCI` bit 12 = "source increments"): clear ⇒ fill `DEST`
+    /// with the single word at `SRC` (`SRC == 0` ⇒ zero-fill scrub); set ⇒ copy
+    /// `SRC`→`DEST`.
+    fn run_dma4(&mut self) {
+        const S_INC: u32 = 1 << 12;
+        let rd = |ram: &Ram, addr: u32| ram.load(addr & 0x3FFF_FFFF, Width::Word).unwrap_or(0);
+
+        let mut cb = self.dma4.cb_addr() & 0x3FFF_FFFF;
+        for _ in 0..4096 {
+            if cb == 0 || !self.ram.contains(cb) {
+                break;
+            }
+            let src = rd(&self.ram, cb + 0x04);
+            let srci = rd(&self.ram, cb + 0x08);
+            let dest = rd(&self.ram, cb + 0x0C);
+            let len = rd(&self.ram, cb + 0x14);
+            let next = rd(&self.ram, cb + 0x18);
+
+            let fill = srci & S_INC == 0;
+            let fill_word = if src == 0 { 0 } else { rd(&self.ram, src) };
+            let mut off = 0u32;
+            while off < len {
+                let v = if fill {
+                    fill_word
+                } else {
+                    rd(&self.ram, src.wrapping_add(off))
+                };
+                let _ = self
+                    .ram
+                    .store(dest.wrapping_add(off) & 0x3FFF_FFFF, Width::Word, v);
+                off = off.wrapping_add(4);
+            }
+            cb = (next << 5) & 0x3FFF_FFFF;
+        }
+        self.dma4.finish();
     }
 }
 
@@ -238,6 +284,9 @@ impl Bus for Machine {
             if trace {
                 self.mmio_events
                     .push((addr, width.bytes() as u8, value, true));
+            }
+            if self.dma4.take_start() {
+                self.run_dma4();
             }
             return r;
         }
