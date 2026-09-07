@@ -19,6 +19,9 @@ use crate::bus::{BusResult, MmioDevice, Width};
 /// Run-state field words. A nonzero write here releases core 1.
 const RUNSTATE_LO: u32 = 0x10;
 const RUNSTATE_HI: u32 = 0x14;
+/// Core 0 / core 1 exception-vector-base registers.
+const VBASE_CORE0: u32 = 0x30;
+const VBASE_CORE1: u32 = 0x38;
 
 #[derive(Default)]
 pub struct CoreCtl {
@@ -28,6 +31,10 @@ pub struct CoreCtl {
     pending_core1_release: bool,
     /// Latches so repeated pokes don't re-spawn the core.
     core1_started: bool,
+    /// Last exception-vector base the firmware wrote for core 0 / core 1
+    /// (offsets `0x30` / `0x38`), 0 until set. The run loop copies this into the
+    /// matching CPU so `swi` traps to the firmware's own handler table.
+    pub vbase: [u32; 2],
 }
 
 impl CoreCtl {
@@ -52,6 +59,11 @@ impl MmioDevice for CoreCtl {
 
     fn write(&mut self, offset: u32, _width: Width, value: u32) -> BusResult<()> {
         self.storage.insert(offset, value);
+        match offset {
+            VBASE_CORE0 => self.vbase[0] = value,
+            VBASE_CORE1 => self.vbase[1] = value,
+            _ => {}
+        }
         if matches!(offset, RUNSTATE_LO | RUNSTATE_HI) && value != 0 && !self.core1_started {
             self.core1_started = true;
             self.pending_core1_release = true;

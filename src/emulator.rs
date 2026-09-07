@@ -166,6 +166,13 @@ impl Emulator {
                 }
             }
 
+            // The firmware's trampoline writes each core's exception-vector base
+            // to CoreCtl (0x7E00_2030 / 0x38); pick it up so `swi` traps into
+            // the firmware's own handler table. An explicit `--exc-vbase` wins.
+            if self.cpu.exc_vbase == 0 && self.machine.corectl.vbase[0] != 0 {
+                self.cpu.exc_vbase = self.machine.corectl.vbase[0];
+            }
+
             let pc_before = self.cpu.pc();
             let step = self.cpu.step(&mut self.machine);
             self.machine.tick(1);
@@ -177,6 +184,9 @@ impl Emulator {
             }
             // Interleave one core-1 step per core-0 step over the shared bus.
             if let Some(c1) = self.cpu1.as_mut() {
+                if c1.exc_vbase == 0 && self.machine.corectl.vbase[1] != 0 {
+                    c1.exc_vbase = self.machine.corectl.vbase[1];
+                }
                 if !c1.is_stopped() {
                     if let crate::vpu::Step::Stopped = c1.step(&mut self.machine) {
                         core1_end =

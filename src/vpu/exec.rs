@@ -84,9 +84,11 @@ pub struct Vpu {
     /// keys its per-core branches (which control register to poke, which stack
     /// to use) off that bit.
     pub core_id: u32,
-    /// Base of the 64-entry exception vector table (`.isr_vectors`). `swi #u`
-    /// raises exception `0x20 + u` and jumps to `*(exc_vbase + exc*8)`, after
-    /// pushing SR and the return address (so the handler's `rti` unwinds).
+    /// Base of the exception vector table. `swi #u` raises exception `0x20 + u`
+    /// and jumps to the **4-byte** entry `*(exc_vbase + exc*4)`, after pushing SR
+    /// and the return address (so the handler's `rti` unwinds). start4.elf's
+    /// trampoline writes this base to CoreCtl `0x7E00_2030` (core 0); the table
+    /// lives at `0xCEC0_1E00` with the `swi` (0x20) slot at `+0x80`.
     pub exc_vbase: u32,
     /// True while executing inside an exception handler (before `rti`).
     pub in_exception: u32,
@@ -197,7 +199,7 @@ impl Vpu {
                 // address (so the handler's `rti` unwinds). Otherwise halt — the
                 // test payloads use `swi` as a clean "done".
                 let handler = if self.exc_vbase != 0 {
-                    bus.load32(self.exc_vbase.wrapping_add(vector.wrapping_mul(8)))
+                    bus.load32(self.exc_vbase.wrapping_add(vector.wrapping_mul(4)))
                         .ok()
                         .filter(|&h| h != 0)
                 } else {
