@@ -9,7 +9,7 @@
 //! self-consistency checks expect.
 //!
 //! Offsets are relative to `SDRAMC_BASE` (`0x7DC0_0000`); the controller sits at
-//! `+0x2_0000`, PHY register arrays at `+0x2_8000` (4096 words) and `+0x3_4000`
+//! `+0x2_0000`, PHY register arrays at `+0x3_8000` (4096 words) and `+0x3_4000`
 //! (1024 words), and the small calibration-result block at `+0x3_2100`.
 //!
 //! Register conventions (from `--trace-mmio` + tracing the memsys verifier):
@@ -20,16 +20,23 @@
 //! * **`+0x3_2010` trigger / `+0x3_2014` busy** — PHY calibration handshake.
 //!   The firmware writes 1 to the trigger, waits for busy to read a stable
 //!   non-zero value 10× (`0x8000685e`), writes 0 back, waits for busy = 0.
-//! * **`+0x3_2100..+0x3_2118`** — calibration-result block, 6 data words +
-//!   trailing sums. The firmware seeds `[+0x00]=1 [+0x04]=<lane mask>` (`0x101`
-//!   or `0x203`) `[+0x08]=0`, writes their sum to `[+0x0C]`, runs the
-//!   calibration, then verifies (`0x800068ce` / `0x800066a6`):
-//!     - a running sum of the leading words == a trailing sum word
-//!       (`sum([+0x00..+0x10])` == `[+0x14]`, or `sum([+0x00..+0x14])` == `[+0x18]`)
-//!     - `[+0x0C]` == the memsys blob's magic word `0x0223_0000`
-//!     - `([+0x10] >> 8) & 0xFF` == an expected byte (0 here)
-//!   So a completed calibration leaves `[+0x0C]` = the PHY signature, `[+0x10]`
-//!   = 0, and `[+0x14]` / `[+0x18]` = the running sums.
+//! * **`+0x3_2100..+0x3_2120`** — calibration-request/result block, five
+//!   parameter words then two trailing checksum words. The firmware seeds
+//!     - `[+0x00] = 1` (valid), `[+0x04] = <command>`, `[+0x08] = <sub-param>`
+//!     - `[+0x0C] = <seed>` (a checksum for the `0x101` query, else a plain tag)
+//!     - `[+0x10] = 0`, `[+0x14] = sum([+0x00..+0x14])`
+//!   then pulses the trigger. The calibration engine writes back:
+//!     - `[+0x0C]` = the PHY signature `0x0223_0000` for command `0x101`
+//!       ("report signature", checked by `0x800068ce`), otherwise `0`
+//!       ("completed, no error", checked by `0x800065f6` / `0x800066a6`)
+//!     - `[+0x10]` = `<rank> << 8` for command `0x101` (`0x800068ce` checks
+//!       `([+0x10] >> 8) & 0xFF` against the rank it is verifying, 0 then 1),
+//!       otherwise `0`. The firmware seeds identical parameters for every rank,
+//!       so the rank is inferred from the count of signature-report calibrations
+//!       so far.
+//!     - `[+0x14] = sum([+0x00..+0x14])`, `[+0x18] = sum([+0x00..+0x18])`
+//!       so the firmware's "sum the leading words, compare the trailing word"
+//!       checks balance.
 //! * Everything else is sticky (read-after-write), default 0. The PHY preset
 //!   arrays the firmware copies in from `memsysNN.bin` and sum-checks land here
 //!   and read straight back, so those checks pass unchanged.
@@ -48,16 +55,23 @@ const CTRL_DONE: u32 = 1 << 0;
 const PHY_CAL_TRIGGER: u32 = 0x3_2010;
 const PHY_CAL_BUSY: u32 = 0x3_2014;
 
-/// PHY calibration-result block.
+/// PHY calibration request/result block: five parameter words at
+/// `[+0x00 .. +0x14]` then checksum words at `[+0x14]` and `[+0x18]`.
 const PHY_RES_BASE: u32 = 0x3_2100;
+const PHY_RES_CMD: u32 = PHY_RES_BASE + 0x04;
 const PHY_RES_SIGNATURE: u32 = PHY_RES_BASE + 0x0C;
-/// The two trailing running-sum words a completed calibration fills in.
-const PHY_RES_SUM5: u32 = PHY_RES_BASE + 0x14; // sum of words [0..5)
-const PHY_RES_SUM6: u32 = PHY_RES_BASE + 0x18; // sum of words [0..6)
+const PHY_RES_STATUS: u32 = PHY_RES_BASE + 0x10;
+const PHY_RES_SUM5: u32 = PHY_RES_BASE + 0x14; // sum of the 5 words [+0x00..+0x14)
+const PHY_RES_SUM6: u32 = PHY_RES_BASE + 0x18; // sum of the 6 words [+0x00..+0x18)
 
-/// Value a completed calibration leaves in `[+0x3_210C]`. All of `memsys00.bin`
-/// .. `memsys08.bin` carry this as their header word and the verifier compares
-/// the two — it is a fixed PHY-block signature, not a per-preset hash.
+/// Command word (`[+0x04]`) that asks the PHY to report its signature rather
+/// than run a training step.
+const PHY_CMD_REPORT_SIGNATURE: u32 = 0x101;
+
+/// Value a signature-report calibration leaves in `[+0x3_210C]`. All of
+/// `memsys00.bin` .. `memsys08.bin` carry this as their header word and the
+/// verifier compares the two — it is a fixed PHY-block signature, not a
+/// per-preset hash.
 const PHY_SIGNATURE: u32 = 0x0223_0000;
 
 #[derive(Debug, Clone)]
@@ -73,10 +87,10 @@ pub struct Sdramc {
     /// Whether the most recent controller `CMD` has "completed" (always true in
     /// the model; a fresh write re-arms the rising edge a poll expects).
     cmd_done: bool,
-    /// Set once a PHY calibration has been triggered (`PHY_CAL_TRIGGER` written
-    /// non-zero) since the result block was last seeded; makes the signature
-    /// register report a completed calibration.
-    cal_ran: bool,
+    /// Count of `0x101` ("report signature") calibrations run so far. The
+    /// firmware verifies each rank with byte-identical PHY parameters, so this
+    /// count stands in for "which rank is being trained" in the result word.
+    sig_cal_count: u32,
     pub log: Vec<SdramcAccess>,
     pub log_limit: usize,
 }
@@ -92,7 +106,7 @@ impl Sdramc {
         Sdramc {
             storage: BTreeMap::new(),
             cmd_done: true,
-            cal_ran: false,
+            sig_cal_count: 0,
             log: Vec::new(),
             log_limit: 8192,
         }
@@ -104,29 +118,29 @@ impl Sdramc {
         }
     }
 
-    /// The value a read of one calibration-result word yields, after applying
-    /// the "calibration has run" fixups. `+0x0C` becomes the PHY signature;
-    /// `+0x14` / `+0x18` become the running sum of every result word before
-    /// them, so the firmware's "sum the leading words, compare the trailing
-    /// word" checks balance (`0x800066a6`, `0x800068ce`).
-    fn result_word(&self, off: u32) -> u32 {
-        let stored = |o: u32| self.storage.get(&o).copied().unwrap_or(0);
-        // The 5 data words, with `+0x0C` replaced by the signature post-cal.
-        let data = |i: u32| {
-            let o = PHY_RES_BASE + i * 4;
-            if o == PHY_RES_SIGNATURE && self.cal_ran {
-                PHY_SIGNATURE
-            } else {
-                stored(o)
-            }
+    fn word(&self, off: u32) -> u32 {
+        self.storage.get(&off).copied().unwrap_or(0)
+    }
+
+    /// Rising edge on `PHY_CAL_TRIGGER`: run one "calibration" and fill in the
+    /// result block the firmware reads back (`0x800065f6` / `0x800068ce` /
+    /// `0x800066a6`).
+    fn run_phy_cal(&mut self) {
+        let (signature, status) = if self.word(PHY_RES_CMD) == PHY_CMD_REPORT_SIGNATURE {
+            let rank = self.sig_cal_count;
+            self.sig_cal_count += 1;
+            (PHY_SIGNATURE, rank << 8)
+        } else {
+            (0, 0)
         };
-        let sum = |n: u32| (0..n).map(data).fold(0u32, u32::wrapping_add);
-        match off {
-            PHY_RES_SIGNATURE if self.cal_ran => PHY_SIGNATURE,
-            PHY_RES_SUM5 if self.cal_ran => sum(5),
-            PHY_RES_SUM6 if self.cal_ran => sum(5).wrapping_add(sum(5)),
-            _ => stored(off),
-        }
+        self.storage.insert(PHY_RES_SIGNATURE, signature);
+        self.storage.insert(PHY_RES_STATUS, status);
+
+        let sum5 = (0..5)
+            .map(|i| self.word(PHY_RES_BASE + i * 4))
+            .fold(0u32, u32::wrapping_add);
+        self.storage.insert(PHY_RES_SUM5, sum5);
+        self.storage.insert(PHY_RES_SUM6, sum5.wrapping_add(sum5));
     }
 }
 
@@ -138,7 +152,7 @@ impl MmioDevice for Sdramc {
     fn read(&mut self, offset: u32, width: Width) -> BusResult<u32> {
         let value = match offset & !3 {
             CTRL_STATUS => {
-                let base = self.storage.get(&CTRL_STATUS).copied().unwrap_or(0);
+                let base = self.word(CTRL_STATUS);
                 if self.cmd_done {
                     base | CTRL_DONE
                 } else {
@@ -148,10 +162,9 @@ impl MmioDevice for Sdramc {
             PHY_CAL_BUSY => {
                 // Busy tracks the trigger: 1 while a calibration is "running",
                 // 0 once the firmware clears the trigger.
-                u32::from(self.storage.get(&PHY_CAL_TRIGGER).copied().unwrap_or(0) != 0)
+                u32::from(self.word(PHY_CAL_TRIGGER) != 0)
             }
-            off @ (PHY_RES_SIGNATURE | PHY_RES_SUM5 | PHY_RES_SUM6) => self.result_word(off),
-            off => self.storage.get(&off).copied().unwrap_or(0),
+            off => self.word(off),
         };
         self.record(SdramcAccess {
             offset,
@@ -169,17 +182,11 @@ impl MmioDevice for Sdramc {
                 self.cmd_done = true;
             }
             PHY_CAL_TRIGGER => {
+                let was = self.word(PHY_CAL_TRIGGER);
                 self.storage.insert(PHY_CAL_TRIGGER, value);
-                if value != 0 {
-                    self.cal_ran = true;
+                if was == 0 && value != 0 {
+                    self.run_phy_cal();
                 }
-            }
-            PHY_RES_SIGNATURE => {
-                // The firmware seeds this with its own checksum before kicking
-                // the calibration; that write invalidates the "cal ran" fixup
-                // until the next trigger.
-                self.storage.insert(PHY_RES_SIGNATURE, value);
-                self.cal_ran = false;
             }
             off => {
                 self.storage.insert(off, value);
