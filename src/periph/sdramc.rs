@@ -22,21 +22,20 @@
 //!   non-zero value 10× (`0x8000685e`), writes 0 back, waits for busy = 0.
 //! * **`+0x3_2100..+0x3_2120`** — calibration-request/result block, five
 //!   parameter words then two trailing checksum words. The firmware seeds
-//!     - `[+0x00] = 1` (valid), `[+0x04] = <command>`, `[+0x08] = <sub-param>`
-//!     - `[+0x0C] = <seed>` (a checksum for the `0x101` query, else a plain tag)
-//!     - `[+0x10] = 0`, `[+0x14] = sum([+0x00..+0x14])`
-//!   then pulses the trigger. The calibration engine writes back:
-//!     - `[+0x0C]` = the PHY signature `0x0223_0000` for command `0x101`
-//!       ("report signature", checked by `0x800068ce`), otherwise `0`
-//!       ("completed, no error", checked by `0x800065f6` / `0x800066a6`)
-//!     - `[+0x10]` = `<rank> << 8` for command `0x101` (`0x800068ce` checks
-//!       `([+0x10] >> 8) & 0xFF` against the rank it is verifying, 0 then 1),
-//!       otherwise `0`. The firmware seeds identical parameters for every rank,
-//!       so the rank is inferred from the count of signature-report calibrations
-//!       so far.
-//!     - `[+0x14] = sum([+0x00..+0x14])`, `[+0x18] = sum([+0x00..+0x18])`
-//!       so the firmware's "sum the leading words, compare the trailing word"
-//!       checks balance.
+//!   `[+0x00] = 1` (valid), `[+0x04] = <command>`, `[+0x08] = <sub-param>`,
+//!   `[+0x0C] = <seed>` (a checksum for the `0x101` query, else a plain tag),
+//!   `[+0x10] = 0`, `[+0x14] = sum([+0x00..+0x14])`, then pulses the trigger.
+//!   The calibration engine writes back:
+//!   - `[+0x0C]` = the PHY signature `0x0223_0000` for command `0x101`
+//!     ("report signature", checked by `0x800068ce`), otherwise `0`
+//!     ("completed, no error", checked by `0x800065f6` / `0x800066a6`)
+//!   - `[+0x10]` = `<rank> << 8` for command `0x101` (`0x800068ce` checks
+//!     `([+0x10] >> 8) & 0xFF` against the rank it is verifying, 0 then 1),
+//!     otherwise `0`. The firmware seeds identical parameters for every rank,
+//!     so the rank is inferred from the count of signature-report calibrations.
+//!   - `[+0x14] = sum([+0x00..+0x14])`, `[+0x18] = sum([+0x00..+0x18])` so the
+//!     firmware's "sum the leading words, compare the trailing word" checks
+//!     balance.
 //! * Everything else is sticky (read-after-write), default 0. The PHY preset
 //!   arrays the firmware copies in from `memsysNN.bin` and sum-checks land here
 //!   and read straight back, so those checks pass unchanged.

@@ -148,13 +148,19 @@ impl Emulator {
         let mut w_hi = 0u32;
         let mut w_steps = 0u64;
         let mut w_output = false;
-        let mut writes_at_window = self.machine.ram_writes;
+        // "Progress" = RAM stores + peripheral stores + RAM loads. A memset or
+        // memcpy advances the stores; a DRAM memtest read-back advances the
+        // loads. A poll loop our stubs never satisfy touches none of them
+        // (MMIO loads are not counted), so it still trips.
+        let progress_count =
+            |m: &Machine| m.ram_writes.wrapping_add(m.mmio_writes).wrapping_add(m.ram_reads);
+        let mut progress_at_window = progress_count(&self.machine);
         let mut clo_reads_at_window = self.machine.systimer.clo_reads;
         // Fast path: the exact same taken transfer repeating is a tight spin —
-        // *unless* memory writes keep advancing (that's a memset/memcpy loop).
+        // *unless* memory traffic keeps advancing.
         let mut last_cf = (u32::MAX, u32::MAX);
         let mut cf_repeat = 0u64;
-        let mut writes_at_cf = self.machine.ram_writes;
+        let mut progress_at_cf = progress_count(&self.machine);
         let mut clo_reads_at_cf = self.machine.systimer.clo_reads;
 
         let mut core1_end: Option<RunEnd> = None;
@@ -231,12 +237,11 @@ impl Emulator {
                 // a pathological one.
                 let timer_polling = self.machine.systimer.clo_reads != clo_reads_at_cf;
                 if let Some(&cf) = self.cpu.cf_trace.last() {
-                    // "Progress" = memory or peripheral writes advancing. A bare
-                    // read-only poll counts as a spin, but firmware delay/lock
-                    // loops legitimately iterate 10k+ times before giving up, so
-                    // the threshold is generous.
-                    let progress = self.machine.ram_writes.wrapping_add(self.machine.mmio_writes);
-                    let progressing = progress != writes_at_cf || timer_polling;
+                    // A bare read-only poll counts as a spin, but firmware
+                    // delay/lock loops legitimately iterate 10k+ times before
+                    // giving up, so the threshold is generous.
+                    let progress = progress_count(&self.machine);
+                    let progressing = progress != progress_at_cf || timer_polling;
                     if cf == last_cf && !had_output && !progressing {
                         cf_repeat += 1;
                         if cf_repeat >= 200_000 {
@@ -245,7 +250,7 @@ impl Emulator {
                     } else {
                         cf_repeat = 0;
                         last_cf = cf;
-                        writes_at_cf = progress;
+                        progress_at_cf = progress;
                     }
                 }
                 clo_reads_at_cf = self.machine.systimer.clo_reads;
@@ -255,7 +260,7 @@ impl Emulator {
                 w_output |= had_output;
                 w_steps += 1;
                 if w_steps >= win {
-                    let stalled = self.machine.ram_writes == writes_at_window
+                    let stalled = progress_count(&self.machine) == progress_at_window
                         && self.machine.systimer.clo_reads == clo_reads_at_window;
                     if !w_output && stalled && w_hi.wrapping_sub(w_lo) <= 4096 {
                         break RunEnd::IdleSpin(w_lo);
@@ -265,7 +270,7 @@ impl Emulator {
                     w_hi = 0;
                     w_steps = 0;
                     w_output = false;
-                    writes_at_window = self.machine.ram_writes;
+                    progress_at_window = progress_count(&self.machine);
                 }
             }
 
