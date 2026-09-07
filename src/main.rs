@@ -137,59 +137,89 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     let path = path.context("recon: missing <file>")?;
     let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
 
-    let payload = if eeprom {
-        Payload::from_eeprom_bytes(&bytes)?
-    } else {
-        Payload::from_elf_bytes(&bytes)?
-    };
-
     // The EEPROM bootloader touches the 0x6000_0000 L2-SRAM window, which
     // our model folds into DRAM past the 512 MiB mark — give it room by default.
     let ram_mb = ram_mb.unwrap_or(if eeprom { 2048 } else { 512 });
-    let mut machine = Machine::new(ram_mb as usize * 1024 * 1024);
-    if eeprom {
-        // The bootloader scans the SPI flash it was itself loaded from.
-        machine.spi0.attach_flash(bytes.clone());
-    }
-    if let Some(sd_path) = &sd_image {
-        let img = std::fs::read(sd_path)
-            .with_context(|| format!("reading SD image {}", sd_path.display()))?;
-        println!("sd image   {} ({} blocks)", sd_path.display(), img.len() / 512);
-        machine.emmc2.insert_card(img);
-    }
-    machine.mmio_trace = trace_mmio;
-    payload.load_into(&mut machine)?;
-    for &(a, v) in &patches {
-        use rpi_virt_fw::bus::Bus;
-        machine.store32(a, v).ok();
-        println!("patch [{a:#010x}] = {v:#010x}");
-    }
-    let start = entry.unwrap_or(payload.entry());
-
-    let mut emu = Emulator::new(machine, start);
-    emu.set_unimpl_policy(UnimplPolicy::Skip);
-    emu.cpu.trace = trace;
-    emu.cpu.exc_vbase = exc_vbase;
-    emu.cpu.trace_cf_only = trace && !trace_full && trace_from == 0;
-    emu.cpu.trace_cap = if trace_full || trace_from != 0 {
-        200_000
-    } else {
-        4_000_000
+    let sd_img = match &sd_image {
+        Some(sd_path) => {
+            let img = std::fs::read(sd_path)
+                .with_context(|| format!("reading SD image {}", sd_path.display()))?;
+            println!("sd image   {} ({} blocks)", sd_path.display(), img.len() / 512);
+            Some(img)
+        }
+        None => None,
     };
-    emu.cpu.trace_from = trace_from;
-    emu.core1_entry = core1_entry;
-    if as_core1 {
-        emu.cpu.core_id = 1;
-    }
-    if smp {
-        emu.start_smp(start);
-    }
-    let report = emu.run(&RunLimits {
+
+    // `flash` may be rewritten by an EEPROM self-update; on a firmware-requested
+    // reset we rebuild from the updated image and run again.
+    let mut flash = bytes.clone();
+    let limits = RunLimits {
         max_steps,
         max_wall: Some(std::time::Duration::from_secs(max_wall_secs)),
         stop_pc: None,
         idle_spin_limit: 200_000,
-    });
+    };
+
+    let mut reboots = 0u32;
+    #[allow(unused_mut)]
+    let (report, mut emu, start) = 'boot: loop {
+        let payload = if eeprom {
+            Payload::from_eeprom_bytes(&flash)?
+        } else {
+            Payload::from_elf_bytes(&bytes)?
+        };
+        let mut machine = Machine::new(ram_mb as usize * 1024 * 1024);
+        if eeprom {
+            machine.spi0.attach_flash(flash.clone());
+        }
+        if let Some(img) = &sd_img {
+            machine.emmc2.insert_card(img.clone());
+        }
+        machine.mmio_trace = trace_mmio;
+        payload.load_into(&mut machine)?;
+        for &(a, v) in &patches {
+            use rpi_virt_fw::bus::Bus;
+            machine.store32(a, v).ok();
+            println!("patch [{a:#010x}] = {v:#010x}");
+        }
+        let start = entry.unwrap_or(payload.entry());
+
+        let mut emu = Emulator::new(machine, start);
+        emu.set_unimpl_policy(UnimplPolicy::Skip);
+        emu.cpu.trace = trace;
+        emu.cpu.exc_vbase = exc_vbase;
+        emu.cpu.trace_cf_only = trace && !trace_full && trace_from == 0;
+        emu.cpu.trace_cap = if trace_full || trace_from != 0 {
+            200_000
+        } else {
+            4_000_000
+        };
+        emu.cpu.trace_from = trace_from;
+        emu.core1_entry = core1_entry;
+        if as_core1 {
+            emu.cpu.core_id = 1;
+        }
+        if smp {
+            emu.start_smp(start);
+        }
+        let report = emu.run(&limits);
+
+        if report.end == rpi_virt_fw::emulator::RunEnd::Reset {
+            reboots += 1;
+            print!("{}", String::from_utf8_lossy(&report.console));
+            flash = emu.machine.spi0.flash_bytes().to_vec();
+            if let Ok(p) = std::env::var("RVF_DUMP_FLASH") {
+                let _ = std::fs::write(format!("{p}.{reboots}"), &flash);
+                eprintln!("wrote {p}.{reboots} ({} bytes)", flash.len());
+            }
+            if reboots <= 4 {
+                println!("\n=== RESET (reboot {reboots}) — re-running from updated flash ===\n");
+                continue 'boot;
+            }
+            println!("\n=== RESET (reboot {reboots}) — giving up after 4 reboots ===");
+        }
+        break 'boot (report, emu, start);
+    };
     // Collapse consecutive-identical transfers so a spin doesn't hide the
     // history that led into it.
     let mut cf_tail: Vec<(u32, u32, u32)> = Vec::new();

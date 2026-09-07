@@ -61,6 +61,9 @@ pub enum RunEnd {
     /// VPU core 1 halted (swi/sleep/breakpoint/fault). Core 0 may still have
     /// been running; check the report's `pc` and `core1_pc`.
     Core1Halted(Stop),
+    /// Firmware asked the SoC to reset (PM `RSTC`). The caller should re-run
+    /// from a fresh machine seeded with the (possibly updated) flash image.
+    Reset,
 }
 
 #[derive(Debug, Clone)]
@@ -214,6 +217,12 @@ impl Emulator {
                         width = (w as usize) * 2 + 2,
                     );
                 }
+            }
+
+            // Firmware asked for a SoC reset (PM RSTC) — stop so the caller can
+            // re-run from a fresh machine seeded with the updated flash.
+            if self.machine.pm.take_reset() {
+                break RunEnd::Reset;
             }
 
             // Core 0 arms core 1's run-state once the shared globals are ready.

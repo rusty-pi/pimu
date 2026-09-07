@@ -3,8 +3,8 @@
 use crate::bus::{Bus, BusError, BusResult, MmioDevice, Width};
 use crate::mem::Ram;
 use crate::periph::{
-    Aux, BootBox, ClockManager, ConfigOtp, CoreCtl, Dma4, Emmc2, Hvs, McSync, Pl011, Sdc, Sdramc,
-    Spi0, StubRegion, SysTimer,
+    Aux, BootBox, ClockManager, ConfigOtp, CoreCtl, Dma4, Emmc2, Hvs, McSync, Pl011, Pm, Sdc,
+    Sdramc, Spi0, StubRegion, SysTimer,
 };
 use crate::soc::bcm2711 as map;
 
@@ -25,6 +25,8 @@ pub struct Machine {
     pub mcsync: McSync,
     /// VPU core-control block (`0x7E00_2000`) — brings up VPU core 1.
     pub corectl: CoreCtl,
+    /// Power-management block (`0x7E10_0000`) — SoC reset / watchdog.
+    pub pm: Pm,
     /// Clock manager (`0x7E10_1000`) — PLL locks always report ready.
     pub clockman: ClockManager,
     /// SPI0 master (`0x7E20_4000`) — minimal model for the EEPROM bootloader.
@@ -92,6 +94,7 @@ impl Machine {
             aux: Aux::new(),
             mcsync: McSync::new(),
             corectl: CoreCtl::new(),
+            pm: Pm::new(),
             clockman: ClockManager::new(),
             spi0: Spi0::new(),
             config_otp: ConfigOtp::new(),
@@ -193,6 +196,9 @@ impl Machine {
         }
         if let Some(off) = hit(map::BOOTBOX_BASE, map::BOOTBOX_SIZE) {
             return Some((&mut self.bootbox, off));
+        }
+        if let Some(off) = hit(map::PM_BASE, map::PM_SIZE) {
+            return Some((&mut self.pm, off));
         }
         if let Some(off) = hit(map::CM_BASE, map::CM_SIZE) {
             return Some((&mut self.clockman, off));
