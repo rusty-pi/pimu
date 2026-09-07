@@ -381,7 +381,7 @@ pub enum Op {
     },
     /// `switch`/`switch.b rd` — indexed jump through a table that starts right
     /// after the instruction. `byte` selects 8-bit vs 16-bit table entries;
-    /// each entry is a halfword displacement from the table base.
+    /// each entry is a signed displacement (in halfwords) from the table base.
     Switch {
         rd: u8,
         byte: bool,

@@ -454,21 +454,24 @@ impl Vpu {
 
             Op::Switch { rd, byte } => {
                 // Table starts at `next` (right after the 2-byte instruction);
-                // entry[idx] is a halfword displacement from that base.
+                // entry[idx] is a *signed* displacement (in halfwords) from that
+                // base — handlers defined before the `switch` are reached with a
+                // negative entry, and the default/unknown case is a small
+                // negative offset back to the literal-`%` fallback.
                 let idx = self.regs.get(rd as usize);
                 let entry_addr = next.wrapping_add(if byte { idx } else { idx * 2 });
                 let disp = if byte {
                     match bus.load8(entry_addr) {
-                        Ok(v) => v as u32,
+                        Ok(v) => v as i8 as i32,
                         Err(err) => return self.stop(Stop::Fault(Fault::Bus { pc, err })),
                     }
                 } else {
                     match bus.load16(entry_addr) {
-                        Ok(v) => v as u32,
+                        Ok(v) => v as i16 as i32,
                         Err(err) => return self.stop(Stop::Fault(Fault::Bus { pc, err })),
                     }
                 };
-                self.regs.pc = next.wrapping_add(disp * 2);
+                self.regs.pc = next.wrapping_add((disp * 2) as u32);
             }
 
             Op::AddCmpB {
