@@ -49,7 +49,21 @@ impl MmioDevice for Pm {
 
     fn read(&mut self, offset: u32, _width: Width) -> BusResult<u32> {
         let off = offset & !3;
-        Ok(self.storage.get(&off).copied().unwrap_or(0) & !PASSWD_MASK)
+        if let Some(&v) = self.storage.get(&off) {
+            return Ok(v & !PASSWD_MASK);
+        }
+        // Power-domain status block (`PM_IMAGE`..`PM_GRAFX`, `0x40..0x60`). On
+        // real silicon each reads back with the PM password nibble plus the
+        // per-domain "powered & functional" bits set — the Pi 4 has
+        // `0x0000_704x`/`0x0000_706x` across this range. start4's `sysm` driver
+        // init gates an init branch on `PM[0x5C] != 0`; with an all-zero PM it
+        // takes the early-return path instead. Mirror a plausible powered
+        // state so that branch runs. (The reset block at `0x1C..0x24` and the
+        // rest of PM stay 0.)
+        if (0x40..0x60).contains(&off) {
+            return Ok(0x0000_7040);
+        }
+        Ok(0)
     }
 
     fn write(&mut self, offset: u32, _width: Width, value: u32) -> BusResult<()> {
