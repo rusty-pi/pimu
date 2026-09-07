@@ -428,17 +428,13 @@ fn decode_ldst32(hw0: u32, hw1: u32) -> Op {
                 cond,
             )
         }
-        // 1010 0010 : ld/st{w} rd, (rs + u11)        (unsigned 11-bit displ)
-        // 1010 0011 : ld/st{w} rd, (pc + (u11 - 2048))
+        // 1010 001o ww{0/1}d dddd | sssss ooo oooo oooo :
+        //   ld/st{w} rd, (rs + o)   — `o` is a signed 12-bit displacement, its
+        //   top bit is `o` in `1010 001o` and the low 11 bits are in hw1.
         0xA2 | 0xA3 => {
             let rs = ((hw1 >> 11) & 0x1F) as u8;
-            let u11 = (hw1 & 0x7FF) as i32;
-            let (base, off) = if hi == 0xA2 {
-                (Base::Reg(rs), u11)
-            } else {
-                (Base::Pc, u11 - 2048)
-            };
-            ldst(store, w, rd, AddrMode::simple(base, off), Cond::Al)
+            let off = sext((((hw0 >> 8) & 1) << 11) | (hw1 & 0x7FF), 12);
+            ldst(store, w, rd, AddrMode::simple(Base::Reg(rs), off), Cond::Al)
         }
         // 1010 0100 : ld/st{w}{C} rd, (--rs)   /   1010 0101 : (rs++)
         0xA4 | 0xA5 => {
