@@ -273,19 +273,22 @@ impl Machine {
         // start4 routes the ThreadX tick to interrupt source 66 (its handler at
         // 0x3ED6583A acks system-timer CS and calls the tick with source id 66).
         let src = crate::periph::corectl::SYS_IRQ_SRC + 2;
-        if self.corectl.irq_priority(src) == 0 {
+        // `enable_irq_source(src, prio)` stores the 4-bit priority, and start4's
+        // exception entry vectors the interrupt through the table slot == that
+        // priority. `enable_irq_source(66, 1)` ⇒ slot 1, whose ISR path runs
+        // the plain ThreadX tick (`0x3ED65142`) and returns cleanly.
+        let slot = self.corectl.irq_priority(src);
+        if slot == 0 {
             return None;
         }
         self.bootbox.raise_irq(src, 0);
-        // start4 traps this interrupt through exception vector 3: only slots 3
-        // and 10 make its ISR run the real source dispatch (0x3EDA2594) that
-        // calls into ThreadX; vector 12's handler reads the source from the
-        // bootbox window instead. `RVF_IRQ_SLOT` overrides for experiments.
+        // `RVF_IRQ_SLOT` overrides for experiments (slots 3/10 force the ISR's
+        // deferred-reschedule path `0x3EDA2594` instead of the plain tick).
         Some(
             std::env::var("RVF_IRQ_SLOT")
                 .ok()
                 .and_then(|s| s.parse().ok())
-                .unwrap_or(3),
+                .unwrap_or(slot as u32),
         )
     }
 }
