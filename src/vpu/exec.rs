@@ -326,14 +326,21 @@ impl Vpu {
                 } else {
                     use super::insn::FpOp::*;
                     let a = f32::from_bits(self.regs.get(ra as usize));
-                    // Register operands are float bit-patterns; immediates are
-                    // small integers used as literal float values / shift counts.
+                    // The `0xCA00` convert ops (ftrunc/floor/flts/fltu) take an
+                    // integer shift as the operand; the `0xC800` triadic ops take
+                    // a float. Register operands are always f32 bit-patterns; an
+                    // immediate is a raw shift count for the converts, and a
+                    // 6-bit minifloat (`s eee mm`, bias 3, implicit `1.mm`) for
+                    // the triadic ops — e.g. `0b011001` is `1.25 × 2³ = 10.0`,
+                    // which the decimal formatter at `0x80009728` relies on.
+                    let is_convert = matches!(op, Ftrunc | FtruncFloor | Flts | Fltu);
                     let (bv, bf) = match b {
                         RegOrImm::Reg(r) => {
                             let raw = self.regs.get(r as usize);
                             (raw, f32::from_bits(raw))
                         }
-                        RegOrImm::Imm(i) => (i as u32, i as f32),
+                        RegOrImm::Imm(i) if is_convert => (i as u32, i as f32),
+                        RegOrImm::Imm(i) => (i as u32, fp_minifloat((i as u32) & 0x3F)),
                     };
                     let scale = |sh: u32| 2f32.powi(sh as i32);
                     let rai = self.regs.get(ra as usize);
@@ -723,6 +730,21 @@ impl Vpu {
         }
         Ok(())
     }
+}
+
+/// Decode the 6-bit floating-point immediate of a `0xC800` triadic FP op.
+///
+/// Layout `s eee mm`: sign, 3-bit exponent (bias 3), 2-bit mantissa with an
+/// implicit leading 1. `eee == 0` is zero. So `0b011001` → `+1.25 × 2³ = 10.0`,
+/// `0b001100` → `1.0`, `0b010000` → `2.0`, `0b001000` → `0.5`.
+fn fp_minifloat(i: u32) -> f32 {
+    let sign = if i & 0x20 != 0 { -1.0 } else { 1.0 };
+    let exp = ((i >> 2) & 7) as i32;
+    let mant = (i & 3) as f32;
+    if exp == 0 {
+        return sign * (mant / 4.0) * 2f32.powi(-2); // subnormal; 0 when mant==0
+    }
+    sign * (1.0 + mant / 4.0) * 2f32.powi(exp - 3)
 }
 
 fn nz(r: u32, carry: bool, overflow: bool) -> Flags {
