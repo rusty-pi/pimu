@@ -37,6 +37,13 @@ const CTRL_DONE: u32 = 1 << 0;
 const PHY_CAL_TRIGGER: u32 = 0x3_2010;
 const PHY_CAL_BUSY: u32 = 0x3_2014;
 
+/// PHY parameter scratch RAM: the firmware writes per-lane codes to
+/// `0x3_2100..0x3_2114` (6 words) and reads back a checksum at `0x3_2118`
+/// (`0x8000690a` sums the 6 words and compares — a mismatch is "SDRAM
+/// failure"). We compute the checksum from what was written.
+const PHY_PARAM_LO: u32 = 0x3_2100;
+const PHY_PARAM_CHECKSUM: u32 = 0x3_2118;
+
 #[derive(Debug, Clone)]
 pub struct SdramcAccess {
     pub offset: u32,
@@ -97,6 +104,9 @@ impl MmioDevice for Sdramc {
                 // 0 once the firmware clears the trigger.
                 u32::from(self.storage.get(&PHY_CAL_TRIGGER).copied().unwrap_or(0) != 0)
             }
+            PHY_PARAM_CHECKSUM => (0..6)
+                .filter_map(|i| self.storage.get(&(PHY_PARAM_LO + i * 4)))
+                .fold(0u32, |acc, &w| acc.wrapping_add(w)),
             off => self.storage.get(&off).copied().unwrap_or(0),
         };
         self.record(SdramcAccess {
