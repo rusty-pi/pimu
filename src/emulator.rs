@@ -141,6 +141,15 @@ impl Emulator {
         // `RVF_LIVE_CONSOLE=1` echoes UART output to stderr as it happens, so a
         // long `recon` run can be watched instead of waiting for the summary.
         let live_console = std::env::var_os("RVF_LIVE_CONSOLE").is_some();
+        // `RVF_MMIO_FROM=<hex>` arms `--trace-mmio`-style logging only once the
+        // PC first reaches that address — lets you capture a late boot stage
+        // (e.g. start4.elf) without drowning in the bootloader's MMIO.
+        let mmio_from = std::env::var("RVF_MMIO_FROM")
+            .ok()
+            .and_then(|s| u32::from_str_radix(s.trim_start_matches("0x"), 16).ok());
+        if mmio_from.is_some() {
+            self.machine.mmio_trace = false;
+        }
 
         // Spin detection: over a sliding window of steps, track the min/max PC
         // and whether any console output happened. If the PC stays within a
@@ -185,6 +194,11 @@ impl Emulator {
             }
 
             let pc_before = self.cpu.pc();
+            if let Some(from) = mmio_from {
+                if !self.machine.mmio_trace && pc_before == from {
+                    self.machine.mmio_trace = true;
+                }
+            }
             let step = self.cpu.step(&mut self.machine);
             self.machine.tick(1);
 
