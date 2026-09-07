@@ -138,6 +138,9 @@ impl Emulator {
         let start = Instant::now();
         let mut console = Vec::new();
         let mut wall_check = 0u64;
+        // `RVF_LIVE_CONSOLE=1` echoes UART output to stderr as it happens, so a
+        // long `recon` run can be watched instead of waiting for the summary.
+        let live_console = std::env::var_os("RVF_LIVE_CONSOLE").is_some();
 
         // Spin detection: over a sliding window of steps, track the min/max PC
         // and whether any console output happened. If the PC stays within a
@@ -219,6 +222,10 @@ impl Emulator {
 
             let fresh = self.machine.take_console_output();
             let had_output = !fresh.is_empty();
+            if live_console && had_output {
+                use std::io::Write;
+                let _ = std::io::stderr().write_all(&fresh);
+            }
             console.extend_from_slice(&fresh);
 
             match step {

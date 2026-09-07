@@ -78,6 +78,11 @@ pub const AUX_SIZE: u32 = 0x100;
 pub const EMMC2_BASE: u32 = 0x7E34_0000;
 pub const EMMC2_SIZE: u32 = 0x1000;
 
+/// HVS (Hardware Video Scaler), `0x7E40_0000` — the bootloader's diagnostic
+/// display path polls its per-channel frame-swap registers.
+pub const HVS_BASE: u32 = 0x7E40_0000;
+pub const HVS_SIZE: u32 = 0x1000;
+
 /// BCM2711 LPDDR4 controller + PHY, mapped *below* the legacy peripheral
 /// window: the `init_sdram_*` path pokes `0x7DC2_0000` (command/status at
 /// `+0x10`..`+0x28`) and per-byte-lane PHY blocks at `0x7DC2_0400`,
