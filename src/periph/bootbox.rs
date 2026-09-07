@@ -21,6 +21,14 @@ use crate::bus::{BusResult, MmioDevice, Width};
 /// "idle, request already serviced".
 const CONTROL_BITS: u32 = 0xF;
 
+/// `start4.elf`'s VPU interrupt handler (exception vector 12, `0x3ED1804E`)
+/// reads the pending interrupt source from a 3-word window here: `+0x00` bit 0
+/// = "a source is pending", `+0x04` / `+0x08` = source id / payload, and it
+/// acks by writing 0 back to `+0x00`.
+const IRQ_STATUS: u32 = 0x1080;
+const IRQ_SOURCE: u32 = 0x1084;
+const IRQ_PAYLOAD: u32 = 0x1088;
+
 #[derive(Default)]
 pub struct BootBox {
     storage: BTreeMap<u32, u32>,
@@ -30,6 +38,18 @@ impl BootBox {
     pub fn new() -> BootBox {
         BootBox::default()
     }
+
+    /// Latch a pending VPU interrupt source for the exc-12 handler to pick up.
+    pub fn raise_irq(&mut self, source: u32, payload: u32) {
+        self.storage.insert(IRQ_STATUS, 1);
+        self.storage.insert(IRQ_SOURCE, source);
+        self.storage.insert(IRQ_PAYLOAD, payload);
+    }
+
+    /// True while a raised source has not yet been acked by the handler.
+    pub fn irq_pending(&self) -> bool {
+        self.storage.get(&IRQ_STATUS).copied().unwrap_or(0) & 1 != 0
+    }
 }
 
 impl MmioDevice for BootBox {
@@ -38,7 +58,15 @@ impl MmioDevice for BootBox {
     }
 
     fn read(&mut self, offset: u32, _width: Width) -> BusResult<u32> {
-        Ok(self.storage.get(&(offset & !3)).copied().unwrap_or(0) & !CONTROL_BITS)
+        let off = offset & !3;
+        let raw = self.storage.get(&off).copied().unwrap_or(0);
+        // The interrupt-status window must report its low bits verbatim; every
+        // other doorbell reads its control bits back clear.
+        if matches!(off, IRQ_STATUS | IRQ_SOURCE | IRQ_PAYLOAD) {
+            Ok(raw)
+        } else {
+            Ok(raw & !CONTROL_BITS)
+        }
     }
 
     fn write(&mut self, offset: u32, _width: Width, value: u32) -> BusResult<()> {

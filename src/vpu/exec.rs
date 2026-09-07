@@ -231,7 +231,19 @@ impl Vpu {
                     return self.stop(Stop::Halt(HaltReason::Sleep));
                 }
             }
-            Op::Bkpt => return self.stop(Stop::Halt(HaltReason::Breakpoint)),
+            Op::Bkpt => {
+                // start4 emits the `0x0000` parcel as inline 2-byte padding /
+                // "unreachable" guards inside functions and at the head of its
+                // exception stubs — real VC4 slides through it. A test payload
+                // uses `bkpt` as a deliberate stop, so only step over it in
+                // reconnaissance mode.
+                if matches!(self.on_unimpl, UnimplPolicy::Skip) {
+                    self.skipped += 1;
+                    self.regs.pc = next;
+                } else {
+                    return self.stop(Stop::Halt(HaltReason::Breakpoint));
+                }
+            }
             Op::Swi { vector } => {
                 // `vector` is already `0x20 + u`. With a vector table configured,
                 // trap to `*(exc_vbase + vector*8)` after pushing SR + return
