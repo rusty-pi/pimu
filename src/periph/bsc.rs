@@ -78,7 +78,10 @@ impl Pmic {
         // Seed the handful of registers the firmware inspects. These are
         // best-effort — refine against a datasheet if the PMIC probe starts
         // rejecting the part. Everything unset reads back 0.
-        let regs = BTreeMap::new();
+        let mut regs = BTreeMap::new();
+        // DA9090 reg 0x02 bit 3: the DA9090 driver (`0x3EC8C9FC`) polls this
+        // forever waiting for it to set ("rail good"). Report it ready.
+        regs.insert(0x02, 0x08);
         Pmic { regs, ptr: 0 }
     }
 
@@ -104,13 +107,13 @@ pub struct Bsc {
     clkt: u32,
     /// Latched status bits (`DONE` / `ERR` / `CLKT`) — sticky until written 1.
     latched: u32,
-    /// The model runs each transfer to completion inside `start()`, but the
-    /// driver expects to observe the hardware sequence: `S.TA` (transfer
-    /// active) rises, then falls with `S.DONE`. So the first `S` read after
-    /// `ST` reports `TA` alone (no `DONE`), and every read after that reports
-    /// `DONE` alone — never both together, or the driver latches the stale
-    /// `TA` bit and fails the transfer.
-    ta_shots: u32,
+    /// A transfer kicked by `ST` but not yet "finished". The data movement
+    /// happens immediately in `start()`, but `S.DONE` is held off for a few
+    /// `tick()`s: `S.TA` (transfer active) reads back meanwhile. Completing
+    /// synchronously inside the `C`-register write re-enters the driver's
+    /// async request queue (the completion callback runs nested inside submit)
+    /// and deadlocks its per-bus "processing" flag. `(ticks_left, is_error)`.
+    pending: Option<(u32, bool)>,
     tx: VecDeque<u8>,
     rx: VecDeque<u8>,
     /// The device on the bus, if its address is selected.
@@ -128,7 +131,7 @@ impl Bsc {
             del: 0,
             clkt: 0,
             latched: 0,
-            ta_shots: 0,
+            pending: None,
             tx: VecDeque::new(),
             rx: VecDeque::new(),
             pmic: Pmic::new(),
@@ -139,6 +142,9 @@ impl Bsc {
     fn status(&self) -> u32 {
         let mut s = self.latched & (S_DONE | S_ERR | S_CLKT);
         s |= S_TXD | S_TXE; // model FIFO drains instantly
+        if self.pending.is_some() {
+            s |= S_TA; // transfer still "in flight"
+        }
         if !self.tx.is_empty() {
             s &= !S_TXE;
         }
@@ -149,9 +155,29 @@ impl Bsc {
             s |= S_RXF;
         }
         // TXW/RXR ("needs servicing") — keep clear; the driver copes without
-        // them because DONE lands immediately.
+        // them because DONE lands as soon as the transfer settles.
         let _ = (S_TXW, S_RXR);
         s
+    }
+
+    /// Number of `tick()`s between `ST` and `S.DONE`. Long enough that the
+    /// driver's submit call (and its request-queue bookkeeping) unwinds before
+    /// the completion is observed; short enough to be invisible to timing.
+    const COMPLETE_DELAY: u32 = 96;
+
+    /// Advance a transfer in flight; latch `DONE` (and `ERR`) when it settles.
+    fn advance(&mut self) {
+        if let Some((left, err)) = self.pending {
+            if left <= 1 {
+                self.pending = None;
+                self.latched |= S_DONE;
+                if err {
+                    self.latched |= S_ERR;
+                }
+            } else {
+                self.pending = Some((left - 1, err));
+            }
+        }
     }
 
     /// Run the transfer the `ST` bit just kicked off.
@@ -187,11 +213,9 @@ impl Bsc {
         // zero.
         self.dlen = 0;
 
-        self.latched |= S_DONE;
-        self.ta_shots = 1;
-        if !device {
-            self.latched |= S_ERR; // nobody ACKed the address
-        }
+        // `DONE` (and `ERR`, if the address went unACKed) land a few ticks
+        // later — see `pending`.
+        self.pending = Some((Self::COMPLETE_DELAY, !device));
         self.c &= !C_ST;
     }
 }
@@ -201,17 +225,14 @@ impl MmioDevice for Bsc {
         self.name
     }
 
+    fn tick(&mut self, _cycles: u64) {
+        self.advance();
+    }
+
     fn read(&mut self, offset: u32, _width: Width) -> BusResult<u32> {
         Ok(match offset & !3 {
             C => self.c,
-            S => {
-                let mut s = self.status();
-                if self.ta_shots > 0 {
-                    self.ta_shots -= 1;
-                    s |= S_TA;
-                }
-                s
-            }
+            S => self.status(),
             DLEN => self.dlen,
             A => self.addr,
             FIFO => self.rx.pop_front().unwrap_or(0) as u32,

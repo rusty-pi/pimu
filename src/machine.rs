@@ -136,6 +136,7 @@ impl Machine {
     /// Advance time-based peripheral state by `cycles` VPU cycles.
     pub fn tick(&mut self, cycles: u64) {
         self.systimer.tick(cycles);
+        self.bsc_pmic.tick(cycles);
     }
 
     /// Drain and return whatever the console UART has transmitted.
