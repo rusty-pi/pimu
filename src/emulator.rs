@@ -229,10 +229,11 @@ impl Emulator {
         // the dt-blob pin map (`load_gpioman_pins`), returning -1 + a
         // `gpioman: gpioman_get_pin_num: pin <NAME> not defined` log only for
         // names the dt-blob doesn't define (as real HW does for
-        // DISPLAY_DSI_PORT / SDCARD_CONTROL_POWER). Also pass the readiness
-        // gate, clear the stuck PMIC errno and skip the PMIC retry backoff so
-        // the boot can move past it. Interim hack, not a substitute for real
-        // gpioman/PMIC modelling.
+        // DISPLAY_DSI_PORT / SDCARD_CONTROL_POWER). Also return success from
+        // `gpioman_configure` (so it stops logging "attempt N failed" and
+        // rescheduling itself), pass the readiness gate, clear the stuck PMIC
+        // errno and skip the PMIC retry backoff so the boot can move past it.
+        // Interim hack, not a substitute for real gpioman/PMIC modelling.
         let gpioman_shim = std::env::var_os("RVF_GPIOMAN_SHIM").is_some();
         let mut gpioman_shim_seen: std::collections::HashSet<String> =
             std::collections::HashSet::new();
@@ -447,6 +448,18 @@ impl Emulator {
                 if pc_before == 0x3ED5_70C2 {
                     let target = self.cpu.regs.get(6);
                     self.cpu.regs.set(3, target);
+                }
+                // `0x3ECC9878` = gpioman_configure. With the provider list
+                // unregistered (`[gp+807672/676/680]` all 0) it always takes the
+                // failure branch — `gpioman: configuration attempt N failed
+                // (error 1) - bad dt-blob.bin?` — and reschedules itself via a
+                // work-item, churning forever. Real HW configures silently. The
+                // `gpioman_get_pin_num` / readiness-gate shims already cover
+                // what the rest of the boot needs, so return success (r0 = 0)
+                // straight away and let the retry loop die.
+                if pc_before == 0x3ECC_9878 {
+                    self.cpu.regs.set(0, 0);
+                    self.cpu.regs.pc = self.cpu.regs.get(26);
                 }
                 // `0x3ECC9C78` = gpioman_get_pin_num(name): the provider list
                 // (`[gp+807676]`) is never populated, so the real function walks
