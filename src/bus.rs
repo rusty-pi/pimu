@@ -109,6 +109,15 @@ pub trait Bus {
     fn timer_wake(&mut self) -> Option<u32> {
         None
     }
+
+    /// The interrupt vector-table slot for the periodic ThreadX tick source, if
+    /// the firmware has enabled it. Unlike [`Self::timer_wake`] this does not
+    /// touch the timer — the run loop calls it when a compare deadline has been
+    /// crossed to deliver a genuine periodic tick (real hardware's preemption
+    /// point). `None` = the tick source is not enabled yet.
+    fn timer_tick_slot(&mut self) -> Option<u32> {
+        None
+    }
 }
 
 /// A memory-mapped peripheral. Offsets are relative to the device's base.

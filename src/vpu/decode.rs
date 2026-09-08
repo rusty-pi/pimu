@@ -67,13 +67,14 @@ fn decode16(p0: u16, pc: u32) -> Op {
     let rd4 = (p & 0xF) as u8;
     let rd5 = (p & 0x1F) as u8;
 
-    // Fixed system encodings 0x0000..=0x000A. ei/di/cb* affect state the model
-    // does not track yet -> treated as nop.
+    // Fixed system encodings 0x0000..=0x000A.
     match p0 {
         0x0000 => return Op::Bkpt,
         0x0001 => return Op::Nop,
         0x0002 => return Op::Sleep,
-        0x0003..=0x0009 => return Op::Nop, // user / ei / di / cbclr / cbadd{1,2,3}
+        0x0004 => return Op::SetIrqEnable(true), // ei
+        0x0005 => return Op::SetIrqEnable(false), // di
+        0x0003 | 0x0006..=0x0009 => return Op::Nop, // user / cbclr / cbadd{1,2,3}
         0x000A => return Op::Rti,
         _ => {}
     }
@@ -590,6 +591,10 @@ mod tests {
         assert_eq!(dec(&[0x01, 0x00]), Op::Nop);
         assert_eq!(dec(&[0x00, 0x00]), Op::Bkpt);
         assert_eq!(dec(&[0x0A, 0x00]), Op::Rti);
+        assert_eq!(dec(&[0x04, 0x00]), Op::SetIrqEnable(true));
+        assert_eq!(dec(&[0x05, 0x00]), Op::SetIrqEnable(false));
+        assert_eq!(dec(&[0x03, 0x00]), Op::Nop);
+        assert_eq!(dec(&[0x06, 0x00]), Op::Nop);
         assert_eq!(dec(&0x00E5u16.to_le_bytes()), Op::Version { rd: 5 });
     }
 
