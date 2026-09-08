@@ -218,6 +218,9 @@ impl MmioDevice for Spi0 {
                     self.rx.clear();
                 }
                 if !was_ta && value & CS_TA != 0 {
+                    if std::env::var_os("RVF_DBG_SPI").is_some() {
+                        eprintln!("[spi0] TA begin: CS={value:#x} (cs-select={})", value & 3);
+                    }
                     self.begin();
                 }
                 if was_ta && value & CS_TA == 0 {
