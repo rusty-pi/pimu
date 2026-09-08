@@ -58,5 +58,12 @@ copy "$fw/start4.elf"                 start4.elf
 copy "$fw/fixup4.dat"                 fixup4.dat
 copy "$cache/bcm2711-rpi-4-b.dtb"     bcm2711-rpi-4-b.dtb
 
+# gpioman pin config. Without it the firmware retries gpioman forever in the
+# model (built-in dt-blob fallback isn't reproduced).
+if [[ -f "$fw/dt-blob.dts" && ! -f "$fw/dt-blob.bin" ]]; then
+  "$here/scripts/make-dt-blob.py" "$fw/dt-blob.dts" "$fw/dt-blob.bin"
+fi
+copy "$fw/dt-blob.bin"                dt-blob.bin
+
 echo "done. contents:"
 mdir -i "$out@@${part_offset}" ::
