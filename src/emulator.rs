@@ -223,6 +223,7 @@ impl Emulator {
         let mut mbox_kick_at = 0u64;
         let probe = std::env::var_os("RVF_PROBE").is_some();
         let mut probe_seen: std::collections::HashSet<&'static str> = std::collections::HashSet::new();
+        let mut probe_gp_n: u64 = 0;
 
         let mut core1_end: Option<RunEnd> = None;
         let end = loop {
@@ -308,6 +309,29 @@ impl Emulator {
                     if std::env::var_os("RVF_PMIC_HACK").is_some() && b == 2 {
                         let _ = self.machine.store(r0, Width::Byte, 0);
                         eprintln!("[probe]   -> forced errno 0");
+                    }
+                }
+                // `0x3ECC9C78` gpioman_get_pin_num — is the provider list ever
+                // populated? Log the state struct on the LEDS lookups.
+                if pc_before == 0x3ECC_9C78 {
+                    probe_gp_n += 1;
+                    if probe_gp_n <= 400 {
+                        let gp = self.cpu.regs.get(24);
+                        let a = self.machine.load(gp + 807672, Width::Word).unwrap_or(0xdead);
+                        let b = self.machine.load(gp + 807676, Width::Word).unwrap_or(0xdead);
+                        let c = self.machine.load(gp + 839404, Width::Word).unwrap_or(0xdead);
+                        let p = self.cpu.regs.get(0);
+                        let mut name = String::new();
+                        for i in 0..24 {
+                            match self.machine.load(p + i, Width::Byte) {
+                                Ok(0) | Err(_) => break,
+                                Ok(ch) => name.push(ch as u8 as char),
+                            }
+                        }
+                        eprintln!(
+                            "[probe] get_pin_num#{probe_gp_n} {name:?} gp={gp:#x} [+672]={a:#x} [+676]={b:#x} [+839404]={c:#x} @{}",
+                            self.cpu.retired
+                        );
                     }
                 }
                 // `0x3EDA4EEC` — the "record an error" helper. When called with
