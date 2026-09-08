@@ -200,7 +200,7 @@ impl MmioDevice for Bsc {
                 let mut s = self.status();
                 if self.ta_shots > 0 {
                     self.ta_shots -= 1;
-                    s = (s & !S_DONE) | S_TA;
+                    s |= S_TA;
                 }
                 s
             }
