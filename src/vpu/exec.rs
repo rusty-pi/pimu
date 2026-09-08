@@ -329,8 +329,15 @@ impl Vpu {
                 rs,
                 set_flags,
             } => {
-                let a = self.regs.get(rd as usize);
                 let b = self.regs.get(rs as usize);
+                // `brev` reverses its source operand, which `alu()` takes in
+                // `a`; the 16-bit form carries it in `Rs` with no shift.
+                let a = if matches!(op, AluOp::Bitrev) {
+                    b
+                } else {
+                    self.regs.get(rd as usize)
+                };
+                let b = if matches!(op, AluOp::Bitrev) { 0 } else { b };
                 match self.apply_alu(pc, op, a, b, set_flags, Some(rd as usize)) {
                     Ok(()) => self.regs.pc = next,
                     Err(step) => return step,
@@ -895,14 +902,22 @@ pub fn alu(op: AluOp, a: u32, b: u32, cin: bool) -> Option<(u32, Flags)> {
             let shift = 31 - sh;
             (((a << shift) as i32) >> shift) as u32
         }
+        // `msb Rd, Rs` / `msb Rd, Ra, Rb` — position of the most-significant set
+        // bit of the source. The source is the second ALU operand (`Rs` in the
+        // 16-bit form, `Rb` — set equal to `Ra` by the assembler — in the
+        // triadic form), i.e. `b`, not the destination.
         Msb => {
-            if a == 0 {
+            if b == 0 {
                 u32::MAX
             } else {
-                31 - a.leading_zeros()
+                31 - b.leading_zeros()
             }
         }
-        Bitrev => b.reverse_bits(),
+        // `brev Rd, Ra[, Rb]` — bit-reverse `Ra`, then shift right by `Rb`
+        // (0 in the 16-bit form and almost always in the triadic form). The
+        // reversible operand is `a`; the 16-bit form feeds `Rs` there (see the
+        // `Op::Alu2` handler) with `b == 0`.
+        Bitrev => a.reverse_bits().wrapping_shr(b & 31),
         Abs => (b as i32).unsigned_abs(),
         AddScale(s) => a.wrapping_add(b.wrapping_shl(s as u32)),
         SubScale(s) => a.wrapping_sub(b.wrapping_shl(s as u32)),
