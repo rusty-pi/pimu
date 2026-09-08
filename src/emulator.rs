@@ -225,11 +225,12 @@ impl Emulator {
         // DEBUG `RVF_GPIOMAN_SHIM=1`: the model never runs the schema-tree
         // apply-walk that invokes `provider_register`, so gpioman's provider
         // list (`[gp+807676]`) stays 0 and every `gpioman_get_pin_num` returns
-        // -1 forever — arm_loader then wedges retrying the LED / PMIC / power
-        // bring-up. Until that registration path is modelled, synthesise pin
-        // numbers, pass the readiness gate, clear the stuck PMIC errno and skip
-        // the PMIC retry backoff so the boot can move past it. Interim hack,
-        // not a substitute for real gpioman/PMIC modelling.
+        // -1 forever. Model the real-hardware "pin not in dt-blob" behaviour:
+        // return -1 for every pin and log `gpioman: gpioman_get_pin_num: pin
+        // <NAME> not defined` (matching a boot without dt-blob.bin), pass the
+        // readiness gate, clear the stuck PMIC errno and skip the PMIC retry
+        // backoff so the boot can move past it. Interim hack, not a substitute
+        // for real gpioman/PMIC modelling.
         let gpioman_shim = std::env::var_os("RVF_GPIOMAN_SHIM").is_some();
         let mut gpioman_shim_seen: std::collections::HashSet<String> =
             std::collections::HashSet::new();
@@ -438,10 +439,14 @@ impl Emulator {
                     let target = self.cpu.regs.get(6);
                     self.cpu.regs.set(3, target);
                 }
-                // `0x3ECC9C78` = gpioman_get_pin_num(name): returns -1 forever
-                // (provider list `[gp+807676]` never populated). Synthesise a
-                // pin for the LED names — the only ones retried endlessly by
-                // arm_loader's activity/power LED bring-up.
+                // `0x3ECC9C78` = gpioman_get_pin_num(name): the provider list
+                // (`[gp+807676]`) is never populated, so the real function walks
+                // an empty list and returns -1. On real hardware that same
+                // "pin not in dt-blob" case is benign — the firmware logs
+                // `gpioman: gpioman_get_pin_num: pin <NAME> not defined` and the
+                // caller copes (see examples-on-real-hardware/early-boot.log).
+                // Model exactly that: return -1 for every pin and emit the log
+                // line, matching a boot with no (or an incomplete) dt-blob.bin.
                 if pc_before == 0x3ECC_9C78 {
                     let p = self.cpu.regs.get(0);
                     let mut name = String::new();
@@ -451,21 +456,12 @@ impl Emulator {
                             Ok(c) => name.push(c as u8 as char),
                         }
                     }
-                    // dt-blob pins_4b: LEDS_DISK_ACTIVITY = GPIO 42,
-                    // LEDS_PWR_OK = 2; everything else gets a stable synthetic
-                    // pin in 34..53 (clear of the eMMC/SD lines).
-                    let pin = if name.contains("LED") {
-                        if name.contains("PWR") { 2 } else { 42 }
-                    } else {
-                        let h = name.bytes().fold(2166136261u32, |a, b| {
-                            (a ^ b as u32).wrapping_mul(16777619)
-                        });
-                        34 + (h % 20)
-                    };
                     if gpioman_shim_seen.insert(name.clone()) {
-                        eprintln!("[gpioman-shim] {name:?} -> pin {pin}");
+                        eprintln!(
+                            "gpioman: gpioman_get_pin_num: pin {name} not defined"
+                        );
                     }
-                    self.cpu.regs.set(0, pin);
+                    self.cpu.regs.set(0, u32::MAX);
                     self.cpu.regs.pc = self.cpu.regs.get(26);
                 }
                 // `0x3ECCA0A0` = gpioman lookup by pin number, gated on the
