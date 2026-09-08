@@ -3,6 +3,8 @@ name: simulated-boot-log
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 jobs:
@@ -31,8 +33,8 @@ jobs:
 
       - name: Simulated boot (2 min cap)
         env:
-          # arm_loader blocks on an async-mailbox completion the model does not
-          # service; this injects the wake so it runs and emits its `MESS:` log.
+          # Interim shim only: issue #3 still needs the real async-mailbox
+          # queue/completer model.
           RVF_MBOX_KICK: "0xbef6d458"
           # gpioman never registers its pin providers in the model (the schema
           # apply-walk is unreached) — shim it so the PMIC / clock bring-up runs.
@@ -51,6 +53,9 @@ jobs:
           if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
             exit "$status"
           fi
+          # A timeout is acceptable only after start4 has progressed past the
+          # async mailbox handoff and emitted its first MESS log.
+          grep -q 'MESS:.*arasan_emmc_open' boot.log
 
       - uses: actions/upload-artifact@v4
         if: always()
