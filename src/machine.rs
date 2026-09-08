@@ -319,6 +319,14 @@ impl Bus for Machine {
     }
 
     fn load(&mut self, addr: u32, width: Width) -> BusResult<u32> {
+        // VPU clock-frequency monitor at `0x7D5D_2200` (outside the `0x7E…`
+        // peripheral window). `measure_clock` (`0x3ED7C8DA`) spins on bit 10
+        // ("measurement valid") and reads bits [9:0] as an oscillator count.
+        // We don't model the analogue measurement — report it valid with a
+        // zero count so the clock-manager calibration stops polling.
+        if addr & !0xF == 0x7D5D_2200 {
+            return Ok(0x400);
+        }
         if !Machine::in_mmio(addr) {
             let phys = Machine::fold_ram_addr(addr);
             if self.ram.contains(phys) {

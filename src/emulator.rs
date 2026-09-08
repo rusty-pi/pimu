@@ -620,17 +620,27 @@ impl Emulator {
                     // range. Jump the counter forward so a multi-100 ms
                     // rail-settle delay (PMIC bring-up does several) doesn't run
                     // in real time.
-                    if !w_output
-                        && clo_delta > win / 8
-                        && self.cpu.in_exception == 0
-                    {
+                    // A tight PC window (a single small loop) that spent the
+                    // whole window polling the free-running counter, no console
+                    // output, is a firmware `usleep(n)` — jump the counter
+                    // forward so it doesn't run in real time. A wider window
+                    // (loop punctuated by a tick ISR) needs a firmer CLO-read
+                    // ratio to be sure it isn't doing real work.
+                    let tight = w_hi.wrapping_sub(w_lo) <= 0x40;
+                    let ff = !w_output
+                        && if tight {
+                            clo_delta > win / 20
+                        } else {
+                            clo_delta > win / 8 && self.cpu.in_exception == 0
+                        };
+                    if ff {
                         self.machine.systimer.jump(200_000);
-                        if std::env::var_os("RVF_DBG_FF").is_some() {
-                            eprintln!(
-                                "[ff] jump: clo_delta={clo_delta} w=[{w_lo:#x}..{w_hi:#x}] @{}",
-                                self.cpu.retired
-                            );
-                        }
+                    }
+                    if std::env::var_os("RVF_DBG_FF").is_some() {
+                        eprintln!(
+                            "[ff] win close: clo_delta={clo_delta} w=[{w_lo:#x}..{w_hi:#x}] out={w_output} exc={} ff={ff} @{}",
+                            self.cpu.in_exception, self.cpu.retired
+                        );
                     }
                     clo_reads_at_window = self.machine.systimer.clo_reads;
                     w_lo = u32::MAX;
