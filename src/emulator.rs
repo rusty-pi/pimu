@@ -378,6 +378,12 @@ impl Emulator {
                         self.cpu.trace_armed = true;
                         self.cpu.trace_cf_only = trace_on_cf;
                         self.cpu.trace_cap = trace_on_cap;
+                        // Also stream peripheral accesses while the trace is
+                        // armed (RVF_TRACE_MMIO=1) — handy for pinning down an
+                        // unmodelled block like the I2C BSC.
+                        if std::env::var_os("RVF_TRACE_MMIO").is_some() {
+                            self.machine.mmio_trace = true;
+                        }
                     }
                     console_seen = console.len();
                 }

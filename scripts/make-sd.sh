@@ -56,7 +56,13 @@ rm -f "$tmpcfg"
 
 copy "$fw/start4.elf"                 start4.elf
 copy "$fw/fixup4.dat"                 fixup4.dat
-copy "$cache/bcm2711-rpi-4-b.dtb"     bcm2711-rpi-4-b.dtb
+
+# The ARM device tree (used by start4 late, at the ARM handoff). Prefer a
+# repo-local copy; fall back to the rpi-mkosi cache (flat or firmware/ subdir).
+for dtb in "$fw/bcm2711-rpi-4-b.dtb" "$cache/bcm2711-rpi-4-b.dtb" \
+           "$cache/firmware/bcm2711-rpi-4-b.dtb"; do
+  [[ -f "$dtb" ]] && { copy "$dtb" bcm2711-rpi-4-b.dtb; break; }
+done
 
 # gpioman pin config. Without it the firmware retries gpioman forever in the
 # model (built-in dt-blob fallback isn't reproduced).
