@@ -336,7 +336,12 @@ impl Bus for Machine {
             return None;
         }
         self.bootbox.raise_irq(src, 0);
-        Some(slot as u32)
+        Some(
+            std::env::var("RVF_TICK_SLOT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(slot as u32),
+        )
     }
 
     fn load(&mut self, addr: u32, width: Width) -> BusResult<u32> {
