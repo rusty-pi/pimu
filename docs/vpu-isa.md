@@ -37,22 +37,30 @@ Parcel packing: 32-bit = `p0` then `p1`, each LE. 48-bit stream order is
 leaves flags alone. This is a guess; VC4 may update flags more widely. The M1
 test payloads only rely on `cmp`.
 
-## Implemented in M1 (`src/vpu/decode.rs`, `src/vpu/exec.rs`)
+## Implemented (`src/vpu/decode.rs`, `src/vpu/exec.rs`)
 
-16-bit: `nop`/`bkpt`/`sleep`/`rti`, `swi`, `b/bl <reg>`, `b<cond>` (7-bit),
-`ld/st (sp+imm)`, `ld/st{w} (rs)`, `ld/st (rs+imm4)`, `add sp,#imm`,
-`add rd,sp,#imm`, `p`-table ALU reg/reg, `q`-table ALU reg/imm5.
+16-bit: `nop`/`bkpt`/`sleep`/`rti`, `swi`, `version rd`, `switch`, `b/bl <reg>`,
+`b<cond>` (7-bit), `ld/st (sp+imm)`, `ld/st{w} (rs)`, `ld/st (rs+imm4)`,
+`add sp,#imm`, `add rd,sp,#imm`, `ldm`/`stm` (`push`/`pop` multi),
+`p`-table ALU reg/reg, `q`-table ALU reg/imm5.
 
-32-bit: `b<cond>`/`bl` (27-bit), ALU imm16 (`p` table), `add rd,rs,#imm16`,
-`add rd,pc,#imm16`, triadic ALU (`p` table, predicated, reg or imm6),
-`ld/st` with `gp`/`sp`/`pc`/`r0` + imm16 base, `ld/st (rs+imm12)`.
+32-bit: `b<cond>`/`bl` (27-bit), `addcmpb`, ALU imm16 (`p` table),
+`add rd,rs,#imm16`, `add rd,pc,#imm16`, triadic ALU incl. `mul`/`div`/`mulhd`
+(predicated, reg or imm6), scalar float ALU (`fadd`/`fmul`/… incl. the 6-bit
+minifloat immediate), `mov p<n>,r<n>` / `mov r<n>,p<n>` (coprocessor-register
+moves), `ld/st` with `gp`/`sp`/`pc`/`r0` + imm16 base, `ld/st (rs+imm12)`.
 
-## Not yet implemented (seen in `start4.elf`, needed for M2/M3)
+48-bit: `j`/`jl`/`b`/`bl <abs32>`, `ld/st` with 27-bit offset, ALU forms.
 
-`version rd`, 48-bit `j`/`jl`/`b`/`bl <abs32>`, 48-bit `ld/st` with 27-bit
-offset, `ldm`/`stm`, `addcmpb`, `mul`/`div` triadic variants, the entire
-floating-point and vector units, `mov p<n>,r<n>` (peripheral-register moves),
-exceptions/interrupts, MMU/cache.
+Machine side: exception / timer-IRQ delivery through the firmware's vector
+table, dual VPU cores (core 1 brought up at the `start4` trampoline).
+
+## Not yet implemented (degrade to `Unimpl`, PC stays on track)
+
+The vector unit (48-bit `0xF000..` and 80-bit `0xF800..` forms) — the VC4
+scalar `memcpy` bulk-copy is special-cased in the emulator, the rest fall
+through. MMU/cache is modelled as flat. A handful of 48/80-bit vector ops are
+hit during the PMIC / clock bring-up (`recon` lists them at exit).
 
 ## Sources
 

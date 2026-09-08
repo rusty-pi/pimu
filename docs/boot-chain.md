@@ -35,33 +35,49 @@ hand-off runs on the **VideoCore VPU**, not the ARM cores.
 `start4.elf`: ELF32-LE, `e_machine = 137`, `e_entry = 0xcec00200`, 21 `PT_LOAD`
 segments. Load addresses cluster around `0x0cec_xxxx` and `0x0ee0_xxxx`, most
 with bit 31.. of the `0xC000_0000` uncached-SDRAM alias set. So the model needs
-(a) enough RAM and (b) the `0xC000_0000+x -> RAM[x]` alias before M3.
+(a) enough RAM and (b) the `0xC000_0000+x -> RAM[x]` alias (both in place).
 
 `pieeprom.bin`: 512 KiB SPI image, header magic `55 AA`. Contains the bootloader
 binary plus a text config block (`BOOT_UART`, `BOOT_ORDER`, `BOOT_WATCHDOG_*`,
 `FREEZE_VERSION`, ...) and format strings including
 `"BOOTMODE: 0x%02x partition %d build-ts %s serial %08x boardrev %x stc %u"` —
-that line is the natural first regression target for M2.
+that line was the first M2 regression target; the model now runs well past it
+(see `board: boardrev d03115` in a `recon --eeprom` transcript).
 
 ## Peripheral scope
 
-Only what boot needs:
+Only what boot needs. Modelled so far (`src/periph/`):
 
-1. **USB3** — VL805 XHCI (PCIe-attached) for the boot disk
-2. **Ethernet** — BCM GENET v5 (`0x7d58_0000`) for netboot
-3. **Serial** — PL011 + mini-UART (done in M1)
+- **Serial** — PL011 + mini-UART (transmit capture)
+- **System timer** — 1 MHz, with a busy-wait fast-forward
+- **SDRAM controller** + the `0xC000_0000` uncached alias
+- **Clock manager** + A2W PLL (`0x7E10_1000`) and the `0x7D5D` VPU clock/PLL
+  block — status bits forced ready; the analogue PLLs / frequency counters are
+  *not* modelled (the current wall, [issue #1])
+- **Arasan eMMC** (`0x7E34_0000`) + a read-only SD-card / FAT image backend
+- **BSC/I²C master** + DA9090 PMIC register file (`0x7E20_5E00`)
+- **DMA4**, **power domains**, **config-OTP**, **CoreCtl**, **mcsync**, the
+  `0x7EE0` boot-box, and a logging catch-all for everything else
 
-Explicitly out: SD/EMMC, HDMI/display, camera, the 3D/QPU vector-graphics unit.
-(The VPU *scalar* vector ALU ops may still need modelling if firmware uses them
-for `memcpy`-style work — that is an ISA question, not a peripheral.)
+Still out: **USB3** (VL805 XHCI) and **GENET** netboot — not needed while the
+boot disk is an SD image; HDMI/display, camera, the 3D/QPU unit; and the VPU
+*scalar* vector ALU (`memcpy`-style bulk ops are special-cased, the rest fall
+through to `Unimpl`).
 
 ## Milestones
 
 - **M1 (done):** VPU scalar interpreter (subset) + UART/timer + regression
   harness. Proven on hand-assembled payloads.
-- **M2:** run `pieeprom.bin` far enough to emit its `BOOTMODE:` banner. Needs:
-  boot-ROM approximation, fuller VPU ISA, SPI/OTP + mailbox stubs, SDRAM-training
-  fast-path.
-- **M3:** `start4.elf` to ARM hand-off. Needs: SDRAM alias mapping, `fixup4.dat`
-  apply, clock manager, mailbox property interface, and the scoped peripherals
-  (USB3 boot disk / GENET netboot), plus VC4 vector ops as they turn up.
+- **M2 (done):** run `pieeprom.bin` through its banner and boot-media
+  selection — boot-ROM approximation, SPI/OTP + mailbox stubs, SDRAM fast-path,
+  GPT/FAT walk off an SD image.
+- **M3 (in progress):** `start4.elf` to ARM hand-off. Done: SDRAM alias,
+  `fixup4.dat` apply, RSA verify, the driver sequencer up to `clkm`. Remaining:
+  the clock/PLL model ([issue #1]), gpioman pin providers ([issue #2]), the
+  async-mailbox completer ([issue #3]), a real DA9090/BSC model ([issue #4]),
+  then the kernel/DTB load and ARM release.
+
+[issue #1]: https://github.com/valtzu/rpi-virt-fw/issues/1
+[issue #2]: https://github.com/valtzu/rpi-virt-fw/issues/2
+[issue #3]: https://github.com/valtzu/rpi-virt-fw/issues/3
+[issue #4]: https://github.com/valtzu/rpi-virt-fw/issues/4
