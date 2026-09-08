@@ -40,6 +40,12 @@ pub struct SysTimer {
     /// `usleep` (polls the counter, is time-bounded) apart from a hung
     /// peripheral poll (never terminates) — the former deserves patience.
     pub clo_reads: u64,
+    /// Set by [`Self::service_matches`] when a compare deadline is crossed;
+    /// cleared by [`Self::take_tick_pending`]. Drives the run loop's periodic
+    /// ThreadX timer interrupt (the real hardware tick that preempts a
+    /// busy-waiting / sleeping thread). Independent of `cs` — the firmware's
+    /// tick ISR acks its interrupt at `0x7E000000`, not the system-timer `CS`.
+    tick_pending: bool,
 }
 
 impl SysTimer {
@@ -53,7 +59,14 @@ impl SysTimer {
             deadline: [None; 4],
             interval: [DEFAULT_INTERVAL_US; 4],
             clo_reads: 0,
+            tick_pending: false,
         }
+    }
+
+    /// Consume the "a compare fired since last checked" flag. The run loop calls
+    /// this each step; a `true` means it should deliver a periodic timer IRQ.
+    pub fn take_tick_pending(&mut self) -> bool {
+        std::mem::take(&mut self.tick_pending)
     }
 
     pub fn now_us(&self) -> u64 {
@@ -69,6 +82,7 @@ impl SysTimer {
                 continue;
             }
             self.cs |= 1 << c;
+            self.tick_pending = true;
             let step = self.interval[c].max(1);
             while d <= self.micros {
                 d += step;

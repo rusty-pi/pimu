@@ -325,6 +325,20 @@ impl Bus for Machine {
         self.timer_wake_impl()
     }
 
+    fn timer_tick_slot(&mut self) -> Option<u32> {
+        // Same source/slot routing as `timer_wake_impl` (ThreadX tick =
+        // interrupt source 66 => vector slot == its enabled priority), but
+        // without advancing the timer: the run loop already tracks that a
+        // compare fired.
+        let src = crate::periph::corectl::SYS_IRQ_SRC + 2;
+        let slot = self.corectl.irq_priority(src);
+        if slot == 0 {
+            return None;
+        }
+        self.bootbox.raise_irq(src, 0);
+        Some(slot as u32)
+    }
+
     fn load(&mut self, addr: u32, width: Width) -> BusResult<u32> {
         if !Machine::in_mmio(addr) {
             let phys = Machine::fold_ram_addr(addr);

@@ -109,6 +109,10 @@ pub struct Vpu {
     pub trace_from: u32,
     /// Flips true once `trace_from` has been reached (always true when it is 0).
     pub trace_armed: bool,
+    /// `RVF_SCHED_TICK=1`: model the interrupt-enable bit (`ei`/`di`, SR bit 30)
+    /// so firmware `msleep` takes its yield-to-scheduler path, paired with the
+    /// run loop's periodic ThreadX tick. Off by default — WIP (issue #7).
+    pub irq_model: bool,
 }
 
 impl Vpu {
@@ -118,6 +122,13 @@ impl Vpu {
         v.version_value = DEFAULT_VERSION;
         v.cf_trace = Vec::with_capacity(512);
         v.trace_cap = 20_000;
+        v.irq_model = std::env::var_os("RVF_SCHED_TICK").is_some();
+        if v.irq_model {
+            // VC4 comes out of reset with interrupts enabled; ThreadX runs
+            // threads that way too. `di`/`ei` toggle it from here.
+            v.regs.set(30, 1 << 30);
+            v.regs.sr = 1 << 30;
+        }
         v
     }
 
@@ -160,6 +171,19 @@ impl Vpu {
             return;
         }
         let Some(slot) = bus.timer_wake() else { return };
+        self.vector_irq(bus, slot);
+    }
+
+    /// Vector into the firmware's interrupt handler for `slot` (== the source's
+    /// enabled priority): push SR + the current `pc` as the resume address (like
+    /// `swi`, so the handler's `rti` unwinds) and jump to
+    /// `*(exc_vbase + slot*4)`. No-op if already in an exception or the vector
+    /// entry is null. Used for both the `sleep`-instruction wake and the run
+    /// loop's periodic ThreadX tick.
+    pub fn vector_irq(&mut self, bus: &mut dyn Bus, slot: u32) {
+        if self.in_exception != 0 || self.exc_vbase == 0 {
+            return;
+        }
         let handler = bus
             .load32(self.exc_vbase.wrapping_add(slot.wrapping_mul(4)))
             .ok()
@@ -173,7 +197,7 @@ impl Vpu {
             }
             let resume = self.regs.pc;
             let sp = self.regs.get(SP).wrapping_sub(8);
-            if bus.store32(sp, self.regs.sr).is_ok()
+            if bus.store32(sp, self.sr()).is_ok()
                 && bus.store32(sp.wrapping_add(4), resume).is_ok()
             {
                 self.regs.set(SP, sp);
@@ -181,6 +205,25 @@ impl Vpu {
                 self.regs.pc = h;
             }
         }
+    }
+
+    /// The VC4 status register value to save on an exception. With `irq_model`
+    /// on this is `r30` (carrying the interrupt-enable bit, [`Op::SetIrqEnable`])
+    /// kept in sync with the `regs.sr` mirror; otherwise the legacy `regs.sr`.
+    fn sr(&mut self) -> u32 {
+        if self.irq_model {
+            let v = self.regs.get(30);
+            self.regs.sr = v;
+            v
+        } else {
+            self.regs.sr
+        }
+    }
+
+    /// True when interrupts are enabled (SR / `r30` bit 30). Firmware `msleep`
+    /// and the run loop's periodic ThreadX tick gate on this.
+    pub fn irq_enabled(&self) -> bool {
+        self.regs.get(30) & (1 << 30) != 0
     }
 
     /// Fetch the instruction bytes at `pc` into a 10-byte buffer.
@@ -225,6 +268,25 @@ impl Vpu {
 
         match insn.op {
             Op::Nop => self.regs.pc = next,
+            Op::SetIrqEnable(on) => {
+                // Track only the interrupt-enable bit of the VC4 status
+                // register (`r30`, bit 30). NZCV stay in `regs.flags`; the
+                // exception save/restore path (`sr()` / `rti`) carries this bit
+                // across handlers. `regs.sr` is kept as a mirror. Gated on
+                // `irq_model` — without the paired periodic tick, letting
+                // `msleep` yield just hangs.
+                if self.irq_model {
+                    let m = 1u32 << 30;
+                    let v = if on {
+                        self.regs.get(30) | m
+                    } else {
+                        self.regs.get(30) & !m
+                    };
+                    self.regs.set(30, v);
+                    self.regs.sr = v;
+                }
+                self.regs.pc = next;
+            }
             Op::Sleep => {
                 // `sleep` waits for an interrupt. We model no async wakeups, so
                 // in recon (skip) mode treat it as a nop — firmware idle/dispatch
@@ -274,7 +336,7 @@ impl Vpu {
                 match handler {
                     Some(h) => {
                         let sp = self.regs.get(SP).wrapping_sub(8);
-                        let sr = self.regs.sr;
+                        let sr = self.sr();
                         if bus.store32(sp, sr).is_err()
                             || bus.store32(sp.wrapping_add(4), next).is_err()
                         {
@@ -310,6 +372,9 @@ impl Vpu {
                     Err(err) => return self.stop(Stop::Fault(Fault::Bus { pc, err })),
                 };
                 self.regs.sr = sr;
+                if self.irq_model {
+                    self.regs.set(30, sr);
+                }
                 self.regs.set(SP, sp.wrapping_add(8));
                 self.regs.pc = ret;
                 self.in_exception = self.in_exception.saturating_sub(1);

@@ -129,6 +129,7 @@ impl Emulator {
         c1.trace_cf_only = self.cpu.trace_cf_only;
         c1.trace_cap = self.cpu.trace_cap;
         c1.trace_from = self.cpu.trace_from;
+        c1.irq_model = self.cpu.irq_model;
         self.cpu1 = Some(c1);
     }
 
@@ -143,6 +144,7 @@ impl Emulator {
         c1.trace_cf_only = self.cpu.trace_cf_only;
         c1.trace_cap = self.cpu.trace_cap;
         c1.trace_from = self.cpu.trace_from;
+        c1.irq_model = self.cpu.irq_model;
         self.cpu1 = Some(c1);
     }
 
@@ -233,6 +235,8 @@ impl Emulator {
         let gpioman_shim = std::env::var_os("RVF_GPIOMAN_SHIM").is_some();
         let mut gpioman_shim_seen: std::collections::HashSet<String> =
             std::collections::HashSet::new();
+        let dbg_tick = std::env::var_os("RVF_DBG_TICK").is_some();
+        let mut tick_deliveries: u64 = 0;
 
         let probe = std::env::var_os("RVF_PROBE").is_some();
         let mut probe_seen: std::collections::HashSet<&'static str> = std::collections::HashSet::new();
@@ -257,6 +261,18 @@ impl Emulator {
             }
 
             let pc_before = self.cpu.pc();
+
+            // `_tx_thread_schedule`'s *solicited* context restore (`0x3EC40034`
+            // → `bx r26` at `0x3EC4003E`) resumes a thread that yielded via a
+            // ThreadX call — it does NOT `rti`, so the model's `in_exception`
+            // depth (bumped on the faked timer IRQ, dropped by `Op::Rti`) would
+            // stay stuck above 0 after the tick ISR preempts into such a thread.
+            // Rebalance it here: reaching this point means we are back in thread
+            // context.
+            if self.cpu.irq_model && pc_before == 0x3EC4_003E {
+                self.cpu.in_exception = 0;
+            }
+
             if let Some(from) = mmio_from {
                 if !self.machine.mmio_trace && pc_before == from {
                     self.machine.mmio_trace = true;
@@ -482,6 +498,35 @@ impl Emulator {
             self.machine.watch_pc = pc_before;
             let step = self.cpu.step(&mut self.machine);
             self.machine.tick(1);
+
+            // Periodic ThreadX tick. Real hardware's timer interrupt fires each
+            // period and preempts whatever is running, so a service thread that
+            // loops on `msleep` (`do_step`, `0x3ED5766E`) — busy-waiting in the
+            // `0x3ED7BD2C` fallback or blocked in `tx_thread_sleep` — is resumed
+            // and lower-priority work (arm_loader) proceeds. The model otherwise
+            // only fakes a timer IRQ on the `sleep` instruction. When a compare
+            // deadline has been crossed, we are not already in a handler, and
+            // interrupts are enabled (`ei`), vector into the tick ISR.
+            let tick_due = self.machine.systimer.take_tick_pending();
+            if self.cpu.irq_model
+                && tick_due
+                && self.cpu.in_exception == 0
+                && self.cpu.irq_enabled()
+            {
+                if let Some(slot) = self.machine.timer_tick_slot() {
+                    if dbg_tick {
+                        tick_deliveries += 1;
+                        if tick_deliveries <= 30 || tick_deliveries % 500 == 0 {
+                            eprintln!(
+                                "[tick] #{tick_deliveries} slot={slot} resume={:#x} retired={}",
+                                self.cpu.pc(),
+                                self.cpu.retired,
+                            );
+                        }
+                    }
+                    self.cpu.vector_irq(&mut self.machine, slot);
+                }
+            }
 
             if self.machine.mmio_trace && !self.machine.mmio_events.is_empty() {
                 for (addr, w, val, write) in self.machine.mmio_events.drain(..) {
