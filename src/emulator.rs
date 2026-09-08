@@ -507,24 +507,44 @@ impl Emulator {
             // only fakes a timer IRQ on the `sleep` instruction. When a compare
             // deadline has been crossed, we are not already in a handler, and
             // interrupts are enabled (`ei`), vector into the tick ISR.
+            // On real hardware `_tx_timer_interrupt` runs each tick and, when a
+            // sleeping thread's timeout is due, `_tx_timer_expiration_process`
+            // simply `_tx_thread_system_resume(&_tx_timer_thread)` — waking the
+            // dedicated system-timer thread ("SysTimer", priority 0), which then
+            // walks the delta list and resumes each expired sleeper. The model
+            // never drives this, so a thread blocked in `tx_thread_sleep` (e.g.
+            // `do_step` / `0x3ED5766E`) never wakes. Emulate the effect: when a
+            // compare has fired and SysTimer is suspended, plain-call
+            // `_tx_thread_system_resume(SysTimer_tcb)` — real firmware code that
+            // marks it ready; the model's cooperative scheduler then runs it.
             let tick_due = self.machine.systimer.take_tick_pending();
             if self.cpu.irq_model
                 && tick_due
                 && self.cpu.in_exception == 0
                 && self.cpu.irq_enabled()
+                && self.cpu.exc_vbase != 0
             {
-                if let Some(slot) = self.machine.timer_tick_slot() {
+                const SYSTIMER_TCB: u32 = 0x3EE3_59A0;
+                const SYSTIMER_STATE: u32 = SYSTIMER_TCB + 0x34;
+                const TX_THREAD_SYSTEM_RESUME: u32 = 0x3EC4_02D2;
+                const TX_SUSPENDED: u32 = 3;
+                let magic = self.machine.load(SYSTIMER_TCB, Width::Word).unwrap_or(0);
+                let state = self.machine.load(SYSTIMER_STATE, Width::Word).unwrap_or(0);
+                if magic == 0x5448_5244 && state == TX_SUSPENDED {
                     if dbg_tick {
                         tick_deliveries += 1;
                         if tick_deliveries <= 30 || tick_deliveries % 500 == 0 {
                             eprintln!(
-                                "[tick] #{tick_deliveries} slot={slot} resume={:#x} retired={}",
+                                "[tick] #{tick_deliveries} resume SysTimer, at pc={:#x} retired={}",
                                 self.cpu.pc(),
                                 self.cpu.retired,
                             );
                         }
                     }
-                    self.cpu.vector_irq(&mut self.machine, slot);
+                    let resume = self.cpu.pc();
+                    self.cpu.regs.set(0, SYSTIMER_TCB);
+                    self.cpu.regs.set(26, resume);
+                    self.cpu.regs.pc = TX_THREAD_SYSTEM_RESUME;
                 }
             }
 
