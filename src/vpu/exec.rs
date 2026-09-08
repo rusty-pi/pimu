@@ -149,6 +149,40 @@ impl Vpu {
         Step::Stopped
     }
 
+    /// Advance the system timer to its next armed compare and, if that raises an
+    /// enabled interrupt source, vector into the firmware's handler — pushing SR
+    /// and the current `pc` as the resume address, exactly like `swi` (so the
+    /// handler's `rti` unwinds). No-op if already in an exception, if no vector
+    /// table is configured, or if nothing is armed. Shared by the `sleep`
+    /// instruction and the `msleep` yield shim.
+    pub fn deliver_timer_irq(&mut self, bus: &mut dyn Bus) {
+        if self.in_exception != 0 || self.exc_vbase == 0 {
+            return;
+        }
+        let Some(slot) = bus.timer_wake() else { return };
+        let handler = bus
+            .load32(self.exc_vbase.wrapping_add(slot.wrapping_mul(4)))
+            .ok()
+            .filter(|&h| h != 0)
+            .map(|h| h & !1);
+        if let Some(mut h) = handler {
+            // start4's dispatching vector stubs begin with a `0x0000` guard
+            // parcel; the stub body follows.
+            if bus.load16(h) == Ok(0x0000) {
+                h = h.wrapping_add(2);
+            }
+            let resume = self.regs.pc;
+            let sp = self.regs.get(SP).wrapping_sub(8);
+            if bus.store32(sp, self.regs.sr).is_ok()
+                && bus.store32(sp.wrapping_add(4), resume).is_ok()
+            {
+                self.regs.set(SP, sp);
+                self.in_exception = self.in_exception.wrapping_add(1);
+                self.regs.pc = h;
+            }
+        }
+    }
+
     /// Fetch the instruction bytes at `pc` into a 10-byte buffer.
     fn fetch(&self, bus: &mut dyn Bus, pc: u32) -> Result<([u8; 10], u8), BusError> {
         let p0 = bus.load16(pc)?;
@@ -198,35 +232,10 @@ impl Vpu {
                 // or spin detector ends things cleanly. Otherwise halt.
                 if matches!(self.on_unimpl, UnimplPolicy::Skip) {
                     self.regs.pc = next;
-                    // `sleep` = wait for an interrupt. Ask the bus to advance to
-                    // the next armed timer compare; if that raises an enabled
-                    // interrupt source, dispatch through the firmware's vector
-                    // table (same stack frame convention as `swi`: push SR then
-                    // the resume address, so the handler's `rti` unwinds).
-                    if self.in_exception == 0 && self.exc_vbase != 0 {
-                        if let Some(slot) = bus.timer_wake() {
-                            let handler = bus
-                                .load32(self.exc_vbase.wrapping_add(slot.wrapping_mul(4)))
-                                .ok()
-                                .filter(|&h| h != 0)
-                                .map(|h| h & !1);
-                            if let Some(mut h) = handler {
-                                // start4's dispatching vector stubs begin with a
-                                // `0x0000` guard parcel; the stub body follows.
-                                if bus.load16(h) == Ok(0x0000) {
-                                    h = h.wrapping_add(2);
-                                }
-                                let sp = self.regs.get(SP).wrapping_sub(8);
-                                if bus.store32(sp, self.regs.sr).is_ok()
-                                    && bus.store32(sp.wrapping_add(4), next).is_ok()
-                                {
-                                    self.regs.set(SP, sp);
-                                    self.in_exception = self.in_exception.wrapping_add(1);
-                                    self.regs.pc = h;
-                                }
-                            }
-                        }
-                    }
+                    // `sleep` = wait for an interrupt: advance to the next armed
+                    // timer compare and, if that raises an enabled source,
+                    // dispatch it (see [`Vpu::deliver_timer_irq`]).
+                    self.deliver_timer_irq(bus);
                 } else {
                     return self.stop(Stop::Halt(HaltReason::Sleep));
                 }
