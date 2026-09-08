@@ -209,10 +209,14 @@ impl Vpu {
 
     /// The VC4 status register value to save on an exception. With `irq_model`
     /// on this is `r30` (carrying the interrupt-enable bit, [`Op::SetIrqEnable`])
-    /// kept in sync with the `regs.sr` mirror; otherwise the legacy `regs.sr`.
+    /// with the live N/Z/C/V condition flags folded into the low nibble (SR
+    /// layout `… ZNCV`), so a handler's `rti` restores the interrupted context's
+    /// flags — ThreadX preempts threads mid-`cmp`/`b<cond>` and the tick handler
+    /// clobbers the flags in between. Without `irq_model`, the legacy `regs.sr`.
     fn sr(&mut self) -> u32 {
         if self.irq_model {
-            let v = self.regs.get(30);
+            let v = (self.regs.get(30) & !0xF) | nzcv_to_sr(self.regs.flags);
+            self.regs.set(30, v);
             self.regs.sr = v;
             v
         } else {
@@ -294,14 +298,24 @@ impl Vpu {
                 // or spin detector ends things cleanly. Otherwise halt.
                 if matches!(self.on_unimpl, UnimplPolicy::Skip) {
                     self.regs.pc = next;
-                    // `sleep` = wait for an interrupt: advance to the next armed
-                    // timer compare and, if that raises an enabled source,
-                    // dispatch it (see [`Vpu::deliver_timer_irq`]). With
-                    // `irq_model` the run loop already delivers a genuine
-                    // periodic tick through the real handler, so a second
-                    // sleep-triggered delivery here would double-vector.
                     if !self.irq_model {
+                        // `sleep` = wait for an interrupt: advance to the next
+                        // armed timer compare and, if that raises an enabled
+                        // source, dispatch it (see [`Vpu::deliver_timer_irq`]).
                         self.deliver_timer_irq(bus);
+                    } else if self.in_exception == 0 && self.exc_vbase != 0 {
+                        // The ThreadX scheduler idle loop parks here as
+                        // `sleep; di; b` — interrupts already disabled, relying
+                        // on the wake to service the pending periodic tick. The
+                        // run loop's tick delivery gates on the SR interrupt-
+                        // enable bit and so never fires once the idle loop has
+                        // run its `di`; deliver the tick here instead, jumping
+                        // the timer to its next compare so the idle loop doesn't
+                        // spin real time waiting for a wheel timeout to mature.
+                        bus.timer_fast_forward();
+                        if let Some(slot) = bus.timer_tick_slot() {
+                            self.vector_irq(bus, slot);
+                        }
                     }
                 } else {
                     return self.stop(Stop::Halt(HaltReason::Sleep));
@@ -392,6 +406,9 @@ impl Vpu {
                 self.regs.sr = sr;
                 if self.irq_model {
                     self.regs.set(30, sr);
+                    // Restore the interrupted context's condition flags from the
+                    // saved SR low nibble (see [`Vpu::sr`]).
+                    self.regs.flags = sr_to_nzcv(sr);
                 }
                 self.regs.set(SP, sp.wrapping_add(8));
                 self.regs.pc = ret;
@@ -942,6 +959,23 @@ fn nz(r: u32, carry: bool, overflow: bool) -> Flags {
         z: r == 0,
         c: carry,
         v: overflow,
+    }
+}
+
+/// Pack N/Z/C/V into the VC4 status-register low nibble. SR bit layout (per the
+/// VideoCore IV programmer's manual): `bit 0 = V`, `bit 1 = C`, `bit 2 = N`,
+/// `bit 3 = Z`.
+fn nzcv_to_sr(f: Flags) -> u32 {
+    (f.v as u32) | ((f.c as u32) << 1) | ((f.n as u32) << 2) | ((f.z as u32) << 3)
+}
+
+/// Inverse of [`nzcv_to_sr`].
+fn sr_to_nzcv(sr: u32) -> Flags {
+    Flags {
+        v: sr & 0b0001 != 0,
+        c: sr & 0b0010 != 0,
+        n: sr & 0b0100 != 0,
+        z: sr & 0b1000 != 0,
     }
 }
 

@@ -118,6 +118,14 @@ pub trait Bus {
     fn timer_tick_slot(&mut self) -> Option<u32> {
         None
     }
+
+    /// `sleep` fast-forward: jump the system timer to its next armed compare
+    /// deadline so a parked idle loop doesn't spin through millions of no-op
+    /// microseconds before a timer-wheel timeout matures. Returns `true` if a
+    /// compare was armed (and time advanced), `false` if nothing is armed.
+    fn timer_fast_forward(&mut self) -> bool {
+        false
+    }
 }
 
 /// A memory-mapped peripheral. Offsets are relative to the device's base.

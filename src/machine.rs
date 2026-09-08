@@ -325,6 +325,10 @@ impl Bus for Machine {
         self.timer_wake_impl()
     }
 
+    fn timer_fast_forward(&mut self) -> bool {
+        self.systimer.wake_to_next_match().is_some()
+    }
+
     fn timer_tick_slot(&mut self) -> Option<u32> {
         // The ThreadX periodic tick is system-timer compare channel 0 = VPU
         // interrupt source 64 (`SYS_IRQ_SRC`), which vectors *directly* to
