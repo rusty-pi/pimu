@@ -3,8 +3,8 @@
 use crate::bus::{Bus, BusError, BusResult, MmioDevice, Width};
 use crate::mem::Ram;
 use crate::periph::{
-    Aux, BootBox, Bsc, ClockManager, ConfigOtp, CoreCtl, Dma4, Emmc2, Hvs, McSync, Pl011, Pm, Sdc,
-    Sdramc, Spi0, StubRegion, SysTimer,
+    Aux, BootBox, Bsc, ClkMon, ClockManager, ConfigOtp, CoreCtl, Dma4, Emmc2, Hvs, McSync, Pl011, Pm,
+    Sdc, Sdramc, Spi0, StubRegion, SysTimer,
 };
 use crate::soc::bcm2711 as map;
 
@@ -29,6 +29,8 @@ pub struct Machine {
     pub pm: Pm,
     /// Clock manager (`0x7E10_1000`) — PLL locks always report ready.
     pub clockman: ClockManager,
+    /// VPU clock block (`0x7D5D_0000`) — PLLs + frequency monitors.
+    pub clkmon: ClkMon,
     /// SPI0 master (`0x7E20_4000`) — minimal model for the EEPROM bootloader.
     pub spi0: Spi0,
     /// BSC / I²C master at `0x7E20_5E00` + the board PMIC — start4 reads the
@@ -106,6 +108,7 @@ impl Machine {
             corectl: CoreCtl::new(),
             pm: Pm::new(),
             clockman: ClockManager::new(),
+            clkmon: ClkMon::new(),
             spi0: Spi0::new(),
             bsc_pmic: Bsc::new("bsc-pmic"),
             config_otp: ConfigOtp::new(),
@@ -163,6 +166,7 @@ impl Machine {
     fn in_mmio(addr: u32) -> bool {
         (map::PERIPH_BASE..map::PERIPH_BASE + map::PERIPH_SIZE).contains(&addr)
             || (map::SDRAMC_BASE..map::SDRAMC_BASE + map::SDRAMC_SIZE).contains(&addr)
+            || (map::CLKMON_BASE..map::CLKMON_BASE + map::CLKMON_SIZE).contains(&addr)
     }
 
     /// Fold the four VC4 cache aliases (`0x0`, `0x4000_0000`, `0x8000_0000`,
@@ -219,6 +223,9 @@ impl Machine {
         }
         if let Some(off) = hit(map::CM_BASE, map::CM_SIZE) {
             return Some((&mut self.clockman, off));
+        }
+        if let Some(off) = hit(map::CLKMON_BASE, map::CLKMON_SIZE) {
+            return Some((&mut self.clkmon, off));
         }
         if let Some(off) = hit(map::SPI0_BASE, map::SPI0_SIZE) {
             return Some((&mut self.spi0, off));
@@ -319,14 +326,6 @@ impl Bus for Machine {
     }
 
     fn load(&mut self, addr: u32, width: Width) -> BusResult<u32> {
-        // VPU clock-frequency monitor at `0x7D5D_2200` (outside the `0x7E…`
-        // peripheral window). `measure_clock` (`0x3ED7C8DA`) spins on bit 10
-        // ("measurement valid") and reads bits [9:0] as an oscillator count.
-        // We don't model the analogue measurement — report it valid with a
-        // zero count so the clock-manager calibration stops polling.
-        if addr & !0xF == 0x7D5D_2200 {
-            return Ok(0x400);
-        }
         if !Machine::in_mmio(addr) {
             let phys = Machine::fold_ram_addr(addr);
             if self.ram.contains(phys) {

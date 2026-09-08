@@ -30,12 +30,21 @@ jobs:
         run: cargo build --release
 
       - name: Simulated boot (2 min cap)
+        env:
+          # arm_loader blocks on an async-mailbox completion the model does not
+          # service; this injects the wake so it runs and emits its `MESS:` log.
+          RVF_MBOX_KICK: "0xbef6d458"
+          # gpioman never registers its pin providers in the model (the schema
+          # apply-walk is unreached) — shim it so the PMIC / clock bring-up runs.
+          RVF_GPIOMAN_SHIM: "1"
+          # stream the UART console (incl. `MESS:` lines) as it is produced.
+          RVF_LIVE_CONSOLE: "1"
         run: |
           timeout --signal=INT 120 \
             ./target/release/rpi-virt-fw recon firmware/pieeprom.bin \
               --eeprom --sd firmware/sd.img \
               --max-wall 115 --max-steps 100000000000 \
-            | tee boot.log
+            2>&1 | tee boot.log
           status=${PIPESTATUS[0]}
           echo "recon exit status: $status"
           # 124 = hit the 2-minute wall clock; that is expected, not a failure.

@@ -7,6 +7,7 @@
 pub mod aux;
 pub mod bootbox;
 pub mod bsc;
+pub mod clkmon;
 pub mod clockman;
 pub mod configotp;
 pub mod corectl;
@@ -27,6 +28,7 @@ pub mod uart_pl011;
 pub use aux::Aux;
 pub use bootbox::BootBox;
 pub use bsc::Bsc;
+pub use clkmon::ClkMon;
 pub use clockman::ClockManager;
 pub use configotp::ConfigOtp;
 pub use corectl::CoreCtl;

@@ -71,6 +71,11 @@ pub const PM_SIZE: u32 = 0x1000;
 pub const CM_BASE: u32 = 0x7E10_1000;
 pub const CM_SIZE: u32 = 0x2000;
 
+/// VPU clock block (PLLs + frequency monitors) at `0x7D5D_0000` — outside the
+/// `0x7E…` legacy window. start4's clock manager uses it on BCM2711.
+pub const CLKMON_BASE: u32 = 0x7D5D_0000;
+pub const CLKMON_SIZE: u32 = 0x0001_0000;
+
 /// GPIO (`0x7E20_0000`).
 pub const GPIO_BASE: u32 = 0x7E20_0000;
 pub const GPIO_SIZE: u32 = 0x1000;
