@@ -551,8 +551,10 @@ impl Emulator {
                     if dbg_tick {
                         tick_deliveries += 1;
                         if tick_deliveries <= 30 || tick_deliveries % 500 == 0 {
+                            let vb = self.cpu.exc_vbase;
+                            let h = self.machine.load(vb.wrapping_add(slot * 4), Width::Word);
                             eprintln!(
-                                "[tick] #{tick_deliveries} slot={slot} resume={:#x} retired={} nest={:#x}",
+                                "[tick] #{tick_deliveries} slot={slot} vbase={vb:#x} handler={h:x?} resume={:#x} retired={} nest={:#x}",
                                 self.cpu.pc(),
                                 self.cpu.retired,
                                 self.machine.load(0x3EE0_3E64, Width::Word).unwrap_or(0xdead),
