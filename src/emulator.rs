@@ -225,14 +225,25 @@ impl Emulator {
         // DEBUG `RVF_GPIOMAN_SHIM=1`: the model never runs the schema-tree
         // apply-walk that invokes `provider_register`, so gpioman's provider
         // list (`[gp+807676]`) stays 0 and every `gpioman_get_pin_num` returns
-        // -1 forever — arm_loader then wedges retrying the LED / PMIC / power
-        // bring-up. Until that registration path is modelled, synthesise pin
-        // numbers, pass the readiness gate, clear the stuck PMIC errno and skip
-        // the PMIC retry backoff so the boot can move past it. Interim hack,
-        // not a substitute for real gpioman/PMIC modelling.
+        // -1 forever. Model the real-hardware behaviour: resolve pin names from
+        // the dt-blob pin map (`load_gpioman_pins`), returning -1 + a
+        // `gpioman: gpioman_get_pin_num: pin <NAME> not defined` log only for
+        // names the dt-blob doesn't define (as real HW does for
+        // DISPLAY_DSI_PORT / SDCARD_CONTROL_POWER). Also return success from
+        // `gpioman_configure` (so it stops logging "attempt N failed" and
+        // rescheduling itself), pass the readiness gate, clear the stuck PMIC
+        // errno and skip the PMIC retry backoff so the boot can move past it.
+        // Interim hack, not a substitute for real gpioman/PMIC modelling.
         let gpioman_shim = std::env::var_os("RVF_GPIOMAN_SHIM").is_some();
         let mut gpioman_shim_seen: std::collections::HashSet<String> =
             std::collections::HashSet::new();
+        // Pin-name → definition for the `gpioman_get_pin_num` shim, from a real
+        // dt-blob when one is present (else a small built-in essential set).
+        let gpioman_pins = if gpioman_shim {
+            load_gpioman_pins()
+        } else {
+            crate::firmware::dtblob::PinMap::new()
+        };
         let dbg_tick = std::env::var_os("RVF_DBG_TICK").is_some();
         let mut tick_deliveries: u64 = 0;
         // Experiment: after the priority-1 timer ISR returns, raise the pending
@@ -438,10 +449,29 @@ impl Emulator {
                     let target = self.cpu.regs.get(6);
                     self.cpu.regs.set(3, target);
                 }
-                // `0x3ECC9C78` = gpioman_get_pin_num(name): returns -1 forever
-                // (provider list `[gp+807676]` never populated). Synthesise a
-                // pin for the LED names — the only ones retried endlessly by
-                // arm_loader's activity/power LED bring-up.
+                // `0x3ECC9878` = gpioman_configure. With the provider list
+                // unregistered (`[gp+807672/676/680]` all 0) it always takes the
+                // failure branch — `gpioman: configuration attempt N failed
+                // (error 1) - bad dt-blob.bin?` — and reschedules itself via a
+                // work-item, churning forever. Real HW configures silently. The
+                // `gpioman_get_pin_num` / readiness-gate shims already cover
+                // what the rest of the boot needs, so return success (r0 = 0)
+                // straight away and let the retry loop die.
+                if pc_before == 0x3ECC_9878 {
+                    self.cpu.regs.set(0, 0);
+                    self.cpu.regs.pc = self.cpu.regs.get(26);
+                }
+                // `0x3ECC9C78` = gpioman_get_pin_num(name): the provider list
+                // (`[gp+807676]`) is never populated, so the real function walks
+                // an empty list and returns -1 for everything. Resolve from the
+                // dt-blob pin map instead:
+                //  - name has a `number` → return it;
+                //  - name present but `type = "absent"` / no number → -1,
+                //    silently (real HW knows the name, just has no pin);
+                //  - name not in the map → -1 and log
+                //    `gpioman: gpioman_get_pin_num: pin <NAME> not defined`,
+                //    as real HW does for e.g. DISPLAY_DSI_PORT /
+                //    SDCARD_CONTROL_POWER (see examples-on-real-hardware/).
                 if pc_before == 0x3ECC_9C78 {
                     let p = self.cpu.regs.get(0);
                     let mut name = String::new();
@@ -451,21 +481,17 @@ impl Emulator {
                             Ok(c) => name.push(c as u8 as char),
                         }
                     }
-                    // dt-blob pins_4b: LEDS_DISK_ACTIVITY = GPIO 42,
-                    // LEDS_PWR_OK = 2; everything else gets a stable synthetic
-                    // pin in 34..53 (clear of the eMMC/SD lines).
-                    let pin = if name.contains("LED") {
-                        if name.contains("PWR") { 2 } else { 42 }
-                    } else {
-                        let h = name.bytes().fold(2166136261u32, |a, b| {
-                            (a ^ b as u32).wrapping_mul(16777619)
-                        });
-                        34 + (h % 20)
-                    };
-                    if gpioman_shim_seen.insert(name.clone()) {
-                        eprintln!("[gpioman-shim] {name:?} -> pin {pin}");
+                    match gpioman_pins.get(&name).and_then(|d| d.number) {
+                        Some(n) => self.cpu.regs.set(0, n),
+                        None => {
+                            if !gpioman_pins.contains_key(&name)
+                                && gpioman_shim_seen.insert(name.clone())
+                            {
+                                eprintln!("gpioman: gpioman_get_pin_num: pin {name} not defined");
+                            }
+                            self.cpu.regs.set(0, u32::MAX);
+                        }
                     }
-                    self.cpu.regs.set(0, pin);
                     self.cpu.regs.pc = self.cpu.regs.get(26);
                 }
                 // `0x3ECCA0A0` = gpioman lookup by pin number, gated on the
@@ -816,4 +842,48 @@ impl Emulator {
             phase_tags: self.machine.phase_tags.clone(),
         }
     }
+}
+
+/// Build the pin-name → definition map the `gpioman_get_pin_num` shim uses.
+///
+/// Prefers a real dt-blob — `$RVF_DT_BLOB`, else `firmware/dt-blob.bin` — so the
+/// model resolves exactly the pins the firmware would. When no dt-blob is
+/// readable/parseable it falls back to a small compiled-in set covering the
+/// pins the boot would otherwise wedge on (real HW in that case uses its
+/// built-in default table and just logs a few extra "pin not defined" lines).
+fn load_gpioman_pins() -> crate::firmware::dtblob::PinMap {
+    use crate::firmware::dtblob::{pin_map, PinDef, PinMap};
+
+    let path = std::env::var_os("RVF_DT_BLOB")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "firmware/dt-blob.bin".into());
+    if let Ok(bytes) = std::fs::read(&path) {
+        if let Some(m) = pin_map(&bytes, &["pins_4b"]) {
+            eprintln!(
+                "[gpioman-shim] pin map from {} ({} pins)",
+                path.display(),
+                m.len()
+            );
+            return m;
+        }
+    }
+
+    // Essential fallback: the activity / power LEDs are the pins arm_loader
+    // retries forever if unresolved (pins_4b numbers). Everything else the
+    // model can leave "not defined" — callers cope.
+    let mut m = PinMap::new();
+    for (name, number) in [("LEDS_DISK_ACTIVITY", 42u32), ("LEDS_PWR_OK", 2)] {
+        m.insert(
+            name.to_string(),
+            PinDef {
+                number: Some(number),
+                kind: Some("external".to_string()),
+            },
+        );
+    }
+    eprintln!(
+        "[gpioman-shim] no dt-blob; built-in essential pin set ({} pins)",
+        m.len()
+    );
+    m
 }
