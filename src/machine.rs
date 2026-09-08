@@ -71,6 +71,13 @@ pub struct Machine {
     pub mmio_trace: bool,
     pub mmio_events: Vec<(u32, u8, u32, bool)>,
 
+    /// Reconnaissance aid: when `RVF_WATCH=<hex>` is set, every store whose
+    /// word-aligned address matches is logged to stderr tagged with the current
+    /// PC (`watch_pc`, refreshed by the run loop each step). Complements
+    /// `mmio_trace` for pinning down who writes a given RAM word.
+    pub watch: Option<u32>,
+    pub watch_pc: u32,
+
     /// `start4.elf` logs boot progress by writing 4-char ASCII tags (`_msh`,
     /// `_osh`, `bfsp`, ...) to a register at `0xCEC0_2000`. We capture the
     /// sequence — it is the closest thing to an early-boot log before any UART
@@ -113,6 +120,11 @@ impl Machine {
             ram_reads: 0,
             mmio_trace: false,
             mmio_events: Vec::new(),
+            watch: std::env::var("RVF_WATCH")
+                .ok()
+                .and_then(|v| u32::from_str_radix(v.trim().trim_start_matches("0x"), 16).ok())
+                .map(|a| a & !3),
+            watch_pc: 0,
             phase_tags: Vec::new(),
         }
     }
@@ -326,6 +338,17 @@ impl Bus for Machine {
 
     fn store(&mut self, addr: u32, width: Width, value: u32) -> BusResult<()> {
         self.ram_writes = self.ram_writes.wrapping_add(1);
+        if let Some(w) = self.watch {
+            if addr & !3 == w {
+                eprintln!(
+                    "[watch] pc={:#010x} store{} {:#010x} <- {:#x}",
+                    self.watch_pc,
+                    width.bytes() * 8,
+                    addr,
+                    value
+                );
+            }
+        }
         if !Machine::in_mmio(addr) {
             let phys = Machine::fold_ram_addr(addr);
             if self.ram.contains(phys) {

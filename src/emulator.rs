@@ -224,6 +224,7 @@ impl Emulator {
                     self.machine.mmio_trace = true;
                 }
             }
+            self.machine.watch_pc = pc_before;
             let step = self.cpu.step(&mut self.machine);
             self.machine.tick(1);
 
