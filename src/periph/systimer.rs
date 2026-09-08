@@ -96,6 +96,17 @@ impl SysTimer {
         self.deadline.iter().any(Option::is_some)
     }
 
+    /// Advance the counter by `us` microseconds unconditionally, then fire any
+    /// armed compare once (`service_matches` collapses a multi-interval jump to
+    /// a single match). Unlike [`Self::skip_ahead`] this does *not* stop at the
+    /// next deadline — used to fast-forward a firmware `usleep()` that would
+    /// otherwise run in real time because the periodic tick keeps the
+    /// spin-detector from recognising it.
+    pub fn jump(&mut self, us: u64) {
+        self.micros = self.micros.saturating_add(us.max(1));
+        self.service_matches();
+    }
+
     /// Jump the microsecond counter forward by `us`, servicing any compare
     /// matches crossed. The run loop calls this when it catches the firmware
     /// busy-waiting on the counter (`while now - start < N`) so a multi-ms
