@@ -177,6 +177,26 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     // reset we rebuild from the updated image and run again.
     let mut flash = bytes.clone();
     unsign(&mut flash, true);
+
+    // Show the EEPROM section table `bootloader_eeprom_find_files` walks, plus
+    // the decoded `bootconf.txt`, so a boot that consults EEPROM config (boot
+    // order etc.) can be followed.
+    if eeprom {
+        if let Ok(img) = rpi_virt_fw::firmware::eeprom::EepromImage::parse(&flash) {
+            println!("eeprom     {} sections", img.sections.len());
+            print!("{}", img.summary());
+            if let Some(conf) = img.bootconf() {
+                for (g, k, v) in &conf.entries {
+                    let g = if g.is_empty() { "all" } else { g.as_str() };
+                    println!("           [{g}] {k}={v}");
+                }
+                if let Some(order) = conf.boot_order_names() {
+                    println!("           BOOT_ORDER: {order}");
+                }
+            }
+        }
+    }
+
     let limits = RunLimits {
         max_steps,
         max_wall: Some(std::time::Duration::from_secs(max_wall_secs)),
