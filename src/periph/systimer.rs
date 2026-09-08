@@ -95,6 +95,27 @@ impl SysTimer {
     pub fn any_armed(&self) -> bool {
         self.deadline.iter().any(Option::is_some)
     }
+
+    /// Jump the microsecond counter forward by `us`, servicing any compare
+    /// matches crossed. The run loop calls this when it catches the firmware
+    /// busy-waiting on the counter (`while now - start < N`) so a multi-ms
+    /// `usleep` doesn't spin through millions of no-op model instructions —
+    /// but never past the next armed compare, so a tick can't be skipped.
+    pub fn skip_ahead(&mut self, us: u64) {
+        let cap = self
+            .deadline
+            .iter()
+            .flatten()
+            .copied()
+            .filter(|&d| d > self.micros)
+            .min();
+        let target = self.micros.saturating_add(us.max(1));
+        self.micros = match cap {
+            Some(d) => target.min(d),
+            None => target,
+        };
+        self.service_matches();
+    }
 }
 
 impl Default for SysTimer {
