@@ -1,0 +1,50 @@
+name: simulated-boot-log
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  boot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mtools
+        run: sudo apt-get update && sudo apt-get install -y mtools
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Fetch firmware blobs
+        run: ./scripts/fetch-firmware.sh
+
+      - name: Build SD image
+        run: ./scripts/make-sd.sh
+
+      - name: Build rpi-virt-fw
+        run: cargo build --release
+
+      - name: Simulated boot (2 min cap)
+        run: |
+          timeout --signal=INT 120 \
+            ./target/release/rpi-virt-fw recon firmware/pieeprom.bin \
+              --eeprom --sd firmware/sd.img \
+              --max-wall 115 --max-steps 100000000000 \
+            | tee boot.log
+          status=${PIPESTATUS[0]}
+          echo "recon exit status: $status"
+          # 124 = hit the 2-minute wall clock; that is expected, not a failure.
+          if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
+            exit "$status"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: boot-log
+          path: boot.log
