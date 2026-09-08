@@ -44,6 +44,13 @@ pub const SDC_SIZE: u32 = 0x1000;
 pub const SPI0_BASE: u32 = 0x7E20_4000;
 pub const SPI0_SIZE: u32 = 0x18;
 
+/// BSC (I²C master) instance `start4.elf` uses for the board PMIC (slave
+/// `0x1B`), at `0x7E20_5E00`. The other BSC instances (`0x7E20_5000`,
+/// `0x7E80_4000`, …) still fall through to the stub — nothing on the boot path
+/// hangs on them.
+pub const BSC_PMIC_BASE: u32 = 0x7E20_5E00;
+pub const BSC_PMIC_SIZE: u32 = 0x20;
+
 /// Unmodelled FIFO/crypto block at `0x7E20_F000` the EEPROM bootloader polls.
 pub const FIFO_STUB_BASE: u32 = 0x7E20_F000;
 pub const FIFO_STUB_SIZE: u32 = 0x1000;
