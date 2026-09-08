@@ -221,6 +221,19 @@ impl Emulator {
             .ok()
             .and_then(|s| u32::from_str_radix(s.trim().trim_start_matches("0x"), 16).ok());
         let mut mbox_kick_at = 0u64;
+
+        // DEBUG `RVF_GPIOMAN_SHIM=1`: the model never runs the schema-tree
+        // apply-walk that invokes `provider_register`, so gpioman's provider
+        // list (`[gp+807676]`) stays 0 and every `gpioman_get_pin_num` returns
+        // -1 forever — arm_loader then wedges retrying the LED / PMIC / power
+        // bring-up. Until that registration path is modelled, synthesise pin
+        // numbers, pass the readiness gate, clear the stuck PMIC errno and skip
+        // the PMIC retry backoff so the boot can move past it. Interim hack,
+        // not a substitute for real gpioman/PMIC modelling.
+        let gpioman_shim = std::env::var_os("RVF_GPIOMAN_SHIM").is_some();
+        let mut gpioman_shim_seen: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+
         let probe = std::env::var_os("RVF_PROBE").is_some();
         let mut probe_seen: std::collections::HashSet<&'static str> = std::collections::HashSet::new();
         let mut probe_gp_n: u64 = 0;
@@ -381,6 +394,69 @@ impl Emulator {
                     }
                 }
             }
+            if gpioman_shim {
+                // `0x3ECC9C78` = gpioman_get_pin_num(name): returns -1 forever
+                // (provider list `[gp+807676]` never populated). Synthesise a
+                // pin for the LED names — the only ones retried endlessly by
+                // arm_loader's activity/power LED bring-up.
+                if pc_before == 0x3ECC_9C78 {
+                    let p = self.cpu.regs.get(0);
+                    let mut name = String::new();
+                    for i in 0..32 {
+                        match self.machine.load(p + i, Width::Byte) {
+                            Ok(0) | Err(_) => break,
+                            Ok(c) => name.push(c as u8 as char),
+                        }
+                    }
+                    // dt-blob pins_4b: LEDS_DISK_ACTIVITY = GPIO 42,
+                    // LEDS_PWR_OK = 2; everything else gets a stable synthetic
+                    // pin in 34..53 (clear of the eMMC/SD lines).
+                    let pin = if name.contains("LED") {
+                        if name.contains("PWR") { 2 } else { 42 }
+                    } else {
+                        let h = name.bytes().fold(2166136261u32, |a, b| {
+                            (a ^ b as u32).wrapping_mul(16777619)
+                        });
+                        34 + (h % 20)
+                    };
+                    if gpioman_shim_seen.insert(name.clone()) {
+                        eprintln!("[gpioman-shim] {name:?} -> pin {pin}");
+                    }
+                    self.cpu.regs.set(0, pin);
+                    self.cpu.regs.pc = self.cpu.regs.get(26);
+                }
+                // `0x3ECCA0A0` = gpioman lookup by pin number, gated on the
+                // readiness flag `[gp+4148]`; returns -1 while gpioman is not
+                // ready. Pass a plausible SoC pin straight through.
+                if pc_before == 0x3ECC_A0A0 {
+                    let n = self.cpu.regs.get(0);
+                    if n < 54 {
+                        self.cpu.regs.pc = self.cpu.regs.get(26);
+                    }
+                }
+                // `0x3EC31A6A` = a delay/backoff helper (`(r0>>4 & 0xF)` x
+                // `usleep(400 ms)` x2). The DA9090 PMIC bring-up calls it
+                // (`lr` in `0x3EC8Cxxx`) after every failed register read, and
+                // the read never succeeds because the model has no PMIC on the
+                // bit-banged GPIO I2C — so this is ~thousands of 3.2 s backoffs.
+                // Skip it for that caller so the retry at least runs at speed.
+                if pc_before == 0x3EC3_1A6A {
+                    let lr = self.cpu.regs.get(26);
+                    if (0x3EC8_C000..0x3EC8_D000).contains(&lr) {
+                        self.cpu.regs.pc = lr;
+                    }
+                }
+                // DA9090 PMIC read (`0x3EC8C4EE` reads the status byte `[r0]`):
+                // the one-time init `0x3EDA545C` leaves the global errno
+                // (`gp+328824`) == 2 and nothing in the model clears it, so
+                // every PMIC read reports a timeout. Clear it here.
+                if pc_before == 0x3EC8_C4EE {
+                    let r0 = self.cpu.regs.get(0);
+                    if self.machine.load(r0, Width::Byte).unwrap_or(0) == 2 {
+                        let _ = self.machine.store(r0, Width::Byte, 0);
+                    }
+                }
+            }
             self.machine.watch_pc = pc_before;
             let step = self.cpu.step(&mut self.machine);
             self.machine.tick(1);
@@ -525,10 +601,32 @@ impl Emulator {
                 w_output |= had_output;
                 w_steps += 1;
                 if w_steps >= win {
+                    let clo_delta =
+                        self.machine.systimer.clo_reads.wrapping_sub(clo_reads_at_window);
                     let stalled = progress_count(&self.machine) == progress_at_window
                         && self.machine.systimer.clo_reads == clo_reads_at_window;
                     if !w_output && stalled && w_hi.wrapping_sub(w_lo) <= 4096 {
                         break RunEnd::IdleSpin(w_lo);
+                    }
+                    // A window that spent >1/8 of its instructions reading the
+                    // free-running counter, with no console output, is
+                    // dominated by a firmware `usleep(n)`. The plain delay-ff
+                    // path above stalls on it because the periodic tick ISR
+                    // keeps bumping `progress` and briefly widening the PC
+                    // range. Jump the counter forward so a multi-100 ms
+                    // rail-settle delay (PMIC bring-up does several) doesn't run
+                    // in real time.
+                    if !w_output
+                        && clo_delta > win / 8
+                        && self.cpu.in_exception == 0
+                    {
+                        self.machine.systimer.jump(200_000);
+                        if std::env::var_os("RVF_DBG_FF").is_some() {
+                            eprintln!(
+                                "[ff] jump: clo_delta={clo_delta} w=[{w_lo:#x}..{w_hi:#x}] @{}",
+                                self.cpu.retired
+                            );
+                        }
                     }
                     clo_reads_at_window = self.machine.systimer.clo_reads;
                     w_lo = u32::MAX;
