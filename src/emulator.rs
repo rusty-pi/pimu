@@ -405,6 +405,14 @@ impl Emulator {
                     let target = self.cpu.regs.get(8);
                     self.cpu.regs.set(0, target);
                 }
+                // `0x3ED570C2` — the clock-manager rate-calibration loop:
+                // `r7 = measured(r3) - target(r6)`; it re-`msleep`s + re-measures
+                // while `|r7| >= 200 kHz`. Same story — the frequency monitor is
+                // stubbed, so measured never converges. Force measured = target.
+                if pc_before == 0x3ED5_70C2 {
+                    let target = self.cpu.regs.get(6);
+                    self.cpu.regs.set(3, target);
+                }
                 // `0x3ECC9C78` = gpioman_get_pin_num(name): returns -1 forever
                 // (provider list `[gp+807676]` never populated). Synthesise a
                 // pin for the LED names — the only ones retried endlessly by
