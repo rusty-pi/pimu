@@ -572,6 +572,15 @@ impl Emulator {
                     if defer_slot3 && slot == 1 {
                         slot3_pending = true;
                     }
+                    // Experiment (`RVF_TICK_CORE1`): also vector the tick on
+                    // core 1 — ThreadX-SMP may run `_tx_timer_interrupt` there.
+                    if std::env::var_os("RVF_TICK_CORE1").is_some() {
+                        if let Some(c1) = self.cpu1.as_mut() {
+                            if c1.in_exception == 0 && c1.irq_enabled() && c1.exc_vbase != 0 {
+                                c1.vector_irq(&mut self.machine, slot);
+                            }
+                        }
+                    }
                 }
             }
 
