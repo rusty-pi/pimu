@@ -2,8 +2,10 @@
 //!
 //! - [`elf32`] — `start4.elf` and the vc4boot test programs.
 //! - [`eeprom`] — `pieeprom.bin` section table + bootcode extraction.
+//! - [`dtblob`] — the VideoCore `dt-blob` pin-name map (for the gpioman shim).
 //! - `fixup4.dat` parsing arrives with M3.
 
+pub mod dtblob;
 pub mod eeprom;
 pub mod elf32;
 
