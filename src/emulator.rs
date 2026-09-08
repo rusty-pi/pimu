@@ -442,18 +442,22 @@ impl Emulator {
                 // Skip it for that caller so the retry at least runs at speed.
                 if pc_before == 0x3EC3_1A6A {
                     let lr = self.cpu.regs.get(26);
-                    if (0x3EC8_C000..0x3EC8_D000).contains(&lr) {
+                    if (0x3EC8_C000..0x3EC8_D000).contains(&lr)
+                        || (0x3EDD_2000..0x3EDD_2400).contains(&lr)
+                    {
                         self.cpu.regs.pc = lr;
                     }
                 }
-                // DA9090 PMIC read (`0x3EC8C4EE` reads the status byte `[r0]`):
-                // the one-time init `0x3EDA545C` leaves the global errno
-                // (`gp+328824`) == 2 and nothing in the model clears it, so
-                // every PMIC read reports a timeout. Clear it here.
-                if pc_before == 0x3EC8_C4EE {
+                // DA9090 PMIC read paths (`0x3EC8C4EE`, `0x3EDD22D4`,
+                // `0x3EDD2318` all read the errno byte `[r0]` = `[gp+328824]`,
+                // `>= 2` => "PMIC: timeout"): the one-time init `0x3EDA545C`
+                // leaves that global == 2 and nothing in the model clears it.
+                // Pin it to 1 — `< 2` passes the check, and unlike 0 it won't be
+                // re-stamped to 2 by `0x3EDA4EEC` (which only stamps at 0).
+                if matches!(pc_before, 0x3EC8_C4EE | 0x3EDD_22D4 | 0x3EDD_2318) {
                     let r0 = self.cpu.regs.get(0);
-                    if self.machine.load(r0, Width::Byte).unwrap_or(0) == 2 {
-                        let _ = self.machine.store(r0, Width::Byte, 0);
+                    if self.machine.load(r0, Width::Byte).unwrap_or(0) >= 2 {
+                        let _ = self.machine.store(r0, Width::Byte, 1);
                     }
                 }
             }

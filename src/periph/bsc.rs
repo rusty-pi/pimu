@@ -54,8 +54,10 @@ const S_RXF: u32 = 1 << 7;
 const S_ERR: u32 = 1 << 8;
 const S_CLKT: u32 = 1 << 9;
 
-/// The 7-bit I²C address the Pi 4 board PMIC answers to.
-pub const PMIC_ADDR: u8 = 0x1B;
+/// The 7-bit I²C addresses the Pi 4 board PMIC answers to. The DA9090 exposes
+/// two register pages on adjacent addresses (`0x1B` and `0x1E`); the firmware
+/// talks to both during rail bring-up.
+pub const PMIC_ADDRS: [u8; 2] = [0x1B, 0x1E];
 
 /// A minimal register-file I²C peripheral: byte-addressable registers with an
 /// auto-incrementing pointer, matching how the firmware drives the PMIC (write
@@ -154,7 +156,7 @@ impl Bsc {
 
     /// Run the transfer the `ST` bit just kicked off.
     fn start(&mut self) {
-        let device = (self.addr as u8 & 0x7F) == PMIC_ADDR;
+        let device = PMIC_ADDRS.contains(&(self.addr as u8 & 0x7F));
         let len = self.dlen as usize;
 
         if self.c & C_READ != 0 {
@@ -178,6 +180,12 @@ impl Bsc {
             }
             self.tx.clear();
         }
+
+        // The transfer ran to completion: every byte has moved to/from the
+        // FIFO, so `DLEN` (which the driver reads back as "bytes still
+        // outstanding" — it retries while `DLEN != expected - received`) is now
+        // zero.
+        self.dlen = 0;
 
         self.latched |= S_DONE;
         self.ta_shots = 1;
