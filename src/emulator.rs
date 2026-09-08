@@ -212,11 +212,9 @@ impl Emulator {
         let mut delay_ff_cf = (u32::MAX, u32::MAX);
         let mut progress_at_delay = progress_count(&self.machine);
 
-        // DEBUG `RVF_MBOX_KICK=<hex>`: arm_loader posts an async request through a
-        // DRAM completion object and blocks in `_tx_mutex_get(obj)` (`0x3ED651AE`)
-        // until a completer calls `_tx_mutex_put(obj)` (`0x3ED651E6`). Nothing in
-        // the model services it. When `[obj]` shows a registered waiter (a value
-        // other than 0/1), inject a `_tx_mutex_put(obj)` call from the idle loop.
+        // Interim async-mailbox shim: the real 0x7EE0 service/completer is not
+        // modeled yet. Keep this opt-in so callers cannot mistake it for the
+        // hardware queue implementation tracked by issue #3.
         let mbox_kick = std::env::var("RVF_MBOX_KICK")
             .ok()
             .and_then(|s| u32::from_str_radix(s.trim().trim_start_matches("0x"), 16).ok());
@@ -263,20 +261,15 @@ impl Emulator {
                 }
             }
             if let Some(obj) = mbox_kick {
-                // Re-arm, but not on consecutive steps (give the resumed thread
-                // time to run and re-post).
-                if pc_before == 0x3EC3_FFCA && self.cpu.retired.saturating_sub(mbox_kick_at) > 2000 {
+                if pc_before == 0x3EC3_FFCA
+                    && self.cpu.retired.saturating_sub(mbox_kick_at) > 2000
+                {
                     let held = self.machine.load(obj, Width::Word).unwrap_or(0);
                     if held != 0 && held != 1 {
                         mbox_kick_at = self.cpu.retired;
-                        // Plain call: return to the idle-loop head, r0 = obj.
                         self.cpu.regs.set(0, obj);
                         self.cpu.regs.set(26, pc_before);
                         self.cpu.regs.pc = 0x3ED6_51E6;
-                        eprintln!(
-                            "[mbox-kick] _tx_mutex_put({obj:#x}) held={held:#x} @{}",
-                            self.cpu.retired
-                        );
                     }
                 }
             }
