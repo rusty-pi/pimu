@@ -23,9 +23,12 @@ pub const SIZE: u32 = 0x0001_0000;
 
 const PASSWD: u32 = 0x5A00_0000;
 
-/// Oscillator-count monitor: bit 10 = measurement valid, `[9:0]` = count.
+/// Oscillator-count monitor: bit 10 = measurement valid, bit 4 = settled,
+/// `[9:0]` = count. `0x3ED603E2` polls for bits 10 **and** 4 (≤10 retries)
+/// before it trusts the count; `measure_clock` (`0x3ED7C8DA`) only checks
+/// bit 10.
 const FREQ_MON: u32 = 0x2200;
-const FREQ_MON_VALID: u32 = 1 << 10;
+const FREQ_MON_READY: u32 = (1 << 10) | (1 << 4);
 
 #[derive(Default)]
 pub struct ClkMon {
@@ -46,7 +49,7 @@ impl MmioDevice for ClkMon {
     fn read(&mut self, offset: u32, _width: Width) -> BusResult<u32> {
         let off = offset & !3;
         if off & !0xF == FREQ_MON {
-            return Ok(FREQ_MON_VALID);
+            return Ok(FREQ_MON_READY);
         }
         Ok(self.storage.get(&off).copied().unwrap_or(0) & !PASSWD)
     }
