@@ -243,6 +243,16 @@ impl Emulator {
         // `RVF_DEFER_SLOT3`.
         let defer_slot3 = std::env::var_os("RVF_DEFER_SLOT3").is_some();
         let mut slot3_pending = false;
+        // Experiment: instead of vectoring the ThreadX tick as a faked IRQ (which
+        // the model's cooperative scheduler can't unwind through a real context
+        // switch), plain-call start4's own tick-ISR body `0x3ED6583A` — it acks
+        // the system-timer compare and runs `[[gp+879584]+56](.., 66)`, the
+        // clock-service timeout processing that resumes `msleep`-suspended
+        // threads (`powerman` / `do_step`). `_tx_thread_schedule`'s idle loop
+        // (`0x3EC40012: sleep; di; b 0x3EC3FFCA`) re-reads the execute pointer
+        // each spin, so a thread resumed here is picked up without a faked `rti`.
+        let tick_call = std::env::var_os("RVF_TICK_CALL").is_some();
+        const TICK_ISR_BODY: u32 = 0x3ED6_583A;
 
         let probe = std::env::var_os("RVF_PROBE").is_some();
         let mut probe_seen: std::collections::HashSet<&'static str> = std::collections::HashSet::new();
@@ -549,7 +559,16 @@ impl Emulator {
                             );
                         }
                     }
-                    self.cpu.vector_irq(&mut self.machine, slot);
+                    if tick_call && slot == 1 {
+                        // Plain-call the tick-ISR body: lr = resume pc, it
+                        // returns via `pop pc` (or never returns if it switches
+                        // to a resumed thread).
+                        let resume = self.cpu.pc();
+                        self.cpu.regs.set(crate::vpu::reg::LR, resume);
+                        self.cpu.regs.pc = TICK_ISR_BODY;
+                    } else {
+                        self.cpu.vector_irq(&mut self.machine, slot);
+                    }
                     if defer_slot3 && slot == 1 {
                         slot3_pending = true;
                     }
