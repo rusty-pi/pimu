@@ -371,6 +371,19 @@ impl Vpu {
                     Ok(v) => v,
                     Err(err) => return self.stop(Stop::Fault(Fault::Bus { pc, err })),
                 };
+                if self.irq_model
+                    && std::env::var_os("RVF_DBG_TICK").is_some()
+                    && !(0x3E00_0000..0x3F00_0000).contains(&ret)
+                {
+                    eprintln!(
+                        "[rti-bad] pc={pc:#x} sp={sp:#x} -> ret={ret:#x} sr={sr:#x} nest={} frame=[{:#x} {:#x} {:#x} {:#x}]",
+                        self.in_exception,
+                        bus.load32(sp).unwrap_or(0),
+                        bus.load32(sp.wrapping_add(4)).unwrap_or(0),
+                        bus.load32(sp.wrapping_add(8)).unwrap_or(0),
+                        bus.load32(sp.wrapping_add(12)).unwrap_or(0),
+                    );
+                }
                 self.regs.sr = sr;
                 if self.irq_model {
                     self.regs.set(30, sr);
