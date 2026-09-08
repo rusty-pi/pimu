@@ -395,6 +395,16 @@ impl Emulator {
                 }
             }
             if gpioman_shim {
+                // `0x3EC307DA` PLL frequency-tuning loop: `r6 = get_pll_freq(id)`
+                // (`0x3EC300CE`), and while `r6 != r8` (the target) it re-sets
+                // the divider, `msleep(300)` and re-measures. We don't model the
+                // analogue PLL / frequency counter, so the measured value never
+                // reaches the target and the loop spins. Force the just-measured
+                // value (`r0`, about to land in `r6`) to the target.
+                if pc_before == 0x3EC3_07F8 {
+                    let target = self.cpu.regs.get(8);
+                    self.cpu.regs.set(0, target);
+                }
                 // `0x3ECC9C78` = gpioman_get_pin_num(name): returns -1 forever
                 // (provider list `[gp+807676]` never populated). Synthesise a
                 // pin for the LED names — the only ones retried endlessly by
