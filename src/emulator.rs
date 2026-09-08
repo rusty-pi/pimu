@@ -174,6 +174,11 @@ impl Emulator {
         // that substring appears in the console — for pinning down a code path
         // by the log line that precedes it.
         let trace_on_console = std::env::var("RVF_TRACE_ON_CONSOLE").ok();
+        let trace_on_cap: usize = std::env::var("RVF_TRACE_CAP")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(300_000);
+        let trace_on_cf = std::env::var_os("RVF_TRACE_CF").is_some();
         let mut console_seen = 0usize;
 
         // Spin detection: over a sliding window of steps, track the min/max PC
@@ -217,6 +222,7 @@ impl Emulator {
             .and_then(|s| u32::from_str_radix(s.trim().trim_start_matches("0x"), 16).ok());
         let mut mbox_kick_at = 0u64;
         let probe = std::env::var_os("RVF_PROBE").is_some();
+        let mut probe_seen: std::collections::HashSet<&'static str> = std::collections::HashSet::new();
 
         let mut core1_end: Option<RunEnd> = None;
         let end = loop {
@@ -287,6 +293,13 @@ impl Emulator {
                         self.cpu.regs.get(26),
                         self.cpu.regs.get(0),
                     );
+                    if probe_seen.insert(t) {
+                        eprintln!("[probe]   cf_trace tail for first {t}:");
+                        let cf = &self.cpu.cf_trace;
+                        for &(from, to) in cf.iter().skip(cf.len().saturating_sub(48)) {
+                            eprintln!("[probe]     {from:#010x} -> {to:#010x}");
+                        }
+                    }
                 }
             }
             self.machine.watch_pc = pc_before;
@@ -363,8 +376,8 @@ impl Emulator {
                     if String::from_utf8_lossy(&console[from..]).contains(needle.as_str()) {
                         self.cpu.trace = true;
                         self.cpu.trace_armed = true;
-                        self.cpu.trace_cf_only = false;
-                        self.cpu.trace_cap = 300_000;
+                        self.cpu.trace_cf_only = trace_on_cf;
+                        self.cpu.trace_cap = trace_on_cap;
                     }
                     console_seen = console.len();
                 }
