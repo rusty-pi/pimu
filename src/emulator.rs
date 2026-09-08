@@ -216,6 +216,7 @@ impl Emulator {
             .ok()
             .and_then(|s| u32::from_str_radix(s.trim().trim_start_matches("0x"), 16).ok());
         let mut mbox_kick_at = 0u64;
+        let probe = std::env::var_os("RVF_PROBE").is_some();
 
         let mut core1_end: Option<RunEnd> = None;
         let end = loop {
@@ -257,6 +258,35 @@ impl Emulator {
                             self.cpu.retired
                         );
                     }
+                }
+            }
+            if probe {
+                // Recon: gpioman config path. `0x3ECC9878` = gpioman_configure,
+                // `0x3ECC9EC4` = provider_register (links a node into the pin
+                // list `[gp+807676]`), `0x3ECC9DC4` = the never-called flag
+                // setter. Log entry with the state words that decide the branch.
+                let tag = match pc_before {
+                    0x3ECC_9878 => Some("gpioman_configure"),
+                    0x3ECC_9EC4 => Some("provider_register"),
+                    0x3ECC_9DC4 => Some("flag_setter"),
+                    0x3ECC_9D78 => Some("faillog+retry_sched"),
+                    0x3ECC_93AC => Some("apply"),
+                    _ => None,
+                };
+                if let Some(t) = tag {
+                    let gp = self.cpu.regs.get(24);
+                    let mut l = |o: u32| {
+                        self.machine
+                            .load(gp.wrapping_add(o), Width::Word)
+                            .unwrap_or(0xdead)
+                    };
+                    let (a, b, c, d) = (l(807672), l(807676), l(807680), l(839404));
+                    eprintln!(
+                        "[probe] {t} @{} lr={:#x} r0={:#x} [gp+807672]={a:#x} [gp+807676]={b:#x} [gp+807680]={c:#x} [gp+839404]={d:#x}",
+                        self.cpu.retired,
+                        self.cpu.regs.get(26),
+                        self.cpu.regs.get(0),
+                    );
                 }
             }
             self.machine.watch_pc = pc_before;
