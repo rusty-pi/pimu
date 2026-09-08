@@ -296,8 +296,13 @@ impl Vpu {
                     self.regs.pc = next;
                     // `sleep` = wait for an interrupt: advance to the next armed
                     // timer compare and, if that raises an enabled source,
-                    // dispatch it (see [`Vpu::deliver_timer_irq`]).
-                    self.deliver_timer_irq(bus);
+                    // dispatch it (see [`Vpu::deliver_timer_irq`]). With
+                    // `irq_model` the run loop already delivers a genuine
+                    // periodic tick through the real handler, so a second
+                    // sleep-triggered delivery here would double-vector.
+                    if !self.irq_model {
+                        self.deliver_timer_irq(bus);
+                    }
                 } else {
                     return self.stop(Stop::Halt(HaltReason::Sleep));
                 }
