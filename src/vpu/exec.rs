@@ -787,6 +787,20 @@ impl Vpu {
         if !self.is_stopped() {
             self.retired += 1;
             if self.regs.pc != next {
+                // Reconnaissance: flag the exact instruction that first jumps
+                // out of start4's code range (a derail — bad computed branch,
+                // corrupt return address). `RVF_DBG_DERAIL=1`.
+                let in_code = |a: u32| (0x3E00_0000..0x3F00_0000).contains(&a);
+                if in_code(pc) && !in_code(self.regs.pc) && self.core_id == 0 {
+                    if std::env::var_os("RVF_DBG_DERAIL").is_some() {
+                        eprintln!(
+                            "[derail] {pc:#x} ({:?}) -> {:#x}  regs r0-9: {:08x?}",
+                            insn.op,
+                            self.regs.pc,
+                            &(0..10).map(|i| self.regs.get(i)).collect::<Vec<_>>(),
+                        );
+                    }
+                }
                 // A taken control transfer. Keep a bounded ring for tracing;
                 // collapse an immediately-repeating transfer (tight loop /
                 // memset) into a single entry with a count so the ring keeps
