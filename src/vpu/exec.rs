@@ -643,6 +643,22 @@ impl Vpu {
                     }
                     UnimplPolicy::Skip => {
                         self.skipped += 1;
+                        // VC4 libc `memcpy` (`0x3EDA28C0`) vectorises its aligned
+                        // bulk copy with `v32` vld/vst (`0x3EDA28F2` load,
+                        // `0x3EDA2904` store) the model doesn't decode — skipping
+                        // them silently corrupts every large aligned copy (e.g.
+                        // gpioman's built-in dt-blob). Emulate the copy at the
+                        // store: `r1` has been advanced past the chunk, `r3` still
+                        // points at its start, `r0` counts 64-byte rows.
+                        if pc == 0x3EDA_2904 {
+                            let n = self.regs.get(0).wrapping_shl(6);
+                            let dst = self.regs.get(3);
+                            let src = self.regs.get(1).wrapping_sub(n);
+                            for i in 0..n {
+                                let b = bus.load8(src.wrapping_add(i)).unwrap_or(0);
+                                let _ = bus.store8(dst.wrapping_add(i), b);
+                            }
+                        }
                         self.regs.pc = next;
                     }
                 }
