@@ -237,6 +237,12 @@ impl Emulator {
             std::collections::HashSet::new();
         let dbg_tick = std::env::var_os("RVF_DBG_TICK").is_some();
         let mut tick_deliveries: u64 = 0;
+        // Experiment: after the priority-1 timer ISR returns, raise the pending
+        // lower-priority software interrupt (vector slot 3) — start4's deferred
+        // reschedule path that runs `_tx_timer_interrupt` proper. Gated on
+        // `RVF_DEFER_SLOT3`.
+        let defer_slot3 = std::env::var_os("RVF_DEFER_SLOT3").is_some();
+        let mut slot3_pending = false;
 
         let probe = std::env::var_os("RVF_PROBE").is_some();
         let mut probe_seen: std::collections::HashSet<&'static str> = std::collections::HashSet::new();
@@ -544,7 +550,30 @@ impl Emulator {
                         }
                     }
                     self.cpu.vector_irq(&mut self.machine, slot);
+                    if defer_slot3 && slot == 1 {
+                        slot3_pending = true;
+                    }
                 }
+            }
+
+            // Deferred software interrupt: once the priority-1 timer ISR has
+            // unwound back to thread context, vector the pending slot-3 SW IRQ.
+            if defer_slot3
+                && slot3_pending
+                && self.cpu.irq_model
+                && self.cpu.in_exception == 0
+                && self.cpu.irq_enabled()
+                && self.cpu.exc_vbase != 0
+            {
+                slot3_pending = false;
+                if dbg_tick {
+                    eprintln!(
+                        "[slot3] deferred SW IRQ at resume={:#x} retired={}",
+                        self.cpu.pc(),
+                        self.cpu.retired,
+                    );
+                }
+                self.cpu.vector_irq(&mut self.machine, 3);
             }
 
             if self.machine.mmio_trace && !self.machine.mmio_events.is_empty() {
