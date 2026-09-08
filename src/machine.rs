@@ -264,11 +264,11 @@ impl Machine {
     /// return the interrupt vector-table slot if the firmware has enabled that
     /// timer source (`enable_irq_source(SYS_IRQ_SRC + channel, prio)`).
     fn timer_wake_impl(&mut self) -> Option<u32> {
-        // Don't stack a second tick while the handler is still working through
-        // the last one.
-        if self.bootbox.irq_pending() {
-            return None;
-        }
+        // The caller (`Op::Sleep`) only asks while not already in an exception,
+        // so the previous tick's handler has returned. The slot-1 ThreadX tick
+        // ISR acks the BCM system timer directly (writes the CS match bit at
+        // `0x3ED65846`), never the `0x7EE0_1080` VPU-dispatch window — so gating
+        // on `bootbox.irq_pending()` here wedged the tick after the first one.
         let _ch = self.systimer.wake_to_next_match()?;
         // start4 routes the ThreadX tick to interrupt source 66 (its handler at
         // 0x3ED6583A acks system-timer CS and calls the tick with source id 66).
