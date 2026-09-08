@@ -267,6 +267,61 @@ impl Emulator {
                 }
             }
             if probe {
+                // PMIC I²C retry loop: `0x3EDD21A0` checks the I²C call's return
+                // (`r6`) — 0 == success, anything else retries until a 1 s
+                // timeout. Log what the model's BSC is handing back.
+                if pc_before == 0x3EDD_21A0 {
+                    eprintln!(
+                        "[probe] pmic i2c ret r6={:#x} @{}",
+                        self.cpu.regs.get(6),
+                        self.cpu.retired
+                    );
+                }
+                // `0x3EDD22D4`: reads the transfer-status byte `[r0+0]`; `>= 2`
+                // => "PMIC: timeout reading reg" at `0x3EDD22E4`.
+                if pc_before == 0x3EDD_22D4 {
+                    let r0 = self.cpu.regs.get(0);
+                    let st = self.machine.load(r0, Width::Word).unwrap_or(0xdead);
+                    eprintln!(
+                        "[probe] pmic status @{r0:#x} = {st:#x}  retired={}",
+                        self.cpu.retired
+                    );
+                }
+                // DA9090 driver: `0x3EC8C4C0` pmic_read entry, `0x3EC8C4EE`
+                // reads the thread status byte `[r0]` (>= 2 => timeout log at
+                // `0x3EC8C4FE`).
+                if pc_before == 0x3EC8_C4C0 {
+                    eprintln!(
+                        "[probe] da9090 pmic_read entry r6={:#x} @{}",
+                        self.cpu.regs.get(6),
+                        self.cpu.retired
+                    );
+                }
+                if pc_before == 0x3EC8_C4EE {
+                    let r0 = self.cpu.regs.get(0);
+                    let b = self.machine.load(r0, Width::Byte).unwrap_or(0xdead);
+                    eprintln!("[probe] da9090 status byte @{r0:#x} = {b:#x}");
+                    // HACK: the one-time init at `0x3EDA545C` leaves the global
+                    // errno (`gp+328824`) == 2 and nothing in the model clears
+                    // it; the DA9090 PMIC read then reads it as a timeout. Clear
+                    // it here so a successful I2C read isn't masked.
+                    if std::env::var_os("RVF_PMIC_HACK").is_some() && b == 2 {
+                        let _ = self.machine.store(r0, Width::Byte, 0);
+                        eprintln!("[probe]   -> forced errno 0");
+                    }
+                }
+                // `0x3EDA4EEC` — the "record an error" helper. When called with
+                // r1 = &global_errno and *errno == 0 it stamps errno = 2.
+                if pc_before == 0x3EDA_4EEC && self.cpu.regs.get(1) == 0x3EE5_3198 {
+                    let lr = self.cpu.regs.get(26);
+                    eprintln!(
+                        "[probe] errno-set caller lr={lr:#x} r0={:#x} @{}",
+                        self.cpu.regs.get(0),
+                        self.cpu.retired
+                    );
+                }
+            }
+            if probe {
                 // Recon: gpioman config path. `0x3ECC9878` = gpioman_configure,
                 // `0x3ECC9EC4` = provider_register (links a node into the pin
                 // list `[gp+807676]`), `0x3ECC9DC4` = the never-called flag
