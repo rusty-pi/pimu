@@ -3,7 +3,7 @@
 use crate::bus::{Bus, BusError, BusResult, MmioDevice, Width};
 use crate::mem::Ram;
 use crate::periph::{
-    Aux, BootBox, ClockManager, ConfigOtp, CoreCtl, Dma4, Emmc2, Hvs, McSync, Pl011, Pm, Sdc,
+    Aux, BootBox, Bsc, ClockManager, ConfigOtp, CoreCtl, Dma4, Emmc2, Hvs, McSync, Pl011, Pm, Sdc,
     Sdramc, Spi0, StubRegion, SysTimer,
 };
 use crate::soc::bcm2711 as map;
@@ -31,6 +31,9 @@ pub struct Machine {
     pub clockman: ClockManager,
     /// SPI0 master (`0x7E20_4000`) — minimal model for the EEPROM bootloader.
     pub spi0: Spi0,
+    /// BSC / I²C master at `0x7E20_5E00` + the board PMIC — start4 reads the
+    /// PMIC over this on its way to bringing up the "external" GPIO pins.
+    pub bsc_pmic: Bsc,
     /// Always-on config / OTP engine (`0x7E20_F000`) — board identity reads.
     pub config_otp: ConfigOtp,
     /// LPDDR4 controller + PHY (`0x7DC0_0000`, below the peripheral window) —
@@ -104,6 +107,7 @@ impl Machine {
             pm: Pm::new(),
             clockman: ClockManager::new(),
             spi0: Spi0::new(),
+            bsc_pmic: Bsc::new("bsc-pmic"),
             config_otp: ConfigOtp::new(),
             sdramc: Sdramc::new(),
             sdc: Sdc::new(),
@@ -217,6 +221,9 @@ impl Machine {
         }
         if let Some(off) = hit(map::SPI0_BASE, map::SPI0_SIZE) {
             return Some((&mut self.spi0, off));
+        }
+        if let Some(off) = hit(map::BSC_PMIC_BASE, map::BSC_PMIC_SIZE) {
+            return Some((&mut self.bsc_pmic, off));
         }
         if let Some(off) = hit(map::FIFO_STUB_BASE, map::FIFO_STUB_SIZE) {
             return Some((&mut self.config_otp, off));
