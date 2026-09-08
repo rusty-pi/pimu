@@ -325,6 +325,27 @@ impl Bus for Machine {
         self.timer_wake_impl()
     }
 
+    fn timer_tick_slot(&mut self) -> Option<u32> {
+        // The ThreadX periodic tick is system-timer compare channel 0 = VPU
+        // interrupt source 64 (`SYS_IRQ_SRC`), which vectors *directly* to
+        // handler-table entry 64 (`exc_vbase + 64*4`, holding `0x3EC40B7C`) —
+        // not through a priority stub. That handler acks CS ch0, computes
+        // `elapsed = CLO - <idle timestamp @ [r29+0]>`, advances the 32-bucket
+        // timer wheel and resumes the SysTimer thread, which then wakes every
+        // `msleep`-suspended thread whose timeout is due.
+        //
+        // Verified on rpi-dev with an instrumented `start4.elf` (issue #7): the
+        // only subsystem-driven `_tx_thread_system_resume` during boot is
+        // SysTimer (~800x), always called from `0x3EC40D1A` inside `0x3EC40B7C`.
+        if !self.systimer.any_armed() {
+            return None;
+        }
+        std::env::var("RVF_TICK_SLOT")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .or(Some(crate::periph::corectl::SYS_IRQ_SRC))
+    }
+
     fn load(&mut self, addr: u32, width: Width) -> BusResult<u32> {
         if !Machine::in_mmio(addr) {
             let phys = Machine::fold_ram_addr(addr);

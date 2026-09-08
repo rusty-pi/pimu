@@ -306,6 +306,11 @@ pub enum Op {
     Nop,
     Bkpt,
     Sleep,
+    /// `ei` / `di` — enable / disable interrupts. The model tracks only the
+    /// interrupt-enable bit (SR / `r30` bit 30); firmware `msleep`
+    /// (`0x3ED6504C`) reads it (`mov rX, r30; btest rX, #30`) to choose the
+    /// yield-to-scheduler path over a CLO busy-wait.
+    SetIrqEnable(bool),
     /// Return from interrupt (pops SR and PC).
     Rti,
     /// Software interrupt / syscall. `vector` is the trap number.
@@ -491,6 +496,8 @@ impl Op {
             Nop => "nop".into(),
             Bkpt => "bkpt".into(),
             Sleep => "sleep".into(),
+            SetIrqEnable(true) => "ei".into(),
+            SetIrqEnable(false) => "di".into(),
             Rti => "rti".into(),
             Swi { .. } => "swi".into(),
             BranchReg { link, .. } => if *link { "bl" } else { "b" }.into(),

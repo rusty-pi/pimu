@@ -129,6 +129,7 @@ impl Emulator {
         c1.trace_cf_only = self.cpu.trace_cf_only;
         c1.trace_cap = self.cpu.trace_cap;
         c1.trace_from = self.cpu.trace_from;
+        c1.irq_model = self.cpu.irq_model;
         self.cpu1 = Some(c1);
     }
 
@@ -143,6 +144,7 @@ impl Emulator {
         c1.trace_cf_only = self.cpu.trace_cf_only;
         c1.trace_cap = self.cpu.trace_cap;
         c1.trace_from = self.cpu.trace_from;
+        c1.irq_model = self.cpu.irq_model;
         self.cpu1 = Some(c1);
     }
 
@@ -231,6 +233,24 @@ impl Emulator {
         let gpioman_shim = std::env::var_os("RVF_GPIOMAN_SHIM").is_some();
         let mut gpioman_shim_seen: std::collections::HashSet<String> =
             std::collections::HashSet::new();
+        let dbg_tick = std::env::var_os("RVF_DBG_TICK").is_some();
+        let mut tick_deliveries: u64 = 0;
+        // Experiment: after the priority-1 timer ISR returns, raise the pending
+        // lower-priority software interrupt (vector slot 3) — start4's deferred
+        // reschedule path that runs `_tx_timer_interrupt` proper. Gated on
+        // `RVF_DEFER_SLOT3`.
+        let defer_slot3 = std::env::var_os("RVF_DEFER_SLOT3").is_some();
+        let mut slot3_pending = false;
+        // Experiment: instead of vectoring the ThreadX tick as a faked IRQ (which
+        // the model's cooperative scheduler can't unwind through a real context
+        // switch), plain-call start4's own tick-ISR body `0x3ED6583A` — it acks
+        // the system-timer compare and runs `[[gp+879584]+56](.., 66)`, the
+        // clock-service timeout processing that resumes `msleep`-suspended
+        // threads (`powerman` / `do_step`). `_tx_thread_schedule`'s idle loop
+        // (`0x3EC40012: sleep; di; b 0x3EC3FFCA`) re-reads the execute pointer
+        // each spin, so a thread resumed here is picked up without a faked `rti`.
+        let tick_call = std::env::var_os("RVF_TICK_CALL").is_some();
+        const TICK_ISR_BODY: u32 = 0x3ED6_583A;
 
         let probe = std::env::var_os("RVF_PROBE").is_some();
         let mut probe_seen: std::collections::HashSet<&'static str> = std::collections::HashSet::new();
@@ -255,6 +275,18 @@ impl Emulator {
             }
 
             let pc_before = self.cpu.pc();
+
+            // `_tx_thread_schedule`'s *solicited* context restore (`0x3EC40034`
+            // → `bx r26` at `0x3EC4003E`) resumes a thread that yielded via a
+            // ThreadX call — it does NOT `rti`, so the model's `in_exception`
+            // depth (bumped on the faked timer IRQ, dropped by `Op::Rti`) would
+            // stay stuck above 0 after the tick ISR preempts into such a thread.
+            // Rebalance it here: reaching this point means we are back in thread
+            // context.
+            if self.cpu.irq_model && pc_before == 0x3EC4_003E {
+                self.cpu.in_exception = 0;
+            }
+
             if let Some(from) = mmio_from {
                 if !self.machine.mmio_trace && pc_before == from {
                     self.machine.mmio_trace = true;
@@ -398,6 +430,14 @@ impl Emulator {
                     let target = self.cpu.regs.get(8);
                     self.cpu.regs.set(0, target);
                 }
+                // `0x3ED570C2` — the clock-manager rate-calibration loop:
+                // `r7 = measured(r3) - target(r6)`; it re-`msleep`s + re-measures
+                // while `|r7| >= 200 kHz`. Same story — the frequency monitor is
+                // stubbed, so measured never converges. Force measured = target.
+                if pc_before == 0x3ED5_70C2 {
+                    let target = self.cpu.regs.get(6);
+                    self.cpu.regs.set(3, target);
+                }
                 // `0x3ECC9C78` = gpioman_get_pin_num(name): returns -1 forever
                 // (provider list `[gp+807676]` never populated). Synthesise a
                 // pin for the LED names — the only ones retried endlessly by
@@ -465,8 +505,99 @@ impl Emulator {
                 }
             }
             self.machine.watch_pc = pc_before;
+            let exc_depth_before = self.cpu.in_exception;
             let step = self.cpu.step(&mut self.machine);
             self.machine.tick(1);
+
+            // start4's interrupt entry (`0x3ED18004`) bumps a nesting counter
+            // (`[gp+4420]`) and indexes a per-nesting IRQ record by it; the
+            // matching decrement lives in `_tx_thread_context_restore`, which
+            // the model's `rti` shortcut skips. Left uncorrected the counter
+            // grows without bound and the record index walks off into garbage
+            // after a few interrupts. Undo one increment each time an `rti`
+            // unwinds a faked interrupt.
+            if self.cpu.irq_model && self.cpu.in_exception < exc_depth_before {
+                const IRQ_NEST: u32 = 0x3EE0_3E64; // gp + 4420
+                if let Ok(n) = self.machine.load(IRQ_NEST, Width::Word) {
+                    if n > 0 && n != 0xFFFF_FFFF {
+                        let _ = self.machine.store(IRQ_NEST, Width::Word, n - 1);
+                    }
+                }
+            }
+
+            // Periodic timer interrupt. Real VC4 hardware raises an interrupt
+            // when a system-timer compare matches the free-running counter and
+            // that source is enabled; the model otherwise only fakes delivery
+            // on the `sleep` instruction, so nothing preempts a thread that
+            // busy-waits or loops on `msleep` (`do_step`, `0x3ED5766E`). Vector
+            // through the firmware's own handler exactly as `Op::Sleep` does,
+            // whenever a compare has fired, we are in thread context, and
+            // interrupts are enabled.
+            let tick_due = self.machine.systimer.take_tick_pending();
+            if self.cpu.irq_model
+                && tick_due
+                && self.cpu.in_exception == 0
+                && self.cpu.irq_enabled()
+                && self.cpu.exc_vbase != 0
+            {
+                if let Some(slot) = self.machine.timer_tick_slot() {
+                    if dbg_tick {
+                        tick_deliveries += 1;
+                        if tick_deliveries <= 30 || tick_deliveries % 500 == 0 {
+                            let vb = self.cpu.exc_vbase;
+                            let h = self.machine.load(vb.wrapping_add(slot * 4), Width::Word);
+                            eprintln!(
+                                "[tick] #{tick_deliveries} slot={slot} vbase={vb:#x} handler={h:x?} resume={:#x} retired={} nest={:#x}",
+                                self.cpu.pc(),
+                                self.cpu.retired,
+                                self.machine.load(0x3EE0_3E64, Width::Word).unwrap_or(0xdead),
+                            );
+                        }
+                    }
+                    if tick_call && slot == 1 {
+                        // Plain-call the tick-ISR body: lr = resume pc, it
+                        // returns via `pop pc` (or never returns if it switches
+                        // to a resumed thread).
+                        let resume = self.cpu.pc();
+                        self.cpu.regs.set(crate::vpu::reg::LR, resume);
+                        self.cpu.regs.pc = TICK_ISR_BODY;
+                    } else {
+                        self.cpu.vector_irq(&mut self.machine, slot);
+                    }
+                    if defer_slot3 && slot == 1 {
+                        slot3_pending = true;
+                    }
+                    // Experiment (`RVF_TICK_CORE1`): also vector the tick on
+                    // core 1 — ThreadX-SMP may run `_tx_timer_interrupt` there.
+                    if std::env::var_os("RVF_TICK_CORE1").is_some() {
+                        if let Some(c1) = self.cpu1.as_mut() {
+                            if c1.in_exception == 0 && c1.irq_enabled() && c1.exc_vbase != 0 {
+                                c1.vector_irq(&mut self.machine, slot);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Deferred software interrupt: once the priority-1 timer ISR has
+            // unwound back to thread context, vector the pending slot-3 SW IRQ.
+            if defer_slot3
+                && slot3_pending
+                && self.cpu.irq_model
+                && self.cpu.in_exception == 0
+                && self.cpu.irq_enabled()
+                && self.cpu.exc_vbase != 0
+            {
+                slot3_pending = false;
+                if dbg_tick {
+                    eprintln!(
+                        "[slot3] deferred SW IRQ at resume={:#x} retired={}",
+                        self.cpu.pc(),
+                        self.cpu.retired,
+                    );
+                }
+                self.cpu.vector_irq(&mut self.machine, 3);
+            }
 
             if self.machine.mmio_trace && !self.machine.mmio_events.is_empty() {
                 for (addr, w, val, write) in self.machine.mmio_events.drain(..) {
