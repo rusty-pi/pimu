@@ -199,6 +199,13 @@ impl Emulator {
         let mut cf_repeat = 0u64;
         let mut progress_at_cf = progress_count(&self.machine);
         let mut clo_reads_at_cf = self.machine.systimer.clo_reads;
+        // Busy-wait fast-forward: a repeating control-flow edge that only
+        // advances the system-timer counter is a firmware `usleep`
+        // (`while now - start < N`). Count the iterations and jump the timer
+        // ahead so a multi-millisecond delay doesn't eat the step budget.
+        let mut delay_ff = 0u64;
+        let mut delay_ff_cf = (u32::MAX, u32::MAX);
+        let mut progress_at_delay = progress_count(&self.machine);
 
         // DEBUG `RVF_MBOX_KICK=<hex>`: arm_loader posts an async request through a
         // DRAM completion object and blocks in `_tx_mutex_get(obj)` (`0x3ED651AE`)
@@ -348,6 +355,24 @@ impl Emulator {
                 // many iterations it takes. `max_steps` / `max_wall` still cap
                 // a pathological one.
                 let timer_polling = self.machine.systimer.clo_reads != clo_reads_at_cf;
+                // Firmware busy-wait on the free-running counter: same edge,
+                // timer advancing, nothing else changing, no output. Let it
+                // build up, then skip the counter forward a slice at a time.
+                if let Some(&cf) = self.cpu.cf_trace.last() {
+                    let p = progress_count(&self.machine);
+                    if cf == delay_ff_cf && timer_polling && !had_output && p == progress_at_delay
+                    {
+                        delay_ff += 1;
+                        if delay_ff >= 2_000 {
+                            self.machine.systimer.skip_ahead(4_000);
+                            delay_ff = 0;
+                        }
+                    } else {
+                        delay_ff = 0;
+                        delay_ff_cf = cf;
+                        progress_at_delay = p;
+                    }
+                }
                 if let Some(&cf) = self.cpu.cf_trace.last() {
                     // A bare read-only poll counts as a spin, but firmware
                     // delay/lock loops legitimately iterate 10k+ times before
