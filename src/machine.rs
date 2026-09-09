@@ -91,6 +91,8 @@ pub struct Machine {
     tick_slot_override: Option<u32>,
     /// `RVF_DBG_DMA=1`: log every control block the DMA4 channel executes.
     dbg_dma: bool,
+    /// Interrupt sources raised by peripherals, waiting to be vectored.
+    pending_irqs: std::collections::VecDeque<u32>,
     irq_slot_override: Option<u32>,
     pub watch_pc: u32,
 
@@ -152,6 +154,7 @@ impl Machine {
                 })
                 .unwrap_or_default(),
             dbg_dma: std::env::var_os("RVF_DBG_DMA").is_some(),
+            pending_irqs: std::collections::VecDeque::new(),
             tick_slot_override: std::env::var("RVF_TICK_SLOT")
                 .ok()
                 .and_then(|s| s.trim().parse().ok()),
@@ -393,6 +396,24 @@ impl Machine {
         } else {
             self.dma_legacy.finish(ch);
         }
+        // Completion interrupt. `dma_interrupt` (`0x3EC980E8`) asserts its
+        // argument is in `0x50..=0x5F` and maps it back to a channel, and the
+        // firmware's own poll loop calls it as `dma_interrupt(channel + 0x50)`
+        // (channels 11..14 fold to 0xB, >= 15 to 0xF). So the source is
+        // `0x50 + channel`, i.e. 95 for channel 15 - which is one of the
+        // sources `enable_irq_source` turns on. `dma_chan_interrupt` then runs,
+        // retires the transfer, signals its waiter and starts the next one in
+        // the queue.
+        if std::env::var_os("RVF_DMA_IRQ").is_some() {
+            let folded = if ch >= 15 {
+                0xF
+            } else if ch > 10 {
+                0xB
+            } else {
+                ch
+            };
+            self.pending_irqs.push_back(0x50 + folded as u32);
+        }
     }
 
     fn run_dma4(&mut self) {
@@ -468,6 +489,10 @@ impl Machine {
 impl Bus for Machine {
     fn timer_wake(&mut self) -> Option<u32> {
         self.timer_wake_impl()
+    }
+
+    fn take_pending_irq(&mut self) -> Option<u32> {
+        self.pending_irqs.pop_front()
     }
 
     fn take_tick_pending(&mut self) -> bool {
