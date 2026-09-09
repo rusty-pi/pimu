@@ -914,11 +914,25 @@ impl Emulator {
                 // build up, then skip the counter forward a slice at a time.
                 if let Some(&cf) = self.cpu.cf_trace.last() {
                     let p = progress_count(&self.machine);
-                    if cf == delay_ff_cf && timer_polling && !had_output && p == progress_at_delay
-                    {
+                    // Firmware `udelay` (e.g. `0x3ED7BD2C`: `while (CLO - start)
+                    // < n`) spins the same 2-instruction edge thousands of times
+                    // per call and the clock bring-up does hundreds of them —
+                    // the model's biggest time sink. Recognise it: the same
+                    // taken edge, the counter advancing, no console output. The
+                    // periodic ThreadX tick ISR fires in the middle of a long
+                    // delay and does a *bounded* amount of RAM traffic, so
+                    // tolerate a small `progress` delta (a real memcpy/memtest
+                    // in the loop would blow past it) rather than resetting.
+                    let prog_delta = p.wrapping_sub(progress_at_delay);
+                    if cf == delay_ff_cf && timer_polling && !had_output && prog_delta < 4_096 {
                         delay_ff += 1;
-                        if delay_ff >= 2_000 {
-                            self.machine.systimer.skip_ahead(4_000);
+                        progress_at_delay = p;
+                        if delay_ff >= 1_000 {
+                            // Jump (not `skip_ahead`) so one long `udelay` clears
+                            // in a few detections instead of being chopped at
+                            // every tick deadline; `service_matches` collapses
+                            // any ticks the jump skips to a single delivery.
+                            self.machine.systimer.jump(50_000);
                             delay_ff = 0;
                         }
                     } else {
