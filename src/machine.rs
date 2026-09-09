@@ -404,7 +404,7 @@ impl Machine {
         // sources `enable_irq_source` turns on. `dma_chan_interrupt` then runs,
         // retires the transfer, signals its waiter and starts the next one in
         // the queue.
-        if std::env::var_os("RVF_DMA_IRQ").is_some() {
+        {
             let folded = if ch >= 15 {
                 0xF
             } else if ch > 10 {
