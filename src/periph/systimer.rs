@@ -54,6 +54,12 @@ pub struct SysTimer {
     ///
     /// Independent of `cs` — the tick ISR acks `CS` itself.
     pending: [bool; 4],
+    /// `RVF_ONESHOT_CMP=1`: model compares as one-shot (hardware behaviour)
+    /// instead of auto-reloading them.
+    oneshot: bool,
+    /// `RVF_DBG_CMP=1`: log every compare-register arm.
+    dbg_cmp: bool,
+    arms: u64,
 }
 
 impl SysTimer {
@@ -68,6 +74,9 @@ impl SysTimer {
             interval: [DEFAULT_INTERVAL_US; 4],
             clo_reads: 0,
             pending: [false; 4],
+            oneshot: std::env::var_os("RVF_ONESHOT_CMP").is_some(),
+            dbg_cmp: std::env::var_os("RVF_DBG_CMP").is_some(),
+            arms: 0,
         }
     }
 
@@ -102,8 +111,20 @@ impl SysTimer {
         self.micros
     }
 
-    /// Set any compare channels whose deadline the counter has now reached, and
-    /// reload them for the next period.
+    /// Set any compare channels whose deadline the counter has now reached.
+    ///
+    /// Real BCM system-timer compares are **one-shot**: the channel matches
+    /// once, the firmware acks it via `CS` and writes a fresh `Cn`. There is no
+    /// auto-reload. `RVF_ONESHOT_CMP=1` models that.
+    ///
+    /// The default is still the legacy auto-reload (re-arm one retained
+    /// interval ahead), because the current tick routing never reaches
+    /// `0x3EC40B7C` — the only code that re-arms `C0` — so without a reload the
+    /// tick would stop after its first match. Auto-reload has a real cost: a
+    /// channel the firmware armed once as a one-shot timeout keeps firing
+    /// forever, and with per-channel interrupt sources that floods the CPU with
+    /// spurious `64 + channel` interrupts (channel 2 / source 66 drowning out
+    /// the channel 0 tick).
     fn service_matches(&mut self) {
         for c in 0..4 {
             let Some(mut d) = self.deadline[c] else { continue };
@@ -112,6 +133,10 @@ impl SysTimer {
             }
             self.cs |= 1 << c;
             self.pending[c] = true;
+            if self.oneshot {
+                self.deadline[c] = None;
+                continue;
+            }
             let step = self.interval[c].max(1);
             while d <= self.micros {
                 d += step;
@@ -211,6 +236,17 @@ impl MmioDevice for SysTimer {
 
     fn write(&mut self, offset: u32, _width: Width, value: u32) -> BusResult<()> {
         let arm = |st: &mut SysTimer, c: usize| {
+            if st.dbg_cmp {
+                st.arms += 1;
+                if st.arms <= 40 || st.arms % 2000 == 0 {
+                    eprintln!(
+                        "[cmp] #{} C{c} <- {value:#x} now={} delta={}",
+                        st.arms,
+                        st.micros as u32,
+                        value.wrapping_sub(st.micros as u32)
+                    );
+                }
+            }
             st.cmp[c] = value;
             // `value` is an absolute CLO compare. Derive the period from how far
             // ahead of "now" it is.

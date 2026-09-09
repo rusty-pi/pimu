@@ -458,7 +458,11 @@ impl Bus for Machine {
         // `_tx_thread_context_save` frame (`[disc][r16-r23][r0-r15][r26][SR][PC]`)
         // rather than our two-word one. Implementing that frame in
         // `Vpu::vector_irq` is the fix, and it removes `RVF_MCSYNC_RPC`.
-        if !self.systimer.any_armed() {
+        // A channel that has already matched is what we are delivering, and
+        // under one-shot compares it disarms at the moment it fires - so check
+        // "something is pending" first and only fall back to "something is
+        // armed". Testing `any_armed()` alone dropped every one-shot match.
+        if self.systimer.pending_channel().is_none() && !self.systimer.any_armed() {
             return None;
         }
         if let Some(base) = self.tick_slot_override {
