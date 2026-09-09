@@ -246,6 +246,7 @@ impl Emulator {
         };
         let dbg_tick = std::env::var_os("RVF_DBG_TICK").is_some();
         let mut tick_deliveries: u64 = 0;
+        let mut tick_skips: u64 = 0;
         // Experiment: after the priority-1 timer ISR returns, raise the pending
         // lower-priority software interrupt (vector slot 3) — start4's deferred
         // reschedule path that runs `_tx_timer_interrupt` proper. Gated on
@@ -560,6 +561,23 @@ impl Emulator {
             // whenever a compare has fired, we are in thread context, and
             // interrupts are enabled.
             let tick_due = self.machine.systimer.take_tick_pending();
+            if dbg_tick
+                && tick_due
+                && self.cpu.irq_model
+                && self.cpu.exc_vbase != 0
+                && (self.cpu.in_exception != 0 || !self.cpu.irq_enabled())
+            {
+                tick_skips += 1;
+                if tick_skips <= 20 || tick_skips % 100_000 == 0 {
+                    eprintln!(
+                        "[tick-skip #{tick_skips}] in_exc={} irq_en={} pc={:#x} retired={}",
+                        self.cpu.in_exception,
+                        self.cpu.irq_enabled(),
+                        self.cpu.pc(),
+                        self.cpu.retired,
+                    );
+                }
+            }
             if self.cpu.irq_model
                 && tick_due
                 && self.cpu.in_exception == 0

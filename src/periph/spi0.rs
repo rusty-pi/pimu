@@ -126,6 +126,10 @@ impl Spi0 {
                 self.addr = (self.addr << 8) | mosi as u32;
                 MISO_IDLE
             }
+            (4, 0x03) if std::env::var_os("RVF_DBG_SPI").is_some() => {
+                eprintln!("[spi0] READ {:#08x}", self.addr);
+                self.read_flash_byte()
+            }
             (_, 0x03) => self.read_flash_byte(),
             // FAST_READ (0x0B): 3 address bytes + 1 dummy, then data.
             (1..=3, 0x0B) => {

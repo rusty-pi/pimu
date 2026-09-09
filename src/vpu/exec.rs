@@ -586,6 +586,25 @@ impl Vpu {
                         Ok(v) => {
                             self.regs.set(rd as usize, v);
                             self.regs.pc = next;
+                            // `ld sp, (r0+8)` restores a thread's saved stack
+                            // pointer — ThreadX's `_tx_thread_schedule` /
+                            // `_tx_thread_context_restore` dispatching a thread
+                            // (`tx_thread_stack_ptr` is TCB field +8). Reaching
+                            // it while a handler is still "pending" means the
+                            // tick ISR concluded by switching threads rather
+                            // than running `rti` (the `b r26` cooperative-
+                            // restore path), so the pending-exception count
+                            // would otherwise leak and wedge periodic-tick
+                            // delivery for good. `ld sp, (r29+32)` (switch to
+                            // the ISR's own system stack) is *not* that — keep
+                            // the count until the real return.
+                            if self.irq_model
+                                && rd as usize == SP
+                                && self.in_exception != 0
+                                && matches!(addr.base, super::insn::Base::R0)
+                            {
+                                self.in_exception = 0;
+                            }
                         }
                         Err(err) => return self.stop(Stop::Fault(Fault::Bus { pc, err })),
                     }
