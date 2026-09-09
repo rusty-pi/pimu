@@ -424,7 +424,13 @@ impl Emulator {
             // is instantaneous in emulation: jump the timer straight to the
             // deadline on entry so the loop exits on its first read. Capped so a
             // garbage argument can't race sim-time away.
-            if pc_before == 0x3ED7_BD2C {
+            // `0x3ED7BD3A` is the loop body, reached once `r3 = start = CLO`
+            // has been captured (`0x3ED7BD36`) and `r1 = us` still holds the
+            // requested delay. Jump the counter a full `us` past `start` so the
+            // very next `(CLO - start) < us` check (`0x3ED7BD40`) fails and the
+            // loop exits. (Jumping on the `0x3ED7BD2C` entry instead is a no-op
+            // — `start` is captured *after* it, so the delta stays 0.)
+            if pc_before == 0x3ED7_BD3A {
                 let us = (self.cpu.regs.get(1) as u64).min(5_000_000);
                 if us != 0 {
                     self.machine.systimer.jump(us);
