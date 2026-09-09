@@ -119,11 +119,11 @@ pub trait Bus {
         None
     }
 
-    /// `sleep` fast-forward: jump the system timer to its next armed compare
-    /// deadline so a parked idle loop doesn't spin through millions of no-op
-    /// microseconds before a timer-wheel timeout matures. Returns `true` if a
-    /// compare was armed (and time advanced), `false` if nothing is armed.
-    fn timer_fast_forward(&mut self) -> bool {
+    /// Consume the "a system-timer compare has fired since last checked" flag
+    /// (see [`Self::timer_tick_slot`]). `Op::Sleep` uses this to service a
+    /// pending periodic tick that the run loop couldn't deliver because
+    /// interrupts were disabled.
+    fn take_tick_pending(&mut self) -> bool {
         false
     }
 }
