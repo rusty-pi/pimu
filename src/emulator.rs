@@ -298,6 +298,25 @@ impl Emulator {
                 *prof_hist.entry(pc_before & !0xFF).or_insert(0) += 1;
             }
 
+            // `0x3EDA28D6` is start4's optimised `memcpy(r0=dst, r1=src,
+            // r2=len)` — a leaf that returns via `bx r26`. Its bulk copy is a
+            // VC4 vector loop (`0x3EDA28F2`+, class Vector80/48) the model's
+            // scalar decoder can't execute, so it was silently skipping ~all of
+            // every copy (only the ≤3-byte scalar tail ran) and corrupting
+            // whatever it moved. Emulate the whole function here — pure memory
+            // effect, no globals touched. `dst < src` in practice (overlapping
+            // shift-down), which a forward byte copy handles correctly.
+            if pc_before == 0x3EDA_28D6 {
+                let dst = self.cpu.regs.get(0);
+                let src = self.cpu.regs.get(1);
+                let len = self.cpu.regs.get(2);
+                for i in 0..len {
+                    let b = self.machine.load(src.wrapping_add(i), Width::Byte).unwrap_or(0);
+                    let _ = self.machine.store(dst.wrapping_add(i), Width::Byte, b);
+                }
+                self.cpu.regs.pc = self.cpu.regs.get(26);
+            }
+
             // `_tx_thread_schedule`'s *solicited* context restore (`0x3EC40034`
             // → `bx r26` at `0x3EC4003E`) resumes a thread that yielded via a
             // ThreadX call — it does NOT `rti`, so the model's `in_exception`
@@ -440,6 +459,15 @@ impl Emulator {
                         }
                     }
                 }
+            }
+            if probe && matches!(pc_before, 0x3EDA_28D6 | 0x3EDA_28C0 | 0x3EDC_9E20 | 0x3EDC_9E48 | 0x3EDC_9E90) {
+                let r = |i| self.cpu.regs.get(i);
+                eprintln!(
+                    "[probe] vecmem @{pc_before:#x} lr={:#x} r0={:#x} r1={:#x} r2={:#x} r3={:#x} sp={:#x} [sp]={:#x} @{}",
+                    r(26), r(0), r(1), r(2), r(3), r(25),
+                    self.machine.load(r(25), Width::Word).unwrap_or(0xdead),
+                    self.cpu.retired,
+                );
             }
             if probe && pc_before == 0x3ED5_76C4 {
                 // do_step_inner(phase r0): log the phase + the state words it
