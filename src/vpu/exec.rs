@@ -195,6 +195,18 @@ impl Vpu {
             if bus.load16(h) == Ok(0x0000) {
                 h = h.wrapping_add(2);
             }
+            if std::env::var_os("RVF_DBG_VEC").is_some() {
+                eprintln!(
+                    "[vec] slot={slot} vbase={:#x} entry={:#x} h={h:#x} pc={:#x} sp={:#x} cur={:#x} exec={:#x} nest={}",
+                    self.exc_vbase,
+                    bus.load32(self.exc_vbase.wrapping_add(slot.wrapping_mul(4))).unwrap_or(0),
+                    self.regs.pc,
+                    self.regs.get(SP),
+                    bus.load32(0x3EE35900).unwrap_or(0),
+                    bus.load32(0x3EE35904).unwrap_or(0),
+                    self.in_exception,
+                );
+            }
             let resume = self.regs.pc;
             let sp = self.regs.get(SP).wrapping_sub(8);
             if bus.store32(sp, self.sr()).is_ok()
