@@ -414,6 +414,22 @@ impl Emulator {
                     self.machine.mmio_trace = true;
                 }
             }
+            // `0x3ED7BD2C` = start4's `udelay(r1)` primitive: `start = CLO;
+            // while (CLO - start) < r1 {}`. The clkm clock bring-up calls it
+            // hundreds of times inside tight outer loops — each call is only
+            // ~50 spin iterations so the generic delay-ff detector (which needs
+            // ~1000 identical edges) never trips, and they add up to the
+            // model's single biggest time sink (~68% of instructions in the
+            // post-config window). A pure busy-wait on the free-running counter
+            // is instantaneous in emulation: jump the timer straight to the
+            // deadline on entry so the loop exits on its first read. Capped so a
+            // garbage argument can't race sim-time away.
+            if pc_before == 0x3ED7_BD2C {
+                let us = (self.cpu.regs.get(1) as u64).min(5_000_000);
+                if us != 0 {
+                    self.machine.systimer.jump(us);
+                }
+            }
             if let Some(obj) = mbox_kick {
                 if pc_before == 0x3EC3_FFCA
                     && self.cpu.retired.saturating_sub(mbox_kick_at) > 2000
