@@ -12,6 +12,7 @@ pub mod clockman;
 pub mod configotp;
 pub mod corectl;
 pub mod dma4;
+pub mod dma_legacy;
 pub mod emmc2;
 pub mod hvs;
 pub mod mcsync;

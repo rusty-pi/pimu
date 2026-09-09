@@ -1,0 +1,170 @@
+//! Legacy BCM2711 DMA controller — 15 channels at `0x7E00_7000 + ch * 0x100`.
+//!
+//! start4 drives this for bulk memory-to-memory copies. `dma_memcpy`
+//! (`helpers/dmalib/dmalib.c`, `0x3EC981CC`) switches on length:
+//!
+//! ```text
+//! if (len < 0x400) memcpy(dst, src, len);   // scalar
+//! else             <queue a DMA transfer and block on its completion>
+//! ```
+//!
+//! so every copy of 1024 bytes or more goes through here. `dma_set_cs`
+//! (`0x3EC98E7C`) confirms the layout: `base = ch < 15 ? 0x7E007000 : 0x7EE04100`,
+//! `*(base + ch * 0x100) = flags | 1` to start.
+//!
+//! Channel registers (words): `+0x00 CS  +0x04 CONBLK_AD  +0x08 TI
+//! +0x0C SOURCE_AD  +0x10 DEST_AD  +0x14 TXFR_LEN  +0x18 STRIDE
+//! +0x1C NEXTCONBK  +0x20 DEBUG`.
+//!
+//! Control block (32 bytes): `+0x00 TI  +0x04 SOURCE_AD  +0x08 DEST_AD
+//! +0x0C TXFR_LEN  +0x10 STRIDE  +0x14 NEXTCONBK`. Note this is *not* the DMA4
+//! ("dma40") layout — channel 11 is modelled separately by [`Dma4`], which the
+//! address decoder keeps ahead of this device.
+//!
+//! [`Dma4`]: super::dma4::Dma4
+
+use crate::bus::{BusResult, MmioDevice, Width};
+
+pub const CHAN_STRIDE: u32 = 0x100;
+pub const NUM_CHAN: usize = 15;
+/// Registers modelled per channel (CS .. DEBUG).
+const NUM_REGS: usize = 9;
+
+pub const CS_ACTIVE: u32 = 1 << 0;
+pub const CS_END: u32 = 1 << 1;
+
+/// `TI` bit 4 — increment `DEST_AD` between writes.
+const TI_DEST_INC: u32 = 1 << 4;
+/// `TI` bit 8 — increment `SOURCE_AD` between reads.
+const TI_SRC_INC: u32 = 1 << 8;
+/// `TI` bit 1 — 2D mode: `TXFR_LEN` is `YLENGTH:XLENGTH`, `STRIDE` applies.
+const TI_TDMODE: u32 = 1 << 1;
+
+#[derive(Default)]
+pub struct DmaLegacy {
+    regs: [[u32; NUM_REGS]; NUM_CHAN],
+    /// Global `ENABLE` (`+0xFF0`) and `INT_STATUS` (`+0xFE0`).
+    enable: u32,
+    int_status: u32,
+    /// Channel whose `CS.ACTIVE` was just set; [`crate::machine::Machine`]
+    /// consumes it and walks the control-block chain.
+    start_pending: Option<usize>,
+}
+
+impl DmaLegacy {
+    pub fn new() -> DmaLegacy {
+        DmaLegacy::default()
+    }
+
+    /// The control-block address channel `ch` is armed with.
+    pub fn conblk_ad(&self, ch: usize) -> u32 {
+        self.regs[ch][1]
+    }
+
+    /// If a start was just requested, consume it.
+    pub fn take_start(&mut self) -> Option<usize> {
+        self.start_pending.take()
+    }
+
+    /// Mark channel `ch` complete: ACTIVE clear, END set, `CONBLK_AD` = 0 (the
+    /// engine walks the chain to its null terminator).
+    pub fn finish(&mut self, ch: usize) {
+        self.regs[ch][0] = (self.regs[ch][0] & !CS_ACTIVE) | CS_END;
+        self.regs[ch][1] = 0;
+        self.int_status |= 1 << ch;
+    }
+
+    /// Decode one control block. Returns `(ti, src, dest, len, stride, next)`.
+    pub fn decode_cb(words: [u32; 6]) -> Cb {
+        Cb {
+            ti: words[0],
+            src: words[1],
+            dest: words[2],
+            len: words[3],
+            stride: words[4],
+            next: words[5],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Cb {
+    pub ti: u32,
+    pub src: u32,
+    pub dest: u32,
+    pub len: u32,
+    pub stride: u32,
+    pub next: u32,
+}
+
+impl Cb {
+    pub fn src_inc(&self) -> bool {
+        self.ti & TI_SRC_INC != 0
+    }
+    pub fn dest_inc(&self) -> bool {
+        self.ti & TI_DEST_INC != 0
+    }
+    pub fn tdmode(&self) -> bool {
+        self.ti & TI_TDMODE != 0
+    }
+    /// 2D mode splits `TXFR_LEN` into `YLENGTH` (bits 30:16) and `XLENGTH`
+    /// (bits 15:0); the transfer is `YLENGTH + 1` rows of `XLENGTH` bytes.
+    pub fn rows(&self) -> (u32, u32) {
+        if self.tdmode() {
+            (((self.len >> 16) & 0x3FFF) + 1, self.len & 0xFFFF)
+        } else {
+            (1, self.len)
+        }
+    }
+    /// Per-row address advance after each row, as signed 16-bit values.
+    pub fn strides(&self) -> (i32, i32) {
+        (
+            (self.stride & 0xFFFF) as u16 as i16 as i32,
+            ((self.stride >> 16) & 0xFFFF) as u16 as i16 as i32,
+        )
+    }
+}
+
+impl MmioDevice for DmaLegacy {
+    fn name(&self) -> &'static str {
+        "dma-legacy"
+    }
+
+    fn read(&mut self, offset: u32, _width: Width) -> BusResult<u32> {
+        if offset >= 0xFE0 {
+            return Ok(match offset & !3 {
+                0xFE0 => self.int_status,
+                0xFF0 => self.enable,
+                _ => 0,
+            });
+        }
+        let ch = (offset / CHAN_STRIDE) as usize;
+        let reg = ((offset % CHAN_STRIDE) / 4) as usize;
+        if ch >= NUM_CHAN || reg >= NUM_REGS {
+            return Ok(0);
+        }
+        Ok(self.regs[ch][reg])
+    }
+
+    fn write(&mut self, offset: u32, _width: Width, value: u32) -> BusResult<()> {
+        if offset >= 0xFE0 {
+            match offset & !3 {
+                0xFE0 => self.int_status &= !value,
+                0xFF0 => self.enable = value,
+                _ => {}
+            }
+            return Ok(());
+        }
+        let ch = (offset / CHAN_STRIDE) as usize;
+        let reg = ((offset % CHAN_STRIDE) / 4) as usize;
+        if ch >= NUM_CHAN || reg >= NUM_REGS {
+            return Ok(());
+        }
+        self.regs[ch][reg] = value;
+        // CS bit 0 (ACTIVE) rising = start the chain at CONBLK_AD.
+        if reg == 0 && value & CS_ACTIVE != 0 {
+            self.start_pending = Some(ch);
+        }
+        Ok(())
+    }
+}
