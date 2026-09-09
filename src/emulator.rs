@@ -1194,6 +1194,24 @@ impl Emulator {
             // that came due anywhere other than the one `sleep` instruction in
             // ThreadX's idle loop — the scheduler then never woke a sleeping
             // thread and the boot wedged with interrupts disabled.
+            // A device-raised interrupt (DMA completion) takes the same
+            // vectoring path as the tick, but is not gated on a compare match.
+            if self.cpu.irq_model
+                && self.cpu.in_exception == 0
+                && self.cpu.irq_enabled()
+                && self.cpu.exc_vbase != 0
+            {
+                if let Some(src) = self.machine.take_pending_irq() {
+                    if dbg_tick {
+                        eprintln!(
+                            "[irq] src={src} pc={:#x} retired={}",
+                            self.cpu.pc(),
+                            self.cpu.retired
+                        );
+                    }
+                    self.cpu.vector_irq(&mut self.machine, src);
+                }
+            }
             let tick_due = self.machine.systimer.tick_pending();
             if dbg_tick
                 && tick_due

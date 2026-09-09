@@ -319,6 +319,15 @@ impl Vpu {
                         // source, dispatch it (see [`Vpu::deliver_timer_irq`]).
                         self.deliver_timer_irq(bus);
                     } else if self.in_exception == 0 && self.exc_vbase != 0 {
+                        // The ThreadX idle loop parks here with interrupts
+                        // disabled, so the run loop's gated delivery never
+                        // fires; service a device interrupt here too.
+                        if let Some(src) = bus.take_pending_irq() {
+                            // `pc` was already advanced past the `sleep` above,
+                            // so `vector_irq` records the right resume point.
+                            self.vector_irq(bus, src);
+                            return Step::Ran;
+                        }
                         // The ThreadX scheduler idle loop parks here as
                         // `sleep; di; b` — interrupts already disabled, relying
                         // on the wake to service the pending periodic tick. The

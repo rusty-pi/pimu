@@ -123,6 +123,14 @@ pub trait Bus {
     /// (see [`Self::timer_tick_slot`]). `Op::Sleep` uses this to service a
     /// pending periodic tick that the run loop couldn't deliver because
     /// interrupts were disabled.
+    /// Take the next device-raised interrupt source, if any. Distinct from
+    /// [`Self::timer_tick_slot`]: that one answers "which vector does the
+    /// system-timer compare use", this one is any peripheral asking to be
+    /// serviced (currently the DMA channels' completion interrupt).
+    fn take_pending_irq(&mut self) -> Option<u32> {
+        None
+    }
+
     fn take_tick_pending(&mut self) -> bool {
         false
     }

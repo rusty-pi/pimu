@@ -32,6 +32,9 @@ const NUM_REGS: usize = 9;
 
 pub const CS_ACTIVE: u32 = 1 << 0;
 pub const CS_END: u32 = 1 << 1;
+/// `CS` bit 2 — interrupt status. `dma_chan_interrupt` is only entered for a
+/// channel whose `CS & 4` is set (`dma_interrupt`, `0x3EC980E8`).
+pub const CS_INT: u32 = 1 << 2;
 
 /// `TI` bit 4 — increment `DEST_AD` between writes.
 const TI_DEST_INC: u32 = 1 << 4;
@@ -89,7 +92,7 @@ impl DmaLegacy {
     /// Mark channel `ch` complete: ACTIVE clear, END set, `CONBLK_AD` = 0 (the
     /// engine walks the chain to its null terminator).
     pub fn finish(&mut self, ch: usize) {
-        self.regs[ch][0] = (self.regs[ch][0] & !CS_ACTIVE) | CS_END;
+        self.regs[ch][0] = (self.regs[ch][0] & !CS_ACTIVE) | CS_END | CS_INT;
         self.regs[ch][1] = 0;
         self.int_status |= 1 << ch;
     }
