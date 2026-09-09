@@ -303,16 +303,18 @@ impl Vpu {
                         // armed timer compare and, if that raises an enabled
                         // source, dispatch it (see [`Vpu::deliver_timer_irq`]).
                         self.deliver_timer_irq(bus);
-                    } else if self.in_exception == 0 && self.exc_vbase != 0 {
+                    } else if self.in_exception == 0
+                        && self.exc_vbase != 0
+                        && bus.take_tick_pending()
+                    {
                         // The ThreadX scheduler idle loop parks here as
                         // `sleep; di; b` — interrupts already disabled, relying
                         // on the wake to service the pending periodic tick. The
                         // run loop's tick delivery gates on the SR interrupt-
                         // enable bit and so never fires once the idle loop has
-                        // run its `di`; deliver the tick here instead, jumping
-                        // the timer to its next compare so the idle loop doesn't
-                        // spin real time waiting for a wheel timeout to mature.
-                        bus.timer_fast_forward();
+                        // run its `di`; deliver the pending tick here instead.
+                        // Only when a compare has actually fired (not on every
+                        // `sleep`) so time isn't raced forward.
                         if let Some(slot) = bus.timer_tick_slot() {
                             self.vector_irq(bus, slot);
                         }
@@ -603,6 +605,9 @@ impl Vpu {
                                 && self.in_exception != 0
                                 && matches!(addr.base, super::insn::Base::R0)
                             {
+                                if std::env::var_os("RVF_DBG_TICK").is_some() {
+                                    eprintln!("[ctx-switch] pc={pc:#x} clear in_exc (was {}) sp<-{v:#x}", self.in_exception);
+                                }
                                 self.in_exception = 0;
                             }
                         }

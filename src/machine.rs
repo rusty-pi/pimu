@@ -325,8 +325,8 @@ impl Bus for Machine {
         self.timer_wake_impl()
     }
 
-    fn timer_fast_forward(&mut self) -> bool {
-        self.systimer.wake_to_next_match().is_some()
+    fn take_tick_pending(&mut self) -> bool {
+        self.systimer.take_tick_pending()
     }
 
     fn timer_tick_slot(&mut self) -> Option<u32> {
@@ -379,7 +379,7 @@ impl Bus for Machine {
     fn store(&mut self, addr: u32, width: Width, value: u32) -> BusResult<()> {
         self.ram_writes = self.ram_writes.wrapping_add(1);
         if let Some(w) = self.watch {
-            if addr & !3 == w {
+            if Machine::fold_ram_addr(addr) & !3 == Machine::fold_ram_addr(w) & !3 {
                 eprintln!(
                     "[watch] pc={:#010x} store{} {:#010x} <- {:#x}",
                     self.watch_pc,
