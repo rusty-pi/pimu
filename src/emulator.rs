@@ -701,13 +701,59 @@ impl Emulator {
                 // (`0x3EDA5B10`) suspends here forever and the whole boot wedges
                 // behind it. Model the completion: OR the requested bits into the
                 // flags word so the get returns straight away.
-                if pc_before == 0x3EC3_E3BE
-                    && self.cpu.regs.get(0) == 0x3EF0_5FEC
-                    && std::env::var_os("RVF_PMIC_EVENT").is_some()
-                {
-                    let req = self.cpu.regs.get(1);
-                    let cur = self.machine.load(0x3EF0_5FF4, Width::Word).unwrap_or(0);
-                    let _ = self.machine.store(0x3EF0_5FF4, Width::Word, cur | req);
+                if pc_before == 0x3EC3_E3BE && std::env::var_os("RVF_PMIC_EVENT").is_some() {
+                    // `_tx_event_flags_get(group, request, ...)`. Cover the
+                    // DA9090 completion flag at `0x3EF05FEC` *and* the per-rail
+                    // PMIC event groups the main boot thread waits on around
+                    // `0x3ECE499C` (`0x3EE58C50`+ — `get_voltage`/`set_voltage`
+                    // completions posted by the unmodelled PMIC transport ISR).
+                    // Guard on the ThreadX event-group magic "NDVD" (`[grp+0]`)
+                    // so only real groups in those two windows are touched.
+                    let grp = self.cpu.regs.get(0);
+                    let in_window = grp == 0x3EF0_5FEC
+                        || (0x3EE5_8C00..0x3EE5_9800).contains(&grp);
+                    if in_window
+                        && self.machine.load(grp, Width::Word).unwrap_or(0) == 0x4456_444E
+                    {
+                        let req = self.cpu.regs.get(1);
+                        let flags = grp.wrapping_add(8);
+                        let cur = self.machine.load(flags, Width::Word).unwrap_or(0);
+                        let _ = self.machine.store(flags, Width::Word, cur | req);
+                    }
+                }
+                // `0x3ECA9560` = the HDMI EDID block read inside the EDID-fetch
+                // retry loop (`0x3ECA94C0`): `r4 = [r13+12]` is the DDC-transport
+                // "read block" op, then `bl r4`. The BCM2711 HDMI DDC I2C block
+                // (`0x7EF04500`) is not modelled — its status register just
+                // RAM-backs, so the transport neither completes a real transfer
+                // nor NAKs: it returns "success" with an all-zero block. start4
+                // then fails the EDID checksum, and because the DDC never
+                // reported an error the per-block attempt counter (`[0x3EE1BB48]`,
+                // capped at 4) is never bumped, so the loop retries forever.
+                //
+                // Worse, before this shim `r4` (`[r13+12]`) is itself null (the
+                // dt-blob provider walk that registers it never runs), so the
+                // `bl r4` derails into low memory and corrupts the run.
+                //
+                // On real hardware with no monitor attached the DDC I2C NAKs and
+                // this op returns an error — start4 logs `HDMI%d:EDID error
+                // reading EDID block 0 attempt 0` / `giving up on reading EDID
+                // block 0` (see examples-on-real-hardware/vc4-boot.log). Model
+                // that: skip the transport call and hand the caller a non-zero
+                // (error) result. The stop/cleanup ops (`bl r4`/`bl r5` at
+                // 0x9608/0x9610) still run normally.
+                //
+                // KNOWN LIMITATION: this removes the derail and gets the EDID
+                // diagnostics to match the reference log, but start4 still spins
+                // the EDID-fetch retry (the give-up counter lives in a DDC
+                // completion path we don't run, and the outer hotplug loop is
+                // gated on the never-posted event group `0x3EE58AB0`). Reaching
+                // `*** Restart logging` / dtb load needs the display subsystem
+                // modelled, which traces back to the missing dt-blob provider
+                // registration.
+                if pc_before == 0x3ECA_9560 {
+                    self.cpu.regs.set(0, 1);
+                    self.cpu.regs.pc = 0x3ECA_9562;
                 }
             }
             self.machine.watch_pc = pc_before;
