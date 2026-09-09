@@ -48,6 +48,8 @@ pub struct Machine {
     pub bootbox: BootBox,
     /// Legacy DMA controller (`0x7E00_7000`) — start4's bulk memory copies.
     pub dma_legacy: crate::periph::dma_legacy::DmaLegacy,
+    /// The `0x7EE0_4100` DMA controller (channel 15 at `0x7EE0_5000`).
+    pub dma_vpu: crate::periph::dma_legacy::DmaLegacy,
     /// DMA4 channel (`0x7E00_7B00`) — the bootloader scrubs / moves DRAM through
     /// it; [`Machine::store`] runs the control-block chain after a `CS` write.
     pub dma4: Dma4,
@@ -126,6 +128,7 @@ impl Machine {
             bootbox: BootBox::new(),
             dma4: Dma4::new(),
             dma_legacy: crate::periph::dma_legacy::DmaLegacy::new(),
+            dma_vpu: crate::periph::dma_legacy::DmaLegacy::new_vpu(),
             emmc2: Emmc2::new(),
             hvs: Hvs::new(),
             periph_stub: StubRegion::new("periph-window"),
@@ -236,6 +239,9 @@ impl Machine {
         if let Some(off) = hit(map::DMA_LEGACY_BASE, map::DMA_LEGACY_SIZE) {
             return Some((&mut self.dma_legacy, off));
         }
+        if let Some(off) = hit(map::DMA_VPU_BASE, map::DMA_VPU_SIZE) {
+            return Some((&mut self.dma_vpu, off));
+        }
         if let Some(off) = hit(map::EMMC2_BASE, map::EMMC2_SIZE) {
             return Some((&mut self.emmc2, off));
         }
@@ -298,22 +304,55 @@ impl Machine {
     /// CB layout (32 bytes): `+0x00 TI  +0x04 SOURCE_AD  +0x08 DEST_AD
     /// +0x0C TXFR_LEN  +0x10 STRIDE  +0x14 NEXTCONBK`. Bus addresses are folded
     /// onto flat DRAM the same way the CPU's are.
-    fn run_dma_legacy(&mut self, ch: usize) {
+    fn run_dma_legacy(&mut self, ch: usize, vpu: bool) {
         use crate::periph::dma_legacy::DmaLegacy;
 
-        let mut cb = self.dma_legacy.conblk_ad(ch) & 0x3FFF_FFFF;
+        let raw = if vpu {
+            self.dma_vpu.conblk_ad(ch)
+        } else {
+            self.dma_legacy.conblk_ad(ch)
+        };
+        // `dma_chain_start` (`0x3EC97544`) writes `CONBLK_AD` two ways:
+        //
+        //   legacy channel: *(base + ch*0x100 + 4) = cb            (raw pointer)
+        //   40-bit channel: cb>>30 == 3 ? (cb & 0x3fffffff) >> 5
+        //                               : (cb >> 5) | 0x20000000
+        //
+        // Both shifted forms leave the top two bits clear, and a raw VC4
+        // pointer always has an alias in them, so that is the discriminator.
+        // Shifting back by 5 restores the alias bits for the `| 0x20000000`
+        // form (0x25F7B6A5 << 5 == 0xBEF6D4A0).
+        let cb_addr = if raw >> 30 != 0 { raw } else { raw << 5 };
+        let mut cb = cb_addr & 0x3FFF_FFFF;
         for _ in 0..4096 {
             if cb == 0 || !self.ram.contains(cb) {
                 break;
             }
-            let mut w = [0u32; 6];
+            let mut w = [0u32; 7];
             for (i, slot) in w.iter_mut().enumerate() {
                 *slot = self
                     .ram
                     .load(cb + (i as u32) * 4, Width::Word)
                     .unwrap_or(0);
             }
-            let d = DmaLegacy::decode_cb(w);
+            // Channel 15 of the `0x7EE0_4100` controller is a 40-bit ("dma40")
+            // channel - `dma_memcpy` builds its CB with
+            // `dma_transfer_setup_memcpy_vpu40` (`0x3EC99EE0`) - so it uses the
+            // DMA4 control-block layout, not the legacy one:
+            //   +0x00 TI  +0x04 SRC  +0x08 SRCI  +0x0C DEST  +0x10 DESTI
+            //   +0x14 LEN +0x18 NEXT_CB(>>5)
+            let d = if vpu {
+                crate::periph::dma_legacy::Cb {
+                    ti: w[0],
+                    src: w[1],
+                    dest: w[3],
+                    len: w[5],
+                    stride: 0,
+                    next: w[6] << 5,
+                }
+            } else {
+                DmaLegacy::decode_cb([w[0], w[1], w[2], w[3], w[4], w[5]])
+            };
             if self.dbg_dma {
                 eprintln!(
                     "[dma-legacy] ch{ch} cb={cb:#x} ti={:#x} src={:#x} dest={:#x} len={:#x} stride={:#x} next={:#x}",
@@ -326,8 +365,12 @@ impl Machine {
             let mut dest = d.dest & 0x3FFF_FFFF;
             for _ in 0..rows {
                 for i in 0..xlen {
-                    let sa = if d.src_inc() { src.wrapping_add(i) } else { src };
-                    let da = if d.dest_inc() {
+                    let sa = if vpu || d.src_inc() {
+                        src.wrapping_add(i)
+                    } else {
+                        src
+                    };
+                    let da = if vpu || d.dest_inc() {
                         dest.wrapping_add(i)
                     } else {
                         dest
@@ -345,7 +388,11 @@ impl Machine {
             }
             cb = d.next & 0x3FFF_FFFF;
         }
-        self.dma_legacy.finish(ch);
+        if vpu {
+            self.dma_vpu.finish(ch);
+        } else {
+            self.dma_legacy.finish(ch);
+        }
     }
 
     fn run_dma4(&mut self) {
@@ -550,7 +597,10 @@ impl Bus for Machine {
                 self.run_dma4();
             }
             if let Some(ch) = self.dma_legacy.take_start() {
-                self.run_dma_legacy(ch);
+                self.run_dma_legacy(ch, false);
+            }
+            if let Some(ch) = self.dma_vpu.take_start() {
+                self.run_dma_legacy(ch, true);
             }
             return r;
         }

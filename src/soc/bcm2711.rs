@@ -35,6 +35,13 @@ pub const DMA4_SIZE: u32 = 0x100;
 pub const DMA_LEGACY_BASE: u32 = 0x7E00_7000;
 pub const DMA_LEGACY_SIZE: u32 = 0x1000;
 
+/// The DMA controller start4's dmalib actually uses: `dma_set_cs` /
+/// `dma_chain_start` pick `base = ch < 15 ? 0x7E007000 : 0x7EE04100`, and the
+/// transfer queue runs on channel 15 — register block `0x7EE0_5000`. Outside
+/// [`BOOTBOX_BASE`]'s 0x4000 window, so it used to land in the catch-all stub.
+pub const DMA_VPU_BASE: u32 = 0x7EE0_4100;
+pub const DMA_VPU_SIZE: u32 = 0x1000;
+
 /// Boot-info handoff doorbells (`0x7EE0_0000` region: `0x7EE0_1000`,
 /// `0x7EE0_2000`, `0x7EE0_2100`) — the bootloader stages a version/OTP block
 /// into DRAM and rings these; their control bits self-clear. Kept below DMA4
