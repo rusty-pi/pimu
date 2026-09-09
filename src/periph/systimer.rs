@@ -69,6 +69,15 @@ impl SysTimer {
         std::mem::take(&mut self.tick_pending)
     }
 
+    /// Peek the pending-tick flag without consuming it. The run loop uses this
+    /// so a tick that becomes due while interrupts are masked / an ISR is
+    /// running stays latched until it can actually be delivered (real hardware:
+    /// the compare-match interrupt stays asserted until acked), instead of
+    /// being silently dropped.
+    pub fn tick_pending(&self) -> bool {
+        self.tick_pending
+    }
+
     pub fn now_us(&self) -> u64 {
         self.micros
     }

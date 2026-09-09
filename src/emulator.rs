@@ -620,7 +620,14 @@ impl Emulator {
             // through the firmware's own handler exactly as `Op::Sleep` does,
             // whenever a compare has fired, we are in thread context, and
             // interrupts are enabled.
-            let tick_due = self.machine.systimer.take_tick_pending();
+            // Peek, don't consume: a tick that comes due while interrupts are
+            // masked or an ISR is running must stay latched until it can be
+            // delivered (real hardware holds the compare-match line asserted).
+            // Consuming it here unconditionally dropped ~39/40 of the ticks
+            // that came due anywhere other than the one `sleep` instruction in
+            // ThreadX's idle loop — the scheduler then never woke a sleeping
+            // thread and the boot wedged with interrupts disabled.
+            let tick_due = self.machine.systimer.tick_pending();
             if dbg_tick
                 && tick_due
                 && self.cpu.irq_model
@@ -645,6 +652,8 @@ impl Emulator {
                 && self.cpu.exc_vbase != 0
             {
                 if let Some(slot) = self.machine.timer_tick_slot() {
+                    // Deliver now — consume the latched flag.
+                    self.machine.systimer.take_tick_pending();
                     if dbg_tick {
                         tick_deliveries += 1;
                         if tick_deliveries <= 30 || tick_deliveries % 500 == 0 {

@@ -89,10 +89,14 @@ impl Spi0 {
         if self.rx.len() >= 16 {
             cs |= CS_RXR | CS_RXF;
         }
-        // With TA asserted and no byte mid-flight, the controller reports DONE
-        // (nothing left to shift). The bootloader polls this right after
-        // asserting TA and again at the end of the command.
-        if self.cs & CS_TA != 0 && self.rx.is_empty() {
+        // CS.DONE reflects the TX side only: "transfer complete, nothing left
+        // to shift" (BCM2711 datasheet — cleared by writing more TX data or
+        // TA=0, unrelated to the RX FIFO). Every shift is instantaneous in this
+        // model, so with TA asserted there is never a byte mid-flight. Gating
+        // this on `rx.is_empty()` was wrong: start4's EEPROM scanner
+        // (`0x3ED77E00`) clocks a block, then checks DONE while RX bytes are
+        // still queued, and treated DONE=0 as a transfer error.
+        if self.cs & CS_TA != 0 {
             cs |= CS_DONE;
         }
         cs
