@@ -315,10 +315,7 @@ impl Vpu {
                         // armed timer compare and, if that raises an enabled
                         // source, dispatch it (see [`Vpu::deliver_timer_irq`]).
                         self.deliver_timer_irq(bus);
-                    } else if self.in_exception == 0
-                        && self.exc_vbase != 0
-                        && bus.take_tick_pending()
-                    {
+                    } else if self.in_exception == 0 && self.exc_vbase != 0 {
                         // The ThreadX scheduler idle loop parks here as
                         // `sleep; di; b` — interrupts already disabled, relying
                         // on the wake to service the pending periodic tick. The
@@ -327,8 +324,14 @@ impl Vpu {
                         // run its `di`; deliver the pending tick here instead.
                         // Only when a compare has actually fired (not on every
                         // `sleep`) so time isn't raced forward.
+                        // Peek the slot *before* consuming the pending flag:
+                        // the slot encodes which compare channel matched
+                        // (source `64 + channel`), so consuming first would
+                        // mis-route the interrupt.
                         if let Some(slot) = bus.timer_tick_slot() {
-                            self.vector_irq(bus, slot);
+                            if bus.take_tick_pending() {
+                                self.vector_irq(bus, slot);
+                            }
                         }
                     }
                 } else {

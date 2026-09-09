@@ -40,12 +40,20 @@ pub struct SysTimer {
     /// `usleep` (polls the counter, is time-bounded) apart from a hung
     /// peripheral poll (never terminates) — the former deserves patience.
     pub clo_reads: u64,
-    /// Set by [`Self::service_matches`] when a compare deadline is crossed;
-    /// cleared by [`Self::take_tick_pending`]. Drives the run loop's periodic
-    /// ThreadX timer interrupt (the real hardware tick that preempts a
-    /// busy-waiting / sleeping thread). Independent of `cs` — the firmware's
-    /// tick ISR acks its interrupt at `0x7E000000`, not the system-timer `CS`.
-    tick_pending: bool,
+    /// Per-channel "this compare fired and its interrupt has not been taken
+    /// yet" flag, set by [`Self::service_matches`] and cleared by
+    /// [`Self::take_pending_channel`].
+    ///
+    /// Each compare channel is its own VPU interrupt source (`64 + channel`)
+    /// with its own vector-table entry, and start4 uses more than one: channel 0
+    /// is the ThreadX periodic tick (source 64 -> `0x3EC40B7C`) and channel 2 is
+    /// the clock service's timeout timer (source 66 -> `0x3EC3E9BC`), which is
+    /// what releases a thread blocked in `msleep`. Collapsing them into one flag
+    /// delivered every match as source 64, so the clock-service timeouts never
+    /// fired and every blocking `msleep` hung forever.
+    ///
+    /// Independent of `cs` — the tick ISR acks `CS` itself.
+    pending: [bool; 4],
 }
 
 impl SysTimer {
@@ -59,23 +67,35 @@ impl SysTimer {
             deadline: [None; 4],
             interval: [DEFAULT_INTERVAL_US; 4],
             clo_reads: 0,
-            tick_pending: false,
+            pending: [false; 4],
         }
     }
 
-    /// Consume the "a compare fired since last checked" flag. The run loop calls
-    /// this each step; a `true` means it should deliver a periodic timer IRQ.
-    pub fn take_tick_pending(&mut self) -> bool {
-        std::mem::take(&mut self.tick_pending)
+    /// Consume the lowest-numbered channel whose compare has fired, if any.
+    /// The caller is expected to vector interrupt source `64 + channel`.
+    pub fn take_pending_channel(&mut self) -> Option<u8> {
+        let c = (0..4).find(|&c| self.pending[c])?;
+        self.pending[c] = false;
+        Some(c as u8)
     }
 
-    /// Peek the pending-tick flag without consuming it. The run loop uses this
-    /// so a tick that becomes due while interrupts are masked / an ISR is
-    /// running stays latched until it can actually be delivered (real hardware:
-    /// the compare-match interrupt stays asserted until acked), instead of
-    /// being silently dropped.
+    /// Consume the "a compare fired since last checked" flag.
+    pub fn take_tick_pending(&mut self) -> bool {
+        self.take_pending_channel().is_some()
+    }
+
+    /// Peek the lowest-numbered pending channel without consuming it. The run
+    /// loop uses this so a match that becomes due while interrupts are masked /
+    /// an ISR is running stays latched until it can actually be delivered (real
+    /// hardware holds the compare-match line asserted until it is acked),
+    /// instead of being silently dropped.
+    pub fn pending_channel(&self) -> Option<u8> {
+        (0..4).find(|&c| self.pending[c]).map(|c| c as u8)
+    }
+
+    /// Peek the pending-tick flag without consuming it.
     pub fn tick_pending(&self) -> bool {
-        self.tick_pending
+        self.pending_channel().is_some()
     }
 
     pub fn now_us(&self) -> u64 {
@@ -91,7 +111,7 @@ impl SysTimer {
                 continue;
             }
             self.cs |= 1 << c;
-            self.tick_pending = true;
+            self.pending[c] = true;
             let step = self.interval[c].max(1);
             while d <= self.micros {
                 d += step;
