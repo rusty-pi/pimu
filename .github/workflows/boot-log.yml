@@ -36,8 +36,9 @@ jobs:
           # Interim shim only: issue #3 still needs the real async-mailbox
           # queue/completer model.
           RVF_MBOX_KICK: "0xbef6d458"
-          # gpioman never registers its pin providers in the model (the schema
-          # apply-walk is unreached) — shim it so the PMIC / clock bring-up runs.
+          # No longer needed for gpioman itself (its provider registration works
+          # since c99ddb8); still forces the PLL / clock-rate loops to converge
+          # (issue #1) and pins the DA9090 errno (issue #4).
           RVF_GPIOMAN_SHIM: "1"
           # stream the UART console (incl. `MESS:` lines) as it is produced.
           RVF_LIVE_CONSOLE: "1"
@@ -56,6 +57,19 @@ jobs:
           # A timeout is acceptable only after start4 has progressed past the
           # async mailbox handoff and emitted its first MESS log.
           grep -q 'MESS:.*arasan_emmc_open' boot.log
+          # ...and reached the HDMI phase, giving up on EDID exactly once per
+          # controller the way real hardware with no monitor does (see
+          # examples-on-real-hardware/vc4-boot.log).
+          grep -q 'HDMI0:EDID giving up on reading EDID block 0' boot.log
+          grep -q 'HDMI1:EDID giving up on reading EDID block 0' boot.log
+          # One attempt each, not a retry storm (regression guard for the
+          # RVF_PMIC_EVENT window bug fixed in 71bd94a).
+          test "$(grep -c 'EDID giving up' boot.log)" -le 4
+          # gpioman must configure its pin providers for real (issue #2).
+          if grep -q 'gpioman: configuration attempt' boot.log; then
+            echo "gpioman provider registration regressed (#2)" >&2
+            exit 1
+          fi
 
       - uses: actions/upload-artifact@v4
         if: always()
