@@ -268,6 +268,12 @@ impl Emulator {
         let mut probe_seen: std::collections::HashSet<&'static str> = std::collections::HashSet::new();
         let mut probe_gp_n: u64 = 0;
 
+        // RVF_PROF=1: cheap PC profiler. Bucket the core-0 PC into 256-byte
+        // slots on every step and dump the hottest on exit — finds the loop
+        // that is eating the step budget when a boot phase runs slow.
+        let prof = std::env::var_os("RVF_PROF").is_some();
+        let mut prof_hist: std::collections::HashMap<u32, u64> = std::collections::HashMap::new();
+
         let mut core1_end: Option<RunEnd> = None;
         let end = loop {
             if self.cpu.retired + self.cpu1.as_ref().map_or(0, |c| c.retired) >= limits.max_steps {
@@ -287,6 +293,10 @@ impl Emulator {
             }
 
             let pc_before = self.cpu.pc();
+
+            if prof {
+                *prof_hist.entry(pc_before & !0xFF).or_insert(0) += 1;
+            }
 
             // `_tx_thread_schedule`'s *solicited* context restore (`0x3EC40034`
             // → `bx r26` at `0x3EC4003E`) resumes a thread that yielded via a
@@ -431,6 +441,23 @@ impl Emulator {
                     }
                 }
             }
+            if probe && pc_before == 0x3ED5_76C4 {
+                // do_step_inner(phase r0): log the phase + the state words it
+                // branches on. `[gp+3296]` = a pending-work flag,
+                // `[gp+867096+36/40/52]` = sub-state.
+                let gp = self.cpu.regs.get(24);
+                let mut l = |a: u32| self.machine.load(a, Width::Word).unwrap_or(0xdead);
+                let r6 = gp.wrapping_add(867096);
+                probe_gp_n += 1;
+                if probe_gp_n <= 60 || probe_gp_n % 500 == 0 {
+                    eprintln!(
+                        "[probe] do_step_inner#{probe_gp_n} phase={:#x} [gp+3296]={:#x} [r6+36]={:#x} [r6+40]={:#x} [r6+52]={:#x} @{}",
+                        self.cpu.regs.get(0), l(gp.wrapping_add(3296)),
+                        l(r6.wrapping_add(36)), l(r6.wrapping_add(40)), l(r6.wrapping_add(52)),
+                        self.cpu.retired,
+                    );
+                }
+            }
             if gpioman_shim {
                 // `0x3EC307DA` PLL frequency-tuning loop: `r6 = get_pll_freq(id)`
                 // (`0x3EC300CE`), and while `r6 != r8` (the target) it re-sets
@@ -451,14 +478,19 @@ impl Emulator {
                     self.cpu.regs.set(3, target);
                 }
                 // `0x3ECC9878` = gpioman_configure. With the provider list
-                // unregistered (`[gp+807672/676/680]` all 0) it always takes the
-                // failure branch — `gpioman: configuration attempt N failed
-                // (error 1) - bad dt-blob.bin?` — and reschedules itself via a
-                // work-item, churning forever. Real HW configures silently. The
-                // `gpioman_get_pin_num` / readiness-gate shims already cover
-                // what the rest of the boot needs, so return success (r0 = 0)
-                // straight away and let the retry loop die.
-                if pc_before == 0x3ECC_9878 {
+                // unregistered (`[gp+807672/676/680]` all 0) it fails twice with
+                // `gpioman: configuration attempt N failed (error 1) - bad
+                // dt-blob.bin?` then gives up — real HW configures silently, but
+                // the failure is otherwise harmless. It used to be short-circuited
+                // to "success" here; that was worse: the caller then marked
+                // gpioman "ready" and a later provider-list walk
+                // (`gpioman_get_pin_state` around the SDCARD_CONTROL_POWER lookup)
+                // dispatched through a garbage vtable slot and derailed into
+                // zeroed RAM (~2.4e9 skipped instructions). Letting the real
+                // function run leaves gpioman in a consistent not-ready state and
+                // the `gpioman_get_pin_num` shim covers what the boot needs.
+                // `RVF_GPIOMAN_FAKECONF=1` restores the old short-circuit.
+                if pc_before == 0x3ECC_9878 && std::env::var_os("RVF_GPIOMAN_FAKECONF").is_some() {
                     self.cpu.regs.set(0, 0);
                     self.cpu.regs.pc = self.cpu.regs.get(26);
                 }
@@ -840,6 +872,16 @@ impl Emulator {
         };
 
         console.extend_from_slice(&self.machine.take_console_output());
+
+        if prof {
+            let mut v: Vec<_> = prof_hist.iter().map(|(&k, &n)| (k, n)).collect();
+            v.sort_by(|a, b| b.1.cmp(&a.1));
+            let total: u64 = v.iter().map(|(_, n)| n).sum();
+            eprintln!("--- RVF_PROF: core-0 PC buckets (total {total}) ---");
+            for (pc, n) in v.iter().take(25) {
+                eprintln!("  {pc:#010x}  {n:>14}  {:5.1}%", 100.0 * *n as f64 / total as f64);
+            }
+        }
 
         let mut unimpl = self.cpu.unimpl.clone();
         unimpl.sort_by(|a, b| b.count.cmp(&a.count).then(a.pc.cmp(&b.pc)));
