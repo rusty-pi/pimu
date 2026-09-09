@@ -281,6 +281,13 @@ impl Emulator {
         let mut mainsus_done = false;
         let mut main_was_cur = false;
 
+        // RVF_DBG_EVGET: log every distinct (event-group, caller) pair passed to
+        // `_tx_event_flags_get` (`0x3EC3E3BE`), so the groups the boot actually
+        // blocks on can be told apart from the ones a shim must not touch.
+        let dbg_evget = std::env::var_os("RVF_DBG_EVGET").is_some();
+        let mut evget_seen: std::collections::HashSet<(u32, u32)> =
+            std::collections::HashSet::new();
+
         let mut core1_end: Option<RunEnd> = None;
         let end = loop {
             if self.cpu.retired + self.cpu1.as_ref().map_or(0, |c| c.retired) >= limits.max_steps {
@@ -701,18 +708,34 @@ impl Emulator {
                 // (`0x3EDA5B10`) suspends here forever and the whole boot wedges
                 // behind it. Model the completion: OR the requested bits into the
                 // flags word so the get returns straight away.
-                if pc_before == 0x3EC3_E3BE && std::env::var_os("RVF_PMIC_EVENT").is_some() {
-                    // `_tx_event_flags_get(group, request, ...)`. Cover the
-                    // DA9090 completion flag at `0x3EF05FEC` *and* the per-rail
-                    // PMIC event groups the main boot thread waits on around
-                    // `0x3ECE499C` (`0x3EE58C50`+ — `get_voltage`/`set_voltage`
-                    // completions posted by the unmodelled PMIC transport ISR).
-                    // Guard on the ThreadX event-group magic "NDVD" (`[grp+0]`)
-                    // so only real groups in those two windows are touched.
+                if pc_before == 0x3EC3_E3BE && dbg_evget {
                     let grp = self.cpu.regs.get(0);
-                    let in_window = grp == 0x3EF0_5FEC
-                        || (0x3EE5_8C00..0x3EE5_9800).contains(&grp);
-                    if in_window
+                    let lr = self.cpu.regs.get(26);
+                    if evget_seen.insert((grp, lr)) {
+                        let magic = self.machine.load(grp, Width::Word).unwrap_or(0);
+                        eprintln!(
+                            "[evget] group={grp:#010x} req={:#x} magic={magic:#010x} lr={lr:#010x}",
+                            self.cpu.regs.get(1)
+                        );
+                    }
+                }
+                if pc_before == 0x3EC3_E3BE && std::env::var_os("RVF_PMIC_EVENT").is_some() {
+                    // `_tx_event_flags_get(group, request, ...)`. Only the DA9090
+                    // completion group (`0x3EF05FEC`, waited on from `0x3ECC7000`)
+                    // belongs here.
+                    //
+                    // It used to also cover `0x3EE58C00..0x3EE59800` on the theory
+                    // that those were per-rail PMIC groups. They are not: they are
+                    // the two HDMI controllers' groups (`0x3EE58AB0` = HDMI0,
+                    // `0x3EE58D24` = HDMI1 — `RVF_DBG_EVGET=1` shows both, waited
+                    // on from the EDID-fetch loop `0x3ECA94E6` for bit 0 and from
+                    // the main boot thread `0x3ECE49AE` for bit 16). Posting into
+                    // HDMI1's group re-triggered its EDID fetch on every pass, so
+                    // it re-read EDID forever (40 715 `HDMI1:EDID ...` lines in a
+                    // 240 s run) instead of giving up once like real hardware.
+                    // Guard on the ThreadX event-group magic "NDVD" at `[grp+0]`.
+                    let grp = self.cpu.regs.get(0);
+                    if grp == 0x3EF0_5FEC
                         && self.machine.load(grp, Width::Word).unwrap_or(0) == 0x4456_444E
                     {
                         let req = self.cpu.regs.get(1);
