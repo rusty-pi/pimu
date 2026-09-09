@@ -590,6 +590,22 @@ impl Emulator {
                         let _ = self.machine.store(r0, Width::Byte, 1);
                     }
                 }
+                // `_tx_event_flags_get(group=r0, request=r1, ...)` (`0x3EC3E3BE`)
+                // on the DA9090 PMIC completion group (`0x3EF05FEC`, id "NDVD"
+                // at +0, current-flags word at +8). On real hardware the PMIC
+                // transport's I2C/SPI completion ISR calls `_tx_event_flags_set`
+                // to post bit 0; the model has no such ISR, so `get_voltage_real`
+                // (`0x3EDA5B10`) suspends here forever and the whole boot wedges
+                // behind it. Model the completion: OR the requested bits into the
+                // flags word so the get returns straight away.
+                if pc_before == 0x3EC3_E3BE
+                    && self.cpu.regs.get(0) == 0x3EF0_5FEC
+                    && std::env::var_os("RVF_PMIC_EVENT").is_some()
+                {
+                    let req = self.cpu.regs.get(1);
+                    let cur = self.machine.load(0x3EF0_5FF4, Width::Word).unwrap_or(0);
+                    let _ = self.machine.store(0x3EF0_5FF4, Width::Word, cur | req);
+                }
             }
             self.machine.watch_pc = pc_before;
             let exc_depth_before = self.cpu.in_exception;
