@@ -305,6 +305,38 @@ impl Emulator {
                 *prof_hist.entry(pc_before & !0xFF).or_insert(0) += 1;
             }
 
+            // RVF_DBG_RESUME: log every _tx_thread_system_resume (0x3EC402D2)
+            // and _tx_thread_system_suspend (0x3EC40516) — who resumes/suspends
+            // which thread, to find what would wake the boot thread.
+            if std::env::var_os("RVF_DBG_RESUME").is_some()
+                && matches!(pc_before, 0x3EC4_02D2 | 0x3EC4_0516)
+                && self.cpu.retired > 90_000_000
+            {
+                let kind = if pc_before == 0x3EC4_02D2 { "resume" } else { "suspend" };
+                eprintln!(
+                    "[{kind}] thread={:#x} lr={:#x} @retired={}",
+                    self.cpu.regs.get(0), self.cpu.regs.get(26), self.cpu.retired
+                );
+            }
+            if std::env::var_os("RVF_DBG_EVSET").is_some()
+                && pc_before == 0x3EC3_E1BA
+                && (self.cpu.regs.get(0) == 0x3EF0_5FEC
+                    || self
+                        .machine
+                        .load(self.cpu.regs.get(0).wrapping_add(112), Width::Word)
+                        .unwrap_or(0)
+                        == 0x3EF0_5FEC)
+            {
+                let cf = &self.cpu.cf_trace;
+                eprintln!(
+                    "[evset] flags={:#x} lr={:#x} @retired={} cf-tail:",
+                    self.cpu.regs.get(1), self.cpu.regs.get(26), self.cpu.retired
+                );
+                for &(from, to) in cf.iter().skip(cf.len().saturating_sub(24)) {
+                    eprintln!("[evset]   {from:#010x} -> {to:#010x}");
+                }
+            }
+
             if dbg_mainsus {
                 let cur = self.machine.load(0x3EE3_5900, Width::Word).unwrap_or(0);
                 if cur == 0x3EF2_48C4 {
