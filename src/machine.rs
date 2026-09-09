@@ -46,6 +46,8 @@ pub struct Machine {
     pub sdc: Sdc,
     /// Boot-info handoff doorbell (`0x7EE0_2000`).
     pub bootbox: BootBox,
+    /// Legacy DMA controller (`0x7E00_7000`) — start4's bulk memory copies.
+    pub dma_legacy: crate::periph::dma_legacy::DmaLegacy,
     /// DMA4 channel (`0x7E00_7B00`) — the bootloader scrubs / moves DRAM through
     /// it; [`Machine::store`] runs the control-block chain after a `CS` write.
     pub dma4: Dma4,
@@ -85,6 +87,8 @@ pub struct Machine {
     /// on every `sleep` (millions of times), so these must not re-read the
     /// environment per call.
     tick_slot_override: Option<u32>,
+    /// `RVF_DBG_DMA=1`: log every control block the DMA4 channel executes.
+    dbg_dma: bool,
     irq_slot_override: Option<u32>,
     pub watch_pc: u32,
 
@@ -121,6 +125,7 @@ impl Machine {
             sdc: Sdc::new(),
             bootbox: BootBox::new(),
             dma4: Dma4::new(),
+            dma_legacy: crate::periph::dma_legacy::DmaLegacy::new(),
             emmc2: Emmc2::new(),
             hvs: Hvs::new(),
             periph_stub: StubRegion::new("periph-window"),
@@ -143,6 +148,7 @@ impl Machine {
                         .collect()
                 })
                 .unwrap_or_default(),
+            dbg_dma: std::env::var_os("RVF_DBG_DMA").is_some(),
             tick_slot_override: std::env::var("RVF_TICK_SLOT")
                 .ok()
                 .and_then(|s| s.trim().parse().ok()),
@@ -227,6 +233,9 @@ impl Machine {
         if let Some(off) = hit(map::DMA4_BASE, map::DMA4_SIZE) {
             return Some((&mut self.dma4, off));
         }
+        if let Some(off) = hit(map::DMA_LEGACY_BASE, map::DMA_LEGACY_SIZE) {
+            return Some((&mut self.dma_legacy, off));
+        }
         if let Some(off) = hit(map::EMMC2_BASE, map::EMMC2_SIZE) {
             return Some((&mut self.emmc2, off));
         }
@@ -269,6 +278,76 @@ impl Machine {
     /// in RAM (`+0x08` `SRCI` bit 12 = "source increments"): clear ⇒ fill `DEST`
     /// with the single word at `SRC` (`SRC == 0` ⇒ zero-fill scrub); set ⇒ copy
     /// `SRC`→`DEST`.
+    /// `RVF_DBG_DMA=1`: trace every access to the legacy DMA controller window
+    /// (`0x7E00_7000..0x7E00_8000`, 15 channels x 0x100). Only channel 11
+    /// (DMA4, `0x7E00_7B00`) is modelled; start4's `dma_memcpy` uses one of the
+    /// others, so those accesses currently fall through to the catch-all stub.
+    fn dma_win_log(&self, rw: &str, addr: u32, value: u32) {
+        if self.dbg_dma && (0x7E00_7000..0x7E00_8000).contains(&addr) {
+            let ch = (addr - 0x7E00_7000) / 0x100;
+            eprintln!(
+                "[dmawin] {rw} ch{ch} +{:#04x} ({addr:#x}) = {value:#x} pc={:#x}",
+                (addr - 0x7E00_7000) % 0x100,
+                self.watch_pc
+            );
+        }
+    }
+
+    /// Execute the control-block chain armed on legacy DMA channel `ch`.
+    ///
+    /// CB layout (32 bytes): `+0x00 TI  +0x04 SOURCE_AD  +0x08 DEST_AD
+    /// +0x0C TXFR_LEN  +0x10 STRIDE  +0x14 NEXTCONBK`. Bus addresses are folded
+    /// onto flat DRAM the same way the CPU's are.
+    fn run_dma_legacy(&mut self, ch: usize) {
+        use crate::periph::dma_legacy::DmaLegacy;
+
+        let mut cb = self.dma_legacy.conblk_ad(ch) & 0x3FFF_FFFF;
+        for _ in 0..4096 {
+            if cb == 0 || !self.ram.contains(cb) {
+                break;
+            }
+            let mut w = [0u32; 6];
+            for (i, slot) in w.iter_mut().enumerate() {
+                *slot = self
+                    .ram
+                    .load(cb + (i as u32) * 4, Width::Word)
+                    .unwrap_or(0);
+            }
+            let d = DmaLegacy::decode_cb(w);
+            if self.dbg_dma {
+                eprintln!(
+                    "[dma-legacy] ch{ch} cb={cb:#x} ti={:#x} src={:#x} dest={:#x} len={:#x} stride={:#x} next={:#x}",
+                    d.ti, d.src, d.dest, d.len, d.stride, d.next
+                );
+            }
+            let (rows, xlen) = d.rows();
+            let (src_stride, dest_stride) = d.strides();
+            let mut src = d.src & 0x3FFF_FFFF;
+            let mut dest = d.dest & 0x3FFF_FFFF;
+            for _ in 0..rows {
+                for i in 0..xlen {
+                    let sa = if d.src_inc() { src.wrapping_add(i) } else { src };
+                    let da = if d.dest_inc() {
+                        dest.wrapping_add(i)
+                    } else {
+                        dest
+                    };
+                    let b = self.ram.load(sa & 0x3FFF_FFFF, Width::Byte).unwrap_or(0);
+                    let _ = self.ram.store(da & 0x3FFF_FFFF, Width::Byte, b);
+                }
+                // 2D mode advances by the row length plus the signed stride.
+                src = src
+                    .wrapping_add(xlen)
+                    .wrapping_add(src_stride as u32);
+                dest = dest
+                    .wrapping_add(xlen)
+                    .wrapping_add(dest_stride as u32);
+            }
+            cb = d.next & 0x3FFF_FFFF;
+        }
+        self.dma_legacy.finish(ch);
+    }
+
     fn run_dma4(&mut self) {
         const S_INC: u32 = 1 << 12;
         let rd = |ram: &Ram, addr: u32| ram.load(addr & 0x3FFF_FFFF, Width::Word).unwrap_or(0);
@@ -284,6 +363,12 @@ impl Machine {
             let len = rd(&self.ram, cb + 0x14);
             let next = rd(&self.ram, cb + 0x18);
 
+            if self.dbg_dma {
+                eprintln!(
+                    "[dma] cb={cb:#x} ti={:#x} src={src:#x} srci={srci:#x} dest={dest:#x} len={len:#x} next={next:#x}",
+                    rd(&self.ram, cb)
+                );
+            }
             let fill = srci & S_INC == 0;
             let fill_word = if src == 0 { 0 } else { rd(&self.ram, src) };
             let mut off = 0u32;
@@ -408,6 +493,7 @@ impl Bus for Machine {
         if let Some((dev, off)) = self.device_for(addr) {
             let v = dev.read(off, width);
             let got = *v.as_ref().unwrap_or(&0);
+            self.dma_win_log("rd", addr, got);
             if trace {
                 self.mmio_events
                     .push((addr, width.bytes() as u8, got, false));
@@ -448,6 +534,7 @@ impl Bus for Machine {
             }
         }
         self.mmio_writes = self.mmio_writes.wrapping_add(1);
+        self.dma_win_log("wr", addr, value);
         let trace = self.mmio_trace;
         if let Some((dev, off)) = self.device_for(addr) {
             let r = dev.write(off, width, value);
@@ -457,6 +544,9 @@ impl Bus for Machine {
             }
             if self.dma4.take_start() {
                 self.run_dma4();
+            }
+            if let Some(ch) = self.dma_legacy.take_start() {
+                self.run_dma_legacy(ch);
             }
             return r;
         }

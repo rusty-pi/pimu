@@ -28,6 +28,13 @@ pub const CORECTL_SIZE: u32 = 0x100;
 pub const DMA4_BASE: u32 = 0x7E00_7B00;
 pub const DMA4_SIZE: u32 = 0x100;
 
+/// Legacy DMA controller: 15 channels x 0x100 plus the global INT_STATUS /
+/// ENABLE words at the top of the window. start4 copies >= 1024 bytes through
+/// here (`dma_memcpy`). Decoded *after* [`DMA4_BASE`], so channel 11 keeps
+/// going to the 40-bit engine the bootloader uses.
+pub const DMA_LEGACY_BASE: u32 = 0x7E00_7000;
+pub const DMA_LEGACY_SIZE: u32 = 0x1000;
+
 /// Boot-info handoff doorbells (`0x7EE0_0000` region: `0x7EE0_1000`,
 /// `0x7EE0_2000`, `0x7EE0_2100`) — the bootloader stages a version/OTP block
 /// into DRAM and rings these; their control bits self-clear. Kept below DMA4
