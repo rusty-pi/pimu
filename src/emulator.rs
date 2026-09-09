@@ -299,6 +299,8 @@ impl Emulator {
         let cz_log: Option<u32> = std::env::var("RVF_CZ_LOG")
             .ok()
             .and_then(|v| v.parse().ok());
+        let mut cz_probe_n = 0u32;
+        let mut cz_match_n = 0u32;
 
         // RVF_HEARTBEAT=<n>: every <n> million retired instructions, print model
         // time, the running ThreadX thread and the PC. The one diagnostic that
@@ -368,9 +370,12 @@ impl Emulator {
                 let cur = self.machine.load(0x3EE3_5900, Width::Word).unwrap_or(0);
                 let exec = self.machine.load(0x3EE3_5904, Width::Word).unwrap_or(0);
                 eprintln!(
-                    "[beat] retired={} model_us={} pc={pc_before:#010x} cur={cur:#010x} exec={exec:#010x}",
+                    "[beat] retired={} model_us={} pc={pc_before:#010x} cur={cur:#010x} exec={exec:#010x} in_exc={} irq_en={} tick_due={}",
                     self.cpu.retired,
                     self.machine.systimer.now_us(),
+                    self.cpu.in_exception,
+                    self.cpu.irq_enabled(),
+                    self.machine.systimer.tick_pending(),
                 );
             }
             if prof_thread {
@@ -784,7 +789,112 @@ impl Emulator {
                     // buffer it was handed, `r0` = the byte-swapped magic it
                     // just read from `[r10]`, which must be 0xD00DFEED. This
                     // says directly whether the blob reached confzilla.
+                    // `FUN_0ecb6fd4(state, root_node, fields, ...)` - the
+                    // schema-tree matcher. It hashes `fields[0]` (FNV-1a) and
+                    // walks the sibling list from `root_node` comparing
+                    // `node[0x15]` (hash) then `strncmp(node->name, .., 31)`.
+                    // Dump what it is actually matching against.
+                    if pc_before == 0x3ECB_6FD4 && cz_match_n < 4 {
+                        cz_match_n += 1;
+                        let root = self.cpu.regs.get(1);
+                        let fields = self.cpu.regs.get(2);
+                        let rdstr = |m: &mut crate::machine::Machine, p: u32| {
+                            let mut t = String::new();
+                            for i in 0..32 {
+                                match m.load(p + i, Width::Byte) {
+                                    Ok(0) | Err(_) => break,
+                                    Ok(c) => t.push(c as u8 as char),
+                                }
+                            }
+                            t
+                        };
+                        let f0 = self.machine.load(fields, Width::Word).unwrap_or(0);
+                        let want = rdstr(&mut self.machine, f0);
+                        let mut chain = Vec::new();
+                        let mut n = root;
+                        for _ in 0..8 {
+                            if n == 0 {
+                                break;
+                            }
+                            let namep = self.machine.load(n, Width::Word).unwrap_or(0);
+                            chain.push(format!(
+                                "{n:#x}:{:?}/h={:#x}",
+                                rdstr(&mut self.machine, namep),
+                                self.machine.load(n + 0x54, Width::Word).unwrap_or(0)
+                            ));
+                            n = self.machine.load(n + 0x30, Width::Word).unwrap_or(0);
+                        }
+                        let mut words = Vec::new();
+                        for i in 0..8 {
+                            words.push(format!(
+                                "{:08x}",
+                                self.machine.load(root + i * 4, Width::Word).unwrap_or(0)
+                            ));
+                        }
+                        let st = self.cpu.regs.get(0);
+                        let mut sw = Vec::new();
+                        for i in 0..13 {
+                            sw.push(format!(
+                                "{:08x}",
+                                self.machine.load(st + i * 4, Width::Word).unwrap_or(0)
+                            ));
+                        }
+                        // First three nodes of the pool (`state[1]`, stride 0x78).
+                        let pool = self.machine.load(st + 4, Width::Word).unwrap_or(0);
+                        let mut pn = Vec::new();
+                        for i in 0..3u32 {
+                            let nd = pool + i * 0x78;
+                            let np = self.machine.load(nd, Width::Word).unwrap_or(0);
+                            pn.push(format!("{nd:#x}:{:?}", rdstr(&mut self.machine, np)));
+                        }
+                        eprintln!(
+                            "[cz] match want={want:?} root={root:#x} node[0..8]={} state={st:#x}[{}] pool={pool:#x} nodes=[{}]",
+                            words.join(" "),
+                            sw.join(" "),
+                            pn.join(", ")
+                        );
+                    }
+                    // `FUN_0ed5a122(state, descriptor)` - the schema tree
+                    // builder. Dump the 44-byte source descriptor it is about
+                    // to copy, and `FUN_0ec89b38`'s stack template before it.
+                    if matches!(pc_before, 0x3ED5_A122 | 0x3EC8_9B38) && cz_probe_n < 3 {
+                        cz_probe_n += 1;
+                        let d = if pc_before == 0x3ED5_A122 {
+                            self.cpu.regs.get(1)
+                        } else {
+                            self.cpu.regs.get(0)
+                        };
+                        let mut w = Vec::new();
+                        for i in 0..11 {
+                            w.push(format!(
+                                "{:08x}",
+                                self.machine.load(d + i * 4, Width::Word).unwrap_or(0)
+                            ));
+                        }
+                        let namep = self.machine.load(d, Width::Word).unwrap_or(0);
+                        let mut nm = String::new();
+                        for i in 0..24 {
+                            match self.machine.load(namep + i, Width::Byte) {
+                                Ok(0) | Err(_) => break,
+                                Ok(c) => nm.push(c as u8 as char),
+                            }
+                        }
+                        eprintln!(
+                            "[cz] {} desc={d:#x} name={nm:?} sp={:#x} [{}]",
+                            if pc_before == 0x3ED5_A122 { "build" } else { "b38  " },
+                            self.cpu.regs.get(25),
+                            w.join(" ")
+                        );
+                    }
                     if pc_before == 0x3EC8_9684 {
+                        // Raise both levels *here*, at `cp_front_fdt_buffer`
+                        // entry: confzilla's own init stamps them back to 3
+                        // after `gpioman_init` runs, so setting them earlier is
+                        // undone. Level 4 turns on `cp_set_property: field not
+                        // found` (the interesting one) without the per-FDT-token
+                        // `cp parse_fdt_node ...` spam that level 5 adds.
+                        let _ = self.machine.store(0x3EE4_ABD8, Width::Byte, lvl);
+                        let _ = self.machine.store(0x3EE4_ABF0, Width::Byte, lvl);
                         let buf = self.cpu.regs.get(10);
                         let be32 = |m: &mut crate::machine::Machine, a: u32| -> u32 {
                             m.load(a, Width::Word).unwrap_or(0).swap_bytes()
@@ -806,15 +916,20 @@ impl Emulator {
                             }
                         }
                         eprintln!(
-                            "[cz] fdt_buffer buf={buf:#010x} magic={:#010x} totalsize={total} \
-                             pins_4b={found:#x?} retired={}",
+                            "[cz] fdt_buffer buf={buf:#010x} magic={:#010x} totalsize={total} pins_4b={found:#x?} be_lvl={} fe_lvl={} retired={}",
                             self.cpu.regs.get(0),
+                            self.machine.load(0x3EE4_ABD8, Width::Byte).unwrap_or(0xff),
+                            self.machine.load(0x3EE4_ABF0, Width::Byte).unwrap_or(0xff),
                             self.cpu.retired
                         );
                     }
                     if pc_before == 0x3ECC_9DB0 {
-                        // confzilla's own log-level byte is `gp+294608`
-                        // (`0x3EC89694`/`0x3EC896C6` gate on it being >= 3).
+                        // confzilla has two log-level bytes: the back end
+                        // (`cp_register_property_list` / `cp_set_property` /
+                        // `cp_done`) uses `gp+294584` = `0x3EE4ABD8`, the FDT
+                        // front end (`cp_front_fdt_buffer`) `gp+294608` =
+                        // `0x3EE4ABF0`. Raise both.
+                        let _ = self.machine.store(0x3EE4_ABD8, Width::Byte, lvl);
                         let _ = self.machine.store(0x3EE4_ABF0, Width::Byte, lvl);
                         let root = 0x3EE1_9114u32;
                         let namep = self.machine.load(root, Width::Word).unwrap_or(0);

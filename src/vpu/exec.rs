@@ -92,6 +92,9 @@ pub struct Vpu {
     pub exc_vbase: u32,
     /// True while executing inside an exception handler (before `rti`).
     pub in_exception: u32,
+    /// `RVF_DBG_SLEEP` counter: how many times the idle loop's `sleep` has
+    /// been reached under `irq_model`.
+    pub sleep_dbg: u64,
     /// System-coprocessor register file (`mov p<n>,r` / `mov r,p<n>`). Not real
     /// hardware behaviour — reads return the last written value (0 at reset),
     /// which is enough to clear the early-boot "wait for p16 == 0" loops.
@@ -328,10 +331,19 @@ impl Vpu {
                         // the slot encodes which compare channel matched
                         // (source `64 + channel`), so consuming first would
                         // mis-route the interrupt.
-                        if let Some(slot) = bus.timer_tick_slot() {
-                            if bus.take_tick_pending() {
-                                self.vector_irq(bus, slot);
+                        let slot = bus.timer_tick_slot();
+                        let took = slot.is_some() && bus.take_tick_pending();
+                        if std::env::var_os("RVF_DBG_SLEEP").is_some() {
+                            self.sleep_dbg += 1;
+                            if self.sleep_dbg <= 20 || self.sleep_dbg % 20000 == 0 {
+                                eprintln!(
+                                    "[sleep] #{} pc={:#x} slot={slot:?} took={took} retired={}",
+                                    self.sleep_dbg, self.regs.pc, self.retired
+                                );
                             }
+                        }
+                        if let (Some(slot), true) = (slot, took) {
+                            self.vector_irq(bus, slot);
                         }
                     }
                 } else {
