@@ -246,6 +246,7 @@ impl Emulator {
         };
         let dbg_tick = std::env::var_os("RVF_DBG_TICK").is_some();
         let mut tick_deliveries: u64 = 0;
+        let mut irqtbl_n = 0u32;
         let mut tick_skips: u64 = 0;
         // Experiment: after the priority-1 timer ISR returns, raise the pending
         // lower-priority software interrupt (vector slot 3) — start4's deferred
@@ -1194,6 +1195,29 @@ impl Emulator {
             // that came due anywhere other than the one `sleep` instruction in
             // ThreadX's idle loop — the scheduler then never woke a sleeping
             // thread and the boot wedged with interrupts disabled.
+            // RVF_DBG_IRQTBL: at the generic per-source dispatcher
+            // (`0x3EC3E9BC`) show where it reads the pending source from
+            // (`[[r29+12]+4]`) and what the handler table at `gp+58004` holds
+            // for the DMA sources (0x50..0x5F).
+            if pc_before == 0x3EC3_E9BC && irqtbl_n < 4 {
+                irqtbl_n += 1;
+                let r29 = self.cpu.regs.get(29);
+                let blk = self.machine.load(r29 + 12, Width::Word).unwrap_or(0);
+                let pend = self.machine.corectl.peek_pending().unwrap_or(0);
+                let tbl = self.cpu.regs.get(24).wrapping_add(58004);
+                let mut h = Vec::new();
+                for src in [64u32, 66, 78, 81, 83, 86, 89, 92, 95] {
+                    h.push(format!(
+                        "{src}:{:#x}",
+                        self.machine.load(tbl + src * 4, Width::Word).unwrap_or(0)
+                    ));
+                }
+                eprintln!(
+                    "[irqtbl] r29={r29:#x} blk={blk:#x} pending={pend:#x} handlers[{}]",
+                    h.join(" ")
+                );
+            }
+
             // A device-raised interrupt (DMA completion) takes the same
             // vectoring path as the tick, but is not gated on a compare match.
             if self.cpu.irq_model

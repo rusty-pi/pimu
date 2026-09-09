@@ -412,7 +412,9 @@ impl Machine {
             } else {
                 ch
             };
-            self.pending_irqs.push_back(0x50 + folded as u32);
+            let src = 0x50 + folded as u32;
+            self.corectl.raise_source(src);
+            self.pending_irqs.push_back(src);
         }
     }
 

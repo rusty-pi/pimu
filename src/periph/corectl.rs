@@ -32,8 +32,17 @@ const IRQ_PRIO_BASE: u32 = 0x10;
 /// `src - SYS_IRQ_SRC`). Enabled via `enable_irq_source(64, 1)`.
 pub const SYS_IRQ_SRC: u32 = 64;
 
+/// Offset the generic per-source ISR dispatcher (`0x3EC3E9BC`) reads to learn
+/// which interrupt is pending: it does `r2 = [r29+12]` (= `0x7E00_2000`),
+/// `r0 = [r2+4]`, `btest r0, 8` (bit 8 = "something pending"), then
+/// `or r0, 64` / 7-bit mask to get the source number in 64..127, and finally
+/// indexes the handler table at `gp+58004` with it.
+const IRQ_PENDING: u32 = 0x04;
+
 #[derive(Default)]
 pub struct CoreCtl {
+    /// Source raised by a peripheral and not yet read by the dispatcher.
+    pending_src: Option<u32>,
     storage: BTreeMap<u32, u32>,
     pending_core1_release: bool,
     core1_started: bool,
@@ -44,6 +53,17 @@ pub struct CoreCtl {
 impl CoreCtl {
     pub fn new() -> CoreCtl {
         CoreCtl::default()
+    }
+
+    /// Present `src` (64..127) at [`IRQ_PENDING`] for the dispatcher to pick up.
+    pub fn raise_source(&mut self, src: u32) {
+        self.pending_src = Some(src);
+    }
+
+    /// Non-destructive view of [`Self::raise_source`]'s pending value, for
+    /// diagnostics (the register itself is read-to-clear).
+    pub fn peek_pending(&self) -> Option<u32> {
+        self.pending_src
     }
 
     pub fn take_core1_release(&mut self) -> bool {
@@ -65,6 +85,13 @@ impl MmioDevice for CoreCtl {
     }
 
     fn read(&mut self, offset: u32, _width: Width) -> BusResult<u32> {
+        if offset == IRQ_PENDING {
+            // Read-to-clear: the dispatcher reads this once per entry, then the
+            // handler acks the device itself.
+            if let Some(src) = self.pending_src.take() {
+                return Ok(0x100 | (src & 0x3F));
+            }
+        }
         Ok(self.storage.get(&offset).copied().unwrap_or(0))
     }
 
