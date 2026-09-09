@@ -337,6 +337,24 @@ impl Emulator {
                 }
             }
 
+            // RVF_MCSYNC_RPC: the clock-service manager (`0x3ED65Axx`) does a
+            // synchronous inter-core RPC — it takes a stack lock (`[obj]=1`),
+            // posts a request via the mcsync doorbell (`0x3ED3A114`), then
+            // re-acquires the same lock (`0x3ED65092` → `0x3ED651AE`), blocking
+            // until the far side processes the request and releases it. The
+            // model has no far side, so the manager (and the whole boot behind
+            // it) suspends forever. On real hardware the RPC completes in
+            // microseconds; model that by releasing the lock right before the
+            // re-acquire so the manager proceeds. (Interim — the reply *data*
+            // is not synthesised; if the manager then mis-reads it this needs
+            // the real request/reply struct modelled.)
+            if pc_before == 0x3ED6_5092 && std::env::var_os("RVF_MCSYNC_RPC").is_some() {
+                let lock = self.cpu.regs.get(6);
+                if self.machine.load(lock, Width::Word).unwrap_or(0) == 1 {
+                    let _ = self.machine.store(lock, Width::Word, 0);
+                }
+            }
+
             if dbg_mainsus {
                 let cur = self.machine.load(0x3EE3_5900, Width::Word).unwrap_or(0);
                 if cur == 0x3EF2_48C4 {
