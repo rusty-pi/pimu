@@ -26,7 +26,7 @@
 use crate::bus::{BusResult, MmioDevice, Width};
 
 pub const CHAN_STRIDE: u32 = 0x100;
-pub const NUM_CHAN: usize = 15;
+pub const NUM_CHAN: usize = 16;
 /// Registers modelled per channel (CS .. DEBUG).
 const NUM_REGS: usize = 9;
 
@@ -42,6 +42,10 @@ const TI_TDMODE: u32 = 1 << 1;
 
 #[derive(Default)]
 pub struct DmaLegacy {
+    /// Whether offsets `>= 0xFE0` are the controller-wide INT_STATUS / ENABLE
+    /// words. True for the `0x7E00_7000` controller; false for the `0x7EE0_4100`
+    /// one, whose channel 15 occupies `0xF00..0xFFF`.
+    global_regs: bool,
     regs: [[u32; NUM_REGS]; NUM_CHAN],
     /// Global `ENABLE` (`+0xFF0`) and `INT_STATUS` (`+0xFE0`).
     enable: u32,
@@ -52,8 +56,24 @@ pub struct DmaLegacy {
 }
 
 impl DmaLegacy {
+    /// The `0x7E00_7000` controller: 15 channels plus the global words.
     pub fn new() -> DmaLegacy {
-        DmaLegacy::default()
+        DmaLegacy {
+            global_regs: true,
+            ..DmaLegacy::default()
+        }
+    }
+
+    /// The `0x7EE0_4100` controller start4's dmalib actually drives. Channel 15
+    /// lives at `0x7EE0_5000` (`dma_set_cs` / `dma_chain_start`:
+    /// `base = ch < 15 ? 0x7E007000 : 0x7EE04100`, register block at
+    /// `base + ch * 0x100`), so all 16 channel slots are used and there is no
+    /// room for the global words.
+    pub fn new_vpu() -> DmaLegacy {
+        DmaLegacy {
+            global_regs: false,
+            ..DmaLegacy::default()
+        }
     }
 
     /// The control-block address channel `ch` is armed with.
@@ -131,7 +151,7 @@ impl MmioDevice for DmaLegacy {
     }
 
     fn read(&mut self, offset: u32, _width: Width) -> BusResult<u32> {
-        if offset >= 0xFE0 {
+        if self.global_regs && offset >= 0xFE0 {
             return Ok(match offset & !3 {
                 0xFE0 => self.int_status,
                 0xFF0 => self.enable,
@@ -147,7 +167,7 @@ impl MmioDevice for DmaLegacy {
     }
 
     fn write(&mut self, offset: u32, _width: Width, value: u32) -> BusResult<()> {
-        if offset >= 0xFE0 {
+        if self.global_regs && offset >= 0xFE0 {
             match offset & !3 {
                 0xFE0 => self.int_status &= !value,
                 0xFF0 => self.enable = value,
@@ -161,8 +181,22 @@ impl MmioDevice for DmaLegacy {
             return Ok(());
         }
         self.regs[ch][reg] = value;
-        // CS bit 0 (ACTIVE) rising = start the chain at CONBLK_AD.
-        if reg == 0 && value & CS_ACTIVE != 0 {
+        // Two ways a transfer starts, and the firmware uses the second one:
+        //
+        //  * `CS.ACTIVE` set while `CONBLK_AD` already holds a chain, or
+        //  * `CONBLK_AD` written to a non-null chain while `CS.ACTIVE` is
+        //    already set. With ACTIVE set and a null `CONBLK_AD` the channel
+        //    simply idles; writing the CB address is what makes it fetch and
+        //    run.
+        //
+        // dmalib does exactly the latter: `dma_subchan_request_specificchannel`
+        // -> `dma_set_cs` (`0x3EC98E7C`) sets `CS = flags | 1` up front, and
+        // `dma_chain_start` (`0x3EC97544`) then only writes
+        // `*(base + ch*0x100 + 4) = cb`. Starting solely on the CS write meant
+        // the transfer never ran.
+        let active = self.regs[ch][0] & CS_ACTIVE != 0;
+        let armed = self.regs[ch][1] != 0;
+        if (reg == 0 && active && armed) || (reg == 1 && active && value != 0) {
             self.start_pending = Some(ch);
         }
         Ok(())
