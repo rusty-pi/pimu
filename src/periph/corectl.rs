@@ -69,6 +69,24 @@ impl MmioDevice for CoreCtl {
     }
 
     fn write(&mut self, offset: u32, _width: Width, value: u32) -> BusResult<()> {
+        // `RVF_DBG_IRQEN=1`: decode writes to the interrupt-priority words back
+        // into the `enable_irq_source(src, prio)` calls that produced them, for
+        // core 0 (`0x10..0x20`) and core 1 (`0x810..0x820`). Which sources core 1
+        // enables is how we find the inter-core doorbell's interrupt number.
+        if std::env::var_os("RVF_DBG_IRQEN").is_some()
+            && matches!(offset, 0x10..=0x1F | 0x810..=0x81F)
+        {
+            let core = u32::from(offset >= 0x800);
+            let word = (offset - if core == 1 { 0x810 } else { 0x10 }) / 4;
+            let prev = self.storage.get(&offset).copied().unwrap_or(0);
+            for f in 0..8u32 {
+                let (a, b) = ((prev >> (f * 4)) & 0xF, (value >> (f * 4)) & 0xF);
+                if a != b {
+                    let src = word * 8 + f + 64;
+                    eprintln!("[irqen] core{core} src={src} prio {a} -> {b}");
+                }
+            }
+        }
         self.storage.insert(offset, value);
         match offset {
             VBASE_CORE0 => self.vbase[0] = value,

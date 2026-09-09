@@ -273,6 +273,12 @@ impl Emulator {
         // that is eating the step budget when a boot phase runs slow.
         let prof = std::env::var_os("RVF_PROF").is_some();
         let mut prof_hist: std::collections::HashMap<u32, u64> = std::collections::HashMap::new();
+        // RVF_PROF_THREAD=1: same buckets, but keyed by the running ThreadX
+        // thread (`_tx_thread_current_ptr`, `0x3EE35900`) as well, so "which
+        // thread is spinning, and where" can be read off directly.
+        let prof_thread = std::env::var_os("RVF_PROF_THREAD").is_some();
+        let mut prof_thist: std::collections::HashMap<(u32, u32), u64> =
+            std::collections::HashMap::new();
 
         // RVF_DBG_MAINSUS: catch the boot thread (0x3EF248C4) suspending — dump
         // the control-flow tail the one time it stops being the current thread
@@ -280,6 +286,55 @@ impl Emulator {
         let dbg_mainsus = std::env::var_os("RVF_DBG_MAINSUS").is_some();
         let mut mainsus_done = false;
         let mut main_was_cur = false;
+
+        // RVF_CZ_LOG=<n>: raise confzilla's own log level (byte at `0x3EE4ABD8`)
+        // to <n> just before `gpioman_init` kicks off the schema walk
+        // (`0x3ECC9DB0`, `bl 0x3EC89B38`), and dump the schema root descriptor
+        // at `0x3EE19114` (its `.name` is patched to "pins_<variant>" at
+        // runtime). confzilla is the FDT front end that is supposed to invoke
+        // the `pin_config/pin` (`0x3ECC9DC4`) and `pin_defines/pin_define`
+        // (`0x3ECC9EC4`) handlers which register the GPIO providers
+        // (`[gp+807672/676/680]`); none of them fire, so gpioman reports
+        // `error 1`. Its own diagnostics say why.
+        let cz_log: Option<u32> = std::env::var("RVF_CZ_LOG")
+            .ok()
+            .and_then(|v| v.parse().ok());
+
+        // RVF_HEARTBEAT=<n>: every <n> million retired instructions, print model
+        // time, the running ThreadX thread and the PC. The one diagnostic that
+        // says whether a stalled boot is wedged or merely slow.
+        let heartbeat: u64 = std::env::var("RVF_HEARTBEAT")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .map(|m| m.saturating_mul(1_000_000))
+            .unwrap_or(0);
+        let mut next_beat = self.cpu.retired + heartbeat;
+
+        // RVF_TRAP=<hex>[,<hex>...]: print pc / lr / r0-r5 every time core 0
+        // reaches one of these addresses. Generic "who calls this, with what"
+        // probe - the linear disassembler can't xref (it desyncs on inline
+        // data), so callers have to be found at runtime.
+        let traps: Vec<u32> = std::env::var("RVF_TRAP")
+            .ok()
+            .map(|v| {
+                v.split(',')
+                    .filter_map(|t| {
+                        let t = t.trim().trim_start_matches("0x");
+                        u32::from_str_radix(t, 16).ok()
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut trap_hits: std::collections::HashMap<u32, u64> =
+            std::collections::HashMap::new();
+        // RVF_TRAP_FROM=<n>: ignore trap hits before <n> million retired
+        // instructions, so the steady state can be sampled instead of only
+        // early boot.
+        let trap_from: u64 = std::env::var("RVF_TRAP_FROM")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .map(|m| m.saturating_mul(1_000_000))
+            .unwrap_or(0);
 
         // RVF_DBG_EVGET: log every distinct (event-group, caller) pair passed to
         // `_tx_event_flags_get` (`0x3EC3E3BE`), so the groups the boot actually
@@ -308,6 +363,22 @@ impl Emulator {
 
             let pc_before = self.cpu.pc();
 
+            if heartbeat != 0 && self.cpu.retired >= next_beat {
+                next_beat = self.cpu.retired + heartbeat;
+                let cur = self.machine.load(0x3EE3_5900, Width::Word).unwrap_or(0);
+                let exec = self.machine.load(0x3EE3_5904, Width::Word).unwrap_or(0);
+                eprintln!(
+                    "[beat] retired={} model_us={} pc={pc_before:#010x} cur={cur:#010x} exec={exec:#010x}",
+                    self.cpu.retired,
+                    self.machine.systimer.now_us(),
+                );
+            }
+            if prof_thread {
+                let cur = self.machine.load(0x3EE3_5900, Width::Word).unwrap_or(0);
+                *prof_thist
+                    .entry((cur, pc_before & !0xFF))
+                    .or_insert(0) += 1;
+            }
             if prof {
                 *prof_hist.entry(pc_before & !0xFF).or_insert(0) += 1;
             }
@@ -708,6 +779,80 @@ impl Emulator {
                 // (`0x3EDA5B10`) suspends here forever and the whole boot wedges
                 // behind it. Model the completion: OR the requested bits into the
                 // flags word so the get returns straight away.
+                if let Some(lvl) = cz_log {
+                    // `cp_front_fdt_buffer` (`0x3EC89670`): `r10` = the FDT
+                    // buffer it was handed, `r0` = the byte-swapped magic it
+                    // just read from `[r10]`, which must be 0xD00DFEED. This
+                    // says directly whether the blob reached confzilla.
+                    if pc_before == 0x3EC8_9684 {
+                        let buf = self.cpu.regs.get(10);
+                        let be32 = |m: &mut crate::machine::Machine, a: u32| -> u32 {
+                            m.load(a, Width::Word).unwrap_or(0).swap_bytes()
+                        };
+                        let total = be32(&mut self.machine, buf + 4);
+                        // Does the blob confzilla was handed actually contain
+                        // the node the schema root names?
+                        let needle = b"pins_4b";
+                        let mut found = None;
+                        let mut win = [0u8; 8];
+                        let n = total.min(1 << 20);
+                        for i in 0..n {
+                            let c = self.machine.load(buf + i, Width::Byte).unwrap_or(0) as u8;
+                            win.rotate_left(1);
+                            win[7] = c;
+                            if &win[1..8] == needle {
+                                found = Some(buf + i - 6);
+                                break;
+                            }
+                        }
+                        eprintln!(
+                            "[cz] fdt_buffer buf={buf:#010x} magic={:#010x} totalsize={total} \
+                             pins_4b={found:#x?} retired={}",
+                            self.cpu.regs.get(0),
+                            self.cpu.retired
+                        );
+                    }
+                    if pc_before == 0x3ECC_9DB0 {
+                        // confzilla's own log-level byte is `gp+294608`
+                        // (`0x3EC89694`/`0x3EC896C6` gate on it being >= 3).
+                        let _ = self.machine.store(0x3EE4_ABF0, Width::Byte, lvl);
+                        let root = 0x3EE1_9114u32;
+                        let namep = self.machine.load(root, Width::Word).unwrap_or(0);
+                        let mut name = String::new();
+                        for i in 0..40 {
+                            match self.machine.load(namep + i, Width::Byte) {
+                                Ok(0) | Err(_) => break,
+                                Ok(c) => name.push(c as u8 as char),
+                            }
+                        }
+                        eprintln!(
+                            "[cz] schema root {root:#x} name={namep:#x} \"{name}\" type={:#x} children={:#x} arg={:#x}",
+                            self.machine.load(root + 4, Width::Word).unwrap_or(0),
+                            self.machine.load(root + 8, Width::Word).unwrap_or(0),
+                            self.cpu.regs.get(0),
+                        );
+                    }
+                }
+                if !traps.is_empty()
+                    && self.cpu.retired >= trap_from
+                    && traps.contains(&pc_before)
+                {
+                    let n = trap_hits.entry(pc_before).or_insert(0);
+                    *n += 1;
+                    if *n <= 12 {
+                        eprintln!(
+                            "[trap] {pc_before:#010x} #{n} lr={:#010x} r0={:#x} r1={:#x} r2={:#x} r3={:#x} r4={:#x} r5={:#x} retired={}",
+                            self.cpu.regs.get(26),
+                            self.cpu.regs.get(0),
+                            self.cpu.regs.get(1),
+                            self.cpu.regs.get(2),
+                            self.cpu.regs.get(3),
+                            self.cpu.regs.get(4),
+                            self.cpu.regs.get(5),
+                            self.cpu.retired
+                        );
+                    }
+                }
                 if pc_before == 0x3EC3_E3BE && dbg_evget {
                     let grp = self.cpu.regs.get(0);
                     let lr = self.cpu.regs.get(26);
@@ -1119,6 +1264,35 @@ impl Emulator {
             eprintln!("--- RVF_PROF: core-0 PC buckets (total {total}) ---");
             for (pc, n) in v.iter().take(25) {
                 eprintln!("  {pc:#010x}  {n:>14}  {:5.1}%", 100.0 * *n as f64 / total as f64);
+            }
+        }
+        if prof_thread {
+            let total: u64 = prof_thist.values().sum();
+            let mut by_thread: std::collections::HashMap<u32, u64> =
+                std::collections::HashMap::new();
+            for (&(t, _), &n) in prof_thist.iter() {
+                *by_thread.entry(t).or_insert(0) += n;
+            }
+            let mut threads: Vec<_> = by_thread.into_iter().collect();
+            threads.sort_by(|a, b| b.1.cmp(&a.1));
+            eprintln!("--- RVF_PROF_THREAD: core-0 time by ThreadX thread (total {total}) ---");
+            for (t, n) in threads.iter().take(8) {
+                eprintln!(
+                    "  thread {t:#010x}  {n:>14}  {:5.1}%",
+                    100.0 * *n as f64 / total as f64
+                );
+                let mut buckets: Vec<_> = prof_thist
+                    .iter()
+                    .filter(|((tt, _), _)| tt == t)
+                    .map(|((_, pc), &c)| (*pc, c))
+                    .collect();
+                buckets.sort_by(|a, b| b.1.cmp(&a.1));
+                for (pc, c) in buckets.iter().take(6) {
+                    eprintln!(
+                        "      {pc:#010x}  {c:>14}  {:5.1}%",
+                        100.0 * *c as f64 / *n as f64
+                    );
+                }
             }
         }
 
