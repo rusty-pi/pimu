@@ -274,6 +274,13 @@ impl Emulator {
         let prof = std::env::var_os("RVF_PROF").is_some();
         let mut prof_hist: std::collections::HashMap<u32, u64> = std::collections::HashMap::new();
 
+        // RVF_DBG_MAINSUS: catch the boot thread (0x3EF248C4) suspending — dump
+        // the control-flow tail the one time it stops being the current thread
+        // for good.
+        let dbg_mainsus = std::env::var_os("RVF_DBG_MAINSUS").is_some();
+        let mut mainsus_done = false;
+        let mut main_was_cur = false;
+
         let mut core1_end: Option<RunEnd> = None;
         let end = loop {
             if self.cpu.retired + self.cpu1.as_ref().map_or(0, |c| c.retired) >= limits.max_steps {
@@ -296,6 +303,30 @@ impl Emulator {
 
             if prof {
                 *prof_hist.entry(pc_before & !0xFF).or_insert(0) += 1;
+            }
+
+            if dbg_mainsus {
+                let cur = self.machine.load(0x3EE3_5900, Width::Word).unwrap_or(0);
+                if cur == 0x3EF2_48C4 {
+                    main_was_cur = true;
+                } else if main_was_cur {
+                    main_was_cur = false;
+                    if !mainsus_done {
+                        let exec = self.machine.load(0x3EE3_5904, Width::Word).unwrap_or(0);
+                        eprintln!(
+                            "[mainsus] main switched out @ retired={} pc={pc_before:#x} exec={exec:#x}",
+                            self.cpu.retired
+                        );
+                        let cf = &self.cpu.cf_trace;
+                        for &(from, to) in cf.iter().skip(cf.len().saturating_sub(40)) {
+                            eprintln!("[mainsus]   {from:#010x} -> {to:#010x}");
+                        }
+                        // stop after the switch-out that lands past ~140M
+                        if self.cpu.retired > 140_000_000 {
+                            mainsus_done = true;
+                        }
+                    }
+                }
             }
 
             // `0x3EDA28D6` is start4's optimised `memcpy(r0=dst, r1=src,
