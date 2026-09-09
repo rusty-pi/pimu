@@ -76,11 +76,16 @@ pub struct Machine {
     pub mmio_trace: bool,
     pub mmio_events: Vec<(u32, u8, u32, bool)>,
 
-    /// Reconnaissance aid: when `RVF_WATCH=<hex>` is set, every store whose
-    /// word-aligned address matches is logged to stderr tagged with the current
-    /// PC (`watch_pc`, refreshed by the run loop each step). Complements
-    /// `mmio_trace` for pinning down who writes a given RAM word.
-    pub watch: Option<u32>,
+    /// Reconnaissance aid: when `RVF_WATCH=<hex>[,<hex>...]` is set, every store
+    /// whose word-aligned address matches one of them is logged to stderr tagged
+    /// with the current PC (`watch_pc`, refreshed by the run loop each step).
+    /// Complements `mmio_trace` for pinning down who writes a given RAM word.
+    pub watch: Vec<u32>,
+    /// Cached `RVF_TICK_SLOT` / `RVF_IRQ_SLOT` overrides. `timer_tick_slot` runs
+    /// on every `sleep` (millions of times), so these must not re-read the
+    /// environment per call.
+    tick_slot_override: Option<u32>,
+    irq_slot_override: Option<u32>,
     pub watch_pc: u32,
 
     /// `start4.elf` logs boot progress by writing 4-char ASCII tags (`_msh`,
@@ -129,8 +134,21 @@ impl Machine {
             mmio_events: Vec::new(),
             watch: std::env::var("RVF_WATCH")
                 .ok()
-                .and_then(|v| u32::from_str_radix(v.trim().trim_start_matches("0x"), 16).ok())
-                .map(|a| a & !3),
+                .map(|v| {
+                    v.split(',')
+                        .filter_map(|t| {
+                            u32::from_str_radix(t.trim().trim_start_matches("0x"), 16).ok()
+                        })
+                        .map(|a| a & !3)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            tick_slot_override: std::env::var("RVF_TICK_SLOT")
+                .ok()
+                .and_then(|s| s.trim().parse().ok()),
+            irq_slot_override: std::env::var("RVF_IRQ_SLOT")
+                .ok()
+                .and_then(|s| s.trim().parse().ok()),
             watch_pc: 0,
             phase_tags: Vec::new(),
         }
@@ -311,12 +329,7 @@ impl Machine {
         self.bootbox.raise_irq(src, 0);
         // `RVF_IRQ_SLOT` overrides for experiments (slots 3/10 force the ISR's
         // deferred-reschedule path `0x3EDA2594` instead of the plain tick).
-        Some(
-            std::env::var("RVF_IRQ_SLOT")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(slot as u32),
-        )
+        Some(self.irq_slot_override.unwrap_or(slot as u32))
     }
 }
 
@@ -363,19 +376,16 @@ impl Bus for Machine {
         if !self.systimer.any_armed() {
             return None;
         }
-        if let Ok(s) = std::env::var("RVF_TICK_SLOT") {
+        if let Some(base) = self.tick_slot_override {
             // Each compare channel is its own interrupt source (`64 + channel`):
             // channel 0 is the ThreadX tick, channel 2 (source 66, vector
             // `0x3EC3E9BC`) the clock service's timeout timer. When the raw
             // source is selected, deliver whichever channel actually matched.
-            if let Ok(base) = s.parse::<u32>() {
-                if base == crate::periph::corectl::SYS_IRQ_SRC {
-                    let ch = self.systimer.pending_channel().unwrap_or(0) as u32;
-                    return Some(base + ch);
-                }
-                return Some(base);
+            if base == crate::periph::corectl::SYS_IRQ_SRC {
+                let ch = self.systimer.pending_channel().unwrap_or(0) as u32;
+                return Some(base + ch);
             }
-            return None;
+            return Some(base);
         }
         let slot = self.corectl.irq_priority(crate::periph::corectl::SYS_IRQ_SRC);
         if slot == 0 {
@@ -414,8 +424,9 @@ impl Bus for Machine {
 
     fn store(&mut self, addr: u32, width: Width, value: u32) -> BusResult<()> {
         self.ram_writes = self.ram_writes.wrapping_add(1);
-        if let Some(w) = self.watch {
-            if Machine::fold_ram_addr(addr) & !3 == Machine::fold_ram_addr(w) & !3 {
+        if !self.watch.is_empty() {
+            let a = Machine::fold_ram_addr(addr) & !3;
+            if self.watch.iter().any(|&w| Machine::fold_ram_addr(w) & !3 == a) {
                 eprintln!(
                     "[watch] pc={:#010x} store{} {:#010x} <- {:#x}",
                     self.watch_pc,
