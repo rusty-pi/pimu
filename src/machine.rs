@@ -331,23 +331,29 @@ impl Bus for Machine {
 
     fn timer_tick_slot(&mut self) -> Option<u32> {
         // The ThreadX periodic tick is system-timer compare channel 0 = VPU
-        // interrupt source 64 (`SYS_IRQ_SRC`), which vectors *directly* to
-        // handler-table entry 64 (`exc_vbase + 64*4`, holding `0x3EC40B7C`) —
-        // not through a priority stub. That handler acks CS ch0, computes
-        // `elapsed = CLO - <idle timestamp @ [r29+0]>`, advances the 32-bucket
-        // timer wheel and resumes the SysTimer thread, which then wakes every
-        // `msleep`-suspended thread whose timeout is due.
-        //
-        // Verified on rpi-dev with an instrumented `start4.elf` (issue #7): the
-        // only subsystem-driven `_tx_thread_system_resume` during boot is
-        // SysTimer (~800x), always called from `0x3EC40D1A` inside `0x3EC40B7C`.
+        // interrupt source 64 (`SYS_IRQ_SRC`). start4's exception entry vectors
+        // it through the table slot == the 4-bit *priority* stored by
+        // `enable_irq_source(64, prio)`, NOT through table entry 64 directly:
+        // that slot holds a small stub (`push {r0-r5,lr}; mov r0,<prio>; bl
+        // 0x3EC41250`) which runs the full ThreadX `_tx_thread_context_save` /
+        // dispatch / `_tx_thread_context_restore` path around the tick handler
+        // `0x3EC40B7C`. Vectoring straight at `0x3EC40B7C` (table entry 64,
+        // reading past the priority table into code) skips the context save, so
+        // a tick that switches threads restores a garbage frame and the
+        // scheduler derails (`rti` → low address).
         if !self.systimer.any_armed() {
             return None;
         }
-        std::env::var("RVF_TICK_SLOT")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .or(Some(crate::periph::corectl::SYS_IRQ_SRC))
+        if let Ok(s) = std::env::var("RVF_TICK_SLOT") {
+            return s.parse().ok();
+        }
+        let slot = self.corectl.irq_priority(crate::periph::corectl::SYS_IRQ_SRC);
+        if slot == 0 {
+            // Fall back to the raw source if start4 hasn't run
+            // `enable_irq_source` for it yet.
+            return Some(crate::periph::corectl::SYS_IRQ_SRC);
+        }
+        Some(slot as u32)
     }
 
     fn load(&mut self, addr: u32, width: Width) -> BusResult<u32> {
