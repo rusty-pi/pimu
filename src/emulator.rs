@@ -591,10 +591,12 @@ impl Emulator {
                             let vb = self.cpu.exc_vbase;
                             let h = self.machine.load(vb.wrapping_add(slot * 4), Width::Word);
                             eprintln!(
-                                "[tick] #{tick_deliveries} slot={slot} vbase={vb:#x} handler={h:x?} resume={:#x} retired={} nest={:#x}",
+                                "[tick] #{tick_deliveries} slot={slot} vbase={vb:#x} handler={h:x?} resume={:#x} retired={} nest={:#x} cur={:#x} exec={:#x}",
                                 self.cpu.pc(),
                                 self.cpu.retired,
                                 self.machine.load(0x3EE0_3E64, Width::Word).unwrap_or(0xdead),
+                                self.machine.load(0x3EE3_5900, Width::Word).unwrap_or(0xdead),
+                                self.machine.load(0x3EE3_5904, Width::Word).unwrap_or(0xdead),
                             );
                         }
                     }
