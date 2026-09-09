@@ -193,11 +193,17 @@ impl MmioDevice for SysTimer {
         let arm = |st: &mut SysTimer, c: usize| {
             st.cmp[c] = value;
             // `value` is an absolute CLO compare. Derive the period from how far
-            // ahead of "now" it is; if it's already in the past, fire promptly
-            // and keep whatever interval we had.
+            // ahead of "now" it is.
             let delta = value.wrapping_sub(st.micros as u32) as u64;
             if delta == 0 || delta > 0x8000_0000 {
-                st.deadline[c] = Some(st.micros);
+                // Already in the past. Real hardware would fire once and then
+                // not match again until the 32-bit counter wraps (~71 min); the
+                // firmware re-arms it every ISR, and if its `now + interval`
+                // math lands a hair behind `micros` (ISR latency, or a bad
+                // interval from an unmodelled clock RPC) that would re-fire
+                // every step — a runaway tick. Re-arm one retained interval
+                // ahead instead so it stays periodic and bounded.
+                st.deadline[c] = Some(st.micros + st.interval[c].max(1));
             } else {
                 st.interval[c] = delta;
                 st.deadline[c] = Some(st.micros + delta);
