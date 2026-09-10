@@ -41,8 +41,9 @@ pub struct Emulator {
 /// Stopping conditions for [`Emulator::run`].
 #[derive(Debug, Clone)]
 pub struct RunLimits {
-    /// Hard cap on retired instructions. Always set something.
-    pub max_steps: u64,
+    /// Optional cap on retired instructions. `None` = run until the wall clock
+    /// (or another stop condition) ends the run.
+    pub max_steps: Option<u64>,
     /// Optional wall-clock cap.
     pub max_wall: Option<Duration>,
     /// Stop cleanly when the PC reaches this address (e.g. an ARM-handoff stub).
@@ -55,7 +56,7 @@ pub struct RunLimits {
 impl Default for RunLimits {
     fn default() -> Self {
         RunLimits {
-            max_steps: 5_000_000,
+            max_steps: Some(5_000_000),
             max_wall: Some(Duration::from_secs(30)),
             stop_pc: None,
             idle_spin_limit: 0,
@@ -352,7 +353,9 @@ impl Emulator {
 
         let mut core1_end: Option<RunEnd> = None;
         let end = loop {
-            if self.cpu.retired + self.cpu1.as_ref().map_or(0, |c| c.retired) >= limits.max_steps {
+            if limits.max_steps.is_some_and(|max| {
+                self.cpu.retired + self.cpu1.as_ref().map_or(0, |c| c.retired) >= max
+            }) {
                 break RunEnd::StepLimit;
             }
             if let Some(pc) = limits.stop_pc {
