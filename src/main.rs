@@ -21,15 +21,19 @@ USAGE:
     rpi-virt-fw run-all [<dir>] [--update] [-v]
     rpi-virt-fw recon <file> [--entry <hex>] [--ram-mb <n>] [--max-steps <n>] [--eeprom]
                              [--max-wall <secs>] [--sd <img>] [--skip-signed-boot]
+                             [--skip-unimpl]
               (no --max-steps = no instruction cap; --max-wall defaults to 140s)
+              (an unknown instruction stops the run; --skip-unimpl steps over it
+               instead, for reconnaissance on firmware the decoder is new to)
                              [--dump <hex>:<len>] [--disasm <hex>:<count>] [--patch <hex>=<hex>]
     rpi-virt-fw disasm <file> [--base <hex>] [--count <n>] [--vaddr <hex>]
 
 COMMANDS:
     run       Run one scenario and check it against its golden transcript.
     run-all   Run every *.toml scenario in <dir> (default: testdata/scenarios).
-    recon     Load an ELF (or --eeprom image) and run it in skip-on-unimplemented
-              mode, reporting how far it got and which instructions it needs.
+    recon     Load an ELF (or --eeprom image) and run it, reporting how far it
+              got and what it touched. Stops on an instruction the decoder does
+              not implement (--skip-unimpl steps over it instead).
     disasm    Disassemble a flat binary / ELF with the (partial) VPU decoder.
 
 FLAGS:
@@ -90,6 +94,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     let mut disasms: Vec<(u32, u32)> = Vec::new();
     let mut sd_image: Option<PathBuf> = None;
     let mut skip_signed_boot = false;
+    let mut skip_unimpl = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -123,6 +128,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
             "--trace-mmio" => trace_mmio = true,
             "--sd" => sd_image = Some(PathBuf::from(it.next().context("--sd needs a path")?)),
             "--skip-signed-boot" => skip_signed_boot = true,
+            "--skip-unimpl" => skip_unimpl = true,
             "--dump" => {
                 let spec = it.next().context("--dump needs <hexaddr>:<len>")?;
                 let (a, n) = spec.split_once(':').context("--dump: expected addr:len")?;
@@ -240,7 +246,16 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         let start = entry.unwrap_or(payload.entry());
 
         let mut emu = Emulator::new(machine, start);
-        emu.set_unimpl_policy(UnimplPolicy::Skip);
+        // Faulting is the default: an instruction the decoder does not know
+        // would otherwise be silently stepped over, and the firmware would
+        // quietly not do whatever it was for. `--skip-unimpl` restores the old
+        // behaviour for reconnaissance on firmware the decoder has not been
+        // taught yet.
+        emu.set_unimpl_policy(if skip_unimpl {
+            UnimplPolicy::Skip
+        } else {
+            UnimplPolicy::ReconFault
+        });
         emu.cpu.trace = trace;
         emu.cpu.exc_vbase = exc_vbase;
         emu.cpu.trace_cf_only = trace && !trace_full && trace_from == 0;
@@ -450,7 +465,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         );
         for h in report.unimpl.iter().take(40) {
             println!(
-                "  {:>9}x  pc={:#010x}  {:>2}-bit  raw={:012x}  {:?}",
+                "  {:>9}x  pc={:#010x}  {:>2}-bit  raw={:020x}  {:?}",
                 h.count,
                 h.pc,
                 h.len * 8,

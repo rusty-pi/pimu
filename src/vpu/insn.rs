@@ -424,6 +424,10 @@ pub enum Op {
         count: u8,
         include_pc: bool,
     },
+    /// A vector-unit instruction (48- or 80-bit, `0xF000..`), decoded to
+    /// operands. Only the subset that touches no vector register is
+    /// *executable* — see [`VecInsn::executable`].
+    Vector(VecInsn),
     /// Correctly sized but not decoded to semantics.
     Unimpl {
         raw: u64,
@@ -431,6 +435,416 @@ pub enum Op {
         class: InsnClass,
     },
 }
+
+/// One VRF operand slot of a vector instruction.
+///
+/// The Vector Register File is a 64x64 array of bytes; a vector register is a
+/// 16-element window into it, named by a 4-bit "type" descriptor (element width
+/// plus horizontal/vertical direction plus the column band) and a 6-bit
+/// coordinate. Descriptors 14 and 15 are the "dash" slot, which names no VRF
+/// register at all: `videocoreiv.arch` spells its meaning per position as
+/// "Discard result (D), Ignore (A), Use coordinate as Scalar (B)".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VecSlot {
+    /// 4-bit descriptor: `(type3 << 1) | vertical`. >= 14 is the dash slot.
+    pub desc: u8,
+    /// 6-bit coordinate. For a dash slot in the B position this is a *scalar*
+    /// register number instead (`r0..r63`, though only `r0..r31` exist).
+    pub coord: u8,
+}
+
+impl VecSlot {
+    /// Names no vector register.
+    pub fn is_dash(self) -> bool {
+        self.desc >= 14
+    }
+}
+
+/// The memory operand of a vector load/store: `(rbase + offset [+= rincr])`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VecAddr {
+    pub base: u8,
+    pub offset: u32,
+    /// Scalar register added to the base after the transfer (80-bit forms).
+    pub incr: Option<u8>,
+}
+
+/// Third operand of a vector instruction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VecOperandB {
+    /// A VRF register, or — when the slot is a dash — the scalar register named
+    /// by its coordinate (an ALU source, or the base register of a memory op).
+    Slot(VecSlot),
+    /// 6-bit immediate (48-bit encodings) or 16-bit immediate (80-bit).
+    Imm(u32),
+}
+
+/// The scalar-result-unit / accumulator field of an 80-bit vector op.
+///
+/// Bit 6 selects the SRU (scalar writeback) group; then bits 3..5 pick the
+/// function and bits 0..2 the scalar register. This split is confirmed by
+/// `binutils-vc4`'s `print_vec80mods` and by `videocoreiv.arch`'s `S` table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VecSru {
+    /// No scalar writeback, and no accumulator update.
+    None,
+    /// Accumulator update (`UADD`/`SACC`/...). Not modelled.
+    Acc(u8),
+    /// `SUMU`/`SUMS`/`IMIN`/`IMAX`/`MAX`... writing scalar `r<reg>`.
+    Scalar { func: u8, reg: u8 },
+}
+
+impl VecSru {
+    pub const SUMU: u8 = 0;
+    pub const SUMS: u8 = 1;
+
+    pub fn from_field(f: u8) -> VecSru {
+        if f & 0x40 != 0 {
+            VecSru::Scalar {
+                func: (f >> 3) & 7,
+                reg: f & 7,
+            }
+        } else if f & 0x3F != 0 {
+            VecSru::Acc(f & 0x3F)
+        } else {
+            VecSru::None
+        }
+    }
+}
+
+/// A decoded vector-unit instruction.
+///
+/// Field layout transcribed from Herman Hermitage's `videocoreiv.arch` and
+/// cross-checked, byte for byte, against `binutils-vc4`'s gas test corpus
+/// (`gas/testsuite/gas/vc4/{dash,accmods,alu80-setf,wide,vldst}.d`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct VecInsn {
+    /// 80-bit encoding (`0xF800..`) rather than 48-bit (`0xF000..`).
+    pub wide: bool,
+    /// Memory class (`vld`/`vst`/`vmemread`/... `M` sub-op) rather than the
+    /// ALU class (`vadd`/`vmov`/... `v` sub-op).
+    pub mem: bool,
+    /// `M` (0..31) for the memory class, `v` (0..63) for the ALU class.
+    pub subop: u8,
+    /// Element width in bits: 8, 16 or 32.
+    pub lane_bits: u8,
+    pub d: VecSlot,
+    pub a: VecSlot,
+    pub b: VecOperandB,
+    /// Set for a memory-class op whose B slot is a dash, i.e. one that
+    /// addresses memory rather than naming a third vector register.
+    pub addr: Option<VecAddr>,
+    /// `*` / `++` coordinate modifiers on the D and A slots (80-bit forms).
+    pub d_mod: u8,
+    pub a_mod: u8,
+    /// `SETF` — update the per-lane vector flags.
+    pub setf: bool,
+    /// `REP` field: 0 = execute once.
+    pub rep: u8,
+    /// Lane predication (`IFZ`/`IFNZ`/...): 0 = all lanes.
+    pub pred: u8,
+    /// Accumulator / scalar-writeback modifier (80-bit encodings only).
+    pub sru: VecSru,
+    /// The instruction word, most significant parcel first.
+    pub raw: u128,
+    pub len: u8,
+}
+
+/// How much of a vector instruction this model can actually carry out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VecExec {
+    /// A memory read whose destination is discarded: `v<w>ld -, (rN)`. Reads
+    /// `16 * lane_bytes` bytes from `rN + offset` and throws them away.
+    DiscardedLoad { base: u8, offset: u32, bytes: u32 },
+    /// `v<w>mov -, rN SUM{S,U} rK`: broadcast a scalar across the 16 lanes,
+    /// discard the vector result, write the sum of the lanes back to a scalar
+    /// register.
+    SumOfBroadcast { src: u8, dst: u8, signed: bool },
+    /// Needs the vector register file, which this model does not have.
+    NeedsVrf,
+}
+
+impl VecInsn {
+    /// Does any slot name a real vector register?
+    pub fn touches_vrf(&self) -> bool {
+        let b_vrf = match self.b {
+            VecOperandB::Slot(s) => !s.is_dash(),
+            VecOperandB::Imm(_) => false,
+        };
+        !self.d.is_dash() || !self.a.is_dash() || b_vrf
+    }
+
+    /// Number of lanes in a vector register. Fixed by the architecture.
+    pub const LANES: u32 = 16;
+
+    /// Classify this instruction for the executor.
+    ///
+    /// The vector register file is not modelled, so almost every vector
+    /// instruction is [`VecExec::NeedsVrf`] and must fault rather than be
+    /// guessed at. Two encodings are executable, and they are matched *exactly*
+    /// — as whole instruction words, with only the fields whose meaning is
+    /// established left free — rather than by a loose test on the decoded
+    /// fields. The encoding has plenty of corners this decoder renders only
+    /// approximately (per-slot `+rN` addends, fine-x coordinate bits, the
+    /// accumulator modifiers); an exact match cannot be fooled by one.
+    ///
+    /// Both forms come from `FUN_0edc9e20` in `start4.elf`, the routine that
+    /// flushes the vector unit's outstanding reads before the VRF semaphore is
+    /// released, and both were disassembled with `binutils-vc4` objdump to
+    /// confirm the reading.
+    pub fn executable(&self) -> VecExec {
+        // `v<w>ld -,(rN)` — a load with a discarded destination. Free fields:
+        // the 2-bit width (bits 11..12) and the base register (bits 42..47).
+        const LD48: u128 = 0xF000_E038_0380;
+        const LD48_FREE: u128 = (3 << 35) | 0x3F;
+        // `v<w>mov -,rN SUM{U,S} rK` — broadcast a scalar over the lanes,
+        // discard the vector result, sum the lanes back into a scalar. Free
+        // fields: the operation size L (bit 6), the source register
+        // (bits 42..47) and the SRU selector (bits 67..73).
+        const MOV80: u128 = 0xFC00_E038_0380_F3C0_1200;
+        const MOV80_FREE: u128 = (1 << 73) | (0x3F << 32) | (0x7F << 6);
+
+        if self.len == 6 && self.raw & !LD48_FREE == LD48 & !LD48_FREE {
+            return VecExec::DiscardedLoad {
+                base: (self.raw & 0x3F) as u8,
+                offset: 0,
+                bytes: Self::LANES * (self.lane_bits as u32 / 8),
+            };
+        }
+        if self.len == 10 && self.raw & !MOV80_FREE == MOV80 & !MOV80_FREE {
+            // Only the two sum functions; the others (IMIN/IMAX/MAX) write a
+            // lane *index*, which needs real lanes.
+            if let VecSru::Scalar { func, reg } = self.sru {
+                if func == VecSru::SUMU || func == VecSru::SUMS {
+                    return VecExec::SumOfBroadcast {
+                        src: ((self.raw >> 32) & 0x3F) as u8,
+                        dst: reg,
+                        signed: func == VecSru::SUMS,
+                    };
+                }
+            }
+        }
+        VecExec::NeedsVrf
+    }
+
+    /// Mnemonic, in `binutils-vc4` objdump spelling.
+    pub fn mnemonic(&self) -> String {
+        let op = if self.mem {
+            VEC_MEM_OPS
+                .get(self.subop as usize)
+                .copied()
+                .unwrap_or("mem?")
+        } else {
+            VEC_ALU_OPS
+                .get(self.subop as usize)
+                .copied()
+                .unwrap_or("op?")
+        };
+        format!("v{}{}", self.lane_bits, op)
+    }
+}
+
+fn slot_str(s: VecSlot, scalar: bool) -> String {
+    if s.is_dash() {
+        return if scalar {
+            format!("r{}", s.coord)
+        } else {
+            "-".to_string()
+        };
+    }
+    // desc = (type3 << 1) | vertical; type3 picks width and column band.
+    let vertical = s.desc & 1 != 0;
+    let (name, col) = match s.desc >> 1 {
+        0 => ("", 0),
+        1 => ("", 16),
+        2 => ("", 32),
+        3 => ("", 48),
+        4 => ("X", 0),
+        5 => ("X", 32),
+        _ => ("Y", 0),
+    };
+    format!(
+        "{}{}({},{})",
+        if vertical { "V" } else { "H" },
+        name,
+        s.coord,
+        col
+    )
+}
+
+impl std::fmt::Debug for VecInsn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} ", self.mnemonic())?;
+        // A store's source sits in the A slot with a dash destination; a load's
+        // destination sits in D. Print whichever is the real register first,
+        // the way `binutils-vc4` objdump does.
+        let first = if self.d.is_dash() && !self.a.is_dash() {
+            (self.a, self.a_mod)
+        } else {
+            (self.d, self.d_mod)
+        };
+        write!(
+            f,
+            "{}{}",
+            slot_str(first.0, false),
+            MOD_STR[first.1 as usize]
+        )?;
+        if self.mem {
+            match self.addr {
+                Some(a) => {
+                    write!(f, ",(r{}", a.base)?;
+                    if a.offset != 0 {
+                        write!(f, "+{}", a.offset)?;
+                    }
+                    if let Some(i) = a.incr {
+                        write!(f, "+=r{i}")?;
+                    }
+                    write!(f, ")")?;
+                }
+                None => match self.b {
+                    VecOperandB::Slot(s) => write!(f, ",{}", slot_str(s, false))?,
+                    VecOperandB::Imm(i) => write!(f, ",{i:#x}")?,
+                },
+            }
+        } else {
+            if !self.a.is_dash() && !self.d.is_dash() {
+                write!(
+                    f,
+                    ",{}{}",
+                    slot_str(self.a, false),
+                    MOD_STR[self.a_mod as usize]
+                )?;
+            }
+            match self.b {
+                VecOperandB::Slot(s) => write!(f, ",{}", slot_str(s, true))?,
+                VecOperandB::Imm(i) => write!(f, ",{i:#x}")?,
+            }
+        }
+        if self.rep != 0 {
+            write!(f, " REP{}", 1u32 << self.rep)?;
+        }
+        if self.setf {
+            write!(f, " SETF")?;
+        }
+        match self.sru {
+            VecSru::None => {}
+            VecSru::Acc(v) => write!(f, " ACC{v:#x}")?,
+            VecSru::Scalar { func, reg } => write!(
+                f,
+                " {} r{reg}",
+                ["SUMU", "SUMS", "max2", "IMIN", "max4", "IMAX", "max6", "MAX"][func as usize]
+            )?,
+        }
+        Ok(())
+    }
+}
+
+/// `define-table G`/`H`/`K` — the per-slot coordinate modifiers.
+const MOD_STR: [&str; 4] = ["", "*", "++", "*++"];
+
+/// `define-table M` in `videocoreiv.arch` — the memory-class sub-ops.
+pub const VEC_MEM_OPS: [&str; 32] = [
+    "ld",
+    "lookupm",
+    "lookupml",
+    "mem03",
+    "st",
+    "indexwritem",
+    "indexwriteml",
+    "mem07",
+    "memread",
+    "memwrite",
+    "mem10",
+    "mem11",
+    "mem12",
+    "mem13",
+    "mem14",
+    "mem15",
+    "mem16",
+    "mem17",
+    "mem18",
+    "mem19",
+    "mem20",
+    "mem21",
+    "mem22",
+    "mem23",
+    "getacc",
+    "mem25",
+    "mem26",
+    "mem27",
+    "mem28",
+    "mem29",
+    "mem30",
+    "mem31",
+];
+
+/// `define-table v` in `videocoreiv.arch` — the ALU-class sub-ops.
+pub const VEC_ALU_OPS: [&str; 64] = [
+    "mov",
+    "bitplanes",
+    "even",
+    "odd",
+    "interl",
+    "interh",
+    "brev",
+    "ror",
+    "shl",
+    "shls",
+    "lsr",
+    "asr",
+    "signshl",
+    "op13",
+    "signasl",
+    "signasls",
+    "and",
+    "or",
+    "eor",
+    "bic",
+    "count",
+    "msb",
+    "op22",
+    "op23",
+    "min",
+    "max",
+    "dist",
+    "dists",
+    "clip",
+    "sign",
+    "clips",
+    "testmag",
+    "add",
+    "adds",
+    "addc",
+    "addsc",
+    "sub",
+    "subs",
+    "subc",
+    "subsc",
+    "rsub",
+    "rsubs",
+    "rsubc",
+    "rsubsc",
+    "op44",
+    "op45",
+    "op46",
+    "op47",
+    "mull",
+    "mulls",
+    "mulm",
+    "mulms",
+    "mulhd.ss",
+    "mulhd.su",
+    "mulhd.us",
+    "mulhd.uu",
+    "mulhn.ss",
+    "mulhn.su",
+    "mulhn.us",
+    "mulhn.uu",
+    "mulht.ss",
+    "mulht.su",
+    "op62",
+    "op63",
+];
 
 impl AluOp {
     pub fn mnemonic(self) -> &'static str {
@@ -518,6 +932,7 @@ impl Op {
             AddCmpB { cond, .. } => format!("addcmpb{}", cond.mnemonic()),
             PushMulti { .. } => "stm".into(),
             PopMulti { .. } => "ldm".into(),
+            Vector(v) => v.mnemonic(),
             Unimpl { .. } => "??".into(),
         }
     }
