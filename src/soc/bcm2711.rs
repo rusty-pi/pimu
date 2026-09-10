@@ -77,6 +77,17 @@ pub const BSC0_SIZE: u32 = 0x20;
 pub const FIFO_STUB_BASE: u32 = 0x7E20_F000;
 pub const FIFO_STUB_SIZE: u32 = 0x1000;
 
+/// VCE (VideoCore vector/codec engine). Two windows, both taken from start4's
+/// own driver (`vcfw/drivers/chip/vciv/2708/vce.c`): data memory at
+/// `0x7F10_0000`, program memory at `0x7F11_0000` and the register file at
+/// `0x7F12_0000` form one contiguous aperture, and the control block sits apart
+/// at `0x7F14_0000`. `0x7F13_0000` is not claimed — nothing is known about it,
+/// so it stays on the stub where it still shows up in the run report.
+pub const VCE_BASE: u32 = crate::periph::vce::BASE;
+pub const VCE_MEM_SIZE: u32 = crate::periph::vce::MEM_SIZE;
+pub const VCE_CTRL_BASE: u32 = VCE_BASE + crate::periph::vce::CTRL_OFF;
+pub const VCE_CTRL_SIZE: u32 = crate::periph::vce::CTRL_SIZE;
+
 /// ARM control block: mailboxes, doorbells, IRQ routing (`0x7E00_B000`).
 pub const ARMCTRL_BASE: u32 = 0x7E00_B000;
 pub const ARMCTRL_SIZE: u32 = 0x1000;
