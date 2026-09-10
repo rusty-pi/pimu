@@ -95,6 +95,9 @@ pub struct RunReport {
     pub pc: u32,
     /// Everything the console UART transmitted during the run.
     pub console: Vec<u8>,
+    /// True if [`Self::console`] was already streamed to stderr as it was
+    /// produced, so the summary does not need to repeat it.
+    pub console_streamed: bool,
     /// Distinct unimplemented instructions encountered (reconnaissance).
     pub unimpl: Vec<crate::vpu::exec::UnimplHit>,
     /// Final register file (r0..r31) of core 0.
@@ -160,9 +163,12 @@ impl Emulator {
         let start = Instant::now();
         let mut console = Vec::new();
         let mut wall_check = 0u64;
-        // `RVF_LIVE_CONSOLE=1` echoes UART output to stderr as it happens, so a
-        // long `recon` run can be watched instead of waiting for the summary.
-        let live_console = std::env::var_os("RVF_LIVE_CONSOLE").is_some();
+        // UART output is echoed to stderr as it happens, so a run can be
+        // watched instead of waiting for the summary at the end. Set
+        // `RVF_LIVE_CONSOLE=0` to get the buffered-only behaviour back (the
+        // summary still prints the whole console either way, but it is not
+        // repeated once it has been streamed).
+        let live_console = std::env::var("RVF_LIVE_CONSOLE").as_deref() != Ok("0");
         // `RVF_MMIO_FROM=<hex>` arms `--trace-mmio`-style logging only once the
         // PC first reaches that address — lets you capture a late boot stage
         // (e.g. start4.elf) without drowning in the bootloader's MMIO.
@@ -1665,6 +1671,7 @@ impl Emulator {
             wall: start.elapsed(),
             pc: self.cpu.pc(),
             console,
+            console_streamed: live_console,
             unimpl,
             regs: std::array::from_fn(|i| self.cpu.regs.get(i)),
             core1_pc: self.cpu1.as_ref().map(|c| c.pc()),

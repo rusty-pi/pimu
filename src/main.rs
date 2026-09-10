@@ -318,7 +318,12 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
 
     if !report.console.is_empty() {
         println!("\n--- console ({} bytes) ---", report.console.len());
-        println!("{}", String::from_utf8_lossy(&report.console));
+        if report.console_streamed {
+            // Already echoed to stderr line by line while the run was going.
+            println!("(streamed above; RVF_LIVE_CONSOLE=0 to buffer it here instead)");
+        } else {
+            println!("{}", String::from_utf8_lossy(&report.console));
+        }
     }
 
     for &(a, n) in &dumps {
