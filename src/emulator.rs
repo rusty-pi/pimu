@@ -220,13 +220,20 @@ impl Emulator {
         let mut delay_ff_cf = (u32::MAX, u32::MAX);
         let mut progress_at_delay = progress_count(&self.machine);
 
-        // Interim async-mailbox shim: the real 0x7EE0 service/completer is not
-        // modeled yet. Keep this opt-in so callers cannot mistake it for the
-        // hardware queue implementation tracked by issue #3.
-        let mbox_kick = std::env::var("RVF_MBOX_KICK")
-            .ok()
-            .and_then(|s| u32::from_str_radix(s.trim().trim_start_matches("0x"), 16).ok());
-        let mut mbox_kick_at = 0u64;
+        // `RVF_MBOX_KICK` used to live here: from the idle loop it called the
+        // lock-release `0x3ED651E6` on a hard-coded object address whenever that
+        // word showed a queued waiter, on the theory that an unmodelled
+        // "0x7EE0 mailbox completer" owed the release. The object it was pointed
+        // at (`0xBEF6D458`, the uncached alias of a stack frame) is a dmalib
+        // transfer control block - `dma_transfer_init` (`0x3EC996CE`) zeroes it
+        // and `dma_transfer_queue_post` (`0x3EC99898`) marks it 1 - and the
+        // release is the firmware's own `dma_chan_interrupt`, reached from
+        // `dma_interrupt` (`0x3EC980E8`) on the channel's completion interrupt
+        // (source `0x50 + channel`). That interrupt is modelled now, in
+        // `Machine::run_dma_legacy`, so the firmware retires its own transfers:
+        // `RVF_WATCH=0xbef6d458` shows the word cycling 0 -> 1 -> 0 through
+        // `0x3ED651C8` / `0x3ED65208` for the whole boot and never parking on a
+        // waiter pointer. The shim has been removed rather than left armed.
 
         // DEBUG `RVF_GPIOMAN_SHIM=1`: the model never runs the schema-tree
         // apply-walk that invokes `provider_register`, so gpioman's provider
@@ -556,19 +563,6 @@ impl Emulator {
                 let us = (self.cpu.regs.get(1) as u64).min(5_000_000);
                 if us != 0 {
                     self.machine.systimer.jump(us);
-                }
-            }
-            if let Some(obj) = mbox_kick {
-                if pc_before == 0x3EC3_FFCA
-                    && self.cpu.retired.saturating_sub(mbox_kick_at) > 2000
-                {
-                    let held = self.machine.load(obj, Width::Word).unwrap_or(0);
-                    if held != 0 && held != 1 {
-                        mbox_kick_at = self.cpu.retired;
-                        self.cpu.regs.set(0, obj);
-                        self.cpu.regs.set(26, pc_before);
-                        self.cpu.regs.pc = 0x3ED6_51E6;
-                    }
                 }
             }
             if probe {

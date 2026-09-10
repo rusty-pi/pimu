@@ -57,7 +57,7 @@ jobs:
           # read to '*** Restart logging' (issue #7).
           RVF_SCHED_TICK: "1"
           # Still forces the PLL / clock-rate loops to converge (issue #1) and
-          # pins the DA9090 errno (issue #4). RVF_MBOX_KICK is no longer needed.
+          # pins the DA9090 errno (issue #4). It is the only shim left.
           RVF_GPIOMAN_SHIM: "1"
           # stream the UART console (incl. `MESS:` lines) as it is produced.
           RVF_LIVE_CONSOLE: "1"
@@ -74,7 +74,7 @@ jobs:
             exit "$status"
           fi
           # A timeout is acceptable only after start4 has progressed past the
-          # async mailbox handoff and emitted its first MESS log.
+          # DMA transfer completion and emitted its first MESS log.
           grep -q 'MESS:.*arasan_emmc_open' boot.log
           # ...and reached the HDMI phase, giving up on EDID exactly once per
           # controller the way real hardware with no monitor does (see

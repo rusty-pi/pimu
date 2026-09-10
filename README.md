@@ -43,10 +43,14 @@ Working:
 - **CI** — `.github/workflows/boot-log.yml` runs the simulated boot on every
   push / PR to `main` and fails if it regresses before `arasan_emmc_open`.
 
-Two opt-in shims are still needed to get as far as `clkm`
-(`RVF_MBOX_KICK`, `RVF_GPIOMAN_SHIM`) — see the open issues. Current wall: the
-clock-manager PLL frequency calibration never converges because the `0x7D5D`
-frequency monitors aren't modelled ([#1](https://github.com/valtzu/rpi-virt-fw/issues/1)).
+Two knobs are still needed for the full boot: `RVF_SCHED_TICK=1` runs the real
+ThreadX periodic tick, and `RVF_GPIOMAN_SHIM=1` is the one remaining shim — it
+forces the PLL / clock-rate loops to converge
+([#1](https://github.com/valtzu/rpi-virt-fw/issues/1)) and pins the DA9090 errno
+([#4](https://github.com/valtzu/rpi-virt-fw/issues/4)). `RVF_MBOX_KICK` is gone:
+it released a dmalib transfer's completion word by hand, which the firmware's own
+`dma_chan_interrupt` does now that the DMA completion interrupt is modelled
+([#3](https://github.com/valtzu/rpi-virt-fw/issues/3)).
 
 Not done: the VPU vector/float unit, USB3 (VL805) and GENET netboot, the ARM
 kernel/DTB load and hand-off. See [`docs/boot-chain.md`](docs/boot-chain.md)
@@ -65,7 +69,7 @@ cargo run -- disasm firmware/start4.elf --base 0xcec00200 --count 40
 
 # Run the real boot chain: EEPROM bootloader + start4.elf off an SD image.
 ./scripts/make-sd.sh                            # build firmware/sd.img
-RVF_MBOX_KICK=0xbef6d458 RVF_GPIOMAN_SHIM=1 \
+RVF_SCHED_TICK=1 RVF_GPIOMAN_SHIM=1 \
   cargo run --release -- recon firmware/pieeprom.bin \
     --eeprom --sd firmware/sd.img --max-wall 240
 ```
