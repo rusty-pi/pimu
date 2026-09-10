@@ -76,6 +76,14 @@ pub struct Vpu {
     pub on_unimpl: UnimplPolicy,
     /// Count of instructions skipped under [`UnimplPolicy::Skip`].
     pub skipped: u64,
+    /// Consecutive `bkpt` (`0x0000`) parcels stepped over, and whether the
+    /// resulting nop-slide has already been reported.
+    bkpt_run: u32,
+    derail_reported: bool,
+    /// Previous instruction's `pc`, and the `pc` that branched into the current
+    /// nop-slide (for [`Self::bkpt_run`] derail reporting).
+    prev_pc: u32,
+    slide_from: u32,
     /// Distinct unimplemented instructions seen (bounded).
     pub unimpl: Vec<UnimplHit>,
     /// Value returned by `version rd` (before the core-id bit is OR'd in).
@@ -285,6 +293,12 @@ impl Vpu {
             None
         };
 
+        if !matches!(insn.op, Op::Bkpt) {
+            self.bkpt_run = 0;
+        }
+        let prev_pc = self.prev_pc;
+        self.prev_pc = pc;
+
         match insn.op {
             Op::Nop => self.regs.pc = next,
             Op::SetIrqEnable(on) => {
@@ -369,6 +383,28 @@ impl Vpu {
                 // through DRAM).
                 if matches!(self.on_unimpl, UnimplPolicy::Skip) && self.core_id == 0 {
                     self.skipped += 1;
+                    // A derail into zeroed RAM shows up as a long nop-slide of
+                    // `0x0000` parcels. Report the first one, once, so the run
+                    // that produced it can be traced back to its last real
+                    // instruction instead of only reporting a garbage final pc.
+                    self.bkpt_run += 1;
+                    if self.bkpt_run == 1 {
+                        self.slide_from = prev_pc;
+                    }
+                    if self.bkpt_run == 64 && !self.derail_reported {
+                        self.derail_reported = true;
+                        eprintln!(
+                            "[derail] nop-slide at pc={pc:#x} from={:#x} lr={:#x} sp={:#x} retired={} regs=[{}]",
+                            self.slide_from,
+                            self.regs.get(LR),
+                            self.regs.get(SP),
+                            self.retired,
+                            (0..16)
+                                .map(|r| format!("{:x}", self.regs.get(r)))
+                                .collect::<Vec<_>>()
+                                .join(",")
+                        );
+                    }
                     self.regs.pc = next;
                 } else {
                     return self.stop(Stop::Halt(HaltReason::Breakpoint));
@@ -747,11 +783,24 @@ impl Vpu {
                         }
                     }
                 };
-                // Register list in ascending memory order, then `lr` at the top
-                // word of the frame. (`count == 0` is the `stm lr` / `ldm pc`
-                // form — see `decode.rs`.)
+                // The register list is stored **highest register at the lowest
+                // address**, with `lr` in the top word of the frame. (`count ==
+                // 0` is the `stm lr` / `ldm pc` form — see `decode.rs`.)
+                //
+                // This ordering is what makes ThreadX's interrupt frame
+                // compose: the ISR stub does `push {r0-r5, lr}` and
+                // `_tx_thread_context_save` (`0x3EC3FA34`) then does
+                // `push {r6-r15}; push {r16-r23}`, and `_tx_thread_schedule`
+                // (`0x3EC40040`) restores the lot with
+                // `pop {r16-r23}; pop {r0-r15}; ld r26,(sp)++; rti`. A single
+                // 16-register pop can only undo those two separate pushes if
+                // each block runs downwards in register number, so that the
+                // `{r6-r15}` block lands exactly where `pop {r0-r15}` looks for
+                // r15..r6 and the stub's `{r0-r5}` block where it looks for
+                // r5..r0. Ascending order rotates the register file by 6 on
+                // every preemptive context switch.
                 for w in 0..count as u32 {
-                    let r = ((first as usize) + w as usize) & 31;
+                    let r = ((first as usize) + (count as usize - 1 - w as usize)) & 31;
                     if !put(self, bus, r, sp.wrapping_add(4 * w)) {
                         return Step::Stopped;
                     }
@@ -780,7 +829,7 @@ impl Vpu {
                         Ok(v) => v,
                         Err(err) => return self.stop(Stop::Fault(Fault::Bus { pc, err })),
                     };
-                    let r = ((first as usize) + w as usize) & 31;
+                    let r = ((first as usize) + (count as usize - 1 - w as usize)) & 31;
                     self.regs.set(r, v);
                     if r == SP {
                         popped_sp = true;

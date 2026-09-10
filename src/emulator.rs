@@ -1076,7 +1076,7 @@ impl Emulator {
                     *n += 1;
                     if *n <= 12 {
                         eprintln!(
-                            "[trap] {pc_before:#010x} #{n} lr={:#010x} r0={:#x} r1={:#x} r2={:#x} r3={:#x} r4={:#x} r5={:#x} retired={}",
+                            "[trap] {pc_before:#010x} #{n} lr={:#010x} r0={:#x} r1={:#x} r2={:#x} r3={:#x} r4={:#x} r5={:#x} r6={:#x} r7={:#x} sp={:#x} retired={}",
                             self.cpu.regs.get(26),
                             self.cpu.regs.get(0),
                             self.cpu.regs.get(1),
@@ -1084,6 +1084,9 @@ impl Emulator {
                             self.cpu.regs.get(3),
                             self.cpu.regs.get(4),
                             self.cpu.regs.get(5),
+                            self.cpu.regs.get(6),
+                            self.cpu.regs.get(7),
+                            self.cpu.regs.get(25),
                             self.cpu.retired
                         );
                     }
