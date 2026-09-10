@@ -65,6 +65,14 @@ pub const SPI0_SIZE: u32 = 0x18;
 pub const BSC_PMIC_BASE: u32 = 0x7E20_5E00;
 pub const BSC_PMIC_SIZE: u32 = 0x20;
 
+/// BSC instance 0 (`0x7E20_5000`). start4's I²C driver picks its base from the
+/// bus id — 8 is the PMIC bus above, 0 is this one, anything else is
+/// `0x7E80_3000 + id * 0x1000` (`FUN_0ecf0ed0`). Late in the boot it probes
+/// address `0x52` here for a HAT / display EEPROM; nothing is attached on a
+/// bare board, so the transfer must complete with `S.ERR`.
+pub const BSC0_BASE: u32 = 0x7E20_5000;
+pub const BSC0_SIZE: u32 = 0x20;
+
 /// Unmodelled FIFO/crypto block at `0x7E20_F000` the EEPROM bootloader polls.
 pub const FIFO_STUB_BASE: u32 = 0x7E20_F000;
 pub const FIFO_STUB_SIZE: u32 = 0x1000;
