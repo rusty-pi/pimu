@@ -21,6 +21,18 @@ use std::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
+/// `SCALER_DISPID` — a read-only identification register. start4 gates its
+/// whole display bring-up on it: `0x3EC945CC` reads `[0x7E40_0008]`, compares
+/// it against `0x64647276` and returns -1 immediately if it does not match,
+/// which skips `hdmi_init` and therefore the HDMI provider registration at
+/// `0x3ECEC626` (issue #13). Returning 0 made the model look like a chip with
+/// no HVS at all.
+///
+/// The value is read off a running Pi 4, not guessed:
+/// `/sys/kernel/debug/dri/0/hvs_regs` reports `SCALER_DISPID = 0x64647276`.
+const DISPID: u32 = 0x08;
+const DISPID_VALUE: u32 = 0x6464_7276;
+
 /// First "requested frame" slot; four channels at stride 4.
 const REQUESTED_BASE: u32 = 0x20;
 /// First "current frame" slot, mirrored back from `REQUESTED_BASE`.
@@ -45,6 +57,9 @@ impl MmioDevice for Hvs {
 
     fn read(&mut self, offset: u32, _width: Width) -> BusResult<u32> {
         let off = offset & !3;
+        if off == DISPID {
+            return Ok(DISPID_VALUE);
+        }
         if (CURRENT_BASE..CURRENT_BASE + 4 * CHANNELS).contains(&off) {
             // Scanout instantly caught up to the requested frame.
             let requested = REQUESTED_BASE + (off - CURRENT_BASE);
@@ -54,7 +69,12 @@ impl MmioDevice for Hvs {
     }
 
     fn write(&mut self, offset: u32, _width: Width, value: u32) -> BusResult<()> {
-        self.storage.insert(offset & !3, value);
+        let off = offset & !3;
+        if off == DISPID {
+            // Read-only.
+            return Ok(());
+        }
+        self.storage.insert(off, value);
         Ok(())
     }
 }
