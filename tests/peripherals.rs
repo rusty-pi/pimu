@@ -114,6 +114,24 @@ fn core1_registers_are_inside_the_corectl_window() {
     assert_eq!(m.corectl.vbase[0], 0x0002_8000);
 }
 
+/// Core 1's vector base is one 0x800 stride above core 0's, like every other
+/// register in this block. A boot trace of the core-control writes shows the
+/// pair `+0x30` and `+0x830` taking the same base (`0xFEC01E00`) and nothing
+/// ever writing `+0x38`; the old `+0x38` guess left `vbase[1]` at 0, so core 1
+/// could never be vectored (commit `06a8447`).
+#[test]
+fn core1_vector_base_is_recorded_from_the_strided_offset() {
+    let mut m = machine();
+
+    m.store32(map::CORECTL_BASE + 0x830, 0xFEC0_1E00).unwrap();
+    assert_eq!(m.corectl.vbase[1], 0xFEC0_1E00);
+
+    // `+0x38` is not the vector base and must not be mistaken for it.
+    let mut m = machine();
+    m.store32(map::CORECTL_BASE + 0x38, 0xFEC0_1E00).unwrap();
+    assert_eq!(m.corectl.vbase[1], 0);
+}
+
 /// start4 raises an interrupt on a core by setting its bit in that core's
 /// pending word (`+0x40` for sources 64..95, `+0x840` for core 1). Dropping
 /// those writes silently starves every software-posted interrupt — the clock
