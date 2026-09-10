@@ -116,11 +116,14 @@ pub struct Bsc {
     pending: Option<(u32, bool)>,
     tx: VecDeque<u8>,
     rx: VecDeque<u8>,
-    /// The device on the bus, if its address is selected.
-    pmic: Pmic,
+    /// The device on the bus, if its address is selected. `None` for an
+    /// instance with nothing attached — every address then goes unACKed, which
+    /// is what real hardware does with an empty bus.
+    pmic: Option<Pmic>,
 }
 
 impl Bsc {
+    /// An instance with the board PMIC on it (the `0x7E20_5E00` one).
     pub fn new(name: &'static str) -> Bsc {
         Bsc {
             name,
@@ -134,7 +137,19 @@ impl Bsc {
             pending: None,
             tx: VecDeque::new(),
             rx: VecDeque::new(),
-            pmic: Pmic::new(),
+            pmic: Some(Pmic::new()),
+        }
+    }
+
+    /// An instance with nothing attached. start4 probes `0x7E20_5000` for a
+    /// HAT/display EEPROM at address `0x52`; with no board plugged in the
+    /// address is not acknowledged and the transfer completes `DONE | ERR`.
+    /// Leaving the instance unmapped instead means `S` reads back 0 and the
+    /// firmware's completion poll spins forever.
+    pub fn empty(name: &'static str) -> Bsc {
+        Bsc {
+            pmic: None,
+            ..Bsc::new(name)
         }
     }
 
@@ -182,14 +197,14 @@ impl Bsc {
 
     /// Run the transfer the `ST` bit just kicked off.
     fn start(&mut self) {
-        let device = PMIC_ADDRS.contains(&(self.addr as u8 & 0x7F));
+        let device = self.pmic.is_some() && PMIC_ADDRS.contains(&(self.addr as u8 & 0x7F));
         let len = self.dlen as usize;
 
         if self.c & C_READ != 0 {
             self.rx.clear();
-            if device {
+            if let Some(pmic) = self.pmic.as_mut().filter(|_| device) {
                 for _ in 0..len {
-                    let b = self.pmic.read_byte();
+                    let b = pmic.read_byte();
                     self.rx.push_back(b);
                 }
             }
@@ -198,10 +213,12 @@ impl Bsc {
             // the register offset, the rest are data.
             if device {
                 if let Some(off) = self.tx.pop_front() {
-                    self.pmic.ptr = off;
+                    let mut pmic = self.pmic.take().expect("device implies a slave");
+                    pmic.ptr = off;
                     while let Some(b) = self.tx.pop_front() {
-                        self.pmic.write_byte(b);
+                        pmic.write_byte(b);
                     }
+                    self.pmic = Some(pmic);
                 }
             }
             self.tx.clear();

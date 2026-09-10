@@ -20,9 +20,12 @@ use crate::bus::{BusResult, MmioDevice, Width};
 /// values are the interrupt-controller priority words, not a release vector).
 const RUNSTATE_LO: u32 = 0x10;
 const RUNSTATE_HI: u32 = 0x14;
-/// Core 0 / core 1 exception-vector-base registers.
+/// Exception-vector-base register. Core 1's copy is one [`CORE_STRIDE`] higher
+/// like every other register in this block — `RVF_DBG_IRQEN` and the peripheral
+/// stub both show core 1 writing `0x7E002830`, not `+0x38`. With the old `0x38`
+/// guess `vbase[1]` was never populated, so core 1 could not be vectored at
+/// all.
 const VBASE_CORE0: u32 = 0x30;
-const VBASE_CORE1: u32 = 0x38;
 
 /// Interrupt-priority words for sources 0..31 (core 0). start4 numbers its
 /// sources from 64, folded back into these four words by `(src >> 3) & 3`.
@@ -175,7 +178,7 @@ impl MmioDevice for CoreCtl {
         self.storage.insert(offset, value);
         match offset {
             VBASE_CORE0 => self.vbase[0] = value,
-            VBASE_CORE1 => self.vbase[1] = value,
+            _ if offset == VBASE_CORE0 + CORE_STRIDE => self.vbase[1] = value,
             _ => {}
         }
         // A code-address write to the run-state words releases core 1. The

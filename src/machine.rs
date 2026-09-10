@@ -35,6 +35,8 @@ pub struct Machine {
     pub avs: Avs,
     /// Hardware RNG (`0x7E10_4000`) — start4 blocks on its interrupt.
     pub rng: Rng,
+    /// BSC instance 0 (`0x7E20_5000`) — nothing attached; probes go unACKed.
+    pub bsc0: Bsc,
     /// SPI0 master (`0x7E20_4000`) — minimal model for the EEPROM bootloader.
     pub spi0: Spi0,
     /// BSC / I²C master at `0x7E20_5E00` + the board PMIC — start4 reads the
@@ -128,6 +130,7 @@ impl Machine {
             clkmon: ClkMon::new(),
             avs: Avs::new(),
             rng: Rng::new(),
+            bsc0: Bsc::empty("bsc0"),
             spi0: Spi0::new(),
             bsc_pmic: Bsc::new("bsc-pmic"),
             config_otp: ConfigOtp::new(),
@@ -181,6 +184,7 @@ impl Machine {
     pub fn tick(&mut self, cycles: u64) {
         self.systimer.tick(cycles);
         self.bsc_pmic.tick(cycles);
+        self.bsc0.tick(cycles);
         // The RNG holds its line asserted while it has words ready and its
         // interrupt is unmasked; start4's handler for source 125 masks it again
         // and releases the gate the boot thread waits on. Only ever keep one
@@ -291,6 +295,9 @@ impl Machine {
         }
         if let Some(off) = hit(map::SPI0_BASE, map::SPI0_SIZE) {
             return Some((&mut self.spi0, off));
+        }
+        if let Some(off) = hit(map::BSC0_BASE, map::BSC0_SIZE) {
+            return Some((&mut self.bsc0, off));
         }
         if let Some(off) = hit(map::BSC_PMIC_BASE, map::BSC_PMIC_SIZE) {
             return Some((&mut self.bsc_pmic, off));
