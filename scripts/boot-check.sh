@@ -105,6 +105,14 @@ count_eq 'baud rate change completes'      'Baud rate change done' 2
 # check on the VCE and waits on interrupt source 68. With the block unmapped
 # that wait timed out and start4 printed this instead (`src/periph/vce.rs`).
 must_not 'VCE launch never completed'      'VCE taking >1s to run'
+# The board-identity check `arm_loader` gates the ARM launch on reads OTP rows
+# 19..26; with them blank it failed and start4 blinked LED error code 4-4
+# ("unsupported board type") forever (`src/periph/configotp.rs`).
+want 'SD card power handover'              'pin SDCARD_CONTROL_POWER not defined'
+want 'watchdog stopped'                    'Watchdog stopped'
+# The goal: the VPU hands the board over to the ARM, with the same split of a
+# 1 GB board's memory the reference reports (vc4-boot.log 68).
+want 'ARM handover'                        'arm_loader: Starting ARM with 948MB'
 # No nop-slides at all: the register file must survive preemptive context
 # switches (8d7c27a) and no callback may be null.
 must_not 'derailed into a nop-slide'       '\[derail\]'

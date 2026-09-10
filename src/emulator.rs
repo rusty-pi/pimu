@@ -216,6 +216,9 @@ impl Emulator {
             .and_then(|s| s.parse().ok())
             .unwrap_or(300_000);
         let trace_on_cf = std::env::var_os("RVF_TRACE_CF").is_some();
+        let trace_on_pc: Option<u32> = std::env::var("RVF_TRACE_ON_PC")
+            .ok()
+            .and_then(|v| u32::from_str_radix(v.trim().trim_start_matches("0x"), 16).ok());
         let mut console_seen = 0usize;
 
         // Spin detection: over a sliding window of steps, track the min/max PC
@@ -925,6 +928,21 @@ impl Emulator {
                         self.machine.load(root + 8, Width::Word).unwrap_or(0),
                         self.cpu.regs.get(0),
                     );
+                }
+            }
+            // `RVF_TRACE_ON_PC=<hex>`: arm the instruction trace the first time
+            // core 0 reaches this address. The console-substring trigger cannot
+            // reach a code path that runs after the firmware has stopped
+            // printing — which is exactly where a wedged boot has to be read.
+            if let Some(pc) = trace_on_pc {
+                if !self.cpu.trace && pc_before == pc {
+                    self.cpu.trace = true;
+                    self.cpu.trace_armed = true;
+                    self.cpu.trace_cf_only = trace_on_cf;
+                    self.cpu.trace_cap = trace_on_cap;
+                    if trace_mmio {
+                        self.machine.mmio_trace = true;
+                    }
                 }
             }
             if !traps.is_empty()
