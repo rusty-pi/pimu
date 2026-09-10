@@ -427,24 +427,6 @@ impl Emulator {
                 }
             }
 
-            // RVF_MCSYNC_RPC: the clock-service manager (`0x3ED65Axx`) does a
-            // synchronous inter-core RPC — it takes a stack lock (`[obj]=1`),
-            // posts a request via the mcsync doorbell (`0x3ED3A114`), then
-            // re-acquires the same lock (`0x3ED65092` → `0x3ED651AE`), blocking
-            // until the far side processes the request and releases it. The
-            // model has no far side, so the manager (and the whole boot behind
-            // it) suspends forever. On real hardware the RPC completes in
-            // microseconds; model that by releasing the lock right before the
-            // re-acquire so the manager proceeds. (Interim — the reply *data*
-            // is not synthesised; if the manager then mis-reads it this needs
-            // the real request/reply struct modelled.)
-            if pc_before == 0x3ED6_5092 && std::env::var_os("RVF_MCSYNC_RPC").is_some() {
-                let lock = self.cpu.regs.get(6);
-                if self.machine.load(lock, Width::Word).unwrap_or(0) == 1 {
-                    let _ = self.machine.store(lock, Width::Word, 0);
-                }
-            }
-
             if dbg_mainsus {
                 let cur = self.machine.load(0x3EE3_5900, Width::Word).unwrap_or(0);
                 if cur == 0x3EF2_48C4 {
@@ -1165,14 +1147,16 @@ impl Emulator {
             // (`0x3EC3E9BC`) show where it reads the pending source from
             // (`[[r29+12]+4]`) and what the handler table at `gp+58004` holds
             // for the DMA sources (0x50..0x5F).
-            if pc_before == 0x3EC3_E9BC && irqtbl_n < 4 {
+            // The vector entry carries a `0x0000` guard parcel that
+            // `vector_irq` steps over, so the dispatcher is entered at +2.
+            if pc_before == 0x3EC3_E9BE && irqtbl_n < 4 {
                 irqtbl_n += 1;
                 let r29 = self.cpu.regs.get(29);
                 let blk = self.machine.load(r29 + 12, Width::Word).unwrap_or(0);
                 let pend = self.machine.corectl.peek_pending().unwrap_or(0);
                 let tbl = self.cpu.regs.get(24).wrapping_add(58004);
                 let mut h = Vec::new();
-                for src in [64u32, 66, 78, 81, 83, 86, 89, 92, 95] {
+                for src in [64u32, 66, 76, 77, 78, 81, 95] {
                     h.push(format!(
                         "{src}:{:#x}",
                         self.machine.load(tbl + src * 4, Width::Word).unwrap_or(0)
@@ -1506,6 +1490,24 @@ impl Emulator {
         // `[1][r16-r23][r0-r15][lr][SR][PC]`, 0 = a solicited frame
         // `[0][r16-r23][r6-r15][lr]` whose `lr` is the resume address. That pc
         // is the answer to "what is this thread blocked on".
+        // `RVF_DBG_IRQTBL=1`: dump the per-source handler table at `gp+58004`
+        // at exit. The generic dispatcher (`0x3EC3E9BC`) indexes it with the
+        // source number to find the ISR, so a zero entry means "this source is
+        // never handled" even if `enable_irq_source` turned it on.
+        if std::env::var_os("RVF_DBG_IRQTBL").is_some() {
+            let tbl = self.cpu.regs.get(24).wrapping_add(58004);
+            eprintln!("[irqtbl] gp={:#x} table={tbl:#x}", self.cpu.regs.get(24));
+            for src in 64u32..128 {
+                let h = self
+                    .machine
+                    .load(tbl.wrapping_add(src * 4), Width::Word)
+                    .unwrap_or(0);
+                if h != 0 {
+                    eprintln!("[irqtbl]   src {src} -> {h:#x}");
+                }
+            }
+        }
+
         if let Ok(list) = std::env::var("RVF_DBG_TCB") {
             for t in list.split(',') {
                 let Ok(tcb) = u32::from_str_radix(t.trim().trim_start_matches("0x"), 16) else {
