@@ -577,3 +577,96 @@ fn pcie_link_stays_down_without_an_endpoint() {
     m.store32(map::PCIE_BASE + 0x9000, 1 << 20).unwrap();
     assert_eq!(m.load32(map::PCIE_BASE + 0x8000).unwrap(), 0xFFFF_FFFF);
 }
+
+/// The PVT magic at `0x7D5D_8010 + ch*0x40`. `FUN_0ec300fa` reads `+0x1C` only
+/// when this equals `0x7FFF50CF`, and returns zeros for both halves otherwise.
+/// Every one of the eighteen channels carries it on a real Pi 4, read through
+/// `/dev/mem` — the same class of trap as `SCALER_DISPID` above (#1 point 3),
+/// so it is pinned per channel rather than only for channel 0.
+#[test]
+fn pvt_channels_all_carry_the_magic() {
+    let mut m = machine();
+    for ch in 0..18 {
+        let base = map::PVT_BASE + ch * 0x40;
+        assert_eq!(
+            m.load32(base + 0x10).unwrap(),
+            0x7FFF_50CF,
+            "channel {ch} magic"
+        );
+        // Read-only: a stray write must not make the block look absent.
+        m.store32(base + 0x10, 0).unwrap();
+        assert_eq!(m.load32(base + 0x10).unwrap(), 0x7FFF_50CF);
+        // And the channel reads back its own index at +0x00.
+        assert_eq!(m.load32(base).unwrap(), ch, "channel {ch} index");
+    }
+}
+
+/// `FUN_0ec300fa` splits `+0x1C` into two 16-bit halves and zeroes either half
+/// that reads below 10, which skips the adaptive correction in `FUN_0ec303e8`.
+/// The measured values clear that floor on every channel.
+#[test]
+fn pvt_readings_clear_the_firmwares_floor() {
+    let mut m = machine();
+    for ch in 0..18 {
+        let v = m.load32(map::PVT_BASE + ch * 0x40 + 0x1C).unwrap();
+        assert!(v >> 16 >= 10, "channel {ch} high half {:#x}", v >> 16);
+        assert!(v & 0xFFFF >= 10, "channel {ch} low half {:#x}", v & 0xFFFF);
+    }
+}
+
+/// `+0x14` / `+0x18` are writable thresholds, but `FUN_0ec30276` can read them
+/// before anything has written them, so they are seeded from hardware.
+#[test]
+fn pvt_thresholds_are_seeded_then_writable() {
+    let mut m = machine();
+    assert_eq!(m.load32(map::PVT_BASE + 0x14).unwrap(), 0x0364_0340);
+    assert_eq!(m.load32(map::PVT_BASE + 0x18).unwrap(), 0x0648_0624);
+
+    m.store32(map::PVT_BASE + 0x14, 0x1234_5678).unwrap();
+    assert_eq!(m.load32(map::PVT_BASE + 0x14).unwrap(), 0x1234_5678);
+    // Channel 1 is unaffected by a write to channel 0.
+    assert_eq!(m.load32(map::PVT_BASE + 0x40 + 0x14).unwrap(), 0x0364_0340);
+}
+
+/// The six AVS result channels each report their own count. Before this they
+/// all answered with one of two values, so a rail read was indistinguishable
+/// from a temperature read (#1 point 2).
+#[test]
+fn avs_channels_report_distinct_counts() {
+    let mut m = machine();
+    let counts: Vec<u32> = (0..6)
+        .map(|ch| m.load32(map::AVS_BASE + 0x200 + ch * 4).unwrap() & 0x3FF)
+        .collect();
+    assert_eq!(counts, vec![752, 2, 669, 758, 2, 841]);
+
+    // `FUN_0ed603e2` accepts a sample only with both bit 10 and bit 16 set.
+    for ch in 0..6 {
+        let v = m.load32(map::AVS_BASE + 0x200 + ch * 4).unwrap();
+        assert!(v & (1 << 10) != 0 && v & (1 << 16) != 0, "channel {ch}");
+    }
+}
+
+/// `+0x03C` is an active-high disable mask: `FUN_0ed6040e` writes
+/// `~(1 << ch) & 0x7F` to leave only `ch` unmasked, and `0` to unmask
+/// everything. A masked channel must not report a valid, settled sample.
+#[test]
+fn avs_disable_mask_gates_the_other_channels() {
+    let mut m = machine();
+    // Select channel 3 the way `FUN_0ed6040e` does.
+    m.store32(map::AVS_BASE + 0x03C, !(1u32 << 3) & 0x7F).unwrap();
+    assert_eq!(m.load32(map::AVS_BASE + 0x200 + 3 * 4).unwrap() & 0x3FF, 758);
+    for ch in [0, 1, 2, 4, 5] {
+        assert_eq!(
+            m.load32(map::AVS_BASE + 0x200 + ch * 4).unwrap(),
+            0,
+            "channel {ch} should be masked off"
+        );
+    }
+
+    // Restoring 0 unmasks everything, which is the state real hardware idles
+    // in — all six channels were read live with this register at 0.
+    m.store32(map::AVS_BASE + 0x03C, 0).unwrap();
+    for ch in 0..6 {
+        assert!(m.load32(map::AVS_BASE + 0x200 + ch * 4).unwrap() & (1 << 10) != 0);
+    }
+}

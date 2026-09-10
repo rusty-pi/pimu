@@ -33,6 +33,9 @@ pub struct Machine {
     pub clkmon: ClkMon,
     /// AVS monitor (`0x7D5D_2000`) — temperature and rail monitors.
     pub avs: Avs,
+    /// PVT monitors (`0x7D5D_8000`) — eighteen per-channel process / voltage /
+    /// temperature sensors, each gated on a magic at `+0x10`.
+    pub pvt: crate::periph::Pvt,
     /// AXI async slave bridges (`0x7E00_A000`) — the stop/acknowledge handshake
     /// start4 runs before gating the V3D / ISP / H264 power domains.
     pub asb: Asb,
@@ -136,6 +139,7 @@ impl Machine {
             clockman: ClockManager::new(),
             clkmon: ClkMon::new(),
             avs: Avs::new(),
+            pvt: crate::periph::Pvt::new(),
             asb: Asb::new(),
             pcie: crate::periph::pcie::Pcie::new(),
             rng: Rng::new(),
@@ -321,6 +325,9 @@ impl Machine {
         }
         if let Some(off) = hit(map::AVS_BASE, map::AVS_SIZE) {
             return Some((&mut self.avs, off));
+        }
+        if let Some(off) = hit(map::PVT_BASE, map::PVT_SIZE) {
+            return Some((&mut self.pvt, off));
         }
         if let Some(off) = hit(map::ASB_BASE, map::ASB_SIZE) {
             return Some((&mut self.asb, off));
