@@ -9,8 +9,58 @@
 //! We do not model the analogue PLLs or the frequency counters — we store
 //! writes (stripping the `0x5A` password byte for read-back).
 //!
-//! The AVS monitor at `0x7D5D_2000` sits inside this window and is decoded
-//! ahead of it; see [`crate::periph::avs`].
+//! Two sub-blocks sit inside this window and are decoded ahead of it: the AVS
+//! monitor at `0x7D5D_2000` ([`crate::periph::avs`]) and the per-channel PVT
+//! monitors at `0x7D5D_8000` ([`crate::periph::pvt`]).
+//!
+//! ## What is left as plain storage here, and why
+//!
+//! Beyond those two sub-blocks, start4 touches only a handful of registers in
+//! this window. All of them were read off `rpi-dev` through `/dev/mem` at the
+//! `0xFD5D…` alias, on a Linux-booted, idle Pi 4:
+//!
+//! ```text
+//! 0x7d5d1800  0x00000004     0x7d5d1818  0x00000000
+//! 0x7d5d1814  0x00000016     0x7d5d1820  0x00000000
+//! 0x7d5d183c  0x00000001
+//! ```
+//!
+//! * **`0x7D5D_1820` reads 0 on real hardware**, which is what this device
+//!   already returns. `FUN_0ec30196` takes bit 10 of it as a predicate and
+//!   `FUN_0ec301a6` decodes bits `[23:11]` into three fields; both therefore
+//!   yield zero on hardware too. This one looked like the `SCALER_DISPID` trap
+//!   — a status register the model was blanking — and measurement says it is
+//!   not. Worth recording as a negative result so it is not re-investigated.
+//! * **`0x7D5D_1814` reads `0x16`, and the model deliberately keeps 0.**
+//!   `FUN_0ec2ffdc` is `(reg & 0x14) != 0`, and `0x16 & 0x14` is non-zero, so
+//!   hardware would answer "true" where the model answers "false". That
+//!   predicate is the condition of a loop in `FUN_0ec303e8` that raises the
+//!   voltage a step at a time and re-tests it — nothing inside the loop writes
+//!   `0x1814`, so it terminates only because real silicon settles. A model that
+//!   answered a constant "true" would hang there. Returning 0 means "settled",
+//!   which is the right steady state for a model with no analogue ramp. The
+//!   loop is in any case unreachable today: it sits behind a `FUN_0ec30196()
+//!   != 0` guard, and that register genuinely reads 0. Recorded here so the
+//!   `0x16` is not mistaken for a missing value later.
+//! * `0x7D5D_1800` (`0x04`) and `0x7D5D_183C` (`0x01`) are both written by the
+//!   firmware before they are read (`FUN_0ec2ffb4` sets bit 2 of the former,
+//!   `FUN_0ec302e2` writes the latter), so plain storage is correct and the
+//!   measured values are post-start4 state rather than reset state anyway.
+//! * `0x7D5D_2074` / `0x7D5D_2078` / `0x7D5D_206C` / `0x7D5D_A000` are only
+//!   ever written, never read back. Storage is all they need.
+//!
+//! ## The PLLs
+//!
+//! Point 4 of issue #1 asks for the PLLs themselves, on the grounds that
+//! leaving them unmodelled makes every frequency measurement return one fixed
+//! value. The measurements above narrow that considerably: there is no PLL
+//! divider or lock-status register in this window that start4 reads and that
+//! this device currently answers wrongly. The live inputs to start4's frequency
+//! and voltage measurements are the AVS channels at `0x7D5D_2200`, which are
+//! now sourced from hardware, and the clock-rate calibration reads a cached
+//! rate table rather than taking a live measurement at all. So the remaining
+//! gap is smaller than the issue's framing suggests, and no PLL model is
+//! invented here to fill it.
 
 use std::collections::BTreeMap;
 

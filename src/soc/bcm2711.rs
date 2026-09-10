@@ -121,6 +121,12 @@ pub const RNG_SIZE: u32 = 0x28;
 pub const AVS_BASE: u32 = 0x7D5D_2000;
 pub const AVS_SIZE: u32 = 0x0000_0F00;
 
+/// Per-channel PVT monitors at `0x7D5D_8000`, eighteen channels `0x40` apart.
+/// Also carved out of the [`CLKMON_BASE`] window and decoded ahead of it — the
+/// magic at `+0x10` has to survive, or start4 concludes the blocks are absent.
+pub const PVT_BASE: u32 = 0x7D5D_8000;
+pub const PVT_SIZE: u32 = 18 * 0x40;
+
 /// VPU clock block (PLLs + frequency monitors) at `0x7D5D_0000` — outside the
 /// `0x7E…` legacy window. start4's clock manager uses it on BCM2711.
 pub const CLKMON_BASE: u32 = 0x7D5D_0000;
