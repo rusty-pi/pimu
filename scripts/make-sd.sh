@@ -35,20 +35,39 @@ copy() {
   local src="$1" dst="$2"
   if [[ -f "$src" ]]; then
     mcopy -i "$out@@${part_offset}" -o "$src" "::${dst}"
-    echo "  + $dst  ($(stat -c %s "$src") bytes)"
+    echo "  + $dst  ($(stat -Lc %s "$src") bytes)"
   else
     echo "  ! missing $src (skipped)" >&2
   fi
 }
 
-# Minimal config: just enough to route the debug console to the PL011 and keep
-# the second-stage chatter on. No armstub / UEFI blob yet — the milestone is
-# "bootloader loads start4.elf", not a full UEFI bring-up.
+# The config the reference boot log was captured with (a stock Raspberry Pi OS
+# config.txt with the UART console enabled). The dtparam/dtoverlay lines are
+# what produce the `dtparam: spi=on` / `Loaded overlay '...'` lines in
+# examples-on-real-hardware/vc4-boot.log — a bare three-line config skips that
+# whole phase, so the model has nothing to match against.
 tmpcfg="$(mktemp)"
 cat >"$tmpcfg" <<'EOF'
 enable_uart=1
 uart_2ndstage=1
+
+dtparam=spi=on
+dtparam=audio=off
+
+dtoverlay=disable-bt
+dtoverlay=disable-wifi
+
+camera_auto_detect=1
+display_auto_detect=1
+auto_initramfs=1
+
+dtoverlay=vc4-kms-v3d
+max_framebuffers=2
+disable_fw_kms_setup=1
+
 arm_64bit=1
+disable_overscan=1
+arm_boost=1
 EOF
 mcopy -i "$out@@${part_offset}" -o "$tmpcfg" ::config.txt
 echo "  + config.txt"
@@ -70,6 +89,24 @@ if [[ -f "$fw/dt-blob.dts" && ! -f "$fw/dt-blob.bin" ]]; then
   "$here/scripts/make-dt-blob.py" "$fw/dt-blob.dts" "$fw/dt-blob.bin"
 fi
 copy "$fw/dt-blob.bin"                dt-blob.bin
+
+# Kernel + overlays, so the boot has something to hand off to. The reference log
+# loads these right after the HDMI bring-up.
+copy "$fw/kernel8.img"                kernel8.img
+
+tmpcmd="$(mktemp)"
+echo "console=serial0,115200 console=tty1 root=/dev/mmcblk0p2 rootfstype=ext4 fsck.repair=yes rootwait" >"$tmpcmd"
+mcopy -i "$out@@${part_offset}" -o "$tmpcmd" ::cmdline.txt
+echo "  + cmdline.txt"
+rm -f "$tmpcmd"
+
+if [[ -d "$fw/overlays" ]]; then
+  mmd -i "$out@@${part_offset}" ::overlays 2>/dev/null || true
+  for ovl in "$fw/overlays"/*; do
+    [[ -f "$ovl" ]] || continue
+    copy "$ovl" "overlays/$(basename "$ovl")"
+  done
+fi
 
 echo "done. contents:"
 mdir -i "$out@@${part_offset}" ::

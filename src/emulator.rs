@@ -1499,6 +1499,52 @@ impl Emulator {
 
         console.extend_from_slice(&self.machine.take_console_output());
 
+        // `RVF_DBG_TCB=<hex>[,<hex>...]`: at exit, decode each ThreadX thread's
+        // saved context and report the pc it is parked at. `[tcb+8]` is the
+        // saved stack pointer and the word at it is the frame discriminator
+        // (`_tx_thread_schedule`, `0x3EC4002C`): 1 = an interrupt frame
+        // `[1][r16-r23][r0-r15][lr][SR][PC]`, 0 = a solicited frame
+        // `[0][r16-r23][r6-r15][lr]` whose `lr` is the resume address. That pc
+        // is the answer to "what is this thread blocked on".
+        if let Ok(list) = std::env::var("RVF_DBG_TCB") {
+            for t in list.split(',') {
+                let Ok(tcb) = u32::from_str_radix(t.trim().trim_start_matches("0x"), 16) else {
+                    continue;
+                };
+                let mut ld = |a: u32| self.machine.load(a, Width::Word).unwrap_or(0xdead_dead);
+                let sp = ld(tcb.wrapping_add(8));
+                let disc = ld(sp);
+                let (kind, resume) = if disc == 1 {
+                    ("irq", ld(sp.wrapping_add(4 * (1 + 8 + 16 + 1 + 1))))
+                } else {
+                    ("solicited", ld(sp.wrapping_add(4 * (1 + 8 + 10))))
+                };
+                eprintln!(
+                    "[tcb] {tcb:#x} id={:#x} run_count={} sp={sp:#x} disc={disc} {kind} resume={resume:#x}",
+                    ld(tcb),
+                    ld(tcb.wrapping_add(4)),
+                );
+                // Everything above the saved frame is the suspended function's
+                // own stack; scan it for words that look like start4 text and
+                // print them as a rough backtrace. `resume` alone is always the
+                // return out of `_tx_thread_system_suspend`, which says nothing
+                // about *what* the thread is waiting for.
+                let frame = 4 * (if disc == 1 { 1 + 8 + 16 + 1 + 1 + 1 } else { 1 + 8 + 10 + 1 });
+                let mut shown = 0;
+                for i in 0..192u32 {
+                    let a = sp.wrapping_add(frame + 4 * i);
+                    let v = ld(a);
+                    if (0x3EC0_0000..0x3EE0_0000).contains(&v) && v & 1 == 0 {
+                        eprintln!("[tcb]     {a:#x}: {v:#010x}");
+                        shown += 1;
+                        if shown == 16 {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
         if prof {
             let mut v: Vec<_> = prof_hist.iter().map(|(&k, &n)| (k, n)).collect();
             v.sort_by(|a, b| b.1.cmp(&a.1));

@@ -40,6 +40,21 @@ fetch "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/fixup4.dat" "fixup4.dat"
 fetch "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/start4db.elf" "start4db.elf"
 fetch "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/fixup4db.dat" "fixup4db.dat"
 
+# Kernel, device tree and the overlays the reference boot log loads. Without
+# these the boot has nothing to hand off to and stops after the HDMI bring-up;
+# with them it can reproduce examples-on-real-hardware/vc4-boot.log from
+# 'dtparam:' onwards. (initramfs8 is generated per-install, not shipped here —
+# auto_initramfs simply finds nothing, which is fine.)
+fetch "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/kernel8.img" "kernel8.img"
+fetch "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/bcm2711-rpi-4-b.dtb" "bcm2711-rpi-4-b.dtb"
+mkdir -p "$dest/overlays"
+for ovl in overlay_map.dtb disable-bt.dtbo disable-wifi.dtbo vc4-kms-v3d.dtbo \
+           vc4-kms-v3d-pi4.dtbo; do
+	echo "  overlays/$ovl"
+	curl -fSL --retry 3 -o "$dest/overlays/$ovl" \
+		"$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/overlays/$ovl"
+done
+
 # dt-blob source (gpioman pin config). Compiled to dt-blob.bin by
 # scripts/make-dt-blob.py and placed on the SD by scripts/make-sd.sh.
 fetch "$raw/raspberrypi/firmware/$FIRMWARE_REF/extra/dt-blob.dts" "dt-blob.dts"
