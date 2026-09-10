@@ -77,7 +77,9 @@ cargo run --release -- recon firmware/pieeprom.bin \
   --eeprom --sd firmware/sd.img
 ```
 
-`--max-wall` defaults to 300 s, which is enough to reach the last milestone;
+`--max-wall` defaults to 140 s; the last milestone needs longer, so
+`scripts/boot-check.sh` runs with its own budget (`RVF_BOOT_WALL`, 290 s by
+default).
 there is no instruction cap unless you pass `--max-steps`. `scripts/boot-check.sh`
 runs exactly this and checks the log against every milestone the boot is known
 to reach — it is what CI runs, so run it locally to reproduce a CI failure.

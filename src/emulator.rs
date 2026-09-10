@@ -341,6 +341,12 @@ impl Emulator {
         // `_tx_event_flags_get` (`0x3EC3E3BE`), so the groups the boot actually
         // blocks on can be told apart from the ones a shim must not touch.
         let dbg_evget = std::env::var_os("RVF_DBG_EVGET").is_some();
+        let dbg_ff = std::env::var_os("RVF_DBG_FF").is_some();
+        let dbg_irqtbl = std::env::var_os("RVF_DBG_IRQTBL").is_some();
+        let pmic_event = std::env::var_os("RVF_PMIC_EVENT").is_some();
+        let pmic_hack = std::env::var_os("RVF_PMIC_HACK").is_some();
+        let tick_core1 = std::env::var_os("RVF_TICK_CORE1").is_some();
+        let trace_mmio = std::env::var_os("RVF_TRACE_MMIO").is_some();
         // Hoisted out of the per-instruction loop: `std::env::var_os` is a
         // locking lookup over the whole environment and these were being
         // evaluated on every step, which dominated run time.
@@ -583,7 +589,7 @@ impl Emulator {
                     // errno (`gp+328824`) == 2 and nothing in the model clears
                     // it; the DA9090 PMIC read then reads it as a timeout. Clear
                     // it here so a successful I2C read isn't masked.
-                    if std::env::var_os("RVF_PMIC_HACK").is_some() && b == 2 {
+                    if pmic_hack && b == 2 {
                         let _ = self.machine.store(r0, Width::Byte, 0);
                         eprintln!("[probe]   -> forced errno 0");
                     }
@@ -921,7 +927,7 @@ impl Emulator {
                     );
                 }
             }
-            if pc_before == 0x3EC3_E3BE && std::env::var_os("RVF_PMIC_EVENT").is_some() {
+            if pc_before == 0x3EC3_E3BE && pmic_event {
                 // `_tx_event_flags_get(group, request, ...)`. Only the DA9090
                 // completion group (`0x3EF05FEC`, waited on from `0x3ECC7000`)
                 // belongs here.
@@ -1130,7 +1136,7 @@ impl Emulator {
                     }
                     // Experiment (`RVF_TICK_CORE1`): also vector the tick on
                     // core 1 — ThreadX-SMP may run `_tx_timer_interrupt` there.
-                    if std::env::var_os("RVF_TICK_CORE1").is_some() {
+                    if tick_core1 {
                         if let Some(c1) = self.cpu1.as_mut() {
                             if c1.in_exception == 0 && c1.irq_enabled() && c1.exc_vbase != 0 {
                                 c1.vector_irq(&mut self.machine, slot);
@@ -1234,7 +1240,7 @@ impl Emulator {
                         // Also stream peripheral accesses while the trace is
                         // armed (RVF_TRACE_MMIO=1) — handy for pinning down an
                         // unmodelled block like the I2C BSC.
-                        if std::env::var_os("RVF_TRACE_MMIO").is_some() {
+                        if trace_mmio {
                             self.machine.mmio_trace = true;
                         }
                     }
@@ -1344,7 +1350,7 @@ impl Emulator {
                     if ff {
                         self.machine.systimer.jump(200_000);
                     }
-                    if std::env::var_os("RVF_DBG_FF").is_some() {
+                    if dbg_ff {
                         eprintln!(
                             "[ff] win close: clo_delta={clo_delta} w=[{w_lo:#x}..{w_hi:#x}] out={w_output} exc={} ff={ff} @{}",
                             self.cpu.in_exception, self.cpu.retired
@@ -1391,7 +1397,7 @@ impl Emulator {
         // at exit. The generic dispatcher (`0x3EC3E9BC`) indexes it with the
         // source number to find the ISR, so a zero entry means "this source is
         // never handled" even if `enable_irq_source` turned it on.
-        if std::env::var_os("RVF_DBG_IRQTBL").is_some() {
+        if dbg_irqtbl {
             let tbl = self.cpu.regs.get(24).wrapping_add(58004);
             let vb = self.cpu.exc_vbase;
             eprintln!(

@@ -21,7 +21,7 @@ USAGE:
     rpi-virt-fw run-all [<dir>] [--update] [-v]
     rpi-virt-fw recon <file> [--entry <hex>] [--ram-mb <n>] [--max-steps <n>] [--eeprom]
                              [--max-wall <secs>] [--sd <img>] [--skip-signed-boot]
-              (no --max-steps = no instruction cap; --max-wall defaults to 300s)
+              (no --max-steps = no instruction cap; --max-wall defaults to 140s)
                              [--dump <hex>:<len>] [--disasm <hex>:<count>] [--patch <hex>=<hex>]
     rpi-virt-fw disasm <file> [--base <hex>] [--count <n>] [--vaddr <hex>]
 
@@ -75,7 +75,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     // and the wall clock is the useful bound. `--max-steps` is for pinning a
     // run to an exact instruction count (bisecting, probes).
     let mut max_steps: Option<u64> = None;
-    let mut max_wall_secs: u64 = 300;
+    let mut max_wall_secs: u64 = 140;
     let mut eeprom = false;
     let mut trace = false;
     let mut trace_full = false;
