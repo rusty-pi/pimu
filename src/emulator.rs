@@ -51,6 +51,15 @@ pub struct RunLimits {
     /// Stop if the PC revisits the same address this many steps in a row with no
     /// console output (tight spin / wfi-style wait). 0 disables.
     pub idle_spin_limit: u64,
+    /// Stop once the firmware has printed nothing for this many microseconds of
+    /// *modelled* time. A healthy boot logs continuously — the largest gap in
+    /// `examples-on-real-hardware/vc4-boot.log` is about a second, and the
+    /// model's own worst gap (the kernel load) is thirteen. Once the firmware
+    /// wedges, output stops but modelled time keeps advancing, because `sleep`
+    /// fast-forwards the system timer. That makes console silence a far better
+    /// stuck-detector than any PC-window heuristic, which the ThreadX tick
+    /// defeats by bumping the progress counters forever. 0 disables.
+    pub silent_us: u64,
 }
 
 impl Default for RunLimits {
@@ -60,7 +69,19 @@ impl Default for RunLimits {
             max_wall: Some(Duration::from_secs(30)),
             stop_pc: None,
             idle_spin_limit: 0,
+            silent_us: 0,
         }
+    }
+}
+
+/// A `u32` that debug-prints as hex. Addresses in a `RunEnd` are read by people
+/// comparing them against a disassembly, and decimal is useless for that.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Hex(pub u32);
+
+impl std::fmt::Debug for Hex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:#010x}", self.0)
     }
 }
 
@@ -76,6 +97,15 @@ pub enum RunEnd {
     TimeLimit,
     /// Detected a tight spin with no output.
     IdleSpin(u32),
+    /// The firmware stopped logging for [`RunLimits::silent_us`] of modelled
+    /// time while still executing — wedged rather than merely slow.
+    Stuck {
+        pc: Hex,
+        /// Microseconds of modelled time since the last console output.
+        silent_us: u64,
+        /// Instructions retired in that window.
+        retired: u64,
+    },
     /// VPU core 1 halted (swi/sleep/breakpoint/fault). Core 0 may still have
     /// been running; check the report's `pc` and `core1_pc`.
     Core1Halted(Stop),
@@ -193,6 +223,10 @@ impl Emulator {
         // small window for the whole window length with no output, call it a
         // spin (a peripheral poll our stubs never satisfy).
         let win = limits.idle_spin_limit.max(1);
+        // Console-silence watchdog: the modelled clock and the retired count at
+        // the last byte the firmware printed.
+        let mut last_output_us = 0u64;
+        let mut last_output_retired = 0u64;
         let mut w_lo = u32::MAX;
         let mut w_hi = 0u32;
         let mut w_steps = 0u64;
@@ -1224,6 +1258,26 @@ impl Emulator {
 
             let fresh = self.machine.take_console_output();
             let had_output = !fresh.is_empty();
+            if had_output {
+                last_output_us = self.machine.systimer.now_us();
+                last_output_retired = self.cpu.retired;
+            } else if limits.silent_us > 0 {
+                // Wedged, not merely slow: the firmware has printed nothing for
+                // a long stretch of *modelled* time and is still burning
+                // instructions. Both halves matter — modelled time alone would
+                // trip on a legitimate long delay that `sleep` fast-forwards
+                // through in a handful of instructions, and instructions alone
+                // would trip on a busy stretch that simply has nothing to say.
+                let silent_us = self.machine.systimer.now_us().saturating_sub(last_output_us);
+                let silent_retired = self.cpu.retired.saturating_sub(last_output_retired);
+                if silent_us >= limits.silent_us && silent_retired >= 20_000_000 {
+                    break RunEnd::Stuck {
+                        pc: Hex(self.cpu.pc()),
+                        silent_us,
+                        retired: silent_retired,
+                    };
+                }
+            }
             if live_console && had_output {
                 use std::io::Write;
                 let _ = std::io::stderr().write_all(&fresh);

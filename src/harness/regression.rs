@@ -95,6 +95,7 @@ pub fn run_scenario(scn: &Scenario) -> Result<ScenarioRun> {
         max_wall: Some(std::time::Duration::from_secs(60)),
         stop_pc: scn.run.stop_pc,
         idle_spin_limit: scn.run.idle_spin_limit,
+        silent_us: 0,
     };
     let report = emu.run(&limits);
     let transcript = transcript(&report.console);
