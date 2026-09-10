@@ -245,6 +245,7 @@ impl Emulator {
             crate::firmware::dtblob::PinMap::new()
         };
         let dbg_tick = std::env::var_os("RVF_DBG_TICK").is_some();
+        let dbg_swirq = std::env::var_os("RVF_DBG_SWIRQ").is_some();
         let mut tick_deliveries: u64 = 0;
         let mut irqtbl_n = 0u32;
         let mut tick_skips: u64 = 0;
@@ -1168,6 +1169,31 @@ impl Emulator {
                 );
             }
 
+            // The firmware raises an interrupt on a core in software by
+            // setting its bit in that core's pending word (`0x7E002040` /
+            // `+0x844`, `0x3ED01896`). start4 uses it for the clock service's
+            // timer (source 66) and for ThreadX's inter-core reschedule IPI
+            // (source 78 on core 0, 79 on core 1). Nothing modelled these, so
+            // every software-posted interrupt was silently dropped.
+            if self.cpu.irq_model {
+                while let Some((core, src)) = self.machine.corectl.take_sw_raised() {
+                    if dbg_swirq {
+                        eprintln!(
+                            "[sw-irq] core {core} src {src} pc={:#x} retired={}",
+                            self.cpu.pc(),
+                            self.cpu.retired
+                        );
+                    }
+                    if core == 0 {
+                        self.machine.push_pending_irq(src);
+                    } else if let Some(c1) = self.cpu1.as_mut() {
+                        if c1.exc_vbase != 0 {
+                            c1.vector_irq(&mut self.machine, src);
+                        }
+                    }
+                }
+            }
+
             // A device-raised interrupt (DMA completion) takes the same
             // vectoring path as the tick, but is not gated on a compare match.
             if self.cpu.irq_model
@@ -1496,14 +1522,33 @@ impl Emulator {
         // never handled" even if `enable_irq_source` turned it on.
         if std::env::var_os("RVF_DBG_IRQTBL").is_some() {
             let tbl = self.cpu.regs.get(24).wrapping_add(58004);
-            eprintln!("[irqtbl] gp={:#x} table={tbl:#x}", self.cpu.regs.get(24));
+            let vb = self.cpu.exc_vbase;
+            eprintln!(
+                "[irqtbl] gp={:#x} table={tbl:#x} vbase={vb:#x}",
+                self.cpu.regs.get(24)
+            );
+            // Two dispatch routes exist. The vector table's [64..127] entries are
+            // direct per-source handlers (source 64 = the ThreadX tick
+            // `0x3EC40B7C`); everything else points at the generic dispatcher
+            // `0x3EC3E9BC`, which indexes the handler table by source. A source
+            // whose *handler-table* slot is 0 is not broken — `0x3ED656A8`
+            // refuses to register on such a slot — it is dispatched directly.
             for src in 64u32..128 {
                 let h = self
                     .machine
                     .load(tbl.wrapping_add(src * 4), Width::Word)
                     .unwrap_or(0);
-                if h != 0 {
-                    eprintln!("[irqtbl]   src {src} -> {h:#x}");
+                let v = self
+                    .machine
+                    .load(vb.wrapping_add(src * 4), Width::Word)
+                    .unwrap_or(0);
+                if h != 0 || v != 0 {
+                    let direct = if v != 0 && v & !1 != 0x3EC3_E9BC {
+                        "  <- direct vector"
+                    } else {
+                        ""
+                    };
+                    eprintln!("[irqtbl]   src {src} handler={h:#x} vector={v:#x}{direct}");
                 }
             }
         }

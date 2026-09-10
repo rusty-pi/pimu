@@ -166,6 +166,11 @@ impl Machine {
         }
     }
 
+    /// Queue an interrupt source for delivery to core 0 on the next step.
+    pub fn push_pending_irq(&mut self, src: u32) {
+        self.pending_irqs.push_back(src);
+    }
+
     /// Advance time-based peripheral state by `cycles` VPU cycles.
     pub fn tick(&mut self, cycles: u64) {
         self.systimer.tick(cycles);

@@ -28,6 +28,23 @@ const VBASE_CORE1: u32 = 0x38;
 /// sources from 64, folded back into these four words by `(src >> 3) & 3`.
 const IRQ_PRIO_BASE: u32 = 0x10;
 
+/// Per-core interrupt **pending** bitmask, one bit per source: `+0x40` holds
+/// sources 64..95, `+0x44` sources 96..127 (core 1's pair lives at `+0x840` /
+/// `+0x844`, i.e. `CORE_STRIDE` higher). start4 drives them with three helpers,
+/// all of which pick the base from a core-index argument:
+///
+/// * `0x3ED01896(src, core)` — `[base] |= 1 << bit`, i.e. *raise* the source in
+///   software. This is how the firmware posts an interrupt to a core, including
+///   the inter-core reschedule IPI (source 78 for core 0, 79 for core 1, both
+///   of which have a direct vector entry at `0x3EC3F8F4`).
+/// * `0x3ED01792(src, core)` — `[base] &= ~(1 << bit)`, the acknowledge every
+///   ISR performs on entry.
+/// * `0x3ED01980(src, core)` — read one bit back.
+const IRQ_PENDING_BITS: u32 = 0x40;
+/// Distance between core 0's register block and core 1's (`[blk+12]` is set to
+/// `0x7E002000 + core * 0x800` by the per-core init at `0x3EC3E938`).
+const CORE_STRIDE: u32 = 0x800;
+
 /// The interrupt source start4 wires to the BCM system timer (compare channel
 /// `src - SYS_IRQ_SRC`). Enabled via `enable_irq_source(64, 1)`.
 pub const SYS_IRQ_SRC: u32 = 64;
@@ -48,6 +65,9 @@ pub struct CoreCtl {
     core1_started: bool,
     /// Last exception-vector base the firmware wrote for core 0 / core 1.
     pub vbase: [u32; 2],
+    /// Sources newly raised in software through [`IRQ_PENDING_BITS`], as
+    /// `(core, source)`, waiting to be vectored on that core.
+    sw_raised: std::collections::VecDeque<(u32, u32)>,
 }
 
 impl CoreCtl {
@@ -66,6 +86,13 @@ impl CoreCtl {
         self.pending_src
     }
 
+    /// Next `(core, source)` the firmware raised in software by setting a bit in
+    /// [`IRQ_PENDING_BITS`]. Real hardware asserts the line as soon as the bit
+    /// goes up; the model vectors it on the next step.
+    pub fn take_sw_raised(&mut self) -> Option<(u32, u32)> {
+        self.sw_raised.pop_front()
+    }
+
     pub fn take_core1_release(&mut self) -> bool {
         std::mem::take(&mut self.pending_core1_release)
     }
@@ -76,6 +103,21 @@ impl CoreCtl {
         let word = IRQ_PRIO_BASE + ((src >> 3) & 3) * 4;
         let field = (src & 7) * 4;
         ((self.storage.get(&word).copied().unwrap_or(0) >> field) & 0xF) as u8
+    }
+}
+
+/// Decode a pending-bitmask offset into `(core, word)`; `word` 0 covers sources
+/// 64..95 and word 1 sources 96..127.
+fn pending_word(offset: u32) -> Option<(u32, u32)> {
+    let (core, off) = if offset >= CORE_STRIDE {
+        (1, offset - CORE_STRIDE)
+    } else {
+        (0, offset)
+    };
+    match off {
+        IRQ_PENDING_BITS => Some((core, 0)),
+        _ if off == IRQ_PENDING_BITS + 4 => Some((core, 1)),
+        _ => None,
     }
 }
 
@@ -111,6 +153,18 @@ impl MmioDevice for CoreCtl {
                 if a != b {
                     let src = word * 8 + f + 64;
                     eprintln!("[irqen] core{core} src={src} prio {a} -> {b}");
+                }
+            }
+        }
+        // A 0 -> 1 transition in a pending word is the firmware raising that
+        // source on that core; queue it for delivery. Clearing bits is the
+        // ISR's acknowledge and needs no action.
+        if let Some((core, word)) = pending_word(offset) {
+            let prev = self.storage.get(&offset).copied().unwrap_or(0);
+            for bit in 0..32 {
+                let mask = 1u32 << bit;
+                if value & mask != 0 && prev & mask == 0 {
+                    self.sw_raised.push_back((core, SYS_IRQ_SRC + word * 32 + bit));
                 }
             }
         }
