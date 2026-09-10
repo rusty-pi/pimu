@@ -85,6 +85,13 @@ pub const PM_SIZE: u32 = 0x1000;
 pub const CM_BASE: u32 = 0x7E10_1000;
 pub const CM_SIZE: u32 = 0x2000;
 
+/// AVS monitor at `0x7D5D_2000` — on-die temperature sensor and the
+/// ring-oscillator / rail monitors start4's DVFS code reads. Carved out of the
+/// [`CLKMON_BASE`] window, so it must be decoded first. `reg = <0x7d5d2000
+/// 0xf00>` in the Pi 4 device tree.
+pub const AVS_BASE: u32 = 0x7D5D_2000;
+pub const AVS_SIZE: u32 = 0x0000_0F00;
+
 /// VPU clock block (PLLs + frequency monitors) at `0x7D5D_0000` — outside the
 /// `0x7E…` legacy window. start4's clock manager uses it on BCM2711.
 pub const CLKMON_BASE: u32 = 0x7D5D_0000;

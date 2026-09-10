@@ -134,6 +134,14 @@ pub trait Bus {
     fn take_tick_pending(&mut self) -> bool {
         false
     }
+
+    /// `sleep` with nothing pending: real VC4 halts the core until an interrupt
+    /// arrives, so advance the system timer straight to its next armed compare
+    /// instead of letting the idle loop spin. Returns false if nothing is armed
+    /// (then there is nothing to wake up for).
+    fn sleep_advance(&mut self) -> bool {
+        false
+    }
 }
 
 /// A memory-mapped peripheral. Offsets are relative to the device's base.

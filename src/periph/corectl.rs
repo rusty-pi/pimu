@@ -68,11 +68,16 @@ pub struct CoreCtl {
     /// Sources newly raised in software through [`IRQ_PENDING_BITS`], as
     /// `(core, source)`, waiting to be vectored on that core.
     sw_raised: std::collections::VecDeque<(u32, u32)>,
+    /// `RVF_DBG_IRQEN`, read once — this device is written from the step loop.
+    dbg_irqen: bool,
 }
 
 impl CoreCtl {
     pub fn new() -> CoreCtl {
-        CoreCtl::default()
+        CoreCtl {
+            dbg_irqen: std::env::var_os("RVF_DBG_IRQEN").is_some(),
+            ..CoreCtl::default()
+        }
     }
 
     /// Present `src` (64..127) at [`IRQ_PENDING`] for the dispatcher to pick up.
@@ -142,8 +147,7 @@ impl MmioDevice for CoreCtl {
         // into the `enable_irq_source(src, prio)` calls that produced them, for
         // core 0 (`0x10..0x20`) and core 1 (`0x810..0x820`). Which sources core 1
         // enables is how we find the inter-core doorbell's interrupt number.
-        if std::env::var_os("RVF_DBG_IRQEN").is_some()
-            && matches!(offset, 0x10..=0x1F | 0x810..=0x81F)
+        if self.dbg_irqen && matches!(offset, 0x10..=0x1F | 0x810..=0x81F)
         {
             let core = u32::from(offset >= 0x800);
             let word = (offset - if core == 1 { 0x810 } else { 0x10 }) / 4;

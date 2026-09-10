@@ -124,6 +124,13 @@ pub struct Vpu {
     /// so firmware `msleep` takes its yield-to-scheduler path, paired with the
     /// run loop's periodic ThreadX tick. Off by default — WIP (issue #7).
     pub irq_model: bool,
+    /// Diagnostic switches, read once at construction. Reading them from the
+    /// environment inside the step loop instead costs a `getenv` per `sleep`
+    /// instruction, and ThreadX's idle loop is nothing but `sleep`.
+    dbg_tick: bool,
+    dbg_vec: bool,
+    dbg_sleep: bool,
+    dbg_derail: bool,
 }
 
 impl Vpu {
@@ -134,6 +141,10 @@ impl Vpu {
         v.cf_trace = Vec::with_capacity(512);
         v.trace_cap = 20_000;
         v.irq_model = std::env::var_os("RVF_SCHED_TICK").is_some();
+        v.dbg_tick = std::env::var_os("RVF_DBG_TICK").is_some();
+        v.dbg_vec = std::env::var_os("RVF_DBG_VEC").is_some();
+        v.dbg_sleep = std::env::var_os("RVF_DBG_SLEEP").is_some();
+        v.dbg_derail = std::env::var_os("RVF_DBG_DERAIL").is_some();
         if v.irq_model {
             // VC4 comes out of reset with interrupts enabled; ThreadX runs
             // threads that way too. `di`/`ei` toggle it from here.
@@ -217,7 +228,7 @@ impl Vpu {
             if bus.load16(h) == Ok(0x0000) {
                 h = h.wrapping_add(2);
             }
-            if std::env::var_os("RVF_DBG_VEC").is_some() {
+            if self.dbg_vec {
                 eprintln!(
                     "[vec] slot={slot} vbase={:#x} entry={:#x} h={h:#x} pc={:#x} sp={:#x} cur={:#x} exec={:#x} nest={}",
                     self.exc_vbase,
@@ -375,7 +386,7 @@ impl Vpu {
                         // mis-route the interrupt.
                         let slot = bus.timer_tick_slot();
                         let took = slot.is_some() && bus.take_tick_pending();
-                        if std::env::var_os("RVF_DBG_SLEEP").is_some() {
+                        if self.dbg_sleep {
                             self.sleep_dbg += 1;
                             if self.sleep_dbg <= 20 || self.sleep_dbg % 20000 == 0 {
                                 eprintln!(
@@ -386,6 +397,12 @@ impl Vpu {
                         }
                         if let (Some(slot), true) = (slot, took) {
                             self.vector_irq_forced(bus, slot);
+                        } else {
+                            // Nothing to service: `sleep` halts the core on real
+                            // hardware, so jump to the next armed compare rather
+                            // than spinning through ThreadX's `sleep; di; b`
+                            // idle loop in real time.
+                            bus.sleep_advance();
                         }
                     }
                 } else {
@@ -484,7 +501,7 @@ impl Vpu {
                     Err(err) => return self.stop(Stop::Fault(Fault::Bus { pc, err })),
                 };
                 if self.irq_model
-                    && std::env::var_os("RVF_DBG_TICK").is_some()
+                    && self.dbg_tick
                     && !(0x3E00_0000..0x3F00_0000).contains(&ret)
                 {
                     eprintln!(
@@ -696,7 +713,7 @@ impl Vpu {
                                 && self.in_exception != 0
                                 && matches!(addr.base, super::insn::Base::R0)
                             {
-                                if std::env::var_os("RVF_DBG_TICK").is_some() {
+                                if self.dbg_tick {
                                     eprintln!("[ctx-switch] pc={pc:#x} clear in_exc (was {}) sp<-{v:#x}", self.in_exception);
                                 }
                                 self.in_exception = 0;
@@ -937,7 +954,7 @@ impl Vpu {
                 // corrupt return address). `RVF_DBG_DERAIL=1`.
                 let in_code = |a: u32| (0x3E00_0000..0x3F00_0000).contains(&a);
                 if in_code(pc) && !in_code(self.regs.pc) && self.core_id == 0 {
-                    if std::env::var_os("RVF_DBG_DERAIL").is_some() {
+                    if self.dbg_derail {
                         eprintln!(
                             "[derail] {pc:#x} ({:?}) -> {:#x}  regs r0-9: {:08x?}",
                             insn.op,

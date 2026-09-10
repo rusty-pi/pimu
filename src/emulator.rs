@@ -332,6 +332,12 @@ impl Emulator {
             .unwrap_or_default();
         let mut trap_hits: std::collections::HashMap<u32, u64> =
             std::collections::HashMap::new();
+        // `RVF_TRAP_MAX=<n>`: how many hits of each trap address to print
+        // (default 12). The totals are always reported at exit.
+        let trap_max: u64 = std::env::var("RVF_TRAP_MAX")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(12);
         // RVF_TRAP_FROM=<n>: ignore trap hits before <n> million retired
         // instructions, so the steady state can be sampled instead of only
         // early boot.
@@ -1020,7 +1026,7 @@ impl Emulator {
                 {
                     let n = trap_hits.entry(pc_before).or_insert(0);
                     *n += 1;
-                    if *n <= 12 {
+                    if *n <= trap_max {
                         eprintln!(
                             "[trap] {pc_before:#010x} #{n} lr={:#010x} r0={:#x} r1={:#x} r2={:#x} r3={:#x} r4={:#x} r5={:#x} r6={:#x} r7={:#x} sp={:#x} retired={}",
                             self.cpu.regs.get(26),
@@ -1185,6 +1191,10 @@ impl Emulator {
                         );
                     }
                     if core == 0 {
+                        // The generic dispatcher re-reads the source from
+                        // CoreCtl `+0x04`, so present it there as well as
+                        // queueing the vectoring.
+                        self.machine.corectl.raise_source(src);
                         self.machine.push_pending_irq(src);
                     } else if let Some(c1) = self.cpu1.as_mut() {
                         if c1.exc_vbase != 0 {
@@ -1508,6 +1518,17 @@ impl Emulator {
         };
 
         console.extend_from_slice(&self.machine.take_console_output());
+
+        // Only the first 12 hits of each `RVF_TRAP` address are printed, so
+        // report the totals as well - the print cap otherwise makes every
+        // busy address look like it ran exactly 12 times.
+        if !trap_hits.is_empty() {
+            let mut totals: Vec<(u32, u64)> = trap_hits.into_iter().collect();
+            totals.sort_unstable();
+            for (pc, n) in totals {
+                eprintln!("[trap-total] {pc:#010x} {n}");
+            }
+        }
 
         // `RVF_DBG_TCB=<hex>[,<hex>...]`: at exit, decode each ThreadX thread's
         // saved context and report the pc it is parked at. `[tcb+8]` is the

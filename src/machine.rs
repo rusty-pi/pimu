@@ -3,7 +3,7 @@
 use crate::bus::{Bus, BusError, BusResult, MmioDevice, Width};
 use crate::mem::Ram;
 use crate::periph::{
-    Aux, BootBox, Bsc, ClkMon, ClockManager, ConfigOtp, CoreCtl, Dma4, Emmc2, Hvs, McSync, Pl011,
+    Avs, Aux, BootBox, Bsc, ClkMon, ClockManager, ConfigOtp, CoreCtl, Dma4, Emmc2, Hvs, McSync, Pl011,
     Pm, Sdc, Sdramc, Spi0, StubRegion, SysTimer,
 };
 use crate::soc::bcm2711 as map;
@@ -31,6 +31,8 @@ pub struct Machine {
     pub clockman: ClockManager,
     /// VPU clock block (`0x7D5D_0000`) — PLLs + frequency monitors.
     pub clkmon: ClkMon,
+    /// AVS monitor (`0x7D5D_2000`) — temperature and rail monitors.
+    pub avs: Avs,
     /// SPI0 master (`0x7E20_4000`) — minimal model for the EEPROM bootloader.
     pub spi0: Spi0,
     /// BSC / I²C master at `0x7E20_5E00` + the board PMIC — start4 reads the
@@ -122,6 +124,7 @@ impl Machine {
             pm: Pm::new(),
             clockman: ClockManager::new(),
             clkmon: ClkMon::new(),
+            avs: Avs::new(),
             spi0: Spi0::new(),
             bsc_pmic: Bsc::new("bsc-pmic"),
             config_otp: ConfigOtp::new(),
@@ -264,6 +267,9 @@ impl Machine {
         }
         if let Some(off) = hit(map::CM_BASE, map::CM_SIZE) {
             return Some((&mut self.clockman, off));
+        }
+        if let Some(off) = hit(map::AVS_BASE, map::AVS_SIZE) {
+            return Some((&mut self.avs, off));
         }
         if let Some(off) = hit(map::CLKMON_BASE, map::CLKMON_SIZE) {
             return Some((&mut self.clkmon, off));
@@ -504,6 +510,10 @@ impl Bus for Machine {
 
     fn take_tick_pending(&mut self) -> bool {
         self.systimer.take_tick_pending()
+    }
+
+    fn sleep_advance(&mut self) -> bool {
+        self.systimer.wake_to_next_match().is_some()
     }
 
     fn timer_tick_slot(&mut self) -> Option<u32> {
