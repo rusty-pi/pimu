@@ -59,7 +59,12 @@ Only what boot needs. Modelled so far (`src/periph/`):
 - **DMA4**, **power domains**, **config-OTP**, **CoreCtl**, **mcsync**, the
   `0x7EE0` boot-box, and a logging catch-all for everything else
 
-Still out: **USB3** (VL805 XHCI) and **GENET** netboot — not needed while the
+- **PCIe root complex** (`0x7D50_0000`) — a register file only, so the block
+  stops aliasing into DRAM; the link never comes up (see
+  [`usb-xhci.md`](usb-xhci.md))
+
+Still out: **USB3** (the VL805 xHCI behind that PCIe root complex — surveyed in
+[`usb-xhci.md`](usb-xhci.md)) and **GENET** netboot — not needed while the
 boot disk is an SD image; HDMI/display, camera, the 3D/QPU unit; and the VPU
 *scalar* vector ALU (`memcpy`-style bulk ops are special-cased, the rest fall
 through to `Unimpl`).

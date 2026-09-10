@@ -33,6 +33,9 @@ pub struct Machine {
     pub clkmon: ClkMon,
     /// AVS monitor (`0x7D5D_2000`) — temperature and rail monitors.
     pub avs: Avs,
+    /// PCIe root complex (`0x7D50_0000`) — a register file only. The VL805
+    /// xHCI controller behind it is not modelled; see `docs/usb-xhci.md`.
+    pub pcie: crate::periph::pcie::Pcie,
     /// Hardware RNG (`0x7E10_4000`) — start4 blocks on its interrupt.
     pub rng: Rng,
     /// BSC instance 0 (`0x7E20_5000`) — nothing attached; probes go unACKed.
@@ -127,6 +130,7 @@ impl Machine {
             clockman: ClockManager::new(),
             clkmon: ClkMon::new(),
             avs: Avs::new(),
+            pcie: crate::periph::pcie::Pcie::new(),
             rng: Rng::new(),
             bsc0: Bsc::empty("bsc0"),
             spi0: Spi0::new(),
@@ -216,6 +220,7 @@ impl Machine {
         (map::PERIPH_BASE..map::PERIPH_BASE + map::PERIPH_SIZE).contains(&addr)
             || (map::SDRAMC_BASE..map::SDRAMC_BASE + map::SDRAMC_SIZE).contains(&addr)
             || (map::CLKMON_BASE..map::CLKMON_BASE + map::CLKMON_SIZE).contains(&addr)
+            || (map::PCIE_BASE..map::PCIE_BASE + map::PCIE_SIZE).contains(&addr)
     }
 
     /// Fold the four VC4 cache aliases (`0x0`, `0x4000_0000`, `0x8000_0000`,
@@ -302,6 +307,9 @@ impl Machine {
         }
         if let Some(off) = hit(map::SDRAMC_BASE, map::SDRAMC_SIZE) {
             return Some((&mut self.sdramc, off));
+        }
+        if let Some(off) = hit(map::PCIE_BASE, map::PCIE_SIZE) {
+            return Some((&mut self.pcie, off));
         }
 
         if (map::PERIPH_BASE..map::PERIPH_BASE + map::PERIPH_SIZE).contains(&a) {

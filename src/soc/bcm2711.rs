@@ -141,6 +141,14 @@ pub const HVS_SIZE: u32 = 0x1000;
 pub const SDRAMC_BASE: u32 = 0x7DC0_0000;
 pub const SDRAMC_SIZE: u32 = 0x0004_0000; // 0x7DC0_0000..0x7DC4_0000
 
+/// PCIe root complex (`pcie@7d500000`, `reg = <0x7d500000 0x9310>`) — the
+/// BCM2711 block the VL805 xHCI controller sits behind. Like [`SDRAMC_BASE`]
+/// and [`CLKMON_BASE`] it lives *below* the `0x7E…` peripheral window, so it
+/// must be decoded before the cache-alias fold or its registers land in DRAM at
+/// `0x3D50_0000`. See `docs/usb-xhci.md`.
+pub const PCIE_BASE: u32 = 0x7D50_0000;
+pub const PCIE_SIZE: u32 = 0x0000_9310;
+
 /// Main SDRAM as seen by the VPU (cached alias at 0, uncached at 0xC000_0000).
 pub const SDRAM_CACHED_BASE: u32 = 0x0000_0000;
 pub const SDRAM_UNCACHED_BASE: u32 = 0xC000_0000;

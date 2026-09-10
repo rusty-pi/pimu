@@ -17,6 +17,7 @@ pub mod dma_legacy;
 pub mod emmc2;
 pub mod hvs;
 pub mod mcsync;
+pub mod pcie;
 pub mod pm;
 pub mod pmic;
 pub mod readystub;
