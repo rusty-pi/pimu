@@ -5,14 +5,15 @@
 #   scripts/boot-check.sh [boot.log]
 #
 # Assumes `cargo build --release` and an SD image built by scripts/make-sd.sh.
-# Set RVF_BOOT_WALL to change the wall-clock budget (default 290 s; the runners
+# Set RVF_BOOT_WALL to change the wall-clock budget (default 330 s; the runners
 # are roughly 1.6x slower than a dev box, where the last milestone lands around
-# 90 s).
+# 90 s). The budget went 290 -> 330 s so the run reaches the codec licence
+# check, which is what exercises the VCE guard below.
 set -uo pipefail
 
 here="$(cd "$(dirname "$0")/.." && pwd)"
 log="${1:-$here/boot.log}"
-wall="${RVF_BOOT_WALL:-290}"
+wall="${RVF_BOOT_WALL:-330}"
 bin="$here/target/release/rpi-virt-fw"
 
 # Stream the UART console (incl. `MESS:` lines) as it is produced.
@@ -94,6 +95,10 @@ want 'overlay load'                        "Loaded overlay 'disable-bt'"
 want 'kernel command line'                 "Read command line from file 'cmdline.txt'"
 want 'kernel load'                         "Loaded 'kernel8.img'"
 want 'device tree relocation'              'Device tree loaded to'
+# The last thing before `arm_loader`: `codec_enabled` runs its licence-key
+# check on the VCE and waits on interrupt source 68. With the block unmapped
+# that wait timed out and start4 printed this instead (`src/periph/vce.rs`).
+must_not 'VCE launch never completed'      'VCE taking >1s to run'
 # No nop-slides at all: the register file must survive preemptive context
 # switches (8d7c27a) and no callback may be null.
 must_not 'derailed into a nop-slide'       '\[derail\]'
