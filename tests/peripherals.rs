@@ -167,3 +167,153 @@ fn interrupt_priority_fields_round_trip() {
     assert_eq!(m.corectl.irq_priority(65), 0, "unenabled source");
     assert_eq!(m.corectl.irq_priority(72), 0, "next word along");
 }
+
+// ---------------------------------------------------------------------------
+// Board PMICs on the BSC at 0x7E20_5E00 (#4).
+// ---------------------------------------------------------------------------
+
+const BSC_C: u32 = 0x00;
+const BSC_S: u32 = 0x04;
+const BSC_DLEN: u32 = 0x08;
+const BSC_A: u32 = 0x0C;
+const BSC_FIFO: u32 = 0x10;
+
+const C_READ: u32 = 1 << 0;
+const C_ST: u32 = 1 << 7;
+const C_I2CEN: u32 = 1 << 15;
+const S_DONE: u32 = 1 << 1;
+const S_ERR: u32 = 1 << 8;
+
+/// Let a transfer settle: `S.DONE` is deliberately held off for a few ticks so
+/// the driver's submit call unwinds before the completion is observed.
+fn settle(m: &mut Machine) {
+    for _ in 0..256 {
+        m.bsc_pmic.tick(1);
+    }
+}
+
+/// `read(reg)` the way start4's BSC transport does it when `cfg[8] & 2` is set
+/// (the `0x1B` path): one-byte write phase, FIFO fed straight after `ST`, then
+/// a separate read phase.
+fn pmic_read(m: &mut Machine, addr: u8, reg: u8) -> u8 {
+    let base = map::BSC_PMIC_BASE;
+    m.store32(base + BSC_A, addr as u32).unwrap();
+    m.store32(base + BSC_DLEN, 1).unwrap();
+    m.store32(base + BSC_C, C_I2CEN | C_ST).unwrap();
+    m.store32(base + BSC_FIFO, reg as u32).unwrap();
+    settle(m);
+    m.store32(base + BSC_S, S_DONE | S_ERR).unwrap();
+
+    m.store32(base + BSC_DLEN, 1).unwrap();
+    m.store32(base + BSC_C, C_I2CEN | C_ST | C_READ).unwrap();
+    settle(m);
+    let v = m.load32(base + BSC_FIFO).unwrap() as u8;
+    m.store32(base + BSC_S, S_DONE | S_ERR).unwrap();
+    v
+}
+
+/// The same read, in the order the transport uses when `cfg[8] & 2` is clear
+/// (the `0x1E` path): it programs the read phase *before* pushing the register
+/// byte, relying on the write phase stalling with `S.TA` asserted until the
+/// FIFO has data. Both orders have to select the same register.
+fn pmic_read_late_fifo(m: &mut Machine, addr: u8, reg: u8) -> u8 {
+    let base = map::BSC_PMIC_BASE;
+    m.store32(base + BSC_A, addr as u32).unwrap();
+    m.store32(base + BSC_DLEN, 1).unwrap();
+    m.store32(base + BSC_C, C_I2CEN | C_ST).unwrap();
+    m.store32(base + BSC_DLEN, 1).unwrap();
+    m.store32(base + BSC_C, C_I2CEN | C_ST | C_READ).unwrap();
+    m.store32(base + BSC_FIFO, reg as u32).unwrap();
+    settle(m);
+    let v = m.load32(base + BSC_FIFO).unwrap() as u8;
+    m.store32(base + BSC_S, S_DONE | S_ERR).unwrap();
+    v
+}
+
+fn pmic_write(m: &mut Machine, addr: u8, reg: u8, value: u8) {
+    let base = map::BSC_PMIC_BASE;
+    m.store32(base + BSC_A, addr as u32).unwrap();
+    m.store32(base + BSC_DLEN, 2).unwrap();
+    m.store32(base + BSC_C, C_I2CEN | C_ST).unwrap();
+    m.store32(base + BSC_FIFO, reg as u32).unwrap();
+    m.store32(base + BSC_FIFO, value as u32).unwrap();
+    settle(m);
+    m.store32(base + BSC_S, S_DONE | S_ERR).unwrap();
+}
+
+/// The register the firmware asks for is the register it gets. start4's
+/// transport (`0x3ECF0ED0`) writes `C.ST` before it feeds the FIFO, so a model
+/// that runs the transfer at `ST` and takes the FIFO byte afterwards selects
+/// nothing, and the auto-incrementing pointer walks the whole 0..0xFF space
+/// instead of answering the register that was asked for.
+#[test]
+fn pmic_register_pointer_follows_the_late_fifo_byte() {
+    let mut m = machine();
+    // 0x1B reg 0x09 is the SDRAM rail setpoint, shared by rails 2, 3 and 4.
+    assert_eq!(pmic_read(&mut m, 0x1B, 0x09), 40);
+    assert_eq!(pmic_read_late_fifo(&mut m, 0x1B, 0x09), 40);
+    // 0x1E reg 0x25 is the SoC core rail setpoint.
+    assert_eq!(pmic_read_late_fifo(&mut m, 0x1E, 0x25), 85);
+    assert_eq!(pmic_read(&mut m, 0x1E, 0x25), 85);
+}
+
+/// Seeded setpoints must decode, through the firmware's own conversion, to the
+/// voltages a real d03115 reports.
+#[test]
+fn pmic_setpoints_decode_to_the_real_boards_voltages() {
+    let mut m = machine();
+
+    // 0x1B rails 2..4 (`0x3EC8C710`): raw * 5_000 + 900_000 µV.
+    let sdram = pmic_read(&mut m, 0x1B, 0x09) as u32 * 5_000 + 900_000;
+    assert_eq!(sdram, 1_100_000, "vcgencmd measure_volts sdram_c on rpi-dev");
+
+    // 0x1E rail 1 (`0x3EC8C9F6`): raw * 10_000 µV, within the descriptor's
+    // 0.3 V..1.9 V range.
+    let core = pmic_read(&mut m, 0x1E, 0x25) as u32 * 10_000;
+    assert!(
+        (300_000..=1_900_000).contains(&core),
+        "core setpoint {core} outside the descriptor range"
+    );
+}
+
+/// A setpoint write is read back, and latches the "voltage settled" bit each
+/// part's post-set callback polls: `0x1B` reg 0x00 bit 4 (`0x3EC8C746`) and
+/// `0x1E` reg 0x02 bit 3 (`0x3EC8C9FC`). Those loops have no timeout, so a bit
+/// that never sets hangs the boot outright.
+#[test]
+fn pmic_setpoint_write_latches_the_settled_bit() {
+    let mut m = machine();
+
+    // 0x6E = 110 -> 1.10 V, the top of the band this boot's DVFS actually uses.
+    pmic_write(&mut m, 0x1E, 0x25, 0x6E);
+    assert_eq!(pmic_read(&mut m, 0x1E, 0x25), 0x6E);
+    assert_ne!(pmic_read(&mut m, 0x1E, 0x02) & 0x08, 0, "0x1E settled bit");
+
+    pmic_write(&mut m, 0x1B, 0x09, 40);
+    assert_ne!(pmic_read(&mut m, 0x1B, 0x00) & 0x10, 0, "0x1B settled bit");
+}
+
+/// The two parts are separate register files even though they share a bus: a
+/// write to one must not show up in the other.
+#[test]
+fn pmic_addresses_are_separate_register_files() {
+    let mut m = machine();
+    pmic_write(&mut m, 0x1E, 0x40, 0x5A);
+    assert_eq!(pmic_read(&mut m, 0x1E, 0x40), 0x5A);
+    assert_eq!(pmic_read(&mut m, 0x1B, 0x40), 0x00);
+}
+
+/// Nothing else is on this bus. start4 probes a handful of other addresses on
+/// it; an unACKed transfer has to complete `DONE | ERR`, not spin.
+#[test]
+fn pmic_bus_nacks_every_other_address() {
+    let mut m = machine();
+    let base = map::BSC_PMIC_BASE;
+    m.store32(base + BSC_A, 0x43).unwrap();
+    m.store32(base + BSC_DLEN, 1).unwrap();
+    m.store32(base + BSC_C, C_I2CEN | C_ST | C_READ).unwrap();
+    settle(&mut m);
+    let s = m.load32(base + BSC_S).unwrap();
+    assert_ne!(s & S_DONE, 0, "transfer must complete");
+    assert_ne!(s & S_ERR, 0, "unACKed address must raise ERR");
+}
