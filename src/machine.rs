@@ -502,61 +502,46 @@ impl Bus for Machine {
     }
 
     fn timer_tick_slot(&mut self) -> Option<u32> {
-        // The ThreadX periodic tick is system-timer compare channel 0 = VPU
-        // interrupt source 64 (`SYS_IRQ_SRC`). We currently vector it through
-        // the table slot == the 4-bit *priority* `enable_irq_source(64, prio)`
-        // stored, i.e. slot 1, whose stub is
+        // Each system-timer compare channel is its own VPU interrupt source
+        // (`SYS_IRQ_SRC + channel`), and start4's vector table has 128 entries /
+        // 0x200 bytes: [0..15] are the per-priority stubs, [64..127] the direct
+        // per-source handlers. Entry 64 is the ThreadX tick `0x3EC40B7C` (read
+        // back off a running Pi 4, issue #7) — the only code that acks `CS.M0`,
+        // re-arms `C0`, walks the 32-bucket timer wheel and calls
+        // `_tx_thread_system_resume`. Entry 66 is the clock service's timeout
+        // timer, which reaches `0x3ED6588A` through the generic dispatcher.
         //
-        //     nop; push {r0-r5,lr}; mov r0,1; bl 0x3EC3EA50; pop {r0-r5};
-        //     ld r26,(sp)++; rti
+        // So deliver the raw source, not the 4-bit priority
+        // `enable_irq_source(64, prio)` recorded. Routing through the priority
+        // stub reached `0x3ECB0BF0(slot)`, which does nothing for slot 1, so no
+        // timed wait ever expired and every blocking `msleep` hung forever.
         //
-        // That runs the generic per-priority ISR (`0x3EC3EA50` -> `0x3ED18004`
-        // -> `0x3ECB0BF0`) and gives correct preemption with the two-word
-        // `[SR][PC]` frame `Vpu::vector_irq` pushes.
-        //
-        // KNOWN WRONG, and the reason `RVF_MCSYNC_RPC` is still needed:
-        // `0x3ECB0BF0(slot)` only does anything for slots 3, 5, 6 and 10, so
-        // slot 1 returns having done nothing. The real tick handler is table
-        // entry **64** = `0x3EC40B7C` — the table is 0x200 bytes / 128 entries
-        // ([0..15] priority stubs, [64..127] direct per-source handlers), and
-        // entry 64 was read back off a running Pi 4 (issue #7). It is the only
-        // code that acks `CS.M0`, re-arms `C0`, walks the 32-bucket timer wheel
-        // and calls `_tx_thread_system_resume`. Because we never reach it, no
-        // timed wait ever expires: every blocking `msleep` (which arms a
-        // timeout then blocks on a held lock, `0x3ED6506C`..`0x3ED65094`) hangs
-        // forever and the boot wedges with `_tx_thread_execute_ptr == 0`.
-        //
-        // `RVF_TICK_SLOT=64` selects the hardware-correct routing. It does not
-        // work yet: `0x3EC40B7C`'s tail (`0x3EC40D26` -> `0x3EC3E29E`) performs
-        // a real ThreadX-SMP context restore, which needs the full
-        // `_tx_thread_context_save` frame (`[disc][r16-r23][r0-r15][r26][SR][PC]`)
-        // rather than our two-word one. Implementing that frame in
-        // `Vpu::vector_irq` is the fix, and it removes `RVF_MCSYNC_RPC`.
         // A channel that has already matched is what we are delivering, and
-        // under one-shot compares it disarms at the moment it fires - so check
+        // under one-shot compares it disarms at the moment it fires — so check
         // "something is pending" first and only fall back to "something is
         // armed". Testing `any_armed()` alone dropped every one-shot match.
         if self.systimer.pending_channel().is_none() && !self.systimer.any_armed() {
             return None;
         }
-        if let Some(base) = self.tick_slot_override {
-            // Each compare channel is its own interrupt source (`64 + channel`):
-            // channel 0 is the ThreadX tick, channel 2 (source 66, vector
-            // `0x3EC3E9BC`) the clock service's timeout timer. When the raw
-            // source is selected, deliver whichever channel actually matched.
-            if base == crate::periph::corectl::SYS_IRQ_SRC {
-                let ch = self.systimer.pending_channel().unwrap_or(0) as u32;
-                return Some(base + ch);
-            }
-            return Some(base);
+        let ch = self.systimer.pending_channel().unwrap_or(0) as u32;
+        let src = self
+            .tick_slot_override
+            .map_or(crate::periph::corectl::SYS_IRQ_SRC + ch, |base| {
+                if base == crate::periph::corectl::SYS_IRQ_SRC {
+                    base + ch
+                } else {
+                    base
+                }
+            });
+        // The generic dispatcher `0x3EC3E9BC` does not take the source from the
+        // vector number — it re-reads it from CoreCtl `+0x04` and indexes the
+        // handler table at `gp+58004`. Entry 64 is a direct handler and never
+        // looks, so leaving a stale pending value there would only shadow a
+        // device interrupt's own source.
+        if src != crate::periph::corectl::SYS_IRQ_SRC {
+            self.corectl.raise_source(src);
         }
-        let slot = self.corectl.irq_priority(crate::periph::corectl::SYS_IRQ_SRC);
-        if slot == 0 {
-            // Fall back to the raw source if start4 hasn't run
-            // `enable_irq_source` for it yet.
-            return Some(crate::periph::corectl::SYS_IRQ_SRC);
-        }
-        Some(slot as u32)
+        Some(src)
     }
 
     fn load(&mut self, addr: u32, width: Width) -> BusResult<u32> {
