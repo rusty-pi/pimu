@@ -49,7 +49,7 @@ jobs:
       - name: Build rpi-virt-fw
         run: cargo build --release
 
-      - name: Simulated boot (3 min cap)
+      - name: Simulated boot (5 min cap)
         env:
           # Model the SR interrupt-enable bit and run the real ThreadX periodic
           # tick through vector-table entry 64, so the scheduler actually
@@ -62,14 +62,14 @@ jobs:
           # stream the UART console (incl. `MESS:` lines) as it is produced.
           RVF_LIVE_CONSOLE: "1"
         run: |
-          timeout --signal=INT 180 \
+          timeout --signal=INT 300 \
             ./target/release/rpi-virt-fw recon firmware/pieeprom.bin \
               --eeprom --sd firmware/sd.img \
-              --max-wall 170 --max-steps 100000000000 \
+              --max-wall 290 --max-steps 100000000000 \
             2>&1 | tee boot.log
           status=${PIPESTATUS[0]}
           echo "recon exit status: $status"
-          # 124 = hit the 3-minute wall clock; that is expected, not a failure.
+          # 124 = hit the 5-minute wall clock; that is expected, not a failure.
           if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
             exit "$status"
           fi

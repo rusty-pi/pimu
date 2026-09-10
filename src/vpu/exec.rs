@@ -362,10 +362,20 @@ impl Vpu {
                         // armed timer compare and, if that raises an enabled
                         // source, dispatch it (see [`Vpu::deliver_timer_irq`]).
                         self.deliver_timer_irq(bus);
-                    } else if self.exc_vbase != 0 {
+                    } else if self.exc_vbase != 0 && self.core_id == 0 {
                         // The ThreadX idle loop parks here with interrupts
                         // disabled, so the run loop's gated delivery never
                         // fires; service a device interrupt here too.
+                        //
+                        // Core 0 only: the pending queue and the system-timer
+                        // compare are the *shared* bus's, which in this model
+                        // stands for core 0's half of the interrupt controller
+                        // (CoreCtl keeps per-core enable and pending words a
+                        // `0x800` stride apart). Core 1 idles in the same
+                        // ThreadX `sleep; di; b` loop, so once it has a vector
+                        // base it would otherwise steal every interrupt core 0
+                        // is waiting for and wedge the boot right after
+                        // `Starting start4.elf`.
                         if let Some(src) = bus.take_pending_irq() {
                             // `pc` was already advanced past the `sleep` above,
                             // so `vector_irq` records the right resume point.
