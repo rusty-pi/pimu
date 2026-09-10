@@ -279,3 +279,131 @@ fn vectored_interrupt_frame_unwinds_through_rti() {
         "rti must restore the interrupted context's enable bit"
     );
 }
+
+// --- vector unit -----------------------------------------------------------
+//
+// The vector register file is not modelled, so almost everything the vector
+// unit can do must fault rather than be guessed at. Exactly two encodings are
+// executed, both from `FUN_0edc9e20` in `start4.elf` — the routine that flushes
+// the unit's outstanding reads before the VRF semaphore is released:
+//
+//     v8ld  -,(r0)          x4
+//     ld    r0,(sp)
+//     v16mov -,r0 SUMS r0
+//     mov   r0,r0
+//     rts
+//
+// Both readings were confirmed against `binutils-vc4` objdump.
+
+/// `00 f0 38 e0 80 03` = `v8ld -,(r0)`: a 16-lane 8-bit load whose destination
+/// descriptor is the "dash" slot, so nothing lands in a vector register. The
+/// read still happens — it is the whole point of the instruction — but no
+/// scalar register may change.
+#[test]
+fn vector_discarded_load_touches_no_register() {
+    let mut m = machine();
+    let mut v = Vpu::new(CODE);
+    load_code(&mut m, CODE, &[0xF000, 0xE038, 0x0380, NOP]);
+    for i in 0..16u32 {
+        m.store8(0x4000 + i, 0xA5).unwrap();
+    }
+    v.regs.set(0, 0x4000);
+    let before: Vec<u32> = (0..32).map(|r| v.regs.get(r)).collect();
+
+    step(&mut v, &mut m);
+
+    assert_eq!(v.regs.pc, CODE + 6, "48-bit vector instruction");
+    for r in 0..32 {
+        assert_eq!(v.regs.get(r), before[r], "r{r} must be untouched");
+    }
+}
+
+/// `00 fc 38 e0 80 03 c0 f3 00 12` = `v16mov -,r0 SUMS r0`: r0 is broadcast
+/// across the 16 lanes at 16-bit width, the vector result is discarded, and the
+/// scalar result unit writes the signed sum of the lanes back to r0.
+#[test]
+fn vector_sum_of_broadcast_writes_the_scalar() {
+    let mut m = machine();
+    let mut v = Vpu::new(CODE);
+    load_code(&mut m, CODE, &[0xFC00, 0xE038, 0x0380, 0xF3C0, 0x1200, NOP]);
+    v.regs.set(0, 3);
+
+    step(&mut v, &mut m);
+
+    assert_eq!(v.regs.pc, CODE + 10, "80-bit vector instruction");
+    assert_eq!(v.regs.get(0), 16 * 3, "sum of 16 lanes each holding r0");
+}
+
+/// The lanes are 16 bits wide and `SUMS` reads them as signed, so a value that
+/// is negative in 16 bits sums negative — not as the 32-bit register would.
+#[test]
+fn vector_sum_of_broadcast_is_signed_at_the_lane_width() {
+    let mut m = machine();
+    let mut v = Vpu::new(CODE);
+    load_code(&mut m, CODE, &[0xFC00, 0xE038, 0x0380, 0xF3C0, 0x1200, NOP]);
+    v.regs.set(0, 0x0001_FFFF); // -1 in a 16-bit lane, positive in 32
+
+    step(&mut v, &mut m);
+
+    assert_eq!(v.regs.get(0), (-16i32) as u32);
+    assert!(v.regs.flags.n, "the SRU writeback updates the scalar flags");
+}
+
+/// Anything that would read or write a real vector register has to fault: the
+/// model has no VRF, and quietly stepping over it corrupts the copy it was
+/// making. `08 f0 b8 80 80 03` = `v16ld HX(2,0),(r0)` from the blit loop at
+/// `FUN_0edc9bbc`.
+#[test]
+fn vector_op_that_needs_the_register_file_faults() {
+    let mut m = machine();
+    let mut v = Vpu::new(CODE);
+    load_code(&mut m, CODE, &[0xF008, 0x80B8, 0x0380, NOP]);
+
+    assert_eq!(v.step(&mut m), Step::Stopped);
+    assert!(
+        matches!(
+            v.stopped,
+            Some(rpi_virt_fw::vpu::Stop::Fault(
+                rpi_virt_fw::vpu::Fault::Unimplemented { .. }
+            ))
+        ),
+        "stopped: {:?}",
+        v.stopped
+    );
+}
+
+/// The "dash" test must not be a loose field check: a near neighbour that names
+/// a real vector register in the discarded slot has to fault too. Here the
+/// destination descriptor is a genuine `H32` register rather than the dash.
+#[test]
+fn vector_near_miss_of_the_discarded_load_faults() {
+    let mut m = machine();
+    let mut v = Vpu::new(CODE);
+    // v8ld -,(r0) is 0xF000_E038_0380; clear the top bit of the destination
+    // descriptor (bit 18 counted from the MSB) so the slot names H32(0,0).
+    let raw: u64 = 0xF000_E038_0380 & !(1u64 << (47 - 16));
+    load_code(
+        &mut m,
+        CODE,
+        &[(raw >> 32) as u16, (raw >> 16) as u16, raw as u16, NOP],
+    );
+
+    assert_eq!(v.step(&mut m), Step::Stopped, "must not be executed");
+}
+
+/// An 80-bit vector word does not fit in 64 bits. It used to be truncated on
+/// the way into the report, which made two different instructions look
+/// identical; the decoder must keep all five parcels.
+#[test]
+fn vector80_keeps_its_top_parcel() {
+    use rpi_virt_fw::vpu::decode::decode;
+    use rpi_virt_fw::vpu::insn::Op;
+
+    let bytes = [0x00, 0xFC, 0x38, 0xE0, 0x80, 0x03, 0xC0, 0xF3, 0x00, 0x12];
+    let insn = decode(&bytes, CODE);
+    assert_eq!(insn.len, 10);
+    match insn.op {
+        Op::Vector(v) => assert_eq!(v.raw, 0xFC00_E038_0380_F3C0_1200),
+        other => panic!("expected a vector op, got {other:?}"),
+    }
+}

@@ -3,9 +3,28 @@
 use crate::bus::{Bus, BusError, Width};
 
 use super::decode::decode;
-use super::insn::{AddrMode, AluOp, Base, MemWidth, Op, RegOrImm, Writeback};
+use super::insn::{AddrMode, AluOp, Base, MemWidth, Op, RegOrImm, VecExec, VecInsn, Writeback};
 use super::length::{insn_len_bytes, InsnClass};
 use super::reg::{Cond, Flags, Regs, GP, LR, SP};
+
+/// Sign-extend the low `bits` of `v` to 32 bits.
+#[inline]
+fn sext_to(v: u32, bits: u8) -> u32 {
+    if bits >= 32 {
+        return v;
+    }
+    let shift = 32 - bits as u32;
+    (((v << shift) as i32) >> shift) as u32
+}
+
+/// Zero-extend the low `bits` of `v` to 32 bits.
+#[inline]
+fn zext_to(v: u32, bits: u8) -> u32 {
+    if bits >= 32 {
+        return v;
+    }
+    v & ((1u32 << bits) - 1)
+}
 
 /// Why the core stopped.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,22 +43,51 @@ pub enum HaltReason {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Fault {
-    Bus { pc: u32, err: BusError },
-    Unimplemented { pc: u32, raw: u64, class: InsnClass },
-    UnimplementedAlu { pc: u32, op: &'static str },
+    Bus {
+        pc: u32,
+        err: BusError,
+    },
+    Unimplemented {
+        pc: u32,
+        raw: u128,
+        class: InsnClass,
+    },
+    UnimplementedAlu {
+        pc: u32,
+        op: &'static str,
+    },
 }
 
 /// What to do when the core meets an instruction the decoder/executor does not
 /// implement.
+///
+/// The variants also select how strict the core is about the *other* ways a run
+/// can wander off the rails — `bkpt` padding, `sleep` with no wakeup source, and
+/// a `swi` with no handler installed. A scenario wants those to halt; a whole
+/// firmware boot has to step over them to get anywhere.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum UnimplPolicy {
-    /// Stop with a [`Fault::Unimplemented`]. The default — silence here means
-    /// silently wrong execution.
+    /// Stop with a [`Fault::Unimplemented`], and halt on `bkpt`/`sleep`/an
+    /// unhandled `swi`. The default — silence here means silently wrong
+    /// execution.
     #[default]
     Fault,
+    /// Fault on an unknown instruction, but keep the reconnaissance leniencies
+    /// so a whole boot can run. What `recon` uses unless told otherwise.
+    ReconFault,
     /// Advance past it (correct length) and keep going. For "how far does the
-    /// firmware get / what does it touch" reconnaissance runs.
+    /// firmware get / what does it touch" reconnaissance runs on firmware the
+    /// decoder has not been taught yet.
     Skip,
+}
+
+impl UnimplPolicy {
+    /// Step over `bkpt` padding, treat `sleep` as a nop, and ignore a `swi`
+    /// with no handler, rather than halting the core.
+    #[inline]
+    pub fn recon_lenient(self) -> bool {
+        matches!(self, UnimplPolicy::Skip | UnimplPolicy::ReconFault)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,7 +101,7 @@ pub enum Step {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UnimplHit {
     pub pc: u32,
-    pub raw: u64,
+    pub raw: u128,
     pub len: u8,
     pub class: InsnClass,
     pub count: u64,
@@ -147,7 +195,7 @@ impl Vpu {
         v
     }
 
-    fn note_unimpl(&mut self, pc: u32, raw: u64, len: u8, class: InsnClass) {
+    fn note_unimpl(&mut self, pc: u32, raw: u128, len: u8, class: InsnClass) {
         if let Some(h) = self.unimpl.iter_mut().find(|h| h.pc == pc && h.raw == raw) {
             h.count += 1;
         } else if self.unimpl.len() < 512 {
@@ -158,6 +206,25 @@ impl Vpu {
                 class,
                 count: 1,
             });
+        }
+    }
+
+    /// Record an instruction the model cannot carry out and apply
+    /// [`Self::on_unimpl`].
+    ///
+    /// Returns `Some(step)` when the run must stop; `None` when the policy is
+    /// to skip, in which case the pc has already been advanced past it.
+    fn unimpl(&mut self, pc: u32, raw: u128, len: u8, class: InsnClass, next: u32) -> Option<Step> {
+        self.note_unimpl(pc, raw, len, class);
+        match self.on_unimpl {
+            UnimplPolicy::Fault | UnimplPolicy::ReconFault => {
+                Some(self.stop(Stop::Fault(Fault::Unimplemented { pc, raw, class })))
+            }
+            UnimplPolicy::Skip => {
+                self.skipped += 1;
+                self.regs.pc = next;
+                None
+            }
         }
     }
 
@@ -326,7 +393,7 @@ impl Vpu {
                 // in recon (skip) mode treat it as a nop — firmware idle/dispatch
                 // loops (`sleep; b loop`) then just spin and the run's step limit
                 // or spin detector ends things cleanly. Otherwise halt.
-                if matches!(self.on_unimpl, UnimplPolicy::Skip) {
+                if self.on_unimpl.recon_lenient() {
                     self.regs.pc = next;
                     if self.exc_vbase != 0 && self.core_id == 0 {
                         // The ThreadX idle loop parks here with interrupts
@@ -393,7 +460,7 @@ impl Vpu {
                 // reconnaissance mode, and only on core 0 (a mis-entered core 1
                 // hitting `0x0000` should still halt rather than nop-slide
                 // through DRAM).
-                if matches!(self.on_unimpl, UnimplPolicy::Skip) && self.core_id == 0 {
+                if self.on_unimpl.recon_lenient() && self.core_id == 0 {
                     self.skipped += 1;
                     // A derail into zeroed RAM shows up as a long nop-slide of
                     // `0x0000` parcels. Report the first one, once, so the run
@@ -456,7 +523,7 @@ impl Vpu {
                         // trap as a no-op so exploration continues past syscall
                         // stubs (start4's atomic/priv helpers) — it is counted
                         // like a skipped instruction. Otherwise halt.
-                        if matches!(self.on_unimpl, UnimplPolicy::Skip) {
+                        if self.on_unimpl.recon_lenient() {
                             self.skipped += 1;
                             self.regs.pc = next;
                         } else {
@@ -855,35 +922,74 @@ impl Vpu {
                 self.regs.pc = new_pc;
             }
 
+            Op::Vector(v) => {
+                match v.executable() {
+                    VecExec::DiscardedLoad {
+                        base,
+                        offset,
+                        bytes,
+                    } => {
+                        // The destination is a dash, so nothing lands in a
+                        // register — but the read still happens on the bus, and
+                        // an MMIO read can have side effects. Errors go nowhere:
+                        // there is no destination to fault into.
+                        let addr = self.regs.get(base as usize).wrapping_add(offset);
+                        for i in 0..bytes {
+                            let _ = bus.load8(addr.wrapping_add(i));
+                        }
+                    }
+                    VecExec::SumOfBroadcast { src, dst, signed } => {
+                        // `v<w>mov -, rN SUM{S,U} rK`: rN is broadcast across
+                        // all 16 lanes at the operation width, the vector result
+                        // is discarded, and the scalar result unit writes the
+                        // sum of the lanes back to rK.
+                        let lane = self.regs.get(src as usize);
+                        let lane = if signed {
+                            sext_to(lane, v.lane_bits)
+                        } else {
+                            zext_to(lane, v.lane_bits)
+                        };
+                        let sum = lane.wrapping_mul(VecInsn::LANES);
+                        self.regs.set(dst as usize, sum);
+                        // The SRU writeback also updates the scalar N and Z
+                        // flags (`videocoreiv.arch`, "<sru> modifier").
+                        self.regs.flags.z = sum == 0;
+                        self.regs.flags.n = (sum as i32) < 0;
+                    }
+                    VecExec::NeedsVrf => {
+                        if let Some(step) = self.unimpl(pc, v.raw, v.len, InsnClass::Vector48, next)
+                        {
+                            return step;
+                        }
+                        // `unimpl` already placed the pc.
+                        return Step::Ran;
+                    }
+                }
+                self.regs.pc = next;
+            }
+
             Op::Unimpl {
                 raw,
                 class,
                 len: ilen,
             } => {
-                self.note_unimpl(pc, raw, ilen, class);
-                match self.on_unimpl {
-                    UnimplPolicy::Fault => {
-                        return self.stop(Stop::Fault(Fault::Unimplemented { pc, raw, class }))
-                    }
-                    UnimplPolicy::Skip => {
-                        self.skipped += 1;
-                        // VC4 libc `memcpy` (`0x3EDA28C0`) vectorises its aligned
-                        // bulk copy with `v32` vld/vst (`0x3EDA28F2` load,
-                        // `0x3EDA2904` store) the model doesn't decode — skipping
-                        // them silently corrupts every large aligned copy (e.g.
-                        // gpioman's built-in dt-blob). Emulate the copy at the
-                        // store: `r1` has been advanced past the chunk, `r3` still
-                        // points at its start, `r0` counts 64-byte rows.
-                        if pc == 0x3EDA_2904 {
-                            let n = self.regs.get(0).wrapping_shl(6);
-                            let dst = self.regs.get(3);
-                            let src = self.regs.get(1).wrapping_sub(n);
-                            for i in 0..n {
-                                let b = bus.load8(src.wrapping_add(i)).unwrap_or(0);
-                                let _ = bus.store8(dst.wrapping_add(i), b);
-                            }
-                        }
-                        self.regs.pc = next;
+                if let Some(step) = self.unimpl(pc, raw as u128, ilen, class, next) {
+                    return step;
+                }
+                // VC4 libc `memcpy` (`0x3EDA28C0`) vectorises its aligned bulk
+                // copy with `v32` vld/vst (`0x3EDA28F2` load, `0x3EDA2904`
+                // store) the model doesn't decode — skipping them silently
+                // corrupts every large aligned copy (e.g. gpioman's built-in
+                // dt-blob). Emulate the copy at the store: `r1` has been
+                // advanced past the chunk, `r3` still points at its start, `r0`
+                // counts 64-byte rows.
+                if pc == 0x3EDA_2904 {
+                    let n = self.regs.get(0).wrapping_shl(6);
+                    let dst = self.regs.get(3);
+                    let src = self.regs.get(1).wrapping_sub(n);
+                    for i in 0..n {
+                        let b = bus.load8(src.wrapping_add(i)).unwrap_or(0);
+                        let _ = bus.store8(dst.wrapping_add(i), b);
                     }
                 }
             }

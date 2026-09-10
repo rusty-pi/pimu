@@ -52,15 +52,54 @@ moves), `ld/st` with `gp`/`sp`/`pc`/`r0` + imm16 base, `ld/st (rs+imm12)`.
 
 48-bit: `j`/`jl`/`b`/`bl <abs32>`, `ld/st` with 27-bit offset, ALU forms.
 
+Vector (48/80-bit, `0xF000..`): decoded to operands — class, sub-op, element
+width, the three VRF slot descriptors and their coordinates, the memory
+addressing form, `REP`/predication/`SETF`, and the 80-bit accumulator / scalar-
+result-unit field. Only the two encodings that touch **no** vector register are
+*executed* (see below); everything else faults.
+
 Machine side: exception / timer-IRQ delivery through the firmware's vector
 table, dual VPU cores (core 1 brought up at the `start4` trampoline).
 
-## Not yet implemented (degrade to `Unimpl`, PC stays on track)
+## The vector unit (confirmed against two references)
 
-The vector unit (48-bit `0xF000..` and 80-bit `0xF800..` forms) — the VC4
-scalar `memcpy` bulk-copy is special-cased in the emulator, the rest fall
-through. MMU/cache is modelled as flat. A handful of 48/80-bit vector ops are
-hit during the PMIC / clock bring-up (`recon` lists them at exit).
+The Vector Register File is a 64x64 array of bytes; a vector register is a
+16-element window into it, named by a 4-bit descriptor (element width,
+horizontal/vertical direction, column band) plus a 6-bit coordinate. Descriptors
+14 and 15 are the "dash" slot, which names no register at all — `-` in
+`videocoreiv.arch`, whose meaning depends on position: *discard the result* (D),
+*ignore* (A), *use the coordinate as a scalar register* (B).
+
+Field layout is transcribed from `videocoreiv.arch` (which flags its own vector
+section as experimental) and then **checked byte for byte** against
+`binutils-vc4`'s gas test corpus — `gas/testsuite/gas/vc4/{dash,accmods,
+alu80-setf,wide,vldst}.d` — and against that assembler's objdump run over
+`start4.elf` itself. Hermitage's 80-bit *memory* patterns place the address
+fields correctly; his 48-bit and 80-bit *ALU* patterns match exactly.
+
+The VRF itself is **not modelled**, so nearly every vector instruction faults.
+Exactly two encodings are executed, matched as whole instruction words with only
+the established fields left free:
+
+| encoding | spelling | what it does here |
+|---|---|---|
+| `00 f0 38 e0 80 03` | `v8ld -,(rN)` | reads 16 bytes at `rN` and discards them; no register changes |
+| `00 fc 38 e0 80 03 c0 f3 00 12` | `v16mov -,rN SUMS rK` | `rK = 16 * sext16(rN)`, and the scalar N/Z flags follow |
+
+Both come from `FUN_0edc9e20` (`0x3EDC9E20`), the vector-unit read fence that
+`vrf_release_vrf_semaphore` (`0x3EDC9D3C`) calls before polling the
+outstanding-read count in coprocessor register 15. Its result is dead — the
+caller overwrites `r0` with 256 on the next instruction — so the sum's exact
+value is unobservable in this firmware; the *lane count and signedness* are from
+`videocoreiv.arch`'s `<sru>` description, not measured on hardware.
+
+## Not yet implemented
+
+The vector register file, and therefore every vector instruction that reads or
+writes one — including the `v32` vld/vst pair inside VC4 libc's `memcpy`
+(`0x3EDA28F2` / `0x3EDA2904`), which is special-cased in the executor under
+`--skip-unimpl` and is not reached by the current boot. MMU/cache is modelled as
+flat.
 
 ## Sources
 
