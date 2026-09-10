@@ -85,6 +85,10 @@ pub const PM_SIZE: u32 = 0x1000;
 pub const CM_BASE: u32 = 0x7E10_1000;
 pub const CM_SIZE: u32 = 0x2000;
 
+/// Hardware RNG at `0x7E10_4000` (`rng@7e104000`, `brcm,bcm2711-rng200`).
+pub const RNG_BASE: u32 = 0x7E10_4000;
+pub const RNG_SIZE: u32 = 0x28;
+
 /// AVS monitor at `0x7D5D_2000` — on-die temperature sensor and the
 /// ring-oscillator / rail monitors start4's DVFS code reads. Carved out of the
 /// [`CLKMON_BASE`] window, so it must be decoded first. `reg = <0x7d5d2000

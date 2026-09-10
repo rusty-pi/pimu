@@ -4,7 +4,7 @@ use crate::bus::{Bus, BusError, BusResult, MmioDevice, Width};
 use crate::mem::Ram;
 use crate::periph::{
     Avs, Aux, BootBox, Bsc, ClkMon, ClockManager, ConfigOtp, CoreCtl, Dma4, Emmc2, Hvs, McSync, Pl011,
-    Pm, Sdc, Sdramc, Spi0, StubRegion, SysTimer,
+    Pm, Rng, Sdc, Sdramc, Spi0, StubRegion, SysTimer,
 };
 use crate::soc::bcm2711 as map;
 
@@ -33,6 +33,8 @@ pub struct Machine {
     pub clkmon: ClkMon,
     /// AVS monitor (`0x7D5D_2000`) — temperature and rail monitors.
     pub avs: Avs,
+    /// Hardware RNG (`0x7E10_4000`) — start4 blocks on its interrupt.
+    pub rng: Rng,
     /// SPI0 master (`0x7E20_4000`) — minimal model for the EEPROM bootloader.
     pub spi0: Spi0,
     /// BSC / I²C master at `0x7E20_5E00` + the board PMIC — start4 reads the
@@ -125,6 +127,7 @@ impl Machine {
             clockman: ClockManager::new(),
             clkmon: ClkMon::new(),
             avs: Avs::new(),
+            rng: Rng::new(),
             spi0: Spi0::new(),
             bsc_pmic: Bsc::new("bsc-pmic"),
             config_otp: ConfigOtp::new(),
@@ -178,6 +181,15 @@ impl Machine {
     pub fn tick(&mut self, cycles: u64) {
         self.systimer.tick(cycles);
         self.bsc_pmic.tick(cycles);
+        // The RNG holds its line asserted while it has words ready and its
+        // interrupt is unmasked; start4's handler for source 125 masks it again
+        // and releases the gate the boot thread waits on. Only ever keep one
+        // delivery outstanding.
+        let src = crate::periph::rng::IRQ_SRC;
+        if self.rng.irq_asserted() && !self.pending_irqs.contains(&src) {
+            self.corectl.raise_source(src);
+            self.pending_irqs.push_back(src);
+        }
     }
 
     /// Drain and return whatever the console UART has transmitted.
@@ -267,6 +279,9 @@ impl Machine {
         }
         if let Some(off) = hit(map::CM_BASE, map::CM_SIZE) {
             return Some((&mut self.clockman, off));
+        }
+        if let Some(off) = hit(map::RNG_BASE, map::RNG_SIZE) {
+            return Some((&mut self.rng, off));
         }
         if let Some(off) = hit(map::AVS_BASE, map::AVS_SIZE) {
             return Some((&mut self.avs, off));
