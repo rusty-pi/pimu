@@ -79,6 +79,10 @@ pub struct Rng {
     storage: BTreeMap<u32, u32>,
     /// xorshift32 state. Fixed seed: boot transcripts are golden files.
     seed: u32,
+    /// Cached interrupt level, recomputed on every register write. The machine
+    /// asks for this once per retired instruction, so it must not walk the
+    /// register map to answer.
+    asserted: bool,
 }
 
 impl Default for Rng {
@@ -86,6 +90,7 @@ impl Default for Rng {
         Rng {
             storage: BTreeMap::new(),
             seed: 0x1AA2_BB31,
+            asserted: false,
         }
     }
 }
@@ -121,11 +126,15 @@ impl Rng {
     /// reset state and means "never interrupt" — without that, the line would
     /// assert the instant the generator is enabled, long before start4 arms it.
     pub fn irq_asserted(&self) -> bool {
+        self.asserted
+    }
+
+    fn update_irq(&mut self) {
         let threshold = self.reg(FF_THRESHOLD);
-        threshold != 0
+        self.asserted = threshold != 0
             && self.enabled()
             && self.reg(INT_MASK) & INT_MASKED == 0
-            && self.available() >= threshold
+            && self.available() >= threshold;
     }
 }
 
@@ -145,6 +154,7 @@ impl MmioDevice for Rng {
 
     fn write(&mut self, offset: u32, _width: Width, value: u32) -> BusResult<()> {
         self.storage.insert(offset & !3, value);
+        self.update_irq();
         Ok(())
     }
 }
