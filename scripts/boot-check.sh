@@ -95,6 +95,12 @@ want 'overlay load'                        "Loaded overlay 'disable-bt'"
 want 'kernel command line'                 "Read command line from file 'cmdline.txt'"
 want 'kernel load'                         "Loaded 'kernel8.img'"
 want 'device tree relocation'              'Device tree loaded to'
+# The console baud rate is recomputed for the ARM once the VPU is done with it
+# (vc4-boot.log 62-65). Getting here needs the ASB bridge handshake modelled:
+# start4 gates the H264 power domain on the way, and with `0x7E00_A000`
+# unmapped the bridge never acknowledged the stop request (`src/periph/asb.rs`).
+want 'final baud rate'                     'Set PL011 baud rate to 103448'
+count_eq 'baud rate change completes'      'Baud rate change done' 2
 # The last thing before `arm_loader`: `codec_enabled` runs its licence-key
 # check on the VCE and waits on interrupt source 68. With the block unmapped
 # that wait timed out and start4 printed this instead (`src/periph/vce.rs`).

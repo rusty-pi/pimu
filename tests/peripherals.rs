@@ -476,3 +476,67 @@ fn vce_program_and_data_memory_are_writable() {
     // Separate windows, not aliases of each other.
     assert_eq!(m.load32(map::VCE_BASE + 0x0000).unwrap(), 0);
 }
+
+/// The ASB bridge handshake at `0x7E00_A000`. start4's power-domain switch
+/// (`FUN_0ED54E40`) sets `ASB_REQ_STOP` on both bridges of a pair and then
+/// spins until each answers with `ASB_ACK`; the release path clears `REQ_STOP`
+/// and spins until `ACK` goes away. With the block unmapped, `ACK` read back 0
+/// forever and the boot hung at `0x3ED550A8` on the H264 bridge, just after
+/// `uart: Baud rate change done`.
+#[test]
+fn asb_ack_follows_the_stop_request() {
+    let mut m = machine();
+
+    // Every `*_CTRL` register: V3D S/M, ISP S/M, H264 S/M.
+    for off in [0x08, 0x0C, 0x10, 0x14, 0x18, 0x1C] {
+        let reg = map::ASB_BASE + off;
+
+        // Out of reset the bridge is running: no request, no acknowledge.
+        let v = m.load32(reg).unwrap();
+        assert_eq!(v & 0b11, 0, "{reg:#x} must come up running");
+
+        // Stop: request, then the acknowledge the firmware polls for.
+        let v = m.load32(reg).unwrap() | 1;
+        m.store32(reg, v).unwrap();
+        assert_ne!(
+            m.load32(reg).unwrap() & 0b10,
+            0,
+            "{reg:#x} never acknowledged the stop request"
+        );
+
+        // Release: clear the request, and the acknowledge has to drop.
+        let v = m.load32(reg).unwrap() & !1;
+        m.store32(reg, v).unwrap();
+        assert_eq!(
+            m.load32(reg).unwrap() & 0b10,
+            0,
+            "{reg:#x} never dropped its acknowledge"
+        );
+    }
+}
+
+/// The bridges are independent: stopping the H264 pair must not report the ISP
+/// or V3D pair as stopped, or a later release would spin on the wrong bridge.
+#[test]
+fn asb_bridges_are_independent() {
+    let mut m = machine();
+
+    m.store32(map::ASB_BASE + 0x18, 1).unwrap();
+    assert_eq!(m.load32(map::ASB_BASE + 0x18).unwrap() & 0b11, 0b11);
+    for off in [0x08, 0x0C, 0x10, 0x14, 0x1C] {
+        assert_eq!(
+            m.load32(map::ASB_BASE + off).unwrap() & 0b11,
+            0,
+            "bridge +{off:#x} moved with the H264 slave bridge"
+        );
+    }
+}
+
+/// `ASB_AXI_BRDG_ID` (`+0x20`) reads `"brdg"`. Linux's `bcm2835_power_probe`
+/// refuses to bind when it does not, and this project's recurring failure mode
+/// is an identification register that reads back 0.
+#[test]
+fn asb_identifies_itself_as_a_bridge() {
+    let mut m = machine();
+    assert_eq!(m.load32(map::ASB_BASE + 0x20).unwrap(), 0x6272_6467);
+}

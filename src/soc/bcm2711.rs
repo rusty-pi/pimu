@@ -88,6 +88,12 @@ pub const VCE_MEM_SIZE: u32 = crate::periph::vce::MEM_SIZE;
 pub const VCE_CTRL_BASE: u32 = VCE_BASE + crate::periph::vce::CTRL_OFF;
 pub const VCE_CTRL_SIZE: u32 = crate::periph::vce::CTRL_SIZE;
 
+/// AXI async slave bridges (`0x7E00_A000`): the per-block stop/acknowledge
+/// handshake start4 runs before gating the V3D, ISP and H264 power domains.
+/// Named by Linux's `drivers/pmdomain/bcm/bcm2835-power.c`.
+pub const ASB_BASE: u32 = crate::periph::asb::BASE;
+pub const ASB_SIZE: u32 = crate::periph::asb::SIZE;
+
 /// ARM control block: mailboxes, doorbells, IRQ routing (`0x7E00_B000`).
 pub const ARMCTRL_BASE: u32 = 0x7E00_B000;
 pub const ARMCTRL_SIZE: u32 = 0x1000;
