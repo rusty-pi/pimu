@@ -18,8 +18,15 @@
 //!   0x08 DLEN  transfer length in bytes
 //!   0x0C A     slave address (7-bit)
 //!   0x10 FIFO  data FIFO (16 bytes each way)
-//!   0x14 DIV / 0x18 DEL / 0x1C CLKT   timing — stored, otherwise ignored
+//!   0x14 DIV   clock divisor — sets how long a transfer takes on the wire
+//!   0x18 DEL / 0x1C CLKT   timing — stored, otherwise ignored
 //! ```
+//!
+//! A transfer takes the time it would take on a real bus: `TA` is asserted from
+//! the `ST` write until the last byte has been clocked out at `core_clock /
+//! DIV`, and `DONE` (plus `ERR` on an unACKed address) latches at the end of
+//! it. The firmware polls both without a timeout in places, so neither may be
+//! a function of how many instructions it happens to retire in between.
 
 use std::collections::VecDeque;
 
@@ -63,13 +70,14 @@ pub struct Bsc {
     clkt: u32,
     /// Latched status bits (`DONE` / `ERR` / `CLKT`) — sticky until written 1.
     latched: u32,
-    /// A transfer kicked by `ST` but not yet "finished". The data movement
-    /// happens immediately in `start()`, but `S.DONE` is held off for a few
-    /// `tick()`s: `S.TA` (transfer active) reads back meanwhile. Completing
-    /// synchronously inside the `C`-register write re-enters the driver's
-    /// async request queue (the completion callback runs nested inside submit)
-    /// and deadlocks its per-bus "processing" flag. `(ticks_left, is_error)`.
-    pending: Option<(u32, bool)>,
+    /// A transfer whose bytes have all moved but which is still on the wire:
+    /// `(the simulated µs at which it finishes clocking out, is_error)`.
+    /// `S.TA` reads back until then and `S.DONE` only after — the master
+    /// cannot report a transfer complete before the bits have been sent.
+    pending: Option<(u64, bool)>,
+    /// Simulated time in microseconds, taken from the system timer so the two
+    /// stay in step across the run loop's `sleep` fast-forward.
+    now_us: u64,
     tx: VecDeque<u8>,
     rx: VecDeque<u8>,
     /// A write transfer kicked by `ST` whose data has not all arrived yet.
@@ -106,6 +114,7 @@ impl Bsc {
             clkt: 0,
             latched: 0,
             pending: None,
+            now_us: 0,
             tx: VecDeque::new(),
             rx: VecDeque::new(),
             writing: None,
@@ -153,22 +162,37 @@ impl Bsc {
         s
     }
 
-    /// Number of `tick()`s between `ST` and `S.DONE`. Long enough that the
-    /// driver's submit call (and its request-queue bookkeeping) unwinds before
-    /// the completion is observed; short enough to be invisible to timing.
-    const COMPLETE_DELAY: u32 = 96;
+    /// BSC core clock. The BCM2835 ARM Peripherals datasheet gives the bus
+    /// speed as `core_clock / CDIV`; on a Pi 4 that clock is the 500 MHz VPU
+    /// core clock (`vcgencmd measure_clock core` on rpi-dev reports
+    /// 500 000 992 Hz). start4's own divisors agree: it programs `DIV` = 5000
+    /// for the PMIC bus, 2500 for its probe sweep and 540 for HDMI DDC — i.e.
+    /// 100 kHz, 200 kHz and ~926 kHz.
+    const CORE_HZ: u64 = 500_000_000;
+    /// Divisor to assume while `DIV` has not been programmed.
+    const DEFAULT_CDIV: u64 = 5000;
 
-    /// Advance a transfer in flight; latch `DONE` (and `ERR`) when it settles.
-    fn advance(&mut self) {
-        if let Some((left, err)) = self.pending {
-            if left <= 1 {
+    /// Time one byte (8 data bits plus the ACK bit) takes on the wire, in
+    /// microseconds.
+    fn byte_us(&self) -> u64 {
+        let cdiv = match self.div & 0xFFFF {
+            0 => Self::DEFAULT_CDIV,
+            d => d as u64,
+        };
+        (9 * cdiv * 1_000_000 / Self::CORE_HZ).max(1)
+    }
+
+    /// Advance simulated time; latch `DONE` (and `ERR`) on a transfer that has
+    /// finished clocking out.
+    pub fn advance_to(&mut self, now_us: u64) {
+        self.now_us = now_us;
+        if let Some((deadline, err)) = self.pending {
+            if deadline <= now_us {
                 self.pending = None;
                 self.latched |= S_DONE;
                 if err {
                     self.latched |= S_ERR;
                 }
-            } else {
-                self.pending = Some((left - 1, err));
             }
         }
     }
@@ -196,7 +220,9 @@ impl Bsc {
             return;
         }
         self.writing = None;
-        self.finish(acked);
+        // The address and every byte but this one were clocked out while
+        // software was feeding the FIFO — one byte of wire time is left.
+        self.finish(acked, 0);
         if let Some(len) = self.deferred_read.take() {
             self.run_read(len);
         }
@@ -214,16 +240,24 @@ impl Bsc {
                 self.rx.push_back(b);
             }
         }
-        self.finish(acked);
+        self.finish(acked, len);
     }
 
-    /// Settle a transfer: every byte has moved, so `DLEN` (which the driver
-    /// reads back as "bytes still outstanding" — it retries while
-    /// `DLEN != expected - received`) is now zero, and `DONE` (plus `ERR` if
-    /// the address went unACKed) lands a few ticks later — see `pending`.
-    fn finish(&mut self, acked: bool) {
+    /// Settle a transfer: every byte has moved between the FIFO and the model
+    /// of the slave, so `DLEN` (which the driver reads back as "bytes still
+    /// outstanding" — it retries while `DLEN != expected - received`) is now
+    /// zero. The bits are still going out on the wire though: `TA` stays
+    /// asserted and `DONE` (plus `ERR` if the address went unACKed) lands once
+    /// the address byte and the `bytes` data bytes have been clocked, at the
+    /// bus speed `DIV` asks for.
+    ///
+    /// The delay also keeps `DONE` from ever appearing inside the `C`-register
+    /// write that started the transfer, which is what `fb697b7` was avoiding
+    /// with a fixed 96-tick countdown.
+    fn finish(&mut self, acked: bool, bytes: usize) {
         self.dlen = 0;
-        self.pending = Some((Self::COMPLETE_DELAY, !acked));
+        let wire_us = self.byte_us() * (bytes as u64 + 1);
+        self.pending = Some((self.now_us + wire_us, !acked));
     }
 
     /// Run the transfer the `ST` bit just kicked off.
@@ -249,7 +283,7 @@ impl Bsc {
             slave.begin(addr, false);
         }
         if len == 0 {
-            self.finish(acked);
+            self.finish(acked, 0);
             return;
         }
         self.writing = Some((acked, len));
@@ -265,10 +299,6 @@ impl Bsc {
 impl MmioDevice for Bsc {
     fn name(&self) -> &'static str {
         self.name
-    }
-
-    fn tick(&mut self, _cycles: u64) {
-        self.advance();
     }
 
     fn read(&mut self, offset: u32, _width: Width) -> BusResult<u32> {
