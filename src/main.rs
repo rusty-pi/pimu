@@ -21,6 +21,7 @@ USAGE:
     rpi-virt-fw run-all [<dir>] [--update] [-v]
     rpi-virt-fw recon <file> [--entry <hex>] [--ram-mb <n>] [--max-steps <n>] [--eeprom]
                              [--max-wall <secs>] [--sd <img>] [--skip-signed-boot]
+              (no --max-steps = no instruction cap; --max-wall defaults to 300s)
                              [--dump <hex>:<len>] [--disasm <hex>:<count>] [--patch <hex>=<hex>]
     rpi-virt-fw disasm <file> [--base <hex>] [--count <n>] [--vaddr <hex>]
 
@@ -70,8 +71,11 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     let mut path: Option<PathBuf> = None;
     let mut entry: Option<u32> = None;
     let mut ram_mb: Option<u32> = None;
-    let mut max_steps: u64 = 20_000_000;
-    let mut max_wall_secs: u64 = 120;
+    // No instruction cap by default — a full boot retires well over a billion,
+    // and the wall clock is the useful bound. `--max-steps` is for pinning a
+    // run to an exact instruction count (bisecting, probes).
+    let mut max_steps: Option<u64> = None;
+    let mut max_wall_secs: u64 = 300;
     let mut eeprom = false;
     let mut trace = false;
     let mut trace_full = false;
@@ -91,7 +95,9 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         match a.as_str() {
             "--entry" => entry = Some(parse_u32(it.next().context("--entry needs a value")?)?),
             "--ram-mb" => ram_mb = Some(it.next().context("--ram-mb needs a value")?.parse()?),
-            "--max-steps" => max_steps = it.next().context("--max-steps needs a value")?.parse()?,
+            "--max-steps" => {
+                max_steps = Some(it.next().context("--max-steps needs a value")?.parse()?)
+            }
             "--max-wall" => {
                 max_wall_secs = it.next().context("--max-wall needs seconds")?.parse()?
             }

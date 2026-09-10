@@ -91,7 +91,7 @@ pub fn run_scenario(scn: &Scenario) -> Result<ScenarioRun> {
     emu.set_unimpl_policy(scn.run.unimpl.into());
 
     let limits = RunLimits {
-        max_steps: scn.run.max_steps,
+        max_steps: Some(scn.run.max_steps),
         max_wall: Some(std::time::Duration::from_secs(60)),
         stop_pc: scn.run.stop_pc,
         idle_spin_limit: scn.run.idle_spin_limit,

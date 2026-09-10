@@ -73,8 +73,13 @@ cargo run -- disasm firmware/start4.elf --base 0xcec00200 --count 40
 # Run the real boot chain: EEPROM bootloader + start4.elf off an SD image.
 ./scripts/make-sd.sh                            # build firmware/sd.img
 RVF_SCHED_TICK=1 cargo run --release -- recon firmware/pieeprom.bin \
-  --eeprom --sd firmware/sd.img --max-wall 330
+  --eeprom --sd firmware/sd.img
 ```
+
+`--max-wall` defaults to 300 s, which is enough to reach the last milestone;
+there is no instruction cap unless you pass `--max-steps`. `scripts/boot-check.sh`
+runs exactly this and checks the log against every milestone the boot is known
+to reach — it is what CI runs, so run it locally to reproduce a CI failure.
 
 ### Scenario file
 
