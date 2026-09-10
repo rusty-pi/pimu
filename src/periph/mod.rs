@@ -4,6 +4,7 @@
 //! self-contained: they never reference each other or the bus. Anything one
 //! device needs from another is routed by [`Machine`](crate::machine::Machine).
 
+pub mod asb;
 pub mod avs;
 pub mod aux;
 pub mod bootbox;
@@ -31,6 +32,7 @@ pub mod systimer;
 pub mod uart_pl011;
 pub mod vce;
 
+pub use asb::Asb;
 pub use avs::Avs;
 pub use aux::Aux;
 pub use bootbox::BootBox;

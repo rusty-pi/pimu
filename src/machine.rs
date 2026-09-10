@@ -3,7 +3,7 @@
 use crate::bus::{Bus, BusError, BusResult, MmioDevice, Width};
 use crate::mem::Ram;
 use crate::periph::{
-    Avs, Aux, BootBox, Bsc, ClkMon, ClockManager, ConfigOtp, CoreCtl, Dma4, Emmc2, Hvs, McSync, Pl011,
+    Asb, Avs, Aux, BootBox, Bsc, ClkMon, ClockManager, ConfigOtp, CoreCtl, Dma4, Emmc2, Hvs, McSync, Pl011,
     Pm, Rng, Sdc, Sdramc, Spi0, StubRegion, SysTimer, Vce,
 };
 use crate::soc::bcm2711 as map;
@@ -33,6 +33,9 @@ pub struct Machine {
     pub clkmon: ClkMon,
     /// AVS monitor (`0x7D5D_2000`) — temperature and rail monitors.
     pub avs: Avs,
+    /// AXI async slave bridges (`0x7E00_A000`) — the stop/acknowledge handshake
+    /// start4 runs before gating the V3D / ISP / H264 power domains.
+    pub asb: Asb,
     /// PCIe root complex (`0x7D50_0000`) — a register file only. The VL805
     /// xHCI controller behind it is not modelled; see `docs/usb-xhci.md`.
     pub pcie: crate::periph::pcie::Pcie,
@@ -133,6 +136,7 @@ impl Machine {
             clockman: ClockManager::new(),
             clkmon: ClkMon::new(),
             avs: Avs::new(),
+            asb: Asb::new(),
             pcie: crate::periph::pcie::Pcie::new(),
             rng: Rng::new(),
             vce: Vce::new(),
@@ -317,6 +321,9 @@ impl Machine {
         }
         if let Some(off) = hit(map::AVS_BASE, map::AVS_SIZE) {
             return Some((&mut self.avs, off));
+        }
+        if let Some(off) = hit(map::ASB_BASE, map::ASB_SIZE) {
+            return Some((&mut self.asb, off));
         }
         if let Some(off) = hit(map::CLKMON_BASE, map::CLKMON_SIZE) {
             return Some((&mut self.clkmon, off));
