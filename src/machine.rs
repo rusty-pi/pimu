@@ -179,11 +179,20 @@ impl Machine {
         self.pending_irqs.push_back(src);
     }
 
+    /// Settle any I²C transfer whose time on the wire has elapsed.
+    fn advance_i2c(&mut self) {
+        let now = self.systimer.now_us();
+        self.bsc_pmic.advance_to(now);
+        self.bsc0.advance_to(now);
+    }
+
     /// Advance time-based peripheral state by `cycles` VPU cycles.
     pub fn tick(&mut self, cycles: u64) {
         self.systimer.tick(cycles);
-        self.bsc_pmic.tick(cycles);
-        self.bsc0.tick(cycles);
+        // The I²C masters time their transfers in microseconds off the system
+        // timer, so they stay in step with it across the run loop's `sleep`
+        // fast-forward (which jumps the counter without retiring cycles).
+        self.advance_i2c();
         // The RNG holds its line asserted while it has words ready and its
         // interrupt is unmasked; start4's handler for source 125 masks it again
         // and releases the gate the boot thread waits on. Only ever keep one
@@ -505,7 +514,10 @@ impl Bus for Machine {
     }
 
     fn sleep_advance(&mut self) -> bool {
-        self.systimer.wake_to_next_match().is_some()
+        let woke = self.systimer.wake_to_next_match().is_some();
+        // The counter just jumped; anything timed against it has to catch up.
+        self.advance_i2c();
+        woke
     }
 
     fn timer_tick_slot(&mut self) -> Option<u32> {

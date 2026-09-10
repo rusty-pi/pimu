@@ -184,12 +184,11 @@ const C_I2CEN: u32 = 1 << 15;
 const S_DONE: u32 = 1 << 1;
 const S_ERR: u32 = 1 << 8;
 
-/// Let a transfer settle: `S.DONE` is deliberately held off for a few ticks so
-/// the driver's submit call unwinds before the completion is observed.
+/// Let a transfer settle: `S.DONE` only lands once the bytes have had time to
+/// clock out at the bus speed `DIV` asks for. 10 ms of simulated time is more
+/// than any transfer here needs.
 fn settle(m: &mut Machine) {
-    for _ in 0..256 {
-        m.bsc_pmic.tick(1);
-    }
+    m.tick(10_000 * 54); // 54 VPU cycles per microsecond
 }
 
 /// `read(reg)` the way start4's BSC transport does it when `cfg[8] & 2` is set
@@ -316,4 +315,53 @@ fn pmic_bus_nacks_every_other_address() {
     let s = m.load32(base + BSC_S).unwrap();
     assert_ne!(s & S_DONE, 0, "transfer must complete");
     assert_ne!(s & S_ERR, 0, "unACKed address must raise ERR");
+}
+
+/// `S.TA` spans the transfer, `S.DONE` lands only at the end of it, and
+/// neither is a function of how many instructions the firmware happens to
+/// retire in between. start4's transport (`0x3ECF0ED0`) spins on
+/// `S & (TA | ERR)` with **no timeout** between writing `C.ST` and pushing the
+/// data byte (#17), so a `TA` that lasts a fixed number of ticks — 96, as it
+/// was — can lapse before the firmware ever reads `S` and hang the boot for
+/// good. Real hardware holds `TA` from `ST` until the last bit is clocked.
+#[test]
+fn bsc_transfer_active_spans_the_whole_transfer() {
+    let mut m = machine();
+    let base = map::BSC_PMIC_BASE;
+    const S_TA: u32 = 1 << 0;
+
+    m.store32(base + BSC_A, 0x1E).unwrap();
+    m.store32(base + BSC_DLEN, 1).unwrap();
+    m.store32(base + BSC_C, C_I2CEN | C_ST).unwrap();
+
+    // Stalled on an empty FIFO: active, and staying active however long the
+    // firmware takes to get round to it — 10 ms here, ~540 000 instructions.
+    for _ in 0..1000 {
+        m.tick(10 * 54);
+        let s = m.load32(base + BSC_S).unwrap();
+        assert_ne!(s & S_TA, 0, "TA must be held while the FIFO is empty");
+        assert_eq!(s & S_DONE, 0, "nothing has been transferred yet");
+    }
+
+    // Feed it: the byte is still on the wire, so the transfer is not over.
+    m.store32(base + BSC_FIFO, 0x25).unwrap();
+    let s = m.load32(base + BSC_S).unwrap();
+    assert_ne!(s & S_TA, 0, "the last byte is still clocking out");
+    assert_eq!(s & S_DONE, 0, "DONE must not land inside the FIFO write");
+
+    // At 100 kHz (DIV defaults to 5000 against the 500 MHz core clock) that
+    // byte takes 90 µs. Well short of it, nothing has changed.
+    m.tick(50 * 54);
+    assert_eq!(
+        m.load32(base + BSC_S).unwrap() & S_DONE,
+        0,
+        "DONE cannot precede the bits going out"
+    );
+
+    settle(&mut m);
+    let s = m.load32(base + BSC_S).unwrap();
+    assert_eq!(s & S_TA, 0, "transfer over");
+    assert_ne!(s & S_DONE, 0, "DONE latches at the end");
+    assert_eq!(s & S_ERR, 0, "the PMIC acknowledged its address");
+    assert_eq!(m.load32(base + BSC_DLEN).unwrap(), 0, "all bytes sent");
 }
