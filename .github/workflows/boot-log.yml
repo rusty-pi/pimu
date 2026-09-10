@@ -56,9 +56,6 @@ jobs:
           # preempts. This is what carries the boot past the second config.txt
           # read to '*** Restart logging' (issue #7).
           RVF_SCHED_TICK: "1"
-          # Still forces the PLL / clock-rate loops to converge (issue #1) and
-          # pins the DA9090 errno (issue #4). It is the only shim left.
-          RVF_GPIOMAN_SHIM: "1"
           # stream the UART console (incl. `MESS:` lines) as it is produced.
           RVF_LIVE_CONSOLE: "1"
         run: |
@@ -90,6 +87,10 @@ jobs:
           # phase, which is where the reference log continues
           # (examples-on-real-hardware/vc4-boot.log line 19).
           grep -q '\*\*\* Restart logging' boot.log
+          # gpioman resolves its pin names from the real dt-blob now that the
+          # shim is gone, so the firmware itself emits the two "not defined"
+          # lines the reference log has (vc4-boot.log lines 16-17).
+          test "$(grep -c 'pin DISPLAY_DSI_PORT not defined' boot.log)" -eq 2
           # gpioman must configure its pin providers for real (issue #2): the
           # confzilla schema pool has to survive its DMA relocation.
           if grep -q 'gpioman: configuration attempt' boot.log; then
