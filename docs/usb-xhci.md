@@ -10,10 +10,16 @@ Every address, register offset and log line below was measured — either from a
 `ssh rpi-dev` (a real Pi 4B with a VL805). Provenance is given inline. Nothing
 here is recalled from memory.
 
-**Bottom line up front:** the boot loses nothing to `USB xHC init failed` today,
-and on real hardware the xHCI bring-up happens *after* `arm_loader`. This is
-worth doing, but it is a feature (USB boot, and eventually netboot's sibling
-paths), not a blocker. See [Recommendation](#7-recommendation).
+**Bottom line up front:** the boot loses nothing to `USB xHC init failed`
+today. Stages 0 and 1 are done — the root complex is decoded, the link trains,
+and the config-space router finds the VL805 — but stage 1 ships with the
+endpoint **detached** (`RVF_PCIE_DEVICE=1` to attach it), because with a live
+link the bootloader starts a USB bring-up that the model cannot finish and the
+boot stalls. What turns it on is stage 3, the controller the *bootloader*
+needs. Stage 2 (start4's `XHCI_RESET`, `MCU FW`, `VLI firmware load`) is a
+separate errand: it is about handing Linux a working controller and lands
+after `arm_loader` in the reference log, so it is not on the USB-boot path at
+all. See [Recommendation](#7-recommendation).
 
 ---
 
@@ -35,6 +41,12 @@ second-stage bootloader's strings are visible in its uncompressed sibling
 | `PCI%d reset` | 2nd-stage bootloader | `0x000A7084` |
 | `PCIe scan %08x:%08x` | 2nd-stage bootloader | `0x000A7118` |
 | `USB xHC init failed` | 2nd-stage bootloader | `0x000B62AC` |
+| `HUB2.0 fail` | 2nd-stage bootloader | `0x000B6DF8` |
+| `xHC%d ver: %d HCS: %08x %08x %08x HCC: %08x` | 2nd-stage bootloader | `0x000BBF20` |
+| `xHC HCRST timeout %x` | 2nd-stage bootloader | `0x000BB0A4` |
+| `xHC%d ports %d slots %d intrs %d` | 2nd-stage bootloader | `0x000BB0BC` |
+| `USB%d root HUB port %d init` | 2nd-stage bootloader | `0x000B9ACC` |
+| `HUB init %s` / `HUB %s port %d st: %x ch: %x dev: %p` | 2nd-stage bootloader | `0x000BB454` / `0x000BB6F0` |
 | `PCIe: xHC failed` / `PCIe: xHC initialised` | `start4.elf` | `0x3EC61368` / `0x3EC6137C` |
 | `XHCI_RESET: vendor: %x device: %x pcie-base: %08x` | `start4.elf` | `0x3EDC6358` |
 | `VL805 device not recognized` | `start4.elf` | `0x3EDC633C` |
@@ -48,6 +60,12 @@ The bootloader's unpacked image was recovered with
 `recon ... --dump 0xa0000:0x60000` and re-disassembled with the `disasm`
 subcommand; `start4.elf` addresses are runtime (`0x3E…` = ELF `0x0E…`
 + `0x3000_0000`).
+
+One gotcha when re-walking this: on a *flat* binary `disasm --vaddr` only
+relabels the output, it does not seek — the bytes still come from file offset
+0. Slice the dump to the address you want (`dd skip=$((addr - 0xa0000))`) and
+pass `--base <addr>`, or the listing is a linear sweep from the wrong place
+that decodes into plausible-looking nonsense.
 
 Neither blob's string references are plain 32-bit immediates, so
 `scripts/vc4-xref.py` cannot find them. They are all `lea rd, (pc ± imm)`. A
@@ -106,7 +124,7 @@ call at `0x000A6C8E`). Its full register conversation, in order:
 | `A6CB6` | — | — | `udelay(10000)` |
 | `A6CC2`… | rmw ×4 | `0x7D504008` | `MISC_MISC_CTRL` — burst size / SCB sizes |
 | `A6D1C`/`A6D22` | write | `0x7D504034`, `0x7D504038` | `MISC_RC_BAR2_CONFIG_LO/HI` — the inbound (DMA) window |
-| `A6D3C`…`A6D5A` | write | `0x7D504044/48/4C` | outbound window base/limit registers |
+| `A6D3C`…`A6D5A` | write | `0x7D504044/48/4C` | `MISC_MSI_BAR_CONFIG_LO/HI` and `MISC_MSI_DATA_CONFIG` — `0xFFFF_FFFD`, `0xF`, `0xFFE0_6540`, matching the MSI address/data `lspci` reports on the endpoint |
 | `A6D60`/`A6D6A` | rmw | `0x7D50402C` | `MISC_RC_BAR1_CONFIG_LO` — disabled (`& ~0x1F`) |
 | `A6D70`/`A6D7A` | rmw | `0x7D50403C` | `MISC_RC_BAR3_CONFIG_LO` — disabled |
 | `A6D92`/`A6D98` | write | `0x7D504310`, `0x7D504308` | MSI/interrupt-mask registers, set to `~0` |
@@ -273,7 +291,8 @@ Register offsets the firmware actually touches, all within that window:
 | `0x402C` | `MISC_RC_BAR1_CONFIG_LO` | bootloader |
 | `0x4034`/`0x4038` | `MISC_RC_BAR2_CONFIG_LO/HI` | bootloader (write), start4 (read) |
 | `0x403C` | `MISC_RC_BAR3_CONFIG_LO` | bootloader |
-| `0x4044`/`0x4048`/`0x404C`/`0x405C` | outbound window base/limit | bootloader |
+| `0x4044`/`0x4048`/`0x404C` | MSI BAR lo/hi + MSI data | bootloader |
+| `0x400C`/`0x4010`/`0x4070`/`0x4080`/`0x4084` | `CPU_2_PCIE_MEM_WIN0` outbound window | bootloader, after the scan (see §5.1) |
 | `0x4068` | `MISC_PCIE_STATUS` | bootloader — **the link-up poll** |
 | `0x4204` | `MISC_HARD_PCIE_HARD_DEBUG` | bootloader (SERDES IDDQ / clock) |
 | `0x4308`/`0x4310`/`0x4314` | MSI / interrupt masks | bootloader, start4 |
@@ -296,21 +315,52 @@ dump on `rpi-dev`:
   at `0xC4`, AER at `0x100`
 - link: 5 GT/s x1
 
-**xHCI MMIO** — 4 KiB at BAR0. `/dev/mem` is locked on `rpi-dev` and
-`resource0` returns `EIO` under `od`, so the capability registers could not be
-read directly; what `dmesg` does report is authoritative and enough to seed a
-model:
+**xHCI MMIO** — 4 KiB at BAR0. An earlier draft of this document said
+`/dev/mem` was locked on `rpi-dev` and that these registers could not be read.
+**That was wrong** and got repeated for several sessions: the kernel there has
+`# CONFIG_STRICT_DEVMEM is not set`, so `sudo` plus `mmap` reads any physical
+address, MMIO included. BAR0 is at physical `0x6_0000_0000`
+(`/sys/bus/pci/devices/0000:01:00.0/resource`):
 
-```
-xhci_hcd 0000:01:00.0: hcc params 0x002841eb hci version 0x100
-lsusb -t: Bus 02 root_hub xhci_hcd/4p 5000M   (4 SuperSpeed ports)
-          Bus 01 root_hub xhci_hcd/1p  480M   (1 high-speed port, feeding an on-board 4-port hub)
+```python
+m = mmap.mmap(os.open("/dev/mem", os.O_RDONLY | os.O_SYNC), 0x1000,
+              mmap.MAP_SHARED, mmap.PROT_READ, offset=0x600000000)
+struct.unpack_from("<I", m, off)[0]
 ```
 
-So `HCIVERSION = 0x0100`, `HCCPARAMS1 = 0x002841EB`, and the port layout is 1
-USB2 + 4 USB3 root ports. `CAPLENGTH`, `HCSPARAMS1..3` and `DBOFF`/`RTSOFF`
-still have to be measured (see the staged plan — stage 1 can read them from a
-`sudo setpci`-style probe or from a kernel module on `rpi-dev`).
+One trap: a bulk byte slice such as `m[:64]` goes through `memcpy`, which
+bursts and hands back each dword aliased four times. It looks like plausible
+data and is not — only 32-bit `unpack_from` reads are valid on an MMIO
+mapping. Read-only; never write to it.
+
+Measured that way, with Linux driving the controller:
+
+```text
+CAPLENGTH  0x20        HCIVERSION 0x0100
+HCSPARAMS1 0x05000420  MaxSlots=32  MaxIntrs=4  MaxPorts=5
+HCSPARAMS2 0xfc000031  IST=1  ERSTMax=3  MaxScratchpad=31
+HCSPARAMS3 0x00e70004  U1ExitLat=4  U2ExitLat=231
+HCCPARAMS1 0x002841eb  AC64=1 CSZ=0 PPC=1  xECP=0x0028 -> caps at BAR0 + 0xA0
+DBOFF      0x00000100  RTSOFF 0x00000200   HCCPARAMS2 0x00000000
+USBCMD 0x5  USBSTS 0  PAGESIZE 1  DNCTRL 2  CONFIG 0x20
+```
+
+`HCCPARAMS1` cross-checks against `dmesg`'s `hcc params 0x002841eb hci version
+0x100`, which is how we know the read path is sound. Note `MaxScratchpad = 31`
+— the controller wants 31 scratchpad pages from the host, which a model has to
+account for.
+
+Extended capability list, walked from `0xA0`:
+
+```text
++0x0a0  id=1   USB legacy support
++0x0b0  id=2   "USB " rev 2.0   portoff=1  portcount=1
++0x0d0  id=2   "USB " rev 3.0   portoff=2  portcount=4
++0x300  id=10
+```
+
+So port 1 is USB2 and ports 2-5 are USB3 — see [§5.2](#52-live-ground-truth-for-stage-3)
+for how those map onto the board's sockets.
 
 ---
 
@@ -457,6 +507,226 @@ BOT/SCSI is a genuine subsystem, comparable in scope to the whole
 `src/periph/` directory as it stands. This is a multi-session project, and
 should be tracked as an epic with independently verifiable stages.
 
+### 5.1 What the bootloader does once the link is up
+
+Measured, with stage 1 landed and `RVF_PCIE_DEVICE=1`:
+
+```text
+  2.14 PCI0 init
+  2.14 PCI0 reset
+  2.75 PCIe scan 000014e4:00002711
+  2.75 PCIe scan 00001106:00003483
+  3.31 XHCI-STOP
+  3.31 xHC0 ver: 0 HCS: 00000000 00000000 00000000 HCC: 00000000
+  3.31 USBSTS 0
+```
+
+…and then nothing. `end Stuck { pc: 0x000AA3C0 }` — a `udelay` poll, 60 s of
+modelled silence, no `SD_OC`, no `Boot mode`, no `arm_loader`. `boot-check.sh`
+fails with the whole file-loading phase missing. This is #18's warning made
+concrete, and the reason the flag defaults off.
+
+Five things worth knowing before stage 3 starts.
+
+**The scan works and is exhaustive.** `pcie_scan` writes
+`bus << 20` into `EXT_CFG_INDEX` (`0x7D50_9000`) for all 256 buses and reads
+vendor/device/class/BAR0/header-type at `EXT_CFG_DATA + 0x00/0x08/0x10/0x0E`.
+It finds the root port at bus 0 and the VL805 at bus 1, and every other bus
+answers `0xFFFF`. So the `pcie-brcmstb` index encoding
+(`bus << 20 | slot << 15 | fn << 12`) is confirmed against the firmware, not
+just against Linux.
+
+**The outbound window is out of the VPU's reach.** After the scan the
+bootloader programs, at `0x000A725C`–`0x000A72F0`:
+
+| register | value | meaning |
+|---|---|---|
+| `0x7D50_400C` `MEM_WIN0_LO` | `0x8000_0000` | PCI bus address the window maps to |
+| `0x7D50_4010` `MEM_WIN0_HI` | `0` | |
+| `0x7D50_4070` `MEM_WIN0_BASE_LIMIT` | `0x3FF0_0000` | base `[31:20]`, limit `[15:4]`, in MiB |
+| `0x7D50_4080` `MEM_WIN0_BASE_HI` | `6` | |
+| `0x7D50_4084` `MEM_WIN0_LIMIT_HI` | `6` | |
+
+Decoding the way `brcm_pcie_set_outbound_win()` encodes it, the CPU-side base
+is `(6 << 12 | 0x3FF) << 20` = `0x6_3FF0_0000` — a 35-bit address the 32-bit
+VPU cannot form. So whatever aperture the VPU uses to reach xHCI MMIO, it is
+**not** this window directly, and finding it is a prerequisite for stage 3.
+(The `0x000A6D3C`–`0x000A6D48` writes the earlier draft of this doc called
+"outbound window base/limit" are not that: `0x4044`/`0x4048`/`0x404C` are
+`MSI_BAR_CONFIG_LO`/`_HI` and `MSI_DATA_CONFIG`, and the values written —
+`0xFFFF_FFFD`, `0xF`, `0xFFE0_6540` — match the MSI address `0xfffffffc` and
+data `0x6540` `lspci` reports on the endpoint.)
+
+**The first thing the bootloader does with the endpoint is a firmware
+upload, not xHCI** — and a sticky index/data port is enough for it. The loop
+at `0x000B6CE0` walks the hub image byte by byte: for each byte `i` it calls a
+write helper (`0x000B6E64`) with address `0x5_2000 + i` and the byte
+replicated into all four lanes, then reads the same address back
+(`0x000B6F10`) and compares the low byte, bailing out with `HUB2.0 fail`
+(`0x000B6DF8`) on the first mismatch. Around the loop it pokes
+`0x5_1000`/`0x5_1004` and `0x3_0000`/`0x3_0004`/`0x3_0008`/`0x3_000C` with
+`1`, `0`, `0x1800`, `0x500` — the same constants start4's `0x3EDC5EF8` path
+uses. Those are addresses *inside the VL805*, reached indirectly through
+`0x400D0`/`0x400E0`/`0x400F0`; the exact framing has not been decoded, but a
+`BTreeMap` behind config `0x78`/`0x7C` that returns what was written is
+already enough to get past the verify pass. Which is how the run above reaches
+xHCI at all.
+
+**It assigns BAR0 itself, and where the VPU reaches it is still open.** After
+the scan, `0x000A6918` sizes BAR0 (write all-ones, read back `0xFFFF_F004` —
+4 KiB), assigns it the PCI bus address **`0x8200_0000`**, writes zero to the
+upper half, programs the MSI capability at `0x92`/`0x94`/`0x98`/`0x9C` with
+`0x0085` / `0xFFFF_FFFC` / `0xF` / `0x6540` — the same MSI address and data
+`lspci` reports on the running board — and finally writes `0x0146` to the
+command register, again matching `lspci`'s `Mem+ BusMaster+ ParErr+ SERR+`.
+
+**Where it actually stops is the xHCI capability registers.** `xHC0 ver: 0
+HCS: 0 0 0 HCC: 0` (`0x000BBF20`) is the bootloader reading its idea of BAR0
+and getting zeros, then hanging in a `udelay` poll at `0x000AA3C0`. Finding
+what VPU address that is, is the first thing stage 3 has to do, and it is not
+obvious:
+
+* the `CPU_2_PCIE_MEM_WIN0` window the bootloader programs lands at
+  CPU-physical `0x6_3FF0_0000`, which a 32-bit VPU cannot form;
+* `r6` in the poll loop at `0x000BBF70` holds `0xFFF4_0000`, which *looks*
+  like a candidate and is **not** one — `0xFFF4_0000 & 0x3FFF_FFFF` is
+  `0x3FF4_0000`, uncached DRAM near the top of the VPU's 1 GiB window, and the
+  firmware `memset`s it to zero at `0x000A0864` before use. It is a driver
+  buffer, not a register window. (Decoding it as MMIO was tried and corrupts
+  the buffer; the capability words still read zero, which is the proof.)
+
+So the aperture is genuinely unidentified. The place to look next is whatever
+computes the base the xHCI driver is handed — start4 prints its own version of
+the same number as `pcie-base: 00004000`, so both stages get it from an
+allocator that is worth tracing directly rather than inferring from a register
+snapshot.
+
+### 5.2 Live ground truth for stage 3
+
+Captured on `rpi-dev` with a Samsung "Flash Drive FIT" plugged in, so stage 3
+does not have to invent descriptor bytes.
+
+**Topology, and how the sockets are wired.** The VL805 has five xHCI root
+ports; the board routes them like this, pinned by moving the stick between
+sockets and re-reading `PORTSC` each time:
+
+```text
+xHCI port 1 -> VIA Labs 2109:3431 hub, 4 ports
+                 hub port 1 -> blue socket A, USB2 half     [inferred]
+                 hub port 2 -> blue socket B, USB2 half     [inferred]
+                 hub port 3 -> black socket, upper          [measured]
+                 hub port 4 -> black socket, lower          [measured]
+xHCI port 2 -> blue socket A, SuperSpeed                    [measured]
+xHCI port 3 -> blue socket B, SuperSpeed                    [measured]
+xHCI ports 4, 5 -> no connector                             [measured]
+```
+
+The bracketed labels are confidence levels, not decoration. Hub ports 3 and 4
+were pinned by moving a stick between the two black sockets; hub ports 1 and 2
+being the blue sockets' USB 2 halves is the obvious reason a four-port hub sits
+behind two sockets, but it is unverified and the test stick cannot verify it —
+being USB 3.10, it always negotiates SuperSpeed onto a root port when it is in
+a blue socket. Confirming would need a USB2-only device.
+
+(The USB-C connector is power-only on a Pi 4B, so it is not an xHCI port at
+all.) Watch the off-by-one against `lsusb`: USB3 root-hub port *n* is xHCI
+port *n + 1*.
+
+`PORTSC` lives at `CAPLENGTH + 0x400 + (n - 1) * 0x10`. Measured values:
+
+```text
+0x00001203   SuperSpeed device attached and enabled (CCS=1 PED=1 PLS=0 speed=4)
+0x000002a0   empty but powered                      (CCS=0 PED=0 PLS=5 PP=1)
+0x4c000e63   the VIA hub, high-speed, on port 1
+0x40000e03   the VIA hub with a device below it
+```
+
+Ports 2-5 sometimes read `0x0a0002a0` instead of `0x000002a0`: bits 25 and 27
+are `WCE`/`WOE`, wake-on-connect and wake-on-over-current, which Linux sets
+when it idles a port. They are power management, not presence — model
+`0x000002a0` as the resting value. An unrouted port is observationally
+identical to an empty one, so ports 4 and 5 need no special case.
+
+**This forks stage 3 into two targets, and they are not the same size.**
+
+1. **Blue socket** — the device sits directly on an xHCI root port. Needs the
+   ring engine and a device model, and nothing else. This is the cheaper
+   target and the one the first `--usb <img>` fixture should aim at.
+2. **Black socket** — the device sits behind the VIA hub (as `1-1.3` or
+   `1-1.4`), so it additionally needs a **USB hub model**: hub descriptor,
+   per-port status, `GetPortStatus` / `SetPortFeature`, and the interrupt-IN
+   status-change endpoint. Real extra work; worth doing only deliberately.
+
+The firmware boots from whichever port reports a device, so this is a choice
+about what the fixture is pretending to be, not about what the firmware
+requires.
+
+The hub, if it is ever needed: `2109:3431`, `bcdUSB 2.10`, `bDeviceClass 9` /
+`bDeviceProtocol 1` (single TT), `bcdDevice 4.21`, one configuration
+(`wTotalLength 0x19`, self-powered, remote wakeup, `MaxPower 100mA`), one
+interface with a single interrupt IN endpoint `0x81`, `wMaxPacketSize 1`,
+`bInterval 12`.
+
+**The device's raw descriptors** (`/sys/bus/usb/devices/2-2/descriptors`,
+device + config + interface + both endpoints, verbatim):
+
+```text
+12 01 10 03 00 00 00 09 0c 09 00 10 00 11 01 02
+03 01 09 02 2c 00 01 01 00 80 26 09 04 00 00 02
+08 06 50 00 07 05 01 02 00 04 00 06 30 08 00 00
+00 07 05 82 02 00 04 00 06 30 08 00 00 00
+```
+
+i.e. `bcdUSB 3.10`, `bMaxPacketSize0 9` (2^9 = 512), `090c:1000`,
+`bcdDevice 11.00`, strings 1/2/3 = `Samsung` / `Flash Drive FIT` /
+`0374122050000640`; one configuration, `wTotalLength 0x2C`, bus-powered,
+304 mA; one interface, class 8 subclass 6 protocol 80 (Mass Storage / SCSI /
+Bulk-Only); bulk OUT `0x01` and bulk IN `0x82`, `wMaxPacketSize 0x400`, each
+followed by a SuperSpeed endpoint companion (`06 30 08 00 00 00`,
+`bMaxBurst 8`).
+
+The two root hubs' own descriptors, for completeness:
+
+```text
+usb2 (SuperSpeed): 12 01 00 03 09 00 03 09 6b 1d 03 00 12 06 03 02 01 01
+                   09 02 1f 00 01 01 00 e0 00 09 04 00 00 01 09 00 00 00
+                   07 05 81 03 02 00 0c 06 30 00 00 02 00
+usb1 (high speed): 12 01 00 02 09 00 01 40 6b 1d 02 00 12 06 03 02 01 01
+                   09 02 19 00 01 01 00 e0 00 09 04 00 00 01 09 00 00 00
+                   07 05 81 03 04 00 0c
+```
+
+**SCSI.** `sg3-utils` is not installed on `rpi-dev` and was not installed for
+this, so the `INQUIRY` and `READ CAPACITY(10)` payloads were not read as raw
+bytes; the fields the kernel parsed out of them are:
+
+```text
+/sys/block/sda/device/vendor      "Samsung "
+/sys/block/sda/device/model       "Flash Drive FIT "
+/sys/block/sda/device/rev         "1100"
+/sys/block/sda/device/type        0        (direct access)
+/sys/block/sda/device/scsi_level  7        (SPC-5, so INQUIRY version byte 0x06)
+/sys/block/sda/size               125313283  512-byte sectors
+logical/physical_block_size       512 / 512
+```
+
+so `READ CAPACITY(10)` returns last-LBA `125313282` (`0x0778_2102`) and block
+length `512`. A model's own disk image will have its own capacity; what
+matters is the field layout and the vendor/model/rev padding to 8, 16 and 4
+bytes.
+
+**Sector 0** is a classic MBR — `55 aa` at `0x1FE` and two entries:
+
+```text
+p1  type 0x0c (FAT32 LBA)  start LBA 0x0000_4000  0x0010_0000 sectors (512 MiB)
+p2  type 0x83 (Linux)      start LBA 0x0010_4000  0x0767_E103 sectors
+```
+
+Neither entry has the boot flag set. This is the same shape the bootloader
+already parses off SD, which is the point: the FAT/GPT walk above the block
+layer is code the firmware already runs, so a `--usb <img>` fixture can be
+built the way `scripts/make-sd.sh` builds the SD one.
+
 ### Staged plan
 
 **Stage 0 — stop the aliasing. Done** (`src/periph/pcie.rs`).
@@ -491,13 +761,32 @@ being byte-identical across the change (`PCI0 init` / `PCI0 reset` / `PCIe
 timeout: 0x00000000` / `USB xHC init failed` / `Boot mode: SD (01) order f4`,
 same timestamps).
 
-**Stage 1 — make the link come up.** Implement `RGR1_SW_INIT_1` reset
-semantics and have `MISC_PCIE_STATUS` report link-up + RC mode once PERST# is
-de-asserted and a device is attached. Add the `EXT_CFG_INDEX`/`EXT_CFG_DATA`
-router and a VL805 config-space model seeded from the `rpi-dev` dump.
-**Verified by:** `PCIe timeout` disappearing from the transcript and being
-replaced by the success path (`PCIe scan %08x:%08x` / `PCIe: xHC
-initialised`), and `USB xHC init failed` no longer being printed.
+**Stage 1 — make the link come up. Done, behind a flag**
+(`src/periph/pcie.rs`, `src/periph/vl805.rs`). `RGR1_SW_INIT_1` reset
+semantics, `MISC_PCIE_STATUS` reporting link-up + RC mode once PERST# is
+de-asserted, the `EXT_CFG_INDEX`/`EXT_CFG_DATA` router, and a VL805
+config-space model seeded from the `rpi-dev` dump — including BAR sizing, so
+writing all-ones to `0x10` reads back `0xFFFF_F004`.
+
+The endpoint is **detached by default**; set `RVF_PCIE_DEVICE=1` to attach it.
+That is a deliberate choice, not a hardware claim — a real Pi 4B has the VL805
+soldered on. With the flag set the boot **stalls**: see
+[§5.1](#51-what-the-bootloader-does-once-the-link-is-up). With it clear the
+transcript is byte-identical to stage 0 (`PCIe timeout: 0x00000000` at `3.66`,
+`Boot mode: SD (01) order f4` at `4.92`) and `boot-check.sh` passes.
+
+**Verified by:** `boot-check.sh` passing on the default, `cargo test` (five
+cases in `src/periph/pcie.rs`, two in `tests/peripherals.rs`), and, with
+`RVF_PCIE_DEVICE=1`, `PCIe timeout` being replaced by
+
+```text
+  2.75 PCIe scan 000014e4:00002711
+  2.75 PCIe scan 00001106:00003483
+```
+
+which is the firmware itself confirming the reset semantics, the link-up bits
+and the config router. `PCIe: xHC initialised` does **not** appear — that
+needs stage 3.
 
 **Stage 2 — make start4's `XHCI_RESET` recognise the device.** Trace start4's
 PCIe allocator to find out what `pcie-base` is and where it maps BAR0, then
@@ -508,8 +797,39 @@ the transcript with the right values —
 `VLI firmware load complete status 0` — which is a new `want` in
 `boot-check.sh`. Note this requires the boot to reach `arm_loader` first.
 
+**This stage is not on the USB-boot path**, and it is worth being explicit
+about why, because the ordering is easy to get backwards. USB *boot* is the
+EEPROM bootloader reading `start4.elf` and the kernel off a stick; that is
+stages 1 and 3, and it all happens around `Boot mode: SD (01) order f4`, long
+before `arm_loader`. Stage 2 is start4 handing an already-working controller
+over to Linux, which is why the reference log puts those three lines *after*
+`arm_loader: Starting ARM with 948MB`. The pairing that matters is **1 + 3**.
+
 **Stage 3 — xHCI rings + a USB mass-storage device.** Everything in layers
-5–7. **Verified by:** `recon ... --usb <img>` with `BOOT_ORDER` forced to
+5–7. The one thing this doc did not originally call out, found by running
+stage 1 with the endpoint attached (§5.1), has to come first:
+
+**Find the aperture the VPU reaches BAR0 through.** The bootloader assigns
+BAR0 the PCI bus address `0x8200_0000` and programs an outbound window whose
+CPU-side base is `0x6_3FF0_0000` — an address a 32-bit VPU cannot form. So
+there is an alias or a second window still to identify, and nothing else in
+stage 3 can be tested until it is. `0xFFF4_0000`, the base the xHCI poll loop
+at `0x000BBF70` carries in `r6`, is *not* it — that folds to `0x3FF4_0000`,
+uncached DRAM, and is a driver buffer. Trace the allocator that produces the
+base instead; start4 prints its own copy of the same number as
+`pcie-base: 00004000`.
+
+After that, in order: the VL805's own hub-firmware upload (a sticky index/data
+port behind config `0x78`/`0x7C` is enough — see §5.1), then the capability
+registers, then the command and event rings, then the device.
+
+Nothing in stage 3 needs a value invented. The xHCI registers are measured
+(§2), and §5.2 has descriptors, BOT/SCSI identity, geometry and the MBR off a
+live stick. Decide deliberately between the two device placements §5.2
+describes: a blue socket needs only a root-port device, a black one needs a
+hub model as well.
+
+**Verified by:** `recon ... --usb <img>` with `BOOT_ORDER` forced to
 USB-MSD reaching `Read start4.elf bytes …` off the USB image instead of the SD
 one.
 
@@ -540,35 +860,38 @@ The only thing the model currently *diverges* on is that a real board prints
 (`vc4-boot.log`) starts after that point, the bench has no golden line to
 regress against for this phase either way.
 
+With stage 1 landed and `RVF_PCIE_DEVICE=1`, half of that divergence closes:
+`PCIe scan` appears with the right values and the timeout is gone. The other
+half — `PCIe: xHC initialised` — needs stage 3.
+
 ---
 
 ## 7. Recommendation
 
-**Stage 0 is done (this change); defer stages 1–3 until after the current boot blocker.**
+**Stages 0 and 1 are done. Stage 1 ships detached; stage 3 is what turns it
+on.**
 
-Stage 0 is a contained fix for a genuine correctness bug — the firmware is
-writing PCIe registers into modelled DRAM — and it makes all future PCIe work
-observable through the tooling that already exists. It changes no transcript
-line, so it cannot regress `boot-check.sh`.
+Stage 0 was a contained fix for a genuine correctness bug — the firmware was
+writing PCIe registers into modelled DRAM — and it made all further PCIe work
+observable through the tooling that already exists.
 
-Stages 1–3 should wait, for three reasons:
+Stage 1 is now implemented and unit-tested, but `RVF_PCIE_DEVICE` defaults to
+off, so by default the transcript is unchanged and `boot-check.sh` cannot
+regress. That default is not caution for its own sake — it was measured.
+Attaching the endpoint gets the bootloader through the bus scan and through the
+VL805 hub-firmware upload, and then hangs it in the xHCI bring-up against
+capability registers that read zero, with no SD fall-through at all (§5.1).
+This section's earlier prediction — "trading a clean, harmless 1.3-second
+timeout for a new and much less clean stall" — turned out to be exactly right.
 
-1. **Nothing downstream needs them.** The critical path to `arm_loader` and to
-   the `/chosen/rpi-machine-id` goal ([issue #5]) does not pass through PCIe.
-   The current wall is the BSC transfer never reporting TA/ERR ([issue #17]),
-   which sits squarely on that path.
-2. **Stage 2 cannot even be tested until the boot reaches `arm_loader`**,
-   because that is where start4 does its xHCI work. Building it first means
-   building it blind.
-3. **Making the link come up is not obviously the cheaper win it looks like.**
-   Once `MISC_PCIE_STATUS` reports link-up, the bootloader stops taking the
-   failure path and starts doing a `PCIe scan` and a full USB bring-up against
-   an xHCI controller that does not exist yet — trading a clean, harmless
-   1.3-second timeout for a new and much less clean stall. Stage 1 and stage 2
-   have to land together, or stage 1 makes the boot worse.
-
-If USB boot is wanted sooner, the honest ordering is: stage 0 → unblock
-[issue #17] → reach `arm_loader` → stages 1 and 2 together → stage 3.
+The honest ordering from here is: **stage 3, then flip the default.** Stage 3
+is the real work and the real payoff — it is what USB *boot* needs, it is
+exercisable today (the bootloader's USB bring-up happens around
+`Boot mode: SD (01) order f4`, nowhere near `arm_loader`), and §5.2 now has
+live device ground truth for all of it. Stage 2 is a separate errand for a
+separate day: it is about handing Linux a working controller, it sits after
+`arm_loader` in the reference log, and nothing on the USB-boot path waits on
+it.
 
 [issue #5]: https://github.com/valtzu/rpi-virt-fw/issues/5
 [issue #18]: https://github.com/valtzu/rpi-virt-fw/issues/18

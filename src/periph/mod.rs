@@ -31,6 +31,7 @@ pub mod stub;
 pub mod systimer;
 pub mod uart_pl011;
 pub mod vce;
+pub mod vl805;
 
 pub use asb::Asb;
 pub use avs::Avs;
@@ -56,3 +57,4 @@ pub use stub::StubRegion;
 pub use systimer::SysTimer;
 pub use uart_pl011::Pl011;
 pub use vce::Vce;
+pub use vl805::Vl805;
