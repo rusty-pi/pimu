@@ -72,8 +72,15 @@ jobs:
           # phase, which is where the reference log continues
           # (examples-on-real-hardware/vc4-boot.log line 19).
           grep -q '\*\*\* Restart logging' boot.log
+          # gpioman must configure its pin providers for real (issue #2): the
+          # confzilla schema pool has to survive its DMA relocation.
+          if grep -q 'gpioman: configuration attempt' boot.log; then
+            echo "gpioman provider registration regressed (#2)" >&2
+            exit 1
+          fi
           # The register file must survive preemptive context switches: a
-          # rotated frame (fixed in 8d7c27a) shows up as a long nop-slide.
+          # rotated frame (fixed in 8d7c27a) shows up as a long nop-slide. One
+          # is still expected - the null HDMI provider callback at 0x3ECE54A8.
           test "$(grep -c '\[derail\]' boot.log)" -le 1
 
       - uses: actions/upload-artifact@v4
