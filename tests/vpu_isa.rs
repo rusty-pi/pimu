@@ -207,7 +207,6 @@ fn arm_vector(m: &mut Machine, v: &mut Vpu, vbase: u32, slot: u32, handler: u32)
 fn interrupts_gate_on_the_enable_bit_not_on_nesting() {
     let mut m = machine();
     let mut v = Vpu::new(CODE);
-    v.irq_model = true;
     arm_vector(&mut m, &mut v, 0x2000, 1, 0x3000);
 
     // Interrupts off: nothing is delivered.
@@ -233,7 +232,6 @@ fn interrupts_gate_on_the_enable_bit_not_on_nesting() {
 fn the_sleep_wake_vectors_with_interrupts_disabled() {
     let mut m = machine();
     let mut v = Vpu::new(CODE);
-    v.irq_model = true;
     arm_vector(&mut m, &mut v, 0x2000, 1, 0x3000);
 
     v.regs.set(30, 0);
@@ -249,7 +247,6 @@ fn the_sleep_wake_vectors_with_interrupts_disabled() {
 fn vectored_interrupt_frame_unwinds_through_rti() {
     let mut m = machine();
     let mut v = Vpu::new(CODE);
-    v.irq_model = true;
     arm_vector(&mut m, &mut v, 0x2000, 1, 0x3000);
     load_code(&mut m, CODE, &[NOP]);
 

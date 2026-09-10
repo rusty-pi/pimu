@@ -91,15 +91,13 @@ pub struct Machine {
     /// with the current PC (`watch_pc`, refreshed by the run loop each step).
     /// Complements `mmio_trace` for pinning down who writes a given RAM word.
     pub watch: Vec<u32>,
-    /// Cached `RVF_TICK_SLOT` / `RVF_IRQ_SLOT` overrides. `timer_tick_slot` runs
-    /// on every `sleep` (millions of times), so these must not re-read the
-    /// environment per call.
+    /// Cached `RVF_TICK_SLOT` override. `timer_tick_slot` runs on every `sleep`
+    /// (millions of times), so it must not re-read the environment per call.
     tick_slot_override: Option<u32>,
     /// `RVF_DBG_DMA=1`: log every control block the DMA4 channel executes.
     dbg_dma: bool,
     /// Interrupt sources raised by peripherals, waiting to be vectored.
     pending_irqs: std::collections::VecDeque<u32>,
-    irq_slot_override: Option<u32>,
     pub watch_pc: u32,
 
     /// `start4.elf` logs boot progress by writing 4-char ASCII tags (`_msh`,
@@ -165,9 +163,6 @@ impl Machine {
             dbg_dma: std::env::var_os("RVF_DBG_DMA").is_some(),
             pending_irqs: std::collections::VecDeque::new(),
             tick_slot_override: std::env::var("RVF_TICK_SLOT")
-                .ok()
-                .and_then(|s| s.trim().parse().ok()),
-            irq_slot_override: std::env::var("RVF_IRQ_SLOT")
                 .ok()
                 .and_then(|s| s.trim().parse().ok()),
             watch_pc: 0,
@@ -492,40 +487,7 @@ impl Machine {
     }
 }
 
-impl Machine {
-    /// `sleep` support: jump to the next armed system-timer compare, fire it, and
-    /// return the interrupt vector-table slot if the firmware has enabled that
-    /// timer source (`enable_irq_source(SYS_IRQ_SRC + channel, prio)`).
-    fn timer_wake_impl(&mut self) -> Option<u32> {
-        // The caller (`Op::Sleep`) only asks while not already in an exception,
-        // so the previous tick's handler has returned. The slot-1 ThreadX tick
-        // ISR acks the BCM system timer directly (writes the CS match bit at
-        // `0x3ED65846`), never the `0x7EE0_1080` VPU-dispatch window — so gating
-        // on `bootbox.irq_pending()` here wedged the tick after the first one.
-        let _ch = self.systimer.wake_to_next_match()?;
-        // start4 routes the ThreadX tick to interrupt source 66 (its handler at
-        // 0x3ED6583A acks system-timer CS and calls the tick with source id 66).
-        let src = crate::periph::corectl::SYS_IRQ_SRC + 2;
-        // `enable_irq_source(src, prio)` stores the 4-bit priority, and start4's
-        // exception entry vectors the interrupt through the table slot == that
-        // priority. `enable_irq_source(66, 1)` ⇒ slot 1, whose ISR path runs
-        // the plain ThreadX tick (`0x3ED65142`) and returns cleanly.
-        let slot = self.corectl.irq_priority(src);
-        if slot == 0 {
-            return None;
-        }
-        self.bootbox.raise_irq(src, 0);
-        // `RVF_IRQ_SLOT` overrides for experiments (slots 3/10 force the ISR's
-        // deferred-reschedule path `0x3EDA2594` instead of the plain tick).
-        Some(self.irq_slot_override.unwrap_or(slot as u32))
-    }
-}
-
 impl Bus for Machine {
-    fn timer_wake(&mut self) -> Option<u32> {
-        self.timer_wake_impl()
-    }
-
     fn take_pending_irq(&mut self) -> Option<u32> {
         self.pending_irqs.pop_front()
     }

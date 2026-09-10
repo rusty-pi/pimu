@@ -101,7 +101,7 @@ pub struct Vpu {
     /// True while executing inside an exception handler (before `rti`).
     pub in_exception: u32,
     /// `RVF_DBG_SLEEP` counter: how many times the idle loop's `sleep` has
-    /// been reached under `irq_model`.
+    /// been reached.
     pub sleep_dbg: u64,
     /// System-coprocessor register file (`mov p<n>,r` / `mov r,p<n>`). Not real
     /// hardware behaviour — reads return the last written value (0 at reset),
@@ -120,10 +120,6 @@ pub struct Vpu {
     pub trace_from: u32,
     /// Flips true once `trace_from` has been reached (always true when it is 0).
     pub trace_armed: bool,
-    /// `RVF_SCHED_TICK=1`: model the interrupt-enable bit (`ei`/`di`, SR bit 30)
-    /// so firmware `msleep` takes its yield-to-scheduler path, paired with the
-    /// run loop's periodic ThreadX tick. Off by default — WIP (issue #7).
-    pub irq_model: bool,
     /// Diagnostic switches, read once at construction. Reading them from the
     /// environment inside the step loop instead costs a `getenv` per `sleep`
     /// instruction, and ThreadX's idle loop is nothing but `sleep`.
@@ -140,17 +136,14 @@ impl Vpu {
         v.version_value = DEFAULT_VERSION;
         v.cf_trace = Vec::with_capacity(512);
         v.trace_cap = 20_000;
-        v.irq_model = std::env::var_os("RVF_SCHED_TICK").is_some();
         v.dbg_tick = std::env::var_os("RVF_DBG_TICK").is_some();
         v.dbg_vec = std::env::var_os("RVF_DBG_VEC").is_some();
         v.dbg_sleep = std::env::var_os("RVF_DBG_SLEEP").is_some();
         v.dbg_derail = std::env::var_os("RVF_DBG_DERAIL").is_some();
-        if v.irq_model {
-            // VC4 comes out of reset with interrupts enabled; ThreadX runs
-            // threads that way too. `di`/`ei` toggle it from here.
-            v.regs.set(30, 1 << 30);
-            v.regs.sr = 1 << 30;
-        }
+        // VC4 comes out of reset with interrupts enabled; ThreadX runs threads
+        // that way too. `di`/`ei` toggle it from here.
+        v.regs.set(30, 1 << 30);
+        v.regs.sr = 1 << 30;
         v
     }
 
@@ -182,20 +175,6 @@ impl Vpu {
         Step::Stopped
     }
 
-    /// Advance the system timer to its next armed compare and, if that raises an
-    /// enabled interrupt source, vector into the firmware's handler — pushing SR
-    /// and the current `pc` as the resume address, exactly like `swi` (so the
-    /// handler's `rti` unwinds). No-op if already in an exception, if no vector
-    /// table is configured, or if nothing is armed. Shared by the `sleep`
-    /// instruction and the `msleep` yield shim.
-    pub fn deliver_timer_irq(&mut self, bus: &mut dyn Bus) {
-        if self.exc_vbase == 0 || (self.irq_model && !self.irq_enabled()) {
-            return;
-        }
-        let Some(slot) = bus.timer_wake() else { return };
-        self.vector_irq(bus, slot);
-    }
-
     /// Vector into the firmware's interrupt handler for `slot` (== the source's
     /// enabled priority): push SR + the current `pc` as the resume address (like
     /// `swi`, so the handler's `rti` unwinds) and jump to
@@ -203,7 +182,7 @@ impl Vpu {
     /// entry is null. Used for both the `sleep`-instruction wake and the run
     /// loop's periodic ThreadX tick.
     pub fn vector_irq(&mut self, bus: &mut dyn Bus, slot: u32) {
-        if self.irq_model && !self.irq_enabled() {
+        if !self.irq_enabled() {
             return;
         }
         self.vector_irq_forced(bus, slot);
@@ -260,21 +239,17 @@ impl Vpu {
         }
     }
 
-    /// The VC4 status register value to save on an exception. With `irq_model`
-    /// on this is `r30` (carrying the interrupt-enable bit, [`Op::SetIrqEnable`])
-    /// with the live N/Z/C/V condition flags folded into the low nibble (SR
-    /// layout `… ZNCV`), so a handler's `rti` restores the interrupted context's
-    /// flags — ThreadX preempts threads mid-`cmp`/`b<cond>` and the tick handler
-    /// clobbers the flags in between. Without `irq_model`, the legacy `regs.sr`.
+    /// The VC4 status register value to save on an exception: `r30` (carrying
+    /// the interrupt-enable bit, [`Op::SetIrqEnable`]) with the live N/Z/C/V
+    /// condition flags folded into the low nibble (SR layout `… ZNCV`), so a
+    /// handler's `rti` restores the interrupted context's flags — ThreadX
+    /// preempts threads mid-`cmp`/`b<cond>` and the tick handler clobbers the
+    /// flags in between.
     fn sr(&mut self) -> u32 {
-        if self.irq_model {
-            let v = (self.regs.get(30) & !0xF) | nzcv_to_sr(self.regs.flags);
-            self.regs.set(30, v);
-            self.regs.sr = v;
-            v
-        } else {
-            self.regs.sr
-        }
+        let v = (self.regs.get(30) & !0xF) | nzcv_to_sr(self.regs.flags);
+        self.regs.set(30, v);
+        self.regs.sr = v;
+        v
     }
 
     /// True when interrupts are enabled (SR / `r30` bit 30). Firmware `msleep`
@@ -335,19 +310,15 @@ impl Vpu {
                 // Track only the interrupt-enable bit of the VC4 status
                 // register (`r30`, bit 30). NZCV stay in `regs.flags`; the
                 // exception save/restore path (`sr()` / `rti`) carries this bit
-                // across handlers. `regs.sr` is kept as a mirror. Gated on
-                // `irq_model` — without the paired periodic tick, letting
-                // `msleep` yield just hangs.
-                if self.irq_model {
-                    let m = 1u32 << 30;
-                    let v = if on {
-                        self.regs.get(30) | m
-                    } else {
-                        self.regs.get(30) & !m
-                    };
-                    self.regs.set(30, v);
-                    self.regs.sr = v;
-                }
+                // across handlers. `regs.sr` is kept as a mirror.
+                let m = 1u32 << 30;
+                let v = if on {
+                    self.regs.get(30) | m
+                } else {
+                    self.regs.get(30) & !m
+                };
+                self.regs.set(30, v);
+                self.regs.sr = v;
                 self.regs.pc = next;
             }
             Op::Sleep => {
@@ -357,12 +328,7 @@ impl Vpu {
                 // or spin detector ends things cleanly. Otherwise halt.
                 if matches!(self.on_unimpl, UnimplPolicy::Skip) {
                     self.regs.pc = next;
-                    if !self.irq_model {
-                        // `sleep` = wait for an interrupt: advance to the next
-                        // armed timer compare and, if that raises an enabled
-                        // source, dispatch it (see [`Vpu::deliver_timer_irq`]).
-                        self.deliver_timer_irq(bus);
-                    } else if self.exc_vbase != 0 && self.core_id == 0 {
+                    if self.exc_vbase != 0 && self.core_id == 0 {
                         // The ThreadX idle loop parks here with interrupts
                         // disabled, so the run loop's gated delivery never
                         // fires; service a device interrupt here too.
@@ -510,10 +476,7 @@ impl Vpu {
                     Ok(v) => v,
                     Err(err) => return self.stop(Stop::Fault(Fault::Bus { pc, err })),
                 };
-                if self.irq_model
-                    && self.dbg_tick
-                    && !(0x3E00_0000..0x3F00_0000).contains(&ret)
-                {
+                if self.dbg_tick && !(0x3E00_0000..0x3F00_0000).contains(&ret) {
                     eprintln!(
                         "[rti-bad] pc={pc:#x} sp={sp:#x} -> ret={ret:#x} sr={sr:#x} nest={} frame=[{:#x} {:#x} {:#x} {:#x}]",
                         self.in_exception,
@@ -524,12 +487,10 @@ impl Vpu {
                     );
                 }
                 self.regs.sr = sr;
-                if self.irq_model {
-                    self.regs.set(30, sr);
-                    // Restore the interrupted context's condition flags from the
-                    // saved SR low nibble (see [`Vpu::sr`]).
-                    self.regs.flags = sr_to_nzcv(sr);
-                }
+                self.regs.set(30, sr);
+                // Restore the interrupted context's condition flags from the
+                // saved SR low nibble (see [`Vpu::sr`]).
+                self.regs.flags = sr_to_nzcv(sr);
                 self.regs.set(SP, sp.wrapping_add(8));
                 self.regs.pc = ret;
                 self.in_exception = self.in_exception.saturating_sub(1);
@@ -718,8 +679,7 @@ impl Vpu {
                             // delivery for good. `ld sp, (r29+32)` (switch to
                             // the ISR's own system stack) is *not* that — keep
                             // the count until the real return.
-                            if self.irq_model
-                                && rd as usize == SP
+                            if rd as usize == SP
                                 && self.in_exception != 0
                                 && matches!(addr.base, super::insn::Base::R0)
                             {

@@ -15,10 +15,6 @@ log="${1:-$here/boot.log}"
 wall="${RVF_BOOT_WALL:-290}"
 bin="$here/target/release/rpi-virt-fw"
 
-# Model the SR interrupt-enable bit and run the real ThreadX periodic tick
-# through vector-table entry 64, so the scheduler actually preempts (#7). This
-# is the only environment variable the boot needs — every shim is retired.
-export RVF_SCHED_TICK=1
 # Stream the UART console (incl. `MESS:` lines) as it is produced.
 export RVF_LIVE_CONSOLE=1
 
