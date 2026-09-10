@@ -540,3 +540,40 @@ fn asb_identifies_itself_as_a_bridge() {
     let mut m = machine();
     assert_eq!(m.load32(map::ASB_BASE + 0x20).unwrap(), 0x6272_6467);
 }
+
+/// The PCIe root complex is decoded as MMIO, not folded onto DRAM at
+/// `0x3D50_xxxx` — stage 0 of #18. The rest of the PCIe behaviour is tested
+/// next to the model in `src/periph/pcie.rs`, where the reset sequence can be
+/// driven directly.
+#[test]
+fn pcie_window_is_mmio_not_dram() {
+    // Big enough that the DRAM alias of the PCIe window, `addr & 0x3FFF_FFFF`,
+    // is backed memory — which is exactly what used to swallow these writes.
+    let mut m = Machine::new(0x3D51_0000);
+    m.store32(0x3D50_9210, 0xDEAD_BEEF).unwrap();
+    m.store32(map::PCIE_BASE + 0x9210, 0x3).unwrap();
+    assert_eq!(m.load32(0x3D50_9210).unwrap(), 0xDEAD_BEEF);
+    assert_eq!(m.load32(map::PCIE_BASE + 0x9210).unwrap(), 0x3);
+}
+
+/// With no endpoint attached — the default, and a deliberate choice documented
+/// in `src/periph/pcie.rs` — the link never trains and `MISC_PCIE_STATUS` reads
+/// 0. That is the word the bootloader prints as `PCIe timeout: 0x00000000`
+/// before falling through to the next `BOOT_ORDER` entry.
+#[test]
+fn pcie_link_stays_down_without_an_endpoint() {
+    let mut m = machine();
+    // bootcode parks the block in reset; the bootloader releases bridge then
+    // PERST#.
+    m.store32(map::PCIE_BASE + 0x9210, 0x3).unwrap();
+    m.store32(map::PCIE_BASE + 0x9210, 0x1).unwrap();
+    m.store32(map::PCIE_BASE + 0x9210, 0x0).unwrap();
+    assert_eq!(
+        m.load32(map::PCIE_BASE + 0x4068).unwrap(),
+        0,
+        "MISC_PCIE_STATUS must read 0 with nothing on the far side of the link"
+    );
+    // And the endpoint's config space is not reachable through the router.
+    m.store32(map::PCIE_BASE + 0x9000, 1 << 20).unwrap();
+    assert_eq!(m.load32(map::PCIE_BASE + 0x8000).unwrap(), 0xFFFF_FFFF);
+}
