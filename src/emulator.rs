@@ -525,43 +525,6 @@ impl Emulator {
                 self.cpu.regs.pc = self.cpu.regs.get(26);
             }
 
-            // `0x3EC981CC` = `dma_memcpy(r0=dst, r1=src, r2=len)` from
-            // `helpers/dmalib/dmalib.c`. Under 0x400 bytes it just calls the
-            // scalar memcpy; at 0x400 and above it builds a DMA control block,
-            // posts it to a transfer queue and blocks on the completion object.
-            //
-            // Nothing in the model services that queue (issue #3), and
-            // `RVF_MBOX_KICK` releases the waiter *without* the transfer having
-            // run — so every copy of >= 1024 bytes silently leaves the
-            // destination untouched. That is what breaks gpioman (issue #2):
-            // confzilla's schema-node pool is a relocatable-heap block that
-            // grows 8 -> 12 -> 18 nodes, and the 12 -> 18 move is
-            // `dma_memcpy(0x3EBCC640, 0x3EBCC920, 0x5A0)` — 1440 bytes, so it
-            // takes the DMA path and the whole schema tree is lost. Every one
-            // of the 4350 `cp_set_property` lookups then misses and
-            // `gpioman_configure` returns error 1.
-            //
-            // Perform the copy the DMA engine would have performed. This is a
-            // stand-in for the missing transfer-queue agent, not a model of it:
-            // the memory effect is exactly right, but the engine and its
-            // completion interrupt are still unmodelled. It should go away once
-            // the queue is serviced for real and the CB reaches the channel
-            // registers (`src/periph/dma_legacy.rs` already executes those).
-            if pc_before == 0x3EC9_81CC {
-                let dst = self.cpu.regs.get(0);
-                let src = self.cpu.regs.get(1);
-                let len = self.cpu.regs.get(2);
-                if len >= 0x400 {
-                    for i in 0..len {
-                        let b = self
-                            .machine
-                            .load(src.wrapping_add(i), Width::Byte)
-                            .unwrap_or(0);
-                        let _ = self.machine.store(dst.wrapping_add(i), Width::Byte, b);
-                    }
-                }
-            }
-
             // `_tx_thread_schedule`'s *solicited* context restore (`0x3EC40034`
             // → `bx r26` at `0x3EC4003E`) resumes a thread that yielded via a
             // ThreadX call — it does NOT `rti`, so the model's `in_exception`
