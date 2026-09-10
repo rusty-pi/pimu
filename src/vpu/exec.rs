@@ -178,7 +178,7 @@ impl Vpu {
     /// table is configured, or if nothing is armed. Shared by the `sleep`
     /// instruction and the `msleep` yield shim.
     pub fn deliver_timer_irq(&mut self, bus: &mut dyn Bus) {
-        if self.in_exception != 0 || self.exc_vbase == 0 {
+        if self.exc_vbase == 0 || (self.irq_model && !self.irq_enabled()) {
             return;
         }
         let Some(slot) = bus.timer_wake() else { return };
@@ -192,7 +192,18 @@ impl Vpu {
     /// entry is null. Used for both the `sleep`-instruction wake and the run
     /// loop's periodic ThreadX tick.
     pub fn vector_irq(&mut self, bus: &mut dyn Bus, slot: u32) {
-        if self.in_exception != 0 || self.exc_vbase == 0 {
+        if self.irq_model && !self.irq_enabled() {
+            return;
+        }
+        self.vector_irq_forced(bus, slot);
+    }
+
+    /// [`Self::vector_irq`] without the interrupt-enable check, for the `sleep`
+    /// wake. ThreadX's scheduler idle loop parks as `…; sleep; di; b …` with
+    /// interrupts already off and relies on the wake itself to service the
+    /// pending periodic tick — nothing in that loop ever runs `ei`.
+    pub fn vector_irq_forced(&mut self, bus: &mut dyn Bus, slot: u32) {
+        if self.exc_vbase == 0 {
             return;
         }
         let handler = bus
@@ -225,6 +236,14 @@ impl Vpu {
             {
                 self.regs.set(SP, sp);
                 self.in_exception = self.in_exception.wrapping_add(1);
+                // Taking an exception clears the interrupt-enable bit; the
+                // handler re-enables it explicitly (`ei`) or implicitly, by
+                // restoring the saved SR through `rti`. This — not a nesting
+                // count — is what serialises delivery, and it is the only model
+                // that works for ThreadX: `_tx_thread_schedule` enters its idle
+                // loop (`0x3EC3FFCA`..`0x3EC40016`) from *inside* the tick ISR
+                // and never returns from it, so any depth counter stays pinned
+                // above zero and wedges every later tick.
                 self.regs.pc = h;
             }
         }
@@ -332,14 +351,14 @@ impl Vpu {
                         // armed timer compare and, if that raises an enabled
                         // source, dispatch it (see [`Vpu::deliver_timer_irq`]).
                         self.deliver_timer_irq(bus);
-                    } else if self.in_exception == 0 && self.exc_vbase != 0 {
+                    } else if self.exc_vbase != 0 {
                         // The ThreadX idle loop parks here with interrupts
                         // disabled, so the run loop's gated delivery never
                         // fires; service a device interrupt here too.
                         if let Some(src) = bus.take_pending_irq() {
                             // `pc` was already advanced past the `sleep` above,
                             // so `vector_irq` records the right resume point.
-                            self.vector_irq(bus, src);
+                            self.vector_irq_forced(bus, src);
                             return Step::Ran;
                         }
                         // The ThreadX scheduler idle loop parks here as
@@ -366,7 +385,7 @@ impl Vpu {
                             }
                         }
                         if let (Some(slot), true) = (slot, took) {
-                            self.vector_irq(bus, slot);
+                            self.vector_irq_forced(bus, slot);
                         }
                     }
                 } else {
