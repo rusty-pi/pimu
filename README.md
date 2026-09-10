@@ -43,17 +43,20 @@ Working:
 - **CI** — `.github/workflows/boot-log.yml` runs the simulated boot on every
   push / PR to `main` and fails if it regresses before `arasan_emmc_open`.
 
-Two knobs are still needed for the full boot: `RVF_SCHED_TICK=1` runs the real
-ThreadX periodic tick, and `RVF_GPIOMAN_SHIM=1` is the one remaining shim — it
-forces the PLL / clock-rate loops to converge
-([#1](https://github.com/valtzu/rpi-virt-fw/issues/1)) and pins the DA9090 errno
-([#4](https://github.com/valtzu/rpi-virt-fw/issues/4)). `RVF_MBOX_KICK` is gone:
-it released a dmalib transfer's completion word by hand, which the firmware's own
-`dma_chan_interrupt` does now that the DMA completion interrupt is modelled
+The boot needs no opt-in shims any more: `RVF_SCHED_TICK=1` (the real ThreadX
+periodic tick) is the only environment variable the reference run sets. It gets
+as far as loading the kernel, the device tree and the config overlays. The one
+piece of firmware behaviour still short-circuited in the emulator is the HDMI
+EDID block read, which is forced to report the error a monitor-less board's DDC
+bus would produce — the DDC I²C block at `0x7EF04500` is not modelled yet.
+
+`RVF_MBOX_KICK` is gone too: it released a dmalib transfer's completion word by
+hand, which the firmware's own `dma_chan_interrupt` does now that the DMA
+completion interrupt is modelled
 ([#3](https://github.com/valtzu/rpi-virt-fw/issues/3)).
 
-Not done: the VPU vector/float unit, USB3 (VL805) and GENET netboot, the ARM
-kernel/DTB load and hand-off. See [`docs/boot-chain.md`](docs/boot-chain.md)
+Not done: the VPU vector/float unit, USB3 (VL805) and GENET netboot, the
+hand-off to the ARM cores. See [`docs/boot-chain.md`](docs/boot-chain.md)
 for the stage-by-stage map and [`docs/vision.md`](docs/vision.md) for the
 longer-term direction (single `boot` command, disk-image mode, QEMU hand-off).
 
@@ -69,9 +72,8 @@ cargo run -- disasm firmware/start4.elf --base 0xcec00200 --count 40
 
 # Run the real boot chain: EEPROM bootloader + start4.elf off an SD image.
 ./scripts/make-sd.sh                            # build firmware/sd.img
-RVF_SCHED_TICK=1 RVF_GPIOMAN_SHIM=1 \
-  cargo run --release -- recon firmware/pieeprom.bin \
-    --eeprom --sd firmware/sd.img --max-wall 240
+RVF_SCHED_TICK=1 cargo run --release -- recon firmware/pieeprom.bin \
+  --eeprom --sd firmware/sd.img --max-wall 330
 ```
 
 ### Scenario file
