@@ -208,6 +208,11 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         max_wall: Some(std::time::Duration::from_secs(max_wall_secs)),
         stop_pc: None,
         idle_spin_limit: 200_000,
+        // Stop once the firmware has gone quiet for a minute of modelled time.
+        // The model's worst legitimate gap is the kernel load, about thirteen
+        // seconds, so this has plenty of headroom; when the boot wedges it
+        // reports in seconds instead of running out the wall clock.
+        silent_us: 60_000_000,
     };
 
     let mut reboots = 0u32;
