@@ -29,6 +29,7 @@ pub mod spi0;
 pub mod stub;
 pub mod systimer;
 pub mod uart_pl011;
+pub mod vce;
 
 pub use avs::Avs;
 pub use aux::Aux;
@@ -52,3 +53,4 @@ pub use spi0::Spi0;
 pub use stub::StubRegion;
 pub use systimer::SysTimer;
 pub use uart_pl011::Pl011;
+pub use vce::Vce;

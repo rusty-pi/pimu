@@ -4,7 +4,7 @@ use crate::bus::{Bus, BusError, BusResult, MmioDevice, Width};
 use crate::mem::Ram;
 use crate::periph::{
     Avs, Aux, BootBox, Bsc, ClkMon, ClockManager, ConfigOtp, CoreCtl, Dma4, Emmc2, Hvs, McSync, Pl011,
-    Pm, Rng, Sdc, Sdramc, Spi0, StubRegion, SysTimer,
+    Pm, Rng, Sdc, Sdramc, Spi0, StubRegion, SysTimer, Vce,
 };
 use crate::soc::bcm2711 as map;
 
@@ -38,6 +38,9 @@ pub struct Machine {
     pub pcie: crate::periph::pcie::Pcie,
     /// Hardware RNG (`0x7E10_4000`) — start4 blocks on its interrupt.
     pub rng: Rng,
+    /// VCE vector/codec engine (`0x7F10_0000`) — the codec licence check
+    /// launches a program on it and waits for interrupt source 68.
+    pub vce: Vce,
     /// BSC instance 0 (`0x7E20_5000`) — nothing attached; probes go unACKed.
     pub bsc0: Bsc,
     /// SPI0 master (`0x7E20_4000`) — minimal model for the EEPROM bootloader.
@@ -132,6 +135,7 @@ impl Machine {
             avs: Avs::new(),
             pcie: crate::periph::pcie::Pcie::new(),
             rng: Rng::new(),
+            vce: Vce::new(),
             bsc0: Bsc::empty("bsc0"),
             spi0: Spi0::new(),
             bsc_pmic: Bsc::new("bsc-pmic"),
@@ -199,6 +203,14 @@ impl Machine {
         // delivery outstanding.
         let src = crate::periph::rng::IRQ_SRC;
         if self.rng.irq_asserted() && !self.pending_irqs.contains(&src) {
+            self.corectl.raise_source(src);
+            self.pending_irqs.push_back(src);
+        }
+        // The VCE holds source 68 asserted from the moment a launch completes
+        // until start4's handler (`0x3ED9D1EA`) acks it through `INTCLR`; that
+        // handler is what sets the event flag `vce_run` is waiting on.
+        let src = crate::periph::vce::IRQ_SRC;
+        if self.vce.irq_asserted() && !self.pending_irqs.contains(&src) {
             self.corectl.raise_source(src);
             self.pending_irqs.push_back(src);
         }
@@ -295,6 +307,13 @@ impl Machine {
         }
         if let Some(off) = hit(map::RNG_BASE, map::RNG_SIZE) {
             return Some((&mut self.rng, off));
+        }
+        // Both VCE windows address the one device; the control block keeps its
+        // aperture-relative offset (`0x4_0000`).
+        if hit(map::VCE_BASE, map::VCE_MEM_SIZE).is_some()
+            || hit(map::VCE_CTRL_BASE, map::VCE_CTRL_SIZE).is_some()
+        {
+            return Some((&mut self.vce, a - map::VCE_BASE));
         }
         if let Some(off) = hit(map::AVS_BASE, map::AVS_SIZE) {
             return Some((&mut self.avs, off));

@@ -365,3 +365,114 @@ fn bsc_transfer_active_spans_the_whole_transfer() {
     assert_eq!(s & S_ERR, 0, "the PMIC acknowledged its address");
     assert_eq!(m.load32(base + BSC_DLEN).unwrap(), 0, "all bytes sent");
 }
+
+/// The VCE launch handshake, as `vce_run_start` / `vce_run_complete` /
+/// `vce_clear_interrupt` drive it (`vcfw/drivers/chip/vciv/2708/vce.c`).
+///
+/// With the block unmapped, `STATUS` read back 0 forever and the boot stalled
+/// one step short of `arm_loader`, printing "VCE taking >1s to run".
+#[test]
+fn vce_launch_completes_and_raises_its_interrupt() {
+    use rpi_virt_fw::periph::vce;
+
+    let mut m = machine();
+    let ctrl = map::VCE_CTRL_BASE;
+
+    // Idle: no interrupt pending, and the two bits `vce_obtain_semaphore` in
+    // start4db asserts are clear must read clear.
+    assert_eq!(m.load32(ctrl + 0x00).unwrap(), 0);
+    assert!(!m.vce.irq_asserted());
+
+    // A launch the way `vce_run_start` does it for the codec licence check:
+    // flags 0xC0000000, so the endcode field is 0 and ENDCODE_ENABLE is not
+    // written at all.
+    m.store32(ctrl + 0x08, 0x1234).unwrap(); // start pc
+    m.store32(ctrl + 0x24, 0xFF).unwrap(); // INTCLR
+    m.store32(ctrl + 0x20, 1).unwrap(); // RUN
+
+    let status = m.load32(ctrl + 0x00).unwrap();
+    assert_eq!(
+        status >> 16 & 0x1F,
+        0,
+        "vce_run_complete requires the endcode it asked for"
+    );
+    assert_ne!(status & (1 << 31), 0, "completion must flag an interrupt");
+    assert_eq!(m.load32(ctrl + 0x30).unwrap(), 0, "BAD_ADDR must stay clear");
+    assert_eq!(m.load32(ctrl + 0x08).unwrap(), 0x1234, "PC0 reads back");
+    assert!(
+        m.vce.irq_asserted(),
+        "source {} has to be driven or the event flag is never set",
+        vce::IRQ_SRC
+    );
+
+    // `vce_clear_interrupt` writes bit 31 and then asserts it reads back clear.
+    m.store32(ctrl + 0x24, 0x8000_0000).unwrap();
+    assert_eq!(m.load32(ctrl + 0x00).unwrap() & (1 << 31), 0);
+    assert!(!m.vce.irq_asserted());
+    // The endcode survives the ack: `vce_run_complete` reads it afterwards.
+    assert_eq!(m.load32(ctrl + 0x00).unwrap() >> 16 & 0x1F, 0);
+}
+
+/// A launch that asks for a non-zero endcode has to get that endcode back, or
+/// `vce_run_complete` logs "unexpected endcode" and retries forever. The only
+/// record of what was asked for is `ENDCODE_ENABLE`, which `vce_run_start`
+/// writes as `(1 << endcode) | 0x20` — bit 5 being the clock-stall condition
+/// the interrupt handler services itself.
+#[test]
+fn vce_reports_the_endcode_the_launch_armed() {
+    let mut m = machine();
+    let ctrl = map::VCE_CTRL_BASE;
+
+    m.store32(ctrl + 0x24, 0xFF).unwrap();
+    m.store32(ctrl + 0x28, (1 << 3) | 0x20).unwrap();
+    m.store32(ctrl + 0x20, 1).unwrap();
+    assert_eq!(m.load32(ctrl + 0x00).unwrap() >> 16 & 0x1F, 3);
+
+    // The next launch does not re-arm the mask, so it means endcode 0 again —
+    // a stale mask must not leak into it.
+    m.store32(ctrl + 0x24, 0xFF).unwrap();
+    m.store32(ctrl + 0x20, 1).unwrap();
+    assert_eq!(m.load32(ctrl + 0x00).unwrap() >> 16 & 0x1F, 0);
+}
+
+/// The codec licence check reads its answer out of VCE register 2. The compute
+/// core is not emulated, so a completed run leaves the register file zeroed,
+/// which is "this key does not match": the reference Pi 4 has OTP rows 45 and 46
+/// blank and reports `MPG2=disabled` / `WVC1=disabled`. Before the run the
+/// register file is plain storage — `vce_launch_prerun` sets register 0 and
+/// asserts it reads back.
+#[test]
+fn vce_register_file_round_trips_but_a_run_consumes_it() {
+    let mut m = machine();
+    let regs = map::VCE_BASE + 0x2_0000;
+
+    m.store32(regs + 4 * 2, 0x137A_FEDA ^ 0x4D50_4732).unwrap();
+    assert_eq!(m.load32(regs + 4 * 2).unwrap(), 0x137A_FEDA ^ 0x4D50_4732);
+
+    m.store32(map::VCE_CTRL_BASE + 0x20, 1).unwrap();
+    assert_eq!(
+        m.load32(regs + 4 * 2).unwrap(),
+        0,
+        "getreg(2) == 0 is 'licence key does not match', which is the measured \
+         answer for a board with blank OTP rows 45/46"
+    );
+}
+
+/// Program and data memory are real storage: `vce_loadprogram` memcpys into
+/// `0x7F11_0000` and `vce_launch_complete` copies results back out of
+/// `0x7F10_0000`, a byte at a time when the host buffer is unaligned.
+#[test]
+fn vce_program_and_data_memory_are_writable() {
+    let mut m = machine();
+    m.store32(map::VCE_BASE + 0x1_0000, 0xDEAD_BEEF).unwrap();
+    assert_eq!(m.load32(map::VCE_BASE + 0x1_0000).unwrap(), 0xDEAD_BEEF);
+
+    m.store(map::VCE_BASE + 0x0104, Width::Byte, 0xA5).unwrap();
+    assert_eq!(
+        m.load(map::VCE_BASE + 0x0104, Width::Byte).unwrap(),
+        0xA5,
+        "data memory must take byte stores"
+    );
+    // Separate windows, not aliases of each other.
+    assert_eq!(m.load32(map::VCE_BASE + 0x0000).unwrap(), 0);
+}
