@@ -1021,7 +1021,7 @@ impl Emulator {
             // for the DMA sources (0x50..0x5F).
             // The vector entry carries a `0x0000` guard parcel that
             // `vector_irq` steps over, so the dispatcher is entered at +2.
-            if pc_before == 0x3EC3_E9BE && irqtbl_n < 4 {
+            if dbg_irqtbl && pc_before == 0x3EC3_E9BE && irqtbl_n < 4 {
                 irqtbl_n += 1;
                 let r29 = self.cpu.regs.get(29);
                 let blk = self.machine.load(r29 + 12, Width::Word).unwrap_or(0);
