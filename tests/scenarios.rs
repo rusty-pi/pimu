@@ -1,4 +1,12 @@
-//! Every scenario in `testdata/scenarios/` must reproduce its golden transcript.
+//! The scenario harness itself: every scenario in `testdata/scenarios/` must
+//! still reproduce its golden transcript.
+//!
+//! This is not much of a test of the *model* — the scenarios are hand-assembled
+//! payloads that touch a dozen instructions and one UART, and none of the
+//! firmware bugs this project has hit would show up here. What it does cover is
+//! the plumbing behind `rpi-virt-fw run-all`: scenario discovery, TOML loading,
+//! payload building, console capture and the golden diff. That plumbing has no
+//! other test and this one costs a millisecond, so it stays.
 //!
 //! Regenerate goldens after an intentional behaviour change with:
 //!   cargo run -- run-all --update
@@ -22,12 +30,12 @@ fn all_scenarios_match_golden() {
         let scn = harness::Scenario::load(&f).expect("load scenario");
         match harness::verify(&scn, false) {
             Ok(run) => {
-                assert!(
-                    run.report.bus_errors == 0,
-                    "{}: {} bus errors during run",
-                    scn.name,
-                    run.report.bus_errors
-                );
+                if run.report.bus_errors != 0 {
+                    failures.push(format!(
+                        "{}: {} bus errors during run",
+                        scn.name, run.report.bus_errors
+                    ));
+                }
             }
             Err(e) => failures.push(format!("{}:\n{e:#}", scn.name)),
         }
