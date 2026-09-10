@@ -98,6 +98,23 @@ want 'device tree relocation'              'Device tree loaded to'
 # switches (8d7c27a) and no callback may be null.
 must_not 'derailed into a nop-slide'       '\[derail\]'
 
+# Instructions the decoder does not implement are skipped rather than faulted,
+# which means the firmware silently does not do whatever they were for. Only
+# one routine still hits this: FUN_0edc9e20, five vector instructions (four
+# identical 48-bit, one 80-bit) called twice, so ten skips. Ghidra cannot
+# decode them either. Hold the line here — the goal is to implement them and
+# switch recon to faulting on an unknown instruction, at which point this
+# budget goes to zero and the wall clock becomes a fallback rather than the
+# primary stop condition.
+skipped="$(sed -n 's/^retired .*(skipped \([0-9]*\).*/\1/p' "$log" | tail -1)"
+if [ -z "$skipped" ]; then
+  echo "MISSING: could not read the skipped-instruction count from the report" >&2
+  fail=1
+elif [ "$skipped" -gt 10 ]; then
+  echo "COUNT: skipped instructions is $skipped, want <= 10  (unimplemented ISA)" >&2
+  fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then
   echo "boot check FAILED" >&2
   exit 1
