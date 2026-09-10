@@ -43,9 +43,10 @@ Working:
 - **CI** — `.github/workflows/boot-log.yml` runs the simulated boot on every
   push / PR to `main` and fails if it regresses before `arasan_emmc_open`.
 
-The boot needs no opt-in shims any more: `RVF_SCHED_TICK=1` (the real ThreadX
-periodic tick) is the only environment variable the reference run sets. It gets
-as far as loading the kernel, the device tree and the config overlays. The one
+The boot needs no opt-in shims or environment variables any more — the real
+ThreadX periodic tick (interrupt-enable bit plus vector-table entry 64) is now
+always modelled, the way the hardware behaves. It gets as far as loading the
+kernel, the device tree and the config overlays. The one
 piece of firmware behaviour still short-circuited in the emulator is the HDMI
 EDID block read, which is forced to report the error a monitor-less board's DDC
 bus would produce — the DDC I²C block at `0x7EF04500` is not modelled yet.
@@ -72,7 +73,7 @@ cargo run -- disasm firmware/start4.elf --base 0xcec00200 --count 40
 
 # Run the real boot chain: EEPROM bootloader + start4.elf off an SD image.
 ./scripts/make-sd.sh                            # build firmware/sd.img
-RVF_SCHED_TICK=1 cargo run --release -- recon firmware/pieeprom.bin \
+cargo run --release -- recon firmware/pieeprom.bin \
   --eeprom --sd firmware/sd.img
 ```
 

@@ -133,7 +133,6 @@ impl Emulator {
         c1.trace_cf_only = self.cpu.trace_cf_only;
         c1.trace_cap = self.cpu.trace_cap;
         c1.trace_from = self.cpu.trace_from;
-        c1.irq_model = self.cpu.irq_model;
         self.cpu1 = Some(c1);
     }
 
@@ -148,7 +147,6 @@ impl Emulator {
         c1.trace_cf_only = self.cpu.trace_cf_only;
         c1.trace_cap = self.cpu.trace_cap;
         c1.trace_from = self.cpu.trace_from;
-        c1.irq_model = self.cpu.irq_model;
         self.cpu1 = Some(c1);
     }
 
@@ -515,7 +513,7 @@ impl Emulator {
             // stay stuck above 0 after the tick ISR preempts into such a thread.
             // Rebalance it here: reaching this point means we are back in thread
             // context.
-            if self.cpu.irq_model && pc_before == 0x3EC4_003E {
+            if pc_before == 0x3EC4_003E {
                 self.cpu.in_exception = 0;
             }
 
@@ -987,7 +985,7 @@ impl Emulator {
             // grows without bound and the record index walks off into garbage
             // after a few interrupts. Undo one increment each time an `rti`
             // unwinds a faked interrupt.
-            if self.cpu.irq_model && self.cpu.in_exception < exc_depth_before {
+            if self.cpu.in_exception < exc_depth_before {
                 const IRQ_NEST: u32 = 0x3EE0_3E64; // gp + 4420
                 if let Ok(n) = self.machine.load(IRQ_NEST, Width::Word) {
                     if n > 0 && n != 0xFFFF_FFFF {
@@ -1042,36 +1040,30 @@ impl Emulator {
             // timer (source 66) and for ThreadX's inter-core reschedule IPI
             // (source 78 on core 0, 79 on core 1). Nothing modelled these, so
             // every software-posted interrupt was silently dropped.
-            if self.cpu.irq_model {
-                while let Some((core, src)) = self.machine.corectl.take_sw_raised() {
-                    if dbg_swirq {
-                        eprintln!(
-                            "[sw-irq] core {core} src {src} pc={:#x} retired={}",
-                            self.cpu.pc(),
-                            self.cpu.retired
-                        );
-                    }
-                    if core == 0 {
-                        // The generic dispatcher re-reads the source from
-                        // CoreCtl `+0x04`, so present it there as well as
-                        // queueing the vectoring.
-                        self.machine.corectl.raise_source(src);
-                        self.machine.push_pending_irq(src);
-                    } else if let Some(c1) = self.cpu1.as_mut() {
-                        if c1.exc_vbase != 0 {
-                            c1.vector_irq(&mut self.machine, src);
-                        }
+            while let Some((core, src)) = self.machine.corectl.take_sw_raised() {
+                if dbg_swirq {
+                    eprintln!(
+                        "[sw-irq] core {core} src {src} pc={:#x} retired={}",
+                        self.cpu.pc(),
+                        self.cpu.retired
+                    );
+                }
+                if core == 0 {
+                    // The generic dispatcher re-reads the source from
+                    // CoreCtl `+0x04`, so present it there as well as
+                    // queueing the vectoring.
+                    self.machine.corectl.raise_source(src);
+                    self.machine.push_pending_irq(src);
+                } else if let Some(c1) = self.cpu1.as_mut() {
+                    if c1.exc_vbase != 0 {
+                        c1.vector_irq(&mut self.machine, src);
                     }
                 }
             }
 
             // A device-raised interrupt (DMA completion) takes the same
             // vectoring path as the tick, but is not gated on a compare match.
-            if self.cpu.irq_model
-                && self.cpu.in_exception == 0
-                && self.cpu.irq_enabled()
-                && self.cpu.exc_vbase != 0
-            {
+            if self.cpu.in_exception == 0 && self.cpu.irq_enabled() && self.cpu.exc_vbase != 0 {
                 if let Some(src) = self.machine.take_pending_irq() {
                     if dbg_tick {
                         eprintln!(
@@ -1086,7 +1078,6 @@ impl Emulator {
             let tick_due = self.machine.systimer.tick_pending();
             if dbg_tick
                 && tick_due
-                && self.cpu.irq_model
                 && self.cpu.exc_vbase != 0
                 && (self.cpu.in_exception != 0 || !self.cpu.irq_enabled())
             {
@@ -1101,8 +1092,7 @@ impl Emulator {
                     );
                 }
             }
-            if self.cpu.irq_model
-                && tick_due
+            if tick_due
                 && self.cpu.in_exception == 0
                 && self.cpu.irq_enabled()
                 && self.cpu.exc_vbase != 0
@@ -1154,7 +1144,6 @@ impl Emulator {
             // unwound back to thread context, vector the pending slot-3 SW IRQ.
             if defer_slot3
                 && slot3_pending
-                && self.cpu.irq_model
                 && self.cpu.in_exception == 0
                 && self.cpu.irq_enabled()
                 && self.cpu.exc_vbase != 0

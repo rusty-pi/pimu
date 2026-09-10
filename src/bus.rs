@@ -102,19 +102,11 @@ pub trait Bus {
         self.store(addr, Width::Word, v)
     }
 
-    /// Model of `sleep` = "wait for the next interrupt". Advances time to the
-    /// earliest armed timer compare, fires it, and — if the firmware has enabled
-    /// the matching interrupt source — returns the vector-table slot to dispatch
-    /// through. `None` means nothing is pending and `sleep` is just a nop.
-    fn timer_wake(&mut self) -> Option<u32> {
-        None
-    }
-
     /// The interrupt vector-table slot for the periodic ThreadX tick source, if
-    /// the firmware has enabled it. Unlike [`Self::timer_wake`] this does not
-    /// touch the timer — the run loop calls it when a compare deadline has been
-    /// crossed to deliver a genuine periodic tick (real hardware's preemption
-    /// point). `None` = the tick source is not enabled yet.
+    /// the firmware has enabled it. This does not touch the timer — the run
+    /// loop calls it when a compare deadline has been crossed to deliver a
+    /// genuine periodic tick (real hardware's preemption point). `None` = the
+    /// tick source is not enabled yet.
     fn timer_tick_slot(&mut self) -> Option<u32> {
         None
     }

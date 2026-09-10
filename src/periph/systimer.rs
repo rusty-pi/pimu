@@ -1,8 +1,9 @@
 //! BCM2711 system timer: a 64-bit free-running microsecond counter with four
 //! compare channels. `start4.elf`'s ThreadX port arms one of them (`C0`) as its
 //! periodic tick and enables the matching VPU interrupt source; the run loop
-//! delivers that interrupt on `sleep` so the RTOS scheduler actually advances
-//! timed waits (see [`crate::machine::Machine::timer_wake`]).
+//! delivers that interrupt whenever a compare comes due — and on `sleep`, where
+//! the idle loop parks with interrupts masked — so the RTOS scheduler actually
+//! advances timed waits (see [`crate::bus::Bus::timer_tick_slot`]).
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
