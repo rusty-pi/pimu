@@ -7,12 +7,10 @@
 //! measurement ready" / "has the PLL locked" poll spins forever.
 //!
 //! We do not model the analogue PLLs or the frequency counters — we store
-//! writes (stripping the `0x5A` password byte for read-back) and force the
-//! handful of status bits the firmware actually waits on:
+//! writes (stripping the `0x5A` password byte for read-back).
 //!
-//! - `0x2200` (+ its 16-byte neighbourhood): the oscillator-count monitor
-//!   `measure_clock` (`0x3ED7C8DA`) polls — bit 10 ("measurement valid") set,
-//!   count field `[9:0]` zero.
+//! The AVS monitor at `0x7D5D_2000` sits inside this window and is decoded
+//! ahead of it; see [`crate::periph::avs`].
 
 use std::collections::BTreeMap;
 
@@ -22,13 +20,6 @@ pub const BASE: u32 = 0x7D5D_0000;
 pub const SIZE: u32 = 0x0001_0000;
 
 const PASSWD: u32 = 0x5A00_0000;
-
-/// Oscillator-count monitor: bit 10 = measurement valid, bit 4 = settled,
-/// `[9:0]` = count. `0x3ED603E2` polls for bits 10 **and** 4 (≤10 retries)
-/// before it trusts the count; `measure_clock` (`0x3ED7C8DA`) only checks
-/// bit 10.
-const FREQ_MON: u32 = 0x2200;
-const FREQ_MON_READY: u32 = (1 << 10) | (1 << 4);
 
 #[derive(Default)]
 pub struct ClkMon {
@@ -48,9 +39,6 @@ impl MmioDevice for ClkMon {
 
     fn read(&mut self, offset: u32, _width: Width) -> BusResult<u32> {
         let off = offset & !3;
-        if off & !0xF == FREQ_MON {
-            return Ok(FREQ_MON_READY);
-        }
         Ok(self.storage.get(&off).copied().unwrap_or(0) & !PASSWD)
     }
 
