@@ -21,10 +21,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # `--lib --bins --tests` rather than a plain `cargo test`:
-      # examples/dtblob_dump.rs does not compile (pre-existing).
       - name: Test
-        run: cargo test --lib --bins --tests
+        run: cargo test
 
   boot:
     runs-on: ubuntu-latest

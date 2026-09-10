@@ -64,7 +64,7 @@ longer-term direction (single `boot` command, disk-image mode, QEMU hand-off).
 ## Quick start
 
 ```bash
-cargo test --lib --bins --tests   # unit + ISA + peripheral + scenario tests
+cargo test                        # unit + ISA + peripheral + scenario tests
 cargo run -- run-all -v           # run every scenario, show transcripts
 cargo run -- run testdata/scenarios/hello-vpu.toml -v
 
