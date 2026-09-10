@@ -8,6 +8,24 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Fast lane: the decoder, peripheral and address-decode tests. No firmware
+  # blobs, no boot — if one of these fails the boot check below is noise.
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # `--lib --bins --tests` rather than a plain `cargo test`:
+      # examples/dtblob_dump.rs does not compile (pre-existing).
+      - name: Test
+        run: cargo test --lib --bins --tests
+
   boot:
     runs-on: ubuntu-latest
     timeout-minutes: 15
