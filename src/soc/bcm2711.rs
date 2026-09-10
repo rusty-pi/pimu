@@ -22,7 +22,7 @@ pub const MCSYNC_SIZE: u32 = 0x1000;
 /// VPU core-control block (`0x7E00_2000`): per-core start vectors and run-state.
 /// `start4.elf` releases VPU core 1 through here.
 pub const CORECTL_BASE: u32 = 0x7E00_2000;
-pub const CORECTL_SIZE: u32 = 0x100;
+pub const CORECTL_SIZE: u32 = 0x1000;
 
 /// DMA4 ("dma40") channel the main bootloader uses to scrub / move DRAM.
 pub const DMA4_BASE: u32 = 0x7E00_7B00;
