@@ -15,10 +15,32 @@
 //! which we just absorb. Anything we don't recognise keeps the old "always
 //! ready" status bits so unrelated pollers still make progress.
 //!
-//! We do not model real OTP fuses — [`ConfigOtp::table`] is a small map from
-//! key to value, seeded with a plausible Raspberry Pi 4 Model B identity. The
-//! values only need to be self-consistent across firmware versions for the
-//! `rpi-machine-id` regression to be meaningful.
+//! The key written to `+0x1C` is the **OTP row number**, so [`ConfigOtp::table`]
+//! is the fuse array itself: row -> value. It is not a full dump of a real
+//! board's fuses and must never become one — OTP holds device-unique and secret
+//! material (see `CLAUDE.md`). Only rows whose contents the boot actually
+//! depends on are modelled; every other row reads back 0.
+//!
+//! Which rows those are is not a matter of taste. `arm_loader` will not start
+//! the ARM until `FUN_0EC78F70` says the board is genuine, and that check reads
+//! **rows 19..26** as two four-word blocks and compares them against an
+//! obfuscated per-board-family constant in `.text` — first the block on its own,
+//! then the other block, then the two OR-ed together. With those rows reading
+//! back 0 no comparison can match, the check fails, and start4 blinks LED error
+//! code 4-4 ("unsupported board type") in a loop for the rest of the boot
+//! instead of reaching `arm_loader`.
+//!
+//! `vcgencmd otp_dump` is no help in seeding them: from Linux those rows read
+//! back `0xFFFF_FFFF`, which cannot be their fused value because the firmware
+//! would reject it — the VPU locks the block before handing over, so what
+//! userspace sees is a redaction, not the contents. The value that does satisfy
+//! the check is [`BOARD_IDENTITY`], taken from start4's own board-type table.
+//!
+//! The board serial (row 28, and its complement in row 29) is deliberately
+//! **not** a real board's — it is an arbitrary fixed value, so nothing here
+//! carries the identity of a specific piece of hardware. It only has to stay
+//! stable across firmware versions for the `rpi-machine-id` regression to mean
+//! something.
 
 use std::collections::BTreeMap;
 
@@ -37,6 +59,21 @@ const DONE: u32 = 1 << 1;
 
 /// Status bits unrelated firmware paths poll for on this block.
 const READY: u32 = (1 << 17) | (1 << 18) | (1 << 7);
+
+/// The board-identity block in OTP rows 19..22 (and again in 23..26).
+///
+/// `FUN_0EC78F70`, the check `arm_loader` gates the ARM launch on, compares
+/// those rows against a per-board-family constant obfuscated with
+/// `^ 0xB0BE_5AD5` in start4's `.text`. It picks the constant by board type —
+/// `0x3EDE_DB18` for type 17, Pi 4 Model B, which is what OTP row 30's revision
+/// code says this machine is — so these four words are the value a genuine
+/// Pi 4 Model B must have fused. They come out of the firmware image itself,
+/// not off any particular board, and identify the model rather than the unit.
+///
+/// The firmware accepts the value in either four-row block, or spread across
+/// both and OR-ed together (the redundancy real fuses need); storing it whole in
+/// both blocks satisfies every one of those comparisons.
+const BOARD_IDENTITY: [u32; 4] = [0x8AA9_6D38, 0x9111_243F, 0x38E4_E488, 0x8E02_2082];
 
 pub struct ConfigOtp {
     storage: BTreeMap<u32, u32>,
@@ -75,8 +112,17 @@ impl ConfigOtp {
         // modelled board behaves like the reference one. Filling the documented
         // control rows with a pattern is not harmless: `0xFA1E_0010` in row 16
         // sets bit 26 and the boot flips to "VC-JTAG locked".
-        for row in (0..=5).chain(19..=27) {
+        for row in (0..=5).chain(std::iter::once(27)) {
             table.insert(row, 0xFA1E_0000 | row);
+        }
+        // 19-26: the board-identity block `arm_loader` verifies (see the module
+        // docs). Unlike its neighbours this one cannot be invented — the value
+        // is the Pi 4 Model B family constant start4 itself carries, so it
+        // identifies the model, not the unit. Stored in both four-row blocks so
+        // all three of the firmware's comparisons agree.
+        for (i, word) in BOARD_IDENTITY.iter().enumerate() {
+            table.insert(19 + i as u32, *word);
+            table.insert(23 + i as u32, *word);
         }
         // 16: OTP control. Bits 26 and 27 disable VC JTAG; both stay clear so
         // the boot reports "VC-JTAG unlocked" as the reference log does.
