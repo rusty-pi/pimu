@@ -55,10 +55,28 @@
 //! (`RVF_DBG_IRQTBL`: `src 94 handler=0x3ec58302`), not guessed, and the boot
 //! does enable that source.
 //!
-//! So a request only reaches the `mbox_read` task if all three parts line up:
-//! the word queued on the FIFO, bit 2 set in the pending word, and source 94
-//! raised. Faking the wake without the pending bit would leave the firmware's
-//! own bookkeeping (`gp+243084` / `gp+243088`) out of step with the hardware.
+//! The callbacks are not the wake, though. The tail of the ISR is:
+//!
+//! ```text
+//!   Load  r8, [0x7E00B9BC]   ; MAIL1 config
+//!   Btest r8, #6             ;   -> [gp+243088] = 0, release gp+243080
+//!   Btest r8, #4             ;   -> [gp+243084] = 0, release gp+243076
+//!   Store [0x7E00B9BC], [gp+243084] | [gp+243088]   ; re-arm what is left
+//! ```
+//!
+//! `gp+243076` is the object the receive op acquires, so **bit 4 of the config
+//! word is what releases the `mbox_read` task**, and bit 6 (the opposite
+//! mailbox going empty) is what releases a sender waiting for room. Those bits
+//! are read-only interrupt-pending flags, and modelling the config word as
+//! nothing but the enables the firmware wrote is exactly what left the ISR
+//! spinning with nothing to do: it ran on every step, found `0x1`, wrote `0x1`
+//! back, and never touched the lock.
+//!
+//! So a request only reaches the `mbox_read` task if all four parts line up:
+//! the word queued on the FIFO, bit 2 set in the pending word, source 94
+//! raised, and bit 4 set in the config word. Faking the wake instead would
+//! leave the firmware's own bookkeeping (`gp+243084` / `gp+243088`) out of step
+//! with the hardware.
 //!
 //! A message is `(address & !0xF) | channel`: the low nibble is the channel and
 //! the rest is the **bus address** of the request buffer. Channel 8 is the
@@ -118,6 +136,23 @@ const STATUS_FULL: u32 = 1 << 31;
 /// `STATUS` bit 30: this mailbox has nothing queued.
 const STATUS_EMPTY: u32 = 1 << 30;
 
+/// `CONFIG` bit 0: raise the interrupt while this mailbox has data.
+const CFG_EN_HAVE_DATA: u32 = 1 << 0;
+/// `CONFIG` bit 1: raise it while this mailbox has room for another word.
+const CFG_EN_HAVE_SPACE: u32 = 1 << 1;
+/// `CONFIG` bit 2: raise it while the *opposite* mailbox is empty — how the
+/// send op waits for the far side to take a reply.
+const CFG_EN_OPP_EMPTY: u32 = 1 << 2;
+/// `CONFIG` bit 3: flush this mailbox's FIFO. Write-only, does not latch.
+const CFG_CLEAR: u32 = 1 << 3;
+/// `CONFIG` bits 0..2, the part that latches.
+const CFG_ENABLES: u32 = CFG_EN_HAVE_DATA | CFG_EN_HAVE_SPACE | CFG_EN_OPP_EMPTY;
+/// `CONFIG` bits 4..6: the interrupt-pending flag for each enable above.
+const CFG_PEND_HAVE_DATA: u32 = 1 << 4;
+const CFG_PEND_HAVE_SPACE: u32 = 1 << 5;
+const CFG_PEND_OPP_EMPTY: u32 = 1 << 6;
+const CFG_PENDING: u32 = CFG_PEND_HAVE_DATA | CFG_PEND_HAVE_SPACE | CFG_PEND_OPP_EMPTY;
+
 /// Hardware FIFOs are 8 deep.
 const DEPTH: usize = 8;
 
@@ -176,15 +211,57 @@ impl Mbox {
         self.to_arm.pop_front()
     }
 
+    /// MAIL1's `CONFIG` word as the firmware reads it (`0x7E00_B9BC`) — the
+    /// enables it wrote plus the pending flags we compute. Reported by
+    /// `--mbox-property` because a zero here means the driver has not armed
+    /// the mailbox at all and nothing we queue can raise [`IRQ_SRC`].
+    pub fn interrupt_armed(&self) -> u32 {
+        self.config1_word()
+    }
+
     /// True while the firmware has not drained the request we posted.
     pub fn request_outstanding(&self) -> bool {
         !self.to_vpu.is_empty()
     }
 
-    /// True while a request is queued for the firmware and it has armed the
-    /// interrupt. The run loop turns this into source [`IRQ_SRC`].
+    /// True while either mailbox has a condition pending that the driver
+    /// enabled. The run loop turns this into source [`IRQ_SRC`].
     pub fn irq_asserted(&self) -> bool {
-        !self.to_vpu.is_empty() && self.config1 != 0
+        (self.config0_word() | self.config1_word()) & CFG_PENDING != 0
+    }
+
+    /// The interrupt-pending bits of one mailbox's `CONFIG`, from `enables`,
+    /// the mailbox's own FIFO and the opposite one.
+    ///
+    /// They are the *interrupt* pending flags, not the raw conditions: each is
+    /// its condition AND its own enable. That distinction is the whole wake
+    /// path. `0x3EC58302` reads this word back and releases a waiter only for
+    /// the bits it finds set — bit 4 releases the receive lock `gp+243076`,
+    /// bit 6 the send lock `gp+243080` — so a `CONFIG` that answers with the
+    /// enables alone leaves the ISR with nothing to do and the `mbox_read`
+    /// task parked forever. Raw conditions would be just as wrong the other
+    /// way: "the opposite mailbox is empty" is true almost always, and the ISR
+    /// would release the send lock on every unrelated interrupt.
+    fn pending_bits(enables: u32, own: &VecDeque<u32>, opp: &VecDeque<u32>) -> u32 {
+        let mut p = 0;
+        if enables & CFG_EN_HAVE_DATA != 0 && !own.is_empty() {
+            p |= CFG_PEND_HAVE_DATA;
+        }
+        if enables & CFG_EN_HAVE_SPACE != 0 && own.len() < DEPTH {
+            p |= CFG_PEND_HAVE_SPACE;
+        }
+        if enables & CFG_EN_OPP_EMPTY != 0 && opp.is_empty() {
+            p |= CFG_PEND_OPP_EMPTY;
+        }
+        p
+    }
+
+    fn config0_word(&self) -> u32 {
+        self.config0 | Mbox::pending_bits(self.config0, &self.to_arm, &self.to_vpu)
+    }
+
+    fn config1_word(&self) -> u32 {
+        self.config1 | Mbox::pending_bits(self.config1, &self.to_vpu, &self.to_arm)
     }
 
     fn status(q: &VecDeque<u32>) -> u32 {
@@ -227,7 +304,7 @@ impl MmioDevice for Mbox {
             PEEK0 => self.to_arm.front().copied().unwrap_or(0),
             STATUS0 => Mbox::status(&self.to_arm),
             SENDER0 => self.sender0,
-            CONFIG0 => self.config0,
+            CONFIG0 => self.config0_word(),
             // `+0x20` / `+0x38`: the ARM->VPU FIFO. The VPU drains it here —
             // this is the read the `mbox_read` task's receive op makes.
             DATA1 if vpu => {
@@ -243,7 +320,7 @@ impl MmioDevice for Mbox {
             PEEK1 => self.to_vpu.front().copied().unwrap_or(0),
             STATUS1 => Mbox::status(&self.to_vpu),
             SENDER1 => self.sender1,
-            CONFIG1 => self.config1,
+            CONFIG1 => self.config1_word(),
             _ => 0,
         })
     }
@@ -274,9 +351,23 @@ impl MmioDevice for Mbox {
                 self.post_from_arm(value);
             }
             SENDER0 => self.sender0 = value,
-            CONFIG0 => self.config0 = value,
+            // Bit 3 flushes the FIFO and does not latch; bits 4..6 are the
+            // pending flags, which are ours to compute. Only the enables stay.
+            // The driver's init writes `8` and then `1` to `CONFIG1` — clear,
+            // then arm.
+            CONFIG0 => {
+                if value & CFG_CLEAR != 0 {
+                    self.to_arm.clear();
+                }
+                self.config0 = value & CFG_ENABLES;
+            }
             SENDER1 => self.sender1 = value,
-            CONFIG1 => self.config1 = value,
+            CONFIG1 => {
+                if value & CFG_CLEAR != 0 {
+                    self.to_vpu.clear();
+                }
+                self.config1 = value & CFG_ENABLES;
+            }
             // Status bits are computed from the queues, so a write to one is an
             // acknowledge of something that does not latch.
             _ => {}
@@ -317,6 +408,67 @@ mod tests {
         assert_eq!(m.take_reply(), Some(0xC000_1008));
         assert_eq!(m.take_reply(), None);
         assert_eq!(m.writes, 1);
+    }
+
+    #[test]
+    fn the_config_word_carries_the_pending_bit_the_isr_releases_on() {
+        let vpu = VPU_BASE - ARM_BASE;
+        let mut m = Mbox::default();
+        // The driver's init: flush, then arm "MAIL1 has data".
+        m.write(vpu + CONFIG1, Width::Word, CFG_CLEAR).unwrap();
+        m.write(vpu + CONFIG1, Width::Word, CFG_EN_HAVE_DATA)
+            .unwrap();
+        // Armed but idle: no pending bit, no line.
+        assert_eq!(
+            m.read(vpu + CONFIG1, Width::Word).unwrap(),
+            CFG_EN_HAVE_DATA
+        );
+        assert!(!m.irq_asserted());
+
+        assert!(m.post_from_arm(0xC000_1000 | CHANNEL_PROPERTY));
+        assert_eq!(
+            m.read(vpu + CONFIG1, Width::Word).unwrap(),
+            CFG_EN_HAVE_DATA | CFG_PEND_HAVE_DATA
+        );
+        assert!(m.irq_asserted());
+        let pend1 = (PEND_BASE - ARM_BASE) + PEND_MBOX1;
+        assert_eq!(m.read(pend1, Width::Word).unwrap(), PEND_BIT);
+
+        // What `0x3EC58302` does with that: clear the enable it just served.
+        m.write(vpu + CONFIG1, Width::Word, 0).unwrap();
+        assert!(!m.irq_asserted());
+        // The request is still there for the woken task to take.
+        assert_eq!(m.read(vpu + DATA1, Width::Word).unwrap(), 0xC000_1008);
+    }
+
+    #[test]
+    fn opp_empty_only_pends_once_the_sender_asks_for_it() {
+        let vpu = VPU_BASE - ARM_BASE;
+        let mut m = Mbox::default();
+        // MAIL0 is empty, but nobody is waiting on it: no pending bit.
+        m.write(vpu + CONFIG1, Width::Word, CFG_EN_HAVE_DATA)
+            .unwrap();
+        assert_eq!(
+            m.read(vpu + CONFIG1, Width::Word).unwrap() & CFG_PEND_OPP_EMPTY,
+            0
+        );
+        // The send op arms bit 2 when it finds MAIL0 full.
+        m.write(vpu + CONFIG1, Width::Word, CFG_EN_OPP_EMPTY)
+            .unwrap();
+        assert_eq!(
+            m.read(vpu + CONFIG1, Width::Word).unwrap(),
+            CFG_EN_OPP_EMPTY | CFG_PEND_OPP_EMPTY
+        );
+    }
+
+    #[test]
+    fn config_bit_three_flushes_the_fifo_and_does_not_latch() {
+        let vpu = VPU_BASE - ARM_BASE;
+        let mut m = Mbox::default();
+        assert!(m.post_from_arm(CHANNEL_PROPERTY));
+        m.write(vpu + CONFIG1, Width::Word, CFG_CLEAR).unwrap();
+        assert!(!m.request_outstanding());
+        assert_eq!(m.read(vpu + CONFIG1, Width::Word).unwrap(), 0);
     }
 
     #[test]
