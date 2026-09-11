@@ -67,22 +67,22 @@ pub struct DiagConfig {
     // Profiling.
     /// Bucket the core-0 PC and dump the hottest slots on exit.
     pub prof: bool,
-    /// The same, attributed per ThreadX thread.
-    pub prof_thread: bool,
+    /// The same, attributed per ThreadX thread — set to the address of the
+    /// firmware's current-thread pointer (`_tx_thread_current_ptr`), since
+    /// only the firmware knows where that lives. `RVF_DBG_IRQTBL` prints `gp`,
+    /// and the pointer is findable from a `RVF_TRACE_ON_PC` trace of a context
+    /// switch.
+    pub prof_thread: Option<u32>,
     /// Print progress every N instructions.
     pub heartbeat: u64,
 
     // Subsystem logs.
     pub dbg_tick: bool,
     pub dbg_swirq: bool,
+    /// Dump the firmware's per-source interrupt handler table at exit. Derived
+    /// from `gp`, so it survives a firmware whose layout moved.
     pub dbg_irqtbl: bool,
-    pub dbg_mainsus: bool,
-    pub dbg_resume: bool,
-    pub dbg_evget: bool,
-    pub dbg_evset: bool,
     pub dbg_ff: bool,
-    /// confzilla / dt-blob schema matching, at this verbosity.
-    pub cz_log: Option<u32>,
 }
 
 impl DiagConfig {
@@ -111,18 +111,13 @@ impl DiagConfig {
             trap_max: num("RVF_TRAP_MAX").unwrap_or(40),
 
             prof: flag("RVF_PROF"),
-            prof_thread: flag("RVF_PROF_THREAD"),
+            prof_thread: hex("RVF_PROF_THREAD"),
             heartbeat: num("RVF_HEARTBEAT").unwrap_or(0),
 
             dbg_tick: flag("RVF_DBG_TICK"),
             dbg_swirq: flag("RVF_DBG_SWIRQ"),
             dbg_irqtbl: flag("RVF_DBG_IRQTBL"),
-            dbg_mainsus: flag("RVF_DBG_MAINSUS"),
-            dbg_resume: flag("RVF_DBG_RESUME"),
-            dbg_evget: flag("RVF_DBG_EVGET"),
-            dbg_evset: flag("RVF_DBG_EVSET"),
             dbg_ff: flag("RVF_DBG_FF"),
-            cz_log: num("RVF_CZ_LOG"),
         }
     }
 }

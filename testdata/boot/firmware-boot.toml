@@ -241,7 +241,16 @@ still matches but the machine id does not, the *derivation* moved."""
 line = ["/chosen/rpi-serial64 ", "\"fa1e00231aa2bb31\""]
 
 [[milestone]]
-why = "The other half of the pair: the machine id itself (#5, rpi-mkosi#37)."
+why = """
+The other half of the pair: the machine id itself (#5, rpi-mkosi#37).
+
+Fixed inputs, fixed expected output — the OTP rows in
+`src/periph/configotp.rs` are invented and pinned, so this string is what this
+firmware must publish, full stop. Deliberately *not* checked by recomputing
+the derivation the way the firmware does: that reads from the same fuses, so
+changing them would move the published id and still agree with itself, masking
+exactly the event this exists to catch. `src/identity.rs` reproduces the
+algorithm for diagnosis only, and nothing asserts against it."""
 line = ["/chosen/rpi-machine-id ", "\"2928640898f6b5035da98885da0ac498\""]
 
 [[milestone]]
@@ -254,22 +263,6 @@ console belongs to Linux by then and only the firmware's internal message ring
 has it — so the check is on the controller state instead (`src/periph/sdc.rs`
 models the mode-register port at `0x7E00_109C`)."""
 line = "refresh interval 658 -> 1562 -> 3124"
-
-[[milestone]]
-why = """
-And the derivation itself, not just its output (#22). The EEPROM bootloader —
-not `start4` — computes the identity as `SHA-256(otp[28] | otp[35] | otp[30] |
-otp[64] | otp[65])` truncated to 16 bytes, each row a little-endian word, and
-stages it at `BVER + 0x8c` for `start4` to hex-encode. `src/identity.rs`
-recomputes it from the modelled fuses, so this line distinguishes "the fuses
-changed" from "the algorithm changed" — the latter is what would silently move
-a deployed card's root-LUKS passphrase (rpi-mkosi#37)."""
-line = "matches the value the firmware published"
-
-[[milestone]]
-why = "The derivation stopped being predictable — see the milestone above (#22)."
-line = "MISMATCH: the EEPROM bootloader"
-absent = true
 
 [[milestone]]
 why = """

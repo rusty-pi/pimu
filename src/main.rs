@@ -1166,11 +1166,10 @@ fn report_machine_id_derivation(machine: &Machine, fdt: &rpi_virt_fw::fdt::Fdt) 
     println!("\n--- rpi-machine-id derivation (#22) ---");
     println!("  SHA-256({})[..16]", inputs.join(" | "));
     if expected == published {
-        println!("  {expected}  matches the value the firmware published");
+        println!("  {expected}  (same as published)");
     } else {
         println!("  predicted {expected}");
         println!("  published {published}");
-        println!("  MISMATCH: the EEPROM bootloader's derivation moved");
     }
 }
 

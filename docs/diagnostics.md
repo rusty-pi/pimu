@@ -71,7 +71,7 @@ it with `SIGPIPE`.
 | Variable | Effect |
 |---|---|
 | `RVF_PROF=1` | Bucket the core-0 PC into 256-byte slots and dump the hottest on exit. Finds the loop a stalled boot is spinning in. |
-| `RVF_PROF_THREAD=1` | The same, attributed per ThreadX thread. |
+| `RVF_PROF_THREAD=<hex>` | The same, attributed per ThreadX thread. Takes the address of the firmware's current-thread pointer (`_tx_thread_current_ptr`) — only the firmware knows where that lives, so it is a parameter rather than a constant baked into the model. |
 | `RVF_HEARTBEAT=<n>` | Print progress every `n` instructions, for runs that look hung. |
 
 ## Subsystem logs
@@ -85,8 +85,6 @@ All of these are `=1`.
 | `RVF_DBG_IRQEN` / `RVF_DBG_IRQTBL` | Interrupt enables; the firmware's interrupt table. |
 | `RVF_DBG_SWIRQ` | Software-posted interrupts via CoreCtl. |
 | `RVF_DBG_TCB` | ThreadX thread control blocks — who is suspended and on what. |
-| `RVF_DBG_RESUME` / `RVF_DBG_MAINSUS` | Thread resumes; every suspend of the main boot thread. |
-| `RVF_DBG_EVGET` / `RVF_DBG_EVSET` / `RVF_DBG_FF` | ThreadX event-flags gets, sets, and the flag words. |
 | `RVF_DBG_SLEEP` | `sleep` instructions and what woke the core. |
 | `RVF_DBG_CMP` | Every system-timer compare arm. |
 | `RVF_DBG_DMA` | Every DMA4 control block executed. |
@@ -96,7 +94,6 @@ All of these are `=1`.
 | `RVF_DBG_OTP` | Every OTP row the firmware reads, and what it got. |
 | `RVF_DBG_XHCI` | xHCI rings, TRBs and port state. |
 | `RVF_DBG_MBOX` | Every word across the ARM↔VideoCore property mailbox, both directions. |
-| `RVF_CZ_LOG=<n>` | confzilla / dt-blob schema matching, at verbosity `n`. |
 
 ## Output and fixtures
 

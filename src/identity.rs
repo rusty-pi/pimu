@@ -46,6 +46,24 @@
 //! `recon` run can say whether the value the firmware published is still the one
 //! the algorithm predicts, instead of only noticing after the fact that it
 //! moved.
+//! # This is a diagnostic, not an assertion
+//!
+//! Nothing regresses against this reimplementation, and nothing should. The
+//! guard that matters is the **pinned output**: given the fixed OTP rows in
+//! `src/periph/configotp.rs`, `/chosen/rpi-machine-id` must be exactly
+//! `2928640898f6b5035da98885da0ac498`, which `testdata/boot/firmware-boot.toml`
+//! asserts directly against the transcript.
+//!
+//! Checking "our recomputation agrees with the firmware" instead would be
+//! circular, and worse than useless: it recomputes from the *same* fuses, so a
+//! change to those fuses moves the published id and the check still passes —
+//! masking exactly the event the bench exists to catch (rpi-mkosi#37). A
+//! firmware that changed its algorithm would fail this file's tests rather than
+//! the boot, which is the wrong place to find out.
+//!
+//! What it is for: when the pinned value does fail, this says *why* — which
+//! inputs went in and what they hash to — so "the fuses changed" is
+//! distinguishable from "the algorithm changed" by reading the report.
 
 /// The OTP rows the derivation consumes, in the order the bootloader feeds them
 /// to SHA-256.
