@@ -182,7 +182,8 @@ mod tests {
         let mut pm = Pm::new();
         pm.advance(1_000);
         pm.write(WDOG, Width::Word, PASSWD | 10).unwrap();
-        pm.write(RSTC, Width::Word, PASSWD | RSTC_WRCFG_FULL_RESET).unwrap();
+        pm.write(RSTC, Width::Word, PASSWD | RSTC_WRCFG_FULL_RESET)
+            .unwrap();
         assert!(pm.watchdog_running());
         assert!(!pm.take_reset());
         // 10 ticks at 65536 Hz is 153 µs.
@@ -201,7 +202,10 @@ mod tests {
         let mut pm = Pm::new();
         pm.write(WDOG, Width::Word, PASSWD | 0xF_FFFF).unwrap();
         pm.write(RSTC, Width::Word, PASSWD | 0x3222).unwrap();
-        assert_eq!(pm.read(RSTC, Width::Word).unwrap() & RSTC_WRCFG_FULL_RESET, 0x20);
+        assert_eq!(
+            pm.read(RSTC, Width::Word).unwrap() & RSTC_WRCFG_FULL_RESET,
+            0x20
+        );
         assert_eq!(pm.read(WDOG, Width::Word).unwrap(), 0xF_FFFF);
         pm.advance(8_000_000);
         assert!(!pm.take_reset());
