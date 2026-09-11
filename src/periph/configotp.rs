@@ -41,6 +41,13 @@
 //! carries the identity of a specific piece of hardware. It only has to stay
 //! stable across firmware versions for the `rpi-machine-id` regression to mean
 //! something.
+//!
+//! It does feed that derivation, which was worth checking rather than assuming:
+//! flipping row 28 by one bit changes every byte of the `rpi-machine-id`
+//! `arm_loader` publishes (`2928640898f6b5035da98885da0ac498` ->
+//! `075d24bb620ac951d7b20db02366b59b`). So the regression `scripts/boot-check.sh`
+//! pins is a real derivation being re-run, not a constant being copied — and
+//! changing the serial here invalidates that milestone, which is the point.
 
 use std::collections::BTreeMap;
 
