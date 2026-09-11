@@ -28,6 +28,7 @@ USAGE:
                instead, for reconnaissance on firmware the decoder is new to)
                              [--dump <hex>:<len>] [--disasm <hex>:<count>] [--patch <hex>=<hex>]
                              [--dump-fdt <path>] [--print-fdt]
+                             [--mbox-property <tag>[,<tag>...]]
     rpi-virt-fw disasm <file> [--base <hex>] [--count <n>] [--vaddr <hex>]
 
 COMMANDS:
@@ -48,6 +49,12 @@ FLAGS:
     --print-fdt
               Print that whole device tree as source, every node and property,
               not only the `/chosen` summary the run report gives by default.
+    --mbox-property <tag>[,<tag>...]
+              After the boot, post a property-interface request to the firmware
+              the way a booted Linux would (`/dev/vcio`), and print what the
+              still-running `start4.elf` answers. Tags are hex, e.g.
+              `0x00000001` (GET_FIRMWARE_REVISION) or `0x00030092`
+              (GET_CRYPTO_HMAC_SHA256). See docs/diagnostics.md.
     --dram-map
               Report which DRAM pages are non-zero when the run ends, as
               address runs. Proof of concept for the QEMU hand-off: this is the
@@ -124,6 +131,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     let mut sd_image: Option<PathBuf> = None;
     let mut dump_fdt: Option<PathBuf> = None;
     let mut print_fdt = false;
+    let mut mbox_tags: Vec<u32> = Vec::new();
     let mut usb_image: Option<PathBuf> = None;
     let mut boot_order: Option<String> = None;
     let mut dram_map = false;
@@ -181,6 +189,12 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
                 disasms.push((parse_u32(a)?, parse_u32(n)?));
             }
             "--print-fdt" => print_fdt = true,
+            "--mbox-property" => {
+                let list = it.next().context("--mbox-property needs a tag list")?;
+                for t in list.split(',') {
+                    mbox_tags.push(parse_u32(t)?);
+                }
+            }
             "--dram-map" => dram_map = true,
             "--dump-fdt" => {
                 dump_fdt = Some(PathBuf::from(it.next().context("--dump-fdt needs a path")?))
@@ -656,6 +670,10 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         }
     }
 
+    if !mbox_tags.is_empty() {
+        mbox_property_exchange(&mut emu, &limits, &mbox_tags)?;
+    }
+
     {
         // The device tree `arm_loader` leaves behind for the ARM, and the
         // `/chosen` identity properties it patched into it. This is the point
@@ -970,6 +988,133 @@ fn parse_addr_range(s: &str) -> Option<(u32, u32)> {
     let p = |t: &str| u32::from_str_radix(t.trim().trim_start_matches("0x"), 16).ok();
     let (lo, hi) = (p(lo)?, p(hi)?);
     (lo < hi).then_some((lo, hi))
+}
+
+/// Where the request buffer is built. Well clear of everything `--dram-map`
+/// reports dirty at `arm_loader` — the kernel ends below `0x0280_0000`, the
+/// device tree sits at `0x2eff_1e00`, and start4's own image is above
+/// `0x3ebe_4000`.
+const MBOX_BUFFER: u32 = 0x1000_0000;
+
+/// Post a property-interface request to the still-running firmware, the way a
+/// booted Linux does through `/dev/vcio`, and report what comes back.
+///
+/// The ARM is not modelled, so this stands in for it: build the buffer, ring
+/// the doorbell, keep stepping the VPU, and read the reply. The address on the
+/// wire is `0xC000_0000 | phys` because Linux allocates the buffer coherently
+/// and `/soc` carries `dma-ranges = <0xc0000000 0x0 0x0 0x40000000>` — the
+/// uncached alias, which the model already maps to the same DRAM.
+fn mbox_property_exchange(emu: &mut Emulator, limits: &RunLimits, tags: &[u32]) -> Result<()> {
+    use rpi_virt_fw::bus::{Bus, Width};
+
+    println!("\n--- ARM property mailbox (0x7e00_b880) ---");
+
+    // Buffer: total size, request code, then one tag each with an empty
+    // response slot, then the end marker. 64 bytes of response room per tag is
+    // enough for every tag below `GET_CRYPTO_*`; the firmware writes back how
+    // much it actually used.
+    const SLOT: u32 = 64;
+    let mut words: Vec<u32> = vec![0, 0];
+    for &tag in tags {
+        words.push(tag);
+        words.push(SLOT);
+        words.push(0);
+        words.extend(std::iter::repeat_n(0, (SLOT / 4) as usize));
+    }
+    words.push(0);
+    words[0] = (words.len() as u32) * 4;
+
+    for (i, w) in words.iter().enumerate() {
+        emu.machine
+            .store(MBOX_BUFFER + (i as u32) * 4, Width::Word, *w)
+            .map_err(|e| anyhow::anyhow!("staging the request buffer: {e}"))?;
+    }
+
+    let bus_addr = 0xC000_0000 | MBOX_BUFFER;
+    let message = (bus_addr & !0xF) | rpi_virt_fw::periph::mbox::CHANNEL_PROPERTY;
+    println!(
+        "  posting {message:#010x}  ({} tags, {} byte buffer at {MBOX_BUFFER:#010x})",
+        tags.len(),
+        words.len() * 4
+    );
+    if !emu.machine.mbox.post_from_arm(message) {
+        bail!("the mailbox is full — the firmware has not drained earlier requests");
+    }
+
+    // Let the firmware run. It is parked in the ThreadX idle loop by now, so a
+    // short budget is plenty if it is going to answer at all.
+    // The firmware is parked in the ThreadX idle loop by now, so the two stop
+    // conditions that end a *boot* would end this instantly and wrongly: the
+    // idle-spin detector fires on the idle loop itself, and the silence
+    // watchdog fires because a serviced mailbox request prints nothing.
+    let resume = RunLimits {
+        max_steps: None,
+        max_wall: Some(std::time::Duration::from_secs(20)),
+        idle_spin_limit: 0,
+        silent_us: u64::MAX,
+        ..*limits
+    };
+    let report = emu.run(&resume);
+
+    match emu.machine.mbox.take_reply() {
+        Some(reply) => println!("  reply {reply:#010x}"),
+        None if emu.machine.mbox.request_outstanding() => {
+            println!("  no reply: the firmware never read the request off MAIL1");
+            println!("  (the `mbox_read` task at 0x3ed1d724 blocks on its driver's");
+            println!("   receive op rather than polling — the wake path is not modelled yet)");
+            return Ok(());
+        }
+        None => println!("  the request was read, but no reply was written to MAIL0"),
+    }
+
+    let code = emu.machine.load(MBOX_BUFFER + 4, Width::Word).unwrap_or(0);
+    println!(
+        "  response code {code:#010x} ({})",
+        match code {
+            0x8000_0000 => "success",
+            0x8000_0001 => "parse error",
+            _ => "not a response",
+        }
+    );
+    let total = emu.machine.load(MBOX_BUFFER, Width::Word).unwrap_or(0);
+    let mut off = 8;
+    while off + 12 <= total.min(4096) {
+        let tag = emu
+            .machine
+            .load(MBOX_BUFFER + off, Width::Word)
+            .unwrap_or(0);
+        if tag == 0 {
+            break;
+        }
+        let len = emu
+            .machine
+            .load(MBOX_BUFFER + off + 8, Width::Word)
+            .unwrap_or(0)
+            & 0x7FFF_FFFF;
+        let mut vals = Vec::new();
+        for i in 0..(len / 4).min(8) {
+            vals.push(format!(
+                "{:#010x}",
+                emu.machine
+                    .load(MBOX_BUFFER + off + 12 + i * 4, Width::Word)
+                    .unwrap_or(0)
+            ));
+        }
+        println!("  tag {tag:#010x}  {len:>3} bytes  {}", vals.join(" "));
+        let slot = emu
+            .machine
+            .load(MBOX_BUFFER + off + 4, Width::Word)
+            .unwrap_or(0);
+        off += 12 + ((slot.max(len) + 3) & !3);
+    }
+    if !report.console.is_empty() {
+        // Anything the firmware printed while servicing the request.
+        let tail = String::from_utf8_lossy(&report.console);
+        for line in tail.lines().filter(|l| !l.is_empty()) {
+            println!("  console: {line}");
+        }
+    }
+    Ok(())
 }
 
 fn parse_u32(s: &str) -> Result<u32> {

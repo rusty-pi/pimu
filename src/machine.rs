@@ -4,7 +4,7 @@ use crate::bus::{Bus, BusError, BusResult, MmioDevice, Width};
 use crate::mem::Ram;
 use crate::periph::{
     Asb, Aux, Avs, BootBox, Bsc, ClkMon, ClockManager, ConfigOtp, CoreCtl, Dma4, Emmc2, HdmiDdc,
-    Hvs, McSync, Pl011, Pm, Rng, Sdc, Sdramc, Spi0, StubRegion, SysTimer, Vce,
+    Hvs, Mbox, McSync, Pl011, Pm, Rng, Sdc, Sdramc, Spi0, StubRegion, SysTimer, Vce,
 };
 use crate::soc::bcm2711 as map;
 
@@ -21,6 +21,9 @@ pub struct Machine {
     pub systimer: SysTimer,
     pub uart0: Pl011,
     pub aux: Aux,
+    /// The ARM property mailbox (`0x7E00_B880`). Idle during a normal boot —
+    /// the firmware only services it once an ARM is running.
+    pub mbox: Mbox,
     /// Inter-core sync block (`0x7E00_0000`) — stubbed as auto-acknowledged.
     pub mcsync: McSync,
     /// VPU core-control block (`0x7E00_2000`) — brings up VPU core 1.
@@ -139,6 +142,7 @@ impl Machine {
             systimer: SysTimer::new(),
             uart0: Pl011::new(),
             aux: Aux::new(),
+            mbox: Mbox::new(),
             mcsync: McSync::new(),
             corectl: CoreCtl::new(),
             pm: Pm::new(),
@@ -263,6 +267,15 @@ impl Machine {
             self.corectl.raise_source(src);
             self.pending_irqs.push_back(src);
         }
+        // The mailbox holds source 94 asserted while a request is queued for
+        // the firmware and its driver has armed the interrupt. `0x3EC58302`
+        // reads the pending word, dispatches to the registered callback, and
+        // the `mbox_read` task takes the message off the FIFO.
+        let src = crate::periph::mbox::IRQ_SRC;
+        if self.mbox.irq_asserted() && !self.pending_irqs.contains(&src) {
+            self.corectl.raise_source(src);
+            self.pending_irqs.push_back(src);
+        }
         // The VCE holds source 68 asserted from the moment a launch completes
         // until start4's handler (`0x3ED9D1EA`) acks it through `INTCLR`; that
         // handler is what sets the event flag `vce_run` is waiting on.
@@ -337,6 +350,9 @@ impl Machine {
         }
         if let Some(off) = hit(map::AUX_BASE, map::AUX_SIZE) {
             return Some((&mut self.aux, off));
+        }
+        if let Some(off) = hit(crate::periph::mbox::BASE, crate::periph::mbox::SIZE) {
+            return Some((&mut self.mbox, off));
         }
         if let Some(off) = hit(map::MCSYNC_BASE, map::MCSYNC_SIZE) {
             return Some((&mut self.mcsync, off));
