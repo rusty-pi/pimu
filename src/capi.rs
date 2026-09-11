@@ -57,7 +57,13 @@ pub const RVF_RUN_RESET: c_int = 2;
 struct HostForeign {
     ops: *const RvfHostOps,
     ranges: Vec<(u32, u32)>,
+    /// Bytes written to UART0's data register, when that window is foreign:
+    /// the firmware log still has to be watched for the hand-off line.
+    tee: Vec<u8>,
 }
+
+/// UART0's data register, the one write that is a console byte.
+const UART0_DR: u32 = map::UART0_BASE;
 
 // `ops` points at the host's table for the life of the `RvfVc`; see
 // `rvf_vc_new`. The host also serialises all use.
@@ -82,10 +88,16 @@ impl ForeignBus for HostForeign {
         }
     }
     fn write(&mut self, addr: u32, width: Width, value: u32) {
+        if addr == UART0_DR {
+            self.tee.push(value as u8);
+        }
         if let Some(f) = self.ops().mmio_write {
             // SAFETY: as above.
             unsafe { f(self.ops().opaque, addr, width.bytes(), value) }
         }
+    }
+    fn take_console_tee(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.tee)
     }
 }
 
@@ -215,7 +227,11 @@ pub unsafe extern "C" fn rvf_vc_new(
         return std::ptr::null_mut();
     }
     let entry = payload.entry();
-    let emu = Emulator::new(machine, entry);
+    let mut emu = Emulator::new(machine, entry);
+    // What `recon` runs with: `sleep` parks the core until the next interrupt
+    // instead of halting the run, and the firmware's inline `0x0000` padding
+    // is stepped over. The strict policy is for hand-assembled test payloads.
+    emu.set_unimpl_policy(crate::vpu::UnimplPolicy::ReconFault);
     let limits = RunLimits {
         max_steps: None,
         max_wall: None,
@@ -276,6 +292,7 @@ pub unsafe extern "C" fn rvf_vc_run(vc: *mut RvfVc, max_steps: u64) -> c_int {
             vc.emu.machine.foreign = Some(Box::new(HostForeign {
                 ops: &vc.ops,
                 ranges: std::mem::take(&mut vc.foreign_ranges),
+                tee: Vec::new(),
             }));
         }
     }
@@ -286,7 +303,11 @@ pub unsafe extern "C" fn rvf_vc_run(vc: *mut RvfVc, max_steps: u64) -> c_int {
     };
     let report = vc.emu.run(&limits);
     let console = report.console;
-    if vc.detect_release(&console) {
+    let seen = match vc.emu.machine.foreign.as_mut() {
+        Some(f) => f.take_console_tee(),
+        None => console.clone(),
+    };
+    if vc.detect_release(&seen) {
         vc.log("arm_loader released the ARM");
         if let Some(f) = vc.ops.arm_release {
             f(vc.ops.opaque);

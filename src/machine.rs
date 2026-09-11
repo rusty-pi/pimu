@@ -24,6 +24,13 @@ pub trait ForeignBus {
     fn covers(&self, addr: u32) -> bool;
     fn read(&mut self, addr: u32, width: Width) -> u32;
     fn write(&mut self, addr: u32, width: Width, value: u32);
+    /// Console bytes that went to a foreign UART since the last call, for
+    /// whoever watches the firmware log (the hosted `take_console_output`
+    /// sees nothing once UART0 is foreign). Empty unless the implementation
+    /// keeps a copy.
+    fn take_console_tee(&mut self) -> Vec<u8> {
+        Vec::new()
+    }
 }
 
 pub struct Machine {

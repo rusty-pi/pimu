@@ -78,7 +78,7 @@ if [ ! -f config-host.h ] || [ "${QEMU_RECONFIGURE:-0}" = 1 ]; then
       --disable-user --disable-gtk --disable-sdl --disable-vnc \
       ${QEMU_CONFIGURE_EXTRA:-}
 fi
-if ! grep -q '^#define CONFIG_RVF 1' config-host.h; then
+if ! grep -qE '^#define CONFIG_RVF( 1)?$' config-host.h; then
   echo "configure did not find rpi-virt-fw.pc — CONFIG_RVF is off, the machine would have no videocore= option" >&2
   exit 1
 fi

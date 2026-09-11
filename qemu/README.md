@@ -74,7 +74,18 @@ ARM's accesses, `rvf_vc_add_foreign` sends a VC address range to the host's
 
 - [x] the model builds as a static library with a C header
 - [x] QEMU patch: device, machine properties, mailbox window, GIC line, ARM release
-- [ ] first boot under QEMU — the firmware to `arm_loader`, the ARM into the stub
+- [x] first boot under QEMU: `pieeprom.bin` to `arm_loader` (18 s of firmware
+      time), kernel and the firmware's patched device tree in RAM, four cores
+      released into `armstub8` at EL3, Linux 6.18 up to
+      `smp: Bringing up secondary CPUs`
+- [ ] **current wall**: no interrupt is ever taken by the ARM. The GIC raises
+      the timer PPI (`gic_set_irq irq 30 level 1`, deliverable per
+      `gic_update_bestirq`) but no CPU acknowledges it; the boot CPU sits in
+      `wfi` with `PSTATE.I` set forever. Under QEMU's own `-kernel` path the
+      same GIC/timer traces show the acknowledge immediately. Difference
+      under investigation: `armstub8` configures the GIC from EL3 (all
+      interrupts group 1, `GICC_CTLR=0x1e7`, `PMR=0xff`) where QEMU's boot
+      path uses `irq-reset-nonsecure` and `arm_emulate_firmware_reset`
 - [ ] Linux's `/dev/vcio` `GET_FIRMWARE_REVISION` answered by the live firmware
 - [ ] the eMMC as one device: the firmware driving QEMU's SDHCI instead of
       its own card model, so the card the kernel writes is the card the
@@ -87,5 +98,18 @@ ARM's accesses, `rvf_vc_add_foreign` sends a VC address range to the host's
 Known shims, to be removed in that order: the ARM release is detected on the
 `arm_loader: Starting ARM` log line rather than on the register write that
 does it on the hardware (the release goes through the firmware's power
-manager, whose register write has not been pinned yet); the card is read
-twice (QEMU's SDHCI for the ARM, the model's `Emmc2` for the VPU).
+manager — the ARM driver's op at vtable `+0x28` asks it for domain 23 — and
+the register write has not been pinned yet); the card is read twice (QEMU's
+SDHCI for the ARM, the model's `Emmc2` for the VPU); the boot ROM's PL011
+enable (`CR=0x301`) is done by the device before the first slice, because the
+bootloader reads `CR` before its first byte and stays silent while `UARTEN`
+is clear.
+
+Without `videocore=` the machine is untouched: the same binary boots the
+stock `-kernel`/`-dtb` path to `CPU3: Booted secondary processor`.
+
+Debugging: `-global rvf-videocore.uart=model` keeps the model's own UART and
+dumps it on stderr (tells the two UART paths apart);
+`-trace 'gic_*' -trace 'arm_gt_*'` and `-d int` are what found the current
+wall. Do not read GIC registers through the monitor (`xp`): the distributor
+model dereferences `current_cpu`, which is NULL there, and QEMU dies.
