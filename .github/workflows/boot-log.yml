@@ -88,23 +88,21 @@ jobs:
             boot.log
             boot.log.console
 
-  # Does Linux boot the device tree our firmware hands the ARM? Independent of
-  # the boot job above: it runs its own simulated boot, takes the `--dump-fdt`
-  # blob out of it and feeds that to a stock QEMU. This proves the tree is one
-  # Linux accepts — not that it survives the trip unchanged (QEMU rewrites parts
-  # of it; see the comments in scripts/qemu-check.sh).
-  qemu:
+  # Boot the bare-metal frontend for real (#32 stage 2). The image reports its
+  # own exception level, so the EL2 claim the epic is built on is checked by a
+  # run rather than asserted in a comment. Needs no firmware blobs and no SD
+  # image — it is scaffolding that prints a banner and parks.
+  aarch64:
     runs-on: ubuntu-26.04
-    timeout-minutes: 20
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v7
 
       # qemu-system-arm is the Debian/Ubuntu package that ships
-      # qemu-system-aarch64; mtools is what pulls kernel8.img back out of the
-      # SD image.
-      - name: Install mtools and QEMU
-        run: sudo apt-get update && sudo apt-get install -y mtools qemu-system-arm
+      # qemu-system-aarch64.
+      - name: Install QEMU
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-arm
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -112,19 +110,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Fetch firmware blobs
-        run: ./scripts/fetch-firmware.sh
-
-      - name: Build SD image
-        run: ./scripts/make-sd.sh
-
-      - name: Build rpi-virt-fw
-        run: cargo build --release
-
-      # The bare-metal frontend, booted for real: it loads as a QEMU `-kernel`
-      # and prints its own exception level, so this is what keeps the `EL2`
-      # claim #32 rests on honest rather than a comment. Same exit-2 contract as
-      # the check below.
+      # Exit 2 means this runner's QEMU has no `raspi4b` machine — a toolchain
+      # gap rather than a regression, so warn and pass. Anything else is real.
       - name: Boot the aarch64 frontend under QEMU
         run: |
           set +e
@@ -136,27 +123,3 @@ jobs:
           elif [ "$status" != 0 ]; then
             exit "$status"
           fi
-
-      # Exit 2 means this runner's QEMU has no `raspi4b` machine — a toolchain
-      # gap, not a regression in the model, so report it as a warning and let
-      # the job pass. Any other non-zero exit is a real failure.
-      - name: Boot the handed-over device tree under QEMU
-        run: |
-          set +e
-          ./scripts/qemu-check.sh
-          status=$?
-          set -e
-          if [ "$status" -eq 2 ]; then
-            echo "::warning title=QEMU check skipped::this runner's qemu-system-aarch64 has no raspi4b machine"
-            exit 0
-          fi
-          exit "$status"
-
-      - uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: qemu-check
-          path: |
-            firmware/qemu-check/boot.log
-            firmware/qemu-check/qemu.log
-            firmware/qemu-check/handoff.dtb

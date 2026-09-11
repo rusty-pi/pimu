@@ -40,17 +40,26 @@ cargo build --manifest-path "$here/aarch64/Cargo.toml" --target "$target" \
 # QEMU would happily load the ELF, but then it takes the entry point from the
 # ELF header and the arm64 Image header is never looked at — which is precisely
 # the thing this stage has to get right. Boot the flat image.
+# `rust-objcopy` links against the toolchain's own libLLVM, which is not on the
+# loader path — on a GitHub runner it exists and then dies with
+# "libLLVM.so.22.1-rust-1.98.1-stable: cannot open shared object file".
+# Exporting the sysroot lib directory fixes that and is inert for the others.
+sysroot="$(rustc --print sysroot)"
+export LD_LIBRARY_PATH="$sysroot/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+# Existing on PATH is not the same as working, so probe each candidate rather
+# than taking the first one `command -v` admits to.
 objcopy=""
-for cand in llvm-objcopy rust-objcopy aarch64-linux-gnu-objcopy; do
-  if command -v "$cand" >/dev/null 2>&1; then objcopy="$cand"; break; fi
+for cand in \
+  llvm-objcopy \
+  rust-objcopy \
+  aarch64-linux-gnu-objcopy \
+  "$sysroot/lib/rustlib/$(rustc -vV | sed -n 's/^host: //p')/bin/rust-objcopy"
+do
+  if "$cand" --version >/dev/null 2>&1; then objcopy="$cand"; break; fi
 done
-# rust-objcopy ships with the llvm-tools rustup component and is not on PATH.
 if [ -z "$objcopy" ]; then
-  cand="$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | sed -n 's/^host: //p')/bin/rust-objcopy"
-  [ -x "$cand" ] && objcopy="$cand"
-fi
-if [ -z "$objcopy" ]; then
-  echo "MISSING: no usable objcopy (rustup component add llvm-tools, or" >&2
+  echo "MISSING: no working objcopy (rustup component add llvm-tools, or" >&2
   echo "         apt-get install binutils-aarch64-linux-gnu)" >&2
   exit 1
 fi
