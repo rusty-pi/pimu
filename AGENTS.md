@@ -5,6 +5,14 @@
   repository conventions and avoid unrelated cleanup.
 - Run the smallest relevant tests or build checks before finishing.
 - Do not commit secrets or generated firmware blobs.
+- **Never let CI or anything in `scripts/` depend on `rpi-dev`.** It is an
+  ad-hoc reference board that is only sometimes reachable, and CI runs in the
+  cloud. Measured values from it belong baked into the model with a source
+  comment saying where they came from — that is what `src/periph/avs.rs`,
+  `pvt.rs` and `xhci.rs` do. Anything that has to *reach* the board at build or
+  test time is a broken build waiting to happen. Benchmarking on it is fine, but
+  it is load-sensitive: check `/proc/loadavg` and skip rather than report a
+  number taken under contention.
 - **Never commit an OTP dump.** `vcgencmd otp_dump` on the reference board
   includes device-unique and secret material — the board serial, the customer
   key hash, and the private key the `rpi-machine-id` / LUKS derivation depends
