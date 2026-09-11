@@ -142,6 +142,61 @@ fn cfg_write_mask(off: usize) -> u32 {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The xHCI register block behind BAR0. Every capability value here was read
+// off `rpi-dev`'s VL805 through `/dev/mem` (docs/usb-xhci.md §2); `dmesg`'s
+// `hcc params 0x002841eb hci version 0x100` cross-checks the pair that matters.
+
+/// `CAPLENGTH` — where the operational registers start.
+pub const CAPLENGTH: u32 = 0x20;
+/// `MaxSlots` 32, `MaxIntrs` 4, `MaxPorts` 5.
+const HCSPARAMS1: u32 = 0x0500_0420;
+/// `IST` 1, `ERSTMax` 3, `MaxScratchpad` 31.
+const HCSPARAMS2: u32 = 0xFC00_0031;
+const HCSPARAMS3: u32 = 0x00E7_0004;
+/// `AC64` 1, `CSZ` 0, `PPC` 1, `xECP` 0x28 (extended caps at BAR0 + 0xA0).
+const HCCPARAMS1: u32 = 0x0028_41EB;
+const DBOFF: u32 = 0x0000_0100;
+const RTSOFF: u32 = 0x0000_0200;
+
+/// Operational register offsets, relative to `CAPLENGTH`.
+const OP_USBCMD: u32 = 0x00;
+const OP_USBSTS: u32 = 0x04;
+const OP_PAGESIZE: u32 = 0x08;
+/// `PORTSC` for port *n* is at `CAPLENGTH + 0x400 + (n - 1) * 0x10`.
+const OP_PORTSC: u32 = 0x400;
+/// The VL805 has five root ports: one USB2, four USB3.
+const PORTS: u32 = 5;
+
+const USBCMD_RS: u32 = 1 << 0;
+const USBCMD_HCRST: u32 = 1 << 1;
+const USBCMD_LHCRST: u32 = 1 << 7;
+const USBSTS_HCH: u32 = 1 << 0;
+/// `HSE`, `EINT`, `PCD`, `SRE` — the write-1-to-clear half of `USBSTS`.
+/// Nothing in the model ever sets them: there are no events and no port
+/// changes, so the register only ever reports `HCHalted`.
+const USBSTS_RW1C: u32 = (1 << 2) | (1 << 3) | (1 << 4) | (1 << 10);
+
+/// `CCS=0 PED=0 PLS=5 (RxDetect) PP=1` — powered, nothing attached. Measured on
+/// the two VL805 ports the Pi 4B routes nowhere, which are observationally
+/// identical to an empty socket.
+const PORTSC_EMPTY: u32 = 0x0000_02A0;
+
+/// The `PORTSC` word index, if `off` is one.
+fn portsc_index(off: u32) -> Option<u32> {
+    let base = CAPLENGTH + OP_PORTSC;
+    if off < base || off >= base + PORTS * 0x10 || (off - base) % 0x10 != 0 {
+        return None;
+    }
+    Some((off - base) / 0x10)
+}
+
+/// Registers the firmware may not change: the port status words, which in this
+/// model only ever say "powered, empty".
+fn is_xhci_ro(off: u32) -> bool {
+    portsc_index(off).is_some()
+}
+
 /// The VL805 endpoint's configuration space.
 pub struct Vl805 {
     cfg: Vec<u8>,
@@ -156,6 +211,11 @@ pub struct Vl805 {
     /// How many words have been pushed through the data port. Only an
     /// observable for tests.
     pub vendor_writes: u64,
+    /// The writable half of the xHCI register block behind BAR0: everything the
+    /// firmware sets and reads back (`USBCMD`, `CRCR`, `DCBAAP`, `CONFIG`, the
+    /// interrupter register set, the doorbells). The capability registers are
+    /// constants — see [`Vl805::bar0_read`].
+    xhci: BTreeMap<u32, u32>,
 }
 
 impl Default for Vl805 {
@@ -174,6 +234,7 @@ impl Vl805 {
             cfg,
             vendor_regs: BTreeMap::new(),
             vendor_writes: 0,
+            xhci: BTreeMap::new(),
         }
     }
 
@@ -229,6 +290,102 @@ impl Vl805 {
             let idx = self.cfg_word(0x78);
             self.vendor_regs.insert(idx, new);
             self.vendor_writes += 1;
+        }
+    }
+
+    /// Read `width` bytes of the xHCI register block behind BAR0.
+    ///
+    /// The capability registers are the values measured on `rpi-dev` (see the
+    /// module docs of [`super::pcie`] and `docs/usb-xhci.md` §2); they are
+    /// read-only constants on real silicon too. Everything else is sticky
+    /// storage, apart from the two bits the firmware polls for progress:
+    /// `USBSTS.HCH` follows `USBCMD.RS`, and `USBCMD.HCRST` self-clears.
+    pub fn bar0_read(&mut self, off: u32, width: Width) -> u32 {
+        let word = self.xhci_word(off & !3);
+        let shift = 8 * (off & 3);
+        let mask: u32 = match width {
+            Width::Byte => 0xFF,
+            Width::Half => 0xFFFF,
+            Width::Word => 0xFFFF_FFFF,
+        };
+        (word >> shift) & mask
+    }
+
+    /// Write `width` bytes of the xHCI register block behind BAR0.
+    pub fn bar0_write(&mut self, off: u32, width: Width, value: u32) {
+        let word_off = off & !3;
+        if word_off < CAPLENGTH || is_xhci_ro(word_off) {
+            return; // capability registers and PORTSC are read-only here
+        }
+        let shift = 8 * (off & 3);
+        let mask: u32 = match width {
+            Width::Byte => 0xFF << shift,
+            Width::Half => 0xFFFF << shift,
+            Width::Word => 0xFFFF_FFFF,
+        };
+        let old = self.xhci.get(&word_off).copied().unwrap_or(0);
+        let mut new = (old & !mask) | ((value << shift) & mask);
+        if word_off == CAPLENGTH + OP_USBSTS {
+            // Write-1-to-clear, not a plain register: the bring-up's stop path
+            // writes all-ones to it. Without this the firmware reads its own
+            // `0xFFFF_FFFF` back and prints `USBSTS fffffffe` where a real
+            // board prints `USBSTS 18`.
+            self.xhci.insert(word_off, old & !(new & USBSTS_RW1C));
+            return;
+        }
+        if word_off == CAPLENGTH + OP_USBCMD {
+            // HCRST (bit 1) and LHCRST (bit 7) complete before the firmware can
+            // read them back, so they always read 0. A reset also returns the
+            // operational registers to their power-on values.
+            if new & (USBCMD_HCRST | USBCMD_LHCRST) != 0 {
+                new &= !(USBCMD_HCRST | USBCMD_LHCRST | USBCMD_RS);
+                self.xhci.clear();
+            }
+        }
+        self.xhci.insert(word_off, new);
+    }
+
+    /// The register block as the firmware sees it: capability constants first,
+    /// then the sticky operational/runtime storage.
+    fn xhci_word(&self, off: u32) -> u32 {
+        match off {
+            // CAPLENGTH 0x20 | HCIVERSION 0x0100.
+            0x00 => 0x0100_0020,
+            0x04 => HCSPARAMS1,
+            0x08 => HCSPARAMS2,
+            0x0C => HCSPARAMS3,
+            0x10 => HCCPARAMS1,
+            0x14 => DBOFF,
+            0x18 => RTSOFF,
+            0x1C => 0,
+            // Extended capabilities, walked from `HCCPARAMS1.xECP` = 0xA0.
+            0xA0 => 0x0000_0401,             // legacy support, next -> 0xB0
+            0xB0 => 0x0200_0802,             // supported protocol, USB 2.0
+            0xB4 | 0xD4 => 0x2042_5355,      // "USB "
+            0xB8 => 0x0000_0101,             // port offset 1, count 1
+            0xD0 => 0x0300_8C02,             // supported protocol, USB 3.0
+            0xD8 => 0x0000_0402,             // port offset 2, count 4
+            0x300 => 0x0000_000A,
+            _ => {
+                if off == CAPLENGTH + OP_PAGESIZE {
+                    return 1; // 4 KiB pages
+                }
+                if off == CAPLENGTH + OP_USBSTS {
+                    // HCHalted mirrors "not running"; the controller is never
+                    // "not ready" (CNR) in the model.
+                    let run = self.xhci.get(&(CAPLENGTH + OP_USBCMD)).copied().unwrap_or(0)
+                        & USBCMD_RS;
+                    let sticky = self.xhci.get(&off).copied().unwrap_or(0) & !USBSTS_HCH;
+                    return if run != 0 { sticky } else { sticky | USBSTS_HCH };
+                }
+                if let Some(port) = portsc_index(off) {
+                    let _ = port;
+                    // Powered, nothing attached: the resting value every
+                    // unpopulated VL805 port reads (docs/usb-xhci.md §5.2).
+                    return PORTSC_EMPTY;
+                }
+                self.xhci.get(&off).copied().unwrap_or(0)
+            }
         }
     }
 

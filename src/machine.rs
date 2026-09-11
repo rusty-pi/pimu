@@ -391,7 +391,9 @@ impl Machine {
     /// Run the DMA4 control-block chain the channel was just armed with. A word
     /// in RAM (`+0x08` `SRCI` bit 12 = "source increments"): clear ⇒ fill `DEST`
     /// with the single word at `SRC` (`SRC == 0` ⇒ zero-fill scrub); set ⇒ copy
-    /// `SRC`→`DEST`.
+    /// `SRC`→`DEST`. Both addresses are 40 bits wide — `SRCI`/`DESTI` bits
+    /// `[7:0]` carry bits `[39:32]` — and an address the PCIe outbound window
+    /// covers reaches the VL805's registers instead of DRAM.
     /// `RVF_DBG_DMA=1`: trace every access to the legacy DMA controller window
     /// (`0x7E00_7000..0x7E00_8000`, 15 channels x 0x100). Only channel 11
     /// (DMA4, `0x7E00_7B00`) is modelled; start4's `dma_memcpy` uses one of the
@@ -523,8 +525,38 @@ impl Machine {
         }
     }
 
+    /// One word from a 40-bit DMA4 address: endpoint MMIO if the PCIe root
+    /// complex's outbound window covers it, DRAM otherwise.
+    fn dma40_load(&mut self, addr: u64) -> u32 {
+        // The window the firmware programs starts at `0x6_0000_0000`, so a
+        // plain 32-bit address can only be DRAM. Checking that first keeps the
+        // multi-megabyte DRAM scrubs off the translation path.
+        if addr >> 32 != 0 {
+            if let Some(v) = self.pcie.mmio_read(addr, Width::Word) {
+                return v;
+            }
+        }
+        self.ram
+            .load((addr as u32) & 0x3FFF_FFFF, Width::Word)
+            .unwrap_or(0)
+    }
+
+    /// One word to a 40-bit DMA4 address.
+    fn dma40_store(&mut self, addr: u64, value: u32) {
+        if addr >> 32 != 0 && self.pcie.mmio_write(addr, Width::Word, value) {
+            return;
+        }
+        let _ = self
+            .ram
+            .store((addr as u32) & 0x3FFF_FFFF, Width::Word, value);
+    }
+
     fn run_dma4(&mut self) {
         const S_INC: u32 = 1 << 12;
+        /// `SRC_INFO` / `DEST_INFO` bits `[7:0]` are address bits `[39:32]` —
+        /// the whole point of the 40-bit channel, and how the firmware reaches
+        /// the PCIe outbound window at `0x6_0000_0000` from a 32-bit core.
+        const ADDR_HI: u32 = 0xFF;
         let rd = |ram: &Ram, addr: u32| ram.load(addr & 0x3FFF_FFFF, Width::Word).unwrap_or(0);
 
         let mut cb = self.dma4.cb_addr() & 0x3FFF_FFFF;
@@ -535,8 +567,11 @@ impl Machine {
             let src = rd(&self.ram, cb + 0x04);
             let srci = rd(&self.ram, cb + 0x08);
             let dest = rd(&self.ram, cb + 0x0C);
+            let desti = rd(&self.ram, cb + 0x10);
             let len = rd(&self.ram, cb + 0x14);
             let next = rd(&self.ram, cb + 0x18);
+            let src40 = (((srci & ADDR_HI) as u64) << 32) | src as u64;
+            let dest40 = (((desti & ADDR_HI) as u64) << 32) | dest as u64;
 
             if self.dbg_dma {
                 eprintln!(
@@ -545,17 +580,15 @@ impl Machine {
                 );
             }
             let fill = srci & S_INC == 0;
-            let fill_word = if src == 0 { 0 } else { rd(&self.ram, src) };
+            let fill_word = if src40 == 0 { 0 } else { self.dma40_load(src40) };
             let mut off = 0u32;
             while off < len {
                 let v = if fill {
                     fill_word
                 } else {
-                    rd(&self.ram, src.wrapping_add(off))
+                    self.dma40_load(src40 + off as u64)
                 };
-                let _ = self
-                    .ram
-                    .store(dest.wrapping_add(off) & 0x3FFF_FFFF, Width::Word, v);
+                self.dma40_store(dest40 + off as u64, v);
                 off = off.wrapping_add(4);
             }
             cb = (next << 5) & 0x3FFF_FFFF;

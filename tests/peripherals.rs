@@ -556,26 +556,73 @@ fn pcie_window_is_mmio_not_dram() {
     assert_eq!(m.load32(map::PCIE_BASE + 0x9210).unwrap(), 0x3);
 }
 
-/// With no endpoint attached — the default, and a deliberate choice documented
-/// in `src/periph/pcie.rs` — the link never trains and `MISC_PCIE_STATUS` reads
-/// 0. That is the word the bootloader prints as `PCIe timeout: 0x00000000`
-/// before falling through to the next `BOOT_ORDER` entry.
+/// The VL805 is soldered to every Pi 4B, so the link trains as soon as the
+/// bootloader releases PERST# and the config router answers for bus 1.
+/// `MISC_PCIE_STATUS` then reads `0xB0` — `PHYLINKUP | DL_ACTIVE | port RC` —
+/// which is what stops `PCIe timeout: 0x00000000` being printed.
 #[test]
-fn pcie_link_stays_down_without_an_endpoint() {
+fn pcie_link_trains_and_finds_the_vl805() {
     let mut m = machine();
     // bootcode parks the block in reset; the bootloader releases bridge then
     // PERST#.
     m.store32(map::PCIE_BASE + 0x9210, 0x3).unwrap();
     m.store32(map::PCIE_BASE + 0x9210, 0x1).unwrap();
     m.store32(map::PCIE_BASE + 0x9210, 0x0).unwrap();
-    assert_eq!(
-        m.load32(map::PCIE_BASE + 0x4068).unwrap(),
-        0,
-        "MISC_PCIE_STATUS must read 0 with nothing on the far side of the link"
-    );
-    // And the endpoint's config space is not reachable through the router.
+    assert_eq!(m.load32(map::PCIE_BASE + 0x4068).unwrap(), 0xB0);
     m.store32(map::PCIE_BASE + 0x9000, 1 << 20).unwrap();
-    assert_eq!(m.load32(map::PCIE_BASE + 0x8000).unwrap(), 0xFFFF_FFFF);
+    assert_eq!(m.load32(map::PCIE_BASE + 0x8000).unwrap(), 0x3483_1106);
+}
+
+/// The whole of the path the bootloader's `xHC0 ver:` line comes out of, driven
+/// through the bus the way the firmware drives it: enumerate the endpoint,
+/// program the outbound window, then read BAR0 with a 40-bit DMA4 transfer
+/// (`0x0008B42C` builds the control block, `0x000A701E` reads the bounce
+/// buffer). The source word is the one `RVF_DBG_DMA` shows the real firmware
+/// using — `src = 0x0200_0004`, `srci = 0x1006`, i.e. `0x6_0200_0004`.
+///
+/// Before the 40-bit address was honoured this read landed in DRAM, every
+/// capability register came back 0, and the bring-up hung at `0x000AA3C0`.
+#[test]
+fn xhci_capability_registers_arrive_by_forty_bit_dma() {
+    let mut m = machine();
+    // Link up, then assign BAR0 and enable memory decoding (0x000A6918).
+    m.store32(map::PCIE_BASE + 0x9210, 0x3).unwrap();
+    m.store32(map::PCIE_BASE + 0x9210, 0x0).unwrap();
+    m.store32(map::PCIE_BASE + 0x9000, 1 << 20).unwrap();
+    m.store32(map::PCIE_BASE + 0x8010, 0x8200_0000).unwrap();
+    m.store32(map::PCIE_BASE + 0x8014, 0).unwrap();
+    m.store32(map::PCIE_BASE + 0x8004, 0x0146).unwrap();
+    // CPU_2_PCIE_MEM_WIN0 (0x000A725C..0x000A72F0).
+    m.store32(map::PCIE_BASE + 0x400C, 0x8000_0000).unwrap();
+    m.store32(map::PCIE_BASE + 0x4010, 0).unwrap();
+    m.store32(map::PCIE_BASE + 0x4070, 0x3FF0_0000).unwrap();
+    m.store32(map::PCIE_BASE + 0x4080, 6).unwrap();
+    m.store32(map::PCIE_BASE + 0x4084, 6).unwrap();
+
+    let cb = 0x2_0000u32;
+    let dst = 0x3_0000u32;
+    for (off, w) in [
+        (0x00, 0),          // TI
+        (0x04, 0x0200_0004),// SRC low
+        (0x08, 0x0000_1006),// SRC info: INC | address bits [39:32] = 6
+        (0x0C, dst),        // DEST low
+        (0x10, 0x0000_1000),// DEST info: INC, high bits 0
+        (0x14, 4),          // LEN
+        (0x18, 0),          // NEXT
+    ] {
+        m.store32(cb + off, w).unwrap();
+    }
+    m.store32(map::DMA4_BASE + 0x04, cb >> 5).unwrap();
+    m.store32(map::DMA4_BASE + 0x00, 1).unwrap(); // ACTIVE
+
+    assert_eq!(
+        m.load32(dst).unwrap(),
+        0x0500_0420,
+        "HCSPARAMS1 as measured on rpi-dev: MaxSlots 32, MaxIntrs 4, MaxPorts 5"
+    );
+    // END set, ACTIVE and ERROR clear — what 0x0008B3F4 polls for.
+    let cs = m.load32(map::DMA4_BASE).unwrap();
+    assert_eq!(cs & 0x403, 0x2);
 }
 
 /// The PVT magic at `0x7D5D_8010 + ch*0x40`. `FUN_0ec300fa` reads `+0x1C` only
