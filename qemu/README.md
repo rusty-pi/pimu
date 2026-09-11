@@ -78,15 +78,25 @@ ARM's accesses, `rvf_vc_add_foreign` sends a VC address range to the host's
       time), kernel and the firmware's patched device tree in RAM, four cores
       released into `armstub8` at EL3, Linux 6.18 up to
       `smp: Bringing up secondary CPUs`
-- [ ] **current wall**: no interrupt is ever taken by the ARM. The GIC raises
-      the timer PPI (`gic_set_irq irq 30 level 1`, deliverable per
-      `gic_update_bestirq`) but no CPU acknowledges it; the boot CPU sits in
-      `wfi` with `PSTATE.I` set forever. Under QEMU's own `-kernel` path the
-      same GIC/timer traces show the acknowledge immediately. Difference
-      under investigation: `armstub8` configures the GIC from EL3 (all
-      interrupts group 1, `GICC_CTLR=0x1e7`, `PMR=0xff`) where QEMU's boot
-      path uses `irq-reset-nonsecure` and `arm_emulate_firmware_reset`
-- [ ] Linux's `/dev/vcio` `GET_FIRMWARE_REVISION` answered by the live firmware
+- [x] the ARM takes interrupts: `bcm2838`'s GIC needs the security
+      extensions the real GIC-400 has, because `armstub8` puts every
+      interrupt in group 1 from EL3 and Linux then drives the non-secure
+      aliases (enabled in `videocore=` mode only; QEMU's `-kernel` path keeps
+      its `irq-reset-nonsecure` shortcut)
+- [x] Linux's `raspberrypi-firmware` driver attaches to the **live**
+      firmware: `GET_FIRMWARE_REVISION` answered by `start4.elf`'s
+      `mbox_read` task ("Attached to firmware from 2026-08-10T18:21:35")
+- [x] whatever QEMU has no device for in either peripheral window is served
+      by the model under QEMU's devices (negative-priority fallback), so
+      `vc4-kms-v3d`'s L2 interrupt controller at `0x7ef00100` probes instead
+      of faulting the guest
+- [x] the golden `sd.img` boot reaches `Waiting for root device` — the same
+      far end as `scripts/qemu-check.sh`, now with the firmware in the loop
+- [ ] **current wall, on the firmware side**: `GET_GPIO_CONFIG` for the
+      expander GPIOs comes back `ffffffff`, so `regulator-sd-vcc` fails and
+      no `mmcblk0` appears. That is gpioman's provider registration never
+      running in the model, [#2](https://github.com/valtzu/rpi-virt-fw/issues/2),
+      now visible from Linux
 - [ ] the eMMC as one device: the firmware driving QEMU's SDHCI instead of
       its own card model, so the card the kernel writes is the card the
       firmware reads (`videocore-sd=` goes away)
