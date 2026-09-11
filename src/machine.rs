@@ -253,7 +253,11 @@ impl Machine {
 
     /// Advance time-based peripheral state by `cycles` VPU cycles.
     pub fn tick(&mut self, cycles: u64) {
-        self.systimer.tick(cycles);
+        // Everything below is derived from the microsecond counter, so when it
+        // has not moved there is nothing for any of it to do.
+        if !self.systimer.advance(cycles) {
+            return;
+        }
         // The I²C masters time their transfers in microseconds off the system
         // timer, so they stay in step with it across the run loop's `sleep`
         // fast-forward (which jumps the counter without retiring cycles).
