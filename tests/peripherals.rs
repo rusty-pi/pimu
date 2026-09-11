@@ -7,6 +7,10 @@
 //! instructions later as a `bl <null>`. These tests pin the register values
 //! that the boot is known to gate on.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use rpi_virt_fw::block::{BlockDevice, MemoryBlocks, Window, BLOCK_LEN};
 use rpi_virt_fw::bus::{Bus, MmioDevice, Width};
 use rpi_virt_fw::periph::Spi0;
 use rpi_virt_fw::soc::bcm2711 as map;
@@ -87,6 +91,114 @@ fn spi0_done_is_tx_side_only() {
         spi.read(FIFO, Width::Word).unwrap(); // command + address echoes
     }
     assert_eq!(spi.read(FIFO, Width::Word).unwrap(), 0xAA);
+}
+
+/// Erase + program one sector through the SPI command stream, the way
+/// `pieeprom.upd`'s self-update does, and hand back what the model now holds.
+fn burn_a_sector(spi: &mut Spi0, addr: u32, byte: u8) {
+    let a = addr.to_be_bytes();
+    for cmd in [
+        vec![0x06u32],                                                  // WREN
+        vec![0x20, a[1] as u32, a[2] as u32, a[3] as u32],              // SE (4 KiB)
+        vec![0x06],                                                     // WREN
+        vec![0x02, a[1] as u32, a[2] as u32, a[3] as u32, byte as u32], // PP
+    ] {
+        spi.write(CS, Width::Word, CS_TA | CS_CLEAR_RX | CS_CLEAR_TX)
+            .unwrap();
+        for b in cmd {
+            spi.write(FIFO, Width::Word, b).unwrap();
+        }
+        spi.write(CS, Width::Word, 0).unwrap();
+    }
+}
+
+/// An EEPROM self-update has to outlive the run. On real hardware it does
+/// because the flash is the flash; here the bytes live in a partition of the SD
+/// image, so the model writes its working copy back when the dirty flag fires.
+#[test]
+fn an_eeprom_self_update_is_written_back_to_the_backing_store() {
+    // A disk with the EEPROM partition at LBA 8, five sectors of erased flash.
+    let mut disk = vec![0x11u8; 8 * BLOCK_LEN];
+    disk.extend(std::iter::repeat_n(0xFFu8, 5 * BLOCK_LEN));
+    disk.extend(std::iter::repeat_n(0x22u8, 2 * BLOCK_LEN));
+    let store = Window::new(MemoryBlocks::new(disk), 8, 5).unwrap();
+
+    let mut spi = Spi0::new();
+    spi.attach_flash_medium(Box::new(store));
+    // The image is the whole window, erased.
+    assert_eq!(spi.flash_bytes().len(), 5 * BLOCK_LEN);
+    assert!(spi.flash_bytes().iter().all(|&b| b == 0xFF));
+
+    // Nothing written yet: a boot that only reads the EEPROM must not touch the
+    // disk at all.
+    assert!(!spi.flush_flash());
+
+    burn_a_sector(&mut spi, 0x0000_0200, 0x5A);
+    assert_eq!(spi.flash_bytes()[0x200], 0x5A);
+    assert!(spi.flush_flash(), "a dirty image is written back");
+    // ...and only once: the flag is consumed, so the next segment of the run
+    // does not rewrite an unchanged image.
+    assert!(!spi.flush_flash());
+}
+
+/// A disk whose bytes stay visible to the test after `Spi0` has taken
+/// ownership of the device — which is what checking a write-back needs.
+#[derive(Clone)]
+struct SharedDisk(Rc<RefCell<Vec<u8>>>);
+
+impl BlockDevice for SharedDisk {
+    fn block_count(&self) -> u64 {
+        (self.0.borrow().len() / BLOCK_LEN) as u64
+    }
+    fn read_block(&self, lba: u64, out: &mut [u8; BLOCK_LEN]) -> bool {
+        let at = lba as usize * BLOCK_LEN;
+        match self.0.borrow().get(at..at + BLOCK_LEN) {
+            Some(src) => {
+                out.copy_from_slice(src);
+                true
+            }
+            None => {
+                out.fill(0);
+                false
+            }
+        }
+    }
+    fn write_block(&mut self, lba: u64, data: &[u8; BLOCK_LEN]) -> bool {
+        let at = lba as usize * BLOCK_LEN;
+        match self.0.borrow_mut().get_mut(at..at + BLOCK_LEN) {
+            Some(dst) => {
+                dst.copy_from_slice(data);
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+/// The write-back lands at the window's offset and nowhere else, leaving the
+/// neighbouring partitions — the FAT the firmware boots from, in the real
+/// layout — exactly as they were.
+#[test]
+fn a_written_back_image_stays_inside_its_partition() {
+    let mut bytes = vec![0x11u8; 2 * BLOCK_LEN];
+    bytes.extend(std::iter::repeat_n(0xFFu8, 2 * BLOCK_LEN));
+    bytes.extend(std::iter::repeat_n(0x22u8, 2 * BLOCK_LEN));
+    let disk = SharedDisk(Rc::new(RefCell::new(bytes)));
+
+    let mut spi = Spi0::new();
+    spi.attach_flash_medium(Box::new(
+        Window::new(disk.clone(), 2, 2).expect("the window fits the disk"),
+    ));
+    burn_a_sector(&mut spi, 0x0000_0000, 0x3C);
+    assert!(spi.flush_flash());
+
+    let out = disk.0.borrow();
+    assert_eq!(&out[..2 * BLOCK_LEN], &[0x11u8; 2 * BLOCK_LEN]);
+    assert_eq!(out[2 * BLOCK_LEN], 0x3C);
+    assert!(out[2 * BLOCK_LEN + 1..4 * BLOCK_LEN]
+        .iter()
+        .all(|&b| b == 0xFF));
+    assert_eq!(&out[4 * BLOCK_LEN..], &[0x22u8; 2 * BLOCK_LEN]);
 }
 
 /// Core 1's copies of the core-control registers live at `+0x800`. The window

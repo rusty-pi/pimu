@@ -12,8 +12,21 @@
 //! sets the write-enable latch, `SE` (0x20) erases a 4 KiB sector to `0xFF`,
 //! `PP` (0x02) programs up to a page. Erase/program are instantaneous in the
 //! model (WIP always reads clear). Everything else returns `0xFF`.
+//!
+//! Where the image comes from is a separate question from what the flash does
+//! with it. The working copy is a `Vec<u8>` and stays one — erase-to-`0xFF` and
+//! program-by-AND are byte operations on a byte-addressed part, and expressing
+//! them through a 512-byte block interface would only obscure them. What a
+//! backing store adds is durability: the image is read out of it once and
+//! written back when the firmware has actually changed it, so an EEPROM
+//! self-update survives the run the way a real flash burn does. Hosted that
+//! store is the EEPROM partition of the SD image; bare-metal (#32) it is the
+//! same partition behind QEMU's SD controller, because `raspi4b` will attach no
+//! second medium to keep an EEPROM in.
 
+use crate::block::{self, BlockDevice, BLOCK_LEN};
 use crate::diag_eprintln;
+use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 
@@ -51,7 +64,12 @@ pub struct Spi0 {
     ltoh: u32,
     dc: u32,
     /// The attached flash image (the `pieeprom.bin` bytes). Empty ⇒ no flash.
+    /// This is the live copy: every read, erase and program goes through it.
     flash: Vec<u8>,
+    /// Where that copy is kept between runs, if anywhere. `None` is the
+    /// historical behaviour — the image came from a file the model was handed
+    /// and a self-update is lost when the process exits.
+    backing: Option<Box<dyn BlockDevice>>,
     /// Bytes clocked since `CS.TA` was asserted.
     beat: u64,
     /// Command byte (first beat of the transaction).
@@ -83,9 +101,75 @@ impl Spi0 {
         self.flash = image;
     }
 
+    /// Attach the flash, reading its contents out of a block device and
+    /// keeping that device as the store to write back to.
+    ///
+    /// The whole medium is the flash image, so hand it a [`Window`] of the
+    /// EEPROM partition rather than the disk: the image is a 512 KiB
+    /// `pieeprom.bin` inside a partition sized for the part the model claims to
+    /// be (`RDID` answers W25Q128, 16 MiB), and the tail reads back as erased
+    /// `0xFF`, exactly as the unused address space of a real chip does.
+    ///
+    /// [`Window`]: crate::block::Window
+    pub fn attach_flash_medium(&mut self, medium: Box<dyn BlockDevice>) {
+        self.flash = block::read_all(medium.as_ref());
+        self.backing = Some(medium);
+    }
+
+    /// Say where the flash image is to be written back to, without disturbing
+    /// the working copy already attached.
+    ///
+    /// The hosted tool wants this rather than [`Spi0::attach_flash_medium`]:
+    /// it patches the image it read before the model ever sees it
+    /// (`--skip-signed-boot`, `--boot-order`) and re-attaches that patched copy
+    /// on every reboot segment, so the store is only ever the destination.
+    pub fn set_flash_backing(&mut self, medium: Box<dyn BlockDevice>) {
+        self.backing = Some(medium);
+    }
+
     /// The current flash contents — reflects any EEPROM self-update writes.
     pub fn flash_bytes(&self) -> &[u8] {
         &self.flash
+    }
+
+    /// Write the flash image back to its backing store if the firmware has
+    /// changed it, returning whether anything was written.
+    ///
+    /// Call this where the run loop already notices a self-update — the same
+    /// point it rebuilds from the new image for the reboot. Sectors that match
+    /// what the store already holds are skipped, so a boot that never touches
+    /// the EEPROM writes nothing at all and one that burns a new image rewrites
+    /// only the part that moved. That keeps the cost proportional to the
+    /// change, which matters bare-metal where every sector is an MMIO round
+    /// trip through QEMU's SD controller rather than a memcpy.
+    pub fn flush_flash(&mut self) -> bool {
+        if !self.dirty {
+            return false;
+        }
+        let Some(medium) = &mut self.backing else {
+            return false;
+        };
+        let mut wrote = false;
+        let mut have = [0u8; BLOCK_LEN];
+        for (lba, want) in self.flash.chunks(BLOCK_LEN).enumerate() {
+            let lba = lba as u64;
+            if lba >= medium.block_count() {
+                // The image outgrew the partition it came from. Truncating is
+                // the honest answer: the bytes past the end belong to whatever
+                // is next on the disk.
+                break;
+            }
+            // A trailing partial chunk cannot be a sector; pad it the way an
+            // erased part would read.
+            let mut want_sector = [MISO_IDLE; BLOCK_LEN];
+            want_sector[..want.len()].copy_from_slice(want);
+            medium.read_block(lba, &mut have);
+            if have != want_sector {
+                wrote |= medium.write_block(lba, &want_sector);
+            }
+        }
+        self.dirty = false;
+        wrote
     }
 
     fn status(&self) -> u32 {

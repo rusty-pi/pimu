@@ -5,6 +5,7 @@ use std::process::ExitCode;
 
 use anyhow::{bail, Context, Result};
 
+use rpi_virt_fw::block::{BlockDevice, FileBlocks, Window};
 use rpi_virt_fw::emulator::{Emulator, RunLimits};
 use rpi_virt_fw::firmware::Payload;
 use rpi_virt_fw::harness::{self, GoldenOutcome};
@@ -21,6 +22,7 @@ USAGE:
     rpi-virt-fw run-all [<dir>] [--update] [-v]
     rpi-virt-fw recon <file> [--entry <hex>] [--ram-mb <n>] [--max-steps <n>] [--eeprom]
                              [--max-wall <secs>] [--sd <img>] [--usb <img>]
+                             [--eeprom-part <n>]
                              [--boot-order <hex>] [--skip-signed-boot]
                              [--skip-unimpl]
               (no --max-steps = no instruction cap; --max-wall defaults to 140s)
@@ -67,6 +69,13 @@ FLAGS:
               still-running `start4.elf` answers. Tags are hex, e.g.
               `0x00000001` (GET_FIRMWARE_REVISION) or `0x00030092`
               (GET_CRYPTO_HMAC_SHA256). See docs/diagnostics.md.
+    --eeprom-part <n>
+              Take the EEPROM image from MBR partition <n> of the `--sd` image
+              instead of from <file>, and write a self-update back to it.
+              Implies --eeprom, and makes <file> optional. This is where the
+              bare-metal frontend keeps the EEPROM (#32): `raspi4b` attaches no
+              second medium, so it gets a partition on the one drive QEMU does
+              take. `scripts/make-sd.sh` writes it as partition 2.
     --dram-map
               Report which DRAM pages are non-zero when the run ends, as
               address runs. Proof of concept for the QEMU hand-off: this is the
@@ -126,6 +135,10 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     let mut max_steps: Option<u64> = None;
     let mut max_wall_secs: u64 = 140;
     let mut eeprom = false;
+    // `--eeprom-part <n>`: the EEPROM lives in a partition of the `--sd` image
+    // rather than in a file of its own, which is the only arrangement the
+    // bare-metal frontend can have (#32).
+    let mut eeprom_part: Option<usize> = None;
     let mut trace = false;
     let mut trace_full = false;
     let mut trace_mmio = false;
@@ -166,6 +179,10 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
                 max_wall_secs = it.next().context("--max-wall needs seconds")?.parse()?
             }
             "--eeprom" => eeprom = true,
+            "--eeprom-part" => {
+                eeprom = true;
+                eeprom_part = Some(it.next().context("--eeprom-part needs a number")?.parse()?)
+            }
             "--trace" => trace = true,
             "--trace-full" => {
                 trace = true;
@@ -250,8 +267,46 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
             s => bail!("unexpected argument '{s}'"),
         }
     }
-    let path = path.context("recon: missing <file>")?;
-    let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+    // `--eeprom-part <n>` opens the EEPROM partition of the `--sd` image as a
+    // block device and reads the image out of it. The window is opened afresh
+    // for every use rather than shared: `FileBlocks` owns an open file, and the
+    // boot loop needs one per segment (a self-update restarts the boot).
+    let eeprom_window = |part: usize| -> Result<Window<FileBlocks>> {
+        let sd = sd_image
+            .as_deref()
+            .context("--eeprom-part needs --sd <img> to take the partition from")?;
+        let disk = FileBlocks::open(sd)
+            .with_context(|| format!("opening SD image {} read/write", sd.display()))?;
+        Window::mbr_partition(disk, part).with_context(|| {
+            format!(
+                "{} has no MBR partition {part} (scripts/make-sd.sh writes the EEPROM as 2)",
+                sd.display()
+            )
+        })
+    };
+
+    let bytes = match eeprom_part {
+        Some(part) => {
+            let win = eeprom_window(part)?;
+            println!(
+                "eeprom     {} partition {part} @ LBA {} ({} blocks)",
+                sd_image
+                    .as_deref()
+                    .unwrap_or(std::path::Path::new("?"))
+                    .display(),
+                win.first_lba(),
+                win.block_count()
+            );
+            rpi_virt_fw::block::read_all(&win)
+        }
+        // The file-based source, unchanged: this is how every scenario and
+        // `scripts/boot-check.sh` run, and it must keep working with no SD
+        // image and no QEMU anywhere near it.
+        None => {
+            let path = path.as_deref().context("recon: missing <file>")?;
+            std::fs::read(path).with_context(|| format!("reading {}", path.display()))?
+        }
+    };
 
     // The EEPROM bootloader touches the 0x6000_0000 L2-SRAM window, which
     // our model folds into DRAM past the 512 MiB mark — give it room by default.
@@ -387,7 +442,16 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         };
         let mut machine = Machine::new(ram_mb as usize * 1024 * 1024);
         if eeprom {
+            // The working copy is `flash`, not whatever the partition holds:
+            // `--skip-signed-boot` and `--boot-order` patch the image before
+            // the model sees it, and those patches are the host's, not the
+            // firmware's. The partition is only the destination.
             machine.spi0.attach_flash(flash.clone());
+            if let Some(part) = eeprom_part {
+                machine
+                    .spi0
+                    .set_flash_backing(Box::new(eeprom_window(part)?));
+            }
         }
         if let Some(img) = &sd_img {
             machine.emmc2.insert_card(img.clone());
@@ -459,6 +523,13 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
                     let _ = std::fs::write(format!("{p}.{}", reboots + 1), cur);
                     eprintln!("wrote {p}.{} ({} bytes)", reboots + 1, cur.len());
                 }
+            }
+            // The durable version of the same thing, when the image came from a
+            // partition: the burned bytes go back where they came from, so the
+            // next run starts from the updated EEPROM exactly as hardware
+            // would. A no-op unless the firmware actually erased or programmed.
+            if emu.machine.spi0.flush_flash() {
+                eprintln!("eeprom: self-update written back to the EEPROM partition");
             }
         }
 
@@ -826,10 +897,14 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
                 h.class
             );
         }
-        println!(
-            "\n(disassemble any of these with:  rpi-virt-fw disasm {} --vaddr <pc> --count 1)",
-            path.display()
-        );
+        // Only when there is a file to name — `--eeprom-part` reads the image
+        // out of a partition, and there is nothing to paste into `disasm`.
+        if let Some(path) = &path {
+            println!(
+                "\n(disassemble any of these with:  rpi-virt-fw disasm {} --vaddr <pc> --count 1)",
+                path.display()
+            );
+        }
     }
 
     Ok(ExitCode::SUCCESS)

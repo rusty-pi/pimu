@@ -186,6 +186,89 @@ prints a fixed message instead of crashing if they differ. Both values reach
 | `aarch64/link.ld` | load address, section order, `.bss`, the two stacks, `_image_size` |
 | `aarch64/build.rs` | passes the linker script by absolute path |
 
+## Where the EEPROM lives
+
+On hardware the EEPROM is a separate SPI NOR chip, and it is writable:
+`pieeprom.upd` rewrites it mid-boot. The hosted tool can take the image from a
+file and, with `RVF_DUMP_FLASH`, drop the modified bytes somewhere afterwards.
+Bare-metal there is no file and nowhere to drop anything, and `raspi4b` accepts
+no second medium to model the chip with:
+
+| tried | result |
+| --- | --- |
+| `-drive if=sd,index=1` | `machine type does not support if=sd,bus=0,unit=1` |
+| `-device virtio-blk-pci` | `No 'PCI' bus found` |
+| `-device virtio-blk-device` | `No 'virtio-bus' bus found` |
+| `-pflash` | `machine type does not support if=pflash,bus=0,unit=0` |
+| `-device usb-storage` | accepted, but consuming it needs an xHCI or DWC2 host driver plus USB MSC |
+
+So the EEPROM gets a partition on the one drive QEMU does take, and both live on
+`-drive if=sd,file=sd.img,format=raw`. QEMU writes through to the file, so a
+self-update survives across runs the way a flash burn does.
+
+`scripts/make-sd.sh` writes:
+
+| # | start LBA | sectors | type | contents |
+| --- | --- | --- | --- | --- |
+| 1 | 2048 | 522240 | `0x0c` FAT32 LBA, bootable | `start4.elf`, `fixup4.dat`, `config.txt`, `dt-blob.bin`, the dtb, the kernel, `overlays/` |
+| 2 | 524288 | 32768 | `0xda` non-FS data | the raw EEPROM image, padded to 16 MiB with `0xFF` |
+
+Partition 2 is *appended*; partition 1 is byte-for-byte what it was before it
+existed. That is deliberate. The firmware prints the partition table and the FAT
+geometry it derives from it, so carving the EEPROM out of the boot partition
+would have moved `FAT32 clusters`, `fat-sectors` and the cluster count in the
+golden boot transcript — a change to the workload disguised as a change to the
+layout. Growing the image instead moves exactly two golden lines, both of them
+the firmware describing the medium rather than behaving differently:
+
+```text
+-CSD: 400e005a05b5900001ff000002600000     # C_SIZE 0x1ff = 256 MiB
++CSD: 400e005a05b59000021f000002600000     # C_SIZE 0x21f = 272 MiB
+-[t] MBR: 0x00000000,       0 type: 0x00   # slot 2 was empty
++[t] MBR: 0x00080000,   32768 type: 0xda   # slot 2 is the EEPROM
+```
+
+(SDHC encodes capacity as `C_SIZE = bytes / 512 KiB - 1`, so 511 → 543.) All 46
+milestones and the published `rpi-machine-id` are unchanged.
+
+The size is the part the model claims to be: `RDID` in `src/periph/spi0.rs`
+answers a Winbond W25Q128, 16 MiB. `pieeprom.bin` is 512 KiB of that; the rest
+reads back as erased flash, which is what the unused address space of a real
+chip does.
+
+### How it reaches `Spi0`
+
+`block::Window` is the whole adapter — a `BlockDevice` over a `BlockDevice`,
+addressed from zero, refusing any access past its end so a runaway EEPROM write
+cannot reach the FAT partition the firmware is about to boot from.
+
+`Spi0` is not a block device and does not become one: serial NOR is byte
+addressed, with 4 KiB sector erase and bit-clearing page program, and the
+working copy stays a `Vec<u8>`. What the backing store adds is durability. The
+image is read out of it once (`attach_flash_medium`), and `flush_flash()`
+writes back the sectors that actually differ when the `dirty` flag says the
+firmware erased or programmed something. `RVF_DUMP_FLASH` becomes the
+degenerate case of the same idea rather than a second mechanism.
+
+Hosted, the same path is available with `--eeprom-part <n>`:
+
+```console
+$ rpi-virt-fw recon --eeprom-part 2 --sd firmware/sd.img
+eeprom     firmware/sd.img partition 2 @ LBA 524288 (32768 blocks)
+```
+
+It reports an image byte-identical to `recon firmware/pieeprom.bin --eeprom`.
+The file-based form is untouched and stays the primary one: it is how every
+scenario and `scripts/boot-check.sh` run, with no SD image and no QEMU involved.
+
+**Not yet exercised end to end.** The write-back is covered by tests in
+`src/block.rs` and `tests/peripherals.rs`, but no *modelled* boot has reached a
+self-update to trigger it: the bootloader's `find_files` reports
+`[sdcard] pieeprom.upd not found` even with the file on the FAT and placed in
+the first directory sector, so the burn never starts. That is a firmware-model
+gap on the lookup side, not on this one, and a boot that never writes leaves the
+partition byte-identical — verified across full runs.
+
 ## What stage 3 needs from this
 
 * An allocator and a RAM window. The image reserves only its own `.bss` and a
@@ -200,8 +283,15 @@ prints a fixed message instead of crashing if they differ. Both values reach
   and a non-zero status otherwise. `scripts/qemu-kernel.sh` already asserts on
   it, and CI already fails on it. The hosted binary stays the primary test path
   — `cargo test` and the golden transcript still live there — but the image is
-  no longer a thing that can only be judged by eye.
+  no longer a thing that can only be judged by eye. That answers the harness
+  question #32 flags as the epic's real open risk.
 * A fault handler that is already installed. Anything stage 3 puts in the image
   gets `ESR_EL2`/`ELR_EL2`/`FAR_EL2`/`SPSR_EL2` and the general registers on the
   console when it goes wrong, and a distinct exit status, instead of a silent
   spin in QEMU's boot stub.
+* An SD driver, for QEMU's SDHCI at ARM `0xFE34_0000`, exposed as a
+  `BlockDevice`. Everything above it is already here: `Window::mbr_partition`
+  finds the EEPROM partition in that device's own table, `Spi0` takes the window
+  with `attach_flash_medium`, and the run loop calls `flush_flash()` where the
+  hosted one does. The driver is the only piece missing — the EEPROM does not
+  need a second one.
