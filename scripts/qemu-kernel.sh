@@ -1,13 +1,29 @@
 #!/usr/bin/env bash
 # Build the bare-metal aarch64 frontend and boot it under QEMU as a `-kernel`.
 #
-#   scripts/qemu-kernel.sh [--fault] [extra qemu args...]
+#   scripts/qemu-kernel.sh [--fault | --boot [bundle]] [extra qemu args...]
 #
-# This is stage 2 of #32: the image is scaffolding — it prints a banner, checks
-# its own exception level and exits. What it proves is the environment the later
+# Without `--boot` this is stage 2 of #32: the image prints a banner, checks its
+# own exception level and exits. What it proves is the environment the later
 # stages need: an image of ours that QEMU's `raspi4b` accepts as an arm64 Image,
 # loads where we linked it, and enters at EL2 (stage 4 installs stage-2
-# translation, which only exists at EL2).
+# translation, which only exists at EL2). It is seconds, so CI keeps running it.
+#
+# `--boot` is stage 3: the same image, handed the firmware blobs through
+# `-initrd`, runs the VPU model over them — the bare-metal spelling of
+# `recon firmware/pieeprom.bin --eeprom --sd firmware/sd.img`. The bundle is
+# built by scripts/make-blob-bundle.sh from `firmware/` unless one is named.
+# This is a *long* run: a full boot to the ARM hand-off retires 991,737,098 VPU
+# instructions and the interpreter is itself under TCG here, so it takes about
+# 35 minutes where the hosted `recon` takes 55 seconds, and the default
+# `RVF_KERNEL_WALL` goes up to an hour. The image carries its own budget, baked
+# in from the same variable and set 20 s lower, so it stops and reports rather
+# than being killed by `timeout`.
+#
+# The assertion in `--boot` mode is the image's ordered milestone list
+# (aarch64/src/model.rs) — *not* the golden transcript, which stays hosted in
+# `scripts/boot-check.sh` along with `cargo test`. This answers one question:
+# does the firmware get as far here as it does there?
 #
 # `raspi4b` and not `virt`: RAM at physical 0 is the BCM2711 map the VideoCore
 # firmware produces addresses for. `virt` starts RAM at 0x40000000 with flash at
@@ -41,7 +57,6 @@ set -uo pipefail
 
 here="$(cd "$(dirname "$0")/.." && pwd)"
 qemu="${QEMU:-qemu-system-aarch64}"
-wall="${RVF_KERNEL_WALL:-20}"
 profile="${RVF_PROFILE:-release}"
 target=aarch64-unknown-none
 elf="$here/target/$target/$profile/vc4-to-aarch64"
@@ -55,11 +70,45 @@ IMAGE_PANIC=4
 
 features=()
 want=$IMAGE_OK
-if [ "${1:-}" = "--fault" ]; then
-  shift
-  features=(--features fault)
-  want=$IMAGE_FAULT
-fi
+initrd=()
+# The stage-2 image exits in well under a second; only the model boot needs a
+# budget worth the name.
+default_wall=20
+case "${1:-}" in
+  --fault)
+    shift
+    features=(--features fault)
+    want=$IMAGE_FAULT
+    ;;
+  --boot)
+    shift
+    # Measured: about 35 minutes on a 12-core dev box (QEMU 10.2.1, TCG). An
+    # hour is the headroom for a slower machine — the run ends on its own stop
+    # condition long before this, and a `timeout` that fires is reported as a
+    # hang, so a generous budget costs nothing and a tight one lies.
+    default_wall=3600
+    bundle="${1:-}"
+    if [ -n "$bundle" ] && [ "${bundle#-}" = "$bundle" ]; then
+      shift
+    else
+      bundle="$here/target/firmware.bundle"
+      for blob in pieeprom.bin sd.img; do
+        if [ ! -r "$here/firmware/$blob" ]; then
+          echo "MISSING: firmware/$blob (scripts/fetch-firmware.sh, scripts/make-sd.sh)" >&2
+          exit 1
+        fi
+      done
+      mkdir -p "$here/target"
+      "$here/scripts/make-blob-bundle.sh" "$bundle" \
+        "$here/firmware/pieeprom.bin" "$here/firmware/sd.img" || exit 1
+    fi
+    initrd=(-initrd "$bundle")
+    ;;
+esac
+wall="${RVF_KERNEL_WALL:-$default_wall}"
+# The image's own budget is derived from this at *build* time (aarch64/build.rs),
+# so it has to be in the environment before cargo runs, not just before qemu.
+export RVF_KERNEL_WALL="$wall"
 
 # --- build --------------------------------------------------------------------
 # The bare-metal crate is a workspace member kept out of `default-members`, so it
@@ -130,7 +179,7 @@ semihosting=(-semihosting-config enable=on,target=native)
 # stdin closed: the image never reads, and a blocked read would hang the run.
 timeout --signal=TERM "$wall" \
   "$qemu" -M raspi4b -kernel "$img" -display none -serial stdio \
-  "${semihosting[@]}" "$@" </dev/null 2>&1
+  "${semihosting[@]}" ${initrd[@]+"${initrd[@]}"} "$@" </dev/null 2>&1
 status=$?
 
 # 124 is `timeout` firing. It used to be the expected end — the image parked in

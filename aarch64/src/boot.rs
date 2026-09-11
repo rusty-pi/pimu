@@ -110,8 +110,16 @@ _start:
     bl      rvf_main
 
     // rvf_main is `-> !`; if it ever returns, park rather than run off the end.
+    //
+    // `wfi`, not `wfe`: three of `raspi4b`'s four cores arrive here immediately
+    // and stay for the whole run, and under TCG that choice is the difference
+    // between three idle vCPU threads and three busy ones. QEMU's `HELPER(wfi)`
+    // halts the vCPU until an interrupt; `HELPER(wfe)` is a yield that returns
+    // at once, so a `wfe` park loop burns a host core each. Measured: 366% CPU
+    // for the process with `wfe`, against ~100% with `wfi` — all of it stolen
+    // from the one core that is actually interpreting the VPU.
 .Lpark:
-    wfe
+    wfi
     b       .Lpark
 
     .balign 8

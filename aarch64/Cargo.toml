@@ -21,6 +21,11 @@ path = "src/main.rs"
 fault = []
 
 [dependencies]
+# The model itself. `default-features = false` is the `no_std` + `alloc` build
+# from #32 stage 1 — with `std` on, the crate wants `std::fs`, `std::env` and
+# `std::time::Instant`, none of which exist here. Same crate, same models, same
+# run loop as the hosted `recon`; only the frontend differs.
+rpi-virt-fw = { path = "..", default-features = false }
 
 # No `[profile.*]` here on purpose: profile sections in a non-root workspace
 # member are ignored by cargo. Nothing needs one — `aarch64-unknown-none`

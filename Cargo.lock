@@ -73,6 +73,9 @@ dependencies = [
 [[package]]
 name = "rvf-aarch64"
 version = "0.1.0"
+dependencies = [
+ "rpi-virt-fw",
+]
 
 [[package]]
 name = "serde"

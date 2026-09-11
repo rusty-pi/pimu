@@ -81,7 +81,11 @@ pub fn exit(code: u32) -> ! {
 /// available; `scripts/qemu-kernel.sh`'s timeout is what ends the run then.
 pub fn park() -> ! {
     loop {
-        // SAFETY: `wfe` is unprivileged and has no memory effects.
-        unsafe { asm!("wfe", options(nomem, nostack)) };
+        // `wfi` rather than `wfe` for the same reason the entry stub's park
+        // loop uses it (boot.rs): under TCG `wfi` halts the vCPU thread and
+        // `wfe` is a yield that returns immediately, so a `wfe` loop spins a
+        // host core for as long as the run lasts.
+        // SAFETY: `wfi` is permitted at EL2 and has no memory effects.
+        unsafe { asm!("wfi", options(nomem, nostack)) };
     }
 }
