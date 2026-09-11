@@ -1,31 +1,42 @@
 # The bare-metal aarch64 frontend
 
 `aarch64/` builds `vc4-to-aarch64`, an image `qemu-system-aarch64 -machine
-raspi4b -kernel` boots. It is stage 2 of [#32](https://github.com/valtzu/rpi-virt-fw/issues/32),
+raspi4b -kernel` boots. It is stages 2 and 3 of [#32](https://github.com/valtzu/rpi-virt-fw/issues/32),
 whose end goal is to run Linux against the *live* firmware model: the emulator
 stays resident at EL2, installs stage-2 translation, and services the guest's
 mailbox traffic from the same models the hosted `recon` binary drives.
 
-Today the image is scaffolding. It brings up a stack, installs EL2 exception
-vectors, clears `.bss`, prints a banner over the PL011, checks its own exception
-level and exits. **There is no VPU model in it yet** — that is stage 3, and it
-depends on the `no_std` port (stage 1).
+The image has two modes, and which one it is in depends on whether it was given
+firmware to boot.
+
+**Without `-initrd` it is the stage-2 environment check.** It brings up a stack,
+installs EL2 exception vectors, clears `.bss`, prints a banner over the PL011,
+checks its own exception level and exits. It takes under a second, which is why
+CI still runs it on every push.
 
 ```console
 $ scripts/qemu-kernel.sh
-image: target/aarch64-unknown-none/release/vc4-to-aarch64.img (16336 bytes)
+image: target/aarch64-unknown-none/release/vc4-to-aarch64.img (276720 bytes)
 
-rpi-virt-fw: aarch64 frontend (issue #32 stage 2)
+rpi-virt-fw: aarch64 frontend (issue #32 stage 3)
   CurrentEL   EL2
   MPIDR_EL1   0x0000000080000000
   DTB (x0)    0x0000000000000100
-  image       0x00200000 .. 0x002180e0 (0x180e0 bytes)
-  bss         0x00203fd0 .. 0x002040e0   stack top 0x002140e0
+  image       0x00200000 .. 0x00257a20 (0x57a20 bytes)
+  bss         0x002438f0 .. 0x00243a20   stack top 0x00253a20
   UART0       0xfe201000 (PL011)
-  VBAR_EL2    0x00201800 (16 x 0x80, see aarch64/src/vectors.rs)
-scaffolding only: no VPU model in this image yet
+  VBAR_EL2    0x00235800 (16 x 0x80, see aarch64/src/vectors.rs)
+  heap        0x20000000 .. 0x80000000 (1536 MiB, see aarch64/src/heap.rs)
+  CNTFRQ_EL0  62500000 Hz (the max_wall clock)
+no firmware bundle: no ATAG_INITRD2 in the boot arguments (pass -initrd)
+stage 2 only: pass -initrd <bundle> (scripts/make-blob-bundle.sh) to boot the model
 qemu -kernel check passed
 ```
+
+**With `--boot` it runs the VPU model** over `pieeprom.bin` and `sd.img` — the
+bare-metal spelling of `recon firmware/pieeprom.bin --eeprom --sd
+firmware/sd.img`, with the same crate, the same models and the same run loop.
+See [Stage 3](#stage-3-the-model-in-the-image) below.
 
 The script builds, flattens the ELF to a raw image, boots it, and asserts on
 QEMU's exit status. It exits 2 — the same convention as `scripts/qemu-check.sh`
@@ -174,17 +185,171 @@ PC-relative) against where it was linked (a literal the linker filled in) and
 prints a fixed message instead of crashing if they differ. Both values reach
 `rvf_main` as arguments; see `aarch64/src/boot.rs`.
 
+## Stage 3: the model in the image
+
+```bash
+scripts/qemu-kernel.sh --boot            # builds the bundle from firmware/
+scripts/qemu-kernel.sh --boot my.bundle  # or bring your own
+```
+
+It reaches the ARM hand-off:
+
+```console
+  heap        0x20000000 .. 0x80000000 (1536 MiB, see aarch64/src/heap.rs)
+  CNTFRQ_EL0  62500000 Hz (the max_wall clock)
+  initrd      0x08000000 .. 0x19080040 (279040 KiB)
+  blob        pieeprom.bin     524288 bytes
+  blob        sd.img           285212672 bytes
+
+--- boot 1 : entry 0x80000200, 1024 MiB model RAM, wall 3580 s ---
+
+  0.00 RPi: BOOTSYS release VERSION:0a7ef05f DATE: 2026/08/04 TIME: 12:38:13
+  ...
+MESS:00:00:21.562712:0: arm_loader: Starting ARM with 948MB
+
+--- end Stuck { pc: 0x3ec40014, silent_us: 60001330, retired: 68773536 }  pc 0x3ec40014  retired 991737098  skipped 0  console 8215 bytes ---
+
+milestones:
+  [ok] EEPROM bootloader running
+      "PM_RSTS 00000020"
+  [ok] PCIe up, VL805 found
+      "PCIe scan 00001106:00003483"
+  [ok] start4.elf loaded and logging
+      "MESS:"
+  [ok] config.txt parsed, second-stage log
+      "*** Restart logging"
+  [ok] ARM hand-off — the whole boot
+      "arm_loader: Starting ARM with 948MB"
+heap        1039 MiB live, 1039 MiB peak of 1536 MiB
+
+the VPU model reached the ARM hand-off bare-metal
+qemu -kernel check passed
+```
+
+`retired 991737098` is the same instruction count the hosted `recon
+--ram-mb 1024` reports for this boot, to the instruction, and the 8215 console
+bytes diff clean against the hosted `boot.log.console` from the same blobs. The
+run takes about 35 minutes on a 12-core dev box against 55 seconds hosted — the
+interpreter is itself running under TCG — which is why `--boot` raises the
+wall budget to an hour and why the hosted path stays the one CI blocks on.
+
+The image runs the same `Emulator` over the same `Machine` as the hosted
+`recon`, from the same crate — `aarch64/` depends on `rpi-virt-fw` with
+`default-features = false`, which is the `no_std` + `alloc` build from stage 1.
+`aarch64/src/model.rs` is the whole of the difference, and it is short: build
+the payload from the EEPROM image, attach the SD card, set `RunLimits`, run,
+tick off milestones.
+
+Four things `src/` deliberately leaves to a frontend, and where each one is:
+
+| what | where | why it matters |
+| --- | --- | --- |
+| a `#[global_allocator]` | `heap.rs` | `Machine::new` is a `vec![0; ram_bytes]`; without a heap nothing allocates at all |
+| a microsecond clock | `clock.rs` | with no source installed `time::Stopwatch` reads zero forever and `RunLimits::max_wall` silently never trips |
+| the diagnostic and console sinks | `main.rs` | `diag_eprintln!` and the modelled UART are dropped on the floor until a frontend takes them |
+| a `DiagConfig` | `model.rs` | `from_env` is hosted-only; `DiagConfig::quiet()` is the bare-metal equivalent |
+
+### The memory map
+
+`raspi4b` has 2 GiB of RAM at physical 0 and no MMU on, so every claim on it is
+by convention. Bottom-up:
+
+| range | who |
+| --- | --- |
+| `0x0` .. `~0x1000` | QEMU's own boot stub, written at `loader_start` |
+| `0x8_0000` | where the firmware puts the ARM kernel — kept free for stage 4 to `ERET` into |
+| `0x20_0000` .. `_end` | this image, stacks included |
+| `0x800_0000` .. | the `-initrd` bundle: QEMU places it at `loader_start + MIN(ram_size / 2, 128 MiB)` |
+| `0x2000_0000` .. `0x8000_0000` | **the heap**, 1.5 GiB |
+
+The model asks for 1 GiB of it. That is not a comfortable round number but the
+exact size of the address space it can reach: `Machine::fold_ram_addr` masks
+every RAM address with `0x3FFF_FFFF` to collapse the four VC4 cache aliases onto
+one backing store, so anything above 1 GiB is unreachable. (The hosted
+`recon --eeprom` default of 2048 MiB is slack, and `recon --ram-mb 1024` reaches
+`arm_loader` exactly as the default does — checked before relying on it.)
+
+512 MiB is where the heap starts because the bundle carries the 272 MiB SD
+image, so the initrd runs to about 400 MiB. That is checked and not assumed: the
+image reads the initrd extent out of the boot arguments and fails with a named
+error if it reaches into the window, because a bigger bundle would otherwise
+present as the firmware reading corrupted blob bytes a long way downstream.
+
+The allocator is a bump pointer with LIFO rollback — freeing the most recent
+block un-bumps it, growing it in place extends it, which is what keeps the
+console `Vec` from copying itself as it doubles. It does not recycle anything
+else, so the run reports its high-water mark at the end and the margin is a
+number rather than a hope. `alloc_zeroed` skips zeroing memory that has never
+been handed out, since QEMU's guest RAM is an anonymous mapping and comes up
+zero; the image samples the window at startup so that assumption is tested
+rather than trusted.
+
+This matters beyond convenience. #32 depends on the model's RAM *being* machine
+physical memory: QEMU's devices DMA into it with no SMMU in the way, so once
+stage 4 lets Linux program a DMA engine, an address the firmware handed out has
+to be one QEMU's devices can actually write.
+
+### Getting the blobs in
+
+`raspi4b` takes exactly one blob of ours. `-pflash` is refused, a second
+`-drive if=sd` is refused, and the machine has no virtio transport. So
+`scripts/make-blob-bundle.sh` packs `pieeprom.bin` and `sd.img` into one
+`RVFB` container, `-initrd` carries it, and `aarch64/src/bundle.rs` reads the
+blobs **in place** — `BundleBlocks` serves SD sectors straight out of the initrd
+rather than copying a 272 MiB image into a heap that is already mostly the
+model's RAM.
+
+Finding it is the one genuinely surprising part. QEMU only builds a device tree
+when the machine supplies one or `-dtb` names one, and `raspi4b` does neither —
+so it falls back to `set_kernel_args()`, which writes an **ATAG list** at
+`0x100` and passes that in `x0`. Verified on QEMU 10.2.1: `ATAG_CORE`,
+`ATAG_MEM`, `ATAG_INITRD2` with the blob's address and length, and no
+`d00dfeed` anywhere. `aarch64/src/initrd.rs` reads a device tree when there is
+one (through `rpi_virt_fw::fdt`, the crate's own parser — it is already
+`no_std`) and the ATAG list when there is not, so the image is not tied to this
+machine.
+
+This is a stopgap with a known end: the SD image belongs behind QEMU's own SD
+controller, reached a sector at a time through `block::BlockDevice`, which is
+what that trait exists for and what makes the EEPROM's self-update persist to a
+file. Until the image has an SDHCI driver, `-initrd` carries it.
+
+### What it asserts
+
+Not the golden transcript. `cargo test` and `scripts/boot-check.sh` stay hosted
+— 46 milestones, a 141-line transcript diffed line by line — and they remain the
+primary test path. The image checks an ordered list of five console landmarks
+(`aarch64/src/model.rs`), which answers the one question stage 3 asks: does the
+firmware get as far here as it does there? When it does not, the ticked list
+says where it stopped instead of leaving a wall of UART output to read.
+
+### Budget
+
+A full boot retires 991,737,098 VPU instructions and the interpreter is itself
+running under TCG here, so `--boot` raises the default `RVF_KERNEL_WALL` to
+3600 seconds — measured at about 35 minutes, with headroom for a slower
+machine. The image carries its own budget too, baked in by `build.rs`
+from the same variable and set 20 s lower, because a guest cannot ask QEMU how
+long `timeout` will give it — and a wedged boot that stops itself prints a
+report, while one that gets killed does not.
+
 ## Layout
 
 | file | what it is |
 | --- | --- |
 | `aarch64/src/boot.rs` | the 64-byte arm64 Image header and the entry stub (CPU park, `VBAR_EL2`, stack, `.bss` clear, placement evidence) |
-| `aarch64/src/main.rs` | `rvf_main`, the banner, the self-checks, and the `#[panic_handler]` |
+| `aarch64/src/main.rs` | `rvf_main`, the banner, the self-checks, the frontend seams, and the `#[panic_handler]` |
+| `aarch64/src/model.rs` | stage 3: build the machine from the bundle, run it, tick off milestones |
+| `aarch64/src/heap.rs` | the `#[global_allocator]` and the RAM window it owns |
+| `aarch64/src/clock.rs` | `CNTPCT_EL0`/`CNTFRQ_EL0` as the run loop's wall clock |
+| `aarch64/src/initrd.rs` | where the bootloader put `-initrd`, from a device tree or an ATAG list |
+| `aarch64/src/bundle.rs` | the `RVFB` container format and the borrowed-in-place `BlockDevice` over it |
 | `aarch64/src/vectors.rs` | the EL2 vector table and the fault report |
 | `aarch64/src/semihost.rs` | `SYS_EXIT_EXTENDED`, and the exit statuses the script asserts on |
 | `aarch64/src/uart.rs` | PL011 transmit at `0xFE20_1000`, register names shared with `src/periph/uart_pl011.rs`; `puthex`/`putdec` for the `core::fmt`-free fault path |
 | `aarch64/link.ld` | load address, section order, `.bss`, the two stacks, `_image_size` |
-| `aarch64/build.rs` | passes the linker script by absolute path |
+| `aarch64/build.rs` | passes the linker script by absolute path, bakes in the wall budget |
+| `scripts/make-blob-bundle.sh` | packs the firmware blobs into the one file `-initrd` can carry |
 
 ## Where the EEPROM lives
 
@@ -269,29 +434,23 @@ the first directory sector, so the burn never starts. That is a firmware-model
 gap on the lookup side, not on this one, and a boot that never writes leaves the
 partition byte-identical — verified across full runs.
 
-## What stage 3 needs from this
+## What stage 4 needs from this
 
-* An allocator and a RAM window. The image reserves only its own `.bss` and a
-  64 KiB stack; the model's memory has to come from somewhere deliberate —
-  physical RAM above the image, not a `Vec`, because QEMU devices DMA straight
-  into machine memory (there is no SMMU by default).
-* Blobs via `-initrd`. `-pflash` is not available on `raspi4b`; `-initrd` places
-  a bundle in RAM and reports its address in the device tree QEMU passes in `x0`
-  (`0x100` on this machine). Nothing in the image parses the device tree yet.
-* A way to report a pass, which is now here: call `semihost::exit` with
-  `EXIT_OK` when the milestones the model was supposed to reach were reached,
-  and a non-zero status otherwise. `scripts/qemu-kernel.sh` already asserts on
-  it, and CI already fails on it. The hosted binary stays the primary test path
-  — `cargo test` and the golden transcript still live there — but the image is
-  no longer a thing that can only be judged by eye. That answers the harness
-  question #32 flags as the epic's real open risk.
-* A fault handler that is already installed. Anything stage 3 puts in the image
-  gets `ESR_EL2`/`ELR_EL2`/`FAR_EL2`/`SPSR_EL2` and the general registers on the
-  console when it goes wrong, and a distinct exit status, instead of a silent
-  spin in QEMU's boot stub.
-* An SD driver, for QEMU's SDHCI at ARM `0xFE34_0000`, exposed as a
-  `BlockDevice`. Everything above it is already here: `Window::mbr_partition`
-  finds the EEPROM partition in that device's own table, `Spi0` takes the window
-  with `attach_flash_medium`, and the run loop calls `flush_flash()` where the
-  hosted one does. The driver is the only piece missing — the EEPROM does not
-  need a second one.
+* **Stage-2 translation tables**, which is the actual work: unmap nothing at
+  first, `ERET` into the kernel the firmware loaded at `0x8_0000`, and check
+  that Linux boots exactly as it does under plain `raspi4b`. Everything below is
+  already in place for it.
+* **RAM the guest and the models agree about.** The model's RAM is a heap block
+  at `0x2000_0000`-something, while the firmware believes it starts at 0. Stage 2
+  translation can map a guest IPA of 0 onto wherever the block landed, but device
+  DMA bypasses stage 2 and uses physical addresses — so the first peripheral the
+  guest programs to write into "RAM" is where that indirection stops being free.
+  The long-run answer is a heap window whose base the model's `Ram` is
+  constructed at, rather than one it is merely allocated from.
+* **An SDHCI driver**, so the SD image comes through `-drive if=sd` and
+  `block::BlockDevice` instead of `-initrd`, and the EEPROM's self-update
+  persists to the file the way it does on real SPI flash.
+* **A fault handler that is already installed**, and now covers a billion
+  interpreted instructions rather than a banner: anything that goes wrong gets
+  `ESR_EL2`/`ELR_EL2`/`FAR_EL2`/`SPSR_EL2` and the general registers on the
+  console, plus a distinct exit status.

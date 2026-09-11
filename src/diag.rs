@@ -104,8 +104,19 @@ pub fn emit_console(bytes: &[u8]) {
     let _ = std::io::stderr().write_all(bytes);
 }
 
+/// Bare-metal, the console goes to the byte sink a frontend installed with
+/// [`set_console_sink`], and only falls back to the formatting sink — which
+/// has to make the bytes a `str` and so is lossy — if there is none.
+///
+/// The distinction is not cosmetic. This stream is what the golden transcript
+/// is made of, so a byte the firmware emitted has to arrive as that byte;
+/// `from_utf8_lossy` would turn anything outside UTF-8 into `U+FFFD` and make
+/// the bare-metal transcript quietly disagree with the hosted one.
 #[cfg(not(feature = "std"))]
 pub fn emit_console(bytes: &[u8]) {
+    if console_emit(bytes) {
+        return;
+    }
     emit(format_args!(
         "{}",
         alloc::string::String::from_utf8_lossy(bytes)
@@ -137,10 +148,34 @@ mod sink {
         let f = unsafe { core::mem::transmute::<usize, Sink>(p) };
         f(args);
     }
+
+    /// Receives modelled-UART bytes exactly as the firmware produced them.
+    pub type ConsoleSink = fn(&[u8]);
+
+    /// Null pointer = none installed; [`super::emit_console`] then falls back
+    /// to the lossy formatting path.
+    static CONSOLE_SINK: AtomicUsize = AtomicUsize::new(0);
+
+    pub fn set_console_sink(f: ConsoleSink) {
+        CONSOLE_SINK.store(f as usize, Ordering::Relaxed);
+    }
+
+    /// Returns whether a sink took the bytes.
+    pub fn console_emit(bytes: &[u8]) -> bool {
+        let p = CONSOLE_SINK.load(Ordering::Relaxed);
+        if p == 0 {
+            return false;
+        }
+        // SAFETY: `p` is non-null, so it was stored by `set_console_sink` from
+        // a `ConsoleSink` and nothing else ever writes this slot.
+        let f = unsafe { core::mem::transmute::<usize, ConsoleSink>(p) };
+        f(bytes);
+        true
+    }
 }
 
 #[cfg(not(feature = "std"))]
-pub use sink::{emit, set_sink, Sink};
+pub use sink::{console_emit, emit, set_console_sink, set_sink, ConsoleSink, Sink};
 
 #[derive(Debug, Clone, Default)]
 pub struct DiagConfig {

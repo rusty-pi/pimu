@@ -31,6 +31,15 @@
 //!   frontend builds a [`diag::DiagConfig`] itself.
 //! * `std::time::Instant` behind [`time::Stopwatch`], and `eprintln!` behind
 //!   [`diag_eprintln!`].
+//!
+//! Which leaves four things for a bare-metal frontend to supply: a
+//! `#[global_allocator]`, a microsecond clock (`time::set_source` — with none
+//! installed `max_wall` reads zero and never trips), the two output sinks
+//! (`diag::set_sink` for diagnostics and `diag::set_console_sink` for the
+//! modelled UART's bytes), and a [`diag::DiagConfig`]. `aarch64/` is one such
+//! frontend; see `docs/aarch64-frontend.md`. (The three `set_*` functions only
+//! exist in the `no_std` build — hosted, all three have a real implementation
+//! already.)
 
 #![cfg_attr(not(feature = "std"), no_std)]
 

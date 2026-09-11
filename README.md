@@ -97,8 +97,13 @@ cargo check --no-default-features --target aarch64-unknown-none
 
 That build has no filesystem, no environment and no `anyhow`: blobs go in as
 `&[u8]`, the `RVF_*` switches become a `DiagConfig` the frontend constructs,
-and diagnostics go to a sink it installs (`diag::set_sink`). The scenario
-harness and the `rpi-virt-fw` binary are hosted-only.
+diagnostics go to a sink it installs (`diag::set_sink`), the modelled UART goes
+to another (`diag::set_console_sink`), and the wall clock is a microsecond
+source it supplies (`time::set_source`). The scenario harness and the
+`rpi-virt-fw` binary are hosted-only.
+
+`scripts/qemu-kernel.sh --boot` runs that build for real — the same boot, inside
+a QEMU `raspi4b` guest at EL2. See `docs/aarch64-frontend.md`.
 
 ### Getting the patched device tree out
 
@@ -220,8 +225,9 @@ src/
   harness/      scenario parsing, transcript capture, golden diff,
                 boot.rs = the firmware-boot scenario and its milestones
   payloads.rs   hand-assembled VPU test programs
-aarch64/        bare-metal `-kernel` frontend (#32 stage 2); see
-                docs/aarch64-frontend.md. Not built by the root cargo commands
+aarch64/        bare-metal `-kernel` frontend (#32 stages 2-3): the same models,
+                run inside a QEMU guest at EL2. `scripts/qemu-kernel.sh --boot`;
+                see docs/aarch64-frontend.md. Not built by the root cargo commands
 docs/           aarch64-frontend, boot-chain, diagnostics, usb-xhci, vpu-isa,
                 references, vision
 scripts/        fetch-firmware.sh, make-sd.sh, provision-eeprom.sh, make-dt-blob.py
