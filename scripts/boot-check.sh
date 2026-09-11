@@ -164,6 +164,15 @@ want 'ARM handover'                        'arm_loader: Starting ARM with 948MB'
 want 'patched device tree read back'       'device tree handed to the ARM'
 want 'chosen serial published'             '/chosen/rpi-serial64 .*"fa1e00231aa2bb31"'
 want 'rpi-machine-id published'            '/chosen/rpi-machine-id .*"2928640898f6b5035da98885da0ac498"'
+# And the derivation itself, not just its output (#22). The EEPROM bootloader —
+# not `start4` — computes the identity as `SHA-256(otp[28] | otp[35] | otp[30] |
+# otp[64] | otp[65])` truncated to 16 bytes, each row a little-endian word, and
+# stages it at `BVER + 0x8c` for `start4` to hex-encode. `src/identity.rs`
+# recomputes it from the modelled fuses, so this line distinguishes "the fuses
+# changed" from "the algorithm changed" — the latter is what would silently move
+# a deployed card's root-LUKS passphrase (rpi-mkosi#37).
+want 'machine-id derivation reproduced'    'matches the value the firmware published'
+must_not 'derivation no longer predicted'  'MISMATCH: the EEPROM bootloader'
 # With the ARM running the VPU keeps polling the LPDDR4 MR4 temperature code
 # once a second and rescales the DRAM refresh interval by 1 << (3 - code); the
 # reference board reports code 2 and the interval doubles (vc4-boot.log 69,
