@@ -48,7 +48,9 @@
 //! [size=4K]`, capabilities PM at `0x80`, MSI at `0x90`, PCIe at `0xC4`, AER at
 //! `0x100`.
 
-use std::collections::BTreeMap;
+use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
 
 use crate::bus::Width;
 use crate::periph::usb::UsbDevice;

@@ -8,7 +8,7 @@
 //!
 //! Everything else is sticky storage with the password byte masked on read-back.
 
-use std::collections::BTreeMap;
+use alloc::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
@@ -58,7 +58,7 @@ impl Pm {
 
     /// Consume a pending reset request.
     pub fn take_reset(&mut self) -> bool {
-        std::mem::take(&mut self.reset_pending)
+        core::mem::take(&mut self.reset_pending)
     }
 }
 

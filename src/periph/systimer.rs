@@ -6,6 +6,7 @@
 //! advances timed waits (see [`crate::bus::Bus::timer_tick_slot`]).
 
 use crate::bus::{BusResult, MmioDevice, Width};
+use crate::diag_eprintln;
 
 const CS: u32 = 0x00;
 const CLO: u32 = 0x04;
@@ -76,7 +77,7 @@ impl SysTimer {
             clo_reads: 0,
             pending: [false; 4],
             pending_any: false,
-            dbg_cmp: std::env::var_os("RVF_DBG_CMP").is_some(),
+            dbg_cmp: crate::diag::flag("RVF_DBG_CMP"),
             arms: 0,
         }
     }
@@ -255,7 +256,7 @@ impl MmioDevice for SysTimer {
             if st.dbg_cmp {
                 st.arms += 1;
                 if st.arms <= 40 || st.arms.is_multiple_of(2000) {
-                    eprintln!(
+                    diag_eprintln!(
                         "[cmp] #{} C{c} <- {value:#x} now={} delta={}",
                         st.arms,
                         st.micros as u32,

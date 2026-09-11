@@ -17,6 +17,9 @@
 //!
 //! [rpi-mkosi#37]: https://github.com/valtzu/rpi-mkosi/issues/37
 
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+
 pub const FDT_MAGIC: u32 = 0xd00d_feed;
 
 const FDT_BEGIN_NODE: u32 = 1;

@@ -65,6 +65,7 @@
 //! HDMI mode-set path is worth exercising.
 
 use crate::bus::{BusResult, MmioDevice, Width};
+use alloc::vec::Vec;
 
 /// DDC master of HDMI0.
 pub const HDMI0_BASE: u32 = 0x7EF0_4500;

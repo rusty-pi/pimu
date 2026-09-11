@@ -49,7 +49,8 @@
 //! pins is a real derivation being re-run, not a constant being copied — and
 //! changing the serial here invalidates that milestone, which is the point.
 
-use std::collections::BTreeMap;
+use crate::diag_eprintln;
+use alloc::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
@@ -119,7 +120,7 @@ impl ConfigOtp {
         // modelled board behaves like the reference one. Filling the documented
         // control rows with a pattern is not harmless: `0xFA1E_0010` in row 16
         // sets bit 26 and the boot flips to "VC-JTAG locked".
-        for row in (0..=5).chain(std::iter::once(27)) {
+        for row in (0..=5).chain(core::iter::once(27)) {
             table.insert(row, 0xFA1E_0000 | row);
         }
         // 19-26: the board-identity block `arm_loader` verifies (see the module
@@ -231,8 +232,8 @@ impl ConfigOtp {
 
     fn resolve(&mut self) {
         self.data = self.table.get(&self.key).copied().unwrap_or(0);
-        if std::env::var_os("RVF_DBG_OTP").is_some() {
-            eprintln!(
+        if crate::diag::flag("RVF_DBG_OTP") {
+            diag_eprintln!(
                 "[otp] key {} (0x{:x}) -> 0x{:08x}{}",
                 self.key,
                 self.key,

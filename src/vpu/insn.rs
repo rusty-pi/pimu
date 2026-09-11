@@ -7,6 +7,8 @@
 
 use super::length::InsnClass;
 use super::reg::Cond;
+use alloc::boxed::Box;
+use alloc::string::{String, ToString};
 
 /// ALU operation, unified across the 16-bit (`p`/`q` tables), 32-bit imm and
 /// 32-bit triadic encodings. Names follow `videocoreiv.arch`.
@@ -938,8 +940,8 @@ fn slot_str(s: VecSlot, scalar: bool) -> String {
     )
 }
 
-impl std::fmt::Debug for VecInsn {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for VecInsn {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{} ", self.mnemonic())?;
         // A store's source sits in the A slot with a dash destination; a load's
         // destination sits in D. Print whichever is the real register first,

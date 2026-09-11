@@ -12,7 +12,8 @@
 //! vector-table slot `prio`". start4 enables source 64 (systimer, [`SYS_IRQ_SRC`])
 //! at priority 1 and arms a system-timer compare as its ThreadX tick.
 
-use std::collections::BTreeMap;
+use crate::diag_eprintln;
+use alloc::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
@@ -70,7 +71,7 @@ pub struct CoreCtl {
     pub vbase: [u32; 2],
     /// Sources newly raised in software through [`IRQ_PENDING_BITS`], as
     /// `(core, source)`, waiting to be vectored on that core.
-    sw_raised: std::collections::VecDeque<(u32, u32)>,
+    sw_raised: alloc::collections::VecDeque<(u32, u32)>,
     /// `RVF_DBG_IRQEN`, read once — this device is written from the step loop.
     dbg_irqen: bool,
 }
@@ -78,7 +79,7 @@ pub struct CoreCtl {
 impl CoreCtl {
     pub fn new() -> CoreCtl {
         CoreCtl {
-            dbg_irqen: std::env::var_os("RVF_DBG_IRQEN").is_some(),
+            dbg_irqen: crate::diag::flag("RVF_DBG_IRQEN"),
             ..CoreCtl::default()
         }
     }
@@ -102,7 +103,7 @@ impl CoreCtl {
     }
 
     pub fn take_core1_release(&mut self) -> bool {
-        std::mem::take(&mut self.pending_core1_release)
+        core::mem::take(&mut self.pending_core1_release)
     }
 
     /// The 4-bit priority/enable field for interrupt source `src` (as numbered by
@@ -158,7 +159,7 @@ impl MmioDevice for CoreCtl {
                 let (a, b) = ((prev >> (f * 4)) & 0xF, (value >> (f * 4)) & 0xF);
                 if a != b {
                     let src = word * 8 + f + 64;
-                    eprintln!("[irqen] core{core} src={src} prio {a} -> {b}");
+                    diag_eprintln!("[irqen] core{core} src={src} prio {a} -> {b}");
                 }
             }
         }

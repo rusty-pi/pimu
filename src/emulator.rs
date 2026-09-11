@@ -1,10 +1,14 @@
 //! Top-level emulator: owns the [`Vpu`] and the [`Machine`] as siblings and
 //! drives the run loop.
 
-use std::time::{Duration, Instant};
+use alloc::string::String;
+use alloc::vec::Vec;
+use core::time::Duration;
 
 use crate::bus::{Bus, Width};
+use crate::diag_eprintln;
 use crate::machine::{Console, Machine};
+use crate::time::Stopwatch;
 use crate::vpu::{Stop, UnimplPolicy, Vpu};
 
 /// The VPU reset vector `start4.elf` is entered at (`.crypto` region). The
@@ -46,6 +50,10 @@ pub struct Emulator {
     /// until the dispatch global is populated — see [`SMP_DISPATCH_GP_OFFSET`].
     core1_release_armed: bool,
     pub machine: Machine,
+    /// Diagnostics for [`Emulator::run`]. `None` means "ask the environment",
+    /// which is what the hosted frontend wants and what every run has always
+    /// done; a `no_std` frontend has no environment to ask, so it sets this.
+    pub diag: Option<crate::diag::DiagConfig>,
 }
 
 /// Stopping conditions for [`Emulator::run`].
@@ -89,8 +97,8 @@ impl Default for RunLimits {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Hex(pub u32);
 
-impl std::fmt::Debug for Hex {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for Hex {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{:#010x}", self.0)
     }
 }
@@ -158,6 +166,19 @@ pub struct RunReport {
     pub core1_release_never_resolved: bool,
 }
 
+/// What [`Emulator::diag`] falls back to: the `RVF_*` environment in a hosted
+/// build, and the quiet defaults where there is no environment to read.
+fn default_diag() -> crate::diag::DiagConfig {
+    #[cfg(feature = "std")]
+    {
+        crate::diag::DiagConfig::from_env()
+    }
+    #[cfg(not(feature = "std"))]
+    {
+        crate::diag::DiagConfig::quiet()
+    }
+}
+
 impl Emulator {
     pub fn new(machine: Machine, entry: u32) -> Emulator {
         Emulator {
@@ -166,6 +187,7 @@ impl Emulator {
             core1_entry: None,
             core1_release_armed: false,
             machine,
+            diag: None,
         }
     }
 
@@ -224,7 +246,7 @@ impl Emulator {
     }
 
     pub fn run(&mut self, limits: &RunLimits) -> RunReport {
-        let start = Instant::now();
+        let start = Stopwatch::start();
         let mut console = Vec::new();
         let mut wall_check = 0u64;
         // UART output is echoed to stderr as it happens, so a run can be
@@ -232,7 +254,7 @@ impl Emulator {
         // `RVF_LIVE_CONSOLE=0` to get the buffered-only behaviour back (the
         // summary still prints the whole console either way, but it is not
         // repeated once it has been streamed).
-        let diag = crate::diag::DiagConfig::from_env();
+        let diag = self.diag.clone().unwrap_or_else(default_diag);
         // `RVF_MMIO_FROM=<hex>` arms `--trace-mmio`-style logging only once the
         // PC first reaches that address — lets you capture a late boot stage
         // (e.g. start4.elf) without drowning in the bootloader's MMIO.
@@ -303,12 +325,17 @@ impl Emulator {
         // RVF_PROF=1: cheap PC profiler. Bucket the core-0 PC into 256-byte
         // slots on every step and dump the hottest on exit — finds the loop
         // that is eating the step budget when a boot phase runs slow.
-        let mut prof_hist: std::collections::HashMap<u32, u64> = std::collections::HashMap::new();
+        //
+        // `BTreeMap`, not `HashMap`: `alloc` has no `HashMap`, and these three
+        // maps are only touched when the switch that owns them is set, so the
+        // lookup being a tree walk costs a normal run nothing.
+        let mut prof_hist: alloc::collections::BTreeMap<u32, u64> =
+            alloc::collections::BTreeMap::new();
         // RVF_PROF_THREAD=1: same buckets, but keyed by the running ThreadX
         // thread (`_tx_thread_current_ptr`, `0x3EE35900`) as well, so "which
         // thread is spinning, and where" can be read off directly.
-        let mut prof_thist: std::collections::HashMap<(u32, u32), u64> =
-            std::collections::HashMap::new();
+        let mut prof_thist: alloc::collections::BTreeMap<(u32, u32), u64> =
+            alloc::collections::BTreeMap::new();
 
         // RVF_DBG_MAINSUS: catch the boot thread (0x3EF248C4) suspending — dump
         // the control-flow tail the one time it stops being the current thread
@@ -333,7 +360,8 @@ impl Emulator {
         // reaches one of these addresses. Generic "who calls this, with what"
         // probe - the linear disassembler can't xref (it desyncs on inline
         // data), so callers have to be found at runtime.
-        let mut trap_hits: std::collections::HashMap<u32, u64> = std::collections::HashMap::new();
+        let mut trap_hits: alloc::collections::BTreeMap<u32, u64> =
+            alloc::collections::BTreeMap::new();
         // `RVF_TRAP_MAX=<n>`: how many hits of each trap address to print
         // (default 12). The totals are always reported at exit.
         // RVF_TRAP_FROM=<n>: ignore trap hits before <n> million retired
@@ -343,8 +371,8 @@ impl Emulator {
         // RVF_DBG_EVGET: log every distinct (event-group, caller) pair passed to
         // `_tx_event_flags_get` (`0x3EC3E3BE`), so the groups the boot actually
         // blocks on can be told apart from the ones a shim must not touch.
-        // Hoisted out of the per-instruction loop: `std::env::var_os` is a
-        // locking lookup over the whole environment and these were being
+        // Hoisted out of the per-instruction loop: an environment lookup is a
+        // locking scan over the whole environment and these were being
         // evaluated on every step, which dominated run time.
 
         let mut core1_end: Option<RunEnd> = None;
@@ -371,7 +399,7 @@ impl Emulator {
 
             if diag.heartbeat != 0 && self.cpu.retired >= next_beat {
                 next_beat = self.cpu.retired + diag.heartbeat;
-                eprintln!(
+                diag_eprintln!(
                     "[beat] retired={} model_us={} pc={pc_before:#010x} in_exc={} irq_en={} tick_due={}",
                     self.cpu.retired,
                     self.machine.systimer.now_us(),
@@ -448,7 +476,7 @@ impl Emulator {
                 let n = trap_hits.entry(pc_before).or_insert(0);
                 *n += 1;
                 if *n <= diag.trap_max {
-                    eprintln!(
+                    diag_eprintln!(
                         "[trap] {pc_before:#010x} #{n} lr={:#010x} r0={:#x} r1={:#x} r2={:#x} r3={:#x} r4={:#x} r5={:#x} r6={:#x} r7={:#x} sp={:#x} retired={}",
                         self.cpu.regs.get(26),
                         self.cpu.regs.get(0),
@@ -500,7 +528,7 @@ impl Emulator {
             // every software-posted interrupt was silently dropped.
             while let Some((core, src)) = self.machine.corectl.take_sw_raised() {
                 if diag.dbg_swirq {
-                    eprintln!(
+                    diag_eprintln!(
                         "[sw-irq] core {core} src {src} pc={:#x} retired={}",
                         self.cpu.pc(),
                         self.cpu.retired
@@ -524,7 +552,7 @@ impl Emulator {
             if self.cpu.in_exception == 0 && self.cpu.irq_enabled() && self.cpu.exc_vbase != 0 {
                 if let Some(src) = self.machine.take_pending_irq() {
                     if diag.dbg_tick {
-                        eprintln!(
+                        diag_eprintln!(
                             "[irq] src={src} pc={:#x} retired={}",
                             self.cpu.pc(),
                             self.cpu.retired
@@ -541,7 +569,7 @@ impl Emulator {
             {
                 tick_skips += 1;
                 if tick_skips <= 20 || tick_skips.is_multiple_of(100_000) {
-                    eprintln!(
+                    diag_eprintln!(
                         "[tick-skip #{tick_skips}] in_exc={} irq_en={} pc={:#x} retired={}",
                         self.cpu.in_exception,
                         self.cpu.irq_enabled(),
@@ -563,7 +591,7 @@ impl Emulator {
                         if tick_deliveries <= 30 || tick_deliveries.is_multiple_of(500) {
                             let vb = self.cpu.exc_vbase;
                             let h = self.machine.load(vb.wrapping_add(slot * 4), Width::Word);
-                            eprintln!(
+                            diag_eprintln!(
                                 "[tick] #{tick_deliveries} slot={slot} vbase={vb:#x} handler={h:x?} resume={:#x} retired={} nest={:#x}",
                                 self.cpu.pc(),
                                 self.cpu.retired,
@@ -584,7 +612,7 @@ impl Emulator {
 
             if self.machine.mmio_trace && !self.machine.mmio_events.is_empty() {
                 for (addr, w, val, write) in self.machine.mmio_events.drain(..) {
-                    eprintln!(
+                    diag_eprintln!(
                         "mmio {:#010x}  {}{}  {:#010x} <- {:#0width$x}",
                         pc_before,
                         if write { "W" } else { "R" },
@@ -661,8 +689,7 @@ impl Emulator {
                 }
             }
             if diag.live_console && had_output {
-                use std::io::Write;
-                let _ = std::io::stderr().write_all(&fresh);
+                crate::diag::emit_console(&fresh);
             }
             console.extend_from_slice(&fresh);
             if let Some(needle) = &diag.trace_on_console {
@@ -790,7 +817,7 @@ impl Emulator {
                         self.machine.systimer.jump(200_000);
                     }
                     if diag.dbg_ff {
-                        eprintln!(
+                        diag_eprintln!(
                             "[ff] win close: clo_delta={clo_delta} w=[{w_lo:#x}..{w_hi:#x}] out={w_output} exc={} ff={ff} @{}",
                             self.cpu.in_exception, self.cpu.retired
                         );
@@ -821,7 +848,7 @@ impl Emulator {
             let mut totals: Vec<(u32, u64)> = trap_hits.into_iter().collect();
             totals.sort_unstable();
             for (pc, n) in totals {
-                eprintln!("[trap-total] {pc:#010x} {n}");
+                diag_eprintln!("[trap-total] {pc:#010x} {n}");
             }
         }
 
@@ -839,7 +866,7 @@ impl Emulator {
         if diag.dbg_irqtbl {
             let tbl = self.cpu.regs.get(24).wrapping_add(58004);
             let vb = self.cpu.exc_vbase;
-            eprintln!(
+            diag_eprintln!(
                 "[irqtbl] gp={:#x} table={tbl:#x} vbase={vb:#x}",
                 self.cpu.regs.get(24)
             );
@@ -864,50 +891,45 @@ impl Emulator {
                     } else {
                         ""
                     };
-                    eprintln!("[irqtbl]   src {src} handler={h:#x} vector={v:#x}{direct}");
+                    diag_eprintln!("[irqtbl]   src {src} handler={h:#x} vector={v:#x}{direct}");
                 }
             }
         }
 
-        if let Ok(list) = std::env::var("RVF_DBG_TCB") {
-            for t in list.split(',') {
-                let Ok(tcb) = u32::from_str_radix(t.trim().trim_start_matches("0x"), 16) else {
-                    continue;
-                };
-                let mut ld = |a: u32| self.machine.load(a, Width::Word).unwrap_or(0xdead_dead);
-                let sp = ld(tcb.wrapping_add(8));
-                let disc = ld(sp);
-                let (kind, resume) = if disc == 1 {
-                    ("irq", ld(sp.wrapping_add(4 * (1 + 8 + 16 + 1 + 1))))
-                } else {
-                    ("solicited", ld(sp.wrapping_add(4 * (1 + 8 + 10))))
-                };
-                eprintln!(
+        for tcb in crate::diag::hex_list("RVF_DBG_TCB") {
+            let mut ld = |a: u32| self.machine.load(a, Width::Word).unwrap_or(0xdead_dead);
+            let sp = ld(tcb.wrapping_add(8));
+            let disc = ld(sp);
+            let (kind, resume) = if disc == 1 {
+                ("irq", ld(sp.wrapping_add(4 * (1 + 8 + 16 + 1 + 1))))
+            } else {
+                ("solicited", ld(sp.wrapping_add(4 * (1 + 8 + 10))))
+            };
+            diag_eprintln!(
                     "[tcb] {tcb:#x} id={:#x} run_count={} sp={sp:#x} disc={disc} {kind} resume={resume:#x}",
                     ld(tcb),
                     ld(tcb.wrapping_add(4)),
                 );
-                // Everything above the saved frame is the suspended function's
-                // own stack; scan it for words that look like start4 text and
-                // print them as a rough backtrace. `resume` alone is always the
-                // return out of `_tx_thread_system_suspend`, which says nothing
-                // about *what* the thread is waiting for.
-                let frame = 4
-                    * (if disc == 1 {
-                        1 + 8 + 16 + 1 + 1 + 1
-                    } else {
-                        1 + 8 + 10 + 1
-                    });
-                let mut shown = 0;
-                for i in 0..192u32 {
-                    let a = sp.wrapping_add(frame + 4 * i);
-                    let v = ld(a);
-                    if (0x3EC0_0000..0x3EE0_0000).contains(&v) && v & 1 == 0 {
-                        eprintln!("[tcb]     {a:#x}: {v:#010x}");
-                        shown += 1;
-                        if shown == 16 {
-                            break;
-                        }
+            // Everything above the saved frame is the suspended function's
+            // own stack; scan it for words that look like start4 text and
+            // print them as a rough backtrace. `resume` alone is always the
+            // return out of `_tx_thread_system_suspend`, which says nothing
+            // about *what* the thread is waiting for.
+            let frame = 4
+                * (if disc == 1 {
+                    1 + 8 + 16 + 1 + 1 + 1
+                } else {
+                    1 + 8 + 10 + 1
+                });
+            let mut shown = 0;
+            for i in 0..192u32 {
+                let a = sp.wrapping_add(frame + 4 * i);
+                let v = ld(a);
+                if (0x3EC0_0000..0x3EE0_0000).contains(&v) && v & 1 == 0 {
+                    diag_eprintln!("[tcb]     {a:#x}: {v:#010x}");
+                    shown += 1;
+                    if shown == 16 {
+                        break;
                     }
                 }
             }
@@ -915,11 +937,11 @@ impl Emulator {
 
         if diag.prof {
             let mut v: Vec<_> = prof_hist.iter().map(|(&k, &n)| (k, n)).collect();
-            v.sort_by_key(|a| std::cmp::Reverse(a.1));
+            v.sort_by_key(|a| core::cmp::Reverse(a.1));
             let total: u64 = v.iter().map(|(_, n)| n).sum();
-            eprintln!("--- RVF_PROF: core-0 PC buckets (total {total}) ---");
+            diag_eprintln!("--- RVF_PROF: core-0 PC buckets (total {total}) ---");
             for (pc, n) in v.iter().take(25) {
-                eprintln!(
+                diag_eprintln!(
                     "  {pc:#010x}  {n:>14}  {:5.1}%",
                     100.0 * *n as f64 / total as f64
                 );
@@ -927,16 +949,18 @@ impl Emulator {
         }
         if diag.prof_thread.is_some() {
             let total: u64 = prof_thist.values().sum();
-            let mut by_thread: std::collections::HashMap<u32, u64> =
-                std::collections::HashMap::new();
+            let mut by_thread: alloc::collections::BTreeMap<u32, u64> =
+                alloc::collections::BTreeMap::new();
             for (&(t, _), &n) in prof_thist.iter() {
                 *by_thread.entry(t).or_insert(0) += n;
             }
             let mut threads: Vec<_> = by_thread.into_iter().collect();
-            threads.sort_by_key(|a| std::cmp::Reverse(a.1));
-            eprintln!("--- RVF_PROF_THREAD: core-0 time by ThreadX thread (total {total}) ---");
+            threads.sort_by_key(|a| core::cmp::Reverse(a.1));
+            diag_eprintln!(
+                "--- RVF_PROF_THREAD: core-0 time by ThreadX thread (total {total}) ---"
+            );
             for (t, n) in threads.iter().take(8) {
-                eprintln!(
+                diag_eprintln!(
                     "  thread {t:#010x}  {n:>14}  {:5.1}%",
                     100.0 * *n as f64 / total as f64
                 );
@@ -945,9 +969,9 @@ impl Emulator {
                     .filter(|((tt, _), _)| tt == t)
                     .map(|((_, pc), &c)| (*pc, c))
                     .collect();
-                buckets.sort_by_key(|a| std::cmp::Reverse(a.1));
+                buckets.sort_by_key(|a| core::cmp::Reverse(a.1));
                 for (pc, c) in buckets.iter().take(6) {
-                    eprintln!(
+                    diag_eprintln!(
                         "      {pc:#010x}  {c:>14}  {:5.1}%",
                         100.0 * *c as f64 / *n as f64
                     );
@@ -970,7 +994,7 @@ impl Emulator {
             console,
             console_streamed: diag.live_console,
             unimpl,
-            regs: std::array::from_fn(|i| self.cpu.regs.get(i)),
+            regs: core::array::from_fn(|i| self.cpu.regs.get(i)),
             core1_pc: self.cpu1.as_ref().map(|c| c.pc()),
             core1_retired: self.cpu1.as_ref().map(|c| c.retired),
             core1_end,

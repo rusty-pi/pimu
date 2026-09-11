@@ -5,6 +5,7 @@
 //! never-stalling line status.
 
 use crate::bus::{BusResult, MmioDevice, Width};
+use alloc::vec::Vec;
 
 const AUX_IRQ: u32 = 0x00;
 const AUX_ENABLES: u32 = 0x04;
@@ -42,7 +43,7 @@ impl Aux {
     }
 
     pub fn take_output(&mut self) -> Vec<u8> {
-        std::mem::take(&mut self.out)
+        core::mem::take(&mut self.out)
     }
 }
 

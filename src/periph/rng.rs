@@ -49,7 +49,7 @@
 //! Output words come from a fixed-seed xorshift: boot transcripts are golden
 //! files, so the sequence has to be reproducible.
 
-use std::collections::BTreeMap;
+use alloc::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 

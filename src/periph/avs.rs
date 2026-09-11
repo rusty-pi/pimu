@@ -169,7 +169,7 @@
 //! for the paths that read a channel *without* going through `FUN_0ed6040e`,
 //! which previously got a reading from a channel that was masked off.
 
-use std::collections::BTreeMap;
+use alloc::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 

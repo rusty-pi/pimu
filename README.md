@@ -86,6 +86,20 @@ cargo run --release -- recon firmware/pieeprom.bin \
   --eeprom --sd firmware/sd.img
 ```
 
+The library also builds without `std`, for the bare-metal aarch64 image of
+[#32](https://github.com/valtzu/rpi-virt-fw/issues/32). CI compiles it on every
+push so the two configurations cannot drift:
+
+```bash
+rustup target add aarch64-unknown-none
+cargo check --no-default-features --target aarch64-unknown-none
+```
+
+That build has no filesystem, no environment and no `anyhow`: blobs go in as
+`&[u8]`, the `RVF_*` switches become a `DiagConfig` the frontend constructs,
+and diagnostics go to a sink it installs (`diag::set_sink`). The scenario
+harness and the `rpi-virt-fw` binary are hosted-only.
+
 ### Getting the patched device tree out
 
 `arm_loader` patches `/chosen` — `rpi-machine-id`, `rpi-serial64`,
@@ -206,7 +220,10 @@ src/
   harness/      scenario parsing, transcript capture, golden diff,
                 boot.rs = the firmware-boot scenario and its milestones
   payloads.rs   hand-assembled VPU test programs
-docs/           boot-chain, diagnostics, usb-xhci, vpu-isa, references, vision
+aarch64/        bare-metal `-kernel` frontend (#32 stage 2); see
+                docs/aarch64-frontend.md. Not built by the root cargo commands
+docs/           aarch64-frontend, boot-chain, diagnostics, usb-xhci, vpu-isa,
+                references, vision
 scripts/        fetch-firmware.sh, make-sd.sh, provision-eeprom.sh, make-dt-blob.py
 testdata/       scenarios/*.toml + golden/*.txt  (in-process, millisecond)
                 boot/firmware-boot.toml + boot/golden/  (the firmware boot)

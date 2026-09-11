@@ -4,7 +4,9 @@
 //! `e_machine`. We only need the program headers: iterate `PT_LOAD`, copy
 //! `p_filesz` bytes to `p_paddr`, zero the rest up to `p_memsz`.
 
-use anyhow::{bail, Context, Result};
+use crate::bail;
+use crate::error::{Context, Result};
+use alloc::vec::Vec;
 
 const PT_LOAD: u32 = 1;
 

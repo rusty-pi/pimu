@@ -34,7 +34,8 @@
 //! `Unexpected sdram refresh code (0)`, so the model seeds MR4 with the
 //! reference board's 2 and leaves every other mode register at its reset 0.
 
-use std::collections::BTreeMap;
+use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 

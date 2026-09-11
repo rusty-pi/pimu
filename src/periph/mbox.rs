@@ -93,7 +93,8 @@
 //!
 //! [rpi-mkosi#37]: https://github.com/valtzu/rpi-mkosi/issues/37
 
-use std::collections::VecDeque;
+use crate::diag_eprintln;
+use alloc::collections::VecDeque;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
@@ -183,7 +184,7 @@ pub struct Mbox {
 impl Mbox {
     pub fn new() -> Mbox {
         Mbox {
-            dbg: std::env::var_os("RVF_DBG_MBOX").is_some(),
+            dbg: crate::diag::flag("RVF_DBG_MBOX"),
             ..Mbox::default()
         }
     }
@@ -195,7 +196,7 @@ impl Mbox {
             return false;
         }
         if self.dbg {
-            eprintln!(
+            diag_eprintln!(
                 "[mbox] ARM -> VPU {:#010x} (channel {}, addr {:#010x})",
                 message,
                 message & 0xF,
@@ -312,7 +313,7 @@ impl MmioDevice for Mbox {
                 if v != 0 {
                     self.reads += 1;
                     if self.dbg {
-                        eprintln!("[mbox] VPU read request {v:#010x}");
+                        diag_eprintln!("[mbox] VPU read request {v:#010x}");
                     }
                 }
                 v
@@ -341,7 +342,7 @@ impl MmioDevice for Mbox {
                     self.writes += 1;
                 }
                 if self.dbg {
-                    eprintln!("[mbox] VPU -> ARM {value:#010x}");
+                    diag_eprintln!("[mbox] VPU -> ARM {value:#010x}");
                 }
             }
             // The ARM posting a request. Nothing in this bench does it through

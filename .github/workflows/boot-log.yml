@@ -20,6 +20,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+          targets: aarch64-unknown-none
 
       - uses: Swatinem/rust-cache@v2
 
@@ -31,6 +32,29 @@ jobs:
 
       - name: Test
         run: cargo test
+
+      # The library also builds `no_std` + `alloc`, which is what lets it run
+      # inside a bare-metal aarch64 image (#32). Nothing here executes it, so
+      # without a compile in CI the `cfg` arms rot within a week — the first
+      # `Vec` or `eprintln!` added to a peripheral model breaks it silently.
+      - name: Build the no_std library
+        run: cargo clippy --no-default-features --target aarch64-unknown-none -- -D warnings
+
+      # The bare-metal `-kernel` frontend (#32 stage 2). It is outside
+      # `default-members`, so nothing above compiles it; without this step it
+      # would rot unnoticed. This job has no QEMU, so it only builds — the
+      # `qemu` job below actually boots the image.
+      - name: Build the aarch64 frontend
+        run: |
+          cargo clippy --manifest-path aarch64/Cargo.toml \
+            --target aarch64-unknown-none --release -- -D warnings
+          cargo build --manifest-path aarch64/Cargo.toml \
+            --target aarch64-unknown-none --release
+          # The `fault` feature is only compiled by `qemu-kernel.sh --fault`,
+          # which the QEMU job runs; lint it here so it cannot rot in a job
+          # that might be skipped for want of `raspi4b`.
+          cargo clippy --manifest-path aarch64/Cargo.toml --features fault \
+            --target aarch64-unknown-none --release -- -D warnings
 
   boot:
     runs-on: ubuntu-26.04
@@ -69,57 +93,53 @@ jobs:
             boot.log
             boot.log.console
 
-  # Does Linux boot the device tree our firmware hands the ARM? Independent of
-  # the boot job above: it runs its own simulated boot, takes the `--dump-fdt`
-  # blob out of it and feeds that to a stock QEMU. This proves the tree is one
-  # Linux accepts — not that it survives the trip unchanged (QEMU rewrites parts
-  # of it; see the comments in scripts/qemu-check.sh).
-  qemu:
+  # Boot the bare-metal frontend for real (#32 stage 2). The image checks its
+  # own exception level and reports the verdict through semihosting, so QEMU's
+  # process exit status is the assertion — no grepping stdout, and a hang no
+  # longer looks like a crash. Needs no firmware blobs and no SD image.
+  aarch64:
     runs-on: ubuntu-26.04
-    timeout-minutes: 20
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v7
 
       # qemu-system-arm is the Debian/Ubuntu package that ships
-      # qemu-system-aarch64; mtools is what pulls kernel8.img back out of the
-      # SD image.
-      - name: Install mtools and QEMU
-        run: sudo apt-get update && sudo apt-get install -y mtools qemu-system-arm
+      # qemu-system-aarch64.
+      - name: Install QEMU
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-arm
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-none
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Fetch firmware blobs
-        run: ./scripts/fetch-firmware.sh
-
-      - name: Build SD image
-        run: ./scripts/make-sd.sh
-
-      - name: Build rpi-virt-fw
-        run: cargo build --release
-
       # Exit 2 means this runner's QEMU has no `raspi4b` machine — a toolchain
-      # gap, not a regression in the model, so report it as a warning and let
-      # the job pass. Any other non-zero exit is a real failure.
-      - name: Boot the handed-over device tree under QEMU
+      # gap rather than a regression, so warn and pass. Anything else is real.
+      - name: Boot the aarch64 frontend under QEMU
         run: |
           set +e
-          ./scripts/qemu-check.sh
+          ./scripts/qemu-kernel.sh
           status=$?
           set -e
-          if [ "$status" -eq 2 ]; then
-            echo "::warning title=QEMU check skipped::this runner's qemu-system-aarch64 has no raspi4b machine"
-            exit 0
+          if [ "$status" = 2 ]; then
+            echo "::warning title=aarch64 frontend not booted::this runner's qemu-system-aarch64 has no raspi4b machine"
+          elif [ "$status" != 0 ]; then
+            exit "$status"
           fi
-          exit "$status"
 
-      - uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: qemu-check
-          path: |
-            firmware/qemu-check/boot.log
-            firmware/qemu-check/qemu.log
-            firmware/qemu-check/handoff.dtb
+      # The fault path is the one that only ever runs when something has
+      # already gone wrong, which is the worst time to discover it is broken.
+      # Fault on purpose and require that the EL2 vector table reports it.
+      - name: Check that the EL2 vector table catches a fault
+        run: |
+          set +e
+          ./scripts/qemu-kernel.sh --fault
+          status=$?
+          set -e
+          if [ "$status" = 2 ]; then
+            echo "::warning title=fault check not run::this runner's qemu-system-aarch64 has no raspi4b machine"
+          elif [ "$status" != 0 ]; then
+            exit "$status"
+          fi

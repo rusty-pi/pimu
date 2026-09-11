@@ -40,7 +40,8 @@
 //!   arrays the firmware copies in from `memsysNN.bin` and sum-checks land here
 //!   and read straight back, so those checks pass unchanged.
 
-use std::collections::BTreeMap;
+use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 

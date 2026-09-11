@@ -69,7 +69,7 @@ impl Dma4 {
     /// If a start was just requested, consume it. [`Machine`] then walks the CB
     /// chain and calls [`Dma4::finish`].
     pub fn take_start(&mut self) -> bool {
-        std::mem::take(&mut self.start_pending)
+        core::mem::take(&mut self.start_pending)
     }
 
     /// Mark the transfer complete: END set, ACTIVE / ERROR / busy-extra clear,

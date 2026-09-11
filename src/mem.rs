@@ -1,6 +1,7 @@
 //! Plain read/write RAM region.
 
 use crate::bus::{BusError, BusResult, Width};
+use alloc::vec::Vec;
 
 /// A contiguous block of little-endian RAM mapped at `base`.
 pub struct Ram {
