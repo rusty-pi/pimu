@@ -27,8 +27,10 @@ USAGE:
               (an unknown instruction stops the run; --skip-unimpl steps over it
                instead, for reconnaissance on firmware the decoder is new to)
                              [--dump <hex>:<len>] [--disasm <hex>:<count>] [--patch <hex>=<hex>]
-                             [--dump-fdt <path>] [--print-fdt]
+                             [--dump-fdt <path>] [--print-fdt] [--console-log <path>]
                              [--mbox-property <tag>[,<tag>...]]
+    rpi-virt-fw boot-check <scenario.toml> --plan [--console <path>]
+    rpi-virt-fw boot-check <scenario.toml> --log <path> --console <path> [--update]
     rpi-virt-fw disasm <file> [--base <hex>] [--count <n>] [--vaddr <hex>]
 
 COMMANDS:
@@ -37,10 +39,20 @@ COMMANDS:
     recon     Load an ELF (or --eeprom image) and run it, reporting how far it
               got and what it touched. Stops on an instruction the decoder does
               not implement (--skip-unimpl steps over it instead).
+    boot-check
+              Check a finished firmware boot against a boot scenario: the
+              golden console transcript plus every named milestone. `--plan`
+              prints the `recon` invocation the scenario describes, which is
+              how `scripts/boot-check.sh` runs the boot without repeating the
+              workload description.
     disasm    Disassemble a flat binary / ELF with the (partial) VPU decoder.
 
 FLAGS:
     --update  Rewrite golden files instead of failing on mismatch.
+    --console-log <path>
+              Write the raw UART bytes of the run to <path>, with none of the
+              run report interleaved. This is what `boot-check` normalises into
+              the golden boot transcript.
     --dump-fdt <path>
               After the run, write the flattened device tree `arm_loader` handed
               to the ARM to <path>. Diff two firmware versions with
@@ -94,6 +106,7 @@ fn run(args: &[String]) -> Result<ExitCode> {
         "run" => cmd_run(&args[1..]),
         "run-all" => cmd_run_all(&args[1..]),
         "recon" => cmd_recon(&args[1..]),
+        "boot-check" => cmd_boot_check(&args[1..]),
         "disasm" => cmd_disasm(&args[1..]),
         "-h" | "--help" | "help" => {
             print!("{USAGE}");
@@ -129,6 +142,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     const USB_ROOT_PORT: usize = 2;
 
     let mut sd_image: Option<PathBuf> = None;
+    let mut console_log: Option<PathBuf> = None;
     let mut dump_fdt: Option<PathBuf> = None;
     let mut print_fdt = false;
     let mut mbox_tags: Vec<u32> = Vec::new();
@@ -170,6 +184,11 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
             }
             "--trace-mmio" => trace_mmio = true,
             "--sd" => sd_image = Some(PathBuf::from(it.next().context("--sd needs a path")?)),
+            "--console-log" => {
+                console_log = Some(PathBuf::from(
+                    it.next().context("--console-log needs a path")?,
+                ))
+            }
             "--usb" => usb_image = Some(PathBuf::from(it.next().context("--usb needs a path")?)),
             "--boot-order" => {
                 boot_order = Some(it.next().context("--boot-order needs a value")?.to_string())
@@ -481,6 +500,23 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         print!(" {r:08x}");
     }
     println!();
+
+    // `--console-log <path>`: the UART bytes on their own, with none of the
+    // run report interleaved. `boot-check` normalises this into the golden
+    // transcript; picking the console out of the combined log afterwards would
+    // be guesswork, since both streams land in the same file.
+    //
+    // On a run that rebooted (EEPROM self-update) this is the last segment
+    // only, which is the one the assertions are about.
+    if let Some(p) = &console_log {
+        std::fs::write(p, &report.console)
+            .with_context(|| format!("writing console log {}", p.display()))?;
+        println!(
+            "console log {} ({} bytes)",
+            p.display(),
+            report.console.len()
+        );
+    }
 
     if !report.console.is_empty() {
         println!("\n--- console ({} bytes) ---", report.console.len());
@@ -866,6 +902,104 @@ fn run_one(scn: &harness::Scenario, update: bool, verbose: bool) -> Result<bool>
     }
 
     Ok(ok)
+}
+
+/// `boot-check <scenario.toml> ...` — the firmware-boot regression.
+///
+/// Two modes, because the boot itself is expensive (minutes) and must be run
+/// exactly once per check:
+///
+/// * `--plan` prints the `recon` invocation the scenario describes, for
+///   `scripts/boot-check.sh` to run. The scenario file stays the only place
+///   the workload is written down.
+/// * `--log <combined.log> --console <console.bin>` checks that finished run:
+///   the console against the golden transcript, the log against the
+///   milestones. `--update` rewrites the golden instead of failing on it.
+fn cmd_boot_check(args: &[String]) -> Result<ExitCode> {
+    let mut path: Option<PathBuf> = None;
+    let mut log: Option<PathBuf> = None;
+    let mut console: Option<PathBuf> = None;
+    let mut plan = false;
+    let mut update = false;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--plan" => plan = true,
+            "--update" => update = true,
+            "--log" => log = Some(PathBuf::from(it.next().context("--log needs a path")?)),
+            "--console" => {
+                console = Some(PathBuf::from(it.next().context("--console needs a path")?))
+            }
+            s if !s.starts_with('-') => path = Some(PathBuf::from(s)),
+            s => bail!("unexpected argument '{s}'"),
+        }
+    }
+    let path = path.context("boot-check: missing <scenario.toml>")?;
+    let scn = harness::BootScenario::load(&path)?;
+
+    if plan {
+        // Shell-readable and quoting-proof: `wall=<n>` on the first line for
+        // the outer timeout, then one `recon` argument per line.
+        let console = console.unwrap_or_else(|| PathBuf::from("boot-console.bin"));
+        println!("wall={}", scn.wall_secs());
+        for a in scn.recon_args(&console) {
+            println!("{a}");
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    let log_path = log.context("boot-check: --log <path> (or --plan)")?;
+    let log_text = std::fs::read_to_string(&log_path)
+        .with_context(|| format!("reading run log {}", log_path.display()))?;
+    let console_path = console.context("boot-check: --console <path> is required with --log")?;
+    let console_bytes = std::fs::read(&console_path).with_context(|| {
+        format!(
+            "reading console log {} (recon writes it with --console-log)",
+            console_path.display()
+        )
+    })?;
+    let transcript = harness::boot::normalise_console(&console_bytes);
+
+    if update {
+        // Never record a bad run as the new truth. A boot that was starved of
+        // CPU stops at the wall clock part-way through, and its transcript
+        // looks like a perfectly good — and much shorter — boot.
+        let milestones = harness::boot::check_milestones(&scn, &log_text);
+        if !milestones.is_empty() {
+            for f in &milestones {
+                eprintln!("{f}");
+            }
+            eprintln!(
+                "refusing to update the golden: this run failed {} milestone(s), so it is \
+                 not a baseline. Fix the run (or raise RVF_BOOT_WALL if it was starved) first.",
+                milestones.len()
+            );
+            return Ok(ExitCode::FAILURE);
+        }
+        harness::boot::write_golden(&scn, &transcript)?;
+        println!(
+            "updated golden {} ({} lines)",
+            scn.golden_path().display(),
+            transcript.lines().count()
+        );
+    }
+
+    let failures = harness::boot::check_run(&scn, &log_text, &transcript)?;
+    println!(
+        "\n{}: {} milestone(s) + golden transcript ({} lines)",
+        scn.name,
+        scn.milestones.len(),
+        transcript.lines().count()
+    );
+    if failures.is_empty() {
+        println!("boot check passed");
+        return Ok(ExitCode::SUCCESS);
+    }
+    for f in &failures {
+        eprintln!("{f}");
+    }
+    eprintln!("boot check FAILED ({} problem(s))", failures.len());
+    Ok(ExitCode::FAILURE)
 }
 
 fn cmd_disasm(args: &[String]) -> Result<ExitCode> {

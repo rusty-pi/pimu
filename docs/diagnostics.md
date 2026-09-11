@@ -103,5 +103,5 @@ All of these are `=1`.
 |---|---|
 | `RVF_LIVE_CONSOLE=1` | Stream the UART console as it is produced instead of buffering it. `scripts/boot-check.sh` sets this. |
 | `RVF_DUMP_FLASH=<path>` | Write the EEPROM flash image out after the run, including any self-update the firmware applied. |
-| `RVF_BOOT_WALL=<seconds>` | `scripts/boot-check.sh` only: wall-clock budget (default 330). Raise it when other work is competing for the CPU — two concurrent boot runs will miss `arm_loader` on time. |
+| `RVF_BOOT_WALL=<seconds>` | Overrides the boot scenario's `wall_secs` (default 330) for `scripts/boot-check.sh`. Raise it when other work is competing for the CPU — two concurrent boot runs will miss `arm_loader` on time. |
 | `RVF_PCIE_DEVICE=0` | Unsolder the VL805 from the modelled board. Describes the hardware, not the firmware: a real Pi 4B always has one, so it is attached by default. |

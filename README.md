@@ -41,6 +41,9 @@ Working:
   parse, GPT/MBR + FAT32 walk, `fixup4.dat`, RSA signature check.
 - **Regression harness** (`src/harness/`) — TOML scenarios in, console
   transcript out, diffed against a golden file. `--update` to re-baseline.
+  The firmware boot is one of those scenarios
+  (`testdata/boot/firmware-boot.toml`): a golden transcript of the whole
+  console plus ~35 named milestones, each carrying the invariant it guards.
 - **CI** — `.github/workflows/boot-log.yml` runs the simulated boot on every
   push / PR to `main` and fails if it regresses before `arasan_emmc_open`.
 
@@ -131,11 +134,37 @@ involved is invented in `src/periph/configotp.rs`. See the OTP rule in
 [`CLAUDE.md`](CLAUDE.md) for why a real board's must never be committed.
 
 `--max-wall` defaults to 140 s and there is no instruction cap unless you pass
-`--max-steps`. Reaching the last milestone takes longer than 140 s, so
-`scripts/boot-check.sh` carries its own budget (`RVF_BOOT_WALL`, 330 s by
-default); it runs the boot and checks the log against every milestone the boot
-is known to reach. That script is what CI runs, so run it locally to reproduce
-a CI failure.
+`--max-steps`. Reaching the last milestone takes longer than 140 s, so the boot
+scenario carries its own budget (`wall_secs`, 330 s, overridable with
+`RVF_BOOT_WALL`). `scripts/boot-check.sh` runs that one boot and checks it two
+ways; it is what CI runs, so run it locally to reproduce a CI failure.
+
+### The boot scenario
+
+`testdata/boot/firmware-boot.toml` describes the run (which EEPROM image, which
+SD card, what wall budget) and everything asserted about it:
+
+- the **golden transcript** in `testdata/boot/golden/`, the whole console
+  diffed line by line. This is what catches output that *moved* or a value that
+  shifted — a change no grep sees, because the line still matches somewhere.
+  The firmware's own timestamps are stripped first: they are cycle-derived and
+  reproduce exactly, but any change to what an instruction costs shifts all of
+  them at once, which would bury the one line that did change.
+- the **milestones**, substring assertions each carrying the reason it exists:
+  the commit or issue that made it pass. This is what a raw diff cannot say —
+  which invariant broke.
+
+Both are checked against a single boot; the wall clock has little headroom, so
+nothing here runs the firmware twice.
+
+```
+scripts/boot-check.sh                  # run it, check it
+scripts/boot-check.sh --update         # re-record the golden from this run
+RVF_BOOT_WALL=600 scripts/boot-check.sh   # slower machine, busier machine
+```
+
+After an intentional change, `--update` and then read the golden diff in the
+commit: it is the change, spelled out.
 
 ### Scenario file
 
@@ -174,11 +203,13 @@ src/
   soc/          BCM2711 memory map
   firmware/     ELF32 loader; EEPROM image parse; Payload abstraction
   emulator.rs   Emulator = Vpu + Machine, run loop
-  harness/      scenario parsing, transcript capture, golden diff
+  harness/      scenario parsing, transcript capture, golden diff,
+                boot.rs = the firmware-boot scenario and its milestones
   payloads.rs   hand-assembled VPU test programs
 docs/           boot-chain, diagnostics, usb-xhci, vpu-isa, references, vision
 scripts/        fetch-firmware.sh, make-sd.sh, provision-eeprom.sh, make-dt-blob.py
-testdata/       scenarios/*.toml, golden/*.txt
+testdata/       scenarios/*.toml + golden/*.txt  (in-process, millisecond)
+                boot/firmware-boot.toml + boot/golden/  (the firmware boot)
 ```
 
 ## Design note — borrow graph

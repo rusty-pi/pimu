@@ -152,25 +152,176 @@ pub fn verify(scn: &Scenario, update: bool) -> Result<ScenarioRun> {
     }
 }
 
-/// Tiny line-oriented diff — no dependency, good enough for short transcripts.
+/// Number of unchanged lines printed either side of a change.
+const DIFF_CONTEXT: usize = 3;
+
+/// Line-oriented diff with context, aligned by longest common subsequence so a
+/// single inserted or deleted line does not make everything after it look
+/// changed. That alignment is what makes the boot transcript diffable at all —
+/// the firmware prints ~200 lines and a one-line insertion in the middle is the
+/// common case.
+///
+/// No dependency: the common prefix and suffix are trimmed first, which on a
+/// real regression leaves a handful of lines, and the O(n*m) table is only
+/// built for what is left (with a positional fallback if that is still huge).
 pub fn unified_diff(expected: &str, actual: &str) -> String {
-    let mut out = String::new();
     let exp: Vec<&str> = expected.lines().collect();
     let act: Vec<&str> = actual.lines().collect();
-    let n = exp.len().max(act.len());
-    for i in 0..n {
-        match (exp.get(i), act.get(i)) {
-            (Some(e), Some(a)) if e == a => {} // context elided
-            (Some(e), Some(a)) => {
-                out.push_str(&format!("  @{i}\n  - {e}\n  + {a}\n"));
+
+    // Trim the common head and tail; everything in between is the real work.
+    let head = exp
+        .iter()
+        .zip(act.iter())
+        .take_while(|(e, a)| e == a)
+        .count();
+    let max_tail = exp.len().min(act.len()) - head;
+    let tail = exp
+        .iter()
+        .rev()
+        .zip(act.iter().rev())
+        .take_while(|(e, a)| e == a)
+        .count()
+        .min(max_tail);
+    let e_mid = &exp[head..exp.len() - tail];
+    let a_mid = &act[head..act.len() - tail];
+
+    // One entry per output line: (kind, line number to show, text), with kind
+    // in {' ', '-', '+'}. The trimmed head and tail go back in as context —
+    // they were only skipped to keep the alignment table small.
+    let mut ops: Vec<(char, usize, &str)> = (0..head).map(|i| (' ', i + 1, exp[i])).collect();
+    if e_mid.len().saturating_mul(a_mid.len()) > 4_000_000 {
+        // Too big to align; fall back to position-by-position.
+        for i in 0..e_mid.len().max(a_mid.len()) {
+            if let Some(l) = e_mid.get(i) {
+                ops.push(('-', head + i + 1, l));
             }
-            (Some(e), None) => out.push_str(&format!("  @{i}\n  - {e}\n")),
-            (None, Some(a)) => out.push_str(&format!("  @{i}\n  + {a}\n")),
-            (None, None) => {}
+            if let Some(l) = a_mid.get(i) {
+                ops.push(('+', head + i + 1, l));
+            }
         }
+    } else {
+        ops.extend(lcs_ops(e_mid, a_mid, head));
     }
-    if out.is_empty() {
-        out.push_str("  (differs only in trailing whitespace / newline)\n");
+    for i in 0..tail {
+        let e_i = exp.len() - tail + i;
+        ops.push((' ', e_i + 1, exp[e_i]));
+    }
+
+    if ops.iter().all(|&(k, _, _)| k == ' ') {
+        return if expected == actual {
+            String::new()
+        } else {
+            "  (differs only in trailing whitespace / newline)\n".to_string()
+        };
+    }
+
+    // Emit the changed runs with `DIFF_CONTEXT` lines either side, collapsing
+    // the untouched stretches between them.
+    let changed: Vec<usize> = ops
+        .iter()
+        .enumerate()
+        .filter(|(_, &(k, _, _))| k != ' ')
+        .map(|(i, _)| i)
+        .collect();
+    let mut out = String::new();
+    let mut emitted_to = 0usize;
+    let mut i = 0usize;
+    while i < changed.len() {
+        let lo = changed[i].saturating_sub(DIFF_CONTEXT);
+        let mut j = i;
+        // Merge hunks whose context windows touch.
+        while j + 1 < changed.len() && changed[j + 1] <= changed[j] + 2 * DIFF_CONTEXT {
+            j += 1;
+        }
+        let hi = (changed[j] + DIFF_CONTEXT + 1).min(ops.len());
+        let lo = lo.max(emitted_to);
+        if lo > emitted_to {
+            out.push_str("  ...\n");
+        }
+        for &(kind, no, line) in &ops[lo..hi] {
+            out.push_str(&format!("  {kind} {no:>5}  {line}\n"));
+        }
+        emitted_to = hi;
+        i = j + 1;
+    }
+    if emitted_to < ops.len() {
+        out.push_str("  ...\n");
     }
     out
+}
+
+/// Longest-common-subsequence alignment of two line slices. `offset` is how
+/// many lines were trimmed off the front, for the reported line numbers.
+fn lcs_ops<'a>(e: &[&'a str], a: &[&'a str], offset: usize) -> Vec<(char, usize, &'a str)> {
+    let (n, m) = (e.len(), a.len());
+    // table[i][j] = LCS length of e[i..] and a[j..]
+    let mut table = vec![0u32; (n + 1) * (m + 1)];
+    let at = |i: usize, j: usize| i * (m + 1) + j;
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            table[at(i, j)] = if e[i] == a[j] {
+                table[at(i + 1, j + 1)] + 1
+            } else {
+                table[at(i + 1, j)].max(table[at(i, j + 1)])
+            };
+        }
+    }
+    let mut ops = Vec::new();
+    let (mut i, mut j) = (0usize, 0usize);
+    while i < n && j < m {
+        if e[i] == a[j] {
+            ops.push((' ', offset + i + 1, e[i]));
+            i += 1;
+            j += 1;
+        } else if table[at(i + 1, j)] >= table[at(i, j + 1)] {
+            ops.push(('-', offset + i + 1, e[i]));
+            i += 1;
+        } else {
+            ops.push(('+', offset + j + 1, a[j]));
+            j += 1;
+        }
+    }
+    while i < n {
+        ops.push(('-', offset + i + 1, e[i]));
+        i += 1;
+    }
+    while j < m {
+        ops.push(('+', offset + j + 1, a[j]));
+        j += 1;
+    }
+    ops
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unified_diff;
+
+    #[test]
+    fn identical_inputs_produce_no_diff() {
+        assert_eq!(unified_diff("a\nb\n", "a\nb\n"), "");
+    }
+
+    #[test]
+    fn an_insertion_is_one_line_not_a_cascade() {
+        let expected = "a\nb\nc\nd\ne\nf\ng\nh\n";
+        let actual = "a\nb\nc\nd\nNEW\ne\nf\ng\nh\n";
+        let d = unified_diff(expected, actual);
+        assert_eq!(d.lines().filter(|l| l.starts_with("  +")).count(), 1);
+        assert_eq!(d.lines().filter(|l| l.starts_with("  -")).count(), 0);
+        assert!(d.contains("NEW"), "{d}");
+    }
+
+    #[test]
+    fn a_changed_line_shows_both_sides_with_context() {
+        let d = unified_diff("a\nb\nc\n", "a\nX\nc\n");
+        assert!(d.contains("-     2  b"), "{d}");
+        assert!(d.contains("+     2  X"), "{d}");
+        assert!(d.contains("a"), "{d}");
+    }
+
+    #[test]
+    fn truncation_is_reported_as_deletions() {
+        let d = unified_diff("a\nb\nc\nd\n", "a\nb\n");
+        assert_eq!(d.lines().filter(|l| l.starts_with("  -")).count(), 2);
+    }
 }
