@@ -232,28 +232,16 @@ impl Emulator {
         // `RVF_LIVE_CONSOLE=0` to get the buffered-only behaviour back (the
         // summary still prints the whole console either way, but it is not
         // repeated once it has been streamed).
-        let live_console = std::env::var("RVF_LIVE_CONSOLE").as_deref() != Ok("0");
+        let diag = crate::diag::DiagConfig::from_env();
         // `RVF_MMIO_FROM=<hex>` arms `--trace-mmio`-style logging only once the
         // PC first reaches that address — lets you capture a late boot stage
         // (e.g. start4.elf) without drowning in the bootloader's MMIO.
-        let mmio_from = std::env::var("RVF_MMIO_FROM")
-            .ok()
-            .and_then(|s| u32::from_str_radix(s.trim_start_matches("0x"), 16).ok());
-        if mmio_from.is_some() {
+        if diag.mmio_from.is_some() {
             self.machine.mmio_trace = false;
         }
         // `RVF_TRACE_ON_CONSOLE=<substr>` arms the instruction trace the moment
         // that substring appears in the console — for pinning down a code path
         // by the log line that precedes it.
-        let trace_on_console = std::env::var("RVF_TRACE_ON_CONSOLE").ok();
-        let trace_on_cap: usize = std::env::var("RVF_TRACE_CAP")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(300_000);
-        let trace_on_cf = std::env::var_os("RVF_TRACE_CF").is_some();
-        let trace_on_pc: Option<u32> = std::env::var("RVF_TRACE_ON_PC")
-            .ok()
-            .and_then(|v| u32::from_str_radix(v.trim().trim_start_matches("0x"), 16).ok());
         let mut console_seen = 0usize;
 
         // Spin detection: over a sliding window of steps, track the min/max PC
@@ -309,8 +297,6 @@ impl Emulator {
         // `0x3ED651C8` / `0x3ED65208` for the whole boot and never parking on a
         // waiter pointer. The shim has been removed rather than left armed.
 
-        let dbg_tick = std::env::var_os("RVF_DBG_TICK").is_some();
-        let dbg_swirq = std::env::var_os("RVF_DBG_SWIRQ").is_some();
         let mut tick_deliveries: u64 = 0;
         let mut irqtbl_n = 0u32;
         let mut tick_skips: u64 = 0;
@@ -318,19 +304,16 @@ impl Emulator {
         // RVF_PROF=1: cheap PC profiler. Bucket the core-0 PC into 256-byte
         // slots on every step and dump the hottest on exit — finds the loop
         // that is eating the step budget when a boot phase runs slow.
-        let prof = std::env::var_os("RVF_PROF").is_some();
         let mut prof_hist: std::collections::HashMap<u32, u64> = std::collections::HashMap::new();
         // RVF_PROF_THREAD=1: same buckets, but keyed by the running ThreadX
         // thread (`_tx_thread_current_ptr`, `0x3EE35900`) as well, so "which
         // thread is spinning, and where" can be read off directly.
-        let prof_thread = std::env::var_os("RVF_PROF_THREAD").is_some();
         let mut prof_thist: std::collections::HashMap<(u32, u32), u64> =
             std::collections::HashMap::new();
 
         // RVF_DBG_MAINSUS: catch the boot thread (0x3EF248C4) suspending — dump
         // the control-flow tail the one time it stops being the current thread
         // for good.
-        let dbg_mainsus = std::env::var_os("RVF_DBG_MAINSUS").is_some();
         let mut mainsus_done = false;
         let mut main_was_cur = false;
 
@@ -343,9 +326,6 @@ impl Emulator {
         // (`0x3ECC9EC4`) handlers which register the GPIO providers
         // (`[gp+807672/676/680]`); none of them fire, so gpioman reports
         // `error 1`. Its own diagnostics say why.
-        let cz_log: Option<u32> = std::env::var("RVF_CZ_LOG")
-            .ok()
-            .and_then(|v| v.parse().ok());
         let mut cz_probe_n = 0u32;
         let mut cz_match_n = 0u32;
         let mut cz_pool_n = 0u32;
@@ -353,56 +333,25 @@ impl Emulator {
         // RVF_HEARTBEAT=<n>: every <n> million retired instructions, print model
         // time, the running ThreadX thread and the PC. The one diagnostic that
         // says whether a stalled boot is wedged or merely slow.
-        let heartbeat: u64 = std::env::var("RVF_HEARTBEAT")
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-            .map(|m| m.saturating_mul(1_000_000))
-            .unwrap_or(0);
-        let mut next_beat = self.cpu.retired + heartbeat;
+        let mut next_beat = self.cpu.retired + diag.heartbeat;
 
         // RVF_TRAP=<hex>[,<hex>...]: print pc / lr / r0-r5 every time core 0
         // reaches one of these addresses. Generic "who calls this, with what"
         // probe - the linear disassembler can't xref (it desyncs on inline
         // data), so callers have to be found at runtime.
-        let traps: Vec<u32> = std::env::var("RVF_TRAP")
-            .ok()
-            .map(|v| {
-                v.split(',')
-                    .filter_map(|t| {
-                        let t = t.trim().trim_start_matches("0x");
-                        u32::from_str_radix(t, 16).ok()
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
         let mut trap_hits: std::collections::HashMap<u32, u64> = std::collections::HashMap::new();
         // `RVF_TRAP_MAX=<n>`: how many hits of each trap address to print
         // (default 12). The totals are always reported at exit.
-        let trap_max: u64 = std::env::var("RVF_TRAP_MAX")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(12);
         // RVF_TRAP_FROM=<n>: ignore trap hits before <n> million retired
         // instructions, so the steady state can be sampled instead of only
         // early boot.
-        let trap_from: u64 = std::env::var("RVF_TRAP_FROM")
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-            .map(|m| m.saturating_mul(1_000_000))
-            .unwrap_or(0);
 
         // RVF_DBG_EVGET: log every distinct (event-group, caller) pair passed to
         // `_tx_event_flags_get` (`0x3EC3E3BE`), so the groups the boot actually
         // blocks on can be told apart from the ones a shim must not touch.
-        let dbg_evget = std::env::var_os("RVF_DBG_EVGET").is_some();
-        let dbg_ff = std::env::var_os("RVF_DBG_FF").is_some();
-        let dbg_irqtbl = std::env::var_os("RVF_DBG_IRQTBL").is_some();
-        let trace_mmio = std::env::var_os("RVF_TRACE_MMIO").is_some();
         // Hoisted out of the per-instruction loop: `std::env::var_os` is a
         // locking lookup over the whole environment and these were being
         // evaluated on every step, which dominated run time.
-        let dbg_resume = std::env::var_os("RVF_DBG_RESUME").is_some();
-        let dbg_evset = std::env::var_os("RVF_DBG_EVSET").is_some();
         let mut evget_seen: std::collections::HashSet<(u32, u32)> =
             std::collections::HashSet::new();
 
@@ -420,7 +369,7 @@ impl Emulator {
             }
 
             // The firmware's trampoline writes each core's exception-vector base
-            // to CoreCtl (0x7E00_2030 / 0x38); pick it up so `swi` traps into
+            // to CoreCtl (0x7E00_2030 / 0x38); pick it up so `swi` diag.traps into
             // the firmware's own handler table. An explicit `--exc-vbase` wins.
             if self.cpu.exc_vbase == 0 && self.machine.corectl.vbase[0] != 0 {
                 self.cpu.exc_vbase = self.machine.corectl.vbase[0];
@@ -428,8 +377,8 @@ impl Emulator {
 
             let pc_before = self.cpu.pc();
 
-            if heartbeat != 0 && self.cpu.retired >= next_beat {
-                next_beat = self.cpu.retired + heartbeat;
+            if diag.heartbeat != 0 && self.cpu.retired >= next_beat {
+                next_beat = self.cpu.retired + diag.heartbeat;
                 let cur = self.machine.load(0x3EE3_5900, Width::Word).unwrap_or(0);
                 let exec = self.machine.load(0x3EE3_5904, Width::Word).unwrap_or(0);
                 eprintln!(
@@ -441,18 +390,18 @@ impl Emulator {
                     self.machine.systimer.tick_pending(),
                 );
             }
-            if prof_thread {
+            if diag.prof_thread {
                 let cur = self.machine.load(0x3EE3_5900, Width::Word).unwrap_or(0);
                 *prof_thist.entry((cur, pc_before & !0xFF)).or_insert(0) += 1;
             }
-            if prof {
+            if diag.prof {
                 *prof_hist.entry(pc_before & !0xFF).or_insert(0) += 1;
             }
 
             // RVF_DBG_RESUME: log every _tx_thread_system_resume (0x3EC402D2)
             // and _tx_thread_system_suspend (0x3EC40516) — who resumes/suspends
             // which thread, to find what would wake the boot thread.
-            if dbg_resume
+            if diag.dbg_resume
                 && matches!(pc_before, 0x3EC4_02D2 | 0x3EC4_0516)
                 && self.cpu.retired > 90_000_000
             {
@@ -468,7 +417,7 @@ impl Emulator {
                     self.cpu.retired
                 );
             }
-            if dbg_evset
+            if diag.dbg_evset
                 && pc_before == 0x3EC3_E1BA
                 && (self.cpu.regs.get(0) == 0x3EF0_5FEC
                     || self
@@ -489,7 +438,7 @@ impl Emulator {
                 }
             }
 
-            if dbg_mainsus {
+            if diag.dbg_mainsus {
                 let cur = self.machine.load(0x3EE3_5900, Width::Word).unwrap_or(0);
                 if cur == 0x3EF2_48C4 {
                     main_was_cur = true;
@@ -583,7 +532,7 @@ impl Emulator {
                 self.cpu.in_exception = 0;
             }
 
-            if let Some(from) = mmio_from {
+            if let Some(from) = diag.mmio_from {
                 if !self.machine.mmio_trace && pc_before == from {
                     self.machine.mmio_trace = true;
                 }
@@ -610,7 +559,7 @@ impl Emulator {
                     self.machine.systimer.jump(us);
                 }
             }
-            if let Some(lvl) = cz_log {
+            if let Some(lvl) = diag.cz_log {
                 // `cp_front_fdt_buffer` (`0x3EC89670`): `r10` = the FDT
                 // buffer it was handed, `r0` = the byte-swapped magic it
                 // just read from `[r10]`, which must be 0xD00DFEED. This
@@ -819,21 +768,24 @@ impl Emulator {
             // core 0 reaches this address. The console-substring trigger cannot
             // reach a code path that runs after the firmware has stopped
             // printing — which is exactly where a wedged boot has to be read.
-            if let Some(pc) = trace_on_pc {
+            if let Some(pc) = diag.trace_on_pc {
                 if !self.cpu.trace && pc_before == pc {
                     self.cpu.trace = true;
                     self.cpu.trace_armed = true;
-                    self.cpu.trace_cf_only = trace_on_cf;
-                    self.cpu.trace_cap = trace_on_cap;
-                    if trace_mmio {
+                    self.cpu.trace_cf_only = diag.trace_cf;
+                    self.cpu.trace_cap = diag.trace_cap;
+                    if diag.trace_mmio {
                         self.machine.mmio_trace = true;
                     }
                 }
             }
-            if !traps.is_empty() && self.cpu.retired >= trap_from && traps.contains(&pc_before) {
+            if !diag.traps.is_empty()
+                && self.cpu.retired >= diag.trap_from
+                && diag.traps.contains(&pc_before)
+            {
                 let n = trap_hits.entry(pc_before).or_insert(0);
                 *n += 1;
-                if *n <= trap_max {
+                if *n <= diag.trap_max {
                     eprintln!(
                         "[trap] {pc_before:#010x} #{n} lr={:#010x} r0={:#x} r1={:#x} r2={:#x} r3={:#x} r4={:#x} r5={:#x} r6={:#x} r7={:#x} sp={:#x} retired={}",
                         self.cpu.regs.get(26),
@@ -850,7 +802,7 @@ impl Emulator {
                     );
                 }
             }
-            if pc_before == 0x3EC3_E3BE && dbg_evget {
+            if pc_before == 0x3EC3_E3BE && diag.dbg_evget {
                 let grp = self.cpu.regs.get(0);
                 let lr = self.cpu.regs.get(26);
                 if evget_seen.insert((grp, lr)) {
@@ -910,7 +862,7 @@ impl Emulator {
             // for the DMA sources (0x50..0x5F).
             // The vector entry carries a `0x0000` guard parcel that
             // `vector_irq` steps over, so the dispatcher is entered at +2.
-            if dbg_irqtbl && pc_before == 0x3EC3_E9BE && irqtbl_n < 4 {
+            if diag.dbg_irqtbl && pc_before == 0x3EC3_E9BE && irqtbl_n < 4 {
                 irqtbl_n += 1;
                 let r29 = self.cpu.regs.get(29);
                 let blk = self.machine.load(r29 + 12, Width::Word).unwrap_or(0);
@@ -936,7 +888,7 @@ impl Emulator {
             // (source 78 on core 0, 79 on core 1). Nothing modelled these, so
             // every software-posted interrupt was silently dropped.
             while let Some((core, src)) = self.machine.corectl.take_sw_raised() {
-                if dbg_swirq {
+                if diag.dbg_swirq {
                     eprintln!(
                         "[sw-irq] core {core} src {src} pc={:#x} retired={}",
                         self.cpu.pc(),
@@ -960,7 +912,7 @@ impl Emulator {
             // vectoring path as the tick, but is not gated on a compare match.
             if self.cpu.in_exception == 0 && self.cpu.irq_enabled() && self.cpu.exc_vbase != 0 {
                 if let Some(src) = self.machine.take_pending_irq() {
-                    if dbg_tick {
+                    if diag.dbg_tick {
                         eprintln!(
                             "[irq] src={src} pc={:#x} retired={}",
                             self.cpu.pc(),
@@ -971,7 +923,7 @@ impl Emulator {
                 }
             }
             let tick_due = self.machine.systimer.tick_pending();
-            if dbg_tick
+            if diag.dbg_tick
                 && tick_due
                 && self.cpu.exc_vbase != 0
                 && (self.cpu.in_exception != 0 || !self.cpu.irq_enabled())
@@ -995,7 +947,7 @@ impl Emulator {
                 if let Some(slot) = self.machine.timer_tick_slot() {
                     // Deliver now — consume the latched flag.
                     self.machine.systimer.take_tick_pending();
-                    if dbg_tick {
+                    if diag.dbg_tick {
                         tick_deliveries += 1;
                         if tick_deliveries <= 30 || tick_deliveries.is_multiple_of(500) {
                             let vb = self.cpu.exc_vbase;
@@ -1092,23 +1044,23 @@ impl Emulator {
                     };
                 }
             }
-            if live_console && had_output {
+            if diag.live_console && had_output {
                 use std::io::Write;
                 let _ = std::io::stderr().write_all(&fresh);
             }
             console.extend_from_slice(&fresh);
-            if let Some(needle) = &trace_on_console {
+            if let Some(needle) = &diag.trace_on_console {
                 if !self.cpu.trace && console.len() > console_seen {
                     let from = console_seen.saturating_sub(needle.len());
                     if String::from_utf8_lossy(&console[from..]).contains(needle.as_str()) {
                         self.cpu.trace = true;
                         self.cpu.trace_armed = true;
-                        self.cpu.trace_cf_only = trace_on_cf;
-                        self.cpu.trace_cap = trace_on_cap;
+                        self.cpu.trace_cf_only = diag.trace_cf;
+                        self.cpu.trace_cap = diag.trace_cap;
                         // Also stream peripheral accesses while the trace is
                         // armed (RVF_TRACE_MMIO=1) — handy for pinning down an
                         // unmodelled block like the I2C BSC.
-                        if trace_mmio {
+                        if diag.trace_mmio {
                             self.machine.mmio_trace = true;
                         }
                     }
@@ -1221,7 +1173,7 @@ impl Emulator {
                     if ff {
                         self.machine.systimer.jump(200_000);
                     }
-                    if dbg_ff {
+                    if diag.dbg_ff {
                         eprintln!(
                             "[ff] win close: clo_delta={clo_delta} w=[{w_lo:#x}..{w_hi:#x}] out={w_output} exc={} ff={ff} @{}",
                             self.cpu.in_exception, self.cpu.retired
@@ -1268,7 +1220,7 @@ impl Emulator {
         // at exit. The generic dispatcher (`0x3EC3E9BC`) indexes it with the
         // source number to find the ISR, so a zero entry means "this source is
         // never handled" even if `enable_irq_source` turned it on.
-        if dbg_irqtbl {
+        if diag.dbg_irqtbl {
             let tbl = self.cpu.regs.get(24).wrapping_add(58004);
             let vb = self.cpu.exc_vbase;
             eprintln!(
@@ -1345,7 +1297,7 @@ impl Emulator {
             }
         }
 
-        if prof {
+        if diag.prof {
             let mut v: Vec<_> = prof_hist.iter().map(|(&k, &n)| (k, n)).collect();
             v.sort_by_key(|a| std::cmp::Reverse(a.1));
             let total: u64 = v.iter().map(|(_, n)| n).sum();
@@ -1357,7 +1309,7 @@ impl Emulator {
                 );
             }
         }
-        if prof_thread {
+        if diag.prof_thread {
             let total: u64 = prof_thist.values().sum();
             let mut by_thread: std::collections::HashMap<u32, u64> =
                 std::collections::HashMap::new();
@@ -1400,7 +1352,7 @@ impl Emulator {
             wall: start.elapsed(),
             pc: self.cpu.pc(),
             console,
-            console_streamed: live_console,
+            console_streamed: diag.live_console,
             unimpl,
             regs: std::array::from_fn(|i| self.cpu.regs.get(i)),
             core1_pc: self.cpu1.as_ref().map(|c| c.pc()),
