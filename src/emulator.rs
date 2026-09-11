@@ -12,13 +12,23 @@ use crate::vpu::{Stop, UnimplPolicy, Vpu};
 /// here after loading the image. Used as core 1's default entry.
 pub const START4_ENTRY: u32 = 0xFEC0_0200;
 
-/// `start4.elf`'s ThreadX-SMP dispatch-module global (`[gp+3672]`, gp = start
-/// of `.sdata` = `0x3EE0_2D20`). It holds a pointer to the per-core scheduler
-/// object once `_tx_thread_smp` init has registered it. Core 1's very first
-/// instructions after the trampoline (`0x3EC2_CC28` → `0x3ED6_50B4`) do
-/// `b *([[gp+3672]] + 24)`, so releasing core 1 before this is populated
-/// jumps it through a null vtable. We gate the core-1 spawn on it being set.
-const SMP_DISPATCH_GLOBAL: u32 = 0x3EE0_3B78;
+/// Offset of `start4.elf`'s ThreadX-SMP dispatch-module global within `.sdata`.
+///
+/// It holds a pointer to the per-core scheduler object once `_tx_thread_smp`
+/// init has registered it. Core 1's very first instructions after the
+/// trampoline (`0x3EC2_CC28` → `0x3ED6_50B4`) do `b *([[gp+3672]] + 24)`, so
+/// releasing core 1 before this is populated jumps it through a null vtable.
+/// The core-1 spawn is gated on it being set.
+///
+/// This is an offset from `gp`, not an absolute address, and it is resolved
+/// against the live `gp` register — see [`Emulator::smp_dispatch_global`].
+/// Hardcoding the absolute (`0x3EE0_3B78` in the build this was read from)
+/// silently version-locked the model: a firmware bump that moves `.sdata`
+/// leaves that address holding something else, and core 1 then either never
+/// spawns or spawns at the wrong moment, with nothing reporting it. For a
+/// bench whose whole purpose is diffing one firmware version against another
+/// (#5, #25) that is the worst available failure mode.
+const SMP_DISPATCH_GP_OFFSET: u32 = 3672;
 
 pub struct Emulator {
     pub cpu: Vpu,
@@ -33,7 +43,7 @@ pub struct Emulator {
     pub core1_entry: Option<u32>,
     /// Latched once the firmware signals it wants core 1 up (a code-address
     /// write to the CoreCtl run-state words). The actual spawn is deferred
-    /// until [`SMP_DISPATCH_GLOBAL`] is populated — see there.
+    /// until the dispatch global is populated — see [`SMP_DISPATCH_GP_OFFSET`].
     core1_release_armed: bool,
     pub machine: Machine,
 }
@@ -139,6 +149,13 @@ pub struct RunReport {
     pub core1_end: Option<RunEnd>,
     /// `start4.elf` boot-progress tags (`0xCEC0_2000`), in order.
     pub phase_tags: Vec<u32>,
+    /// The firmware released core 1, but the ThreadX-SMP dispatch global never
+    /// became non-zero, so core 1 was never spawned.
+    ///
+    /// Worth reporting rather than passing over in silence: the most likely
+    /// cause is a firmware whose `.sdata` layout moved, which would make
+    /// [`SMP_DISPATCH_GP_OFFSET`] point at the wrong word (#25).
+    pub core1_release_never_resolved: bool,
 }
 
 impl Emulator {
@@ -155,6 +172,24 @@ impl Emulator {
     /// Release VPU core 1 at `entry` (the shared trampoline), inheriting core 0's
     /// unimpl policy. Core 1 sets its own exception-vector base from the
     /// trampoline, so leave `exc_vbase` at 0 here.
+    /// Has `_tx_thread_smp` init registered the per-core scheduler object yet?
+    ///
+    /// Resolved against the live `gp` rather than a baked-in address, so a
+    /// firmware whose `.sdata` sits somewhere else still gates correctly. `gp`
+    /// is zero until the firmware establishes it, and an unresolved gate reads
+    /// as "not ready", which is the safe direction: core 1 stays parked rather
+    /// than branching through a null vtable.
+    fn smp_dispatch_ready(&mut self) -> bool {
+        let gp = self.cpu.regs.get(crate::vpu::reg::GP);
+        if gp == 0 {
+            return false;
+        }
+        self.machine
+            .load(gp.wrapping_add(SMP_DISPATCH_GP_OFFSET), Width::Word)
+            .unwrap_or(0)
+            != 0
+    }
+
     fn spawn_core1(&mut self, entry: u32) {
         let mut c1 = Vpu::new(entry);
         c1.core_id = 1;
@@ -1005,13 +1040,7 @@ impl Emulator {
                 if self.machine.corectl.take_core1_release() {
                     self.core1_release_armed = true;
                 }
-                if self.core1_release_armed
-                    && self
-                        .machine
-                        .load(SMP_DISPATCH_GLOBAL, Width::Word)
-                        .unwrap_or(0)
-                        != 0
-                {
+                if self.core1_release_armed && self.smp_dispatch_ready() {
                     let entry = self.core1_entry.unwrap_or(START4_ENTRY);
                     self.spawn_core1(entry);
                 }
@@ -1371,6 +1400,7 @@ impl Emulator {
             core1_retired: self.cpu1.as_ref().map(|c| c.retired),
             core1_end,
             phase_tags: self.machine.phase_tags.clone(),
+            core1_release_never_resolved: self.core1_release_armed && self.cpu1.is_none(),
         }
     }
 }
