@@ -20,6 +20,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+          targets: aarch64-unknown-none
 
       - uses: Swatinem/rust-cache@v2
 
@@ -31,6 +32,18 @@ jobs:
 
       - name: Test
         run: cargo test
+
+      # The bare-metal `-kernel` frontend (#32 stage 2). It is outside
+      # `default-members`, so nothing above compiles it; without this step it
+      # would rot unnoticed. Build only — these runners' QEMU has no `raspi4b`
+      # machine to run it on (see the qemu job below), so the boot itself is
+      # checked locally with scripts/qemu-kernel.sh.
+      - name: Build the aarch64 frontend
+        run: |
+          cargo clippy --manifest-path aarch64/Cargo.toml \
+            --target aarch64-unknown-none --release -- -D warnings
+          cargo build --manifest-path aarch64/Cargo.toml \
+            --target aarch64-unknown-none --release
 
   boot:
     runs-on: ubuntu-26.04

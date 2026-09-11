@@ -206,7 +206,10 @@ src/
   harness/      scenario parsing, transcript capture, golden diff,
                 boot.rs = the firmware-boot scenario and its milestones
   payloads.rs   hand-assembled VPU test programs
-docs/           boot-chain, diagnostics, usb-xhci, vpu-isa, references, vision
+aarch64/        bare-metal `-kernel` frontend (#32 stage 2); see
+                docs/aarch64-frontend.md. Not built by the root cargo commands
+docs/           aarch64-frontend, boot-chain, diagnostics, usb-xhci, vpu-isa,
+                references, vision
 scripts/        fetch-firmware.sh, make-sd.sh, provision-eeprom.sh, make-dt-blob.py
 testdata/       scenarios/*.toml + golden/*.txt  (in-process, millisecond)
                 boot/firmware-boot.toml + boot/golden/  (the firmware boot)
