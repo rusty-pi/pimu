@@ -103,7 +103,8 @@ must_not 'gpioman registration regressed (#2)' 'gpioman: configuration attempt'
 # monitor does (vc4-boot.log 20-31). Needs SCALER_DISPID (#13).
 want 'HDMI0 EDID give-up'                  'HDMI0:EDID giving up on reading EDID block 0'
 want 'HDMI1 EDID give-up'                  'HDMI1:EDID giving up on reading EDID block 0'
-# Bounded, not a retry storm (guard for the RVF_PMIC_EVENT window bug, 71bd94a).
+# Bounded, not a retry storm: posting into HDMI1's event-flags group used to
+# re-trigger its EDID fetch on every pass (71bd94a).
 count_le 'EDID retry storm'                'EDID giving up' 16
 want 'hdmi_get_state deprecation'          'hdmi: HDMI:hdmi_get_state is deprecated'
 want 'HDMI0 pixel-clock limit'             'HDMI0: hdmi_pixel_freq_limit'
