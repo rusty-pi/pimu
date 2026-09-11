@@ -460,6 +460,73 @@ impl VecSlot {
     pub fn is_dash(self) -> bool {
         self.desc >= 14
     }
+
+    /// Resolve a *horizontal* slot — 16 consecutive elements of one VRF row —
+    /// whose element width matches `lane_bits`.
+    ///
+    /// The descriptor's column band fixes both the element width and where in
+    /// the row the window starts, and the band always spans exactly 16 elements:
+    /// four 16-byte bands for 8-bit elements, two 32-byte bands for 16-bit, one
+    /// 64-byte band for 32-bit. A vertical slot (a *column* of the file), or a
+    /// band that disagrees with the operation width, returns `None` — the
+    /// executor faults on those rather than guessing.
+    pub fn horizontal(self, lane_bits: u8) -> Option<VecReg> {
+        if self.desc & 1 != 0 {
+            return None;
+        }
+        let (bits, x0) = match self.desc >> 1 {
+            band @ 0..=3 => (8, band * 16),
+            band @ (4 | 5) => (16, (band - 4) * 32),
+            6 => (32, 0),
+            _ => return None,
+        };
+        if bits != lane_bits {
+            return None;
+        }
+        Some(VecReg {
+            row: self.coord % 64,
+            x0,
+            lane_bytes: lane_bits / 8,
+        })
+    }
+}
+
+/// A horizontal VRF register window: 16 lanes of `lane_bytes` bytes each,
+/// starting at byte column `x0` of row `row`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VecReg {
+    pub row: u8,
+    pub x0: u8,
+    pub lane_bytes: u8,
+}
+
+/// How many times a vector instruction repeats (the `REP` field).
+///
+/// The fixed counts are powers of two; the top encoding takes the count from
+/// `r0`. That reading is forced by `memcpy` itself: at `0x3EDA28EC` it computes
+/// `r0 = min(blocks, 64)`, runs the `REP` load/store pair, then advances the
+/// pointers by exactly `r0 * 64` bytes — which is only consistent if the pair
+/// transferred `r0` rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VecRep {
+    Fixed(u32),
+    FromR0,
+}
+
+/// Lane predication: which lanes of a vector instruction actually execute.
+///
+/// `v<w>bitplanes -,rN SETF` sets the per-lane flags from the bits of `rN`;
+/// these two predicates then select one polarity. Both are pinned by the
+/// firmware: `memcpy`'s tail (`0x3EDA292C`) builds `~0 << n` and transfers
+/// under predicate 2, so predicate 2 is "the lane's bit was 0"; `memset`'s
+/// (`0x3EDA2B5E`) builds a band of set bits and stores under predicate 3.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VecPred {
+    All,
+    /// Lanes whose `bitplanes` bit was 0.
+    IfZero,
+    /// Lanes whose `bitplanes` bit was 1.
+    IfNonZero,
 }
 
 /// The memory operand of a vector load/store: `(rbase + offset [+= rincr])`.
@@ -562,8 +629,43 @@ pub enum VecExec {
     /// discard the vector result, write the sum of the lanes back to a scalar
     /// register.
     SumOfBroadcast { src: u8, dst: u8, signed: bool },
-    /// Needs the vector register file, which this model does not have.
+    /// `v<w>{ld,st} <reg>[++],(r<base>[+=r<incr>]) [REP n]` — transfer 16 lanes
+    /// between a VRF row and memory, `reps` times. Each repetition steps the
+    /// address by `r<incr>` and, with `++`, the register down one row.
+    Mem {
+        store: bool,
+        reg: VecReg,
+        /// `++` on the vector slot: advance to the next row each repetition.
+        step_row: bool,
+        base: u8,
+        incr: Option<u8>,
+        reps: VecRep,
+        pred: VecPred,
+    },
+    /// `v<w>mov <reg>,r<n>` / `v<w>mov <reg>,#imm` — broadcast a scalar or a
+    /// 6-bit immediate across the 16 lanes of a VRF register.
+    Broadcast { reg: VecReg, src: RegOrImm },
+    /// `v<w>bitplanes -,r<n> SETF` — set the per-lane flags from the low 16 bits
+    /// of a scalar; the vector result goes to a dash and is discarded.
+    Bitplanes { src: u8 },
+    /// Needs a part of the vector unit this model does not implement.
     NeedsVrf,
+}
+
+/// Mask of `n` bits at bit position `pos`, counted from the most significant
+/// bit of a `width`-bit instruction word (how `videocoreiv.arch` writes them).
+const fn vmask(width: u32, pos: u32, n: u32) -> u128 {
+    ((1u128 << n) - 1) << (width - pos - n)
+}
+
+/// The same field, carrying `v`.
+const fn vbits(width: u32, pos: u32, n: u32, v: u128) -> u128 {
+    v << (width - pos - n)
+}
+
+/// Read such a field out of an instruction word.
+const fn vfield(raw: u128, width: u32, pos: u32, n: u32) -> u32 {
+    ((raw >> (width - pos - n)) & ((1u128 << n) - 1)) as u32
 }
 
 impl VecInsn {
@@ -581,19 +683,21 @@ impl VecInsn {
 
     /// Classify this instruction for the executor.
     ///
-    /// The vector register file is not modelled, so almost every vector
-    /// instruction is [`VecExec::NeedsVrf`] and must fault rather than be
-    /// guessed at. Two encodings are executable, and they are matched *exactly*
-    /// — as whole instruction words, with only the fields whose meaning is
-    /// established left free — rather than by a loose test on the decoded
-    /// fields. The encoding has plenty of corners this decoder renders only
-    /// approximately (per-slot `+rN` addends, fine-x coordinate bits, the
-    /// accumulator modifiers); an exact match cannot be fooled by one.
+    /// Only a few forms are executable, and every one of them is matched
+    /// *exactly*: a whole-word template with only the fields whose meaning is
+    /// established left free, and a value whitelist on each of those. The
+    /// encoding has plenty of corners this decoder renders only approximately
+    /// (per-slot `+rN` addends, fine-x coordinate bits, vertical slots, the
+    /// accumulator modifiers), and anything outside the template — a set bit in
+    /// a field this model does not interpret, a vertical slot, an unknown
+    /// predicate — falls through to [`VecExec::NeedsVrf`] and faults.
     ///
-    /// Both forms come from `FUN_0edc9e20` in `start4.elf`, the routine that
-    /// flushes the vector unit's outstanding reads before the VRF semaphore is
-    /// released, and both were disassembled with `binutils-vc4` objdump to
-    /// confirm the reading.
+    /// The two `-`-destination forms come from `FUN_0edc9e20` in `start4.elf`,
+    /// the routine that flushes the vector unit's outstanding reads before the
+    /// VRF semaphore is released. The load/store, broadcast and `bitplanes`
+    /// forms are the ones VC4 libc's `memcpy` (`0x3EDA28D6`), `memmove`
+    /// (`0x3EDA2A00`) and `memset` (`0x3EDA2AB4`) are built out of; all were
+    /// read back with `binutils-vc4` objdump to confirm the decoding.
     pub fn executable(&self) -> VecExec {
         // `v<w>ld -,(rN)` — a load with a discarded destination. Free fields:
         // the 2-bit width (bits 11..12) and the base register (bits 42..47).
@@ -626,7 +730,167 @@ impl VecInsn {
                 }
             }
         }
+        if self.mem {
+            if let Some(e) = self.mem_transfer() {
+                return e;
+            }
+        } else if let Some(e) = self.alu48() {
+            return e;
+        }
         VecExec::NeedsVrf
+    }
+
+    /// `v<w>ld`/`v<w>st` between one VRF row and memory, in both the 48-bit and
+    /// the 80-bit encoding.
+    ///
+    /// ```text
+    ///   48: 1111 00MM MMMW Weee VVV0 dddddd TTTx aaaaaa z 0 111 0 bbbbbb
+    ///   80: 1111 10MM MMMW WRRR DDDD dddddd AAAA aaaaaa 0 0 1110 000000
+    ///       gggg GG hhhh HH 0000 PPP 0000000 ssss 00
+    /// ```
+    ///
+    /// The vector operand is the D slot for a load and the A slot for a store;
+    /// the other slot must be a bare dash. In the 80-bit form each slot also
+    /// carries a 4-bit register addend and a 2-bit coordinate modifier: on the
+    /// vector slot the addend must be "none" (15) and the modifier is `++` or
+    /// nothing, while the *dash* slot's addend is the register the address is
+    /// stepped by between repetitions. Any offset field must be zero — the
+    /// address fields' placement is Hermitage's, and no executed instruction
+    /// exercises a non-zero one.
+    fn mem_transfer(&self) -> Option<VecExec> {
+        const M48_FREE: u128 = vmask(48, 6, 5)
+            | vmask(48, 11, 2)
+            | vmask(48, 16, 3)
+            | vmask(48, 20, 6)
+            | vmask(48, 26, 3)
+            | vmask(48, 30, 6)
+            | vmask(48, 42, 6);
+        const M48: u128 = vbits(48, 0, 6, 0b111100) | vbits(48, 38, 3, 7);
+        const M80_FREE: u128 = vmask(80, 6, 5)
+            | vmask(80, 11, 2)
+            | vmask(80, 13, 3)
+            | vmask(80, 16, 10)
+            | vmask(80, 26, 10)
+            | vmask(80, 48, 12)
+            | vmask(80, 64, 3)
+            | vmask(80, 74, 4);
+        const M80: u128 = vbits(80, 0, 6, 0b111110) | vbits(80, 38, 4, 0b1110);
+
+        let wide = match self.len {
+            6 => false,
+            10 => true,
+            _ => return None,
+        };
+        let (free, template, width) = if wide {
+            (M80_FREE, M80, 80)
+        } else {
+            (M48_FREE, M48, 48)
+        };
+        if self.raw & !free != template {
+            return None;
+        }
+        // `WW` 3 is not a width this decoder knows; 0/1/2 are 8/16/32.
+        if vfield(self.raw, width, 11, 2) > 2 {
+            return None;
+        }
+        let store = match self.subop {
+            0 => false,
+            4 => true,
+            _ => return None,
+        };
+        // Addend/modifier pairs: g/G belong to D, h/H to A.
+        let (g, h) = if wide {
+            (
+                vfield(self.raw, 80, 48, 4) as u8,
+                vfield(self.raw, 80, 54, 4) as u8,
+            )
+        } else {
+            (15, 15)
+        };
+        let ((vec_slot, vec_mod, vec_addend), (dash, dash_mod, dash_addend)) = if store {
+            ((self.a, self.a_mod, h), (self.d, self.d_mod, g))
+        } else {
+            ((self.d, self.d_mod, g), (self.a, self.a_mod, h))
+        };
+        if dash.desc != 14 || dash.coord != 0 || dash_mod != 0 || vec_addend != 15 {
+            return None;
+        }
+        let step_row = match vec_mod {
+            0 => false,
+            2 => true,
+            _ => return None,
+        };
+        let addr = self.addr?;
+        Some(VecExec::Mem {
+            store,
+            reg: vec_slot.horizontal(self.lane_bits)?,
+            step_row,
+            base: addr.base,
+            incr: if dash_addend == 15 {
+                None
+            } else {
+                Some(dash_addend)
+            },
+            reps: match self.rep {
+                7 => VecRep::FromR0,
+                n => VecRep::Fixed(1 << n),
+            },
+            pred: match self.pred {
+                0 => VecPred::All,
+                2 => VecPred::IfZero,
+                3 => VecPred::IfNonZero,
+                _ => return None,
+            },
+        })
+    }
+
+    /// The two 48-bit ALU-class forms the libc string routines use:
+    ///
+    /// ```text
+    ///   v<w>mov <reg>,r<n>    1111 01Lv vvvv v000 VVV0 dddddd 1110 000000 0 0 111 0 bbbbbb
+    ///   v<w>mov <reg>,#imm    1111 01Lv vvvv v000 VVV0 dddddd 1110 000000 0 1 000 0 iiiiii
+    ///   v<w>bitplanes -,r<n>  1111 01L0 0000 1000 1110 000000 1110 000000 0 0 111 1 bbbbbb
+    /// ```
+    ///
+    /// `bitplanes` writes no register (its destination is a dash) — the whole
+    /// point of it here is `SETF`, which leaves one flag per lane holding the
+    /// corresponding bit of the scalar operand.
+    fn alu48(&self) -> Option<VecExec> {
+        const MOV_FREE: u128 =
+            vmask(48, 6, 1) | vmask(48, 16, 3) | vmask(48, 20, 6) | vmask(48, 42, 6);
+        const MOV_REG: u128 = vbits(48, 0, 6, 0b111101) | vbits(48, 26, 3, 7) | vbits(48, 38, 3, 7);
+        const MOV_IMM: u128 = vbits(48, 0, 6, 0b111101) | vbits(48, 26, 3, 7) | vbits(48, 37, 1, 1);
+        const BITPLANES_FREE: u128 = vmask(48, 6, 1) | vmask(48, 42, 6);
+        const BITPLANES: u128 = vbits(48, 0, 6, 0b111101)
+            | vbits(48, 7, 6, 1)
+            | vbits(48, 16, 3, 7)
+            | vbits(48, 26, 3, 7)
+            | vbits(48, 38, 3, 7)
+            | vbits(48, 41, 1, 1);
+
+        if self.len != 6 {
+            return None;
+        }
+        let operand = vfield(self.raw, 48, 42, 6) as u8;
+        if self.raw & !BITPLANES_FREE == BITPLANES {
+            // Scalar registers are r0..r31; the field is six bits wide.
+            return (operand < 32).then_some(VecExec::Bitplanes { src: operand });
+        }
+        let masked = self.raw & !MOV_FREE;
+        let src = if masked == MOV_REG {
+            if operand >= 32 {
+                return None;
+            }
+            RegOrImm::Reg(operand)
+        } else if masked == MOV_IMM {
+            RegOrImm::Imm(operand as i32)
+        } else {
+            return None;
+        };
+        Some(VecExec::Broadcast {
+            reg: self.d.horizontal(self.lane_bits)?,
+            src,
+        })
     }
 
     /// Mnemonic, in `binutils-vc4` objdump spelling.

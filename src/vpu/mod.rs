@@ -14,6 +14,7 @@ pub mod exec;
 pub mod insn;
 pub mod length;
 pub mod reg;
+pub mod vrf;
 
 pub use exec::{Fault, HaltReason, Step, Stop, UnimplHit, UnimplPolicy, Vpu};
 pub use reg::{Cond, Flags, Regs};

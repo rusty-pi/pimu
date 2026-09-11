@@ -388,65 +388,6 @@ impl Emulator {
                 *prof_hist.entry(pc_before & !0xFF).or_insert(0) += 1;
             }
 
-            // `0x3EDA28D6` is start4's optimised `memcpy(r0=dst, r1=src,
-            // r2=len)` — a leaf that returns via `bx r26`. Its bulk copy is a
-            // VC4 vector loop (`0x3EDA28F2`+, class Vector80/48) the model's
-            // scalar decoder can't execute, so it was silently skipping ~all of
-            // every copy (only the ≤3-byte scalar tail ran) and corrupting
-            // whatever it moved. Emulate the whole function here — pure memory
-            // effect, no globals touched. `dst < src` in practice (overlapping
-            // shift-down), which a forward byte copy handles correctly.
-            if pc_before == 0x3EDA_28D6 {
-                let dst = self.cpu.regs.get(0);
-                let src = self.cpu.regs.get(1);
-                let len = self.cpu.regs.get(2);
-                for i in 0..len {
-                    let b = self
-                        .machine
-                        .load(src.wrapping_add(i), Width::Byte)
-                        .unwrap_or(0);
-                    let _ = self.machine.store(dst.wrapping_add(i), Width::Byte, b);
-                }
-                self.cpu.regs.pc = self.cpu.regs.get(26);
-            }
-
-            // `0x3EDA2A00` is start4's `memmove(r0=dst, r1=src, r2=len)`, the
-            // companion to the `memcpy` above and likewise a leaf returning via
-            // `r26`. `if r0 > r1` it copies backwards in-place; otherwise it
-            // tail-branches to the forward copier `0x3EDA28D6` at `0x3EDA2A04`.
-            //
-            // The backward path has three VC4 vector fast paths (32-byte
-            // aligned, 16-byte aligned, and a 16-byte bulk chunk in the middle
-            // of the byte-wise case) which the scalar decoder cannot execute, so
-            // the model was running only the byte-wise edges and losing the
-            // middle of every backward move. The relocatable heap moves blocks
-            // through here, so a grown block came out with a hole in it.
-            //
-            // Emulate the whole function; overlap-correct in both directions.
-            if pc_before == 0x3EDA_2A00 {
-                let dst = self.cpu.regs.get(0);
-                let src = self.cpu.regs.get(1);
-                let len = self.cpu.regs.get(2);
-                if dst > src {
-                    for i in (0..len).rev() {
-                        let b = self
-                            .machine
-                            .load(src.wrapping_add(i), Width::Byte)
-                            .unwrap_or(0);
-                        let _ = self.machine.store(dst.wrapping_add(i), Width::Byte, b);
-                    }
-                } else {
-                    for i in 0..len {
-                        let b = self
-                            .machine
-                            .load(src.wrapping_add(i), Width::Byte)
-                            .unwrap_or(0);
-                        let _ = self.machine.store(dst.wrapping_add(i), Width::Byte, b);
-                    }
-                }
-                self.cpu.regs.pc = self.cpu.regs.get(26);
-            }
-
             // `_tx_thread_schedule`'s *solicited* context restore (`0x3EC40034`
             // → `bx r26` at `0x3EC4003E`) resumes a thread that yielded via a
             // ThreadX call — it does NOT `rti`, so the model's `in_exception`
