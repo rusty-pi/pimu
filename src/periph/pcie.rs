@@ -265,11 +265,19 @@ impl Pcie {
         Some(self.endpoint.bar0_read(off, width))
     }
 
-    /// A write of endpoint MMIO, addressed CPU-physically.
-    pub fn mmio_write(&mut self, cpu: u64, width: Width, value: u32) -> bool {
+    /// A write of endpoint MMIO, addressed CPU-physically. `mem` is host
+    /// memory: an xHCI doorbell write makes the endpoint fetch TRBs from DRAM
+    /// and post events back into it.
+    pub fn mmio_write(
+        &mut self,
+        cpu: u64,
+        width: Width,
+        value: u32,
+        mem: &mut dyn crate::periph::xhci::HostMem,
+    ) -> bool {
         match self.bar0_offset(cpu) {
             Some(off) => {
-                self.endpoint.bar0_write(off, width, value);
+                self.endpoint.bar0_write(off, width, value, mem);
                 true
             }
             None => false,
@@ -607,16 +615,18 @@ mod tests {
         let usbcmd = 0x6_0200_0020;
         let usbsts = 0x6_0200_0024;
         assert_eq!(p.mmio_read(usbsts, Width::Word), Some(1)); // HCHalted
-        p.mmio_write(usbcmd, Width::Word, 1 << 1); // HCRST
+        let mut mem = crate::periph::xhci::VecMem::default();
+        p.mmio_write(usbcmd, Width::Word, 1 << 1, &mut mem); // HCRST
         assert_eq!(p.mmio_read(usbcmd, Width::Word), Some(0));
-        p.mmio_write(usbcmd, Width::Word, 1); // Run/Stop
+        p.mmio_write(usbcmd, Width::Word, 1, &mut mem); // Run/Stop
         assert_eq!(p.mmio_read(usbsts, Width::Word), Some(0));
         // `USBSTS` is write-1-to-clear. The bring-up's stop path writes
         // all-ones; a plain register would read that straight back.
-        p.mmio_write(usbsts, Width::Word, 0xFFFF_FFFF);
+        p.mmio_write(usbsts, Width::Word, 0xFFFF_FFFF, &mut mem);
         assert_eq!(p.mmio_read(usbsts, Width::Word), Some(0));
-        // Every root port reads "powered, empty" — there is no device model.
-        assert_eq!(p.mmio_read(0x6_0200_0420, Width::Word), Some(0x2A0));
+        // Root port 1 carries the on-board VIA hub, so it reports a connect;
+        // the four USB3 ports read "powered, empty".
+        assert_eq!(p.mmio_read(0x6_0200_0420, Width::Word), Some(0x4002_02E1));
         assert_eq!(p.mmio_read(0x6_0200_0460, Width::Word), Some(0x2A0));
     }
 

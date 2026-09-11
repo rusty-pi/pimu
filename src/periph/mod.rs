@@ -32,8 +32,10 @@ pub mod spi0;
 pub mod stub;
 pub mod systimer;
 pub mod uart_pl011;
+pub mod usb;
 pub mod vce;
 pub mod vl805;
+pub mod xhci;
 
 pub use asb::Asb;
 pub use avs::Avs;
@@ -62,3 +64,4 @@ pub use systimer::SysTimer;
 pub use uart_pl011::Pl011;
 pub use vce::Vce;
 pub use vl805::Vl805;
+pub use xhci::Xhci;

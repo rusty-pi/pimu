@@ -586,7 +586,7 @@ impl Machine {
 
     /// One word to a 40-bit DMA4 address.
     fn dma40_store(&mut self, addr: u64, value: u32) {
-        if addr >> 32 != 0 && self.pcie.mmio_write(addr, Width::Word, value) {
+        if addr >> 32 != 0 && self.pcie.mmio_write(addr, Width::Word, value, &mut self.ram) {
             return;
         }
         let _ = self

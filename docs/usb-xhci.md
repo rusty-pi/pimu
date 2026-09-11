@@ -10,14 +10,16 @@ Every address, register offset and log line below was measured — either from a
 `ssh rpi-dev` (a real Pi 4B with a VL805). Provenance is given inline. Nothing
 here is recalled from memory.
 
-**Bottom line up front:** the VL805 is attached by default and the bootloader's
-xHCI bring-up now reads the same capability registers a real board reads. Stage
-0 (decode), stage 1 (link, config router, endpoint identity) and stage 2a (BAR0
-over 40-bit DMA) are done; what is left for USB *boot* is stage 3 — the command
-and event rings plus a USB mass-storage device. Stage 2 (start4's `XHCI_RESET`,
-`MCU FW`, `VLI firmware load`) turns out to be unreachable for a reason that has
-nothing to do with PCIe: the ARM triggers it, and the lines are message-ring
-entries rather than console output. See [Recommendation](#7-recommendation).
+**Bottom line up front:** USB boot works. Stage 0 (decode), stage 1 (link,
+config router, endpoint identity), stage 2a (BAR0 over 40-bit DMA) and stage 3
+(the ring engine, the on-board VIA hub, and a Bulk-Only Transport disk behind
+`--usb <img>`) are all done and on by default. The bootloader enumerates the
+hub exactly as the reference board does, and with `--usb` it reads
+`start4.elf` off a USB stick over SCSI `READ(10)`. Stage 2 (start4's
+`XHCI_RESET`, `MCU FW`, `VLI firmware load`) turns out to be unreachable for a
+reason that has nothing to do with PCIe: the ARM triggers it, and the lines are
+message-ring entries rather than console output. See
+[Recommendation](#7-recommendation).
 
 ---
 
@@ -858,20 +860,72 @@ stages 1 and 3, and it all happens around `Boot mode: SD (01) order f4`, long
 before `arm_loader`. Stage 2 is start4 handing an already-working controller
 over to Linux. The pairing that matters is **1 + 3**.
 
-**Stage 3 — xHCI rings + a USB mass-storage device.** Everything in layers
-5–7: the command and event rings, then the device. The VL805's own hub-firmware
-upload is already answered by the sticky index/data port behind config
-`0x78`/`0x7C` (§5.1).
+**Stage 3 — xHCI rings + a USB mass-storage device. Done**
+(`src/periph/xhci.rs`, `src/periph/usb.rs`). Layers 5–7 in one piece:
 
-Nothing in stage 3 needs a value invented. The xHCI registers are measured
-(§2), and §5.2 has descriptors, BOT/SCSI identity, geometry and the MBR off a
-live stick. Decide deliberately between the two device placements §5.2
-describes: a blue socket needs only a root-port device, a black one needs a
-hub model as well.
+* `src/periph/xhci.rs` — the operational registers, the command ring, the event
+  ring and its ERST, slot and endpoint contexts, the doorbells, transfer rings
+  (control and bulk), and the port state machine. It is synchronous: a doorbell
+  write runs the ring it points at to completion and posts the events before the
+  write returns, which is indistinguishable from silicon to a polling driver.
+  There is no MSI delivery, no streams, no isochronous, and the scratchpad
+  buffers the firmware allocates are never touched.
+* `src/periph/usb.rs` — a `UsbDevice` trait, the VIA Labs `2109:3431` hub and a
+  Bulk-Only Transport / SCSI `MassStorage`. Descriptor bytes are verbatim from
+  `rpi-dev`; the hub answers `GET_PORT_STATUS` / `SET_FEATURE` / `CLEAR_FEATURE`
+  and has its interrupt-IN status-change endpoint, so a device behind it (a
+  black socket) works as well as one on a root port.
 
-**Verified by:** `recon ... --usb <img>` with `BOOT_ORDER` forced to
-USB-MSD reaching `Read start4.elf bytes …` off the USB image instead of the SD
-one.
+**The hub is attached unconditionally**, because a Pi 4B has one soldered to
+root port 1 whether or not anything is plugged in. That is the whole of what a
+stock board shows on the bus, and it is what the reference log records.
+
+**Verified by:** four new `boot-check.sh` milestones whose lines are
+byte-identical to `examples-on-real-hardware/sd-card-boot.log:36-39` —
+
+```text
+  4.44 USB2[1] 400202e1 connected
+  4.51 USB2 root HUB port 1 init
+  4.75 DEV [01:00] 2.16 000000:01 class 9 VID 2109 PID 3431
+  4.75 HUB init [01:00] 2.16 000000:01
+```
+
+— plus `USBSTS 18` at the pre-handover `XHCI-STOP` (line 73), where the model
+used to print `USBSTS 0`; and by unit tests that drive a whole enumeration
+through rings in host memory (`src/periph/xhci.rs`), plus hub and BOT/SCSI
+cases in `src/periph/usb.rs`.
+
+**And by USB boot.** `--usb <img>` puts a mass-storage device in blue socket A
+(root port 2, SuperSpeed). The pinned EEPROM carries no `BOOT_ORDER`, so the
+bootloader uses its built-in `0xf41` — SD, then USB-MSD, then restart — and the
+USB entry is only reached if the SD one fails. `--boot-order <hex>` appends a
+`BOOT_ORDER=` line to the EEPROM's `bootconf.txt` (the section is last in the
+image and followed by erased flash, so this is a length-field bump and an
+append; nothing moves):
+
+```text
+$ recon firmware/pieeprom.bin --eeprom --usb firmware/sd.img --boot-order 0xf14
+boot-order: bootconf BOOT_ORDER=0xf14 @ 0x73067
+           BOOT_ORDER: USB-MSD -> SD CARD -> RESTART
+  4.44 Boot mode: USB-MSD (04) order f1
+  4.44 USB3[2] 00021203 connected enabled
+  4.44 USB3 root HUB port 2 init
+  4.75 DEV [01:00] 3.16 000000:02 class 0 VID 090c PID 1000
+  4.75 MSD device [01:00] 3.16 000000:02 conf 0 iface 0 ep 82#1024 01#1024
+  4.53 MSD [01:00] 3.16 000000:02 register MSD
+  6.76 MSD READ_CAPACITY [01:00] 3.16 000000:02 lun 0 block-count 524288 block-size 512
+  6.76 MBR: 0x00000800,  522240 type: 0x0c
+  6.48 Read start4.elf bytes  2298048 hnd 0x4
+  ... MESS:00:00:21.859733:0: USB boot mode 2
+```
+
+`ep 82#1024 01#1024` is the firmware reading back the measured endpoint
+descriptors, and the whole 2.3 MB of `start4.elf` arrives over SCSI `READ(10)`.
+
+**Not modelled, deliberately:** SCSI writes are accepted and discarded (nothing
+in the boot path writes), `REQUEST SENSE` always reports no sense, and the
+`MassStorage` capacity comes from the image rather than from the reference
+stick's 125313283 blocks — that is the one field a fixture cannot borrow.
 
 ---
 
@@ -891,26 +945,27 @@ to the same point a real board's does:
   3.31 xHC0 ports 5 slots 32 intrs 4
   4.54 SD_OC: 0
   4.44 Boot mode: SD (01) order f4
+  4.44 USB2[1] 400202e1 connected
+  4.51 USB2 root HUB port 1 init
+  4.75 DEV [01:00] 2.16 000000:01 class 9 VID 2109 PID 3431
+  4.75 HUB init [01:00] 2.16 000000:01
 ```
 
-Compare `examples-on-real-hardware/sd-card-boot.log` lines 25-32: the
-capability words, the `USBSTS`, the port/slot/interrupter counts are all
-byte-identical. Three differences remain, all honest:
+Compare `examples-on-real-hardware/sd-card-boot.log` lines 25-39: the
+capability words, the `USBSTS`, the port/slot/interrupter counts and the whole
+hub enumeration are byte-identical. One difference remains, and two that stage
+3 closed are kept here as history:
 
 - the real board prints only `PCIe scan 00001106:00003483`, the model prints
   the root port as well. The root port answers its own config space at bus 0
   through the `EXT_CFG` router here; on silicon it apparently does not. Cosmetic
   — nothing branches on it;
-- the real board goes on to `USB2[1] 400202e1 connected` / `USB2 root HUB port
-  1 init` / `HUB init [01:00] 2.16 000000:01`, because a VIA hub is soldered to
-  root port 1. The model reports all five ports "powered, empty", so the
-  bootloader finds nothing and falls through to the SD entry of `BOOT_ORDER`.
-  That is stage 3, and it is the only reason USB boot is still unreachable;
-- the second `XHCI-STOP`, the one just before `start4.elf` is handed control,
-  prints `USBSTS 0` where the real board prints `USBSTS 18`. `0x18` is
-  `EINT | PCD` — an interrupt pending and a port-change detected, both of which
-  a board with a hub on port 1 has by then and a board with nothing attached
-  does not. Same consequence as the bullet above, not a separate gap.
+- ~~no hub on root port 1~~ — fixed in stage 3. The model now prints
+  `USB2[1] 400202e1 connected` / `USB2 root HUB port 1 init` /
+  `DEV [01:00] 2.16 000000:01 class 9 VID 2109 PID 3431` /
+  `HUB init [01:00] 2.16 000000:01`, byte-identical to lines 36-39;
+- ~~`USBSTS 0` at the second `XHCI-STOP`~~ — also fixed: it now prints
+  `USBSTS 18`, `EINT | PCD`, the same as line 73.
 
 `PCIe timeout: 0x00000000` and `USB xHC init failed` are gone, and with them
 the 1.32 s of modelled time the failed link used to cost.
@@ -919,8 +974,8 @@ the 1.32 s of modelled time the failed link used to cost.
 
 ## 7. Recommendation
 
-**Stages 0, 1 and 2a are done and on by default. Stage 3 is the remaining work
-for USB boot. Stage 2 is closed as not-reachable.**
+**Stages 0, 1, 2a and 3 are done and on by default. Stage 2 is closed as
+not-reachable.**
 
 Stage 0 fixed a genuine correctness bug — the firmware was writing PCIe
 registers into modelled DRAM — and made every later step observable through
@@ -944,12 +999,12 @@ them is entered on an ARM property-mailbox request that this bench, having no
 ARM core, never sends — measured, not assumed: zero trap hits on `0x3EDC61F4`
 and its two call sites over a full run with a live, enumerated VL805.
 
-Stage 3 is the real remaining payoff: the command and event rings, a USB
-mass-storage device, BOT/SCSI, and a `--usb <img>` flag. It is exercisable
-today, well before `arm_loader`, and §5.2 has live device ground truth for all
-of it. Decide deliberately between the two device placements §5.2 describes: a
-blue socket needs only a root-port device, a black one needs a hub model as
-well.
+Stage 3 landed the ring engine, the on-board VIA hub, a BOT/SCSI mass-storage
+device and the `--usb <img>` / `--boot-order <hex>` flags. The bootloader
+enumerates the hub with the reference board's exact log lines, and boots off a
+USB stick when the boot order reaches the USB entry — all well before
+`arm_loader`, which is the point the stage-2 discussion above makes about the
+1 + 3 pairing.
 
 [issue #5]: https://github.com/valtzu/rpi-virt-fw/issues/5
 [issue #18]: https://github.com/valtzu/rpi-virt-fw/issues/18

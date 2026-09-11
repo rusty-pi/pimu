@@ -79,6 +79,18 @@ want 'xHCI capability registers'           'xHC0 ver: 256 HCS: 05000420 fc000031
 want 'xHCI port and slot counts'           'xHC0 ports 5 slots 32 intrs 4'
 must_not 'PCIe link never trained'         'PCIe timeout'
 must_not 'xHC bring-up failed'             'USB xHC init failed'
+# The xHCI ring engine enumerates the VIA Labs hub that is soldered to root
+# port 1 of every Pi 4B: port connect, reset, Enable Slot / Address Device, and
+# GET_DESCRIPTOR over the control ring. All four lines are byte-identical to
+# the real board, sd-card-boot.log:36-39 (#18 stage 3).
+want 'USB2 root port reports the hub'      'USB2\[1\] 400202e1 connected'
+want 'root hub port init'                  'USB2 root HUB port 1 init'
+want 'hub enumerated over the control ring' 'DEV \[01:00\] 2.16 000000:01 class 9 VID 2109 PID 3431'
+want 'hub driver bound'                    'HUB init \[01:00\] 2.16 000000:01'
+# The pre-handover XHCI-STOP: EINT | PCD, an event posted and a port change
+# seen. A board with nothing on the bus prints `USBSTS 0`; the reference board
+# prints 18 (sd-card-boot.log:73) because of the hub above.
+want 'xHCI stopped with events pending'    'USBSTS 18'
 # start4 got past the DMA transfer completion and emitted its first MESS log.
 want 'first MESS log'                      'MESS:.*arasan_emmc_open'
 # gpioman resolves its pin names from the real dt-blob, so the firmware itself
