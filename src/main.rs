@@ -248,6 +248,17 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
             machine.emmc2.insert_card(img.clone());
         }
         machine.mmio_trace = trace_mmio;
+        // `RVF_TRACE_MMIO=<lo>-<hi>` (hex): trace peripheral accesses from the
+        // first instruction, but only inside that address range. Tracing the
+        // whole bus across a boot is unusable — both in volume and in the time
+        // the formatting costs — when the question is about one block.
+        if let Some((lo, hi)) = std::env::var("RVF_TRACE_MMIO")
+            .ok()
+            .and_then(|v| parse_addr_range(&v))
+        {
+            machine.mmio_trace = true;
+            machine.mmio_trace_range = Some((lo, hi));
+        }
         payload.load_into(&mut machine)?;
         for &(a, v) in &patches {
             use rpi_virt_fw::bus::Bus;
@@ -770,6 +781,16 @@ fn locate_fdt(machine: &mut Machine, console: &[u8]) -> Option<(u32, Vec<u8>)> {
         logged_len.max(40)
     };
     Some((addr, read(machine, addr, len)))
+}
+
+/// Parse `<lo>-<hi>` (hex, `0x` optional) into a half-open address range.
+/// Anything else — including the bare `1` that arms the trace from a
+/// `RVF_TRACE_ON_*` trigger — yields `None`.
+fn parse_addr_range(s: &str) -> Option<(u32, u32)> {
+    let (lo, hi) = s.trim().split_once('-')?;
+    let p = |t: &str| u32::from_str_radix(t.trim().trim_start_matches("0x"), 16).ok();
+    let (lo, hi) = (p(lo)?, p(hi)?);
+    (lo < hi).then_some((lo, hi))
 }
 
 fn parse_u32(s: &str) -> Result<u32> {

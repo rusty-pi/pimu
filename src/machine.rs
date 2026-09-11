@@ -99,6 +99,12 @@ pub struct Machine {
     /// as `(addr, width_bytes, value, is_write)`. The run loop drains and prints
     /// it tagged with the current PC. A reconnaissance aid for unmodelled blocks.
     pub mmio_trace: bool,
+    /// Optional `[lo, hi)` address filter for `mmio_trace`. Tracing every
+    /// peripheral access across a whole boot buries the one block under
+    /// investigation in millions of unrelated lines (and costs more time than
+    /// the wall-clock budget has); with this set only accesses inside the
+    /// range are recorded. `RVF_TRACE_MMIO=<lo>-<hi>` sets it.
+    pub mmio_trace_range: Option<(u32, u32)>,
     pub mmio_events: Vec<(u32, u8, u32, bool)>,
 
     /// Reconnaissance aid: when `RVF_WATCH=<hex>[,<hex>...]` is set, every store
@@ -169,6 +175,7 @@ impl Machine {
             mmio_writes: 0,
             ram_reads: 0,
             mmio_trace: false,
+            mmio_trace_range: None,
             mmio_events: Vec::new(),
             watch: std::env::var("RVF_WATCH")
                 .ok()
@@ -216,6 +223,33 @@ impl Machine {
             let now = self.systimer.now_us();
             self.hdmi_ddc0.advance_to(now);
             self.hdmi_ddc1.advance_to(now);
+        }
+    }
+
+    /// Mirror the core rail's PMIC setpoint into the AVS monitor before a read
+    /// of that block.
+    ///
+    /// Channel 3 of the AVS monitor is a voltage sensor sitting on the SoC core
+    /// rail, and the rail is driven over I²C by the `0x1E` PMIC (register
+    /// `0x25`, 10 mV per step — see [`crate::periph::pmic`]). start4's DVFS
+    /// calibration `FUN_0ec303e8` programs two voltages an appreciable step
+    /// apart and requires the sensor to report a difference of at least 10 mV
+    /// between them; a channel that answers with one fixed count reads as a
+    /// rail that does not respond, and the calibration gives up. The two
+    /// devices are in different windows, so the tie between them has to be made
+    /// here.
+    fn sync_avs_core_rail(&mut self, addr: u32) {
+        if !(map::AVS_BASE..map::AVS_BASE + map::AVS_SIZE).contains(&addr) {
+            return;
+        }
+        // `0x3EC8C9F6`, the `0x1E` descriptor's raw-to-microvolts callback.
+        let raw = self
+            .bsc_pmic
+            .slave()
+            .and_then(|p| p.part(crate::periph::pmic::ADDR_CORE))
+            .map(|part| part.reg(0x25));
+        if let Some(raw) = raw {
+            self.avs.set_core_rail_uv(u32::from(raw) * 10_000);
         }
     }
 
@@ -271,6 +305,15 @@ impl Machine {
             || (map::SDRAMC_BASE..map::SDRAMC_BASE + map::SDRAMC_SIZE).contains(&addr)
             || (map::CLKMON_BASE..map::CLKMON_BASE + map::CLKMON_SIZE).contains(&addr)
             || (map::PCIE_BASE..map::PCIE_BASE + map::PCIE_SIZE).contains(&addr)
+    }
+
+    /// Should an access to `addr` be recorded in `mmio_events`? True when the
+    /// trace is on and `addr` passes `mmio_trace_range`, if one is set.
+    fn mmio_traced(&self, addr: u32) -> bool {
+        self.mmio_trace
+            && self
+                .mmio_trace_range
+                .is_none_or(|(lo, hi)| (lo..hi).contains(&addr))
     }
 
     /// Fold the four VC4 cache aliases (`0x0`, `0x4000_0000`, `0x8000_0000`,
@@ -665,7 +708,8 @@ impl Bus for Machine {
             }
         }
         self.advance_hdmi_ddc(addr);
-        let trace = self.mmio_trace;
+        self.sync_avs_core_rail(addr);
+        let trace = self.mmio_traced(addr);
         if let Some((dev, off)) = self.device_for(addr) {
             let v = dev.read(off, width);
             let got = *v.as_ref().unwrap_or(&0);
@@ -712,7 +756,7 @@ impl Bus for Machine {
         self.mmio_writes = self.mmio_writes.wrapping_add(1);
         self.dma_win_log("wr", addr, value);
         self.advance_hdmi_ddc(addr);
-        let trace = self.mmio_trace;
+        let trace = self.mmio_traced(addr);
         if let Some((dev, off)) = self.device_for(addr) {
             let r = dev.write(off, width, value);
             if trace {
