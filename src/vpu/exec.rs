@@ -7,9 +7,13 @@ use crate::bus::{Bus, BusError, Width};
 const CF_TRACE_LEN: usize = 512;
 
 use super::decode::decode;
-use super::insn::{AddrMode, AluOp, Base, MemWidth, Op, RegOrImm, VecExec, VecInsn, Writeback};
+use super::insn::{
+    AddrMode, AluOp, Base, MemWidth, Op, RegOrImm, VecExec, VecInsn, VecPred, VecReg, VecRep,
+    Writeback,
+};
 use super::length::InsnClass;
 use super::reg::{Cond, Flags, Regs, GP, LR, SP};
+use super::vrf::{self, Vrf};
 
 /// Sign-extend the low `bits` of `v` to 32 bits.
 #[inline]
@@ -168,6 +172,9 @@ pub struct Vpu {
     /// hardware behaviour — reads return the last written value (0 at reset),
     /// which is enough to clear the early-boot "wait for p16 == 0" loops.
     pub coproc: [u32; 32],
+    /// The vector unit's register file. See `src/vpu/vrf.rs`; only the parts of
+    /// the vector ISA `VecInsn::executable` accepts ever reach it.
+    pub vrf: Vrf,
     /// Ring of recent taken control transfers `(from_pc, to_pc)`.
     ///
     /// A `VecDeque`, not a `Vec`: this is a ring, and dropping the oldest entry
@@ -984,6 +991,65 @@ impl Vpu {
                         self.regs.flags.z = sum == 0;
                         self.regs.flags.n = (sum as i32) < 0;
                     }
+                    VecExec::Mem {
+                        store,
+                        reg,
+                        step_row,
+                        base,
+                        incr,
+                        reps,
+                        pred,
+                    } => {
+                        // Lanes are transferred at their own address —
+                        // predication masks lanes out, it does not compact them
+                        // — so a masked-off lane touches no memory at all.
+                        let lanes = match pred {
+                            VecPred::All => u16::MAX,
+                            VecPred::IfZero => self.vrf.lane_z,
+                            VecPred::IfNonZero => !self.vrf.lane_z,
+                        };
+                        let reps = match reps {
+                            VecRep::Fixed(n) => n,
+                            VecRep::FromR0 => self.regs.get(0),
+                        };
+                        let stride = incr.map_or(0, |r| self.regs.get(r as usize));
+                        // The base register itself is *not* written back: the
+                        // firmware advances it separately after the loop
+                        // (`memcpy` at `0x3EDA28FE` adds `r0 * 64` to `r1`),
+                        // which would double-count if the instruction did too.
+                        let mut addr = self.regs.get(base as usize);
+                        let mut row = reg.row;
+                        for _ in 0..reps {
+                            if let Err(err) = self.vec_transfer(bus, store, reg, row, addr, lanes) {
+                                return self.stop(Stop::Fault(Fault::Bus { pc, err }));
+                            }
+                            addr = addr.wrapping_add(stride);
+                            if step_row {
+                                row = (row + 1) % vrf::DIM as u8;
+                            }
+                        }
+                    }
+                    VecExec::Broadcast { reg, src } => {
+                        // The 6-bit immediate is taken unsigned. Its only use in
+                        // this firmware (`memcpy`'s `v16mov HX(0,0),0x3f` at
+                        // `0x3EDA2918`) is dead — the lanes it writes are
+                        // overwritten or masked off before anything reads them —
+                        // so the choice is unobservable here.
+                        let value = match src {
+                            RegOrImm::Reg(r) => self.regs.get(r as usize),
+                            RegOrImm::Imm(i) => i as u32,
+                        };
+                        for lane in 0..vrf::LANES {
+                            self.vrf
+                                .write(reg.row, reg.x0, lane, reg.lane_bytes as u32, value);
+                        }
+                    }
+                    VecExec::Bitplanes { src } => {
+                        // One flag per lane, holding that lane's bit of the
+                        // scalar. Only the zero flag is modelled: the predicated
+                        // forms this model executes read nothing else.
+                        self.vrf.lane_z = !(self.regs.get(src as usize) as u16);
+                    }
                     VecExec::NeedsVrf => {
                         if let Some(step) = self.unimpl(pc, v.raw, v.len, InsnClass::Vector48, next)
                         {
@@ -1003,22 +1069,6 @@ impl Vpu {
             } => {
                 if let Some(step) = self.unimpl(pc, raw as u128, ilen, class, next) {
                     return step;
-                }
-                // VC4 libc `memcpy` (`0x3EDA28C0`) vectorises its aligned bulk
-                // copy with `v32` vld/vst (`0x3EDA28F2` load, `0x3EDA2904`
-                // store) the model doesn't decode — skipping them silently
-                // corrupts every large aligned copy (e.g. gpioman's built-in
-                // dt-blob). Emulate the copy at the store: `r1` has been
-                // advanced past the chunk, `r3` still points at its start, `r0`
-                // counts 64-byte rows.
-                if pc == 0x3EDA_2904 {
-                    let n = self.regs.get(0).wrapping_shl(6);
-                    let dst = self.regs.get(3);
-                    let src = self.regs.get(1).wrapping_sub(n);
-                    for i in 0..n {
-                        let b = bus.load8(src.wrapping_add(i)).unwrap_or(0);
-                        let _ = bus.store8(dst.wrapping_add(i), b);
-                    }
                 }
             }
         }
@@ -1140,6 +1190,59 @@ impl Vpu {
                 base_val
             }
         }
+    }
+
+    /// One repetition of a vector load or store: 16 lanes of `reg` against
+    /// consecutive elements at `addr`, restricted to the lanes set in `lanes`.
+    ///
+    /// A lane is transferred with an access of its own width when it is
+    /// naturally aligned and byte by byte when it is not — VC4's `v8` forms copy
+    /// arbitrary byte alignments, and splitting an aligned word access would
+    /// misreport itself to any MMIO register underneath.
+    fn vec_transfer(
+        &mut self,
+        bus: &mut dyn Bus,
+        store: bool,
+        reg: VecReg,
+        row: u8,
+        addr: u32,
+        lanes: u16,
+    ) -> Result<(), BusError> {
+        let lane_bytes = reg.lane_bytes as u32;
+        let width = match lane_bytes {
+            1 => Width::Byte,
+            2 => Width::Half,
+            _ => Width::Word,
+        };
+        for lane in 0..vrf::LANES {
+            if lanes & (1 << lane) == 0 {
+                continue;
+            }
+            let ea = addr.wrapping_add(lane * lane_bytes);
+            let aligned = ea.is_multiple_of(lane_bytes);
+            if store {
+                let v = self.vrf.read(row, reg.x0, lane, lane_bytes);
+                if aligned {
+                    bus.store(ea, width, v)?;
+                } else {
+                    for i in 0..lane_bytes {
+                        bus.store8(ea.wrapping_add(i), (v >> (8 * i)) as u8)?;
+                    }
+                }
+            } else {
+                let v = if aligned {
+                    bus.load(ea, width)?
+                } else {
+                    let mut v = 0u32;
+                    for i in 0..lane_bytes {
+                        v |= (bus.load8(ea.wrapping_add(i))? as u32) << (8 * i);
+                    }
+                    v
+                };
+                self.vrf.write(row, reg.x0, lane, lane_bytes, v);
+            }
+        }
+        Ok(())
     }
 
     fn load_width(&self, bus: &mut dyn Bus, ea: u32, w: MemWidth) -> Result<u32, BusError> {
