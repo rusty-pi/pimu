@@ -65,39 +65,78 @@ instead of a disk image — lower priority.
 
 ---
 
-## 3. If we ever reach Linux — hand off to QEMU
+## 3. Reaching Linux — keep the VideoCore running alongside QEMU
 
-Fully emulating the ARM side (kernel, userspace, USB, networking, …) is not the
-point of this project and would be a poor use of effort. QEMU already does it
-well.
+We reach Linux now: the boot runs to `arm_loader: Starting ARM with 948MB`, and
+`recon --dump-fdt` yields a device tree a stock
+`qemu-system-aarch64 -M raspi4b -m 2G -kernel kernel8.img -dtb handoff.dtb`
+boots the real kernel from, as far as `Waiting for root device`.
 
-The vision is to make our firmware emulator a **drop-in BIOS/firmware for
-QEMU's `raspi4b` (or `virt`) machine**: run the real VideoCore boot chain in our
-model, and at the ARM hand-off, transfer the resulting machine state — DRAM
-contents, the loaded kernel, the fixed-up device tree, PLL/clock state, the ARM
-stub — into QEMU and let it take over from reset.
+Fully emulating the ARM side is still not the point. But a *static* hand-off is
+not enough either: the thing [`rpi-mkosi` #37][37] cares about — `rpi-fw-crypto`,
+`/dev/vcio`, the OTP-backed key derivation — is a **live** conversation between a
+booted Linux and a still-running VideoCore. So the target is: **our model keeps
+executing `start4.elf` alongside QEMU and services the ARM property mailbox for
+real.**
 
-Two plausible integration shapes:
+### What is settled
 
-```
-# a) our emulator produces a firmware image QEMU loads as -bios
-rpi-virt-fw build-bios --eeprom pieeprom.bin --disk sdcard.img -o rpi-fw.bin
-qemu-system-aarch64 -M raspi4b -bios rpi-fw.bin -drive file=sdcard.img,...
+- **Guest DRAM can be shared, with stock QEMU.**
+  `-object memory-backend-file,id=pcram,size=2G,mem-path=…,share=on` plus
+  `-machine memory-backend=pcram` works on `raspi4b`; a second process sees guest
+  writes live and can write back. Property buffers arrive as `0xC000_0000 | phys`
+  (`/soc` carries `dma-ranges = <0xc0000000 0x0 0x0 0x40000000>`), which is the
+  uncached SDRAM alias the model already implements — so a shared mapping needs
+  no address translation at all.
+- **The hand-off is a file copy, not a subsystem.** `recon --dram-map` reports
+  39 MiB non-zero in 24 regions at `arm_loader`: the armstub and spin table at
+  `0x0..0x1b000`, the kernel at `0x200000`, the patched DTB at `0x2eff1e00`, and
+  `start4`'s own image around `0x3ebe4000`. Nothing above `0x4000_0000`. The
+  firmware's image has to stay live regardless — `/reserved-memory/nvram@0` and
+  `nvram@1`, which Linux reads as `rpi-bootloader-config` and
+  `rpi-bootloader-public-key`, point straight into VPU DRAM.
+- **`-bios` does not work on `raspi4b`.** The image is copied to `0x80000`, but
+  CPU0 resets to PC = 0 in EL3 secure and QEMU writes nothing at 0, so the guest
+  executes zeros. The "build a BIOS image" shape is dropped. That reset state is
+  exactly right for a restore, though — it is where `armstub8` starts on
+  hardware — and `-device loader,file=…,addr=…` (with `cpu-num=` for the reset
+  PC) restores memory and entry point with no patched QEMU.
+- **The device tree is accepted.** Our `--dump-fdt` blob boots Linux 6.18 to the
+  same point as the stock `bcm2711-rpi-4-b.dtb`, with `Attached to firmware` and
+  `mailbox enabled`.
 
-# b) our emulator runs first, snapshots at hand-off, resumes under QEMU
-rpi-virt-fw boot ... --handoff-snapshot state.tar
-qemu-system-aarch64 -M raspi4b -incoming-rpi-handoff state.tar ...
-```
+### What is not
 
-(b) is closer to how the hardware actually works (the VPU keeps running
-alongside the ARM cores, servicing the mailbox); it would need a small
-paravirtual channel for the VideoCore mailbox / property interface so a booted
-Linux can still talk to "the firmware". (a) is simpler and probably enough for
-CI-style "does it boot" checks.
+- **The mailbox bridge.** `0x7E00_B880` is in the memory map but unmodelled, and
+  nothing forwards its MMIO out of QEMU. `raspi4b` has no PCI bus (so no
+  `ivshmem`) and no virtio-mmio (so no vhost-user), which leaves either a small
+  custom QEMU device over a socket — shipping a patched QEMU — or a guest-side
+  driver shim, the way `rpi-mkosi`'s own `rpi-fw-mock` already does it, with our
+  model behind it instead of hardcoded constants.
+- **Without a working mailbox Linux stops at `Waiting for root device`.** The
+  device tree alone is not enough: `raspberrypi-exp-gpio` fails
+  `GET_GPIO_CONFIG`, `regulator-sd-io-1v8` fails to probe, and the SD/eMMC
+  controller defers forever. Firmware clocks, power domains, cpufreq, thermal
+  and `vcio` go with it.
+- **`raspi4b` caps guest RAM at 2 GiB** and models no HDMI/VC4/PCIe/GENET, so a
+  device tree carrying `dtoverlay=vc4-kms-v3d` aborts the guest in
+  `brcmstb_l2_intc_probe` (the HDMI L2 interrupt controller at `0x7ef00100`).
+  QEMU also rewrites parts of a supplied DTB on the way in, so what Linux sees
+  is not byte-identical to what the firmware produced.
 
-Either way: **we own everything up to the ARM cores leaving reset; QEMU owns
-everything after.** The firmware crypto / mailbox / device-tree behaviour —
-the part `rpi-mkosi` #37 cares about — is entirely on our side of that line.
+### Order of work
+
+**Model the ARM mailbox in our own machine first**, and prove `start4`'s mailbox
+task — it exists, the blob says `Creating mailbox reading task ...` — answers
+`GET_FIRMWARE_REVISION` and then `GET_CRYPTO_HMAC_SHA256`, with no ARM anywhere
+in the picture. That single step answers #37 in CI in one `recon` run. Only then
+is it worth choosing a QEMU transport, because the transport is a deployment
+detail on top of a proven mailbox rather than the thing the idea is gated on.
+
+Either way: **we own everything the VideoCore does; QEMU owns the ARM.** The line
+is the mailbox, not the reset vector.
+
+[37]: https://github.com/valtzu/rpi-mkosi/issues/37
 
 ---
 

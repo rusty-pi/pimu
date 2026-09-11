@@ -48,6 +48,10 @@ FLAGS:
     --print-fdt
               Print that whole device tree as source, every node and property,
               not only the `/chosen` summary the run report gives by default.
+    --dram-map
+              Report which DRAM pages are non-zero when the run ends, as
+              address runs. Proof of concept for the QEMU hand-off: this is the
+              state that would have to cross the line (docs/vision.md §3).
     -v        Print the full run report and transcript.
 ";
 
@@ -122,6 +126,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     let mut print_fdt = false;
     let mut usb_image: Option<PathBuf> = None;
     let mut boot_order: Option<String> = None;
+    let mut dram_map = false;
     let mut skip_signed_boot = false;
     let mut skip_unimpl = false;
     let mut it = args.iter();
@@ -173,6 +178,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
                 disasms.push((parse_u32(a)?, parse_u32(n)?));
             }
             "--print-fdt" => print_fdt = true,
+            "--dram-map" => dram_map = true,
             "--dump-fdt" => {
                 dump_fdt = Some(PathBuf::from(it.next().context("--dump-fdt needs a path")?))
             }
@@ -560,6 +566,53 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
                     off, r, w, v
                 );
             }
+        }
+    }
+
+    if dram_map {
+        // Proof of concept for the QEMU hand-off (docs/vision.md section 3):
+        // how much of DRAM is actually dirty when `arm_loader` releases the
+        // ARM, and where. Everything QEMU would have to be told about has to
+        // come out of here, so the size and the shape of it decide whether a
+        // hand-off is a file copy or a subsystem.
+        //
+        // "Dirty" is approximated as "not all zero", which is exact for this
+        // purpose: the model starts RAM zeroed and QEMU's guest RAM is zeroed
+        // too, so a zero page needs no transfer either way.
+        const PAGE: usize = 4096;
+        let ram = &emu.machine.ram;
+        let base = ram.base();
+        let mut runs: Vec<(u32, u32)> = Vec::new();
+        let mut nonzero_pages = 0usize;
+        let total_pages = ram.len() / PAGE;
+        for p in 0..total_pages {
+            let addr = base + (p * PAGE) as u32;
+            let dirty = ram
+                .read_slice(addr, PAGE)
+                .map(|s| s.iter().any(|&b| b != 0))
+                .unwrap_or(false);
+            if !dirty {
+                continue;
+            }
+            nonzero_pages += 1;
+            match runs.last_mut() {
+                // Bridge gaps of up to 64 KiB so the report is readable; the
+                // bytes in the gap are zero and are counted separately.
+                Some(last) if addr <= last.1 + 0x1_0000 => last.1 = addr + PAGE as u32,
+                _ => runs.push((addr, addr + PAGE as u32)),
+            }
+        }
+        println!("\n--- DRAM occupancy at the ARM hand-off ---");
+        println!(
+            "  {} MiB of RAM, {} of {} 4K pages non-zero ({} MiB), {} regions",
+            ram.len() >> 20,
+            nonzero_pages,
+            total_pages,
+            (nonzero_pages * PAGE) >> 20,
+            runs.len()
+        );
+        for (lo, hi) in &runs {
+            println!("  {lo:#010x}..{hi:#010x}  {:>8} KiB", (hi - lo) / 1024);
         }
     }
 
