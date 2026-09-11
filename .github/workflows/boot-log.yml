@@ -15,7 +15,7 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -37,7 +37,7 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install mtools
         run: sudo apt-get update && sudo apt-get install -y mtools
@@ -58,7 +58,7 @@ jobs:
       - name: Simulated boot (5 min cap)
         run: ./scripts/boot-check.sh boot.log
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: boot-log
@@ -79,7 +79,7 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # qemu-system-arm is the Debian/Ubuntu package that ships
       # qemu-system-aarch64; mtools is what pulls kernel8.img back out of the
@@ -115,7 +115,7 @@ jobs:
           fi
           exit "$status"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: qemu-check
