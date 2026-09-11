@@ -63,3 +63,46 @@ jobs:
         with:
           name: boot-log
           path: boot.log
+
+  # Does Linux boot the device tree our firmware hands the ARM? Independent of
+  # the boot job above: it runs its own simulated boot, takes the `--dump-fdt`
+  # blob out of it and feeds that to a stock QEMU. This proves the tree is one
+  # Linux accepts — not that it survives the trip unchanged (QEMU rewrites parts
+  # of it; see the comments in scripts/qemu-check.sh).
+  qemu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # qemu-system-arm is the Debian/Ubuntu package that ships
+      # qemu-system-aarch64; mtools is what pulls kernel8.img back out of the
+      # SD image.
+      - name: Install mtools and QEMU
+        run: sudo apt-get update && sudo apt-get install -y mtools qemu-system-arm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Fetch firmware blobs
+        run: ./scripts/fetch-firmware.sh
+
+      - name: Build SD image
+        run: ./scripts/make-sd.sh
+
+      - name: Build rpi-virt-fw
+        run: cargo build --release
+
+      - name: Boot the handed-over device tree under QEMU
+        run: ./scripts/qemu-check.sh
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qemu-check
+          path: |
+            firmware/qemu-check/boot.log
+            firmware/qemu-check/qemu.log
+            firmware/qemu-check/handoff.dtb
