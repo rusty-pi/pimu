@@ -144,6 +144,15 @@ pub struct Vpu {
     /// keys its per-core branches (which control register to poke, which stack
     /// to use) off that bit.
     pub core_id: u32,
+    /// Halted by `sleep`, waiting for an interrupt.
+    ///
+    /// Real VC4 `sleep` stops the core until one arrives. Core 0's idle path
+    /// models that by jumping the clock to the next armed compare; core 1 has
+    /// no business moving the clock — core 0 owns it — so it simply stops
+    /// being stepped until something vectors an interrupt at it. Before this,
+    /// core 1 spun the ThreadX idle loop in real time and accounted for 46% of
+    /// every instruction the emulator executed, for no modelled effect.
+    pub halted: bool,
     /// Base of the exception vector table. `swi #u` raises exception `0x20 + u`
     /// and jumps to the **4-byte** entry `*(exc_vbase + exc*4)`, after pushing SR
     /// and the return address (so the handler's `rti` unwinds). start4.elf's
@@ -277,6 +286,8 @@ impl Vpu {
     /// interrupts already off and relies on the wake itself to service the
     /// pending periodic tick — nothing in that loop ever runs `ei`.
     pub fn vector_irq_forced(&mut self, bus: &mut dyn Bus, slot: u32) {
+        // An interrupt is what `sleep` was waiting for.
+        self.halted = false;
         if self.exc_vbase == 0 {
             return;
         }
@@ -403,6 +414,12 @@ impl Vpu {
                 // or spin detector ends things cleanly. Otherwise halt.
                 if self.on_unimpl.recon_lenient() {
                     self.regs.pc = next;
+                    if self.exc_vbase != 0 && self.core_id != 0 {
+                        // Halt until an interrupt is vectored here. The run
+                        // loop skips a halted core; `vector_irq` clears it.
+                        self.halted = true;
+                        return Step::Ran;
+                    }
                     if self.exc_vbase != 0 && self.core_id == 0 {
                         // The ThreadX idle loop parks here with interrupts
                         // disabled, so the run loop's gated delivery never
