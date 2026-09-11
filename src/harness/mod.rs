@@ -1,9 +1,11 @@
 //! The regression bench: scenario files in, pass/fail (+ transcript) out.
 
+pub mod boot;
 pub mod capture;
 pub mod regression;
 pub mod scenario;
 
+pub use boot::BootScenario;
 pub use regression::{
     build_payload, check_golden, run_scenario, unified_diff, verify, GoldenOutcome, ScenarioRun,
 };

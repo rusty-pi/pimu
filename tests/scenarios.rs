@@ -8,6 +8,14 @@
 //! payload building, console capture and the golden diff. That plumbing has no
 //! other test and this one costs a millisecond, so it stays.
 //!
+//! The firmware boot is a scenario too, but a different kind: it needs blobs
+//! that are never committed and minutes of CPU, so it lives in
+//! `testdata/boot/firmware-boot.toml`, `scripts/boot-check.sh` runs it, and
+//! `tests/boot_scenario.rs` tests everything about it that does not need the
+//! boot. These two stay because they are the only end-to-end exercise of
+//! payload loading, the run loop and console capture that `cargo test` can
+//! afford.
+//!
 //! Regenerate goldens after an intentional behaviour change with:
 //!   cargo run -- run-all --update
 

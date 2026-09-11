@@ -62,7 +62,12 @@ jobs:
         if: always()
         with:
           name: boot-log
-          path: boot.log
+          # The console file is the golden transcript's raw material: download
+          # it from a failed run and `boot-check --update` against it to see
+          # exactly what the boot did differently.
+          path: |
+            boot.log
+            boot.log.console
 
   # Does Linux boot the device tree our firmware hands the ARM? Independent of
   # the boot job above: it runs its own simulated boot, takes the `--dump-fdt`
