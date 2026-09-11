@@ -38,6 +38,7 @@ fn fake_log(console: &str) -> String {
          --- ARM property mailbox (0x7e00_b880) ---\n\
          \x20 mailbox: config1 0x1, 1 requests taken, 1 replies written\n\
          \x20 tag 0x00000001     answered    4 bytes  0x6a7a16af\n\
+         \x20 tag 0x0003008f     answered    4 bytes  0x00000001\n\
          \x20 tag 0x00030090     answered    4 bytes  0x80000000\n\
          retired 1234  (skipped 0, cycles 5678)\n"
     )
