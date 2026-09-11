@@ -49,13 +49,13 @@ CSD: 400e005a05b5900001ff000002600000
 [t] MBR: 0x00000000,       0 type: 0x00
 [t] MBR: 0x00000000,       0 type: 0x00
 [t] Trying partition: 0
-[t] type: 32 lba: 2048 'MTOO4049' ' RPIBOOT    ' clusters 130044 (4)
+[t] type: 32 lba: 2048 '[oem]' ' RPIBOOT    ' clusters 130044 (4)
 [t] rsc 32 fat-sectors 1016 root dir cluster 2 sectors 0 entries 0
 [t] FAT32 clusters 130044
 [t] [sdcard] autoboot.txt not found
 [t] Select partition rsts 0 C(boot_partition) 0 EEPROM config 0 result 1
 [t] Trying partition: 1
-[t] type: 32 lba: 2048 'MTOO4049' ' RPIBOOT    ' clusters 130044 (4)
+[t] type: 32 lba: 2048 '[oem]' ' RPIBOOT    ' clusters 130044 (4)
 [t] rsc 32 fat-sectors 1016 root dir cluster 2 sectors 0 entries 0
 [t] FAT32 clusters 130044
 [t] Read config.txt bytes      279 hnd 0x3

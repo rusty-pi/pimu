@@ -289,10 +289,32 @@ fn normalise_line(line: &str) -> String {
                 && f.len() == 2
                 && f.bytes().all(|b| b.is_ascii_digit()));
         if is_stamp {
-            return format!("[t] {}", scrub_stc(tail));
+            return format!("[t] {}", scrub_fat_oem(&scrub_stc(tail)));
         }
     }
-    scrub_stc(line)
+    scrub_fat_oem(&scrub_stc(line))
+}
+
+/// Replace the FAT OEM name the partition scan prints.
+///
+/// `type: 32 lba: 2048 'MTOO4049' ' RPIBOOT    ' ...` — that quoted field is
+/// written into the filesystem by `mformat`, and mtools stamps its own version
+/// into it, so an SD image built on one machine differs from one built on
+/// another (`MTOO4049` here, `MTOO4043` on the CI runner). It describes the
+/// tool that made the fixture, not anything the firmware did, so it has no
+/// business in a transcript that is diffed for firmware changes. The volume
+/// label beside it is ours (`RPIBOOT`, set by `scripts/make-sd.sh`) and stays.
+fn scrub_fat_oem(line: &str) -> String {
+    let Some(i) = line.find("lba: ") else {
+        return line.to_string();
+    };
+    let Some(open) = line[i..].find('\'').map(|o| i + o) else {
+        return line.to_string();
+    };
+    let Some(close) = line[open + 1..].find('\'').map(|c| open + 1 + c) else {
+        return line.to_string();
+    };
+    format!("{}[oem]{}", &line[..open + 1], &line[close..])
 }
 
 /// Replace the `stc <n>` system-timer reading on the `BOOTMODE:` line.
