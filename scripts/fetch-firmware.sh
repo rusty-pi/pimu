@@ -25,45 +25,49 @@ mkdir -p "$dest"
 
 raw="https://raw.githubusercontent.com"
 
-fetch() {
+# Every blob is queued here and fetched in one parallel curl run at the end.
+jobs=()
+queue() {
 	local url="$1" out="$2"
 	echo "  $out  <-  $url"
-	curl -fSL --retry 3 -o "$dest/$out" "$url"
+	jobs+=(-o "$dest/$out" "$url")
 }
 
 echo "raspberrypi/firmware @ $FIRMWARE_REF"
-fetch "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/start4.elf" "start4.elf"
-fetch "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/fixup4.dat" "fixup4.dat"
+queue "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/start4.elf" "start4.elf"
+queue "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/fixup4.dat" "fixup4.dat"
 # Debug build: identical function, far more verbose UART logging (MESS: lines).
 # Embed it in the boot medium with `START4=start4db make-sd.sh` to see where
 # start4 gets stuck.
-fetch "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/start4db.elf" "start4db.elf"
-fetch "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/fixup4db.dat" "fixup4db.dat"
+queue "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/start4db.elf" "start4db.elf"
+queue "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/fixup4db.dat" "fixup4db.dat"
 
 # Kernel, device tree and the overlays the reference boot log loads. Without
 # these the boot has nothing to hand off to and stops after the HDMI bring-up;
 # with them it can reproduce examples-on-real-hardware/vc4-boot.log from
 # 'dtparam:' onwards. (initramfs8 is generated per-install, not shipped here —
 # auto_initramfs simply finds nothing, which is fine.)
-fetch "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/kernel8.img" "kernel8.img"
-fetch "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/bcm2711-rpi-4-b.dtb" "bcm2711-rpi-4-b.dtb"
+queue "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/kernel8.img" "kernel8.img"
+queue "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/bcm2711-rpi-4-b.dtb" "bcm2711-rpi-4-b.dtb"
 mkdir -p "$dest/overlays"
 for ovl in overlay_map.dtb disable-bt.dtbo disable-wifi.dtbo vc4-kms-v3d.dtbo \
            vc4-kms-v3d-pi4.dtbo; do
-	echo "  overlays/$ovl"
-	curl -fSL --retry 3 -o "$dest/overlays/$ovl" \
-		"$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/overlays/$ovl"
+	queue "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/overlays/$ovl" "overlays/$ovl"
 done
 
 # dt-blob source (gpioman pin config). Compiled to dt-blob.bin by
 # scripts/make-dt-blob.py and placed on the SD by scripts/make-sd.sh.
-fetch "$raw/raspberrypi/firmware/$FIRMWARE_REF/extra/dt-blob.dts" "dt-blob.dts"
-"$here/scripts/make-dt-blob.py" "$dest/dt-blob.dts" "$dest/dt-blob.bin"
+queue "$raw/raspberrypi/firmware/$FIRMWARE_REF/extra/dt-blob.dts" "dt-blob.dts"
 
 echo "raspberrypi/rpi-eeprom @ $EEPROM_REF ($EEPROM_CHANNEL/$EEPROM_DATE)"
-fetch "$raw/raspberrypi/rpi-eeprom/$EEPROM_REF/firmware-2711/$EEPROM_CHANNEL/pieeprom-$EEPROM_DATE.bin" "pieeprom.bin"
-fetch "$raw/raspberrypi/rpi-eeprom/$EEPROM_REF/firmware-2711/$EEPROM_CHANNEL/recovery.bin" "recovery.bin"
-fetch "$raw/raspberrypi/rpi-eeprom/$EEPROM_REF/firmware-2711/$EEPROM_CHANNEL/vl805-$EEPROM_VL805.bin" "vl805-$EEPROM_VL805.bin"
+queue "$raw/raspberrypi/rpi-eeprom/$EEPROM_REF/firmware-2711/$EEPROM_CHANNEL/pieeprom-$EEPROM_DATE.bin" "pieeprom.bin"
+queue "$raw/raspberrypi/rpi-eeprom/$EEPROM_REF/firmware-2711/$EEPROM_CHANNEL/recovery.bin" "recovery.bin"
+queue "$raw/raspberrypi/rpi-eeprom/$EEPROM_REF/firmware-2711/$EEPROM_CHANNEL/vl805-$EEPROM_VL805.bin" "vl805-$EEPROM_VL805.bin"
+
+echo
+curl -fSL --retry 3 --parallel --parallel-max 8 "${jobs[@]}"
+
+"$here/scripts/make-dt-blob.py" "$dest/dt-blob.dts" "$dest/dt-blob.bin"
 
 echo
 echo "sha256:"
