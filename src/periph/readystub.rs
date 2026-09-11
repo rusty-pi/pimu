@@ -8,7 +8,7 @@
 //! the data it reads back is not meaningful yet (that needs the real crypto /
 //! FIFO engine), but boot gets past the wait.
 
-use std::collections::BTreeMap;
+use alloc::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 

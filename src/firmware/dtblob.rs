@@ -6,7 +6,9 @@
 //! `pin_define@<NAME>` node. This is not a general FDT library; it walks the
 //! struct block once and pulls out that one subtree.
 
-use std::collections::HashMap;
+use alloc::collections::BTreeMap;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 
 const FDT_MAGIC: u32 = 0xD00D_FEED;
 const FDT_BEGIN_NODE: u32 = 1;
@@ -34,7 +36,12 @@ impl PinDef {
 }
 
 /// Pin name → definition, for one board section.
-pub type PinMap = HashMap<String, PinDef>;
+///
+/// A `BTreeMap` because `alloc` has no `HashMap` (it needs a random state, so
+/// it lives in `std`) and this has to build without one. Lookup is all anyone
+/// does with it; the only iteration, `examples/dtblob_dump.rs`, sorted by name
+/// anyway.
+pub type PinMap = BTreeMap<String, PinDef>;
 
 fn be32(b: &[u8], off: usize) -> Option<u32> {
     b.get(off..off + 4)

@@ -69,7 +69,9 @@
 //! observable effect. In particular there is no part-id register to get right:
 //! the driver is chosen by board revision, never by a probe.
 
-use std::collections::BTreeMap;
+use crate::diag_eprintln;
+use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
 
 /// 7-bit address of the PMIC that owns the SoC core rail (descriptor
 /// `0x3EDE9658`, type `0x82`).
@@ -197,7 +199,7 @@ impl Pmic {
             return;
         }
         if dbg() {
-            eprintln!("[pmic {:02x}] W {:02x} = {:02x}", part.addr, part.ptr, b);
+            diag_eprintln!("[pmic {:02x}] W {:02x} = {:02x}", part.addr, part.ptr, b);
         }
         part.regs.insert(part.ptr, b);
         // Writing a rail setpoint starts a voltage ramp on real silicon; the
@@ -215,7 +217,7 @@ impl Pmic {
         let part = &mut self.parts[i];
         let v = part.regs.get(&part.ptr).copied().unwrap_or(0);
         if dbg() {
-            eprintln!("[pmic {:02x}] R {:02x} -> {:02x}", part.addr, part.ptr, v);
+            diag_eprintln!("[pmic {:02x}] R {:02x} -> {:02x}", part.addr, part.ptr, v);
         }
         part.ptr = part.ptr.wrapping_add(1);
         v
@@ -225,5 +227,5 @@ impl Pmic {
 /// `RVF_DBG_PMIC=1` logs every register access, in the style of the other
 /// `RVF_DBG_*` probes. Off by default.
 fn dbg() -> bool {
-    std::env::var_os("RVF_DBG_PMIC").is_some()
+    crate::diag::flag("RVF_DBG_PMIC")
 }

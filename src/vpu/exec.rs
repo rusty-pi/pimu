@@ -1,12 +1,16 @@
 //! The VPU scalar executor: fetch → decode → execute one instruction.
 
 use crate::bus::{Bus, BusError, Width};
+use crate::diag_eprintln;
+use alloc::string::String;
+use alloc::vec::Vec;
 
 /// How many control transfers [`Vpu::cf_trace`] keeps. The run report prints
 /// the tail of it when a boot derails, which is the main thing it is for.
 const CF_TRACE_LEN: usize = 512;
 
 use super::decode::decode;
+use super::fmath;
 use super::insn::{
     AddrMode, AluOp, Base, MemWidth, Op, RegOrImm, VecExec, VecInsn, VecPred, VecReg, VecRep,
     Writeback,
@@ -182,7 +186,7 @@ pub struct Vpu {
     /// transfer once it filled. That single line was 6.8% of the emulator's
     /// total run time, measured with `perf` — the largest cost in `Vpu::step`
     /// after decode.
-    pub cf_trace: std::collections::VecDeque<(u32, u32)>,
+    pub cf_trace: alloc::collections::VecDeque<(u32, u32)>,
     /// The newest entry of [`Self::cf_trace`], kept alongside it.
     ///
     /// The run loop's spin and `udelay` detectors read the last taken edge once
@@ -214,13 +218,13 @@ impl Vpu {
         let mut v = Vpu::default();
         v.regs.pc = entry;
         v.version_value = DEFAULT_VERSION;
-        v.cf_trace = std::collections::VecDeque::with_capacity(CF_TRACE_LEN);
+        v.cf_trace = alloc::collections::VecDeque::with_capacity(CF_TRACE_LEN);
         v.cf_last = None;
         v.trace_cap = 20_000;
-        v.dbg_tick = std::env::var_os("RVF_DBG_TICK").is_some();
-        v.dbg_vec = std::env::var_os("RVF_DBG_VEC").is_some();
-        v.dbg_sleep = std::env::var_os("RVF_DBG_SLEEP").is_some();
-        v.dbg_derail = std::env::var_os("RVF_DBG_DERAIL").is_some();
+        v.dbg_tick = crate::diag::flag("RVF_DBG_TICK");
+        v.dbg_vec = crate::diag::flag("RVF_DBG_VEC");
+        v.dbg_sleep = crate::diag::flag("RVF_DBG_SLEEP");
+        v.dbg_derail = crate::diag::flag("RVF_DBG_DERAIL");
         // VC4 comes out of reset with interrupts enabled; ThreadX runs threads
         // that way too. `di`/`ei` toggle it from here.
         v.regs.set(30, 1 << 30);
@@ -310,7 +314,7 @@ impl Vpu {
                 h = h.wrapping_add(2);
             }
             if self.dbg_vec {
-                eprintln!(
+                diag_eprintln!(
                     "[vec] slot={slot} vbase={:#x} entry={:#x} h={h:#x} pc={:#x} sp={:#x} cur={:#x} exec={:#x} nest={}",
                     self.exc_vbase,
                     bus.load32(self.exc_vbase.wrapping_add(slot.wrapping_mul(4))).unwrap_or(0),
@@ -464,9 +468,11 @@ impl Vpu {
                         if self.dbg_sleep {
                             self.sleep_dbg += 1;
                             if self.sleep_dbg <= 20 || self.sleep_dbg.is_multiple_of(20000) {
-                                eprintln!(
+                                diag_eprintln!(
                                     "[sleep] #{} pc={:#x} slot={slot:?} took={took} retired={}",
-                                    self.sleep_dbg, self.regs.pc, self.retired
+                                    self.sleep_dbg,
+                                    self.regs.pc,
+                                    self.retired
                                 );
                             }
                         }
@@ -504,7 +510,7 @@ impl Vpu {
                     }
                     if self.bkpt_run == 64 && !self.derail_reported {
                         self.derail_reported = true;
-                        eprintln!(
+                        diag_eprintln!(
                             "[derail] nop-slide at pc={pc:#x} from={:#x} lr={:#x} sp={:#x} retired={} regs=[{}]",
                             self.slide_from,
                             self.regs.get(LR),
@@ -576,7 +582,7 @@ impl Vpu {
                     Err(err) => return self.stop(Stop::Fault(Fault::Bus { pc, err })),
                 };
                 if self.dbg_tick && !(0x3E00_0000..0x3F00_0000).contains(&ret) {
-                    eprintln!(
+                    diag_eprintln!(
                         "[rti-bad] pc={pc:#x} sp={sp:#x} -> ret={ret:#x} sr={sr:#x} nest={} frame=[{:#x} {:#x} {:#x} {:#x}]",
                         self.in_exception,
                         bus.load32(sp).unwrap_or(0),
@@ -695,7 +701,7 @@ impl Vpu {
                         RegOrImm::Imm(i) if is_convert => (i as u32, i as f32),
                         RegOrImm::Imm(i) => (i as u32, fp_minifloat((i as u32) & 0x3F)),
                     };
-                    let scale = |sh: u32| 2f32.powi(sh as i32);
+                    let scale = |sh: u32| fmath::exp2i(sh as i32);
                     let rai = self.regs.get(ra as usize);
                     let res: Option<u32> = match op {
                         Fadd => Some((a + bf).to_bits()),
@@ -707,14 +713,14 @@ impl Vpu {
                         Fmax => Some(a.max(bf).to_bits()),
                         Fmin => Some(a.min(bf).to_bits()),
                         Frcp => Some((1.0 / bf).to_bits()),
-                        Frsqrt => Some((1.0 / bf.sqrt()).to_bits()),
+                        Frsqrt => Some((1.0 / fmath::sqrt(bf)).to_bits()),
                         Fnmul => Some((-(a * bf)).to_bits()),
-                        Fceil => Some(bf.ceil().to_bits()),
-                        Ffloor => Some(bf.floor().to_bits()),
-                        Flog2 => Some(bf.log2().to_bits()),
-                        Fexp2 => Some(bf.exp2().to_bits()),
+                        Fceil => Some(fmath::ceil(bf).to_bits()),
+                        Ffloor => Some(fmath::floor(bf).to_bits()),
+                        Flog2 => Some(fmath::log2(bf).to_bits()),
+                        Fexp2 => Some(fmath::exp2(bf).to_bits()),
                         Ftrunc => Some(((a * scale(bv)) as i64 as i32) as u32),
-                        FtruncFloor => Some((((a * scale(bv)).floor()) as i64 as i32) as u32),
+                        FtruncFloor => Some(((fmath::floor(a * scale(bv))) as i64 as i32) as u32),
                         Flts => Some(((rai as i32 as f32) / scale(bv)).to_bits()),
                         Fltu => Some(((rai as f32) / scale(bv)).to_bits()),
                         Fcmp => {
@@ -783,7 +789,7 @@ impl Vpu {
                                 && matches!(addr.base, super::insn::Base::R0)
                             {
                                 if self.dbg_tick {
-                                    eprintln!(
+                                    diag_eprintln!(
                                         "[ctx-switch] pc={pc:#x} clear in_exc (was {}) sp<-{v:#x}",
                                         self.in_exception
                                     );
@@ -1108,7 +1114,7 @@ impl Vpu {
                 // corrupt return address). `RVF_DBG_DERAIL=1`.
                 let in_code = |a: u32| (0x3E00_0000..0x3F00_0000).contains(&a);
                 if in_code(pc) && !in_code(self.regs.pc) && self.core_id == 0 && self.dbg_derail {
-                    eprintln!(
+                    diag_eprintln!(
                         "[derail] {pc:#x} ({:?}) -> {:#x}  regs r0-9: {:08x?}",
                         insn.op,
                         self.regs.pc,
@@ -1298,9 +1304,9 @@ fn fp_minifloat(i: u32) -> f32 {
     let exp = ((i >> 2) & 7) as i32;
     let mant = (i & 3) as f32;
     if exp == 0 {
-        return sign * (mant / 4.0) * 2f32.powi(-2); // subnormal; 0 when mant==0
+        return sign * (mant / 4.0) * fmath::exp2i(-2); // subnormal; 0 when mant==0
     }
-    sign * (1.0 + mant / 4.0) * 2f32.powi(exp - 3)
+    sign * (1.0 + mant / 4.0) * fmath::exp2i(exp - 3)
 }
 
 fn nz(r: u32, carry: bool, overflow: bool) -> Flags {

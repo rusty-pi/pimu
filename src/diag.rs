@@ -16,23 +16,131 @@
 //!
 //! What each switch prints is documented in `docs/diagnostics.md`, which is the
 //! reference for using them; this is just where they are read.
+//!
+//! The reading is hosted-only. A `no_std` build has no environment, so the
+//! four accessors below answer "unset" and a bare-metal frontend constructs
+//! the [`DiagConfig`] it wants directly. That keeps every call site one shape
+//! — `crate::diag::flag("RVF_DBG_SPI")` — instead of a `cfg` per switch.
+
+use alloc::string::String;
+use alloc::vec::Vec;
 
 /// One `RVF_*` switch that is either on or off.
-fn flag(name: &str) -> bool {
-    std::env::var_os(name).is_some()
+pub fn flag(name: &str) -> bool {
+    let _ = name;
+    #[cfg(feature = "std")]
+    {
+        std::env::var_os(name).is_some()
+    }
+    #[cfg(not(feature = "std"))]
+    {
+        false
+    }
+}
+
+/// A `RVF_*` switch's raw value.
+pub fn var(name: &str) -> Option<String> {
+    let _ = name;
+    #[cfg(feature = "std")]
+    {
+        std::env::var(name).ok()
+    }
+    #[cfg(not(feature = "std"))]
+    {
+        None
+    }
 }
 
 /// A `RVF_*` switch carrying a hex address, with or without a `0x` prefix.
-fn hex(name: &str) -> Option<u32> {
-    std::env::var(name)
-        .ok()
-        .and_then(|v| u32::from_str_radix(v.trim().trim_start_matches("0x"), 16).ok())
+pub fn hex(name: &str) -> Option<u32> {
+    var(name).and_then(|v| u32::from_str_radix(v.trim().trim_start_matches("0x"), 16).ok())
 }
 
 /// A `RVF_*` switch carrying a decimal number.
-fn num<T: std::str::FromStr>(name: &str) -> Option<T> {
-    std::env::var(name).ok().and_then(|v| v.trim().parse().ok())
+pub fn num<T: core::str::FromStr>(name: &str) -> Option<T> {
+    var(name).and_then(|v| v.trim().parse().ok())
 }
+
+/// A `RVF_*` switch carrying a comma-separated list of hex addresses.
+pub fn hex_list(name: &str) -> Vec<u32> {
+    var(name)
+        .map(|v| {
+            v.split(',')
+                .filter_map(|t| u32::from_str_radix(t.trim().trim_start_matches("0x"), 16).ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Diagnostic output: `eprintln!` in a hosted build, and in a `no_std` one the
+/// sink the frontend installed with [`set_sink`] — dropped if it installed
+/// none. Everything the library prints is a diagnostic; the modelled UART
+/// console goes through [`crate::machine::Machine`], not through here.
+#[macro_export]
+macro_rules! diag_eprintln {
+    ($($arg:tt)*) => {
+        $crate::diag::emit_line(::core::format_args!($($arg)*))
+    };
+}
+
+/// One diagnostic line, newline included.
+#[cfg(feature = "std")]
+pub fn emit_line(args: core::fmt::Arguments<'_>) {
+    eprintln!("{args}");
+}
+
+#[cfg(not(feature = "std"))]
+pub fn emit_line(args: core::fmt::Arguments<'_>) {
+    emit(args);
+    emit(format_args!("\n"));
+}
+
+/// Bytes from the modelled UART, streamed as the firmware produces them
+/// (`RVF_LIVE_CONSOLE`). Verbatim: no newline, no lossy framing, because this
+/// is the transcript `scripts/boot-check.sh` diffs against the golden.
+#[cfg(feature = "std")]
+pub fn emit_console(bytes: &[u8]) {
+    use std::io::Write;
+    let _ = std::io::stderr().write_all(bytes);
+}
+
+#[cfg(not(feature = "std"))]
+pub fn emit_console(bytes: &[u8]) {
+    emit(format_args!(
+        "{}",
+        alloc::string::String::from_utf8_lossy(bytes)
+    ));
+}
+
+#[cfg(not(feature = "std"))]
+mod sink {
+    use core::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Receives formatted output and writes it verbatim — the newline, when
+    /// there is one, is already in the arguments.
+    pub type Sink = fn(core::fmt::Arguments<'_>);
+
+    /// Null pointer = no sink installed, so diagnostics are dropped.
+    static SINK: AtomicUsize = AtomicUsize::new(0);
+
+    pub fn set_sink(f: Sink) {
+        SINK.store(f as usize, Ordering::Relaxed);
+    }
+
+    pub fn emit(args: core::fmt::Arguments<'_>) {
+        let p = SINK.load(Ordering::Relaxed);
+        if p == 0 {
+            return;
+        }
+        // SAFETY: `p` is non-null, so it was stored by `set_sink` from a
+        // `Sink` and nothing else ever writes this slot.
+        let f = unsafe { core::mem::transmute::<usize, Sink>(p) };
+        f(args);
+    }
+}
+
+#[cfg(not(feature = "std"))]
+pub use sink::{emit, set_sink, Sink};
 
 #[derive(Debug, Clone, Default)]
 pub struct DiagConfig {
@@ -86,27 +194,28 @@ pub struct DiagConfig {
 }
 
 impl DiagConfig {
+    /// The configuration a build with no environment starts from: everything
+    /// quiet except the live console, which matches `from_env`'s default.
+    pub fn quiet() -> DiagConfig {
+        DiagConfig {
+            live_console: true,
+            ..DiagConfig::default()
+        }
+    }
+
+    #[cfg(feature = "std")]
     pub fn from_env() -> DiagConfig {
         DiagConfig {
-            live_console: std::env::var("RVF_LIVE_CONSOLE").as_deref() != Ok("0"),
+            live_console: var("RVF_LIVE_CONSOLE").as_deref() != Some("0"),
 
             trace_on_pc: hex("RVF_TRACE_ON_PC"),
-            trace_on_console: std::env::var("RVF_TRACE_ON_CONSOLE").ok(),
+            trace_on_console: var("RVF_TRACE_ON_CONSOLE"),
             trace_cap: num("RVF_TRACE_CAP").unwrap_or(300_000),
             trace_cf: flag("RVF_TRACE_CF"),
             trace_mmio: flag("RVF_TRACE_MMIO"),
             mmio_from: hex("RVF_MMIO_FROM"),
 
-            traps: std::env::var("RVF_TRAP")
-                .ok()
-                .map(|v| {
-                    v.split(',')
-                        .filter_map(|t| {
-                            u32::from_str_radix(t.trim().trim_start_matches("0x"), 16).ok()
-                        })
-                        .collect()
-                })
-                .unwrap_or_default(),
+            traps: hex_list("RVF_TRAP"),
             trap_from: num("RVF_TRAP_FROM").unwrap_or(0),
             trap_max: num("RVF_TRAP_MAX").unwrap_or(40),
 
@@ -140,6 +249,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "std")]
     fn hex_switches_take_a_prefix_or_not() {
         // SAFETY: single-threaded test, and the variable is removed after.
         unsafe {

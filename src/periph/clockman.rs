@@ -47,7 +47,7 @@
 //! not re-investigated — it is not a `SCALER_DISPID`-style blanked status
 //! register.
 
-use std::collections::BTreeMap;
+use alloc::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 

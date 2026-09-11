@@ -38,7 +38,10 @@
 //! streams, no isochronous endpoints, and no scratchpad buffer use (the
 //! firmware still allocates them; the model simply never touches them).
 
-use std::collections::BTreeMap;
+use crate::diag_eprintln;
+use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
 
 use crate::bus::Width;
 use crate::periph::usb::{Setup, Speed, UsbDevice, Xfer};
@@ -348,7 +351,7 @@ impl Xhci {
             cmd_ptr: 0,
             cmd_ccs: true,
             running: false,
-            dbg: std::env::var("RVF_DBG_XHCI").is_ok(),
+            dbg: crate::diag::flag("RVF_DBG_XHCI"),
             commands: 0,
             transfers: 0,
         };
@@ -620,7 +623,7 @@ impl Xhci {
             mem.write32(at + 4 * i as u64, *w);
         }
         if self.dbg {
-            eprintln!(
+            diag_eprintln!(
                 "[xhci] event@{at:#x} type={} {:08x} {:08x} {:08x} {:08x}",
                 (trb[3] >> 10) & 0x3F,
                 trb[0],
@@ -693,9 +696,13 @@ impl Xhci {
                 continue;
             }
             if self.dbg {
-                eprintln!(
+                diag_eprintln!(
                     "[xhci] cmd@{:#x} type={kind} {:08x} {:08x} {:08x} {:08x}",
-                    self.cmd_ptr, trb[0], trb[1], trb[2], trb[3]
+                    self.cmd_ptr,
+                    trb[0],
+                    trb[1],
+                    trb[2],
+                    trb[3]
                 );
             }
             let this = self.cmd_ptr;
@@ -928,7 +935,7 @@ impl Xhci {
                 continue;
             }
             if self.dbg {
-                eprintln!(
+                diag_eprintln!(
                     "[xhci] xfer slot={slot} dci={dci} @{ptr:#x} type={kind} {:08x} {:08x} {:08x} {:08x}",
                     trb[0], trb[1], trb[2], trb[3]
                 );
@@ -1085,7 +1092,7 @@ impl Xhci {
             // The IN data already went to the device at the Data Stage.
             return (CC_SUCCESS, 0);
         }
-        let out = std::mem::take(&mut ctrl.out);
+        let out = core::mem::take(&mut ctrl.out);
         let Some(dev) = self.slot_device(slot, mem) else {
             return (CC_TRB_ERROR, 0);
         };

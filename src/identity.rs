@@ -65,6 +65,8 @@
 //! inputs went in and what they hash to — so "the fuses changed" is
 //! distinguishable from "the algorithm changed" by reading the report.
 
+use alloc::string::String;
+
 /// The OTP rows the derivation consumes, in the order the bootloader feeds them
 /// to SHA-256.
 pub const MACHINE_ID_ROWS: [u32; 5] = [28, 35, 30, 64, 65];

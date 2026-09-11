@@ -83,7 +83,7 @@
 //! So the per-channel `+0x1C` values are reproduced exactly as measured and
 //! held constant, deliberately. Nothing here models drift.
 
-use std::collections::BTreeMap;
+use alloc::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 

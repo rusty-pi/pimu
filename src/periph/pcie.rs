@@ -91,7 +91,7 @@
 //! `0x8000` `EXT_CFG_DATA`, `0x9000` `EXT_CFG_INDEX`, `0x9210`
 //! `RGR1_SW_INIT_1`.
 
-use std::collections::BTreeMap;
+use alloc::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 use crate::periph::vl805::Vl805;
@@ -185,7 +185,7 @@ impl Pcie {
         // A Pi 4B has the VL805 soldered on, so attached is what the reference
         // board looks like. `RVF_PCIE_DEVICE=0` unsolders it — for reproducing
         // the pre-stage-1 transcript, nothing else.
-        Pcie::with_device(std::env::var("RVF_PCIE_DEVICE").as_deref() != Ok("0"))
+        Pcie::with_device(crate::diag::var("RVF_PCIE_DEVICE").as_deref() != Some("0"))
     }
 
     pub fn with_device(device_present: bool) -> Pcie {

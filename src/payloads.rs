@@ -5,6 +5,7 @@
 //! doubles as a worked example of the instruction encoding.
 
 use crate::soc::bcm2711 as map;
+use alloc::vec::Vec;
 
 /// Mini-UART data register, VPU address.
 const MU_IO: u32 = map::AUX_BASE + 0x40;

@@ -130,6 +130,7 @@
 //! engine, which is all the evidence there is about it.
 
 use crate::bus::{BusResult, MmioDevice, Width};
+use alloc::vec::Vec;
 
 /// Base of the whole VCE aperture: data memory is the first window.
 pub const BASE: u32 = 0x7F10_0000;

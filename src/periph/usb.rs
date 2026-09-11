@@ -24,7 +24,9 @@
 //! a list: [`UsbDevice::child`] is how the controller walks an xHCI route
 //! string down to the device a slot addresses.
 
-use std::collections::HashMap;
+use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
 
 /// The `PORTSC` / slot-context speed encoding (xHCI 4.19.7 "Protocol Speed
 /// ID"), for the default speed IDs the VL805 reports in its supported-protocol
@@ -181,7 +183,7 @@ pub struct Descriptors {
     /// `wLength`-sized `GET_DESCRIPTOR(CONFIG)` returns.
     pub config: Vec<u8>,
     pub bos: Option<Vec<u8>>,
-    pub strings: HashMap<u8, Vec<u8>>,
+    pub strings: BTreeMap<u8, Vec<u8>>,
     /// The `GET_STATUS` low byte: bit 0 self-powered, bit 1 remote wakeup.
     pub status: u8,
 }
@@ -264,7 +266,7 @@ impl Default for Hub {
 
 impl Hub {
     pub fn new() -> Hub {
-        let mut strings = HashMap::new();
+        let mut strings = BTreeMap::new();
         strings.insert(0, lang_desc());
         strings.insert(1, string_desc("USB2.0 Hub"));
         let mut ports: [HubPort; 4] = Default::default();
@@ -475,7 +477,7 @@ pub struct MassStorage {
 
 impl MassStorage {
     pub fn new(image: Vec<u8>) -> MassStorage {
-        let mut strings = HashMap::new();
+        let mut strings = BTreeMap::new();
         strings.insert(0, lang_desc());
         strings.insert(1, string_desc("Samsung"));
         strings.insert(2, string_desc("Flash Drive FIT"));
@@ -669,7 +671,7 @@ impl UsbDevice for MassStorage {
         if ep != 2 {
             return Xfer::Stall;
         }
-        match std::mem::replace(&mut self.phase, BotPhase::Command) {
+        match core::mem::replace(&mut self.phase, BotPhase::Command) {
             BotPhase::DataIn { mut data, tag } => {
                 let take = len.min(data.len());
                 let out: Vec<u8> = data.drain(..take).collect();
@@ -700,7 +702,7 @@ impl UsbDevice for MassStorage {
         if ep != 1 {
             return Xfer::Stall;
         }
-        match std::mem::replace(&mut self.phase, BotPhase::Command) {
+        match core::mem::replace(&mut self.phase, BotPhase::Command) {
             BotPhase::Command => self.handle_cbw(data),
             BotPhase::DataOut { remaining, tag } => {
                 let left = remaining.saturating_sub(data.len());

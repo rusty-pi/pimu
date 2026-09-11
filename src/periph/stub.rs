@@ -6,7 +6,8 @@
 //! poke becomes a triage note instead of a crash. Per-offset "sticky" storage
 //! makes the common "write reg then read it back" pattern behave.
 
-use std::collections::BTreeMap;
+use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 

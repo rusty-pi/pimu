@@ -28,7 +28,8 @@
 //! it. The firmware polls both without a timeout in places, so neither may be
 //! a function of how many instructions it happens to retire in between.
 
-use std::collections::VecDeque;
+use alloc::collections::VecDeque;
+use alloc::vec::Vec;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 use crate::periph::pmic::Pmic;

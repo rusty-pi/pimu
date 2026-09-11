@@ -26,7 +26,10 @@
 //! in L2-as-SRAM at `0x8000_0000` (per `librerpi/lk-overlay`'s `bootcode.ld`,
 //! `ORIGIN = 0x8000_0000`).
 
-use anyhow::{bail, Context, Result};
+use crate::bail;
+use crate::error::{Context, Result};
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 
 const MAGIC_MASK: u32 = 0xFFFF_F00F;
 const MAGIC_BASE: u32 = 0x55AA_F00F;

@@ -17,7 +17,7 @@
 //! matching `requested` slot, so the swap always reports complete on the first
 //! poll. Everything else is plain sticky storage.
 
-use std::collections::BTreeMap;
+use alloc::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 

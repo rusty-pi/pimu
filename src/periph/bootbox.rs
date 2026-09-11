@@ -13,7 +13,7 @@
 //! processor). Every doorbell self-clears its low control bits so the
 //! handshakes complete; parameter words the firmware writes read straight back.
 
-use std::collections::BTreeMap;
+use alloc::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
