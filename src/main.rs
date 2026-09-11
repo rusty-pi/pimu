@@ -1446,6 +1446,18 @@ fn mbox_property_exchange(emu: &mut Emulator, limits: &RunLimits, tags: &[MboxTa
             .unwrap_or(0);
         off += 12 + ((slot.max(len) + 3) & !3);
     }
+    // A trace armed by `RVF_TRACE_ON_PC` inside the exchange is collected here,
+    // after the recon report that normally prints one has already run — so
+    // print it, or investigating a tag handler silently produces nothing.
+    if !emu.cpu.trace_log.is_empty() {
+        println!(
+            "\n--- instruction trace while servicing the request ({} entries) ---",
+            emu.cpu.trace_log.len()
+        );
+        for l in &emu.cpu.trace_log {
+            println!("{l}");
+        }
+    }
     if !console.is_empty() {
         // Anything the firmware printed while servicing the request.
         let tail = String::from_utf8_lossy(&console);
