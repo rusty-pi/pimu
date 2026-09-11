@@ -40,18 +40,18 @@ pub enum AluOp {
     Bitrev,
     Asr,
     Abs,
-    AddScale(u8),  // ra + (b << n)  — field is the shift amount n
-    SubScale(u8),  // ra - (b << n)  — field is the shift amount n
-    Count,         // popcount(b)
-    MulhdSS,       // high word of ra * b, signed*signed
-    MulhdSU,       // signed*unsigned
-    MulhdUS,       // unsigned*signed
-    MulhdUU,       // unsigned*unsigned
-    DivS,          // ra / b, signed
-    DivSU,         // signed ra / unsigned b
-    DivUS,         // unsigned ra / signed b
-    DivU,          // unsigned / unsigned
-    Clamp16,       // clamp ra to the signed 16-bit range
+    AddScale(u8), // ra + (b << n)  — field is the shift amount n
+    SubScale(u8), // ra - (b << n)  — field is the shift amount n
+    Count,        // popcount(b)
+    MulhdSS,      // high word of ra * b, signed*signed
+    MulhdSU,      // signed*unsigned
+    MulhdUS,      // unsigned*signed
+    MulhdUU,      // unsigned*unsigned
+    DivS,         // ra / b, signed
+    DivSU,        // signed ra / unsigned b
+    DivUS,        // unsigned ra / signed b
+    DivU,         // unsigned / unsigned
+    Clamp16,      // clamp ra to the signed 16-bit range
     /// Recognised mnemonic, semantics not implemented yet.
     Unimpl(&'static str),
 }
@@ -178,9 +178,9 @@ impl AluOp {
             0x25 => DivSU,
             0x26 => DivUS,
             0x27 => DivU,
-            0x28 => Add,     // adds
-            0x29 => Sub,     // subs
-            0x2a => Shl,     // shls
+            0x28 => Add, // adds
+            0x29 => Sub, // subs
+            0x2a => Shl, // shls
             0x2b => Clamp16,
             0x2c => AddScale(5),
             0x2d => AddScale(6),

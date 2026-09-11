@@ -150,8 +150,7 @@ impl MmioDevice for CoreCtl {
         // into the `enable_irq_source(src, prio)` calls that produced them, for
         // core 0 (`0x10..0x20`) and core 1 (`0x810..0x820`). Which sources core 1
         // enables is how we find the inter-core doorbell's interrupt number.
-        if self.dbg_irqen && matches!(offset, 0x10..=0x1F | 0x810..=0x81F)
-        {
+        if self.dbg_irqen && matches!(offset, 0x10..=0x1F | 0x810..=0x81F) {
             let core = u32::from(offset >= 0x800);
             let word = (offset - if core == 1 { 0x810 } else { 0x10 }) / 4;
             let prev = self.storage.get(&offset).copied().unwrap_or(0);
@@ -171,7 +170,8 @@ impl MmioDevice for CoreCtl {
             for bit in 0..32 {
                 let mask = 1u32 << bit;
                 if value & mask != 0 && prev & mask == 0 {
-                    self.sw_raised.push_back((core, SYS_IRQ_SRC + word * 32 + bit));
+                    self.sw_raised
+                        .push_back((core, SYS_IRQ_SRC + word * 32 + bit));
                 }
             }
         }

@@ -226,7 +226,7 @@ impl MmioDevice for SysTimer {
         let arm = |st: &mut SysTimer, c: usize| {
             if st.dbg_cmp {
                 st.arms += 1;
-                if st.arms <= 40 || st.arms % 2000 == 0 {
+                if st.arms <= 40 || st.arms.is_multiple_of(2000) {
                     eprintln!(
                         "[cmp] #{} C{c} <- {value:#x} now={} delta={}",
                         st.arms,

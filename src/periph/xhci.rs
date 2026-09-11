@@ -280,11 +280,7 @@ impl Port {
             Some(_) => {
                 // `0x400202e1` — connected, link polling, waiting for the host
                 // to drive a reset.
-                PORTSC_CCS
-                    | PORTSC_PP
-                    | PORTSC_DR
-                    | (PLS_POLLING << PORTSC_PLS_SHIFT)
-                    | PORTSC_CSC
+                PORTSC_CCS | PORTSC_PP | PORTSC_DR | (PLS_POLLING << PORTSC_PLS_SHIFT) | PORTSC_CSC
             }
         };
     }
@@ -394,7 +390,7 @@ impl Xhci {
         if off < base || off >= base + (PORTS as u32) * 0x10 {
             return None;
         }
-        if (off - base) % 0x10 != 0 {
+        if !(off - base).is_multiple_of(0x10) {
             return None;
         }
         Some(((off - base) / 0x10) as usize)
@@ -646,8 +642,7 @@ impl Xhci {
                 self.event.segment = 0;
                 self.event.cycle = !self.event.cycle;
             }
-            self.event.enqueue =
-                mem.read64(erstba + 16 * self.event.segment as u64) & !0x3F;
+            self.event.enqueue = mem.read64(erstba + 16 * self.event.segment as u64) & !0x3F;
         } else {
             self.event.enqueue += 16;
         }
@@ -938,7 +933,8 @@ impl Xhci {
                     trb[0], trb[1], trb[2], trb[3]
                 );
             }
-            let (code, residue) = self.run_transfer_trb(slot as u32, dci, kind, &trb, &mut ctrl, mem);
+            let (code, residue) =
+                self.run_transfer_trb(slot as u32, dci, kind, &trb, &mut ctrl, mem);
             self.transfers += 1;
             // Interrupt On Completion, or Interrupt On Short Packet when the
             // transfer came up short.
@@ -1183,17 +1179,32 @@ mod tests {
         hc.attach(1, Box::new(Hub::new()));
         let mut mem = VecMem::default();
         // One event ring segment, 16 TRBs.
-        mem.write32(ERST as u64, EVENT_RING as u32);
-        mem.write32(ERST as u64 + 4, 0);
-        mem.write32(ERST as u64 + 8, 16);
+        mem.write32(ERST, EVENT_RING as u32);
+        mem.write32(ERST + 4, 0);
+        mem.write32(ERST + 8, 16);
         let w = |hc: &mut Xhci, mem: &mut VecMem, off: u32, v: u32| {
             hc.write(off, Width::Word, v, mem);
         };
         w(&mut hc, &mut mem, RTSOFF + RT_IR0 + IR_ERSTSZ, 1);
-        w(&mut hc, &mut mem, RTSOFF + RT_IR0 + IR_ERDP_LO, EVENT_RING as u32);
-        w(&mut hc, &mut mem, RTSOFF + RT_IR0 + IR_ERSTBA_LO, ERST as u32);
+        w(
+            &mut hc,
+            &mut mem,
+            RTSOFF + RT_IR0 + IR_ERDP_LO,
+            EVENT_RING as u32,
+        );
+        w(
+            &mut hc,
+            &mut mem,
+            RTSOFF + RT_IR0 + IR_ERSTBA_LO,
+            ERST as u32,
+        );
         w(&mut hc, &mut mem, CAPLENGTH + OP_DCBAAP_LO, DCBAA as u32);
-        w(&mut hc, &mut mem, CAPLENGTH + OP_CRCR_LO, CMD_RING as u32 | 1);
+        w(
+            &mut hc,
+            &mut mem,
+            CAPLENGTH + OP_CRCR_LO,
+            CMD_RING as u32 | 1,
+        );
         w(&mut hc, &mut mem, CAPLENGTH + OP_USBCMD, USBCMD_RS);
         (hc, mem)
     }
@@ -1228,7 +1239,13 @@ mod tests {
         assert_eq!(hc.usbsts() & USBSTS_PCD, USBSTS_PCD);
 
         // Enable Slot.
-        let ev = command(&mut hc, &mut mem, 0, 1, [0, 0, 0, (TRB_ENABLE_SLOT << 10) | 1]);
+        let ev = command(
+            &mut hc,
+            &mut mem,
+            0,
+            1,
+            [0, 0, 0, (TRB_ENABLE_SLOT << 10) | 1],
+        );
         assert_eq!((ev[3] >> 10) & 0x3F, TRB_COMMAND_COMPLETION);
         assert_eq!(ev[2] >> 24, CC_SUCCESS);
         let slot = ev[3] >> 24;
@@ -1309,7 +1326,13 @@ mod tests {
     fn a_short_in_transfer_reports_its_residue() {
         let (mut hc, mut mem) = started();
         hc.write(CAPLENGTH + OP_PORTSC, Width::Word, PORTSC_PR, &mut mem);
-        command(&mut hc, &mut mem, 0, 1, [0, 0, 0, (TRB_ENABLE_SLOT << 10) | 1]);
+        command(
+            &mut hc,
+            &mut mem,
+            0,
+            1,
+            [0, 0, 0, (TRB_ENABLE_SLOT << 10) | 1],
+        );
         mem.write32(DCBAA + 8, DEV_CTX as u32);
         mem.write32(INPUT_CTX + 4, 0x3);
         mem.write32(INPUT_CTX + 0x24, 1 << 16);
@@ -1319,7 +1342,12 @@ mod tests {
             &mut mem,
             1,
             2,
-            [INPUT_CTX as u32, 0, 0, (1 << 24) | (TRB_ADDRESS_DEVICE << 10) | 1],
+            [
+                INPUT_CTX as u32,
+                0,
+                0,
+                (1 << 24) | (TRB_ADDRESS_DEVICE << 10) | 1,
+            ],
         );
         // Ask for 64 bytes of an 18-byte descriptor.
         let setup = [0x80u8, 6, 0, 1, 0, 0, 64, 0];

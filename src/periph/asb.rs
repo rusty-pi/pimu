@@ -202,7 +202,7 @@ impl Asb {
     }
 
     fn bridge(offset: u32) -> Option<usize> {
-        if (CTRL_FIRST..=CTRL_LAST).contains(&offset) && offset % 4 == 0 {
+        if (CTRL_FIRST..=CTRL_LAST).contains(&offset) && offset.is_multiple_of(4) {
             Some(((offset - CTRL_FIRST) / 4) as usize)
         } else {
             None

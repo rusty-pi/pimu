@@ -3,8 +3,8 @@
 use crate::bus::{Bus, BusError, BusResult, MmioDevice, Width};
 use crate::mem::Ram;
 use crate::periph::{
-    Asb, Avs, Aux, BootBox, Bsc, ClkMon, ClockManager, ConfigOtp, CoreCtl, Dma4, Emmc2, HdmiDdc, Hvs,
-    McSync, Pl011, Pm, Rng, Sdc, Sdramc, Spi0, StubRegion, SysTimer, Vce,
+    Asb, Aux, Avs, BootBox, Bsc, ClkMon, ClockManager, ConfigOtp, CoreCtl, Dma4, Emmc2, HdmiDdc,
+    Hvs, McSync, Pl011, Pm, Rng, Sdc, Sdramc, Spi0, StubRegion, SysTimer, Vce,
 };
 use crate::soc::bcm2711 as map;
 
@@ -477,10 +477,7 @@ impl Machine {
             }
             let mut w = [0u32; 7];
             for (i, slot) in w.iter_mut().enumerate() {
-                *slot = self
-                    .ram
-                    .load(cb + (i as u32) * 4, Width::Word)
-                    .unwrap_or(0);
+                *slot = self.ram.load(cb + (i as u32) * 4, Width::Word).unwrap_or(0);
             }
             // Channel 15 of the `0x7EE0_4100` controller is a 40-bit ("dma40")
             // channel - `dma_memcpy` builds its CB with
@@ -526,12 +523,8 @@ impl Machine {
                     let _ = self.ram.store(da & 0x3FFF_FFFF, Width::Byte, b);
                 }
                 // 2D mode advances by the row length plus the signed stride.
-                src = src
-                    .wrapping_add(xlen)
-                    .wrapping_add(src_stride as u32);
-                dest = dest
-                    .wrapping_add(xlen)
-                    .wrapping_add(dest_stride as u32);
+                src = src.wrapping_add(xlen).wrapping_add(src_stride as u32);
+                dest = dest.wrapping_add(xlen).wrapping_add(dest_stride as u32);
             }
             cb = d.next & 0x3FFF_FFFF;
         }
@@ -580,7 +573,11 @@ impl Machine {
 
     /// One word to a 40-bit DMA4 address.
     fn dma40_store(&mut self, addr: u64, value: u32) {
-        if addr >> 32 != 0 && self.pcie.mmio_write(addr, Width::Word, value, &mut self.ram) {
+        if addr >> 32 != 0
+            && self
+                .pcie
+                .mmio_write(addr, Width::Word, value, &mut self.ram)
+        {
             return;
         }
         let _ = self
@@ -617,7 +614,11 @@ impl Machine {
                 );
             }
             let fill = srci & S_INC == 0;
-            let fill_word = if src40 == 0 { 0 } else { self.dma40_load(src40) };
+            let fill_word = if src40 == 0 {
+                0
+            } else {
+                self.dma40_load(src40)
+            };
             let mut off = 0u32;
             while off < len {
                 let v = if fill {
@@ -718,7 +719,11 @@ impl Bus for Machine {
         self.ram_writes = self.ram_writes.wrapping_add(1);
         if !self.watch.is_empty() {
             let a = Machine::fold_ram_addr(addr) & !3;
-            if self.watch.iter().any(|&w| Machine::fold_ram_addr(w) & !3 == a) {
+            if self
+                .watch
+                .iter()
+                .any(|&w| Machine::fold_ram_addr(w) & !3 == a)
+            {
                 eprintln!(
                     "[watch] pc={:#010x} store{} {:#010x} <- {:#x}",
                     self.watch_pc,
@@ -731,10 +736,11 @@ impl Bus for Machine {
         if !Machine::in_mmio(addr) {
             let phys = Machine::fold_ram_addr(addr);
             if self.ram.contains(phys) {
-                if addr & 0x03FF_FFFF == PHASE_TAG_SIG && width == Width::Word {
-                    if self.phase_tags.last() != Some(&value) {
-                        self.phase_tags.push(value);
-                    }
+                if addr & 0x03FF_FFFF == PHASE_TAG_SIG
+                    && width == Width::Word
+                    && self.phase_tags.last() != Some(&value)
+                {
+                    self.phase_tags.push(value);
                 }
                 return self.ram.store(phys, width, value);
             }

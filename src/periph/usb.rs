@@ -131,11 +131,7 @@ pub trait UsbDevice: 'static {
 /// Answer the descriptor and configuration requests every device answers the
 /// same way, given its descriptor bytes. Returns `None` for anything
 /// device-specific, which the caller then handles or stalls.
-fn standard_control(
-    dev: &mut CommonState,
-    desc: &Descriptors,
-    setup: &Setup,
-) -> Option<Xfer> {
+fn standard_control(dev: &mut CommonState, desc: &Descriptors, setup: &Setup) -> Option<Xfer> {
     // Only standard device-directed requests are handled here.
     if setup.request_type & 0x60 != 0 {
         return None;
@@ -309,7 +305,8 @@ impl Hub {
         let p = &mut self.ports[(port - 1) as usize];
         // Connected, powered, and at the speed the device negotiated. Bit 9 is
         // low-speed, bit 10 high-speed (USB 2.0 table 11-21).
-        p.status = 1 | (1 << 8)
+        p.status = 1
+            | (1 << 8)
             | match speed {
                 Speed::Low => 1 << 9,
                 Speed::High | Speed::Super => 1 << 10,
@@ -785,7 +782,14 @@ mod tests {
             Xfer::Ok(v) => assert_eq!(v, vec![0b1000]),
             Xfer::Stall => panic!("stalled"),
         }
-        ctrl(&mut hub, 0x23, REQ_CLEAR_FEATURE, HUB_FEAT_C_PORT_CONNECTION, 3, 0);
+        ctrl(
+            &mut hub,
+            0x23,
+            REQ_CLEAR_FEATURE,
+            HUB_FEAT_C_PORT_CONNECTION,
+            3,
+            0,
+        );
         let st = ctrl(&mut hub, 0xA3, REQ_GET_STATUS, 0, 3, 4);
         assert_eq!(u16::from_le_bytes([st[2], st[3]]), 0);
     }
@@ -811,7 +815,10 @@ mod tests {
         let Xfer::Ok(csw) = msd.data_in(2, 13) else {
             panic!("stall")
         };
-        assert_eq!(u32::from_le_bytes([csw[0], csw[1], csw[2], csw[3]]), CSW_SIGNATURE);
+        assert_eq!(
+            u32::from_le_bytes([csw[0], csw[1], csw[2], csw[3]]),
+            CSW_SIGNATURE
+        );
         assert_eq!(csw[12], 0, "command succeeded");
 
         // READ CAPACITY(10) reports the image's own geometry.

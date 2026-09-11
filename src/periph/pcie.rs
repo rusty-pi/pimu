@@ -552,7 +552,8 @@ mod tests {
         let mut p = link_up_pcie();
         p.write(MEM_WIN0_LO, Width::Word, 0x8000_0000).unwrap();
         p.write(MEM_WIN0_HI, Width::Word, 0).unwrap();
-        p.write(MEM_WIN0_BASE_LIMIT, Width::Word, 0x3FF0_0000).unwrap();
+        p.write(MEM_WIN0_BASE_LIMIT, Width::Word, 0x3FF0_0000)
+            .unwrap();
         p.write(MEM_WIN0_BASE_HI, Width::Word, 6).unwrap();
         p.write(MEM_WIN0_LIMIT_HI, Width::Word, 6).unwrap();
         p.write(EXT_CFG_INDEX, Width::Word, 1 << EXT_BUSNUM_SHIFT)
@@ -596,7 +597,8 @@ mod tests {
     fn endpoint_mmio_needs_the_command_register() {
         let mut p = link_up_pcie();
         p.write(MEM_WIN0_LO, Width::Word, 0x8000_0000).unwrap();
-        p.write(MEM_WIN0_BASE_LIMIT, Width::Word, 0x3FF0_0000).unwrap();
+        p.write(MEM_WIN0_BASE_LIMIT, Width::Word, 0x3FF0_0000)
+            .unwrap();
         p.write(MEM_WIN0_BASE_HI, Width::Word, 6).unwrap();
         p.write(MEM_WIN0_LIMIT_HI, Width::Word, 6).unwrap();
         p.write(EXT_CFG_INDEX, Width::Word, 1 << EXT_BUSNUM_SHIFT)

@@ -91,7 +91,7 @@ pub struct SdCard {
 impl SdCard {
     /// Wrap a raw card image (must be a multiple of 512 bytes; padded if not).
     pub fn new(mut image: Vec<u8>) -> SdCard {
-        if image.len() % 512 != 0 {
+        if !image.len().is_multiple_of(512) {
             image.resize(image.len().next_multiple_of(512), 0);
         }
         if image.is_empty() {
@@ -294,7 +294,7 @@ fn default_cid() -> u128 {
     let mut cid: u128 = 0;
     cid |= 0x00 << 120; // MID = 0 (unknown mfr)
     cid |= (u128::from(b'P') << 112) | (u128::from(b'I') << 104); // OID "PI"
-    // PNM "VIRTF"
+                                                                  // PNM "VIRTF"
     for (i, c) in b"VIRTF".iter().enumerate() {
         cid |= u128::from(*c) << (96 - 8 * i as u32);
     }

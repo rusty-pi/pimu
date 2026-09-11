@@ -51,10 +51,12 @@ impl Property {
         if let Some(s) = self.as_str() {
             return format!("{s:?}");
         }
-        if !self.value.is_empty() && self.value.len() % 4 == 0 && self.value.len() <= 16 {
+        if !self.value.is_empty() && self.value.len().is_multiple_of(4) && self.value.len() <= 16 {
             let words: Vec<String> = self
                 .value
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|c| format!("{:#010x}", be32(c)))
                 .collect();
             return format!("<{}>", words.join(" "));
@@ -99,7 +101,10 @@ impl<'a> Fdt<'a> {
     /// address came out of a firmware log line.
     pub fn parse(blob: &'a [u8]) -> Result<Fdt<'a>, String> {
         if blob.len() < 40 {
-            return Err(format!("too short for an FDT header ({} bytes)", blob.len()));
+            return Err(format!(
+                "too short for an FDT header ({} bytes)",
+                blob.len()
+            ));
         }
         let magic = be32(&blob[0..4]);
         if magic != FDT_MAGIC {

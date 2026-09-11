@@ -200,7 +200,11 @@ impl Spi0 {
     }
 
     fn read_flash_byte(&mut self) -> u8 {
-        let b = self.flash.get(self.addr as usize).copied().unwrap_or(MISO_IDLE);
+        let b = self
+            .flash
+            .get(self.addr as usize)
+            .copied()
+            .unwrap_or(MISO_IDLE);
         self.addr = self.addr.wrapping_add(1);
         b
     }
@@ -250,7 +254,13 @@ impl MmioDevice for Spi0 {
             DLEN => self.dlen = value,
             LTOH => self.ltoh = value,
             DC => self.dc = value,
-            _ => return Err(BusError::Unmapped { addr: offset, width: _width, write: true }),
+            _ => {
+                return Err(BusError::Unmapped {
+                    addr: offset,
+                    width: _width,
+                    write: true,
+                })
+            }
         }
         Ok(())
     }
