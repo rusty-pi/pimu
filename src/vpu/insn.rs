@@ -427,7 +427,9 @@ pub enum Op {
     /// A vector-unit instruction (48- or 80-bit, `0xF000..`), decoded to
     /// operands. Only the subset that touches no vector register is
     /// *executable* — see [`VecInsn::executable`].
-    Vector(VecInsn),
+    /// Boxed: `VecInsn` is 56 bytes and inflates `Op` — and so every decoded
+    /// `Insn` — for a class of instruction the boot barely executes.
+    Vector(Box<VecInsn>),
     /// Correctly sized but not decoded to semantics.
     Unimpl {
         raw: u64,

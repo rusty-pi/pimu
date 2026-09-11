@@ -218,7 +218,7 @@ fn decode_vector(raw: u128, len: u8) -> Op {
         (d, a, b, setf, 0, pred, VecSru::None)
     };
 
-    Op::Vector(VecInsn {
+    Op::Vector(Box::new(VecInsn {
         wide,
         mem,
         subop,
@@ -235,7 +235,7 @@ fn decode_vector(raw: u128, len: u8) -> Op {
         sru,
         raw,
         len,
-    })
+    }))
 }
 
 fn decode16(p0: u16, pc: u32) -> Op {

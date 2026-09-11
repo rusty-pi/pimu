@@ -926,7 +926,7 @@ impl Vpu {
                 self.regs.pc = new_pc;
             }
 
-            Op::Vector(v) => {
+            Op::Vector(ref v) => {
                 match v.executable() {
                     VecExec::DiscardedLoad {
                         base,
