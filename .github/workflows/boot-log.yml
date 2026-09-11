@@ -11,7 +11,7 @@ jobs:
   # Fast lane: the decoder, peripheral and address-decode tests. No firmware
   # blobs, no boot — if one of these fails the boot check below is noise.
   tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
 
     steps:
@@ -33,7 +33,7 @@ jobs:
         run: cargo test
 
   boot:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
 
     steps:
@@ -75,7 +75,7 @@ jobs:
   # Linux accepts — not that it survives the trip unchanged (QEMU rewrites parts
   # of it; see the comments in scripts/qemu-check.sh).
   qemu:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
 
     steps:
