@@ -258,6 +258,7 @@ impl Machine {
         if !self.systimer.advance(cycles) {
             return;
         }
+        self.pm.advance(self.systimer.now_us());
         // The I²C masters time their transfers in microseconds off the system
         // timer, so they stay in step with it across the run loop's `sleep`
         // fast-forward (which jumps the counter without retiring cycles).
