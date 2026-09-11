@@ -1,33 +1,62 @@
-/* Link map for the arm64 `-kernel` image (issue #32 stage 2).
+/* Link map for the arm64 `-kernel` image (#32 stages 2-4).
  *
- * QEMU's `raspi4b` puts RAM at physical 0, so link address == load address ==
- * physical address (the MMU is off and nothing here is position-independent).
+ * QEMU's `raspi4b` puts RAM at physical 0 with the MMU off, so a link address
+ * is a physical address. This image is loaded at one and runs at another:
  *
- * Load address 0x20_0000, not the 0x8_0000 of a Linux kernel, for two reasons:
+ *   _load_addr  0x0020_0000   where QEMU puts the file (the header's text_offset)
+ *   _start_addr 0x4000_0000   where it is linked, and where the entry stub
+ *                             copies itself to before running any absolute code
  *
- *  1. It is what QEMU actually does. `load_aarch64_image()` in hw/arm/boot.c
- *     takes the load offset from the header's `text_offset` once `image_size`
- *     is non-zero, and then, because it writes its own boot stub at the bottom
- *     of RAM, adds 2 MiB if that offset is below BOOTLOADER_MAX_SIZE. An image
- *     asking for offset 0 therefore lands at 0x20_0000, not at 0x8_0000 —
- *     which is exactly how the first cut of this frontend failed: linked for
- *     0x8_0000, loaded at 0x20_0000, running fine on PC-relative code until
- *     the first absolute pointer (a core::fmt vtable) branched into unmapped
- *     RAM. Asking for 0x20_0000 explicitly makes the placement match the link.
- *  2. We want 0x8_0000 free. It is where the VideoCore firmware puts the ARM
- *     kernel, and stage 4 of #32 ERETs into that kernel from EL2. A resident
- *     sitting at 0x8_0000 would be overwritten by its own guest.
+ * # Why the image has to move
  *
- * The entry stub checks the placement at runtime and says so on the UART if a
- * bootloader ever ignores `text_offset` (the arm64 spec permits it to, as long
- * as the base is 2 MiB aligned) — a silent mismatch is the confusing failure.
+ * Stage 4 needs the model's RAM to *be* physical memory. Linux's devices are
+ * QEMU's, they DMA with no SMMU in the way, and stage-2 translation does not
+ * apply to a device — so an address the firmware hands a peripheral only works
+ * if the model's backing store sits at exactly that physical address. The
+ * model can reach 1 GiB (`Machine::fold_ram_addr` masks with 0x3FFF_FFFF), so
+ * physical 0 .. 0x4000_0000 belongs to the model, and everything of ours has
+ * to be above it. See aarch64/src/heap.rs for the whole map.
+ *
+ * # Why it cannot simply be *loaded* at 0x4000_0000
+ *
+ * `load_aarch64_image()` in hw/arm/boot.c honours the header's `text_offset`
+ * once `image_size` is non-zero, so asking to be loaded at 1 GiB does work on
+ * its own. What breaks is `-initrd`, which is how the firmware blobs get in
+ * (aarch64/src/bundle.rs): QEMU places the initrd at
+ * `MAX(loader_start + MIN(ram_size/2, 128 MiB), end-of-kernel-image)` and then
+ * refuses it if it does not fit under `ram_size`. On `raspi4b` that limit is
+ * 960 MiB, not the machine's 2 GiB — `raspi_machine_init()` passes
+ * `machine->ram_size - vcram_size` to `setup_boot()`, and the ARM's share is
+ * 1 GiB less the 64 MiB VideoCore split. Measured on QEMU 10.2.1 by patching
+ * `text_offset` in the built image and booting it with a 1 MiB `-initrd`:
+ *
+ *     0x3800_0000  ok
+ *     0x3BF0_0000  "could not load initrd"          (blob crosses 0x3C00_0000)
+ *     0x3BFB_0000  "not enough space after kernel"  (start >= 0x3C00_0000)
+ *     0x4000_0000  "not enough space after kernel"
+ *
+ * So the image must be *loaded* low, below anything the initrd needs, and get
+ * itself out of the model's way afterwards. 0x20_0000 for the load address
+ * because that is where QEMU puts an image asking for offset 0 anyway — it
+ * writes its own boot stub at the bottom of RAM and adds 2 MiB if the
+ * requested offset is below BOOTLOADER_MAX_SIZE — so nothing is gained by
+ * asking for anything lower, and 0x8_0000 is spoken for: it is where the
+ * VideoCore firmware puts the ARM kernel that stage 4 will ERET into.
+ *
+ * The entry stub does the copy, and `rvf_main` still compares where it is
+ * running against where it was linked, so a copy that did not happen reads as
+ * a named failure rather than as the first absolute pointer — a core::fmt
+ * vtable, say — branching into unmapped RAM.
  */
 
 ENTRY(_start)
 
+/* The header's `text_offset`: where QEMU loads the file. Not where it runs. */
+_load_addr = 0x200000;
+
 SECTIONS
 {
-    . = 0x200000;
+    . = 0x40000000;
     _start_addr = .;
 
     /* .text.boot must come first: the very first bytes of the image are the
@@ -99,8 +128,26 @@ SECTIONS
  * field of the arm64 Image header (Documentation/arch/arm64/booting.rst). */
 _image_size = _end - _start_addr;
 
+/* Bytes that exist in the file, i.e. everything up to the NOLOAD .bss — the
+ * part the entry stub has to copy from the load address to the link address.
+ * `__bss_start` is 16-byte aligned above, so the stub's `ldp`/`stp` pair
+ * cannot run past it. */
+_load_size = __bss_start - _start_addr;
+
 /* VBAR_EL2 ignores the low 11 bits, so a misaligned table is not a link error
  * but a jump into the middle of somebody else's code on the first fault. Make
  * it a link error. */
 ASSERT((__exception_vectors & 2047) == 0,
        "the EL2 vector table must be 2 KiB aligned (VBAR_EL2, Arm ARM D17.2.152)")
+
+/* The image, its .bss and both its stacks have to fit in the 2 MiB reserved
+ * for them below the heap, or they grow into the allocator's window. The
+ * constant is `heap::HEAP_BASE`; keep the two in step. */
+ASSERT(_end <= 0x40200000,
+       "the image has outgrown the 2 MiB below heap::HEAP_BASE (0x40200000)")
+
+/* The copy at the load address must not reach the link address, or the stub
+ * would be overwriting its own source. 0x20_0000 + 2 MiB against 0x4000_0000
+ * is not close, but it is the invariant that makes a forward copy legal. */
+ASSERT(_load_addr + _image_size <= _start_addr,
+       "the loaded image overlaps the address it is copied to")

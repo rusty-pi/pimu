@@ -42,6 +42,7 @@ mod heap;
 mod initrd;
 mod model;
 mod semihost;
+mod smp;
 mod uart;
 mod vectors;
 
@@ -108,9 +109,13 @@ pub extern "C" fn rvf_main(dtb: u64, run_base: u64, link_base: u64) -> ! {
     // address that does not appear in the binary. Say so instead. `puts` is
     // safe here: rustc materialises string literals with adrp/add, which is
     // PC-relative.
+    //
+    // The image is loaded at 0x20_0000 and copies itself to 0x4000_0000 (the
+    // model owns the gigabyte below), so reaching here with the two still
+    // apart means the entry stub's copy did not happen or did not land.
     if run_base != link_base {
-        con.puts("\nrpi-virt-fw: FATAL: image loaded at the wrong address.\n");
-        con.puts("  the bootloader ignored the header's text_offset; see aarch64/link.ld\n");
+        con.puts("\nrpi-virt-fw: FATAL: running somewhere other than the link address.\n");
+        con.puts("  the entry stub's relocation did not land; see aarch64/link.ld\n");
         semihost::exit(semihost::EXIT_SELF_CHECK);
     }
 
@@ -121,8 +126,8 @@ pub extern "C" fn rvf_main(dtb: u64, run_base: u64, link_base: u64) -> ! {
     let _ = writeln!(con, "  CurrentEL   EL{}", current_el());
     let _ = writeln!(con, "  MPIDR_EL1   {:#018x}", mpidr());
     let _ = writeln!(con, "  DTB (x0)    {:#018x}", dtb);
-    // Should read 0x80000 .. and a size matching the header's image_size; if it
-    // does not, the bootloader placed us somewhere we did not link for.
+    // Reads 0x4000_0000 .., above the model's RAM — the entry stub has already
+    // moved us there from the 0x20_0000 QEMU loaded us at.
     let _ = writeln!(
         con,
         "  image       {:#010x} .. {:#010x} ({:#x} bytes)",
@@ -138,6 +143,13 @@ pub extern "C" fn rvf_main(dtb: u64, run_base: u64, link_base: u64) -> ! {
         unsafe { sym(&__bss_start) },
         unsafe { sym(&__bss_end) },
         unsafe { sym(&__stack_top) },
+    );
+    let _ = writeln!(
+        con,
+        "  model RAM   {:#010x} .. {:#010x} ({} MiB, identity — see heap.rs)",
+        heap::MODEL_RAM_BASE,
+        heap::MODEL_RAM_BASE + heap::MODEL_RAM_BYTES,
+        heap::MODEL_RAM_BYTES / (1024 * 1024),
     );
     let _ = writeln!(con, "  UART0       {:#010x} (PL011)", uart::UART0_BASE);
     let _ = writeln!(
@@ -222,9 +234,9 @@ fn boot_the_model(dtb: u64, con: &mut uart::Uart) -> u32 {
     if !heap::check_clear_of(initrd.start, initrd.end) {
         let _ = writeln!(
             con,
-            "FAILED: the -initrd blob overlaps the heap window at {:#x}; \
+            "FAILED: the -initrd blob reaches the image at {:#x}; \
              the bundle has outgrown the gap QEMU leaves below it",
-            heap::HEAP_BASE
+            heap::IMAGE_BASE
         );
         return semihost::EXIT_SELF_CHECK;
     }
@@ -237,10 +249,31 @@ fn boot_the_model(dtb: u64, con: &mut uart::Uart) -> u32 {
         return semihost::EXIT_SELF_CHECK;
     }
 
-    // SAFETY: the extent came from the bootloader's own device tree and has
-    // just been shown not to overlap anything this image allocates from.
+    // The bundle is where QEMU put it, 128 MiB into RAM — which is inside the
+    // gigabyte the model is about to claim and zero. `BundleBlocks` serves the
+    // SD image straight out of these bytes for the whole boot, so they have to
+    // survive it: copy the blob into the heap and hand the parser the copy.
+    //
+    // This is the price of the model's RAM being physical RAM. QEMU chooses
+    // where `-initrd` lands (`loader_start + MIN(ram_size/2, 128 MiB)`, after
+    // the kernel image) and will not place it above `raspi4b`'s 960 MiB ARM
+    // split, so there is nowhere it could have been put that was out of the
+    // way to begin with — see link.ld. 272 MiB of memcpy, once, against a boot
+    // that runs for half an hour.
+    //
+    // SAFETY: the extent came from the bootloader's own boot arguments, has
+    // just been shown not to overlap this image, and nothing has claimed the
+    // model's RAM yet.
     let raw = unsafe { initrd.bytes() };
-    let bundle = match bundle::Bundle::parse(raw) {
+    let copied: &'static [u8] = alloc::vec::Vec::leak(raw.to_vec());
+    let _ = writeln!(
+        con,
+        "  bundle      copied to {:#010x} ({} KiB, out of the model's RAM)",
+        copied.as_ptr() as usize,
+        copied.len() / 1024,
+    );
+
+    let bundle = match bundle::Bundle::parse(copied) {
         Ok(b) => b,
         Err(e) => {
             let _ = writeln!(con, "FAILED: -initrd: {}", e.as_str());
@@ -249,6 +282,18 @@ fn boot_the_model(dtb: u64, con: &mut uart::Uart) -> u32 {
     };
     for blob in bundle.iter() {
         let _ = writeln!(con, "  blob        {:<16} {} bytes", blob.name, blob.len());
+    }
+
+    // Last thing before the model owns the first gigabyte: get the other three
+    // CPUs out of it. They are spinning in QEMU's spin-table stub at physical
+    // 0x300, which the model's first write to low RAM would turn into
+    // firmware data executed as instructions. See `smp.rs`.
+    //
+    // SAFETY: the image has been relocated, so the park address handed to the
+    // spin table is in memory that survives; and nothing has written the
+    // model's RAM yet.
+    if !unsafe { smp::release(con) } {
+        return semihost::EXIT_SELF_CHECK;
     }
 
     // The seams `src/` leaves open, installed before anything uses them.

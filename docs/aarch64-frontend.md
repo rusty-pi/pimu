@@ -16,17 +16,18 @@ CI still runs it on every push.
 
 ```console
 $ scripts/qemu-kernel.sh
-image: target/aarch64-unknown-none/release/vc4-to-aarch64.img (276720 bytes)
+image: target/aarch64-unknown-none/release/vc4-to-aarch64.img (277936 bytes)
 
 rpi-virt-fw: aarch64 frontend (issue #32 stage 3)
   CurrentEL   EL2
   MPIDR_EL1   0x0000000080000000
   DTB (x0)    0x0000000000000100
-  image       0x00200000 .. 0x00257a20 (0x57a20 bytes)
-  bss         0x002438f0 .. 0x00243a20   stack top 0x00253a20
+  image       0x40000000 .. 0x40057ee0 (0x57ee0 bytes)
+  bss         0x40043db0 .. 0x40043ee0   stack top 0x40053ee0
+  model RAM   0x00000000 .. 0x40000000 (1024 MiB, identity — see heap.rs)
   UART0       0xfe201000 (PL011)
-  VBAR_EL2    0x00235800 (16 x 0x80, see aarch64/src/vectors.rs)
-  heap        0x20000000 .. 0x80000000 (1536 MiB, see aarch64/src/heap.rs)
+  VBAR_EL2    0x40035800 (16 x 0x80, see aarch64/src/vectors.rs)
+  heap        0x40200000 .. 0x80000000 (1022 MiB, see aarch64/src/heap.rs)
   CNTFRQ_EL0  62500000 Hz (the max_wall clock)
 no firmware bundle: no ATAG_INITRD2 in the boot arguments (pass -initrd)
 stage 2 only: pass -initrd <bundle> (scripts/make-blob-bundle.sh) to boot the model
@@ -55,7 +56,7 @@ QEMU's own process exit status carries the verdict.
 | image exit status | meaning |
 | --- | --- |
 | 0 | ran, and every self-check passed |
-| 1 | a self-check failed — not at EL2, or loaded at the wrong address |
+| 1 | a self-check failed — not at EL2, not running at the link address, a secondary CPU still in the model's RAM, a bad bundle, or a boot that stopped short |
 | 3 | an exception was taken; the dump is on the console |
 | 4 | a Rust `panic!` reached the panic handler |
 
@@ -77,11 +78,13 @@ recursing.
 
 ## Exception vectors
 
-`VBAR_EL2` is installed by the entry stub before the `.bss` clear, so every
-instruction after the first three is covered. Left at its reset value of 0, a
+`VBAR_EL2` is installed by the entry stub as the first thing it does after
+relocating, so everything but the copy loop itself is covered — and the copy
+loop is a dozen instructions that touch only memory the bootloader handed us.
+Left at its reset value of 0, a
 fault vectors into QEMU's boot stub at physical `0x200`, which is not a handler,
 so the machine re-takes the same exception forever and prints nothing at all —
-which is exactly how the `0x200000` load-address bug below presented, visible
+which is exactly how the load-address bug described below presented, visible
 only under `-d int`.
 
 The table is sixteen 0x80-byte slots in its own 2 KiB-aligned output section
@@ -112,11 +115,11 @@ rpi-virt-fw: EXCEPTION: Current EL, SP_ELx: Synchronous
   FAR_EL2     0x8000000000000000   (the faulting address)
   SPSR_EL2    0x00000000600003c9
   ISS         0x0000000      address size fault
-  x0  0x0000000000000000   x1  0x0000000000203ea1
+  x0  0x0000000000000000   x1  0x000000004003d27f
   ...
   x8  0x8000000000000000   x9  0x000000000000beef
   ...
-  SP          0x0000000000214150   (at the fault, not the handler's)
+  SP          0x0000000040053f20   (at the fault, not the handler's)
 qemu -kernel fault check passed (the vector table caught it)
 ```
 
@@ -154,19 +157,20 @@ one peripheral window at a time away from QEMU's own BCM2835 models and service
 it from ours, exists only at EL2. The banner prints `CurrentEL` so the claim is
 attested by the binary rather than by a host-side trace.
 
-## Why the image loads at 0x20_0000 and not 0x8_0000
+## Where the image is loaded, and where it runs
 
-This is the one thing in stage 2 that is easy to get wrong and hard to debug, so
-it is worth stating plainly.
+This is the one thing here that is easy to get wrong and hard to debug, so it
+is worth stating plainly. The image is **loaded at `0x20_0000` and runs at
+`0x4000_0000`**, and it copies itself between the two in its first dozen
+instructions.
 
 The header carries a `text_offset` (where the image wants to sit, relative to
 the base of RAM) and an `image_size` (how much memory to reserve there, `.bss`
 included). QEMU's `load_aarch64_image()` in `hw/arm/boot.c` only looks at
 `text_offset` when `image_size` is non-zero — and then adds 2 MiB if the
 requested offset would collide with the boot stub QEMU writes at the bottom of
-RAM.
+RAM. So an image asking for offset 0 is loaded at `0x20_0000`, not `0x8_0000`.
 
-So an image asking for offset 0 is loaded at `0x20_0000`, not at `0x8_0000`.
 The first cut of this frontend was linked for `0x8_0000` with `text_offset = 0`
 and failed exactly there: the entry stub and everything reachable by PC-relative
 code ran fine at the wrong address, and the first absolute pointer — a
@@ -174,16 +178,88 @@ code ran fine at the wrong address, and the first absolute pointer — a
 `Taking exception 1 [Undefined Instruction] ... ELR 0x810f0` under `-d int`, at
 an address that is real in the binary and zero in the machine.
 
-The fix is to ask for `0x20_0000` explicitly, which is also where we want to be:
-`0x8_0000` is where the VideoCore firmware puts the ARM kernel, and stage 4
-`ERET`s into that kernel. A resident sitting at `0x8_0000` would be overwritten
-by its own guest.
+### Why it does not simply stay there
 
-The arm64 spec lets a bootloader ignore `text_offset` entirely as long as the
-base is 2 MiB aligned, so the entry stub compares where it is running (`adr`,
-PC-relative) against where it was linked (a literal the linker filled in) and
-prints a fixed message instead of crashing if they differ. Both values reach
-`rvf_main` as arguments; see `aarch64/src/boot.rs`.
+Because the model's RAM is physical `0x0` .. `0x4000_0000` now (see below), and
+`0x20_0000` is inside it.
+
+### Why it is not simply *loaded* at `0x4000_0000`
+
+`text_offset` is honoured, so asking to be loaded at 1 GiB does work on its
+own — verified. What breaks is `-initrd`, which is how the firmware blobs get
+in. QEMU places the initrd at `MAX(loader_start + MIN(ram_size/2, 128 MiB),
+end-of-kernel-image)` and refuses it if it does not fit under `ram_size` — and
+on `raspi4b` that `ram_size` is **960 MiB, not the machine's 2 GiB**:
+`raspi_machine_init()` passes `machine->ram_size - vcram_size` to
+`setup_boot()`, and the ARM's share is 1 GiB less the 64 MiB VideoCore split.
+
+Measured on QEMU 10.2.1 by patching `text_offset` in the built image and
+booting it with a 1 MiB `-initrd`:
+
+| `text_offset` | result |
+| --- | --- |
+| `0x3800_0000` | ok |
+| `0x3BF0_0000` | `could not load initrd` (the blob would cross `0x3C00_0000`) |
+| `0x3BFB_0000` | `not enough space after kernel to load initrd` (start ≥ `0x3C00_0000`) |
+| `0x4000_0000` | `not enough space after kernel to load initrd` |
+
+So the image has to be loaded low, below anything the initrd needs, and get
+itself out of the model's way afterwards.
+
+### How the copy works
+
+`.text.boot` is position-independent up to the branch that ends it. The stub
+compares where it is running (`adr`, PC-relative) against where it was linked
+(a literal the linker filled in), copies `_load_size` bytes — everything up to
+the NOLOAD `.bss`, both bounds 16-byte aligned — to the link address, does
+`dsb; ic iallu; dsb; isb` because it has just written the instructions it is
+about to execute, and `br`s to an absolute literal pointing into the copy. Only
+then does it install `VBAR_EL2`, set `SP` and clear `.bss`: the vector table,
+both stacks and every absolute pointer in the image are at the link address,
+and nothing that depends on them runs before the branch.
+
+`rvf_main` still receives both values and still refuses to run if they differ,
+so a copy that did not happen is a named failure rather than the first
+`core::fmt` vtable branching into unmapped RAM. `link.ld` `ASSERT`s that the
+loaded image cannot reach the address it is copied to, and that the whole image
+fits in the 2 MiB reserved below the heap.
+
+`0x8_0000` is left free throughout: it is where the VideoCore firmware puts the
+ARM kernel that stage 4 `ERET`s into.
+
+## The secondary CPUs
+
+Left alone, three of `raspi4b`'s four cores would spend the whole run inside
+what is now the model's RAM. That has to be dealt with before the model writes
+a byte of it.
+
+Under `-kernel`, `hw/arm/raspi.c` installs `write_smpboot64()` as the board's
+`write_secondary_boot` hook and starts cores 1-3 at `smp_loader_start`. Read
+back from inside the image on QEMU 10.2.1, physical `0x300` holds exactly that
+stub — `mov x5, #0xd8` (`d2801b05`), `mrs x6, mpidr_el1`, `and x6, x6, #3`,
+`wfe`, `ldr x4, [x5, x6, lsl #3]`, `cbz x4, spin`, … `br x4` — and the release
+table at `0xd8` reads all zeroes. They never reach `_start`; the image's own
+`mpidr` guard has never fired on this machine.
+
+Left alone, the model's first write to low RAM turns that stub into whatever
+the firmware stored there, and three cores start executing model RAM as
+instructions with `VBAR_EL2` still at its reset value of 0. They would not
+merely spin: a stray store from one of them lands in the model's RAM, and the
+retired-instruction count stops matching the hosted run for reasons nothing in
+the transcript would explain.
+
+`aarch64/src/smp.rs` writes the address of a `wfi` park loop *inside the
+relocated image* into each release slot, `sev`s, and then waits for each core
+to mark its own byte on arrival. The waiting is the point — it turns "they are
+probably out of the way" into evidence, printed as
+
+```text
+  secondaries 3/3 parked at 0x400000dc (QEMU's spin table at 0xd8)
+```
+
+before the model starts. A machine whose stub is not the one above fails the
+run rather than guessing, because there is no honest way to overwrite a
+gigabyte while not knowing where the other cores are.
 
 ## Stage 3: the model in the image
 
@@ -195,11 +271,14 @@ scripts/qemu-kernel.sh --boot my.bundle  # or bring your own
 It reaches the ARM hand-off:
 
 ```console
-  heap        0x20000000 .. 0x80000000 (1536 MiB, see aarch64/src/heap.rs)
+  model RAM   0x00000000 .. 0x40000000 (1024 MiB, identity — see heap.rs)
+  heap        0x40200000 .. 0x80000000 (1022 MiB, see aarch64/src/heap.rs)
   CNTFRQ_EL0  62500000 Hz (the max_wall clock)
   initrd      0x08000000 .. 0x19080040 (279040 KiB)
+  bundle      copied to 0x40200000 (279040 KiB, out of the model's RAM)
   blob        pieeprom.bin     524288 bytes
   blob        sd.img           285212672 bytes
+  secondaries 3/3 parked at 0x400000dc (QEMU's spin table at 0xd8)
 
 --- boot 1 : entry 0x80000200, 1024 MiB model RAM, wall 3580 s ---
 
@@ -220,7 +299,7 @@ milestones:
       "*** Restart logging"
   [ok] ARM hand-off — the whole boot
       "arm_loader: Starting ARM with 948MB"
-heap        1039 MiB live, 1039 MiB peak of 1536 MiB
+heap        287 MiB live, 287 MiB peak of 1022 MiB
 
 the VPU model reached the ARM hand-off bare-metal
 qemu -kernel check passed
@@ -251,29 +330,59 @@ Four things `src/` deliberately leaves to a frontend, and where each one is:
 
 ### The memory map
 
-`raspi4b` has 2 GiB of RAM at physical 0 and no MMU on, so every claim on it is
-by convention. Bottom-up:
+`raspi4b` has 2 GiB of RAM at physical 0, will not take `-m` (*"Invalid RAM
+size, should be 2 GiB"*), and hands us no memory map — the MMU is off and every
+claim on RAM is by convention. The convention, bottom-up:
+
+| range | size | who |
+| --- | --- | --- |
+| `0x0000_0000` .. `0x4000_0000` | 1 GiB | **the model's RAM**, at the address the firmware believes RAM starts at |
+| `0x4000_0000` .. `0x4020_0000` | 2 MiB | this image after it relocates itself, `.bss` and both stacks included |
+| `0x4020_0000` .. `0x8000_0000` | 1022 MiB | **the heap** |
+
+and transiently, before the model claims the first gigabyte — all of it inside
+that gigabyte, and all of it consumed by the time it does:
 
 | range | who |
 | --- | --- |
-| `0x0` .. `~0x1000` | QEMU's own boot stub, written at `loader_start` |
+| `0x0` .. `0x1000` | QEMU's boot stub, the ATAG list at `0x100`, the secondary-CPU release table at `0xd8` and its stub at `0x300` |
 | `0x8_0000` | where the firmware puts the ARM kernel — kept free for stage 4 to `ERET` into |
-| `0x20_0000` .. `_end` | this image, stacks included |
+| `0x20_0000` .. | the image as QEMU loaded it, dead once the entry stub has copied it up |
 | `0x800_0000` .. | the `-initrd` bundle: QEMU places it at `loader_start + MIN(ram_size / 2, 128 MiB)` |
-| `0x2000_0000` .. `0x8000_0000` | **the heap**, 1.5 GiB |
 
-The model asks for 1 GiB of it. That is not a comfortable round number but the
-exact size of the address space it can reach: `Machine::fold_ram_addr` masks
-every RAM address with `0x3FFF_FFFF` to collapse the four VC4 cache aliases onto
-one backing store, so anything above 1 GiB is unreachable. (The hosted
-`recon --eeprom` default of 2048 MiB is slack, and `recon --ram-mb 1024` reaches
-`arm_loader` exactly as the default does — checked before relying on it.)
+**The model's RAM is physical memory, identity, no translation.** Stage 4 puts
+Linux at EL1 under stage-2 translation, which could map a guest IPA of 0 onto a
+block of ours wherever it landed — but device DMA cannot be mapped. There is no
+SMMU here, so a QEMU device Linux programs writes *physical* addresses, and an
+address the firmware handed out is only writable if the model's backing store
+is at that physical address. Identity is the only arrangement in which the
+guest's IPA, the model's address and the machine's physical address are the
+same number. Doing it now rather than during stage 4 is deliberate: the
+alternative breaks at the first DMA-capable peripheral the guest programs,
+which is a long way from anything that would point at the cause.
 
-512 MiB is where the heap starts because the bundle carries the 272 MiB SD
-image, so the initrd runs to about 400 MiB. That is checked and not assumed: the
-image reads the initrd extent out of the boot arguments and fails with a named
-error if it reaches into the window, because a bigger bundle would otherwise
-present as the firmware reading corrupted blob bytes a long way downstream.
+**1 GiB** is not a comfortable round number but the exact size of the address
+space the model can reach: `Machine::fold_ram_addr` masks every RAM address
+with `0x3FFF_FFFF` to collapse the four VC4 cache aliases onto one backing
+store, so anything above 1 GiB is unreachable. (The hosted `recon --eeprom`
+default of 2048 MiB is slack, and `recon --ram-mb 1024` reaches `arm_loader`
+exactly as the default does — checked before relying on it.)
+
+Which leaves the rest of the arithmetic: 2 GiB total, less the model's first
+gigabyte, is 1 GiB for us. The image needs 360 KiB and is given 2 MiB,
+`ASSERT`ed in `link.ld` against `heap::HEAP_BASE`. The heap gets the remaining
+1022 MiB, and its largest tenant is a 272 MiB copy of the bundle.
+
+**The bundle has to be copied.** QEMU puts `-initrd` at 128 MiB, inside the
+model's gigabyte, and `BundleBlocks` serves SD sectors straight out of those
+bytes for the whole boot — so they have to survive it. There is nowhere QEMU
+could have put it that was out of the way: it places the blob after the kernel
+image and will not go above the 960 MiB ARM split. So `main.rs` copies the
+blob into the heap before the model starts, which is 272 MiB of memcpy once
+against a boot that runs for half an hour. What the image still checks, rather
+than assumes, is that the blob did not land on *the image itself* — a bigger
+bundle moves that closer with no warning, and the overlap would present as the
+firmware reading corrupted blob bytes a long way downstream.
 
 The allocator is a bump pointer with LIFO rollback — freeing the most recent
 block un-bumps it, growing it in place extends it, which is what keeps the
@@ -282,12 +391,37 @@ else, so the run reports its high-water mark at the end and the margin is a
 number rather than a hope. `alloc_zeroed` skips zeroing memory that has never
 been handed out, since QEMU's guest RAM is an anonymous mapping and comes up
 zero; the image samples the window at startup so that assumption is tested
-rather than trusted.
+rather than trusted. The model's gigabyte gets no such shortcut — the
+bootloader's leavings are all over it — so `Ram::over_region` zeroes it
+outright, which is what makes a bare-metal boot retire the same instructions as
+a hosted one.
 
-This matters beyond convenience. #32 depends on the model's RAM *being* machine
-physical memory: QEMU's devices DMA into it with no SMMU in the way, so once
-stage 4 lets Linux program a DMA engine, an address the firmware handed out has
-to be one QEMU's devices can actually write.
+### Physical zero is not expressible in safe Rust
+
+The model's RAM starts at address 0, and that is where the language stops
+helping: a Rust reference may not be null, and `ptr::copy_nonoverlapping` and
+friends require a non-null pointer too. To the compiler, naming address 0 is a
+promise that the code is unreachable — and it acts on it.
+
+It acted on it twice while this was written. `slice::from_raw_parts_mut(0,
+1 GiB)`, and then `write_bytes(0 as *mut u8, ..)`, each let LLVM propagate the
+non-null precondition backwards until the entire VPU model was dead code:
+`.text` fell from 276 KiB to 40 KiB and the image printed its banner, skipped
+the boot it exists to run, and exited 0.
+
+Two things follow, and they are the reason `src/mem.rs` looks the way it does:
+
+* `Ram` holds a raw pointer and a length, not a slice, and hands out no
+  references into the region — `read_into` copies out. The hosted case keeps a
+  `Vec` in an `owner` field purely so the allocation is still freed when the
+  `Machine` is dropped; `Box::leak`ing it to make both cases `&'static mut
+  [u8]` was rejected because it turns every `Machine` into a permanent 1-2 GiB
+  leak, which a five-reboot `recon` run and the regression harness both notice.
+* `heap::model_ram()` launders the address through an empty `asm!` with an
+  `inout` operand — the identity function the optimiser cannot see through —
+  so that nothing downstream ever has a pointer it can prove is null. The
+  address being 0 is a fact about the machine, not a fact the compiler is
+  entitled to reason from.
 
 ### Getting the blobs in
 
@@ -337,17 +471,18 @@ report, while one that gets killed does not.
 
 | file | what it is |
 | --- | --- |
-| `aarch64/src/boot.rs` | the 64-byte arm64 Image header and the entry stub (CPU park, `VBAR_EL2`, stack, `.bss` clear, placement evidence) |
+| `aarch64/src/boot.rs` | the 64-byte arm64 Image header and the entry stub (relocation, `VBAR_EL2`, stack, `.bss` clear, placement evidence, the secondary-CPU park) |
 | `aarch64/src/main.rs` | `rvf_main`, the banner, the self-checks, the frontend seams, and the `#[panic_handler]` |
 | `aarch64/src/model.rs` | stage 3: build the machine from the bundle, run it, tick off milestones |
 | `aarch64/src/heap.rs` | the `#[global_allocator]` and the RAM window it owns |
 | `aarch64/src/clock.rs` | `CNTPCT_EL0`/`CNTFRQ_EL0` as the run loop's wall clock |
 | `aarch64/src/initrd.rs` | where the bootloader put `-initrd`, from a device tree or an ATAG list |
 | `aarch64/src/bundle.rs` | the `RVFB` container format and the borrowed-in-place `BlockDevice` over it |
+| `aarch64/src/smp.rs` | moving cores 1-3 out of the model's RAM, and checking that they went |
 | `aarch64/src/vectors.rs` | the EL2 vector table and the fault report |
 | `aarch64/src/semihost.rs` | `SYS_EXIT_EXTENDED`, and the exit statuses the script asserts on |
 | `aarch64/src/uart.rs` | PL011 transmit at `0xFE20_1000`, register names shared with `src/periph/uart_pl011.rs`; `puthex`/`putdec` for the `core::fmt`-free fault path |
-| `aarch64/link.ld` | load address, section order, `.bss`, the two stacks, `_image_size` |
+| `aarch64/link.ld` | load and link addresses (and why they differ), section order, `.bss`, the two stacks, `_image_size`/`_load_size` |
 | `aarch64/build.rs` | passes the linker script by absolute path, bakes in the wall budget |
 | `scripts/make-blob-bundle.sh` | packs the firmware blobs into the one file `-initrd` can carry |
 
@@ -440,13 +575,18 @@ partition byte-identical — verified across full runs.
   first, `ERET` into the kernel the firmware loaded at `0x8_0000`, and check
   that Linux boots exactly as it does under plain `raspi4b`. Everything below is
   already in place for it.
-* **RAM the guest and the models agree about.** The model's RAM is a heap block
-  at `0x2000_0000`-something, while the firmware believes it starts at 0. Stage 2
-  translation can map a guest IPA of 0 onto wherever the block landed, but device
-  DMA bypasses stage 2 and uses physical addresses — so the first peripheral the
-  guest programs to write into "RAM" is where that indirection stops being free.
-  The long-run answer is a heap window whose base the model's `Ram` is
-  constructed at, rather than one it is merely allocated from.
+* ~~**RAM the guest and the models agree about.**~~ Done: the model's RAM *is*
+  physical `0x0` .. `0x4000_0000`, so a guest IPA, a model address and a machine
+  physical address are the same number and device DMA needs nothing from us. See
+  [the memory map](#the-memory-map).
+* **A way back for the secondary CPUs.** Linux brings up the Pi's cores through
+  the spin table (`enable-method = "spin-table"`, `cpu-release-addr = <0xd8>`),
+  and `0xd8` is now a location *inside the model's RAM* that the firmware also
+  writes. Cores 1-3 are parked in a `wfi` loop in this image and deliberately
+  poll nothing, so the guest's releases will have to be noticed by the resident
+  — a trapped write, or the model reporting the store — rather than by a core
+  watching model memory and launching on whatever the firmware happened to put
+  there. `aarch64/src/smp.rs` has the detail.
 * **An SDHCI driver**, so the SD image comes through `-drive if=sd` and
   `block::BlockDevice` instead of `-initrd`, and the EEPROM's self-update
   persists to the file the way it does on real SPI flash.

@@ -39,15 +39,12 @@ pub const SD_BLOB: &str = "sd.img";
 /// masks every RAM address with `0x3FFF_FFFF` to collapse the four VC4 cache
 /// aliases (`0x0`, `0x4000_0000`, `0x8000_0000`, `0xC000_0000`) onto one
 /// backing store, so 1 GiB *is* the whole of the address space the model can
-/// reach. The hosted `recon --eeprom` default of 2048 MiB is slack above that,
-/// and slack is what this image does not have: `raspi4b` is fixed at 2 GiB
-/// total (`-m 1G` → "Invalid RAM size, should be 2 GiB") and the heap window
-/// is 1.5 GiB of it.
+/// reach. The hosted `recon --eeprom` default of 2048 MiB is slack above that.
 ///
 /// Checked, not reasoned about: a hosted `recon --ram-mb 1024` run of the boot
 /// scenario reaches `arm_loader: Starting ARM with 948MB` exactly as the
 /// 2048 MiB default does.
-const RAM_MB: usize = 1024;
+const RAM_MB: usize = crate::heap::MODEL_RAM_BYTES / (1024 * 1024);
 
 /// Console landmarks, in the order a healthy boot produces them.
 ///
@@ -82,14 +79,12 @@ pub struct Outcome {
 /// the SoC to reset, and the caller is expected to re-run from the updated
 /// bytes rather than treat the reset as the end.
 ///
-/// Known limit: each reboot builds a fresh `Machine`, and the previous one's
-/// 1 GiB of RAM is freed but not reclaimed — the bump allocator only gives
-/// back the most recent block (`heap.rs`), and by then it is buried. One
-/// reboot fits in the 1.5 GiB window, a second does not. That is enough for an
-/// already-provisioned `pieeprom.bin`, which is what this is run with and
-/// which never resets; a `pieeprom.upd` boot would exhaust the heap and say
-/// so, rather than fail quietly. Reclaiming it needs an allocator that
-/// coalesces, or a `Machine` that can be reset in place.
+/// The model's RAM is the same physical gigabyte on every pass — it is
+/// `heap::model_ram`, not an allocation — so a reboot re-zeroes rather than
+/// re-allocating, and no longer strands the previous machine's gigabyte in a
+/// bump allocator that cannot reclaim it. That is also why the previous
+/// `Machine` is dropped explicitly below before the next one takes the region:
+/// two live ones would both believe they owned it.
 pub fn run(bundle: &Bundle<'static>, con: &mut Uart) -> Outcome {
     let Some(eeprom) = bundle.get(EEPROM_BLOB) else {
         con.puts("FAILED: no ");
@@ -133,7 +128,16 @@ pub fn run(bundle: &Bundle<'static>, con: &mut Uart) -> Outcome {
                 };
             }
         };
-        let mut machine = Machine::new(RAM_MB * 1024 * 1024);
+        // The physical gigabyte at 0, not a heap block: the firmware's
+        // addresses have to be addresses QEMU's own devices can write, because
+        // nothing translates for a device (`heap.rs`, and #32 stage 4).
+        //
+        // SAFETY: the region is real RAM this image has claimed, no other
+        // `Machine` is alive — the previous pass drops its one before
+        // `continue` — and `main.rs` has already moved the `-initrd` bundle
+        // and the secondary CPUs out of it.
+        let (ram_ptr, ram_len) = crate::heap::model_ram();
+        let mut machine = unsafe { Machine::with_ram_region(ram_ptr, ram_len) };
         machine.spi0.attach_flash(flash.clone());
         if let Some(sd) = &sd {
             machine
@@ -187,6 +191,10 @@ pub fn run(bundle: &Bundle<'static>, con: &mut Uart) -> Outcome {
             // next boot the way `cmd_recon` does, or the firmware provisions
             // itself again on every reboot and never gets past it.
             flash = emu.machine.spi0.flash_bytes().to_vec();
+            // Explicit, not incidental: the next pass takes the same physical
+            // region back out of `heap::model_ram`, which is only sound with
+            // this machine already gone.
+            drop(emu);
             let _ = writeln!(con, "=== RESET (reboot {reboots}) — re-running ===");
             continue;
         }
