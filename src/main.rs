@@ -727,6 +727,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
                     if !print_fdt {
                         println!("  (--print-fdt for every node, --dump-fdt <path> for the blob)");
                     }
+                    report_machine_id_derivation(&emu.machine, &fdt);
                     if print_fdt {
                         println!("\n{}", fdt.to_dts());
                     }
@@ -986,6 +987,57 @@ fn locate_fdt(machine: &mut Machine, console: &[u8]) -> Option<(u32, Vec<u8>)> {
         logged_len.max(40)
     };
     Some((addr, read(machine, addr, len)))
+}
+
+/// Recompute `/chosen/rpi-machine-id` from the modelled OTP and say whether the
+/// firmware's own value still matches.
+///
+/// This is the one thing in the report that is a *prediction* rather than an
+/// observation. `scripts/boot-check.sh` pins the published string, which catches
+/// a firmware bump that moves the root-LUKS passphrase — but only after the fact
+/// and only for this board's fuses. The derivation is documented in
+/// `src/identity.rs`; recomputing it here turns "the value changed" into "the
+/// algorithm changed", which is the distinction rpi-mkosi#37 actually needs.
+///
+/// A mismatch is not by itself a bug in the model: it means the EEPROM
+/// bootloader no longer derives the identity the way `src/identity.rs` says, and
+/// that is exactly the event worth failing on.
+fn report_machine_id_derivation(machine: &Machine, fdt: &rpi_virt_fw::fdt::Fdt) {
+    use rpi_virt_fw::identity::{expected_machine_id_hex, MACHINE_ID_ROWS};
+
+    let published = fdt
+        .properties_of("/chosen")
+        .and_then(|props| {
+            props
+                .iter()
+                .find(|p| p.name == "rpi-machine-id")
+                .and_then(|p| p.as_str())
+        })
+        .map(|s| s.trim().to_string());
+    let Some(published) = published else {
+        return;
+    };
+
+    let mut rows = [0u32; 5];
+    for (slot, key) in rows.iter_mut().zip(MACHINE_ID_ROWS) {
+        *slot = machine.config_otp.row(key);
+    }
+    let expected = expected_machine_id_hex(&rows);
+    let inputs: Vec<String> = MACHINE_ID_ROWS
+        .iter()
+        .zip(rows)
+        .map(|(k, v)| format!("otp[{k}]={v:#010x}"))
+        .collect();
+
+    println!("\n--- rpi-machine-id derivation (#22) ---");
+    println!("  SHA-256({})[..16]", inputs.join(" | "));
+    if expected == published {
+        println!("  {expected}  matches the value the firmware published");
+    } else {
+        println!("  predicted {expected}");
+        println!("  published {published}");
+        println!("  MISMATCH: the EEPROM bootloader's derivation moved");
+    }
 }
 
 /// Parse `<lo>-<hi>` (hex, `0x` optional) into a half-open address range.

@@ -23,6 +23,7 @@ pub mod emulator;
 pub mod fdt;
 pub mod firmware;
 pub mod harness;
+pub mod identity;
 pub mod machine;
 pub mod mem;
 pub mod payloads;

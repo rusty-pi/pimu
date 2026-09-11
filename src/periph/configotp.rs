@@ -188,6 +188,15 @@ impl ConfigOtp {
         self.table.insert(key, value);
     }
 
+    /// The fused value of a row, as the firmware would read it. Unprogrammed
+    /// rows read back 0, which is what the hardware does too.
+    ///
+    /// Used by [`crate::identity`] to recompute `/chosen/rpi-machine-id`
+    /// independently of the firmware.
+    pub fn row(&self, key: u32) -> u32 {
+        self.table.get(&key).copied().unwrap_or(0)
+    }
+
     fn resolve(&mut self) {
         self.data = self.table.get(&self.key).copied().unwrap_or(0);
         if std::env::var_os("RVF_DBG_OTP").is_some() {
