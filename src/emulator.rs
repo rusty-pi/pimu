@@ -1009,7 +1009,7 @@ impl Emulator {
                 if c1.exc_vbase == 0 && self.machine.corectl.vbase[1] != 0 {
                     c1.exc_vbase = self.machine.corectl.vbase[1];
                 }
-                if !c1.is_stopped() {
+                if !c1.is_stopped() && !c1.halted {
                     if let crate::vpu::Step::Stopped = c1.step(&mut self.machine) {
                         core1_end = Some(RunEnd::Core1Halted(
                             c1.stopped.clone().expect("stop reason"),
