@@ -1,0 +1,5 @@
+# Building inside this directory always means the bare-metal image; there is no
+# hosted target for this crate. The root workspace keeps `default-members = ["."]`
+# so a plain `cargo build` at the repo root never reaches here.
+[build]
+target = "aarch64-unknown-none"

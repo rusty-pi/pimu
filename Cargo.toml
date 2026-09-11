@@ -1,3 +1,12 @@
+# `aarch64/` is the bare-metal `-kernel` frontend (issue #32 stage 2). It is a
+# workspace member so it shares the lockfile and stays visible to `cargo fmt`,
+# but `default-members` keeps it out of `cargo build`/`test`/`clippy` at the
+# root: it only builds for `aarch64-unknown-none`. Build it with
+# `scripts/qemu-kernel.sh` or `cargo build --manifest-path aarch64/Cargo.toml`.
+[workspace]
+members = ["aarch64"]
+default-members = ["."]
+
 [package]
 name = "rpi-virt-fw"
 version = "0.1.0"

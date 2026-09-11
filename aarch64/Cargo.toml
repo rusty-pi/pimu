@@ -1,0 +1,21 @@
+[package]
+name = "rvf-aarch64"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.98"
+description = "Bare-metal aarch64 frontend: the firmware model as a QEMU -kernel image (issue #32 stage 2)"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# `vc4-to-aarch64` is the name the epic (#32) uses for the image in its QEMU
+# invocation; keep it so the docs and the artefact agree.
+[[bin]]
+name = "vc4-to-aarch64"
+path = "src/main.rs"
+
+[dependencies]
+
+# No `[profile.*]` here on purpose: profile sections in a non-root workspace
+# member are ignored by cargo. Nothing needs one — `aarch64-unknown-none`
+# already declares `panic-strategy: abort`, so `#[panic_handler]` is all the
+# unwinder story this image has.
