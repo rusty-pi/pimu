@@ -20,7 +20,8 @@ USAGE:
     rpi-virt-fw run <scenario.toml> [--update] [-v]
     rpi-virt-fw run-all [<dir>] [--update] [-v]
     rpi-virt-fw recon <file> [--entry <hex>] [--ram-mb <n>] [--max-steps <n>] [--eeprom]
-                             [--max-wall <secs>] [--sd <img>] [--skip-signed-boot]
+                             [--max-wall <secs>] [--sd <img>] [--usb <img>]
+                             [--boot-order <hex>] [--skip-signed-boot]
                              [--skip-unimpl]
               (no --max-steps = no instruction cap; --max-wall defaults to 140s)
               (an unknown instruction stops the run; --skip-unimpl steps over it
@@ -49,6 +50,17 @@ FLAGS:
               not only the `/chosen` summary the run report gives by default.
     -v        Print the full run report and transcript.
 ";
+
+/// The offset of the `bootconf.txt` `MAGIC_FILE` section header in an EEPROM
+/// image, found through the section walk rather than by searching for the name
+/// — the bootcode carries a string table with the same names in it.
+fn find_bootconf_header(flash: &[u8]) -> Option<usize> {
+    let img = rpi_virt_fw::firmware::eeprom::EepromImage::parse(flash).ok()?;
+    img.sections
+        .iter()
+        .find(|s| s.filename.as_deref() == Some("bootconf.txt"))
+        .map(|s| s.header_offset)
+}
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -101,9 +113,15 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     let mut patches: Vec<(u32, u32)> = Vec::new();
     let mut dumps: Vec<(u32, u32)> = Vec::new();
     let mut disasms: Vec<(u32, u32)> = Vec::new();
+    /// Blue socket A. Root port 1 is the USB2 port feeding the on-board VIA
+    /// hub, so a SuperSpeed fixture goes on port 2 (`docs/usb-xhci.md` §5.2).
+    const USB_ROOT_PORT: usize = 2;
+
     let mut sd_image: Option<PathBuf> = None;
     let mut dump_fdt: Option<PathBuf> = None;
     let mut print_fdt = false;
+    let mut usb_image: Option<PathBuf> = None;
+    let mut boot_order: Option<String> = None;
     let mut skip_signed_boot = false;
     let mut skip_unimpl = false;
     let mut it = args.iter();
@@ -138,6 +156,10 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
             }
             "--trace-mmio" => trace_mmio = true,
             "--sd" => sd_image = Some(PathBuf::from(it.next().context("--sd needs a path")?)),
+            "--usb" => usb_image = Some(PathBuf::from(it.next().context("--usb needs a path")?)),
+            "--boot-order" => {
+                boot_order = Some(it.next().context("--boot-order needs a value")?.to_string())
+            }
             "--skip-signed-boot" => skip_signed_boot = true,
             "--skip-unimpl" => skip_unimpl = true,
             "--dump" => {
@@ -169,6 +191,20 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     // The EEPROM bootloader touches the 0x6000_0000 L2-SRAM window, which
     // our model folds into DRAM past the 512 MiB mark — give it room by default.
     let ram_mb = ram_mb.unwrap_or(if eeprom { 2048 } else { 512 });
+    // `--usb <img>`: a Bulk-Only Transport mass-storage device in blue socket
+    // A, which is xHCI root port 2 — a SuperSpeed lane straight onto the root
+    // hub, so no hub traversal is involved. See `docs/usb-xhci.md` §5.2 for the
+    // socket map.
+    let usb_img = match &usb_image {
+        Some(p) => {
+            let img = std::fs::read(p)
+                .with_context(|| format!("reading USB image {}", p.display()))?;
+            println!("usb image  {} ({} blocks)", p.display(), img.len() / 512);
+            Some(img)
+        }
+        None => None,
+    };
+
     let sd_img = match &sd_image {
         Some(sd_path) => {
             let img = std::fs::read(sd_path)
@@ -200,10 +236,46 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         }
     };
 
+    // `--boot-order <hex>`: append a `BOOT_ORDER=` line to the EEPROM's
+    // `bootconf.txt`. The pinned image does not carry one, so the bootloader
+    // falls back to its built-in `0xf4` — SD card, then restart — and never
+    // tries the USB entry, which makes `--usb` unexercisable. The section is
+    // the last one in the image and is followed by erased flash, so growing it
+    // is a length-field bump and an append; nothing moves.
+    let set_boot_order = |flash: &mut Vec<u8>, announce: bool| {
+        let Some(order) = boot_order.as_deref() else {
+            return;
+        };
+        if !eeprom {
+            return;
+        }
+        let Some(hdr) = find_bootconf_header(flash) else {
+            if announce {
+                eprintln!("boot-order: no bootconf.txt section in the EEPROM image");
+            }
+            return;
+        };
+        let len = u32::from_be_bytes([
+            flash[hdr + 4],
+            flash[hdr + 5],
+            flash[hdr + 6],
+            flash[hdr + 7],
+        ]) as usize;
+        let line = format!("BOOT_ORDER={order}\n");
+        let end = hdr + 8 + len;
+        let new_len = len + line.len();
+        flash.splice(end..end + line.len(), line.bytes());
+        flash[hdr + 4..hdr + 8].copy_from_slice(&(new_len as u32).to_be_bytes());
+        if announce {
+            println!("boot-order: bootconf BOOT_ORDER={order} @ {:#x}", end);
+        }
+    };
+
     // `flash` may be rewritten by an EEPROM self-update; on a firmware-requested
     // reset we rebuild from the updated image and run again.
     let mut flash = bytes.clone();
     unsign(&mut flash, true);
+    set_boot_order(&mut flash, true);
 
     // Show the EEPROM section table `bootloader_eeprom_find_files` walks, plus
     // the decoded `bootconf.txt`, so a boot that consults EEPROM config (boot
@@ -250,6 +322,12 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         }
         if let Some(img) = &sd_img {
             machine.emmc2.insert_card(img.clone());
+        }
+        if let Some(img) = &usb_img {
+            machine.pcie.endpoint.attach(
+                USB_ROOT_PORT,
+                Box::new(rpi_virt_fw::periph::usb::MassStorage::new(img.clone())),
+            );
         }
         machine.mmio_trace = trace_mmio;
         // `RVF_TRACE_MMIO=<lo>-<hi>` (hex): trace peripheral accesses from the
@@ -320,6 +398,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
             print!("{}", String::from_utf8_lossy(&report.console));
             flash = emu.machine.spi0.flash_bytes().to_vec();
             unsign(&mut flash, false); // self-update restored SIGNED_BOOT=1
+            set_boot_order(&mut flash, false);
             if reboots <= 4 {
                 println!("\n=== RESET (reboot {reboots}) — re-running from updated flash ===\n");
                 continue 'boot;
