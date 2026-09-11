@@ -26,6 +26,8 @@
 //!
 //! Writes are not modelled — the bootloader only reads.
 
+use alloc::vec::Vec;
+
 /// SD card operating states (subset), per the physical-layer spec.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CardState {

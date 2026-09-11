@@ -1,12 +1,14 @@
 //! The `Machine`: RAM + peripherals + address decode. Implements [`Bus`].
 
 use crate::bus::{Bus, BusError, BusResult, MmioDevice, Width};
+use crate::diag_eprintln;
 use crate::mem::Ram;
 use crate::periph::{
     Asb, Aux, Avs, BootBox, Bsc, ClkMon, ClockManager, ConfigOtp, CoreCtl, Dma4, Emmc2, HdmiDdc,
     Hvs, Mbox, McSync, Pl011, Pm, Rng, Sdc, Sdramc, Spi0, StubRegion, SysTimer, Vce,
 };
 use crate::soc::bcm2711 as map;
+use alloc::vec::Vec;
 
 /// Which UART the harness captures as "the console".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -118,7 +120,7 @@ pub struct Machine {
     /// `RVF_DBG_DMA=1`: log every control block the DMA4 channel executes.
     dbg_dma: bool,
     /// Interrupt sources raised by peripherals, waiting to be vectored.
-    pending_irqs: std::collections::VecDeque<u32>,
+    pending_irqs: alloc::collections::VecDeque<u32>,
     pub watch_pc: u32,
 
     /// `start4.elf` logs boot progress by writing 4-char ASCII tags (`_msh`,
@@ -178,19 +180,12 @@ impl Machine {
             mmio_trace: false,
             mmio_trace_range: None,
             mmio_events: Vec::new(),
-            watch: std::env::var("RVF_WATCH")
-                .ok()
-                .map(|v| {
-                    v.split(',')
-                        .filter_map(|t| {
-                            u32::from_str_radix(t.trim().trim_start_matches("0x"), 16).ok()
-                        })
-                        .map(|a| a & !3)
-                        .collect()
-                })
-                .unwrap_or_default(),
-            dbg_dma: std::env::var_os("RVF_DBG_DMA").is_some(),
-            pending_irqs: std::collections::VecDeque::new(),
+            watch: crate::diag::hex_list("RVF_WATCH")
+                .into_iter()
+                .map(|a| a & !3)
+                .collect(),
+            dbg_dma: crate::diag::flag("RVF_DBG_DMA"),
+            pending_irqs: alloc::collections::VecDeque::new(),
             watch_pc: 0,
             phase_tags: Vec::new(),
         }
@@ -458,7 +453,7 @@ impl Machine {
     fn dma_win_log(&self, rw: &str, addr: u32, value: u32) {
         if self.dbg_dma && (0x7E00_7000..0x7E00_8000).contains(&addr) {
             let ch = (addr - 0x7E00_7000) / 0x100;
-            eprintln!(
+            diag_eprintln!(
                 "[dmawin] {rw} ch{ch} +{:#04x} ({addr:#x}) = {value:#x} pc={:#x}",
                 (addr - 0x7E00_7000) % 0x100,
                 self.watch_pc
@@ -518,7 +513,7 @@ impl Machine {
                 DmaLegacy::decode_cb([w[0], w[1], w[2], w[3], w[4], w[5]])
             };
             if self.dbg_dma {
-                eprintln!(
+                diag_eprintln!(
                     "[dma-legacy] ch{ch} cb={cb:#x} ti={:#x} src={:#x} dest={:#x} len={:#x} stride={:#x} next={:#x}",
                     d.ti, d.src, d.dest, d.len, d.stride, d.next
                 );
@@ -628,7 +623,7 @@ impl Machine {
             let dest40 = (((desti & ADDR_HI) as u64) << 32) | dest as u64;
 
             if self.dbg_dma {
-                eprintln!(
+                diag_eprintln!(
                     "[dma] cb={cb:#x} ti={:#x} src={src:#x} srci={srci:#x} dest={dest:#x} len={len:#x} next={next:#x}",
                     rd(&self.ram, cb)
                 );
@@ -774,7 +769,7 @@ impl Bus for Machine {
                 .iter()
                 .any(|&w| Machine::fold_ram_addr(w) & !3 == a)
             {
-                eprintln!(
+                diag_eprintln!(
                     "[watch] pc={:#010x} store{} {:#010x} <- {:#x}",
                     self.watch_pc,
                     width.bytes() * 8,

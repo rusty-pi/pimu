@@ -12,6 +12,7 @@ use super::insn::{
 };
 use super::length::{insn_class, insn_len_bytes, InsnClass};
 use super::reg::Cond;
+use alloc::boxed::Box;
 
 #[inline]
 fn sext(value: u32, bits: u32) -> i32 {

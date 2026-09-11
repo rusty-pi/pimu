@@ -20,6 +20,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+          targets: aarch64-unknown-none
 
       - uses: Swatinem/rust-cache@v2
 
@@ -31,6 +32,13 @@ jobs:
 
       - name: Test
         run: cargo test
+
+      # The library also builds `no_std` + `alloc`, which is what lets it run
+      # inside a bare-metal aarch64 image (#32). Nothing here executes it, so
+      # without a compile in CI the `cfg` arms rot within a week — the first
+      # `Vec` or `eprintln!` added to a peripheral model breaks it silently.
+      - name: Build the no_std library
+        run: cargo clippy --no-default-features --target aarch64-unknown-none -- -D warnings
 
   boot:
     runs-on: ubuntu-26.04

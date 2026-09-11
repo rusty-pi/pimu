@@ -21,7 +21,9 @@
 //! Only PIO reads are implemented (no SDMA / ADMA, no writes) — that is all the
 //! bootloader uses for the SD path.
 
-use std::collections::BTreeMap;
+use crate::diag_eprintln;
+use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 use crate::periph::sdcard::{SdCard, SCR_MAGIC_LBA, SWITCH_FUNC_MAGIC_LBA};
@@ -107,7 +109,7 @@ impl Default for Emmc2 {
             read_blocks_left: 0,
             read_open_ended: false,
             words_out: 0,
-            dbg: std::env::var_os("EMMC_DBG").is_some(),
+            dbg: crate::diag::flag("EMMC_DBG"),
         }
     }
 }
@@ -210,7 +212,7 @@ impl Emmc2 {
         }
 
         if self.dbg {
-            eprintln!(
+            diag_eprintln!(
                 "  emmc CMD{index} arg={arg:#010x} rt={resp_type} data={data_present} \
                  -> r0={:#010x} r1={:#010x} r2={:#010x} r3={:#010x} blocks={} open={}",
                 self.resp[0],
@@ -257,7 +259,7 @@ impl Emmc2 {
         self.set_int(INT_BUF_READ_RDY);
         if self.dbg {
             let lba = self.read_lba.wrapping_sub(1);
-            eprintln!(
+            diag_eprintln!(
                 "  emmc  block lba={lba:#x} ({} bytes) first={:02x}{:02x}{:02x}{:02x} left={} open={}",
                 self.data.len(),
                 block[0],
@@ -332,10 +334,10 @@ impl MmioDevice for Emmc2 {
         if self.dbg {
             if off == BUFFER_DATA {
                 if self.words_out % 64 == 1 {
-                    eprintln!("  emmc R [0x20] -> {v:#010x}  (word {})", self.words_out);
+                    diag_eprintln!("  emmc R [0x20] -> {v:#010x}  (word {})", self.words_out);
                 }
             } else {
-                eprintln!("  emmc R [{off:#04x}] -> {v:#010x}");
+                diag_eprintln!("  emmc R [{off:#04x}] -> {v:#010x}");
             }
         }
         Ok(v)
@@ -344,7 +346,7 @@ impl MmioDevice for Emmc2 {
     fn write(&mut self, offset: u32, _width: Width, value: u32) -> BusResult<()> {
         let off = offset & !3;
         if self.dbg && off != BUFFER_DATA {
-            eprintln!("  emmc W [{off:#04x}] <- {value:#010x}");
+            diag_eprintln!("  emmc W [{off:#04x}] <- {value:#010x}");
         }
         match off {
             CLOCK_CONTROL => {

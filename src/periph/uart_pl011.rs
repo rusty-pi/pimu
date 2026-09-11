@@ -5,6 +5,7 @@
 //! empty, not busy", so polling firmware never stalls. Receive returns 0.
 
 use crate::bus::{BusResult, MmioDevice, Width};
+use alloc::vec::Vec;
 
 // Register offsets.
 const DR: u32 = 0x00;
@@ -44,7 +45,7 @@ impl Pl011 {
     }
 
     pub fn take_output(&mut self) -> Vec<u8> {
-        std::mem::take(&mut self.out)
+        core::mem::take(&mut self.out)
     }
 }
 

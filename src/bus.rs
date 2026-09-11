@@ -6,7 +6,7 @@
 //! them. This keeps the borrow graph a tree: `Emulator` owns `Vpu` and `Machine`
 //! as siblings.
 
-use std::fmt;
+use core::fmt;
 
 /// Access width.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

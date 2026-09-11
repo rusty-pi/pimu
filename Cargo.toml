@@ -7,12 +7,39 @@ description = "A virtual bench for Raspberry Pi VideoCore boot firmware (start4.
 license = "MIT OR Apache-2.0"
 publish = false
 
+# With `--no-default-features` the library is `no_std` + `alloc`, so the same
+# models can run inside a bare-metal aarch64 image (#32 stage 1). Everything
+# below is hosted-only: `anyhow` is the frontend's error type (the core uses
+# `crate::error::Error`), and serde/toml only parse the harness's scenario
+# files, which a bare-metal build has no filesystem to read.
+[features]
+default = ["std"]
+std = ["dep:anyhow", "dep:serde", "dep:toml"]
+
 [dependencies]
-anyhow = "1"
-serde = { version = "1", features = ["derive"] }
-toml = "0.8"
+# The VC4 FP ALU needs sqrt/ceil/floor/log2/exp2, which only exist as `f32`
+# inherent methods under `std`. Not optional: Cargo has no "when `std` is off"
+# dependency, and the hosted build drops it as dead code (see `vpu::fmath`).
+libm = "0.2"
+
+anyhow = { version = "1", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+toml = { version = "0.8", optional = true }
 
 [dev-dependencies]
+
+# The frontend is hosted by definition — it reads files, parses argv and prints
+# to stdout. `required-features` keeps `cargo build --no-default-features` from
+# trying to build it for a bare-metal target.
+[[bin]]
+name = "rpi-virt-fw"
+path = "src/main.rs"
+required-features = ["std"]
+
+[[example]]
+name = "dtblob_dump"
+path = "examples/dtblob_dump.rs"
+required-features = ["std"]
 
 [profile.release]
 lto = "thin"

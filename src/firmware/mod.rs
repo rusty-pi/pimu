@@ -11,7 +11,8 @@ pub mod dtblob;
 pub mod eeprom;
 pub mod elf32;
 
-use anyhow::{Context, Result};
+use crate::error::{Context, Result};
+use alloc::vec::Vec;
 
 use crate::machine::Machine;
 
@@ -95,10 +96,10 @@ impl Payload {
 fn write_folded(machine: &mut Machine, addr: u32, bytes: &[u8]) -> Result<()> {
     let phys = addr & 0x3FFF_FFFF;
     machine.ram.write_slice(phys, bytes).map_err(|e| {
-        anyhow::anyhow!(
+        crate::error::Error::msg(format!(
             "{e} (phys {phys:#x}, {} bytes, ram {} B)",
             bytes.len(),
             machine.ram.len()
-        )
+        ))
     })
 }

@@ -77,7 +77,7 @@
 //! probes. If a later boot phase does read one of these registers, the trace
 //! above is the way to find out.
 
-use std::collections::BTreeMap;
+use alloc::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 

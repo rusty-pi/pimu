@@ -13,7 +13,9 @@
 //! `PP` (0x02) programs up to a page. Erase/program are instantaneous in the
 //! model (WIP always reads clear). Everything else returns `0xFF`.
 
-use std::collections::VecDeque;
+use crate::diag_eprintln;
+use alloc::collections::VecDeque;
+use alloc::vec::Vec;
 
 use crate::bus::{BusError, BusResult, MmioDevice, Width};
 
@@ -64,14 +66,14 @@ pub struct Spi0 {
     /// EEPROM self-update landed and a re-run from the new image is due.
     pub dirty: bool,
     /// `RVF_DBG_SPI`, read once. This device is written from the step loop, so
-    /// an `std::env::var_os` here is a per-access syscall.
+    /// an environment lookup here is a per-access syscall.
     dbg: bool,
 }
 
 impl Spi0 {
     pub fn new() -> Spi0 {
         Spi0 {
-            dbg: std::env::var_os("RVF_DBG_SPI").is_some(),
+            dbg: crate::diag::flag("RVF_DBG_SPI"),
             ..Spi0::default()
         }
     }
@@ -137,7 +139,7 @@ impl Spi0 {
                 MISO_IDLE
             }
             (4, 0x03) if self.dbg => {
-                eprintln!("[spi0] READ {:#08x}", self.addr);
+                diag_eprintln!("[spi0] READ {:#08x}", self.addr);
                 self.read_flash_byte()
             }
             (_, 0x03) => self.read_flash_byte(),
@@ -237,7 +239,7 @@ impl MmioDevice for Spi0 {
                 }
                 if !was_ta && value & CS_TA != 0 {
                     if self.dbg {
-                        eprintln!("[spi0] TA begin: CS={value:#x} (cs-select={})", value & 3);
+                        diag_eprintln!("[spi0] TA begin: CS={value:#x} (cs-select={})", value & 3);
                     }
                     self.begin();
                 }

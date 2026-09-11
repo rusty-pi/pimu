@@ -13,6 +13,8 @@
 //! modelled, and only `v<w>bitplanes … SETF` writes it — the one producer the
 //! executed encodings have.
 
+use alloc::boxed::Box;
+
 /// Bytes per VRF row, and rows in the file.
 pub const DIM: usize = 64;
 
