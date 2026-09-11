@@ -330,10 +330,8 @@ impl MmioDevice for Vce {
                     self.endcode = 0;
                 }
             }
-            RUN => {
-                if value & 1 != 0 {
-                    self.launch();
-                }
+            RUN if value & 1 != 0 => {
+                self.launch();
             }
             _ => {}
         }

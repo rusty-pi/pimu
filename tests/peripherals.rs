@@ -264,7 +264,10 @@ fn pmic_setpoints_decode_to_the_real_boards_voltages() {
 
     // 0x1B rails 2..4 (`0x3EC8C710`): raw * 5_000 + 900_000 µV.
     let sdram = pmic_read(&mut m, 0x1B, 0x09) as u32 * 5_000 + 900_000;
-    assert_eq!(sdram, 1_100_000, "vcgencmd measure_volts sdram_c on rpi-dev");
+    assert_eq!(
+        sdram, 1_100_000,
+        "vcgencmd measure_volts sdram_c on rpi-dev"
+    );
 
     // 0x1E rail 1 (`0x3EC8C9F6`): raw * 10_000 µV, within the descriptor's
     // 0.3 V..1.9 V range.
@@ -380,7 +383,7 @@ fn vce_launch_completes_and_raises_its_interrupt() {
 
     // Idle: no interrupt pending, and the two bits `vce_obtain_semaphore` in
     // start4db asserts are clear must read clear.
-    assert_eq!(m.load32(ctrl + 0x00).unwrap(), 0);
+    assert_eq!(m.load32(ctrl).unwrap(), 0);
     assert!(!m.vce.irq_asserted());
 
     // A launch the way `vce_run_start` does it for the codec licence check:
@@ -390,14 +393,18 @@ fn vce_launch_completes_and_raises_its_interrupt() {
     m.store32(ctrl + 0x24, 0xFF).unwrap(); // INTCLR
     m.store32(ctrl + 0x20, 1).unwrap(); // RUN
 
-    let status = m.load32(ctrl + 0x00).unwrap();
+    let status = m.load32(ctrl).unwrap();
     assert_eq!(
         status >> 16 & 0x1F,
         0,
         "vce_run_complete requires the endcode it asked for"
     );
     assert_ne!(status & (1 << 31), 0, "completion must flag an interrupt");
-    assert_eq!(m.load32(ctrl + 0x30).unwrap(), 0, "BAD_ADDR must stay clear");
+    assert_eq!(
+        m.load32(ctrl + 0x30).unwrap(),
+        0,
+        "BAD_ADDR must stay clear"
+    );
     assert_eq!(m.load32(ctrl + 0x08).unwrap(), 0x1234, "PC0 reads back");
     assert!(
         m.vce.irq_asserted(),
@@ -407,10 +414,10 @@ fn vce_launch_completes_and_raises_its_interrupt() {
 
     // `vce_clear_interrupt` writes bit 31 and then asserts it reads back clear.
     m.store32(ctrl + 0x24, 0x8000_0000).unwrap();
-    assert_eq!(m.load32(ctrl + 0x00).unwrap() & (1 << 31), 0);
+    assert_eq!(m.load32(ctrl).unwrap() & (1 << 31), 0);
     assert!(!m.vce.irq_asserted());
     // The endcode survives the ack: `vce_run_complete` reads it afterwards.
-    assert_eq!(m.load32(ctrl + 0x00).unwrap() >> 16 & 0x1F, 0);
+    assert_eq!(m.load32(ctrl).unwrap() >> 16 & 0x1F, 0);
 }
 
 /// A launch that asks for a non-zero endcode has to get that endcode back, or
@@ -426,13 +433,13 @@ fn vce_reports_the_endcode_the_launch_armed() {
     m.store32(ctrl + 0x24, 0xFF).unwrap();
     m.store32(ctrl + 0x28, (1 << 3) | 0x20).unwrap();
     m.store32(ctrl + 0x20, 1).unwrap();
-    assert_eq!(m.load32(ctrl + 0x00).unwrap() >> 16 & 0x1F, 3);
+    assert_eq!(m.load32(ctrl).unwrap() >> 16 & 0x1F, 3);
 
     // The next launch does not re-arm the mask, so it means endcode 0 again —
     // a stale mask must not leak into it.
     m.store32(ctrl + 0x24, 0xFF).unwrap();
     m.store32(ctrl + 0x20, 1).unwrap();
-    assert_eq!(m.load32(ctrl + 0x00).unwrap() >> 16 & 0x1F, 0);
+    assert_eq!(m.load32(ctrl).unwrap() >> 16 & 0x1F, 0);
 }
 
 /// The codec licence check reads its answer out of VCE register 2. The compute
@@ -474,7 +481,7 @@ fn vce_program_and_data_memory_are_writable() {
         "data memory must take byte stores"
     );
     // Separate windows, not aliases of each other.
-    assert_eq!(m.load32(map::VCE_BASE + 0x0000).unwrap(), 0);
+    assert_eq!(m.load32(map::VCE_BASE).unwrap(), 0);
 }
 
 /// The ASB bridge handshake at `0x7E00_A000`. start4's power-domain switch
@@ -602,18 +609,18 @@ fn xhci_capability_registers_arrive_by_forty_bit_dma() {
     let cb = 0x2_0000u32;
     let dst = 0x3_0000u32;
     for (off, w) in [
-        (0x00, 0),          // TI
-        (0x04, 0x0200_0004),// SRC low
-        (0x08, 0x0000_1006),// SRC info: INC | address bits [39:32] = 6
-        (0x0C, dst),        // DEST low
-        (0x10, 0x0000_1000),// DEST info: INC, high bits 0
-        (0x14, 4),          // LEN
-        (0x18, 0),          // NEXT
+        (0x00, 0),           // TI
+        (0x04, 0x0200_0004), // SRC low
+        (0x08, 0x0000_1006), // SRC info: INC | address bits [39:32] = 6
+        (0x0C, dst),         // DEST low
+        (0x10, 0x0000_1000), // DEST info: INC, high bits 0
+        (0x14, 4),           // LEN
+        (0x18, 0),           // NEXT
     ] {
         m.store32(cb + off, w).unwrap();
     }
     m.store32(map::DMA4_BASE + 0x04, cb >> 5).unwrap();
-    m.store32(map::DMA4_BASE + 0x00, 1).unwrap(); // ACTIVE
+    m.store32(map::DMA4_BASE, 1).unwrap(); // ACTIVE
 
     assert_eq!(
         m.load32(dst).unwrap(),
@@ -752,8 +759,12 @@ fn avs_core_channel_follows_the_pmic_setpoint() {
 fn avs_disable_mask_gates_the_other_channels() {
     let mut m = machine();
     // Select channel 3 the way `FUN_0ed6040e` does.
-    m.store32(map::AVS_BASE + 0x03C, !(1u32 << 3) & 0x7F).unwrap();
-    assert_eq!(m.load32(map::AVS_BASE + 0x200 + 3 * 4).unwrap() & 0x3FF, 692);
+    m.store32(map::AVS_BASE + 0x03C, !(1u32 << 3) & 0x7F)
+        .unwrap();
+    assert_eq!(
+        m.load32(map::AVS_BASE + 0x200 + 3 * 4).unwrap() & 0x3FF,
+        692
+    );
     for ch in [0, 1, 2, 4, 5] {
         assert_eq!(
             m.load32(map::AVS_BASE + 0x200 + ch * 4).unwrap(),

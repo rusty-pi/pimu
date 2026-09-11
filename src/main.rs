@@ -152,8 +152,9 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
             "--smp" => smp = true,
             "--as-core1" => as_core1 = true,
             "--core1-entry" => {
-                core1_entry =
-                    Some(parse_u32(it.next().context("--core1-entry needs a value")?)?)
+                core1_entry = Some(parse_u32(
+                    it.next().context("--core1-entry needs a value")?,
+                )?)
             }
             "--trace-from" => {
                 trace = true;
@@ -174,7 +175,9 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
             }
             "--disasm" => {
                 let spec = it.next().context("--disasm needs <hexaddr>:<count>")?;
-                let (a, n) = spec.split_once(':').context("--disasm: expected addr:count")?;
+                let (a, n) = spec
+                    .split_once(':')
+                    .context("--disasm: expected addr:count")?;
                 disasms.push((parse_u32(a)?, parse_u32(n)?));
             }
             "--print-fdt" => print_fdt = true,
@@ -203,8 +206,8 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     // socket map.
     let usb_img = match &usb_image {
         Some(p) => {
-            let img = std::fs::read(p)
-                .with_context(|| format!("reading USB image {}", p.display()))?;
+            let img =
+                std::fs::read(p).with_context(|| format!("reading USB image {}", p.display()))?;
             println!("usb image  {} ({} blocks)", p.display(), img.len() / 512);
             Some(img)
         }
@@ -215,7 +218,11 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         Some(sd_path) => {
             let img = std::fs::read(sd_path)
                 .with_context(|| format!("reading SD image {}", sd_path.display()))?;
-            println!("sd image   {} ({} blocks)", sd_path.display(), img.len() / 512);
+            println!(
+                "sd image   {} ({} blocks)",
+                sd_path.display(),
+                img.len() / 512
+            );
             Some(img)
         }
         None => None,
@@ -470,7 +477,12 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
             if i % 32 == 0 {
                 print!("\n  {:#010x} ", a + i);
             }
-            print!("{:02x}", emu.machine.load(a + i, rpi_virt_fw::bus::Width::Byte).unwrap_or(0) as u8);
+            print!(
+                "{:02x}",
+                emu.machine
+                    .load(a + i, rpi_virt_fw::bus::Width::Byte)
+                    .unwrap_or(0) as u8
+            );
         }
         println!();
     }
@@ -502,7 +514,13 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
             .map(|&v| {
                 v.to_le_bytes()
                     .iter()
-                    .map(|&c| if (0x20..0x7f).contains(&c) { c as char } else { '.' })
+                    .map(|&c| {
+                        if (0x20..0x7f).contains(&c) {
+                            c as char
+                        } else {
+                            '.'
+                        }
+                    })
                     .collect()
             })
             .collect();
@@ -522,7 +540,10 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
 
     if let Some(c1) = &emu.cpu1 {
         if !c1.trace_log.is_empty() {
-            println!("\n--- core 1 instruction trace ({} lines) ---", c1.trace_log.len());
+            println!(
+                "\n--- core 1 instruction trace ({} lines) ---",
+                c1.trace_log.len()
+            );
             for l in &c1.trace_log {
                 println!("{l}");
             }
@@ -689,7 +710,9 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
                         println!("  wrote {} ({} bytes)", out.display(), fdt.bytes().len());
                     }
                 }
-                Err(e) => println!("\n--- device tree handed to the ARM ---\n  at {addr:#010x}: {e}"),
+                Err(e) => {
+                    println!("\n--- device tree handed to the ARM ---\n  at {addr:#010x}: {e}")
+                }
             },
             None => {
                 if dump_fdt.is_some() {
@@ -843,9 +866,13 @@ fn cmd_disasm(args: &[String]) -> Result<ExitCode> {
     // ELF: locate the segment containing `vaddr` (or the entry) and disassemble
     // from there. Flat binary: disassemble from file offset 0 at `--base`.
     let (bytes, mut pc): (Vec<u8>, u32) = if eeprom {
-        use rpi_virt_fw::firmware::eeprom::{EepromImage, BOOTCODE_ENTRY_OFFSET, BOOTCODE_LOAD_ADDR};
+        use rpi_virt_fw::firmware::eeprom::{
+            EepromImage, BOOTCODE_ENTRY_OFFSET, BOOTCODE_LOAD_ADDR,
+        };
         let img = EepromImage::parse(&raw)?;
-        let bc = img.bootcode().context("EEPROM image has no bootcode section")?;
+        let bc = img
+            .bootcode()
+            .context("EEPROM image has no bootcode section")?;
         let target = vaddr.unwrap_or(BOOTCODE_LOAD_ADDR + BOOTCODE_ENTRY_OFFSET);
         let skip = (target - BOOTCODE_LOAD_ADDR) as usize;
         (bc.body[skip..].to_vec(), target)
@@ -926,8 +953,7 @@ fn locate_fdt(machine: &mut Machine, console: &[u8]) -> Option<(u32, Vec<u8>)> {
     // logged length so `Fdt::parse` can report what is actually there.
     let len = if u32::from_be_bytes([head[0], head[1], head[2], head[3]])
         == rpi_virt_fw::fdt::FDT_MAGIC
-        && totalsize >= 40
-        && totalsize <= 8 << 20
+        && (40..=8 << 20).contains(&totalsize)
     {
         totalsize
     } else {

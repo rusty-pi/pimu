@@ -110,7 +110,11 @@ impl Rng {
 
     /// Words currently waiting, as `RNG_STATUS[31:24]` reports them.
     fn available(&self) -> u32 {
-        if self.enabled() { FIFO_WORDS } else { 0 }
+        if self.enabled() {
+            FIFO_WORDS
+        } else {
+            0
+        }
     }
 
     fn next_word(&mut self) -> u32 {

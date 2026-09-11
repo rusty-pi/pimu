@@ -5,8 +5,8 @@
 //! device needs from another is routed by [`Machine`](crate::machine::Machine).
 
 pub mod asb;
-pub mod avs;
 pub mod aux;
+pub mod avs;
 pub mod bootbox;
 pub mod bsc;
 pub mod clkmon;
@@ -38,8 +38,8 @@ pub mod vl805;
 pub mod xhci;
 
 pub use asb::Asb;
-pub use avs::Avs;
 pub use aux::Aux;
+pub use avs::Avs;
 pub use bootbox::BootBox;
 pub use bsc::Bsc;
 pub use clkmon::ClkMon;

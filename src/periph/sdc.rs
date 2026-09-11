@@ -198,8 +198,12 @@ mod tests {
     #[test]
     fn a_mode_register_write_is_read_back() {
         let mut sdc = Sdc::new();
-        sdc.write(MR_PORT, Width::Word, MR_WRITE | (0x5A << MR_WDATA_SHIFT) | 13)
-            .unwrap();
+        sdc.write(
+            MR_PORT,
+            Width::Word,
+            MR_WRITE | (0x5A << MR_WDATA_SHIFT) | 13,
+        )
+        .unwrap();
         sdc.write(MR_PORT, Width::Word, 13).unwrap();
         assert_eq!((port(&mut sdc) & MR_RDATA) >> MR_RDATA_SHIFT, 0x5A);
         // ... and only for the channel/device it was written to.
@@ -220,7 +224,9 @@ mod tests {
     fn plain_status_slots_still_read_ready() {
         let mut sdc = Sdc::new();
         assert_eq!(
-            sdc.read(STATUS_STRIDE * 2 + STATUS_SLOT, Width::Word).unwrap() & STATUS_READY,
+            sdc.read(STATUS_STRIDE * 2 + STATUS_SLOT, Width::Word)
+                .unwrap()
+                & STATUS_READY,
             STATUS_READY
         );
         // Timing words are plain storage.

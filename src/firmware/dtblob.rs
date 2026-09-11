@@ -156,7 +156,7 @@ mod tests {
             v.to_be_bytes()
         }
         let mut strings = Vec::new();
-        let mut soff = |strings: &mut Vec<u8>, s: &str| -> u32 {
+        let soff = |strings: &mut Vec<u8>, s: &str| -> u32 {
             let o = strings.len() as u32;
             strings.extend_from_slice(s.as_bytes());
             strings.push(0);
@@ -166,11 +166,11 @@ mod tests {
         let s_type = soff(&mut strings, "type");
 
         let mut st = Vec::new();
-        let mut node = |st: &mut Vec<u8>, name: &str| {
+        let node = |st: &mut Vec<u8>, name: &str| {
             st.extend_from_slice(&be(FDT_BEGIN_NODE));
             st.extend_from_slice(name.as_bytes());
             st.push(0);
-            while st.len() % 4 != 0 {
+            while !st.len().is_multiple_of(4) {
                 st.push(0);
             }
         };
@@ -188,7 +188,7 @@ mod tests {
             st.extend_from_slice(&be(b.len() as u32));
             st.extend_from_slice(&be(noff));
             st.extend_from_slice(&b);
-            while st.len() % 4 != 0 {
+            while !st.len().is_multiple_of(4) {
                 st.push(0);
             }
         };

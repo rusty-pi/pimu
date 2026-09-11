@@ -238,8 +238,11 @@ impl Emulator {
         // memcpy advances the stores; a DRAM memtest read-back advances the
         // loads. A poll loop our stubs never satisfy touches none of them
         // (MMIO loads are not counted), so it still trips.
-        let progress_count =
-            |m: &Machine| m.ram_writes.wrapping_add(m.mmio_writes).wrapping_add(m.ram_reads);
+        let progress_count = |m: &Machine| {
+            m.ram_writes
+                .wrapping_add(m.mmio_writes)
+                .wrapping_add(m.ram_reads)
+        };
         let mut progress_at_window = progress_count(&self.machine);
         let mut clo_reads_at_window = self.machine.systimer.clo_reads;
         // Fast path: the exact same taken transfer repeating is a tight spin —
@@ -337,8 +340,7 @@ impl Emulator {
                     .collect()
             })
             .unwrap_or_default();
-        let mut trap_hits: std::collections::HashMap<u32, u64> =
-            std::collections::HashMap::new();
+        let mut trap_hits: std::collections::HashMap<u32, u64> = std::collections::HashMap::new();
         // `RVF_TRAP_MAX=<n>`: how many hits of each trap address to print
         // (default 12). The totals are always reported at exit.
         let trap_max: u64 = std::env::var("RVF_TRAP_MAX")
@@ -406,9 +408,7 @@ impl Emulator {
             }
             if prof_thread {
                 let cur = self.machine.load(0x3EE3_5900, Width::Word).unwrap_or(0);
-                *prof_thist
-                    .entry((cur, pc_before & !0xFF))
-                    .or_insert(0) += 1;
+                *prof_thist.entry((cur, pc_before & !0xFF)).or_insert(0) += 1;
             }
             if prof {
                 *prof_hist.entry(pc_before & !0xFF).or_insert(0) += 1;
@@ -421,10 +421,16 @@ impl Emulator {
                 && matches!(pc_before, 0x3EC4_02D2 | 0x3EC4_0516)
                 && self.cpu.retired > 90_000_000
             {
-                let kind = if pc_before == 0x3EC4_02D2 { "resume" } else { "suspend" };
+                let kind = if pc_before == 0x3EC4_02D2 {
+                    "resume"
+                } else {
+                    "suspend"
+                };
                 eprintln!(
                     "[{kind}] thread={:#x} lr={:#x} @retired={}",
-                    self.cpu.regs.get(0), self.cpu.regs.get(26), self.cpu.retired
+                    self.cpu.regs.get(0),
+                    self.cpu.regs.get(26),
+                    self.cpu.retired
                 );
             }
             if dbg_evset
@@ -439,7 +445,9 @@ impl Emulator {
                 let cf = &self.cpu.cf_trace;
                 eprintln!(
                     "[evset] flags={:#x} lr={:#x} @retired={} cf-tail:",
-                    self.cpu.regs.get(1), self.cpu.regs.get(26), self.cpu.retired
+                    self.cpu.regs.get(1),
+                    self.cpu.regs.get(26),
+                    self.cpu.retired
                 );
                 for &(from, to) in cf.iter().skip(cf.len().saturating_sub(24)) {
                     eprintln!("[evset]   {from:#010x} -> {to:#010x}");
@@ -483,7 +491,10 @@ impl Emulator {
                 let src = self.cpu.regs.get(1);
                 let len = self.cpu.regs.get(2);
                 for i in 0..len {
-                    let b = self.machine.load(src.wrapping_add(i), Width::Byte).unwrap_or(0);
+                    let b = self
+                        .machine
+                        .load(src.wrapping_add(i), Width::Byte)
+                        .unwrap_or(0);
                     let _ = self.machine.store(dst.wrapping_add(i), Width::Byte, b);
                 }
                 self.cpu.regs.pc = self.cpu.regs.get(26);
@@ -640,9 +651,7 @@ impl Emulator {
                 // node's internal pointers by (new_base - old_base). Trace
                 // the base and node 0's `type` word across all three so it
                 // is obvious where the contents are lost.
-                if matches!(pc_before, 0x3ED5_A420 | 0x3ED5_A494 | 0x3ED1_FB7C)
-                    && cz_pool_n < 30
-                {
+                if matches!(pc_before, 0x3ED5_A420 | 0x3ED5_A494 | 0x3ED1_FB7C) && cz_pool_n < 30 {
                     cz_pool_n += 1;
                     let (tag, st) = match pc_before {
                         0x3ED5_A420 => ("lock  ", self.cpu.regs.get(0)),
@@ -698,7 +707,11 @@ impl Emulator {
                     let st = self.cpu.regs.get(0);
                     eprintln!(
                         "[cz] {} desc={d:#x} name={nm:?} pool={:#x} cap={} free={} [{}]",
-                        if pc_before == 0x3ED5_A122 { "build" } else { "b38  " },
+                        if pc_before == 0x3ED5_A122 {
+                            "build"
+                        } else {
+                            "b38  "
+                        },
                         self.machine.load(st + 4, Width::Word).unwrap_or(0),
                         self.machine.load(st + 20, Width::Word).unwrap_or(0),
                         self.machine.load(st + 16, Width::Word).unwrap_or(0),
@@ -782,10 +795,7 @@ impl Emulator {
                     }
                 }
             }
-            if !traps.is_empty()
-                && self.cpu.retired >= trap_from
-                && traps.contains(&pc_before)
-            {
+            if !traps.is_empty() && self.cpu.retired >= trap_from && traps.contains(&pc_before) {
                 let n = trap_hits.entry(pc_before).or_insert(0);
                 *n += 1;
                 if *n <= trap_max {
@@ -925,7 +935,7 @@ impl Emulator {
                 && (self.cpu.in_exception != 0 || !self.cpu.irq_enabled())
             {
                 tick_skips += 1;
-                if tick_skips <= 20 || tick_skips % 100_000 == 0 {
+                if tick_skips <= 20 || tick_skips.is_multiple_of(100_000) {
                     eprintln!(
                         "[tick-skip #{tick_skips}] in_exc={} irq_en={} pc={:#x} retired={}",
                         self.cpu.in_exception,
@@ -945,7 +955,7 @@ impl Emulator {
                     self.machine.systimer.take_tick_pending();
                     if dbg_tick {
                         tick_deliveries += 1;
-                        if tick_deliveries <= 30 || tick_deliveries % 500 == 0 {
+                        if tick_deliveries <= 30 || tick_deliveries.is_multiple_of(500) {
                             let vb = self.cpu.exc_vbase;
                             let h = self.machine.load(vb.wrapping_add(slot * 4), Width::Word);
                             eprintln!(
@@ -1013,8 +1023,9 @@ impl Emulator {
                 }
                 if !c1.is_stopped() {
                     if let crate::vpu::Step::Stopped = c1.step(&mut self.machine) {
-                        core1_end =
-                            Some(RunEnd::Core1Halted(c1.stopped.clone().expect("stop reason")));
+                        core1_end = Some(RunEnd::Core1Halted(
+                            c1.stopped.clone().expect("stop reason"),
+                        ));
                     }
                 }
             }
@@ -1031,7 +1042,11 @@ impl Emulator {
                 // trip on a legitimate long delay that `sleep` fast-forwards
                 // through in a handful of instructions, and instructions alone
                 // would trip on a busy stretch that simply has nothing to say.
-                let silent_us = self.machine.systimer.now_us().saturating_sub(last_output_us);
+                let silent_us = self
+                    .machine
+                    .systimer
+                    .now_us()
+                    .saturating_sub(last_output_us);
                 let silent_retired = self.cpu.retired.saturating_sub(last_output_retired);
                 if silent_us >= limits.silent_us && silent_retired >= 20_000_000 {
                     break RunEnd::Stuck {
@@ -1136,8 +1151,11 @@ impl Emulator {
                 w_output |= had_output;
                 w_steps += 1;
                 if w_steps >= win {
-                    let clo_delta =
-                        self.machine.systimer.clo_reads.wrapping_sub(clo_reads_at_window);
+                    let clo_delta = self
+                        .machine
+                        .systimer
+                        .clo_reads
+                        .wrapping_sub(clo_reads_at_window);
                     let stalled = progress_count(&self.machine) == progress_at_window
                         && self.machine.systimer.clo_reads == clo_reads_at_window;
                     if !w_output && stalled && w_hi.wrapping_sub(w_lo) <= 4096 {
@@ -1270,7 +1288,12 @@ impl Emulator {
                 // print them as a rough backtrace. `resume` alone is always the
                 // return out of `_tx_thread_system_suspend`, which says nothing
                 // about *what* the thread is waiting for.
-                let frame = 4 * (if disc == 1 { 1 + 8 + 16 + 1 + 1 + 1 } else { 1 + 8 + 10 + 1 });
+                let frame = 4
+                    * (if disc == 1 {
+                        1 + 8 + 16 + 1 + 1 + 1
+                    } else {
+                        1 + 8 + 10 + 1
+                    });
                 let mut shown = 0;
                 for i in 0..192u32 {
                     let a = sp.wrapping_add(frame + 4 * i);
@@ -1288,11 +1311,14 @@ impl Emulator {
 
         if prof {
             let mut v: Vec<_> = prof_hist.iter().map(|(&k, &n)| (k, n)).collect();
-            v.sort_by(|a, b| b.1.cmp(&a.1));
+            v.sort_by_key(|a| std::cmp::Reverse(a.1));
             let total: u64 = v.iter().map(|(_, n)| n).sum();
             eprintln!("--- RVF_PROF: core-0 PC buckets (total {total}) ---");
             for (pc, n) in v.iter().take(25) {
-                eprintln!("  {pc:#010x}  {n:>14}  {:5.1}%", 100.0 * *n as f64 / total as f64);
+                eprintln!(
+                    "  {pc:#010x}  {n:>14}  {:5.1}%",
+                    100.0 * *n as f64 / total as f64
+                );
             }
         }
         if prof_thread {
@@ -1303,7 +1329,7 @@ impl Emulator {
                 *by_thread.entry(t).or_insert(0) += n;
             }
             let mut threads: Vec<_> = by_thread.into_iter().collect();
-            threads.sort_by(|a, b| b.1.cmp(&a.1));
+            threads.sort_by_key(|a| std::cmp::Reverse(a.1));
             eprintln!("--- RVF_PROF_THREAD: core-0 time by ThreadX thread (total {total}) ---");
             for (t, n) in threads.iter().take(8) {
                 eprintln!(
@@ -1315,7 +1341,7 @@ impl Emulator {
                     .filter(|((tt, _), _)| tt == t)
                     .map(|((_, pc), &c)| (*pc, c))
                     .collect();
-                buckets.sort_by(|a, b| b.1.cmp(&a.1));
+                buckets.sort_by_key(|a| std::cmp::Reverse(a.1));
                 for (pc, c) in buckets.iter().take(6) {
                     eprintln!(
                         "      {pc:#010x}  {c:>14}  {:5.1}%",

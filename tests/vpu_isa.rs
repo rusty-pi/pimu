@@ -313,6 +313,9 @@ fn vector_discarded_load_touches_no_register() {
     step(&mut v, &mut m);
 
     assert_eq!(v.regs.pc, CODE + 6, "48-bit vector instruction");
+    // `r` is a register *number*, not just an index — it is what the failure
+    // message names, so enumerate() would make this worse.
+    #[allow(clippy::needless_range_loop)]
     for r in 0..32 {
         assert_eq!(v.regs.get(r), before[r], "r{r} must be untouched");
     }

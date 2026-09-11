@@ -248,8 +248,8 @@ fn decode16(p0: u16, pc: u32) -> Op {
         0x0000 => return Op::Bkpt,
         0x0001 => return Op::Nop,
         0x0002 => return Op::Sleep,
-        0x0004 => return Op::SetIrqEnable(true), // ei
-        0x0005 => return Op::SetIrqEnable(false), // di
+        0x0004 => return Op::SetIrqEnable(true),    // ei
+        0x0005 => return Op::SetIrqEnable(false),   // di
         0x0003 | 0x0006..=0x0009 => return Op::Nop, // user / cbclr / cbadd{1,2,3}
         0x000A => return Op::Rti,
         _ => {}

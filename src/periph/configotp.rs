@@ -196,7 +196,11 @@ impl ConfigOtp {
                 self.key,
                 self.key,
                 self.data,
-                if self.table.contains_key(&self.key) { "" } else { "  (UNMODELLED)" }
+                if self.table.contains_key(&self.key) {
+                    ""
+                } else {
+                    "  (UNMODELLED)"
+                }
             );
         }
         self.done = true;

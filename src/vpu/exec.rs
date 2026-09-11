@@ -288,8 +288,7 @@ impl Vpu {
             }
             let resume = self.regs.pc;
             let sp = self.regs.get(SP).wrapping_sub(8);
-            if bus.store32(sp, self.sr()).is_ok()
-                && bus.store32(sp.wrapping_add(4), resume).is_ok()
+            if bus.store32(sp, self.sr()).is_ok() && bus.store32(sp.wrapping_add(4), resume).is_ok()
             {
                 self.regs.set(SP, sp);
                 self.in_exception = self.in_exception.wrapping_add(1);
@@ -358,12 +357,12 @@ impl Vpu {
         if !self.trace_armed && (self.trace_from == 0 || pc == self.trace_from) {
             self.trace_armed = true;
         }
-        let trace_before = if self.trace && self.trace_armed && self.trace_log.len() < self.trace_cap
-        {
-            Some(self.regs.clone())
-        } else {
-            None
-        };
+        let trace_before =
+            if self.trace && self.trace_armed && self.trace_log.len() < self.trace_cap {
+                Some(self.regs.clone())
+            } else {
+                None
+            };
 
         if !matches!(insn.op, Op::Bkpt) {
             self.bkpt_run = 0;
@@ -431,7 +430,7 @@ impl Vpu {
                         let took = slot.is_some() && bus.take_tick_pending();
                         if self.dbg_sleep {
                             self.sleep_dbg += 1;
-                            if self.sleep_dbg <= 20 || self.sleep_dbg % 20000 == 0 {
+                            if self.sleep_dbg <= 20 || self.sleep_dbg.is_multiple_of(20000) {
                                 eprintln!(
                                     "[sleep] #{} pc={:#x} slot={slot:?} took={took} retired={}",
                                     self.sleep_dbg, self.regs.pc, self.retired
@@ -751,7 +750,10 @@ impl Vpu {
                                 && matches!(addr.base, super::insn::Base::R0)
                             {
                                 if self.dbg_tick {
-                                    eprintln!("[ctx-switch] pc={pc:#x} clear in_exc (was {}) sp<-{v:#x}", self.in_exception);
+                                    eprintln!(
+                                        "[ctx-switch] pc={pc:#x} clear in_exc (was {}) sp<-{v:#x}",
+                                        self.in_exception
+                                    );
                                 }
                                 self.in_exception = 0;
                             }
@@ -1029,15 +1031,13 @@ impl Vpu {
                 // out of start4's code range (a derail — bad computed branch,
                 // corrupt return address). `RVF_DBG_DERAIL=1`.
                 let in_code = |a: u32| (0x3E00_0000..0x3F00_0000).contains(&a);
-                if in_code(pc) && !in_code(self.regs.pc) && self.core_id == 0 {
-                    if self.dbg_derail {
-                        eprintln!(
-                            "[derail] {pc:#x} ({:?}) -> {:#x}  regs r0-9: {:08x?}",
-                            insn.op,
-                            self.regs.pc,
-                            &(0..10).map(|i| self.regs.get(i)).collect::<Vec<_>>(),
-                        );
-                    }
+                if in_code(pc) && !in_code(self.regs.pc) && self.core_id == 0 && self.dbg_derail {
+                    eprintln!(
+                        "[derail] {pc:#x} ({:?}) -> {:#x}  regs r0-9: {:08x?}",
+                        insn.op,
+                        self.regs.pc,
+                        (0..10).map(|i| self.regs.get(i)).collect::<Vec<_>>(),
+                    );
                 }
                 // A taken control transfer. Keep a bounded ring for tracing;
                 // collapse an immediately-repeating transfer (tight loop /
@@ -1324,6 +1324,10 @@ pub fn alu(op: AluOp, a: u32, b: u32, cin: bool) -> Option<(u32, Flags)> {
                 ((a as i64) / (b as i32 as i64)) as u32
             }
         }
+        // Not `checked_div`: this mirrors `DivUS` above, which cannot use it
+        // (the divisor goes through a signed cast), and the pair reads as one
+        // rule — the VPU yields 0 rather than trapping on a zero divisor.
+        #[allow(clippy::manual_checked_ops)]
         DivU => {
             if b == 0 {
                 0
