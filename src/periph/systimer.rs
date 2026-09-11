@@ -55,6 +55,9 @@ pub struct SysTimer {
     ///
     /// Independent of `cs` — the tick ISR acks `CS` itself.
     pending: [bool; 4],
+    /// Whether any of [`Self::pending`] is set, kept in step with it so the
+    /// per-instruction poll is a bool read rather than a four-way scan.
+    pending_any: bool,
     /// `RVF_DBG_CMP=1`: log every compare-register arm.
     dbg_cmp: bool,
     arms: u64,
@@ -72,6 +75,7 @@ impl SysTimer {
             interval: [DEFAULT_INTERVAL_US; 4],
             clo_reads: 0,
             pending: [false; 4],
+            pending_any: false,
             dbg_cmp: std::env::var_os("RVF_DBG_CMP").is_some(),
             arms: 0,
         }
@@ -80,9 +84,10 @@ impl SysTimer {
     /// Consume the lowest-numbered channel whose compare has fired, if any.
     /// The caller is expected to vector interrupt source `64 + channel`.
     pub fn take_pending_channel(&mut self) -> Option<u8> {
-        let c = (0..4).find(|&c| self.pending[c])?;
-        self.pending[c] = false;
-        Some(c as u8)
+        let c = self.pending_channel()?;
+        self.pending[c as usize] = false;
+        self.pending_any = self.pending.iter().any(|&p| p);
+        Some(c)
     }
 
     /// Consume the "a compare fired since last checked" flag.
@@ -96,6 +101,12 @@ impl SysTimer {
     /// hardware holds the compare-match line asserted until it is acked),
     /// instead of being silently dropped.
     pub fn pending_channel(&self) -> Option<u8> {
+        // `pending_any` short-circuits the scan. The run loop asks this once
+        // per retired instruction — nearly two billion times a boot — and the
+        // answer is almost always "nothing".
+        if !self.pending_any {
+            return None;
+        }
         (0..4).find(|&c| self.pending[c]).map(|c| c as u8)
     }
 
@@ -106,6 +117,25 @@ impl SysTimer {
 
     pub fn now_us(&self) -> u64 {
         self.micros
+    }
+
+    /// Advance the counter by `cycles` VPU cycles, reporting whether the
+    /// microsecond count moved.
+    ///
+    /// At 54 cycles per microsecond, 53 of every 54 calls cannot change
+    /// anything a compare could match on, and the run loop makes one per
+    /// retired instruction. The caller uses the return value to skip its own
+    /// time-derived work on those calls.
+    pub fn advance(&mut self, cycles: u64) -> bool {
+        let total = self.frac_cycles + cycles;
+        if total < self.cycles_per_us {
+            self.frac_cycles = total;
+            return false;
+        }
+        self.micros += total / self.cycles_per_us;
+        self.frac_cycles = total % self.cycles_per_us;
+        self.service_matches();
+        true
     }
 
     /// Set any compare channels whose deadline the counter has now reached.
@@ -129,6 +159,7 @@ impl SysTimer {
             }
             self.cs |= 1 << c;
             self.pending[c] = true;
+            self.pending_any = true;
             self.deadline[c] = None;
         }
     }
@@ -197,10 +228,7 @@ impl MmioDevice for SysTimer {
     }
 
     fn tick(&mut self, cycles: u64) {
-        let total = self.frac_cycles + cycles;
-        self.micros += total / self.cycles_per_us;
-        self.frac_cycles = total % self.cycles_per_us;
-        self.service_matches();
+        self.advance(cycles);
     }
 
     fn read(&mut self, offset: u32, _width: Width) -> BusResult<u32> {
