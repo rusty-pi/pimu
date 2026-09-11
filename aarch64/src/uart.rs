@@ -96,6 +96,58 @@ impl Uart {
             self.putc(b);
         }
     }
+
+    /// Write the low `digits` nibbles of `v` as `0x`-prefixed hex.
+    ///
+    /// This exists so the fault handler can report without `core::fmt`. A
+    /// handler must not be able to fault, and `core::fmt` dispatches through
+    /// vtable pointers — absolute addresses baked in at link time, which is
+    /// precisely what a mis-loaded image gets wrong (the `0x200000` incident;
+    /// see link.ld). `write!` is fine for the banner, which only runs once the
+    /// placement check has passed; it is not fine for the handler that catches
+    /// the case where the check was not enough.
+    pub fn puthex(&self, v: u64, digits: u32) {
+        self.puts("0x");
+        let mut i = digits;
+        while i > 0 {
+            i -= 1;
+            let nibble = ((v >> (i * 4)) & 0xf) as u8;
+            self.putc(match nibble {
+                0..=9 => b'0' + nibble,
+                _ => b'a' + nibble - 10,
+            });
+        }
+    }
+
+    /// `0x` + 16 hex digits, for a 64-bit register.
+    pub fn puthex64(&self, v: u64) {
+        self.puthex(v, 16);
+    }
+
+    /// `0x` + 8 hex digits, for a 32-bit register such as `ESR_EL2`.
+    pub fn puthex32(&self, v: u32) {
+        self.puthex(v as u64, 8);
+    }
+
+    /// Unsigned decimal, `core::fmt`-free. Only used for small values (register
+    /// numbers, vector indices), so the 20-digit buffer is more than enough.
+    pub fn putdec(&self, v: u64) {
+        let mut buf = [0u8; 20];
+        let mut n = 0;
+        let mut x = v;
+        loop {
+            buf[n] = b'0' + (x % 10) as u8;
+            n += 1;
+            x /= 10;
+            if x == 0 {
+                break;
+            }
+        }
+        while n > 0 {
+            n -= 1;
+            self.putc(buf[n]);
+        }
+    }
 }
 
 impl fmt::Write for Uart {

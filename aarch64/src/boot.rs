@@ -69,6 +69,19 @@ _start:
     and     x1, x1, #0xff
     cbnz    x1, .Lpark
 
+    // Vectors before anything else, including the .bss clear below. With
+    // VBAR_EL2 at its reset value of 0 a fault vectors into QEMU's boot stub at
+    // physical 0x200, which is not a handler, so the machine silently re-takes
+    // the same exception forever — how the 0x200000 load-address bug presented.
+    // Installing here costs three instructions and covers every instruction
+    // after them. See vectors.rs.
+    adrp    x1, __exception_vectors
+    add     x1, x1, :lo12:__exception_vectors
+    msr     vbar_el2, x1
+    isb                             // Arm ARM D17.2.152: the write needs a
+                                    // context-synchronising event to take
+                                    // effect for following instructions
+
     // Stack first: everything after this may call.
     adrp    x1, __stack_top
     add     x1, x1, :lo12:__stack_top

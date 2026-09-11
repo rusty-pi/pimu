@@ -38,6 +38,16 @@ SECTIONS
         *(.text .text.*)
     }
 
+    /* Its own output section, with the alignment VBAR_EL2 requires stated
+     * here rather than left to an inner .balign inside .text: VBAR_EL2 ignores
+     * bits 10:0 (Arm ARM D17.2.152), so a table that is merely "somewhere in
+     * .text" would be silently entered at the wrong address. KEEP because
+     * nothing in Rust references the table's contents — only the entry stub's
+     * adrp does. */
+    .text.vectors : ALIGN(2048) {
+        KEEP(*(.text.vectors))
+    }
+
     .rodata : ALIGN(8) {
         *(.rodata .rodata.*)
     }
@@ -64,6 +74,17 @@ SECTIONS
     . += 0x10000;             /* 64 KiB is plenty for the scaffolding stage */
     __stack_top = .;
 
+    /* A separate stack for the exception handler. The SP that was live when a
+     * fault was taken is one of the things that can *be* the fault (SP
+     * alignment, or a stack that ran off its allocation), so the handler must
+     * not borrow it. Kept out of .bss so a fault during the .bss clear — which
+     * now runs with VBAR_EL2 already installed — still has somewhere to stand.
+     */
+    . = ALIGN(16);
+    __exc_stack_bottom = .;
+    . += 0x4000;              /* 16 KiB: the handler only formats and exits */
+    __exc_stack_top = .;
+
     _end = .;
 
     /DISCARD/ : {
@@ -77,3 +98,9 @@ SECTIONS
 /* Total memory the bootloader must reserve, header included: the `image_size`
  * field of the arm64 Image header (Documentation/arch/arm64/booting.rst). */
 _image_size = _end - _start_addr;
+
+/* VBAR_EL2 ignores the low 11 bits, so a misaligned table is not a link error
+ * but a jump into the middle of somebody else's code on the first fault. Make
+ * it a link error. */
+ASSERT((__exception_vectors & 2047) == 0,
+       "the EL2 vector table must be 2 KiB aligned (VBAR_EL2, Arm ARM D17.2.152)")

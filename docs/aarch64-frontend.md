@@ -6,29 +6,111 @@ whose end goal is to run Linux against the *live* firmware model: the emulator
 stays resident at EL2, installs stage-2 translation, and services the guest's
 mailbox traffic from the same models the hosted `recon` binary drives.
 
-Today the image is scaffolding. It brings up a stack, clears `.bss`, prints a
-banner over the PL011 and parks. **There is no VPU model in it yet** — that is
-stage 3, and it depends on the `no_std` port (stage 1).
+Today the image is scaffolding. It brings up a stack, installs EL2 exception
+vectors, clears `.bss`, prints a banner over the PL011, checks its own exception
+level and exits. **There is no VPU model in it yet** — that is stage 3, and it
+depends on the `no_std` port (stage 1).
 
 ```console
 $ scripts/qemu-kernel.sh
-image: target/aarch64-unknown-none/release/vc4-to-aarch64.img (6449 bytes)
+image: target/aarch64-unknown-none/release/vc4-to-aarch64.img (16336 bytes)
 
 rpi-virt-fw: aarch64 frontend (issue #32 stage 2)
   CurrentEL   EL2
   MPIDR_EL1   0x0000000080000000
   DTB (x0)    0x0000000000000100
-  image       0x00200000 .. 0x00211940 (0x11940 bytes)
-  bss         0x00201940 .. 0x00201940   stack top 0x00211940
+  image       0x00200000 .. 0x002180e0 (0x180e0 bytes)
+  bss         0x00203fd0 .. 0x002040e0   stack top 0x002140e0
   UART0       0xfe201000 (PL011)
+  VBAR_EL2    0x00201800 (16 x 0x80, see aarch64/src/vectors.rs)
 scaffolding only: no VPU model in this image yet
 qemu -kernel check passed
 ```
 
-The script builds, flattens the ELF to a raw image, boots it, and fails unless
-the guest reports `EL2`. It exits 2 — the same convention as
-`scripts/qemu-check.sh` — when this QEMU has no `raspi4b`, so a toolchain gap
-reads as a skip and not as a regression.
+The script builds, flattens the ELF to a raw image, boots it, and asserts on
+QEMU's exit status. It exits 2 — the same convention as `scripts/qemu-check.sh`
+— when this QEMU has no `raspi4b`, so a toolchain gap reads as a skip and not as
+a regression.
+
+## How the image reports a pass
+
+`cargo test`, `scripts/boot-check.sh` and the golden transcript do not run
+inside a bare-metal image; [#32](https://github.com/valtzu/rpi-virt-fw/issues/32)
+calls that the epic's real open risk. The image reports out through **ARM
+semihosting** instead: `SYS_EXIT_EXTENDED` (`HLT #0xF000` with `0x20` in `x0`
+and `ADP_Stopped_ApplicationExit` plus an exit code in the parameter block), so
+QEMU's own process exit status carries the verdict.
+
+| image exit status | meaning |
+| --- | --- |
+| 0 | ran, and every self-check passed |
+| 1 | a self-check failed — not at EL2, or loaded at the wrong address |
+| 3 | an exception was taken; the dump is on the console |
+| 4 | a Rust `panic!` reached the panic handler |
+
+2 is deliberately never used by the image: `scripts/qemu-kernel.sh` reserves it
+for "this QEMU has no `raspi4b`", which CI turns into a warning.
+
+This replaced grepping stdout for `CurrentEL   EL2`. A grep cannot tell
+"reported EL1" from "printed nothing", it does not scale past a banner, and it
+read a hang and a crash as the same thing — the script's `timeout` firing is now
+a failure in its own right, because the image ends by exiting rather than by
+parking.
+
+The mechanism needs `-semihosting-config enable=on,target=native` on the QEMU
+command line, which the script passes. Verified working on `raspi4b` under QEMU
+10.2.1: the exit code propagates unchanged to the host shell. Without the flag,
+`HLT #0xF000` is an unallocated instruction — the handler recognises that it is
+the semihosting call itself that trapped, says so once and parks, rather than
+recursing.
+
+## Exception vectors
+
+`VBAR_EL2` is installed by the entry stub before the `.bss` clear, so every
+instruction after the first three is covered. Left at its reset value of 0, a
+fault vectors into QEMU's boot stub at physical `0x200`, which is not a handler,
+so the machine re-takes the same exception forever and prints nothing at all —
+which is exactly how the `0x200000` load-address bug below presented, visible
+only under `-d int`.
+
+The table is sixteen 0x80-byte slots in its own 2 KiB-aligned output section
+(`VBAR_EL2` ignores bits 10:0, so `link.ld` `ASSERT`s the alignment rather than
+letting a misplaced table become a wrong-address jump on the first fault). Each
+slot records which of the sixteen fired and branches to one common path, so the
+`0x400` group — where stage 4's stage-2 aborts arrive — is a branch in
+`rvf_exception` rather than a rewrite.
+
+A handler must not itself be able to fault, so it has its own stack
+(`__exc_stack_top`, separate from the boot stack, because the faulting `SP` may
+*be* the fault), saves the general registers into a fixed `.bss` frame reached
+with PC-relative `adrp`, and reports using `uart::puts`/`puthex` only — never
+`core::fmt`, which dispatches through absolute vtable pointers and is a
+plausible thing to have faulted in the first place.
+
+`scripts/qemu-kernel.sh --fault` builds with the `fault` feature, which branches
+to an unmapped address on purpose, and requires image status 3:
+
+```console
+$ scripts/qemu-kernel.sh --fault
+...
+fault feature: branching to an unmapped address on purpose
+
+rpi-virt-fw: EXCEPTION: Current EL, SP_ELx: Synchronous
+  ESR_EL2     0x86000000   EC 0x21 = instruction abort without a change of EL
+  ELR_EL2     0x8000000000000000   (the faulting instruction)
+  FAR_EL2     0x8000000000000000   (the faulting address)
+  SPSR_EL2    0x00000000600003c9
+  ISS         0x0000000      address size fault
+  x0  0x0000000000000000   x1  0x0000000000203ea1
+  ...
+  x8  0x8000000000000000   x9  0x000000000000beef
+  ...
+  SP          0x0000000000214150   (at the fault, not the handler's)
+qemu -kernel fault check passed (the vector table caught it)
+```
+
+CI runs both, so the path that only ever executes when something has already
+gone wrong is not discovered to be broken at that moment.
 
 ## Building it by hand
 
@@ -43,8 +125,8 @@ cargo build --manifest-path aarch64/Cargo.toml --target aarch64-unknown-none --r
 cd aarch64 && cargo build --release
 ```
 
-CI builds it in the fast `tests` job of `.github/workflows/boot-log.yml`. It does
-not *run* it: the runners' QEMU has no `raspi4b`.
+CI builds it in the fast `tests` job of `.github/workflows/boot-log.yml`, and
+the `aarch64` job boots it for real — both the normal run and the `--fault` one.
 
 ## Why `raspi4b`
 
@@ -96,10 +178,12 @@ prints a fixed message instead of crashing if they differ. Both values reach
 
 | file | what it is |
 | --- | --- |
-| `aarch64/src/boot.rs` | the 64-byte arm64 Image header and the entry stub (CPU park, stack, `.bss` clear, placement evidence) |
-| `aarch64/src/main.rs` | `rvf_main`, the banner, and the `#[panic_handler]` |
-| `aarch64/src/uart.rs` | PL011 transmit at `0xFE20_1000`, register names shared with `src/periph/uart_pl011.rs` |
-| `aarch64/link.ld` | load address, section order, `.bss` and stack bounds, `_image_size` |
+| `aarch64/src/boot.rs` | the 64-byte arm64 Image header and the entry stub (CPU park, `VBAR_EL2`, stack, `.bss` clear, placement evidence) |
+| `aarch64/src/main.rs` | `rvf_main`, the banner, the self-checks, and the `#[panic_handler]` |
+| `aarch64/src/vectors.rs` | the EL2 vector table and the fault report |
+| `aarch64/src/semihost.rs` | `SYS_EXIT_EXTENDED`, and the exit statuses the script asserts on |
+| `aarch64/src/uart.rs` | PL011 transmit at `0xFE20_1000`, register names shared with `src/periph/uart_pl011.rs`; `puthex`/`putdec` for the `core::fmt`-free fault path |
+| `aarch64/link.ld` | load address, section order, `.bss`, the two stacks, `_image_size` |
 | `aarch64/build.rs` | passes the linker script by absolute path |
 
 ## What stage 3 needs from this
@@ -111,6 +195,13 @@ prints a fixed message instead of crashing if they differ. Both values reach
 * Blobs via `-initrd`. `-pflash` is not available on `raspi4b`; `-initrd` places
   a bundle in RAM and reports its address in the device tree QEMU passes in `x0`
   (`0x100` on this machine). Nothing in the image parses the device tree yet.
-* A decision on the harness. `boot-check`, the golden transcript and `cargo test`
-  do not run inside a bare-metal image; the hosted binary remains the test path
-  unless semihosting is added. #32 flags this as the epic's real open risk.
+* A way to report a pass, which is now here: call `semihost::exit` with
+  `EXIT_OK` when the milestones the model was supposed to reach were reached,
+  and a non-zero status otherwise. `scripts/qemu-kernel.sh` already asserts on
+  it, and CI already fails on it. The hosted binary stays the primary test path
+  — `cargo test` and the golden transcript still live there — but the image is
+  no longer a thing that can only be judged by eye.
+* A fault handler that is already installed. Anything stage 3 puts in the image
+  gets `ESR_EL2`/`ELR_EL2`/`FAR_EL2`/`SPSR_EL2` and the general registers on the
+  console when it goes wrong, and a distinct exit status, instead of a silent
+  spin in QEMU's boot stub.

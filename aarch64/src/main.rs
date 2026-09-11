@@ -18,7 +18,9 @@
 #![no_main]
 
 mod boot;
+mod semihost;
 mod uart;
+mod vectors;
 
 use core::fmt::Write;
 
@@ -73,7 +75,7 @@ pub extern "C" fn rvf_main(dtb: u64, run_base: u64, link_base: u64) -> ! {
     if run_base != link_base {
         con.puts("\nrpi-virt-fw: FATAL: image loaded at the wrong address.\n");
         con.puts("  the bootloader ignored the header's text_offset; see aarch64/link.ld\n");
-        park();
+        semihost::exit(semihost::EXIT_SELF_CHECK);
     }
 
     let _ = writeln!(con, "\nrpi-virt-fw: aarch64 frontend (issue #32 stage 2)");
@@ -102,22 +104,58 @@ pub extern "C" fn rvf_main(dtb: u64, run_base: u64, link_base: u64) -> ! {
         unsafe { sym(&__stack_top) },
     );
     let _ = writeln!(con, "  UART0       {:#010x} (PL011)", uart::UART0_BASE);
+    let _ = writeln!(
+        con,
+        "  VBAR_EL2    {:#010x} (16 x 0x80, see aarch64/src/vectors.rs)",
+        vbar_el2()
+    );
     let _ = writeln!(con, "scaffolding only: no VPU model in this image yet");
 
-    park()
+    // `fault` is how the vector table is proven to work: without a deliberate
+    // fault the handler is code nobody has ever executed. Keep it, so the next
+    // change to it can be checked the same way.
+    if cfg!(feature = "fault") {
+        con.puts("fault feature: branching to an unmapped address on purpose\n");
+        // 0x8000_0000_0000_0000 is outside the PA range the BCM2711 can
+        // address, so the branch is an abort however the access is decoded.
+        // x9 gets a recognisable value first, so the register dump is visibly
+        // the faulting context and not the handler's.
+        // SAFETY: never returns, and is meant not to.
+        unsafe {
+            core::arch::asm!(
+                "movz x9, #0xbeef",
+                "br {}",
+                in(reg) 0x8000_0000_0000_0000u64,
+                options(nostack),
+            )
+        };
+    }
+
+    // The exception level is this stage's load-bearing claim, so the image
+    // checks it rather than the host grepping the banner for it: a host-side
+    // grep cannot tell "printed EL1" from "printed nothing".
+    if current_el() != 2 {
+        con.puts("FAILED: not at EL2; stage-2 translation is unavailable\n");
+        semihost::exit(semihost::EXIT_SELF_CHECK);
+    }
+
+    semihost::exit(semihost::EXIT_OK)
+}
+
+/// The vector table base actually in effect, read back rather than assumed —
+/// `msr vbar_el2` from the entry stub is the sort of thing that silently does
+/// not happen if the image is ever entered at EL1.
+fn vbar_el2() -> u64 {
+    let v: u64;
+    // SAFETY: a system-register read with no side effects.
+    unsafe { core::arch::asm!("mrs {}, vbar_el2", out(reg) v, options(nomem, nostack)) };
+    v
 }
 
 extern "C" {
     /// The image's first byte, i.e. the arm64 Image header. Declared as a
     /// function because that is what the entry stub defines it as.
     fn _start() -> !;
-}
-
-fn park() -> ! {
-    loop {
-        // SAFETY: `wfe` is unprivileged and has no memory effects.
-        unsafe { core::arch::asm!("wfe", options(nomem, nostack)) };
-    }
 }
 
 #[panic_handler]
@@ -127,5 +165,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     // SAFETY: we are terminal; no other user can matter any more.
     let mut con = unsafe { uart::console() };
     let _ = writeln!(con, "\nrpi-virt-fw: PANIC: {info}");
-    park()
+    // Its own status: a panic is the image disagreeing with itself, which is a
+    // different first question from a fault (EXIT_FAULT) or a self-check.
+    semihost::exit(semihost::EXIT_PANIC)
 }

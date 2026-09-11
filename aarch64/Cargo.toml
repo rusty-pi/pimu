@@ -13,6 +13,13 @@ publish = false
 name = "vc4-to-aarch64"
 path = "src/main.rs"
 
+[features]
+# Fault the image on purpose, right after the banner, so the EL2 vector table
+# in src/vectors.rs can be exercised end to end. A handler nobody has ever run
+# is a handler that does not work; `scripts/qemu-kernel.sh --fault` builds with
+# this and asserts the fault exit status.
+fault = []
+
 [dependencies]
 
 # No `[profile.*]` here on purpose: profile sections in a non-root workspace

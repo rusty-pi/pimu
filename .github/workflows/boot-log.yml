@@ -50,6 +50,11 @@ jobs:
             --target aarch64-unknown-none --release -- -D warnings
           cargo build --manifest-path aarch64/Cargo.toml \
             --target aarch64-unknown-none --release
+          # The `fault` feature is only compiled by `qemu-kernel.sh --fault`,
+          # which the QEMU job runs; lint it here so it cannot rot in a job
+          # that might be skipped for want of `raspi4b`.
+          cargo clippy --manifest-path aarch64/Cargo.toml --features fault \
+            --target aarch64-unknown-none --release -- -D warnings
 
   boot:
     runs-on: ubuntu-26.04
@@ -88,10 +93,10 @@ jobs:
             boot.log
             boot.log.console
 
-  # Boot the bare-metal frontend for real (#32 stage 2). The image reports its
-  # own exception level, so the EL2 claim the epic is built on is checked by a
-  # run rather than asserted in a comment. Needs no firmware blobs and no SD
-  # image — it is scaffolding that prints a banner and parks.
+  # Boot the bare-metal frontend for real (#32 stage 2). The image checks its
+  # own exception level and reports the verdict through semihosting, so QEMU's
+  # process exit status is the assertion — no grepping stdout, and a hang no
+  # longer looks like a crash. Needs no firmware blobs and no SD image.
   aarch64:
     runs-on: ubuntu-26.04
     timeout-minutes: 15
@@ -120,6 +125,21 @@ jobs:
           set -e
           if [ "$status" = 2 ]; then
             echo "::warning title=aarch64 frontend not booted::this runner's qemu-system-aarch64 has no raspi4b machine"
+          elif [ "$status" != 0 ]; then
+            exit "$status"
+          fi
+
+      # The fault path is the one that only ever runs when something has
+      # already gone wrong, which is the worst time to discover it is broken.
+      # Fault on purpose and require that the EL2 vector table reports it.
+      - name: Check that the EL2 vector table catches a fault
+        run: |
+          set +e
+          ./scripts/qemu-kernel.sh --fault
+          status=$?
+          set -e
+          if [ "$status" = 2 ]; then
+            echo "::warning title=fault check not run::this runner's qemu-system-aarch64 has no raspi4b machine"
           elif [ "$status" != 0 ]; then
             exit "$status"
           fi
