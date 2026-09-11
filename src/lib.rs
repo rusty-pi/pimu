@@ -18,6 +18,7 @@
 //! ```
 
 pub mod bus;
+pub mod diag;
 pub mod emulator;
 pub mod fdt;
 pub mod firmware;
