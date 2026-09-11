@@ -50,7 +50,10 @@ Only what boot needs. Modelled so far (`src/periph/`):
 
 - **Serial** — PL011 + mini-UART (transmit capture)
 - **System timer** — 1 MHz, with a busy-wait fast-forward
-- **SDRAM controller** + the `0xC000_0000` uncached alias
+- **SDRAM controller** + the `0xC000_0000` uncached alias, including the LPDDR4
+  mode-register port at `0x7E00_109C` — start4 polls MR4 (temperature-controlled
+  refresh) once a second after the ARM handover and rescales the refresh
+  interval from it
 - **Clock manager** + A2W PLL (`0x7E10_1000`) and the `0x7D5D` VPU clock/PLL
   block — status bits forced ready; the analogue PLLs / frequency counters are
   *not* modelled (the current wall, [issue #1])
