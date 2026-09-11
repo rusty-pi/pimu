@@ -28,7 +28,7 @@ pub const START4_ENTRY: u32 = 0xFEC0_0200;
 /// spawns or spawns at the wrong moment, with nothing reporting it. For a
 /// bench whose whole purpose is diffing one firmware version against another
 /// (#5, #25) that is the worst available failure mode.
-const SMP_DISPATCH_GP_OFFSET: u32 = 3672;
+const SMP_DISPATCH_GP_OFFSET: u32 = crate::firmware::addrs::SMP_DISPATCH_GP_OFFSET;
 
 pub struct Emulator {
     pub cpu: Vpu,
@@ -579,7 +579,7 @@ impl Emulator {
             // stay stuck above 0 after the tick ISR preempts into such a thread.
             // Rebalance it here: reaching this point means we are back in thread
             // context.
-            if pc_before == 0x3EC4_003E {
+            if pc_before == crate::firmware::addrs::SOLICITED_RESTORE_PC {
                 self.cpu.in_exception = 0;
             }
 
@@ -874,10 +874,17 @@ impl Emulator {
             // after a few interrupts. Undo one increment each time an `rti`
             // unwinds a faked interrupt.
             if self.cpu.in_exception < exc_depth_before {
-                const IRQ_NEST: u32 = 0x3EE0_3E64; // gp + 4420
-                if let Ok(n) = self.machine.load(IRQ_NEST, Width::Word) {
+                // Resolved against the live `gp`, not pinned: see
+                // `firmware::addrs` for why an absolute here would version-lock
+                // the model (#25).
+                let nest = self
+                    .cpu
+                    .regs
+                    .get(crate::vpu::reg::GP)
+                    .wrapping_add(crate::firmware::addrs::IRQ_NEST_GP_OFFSET);
+                if let Ok(n) = self.machine.load(nest, Width::Word) {
                     if n > 0 && n != 0xFFFF_FFFF {
-                        let _ = self.machine.store(IRQ_NEST, Width::Word, n - 1);
+                        let _ = self.machine.store(nest, Width::Word, n - 1);
                     }
                 }
             }
