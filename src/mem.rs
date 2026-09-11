@@ -28,6 +28,20 @@ impl Ram {
         self.data.is_empty()
     }
 
+    /// The first byte of the backing store, for mapping this RAM into a
+    /// second emulator (the ARM core, `src/arm.rs`) without a copy.
+    ///
+    /// Stable for the life of the `Ram`: `data` is allocated once, in
+    /// [`Ram::new`], and nothing in this type grows, shrinks or replaces it.
+    /// That is the invariant the ARM mapping rests on — Unicorn keeps this
+    /// pointer and writes through it — so a method that reallocates `data`
+    /// must never be added. `Vec::as_mut_ptr` does not materialise a
+    /// reference to the slice, so taking the pointer does not itself alias
+    /// anything.
+    pub fn host_ptr(&mut self) -> *mut u8 {
+        self.data.as_mut_ptr()
+    }
+
     pub fn contains(&self, addr: u32) -> bool {
         let end = self.base as u64 + self.data.len() as u64;
         (addr as u64) >= self.base as u64 && (addr as u64) < end

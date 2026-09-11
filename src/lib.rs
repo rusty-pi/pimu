@@ -18,6 +18,10 @@
 //! ```
 
 pub mod aarch64;
+/// The in-process Unicorn aarch64 core that runs the kernel the firmware
+/// hands over (`docs/arm-unicorn.md`); needs the `arm` cargo feature.
+#[cfg(feature = "arm")]
+pub mod arm;
 pub mod armstub;
 pub mod bus;
 pub mod diag;

@@ -29,6 +29,7 @@ USAGE:
                              [--dump <hex>:<len>] [--disasm <hex>:<count>] [--patch <hex>=<hex>]
                              [--dump-fdt <path>] [--print-fdt] [--console-log <path>]
                              [--mbox-property <tag>[,<tag>...]]
+                             [--arm [--arm-insns <n>] [--arm-wall <secs>]]
     rpi-virt-fw boot-check <scenario.toml> --plan [--console <path>]
     rpi-virt-fw boot-check <scenario.toml> --log <path> --console <path> [--update]
     rpi-virt-fw disasm <file> [--base <hex>] [--count <n>] [--vaddr <hex>]
@@ -67,6 +68,13 @@ FLAGS:
               still-running `start4.elf` answers. Tags are hex, e.g.
               `0x00000001` (GET_FIRMWARE_REVISION) or `0x00030092`
               (GET_CRYPTO_HMAC_SHA256). See docs/diagnostics.md.
+    --arm     After the boot (and any --mbox-property exchange), release an
+              aarch64 core into what `arm_loader` left behind, the way the SoC
+              does: at the armstub at address 0, in EL3, with `earlycon` added
+              to the kernel command line. The VPU keeps running, interleaved.
+              Needs a build with `--features arm` (docs/arm-unicorn.md).
+              --arm-insns caps the ARM instructions (default 2000000000),
+              --arm-wall the wall clock in seconds (default 300).
     --dram-map
               Report which DRAM pages are non-zero when the run ends, as
               address runs. Proof of concept for the QEMU hand-off: this is the
@@ -154,6 +162,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     let mut dram_map = false;
     let mut skip_signed_boot = false;
     let mut skip_unimpl = false;
+    let mut arm = ArmOpts::default();
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -238,6 +247,13 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
                 mbox_tags.push(group);
             }
             "--dram-map" => dram_map = true,
+            "--arm" => arm.enabled = true,
+            "--arm-insns" => {
+                arm.max_insns = it.next().context("--arm-insns needs a count")?.parse()?
+            }
+            "--arm-wall" => {
+                arm.max_wall_secs = it.next().context("--arm-wall needs seconds")?.parse()?
+            }
             "--dump-fdt" => {
                 dump_fdt = Some(PathBuf::from(it.next().context("--dump-fdt needs a path")?))
             }
@@ -251,6 +267,11 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         }
     }
     let path = path.context("recon: missing <file>")?;
+    // Before the boot, not after it: finding out at the hand-off would waste
+    // the minutes the boot takes.
+    if arm.enabled && !cfg!(feature = "arm") {
+        bail!("--arm: this build has no ARM core; rebuild with `cargo build --release --features arm`");
+    }
     let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
 
     // The EEPROM bootloader touches the 0x6000_0000 L2-SRAM window, which
@@ -832,7 +853,202 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         );
     }
 
+    // Last, so everything above — the firmware regression's whole report —
+    // is exactly what a run without `--arm` prints.
+    #[cfg(feature = "arm")]
+    if arm.enabled {
+        run_arm(emu, &report.console, &arm)?;
+    }
+
     Ok(ExitCode::SUCCESS)
+}
+
+/// `--arm` and its budget.
+#[cfg_attr(not(feature = "arm"), allow(dead_code))]
+struct ArmOpts {
+    enabled: bool,
+    max_insns: u64,
+    max_wall_secs: u64,
+}
+
+impl Default for ArmOpts {
+    fn default() -> Self {
+        ArmOpts {
+            enabled: false,
+            max_insns: 2_000_000_000,
+            max_wall_secs: 300,
+        }
+    }
+}
+
+/// Release the ARM into what `arm_loader` left behind and report how far the
+/// kernel gets (`src/arm.rs`, `docs/arm-unicorn.md`).
+///
+/// The kernel entry and the dtb come from the armstub's own data words — that
+/// is what the core will actually do — and are cross-checked against the
+/// firmware's console lines before anything is released.
+#[cfg(feature = "arm")]
+fn run_arm(mut emu: Emulator, console: &[u8], opts: &ArmOpts) -> Result<()> {
+    use anyhow::anyhow;
+    use rpi_virt_fw::arm::{self, ArmCore, ArmEnd, ArmLimits, ArmStop, Schedule};
+
+    println!("\n--- ARM core (Unicorn aarch64, docs/arm-unicorn.md) ---");
+    let h = arm::read_handoff(&emu.machine).map_err(|e| anyhow!("reading the armstub: {e}"))?;
+    let text = String::from_utf8_lossy(console);
+    let kernel_line = text
+        .lines()
+        .rev()
+        .find(|l| l.contains(&format!("' to {:#x} size", h.kernel)));
+    let dtb_line = text
+        .lines()
+        .rev()
+        .find(|l| l.contains(&format!("Device tree loaded to {:#x} ", h.dtb)));
+    let show = |l: Option<&str>| {
+        l.map_or("NOT what the console says".to_string(), |l| {
+            let l = l.trim();
+            format!("= \"{}\"", l.rsplit_once(": ").map_or(l, |(_, t)| t))
+        })
+    };
+    println!(
+        "  armstub   kernel_entry32 [{:#x}] = {:#010x}  {}",
+        arm::STUB_KERNEL_ENTRY,
+        h.kernel,
+        show(kernel_line)
+    );
+    println!(
+        "            dtb_ptr32      [{:#x}] = {:#010x}  {}",
+        arm::STUB_DTB_PTR,
+        h.dtb,
+        show(dtb_line)
+    );
+    if kernel_line.is_none() || dtb_line.is_none() {
+        bail!("the armstub's data words disagree with the firmware's log; not releasing the ARM");
+    }
+    if !arm::is_arm64_image(&emu.machine, h.kernel) {
+        println!("  warning   no arm64 Image header (\"ARM\\x64\" at +0x38) at the kernel entry");
+    }
+
+    let blob = arm::read_dtb(&emu.machine, h.dtb).map_err(|e| anyhow!("device tree: {e}"))?;
+    let ranges = rpi_virt_fw::fdt::Fdt::parse(&blob)
+        .and_then(|f| f.memory_ranges())
+        .map_err(|e| anyhow!("device tree /memory: {e}"))?;
+    for (b, s) in &ranges {
+        println!(
+            "  memory    {b:#010x}..{:#010x}  {} MiB, from the dtb's /memory",
+            b + s,
+            s >> 20
+        );
+    }
+    let (old, new) =
+        arm::add_earlycon(&mut emu.machine, h.dtb).map_err(|e| anyhow!("bootargs: {e}"))?;
+    if old == new {
+        println!("  bootargs  already has earlycon");
+    } else {
+        println!(
+            "  bootargs  \"earlycon\" prepended in place ({} -> {} bytes)",
+            old.len(),
+            new.len()
+        );
+    }
+
+    let mut core = ArmCore::new(emu, &ranges).map_err(|e| anyhow!(e))?;
+    core.reset().map_err(|e| anyhow!(e))?;
+    let sched = Schedule::default();
+    println!(
+        "  released  pc 0x0, EL3h, DAIF masked; slices of {} ARM instructions / {} VPU steps",
+        sched.arm_slice, sched.vpu_slice
+    );
+    let live = std::env::var("RVF_LIVE_CONSOLE").as_deref() != Ok("0");
+    let rep = core.run(
+        sched,
+        &ArmLimits {
+            max_insns: opts.max_insns,
+            max_wall: std::time::Duration::from_secs(opts.max_wall_secs),
+            live_console: live,
+        },
+    );
+
+    match &rep.end {
+        ArmEnd::InsnLimit => println!("  end       ARM instruction budget reached"),
+        ArmEnd::TimeLimit => println!("  end       wall-clock budget reached"),
+        ArmEnd::VpuStopped(e) => println!("  end       the VPU stopped: {e:?}"),
+        ArmEnd::Stopped(ArmStop::Unhandled { intno, pc, el }) => {
+            let what = match intno {
+                3 => "prefetch abort",
+                4 => "data abort",
+                5 => "IRQ",
+                6 => "FIQ",
+                _ => "exception",
+            };
+            println!(
+                "  end       {what} (QEMU EXCP {intno}) at pc {pc:#x} in EL{el} — its syndrome \
+                 is not visible through Unicorn, so it was not delivered"
+            );
+        }
+        ArmEnd::Stopped(ArmStop::Engine {
+            error,
+            pc,
+            unmapped,
+        }) => {
+            println!("  end       {error} at pc {pc:#x}");
+            if let Some((ty, addr, size)) = unmapped {
+                println!("            {ty:?} of {size} bytes at {addr:#x}");
+            }
+        }
+    }
+    println!(
+        "  ran       {} ARM instructions, {} VPU steps, {} slices, {:.1?}",
+        rep.insns, rep.vpu_steps, rep.slices, rep.wall
+    );
+    println!(
+        "  state     pc {:#x}  EL{}  sp {:#x}  lr {:#x}  x0 {:#x}",
+        core.pc(),
+        core.el(),
+        core.x(31),
+        core.x(30),
+        core.x(0)
+    );
+    for el in 1..=2 {
+        let (esr, elr, far) = core.exception_regs(el);
+        println!("            ESR_EL{el} {esr:#010x}  ELR_EL{el} {elr:#x}  FAR_EL{el} {far:#x}");
+    }
+    let side = core.side();
+    println!("  exceptions taken: {}", side.exceptions_taken);
+    for e in side.exceptions.iter().take(24) {
+        println!(
+            "    {:<9} pc {:#x} EL{} -> EL{}  ESR {:#010x}  vector {:#x}",
+            e.kind, e.pc, e.from_el, e.to_el, e.esr, e.vector
+        );
+    }
+    for (name, v) in &side.impdef {
+        println!("  impdef    {name} = {v:#x}");
+    }
+    if !side.mmio_faults.is_empty() {
+        println!("  refused MMIO accesses: {}", side.mmio_faults.len());
+        for f in side.mmio_faults.iter().take(10) {
+            println!("    {f}");
+        }
+    }
+    println!("  last MMIO accesses (oldest first):");
+    for a in side.recent_mmio.iter().rev().take(16).rev() {
+        println!(
+            "    {} {}B {:#010x}  {:#x}",
+            if a.write { "W" } else { "R" },
+            a.size,
+            a.addr,
+            a.value
+        );
+    }
+    println!("\n--- ARM console ({} bytes) ---", rep.console.len());
+    println!("{}", String::from_utf8_lossy(&rep.console));
+    if !rep.vpu_console.is_empty() {
+        println!(
+            "--- VPU console during the ARM run ({} bytes) ---",
+            rep.vpu_console.len()
+        );
+        println!("{}", String::from_utf8_lossy(&rep.vpu_console));
+    }
+    Ok(())
 }
 
 fn cmd_run(args: &[String]) -> Result<ExitCode> {

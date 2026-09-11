@@ -33,14 +33,22 @@ ours to model, starting with the interrupt controller and the timer.
   into the existing `Bus`, so the PL011, the mailbox, eMMC2 and the rest answer
   both cores from the same state.
 * **ARM-local** — the GIC-400 at `0xFF84_0000` and the ARM local block at
-  `0xFF80_0000` have no VPU-side counterpart and are new models.
-* **Interrupts** — Unicorn has no interrupt controller and no API to raise an IRQ
-  line, so exception entry is done by hand between slices: `ELR`/`SPSR` saved,
-  `PC` set to the vector.
+  `0xFF80_0000` have no VPU-side counterpart: `src/periph/gic.rs` and
+  `src/periph/armlocal.rs`, mapped only on the ARM side.
+* **Entry** — the firmware's own armstub at physical 0, in EL3, as the SoC
+  does it; the stub enters the kernel at EL2 with `x0` = the dtb.
+* **Exceptions** — Unicorn takes *no* exception into the guest (it hands each
+  one to a hook and drops it), and it has no API to raise an IRQ line. So every
+  exception entry is done by hand — `hvc`, `svc`, `brk` and UNDEFINED now, IRQs
+  between slices for milestone 2: `ELR`/`SPSR`/`ESR` saved, `PC` set to the
+  vector.
 * **Scheduling** — `emu_start(.., count)` runs a fixed number of ARM
   instructions, interleaved with VPU steps, so a run is reproducible.
-* **Opt-in** — behind a cargo feature, so the default build, the firmware-only
-  tool and CI's existing jobs do not grow a C dependency.
+* **Opt-in** — behind the `arm` cargo feature (`recon --arm`), so the default
+  build, the firmware-only tool and CI's existing jobs do not grow a C
+  dependency.
+
+`src/arm.rs` carries the details and the evidence for each of these.
 
 ## Milestones
 

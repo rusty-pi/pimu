@@ -7,10 +7,19 @@ description = "A virtual bench for Raspberry Pi VideoCore boot firmware (start4.
 license = "MIT OR Apache-2.0"
 publish = false
 
+[features]
+# The in-process aarch64 core that runs the kernel start4.elf hands over to
+# (docs/arm-unicorn.md, `recon --arm`). Unicorn is QEMU in a C library: it adds
+# a cmake + libclang build, so it stays out of the default build.
+arm = ["dep:unicorn-engine"]
+
 [dependencies]
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
+# Only the aarch64 target. The crate's `arch_aarch64` also enables its 32-bit
+# `arch_arm` (it shares QEMU's target/arm), which is as small as it gets.
+unicorn-engine = { version = "2.1.5", optional = true, default-features = false, features = ["arch_aarch64"] }
 
 [dev-dependencies]
 

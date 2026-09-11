@@ -316,7 +316,10 @@ impl Machine {
     /// cache aliasing, unlike RAM) — plus the LPDDR4 controller/PHY, which is
     /// mapped just *below* that window at `0x7DC0_0000`. Both must be decoded
     /// before the cache-alias fold, or their (aliased) addresses land in DRAM.
-    fn in_mmio(addr: u32) -> bool {
+    ///
+    /// Public for the ARM core's peripheral window (`src/arm.rs`), which must
+    /// not hand the bus an address this would fold into RAM.
+    pub fn in_mmio(addr: u32) -> bool {
         (map::PERIPH_BASE..map::PERIPH_BASE + map::PERIPH_SIZE).contains(&addr)
             || (map::SDRAMC_BASE..map::SDRAMC_BASE + map::SDRAMC_SIZE).contains(&addr)
             || (map::CLKMON_BASE..map::CLKMON_BASE + map::CLKMON_SIZE).contains(&addr)
