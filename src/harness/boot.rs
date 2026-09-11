@@ -62,6 +62,11 @@ pub struct BootSpec {
     /// clean boot should need even those.
     #[serde(default)]
     pub max_skipped: u64,
+    /// Property-interface tags to ask the still-running firmware for once the
+    /// boot has handed over, as `recon --mbox-property` would (#23). Empty =
+    /// do not exchange anything.
+    #[serde(default)]
+    pub mbox_property: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -205,7 +210,7 @@ impl BootScenario {
     /// asks for this rather than spelling the run out a second time, so the
     /// scenario file stays the only description of the workload.
     pub fn recon_args(&self, console_log: &Path) -> Vec<String> {
-        vec![
+        let mut args: Vec<String> = vec![
             "recon".into(),
             self.eeprom_path().display().to_string(),
             "--eeprom".into(),
@@ -215,7 +220,12 @@ impl BootScenario {
             self.wall_secs().to_string(),
             "--console-log".into(),
             console_log.display().to_string(),
-        ]
+        ];
+        if !self.boot.mbox_property.is_empty() {
+            args.push("--mbox-property".into());
+            args.push(self.boot.mbox_property.join(","));
+        }
+        args
     }
 }
 

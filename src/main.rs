@@ -1241,21 +1241,54 @@ fn mbox_property_exchange(emu: &mut Emulator, limits: &RunLimits, tags: &[u32]) 
     // conditions that end a *boot* would end this instantly and wrongly: the
     // idle-spin detector fires on the idle loop itself, and the silence
     // watchdog fires because a serviced mailbox request prints nothing.
-    let resume = RunLimits {
+    //
+    // Nothing in `RunLimits` can say "stop when the reply lands", so run in
+    // short slices and check between them. The answer takes a few million
+    // instructions once the interrupt gets through; the budget is there for
+    // the case where it does not.
+    let slice = RunLimits {
         max_steps: None,
-        max_wall: Some(std::time::Duration::from_secs(20)),
+        max_wall: Some(std::time::Duration::from_millis(500)),
         idle_spin_limit: 0,
         silent_us: u64::MAX,
         ..*limits
     };
-    let report = emu.run(&resume);
+    let budget = std::time::Duration::from_secs(20);
+    let started = std::time::Instant::now();
+    let retired_before = emu.cpu.retired;
+    let replies_before = emu.machine.mbox.writes;
+    let mut console = Vec::new();
+    let mut report = emu.run(&slice);
+    loop {
+        console.extend_from_slice(&report.console);
+        let answered =
+            !emu.machine.mbox.request_outstanding() && emu.machine.mbox.writes > replies_before;
+        if answered || started.elapsed() >= budget {
+            break;
+        }
+        report = emu.run(&slice);
+    }
+    println!(
+        "  resumed: {} instructions over {:.1?}, ended {:?} at {:#010x}",
+        report.retired.saturating_sub(retired_before),
+        started.elapsed(),
+        report.end,
+        report.pc
+    );
+    println!(
+        "  mailbox: config1 {:#x}, {} requests taken, {} replies written",
+        emu.machine.mbox.interrupt_armed(),
+        emu.machine.mbox.reads,
+        emu.machine.mbox.writes
+    );
 
     match emu.machine.mbox.take_reply() {
         Some(reply) => println!("  reply {reply:#010x}"),
         None if emu.machine.mbox.request_outstanding() => {
             println!("  no reply: the firmware never read the request off MAIL1");
-            println!("  (the `mbox_read` task at 0x3ed1d724 blocks on its driver's");
-            println!("   receive op rather than polling — the wake path is not modelled yet)");
+            println!("  (the `mbox_read` task at 0x3ed1d724 waits on its driver's receive");
+            println!("   lock, so this means the wake never arrived: check that the config");
+            println!("   word above carries the pending bit 4 that 0x3ec58302 releases on)");
             return Ok(());
         }
         None => println!("  the request was read, but no reply was written to MAIL0"),
@@ -1280,11 +1313,15 @@ fn mbox_property_exchange(emu: &mut Emulator, limits: &RunLimits, tags: &[u32]) 
         if tag == 0 {
             break;
         }
-        let len = emu
+        // Bit 31 of the third word is the firmware's "I handled this" mark. A
+        // tag it does not know is left exactly as it was staged, so the word
+        // reads back 0 — which is how an unknown tag is told apart from a
+        // handler that answered with nothing.
+        let resp = emu
             .machine
             .load(MBOX_BUFFER + off + 8, Width::Word)
-            .unwrap_or(0)
-            & 0x7FFF_FFFF;
+            .unwrap_or(0);
+        let len = resp & 0x7FFF_FFFF;
         let mut vals = Vec::new();
         for i in 0..(len / 4).min(8) {
             vals.push(format!(
@@ -1294,16 +1331,24 @@ fn mbox_property_exchange(emu: &mut Emulator, limits: &RunLimits, tags: &[u32]) 
                     .unwrap_or(0)
             ));
         }
-        println!("  tag {tag:#010x}  {len:>3} bytes  {}", vals.join(" "));
+        let mark = if resp & 0x8000_0000 != 0 {
+            "answered"
+        } else {
+            "not handled"
+        };
+        println!(
+            "  tag {tag:#010x}  {mark:>11}  {len:>3} bytes  {}",
+            vals.join(" ")
+        );
         let slot = emu
             .machine
             .load(MBOX_BUFFER + off + 4, Width::Word)
             .unwrap_or(0);
         off += 12 + ((slot.max(len) + 3) & !3);
     }
-    if !report.console.is_empty() {
+    if !console.is_empty() {
         // Anything the firmware printed while servicing the request.
-        let tail = String::from_utf8_lossy(&report.console);
+        let tail = String::from_utf8_lossy(&console);
         for line in tail.lines().filter(|l| !l.is_empty()) {
             println!("  console: {line}");
         }

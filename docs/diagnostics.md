@@ -95,6 +95,7 @@ All of these are `=1`.
 | `RVF_DBG_PMIC` | DA9090 PMIC register traffic. |
 | `RVF_DBG_OTP` | Every OTP row the firmware reads, and what it got. |
 | `RVF_DBG_XHCI` | xHCI rings, TRBs and port state. |
+| `RVF_DBG_MBOX` | Every word across the ARM↔VideoCore property mailbox, both directions. |
 | `RVF_CZ_LOG=<n>` | confzilla / dt-blob schema matching, at verbosity `n`. |
 
 ## Output and fixtures
@@ -105,3 +106,44 @@ All of these are `=1`.
 | `RVF_DUMP_FLASH=<path>` | Write the EEPROM flash image out after the run, including any self-update the firmware applied. |
 | `RVF_BOOT_WALL=<seconds>` | Overrides the boot scenario's `wall_secs` (default 330) for `scripts/boot-check.sh`. Raise it when other work is competing for the CPU — two concurrent boot runs will miss `arm_loader` on time. |
 | `RVF_PCIE_DEVICE=0` | Unsolder the VL805 from the modelled board. Describes the hardware, not the firmware: a real Pi 4B always has one, so it is attached by default. |
+
+---
+
+## Asking the firmware a question after it has booted
+
+`start4.elf` does not stop at `arm_loader` — it leaves a `mbox_read` task
+running and answers the property interface for the ARM it just released. This
+bench has no ARM, so `--mbox-property` stands in for one:
+
+```bash
+recon firmware/pieeprom.bin --eeprom --sd firmware/sd.img \
+  --mbox-property 0x00000001,0x00030090
+```
+
+It builds the request buffer, posts the doorbell, resumes the VPU until the
+answer comes back, and decodes the reply tag by tag — including whether the
+firmware marked each tag as handled at all.
+
+The wake is worth understanding before debugging it, because it is four things
+in series and any of them failing looks the same from outside:
+
+1. the request word is queued on MAIL1 (`0x7E00_B9A0`),
+2. bit 2 appears in MAIL1's pending word (`0x7E00_B94C`),
+3. interrupt source 94 is raised and delivered, entering `0x3EC58302`,
+4. bit 4 — the "MAIL1 has data" *interrupt-pending* flag — is set in the config
+   word at `0x7E00_B9BC`, which is what makes the ISR release the receive lock
+   `gp+243076` that the `mbox_read` task is parked on.
+
+Step 4 is the one that is easy to get wrong: model the config word as only the
+enables the firmware wrote and the ISR runs on every step, finds nothing to do,
+and the task never wakes. `RVF_TRACE_MMIO=0x7e00b880-0x7e00b9c0` shows that
+failure directly — the ISR reading `0x7e00b9bc <- 0x00000001` and writing the
+same value straight back, forever.
+
+What the firmware answers today, with the model's blank OTP:
+
+| Tag | Answer |
+|---|---|
+| `0x00000001` `GET_FIRMWARE_REVISION` | `0x6a7a16af` — the build timestamp of the pinned `start4.elf`. |
+| `0x00030090` `GET_CRYPTO_KEY_STATUS` | `0x80000000`. The slot is unprovisioned: OTP rows 56-63 hold the device private key and this model's are blank. The handler runs, but reports failure, which is why the *buffer* level code comes back `0x80000001` whenever this tag is in the request. |
+| `0x00030092` `GET_CRYPTO_HMAC_SHA256` | Nothing — the response word is left as staged. Either the tag is not in this firmware's table or it refuses without a key; telling those apart needs the key provisioned first. |

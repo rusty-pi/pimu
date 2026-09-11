@@ -24,6 +24,11 @@ description = "pieeprom.bin + start4.elf boot from the SD image, through to the 
 [boot]
 eeprom = "../../firmware/pieeprom.bin"
 sd = "../../firmware/sd.img"
+# Ask the still-running firmware for a property after the hand-off, the way a
+# booted Linux would through `/dev/vcio` (#23): the firmware revision, which
+# pins that the mailbox round trip works at all, and the crypto key status,
+# which is the service rpi-mkosi#37 ultimately cares about.
+mbox_property = ["0x00000001", "0x00030090"]
 # The runners are roughly 1.6x slower than a dev box, where the last milestone
 # lands around 90 s. The budget went 290 -> 330 s so the run reaches the codec
 # licence check, which is what exercises the VCE guard below. RVF_BOOT_WALL
@@ -265,6 +270,32 @@ line = "matches the value the firmware published"
 why = "The derivation stopped being predictable — see the milestone above (#22)."
 line = "MISMATCH: the EEPROM bootloader"
 absent = true
+
+[[milestone]]
+why = """
+The ARM property mailbox answers (#23). `start4` leaves a `mbox_read` task
+running after the hand-off; posting a request the way a booted Linux does
+through `/dev/vcio` reaches it, and this is the line that proves the whole
+round trip — doorbell, interrupt source 94, the ISR at `0x3EC58302` releasing
+the reader's lock, the reply written back to MAIL0."""
+line = "1 requests taken, 1 replies written"
+
+[[milestone]]
+why = """
+`GET_FIRMWARE_REVISION` comes back with the pinned build's timestamp
+(`0x6a7a16af` = 2026-08-10 18:21:35 UTC). A firmware bump is expected to change
+this — when it does, re-pin it deliberately rather than loosening the match,
+since it is also the cheapest proof that the reply carries real data rather
+than a staged buffer read back."""
+line = ["tag 0x00000001", "answered", "0x6a7a16af"]
+
+[[milestone]]
+why = """
+`GET_CRYPTO_KEY_STATUS` answers `0x80000000` — unprovisioned, matching the
+blank OTP rows 56-63 this bench models. That is the service rpi-mkosi#37 turns
+on, so the milestone guards that the tag still reaches its handler even while
+no key is fused."""
+line = ["tag 0x00030090", "answered", "0x80000000"]
 
 [[milestone]]
 why = "No nop-slides at all: the register file must survive preemptive context switches (8d7c27a) and no callback may be null."

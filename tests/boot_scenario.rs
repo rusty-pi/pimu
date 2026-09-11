@@ -35,6 +35,10 @@ fn fake_log(console: &str) -> String {
          \x20 /chosen/rpi-machine-id         \"2928640898f6b5035da98885da0ac498\"\n\
          --- rpi-machine-id derivation (#22) ---\n\
          \x20 2928640898f6b5035da98885da0ac498  matches the value the firmware published\n\
+         --- ARM property mailbox (0x7e00_b880) ---\n\
+         \x20 mailbox: config1 0x1, 1 requests taken, 1 replies written\n\
+         \x20 tag 0x00000001     answered    4 bytes  0x6a7a16af\n\
+         \x20 tag 0x00030090     answered    4 bytes  0x80000000\n\
          retired 1234  (skipped 0, cycles 5678)\n"
     )
 }
