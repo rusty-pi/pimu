@@ -298,7 +298,6 @@ impl Emulator {
         // waiter pointer. The shim has been removed rather than left armed.
 
         let mut tick_deliveries: u64 = 0;
-        let mut irqtbl_n = 0u32;
         let mut tick_skips: u64 = 0;
 
         // RVF_PROF=1: cheap PC profiler. Bucket the core-0 PC into 256-byte
@@ -314,8 +313,6 @@ impl Emulator {
         // RVF_DBG_MAINSUS: catch the boot thread (0x3EF248C4) suspending — dump
         // the control-flow tail the one time it stops being the current thread
         // for good.
-        let mut mainsus_done = false;
-        let mut main_was_cur = false;
 
         // RVF_CZ_LOG=<n>: raise confzilla's own log level (byte at `0x3EE4ABD8`)
         // to <n> just before `gpioman_init` kicks off the schema walk
@@ -326,9 +323,6 @@ impl Emulator {
         // (`0x3ECC9EC4`) handlers which register the GPIO providers
         // (`[gp+807672/676/680]`); none of them fire, so gpioman reports
         // `error 1`. Its own diagnostics say why.
-        let mut cz_probe_n = 0u32;
-        let mut cz_match_n = 0u32;
-        let mut cz_pool_n = 0u32;
 
         // RVF_HEARTBEAT=<n>: every <n> million retired instructions, print model
         // time, the running ThreadX thread and the PC. The one diagnostic that
@@ -352,8 +346,6 @@ impl Emulator {
         // Hoisted out of the per-instruction loop: `std::env::var_os` is a
         // locking lookup over the whole environment and these were being
         // evaluated on every step, which dominated run time.
-        let mut evget_seen: std::collections::HashSet<(u32, u32)> =
-            std::collections::HashSet::new();
 
         let mut core1_end: Option<RunEnd> = None;
         let end = loop {
@@ -379,10 +371,8 @@ impl Emulator {
 
             if diag.heartbeat != 0 && self.cpu.retired >= next_beat {
                 next_beat = self.cpu.retired + diag.heartbeat;
-                let cur = self.machine.load(0x3EE3_5900, Width::Word).unwrap_or(0);
-                let exec = self.machine.load(0x3EE3_5904, Width::Word).unwrap_or(0);
                 eprintln!(
-                    "[beat] retired={} model_us={} pc={pc_before:#010x} cur={cur:#010x} exec={exec:#010x} in_exc={} irq_en={} tick_due={}",
+                    "[beat] retired={} model_us={} pc={pc_before:#010x} in_exc={} irq_en={} tick_due={}",
                     self.cpu.retired,
                     self.machine.systimer.now_us(),
                     self.cpu.in_exception,
@@ -390,76 +380,12 @@ impl Emulator {
                     self.machine.systimer.tick_pending(),
                 );
             }
-            if diag.prof_thread {
-                let cur = self.machine.load(0x3EE3_5900, Width::Word).unwrap_or(0);
+            if let Some(cur_ptr) = diag.prof_thread {
+                let cur = self.machine.load(cur_ptr, Width::Word).unwrap_or(0);
                 *prof_thist.entry((cur, pc_before & !0xFF)).or_insert(0) += 1;
             }
             if diag.prof {
                 *prof_hist.entry(pc_before & !0xFF).or_insert(0) += 1;
-            }
-
-            // RVF_DBG_RESUME: log every _tx_thread_system_resume (0x3EC402D2)
-            // and _tx_thread_system_suspend (0x3EC40516) — who resumes/suspends
-            // which thread, to find what would wake the boot thread.
-            if diag.dbg_resume
-                && matches!(pc_before, 0x3EC4_02D2 | 0x3EC4_0516)
-                && self.cpu.retired > 90_000_000
-            {
-                let kind = if pc_before == 0x3EC4_02D2 {
-                    "resume"
-                } else {
-                    "suspend"
-                };
-                eprintln!(
-                    "[{kind}] thread={:#x} lr={:#x} @retired={}",
-                    self.cpu.regs.get(0),
-                    self.cpu.regs.get(26),
-                    self.cpu.retired
-                );
-            }
-            if diag.dbg_evset
-                && pc_before == 0x3EC3_E1BA
-                && (self.cpu.regs.get(0) == 0x3EF0_5FEC
-                    || self
-                        .machine
-                        .load(self.cpu.regs.get(0).wrapping_add(112), Width::Word)
-                        .unwrap_or(0)
-                        == 0x3EF0_5FEC)
-            {
-                let cf = &self.cpu.cf_trace;
-                eprintln!(
-                    "[evset] flags={:#x} lr={:#x} @retired={} cf-tail:",
-                    self.cpu.regs.get(1),
-                    self.cpu.regs.get(26),
-                    self.cpu.retired
-                );
-                for &(from, to) in cf.iter().skip(cf.len().saturating_sub(24)) {
-                    eprintln!("[evset]   {from:#010x} -> {to:#010x}");
-                }
-            }
-
-            if diag.dbg_mainsus {
-                let cur = self.machine.load(0x3EE3_5900, Width::Word).unwrap_or(0);
-                if cur == 0x3EF2_48C4 {
-                    main_was_cur = true;
-                } else if main_was_cur {
-                    main_was_cur = false;
-                    if !mainsus_done {
-                        let exec = self.machine.load(0x3EE3_5904, Width::Word).unwrap_or(0);
-                        eprintln!(
-                            "[mainsus] main switched out @ retired={} pc={pc_before:#x} exec={exec:#x}",
-                            self.cpu.retired
-                        );
-                        let cf = &self.cpu.cf_trace;
-                        for &(from, to) in cf.iter().skip(cf.len().saturating_sub(40)) {
-                            eprintln!("[mainsus]   {from:#010x} -> {to:#010x}");
-                        }
-                        // stop after the switch-out that lands past ~140M
-                        if self.cpu.retired > 140_000_000 {
-                            mainsus_done = true;
-                        }
-                    }
-                }
             }
 
             // `0x3EDA28D6` is start4's optimised `memcpy(r0=dst, r1=src,
@@ -559,211 +485,6 @@ impl Emulator {
                     self.machine.systimer.jump(us);
                 }
             }
-            if let Some(lvl) = diag.cz_log {
-                // `cp_front_fdt_buffer` (`0x3EC89670`): `r10` = the FDT
-                // buffer it was handed, `r0` = the byte-swapped magic it
-                // just read from `[r10]`, which must be 0xD00DFEED. This
-                // says directly whether the blob reached confzilla.
-                // `FUN_0ecb6fd4(state, root_node, fields, ...)` - the
-                // schema-tree matcher. It hashes `fields[0]` (FNV-1a) and
-                // walks the sibling list from `root_node` comparing
-                // `node[0x15]` (hash) then `strncmp(node->name, .., 31)`.
-                // Dump what it is actually matching against.
-                if pc_before == 0x3ECB_6FD4 && cz_match_n < 4 {
-                    cz_match_n += 1;
-                    let root = self.cpu.regs.get(1);
-                    let fields = self.cpu.regs.get(2);
-                    let rdstr = |m: &mut crate::machine::Machine, p: u32| {
-                        let mut t = String::new();
-                        for i in 0..32 {
-                            match m.load(p + i, Width::Byte) {
-                                Ok(0) | Err(_) => break,
-                                Ok(c) => t.push(c as u8 as char),
-                            }
-                        }
-                        t
-                    };
-                    let f0 = self.machine.load(fields, Width::Word).unwrap_or(0);
-                    let want = rdstr(&mut self.machine, f0);
-                    let mut chain = Vec::new();
-                    let mut n = root;
-                    for _ in 0..8 {
-                        if n == 0 {
-                            break;
-                        }
-                        let namep = self.machine.load(n, Width::Word).unwrap_or(0);
-                        chain.push(format!(
-                            "{n:#x}:{:?}/h={:#x}",
-                            rdstr(&mut self.machine, namep),
-                            self.machine.load(n + 0x54, Width::Word).unwrap_or(0)
-                        ));
-                        n = self.machine.load(n + 0x30, Width::Word).unwrap_or(0);
-                    }
-                    let mut words = Vec::new();
-                    for i in 0..8 {
-                        words.push(format!(
-                            "{:08x}",
-                            self.machine.load(root + i * 4, Width::Word).unwrap_or(0)
-                        ));
-                    }
-                    let st = self.cpu.regs.get(0);
-                    let mut sw = Vec::new();
-                    for i in 0..13 {
-                        sw.push(format!(
-                            "{:08x}",
-                            self.machine.load(st + i * 4, Width::Word).unwrap_or(0)
-                        ));
-                    }
-                    // First three nodes of the pool (`state[1]`, stride 0x78).
-                    let pool = self.machine.load(st + 4, Width::Word).unwrap_or(0);
-                    let mut pn = Vec::new();
-                    for i in 0..3u32 {
-                        let nd = pool + i * 0x78;
-                        let np = self.machine.load(nd, Width::Word).unwrap_or(0);
-                        pn.push(format!("{nd:#x}:{:?}", rdstr(&mut self.machine, np)));
-                    }
-                    eprintln!(
-                        "[cz] match want={want:?} root={root:#x} node[0..8]={} state={st:#x}[{}] pool={pool:#x} nodes=[{}]",
-                        words.join(" "),
-                        sw.join(" "),
-                        pn.join(", ")
-                    );
-                }
-                // The confzilla node pool is a relocatable-heap block.
-                // `FUN_0ed5a494` unlocks it, `mem_resize_ex` (`0x3ED1FB7C`)
-                // grows it, `FUN_0ed5a420` re-locks and re-bases every
-                // node's internal pointers by (new_base - old_base). Trace
-                // the base and node 0's `type` word across all three so it
-                // is obvious where the contents are lost.
-                if matches!(pc_before, 0x3ED5_A420 | 0x3ED5_A494 | 0x3ED1_FB7C) && cz_pool_n < 30 {
-                    cz_pool_n += 1;
-                    let (tag, st) = match pc_before {
-                        0x3ED5_A420 => ("lock  ", self.cpu.regs.get(0)),
-                        0x3ED5_A494 => ("unlock", self.cpu.regs.get(0)),
-                        _ => ("resize", 0),
-                    };
-                    if st != 0 {
-                        let base = self.machine.load(st + 4, Width::Word).unwrap_or(0);
-                        eprintln!(
-                            "[cz] {tag} state={st:#x} base={base:#x} oldbase={:#x} cap={} n0type={:#x} n0name={:#x}",
-                            self.machine.load(st + 8, Width::Word).unwrap_or(0),
-                            self.machine.load(st + 20, Width::Word).unwrap_or(0),
-                            self.machine.load(base + 4, Width::Word).unwrap_or(0),
-                            self.machine.load(base, Width::Word).unwrap_or(0),
-                        );
-                    } else {
-                        eprintln!(
-                            "[cz] {tag} handle={:#x} newsize={:#x} lr={:#x}",
-                            self.cpu.regs.get(0),
-                            self.cpu.regs.get(1),
-                            self.cpu.regs.get(26)
-                        );
-                    }
-                }
-                // `FUN_0ed5a122(state, descriptor)` - the schema tree
-                // builder. Dump the 44-byte source descriptor it is about
-                // to copy, and `FUN_0ec89b38`'s stack template before it.
-                if matches!(pc_before, 0x3ED5_A122 | 0x3EC8_9B38) && cz_probe_n < 14 {
-                    cz_probe_n += 1;
-                    let d = if pc_before == 0x3ED5_A122 {
-                        self.cpu.regs.get(1)
-                    } else {
-                        self.cpu.regs.get(0)
-                    };
-                    let mut w = Vec::new();
-                    for i in 0..11 {
-                        w.push(format!(
-                            "{:08x}",
-                            self.machine.load(d + i * 4, Width::Word).unwrap_or(0)
-                        ));
-                    }
-                    let namep = self.machine.load(d, Width::Word).unwrap_or(0);
-                    let mut nm = String::new();
-                    for i in 0..24 {
-                        match self.machine.load(namep + i, Width::Byte) {
-                            Ok(0) | Err(_) => break,
-                            Ok(c) => nm.push(c as u8 as char),
-                        }
-                    }
-                    // For the builder, r0 = the CP_STATE: show the node
-                    // pool base and capacity, so a pool that moves under a
-                    // relocatable-heap resize is visible.
-                    let st = self.cpu.regs.get(0);
-                    eprintln!(
-                        "[cz] {} desc={d:#x} name={nm:?} pool={:#x} cap={} free={} [{}]",
-                        if pc_before == 0x3ED5_A122 {
-                            "build"
-                        } else {
-                            "b38  "
-                        },
-                        self.machine.load(st + 4, Width::Word).unwrap_or(0),
-                        self.machine.load(st + 20, Width::Word).unwrap_or(0),
-                        self.machine.load(st + 16, Width::Word).unwrap_or(0),
-                        w.join(" ")
-                    );
-                }
-                if pc_before == 0x3EC8_9684 {
-                    // Raise both levels *here*, at `cp_front_fdt_buffer`
-                    // entry: confzilla's own init stamps them back to 3
-                    // after `gpioman_init` runs, so setting them earlier is
-                    // undone. Level 4 turns on `cp_set_property: field not
-                    // found` (the interesting one) without the per-FDT-token
-                    // `cp parse_fdt_node ...` spam that level 5 adds.
-                    let _ = self.machine.store(0x3EE4_ABD8, Width::Byte, lvl);
-                    let _ = self.machine.store(0x3EE4_ABF0, Width::Byte, lvl);
-                    let buf = self.cpu.regs.get(10);
-                    let be32 = |m: &mut crate::machine::Machine, a: u32| -> u32 {
-                        m.load(a, Width::Word).unwrap_or(0).swap_bytes()
-                    };
-                    let total = be32(&mut self.machine, buf + 4);
-                    // Does the blob confzilla was handed actually contain
-                    // the node the schema root names?
-                    let needle = b"pins_4b";
-                    let mut found = None;
-                    let mut win = [0u8; 8];
-                    let n = total.min(1 << 20);
-                    for i in 0..n {
-                        let c = self.machine.load(buf + i, Width::Byte).unwrap_or(0) as u8;
-                        win.rotate_left(1);
-                        win[7] = c;
-                        if &win[1..8] == needle {
-                            found = Some(buf + i - 6);
-                            break;
-                        }
-                    }
-                    eprintln!(
-                        "[cz] fdt_buffer buf={buf:#010x} magic={:#010x} totalsize={total} pins_4b={found:#x?} be_lvl={} fe_lvl={} retired={}",
-                        self.cpu.regs.get(0),
-                        self.machine.load(0x3EE4_ABD8, Width::Byte).unwrap_or(0xff),
-                        self.machine.load(0x3EE4_ABF0, Width::Byte).unwrap_or(0xff),
-                        self.cpu.retired
-                    );
-                }
-                if pc_before == 0x3ECC_9DB0 {
-                    // confzilla has two log-level bytes: the back end
-                    // (`cp_register_property_list` / `cp_set_property` /
-                    // `cp_done`) uses `gp+294584` = `0x3EE4ABD8`, the FDT
-                    // front end (`cp_front_fdt_buffer`) `gp+294608` =
-                    // `0x3EE4ABF0`. Raise both.
-                    let _ = self.machine.store(0x3EE4_ABD8, Width::Byte, lvl);
-                    let _ = self.machine.store(0x3EE4_ABF0, Width::Byte, lvl);
-                    let root = 0x3EE1_9114u32;
-                    let namep = self.machine.load(root, Width::Word).unwrap_or(0);
-                    let mut name = String::new();
-                    for i in 0..40 {
-                        match self.machine.load(namep + i, Width::Byte) {
-                            Ok(0) | Err(_) => break,
-                            Ok(c) => name.push(c as u8 as char),
-                        }
-                    }
-                    eprintln!(
-                        "[cz] schema root {root:#x} name={namep:#x} \"{name}\" type={:#x} children={:#x} arg={:#x}",
-                        self.machine.load(root + 4, Width::Word).unwrap_or(0),
-                        self.machine.load(root + 8, Width::Word).unwrap_or(0),
-                        self.cpu.regs.get(0),
-                    );
-                }
-            }
             // `RVF_TRACE_ON_PC=<hex>`: arm the instruction trace the first time
             // core 0 reaches this address. The console-substring trigger cannot
             // reach a code path that runs after the firmware has stopped
@@ -802,17 +523,6 @@ impl Emulator {
                     );
                 }
             }
-            if pc_before == 0x3EC3_E3BE && diag.dbg_evget {
-                let grp = self.cpu.regs.get(0);
-                let lr = self.cpu.regs.get(26);
-                if evget_seen.insert((grp, lr)) {
-                    let magic = self.machine.load(grp, Width::Word).unwrap_or(0);
-                    eprintln!(
-                        "[evget] group={grp:#010x} req={:#x} magic={magic:#010x} lr={lr:#010x}",
-                        self.cpu.regs.get(1)
-                    );
-                }
-            }
             self.machine.watch_pc = pc_before;
             let exc_depth_before = self.cpu.in_exception;
             let step = self.cpu.step(&mut self.machine);
@@ -839,46 +549,6 @@ impl Emulator {
                         let _ = self.machine.store(nest, Width::Word, n - 1);
                     }
                 }
-            }
-
-            // Periodic timer interrupt. Real VC4 hardware raises an interrupt
-            // when a system-timer compare matches the free-running counter and
-            // that source is enabled; the model otherwise only fakes delivery
-            // on the `sleep` instruction, so nothing preempts a thread that
-            // busy-waits or loops on `msleep` (`do_step`, `0x3ED5766E`). Vector
-            // through the firmware's own handler exactly as `Op::Sleep` does,
-            // whenever a compare has fired, we are in thread context, and
-            // interrupts are enabled.
-            // Peek, don't consume: a tick that comes due while interrupts are
-            // masked or an ISR is running must stay latched until it can be
-            // delivered (real hardware holds the compare-match line asserted).
-            // Consuming it here unconditionally dropped ~39/40 of the ticks
-            // that came due anywhere other than the one `sleep` instruction in
-            // ThreadX's idle loop — the scheduler then never woke a sleeping
-            // thread and the boot wedged with interrupts disabled.
-            // RVF_DBG_IRQTBL: at the generic per-source dispatcher
-            // (`0x3EC3E9BC`) show where it reads the pending source from
-            // (`[[r29+12]+4]`) and what the handler table at `gp+58004` holds
-            // for the DMA sources (0x50..0x5F).
-            // The vector entry carries a `0x0000` guard parcel that
-            // `vector_irq` steps over, so the dispatcher is entered at +2.
-            if diag.dbg_irqtbl && pc_before == 0x3EC3_E9BE && irqtbl_n < 4 {
-                irqtbl_n += 1;
-                let r29 = self.cpu.regs.get(29);
-                let blk = self.machine.load(r29 + 12, Width::Word).unwrap_or(0);
-                let pend = self.machine.corectl.peek_pending().unwrap_or(0);
-                let tbl = self.cpu.regs.get(24).wrapping_add(58004);
-                let mut h = Vec::new();
-                for src in [64u32, 66, 76, 77, 78, 81, 95] {
-                    h.push(format!(
-                        "{src}:{:#x}",
-                        self.machine.load(tbl + src * 4, Width::Word).unwrap_or(0)
-                    ));
-                }
-                eprintln!(
-                    "[irqtbl] r29={r29:#x} blk={blk:#x} pending={pend:#x} handlers[{}]",
-                    h.join(" ")
-                );
             }
 
             // The firmware raises an interrupt on a core in software by
@@ -953,12 +623,17 @@ impl Emulator {
                             let vb = self.cpu.exc_vbase;
                             let h = self.machine.load(vb.wrapping_add(slot * 4), Width::Word);
                             eprintln!(
-                                "[tick] #{tick_deliveries} slot={slot} vbase={vb:#x} handler={h:x?} resume={:#x} retired={} nest={:#x} cur={:#x} exec={:#x}",
+                                "[tick] #{tick_deliveries} slot={slot} vbase={vb:#x} handler={h:x?} resume={:#x} retired={} nest={:#x}",
                                 self.cpu.pc(),
                                 self.cpu.retired,
-                                self.machine.load(0x3EE0_3E64, Width::Word).unwrap_or(0xdead),
-                                self.machine.load(0x3EE3_5900, Width::Word).unwrap_or(0xdead),
-                                self.machine.load(0x3EE3_5904, Width::Word).unwrap_or(0xdead),
+                                {
+                                    let nest = self
+                                        .cpu
+                                        .regs
+                                        .get(crate::vpu::reg::GP)
+                                        .wrapping_add(crate::firmware::addrs::IRQ_NEST_GP_OFFSET);
+                                    self.machine.load(nest, Width::Word).unwrap_or(0xdead)
+                                },
                             );
                         }
                     }
@@ -1309,7 +984,7 @@ impl Emulator {
                 );
             }
         }
-        if diag.prof_thread {
+        if diag.prof_thread.is_some() {
             let total: u64 = prof_thist.values().sum();
             let mut by_thread: std::collections::HashMap<u32, u64> =
                 std::collections::HashMap::new();
