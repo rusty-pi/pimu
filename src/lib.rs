@@ -18,6 +18,7 @@
 //! ```
 
 pub mod bus;
+pub mod capi;
 pub mod diag;
 pub mod emulator;
 pub mod fdt;

@@ -16,6 +16,16 @@ pub enum Console {
     MiniUart,
 }
 
+/// A bus master's view of peripherals that live outside this model. See
+/// [`Machine::foreign`].
+pub trait ForeignBus {
+    /// Whether `addr` (a VC bus address, `0x7Exx_xxxx`) belongs to the foreign
+    /// side.
+    fn covers(&self, addr: u32) -> bool;
+    fn read(&mut self, addr: u32, width: Width) -> u32;
+    fn write(&mut self, addr: u32, width: Width, value: u32);
+}
+
 pub struct Machine {
     pub ram: Ram,
     pub systimer: SysTimer,
@@ -119,6 +129,11 @@ pub struct Machine {
     dbg_dma: bool,
     /// Interrupt sources raised by peripherals, waiting to be vectored.
     pending_irqs: std::collections::VecDeque<u32>,
+    /// Another bus master's peripherals, reached by address range. Set by the
+    /// QEMU frontend so that blocks QEMU already models (UART0 today) are the
+    /// *same* device for the VideoCore and the ARM, as on hardware. Ranges are
+    /// checked before our own decode, so a foreign window shadows a model.
+    pub foreign: Option<Box<dyn ForeignBus + Send>>,
     pub watch_pc: u32,
 
     /// `start4.elf` logs boot progress by writing 4-char ASCII tags (`_msh`,
@@ -137,8 +152,17 @@ const PHASE_TAG_SIG: u32 = 0x02C0_2000;
 
 impl Machine {
     pub fn new(ram_bytes: usize) -> Machine {
+        Machine::with_ram(Ram::new(map::SDRAM_CACHED_BASE, ram_bytes))
+    }
+
+    /// Build the machine over RAM the caller constructed — the way to run the
+    /// model over memory something else owns (QEMU's guest RAM, see
+    /// [`Ram::over_raw`]). `ram.base()` must be the VC4 cached SDRAM alias,
+    /// `0x0`: the address decode folds every alias onto it.
+    pub fn with_ram(ram: Ram) -> Machine {
+        debug_assert_eq!(ram.base(), map::SDRAM_CACHED_BASE);
         Machine {
-            ram: Ram::new(map::SDRAM_CACHED_BASE, ram_bytes),
+            ram,
             systimer: SysTimer::new(),
             uart0: Pl011::new(),
             aux: Aux::new(),
@@ -193,7 +217,18 @@ impl Machine {
             pending_irqs: std::collections::VecDeque::new(),
             watch_pc: 0,
             phase_tags: Vec::new(),
+            foreign: None,
         }
+    }
+
+    /// Level of the ARM's mailbox interrupt (GIC SPI 33 on BCM2711): a reply
+    /// is waiting in the VPU->ARM FIFO and the ARM enabled the interrupt.
+    pub fn arm_mbox_irq(&self) -> bool {
+        self.mbox.arm_irq_asserted()
+    }
+
+    fn foreign_covers(&self, addr: u32) -> bool {
+        self.foreign.as_ref().is_some_and(|f| f.covers(addr))
     }
 
     /// Queue an interrupt source for delivery to core 0 on the next step.
@@ -258,6 +293,7 @@ impl Machine {
         if !self.systimer.advance(cycles) {
             return;
         }
+        self.pm.advance(self.systimer.now_us());
         // The I²C masters time their transfers in microseconds off the system
         // timer, so they stay in step with it across the run loop's `sleep`
         // fast-forward (which jumps the counter without retiring cycles).
@@ -744,6 +780,10 @@ impl Bus for Machine {
                 return self.ram.load(phys, width);
             }
         }
+        if self.foreign_covers(addr) {
+            let f = self.foreign.as_mut().expect("covered");
+            return Ok(f.read(addr, width));
+        }
         self.advance_hdmi_ddc(addr);
         self.sync_avs_core_rail(addr);
         let trace = self.mmio_traced(addr);
@@ -796,6 +836,11 @@ impl Bus for Machine {
             }
         }
         self.mmio_writes = self.mmio_writes.wrapping_add(1);
+        if self.foreign_covers(addr) {
+            let f = self.foreign.as_mut().expect("covered");
+            f.write(addr, width, value);
+            return Ok(());
+        }
         self.dma_win_log("wr", addr, value);
         self.advance_hdmi_ddc(addr);
         let trace = self.mmio_traced(addr);

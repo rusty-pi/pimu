@@ -230,6 +230,16 @@ impl Mbox {
         (self.config0_word() | self.config1_word()) & CFG_PENDING != 0
     }
 
+    /// The ARM's mailbox-0 interrupt: level of the line Linux's `bcm2835-mbox`
+    /// driver waits on (GIC SPI 33 on BCM2711). It is the "I have data" pending
+    /// bit of the ARM's own config register — the enable the driver writes at
+    /// probe (`ARM_MC_IHAVEDATAIRQEN`) gated on a reply sitting in the
+    /// VPU->ARM FIFO. Reading the reply (`MAIL0_RD`) drops it, which is how the
+    /// driver's ISR loop terminates.
+    pub fn arm_irq_asserted(&self) -> bool {
+        self.config0_word() & CFG_PEND_HAVE_DATA != 0
+    }
+
     /// The interrupt-pending bits of one mailbox's `CONFIG`, from `enables`,
     /// the mailbox's own FIFO and the opposite one.
     ///

@@ -1,0 +1,687 @@
+From 36e8893b9b0d1ad5dea355b6522b17a94cc2e213 Mon Sep 17 00:00:00 2001
+From: Valtteri R <valtzu@gmail.com>
+Date: Sat, 12 Sep 2026 00:01:35 +0300
+Subject: [PATCH] hw/arm/raspi4b: run the VideoCore with the rpi-virt-fw model
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+`-machine raspi4b,videocore=pieeprom.bin[,videocore-sd=sd.img]` adds the
+BCM2711's second processor: the VideoCore IV that runs the boot firmware.
+The rpi-virt-fw model (https://github.com/valtzu/rpi-virt-fw) is linked as
+a library when its pkg-config file is found, and runs on its own thread over
+guest RAM. The firmware loads the ARM stub, kernel and device tree the way
+it does on the board, releases the cores out of reset at physical 0 in EL3,
+and then answers the ARM's mailbox requests from the same models — so
+-kernel/-dtb are not used, and the bcm2835-mbox/property mocks are shadowed
+by the live firmware's mailbox.
+
+The VPU thread takes the BQL for each slice it runs; the ARM's MMIO into the
+model already runs under the BQL, which keeps the two exclusive without a
+second lock. UART0 is a shared device: the firmware drives QEMU's PL011
+through the VideoCore bus, so the firmware log and the kernel console arrive
+on the same -serial.
+---
+ hw/arm/bcm2838.c                     |  14 ++
+ hw/arm/bcm2838_peripherals.c         |  34 +++
+ hw/arm/raspi.c                       |  12 +
+ hw/arm/raspi4b.c                     |  59 +++++
+ hw/misc/meson.build                  |   1 +
+ hw/misc/rvf_videocore.c              | 313 +++++++++++++++++++++++++++
+ include/hw/arm/bcm2838_peripherals.h |   6 +
+ include/hw/arm/raspi_platform.h      |   6 +
+ include/hw/misc/rvf_videocore.h      |  44 ++++
+ meson.build                          |   5 +
+ 10 files changed, 494 insertions(+)
+ create mode 100644 hw/misc/rvf_videocore.c
+ create mode 100644 include/hw/misc/rvf_videocore.h
+
+diff --git a/hw/arm/bcm2838.c b/hw/arm/bcm2838.c
+index 22aa754..c5f59e8 100644
+--- a/hw/arm/bcm2838.c
++++ b/hw/arm/bcm2838.c
+@@ -60,6 +60,13 @@ static void bcm2838_init(Object *obj)
+                               "command-line");
+ 
+     object_initialize_child(obj, "gic", &s->gic, TYPE_ARM_GIC);
++
++#ifdef CONFIG_RVF
++    object_property_add_alias(obj, "videocore-eeprom",
++                              OBJECT(&s->peripherals), "videocore-eeprom");
++    object_property_add_alias(obj, "videocore-sd",
++                              OBJECT(&s->peripherals), "videocore-sd");
++#endif
+ }
+ 
+ static void bcm2838_realize(DeviceState *dev, Error **errp)
+@@ -187,6 +194,13 @@ static void bcm2838_realize(DeviceState *dev, Error **errp)
+     /* Connect VC mailbox to the interrupt controller */
+     sysbus_connect_irq(SYS_BUS_DEVICE(&ps_base->mboxes), 0,
+                        qdev_get_gpio_in(gicdev, GIC_SPI_INTERRUPT_MBOX));
++#ifdef CONFIG_RVF
++    /* The live firmware's mailbox replaces the mock's; same interrupt line. */
++    if (ps->videocore.eeprom) {
++        sysbus_connect_irq(SYS_BUS_DEVICE(&ps->videocore), 0,
++                           qdev_get_gpio_in(gicdev, GIC_SPI_INTERRUPT_MBOX));
++    }
++#endif
+ 
+     /* Connect SD host to the interrupt controller */
+     sysbus_connect_irq(SYS_BUS_DEVICE(&ps_base->sdhost), 0,
+diff --git a/hw/arm/bcm2838_peripherals.c b/hw/arm/bcm2838_peripherals.c
+index 812b5b8..6fa6be9 100644
+--- a/hw/arm/bcm2838_peripherals.c
++++ b/hw/arm/bcm2838_peripherals.c
+@@ -57,6 +57,16 @@ static void bcm2838_peripherals_init(Object *obj)
+                             TYPE_OR_IRQ);
+     object_property_set_int(OBJECT(&s->dma_9_10_irq_orgate), "num-lines", 2,
+                             &error_abort);
++
++#ifdef CONFIG_RVF
++    /* VideoCore (rpi-virt-fw) */
++    object_initialize_child(obj, "videocore", &s->videocore,
++                            TYPE_RVF_VIDEOCORE);
++    object_property_add_alias(obj, "videocore-eeprom",
++                              OBJECT(&s->videocore), "eeprom");
++    object_property_add_alias(obj, "videocore-sd",
++                              OBJECT(&s->videocore), "sd");
++#endif
+ }
+ 
+ static void bcm2838_peripherals_realize(DeviceState *dev, Error **errp)
+@@ -194,6 +204,30 @@ static void bcm2838_peripherals_realize(DeviceState *dev, Error **errp)
+ 
+     /* BCM2838 RPiVid ASB must be mapped to prevent kernel crash */
+     create_unimp(s_base, &s->asb, "bcm2838-asb", BRDG_OFFSET, 0x24);
++
++#ifdef CONFIG_RVF
++    /*
++     * VideoCore. With an EEPROM image the real firmware runs the VPU side of
++     * the SoC, so its mailbox shadows the bcm2835-mbox/property mocks the
++     * common realize mapped: the ARM's 0x40-byte aperture at 0xb880 goes
++     * over them with a higher priority.
++     */
++    if (s->videocore.eeprom) {
++        Object *ram = object_property_get_link(OBJECT(dev), "ram",
++                                               &error_abort);
++
++        object_property_set_link(OBJECT(&s->videocore), "ram", ram,
++                                 &error_abort);
++        object_property_set_link(OBJECT(&s->videocore), "gpu-bus",
++                                 OBJECT(&s_base->gpu_bus_mr), &error_abort);
++        if (!sysbus_realize(SYS_BUS_DEVICE(&s->videocore), errp)) {
++            return;
++        }
++        memory_region_add_subregion_overlap(
++            &s_base->peri_mr, ARMCTRL_0_SBM_OFFSET + 0x80,
++            sysbus_mmio_get_region(SYS_BUS_DEVICE(&s->videocore), 0), 1);
++    }
++#endif
+ }
+ 
+ static void bcm2838_peripherals_class_init(ObjectClass *oc, const void *data)
+diff --git a/hw/arm/raspi.c b/hw/arm/raspi.c
+index 81d2fa1..60134ff 100644
+--- a/hw/arm/raspi.c
++++ b/hw/arm/raspi.c
+@@ -274,6 +274,10 @@ void raspi_base_machine_init(MachineState *machine,
+                             &error_abort);
+     object_property_set_str(OBJECT(soc), "command-line",
+                             machine->kernel_cmdline, &error_abort);
++    if (RASPI_BASE_MACHINE(machine)->firmware_boots_arm) {
++        object_property_set_uint(OBJECT(soc), "enabled-cpus", 0,
++                                 &error_abort);
++    }
+     qdev_realize(DEVICE(soc), NULL, &error_fatal);
+ 
+     /* Create and plug in the SD cards */
+@@ -298,6 +302,14 @@ void raspi_base_machine_init(MachineState *machine,
+     }
+     boot_ram_size = MIN(vcram_base, UPPER_RAM_BASE - vcram_size);
+ 
++    if (RASPI_BASE_MACHINE(machine)->firmware_boots_arm) {
++        if (machine->kernel_filename || machine->firmware) {
++            error_report("-kernel/-bios are not used with videocore=: "
++                         "the firmware loads the ARM from the SD card");
++            exit(1);
++        }
++        return;
++    }
+     setup_boot(machine, &soc->cpu[0].core, board_processor_id(board_rev),
+                boot_ram_size);
+ }
+diff --git a/hw/arm/raspi4b.c b/hw/arm/raspi4b.c
+index 0422ae0..0da2353 100644
+--- a/hw/arm/raspi4b.c
++++ b/hw/arm/raspi4b.c
+@@ -30,6 +30,9 @@ OBJECT_DECLARE_SIMPLE_TYPE(Raspi4bMachineState, RASPI4B_MACHINE)
+ struct Raspi4bMachineState {
+     RaspiBaseMachineState parent_obj;
+     BCM2838State soc;
++    /* The 'videocore' / 'videocore-sd' machine properties (CONFIG_RVF). */
++    char *videocore;
++    char *videocore_sd;
+ };
+ 
+ /*
+@@ -101,9 +104,50 @@ static void raspi4b_machine_init(MachineState *machine)
+     object_initialize_child(OBJECT(machine), "soc", soc,
+                             board_soc_type(mc->board_rev));
+ 
++#ifdef CONFIG_RVF
++    if (s->videocore) {
++        object_property_set_str(OBJECT(soc), "videocore-eeprom",
++                                s->videocore, &error_abort);
++        if (s->videocore_sd) {
++            object_property_set_str(OBJECT(soc), "videocore-sd",
++                                    s->videocore_sd, &error_abort);
++        }
++        s_base->firmware_boots_arm = true;
++    }
++#endif
++
+     raspi_base_machine_init(machine, &soc->parent_obj);
+ }
+ 
++#ifdef CONFIG_RVF
++static char *raspi4b_get_videocore(Object *obj, Error **errp)
++{
++    return g_strdup(RASPI4B_MACHINE(obj)->videocore);
++}
++
++static void raspi4b_set_videocore(Object *obj, const char *value, Error **errp)
++{
++    Raspi4bMachineState *s = RASPI4B_MACHINE(obj);
++
++    g_free(s->videocore);
++    s->videocore = g_strdup(value);
++}
++
++static char *raspi4b_get_videocore_sd(Object *obj, Error **errp)
++{
++    return g_strdup(RASPI4B_MACHINE(obj)->videocore_sd);
++}
++
++static void raspi4b_set_videocore_sd(Object *obj, const char *value,
++                                     Error **errp)
++{
++    Raspi4bMachineState *s = RASPI4B_MACHINE(obj);
++
++    g_free(s->videocore_sd);
++    s->videocore_sd = g_strdup(value);
++}
++#endif
++
+ static void raspi4b_machine_class_init(ObjectClass *oc, const void *data)
+ {
+     MachineClass *mc = MACHINE_CLASS(oc);
+@@ -117,6 +161,21 @@ static void raspi4b_machine_class_init(ObjectClass *oc, const void *data)
+     raspi_machine_class_common_init(mc, rmc->board_rev);
+     mc->auto_create_sdcard = true;
+     mc->init = raspi4b_machine_init;
++
++#ifdef CONFIG_RVF
++    object_class_property_add_str(oc, "videocore",
++                                  raspi4b_get_videocore,
++                                  raspi4b_set_videocore);
++    object_class_property_set_description(oc, "videocore",
++        "Run the VideoCore firmware from this EEPROM image (pieeprom.bin) "
++        "with the rpi-virt-fw model; it boots the ARM instead of -kernel");
++    object_class_property_add_str(oc, "videocore-sd",
++                                  raspi4b_get_videocore_sd,
++                                  raspi4b_set_videocore_sd);
++    object_class_property_set_description(oc, "videocore-sd",
++        "SD card image the VideoCore firmware boots from "
++        "(until it drives the emulated SD controller itself)");
++#endif
+ }
+ 
+ static const TypeInfo raspi4b_machine_type = {
+diff --git a/hw/misc/meson.build b/hw/misc/meson.build
+index b1d8d8e..49a69ea 100644
+--- a/hw/misc/meson.build
++++ b/hw/misc/meson.build
+@@ -84,6 +84,7 @@ system_ss.add(when: 'CONFIG_NPCM7XX', if_true: files(
+ system_ss.add(when: 'CONFIG_OMAP', if_true: files(
+   'omap_clk.c',
+ ))
++system_ss.add(when: ['CONFIG_RASPI', rvf], if_true: [files('rvf_videocore.c'), rvf])
+ system_ss.add(when: 'CONFIG_RASPI', if_true: files(
+   'bcm2835_mbox.c',
+   'bcm2835_mphi.c',
+diff --git a/hw/misc/rvf_videocore.c b/hw/misc/rvf_videocore.c
+new file mode 100644
+index 0000000..f88a9b2
+--- /dev/null
++++ b/hw/misc/rvf_videocore.c
+@@ -0,0 +1,313 @@
++/*
++ * The Raspberry Pi 4 VideoCore, run by the rpi-virt-fw firmware model.
++ *
++ * The BCM2711 has two processors: four Cortex-A72s, which QEMU's raspi4b
++ * emulates, and the VideoCore IV VPU that runs the boot firmware
++ * (pieeprom.bin, start4.elf) and stays resident as the ARM's firmware
++ * service. This device is that second processor. It links the rpi-virt-fw
++ * model (https://github.com/valtzu/rpi-virt-fw) as a library and runs it on
++ * its own thread over guest RAM, so the firmware loads the ARM stub, kernel
++ * and device tree into the same memory the ARM cores boot from, releases the
++ * cores out of reset the way the hardware does, and then answers the
++ * mailbox requests Linux sends it.
++ *
++ * Locking: the model is not thread-safe, so the VPU thread takes the BQL for
++ * every slice it runs. The ARM's MMIO into the model already runs under the
++ * BQL on a vCPU thread, which is what makes the two mutually exclusive
++ * without a second lock (and lets the model reach QEMU's own devices, and
++ * raise interrupts, from inside a slice).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "qemu/error-report.h"
++#include "qemu/log.h"
++#include "qemu/main-loop.h"
++#include "qemu/module.h"
++#include "qemu/rcu.h"
++#include "qemu/timer.h"
++#include "hw/irq.h"
++#include "hw/qdev-properties.h"
++#include "hw/misc/rvf_videocore.h"
++#include "system/address-spaces.h"
++#include "system/memory.h"
++#include "system/runstate.h"
++#include "hw/core/cpu.h"
++#include "target/arm/arm-powerctl.h"
++
++#include <rvf.h>
++
++/* The ARM's mailbox aperture, in VideoCore bus addresses. */
++#define RVF_MBOX_BASE   0x7e00b880
++#define RVF_MBOX_SIZE   0x40
++/* UART0 (PL011): shared with the ARM, so the firmware drives QEMU's. */
++#define RVF_UART0_BASE  0x7e201000
++#define RVF_UART0_SIZE  0x200
++
++/* How far the model may run ahead of the virtual clock before it sleeps. */
++#define RVF_PACE_SLACK_NS   (1 * SCALE_MS)
++#define RVF_PACE_NAP_NS     (2 * SCALE_MS)
++
++static void rvf_update_irq(RvfVideoCoreState *s)
++{
++    int level = rvf_vc_arm_irq(s->vc);
++
++    if (level != s->irq_level) {
++        s->irq_level = level;
++        qemu_set_irq(s->mbox_irq, level);
++    }
++}
++
++/* --- callbacks from the model (BQL held: we are inside a slice) --------- */
++
++static uint32_t rvf_cb_mmio_read(void *opaque, uint32_t addr, uint32_t size)
++{
++    RvfVideoCoreState *s = opaque;
++    uint32_t value = 0;
++
++    address_space_rw(&s->gpu_as, addr, MEMTXATTRS_UNSPECIFIED,
++                     &value, size, false);
++    return le32_to_cpu(value);
++}
++
++static void rvf_cb_mmio_write(void *opaque, uint32_t addr, uint32_t size,
++                              uint32_t value)
++{
++    RvfVideoCoreState *s = opaque;
++    uint32_t le = cpu_to_le32(value);
++
++    address_space_rw(&s->gpu_as, addr, MEMTXATTRS_UNSPECIFIED,
++                     &le, size, true);
++}
++
++static void rvf_cb_log(void *opaque, const char *msg)
++{
++    qemu_log_mask(LOG_GUEST_ERROR, "rvf-videocore: %s\n", msg);
++    info_report("rvf-videocore: %s", msg);
++}
++
++static void rvf_cb_arm_release(void *opaque)
++{
++    RvfVideoCoreState *s = opaque;
++    CPUState *cs;
++
++    /*
++     * The hand-off. Every core comes out of reset at physical 0 in EL3 —
++     * whatever the firmware put there (armstub8, or RPI_EFI.fd's TF-A)
++     * parks the secondaries itself, exactly as on the board.
++     */
++    CPU_FOREACH(cs) {
++        uint64_t mpidr = object_property_get_uint(OBJECT(cs), "mp-affinity",
++                                                  &error_abort);
++        int r = arm_set_cpu_on(mpidr, 0, 0, 3, true);
++
++        if (r != QEMU_ARM_POWERCTL_RET_SUCCESS) {
++            warn_report("rvf-videocore: cannot start cpu %" PRIx64 ": %d",
++                        mpidr, r);
++        }
++    }
++    s->pace_offset_ns = (int64_t)rvf_vc_now_us(s->vc) * SCALE_US
++                        - qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    s->released = true;
++}
++
++/* --- the ARM's view --------------------------------------------------- */
++
++static uint64_t rvf_mbox_read(void *opaque, hwaddr offset, unsigned size)
++{
++    RvfVideoCoreState *s = opaque;
++    uint32_t v = rvf_vc_mmio_read(s->vc, RVF_MBOX_BASE + offset, size);
++
++    rvf_update_irq(s);
++    return v;
++}
++
++static void rvf_mbox_write(void *opaque, hwaddr offset, uint64_t value,
++                           unsigned size)
++{
++    RvfVideoCoreState *s = opaque;
++
++    rvf_vc_mmio_write(s->vc, RVF_MBOX_BASE + offset, size, value);
++    rvf_update_irq(s);
++}
++
++static const MemoryRegionOps rvf_mbox_ops = {
++    .read = rvf_mbox_read,
++    .write = rvf_mbox_write,
++    .endianness = DEVICE_LITTLE_ENDIAN,
++    .valid.min_access_size = 4,
++    .valid.max_access_size = 4,
++};
++
++/* --- the VPU thread --------------------------------------------------- */
++
++static void rvf_pace(RvfVideoCoreState *s)
++{
++    int64_t model_ns, ahead;
++
++    if (!s->released) {
++        return;
++    }
++    model_ns = (int64_t)rvf_vc_now_us(s->vc) * SCALE_US - s->pace_offset_ns;
++    ahead = model_ns - qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    if (ahead > RVF_PACE_SLACK_NS) {
++        g_usleep(MIN(ahead, RVF_PACE_NAP_NS) / SCALE_US);
++    }
++}
++
++static void *rvf_thread_fn(void *opaque)
++{
++    RvfVideoCoreState *s = opaque;
++
++    rcu_register_thread();
++    while (!s->stop) {
++        int st;
++
++        if (!runstate_is_running()) {
++            g_usleep(1000);
++            continue;
++        }
++        bql_lock();
++        st = rvf_vc_run(s->vc, s->slice);
++        rvf_update_irq(s);
++        bql_unlock();
++
++        if (st == RVF_RUN_RESET) {
++            warn_report("rvf-videocore: the firmware requested a SoC reset; "
++                        "resetting the machine is not modelled yet, the "
++                        "VideoCore is now stopped");
++            break;
++        }
++        if (st != RVF_RUN_RUNNING) {
++            break;
++        }
++        rvf_pace(s);
++    }
++    rcu_unregister_thread();
++    return NULL;
++}
++
++/* --- device ----------------------------------------------------------- */
++
++static bool rvf_read_file(const char *path, uint8_t **out, size_t *len,
++                          Error **errp)
++{
++    gchar *data = NULL;
++    gsize n = 0;
++    GError *gerr = NULL;
++
++    if (!g_file_get_contents(path, &data, &n, &gerr)) {
++        error_setg(errp, "rvf-videocore: %s: %s", path, gerr->message);
++        g_error_free(gerr);
++        return false;
++    }
++    *out = (uint8_t *)data;
++    *len = n;
++    return true;
++}
++
++static void rvf_videocore_realize(DeviceState *dev, Error **errp)
++{
++    RvfVideoCoreState *s = RVF_VIDEOCORE(dev);
++    g_autofree uint8_t *eeprom = NULL;
++    g_autofree uint8_t *sd = NULL;
++    size_t eeprom_len = 0, sd_len = 0;
++    char err[256] = "";
++    rvf_host_ops ops = {
++        .opaque = s,
++        .mmio_read = rvf_cb_mmio_read,
++        .mmio_write = rvf_cb_mmio_write,
++        .console = NULL,
++        .log = rvf_cb_log,
++        .arm_release = rvf_cb_arm_release,
++    };
++
++    if (!s->eeprom) {
++        error_setg(errp, "rvf-videocore: the 'eeprom' property is required");
++        return;
++    }
++    if (!s->ram || !s->gpu_bus) {
++        error_setg(errp, "rvf-videocore: 'ram' and 'gpu-bus' links required");
++        return;
++    }
++    if (!rvf_read_file(s->eeprom, &eeprom, &eeprom_len, errp)) {
++        return;
++    }
++    if (s->sd && !rvf_read_file(s->sd, &sd, &sd_len, errp)) {
++        return;
++    }
++
++    address_space_init(&s->gpu_as, s->gpu_bus, "rvf-videocore-gpu");
++
++    s->vc = rvf_vc_new(memory_region_get_ram_ptr(s->ram),
++                       memory_region_size(s->ram),
++                       eeprom, eeprom_len, sd, sd_len,
++                       &ops, err, sizeof(err));
++    if (!s->vc) {
++        error_setg(errp, "rvf-videocore: %s", err);
++        return;
++    }
++    rvf_vc_add_foreign(s->vc, RVF_UART0_BASE, RVF_UART0_BASE + RVF_UART0_SIZE);
++
++    memory_region_init_io(&s->mbox_mr, OBJECT(s), &rvf_mbox_ops, s,
++                          "rvf-videocore-mbox", RVF_MBOX_SIZE);
++    sysbus_init_mmio(SYS_BUS_DEVICE(s), &s->mbox_mr);
++    sysbus_init_irq(SYS_BUS_DEVICE(s), &s->mbox_irq);
++
++    qemu_thread_create(&s->thread, "rvf-videocore", rvf_thread_fn, s,
++                       QEMU_THREAD_JOINABLE);
++    s->thread_started = true;
++}
++
++static void rvf_videocore_unrealize(DeviceState *dev)
++{
++    RvfVideoCoreState *s = RVF_VIDEOCORE(dev);
++
++    if (s->thread_started) {
++        s->stop = true;
++        qemu_thread_join(&s->thread);
++        s->thread_started = false;
++    }
++    if (s->vc) {
++        rvf_vc_free(s->vc);
++        s->vc = NULL;
++    }
++}
++
++static const Property rvf_videocore_properties[] = {
++    DEFINE_PROP_STRING("eeprom", RvfVideoCoreState, eeprom),
++    DEFINE_PROP_STRING("sd", RvfVideoCoreState, sd),
++    /* VPU instructions per BQL slice: ~0.1 ms of model time at 18 MIPS. */
++    DEFINE_PROP_UINT32("slice", RvfVideoCoreState, slice, 2000),
++    DEFINE_PROP_LINK("ram", RvfVideoCoreState, ram,
++                     TYPE_MEMORY_REGION, MemoryRegion *),
++    DEFINE_PROP_LINK("gpu-bus", RvfVideoCoreState, gpu_bus,
++                     TYPE_MEMORY_REGION, MemoryRegion *),
++};
++
++static void rvf_videocore_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++
++    dc->realize = rvf_videocore_realize;
++    dc->unrealize = rvf_videocore_unrealize;
++    device_class_set_props(dc, rvf_videocore_properties);
++    /* It is wired by the SoC, not the command line. */
++    dc->user_creatable = false;
++}
++
++static const TypeInfo rvf_videocore_info = {
++    .name = TYPE_RVF_VIDEOCORE,
++    .parent = TYPE_SYS_BUS_DEVICE,
++    .instance_size = sizeof(RvfVideoCoreState),
++    .class_init = rvf_videocore_class_init,
++};
++
++static void rvf_videocore_register_types(void)
++{
++    type_register_static(&rvf_videocore_info);
++}
++
++type_init(rvf_videocore_register_types)
+diff --git a/include/hw/arm/bcm2838_peripherals.h b/include/hw/arm/bcm2838_peripherals.h
+index 7ee1bd0..8325261 100644
+--- a/include/hw/arm/bcm2838_peripherals.h
++++ b/include/hw/arm/bcm2838_peripherals.h
+@@ -12,6 +12,7 @@
+ #include "hw/arm/bcm2835_peripherals.h"
+ #include "hw/sd/sdhci.h"
+ #include "hw/gpio/bcm2838_gpio.h"
++#include "hw/misc/rvf_videocore.h"
+ 
+ /* SPI */
+ #define GIC_SPI_INTERRUPT_MBOX         33
+@@ -72,6 +73,11 @@ struct BCM2838PeripheralState {
+ 
+     UnimplementedDeviceState asb;
+     UnimplementedDeviceState clkisp;
++    /*
++     * The VideoCore, run by the rpi-virt-fw model (CONFIG_RVF). Present as an
++     * object always; realized only when 'videocore-eeprom' names an image.
++     */
++    RvfVideoCoreState videocore;
+ };
+ 
+ struct BCM2838PeripheralClass {
+diff --git a/include/hw/arm/raspi_platform.h b/include/hw/arm/raspi_platform.h
+index 7bc4807..7310baf 100644
+--- a/include/hw/arm/raspi_platform.h
++++ b/include/hw/arm/raspi_platform.h
+@@ -43,6 +43,12 @@ struct RaspiBaseMachineState {
+     MachineState parent_obj;
+     /*< public >*/
+     struct arm_boot_info binfo;
++    /*
++     * The VideoCore firmware boots the ARM (rpi-virt-fw, raspi4b only):
++     * -kernel/-dtb are not loaded, no boot stub is written, and every core
++     * starts powered off until the firmware releases it at physical 0, EL3.
++     */
++    bool firmware_boots_arm;
+ };
+ 
+ struct RaspiBaseMachineClass {
+diff --git a/include/hw/misc/rvf_videocore.h b/include/hw/misc/rvf_videocore.h
+new file mode 100644
+index 0000000..8efe6d1
+--- /dev/null
++++ b/include/hw/misc/rvf_videocore.h
+@@ -0,0 +1,44 @@
++/*
++ * The Raspberry Pi 4 VideoCore, run by the rpi-virt-fw firmware model.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++#ifndef HW_MISC_RVF_VIDEOCORE_H
++#define HW_MISC_RVF_VIDEOCORE_H
++
++#include "hw/sysbus.h"
++#include "qemu/thread.h"
++#include "qom/object.h"
++
++#define TYPE_RVF_VIDEOCORE "rvf-videocore"
++OBJECT_DECLARE_SIMPLE_TYPE(RvfVideoCoreState, RVF_VIDEOCORE)
++
++struct rvf_vc;
++
++struct RvfVideoCoreState {
++    SysBusDevice parent_obj;
++
++    /* The ARM's aperture onto the mailbox: 0x40 bytes at 0x7e00b880. */
++    MemoryRegion mbox_mr;
++    qemu_irq mbox_irq;
++
++    /* Properties. */
++    char *eeprom;
++    char *sd;
++    uint32_t slice;
++
++    /* Links: guest RAM and the VideoCore bus. */
++    MemoryRegion *ram;
++    MemoryRegion *gpu_bus;
++    AddressSpace gpu_as;
++
++    struct rvf_vc *vc;
++    QemuThread thread;
++    bool thread_started;
++    bool stop;
++    int irq_level;
++    bool released;
++    int64_t pace_offset_ns;
++};
++
++#endif
+diff --git a/meson.build b/meson.build
+index d929329..c0574bd 100644
+--- a/meson.build
++++ b/meson.build
+@@ -824,6 +824,10 @@ endif
+ #####################################
+ 
+ libm = cc.find_library('m', required: false)
++# The rpi-virt-fw VideoCore model, for `-machine raspi4b,videocore=`. Found
++# through pkg-config only (scripts/build-qemu.sh in that repository writes the
++# .pc); absent, raspi4b builds exactly as before.
++rvf = dependency('rpi-virt-fw', method: 'pkg-config', required: false)
+ threads = dependency('threads')
+ util = cc.find_library('util', required: false)
+ winmm = []
+@@ -2448,6 +2452,7 @@ endif
+ config_host_data.set('CONFIG_MODULE_UPGRADES', get_option('module_upgrades'))
+ 
+ config_host_data.set('CONFIG_ATTR', libattr.found())
++config_host_data.set('CONFIG_RVF', rvf.found())
+ config_host_data.set('CONFIG_BDRV_WHITELIST_TOOLS', get_option('block_drv_whitelist_in_tools'))
+ config_host_data.set('CONFIG_BRLAPI', brlapi.found())
+ config_host_data.set('CONFIG_BSD', host_os in bsd_oses)
+-- 
+2.53.0
+

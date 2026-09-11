@@ -7,6 +7,11 @@ description = "A virtual bench for Raspberry Pi VideoCore boot firmware (start4.
 license = "MIT OR Apache-2.0"
 publish = false
 
+# `staticlib` is for the QEMU frontend (see `qemu/`): a patched `raspi4b`
+# machine links the model in and drives it through `src/capi.rs` / `include/rvf.h`.
+[lib]
+crate-type = ["rlib", "staticlib"]
+
 [dependencies]
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
@@ -25,3 +30,7 @@ opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+
+# Standalone package: keep a checkout nested under another workspace (e.g. a
+# git worktree inside the main checkout) from being claimed by it.
+[workspace]

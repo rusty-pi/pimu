@@ -15,3 +15,7 @@ docs/*.pdf
 # testdata/boot/firmware-boot.toml, not this transcript.
 /boot.log
 /boot.log.console
+
+# QEMU sources and build (scripts/build-qemu.sh)
+/qemu/src/
+/qemu/build/

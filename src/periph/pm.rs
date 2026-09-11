@@ -1,10 +1,23 @@
 //! BCM2711 power-management block (`0x7E10_0000`): reset control + watchdog.
 //!
-//! The only behaviour the model needs is the SoC reset the EEPROM bootloader
-//! triggers after applying a self-update ("EEPROMs updated. Rebooting / RESET"):
-//! it writes `RSTC` (`+0x1C`) with the `0x5A` password and a reset config, then
-//! spins in a delay loop expecting the chip to reboot. [`Pm::take_reset`] lets
-//! the run loop notice that and restart from a fresh machine.
+//! Two things drive the model here, and they are the same hardware feature:
+//!
+//! * the SoC reset the EEPROM bootloader triggers after applying a self-update
+//!   ("EEPROMs updated. Rebooting / RESET"): `WDOG = PASSWORD | 10` then
+//!   `RSTC = PASSWORD | WRCFG_FULL_RESET`, after which it spins in a delay loop
+//!   expecting the chip to reboot;
+//! * the watchdog `start4` arms at the ARM hand-off when `config.txt` carries
+//!   `dtparam=watchdog=on`: `WDOG = PASSWORD | 0xFFFFF` (the 20-bit maximum,
+//!   16 s at the watchdog's 65536 Hz) then `RSTC = PASSWORD | 0x3222`, seen at
+//!   `0x3ED62334`/`0x3ED62342` right after `arm_loader: Starting ARM`. That is
+//!   byte for byte Linux's `bcm2835_wdt_start`, and Linux's probe then finds
+//!   the dog running (`bcm2835_wdt_is_running`) and keeps it fed.
+//!
+//! Both are "arm the countdown"; only the timeout differs. So the model counts
+//! down: a `RSTC` write with `WRCFG_FULL_RESET` set starts the timer from the
+//! last `WDOG` value, `WDOG` reads back the ticks left (`get_timeleft`), and
+//! [`Pm::take_reset`] reports the moment it expires. Treating the arm itself as
+//! the reset made every `watchdog=on` boot reboot at the hand-off.
 //!
 //! Everything else is sticky storage with the password byte masked on read-back.
 
@@ -37,12 +50,18 @@ const RSTC_WRCFG_FULL_RESET: u32 = 0x20;
 /// decodes to partition 0, same as the all-zero value did.
 const RSTS_HADWRF: u32 = 0x20;
 
+/// The watchdog counts at 65536 Hz: one `WDOG` tick is 1 s / 65536 ≈ 15.26 µs.
+const WDOG_HZ: u64 = 65_536;
+/// `WDOG` timeout field.
+const WDOG_TIME_MASK: u32 = 0x000F_FFFF;
+
 #[derive(Default)]
 pub struct Pm {
     storage: BTreeMap<u32, u32>,
-    /// Set once the watchdog is armed with a timeout — the bootloader does this
-    /// only as the first half of a reboot.
-    wdog_armed: bool,
+    /// Model time, in microseconds, as of the last [`Pm::advance`].
+    now_us: u64,
+    /// When the armed countdown expires, in model microseconds.
+    deadline_us: Option<u64>,
     reset_pending: bool,
 }
 
@@ -56,7 +75,33 @@ impl Pm {
         pm
     }
 
-    /// Consume a pending reset request.
+    /// Feed the watchdog the model clock. Called from `Machine::tick`; the
+    /// countdown fires when the deadline the last arm set has passed.
+    pub fn advance(&mut self, now_us: u64) {
+        self.now_us = now_us;
+        if self.deadline_us.is_some_and(|d| now_us >= d) {
+            self.deadline_us = None;
+            self.reset_pending = true;
+        }
+    }
+
+    /// True while the countdown is armed and running.
+    pub fn watchdog_running(&self) -> bool {
+        self.deadline_us.is_some()
+    }
+
+    /// `WDOG` ticks remaining, which is what the register reads back as.
+    fn ticks_left(&self) -> u32 {
+        match self.deadline_us {
+            Some(d) => {
+                let us = d.saturating_sub(self.now_us);
+                ((us * WDOG_HZ).div_ceil(1_000_000)).min(WDOG_TIME_MASK as u64) as u32
+            }
+            None => 0,
+        }
+    }
+
+    /// True once, after the firmware has asked for a SoC reset.
     pub fn take_reset(&mut self) -> bool {
         std::mem::take(&mut self.reset_pending)
     }
@@ -69,17 +114,15 @@ impl MmioDevice for Pm {
 
     fn read(&mut self, offset: u32, _width: Width) -> BusResult<u32> {
         let off = offset & !3;
+        if off == WDOG {
+            return Ok(self.ticks_left());
+        }
         if let Some(&v) = self.storage.get(&off) {
             return Ok(v & !PASSWD_MASK);
         }
-        // Power-domain status block (`PM_IMAGE`..`PM_GRAFX`, `0x40..0x60`). On
-        // real silicon each reads back with the PM password nibble plus the
-        // per-domain "powered & functional" bits set — the Pi 4 has
-        // `0x0000_704x`/`0x0000_706x` across this range. start4's `sysm` driver
-        // init gates an init branch on `PM[0x5C] != 0`; with an all-zero PM it
-        // takes the early-return path instead. Mirror a plausible powered
-        // state so that branch runs. (`RSTS` is seeded in [`Pm::new`]; the rest
-        // of PM stays 0.)
+        // Power-domain status registers (`PM_GRAFX`, `PM_IMAGE`, ...): report
+        // the domain powered and its clocks stable so that branch runs.
+        // (`RSTS` is seeded in [`Pm::new`]; the rest of the block reads as 0.)
         if (0x40..0x60).contains(&off) {
             return Ok(0x0000_7040);
         }
@@ -89,14 +132,18 @@ impl MmioDevice for Pm {
     fn write(&mut self, offset: u32, _width: Width, value: u32) -> BusResult<()> {
         let off = offset & !3;
         let passworded = value & PASSWD_MASK == PASSWD;
-        // The bootloader's reboot is `WDOG = PASSWORD | <ticks>` then
-        // `RSTC = PASSWORD | WRCFG_FULL_RESET`. Startup also pokes RSTC (with
-        // `0x200`/`0x202`, no WRCFG bits) — that must not count as a reset.
-        if off == WDOG && passworded && value & 0x000F_FFFF != 0 {
-            self.wdog_armed = true;
-        }
-        if off == RSTC && passworded && (value & RSTC_WRCFG_FULL_RESET != 0 || self.wdog_armed) {
-            self.reset_pending = true;
+        if off == RSTC && passworded {
+            // `WRCFG_FULL_RESET` arms the countdown from the current `WDOG`
+            // value; clearing it (`bcm2835_wdt_stop` writes `0x102`) stops it.
+            // Startup pokes `RSTC` with `0x200`/`0x202` — no WRCFG bits — and
+            // that must not count as anything.
+            if value & RSTC_WRCFG_FULL_RESET != 0 {
+                let ticks = self.storage.get(&WDOG).copied().unwrap_or(0) & WDOG_TIME_MASK;
+                let us = (u64::from(ticks) * 1_000_000).div_ceil(WDOG_HZ);
+                self.deadline_us = Some(self.now_us + us);
+            } else {
+                self.deadline_us = None;
+            }
         }
         self.storage.insert(off, value);
         Ok(())
@@ -125,6 +172,48 @@ mod tests {
         let mut pm = Pm::new();
         pm.write(RSTS, Width::Word, PASSWD).unwrap();
         assert_eq!(pm.read(RSTS, Width::Word).unwrap(), 0);
+        assert!(!pm.take_reset());
+    }
+
+    /// The bootloader's reboot: a 10-tick timeout, then the arm. The reset
+    /// lands when the countdown expires, not on the arm itself.
+    #[test]
+    fn a_short_watchdog_resets_when_it_expires() {
+        let mut pm = Pm::new();
+        pm.advance(1_000);
+        pm.write(WDOG, Width::Word, PASSWD | 10).unwrap();
+        pm.write(RSTC, Width::Word, PASSWD | RSTC_WRCFG_FULL_RESET)
+            .unwrap();
+        assert!(pm.watchdog_running());
+        assert!(!pm.take_reset());
+        // 10 ticks at 65536 Hz is 153 µs.
+        pm.advance(1_000 + 152);
+        assert!(!pm.take_reset());
+        pm.advance(1_000 + 153);
+        assert!(pm.take_reset());
+        assert!(!pm.watchdog_running());
+    }
+
+    /// What `start4` does at the ARM hand-off with `dtparam=watchdog=on`, and
+    /// what Linux's `bcm2835_wdt` then reads: a running dog with ~16 s left.
+    /// Stopping it the way `bcm2835_wdt_stop` does must not reset either.
+    #[test]
+    fn the_hand_off_watchdog_runs_for_sixteen_seconds_and_can_be_stopped() {
+        let mut pm = Pm::new();
+        pm.write(WDOG, Width::Word, PASSWD | 0xF_FFFF).unwrap();
+        pm.write(RSTC, Width::Word, PASSWD | 0x3222).unwrap();
+        assert_eq!(
+            pm.read(RSTC, Width::Word).unwrap() & RSTC_WRCFG_FULL_RESET,
+            0x20
+        );
+        assert_eq!(pm.read(WDOG, Width::Word).unwrap(), 0xF_FFFF);
+        pm.advance(8_000_000);
+        assert!(!pm.take_reset());
+        let left = pm.read(WDOG, Width::Word).unwrap();
+        assert!((0x7_FFF0..=0x8_0010).contains(&left), "{left:#x}");
+        pm.write(RSTC, Width::Word, PASSWD | 0x102).unwrap();
+        assert!(!pm.watchdog_running());
+        pm.advance(60_000_000);
         assert!(!pm.take_reset());
     }
 }
