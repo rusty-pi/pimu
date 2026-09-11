@@ -100,8 +100,20 @@ jobs:
       - name: Build rpi-virt-fw
         run: cargo build --release
 
+      # Exit 2 means this runner's QEMU has no `raspi4b` machine — a toolchain
+      # gap, not a regression in the model, so report it as a warning and let
+      # the job pass. Any other non-zero exit is a real failure.
       - name: Boot the handed-over device tree under QEMU
-        run: ./scripts/qemu-check.sh
+        run: |
+          set +e
+          ./scripts/qemu-check.sh
+          status=$?
+          set -e
+          if [ "$status" -eq 2 ]; then
+            echo "::warning title=QEMU check skipped::this runner's qemu-system-aarch64 has no raspi4b machine"
+            exit 0
+          fi
+          exit "$status"
 
       - uses: actions/upload-artifact@v4
         if: always()

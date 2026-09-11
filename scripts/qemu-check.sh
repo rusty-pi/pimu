@@ -47,6 +47,18 @@ if ! command -v "$qemu" >/dev/null 2>&1; then
   echo "MISSING: $qemu is not installed (Debian/Ubuntu: apt-get install qemu-system-arm)" >&2
   exit 1
 fi
+# The machine has to exist in *this* QEMU. `raspi4b` arrived in 7.1 (it was
+# `raspi4` before that), and a build without it fails with a bare "unsupported
+# machine type" that says nothing about which machines it does have. Exit 2
+# rather than 1 so a caller can tell "this QEMU is too old" apart from "the
+# device tree is bad" — CI reports the former as a skipped check, because a
+# toolchain gap is not a regression in the firmware model.
+if ! "$qemu" -machine help 2>/dev/null | grep -q '^raspi4b '; then
+  echo "SKIP: $qemu has no raspi4b machine ($("$qemu" --version | head -1))." >&2
+  echo "      Available raspi machines:" >&2
+  "$qemu" -machine help 2>/dev/null | grep -E '^raspi' >&2 || echo "      (none)" >&2
+  exit 2
+fi
 for f in "$bin" "$here/firmware/pieeprom.bin" "$here/firmware/sd.img"; do
   if [ ! -f "$f" ]; then
     echo "MISSING: $f (run scripts/fetch-firmware.sh, scripts/make-sd.sh, cargo build --release)" >&2
