@@ -39,7 +39,9 @@ fn fake_log(console: &str) -> String {
          \x20 mailbox: config1 0x1, 1 requests taken, 1 replies written\n\
          \x20 tag 0x00000001     answered    4 bytes  0x6a7a16af\n\
          \x20 tag 0x0003008f     answered    4 bytes  0x00000001\n\
-         \x20 tag 0x00030090     answered    4 bytes  0x80000000\n\
+         \x20 tag 0x00030090     answered    4 bytes  0x00000001\n\
+         \x20 tag 0x0003009c     answered    4 bytes  0x00000000\n\
+         \x20 tag 0x00030092     answered   40 bytes  0x00000000 0x00000020 0x6ff9b60e 0x7bb3973a 0x01eb65b0 0x48fd764f 0x8286f48d 0xf1b46aed 0xe8e0da4c 0x9d1e6ea2\n\
          retired 1234  (skipped 0, cycles 5678)\n"
     )
 }

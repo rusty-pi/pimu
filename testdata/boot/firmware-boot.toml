@@ -30,10 +30,22 @@ sd = "../../firmware/sd.img"
 # and the crypto key status, which is the service rpi-mkosi#37 ultimately
 # cares about.
 #
-# `0x00030090` is deliberately last. A crypto handler that fails answers its
-# own tag but stamps the whole buffer `0x80000001` and stops the walk, so any
-# tag placed after it would go unanswered for that reason alone.
-mbox_property = ["0x00000001", "0x0003008f", "0x00030090"]
+# The `=1` is load-bearing: crypto key ids are 1-based, and `key_id` 0 answers
+# `KEY_NOT_FOUND` on a part whose only key is key 1. A crypto handler that does
+# fail answers its own tag but stamps the whole buffer `0x80000001` and stops
+# the walk, so a failing tag has to go last or every tag after it reads as
+# unanswered for that reason alone.
+#
+# The last one is an HMAC-SHA256 over a fixed 16-byte message ("Hello, world!"),
+# keyed by the OTP key, which is the end-to-end proof that the crypto service
+# runs for real.
+mbox_property = [
+  "0x00000001",
+  "0x0003008f",
+  "0x00030090=1",
+  "0x0003009c=1",
+  "0x00030092=0.1.16.0x6c6c6548.0x77202c6f.0x646c726f.0x00000021",
+]
 # The runners are roughly 1.6x slower than a dev box, where the last milestone
 # lands around 90 s. The budget went 290 -> 330 s so the run reaches the codec
 # licence check, which is what exercises the VCE guard below. RVF_BOOT_WALL
@@ -289,31 +301,44 @@ line = ["tag 0x00000001", "answered", "0x6a7a16af"]
 
 [[milestone]]
 why = """
-`GET_CRYPTO_NUM_OTP_KEYS` reports one key slot. This is what makes the failure
-below a *provisioning* answer rather than a broken interface: the crypto
-service is up and knows how many slots the part has."""
+`GET_CRYPTO_NUM_OTP_KEYS` reports one key slot — and the id of that one key is
+**1**, not 0. Crypto key ids are 1-based, which is worth a milestone of its own
+because asking for key 0 answers `KEY_NOT_FOUND` and reads exactly like an
+unprovisioned part."""
 line = ["tag 0x0003008f", "answered", "0x00000001"]
 
 [[milestone]]
 why = """
-`GET_CRYPTO_KEY_STATUS` answers `0x80000000` — an error, and asking
-`GET_CRYPTO_LAST_ERROR` straight afterwards returns 3,
-`RPI_FW_CRYPTO_KEY_NOT_FOUND`. That is the correct answer for a board with no
-key fused, which is what this bench models, and it is reached through the real
-handler: the request costs millions of instructions inside `start4.elf` and no
-short-circuit stands in for it.
+`GET_CRYPTO_KEY_STATUS` for key 1 answers `0x00000001` —
+`ARM_CRYPTO_KEY_STATUS_TYPE_DEVICE_PRIVATE_KEY`, none of the lock bits set. The
+reference board answers the same for key 1 when asked over `/dev/vcio`, and
+`KEY_NOT_FOUND` for 0, 2 and 3.
 
-The firmware treats a failing crypto handler as fatal for the whole buffer —
-the tag itself is marked answered, but the header comes back `0x80000001` and
-the walk stops — which is why this tag is last in the request.
+This depends on OTP rows 56-63 being modelled as fused, which they are on real
+hardware: `vcgencmd otp_dump` prints that region as zeroes but hides it the way
+it hides rows 19-26, while Linux's `nvmem_priv0` reads back 32 non-zero bytes.
+The key in `src/periph/configotp.rs` is invented — never a real row."""
+line = ["tag 0x00030090", "answered", "0x00000001"]
 
-This is the reference board's answer too, not a shortfall of the model: asking
-a real Pi 4 the same tags through `/dev/vcio` returns `NUM_OTP_KEYS` 1 and
-`LAST_ERROR` 3, with `KEY_STATUS` failing out of the `vcio` driver as `EINVAL`
-because of the same `0x80000001` buffer code. Its rows 56-63 are blank as
-well. No key is fused on either, so this milestone pins agreement with
-hardware."""
-line = ["tag 0x00030090", "answered", "0x80000000"]
+[[milestone]]
+why = """
+`GET_CRYPTO_KEY_USAGE` for key 1 is `0` — `RPI_FW_CRYPTO_KEY_USAGE_UNDEFINED`,
+as on the reference board. Nothing has claimed the key for RPi Connect or a
+user-defined purpose."""
+line = ["tag 0x0003009c", "answered", "0x00000000"]
+
+[[milestone]]
+why = """
+The end of the line this project exists for: `GET_CRYPTO_HMAC_SHA256` returns
+status `0`, length `0x20`, and a real HMAC-SHA256 over the fixed 16-byte
+message, computed by `start4.elf`'s own mbedTLS with the OTP key. Nothing is
+short-circuited — the whole crypto service runs.
+
+This is the shape of the derivation rpi-mkosi#37 needs guarded: a firmware bump
+that changes how the OTP key reaches the HMAC changes this digest, and the diff
+lands here instead of on a thousand cards that will not unlock. The value is
+safe to publish precisely because the key it is derived from is invented."""
+line = ["tag 0x00030092", "answered", "0x6ff9b60e 0x7bb3973a 0x01eb65b0 0x48fd764f 0x8286f48d 0xf1b46aed 0xe8e0da4c 0x9d1e6ea2"]
 
 [[milestone]]
 why = "No nop-slides at all: the register file must survive preemptive context switches (8d7c27a) and no callback may be null."

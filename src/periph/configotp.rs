@@ -169,11 +169,43 @@ impl ConfigOtp {
         // pin it down (#5), and this is the place to correct if it disagrees.
         table.insert(64, 0x5E00_5301);
         table.insert(65, 0x0000_0200);
+        // 56-63: the 256-bit customer-private key. The reference board has
+        // these *fused* — `vcgencmd otp_dump` prints them as `00000000`, but it
+        // hides this region the same way it hides rows 19-26, and Linux's
+        // `nvmem_priv0` reads back 32 non-zero bytes. Modelling them as blank
+        // would therefore be modelling the wrong board: firmware that reads 0
+        // from a row concludes the fuse is unprogrammed and can take a
+        // different path.
+        //
+        // The value is **invented for this model** and must stay that way. The
+        // real rows are the secret behind `rpi-machine-id` and the root LUKS
+        // passphrase, which is what `CLAUDE.md`'s "never commit an OTP dump"
+        // rule protects; a made-up key exercises the same firmware path. It is
+        // a valid NIST P-256 scalar — non-zero and far below the group order,
+        // whose top word is `0xFFFFFFFF` — and deliberately ASCII, so a
+        // hexdump of these rows reads as obviously fake.
+        //
+        // Fusing them does not by itself make the crypto property tags answer:
+        // `GET_CRYPTO_KEY_STATUS` still reports `KEY_NOT_FOUND`, on this model
+        // and on the reference board alike. The key also has to be *registered*
+        // in customer OTP (rows 36-43), which is blank on both.
+        const DEVICE_PRIVATE_KEY: [u32; 8] = [
+            0x5250_4956, // "RPIV"
+            0x4952_5446, // "IRTF"
+            0x574D_4F44, // "WMOD"
+            0x454C_4B45, // "ELKE"
+            0x5930_3030, // "Y000"
+            0x3030_3030, // "0000"
+            0x3030_3030, // "0000"
+            0x3030_3031, // "0001"
+        ];
+        for (i, word) in DEVICE_PRIVATE_KEY.iter().enumerate() {
+            table.insert(56 + i as u32, *word);
+        }
         // Deliberately left blank, exactly as the reference board has them:
-        // 36-43 customer OTP, 45/46 the MPG2 and WVC1 decode keys, 47-54 the
-        // SHA256 of the secure-boot RSA public key, 55 the secure-boot flags,
-        // and 56-63 the 256-bit device-specific private key. Those last two
-        // groups are why an OTP dump must never be committed.
+        // 36-43 customer OTP (`nvmem_cust0` reads back all zero), 45/46 the
+        // MPG2 and WVC1 decode keys, 47-54 the SHA256 of the secure-boot RSA
+        // public key, and 55 the secure-boot flags.
         ConfigOtp {
             storage: BTreeMap::new(),
             key: 0,
