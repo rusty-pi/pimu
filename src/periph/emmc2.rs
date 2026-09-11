@@ -22,6 +22,7 @@
 //! bootloader uses for the SD path.
 
 use crate::diag_eprintln;
+use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 

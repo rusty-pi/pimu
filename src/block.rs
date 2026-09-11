@@ -38,6 +38,8 @@
 //!
 //! [#32]: https://github.com/valtzu/rpi-virt-fw/issues/32
 
+use alloc::vec::Vec;
+
 /// Sector size. 512 everywhere in this machine: SDHC addresses in 512-byte
 /// units, and the mass-storage model reports 512 in READ CAPACITY.
 pub const BLOCK_LEN: usize = 512;

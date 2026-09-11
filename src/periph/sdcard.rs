@@ -32,6 +32,7 @@
 
 use crate::block::{BlockDevice, MemoryBlocks, BLOCK_LEN};
 
+use alloc::boxed::Box;
 use alloc::vec::Vec;
 
 /// SD card operating states (subset), per the physical-layer spec.
