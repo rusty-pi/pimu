@@ -53,14 +53,29 @@
 //!
 //! Point 4 of issue #1 asks for the PLLs themselves, on the grounds that
 //! leaving them unmodelled makes every frequency measurement return one fixed
-//! value. The measurements above narrow that considerably: there is no PLL
-//! divider or lock-status register in this window that start4 reads and that
-//! this device currently answers wrongly. The live inputs to start4's frequency
-//! and voltage measurements are the AVS channels at `0x7D5D_2200`, which are
-//! now sourced from hardware, and the clock-rate calibration reads a cached
-//! rate table rather than taking a live measurement at all. So the remaining
-//! gap is smaller than the issue's framing suggests, and no PLL model is
-//! invented here to fill it.
+//! value. A full boot to `arm_loader` was traced with every access to this
+//! window logged (`RVF_TRACE_MMIO=0x7d5d0000-0x7d5e0000`), and the complete
+//! list of offsets the firmware touches outside the two sub-blocks is:
+//!
+//! ```text
+//! 0x7d5d1800  R+W   FUN_0ec2ffb4 sets bit 2 from the measured core voltage
+//! 0x7d5d1820  R     FUN_0ec30196's predicate; reads 0 on hardware too
+//! 0x7d5d183c  R+W   start4's own "characterisation done" flag
+//! 0x7d5da000  W     FUN_0ec30200 writes 0xA0, never reads it back
+//! ```
+//!
+//! Plus, in the AVS page and covered by [`crate::periph::avs`], the write-only
+//! `+0x203C` / `+0x2040` / `+0x2044` measurement masks and the `+0x206C` /
+//! `+0x2074` / `+0x2078` enables.
+//!
+//! There is no PLL divider, multiplier or lock-status register among them —
+//! not one this device answers wrongly, and not one it is asked about at all.
+//! The live inputs to start4's frequency and voltage measurements are the AVS
+//! channels at `0x7D5D_2200`, and the clock-rate calibration reads a cached
+//! rate table rather than taking a live measurement. So there is nothing here
+//! to model, and no PLL model is invented to fill a gap the firmware never
+//! probes. If a later boot phase does read one of these registers, the trace
+//! above is the way to find out.
 
 use std::collections::BTreeMap;
 

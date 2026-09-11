@@ -684,13 +684,65 @@ fn avs_channels_report_distinct_counts() {
     let counts: Vec<u32> = (0..6)
         .map(|ch| m.load32(map::AVS_BASE + 0x200 + ch * 4).unwrap() & 0x3FF)
         .collect();
-    assert_eq!(counts, vec![752, 2, 669, 758, 2, 841]);
+    // Channel 3 is the core rail, and it reports whatever the PMIC is set to
+    // rather than a fixed count: 692 decodes back to the 0.85 V the `0x1E`
+    // setpoint is seeded with. The others are the measured constants.
+    assert_eq!(counts, vec![752, 2, 669, 692, 2, 841]);
 
     // `FUN_0ed603e2` accepts a sample only with both bit 10 and bit 16 set.
     for ch in 0..6 {
         let v = m.load32(map::AVS_BASE + 0x200 + ch * 4).unwrap();
         assert!(v & (1 << 10) != 0 && v & (1 << 16) != 0, "channel {ch}");
     }
+}
+
+/// The AVS block is 36 channels wide at `+0x220`, not 24: `FUN_0ec5f2c0`
+/// accepts a channel up to 0x23 and hands it straight to `FUN_0ec3007a`, which
+/// spins ten times on a channel that does not report "settled". Channels
+/// 0x20..0x23 settle with a count of 0 on hardware, which is not the same thing
+/// as never settling.
+#[test]
+fn avs_rail_monitors_cover_every_channel_the_sensor_api_accepts() {
+    let mut m = machine();
+    for ch in 0..0x24u32 {
+        let v = m.load32(map::AVS_BASE + 0x220 + ch * 4).unwrap();
+        assert_ne!(v & (1 << 16), 0, "channel {ch:#x} must report settled");
+    }
+    assert_eq!(m.load32(map::AVS_BASE + 0x220).unwrap() & 0x7FFF, 0x07FD);
+    assert_eq!(
+        m.load32(map::AVS_BASE + 0x220 + 0x23 * 4).unwrap() & 0x7FFF,
+        0
+    );
+}
+
+/// Channel 3 measures the SoC core rail, so it has to follow the rail. start4's
+/// DVFS calibration (`FUN_0ec303e8`) programs two voltages and gives up on the
+/// whole scan unless the sensor reports at least 10 mV between them; a fixed
+/// count reads as a rail that does not respond.
+#[test]
+fn avs_core_channel_follows_the_pmic_setpoint() {
+    let mut m = machine();
+    let count = |m: &mut Machine| m.load32(map::AVS_BASE + 0x200 + 3 * 4).unwrap() & 0x3FF;
+    // start4 decodes the count as `(count * 100571) >> 13` tenths of a mV.
+    let tenths = |c: u32| (c * 100_571) >> 13;
+
+    pmic_write(&mut m, 0x1E, 0x25, 0x54); // 0.84 V
+    let low = count(&mut m);
+    pmic_write(&mut m, 0x1E, 0x25, 0x6E); // 1.10 V
+    let high = count(&mut m);
+
+    // One count is ~1.2 mV, so the round trip is exact to within a count.
+    assert!(
+        tenths(low).abs_diff(8400) <= 12,
+        "0.84 V decoded back as {}",
+        tenths(low)
+    );
+    assert!(
+        tenths(high).abs_diff(11000) <= 12,
+        "1.10 V decoded back as {}",
+        tenths(high)
+    );
+    assert!(tenths(high) - tenths(low) >= 100, "rail must move >= 10 mV");
 }
 
 /// `+0x03C` is an active-high disable mask: `FUN_0ed6040e` writes
@@ -701,7 +753,7 @@ fn avs_disable_mask_gates_the_other_channels() {
     let mut m = machine();
     // Select channel 3 the way `FUN_0ed6040e` does.
     m.store32(map::AVS_BASE + 0x03C, !(1u32 << 3) & 0x7F).unwrap();
-    assert_eq!(m.load32(map::AVS_BASE + 0x200 + 3 * 4).unwrap() & 0x3FF, 758);
+    assert_eq!(m.load32(map::AVS_BASE + 0x200 + 3 * 4).unwrap() & 0x3FF, 692);
     for ch in [0, 1, 2, 4, 5] {
         assert_eq!(
             m.load32(map::AVS_BASE + 0x200 + ch * 4).unwrap(),
