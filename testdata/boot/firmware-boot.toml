@@ -307,10 +307,12 @@ The firmware treats a failing crypto handler as fatal for the whole buffer —
 the tag itself is marked answered, but the header comes back `0x80000001` and
 the walk stops — which is why this tag is last in the request.
 
-Provisioning a key is the open half of this (rpi-mkosi#37). Writing invented
-values into OTP rows 56-63 does *not* do it: they read back fine and the answer
-does not change, because the verdict is reached during boot and cached, with no
-OTP row read at all while the request is served."""
+This is the reference board's answer too, not a shortfall of the model: asking
+a real Pi 4 the same tags through `/dev/vcio` returns `NUM_OTP_KEYS` 1 and
+`LAST_ERROR` 3, with `KEY_STATUS` failing out of the `vcio` driver as `EINVAL`
+because of the same `0x80000001` buffer code. Its rows 56-63 are blank as
+well. No key is fused on either, so this milestone pins agreement with
+hardware."""
 line = ["tag 0x00030090", "answered", "0x80000000"]
 
 [[milestone]]
