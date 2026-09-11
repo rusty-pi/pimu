@@ -760,10 +760,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         let total_pages = ram.len() / PAGE;
         for p in 0..total_pages {
             let addr = base + (p * PAGE) as u32;
-            let dirty = ram
-                .read_slice(addr, PAGE)
-                .map(|s| s.iter().any(|&b| b != 0))
-                .unwrap_or(false);
+            let dirty = ram.any_nonzero(addr, PAGE);
             if !dirty {
                 continue;
             }

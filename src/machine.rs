@@ -139,8 +139,30 @@ const PHASE_TAG_SIG: u32 = 0x02C0_2000;
 
 impl Machine {
     pub fn new(ram_bytes: usize) -> Machine {
+        Machine::with_ram(Ram::new(map::SDRAM_CACHED_BASE, ram_bytes))
+    }
+
+    /// A machine whose RAM is memory the caller owns, at the physical address
+    /// the firmware believes RAM starts at.
+    ///
+    /// For the bare-metal frontend (#32 stage 4): QEMU's devices DMA into
+    /// machine physical memory with no SMMU in the way and stage-2 translation
+    /// does not apply to them, so the model's backing store has to *be* the
+    /// physical memory it hands out addresses in, not a block mapped to look
+    /// like it. The region therefore starts at [`map::SDRAM_CACHED_BASE`] —
+    /// physical zero — and should be the 1 GiB [`Machine::fold_ram_addr`] can
+    /// reach.
+    ///
+    /// # Safety
+    /// As [`Ram::over_region`]: the region must be valid, exclusively ours,
+    /// and outlive the `Machine`.
+    pub unsafe fn with_ram_region(ptr: *mut u8, len: usize) -> Machine {
+        Machine::with_ram(Ram::over_region(map::SDRAM_CACHED_BASE, ptr, len))
+    }
+
+    fn with_ram(ram: Ram) -> Machine {
         Machine {
-            ram: Ram::new(map::SDRAM_CACHED_BASE, ram_bytes),
+            ram,
             systimer: SysTimer::new(),
             uart0: Pl011::new(),
             aux: Aux::new(),
@@ -674,14 +696,17 @@ impl Bus for Machine {
     fn read_insn(&mut self, pc: u32, out: &mut [u8; 10]) -> BusResult<u8> {
         if !Machine::in_mmio(pc) {
             let phys = Machine::fold_ram_addr(pc);
-            if let Ok(head) = self.ram.read_slice(phys, 2) {
-                let p0 = u16::from_le_bytes([head[0], head[1]]);
-                let len = crate::vpu::length::insn_len_bytes(p0);
-                if let Ok(bytes) = self.ram.read_slice(phys, len as usize) {
-                    self.ram_reads = self.ram_reads.wrapping_add(1);
-                    out[..len as usize].copy_from_slice(bytes);
-                    return Ok(len);
-                }
+            // One fixed-size copy of the longest encoding, then decide how much
+            // of it was the instruction. Reading the first halfword separately
+            // to work out the length would cost a second copy on every one of
+            // the two billion instructions a boot retires. The only address
+            // this cannot serve is one within ten bytes of the end of RAM,
+            // where it fails the bounds check and the halfword path below
+            // picks it up — which is what the two-step version did there too.
+            if self.ram.read_into(phys, &mut out[..]).is_ok() {
+                let p0 = u16::from_le_bytes([out[0], out[1]]);
+                self.ram_reads = self.ram_reads.wrapping_add(1);
+                return Ok(crate::vpu::length::insn_len_bytes(p0));
             }
         }
         let p0 = self.load(pc, Width::Half)? as u16;
