@@ -2,6 +2,10 @@
 
 use crate::bus::{Bus, BusError, Width};
 
+/// How many control transfers [`Vpu::cf_trace`] keeps. The run report prints
+/// the tail of it when a boot derails, which is the main thing it is for.
+const CF_TRACE_LEN: usize = 512;
+
 use super::decode::decode;
 use super::insn::{AddrMode, AluOp, Base, MemWidth, Op, RegOrImm, VecExec, VecInsn, Writeback};
 use super::length::{insn_len_bytes, InsnClass};
@@ -156,7 +160,13 @@ pub struct Vpu {
     /// which is enough to clear the early-boot "wait for p16 == 0" loops.
     pub coproc: [u32; 32],
     /// Ring of recent taken control transfers `(from_pc, to_pc)`.
-    pub cf_trace: Vec<(u32, u32)>,
+    ///
+    /// A `VecDeque`, not a `Vec`: this is a ring, and dropping the oldest entry
+    /// with `Vec::remove(0)` memmoved the whole buffer on every control
+    /// transfer once it filled. That single line was 6.8% of the emulator's
+    /// total run time, measured with `perf` — the largest cost in `Vpu::step`
+    /// after decode.
+    pub cf_trace: std::collections::VecDeque<(u32, u32)>,
     /// When set, `step` pushes a one-line disassembly + delta of every
     /// instruction it retires (bounded by `trace_cap`) into `trace_log`.
     pub trace: bool,
@@ -182,7 +192,7 @@ impl Vpu {
         let mut v = Vpu::default();
         v.regs.pc = entry;
         v.version_value = DEFAULT_VERSION;
-        v.cf_trace = Vec::with_capacity(512);
+        v.cf_trace = std::collections::VecDeque::with_capacity(CF_TRACE_LEN);
         v.trace_cap = 20_000;
         v.dbg_tick = std::env::var_os("RVF_DBG_TICK").is_some();
         v.dbg_vec = std::env::var_os("RVF_DBG_VEC").is_some();
@@ -1043,15 +1053,13 @@ impl Vpu {
                 // collapse an immediately-repeating transfer (tight loop /
                 // memset) into a single entry with a count so the ring keeps
                 // the history that led into it.
-                match self.cf_trace.last_mut() {
+                match self.cf_trace.back_mut() {
                     Some((f, t)) if *f == pc && *t == self.regs.pc => {}
                     _ => {
-                        if self.cf_trace.len() == self.cf_trace.capacity()
-                            && !self.cf_trace.is_empty()
-                        {
-                            self.cf_trace.remove(0);
+                        if self.cf_trace.len() == CF_TRACE_LEN {
+                            self.cf_trace.pop_front();
                         }
-                        self.cf_trace.push((pc, self.regs.pc));
+                        self.cf_trace.push_back((pc, self.regs.pc));
                     }
                 }
             }

@@ -1086,7 +1086,7 @@ impl Emulator {
                 // Firmware busy-wait on the free-running counter: same edge,
                 // timer advancing, nothing else changing, no output. Let it
                 // build up, then skip the counter forward a slice at a time.
-                if let Some(&cf) = self.cpu.cf_trace.last() {
+                if let Some(&cf) = self.cpu.cf_trace.back() {
                     let p = progress_count(&self.machine);
                     // Firmware `udelay` (e.g. `0x3ED7BD2C`: `while (CLO - start)
                     // < n`) spins the same 2-instruction edge thousands of times
@@ -1115,7 +1115,7 @@ impl Emulator {
                         progress_at_delay = p;
                     }
                 }
-                if let Some(&cf) = self.cpu.cf_trace.last() {
+                if let Some(&cf) = self.cpu.cf_trace.back() {
                     // A bare read-only poll counts as a spin, but firmware
                     // delay/lock loops legitimately iterate 10k+ times before
                     // giving up, so the threshold is generous.
