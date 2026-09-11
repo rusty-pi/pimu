@@ -125,6 +125,14 @@ want 'watchdog stopped'                    'Watchdog stopped'
 # The goal: the VPU hands the board over to the ARM, with the same split of a
 # 1 GB board's memory the reference reports (vc4-boot.log 68).
 want 'ARM handover'                        'arm_loader: Starting ARM with 948MB'
+# With the ARM running the VPU keeps polling the LPDDR4 MR4 temperature code
+# once a second and rescales the DRAM refresh interval by 1 << (3 - code); the
+# reference board reports code 2 and the interval doubles (vc4-boot.log 69,
+# `sdram: sdram refresh 1562->3124 (2)`). That line never reaches a UART — the
+# console belongs to Linux by then and only the firmware's internal message
+# ring has it — so the check is on the controller state instead
+# (`src/periph/sdc.rs` models the mode-register port at `0x7E00_109C`).
+want 'SDRAM refresh rescaled after handover' 'refresh interval 658 -> 1562 -> 3124'
 # No nop-slides at all: the register file must survive preemptive context
 # switches (8d7c27a) and no callback may be null.
 must_not 'derailed into a nop-slide'       '\[derail\]'

@@ -458,6 +458,25 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         }
     }
 
+    {
+        // The DRAM refresh interval start4 rescales from the LPDDR4 MR4 code
+        // once the ARM is running. The firmware logs the change as
+        // `sdram: sdram refresh 1562->3124 (2)`, but by then it has handed the
+        // UART to Linux and only its internal message ring sees that line, so
+        // the controller state is the console-independent way to check it.
+        let sdc = &emu.machine.sdc;
+        let history = sdc.refresh_history();
+        if !history.is_empty() {
+            let steps: Vec<String> = history.iter().map(|v| v.to_string()).collect();
+            println!("\n--- sdram controller (0x7e00_1000) ---");
+            println!(
+                "  refresh interval {}  ({} mode-register reads)",
+                steps.join(" -> "),
+                sdc.mode_register_reads()
+            );
+        }
+    }
+
     if !report.unimpl.is_empty() {
         println!(
             "\n--- distinct unimplemented instructions ({}, top 40 by hit count) ---",
