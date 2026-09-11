@@ -39,6 +39,7 @@
 #[macro_use]
 extern crate alloc;
 
+pub mod block;
 pub mod bus;
 pub mod diag;
 pub mod emulator;

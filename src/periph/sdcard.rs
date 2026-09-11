@@ -25,6 +25,12 @@
 //! full 120-bit CID/CSD out through [`SdResponse::r2`].
 //!
 //! Writes are not modelled — the bootloader only reads.
+//!
+//! The card contents come from a [`BlockDevice`] rather than a byte array, so
+//! the same state machine serves a disk image in RAM (hosted) and QEMU's own SD
+//! controller (bare-metal, #32).
+
+use crate::block::{BlockDevice, MemoryBlocks, BLOCK_LEN};
 
 use alloc::vec::Vec;
 
@@ -73,8 +79,8 @@ const R1_READY_FOR_DATA: u32 = 1 << 8;
 const R1_CURRENT_STATE_SHIFT: u32 = 9; // bits [12:9]
 
 pub struct SdCard {
-    /// Flat card contents, 512-byte blocks. FAT image lives here.
-    image: Vec<u8>,
+    /// Where the sectors come from. The FAT image lives behind this.
+    medium: Box<dyn BlockDevice>,
     state: CardState,
     /// Relative card address, assigned by CMD3.
     rca: u16,
@@ -91,17 +97,25 @@ pub struct SdCard {
 }
 
 impl SdCard {
-    /// Wrap a raw card image (must be a multiple of 512 bytes; padded if not).
+    /// Wrap a raw card image held in RAM (must be a multiple of 512 bytes;
+    /// padded if not, and never empty — a zero-capacity card would give the
+    /// bootloader a CSD it cannot make sense of).
     pub fn new(mut image: Vec<u8>) -> SdCard {
-        if !image.len().is_multiple_of(512) {
-            image.resize(image.len().next_multiple_of(512), 0);
+        if !image.len().is_multiple_of(BLOCK_LEN) {
+            image.resize(image.len().next_multiple_of(BLOCK_LEN), 0);
         }
         if image.is_empty() {
-            image.resize(512, 0);
+            image.resize(BLOCK_LEN, 0);
         }
-        let blocks = (image.len() / 512) as u64;
+        SdCard::with_medium(Box::new(MemoryBlocks::new(image)))
+    }
+
+    /// Wrap any block medium — the seam the bare-metal frontend plugs QEMU's
+    /// SD controller into.
+    pub fn with_medium(medium: Box<dyn BlockDevice>) -> SdCard {
+        let blocks = medium.block_count();
         SdCard {
-            image,
+            medium,
             state: CardState::Idle,
             rca: 0,
             app_cmd: false,
@@ -112,16 +126,15 @@ impl SdCard {
     }
 
     pub fn block_count(&self) -> u64 {
-        (self.image.len() / 512) as u64
+        self.medium.block_count()
     }
 
-    /// Copy one 512-byte block out of the card image (zero-padded past the end).
-    pub fn read_block(&self, lba: u32, out: &mut [u8; 512]) {
-        let start = (lba as usize).wrapping_mul(512);
-        out.fill(0);
-        if let Some(src) = self.image.get(start..start + 512) {
-            out.copy_from_slice(src);
-        }
+    /// Fetch one 512-byte block. A read past the end of the medium (or a
+    /// backend that failed) leaves `out` zeroed, as it always has — the
+    /// bootloader probes beyond the partition and must see quiet zeros, not a
+    /// stalled transfer.
+    pub fn read_block(&self, lba: u32, out: &mut [u8; BLOCK_LEN]) {
+        self.medium.read_block(u64::from(lba), out);
     }
 
     fn status(&self) -> u32 {

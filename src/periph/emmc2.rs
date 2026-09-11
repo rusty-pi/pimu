@@ -119,9 +119,17 @@ impl Emmc2 {
         Emmc2::default()
     }
 
-    /// Insert a card backed by `image` (a raw block device: MBR + FAT + files).
+    /// Insert a card backed by `image` (a raw block device: MBR + FAT + files)
+    /// held in RAM.
     pub fn insert_card(&mut self, image: Vec<u8>) {
         self.card = Some(SdCard::new(image));
+    }
+
+    /// Insert a card backed by an arbitrary medium — bare-metal (#32) that is
+    /// QEMU's own SD controller, so the sectors are fetched on demand instead
+    /// of living in our RAM.
+    pub fn insert_card_medium(&mut self, medium: Box<dyn crate::block::BlockDevice>) {
+        self.card = Some(SdCard::with_medium(medium));
     }
 
     pub fn has_card(&self) -> bool {
