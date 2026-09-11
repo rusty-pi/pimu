@@ -33,10 +33,10 @@
 //! * **The config-space router.** `EXT_CFG_INDEX` (`+0x9000`) selects a
 //!   `(bus, slot, fn)` — `bus << 20 | slot << 15 | fn << 12`, per
 //!   `pcie-brcmstb` — and the 4 KiB window at `EXT_CFG_DATA` (`+0x8000`) is
-//!   that function's configuration space. Bus 0 device 0 is the root port,
-//!   whose own config space is also directly visible at `+0x0000`; bus 1
-//!   device 0 is the VL805. Everything else reads back all-ones, which is how
-//!   PCI says "nothing there".
+//!   that function's configuration space. Bus 1 device 0 is the VL805.
+//!   Everything else — bus 0 included, see [`Pcie::ext_target`] — reads back
+//!   all-ones, which is how PCI says "nothing there". The root port's own
+//!   config space is reachable only through the direct view at `+0x0000`.
 //!
 //! ## The outbound window, and how the VPU reaches BAR0
 //!
@@ -277,12 +277,37 @@ impl Pcie {
     }
 
     /// Which function the `EXT_CFG_DATA` window currently points at, if any.
+    ///
+    /// Bus 0 is deliberately not one of them (#21). The window turns its index
+    /// into a configuration request on the link, and the link's far side is the
+    /// secondary bus — the root port's own config space is never reachable this
+    /// way, only through the direct `+0x0000` view. That is why `pcie-brcmstb`
+    /// special-cases it in `brcm_pcie_map_conf()`:
+    ///
+    /// ```c
+    /// /* Accesses to the RC go right to the RC registers if slot==0 */
+    /// if (pci_is_root_bus(bus))
+    ///     return PCI_SLOT(devfn) ? NULL : base + where;
+    /// ```
+    ///
+    /// and it is what the reference transcript shows. The bootloader's scan
+    /// (`0x000A712C`) starts at bus 0, slot 0 and prints `PCIe scan %08x:%08x`
+    /// for every function whose vendor id is not `0xFFFF`, *before* it looks at
+    /// the header type — the header-type byte at `0x0E` only decides whether the
+    /// function is recorded in the device list (`0x000A71CC`, non-zero = bridge
+    /// = skip), not whether it is printed. So if bus 0 answered here the real
+    /// board would print the root complex too, and
+    /// `examples-on-real-hardware/sd-card-boot.log:25-27` shows it does not.
+    ///
+    /// The bootloader reaches the root port's own config space the same way
+    /// Linux does: its config-space selector (`0x000A6888`) writes
+    /// `EXT_CFG_INDEX` and points its window at `EXT_CFG_DATA` only for a real
+    /// device, and points it straight at `0x7D50_0000` for the root port.
     fn ext_target(&self) -> CfgTarget {
         let bus = (self.ext_cfg_index >> EXT_BUSNUM_SHIFT) & 0xFF;
         let slot = (self.ext_cfg_index >> EXT_SLOT_SHIFT) & 0x1F;
         let func = (self.ext_cfg_index >> EXT_FUNC_SHIFT) & 0x7;
         match (bus, slot, func) {
-            (0, 0, 0) => CfgTarget::RootPort,
             (ENDPOINT_BUS, 0, 0) if self.link_up => CfgTarget::Endpoint,
             _ => CfgTarget::None,
         }
@@ -302,7 +327,6 @@ impl Pcie {
 }
 
 enum CfgTarget {
-    RootPort,
     Endpoint,
     None,
 }
@@ -322,7 +346,6 @@ impl MmioDevice for Pcie {
         if (EXT_CFG_DATA..EXT_CFG_DATA + 0x1000).contains(&offset) {
             let cfg_off = offset - EXT_CFG_DATA;
             return Ok(match self.ext_target() {
-                CfgTarget::RootPort => self.rc_cfg_read(cfg_off, width),
                 CfgTarget::Endpoint => self.endpoint.cfg_read(cfg_off, width),
                 // No function responds: the root complex returns all-ones,
                 // which is what makes a scan skip the slot.
@@ -352,11 +375,6 @@ impl MmioDevice for Pcie {
             let cfg_off = offset - EXT_CFG_DATA;
             match self.ext_target() {
                 CfgTarget::Endpoint => self.endpoint.cfg_write(cfg_off, width, value),
-                // Root-port writes land in the same storage the direct
-                // `+0x0000` view uses, so the two stay consistent.
-                CfgTarget::RootPort => {
-                    self.storage.insert(cfg_off & !3, value);
-                }
                 CfgTarget::None => {}
             }
             return Ok(());
@@ -443,8 +461,11 @@ mod tests {
     #[test]
     fn ext_cfg_routes_to_the_endpoint() {
         let mut p = link_up_pcie();
-        // Index 0 is the root port itself.
-        assert_eq!(rd(&mut p, EXT_CFG_DATA), 0x2711_14E4);
+        // Index 0 is bus 0 — the root port's own bus, which no configuration
+        // request on the link can reach (#21). Its config space is the direct
+        // `+0x0000` view, and only that.
+        assert_eq!(rd(&mut p, EXT_CFG_DATA), 0xFFFF_FFFF);
+        assert_eq!(rd(&mut p, RC_CFG), 0x2711_14E4);
         // Bus 1, slot 0, function 0 is the VL805.
         p.write(EXT_CFG_INDEX, Width::Word, 1 << EXT_BUSNUM_SHIFT)
             .unwrap();
