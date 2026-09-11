@@ -145,7 +145,10 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     let mut console_log: Option<PathBuf> = None;
     let mut dump_fdt: Option<PathBuf> = None;
     let mut print_fdt = false;
-    let mut mbox_tags: Vec<u32> = Vec::new();
+    // One entry per `--mbox-property`, so several exchanges can be made
+    // against the same booted firmware. A crypto tag that fails leaves an error
+    // code behind that only the *next* request can ask for (`0x0003008e`).
+    let mut mbox_tags: Vec<Vec<(u32, Option<u32>)>> = Vec::new();
     let mut usb_image: Option<PathBuf> = None;
     let mut boot_order: Option<String> = None;
     let mut dram_map = false;
@@ -210,9 +213,19 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
             "--print-fdt" => print_fdt = true,
             "--mbox-property" => {
                 let list = it.next().context("--mbox-property needs a tag list")?;
+                let mut group: Vec<(u32, Option<u32>)> = Vec::new();
                 for t in list.split(',') {
-                    mbox_tags.push(parse_u32(t)?);
+                    // `<tag>` or `<tag>:<value-buffer bytes>`. The override
+                    // exists because start4's idea of how much room a tag needs
+                    // is not always its Linux client's `sizeof`, and finding out
+                    // costs a boot per guess otherwise.
+                    let (tag, size) = match t.split_once(':') {
+                        Some((a, b)) => (parse_u32(a)?, Some(parse_u32(b)?)),
+                        None => (parse_u32(t)?, None),
+                    };
+                    group.push((tag, size));
                 }
+                mbox_tags.push(group);
             }
             "--dram-map" => dram_map = true,
             "--dump-fdt" => {
@@ -714,8 +727,8 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         }
     }
 
-    if !mbox_tags.is_empty() {
-        mbox_property_exchange(&mut emu, &limits, &mbox_tags)?;
+    for group in &mbox_tags {
+        mbox_property_exchange(&mut emu, &limits, group)?;
     }
 
     {
@@ -1197,24 +1210,73 @@ const MBOX_BUFFER: u32 = 0x1000_0000;
 /// wire is `0xC000_0000 | phys` because Linux allocates the buffer coherently
 /// and `/soc` carries `dma-ranges = <0xc0000000 0x0 0x0 0x40000000>` — the
 /// uncached alias, which the model already maps to the same DRAM.
-fn mbox_property_exchange(emu: &mut Emulator, limits: &RunLimits, tags: &[u32]) -> Result<()> {
+fn mbox_property_exchange(
+    emu: &mut Emulator,
+    limits: &RunLimits,
+    tags: &[(u32, Option<u32>)],
+) -> Result<()> {
     use rpi_virt_fw::bus::{Bus, Width};
 
     println!("\n--- ARM property mailbox (0x7e00_b880) ---");
 
-    // Buffer: total size, request code, then one tag each with an empty
-    // response slot, then the end marker. 64 bytes of response room per tag is
-    // enough for every tag below `GET_CRYPTO_*`; the firmware writes back how
-    // much it actually used.
-    const SLOT: u32 = 64;
+    // Each tag names its own value-buffer size, and the firmware walks the
+    // request by those sizes — so one wrong size desynchronises every tag after
+    // it and the whole buffer comes back `0x80000001` (parse error). A fixed
+    // 64-byte slot for everything did exactly that.
+    //
+    // Sizes and request payloads follow raspberrypi/utils `rpifwcrypto.c`,
+    // which is the Linux-side client of the same interface. The service itself
+    // lives in `start4.elf` (`arm_crypto_*`, with its own mbedTLS) — this is
+    // only the caller, standing in for an ARM the bench does not have.
+    let spec = |tag: u32| -> (u32, Vec<u32>) {
+        match tag {
+            // `flags, key_id` in; `status, length, key[]` back. The buffer has
+            // to hold the key, so it is sized by the client's maxima:
+            // 512 bytes of public key, 1024 of private key.
+            0x0003_0093 => (8 + 512, vec![0, 0]),
+            0x0003_0094 => (8 + 1024, vec![0, 0]),
+            // `flags, key_id` in, nothing back.
+            0x0003_0095 => (8, vec![0, 0]),
+            // `key_id, status` / `key_id, usage` in.
+            0x0003_8090 | 0x0003_809c => (8, vec![0, 0]),
+            // `key_id` in, one word back.
+            0x0003_0090 | 0x0003_009c => (4, vec![0]),
+            // `flags, key_id, length, hash[32]` in; `status, length, sig[]`
+            // back, so the buffer has to be the larger of the two.
+            0x0003_0091 => (128, vec![0, 0, 32]),
+            // `flags, key_id, length, message[]` in; `status, length,
+            // hmac[32]` back. A fixed short message keeps the result stable
+            // across runs, which is what makes it a regression.
+            0x0003_0092 => {
+                let mut v = vec![0, 0, 16];
+                v.extend_from_slice(&[0x6c6c6548, 0x77202c6f, 0x646c726f, 0x00000021]);
+                (128, v)
+            }
+            // Everything else: one word in, one word back.
+            _ => (4, vec![0]),
+        }
+    };
+
     let mut words: Vec<u32> = vec![0, 0];
-    for &tag in tags {
+    for &(tag, override_size) in tags {
+        let (size, payload) = spec(tag);
+        let size = override_size.unwrap_or(size);
         words.push(tag);
-        words.push(SLOT);
+        words.push(size);
         words.push(0);
-        words.extend(std::iter::repeat_n(0, (SLOT / 4) as usize));
+        let slot = (size / 4) as usize;
+        for i in 0..slot {
+            words.push(payload.get(i).copied().unwrap_or(0));
+        }
     }
+    // End marker, then slack. The firmware rejects a buffer whose declared
+    // total ends exactly at the marker: the last tag comes back unhandled and
+    // the whole buffer gets `0x80000001`, whichever tag is last. `rpifwcrypto.c`
+    // never hits this because it declares `sizeof(msg)` — its value arrays are
+    // bigger than the `tag_buf_size` it asks for, so its total always carries
+    // spare room past the marker.
     words.push(0);
+    words.extend_from_slice(&[0; 4]);
     words[0] = (words.len() as u32) * 4;
 
     for (i, w) in words.iter().enumerate() {
@@ -1303,6 +1365,27 @@ fn mbox_property_exchange(emu: &mut Emulator, limits: &RunLimits, tags: &[u32]) 
         }
     );
     let total = emu.machine.load(MBOX_BUFFER, Width::Word).unwrap_or(0);
+    if code != 0x8000_0000 {
+        // The tag walk below trusts the sizes it staged. When the firmware
+        // disagrees about them that walk is exactly what cannot be trusted, so
+        // print the buffer as the firmware left it and decode by hand.
+        println!("  raw reply buffer ({total} bytes by its own header):");
+        let n = (total.min(1024) / 4).max(4);
+        for row in 0..n.div_ceil(4) {
+            let mut line = format!("  {:#010x} ", MBOX_BUFFER + row * 16);
+            for col in 0..4 {
+                let i = row * 4 + col;
+                if i < n {
+                    let w = emu
+                        .machine
+                        .load(MBOX_BUFFER + i * 4, Width::Word)
+                        .unwrap_or(0);
+                    line.push_str(&format!(" {w:08x}"));
+                }
+            }
+            println!("{line}");
+        }
+    }
     let mut off = 8;
     while off + 12 <= total.min(4096) {
         let tag = emu

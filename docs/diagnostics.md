@@ -137,10 +137,42 @@ and the task never wakes. `RVF_TRACE_MMIO=0x7e00b880-0x7e00b9c0` shows that
 failure directly — the ISR reading `0x7e00b9bc <- 0x00000001` and writing the
 same value straight back, forever.
 
+Each tag's value buffer is sized the way `rpifwcrypto.c` sizes it, since that
+is the Linux-side client of the same interface. A size can be overridden per
+tag with `<tag>:<bytes>`, and the flag can be repeated to make **several**
+exchanges against one booted firmware — which is the only way to read
+`GET_CRYPTO_LAST_ERROR`, because it reports the error left behind by the
+*previous* request:
+
+```bash
+recon firmware/pieeprom.bin --eeprom --sd firmware/sd.img \
+  --mbox-property 0x00030090 --mbox-property 0x0003008e
+```
+
+When the buffer-level code is not `0x80000000`, the reply is also dumped as raw
+words. That matters because the tag-by-tag decode walks by the sizes it staged,
+so it is exactly what cannot be trusted when the sizes are in question.
+
 What the firmware answers today, with the model's blank OTP:
 
 | Tag | Answer |
 |---|---|
 | `0x00000001` `GET_FIRMWARE_REVISION` | `0x6a7a16af` — the build timestamp of the pinned `start4.elf`. |
-| `0x00030090` `GET_CRYPTO_KEY_STATUS` | `0x80000000`. The slot is unprovisioned: OTP rows 56-63 hold the device private key and this model's are blank. The handler runs, but reports failure, which is why the *buffer* level code comes back `0x80000001` whenever this tag is in the request. |
-| `0x00030092` `GET_CRYPTO_HMAC_SHA256` | Nothing — the response word is left as staged. Either the tag is not in this firmware's table or it refuses without a key; telling those apart needs the key provisioned first. |
+| `0x0003008f` `GET_CRYPTO_NUM_OTP_KEYS` | `0x00000001` — one key slot. The crypto service is up. |
+| `0x0003008e` `GET_CRYPTO_LAST_ERROR` | `3`, `RPI_FW_CRYPTO_KEY_NOT_FOUND`, after either of the two below. |
+| `0x00030090` `GET_CRYPTO_KEY_STATUS` | `0x80000000`. No key is fused, which is the honest answer for this model. |
+| `0x00030095` `GET_CRYPTO_GEN_ECDSA_KEY` | `0x80000000`, same error — generating one does not work around it. |
+
+A failing crypto handler is fatal for the whole request: the tag itself is
+marked answered, but the buffer-level code becomes `0x80000001` and the walk
+stops, so every tag *after* it goes unanswered for that reason alone. Put the
+crypto tag last, or in its own exchange, before reading anything into an
+unanswered tag. Five copies of `0x00000001` in one buffer all answer and the
+code stays `0x80000000`, so there is no tag-count or buffer-size limit behind
+this.
+
+Provisioning a key is the open half of rpi-mkosi#37. Writing invented values
+into OTP rows 56-63 does not do it: `RVF_DBG_OTP=1` shows them read back
+correctly during boot, the answer unchanged — and *no* OTP row is read while
+the request is served, so the verdict is reached during boot and cached. The
+gate is somewhere in that boot-time path, not in the handler.
