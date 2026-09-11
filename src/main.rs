@@ -465,6 +465,14 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
             report.core1_end
         );
     }
+    if report.core1_release_never_resolved {
+        println!(
+            "core1      RELEASED BUT NEVER SPAWNED — the ThreadX-SMP dispatch \
+             global at gp+3672 stayed zero.\n\
+             \x20          Most likely this firmware's .sdata layout differs \
+             from the one that offset was read from (#25)."
+        );
+    }
     print!("regs      ");
     for (i, r) in report.regs.iter().enumerate() {
         if i % 8 == 0 {
