@@ -100,6 +100,18 @@ want 'device tree relocation'              'Device tree loaded to'
 # start4 gates the H264 power domain on the way, and with `0x7E00_A000`
 # unmapped the bridge never acknowledged the stop request (`src/periph/asb.rs`).
 want 'final baud rate'                     'Set PL011 baud rate to 103448'
+# Exactly one "Set", two "done" — that asymmetry is real, not a modelling gap
+# (#20). The clock notifier calls the PL011 callback `0x3EC799BC` twice in
+# phase 0 and twice in phase 2. Phase 0 prints, then clears the "console
+# usable" flag `[gp+5176]` and writes `UARTCR = 0`; the console writer
+# `0x3ED85E9C` drops every byte while that flag is 0, so the second phase-0
+# line never reaches the wire. Phase 2 restores the flag before it prints, so
+# both "done" lines do. `vc4-boot.log` shows two "Set" lines because it is a
+# `vcdbg` dump of the firmware's message ring (it keeps logging past
+# `arm_loader`, when the UART already belongs to Linux), not a serial capture.
+# The genuine UART captures agree with the model: sd-card-boot-perfect.log
+# lines 137-139 are one "Set" and two "done".
+count_eq 'baud rate change starts'         'Set PL011 baud rate' 1
 count_eq 'baud rate change completes'      'Baud rate change done' 2
 # The last thing before `arm_loader`: `codec_enabled` runs its licence-key
 # check on the VCE and waits on interrupt source 68. With the block unmapped

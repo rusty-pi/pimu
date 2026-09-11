@@ -14,6 +14,38 @@
 //!
 //! Writes carry the `0x5A` password in the top byte; we strip it on read-back so
 //! the firmware's `read / modify / write` sequences converge.
+//!
+//! ## `CM_UARTCTL` (`0x7E10_10F0`) — measured, and why nothing is forced here
+//!
+//! Two places in `start4.elf` gate on bit 4 (`ENAB`) of this register:
+//!
+//! - the console writer `0x3ED85E9C`, which polls `UART_FR.TXFF` before each
+//!   byte only while the UART clock is running, and
+//! - the PL011 clock-change callback `0x3EC799BC`, whose phase-0 leg drains
+//!   `UART_FR.BUSY` before it writes `UARTCR = 0`.
+//!
+//! Read off `rpi-dev` (Pi 4, Linux up, idle) at the `0xFE10_10F0` alias, one
+//! enumerated offset at a time through `/dev/mem`:
+//!
+//! ```text
+//! 0x7e1010f0  CM_UARTCTL  0x00000296     (MASH=1, BUSY=1, ENAB=1, SRC=6/PLLD)
+//! 0x7e1010f4  CM_UARTDIV  0x0000fa00     (DIVI=250)
+//! ```
+//!
+//! `ENAB` and `SRC` are plain read/write state, so the stored-write read-back
+//! above reproduces whatever the firmware programs. In the modelled boot both
+//! gates read `0x11` — `SRC=1` (oscillator) because that is what start4 itself
+//! writes, and crucially the same `ENAB` bit set that hardware shows; the
+//! measured `SRC=6` / `MASH=1` is Linux's later reprogramming, not a
+//! divergence. Both gates therefore take the same branch here as on silicon.
+//!
+//! The single forced difference is `BUSY`, which real silicon holds at 1 while
+//! the generator runs and this device always reports as 0 — deliberately,
+//! because the shutdown path `0x3EC7F0BA` spins on `BUSY` (with a
+//! 1000-iteration escape) waiting for clocks the model stops instantly.
+//! Neither consumer above reads `BUSY` at all. Recorded so `0x7E10_10F0` is
+//! not re-investigated — it is not a `SCALER_DISPID`-style blanked status
+//! register.
 
 use std::collections::BTreeMap;
 
