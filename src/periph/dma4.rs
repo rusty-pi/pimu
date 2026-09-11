@@ -12,7 +12,12 @@
 //!   `+0x00 TI  +0x04 SRC  +0x08 SRCI  +0x0C DEST  +0x10 DESTI  +0x14 LEN
 //!    +0x18 NEXT_CB(>>5)  +0x1C —`
 //! A `SRC` of 0 is a zero-fill (DRAM scrub); otherwise SRC→DEST is copied.
-//! Addresses are folded onto the model's flat DRAM by the caller.
+//!
+//! `SRCI` / `DESTI` are not just the increment flag: bits `[7:0]` are address
+//! bits `[39:32]`, which is what makes this the 40-bit channel. The bootloader
+//! uses that to reach the PCIe outbound window at `0x6_0000_0000` — the only
+//! way a 32-bit VPU can touch the VL805's registers at all. See
+//! `docs/usb-xhci.md` §5.1; the caller composes the full address and routes it.
 //!
 //! The actual `SRC`/`DEST` transfer needs bus access, so [`Machine`] pulls the
 //! pending descriptor out of here after the `CS` write and runs it.

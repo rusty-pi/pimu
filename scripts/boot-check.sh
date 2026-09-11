@@ -68,6 +68,17 @@ must_not() {
 # The reset cause the bootloader reports; the real board latches HADWRF
 # (1bc5fa1), matching sd-card-boot.log line 4.
 want 'PM reset-status register'            'PM_RSTS 00000020'
+# The PCIe link trains and the bus scan finds the VL805 that is soldered to
+# every Pi 4B (#18). Same identity the real board prints, sd-card-boot.log:27.
+want 'PCIe endpoint enumeration'           'PCIe scan 00001106:00003483'
+# The bootloader reads the VL805's xHCI capability registers. It reaches them
+# through 40-bit DMA4 transfers into the PCIe outbound window, not a load, so
+# this line is the end-to-end proof of that path (src/periph/pcie.rs). The
+# values are byte-identical to the real board, sd-card-boot.log:29-32.
+want 'xHCI capability registers'           'xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb'
+want 'xHCI port and slot counts'           'xHC0 ports 5 slots 32 intrs 4'
+must_not 'PCIe link never trained'         'PCIe timeout'
+must_not 'xHC bring-up failed'             'USB xHC init failed'
 # start4 got past the DMA transfer completion and emitted its first MESS log.
 want 'first MESS log'                      'MESS:.*arasan_emmc_open'
 # gpioman resolves its pin names from the real dt-blob, so the firmware itself

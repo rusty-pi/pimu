@@ -38,44 +38,48 @@
 //!   device 0 is the VL805. Everything else reads back all-ones, which is how
 //!   PCI says "nothing there".
 //!
-//! ## Why the endpoint is *detached* by default
+//! ## The outbound window, and how the VPU reaches BAR0
 //!
-//! A real Pi 4B has the VL805 soldered on, so "no device" is not what the
-//! hardware looks like. It is a deliberate modelling choice, not an accident of
-//! what happened to be plugged in when the ground truth was captured, and it is
-//! here for one reason: **the controller behind the link is not modelled yet.**
+//! It does not reach it with a load. `CPU_2_PCIE_MEM_WIN0` (`+0x400C`,
+//! `+0x4010`, `+0x4070`, `+0x4080`, `+0x4084`) puts the endpoint's registers at
+//! CPU-physical `0x6_0000_0000..0x6_3FFF_FFFF` — 35 bits, which a 32-bit VPU
+//! cannot form — so the firmware reads and writes them with the **40-bit DMA4
+//! channel** instead: `0x000A701E` builds a control block whose `SRC` is
+//! `0x6_0200_0004` (`src = 0x0200_0004`, `srci = 0x1006`, high byte 6), DMAs
+//! four bytes into a bounce buffer at `0xC031B000`, and reads the buffer.
+//! `docs/usb-xhci.md` §5.1 has the full trace.
 //!
-//! Bringing the link up changes what the second-stage bootloader does. Instead
-//! of timing out and printing `USB xHC init failed`, it scans the bus, finds
-//! the VL805, uploads the VL805's own hub firmware through the vendor port at
-//! config `0x78`/`0x7C` (`0x000B6CE0`) — which this model answers — and then
-//! goes on to xHCI itself, which it does not.
+//! So this file translates CPU-physical → PCI bus → BAR0 offset
+//! ([`Pcie::mmio_read`] / [`Pcie::mmio_write`]), and
+//! [`Machine::run_dma4`](crate::machine::Machine) calls it with the composed
+//! 40-bit address. Until that landed the transfer read modelled DRAM, the
+//! capability registers came back zero, and the bring-up hung forever at
+//! `0x000AA3C0` — which is why the endpoint used to be detached by default.
 //!
-//! That is not a theory. With `RVF_PCIE_DEVICE=1` the transcript is
+//! ## The endpoint is attached by default
+//!
+//! A Pi 4B has the VL805 soldered on, so attached is the honest model of the
+//! reference board, and with BAR0 answering, the bootloader's bring-up gets the
+//! same numbers a real board prints
+//! (`examples-on-real-hardware/sd-card-boot.log` lines 27-32):
 //!
 //! ```text
-//!   2.14 PCI0 init
-//!   2.14 PCI0 reset
-//!   2.75 PCIe scan 000014e4:00002711
 //!   2.75 PCIe scan 00001106:00003483
-//!   3.31 XHCI-STOP
-//!   3.31 xHC0 ver: 0 HCS: 00000000 00000000 00000000 HCC: 00000000
-//!   3.31 USBSTS 0
+//!   3.31 xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb
+//!   3.31 USBSTS 1
+//!   3.31 xHC0 ports 5 slots 32 intrs 4
 //! ```
 //!
-//! and then the boot **stops dead** — `end Stuck { pc: 0x000AA3C0 }`, a
-//! `udelay` poll with nothing to wait for, 60 s of modelled silence, no SD
-//! fall-through, no `arm_loader`. The all-zero capability words are the tell:
-//! BAR0's 4 KiB of xHCI MMIO does not exist yet, so `HCIVERSION` reads 0 and
-//! the bring-up waits forever for a controller that will never answer. This is
-//! exactly the trade #18 warns about — a harmless 1.32 s timeout for a hard
-//! stall — and it is why the flag defaults off.
+//! What it does *not* find is a device: the model has no USB device behind the
+//! root hub and no VIA hub on port 1, so all five ports read "powered, empty"
+//! and the bootloader falls through to the SD entry of `BOOT_ORDER` without the
+//! `USB2[1] … connected` / `HUB init` lines the real board prints. That is
+//! stage 3 of `docs/usb-xhci.md`.
 //!
-//! So the default is: link never trains, `MISC_PCIE_STATUS` reads `0`, the
-//! bootloader prints `PCIe timeout: 0x00000000` / `USB xHC init failed` and
-//! moves on to the next `BOOT_ORDER` entry — byte-identical to stage 0,
-//! `boot check passed`. Flipping the default is a one-line change once stage 3
-//! lands.
+//! `RVF_PCIE_DEVICE=0` unsolders the endpoint again — the link never trains,
+//! `MISC_PCIE_STATUS` reads `0` and the bootloader prints
+//! `PCIe timeout: 0x00000000` / `USB xHC init failed`, the pre-stage-1
+//! transcript. It is for reproducing that, nothing else.
 //!
 //! ## Register offsets the firmware actually touches
 //!
@@ -107,6 +111,21 @@ const EXT_CFG_DATA: u32 = 0x8000;
 const EXT_CFG_INDEX: u32 = 0x9000;
 /// `PCIE_MISC_PCIE_STATUS`.
 const MISC_PCIE_STATUS: u32 = 0x4068;
+/// `CPU_2_PCIE_MEM_WIN0_LO` / `_HI` — the PCI bus address the outbound window
+/// maps to. The bootloader writes `0x8000_0000` / `0` at `0x000A725C`.
+const MEM_WIN0_LO: u32 = 0x400C;
+const MEM_WIN0_HI: u32 = 0x4010;
+/// `CPU_2_PCIE_MEM_WIN0_BASE_LIMIT` — the CPU-side extent, in MiB: base in bits
+/// `[15:4]`, limit in bits `[31:20]`, the same field order `pcie-brcmstb` uses
+/// (`PCIE_MEM_WIN0_BASE_LIMIT_BASE_MASK` = `0xFFF0`). The bootloader writes
+/// `0x3FF0_0000` at `0x000A72C6` — base 0, limit `0x3FF` MiB.
+const MEM_WIN0_BASE_LIMIT: u32 = 0x4070;
+/// The bits above `[31:20]` of the CPU-side base and limit. Both are written
+/// `6` (`0x000A72DE` / `0x000A72F0`), putting the window at CPU-physical
+/// `0x6_0000_0000..0x6_3FFF_FFFF` — exactly the 1 GiB `ranges` property and
+/// exactly what `dmesg` reports (`MEM 0x0600000000..0x063fffffff`).
+const MEM_WIN0_BASE_HI: u32 = 0x4080;
+const MEM_WIN0_LIMIT_HI: u32 = 0x4084;
 /// `PCIE_RGR1_SW_INIT_1`.
 const RGR1_SW_INIT_1: u32 = 0x9210;
 
@@ -163,7 +182,10 @@ impl Default for Pcie {
 
 impl Pcie {
     pub fn new() -> Pcie {
-        Pcie::with_device(std::env::var("RVF_PCIE_DEVICE").is_ok())
+        // A Pi 4B has the VL805 soldered on, so attached is what the reference
+        // board looks like. `RVF_PCIE_DEVICE=0` unsolders it — for reproducing
+        // the pre-stage-1 transcript, nothing else.
+        Pcie::with_device(std::env::var("RVF_PCIE_DEVICE").as_deref() != Ok("0"))
     }
 
     pub fn with_device(device_present: bool) -> Pcie {
@@ -190,6 +212,67 @@ impl Pcie {
             STATUS_PHYLINKUP | STATUS_DL_ACTIVE | STATUS_PORT_RC
         } else {
             0
+        }
+    }
+
+    /// The CPU-physical extent of outbound window 0, as the firmware programmed
+    /// it. Both ends are inclusive and 40 bits wide — well outside anything a
+    /// 32-bit VPU load can form, which is why the firmware reaches through it by
+    /// DMA (see [`crate::machine::Machine::run_dma4`]).
+    fn outbound_window(&self) -> Option<(u64, u64, u64)> {
+        let base_limit = self.storage.get(&MEM_WIN0_BASE_LIMIT).copied().unwrap_or(0);
+        let base_hi = self.storage.get(&MEM_WIN0_BASE_HI).copied().unwrap_or(0) as u64;
+        let limit_hi = self.storage.get(&MEM_WIN0_LIMIT_HI).copied().unwrap_or(0) as u64;
+        let base_mb = (base_hi << 12) | ((base_limit >> 4) & 0xFFF) as u64;
+        let limit_mb = (limit_hi << 12) | ((base_limit >> 20) & 0xFFF) as u64;
+        if limit_mb < base_mb {
+            return None;
+        }
+        let bus = ((self.storage.get(&MEM_WIN0_HI).copied().unwrap_or(0) as u64) << 32)
+            | self.storage.get(&MEM_WIN0_LO).copied().unwrap_or(0) as u64;
+        Some((base_mb << 20, (limit_mb << 20) | 0xF_FFFF, bus))
+    }
+
+    /// Translate a CPU-physical address into a PCI bus address, if outbound
+    /// window 0 covers it.
+    pub fn outbound_bus_addr(&self, cpu: u64) -> Option<u64> {
+        let (base, limit, bus) = self.outbound_window()?;
+        if cpu < base || cpu > limit {
+            return None;
+        }
+        Some(bus + (cpu - base))
+    }
+
+    /// Which endpoint register a CPU-physical address lands on, if any: through
+    /// the outbound window, then through the endpoint's BAR0.
+    fn bar0_offset(&self, cpu: u64) -> Option<u32> {
+        if !self.link_up {
+            return None;
+        }
+        let bus = self.outbound_bus_addr(cpu)?;
+        let bar = self.endpoint.bar0_bus_addr()?;
+        if bus < bar || bus >= bar + crate::periph::vl805::BAR0_SIZE as u64 {
+            return None;
+        }
+        Some((bus - bar) as u32)
+    }
+
+    /// A read of endpoint MMIO, addressed CPU-physically. `None` means nothing
+    /// decodes there — the DMA engine then falls back to DRAM, the way an
+    /// unclaimed address does on real silicon.
+    pub fn mmio_read(&mut self, cpu: u64, width: Width) -> Option<u32> {
+        let off = self.bar0_offset(cpu)?;
+        Some(self.endpoint.bar0_read(off, width))
+    }
+
+    /// A write of endpoint MMIO, addressed CPU-physically.
+    pub fn mmio_write(&mut self, cpu: u64, width: Width, value: u32) -> bool {
+        match self.bar0_offset(cpu) {
+            Some(off) => {
+                self.endpoint.bar0_write(off, width, value);
+                true
+            }
+            None => false,
         }
     }
 
@@ -430,6 +513,90 @@ mod tests {
             assert_eq!(rd(&mut p, EXT_CFG_DATA + 0x7C) & 0xFF, byte);
         }
         assert_eq!(p.endpoint.vendor_writes, 4);
+    }
+
+    /// The exact outbound-window programming the bootloader does at
+    /// `0x000A725C`–`0x000A72F0`, followed by the BAR assignment at
+    /// `0x000A6918`. The window is the only way a 32-bit VPU can name the
+    /// endpoint's registers, and it names them 40 bits wide.
+    fn enumerated_pcie() -> Pcie {
+        let mut p = link_up_pcie();
+        p.write(MEM_WIN0_LO, Width::Word, 0x8000_0000).unwrap();
+        p.write(MEM_WIN0_HI, Width::Word, 0).unwrap();
+        p.write(MEM_WIN0_BASE_LIMIT, Width::Word, 0x3FF0_0000).unwrap();
+        p.write(MEM_WIN0_BASE_HI, Width::Word, 6).unwrap();
+        p.write(MEM_WIN0_LIMIT_HI, Width::Word, 6).unwrap();
+        p.write(EXT_CFG_INDEX, Width::Word, 1 << EXT_BUSNUM_SHIFT)
+            .unwrap();
+        p.write(EXT_CFG_DATA + 0x10, Width::Word, 0x8200_0000)
+            .unwrap();
+        p.write(EXT_CFG_DATA + 0x14, Width::Word, 0).unwrap();
+        p.write(EXT_CFG_DATA + 0x04, Width::Word, 0x0146).unwrap();
+        p
+    }
+
+    #[test]
+    fn outbound_window_spans_one_gib_at_six() {
+        let p = enumerated_pcie();
+        // `dmesg` on rpi-dev: `MEM 0x0600000000..0x063fffffff -> 0x00c0000000`.
+        // The firmware picks `0x8000_0000` for the bus side rather than Linux's
+        // `0xC000_0000`, so the model has to read the register, not the DT.
+        assert_eq!(p.outbound_bus_addr(0x6_0000_0000), Some(0x8000_0000));
+        assert_eq!(p.outbound_bus_addr(0x6_3FFF_FFFF), Some(0xBFFF_FFFF));
+        assert_eq!(p.outbound_bus_addr(0x5_FFFF_FFFF), None);
+        assert_eq!(p.outbound_bus_addr(0x6_4000_0000), None);
+    }
+
+    /// The read the bootloader's `xHC0 ver:` line is built from. Its DMA4
+    /// control block carries `src = 0x0200_0004`, `srci = 0x1006` — a 40-bit
+    /// source of `0x6_0200_0004`, i.e. BAR0 + 4 = `HCSPARAMS1`.
+    #[test]
+    fn the_outbound_window_reaches_xhci_capability_registers() {
+        let mut p = enumerated_pcie();
+        assert_eq!(p.mmio_read(0x6_0200_0000, Width::Word), Some(0x0100_0020));
+        assert_eq!(p.mmio_read(0x6_0200_0004, Width::Word), Some(0x0500_0420));
+        assert_eq!(p.mmio_read(0x6_0200_0010, Width::Word), Some(0x0028_41EB));
+        // One page, and not a byte more.
+        assert_eq!(p.mmio_read(0x6_0200_1000, Width::Word), None);
+    }
+
+    /// With memory decoding still disabled, or the link down, the window
+    /// decodes nothing — the DMA engine then reads DRAM, the way an unclaimed
+    /// address behaves on real silicon.
+    #[test]
+    fn endpoint_mmio_needs_the_command_register() {
+        let mut p = link_up_pcie();
+        p.write(MEM_WIN0_LO, Width::Word, 0x8000_0000).unwrap();
+        p.write(MEM_WIN0_BASE_LIMIT, Width::Word, 0x3FF0_0000).unwrap();
+        p.write(MEM_WIN0_BASE_HI, Width::Word, 6).unwrap();
+        p.write(MEM_WIN0_LIMIT_HI, Width::Word, 6).unwrap();
+        p.write(EXT_CFG_INDEX, Width::Word, 1 << EXT_BUSNUM_SHIFT)
+            .unwrap();
+        p.write(EXT_CFG_DATA + 0x10, Width::Word, 0x8200_0000)
+            .unwrap();
+        assert_eq!(p.mmio_read(0x6_0200_0000, Width::Word), None);
+    }
+
+    /// `USBCMD.HCRST` self-clears and returns the operational registers to
+    /// their power-on state; `USBSTS.HCH` follows `USBCMD.RS`. Those two are
+    /// the only live bits the bootloader's bring-up waits on.
+    #[test]
+    fn host_controller_reset_completes() {
+        let mut p = enumerated_pcie();
+        let usbcmd = 0x6_0200_0020;
+        let usbsts = 0x6_0200_0024;
+        assert_eq!(p.mmio_read(usbsts, Width::Word), Some(1)); // HCHalted
+        p.mmio_write(usbcmd, Width::Word, 1 << 1); // HCRST
+        assert_eq!(p.mmio_read(usbcmd, Width::Word), Some(0));
+        p.mmio_write(usbcmd, Width::Word, 1); // Run/Stop
+        assert_eq!(p.mmio_read(usbsts, Width::Word), Some(0));
+        // `USBSTS` is write-1-to-clear. The bring-up's stop path writes
+        // all-ones; a plain register would read that straight back.
+        p.mmio_write(usbsts, Width::Word, 0xFFFF_FFFF);
+        assert_eq!(p.mmio_read(usbsts, Width::Word), Some(0));
+        // Every root port reads "powered, empty" — there is no device model.
+        assert_eq!(p.mmio_read(0x6_0200_0420, Width::Word), Some(0x2A0));
+        assert_eq!(p.mmio_read(0x6_0200_0460, Width::Word), Some(0x2A0));
     }
 
     /// The root-port bridge header the bootloader builds at `0x000A6E80`
