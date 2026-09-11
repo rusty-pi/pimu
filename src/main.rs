@@ -26,7 +26,7 @@ USAGE:
               (an unknown instruction stops the run; --skip-unimpl steps over it
                instead, for reconnaissance on firmware the decoder is new to)
                              [--dump <hex>:<len>] [--disasm <hex>:<count>] [--patch <hex>=<hex>]
-                             [--dump-fdt <path>]
+                             [--dump-fdt <path>] [--print-fdt]
     rpi-virt-fw disasm <file> [--base <hex>] [--count <n>] [--vaddr <hex>]
 
 COMMANDS:
@@ -41,10 +41,12 @@ FLAGS:
     --update  Rewrite golden files instead of failing on mismatch.
     --dump-fdt <path>
               After the run, write the flattened device tree `arm_loader` handed
-              to the ARM — `/chosen/rpi-machine-id` and all — to <path>. Diff two
-              firmware versions with `fdtdump`/`dtc` to catch a bump that changes
-              the derivation (rpi-mkosi#37). The `/chosen` identity properties are
-              printed in the run report whether or not this flag is given.
+              to the ARM to <path>. Diff two firmware versions with
+              `fdtdump`/`dtc` to catch a bump that changes what the firmware
+              publishes (rpi-mkosi#37).
+    --print-fdt
+              Print that whole device tree as source, every node and property,
+              not only the `/chosen` summary the run report gives by default.
     -v        Print the full run report and transcript.
 ";
 
@@ -101,6 +103,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     let mut disasms: Vec<(u32, u32)> = Vec::new();
     let mut sd_image: Option<PathBuf> = None;
     let mut dump_fdt: Option<PathBuf> = None;
+    let mut print_fdt = false;
     let mut skip_signed_boot = false;
     let mut skip_unimpl = false;
     let mut it = args.iter();
@@ -147,6 +150,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
                 let (a, n) = spec.split_once(':').context("--disasm: expected addr:count")?;
                 disasms.push((parse_u32(a)?, parse_u32(n)?));
             }
+            "--print-fdt" => print_fdt = true,
             "--dump-fdt" => {
                 dump_fdt = Some(PathBuf::from(it.next().context("--dump-fdt needs a path")?))
             }
@@ -520,6 +524,17 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
                         "  at {addr:#010x}  totalsize {:#x}  version {}",
                         h.totalsize, h.version
                     );
+                    let nodes = fdt.nodes();
+                    println!(
+                        "  {} nodes, {} properties",
+                        nodes.len(),
+                        nodes.iter().map(|n| n.2.len()).sum::<usize>()
+                    );
+                    // `/chosen` is what the regression pins today, so it is
+                    // always in the report. It is not special otherwise — the
+                    // subject is the whole tree, and a firmware bump may move
+                    // what it publishes into a node that does not exist yet,
+                    // which is what `--print-fdt` and `--dump-fdt` are for.
                     match fdt.properties_of("/chosen") {
                         Some(props) => {
                             for p in &props {
@@ -529,6 +544,12 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
                             }
                         }
                         None => println!("  (no /chosen node)"),
+                    }
+                    if !print_fdt {
+                        println!("  (--print-fdt for every node, --dump-fdt <path> for the blob)");
+                    }
+                    if print_fdt {
+                        println!("\n{}", fdt.to_dts());
                     }
                     if let Some(out) = &dump_fdt {
                         std::fs::write(out, fdt.bytes())

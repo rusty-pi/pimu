@@ -5,8 +5,11 @@
 //! silently change `/chosen/rpi-machine-id`, because that string feeds the root
 //! LUKS passphrase. To diff two firmware versions we have to get the *patched*
 //! device tree back out of the model, so this module parses the blob well
-//! enough to print the `/chosen` properties and to check the header before the
-//! bytes are written to a file.
+//! enough to walk every node and print it, and to check the header before the
+//! bytes are written to a file. `/chosen` is the property set the regression
+//! pins today, but nothing here is specific to it: the tree start4 hands over
+//! is the whole subject, and a firmware bump is free to move identity into a
+//! node that does not exist yet.
 //!
 //! This is deliberately not a general DTB library: no phandle resolution, no
 //! memory-reservation walk, no writing. Spec: Devicetree Specification v0.4,
@@ -208,11 +211,137 @@ impl<'a> Fdt<'a> {
             None
         }
     }
+    /// Every node in the tree, depth first, as `(depth, path, properties)`.
+    /// The root is depth 0 with the path `/`.
+    ///
+    /// This is the general form; [`Self::properties_of`] is the shortcut for
+    /// one known path. Keeping the walk general is deliberate — the bench
+    /// exists to diff one firmware version against another, and a bump may add
+    /// nodes as readily as it changes a property inside one.
+    pub fn nodes(&self) -> Vec<(usize, String, Vec<Property>)> {
+        let mut out: Vec<(usize, String, Vec<Property>)> = Vec::new();
+        // Index into `out` of each open node, innermost last.
+        let mut open: Vec<usize> = Vec::new();
+        let mut names: Vec<String> = Vec::new();
+
+        let mut p = self.header.off_dt_struct as usize;
+        let end = (p + self.header.size_dt_struct as usize).min(self.blob.len());
+        while p + 4 <= end {
+            let token = be32(&self.blob[p..p + 4]);
+            p += 4;
+            match token {
+                FDT_BEGIN_NODE => {
+                    let rest = &self.blob[p..end];
+                    let nlen = rest.iter().position(|&b| b == 0).unwrap_or(0);
+                    let name = String::from_utf8_lossy(&rest[..nlen]).into_owned();
+                    p += (nlen + 4) & !3;
+                    names.push(name);
+                    let path = if names.len() == 1 {
+                        "/".to_string()
+                    } else {
+                        format!("/{}", names[1..].join("/"))
+                    };
+                    open.push(out.len());
+                    out.push((names.len() - 1, path, Vec::new()));
+                }
+                FDT_END_NODE => {
+                    open.pop();
+                    names.pop();
+                }
+                FDT_PROP => {
+                    if p + 8 > end {
+                        break;
+                    }
+                    let len = be32(&self.blob[p..p + 4]) as usize;
+                    let nameoff = be32(&self.blob[p + 4..p + 8]);
+                    p += 8;
+                    let data_end = (p + len).min(self.blob.len());
+                    if let Some(&idx) = open.last() {
+                        out[idx].2.push(Property {
+                            name: self.string(nameoff),
+                            value: self.blob[p..data_end].to_vec(),
+                        });
+                    }
+                    p += (len + 3) & !3;
+                }
+                FDT_NOP => {}
+                FDT_END => break,
+                _ => break,
+            }
+        }
+        out
+    }
+
+    /// The whole tree rendered as source, near enough to `dtc -O dts` output to
+    /// diff two firmware versions by eye. Not a faithful `.dts`: values are
+    /// rendered by [`Property::display`], which guesses string vs cell vs
+    /// bytes, so feed `dtc` the blob from `--dump-fdt` when exactness matters.
+    pub fn to_dts(&self) -> String {
+        let mut s = String::from("/dts-v1/;\n\n");
+        let nodes = self.nodes();
+        let mut depth_of_last = 0usize;
+        for (i, (depth, path, props)) in nodes.iter().enumerate() {
+            // Close any nodes this one is not inside of.
+            while depth_of_last > *depth {
+                depth_of_last -= 1;
+                s.push_str(&format!("{}}};\n", "\t".repeat(depth_of_last)));
+            }
+            let name = if *depth == 0 {
+                "/"
+            } else {
+                path.rsplit('/').next().unwrap_or(path)
+            };
+            let indent = "\t".repeat(*depth);
+            s.push_str(&format!("{indent}{name} {{\n"));
+            for prop in props {
+                s.push_str(&format!("{indent}\t{} = {};\n", prop.name, prop.display()));
+            }
+            let next_depth = nodes.get(i + 1).map(|n| n.0).unwrap_or(0);
+            if next_depth <= *depth {
+                s.push_str(&format!("{indent}}};\n"));
+                depth_of_last = *depth;
+            } else {
+                depth_of_last = *depth + 1;
+            }
+        }
+        while depth_of_last > 0 {
+            depth_of_last -= 1;
+            s.push_str(&format!("{}}};\n", "\t".repeat(depth_of_last)));
+        }
+        s
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nodes_walks_the_whole_tree_not_just_one_path() {
+        let blob = sample();
+        let fdt = Fdt::parse(&blob).unwrap();
+        let nodes = fdt.nodes();
+        // The root plus `/chosen`, with the root's path spelled `/`.
+        let paths: Vec<&str> = nodes.iter().map(|(_, p, _)| p.as_str()).collect();
+        assert_eq!(paths, vec!["/", "/chosen"]);
+        assert_eq!(nodes[0].0, 0);
+        assert_eq!(nodes[1].0, 1);
+        // Properties land on the node that is open, not on the root.
+        assert!(nodes[0].2.is_empty());
+        let names: Vec<&str> = nodes[1].2.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, vec!["bootargs", "rpi-machine-id"]);
+    }
+
+    #[test]
+    fn to_dts_renders_every_node() {
+        let blob = sample();
+        let dts = Fdt::parse(&blob).unwrap().to_dts();
+        assert!(dts.starts_with("/dts-v1/;"), "{dts}");
+        assert!(dts.contains("chosen {"), "{dts}");
+        assert!(dts.contains("bootargs = \"hi\";"), "{dts}");
+        // Every node that was opened is closed again.
+        assert_eq!(dts.matches('{').count(), dts.matches("};").count());
+    }
 
     /// Build a tiny blob: `/ { chosen { bootargs = "hi"; rpi-machine-id = "ab\n"; } }`.
     fn sample() -> Vec<u8> {
