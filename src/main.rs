@@ -148,7 +148,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     // One entry per `--mbox-property`, so several exchanges can be made
     // against the same booted firmware. A crypto tag that fails leaves an error
     // code behind that only the *next* request can ask for (`0x0003008e`).
-    let mut mbox_tags: Vec<Vec<(u32, Option<u32>)>> = Vec::new();
+    let mut mbox_tags: Vec<Vec<MboxTag>> = Vec::new();
     let mut usb_image: Option<PathBuf> = None;
     let mut boot_order: Option<String> = None;
     let mut dram_map = false;
@@ -213,17 +213,27 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
             "--print-fdt" => print_fdt = true,
             "--mbox-property" => {
                 let list = it.next().context("--mbox-property needs a tag list")?;
-                let mut group: Vec<(u32, Option<u32>)> = Vec::new();
+                let mut group: Vec<MboxTag> = Vec::new();
                 for t in list.split(',') {
-                    // `<tag>` or `<tag>:<value-buffer bytes>`. The override
-                    // exists because start4's idea of how much room a tag needs
-                    // is not always its Linux client's `sizeof`, and finding out
-                    // costs a boot per guess otherwise.
-                    let (tag, size) = match t.split_once(':') {
-                        Some((a, b)) => (parse_u32(a)?, Some(parse_u32(b)?)),
-                        None => (parse_u32(t)?, None),
+                    // `<tag>[:<value-buffer bytes>][=<word>.<word>...]`.
+                    // The size override exists because start4's idea of how
+                    // much room a tag needs is not always its Linux client's
+                    // `sizeof`; the request words exist because most crypto
+                    // tags take a `key_id`, and those are **1-based** — asking
+                    // for key 0 answers `KEY_NOT_FOUND` on a part whose only
+                    // key is key 1.
+                    let (head, req) = match t.split_once('=') {
+                        Some((a, b)) => (
+                            a,
+                            b.split('.').map(parse_u32).collect::<Result<Vec<u32>>>()?,
+                        ),
+                        None => (t, Vec::new()),
                     };
-                    group.push((tag, size));
+                    let (tag, size) = match head.split_once(':') {
+                        Some((a, b)) => (parse_u32(a)?, Some(parse_u32(b)?)),
+                        None => (parse_u32(head)?, None),
+                    };
+                    group.push((tag, size, req));
                 }
                 mbox_tags.push(group);
             }
@@ -1210,11 +1220,11 @@ const MBOX_BUFFER: u32 = 0x1000_0000;
 /// wire is `0xC000_0000 | phys` because Linux allocates the buffer coherently
 /// and `/soc` carries `dma-ranges = <0xc0000000 0x0 0x0 0x40000000>` — the
 /// uncached alias, which the model already maps to the same DRAM.
-fn mbox_property_exchange(
-    emu: &mut Emulator,
-    limits: &RunLimits,
-    tags: &[(u32, Option<u32>)],
-) -> Result<()> {
+/// One tag in a `--mbox-property` request: the tag, an optional override of the
+/// value-buffer size, and optional request words (a `key_id`, most often).
+type MboxTag = (u32, Option<u32>, Vec<u32>);
+
+fn mbox_property_exchange(emu: &mut Emulator, limits: &RunLimits, tags: &[MboxTag]) -> Result<()> {
     use rpi_virt_fw::bus::{Bus, Width};
 
     println!("\n--- ARM property mailbox (0x7e00_b880) ---");
@@ -1258,9 +1268,15 @@ fn mbox_property_exchange(
     };
 
     let mut words: Vec<u32> = vec![0, 0];
-    for &(tag, override_size) in tags {
+    for (tag, override_size, override_req) in tags {
+        let (tag, override_size) = (*tag, *override_size);
         let (size, payload) = spec(tag);
         let size = override_size.unwrap_or(size);
+        let payload = if override_req.is_empty() {
+            payload
+        } else {
+            override_req.clone()
+        };
         words.push(tag);
         words.push(size);
         words.push(0);
@@ -1405,7 +1421,9 @@ fn mbox_property_exchange(
             .unwrap_or(0);
         let len = resp & 0x7FFF_FFFF;
         let mut vals = Vec::new();
-        for i in 0..(len / 4).min(8) {
+        // Enough for the longest answer worth reading inline: a
+        // 32-byte HMAC plus its status and length words.
+        for i in 0..(len / 4).min(16) {
             vals.push(format!(
                 "{:#010x}",
                 emu.machine

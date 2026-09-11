@@ -153,15 +153,17 @@ When the buffer-level code is not `0x80000000`, the reply is also dumped as raw
 words. That matters because the tag-by-tag decode walks by the sizes it staged,
 so it is exactly what cannot be trusted when the sizes are in question.
 
-What the firmware answers today, with the model's blank OTP:
+What the firmware answers today:
 
 | Tag | Answer |
 |---|---|
 | `0x00000001` `GET_FIRMWARE_REVISION` | `0x6a7a16af` — the build timestamp of the pinned `start4.elf`. |
 | `0x0003008f` `GET_CRYPTO_NUM_OTP_KEYS` | `0x00000001` — one key slot. The crypto service is up. |
-| `0x0003008e` `GET_CRYPTO_LAST_ERROR` | `3`, `RPI_FW_CRYPTO_KEY_NOT_FOUND`, after either of the two below. |
-| `0x00030090` `GET_CRYPTO_KEY_STATUS` | `0x80000000`. No key is fused, which is the honest answer for this model. |
-| `0x00030095` `GET_CRYPTO_GEN_ECDSA_KEY` | `0x80000000`, same error — generating one does not work around it. |
+| `0x0003008e` `GET_CRYPTO_LAST_ERROR` | `0` after a tag that worked, `3` `RPI_FW_CRYPTO_KEY_NOT_FOUND` after one that did not. Reports the *previous* request, so it needs its own exchange. |
+| `0x00030090` `GET_CRYPTO_KEY_STATUS` | Depends on the `key_id` in the request — see below. Ask with `0x00030090=1`. |
+| `0x0003009c` `GET_CRYPTO_KEY_USAGE` | `0` for key 1, `RPI_FW_CRYPTO_KEY_USAGE_UNDEFINED`. |
+| `0x00030092` `GET_CRYPTO_HMAC_SHA256` | status `0`, length `0x20`, and a real HMAC. Ask with `0x00030092=<flags>.<key_id>.<len>.<message words>`. |
+| `0x00030095` `GET_CRYPTO_GEN_ECDSA_KEY` | `0x80000000` for `key_id` 0, for the same reason. |
 
 A failing crypto handler is fatal for the whole request: the tag itself is
 marked answered, but the buffer-level code becomes `0x80000001` and the walk
@@ -171,16 +173,26 @@ unanswered tag. Five copies of `0x00000001` in one buffer all answer and the
 code stays `0x80000000`, so there is no tag-count or buffer-size limit behind
 this.
 
-This matches the reference board rather than falling short of it. Asking the
-real Pi 4 the same three tags through `/dev/vcio` gives the same answers:
-`NUM_OTP_KEYS` 1, `LAST_ERROR` 3, and `KEY_STATUS` failing — there as `EINVAL`
-out of the `vcio` driver, which rejects exactly the `0x80000001` buffer code
-the firmware returns. Its OTP rows 56-63 read blank too. The board simply has
-no key fused, so `KEY_NOT_FOUND` is the whole truth and there is nothing
-missing in the model.
+A crypto tag that answers `0x80000000` with `LAST_ERROR` 3 is usually being
+asked for `key_id` **0**. Key ids are **1-based**: `NUM_OTP_KEYS` of 1 means the
+part has one key and it is key *1*. Ask with `0x00030090=1` and it answers
+`0x00000001` (`TYPE_DEVICE_PRIVATE_KEY`) with `LAST_ERROR` 0; 0, 2 and 3 all
+give `KEY_NOT_FOUND`. The reference board behaves identically when asked the
+same way over `/dev/vcio` — which is worth knowing before reading a
+`KEY_NOT_FOUND` as an unprovisioned part, because it looks exactly like one.
 
-Provisioning one would be the way to exercise sign and HMAC, and it is not done
-by writing values into rows 56-63: `RVF_DBG_OTP=1` shows those read back
-correctly during boot with the answer unchanged, and *no* OTP row is read at
-all while the request is served, so the verdict is reached during boot and
-cached.
+With the right key id the whole service runs: `GET_CRYPTO_HMAC_SHA256` returns
+status 0, length `0x20`, and a real HMAC computed by `start4.elf`'s own mbedTLS
+from the OTP key. The scenario pins that digest.
+
+That board's key rows are fused, which `vcgencmd otp_dump` will not show you —
+it prints rows 56-63 as `00000000`, hiding them the way it hides rows 19-26,
+while Linux's `nvmem_priv0` reads back 32 non-zero bytes. Checking blankness
+through `nvmem_priv0`/`nvmem_cust0` is the reliable way, and reporting it as a
+boolean is the *only* way that respects the "never commit an OTP dump" rule in
+`CLAUDE.md`. `src/periph/configotp.rs` models rows 56-63 as fused for the same
+reason: firmware that reads 0 from a row concludes the fuse is unprogrammed.
+
+The `nvmem_cust_rw`, `nvmem_mac_rw` and `nvmem_priv_rw` `dtparam`s open those
+regions for *write* from Linux. OTP writes are one-way, so nothing here needs
+them — read access is enough to check what is fused.
