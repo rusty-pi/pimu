@@ -26,6 +26,8 @@
 
 use std::collections::HashMap;
 
+use crate::block::{BlockDevice, MemoryBlocks};
+
 /// The `PORTSC` / slot-context speed encoding (xHCI 4.19.7 "Protocol Speed
 /// ID"), for the default speed IDs the VL805 reports in its supported-protocol
 /// extended capabilities.
@@ -459,7 +461,8 @@ enum BotPhase {
 }
 
 /// A USB mass-storage device: Bulk-Only Transport carrying SCSI, backed by a
-/// disk image.
+/// block medium (a disk image in RAM hosted; whatever QEMU exposes bare-metal,
+/// see [`crate::block`]).
 ///
 /// Identity is the Samsung "Flash Drive FIT" (`090c:1000`) the stage-3 ground
 /// truth was captured from — descriptors verbatim from `docs/usb-xhci.md` §5.2,
@@ -469,12 +472,18 @@ enum BotPhase {
 pub struct MassStorage {
     common: CommonState,
     desc: Descriptors,
-    image: Vec<u8>,
+    medium: Box<dyn BlockDevice>,
     phase: BotPhase,
 }
 
 impl MassStorage {
+    /// Attach a disk image held in RAM.
     pub fn new(image: Vec<u8>) -> MassStorage {
+        MassStorage::with_medium(Box::new(MemoryBlocks::new(image)))
+    }
+
+    /// Attach any block medium — the seam the bare-metal frontend uses.
+    pub fn with_medium(medium: Box<dyn BlockDevice>) -> MassStorage {
         let mut strings = HashMap::new();
         strings.insert(0, lang_desc());
         strings.insert(1, string_desc("Samsung"));
@@ -500,13 +509,13 @@ impl MassStorage {
                 // Bus powered, no remote wakeup.
                 status: 0x00,
             },
-            image,
+            medium,
             phase: BotPhase::Command,
         }
     }
 
     fn blocks(&self) -> u64 {
-        (self.image.len() / BLOCK_SIZE) as u64
+        self.medium.block_count()
     }
 
     /// Run one SCSI command block, returning the IN payload (for a read) and
@@ -563,12 +572,21 @@ impl MassStorage {
                         u32::from_be_bytes([cdb[10], cdb[11], cdb[12], cdb[13]]) as u64,
                     ),
                 };
-                let start = lba as usize * BLOCK_SIZE;
-                let len = count as usize * BLOCK_SIZE;
-                if start + len > self.image.len() {
+                // A read that runs off the end of the medium fails the whole
+                // command, as it did when the image was one slice: a short
+                // reply would look like a successful partial read to the host.
+                if lba.saturating_add(count) > self.blocks() {
                     return (Vec::new(), 1);
                 }
-                (self.image[start..start + len].to_vec(), 0)
+                let mut data = Vec::with_capacity(count as usize * BLOCK_SIZE);
+                let mut block = [0u8; BLOCK_SIZE];
+                for i in 0..count {
+                    if !self.medium.read_block(lba + i, &mut block) {
+                        return (Vec::new(), 1);
+                    }
+                    data.extend_from_slice(&block);
+                }
+                (data, 0)
             }
             // MODE SENSE(6): one header, no pages, not write protected.
             0x1A => (vec![3, 0, 0, 0], 0),

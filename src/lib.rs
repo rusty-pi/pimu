@@ -17,6 +17,7 @@
 //!                  └── StubRegion (catch-all + log)      src/periph/stub.rs
 //! ```
 
+pub mod block;
 pub mod bus;
 pub mod diag;
 pub mod emulator;
