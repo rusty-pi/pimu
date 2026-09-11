@@ -55,9 +55,6 @@ pub struct SysTimer {
     ///
     /// Independent of `cs` — the tick ISR acks `CS` itself.
     pending: [bool; 4],
-    /// `RVF_ONESHOT_CMP=1`: model compares as one-shot (hardware behaviour)
-    /// instead of auto-reloading them.
-    oneshot: bool,
     /// `RVF_DBG_CMP=1`: log every compare-register arm.
     dbg_cmp: bool,
     arms: u64,
@@ -75,7 +72,6 @@ impl SysTimer {
             interval: [DEFAULT_INTERVAL_US; 4],
             clo_reads: 0,
             pending: [false; 4],
-            oneshot: std::env::var_os("RVF_ONESHOT_CMP").is_some(),
             dbg_cmp: std::env::var_os("RVF_DBG_CMP").is_some(),
             arms: 0,
         }
@@ -114,35 +110,26 @@ impl SysTimer {
 
     /// Set any compare channels whose deadline the counter has now reached.
     ///
-    /// Real BCM system-timer compares are **one-shot**: the channel matches
-    /// once, the firmware acks it via `CS` and writes a fresh `Cn`. There is no
-    /// auto-reload. `RVF_ONESHOT_CMP=1` models that.
+    /// BCM system-timer compares are **one-shot**: the channel matches once,
+    /// the firmware acks it via `CS` and writes a fresh `Cn`. There is no
+    /// auto-reload, and the model does not invent one.
     ///
-    /// The default is still the legacy auto-reload (re-arm one retained
-    /// interval ahead), because the current tick routing never reaches
-    /// `0x3EC40B7C` — the only code that re-arms `C0` — so without a reload the
-    /// tick would stop after its first match. Auto-reload has a real cost: a
-    /// channel the firmware armed once as a one-shot timeout keeps firing
-    /// forever, and with per-channel interrupt sources that floods the CPU with
-    /// spurious `64 + channel` interrupts (channel 2 / source 66 drowning out
-    /// the channel 0 tick).
+    /// It used to, behind `RVF_ONESHOT_CMP`, because the tick routing of the
+    /// time never reached `0x3EC40B7C` — the only code that re-arms `C0` — so
+    /// without a reload the tick stopped after its first match. That has not
+    /// been true since the tick started vectoring through its priority stub
+    /// (#7, `8d7c27a`): the firmware re-arms its own compares, and faking a
+    /// reload only made a channel armed once as a timeout fire forever,
+    /// flooding the CPU with spurious `64 + channel` interrupts.
     fn service_matches(&mut self) {
         for c in 0..4 {
-            let Some(mut d) = self.deadline[c] else { continue };
+            let Some(d) = self.deadline[c] else { continue };
             if self.micros < d {
                 continue;
             }
             self.cs |= 1 << c;
             self.pending[c] = true;
-            if self.oneshot {
-                self.deadline[c] = None;
-                continue;
-            }
-            let step = self.interval[c].max(1);
-            while d <= self.micros {
-                d += step;
-            }
-            self.deadline[c] = Some(d);
+            self.deadline[c] = None;
         }
     }
 

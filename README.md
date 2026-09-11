@@ -59,10 +59,13 @@ hand, which the firmware's own `dma_chan_interrupt` does now that the DMA
 completion interrupt is modelled
 ([#3](https://github.com/valtzu/rpi-virt-fw/issues/3)).
 
-Not done: the VPU vector/float unit, USB3 (VL805) and GENET netboot, the
-hand-off to the ARM cores. See [`docs/boot-chain.md`](docs/boot-chain.md)
-for the stage-by-stage map and [`docs/vision.md`](docs/vision.md) for the
-longer-term direction (single `boot` command, disk-image mode, QEMU hand-off).
+Not done: the VPU vector/float unit, GENET netboot, and the ARM property
+mailbox — which is what a booted Linux needs to reach `/dev/vcio` and the
+firmware crypto service. See [`docs/boot-chain.md`](docs/boot-chain.md) for the
+stage-by-stage map, [`docs/diagnostics.md`](docs/diagnostics.md) for the
+environment variables that find a wall, and [`docs/vision.md`](docs/vision.md)
+for the longer-term direction (single `boot` command, disk-image mode, keeping
+the VideoCore running alongside QEMU).
 
 ## Quick start
 
@@ -129,7 +132,7 @@ involved is invented in `src/periph/configotp.rs`. See the OTP rule in
 
 `--max-wall` defaults to 140 s and there is no instruction cap unless you pass
 `--max-steps`. Reaching the last milestone takes longer than 140 s, so
-`scripts/boot-check.sh` carries its own budget (`RVF_BOOT_WALL`, 290 s by
+`scripts/boot-check.sh` carries its own budget (`RVF_BOOT_WALL`, 330 s by
 default); it runs the boot and checks the log against every milestone the boot
 is known to reach. That script is what CI runs, so run it locally to reproduce
 a CI failure.
@@ -173,7 +176,7 @@ src/
   emulator.rs   Emulator = Vpu + Machine, run loop
   harness/      scenario parsing, transcript capture, golden diff
   payloads.rs   hand-assembled VPU test programs
-docs/           boot-chain, vpu-isa, references, vision
+docs/           boot-chain, diagnostics, usb-xhci, vpu-isa, references, vision
 scripts/        fetch-firmware.sh, make-sd.sh, provision-eeprom.sh, make-dt-blob.py
 testdata/       scenarios/*.toml, golden/*.txt
 ```

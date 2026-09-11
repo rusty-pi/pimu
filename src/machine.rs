@@ -112,9 +112,6 @@ pub struct Machine {
     /// with the current PC (`watch_pc`, refreshed by the run loop each step).
     /// Complements `mmio_trace` for pinning down who writes a given RAM word.
     pub watch: Vec<u32>,
-    /// Cached `RVF_TICK_SLOT` override. `timer_tick_slot` runs on every `sleep`
-    /// (millions of times), so it must not re-read the environment per call.
-    tick_slot_override: Option<u32>,
     /// `RVF_DBG_DMA=1`: log every control block the DMA4 channel executes.
     dbg_dma: bool,
     /// Interrupt sources raised by peripherals, waiting to be vectored.
@@ -190,9 +187,6 @@ impl Machine {
                 .unwrap_or_default(),
             dbg_dma: std::env::var_os("RVF_DBG_DMA").is_some(),
             pending_irqs: std::collections::VecDeque::new(),
-            tick_slot_override: std::env::var("RVF_TICK_SLOT")
-                .ok()
-                .and_then(|s| s.trim().parse().ok()),
             watch_pc: 0,
             phase_tags: Vec::new(),
         }
@@ -679,15 +673,7 @@ impl Bus for Machine {
             return None;
         }
         let ch = self.systimer.pending_channel().unwrap_or(0) as u32;
-        let src = self
-            .tick_slot_override
-            .map_or(crate::periph::corectl::SYS_IRQ_SRC + ch, |base| {
-                if base == crate::periph::corectl::SYS_IRQ_SRC {
-                    base + ch
-                } else {
-                    base
-                }
-            });
+        let src = crate::periph::corectl::SYS_IRQ_SRC + ch;
         // The generic dispatcher `0x3EC3E9BC` does not take the source from the
         // vector number — it re-reads it from CoreCtl `+0x04` and indexes the
         // handler table at `gp+58004`. Entry 64 is a direct handler and never

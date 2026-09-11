@@ -276,26 +276,6 @@ impl Emulator {
         let mut tick_deliveries: u64 = 0;
         let mut irqtbl_n = 0u32;
         let mut tick_skips: u64 = 0;
-        // Experiment: after the priority-1 timer ISR returns, raise the pending
-        // lower-priority software interrupt (vector slot 3) — start4's deferred
-        // reschedule path that runs `_tx_timer_interrupt` proper. Gated on
-        // `RVF_DEFER_SLOT3`.
-        let defer_slot3 = std::env::var_os("RVF_DEFER_SLOT3").is_some();
-        let mut slot3_pending = false;
-        // Experiment: instead of vectoring the ThreadX tick as a faked IRQ (which
-        // the model's cooperative scheduler can't unwind through a real context
-        // switch), plain-call start4's own tick-ISR body `0x3ED6583A` — it acks
-        // the system-timer compare and runs `[[gp+879584]+56](.., 66)`, the
-        // clock-service timeout processing that resumes `msleep`-suspended
-        // threads (`powerman` / `do_step`). `_tx_thread_schedule`'s idle loop
-        // (`0x3EC40012: sleep; di; b 0x3EC3FFCA`) re-reads the execute pointer
-        // each spin, so a thread resumed here is picked up without a faked `rti`.
-        let tick_call = std::env::var_os("RVF_TICK_CALL").is_some();
-        const TICK_ISR_BODY: u32 = 0x3ED6_583A;
-
-        let probe = std::env::var_os("RVF_PROBE").is_some();
-        let mut probe_seen: std::collections::HashSet<&'static str> = std::collections::HashSet::new();
-        let mut probe_gp_n: u64 = 0;
 
         // RVF_PROF=1: cheap PC profiler. Bucket the core-0 PC into 256-byte
         // slots on every step and dump the hottest on exit — finds the loop
@@ -380,9 +360,6 @@ impl Emulator {
         let dbg_evget = std::env::var_os("RVF_DBG_EVGET").is_some();
         let dbg_ff = std::env::var_os("RVF_DBG_FF").is_some();
         let dbg_irqtbl = std::env::var_os("RVF_DBG_IRQTBL").is_some();
-        let pmic_event = std::env::var_os("RVF_PMIC_EVENT").is_some();
-        let pmic_hack = std::env::var_os("RVF_PMIC_HACK").is_some();
-        let tick_core1 = std::env::var_os("RVF_TICK_CORE1").is_some();
         let trace_mmio = std::env::var_os("RVF_TRACE_MMIO").is_some();
         // Hoisted out of the per-instruction loop: `std::env::var_os` is a
         // locking lookup over the whole environment and these were being
@@ -585,146 +562,6 @@ impl Emulator {
                 let us = (self.cpu.regs.get(1) as u64).min(5_000_000);
                 if us != 0 {
                     self.machine.systimer.jump(us);
-                }
-            }
-            if probe {
-                // PMIC I²C retry loop: `0x3EDD21A0` checks the I²C call's return
-                // (`r6`) — 0 == success, anything else retries until a 1 s
-                // timeout. Log what the model's BSC is handing back.
-                if pc_before == 0x3EDD_21A0 {
-                    eprintln!(
-                        "[probe] pmic i2c ret r6={:#x} @{}",
-                        self.cpu.regs.get(6),
-                        self.cpu.retired
-                    );
-                }
-                // `0x3EDD22D4`: reads the transfer-status byte `[r0+0]`; `>= 2`
-                // => "PMIC: timeout reading reg" at `0x3EDD22E4`.
-                if pc_before == 0x3EDD_22D4 {
-                    let r0 = self.cpu.regs.get(0);
-                    let st = self.machine.load(r0, Width::Word).unwrap_or(0xdead);
-                    eprintln!(
-                        "[probe] pmic status @{r0:#x} = {st:#x}  retired={}",
-                        self.cpu.retired
-                    );
-                }
-                // DA9090 driver: `0x3EC8C4C0` pmic_read entry, `0x3EC8C4EE`
-                // reads the thread status byte `[r0]` (>= 2 => timeout log at
-                // `0x3EC8C4FE`).
-                if pc_before == 0x3EC8_C4C0 {
-                    eprintln!(
-                        "[probe] da9090 pmic_read entry r6={:#x} @{}",
-                        self.cpu.regs.get(6),
-                        self.cpu.retired
-                    );
-                }
-                if pc_before == 0x3EC8_C4EE {
-                    let r0 = self.cpu.regs.get(0);
-                    let b = self.machine.load(r0, Width::Byte).unwrap_or(0xdead);
-                    eprintln!("[probe] da9090 status byte @{r0:#x} = {b:#x}");
-                    // HACK: the one-time init at `0x3EDA545C` leaves the global
-                    // errno (`gp+328824`) == 2 and nothing in the model clears
-                    // it; the DA9090 PMIC read then reads it as a timeout. Clear
-                    // it here so a successful I2C read isn't masked.
-                    if pmic_hack && b == 2 {
-                        let _ = self.machine.store(r0, Width::Byte, 0);
-                        eprintln!("[probe]   -> forced errno 0");
-                    }
-                }
-                // `0x3ECC9C78` gpioman_get_pin_num — is the provider list ever
-                // populated? Log the state struct on the LEDS lookups.
-                if pc_before == 0x3ECC_9C78 {
-                    probe_gp_n += 1;
-                    if probe_gp_n <= 400 {
-                        let gp = self.cpu.regs.get(24);
-                        let a = self.machine.load(gp + 807672, Width::Word).unwrap_or(0xdead);
-                        let b = self.machine.load(gp + 807676, Width::Word).unwrap_or(0xdead);
-                        let c = self.machine.load(gp + 839404, Width::Word).unwrap_or(0xdead);
-                        let p = self.cpu.regs.get(0);
-                        let mut name = String::new();
-                        for i in 0..24 {
-                            match self.machine.load(p + i, Width::Byte) {
-                                Ok(0) | Err(_) => break,
-                                Ok(ch) => name.push(ch as u8 as char),
-                            }
-                        }
-                        eprintln!(
-                            "[probe] get_pin_num#{probe_gp_n} {name:?} gp={gp:#x} [+672]={a:#x} [+676]={b:#x} [+839404]={c:#x} @{}",
-                            self.cpu.retired
-                        );
-                    }
-                }
-                // `0x3EDA4EEC` — the "record an error" helper. When called with
-                // r1 = &global_errno and *errno == 0 it stamps errno = 2.
-                if pc_before == 0x3EDA_4EEC && self.cpu.regs.get(1) == 0x3EE5_3198 {
-                    let lr = self.cpu.regs.get(26);
-                    eprintln!(
-                        "[probe] errno-set caller lr={lr:#x} r0={:#x} @{}",
-                        self.cpu.regs.get(0),
-                        self.cpu.retired
-                    );
-                }
-            }
-            if probe {
-                // Recon: gpioman config path. `0x3ECC9878` = gpioman_configure,
-                // `0x3ECC9EC4` = provider_register (links a node into the pin
-                // list `[gp+807676]`), `0x3ECC9DC4` = the never-called flag
-                // setter. Log entry with the state words that decide the branch.
-                let tag = match pc_before {
-                    0x3ECC_9878 => Some("gpioman_configure"),
-                    0x3ECC_9EC4 => Some("provider_register"),
-                    0x3ECC_9DC4 => Some("flag_setter"),
-                    0x3ECC_9D78 => Some("faillog+retry_sched"),
-                    0x3ECC_93AC => Some("apply"),
-                    _ => None,
-                };
-                if let Some(t) = tag {
-                    let gp = self.cpu.regs.get(24);
-                    let mut l = |o: u32| {
-                        self.machine
-                            .load(gp.wrapping_add(o), Width::Word)
-                            .unwrap_or(0xdead)
-                    };
-                    let (a, b, c, d) = (l(807672), l(807676), l(807680), l(839404));
-                    eprintln!(
-                        "[probe] {t} @{} lr={:#x} r0={:#x} [gp+807672]={a:#x} [gp+807676]={b:#x} [gp+807680]={c:#x} [gp+839404]={d:#x}",
-                        self.cpu.retired,
-                        self.cpu.regs.get(26),
-                        self.cpu.regs.get(0),
-                    );
-                    if probe_seen.insert(t) {
-                        eprintln!("[probe]   cf_trace tail for first {t}:");
-                        let cf = &self.cpu.cf_trace;
-                        for &(from, to) in cf.iter().skip(cf.len().saturating_sub(48)) {
-                            eprintln!("[probe]     {from:#010x} -> {to:#010x}");
-                        }
-                    }
-                }
-            }
-            if probe && matches!(pc_before, 0x3EDA_28D6 | 0x3EDA_28C0 | 0x3EDC_9E20 | 0x3EDC_9E48 | 0x3EDC_9E90) {
-                let r = |i| self.cpu.regs.get(i);
-                eprintln!(
-                    "[probe] vecmem @{pc_before:#x} lr={:#x} r0={:#x} r1={:#x} r2={:#x} r3={:#x} sp={:#x} [sp]={:#x} @{}",
-                    r(26), r(0), r(1), r(2), r(3), r(25),
-                    self.machine.load(r(25), Width::Word).unwrap_or(0xdead),
-                    self.cpu.retired,
-                );
-            }
-            if probe && pc_before == 0x3ED5_76C4 {
-                // do_step_inner(phase r0): log the phase + the state words it
-                // branches on. `[gp+3296]` = a pending-work flag,
-                // `[gp+867096+36/40/52]` = sub-state.
-                let gp = self.cpu.regs.get(24);
-                let mut l = |a: u32| self.machine.load(a, Width::Word).unwrap_or(0xdead);
-                let r6 = gp.wrapping_add(867096);
-                probe_gp_n += 1;
-                if probe_gp_n <= 60 || probe_gp_n % 500 == 0 {
-                    eprintln!(
-                        "[probe] do_step_inner#{probe_gp_n} phase={:#x} [gp+3296]={:#x} [r6+36]={:#x} [r6+40]={:#x} [r6+52]={:#x} @{}",
-                        self.cpu.regs.get(0), l(gp.wrapping_add(3296)),
-                        l(r6.wrapping_add(36)), l(r6.wrapping_add(40)), l(r6.wrapping_add(52)),
-                        self.cpu.retired,
-                    );
                 }
             }
             if let Some(lvl) = cz_log {
@@ -979,31 +816,6 @@ impl Emulator {
                     );
                 }
             }
-            if pc_before == 0x3EC3_E3BE && pmic_event {
-                // `_tx_event_flags_get(group, request, ...)`. Only the DA9090
-                // completion group (`0x3EF05FEC`, waited on from `0x3ECC7000`)
-                // belongs here.
-                //
-                // It used to also cover `0x3EE58C00..0x3EE59800` on the theory
-                // that those were per-rail PMIC groups. They are not: they are
-                // the two HDMI controllers' groups (`0x3EE58AB0` = HDMI0,
-                // `0x3EE58D24` = HDMI1 — `RVF_DBG_EVGET=1` shows both, waited
-                // on from the EDID-fetch loop `0x3ECA94E6` for bit 0 and from
-                // the main boot thread `0x3ECE49AE` for bit 16). Posting into
-                // HDMI1's group re-triggered its EDID fetch on every pass, so
-                // it re-read EDID forever (40 715 `HDMI1:EDID ...` lines in a
-                // 240 s run) instead of giving up once like real hardware.
-                // Guard on the ThreadX event-group magic "NDVD" at `[grp+0]`.
-                let grp = self.cpu.regs.get(0);
-                if grp == 0x3EF0_5FEC
-                    && self.machine.load(grp, Width::Word).unwrap_or(0) == 0x4456_444E
-                {
-                    let req = self.cpu.regs.get(1);
-                    let flags = grp.wrapping_add(8);
-                    let cur = self.machine.load(flags, Width::Word).unwrap_or(0);
-                    let _ = self.machine.store(flags, Width::Word, cur | req);
-                }
-            }
             self.machine.watch_pc = pc_before;
             let exc_depth_before = self.cpu.in_exception;
             let step = self.cpu.step(&mut self.machine);
@@ -1146,48 +958,8 @@ impl Emulator {
                             );
                         }
                     }
-                    if tick_call && slot == 1 {
-                        // Plain-call the tick-ISR body: lr = resume pc, it
-                        // returns via `pop pc` (or never returns if it switches
-                        // to a resumed thread).
-                        let resume = self.cpu.pc();
-                        self.cpu.regs.set(crate::vpu::reg::LR, resume);
-                        self.cpu.regs.pc = TICK_ISR_BODY;
-                    } else {
-                        self.cpu.vector_irq(&mut self.machine, slot);
-                    }
-                    if defer_slot3 && slot == 1 {
-                        slot3_pending = true;
-                    }
-                    // Experiment (`RVF_TICK_CORE1`): also vector the tick on
-                    // core 1 — ThreadX-SMP may run `_tx_timer_interrupt` there.
-                    if tick_core1 {
-                        if let Some(c1) = self.cpu1.as_mut() {
-                            if c1.in_exception == 0 && c1.irq_enabled() && c1.exc_vbase != 0 {
-                                c1.vector_irq(&mut self.machine, slot);
-                            }
-                        }
-                    }
+                    self.cpu.vector_irq(&mut self.machine, slot);
                 }
-            }
-
-            // Deferred software interrupt: once the priority-1 timer ISR has
-            // unwound back to thread context, vector the pending slot-3 SW IRQ.
-            if defer_slot3
-                && slot3_pending
-                && self.cpu.in_exception == 0
-                && self.cpu.irq_enabled()
-                && self.cpu.exc_vbase != 0
-            {
-                slot3_pending = false;
-                if dbg_tick {
-                    eprintln!(
-                        "[slot3] deferred SW IRQ at resume={:#x} retired={}",
-                        self.cpu.pc(),
-                        self.cpu.retired,
-                    );
-                }
-                self.cpu.vector_irq(&mut self.machine, 3);
             }
 
             if self.machine.mmio_trace && !self.machine.mmio_events.is_empty() {
