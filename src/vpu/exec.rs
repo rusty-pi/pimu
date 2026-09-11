@@ -8,7 +8,7 @@ const CF_TRACE_LEN: usize = 512;
 
 use super::decode::decode;
 use super::insn::{AddrMode, AluOp, Base, MemWidth, Op, RegOrImm, VecExec, VecInsn, Writeback};
-use super::length::{insn_len_bytes, InsnClass};
+use super::length::InsnClass;
 use super::reg::{Cond, Flags, Regs, GP, LR, SP};
 
 /// Sign-extend the low `bits` of `v` to 32 bits.
@@ -336,16 +336,8 @@ impl Vpu {
 
     /// Fetch the instruction bytes at `pc` into a 10-byte buffer.
     fn fetch(&self, bus: &mut dyn Bus, pc: u32) -> Result<([u8; 10], u8), BusError> {
-        let p0 = bus.load16(pc)?;
-        let len = insn_len_bytes(p0);
         let mut buf = [0u8; 10];
-        buf[0..2].copy_from_slice(&p0.to_le_bytes());
-        let mut i = 2u32;
-        while i < len as u32 {
-            let h = bus.load16(pc.wrapping_add(i))?;
-            buf[i as usize..i as usize + 2].copy_from_slice(&h.to_le_bytes());
-            i += 2;
-        }
+        let len = bus.read_insn(pc, &mut buf)?;
         Ok((buf, len))
     }
 

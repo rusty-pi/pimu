@@ -102,6 +102,24 @@ pub trait Bus {
         self.store(addr, Width::Word, v)
     }
 
+    /// Fetch the instruction bytes at `pc` into `out`, returning its length.
+    ///
+    /// The default walks the instruction a halfword at a time through
+    /// [`Self::load16`]; `Machine` overrides it with a slice copy when the
+    /// instruction lies in RAM.
+    fn read_insn(&mut self, pc: u32, out: &mut [u8; 10]) -> BusResult<u8> {
+        let p0 = self.load16(pc)?;
+        let len = crate::vpu::length::insn_len_bytes(p0);
+        out[0..2].copy_from_slice(&p0.to_le_bytes());
+        let mut i = 2u32;
+        while i < len as u32 {
+            let h = self.load16(pc.wrapping_add(i))?;
+            out[i as usize..i as usize + 2].copy_from_slice(&h.to_le_bytes());
+            i += 2;
+        }
+        Ok(len)
+    }
+
     /// The interrupt vector-table slot for the periodic ThreadX tick source, if
     /// the firmware has enabled it. This does not touch the timer — the run
     /// loop calls it when a compare deadline has been crossed to deliver a

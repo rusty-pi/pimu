@@ -667,6 +667,36 @@ impl Bus for Machine {
         woke
     }
 
+    /// Fetch an instruction straight out of RAM when it lives there.
+    ///
+    /// The generic path in [`Bus::read_insn`] costs a full address decode per
+    /// halfword — two to five per instruction, across nearly two billion
+    /// instructions a boot. Execution is essentially always out of RAM.
+    fn read_insn(&mut self, pc: u32, out: &mut [u8; 10]) -> BusResult<u8> {
+        if !Machine::in_mmio(pc) {
+            let phys = Machine::fold_ram_addr(pc);
+            if let Ok(head) = self.ram.read_slice(phys, 2) {
+                let p0 = u16::from_le_bytes([head[0], head[1]]);
+                let len = crate::vpu::length::insn_len_bytes(p0);
+                if let Ok(bytes) = self.ram.read_slice(phys, len as usize) {
+                    self.ram_reads = self.ram_reads.wrapping_add(1);
+                    out[..len as usize].copy_from_slice(bytes);
+                    return Ok(len);
+                }
+            }
+        }
+        let p0 = self.load(pc, Width::Half)? as u16;
+        let len = crate::vpu::length::insn_len_bytes(p0);
+        out[0..2].copy_from_slice(&p0.to_le_bytes());
+        let mut i = 2u32;
+        while i < len as u32 {
+            let h = self.load(pc.wrapping_add(i), Width::Half)? as u16;
+            out[i as usize..i as usize + 2].copy_from_slice(&h.to_le_bytes());
+            i += 2;
+        }
+        Ok(len)
+    }
+
     fn timer_tick_slot(&mut self) -> Option<u32> {
         // Each system-timer compare channel is its own VPU interrupt source
         // (`SYS_IRQ_SRC + channel`), and start4's vector table has 128 entries /
