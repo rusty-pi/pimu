@@ -167,6 +167,12 @@ pub struct Vpu {
     /// total run time, measured with `perf` — the largest cost in `Vpu::step`
     /// after decode.
     pub cf_trace: std::collections::VecDeque<(u32, u32)>,
+    /// The newest entry of [`Self::cf_trace`], kept alongside it.
+    ///
+    /// The run loop's spin and `udelay` detectors read the last taken edge once
+    /// per retired instruction. Reaching into the ring for it costs the
+    /// `VecDeque` index arithmetic every time; a plain field is a load.
+    pub cf_last: Option<(u32, u32)>,
     /// When set, `step` pushes a one-line disassembly + delta of every
     /// instruction it retires (bounded by `trace_cap`) into `trace_log`.
     pub trace: bool,
@@ -193,6 +199,7 @@ impl Vpu {
         v.regs.pc = entry;
         v.version_value = DEFAULT_VERSION;
         v.cf_trace = std::collections::VecDeque::with_capacity(CF_TRACE_LEN);
+        v.cf_last = None;
         v.trace_cap = 20_000;
         v.dbg_tick = std::env::var_os("RVF_DBG_TICK").is_some();
         v.dbg_vec = std::env::var_os("RVF_DBG_VEC").is_some();
@@ -1051,7 +1058,9 @@ impl Vpu {
                         if self.cf_trace.len() == CF_TRACE_LEN {
                             self.cf_trace.pop_front();
                         }
-                        self.cf_trace.push_back((pc, self.regs.pc));
+                        let edge = (pc, self.regs.pc);
+                        self.cf_trace.push_back(edge);
+                        self.cf_last = Some(edge);
                     }
                 }
             }
