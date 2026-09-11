@@ -26,6 +26,7 @@ USAGE:
               (an unknown instruction stops the run; --skip-unimpl steps over it
                instead, for reconnaissance on firmware the decoder is new to)
                              [--dump <hex>:<len>] [--disasm <hex>:<count>] [--patch <hex>=<hex>]
+                             [--dump-fdt <path>]
     rpi-virt-fw disasm <file> [--base <hex>] [--count <n>] [--vaddr <hex>]
 
 COMMANDS:
@@ -38,6 +39,12 @@ COMMANDS:
 
 FLAGS:
     --update  Rewrite golden files instead of failing on mismatch.
+    --dump-fdt <path>
+              After the run, write the flattened device tree `arm_loader` handed
+              to the ARM — `/chosen/rpi-machine-id` and all — to <path>. Diff two
+              firmware versions with `fdtdump`/`dtc` to catch a bump that changes
+              the derivation (rpi-mkosi#37). The `/chosen` identity properties are
+              printed in the run report whether or not this flag is given.
     -v        Print the full run report and transcript.
 ";
 
@@ -93,6 +100,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     let mut dumps: Vec<(u32, u32)> = Vec::new();
     let mut disasms: Vec<(u32, u32)> = Vec::new();
     let mut sd_image: Option<PathBuf> = None;
+    let mut dump_fdt: Option<PathBuf> = None;
     let mut skip_signed_boot = false;
     let mut skip_unimpl = false;
     let mut it = args.iter();
@@ -138,6 +146,9 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
                 let spec = it.next().context("--disasm needs <hexaddr>:<count>")?;
                 let (a, n) = spec.split_once(':').context("--disasm: expected addr:count")?;
                 disasms.push((parse_u32(a)?, parse_u32(n)?));
+            }
+            "--dump-fdt" => {
+                dump_fdt = Some(PathBuf::from(it.next().context("--dump-fdt needs a path")?))
             }
             "--patch" => {
                 let spec = it.next().context("--patch needs <hexaddr>=<hexval>")?;
@@ -477,6 +488,56 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         }
     }
 
+    {
+        // The device tree `arm_loader` leaves behind for the ARM, and the
+        // `/chosen` identity properties it patched into it. This is the point
+        // of the bench (rpi-mkosi#37): `rpi-machine-id` feeds the root LUKS
+        // passphrase, so a firmware bump that changes how it is derived has to
+        // be caught here rather than on a thousand deployed cards.
+        //
+        // Nothing hands the blob's address over in a register we can read — no
+        // ARM core runs on this bench — so it is taken from the firmware's own
+        // `Device tree loaded to 0x%x (size 0x%x)` line, which is the last word
+        // start4 says about the blob before it releases the ARM. The header is
+        // validated before anything is believed or written out.
+        match locate_fdt(&mut emu.machine, &report.console) {
+            Some((addr, blob)) => match rpi_virt_fw::fdt::Fdt::parse(&blob) {
+                Ok(fdt) => {
+                    let h = fdt.header();
+                    println!("\n--- device tree handed to the ARM ---");
+                    println!(
+                        "  at {addr:#010x}  totalsize {:#x}  version {}",
+                        h.totalsize, h.version
+                    );
+                    match fdt.properties_of("/chosen") {
+                        Some(props) => {
+                            for p in &props {
+                                // `bootargs` is the kernel command line and can
+                                // be long; everything else in /chosen is short.
+                                println!("  /chosen/{:<22} {}", p.name, p.display());
+                            }
+                        }
+                        None => println!("  (no /chosen node)"),
+                    }
+                    if let Some(out) = &dump_fdt {
+                        std::fs::write(out, fdt.bytes())
+                            .with_context(|| format!("writing {}", out.display()))?;
+                        println!("  wrote {} ({} bytes)", out.display(), fdt.bytes().len());
+                    }
+                }
+                Err(e) => println!("\n--- device tree handed to the ARM ---\n  at {addr:#010x}: {e}"),
+            },
+            None => {
+                if dump_fdt.is_some() {
+                    bail!(
+                        "--dump-fdt: the boot never printed 'Device tree loaded to ...', \
+                         so there is no device tree to dump"
+                    );
+                }
+            }
+        }
+    }
+
     if !report.unimpl.is_empty() {
         println!(
             "\n--- distinct unimplemented instructions ({}, top 40 by hit count) ---",
@@ -663,6 +724,52 @@ fn cmd_disasm(args: &[String]) -> Result<ExitCode> {
         off += len;
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// Find the device tree blob `arm_loader` left for the ARM, using the
+/// firmware's own `Device tree loaded to 0x<addr> (size 0x<len>)` console line
+/// as the pointer.
+///
+/// Reading it out of the log rather than hard-coding an address is what keeps
+/// this working across firmware versions — which is the entire point, since the
+/// bench exists to diff one version against another. The line is emitted after
+/// the overlays are merged and `/chosen` is patched, and nothing overwrites the
+/// blob afterwards: the ARM that would consume it is not modelled.
+///
+/// The length in the log is the tree's own `totalsize`, but the header is read
+/// first and trusted over it, so a firmware that logs a rounded figure still
+/// yields an exact blob. Returns the address and the bytes.
+fn locate_fdt(machine: &mut Machine, console: &[u8]) -> Option<(u32, Vec<u8>)> {
+    use rpi_virt_fw::bus::{Bus, Width};
+
+    let text = String::from_utf8_lossy(console);
+    // Last one wins: a `tryboot` retry would load the tree more than once.
+    let tail = text.rsplit_once("Device tree loaded to 0x")?.1;
+    let (addr_hex, rest) = tail.split_once(" (size 0x")?;
+    let addr = u32::from_str_radix(addr_hex.trim(), 16).ok()?;
+    let logged_len = rest
+        .split_once(')')
+        .and_then(|(l, _)| u32::from_str_radix(l.trim(), 16).ok())
+        .unwrap_or(0);
+
+    let byte = |m: &mut Machine, a: u32| m.load(a, Width::Byte).unwrap_or(0) as u8;
+    let read = |m: &mut Machine, a: u32, n: u32| -> Vec<u8> {
+        (0..n).map(|i| byte(m, a.wrapping_add(i))).collect()
+    };
+    let head = read(machine, addr, 8);
+    let totalsize = u32::from_be_bytes([head[4], head[5], head[6], head[7]]);
+    // Believe the header only if it is plausible; otherwise fall back to the
+    // logged length so `Fdt::parse` can report what is actually there.
+    let len = if u32::from_be_bytes([head[0], head[1], head[2], head[3]])
+        == rpi_virt_fw::fdt::FDT_MAGIC
+        && totalsize >= 40
+        && totalsize <= 8 << 20
+    {
+        totalsize
+    } else {
+        logged_len.max(40)
+    };
+    Some((addr, read(machine, addr, len)))
 }
 
 fn parse_u32(s: &str) -> Result<u32> {

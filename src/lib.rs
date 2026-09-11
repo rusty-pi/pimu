@@ -19,6 +19,7 @@
 
 pub mod bus;
 pub mod emulator;
+pub mod fdt;
 pub mod firmware;
 pub mod harness;
 pub mod machine;

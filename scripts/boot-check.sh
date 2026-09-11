@@ -136,6 +136,21 @@ want 'watchdog stopped'                    'Watchdog stopped'
 # The goal: the VPU hands the board over to the ARM, with the same split of a
 # 1 GB board's memory the reference reports (vc4-boot.log 68).
 want 'ARM handover'                        'arm_loader: Starting ARM with 948MB'
+# The point of the bench (#5, rpi-mkosi#37). Before releasing the ARM,
+# `arm_loader` patches `/chosen` and publishes `rpi-machine-id` at `0x3EC568F8`
+# — the string a `rpi-mkosi` image turns into its root-LUKS passphrase. `recon`
+# reads the patched blob back out of DRAM at the address the firmware logged
+# and prints the identity properties, so a firmware bump that changes the
+# derivation fails right here instead of on deployed cards.
+#
+# Pinning the value is safe: every OTP row it derives from is invented in
+# `src/periph/configotp.rs` (see the OTP rule in CLAUDE.md), so this is the
+# model's own identity and not any real board's. `rpi-serial64` is the same
+# two rows unhashed, which is what makes the pair a useful regression: if the
+# serial still matches but the machine id does not, the *derivation* moved.
+want 'patched device tree read back'       'device tree handed to the ARM'
+want 'chosen serial published'             '/chosen/rpi-serial64 .*"fa1e00231aa2bb31"'
+want 'rpi-machine-id published'            '/chosen/rpi-machine-id .*"2928640898f6b5035da98885da0ac498"'
 # With the ARM running the VPU keeps polling the LPDDR4 MR4 temperature code
 # once a second and rescales the DRAM refresh interval by 1 << (3 - code); the
 # reference board reports code 2 and the interval doubles (vc4-boot.log 69,
