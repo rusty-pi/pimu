@@ -171,8 +171,16 @@ unanswered tag. Five copies of `0x00000001` in one buffer all answer and the
 code stays `0x80000000`, so there is no tag-count or buffer-size limit behind
 this.
 
-Provisioning a key is the open half of rpi-mkosi#37. Writing invented values
-into OTP rows 56-63 does not do it: `RVF_DBG_OTP=1` shows them read back
-correctly during boot, the answer unchanged — and *no* OTP row is read while
-the request is served, so the verdict is reached during boot and cached. The
-gate is somewhere in that boot-time path, not in the handler.
+This matches the reference board rather than falling short of it. Asking the
+real Pi 4 the same three tags through `/dev/vcio` gives the same answers:
+`NUM_OTP_KEYS` 1, `LAST_ERROR` 3, and `KEY_STATUS` failing — there as `EINVAL`
+out of the `vcio` driver, which rejects exactly the `0x80000001` buffer code
+the firmware returns. Its OTP rows 56-63 read blank too. The board simply has
+no key fused, so `KEY_NOT_FOUND` is the whole truth and there is nothing
+missing in the model.
+
+Provisioning one would be the way to exercise sign and HMAC, and it is not done
+by writing values into rows 56-63: `RVF_DBG_OTP=1` shows those read back
+correctly during boot with the answer unchanged, and *no* OTP row is read at
+all while the request is served, so the verdict is reached during boot and
+cached.
