@@ -824,7 +824,35 @@ transfers whose source or destination lies in the PCIe outbound window at
   `USBCMD`/`USBSTS` reset semantics, and five root ports that all read
   "powered, empty".
 
-**Stage 2 — start4's `XHCI_RESET`. Not reachable, and the reason is not PCIe.**
+**Stage 2 — start4's `XHCI_RESET`. Reachable after all, through the mailbox.**
+
+*(Superseded below: the paragraph that follows was written before the property
+mailbox had a client. It is right that a plain boot never gets there, and right
+about why; it is wrong that nothing can drive it.)*
+
+`--mbox-property 0x00030058=0x00100000` — `NOTIFY_XHCI_RESET`, the request
+Linux's driver sends — enters `0x3EDC61F4` (one trap hit), and the `pcie-base`
+argument the firmware derives is `0x4000`, matching the reference log's
+`pcie-base: 00004000` exactly. A control-flow trace from the entry shows it
+reaching the printf and then taking the `bne` at `0x3EDC6232`, the
+"VL805 device not recognized" path, and returning `0xffffffff`.
+
+An MMIO trace says why, and it is a gap in *this model*:
+
+```text
+mmio 0x3ed42d96  W4  0x7d509000 <- 0x00100000   EXT_CFG_INDEX: bus 1, slot 0, fn 0
+mmio 0x3edc6204  R2  0x7d508000 <- 0xffff       vendor
+mmio 0x3edc620a  R2  0x7d508002 <- 0xffff       device
+```
+
+The firmware selects the right function; `Pcie::ext_target` answers
+`CfgTarget::None` anyway, because `link_up` is false by then. It is only set on
+a `RGR1_SW_INIT_1` PERST# 1->0 *transition*, which happens once during the
+bootloader's bring-up; nothing re-establishes it for start4, so the endpoint has
+gone invisible between the two. Fixing that is what stands between here and
+driving `MCU FW` / `VLI firmware load complete`.
+
+**The original note, still true for a plain boot:**
 This was scoped as "make start4 recognise the device", and the model now
 presents exactly the device it looks for. It still never calls the function.
 With the endpoint attached, a trained link and a fully enumerated VL805,
