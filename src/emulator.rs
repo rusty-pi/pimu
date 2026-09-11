@@ -1004,33 +1004,6 @@ impl Emulator {
                     let _ = self.machine.store(flags, Width::Word, cur | req);
                 }
             }
-            // `0x3ECA9560` = the HDMI EDID block read inside the EDID-fetch
-            // retry loop (`0x3ECA94C0`): `r4 = [r13+12]` is the DDC-transport
-            // "read block" op, then `bl r4`. The BCM2711 HDMI DDC I2C block
-            // (`0x7EF04500`) is not modelled — its status register just
-            // RAM-backs, so the transport neither completes a real transfer
-            // nor NAKs: it returns "success" with an all-zero block. start4
-            // then fails the EDID checksum, and because the DDC never
-            // reported an error the per-block attempt counter (`[0x3EE1BB48]`,
-            // capped at 4) is never bumped, so the loop retries forever.
-            //
-            // The reference board has no monitor attached, so on real hardware
-            // the DDC I2C NAKs and this op returns an error — start4 logs
-            // `HDMI%d:EDID error reading EDID block 0 attempt 0` and then
-            // `HDMI%d:EDID giving up on reading EDID block 0`
-            // (examples-on-real-hardware/vc4-boot.log lines 20-27). Model that:
-            // skip the transport call and hand the caller a non-zero (error)
-            // result. The stop/cleanup ops (`bl r4`/`bl r5` at 0x9608/0x9610)
-            // still run normally.
-            //
-            // Unconditional, because "no monitor on the DDC bus" is what the
-            // board we model actually looks like. The proper fix is to model
-            // the DDC I2C block at `0x7EF04500` and let it NAK on its own; this
-            // stands in until then.
-            if pc_before == 0x3ECA_9560 {
-                self.cpu.regs.set(0, 1);
-                self.cpu.regs.pc = 0x3ECA_9562;
-            }
             self.machine.watch_pc = pc_before;
             let exc_depth_before = self.cpu.in_exception;
             let step = self.cpu.step(&mut self.machine);

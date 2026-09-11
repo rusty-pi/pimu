@@ -35,7 +35,8 @@ Working:
   1 MHz system timer (with busy-wait fast-forward), SDRAM controller, clock
   manager + A2W PLL, the `0x7D5D` VPU clock/PLL block, config-OTP, power
   domains, DMA4, Arasan eMMC + SD-card read, BSC/I²C + DA9090 PMIC register
-  file, mcsync, the `0x7EE0` boot-box, and a logging catch-all for the rest.
+  file, the two HDMI DDC I²C masters, mcsync, the `0x7EE0` boot-box, and a
+  logging catch-all for the rest.
 - **Firmware pipeline** — `pieeprom.bin` self-update trailer, EEPROM config
   parse, GPT/MBR + FAT32 walk, `fixup4.dat`, RSA signature check.
 - **Regression harness** (`src/harness/`) — TOML scenarios in, console
@@ -46,10 +47,12 @@ Working:
 The boot needs no opt-in shims or environment variables any more — the real
 ThreadX periodic tick (interrupt-enable bit plus vector-table entry 64) is now
 always modelled, the way the hardware behaves. It gets as far as loading the
-kernel, the device tree and the config overlays. The one
-piece of firmware behaviour still short-circuited in the emulator is the HDMI
-EDID block read, which is forced to report the error a monitor-less board's DDC
-bus would produce — the DDC I²C block at `0x7EF04500` is not modelled yet.
+kernel, the device tree and the config overlays, and no firmware behaviour is
+short-circuited anywhere: the last one to go was the HDMI EDID block read,
+which now fails because the DDC I²C masters at `0x7EF04500` / `0x7EF09500` are
+modelled and nothing acknowledges the EDID EEPROM's address — the reference
+board has no monitor plugged in
+([#15](https://github.com/valtzu/rpi-virt-fw/issues/15)).
 
 `RVF_MBOX_KICK` is gone too: it released a dmalib transfer's completion word by
 hand, which the firmware's own `dma_chan_interrupt` does now that the DMA

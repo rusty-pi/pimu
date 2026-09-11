@@ -155,6 +155,15 @@ pub const EMMC2_SIZE: u32 = 0x1000;
 pub const HVS_BASE: u32 = 0x7E40_0000;
 pub const HVS_SIZE: u32 = 0x1000;
 
+/// The two HDMI controllers' DDC I²C masters (`i2c@7ef04500`, `i2c@7ef09500`,
+/// `brcm,bcm2711-hdmi-i2c`) — the buses a monitor's EDID EEPROM sits on. Left
+/// on the catch-all stub they RAM-back, so every EDID read looked like a
+/// successful transfer of 128 zero bytes and start4 retried it forever
+/// (`src/periph/hdmi_ddc.rs`).
+pub const HDMI_DDC0_BASE: u32 = crate::periph::hdmi_ddc::HDMI0_BASE;
+pub const HDMI_DDC1_BASE: u32 = crate::periph::hdmi_ddc::HDMI1_BASE;
+pub const HDMI_DDC_SIZE: u32 = crate::periph::hdmi_ddc::SIZE;
+
 /// BCM2711 LPDDR4 controller + PHY, mapped *below* the legacy peripheral
 /// window: the `init_sdram_*` path pokes `0x7DC2_0000` (command/status at
 /// `+0x10`..`+0x28`) and per-byte-lane PHY blocks at `0x7DC2_0400`,

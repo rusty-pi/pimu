@@ -56,6 +56,9 @@ Only what boot needs. Modelled so far (`src/periph/`):
   *not* modelled (the current wall, [issue #1])
 - **Arasan eMMC** (`0x7E34_0000`) + a read-only SD-card / FAT image backend
 - **BSC/I²C master** + DA9090 PMIC register file (`0x7E20_5E00`)
+- **HDMI DDC I²C masters** (`0x7EF0_4500`, `0x7EF0_9500`) — the EDID buses, with
+  no monitor on either, so start4 gives up on EDID the way the reference board
+  does
 - **DMA4**, **power domains**, **config-OTP**, **CoreCtl**, **mcsync**, the
   `0x7EE0` boot-box, and a logging catch-all for everything else
 

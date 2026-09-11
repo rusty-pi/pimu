@@ -670,3 +670,169 @@ fn avs_disable_mask_gates_the_other_channels() {
         assert!(m.load32(map::AVS_BASE + 0x200 + ch * 4).unwrap() & (1 << 10) != 0);
     }
 }
+
+// ---------------------------------------------------------------------------
+// HDMI DDC I²C masters (`0x7EF0_4500` / `0x7EF0_9500`), issue #15.
+// ---------------------------------------------------------------------------
+
+const DDC_CHIP_ADDRESS: u32 = 0x00;
+const DDC_DATA_IN: u32 = 0x04;
+const DDC_CNT: u32 = 0x24;
+const DDC_CTL: u32 = 0x28;
+const DDC_IIC_ENABLE: u32 = 0x2C;
+const DDC_DATA_OUT: u32 = 0x30;
+const DDC_CTLHI: u32 = 0x50;
+
+const DDC_EN_ENABLE: u32 = 1 << 0;
+const DDC_EN_INTRP: u32 = 1 << 1;
+const DDC_EN_NOACK: u32 = 1 << 2;
+const DDC_EN_NOSTOP: u32 = 1 << 4;
+const DDC_EN_NOSTART: u32 = 1 << 5;
+const DDC_EN_RESTART: u32 = 1 << 6;
+
+/// Start a transfer the way start4's driver does (`0x3ECE69E2` /
+/// `0x3ECE6DEC`): address, clear `CTLHI.IGNORE_ACK`, count, direction, then
+/// `IIC_ENABLE` with `ENABLE | INTRP` and the start/stop flags for this chunk.
+fn ddc_start(m: &mut Machine, base: u32, addr: u32, read: bool, count: u32, flags: u32) {
+    m.store32(base + DDC_CHIP_ADDRESS, addr << 1 | u32::from(read))
+        .unwrap();
+    let ctlhi = m.load32(base + DDC_CTLHI).unwrap();
+    m.store32(base + DDC_CTLHI, ctlhi & !2).unwrap();
+    m.store32(base + DDC_CNT, count & 0x3F).unwrap();
+    let ctl = m.load32(base + DDC_CTL).unwrap();
+    m.store32(base + DDC_CTL, (ctl & !3) | u32::from(read))
+        .unwrap();
+    m.store32(base + DDC_IIC_ENABLE, flags | DDC_EN_ENABLE | DDC_EN_INTRP)
+        .unwrap();
+}
+
+/// The driver's completion wait (`0x3ECE6D5C`): poll `INTRP`, then look at
+/// `NOACK`. Returns the final `IIC_ENABLE`, or `None` on the 100 ms timeout.
+fn ddc_wait(m: &mut Machine, base: u32) -> Option<u32> {
+    for _ in 0..20 {
+        let v = m.load32(base + DDC_IIC_ENABLE).unwrap();
+        if v & DDC_EN_INTRP != 0 {
+            return Some(v);
+        }
+        m.tick(5000 * 54); // the driver's 5 ms between polls
+    }
+    None
+}
+
+/// Release the bus the way the driver does after every transfer.
+fn ddc_stop(m: &mut Machine, base: u32) {
+    m.store32(base + DDC_CNT, 0).unwrap();
+    m.store32(base + DDC_IIC_ENABLE, 0).unwrap();
+}
+
+/// Nothing is plugged into either HDMI connector on the reference board
+/// (`rpi-dev` reports both `card1-HDMI-A-*/status` as `disconnected`), so the
+/// EDID EEPROM's address goes unacknowledged and the transfer has to complete
+/// `INTRP | NOACK`. That is the whole point of the block: with `IIC_ENABLE`
+/// RAM-backing on the catch-all stub it read back the `ENABLE | INTRP` the
+/// driver had just written, so every read looked like an instant, successful
+/// transfer of 32 zero bytes — start4 failed the EDID checksum, never bumped
+/// its attempt counter, and re-read EDID forever (#15).
+#[test]
+fn hdmi_ddc_nacks_when_no_monitor_answers() {
+    for base in [map::HDMI_DDC0_BASE, map::HDMI_DDC1_BASE] {
+        let mut m = machine();
+
+        // Write phase: the EDID byte offset to start reading from.
+        m.store32(base + DDC_DATA_IN, 0).unwrap();
+        ddc_start(&mut m, base, 0x50, false, 1, DDC_EN_NOSTOP | DDC_EN_RESTART);
+        let v = ddc_wait(&mut m, base).expect("the transfer must complete");
+        assert_ne!(v & DDC_EN_NOACK, 0, "an empty bus cannot acknowledge");
+        ddc_stop(&mut m, base);
+
+        // Read phase.
+        ddc_start(&mut m, base, 0x50, true, 32, DDC_EN_NOSTOP);
+        let v = ddc_wait(&mut m, base).expect("the transfer must complete");
+        assert_ne!(v & DDC_EN_NOACK, 0, "an empty bus cannot acknowledge");
+        for i in 0..8 {
+            assert_eq!(
+                m.load32(base + DDC_DATA_OUT + 4 * i).unwrap(),
+                0,
+                "a NAKed read returns nothing"
+            );
+        }
+        ddc_stop(&mut m, base);
+    }
+}
+
+/// `INTRP` means "the bytes have been clocked out", so it cannot be set
+/// already inside the register write that starts the transfer, however few
+/// instructions the firmware retires before it looks. 32 bytes at the 97.5 kHz
+/// the device tree gives for this bus take ~3 ms.
+#[test]
+fn hdmi_ddc_completion_waits_for_the_wire() {
+    let base = map::HDMI_DDC0_BASE;
+    let mut m = machine();
+
+    ddc_start(&mut m, base, 0x50, true, 32, DDC_EN_NOSTOP);
+    assert_eq!(
+        m.load32(base + DDC_IIC_ENABLE).unwrap() & DDC_EN_INTRP,
+        0,
+        "INTRP must not land inside the write that started the transfer"
+    );
+    m.tick(1000 * 54); // 1 ms — a third of the way through
+    assert_eq!(
+        m.load32(base + DDC_IIC_ENABLE).unwrap() & DDC_EN_INTRP,
+        0,
+        "INTRP cannot precede the bits going out"
+    );
+    m.tick(3000 * 54);
+    assert_ne!(
+        m.load32(base + DDC_IIC_ENABLE).unwrap() & DDC_EN_INTRP,
+        0,
+        "INTRP must latch once the transfer is over"
+    );
+
+    // Disabling the master drops the status again.
+    ddc_stop(&mut m, base);
+    assert_eq!(m.load32(base + DDC_IIC_ENABLE).unwrap(), 0);
+}
+
+/// With a monitor on the bus the same sequence reads its EDID back: a one-byte
+/// write phase sets the EEPROM's address pointer and the read chunks that
+/// follow walk on from it, four bytes per `DATA_OUT` register, little-endian.
+/// Nothing on the boot path attaches one yet — this pins the transport for the
+/// HDMI mode-set work that would.
+#[test]
+fn hdmi_ddc_reads_an_attached_edid() {
+    use rpi_virt_fw::periph::HdmiDdc;
+
+    let edid: Vec<u8> = (0..128u32).map(|i| (i * 7 + 1) as u8).collect();
+    let base = map::HDMI_DDC0_BASE;
+    let mut m = machine();
+    m.hdmi_ddc0 = HdmiDdc::new("hdmi-ddc0").with_edid(edid.clone());
+
+    m.store32(base + DDC_DATA_IN, 0).unwrap();
+    ddc_start(&mut m, base, 0x50, false, 1, DDC_EN_NOSTOP | DDC_EN_RESTART);
+    let v = ddc_wait(&mut m, base).expect("the transfer must complete");
+    assert_eq!(v & DDC_EN_NOACK, 0, "a monitor acknowledges its address");
+    ddc_stop(&mut m, base);
+
+    let mut got = Vec::new();
+    for chunk in 0..4 {
+        let flags = if chunk == 0 {
+            DDC_EN_NOSTOP
+        } else {
+            DDC_EN_NOSTOP | DDC_EN_NOSTART
+        };
+        ddc_start(&mut m, base, 0x50, true, 32, flags);
+        let v = ddc_wait(&mut m, base).expect("the transfer must complete");
+        assert_eq!(v & DDC_EN_NOACK, 0, "a monitor acknowledges its address");
+        for i in 0..8 {
+            got.extend_from_slice(&m.load32(base + DDC_DATA_OUT + 4 * i).unwrap().to_le_bytes());
+        }
+        ddc_stop(&mut m, base);
+    }
+    assert_eq!(got, edid, "the whole block, in order");
+
+    // The other connector still has nothing on it.
+    let base1 = map::HDMI_DDC1_BASE;
+    ddc_start(&mut m, base1, 0x50, true, 32, DDC_EN_NOSTOP);
+    let v = ddc_wait(&mut m, base1).expect("the transfer must complete");
+    assert_ne!(v & DDC_EN_NOACK, 0, "HDMI1 has no monitor");
+}
