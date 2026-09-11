@@ -3,8 +3,8 @@
 use crate::bus::{Bus, BusError, BusResult, MmioDevice, Width};
 use crate::mem::Ram;
 use crate::periph::{
-    Asb, Avs, Aux, BootBox, Bsc, ClkMon, ClockManager, ConfigOtp, CoreCtl, Dma4, Emmc2, Hvs, McSync, Pl011,
-    Pm, Rng, Sdc, Sdramc, Spi0, StubRegion, SysTimer, Vce,
+    Asb, Avs, Aux, BootBox, Bsc, ClkMon, ClockManager, ConfigOtp, CoreCtl, Dma4, Emmc2, HdmiDdc, Hvs,
+    McSync, Pl011, Pm, Rng, Sdc, Sdramc, Spi0, StubRegion, SysTimer, Vce,
 };
 use crate::soc::bcm2711 as map;
 
@@ -54,6 +54,9 @@ pub struct Machine {
     /// BSC / I²C master at `0x7E20_5E00` + the board PMIC — start4 reads the
     /// PMIC over this on its way to bringing up the "external" GPIO pins.
     pub bsc_pmic: Bsc,
+    /// The two HDMI connectors' DDC I²C masters, with no monitor on either.
+    pub hdmi_ddc0: HdmiDdc,
+    pub hdmi_ddc1: HdmiDdc,
     /// Always-on config / OTP engine (`0x7E20_F000`) — board identity reads.
     pub config_otp: ConfigOtp,
     /// LPDDR4 controller + PHY (`0x7DC0_0000`, below the peripheral window) —
@@ -147,6 +150,8 @@ impl Machine {
             bsc0: Bsc::empty("bsc0"),
             spi0: Spi0::new(),
             bsc_pmic: Bsc::new("bsc-pmic"),
+            hdmi_ddc0: HdmiDdc::new("hdmi-ddc0"),
+            hdmi_ddc1: HdmiDdc::new("hdmi-ddc1"),
             config_otp: ConfigOtp::new(),
             sdramc: Sdramc::new(),
             sdc: Sdc::new(),
@@ -196,6 +201,22 @@ impl Machine {
         let now = self.systimer.now_us();
         self.bsc_pmic.advance_to(now);
         self.bsc0.advance_to(now);
+    }
+
+    /// Settle the HDMI DDC masters, which time their transfers the same way.
+    ///
+    /// Unlike the BSCs these are advanced lazily, on the way into their own
+    /// registers, rather than out of [`Machine::tick`]: nothing but the
+    /// firmware's own status poll ever observes them, and two more calls on
+    /// every single retired instruction cost a measurable few percent of the
+    /// model's throughput.
+    fn advance_hdmi_ddc(&mut self, addr: u32) {
+        let in_window = |base: u32| addr >= base && addr < base + map::HDMI_DDC_SIZE;
+        if in_window(map::HDMI_DDC0_BASE) || in_window(map::HDMI_DDC1_BASE) {
+            let now = self.systimer.now_us();
+            self.hdmi_ddc0.advance_to(now);
+            self.hdmi_ddc1.advance_to(now);
+        }
     }
 
     /// Advance time-based peripheral state by `cycles` VPU cycles.
@@ -343,6 +364,12 @@ impl Machine {
         }
         if let Some(off) = hit(map::BSC_PMIC_BASE, map::BSC_PMIC_SIZE) {
             return Some((&mut self.bsc_pmic, off));
+        }
+        if let Some(off) = hit(map::HDMI_DDC0_BASE, map::HDMI_DDC_SIZE) {
+            return Some((&mut self.hdmi_ddc0, off));
+        }
+        if let Some(off) = hit(map::HDMI_DDC1_BASE, map::HDMI_DDC_SIZE) {
+            return Some((&mut self.hdmi_ddc1, off));
         }
         if let Some(off) = hit(map::FIFO_STUB_BASE, map::FIFO_STUB_SIZE) {
             return Some((&mut self.config_otp, off));
@@ -604,6 +631,7 @@ impl Bus for Machine {
                 return self.ram.load(phys, width);
             }
         }
+        self.advance_hdmi_ddc(addr);
         let trace = self.mmio_trace;
         if let Some((dev, off)) = self.device_for(addr) {
             let v = dev.read(off, width);
@@ -650,6 +678,7 @@ impl Bus for Machine {
         }
         self.mmio_writes = self.mmio_writes.wrapping_add(1);
         self.dma_win_log("wr", addr, value);
+        self.advance_hdmi_ddc(addr);
         let trace = self.mmio_trace;
         if let Some((dev, off)) = self.device_for(addr) {
             let r = dev.write(off, width, value);
