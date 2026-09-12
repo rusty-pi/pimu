@@ -442,7 +442,14 @@ impl ArmSide {
         let sev = std::mem::take(&mut core.cpu.sev);
         // Sleepers an event just reached: their runnable bits need a look.
         let mut signalled = 0u32;
-        for (k, other) in self.cores.iter_mut().enumerate() {
+        // Most steps store to no one else's granule, signal nothing and
+        // flush no TLB, and then there is nothing to tell the other cores.
+        let others = if written.is_some() || sev || broadcast {
+            self.cores.len()
+        } else {
+            0
+        };
+        for (k, other) in self.cores.iter_mut().enumerate().take(others) {
             if k == id {
                 continue;
             }
