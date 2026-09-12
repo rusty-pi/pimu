@@ -21,7 +21,7 @@ USAGE:
     rpi-virt-fw run-all [<dir>] [--update] [-v]
     rpi-virt-fw recon <file> [--entry <hex>] [--ram-mb <n>] [--max-steps <n>] [--eeprom]
                              [--max-wall <secs>] [--sd <img>] [--usb <img>]
-                             [--boot-order <hex>] [--skip-signed-boot]
+                             [--boot-order <hex>] [--skip-signed-boot] [--tftp <dir>]
                              [--skip-unimpl]
               (no --max-steps = no instruction cap; --max-wall defaults to 140s)
               (an unknown instruction stops the run; --skip-unimpl steps over it
@@ -182,6 +182,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     // code behind that only the *next* request can ask for (`0x0003008e`).
     let mut mbox_tags: Vec<Vec<MboxTag>> = Vec::new();
     let mut usb_image: Option<PathBuf> = None;
+    let mut tftp_root: Option<PathBuf> = None;
     let mut boot_order: Option<String> = None;
     let mut dram_map = false;
     let mut skip_signed_boot = false;
@@ -227,6 +228,11 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
                 ))
             }
             "--usb" => usb_image = Some(PathBuf::from(it.next().context("--usb needs a path")?)),
+            "--tftp" => {
+                tftp_root = Some(PathBuf::from(
+                    it.next().context("--tftp needs a directory")?,
+                ))
+            }
             "--boot-order" => {
                 boot_order = Some(it.next().context("--boot-order needs a value")?.to_string())
             }
@@ -432,6 +438,13 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
                 Box::new(rpi_virt_fw::periph::usb::MassStorage::new(img.clone())),
             );
         }
+        // `--tftp <dir>`: plug the Ethernet cable into the built-in DHCP /
+        // TFTP server (`src/net/peer.rs`), serving `<dir>`.
+        if let Some(dir) = &tftp_root {
+            machine.attach_net(Box::new(rpi_virt_fw::net::BuiltinPeer::with_root(
+                dir.clone(),
+            )));
+        }
         machine.mmio_trace = trace_mmio;
         // `RVF_TRACE_MMIO=<lo>-<hi>` (hex): trace peripheral accesses from the
         // first instruction, but only inside that address range. Tracing the
@@ -612,6 +625,18 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
             p.display(),
             report.console.len()
         );
+    }
+
+    if let Some(net) = emu.machine.net.as_mut() {
+        let st = emu.machine.genet.stats;
+        println!("\n--- network (GENET <-> {}) ---", net.name());
+        println!(
+            "  tx {} (dropped {})  rx {} (filtered {}, dropped {})",
+            st.tx, st.tx_dropped, st.rx, st.rx_filtered, st.rx_dropped
+        );
+        for line in net.take_log() {
+            println!("  {line}");
+        }
     }
 
     if !report.console.is_empty() {

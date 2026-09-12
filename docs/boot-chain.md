@@ -104,9 +104,15 @@ Only what boot needs. Modelled so far (`src/periph/`):
   stops aliasing into DRAM; the link never comes up (see
   [`usb-xhci.md`](usb-xhci.md))
 
+- **GENET** (`0x7D58_0000`) with its BCM54213PE PHY and packet DMA, plus a
+  built-in DHCP / TFTP server on the other end of the cable
+  (`src/net/peer.rs`). `--tftp <dir> --boot-order 0xf2` network boots from
+  `<dir>`: the bootloader TFTPs `start4.elf` / `fixup4.dat`, and start4's own
+  GENET driver fetches `config.txt`, the overlays, the dtb and `kernel8.img`
+  through to `arm_loader`
+
 Still out: **USB3** (the VL805 xHCI behind that PCIe root complex — surveyed in
-[`usb-xhci.md`](usb-xhci.md)) and **GENET** netboot — not needed while the
-boot disk is an SD image; HDMI/display, camera, the 3D/QPU unit; and the VPU
+[`usb-xhci.md`](usb-xhci.md)); HTTP network boot; HDMI/display, camera, the 3D/QPU unit; and the VPU
 *scalar* vector ALU (`memcpy`-style bulk ops are special-cased, the rest fall
 through to `Unimpl`).
 

@@ -54,8 +54,10 @@ pub struct Machine {
     /// xHCI controller behind it is not modelled; see `docs/usb-xhci.md`.
     pub pcie: crate::periph::pcie::Pcie,
     /// GENET v5 Ethernet MAC (`0x7D58_0000`) with the BCM54213PE PHY on its
-    /// MDIO bus. No packet DMA; see [`crate::periph::genet`].
+    /// MDIO bus; see [`crate::periph::genet`].
     pub genet: crate::periph::Genet,
+    /// What GENET's cable is plugged into, if anything ([`Machine::attach_net`]).
+    pub net: Option<Box<dyn crate::net::NetBackend>>,
     /// Hardware RNG (`0x7E10_4000`), an RNG200 — start4 and Linux both read it.
     pub rng: Rng,
     /// VCE vector/codec engine (`0x7F10_0000`) — the codec licence check
@@ -167,6 +169,7 @@ impl Machine {
             asb: Asb::new(),
             pcie: crate::periph::pcie::Pcie::new(),
             genet: crate::periph::Genet::new(),
+            net: None,
             rng: Rng::new(),
             vce: Vce::new(),
             bsc0: Bsc::empty("bsc0"),
@@ -209,6 +212,13 @@ impl Machine {
             watch_pc: 0,
             phase_tags: Vec::new(),
         }
+    }
+
+    /// Plug GENET's cable into `backend`: the PHY sees a link partner, and
+    /// frames flow between the DMA rings and `backend`.
+    pub fn attach_net(&mut self, backend: Box<dyn crate::net::NetBackend>) {
+        self.genet.phy.set_link(true);
+        self.net = Some(backend);
     }
 
     /// Queue an interrupt source for delivery to core 0 on the next step.
@@ -274,6 +284,11 @@ impl Machine {
             return;
         }
         self.pm.advance(self.systimer.now_us());
+        // A backend with its own clock (a host network) can deliver a frame
+        // at any time, not only in reply to a register write.
+        if self.net.is_some() {
+            self.genet.service(&mut self.ram, &mut self.net);
+        }
         // The I²C masters time their transfers in microseconds off the system
         // timer, so they stay in step with it across the run loop's `sleep`
         // fast-forward (which jumps the counter without retiring cycles).
@@ -839,6 +854,9 @@ impl Bus for Machine {
             }
             if self.emmc2.dma_pending() {
                 self.emmc2.run_dma(&mut self.ram);
+            }
+            if self.genet.take_kick() {
+                self.genet.service(&mut self.ram, &mut self.net);
             }
             return r;
         }

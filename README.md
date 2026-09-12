@@ -67,7 +67,12 @@ hand, which the firmware's own `dma_chan_interrupt` does now that the DMA
 completion interrupt is modelled
 ([#3](https://github.com/valtzu/rpi-virt-fw/issues/3)).
 
-Not done: the VPU vector/float unit, GENET netboot, and the ARM property
+Network boot works too: `--tftp <dir> --boot-order 0xf2` plugs the Ethernet
+cable into a built-in DHCP / TFTP server serving `<dir>`, and both the
+bootloader and start4 load everything from it through to `arm_loader`
+([#38](https://github.com/valtzu/rpi-virt-fw/issues/38)).
+
+Not done: the VPU vector/float unit, HTTP network boot, and the ARM property
 mailbox — which is what a booted Linux needs to reach `/dev/vcio` and the
 firmware crypto service. See [`docs/boot-chain.md`](docs/boot-chain.md) for the
 stage-by-stage map, [`docs/diagnostics.md`](docs/diagnostics.md) for the

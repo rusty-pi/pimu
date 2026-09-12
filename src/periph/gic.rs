@@ -150,6 +150,11 @@ pub const ID_MAILBOX: u32 = 65;
 pub const ID_PL011: u32 = 153;
 /// EMMC2 (`mmc@7e340000`, `interrupts = <GIC_SPI 0x7e IRQ_TYPE_LEVEL_HIGH>`).
 pub const ID_EMMC2: u32 = 32 + 0x7E;
+/// GENET's two lines (`ethernet@7d580000`, `interrupts = <GIC_SPI 157
+/// IRQ_TYPE_LEVEL_HIGH>, <GIC_SPI 158 IRQ_TYPE_LEVEL_HIGH>`): `INTRL2_0`, then
+/// `INTRL2_1`.
+pub const ID_GENET_A: u32 = 32 + 157;
+pub const ID_GENET_B: u32 = 32 + 158;
 
 /// Measured on the reference board (module docs).
 const TYPER: u32 = 0x0000_FC67;

@@ -28,11 +28,19 @@
 //!
 //! # Link
 //!
-//! No cable is modelled, so there is no link partner: auto-negotiation never
-//! completes and the link stays down. BMSR reads the measured value without
-//! its link-status (bit 2) and AN-complete (bit 5) bits, and the link
-//! partner registers read 0. Linux reports `eth0: Link is Down` and stops
-//! there; the bootloader's network boot waits for link and times out.
+//! Without a cable ([`Bcm54213pe::set_link`] false, the default) there is no
+//! link partner: auto-negotiation never completes and the link stays down.
+//! BMSR reads the measured value without its link-status (bit 2) and
+//! AN-complete (bit 5) bits, and the link partner registers read 0. Linux
+//! reports `eth0: Link is Down` and stops there; the bootloader's network
+//! boot waits for link and times out.
+//!
+//! With a cable the partner is the measured one: a 1 Gb/s full-duplex switch
+//! port with pause, and every link-partner register reads what the reference
+//! board read. Negotiation completes as soon as it is (re)started, so the
+//! link is up at the first poll. The bootloader's wait-for-link loop polls
+//! only BMSR, LPA and STAT1000 (MDIO reads of registers 1, 5 and 10 from
+//! `0x0009196e`).
 //!
 //! # Register access paths
 //!
@@ -93,6 +101,16 @@ const BMCR_DEFAULT: u16 = 0x1140;
 /// (bit 5): 10/100 half/full, extended status, preamble suppression, AN
 /// ability, extended capabilities.
 const BMSR_NO_LINK: u16 = 0x7949;
+/// BMSR with a partner (measured): adds link status and AN complete.
+const BMSR_LINK: u16 = 0x796d;
+/// Link partner abilities with a partner (measured): 10/100 half/full, pause
+/// and asymmetric pause, acknowledge, next page.
+const LPA_LINK: u16 = 0xc5e1;
+/// ANER with a partner (measured): partner AN able, page received, next page
+/// able on both ends.
+const ANER_LINK: u16 = 0x006d;
+/// STAT1000 with a partner (measured): partner is 1000BASE-T full duplex.
+const STAT1000_LINK: u16 = 0x0800;
 /// Selector 802.3, 10/100 half/full, no pause. The measured `0x0de1` is this
 /// plus the pause bits Linux adds.
 const ADVERTISE_DEFAULT: u16 = 0x01e1;
@@ -135,6 +153,8 @@ const EEE_100TX_1000T: u16 = 0x0006;
 
 #[derive(Debug, Clone)]
 pub struct Bcm54213pe {
+    /// A cable to a link partner is plugged in.
+    link: bool,
     bmcr: u16,
     advertise: u16,
     nptx: u16,
@@ -167,6 +187,7 @@ impl Bcm54213pe {
         let mut shadow = [0; 32];
         shadow[SHD_LEDS2] = 0x060;
         Bcm54213pe {
+            link: false,
             bmcr: BMCR_DEFAULT,
             advertise: ADVERTISE_DEFAULT,
             nptx: NPTX_DEFAULT,
@@ -186,11 +207,25 @@ impl Bcm54213pe {
         }
     }
 
+    /// Plug (`true`) or unplug the cable.
+    pub fn set_link(&mut self, link: bool) {
+        self.link = link;
+    }
+
+    /// The link is up: a partner is there and auto-negotiation has finished.
+    pub fn link_up(&self) -> bool {
+        self.link
+    }
+
     /// Clause-22 register read, as the MDIO controller sees it.
     pub fn read(&mut self, reg: u8) -> u16 {
         match reg & 0x1f {
             BMCR => self.bmcr,
+            BMSR if self.link => BMSR_LINK,
             BMSR => BMSR_NO_LINK,
+            LPA if self.link => LPA_LINK,
+            EXPANSION if self.link => ANER_LINK,
+            STAT1000 if self.link => STAT1000_LINK,
             PHYSID1 => (PHY_ID >> 16) as u16,
             PHYSID2 => PHY_ID as u16,
             ADVERTISE => self.advertise,
@@ -233,10 +268,15 @@ impl Bcm54213pe {
                 if v & BMCR_RESET != 0 {
                     // Soft reset restores the defaults and self-clears; it
                     // completes before the next MDIO frame could observe it.
-                    *self = Bcm54213pe::new();
+                    // The cable stays where it is.
+                    *self = Bcm54213pe {
+                        link: self.link,
+                        ..Bcm54213pe::new()
+                    };
                 } else {
                     // Restart-AN self-clears. With no partner the restarted
-                    // negotiation never completes.
+                    // negotiation never completes; with one it is done by
+                    // the next poll.
                     self.bmcr = v & !BMCR_ANRESTART;
                 }
             }
@@ -372,6 +412,20 @@ mod tests {
         assert_eq!(bmsr & (1 << 5), 0, "AN not complete");
         assert_ne!(bmsr & (1 << 3), 0, "AN capable");
         assert_eq!(p.read(LPA), 0);
+    }
+
+    #[test]
+    fn with_a_cable_the_partner_registers_read_the_measured_values() {
+        let mut p = Bcm54213pe::new();
+        p.set_link(true);
+        p.write(BMCR, BMCR_RESET);
+        p.write(BMCR, BMCR_DEFAULT | BMCR_ANRESTART);
+        assert_eq!(p.read(BMSR), 0x796d);
+        assert_eq!(p.read(LPA), 0xc5e1);
+        assert_eq!(p.read(EXPANSION), 0x006d);
+        assert_eq!(p.read(STAT1000), 0x0800);
+        p.set_link(false);
+        assert_eq!(p.read(BMSR) & (1 << 2), 0);
     }
 
     #[test]

@@ -29,6 +29,7 @@ pub mod harness;
 pub mod identity;
 pub mod machine;
 pub mod mem;
+pub mod net;
 pub mod payloads;
 pub mod periph;
 pub mod soc;
