@@ -23,6 +23,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # tests/a64_diff.rs checks the A64 interpreter against qemu-aarch64
+      # user-mode emulation.
+      - name: Install qemu-user
+        run: sudo apt-get update && sudo apt-get install -y qemu-user
+
       - name: Format
         run: cargo fmt --check
 

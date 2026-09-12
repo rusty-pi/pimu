@@ -15,3 +15,6 @@ docs/*.pdf
 # testdata/boot/firmware-boot.toml, not this transcript.
 /boot.log
 /boot.log.console
+
+# qemu-user core dumps (tests/a64_diff.rs runs with `ulimit -c 0`, but just in case).
+qemu_*.core
