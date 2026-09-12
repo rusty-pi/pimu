@@ -32,6 +32,7 @@ USAGE:
     rpi-virt-fw boot-check <scenario.toml> --plan [--console <path>]
     rpi-virt-fw boot-check <scenario.toml> --log <path> --console <path> [--update]
     rpi-virt-fw disasm <file> [--base <hex>] [--count <n>] [--vaddr <hex>]
+    rpi-virt-fw spec-docs [--update]
 
 COMMANDS:
     run       Run one scenario and check it against its golden transcript.
@@ -46,6 +47,8 @@ COMMANDS:
               how `scripts/boot-check.sh` runs the boot without repeating the
               workload description.
     disasm    Disassemble a flat binary / ELF with the (partial) VPU decoder.
+    spec-docs Check docs/periph/ against the register specs in specs/*.toml;
+              --update regenerates it.
 
 FLAGS:
     --update  Rewrite golden files instead of failing on mismatch.
@@ -108,11 +111,36 @@ fn run(args: &[String]) -> Result<ExitCode> {
         "recon" => cmd_recon(&args[1..]),
         "boot-check" => cmd_boot_check(&args[1..]),
         "disasm" => cmd_disasm(&args[1..]),
+        "spec-docs" => cmd_spec_docs(&args[1..]),
         "-h" | "--help" | "help" => {
             print!("{USAGE}");
             Ok(ExitCode::SUCCESS)
         }
         other => bail!("unknown command '{other}' (try --help)"),
+    }
+}
+
+/// `spec-docs [--update]`: the Markdown under `docs/periph/` is generated from
+/// `specs/*.toml`; report (or with `--update`, rewrite) whatever is out of date.
+fn cmd_spec_docs(args: &[String]) -> Result<ExitCode> {
+    let mut update = false;
+    for a in args {
+        match a.as_str() {
+            "--update" => update = true,
+            other => bail!("unknown argument '{other}'"),
+        }
+    }
+    let stale = rpi_virt_fw::spec::sync_docs(update).map_err(anyhow::Error::msg)?;
+    let dir = rpi_virt_fw::spec::doc_dir();
+    for name in &stale {
+        let verb = if update { "updated" } else { "stale" };
+        println!("{verb}: {}", dir.join(name).display());
+    }
+    if stale.is_empty() || update {
+        Ok(ExitCode::SUCCESS)
+    } else {
+        eprintln!("docs/periph is out of date; run `cargo run -- spec-docs --update`");
+        Ok(ExitCode::FAILURE)
     }
 }
 

@@ -1,0 +1,78 @@
+[block]
+name    = "mcsync"
+base    = 0x7E000000
+size    = 0x1000
+summary = "Doorbells / semaphores between the two VPU cores"
+
+[[block.source]]
+kind       = "decompile"
+ref        = "0x3ED3A114 / 0x3ED3A00C address the slot array at 0x7E000000"
+confidence = "high"
+
+[[block.source]]
+kind       = "inferred"
+ref        = "size: the SDC block starts at 0x7E001000"
+confidence = "medium"
+
+[[register]]
+name   = "DOORBELL"
+offset = 0x00
+count  = 32
+stride = 4
+access = "rw"
+notes  = "Poster writes 1; the receiving core clears it once the work is done."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "0x3ED3A114 (post), 0x3ED3A00C (wait while non-zero)"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "recon run: clock-service manager posts slot 6, then suspends"
+confidence = "high"
+
+[[register]]
+name   = "PENDING"
+offset = 0x80
+access = "r"
+notes  = "Doorbells pending for this core's interrupt; the ISR clears exactly these bits from its ack word."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "ISR 0x3ED3A098"
+confidence = "medium"
+
+[[register]]
+name   = "ACK76"
+offset = 0x84
+access = "rw"
+notes  = "Acknowledge word for VPU interrupt source 76. The ISR does `[+0x84] &= ~[+0x80]`."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "ISR 0x3ED3A098 (handler table gp+58004)"
+confidence = "medium"
+
+[[register.source]]
+kind       = "trace"
+ref        = "RVF_DBG_IRQEN: neither core calls enable_irq_source for 76 or 77"
+confidence = "medium"
+note       = "so the interrupt path itself is not exercised by the boot so far"
+
+[[register]]
+name   = "ACK77"
+offset = 0x88
+access = "rw"
+notes  = "Acknowledge word for VPU interrupt source 77. The ISR does `[+0x88] &= ~[+0x80]`."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "ISR 0x3ED3A098 (handler table gp+58004)"
+confidence = "medium"
+
+[[register.source]]
+kind       = "trace"
+ref        = "RVF_DBG_IRQEN: neither core calls enable_irq_source for 76 or 77"
+confidence = "medium"
+note       = "so the interrupt path itself is not exercised by the boot so far"

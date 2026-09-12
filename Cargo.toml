@@ -12,6 +12,11 @@ anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 
+[build-dependencies]
+# build.rs generates src/spec.rs from specs/*.toml.
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
 [dev-dependencies]
 
 [profile.release]
