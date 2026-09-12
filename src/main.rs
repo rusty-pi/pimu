@@ -687,6 +687,12 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
                 c.cpu.sp(),
                 if c.waiting { "  (wfi)" } else { "" }
             );
+            println!(
+                "            daif {:#x}  irq line {}  gic {}",
+                c.cpu.daif >> 6,
+                u8::from(c.cpu.irq_line),
+                emu.machine.gic.describe(i)
+            );
         }
         if let Some(stop) = &a.stopped {
             println!("  stopped   {stop:x?}");

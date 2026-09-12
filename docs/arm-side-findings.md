@@ -65,7 +65,15 @@ modelled.
   the idle loop only unmasks briefly after each `wfi`.
 - Wired lines were the timers (PPIs), the mailbox (65) and eMMC2 (158). The
   PL011 line (153) was not needed for console output, only for input
-  (milestone 6).
+  (milestone 6). PCIe adds the endpoint's INTA (175) and the root complex's
+  MSI block (180).
+- A level line nobody on the ARM can clear stops the boot silently. The
+  firmware's USB bring-up left an xHCI event pending in the VL805; when Linux
+  retrained the link that came back as INTA, on the line only `pcieport`'s
+  PME/AER handler listens to, and the kernel hung a few initcalls later with
+  core 0 spinning. PERST# resets the endpoint on silicon, and now in the model.
+  The run report prints each core's DAIF and GIC state (running priority,
+  active, pending, lines held high) for this kind of hang.
 - The firmware keeps serving property requests while Linux runs, and a lost
   VPU interrupt shows up there first. `reboot` used to end in `Firmware
   transaction 0x00038041 timeout`: the SD card power-off (`SET_GPIO_STATE`
@@ -92,6 +100,15 @@ Each of these was found by the Linux run and fixed in the device model on
 4. **eMMC2** — Linux uses ADMA, DDR50 at 1.8 V, and needs the interrupt line
    and writes. The CSD, SCR and present-state values the firmware prints are
    golden-bound; see the eMMC2 commits.
+5. **PCIe root complex** — `PCIe RC controller misconfigured as Endpoint`.
+   `pcie-brcmstb` checks the port-mode bit of `MISC_PCIE_STATUS` with PERST#
+   still asserted, and the model only reported it with the link up; it is a
+   strap. Beyond that Linux needed a real type-1 header for the root port
+   (seeded from `rpi-dev`'s config dump: no BARs, writable bus numbers and
+   windows, the PCIe capability with the trained link's status), the SerDes
+   MDIO port for spread spectrum, and the 32-vector MSI block at `+0x4500`
+   (`src/periph/pcie.rs`). It now enumerates the bridge and the VL805 the way
+   the real board does, `link up, 5.0 GT/s PCIe x1 (SSC)` included.
 
 The run ended with the kernel idling in `cpu_do_idle` at `Waiting for root
 device`, because the test image had no ext4 `p2` and the card's CSD packing

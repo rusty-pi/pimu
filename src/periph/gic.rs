@@ -155,6 +155,12 @@ pub const ID_EMMC2: u32 = 32 + 0x7E;
 /// `INTRL2_1`.
 pub const ID_GENET_A: u32 = 32 + 157;
 pub const ID_GENET_B: u32 = 32 + 158;
+/// The PCIe root complex (`pcie@7d500000`): the `interrupt-map` routes the
+/// endpoint's INTA to `GIC_SPI 143`, and `interrupt-names = "pcie", "msi"`
+/// puts the MSI controller's output on `GIC_SPI 148`. `rpi-dev` shows the
+/// former as `GICv2 175 Level PCIe PME, aerdrv`.
+pub const ID_PCIE_INTA: u32 = 32 + 143;
+pub const ID_PCIE_MSI: u32 = 32 + 148;
 
 /// Measured on the reference board (module docs).
 const TYPER: u32 = 0x0000_FC67;
@@ -463,6 +469,28 @@ impl Gic {
             0 => IDLE_PRIORITY,
             apr => (apr.trailing_zeros() << 3) as u8,
         }
+    }
+
+    /// One line of CPU `cpu`'s interrupt state, for the run report: its
+    /// running priority and mask, and which interrupts are active, pending, or
+    /// have their line held high.
+    pub fn describe(&self, cpu: usize) -> String {
+        let ids = |f: &dyn Fn(u32) -> bool| {
+            (0..NUM_IRQS as u32)
+                .filter(|&id| f(id))
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        let targeted = |id: u32| id < 32 || self.irq(cpu, id).targets & (1 << cpu) != 0;
+        format!(
+            "rpr {:#04x} pmr {:#04x} active [{}] pending [{}] line [{}]",
+            self.running_priority(cpu),
+            self.cpu[cpu].pmr,
+            ids(&|id| targeted(id) && self.irq(cpu, id).active),
+            ids(&|id| targeted(id) && self.pending(cpu, id)),
+            ids(&|id| id >= 16 && targeted(id) && self.irq(cpu, id).line),
+        )
     }
 
     /// `(intid, priority, group1)` of what the CPU interface would signal.
