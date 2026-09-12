@@ -17,6 +17,10 @@ EEPROM_REF="${EEPROM_REF:-master}"
 EEPROM_CHANNEL="${EEPROM_CHANNEL:-latest}"
 EEPROM_DATE="${EEPROM_DATE:-2026-08-04}"
 EEPROM_VL805="${EEPROM_VL805:-000138c0}"
+# Debian's static aarch64 busybox: the userland on the SD card's root
+# filesystem (scripts/make-sd.sh, #40 milestone 5). Checked against the hash.
+BUSYBOX_DEB="${BUSYBOX_DEB:-busybox-static_1.35.0-4+deb12u1+b1_arm64.deb}"
+BUSYBOX_SHA256="${BUSYBOX_SHA256:-732c9135564fc71337e0e05fb4da4d11e6c28c1834bce3e405e575afef2a52f5}"
 # ---------------------------------------------------------------------------
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -64,10 +68,17 @@ queue "$raw/raspberrypi/rpi-eeprom/$EEPROM_REF/firmware-2711/$EEPROM_CHANNEL/pie
 queue "$raw/raspberrypi/rpi-eeprom/$EEPROM_REF/firmware-2711/$EEPROM_CHANNEL/recovery.bin" "recovery.bin"
 queue "$raw/raspberrypi/rpi-eeprom/$EEPROM_REF/firmware-2711/$EEPROM_CHANNEL/vl805-$EEPROM_VL805.bin" "vl805-$EEPROM_VL805.bin"
 
+echo "debian busybox-static ($BUSYBOX_DEB)"
+queue "https://deb.debian.org/debian/pool/main/b/busybox/$BUSYBOX_DEB" "busybox-static_arm64.deb"
+
 echo
 curl -fSL --retry 3 --parallel --parallel-max 8 "${jobs[@]}"
 
 "$here/scripts/make-dt-blob.py" "$dest/dt-blob.dts" "$dest/dt-blob.bin"
+
+echo "$BUSYBOX_SHA256  $dest/busybox-static_arm64.deb" | sha256sum --quiet -c -
+dpkg-deb --fsys-tarfile "$dest/busybox-static_arm64.deb" | tar -xO ./bin/busybox >"$dest/busybox-aarch64"
+chmod +x "$dest/busybox-aarch64"
 
 echo
 echo "sha256:"

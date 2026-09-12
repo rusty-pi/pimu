@@ -87,6 +87,21 @@ The run ended with the kernel idling in `cpu_do_idle` at `Waiting for root
 device`, because the test image had no ext4 `p2` and the card's CSD packing
 hid block reads from Linux.
 
+## Root filesystem and shell (in-house core, milestone 5)
+
+`scripts/make-sd.sh` now adds a 32 MiB ext4 `p2` after the boot partition,
+holding Debian's static busybox, and `testdata/boot/linux-boot.toml` boots
+through to its prompt on all four cores. Things that mattered:
+
+- The boot partition's geometry and the card's size are both in the firmware
+  golden (FAT cluster count, CSD), so `p1` keeps its old size and the card
+  grows instead; the bootloader then also lists `p2` in its MBR dump.
+- The firmware's command line ends in `console=tty1`, which makes the
+  framebuffer `/dev/console`; the inittab names `ttyAMA0` explicitly.
+- `mke2fs -d` copies the builder's uid/gid and random inode generations, and
+  e2fsprogs 1.47 enables `orphan_file` (a read-only mount then logs an orphan
+  cleanup); the script fixes all of those so the image is byte-reproducible.
+
 ## Unicorn-specific lessons (for differential testing, if it is ever used)
 
 - Its C `UC_HOOK_INSN` system-register hook returns `uint32_t`, but the Rust

@@ -2,12 +2,13 @@
 # Run the simulated boot and check it against the boot scenario. This is what
 # CI runs; run it locally to reproduce a CI failure.
 #
-#   scripts/boot-check.sh [--update] [boot.log]
+#   scripts/boot-check.sh [--update] [--scenario=<toml>] [boot.log]
 #
 # Assumes `cargo build --release` and an SD image built by scripts/make-sd.sh.
 #
-# What is checked, and where it is written down, both live in
-# `testdata/boot/firmware-boot.toml`:
+# What is checked, and where it is written down, both live in the scenario —
+# `testdata/boot/firmware-boot.toml` unless `--scenario` names another (the
+# Linux boot to a shell is `testdata/boot/linux-boot.toml`):
 #
 #   * the golden console transcript (`testdata/boot/golden/`), diffed line by
 #     line so a change shows up in place — including output that moved or a
@@ -31,7 +32,8 @@ log="$here/boot.log"
 for arg in "$@"; do
   case "$arg" in
     --update) update=(--update) ;;
-    -*) echo "usage: $0 [--update] [boot.log]" >&2; exit 2 ;;
+    --scenario=*) scenario="${arg#--scenario=}" ;;
+    -*) echo "usage: $0 [--update] [--scenario=<toml>] [boot.log]" >&2; exit 2 ;;
     *) log="$arg" ;;
   esac
 done
