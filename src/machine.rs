@@ -299,7 +299,6 @@ impl Machine {
         // delivery outstanding.
         let src = crate::periph::rng::IRQ_SRC;
         if self.rng.irq_asserted() && !self.pending_irqs.contains(&src) {
-            self.corectl.raise_source(src);
             self.pending_irqs.push_back(src);
         }
         // The mailbox holds source 94 asserted while a request is queued for
@@ -308,7 +307,6 @@ impl Machine {
         // the `mbox_read` task takes the message off the FIFO.
         let src = crate::periph::mbox::IRQ_SRC;
         if self.mbox.irq_asserted() && !self.pending_irqs.contains(&src) {
-            self.corectl.raise_source(src);
             self.pending_irqs.push_back(src);
         }
         // The VCE holds source 68 asserted from the moment a launch completes
@@ -316,7 +314,6 @@ impl Machine {
         // handler is what sets the event flag `vce_run` is waiting on.
         let src = crate::periph::vce::IRQ_SRC;
         if self.vce.irq_asserted() && !self.pending_irqs.contains(&src) {
-            self.corectl.raise_source(src);
             self.pending_irqs.push_back(src);
         }
     }
@@ -595,7 +592,6 @@ impl Machine {
         // back to a channel and `dma_chan_interrupt` then retires the transfer,
         // signals its waiter and starts the next one in the queue.
         let src = dma_irq_source(ch);
-        self.corectl.raise_source(src);
         self.pending_irqs.push_back(src);
     }
 
@@ -682,9 +678,7 @@ impl Machine {
         // polls (`TI` = 0, no INTEN); start4's dmalib asks for the interrupt
         // and starts its next chain from it.
         if interrupt {
-            let src = dma_irq_source(11);
-            self.corectl.raise_source(src);
-            self.pending_irqs.push_back(src);
+            self.pending_irqs.push_back(dma_irq_source(11));
         }
     }
 }
@@ -711,7 +705,18 @@ fn dma_irq_source(ch: usize) -> u32 {
 
 impl Bus for Machine {
     fn take_pending_irq(&mut self) -> Option<u32> {
-        self.pending_irqs.pop_front()
+        // Present the source at CoreCtl `+0x04` now, as it is vectored, not
+        // when it was queued: the generic dispatcher (`0x3EC3E9BC`) reads it a
+        // dozen instructions into its entry, and a source queued in between
+        // used to overwrite the one being taken. That is how a system-timer
+        // C2 match (source 66, the clock service's timeouts) got dispatched
+        // as a mailbox interrupt during Linux's boot, leaving the clock
+        // service waiting on a timer that had already fired — every later
+        // `msleep` in the firmware then hung, starting with the SD card
+        // power-off Linux asks for on its way to reboot.
+        let src = self.pending_irqs.pop_front()?;
+        self.corectl.raise_source(src);
+        Some(src)
     }
 
     fn take_tick_pending(&mut self) -> bool {

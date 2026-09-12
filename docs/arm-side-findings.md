@@ -64,7 +64,17 @@ modelled.
 - A pending interrupt has to be taken within a few instructions of the unmask:
   the idle loop only unmasks briefly after each `wfi`.
 - Wired lines were the timers (PPIs), the mailbox (65) and eMMC2 (158). The
-  PL011 line (153) was not needed for console output.
+  PL011 line (153) was not needed for console output, only for input
+  (milestone 6).
+- The firmware keeps serving property requests while Linux runs, and a lost
+  VPU interrupt shows up there first. `reboot` used to end in `Firmware
+  transaction 0x00038041 timeout`: the SD card power-off (`SET_GPIO_STATE`
+  pin 134) sleeps 2 ms in the firmware, and its clock-service timer had
+  stalled during Linux's boot, when a system-timer C2 match (VPU source 66)
+  was dispatched as a mailbox interrupt. The model presented a device's
+  source at CoreCtl when it was queued, not when it was vectored, so a source
+  queued during the dispatcher's entry overwrote the one being taken.
+  `RVF_DBG_MBOX` names each request's tag, which is how it was found.
 
 ## Devices Linux touched, and what they needed
 

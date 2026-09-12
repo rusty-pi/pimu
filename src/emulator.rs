@@ -574,9 +574,8 @@ impl Emulator {
                 }
                 if core == 0 {
                     // The generic dispatcher re-reads the source from
-                    // CoreCtl `+0x04`, so present it there as well as
-                    // queueing the vectoring.
-                    self.machine.corectl.raise_source(src);
+                    // CoreCtl `+0x04`; `take_pending_irq` presents it there
+                    // when it is vectored.
                     self.machine.push_pending_irq(src);
                 } else if let Some(c1) = self.cpu1.as_mut() {
                     if c1.exc_vbase != 0 {
