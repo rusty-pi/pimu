@@ -939,13 +939,14 @@ fn run_arm(mut emu: Emulator, console: &[u8], opts: &ArmOpts) -> Result<()> {
             s >> 20
         );
     }
-    let (old, new) =
-        arm::add_earlycon(&mut emu.machine, h.dtb).map_err(|e| anyhow!("bootargs: {e}"))?;
+    let (old, new) = arm::add_bootargs(&mut emu.machine, h.dtb, &arm::BOOTARGS)
+        .map_err(|e| anyhow!("bootargs: {e}"))?;
     if old == new {
-        println!("  bootargs  already has earlycon");
+        println!("  bootargs  already has {}", arm::BOOTARGS.join(" "));
     } else {
         println!(
-            "  bootargs  \"earlycon\" prepended in place ({} -> {} bytes)",
+            "  bootargs  \"{}\" prepended in place ({} -> {} bytes)",
+            new.strip_suffix(old.as_str()).unwrap_or(&new).trim_end(),
             old.len(),
             new.len()
         );
@@ -955,8 +956,8 @@ fn run_arm(mut emu: Emulator, console: &[u8], opts: &ArmOpts) -> Result<()> {
     core.reset().map_err(|e| anyhow!(e))?;
     let sched = Schedule::default();
     println!(
-        "  released  pc 0x0, EL3h, DAIF masked; slices of {} ARM instructions / {} VPU steps",
-        sched.arm_slice, sched.vpu_slice
+        "  released  pc 0x0, EL3h, DAIF masked; {} VPU steps every {} ARM cycles",
+        sched.vpu_slice, sched.arm_slice
     );
     let live = std::env::var("RVF_LIVE_CONSOLE").as_deref() != Ok("0");
     let rep = core.run(
@@ -997,13 +998,22 @@ fn run_arm(mut emu: Emulator, console: &[u8], opts: &ArmOpts) -> Result<()> {
         }
     }
     println!(
-        "  ran       {} ARM instructions, {} VPU steps, {} slices, {:.1?}",
-        rep.insns, rep.vpu_steps, rep.slices, rep.wall
+        "  ran       {} ARM instructions + {} cycles slept in {} wfi = {} cycles ({:.3} s modelled), \
+         {} VPU steps, {} slices, {:.1?}",
+        rep.insns,
+        rep.slept,
+        rep.wfis,
+        rep.cycles,
+        rep.cycles as f64 / arm::ARM_HZ as f64,
+        rep.vpu_steps,
+        rep.slices,
+        rep.wall
     );
     println!(
-        "  state     pc {:#x}  EL{}  sp {:#x}  lr {:#x}  x0 {:#x}",
+        "  state     pc {:#x}  EL{}  PSTATE {:#x}  sp {:#x}  lr {:#x}  x0 {:#x}",
         core.pc(),
         core.el(),
+        core.pstate(),
         core.x(31),
         core.x(30),
         core.x(0)
@@ -1012,14 +1022,44 @@ fn run_arm(mut emu: Emulator, console: &[u8], opts: &ArmOpts) -> Result<()> {
         let (esr, elr, far) = core.exception_regs(el);
         println!("            ESR_EL{el} {esr:#010x}  ELR_EL{el} {elr:#x}  FAR_EL{el} {far:#x}");
     }
+    println!(
+        "            VBAR_EL1 {:#x}  (Linux's `vectors`: the KASLR slide is this minus its link address)",
+        core.vbar_el1()
+    );
+    println!(
+        "  counter   CNTPCT {}  ({} generic-timer register accesses)",
+        rep.counter,
+        core.side().timer_accesses
+    );
+    let irqs: Vec<String> = rep
+        .irqs
+        .iter()
+        .map(|(id, n)| format!("INTID {id} x{n}"))
+        .collect();
+    println!(
+        "  irqs      {}",
+        if irqs.is_empty() {
+            "none".to_string()
+        } else {
+            irqs.join(", ")
+        }
+    );
     let side = core.side();
     println!("  exceptions taken: {}", side.exceptions_taken);
-    for e in side.exceptions.iter().take(24) {
+    let show = |e: &arm::ExceptionTaken| {
+        let what = match e.intid {
+            Some(id) => format!("INTID {id}"),
+            None => format!("ESR {:#010x}", e.esr),
+        };
         println!(
-            "    {:<9} pc {:#x} EL{} -> EL{}  ESR {:#010x}  vector {:#x}",
-            e.kind, e.pc, e.from_el, e.to_el, e.esr, e.vector
+            "    {:<9} pc {:#x} EL{} -> EL{}  {what}  vector {:#x}  @ cycle {}",
+            e.kind, e.pc, e.from_el, e.to_el, e.vector, e.cycle
         );
-    }
+    };
+    println!("   first:");
+    side.first_exceptions.iter().for_each(show);
+    println!("   most recent:");
+    side.recent_exceptions.iter().for_each(show);
     for (name, v) in &side.impdef {
         println!("  impdef    {name} = {v:#x}");
     }

@@ -39,11 +39,18 @@ ours to model, starting with the interrupt controller and the timer.
   does it; the stub enters the kernel at EL2 with `x0` = the dtb.
 * **Exceptions** — Unicorn takes *no* exception into the guest (it hands each
   one to a hook and drops it), and it has no API to raise an IRQ line. So every
-  exception entry is done by hand — `hvc`, `svc`, `brk` and UNDEFINED now, IRQs
-  between slices for milestone 2: `ELR`/`SPSR`/`ESR` saved, `PC` set to the
-  vector.
-* **Scheduling** — `emu_start(.., count)` runs a fixed number of ARM
-  instructions, interleaved with VPU steps, so a run is reproducible.
+  exception entry is done by hand — `hvc`, `svc`, `brk` and UNDEFINED from a
+  hook, IRQs from the run loop whenever the GIC signals one the core would take:
+  `ELR`/`SPSR`/`ESR` saved, `PC` set to the vector.
+* **Time** — one modelled clock: an ARM instruction is a cycle at a nominal
+  1.5 GHz, counted per translation block, and `wfi` skips the clock to the next
+  thing that can wake the core. The generic timer (`src/periph/gentimer.rs`)
+  counts from it at the 54 MHz the armstub sets up and drives the GIC's timer
+  PPIs. Nothing reads the host clock, so two runs with the same inputs print
+  the same bytes, timestamps included.
+* **Scheduling** — the VPU gets a fixed number of steps every fixed number of
+  ARM cycles, so the firmware keeps servicing the mailbox and the interleaving
+  is reproducible.
 * **Opt-in** — behind the `arm` cargo feature (`recon --arm`), so the default
   build, the firmware-only tool and CI's existing jobs do not grow a C
   dependency.
@@ -56,3 +63,30 @@ ours to model, starting with the interrupt controller and the timer.
 2. GIC and generic timer interrupts delivered — the scheduler runs.
 3. A mailbox request from Linux reaches the live firmware and is answered.
 4. Root filesystem mounted from the modelled SD card, userspace reached.
+
+### Where it stands
+
+Milestone 1 stopped at `cpu_do_idle+0x8`, the instruction after its `wfi`
+(the slide is `VBAR_EL1` minus `vectors`' link offset `0x10800`): the idle loop,
+waiting for a timer interrupt nothing delivered.
+
+With the timer and IRQ delivery in, a 20 G-instruction run (28.7 s modelled,
+about 4.5 minutes of wall clock) takes 7237 timer interrupts at `HZ=250`, prints
+`Calibrating delay loop (skipped)`, `pid_max`, `Mount-cache`, `rcu:`, gives up
+on the secondaries after the kernel's 5 s timeout each (`CPU1: failed to come
+online`, `smp: Brought up 1 node, 1 CPU`), then `devtmpfs: initialized` and the
+driver probes. The mailbox already works both ways — `raspberrypi-firmware
+soc:firmware: Attached to firmware from 2026-08-10T18:21:35`, 71 mailbox
+interrupts — and the kernel reaches `Waiting for root device /dev/mmcblk0p2...`.
+Two runs print byte-identical consoles, timestamps included.
+
+What it waits on: the SD controller (`fe340000.mmc`) defers on
+`regulator-sd-io-1v8`, whose GPIO lives on the firmware's expander, and the
+firmware answers `Failed to get GPIO 4 config (0 ffffffff)`. Meanwhile
+`hwrng_fillfn` spins in `bcm2711_rng200_read`, polling `0xfe10400c`, which the
+RNG model answers with start4's legacy register map (see `src/periph/rng.rs`)
+rather than the rng200 one Linux uses.
+
+Every line appears twice once `ttyAMA0` registers: `keep_bootcon` keeps
+`earlycon` on the same UART as the real console. That is the price of seeing
+the output that used to go to `tty1`.

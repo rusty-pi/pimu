@@ -42,13 +42,29 @@
 //! Its QEMU also has none of the Cortex-A72's IMPLEMENTATION DEFINED
 //! registers, so the stub's `L2CTLR_EL1` / `CPUECTLR_EL1` accesses are
 //! UNDEFINED there. They are emulated as plain storage on the
-//! undefined-instruction path ([`ArmSide::impdef`]). Unicorn's MRS/MSR
-//! instruction hook is not used for this: with one installed, an MSR the hook
-//! lets through is dropped (probed: `msr cntfrq_el0` then read back QEMU's
-//! 62.5 MHz default instead of the value written), and one it skips
-//! re-executes forever unless the hook also moves `PC`.
+//! undefined-instruction path ([`ArmSide::impdef`]).
 //!
-//! ## Exceptions are taken by hand
+//! ## System registers: the `MRS`/`MSR` hook, registered by hand
+//!
+//! The generic timer has to be answered here (see [`GenericTimer`] for why),
+//! and the way to see a system-register access is Unicorn's `UC_HOOK_INSN`
+//! for `UC_ARM64_INS_MRS` / `MSR`: the translator emits a call to the hook
+//! before the access and branches over the access when the hook returns
+//! non-zero (`qemu/target/arm/translate-a64.c`, `gen_hook_sys` /
+//! `handle_sys`).
+//!
+//! The Rust binding's wrapper for it cannot be used. The C callback type
+//! returns `uint32_t` (`uc_cb_insn_sys_t`, `include/unicorn/arm64.h`), but the
+//! binding's trampoline (`insn_sys_hook_proxy_arm64`) returns a Rust `bool`,
+//! which on x86-64 sets only `al`: the C side reads whatever the rest of
+//! `eax` held, and a hook that meant "let it through" skips the access
+//! whenever that garbage is non-zero. That is what an earlier probe here saw
+//! as "an MSR the hook lets through is dropped" (`msr cntfrq_el0` then read
+//! back QEMU's 62.5 MHz default). [`ffi`] registers [`on_mrs`] / [`on_msr`]
+//! directly with the right return type, and a test pins that a passed-through
+//! `MSR` now lands.
+//!
+//! ## Exceptions and interrupts are taken by hand
 //!
 //! Unicorn never takes an exception into the guest. `cpu_handle_exception`
 //! (`qemu/accel/tcg/cpu-exec.c`) hands every one to the `UC_HOOK_INTR` hooks
@@ -61,6 +77,22 @@
 //! SVC, HVC, SMC, BRK and UNDEFINED. An abort cannot be rebuilt that way (the
 //! fault address and status are QEMU-internal), so one stops the core and is
 //! reported instead of guessed at. `eret` needs nothing: QEMU executes it.
+//!
+//! Unicorn has no interrupt input either, so IRQs are entered the same way,
+//! from outside: [`ArmCore::run`] asks the [`Gic`] what it is signalling to
+//! CPU 0 and, if the core would take it now ([`Route::target`], ARM ARM
+//! D1.13.4 — routing by `SCR_EL3.IRQ` / `HCR_EL2.{IMO,TGE}`, masking by
+//! `PSTATE.I` only when the target is the current EL), enters the IRQ vector
+//! (`+0x80` from the synchronous one). The GIC keeps signalling until Linux
+//! reads `GICC_IAR`; the entry masks `PSTATE.I`, so it is not entered twice.
+//!
+//! "Now" has to be soon after it becomes true, or the kernel livelocks: its
+//! idle loop runs `wfi` with IRQs masked and unmasks for a few instructions
+//! after waking (`default_idle_call`: `cpu_do_idle()` then
+//! `raw_local_irq_enable()`). QEMU ends the translation block at every
+//! `msr daifclr` ("exit the cpu loop to re-evaluate pending IRQs"), so the
+//! block hook [`on_block`] sees the unmask at the next block and stops the
+//! slice there when an interrupt is waiting.
 //!
 //! ## Memory and MMIO
 //!
@@ -84,27 +116,52 @@
 //! raise an external abort from an MMIO callback), so an access a model
 //! refuses reads as zero and is recorded in [`ArmSide::mmio_faults`].
 //!
-//! ## Scheduling
+//! ## Time and scheduling
 //!
-//! [`ArmCore::run`] alternates a fixed number of ARM instructions
-//! (`emu_start(.., count)`) with a fixed number of VPU steps, so the firmware
-//! keeps servicing the mailbox and a run is reproducible: the same inputs give
-//! the same interleaving. The one input that is not the model's own is the
-//! generic timer — Unicorn's `CNTVCT` follows the host clock — and nothing on
-//! the way to the first `earlycon` line reads it.
+//! Everything runs on one modelled clock, [`ArmSide::cycles`]: an instruction
+//! is a cycle (at [`gentimer::ARM_HZ`]), and a `wfi` adds the cycles it slept.
+//! Nothing reads the host clock, so two runs with the same inputs are the
+//! same run, timestamps included.
+//!
+//! Instructions are counted per translation block, by [`on_block`] at block
+//! entry (every A64 instruction is 4 bytes). That hook runs before the block's
+//! own exit check (`qemu/accel/tcg/translator.c`: `gen_uc_tracecode` for
+//! `UC_HOOK_BLOCK` precedes `gen_tb_start`), so when it calls `emu_stop` the
+//! block does not run and is not counted. This replaces `emu_start`'s
+//! instruction count, which Unicorn implements as a code hook on every
+//! instruction (`uc.c`, `hook_count_cb`). A system-register read in the middle
+//! of a block sees the whole block counted — fine, since only monotonicity and
+//! reproducibility matter.
+//!
+//! [`ArmCore::run`] runs the ARM until the next point anything can change:
+//! the VPU's turn (every [`Schedule::arm_slice`] cycles it gets
+//! [`Schedule::vpu_slice`] steps, so the firmware keeps servicing the
+//! mailbox), a generic-timer compare firing, or an interrupt becoming
+//! takeable. Between those it drives the interrupt lines and takes an IRQ.
+//!
+//! `wfi` makes Unicorn return from `emu_start` (QEMU's `helper_wfi` halts,
+//! since nothing ever gives it pending work). The run loop then advances the
+//! clock straight to whatever can wake the core — the next timer compare, or
+//! the VPU's turn, since the mailbox is the other interrupt source — unless an
+//! interrupt is already pending, which wakes a `wfi` whether or not it is
+//! masked (ARM ARM D1.16.2). `emu_start` clears QEMU's halted state
+//! (`resume_all_vcpus`), so the core resumes after the `wfi`.
 //!
 //! ## Known gaps
 //!
-//! * No interrupt is ever delivered: the GIC is mapped and programmed, but
-//!   nothing yet asks it [`Gic::signal`] between slices (milestone 2).
-//! * `wfi` makes Unicorn return from `emu_start` early; the next slice resumes
-//!   after it, which the architecture allows (a spurious wake) but which spins
-//!   rather than sleeps.
+//! * One core. Linux's secondaries wait on the spin table at `0xd8` and are
+//!   never released; it gives up on them after its own timeout.
+//! * The PL011's interrupt is not wired: the model's `RIS`/`MIS` read zero and
+//!   the firmware reads the same registers, so modelling them belongs with the
+//!   firmware regression. Linux's console writes poll `FR` and do not need it.
+//! * The generic timer's EL0/EL1 access traps (`CNTKCTL_EL1`, `CNTHCTL_EL2`)
+//!   are not modelled: every EL can read the counter.
 //! * Code the VPU writes into RAM the ARM has already translated is not seen
 //!   by the ARM: QEMU tracks self-modifying code only for its own guest's
 //!   stores. Nothing does that today.
 
 use std::collections::{BTreeMap, VecDeque};
+use std::ffi::c_void;
 use std::io::Write as _;
 use std::time::{Duration, Instant};
 
@@ -117,8 +174,11 @@ use crate::bus::{Bus, BusError, BusResult, MmioDevice, Width};
 use crate::emulator::{Emulator, RunEnd, RunLimits};
 use crate::fdt::Fdt;
 use crate::machine::Machine;
-use crate::periph::gic::{self, Accessor};
-use crate::periph::{armlocal, ArmLocal, Gic};
+use crate::periph::gentimer::{self, GenericTimer, Which};
+use crate::periph::gic::{self, Accessor, Signal};
+use crate::periph::{armlocal, mbox, ArmLocal, Gic};
+
+pub use crate::periph::gentimer::ARM_HZ;
 
 /// The armstub's `dtb_ptr32` and `kernel_entry32` words (module docs).
 pub const STUB_DTB_PTR: u32 = 0xf8;
@@ -153,14 +213,37 @@ const EC_SMC64: u64 = 0x17;
 const EC_BRK64: u64 = 0x3C;
 const ESR_IL: u64 = 1 << 25;
 
+/// Offsets of the exception kinds within each group of four vectors
+/// (ARM ARM D1.10.2).
+const VECTOR_SYNC: u64 = 0x000;
+const VECTOR_IRQ: u64 = 0x080;
+const VECTOR_FIQ: u64 = 0x100;
+
 /// `PSTATE.{D,A,I,F}`, and `M` for ELx with `SP_ELx`.
 const PSTATE_DAIF: u64 = 0xF << 6;
+const PSTATE_I: u64 = 1 << 7;
+const PSTATE_F: u64 = 1 << 6;
 fn pstate_elh(el: u32) -> u64 {
     (u64::from(el) << 2) | 1
 }
 
+/// Interrupt routing bits (ARM ARM D17.2.117 `SCR_EL3`, D17.2.48 `HCR_EL2`).
+const SCR_NS: u64 = 1 << 0;
+const SCR_IRQ: u64 = 1 << 1;
+const SCR_FIQ: u64 = 1 << 2;
+const HCR_FMO: u64 = 1 << 3;
+const HCR_IMO: u64 = 1 << 4;
+const HCR_TGE: u64 = 1 << 27;
+
+/// `wfi`.
+const INSN_WFI: u32 = 0xd503_207f;
+
 /// How many recent MMIO accesses to keep for the "where did it stop" report.
 const RECENT_MMIO: usize = 32;
+/// Exceptions kept for the report: the first few (the boot's `hvc`s), and the
+/// most recent ones (where it ended up).
+const FIRST_EXCEPTIONS: usize = 8;
+const RECENT_EXCEPTIONS: usize = 24;
 
 const XREGS: [RegisterARM64; 31] = [
     RegisterARM64::X0,
@@ -196,6 +279,50 @@ const XREGS: [RegisterARM64; 31] = [
     RegisterARM64::X30,
 ];
 
+/// The slice of Unicorn's C API the `MRS`/`MSR` hook needs, declared here
+/// because the binding's own wrapper has the wrong return type (module docs).
+/// The library itself is linked by `unicorn-engine-sys`.
+mod ffi {
+    use std::ffi::c_void;
+
+    /// `include/unicorn/unicorn.h`: `UC_HOOK_INSN = 1 << 1`.
+    pub const UC_HOOK_INSN: i32 = 1 << 1;
+    /// `include/unicorn/arm64.h`, `uc_arm64_insn`.
+    pub const UC_ARM64_INS_MRS: i32 = 1;
+    pub const UC_ARM64_INS_MSR: i32 = 2;
+    /// `uc_arm64_reg`: `INVALID, X29, X30, NZCV, SP, WSP, WZR, XZR`. The hook
+    /// passes it as `Rt` for register 31.
+    pub const UC_ARM64_REG_XZR: i32 = 7;
+
+    /// `uc_arm64_cp_reg`.
+    #[repr(C)]
+    pub struct CpReg {
+        pub crn: u32,
+        pub crm: u32,
+        pub op0: u32,
+        pub op1: u32,
+        pub op2: u32,
+        pub val: u64,
+    }
+
+    /// `uc_cb_insn_sys_t`: note the `uint32_t` return.
+    pub type SysHook = extern "C" fn(*mut c_void, i32, *const CpReg, *mut c_void) -> u32;
+
+    extern "C" {
+        pub fn uc_hook_add(
+            uc: *mut c_void,
+            hh: *mut usize,
+            kind: i32,
+            callback: *mut c_void,
+            user_data: *mut c_void,
+            begin: u64,
+            end: u64,
+            ...
+        ) -> i32;
+        pub fn uc_reg_write(uc: *mut c_void, regid: i32, value: *const c_void) -> i32;
+    }
+}
+
 /// What `arm_loader` left in the armstub for the primary core.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Handoff {
@@ -229,8 +356,23 @@ pub fn read_dtb(machine: &Machine, addr: u32) -> Result<Vec<u8>, String> {
     Ok(blob)
 }
 
-/// Put `earlycon` on the kernel command line, in the device tree the firmware
-/// already placed, before the ARM is released.
+/// What the harness puts in front of the firmware's kernel command line:
+///
+/// * `earlycon` — resolves through `/chosen/stdout-path` = `"serial0:115200n8"`
+///   and the `serial0` alias to the PL011 at `0x7e201000`, so the kernel
+///   prints from its first line.
+/// * `keep_bootcon` — otherwise the kernel drops `earlycon` the moment a real
+///   console registers, which here is `tty1` (the `console=tty1` in the
+///   firmware's `cmdline.txt`): milestone 1's output ended at `printk: legacy
+///   bootconsole [pl11] disabled`, with everything after it going to a
+///   framebuffer console nobody reads.
+/// * `kvm-arm.mode=none` — KVM's vgic probe reads the GIC's virtualisation
+///   interface, which [`Gic`] deliberately faults rather than invent.
+pub const BOOTARGS: [&str; 3] = ["earlycon", "keep_bootcon", "kvm-arm.mode=none"];
+
+/// Put [`BOOTARGS`] on the kernel command line, in the device tree the
+/// firmware already placed, before the ARM is released. Arguments already
+/// present (by name) are not added again.
 ///
 /// Why here and not in `cmdline.txt`: the firmware echoes `cmdline.txt` into
 /// its log (`Read command line from file 'cmdline.txt':`, the line itself, then
@@ -238,28 +380,32 @@ pub fn read_dtb(machine: &Machine, addr: u32) -> Result<Vec<u8>, String> {
 /// regression's golden transcript. Patching `/chosen/bootargs` after the
 /// firmware is done leaves every byte it printed alone.
 ///
-/// A bare `earlycon` resolves through `/chosen/stdout-path` =
-/// `"serial0:115200n8"` and the `serial0` alias to the PL011 at `0x7e201000`.
-///
 /// The blob grows by a few bytes and is rewritten in place, so the armstub's
 /// `dtb_ptr32` stays what the firmware wrote. The bytes it grows into must be
 /// zero — unused — or this refuses. Linux reserves the blob by the header's
 /// new `totalsize`. Returns the old and new command lines.
-pub fn add_earlycon(machine: &mut Machine, dtb: u32) -> Result<(String, String), String> {
+pub fn add_bootargs(
+    machine: &mut Machine,
+    dtb: u32,
+    args: &[&str],
+) -> Result<(String, String), String> {
     let blob = read_dtb(machine, dtb)?;
     let fdt = Fdt::parse(&blob)?;
     let old = fdt
         .properties_of("/chosen")
         .and_then(|p| p.into_iter().find(|p| p.name == "bootargs"))
         .and_then(|p| p.as_str())
-        .ok_or("no /chosen/bootargs to add earlycon to")?;
-    if old
-        .split_whitespace()
-        .any(|a| a == "earlycon" || a.starts_with("earlycon="))
-    {
+        .ok_or("no /chosen/bootargs to add to")?;
+    let name = |a: &str| a.split('=').next().unwrap_or(a).to_string();
+    let missing: Vec<&str> = args
+        .iter()
+        .copied()
+        .filter(|a| !old.split_whitespace().any(|o| name(o) == name(a)))
+        .collect();
+    if missing.is_empty() {
         return Ok((old.clone(), old));
     }
-    let new = format!("earlycon {old}");
+    let new = format!("{} {old}", missing.join(" "));
     let mut value = new.clone().into_bytes();
     value.push(0);
     let patched = fdt.with_property("/chosen", "bootargs", &value)?;
@@ -289,15 +435,20 @@ pub struct MmioAccess {
     pub write: bool,
 }
 
-/// An exception the core took (by hand, see the module docs).
+/// An exception or interrupt the core took (by hand, see the module docs).
 #[derive(Debug, Clone)]
 pub struct ExceptionTaken {
     pub kind: &'static str,
     pub pc: u64,
     pub from_el: u32,
     pub to_el: u32,
+    /// The syndrome written; 0 for an interrupt, which writes none.
     pub esr: u64,
+    /// The interrupt's INTID, for an IRQ or FIQ.
+    pub intid: Option<u32>,
     pub vector: u64,
+    /// [`ArmSide::cycles`] when it was taken.
+    pub cycle: u64,
 }
 
 /// Why the ARM stopped.
@@ -315,6 +466,61 @@ pub enum ArmStop {
     },
 }
 
+/// Where the GIC's signal goes, from the routing controls (module docs).
+#[derive(Debug, Clone, Copy, Default)]
+struct Route {
+    scr: u64,
+    hcr: u64,
+}
+
+impl Route {
+    fn read(uc: &Unicorn<'_, ArmSide>) -> Result<Route, uc_error> {
+        // SCR_EL3 = S3_6_C1_C1_0, HCR_EL2 = S3_4_C1_C1_0.
+        let rd = |op1| {
+            let mut cp = RegisterARM64CP {
+                crn: 1,
+                crm: 1,
+                op0: 3,
+                op1,
+                op2: 0,
+                val: 0,
+            };
+            uc.reg_read_arm64_coproc(&mut cp).map(|()| cp.val)
+        };
+        Ok(Route {
+            scr: rd(6)?,
+            hcr: rd(4)?,
+        })
+    }
+
+    /// The EL an IRQ (or FIQ) is taken to from a core in `pstate`, or `None`
+    /// if it stays pending there (ARM ARM D1.13.4). `SCR_EL3.IRQ` sends it to
+    /// EL3; from non-secure EL0/EL1, `HCR_EL2.IMO` or `TGE` send it to EL2;
+    /// otherwise it goes to the current EL, but never below EL1. Only an
+    /// interrupt to the current EL is masked by `PSTATE.I`; one to a higher EL
+    /// is taken regardless, and one to a lower EL waits.
+    fn target(&self, pstate: u64, fiq: bool) -> Option<u32> {
+        let el = ((pstate >> 2) & 3) as u32;
+        let (scr_bit, hcr_bit, mask) = if fiq {
+            (SCR_FIQ, HCR_FMO, PSTATE_F)
+        } else {
+            (SCR_IRQ, HCR_IMO, PSTATE_I)
+        };
+        let to = if self.scr & scr_bit != 0 {
+            3
+        } else if el < 2 && self.scr & SCR_NS != 0 && self.hcr & (hcr_bit | HCR_TGE) != 0 {
+            2
+        } else {
+            el.max(1)
+        };
+        match to.cmp(&el) {
+            std::cmp::Ordering::Less => None,
+            std::cmp::Ordering::Equal => (pstate & mask == 0).then_some(to),
+            std::cmp::Ordering::Greater => Some(to),
+        }
+    }
+}
+
 /// Everything the ARM's callbacks reach: the VPU model and its bus, and the
 /// devices only the ARM sees. It is Unicorn's user data, so `mmio_map` and hook
 /// callbacks get it as `uc.get_data_mut()`.
@@ -322,6 +528,18 @@ pub struct ArmSide {
     pub emu: Emulator,
     pub gic: Gic,
     pub local: ArmLocal,
+    pub timer: GenericTimer,
+    /// The modelled clock: instructions executed plus cycles slept in `wfi`
+    /// (module docs, "Time and scheduling").
+    pub cycles: u64,
+    /// The part of [`Self::cycles`] slept in `wfi`.
+    pub slept: u64,
+    /// `wfi`s the core halted in.
+    pub wfis: u64,
+    /// Interrupts taken, by INTID.
+    pub irqs: BTreeMap<u32, u64>,
+    /// Generic-timer register accesses answered by [`on_mrs`] / [`on_msr`].
+    pub timer_accesses: u64,
     /// The A72's IMPLEMENTATION DEFINED system registers Unicorn lacks
     /// (`op0 = 3`, `CRn` 11 or 15), as plain storage keyed by encoding. Reset
     /// values are not modelled: the armstub writes the two it touches before
@@ -329,8 +547,21 @@ pub struct ArmSide {
     pub impdef: BTreeMap<String, u64>,
     pub mmio_faults: Vec<String>,
     pub recent_mmio: VecDeque<MmioAccess>,
-    pub exceptions: Vec<ExceptionTaken>,
+    pub first_exceptions: Vec<ExceptionTaken>,
+    pub recent_exceptions: VecDeque<ExceptionTaken>,
     pub exceptions_taken: u64,
+    /// What the GIC is signalling to CPU 0, refreshed whenever something that
+    /// can change it happens (a line moves, a GIC register is touched), and
+    /// the routing that decides whether the core takes it.
+    signal: Option<Signal>,
+    route: Route,
+    /// The levels last driven onto the four timer PPIs ([`Which::ALL`] order)
+    /// and the mailbox SPI.
+    lines: [bool; 5],
+    /// [`on_block`] stops the slice at the first block that starts at or
+    /// after this cycle.
+    stop_at: u64,
+    hit_stop: bool,
     stop: Option<ArmStop>,
     unmapped: Option<(MemType, u64, usize)>,
 }
@@ -346,6 +577,36 @@ impl ArmSide {
             value,
             write,
         });
+    }
+
+    fn record_exception(&mut self, e: ExceptionTaken) {
+        self.exceptions_taken += 1;
+        if self.first_exceptions.len() < FIRST_EXCEPTIONS {
+            self.first_exceptions.push(e.clone());
+        }
+        if self.recent_exceptions.len() == RECENT_EXCEPTIONS {
+            self.recent_exceptions.pop_front();
+        }
+        self.recent_exceptions.push_back(e);
+    }
+
+    /// Drive every interrupt line the ARM sees from its source's current
+    /// state — the four generic timers at [`Self::cycles`], the mailbox — and
+    /// refresh what the GIC signals.
+    fn sync_lines(&mut self) {
+        for (i, &w) in Which::ALL.iter().enumerate() {
+            let level = self.timer.line(w, self.cycles);
+            if level != self.lines[i] {
+                self.lines[i] = level;
+                self.gic.set_ppi_level(0, w.intid(), level);
+            }
+        }
+        let level = self.emu.machine.mbox.arm_irq_asserted();
+        if level != self.lines[4] {
+            self.lines[4] = level;
+            self.gic.set_spi_level(gic::ID_MAILBOX, level);
+        }
+        self.signal = self.gic.signal(0);
     }
 
     /// Log an access and hand back what the guest sees: the value read, or
@@ -412,12 +673,14 @@ fn current_el(uc: &Unicorn<'_, ArmSide>) -> u32 {
 
 /// Enter an exception at `to_el` the way the hardware would (ARM ARM D1.10.2):
 /// save `PSTATE` to `SPSR_ELx` and the return address to `ELR_ELx`, record the
-/// syndrome in `ESR_ELx`, switch to ELxh with `DAIF` masked, and branch to the
-/// vector. Returns the vector address.
+/// syndrome in `ESR_ELx` (synchronous exceptions only), switch to ELxh with
+/// `DAIF` masked, and branch to the vector — `kind` is [`VECTOR_SYNC`],
+/// [`VECTOR_IRQ`] or [`VECTOR_FIQ`]. Returns the vector address.
 fn take_exception(
     uc: &mut Unicorn<'_, ArmSide>,
     to_el: u32,
-    esr: u64,
+    kind: u64,
+    esr: Option<u64>,
     ret: u64,
 ) -> Result<u64, uc_error> {
     use RegisterARM64 as R;
@@ -434,15 +697,17 @@ fn take_exception(
     uc.reg_write(banks[if spsel { from_el } else { 0 }], sp)?;
 
     let vbar = uc.reg_read([R::VBAR_EL0, R::VBAR_EL1, R::VBAR_EL2, R::VBAR_EL3][t])?;
-    // Synchronous exception: +0x000 current EL with SP_EL0, +0x200 current EL
+    // The group of four: +0x000 current EL with SP_EL0, +0x200 current EL
     // with SP_ELx, +0x400 lower EL using AArch64 (everything here is AArch64).
-    let offset = match (t == from_el, spsel) {
+    let group = match (t == from_el, spsel) {
         (true, false) => 0x000,
         (true, true) => 0x200,
         (false, _) => 0x400,
     };
     uc.reg_write([R::ELR_EL0, R::ELR_EL1, R::ELR_EL2, R::ELR_EL3][t], ret)?;
-    uc.reg_write([R::ESR_EL0, R::ESR_EL1, R::ESR_EL2, R::ESR_EL3][t], esr)?;
+    if let Some(esr) = esr {
+        uc.reg_write([R::ESR_EL0, R::ESR_EL1, R::ESR_EL2, R::ESR_EL3][t], esr)?;
+    }
     uc.reg_write(R::PSTATE, PSTATE_DAIF | pstate_elh(to_el))?;
     // SPSR_ELx has no Unicorn register id: through the coprocessor interface
     // (`S3_<0|4|6>_C4_C0_0`), which also rebuilds `hflags` for the new EL.
@@ -456,9 +721,42 @@ fn take_exception(
     })?;
     let new_sp = uc.reg_read(banks[t])?;
     uc.reg_write(R::SP, new_sp)?;
-    let vector = vbar + offset;
+    let vector = vbar + group + kind;
     uc.set_pc(vector)?;
     Ok(vector)
+}
+
+/// Take the interrupt the GIC is signalling, if the core would take it now.
+/// Returns its INTID. The preferred return address of an interrupt is the
+/// next instruction to execute — the current `PC`, which for a core halted in
+/// `wfi` is the instruction after it.
+fn take_interrupt(uc: &mut Unicorn<'_, ArmSide>) -> Result<Option<u32>, uc_error> {
+    let (signal, route) = {
+        let side = uc.get_data();
+        (side.signal, side.route)
+    };
+    let Some(sig) = signal else { return Ok(None) };
+    let pstate = uc.reg_read(RegisterARM64::PSTATE)?;
+    let Some(to_el) = route.target(pstate, sig.fiq) else {
+        return Ok(None);
+    };
+    let pc = uc.pc_read()?;
+    let kind = if sig.fiq { VECTOR_FIQ } else { VECTOR_IRQ };
+    let vector = take_exception(uc, to_el, kind, None, pc)?;
+    let side = uc.get_data_mut();
+    *side.irqs.entry(sig.intid).or_default() += 1;
+    let cycle = side.cycles;
+    side.record_exception(ExceptionTaken {
+        kind: if sig.fiq { "fiq" } else { "irq" },
+        pc,
+        from_el: ((pstate >> 2) & 3) as u32,
+        to_el,
+        esr: 0,
+        intid: Some(sig.intid),
+        vector,
+        cycle,
+    });
+    Ok(Some(sig.intid))
 }
 
 /// A decoded `MRS`/`MSR` (register) instruction.
@@ -561,19 +859,19 @@ fn handle_exception(uc: &mut Unicorn<'_, ArmSide>, intno: u32) -> Result<(), Arm
         // QEMU's `env->exception`, which Unicorn does not expose.
         _ => return Err(unhandled()),
     };
-    let vector = take_exception(uc, to_el, esr, pc).map_err(engine)?;
+    let vector = take_exception(uc, to_el, VECTOR_SYNC, Some(esr), pc).map_err(engine)?;
     let side = uc.get_data_mut();
-    side.exceptions_taken += 1;
-    if side.exceptions.len() < 64 {
-        side.exceptions.push(ExceptionTaken {
-            kind,
-            pc,
-            from_el: el,
-            to_el,
-            esr,
-            vector,
-        });
-    }
+    let cycle = side.cycles;
+    side.record_exception(ExceptionTaken {
+        kind,
+        pc,
+        from_el: el,
+        to_el,
+        esr,
+        intid: None,
+        vector,
+        cycle,
+    });
     Ok(())
 }
 
@@ -600,6 +898,79 @@ fn emulate_impdef(uc: &mut Unicorn<'_, ArmSide>, m: SysregMove, pc: u64) -> Resu
         uc.get_data_mut().impdef.insert(m.name(), v);
     }
     uc.set_pc(pc + 4)
+}
+
+/// The [`ArmSide`] behind a raw hook's `user_data`.
+///
+/// # Safety
+///
+/// `data` must be the pointer [`ArmCore::new`] registered: the `ArmSide`
+/// inside the `Unicorn` that is calling the hook. That `ArmSide` lives in the
+/// `Unicorn`'s heap-allocated inner state for as long as the hooks can fire
+/// (they die with `uc_close`), and while the guest runs no other reference to
+/// it is live — the crate's own hook trampolines take theirs the same way,
+/// one callback at a time.
+unsafe fn side_of<'a>(data: *mut c_void) -> &'a mut ArmSide {
+    unsafe { &mut *data.cast::<ArmSide>() }
+}
+
+/// `MRS` hook: a generic-timer register is read from [`GenericTimer`] at the
+/// current cycle and the access skipped; anything else is let through.
+extern "C" fn on_mrs(uc: *mut c_void, rt: i32, cp: *const ffi::CpReg, data: *mut c_void) -> u32 {
+    // SAFETY: Unicorn passes a valid `uc_arm64_cp_reg` for the duration of
+    // the call (`HELPER(uc_hooksys64)`), and `data` is ours (`side_of`).
+    let cp = unsafe { &*cp };
+    let Some(reg) = gentimer::Reg::decode(cp.op0, cp.op1, cp.crn, cp.crm, cp.op2) else {
+        return 0;
+    };
+    let side = unsafe { side_of(data) };
+    side.timer_accesses += 1;
+    let v = side.timer.read(reg, side.cycles);
+    if rt != ffi::UC_ARM64_REG_XZR {
+        // SAFETY: `uc` is the engine calling us; `v` outlives the call.
+        // Writing an X register from a hook is what the hook API is for — the
+        // helper call makes TCG reload its register globals afterwards.
+        unsafe { ffi::uc_reg_write(uc, rt, (&raw const v).cast()) };
+    }
+    1
+}
+
+/// `MSR` hook: a generic-timer register is written to [`GenericTimer`], the
+/// interrupt lines follow at once, and the access is skipped; anything else
+/// is let through to QEMU.
+extern "C" fn on_msr(_uc: *mut c_void, _rt: i32, cp: *const ffi::CpReg, data: *mut c_void) -> u32 {
+    // SAFETY: as in `on_mrs`. `val` is `Rt`'s value (zero for XZR).
+    let cp = unsafe { &*cp };
+    let Some(reg) = gentimer::Reg::decode(cp.op0, cp.op1, cp.crn, cp.crm, cp.op2) else {
+        return 0;
+    };
+    let side = unsafe { side_of(data) };
+    side.timer_accesses += 1;
+    side.timer.write(reg, side.cycles, cp.val);
+    side.sync_lines();
+    1
+}
+
+/// `UC_HOOK_BLOCK`: count the block's instructions onto the clock, or stop
+/// before it — at [`ArmSide::stop_at`], or as soon as the core would take the
+/// interrupt the GIC is signalling (module docs).
+fn on_block(uc: &mut Unicorn<'_, ArmSide>, _addr: u64, size: u32) {
+    let (due, signal, route) = {
+        let side = uc.get_data();
+        (side.cycles >= side.stop_at, side.signal, side.route)
+    };
+    let takeable = !due
+        && signal.is_some_and(|s| {
+            uc.reg_read(RegisterARM64::PSTATE)
+                .is_ok_and(|p| route.target(p, s.fiq).is_some())
+        });
+    let side = uc.get_data_mut();
+    if due || takeable {
+        side.hit_stop = true;
+        let _ = uc.emu_stop();
+    } else {
+        side.cycles += u64::from(size / 4);
+    }
 }
 
 /// One access of `size` bytes to a device on a 32-bit bus; `op(delta, width,
@@ -641,6 +1012,10 @@ fn periph(uc: &mut Unicorn<'_, ArmSide>, off: u64, size: usize, write: Option<u6
     } else {
         Err("no device decodes this bus address".to_string())
     };
+    // Reading MAIL0 or writing its CONFIG moves the ARM's mailbox interrupt.
+    if (mbox::BASE..mbox::BASE + mbox::SIZE).contains(&bus) {
+        side.sync_lines();
+    }
     side.finish(PERIPH_ARM + off, size, write, r)
 }
 
@@ -664,16 +1039,23 @@ fn local(uc: &mut Unicorn<'_, ArmSide>, off: u64, size: usize, write: Option<u64
     let side = uc.get_data_mut();
     let r = if off < u64::from(armlocal::SIZE) {
         let (dev, o) = (&mut side.local, off as u32);
-        access32(size, write, |d, w, store| match store {
+        let r = access32(size, write, |d, w, store| match store {
             Some(v) => dev.write(o + d, w, v).map(|()| 0),
             None => dev.read(o + d, w),
-        })
+        });
+        // The prescaler sets the counter's rate.
+        let hz = side.local.counter_hz().unwrap_or(0);
+        side.timer.set_hz(side.cycles, hz);
+        r
     } else if (GIC_OFF..GIC_OFF + u64::from(gic::SIZE)).contains(&off) {
         let (g, o) = (&mut side.gic, (off - GIC_OFF) as u32);
-        access32(size, write, |d, w, store| match store {
+        let r = access32(size, write, |d, w, store| match store {
             Some(v) => g.write_as(acc, o + d, w, v).map(|()| 0),
             None => g.read_as(acc, o + d, w),
-        })
+        });
+        // Enables, priorities, IAR and EOI all change what it signals.
+        side.signal = side.gic.signal(0);
+        r
     } else {
         Err("nothing is modelled here in the ARM-local window".to_string())
     };
@@ -702,15 +1084,15 @@ fn on_unmapped(
 /// How [`ArmCore::run`] interleaves the two processors.
 #[derive(Debug, Clone, Copy)]
 pub struct Schedule {
-    /// ARM instructions per slice.
+    /// ARM cycles between the VPU's turns.
     pub arm_slice: usize,
-    /// VPU steps (both cores together) per slice.
+    /// VPU steps (both cores together) per turn.
     pub vpu_slice: u64,
 }
 
 impl Default for Schedule {
-    /// A million ARM instructions to twenty thousand VPU steps. The firmware
-    /// is parked in its ThreadX idle loop after `arm_loader` and only has to
+    /// A million ARM cycles to twenty thousand VPU steps. The firmware is
+    /// parked in its ThreadX idle loop after `arm_loader` and only has to
     /// notice a mailbox doorbell, while the kernel has all the work; and a VPU
     /// step costs the interpreter far more than an ARM instruction costs TCG.
     fn default() -> Self {
@@ -724,6 +1106,8 @@ impl Default for Schedule {
 /// When [`ArmCore::run`] gives up.
 #[derive(Debug, Clone)]
 pub struct ArmLimits {
+    /// ARM instructions executed (not slept). Deterministic, unlike the wall
+    /// clock: a run cut by this ends at the same point every time.
     pub max_insns: u64,
     pub max_wall: Duration,
     /// Echo the ARM's UART output to stderr as it is produced.
@@ -742,9 +1126,19 @@ pub enum ArmEnd {
 #[derive(Debug, Clone)]
 pub struct ArmReport {
     pub end: ArmEnd,
+    /// ARM instructions executed.
     pub insns: u64,
+    /// Modelled cycles that passed: `insns` plus `slept`.
+    pub cycles: u64,
+    pub slept: u64,
+    pub wfis: u64,
     pub vpu_steps: u64,
+    /// ARM runs between two points where an interrupt could be taken.
     pub slices: u64,
+    /// `CNTPCT` at the end.
+    pub counter: u64,
+    /// Interrupts taken, by INTID.
+    pub irqs: BTreeMap<u32, u64>,
     /// What the ARM wrote to the console UART.
     pub console: Vec<u8>,
     /// What the VPU wrote to it during its slices (it has handed the UART over
@@ -753,11 +1147,18 @@ pub struct ArmReport {
     pub wall: Duration,
 }
 
+/// Why a [`ArmCore::run_until`] returned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SliceEnd {
+    /// It reached its stop cycle, or an interrupt became takeable.
+    Stopped,
+    /// The core halted in `wfi`.
+    Wfi,
+}
+
 /// An aarch64 core sharing an [`Emulator`]'s RAM and bus.
 pub struct ArmCore {
     uc: Unicorn<'static, ArmSide>,
-    /// ARM instructions executed so far (slices that ran to their count).
-    pub insns: u64,
 }
 
 impl ArmCore {
@@ -769,11 +1170,23 @@ impl ArmCore {
             emu,
             gic: Gic::new(),
             local: ArmLocal::new(),
+            timer: GenericTimer::new(),
+            cycles: 0,
+            slept: 0,
+            wfis: 0,
+            irqs: BTreeMap::new(),
+            timer_accesses: 0,
             impdef: BTreeMap::new(),
             mmio_faults: Vec::new(),
             recent_mmio: VecDeque::new(),
-            exceptions: Vec::new(),
+            first_exceptions: Vec::new(),
+            recent_exceptions: VecDeque::new(),
             exceptions_taken: 0,
+            signal: None,
+            route: Route::default(),
+            lines: [false; 5],
+            stop_at: u64::MAX,
+            hit_stop: false,
             stop: None,
             unmapped: None,
         };
@@ -822,6 +1235,7 @@ impl ArmCore {
         uc.mmio_map(LOCAL_ARM, LOCAL_SIZE, Some(local_read), Some(local_write))
             .map_err(uce)?;
         uc.add_intr_hook(on_exception).map_err(uce)?;
+        uc.add_block_hook(1, 0, on_block).map_err(uce)?;
         uc.add_mem_hook(
             HookType::MEM_READ_UNMAPPED
                 | HookType::MEM_WRITE_UNMAPPED
@@ -831,7 +1245,36 @@ impl ArmCore {
             on_unmapped,
         )
         .map_err(uce)?;
-        Ok(ArmCore { uc, insns: 0 })
+
+        let handle = uc.get_handle().cast::<c_void>();
+        let data = std::ptr::from_mut(uc.get_data_mut()).cast::<c_void>();
+        let hooks: [(i32, ffi::SysHook); 2] = [
+            (ffi::UC_ARM64_INS_MRS, on_mrs),
+            (ffi::UC_ARM64_INS_MSR, on_msr),
+        ];
+        for (insn, callback) in hooks {
+            let mut hh = 0usize;
+            // SAFETY: `handle` is this live engine; `callback` has the C
+            // signature `uc_cb_insn_sys_t`; `data` stays valid for the hook's
+            // whole life (`side_of`). `begin > end` hooks every address, and
+            // the variadic argument is the `uc_arm64_insn` to hook.
+            let err = unsafe {
+                ffi::uc_hook_add(
+                    handle,
+                    &mut hh,
+                    ffi::UC_HOOK_INSN,
+                    callback as *mut c_void,
+                    data,
+                    1,
+                    0,
+                    insn,
+                )
+            };
+            if err != 0 {
+                return Err(format!("uc_hook_add(UC_HOOK_INSN, {insn}): error {err}"));
+            }
+        }
+        Ok(ArmCore { uc })
     }
 
     pub fn side(&mut self) -> &mut ArmSide {
@@ -844,6 +1287,12 @@ impl ArmCore {
 
     pub fn el(&self) -> u32 {
         current_el(&self.uc)
+    }
+
+    /// Instructions executed so far.
+    pub fn insns(&self) -> u64 {
+        let s = self.uc.get_data();
+        s.cycles - s.slept
     }
 
     /// General-purpose register `n` (0..=30), `SP` for 31.
@@ -864,6 +1313,17 @@ impl ArmCore {
         )
     }
 
+    /// `VBAR_EL1` — for Linux, the address of its `vectors`, which is what
+    /// the KASLR slide can be read off.
+    pub fn vbar_el1(&self) -> u64 {
+        self.uc.reg_read(RegisterARM64::VBAR_EL1).unwrap_or(0)
+    }
+
+    /// `PSTATE`, including `DAIF`.
+    pub fn pstate(&self) -> u64 {
+        self.uc.reg_read(RegisterARM64::PSTATE).unwrap_or(0)
+    }
+
     /// Release the core the way the SoC does: at physical 0, where
     /// `arm_loader` put the armstub, in EL3h with `DAIF` masked.
     pub fn reset(&mut self) -> Result<(), String> {
@@ -874,41 +1334,112 @@ impl ArmCore {
         self.uc.set_pc(0).map_err(uce)
     }
 
-    /// Run up to `count` ARM instructions.
-    pub fn run_slice(&mut self, count: usize) -> Result<(), ArmStop> {
-        let pc = self.pc();
-        let r = self.uc.emu_start(pc, u64::MAX, 0, count);
+    fn finish_run(&mut self, r: Result<(), uc_error>) -> Result<(), ArmStop> {
         if let Some(stop) = self.side().stop.take() {
             return Err(stop);
         }
-        match r {
-            Ok(()) => {
-                self.insns += count as u64;
-                Ok(())
+        r.map_err(|e| {
+            let unmapped = self.side().unmapped.take();
+            ArmStop::Engine {
+                error: uce(e),
+                pc: self.pc(),
+                unmapped,
             }
-            Err(e) => {
-                let unmapped = self.side().unmapped.take();
-                Err(ArmStop::Engine {
-                    error: uce(e),
-                    pc: self.pc(),
-                    unmapped,
-                })
-            }
+        })
+    }
+
+    /// Run exactly `count` ARM instructions (Unicorn's own instruction
+    /// count), taking no interrupts. For tests that step through a program.
+    pub fn run_slice(&mut self, count: usize) -> Result<(), ArmStop> {
+        self.side().stop_at = u64::MAX;
+        let pc = self.pc();
+        let r = self.uc.emu_start(pc, u64::MAX, 0, count);
+        self.finish_run(r)
+    }
+
+    /// Run until the first block that starts at or after cycle `stop_at`, an
+    /// interrupt becoming takeable, a `wfi`, or a stop.
+    fn run_until(&mut self, stop_at: u64) -> Result<SliceEnd, ArmStop> {
+        let side = self.side();
+        // Never a stop point already behind us: that would stop before the
+        // first block, with no progress.
+        side.stop_at = stop_at.max(side.cycles + 1);
+        side.hit_stop = false;
+        let pc = self.pc();
+        let r = self.uc.emu_start(pc, u64::MAX, 0, 0);
+        self.finish_run(r)?;
+        // Nothing else ends an `emu_start` with no count, no timeout and an
+        // unreachable `until`: no stop was requested, so QEMU halted in `wfi`
+        // (`helper_wfi`, with `PC` already past it).
+        if self.side().hit_stop {
+            Ok(SliceEnd::Stopped)
+        } else {
+            debug_assert_eq!(fetch_insn(&self.uc, self.pc() - 4), Some(INSN_WFI));
+            Ok(SliceEnd::Wfi)
         }
     }
 
-    /// Alternate ARM and VPU slices until the ARM stops or a limit is hit.
+    /// Bring the interrupt state up to date — the counter's rate, every line,
+    /// the routing — and take whatever the core would take now.
+    fn poll_interrupts(&mut self) -> Result<Option<u32>, uc_error> {
+        let route = Route::read(&self.uc)?;
+        let side = self.side();
+        side.route = route;
+        side.sync_lines();
+        take_interrupt(&mut self.uc)
+    }
+
+    /// The core is halted in `wfi`: move the clock to the next thing that can
+    /// wake it — a timer compare, or `until` (the VPU's turn: the mailbox is
+    /// the other interrupt source) — unless an interrupt is already pending,
+    /// which wakes it at once.
+    fn sleep(&mut self, until: u64) {
+        let side = self.side();
+        side.wfis += 1;
+        side.sync_lines();
+        if side.signal.is_some() {
+            return;
+        }
+        let wake = side
+            .timer
+            .next_event(side.cycles)
+            .unwrap_or(u64::MAX)
+            .min(until);
+        if wake > side.cycles {
+            side.slept += wake - side.cycles;
+            side.cycles = wake;
+        }
+    }
+
+    /// Alternate ARM and VPU until the ARM stops or a limit is hit.
     pub fn run(&mut self, sched: Schedule, lim: &ArmLimits) -> ArmReport {
         let start = Instant::now();
-        let insns0 = self.insns;
+        let insns0 = self.insns();
+        let (cycles0, slept0, wfis0) = {
+            let s = self.side();
+            (s.cycles, s.slept, s.wfis)
+        };
         let vpu_retired = |e: &Emulator| e.cpu.retired + e.cpu1.as_ref().map_or(0, |c| c.retired);
         let vpu0 = vpu_retired(&self.side().emu);
+        let quantum = sched.arm_slice as u64;
+        let mut vpu_due = cycles0 + quantum;
         let mut console = Vec::new();
         let mut vpu_console = Vec::new();
         let mut slices = 0u64;
         let end = loop {
+            if let Err(e) = self.poll_interrupts() {
+                break ArmEnd::Stopped(ArmStop::Engine {
+                    error: uce(e),
+                    pc: self.pc(),
+                    unmapped: None,
+                });
+            }
+            let next = {
+                let s = self.side();
+                s.timer.next_event(s.cycles).unwrap_or(u64::MAX)
+            };
             slices += 1;
-            let r = self.run_slice(sched.arm_slice);
+            let r = self.run_until(vpu_due.min(next));
             // Drain before the VPU slice runs: `Emulator::run` drains the same
             // UART into its own report.
             let out = self.side().emu.machine.take_console_output();
@@ -916,26 +1447,37 @@ impl ArmCore {
                 let _ = std::io::stderr().write_all(&out);
             }
             console.extend_from_slice(&out);
-            if let Err(stop) = r {
-                break ArmEnd::Stopped(stop);
+            match r {
+                Err(stop) => break ArmEnd::Stopped(stop),
+                Ok(SliceEnd::Wfi) => self.sleep(vpu_due),
+                Ok(SliceEnd::Stopped) => {}
             }
 
-            let emu = &mut self.side().emu;
-            let vl = RunLimits {
-                max_steps: Some(vpu_retired(emu) + sched.vpu_slice),
-                max_wall: None,
-                stop_pc: None,
-                // The firmware is in its idle loop by design now: neither the
-                // spin detector nor the silence watchdog means anything.
-                idle_spin_limit: 0,
-                silent_us: 0,
-            };
-            let rep = emu.run(&vl);
-            vpu_console.extend_from_slice(&rep.console);
-            if rep.end != RunEnd::StepLimit {
-                break ArmEnd::VpuStopped(rep.end);
+            let mut vpu_end = None;
+            while self.side().cycles >= vpu_due {
+                let emu = &mut self.side().emu;
+                let vl = RunLimits {
+                    max_steps: Some(vpu_retired(emu) + sched.vpu_slice),
+                    max_wall: None,
+                    stop_pc: None,
+                    // The firmware is in its idle loop by design now: neither
+                    // the spin detector nor the silence watchdog means
+                    // anything.
+                    idle_spin_limit: 0,
+                    silent_us: 0,
+                };
+                let rep = emu.run(&vl);
+                vpu_console.extend_from_slice(&rep.console);
+                if rep.end != RunEnd::StepLimit {
+                    vpu_end = Some(rep.end);
+                    break;
+                }
+                vpu_due += quantum;
             }
-            if self.insns - insns0 >= lim.max_insns {
+            if let Some(e) = vpu_end {
+                break ArmEnd::VpuStopped(e);
+            }
+            if self.insns() - insns0 >= lim.max_insns {
                 break ArmEnd::InsnLimit;
             }
             if start.elapsed() >= lim.max_wall {
@@ -943,11 +1485,18 @@ impl ArmCore {
             }
         };
         let vpu_steps = vpu_retired(&self.side().emu) - vpu0;
+        let insns = self.insns() - insns0;
+        let s = self.side();
         ArmReport {
             end,
-            insns: self.insns - insns0,
+            insns,
+            cycles: s.cycles - cycles0,
+            slept: s.slept - slept0,
+            wfis: s.wfis - wfis0,
             vpu_steps,
             slices,
+            counter: s.timer.count(s.cycles),
+            irqs: s.irqs.clone(),
             console,
             vpu_console,
             wall: start.elapsed(),
@@ -1083,18 +1632,232 @@ mod tests {
         assert_eq!(core.side().exceptions_taken, 1);
     }
 
+    /// The Rust binding's MRS/MSR hook returns `bool` where C expects
+    /// `uint32_t` (module docs); through our own registration, an access the
+    /// hook lets through must land, and the instructions after a skipped one
+    /// must run normally.
     #[test]
-    fn earlycon_goes_onto_the_command_line_in_place() {
+    fn the_sysreg_hook_lets_other_registers_through_and_answers_the_timer() {
+        let mut core = core_with(&[(
+            0,
+            &[
+                0xd29f_3000, // mov  x0, #0xf980
+                0xf2a0_66e0, // movk x0, #0x337, lsl #16   -> 54_000_000
+                0xd51b_e000, // msr  cntfrq_el0, x0        let through to QEMU
+                0xd53b_e001, // mrs  x1, cntfrq_el0        let through
+                0xd53b_e022, // mrs  x2, cntpct_el0        answered here
+                0xd280_00a3, // mov  x3, #5                runs after a skipped MRS
+                0xd280_0024, // mov  x4, #1
+                0xd51b_e224, // msr  cntp_ctl_el0, x4      answered here
+                0xd53b_e225, // mrs  x5, cntp_ctl_el0
+                0xd280_00e6, // mov  x6, #7
+            ],
+        )]);
+        core.side().timer.set_hz(0, armlocal::CRYSTAL_HZ);
+        core.run_slice(10).unwrap();
+        assert_eq!(core.x(1), 54_000_000, "the MSR passed through landed");
+        assert_eq!(core.x(3), 5);
+        assert_eq!(core.x(6), 7);
+        // Enabled, compare 0 already met: ISTATUS.
+        assert_eq!(core.x(5), 0b101);
+        assert_eq!(core.side().timer_accesses, 3);
+        assert_eq!(core.pc(), 40);
+    }
+
+    /// Drop from EL3 to EL1h non-secure with IRQs unmasked, at `0x40`, with
+    /// `VBAR_EL1 = 0x2000` — the shape Linux runs in (its IRQs are routed to
+    /// EL1: the hyp stub leaves `HCR_EL2.IMO` clear).
+    const TO_EL1: [u32; 12] = [
+        0xd280_b620, // mov  x0, #0x5b1
+        0xd51e_1100, // msr  scr_el3, x0        NS | HCE | RW | SMD
+        0xd284_0000, // mov  x0, #0x2000
+        0xd518_c000, // msr  vbar_el1, x0
+        0xd2b0_0000, // mov  x0, #0x80000000
+        0xd51c_1100, // msr  hcr_el2, x0        RW
+        0xd280_00a0, // mov  x0, #0x5           EL1h, DAIF clear
+        0xd51e_4000, // msr  spsr_el3, x0
+        0x1000_0100, // 0x20: adr x0, 0x40
+        0xd51e_4020, // msr  elr_el3, x0
+        0xd69f_03e0, // eret
+        0xd503_201f, // nop
+    ];
+
+    /// VBAR_EL1 + 0x280: IRQ, current EL with SP_ELx.
+    const IRQ_HANDLER: (u32, &[u32]) = (
+        0x2280,
+        &[
+            0xd538_4247, // mrs  x7, CurrentEL
+            0xd538_4028, // mrs  x8, elr_el1
+            0xd538_4009, // mrs  x9, spsr_el1
+            0x1400_0000, // b .
+        ],
+    );
+
+    /// The GIC as the armstub (secure) leaves it plus the NS timer PPI
+    /// enabled, and the counter at 54 MHz with CNTP firing at `cval`.
+    fn arm_timer(core: &mut ArmCore, cval: u64) {
+        let s = Accessor {
+            cpu: 0,
+            secure: true,
+        };
+        let side = core.side();
+        for (off, v) in [
+            (0x1000, 3),                          // GICD_CTLR
+            (0x1080, !0),                         // GICD_IGROUPR0: group 1
+            (0x1100, 1 << gic::ID_NS_PHYS_TIMER), // GICD_ISENABLER0
+            (0x2000, 0x1e7),                      // GICC_CTLR
+            (0x2004, 0xff),                       // GICC_PMR
+        ] {
+            side.gic.write_as(s, off, Width::Word, v).unwrap();
+        }
+        side.timer.set_hz(0, armlocal::CRYSTAL_HZ);
+        let t = gentimer::Reg::decode(3, 3, 14, 2, 2).unwrap(); // CNTP_CVAL_EL0
+        side.timer.write(t, 0, cval);
+        let c = gentimer::Reg::decode(3, 3, 14, 2, 1).unwrap(); // CNTP_CTL_EL0
+        side.timer.write(c, 0, 1);
+    }
+
+    #[test]
+    fn a_timer_interrupt_stops_the_slice_at_its_deadline_and_is_taken_at_el1() {
+        let mut prog = TO_EL1.to_vec();
+        prog.push(0x1400_0000); // 0x30: b .   (never reached: eret goes to 0x40)
+        let mut core = core_with(&[
+            (0, &prog),
+            (0x40, &[0x1400_0000]), // b .
+            IRQ_HANDLER,
+        ]);
+        arm_timer(&mut core, 540); // 10 µs = 15_000 cycles
+        core.run_slice(11).unwrap();
+        assert_eq!((core.pc(), core.el()), (0x40, 1));
+
+        assert_eq!(core.poll_interrupts().unwrap(), None);
+        let due = {
+            let s = core.side();
+            s.timer.next_event(s.cycles).unwrap()
+        };
+        assert_eq!(core.run_until(due).unwrap(), SliceEnd::Stopped);
+        // `b .` is a one-instruction block: the stop lands on the deadline.
+        assert_eq!(core.side().cycles, due);
+        assert_eq!(core.poll_interrupts().unwrap(), Some(gic::ID_NS_PHYS_TIMER));
+        assert_eq!(core.pc(), 0x2280);
+
+        core.run_until(due + 10).unwrap();
+        assert_eq!(core.x(7), 0x4, "handler runs at EL1");
+        assert_eq!(core.x(8), 0x40, "ELR: where the loop was");
+        assert_eq!(core.x(9), 0x5, "SPSR: EL1h, IRQs unmasked");
+        assert_eq!(core.side().irqs.get(&gic::ID_NS_PHYS_TIMER), Some(&1));
+        // The handler has not read GICC_IAR, so the GIC still signals, but
+        // PSTATE.I is set now: it is not entered twice.
+        assert!(core.side().signal.is_some());
+        assert_eq!(core.poll_interrupts().unwrap(), None);
+    }
+
+    #[test]
+    fn wfi_sleeps_to_the_next_timer_compare_and_wakes_into_the_irq() {
+        let mut core = core_with(&[
+            (0, &TO_EL1),
+            (0x40, &[0xd503_207f, 0x17ff_ffff]), // wfi; b .-4
+            IRQ_HANDLER,
+        ]);
+        arm_timer(&mut core, 54_000); // 1 ms
+        core.run_slice(11).unwrap();
+        assert_eq!(core.poll_interrupts().unwrap(), None);
+        assert_eq!(core.run_until(u64::MAX).unwrap(), SliceEnd::Wfi);
+        assert_eq!(core.pc(), 0x44, "halted after the wfi");
+        let before = core.side().cycles;
+        core.sleep(u64::MAX);
+        let s = core.side();
+        assert_eq!(
+            s.timer.count(s.cycles),
+            54_000,
+            "woke exactly at the compare"
+        );
+        assert_eq!(s.slept, s.cycles - before);
+        assert_eq!(core.poll_interrupts().unwrap(), Some(gic::ID_NS_PHYS_TIMER));
+        let now = core.side().cycles;
+        core.run_until(now + 10).unwrap();
+        assert_eq!(core.x(8), 0x44, "ELR: the instruction after the wfi");
+
+        // A `wfi` with an interrupt already pending does not sleep.
+        let c = core.side().cycles;
+        core.sleep(u64::MAX);
+        assert_eq!(core.side().cycles, c);
+    }
+
+    #[test]
+    fn a_masked_interrupt_is_taken_right_after_the_unmask() {
+        let mut core = core_with(&[
+            (0, &TO_EL1),
+            (
+                0x40,
+                &[
+                    0xd503_42df, // msr  daifset, #2
+                    0xd503_201f, // 0x44: nop            <- the timer fires while masked
+                    0xd503_201f, // nop
+                    0xd503_42ff, // 0x4c: msr daifclr, #2
+                    0xd503_201f, // 0x50: nop            <- taken here
+                    0x17ff_fffb, // b 0x40
+                ],
+            ),
+            IRQ_HANDLER,
+        ]);
+        // Due within the first pass, while masked.
+        arm_timer(&mut core, 0);
+        core.run_slice(11).unwrap();
+        core.run_slice(1).unwrap(); // msr daifset
+        assert_eq!(core.poll_interrupts().unwrap(), None, "masked");
+        assert!(core.side().signal.is_some());
+        assert_eq!(core.run_until(u64::MAX).unwrap(), SliceEnd::Stopped);
+        assert_eq!(core.pc(), 0x50, "stopped at the block after the unmask");
+        assert_eq!(core.poll_interrupts().unwrap(), Some(gic::ID_NS_PHYS_TIMER));
+        let now = core.side().cycles;
+        core.run_until(now + 10).unwrap();
+        assert_eq!(core.x(8), 0x50);
+    }
+
+    #[test]
+    fn routing_follows_scr_and_hcr() {
+        let el = |el: u64, masked: bool| (el << 2) | 1 | if masked { PSTATE_I } else { 0 };
+        let linux = Route {
+            scr: 0x5b1,
+            hcr: 1 << 31,
+        };
+        assert_eq!(linux.target(el(1, false), false), Some(1));
+        assert_eq!(linux.target(el(1, true), false), None);
+        // Without IMO an IRQ goes to the current EL, EL2 included.
+        assert_eq!(linux.target(el(2, false), false), Some(2));
+        let kvm = Route {
+            scr: 0x5b1,
+            hcr: HCR_IMO,
+        };
+        assert_eq!(
+            kvm.target(el(1, true), false),
+            Some(2),
+            "not maskable from below"
+        );
+        let secure_irq = Route {
+            scr: SCR_IRQ,
+            hcr: 0,
+        };
+        assert_eq!(secure_irq.target(el(3, false), false), Some(3));
+        assert_eq!(secure_irq.target(el(3, true), false), None);
+    }
+
+    #[test]
+    fn bootargs_go_onto_the_command_line_in_place() {
         let mut m = Machine::new(RAM);
         let blob = crate::fdt::tests::sample();
         m.ram.write_slice(0x8000, &blob).unwrap();
-        let (old, new) = add_earlycon(&mut m, 0x8000).unwrap();
-        assert_eq!((old.as_str(), new.as_str()), ("hi", "earlycon hi"));
+        let (old, new) = add_bootargs(&mut m, 0x8000, &BOOTARGS).unwrap();
+        assert_eq!(old, "hi");
+        assert_eq!(new, "earlycon keep_bootcon kvm-arm.mode=none hi");
         let back = read_dtb(&m, 0x8000).unwrap();
         let props = Fdt::parse(&back).unwrap().properties_of("/chosen").unwrap();
-        assert_eq!(props[0].as_str().as_deref(), Some("earlycon hi"));
-        // Idempotent.
-        assert_eq!(add_earlycon(&mut m, 0x8000).unwrap().0, "earlycon hi");
+        assert_eq!(props[0].as_str().as_deref(), Some(new.as_str()));
+        // Idempotent, and an argument already there by name is not repeated.
+        assert_eq!(add_bootargs(&mut m, 0x8000, &BOOTARGS).unwrap().0, new);
+        let (_, again) = add_bootargs(&mut m, 0x8000, &["kvm-arm.mode=protected"]).unwrap();
+        assert_eq!(again, new);
 
         // Something right after the blob: refuse rather than overwrite it.
         let mut m = Machine::new(RAM);
@@ -1102,6 +1865,6 @@ mod tests {
         m.ram
             .store(0x8000 + blob.len() as u32 + 2, Width::Byte, 0xAA)
             .unwrap();
-        assert!(add_earlycon(&mut m, 0x8000).is_err());
+        assert!(add_bootargs(&mut m, 0x8000, &BOOTARGS).is_err());
     }
 }
