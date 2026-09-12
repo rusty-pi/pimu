@@ -18,12 +18,12 @@ pub(super) enum Stop {
     Unimplemented,
 }
 
-type Exec = Result<(), Stop>;
+pub(super) type Exec = Result<(), Stop>;
 
-const UNDEF: Stop = Stop::Exception(Exception::Undefined);
+pub(super) const UNDEF: Stop = Stop::Exception(Exception::Undefined);
 
 #[inline]
-fn undef() -> Exec {
+pub(super) fn undef() -> Exec {
     Err(UNDEF)
 }
 
@@ -37,12 +37,12 @@ impl From<Abort> for Stop {
 }
 
 #[inline]
-fn bit(insn: u32, n: u32) -> bool {
+pub(super) fn bit(insn: u32, n: u32) -> bool {
     (insn >> n) & 1 != 0
 }
 
 #[inline]
-fn field(insn: u32, lo: u32, len: u32) -> u32 {
+pub(super) fn field(insn: u32, lo: u32, len: u32) -> u32 {
     (insn >> lo) & ((1 << len) - 1)
 }
 
@@ -243,7 +243,7 @@ fn crc32(mut acc: u32, val: u64, bytes: u32, castagnoli: bool) -> u32 {
 impl Cpu {
     /// Read general register `r` with 31 = XZR, truncated to the operand size.
     #[inline]
-    fn xr(&self, r: u32, sf: bool) -> u64 {
+    pub(super) fn xr(&self, r: u32, sf: bool) -> u64 {
         if r == 31 {
             0
         } else {
@@ -253,7 +253,7 @@ impl Cpu {
 
     /// Read general register `r` with 31 = SP.
     #[inline]
-    fn xsp(&self, r: u32) -> u64 {
+    pub(super) fn xsp(&self, r: u32) -> u64 {
         if r == 31 {
             self.sp()
         } else {
@@ -264,7 +264,7 @@ impl Cpu {
     /// Write general register `r` with 31 = XZR; a 32-bit write zeroes the
     /// top half.
     #[inline]
-    fn set_xr(&mut self, r: u32, sf: bool, v: u64) {
+    pub(super) fn set_xr(&mut self, r: u32, sf: bool, v: u64) {
         if r != 31 {
             self.x[r as usize] = mask(v, sf);
         }
@@ -272,7 +272,7 @@ impl Cpu {
 
     /// Write general register `r` with 31 = SP.
     #[inline]
-    fn set_xsp(&mut self, r: u32, sf: bool, v: u64) {
+    pub(super) fn set_xsp(&mut self, r: u32, sf: bool, v: u64) {
         if r == 31 {
             self.set_sp(mask(v, sf));
         } else {
@@ -319,7 +319,7 @@ pub(super) fn execute(cpu: &mut Cpu, insn: u32, mem: &mut dyn Memory) -> Exec {
         0b1010 | 0b1011 => branch_sys(cpu, insn, mem),
         0b0100 | 0b0110 | 0b1100 | 0b1110 => ldst(cpu, insn, mem),
         0b0101 | 0b1101 => dp_reg(cpu, insn),
-        0b0111 | 0b1111 => Err(Stop::Unimplemented),
+        0b0111 | 0b1111 => super::simd::execute(cpu, insn),
         _ => undef(),
     }
 }
@@ -661,9 +661,10 @@ fn sysreg_write(cpu: &mut Cpu, op0: u32, op1: u32, crn: u32, crm: u32, op2: u32,
     match (op0, op1, crn, crm, op2) {
         (3, 3, 4, 2, 0) => cpu.nzcv = v as u32 & 0xF000_0000,
         (3, 3, 4, 2, 1) => cpu.daif = v as u32 & (0xF << 6),
-        // FPCR: AHP, DN, FZ, RMode, Stride, Len and the trap enables; the
-        // A72 implements no trapped exceptions, so IxE read as zero.
-        (3, 3, 4, 4, 0) => cpu.fpcr = v as u32 & 0x07FF_0000,
+        // FPCR: AHP, DN, FZ, RMode, Stride and Len; bit 19 (FZ16 from v8.2)
+        // is RES0, and the A72 implements no trapped exceptions, so the IxE
+        // enables read as zero.
+        (3, 3, 4, 4, 0) => cpu.fpcr = v as u32 & 0x07F7_0000,
         (3, 3, 4, 4, 1) => cpu.fpsr = v as u32 & 0xF800_009F,
         (3, 3, 13, 0, 2) => cpu.tpidr_el0 = v,
         (3, 3, 13, 0, 3) if cpu.el > 0 => cpu.tpidrro_el0 = v,
@@ -689,8 +690,7 @@ fn ldst(cpu: &mut Cpu, insn: u32, mem: &mut dyn Memory) -> Exec {
     } else if insn & 0x3B00_0000 == 0x3900_0000 {
         ld_st_reg_uimm(cpu, insn, mem)
     } else if insn & 0xBE00_0000 == 0x0C00_0000 {
-        // Advanced SIMD load/store structures.
-        Err(Stop::Unimplemented)
+        super::simd::ldst_structures(cpu, insn, mem)
     } else {
         undef()
     }
