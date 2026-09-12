@@ -64,6 +64,9 @@ pub struct SysTimer {
     /// Whether any of [`Self::pending`] is set, kept in step with it so the
     /// per-instruction poll is a bool read rather than a four-way scan.
     pending_any: bool,
+    /// A compare fired since [`Self::take_fired`] last looked: the run loop's
+    /// cue that an interrupt may be due.
+    fired: bool,
     /// `RVF_DBG_CMP=1`: log every compare-register arm.
     dbg_cmp: bool,
     arms: u64,
@@ -82,6 +85,7 @@ impl SysTimer {
             clo_reads: 0,
             pending: [false; 4],
             pending_any: false,
+            fired: false,
             dbg_cmp: std::env::var_os("RVF_DBG_CMP").is_some(),
             arms: 0,
         }
@@ -123,6 +127,22 @@ impl SysTimer {
 
     pub fn now_us(&self) -> u64 {
         self.micros
+    }
+
+    /// Did a compare fire since the last call?
+    pub fn take_fired(&mut self) -> bool {
+        std::mem::take(&mut self.fired)
+    }
+
+    /// How many cycles of [`Self::advance`] it takes the counter to reach
+    /// `us` (0 if it is there already).
+    pub fn cycles_until(&self, us: u64) -> u64 {
+        if self.micros >= us {
+            return 0;
+        }
+        (us - self.micros)
+            .saturating_mul(self.cycles_per_us)
+            .saturating_sub(self.frac_cycles)
     }
 
     /// Modelled time so far in cycles of a clock at `hz` (a whole number of
@@ -175,6 +195,7 @@ impl SysTimer {
             self.cs |= CS_M0_MASK << c;
             self.pending[c] = true;
             self.pending_any = true;
+            self.fired = true;
             self.deadline[c] = None;
         }
     }

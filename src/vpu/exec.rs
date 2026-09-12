@@ -158,6 +158,11 @@ pub struct Vpu {
     /// core 1 spun the ThreadX idle loop in real time and accounted for 46% of
     /// every instruction the emulator executed, for no modelled effect.
     pub halted: bool,
+    /// Set by every step that could change what the run loop's per-step
+    /// checks decide: one that enters or leaves an exception, toggles the
+    /// interrupt enable, sleeps, stops, or had to decode its instruction.
+    /// The run loop clears it; `Emulator::fast_steps` has the argument.
+    pub event: bool,
     /// Base of the exception vector table. `swi #u` raises exception `0x20 + u`
     /// and jumps to the **4-byte** entry `*(exc_vbase + exc*4)`, after pushing SR
     /// and the return address (so the handler's `rti` unwinds). start4.elf's
@@ -276,6 +281,7 @@ impl Vpu {
 
     fn stop(&mut self, s: Stop) -> Step {
         self.stopped = Some(s);
+        self.event = true;
         Step::Stopped
     }
 
@@ -297,6 +303,7 @@ impl Vpu {
     /// interrupts already off and relies on the wake itself to service the
     /// pending periodic tick — nothing in that loop ever runs `ei`.
     pub fn vector_irq_forced(&mut self, bus: &mut dyn Bus, slot: u32) {
+        self.event = true;
         // An interrupt is what `sleep` was waiting for.
         self.halted = false;
         if self.exc_vbase == 0 {
@@ -385,6 +392,9 @@ impl Vpu {
             self.icache.hits += 1;
             self.execute(bus, pc, entries.get(pc))
         } else {
+            // Not served from the cache, so not counted as the RAM read a
+            // hit is: the fast run loop's detectors rely on that count.
+            self.event = true;
             match self.fetch(bus, pc) {
                 Err(err) => self.stop(Stop::Fault(Fault::Bus { pc, err })),
                 Ok((buf, len)) => {
@@ -433,6 +443,7 @@ impl Vpu {
         match insn.op {
             Op::Nop => self.regs.pc = next,
             Op::SetIrqEnable(on) => {
+                self.event = true;
                 // Track only the interrupt-enable bit of the VC4 status
                 // register (`r30`, bit 30). NZCV stay in `regs.flags`; the
                 // exception save/restore path (`sr()` / `rti`) carries this bit
@@ -448,6 +459,7 @@ impl Vpu {
                 self.regs.pc = next;
             }
             Op::Sleep => {
+                self.event = true;
                 // `sleep` waits for an interrupt. We model no async wakeups, so
                 // in recon (skip) mode treat it as a nop — firmware idle/dispatch
                 // loops (`sleep; b loop`) then just spin and the run's step limit
@@ -555,6 +567,7 @@ impl Vpu {
                 }
             }
             Op::Swi { vector } => {
+                self.event = true;
                 // `vector` is already `0x20 + u`. With a vector table configured,
                 // trap to `*(exc_vbase + vector*8)` after pushing SR + return
                 // address (so the handler's `rti` unwinds). Otherwise halt — the
@@ -599,6 +612,7 @@ impl Vpu {
             }
 
             Op::Rti => {
+                self.event = true;
                 let sp = self.regs.get(SP);
                 let sr = match bus.load32(sp) {
                     Ok(v) => v,
@@ -822,6 +836,7 @@ impl Vpu {
                                     );
                                 }
                                 self.in_exception = 0;
+                                self.event = true;
                             }
                         }
                         Err(err) => return self.stop(Stop::Fault(Fault::Bus { pc, err })),
