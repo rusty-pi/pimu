@@ -84,6 +84,9 @@ impl CoreCtl {
     }
 
     /// Present `src` (64..127) at [`IRQ_PENDING`] for the dispatcher to pick up.
+    /// Call it as the source is vectored, never when it is merely queued: the
+    /// register holds one value, and the dispatcher reads it only after its
+    /// entry sequence.
     pub fn raise_source(&mut self, src: u32) {
         self.pending_src = Some(src);
     }
