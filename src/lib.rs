@@ -18,6 +18,7 @@
 //! ```
 
 pub mod aarch64;
+pub mod arm;
 pub mod armstub;
 pub mod bus;
 pub mod diag;

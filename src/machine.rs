@@ -3,8 +3,9 @@
 use crate::bus::{Bus, BusError, BusResult, MmioDevice, Width};
 use crate::mem::Ram;
 use crate::periph::{
-    Asb, Aux, Avs, BootBox, Bsc, ClkMon, ClockManager, ConfigOtp, CoreCtl, Dma4, Emmc2, HdmiDdc,
-    Hvs, Mbox, McSync, Pl011, Pm, Rng, Sdc, Sdramc, Spi0, StubRegion, SysTimer, Vce,
+    ArmCtrl, ArmLocal, Asb, Aux, Avs, BootBox, Bsc, ClkMon, ClockManager, ConfigOtp, CoreCtl, Dma4,
+    Emmc2, Gic, HdmiDdc, Hvs, Mbox, McSync, Pl011, Pm, Rng, Sdc, Sdramc, Spi0, StubRegion,
+    SysTimer, Vce,
 };
 use crate::soc::bcm2711 as map;
 
@@ -24,6 +25,13 @@ pub struct Machine {
     /// The ARM property mailbox (`0x7E00_B880`). Idle during a normal boot —
     /// the firmware only services it once an ARM is running.
     pub mbox: Mbox,
+    /// The ARM control block below the mailboxes (`0x7E00_B000`): where
+    /// `arm_loader` releases the ARM.
+    pub armctrl: ArmCtrl,
+    /// ARM-only blocks, reached from [`crate::arm`], never from the VPU: the
+    /// ARM-local block (`0xFF80_0000`) and the GIC-400 (`0xFF84_0000`).
+    pub arm_local: ArmLocal,
+    pub gic: Gic,
     /// Inter-core sync block (`0x7E00_0000`) — stubbed as auto-acknowledged.
     pub mcsync: McSync,
     /// VPU core-control block (`0x7E00_2000`) — brings up VPU core 1.
@@ -146,6 +154,9 @@ impl Machine {
             uart0: Pl011::new(),
             aux: Aux::new(),
             mbox: Mbox::new(),
+            armctrl: ArmCtrl::new(),
+            arm_local: ArmLocal::new(),
+            gic: Gic::new(),
             mcsync: McSync::new(),
             corectl: CoreCtl::new(),
             pm: Pm::new(),
@@ -363,6 +374,9 @@ impl Machine {
         }
         if let Some(off) = hit(crate::periph::mbox::BASE, crate::periph::mbox::SIZE) {
             return Some((&mut self.mbox, off));
+        }
+        if let Some(off) = hit(crate::periph::armctrl::BASE, crate::periph::armctrl::SIZE) {
+            return Some((&mut self.armctrl, off));
         }
         if let Some(off) = hit(map::MCSYNC_BASE, map::MCSYNC_SIZE) {
             return Some((&mut self.mcsync, off));

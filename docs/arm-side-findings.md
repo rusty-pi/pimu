@@ -16,11 +16,15 @@ is on `main`:
 | The ARM's mailbox interrupt (INTID 65) | `Mbox::arm_irq_asserted` |
 | eMMC2 interrupt (INTID 158), ADMA2/SDMA, writes, 1.8 V | `src/periph/emmc2.rs` (`gic::ID_EMMC2`) |
 | armstub hand-off words, image check, bootargs patch | `src/armstub.rs` |
-| Exception entry, IRQ routing, `MRS`/`MSR` decode | `src/aarch64.rs` |
+| Exception entry, IRQ routing, system registers | `src/aarch64/` (`cpu.rs`, `sysreg.rs`) |
 | `/memory` ranges, replacing a property in a DTB | `Fdt::memory_ranges`, `Fdt::with_property` |
 
 ## Entry
 
+- The firmware lets the ARM out of reset by writing the ARM control block:
+  `0x7E00_B000 <- 0x1000`, right after it prints `arm_loader: Starting ARM
+  with 948MB` (traced with `RVF_TRACE_MMIO`, see `src/periph/armctrl.rs`).
+  The #36 and #37 drafts keyed on that log line instead.
 - Start CPU 0 at physical 0 in EL3 with `DAIF` masked. The firmware's armstub
   is there (`src/armstub.rs` has its instruction-level summary). It writes the
   ARM-local prescaler and `CNTFRQ_EL0 = 54 MHz`, puts every GIC interrupt in
@@ -88,7 +92,7 @@ hid block reads from Linux.
   dropped until the hook was registered through the C API directly.
 - It forces EL1 at reset; getting to EL3 needs a cached-flags rebuild.
 - It never delivers an exception or an interrupt to the guest; both have to be
-  entered by hand (the rules are in `src/aarch64.rs`).
+  entered by hand (the rules are in `src/aarch64/`).
 - Its counter follows the host clock.
 - A DMA write into RAM behind its back leaves stale translated code; the
   translation cache has to be flushed.

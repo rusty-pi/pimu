@@ -46,6 +46,11 @@ pub struct Emulator {
     /// until the dispatch global is populated — see [`SMP_DISPATCH_GP_OFFSET`].
     core1_release_armed: bool,
     pub machine: Machine,
+    /// Model the ARM: release core 0 when `arm_loader` writes the ARM control
+    /// block, then run it in lock-step with the VPU ([`crate::arm`]).
+    pub arm_enabled: bool,
+    /// ARM core 0, once released.
+    pub arm: Option<crate::arm::ArmSide>,
 }
 
 /// Stopping conditions for [`Emulator::run`].
@@ -122,6 +127,8 @@ pub enum RunEnd {
     /// Firmware asked the SoC to reset (PM `RSTC`). The caller should re-run
     /// from a fresh machine seeded with the (possibly updated) flash image.
     Reset,
+    /// The ARM core hit something the model does not do yet.
+    ArmStopped(crate::arm::ArmStop),
 }
 
 #[derive(Debug, Clone)]
@@ -166,6 +173,8 @@ impl Emulator {
             core1_entry: None,
             core1_release_armed: false,
             machine,
+            arm_enabled: false,
+            arm: None,
         }
     }
 
@@ -631,6 +640,18 @@ impl Emulator {
                             c1.stopped.clone().expect("stop reason"),
                         ));
                     }
+                }
+            }
+
+            // The ARM: out of reset when `arm_loader` writes the ARM control
+            // block, then a fixed number of ARM cycles per VPU step.
+            if self.arm_enabled && self.arm.is_none() && self.machine.armctrl.take_release() {
+                self.arm = Some(crate::arm::ArmSide::released(&mut self.machine));
+            }
+            if let Some(arm) = self.arm.as_mut() {
+                arm.run(&mut self.machine, crate::arm::CYCLES_PER_VPU_STEP);
+                if let Some(stop) = &arm.stopped {
+                    break RunEnd::ArmStopped(stop.clone());
                 }
             }
 
