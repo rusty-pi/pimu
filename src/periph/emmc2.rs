@@ -1,30 +1,46 @@
-//! BCM2711 EMMC2 — the SD Host Controller (SDHCI v3) the main bootloader drives
-//! once it picks "Boot mode: SD". Register block at `0x7E34_0000`.
+//! BCM2711 EMMC2 — the SD Host Controller (an Arasan SDHCI v3.00) the main
+//! bootloader drives once it picks "Boot mode: SD", and Linux's `sdhci-iproc`
+//! after it. Register block at `0x7E34_0000` (`0xFE34_0000` to the ARM).
 //!
-//! Models the clock / reset / present-state plumbing *and* a working command +
-//! PIO-data engine wired to an [`SdCard`]. The bootloader enumerates the card
-//! (CMD0/8/55/ACMD41/2/3/9/7/ACMD51/CMD6), then reads blocks with CMD18/CMD12
-//! through the Buffer Data Port — enough to parse the MBR, mount the FAT32 boot
-//! partition and pull `start4.elf`.
+//! Models the clock / reset / present-state plumbing *and* a working command
+//! engine wired to an [`SdCard`], with three data paths:
+//!
+//! * **PIO** through the Buffer Data Port, both directions — what the
+//!   bootloader and start4 use (CMD17/CMD18 + CMD12) to pull `start4.elf` and
+//!   the kernel;
+//! * **SDMA** — a single system address, pausing with a DMA interrupt at each
+//!   buffer boundary until the host writes the next address;
+//! * **ADMA2**, 32-bit descriptors (CAPS0 bit 28 says no 64-bit system bus) —
+//!   what Linux uses (`mmc0: SDHCI controller on fe340000.mmc using ADMA` on
+//!   the real board).
+//!
+//! DMA needs the RAM, so a command (or an SDMA address write) that starts one
+//! only marks it pending; [`crate::machine::Machine`] then calls
+//! [`Emmc2::run_dma`] straight after the register write, which completes the
+//! whole transfer at once. Also: auto-CMD12 / auto-CMD23, CMD11 1.8 V
+//! switching (the card holds CMD/DAT low until the host's clock comes back at
+//! 1.8 V), tuning (one CMD19 succeeds), the interrupt output
+//! ([`Emmc2::irq_asserted`], INTID 158 on the GIC) and status gating by
+//! INT_STATUS_EN, as the SDHCI spec has it.
 //!
 //! SDHCI register map (word offsets):
 //! ```text
-//!   0x00 SDMA address / arg2      0x04 block size[11:0] | block count[31:16]
+//!   0x00 SDMA address / arg2      0x04 block size[11:0] | SDMA boundary[14:12] | count[31:16]
 //!   0x08 argument                 0x0C transfer mode[15:0] | command[31:16]
 //!   0x10..0x1C RESPONSE0..3       0x20 buffer data port
 //!   0x24 present state            0x28 host/power/gap/wakeup control
 //!   0x2C clock ctl[15:0] | timeout[23:16] | sw-reset[26:24]
 //!   0x30 int status               0x34 int status enable   0x38 int signal enable
-//!   0x40/0x44 capabilities        0xFC controller version
+//!   0x3C auto-CMD error[15:0] | host control 2[31:16]
+//!   0x40/0x44 capabilities        0x48 max current
+//!   0x54 ADMA error status        0x58 ADMA system address  0xFC controller version
 //! ```
-//!
-//! Only PIO reads are implemented (no SDMA / ADMA, no writes) — that is all the
-//! bootloader uses for the SD path.
 
 use std::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
-use crate::periph::sdcard::{SdCard, SCR_MAGIC_LBA, SWITCH_FUNC_MAGIC_LBA};
+use crate::mem::Ram;
+use crate::periph::sdcard::SdCard;
 
 // SDHCI register offsets (byte), each a 32-bit word.
 const SDMA_ADDR: u32 = 0x00;
@@ -42,33 +58,131 @@ const CLOCK_CONTROL: u32 = 0x2C;
 const INT_STATUS: u32 = 0x30;
 const INT_STATUS_EN: u32 = 0x34;
 const INT_SIGNAL_EN: u32 = 0x38;
+const HOST_CONTROL2: u32 = 0x3C;
 const CAPABILITIES_0: u32 = 0x40;
 const CAPABILITIES_1: u32 = 0x44;
+const MAX_CURRENT: u32 = 0x48;
+const ADMA_ERROR: u32 = 0x54;
+const ADMA_ADDR: u32 = 0x58;
 const CONTROLLER_VERSION: u32 = 0xFC;
 
-/// CLOCK_CONTROL (low 16 bits of `0x2C`): internal-clock enable / stable.
+// Read-only identity, measured on a Pi 4B rev 1.5 with Linux running
+// (`0xfe340000` via /dev/mem, the controller idle at the time):
+/// Timeout clock 50 kHz, base clock 100 MHz, 2048-byte max block, 8-bit bus,
+/// ADMA2, high speed, SDMA, suspend/resume, 3.3 V and 1.8 V, no 64-bit system
+/// bus, embedded slot.
+const CAPS0: u32 = 0x45EE_6432;
+/// SDR50 and DDR50 (no SDR104), driver type C, re-tuning count 5 (16 s) in
+/// mode 3, SDR50 needs tuning.
+const CAPS1: u32 = 0x0000_A525;
+/// 32 mA at 3.3 V and at 1.8 V.
+const MAX_CURRENT_VALUE: u32 = 0x0008_0008;
+/// Vendor 0x10, SDHCI spec 3.00, in `0xFE` (the high half).
+const VERSION: u32 = 0x1002_0000;
+/// Card inserted and stable, DAT0 and CMD high: the idle state. start4 prints
+/// this word (`SD HOST: ... status: 0x01130000`) into the golden transcript.
+/// The real board reads `0x1FFF0000` (card-detect and write-protect pins, all
+/// DAT lines high); adopting it moves that line, and without bit 19 (write
+/// protect switch: 1 = writable) Linux treats the card as read-only.
+const PRESENT_STATE_IDLE: u32 = 0x0113_0000;
+
+/// PRESENT_STATE bits.
+const PS_BUF_WRITE_EN: u32 = 1 << 10;
+const PS_BUF_READ_EN: u32 = 1 << 11;
+/// DAT[3:0] (bits 20..23) and CMD (bit 24) line levels.
+const PS_LINES_CMD_DAT: u32 = (0xF << 20) | (1 << 24);
+
+/// Transfer mode (low half of `0x0C`).
+const TM_DMA: u32 = 1 << 0;
+const TM_BLOCK_COUNT_EN: u32 = 1 << 1;
+const TM_AUTO_CMD_SHIFT: u32 = 2;
+const TM_AUTO_CMD12: u32 = 1;
+const TM_AUTO_CMD23: u32 = 2;
+const TM_READ: u32 = 1 << 4;
+const TM_MULTI: u32 = 1 << 5;
+
+/// HOST_CONTROL: DMA select (bits 4:3) and SD bus power (bit 8).
+const HC_DMA_SHIFT: u32 = 3;
+const HC_DMA_ADMA2_32: u32 = 2;
+const HC_BUS_POWER: u32 = 1 << 8;
+
+/// HOST_CONTROL2 (high half of `0x3C`).
+const HC2_1V8: u32 = 1 << (16 + 3);
+const HC2_EXEC_TUNING: u32 = 1 << (16 + 6);
+const HC2_TUNED_CLK: u32 = 1 << (16 + 7);
+
+/// CLOCK_CONTROL (low 16 bits of `0x2C`): internal-clock enable / stable, SD
+/// clock enable.
 const CLK_INTLEN: u32 = 1 << 0;
 const CLK_STABLE: u32 = 1 << 1;
+const CLK_SD_EN: u32 = 1 << 2;
 /// Software-reset bits (`0x2C` bits 24..26) — self-clearing in the model.
 const SRST_MASK: u32 = 0x0700_0000;
 const SRST_ALL: u32 = 1 << 24;
 const SRST_CMD: u32 = 1 << 25;
 const SRST_DATA: u32 = 1 << 26;
 
-/// PRESENT_STATE: a stable, inserted, idle card, no command inhibit.
-const PRESENT_STATE_IDLE: u32 = (1 << 16) | (1 << 17) | (1 << 20) | (1 << 24);
-/// PRESENT_STATE bit 11: Buffer Read Enable (data available in the FIFO).
-const PS_BUF_READ_EN: u32 = 1 << 11;
-
 /// INT_STATUS (Normal Interrupt Status, low 16 bits of `0x30`).
 const INT_CMD_COMPLETE: u32 = 1 << 0;
 const INT_XFER_COMPLETE: u32 = 1 << 1;
+const INT_DMA: u32 = 1 << 3;
 const INT_BUF_WRITE_RDY: u32 = 1 << 4;
 const INT_BUF_READ_RDY: u32 = 1 << 5;
+/// Error Interrupt summary: read-only, set while any error bit is.
+const INT_ERROR: u32 = 1 << 15;
+/// Error Interrupt Status (high half).
+const INT_ERR_CMD_TIMEOUT: u32 = 1 << 16;
+const INT_ERR_ADMA: u32 = 1 << 25;
 /// Data-circuit interrupt bits cleared by a DAT software reset (spec: buffer
 /// ready both ways, DMA, block-gap, transfer complete) — command complete is
 /// explicitly preserved.
-const INT_DATA_BITS: u32 = INT_XFER_COMPLETE | (1 << 3) | INT_BUF_WRITE_RDY | INT_BUF_READ_RDY;
+const INT_DATA_BITS: u32 =
+    INT_XFER_COMPLETE | INT_DMA | (1 << 2) | INT_BUF_WRITE_RDY | INT_BUF_READ_RDY;
+
+/// ADMA2 descriptor attributes.
+const ADMA_VALID: u16 = 1 << 0;
+const ADMA_END: u16 = 1 << 1;
+const ADMA_INT: u16 = 1 << 2;
+const ADMA_ACT_SHIFT: u16 = 4;
+const ADMA_ACT_TRAN: u16 = 2;
+const ADMA_ACT_LINK: u16 = 3;
+/// ADMA error status: state at the error (bits 1:0) and length mismatch.
+const ADMA_ST_FDS: u32 = 1;
+const ADMA_ST_TFR: u32 = 3;
+const ADMA_LEN_MISMATCH: u32 = 1 << 2;
+/// Descriptors walked per transfer before the engine gives up (a link loop).
+const ADMA_MAX_DESCRIPTORS: usize = 1 << 16;
+
+/// A DMA address as the RAM sees it: the ARM's physical addresses are the
+/// bus addresses on the emmc2bus (its `dma-ranges` is 1:1), and the VPU's
+/// cache aliases fold away.
+fn dma_ram_addr(addr: u32) -> u32 {
+    addr & 0x3FFF_FFFF
+}
+
+/// An SDMA or ADMA2 transfer in flight: the data (read from the card, or to be
+/// written to it) and how far the engine has got.
+struct Dma {
+    adma: bool,
+    write: bool,
+    buf: Vec<u8>,
+    pos: usize,
+    /// SDMA: the next system address.
+    sdma_addr: u32,
+    /// Where a write's blocks go, and in what size.
+    lba: u32,
+    block_size: usize,
+    /// Issue CMD12 once the data is through.
+    auto_cmd12: bool,
+}
+
+/// A PIO write in flight: blocks the host pushes through the Buffer Data Port.
+struct PioWrite {
+    lba: u32,
+    /// `None` = open-ended (until CMD12).
+    blocks_left: Option<u32>,
+    auto_cmd12: bool,
+}
 
 pub struct Emmc2 {
     /// Sticky storage for offsets without special behaviour.
@@ -90,6 +204,23 @@ pub struct Emmc2 {
     /// CMD18 with block count 0 / block-count-enable off: keep streaming blocks
     /// until CMD12 stops it.
     read_open_ended: bool,
+    /// A register block (CMD6 status, SCR, ...) the card sends instead of
+    /// image data; one block.
+    read_synthetic: Option<Vec<u8>>,
+    /// Issue CMD12 when the PIO read's last block has been drained.
+    read_auto_cmd12: bool,
+    /// PIO write state and the partly filled block.
+    pio_write: Option<PioWrite>,
+    wbuf: Vec<u8>,
+    /// DMA transfer in flight, and whether [`Self::run_dma`] has work.
+    dma: Option<Dma>,
+    dma_pending: bool,
+    /// RAM ranges `[start, end)` the last DMA run wrote, for an ARM core that
+    /// caches translated code to drop (bounded to one transfer).
+    dma_written: Vec<(u32, u32)>,
+    /// CMD11 accepted: the card holds CMD/DAT low until the host restarts the
+    /// SD clock with 1.8 V signalling on.
+    switching_1v8: bool,
     /// Debug: 32-bit words handed out through the Buffer Data Port this transfer.
     words_out: u64,
     dbg: bool,
@@ -106,6 +237,14 @@ impl Default for Emmc2 {
             read_lba: 0,
             read_blocks_left: 0,
             read_open_ended: false,
+            read_synthetic: None,
+            read_auto_cmd12: false,
+            pio_write: None,
+            wbuf: Vec::new(),
+            dma: None,
+            dma_pending: false,
+            dma_written: Vec::new(),
+            switching_1v8: false,
             words_out: 0,
             dbg: std::env::var_os("EMMC_DBG").is_some(),
         }
@@ -126,13 +265,47 @@ impl Emmc2 {
         self.card.is_some()
     }
 
+    pub fn card(&self) -> Option<&SdCard> {
+        self.card.as_ref()
+    }
+
     fn get(&self, off: u32) -> u32 {
         self.reg.get(&off).copied().unwrap_or(0)
     }
 
+    /// Latch interrupt status bits — only those INT_STATUS_EN lets through.
     fn set_int(&mut self, bits: u32) {
         let cur = self.get(INT_STATUS);
-        self.reg.insert(INT_STATUS, cur | bits);
+        let en = self.get(INT_STATUS_EN);
+        self.reg.insert(INT_STATUS, cur | (bits & en));
+    }
+
+    /// INT_STATUS as read: the latched bits plus the error summary.
+    fn int_status(&self) -> u32 {
+        let st = self.get(INT_STATUS) & !INT_ERROR;
+        if st & 0xFFFF_0000 != 0 {
+            st | INT_ERROR
+        } else {
+            st
+        }
+    }
+
+    /// The controller's interrupt output: a level, high while any latched
+    /// status bit is enabled in INT_SIGNAL_EN (normal bits in the low half,
+    /// error bits in the high half, the summary bit 15 included).
+    pub fn irq_asserted(&self) -> bool {
+        self.int_status() & self.get(INT_SIGNAL_EN) != 0
+    }
+
+    /// A DMA transfer is waiting for [`Self::run_dma`].
+    pub fn dma_pending(&self) -> bool {
+        self.dma_pending
+    }
+
+    /// RAM ranges `[start, end)` the DMA engine has written since the last
+    /// call.
+    pub fn take_dma_written(&mut self) -> Vec<(u32, u32)> {
+        std::mem::take(&mut self.dma_written)
     }
 
     fn block_size(&self) -> usize {
@@ -148,20 +321,91 @@ impl Emmc2 {
         (self.get(BLOCK_SIZE_COUNT) >> 16) & 0xFFFF
     }
 
+    /// SDMA buffer boundary: 4 KiB << BLOCK_SIZE[14:12].
+    fn sdma_boundary(&self) -> u32 {
+        4096 << ((self.get(BLOCK_SIZE_COUNT) >> 12) & 7)
+    }
+
+    /// Stop whatever data transfer is in flight.
+    fn reset_data(&mut self) {
+        self.data.clear();
+        self.data_pos = 0;
+        self.read_blocks_left = 0;
+        self.read_open_ended = false;
+        self.read_synthetic = None;
+        self.read_auto_cmd12 = false;
+        self.pio_write = None;
+        self.wbuf.clear();
+        self.dma = None;
+        self.dma_pending = false;
+    }
+
+    /// The controller sends CMD12 itself after a multi-block transfer; the
+    /// card's R1b lands in RESPONSE3.
+    fn auto_cmd12(&mut self) {
+        if let Some(card) = self.card.as_mut() {
+            self.resp[3] = card.command(12, 0).r1.unwrap_or(0);
+        }
+    }
+
+    /// The data phase is over: transfer complete, and the auto-CMD12 if one
+    /// was asked for.
+    fn finish_data(&mut self, auto_cmd12: bool) {
+        if auto_cmd12 {
+            self.auto_cmd12();
+        }
+        self.set_int(INT_XFER_COMPLETE);
+    }
+
     /// Dispatch the command in the `0x0C` word to the card and latch its result.
     fn issue_command(&mut self, cmd_xfer: u32) {
         let arg = self.get(ARGUMENT);
+        let mode = cmd_xfer & 0xFFFF;
         let command = cmd_xfer >> 16;
         let index = ((command >> 8) & 0x3F) as u8;
         let resp_type = command & 0x3; // 0 none, 1 R2(136), 2 R(48), 3 R1b(48+busy)
         let data_present = (command >> 5) & 1 != 0;
+        let multi = mode & TM_MULTI != 0;
+        let auto_cmd = (mode >> TM_AUTO_CMD_SHIFT) & 3;
 
+        // Any new command tears down a previous transfer's state (CMD12
+        // included — ending an open-ended read is what it is for).
+        self.reset_data();
+        self.words_out = 0;
         self.resp = [0; 4];
+
+        if data_present && multi && auto_cmd == TM_AUTO_CMD23 {
+            // Auto-CMD23: the block count goes to the card first, from
+            // ARGUMENT2.
+            let arg2 = self.get(SDMA_ADDR);
+            if let Some(card) = self.card.as_mut() {
+                card.command(23, arg2);
+            }
+        }
 
         let response = match self.card.as_mut() {
             Some(card) => card.command(index, arg),
             None => crate::periph::sdcard::SdResponse::default(),
         };
+
+        if self.dbg {
+            eprintln!(
+                "  emmc CMD{index} arg={arg:#010x} mode={mode:#06x} rt={resp_type} data={data_present} \
+                 -> r1={:?} silent={} rd={}@{:#x} wr={}@{:#x}",
+                response.r1,
+                response.no_response,
+                response.read_blocks,
+                response.read_lba,
+                response.write_blocks,
+                response.write_lba,
+            );
+        }
+
+        if response.no_response && resp_type != 0 {
+            // Nothing answered: command timeout, no completion.
+            self.set_int(INT_ERR_CMD_TIMEOUT);
+            return;
+        }
 
         match resp_type {
             1 => {
@@ -178,22 +422,56 @@ impl Emmc2 {
             _ => {}
         }
 
+        if index == 11 && response.r1.is_some() {
+            self.switching_1v8 = true;
+        }
+
+        if index == 19 && self.get(HOST_CONTROL2) & HC2_EXEC_TUNING != 0 {
+            // Tuning: the controller swallows the tuning block and raises
+            // only Buffer Read Ready. One pass finds a sampling point.
+            let hc2 = self.get(HOST_CONTROL2);
+            self.reg
+                .insert(HOST_CONTROL2, (hc2 & !HC2_EXEC_TUNING) | HC2_TUNED_CLK);
+            self.set_int(INT_BUF_READ_RDY);
+            return;
+        }
+
         self.set_int(INT_CMD_COMPLETE);
         if resp_type == 3 {
             // R1b: busy released immediately in the model. CMD12 (STOP) also
-            // lands here — ending the open-ended read below covers the rest.
+            // lands here — ending the open-ended read above covers the rest.
             self.set_int(INT_XFER_COMPLETE);
         }
 
-        // Any new command tears down a previous transfer's PIO state (CMD12
-        // included, via the block above).
-        self.data.clear();
-        self.data_pos = 0;
-        self.read_blocks_left = 0;
-        self.read_open_ended = false;
-        self.words_out = 0;
-        if data_present && response.read_blocks > 0 {
+        if !data_present {
+            return;
+        }
+        let auto_cmd12 = multi && auto_cmd == TM_AUTO_CMD12;
+        if mode & TM_DMA != 0 {
+            self.start_dma(&response, mode, auto_cmd12);
+            return;
+        }
+        if response.write_blocks > 0 {
+            let count = self.block_count();
+            self.pio_write = Some(PioWrite {
+                lba: response.write_lba,
+                blocks_left: if !multi {
+                    Some(1)
+                } else if count > 0 || mode & TM_BLOCK_COUNT_EN != 0 {
+                    Some(count)
+                } else {
+                    None
+                },
+                auto_cmd12,
+            });
+            self.set_int(INT_BUF_WRITE_RDY);
+        } else if let Some(block) = response.data {
+            self.read_synthetic = Some(block);
+            self.read_blocks_left = 1;
+            self.fill_next_block();
+        } else if response.read_blocks > 0 {
             self.read_lba = response.read_lba;
+            self.read_auto_cmd12 = auto_cmd12;
             let count = self.block_count();
             if response.read_blocks == u32::MAX {
                 // CMD18: bounded by the block-count register if set, else runs
@@ -208,19 +486,190 @@ impl Emmc2 {
             }
             self.fill_next_block();
         }
+    }
 
-        if self.dbg {
-            eprintln!(
-                "  emmc CMD{index} arg={arg:#010x} rt={resp_type} data={data_present} \
-                 -> r0={:#010x} r1={:#010x} r2={:#010x} r3={:#010x} blocks={} open={}",
-                self.resp[0],
-                self.resp[1],
-                self.resp[2],
-                self.resp[3],
-                self.read_blocks_left,
-                self.read_open_ended
-            );
+    /// Set up an SDMA / ADMA2 transfer for a data command; [`Self::run_dma`]
+    /// moves the bytes.
+    fn start_dma(
+        &mut self,
+        response: &crate::periph::sdcard::SdResponse,
+        mode: u32,
+        auto_cmd12: bool,
+    ) {
+        let bs = self.block_size();
+        let blocks = if mode & TM_MULTI != 0 {
+            self.block_count() as usize
+        } else {
+            1
+        };
+        let write = mode & TM_READ == 0 && response.write_blocks > 0;
+        let mut buf = vec![0u8; bs * blocks];
+        if !write {
+            if let Some(block) = &response.data {
+                let n = block.len().min(buf.len());
+                buf[..n].copy_from_slice(&block[..n]);
+            } else if response.read_blocks > 0 {
+                if let Some(card) = self.card.as_mut() {
+                    let mut b = [0u8; 512];
+                    for (i, chunk) in buf.chunks_mut(bs).enumerate() {
+                        card.read_block(response.read_lba.wrapping_add(i as u32), &mut b);
+                        let n = chunk.len().min(512);
+                        chunk[..n].copy_from_slice(&b[..n]);
+                        card.block_done();
+                    }
+                }
+            }
         }
+        let adma = (self.get(HOST_CONTROL) >> HC_DMA_SHIFT) & 3 == HC_DMA_ADMA2_32;
+        self.dma = Some(Dma {
+            adma,
+            write,
+            buf,
+            pos: 0,
+            sdma_addr: self.get(SDMA_ADDR),
+            lba: response.write_lba,
+            block_size: bs,
+            auto_cmd12,
+        });
+        self.dma_pending = true;
+        self.dma_written.clear();
+    }
+
+    /// Run the pending DMA transfer against `ram`: to completion, to the next
+    /// SDMA boundary, or to an ADMA error.
+    pub fn run_dma(&mut self, ram: &mut Ram) {
+        self.dma_pending = false;
+        let Some(mut d) = self.dma.take() else {
+            return;
+        };
+        let done = if d.adma {
+            self.run_adma2(&mut d, ram)
+        } else {
+            self.run_sdma(&mut d, ram)
+        };
+        match done {
+            Some(true) => {
+                if d.write {
+                    if let Some(card) = self.card.as_mut() {
+                        for (i, block) in d.buf.chunks(d.block_size).enumerate() {
+                            card.write_block(d.lba.wrapping_add(i as u32), block);
+                            card.block_done();
+                        }
+                    }
+                }
+                self.finish_data(d.auto_cmd12);
+            }
+            Some(false) => self.dma = Some(d),
+            None => {}
+        }
+    }
+
+    /// Move `n` bytes between the transfer buffer and RAM at `addr`.
+    fn dma_copy(&mut self, d: &mut Dma, ram: &mut Ram, addr: u32, n: usize) -> bool {
+        let a = dma_ram_addr(addr);
+        let ok = if d.write {
+            match ram.read_slice(a, n) {
+                Ok(src) => {
+                    d.buf[d.pos..d.pos + n].copy_from_slice(src);
+                    true
+                }
+                Err(_) => false,
+            }
+        } else {
+            let ok = ram.write_slice(a, &d.buf[d.pos..d.pos + n]).is_ok();
+            if ok {
+                let end = a + n as u32;
+                match self.dma_written.last_mut() {
+                    Some(last) if last.1 == a => last.1 = end,
+                    _ => self.dma_written.push((a, end)),
+                }
+            }
+            ok
+        };
+        if ok {
+            d.pos += n;
+        }
+        ok
+    }
+
+    /// SDMA: one system address, stopping with a DMA interrupt when it
+    /// reaches a buffer boundary with data left. `Some(true)` = done,
+    /// `Some(false)` = paused.
+    fn run_sdma(&mut self, d: &mut Dma, ram: &mut Ram) -> Option<bool> {
+        let boundary = self.sdma_boundary();
+        while d.pos < d.buf.len() {
+            let to_boundary = (boundary - d.sdma_addr % boundary) as usize;
+            let n = to_boundary.min(d.buf.len() - d.pos);
+            if !self.dma_copy(d, ram, d.sdma_addr, n) {
+                // No RAM there: the data goes nowhere (SDHCI 3.00 has no SDMA
+                // error status), but the transfer still ends.
+                d.pos += n;
+            }
+            d.sdma_addr = d.sdma_addr.wrapping_add(n as u32);
+            if d.pos < d.buf.len() && d.sdma_addr.is_multiple_of(boundary) {
+                self.reg.insert(SDMA_ADDR, d.sdma_addr);
+                self.set_int(INT_DMA);
+                return Some(false);
+            }
+        }
+        self.reg.insert(SDMA_ADDR, d.sdma_addr);
+        Some(true)
+    }
+
+    /// ADMA2 with 32-bit descriptors: `{attr: u16, len: u16, addr: u32}`,
+    /// walked from ADMA_ADDR. `Some(true)` = done, `None` = ADMA error.
+    fn run_adma2(&mut self, d: &mut Dma, ram: &mut Ram) -> Option<bool> {
+        let mut desc = self.get(ADMA_ADDR);
+        let mut result = None;
+        let mut state = ADMA_ST_FDS;
+        let mut mismatch = false;
+        for _ in 0..ADMA_MAX_DESCRIPTORS {
+            let Ok(raw) = ram.read_slice(dma_ram_addr(desc), 8) else {
+                break;
+            };
+            let attr = u16::from_le_bytes([raw[0], raw[1]]);
+            let len = match u16::from_le_bytes([raw[2], raw[3]]) {
+                0 => 65536,
+                n => n as usize,
+            };
+            let addr = u32::from_le_bytes([raw[4], raw[5], raw[6], raw[7]]);
+            if attr & ADMA_VALID == 0 {
+                break;
+            }
+            let act = (attr >> ADMA_ACT_SHIFT) & 3;
+            if act == ADMA_ACT_TRAN {
+                let n = len.min(d.buf.len() - d.pos);
+                if n > 0 && !self.dma_copy(d, ram, addr, n) {
+                    state = ADMA_ST_TFR;
+                    break;
+                }
+            }
+            if attr & ADMA_INT != 0 {
+                self.set_int(INT_DMA);
+            }
+            if d.pos == d.buf.len() {
+                result = Some(true);
+                break;
+            }
+            if attr & ADMA_END != 0 {
+                // The descriptors ran out before the data did.
+                state = ADMA_ST_TFR;
+                mismatch = true;
+                break;
+            }
+            desc = if act == ADMA_ACT_LINK {
+                addr
+            } else {
+                desc.wrapping_add(8)
+            };
+        }
+        self.reg.insert(ADMA_ADDR, desc);
+        if result.is_none() {
+            let mm = if mismatch { ADMA_LEN_MISMATCH } else { 0 };
+            self.reg.insert(ADMA_ERROR, state | mm);
+            self.set_int(INT_ERR_ADMA);
+        }
+        result
     }
 
     /// Pull one block from the card (or a synthetic register block) into the PIO
@@ -231,25 +680,16 @@ impl Emmc2 {
         }
         let bs = self.block_size();
         let mut block = [0u8; 512];
-        match self.read_lba {
-            SWITCH_FUNC_MAGIC_LBA => {
-                // CMD6 switch-function status: 64 bytes, byte 13 bit0..3 =
-                // supported group-1 functions; leave benign zeros but mark the
-                // "function 1 = high-speed" as selectable.
-                block[13] = 0x02;
-                block[16] = 0x01; // selected function group 1 = 1
+        if let Some(reg) = self.read_synthetic.take() {
+            let n = reg.len().min(512);
+            block[..n].copy_from_slice(&reg[..n]);
+        } else {
+            let lba = self.read_lba;
+            if let Some(card) = self.card.as_mut() {
+                card.read_block(lba, &mut block);
+                card.block_done();
             }
-            SCR_MAGIC_LBA => {
-                // SCR: SD spec 2.00, 1-bit + 4-bit bus width, 8 bytes.
-                block[0] = 0x02; // SCR_STRUCTURE=0, SD_SPEC=2
-                block[1] = 0x05; // bus widths: 1-bit | 4-bit
-            }
-            lba => {
-                if let Some(card) = self.card.as_ref() {
-                    card.read_block(lba, &mut block);
-                }
-                self.read_lba = lba.wrapping_add(1);
-            }
+            self.read_lba = lba.wrapping_add(1);
         }
         self.data = block[..bs.min(512)].to_vec();
         self.data_pos = 0;
@@ -282,34 +722,67 @@ impl Emmc2 {
             // Block drained: fetch the next one, or finish the transfer.
             if self.read_blocks_left > 0 || self.read_open_ended {
                 self.fill_next_block();
-            } else {
+            } else if !self.data.is_empty() {
                 let cur = self.get(INT_STATUS) & !INT_BUF_READ_RDY;
-                self.reg.insert(INT_STATUS, cur | INT_XFER_COMPLETE);
+                self.reg.insert(INT_STATUS, cur);
                 self.data.clear();
                 self.data_pos = 0;
+                let auto = std::mem::take(&mut self.read_auto_cmd12);
+                self.finish_data(auto);
             }
         }
         u32::from_le_bytes(w)
     }
-}
 
-impl MmioDevice for Emmc2 {
-    fn name(&self) -> &'static str {
-        "emmc2"
+    /// Push bytes the host wrote to the Buffer Data Port; each full block goes
+    /// to the card.
+    fn write_buffer(&mut self, bytes: &[u8]) {
+        let bs = self.block_size();
+        let Some(pw) = self.pio_write.as_mut() else {
+            return;
+        };
+        self.wbuf.extend_from_slice(bytes);
+        if self.wbuf.len() < bs {
+            return;
+        }
+        let lba = pw.lba;
+        pw.lba = lba.wrapping_add(1);
+        let more = match pw.blocks_left.as_mut() {
+            Some(n) => {
+                *n = n.saturating_sub(1);
+                *n > 0
+            }
+            None => true,
+        };
+        let auto = pw.auto_cmd12;
+        if let Some(card) = self.card.as_mut() {
+            card.write_block(lba, &self.wbuf[..bs]);
+            card.block_done();
+        }
+        self.wbuf.clear();
+        if more {
+            self.set_int(INT_BUF_WRITE_RDY);
+        } else {
+            self.pio_write = None;
+            self.finish_data(auto);
+        }
     }
 
-    fn read(&mut self, offset: u32, _width: Width) -> BusResult<u32> {
-        let off = offset & !3;
-        let v = match off {
+    /// The current value of the word at `off`, as a read returns it.
+    fn read_word(&mut self, off: u32) -> u32 {
+        match off {
             RESPONSE0 => self.resp[0],
             RESPONSE1 => self.resp[1],
             RESPONSE2 => self.resp[2],
             RESPONSE3 => self.resp[3],
             BUFFER_DATA => self.read_buffer_word(),
             CLOCK_CONTROL => {
+                // The timeout byte (bits 16..23) is not read back: start4
+                // prints this word (`arasan_emmc_set_clock ... C1:`) into the
+                // golden transcript.
                 let clk = self.get(CLOCK_CONTROL) & 0xFFFF;
                 // Internal clock reports stable as soon as it is enabled; the
-                // software-reset bits (high half) always read back done.
+                // software-reset bits (high byte) always read back done.
                 if clk & CLK_INTLEN != 0 {
                     clk | CLK_STABLE
                 } else {
@@ -321,43 +794,34 @@ impl MmioDevice for Emmc2 {
                 if !self.data.is_empty() && self.data_pos < self.data.len() {
                     ps |= PS_BUF_READ_EN;
                 }
+                if self.pio_write.is_some() {
+                    ps |= PS_BUF_WRITE_EN;
+                }
+                if self.switching_1v8 {
+                    ps &= !PS_LINES_CMD_DAT;
+                }
                 ps
             }
-            // v3 host, base clock 100 MHz, 3.3 V, high-speed, SDMA.
-            CAPABILITIES_0 => (100 << 8) | (1 << 21) | (1 << 22) | (1 << 24) | (1 << 25),
-            CAPABILITIES_1 => 0,
-            CONTROLLER_VERSION => 0x0002,
+            INT_STATUS => self.int_status(),
+            CAPABILITIES_0 => CAPS0,
+            CAPABILITIES_1 => CAPS1,
+            MAX_CURRENT => MAX_CURRENT_VALUE,
+            CONTROLLER_VERSION => VERSION,
             _ => self.get(off),
-        };
-        if self.dbg {
-            if off == BUFFER_DATA {
-                if self.words_out % 64 == 1 {
-                    eprintln!("  emmc R [0x20] -> {v:#010x}  (word {})", self.words_out);
-                }
-            } else {
-                eprintln!("  emmc R [{off:#04x}] -> {v:#010x}");
-            }
         }
-        Ok(v)
     }
 
-    fn write(&mut self, offset: u32, _width: Width, value: u32) -> BusResult<()> {
-        let off = offset & !3;
-        if self.dbg && off != BUFFER_DATA {
-            eprintln!("  emmc W [{off:#04x}] <- {value:#010x}");
-        }
+    fn write_word(&mut self, off: u32, value: u32, lanes: u32) {
         match off {
             CLOCK_CONTROL => {
                 self.reg.insert(CLOCK_CONTROL, value & !SRST_MASK);
                 // Software resets self-clear immediately. A DAT reset tears down
                 // the data path (FIFO + data-circuit interrupts) but leaves
                 // command-complete alone; a CMD reset clears command-complete; an
-                // ALL reset clears everything.
+                // ALL reset clears everything the host programmed for
+                // interrupts, DMA and signalling.
                 if value & (SRST_ALL | SRST_DATA) != 0 {
-                    self.data.clear();
-                    self.data_pos = 0;
-                    self.read_blocks_left = 0;
-                    self.read_open_ended = false;
+                    self.reset_data();
                     let keep = if value & SRST_ALL != 0 {
                         0
                     } else {
@@ -365,29 +829,513 @@ impl MmioDevice for Emmc2 {
                     };
                     self.reg.insert(INT_STATUS, keep);
                 }
+                if value & SRST_ALL != 0 {
+                    for r in [
+                        INT_STATUS_EN,
+                        INT_SIGNAL_EN,
+                        HOST_CONTROL2,
+                        ADMA_ERROR,
+                        ADMA_ADDR,
+                    ] {
+                        self.reg.remove(&r);
+                    }
+                    self.switching_1v8 = false;
+                }
                 if value & (SRST_ALL | SRST_CMD) != 0 {
                     let cur = self.get(INT_STATUS);
                     self.reg.insert(INT_STATUS, cur & !INT_CMD_COMPLETE);
                 }
+                // The card lets go of CMD/DAT once the SD clock runs again at
+                // 1.8 V after CMD11.
+                if self.switching_1v8
+                    && value & CLK_SD_EN != 0
+                    && self.get(HOST_CONTROL2) & HC2_1V8 != 0
+                {
+                    self.switching_1v8 = false;
+                }
             }
             INT_STATUS => {
                 let cur = self.get(INT_STATUS);
-                self.reg.insert(INT_STATUS, cur & !value); // write-1-to-clear
+                self.reg.insert(INT_STATUS, cur & !(value & lanes)); // write-1-to-clear
             }
             CMD_XFER => {
                 self.reg.insert(CMD_XFER, value);
-                self.issue_command(value);
+                // The command register is the upper half: writing it issues.
+                if lanes & 0xFFFF_0000 != 0 {
+                    self.issue_command(value);
+                }
             }
-            SDMA_ADDR | BLOCK_SIZE_COUNT | ARGUMENT | HOST_CONTROL | INT_STATUS_EN
-            | INT_SIGNAL_EN => {
-                self.reg.insert(off, value);
+            SDMA_ADDR => {
+                self.reg.insert(SDMA_ADDR, value);
+                // A paused SDMA resumes from the address the host writes.
+                if let Some(d) = self.dma.as_mut() {
+                    if !d.adma {
+                        d.sdma_addr = value;
+                        self.dma_pending = true;
+                    }
+                }
+            }
+            HOST_CONTROL => {
+                let was = self.get(HOST_CONTROL);
+                self.reg.insert(HOST_CONTROL, value);
+                if was & HC_BUS_POWER != 0 && value & HC_BUS_POWER == 0 {
+                    // SD bus power off: the card loses VDD.
+                    if let Some(card) = self.card.as_mut() {
+                        card.power_off();
+                    }
+                    self.switching_1v8 = false;
+                }
+            }
+            HOST_CONTROL2 => {
+                // The low half is the read-only Auto CMD Error Status.
+                self.reg.insert(HOST_CONTROL2, value & 0xFFFF_0000);
             }
             RESPONSE0 | RESPONSE1 | RESPONSE2 | RESPONSE3 | BUFFER_DATA | PRESENT_STATE
-            | CAPABILITIES_0 | CAPABILITIES_1 | CONTROLLER_VERSION => {}
+            | CAPABILITIES_0 | CAPABILITIES_1 | MAX_CURRENT | CONTROLLER_VERSION => {}
             _ => {
                 self.reg.insert(off, value);
             }
         }
+    }
+}
+
+impl MmioDevice for Emmc2 {
+    fn name(&self) -> &'static str {
+        "emmc2"
+    }
+
+    fn read(&mut self, offset: u32, width: Width) -> BusResult<u32> {
+        let off = offset & !3;
+        let word = self.read_word(off);
+        if self.dbg {
+            if off == BUFFER_DATA {
+                if self.words_out % 64 == 1 {
+                    eprintln!("  emmc R [0x20] -> {word:#010x}  (word {})", self.words_out);
+                }
+            } else {
+                eprintln!("  emmc R [{off:#04x}] -> {word:#010x}");
+            }
+        }
+        // Narrow reads get their lane, right-aligned.
+        Ok(match width {
+            Width::Word => word,
+            Width::Half => (word >> ((offset & 2) * 8)) & 0xFFFF,
+            Width::Byte => (word >> ((offset & 3) * 8)) & 0xFF,
+        })
+    }
+
+    fn write(&mut self, offset: u32, width: Width, value: u32) -> BusResult<()> {
+        let off = offset & !3;
+        if self.dbg && off != BUFFER_DATA {
+            eprintln!("  emmc W [{off:#04x}] <- {value:#010x} ({width:?})");
+        }
+        if off == BUFFER_DATA {
+            let n = width.bytes() as usize;
+            self.write_buffer(&value.to_le_bytes()[..n]);
+            return Ok(());
+        }
+        // Narrow writes merge into the word; the lane mask says which bytes
+        // were actually written (for W1C and for issuing a command).
+        let (value, lanes) = match width {
+            Width::Word => (value, u32::MAX),
+            _ => {
+                let shift = (offset & 3) * 8;
+                let mask = if width == Width::Half { 0xFFFF } else { 0xFF } << shift;
+                let old = match off {
+                    INT_STATUS => 0,
+                    _ => self.get(off),
+                };
+                ((old & !mask) | ((value << shift) & mask), mask)
+            }
+        };
+        self.write_word(off, value, lanes);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const RAM: u32 = 0x10_0000;
+
+    fn host() -> Emmc2 {
+        let mut e = Emmc2::new();
+        let mut img = vec![0u8; 64 * 512];
+        for (i, b) in img.iter_mut().enumerate() {
+            *b = (i / 512) as u8 ^ (i as u8);
+        }
+        e.insert_card(img);
+        wr(&mut e, INT_STATUS_EN, 0xFFFF_FFFF);
+        e
+    }
+
+    fn wr(e: &mut Emmc2, off: u32, v: u32) {
+        e.write(off, Width::Word, v).unwrap();
+    }
+
+    fn rd(e: &mut Emmc2, off: u32) -> u32 {
+        e.read(off, Width::Word).unwrap()
+    }
+
+    /// Issue `index` with `arg`, transfer mode `mode`, command flags `flags`
+    /// (response type, data-present...).
+    fn cmd(e: &mut Emmc2, index: u32, arg: u32, flags: u32, mode: u32) {
+        wr(e, ARGUMENT, arg);
+        wr(e, CMD_XFER, ((index << 8 | flags) << 16) | mode);
+    }
+
+    const R1: u32 = 0x1A;
+    const R1_DATA: u32 = 0x3A;
+
+    /// CMD0, ACMD41 ×2 with `ocr`, CMD2, CMD3, CMD7: card in tran.
+    fn enumerate(e: &mut Emmc2, ocr: u32) -> u32 {
+        cmd(e, 0, 0, 0, 0);
+        let mut r = 0;
+        for _ in 0..2 {
+            cmd(e, 55, 0, R1, 0);
+            cmd(e, 41, ocr, 0x02, 0);
+            r = rd(e, RESPONSE0);
+        }
+        r
+    }
+
+    fn select(e: &mut Emmc2) {
+        cmd(e, 2, 0, 0x09, 0);
+        cmd(e, 3, 0, R1, 0);
+        cmd(e, 7, 0x0001_0000, 0x1B, 0);
+        wr(e, INT_STATUS, 0xFFFF_FFFF);
+    }
+
+    fn adma_table(ram: &mut Ram, at: u32, descs: &[(u16, u16, u32)]) {
+        for (i, &(attr, len, addr)) in descs.iter().enumerate() {
+            let a = at + 8 * i as u32;
+            ram.store(a, Width::Half, attr as u32).unwrap();
+            ram.store(a + 2, Width::Half, len as u32).unwrap();
+            ram.store(a + 4, Width::Word, addr).unwrap();
+        }
+    }
+
+    const TRAN: u16 = 0x21;
+    const TRAN_END: u16 = 0x23;
+    const NOP_END: u16 = 0x03;
+
+    #[test]
+    fn identity_registers_are_the_measured_ones() {
+        let mut e = host();
+        assert_eq!(rd(&mut e, CAPABILITIES_0), 0x45EE_6432);
+        assert_eq!(rd(&mut e, CAPABILITIES_1), 0x0000_A525);
+        assert_eq!(rd(&mut e, CONTROLLER_VERSION), 0x1002_0000);
+        assert_eq!(e.read(0xFE, Width::Half).unwrap(), 0x1002);
+        assert_eq!(rd(&mut e, PRESENT_STATE), 0x0113_0000);
+        assert_eq!(CAPS0 & (1 << 28), 0, "no 64-bit ADMA");
+    }
+
+    #[test]
+    fn interrupt_line_follows_status_and_signal_enable() {
+        let mut e = host();
+        cmd(&mut e, 13, 0, R1, 0);
+        assert_eq!(rd(&mut e, INT_STATUS), INT_CMD_COMPLETE);
+        assert!(!e.irq_asserted(), "nothing signalled yet");
+        wr(&mut e, INT_SIGNAL_EN, INT_CMD_COMPLETE);
+        assert!(e.irq_asserted());
+        wr(&mut e, INT_STATUS, INT_CMD_COMPLETE);
+        assert!(!e.irq_asserted(), "W1C drops the level");
+
+        // Errors: the high half, plus the summary bit 15.
+        cmd(&mut e, 5, 0, 0x02, 0);
+        assert_eq!(rd(&mut e, INT_STATUS), INT_ERR_CMD_TIMEOUT | INT_ERROR);
+        assert!(!e.irq_asserted());
+        wr(&mut e, INT_SIGNAL_EN, INT_ERR_CMD_TIMEOUT);
+        assert!(e.irq_asserted());
+        wr(&mut e, INT_STATUS, INT_ERR_CMD_TIMEOUT);
+        assert_eq!(rd(&mut e, INT_STATUS), 0);
+
+        // INT_STATUS_EN gates what latches at all.
+        wr(&mut e, INT_SIGNAL_EN, 0xFFFF_FFFF);
+        wr(&mut e, INT_STATUS_EN, 0);
+        cmd(&mut e, 13, 0, R1, 0);
+        assert_eq!(rd(&mut e, INT_STATUS), 0);
+        assert!(!e.irq_asserted());
+    }
+
+    #[test]
+    fn adma2_read_scatters_blocks_over_the_descriptors() {
+        let mut e = host();
+        let mut ram = Ram::new(0, 4 << 20);
+        enumerate(&mut e, 0x40FF_8000);
+        select(&mut e);
+        wr(&mut e, HOST_CONTROL, HC_DMA_ADMA2_32 << HC_DMA_SHIFT);
+        // 3 blocks at LBA 5: 100 bytes, a link to a second table, 1436 bytes.
+        adma_table(
+            &mut ram,
+            RAM,
+            &[(TRAN, 100, RAM + 0x1000), (0x31, 0, RAM + 0x100)],
+        );
+        adma_table(
+            &mut ram,
+            RAM + 0x100,
+            &[(TRAN, 1436, RAM + 0x2000), (NOP_END, 0, 0)],
+        );
+        wr(&mut e, ADMA_ADDR, RAM);
+        wr(&mut e, BLOCK_SIZE_COUNT, (3 << 16) | 512);
+        let mode =
+            TM_DMA | TM_BLOCK_COUNT_EN | TM_READ | TM_MULTI | (TM_AUTO_CMD12 << TM_AUTO_CMD_SHIFT);
+        cmd(&mut e, 18, 5, R1_DATA, mode);
+        assert!(e.dma_pending());
+        e.run_dma(&mut ram);
+        assert_eq!(rd(&mut e, INT_STATUS), INT_CMD_COMPLETE | INT_XFER_COMPLETE);
+
+        let mut want = Vec::new();
+        for lba in 5..8 {
+            let mut b = [0u8; 512];
+            e.card().unwrap().read_block(lba, &mut b);
+            want.extend_from_slice(&b);
+        }
+        assert_eq!(ram.read_slice(RAM + 0x1000, 100).unwrap(), &want[..100]);
+        assert_eq!(ram.read_slice(RAM + 0x2000, 1436).unwrap(), &want[100..]);
+        assert_eq!(
+            e.take_dma_written(),
+            vec![
+                (RAM + 0x1000, RAM + 0x1064),
+                (RAM + 0x2000, RAM + 0x2000 + 1436)
+            ]
+        );
+        // Auto-CMD12 put the card back in tran and its R1b in RESPONSE3.
+        assert_eq!((rd(&mut e, RESPONSE3) >> 9) & 0xF, 4);
+    }
+
+    #[test]
+    fn adma2_errors_on_an_invalid_descriptor_and_on_short_tables() {
+        let mut e = host();
+        let mut ram = Ram::new(0, 4 << 20);
+        enumerate(&mut e, 0x40FF_8000);
+        select(&mut e);
+        wr(&mut e, HOST_CONTROL, HC_DMA_ADMA2_32 << HC_DMA_SHIFT);
+        wr(&mut e, BLOCK_SIZE_COUNT, (2 << 16) | 512);
+        let mode = TM_DMA | TM_BLOCK_COUNT_EN | TM_READ | TM_MULTI;
+
+        adma_table(
+            &mut ram,
+            RAM,
+            &[(TRAN, 512, RAM + 0x1000), (0x20, 512, RAM + 0x2000)],
+        );
+        wr(&mut e, ADMA_ADDR, RAM);
+        cmd(&mut e, 18, 0, R1_DATA, mode);
+        e.run_dma(&mut ram);
+        assert_eq!(
+            rd(&mut e, INT_STATUS),
+            INT_CMD_COMPLETE | INT_ERR_ADMA | INT_ERROR
+        );
+        assert_eq!(rd(&mut e, ADMA_ERROR), ADMA_ST_FDS);
+        assert_eq!(
+            rd(&mut e, ADMA_ADDR),
+            RAM + 8,
+            "points at the bad descriptor"
+        );
+
+        wr(&mut e, INT_STATUS, 0xFFFF_FFFF);
+        adma_table(&mut ram, RAM, &[(TRAN_END, 512, RAM + 0x1000)]);
+        wr(&mut e, ADMA_ADDR, RAM);
+        cmd(&mut e, 18, 0, R1_DATA, mode);
+        e.run_dma(&mut ram);
+        assert_eq!(rd(&mut e, INT_STATUS) & INT_ERR_ADMA, INT_ERR_ADMA);
+        assert_eq!(rd(&mut e, ADMA_ERROR), ADMA_ST_TFR | ADMA_LEN_MISMATCH);
+    }
+
+    #[test]
+    fn adma2_write_with_auto_cmd23_lands_in_the_card() {
+        let mut e = host();
+        let mut ram = Ram::new(0, 4 << 20);
+        enumerate(&mut e, 0x40FF_8000);
+        select(&mut e);
+        wr(&mut e, HOST_CONTROL, HC_DMA_ADMA2_32 << HC_DMA_SHIFT);
+        let data: Vec<u8> = (0..1024u32).map(|i| (i * 7) as u8).collect();
+        ram.write_slice(RAM + 0x3000, &data).unwrap();
+        adma_table(&mut ram, RAM, &[(TRAN_END, 1024, RAM + 0x3000)]);
+        wr(&mut e, ADMA_ADDR, RAM);
+        wr(&mut e, BLOCK_SIZE_COUNT, (2 << 16) | 512);
+        wr(&mut e, SDMA_ADDR, 2); // ARGUMENT2: the CMD23 count
+        let mode = TM_DMA | TM_BLOCK_COUNT_EN | TM_MULTI | (TM_AUTO_CMD23 << TM_AUTO_CMD_SHIFT);
+        cmd(&mut e, 25, 40, R1_DATA, mode);
+        e.run_dma(&mut ram);
+        assert_eq!(rd(&mut e, INT_STATUS), INT_CMD_COMPLETE | INT_XFER_COMPLETE);
+        assert_eq!(&e.card().unwrap().image()[40 * 512..42 * 512], &data[..]);
+        // CMD23's count ended the transfer: the card is back in tran.
+        assert_eq!(
+            e.card().unwrap().state(),
+            crate::periph::sdcard::CardState::Tran
+        );
+        assert!(e.take_dma_written().is_empty(), "a write only reads RAM");
+    }
+
+    #[test]
+    fn sdma_pauses_at_the_boundary_until_the_next_address() {
+        let mut e = host();
+        let mut ram = Ram::new(0, 4 << 20);
+        enumerate(&mut e, 0x40FF_8000);
+        select(&mut e);
+        // 4 KiB boundary, 16 blocks, starting 1 KiB below a boundary.
+        wr(&mut e, BLOCK_SIZE_COUNT, (16 << 16) | 512);
+        wr(&mut e, SDMA_ADDR, RAM + 0x0C00);
+        cmd(
+            &mut e,
+            18,
+            0,
+            R1_DATA,
+            TM_DMA | TM_BLOCK_COUNT_EN | TM_READ | TM_MULTI,
+        );
+        e.run_dma(&mut ram);
+        assert_eq!(rd(&mut e, INT_STATUS), INT_CMD_COMPLETE | INT_DMA);
+        wr(&mut e, INT_STATUS, INT_DMA);
+        let mut resumes = 0;
+        while rd(&mut e, INT_STATUS) & INT_XFER_COMPLETE == 0 {
+            wr(&mut e, SDMA_ADDR, RAM + 0x1000 + 0x1000 * resumes);
+            assert!(e.dma_pending());
+            e.run_dma(&mut ram);
+            wr(&mut e, INT_STATUS, INT_DMA);
+            resumes += 1;
+        }
+        assert_eq!(resumes, 2, "1 KiB + 4 KiB + 3 KiB");
+        let mut b = [0u8; 512];
+        e.card().unwrap().read_block(15, &mut b);
+        assert_eq!(
+            ram.read_slice(RAM + 0x0C00 + 15 * 512, 512).unwrap(),
+            &b[..]
+        );
+    }
+
+    #[test]
+    fn pio_write_then_pio_read_round_trips() {
+        let mut e = host();
+        enumerate(&mut e, 0x40FF_8000);
+        select(&mut e);
+        wr(&mut e, BLOCK_SIZE_COUNT, (2 << 16) | 512);
+        cmd(
+            &mut e,
+            25,
+            3,
+            R1_DATA,
+            TM_BLOCK_COUNT_EN | TM_MULTI | (TM_AUTO_CMD12 << TM_AUTO_CMD_SHIFT),
+        );
+        assert_ne!(rd(&mut e, PRESENT_STATE) & PS_BUF_WRITE_EN, 0);
+        for i in 0..128u32 {
+            wr(&mut e, BUFFER_DATA, i.wrapping_mul(0x0101_0101));
+        }
+        assert_eq!(rd(&mut e, INT_STATUS) & INT_XFER_COMPLETE, 0);
+        for i in 128..256u32 {
+            wr(&mut e, BUFFER_DATA, i.wrapping_mul(0x0101_0101));
+        }
+        assert_eq!(
+            rd(&mut e, INT_STATUS) & INT_XFER_COMPLETE,
+            INT_XFER_COMPLETE
+        );
+        assert_eq!(rd(&mut e, PRESENT_STATE) & PS_BUF_WRITE_EN, 0);
+        assert_eq!(
+            e.card().unwrap().state(),
+            crate::periph::sdcard::CardState::Tran
+        );
+
+        wr(&mut e, INT_STATUS, 0xFFFF_FFFF);
+        cmd(&mut e, 17, 4, R1_DATA, TM_READ);
+        let words: Vec<u32> = (0..128).map(|_| rd(&mut e, BUFFER_DATA)).collect();
+        let want: Vec<u32> = (128..256u32).map(|i| i.wrapping_mul(0x0101_0101)).collect();
+        assert_eq!(words, want);
+        assert_eq!(
+            rd(&mut e, INT_STATUS) & INT_XFER_COMPLETE,
+            INT_XFER_COMPLETE
+        );
+    }
+
+    #[test]
+    fn voltage_switch_holds_the_lines_low_until_the_clock_returns_at_1v8() {
+        let mut e = host();
+        let ocr = enumerate(&mut e, 0x41FF_8000);
+        assert_eq!(ocr & 0xC100_0000, 0xC100_0000, "ready, CCS, S18A");
+        wr(&mut e, CLOCK_CONTROL, CLK_INTLEN | CLK_SD_EN);
+        cmd(&mut e, 11, 0, R1, 0);
+        assert_eq!(rd(&mut e, PRESENT_STATE) & PS_LINES_CMD_DAT, 0, "card busy");
+        // Clock gated, 1.8 V on, clock back: lines released.
+        wr(&mut e, CLOCK_CONTROL, CLK_INTLEN);
+        assert_eq!(rd(&mut e, PRESENT_STATE) & PS_LINES_CMD_DAT, 0);
+        wr(&mut e, HOST_CONTROL2, HC2_1V8);
+        assert_eq!(rd(&mut e, HOST_CONTROL2) & HC2_1V8, HC2_1V8);
+        wr(&mut e, CLOCK_CONTROL, CLK_INTLEN | CLK_SD_EN);
+        assert_eq!(
+            rd(&mut e, PRESENT_STATE) & PS_LINES_CMD_DAT,
+            PRESENT_STATE_IDLE & PS_LINES_CMD_DAT,
+            "lines back at their idle levels"
+        );
+        assert!(e.card().unwrap().signal_1v8());
+    }
+
+    #[test]
+    fn voltage_switch_fails_if_the_host_stays_at_3v3_and_power_off_resets_it() {
+        let mut e = host();
+        enumerate(&mut e, 0x41FF_8000);
+        cmd(&mut e, 11, 0, R1, 0);
+        wr(&mut e, CLOCK_CONTROL, CLK_INTLEN | CLK_SD_EN);
+        assert_eq!(
+            rd(&mut e, PRESENT_STATE) & PS_LINES_CMD_DAT,
+            0,
+            "still held low"
+        );
+        wr(&mut e, HOST_CONTROL, HC_BUS_POWER | (7 << 9));
+        wr(&mut e, HOST_CONTROL, 0);
+        assert_eq!(
+            rd(&mut e, PRESENT_STATE) & PS_LINES_CMD_DAT,
+            PRESENT_STATE_IDLE & PS_LINES_CMD_DAT,
+            "lines back at their idle levels"
+        );
+        assert!(!e.card().unwrap().signal_1v8());
+    }
+
+    #[test]
+    fn tuning_succeeds_on_the_first_block() {
+        let mut e = host();
+        enumerate(&mut e, 0x40FF_8000);
+        select(&mut e);
+        wr(&mut e, HOST_CONTROL2, HC2_1V8 | HC2_EXEC_TUNING);
+        wr(&mut e, INT_STATUS_EN, INT_BUF_READ_RDY);
+        wr(&mut e, INT_SIGNAL_EN, INT_BUF_READ_RDY);
+        wr(&mut e, BLOCK_SIZE_COUNT, 64);
+        cmd(&mut e, 19, 0, R1_DATA, TM_READ);
+        assert_eq!(rd(&mut e, INT_STATUS), INT_BUF_READ_RDY);
+        assert!(e.irq_asserted());
+        let hc2 = rd(&mut e, HOST_CONTROL2);
+        assert_eq!(hc2 & (HC2_EXEC_TUNING | HC2_TUNED_CLK), HC2_TUNED_CLK);
+        // The driver checks the command register for CMD19 in its handler.
+        assert_eq!(e.read(0x0E, Width::Half).unwrap() >> 8, 19);
+    }
+
+    #[test]
+    fn reset_all_clears_interrupt_enables_but_a_data_reset_does_not() {
+        let mut e = host();
+        wr(&mut e, INT_SIGNAL_EN, 1);
+        wr(&mut e, CLOCK_CONTROL, SRST_DATA | CLK_INTLEN);
+        assert_eq!(rd(&mut e, INT_STATUS_EN), 0xFFFF_FFFF);
+        wr(&mut e, CLOCK_CONTROL, SRST_ALL | CLK_INTLEN);
+        assert_eq!(rd(&mut e, INT_STATUS_EN), 0);
+        assert_eq!(rd(&mut e, INT_SIGNAL_EN), 0);
+        assert_eq!(rd(&mut e, CLOCK_CONTROL), CLK_INTLEN | CLK_STABLE);
+    }
+
+    #[test]
+    fn narrow_writes_merge_and_only_the_command_half_issues() {
+        let mut e = host();
+        e.write(CMD_XFER, Width::Half, TM_READ).unwrap();
+        assert_eq!(
+            rd(&mut e, INT_STATUS),
+            0,
+            "transfer mode alone issues nothing"
+        );
+        e.write(CMD_XFER + 2, Width::Half, (13 << 8) | R1).unwrap();
+        assert_eq!(rd(&mut e, INT_STATUS), INT_CMD_COMPLETE);
+        assert_eq!(rd(&mut e, CMD_XFER), ((13 << 8 | R1) << 16) | TM_READ);
+        // A byte write-1-to-clear touches only its own lane.
+        e.write(INT_STATUS + 1, Width::Byte, 0xFF).unwrap();
+        assert_eq!(rd(&mut e, INT_STATUS), INT_CMD_COMPLETE);
+        e.write(INT_STATUS, Width::Byte, 0x01).unwrap();
+        assert_eq!(rd(&mut e, INT_STATUS), 0);
     }
 }

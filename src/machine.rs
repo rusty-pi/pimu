@@ -823,6 +823,9 @@ impl Bus for Machine {
             if let Some(ch) = self.dma_vpu.take_start() {
                 self.run_dma_legacy(ch, true);
             }
+            if self.emmc2.dma_pending() {
+                self.emmc2.run_dma(&mut self.ram);
+            }
             return r;
         }
         self.mmio_writes = self.mmio_writes.wrapping_sub(1);
