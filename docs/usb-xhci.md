@@ -1020,6 +1020,15 @@ hub enumeration are byte-identical. One difference remains, and two that stage
 `PCIe timeout: 0x00000000` and `USB xHC init failed` are gone, and with them
 the 1.32 s of modelled time the failed link used to cost.
 
+Linux (#40) now drives the same hardware from the ARM. `pcie-brcmstb`
+enumerates the root port and the VL805 the way `rpi-dev` does (`link up, 5.0
+GT/s PCIe x1 (SSC)`, BAR0 at `0x6_0000_0000`), `xhci-pci` reads the capability
+registers through the outbound window, takes its interrupts as MSIs through the
+root complex's MSI block, and registers both root hubs; `usb 1-1` (the VIA hub)
+starts enumerating just before the scenario's shell session ends. What that
+needed is in `src/periph/pcie.rs` (module docs, "Linux") and
+`docs/arm-side-findings.md`.
+
 ---
 
 ## 7. Recommendation

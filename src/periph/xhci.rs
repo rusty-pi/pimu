@@ -126,7 +126,7 @@ const HCSPARAMS3: u32 = 0x00E7_0004;
 /// `AC64` 1, `CSZ` 0 (32-byte contexts), `PPC` 1, `xECP` 0x28 → BAR0 + 0xA0.
 const HCCPARAMS1: u32 = 0x0028_41EB;
 const DBOFF: u32 = 0x0000_0100;
-const RTSOFF: u32 = 0x0000_0200;
+pub const RTSOFF: u32 = 0x0000_0200;
 
 /// The VL805 has five root ports: port 1 USB2, ports 2-5 USB3.
 pub const PORTS: usize = 5;
@@ -147,6 +147,8 @@ const OP_PORTSC: u32 = 0x400;
 
 const USBCMD_RS: u32 = 1 << 0;
 const USBCMD_HCRST: u32 = 1 << 1;
+/// Interrupter Enable: without it no interrupter raises anything.
+const USBCMD_INTE: u32 = 1 << 2;
 const USBCMD_LHCRST: u32 = 1 << 7;
 
 const USBSTS_HCH: u32 = 1 << 0;
@@ -197,8 +199,9 @@ const IR_IMAN: u32 = 0x00;
 const IR_ERSTSZ: u32 = 0x08;
 const IR_ERSTBA_LO: u32 = 0x10;
 const IR_ERDP_LO: u32 = 0x18;
-/// Interrupt Pending / Interrupt Enable.
+/// Interrupt Pending (write-1-to-clear) / Interrupt Enable.
 const IMAN_IP: u32 = 1 << 0;
+const IMAN_IE: u32 = 1 << 1;
 /// `ERDP.EHB`, the Event Handler Busy bit the driver clears when it is done.
 const ERDP_EHB: u64 = 1 << 3;
 
@@ -501,6 +504,13 @@ impl Xhci {
             self.write_usbcmd(new);
             return;
         }
+        if word_off == RTSOFF + RT_IR0 + IR_IMAN {
+            // `IP` is write-1-to-clear: the driver acknowledges an interrupt
+            // by writing it back (xHCI 5.5.2.1). Only the controller sets it.
+            let ip = old & IMAN_IP & !(value & IMAN_IP);
+            self.set_reg(word_off, (new & !IMAN_IP) | ip);
+            return;
+        }
         if word_off == CAPLENGTH + OP_CRCR_LO || word_off == CAPLENGTH + OP_CRCR_HI {
             self.set_reg(word_off, new);
             let ptr = self.reg64(CAPLENGTH + OP_CRCR_LO);
@@ -533,8 +543,9 @@ impl Xhci {
     }
 
     /// `HCRST`: everything back to power-on, including the ports, which
-    /// re-report whatever is plugged in.
-    fn reset(&mut self) {
+    /// re-report whatever is plugged in. PERST# does the same to the whole
+    /// controller.
+    pub fn reset(&mut self) {
         self.regs.clear();
         self.slots = [Slot::default(); MAX_SLOTS + 1];
         self.event = EventRing::default();
@@ -1093,6 +1104,14 @@ impl Xhci {
             Xfer::Stall => (CC_STALL, 0),
             Xfer::Ok(_) => (CC_SUCCESS, 0),
         }
+    }
+
+    /// Interrupter 0 wants the host's attention: an event is pending, the
+    /// interrupter is enabled, and so are interrupts as a whole. This is the
+    /// level the PCI function turns into an MSI or INTA (xHCI 4.17).
+    pub fn interrupt_pending(&self) -> bool {
+        self.reg(RTSOFF + RT_IR0 + IR_IMAN) & (IMAN_IP | IMAN_IE) == IMAN_IP | IMAN_IE
+            && self.reg(CAPLENGTH + OP_USBCMD) & USBCMD_INTE != 0
     }
 
     /// The port status words, for tests and for `RVF_DBG_XHCI`.

@@ -312,8 +312,33 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] brcm-pcie fd500000.pcie: host bridge /scb/pcie@7d500000 ranges:
 [t] brcm-pcie fd500000.pcie:      MEM 0x0600000000..0x063fffffff -> 0x00c0000000
 [t] brcm-pcie fd500000.pcie:   IB MEM 0x0000000000..0x003fffffff -> 0x0400000000
-[t] brcm-pcie fd500000.pcie: PCIe RC controller misconfigured as Endpoint
-[t] brcm-pcie fd500000.pcie: probe with driver brcm-pcie failed with error -22
+[t] brcm-pcie fd500000.pcie: PCI host bridge to bus 0000:00
+[t] pci_bus 0000:00: root bus resource [bus 00-ff]
+[t] pci_bus 0000:00: root bus resource [mem 0x600000000-0x63fffffff] (bus address [0xc0000000-0xffffffff])
+[t] pci 0000:00:00.0: [14e4:2711] type 01 class 0x060400 PCIe Root Port
+[t] pci 0000:00:00.0: PCI bridge to [bus 00]
+[t] pci 0000:00:00.0:   bridge window [mem 0x80000000-0xbfffffff]
+[t] pci 0000:00:00.0: PME# supported from D0 D3hot
+[t] pci 0000:00:00.0: bridge configuration invalid ([bus 00-00]), reconfiguring
+[t] pci_bus 0000:01: supply vpcie3v3 not found, using dummy regulator
+[t] pci_bus 0000:01: supply vpcie3v3aux not found, using dummy regulator
+[t] pci_bus 0000:01: supply vpcie12v not found, using dummy regulator
+[t] brcm-pcie fd500000.pcie: clkreq-mode set to default
+[t] brcm-pcie fd500000.pcie: link up, 5.0 GT/s PCIe x1 (SSC)
+[t] pci 0000:01:00.0: [1106:3483] type 00 class 0x0c0330 PCIe Endpoint
+[t] pci 0000:01:00.0: BAR 0 [mem 0x00000000-0x00000fff 64bit]
+[t] pci 0000:01:00.0: ASPM: VL805 fixup applied
+[t] pci 0000:01:00.0: PME# supported from D0 D3cold
+[t] pci 0000:01:00.0: ASPM: default states L1
+[t] pci_bus 0000:01: busn_res: [bus 01-ff] end is updated to 01
+[t] pci 0000:00:00.0: bridge window [mem 0x600000000-0x6000fffff]: assigned
+[t] pci 0000:01:00.0: BAR 0 [mem 0x600000000-0x600000fff 64bit]: assigned
+[t] pci 0000:00:00.0: PCI bridge to [bus 01]
+[t] pci 0000:00:00.0:   bridge window [mem 0x600000000-0x6000fffff]
+[t] pci_bus 0000:00: resource 4 [mem 0x600000000-0x63fffffff]
+[t] pci_bus 0000:01: resource 1 [mem 0x600000000-0x6000fffff]
+[t] pcieport 0000:00:00.0: PME: Signaling with IRQ 27
+[t] pcieport 0000:00:00.0: AER: enabled with IRQ 27
 [t] Serial: 8250/16550 driver, 1 ports, IRQ sharing enabled
 [t] iproc-rng200 fe104000.rng: hwrng registered
 [t] vc-mem: phys_addr:0x00000000 mem_base=0x3ec00000 mem_size:0x40000000(1024 MiB)
@@ -324,6 +349,26 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] unimac-mdio unimac-mdio.-19: Broadcom UniMAC MDIO bus
 [t] usbcore: registered new interface driver lan78xx
 [t] usbcore: registered new interface driver smsc95xx
+[t] xhci_hcd 0000:01:00.0: xHCI Host Controller
+[t] xhci_hcd 0000:01:00.0: new USB bus registered, assigned bus number 1
+[t] xhci_hcd 0000:01:00.0: hcc params 0x002841eb hci version 0x100 quirks 0x0300240000000890
+[t] xhci_hcd 0000:01:00.0: xHCI Host Controller
+[t] xhci_hcd 0000:01:00.0: new USB bus registered, assigned bus number 2
+[t] xhci_hcd 0000:01:00.0: Host supports USB 3.0 SuperSpeed
+[t] usb usb1: New USB device found, idVendor=1d6b, idProduct=0002, bcdDevice= 6.18
+[t] usb usb1: New USB device strings: Mfr=3, Product=2, SerialNumber=1
+[t] usb usb1: Product: xHCI Host Controller
+[t] usb usb1: Manufacturer: Linux 6.18.46-v8+ xhci-hcd
+[t] usb usb1: SerialNumber: 0000:01:00.0
+[t] hub 1-0:1.0: USB hub found
+[t] hub 1-0:1.0: 1 port detected
+[t] usb usb2: New USB device found, idVendor=1d6b, idProduct=0003, bcdDevice= 6.18
+[t] usb usb2: New USB device strings: Mfr=3, Product=2, SerialNumber=1
+[t] usb usb2: Product: xHCI Host Controller
+[t] usb usb2: Manufacturer: Linux 6.18.46-v8+ xhci-hcd
+[t] usb usb2: SerialNumber: 0000:01:00.0
+[t] hub 2-0:1.0: USB hub found
+[t] hub 2-0:1.0: 4 ports detected
 [t] dwc_otg: version 3.00a 10-AUG-2012 (platform bus)
 [t] usbcore: registered new interface driver uas
 [t] usbcore: registered new interface driver usb-storage
@@ -346,7 +391,7 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] bcm2835-power bcm2835-power: RPiVid ASB register ID returned 0x00000000
 [t] uart-pl011 fe201000.serial: there is not valid maps for state default
 [t] uart-pl011 fe201000.serial: cts_event_workaround enabled
-[t] fe201000.serial: ttyAMA0 at MMIO 0xfe201000 (irq = 33, base_baud = 0) is a PL011 rev3
+[t] fe201000.serial: ttyAMA0 at MMIO 0xfe201000 (irq = 36, base_baud = 0) is a PL011 rev3
 [t] Booting Linux on physical CPU 0x0000000000 [0x410fd083]
 [t] printk: console [ttyAMA0] enabled
 [t] Linux version 6.18.46-v8+ (dom@buildbot) (aarch64-linux-gnu-gcc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0, GNU ld (GNU Binutils for Ubuntu) 2.38) #1999 SMP PREEMPT Mon Aug 24 15:30:47 BST 2026
@@ -521,8 +566,33 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] brcm-pcie fd500000.pcie: host bridge /scb/pcie@7d500000 ranges:
 [t] brcm-pcie fd500000.pcie:      MEM 0x0600000000..0x063fffffff -> 0x00c0000000
 [t] brcm-pcie fd500000.pcie:   IB MEM 0x0000000000..0x003fffffff -> 0x0400000000
-[t] brcm-pcie fd500000.pcie: PCIe RC controller misconfigured as Endpoint
-[t] brcm-pcie fd500000.pcie: probe with driver brcm-pcie failed with error -22
+[t] brcm-pcie fd500000.pcie: PCI host bridge to bus 0000:00
+[t] pci_bus 0000:00: root bus resource [bus 00-ff]
+[t] pci_bus 0000:00: root bus resource [mem 0x600000000-0x63fffffff] (bus address [0xc0000000-0xffffffff])
+[t] pci 0000:00:00.0: [14e4:2711] type 01 class 0x060400 PCIe Root Port
+[t] pci 0000:00:00.0: PCI bridge to [bus 00]
+[t] pci 0000:00:00.0:   bridge window [mem 0x80000000-0xbfffffff]
+[t] pci 0000:00:00.0: PME# supported from D0 D3hot
+[t] pci 0000:00:00.0: bridge configuration invalid ([bus 00-00]), reconfiguring
+[t] pci_bus 0000:01: supply vpcie3v3 not found, using dummy regulator
+[t] pci_bus 0000:01: supply vpcie3v3aux not found, using dummy regulator
+[t] pci_bus 0000:01: supply vpcie12v not found, using dummy regulator
+[t] brcm-pcie fd500000.pcie: clkreq-mode set to default
+[t] brcm-pcie fd500000.pcie: link up, 5.0 GT/s PCIe x1 (SSC)
+[t] pci 0000:01:00.0: [1106:3483] type 00 class 0x0c0330 PCIe Endpoint
+[t] pci 0000:01:00.0: BAR 0 [mem 0x00000000-0x00000fff 64bit]
+[t] pci 0000:01:00.0: ASPM: VL805 fixup applied
+[t] pci 0000:01:00.0: PME# supported from D0 D3cold
+[t] pci 0000:01:00.0: ASPM: default states L1
+[t] pci_bus 0000:01: busn_res: [bus 01-ff] end is updated to 01
+[t] pci 0000:00:00.0: bridge window [mem 0x600000000-0x6000fffff]: assigned
+[t] pci 0000:01:00.0: BAR 0 [mem 0x600000000-0x600000fff 64bit]: assigned
+[t] pci 0000:00:00.0: PCI bridge to [bus 01]
+[t] pci 0000:00:00.0:   bridge window [mem 0x600000000-0x6000fffff]
+[t] pci_bus 0000:00: resource 4 [mem 0x600000000-0x63fffffff]
+[t] pci_bus 0000:01: resource 1 [mem 0x600000000-0x6000fffff]
+[t] pcieport 0000:00:00.0: PME: Signaling with IRQ 27
+[t] pcieport 0000:00:00.0: AER: enabled with IRQ 27
 [t] Serial: 8250/16550 driver, 1 ports, IRQ sharing enabled
 [t] iproc-rng200 fe104000.rng: hwrng registered
 [t] vc-mem: phys_addr:0x00000000 mem_base=0x3ec00000 mem_size:0x40000000(1024 MiB)
@@ -533,6 +603,26 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] unimac-mdio unimac-mdio.-19: Broadcom UniMAC MDIO bus
 [t] usbcore: registered new interface driver lan78xx
 [t] usbcore: registered new interface driver smsc95xx
+[t] xhci_hcd 0000:01:00.0: xHCI Host Controller
+[t] xhci_hcd 0000:01:00.0: new USB bus registered, assigned bus number 1
+[t] xhci_hcd 0000:01:00.0: hcc params 0x002841eb hci version 0x100 quirks 0x0300240000000890
+[t] xhci_hcd 0000:01:00.0: xHCI Host Controller
+[t] xhci_hcd 0000:01:00.0: new USB bus registered, assigned bus number 2
+[t] xhci_hcd 0000:01:00.0: Host supports USB 3.0 SuperSpeed
+[t] usb usb1: New USB device found, idVendor=1d6b, idProduct=0002, bcdDevice= 6.18
+[t] usb usb1: New USB device strings: Mfr=3, Product=2, SerialNumber=1
+[t] usb usb1: Product: xHCI Host Controller
+[t] usb usb1: Manufacturer: Linux 6.18.46-v8+ xhci-hcd
+[t] usb usb1: SerialNumber: 0000:01:00.0
+[t] hub 1-0:1.0: USB hub found
+[t] hub 1-0:1.0: 1 port detected
+[t] usb usb2: New USB device found, idVendor=1d6b, idProduct=0003, bcdDevice= 6.18
+[t] usb usb2: New USB device strings: Mfr=3, Product=2, SerialNumber=1
+[t] usb usb2: Product: xHCI Host Controller
+[t] usb usb2: Manufacturer: Linux 6.18.46-v8+ xhci-hcd
+[t] usb usb2: SerialNumber: 0000:01:00.0
+[t] hub 2-0:1.0: USB hub found
+[t] hub 2-0:1.0: 4 ports detected
 [t] dwc_otg: version 3.00a 10-AUG-2012 (platform bus)
 [t] usbcore: registered new interface driver uas
 [t] usbcore: registered new interface driver usb-storage
@@ -555,7 +645,7 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] bcm2835-power bcm2835-power: RPiVid ASB register ID returned 0x00000000
 [t] uart-pl011 fe201000.serial: there is not valid maps for state default
 [t] uart-pl011 fe201000.serial: cts_event_workaround enabled
-[t] fe201000.serial: ttyAMA0 at MMIO 0xfe201000 (irq = 33, base_baud = 0) is a PL011 rev3
+[t] fe201000.serial: ttyAMA0 at MMIO 0xfe201000 (irq = 36, base_baud = 0) is a PL011 rev3
 [t] printk: console [ttyAMA0] enabled
 [t] of_cfs_init
 [t] of_cfs_init
@@ -567,10 +657,10 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] PM: genpd: Disabling unused power domains
 [t] check access for rdinit=/init failed: -2, ignoring
 [t] check access for rdinit=/init failed: -2, ignoring
-[t] Waiting for root device /dev/mmcblk0p2...
-[t] Waiting for root device /dev/mmcblk0p2...
 [t] mmc0: SDHCI controller on fe340000.mmc [fe340000.mmc] using ADMA
 [t] mmc0: SDHCI controller on fe340000.mmc [fe340000.mmc] using ADMA
+[t] Waiting for root device /dev/mmcblk0p2...
+[t] Waiting for root device /dev/mmcblk0p2...
 [t] mmc0: new UHS-I speed DDR50 SDHC card at address 0001
 [t] mmc0: new UHS-I speed DDR50 SDHC card at address 0001
 [t] mmcblk0: mmc0:0001 VIRTF 288 MiB
@@ -596,6 +686,8 @@ BusyBox v1.35.0 (Debian 1:1.35.0-4+deb12u1+b1) built-in shell (ash)
 Enter 'help' for a list of built-in commands.
 
 / # \x1b[6nuname -sm
+[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
+[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
 Linux aarch64
 / # \x1b[6necho cpus=$(grep -c ^processor /proc/cpuinfo)
 cpus=4

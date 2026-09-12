@@ -135,8 +135,9 @@ fn cfg_write_mask(off: usize) -> u32 {
         0x78 | 0x7c => 0xFFFF_FFFF,
         // PM control/status.
         0x84 => 0xFFFF_FFFF,
-        // MSI control (the enable/count field), address, data.
-        0x90 => 0x00FF_0000,
+        // MSI control: the enable bit and Multiple Message Enable. The rest
+        // (64-bit capable, Multiple Message Capable) is fixed.
+        0x90 => 0x0071_0000,
         0x94 | 0x98 | 0x9c => 0xFFFF_FFFF,
         // PCIe device control / link control / device control 2 / link ctl 2.
         0xc8 | 0xd0 | 0xe8 | 0xf0 => 0x0000_FFFF,
@@ -176,13 +177,30 @@ impl Default for Vl805 {
 }
 
 impl Vl805 {
-    pub fn new() -> Vl805 {
+    fn power_on_cfg() -> Vec<u8> {
         let mut cfg = vec![0u8; CFG_LEN];
         for (off, bytes) in CFG_SEED {
             cfg[*off..*off + bytes.len()].copy_from_slice(bytes);
         }
+        cfg
+    }
+
+    /// PERST#: the function comes back as it powered on — command register
+    /// clear, BAR0 unassigned, MSI off — and so does the xHCI controller, so an
+    /// interrupt it had pending is gone. Linux asserts PERST# before it starts
+    /// the link (`brcm_pcie_setup()`); without this the firmware's last USB
+    /// event left INTA asserted and nothing on the ARM ever cleared it.
+    ///
+    /// The vendor port's storage survives: nothing reads it back after a
+    /// reset without writing it first.
+    pub fn reset(&mut self) {
+        self.cfg = Vl805::power_on_cfg();
+        self.xhci.reset();
+    }
+
+    pub fn new() -> Vl805 {
         let mut dev = Vl805 {
-            cfg,
+            cfg: Vl805::power_on_cfg(),
             vendor_regs: BTreeMap::new(),
             vendor_writes: 0,
             xhci: Xhci::new(),
@@ -265,6 +283,31 @@ impl Vl805 {
     /// and post events.
     pub fn bar0_write(&mut self, off: u32, width: Width, value: u32, mem: &mut dyn HostMem) {
         self.xhci.write(off, width, value, mem);
+    }
+
+    /// The MSI the function sends when its interrupt fires, as `(address,
+    /// data)`, if the host has enabled MSI in the capability at `0x90` (64-bit
+    /// layout: address at `0x94`/`0x98`, data at `0x9C`). `lspci` on `rpi-dev`:
+    /// `MSI: Enable+ Count=4/4 Maskable- 64bit+`, `Address: 00000000fffffffc
+    /// Data: 6540`. Only interrupter 0 is ever used, so the vector offset the
+    /// function may OR into the data is always zero.
+    pub fn msi_message(&self) -> Option<(u64, u32)> {
+        if self.cfg_word(0x90) & (1 << 16) == 0 {
+            return None;
+        }
+        let addr = self.cfg_word(0x94) as u64 | ((self.cfg_word(0x98) as u64) << 32);
+        Some((addr, self.cfg_word(0x9C) & 0xFFFF))
+    }
+
+    /// Command register Bus Master Enable: without it the function may not
+    /// write anything upstream, an MSI included.
+    pub fn bus_master(&self) -> bool {
+        self.cfg_word(0x04) & 0x4 != 0
+    }
+
+    /// Command register Interrupt Disable: INTA stays deasserted.
+    pub fn intx_disabled(&self) -> bool {
+        self.cfg_word(0x04) & 0x400 != 0
     }
 
     /// Where BAR0 currently decodes on the PCI bus, if the firmware has both

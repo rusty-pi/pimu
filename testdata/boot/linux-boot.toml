@@ -67,6 +67,23 @@ why = "Linux's SDHCI driver reads the card and its partition table over eMMC2 (A
 line = "mmcblk0: p1 p2"
 
 [[milestone]]
+why = "pcie-brcmstb reads the root-complex strap with PERST# held, trains the link and sets up spread spectrum over MDIO (src/periph/pcie.rs); the real board prints the same line."
+line = "brcm-pcie fd500000.pcie: link up, 5.0 GT/s PCIe x1 (SSC)"
+
+[[milestone]]
+why = "The port-mode bit is a strap, not link state; reading it clear failed the probe before the root complex was modelled for Linux."
+line = "PCIe RC controller misconfigured as Endpoint"
+absent = true
+
+[[milestone]]
+why = "The bus scan finds the VL805 behind the root port and gives BAR0 the address the real board's does."
+line = "pci 0000:01:00.0: BAR 0 [mem 0x600000000-0x600000fff 64bit]: assigned"
+
+[[milestone]]
+why = "xhci-pci drives the VL805 through the outbound window: the capability registers read back, and both root hubs register."
+line = "hub 2-0:1.0: 4 ports detected"
+
+[[milestone]]
 why = "The root filesystem mounts from the card's second partition."
 line = "VFS: Mounted root (ext4 filesystem) readonly on device 179:2."
 
