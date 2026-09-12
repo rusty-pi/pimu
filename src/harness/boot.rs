@@ -474,7 +474,10 @@ mod tests {
     fn printk_timestamps_are_stripped() {
         let raw = b"[    1.858355] Run /sbin/init as init process\r\n[  OK  ] not a clock\n";
         let once = normalise_console(raw);
-        assert_eq!(once, "[t] Run /sbin/init as init process\n[  OK  ] not a clock\n");
+        assert_eq!(
+            once,
+            "[t] Run /sbin/init as init process\n[  OK  ] not a clock\n"
+        );
         // Idempotent: the golden is fed back through this.
         assert_eq!(normalise_console(once.as_bytes()), once);
     }

@@ -192,7 +192,13 @@ fn walk(s: &SysRegs, mem: &mut dyn Memory, regime: u8, va: u64) -> Result<Leaf, 
         (s.ttbr0[1], tcr & 63, g, tcr >> 7 & 1 != 0, tcr >> 32 & 7)
     } else {
         let g = if tcr >> 30 & 3 == 3 { 16 } else { 12 };
-        (s.ttbr1_el1, tcr >> 16 & 63, g, tcr >> 23 & 1 != 0, tcr >> 32 & 7)
+        (
+            s.ttbr1_el1,
+            tcr >> 16 & 63,
+            g,
+            tcr >> 23 & 1 != 0,
+            tcr >> 32 & 7,
+        )
     };
     let inputsize = 64 - tsz.clamp(16, 39) as u32;
     let outputsize = pa_bits(ps);
@@ -308,8 +314,7 @@ impl Cpu {
         let Some(regime) = self.regime() else {
             return Ok(va);
         };
-        let user =
-            regime == 1 && (self.el == 0 || (self.unprivileged && kind != Kind::Fetch));
+        let user = regime == 1 && (self.el == 0 || (self.unprivileged && kind != Kind::Fetch));
         let va_t = untag(&self.sys, regime, va);
         let tag = (va_t >> 12) << 2 | u64::from(regime);
         let e = match self.tlb.get(tag) {
@@ -377,7 +382,11 @@ impl Cpu {
         };
         let mut v = 0;
         for i in 0..u64::from(size) {
-            let p = if i < in_page { pa + i } else { pa2 + i - in_page };
+            let p = if i < in_page {
+                pa + i
+            } else {
+                pa2 + i - in_page
+            };
             let b = mem.read(p, 1).map_err(|_| abort(va + i, FSC_EXTERNAL))?;
             v |= b << (8 * i);
         }
@@ -403,10 +412,16 @@ impl Cpu {
             .translate_access(mem, va, size, Kind::Write)
             .map_err(|(a, f)| abort(a, f))?;
         let Some((in_page, pa2)) = split else {
-            return mem.write(pa, size, value).map_err(|_| abort(va, FSC_EXTERNAL));
+            return mem
+                .write(pa, size, value)
+                .map_err(|_| abort(va, FSC_EXTERNAL));
         };
         for i in 0..u64::from(size) {
-            let p = if i < in_page { pa + i } else { pa2 + i - in_page };
+            let p = if i < in_page {
+                pa + i
+            } else {
+                pa2 + i - in_page
+            };
             mem.write(p, 1, value >> (8 * i))
                 .map_err(|_| abort(va + i, FSC_EXTERNAL))?;
         }
@@ -425,7 +440,14 @@ impl Cpu {
 /// are stage 1 only): walk `va` in `regime` as EL0 (`user`) or the regime's
 /// own EL, and report in `PAR_EL1` (ARM ARM D17.2.113). Never uses or fills
 /// the TLB.
-pub(super) fn at(cpu: &mut Cpu, mem: &mut dyn Memory, regime: u8, user: bool, write: bool, va: u64) {
+pub(super) fn at(
+    cpu: &mut Cpu,
+    mem: &mut dyn Memory,
+    regime: u8,
+    user: bool,
+    write: bool,
+    va: u64,
+) {
     let s = &cpu.sys;
     let ns = s.scr_el3 & SCR_NS != 0 && regime != 3;
     // Bit 11 is RES1 in both formats.
@@ -539,7 +561,10 @@ mod tests {
         assert_eq!(c.read(&mut m, 0x1123, 4).ok(), Some(0xAABB_CCDD));
         assert_eq!(c.read(&mut m, 0x28_0010, 8).ok(), Some(0x1122));
         // TTBR1: the top 25 bits all ones, then the same tables.
-        assert_eq!(c.read(&mut m, 0xFFFF_FF80_0000_1123, 4).ok(), Some(0xAABB_CCDD));
+        assert_eq!(
+            c.read(&mut m, 0xFFFF_FF80_0000_1123, 4).ok(),
+            Some(0xAABB_CCDD)
+        );
         // Neither range: bits 63..39 mixed.
         assert_eq!(
             fault(c.read(&mut m, 0x0000_0080_0000_0000, 4)),
@@ -549,7 +574,10 @@ mod tests {
         assert!(fault(c.read(&mut m, 0x5600_0000_0000_1123, 4)).is_some());
         c.sys.tcr[1] |= 1 << 37;
         c.tlb.flush();
-        assert_eq!(c.read(&mut m, 0x5600_0000_0000_1123, 4).ok(), Some(0xAABB_CCDD));
+        assert_eq!(
+            c.read(&mut m, 0x5600_0000_0000_1123, 4).ok(),
+            Some(0xAABB_CCDD)
+        );
     }
 
     #[test]
@@ -623,7 +651,10 @@ mod tests {
         c.x[1] = 0x7008;
         c.sys.vbar[1] = 0x1000; // vectors in the mapped page
         assert!(matches!(c.step_system(&mut m), Step::Took(_)));
-        assert_eq!(c.sys.esr[1], 0x25 << 26 | 1 << 25 | u64::from(FSC_TRANSLATION | 3));
+        assert_eq!(
+            c.sys.esr[1],
+            0x25 << 26 | 1 << 25 | u64::from(FSC_TRANSLATION | 3)
+        );
         assert_eq!(c.sys.far[1], 0x7008);
         assert_eq!(c.sys.elr[1], 0x1000);
         assert_eq!(c.pc, 0x1200);
