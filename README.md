@@ -1,42 +1,65 @@
 # rpi-virt-fw
 
-A virtual bench for Raspberry Pi 4 (BCM2711) **VideoCore boot firmware**:
-`pieeprom.bin`, `start4.elf`, `fixup4.dat`.
+A whole-machine Raspberry Pi 4 (BCM2711) emulator that boots the **real
+firmware** — `pieeprom.bin`, `start4.elf`, `fixup4.dat` on the VideoCore VPU —
+and then Linux on the four Cortex-A72 cores it releases.
 
-The goal is to *execute the real blobs* in a modelled SoC and regression-test
-their behaviour — primarily serial output — against a known-good baseline, so a
-firmware bump (or a change to a custom-built firmware) shows up as a transcript
-diff.
+The original goal, and still the main one, is to *execute the real blobs* in a
+modelled SoC and regression-test their behaviour — primarily serial output —
+against a known-good baseline, so a firmware bump (or a change to a
+custom-built firmware) shows up as a transcript diff.
 
-These blobs run on the **VideoCore VPU**, not the ARM cores, which is why an
-ARM emulator like QEMU's `raspi4b` cannot test them (it stubs the GPU firmware
-out entirely). See [`docs/references.md`](docs/references.md) for the full
-survey of prior art — there is no off-the-shelf tool for this.
+The boot firmware runs on the **VideoCore VPU**, not the ARM cores, which is
+why an ARM emulator like QEMU's `raspi4b` cannot test it (it stubs the GPU
+firmware out entirely). See [`docs/references.md`](docs/references.md) for the
+survey of prior art — there is no off-the-shelf tool for this. Since
+[#40](https://github.com/valtzu/rpi-virt-fw/issues/40) the ARM side is ours
+too, Bochs-style: an interpreter, accuracy over speed, every core lock-stepped
+in one host thread so a run is deterministic.
 
 ## Status
 
-The full EEPROM → BOOTLOADER → `start4.elf` chain runs in the model. A
-`recon --eeprom` run boots the real `pieeprom.bin` through DDR bring-up, GPT +
-FAT parsing off an SD image, the RSA-verified `start4.elf` load, and into
-`start4`'s driver sequencer — it reads `config.txt` / `dt-blob.bin`, prints
-`board: boardrev d03115`, and reaches the clock-manager (`clkm`) init phase
-(model time ~20.8 s).
+The full EEPROM → BOOTLOADER → `start4.elf` → `arm_loader` chain runs in the
+model, from every boot medium CI checks: SD card, USB mass storage, TFTP and
+HTTP network boot. With `--arm`, `arm_loader` releases the four A72 cores, the
+firmware's own armstub drops them to EL2 and enters the kernel, and Linux boots
+off the SD card's ext4 root partition to a busybox shell on the serial console
+(a dev box reaches the prompt in about three minutes).
+
+No firmware behaviour is short-circuited and the boot needs no opt-in shims or
+environment variables. The one thing that fails on purpose is the HDMI EDID
+read: the DDC I²C masters are modelled and nothing acknowledges the EDID
+EEPROM's address, because the reference board has no monitor plugged in
+([#15](https://github.com/valtzu/rpi-virt-fw/issues/15)).
 
 Working:
 
 - **VideoCore IV scalar interpreter** (`src/vpu/`) — the 16-, 32- and 48-bit
-  scalar instruction forms `start4` actually executes: branches (incl. 48-bit
-  absolute), `ldm`/`stm`, `ld/st` addressing modes, ALU, `version`,
-  coprocessor-register moves, exception/timer-IRQ delivery, dual VPU cores.
+  scalar instruction forms `start4` actually executes, both VPU cores,
+  exception and interrupt delivery through the ThreadX vector table.
   Instruction *lengths* are always decoded correctly, so unknown opcodes
   (the vector unit) degrade to `Unimpl` rather than derailing the PC.
-- **Machine model** (`src/machine.rs`, `src/periph/`) — RAM + `0xC000_0000`
-  uncached SDRAM alias + address decode + peripherals: PL011 and mini-UART,
-  1 MHz system timer (with busy-wait fast-forward), SDRAM controller, clock
-  manager + A2W PLL, the `0x7D5D` VPU clock/PLL block, config-OTP, power
-  domains, DMA4, Arasan eMMC + SD-card read, BSC/I²C + DA9090 PMIC register
-  file, the two HDMI DDC I²C masters, mcsync, the `0x7EE0` boot-box, and a
-  logging catch-all for the rest.
+- **AArch64 interpreter** (`src/aarch64/`) — integer A64, SIMD and floating
+  point with ARM-exact soft-float, stage 1 MMU, exception levels EL3..EL0 and
+  the system registers Linux touches. `tests/a64_diff.rs` checks it
+  differentially against `qemu-aarch64` user-mode on random instruction
+  streams. Four cores run in lock-step with the VPU, paced by the system timer
+  (`src/arm.rs`, `src/armstub.rs`).
+- **Machine model** (`src/machine.rs`, `src/periph/`) — RAM + the
+  `0xC000_0000` uncached SDRAM alias + address decode + peripherals: PL011
+  (transmit and receive) and mini-UART, system timer, SDRAM controller, clock
+  manager + PLLs, config-OTP, power domains and watchdog, DMA4 and legacy DMA,
+  Arasan eMMC2 (ADMA2/SDMA, writes, 1.8 V) + SD card, SPI0 EEPROM, BSC/I²C
+  with the DA9090 PMIC and FXL6408 GPIO expander, HDMI DDC, HVS, mailbox with
+  the crypto service, RNG, AVS/PVT, PCIe + VL805 xHCI + a USB mass-storage
+  device, GENET with its BCM54213PE PHY, and on the ARM side the GIC-400, the
+  ARM-local block and the generic timer. A logging catch-all takes the rest.
+- **Network peer** (`src/net/`) — `--netboot <dir>` plugs the Ethernet cable
+  into a built-in DHCP, DNS, TFTP and plain HTTP server serving `<dir>`
+  ([#38](https://github.com/valtzu/rpi-virt-fw/issues/38)).
+- **Serial console input** — `--send-after <prompt> <text>` types into the
+  PL011 deterministically, keyed to the transcript; `--stdin` makes the host
+  terminal the console for an interactive session (Ctrl-A x quits).
 - **Register specs** (`specs/*.toml`) — machine-readable register maps with
   per-register provenance. `build.rs` generates the constants the device
   models match on, `tests/specs.rs` checks them against the model, and
@@ -46,45 +69,23 @@ Working:
   parse, GPT/MBR + FAT32 walk, `fixup4.dat`, RSA signature check.
 - **Regression harness** (`src/harness/`) — TOML scenarios in, console
   transcript out, diffed against a golden file. `--update` to re-baseline.
-  The firmware boot is one of those scenarios
-  (`testdata/boot/firmware-boot.toml`): a golden transcript of the whole
-  console plus ~35 named milestones, each carrying the invariant it guards.
-- **CI** — `.github/workflows/boot-log.yml` runs the simulated boot on every
-  push / PR to `main` and fails if it regresses before `arasan_emmc_open`.
+  Each boot is a scenario in `testdata/boot/`: a golden transcript of the whole
+  console plus named milestones, each carrying the invariant it guards.
+- **CI** — `.github/workflows/boot-log.yml` runs fmt, clippy and the tests,
+  then all five boots in parallel on every push / PR to `main`: the firmware
+  boot from SD, USB, TFTP and HTTP, and the Linux boot to a shell.
+  `periph-docs.yml` fails when `docs/periph/` differs from what the specs
+  generate.
 
-The boot needs no opt-in shims or environment variables any more — the real
-ThreadX periodic tick (interrupt-enable bit plus vector-table entry 64) is now
-always modelled, the way the hardware behaves. It gets as far as loading the
-kernel, the device tree and the config overlays, and no firmware behaviour is
-short-circuited anywhere: the last one to go was the HDMI EDID block read,
-which now fails because the DDC I²C masters at `0x7EF04500` / `0x7EF09500` are
-modelled and nothing acknowledges the EDID EEPROM's address — the reference
-board has no monitor plugged in
-([#15](https://github.com/valtzu/rpi-virt-fw/issues/15)).
-
-`RVF_MBOX_KICK` is gone too: it released a dmalib transfer's completion word by
-hand, which the firmware's own `dma_chan_interrupt` does now that the DMA
-completion interrupt is modelled
-([#3](https://github.com/valtzu/rpi-virt-fw/issues/3)).
-
-Network boot works too: `--netboot <dir>` plugs the Ethernet cable into a
-built-in network peer (DHCP, DNS, TFTP and plain HTTP) serving `<dir>`. Over
-TFTP (`--boot-order 0xf2`) the bootloader and start4 load everything from it
-through to `arm_loader`; over HTTP (`--boot-order 0xf7`) the bootloader
-downloads a signed `boot.img` ramdisk and boots from that.
-`scripts/make-netboot.sh` builds both from the SD image, and
-`testdata/boot/http-boot.toml` has the EEPROM settings HTTP boot needs. CI
-boots the same files from SD, USB, TFTP and HTTP in parallel
-([#38](https://github.com/valtzu/rpi-virt-fw/issues/38)), every one of them
-through to `arm_loader`.
-
-Not done: the VPU vector/float unit, HTTPS network boot, and the ARM property
-mailbox — which is what a booted Linux needs to reach `/dev/vcio` and the
-firmware crypto service. See [`docs/boot-chain.md`](docs/boot-chain.md) for the
-stage-by-stage map, [`docs/diagnostics.md`](docs/diagnostics.md) for the
+Not done: the VPU vector/float unit, HTTPS network boot, Linux reaching
+`start4`'s mailbox task through `/dev/vcio` (#40 milestone 4 — the firmware
+crypto service rpi-mkosi#37 needs), and USB, network and display under Linux.
+See [`docs/boot-chain.md`](docs/boot-chain.md) for the stage-by-stage map,
+[`docs/arm-side-findings.md`](docs/arm-side-findings.md) for what the ARM
+hand-off needs, [`docs/diagnostics.md`](docs/diagnostics.md) for the
 environment variables that find a wall, and [`docs/vision.md`](docs/vision.md)
-for the longer-term direction (single `boot` command, disk-image mode, keeping
-the VideoCore running alongside QEMU).
+for the longer-term direction (single `boot` command, disk-image mode). Its §3
+— keeping the VideoCore running alongside QEMU — is superseded by #40.
 
 ## Quick start
 
@@ -93,14 +94,24 @@ cargo test                        # unit + ISA + peripheral + scenario tests
 cargo run -- run-all -v           # run every scenario, show transcripts
 cargo run -- run testdata/scenarios/hello-vpu.toml -v
 
-./scripts/fetch-firmware.sh       # pull the real blobs into firmware/ (gitignored)
+./scripts/fetch-firmware.sh       # pull the real blobs, kernel and busybox into firmware/ (gitignored)
 cargo run -- disasm firmware/start4.elf --base 0xcec00200 --count 40
 
 # Run the real boot chain: EEPROM bootloader + start4.elf off an SD image.
 ./scripts/make-sd.sh                            # build firmware/sd.img
 cargo run --release -- recon firmware/pieeprom.bin \
   --eeprom --sd firmware/sd.img
+
+# ...and on into Linux, with the terminal as the serial console.
+cargo run --release -- recon firmware/pieeprom.bin \
+  --eeprom --sd firmware/sd.img --arm --stdin
 ```
+
+`make-sd.sh` needs `sfdisk`, `mtools` and `e2fsprogs`; no root or loop devices.
+`--usb <img>` boots the same image as a USB stick instead, and
+`scripts/make-netboot.sh` builds the root `--netboot` serves — the boot
+scenarios in `testdata/boot/` carry the exact flags and EEPROM settings for
+each medium, and `rpi-virt-fw boot-check <scenario> --plan` prints them.
 
 ### Getting the patched device tree out
 
@@ -133,8 +144,8 @@ diff <(fdtdump old.dtb) <(fdtdump new.dtb)
 The blob is found through the firmware's own `Device tree loaded to 0x… (size
 0x…)` log line and its FDT header is validated before anything is written, so
 no address is hard-coded and the flag keeps working across firmware versions.
-Nothing overwrites the tree afterwards — the ARM that would consume it is not
-modelled — so reading it out at the end of the run is safe.
+Without `--arm` nothing overwrites the tree afterwards, so reading it out at
+the end of the run is safe.
 
 `arm_loader` does not compute `rpi-machine-id` itself. `0x3ECC5190` first looks
 for the `BVER` block in the handoff table the EEPROM bootloader left behind and,
@@ -149,16 +160,28 @@ The identity behind it is this bench's own, not any real board's: every OTP row
 involved is invented in `src/periph/configotp.rs`. See the OTP rule in
 [`CLAUDE.md`](CLAUDE.md) for why a real board's must never be committed.
 
-`--max-wall` defaults to 140 s and there is no instruction cap unless you pass
-`--max-steps`. Reaching the last milestone takes longer than 140 s, so the boot
-scenario carries its own budget (`wall_secs`, 330 s, overridable with
-`RVF_BOOT_WALL`). `scripts/boot-check.sh` runs that one boot and checks it two
-ways; it is what CI runs, so run it locally to reproduce a CI failure.
+`--max-wall` defaults to 140 s (none with `--stdin`) and there is no
+instruction cap unless you pass `--max-steps`. Reaching the last milestone takes
+longer than 140 s, so each boot scenario carries its own budget (`wall_secs`,
+overridable with `RVF_BOOT_WALL`). `scripts/boot-check.sh` runs one boot and
+checks it two ways; it is what CI runs, so run it locally to reproduce a CI
+failure.
 
-### The boot scenario
+### The boot scenarios
 
-`testdata/boot/firmware-boot.toml` describes the run (which EEPROM image, which
-SD card, what wall budget) and everything asserted about it:
+Each file in `testdata/boot/` describes one run (which EEPROM image, which boot
+medium, what wall budget, what to type into the console) and everything
+asserted about it:
+
+| Scenario | Boot |
+|---|---|
+| `firmware-boot.toml` | SD card, through to `arm_loader` |
+| `usb-boot.toml` | USB mass storage (`BOOT_ORDER` 0x4), no SD card |
+| `tftp-boot.toml` | network boot over TFTP |
+| `http-boot.toml` | HTTP boot of a signed `boot.img` ramdisk |
+| `linux-boot.toml` | SD card with `--arm`: Linux to a busybox shell, then a few commands typed into it |
+
+Each one has:
 
 - the **golden transcript** in `testdata/boot/golden/`, the whole console
   diffed line by line. This is what catches output that *moved* or a value that
@@ -174,7 +197,8 @@ Both are checked against a single boot; the wall clock has little headroom, so
 nothing here runs the firmware twice.
 
 ```
-scripts/boot-check.sh                  # run it, check it
+scripts/boot-check.sh                  # run the SD boot, check it
+scripts/boot-check.sh --scenario=testdata/boot/linux-boot.toml
 scripts/boot-check.sh --update         # re-record the golden from this run
 RVF_BOOT_WALL=600 scripts/boot-check.sh   # slower machine, busier machine
 ```
@@ -210,28 +234,39 @@ path = "../golden/hello-vpu.txt"
 ```
 src/
   vpu/          VideoCore IV scalar core: length, decode, exec, registers
+  aarch64/      A64 core: integer, SIMD/FP, MMU, system registers
+  arm.rs        the four A72 cores, released at arm_loader, lock-stepped
+  armstub.rs    armstub hand-off words, image check, bootargs patch
   bus.rs        Bus + MmioDevice traits
   mem.rs        RAM region
   machine.rs    Machine: owns RAM + peripherals, decodes addresses
-  periph/       uart_pl011, aux, systimer, sdramc, clockman, clkmon, bsc,
-                emmc2, sdcard, dma4, pm, configotp, corectl, bootbox,
-                mcsync, stub (catch-all + log)
+  periph/       one file per block (see Status), stub.rs = catch-all + log
+  net/          built-in DHCP/DNS/TFTP/HTTP peer for --netboot
   soc/          BCM2711 memory map
-  firmware/     ELF32 loader; EEPROM image parse; Payload abstraction
+  spec/         register-spec schema (specs/*.toml, via build.rs)
+  firmware/     ELF32 loader; EEPROM image parse; dt-blob; Payload
+  fdt.rs        device tree reader/patcher
+  identity.rs   the rpi-machine-id derivation
+  stdio.rs      host terminal as the serial console (--stdin)
+  diag.rs       RVF_* diagnostics
   emulator.rs   Emulator = Vpu + Machine, run loop
   harness/      scenario parsing, transcript capture, golden diff,
-                boot.rs = the firmware-boot scenario and its milestones
+                boot.rs = the boot scenarios and their milestones
   payloads.rs   hand-assembled VPU test programs
-docs/           boot-chain, diagnostics, usb-xhci, vpu-isa, references, vision
-scripts/        fetch-firmware.sh, make-sd.sh, provision-eeprom.sh, make-dt-blob.py
+specs/          register maps with provenance; docs/periph/ is generated
+docs/           boot-chain, arm-side-findings, diagnostics, usb-xhci, vpu-isa,
+                references, vision, periph/
+scripts/        fetch-firmware.sh, make-sd.sh, make-netboot.sh, boot-check.sh,
+                provision-eeprom.sh, make-dt-blob.py, vc4-xref.py
 testdata/       scenarios/*.toml + golden/*.txt  (in-process, millisecond)
-                boot/firmware-boot.toml + boot/golden/  (the firmware boot)
+                boot/*.toml + boot/golden/  (the firmware and Linux boots)
+                netboot/  test-only signing key for HTTP boot
 ```
 
 ## Design note — borrow graph
 
 Emulators usually fight the borrow checker because "everything pokes the bus".
-Here the ownership is a tree: `Emulator` owns `Vpu` and `Machine` as siblings;
-`Vpu::step` takes `&mut dyn Bus`; `Machine` implements `Bus` and owns every
+Here the ownership is a tree: `Emulator` owns the cores and `Machine` as
+siblings; `Vpu::step` takes `&mut dyn Bus`; `Machine` implements `Bus` and owns every
 peripheral, dispatching by address range to `&mut self` methods. No `Rc`,
 no `RefCell`, no interior mutability.
