@@ -29,6 +29,19 @@ jobs:
       - name: Lint
         run: cargo clippy --all-targets -- -D warnings
 
+      # docs/periph/ is generated from specs/*.toml and committed. Regenerate it
+      # and fail on any difference: a hand edit, a file missing from the commit,
+      # or one left behind by a removed spec.
+      - name: Generated register docs
+        run: |
+          cargo run --quiet -- spec-docs --update
+          if [ -n "$(git status --porcelain -- docs/periph)" ]; then
+            git status --short -- docs/periph
+            git diff -- docs/periph
+            echo "::error::docs/periph is out of date; run 'cargo run -- spec-docs --update' and commit the result"
+            exit 1
+          fi
+
       - name: Test
         run: cargo test
 
