@@ -1,0 +1,202 @@
+
+[t] RPi: BOOTSYS release VERSION:0a7ef05f DATE: 2026/08/04 TIME: 12:38:13
+[t] MFG_VER: 1
+[t] BOOTMODE: 0x00 partition 0 build-ts BUILD_TIMESTAMP=1785847093 serial 1aa2bb31 boardrev d03115 stc [n]
+[t] PM_RSTS 00000020
+[t] POWER_OFF_ON_HALT: 0 WAIT_FOR_POWER_BUTTON 0 power-on-reset 0
+[t] EEPROM ID 0xef4018
+[t] SFDP None
+[t] part 00000000 reset_info 00000000
+[t] uSD voltage 3.3V
+[t] init_sdram_1350
+[t] Initialising SDRAM rank 2 total-size: 8Gbit part: 0 (0x17 0x00) odt: 0
+[t] memsys_init: 0 8Gbit MCB 0x80015ff0: 11696
+[t] DDR 3200 Mbps dual-rank:1 byte-mode:0 size-gbit:8 part-config:0 odt:0
+[t] SD_SB 11013100
+[t] OTP boardrev d03115 bootrom 8b0 8b0
+[t] Customer key hash 0000000000000000000000000000000000000000000000000000000000000000
+[t] VC-JTAG unlocked
+
+
+[t] RPi: BOOTLOADER release VERSION:0a7ef05f DATE: 2026/08/04 TIME: 12:38:13
+[t] MFG_VER: 1
+[t] BOOTMODE: 0x00 partition 0 build-ts BUILD_TIMESTAMP=1785847093 serial 1aa2bb31 boardrev d03115 stc [n]
+[t] EEPROM ID 0xef4018
+[t] SFDP None
+[t] PCI0 init
+[t] PCI0 reset
+[t] PCIe scan 00001106:00003483
+[t] XHCI-STOP
+[t] xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb
+[t] USBSTS 1
+[t] xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb
+[t] xHC0 ports 5 slots 32 intrs 4
+[t] SD_OC: 0
+[t] Boot mode: HTTP (07) order f
+[t] USB2[1] 400202e1 connected
+[t] USB2 root HUB port 1 init
+[t] DEV [01:00] 2.16 000000:01 class 9 VID 2109 PID 3431
+[t] HUB init [01:00] 2.16 000000:01
+[t] GENET: RESET_PHY 0
+[t] CTL 1140 PHY ID 600d 84a2
+[t] MII_CONTROL 1140
+[t] MII APD 0000 SCTL3 0000 IDDQ 0000
+
+[t] NETWORK: 02:00:5e:00:53:01 wait for link TFTP: 0.0.0.0
+[t] LINK STATUS: speed: 1000 full duplex
+[t] Link ready
+[t] GENET START: 64 16 32
+[t] GENET: UMAC_START 0x02005e00 0x53010000
+[t] RX: 0 IP: 0 IPV4: 0 MAC: 0 UDP: 0 UDP RECV: 0 IP_CSUM_ERR: 0 UDP_CSUM_ERR: 0
+[t] DHCP src: 02:00:5e:00:53:02 192.0.2.1
+[t] YI_ADDR 192.0.2.100
+[t] SI_ADDR 192.0.2.1
+[t] OPTIONS:-
+	op: 53 len:   1 DHCP recv OFFER (2) expect OFFER  6.28 
+	op: 54 len:   4 192.0.2.1  6.28 
+	op: 51 len:   4   6.28 
+	op:  1 len:   4 255.255.255.0  6.28 
+	op:  3 len:   4 192.0.2.1  6.28 
+	op:  6 len:   4 192.0.2.1  6.28 
+	op: 66 len:   9 192.0.2.1  6.84 [66]: 192.0.2.1
+[t] 
+	op: 60 len:   9   6.28 
+	op: 43 len:  32 
+		PXE op:  6 len:   1 
+		PXE op: 10 len:   4 
+		PXE op:  9 len:  20 
+00000000  52 61 73 70 62 65 72 72  79 20 50 69 20 42 6f 6f |Raspberry Pi Boo|
+00000010  74 ff ff 00                                      |t...            |
+
+
+[t] 
+[t] DHCP src: 02:00:5e:00:53:02 192.0.2.1
+[t] YI_ADDR 192.0.2.100
+[t] SI_ADDR 192.0.2.1
+[t] OPTIONS:-
+	op: 53 len:   1 DHCP recv ACK (5) expect ACK  6.28 
+	op: 54 len:   4 192.0.2.1  6.28 
+	op: 51 len:   4   6.28 
+	op:  1 len:   4 255.255.255.0  6.28 
+	op:  3 len:   4 192.0.2.1  6.28 
+	op:  6 len:   4 192.0.2.1  6.28 
+	op: 66 len:   9 192.0.2.1  6.86 [66]: 192.0.2.1
+[t] 
+	op: 60 len:   9   6.28 
+	op: 43 len:  32 
+		PXE op:  6 len:   1 
+		PXE op: 10 len:   4 
+		PXE op:  9 len:  20 
+00000000  52 61 73 70 62 65 72 72  79 20 50 69 20 42 6f 6f |Raspberry Pi Boo|
+00000010  74 ff ff 00                                      |t...            |
+
+
+[t] 
+[t] NET 192.0.2.100 255.255.255.0 gw 192.0.2.1 tftp 192.0.2.1
+[t] NET 192.0.2.100 255.255.255.0 gw 192.0.2.1 tftp 192.0.2.1
+[t] RX: 2 IP: 0 IPV4: 2 MAC: 2 UDP: 2 UDP RECV: 2 IP_CSUM_ERR: 0 UDP_CSUM_ERR: 0
+[t] Loading boot.img ...
+[t] HTTP: GET request for http://netboot.test:80/net_install/boot.sig
+[t] boot.sig
+[t] hash: [sha256]
+[t] ts: 1785847093
+[t] rsa2048: [signature]
+[t] HTTP: GET request for http://netboot.test:80/net_install/boot.img
+[t] HTTP: got 0% at 1 kB/s
+[t] HTTP: got 25% at 2127 kB/s
+[t] HTTP: got 52% at 2841 kB/s
+[t] HTTP: got 77% at 3187 kB/s
+[t] HTTP: got 100% at 4096 kB/s
+[t] Verifying
+[t] RSA verify
+[t] rsa-verify pass (0x0)
+[t] MBR: 0x00000000,   33264 type: 0x04
+[t] MBR: 0x00000000,       0 type: 0x00
+[t] MBR: 0x00000000,       0 type: 0x00
+[t] MBR: 0x00000000,       0 type: 0x00
+[t] Trying partition: 0
+[t] type: 16 lba: 0 '[oem]' '            ' clusters 32481 (1)
+[t] rsc 1 fat-sectors 127 root dir cluster 1 sectors 32 entries 512
+[t] FAT16 clusters 32481
+[t] Read config.txt bytes      279 hnd 0x72
+[t] [ramdisk] pieeprom.upd not found
+[t] [ramdisk] recover4.elf not found
+[t] [ramdisk] recovery.elf not found
+[t] Read start4.elf bytes  2298048 hnd 0x5115
+[t] Read fixup4.dat bytes     5512 hnd 0xff
+[t] 0x00d03115 0x00000000 0x00003fff
+[t] MEM GPU: 76 ARM: 948 TOTAL: 1024
+[t] Starting start4.elf @ 0xfec00200 partition 0
+[t] Stopping network
+[t] RX: 2 IP: 0 IPV4: 2 MAC: 2 UDP: 2 UDP RECV: 2 IP_CSUM_ERR: 0 UDP_CSUM_ERR: 0
+[t] RX: 2 IP: 0 IPV4: 2 MAC: 2 UDP: 2 UDP RECV: 2 IP_CSUM_ERR: 0 UDP_CSUM_ERR: 0
+[t] GENET STOP: 0
+[t] GENET: RESET_PHY 0
+[t] CTL 1000 PHY ID 600d 84a2
+[t] MII_CONTROL 1000
+[t] MII APD 0000 SCTL3 0000 IDDQ 0000
+
+[t] XHCI-STOP
+[t] xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb
+[t] USBSTS 18
+[t] PCI0 reset
+[t] +
+
+MESS:[t]:0: brfs: File read: /mfs/sd/config.txt
+MESS:[t]:0: board: boardrev d03115 otp d03115
+MESS:[t]:0: brfs: File read: 279 bytes
+MESS:[t]:0: brfs: File read: /mfs/sd/dt-blob.bin
+MESS:[t]:0: HDMI0:EDID error reading EDID block 0 attempt 0
+MESS:[t]:0: HDMI0:EDID giving up on reading EDID block 0
+MESS:[t]:0: HDMI1:EDID error reading EDID block 0 attempt 0
+MESS:[t]:0: HDMI1:EDID giving up on reading EDID block 0
+MESS:[t]:0: brfs: File read: 71582 bytes
+MESS:[t]:0: brfs: File read: /mfs/sd/config.txt
+MESS:[t]:0: gpioman: gpioman_get_pin_num: pin DISPLAY_DSI_PORT not defined
+MESS:[t]:0: gpioman: gpioman_get_pin_num: pin DISPLAY_DSI_PORT not defined
+MESS:[t]:0: *** Restart logging
+MESS:[t]:0: brfs: File read: 279 bytes
+MESS:[t]:0: hdmi: HDMI0:EDID error reading EDID block 0 attempt 0
+MESS:[t]:0: hdmi: HDMI0:EDID giving up on reading EDID block 0
+MESS:[t]:0: hdmi: HDMI0:EDID error reading EDID block 0 attempt 0
+MESS:[t]:0: hdmi: HDMI0:EDID giving up on reading EDID block 0
+MESS:[t]:0: hdmi: HDMI:hdmi_get_state is deprecated, use hdmi_get_display_state instead
+MESS:[t]:0: hdmi: HDMI1:EDID error reading EDID block 0 attempt 0
+MESS:[t]:0: hdmi: HDMI1:EDID giving up on reading EDID block 0
+MESS:[t]:0: hdmi: HDMI1:EDID error reading EDID block 0 attempt 0
+MESS:[t]:0: hdmi: HDMI1:EDID giving up on reading EDID block 0
+MESS:[t]:0: hdmi: HDMI:hdmi_get_state is deprecated, use hdmi_get_display_state instead
+MESS:[t]:0: HDMI0: hdmi_pixel_freq_limit: 300000000
+MESS:[t]:0: HDMI1: hdmi_pixel_freq_limit: 300000000
+MESS:[t]:0: No matching initramfs found (expected initramfs8) - auto_initramfs disabled
+MESS:[t]:0: dtb_file 'bcm2711-rpi-4-b.dtb'
+MESS:[t]:0: brfs: File read: /mfs/sd/bcm2711-rpi-4-b.dtb
+MESS:[t]:0: Loaded 'bcm2711-rpi-4-b.dtb' to 0x100 size 0xdc57
+MESS:[t]:0: brfs: File read: 56407 bytes
+MESS:[t]:0: brfs: File read: /mfs/sd/config.txt
+MESS:[t]:0: dtparam: spi=on
+MESS:[t]:0: dtparam: audio=off
+MESS:[t]:0: brfs: File read: 279 bytes
+MESS:[t]:0: brfs: File read: /mfs/sd/overlays/overlay_map.dtb
+MESS:[t]:0: brfs: File read: 6115 bytes
+MESS:[t]:0: brfs: File read: /mfs/sd/overlays/disable-bt.dtbo
+MESS:[t]:0: Loaded overlay 'disable-bt'
+MESS:[t]:0: brfs: File read: 1073 bytes
+MESS:[t]:0: brfs: File read: /mfs/sd/overlays/disable-wifi.dtbo
+MESS:[t]:0: Loaded overlay 'disable-wifi'
+MESS:[t]:0: brfs: File read: 387 bytes
+MESS:[t]:0: brfs: File read: /mfs/sd/overlays/vc4-kms-v3d-pi4.dtbo
+MESS:[t]:0: Loaded overlay 'vc4-kms-v3d-pi4'
+MESS:[t]:0: brfs: File read: 3913 bytes
+MESS:[t]:0: brfs: File read: /mfs/sd/cmdline.txt
+MESS:[t]:0: Read command line from file 'cmdline.txt':
+MESS:[t]:0: 'console=serial0,115200 console=tty1 root=/dev/mmcblk0p2 rootfstype=ext4 fsck.repair=yes rootwait'
+MESS:[t]:0: brfs: File read: 97 bytes
+MESS:[t]:0: brfs: File read: /mfs/sd/kernel8.img
+MESS:[t]:0: Loaded 'kernel8.img' to 0x200000 size 0x9fd5b1
+MESS:[t]:0: Device tree loaded to 0x2eff1e00 (size 0xe1b5)
+MESS:[t]:0: uart: Set PL011 baud rate to 103448.300000 Hz
+MESS:[t]:0: uart: Baud rate change done...
+MESS:[t]:0: uart: Baud rate change done...
+MESS:[t]:0: Watchdog stopped
+MESS:[t]:0: arm_loader: Starting ARM with 948MB

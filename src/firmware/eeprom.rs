@@ -202,6 +202,51 @@ impl EepromImage {
 
 /// A `BOOT_ORDER` device code (one hex nibble). Names per the Raspberry Pi
 /// bootloader documentation.
+/// Replace the body of the modifiable file `name` in `flash` in place, the
+/// way `rpi-eeprom-config`'s `ImageSection.update` does: the length field
+/// becomes the data plus the 16-byte name field, the data follows the name,
+/// and the rest of the slot up to the next non-padding section becomes `0xFF`
+/// with a `MAGIC_PAD` section header, so the section walk still finds
+/// everything after it. The file keeps its place; nothing moves.
+pub fn replace_file(flash: &mut [u8], name: &str, data: &[u8]) -> Result<()> {
+    let img = EepromImage::parse(flash)?;
+    let i = img
+        .sections
+        .iter()
+        .position(|s| s.magic == MAGIC_FILE && s.filename.as_deref() == Some(name))
+        .with_context(|| format!("no {name} in the EEPROM image"))?;
+    let hdr = img.sections[i].header_offset;
+    let next = img.sections[i + 1..]
+        .iter()
+        .find(|s| s.magic != MAGIC_PAD)
+        .map(|s| s.header_offset)
+        .with_context(|| {
+            format!("{name} is the last section; only slots with a successor are replaced")
+        })?;
+    let at = hdr + 8 + FILENAME_FIELD;
+    if at + data.len() > next {
+        bail!(
+            "{name}: {} bytes do not fit the {}-byte slot",
+            data.len(),
+            next - at
+        );
+    }
+    flash[hdr + 4..hdr + 8].copy_from_slice(&((data.len() + FILENAME_FIELD) as u32).to_be_bytes());
+    flash[at..at + data.len()].copy_from_slice(data);
+    let mut p = at + data.len();
+    while !p.is_multiple_of(8) {
+        flash[p] = 0xFF;
+        p += 1;
+    }
+    if next - p >= 8 {
+        flash[p..p + 4].copy_from_slice(&MAGIC_PAD.to_be_bytes());
+        flash[p + 4..p + 8].copy_from_slice(&((next - p - 8) as u32).to_be_bytes());
+        p += 8;
+    }
+    flash[p..next].fill(0xFF);
+    Ok(())
+}
+
 pub fn boot_device_name(code: u8) -> &'static str {
     match code {
         0x0 => "NONE",
@@ -295,6 +340,49 @@ impl BootConf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A file section: header, 16-byte name field, body, 8-byte aligned.
+    fn file_section(img: &mut Vec<u8>, name: &str, body: &[u8]) {
+        img.extend_from_slice(&MAGIC_FILE.to_be_bytes());
+        img.extend_from_slice(&((FILENAME_FIELD + body.len()) as u32).to_be_bytes());
+        let mut field = [0u8; FILENAME_FIELD];
+        field[..name.len()].copy_from_slice(name.as_bytes());
+        img.extend_from_slice(&field);
+        img.extend_from_slice(body);
+        while !img.len().is_multiple_of(8) {
+            img.push(0xFF);
+        }
+    }
+
+    #[test]
+    fn replace_file_shrinks_the_slot_and_pads_up_to_the_next_section() {
+        let mut img = Vec::new();
+        file_section(&mut img, "pubkey.bin", &[0; 512]);
+        let next = img.len();
+        file_section(&mut img, "bootconf.txt", b"BOOT_ORDER=0xf41\n");
+        img.extend_from_slice(&[0xFF; 64]);
+
+        let key: Vec<u8> = (0..264).map(|i| i as u8).collect();
+        replace_file(&mut img, "pubkey.bin", &key).unwrap();
+        let parsed = EepromImage::parse(&img).unwrap();
+        let names: Vec<_> = parsed.files().map(|(n, _)| n.to_string()).collect();
+        assert_eq!(
+            names,
+            ["pubkey.bin", "bootconf.txt"],
+            "the walk still reaches bootconf"
+        );
+        assert_eq!(parsed.files().next().unwrap().1, key.as_slice());
+        let pad = &parsed.sections[1];
+        assert_eq!(pad.magic, MAGIC_PAD);
+        assert!(pad.body.iter().all(|&b| b == 0xFF));
+        assert_eq!(parsed.sections[2].header_offset, next);
+
+        assert!(
+            replace_file(&mut img, "pubkey.bin", &[0; 600]).is_err(),
+            "too big"
+        );
+        assert!(replace_file(&mut img, "nope", &key).is_err());
+    }
 
     #[test]
     fn rejects_garbage() {

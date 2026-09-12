@@ -52,7 +52,25 @@ pub struct BootSpec {
     /// `pieeprom.bin` image, relative to the scenario file.
     pub eeprom: String,
     /// SD card image, relative to the scenario file.
-    pub sd: String,
+    #[serde(default)]
+    pub sd: Option<String>,
+    /// Mass-storage image in USB socket A, relative to the scenario file.
+    #[serde(default)]
+    pub usb: Option<String>,
+    /// Directory the built-in network peer serves over TFTP and HTTP (plugs
+    /// the Ethernet cable in), relative to the scenario file.
+    #[serde(default)]
+    pub netboot: Option<String>,
+    /// `BOOT_ORDER` to append to the EEPROM's `bootconf.txt`.
+    #[serde(default)]
+    pub boot_order: Option<String>,
+    /// Further `KEY=VALUE` lines to append to `bootconf.txt`.
+    #[serde(default)]
+    pub bootconf: Vec<String>,
+    /// RSA public key (`pubkey.bin` format) to put in the EEPROM, for boots
+    /// that verify a signed `boot.img`; relative to the scenario file.
+    #[serde(default)]
+    pub eeprom_pubkey: Option<String>,
     /// Wall-clock budget for the run, in seconds.
     pub wall_secs: u64,
     /// Largest acceptable skipped-instruction count in the run report. `recon`
@@ -196,8 +214,8 @@ impl BootScenario {
         self.base_dir.join(&self.boot.eeprom)
     }
 
-    pub fn sd_path(&self) -> PathBuf {
-        self.base_dir.join(&self.boot.sd)
+    pub fn sd_path(&self) -> Option<PathBuf> {
+        self.boot.sd.as_ref().map(|p| self.base_dir.join(p))
     }
 
     pub fn golden_path(&self) -> PathBuf {
@@ -220,13 +238,36 @@ impl BootScenario {
             "recon".into(),
             self.eeprom_path().display().to_string(),
             "--eeprom".into(),
-            "--sd".into(),
-            self.sd_path().display().to_string(),
+        ];
+        let b = &self.boot;
+        for (flag, path) in [
+            ("--sd", &b.sd),
+            ("--usb", &b.usb),
+            ("--netboot", &b.netboot),
+        ] {
+            if let Some(p) = path {
+                args.push(flag.into());
+                args.push(self.base_dir.join(p).display().to_string());
+            }
+        }
+        if let Some(order) = &b.boot_order {
+            args.push("--boot-order".into());
+            args.push(order.clone());
+        }
+        for kv in &b.bootconf {
+            args.push("--bootconf".into());
+            args.push(kv.clone());
+        }
+        if let Some(k) = &b.eeprom_pubkey {
+            args.push("--eeprom-pubkey".into());
+            args.push(self.base_dir.join(k).display().to_string());
+        }
+        args.extend([
             "--max-wall".into(),
             self.wall_secs().to_string(),
             "--console-log".into(),
             console_log.display().to_string(),
-        ];
+        ]);
         if !self.boot.mbox_property.is_empty() {
             args.push("--mbox-property".into());
             args.push(self.boot.mbox_property.join(","));
@@ -313,7 +354,10 @@ fn normalise_line(line: &str) -> String {
                 && f.len() == 2
                 && f.bytes().all(|b| b.is_ascii_digit()));
         if is_stamp {
-            return format!("[t] {}", scrub_fat_oem(&scrub_stc(tail)));
+            return format!(
+                "[t] {}",
+                scrub_image_digest(&scrub_fat_oem(&scrub_stc(tail)))
+            );
         }
     }
     scrub_fat_oem(&scrub_stc(line))
@@ -339,6 +383,25 @@ fn scrub_fat_oem(line: &str) -> String {
         return line.to_string();
     };
     format!("{}[oem]{}", &line[..open + 1], &line[close..])
+}
+
+/// Replace the digest and signature the bootloader prints for a downloaded
+/// `boot.img` (`hash: <sha256>`, `rsa2048: <hex>` from its `boot.sig`).
+///
+/// Both are functions of the image's bytes, and those depend on the tools that
+/// built the fixture (`scripts/make-netboot.sh` with the builder's mtools) as
+/// much as on anything the firmware did — the same reason the FAT OEM name is
+/// scrubbed. Whether the signature *verified* is what matters, and that stays
+/// in the transcript (`rsa-verify pass`).
+fn scrub_image_digest(line: &str) -> String {
+    for (prefix, marker) in [("hash: ", "[sha256]"), ("rsa2048: ", "[signature]")] {
+        if let Some(value) = line.strip_prefix(prefix) {
+            if !value.is_empty() && value.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return format!("{prefix}{marker}");
+            }
+        }
+    }
+    line.to_string()
 }
 
 /// Replace the `stc <n>` system-timer reading on the `BOOTMODE:` line.
@@ -468,6 +531,20 @@ mod tests {
             normalise_console(raw),
             "MESS:[t]:0: brfs: File read: 97 bytes\n"
         );
+    }
+
+    #[test]
+    fn a_downloaded_image_digest_and_signature_are_scrubbed() {
+        let raw =
+            b" 18.51 hash: c2288cbb31ccd4e9d3c3052a15f980049fa593beeb4e51c636f76e3db8f888ba\n\
+                    18.51 rsa2048: 9168816c3291\n\
+                    44.89 rsa-verify pass (0x0)\n";
+        let once = normalise_console(raw);
+        assert_eq!(
+            once,
+            "[t] hash: [sha256]\n[t] rsa2048: [signature]\n[t] rsa-verify pass (0x0)\n"
+        );
+        assert_eq!(normalise_console(once.as_bytes()), once);
     }
 
     #[test]

@@ -268,3 +268,42 @@ fn the_skipped_instruction_guard_still_bites() {
     assert_eq!(f.len(), 1, "{f:?}");
     assert!(f[0].contains("could not read the skipped"), "{}", f[0]);
 }
+
+/// Every boot medium has its own scenario (`testdata/boot/*.toml`), and each
+/// one's run plan attaches exactly the media it names.
+#[test]
+fn every_boot_scenario_loads_and_plans_its_media() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/boot");
+    let mut seen = Vec::new();
+    for entry in std::fs::read_dir(&dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|e| e != "toml") {
+            continue;
+        }
+        let scn = BootScenario::load(&path).expect("scenario parses");
+        assert!(
+            scn.milestones.iter().all(|m| !m.why.trim().is_empty()),
+            "{}: every milestone says why",
+            path.display()
+        );
+        let joined = scn.recon_args(Path::new("/tmp/c")).join(" ");
+        for (flag, media) in [
+            ("--sd ", &scn.boot.sd),
+            ("--usb ", &scn.boot.usb),
+            ("--netboot ", &scn.boot.netboot),
+        ] {
+            assert_eq!(joined.contains(flag), media.is_some(), "{joined}");
+        }
+        if let Some(order) = &scn.boot.boot_order {
+            assert!(
+                joined.contains(&format!("--boot-order {order}")),
+                "{joined}"
+            );
+        }
+        seen.push(scn.name);
+    }
+    seen.sort();
+    for name in ["firmware-boot", "tftp-boot", "usb-boot"] {
+        assert!(seen.iter().any(|s| s == name), "{name} missing: {seen:?}");
+    }
+}
