@@ -630,6 +630,7 @@ fn sys(
         // allowed.
         (0 | 4 | 6, 8, _, _) if op1 / 2 <= cpu.el => {
             cpu.tlb.flush();
+            cpu.tlb.broadcast = true;
             Ok(())
         }
         // AT S1E1R/W, S1E0R/W; S1E2R/W and S12E1*/S12E0* from EL2; S1E3R/W.
@@ -965,13 +966,13 @@ fn ld_st_exclusive(cpu: &mut Cpu, insn: u32, mem: &mut dyn Memory) -> Exec {
         } else {
             None
         };
-        cpu.exclusive = Some(addr);
+        cpu.exclusive = Some((addr, cpu.last_pa));
         cpu.set_xr(rt, true, v1);
         if let Some(v2) = v2 {
             cpu.set_xr(rt2, true, v2);
         }
     } else {
-        let ok = cpu.exclusive == Some(addr);
+        let ok = cpu.exclusive.map(|(va, _)| va) == Some(addr);
         if ok {
             cpu.write(mem, addr, bytes, cpu.xr(rt, true))?;
             if pair {

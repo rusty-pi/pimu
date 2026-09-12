@@ -1,13 +1,15 @@
-//! The ARM side of the machine (#40, milestone 2): Cortex-A72 core 0 on the
-//! BCM2711's ARM physical map, run in lock-step with the VPU.
+//! The ARM side of the machine (#40): the BCM2711's four Cortex-A72 cores on
+//! its ARM physical map, run in lock-step with the VPU.
 //!
 //! ## Release
 //!
-//! The core stays in reset until `arm_loader` lets it go, which it does by
-//! writing the ARM control block ([`crate::periph::armctrl`]). It then starts
-//! the way the SoC starts it: PC 0, EL3, `DAIF` masked — in the firmware's
-//! armstub ([`crate::armstub`]), which drops to non-secure EL2 and jumps to
-//! the kernel with `x0` = the dtb.
+//! The cores stay in reset until `arm_loader` lets them go, which it does by
+//! writing the ARM control block ([`crate::periph::armctrl`]). All four then
+//! start the way the SoC starts them: PC 0, EL3, `DAIF` masked — in the
+//! firmware's armstub ([`crate::armstub`]). Every core sets up its own banked
+//! GIC state and drops to non-secure EL2; core 0 jumps to the kernel with
+//! `x0` = the dtb, and cores 1..3 park in the stub, polling their spin-table
+//! word until Linux writes an entry point there.
 //!
 //! ## Address map
 //!
@@ -27,25 +29,36 @@
 //!
 //! ## Time and scheduling
 //!
-//! One ARM instruction is one cycle at the nominal [`gentimer::ARM_HZ`].
-//! After every VPU step the run loop calls [`ArmSide::catch_up`], which runs
-//! the ARM until it has had as many cycles as the system timer says have
-//! passed since release: about 28 per VPU step, and a whole slice at once
-//! when the VPU's `sleep` or `usleep` fast-forward jumps the counter. Either
-//! way a run is a pure function of its inputs — the reproducibility the
-//! regression bench depends on — and the ARM's clock never falls behind the
-//! VPU's. A core in `wfi` spends its cycles asleep, skipping ahead to the
-//! next generic-timer event inside its slice, and wakes as soon as the GIC
-//! signals it (masked or not, as the architecture says).
+//! One ARM instruction is one cycle at the nominal [`gentimer::ARM_HZ`], on
+//! every core: the cores take turns, one instruction each per cycle in core
+//! order, so they share one cycle count and read the same counter. After
+//! every VPU step the run loop calls [`ArmSide::catch_up`], which runs the
+//! ARM until it has had as many cycles as the system timer says have passed
+//! since release: about 28 per VPU step, and a whole slice at once when the
+//! VPU's `sleep` or `usleep` fast-forward jumps the counter. Either way a run
+//! is a pure function of its inputs — the reproducibility the regression
+//! bench depends on — and the ARM's clock never falls behind the VPU's.
+//!
+//! A core in `wfi` sits out its turns until the GIC signals it (masked or
+//! not, as the architecture says); when all of them wait, time skips ahead
+//! to the next generic-timer event inside the slice.
 //!
 //! A fast-forward slice runs with the VPU frozen, so a mailbox request the
 //! ARM makes in one is seen by the VPU only when the slice ends (at most one
 //! VPU timer interval late).
 //!
+//! ## Between cores
+//!
+//! - Exclusive monitor: a store by one core into the 64-byte granule another
+//!   core has marked with `ldxr` clears that core's mark, so its `stxr`
+//!   fails — the global monitor's part in a spinlock.
+//! - TLB maintenance: every `TLBI` flushes all the cores' TLBs, which covers
+//!   the broadcast (inner-shareable) forms; invalidating more is allowed.
+//! - `wfe` and `sev` are no-ops: a `wfe` may complete without an event, so
+//!   the loops that wait with it just spin.
+//!
 //! Not yet: stage 2 translation (a core that sets `HCR_EL2.VM` stops with
-//! [`ArmStop::Unsupported`]), secondary cores (they stay in reset; Linux
-//! gives up on them after its own timeout), and time spent asleep on the VPU
-//! side (`sleep` fast-forwards the system timer without the ARM).
+//! [`ArmStop::Unsupported`]).
 
 use crate::aarch64::{sysreg, Abort, Cpu, Memory, Step};
 use crate::armstub::{self, Handoff};
@@ -54,46 +67,107 @@ use crate::machine::Machine;
 use crate::periph::gentimer::{self, GenericTimer, Reg, Which};
 use crate::periph::{armlocal, gic};
 
+/// The number of cores: BCM2711 has four A72s.
+pub const CORES: usize = 4;
+
 /// The peripheral window, and how far below it the VPU sees the same thing.
 const PERIPH: std::ops::Range<u64> = 0xFC00_0000..0xFF80_0000;
 const PERIPH_TO_BUS: u64 = 0x8000_0000;
 
-/// Why the ARM stopped. The core never stops by itself; these are gaps in the
-/// model.
+/// The armstub lives at physical 0 and is well under a page; a core whose PC
+/// gets past this has left it.
+const STUB_END: u64 = 0x1000;
+
+/// Why the ARM stopped. The cores never stop by themselves; these are gaps in
+/// the model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArmStop {
     /// An instruction the interpreter does not implement yet.
-    Unimplemented { pc: u64, el: u32, insn: u32 },
-    /// The guest enabled something not modelled yet (the MMU).
+    Unimplemented {
+        core: usize,
+        pc: u64,
+        el: u32,
+        insn: u32,
+    },
+    /// The guest enabled something not modelled yet.
     Unsupported {
+        core: usize,
         pc: u64,
         el: u32,
         what: &'static str,
     },
 }
 
-/// ARM core 0 and what it has done since release.
-pub struct ArmSide {
+/// One core and what it has done since release.
+pub struct Core {
     pub cpu: Cpu,
     pub timer: GenericTimer,
-    /// Modelled cycles since release: instructions plus time asleep.
-    pub cycles: u64,
     pub insns: u64,
-    pub slept: u64,
     pub exceptions: u64,
     pub interrupts: u64,
     /// In `wfi`, waiting for an interrupt.
     pub waiting: bool,
+    /// The first time the core's PC left the armstub: `(cycle, EL, PC, x0)`.
+    /// For core 0 that is the kernel entry.
+    pub entered: Option<(u64, u32, u64, u64)>,
+}
+
+impl Core {
+    fn new(id: usize) -> Core {
+        Core {
+            cpu: Cpu::with_id(id as u32),
+            timer: GenericTimer::new(),
+            insns: 0,
+            exceptions: 0,
+            interrupts: 0,
+            waiting: false,
+            entered: None,
+        }
+    }
+
+    /// Bring this core's interrupt inputs up to date: the counter's rate,
+    /// its timers' lines into its GIC PPIs, and the GIC's verdict onto it.
+    fn sync(&mut self, m: &mut Machine, id: usize, cycles: u64, hz: u64) {
+        self.timer.set_hz(cycles, hz);
+        for w in Which::ALL {
+            m.gic.set_ppi_level(id, w.intid(), self.timer.line(w, cycles));
+        }
+        let s = m.gic.signal(id);
+        self.cpu.irq_line = s.is_some_and(|s| !s.fiq);
+        self.cpu.fiq_line = s.is_some_and(|s| s.fiq);
+    }
+}
+
+/// The ARM cores and what they have done since release.
+pub struct ArmSide {
+    pub cores: Vec<Core>,
+    /// Modelled cycles since release.
+    pub cycles: u64,
+    /// The part of [`Self::cycles`] every core spent asleep.
+    pub slept: u64,
     pub stopped: Option<ArmStop>,
     /// What `arm_loader` left in the armstub, read at release.
     pub handoff: Option<Handoff>,
     /// The kernel command line, before and after [`armstub::BOOTARGS`] were
     /// added at release.
     pub bootargs: Option<Result<(String, String), String>>,
-    /// The first time the core reached the kernel entry: `(cycles, EL, x0)`.
-    pub kernel_entered: Option<(u64, u32, u64)>,
     /// The system timer, in ARM cycles, at the first [`Self::catch_up`].
     released_at: Option<u64>,
+    /// Interrupt state has to be recomputed before the next step.
+    dirty: bool,
+    /// The earliest cycle a generic timer's output can rise.
+    timer_due: u64,
+    /// The [`SPIS`] lines into the GIC, as last seen.
+    spis: [bool; SPIS.len()],
+}
+
+/// The device interrupt lines wired to the GIC: the mailbox, eMMC2 and the
+/// two GENET lines.
+const SPIS: [u32; 4] = [gic::ID_MAILBOX, gic::ID_EMMC2, gic::ID_GENET_A, gic::ID_GENET_B];
+
+fn spi_levels(m: &Machine) -> [bool; SPIS.len()] {
+    let [genet_a, genet_b] = m.genet.irq_lines();
+    [m.mbox.arm_irq_asserted(), m.emmc2.irq_asserted(), genet_a, genet_b]
 }
 
 impl Default for ArmSide {
@@ -103,23 +177,37 @@ impl Default for ArmSide {
 }
 
 impl ArmSide {
-    /// Core 0 in its reset state, not yet looking at any hand-off.
+    /// All the cores in their reset state, not yet looking at any hand-off.
     pub fn new() -> ArmSide {
+        Self::with_cores(CORES)
+    }
+
+    /// The first `n` cores only.
+    pub fn with_cores(n: usize) -> ArmSide {
         ArmSide {
-            cpu: Cpu::new(),
-            timer: GenericTimer::new(),
+            cores: (0..n).map(Core::new).collect(),
             cycles: 0,
-            insns: 0,
             slept: 0,
-            exceptions: 0,
-            interrupts: 0,
-            waiting: false,
             stopped: None,
             handoff: None,
             bootargs: None,
-            kernel_entered: None,
             released_at: None,
+            dirty: true,
+            timer_due: 0,
+            spis: [false; SPIS.len()],
         }
+    }
+
+    /// The cores as `arm_loader` releases them: read the armstub's hand-off
+    /// words, and put the harness's kernel arguments into the device tree
+    /// before the first instruction runs.
+    pub fn released(m: &mut Machine) -> ArmSide {
+        let mut arm = Self::new();
+        if let Ok(h) = armstub::read_handoff(m) {
+            arm.handoff = Some(h);
+            arm.bootargs = Some(armstub::add_bootargs(m, h.dtb, &armstub::BOOTARGS));
+        }
+        arm
     }
 
     /// Run until the ARM has had every cycle of modelled time since release
@@ -132,98 +220,129 @@ impl ArmSide {
         }
     }
 
-    /// Core 0 as `arm_loader` releases it: read the armstub's hand-off
-    /// words, and put the harness's kernel arguments into the device tree
-    /// before the first instruction runs.
-    pub fn released(m: &mut Machine) -> ArmSide {
-        let mut arm = ArmSide::new();
-        if let Ok(h) = armstub::read_handoff(m) {
-            arm.handoff = Some(h);
-            arm.bootargs = Some(armstub::add_bootargs(m, h.dtb, &armstub::BOOTARGS));
-        }
-        arm
-    }
-
-    /// Bring the interrupt inputs up to date: the counter's rate, the timer
-    /// and device lines into the GIC, and the GIC's verdict onto the core.
+    /// Bring every core's interrupt inputs up to date (module docs, "Time
+    /// and scheduling"), and note when a timer next needs looking at.
     fn sync(&mut self, m: &mut Machine) {
-        self.timer
-            .set_hz(self.cycles, m.arm_local.counter_hz().unwrap_or(0));
-        for w in Which::ALL {
-            m.gic
-                .set_ppi_level(0, w.intid(), self.timer.line(w, self.cycles));
+        // Fresh, not the levels `run` saw: a core's own access (reading the
+        // mailbox, acking a device) may just have dropped one.
+        self.spis = spi_levels(m);
+        for (&id, &level) in SPIS.iter().zip(&self.spis) {
+            m.gic.set_spi_level(id, level);
         }
-        m.gic
-            .set_spi_level(gic::ID_MAILBOX, m.mbox.arm_irq_asserted());
-        m.gic.set_spi_level(gic::ID_EMMC2, m.emmc2.irq_asserted());
-        let [genet_a, genet_b] = m.genet.irq_lines();
-        m.gic.set_spi_level(gic::ID_GENET_A, genet_a);
-        m.gic.set_spi_level(gic::ID_GENET_B, genet_b);
-        let s = m.gic.signal(0);
-        self.cpu.irq_line = s.is_some_and(|s| !s.fiq);
-        self.cpu.fiq_line = s.is_some_and(|s| s.fiq);
+        let hz = m.arm_local.counter_hz().unwrap_or(0);
+        let cycles = self.cycles;
+        for (id, core) in self.cores.iter_mut().enumerate() {
+            core.sync(m, id, cycles, hz);
+        }
+        self.timer_due = self
+            .cores
+            .iter()
+            .filter_map(|c| c.timer.next_event(cycles))
+            .min()
+            .unwrap_or(u64::MAX);
+        self.dirty = false;
     }
 
-    /// Run for `budget` cycles, or until the core stops.
+    /// Run for `budget` cycles, or until a core stops.
     pub fn run(&mut self, m: &mut Machine, budget: u64) {
         let end = self.cycles + budget;
-        let kernel = self.handoff.map(|h| u64::from(h.kernel));
+        // The VPU side moves these lines, and it is frozen while this runs.
+        if spi_levels(m) != self.spis {
+            self.dirty = true;
+        }
         while self.cycles < end && self.stopped.is_none() {
-            self.sync(m);
-            if self.waiting {
-                if self.cpu.irq_line || self.cpu.fiq_line {
-                    self.waiting = false;
-                } else {
-                    let wake = self
-                        .timer
-                        .next_event(self.cycles)
-                        .unwrap_or(u64::MAX)
-                        .min(end);
-                    self.slept += wake - self.cycles;
-                    self.cycles = wake;
-                    continue;
+            // Interrupt state only moves when a core touches a device, the
+            // GIC or a timer register, or a timer reaches its compare.
+            if self.dirty || self.cycles >= self.timer_due {
+                self.sync(m);
+            }
+            let mut awake = false;
+            for id in 0..self.cores.len() {
+                let core = &mut self.cores[id];
+                if core.waiting {
+                    if !core.cpu.irq_line && !core.cpu.fiq_line {
+                        continue;
+                    }
+                    core.waiting = false;
+                }
+                awake = true;
+                if let Some(stop) = self.step_core(m, id) {
+                    self.stopped = Some(stop);
+                    break;
                 }
             }
-            let secure = self.cpu.el == 3 || self.cpu.sys.scr_el3 & sysreg::SCR_NS == 0;
-            let pc = self.cpu.pc;
-            let step = self.cpu.step_system(&mut ArmBus {
-                m,
-                timer: &mut self.timer,
-                cycles: self.cycles,
-                secure,
-            });
+            if !awake {
+                let wake = self.timer_due.min(end).max(self.cycles + 1);
+                self.slept += wake - self.cycles;
+                self.cycles = wake;
+                continue;
+            }
             self.cycles += 1;
-            match step {
-                Step::Retired => self.insns += 1,
-                Step::Wfi => {
-                    self.insns += 1;
-                    self.waiting = true;
-                }
-                // No other core to send an event, and an event-less `wfe`
-                // may complete at once.
-                Step::Wfe => self.insns += 1,
-                Step::Took(_) => self.exceptions += 1,
-                Step::Interrupt { .. } => self.interrupts += 1,
-                Step::Unimplemented(insn) => {
-                    self.stopped = Some(ArmStop::Unimplemented {
-                        pc,
-                        el: self.cpu.el,
-                        insn,
-                    })
-                }
-                Step::Unsupported(what) => {
-                    self.stopped = Some(ArmStop::Unsupported {
-                        pc,
-                        el: self.cpu.el,
-                        what,
-                    })
-                }
-                Step::Exception(_) => unreachable!("step_system takes exceptions"),
+        }
+    }
+
+    /// One instruction (or exception or interrupt entry) on core `id`, and
+    /// what it means for the others (module docs, "Between cores").
+    fn step_core(&mut self, m: &mut Machine, id: usize) -> Option<ArmStop> {
+        let cycles = self.cycles;
+        let core = &mut self.cores[id];
+        let secure = core.cpu.el == 3 || core.cpu.sys.scr_el3 & sysreg::SCR_NS == 0;
+        let pc = core.cpu.pc;
+        let mut bus = ArmBus {
+            m,
+            timer: &mut core.timer,
+            cycles,
+            core: id,
+            secure,
+            written: None,
+            io: false,
+        };
+        let step = core.cpu.step_system(&mut bus);
+        let written = bus.written;
+        self.dirty |= bus.io;
+        let el = core.cpu.el;
+        match step {
+            Step::Retired | Step::Wfe => core.insns += 1,
+            Step::Wfi => {
+                core.insns += 1;
+                core.waiting = true;
             }
-            if self.kernel_entered.is_none() && Some(self.cpu.pc) == kernel {
-                self.kernel_entered = Some((self.cycles, self.cpu.el, self.cpu.x[0]));
+            Step::Took(_) => core.exceptions += 1,
+            Step::Interrupt { .. } => core.interrupts += 1,
+            Step::Unimplemented(insn) => {
+                return Some(ArmStop::Unimplemented {
+                    core: id,
+                    pc,
+                    el,
+                    insn,
+                })
+            }
+            Step::Unsupported(what) => {
+                return Some(ArmStop::Unsupported {
+                    core: id,
+                    pc,
+                    el,
+                    what,
+                })
+            }
+            Step::Exception(_) => unreachable!("step_system takes exceptions"),
+        }
+        if core.entered.is_none() && core.cpu.pc >= STUB_END {
+            core.entered = Some((cycles, el, core.cpu.pc, core.cpu.x[0]));
+        }
+        let broadcast = std::mem::take(&mut core.cpu.tlb.broadcast);
+        for (k, other) in self.cores.iter_mut().enumerate() {
+            if k == id {
+                continue;
+            }
+            if let Some((lo, hi)) = written {
+                other.cpu.snoop_write(lo, hi);
+            }
+            if broadcast {
+                other.cpu.tlb.flush();
             }
         }
+        None
     }
 }
 
@@ -241,8 +360,16 @@ struct ArmBus<'a> {
     m: &'a mut Machine,
     timer: &'a mut GenericTimer,
     cycles: u64,
+    /// Which core is accessing, for the GIC's per-CPU views.
+    core: usize,
     /// The access's security state, for the GIC's banked views.
     secure: bool,
+    /// The physical range the step wrote to, for the other cores'
+    /// exclusive monitors.
+    written: Option<(u64, u64)>,
+    /// The step touched something besides RAM (a device, the GIC, a timer
+    /// register), so interrupt state may have moved.
+    io: bool,
 }
 
 impl ArmBus<'_> {
@@ -276,7 +403,7 @@ impl ArmBus<'_> {
 
     fn accessor(&self) -> gic::Accessor {
         gic::Accessor {
-            cpu: 0,
+            cpu: self.core,
             secure: self.secure,
         }
     }
@@ -284,7 +411,9 @@ impl ArmBus<'_> {
     /// An access of at most 4 bytes.
     fn read32(&mut self, addr: u64, size: u32) -> Result<u64, Abort> {
         let w = Self::width(size);
-        let r = match self.route(addr, size, false)? {
+        let target = self.route(addr, size, false)?;
+        self.io |= !matches!(target, Target::Ram(_));
+        let r = match target {
             Target::Ram(a) => self.m.ram.load(self.m.ram.base() + a, w),
             Target::Periph(a) => self.m.load(a, w),
             Target::Local(o) => self.m.arm_local.read(o, w),
@@ -298,7 +427,9 @@ impl ArmBus<'_> {
 
     fn write32(&mut self, addr: u64, size: u32, value: u64) -> Result<(), Abort> {
         let (w, v) = (Self::width(size), value as u32);
-        let r = match self.route(addr, size, true)? {
+        let target = self.route(addr, size, true)?;
+        self.io |= !matches!(target, Target::Ram(_));
+        let r = match target {
             Target::Ram(a) => {
                 let base = self.m.ram.base();
                 self.m.ram.store(base + a, w, v)
@@ -335,6 +466,11 @@ impl Memory for ArmBus<'_> {
     }
 
     fn write(&mut self, addr: u64, size: u32, value: u64) -> Result<(), Abort> {
+        let end = addr.saturating_add(u64::from(size));
+        self.written = Some(match self.written {
+            Some((lo, hi)) => (lo.min(addr), hi.max(end)),
+            None => (addr, end),
+        });
         if size == 8 {
             self.write32(addr, 4, value)?;
             return self.write32(addr.wrapping_add(4), 4, value >> 32);
@@ -350,6 +486,7 @@ impl Memory for ArmBus<'_> {
         match timer_reg(key) {
             Some(r) => {
                 self.timer.write(r, self.cycles, value);
+                self.io = true;
                 true
             }
             None => false,
@@ -384,7 +521,7 @@ mod tests {
         let mut code = mov32(1, 0xFE20_1000).to_vec();
         code.extend([0xD280_0820, 0xB900_0020, 0x1400_0000]);
         let mut m = machine_with(&code);
-        let mut arm = ArmSide::new();
+        let mut arm = ArmSide::with_cores(1);
         arm.run(&mut m, 10);
         assert_eq!(arm.stopped, None);
         assert_eq!(m.uart0.take_output(), b"A");
@@ -404,21 +541,87 @@ mod tests {
         code.extend([0xD503_201F; 10]);
         code.extend([0xD53B_E025, 0x1400_0000]);
         let mut m = machine_with(&code);
-        let mut arm = ArmSide::new();
+        let mut arm = ArmSide::with_cores(1);
         arm.run(&mut m, 40);
         assert_eq!(arm.stopped, None);
-        assert_eq!(arm.cpu.x[2], 0xFC67, "GICD_TYPER as measured on the board");
+        assert_eq!(arm.cores[0].cpu.x[2], 0xFC67, "GICD_TYPER as measured on the board");
         // The counter started when the prescaler was written, and has run
         // at 54 MHz on a 1.5 GHz clock since: ~11 cycles -> 0 ticks, so
         // just check it is not running wild.
-        assert!(arm.cpu.x[5] < 10);
+        assert!(arm.cores[0].cpu.x[5] < 10);
+    }
+
+    /// Interpreter speed, without the VPU: `cargo test --release --lib
+    /// arm::tests::speed -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn speed() {
+        // x1 = 0x1000; 1: ldr x2, [x1]; add x2, x2, #1; str x2, [x1]; b 1b
+        let mut m = machine_with(&[0xD282_0001, 0xF940_0022, 0x9100_0442, 0xF900_0022, 0x17FF_FFFD]);
+        for cores in [1, CORES] {
+            let mut arm = ArmSide::with_cores(cores);
+            let t = std::time::Instant::now();
+            arm.run(&mut m, 20_000_000);
+            let insns: u64 = arm.cores.iter().map(|c| c.insns).sum();
+            let s = t.elapsed().as_secs_f64();
+            println!("{cores} core(s): {insns} instructions in {s:.2} s = {:.1} M/s", insns as f64 / s / 1e6);
+        }
+    }
+
+    #[test]
+    fn every_core_runs_and_knows_which_it_is() {
+        // mrs x0, mpidr_el1; and x0, x0, #0xff; add x0, x0, #1;
+        // lsl x1, x0, #3; add x1, x1, #0x100; str x0, [x1]; b .
+        let mut m = machine_with(&[
+            0xD538_00A0,
+            0x9240_1C00,
+            0x9100_0400,
+            0xD37D_F001,
+            0x9104_0021,
+            0xF900_0020,
+            0x1400_0000,
+        ]);
+        let mut arm = ArmSide::new();
+        arm.run(&mut m, 20);
+        assert_eq!(arm.stopped, None);
+        for id in 0..CORES as u32 {
+            let slot = m.ram.base() + 0x108 + 8 * id;
+            assert_eq!(m.ram.load(slot, Width::Word), Ok(id + 1));
+        }
+    }
+
+    #[test]
+    fn another_cores_store_breaks_an_exclusive_pair() {
+        // mrs x0, mpidr_el1; and x0, x0, #0xff; cbnz x0, 1f;
+        // ldxr x2, [x1]; stxr w3, x2, [x1]; b .
+        // 1: str x0, [x1]; b .
+        // Core 1's store lands in the cycle between core 0's ldxr and stxr.
+        let code = [
+            0xD538_00A0,
+            0x9240_1C00,
+            0xB500_0080,
+            0xC85F_7C22,
+            0xC803_7C22,
+            0x1400_0000,
+            0xF900_0020,
+            0x1400_0000,
+        ];
+        for (cores, failed) in [(1, 0), (2, 1)] {
+            let mut m = machine_with(&code);
+            let mut arm = ArmSide::with_cores(cores);
+            for c in &mut arm.cores {
+                c.cpu.x[1] = 0x800;
+            }
+            arm.run(&mut m, 8);
+            assert_eq!(arm.cores[0].cpu.x[3], failed, "{cores} core(s)");
+        }
     }
 
     #[test]
     fn the_arm_keeps_up_with_the_system_timer() {
         // b . — always busy.
         let mut m = machine_with(&[0x1400_0000]);
-        let mut arm = ArmSide::new();
+        let mut arm = ArmSide::with_cores(1);
         arm.catch_up(&mut m);
         assert_eq!(arm.cycles, 0);
         // 54 VPU cycles = 1 µs = 1500 ARM cycles.
@@ -436,12 +639,12 @@ mod tests {
         // ldr x0, [x1] with x1 = 0x1_0000_0000: nothing there. VBAR_EL3 = 0
         // so the sync vector (current EL, SP_ELx) is at 0x200.
         let mut m = machine_with(&[0xF940_0020]);
-        let mut arm = ArmSide::new();
-        arm.cpu.x[1] = 0x1_0000_0000;
+        let mut arm = ArmSide::with_cores(1);
+        arm.cores[0].cpu.x[1] = 0x1_0000_0000;
         arm.run(&mut m, 1);
-        assert_eq!(arm.exceptions, 1);
-        assert_eq!(arm.cpu.pc, 0x200);
-        assert_eq!(arm.cpu.sys.far[3], 0x1_0000_0000);
-        assert_eq!(arm.cpu.sys.esr[3] >> 26, 0x25);
+        assert_eq!(arm.cores[0].exceptions, 1);
+        assert_eq!(arm.cores[0].cpu.pc, 0x200);
+        assert_eq!(arm.cores[0].cpu.sys.far[3], 0x1_0000_0000);
+        assert_eq!(arm.cores[0].cpu.sys.esr[3] >> 26, 0x25);
     }
 }
