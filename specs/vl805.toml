@@ -234,51 +234,66 @@ confidence = "high"
 name   = "PCIE_DEVCAP"
 offset = 0xC8
 access = "r"
-notes  = "Device capabilities (0x00008001)."
+reset  = 0x00008001
+notes  = "Device capabilities: MaxPayload 256, role-based error reporting."
 
 [[register.source]]
 kind       = "measured"
-ref        = "config dump 0xC8"
+ref        = "config dump 0xC8; lspci 'MaxPayload 256 bytes ... RBE+'"
 confidence = "high"
 
 [[register]]
 name   = "PCIE_DEVCTL"
 offset = 0xCC
 access = "rw"
-notes  = "Device control / status (0x0019281F running)."
+reset  = 0x00102810
+notes  = "Device control (low half) / status (high half). Power-on DevCtl 0x2810 is the spec default: relaxed ordering, no snoop, MaxReadReq 512. DevSta keeps AuxPwr. Running, Linux had added the four error-reporting enables and CorrErr / UnsupReq had latched: 0x0019281F."
 
 [[register.source]]
 kind       = "measured"
-ref        = "config dump 0xCC"
+ref        = "config dump 0xCC; lspci DevCtl / DevSta"
+confidence = "high"
+
+[[register.source]]
+kind       = "standard"
+ref        = "PCIe 2.0, 7.8.4: Device Control defaults"
 confidence = "high"
 
 [[register]]
 name   = "PCIE_LNKCAP"
 offset = 0xD0
 access = "r"
-notes  = "Link capabilities (0x00065C12: 5 GT/s x1)."
+reset  = 0x00065C12
+notes  = "Link capabilities: 5 GT/s x1, ASPM L0s and L1, clock power management."
 
 [[register.source]]
 kind       = "measured"
-ref        = "config dump 0xD0"
+ref        = "config dump 0xD0; lspci 'LnkCap: Port #0, Speed 5GT/s, Width x1, ASPM L0s L1'"
 confidence = "high"
 
 [[register]]
 name   = "PCIE_LNKCTL"
 offset = 0xD4
 access = "rw"
-notes  = "Link control / status (0x10120143 running)."
+reset  = 0x10120000
+notes  = "Link control (low half) / status (high half). LnkCtl is zero at power-on; running, Linux had enabled ASPM, common clock and clock PM (0x0143). LnkSta 0x1012 is the trained link: 5 GT/s x1, slot clock."
 
 [[register.source]]
 kind       = "measured"
-ref        = "config dump 0xD4"
+ref        = "config dump 0xD4; lspci LnkCtl / LnkSta"
 confidence = "high"
 
 [[register]]
 name   = "PCIE_DEVCAP2"
 offset = 0xE8
 access = "r"
-notes  = "Device capabilities 2."
+reset  = 0x00000012
+notes  = "Device capabilities 2: completion timeout range B, timeout disable supported."
+
+[[register.source]]
+kind       = "measured"
+ref        = "config dump 0xE8; lspci 'DevCap2: Completion Timeout: Range B, TimeoutDis+'"
+confidence = "high"
 
 [[register.source]]
 kind       = "standard"
@@ -289,7 +304,13 @@ confidence = "high"
 name   = "PCIE_DEVCTL2"
 offset = 0xEC
 access = "rw"
-notes  = "Device control 2."
+reset  = 0x00000000
+notes  = "Device control 2; the high half is reserved."
+
+[[register.source]]
+kind       = "measured"
+ref        = "config dump 0xEC"
+confidence = "high"
 
 [[register.source]]
 kind       = "standard"
@@ -300,7 +321,13 @@ confidence = "high"
 name   = "PCIE_LNKCAP2"
 offset = 0xF0
 access = "r"
-notes  = "Link capabilities 2."
+reset  = 0x00000000
+notes  = "Link capabilities 2; zero on this part."
+
+[[register.source]]
+kind       = "measured"
+ref        = "config dump 0xF0"
+confidence = "high"
 
 [[register.source]]
 kind       = "standard"
@@ -311,7 +338,13 @@ confidence = "high"
 name   = "PCIE_LNKCTL2"
 offset = 0xF4
 access = "rw"
-notes  = "Link control 2."
+reset  = 0x00010022
+notes  = "Link control 2 (low half): target 5 GT/s, hardware-autonomous speed disable. Link status 2 (high half): -3.5 dB de-emphasis."
+
+[[register.source]]
+kind       = "measured"
+ref        = "config dump 0xF4; lspci LnkCtl2 / LnkSta2"
+confidence = "high"
 
 [[register.source]]
 kind       = "standard"

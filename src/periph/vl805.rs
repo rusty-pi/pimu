@@ -36,14 +36,18 @@
 //! ...
 //! 0000c0 00 20 00 00 10 00 02 00 01 80 00 00 1f 28 19 00
 //! 0000d0 12 5c 06 00 43 01 12 10 00 00 00 00 00 00 00 00
+//! 0000e0 00 00 00 00 00 00 00 00 12 00 00 00 00 00 00 00
+//! 0000f0 00 00 00 00 22 00 01 00 00 00 00 00 00 00 00 00
 //! 000100 01 00 01 00 00 00 00 00 00 00 00 00 31 20 06 00
 //! ```
 //!
 //! That dump is a *running* device: Linux had already enabled the command
-//! register (`0x04` = `0x0546`), assigned BAR0 (`0x10` = `0xC000_0004`) and
-//! programmed the MSI address/data. The seed table below restores those to
-//! their power-on values — command `0x0000`, BAR0 `0x0000_0004`, MSI address
-//! and data zero — and keeps everything else verbatim. `lspci -vvv` confirms
+//! register (`0x04` = `0x0546`), assigned BAR0 (`0x10` = `0xC000_0004`),
+//! programmed the MSI address/data and set up the PCIe device and link control
+//! words (`0xCC` = `0x0019_281F`, `0xD4` = `0x1012_0143`). The seed table below
+//! restores those to their power-on values — command `0x0000`, BAR0
+//! `0x0000_0004`, MSI address and data zero, DevCtl/DevSta `0x0010_2810`,
+//! LnkCtl `0x0000` — and keeps everything else verbatim. `lspci -vvv` confirms
 //! the shape: `Region 0: Memory at 600000000 (64-bit, non-prefetchable)
 //! [size=4K]`, capabilities PM at `0x80`, MSI at `0x90`, PCIe at `0xC4`, AER at
 //! `0x100`.
@@ -138,16 +142,26 @@ const CFG_SEED: &[(usize, &[u8])] = &[
     // 0x90: MSI capability, 4 vectors, 64-bit, next -> 0xc4. The address and
     // data words were programmed by Linux; power-on they are zero.
     (0x90, &[0x05, 0xc4, 0x80, 0x00]),
-    // 0xc4: PCI Express capability (v2 endpoint), verbatim apart from the
-    // control words Linux wrote.
-    (
-        0xc4,
-        &[
-            0x10, 0x00, 0x02, 0x00, 0x01, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1f, 0x28,
-            0x19, 0x00, 0x00, 0x00, 0x00, 0x00, 0x43, 0x01, 0x12, 0x10,
-        ],
-    ),
+    // 0xc4: PCI Express capability (v2 endpoint). The capability words are
+    // verbatim; the control words Linux wrote are back at their power-on
+    // values.
+    (0xc4, &[0x10, 0x00, 0x02, 0x00]),
+    // 0xc8: DevCap — MaxPayload 256, RBE+.
+    (0xc8, &[0x01, 0x80, 0x00, 0x00]),
+    // 0xcc: DevCtl 0x2810 — the spec defaults RlxdOrd+ NoSnoop+ MaxReadReq 512
+    // (Linux had added the four error-reporting enables, 0x281f) — and DevSta
+    // 0x0010, AuxPwr+ (the running board also had CorrErr+ UnsupReq+ latched
+    // from enumeration).
+    (0xcc, &[0x10, 0x28, 0x10, 0x00]),
+    // 0xd0: LnkCap — 5 GT/s x1, ASPM L0s L1, ClockPM+.
+    (0xd0, &[0x12, 0x5c, 0x06, 0x00]),
+    // 0xd4: LnkCtl 0x0000 (Linux had enabled ASPM, CommClk and ClockPM, 0x0143)
+    // and LnkSta 0x1012, 5 GT/s x1 SlotClk+ — the link is trained by the time
+    // anything can read it.
+    (0xd4, &[0x00, 0x00, 0x12, 0x10]),
+    // 0xe8: DevCap2 — completion timeout range B, TimeoutDis+.
     (0xe8, &[0x12]),
+    // 0xf4: LnkCtl2 — target 5 GT/s, SpeedDis+ — and LnkSta2, -3.5 dB.
     (0xf4, &[0x22, 0x00, 0x01, 0x00]),
     // 0x100: AER extended capability.
     (0x100, &[0x01, 0x00, 0x01, 0x00]),
@@ -178,11 +192,11 @@ fn cfg_write_mask(off: usize) -> u32 {
         // (64-bit capable, Multiple Message Capable) is fixed.
         MSI_CTRL => 0x0071_0000,
         MSI_ADDR_LO | MSI_ADDR_HI | MSI_DATA => 0xFFFF_FFFF,
-        // Meant as device control / link control / device control 2 / link
-        // control 2. By the PCIe capability layout these four are the
-        // capability words, and each control word is the one after it
-        // (`specs/vl805.toml`).
-        PCIE_DEVCAP | PCIE_LNKCAP | PCIE_DEVCAP2 | PCIE_LNKCAP2 => 0x0000_FFFF,
+        // PCIe DevCtl / LnkCtl / DevCtl2 / LnkCtl2, the low half of the word
+        // after each capability word. The high halves are DevSta / LnkSta /
+        // LnkSta2 (DevSta's error bits are write-1-to-clear on real silicon;
+        // they never latch here) and DevCtl2's is reserved.
+        PCIE_DEVCTL | PCIE_LNKCTL | PCIE_DEVCTL2 | PCIE_LNKCTL2 => 0x0000_FFFF,
         _ => 0,
     }
 }
@@ -369,5 +383,65 @@ impl Vl805 {
         } else {
             Some(addr)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rd(dev: &mut Vl805, off: u32) -> u32 {
+        dev.cfg_read(off, Width::Word)
+    }
+
+    /// The seed holds what `specs/vl805.toml` says the PCIe capability's words
+    /// reset to: the measured capability words, the control words at power-on.
+    #[test]
+    fn pcie_capability_matches_the_spec() {
+        use crate::spec::vl805::*;
+        let mut dev = Vl805::new();
+        for (off, reset) in [
+            (PCIE_CAP, PCIE_CAP_RESET),
+            (PCIE_DEVCAP, PCIE_DEVCAP_RESET),
+            (PCIE_DEVCTL, PCIE_DEVCTL_RESET),
+            (PCIE_LNKCAP, PCIE_LNKCAP_RESET),
+            (PCIE_LNKCTL, PCIE_LNKCTL_RESET),
+            (PCIE_DEVCAP2, PCIE_DEVCAP2_RESET),
+            (PCIE_DEVCTL2, PCIE_DEVCTL2_RESET),
+            (PCIE_LNKCAP2, PCIE_LNKCAP2_RESET),
+            (PCIE_LNKCTL2, PCIE_LNKCTL2_RESET),
+        ] {
+            assert_eq!(rd(&mut dev, off), reset, "{off:#x}");
+        }
+        // 5 GT/s x1, as the bootloader and Linux both see it.
+        assert_eq!(rd(&mut dev, PCIE_LNKCAP) & 0x3FF, 0x012);
+    }
+
+    /// Linux's writes land in the control words; the capability words beside
+    /// them stay read-only.
+    #[test]
+    fn pcie_control_words_are_writable_and_capabilities_are_not() {
+        let mut dev = Vl805::new();
+        for (cap, ctl) in [
+            (PCIE_DEVCAP, PCIE_DEVCTL),
+            (PCIE_LNKCAP, PCIE_LNKCTL),
+            (PCIE_DEVCAP2, PCIE_DEVCTL2),
+            (PCIE_LNKCAP2, PCIE_LNKCTL2),
+        ] {
+            let before = rd(&mut dev, cap);
+            dev.cfg_write(cap, Width::Word, 0xFFFF_FFFF);
+            assert_eq!(rd(&mut dev, cap), before, "{cap:#x} is read-only");
+
+            let status = rd(&mut dev, ctl) & 0xFFFF_0000;
+            dev.cfg_write(ctl, Width::Half, 0x0143);
+            assert_eq!(rd(&mut dev, ctl), status | 0x0143, "{ctl:#x}");
+        }
+        // Linux's DevCtl on the running board, over the power-on DevSta.
+        dev.cfg_write(0xcc, Width::Half, 0x281f);
+        assert_eq!(rd(&mut dev, 0xcc), 0x0010_281f);
+        // PERST# puts them back.
+        dev.reset();
+        assert_eq!(rd(&mut dev, 0xcc), 0x0010_2810);
+        assert_eq!(rd(&mut dev, 0xd4), 0x1012_0000);
     }
 }
