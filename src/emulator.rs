@@ -41,6 +41,12 @@ pub struct Emulator {
     /// ROM releases *both* cores at; core 1 runs start4's trampoline from there
     /// and diverges on `version` bit 16. Override for tests / direct-load runs.
     pub core1_entry: Option<u32>,
+    /// Where core 0 entered `start4.elf`: the first instruction it fetched
+    /// from the `0xC000_0000` uncached alias start4 runs in (the bootloader
+    /// runs below it). Not always [`START4_ENTRY`]: for a USB mass-storage
+    /// boot the bootloader places start4 1 MiB lower (`Starting start4.elf @
+    /// 0xfeb00200`), and core 1 has to run the same trampoline.
+    pub start4_entry: Option<u32>,
     /// Latched once the firmware signals it wants core 1 up (a code-address
     /// write to the CoreCtl run-state words). The actual spawn is deferred
     /// until the dispatch global is populated — see [`SMP_DISPATCH_GP_OFFSET`].
@@ -202,6 +208,7 @@ impl Emulator {
             cpu: Vpu::new(entry),
             cpu1: None,
             core1_entry: None,
+            start4_entry: None,
             core1_release_armed: false,
             machine,
             arm_enabled: false,
@@ -229,6 +236,16 @@ impl Emulator {
             .load(gp.wrapping_add(SMP_DISPATCH_GP_OFFSET), Width::Word)
             .unwrap_or(0)
             != 0
+    }
+
+    /// Where a start4 address from the pinned build (its link address) is in
+    /// this run: shifted by however far the bootloader moved start4 from
+    /// [`START4_ENTRY`] (`0` on an SD boot, `-1 MiB` on a USB mass-storage one).
+    fn start4_pc(&self, link: u32) -> u32 {
+        let shift = self
+            .start4_entry
+            .map_or(0, |e| e.wrapping_sub(START4_ENTRY));
+        link.wrapping_add(shift)
     }
 
     fn spawn_core1(&mut self, entry: u32) {
@@ -414,6 +431,9 @@ impl Emulator {
             }
 
             let pc_before = self.cpu.pc();
+            if self.start4_entry.is_none() && pc_before >= 0xC000_0000 {
+                self.start4_entry = Some(pc_before);
+            }
 
             if diag.heartbeat != 0 && self.cpu.retired >= next_beat {
                 next_beat = self.cpu.retired + diag.heartbeat;
@@ -441,7 +461,7 @@ impl Emulator {
             // stay stuck above 0 after the tick ISR preempts into such a thread.
             // Rebalance it here: reaching this point means we are back in thread
             // context.
-            if pc_before == crate::firmware::addrs::SOLICITED_RESTORE_PC {
+            if pc_before == self.start4_pc(crate::firmware::addrs::SOLICITED_RESTORE_PC) {
                 self.cpu.in_exception = 0;
             }
 
@@ -466,7 +486,7 @@ impl Emulator {
             // very next `(CLO - start) < us` check (`0x3ED7BD40`) fails and the
             // loop exits. (Jumping on the `0x3ED7BD2C` entry instead is a no-op
             // — `start` is captured *after* it, so the delta stays 0.)
-            if pc_before == 0x3ED7_BD3A {
+            if pc_before == self.start4_pc(0x3ED7_BD3A) {
                 let us = (self.cpu.regs.get(1) as u64).min(5_000_000);
                 if us != 0 {
                     self.machine.systimer.jump(us);
@@ -648,9 +668,9 @@ impl Emulator {
                 break RunEnd::Reset;
             }
 
-            // Core 1 (re)enters at the shared start4 reset vector, not core 0's
-            // `entry` — which on the EEPROM path is the *bootcode*, long gone by
-            // the time start4 brings its sibling up.
+            // Core 1 (re)enters at the shared start4 reset vector — where core 0
+            // entered start4 — not core 0's `entry`, which on the EEPROM path is
+            // the *bootcode*, long gone by the time start4 brings its sibling up.
             //
             // The CoreCtl run-state write the model keys on also overlaps the
             // interrupt-priority words, so it fires early (during driver
@@ -662,7 +682,10 @@ impl Emulator {
                     self.core1_release_armed = true;
                 }
                 if self.core1_release_armed && self.smp_dispatch_ready() {
-                    let entry = self.core1_entry.unwrap_or(START4_ENTRY);
+                    let entry = self
+                        .core1_entry
+                        .or(self.start4_entry)
+                        .unwrap_or(START4_ENTRY);
                     self.spawn_core1(entry);
                 }
             }

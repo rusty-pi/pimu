@@ -591,26 +591,12 @@ impl Machine {
         } else {
             self.dma_legacy.finish(ch);
         }
-        // Completion interrupt. `dma_interrupt` (`0x3EC980E8`) asserts its
-        // argument is in `0x50..=0x5F` and maps it back to a channel, and the
-        // firmware's own poll loop calls it as `dma_interrupt(channel + 0x50)`
-        // (channels 11..14 fold to 0xB, >= 15 to 0xF). So the source is
-        // `0x50 + channel`, i.e. 95 for channel 15 - which is one of the
-        // sources `enable_irq_source` turns on. `dma_chan_interrupt` then runs,
-        // retires the transfer, signals its waiter and starts the next one in
-        // the queue.
-        {
-            let folded = if ch >= 15 {
-                0xF
-            } else if ch > 10 {
-                0xB
-            } else {
-                ch
-            };
-            let src = 0x50 + folded as u32;
-            self.corectl.raise_source(src);
-            self.pending_irqs.push_back(src);
-        }
+        // Completion interrupt. `dma_interrupt` (`0x3EC980E8`) maps the source
+        // back to a channel and `dma_chan_interrupt` then retires the transfer,
+        // signals its waiter and starts the next one in the queue.
+        let src = dma_irq_source(ch);
+        self.corectl.raise_source(src);
+        self.pending_irqs.push_back(src);
     }
 
     /// One word from a 40-bit DMA4 address: endpoint MMIO if the PCIe root
@@ -652,6 +638,7 @@ impl Machine {
         let rd = |ram: &Ram, addr: u32| ram.load(addr & 0x3FFF_FFFF, Width::Word).unwrap_or(0);
 
         let mut cb = self.dma4.cb_addr() & 0x3FFF_FFFF;
+        let mut interrupt = false;
         for _ in 0..4096 {
             if cb == 0 || !self.ram.contains(cb) {
                 break;
@@ -662,6 +649,7 @@ impl Machine {
             let desti = rd(&self.ram, cb + 0x10);
             let len = rd(&self.ram, cb + 0x14);
             let next = rd(&self.ram, cb + 0x18);
+            interrupt |= rd(&self.ram, cb) & crate::periph::dma4::TI_INTEN != 0;
             let src40 = (((srci & ADDR_HI) as u64) << 32) | src as u64;
             let dest40 = (((desti & ADDR_HI) as u64) << 32) | dest as u64;
 
@@ -689,7 +677,35 @@ impl Machine {
             }
             cb = (next << 5) & 0x3FFF_FFFF;
         }
-        self.dma4.finish();
+        self.dma4.finish(interrupt);
+        // DMA4 is channel 11 of the `0x7E00_7000` controller. The bootloader
+        // polls (`TI` = 0, no INTEN); start4's dmalib asks for the interrupt
+        // and starts its next chain from it.
+        if interrupt {
+            let src = dma_irq_source(11);
+            self.corectl.raise_source(src);
+            self.pending_irqs.push_back(src);
+        }
+    }
+}
+
+/// The VPU interrupt source a DMA channel's completion raises.
+///
+/// start4's dmalib keeps its own source -> channel table (`gp+0x556b8`, read
+/// by `dma_interrupt`) and registers `dma_interrupt` on exactly the sources it
+/// uses: 81, 83, 86, 89, 92 and 95 for channels 1, 3, 6, 11, 14 and 15. That
+/// is 80 + channel for the low channels, 78 + channel for the DMA4 channels
+/// 11..14, and 95 for the VPU's channel 15 — the same wiring Linux's
+/// `bcm2711.dtsi` gives the controller as far as I know, where channels 7/8
+/// and 9/10 share a line each (not verified here: nothing on this bench uses
+/// them).
+fn dma_irq_source(ch: usize) -> u32 {
+    match ch {
+        0..=6 => 80 + ch as u32,
+        7 | 8 => 87,
+        9 | 10 => 88,
+        11..=14 => 78 + ch as u32,
+        _ => 95,
     }
 }
 
@@ -867,5 +883,19 @@ impl Bus for Machine {
             width,
             write: true,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::dma_irq_source;
+
+    /// The sources start4's dmalib registers `dma_interrupt` on, from its own
+    /// source -> channel table (`gp+0x556b8`).
+    #[test]
+    fn dma_completion_sources_match_dmalib() {
+        for (ch, src) in [(1, 81), (3, 83), (6, 86), (11, 89), (14, 92), (15, 95)] {
+            assert_eq!(dma_irq_source(ch), src, "channel {ch}");
+        }
     }
 }
