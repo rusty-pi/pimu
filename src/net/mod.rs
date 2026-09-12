@@ -8,7 +8,7 @@
 //! adapter over one of those.
 //!
 //! [`BuiltinPeer`] is the backend that needs nothing outside the emulator: a
-//! deterministic DHCP and TFTP server, for tests and CI.
+//! deterministic DHCP, DNS, TFTP and HTTP server, for tests and CI.
 
 pub mod peer;
 
@@ -40,6 +40,7 @@ pub const BROADCAST: Mac = [0xff; 6];
 pub const ETHERTYPE_IPV4: u16 = 0x0800;
 pub const ETHERTYPE_ARP: u16 = 0x0806;
 pub const IPPROTO_ICMP: u8 = 1;
+pub const IPPROTO_TCP: u8 = 6;
 pub const IPPROTO_UDP: u8 = 17;
 
 /// The one's-complement sum of `data` as 16-bit big-endian words (RFC 1071),
@@ -67,15 +68,22 @@ pub fn checksum(data: &[u8]) -> u16 {
     fold(sum16(data, 0))
 }
 
-/// The UDP checksum of `udp` (header and payload, checksum field zero) sent
-/// from `src` to `dst`. A computed 0 goes on the wire as `0xffff`.
-pub fn udp_checksum(src: [u8; 4], dst: [u8; 4], udp: &[u8]) -> u16 {
+/// The TCP or UDP checksum of `segment` (header and payload, checksum field
+/// zero) sent from `src` to `dst`: the Internet checksum over the IPv4
+/// pseudo-header and the segment.
+pub fn transport_checksum(src: [u8; 4], dst: [u8; 4], proto: u8, segment: &[u8]) -> u16 {
     let mut pseudo = [0u8; 12];
     pseudo[..4].copy_from_slice(&src);
     pseudo[4..8].copy_from_slice(&dst);
-    pseudo[9] = IPPROTO_UDP;
-    pseudo[10..12].copy_from_slice(&(udp.len() as u16).to_be_bytes());
-    match fold(sum16(udp, sum16(&pseudo, 0))) {
+    pseudo[9] = proto;
+    pseudo[10..12].copy_from_slice(&(segment.len() as u16).to_be_bytes());
+    fold(sum16(segment, sum16(&pseudo, 0)))
+}
+
+/// The UDP checksum of `udp`. A computed 0 goes on the wire as `0xffff`, since
+/// 0 means "no checksum".
+pub fn udp_checksum(src: [u8; 4], dst: [u8; 4], udp: &[u8]) -> u16 {
+    match transport_checksum(src, dst, IPPROTO_UDP, udp) {
         0 => 0xffff,
         c => c,
     }

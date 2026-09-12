@@ -1,0 +1,63 @@
+# The firmware boot from USB mass storage (BOOT_ORDER 0x4).
+#
+# The SD image (`firmware-boot.toml`) as a stick in blue USB socket A (xHCI
+# root port 2, SuperSpeed), with no SD card: the bootloader enumerates it and
+# reads config.txt, start4.elf and fixup4.dat over SCSI READ(10) through the
+# VL805 (docs/usb-xhci.md).
+#
+# Where it stops: start4 comes up in USB boot mode and then idles — its own
+# mass-storage path (reading config.txt and the kernel through the xHCI
+# controller the bootloader handed over) never completes in the model, so the
+# run ends as `Stuck` in start4's idle loop, well before `arm_loader`. That is
+# the extent of USB boot so far, not a regression; when start4's USB path is
+# modelled, this scenario gains the `arm_loader` milestone the others have.
+#
+# Re-record the golden with:
+#   scripts/boot-check.sh --scenario=testdata/boot/usb-boot.toml --update
+
+name = "usb-boot"
+description = "pieeprom.bin boot from a USB mass-storage device: the bootloader loads start4.elf over USB."
+
+[boot]
+eeprom = "../../firmware/pieeprom.bin"
+usb = "../../firmware/sd.img"
+boot_order = "0xf4"
+wall_secs = 330
+max_skipped = 0
+
+[golden]
+path = "golden/usb-boot.txt"
+
+[[milestone]]
+why = "BOOT_ORDER 0xf4 reached the bootloader: USB mass storage first."
+line = "Boot mode: USB-MSD (04)"
+
+[[milestone]]
+why = "The stick enumerates on root port 2 with the measured endpoint descriptors (docs/usb-xhci.md)."
+line = ["MSD device [01:00]", "ep 82#1024 01#1024"]
+
+[[milestone]]
+why = "SCSI READ CAPACITY answers with the image's size: the 288 MiB scripts/make-sd.sh image in 512-byte blocks."
+line = "MSD READ_CAPACITY [01:00] 3.16 000000:02 lun 0 block-count 589824 block-size 512"
+
+[[milestone]]
+why = "The bootloader reads all of start4.elf over SCSI."
+line = "Read start4.elf bytes  2298048"
+
+[[milestone]]
+why = "...and fixup4.dat, the last file it loads before handing over."
+line = "Read fixup4.dat bytes     5512"
+
+[[milestone]]
+why = "start4 runs, and knows it came from USB."
+line = ["MESS:", "USB boot mode 2"]
+
+[[milestone]]
+why = "No nop-slides at all."
+line = "[derail]"
+absent = true
+
+[[milestone]]
+why = "An unknown instruction must be reported as a fault, with its pc and raw bytes."
+line = "Unimplemented"
+absent = true

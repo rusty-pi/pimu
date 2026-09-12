@@ -13,14 +13,28 @@
 //!   without it. The bytes are what `dnsmasq` sends for
 //!   `pxe-service=0,"Raspberry Pi Boot"`, the configuration Raspberry Pi's
 //!   network boot documentation gives;
+//! * **DNS** (RFC 1035): every name resolves to the peer itself, so the
+//!   bootloader's default `HTTP_HOST` (`fw-download-alias1.raspberrypi.com`)
+//!   lands here without an EEPROM change;
 //! * **TFTP** (RFC 1350) read requests, with the `blksize` (RFC 2348),
-//!   `tsize` and `timeout` (RFC 2349) options, from a directory and/or files
-//!   registered in memory.
+//!   `tsize` and `timeout` (RFC 2349) options;
+//! * **HTTP/1.1** `GET` and `HEAD` on port 80 (plain HTTP, no TLS), with
+//!   single `Range: bytes=` requests, over a minimal **TCP** (RFC 9293): one
+//!   request per connection, answered with `Connection: close`.
+//!
+//! TFTP and HTTP serve the same files: a directory and/or files registered in
+//! memory.
 //!
 //! Every reply is produced synchronously, while the request is handed over,
 //! and nothing depends on time: the same guest traffic always gets the same
-//! frames back. No loss is modelled, so there is no retransmission either; a
-//! duplicate ACK is ignored rather than answered.
+//! frames back. No loss is modelled, so there is no retransmission either: a
+//! duplicate TFTP ACK is ignored rather than answered, and TCP never times
+//! out. TCP sends as much as the client's window allows and no more, so a
+//! slow guest paces the transfer.
+//!
+//! Limits: no IP options or fragments, no TCP window scaling, SACK or urgent
+//! data; out-of-order TCP data is dropped and re-ACKed (it cannot happen on
+//! this lossless link).
 
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Component, Path, PathBuf};
@@ -34,6 +48,11 @@ pub const NETMASK: [u8; 4] = [255, 255, 255, 0];
 const SUBNET_BROADCAST: [u8; 4] = [192, 0, 2, 255];
 const LIMITED_BROADCAST: [u8; 4] = [255; 4];
 const LEASE_SECS: u32 = 86_400;
+
+const DNS_PORT: u16 = 53;
+const DNS_TYPE_A: u16 = 1;
+const DNS_CLASS_IN: u16 = 1;
+const DNS_TTL_SECS: u32 = 60;
 
 const DHCP_SERVER_PORT: u16 = 67;
 const DHCP_CLIENT_PORT: u16 = 68;
@@ -64,6 +83,59 @@ const TFTP_DEFAULT_BLKSIZE: usize = 512;
 const TFTP_MAX_BLKSIZE: usize = 1468;
 /// Server transfer ports (TIDs) are handed out from here up.
 const TFTP_FIRST_TID: u16 = 49152;
+
+const HTTP_PORT: u16 = 80;
+const TCP_FIN: u8 = 0x01;
+const TCP_SYN: u8 = 0x02;
+const TCP_RST: u8 = 0x04;
+const TCP_PSH: u8 = 0x08;
+const TCP_ACK: u8 = 0x10;
+/// The segment size a 1500-byte MTU leaves room for, and what the SYN-ACK
+/// advertises.
+const TCP_MSS: usize = 1460;
+/// The receive window the server advertises. Requests are small; this only
+/// has to hold one.
+const TCP_WINDOW: u16 = 65535;
+/// Initial sequence numbers: fixed, one 16 MiB stride per connection, so runs
+/// are reproducible and connections do not share sequence space.
+const TCP_ISS_BASE: u32 = 0x5250_0000;
+/// Largest request head accepted before the connection is reset.
+const HTTP_MAX_REQUEST: usize = 16 * 1024;
+
+/// The fields of a TCP header the peer sets.
+#[derive(Clone, Copy)]
+struct TcpHeader {
+    sport: u16,
+    dport: u16,
+    seq: u32,
+    ack: u32,
+    flags: u8,
+}
+
+/// A connection, from the server's side.
+struct TcpConn {
+    client_mac: Mac,
+    client_ip: [u8; 4],
+    client_port: u16,
+    server_port: u16,
+    mss: usize,
+    /// First sequence number of the response stream (ISS + 1).
+    base: u32,
+    snd_una: u32,
+    snd_nxt: u32,
+    snd_wnd: u32,
+    rcv_nxt: u32,
+    request: Vec<u8>,
+    /// The whole response, once the request is complete.
+    response: Option<Vec<u8>>,
+    fin_sent: bool,
+    fin_received: bool,
+}
+
+/// Wrapping sequence-number comparison: `a` is after `b`.
+fn seq_gt(a: u32, b: u32) -> bool {
+    (a.wrapping_sub(b) as i32) > 0
+}
 
 /// One TFTP read in progress.
 struct Transfer {
@@ -98,6 +170,9 @@ pub struct BuiltinPeer {
     transfers: BTreeMap<u16, Transfer>,
     next_tid: u16,
     ip_id: u16,
+    /// TCP connections by (client IP, client port, server port).
+    conns: BTreeMap<([u8; 4], u16, u16), TcpConn>,
+    conn_count: u32,
 }
 
 impl Default for BuiltinPeer {
@@ -117,6 +192,8 @@ impl BuiltinPeer {
             transfers: BTreeMap::new(),
             next_tid: TFTP_FIRST_TID,
             ip_id: 0,
+            conns: BTreeMap::new(),
+            conn_count: 0,
         }
     }
 
@@ -222,12 +299,14 @@ impl BuiltinPeer {
         let body = &p[ihl..total];
         match p[9] {
             IPPROTO_ICMP if dst == SERVER_IP => self.icmp(src_mac, src, body),
+            IPPROTO_TCP if dst == SERVER_IP && body.len() >= 20 => self.tcp(src_mac, src, body),
             IPPROTO_UDP if body.len() >= 8 => {
                 let len = usize::from(be16(body, 4)).clamp(8, body.len());
                 let (sport, dport) = (be16(body, 0), be16(body, 2));
                 let data = &body[8..len];
                 match dport {
                     DHCP_SERVER_PORT => self.dhcp(data),
+                    DNS_PORT if dst == SERVER_IP => self.dns(src_mac, src, sport, data),
                     TFTP_PORT if dst == SERVER_IP => self.tftp_request(src_mac, src, sport, data),
                     tid if dst == SERVER_IP && self.transfers.contains_key(&tid) => {
                         self.tftp_session(tid, src, sport, data)
@@ -313,6 +392,7 @@ impl BuiltinPeer {
         opt(51, &LEASE_SECS.to_be_bytes());
         opt(1, &NETMASK);
         opt(3, &SERVER_IP);
+        opt(6, &SERVER_IP);
         opt(66, fmt_ip(SERVER_IP).as_bytes());
         if pxe {
             opt(60, b"PXEClient");
@@ -326,6 +406,363 @@ impl BuiltinPeer {
             (chaddr, CLIENT_IP)
         };
         self.udp(mac, ip, DHCP_SERVER_PORT, DHCP_CLIENT_PORT, &r);
+    }
+
+    fn dns(&mut self, mac: Mac, ip: [u8; 4], port: u16, q: &[u8]) {
+        // A standard query (QR = 0, opcode 0) with one question.
+        if q.len() < 12 || q[2] & 0xf8 != 0 || be16(q, 4) != 1 {
+            return;
+        }
+        let mut i = 12;
+        let mut labels = Vec::new();
+        while let Some(&n) = q.get(i) {
+            if n == 0 || n & 0xc0 != 0 {
+                break;
+            }
+            let end = i + 1 + usize::from(n);
+            let Some(label) = q.get(i + 1..end) else {
+                return;
+            };
+            labels.push(String::from_utf8_lossy(label).into_owned());
+            i = end;
+        }
+        if q.get(i) != Some(&0) || q.len() < i + 5 {
+            return;
+        }
+        let qend = i + 5;
+        let (qtype, qclass) = (be16(q, i + 1), be16(q, i + 3));
+        let name = labels.join(".");
+        let answer = qtype == DNS_TYPE_A && qclass == DNS_CLASS_IN;
+        self.log.push(format!(
+            "dns: {name} type {qtype} -> {}",
+            if answer {
+                fmt_ip(SERVER_IP)
+            } else {
+                "no records".into()
+            }
+        ));
+        let mut r = Vec::with_capacity(qend + 16);
+        r.extend_from_slice(&q[..2]); // id
+                                      // QR, the query's RD copied, RA; NOERROR.
+        r.extend_from_slice(&[0x80 | (q[2] & 0x01), 0x80]);
+        r.extend_from_slice(&1u16.to_be_bytes());
+        r.extend_from_slice(&u16::from(answer).to_be_bytes());
+        r.extend_from_slice(&[0, 0, 0, 0]);
+        r.extend_from_slice(&q[12..qend]);
+        if answer {
+            r.extend_from_slice(&[0xc0, 12]); // the name in the question
+            r.extend_from_slice(&DNS_TYPE_A.to_be_bytes());
+            r.extend_from_slice(&DNS_CLASS_IN.to_be_bytes());
+            r.extend_from_slice(&DNS_TTL_SECS.to_be_bytes());
+            r.extend_from_slice(&4u16.to_be_bytes());
+            r.extend_from_slice(&SERVER_IP);
+        }
+        self.udp(mac, ip, DNS_PORT, port, &r);
+    }
+
+    fn tcp_segment(&mut self, mac: Mac, ip: [u8; 4], h: TcpHeader, options: &[u8], data: &[u8]) {
+        let hlen = 20 + options.len();
+        let mut t = Vec::with_capacity(hlen + data.len());
+        t.extend_from_slice(&h.sport.to_be_bytes());
+        t.extend_from_slice(&h.dport.to_be_bytes());
+        t.extend_from_slice(&h.seq.to_be_bytes());
+        t.extend_from_slice(&h.ack.to_be_bytes());
+        t.push(((hlen / 4) as u8) << 4);
+        t.push(h.flags);
+        t.extend_from_slice(&TCP_WINDOW.to_be_bytes());
+        t.extend_from_slice(&[0, 0, 0, 0]); // checksum, urgent pointer
+        t.extend_from_slice(options);
+        t.extend_from_slice(data);
+        let c = transport_checksum(SERVER_IP, ip, IPPROTO_TCP, &t);
+        t[16..18].copy_from_slice(&c.to_be_bytes());
+        self.ipv4(mac, ip, IPPROTO_TCP, &t);
+    }
+
+    /// Send a segment on `key`'s connection, from its current state.
+    fn tcp_send(&mut self, key: ([u8; 4], u16, u16), flags: u8, data_from: Option<(usize, usize)>) {
+        let c = &self.conns[&key];
+        let (mac, ip, cport, sport, seq, ack) = (
+            c.client_mac,
+            c.client_ip,
+            c.client_port,
+            c.server_port,
+            c.snd_nxt,
+            c.rcv_nxt,
+        );
+        let data = match (data_from, &c.response) {
+            (Some((from, to)), Some(r)) => r[from..to].to_vec(),
+            _ => Vec::new(),
+        };
+        self.tcp_segment(
+            mac,
+            ip,
+            TcpHeader {
+                sport,
+                dport: cport,
+                seq,
+                ack,
+                flags,
+            },
+            &[],
+            &data,
+        );
+    }
+
+    /// Send as much of the response as the client's window takes, then FIN
+    /// once all of it is out.
+    fn tcp_pump(&mut self, key: ([u8; 4], u16, u16)) {
+        loop {
+            let c = &self.conns[&key];
+            let Some(resp) = &c.response else { return };
+            let sent = c.snd_nxt.wrapping_sub(c.base) as usize - usize::from(c.fin_sent);
+            let in_flight = c.snd_nxt.wrapping_sub(c.snd_una);
+            if sent < resp.len() {
+                let room = c.snd_wnd.saturating_sub(in_flight) as usize;
+                let n = c.mss.min(resp.len() - sent).min(room);
+                if n == 0 {
+                    return;
+                }
+                self.tcp_send(key, TCP_ACK | TCP_PSH, Some((sent, sent + n)));
+                self.conns.get_mut(&key).unwrap().snd_nxt += n as u32;
+            } else {
+                if !c.fin_sent {
+                    self.tcp_send(key, TCP_FIN | TCP_ACK, None);
+                    let c = self.conns.get_mut(&key).unwrap();
+                    c.snd_nxt += 1;
+                    c.fin_sent = true;
+                }
+                return;
+            }
+        }
+    }
+
+    fn tcp(&mut self, mac: Mac, ip: [u8; 4], t: &[u8]) {
+        let (sport, dport) = (be16(t, 0), be16(t, 2));
+        let (seq, ack) = (be32(t, 4), be32(t, 8));
+        let doff = usize::from(t[12] >> 4) * 4;
+        let flags = t[13];
+        if doff < 20 || doff > t.len() {
+            return;
+        }
+        let data = &t[doff..];
+        let key = (ip, sport, dport);
+        if flags & TCP_RST != 0 {
+            self.conns.remove(&key);
+            return;
+        }
+        if !self.conns.contains_key(&key) {
+            if flags & TCP_SYN == 0 || flags & TCP_ACK != 0 || dport != HTTP_PORT {
+                // Nothing listening, or no such connection: reset.
+                if flags & TCP_ACK != 0 {
+                    self.tcp_segment(
+                        mac,
+                        ip,
+                        TcpHeader {
+                            sport: dport,
+                            dport: sport,
+                            seq: ack,
+                            ack: 0,
+                            flags: TCP_RST,
+                        },
+                        &[],
+                        &[],
+                    );
+                } else {
+                    let len = data.len() as u32 + u32::from(flags & (TCP_SYN | TCP_FIN) != 0);
+                    self.tcp_segment(
+                        mac,
+                        ip,
+                        TcpHeader {
+                            sport: dport,
+                            dport: sport,
+                            seq: 0,
+                            ack: seq.wrapping_add(len),
+                            flags: TCP_RST | TCP_ACK,
+                        },
+                        &[],
+                        &[],
+                    );
+                }
+                return;
+            }
+            // Passive open: SYN -> SYN-ACK, advertising our MSS.
+            let mut mss = TCP_MSS;
+            let mut i = 20;
+            while i < doff {
+                match t[i] {
+                    0 => break,
+                    1 => i += 1,
+                    kind => {
+                        let len = usize::from(*t.get(i + 1).unwrap_or(&0)).max(2);
+                        if kind == 2 && len == 4 && i + 4 <= doff {
+                            mss = mss.min(usize::from(be16(t, i + 2)));
+                        }
+                        i += len;
+                    }
+                }
+            }
+            let iss = TCP_ISS_BASE.wrapping_add(self.conn_count << 24);
+            self.conn_count += 1;
+            self.conns.insert(
+                key,
+                TcpConn {
+                    client_mac: mac,
+                    client_ip: ip,
+                    client_port: sport,
+                    server_port: dport,
+                    mss: mss.max(64),
+                    base: iss.wrapping_add(1),
+                    snd_una: iss,
+                    snd_nxt: iss,
+                    snd_wnd: u32::from(be16(t, 14)),
+                    rcv_nxt: seq.wrapping_add(1),
+                    request: Vec::new(),
+                    response: None,
+                    fin_sent: false,
+                    fin_received: false,
+                },
+            );
+            let mut opt = vec![2, 4];
+            opt.extend_from_slice(&(TCP_MSS as u16).to_be_bytes());
+            self.tcp_segment(
+                mac,
+                ip,
+                TcpHeader {
+                    sport: dport,
+                    dport: sport,
+                    seq: iss,
+                    ack: seq.wrapping_add(1),
+                    flags: TCP_SYN | TCP_ACK,
+                },
+                &opt,
+                &[],
+            );
+            self.conns.get_mut(&key).unwrap().snd_nxt = iss.wrapping_add(1);
+            return;
+        }
+
+        let c = self.conns.get_mut(&key).unwrap();
+        if flags & TCP_ACK != 0 {
+            // Acknowledges something we sent (and not more than that).
+            if seq_gt(ack, c.snd_una) && !seq_gt(ack, c.snd_nxt) {
+                c.snd_una = ack;
+            }
+            c.snd_wnd = u32::from(be16(t, 14));
+        }
+        let mut must_ack = false;
+        if !data.is_empty() || flags & TCP_FIN != 0 {
+            if seq != c.rcv_nxt {
+                // Out of order (or a duplicate): re-ACK what we have.
+                self.tcp_send(key, TCP_ACK, None);
+                return;
+            }
+            if !data.is_empty() && c.response.is_none() {
+                c.request.extend_from_slice(data);
+            }
+            c.rcv_nxt = c.rcv_nxt.wrapping_add(data.len() as u32);
+            if flags & TCP_FIN != 0 {
+                c.rcv_nxt = c.rcv_nxt.wrapping_add(1);
+                c.fin_received = true;
+            }
+            must_ack = true;
+        }
+        if c.response.is_none() {
+            if let Some(end) = find(&c.request, b"\r\n\r\n") {
+                let head = String::from_utf8_lossy(&c.request[..end]).into_owned();
+                let resp = self.http_response(&head);
+                self.conns.get_mut(&key).unwrap().response = Some(resp);
+            } else if c.request.len() > HTTP_MAX_REQUEST || c.fin_received {
+                self.log
+                    .push("http: incomplete request, connection reset".into());
+                self.tcp_send(key, TCP_RST | TCP_ACK, None);
+                self.conns.remove(&key);
+                return;
+            }
+        }
+        let before = self.out.len();
+        self.tcp_pump(key);
+        if must_ack && self.out.len() == before {
+            self.tcp_send(key, TCP_ACK, None);
+        }
+        let c = &self.conns[&key];
+        // Both FINs exchanged and ours acknowledged: done.
+        if c.fin_sent && c.fin_received && c.snd_una == c.snd_nxt {
+            self.conns.remove(&key);
+        }
+    }
+
+    /// The whole response to the request whose head (request line and
+    /// headers, without the blank line) is `head`.
+    fn http_response(&mut self, head: &str) -> Vec<u8> {
+        let mut lines = head.split("\r\n");
+        let request_line = lines.next().unwrap_or("");
+        let mut parts = request_line.split(' ');
+        let (method, target) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
+        let range = lines
+            .filter_map(|l| l.split_once(':'))
+            .find(|(k, _)| k.trim().eq_ignore_ascii_case("range"))
+            .map(|(_, v)| v.trim().to_string());
+        // An absolute-form target (`http://host/path`) carries the host too.
+        let path = match target.split_once("://") {
+            Some((_, rest)) => rest.find('/').map_or("/", |i| &rest[i..]),
+            None => target,
+        };
+        let path = path.split(['?', '#']).next().unwrap_or("");
+
+        let reply = |status: &str, headers: &[String], body: &[u8], head_only: bool| {
+            let mut r = format!("HTTP/1.1 {status}\r\n").into_bytes();
+            for h in headers {
+                r.extend_from_slice(h.as_bytes());
+                r.extend_from_slice(b"\r\n");
+            }
+            r.extend_from_slice(format!("Content-Length: {}\r\n", body.len()).as_bytes());
+            r.extend_from_slice(b"Connection: close\r\n\r\n");
+            if !head_only {
+                r.extend_from_slice(body);
+            }
+            r
+        };
+        let head_only = method == "HEAD";
+        if method != "GET" && !head_only {
+            self.log.push(format!("http: {method} {target} -> 405"));
+            return reply(
+                "405 Method Not Allowed",
+                &["Allow: GET, HEAD".into()],
+                b"",
+                false,
+            );
+        }
+        let Some(data) = self.lookup(path) else {
+            self.log.push(format!("http: {method} {path} -> 404"));
+            return reply("404 Not Found", &[], b"not found\n", head_only);
+        };
+        let total = data.len();
+        let octets = "Content-Type: application/octet-stream".to_string();
+        match range.as_deref().map(|r| parse_range(r, total)) {
+            None => {
+                self.log
+                    .push(format!("http: {method} {path} -> 200, {total} bytes"));
+                reply("200 OK", &[octets], &data, head_only)
+            }
+            Some(Some((first, last))) => {
+                self.log.push(format!(
+                    "http: {method} {path} bytes {first}-{last}/{total} -> 206"
+                ));
+                let cr = format!("Content-Range: bytes {first}-{last}/{total}");
+                reply(
+                    "206 Partial Content",
+                    &[octets, cr],
+                    &data[first..=last],
+                    head_only,
+                )
+            }
+            Some(None) => {
+                self.log
+                    .push(format!("http: {method} {path} unsatisfiable range -> 416"));
+                let cr = format!("Content-Range: bytes */{total}");
+                reply("416 Range Not Satisfiable", &[cr], b"", head_only)
+            }
+        }
     }
 
     fn tftp_error(&mut self, mac: Mac, ip: [u8; 4], sport: u16, dport: u16, code: u16, msg: &str) {
@@ -458,7 +895,7 @@ impl BuiltinPeer {
 
 impl NetBackend for BuiltinPeer {
     fn name(&self) -> &'static str {
-        "built-in DHCP/TFTP peer"
+        "built-in network peer"
     }
 
     fn send(&mut self, frame: &[u8]) {
@@ -484,6 +921,32 @@ impl NetBackend for BuiltinPeer {
     fn take_log(&mut self) -> Vec<String> {
         std::mem::take(&mut self.log)
     }
+}
+
+fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    hay.windows(needle.len()).position(|w| w == needle)
+}
+
+/// A single `bytes=` range against a `total`-byte body: the inclusive span to
+/// send, or `None` when it cannot be satisfied (RFC 9110 section 14.1.2).
+fn parse_range(spec: &str, total: usize) -> Option<(usize, usize)> {
+    let (first, last) = spec.strip_prefix("bytes=")?.split_once('-')?;
+    let (first, last) = (first.trim(), last.trim());
+    if total == 0 {
+        return None;
+    }
+    if first.is_empty() {
+        // `bytes=-N`: the last N bytes.
+        let n: usize = last.parse().ok()?;
+        return (n > 0).then(|| (total.saturating_sub(n), total - 1));
+    }
+    let first: usize = first.parse().ok()?;
+    let last = if last.is_empty() {
+        total - 1
+    } else {
+        last.parse::<usize>().ok()?.min(total - 1)
+    };
+    (first <= last).then_some((first, last))
 }
 
 pub fn fmt_ip(ip: [u8; 4]) -> String {
@@ -787,6 +1250,217 @@ mod tests {
         assert!(p.transfers.is_empty());
         p.send(&to_server(1000, tid, &ack(0)));
         assert!(p.recv().is_none(), "nothing left to answer");
+    }
+
+    #[test]
+    fn dns_resolves_every_name_to_the_peer() {
+        let mut p = BuiltinPeer::new();
+        let mut q = vec![0xbe, 0xef, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0];
+        for l in ["fw-download-alias1", "raspberrypi", "com"] {
+            q.push(l.len() as u8);
+            q.extend_from_slice(l.as_bytes());
+        }
+        q.extend_from_slice(&[0, 0, 1, 0, 1]);
+        p.send(&to_server(5353, 53, &q));
+        let (_, _, sport, dport, r) = parse_udp(&p.recv().unwrap());
+        assert_eq!((sport, dport), (53, 5353));
+        assert_eq!(r[..2], [0xbe, 0xef]);
+        assert_eq!(r[2] & 0x80, 0x80, "a response");
+        assert_eq!(r[3] & 0x0f, 0, "NOERROR");
+        assert_eq!(be16(&r, 6), 1, "one answer");
+        assert_eq!(r[r.len() - 4..], SERVER_IP);
+        // AAAA: no records, still NOERROR.
+        let n = q.len();
+        q[n - 3] = 28;
+        p.send(&to_server(5353, 53, &q));
+        let (.., r) = parse_udp(&p.recv().unwrap());
+        assert_eq!(be16(&r, 6), 0);
+        assert!(p.take_log()[0].contains("-> 192.0.2.1"));
+    }
+
+    /// The client side of one TCP connection to the peer, for tests.
+    struct Client {
+        port: u16,
+        seq: u32,
+        ack: u32,
+        window: u16,
+    }
+
+    impl Client {
+        fn segment(&mut self, p: &mut BuiltinPeer, flags: u8, opts: &[u8], data: &[u8]) {
+            let hlen = 20 + opts.len();
+            let mut t = Vec::new();
+            t.extend_from_slice(&self.port.to_be_bytes());
+            t.extend_from_slice(&HTTP_PORT.to_be_bytes());
+            t.extend_from_slice(&self.seq.to_be_bytes());
+            t.extend_from_slice(&self.ack.to_be_bytes());
+            t.push(((hlen / 4) as u8) << 4);
+            t.push(flags);
+            t.extend_from_slice(&self.window.to_be_bytes());
+            t.extend_from_slice(&[0, 0, 0, 0]);
+            t.extend_from_slice(opts);
+            t.extend_from_slice(data);
+            let c = transport_checksum(CLIENT_IP, SERVER_IP, IPPROTO_TCP, &t);
+            t[16..18].copy_from_slice(&c.to_be_bytes());
+            let mut ip = vec![0x45, 0, 0, 0, 0, 0, 0x40, 0, 64, IPPROTO_TCP, 0, 0];
+            ip[2..4].copy_from_slice(&((20 + t.len()) as u16).to_be_bytes());
+            ip.extend_from_slice(&CLIENT_IP);
+            ip.extend_from_slice(&SERVER_IP);
+            let c = checksum(&ip);
+            ip[10..12].copy_from_slice(&c.to_be_bytes());
+            ip.extend_from_slice(&t);
+            let mut f = SERVER_MAC.to_vec();
+            f.extend_from_slice(&CLIENT_MAC);
+            f.extend_from_slice(&ETHERTYPE_IPV4.to_be_bytes());
+            f.extend_from_slice(&ip);
+            p.send(&f);
+            self.seq = self
+                .seq
+                .wrapping_add(data.len() as u32 + u32::from(flags & (TCP_SYN | TCP_FIN) != 0));
+        }
+    }
+
+    /// A segment from the peer: (seq, ack, flags, options, data), with both
+    /// checksums verified.
+    fn parse_tcp(f: &[u8]) -> (u32, u32, u8, Vec<u8>, Vec<u8>) {
+        assert_eq!(f[..6], CLIENT_MAC);
+        let ip = &f[14..];
+        assert_eq!(checksum(&ip[..20]), 0);
+        assert_eq!(ip[9], IPPROTO_TCP);
+        let t = &ip[20..usize::from(be16(ip, 2))];
+        assert_eq!(transport_checksum(SERVER_IP, CLIENT_IP, IPPROTO_TCP, t), 0);
+        let doff = usize::from(t[12] >> 4) * 4;
+        (
+            be32(t, 4),
+            be32(t, 8),
+            t[13],
+            t[20..doff].to_vec(),
+            t[doff..].to_vec(),
+        )
+    }
+
+    /// Open a connection, send `request`, read the response to the end with
+    /// a receive window of `window` bytes, close. Returns the response and the
+    /// largest number of bytes the peer ever had unacknowledged.
+    fn http(p: &mut BuiltinPeer, request: &str, window: u16) -> (String, usize) {
+        let mut c = Client {
+            port: 40000,
+            seq: 1000,
+            ack: 0,
+            window,
+        };
+        c.segment(p, TCP_SYN, &[2, 4, 0x05, 0xb4], &[]);
+        let (iss, ack, flags, opts, _) = parse_tcp(&p.recv().unwrap());
+        assert_eq!(flags, TCP_SYN | TCP_ACK);
+        assert_eq!(ack, 1001);
+        assert_eq!(opts, [2, 4, 0x05, 0xb4], "MSS 1460");
+        c.ack = iss.wrapping_add(1);
+        c.segment(p, TCP_ACK, &[], &[]);
+        assert!(p.recv().is_none(), "nothing to say yet");
+        c.segment(p, TCP_ACK | TCP_PSH, &[], request.as_bytes());
+
+        let mut body = Vec::new();
+        let mut max_in_flight = 0;
+        loop {
+            // Everything the peer sent in reply to our last segment.
+            let mut got = Vec::new();
+            while let Some(f) = p.recv() {
+                got.push(parse_tcp(&f));
+            }
+            assert!(!got.is_empty(), "the peer always answers");
+            let in_flight: usize = got.iter().map(|g| g.4.len()).sum();
+            max_in_flight = max_in_flight.max(in_flight);
+            let mut fin = false;
+            for (seq, _, flags, _, data) in got {
+                assert_eq!(seq, c.ack, "in order, no gaps");
+                c.ack = c.ack.wrapping_add(data.len() as u32);
+                body.extend_from_slice(&data);
+                if flags & TCP_FIN != 0 {
+                    c.ack = c.ack.wrapping_add(1);
+                    fin = true;
+                }
+            }
+            if fin {
+                c.segment(p, TCP_FIN | TCP_ACK, &[], &[]);
+                // The peer acknowledges our FIN, and is done.
+                let (_, ack, flags, _, data) = parse_tcp(&p.recv().unwrap());
+                assert_eq!((flags, ack, data.len()), (TCP_ACK, c.seq, 0));
+                assert!(p.recv().is_none());
+                break;
+            }
+            c.segment(p, TCP_ACK, &[], &[]);
+        }
+        assert!(p.conns.is_empty(), "closed");
+        (String::from_utf8_lossy(&body).into_owned(), max_in_flight)
+    }
+
+    #[test]
+    fn http_get_serves_the_file_paced_by_the_client_window() {
+        let mut p = BuiltinPeer::new();
+        let file: String = (0..10_000)
+            .map(|i| char::from(b'a' + (i % 26) as u8))
+            .collect();
+        p.add_file("net_install/boot.img", file.clone().into_bytes());
+        let req = "GET /net_install/boot.img HTTP/1.1\r\nHost: fw-download-alias1.raspberrypi.com\r\n\r\n";
+        let (resp, in_flight) = http(&mut p, req, 3000);
+        let (head, body) = resp.split_once("\r\n\r\n").unwrap();
+        assert!(head.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(head.contains("Content-Length: 10000"));
+        assert!(head.contains("Connection: close"));
+        assert_eq!(body, file);
+        assert!(in_flight <= 3000, "window respected: {in_flight}");
+        assert!(p
+            .take_log()
+            .iter()
+            .any(|l| l.contains("-> 200, 10000 bytes")));
+    }
+
+    #[test]
+    fn http_range_head_and_missing_files() {
+        let mut p = BuiltinPeer::new();
+        p.add_file("f", b"0123456789".to_vec());
+        let (r, _) = http(&mut p, "GET /f HTTP/1.1\r\nRange: bytes=2-5\r\n\r\n", 65535);
+        assert!(r.starts_with("HTTP/1.1 206 Partial Content\r\n"));
+        assert!(r.contains("Content-Range: bytes 2-5/10\r\n"));
+        assert!(r.ends_with("\r\n\r\n2345"));
+        let (r, _) = http(&mut p, "HEAD http://host/f?x=1 HTTP/1.1\r\n\r\n", 65535);
+        assert!(r.contains("Content-Length: 10\r\n"));
+        assert!(r.ends_with("\r\n\r\n"), "no body for HEAD");
+        let (r, _) = http(&mut p, "GET /nope HTTP/1.1\r\n\r\n", 65535);
+        assert!(r.starts_with("HTTP/1.1 404 Not Found"));
+        let (r, _) = http(&mut p, "GET /f HTTP/1.1\r\nrange: bytes=20-\r\n\r\n", 65535);
+        assert!(r.starts_with("HTTP/1.1 416"));
+    }
+
+    #[test]
+    fn parse_range_forms() {
+        assert_eq!(parse_range("bytes=0-0", 10), Some((0, 0)));
+        assert_eq!(parse_range("bytes=4-", 10), Some((4, 9)));
+        assert_eq!(parse_range("bytes=-3", 10), Some((7, 9)));
+        assert_eq!(parse_range("bytes=8-100", 10), Some((8, 9)));
+        assert_eq!(parse_range("bytes=5-2", 10), None);
+        assert_eq!(parse_range("bytes=10-", 10), None);
+        assert_eq!(parse_range("items=0-1", 10), None);
+    }
+
+    #[test]
+    fn tcp_to_a_closed_port_is_reset() {
+        let mut p = BuiltinPeer::new();
+        let mut c = Client {
+            port: 40000,
+            seq: 7,
+            ack: 0,
+            window: 1000,
+        };
+        let mut t = Vec::new();
+        t.extend_from_slice(&c.port.to_be_bytes());
+        t.extend_from_slice(&81u16.to_be_bytes());
+        c.seq = 7;
+        // Reuse the client builder for port 80, then check a stray ACK.
+        c.segment(&mut p, TCP_ACK, &[], &[]);
+        let (seq, _, flags, _, _) = parse_tcp(&p.recv().unwrap());
+        assert_eq!(flags, TCP_RST, "no connection: RST with the ACK's number");
+        assert_eq!(seq, 0);
     }
 
     #[test]

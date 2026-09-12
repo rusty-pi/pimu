@@ -1,0 +1,86 @@
+
+[t] RPi: BOOTSYS release VERSION:0a7ef05f DATE: 2026/08/04 TIME: 12:38:13
+[t] MFG_VER: 1
+[t] BOOTMODE: 0x00 partition 0 build-ts BUILD_TIMESTAMP=1785847093 serial 1aa2bb31 boardrev d03115 stc [n]
+[t] PM_RSTS 00000020
+[t] POWER_OFF_ON_HALT: 0 WAIT_FOR_POWER_BUTTON 0 power-on-reset 0
+[t] EEPROM ID 0xef4018
+[t] SFDP None
+[t] part 00000000 reset_info 00000000
+[t] uSD voltage 3.3V
+[t] init_sdram_1350
+[t] Initialising SDRAM rank 2 total-size: 8Gbit part: 0 (0x17 0x00) odt: 0
+[t] memsys_init: 0 8Gbit MCB 0x80015ff0: 11696
+[t] DDR 3200 Mbps dual-rank:1 byte-mode:0 size-gbit:8 part-config:0 odt:0
+[t] SD_SB 11013100
+[t] OTP boardrev d03115 bootrom 8b0 8b0
+[t] Customer key hash 0000000000000000000000000000000000000000000000000000000000000000
+[t] VC-JTAG unlocked
+
+
+[t] RPi: BOOTLOADER release VERSION:0a7ef05f DATE: 2026/08/04 TIME: 12:38:13
+[t] MFG_VER: 1
+[t] BOOTMODE: 0x00 partition 0 build-ts BUILD_TIMESTAMP=1785847093 serial 1aa2bb31 boardrev d03115 stc [n]
+[t] EEPROM ID 0xef4018
+[t] SFDP None
+[t] PCI0 init
+[t] PCI0 reset
+[t] PCIe scan 00001106:00003483
+[t] XHCI-STOP
+[t] xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb
+[t] USBSTS 1
+[t] xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb
+[t] xHC0 ports 5 slots 32 intrs 4
+[t] SD_OC: 0
+[t] Boot mode: USB-MSD (04) order f
+[t] USB3[2] 00021203 connected enabled
+[t] USB3 root HUB port 2 init
+[t] USB2[1] 400202e1 connected
+[t] DEV [01:00] 3.16 000000:02 class 0 VID 090c PID 1000
+[t] MSD device [01:00] 3.16 000000:02 conf 0 iface 0 ep 82#1024 01#1024
+[t] MSD [01:00] 3.16 000000:02 register MSD
+[t] USB2 root HUB port 1 init
+[t] DEV [02:00] 2.16 000000:01 class 9 VID 2109 PID 3431
+[t] HUB init [02:00] 2.16 000000:01
+[t] XHCI-STOP
+[t] xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb
+[t] USBSTS 18
+[t] XHCI-STOP
+[t] xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb
+[t] USBSTS 19
+[t] xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb
+[t] xHC0 ports 5 slots 32 intrs 4
+[t] USB3[2] 00021203 connected enabled
+[t] USB3 root HUB port 2 init
+[t] USB2[1] 400202e1 connected
+[t] DEV [01:00] 3.16 000000:02 class 0 VID 090c PID 1000
+[t] MSD device [01:00] 3.16 000000:02 conf 0 iface 0 ep 82#1024 01#1024
+[t] MSD [01:00] 3.16 000000:02 register MSD
+[t] MSD [01:00] 3.16 000000:02 LUN 0
+[t] MSD READ_CAPACITY [01:00] 3.16 000000:02 lun 0 block-count 589824 block-size 512
+[t] MBR: 0x00000800,  522240 type: 0x0c
+[t] MBR: 0x00080000,   65536 type: 0x83
+[t] MBR: 0x00000000,       0 type: 0x00
+[t] MBR: 0x00000000,       0 type: 0x00
+[t] Trying partition: 0
+[t] type: 32 lba: 2048 '[oem]' ' RPIBOOT    ' clusters 130044 (4)
+[t] rsc 32 fat-sectors 1016 root dir cluster 2 sectors 0 entries 0
+[t] FAT32 clusters 130044
+[t] [MSD [01:00] 3.16 000000:02] autoboot.txt not found
+[t] Select partition rsts 0 C(boot_partition) 0 EEPROM config 0 result 1
+[t] Trying partition: 1
+[t] type: 32 lba: 2048 '[oem]' ' RPIBOOT    ' clusters 130044 (4)
+[t] rsc 32 fat-sectors 1016 root dir cluster 2 sectors 0 entries 0
+[t] FAT32 clusters 130044
+[t] Read config.txt bytes      279 hnd 0x3
+[t] [MSD [01:00] 3.16 000000:02] pieeprom.upd not found
+[t] [MSD [01:00] 3.16 000000:02] recover4.elf not found
+[t] [MSD [01:00] 3.16 000000:02] recovery.elf not found
+[t] Read start4.elf bytes  2298048 hnd 0x4
+[t] Read fixup4.dat bytes     5512 hnd 0x467
+[t] 0x00d03115 0x00000000 0x00003fff
+[t] MEM GPU: 76 ARM: 947 TOTAL: 1023
+[t] Starting start4.elf @ 0xfeb00200 partition 1
+[t] +
+
+MESS:[t]:0: USB boot mode 2

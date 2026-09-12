@@ -105,14 +105,20 @@ Only what boot needs. Modelled so far (`src/periph/`):
   [`usb-xhci.md`](usb-xhci.md))
 
 - **GENET** (`0x7D58_0000`) with its BCM54213PE PHY and packet DMA, plus a
-  built-in DHCP / TFTP server on the other end of the cable
-  (`src/net/peer.rs`). `--tftp <dir> --boot-order 0xf2` network boots from
-  `<dir>`: the bootloader TFTPs `start4.elf` / `fixup4.dat`, and start4's own
-  GENET driver fetches `config.txt`, the overlays, the dtb and `kernel8.img`
-  through to `arm_loader`
+  built-in network peer on the other end of the cable (`src/net/peer.rs`:
+  DHCP, DNS, TFTP, plain HTTP over a minimal TCP). `--netboot <dir>` serves
+  `<dir>`:
+  - TFTP (`--boot-order 0xf2`): the bootloader TFTPs `start4.elf` /
+    `fixup4.dat`, and start4's own GENET driver fetches `config.txt`, the
+    overlays, the dtb and `kernel8.img` through to `arm_loader`;
+  - HTTP (`--boot-order 0xf7`): the bootloader fetches `boot.sig` and
+    `boot.img` from `HTTP_HOST`/`net_install/` and boots the ramdisk. The
+    default host forces HTTPS, so the scenario sets its own `HTTP_HOST` and
+    `HTTP_PORT=80`; the image must be RSA-signed and the key must be in the
+    EEPROM's `pubkey.bin` (`--eeprom-pubkey`, test key in `testdata/netboot/`)
 
 Still out: **USB3** (the VL805 xHCI behind that PCIe root complex — surveyed in
-[`usb-xhci.md`](usb-xhci.md)); HTTP network boot; HDMI/display, camera, the 3D/QPU unit; and the VPU
+[`usb-xhci.md`](usb-xhci.md)); HTTPS network boot; HDMI/display, camera, the 3D/QPU unit; and the VPU
 *scalar* vector ALU (`memcpy`-style bulk ops are special-cased, the rest fall
 through to `Unimpl`).
 

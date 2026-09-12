@@ -37,9 +37,10 @@ jobs:
       - name: Test
         run: cargo test
 
-  boot:
+  # Build once: the binary, the firmware blobs and every boot medium.
+  build:
     runs-on: ubuntu-26.04
-    timeout-minutes: 30
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v7
@@ -57,25 +58,61 @@ jobs:
       - name: Build SD image
         run: ./scripts/make-sd.sh
 
+      - name: Build network-boot root
+        run: ./scripts/make-netboot.sh
+
       - name: Build rpi-virt-fw
         run: cargo build --release
 
-      - name: Simulated boot (5 min cap)
-        run: ./scripts/boot-check.sh boot.log
+      - uses: actions/upload-artifact@v7
+        with:
+          name: boot-inputs
+          retention-days: 1
+          path: |
+            target/release/rpi-virt-fw
+            firmware/
 
-      - name: Linux boot to a shell (#40)
-        if: always()
-        run: ./scripts/boot-check.sh --scenario=testdata/boot/linux-boot.toml linux.log
+  # Then every boot at once, each against its own scenario: the firmware boot
+  # from each medium, and the Linux boot to a shell (#40).
+  boot:
+    needs: build
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - medium: sd
+            scenario: testdata/boot/firmware-boot.toml
+          - medium: usb
+            scenario: testdata/boot/usb-boot.toml
+          - medium: tftp
+            scenario: testdata/boot/tftp-boot.toml
+          - medium: http
+            scenario: testdata/boot/http-boot.toml
+          - medium: linux
+            scenario: testdata/boot/linux-boot.toml
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: boot-inputs
+
+      - name: Restore the executable bit
+        run: chmod +x target/release/rpi-virt-fw
+
+      - name: Simulated boot (${{ matrix.medium }})
+        run: ./scripts/boot-check.sh --scenario=${{ matrix.scenario }} boot-${{ matrix.medium }}.log
 
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: boot-log
+          name: boot-log-${{ matrix.medium }}
           # The console file is the golden transcript's raw material: download
           # it from a failed run and `boot-check --update` against it to see
           # exactly what the boot did differently.
           path: |
-            boot.log
-            boot.log.console
-            linux.log
-            linux.log.console
+            boot-${{ matrix.medium }}.log
+            boot-${{ matrix.medium }}.log.console

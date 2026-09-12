@@ -21,7 +21,9 @@ USAGE:
     rpi-virt-fw run-all [<dir>] [--update] [-v]
     rpi-virt-fw recon <file> [--entry <hex>] [--ram-mb <n>] [--max-steps <n>] [--eeprom]
                              [--max-wall <secs>] [--sd <img>] [--usb <img>]
-                             [--boot-order <hex>] [--skip-signed-boot] [--tftp <dir>]
+                             [--boot-order <hex>] [--bootconf <KEY=VALUE>]...
+                             [--skip-signed-boot] [--netboot <dir>]
+                             [--eeprom-pubkey <pubkey.bin>]
                              [--skip-unimpl]
               (no --max-steps = no instruction cap; --max-wall defaults to 140s)
               (an unknown instruction stops the run; --skip-unimpl steps over it
@@ -185,8 +187,10 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     // code behind that only the *next* request can ask for (`0x0003008e`).
     let mut mbox_tags: Vec<Vec<MboxTag>> = Vec::new();
     let mut usb_image: Option<PathBuf> = None;
-    let mut tftp_root: Option<PathBuf> = None;
+    let mut netboot_root: Option<PathBuf> = None;
     let mut boot_order: Option<String> = None;
+    let mut bootconf: Vec<String> = Vec::new();
+    let mut eeprom_pubkey: Option<PathBuf> = None;
     let mut dram_map = false;
     let mut skip_signed_boot = false;
     let mut skip_unimpl = false;
@@ -233,13 +237,25 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
                 ))
             }
             "--usb" => usb_image = Some(PathBuf::from(it.next().context("--usb needs a path")?)),
-            "--tftp" => {
-                tftp_root = Some(PathBuf::from(
-                    it.next().context("--tftp needs a directory")?,
+            "--netboot" => {
+                netboot_root = Some(PathBuf::from(
+                    it.next().context("--netboot needs a directory")?,
                 ))
             }
             "--boot-order" => {
                 boot_order = Some(it.next().context("--boot-order needs a value")?.to_string())
+            }
+            "--eeprom-pubkey" => {
+                eeprom_pubkey = Some(PathBuf::from(
+                    it.next().context("--eeprom-pubkey needs a file")?,
+                ))
+            }
+            "--bootconf" => {
+                let kv = it.next().context("--bootconf needs KEY=VALUE")?;
+                if !kv.contains('=') {
+                    bail!("--bootconf: expected KEY=VALUE, got '{kv}'");
+                }
+                bootconf.push(kv.to_string())
             }
             "--skip-signed-boot" => skip_signed_boot = true,
             "--skip-unimpl" => skip_unimpl = true,
@@ -356,11 +372,17 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     // tries the USB entry, which makes `--usb` unexercisable. The section is
     // the last one in the image and is followed by erased flash, so growing it
     // is a length-field bump and an append; nothing moves.
+    //
+    // `--bootconf KEY=VALUE` appends any other line the same way (e.g.
+    // `HTTP_HOST` / `HTTP_PORT` / `HTTP_PATH` for HTTP boot). A later line
+    // overrides an earlier one with the same key.
+    let conf_lines: Vec<String> = boot_order
+        .iter()
+        .map(|o| format!("BOOT_ORDER={o}"))
+        .chain(bootconf.iter().cloned())
+        .collect();
     let set_boot_order = |flash: &mut Vec<u8>, announce: bool| {
-        let Some(order) = boot_order.as_deref() else {
-            return;
-        };
-        if !eeprom {
+        if conf_lines.is_empty() || !eeprom {
             return;
         }
         let Some(hdr) = find_bootconf_header(flash) else {
@@ -375,13 +397,43 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
             flash[hdr + 6],
             flash[hdr + 7],
         ]) as usize;
-        let line = format!("BOOT_ORDER={order}\n");
+        let text: String = conf_lines.iter().map(|l| format!("{l}\n")).collect();
         let end = hdr + 8 + len;
-        let new_len = len + line.len();
-        flash.splice(end..end + line.len(), line.bytes());
+        let new_len = len + text.len();
+        flash.splice(end..end + text.len(), text.bytes());
         flash[hdr + 4..hdr + 8].copy_from_slice(&(new_len as u32).to_be_bytes());
         if announce {
-            println!("boot-order: bootconf BOOT_ORDER={order} @ {:#x}", end);
+            for l in &conf_lines {
+                println!("bootconf: appended {l} @ {:#x}", end);
+            }
+        }
+    };
+
+    // `--eeprom-pubkey <pubkey.bin>`: put an RSA-2048 public key in the
+    // EEPROM's `pubkey.bin` slot, as `rpi-eeprom-config --pubkey` does (n then
+    // e, little-endian, 256 + 8 bytes). Signed images — an HTTP-booted
+    // `boot.img` among them — are verified against it; the pinned image's slot
+    // is all zeros, which verifies nothing.
+    let pubkey = match &eeprom_pubkey {
+        Some(p) => {
+            let k = std::fs::read(p).with_context(|| format!("reading {}", p.display()))?;
+            if k.len() != 264 {
+                bail!(
+                    "{}: {} bytes, want 264 (RSA-2048 n + e)",
+                    p.display(),
+                    k.len()
+                );
+            }
+            Some(k)
+        }
+        None => None,
+    };
+    let set_pubkey = |flash: &mut Vec<u8>, announce: bool| {
+        let Some(k) = &pubkey else { return };
+        match rpi_virt_fw::firmware::eeprom::replace_file(flash, "pubkey.bin", k) {
+            Ok(()) if announce => println!("eeprom-pubkey: pubkey.bin replaced"),
+            Ok(()) => {}
+            Err(e) => eprintln!("eeprom-pubkey: {e:#}"),
         }
     };
 
@@ -390,6 +442,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     let mut flash = bytes.clone();
     unsign(&mut flash, true);
     set_boot_order(&mut flash, true);
+    set_pubkey(&mut flash, true);
 
     // Show the EEPROM section table `bootloader_eeprom_find_files` walks, plus
     // the decoded `bootconf.txt`, so a boot that consults EEPROM config (boot
@@ -444,9 +497,9 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
                 Box::new(rpi_virt_fw::periph::usb::MassStorage::new(img.clone())),
             );
         }
-        // `--tftp <dir>`: plug the Ethernet cable into the built-in DHCP /
-        // TFTP server (`src/net/peer.rs`), serving `<dir>`.
-        if let Some(dir) = &tftp_root {
+        // `--netboot <dir>`: plug the Ethernet cable into the built-in network
+        // peer (`src/net/peer.rs`): DHCP, DNS, and `<dir>` over TFTP and HTTP.
+        if let Some(dir) = &netboot_root {
             machine.attach_net(Box::new(rpi_virt_fw::net::BuiltinPeer::with_root(
                 dir.clone(),
             )));
@@ -522,6 +575,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
             flash = emu.machine.spi0.flash_bytes().to_vec();
             unsign(&mut flash, false); // self-update restored SIGNED_BOOT=1
             set_boot_order(&mut flash, false);
+            set_pubkey(&mut flash, false);
             if reboots <= 4 {
                 println!("\n=== RESET (reboot {reboots}) — re-running from updated flash ===\n");
                 continue 'boot;

@@ -67,12 +67,19 @@ hand, which the firmware's own `dma_chan_interrupt` does now that the DMA
 completion interrupt is modelled
 ([#3](https://github.com/valtzu/rpi-virt-fw/issues/3)).
 
-Network boot works too: `--tftp <dir> --boot-order 0xf2` plugs the Ethernet
-cable into a built-in DHCP / TFTP server serving `<dir>`, and both the
-bootloader and start4 load everything from it through to `arm_loader`
-([#38](https://github.com/valtzu/rpi-virt-fw/issues/38)).
+Network boot works too: `--netboot <dir>` plugs the Ethernet cable into a
+built-in network peer (DHCP, DNS, TFTP and plain HTTP) serving `<dir>`. Over
+TFTP (`--boot-order 0xf2`) the bootloader and start4 load everything from it
+through to `arm_loader`; over HTTP (`--boot-order 0xf7`) the bootloader
+downloads a signed `boot.img` ramdisk and boots from that.
+`scripts/make-netboot.sh` builds both from the SD image, and
+`testdata/boot/http-boot.toml` has the EEPROM settings HTTP boot needs. CI
+boots the same files from SD, USB, TFTP and HTTP in parallel
+([#38](https://github.com/valtzu/rpi-virt-fw/issues/38)); USB gets as far as
+start4, which then idles — its own mass-storage path is not modelled yet
+(`testdata/boot/usb-boot.toml`).
 
-Not done: the VPU vector/float unit, HTTP network boot, and the ARM property
+Not done: the VPU vector/float unit, HTTPS network boot, and the ARM property
 mailbox — which is what a booted Linux needs to reach `/dev/vcio` and the
 firmware crypto service. See [`docs/boot-chain.md`](docs/boot-chain.md) for the
 stage-by-stage map, [`docs/diagnostics.md`](docs/diagnostics.md) for the

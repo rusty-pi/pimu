@@ -4,11 +4,15 @@
 #
 #   scripts/boot-check.sh [--update] [--scenario=<toml>] [boot.log]
 #
-# Assumes `cargo build --release` and an SD image built by scripts/make-sd.sh.
+# Assumes `cargo build --release` and the boot media the scenario names: an SD
+# image built by scripts/make-sd.sh, and for the network boots the root
+# scripts/make-netboot.sh builds from it.
 #
 # What is checked, and where it is written down, both live in the scenario —
-# `testdata/boot/firmware-boot.toml` unless `--scenario` names another (the
-# Linux boot to a shell is `testdata/boot/linux-boot.toml`):
+# `testdata/boot/firmware-boot.toml` (the SD boot) unless `--scenario` names
+# another: the same files booted from USB, TFTP and HTTP (`usb-boot.toml`,
+# `tftp-boot.toml`, `http-boot.toml`), or the Linux boot to a shell
+# (`linux-boot.toml`), all in `testdata/boot/`:
 #
 #   * the golden console transcript (`testdata/boot/golden/`), diffed line by
 #     line so a change shows up in place — including output that moved or a
@@ -29,13 +33,15 @@ scenario="$here/testdata/boot/firmware-boot.toml"
 
 update=()
 log="$here/boot.log"
-for arg in "$@"; do
-  case "$arg" in
+while [ $# -gt 0 ]; do
+  case "$1" in
     --update) update=(--update) ;;
-    --scenario=*) scenario="${arg#--scenario=}" ;;
+    --scenario=*) scenario="${1#--scenario=}" ;;
+    --scenario) scenario="${2:?--scenario needs a file}"; shift ;;
     -*) echo "usage: $0 [--update] [--scenario=<toml>] [boot.log]" >&2; exit 2 ;;
-    *) log="$arg" ;;
+    *) log="$1" ;;
   esac
+  shift
 done
 # The UART bytes on their own, with none of the run report interleaved: this is
 # what the golden transcript is made of. `$log` keeps the combined stream, which

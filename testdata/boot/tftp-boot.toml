@@ -1,0 +1,69 @@
+# The firmware boot over the network: TFTP (BOOT_ORDER 0x2).
+#
+# The same files as the SD boot (`firmware-boot.toml`), served by the built-in
+# network peer (src/net/peer.rs) from the root `scripts/make-netboot.sh` builds.
+# No SD card: the bootloader TFTPs start4.elf / fixup4.dat, and start4's own
+# GENET driver fetches config.txt, the overlays, the dtb and the kernel.
+#
+# Re-record the golden with:
+#   scripts/boot-check.sh --scenario=testdata/boot/tftp-boot.toml --update
+
+name = "tftp-boot"
+description = "pieeprom.bin network boot over TFTP from the built-in peer, through to the ARM hand-off."
+
+[boot]
+eeprom = "../../firmware/pieeprom.bin"
+netboot = "../../firmware/netboot"
+boot_order = "0xf2"
+# ~40 s on a dev box; the runners are ~1.6x slower.
+wall_secs = 200
+max_skipped = 0
+
+[golden]
+path = "golden/tftp-boot.txt"
+
+[[milestone]]
+why = "BOOT_ORDER 0xf2 reached the bootloader: network first."
+line = "Boot mode: NETWORK (02)"
+
+[[milestone]]
+why = "With a cable the PHY reports the measured link partner, and the bootloader's wait-for-link (BMSR / LPA / STAT1000 polls) completes (#38)."
+line = "LINK STATUS: speed: 1000 full duplex"
+
+[[milestone]]
+why = "The OTP MAC rows are read the way the firmware reads them: row 65 then the top half of row 64."
+line = "NETWORK: 02:00:5e:00:53:01"
+
+[[milestone]]
+why = "DHCP over the GENET rings: DISCOVER / OFFER / REQUEST / ACK with the peer's PXE boot menu (#38). The gateway is left out: TFTP mode prints 0.0.0.0 whatever option 3 says."
+line = ["NET 192.0.2.100 255.255.255.0 gw ", " tftp 192.0.2.1"]
+
+[[milestone]]
+why = "The bootloader TFTPs all of start4.elf."
+line = "Read start4.elf bytes  2298048"
+
+[[milestone]]
+why = "start4's own GENET driver takes over and loads the kernel over TFTP."
+line = ["MESS:", "Loaded 'kernel8.img'"]
+
+[[milestone]]
+why = "The goal: the VPU hands the board over to the ARM, with no SD card in the machine."
+line = "arm_loader: Starting ARM with 948MB"
+
+[[milestone]]
+why = "The identity is the same however the board booted: rows 28/35/30/64/65 (src/identity.rs)."
+line = ["/chosen/rpi-machine-id ", "\"ed96a9bc626d9d0869ce37ee4aea025d\""]
+
+[[milestone]]
+why = "The peer's own record: the kernel went out in full, not only started."
+line = "tftp: kernel8.img sent, 10474929 bytes"
+
+[[milestone]]
+why = "No nop-slides at all."
+line = "[derail]"
+absent = true
+
+[[milestone]]
+why = "An unknown instruction must be reported as a fault, with its pc and raw bytes."
+line = "Unimplemented"
+absent = true
