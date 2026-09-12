@@ -222,6 +222,24 @@ impl Pmic {
     }
 }
 
+impl crate::periph::bsc::I2cSlave for Pmic {
+    fn responds_to(&self, addr: u8) -> bool {
+        Pmic::responds_to(self, addr)
+    }
+
+    fn begin(&mut self, addr: u8, read: bool) {
+        Pmic::begin(self, addr, read)
+    }
+
+    fn write_byte(&mut self, b: u8) {
+        Pmic::write_byte(self, b)
+    }
+
+    fn read_byte(&mut self) -> u8 {
+        Pmic::read_byte(self)
+    }
+}
+
 /// `RVF_DBG_PMIC=1` logs every register access, in the style of the other
 /// `RVF_DBG_*` probes. Off by default.
 fn dbg() -> bool {

@@ -305,13 +305,23 @@ fn pmic_addresses_are_separate_register_files() {
     assert_eq!(pmic_read(&mut m, 0x1B, 0x40), 0x00);
 }
 
+/// The FXL6408 GPIO expander shares the bus at `0x43`; start4 probes it by
+/// reading register `0x01` (any value will do for the firmware, but it is the
+/// Fairchild manufacturer id on the real part).
+#[test]
+fn gpio_expander_answers_on_the_pmic_bus() {
+    let mut m = machine();
+    assert_eq!(pmic_read(&mut m, 0x43, 0x01) >> 5, 0b101);
+}
+
 /// Nothing else is on this bus. start4 probes a handful of other addresses on
-/// it; an unACKed transfer has to complete `DONE | ERR`, not spin.
+/// it — `0x10`, where its other expander driver (a GreenPAK) looks, among
+/// them; an unACKed transfer has to complete `DONE | ERR`, not spin.
 #[test]
 fn pmic_bus_nacks_every_other_address() {
     let mut m = machine();
     let base = map::BSC_PMIC_BASE;
-    m.store32(base + BSC_A, 0x43).unwrap();
+    m.store32(base + BSC_A, 0x10).unwrap();
     m.store32(base + BSC_DLEN, 1).unwrap();
     m.store32(base + BSC_C, C_I2CEN | C_ST | C_READ).unwrap();
     settle(&mut m);
