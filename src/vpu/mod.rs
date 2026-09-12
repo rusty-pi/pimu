@@ -11,6 +11,7 @@
 
 pub mod decode;
 pub mod exec;
+pub mod icache;
 pub mod insn;
 pub mod length;
 pub mod reg;

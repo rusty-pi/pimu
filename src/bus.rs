@@ -120,6 +120,16 @@ pub trait Bus {
         Ok(len)
     }
 
+    /// The write generation of the RAM page `pc` is in ([`crate::mem::Ram::page_gen`]),
+    /// or `None` when an instruction there must not be served from a decode
+    /// cache (not RAM). `cached` is the generation the caller's cached copy
+    /// was decoded under: when it matches, the caller will use that copy
+    /// instead of calling [`Self::read_insn`], so this is where the fetch's
+    /// own bookkeeping has to happen.
+    fn code_gen(&mut self, _pc: u32, _cached: Option<u64>) -> Option<u64> {
+        None
+    }
+
     /// The interrupt vector-table slot for the periodic ThreadX tick source, if
     /// the firmware has enabled it. This does not touch the timer — the run
     /// loop calls it when a compare deadline has been crossed to deliver a
