@@ -27,6 +27,11 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
+/// SIMD&FP instructions (`op0` = x111) our core retired / found UNDEFINED
+/// across all cases, to show the random words are not all reserved space.
+static SIMD_RETIRED: AtomicU64 = AtomicU64::new(0);
+static SIMD_UNDEF: AtomicU64 = AtomicU64::new(0);
+
 use rpi_virt_fw::aarch64::{Abort, Cpu, Exception, Memory, Step};
 
 // --- Layout of the test executable ------------------------------------------
@@ -40,7 +45,9 @@ const DATA: u64 = BASE + 0x2_0000;
 const INIT_SP: u64 = 31 * 8;
 const INIT_NZCV: u64 = 32 * 8;
 const INIT_TPIDR: u64 = 33 * 8;
-const INIT_Q: u64 = 0x100;
+const INIT_FPCR: u64 = 34 * 8;
+const INIT_FPSR: u64 = 35 * 8;
+const INIT_Q: u64 = 0x200;
 /// `struct sigaction` and `stack_t` for the SIGILL handler.
 const INIT_SIGACT: u64 = 0x400;
 const INIT_ALTSS: u64 = 0x440;
@@ -55,9 +62,12 @@ const DUMP: u64 = SCRATCH + SCRATCH_LEN;
 const DUMP_LEN: u64 = 0x800;
 const DUMP_Q: u64 = 0x200;
 const LOG: u64 = DUMP + 0x400;
-const ALTSTACK: u64 = DUMP + 0x1000;
+const END: u64 = DUMP + 0x1000;
+/// The SIGILL handler's stack, in a segment of its own well away from the
+/// image: if the stream's SP ever pointed into it, the kernel would take
+/// that as "already on the alternate stack" and push the frame at SP.
+const ALTSTACK: u64 = 0x5555_0000_0000;
 const ALTSTACK_LEN: u64 = 0x2000;
-const END: u64 = ALTSTACK + ALTSTACK_LEN;
 
 const NOP: u32 = 0xD503_201F;
 const SVC0: u32 = 0xD400_0001;
@@ -135,6 +145,10 @@ fn prologue() -> Vec<u32> {
     p.push(msr(NZCV, 0));
     p.push(ldr_x(0, 27, INIT_TPIDR));
     p.push(msr(TPIDR_EL0, 0));
+    p.push(ldr_x(0, 27, INIT_FPCR));
+    p.push(msr(FPCR, 0));
+    p.push(ldr_x(0, 27, INIT_FPSR));
+    p.push(msr(FPSR, 0));
     for i in (0..32).step_by(2) {
         p.push(ldp_q(i, i + 1, 27, INIT_Q + 16 * i as u64));
     }
@@ -234,6 +248,30 @@ impl Rng {
     }
 }
 
+/// A floating-point value of `bits` (32 or 64) biased towards the cases the
+/// ARM rules single out: zeros, infinities, both kinds of NaN, denormals,
+/// the extremes of the normal range, and small integers and halves.
+fn fp_value(r: &mut Rng, bits: u32) -> u64 {
+    let (e, f) = if bits == 32 { (8, 23) } else { (11, 52) };
+    let sign = r.bits(1) as u64;
+    let frac = r.next() & ((1u64 << f) - 1);
+    let emax = (1u64 << e) - 1;
+    let bias = emax >> 1;
+    let (exp, frac) = match r.below(12) {
+        0 => (0, 0),
+        1 => (emax, 0),
+        2 => (emax, frac | (1 << (f - 1))),
+        3 => (emax, (frac & !(1 << (f - 1))).max(1)),
+        4 => (0, frac.max(1)),
+        5 => (1, frac),
+        6 => (emax - 1, frac),
+        7 => (bias + r.below(4), frac & (0xF << (f - 4))),
+        8 => (bias - 1, 0),
+        _ => (r.below(emax), frac),
+    };
+    (sign << (bits - 1)) | (exp << f) | frac
+}
+
 /// A destination register the stream may overwrite: anything but `x27`
 /// (scratch base) and `x28` (address register). 31 is XZR in the encodings
 /// this is used for.
@@ -306,11 +344,119 @@ impl Gen {
         w
     }
 
+    /// A random word in the SIMD&FP space. Mostly it picks one of the
+    /// encoding classes (fixed bits as `(value, mask)`, the same split
+    /// `src/aarch64/simd.rs` decodes by) and randomises only the rest, so
+    /// most words are allocated; one in four is anything with `op0` = x111.
+    /// Crypto encodings are left out: QEMU's cortex-a72 has the extension,
+    /// the Pi's does not (see `src/aarch64/simd.rs`).
+    fn random_simd(&mut self) -> u32 {
+        const CLASSES: &[(u32, u32)] = &[
+            // Advanced SIMD, vector.
+            (0x0e20_0400, 0x9f20_0400), // three same
+            (0x0e20_0000, 0x9f20_0c00), // three different
+            (0x0e20_0800, 0x9f3e_0c00), // two-register misc
+            (0x0e30_0800, 0x9f3e_0c00), // across lanes
+            (0x0e00_0400, 0x9fe0_8400), // copy
+            (0x0f00_0000, 0x9f00_0400), // by element
+            (0x0f00_0400, 0x9ff8_0400), // modified immediate
+            (0x0f00_0400, 0x9f80_0400), // shift by immediate
+            (0x0e00_0000, 0xbf20_8c00), // table lookup
+            (0x0e00_0800, 0xbf20_8c00), // permute
+            (0x2e00_0000, 0xbf20_8400), // extract
+            // Advanced SIMD, scalar.
+            (0x5e20_0400, 0xdf20_0400),
+            (0x5e20_0000, 0xdf20_0c00),
+            (0x5e20_0800, 0xdf3e_0c00),
+            (0x5e30_0800, 0xdf3e_0c00), // pairwise
+            (0x5e00_0400, 0xdfe0_8400), // copy
+            (0x5f00_0000, 0xdf00_0400), // by element
+            (0x5f00_0400, 0xdf80_0400), // shift by immediate
+            // Scalar floating point.
+            (0x1e00_0000, 0x7f20_0000), // <-> fixed point
+            (0x1e20_0000, 0x7f20_fc00), // <-> integer
+            (0x1e20_2000, 0xff20_3c00), // compare
+            (0x1e20_1000, 0xff20_1c00), // immediate
+            (0x1e20_0400, 0xff20_0c00), // conditional compare
+            (0x1e20_0800, 0xff20_0c00), // 2-source
+            (0x1e20_0c00, 0xff20_0c00), // conditional select
+            (0x1e20_4000, 0xff20_7c00), // 1-source
+            (0x1f00_0000, 0xff00_0000), // 3-source
+        ];
+        loop {
+            let r = &mut self.r;
+            let mut w = r.u32();
+            w = if r.chance(4) {
+                (w & !(7 << 25)) | (7 << 25)
+            } else {
+                let (value, mask) = CLASSES[r.below(CLASSES.len() as u64) as usize];
+                let w = (w & !mask) | value;
+                if value & 0x5e00_0000 == 0x1e00_0000 && !r.chance(8) {
+                    // Scalar FP: single or double, mostly.
+                    (w & !(3 << 22)) | (r.bits(1) << 22)
+                } else {
+                    w
+                }
+            };
+            let crypto = w & 0xff3e_0c00 == 0x4e28_0800
+                || w & 0xff20_8c00 == 0x5e00_0000
+                || w & 0xff3e_0c00 == 0x5e28_0800
+                || w & 0xbfe0_fc00 == 0x0ee0_e000;
+            if crypto {
+                continue;
+            }
+            // General-register destinations (FMOV, UMOV, FCVTZS, ...) must not
+            // hit x27/x28.
+            let rd = w & 0x1F;
+            if rd == 27 || rd == 28 {
+                w = (w & !0x1F) | (rd - 16);
+            }
+            return w;
+        }
+    }
+
+    /// LD1-4 / ST1-4 / LD1R-4R, multiple or single structure, on `x28`.
+    fn emit_simd_ldst(&mut self) {
+        self.reset_base(1);
+        let r = &mut self.r;
+        let post = r.bits(1);
+        let rm = if post == 0 {
+            if r.chance(16) {
+                r.bits(5)
+            } else {
+                0
+            }
+        } else if r.chance(2) {
+            31
+        } else {
+            26
+        };
+        let w = (r.bits(1) << 30)
+            | (0b0011 << 26)
+            | (r.bits(1) << 24)
+            | (post << 23)
+            | (r.bits(2) << 21)
+            | (rm << 16)
+            | (r.bits(6) << 10)
+            | (28 << 5)
+            | r.bits(5);
+        if rm == 26 {
+            let k = r.bits(7) as u16;
+            self.body.push(movz(26, k, 0));
+        }
+        self.body.push(w);
+    }
+
     fn emit(&mut self) {
         self.starts.push(self.body.len());
         let r = &mut self.r;
         let sf = r.bits(1);
-        match r.below(40) {
+        match r.below(56) {
+            36..=47 => {
+                let w = self.random_simd();
+                self.body.push(w);
+            }
+            48..=50 => self.emit_simd_ldst(),
             // Fully random data-processing words, reserved encodings included.
             0..=5 => {
                 let g = [0b1000, 0b1001, 0b0101, 0b1101][r.below(4) as usize];
@@ -482,7 +628,7 @@ impl Gen {
             }
             35 => {
                 // MRS/MSR of the EL0-visible registers.
-                let reg = [NZCV, TPIDR_EL0][self.r.below(2) as usize];
+                let reg = [NZCV, TPIDR_EL0, FPCR, FPSR][self.r.below(4) as usize];
                 let rt = self.r.bits(5);
                 if self.r.chance(2) {
                     self.body.push(msr(reg, rt));
@@ -717,9 +863,27 @@ fn generate(seed: u64, len: usize) -> Case {
     let nzcv = (r.bits(4) as u64) << 28;
     init[INIT_NZCV as usize..][..8].copy_from_slice(&nzcv.to_le_bytes());
     init[INIT_TPIDR as usize..][..8].copy_from_slice(&r.next().to_le_bytes());
-    for i in 0..64 {
-        let off = INIT_Q as usize + i * 8;
-        init[off..off + 8].copy_from_slice(&r.interesting().to_le_bytes());
+    // FPCR: AHP, DN, FZ and RMode, often left at the Linux default of 0.
+    let fpcr = if r.chance(2) {
+        0
+    } else {
+        r.u32() as u64 & 0x07C0_0000
+    };
+    init[INIT_FPCR as usize..][..8].copy_from_slice(&fpcr.to_le_bytes());
+    let fpsr = if r.chance(2) {
+        0
+    } else {
+        r.u32() as u64 & 0x0800_009F
+    };
+    init[INIT_FPSR as usize..][..8].copy_from_slice(&fpsr.to_le_bytes());
+    for i in 0..32 {
+        let off = INIT_Q as usize + i * 16;
+        let q: u128 = match r.below(4) {
+            0 => r.interesting() as u128 | ((r.interesting() as u128) << 64),
+            1 => (0..2).fold(0, |q, l| q | ((fp_value(r, 64) as u128) << (64 * l))),
+            _ => (0..4).fold(0, |q, l| q | ((fp_value(r, 32) as u128) << (32 * l))),
+        };
+        init[off..off + 16].copy_from_slice(&q.to_le_bytes());
     }
     let scratch = (0..SCRATCH_LEN).map(|_| r.next() as u8).collect();
     Case {
@@ -749,15 +913,24 @@ fn elf(case: &Case) -> Vec<u8> {
     put(&mut f, 32, &64u64.to_le_bytes()); // e_phoff
     put(&mut f, 52, &64u16.to_le_bytes()); // e_ehsize
     put(&mut f, 54, &56u16.to_le_bytes()); // e_phentsize
-    put(&mut f, 56, &1u16.to_le_bytes()); // e_phnum
-    let ph = 64;
-    put(&mut f, ph, &1u32.to_le_bytes()); // PT_LOAD
-    put(&mut f, ph + 4, &7u32.to_le_bytes()); // RWX
-    put(&mut f, ph + 16, &BASE.to_le_bytes());
-    put(&mut f, ph + 24, &BASE.to_le_bytes());
-    put(&mut f, ph + 32, &(size as u64).to_le_bytes());
-    put(&mut f, ph + 40, &(size as u64).to_le_bytes());
-    put(&mut f, ph + 48, &0x1000u64.to_le_bytes());
+    put(&mut f, 56, &2u16.to_le_bytes()); // e_phnum
+                                          // The image (RWX), then the alternate signal stack (RW, zero-filled).
+    for (i, (vaddr, filesz, memsz, flags)) in [
+        (BASE, size as u64, size as u64, 7u32),
+        (ALTSTACK, 0, ALTSTACK_LEN, 6),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let ph = 64 + 56 * i;
+        put(&mut f, ph, &1u32.to_le_bytes()); // PT_LOAD
+        put(&mut f, ph + 4, &flags.to_le_bytes());
+        put(&mut f, ph + 16, &vaddr.to_le_bytes());
+        put(&mut f, ph + 24, &vaddr.to_le_bytes());
+        put(&mut f, ph + 32, &filesz.to_le_bytes());
+        put(&mut f, ph + 40, &memsz.to_le_bytes());
+        put(&mut f, ph + 48, &0x1000u64.to_le_bytes());
+    }
     let words: Vec<u8> = code.iter().flat_map(|w| w.to_le_bytes()).collect();
     put(&mut f, (CODE - BASE) as usize, &words);
     put(&mut f, (DATA - BASE) as usize, &case.init);
@@ -826,7 +999,11 @@ fn run_ours(image: &[u8]) -> Outcome {
     let trace = std::env::var_os("RVF_A64_TRACE").is_some();
     for _ in 0..1_000_000 {
         let before = trace.then(|| (cpu.pc, cpu.x, cpu.sp(), cpu.nzcv));
+        let simd = mem.read(cpu.pc, 4).is_ok_and(|w| (w >> 25) & 7 == 7);
         let step = cpu.step(&mut mem);
+        if simd && step == Step::Retired {
+            SIMD_RETIRED.fetch_add(1, Ordering::Relaxed);
+        }
         if let Some((pc, x, sp, nzcv)) = before.filter(|b| b.0 >= body_start) {
             let insn = mem.read(pc, 4).unwrap();
             let mut s = format!("[{:3}] {insn:08x}", (pc - body_start) / 4);
@@ -860,6 +1037,9 @@ fn run_ours(image: &[u8]) -> Outcome {
                 cpu.pc += 4;
             }
             Step::Exception(Exception::Undefined) => {
+                if simd {
+                    SIMD_UNDEF.fetch_add(1, Ordering::Relaxed);
+                }
                 // What the guest's SIGILL handler does.
                 let n = mem.read(LOG, 8).unwrap();
                 mem.write(LOG + 8 + 8 * n, 8, cpu.pc).unwrap();
@@ -1031,7 +1211,7 @@ fn report(seed: u64, case: &Case, k: usize, what: &str) -> String {
 }
 
 #[test]
-fn random_integer_streams_match_qemu() {
+fn random_streams_match_qemu() {
     let Some(qemu) = qemu() else {
         if std::env::var_os("CI").is_some() {
             panic!("qemu-aarch64 not found; CI must install qemu-user");
@@ -1072,8 +1252,10 @@ fn random_integer_streams_match_qemu() {
     let mut failures = failures.into_inner().unwrap();
     failures.sort();
     eprintln!(
-        "{cases} cases, {} UNDEFINED encodings agreed on",
-        undefs.into_inner()
+        "{cases} cases, {} UNDEFINED encodings agreed on; SIMD&FP: {} executed, {} UNDEFINED",
+        undefs.into_inner(),
+        SIMD_RETIRED.load(Ordering::Relaxed),
+        SIMD_UNDEF.load(Ordering::Relaxed)
     );
     assert!(failures.is_empty(), "\n{}", failures.join("\n"));
 }

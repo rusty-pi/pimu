@@ -30,6 +30,9 @@
 
 mod cpu;
 mod exec;
+pub mod fp;
+mod fpinsn;
+mod simd;
 
 pub use cpu::{Abort, Cpu, Exception, Memory, Step, NZCV_C, NZCV_N, NZCV_V, NZCV_Z};
 
