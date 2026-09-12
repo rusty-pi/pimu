@@ -25,7 +25,10 @@ The run-loop switches — tracing (`RVF_TRACE_*`, `RVF_MMIO_FROM`, `--trace*`),
 `RVF_TRAP*`, `RVF_PROF*`, `RVF_HEARTBEAT`, `RVF_WATCH`, and the `RVF_DBG_*`
 switches of the run loop, the VPU core and the DMA window — are checked on
 every instruction, so a normal build (CI's included) compiles them out. Set on
-such a build they are reported and ignored, and `--trace*` is refused.
+such a build they are reported and ignored, and `--trace*` is refused. A `diag`
+build also takes every step through every check of the run loop, instead of
+skipping the ones that cannot act (`Emulator::fast_steps`), so the switches see
+each instruction.
 `RVF_LIVE_CONSOLE` is not a diagnostic and works everywhere, as do the
 device-model `RVF_DBG_*` switches, which are read once and only fire on rare
 device events.
@@ -119,6 +122,7 @@ All of these are `=1`.
 | Variable | Effect |
 |---|---|
 | `RVF_LIVE_CONSOLE=1` | Stream the UART console as it is produced instead of buffering it. `scripts/boot-check.sh` sets this. |
+| `RVF_SLOW_LOOP=1` | Take every step through every check of the run loop, as a `diag` build does, instead of skipping the checks that cannot act (`Emulator::fast_steps`). A run must come out the same either way; this is how to check that it does. |
 | `RVF_DUMP_FLASH=<path>` | Write the EEPROM flash image out after the run, including any self-update the firmware applied. |
 | `RVF_BOOT_WALL=<seconds>` | Overrides the boot scenario's `wall_secs` (default 330) for `scripts/boot-check.sh`. Raise it when other work is competing for the CPU — two concurrent boot runs will miss `arm_loader` on time. |
 | `RVF_PCIE_DEVICE=0` | Unsolder the VL805 from the modelled board. Describes the hardware, not the firmware: a real Pi 4B always has one, so it is attached by default. |

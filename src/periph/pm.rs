@@ -98,6 +98,11 @@ impl Pm {
         }
     }
 
+    /// Has the firmware asked for a SoC reset that nobody took yet?
+    pub fn reset_pending(&self) -> bool {
+        self.reset_pending
+    }
+
     /// True once, after the firmware has asked for a SoC reset.
     pub fn take_reset(&mut self) -> bool {
         std::mem::take(&mut self.reset_pending)

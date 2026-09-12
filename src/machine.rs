@@ -132,6 +132,11 @@ pub struct Machine {
     dbg_dma: bool,
     /// Interrupt sources raised by peripherals, waiting to be vectored.
     pending_irqs: std::collections::VecDeque<u32>,
+    /// Something happened that the run loop's per-step checks may have to
+    /// act on: a peripheral register was written, an interrupt was queued, a
+    /// compare fired, or a reset came due. The run loop clears it; while it
+    /// stays clear, those checks have nothing to do (`Emulator::fast_steps`).
+    pub wake: bool,
     pub watch_pc: u32,
 
     /// `start4.elf` logs boot progress by writing 4-char ASCII tags (`_msh`,
@@ -210,6 +215,7 @@ impl Machine {
                 .unwrap_or_default(),
             dbg_dma: crate::diag::ON && std::env::var_os("RVF_DBG_DMA").is_some(),
             pending_irqs: std::collections::VecDeque::new(),
+            wake: false,
             watch_pc: 0,
             phase_tags: Vec::new(),
         }
@@ -225,6 +231,12 @@ impl Machine {
     /// Queue an interrupt source for delivery to core 0 on the next step.
     pub fn push_pending_irq(&mut self, src: u32) {
         self.pending_irqs.push_back(src);
+        self.wake = true;
+    }
+
+    /// Is an interrupt source queued for core 0?
+    pub fn irq_queued(&self) -> bool {
+        !self.pending_irqs.is_empty()
     }
 
     /// Settle any I²C transfer whose time on the wire has elapsed.
@@ -284,7 +296,13 @@ impl Machine {
         if !self.systimer.advance(cycles) {
             return;
         }
+        if self.systimer.take_fired() {
+            self.wake = true;
+        }
         self.pm.advance(self.systimer.now_us());
+        if self.pm.reset_pending() {
+            self.wake = true;
+        }
         // A backend with its own clock (a host network) can deliver a frame
         // at any time, not only in reply to a register write.
         if self.net.is_some() {
@@ -300,7 +318,7 @@ impl Machine {
         // delivery outstanding.
         let src = crate::periph::rng::IRQ_SRC;
         if self.rng.irq_asserted() && !self.pending_irqs.contains(&src) {
-            self.pending_irqs.push_back(src);
+            self.push_pending_irq(src);
         }
         // The mailbox holds source 94 asserted while a request is queued for
         // the firmware and its driver has armed the interrupt. `0x3EC58302`
@@ -308,14 +326,14 @@ impl Machine {
         // the `mbox_read` task takes the message off the FIFO.
         let src = crate::periph::mbox::IRQ_SRC;
         if self.mbox.irq_asserted() && !self.pending_irqs.contains(&src) {
-            self.pending_irqs.push_back(src);
+            self.push_pending_irq(src);
         }
         // The VCE holds source 68 asserted from the moment a launch completes
         // until start4's handler (`0x3ED9D1EA`) acks it through `INTCLR`; that
         // handler is what sets the event flag `vce_run` is waiting on.
         let src = crate::periph::vce::IRQ_SRC;
         if self.vce.irq_asserted() && !self.pending_irqs.contains(&src) {
-            self.pending_irqs.push_back(src);
+            self.push_pending_irq(src);
         }
     }
 
@@ -595,7 +613,7 @@ impl Machine {
         // back to a channel and `dma_chan_interrupt` then retires the transfer,
         // signals its waiter and starts the next one in the queue.
         let src = dma_irq_source(ch);
-        self.pending_irqs.push_back(src);
+        self.push_pending_irq(src);
     }
 
     /// One word from a 40-bit DMA4 address: endpoint MMIO if the PCIe root
@@ -681,7 +699,7 @@ impl Machine {
         // polls (`TI` = 0, no INTEN); start4's dmalib asks for the interrupt
         // and starts its next chain from it.
         if interrupt {
-            self.pending_irqs.push_back(dma_irq_source(11));
+            self.push_pending_irq(dma_irq_source(11));
         }
     }
 }
@@ -871,6 +889,7 @@ impl Bus for Machine {
                 return self.ram.store(phys, width, value);
             }
         }
+        self.wake = true;
         self.mmio_writes = self.mmio_writes.wrapping_add(1);
         self.dma_win_log("wr", addr, value);
         self.advance_hdmi_ddc(addr);
