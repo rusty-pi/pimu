@@ -7,9 +7,10 @@
 //! fronts the "external" GPIO pins (`LEDS_PWR_OK` …), `gpioman` never finishes
 //! and the boot wedges retrying it.
 //!
-//! This is the *master* only: it moves bytes to and from whatever slave is
-//! attached (see [`crate::periph::pmic`]) and knows nothing about it beyond its
-//! 7-bit address.
+//! This is the *master* only: it moves bytes to and from whatever slave answers
+//! the address — the PMICs ([`crate::periph::pmic`]) and the GPIO expander
+//! ([`crate::periph::fxl6408`]) — and knows nothing about them beyond their
+//! 7-bit addresses.
 //!
 //! Register map (offsets from the instance base):
 //! ```text
@@ -31,7 +32,20 @@
 use std::collections::VecDeque;
 
 use crate::bus::{BusResult, MmioDevice, Width};
+use crate::periph::fxl6408::Fxl6408;
 use crate::periph::pmic::Pmic;
+
+/// The device side of an I²C transfer.
+pub trait I2cSlave {
+    /// Does this device acknowledge the 7-bit address?
+    fn responds_to(&self, addr: u8) -> bool;
+    /// A transfer to `addr` begins, in the given direction.
+    fn begin(&mut self, addr: u8, read: bool);
+    /// Master to slave.
+    fn write_byte(&mut self, b: u8);
+    /// Slave to master.
+    fn read_byte(&mut self) -> u8;
+}
 
 const C: u32 = 0x00;
 const S: u32 = 0x04;
@@ -95,14 +109,17 @@ pub struct Bsc {
     /// byte. The read has to wait for the write to actually happen or it would
     /// sample the wrong register. Holds the read length.
     deferred_read: Option<usize>,
-    /// The slave on the bus. `None` for an instance with nothing attached —
-    /// every address then goes unACKed, which is what real hardware does with
-    /// an empty bus.
+    /// The PMICs on the bus. `None` (with `expander` also `None`) for an
+    /// instance with nothing attached — every address then goes unACKed,
+    /// which is what real hardware does with an empty bus.
     slave: Option<Pmic>,
+    /// The GPIO expander sharing the PMIC bus.
+    expander: Option<Fxl6408>,
 }
 
 impl Bsc {
-    /// An instance with the board PMICs on it (the `0x7E20_5E00` one).
+    /// An instance with the board PMICs and GPIO expander on it (the
+    /// `0x7E20_5E00` one).
     pub fn new(name: &'static str) -> Bsc {
         Bsc {
             name,
@@ -120,6 +137,7 @@ impl Bsc {
             writing: None,
             deferred_read: None,
             slave: Some(Pmic::pi4b()),
+            expander: Some(Fxl6408::new()),
         }
     }
 
@@ -131,13 +149,31 @@ impl Bsc {
     pub fn empty(name: &'static str) -> Bsc {
         Bsc {
             slave: None,
+            expander: None,
             ..Bsc::new(name)
         }
     }
 
-    /// Read-only view of the attached slave, for tests and probes.
+    /// Read-only view of the attached PMICs, for tests and probes.
     pub fn slave(&self) -> Option<&Pmic> {
         self.slave.as_ref()
+    }
+
+    /// Read-only view of the attached GPIO expander, for tests and probes.
+    pub fn expander(&self) -> Option<&Fxl6408> {
+        self.expander.as_ref()
+    }
+
+    /// The device that answers the address currently in `A`, if any.
+    fn target(&mut self) -> Option<&mut dyn I2cSlave> {
+        let addr = (self.addr as u8) & 0x7F;
+        if let Some(p) = self.slave.as_mut().filter(|p| p.responds_to(addr)) {
+            return Some(p);
+        }
+        self.expander
+            .as_mut()
+            .filter(|x| x.responds_to(addr))
+            .map(|x| x as &mut dyn I2cSlave)
     }
 
     /// Live status word: latched flags plus FIFO state.
@@ -197,10 +233,11 @@ impl Bsc {
         }
     }
 
-    /// Does the attached slave answer the address currently in `A`?
+    /// Does an attached slave answer the address currently in `A`?
     fn addressed(&self) -> bool {
         let addr = (self.addr as u8) & 0x7F;
         self.slave.as_ref().is_some_and(|s| s.responds_to(addr))
+            || self.expander.as_ref().is_some_and(|x| x.responds_to(addr))
     }
 
     /// Hand one byte of a stalled write transfer to the slave; complete the
@@ -210,7 +247,7 @@ impl Bsc {
             return;
         };
         if acked {
-            if let Some(slave) = self.slave.as_mut() {
+            if let Some(slave) = self.target() {
                 slave.write_byte(b);
             }
         }
@@ -233,13 +270,14 @@ impl Bsc {
         let addr = (self.addr as u8) & 0x7F;
         let acked = self.addressed();
         self.rx.clear();
-        if let Some(slave) = self.slave.as_mut().filter(|_| acked) {
-            slave.begin(addr, true);
-            for _ in 0..len {
-                let b = slave.read_byte();
-                self.rx.push_back(b);
+        let bytes: Vec<u8> = match self.target() {
+            Some(slave) => {
+                slave.begin(addr, true);
+                (0..len).map(|_| slave.read_byte()).collect()
             }
-        }
+            None => Vec::new(),
+        };
+        self.rx.extend(bytes);
         self.finish(acked, len);
     }
 
@@ -279,7 +317,7 @@ impl Bsc {
             return;
         }
 
-        if let Some(slave) = self.slave.as_mut().filter(|_| acked) {
+        if let Some(slave) = self.target() {
             slave.begin(addr, false);
         }
         if len == 0 {

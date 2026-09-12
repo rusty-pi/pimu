@@ -16,6 +16,7 @@ pub mod corectl;
 pub mod dma4;
 pub mod dma_legacy;
 pub mod emmc2;
+pub mod fxl6408;
 pub mod hdmi_ddc;
 pub mod hvs;
 pub mod mbox;
