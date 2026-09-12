@@ -34,6 +34,11 @@ jobs:
       - name: Lint
         run: cargo clippy --all-targets -- -D warnings
 
+      # The diagnostics are compiled out of every other build here; lint them
+      # too, so they cannot rot unnoticed.
+      - name: Lint (diag)
+        run: cargo clippy --all-targets --features diag -- -D warnings
+
       - name: Test
         run: cargo test
 

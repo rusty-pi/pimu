@@ -220,10 +220,11 @@ impl Vpu {
         v.cf_trace = std::collections::VecDeque::with_capacity(CF_TRACE_LEN);
         v.cf_last = None;
         v.trace_cap = 20_000;
-        v.dbg_tick = std::env::var_os("RVF_DBG_TICK").is_some();
-        v.dbg_vec = std::env::var_os("RVF_DBG_VEC").is_some();
-        v.dbg_sleep = std::env::var_os("RVF_DBG_SLEEP").is_some();
-        v.dbg_derail = std::env::var_os("RVF_DBG_DERAIL").is_some();
+        let on = |n: &str| crate::diag::ON && std::env::var_os(n).is_some();
+        v.dbg_tick = on("RVF_DBG_TICK");
+        v.dbg_vec = on("RVF_DBG_VEC");
+        v.dbg_sleep = on("RVF_DBG_SLEEP");
+        v.dbg_derail = on("RVF_DBG_DERAIL");
         // VC4 comes out of reset with interrupts enabled; ThreadX runs threads
         // that way too. `di`/`ei` toggle it from here.
         v.regs.set(30, 1 << 30);
@@ -312,7 +313,7 @@ impl Vpu {
             if bus.load16(h) == Ok(0x0000) {
                 h = h.wrapping_add(2);
             }
-            if self.dbg_vec {
+            if crate::diag::ON && self.dbg_vec {
                 eprintln!(
                     "[vec] slot={slot} vbase={:#x} entry={:#x} h={h:#x} pc={:#x} sp={:#x} cur={:#x} exec={:#x} nest={}",
                     self.exc_vbase,
@@ -408,15 +409,20 @@ impl Vpu {
 
         self.cycles += 1;
 
-        if !self.trace_armed && (self.trace_from == 0 || pc == self.trace_from) {
+        // The instruction trace is a `diag` build feature (Cargo.toml): in a
+        // normal build these checks are compiled out of the step entirely.
+        if crate::diag::ON && !self.trace_armed && (self.trace_from == 0 || pc == self.trace_from) {
             self.trace_armed = true;
         }
-        let trace_before =
-            if self.trace && self.trace_armed && self.trace_log.len() < self.trace_cap {
-                Some(self.regs.clone())
-            } else {
-                None
-            };
+        let trace_before = if crate::diag::ON
+            && self.trace
+            && self.trace_armed
+            && self.trace_log.len() < self.trace_cap
+        {
+            Some(self.regs.clone())
+        } else {
+            None
+        };
 
         if !matches!(insn.op, Op::Bkpt) {
             self.bkpt_run = 0;
@@ -488,7 +494,7 @@ impl Vpu {
                         // mis-route the interrupt.
                         let slot = bus.timer_tick_slot();
                         let took = slot.is_some() && bus.take_tick_pending();
-                        if self.dbg_sleep {
+                        if crate::diag::ON && self.dbg_sleep {
                             self.sleep_dbg += 1;
                             if self.sleep_dbg <= 20 || self.sleep_dbg.is_multiple_of(20000) {
                                 eprintln!(
@@ -602,7 +608,7 @@ impl Vpu {
                     Ok(v) => v,
                     Err(err) => return self.stop(Stop::Fault(Fault::Bus { pc, err })),
                 };
-                if self.dbg_tick && !(0x3E00_0000..0x3F00_0000).contains(&ret) {
+                if crate::diag::ON && self.dbg_tick && !(0x3E00_0000..0x3F00_0000).contains(&ret) {
                     eprintln!(
                         "[rti-bad] pc={pc:#x} sp={sp:#x} -> ret={ret:#x} sr={sr:#x} nest={} frame=[{:#x} {:#x} {:#x} {:#x}]",
                         self.in_exception,
@@ -809,7 +815,7 @@ impl Vpu {
                                 && self.in_exception != 0
                                 && matches!(addr.base, super::insn::Base::R0)
                             {
-                                if self.dbg_tick {
+                                if crate::diag::ON && self.dbg_tick {
                                     eprintln!(
                                         "[ctx-switch] pc={pc:#x} clear in_exc (was {}) sp<-{v:#x}",
                                         self.in_exception
@@ -1134,7 +1140,12 @@ impl Vpu {
                 // out of start4's code range (a derail — bad computed branch,
                 // corrupt return address). `RVF_DBG_DERAIL=1`.
                 let in_code = |a: u32| (0x3E00_0000..0x3F00_0000).contains(&a);
-                if in_code(pc) && !in_code(self.regs.pc) && self.core_id == 0 && self.dbg_derail {
+                if crate::diag::ON
+                    && self.dbg_derail
+                    && in_code(pc)
+                    && !in_code(self.regs.pc)
+                    && self.core_id == 0
+                {
                     eprintln!(
                         "[derail] {pc:#x} ({:?}) -> {:#x}  regs r0-9: {:08x?}",
                         insn.op,

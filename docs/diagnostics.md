@@ -15,6 +15,21 @@ a diagnostic and belongs here.
 The two exceptions, which describe the *board* rather than the firmware, are
 `RVF_PCIE_DEVICE` and `RVF_BOOT_WALL`.
 
+**Build with the `diag` feature to use them:**
+
+```bash
+cargo build --release --features diag
+```
+
+The run-loop switches — tracing (`RVF_TRACE_*`, `RVF_MMIO_FROM`, `--trace*`),
+`RVF_TRAP*`, `RVF_PROF*`, `RVF_HEARTBEAT`, `RVF_WATCH`, and the `RVF_DBG_*`
+switches of the run loop, the VPU core and the DMA window — are checked on
+every instruction, so a normal build (CI's included) compiles them out. Set on
+such a build they are reported and ignored, and `--trace*` is refused.
+`RVF_LIVE_CONSOLE` is not a diagnostic and works everywhere, as do the
+device-model `RVF_DBG_*` switches, which are read once and only fire on rare
+device events.
+
 ---
 
 ## The recipe that works

@@ -16,6 +16,43 @@
 //!
 //! What each switch prints is documented in `docs/diagnostics.md`, which is the
 //! reference for using them; this is just where they are read.
+//!
+//! The switches that cost something on every step are a build feature, `diag`
+//! (Cargo.toml). Without it [`ON`] is `false`, so each per-step check guarded
+//! by it folds away at compile time — hoisting the flags into a struct only
+//! removed the environment lookups, not the branches, and #29 measured that the
+//! branches are what cost. A gated switch set on such a build is reported, not
+//! silently ignored.
+
+/// Whether this build has the `diag` feature. Guard every per-step diagnostic
+/// with it (`if crate::diag::ON && …`), so a normal build compiles it out.
+pub const ON: bool = cfg!(feature = "diag");
+
+/// The switches that only do anything in a `diag` build.
+const GATED: &[&str] = &[
+    "RVF_TRACE_ON_PC",
+    "RVF_TRACE_ON_CONSOLE",
+    "RVF_TRACE_CAP",
+    "RVF_TRACE_CF",
+    "RVF_TRACE_MMIO",
+    "RVF_MMIO_FROM",
+    "RVF_TRAP",
+    "RVF_TRAP_FROM",
+    "RVF_TRAP_MAX",
+    "RVF_PROF",
+    "RVF_PROF_THREAD",
+    "RVF_HEARTBEAT",
+    "RVF_WATCH",
+    "RVF_DBG_TICK",
+    "RVF_DBG_SWIRQ",
+    "RVF_DBG_IRQTBL",
+    "RVF_DBG_FF",
+    "RVF_DBG_TCB",
+    "RVF_DBG_VEC",
+    "RVF_DBG_SLEEP",
+    "RVF_DBG_DERAIL",
+    "RVF_DBG_DMA",
+];
 
 /// One `RVF_*` switch that is either on or off.
 fn flag(name: &str) -> bool {
@@ -87,6 +124,25 @@ pub struct DiagConfig {
 
 impl DiagConfig {
     pub fn from_env() -> DiagConfig {
+        if !ON {
+            let set: Vec<&str> = GATED
+                .iter()
+                .copied()
+                .filter(|n| std::env::var_os(n).is_some())
+                .collect();
+            if !set.is_empty() {
+                eprintln!(
+                    "warning: {} ignored: this build has no `diag` feature \
+                     (cargo build --release --features diag)",
+                    set.join(", ")
+                );
+            }
+            // The live console is not a diagnostic: boot-check reads it.
+            return DiagConfig {
+                live_console: std::env::var("RVF_LIVE_CONSOLE").as_deref() != Ok("0"),
+                ..DiagConfig::default()
+            };
+        }
         DiagConfig {
             live_console: std::env::var("RVF_LIVE_CONSOLE").as_deref() != Ok("0"),
 
