@@ -239,6 +239,8 @@ pub enum MemWidth {
     Half,
     Byte,
     SignedHalf,
+    /// Only ever a load: the `ww = 11` store encoding (see `decode::ldst`).
+    SignedByte,
 }
 
 impl MemWidth {
@@ -1163,6 +1165,7 @@ impl MemWidth {
             MemWidth::Half => "h",
             MemWidth::Byte => "b",
             MemWidth::SignedHalf => "s",
+            MemWidth::SignedByte => "sb",
         }
     }
 }

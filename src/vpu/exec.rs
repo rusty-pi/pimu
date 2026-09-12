@@ -804,7 +804,7 @@ impl Vpu {
                     let width = match w {
                         MemWidth::Word => Width::Word,
                         MemWidth::Half | MemWidth::SignedHalf => Width::Half,
-                        MemWidth::Byte => Width::Byte,
+                        MemWidth::Byte | MemWidth::SignedByte => Width::Byte,
                     };
                     match bus.store(ea, width, v) {
                         Ok(()) => self.regs.pc = next,
@@ -1148,7 +1148,7 @@ impl Vpu {
         let size = match w {
             MemWidth::Word => 4u32,
             MemWidth::Half | MemWidth::SignedHalf => 2,
-            MemWidth::Byte => 1,
+            MemWidth::Byte | MemWidth::SignedByte => 1,
         };
         let base_reg = match addr.base {
             Base::Reg(r) => Some(r as usize),
@@ -1251,6 +1251,7 @@ impl Vpu {
             MemWidth::Half => bus.load16(ea)? as u32,
             MemWidth::Byte => bus.load8(ea)? as u32,
             MemWidth::SignedHalf => bus.load16(ea)? as i16 as i32 as u32,
+            MemWidth::SignedByte => bus.load8(ea)? as i8 as i32 as u32,
         })
     }
 
