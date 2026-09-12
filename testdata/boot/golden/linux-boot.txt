@@ -329,7 +329,7 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] pci 0000:01:00.0: BAR 0 [mem 0x00000000-0x00000fff 64bit]
 [t] pci 0000:01:00.0: ASPM: VL805 fixup applied
 [t] pci 0000:01:00.0: PME# supported from D0 D3cold
-[t] pci 0000:01:00.0: ASPM: default states L1
+[t] pci 0000:01:00.0: ASPM: default states L0s L1
 [t] pci_bus 0000:01: busn_res: [bus 01-ff] end is updated to 01
 [t] pci 0000:00:00.0: bridge window [mem 0x600000000-0x6000fffff]: assigned
 [t] pci 0000:01:00.0: BAR 0 [mem 0x600000000-0x600000fff 64bit]: assigned
@@ -583,7 +583,7 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] pci 0000:01:00.0: BAR 0 [mem 0x00000000-0x00000fff 64bit]
 [t] pci 0000:01:00.0: ASPM: VL805 fixup applied
 [t] pci 0000:01:00.0: PME# supported from D0 D3cold
-[t] pci 0000:01:00.0: ASPM: default states L1
+[t] pci 0000:01:00.0: ASPM: default states L0s L1
 [t] pci_bus 0000:01: busn_res: [bus 01-ff] end is updated to 01
 [t] pci 0000:00:00.0: bridge window [mem 0x600000000-0x6000fffff]: assigned
 [t] pci 0000:01:00.0: BAR 0 [mem 0x600000000-0x600000fff 64bit]: assigned
