@@ -98,29 +98,73 @@ impl Ram {
         }
     }
 
+    /// The `N` bytes at `addr`, if they are all in RAM.
+    #[inline]
+    fn bytes<const N: usize>(&self, addr: u32) -> Option<[u8; N]> {
+        let rel = addr.checked_sub(self.base)? as usize;
+        self.data.get(rel..rel.checked_add(N)?)?.try_into().ok()
+    }
+
+    #[inline]
+    fn bytes_mut<const N: usize>(&mut self, addr: u32) -> Option<(usize, &mut [u8; N])> {
+        let rel = addr.checked_sub(self.base)? as usize;
+        let b = self
+            .data
+            .get_mut(rel..rel.checked_add(N)?)?
+            .try_into()
+            .ok()?;
+        Some((rel, b))
+    }
+
+    // One arm per width, so that each access is a plain load or store
+    // rather than a copy of a run-time length.
     #[inline]
     pub fn load(&self, addr: u32, width: Width) -> BusResult<u32> {
-        let n = width.bytes() as usize;
-        let off = self.offset(addr, n).map_err(|_| BusError::Unmapped {
+        let v = match width {
+            Width::Byte => self.bytes::<1>(addr).map(|b| u32::from(b[0])),
+            Width::Half => self
+                .bytes::<2>(addr)
+                .map(|b| u32::from(u16::from_le_bytes(b))),
+            Width::Word => self.bytes::<4>(addr).map(u32::from_le_bytes),
+        };
+        v.ok_or(BusError::Unmapped {
             addr,
             width,
             write: false,
-        })?;
-        let mut buf = [0u8; 4];
-        buf[..n].copy_from_slice(&self.data[off..off + n]);
-        Ok(u32::from_le_bytes(buf))
+        })
     }
 
     #[inline]
     pub fn store(&mut self, addr: u32, width: Width, value: u32) -> BusResult<()> {
-        let n = width.bytes() as usize;
-        let off = self.offset(addr, n).map_err(|_| BusError::Unmapped {
+        let unmapped = BusError::Unmapped {
             addr,
             width,
             write: true,
-        })?;
-        self.data[off..off + n].copy_from_slice(&value.to_le_bytes()[..n]);
-        self.wrote(off, n);
+        };
+        let (off, n) = match width {
+            Width::Byte => {
+                let (off, b) = self.bytes_mut::<1>(addr).ok_or(unmapped)?;
+                *b = [value as u8];
+                (off, 1)
+            }
+            Width::Half => {
+                let (off, b) = self.bytes_mut::<2>(addr).ok_or(unmapped)?;
+                *b = (value as u16).to_le_bytes();
+                (off, 2)
+            }
+            Width::Word => {
+                let (off, b) = self.bytes_mut::<4>(addr).ok_or(unmapped)?;
+                *b = value.to_le_bytes();
+                (off, 4)
+            }
+        };
+        // At most two pages, and nearly always one.
+        let first = off >> PAGE_SHIFT;
+        let last = (off + n - 1) >> PAGE_SHIFT;
+        self.gens[first] += 1;
+        if last != first {
+            self.gens[last] += 1;
+        }
         Ok(())
     }
 }
