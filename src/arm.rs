@@ -582,7 +582,8 @@ impl ArmBus<'_> {
                     let buf = self.m.ram.base() + (v & 0x3FFF_FFF0);
                     let word = |o: u32| self.m.ram.load(buf + o, Width::Word).unwrap_or(0);
                     eprintln!(
-                        "[mbox] ARM request tag {:#010x} values {:#x} {:#x}",
+                        "[mbox] {} us ARM request tag {:#010x} values {:#x} {:#x}",
+                        self.m.systimer.now_us(),
                         word(8),
                         word(20),
                         word(24)

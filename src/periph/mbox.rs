@@ -163,6 +163,9 @@ pub struct Mbox {
     pub writes: u64,
     /// `RVF_DBG_MBOX`, read once — this device sits on the step path.
     dbg: bool,
+    /// Model time at the latest access, for `RVF_DBG_MBOX`'s timestamps.
+    /// [`crate::machine::Machine`] sets it on every mailbox access.
+    pub now_us: u64,
 }
 
 impl Mbox {
@@ -310,7 +313,7 @@ impl MmioDevice for Mbox {
                 if v != 0 {
                     self.reads += 1;
                     if self.dbg {
-                        eprintln!("[mbox] VPU read request {v:#010x}");
+                        eprintln!("[mbox] {} us VPU read request {v:#010x}", self.now_us);
                     }
                 }
                 v
@@ -339,7 +342,7 @@ impl MmioDevice for Mbox {
                     self.writes += 1;
                 }
                 if self.dbg {
-                    eprintln!("[mbox] VPU -> ARM {value:#010x}");
+                    eprintln!("[mbox] {} us VPU -> ARM {value:#010x}", self.now_us);
                 }
             }
             // The ARM posting a request. Nothing in this bench does it through
