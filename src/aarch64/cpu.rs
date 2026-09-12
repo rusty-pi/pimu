@@ -182,6 +182,13 @@ pub struct Cpu {
     pub(super) last_pa: u64,
     /// Set by the executor for the instruction in flight: where to go next.
     pub(super) next_pc: u64,
+    /// The Event Register (ARM ARM D1.16.1): set by `sev` on any core,
+    /// `sevl`, an exception return, or the global monitor clearing this
+    /// core's mark; a `wfe` that finds it set clears it and does not wait.
+    pub event: bool,
+    /// Set by the executor when this step ran `sev`: the caller signals the
+    /// other cores and clears it.
+    pub sev: bool,
 }
 
 impl Default for Cpu {
@@ -220,6 +227,8 @@ impl Cpu {
             exclusive: None,
             last_pa: 0,
             next_pc: 0,
+            event: false,
+            sev: false,
         }
     }
 
@@ -273,14 +282,19 @@ impl Cpu {
 
     /// Another core wrote physical `[lo, hi)`: the global monitor clears this
     /// core's exclusive mark if the write touched its 64-byte granule (the
-    /// A72's reservation granule, `CTR_EL0.ERG`).
-    pub fn snoop_write(&mut self, lo: u64, hi: u64) {
+    /// A72's reservation granule, `CTR_EL0.ERG`). Clearing the mark is a
+    /// wake-up event: it sets the Event Register, which is how a `ldxr; wfe`
+    /// wait learns the location changed. Returns whether it did.
+    pub fn snoop_write(&mut self, lo: u64, hi: u64) -> bool {
         if let Some((_, pa)) = self.exclusive {
             let granule = pa & !63;
             if lo < granule + 64 && hi > granule {
                 self.exclusive = None;
+                self.event = true;
+                return true;
             }
         }
+        false
     }
 
     /// Exception entry to AArch64 `target` (ARM ARM D1.10.2): save `PSTATE`
@@ -369,6 +383,8 @@ impl Cpu {
         self.set_pstate(spsr);
         self.next_pc = self.sys.elr[el];
         self.exclusive = None;
+        // An exception return sets the Event Register (D1.16.1).
+        self.event = true;
         true
     }
 
