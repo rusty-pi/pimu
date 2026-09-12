@@ -91,11 +91,14 @@ What it waits on: the card. The kernel still reaches `Waiting for root device
 /dev/mmcblk0p2...` and no card shows up, because the eMMC2 model is only what
 the VPU bootloader needed: PIO reads, no SDMA/ADMA2, no writes, no interrupt
 line to the GIC (INTID 158), and no UHS voltage switch. A real 4B runs the card
-with ADMA in DDR50 at 1.8 V. GENET (`fd580000.ethernet`) is unmapped too
-(#38), but it is not on the root-filesystem path.
+with ADMA in DDR50 at 1.8 V.
 
-The hwrng no longer gets in the way: the RNG model now implements the rng200 register map
-that start4 and Linux both use (see `src/periph/rng.rs`), so `hwrng_fillfn`
+GENET is modelled (`src/periph/genet.rs`, #38) and probes the way it does on a
+real board (`GENET 5.0 EPHY: 0x0000`, the UniMAC MDIO bus with a BCM54213PE at
+address 1); it moves no packets yet and is not on the root-filesystem path.
+
+The hwrng no longer gets in the way: the RNG model now implements the rng200
+register map that start4 and Linux both use (see `src/periph/rng.rs`), so `hwrng_fillfn`
 gets words instead of spinning in `bcm2711_rng200_read`, and the kernel idles
 in `cpu_do_idle` while it waits (1800 s of wall clock models 737 s, nearly all
 of it `wfi`).
