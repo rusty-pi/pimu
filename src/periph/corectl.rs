@@ -1,5 +1,6 @@
 //! VPU core-control block at `0x7E00_2000`. This region carries both the
-//! per-core boot handshake and the VPU interrupt controller.
+//! per-core boot handshake and the VPU interrupt controller. Register map:
+//! `specs/corectl.toml` ([`crate::spec::corectl`]).
 //!
 //! `start4.elf`'s entry trampoline runs on both VPU cores; they diverge on
 //! `version` bit 16. Core 0 writes its vector base to offset `0x30` (core 1's
@@ -15,49 +16,48 @@
 use std::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
+use crate::spec::corectl::{
+    INSTANCE_STRIDE as CORE_STRIDE, IRQ_PENDING, IRQ_PENDING_BITS, IRQ_PENDING_BITS_COUNT,
+    IRQ_PENDING_BITS_STRIDE, IRQ_PENDING_SOURCE_MASK, IRQ_PENDING_SOURCE_SHIFT,
+    IRQ_PENDING_VALID_MASK, IRQ_PRIO, IRQ_PRIO_COUNT, IRQ_PRIO_STRIDE, VBASE,
+};
+use crate::spec::Coverage;
+
+/// Everything else in the bank is plain read-back storage.
+pub const COVERAGE: Coverage = Coverage {
+    block: "corectl",
+    decoded: &[IRQ_PENDING, IRQ_PRIO, VBASE, IRQ_PENDING_BITS],
+};
+
+// Register notes beyond what `specs/corectl.toml` records:
+//
+// * `IRQ_PRIO` — start4 numbers its sources from 64, folded back into these
+//   four words by `(src >> 3) & 3`. Its first two words double as the model's
+//   core-1 release trigger, see `write`.
+// * `VBASE` — core 1's copy is one `CORE_STRIDE` higher like every other
+//   register in this block. `RVF_DBG_IRQEN` and the peripheral stub both show
+//   core 1 writing `0x7E002830`, not `+0x38`; with the old `0x38` guess
+//   `vbase[1]` was never populated, so core 1 could not be vectored at all.
+// * `IRQ_PENDING_BITS` — start4 drives the pending bitmask with three helpers,
+//   all of which pick the bank from a core-index argument:
+//   `0x3ED01896(src, core)` raises the source in software (`|= 1 << bit`),
+//   which is how the firmware posts an interrupt to a core, including the
+//   inter-core reschedule IPI (source 78 for core 0, 79 for core 1, both with a
+//   direct vector entry at `0x3EC3F8F4`); `0x3ED01792` is the acknowledge every
+//   ISR performs on entry; `0x3ED01980` reads one bit back.
+// * `IRQ_PENDING` — the generic per-source ISR dispatcher (`0x3EC3E9BC`) does
+//   `r2 = [r29+12]` (the bank), `r0 = [r2+4]`, `btest r0, 8`, then `or r0, 64`
+//   / 7-bit mask to get the source number, and indexes the handler table at
+//   `gp+58004` with it.
 
 /// Run-state field words. A write of a code address here releases core 1 (small
 /// values are the interrupt-controller priority words, not a release vector).
-const RUNSTATE_LO: u32 = 0x10;
-const RUNSTATE_HI: u32 = 0x14;
-/// Exception-vector-base register. Core 1's copy is one [`CORE_STRIDE`] higher
-/// like every other register in this block — `RVF_DBG_IRQEN` and the peripheral
-/// stub both show core 1 writing `0x7E002830`, not `+0x38`. With the old `0x38`
-/// guess `vbase[1]` was never populated, so core 1 could not be vectored at
-/// all.
-const VBASE_CORE0: u32 = 0x30;
-
-/// Interrupt-priority words for sources 0..31 (core 0). start4 numbers its
-/// sources from 64, folded back into these four words by `(src >> 3) & 3`.
-const IRQ_PRIO_BASE: u32 = 0x10;
-
-/// Per-core interrupt **pending** bitmask, one bit per source: `+0x40` holds
-/// sources 64..95, `+0x44` sources 96..127 (core 1's pair lives at `+0x840` /
-/// `+0x844`, i.e. `CORE_STRIDE` higher). start4 drives them with three helpers,
-/// all of which pick the base from a core-index argument:
-///
-/// * `0x3ED01896(src, core)` — `[base] |= 1 << bit`, i.e. *raise* the source in
-///   software. This is how the firmware posts an interrupt to a core, including
-///   the inter-core reschedule IPI (source 78 for core 0, 79 for core 1, both
-///   of which have a direct vector entry at `0x3EC3F8F4`).
-/// * `0x3ED01792(src, core)` — `[base] &= ~(1 << bit)`, the acknowledge every
-///   ISR performs on entry.
-/// * `0x3ED01980(src, core)` — read one bit back.
-const IRQ_PENDING_BITS: u32 = 0x40;
-/// Distance between core 0's register block and core 1's (`[blk+12]` is set to
-/// `0x7E002000 + core * 0x800` by the per-core init at `0x3EC3E938`).
-const CORE_STRIDE: u32 = 0x800;
+const RUNSTATE_LO: u32 = IRQ_PRIO;
+const RUNSTATE_HI: u32 = IRQ_PRIO + IRQ_PRIO_STRIDE;
 
 /// The interrupt source start4 wires to the BCM system timer (compare channel
 /// `src - SYS_IRQ_SRC`). Enabled via `enable_irq_source(64, 1)`.
 pub const SYS_IRQ_SRC: u32 = 64;
-
-/// Offset the generic per-source ISR dispatcher (`0x3EC3E9BC`) reads to learn
-/// which interrupt is pending: it does `r2 = [r29+12]` (= `0x7E00_2000`),
-/// `r0 = [r2+4]`, `btest r0, 8` (bit 8 = "something pending"), then
-/// `or r0, 64` / 7-bit mask to get the source number in 64..127, and finally
-/// indexes the handler table at `gp+58004` with it.
-const IRQ_PENDING: u32 = 0x04;
 
 #[derive(Default)]
 pub struct CoreCtl {
@@ -108,25 +108,35 @@ impl CoreCtl {
     /// The 4-bit priority/enable field for interrupt source `src` (as numbered by
     /// start4, i.e. 64.. for the first word). 0 = disabled.
     pub fn irq_priority(&self, src: u32) -> u8 {
-        let word = IRQ_PRIO_BASE + ((src >> 3) & 3) * 4;
+        let word = IRQ_PRIO + ((src >> 3) % IRQ_PRIO_COUNT) * IRQ_PRIO_STRIDE;
         let field = (src & 7) * 4;
         ((self.storage.get(&word).copied().unwrap_or(0) >> field) & 0xF) as u8
     }
 }
 
+/// Split a window offset into `(core, offset within that core's bank)`.
+fn bank(offset: u32) -> (u32, u32) {
+    (offset / CORE_STRIDE, offset % CORE_STRIDE)
+}
+
+/// Index of the array element `off` addresses, for an array register at
+/// `base` with `count` elements `stride` apart.
+fn element(off: u32, base: u32, count: u32, stride: u32) -> Option<u32> {
+    let rel = off.checked_sub(base)?;
+    (rel % stride == 0 && rel / stride < count).then_some(rel / stride)
+}
+
 /// Decode a pending-bitmask offset into `(core, word)`; `word` 0 covers sources
 /// 64..95 and word 1 sources 96..127.
 fn pending_word(offset: u32) -> Option<(u32, u32)> {
-    let (core, off) = if offset >= CORE_STRIDE {
-        (1, offset - CORE_STRIDE)
-    } else {
-        (0, offset)
-    };
-    match off {
-        IRQ_PENDING_BITS => Some((core, 0)),
-        _ if off == IRQ_PENDING_BITS + 4 => Some((core, 1)),
-        _ => None,
-    }
+    let (core, off) = bank(offset);
+    let word = element(
+        off,
+        IRQ_PENDING_BITS,
+        IRQ_PENDING_BITS_COUNT,
+        IRQ_PENDING_BITS_STRIDE,
+    )?;
+    Some((core, word))
 }
 
 impl MmioDevice for CoreCtl {
@@ -139,7 +149,8 @@ impl MmioDevice for CoreCtl {
             // Read-to-clear: the dispatcher reads this once per entry, then the
             // handler acks the device itself.
             if let Some(src) = self.pending_src.take() {
-                return Ok(0x100 | (src & 0x3F));
+                return Ok(IRQ_PENDING_VALID_MASK
+                    | ((src << IRQ_PENDING_SOURCE_SHIFT) & IRQ_PENDING_SOURCE_MASK));
             }
         }
         Ok(self.storage.get(&offset).copied().unwrap_or(0))
@@ -150,9 +161,9 @@ impl MmioDevice for CoreCtl {
         // into the `enable_irq_source(src, prio)` calls that produced them, for
         // core 0 (`0x10..0x20`) and core 1 (`0x810..0x820`). Which sources core 1
         // enables is how we find the inter-core doorbell's interrupt number.
-        if self.dbg_irqen && matches!(offset, 0x10..=0x1F | 0x810..=0x81F) {
-            let core = u32::from(offset >= 0x800);
-            let word = (offset - if core == 1 { 0x810 } else { 0x10 }) / 4;
+        let (core, off) = bank(offset);
+        let prio_word = element(off, IRQ_PRIO, IRQ_PRIO_COUNT, IRQ_PRIO_STRIDE);
+        if let (true, Some(word)) = (self.dbg_irqen, prio_word) {
             let prev = self.storage.get(&offset).copied().unwrap_or(0);
             for f in 0..8u32 {
                 let (a, b) = ((prev >> (f * 4)) & 0xF, (value >> (f * 4)) & 0xF);
@@ -176,10 +187,10 @@ impl MmioDevice for CoreCtl {
             }
         }
         self.storage.insert(offset, value);
-        match offset {
-            VBASE_CORE0 => self.vbase[0] = value,
-            _ if offset == VBASE_CORE0 + CORE_STRIDE => self.vbase[1] = value,
-            _ => {}
+        if off == VBASE {
+            if let Some(vbase) = self.vbase.get_mut(core as usize) {
+                *vbase = value;
+            }
         }
         // A code-address write to the run-state words releases core 1. The
         // interrupt-controller priority words live at the same offsets but only
