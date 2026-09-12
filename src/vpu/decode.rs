@@ -59,7 +59,21 @@ pub fn decode(bytes: &[u8], pc: u32) -> Insn {
     Insn { op, len }
 }
 
+/// A load or store from its `{ww, L}` bits. There is no signed store, so the
+/// `ww = 11` store slot is a *load*: of a signed byte. start4's bootloader
+/// stage proves it — mbedtls' `ecp_mod_p256` carry handling loads its
+/// `signed char c` (a byte at `sp+7`) with `1010 1001 111d dddd` and then
+/// branches on the sign; decoded as a store, the fast reduction came out
+/// wrong and the `while (N >= P) N -= P` loop after it never finished.
 fn ldst(store: bool, w: MemWidth, rd: u8, addr: AddrMode, cond: Cond) -> Op {
+    if store && w == MemWidth::SignedHalf {
+        return Op::Load {
+            w: MemWidth::SignedByte,
+            rd,
+            addr,
+            cond,
+        };
+    }
     if store {
         Op::Store { w, rd, addr, cond }
     } else {
@@ -400,7 +414,8 @@ fn decode16(p0: u16, pc: u32) -> Op {
 }
 
 /// Map a 3-bit load/store sub-op (`0000 1sss ...` and `1010 xxxs ss...`) to
-/// `(is_store, width)`: 0 ld, 1 st, 2 ldh, 3 sth, 4 ldb, 5 stb, 6 lds, 7 sts.
+/// `(is_store, width)`: 0 ld, 1 st, 2 ldh, 3 sth, 4 ldb, 5 stb, 6 ldsh, and
+/// 7, the store slot of the signed width, which [`ldst`] turns into ldsb.
 fn ldst_suffix(sub: u32) -> (bool, MemWidth) {
     let store = sub & 1 != 0;
     let w = match sub >> 1 {
