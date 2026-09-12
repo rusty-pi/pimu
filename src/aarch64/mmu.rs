@@ -88,6 +88,15 @@ pub struct Tlb {
     pub walks: u64,
     /// Set by a `TLBI`: the machine is to flush the other cores' TLBs too.
     pub broadcast: bool,
+    /// The page the last instruction came from, as `(VA page, EL, PA page)`.
+    ///
+    /// Consecutive fetches are nearly always from the same page, and this
+    /// lets [`Cpu::fetch`] skip the whole of `translate` for them (#43). It is
+    /// only as good as the translation it was made from, so [`Tlb::flush`]
+    /// drops it with everything else — which covers every register that
+    /// shapes translation — and the EL is part of the key because it picks
+    /// the regime and the permissions.
+    fetch: Option<(u64, u32, u64)>,
 }
 
 impl Default for Tlb {
@@ -104,11 +113,13 @@ impl Tlb {
             hits: 0,
             walks: 0,
             broadcast: false,
+            fetch: None,
         }
     }
 
     /// Forget everything.
     pub fn flush(&mut self) {
+        self.fetch = None;
         self.generation = self.generation.wrapping_add(1);
         if self.generation == 0 {
             self.entries.fill(Entry::default());
@@ -431,7 +442,15 @@ impl Cpu {
     /// Fetch the instruction at `va` (4-byte aligned, so within one page).
     pub(super) fn fetch(&mut self, mem: &mut dyn Memory, va: u64) -> Result<u32, Exception> {
         let abort = |fsc| Exception::InsnAbort { addr: va, fsc };
-        let pa = self.translate(mem, va, Kind::Fetch).map_err(abort)?;
+        let page = va & !0xFFF;
+        let pa = match self.tlb.fetch {
+            Some((v, el, pa)) if v == page && el == self.el => pa | (va & 0xFFF),
+            _ => {
+                let pa = self.translate(mem, va, Kind::Fetch).map_err(abort)?;
+                self.tlb.fetch = Some((page, self.el, pa & !0xFFF));
+                pa
+            }
+        };
         mem.fetch(pa).map_err(|_| abort(FSC_EXTERNAL))
     }
 }
@@ -668,6 +687,31 @@ mod tests {
         assert!(c.read(&mut m, 0x1000, 4).is_ok());
         c.tlb.flush();
         assert!(fault(c.read(&mut m, 0x1000, 4)).is_some());
+    }
+
+    /// The fetch hint (#43) skips `translate` for the page the last
+    /// instruction came from, so it has to go wherever the translation goes:
+    /// with a flush, and when the EL (so the regime and permissions) changes.
+    #[test]
+    fn fetch_hint_follows_flushes_and_the_el() {
+        let (mut c, mut m) = setup();
+        m.write(0x5000, 4, 0xD503_201F).unwrap(); // nop, at the PA VA 0x1000 maps to
+        m.write(0x9000, 4, 0xD503_203F).unwrap(); // yield, at PA 0x9000
+        assert_eq!(c.fetch(&mut m, 0x1000), Ok(0xD503_201F));
+        m.write(L3 + 8, 8, 0x9000 | PAGE).unwrap(); // remap without TLBI
+        assert_eq!(c.fetch(&mut m, 0x1004), Ok(0));
+        c.tlb.flush();
+        assert_eq!(c.fetch(&mut m, 0x1000), Ok(0xD503_203F));
+
+        // VA 0x3000 is EL0-executable but PXN: a hint made at EL0 must not
+        // let EL1 fetch from it.
+        c.el = 0;
+        assert_eq!(c.fetch(&mut m, 0x3000), Ok(0));
+        c.el = 1;
+        assert!(matches!(
+            c.fetch(&mut m, 0x3000),
+            Err(Exception::InsnAbort { addr: 0x3000, .. })
+        ));
     }
 
     #[test]
