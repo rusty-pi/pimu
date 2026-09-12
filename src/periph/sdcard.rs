@@ -486,12 +486,12 @@ impl SdCard {
                 SdResponse::r1(ocr)
             }
             51 => {
-                // SEND_SCR -> R1 + 8-byte SCR: SCR_STRUCTURE 0, SD_SPEC 2,
-                // 1- and 4-bit bus. start4 prints it (`SCR: 0x02050000`) into
-                // the golden transcript, so SD_SPEC3 and the CMD23 bit a real
-                // UHS-I card sets (`0x02058002`) are left out — which keeps
-                // Linux from reading the card's UHS bus modes.
-                let scr = vec![0x02, 0x05, 0x00, 0x00, 0, 0, 0, 0];
+                // SEND_SCR -> R1 + 8-byte SCR: SCR_STRUCTURE 0, SD_SPEC 2 with
+                // SD_SPEC3 (a UHS-I card: Linux reads the CMD6 bus modes only
+                // then), 1- and 4-bit bus, CMD23 supported — the parts of the
+                // real board's card's `0x02858082` this card implements
+                // (erased data reads 0, no SD_SPECX).
+                let scr = vec![0x02, 0x05, 0x80, 0x02, 0, 0, 0, 0];
                 SdResponse::with_data(self.status(), scr)
             }
             _ => SdResponse::r1(self.status()),
@@ -557,20 +557,24 @@ fn default_cid() -> u128 {
 }
 
 /// CSD version 2.0 (CSD_STRUCTURE = 1), high-capacity, describing `blocks`
-/// 512-byte sectors. Only the fields the bootloader reads are meaningful.
+/// 512-byte sectors. Apart from C_SIZE, every field is the value the SD spec
+/// fixes for CSD 2.0 — which is also what the real board's card reports
+/// (`CSD: 400e00325b590000e9277f800a400000`, sd-card-boot.log).
 fn csd_v2(blocks: u64) -> u128 {
     // CSD v2: C_SIZE counts (512 KiB) units, minus 1.
     let c_size = (blocks / 1024).saturating_sub(1) as u128;
     let mut csd: u128 = 0;
-    csd |= 1 << 126; // CSD_STRUCTURE = 1
-    csd |= 0x0E << 112; // TAAC = 1ms
-    csd |= 0x00 << 104; // NSAC
-    csd |= 0x5A << 96; // TRAN_SPEED = 50 Mbit/s
-    csd |= 0x05B5 << 80; // CCC
-    csd |= 0x09 << 76; // READ_BL_LEN = 9 (512)
-    csd |= (c_size & 0x3F_FFFF) << 48;
-    csd |= 0x09 << 22; // WRITE_BL_LEN = 9
-    csd |= 1 << 21; // WRITE_BL_PARTIAL? keep 0 normally; harmless
+    csd |= 1 << 126; // [127:126] CSD_STRUCTURE = 1
+    csd |= 0x0E << 112; // [119:112] TAAC = 1 ms
+    csd |= 0x00 << 104; // [111:104] NSAC
+    csd |= 0x32 << 96; // [103:96] TRAN_SPEED = 25 MHz (default speed)
+    csd |= 0x5B5 << 84; // [95:84] CCC: classes 0, 2, 4, 5, 7, 8, 10
+    csd |= 0x9 << 80; // [83:80] READ_BL_LEN = 512
+    csd |= (c_size & 0x3F_FFFF) << 48; // [69:48] C_SIZE
+    csd |= 1 << 46; // ERASE_BLK_EN
+    csd |= 0x7F << 39; // [45:39] SECTOR_SIZE
+    csd |= 0x2 << 26; // [28:26] R2W_FACTOR
+    csd |= 0x9 << 22; // [25:22] WRITE_BL_LEN = 512
     csd
 }
 
@@ -669,6 +673,27 @@ mod tests {
         assert_eq!(b, [0; 512]);
         c.read_block(4, &mut b);
         assert_eq!(b[511], 0x5A);
+    }
+
+    #[test]
+    fn csd_fields_sit_where_the_spec_puts_them() {
+        let csd = csd_v2(524288);
+        assert_eq!((csd >> 84) & 0xFFF, 0x5B5, "CCC");
+        assert_ne!(csd & (1 << (84 + 2)), 0, "class 2: block read");
+        assert_eq!((csd >> 80) & 0xF, 9, "READ_BL_LEN");
+        assert_eq!((csd >> 48) & 0x3F_FFFF, 511, "C_SIZE: 256 MiB");
+        // Everything but C_SIZE as the real board's card reports it.
+        let c_size = 0x3F_FFFFu128 << 48;
+        let real = 0x400e_0032_5b59_0000_e927_7f80_0a40_0000u128;
+        assert_eq!(csd & !c_size, real & !c_size);
+    }
+
+    #[test]
+    fn scr_claims_spec3_and_cmd23() {
+        let mut c = card();
+        c.command(55, 0);
+        let scr = c.command(51, 0).data.unwrap();
+        assert_eq!(&scr[..4], &[0x02, 0x05, 0x80, 0x02]);
     }
 
     #[test]

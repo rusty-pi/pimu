@@ -37,13 +37,13 @@
 [t] USB2 root HUB port 1 init
 [t] DEV [01:00] 2.16 000000:01 class 9 VID 2109 PID 3431
 [t] HUB init [01:00] 2.16 000000:01
-[t] SD HOST: 200000000 CTL0: 0x00000000 BUS: 400000 Hz actual: 390625 HZ div: 512 (256) status: 0x01130000 delay: 276
-[t] SD HOST: 200000000 CTL0: 0x00000f00 BUS: 400000 Hz actual: 390625 HZ div: 512 (256) status: 0x01130000 delay: 276
+[t] SD HOST: 200000000 CTL0: 0x00800000 BUS: 400000 Hz actual: 390625 HZ div: 512 (256) status: 0x1fff0000 delay: 276
+[t] SD HOST: 200000000 CTL0: 0x00800f00 BUS: 400000 Hz actual: 390625 HZ div: 512 (256) status: 0x1fff0000 delay: 276
 [t] OCR c0ff8000 [2]
 CID: 00005049564952544601123456780015
-CSD: 400e005a05b5900001ff000002600000
-[t] SD: bus-width: 4 spec: 2 SCR: 0x02050000 0x00000000
-[t] SD HOST: 200000000 CTL0: 0x00000f04 BUS: 50000000 Hz actual: 50000000 HZ div: 4 (2) status: 0x01130000 delay: 2
+CSD: 400e00325b59000001ff7f800a400000
+[t] SD: bus-width: 4 spec: 2 SCR: 0x02058002 0x00000000
+[t] SD HOST: 200000000 CTL0: 0x00800f04 BUS: 50000000 Hz actual: 50000000 HZ div: 4 (2) status: 0x1fff0000 delay: 2
 [t] MBR: 0x00000800,  522240 type: 0x0c
 [t] MBR: 0x00000000,       0 type: 0x00
 [t] MBR: 0x00000000,       0 type: 0x00
@@ -74,12 +74,12 @@ CSD: 400e005a05b5900001ff000002600000
 [t] +
 
 MESS:[t]:0: arasan: arasan_emmc_open
-MESS:[t]:0: arasan: arasan_emmc_set_clock C0: 0x00000f02 C1: 0x00000047 emmc: 200000000 actual: 390625 div: 0x00000100 target: 400000 min: 400000 max: 400000 delay: 5
-MESS:[t]:0: arasan: arasan_emmc_set_clock C0: 0x00000f02 C1: 0x00000047 emmc: 200000000 actual: 390625 div: 0x00000100 target: 400000 min: 400000 max: 400000 delay: 5
-MESS:[t]:0: arasan: arasan_emmc_set_clock C0: 0x00000f02 C1: 0x00000047 emmc: 200000000 actual: 390625 div: 0x00000100 target: 400000 min: 390000 max: 400000 delay: 5
+MESS:[t]:0: arasan: arasan_emmc_set_clock C0: 0x00800000 C1: 0x000e0047 emmc: 200000000 actual: 390625 div: 0x00000100 target: 400000 min: 400000 max: 400000 delay: 5
+MESS:[t]:0: arasan: arasan_emmc_set_clock C0: 0x00800000 C1: 0x000e0047 emmc: 200000000 actual: 390625 div: 0x00000100 target: 400000 min: 400000 max: 400000 delay: 5
+MESS:[t]:0: arasan: arasan_emmc_set_clock C0: 0x00800f00 C1: 0x000e0047 emmc: 200000000 actual: 390625 div: 0x00000100 target: 400000 min: 390000 max: 400000 delay: 5
 MESS:[t]:0: boot-part: 0 fs-type: 0
 MESS:[t]:0: boot-part: 0 fs-type: 3
-MESS:[t]:0: arasan: arasan_emmc_set_clock C0: 0x00000f06 C1: 0x00000207 emmc: 200000000 actual: 50000000 div: 0x00000002 target: 50000000 min: 0 max: 50000000 delay: 1
+MESS:[t]:0: arasan: arasan_emmc_set_clock C0: 0x00800f06 C1: 0x000e0207 emmc: 200000000 actual: 50000000 div: 0x00000002 target: 50000000 min: 0 max: 50000000 delay: 1
 MESS:[t]:0: brfs: File read: /mfs/sd/config.txt
 MESS:[t]:0: board: boardrev d03115 otp d03115
 MESS:[t]:0: brfs: File read: 279 bytes
