@@ -784,8 +784,12 @@ mmio 0x000a6d48  W4  0x7d50404c <- 0xffe06540
 (`RVF_TRACE_ON_CONSOLE="PCI0 init" RVF_TRACE_MMIO=1 RVF_TRACE_CF=1`, which
 also confirms the register table in §1 line by line.) Note
 `RC_BAR2_CONFIG_HI` is written `0`, not the `4` the reference log's `MCU FW`
-arithmetic implies — the inbound window is only widened later, presumably by
-start4, and stage 2 will need to know where.
+arithmetic implies: the bootloader's window sits at bus 0, 8 GiB wide, so the
+bus addresses it hands the VL805 are physical addresses. start4 never
+reprograms it in the model (the SD and USB boots included); Linux moves it to
+bus `0x4_0000_0000`, 1 GiB, and `src/periph/pcie.rs` translates the
+endpoint's DMA through whichever window is programmed (`RVF_DBG_PCIE` shows
+both).
 
 **Verified by:** `scripts/boot-check.sh` passing unchanged, and the transcript
 being byte-identical across the change (`PCI0 init` / `PCI0 reset` / `PCIe
