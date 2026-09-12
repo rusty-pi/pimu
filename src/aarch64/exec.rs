@@ -8,7 +8,7 @@
 //! UNDEFINED, which is what the real core and `qemu-aarch64 -cpu cortex-a72`
 //! both do. `tests/a64_diff.rs` holds this file to that.
 
-use super::cpu::{Abort, Cpu, Exception, Memory, NZCV_C, NZCV_N, NZCV_V, NZCV_Z};
+use super::cpu::{Cpu, Exception, Memory, NZCV_C, NZCV_N, NZCV_V, NZCV_Z};
 
 /// Why an instruction did not simply retire.
 pub(super) enum Stop {
@@ -25,15 +25,6 @@ pub(super) const UNDEF: Stop = Stop::Exception(Exception::Undefined);
 #[inline]
 pub(super) fn undef() -> Exec {
     Err(UNDEF)
-}
-
-impl From<Abort> for Stop {
-    fn from(a: Abort) -> Stop {
-        Stop::Exception(Exception::DataAbort {
-            addr: a.addr,
-            write: a.write,
-        })
-    }
 }
 
 #[inline]
@@ -624,7 +615,7 @@ fn sys(
         (3, 7, 4, 1) => {
             let base = cpu.xr(rt, true) & !63;
             for i in 0..8 {
-                mem.write(base + i * 8, 8, 0)?;
+                cpu.write(mem, base + i * 8, 8, 0)?;
             }
             Ok(())
         }
@@ -635,9 +626,24 @@ fn sys(
         // The rest of the cache maintenance (DC IVAC/ISW/CSW/CISW, IC IALLU/
         // IALLUIS): no caches.
         (0, 7, 6 | 10 | 14, 1 | 2) | (0, 7, 5 | 1, 0) => Ok(()),
-        // TLB maintenance: nothing is cached until the MMU is modelled.
-        (0 | 4 | 6, 8, _, _) if op1 / 2 <= cpu.el => Ok(()),
-        // AT (address translation) needs the MMU.
+        // TLB maintenance: every TLBI drops the whole TLB, which is always
+        // allowed.
+        (0 | 4 | 6, 8, _, _) if op1 / 2 <= cpu.el => {
+            cpu.tlb.flush();
+            Ok(())
+        }
+        // AT S1E1R/W, S1E0R/W; S1E2R/W and S12E1*/S12E0* from EL2; S1E3R/W.
+        (0, 7, 8, 0..=3) | (4, 7, 8, 0 | 1 | 4..=7) | (6, 7, 8, 0 | 1) if op1 / 2 <= cpu.el => {
+            let regime = match (op1, op2) {
+                (4, 0 | 1) => 2,
+                (6, _) => 3,
+                _ => 1,
+            };
+            let user = regime == 1 && op2 & 2 != 0;
+            let va = cpu.xr(rt, true);
+            super::mmu::at(cpu, mem, regime, user, op2 & 1 != 0, va);
+            Ok(())
+        }
         _ => Err(Stop::Unimplemented),
     }
 }
@@ -663,15 +669,15 @@ fn ldst(cpu: &mut Cpu, insn: u32, mem: &mut dyn Memory) -> Exec {
     }
 }
 
-fn read128(mem: &mut dyn Memory, addr: u64) -> Result<u128, Stop> {
-    let lo = mem.read(addr, 8)?;
-    let hi = mem.read(addr.wrapping_add(8), 8)?;
+fn read128(cpu: &mut Cpu, mem: &mut dyn Memory, addr: u64) -> Result<u128, Stop> {
+    let lo = cpu.read(mem, addr, 8)?;
+    let hi = cpu.read(mem, addr.wrapping_add(8), 8)?;
     Ok(((hi as u128) << 64) | lo as u128)
 }
 
-fn write128(mem: &mut dyn Memory, addr: u64, v: u128) -> Exec {
-    mem.write(addr, 8, v as u64)?;
-    mem.write(addr.wrapping_add(8), 8, (v >> 64) as u64)?;
+fn write128(cpu: &mut Cpu, mem: &mut dyn Memory, addr: u64, v: u128) -> Exec {
+    cpu.write(mem, addr, 8, v as u64)?;
+    cpu.write(mem, addr.wrapping_add(8), 8, (v >> 64) as u64)?;
     Ok(())
 }
 
@@ -703,16 +709,16 @@ fn transfer(
             Access::Store => {
                 let v = cpu.v[rt as usize];
                 if scale == 4 {
-                    write128(mem, addr, v)?;
+                    write128(cpu, mem, addr, v)?;
                 } else {
-                    mem.write(addr, bytes, v as u64)?;
+                    cpu.write(mem, addr, bytes, v as u64)?;
                 }
             }
             _ => {
                 let v = if scale == 4 {
-                    read128(mem, addr)?
+                    read128(cpu, mem, addr)?
                 } else {
-                    mem.read(addr, bytes)? as u128
+                    cpu.read(mem, addr, bytes)? as u128
                 };
                 cpu.v[rt as usize] = v;
             }
@@ -721,12 +727,12 @@ fn transfer(
     }
     Ok(match access {
         Access::Store => {
-            mem.write(addr, bytes, cpu.xr(rt, true))?;
+            cpu.write(mem, addr, bytes, cpu.xr(rt, true))?;
             None
         }
-        Access::Load => Some((mem.read(addr, bytes)?, true)),
-        Access::LoadSigned64 => Some((sext(mem.read(addr, bytes)?, 8 * bytes), true)),
-        Access::LoadSigned32 => Some((sext(mem.read(addr, bytes)?, 8 * bytes), false)),
+        Access::Load => Some((cpu.read(mem, addr, bytes)?, true)),
+        Access::LoadSigned64 => Some((sext(cpu.read(mem, addr, bytes)?, 8 * bytes), true)),
+        Access::LoadSigned32 => Some((sext(cpu.read(mem, addr, bytes)?, 8 * bytes), false)),
     })
 }
 
@@ -840,8 +846,8 @@ fn ld_st_reg(cpu: &mut Cpu, insn: u32, mem: &mut dyn Memory) -> Exec {
         0 => (base.wrapping_add(imm), None),
         1 => (base, Some(base.wrapping_add(imm))),
         2 => {
-            // LDTR/STTR: EL0 permissions from EL1. Without an MMU they are
-            // the plain accesses; no SIMD form exists.
+            // LDTR/STTR: EL0 permissions from EL1 (see mmu.rs); no SIMD
+            // form exists.
             if simd {
                 return undef();
             }
@@ -852,7 +858,10 @@ fn ld_st_reg(cpu: &mut Cpu, insn: u32, mem: &mut dyn Memory) -> Exec {
             (a, Some(a))
         }
     };
-    let loaded = transfer(cpu, mem, simd, scale, access, rt, addr)?;
+    cpu.unprivileged = mode == 2;
+    let loaded = transfer(cpu, mem, simd, scale, access, rt, addr);
+    cpu.unprivileged = false;
+    let loaded = loaded?;
     if let Some(wb) = wb {
         cpu.set_xsp(rn, true, wb);
     }
@@ -932,23 +941,27 @@ fn ld_st_exclusive(cpu: &mut Cpu, insn: u32, mem: &mut dyn Memory) -> Exec {
     // Exclusives and acquire/release demand natural alignment of the whole
     // access regardless of SCTLR.A.
     if addr & (total as u64 - 1) != 0 {
-        return Err(Stop::Exception(Exception::Alignment { addr, write: !load }));
+        return Err(Stop::Exception(Exception::DataAbort {
+            addr,
+            write: !load,
+            fsc: super::mmu::FSC_ALIGNMENT,
+        }));
     }
 
     if o2 {
         if load {
-            let v = mem.read(addr, bytes)?;
+            let v = cpu.read(mem, addr, bytes)?;
             cpu.set_xr(rt, true, v);
         } else {
-            mem.write(addr, bytes, cpu.xr(rt, true))?;
+            cpu.write(mem, addr, bytes, cpu.xr(rt, true))?;
         }
         return Ok(());
     }
 
     if load {
-        let v1 = mem.read(addr, bytes)?;
+        let v1 = cpu.read(mem, addr, bytes)?;
         let v2 = if pair {
-            Some(mem.read(addr.wrapping_add(bytes as u64), bytes)?)
+            Some(cpu.read(mem, addr.wrapping_add(bytes as u64), bytes)?)
         } else {
             None
         };
@@ -960,9 +973,9 @@ fn ld_st_exclusive(cpu: &mut Cpu, insn: u32, mem: &mut dyn Memory) -> Exec {
     } else {
         let ok = cpu.exclusive == Some(addr);
         if ok {
-            mem.write(addr, bytes, cpu.xr(rt, true))?;
+            cpu.write(mem, addr, bytes, cpu.xr(rt, true))?;
             if pair {
-                mem.write(addr.wrapping_add(bytes as u64), bytes, cpu.xr(rt2, true))?;
+                cpu.write(mem, addr.wrapping_add(bytes as u64), bytes, cpu.xr(rt2, true))?;
             }
         }
         cpu.exclusive = None;

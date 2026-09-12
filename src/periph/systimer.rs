@@ -125,6 +125,15 @@ impl SysTimer {
         self.micros
     }
 
+    /// Modelled time so far in cycles of a clock at `hz` (a whole number of
+    /// MHz), counting the fraction of a microsecond the counter has not
+    /// shown yet. The ARM side is paced by this, so it keeps up with the
+    /// `sleep` and `usleep` fast-forwards as well as with retired cycles.
+    pub fn cycles_at(&self, hz: u64) -> u64 {
+        let per_us = hz / 1_000_000;
+        self.micros * per_us + self.frac_cycles * per_us / self.cycles_per_us
+    }
+
     /// Advance the counter by `cycles` VPU cycles, reporting whether the
     /// microsecond count moved.
     ///

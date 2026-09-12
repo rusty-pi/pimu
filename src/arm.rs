@@ -27,15 +27,22 @@
 //!
 //! ## Time and scheduling
 //!
-//! One ARM instruction is one cycle at the nominal [`gentimer::ARM_HZ`], and
-//! the VPU run loop hands the ARM [`CYCLES_PER_VPU_STEP`] cycles after every
-//! VPU step, so the two advance in a fixed ratio of instructions and a run is
-//! a pure function of its inputs — the reproducibility the regression bench
-//! depends on. A core in `wfi` spends its cycles asleep, skipping ahead to
-//! the next generic-timer event inside its slice, and wakes as soon as the
-//! GIC signals it (masked or not, as the architecture says).
+//! One ARM instruction is one cycle at the nominal [`gentimer::ARM_HZ`].
+//! After every VPU step the run loop calls [`ArmSide::catch_up`], which runs
+//! the ARM until it has had as many cycles as the system timer says have
+//! passed since release: about 28 per VPU step, and a whole slice at once
+//! when the VPU's `sleep` or `usleep` fast-forward jumps the counter. Either
+//! way a run is a pure function of its inputs — the reproducibility the
+//! regression bench depends on — and the ARM's clock never falls behind the
+//! VPU's. A core in `wfi` spends its cycles asleep, skipping ahead to the
+//! next generic-timer event inside its slice, and wakes as soon as the GIC
+//! signals it (masked or not, as the architecture says).
 //!
-//! Not yet: the MMU (a core that sets `SCTLR_ELx.M` stops with
+//! A fast-forward slice runs with the VPU frozen, so a mailbox request the
+//! ARM makes in one is seen by the VPU only when the slice ends (at most one
+//! VPU timer interval late).
+//!
+//! Not yet: stage 2 translation (a core that sets `HCR_EL2.VM` stops with
 //! [`ArmStop::Unsupported`]), secondary cores (they stay in reset; Linux
 //! gives up on them after its own timeout), and time spent asleep on the VPU
 //! side (`sleep` fast-forwards the system timer without the ARM).
@@ -45,11 +52,7 @@ use crate::armstub::{self, Handoff};
 use crate::bus::{Bus, MmioDevice, Width};
 use crate::machine::Machine;
 use crate::periph::gentimer::{self, GenericTimer, Reg, Which};
-use crate::periph::{armlocal, gic, systimer};
-
-/// ARM cycles per VPU step: the ARM's nominal 1.5 GHz over the rate the model
-/// counts VPU steps at (the system timer's 54 MHz).
-pub const CYCLES_PER_VPU_STEP: u64 = gentimer::ARM_HZ / systimer::VPU_HZ_DEFAULT;
+use crate::periph::{armlocal, gic};
 
 /// The peripheral window, and how far below it the VPU sees the same thing.
 const PERIPH: std::ops::Range<u64> = 0xFC00_0000..0xFF80_0000;
@@ -89,6 +92,8 @@ pub struct ArmSide {
     pub bootargs: Option<Result<(String, String), String>>,
     /// The first time the core reached the kernel entry: `(cycles, EL, x0)`.
     pub kernel_entered: Option<(u64, u32, u64)>,
+    /// The system timer, in ARM cycles, at the first [`Self::catch_up`].
+    released_at: Option<u64>,
 }
 
 impl Default for ArmSide {
@@ -113,6 +118,17 @@ impl ArmSide {
             handoff: None,
             bootargs: None,
             kernel_entered: None,
+            released_at: None,
+        }
+    }
+
+    /// Run until the ARM has had every cycle of modelled time since release
+    /// (module docs, "Time and scheduling").
+    pub fn catch_up(&mut self, m: &mut Machine) {
+        let now = m.systimer.cycles_at(gentimer::ARM_HZ);
+        let since = now - *self.released_at.get_or_insert(now);
+        if since > self.cycles {
+            self.run(m, since - self.cycles);
         }
     }
 
@@ -393,6 +409,23 @@ mod tests {
         // at 54 MHz on a 1.5 GHz clock since: ~11 cycles -> 0 ticks, so
         // just check it is not running wild.
         assert!(arm.cpu.x[5] < 10);
+    }
+
+    #[test]
+    fn the_arm_keeps_up_with_the_system_timer() {
+        // b . — always busy.
+        let mut m = machine_with(&[0x1400_0000]);
+        let mut arm = ArmSide::new();
+        arm.catch_up(&mut m);
+        assert_eq!(arm.cycles, 0);
+        // 54 VPU cycles = 1 µs = 1500 ARM cycles.
+        m.tick(54);
+        arm.catch_up(&mut m);
+        assert_eq!(arm.cycles, 1500);
+        // A `sleep`-style jump of 1 ms: the ARM gets the whole of it.
+        m.systimer.jump(1000);
+        arm.catch_up(&mut m);
+        assert_eq!(arm.cycles, 1500 + 1_500_000);
     }
 
     #[test]

@@ -644,12 +644,12 @@ impl Emulator {
             }
 
             // The ARM: out of reset when `arm_loader` writes the ARM control
-            // block, then a fixed number of ARM cycles per VPU step.
+            // block, then kept in step with the system timer.
             if self.arm_enabled && self.arm.is_none() && self.machine.armctrl.take_release() {
                 self.arm = Some(crate::arm::ArmSide::released(&mut self.machine));
             }
             if let Some(arm) = self.arm.as_mut() {
-                arm.run(&mut self.machine, crate::arm::CYCLES_PER_VPU_STEP);
+                arm.catch_up(&mut self.machine);
                 if let Some(stop) = &arm.stopped {
                     break RunEnd::ArmStopped(stop.clone());
                 }
