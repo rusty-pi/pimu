@@ -167,6 +167,12 @@ pub struct ArmSide {
     timer_due: u64,
     /// The [`SPIS`] lines into the GIC, as last seen.
     spis: [bool; SPIS.len()],
+    /// Bit `id` set when core `id` takes its turn this cycle: not in `wfi`,
+    /// or woken by a line that is up. A core's lines only move in
+    /// [`Self::sync`] and its `waiting` only in its own step, so recomputing
+    /// the bits there is exact, and the cycle loop visits just these cores —
+    /// in the same order — instead of re-testing all four every cycle (#43).
+    runnable: u32,
 }
 
 /// The device interrupt lines wired to the GIC: the mailbox, eMMC2, the two
@@ -215,6 +221,7 @@ impl ArmSide {
             dirty: true,
             timer_due: 0,
             spis: [false; SPIS.len()],
+            runnable: (1 << n) - 1,
         }
     }
 
@@ -268,7 +275,21 @@ impl ArmSide {
             .filter_map(|c| c.timer.next_event(cycles))
             .min()
             .unwrap_or(u64::MAX);
+        for id in 0..self.cores.len() {
+            self.refresh_runnable(id);
+        }
         self.dirty = false;
+    }
+
+    /// Recompute core `id`'s bit in [`Self::runnable`].
+    #[inline]
+    fn refresh_runnable(&mut self, id: usize) {
+        let c = &self.cores[id];
+        if !c.waiting || c.cpu.irq_line || c.cpu.fiq_line {
+            self.runnable |= 1 << id;
+        } else {
+            self.runnable &= !(1 << id);
+        }
     }
 
     /// Run for `budget` cycles, or until a core stops.
@@ -285,19 +306,18 @@ impl ArmSide {
                 self.sync(m);
             }
             let mut awake = false;
-            for id in 0..self.cores.len() {
-                let core = &mut self.cores[id];
-                if core.waiting {
-                    if !core.cpu.irq_line && !core.cpu.fiq_line {
-                        continue;
-                    }
-                    core.waiting = false;
-                }
+            let mut ids = self.runnable;
+            while ids != 0 {
+                let id = ids.trailing_zeros() as usize;
+                ids &= ids - 1;
+                // Runnable and waiting means a line is up: it wakes.
+                self.cores[id].waiting = false;
                 awake = true;
                 if let Some(stop) = self.step_core(m, id) {
                     self.stopped = Some(stop);
                     break;
                 }
+                self.refresh_runnable(id);
             }
             if !awake {
                 let wake = self.timer_due.min(end).max(self.cycles + 1);
