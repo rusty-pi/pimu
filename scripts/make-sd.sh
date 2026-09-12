@@ -9,6 +9,12 @@
 set -euo pipefail
 # mtools stamps directory entries with this instead of the build time.
 export SOURCE_DATE_EPOCH=315532800   # 1980-01-01, the FAT epoch
+# Globs sort by the locale's collation, and the order files are copied in is
+# the order of their directory entries. An en_US host put vc4-kms-v3d.dtbo
+# before vc4-kms-v3d-pi4.dtbo and the C-locale CI runner the other way round,
+# so the firmware found the pi4 overlay one entry later here: 180 us of
+# modelled time, enough to reorder two kernel lines in the Linux golden.
+export LC_ALL=C
 
 here="$(cd "$(dirname "$0")/.." && pwd)"
 out="${1:-$here/firmware/sd.img}"

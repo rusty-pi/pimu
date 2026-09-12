@@ -567,10 +567,10 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] PM: genpd: Disabling unused power domains
 [t] check access for rdinit=/init failed: -2, ignoring
 [t] check access for rdinit=/init failed: -2, ignoring
-[t] mmc0: SDHCI controller on fe340000.mmc [fe340000.mmc] using ADMA
-[t] mmc0: SDHCI controller on fe340000.mmc [fe340000.mmc] using ADMA
 [t] Waiting for root device /dev/mmcblk0p2...
 [t] Waiting for root device /dev/mmcblk0p2...
+[t] mmc0: SDHCI controller on fe340000.mmc [fe340000.mmc] using ADMA
+[t] mmc0: SDHCI controller on fe340000.mmc [fe340000.mmc] using ADMA
 [t] mmc0: new UHS-I speed DDR50 SDHC card at address 0001
 [t] mmc0: new UHS-I speed DDR50 SDHC card at address 0001
 [t] mmcblk0: mmc0:0001 VIRTF 288 MiB
