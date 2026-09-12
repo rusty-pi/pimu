@@ -190,7 +190,7 @@ fn pa_bits(ps: u64) -> u32 {
 /// The translation table walk (ARM ARM `AArch64.TranslationTableWalk` and
 /// `AArch64.CheckPermission`, v8.0). `va` is already untagged. Errors are
 /// fault status codes.
-fn walk(s: &SysRegs, mem: &mut dyn Memory, regime: u8, va: u64) -> Result<Leaf, u8> {
+fn walk<M: Memory + ?Sized>(s: &SysRegs, mem: &mut M, regime: u8, va: u64) -> Result<Leaf, u8> {
     let r = regime as usize;
     let tcr = s.tcr[r];
     let upper = regime == 1 && va >> 55 & 1 != 0;
@@ -321,7 +321,12 @@ impl Cpu {
     }
 
     /// Translate `va` for an access of `kind`; errors are fault status codes.
-    fn translate(&mut self, mem: &mut dyn Memory, va: u64, kind: Kind) -> Result<u64, u8> {
+    fn translate<M: Memory + ?Sized>(
+        &mut self,
+        mem: &mut M,
+        va: u64,
+        kind: Kind,
+    ) -> Result<u64, u8> {
         let Some(regime) = self.regime() else {
             return Ok(va);
         };
@@ -358,9 +363,9 @@ impl Cpu {
     /// physical address, and for an access that crosses into the next page,
     /// how many bytes are in the first and where the rest go. Errors are
     /// `(faulting VA, fault status code)`.
-    fn translate_access(
+    fn translate_access<M: Memory + ?Sized>(
         &mut self,
-        mem: &mut dyn Memory,
+        mem: &mut M,
         va: u64,
         size: u32,
         kind: Kind,
@@ -376,7 +381,12 @@ impl Cpu {
     }
 
     /// A data read of `size` bytes at virtual address `va`.
-    pub(super) fn read(&mut self, mem: &mut dyn Memory, va: u64, size: u32) -> Result<u64, Stop> {
+    pub(super) fn read<M: Memory + ?Sized>(
+        &mut self,
+        mem: &mut M,
+        va: u64,
+        size: u32,
+    ) -> Result<u64, Stop> {
         let abort = |addr: u64, fsc: u8| {
             Stop::Exception(Exception::DataAbort {
                 addr,
@@ -405,9 +415,9 @@ impl Cpu {
     }
 
     /// A data write of the low `size` bytes of `value` at `va`.
-    pub(super) fn write(
+    pub(super) fn write<M: Memory + ?Sized>(
         &mut self,
-        mem: &mut dyn Memory,
+        mem: &mut M,
         va: u64,
         size: u32,
         value: u64,
@@ -440,7 +450,11 @@ impl Cpu {
     }
 
     /// Fetch the instruction at `va` (4-byte aligned, so within one page).
-    pub(super) fn fetch(&mut self, mem: &mut dyn Memory, va: u64) -> Result<u32, Exception> {
+    pub(super) fn fetch<M: Memory + ?Sized>(
+        &mut self,
+        mem: &mut M,
+        va: u64,
+    ) -> Result<u32, Exception> {
         let abort = |fsc| Exception::InsnAbort { addr: va, fsc };
         let page = va & !0xFFF;
         let pa = match self.tlb.fetch {
@@ -459,9 +473,9 @@ impl Cpu {
 /// are stage 1 only): walk `va` in `regime` as EL0 (`user`) or the regime's
 /// own EL, and report in `PAR_EL1` (ARM ARM D17.2.113). Never uses or fills
 /// the TLB.
-pub(super) fn at(
+pub(super) fn at<M: Memory + ?Sized>(
     cpu: &mut Cpu,
-    mem: &mut dyn Memory,
+    mem: &mut M,
     regime: u8,
     user: bool,
     write: bool,

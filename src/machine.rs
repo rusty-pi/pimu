@@ -153,6 +153,24 @@ pub struct Machine {
 /// that regardless of which alias the write used.
 const PHASE_TAG_SIG: u32 = 0x02C0_2000;
 
+/// The 64 MiB every peripheral window the VPU decodes lies in.
+const MMIO_WINDOW: std::ops::Range<u32> = 0x7C00_0000..0x8000_0000;
+const _: () = {
+    let windows = [
+        (map::PERIPH_BASE, map::PERIPH_SIZE),
+        (map::SDRAMC_BASE, map::SDRAMC_SIZE),
+        (map::CLKMON_BASE, map::CLKMON_SIZE),
+        (map::PCIE_BASE, map::PCIE_SIZE),
+        (map::GENET_BASE, map::GENET_SIZE),
+    ];
+    let mut i = 0;
+    while i < windows.len() {
+        let (base, size) = windows[i];
+        assert!(base >= MMIO_WINDOW.start && size <= MMIO_WINDOW.end - base);
+        i += 1;
+    }
+};
+
 impl Machine {
     pub fn new(ram_bytes: usize) -> Machine {
         Machine {
@@ -358,12 +376,16 @@ impl Machine {
     /// cache aliasing, unlike RAM) — plus the LPDDR4 controller/PHY, which is
     /// mapped just *below* that window at `0x7DC0_0000`. Both must be decoded
     /// before the cache-alias fold, or their (aliased) addresses land in DRAM.
+    #[inline]
     fn in_mmio(addr: u32) -> bool {
-        (map::PERIPH_BASE..map::PERIPH_BASE + map::PERIPH_SIZE).contains(&addr)
-            || (map::SDRAMC_BASE..map::SDRAMC_BASE + map::SDRAMC_SIZE).contains(&addr)
-            || (map::CLKMON_BASE..map::CLKMON_BASE + map::CLKMON_SIZE).contains(&addr)
-            || (map::PCIE_BASE..map::PCIE_BASE + map::PCIE_SIZE).contains(&addr)
-            || (map::GENET_BASE..map::GENET_BASE + map::GENET_SIZE).contains(&addr)
+        // Every window below is inside `MMIO_WINDOW`, and nearly every access
+        // (RAM) is outside it.
+        addr >> 26 == MMIO_WINDOW.start >> 26
+            && ((map::PERIPH_BASE..map::PERIPH_BASE + map::PERIPH_SIZE).contains(&addr)
+                || (map::SDRAMC_BASE..map::SDRAMC_BASE + map::SDRAMC_SIZE).contains(&addr)
+                || (map::CLKMON_BASE..map::CLKMON_BASE + map::CLKMON_SIZE).contains(&addr)
+                || (map::PCIE_BASE..map::PCIE_BASE + map::PCIE_SIZE).contains(&addr)
+                || (map::GENET_BASE..map::GENET_BASE + map::GENET_SIZE).contains(&addr))
     }
 
     /// Should an access to `addr` be recorded in `mmio_events`? True when the
@@ -724,6 +746,73 @@ fn dma_irq_source(ch: usize) -> u32 {
     }
 }
 
+impl Machine {
+    /// [`Bus::load`] off the RAM path: a peripheral, or nothing. Kept out of
+    /// line so that the RAM path inlines into the cores' executors.
+    #[inline(never)]
+    fn load_device(&mut self, addr: u32, width: Width) -> BusResult<u32> {
+        self.advance_hdmi_ddc(addr);
+        self.sync_avs_core_rail(addr);
+        let trace = self.mmio_traced(addr);
+        if let Some((dev, off)) = self.device_for(addr) {
+            let v = dev.read(off, width);
+            let got = *v.as_ref().unwrap_or(&0);
+            self.dma_win_log("rd", addr, got);
+            if trace {
+                self.mmio_events
+                    .push((addr, width.bytes() as u8, got, false));
+            }
+            return v;
+        }
+        self.bus_errors += 1;
+        Err(BusError::Unmapped {
+            addr,
+            width,
+            write: false,
+        })
+    }
+
+    /// [`Bus::store`] off the RAM path; see [`Self::load_device`].
+    #[inline(never)]
+    fn store_device(&mut self, addr: u32, width: Width, value: u32) -> BusResult<()> {
+        self.wake = true;
+        self.mmio_writes = self.mmio_writes.wrapping_add(1);
+        self.dma_win_log("wr", addr, value);
+        self.advance_hdmi_ddc(addr);
+        let trace = self.mmio_traced(addr);
+        if let Some((dev, off)) = self.device_for(addr) {
+            let r = dev.write(off, width, value);
+            if trace {
+                self.mmio_events
+                    .push((addr, width.bytes() as u8, value, true));
+            }
+            if self.dma4.take_start() {
+                self.run_dma4();
+            }
+            if let Some(ch) = self.dma_legacy.take_start() {
+                self.run_dma_legacy(ch, false);
+            }
+            if let Some(ch) = self.dma_vpu.take_start() {
+                self.run_dma_legacy(ch, true);
+            }
+            if self.emmc2.dma_pending() {
+                self.emmc2.run_dma(&mut self.ram);
+            }
+            if self.genet.take_kick() {
+                self.genet.service(&mut self.ram, &mut self.net);
+            }
+            return r;
+        }
+        self.mmio_writes = self.mmio_writes.wrapping_sub(1);
+        self.bus_errors += 1;
+        Err(BusError::Unmapped {
+            addr,
+            width,
+            write: true,
+        })
+    }
+}
+
 impl Bus for Machine {
     fn take_pending_irq(&mut self) -> Option<u32> {
         // Present the source at CoreCtl `+0x04` now, as it is vectored, not
@@ -784,6 +873,7 @@ impl Bus for Machine {
     /// Same condition as `read_insn`'s RAM fast path. A hit counts as the RAM
     /// read that fetch would have made: `ram_reads` feeds the run loop's
     /// progress heuristics, and a decode cache must not change what they see.
+    #[inline]
     fn code_gen(&mut self, pc: u32, cached: Option<u64>) -> Option<u64> {
         if Machine::in_mmio(pc) {
             return None;
@@ -830,6 +920,7 @@ impl Bus for Machine {
         Some(src)
     }
 
+    #[inline]
     fn load(&mut self, addr: u32, width: Width) -> BusResult<u32> {
         if !Machine::in_mmio(addr) {
             let phys = Machine::fold_ram_addr(addr);
@@ -838,27 +929,10 @@ impl Bus for Machine {
                 return self.ram.load(phys, width);
             }
         }
-        self.advance_hdmi_ddc(addr);
-        self.sync_avs_core_rail(addr);
-        let trace = self.mmio_traced(addr);
-        if let Some((dev, off)) = self.device_for(addr) {
-            let v = dev.read(off, width);
-            let got = *v.as_ref().unwrap_or(&0);
-            self.dma_win_log("rd", addr, got);
-            if trace {
-                self.mmio_events
-                    .push((addr, width.bytes() as u8, got, false));
-            }
-            return v;
-        }
-        self.bus_errors += 1;
-        Err(BusError::Unmapped {
-            addr,
-            width,
-            write: false,
-        })
+        self.load_device(addr, width)
     }
 
+    #[inline]
     fn store(&mut self, addr: u32, width: Width, value: u32) -> BusResult<()> {
         self.ram_writes = self.ram_writes.wrapping_add(1);
         if crate::diag::ON && !self.watch.is_empty() {
@@ -889,41 +963,7 @@ impl Bus for Machine {
                 return self.ram.store(phys, width, value);
             }
         }
-        self.wake = true;
-        self.mmio_writes = self.mmio_writes.wrapping_add(1);
-        self.dma_win_log("wr", addr, value);
-        self.advance_hdmi_ddc(addr);
-        let trace = self.mmio_traced(addr);
-        if let Some((dev, off)) = self.device_for(addr) {
-            let r = dev.write(off, width, value);
-            if trace {
-                self.mmio_events
-                    .push((addr, width.bytes() as u8, value, true));
-            }
-            if self.dma4.take_start() {
-                self.run_dma4();
-            }
-            if let Some(ch) = self.dma_legacy.take_start() {
-                self.run_dma_legacy(ch, false);
-            }
-            if let Some(ch) = self.dma_vpu.take_start() {
-                self.run_dma_legacy(ch, true);
-            }
-            if self.emmc2.dma_pending() {
-                self.emmc2.run_dma(&mut self.ram);
-            }
-            if self.genet.take_kick() {
-                self.genet.service(&mut self.ram, &mut self.net);
-            }
-            return r;
-        }
-        self.mmio_writes = self.mmio_writes.wrapping_sub(1);
-        self.bus_errors += 1;
-        Err(BusError::Unmapped {
-            addr,
-            width,
-            write: true,
-        })
+        self.store_device(addr, width, value)
     }
 }
 

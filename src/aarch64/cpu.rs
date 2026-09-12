@@ -1,9 +1,10 @@
 //! Architectural state of one Cortex-A72 core and the interface it executes
 //! against.
 //!
-//! The core never owns memory. [`Cpu::step`] takes `&mut dyn Memory`, the same
+//! The core never owns memory. [`Cpu::step`] takes a [`Memory`], the same
 //! shape as the VPU's [`Bus`](crate::bus::Bus), so the machine can hand both
-//! processors the same RAM and peripherals. Addresses here are 64-bit: the
+//! processors the same RAM and peripherals. It is a type parameter rather than
+//! a trait object, so the machine's RAM path inlines into the executor. Addresses here are 64-bit: the
 //! A72 sees the full 35-bit physical map of the BCM2711 and, with the MMU on,
 //! 48-bit virtual addresses; [`Memory`] only ever sees physical ones
 //! (translation is `src/aarch64/mmu.rs`).
@@ -389,7 +390,7 @@ impl Cpu {
     }
 
     /// Execute one instruction.
-    pub fn step(&mut self, mem: &mut dyn Memory) -> Step {
+    pub fn step<M: Memory + ?Sized>(&mut self, mem: &mut M) -> Step {
         let pc = self.pc;
         if pc & 3 != 0 {
             return Step::Exception(Exception::PcAlignment);
@@ -419,7 +420,7 @@ impl Cpu {
 
     /// One step of the whole core: take a pending interrupt if it can be
     /// taken, else execute an instruction and take any exception it raises.
-    pub fn step_system(&mut self, mem: &mut dyn Memory) -> Step {
+    pub fn step_system<M: Memory + ?Sized>(&mut self, mem: &mut M) -> Step {
         if self.fiq_line && self.take_interrupt(true) {
             return Step::Interrupt { fiq: true };
         }

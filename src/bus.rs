@@ -1,9 +1,10 @@
 //! The memory/MMIO bus abstraction.
 //!
 //! The VPU core never holds a reference to memory or peripherals. `Vpu::step`
-//! takes `&mut dyn Bus`, and [`Machine`](crate::machine::Machine) is the concrete
-//! implementation that owns RAM and every peripheral and decodes addresses to
-//! them. This keeps the borrow graph a tree: `Emulator` owns `Vpu` and `Machine`
+//! takes a `Bus` — a type parameter, not a trait object, so the RAM path
+//! inlines into the executor — and [`Machine`](crate::machine::Machine) is the
+//! concrete implementation that owns RAM and every peripheral and decodes
+//! addresses to them. This keeps the borrow graph a tree: `Emulator` owns `Vpu` and `Machine`
 //! as siblings.
 
 use std::fmt;

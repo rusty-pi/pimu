@@ -58,6 +58,7 @@ impl Ram {
         self.data.is_empty()
     }
 
+    #[inline]
     pub fn contains(&self, addr: u32) -> bool {
         let end = self.base as u64 + self.data.len() as u64;
         (addr as u64) >= self.base as u64 && (addr as u64) < end
@@ -78,6 +79,7 @@ impl Ram {
         Ok(&self.data[off..off + len])
     }
 
+    #[inline]
     fn offset(&self, addr: u32, len: usize) -> BusResult<usize> {
         let rel = (addr as u64).checked_sub(self.base as u64);
         match rel {
@@ -96,6 +98,7 @@ impl Ram {
         }
     }
 
+    #[inline]
     pub fn load(&self, addr: u32, width: Width) -> BusResult<u32> {
         let n = width.bytes() as usize;
         let off = self.offset(addr, n).map_err(|_| BusError::Unmapped {
@@ -108,6 +111,7 @@ impl Ram {
         Ok(u32::from_le_bytes(buf))
     }
 
+    #[inline]
     pub fn store(&mut self, addr: u32, width: Width, value: u32) -> BusResult<()> {
         let n = width.bytes() as usize;
         let off = self.offset(addr, n).map_err(|_| BusError::Unmapped {
