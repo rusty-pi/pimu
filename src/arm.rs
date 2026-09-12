@@ -218,7 +218,15 @@ impl ArmSide {
         let mut arm = Self::new();
         if let Ok(h) = armstub::read_handoff(m) {
             arm.handoff = Some(h);
-            arm.bootargs = Some(armstub::add_bootargs(m, h.dtb, &armstub::BOOTARGS));
+            // `RVF_BOOTARGS="initcall_debug nokaslr"`: more kernel arguments,
+            // for a run that has to be read from the kernel's side.
+            let extra = std::env::var("RVF_BOOTARGS").unwrap_or_default();
+            let args: Vec<&str> = armstub::BOOTARGS
+                .iter()
+                .copied()
+                .chain(extra.split_whitespace())
+                .collect();
+            arm.bootargs = Some(armstub::add_bootargs(m, h.dtb, &args));
         }
         arm
     }
@@ -447,7 +455,23 @@ impl ArmBus<'_> {
                 let base = self.m.ram.base();
                 self.m.ram.store(base + a, w, v)
             }
-            Target::Periph(a) => self.m.store(a, w, v),
+            Target::Periph(a) => {
+                // `RVF_DBG_MBOX`: name what Linux asks the firmware for — the
+                // first tag of each property request it posts, and its
+                // first value words. The address on the wire is the bus
+                // alias (`0xC000_0000 | phys`, module docs of `mbox`).
+                if a == crate::periph::mbox::ARM_BASE + 0x20 && self.m.mbox.debug() {
+                    let buf = self.m.ram.base() + (v & 0x3FFF_FFF0);
+                    let word = |o: u32| self.m.ram.load(buf + o, Width::Word).unwrap_or(0);
+                    eprintln!(
+                        "[mbox] ARM request tag {:#010x} values {:#x} {:#x}",
+                        word(8),
+                        word(20),
+                        word(24)
+                    );
+                }
+                self.m.store(a, w, v)
+            }
             Target::Local(o) => self.m.arm_local.write(o, w, v),
             Target::Gic(o) => {
                 let acc = self.accessor();

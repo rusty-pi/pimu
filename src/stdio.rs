@@ -31,6 +31,7 @@ pub struct HostInput {
 impl HostInput {
     pub fn stdin() -> HostInput {
         let saved_tty = if std::io::stdin().is_terminal() {
+            eprintln!("serial console on this terminal: keys go to the guest, Ctrl-A x quits");
             raw_mode()
         } else {
             None
