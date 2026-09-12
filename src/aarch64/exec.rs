@@ -976,7 +976,12 @@ fn ld_st_exclusive(cpu: &mut Cpu, insn: u32, mem: &mut dyn Memory) -> Exec {
         if ok {
             cpu.write(mem, addr, bytes, cpu.xr(rt, true))?;
             if pair {
-                cpu.write(mem, addr.wrapping_add(bytes as u64), bytes, cpu.xr(rt2, true))?;
+                cpu.write(
+                    mem,
+                    addr.wrapping_add(bytes as u64),
+                    bytes,
+                    cpu.xr(rt2, true),
+                )?;
             }
         }
         cpu.exclusive = None;

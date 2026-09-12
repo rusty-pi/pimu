@@ -130,7 +130,8 @@ impl Core {
     fn sync(&mut self, m: &mut Machine, id: usize, cycles: u64, hz: u64) {
         self.timer.set_hz(cycles, hz);
         for w in Which::ALL {
-            m.gic.set_ppi_level(id, w.intid(), self.timer.line(w, cycles));
+            m.gic
+                .set_ppi_level(id, w.intid(), self.timer.line(w, cycles));
         }
         let s = m.gic.signal(id);
         self.cpu.irq_line = s.is_some_and(|s| !s.fiq);
@@ -163,11 +164,21 @@ pub struct ArmSide {
 
 /// The device interrupt lines wired to the GIC: the mailbox, eMMC2 and the
 /// two GENET lines.
-const SPIS: [u32; 4] = [gic::ID_MAILBOX, gic::ID_EMMC2, gic::ID_GENET_A, gic::ID_GENET_B];
+const SPIS: [u32; 4] = [
+    gic::ID_MAILBOX,
+    gic::ID_EMMC2,
+    gic::ID_GENET_A,
+    gic::ID_GENET_B,
+];
 
 fn spi_levels(m: &Machine) -> [bool; SPIS.len()] {
     let [genet_a, genet_b] = m.genet.irq_lines();
-    [m.mbox.arm_irq_asserted(), m.emmc2.irq_asserted(), genet_a, genet_b]
+    [
+        m.mbox.arm_irq_asserted(),
+        m.emmc2.irq_asserted(),
+        genet_a,
+        genet_b,
+    ]
 }
 
 impl Default for ArmSide {
@@ -544,7 +555,10 @@ mod tests {
         let mut arm = ArmSide::with_cores(1);
         arm.run(&mut m, 40);
         assert_eq!(arm.stopped, None);
-        assert_eq!(arm.cores[0].cpu.x[2], 0xFC67, "GICD_TYPER as measured on the board");
+        assert_eq!(
+            arm.cores[0].cpu.x[2], 0xFC67,
+            "GICD_TYPER as measured on the board"
+        );
         // The counter started when the prescaler was written, and has run
         // at 54 MHz on a 1.5 GHz clock since: ~11 cycles -> 0 ticks, so
         // just check it is not running wild.
@@ -557,14 +571,23 @@ mod tests {
     #[ignore]
     fn speed() {
         // x1 = 0x1000; 1: ldr x2, [x1]; add x2, x2, #1; str x2, [x1]; b 1b
-        let mut m = machine_with(&[0xD282_0001, 0xF940_0022, 0x9100_0442, 0xF900_0022, 0x17FF_FFFD]);
+        let mut m = machine_with(&[
+            0xD282_0001,
+            0xF940_0022,
+            0x9100_0442,
+            0xF900_0022,
+            0x17FF_FFFD,
+        ]);
         for cores in [1, CORES] {
             let mut arm = ArmSide::with_cores(cores);
             let t = std::time::Instant::now();
             arm.run(&mut m, 20_000_000);
             let insns: u64 = arm.cores.iter().map(|c| c.insns).sum();
             let s = t.elapsed().as_secs_f64();
-            println!("{cores} core(s): {insns} instructions in {s:.2} s = {:.1} M/s", insns as f64 / s / 1e6);
+            println!(
+                "{cores} core(s): {insns} instructions in {s:.2} s = {:.1} M/s",
+                insns as f64 / s / 1e6
+            );
         }
     }
 
