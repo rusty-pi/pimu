@@ -25,23 +25,51 @@
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
-pub const CHAN_STRIDE: u32 = 0x100;
-pub const NUM_CHAN: usize = 16;
+// Control blocks use the `TI` register's bit layout.
+use crate::spec::dma::{
+    CONBLK_AD, CS, DEBUG, DEST_AD, ENABLE, INT_STATUS, NEXTCONBK, SOURCE_AD, STRIDE, TI,
+    TI_DEST_INC_MASK as TI_DEST_INC, TI_SRC_INC_MASK as TI_SRC_INC, TI_TDMODE_MASK as TI_TDMODE,
+    TXFR_LEN,
+};
+pub use crate::spec::dma::{
+    CS_ACTIVE_MASK as CS_ACTIVE, CS_END_MASK as CS_END, CS_INT_MASK as CS_INT,
+    CS_STRIDE as CHAN_STRIDE,
+};
+use crate::spec::{dma_vpu, Coverage};
+
+/// Channel slots in the larger of the two controllers.
+pub const NUM_CHAN: usize = dma_vpu::CS_COUNT as usize;
 /// Registers modelled per channel (CS .. DEBUG).
-const NUM_REGS: usize = 9;
+const NUM_REGS: usize = ((DEBUG - CS) / 4 + 1) as usize;
 
-pub const CS_ACTIVE: u32 = 1 << 0;
-pub const CS_END: u32 = 1 << 1;
-/// `CS` bit 2 — interrupt status. `dma_chan_interrupt` is only entered for a
-/// channel whose `CS & 4` is set (`dma_interrupt`, `0x3EC980E8`).
-pub const CS_INT: u32 = 1 << 2;
+// One model serves both controllers, so their channel layouts must agree.
+const _: () =
+    assert!(dma_vpu::CS == CS && dma_vpu::DEBUG == DEBUG && dma_vpu::CS_STRIDE == CHAN_STRIDE);
 
-/// `TI` bit 4 — increment `DEST_AD` between writes.
-const TI_DEST_INC: u32 = 1 << 4;
-/// `TI` bit 8 — increment `SOURCE_AD` between reads.
-const TI_SRC_INC: u32 = 1 << 8;
-/// `TI` bit 1 — 2D mode: `TXFR_LEN` is `YLENGTH:XLENGTH`, `STRIDE` applies.
-const TI_TDMODE: u32 = 1 << 1;
+/// The `0x7E00_7000` controller: every register is modelled.
+pub const COVERAGE: Coverage = Coverage {
+    block: "dma",
+    decoded: &[
+        CS, CONBLK_AD, TI, SOURCE_AD, DEST_AD, TXFR_LEN, STRIDE, NEXTCONBK, DEBUG, INT_STATUS,
+        ENABLE,
+    ],
+};
+
+/// The `0x7EE0_4100` controller: every register is modelled.
+pub const COVERAGE_VPU: Coverage = Coverage {
+    block: "dma_vpu",
+    decoded: &[
+        dma_vpu::CS,
+        dma_vpu::CONBLK_AD,
+        dma_vpu::TI,
+        dma_vpu::SOURCE_AD,
+        dma_vpu::DEST_AD,
+        dma_vpu::TXFR_LEN,
+        dma_vpu::STRIDE,
+        dma_vpu::NEXTCONBK,
+        dma_vpu::DEBUG,
+    ],
+};
 
 #[derive(Default)]
 pub struct DmaLegacy {
@@ -154,10 +182,10 @@ impl MmioDevice for DmaLegacy {
     }
 
     fn read(&mut self, offset: u32, _width: Width) -> BusResult<u32> {
-        if self.global_regs && offset >= 0xFE0 {
+        if self.global_regs && offset >= INT_STATUS {
             return Ok(match offset & !3 {
-                0xFE0 => self.int_status,
-                0xFF0 => self.enable,
+                INT_STATUS => self.int_status,
+                ENABLE => self.enable,
                 _ => 0,
             });
         }
@@ -170,10 +198,10 @@ impl MmioDevice for DmaLegacy {
     }
 
     fn write(&mut self, offset: u32, _width: Width, value: u32) -> BusResult<()> {
-        if self.global_regs && offset >= 0xFE0 {
+        if self.global_regs && offset >= INT_STATUS {
             match offset & !3 {
-                0xFE0 => self.int_status &= !value,
-                0xFF0 => self.enable = value,
+                INT_STATUS => self.int_status &= !value,
+                ENABLE => self.enable = value,
                 _ => {}
             }
             return Ok(());

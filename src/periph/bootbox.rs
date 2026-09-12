@@ -17,17 +17,29 @@ use std::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
-/// Low control bits (ready / busy / trigger) — always read back clear, i.e.
-/// "idle, request already serviced".
-const CONTROL_BITS: u32 = 0xF;
+// Every doorbell has its ready / busy / trigger bits in the same place.
+use crate::spec::bootbox::{
+    DOORBELL_A, DOORBELL_A_SIZE, DOORBELL_B, DOORBELL_B_CONTROL_MASK as CONTROL_BITS, DOORBELL_C,
+    DOORBELL_C_SIZE, IRQ_PAYLOAD, IRQ_SOURCE, IRQ_STATUS, IRQ_STATUS_PENDING_MASK,
+};
+use crate::spec::Coverage;
 
-/// `start4.elf`'s VPU interrupt handler (exception vector 12, `0x3ED1804E`)
-/// reads the pending interrupt source from a 3-word window here: `+0x00` bit 0
-/// = "a source is pending", `+0x04` / `+0x08` = source id / payload, and it
-/// acks by writing 0 back to `+0x00`.
-const IRQ_STATUS: u32 = 0x1080;
-const IRQ_SOURCE: u32 = 0x1084;
-const IRQ_PAYLOAD: u32 = 0x1088;
+/// Every doorbell reads its control bits back clear ("idle, request already
+/// serviced"); the interrupt window `start4.elf`'s exception-12 handler
+/// (`0x3ED1804E`) reads reports verbatim.
+pub const COVERAGE: Coverage = Coverage {
+    block: "bootbox",
+    decoded: &[
+        DOORBELL_A,
+        DOORBELL_A_SIZE,
+        IRQ_STATUS,
+        IRQ_SOURCE,
+        IRQ_PAYLOAD,
+        DOORBELL_B,
+        DOORBELL_C,
+        DOORBELL_C_SIZE,
+    ],
+};
 
 #[derive(Default)]
 pub struct BootBox {
@@ -41,14 +53,14 @@ impl BootBox {
 
     /// Latch a pending VPU interrupt source for the exc-12 handler to pick up.
     pub fn raise_irq(&mut self, source: u32, payload: u32) {
-        self.storage.insert(IRQ_STATUS, 1);
+        self.storage.insert(IRQ_STATUS, IRQ_STATUS_PENDING_MASK);
         self.storage.insert(IRQ_SOURCE, source);
         self.storage.insert(IRQ_PAYLOAD, payload);
     }
 
     /// True while a raised source has not yet been acked by the handler.
     pub fn irq_pending(&self) -> bool {
-        self.storage.get(&IRQ_STATUS).copied().unwrap_or(0) & 1 != 0
+        self.storage.get(&IRQ_STATUS).copied().unwrap_or(0) & IRQ_STATUS_PENDING_MASK != 0
     }
 }
 

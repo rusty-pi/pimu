@@ -271,7 +271,7 @@ impl Machine {
             .bsc_pmic
             .slave()
             .and_then(|p| p.part(crate::periph::pmic::ADDR_CORE))
-            .map(|part| part.reg(0x25));
+            .map(|part| part.reg(crate::periph::pmic::CORE_SETPOINT));
         if let Some(raw) = raw {
             self.avs.set_core_rail_uv(u32::from(raw) * 10_000);
         }
@@ -386,10 +386,10 @@ impl Machine {
         if let Some(off) = hit(map::AUX_BASE, map::AUX_SIZE) {
             return Some((&mut self.aux, off));
         }
-        if let Some(off) = hit(crate::periph::mbox::BASE, crate::periph::mbox::SIZE) {
+        if let Some(off) = hit(map::MBOX_BASE, map::MBOX_SIZE) {
             return Some((&mut self.mbox, off));
         }
-        if let Some(off) = hit(crate::periph::armctrl::BASE, crate::periph::armctrl::SIZE) {
+        if let Some(off) = hit(map::ARMCTRL_BASE, map::ARMCTRL_SIZE) {
             return Some((&mut self.armctrl, off));
         }
         if let Some(off) = hit(map::MCSYNC_BASE, map::MCSYNC_SIZE) {
@@ -462,7 +462,7 @@ impl Machine {
         if let Some(off) = hit(map::HDMI_DDC1_BASE, map::HDMI_DDC_SIZE) {
             return Some((&mut self.hdmi_ddc1, off));
         }
-        if let Some(off) = hit(map::FIFO_STUB_BASE, map::FIFO_STUB_SIZE) {
+        if let Some(off) = hit(map::OTP_BASE, map::OTP_SIZE) {
             return Some((&mut self.config_otp, off));
         }
         if let Some(off) = hit(map::SDRAMC_BASE, map::SDRAMC_SIZE) {

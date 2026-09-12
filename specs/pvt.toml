@@ -1,0 +1,124 @@
+[block]
+name            = "pvt"
+base            = 0x7D5D8000
+size            = 0x480
+summary         = "Per-channel PVT (process / voltage / temperature) monitors"
+instances       = 18
+instance_stride = 0x40
+notes           = "Eighteen channels, one bank each. Carved out of the `clkmon` window and decoded ahead of it. The measured per-channel thresholds and readings live in src/periph/pvt.rs; a register can only carry one reset value, and these differ per channel."
+
+[[block.source]]
+kind       = "decompile"
+ref        = "FUN_0ec300fa(ch, ...) reads ch * 0x40 + 0x7d5d8010 / +0x1c; start4 initialises k = 0..17"
+confidence = "high"
+
+[[block.source]]
+kind       = "measured"
+ref        = "/dev/mem at 0xFD5D8000 on rpi-dev: all eighteen channels carry the magic"
+confidence = "high"
+
+[[register]]
+name   = "INDEX"
+offset = 0x00
+access = "r"
+notes  = "The channel's own index."
+
+[[register.source]]
+kind       = "measured"
+ref        = "reads 0..17 across the channels on rpi-dev"
+confidence = "high"
+
+[[register]]
+name   = "MAGIC"
+offset = 0x10
+access = "r"
+reset  = 0x7FFF50CF
+notes  = "Present marker. Reading 0 would say the channel is absent."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "FUN_0ec300fa only reads +0x1C when *(ch * 0x40 + 0x7d5d8010) == 0x7fff50cf"
+confidence = "high"
+
+[[register.source]]
+kind       = "measured"
+ref        = "0x7fff50cf on all eighteen channels of rpi-dev"
+confidence = "high"
+
+[[register]]
+name   = "THRESHOLD_A"
+offset = 0x14
+access = "rw"
+notes  = "Threshold pair; can be read before anything writes it, so the model seeds it from hardware."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "FUN_0ec30276 reads and splits it; FUN_0ec3030e writes (lo & 0xffff) | (hi << 16)"
+confidence = "high"
+
+[[register.field]]
+name  = "LO"
+bits  = "15:0"
+notes = "Low threshold."
+
+[[register.field.source]]
+kind       = "decompile"
+ref        = "FUN_0ec3030e"
+confidence = "high"
+
+[[register.field]]
+name  = "HI"
+bits  = "31:16"
+notes = "High threshold."
+
+[[register.field.source]]
+kind       = "decompile"
+ref        = "FUN_0ec3030e"
+confidence = "high"
+
+[[register]]
+name   = "THRESHOLD_B"
+offset = 0x18
+access = "rw"
+notes  = "Second threshold pair, as THRESHOLD_A."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "FUN_0ec30276 / FUN_0ec3030e"
+confidence = "high"
+
+[[register]]
+name   = "READING"
+offset = 0x1C
+access = "r"
+notes  = "Measurement pair. Held constant in the model: a stable reading means 'no adaptive correction'."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "FUN_0ec300fa: hi = reading >> 16, lo = (ushort)reading; both zeroed below 10"
+confidence = "high"
+
+[[register.source]]
+kind       = "measured"
+ref        = "per-channel values off rpi-dev, e.g. 0x04270799 on channel 0"
+confidence = "high"
+
+[[register.field]]
+name  = "LO"
+bits  = "15:0"
+notes = "Low half."
+
+[[register.field.source]]
+kind       = "decompile"
+ref        = "FUN_0ec300fa"
+confidence = "high"
+
+[[register.field]]
+name  = "HI"
+bits  = "31:16"
+notes = "High half."
+
+[[register.field.source]]
+kind       = "decompile"
+ref        = "FUN_0ec300fa"
+confidence = "high"

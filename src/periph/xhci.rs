@@ -42,6 +42,69 @@ use std::collections::BTreeMap;
 
 use crate::bus::Width;
 use crate::periph::usb::{Setup, Speed, UsbDevice, Xfer};
+use crate::spec::xhci as regs;
+use crate::spec::xhci::{
+    CRCR_HI, CRCR_LO, DCBAAP_LO, DOORBELL, DOORBELL_COUNT, DOORBELL_STRIDE, ERDP_LO,
+    ERDP_LO_EHB_MASK, ERSTBA_LO, ERSTSZ, IMAN, IMAN_IE_MASK as IMAN_IE, IMAN_IP_MASK as IMAN_IP,
+    PAGESIZE, PAGESIZE_RESET, PORTSC, PORTSC_CCS_MASK as PORTSC_CCS, PORTSC_CEC_MASK as PORTSC_CEC,
+    PORTSC_CSC_MASK as PORTSC_CSC, PORTSC_DR_MASK as PORTSC_DR, PORTSC_OCC_MASK as PORTSC_OCC,
+    PORTSC_PEC_MASK as PORTSC_PEC, PORTSC_PED_MASK as PORTSC_PED, PORTSC_PLC_MASK as PORTSC_PLC,
+    PORTSC_PLS_MASK, PORTSC_PLS_SHIFT, PORTSC_PP_MASK as PORTSC_PP, PORTSC_PRC_MASK as PORTSC_PRC,
+    PORTSC_PR_MASK as PORTSC_PR, PORTSC_SPEED_SHIFT, PORTSC_STRIDE, PORTSC_WPR_MASK as PORTSC_WPR,
+    PORTSC_WRC_MASK as PORTSC_WRC, USBCMD, USBCMD_HCRST_MASK as USBCMD_HCRST,
+    USBCMD_INTE_MASK as USBCMD_INTE, USBCMD_LHCRST_MASK as USBCMD_LHCRST,
+    USBCMD_RS_MASK as USBCMD_RS, USBSTS, USBSTS_EINT_MASK as USBSTS_EINT,
+    USBSTS_HCH_MASK as USBSTS_HCH, USBSTS_HSE_MASK as USBSTS_HSE, USBSTS_PCD_MASK as USBSTS_PCD,
+    USBSTS_SRE_MASK as USBSTS_SRE,
+};
+use crate::spec::Coverage;
+
+/// Every register in `specs/xhci.toml` is modelled: the capabilities read the
+/// measured values, the rest is register, ring or port state, or storage.
+pub const COVERAGE: Coverage = Coverage {
+    block: "xhci",
+    decoded: &[
+        regs::CAPLENGTH,
+        regs::HCIVERSION,
+        regs::HCSPARAMS1,
+        regs::HCSPARAMS2,
+        regs::HCSPARAMS3,
+        regs::HCCPARAMS1,
+        regs::DBOFF,
+        regs::RTSOFF,
+        regs::HCCPARAMS2,
+        regs::USBCMD,
+        regs::USBSTS,
+        regs::PAGESIZE,
+        regs::DNCTRL,
+        regs::CRCR_LO,
+        regs::CRCR_HI,
+        regs::DCBAAP_LO,
+        regs::DCBAAP_HI,
+        regs::CONFIG,
+        regs::USBLEGSUP,
+        regs::SUPPORTED_USB2,
+        regs::SUPPORTED_USB2_NAME,
+        regs::SUPPORTED_USB2_PORTS,
+        regs::SUPPORTED_USB3,
+        regs::SUPPORTED_USB3_NAME,
+        regs::SUPPORTED_USB3_PORTS,
+        regs::DOORBELL,
+        regs::MFINDEX,
+        regs::IMAN,
+        regs::IMOD,
+        regs::ERSTSZ,
+        regs::ERSTBA_LO,
+        regs::ERSTBA_HI,
+        regs::ERDP_LO,
+        regs::ERDP_HI,
+        regs::DEBUG_CAP,
+        regs::PORTSC,
+        regs::PORTPMSC,
+        regs::PORTLI,
+        regs::PORTHLPMC,
+    ],
+};
 
 // ---------------------------------------------------------------------------
 // Host memory, as the endpoint sees it.
@@ -122,68 +185,26 @@ impl HostMem for VecMem {
 // ---------------------------------------------------------------------------
 // Register map
 
-/// `CAPLENGTH` — where the operational registers start.
-pub const CAPLENGTH: u32 = 0x20;
-/// `MaxSlots` 32, `MaxIntrs` 4, `MaxPorts` 5.
-const HCSPARAMS1: u32 = 0x0500_0420;
-/// `IST` 1, `ERSTMax` 3, `MaxScratchpad` 31.
-const HCSPARAMS2: u32 = 0xFC00_0031;
-const HCSPARAMS3: u32 = 0x00E7_0004;
-/// `AC64` 1, `CSZ` 0 (32-byte contexts), `PPC` 1, `xECP` 0x28 → BAR0 + 0xA0.
-const HCCPARAMS1: u32 = 0x0028_41EB;
-const DBOFF: u32 = 0x0000_0100;
-pub const RTSOFF: u32 = 0x0000_0200;
+/// `CAPLENGTH`'s value: where the operational registers start.
+pub const CAPLENGTH: u32 = regs::CAPLENGTH_RESET;
+/// `RTSOFF`'s value: where the runtime registers start.
+pub const RTSOFF: u32 = regs::RTSOFF_RESET;
+/// `DBOFF`'s value: where the doorbells start.
+const DBOFF: u32 = regs::DBOFF_RESET;
+// The spec's operational, runtime and doorbell offsets are absolute BAR0
+// offsets, so they have to agree with what the capability registers announce.
+const _: () = assert!(USBCMD == CAPLENGTH && IMAN == RTSOFF + 0x20 && DOORBELL == DBOFF);
 
-/// The VL805 has five root ports: port 1 USB2, ports 2-5 USB3.
-pub const PORTS: usize = 5;
+/// The VL805 has five root ports: port 1 USB2, ports 2-5 USB3
+/// (`HCSPARAMS1.MaxPorts`).
+pub const PORTS: usize = (regs::HCSPARAMS1_RESET >> 24) as usize;
 /// `HCSPARAMS1.MaxSlots`.
-const MAX_SLOTS: usize = 32;
-
-// Operational registers, relative to `CAPLENGTH`.
-const OP_USBCMD: u32 = 0x00;
-const OP_USBSTS: u32 = 0x04;
-const OP_PAGESIZE: u32 = 0x08;
-/// `DNCTRL` (`0x14`), `CONFIG` (`0x38`) and the upper halves of the 64-bit
-/// pointers are plain sticky storage, so they need no named offset.
-const OP_CRCR_LO: u32 = 0x18;
-const OP_CRCR_HI: u32 = 0x1C;
-const OP_DCBAAP_LO: u32 = 0x30;
-/// `PORTSC` for port *n* is at `CAPLENGTH + 0x400 + (n - 1) * 0x10`.
-const OP_PORTSC: u32 = 0x400;
-
-const USBCMD_RS: u32 = 1 << 0;
-const USBCMD_HCRST: u32 = 1 << 1;
-/// Interrupter Enable: without it no interrupter raises anything.
-const USBCMD_INTE: u32 = 1 << 2;
-const USBCMD_LHCRST: u32 = 1 << 7;
-
-const USBSTS_HCH: u32 = 1 << 0;
-const USBSTS_HSE: u32 = 1 << 2;
-const USBSTS_EINT: u32 = 1 << 3;
-const USBSTS_PCD: u32 = 1 << 4;
-const USBSTS_SRE: u32 = 1 << 10;
+const MAX_SLOTS: usize = (regs::HCSPARAMS1_RESET & 0xFF) as usize;
+const _: () =
+    assert!(PORTS == regs::PORTSC_COUNT as usize && MAX_SLOTS + 1 == DOORBELL_COUNT as usize);
 /// The write-1-to-clear half of `USBSTS`.
 const USBSTS_RW1C: u32 = USBSTS_HSE | USBSTS_EINT | USBSTS_PCD | USBSTS_SRE;
 
-// `PORTSC` bit positions (xHCI 5.4.8).
-const PORTSC_CCS: u32 = 1 << 0;
-const PORTSC_PED: u32 = 1 << 1;
-const PORTSC_PR: u32 = 1 << 4;
-const PORTSC_PLS_SHIFT: u32 = 5;
-const PORTSC_PLS_MASK: u32 = 0xF << PORTSC_PLS_SHIFT;
-const PORTSC_PP: u32 = 1 << 9;
-const PORTSC_SPEED_SHIFT: u32 = 10;
-const PORTSC_CSC: u32 = 1 << 17;
-const PORTSC_PEC: u32 = 1 << 18;
-const PORTSC_WRC: u32 = 1 << 19;
-const PORTSC_OCC: u32 = 1 << 20;
-const PORTSC_PRC: u32 = 1 << 21;
-const PORTSC_PLC: u32 = 1 << 22;
-const PORTSC_CEC: u32 = 1 << 23;
-/// Device Removable — set on the USB2 root port, which is how the measured
-/// `0x400202e1` gets its top bit.
-const PORTSC_DR: u32 = 1 << 30;
-const PORTSC_WPR: u32 = 1 << 31;
 /// Bits the firmware clears by writing one.
 const PORTSC_RW1C: u32 =
     PORTSC_CSC | PORTSC_PEC | PORTSC_WRC | PORTSC_OCC | PORTSC_PRC | PORTSC_PLC | PORTSC_CEC;
@@ -199,17 +220,8 @@ const PLS_POLLING: u32 = 7;
 /// unpopulated VL805 port reads (`docs/usb-xhci.md` §5.2).
 const PORTSC_EMPTY: u32 = PORTSC_PP | (PLS_RXDETECT << PORTSC_PLS_SHIFT);
 
-// Runtime registers, relative to `RTSOFF`.
-const RT_IR0: u32 = 0x20;
-const IR_IMAN: u32 = 0x00;
-const IR_ERSTSZ: u32 = 0x08;
-const IR_ERSTBA_LO: u32 = 0x10;
-const IR_ERDP_LO: u32 = 0x18;
-/// Interrupt Pending (write-1-to-clear) / Interrupt Enable.
-const IMAN_IP: u32 = 1 << 0;
-const IMAN_IE: u32 = 1 << 1;
 /// `ERDP.EHB`, the Event Handler Busy bit the driver clears when it is done.
-const ERDP_EHB: u64 = 1 << 3;
+const ERDP_EHB: u64 = ERDP_LO_EHB_MASK as u64;
 
 // TRB types (xHCI 6.4.6).
 const TRB_NORMAL: u32 = 1;
@@ -395,14 +407,9 @@ impl Xhci {
     }
 
     fn portsc_index(off: u32) -> Option<usize> {
-        let base = CAPLENGTH + OP_PORTSC;
-        if off < base || off >= base + (PORTS as u32) * 0x10 {
-            return None;
-        }
-        if !(off - base).is_multiple_of(0x10) {
-            return None;
-        }
-        Some(((off - base) / 0x10) as usize)
+        let rel = off.checked_sub(PORTSC)?;
+        (rel % PORTSC_STRIDE == 0 && rel / PORTSC_STRIDE < PORTS as u32)
+            .then_some((rel / PORTSC_STRIDE) as usize)
     }
 
     // -----------------------------------------------------------------------
@@ -421,29 +428,30 @@ impl Xhci {
 
     fn read_word(&mut self, off: u32) -> u32 {
         match off {
-            // CAPLENGTH 0x20 | HCIVERSION 0x0100.
-            0x00 => return 0x0100_0020,
-            0x04 => return HCSPARAMS1,
-            0x08 => return HCSPARAMS2,
-            0x0C => return HCSPARAMS3,
-            0x10 => return HCCPARAMS1,
-            0x14 => return DBOFF,
-            0x18 => return RTSOFF,
-            0x1C => return 0,
+            // The word at 0 is CAPLENGTH with HCIVERSION in its top half.
+            regs::CAPLENGTH => return regs::CAPLENGTH_RESET | regs::HCIVERSION_RESET << 16,
+            regs::HCSPARAMS1 => return regs::HCSPARAMS1_RESET,
+            regs::HCSPARAMS2 => return regs::HCSPARAMS2_RESET,
+            regs::HCSPARAMS3 => return regs::HCSPARAMS3_RESET,
+            regs::HCCPARAMS1 => return regs::HCCPARAMS1_RESET,
+            regs::DBOFF => return regs::DBOFF_RESET,
+            regs::RTSOFF => return regs::RTSOFF_RESET,
+            regs::HCCPARAMS2 => return regs::HCCPARAMS2_RESET,
             // Extended capabilities, walked from `HCCPARAMS1.xECP` = 0xA0.
-            0xA0 => return 0x0000_0401, // legacy support, next -> 0xB0
-            0xB0 => return 0x0200_0802, // supported protocol, USB 2.0
-            0xB4 | 0xD4 => return 0x2042_5355, // "USB "
-            0xB8 => return 0x0000_0101, // port offset 1, count 1
-            0xD0 => return 0x0300_8C02, // supported protocol, USB 3.0
-            0xD8 => return 0x0000_0402, // port offset 2, count 4
-            0x300 => return 0x0000_000A,
+            regs::USBLEGSUP => return regs::USBLEGSUP_RESET,
+            regs::SUPPORTED_USB2 => return regs::SUPPORTED_USB2_RESET,
+            regs::SUPPORTED_USB2_NAME => return regs::SUPPORTED_USB2_NAME_RESET,
+            regs::SUPPORTED_USB2_PORTS => return regs::SUPPORTED_USB2_PORTS_RESET,
+            regs::SUPPORTED_USB3 => return regs::SUPPORTED_USB3_RESET,
+            regs::SUPPORTED_USB3_NAME => return regs::SUPPORTED_USB3_NAME_RESET,
+            regs::SUPPORTED_USB3_PORTS => return regs::SUPPORTED_USB3_PORTS_RESET,
+            regs::DEBUG_CAP => return regs::DEBUG_CAP_RESET,
             _ => {}
         }
-        if off == CAPLENGTH + OP_PAGESIZE {
-            return 1; // 4 KiB pages
+        if off == PAGESIZE {
+            return PAGESIZE_RESET; // 4 KiB pages
         }
-        if off == CAPLENGTH + OP_USBSTS {
+        if off == USBSTS {
             let sticky = self.reg(off) & !USBSTS_HCH;
             return if self.running {
                 sticky
@@ -451,7 +459,7 @@ impl Xhci {
                 sticky | USBSTS_HCH
             };
         }
-        if off == CAPLENGTH + OP_CRCR_LO {
+        if off == CRCR_LO {
             // The dequeue pointer reads as zero (xHCI 5.4.5); only the Command
             // Ring Running bit is observable.
             return if self.running && self.cmd_ptr != 0 {
@@ -460,7 +468,7 @@ impl Xhci {
                 0
             };
         }
-        if off == CAPLENGTH + OP_CRCR_HI {
+        if off == CRCR_HI {
             return 0;
         }
         if let Some(i) = Xhci::portsc_index(off) {
@@ -490,8 +498,8 @@ impl Xhci {
             return;
         }
         // Doorbells: `DBOFF` + 4 * target.
-        if (DBOFF..DBOFF + 4 * (MAX_SLOTS as u32 + 1)).contains(&word_off) {
-            let target = (word_off - DBOFF) / 4;
+        if (DOORBELL..DOORBELL + DOORBELL_COUNT * DOORBELL_STRIDE).contains(&word_off) {
+            let target = (word_off - DOORBELL) / DOORBELL_STRIDE;
             self.set_reg(word_off, value);
             self.ring_doorbell(target, value, mem);
             return;
@@ -500,34 +508,34 @@ impl Xhci {
         let old = self.reg(word_off);
         let new = (old & !mask) | value;
 
-        if word_off == CAPLENGTH + OP_USBSTS {
+        if word_off == USBSTS {
             // Write-1-to-clear. The bring-up's stop path writes all-ones here;
             // without this the firmware reads its own `0xFFFF_FFFF` back.
             self.set_reg(word_off, old & !(value & USBSTS_RW1C));
             return;
         }
-        if word_off == CAPLENGTH + OP_USBCMD {
+        if word_off == USBCMD {
             self.write_usbcmd(new);
             return;
         }
-        if word_off == RTSOFF + RT_IR0 + IR_IMAN {
+        if word_off == IMAN {
             // `IP` is write-1-to-clear: the driver acknowledges an interrupt
             // by writing it back (xHCI 5.5.2.1). Only the controller sets it.
             let ip = old & IMAN_IP & !(value & IMAN_IP);
             self.set_reg(word_off, (new & !IMAN_IP) | ip);
             return;
         }
-        if word_off == CAPLENGTH + OP_CRCR_LO || word_off == CAPLENGTH + OP_CRCR_HI {
+        if word_off == CRCR_LO || word_off == CRCR_HI {
             self.set_reg(word_off, new);
-            let ptr = self.reg64(CAPLENGTH + OP_CRCR_LO);
+            let ptr = self.reg64(CRCR_LO);
             self.cmd_ptr = ptr & !0x3F;
-            if word_off == CAPLENGTH + OP_CRCR_LO {
+            if word_off == CRCR_LO {
                 self.cmd_ccs = ptr & 1 != 0;
             }
             return;
         }
         self.set_reg(word_off, new);
-        if word_off == RTSOFF + RT_IR0 + IR_ERDP_LO {
+        if word_off == ERDP_LO {
             // Clearing `EHB` acknowledges the events consumed so far. Nothing
             // in the model depends on it, but it must not be sticky.
             self.set_reg(word_off, new & !(ERDP_EHB as u32));
@@ -539,7 +547,7 @@ impl Xhci {
             self.reset();
             return;
         }
-        self.set_reg(CAPLENGTH + OP_USBCMD, new & !(USBCMD_HCRST | USBCMD_LHCRST));
+        self.set_reg(USBCMD, new & !(USBCMD_HCRST | USBCMD_LHCRST));
         let run = new & USBCMD_RS != 0;
         if run && !self.running {
             self.running = true;
@@ -609,10 +617,7 @@ impl Xhci {
             CC_SUCCESS << 24,
             TRB_PORT_STATUS_CHANGE << 10,
         ];
-        self.set_reg(
-            CAPLENGTH + OP_USBSTS,
-            self.reg(CAPLENGTH + OP_USBSTS) | USBSTS_PCD,
-        );
+        self.set_reg(USBSTS, self.reg(USBSTS) | USBSTS_PCD);
         self.post_event(trb, mem);
     }
 
@@ -620,8 +625,8 @@ impl Xhci {
     // Event ring
 
     fn post_event(&mut self, mut trb: [u32; 4], mem: &mut dyn HostMem) {
-        let erstba = self.reg64(RTSOFF + RT_IR0 + IR_ERSTBA_LO) & !0x3F;
-        let erstsz = self.reg(RTSOFF + RT_IR0 + IR_ERSTSZ) & 0xFFFF;
+        let erstba = self.reg64(ERSTBA_LO) & !0x3F;
+        let erstsz = self.reg(ERSTSZ) & 0xFFFF;
         if erstba == 0 || erstsz == 0 {
             return; // no event ring yet; the event is simply lost, as on silicon
         }
@@ -664,10 +669,10 @@ impl Xhci {
             self.event.enqueue += 16;
         }
 
-        let sts = self.reg(CAPLENGTH + OP_USBSTS) | USBSTS_EINT;
-        self.set_reg(CAPLENGTH + OP_USBSTS, sts);
-        let iman = self.reg(RTSOFF + RT_IR0 + IR_IMAN) | IMAN_IP;
-        self.set_reg(RTSOFF + RT_IR0 + IR_IMAN, iman);
+        let sts = self.reg(USBSTS) | USBSTS_EINT;
+        self.set_reg(USBSTS, sts);
+        let iman = self.reg(IMAN) | IMAN_IP;
+        self.set_reg(IMAN, iman);
     }
 
     // -----------------------------------------------------------------------
@@ -783,7 +788,7 @@ impl Xhci {
         if slot == 0 || slot as usize > MAX_SLOTS || !self.slots[slot as usize].enabled {
             return None;
         }
-        let dcbaap = self.reg64(CAPLENGTH + OP_DCBAAP_LO) & !0x3F;
+        let dcbaap = self.reg64(DCBAAP_LO) & !0x3F;
         if dcbaap == 0 {
             return None;
         }
@@ -1116,8 +1121,8 @@ impl Xhci {
     /// interrupter is enabled, and so are interrupts as a whole. This is the
     /// level the PCI function turns into an MSI or INTA (xHCI 4.17).
     pub fn interrupt_pending(&self) -> bool {
-        self.reg(RTSOFF + RT_IR0 + IR_IMAN) & (IMAN_IP | IMAN_IE) == IMAN_IP | IMAN_IE
-            && self.reg(CAPLENGTH + OP_USBCMD) & USBCMD_INTE != 0
+        self.reg(IMAN) & (IMAN_IP | IMAN_IE) == IMAN_IP | IMAN_IE
+            && self.reg(USBCMD) & USBCMD_INTE != 0
     }
 
     /// The port status words, for tests and for `RVF_DBG_XHCI`.
@@ -1127,7 +1132,7 @@ impl Xhci {
 
     /// `USBSTS` as the firmware reads it.
     pub fn usbsts(&self) -> u32 {
-        let sticky = self.reg(CAPLENGTH + OP_USBSTS) & !USBSTS_HCH;
+        let sticky = self.reg(USBSTS) & !USBSTS_HCH;
         if self.running {
             sticky
         } else {
@@ -1174,7 +1179,7 @@ mod tests {
         let mut hc = Xhci::new();
         let mut mem = VecMem::default();
         assert_eq!(hc.usbsts() & USBSTS_HCH, USBSTS_HCH);
-        hc.write(CAPLENGTH + OP_USBCMD, Width::Word, USBCMD_RS, &mut mem);
+        hc.write(USBCMD, Width::Word, USBCMD_RS, &mut mem);
         assert_eq!(hc.usbsts() & USBSTS_HCH, 0);
     }
 
@@ -1210,27 +1215,12 @@ mod tests {
         let w = |hc: &mut Xhci, mem: &mut VecMem, off: u32, v: u32| {
             hc.write(off, Width::Word, v, mem);
         };
-        w(&mut hc, &mut mem, RTSOFF + RT_IR0 + IR_ERSTSZ, 1);
-        w(
-            &mut hc,
-            &mut mem,
-            RTSOFF + RT_IR0 + IR_ERDP_LO,
-            EVENT_RING as u32,
-        );
-        w(
-            &mut hc,
-            &mut mem,
-            RTSOFF + RT_IR0 + IR_ERSTBA_LO,
-            ERST as u32,
-        );
-        w(&mut hc, &mut mem, CAPLENGTH + OP_DCBAAP_LO, DCBAA as u32);
-        w(
-            &mut hc,
-            &mut mem,
-            CAPLENGTH + OP_CRCR_LO,
-            CMD_RING as u32 | 1,
-        );
-        w(&mut hc, &mut mem, CAPLENGTH + OP_USBCMD, USBCMD_RS);
+        w(&mut hc, &mut mem, ERSTSZ, 1);
+        w(&mut hc, &mut mem, ERDP_LO, EVENT_RING as u32);
+        w(&mut hc, &mut mem, ERSTBA_LO, ERST as u32);
+        w(&mut hc, &mut mem, DCBAAP_LO, DCBAA as u32);
+        w(&mut hc, &mut mem, CRCR_LO, CMD_RING as u32 | 1);
+        w(&mut hc, &mut mem, USBCMD, USBCMD_RS);
         (hc, mem)
     }
 
@@ -1250,12 +1240,7 @@ mod tests {
         let (mut hc, mut mem) = started();
 
         // The port has to be reset before the driver addresses anything.
-        hc.write(
-            CAPLENGTH + OP_PORTSC,
-            Width::Word,
-            PORTSC_PR | PORTSC_PP,
-            &mut mem,
-        );
+        hc.write(PORTSC, Width::Word, PORTSC_PR | PORTSC_PP, &mut mem);
         assert_eq!(hc.portsc(1) & PORTSC_PED, PORTSC_PED, "port enabled");
         // The reset posted a Port Status Change Event for port 1.
         let ev = [0, 1, 2, 3].map(|i| mem.read32(EVENT_RING + 4 * i));
@@ -1350,7 +1335,7 @@ mod tests {
     #[test]
     fn a_short_in_transfer_reports_its_residue() {
         let (mut hc, mut mem) = started();
-        hc.write(CAPLENGTH + OP_PORTSC, Width::Word, PORTSC_PR, &mut mem);
+        hc.write(PORTSC, Width::Word, PORTSC_PR, &mut mem);
         command(
             &mut hc,
             &mut mem,

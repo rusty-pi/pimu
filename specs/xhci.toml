@@ -1,0 +1,803 @@
+[block]
+name    = "xhci"
+bus     = "pci"
+base    = 0x0
+size    = 0x1000
+summary = "xHCI register block behind the VL805's BAR0: capability, operational, runtime and doorbell registers"
+notes   = "Offsets are into BAR0 (4 KiB). The VPU reaches it only by 40-bit DMA through the PCIe outbound window, the ARM through that window at 0x6_0000_0000. Five root ports: port 1 USB2, ports 2..5 USB3; a VIA hub sits on port 1 on every board."
+
+[[block.source]]
+kind       = "standard"
+ref        = "eXtensible Host Controller Interface 1.1, section 5"
+confidence = "high"
+
+[[block.source]]
+kind       = "measured"
+ref        = "capability registers and PORTSC read on rpi-dev through /dev/mem (docs/usb-xhci.md section 2); dmesg 'hcc params 0x002841eb hci version 0x100'"
+confidence = "high"
+
+[[block.source]]
+kind       = "measured"
+ref        = "examples-on-real-hardware/sd-card-boot.log: 'xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb'"
+confidence = "high"
+
+[[register]]
+name   = "CAPLENGTH"
+offset = 0x00
+width  = 8
+access = "r"
+reset  = 0x20
+notes  = "Where the operational registers start."
+
+[[register.source]]
+kind       = "measured"
+ref        = "rpi-dev /dev/mem"
+confidence = "high"
+
+[[register]]
+name   = "HCIVERSION"
+offset = 0x02
+width  = 16
+access = "r"
+reset  = 0x0100
+notes  = "xHCI 1.0."
+
+[[register.source]]
+kind       = "measured"
+ref        = "rpi-dev dmesg: hci version 0x100"
+confidence = "high"
+
+[[register]]
+name   = "HCSPARAMS1"
+offset = 0x04
+access = "r"
+reset  = 0x05000420
+notes  = "MaxSlots 32, MaxIntrs 4, MaxPorts 5."
+
+[[register.source]]
+kind       = "measured"
+ref        = "rpi-dev /dev/mem; sd-card-boot.log 'xHC0 ports 5 slots 32 intrs 4'"
+confidence = "high"
+
+[[register]]
+name   = "HCSPARAMS2"
+offset = 0x08
+access = "r"
+reset  = 0xFC000031
+notes  = "IST 1, ERSTMax 3, MaxScratchpad 31."
+
+[[register.source]]
+kind       = "measured"
+ref        = "rpi-dev /dev/mem"
+confidence = "high"
+
+[[register]]
+name   = "HCSPARAMS3"
+offset = 0x0C
+access = "r"
+reset  = 0x00E70004
+notes  = "Exit latencies."
+
+[[register.source]]
+kind       = "measured"
+ref        = "rpi-dev /dev/mem"
+confidence = "high"
+
+[[register]]
+name   = "HCCPARAMS1"
+offset = 0x10
+access = "r"
+reset  = 0x002841EB
+notes  = "AC64, 32-byte contexts, PPC, xECP 0x28 (BAR0 + 0xA0)."
+
+[[register.source]]
+kind       = "measured"
+ref        = "rpi-dev dmesg: hcc params 0x002841eb"
+confidence = "high"
+
+[[register]]
+name   = "DBOFF"
+offset = 0x14
+access = "r"
+reset  = 0x00000100
+notes  = "Doorbell array offset."
+
+[[register.source]]
+kind       = "measured"
+ref        = "rpi-dev /dev/mem"
+confidence = "high"
+
+[[register]]
+name   = "RTSOFF"
+offset = 0x18
+access = "r"
+reset  = 0x00000200
+notes  = "Runtime register offset."
+
+[[register.source]]
+kind       = "measured"
+ref        = "rpi-dev /dev/mem"
+confidence = "high"
+
+[[register]]
+name   = "HCCPARAMS2"
+offset = 0x1C
+access = "r"
+reset  = 0x00000000
+notes  = "No extended capabilities of version 1.1."
+
+[[register.source]]
+kind       = "measured"
+ref        = "rpi-dev /dev/mem"
+confidence = "high"
+
+[[register]]
+name   = "USBCMD"
+offset = 0x20
+access = "rw"
+notes  = "Run / stop and resets."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.1 USBCMD"
+confidence = "high"
+
+[[register.field]]
+name  = "RS"
+bits  = "0"
+notes = "Run."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.1"
+confidence = "high"
+
+[[register.field]]
+name  = "HCRST"
+bits  = "1"
+notes = "Host controller reset: everything back to power-on."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.1"
+confidence = "high"
+
+[[register.field]]
+name  = "INTE"
+bits  = "2"
+notes = "Interrupter enable."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.1"
+confidence = "high"
+
+[[register.field]]
+name  = "LHCRST"
+bits  = "7"
+notes = "Light host controller reset."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.1"
+confidence = "high"
+
+[[register]]
+name   = "USBSTS"
+offset = 0x24
+access = "rw"
+notes  = "Status; the event and change bits are write-1-to-clear. The bring-up's stop path writes all-ones here."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.2 USBSTS"
+confidence = "high"
+
+[[register.source]]
+kind       = "measured"
+ref        = "reference log pre-handover XHCI-STOP prints 'USBSTS 18' (EINT | PCD) because of the hub"
+confidence = "high"
+
+[[register.field]]
+name   = "HCH"
+bits   = "0"
+access = "r"
+notes  = "Halted."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.2"
+confidence = "high"
+
+[[register.field]]
+name   = "HSE"
+bits   = "2"
+access = "w1c"
+notes  = "Host system error."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.2"
+confidence = "high"
+
+[[register.field]]
+name   = "EINT"
+bits   = "3"
+access = "w1c"
+notes  = "Event interrupt."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.2"
+confidence = "high"
+
+[[register.field]]
+name   = "PCD"
+bits   = "4"
+access = "w1c"
+notes  = "Port change detected."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.2"
+confidence = "high"
+
+[[register.field]]
+name   = "SRE"
+bits   = "10"
+access = "w1c"
+notes  = "Save / restore error."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.2"
+confidence = "high"
+
+[[register]]
+name   = "PAGESIZE"
+offset = 0x28
+access = "r"
+reset  = 0x00000001
+notes  = "4 KiB pages."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.3 PAGESIZE"
+confidence = "high"
+
+[[register]]
+name   = "DNCTRL"
+offset = 0x34
+access = "rw"
+notes  = "Device notification control. Stored."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.4 DNCTRL"
+confidence = "high"
+
+[[register]]
+name   = "CRCR_LO"
+offset = 0x38
+access = "rw"
+notes  = "Command ring pointer and consumer cycle; the pointer reads as 0, only Command Ring Running is visible."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.5 CRCR"
+confidence = "high"
+
+[[register.field]]
+name   = "CRR"
+bits   = "3"
+access = "r"
+notes  = "Command ring running."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.5"
+confidence = "high"
+
+[[register]]
+name   = "CRCR_HI"
+offset = 0x3C
+access = "rw"
+notes  = "Command ring pointer, high word; reads 0."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.5 CRCR"
+confidence = "high"
+
+[[register]]
+name   = "DCBAAP_LO"
+offset = 0x50
+access = "rw"
+notes  = "Device context base address array pointer."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.6 DCBAAP"
+confidence = "high"
+
+[[register]]
+name   = "DCBAAP_HI"
+offset = 0x54
+access = "rw"
+notes  = "DCBAAP, high word."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.6 DCBAAP"
+confidence = "high"
+
+[[register]]
+name   = "CONFIG"
+offset = 0x58
+access = "rw"
+notes  = "Slots enabled. Stored."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.7 CONFIG"
+confidence = "high"
+
+[[register]]
+name   = "USBLEGSUP"
+offset = 0xA0
+access = "r"
+reset  = 0x00000401
+notes  = "Extended capability: USB legacy support, next at +0x10 dwords (0xB0)."
+
+[[register.source]]
+kind       = "measured"
+ref        = "rpi-dev /dev/mem"
+confidence = "high"
+
+[[register]]
+name   = "SUPPORTED_USB2"
+offset = 0xB0
+access = "r"
+reset  = 0x02000802
+notes  = "Supported protocol: USB 2.0, next at 0xD0."
+
+[[register.source]]
+kind       = "measured"
+ref        = "rpi-dev: id=2 'USB ' rev 2.0 portoff=1 count=1"
+confidence = "high"
+
+[[register]]
+name   = "SUPPORTED_USB2_NAME"
+offset = 0xB4
+access = "r"
+reset  = 0x20425355
+notes  = "'USB '."
+
+[[register.source]]
+kind       = "measured"
+ref        = "rpi-dev /dev/mem"
+confidence = "high"
+
+[[register]]
+name   = "SUPPORTED_USB2_PORTS"
+offset = 0xB8
+access = "r"
+reset  = 0x00000101
+notes  = "Port offset 1, count 1."
+
+[[register.source]]
+kind       = "measured"
+ref        = "rpi-dev /dev/mem"
+confidence = "high"
+
+[[register]]
+name   = "SUPPORTED_USB3"
+offset = 0xD0
+access = "r"
+reset  = 0x03008C02
+notes  = "Supported protocol: USB 3.0, next at 0x300."
+
+[[register.source]]
+kind       = "measured"
+ref        = "rpi-dev: id=2 'USB ' rev 3.0 portoff=2 count=4"
+confidence = "high"
+
+[[register]]
+name   = "SUPPORTED_USB3_NAME"
+offset = 0xD4
+access = "r"
+reset  = 0x20425355
+notes  = "'USB '."
+
+[[register.source]]
+kind       = "measured"
+ref        = "rpi-dev /dev/mem"
+confidence = "high"
+
+[[register]]
+name   = "SUPPORTED_USB3_PORTS"
+offset = 0xD8
+access = "r"
+reset  = 0x00000402
+notes  = "Port offset 2, count 4."
+
+[[register.source]]
+kind       = "measured"
+ref        = "rpi-dev /dev/mem"
+confidence = "high"
+
+[[register]]
+name   = "DOORBELL"
+offset = 0x100
+count  = 33
+stride = 4
+access = "rw"
+notes  = "Doorbell 0 is the command ring, doorbell n slot n; a write runs the ring to completion before it returns."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.6 Doorbell registers"
+confidence = "high"
+
+[[register]]
+name   = "MFINDEX"
+offset = 0x200
+access = "r"
+notes  = "Microframe index."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.5.1 MFINDEX"
+confidence = "high"
+
+[[register]]
+name   = "IMAN"
+offset = 0x220
+count  = 4
+stride = 0x20
+access = "rw"
+notes  = "Interrupter management. Only interrupter 0 is used."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.5.2.1 IMAN"
+confidence = "high"
+
+[[register.field]]
+name   = "IP"
+bits   = "0"
+access = "w1c"
+notes  = "Interrupt pending; only the controller sets it."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.5.2.1"
+confidence = "high"
+
+[[register.field]]
+name  = "IE"
+bits  = "1"
+notes = "Interrupt enable."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.5.2.1"
+confidence = "high"
+
+[[register]]
+name   = "IMOD"
+offset = 0x224
+count  = 4
+stride = 0x20
+access = "rw"
+notes  = "Interrupter moderation. Stored."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.5.2.2 IMOD"
+confidence = "high"
+
+[[register]]
+name   = "ERSTSZ"
+offset = 0x228
+count  = 4
+stride = 0x20
+access = "rw"
+notes  = "Event ring segment table size."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.5.2.3.1 ERSTSZ"
+confidence = "high"
+
+[[register]]
+name   = "ERSTBA_LO"
+offset = 0x230
+count  = 4
+stride = 0x20
+access = "rw"
+notes  = "Event ring segment table base."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.5.2.3.2 ERSTBA"
+confidence = "high"
+
+[[register]]
+name   = "ERSTBA_HI"
+offset = 0x234
+count  = 4
+stride = 0x20
+access = "rw"
+notes  = "ERSTBA, high word."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.5.2.3.2 ERSTBA"
+confidence = "high"
+
+[[register]]
+name   = "ERDP_LO"
+offset = 0x238
+count  = 4
+stride = 0x20
+access = "rw"
+notes  = "Event ring dequeue pointer."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.5.2.3.3 ERDP"
+confidence = "high"
+
+[[register.field]]
+name   = "EHB"
+bits   = "3"
+access = "w1c"
+notes  = "Event handler busy; the driver clears it when done."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.5.2.3.3"
+confidence = "high"
+
+[[register]]
+name   = "ERDP_HI"
+offset = 0x23C
+count  = 4
+stride = 0x20
+access = "rw"
+notes  = "ERDP, high word."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.5.2.3.3 ERDP"
+confidence = "high"
+
+[[register]]
+name   = "DEBUG_CAP"
+offset = 0x300
+access = "r"
+reset  = 0x0000000A
+notes  = "Extended capability 10 (debug capability), the last in the list."
+
+[[register.source]]
+kind       = "measured"
+ref        = "rpi-dev /dev/mem"
+confidence = "high"
+
+[[register]]
+name   = "PORTSC"
+offset = 0x420
+count  = 5
+stride = 0x10
+access = "rw"
+notes  = "Port status and control. Empty but powered is 0x2A0; the USB2 port adds DR."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.8 PORTSC"
+confidence = "high"
+
+[[register.source]]
+kind       = "measured"
+ref        = "rpi-dev, moving a stick between sockets: 0x400202e1 USB2 just connected, 0x40000e03 USB2 enumerated, 0x00021203 USB3 SuperSpeed, 0x000002a0 empty"
+confidence = "high"
+
+[[register.field]]
+name   = "CCS"
+bits   = "0"
+access = "r"
+notes  = "Device connected."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.8"
+confidence = "high"
+
+[[register.field]]
+name  = "PED"
+bits  = "1"
+notes = "Port enabled; writing 1 disables it."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.8"
+confidence = "high"
+
+[[register.field]]
+name  = "PR"
+bits  = "4"
+notes = "Port reset."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.8"
+confidence = "high"
+
+[[register.field]]
+name  = "PLS"
+bits  = "8:5"
+notes = "Link state: 0 U0, 5 RxDetect, 7 Polling."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.8"
+confidence = "high"
+
+[[register.field]]
+name  = "PP"
+bits  = "9"
+notes = "Port power."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.8"
+confidence = "high"
+
+[[register.field]]
+name   = "SPEED"
+bits   = "13:10"
+access = "r"
+notes  = "Port speed id."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.8"
+confidence = "high"
+
+[[register.field]]
+name   = "CSC"
+bits   = "17"
+access = "w1c"
+notes  = "Connect status change."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.8"
+confidence = "high"
+
+[[register.field]]
+name   = "PEC"
+bits   = "18"
+access = "w1c"
+notes  = "Port enabled change."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.8"
+confidence = "high"
+
+[[register.field]]
+name   = "WRC"
+bits   = "19"
+access = "w1c"
+notes  = "Warm reset change."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.8"
+confidence = "high"
+
+[[register.field]]
+name   = "OCC"
+bits   = "20"
+access = "w1c"
+notes  = "Over-current change."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.8"
+confidence = "high"
+
+[[register.field]]
+name   = "PRC"
+bits   = "21"
+access = "w1c"
+notes  = "Port reset change."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.8"
+confidence = "high"
+
+[[register.field]]
+name   = "PLC"
+bits   = "22"
+access = "w1c"
+notes  = "Link state change."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.8"
+confidence = "high"
+
+[[register.field]]
+name   = "CEC"
+bits   = "23"
+access = "w1c"
+notes  = "Config error change."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.8"
+confidence = "high"
+
+[[register.field]]
+name   = "DR"
+bits   = "30"
+access = "r"
+notes  = "Device removable; set on the USB2 root port."
+
+[[register.field.source]]
+kind       = "measured"
+ref        = "top bit of the measured 0x400202e1"
+confidence = "high"
+
+[[register.field]]
+name  = "WPR"
+bits  = "31"
+notes = "Warm port reset."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.8"
+confidence = "high"
+
+[[register]]
+name   = "PORTPMSC"
+offset = 0x424
+count  = 5
+stride = 0x10
+access = "rw"
+notes  = "Port power management. Stored."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.9 PORTPMSC"
+confidence = "high"
+
+[[register]]
+name   = "PORTLI"
+offset = 0x428
+count  = 5
+stride = 0x10
+access = "r"
+notes  = "Port link info."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.10 PORTLI"
+confidence = "high"
+
+[[register]]
+name   = "PORTHLPMC"
+offset = 0x42C
+count  = 5
+stride = 0x10
+access = "rw"
+notes  = "Port hardware LPM control. Stored."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.11 PORTHLPMC"
+confidence = "high"

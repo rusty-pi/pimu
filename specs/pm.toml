@@ -1,0 +1,151 @@
+[block]
+name    = "pm"
+base    = 0x7E100000
+size    = 0x1000
+summary = "Power management: reset control, reset status, watchdog, power-domain registers"
+notes   = "Writes carry the 0x5A password in the top byte, which reads back masked. The watchdog counts down at 65536 Hz from the last WDOG value once RSTC arms a full reset."
+
+[[block.source]]
+kind       = "linux"
+ref        = "drivers/watchdog/bcm2835_wdt.c and drivers/pmdomain/bcm/bcm2835-power.c map this block"
+confidence = "high"
+
+[[block.source]]
+kind       = "decompile"
+ref        = "bootloader self-update reset (WDOG = PASSWORD | 10, RSTC = PASSWORD | full reset); start4 arms the dog at 0x3ED62334 / 0x3ED62342 with dtparam=watchdog=on"
+confidence = "high"
+
+[[register]]
+name   = "RSTC"
+offset = 0x1C
+access = "rw"
+notes  = "Reset control. Arming a full reset starts the watchdog; clearing WRCFG stops it."
+
+[[register.source]]
+kind       = "linux"
+ref        = "bcm2835_wdt_start writes PM_PASSWORD | 0x3222 style values, bcm2835_wdt_stop writes 0x102"
+confidence = "high"
+
+[[register.field]]
+name  = "WRCFG"
+bits  = "5:4"
+notes = "2 = full reset when the watchdog expires."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "bcm2835_wdt.c: PM_RSTC_WRCFG_FULL_RESET = 0x20"
+confidence = "high"
+
+[[register.field]]
+name  = "PASSWD"
+bits  = "31:24"
+notes = "Must be 0x5A for the write to count."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "bcm2835_wdt.c: PM_PASSWORD = 0x5a000000"
+confidence = "high"
+
+[[register]]
+name   = "RSTS"
+offset = 0x20
+access = "rw"
+reset  = 0x00000020
+notes  = "Which reset source fired last. The bootloader also packs the partition to boot into the even bits 0..10, which the odd HADWRF bit does not disturb."
+
+[[register.source]]
+kind       = "measured"
+ref        = "the reference board's bootloader prints 'PM_RSTS 00000020' after power-on"
+confidence = "high"
+
+[[register.source]]
+kind       = "decompile"
+ref        = "partition field in the even bits (mask 0x555): FUN_00000578 / FUN_00000666 in firmware/source/pieeprom.bin.c"
+confidence = "high"
+
+[[register.field]]
+name  = "HADWRF"
+bits  = "5"
+notes = "Last reset was a full watchdog reset: what power-on sequencing leaves."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "bcm2835_wdt.c: PM_RSTS_HADWRF_SET"
+confidence = "high"
+
+[[register]]
+name   = "WDOG"
+offset = 0x24
+access = "rw"
+notes  = "Watchdog timeout on write, ticks left on read (1 tick = 1/65536 s)."
+
+[[register.source]]
+kind       = "linux"
+ref        = "bcm2835_wdt.c: PM_WDOG_TIME_SET = 0x000fffff, get_timeleft reads it back"
+confidence = "high"
+
+[[register.field]]
+name  = "TIME"
+bits  = "19:0"
+notes = "Timeout in watchdog ticks; 0xFFFFF is 16 s."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "bcm2835_wdt.c: PM_WDOG_TIME_SET"
+confidence = "high"
+
+[[register.field]]
+name  = "PASSWD"
+bits  = "31:24"
+notes = "Must be 0x5A."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "bcm2835_wdt.c: PM_PASSWORD"
+confidence = "high"
+
+[[register]]
+name   = "DOMAIN_STATUS"
+offset = 0x40
+count  = 8
+stride = 4
+access = "rw"
+reset  = 0x00007040
+notes  = "Power-domain words the firmware reads for 'powered, clocks stable'. Which domain each word is was not decoded; the model answers powered so the powered-up branch runs."
+
+[[register.source]]
+kind       = "inferred"
+ref        = "the model's choice: status reads here gate a branch the boot has to take"
+confidence = "low"
+
+[[register]]
+name   = "IMAGE"
+offset = 0x108
+access = "rw"
+notes  = "Image power domain: ISP and H264 resets among others."
+
+[[register.source]]
+kind       = "linux"
+ref        = "bcm2835-power.c: PM_IMAGE, PM_ISPRSTN = BIT(8), PM_H264RSTN = BIT(7)"
+confidence = "high"
+
+[[register.source]]
+kind       = "decompile"
+ref        = "power-domain switch 0x3ED54E40 writes 0x7E100108 & ~BIT(8) / & ~BIT(7)"
+confidence = "high"
+
+[[register]]
+name   = "GRAFX"
+offset = 0x10C
+access = "rw"
+notes  = "Graphics power domain: the V3D reset."
+
+[[register.source]]
+kind       = "linux"
+ref        = "bcm2835-power.c: PM_GRAFX, PM_V3DRSTN = BIT(6)"
+confidence = "high"
+
+[[register.source]]
+kind       = "decompile"
+ref        = "power-domain switch 0x3ED54E40 writes 0x7E10010C & ~BIT(6)"
+confidence = "high"

@@ -1,0 +1,288 @@
+[block]
+name    = "uart0"
+base    = 0x7E201000
+size    = 0x1000
+summary = "PL011 UART0: the firmware's debug console and Linux's ttyAMA0"
+notes   = "Transmit completes instantly in the model; receive is paced at the programmed baud rate against the modelled clock."
+
+[[block.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, UART chapter (ARM PL011)"
+confidence = "high"
+
+[[block.source]]
+kind       = "linux"
+ref        = "dtb start4 hands to Linux: serial@7e201000, arm,pl011, GIC SPI 121"
+confidence = "high"
+
+[[block.source]]
+kind       = "inferred"
+ref        = "size: one 4 KiB page, the granularity of this window"
+confidence = "medium"
+
+[[register]]
+name   = "DR"
+offset = 0x00
+access = "rw"
+notes  = "Write sends a byte; read pops the receive FIFO."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, UART: DR"
+confidence = "high"
+
+[[register.source]]
+kind       = "decompile"
+ref        = "start4 console writer 0x3ED85E9C stores each byte here"
+confidence = "high"
+
+[[register]]
+name   = "FR"
+offset = 0x18
+access = "r"
+notes  = "FIFO and line flags."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, UART: FR"
+confidence = "high"
+
+[[register.source]]
+kind       = "decompile"
+ref        = "0x3ED85E9C polls TXFF before each byte; the clock-change callback 0x3EC799BC drains BUSY"
+confidence = "high"
+
+[[register.field]]
+name  = "BUSY"
+bits  = "3"
+notes = "Transmitting. The model never is."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, UART: FR"
+confidence = "high"
+
+[[register.field]]
+name  = "RXFE"
+bits  = "4"
+notes = "Receive FIFO empty."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, UART: FR"
+confidence = "high"
+
+[[register.field]]
+name  = "TXFF"
+bits  = "5"
+notes = "Transmit FIFO full. The model never is."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, UART: FR"
+confidence = "high"
+
+[[register.field]]
+name  = "RXFF"
+bits  = "6"
+notes = "Receive FIFO full."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, UART: FR"
+confidence = "high"
+
+[[register.field]]
+name  = "TXFE"
+bits  = "7"
+notes = "Transmit FIFO empty."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, UART: FR"
+confidence = "high"
+
+[[register]]
+name   = "IBRD"
+offset = 0x24
+access = "rw"
+notes  = "Integer part of the baud divisor (16 bits)."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, UART: IBRD"
+confidence = "high"
+
+[[register]]
+name   = "FBRD"
+offset = 0x28
+access = "rw"
+notes  = "Fractional part of the baud divisor, in 64ths (6 bits)."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, UART: FBRD"
+confidence = "high"
+
+[[register]]
+name   = "LCRH"
+offset = 0x2C
+access = "rw"
+notes  = "Line control. Toggling FEN flushes the receive FIFO."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, UART: LCRH"
+confidence = "high"
+
+[[register.field]]
+name  = "FEN"
+bits  = "4"
+notes = "FIFOs on; off makes the receiver a one-character holding register."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, UART: LCRH"
+confidence = "high"
+
+[[register]]
+name   = "CR"
+offset = 0x30
+access = "rw"
+notes  = "Control."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, UART: CR"
+confidence = "high"
+
+[[register.field]]
+name  = "UARTEN"
+bits  = "0"
+notes = "UART on."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, UART: CR"
+confidence = "high"
+
+[[register.field]]
+name  = "TXE"
+bits  = "8"
+notes = "Transmitter on."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, UART: CR"
+confidence = "high"
+
+[[register.field]]
+name  = "RXE"
+bits  = "9"
+notes = "Receiver on."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, UART: CR"
+confidence = "high"
+
+[[register]]
+name   = "IFLS"
+offset = 0x34
+access = "rw"
+reset  = 0x12
+notes  = "FIFO interrupt trigger levels; reset is half full both ways."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, UART: IFLS"
+confidence = "high"
+
+[[register.field]]
+name  = "TXIFLSEL"
+bits  = "2:0"
+notes = "Transmit trigger level."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, UART: IFLS"
+confidence = "high"
+
+[[register.field]]
+name  = "RXIFLSEL"
+bits  = "5:3"
+notes = "Receive trigger level: 1/8, 1/4, 1/2, 3/4, 7/8 full."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, UART: IFLS"
+confidence = "high"
+
+[[register]]
+name   = "IMSC"
+offset = 0x38
+access = "rw"
+notes  = "Interrupt mask, same bit layout as RIS."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, UART: IMSC"
+confidence = "high"
+
+[[register.source]]
+kind       = "linux"
+ref        = "amba-pl011 enables RX and RT here"
+confidence = "high"
+
+[[register]]
+name   = "RIS"
+offset = 0x3C
+access = "r"
+notes  = "Raw interrupt status. IMSC, MIS and ICR use the same bit positions."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, UART: RIS"
+confidence = "high"
+
+[[register.field]]
+name  = "RX"
+bits  = "4"
+notes = "Receive FIFO at or past its trigger level."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, UART: RIS"
+confidence = "high"
+
+[[register.field]]
+name  = "RT"
+bits  = "6"
+notes = "Receive timeout: characters waiting and none new for 32 bit periods."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, UART: RIS"
+confidence = "high"
+
+[[register]]
+name   = "MIS"
+offset = 0x40
+access = "r"
+notes  = "RIS & IMSC."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, UART: MIS"
+confidence = "high"
+
+[[register]]
+name   = "ICR"
+offset = 0x44
+access = "w"
+notes  = "Write 1 to clear a raw interrupt."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, UART: ICR"
+confidence = "high"

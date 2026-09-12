@@ -2,6 +2,7 @@
 
 # `systimer` – System timer: 64-bit free-running 1 MHz counter with four compare channels
 
+- Bus: `vpu` (VPU bus address)
 - Base: `0x7E003000`
 - Size: `0x1000`
 

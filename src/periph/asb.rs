@@ -157,35 +157,21 @@
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
-/// Base of the ASB register block.
-pub const BASE: u32 = 0x7E00_A000;
-/// One peripheral page, as every other block in this window gets.
-pub const SIZE: u32 = 0x1000;
+// `CTRL[0..6]` are Linux's `ASB_V3D_S_CTRL` .. `ASB_H264_M_CTRL`.
+use crate::spec::asb::{
+    AXI_BRDG_ID, AXI_BRDG_ID_RESET as BRDG_ID, BRDG_VERSION, CPR_CTRL, CTRL, CTRL_ACK_MASK as ACK,
+    CTRL_COUNT, CTRL_EMPTY_MASK as EMPTY, CTRL_REQ_STOP_MASK as REQ_STOP, CTRL_STRIDE,
+};
+use crate::spec::Coverage;
 
-/// `ASB_BRDG_VERSION`.
-const BRDG_VERSION: u32 = 0x00;
-/// `ASB_CPR_CTRL`.
-const CPR_CTRL: u32 = 0x04;
-/// First `*_CTRL` register (`ASB_V3D_S_CTRL`).
-const CTRL_FIRST: u32 = 0x08;
-/// Last `*_CTRL` register (`ASB_H264_M_CTRL`).
-const CTRL_LAST: u32 = 0x1C;
-/// `ASB_AXI_BRDG_ID`.
-const AXI_BRDG_ID: u32 = 0x20;
-
-/// The value Linux's probe requires at [`AXI_BRDG_ID`]: `BCM2835_BRDG_ID`,
-/// which is `"brdg"` little-endian.
-const BRDG_ID: u32 = 0x6272_6467;
-
-/// `ASB_REQ_STOP`.
-const REQ_STOP: u32 = 1 << 0;
-/// `ASB_ACK`.
-const ACK: u32 = 1 << 1;
-/// `ASB_EMPTY`.
-const EMPTY: u32 = 1 << 2;
+/// Every register in `specs/asb.toml` is modelled.
+pub const COVERAGE: Coverage = Coverage {
+    block: "asb",
+    decoded: &[BRDG_VERSION, CPR_CTRL, CTRL, AXI_BRDG_ID],
+};
 
 /// Number of `*_CTRL` registers: three blocks, slave and master port each.
-const BRIDGES: usize = ((CTRL_LAST - CTRL_FIRST) / 4 + 1) as usize;
+const BRIDGES: usize = CTRL_COUNT as usize;
 
 #[derive(Default)]
 pub struct Asb {
@@ -202,11 +188,9 @@ impl Asb {
     }
 
     fn bridge(offset: u32) -> Option<usize> {
-        if (CTRL_FIRST..=CTRL_LAST).contains(&offset) && offset.is_multiple_of(4) {
-            Some(((offset - CTRL_FIRST) / 4) as usize)
-        } else {
-            None
-        }
+        let rel = offset.checked_sub(CTRL)?;
+        (rel % CTRL_STRIDE == 0 && rel / CTRL_STRIDE < CTRL_COUNT)
+            .then_some((rel / CTRL_STRIDE) as usize)
     }
 
     /// A bridge's status word. `ACK` mirrors `REQ_STOP`; the queue is always

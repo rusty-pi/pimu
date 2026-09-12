@@ -81,8 +81,15 @@ use std::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
-pub const BASE: u32 = 0x7D5D_0000;
-pub const SIZE: u32 = 0x0001_0000;
+use crate::spec::clkmon::{CHAR_DONE, REG_1800, REG_1814, REG_1820, REG_A000};
+use crate::spec::Coverage;
+
+/// All plain storage, which is what the traced boot and the measurements call
+/// for (module docs).
+pub const COVERAGE: Coverage = Coverage {
+    block: "clkmon",
+    decoded: &[REG_1800, REG_1814, REG_1820, CHAR_DONE, REG_A000],
+};
 
 const PASSWD: u32 = 0x5A00_0000;
 

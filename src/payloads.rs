@@ -7,7 +7,7 @@
 use crate::soc::bcm2711 as map;
 
 /// Mini-UART data register, VPU address.
-const MU_IO: u32 = map::AUX_BASE + 0x40;
+const MU_IO: u32 = map::AUX_BASE + crate::spec::aux::MU_IO;
 
 fn emit16(out: &mut Vec<u8>, h: u16) {
     out.extend_from_slice(&h.to_le_bytes());

@@ -19,31 +19,20 @@ use std::collections::VecDeque;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
-// Register offsets.
-const DR: u32 = 0x00;
-const FR: u32 = 0x18;
-const IBRD: u32 = 0x24;
-const FBRD: u32 = 0x28;
-const LCRH: u32 = 0x2C;
-const CR: u32 = 0x30;
-const IFLS: u32 = 0x34;
-const IMSC: u32 = 0x38;
-const RIS: u32 = 0x3C;
-const MIS: u32 = 0x40;
-const ICR: u32 = 0x44;
+// The interrupt bits sit at the same positions in RIS, MIS, IMSC and ICR.
+use crate::spec::uart0::{
+    CR, CR_RXE_MASK as CR_RXE, CR_UARTEN_MASK as CR_UARTEN, DR, FBRD, FR, FR_RXFE_MASK as FR_RXFE,
+    FR_RXFF_MASK as FR_RXFF, FR_TXFE_MASK as FR_TXFE, IBRD, ICR, IFLS, IFLS_RESET,
+    IFLS_RXIFLSEL_MASK, IFLS_RXIFLSEL_SHIFT, IMSC, LCRH, LCRH_FEN_MASK as LCRH_FEN, MIS, RIS,
+    RIS_RT_MASK as INT_RT, RIS_RX_MASK as INT_RX,
+};
+use crate::spec::Coverage;
 
-// FR bits.
-const FR_RXFE: u32 = 1 << 4;
-const FR_RXFF: u32 = 1 << 6;
-const FR_TXFE: u32 = 1 << 7;
-
-// Interrupt bits (RIS / MIS / IMSC / ICR).
-const INT_RX: u32 = 1 << 4;
-const INT_RT: u32 = 1 << 6;
-
-const CR_UARTEN: u32 = 1 << 0;
-const CR_RXE: u32 = 1 << 9;
-const LCRH_FEN: u32 = 1 << 4;
+/// Every register in `specs/uart0.toml` is modelled.
+pub const COVERAGE: Coverage = Coverage {
+    block: "uart0",
+    decoded: &[DR, FR, IBRD, FBRD, LCRH, CR, IFLS, IMSC, RIS, MIS, ICR],
+};
 
 const FIFO_DEPTH: usize = 32;
 
@@ -85,8 +74,8 @@ impl Pl011 {
             ibrd: 0,
             fbrd: 0,
             lcrh: 0,
-            cr: 0x0301, // UARTEN|TXE|RXE at reset-ish
-            ifls: 0x12, // reset: both triggers at half full
+            cr: 0x0301,       // UARTEN|TXE|RXE at reset-ish
+            ifls: IFLS_RESET, // both triggers at half full
             imsc: 0,
             ris: 0,
             rx: VecDeque::new(),
@@ -182,7 +171,7 @@ impl Pl011 {
         if self.lcrh & LCRH_FEN == 0 {
             return 1;
         }
-        match (self.ifls >> 3) & 7 {
+        match (self.ifls & IFLS_RXIFLSEL_MASK) >> IFLS_RXIFLSEL_SHIFT {
             0 => 4,
             1 => 8,
             2 => 16,

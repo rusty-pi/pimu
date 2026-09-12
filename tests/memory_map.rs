@@ -36,7 +36,7 @@ const MODELLED: &[(&str, u32)] = &[
     ("uart0", map::UART0_BASE),
     ("spi0", map::SPI0_BASE),
     ("bsc pmic", map::BSC_PMIC_BASE),
-    ("config/otp fifo", map::FIFO_STUB_BASE),
+    ("config/otp fifo", map::OTP_BASE),
     ("aux mini-uart", map::AUX_BASE + 0x40),
     ("emmc2", map::EMMC2_BASE),
     ("hvs", map::HVS_BASE),

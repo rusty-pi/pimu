@@ -66,37 +66,38 @@
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
-/// DDC master of HDMI0.
-pub const HDMI0_BASE: u32 = 0x7EF0_4500;
-/// DDC master of HDMI1.
-pub const HDMI1_BASE: u32 = 0x7EF0_9500;
-/// Window size from the device tree's `reg`.
-pub const SIZE: u32 = 0x100;
+use crate::spec::hdmi_ddc::{
+    CHIP_ADDRESS, CNT, CNT_CNT1_MASK, CTL, CTLHI, CTLHI_IGNORE_ACK_MASK as CTLHI_IGNORE_ACK,
+    CTL_DTF_SHIFT, DATA_IN, DATA_IN_COUNT, DATA_IN_STRIDE, DATA_OUT, DATA_OUT_COUNT,
+    DATA_OUT_STRIDE, IIC_ENABLE, IIC_ENABLE_ENABLE_MASK as EN_ENABLE,
+    IIC_ENABLE_INTRP_MASK as EN_INTRP, IIC_ENABLE_NOACK_MASK as EN_NOACK, SCL_PARAM,
+};
+use crate::spec::Coverage;
 
-const CHIP_ADDRESS: u32 = 0x00;
-const DATA_IN: u32 = 0x04;
-const CNT: u32 = 0x24;
-const CTL: u32 = 0x28;
-const IIC_ENABLE: u32 = 0x2C;
-const DATA_OUT: u32 = 0x30;
-const CTLHI: u32 = 0x50;
-const SCL_PARAM: u32 = 0x54;
+/// Every register in `specs/hdmi_ddc.toml` is modelled, on both connectors.
+pub const COVERAGE: Coverage = Coverage {
+    block: "hdmi_ddc",
+    decoded: &[
+        CHIP_ADDRESS,
+        DATA_IN,
+        CNT,
+        CTL,
+        IIC_ENABLE,
+        DATA_OUT,
+        CTLHI,
+        SCL_PARAM,
+    ],
+};
 
 /// Eight data registers each way, four bytes apiece.
-const DATA_REGS: usize = 8;
+const DATA_REGS: usize = DATA_IN_COUNT as usize;
+const DATA_IN_LAST: u32 = DATA_IN + (DATA_IN_COUNT - 1) * DATA_IN_STRIDE;
+const DATA_OUT_LAST: u32 = DATA_OUT + (DATA_OUT_COUNT - 1) * DATA_OUT_STRIDE;
 /// Longest transfer the block can do in one go.
 pub const MAX_BYTES: usize = DATA_REGS * 4;
 
-// CTL bits.
-const CTL_DTF_READ: u32 = 1 << 0;
-
-// IIC_ENABLE bits.
-const EN_ENABLE: u32 = 1 << 0;
-const EN_INTRP: u32 = 1 << 1;
-const EN_NOACK: u32 = 1 << 2;
-
-// CTLHI bits.
-const CTLHI_IGNORE_ACK: u32 = 1 << 1;
+/// `CTL.DTF` bit 0: a read.
+const CTL_DTF_READ: u32 = 1 << CTL_DTF_SHIFT;
 
 /// 7-bit address of a monitor's EDID EEPROM on the DDC bus.
 pub const EDID_ADDR: u32 = 0x50;
@@ -199,7 +200,7 @@ impl HdmiDdc {
     fn start(&mut self) {
         let read = self.ctl & CTL_DTF_READ != 0;
         let addr = (self.chip_address >> 1) & 0x7F;
-        let count = (self.cnt as usize & 0x3F).min(MAX_BYTES);
+        let count = ((self.cnt & CNT_CNT1_MASK) as usize).min(MAX_BYTES);
         let acked = self.edid.is_some() && addr == EDID_ADDR;
 
         if acked {
@@ -256,11 +257,13 @@ impl MmioDevice for HdmiDdc {
         let off = offset & !3;
         Ok(match off {
             CHIP_ADDRESS => self.chip_address,
-            DATA_IN..=0x20 => self.data_in[((off - DATA_IN) / 4) as usize],
+            DATA_IN..=DATA_IN_LAST => self.data_in[((off - DATA_IN) / DATA_IN_STRIDE) as usize],
             CNT => self.cnt,
             CTL => self.ctl,
             IIC_ENABLE => self.enable_status(),
-            DATA_OUT..=0x4C => self.data_out[((off - DATA_OUT) / 4) as usize],
+            DATA_OUT..=DATA_OUT_LAST => {
+                self.data_out[((off - DATA_OUT) / DATA_OUT_STRIDE) as usize]
+            }
             CTLHI => self.ctlhi,
             SCL_PARAM => self.scl_param,
             _ => 0,
@@ -271,7 +274,9 @@ impl MmioDevice for HdmiDdc {
         let off = offset & !3;
         match off {
             CHIP_ADDRESS => self.chip_address = value,
-            DATA_IN..=0x20 => self.data_in[((off - DATA_IN) / 4) as usize] = value,
+            DATA_IN..=DATA_IN_LAST => {
+                self.data_in[((off - DATA_IN) / DATA_IN_STRIDE) as usize] = value
+            }
             CNT => self.cnt = value,
             CTL => self.ctl = value,
             IIC_ENABLE => {

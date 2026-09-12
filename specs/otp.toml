@@ -1,0 +1,103 @@
+[block]
+name    = "otp"
+base    = 0x7E20F000
+size    = 0x1000
+summary = "Always-on config / OTP engine: one-row-at-a-time reads of the fuse array"
+notes   = "The fuse contents live in src/periph/configotp.rs and must never be a real board's (CLAUDE.md). Offsets without a known register keep the old 'always ready' status bits (17, 18, 7) so unrelated pollers progress."
+
+[[block.source]]
+kind       = "decompile"
+ref        = "EEPROM bootloader getconfig(key): key -> +0x1C, 0 -> +0x0C / +0x08, +0x08 |= 1, poll +0x10, value <- +0x18"
+confidence = "high"
+
+[[register]]
+name   = "CLKMUX"
+offset = 0x04
+access = "rw"
+notes  = "Clock-mux pokes (3 / 0 / 2), absorbed."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "the bootloader writes 3, 0, 2 here"
+confidence = "medium"
+
+[[register]]
+name   = "PARAM_A"
+offset = 0x08
+access = "rw"
+notes  = "Transaction parameters; bit 0 starts it."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "getconfig: writes 0, then |= 1"
+confidence = "high"
+
+[[register.field]]
+name  = "GO"
+bits  = "0"
+notes = "Start the transaction."
+
+[[register.field.source]]
+kind       = "decompile"
+ref        = "getconfig sets bit 0 to trigger"
+confidence = "high"
+
+[[register]]
+name   = "PARAM_B"
+offset = 0x0C
+access = "rw"
+notes  = "Second transaction parameter, written 0."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "getconfig writes 0"
+confidence = "medium"
+
+[[register]]
+name   = "STATUS"
+offset = 0x10
+access = "rw"
+notes  = "Transaction status."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "poll at 0x8000760e: btest [+0x10], #1"
+confidence = "high"
+
+[[register.field]]
+name   = "DONE"
+bits   = "1"
+access = "w1c"
+notes  = "The row is in DATA."
+
+[[register.field.source]]
+kind       = "decompile"
+ref        = "0x8000760e"
+confidence = "high"
+
+[[register]]
+name   = "DATA"
+offset = 0x18
+access = "r"
+notes  = "The row read."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "getconfig reads the value from +0x18"
+confidence = "high"
+
+[[register]]
+name   = "KEY"
+offset = 0x1C
+access = "rw"
+notes  = "OTP row number to read."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "getconfig writes the key to +0x1C"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "RVF_DBG_OTP: the keys are row numbers (19..26 for the board-identity check, 28 serial, 30 revision)"
+confidence = "high"

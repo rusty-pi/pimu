@@ -1,0 +1,114 @@
+[block]
+name    = "vce_ctrl"
+base    = 0x7F140000
+size    = 0x1000
+summary = "VCE control block: status, launch, interrupt clear and endcode enables"
+notes   = "Same device as `vce`; its offsets are relative to 0x7F140000. A completed launch raises interrupt source 68 with STATUS.INT set until vce_clear_interrupt acks it."
+
+[[block.source]]
+kind       = "decompile"
+ref        = "vce_run_start, vce_run_complete, vce_clear_interrupt and the source-68 handler 0x3ED9D1EA"
+confidence = "high"
+
+[[block.source]]
+kind       = "trace"
+ref        = "RVF_DBG_IRQTBL=1: src 68 handler=0x3ed9d1ea"
+confidence = "high"
+
+[[register]]
+name   = "STATUS"
+offset = 0x00
+access = "r"
+notes  = "Engine status."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "handler 0x3ED9D1EA: endcode = ([0x7F140000] >> 16) & 0x1F"
+confidence = "high"
+
+[[register.field]]
+name  = "ENDCODE"
+bits  = "20:16"
+notes = "Endcode the program halted on. 5 is a clock stall the handler services itself."
+
+[[register.field.source]]
+kind       = "decompile"
+ref        = "handler 0x3ED9D1EA; vce_run_complete requires 0 for the licence check"
+confidence = "high"
+
+[[register.field]]
+name  = "IDLE_CHECK"
+bits  = "24"
+notes = "vce_obtain_semaphore and vce_release_semaphore assert it is clear on an idle engine; nothing else is known."
+
+[[register.field.source]]
+kind       = "decompile"
+ref        = "asserts in start4db.elf's vce_obtain_semaphore / vce_release_semaphore"
+confidence = "low"
+
+[[register.field]]
+name  = "INT"
+bits  = "31"
+notes = "Interrupt pending; the model drives source 68 while it is set."
+
+[[register.field.source]]
+kind       = "decompile"
+ref        = "vce_clear_interrupt writes 0x80000000 to INTCLR, then asserts STATUS & 0x80000000 == 0"
+confidence = "high"
+
+[[register]]
+name   = "PC"
+offset = 0x08
+count  = 4
+stride = 4
+access = "rw"
+notes  = "Per-core program counters; PC[0] takes the start pc. PC[1..3] read 0, nothing executes."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "vce_run_start writes the start pc to +0x08; the timeout message prints +0x08..+0x14, +0x14 as pc_ex0"
+confidence = "high"
+
+[[register]]
+name   = "RUN"
+offset = 0x20
+access = "rw"
+notes  = "Write 1 to launch; the semaphore ops write 0. Reads 0, the engine is always already halted."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "vce_run_start writes 1; vce_obtain_semaphore / vce_release_semaphore write 0"
+confidence = "high"
+
+[[register]]
+name   = "INTCLR"
+offset = 0x24
+access = "w"
+notes  = "Write 1 to clear: bit 31 the interrupt, bit n endcode n."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "vce_clear_interrupt writes 0x80000000; vce_run_start 0xFF; the ISR 0x20 for endcode 5; vce_run_complete 1"
+confidence = "high"
+
+[[register]]
+name   = "ENDCODE_ENABLE"
+offset = 0x28
+access = "rw"
+notes  = "Endcodes a launch accepts. vce_run_start writes (1 << endcode) | 0x20, and only when the endcode is non-zero."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "vce_run_start"
+confidence = "high"
+
+[[register]]
+name   = "BAD_ADDR"
+offset = 0x30
+access = "r"
+notes  = "Non-zero is 'bad address in VCE ld/st'. Reads 0."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "vce_run_complete's assert text"
+confidence = "high"

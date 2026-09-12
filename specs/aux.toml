@@ -1,0 +1,214 @@
+[block]
+name    = "aux"
+base    = 0x7E215000
+size    = 0x100
+summary = "AUX: mini-UART (UART1) and the SPI1 / SPI2 masters"
+notes   = "Only the mini-UART is modelled, transmit-only with a line that is always ready. The SPI masters at +0x80 / +0xC0 read 0."
+
+[[block.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries chapter"
+confidence = "high"
+
+[[register]]
+name   = "IRQ"
+offset = 0x00
+access = "r"
+notes  = "Which auxiliary has an interrupt pending. Always 0 here."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: AUX_IRQ"
+confidence = "high"
+
+[[register]]
+name   = "ENABLES"
+offset = 0x04
+access = "rw"
+notes  = "Per-auxiliary enables."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: AUX_ENABLES"
+confidence = "high"
+
+[[register.field]]
+name  = "UART"
+bits  = "0"
+notes = "Mini-UART on."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: AUX_ENABLES"
+confidence = "high"
+
+[[register.field]]
+name  = "SPI1"
+bits  = "1"
+notes = "SPI1 on."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: AUX_ENABLES"
+confidence = "high"
+
+[[register.field]]
+name  = "SPI2"
+bits  = "2"
+notes = "SPI2 on."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: AUX_ENABLES"
+confidence = "high"
+
+[[register]]
+name   = "MU_IO"
+offset = 0x40
+access = "rw"
+notes  = "Data: write transmits a byte; nothing is ever received."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: AUX_MU_IO_REG"
+confidence = "high"
+
+[[register]]
+name   = "MU_IER"
+offset = 0x44
+access = "rw"
+notes  = "Interrupt enables."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: AUX_MU_IER_REG"
+confidence = "high"
+
+[[register]]
+name   = "MU_IIR"
+offset = 0x48
+access = "rw"
+notes  = "Interrupt identity on read (FIFOs on, nothing pending), FIFO clear on write."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: AUX_MU_IIR_REG"
+confidence = "high"
+
+[[register]]
+name   = "MU_LCR"
+offset = 0x4C
+access = "rw"
+notes  = "Line control."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: AUX_MU_LCR_REG"
+confidence = "high"
+
+[[register]]
+name   = "MU_MCR"
+offset = 0x50
+access = "rw"
+notes  = "Modem control."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: AUX_MU_MCR_REG"
+confidence = "high"
+
+[[register]]
+name   = "MU_LSR"
+offset = 0x54
+access = "r"
+notes  = "Line status."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: AUX_MU_LSR_REG"
+confidence = "high"
+
+[[register.field]]
+name  = "DATA_READY"
+bits  = "0"
+notes = "A received byte is waiting. Never set here."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: AUX_MU_LSR_REG"
+confidence = "high"
+
+[[register.field]]
+name  = "TX_EMPTY"
+bits  = "5"
+notes = "Room for another byte."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: AUX_MU_LSR_REG"
+confidence = "high"
+
+[[register.field]]
+name  = "TX_IDLE"
+bits  = "6"
+notes = "Transmitter idle."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: AUX_MU_LSR_REG"
+confidence = "high"
+
+[[register]]
+name   = "MU_MSR"
+offset = 0x58
+access = "r"
+notes  = "Modem status."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: AUX_MU_MSR_REG"
+confidence = "high"
+
+[[register]]
+name   = "MU_SCRATCH"
+offset = 0x5C
+access = "rw"
+notes  = "One byte of scratch storage."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: AUX_MU_SCRATCH"
+confidence = "high"
+
+[[register]]
+name   = "MU_CNTL"
+offset = 0x60
+access = "rw"
+notes  = "Extra control: receiver / transmitter enables, flow control."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: AUX_MU_CNTL_REG"
+confidence = "high"
+
+[[register]]
+name   = "MU_STAT"
+offset = 0x64
+access = "r"
+notes  = "Extra status. The model reports the same ready bits as MU_LSR."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: AUX_MU_STAT_REG"
+confidence = "high"
+
+[[register]]
+name   = "MU_BAUD"
+offset = 0x68
+access = "rw"
+notes  = "Baud-rate counter (16 bits)."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: AUX_MU_BAUD_REG"
+confidence = "high"

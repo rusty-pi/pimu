@@ -44,34 +44,42 @@ use std::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
-/// Controller command/status (offset from `SDRAMC_BASE`).
-const CTRL_STATUS: u32 = 0x2_0010;
-const CTRL_CMD: u32 = 0x2_0014;
-/// `STATUS` bit 0 = "last command complete".
-const CTRL_DONE: u32 = 1 << 0;
+// The calibration request / result block is five parameter words from
+// `PHY_RES_VALID` then the two checksum words. `PHY_SIGNATURE` is the header
+// word of every `memsys00.bin` .. `memsys08.bin`: a fixed PHY-block signature,
+// not a per-preset hash.
+use crate::spec::sdramc::{
+    CTRL_CMD, CTRL_STATUS, CTRL_STATUS_DONE_MASK as CTRL_DONE, PHY_A, PHY_B, PHY_CAL_BUSY,
+    PHY_CAL_TRIGGER, PHY_RES_CMD, PHY_RES_PARAM, PHY_RES_SIGNATURE,
+    PHY_RES_SIGNATURE_RESET as PHY_SIGNATURE, PHY_RES_STATUS, PHY_RES_SUM5, PHY_RES_SUM6,
+    PHY_RES_VALID as PHY_RES_BASE,
+};
+use crate::spec::Coverage;
 
-/// PHY calibration handshake.
-const PHY_CAL_TRIGGER: u32 = 0x3_2010;
-const PHY_CAL_BUSY: u32 = 0x3_2014;
+/// Every register in `specs/sdramc.toml` is modelled, the PHY arrays and the
+/// parameter words as storage.
+pub const COVERAGE: Coverage = Coverage {
+    block: "sdramc",
+    decoded: &[
+        CTRL_STATUS,
+        CTRL_CMD,
+        PHY_CAL_TRIGGER,
+        PHY_CAL_BUSY,
+        PHY_RES_BASE,
+        PHY_RES_CMD,
+        PHY_RES_PARAM,
+        PHY_RES_SIGNATURE,
+        PHY_RES_STATUS,
+        PHY_RES_SUM5,
+        PHY_RES_SUM6,
+        PHY_A,
+        PHY_B,
+    ],
+};
 
-/// PHY calibration request/result block: five parameter words at
-/// `[+0x00 .. +0x14]` then checksum words at `[+0x14]` and `[+0x18]`.
-const PHY_RES_BASE: u32 = 0x3_2100;
-const PHY_RES_CMD: u32 = PHY_RES_BASE + 0x04;
-const PHY_RES_SIGNATURE: u32 = PHY_RES_BASE + 0x0C;
-const PHY_RES_STATUS: u32 = PHY_RES_BASE + 0x10;
-const PHY_RES_SUM5: u32 = PHY_RES_BASE + 0x14; // sum of the 5 words [+0x00..+0x14)
-const PHY_RES_SUM6: u32 = PHY_RES_BASE + 0x18; // sum of the 6 words [+0x00..+0x18)
-
-/// Command word (`[+0x04]`) that asks the PHY to report its signature rather
-/// than run a training step.
+/// Command word (`PHY_RES_CMD`) that asks the PHY to report its signature
+/// rather than run a training step.
 const PHY_CMD_REPORT_SIGNATURE: u32 = 0x101;
-
-/// Value a signature-report calibration leaves in `[+0x3_210C]`. All of
-/// `memsys00.bin` .. `memsys08.bin` carry this as their header word and the
-/// verifier compares the two — it is a fixed PHY-block signature, not a
-/// per-preset hash.
-const PHY_SIGNATURE: u32 = 0x0223_0000;
 
 #[derive(Debug, Clone)]
 pub struct SdramcAccess {

@@ -42,106 +42,85 @@ use crate::bus::{BusResult, MmioDevice, Width};
 use crate::mem::Ram;
 use crate::periph::sdcard::SdCard;
 
-// SDHCI register offsets (byte), each a 32-bit word.
-const SDMA_ADDR: u32 = 0x00;
-const BLOCK_SIZE_COUNT: u32 = 0x04;
-const ARGUMENT: u32 = 0x08;
-const CMD_XFER: u32 = 0x0C;
-const RESPONSE0: u32 = 0x10;
-const RESPONSE1: u32 = 0x14;
-const RESPONSE2: u32 = 0x18;
-const RESPONSE3: u32 = 0x1C;
-const BUFFER_DATA: u32 = 0x20;
-const PRESENT_STATE: u32 = 0x24;
-const HOST_CONTROL: u32 = 0x28;
-const CLOCK_CONTROL: u32 = 0x2C;
-const INT_STATUS: u32 = 0x30;
-const INT_STATUS_EN: u32 = 0x34;
-const INT_SIGNAL_EN: u32 = 0x38;
-const HOST_CONTROL2: u32 = 0x3C;
-const CAPABILITIES_0: u32 = 0x40;
-const CAPABILITIES_1: u32 = 0x44;
-const MAX_CURRENT: u32 = 0x48;
-const ADMA_ERROR: u32 = 0x54;
-const ADMA_ADDR: u32 = 0x58;
-const CONTROLLER_VERSION: u32 = 0xFC;
+// The read-only identity (`CAPABILITIES_*`, `MAX_CURRENT`,
+// `CONTROLLER_VERSION`), the idle `PRESENT_STATE` and `HOST_CONTROL.FIXED` are
+// measured on a Pi 4B rev 1.5 (`specs/emmc2.toml`).
+use crate::spec::emmc2::{
+    ADMA_ADDR, ADMA_ERROR, ADMA_ERROR_LEN_MISMATCH_MASK as ADMA_LEN_MISMATCH, ARGUMENT,
+    BLOCK_SIZE_COUNT, BUFFER_DATA, CAPABILITIES_0, CAPABILITIES_0_RESET as CAPS0, CAPABILITIES_1,
+    CAPABILITIES_1_RESET as CAPS1, CLOCK_CONTROL, CLOCK_CONTROL_INTERNAL_EN_MASK as CLK_INTLEN,
+    CLOCK_CONTROL_SD_EN_MASK as CLK_SD_EN, CLOCK_CONTROL_SRST_ALL_MASK as SRST_ALL,
+    CLOCK_CONTROL_SRST_CMD_MASK as SRST_CMD, CLOCK_CONTROL_SRST_DATA_MASK as SRST_DATA,
+    CLOCK_CONTROL_STABLE_MASK as CLK_STABLE, CMD_XFER,
+    CMD_XFER_AUTO_CMD_SHIFT as TM_AUTO_CMD_SHIFT,
+    CMD_XFER_BLOCK_COUNT_EN_MASK as TM_BLOCK_COUNT_EN, CMD_XFER_DMA_MASK as TM_DMA,
+    CMD_XFER_MULTI_MASK as TM_MULTI, CMD_XFER_READ_MASK as TM_READ, CONTROLLER_VERSION,
+    CONTROLLER_VERSION_RESET as VERSION, HOST_CONTROL, HOST_CONTROL2,
+    HOST_CONTROL2_EXEC_TUNING_MASK as HC2_EXEC_TUNING, HOST_CONTROL2_SIGNAL_1V8_MASK as HC2_1V8,
+    HOST_CONTROL2_TUNED_CLK_MASK as HC2_TUNED_CLK, HOST_CONTROL_BUS_POWER_MASK as HC_BUS_POWER,
+    HOST_CONTROL_DMA_SELECT_SHIFT as HC_DMA_SHIFT, HOST_CONTROL_FIXED_MASK as HOST_CONTROL_FIXED,
+    INT_SIGNAL_EN, INT_STATUS, INT_STATUS_BLOCK_GAP_MASK as INT_BLOCK_GAP,
+    INT_STATUS_BUF_READ_RDY_MASK as INT_BUF_READ_RDY,
+    INT_STATUS_BUF_WRITE_RDY_MASK as INT_BUF_WRITE_RDY,
+    INT_STATUS_CMD_COMPLETE_MASK as INT_CMD_COMPLETE, INT_STATUS_DMA_MASK as INT_DMA,
+    INT_STATUS_EN, INT_STATUS_ERROR_MASK as INT_ERROR, INT_STATUS_ERR_ADMA_MASK as INT_ERR_ADMA,
+    INT_STATUS_ERR_CMD_TIMEOUT_MASK as INT_ERR_CMD_TIMEOUT,
+    INT_STATUS_XFER_COMPLETE_MASK as INT_XFER_COMPLETE, MAX_CURRENT,
+    MAX_CURRENT_RESET as MAX_CURRENT_VALUE, PRESENT_STATE,
+    PRESENT_STATE_BUF_READ_EN_MASK as PS_BUF_READ_EN,
+    PRESENT_STATE_BUF_WRITE_EN_MASK as PS_BUF_WRITE_EN, PRESENT_STATE_CMD_LINE_MASK,
+    PRESENT_STATE_DAT_LINES_MASK, PRESENT_STATE_RESET as PRESENT_STATE_IDLE, RESPONSE0, RESPONSE1,
+    RESPONSE2, RESPONSE3, SDMA_ADDR,
+};
+use crate::spec::Coverage;
 
-// Read-only identity, measured on a Pi 4B rev 1.5 with Linux running
-// (`0xfe340000` via /dev/mem, the controller idle at the time):
-/// Timeout clock 50 kHz, base clock 100 MHz, 2048-byte max block, 8-bit bus,
-/// ADMA2, high speed, SDMA, suspend/resume, 3.3 V and 1.8 V, no 64-bit system
-/// bus, embedded slot.
-const CAPS0: u32 = 0x45EE_6432;
-/// SDR50 and DDR50 (no SDR104), driver type C, re-tuning count 5 (16 s) in
-/// mode 3, SDR50 needs tuning.
-const CAPS1: u32 = 0x0000_A525;
-/// 32 mA at 3.3 V and at 1.8 V.
-const MAX_CURRENT_VALUE: u32 = 0x0008_0008;
-/// Vendor 0x10, SDHCI spec 3.00, in `0xFE` (the high half).
-const VERSION: u32 = 0x1002_0000;
-/// Card inserted and stable, card-detect pin high, write-protect pin high
-/// (bit 19: writable — Linux mounts the card read-only without it), CMD and
-/// DAT[7:0] lines high: the idle state, measured on a Pi 4B rev 1.5 with
-/// Linux running, and what start4 prints on the real board (`SD HOST: ...
-/// status: 0x1fff0000`, examples-on-real-hardware/sd-card-boot.log).
-const PRESENT_STATE_IDLE: u32 = 0x1FFF_0000;
-/// HOST_CONTROL bit 23 reads 1 whatever is written: measured `0x00800000`
-/// with Linux running, and the real board's bootloader prints `CTL0:
-/// 0x00800f00` right after writing `0x00000f00` (sd-card-boot.log).
-const HOST_CONTROL_FIXED: u32 = 0x0080_0000;
+/// Every register in `specs/emmc2.toml` is modelled.
+pub const COVERAGE: Coverage = Coverage {
+    block: "emmc2",
+    decoded: &[
+        SDMA_ADDR,
+        BLOCK_SIZE_COUNT,
+        ARGUMENT,
+        CMD_XFER,
+        RESPONSE0,
+        RESPONSE1,
+        RESPONSE2,
+        RESPONSE3,
+        BUFFER_DATA,
+        PRESENT_STATE,
+        HOST_CONTROL,
+        CLOCK_CONTROL,
+        INT_STATUS,
+        INT_STATUS_EN,
+        INT_SIGNAL_EN,
+        HOST_CONTROL2,
+        CAPABILITIES_0,
+        CAPABILITIES_1,
+        MAX_CURRENT,
+        ADMA_ERROR,
+        ADMA_ADDR,
+        CONTROLLER_VERSION,
+    ],
+};
 
-/// PRESENT_STATE bits.
-const PS_BUF_WRITE_EN: u32 = 1 << 10;
-const PS_BUF_READ_EN: u32 = 1 << 11;
-/// DAT[3:0] (bits 20..23) and CMD (bit 24) line levels.
-const PS_LINES_CMD_DAT: u32 = (0xF << 20) | (1 << 24);
+/// DAT[3:0] and CMD line levels.
+const PS_LINES_CMD_DAT: u32 = PRESENT_STATE_DAT_LINES_MASK | PRESENT_STATE_CMD_LINE_MASK;
 
-/// Transfer mode (low half of `0x0C`).
-const TM_DMA: u32 = 1 << 0;
-const TM_BLOCK_COUNT_EN: u32 = 1 << 1;
-const TM_AUTO_CMD_SHIFT: u32 = 2;
+/// `CMD_XFER.AUTO_CMD` values.
 const TM_AUTO_CMD12: u32 = 1;
 const TM_AUTO_CMD23: u32 = 2;
-const TM_READ: u32 = 1 << 4;
-const TM_MULTI: u32 = 1 << 5;
 
-/// HOST_CONTROL: DMA select (bits 4:3) and SD bus power (bit 8).
-const HC_DMA_SHIFT: u32 = 3;
+/// `HOST_CONTROL.DMA_SELECT`: 32-bit ADMA2.
 const HC_DMA_ADMA2_32: u32 = 2;
-const HC_BUS_POWER: u32 = 1 << 8;
 
-/// HOST_CONTROL2 (high half of `0x3C`).
-const HC2_1V8: u32 = 1 << (16 + 3);
-const HC2_EXEC_TUNING: u32 = 1 << (16 + 6);
-const HC2_TUNED_CLK: u32 = 1 << (16 + 7);
+/// Software-reset bits — self-clearing in the model.
+const SRST_MASK: u32 = SRST_ALL | SRST_CMD | SRST_DATA;
 
-/// CLOCK_CONTROL (low 16 bits of `0x2C`): internal-clock enable / stable, SD
-/// clock enable.
-const CLK_INTLEN: u32 = 1 << 0;
-const CLK_STABLE: u32 = 1 << 1;
-const CLK_SD_EN: u32 = 1 << 2;
-/// Software-reset bits (`0x2C` bits 24..26) — self-clearing in the model.
-const SRST_MASK: u32 = 0x0700_0000;
-const SRST_ALL: u32 = 1 << 24;
-const SRST_CMD: u32 = 1 << 25;
-const SRST_DATA: u32 = 1 << 26;
-
-/// INT_STATUS (Normal Interrupt Status, low 16 bits of `0x30`).
-const INT_CMD_COMPLETE: u32 = 1 << 0;
-const INT_XFER_COMPLETE: u32 = 1 << 1;
-const INT_DMA: u32 = 1 << 3;
-const INT_BUF_WRITE_RDY: u32 = 1 << 4;
-const INT_BUF_READ_RDY: u32 = 1 << 5;
-/// Error Interrupt summary: read-only, set while any error bit is.
-const INT_ERROR: u32 = 1 << 15;
-/// Error Interrupt Status (high half).
-const INT_ERR_CMD_TIMEOUT: u32 = 1 << 16;
-const INT_ERR_ADMA: u32 = 1 << 25;
 /// Data-circuit interrupt bits cleared by a DAT software reset (spec: buffer
 /// ready both ways, DMA, block-gap, transfer complete) — command complete is
 /// explicitly preserved.
 const INT_DATA_BITS: u32 =
-    INT_XFER_COMPLETE | INT_DMA | (1 << 2) | INT_BUF_WRITE_RDY | INT_BUF_READ_RDY;
+    INT_XFER_COMPLETE | INT_DMA | INT_BLOCK_GAP | INT_BUF_WRITE_RDY | INT_BUF_READ_RDY;
 
 /// ADMA2 descriptor attributes.
 const ADMA_VALID: u16 = 1 << 0;
@@ -150,10 +129,9 @@ const ADMA_INT: u16 = 1 << 2;
 const ADMA_ACT_SHIFT: u16 = 4;
 const ADMA_ACT_TRAN: u16 = 2;
 const ADMA_ACT_LINK: u16 = 3;
-/// ADMA error status: state at the error (bits 1:0) and length mismatch.
+/// `ADMA_ERROR.STATE` at the error: fetching a descriptor, transferring.
 const ADMA_ST_FDS: u32 = 1;
 const ADMA_ST_TFR: u32 = 3;
-const ADMA_LEN_MISMATCH: u32 = 1 << 2;
 /// Descriptors walked per transfer before the engine gives up (a link loop).
 const ADMA_MAX_DESCRIPTORS: usize = 1 << 16;
 

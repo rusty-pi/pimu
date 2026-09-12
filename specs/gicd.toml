@@ -1,0 +1,234 @@
+[block]
+name    = "gicd"
+bus     = "arm"
+base    = 0xFF841000
+size    = 0x1000
+summary = "GIC-400 distributor"
+notes   = "256 interrupt IDs, 4 CPUs, Security Extensions. The bit-per-interrupt arrays are listed at their architectural extent (1020 IDs); IDs past 255 read as zero. IPRIORITYR, ITARGETSR and the SGI source registers are byte-accessible. The armstub moves every interrupt to group 1 before Linux runs non-secure."
+
+[[block.source]]
+kind       = "linux"
+ref        = "dtb: interrupt-controller@40041000, arm,gic-400, reg <0x40041000 0x1000 ...> -> 0xFF841000"
+confidence = "high"
+
+[[block.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), section 4.3, and the GIC-400 TRM"
+confidence = "high"
+
+[[register]]
+name   = "CTLR"
+offset = 0x000
+access = "rw"
+notes  = "Secure view: EnableGrp0 (0), EnableGrp1 (1). Non-secure view: EnableGrp1 in bit 0."
+
+[[register.source]]
+kind       = "standard"
+ref        = "GICv2 4.3.1 GICD_CTLR"
+confidence = "high"
+
+[[register.source]]
+kind       = "decompile"
+ref        = "armstub writes 3 on the secondary cores"
+confidence = "high"
+
+[[register]]
+name   = "TYPER"
+offset = 0x004
+access = "r"
+reset  = 0x0000FC67
+notes  = "256 IDs, 4 CPUs, Security Extensions, LSPI 31."
+
+[[register.source]]
+kind       = "measured"
+ref        = "/dev/mem read of 0xFF841004 on the reference board"
+confidence = "high"
+
+[[register]]
+name   = "IIDR"
+offset = 0x008
+access = "r"
+reset  = 0x0200143B
+notes  = "ARM (0x43B), GIC-400 distributor r0p1."
+
+[[register.source]]
+kind       = "measured"
+ref        = "/dev/mem read of 0xFF841008 on the reference board"
+confidence = "high"
+
+[[register]]
+name   = "IGROUPR"
+offset = 0x080
+count  = 32
+stride = 4
+access = "rw"
+notes  = "Group per interrupt: 1 = group 1 (non-secure). Secure access only."
+
+[[register.source]]
+kind       = "standard"
+ref        = "GICv2 4.3.4 GICD_IGROUPRn"
+confidence = "high"
+
+[[register.source]]
+kind       = "decompile"
+ref        = "armstub writes ~0 to IGROUPR0..7"
+confidence = "high"
+
+[[register]]
+name   = "ISENABLER"
+offset = 0x100
+count  = 32
+stride = 4
+access = "rw"
+notes  = "Set-enable, one bit per interrupt."
+
+[[register.source]]
+kind       = "standard"
+ref        = "GICv2 4.3.5 GICD_ISENABLERn"
+confidence = "high"
+
+[[register]]
+name   = "ICENABLER"
+offset = 0x180
+count  = 32
+stride = 4
+access = "rw"
+notes  = "Clear-enable."
+
+[[register.source]]
+kind       = "standard"
+ref        = "GICv2 4.3.6 GICD_ICENABLERn"
+confidence = "high"
+
+[[register]]
+name   = "ISPENDR"
+offset = 0x200
+count  = 32
+stride = 4
+access = "rw"
+notes  = "Set-pending. SGI bits are read-only here."
+
+[[register.source]]
+kind       = "standard"
+ref        = "GICv2 4.3.7 GICD_ISPENDRn"
+confidence = "high"
+
+[[register]]
+name   = "ICPENDR"
+offset = 0x280
+count  = 32
+stride = 4
+access = "rw"
+notes  = "Clear-pending."
+
+[[register.source]]
+kind       = "standard"
+ref        = "GICv2 4.3.8 GICD_ICPENDRn"
+confidence = "high"
+
+[[register]]
+name   = "ISACTIVER"
+offset = 0x300
+count  = 32
+stride = 4
+access = "rw"
+notes  = "Set-active."
+
+[[register.source]]
+kind       = "standard"
+ref        = "GICv2 4.3.9 GICD_ISACTIVERn"
+confidence = "high"
+
+[[register]]
+name   = "ICACTIVER"
+offset = 0x380
+count  = 32
+stride = 4
+access = "rw"
+notes  = "Clear-active."
+
+[[register.source]]
+kind       = "standard"
+ref        = "GICv2 4.3.10 GICD_ICACTIVERn"
+confidence = "high"
+
+[[register]]
+name   = "IPRIORITYR"
+offset = 0x400
+count  = 256
+stride = 4
+access = "rw"
+notes  = "One priority byte per interrupt; 32 levels, the low three bits read 0. Non-secure software sees group-1 priorities shifted up a bit."
+
+[[register.source]]
+kind       = "standard"
+ref        = "GICv2 4.3.11 GICD_IPRIORITYRn"
+confidence = "high"
+
+[[register]]
+name   = "ITARGETSR"
+offset = 0x800
+count  = 256
+stride = 4
+access = "rw"
+notes  = "One CPU-target byte per interrupt; banked IDs read back as 'this CPU'."
+
+[[register.source]]
+kind       = "standard"
+ref        = "GICv2 4.3.12 GICD_ITARGETSRn"
+confidence = "high"
+
+[[register.source]]
+kind       = "linux"
+ref        = "irq-gic.c gic_get_cpumask relies on the banked read-back"
+confidence = "high"
+
+[[register]]
+name   = "ICFGR"
+offset = 0xC00
+count  = 64
+stride = 4
+access = "rw"
+notes  = "Two bits per interrupt, bit 1 set = edge. SGIs are fixed at edge."
+
+[[register.source]]
+kind       = "standard"
+ref        = "GICv2 4.3.13 GICD_ICFGRn"
+confidence = "high"
+
+[[register]]
+name   = "SGIR"
+offset = 0xF00
+access = "w"
+notes  = "Raise an SGI: ID 3:0, target list 23:16, filter 25:24, NSATT 15."
+
+[[register.source]]
+kind       = "standard"
+ref        = "GICv2 4.3.15 GICD_SGIR"
+confidence = "high"
+
+[[register]]
+name   = "CPENDSGIR"
+offset = 0xF10
+count  = 4
+stride = 4
+access = "rw"
+notes  = "Clear SGI pending, one source-CPU byte per SGI."
+
+[[register.source]]
+kind       = "standard"
+ref        = "GICv2 4.3.16 GICD_CPENDSGIRn"
+confidence = "high"
+
+[[register]]
+name   = "SPENDSGIR"
+offset = 0xF20
+count  = 4
+stride = 4
+access = "rw"
+notes  = "Set SGI pending, one source-CPU byte per SGI."
+
+[[register.source]]
+kind       = "standard"
+ref        = "GICv2 4.3.17 GICD_SPENDSGIRn"
+confidence = "high"

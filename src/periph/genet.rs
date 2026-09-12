@@ -113,93 +113,153 @@
 use super::bcm54213pe::{self, Bcm54213pe};
 use crate::bus::{BusResult, MmioDevice, Width};
 
-pub const SIZE: u32 = 0x1_0000;
-
 use crate::mem::Ram;
 use crate::net::NetBackend;
+use crate::spec::genet as regs;
+use crate::spec::Coverage;
 
-// SYS
-pub const SYS_REV_CTRL: u32 = 0x0000;
-pub const SYS_PORT_CTRL: u32 = 0x0004;
-pub const SYS_RBUF_FLUSH_CTRL: u32 = 0x0008;
-pub const SYS_TBUF_FLUSH_CTRL: u32 = 0x000c;
-// EXT
-pub const EXT_PWR_MGMT: u32 = 0x0080;
-pub const EXT_RGMII_OOB_CTRL: u32 = 0x008c;
-// INTRL2 (two instances, 0x40 apart)
-pub const INTRL2_0: u32 = 0x0200;
-pub const INTRL2_1: u32 = 0x0240;
-const INTRL2_CPU_STAT: u32 = 0x00;
-const INTRL2_CPU_SET: u32 = 0x04;
-const INTRL2_CPU_CLEAR: u32 = 0x08;
-const INTRL2_CPU_MASK_STATUS: u32 = 0x0c;
-const INTRL2_CPU_MASK_SET: u32 = 0x10;
-const INTRL2_CPU_MASK_CLEAR: u32 = 0x14;
-pub const UMAC_IRQ_RXDMA_MBDONE: u32 = 1 << 13;
-pub const UMAC_IRQ_TXDMA_MBDONE: u32 = 1 << 16;
-pub const UMAC_IRQ_MDIO_DONE: u32 = 1 << 23;
-pub const UMAC_IRQ_MDIO_ERROR: u32 = 1 << 24;
+pub use regs::{
+    EXT_PWR_MGMT, EXT_RGMII_OOB_CTRL, HFB_CTRL, RBUF_CTRL, RDMA_DESC, SIZE, SYS_PORT_CTRL,
+    SYS_RBUF_FLUSH_CTRL, SYS_REV_CTRL, SYS_TBUF_FLUSH_CTRL, TBUF_BP_MC, TBUF_CTRL, TDMA_DESC,
+    UMAC_CMD, UMAC_EEE_CTRL, UMAC_HD_BKP_CTRL, UMAC_MAC0, UMAC_MAC1, UMAC_MDIO_CFG, UMAC_MDIO_CMD,
+    UMAC_MIB_CTRL, UMAC_MODE, UMAC_PAUSE_QUANTA, UMAC_TX_IPG_LEN,
+};
+
+/// The whole window is register storage, so every register in
+/// `specs/genet.toml` is modelled; the ones with behaviour are intercepted in
+/// [`Genet::read_word`] / [`Genet::write_word`].
+pub const COVERAGE: Coverage = Coverage {
+    block: "genet",
+    decoded: &[
+        regs::SYS_REV_CTRL,
+        regs::SYS_PORT_CTRL,
+        regs::SYS_RBUF_FLUSH_CTRL,
+        regs::SYS_TBUF_FLUSH_CTRL,
+        regs::EXT_PWR_MGMT,
+        regs::EXT_RGMII_OOB_CTRL,
+        regs::EXT_GPHY_CTRL,
+        regs::INTRL2_CPU_STAT,
+        regs::INTRL2_CPU_SET,
+        regs::INTRL2_CPU_CLEAR,
+        regs::INTRL2_CPU_MASK_STATUS,
+        regs::INTRL2_CPU_MASK_SET,
+        regs::INTRL2_CPU_MASK_CLEAR,
+        regs::RBUF_CTRL,
+        regs::RBUF_CHK_CTRL,
+        regs::RBUF_TBUF_SIZE_CTRL,
+        regs::TBUF_CTRL,
+        regs::TBUF_BP_MC,
+        regs::UMAC_HD_BKP_CTRL,
+        regs::UMAC_CMD,
+        regs::UMAC_MAC0,
+        regs::UMAC_MAC1,
+        regs::UMAC_MAX_FRAME_LEN,
+        regs::UMAC_PAUSE_QUANTA,
+        regs::UMAC_MODE,
+        regs::UMAC_TX_IPG_LEN,
+        regs::UMAC_EEE_CTRL,
+        regs::UMAC_MIB,
+        regs::UMAC_MIB_CTRL,
+        regs::UMAC_MDIO_CMD,
+        regs::UMAC_MDIO_CFG,
+        regs::RDMA_DESC,
+        regs::RDMA_RING_WRITE_PTR,
+        regs::RDMA_RING_PROD_INDEX,
+        regs::RDMA_RING_CONS_INDEX,
+        regs::RDMA_RING_BUF_SIZE,
+        regs::RDMA_RING_START_ADDR,
+        regs::RDMA_RING_END_ADDR,
+        regs::RDMA_RING_CFG,
+        regs::RDMA_CTRL,
+        regs::RDMA_STATUS,
+        regs::RDMA_INDEX2RING,
+        regs::TDMA_DESC,
+        regs::TDMA_RING_READ_PTR,
+        regs::TDMA_RING_CONS_INDEX,
+        regs::TDMA_RING_PROD_INDEX,
+        regs::TDMA_RING_BUF_SIZE,
+        regs::TDMA_RING_START_ADDR,
+        regs::TDMA_RING_END_ADDR,
+        regs::TDMA_RING_CFG,
+        regs::TDMA_CTRL,
+        regs::TDMA_STATUS,
+        regs::HFB_RAM,
+        regs::HFB_CTRL,
+        regs::HFB_FLT_ENABLE,
+        regs::HFB_FLT_LEN,
+    ],
+};
+
+// INTRL2: two instances; the rest of the code works with offsets within one.
+pub const INTRL2_0: u32 = regs::INTRL2_CPU_STAT;
+pub const INTRL2_1: u32 = INTRL2_0 + INTRL2_STRIDE;
+const INTRL2_STRIDE: u32 = regs::INTRL2_CPU_STAT_STRIDE;
+const INTRL2_END: u32 = INTRL2_1 + INTRL2_STRIDE - 1;
+const INTRL2_CPU_STAT: u32 = 0;
+const INTRL2_CPU_SET: u32 = regs::INTRL2_CPU_SET - INTRL2_0;
+const INTRL2_CPU_CLEAR: u32 = regs::INTRL2_CPU_CLEAR - INTRL2_0;
+const INTRL2_CPU_MASK_STATUS: u32 = regs::INTRL2_CPU_MASK_STATUS - INTRL2_0;
+const INTRL2_CPU_MASK_SET: u32 = regs::INTRL2_CPU_MASK_SET - INTRL2_0;
+const INTRL2_CPU_MASK_CLEAR: u32 = regs::INTRL2_CPU_MASK_CLEAR - INTRL2_0;
+pub const UMAC_IRQ_RXDMA_MBDONE: u32 = regs::INTRL2_CPU_STAT_RXDMA_MBDONE_MASK;
+pub const UMAC_IRQ_TXDMA_MBDONE: u32 = regs::INTRL2_CPU_STAT_TXDMA_MBDONE_MASK;
+pub const UMAC_IRQ_MDIO_DONE: u32 = regs::INTRL2_CPU_STAT_MDIO_DONE_MASK;
+pub const UMAC_IRQ_MDIO_ERROR: u32 = regs::INTRL2_CPU_STAT_MDIO_ERROR_MASK;
 // RBUF / TBUF
-pub const RBUF_CTRL: u32 = 0x0300;
-const RBUF_64B_EN: u32 = 1 << 0;
-const RBUF_ALIGN_2B: u32 = 1 << 1;
-pub const TBUF_CTRL: u32 = 0x0600;
-const TBUF_64B_EN: u32 = 1 << 0;
-pub const TBUF_BP_MC: u32 = 0x060c;
+const RBUF_64B_EN: u32 = regs::RBUF_CTRL_STATUS64_MASK;
+const RBUF_ALIGN_2B: u32 = regs::RBUF_CTRL_ALIGN_2B_MASK;
+const TBUF_64B_EN: u32 = regs::TBUF_CTRL_STATUS64_MASK;
 // UMAC
-pub const UMAC: u32 = 0x0800;
-pub const UMAC_HD_BKP_CTRL: u32 = UMAC + 0x004;
-pub const UMAC_CMD: u32 = UMAC + 0x008;
-pub const UMAC_MAC0: u32 = UMAC + 0x00c;
-pub const UMAC_MAC1: u32 = UMAC + 0x010;
-pub const UMAC_PAUSE_QUANTA: u32 = UMAC + 0x018;
-pub const UMAC_MODE: u32 = UMAC + 0x044;
-pub const UMAC_TX_IPG_LEN: u32 = UMAC + 0x05c;
-pub const UMAC_EEE_CTRL: u32 = UMAC + 0x064;
-pub const UMAC_MIB_START: u32 = UMAC + 0x400;
-pub const UMAC_MIB_CTRL: u32 = UMAC + 0x580;
-pub const UMAC_MDIO_CMD: u32 = UMAC + 0x614;
-pub const UMAC_MDIO_CFG: u32 = UMAC + 0x618;
-// DMA register blocks: rdma/tdma offset + 256 descriptors x 12 bytes +
-// 17 rings x 0x40 (`GENET_RDMA_REG_OFF + DMA_RINGS_SIZE`).
-pub const RDMA_REGS: u32 = 0x3040;
-pub const TDMA_REGS: u32 = 0x5040;
-const DMA_CTRL: u32 = 0x04;
-const DMA_STATUS: u32 = 0x08;
-const DMA_EN: u32 = 1 << 0;
-pub const RDMA_DESC: u32 = 0x2000;
-pub const TDMA_DESC: u32 = 0x4000;
-pub const RDMA_RINGS: u32 = 0x2c00;
-pub const TDMA_RINGS: u32 = 0x4c00;
-const RING_STRIDE: u32 = 0x40;
-const RINGS: usize = 17;
+pub const UMAC_MIB_START: u32 = regs::UMAC_MIB;
+// DMA: each direction's ring-config / control / status block, as offsets
+// within it; both directions are laid out alike.
+pub const RDMA_REGS: u32 = regs::RDMA_RING_CFG;
+pub const TDMA_REGS: u32 = regs::TDMA_RING_CFG;
+const DMA_CTRL: u32 = regs::RDMA_CTRL - RDMA_REGS;
+const DMA_STATUS: u32 = regs::RDMA_STATUS - RDMA_REGS;
+const DMA_EN: u32 = regs::RDMA_CTRL_EN_MASK;
+/// Descriptor RAM, three words a descriptor.
+const DESC_RAM_BYTES: u32 = regs::RDMA_DESC_COUNT * regs::RDMA_DESC_STRIDE;
+pub const RDMA_RINGS: u32 = regs::RDMA_RING_WRITE_PTR;
+pub const TDMA_RINGS: u32 = regs::TDMA_RING_READ_PTR;
+const RING_STRIDE: u32 = regs::RDMA_RING_WRITE_PTR_STRIDE;
+const RINGS: usize = regs::RDMA_RING_WRITE_PTR_COUNT as usize;
 /// The ring frames go to when no HFB filter claims them: the one the
 /// bootloader and start4 use, and Linux before 3b5d4f5a820d.
 pub const DEFAULT_RING: usize = 16;
 /// `DMA_INDEX2RING_0..7` in the RDMA registers: a 4-bit ring number per HFB
 /// filter, eight to a word.
-const DMA_INDEX2RING: u32 = 0x70;
+const DMA_INDEX2RING: u32 = regs::RDMA_INDEX2RING - RDMA_REGS;
 // Hardware Filter Block. Filter RAM: 48 filters of 128 words, two frame bytes
 // a word (even byte in 15:8 with its high/low nibble mask in bits 19/18, odd
 // byte in 7:0 with bits 17/16), as `bcmgenet_hfb_insert_data` writes them.
-const HFB_RAM: u32 = 0x8000;
-const HFB_FILTERS: usize = 48;
+const HFB_RAM: u32 = regs::HFB_RAM;
 const HFB_FILTER_WORDS: usize = 128;
-pub const HFB_CTRL: u32 = 0xfc00;
-const HFB_EN: u32 = 1 << 0;
+const HFB_FILTERS: usize = regs::HFB_RAM_COUNT as usize / HFB_FILTER_WORDS;
+const HFB_EN: u32 = regs::HFB_CTRL_EN_MASK;
 /// Two enable words: filters 32..47 at `+0x04`, filters 0..31 at `+0x08`.
-const HFB_FLT_ENABLE: u32 = 0xfc04;
+const HFB_FLT_ENABLE: u32 = regs::HFB_FLT_ENABLE;
 /// Filter lengths in bytes, one byte a filter, filter 47 first.
-const HFB_FLT_LEN: u32 = 0xfc1c;
-// Ring registers.
-pub const RING_PTR: u32 = 0x00;
-pub const RDMA_PROD_INDEX: u32 = 0x08;
-pub const TDMA_CONS_INDEX: u32 = 0x08;
-pub const RDMA_CONS_INDEX: u32 = 0x0c;
-pub const TDMA_PROD_INDEX: u32 = 0x0c;
-pub const RING_BUF_SIZE: u32 = 0x10;
-pub const RING_START: u32 = 0x14;
-pub const RING_END: u32 = 0x1c;
+const HFB_FLT_LEN: u32 = regs::HFB_FLT_LEN;
+// Ring registers, as offsets within one ring's block.
+pub const RING_PTR: u32 = regs::RDMA_RING_WRITE_PTR - RDMA_RINGS;
+pub const RDMA_PROD_INDEX: u32 = regs::RDMA_RING_PROD_INDEX - RDMA_RINGS;
+pub const TDMA_CONS_INDEX: u32 = regs::TDMA_RING_CONS_INDEX - TDMA_RINGS;
+pub const RDMA_CONS_INDEX: u32 = regs::RDMA_RING_CONS_INDEX - RDMA_RINGS;
+pub const TDMA_PROD_INDEX: u32 = regs::TDMA_RING_PROD_INDEX - TDMA_RINGS;
+pub const RING_BUF_SIZE: u32 = regs::RDMA_RING_BUF_SIZE - RDMA_RINGS;
+pub const RING_START: u32 = regs::RDMA_RING_START_ADDR - RDMA_RINGS;
+pub const RING_END: u32 = regs::RDMA_RING_END_ADDR - RDMA_RINGS;
+// The transmit side shares the receive side's ring and DMA layout.
+const _: () = assert!(
+    regs::TDMA_RING_READ_PTR - TDMA_RINGS == RING_PTR
+        && regs::TDMA_RING_BUF_SIZE - TDMA_RINGS == RING_BUF_SIZE
+        && regs::TDMA_RING_START_ADDR - TDMA_RINGS == RING_START
+        && regs::TDMA_RING_END_ADDR - TDMA_RINGS == RING_END
+        && regs::TDMA_RING_READ_PTR_STRIDE == RING_STRIDE
+        && regs::TDMA_CTRL - TDMA_REGS == DMA_CTRL
+        && regs::TDMA_STATUS - TDMA_REGS == DMA_STATUS
+);
 const INDEX_MASK: u32 = 0xffff;
 // Descriptor `length_status`.
 const DESC_LEN_SHIFT: u32 = 16;
@@ -213,25 +273,26 @@ const STATUS_BLOCK: usize = 64;
 const ETH_ZLEN: usize = 60;
 
 // UMAC_CMD bits
-const CMD_TX_EN: u32 = 1 << 0;
-const CMD_RX_EN: u32 = 1 << 1;
-const CMD_SPEED_SHIFT: u32 = 2;
-const CMD_PROMISC: u32 = 1 << 4;
-const CMD_CRC_FWD: u32 = 1 << 6;
-const CMD_HD_EN: u32 = 1 << 10;
-const CMD_RX_PAUSE_IGNORE: u32 = 1 << 8;
-const CMD_TX_PAUSE_IGNORE: u32 = 1 << 28;
+const CMD_TX_EN: u32 = regs::UMAC_CMD_TX_EN_MASK;
+const CMD_RX_EN: u32 = regs::UMAC_CMD_RX_EN_MASK;
+const CMD_SPEED_SHIFT: u32 = regs::UMAC_CMD_SPEED_SHIFT;
+const CMD_PROMISC: u32 = regs::UMAC_CMD_PROMISC_MASK;
+const CMD_CRC_FWD: u32 = regs::UMAC_CMD_CRC_FWD_MASK;
+const CMD_HD_EN: u32 = regs::UMAC_CMD_HD_EN_MASK;
+const CMD_RX_PAUSE_IGNORE: u32 = regs::UMAC_CMD_RX_PAUSE_IGNORE_MASK;
+const CMD_TX_PAUSE_IGNORE: u32 = regs::UMAC_CMD_TX_PAUSE_IGNORE_MASK;
 // MDIO_CMD bits
-pub const MDIO_START_BUSY: u32 = 1 << 29;
-pub const MDIO_READ_FAIL: u32 = 1 << 28;
-pub const MDIO_RD: u32 = 2 << 26;
-pub const MDIO_WR: u32 = 1 << 26;
-pub const MDIO_PMD_SHIFT: u32 = 21;
-pub const MDIO_REG_SHIFT: u32 = 16;
+pub const MDIO_START_BUSY: u32 = regs::UMAC_MDIO_CMD_START_BUSY_MASK;
+pub const MDIO_READ_FAIL: u32 = regs::UMAC_MDIO_CMD_READ_FAIL_MASK;
+const MDIO_OP: u32 = regs::UMAC_MDIO_CMD_OP_MASK;
+pub const MDIO_RD: u32 = 2 << regs::UMAC_MDIO_CMD_OP_SHIFT;
+pub const MDIO_WR: u32 = 1 << regs::UMAC_MDIO_CMD_OP_SHIFT;
+pub const MDIO_PMD_SHIFT: u32 = regs::UMAC_MDIO_CMD_PMD_SHIFT;
+pub const MDIO_REG_SHIFT: u32 = regs::UMAC_MDIO_CMD_REG_SHIFT;
 
 /// `SYS_REV_CTRL`, measured: major 6 in bits 27:24, which `bcmgenet` maps to
 /// GENET v5 (`GENET 5.0 EPHY: 0x0000`).
-pub const REV_CTRL_VALUE: u32 = 0x0600_0000;
+pub const REV_CTRL_VALUE: u32 = regs::SYS_REV_CTRL_RESET;
 
 /// `DMA_STATUS` bit 0: DMA disabled. Bits 1..=17: ring `n - 1` disabled.
 /// Bit 18: descriptor RAM initialisation busy (the bootloader waits for it to
@@ -280,22 +341,21 @@ impl Genet {
         let mut regs = vec![0u32; (SIZE / 4) as usize];
         let mut set = |off: u32, v: u32| regs[(off / 4) as usize] = v;
         // Measured, and not written by the bootloader or start4 on an SD boot
-        // nor by Linux for an RGMII PHY (see the module docs).
-        set(EXT_PWR_MGMT, 0x051f_02c3);
-        set(TBUF_BP_MC, 0x0000_ffff);
-        set(UMAC_HD_BKP_CTRL, 0x0000_0014);
-        set(UMAC_PAUSE_QUANTA, 0x0000_ffff);
-        set(UMAC_TX_IPG_LEN, 0x0000_3c00);
-        set(UMAC_MDIO_CFG, 0x0000_0091);
-        // Measured 0x00f00050: Linux sets RGMII_MODE_EN (bit 6) and RGMII_LINK
-        // (bit 4) and leaves bits 23:20 alone; the bootloader writes 0xf000xx
-        // itself.
-        set(EXT_RGMII_OOB_CTRL, 0x00f0_0000);
-        // Measured 0xc043: Linux only sets bits 1:0 (RBUF_ALIGN_2B,
-        // RBUF_64B_EN).
-        set(RBUF_CTRL, 0x0000_c040);
-        // Measured 0x48: Linux sets EEE_EN (bit 3) once EEE is active.
-        set(UMAC_EEE_CTRL, 0x0000_0040);
+        // nor by Linux for an RGMII PHY (see the module docs). The last three
+        // are the measured values less the bits Linux sets.
+        for (off, v) in [
+            (EXT_PWR_MGMT, regs::EXT_PWR_MGMT_RESET),
+            (TBUF_BP_MC, regs::TBUF_BP_MC_RESET),
+            (UMAC_HD_BKP_CTRL, regs::UMAC_HD_BKP_CTRL_RESET),
+            (UMAC_PAUSE_QUANTA, regs::UMAC_PAUSE_QUANTA_RESET),
+            (UMAC_TX_IPG_LEN, regs::UMAC_TX_IPG_LEN_RESET),
+            (UMAC_MDIO_CFG, regs::UMAC_MDIO_CFG_RESET),
+            (EXT_RGMII_OOB_CTRL, regs::EXT_RGMII_OOB_CTRL_RESET),
+            (RBUF_CTRL, regs::RBUF_CTRL_RESET),
+            (UMAC_EEE_CTRL, regs::UMAC_EEE_CTRL_RESET),
+        ] {
+            set(off, v);
+        }
         Genet {
             regs,
             irq_stat: [0; 2],
@@ -316,9 +376,9 @@ impl Genet {
     fn read_word(&self, off: u32) -> u32 {
         match off {
             SYS_REV_CTRL => REV_CTRL_VALUE,
-            INTRL2_0..=0x027f => {
-                let i = ((off - INTRL2_0) / 0x40) as usize;
-                match (off - INTRL2_0) % 0x40 {
+            INTRL2_0..=INTRL2_END => {
+                let i = ((off - INTRL2_0) / INTRL2_STRIDE) as usize;
+                match (off - INTRL2_0) % INTRL2_STRIDE {
                     INTRL2_CPU_STAT => self.irq_stat[i],
                     INTRL2_CPU_MASK_STATUS => self.irq_mask[i],
                     _ => 0,
@@ -336,9 +396,9 @@ impl Genet {
     fn write_word(&mut self, off: u32, v: u32) {
         match off {
             SYS_REV_CTRL => {}
-            INTRL2_0..=0x027f => {
-                let i = ((off - INTRL2_0) / 0x40) as usize;
-                match (off - INTRL2_0) % 0x40 {
+            INTRL2_0..=INTRL2_END => {
+                let i = ((off - INTRL2_0) / INTRL2_STRIDE) as usize;
+                match (off - INTRL2_0) % INTRL2_STRIDE {
                     INTRL2_CPU_SET => self.irq_stat[i] |= v,
                     INTRL2_CPU_CLEAR => self.irq_stat[i] &= !v,
                     INTRL2_CPU_MASK_SET => self.irq_mask[i] |= v,
@@ -414,7 +474,7 @@ impl Genet {
     /// descriptor RAM.
     fn desc(desc_ram: u32, ptr: u32) -> Option<u32> {
         let off = desc_ram + ptr * 4;
-        (off + 12 <= desc_ram + 256 * 12).then_some(off)
+        (off + 12 <= desc_ram + DESC_RAM_BYTES).then_some(off)
     }
 
     fn set_index(&mut self, at: u32, index: u32) {
@@ -634,7 +694,7 @@ impl Genet {
         let present = pmd == bcm54213pe::ADDR;
         let mut done = v & !(MDIO_START_BUSY | MDIO_READ_FAIL);
         let mut irq = UMAC_IRQ_MDIO_DONE;
-        match v & (3 << 26) {
+        match v & MDIO_OP {
             MDIO_RD => {
                 done &= !0xffff;
                 if present {

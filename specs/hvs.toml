@@ -1,0 +1,54 @@
+[block]
+name    = "hvs"
+base    = 0x7E400000
+size    = 0x1000
+summary = "HVS (Hardware Video Scaler): identification and the per-channel frame-swap words"
+notes   = "No display is modelled: scanout catches up with a queued frame immediately. Everything else is stored and read back."
+
+[[block.source]]
+kind       = "decompile"
+ref        = "bootloader diagnostic-display channel-swap wait 0x0008adc0; start4 display bring-up 0x3EC945CC"
+confidence = "high"
+
+[[register]]
+name   = "DISPID"
+offset = 0x08
+access = "r"
+reset  = 0x64647276
+notes  = "Identification. start4 gates its whole display bring-up, and with it the HDMI provider registration, on this value; 0 reads as 'no HVS' (issue #13)."
+
+[[register.source]]
+kind       = "measured"
+ref        = "/sys/kernel/debug/dri/0/hvs_regs on the reference board: SCALER_DISPID = 0x64647276"
+confidence = "high"
+
+[[register.source]]
+kind       = "decompile"
+ref        = "0x3EC945CC compares [0x7E400008] with 0x64647276 and returns -1 on a mismatch"
+confidence = "high"
+
+[[register]]
+name   = "REQUESTED"
+offset = 0x20
+count  = 4
+stride = 4
+access = "rw"
+notes  = "Frame each channel has queued."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "0x0008adc0 spins until (*current & 0xFFFF) == (*requested & 0xFFF), requested at +0x20 + 4 * chan"
+confidence = "medium"
+
+[[register]]
+name   = "CURRENT"
+offset = 0x30
+count  = 4
+stride = 4
+access = "r"
+notes  = "Frame each channel is scanning out. The model mirrors REQUESTED."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "0x0008adc0 reads current at +0x30 + 4 * chan"
+confidence = "medium"
