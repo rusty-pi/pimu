@@ -556,7 +556,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         );
     }
     if let Some(a) = &emu.arm {
-        println!("\n--- ARM core 0 (#40) ---");
+        println!("\n--- ARM cores (#40) ---");
         if let Some(h) = a.handoff {
             println!(
                 "  armstub   kernel_entry32 {:#010x}  dtb_ptr32 {:#010x}",
@@ -571,27 +571,33 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
             Some(Err(e)) => println!("  bootargs  not patched: {e}"),
             _ => {}
         }
-        match a.kernel_entered {
-            Some((cycles, el, x0)) => {
-                println!("  kernel    entered at cycle {cycles} in EL{el}, x0 = {x0:#x}")
+        println!(
+            "  ran       {} cycles, {} of them with every core asleep",
+            a.cycles, a.slept
+        );
+        for (i, c) in a.cores.iter().enumerate() {
+            match c.entered {
+                Some((cycles, el, pc, x0)) => println!(
+                    "  core {i}    left the armstub at cycle {cycles} for {pc:#x} in EL{el}, x0 = {x0:#x}"
+                ),
+                None => println!("  core {i}    still in the armstub"),
             }
-            None => println!("  kernel    not reached"),
+            println!(
+                "            {} instructions, {} exceptions, {} interrupts; now pc {:#x}  EL{}  sp {:#x}{}",
+                c.insns,
+                c.exceptions,
+                c.interrupts,
+                c.cpu.pc,
+                c.cpu.el,
+                c.cpu.sp(),
+                if c.waiting { "  (wfi)" } else { "" }
+            );
         }
-        println!(
-            "  ran       {} instructions, {} cycles asleep, {} exceptions, {} interrupts",
-            a.insns, a.slept, a.exceptions, a.interrupts
-        );
-        println!(
-            "  now       pc {:#x}  EL{}  sp {:#x}",
-            a.cpu.pc,
-            a.cpu.el,
-            a.cpu.sp()
-        );
         if let Some(stop) = &a.stopped {
             println!("  stopped   {stop:x?}");
         }
     } else if arm {
-        println!("\n--- ARM core 0 (#40) ---\n  never released");
+        println!("\n--- ARM cores (#40) ---\n  never released");
     }
     if report.core1_release_never_resolved {
         println!(

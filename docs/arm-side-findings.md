@@ -33,9 +33,11 @@ is on `main`:
   `[0xf8] = 0x2eff1e00` (dtb).
 - The armstub touches two IMPLEMENTATION DEFINED registers (`L2CTLR_EL1`,
   `CPUECTLR_EL1`); plain storage is enough.
-- Secondary cores wait on the spin table at `0xd8..0xf0`. With one core
-  modelled, Linux gives up after its own 5 s timeout per core
-  (`CPU1: failed to come online`) and carries on with one.
+- Secondary cores wait on the spin table at `0xd8..0xf0`. All four cores
+  come out of reset together and run the armstub (each sets up its own
+  banked GIC state); Linux then releases 1..3 through the spin table
+  (`smp: Brought up 1 node, 4 CPUs`). With only core 0 modelled, Linux gives
+  up after its own 5 s timeout per core (`CPU1: failed to come online`).
 - RAM for the ARM is the handed-over tree's `/memory` (948 MiB with the pinned
   firmware), not the whole SDRAM.
 

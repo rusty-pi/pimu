@@ -175,8 +175,11 @@ pub struct Cpu {
     pub tlb: Tlb,
     /// Set by the executor while an `LDTR`/`STTR` accesses memory.
     pub(super) unprivileged: bool,
-    /// The local exclusive monitor: the address `ldxr` marked, if any.
-    pub(super) exclusive: Option<u64>,
+    /// The exclusive monitor: the address `ldxr` marked, if any, as
+    /// `(virtual, physical)`.
+    pub(super) exclusive: Option<(u64, u64)>,
+    /// The physical address of the last data read, for `ldxr` to mark.
+    pub(super) last_pa: u64,
     /// Set by the executor for the instruction in flight: where to go next.
     pub(super) next_pc: u64,
 }
@@ -215,6 +218,7 @@ impl Cpu {
             tlb: Tlb::new(),
             unprivileged: false,
             exclusive: None,
+            last_pa: 0,
             next_pc: 0,
         }
     }
@@ -265,6 +269,18 @@ impl Cpu {
     /// Is the translation regime the core is in now running with its MMU on?
     pub fn mmu_on(&self) -> bool {
         self.regime().is_some()
+    }
+
+    /// Another core wrote physical `[lo, hi)`: the global monitor clears this
+    /// core's exclusive mark if the write touched its 64-byte granule (the
+    /// A72's reservation granule, `CTR_EL0.ERG`).
+    pub fn snoop_write(&mut self, lo: u64, hi: u64) {
+        if let Some((_, pa)) = self.exclusive {
+            let granule = pa & !63;
+            if lo < granule + 64 && hi > granule {
+                self.exclusive = None;
+            }
+        }
     }
 
     /// Exception entry to AArch64 `target` (ARM ARM D1.10.2): save `PSTATE`

@@ -86,6 +86,8 @@ pub struct Tlb {
     entries: Box<[Entry]>,
     pub hits: u64,
     pub walks: u64,
+    /// Set by a `TLBI`: the machine is to flush the other cores' TLBs too.
+    pub broadcast: bool,
 }
 
 impl Default for Tlb {
@@ -101,6 +103,7 @@ impl Tlb {
             entries: vec![Entry::default(); TLB_ENTRIES].into_boxed_slice(),
             hits: 0,
             walks: 0,
+            broadcast: false,
         }
     }
 
@@ -368,6 +371,7 @@ impl Cpu {
         let (pa, split) = self
             .translate_access(mem, va, size, Kind::Read)
             .map_err(|(a, f)| abort(a, f))?;
+        self.last_pa = pa;
         let Some((in_page, pa2)) = split else {
             return mem.read(pa, size).map_err(|_| abort(va, FSC_EXTERNAL));
         };
