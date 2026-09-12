@@ -387,7 +387,7 @@ impl Emulator {
         // (`[gp+807672/676/680]`); none of them fire, so gpioman reports
         // `error 1`. Its own diagnostics say why.
 
-        // RVF_HEARTBEAT=<n>: every <n> million retired instructions, print model
+        // RVF_HEARTBEAT=<n>: every <n> retired instructions, print model
         // time, the running ThreadX thread and the PC. The one diagnostic that
         // says whether a stalled boot is wedged or merely slow.
         let mut next_beat = self.cpu.retired + diag.heartbeat;

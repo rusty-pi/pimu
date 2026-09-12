@@ -1517,9 +1517,12 @@ fn mbox_property_exchange(emu: &mut Emulator, limits: &RunLimits, tags: &[MboxTa
     // short slices and check between them. The answer takes a few million
     // instructions once the interrupt gets through; the budget is there for
     // the case where it does not.
+    // Short slices, because the check between them is also what dates the
+    // reply: the firmware idles through `sleep`, so half a second of wall
+    // clock is ten of modelled time — ten times what a Linux client waits.
     let slice = RunLimits {
         max_steps: None,
-        max_wall: Some(std::time::Duration::from_millis(500)),
+        max_wall: Some(std::time::Duration::from_millis(10)),
         idle_spin_limit: 0,
         silent_us: u64::MAX,
         ..limits.clone()
@@ -1527,6 +1530,7 @@ fn mbox_property_exchange(emu: &mut Emulator, limits: &RunLimits, tags: &[MboxTa
     let budget = std::time::Duration::from_secs(20);
     let started = std::time::Instant::now();
     let retired_before = emu.cpu.retired;
+    let us_before = emu.machine.systimer.now_us();
     let replies_before = emu.machine.mbox.writes;
     let mut console = Vec::new();
     let mut report = emu.run(&slice);
@@ -1539,9 +1543,13 @@ fn mbox_property_exchange(emu: &mut Emulator, limits: &RunLimits, tags: &[MboxTa
         }
         report = emu.run(&slice);
     }
+    // Modelled time is what a real client's timeout counts (Linux's
+    // `raspberrypi-firmware` gives up after one second); the wall clock only
+    // says how long the interpreter took.
     println!(
-        "  resumed: {} instructions over {:.1?}, ended {:?} at {:#010x}",
+        "  resumed: {} instructions, {} us modelled, over {:.1?}, ended {:?} at {:#010x}",
         report.retired.saturating_sub(retired_before),
+        emu.machine.systimer.now_us().saturating_sub(us_before),
         started.elapsed(),
         report.end,
         report.pc

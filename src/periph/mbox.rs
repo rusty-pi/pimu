@@ -206,6 +206,11 @@ impl Mbox {
         true
     }
 
+    /// `RVF_DBG_MBOX` is set.
+    pub fn debug(&self) -> bool {
+        self.dbg
+    }
+
     /// Take a reply the firmware left for the ARM, if any.
     pub fn take_reply(&mut self) -> Option<u32> {
         self.to_arm.pop_front()
