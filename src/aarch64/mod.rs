@@ -33,6 +33,7 @@ mod exec;
 pub mod fp;
 mod fpinsn;
 mod simd;
+pub mod sysreg;
 
 pub use cpu::{Abort, Cpu, Exception, Memory, Step, NZCV_C, NZCV_N, NZCV_V, NZCV_Z};
 
@@ -90,10 +91,10 @@ pub fn vector_group(from_el: u32, to_el: u32, spsel: bool) -> u64 {
 
 /// The EL an IRQ (or FIQ) is taken to from a core in `pstate`, or `None` if
 /// it stays pending there (ARM ARM D1.13.4). `SCR_EL3.IRQ` sends it to EL3;
-/// from non-secure EL0/EL1, `HCR_EL2.IMO` or `TGE` send it to EL2; otherwise
-/// it goes to the current EL, but never below EL1. Only an interrupt to the
-/// current EL is masked by `PSTATE.I`; one to a higher EL is taken regardless,
-/// and one to a lower EL waits.
+/// in non-secure state `HCR_EL2.IMO` or `TGE` send it to EL2; otherwise it
+/// goes to EL1. Only an interrupt to the current EL is masked by `PSTATE.I`;
+/// one to a higher EL is taken regardless, and one to a lower EL waits —
+/// so at EL2 or EL3 an interrupt nobody routed there is never taken.
 pub fn irq_target(scr: u64, hcr: u64, pstate: u64, fiq: bool) -> Option<u32> {
     let el = pstate_el(pstate);
     let (scr_bit, hcr_bit, mask) = if fiq {
@@ -103,10 +104,10 @@ pub fn irq_target(scr: u64, hcr: u64, pstate: u64, fiq: bool) -> Option<u32> {
     };
     let to = if scr & scr_bit != 0 {
         3
-    } else if el < 2 && scr & SCR_NS != 0 && hcr & (hcr_bit | HCR_TGE) != 0 {
+    } else if el != 3 && scr & SCR_NS != 0 && hcr & (hcr_bit | HCR_TGE) != 0 {
         2
     } else {
-        el.max(1)
+        1
     };
     match to.cmp(&el) {
         std::cmp::Ordering::Less => None,
@@ -196,10 +197,12 @@ mod tests {
     }
 
     #[test]
-    fn with_no_routing_the_target_is_the_current_el() {
-        assert_eq!(irq_target(SCR_NS, 0, EL2H, false), Some(2));
-        // HCR_EL2.IMO only matters below EL2.
-        assert_eq!(irq_target(0, HCR_IMO, EL3H, false), Some(3));
+    fn with_no_routing_irqs_go_to_el1_and_wait_above_it() {
+        // Linux's EL2 hyp stub never sees an IRQ it did not route to itself.
+        assert_eq!(irq_target(SCR_NS, 0, EL2H, false), None);
+        assert_eq!(irq_target(SCR_NS, HCR_IMO, EL2H, false), Some(2));
+        // EL3 takes only what SCR_EL3 sends there.
+        assert_eq!(irq_target(0, HCR_IMO, EL3H, false), None);
     }
 
     #[test]

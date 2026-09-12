@@ -539,8 +539,11 @@ fn branch_reg(cpu: &mut Cpu, insn: u32) -> Exec {
             cpu.x[30] = cpu.pc.wrapping_add(4);
             cpu.branch_to(t);
         }
-        // ERET / DRPS: need the system-register file (milestone 2).
-        4 if cpu.el > 0 && rn == 31 => return Err(Stop::Unimplemented),
+        4 if cpu.el > 0 && rn == 31 => {
+            if !cpu.eret() {
+                return Err(Stop::Unimplemented);
+            }
+        }
         _ => return undef(),
     }
     Ok(())
@@ -577,13 +580,14 @@ fn system(cpu: &mut Cpu, insn: u32, mem: &mut dyn Memory) -> Exec {
         },
         (_, 1) => sys(cpu, l, op1, crn, crm, op2, rt, mem),
         (_, _) if op0 >= 2 => {
+            let key = super::sysreg::key(op0, op1, crn, crm, op2);
             if l {
-                let v = sysreg_read(cpu, op0, op1, crn, crm, op2)?;
+                let v = super::sysreg::read(cpu, key, mem)?;
                 cpu.set_xr(rt, true, v);
                 Ok(())
             } else {
                 let v = cpu.xr(rt, true);
-                sysreg_write(cpu, op0, op1, crn, crm, op2, v)
+                super::sysreg::write(cpu, key, v, mem)
             }
         }
         _ => undef(),
@@ -625,54 +629,17 @@ fn sys(
             Ok(())
         }
         // DC CVAC/CVAU/CIVAC, IC IVAU: no caches modelled. The EL0 trap
-        // controls (SCTLR_EL1.UCI) come with the system registers.
+        // controls (SCTLR_EL1.UCI) are not modelled.
         (3, 7, 10 | 11 | 14, 1) | (3, 7, 5, 1) => Ok(()),
         _ if cpu.el == 0 => undef(),
-        // EL1+ cache, TLB and AT operations: milestone 2.
+        // The rest of the cache maintenance (DC IVAC/ISW/CSW/CISW, IC IALLU/
+        // IALLUIS): no caches.
+        (0, 7, 6 | 10 | 14, 1 | 2) | (0, 7, 5 | 1, 0) => Ok(()),
+        // TLB maintenance: nothing is cached until the MMU is modelled.
+        (0 | 4 | 6, 8, _, _) if op1 / 2 <= cpu.el => Ok(()),
+        // AT (address translation) needs the MMU.
         _ => Err(Stop::Unimplemented),
     }
-}
-
-fn sysreg_read(
-    cpu: &mut Cpu,
-    op0: u32,
-    op1: u32,
-    crn: u32,
-    crm: u32,
-    op2: u32,
-) -> Result<u64, Stop> {
-    Ok(match (op0, op1, crn, crm, op2) {
-        (3, 3, 4, 2, 0) => cpu.nzcv as u64,
-        (3, 3, 4, 2, 1) => cpu.daif as u64,
-        (3, 3, 4, 4, 0) => cpu.fpcr as u64,
-        (3, 3, 4, 4, 1) => cpu.fpsr as u64,
-        (3, 3, 13, 0, 2) => cpu.tpidr_el0,
-        (3, 3, 13, 0, 3) => cpu.tpidrro_el0,
-        // DCZID_EL0: DC ZVA permitted, 2^4 words.
-        (3, 3, 0, 0, 7) => 4,
-        (3, 0, 4, 2, 2) if cpu.el > 0 => (cpu.el as u64) << 2,
-        (3, 0, 4, 2, 0) if cpu.el > 0 => cpu.spsel as u64,
-        _ if cpu.el == 0 => return Err(UNDEF),
-        _ => return Err(Stop::Unimplemented),
-    })
-}
-
-fn sysreg_write(cpu: &mut Cpu, op0: u32, op1: u32, crn: u32, crm: u32, op2: u32, v: u64) -> Exec {
-    match (op0, op1, crn, crm, op2) {
-        (3, 3, 4, 2, 0) => cpu.nzcv = v as u32 & 0xF000_0000,
-        (3, 3, 4, 2, 1) => cpu.daif = v as u32 & (0xF << 6),
-        // FPCR: AHP, DN, FZ, RMode, Stride and Len; bit 19 (FZ16 from v8.2)
-        // is RES0, and the A72 implements no trapped exceptions, so the IxE
-        // enables read as zero.
-        (3, 3, 4, 4, 0) => cpu.fpcr = v as u32 & 0x07F7_0000,
-        (3, 3, 4, 4, 1) => cpu.fpsr = v as u32 & 0xF800_009F,
-        (3, 3, 13, 0, 2) => cpu.tpidr_el0 = v,
-        (3, 3, 13, 0, 3) if cpu.el > 0 => cpu.tpidrro_el0 = v,
-        (3, 0, 4, 2, 0) if cpu.el > 0 => cpu.spsel = v & 1 != 0,
-        _ if cpu.el == 0 => return undef(),
-        _ => return Err(Stop::Unimplemented),
-    }
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -965,7 +932,7 @@ fn ld_st_exclusive(cpu: &mut Cpu, insn: u32, mem: &mut dyn Memory) -> Exec {
     // Exclusives and acquire/release demand natural alignment of the whole
     // access regardless of SCTLR.A.
     if addr & (total as u64 - 1) != 0 {
-        return Err(Stop::Exception(Exception::DataAbort { addr, write: !load }));
+        return Err(Stop::Exception(Exception::Alignment { addr, write: !load }));
     }
 
     if o2 {

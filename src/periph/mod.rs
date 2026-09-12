@@ -4,6 +4,7 @@
 //! self-contained: they never reference each other or the bus. Anything one
 //! device needs from another is routed by [`Machine`](crate::machine::Machine).
 
+pub mod armctrl;
 pub mod armlocal;
 pub mod asb;
 pub mod aux;
@@ -44,6 +45,7 @@ pub mod vce;
 pub mod vl805;
 pub mod xhci;
 
+pub use armctrl::ArmCtrl;
 pub use armlocal::ArmLocal;
 pub use asb::Asb;
 pub use aux::Aux;

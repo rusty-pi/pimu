@@ -28,7 +28,7 @@ USAGE:
                instead, for reconnaissance on firmware the decoder is new to)
                              [--dump <hex>:<len>] [--disasm <hex>:<count>] [--patch <hex>=<hex>]
                              [--dump-fdt <path>] [--print-fdt] [--console-log <path>]
-                             [--mbox-property <tag>[,<tag>...]]
+                             [--mbox-property <tag>[,<tag>...]] [--arm]
     rpi-virt-fw boot-check <scenario.toml> --plan [--console <path>]
     rpi-virt-fw boot-check <scenario.toml> --log <path> --console <path> [--update]
     rpi-virt-fw disasm <file> [--base <hex>] [--count <n>] [--vaddr <hex>]
@@ -70,6 +70,10 @@ FLAGS:
               still-running `start4.elf` answers. Tags are hex, e.g.
               `0x00000001` (GET_FIRMWARE_REVISION) or `0x00030092`
               (GET_CRYPTO_HMAC_SHA256). See docs/diagnostics.md.
+    --arm     Model the ARM (#40): release Cortex-A72 core 0 when `arm_loader`
+              writes the ARM control block, at PC 0 in EL3 like the SoC, and
+              run it in lock-step with the VPU. The run ends when the ARM hits
+              something not modelled yet (today: turning its MMU on).
     --dram-map
               Report which DRAM pages are non-zero when the run ends, as
               address runs. Proof of concept for the QEMU hand-off: this is the
@@ -182,6 +186,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     let mut dram_map = false;
     let mut skip_signed_boot = false;
     let mut skip_unimpl = false;
+    let mut arm = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -214,6 +219,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
                 trace_from = parse_u32(it.next().context("--trace-from needs a value")?)?
             }
             "--trace-mmio" => trace_mmio = true,
+            "--arm" => arm = true,
             "--sd" => sd_image = Some(PathBuf::from(it.next().context("--sd needs a path")?)),
             "--console-log" => {
                 console_log = Some(PathBuf::from(
@@ -467,6 +473,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         };
         emu.cpu.trace_from = trace_from;
         emu.core1_entry = core1_entry;
+        emu.arm_enabled = arm;
         if as_core1 {
             emu.cpu.core_id = 1;
         }
@@ -534,6 +541,44 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
             report.core1_retired.unwrap_or(0),
             report.core1_end
         );
+    }
+    if let Some(a) = &emu.arm {
+        println!("\n--- ARM core 0 (#40) ---");
+        if let Some(h) = a.handoff {
+            println!(
+                "  armstub   kernel_entry32 {:#010x}  dtb_ptr32 {:#010x}",
+                h.kernel, h.dtb
+            );
+        }
+        match &a.bootargs {
+            Some(Ok((old, new))) if old != new => println!(
+                "  bootargs  \"{}\" prepended",
+                new.strip_suffix(old.as_str()).unwrap_or(new).trim_end()
+            ),
+            Some(Err(e)) => println!("  bootargs  not patched: {e}"),
+            _ => {}
+        }
+        match a.kernel_entered {
+            Some((cycles, el, x0)) => {
+                println!("  kernel    entered at cycle {cycles} in EL{el}, x0 = {x0:#x}")
+            }
+            None => println!("  kernel    not reached"),
+        }
+        println!(
+            "  ran       {} instructions, {} cycles asleep, {} exceptions, {} interrupts",
+            a.insns, a.slept, a.exceptions, a.interrupts
+        );
+        println!(
+            "  now       pc {:#x}  EL{}  sp {:#x}",
+            a.cpu.pc,
+            a.cpu.el,
+            a.cpu.sp()
+        );
+        if let Some(stop) = &a.stopped {
+            println!("  stopped   {stop:x?}");
+        }
+    } else if arm {
+        println!("\n--- ARM core 0 (#40) ---\n  never released");
     }
     if report.core1_release_never_resolved {
         println!(
