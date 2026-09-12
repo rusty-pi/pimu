@@ -75,6 +75,9 @@ pub struct RunLimits {
     /// stuck-detector than any PC-window heuristic, which the ThreadX tick
     /// defeats by bumping the progress counters forever. 0 disables.
     pub silent_us: u64,
+    /// Stop cleanly once the console has printed this text — a shell prompt,
+    /// say, where a run that got there has nothing more to show.
+    pub until: Option<String>,
 }
 
 impl Default for RunLimits {
@@ -85,6 +88,7 @@ impl Default for RunLimits {
             stop_pc: None,
             idle_spin_limit: 0,
             silent_us: 0,
+            until: None,
         }
     }
 }
@@ -129,6 +133,8 @@ pub enum RunEnd {
     Reset,
     /// The ARM core hit something the model does not do yet.
     ArmStopped(crate::arm::ArmStop),
+    /// The console printed [`RunLimits::until`].
+    Until,
 }
 
 #[derive(Debug, Clone)]
@@ -252,6 +258,7 @@ impl Emulator {
         // that substring appears in the console — for pinning down a code path
         // by the log line that precedes it.
         let mut console_seen = 0usize;
+        let mut until_seen = 0usize;
 
         // Spin detection: over a sliding window of steps, track the min/max PC
         // and whether any console output happened. If the PC stays within a
@@ -686,6 +693,13 @@ impl Emulator {
                 let _ = std::io::stderr().write_all(&fresh);
             }
             console.extend_from_slice(&fresh);
+            if let (Some(needle), true) = (&limits.until, had_output) {
+                let from = until_seen.saturating_sub(needle.len());
+                if String::from_utf8_lossy(&console[from..]).contains(needle.as_str()) {
+                    break RunEnd::Until;
+                }
+                until_seen = console.len();
+            }
             if let Some(needle) = &diag.trace_on_console {
                 if !self.cpu.trace && console.len() > console_seen {
                     let from = console_seen.saturating_sub(needle.len());

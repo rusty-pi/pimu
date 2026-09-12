@@ -67,6 +67,12 @@ pub struct BootSpec {
     /// do not exchange anything.
     #[serde(default)]
     pub mbox_property: Vec<String>,
+    /// Run the ARM cores too (`recon --arm`, #40): the boot goes on into Linux.
+    #[serde(default)]
+    pub arm: bool,
+    /// End the run once the console prints this (`recon --until`).
+    #[serde(default)]
+    pub until: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -225,6 +231,13 @@ impl BootScenario {
             args.push("--mbox-property".into());
             args.push(self.boot.mbox_property.join(","));
         }
+        if self.boot.arm {
+            args.push("--arm".into());
+        }
+        if let Some(until) = &self.boot.until {
+            args.push("--until".into());
+            args.push(until.clone());
+        }
         args
     }
 }
@@ -264,6 +277,17 @@ pub fn normalise_console(raw: &[u8]) -> String {
 }
 
 fn normalise_line(line: &str) -> String {
+    // Linux's printk prefix, `[    1.858355] ` — seconds, a dot, microseconds.
+    if let Some((stamp, tail)) = line.strip_prefix('[').and_then(|r| r.split_once(']')) {
+        let is_stamp = matches!(stamp.trim_start().split_once('.'), Some((s, f))
+            if !s.is_empty()
+                && s.bytes().all(|b| b.is_ascii_digit())
+                && f.len() == 6
+                && f.bytes().all(|b| b.is_ascii_digit()));
+        if is_stamp {
+            return format!("[t]{tail}");
+        }
+    }
     if let Some(rest) = line.strip_prefix("MESS:") {
         // `00:00:12.882804:0: brfs: ...` — the timestamp and the core id are
         // digits, colons and one dot; keep the core id, drop the clock.
@@ -444,6 +468,15 @@ mod tests {
             normalise_console(raw),
             "MESS:[t]:0: brfs: File read: 97 bytes\n"
         );
+    }
+
+    #[test]
+    fn printk_timestamps_are_stripped() {
+        let raw = b"[    1.858355] Run /sbin/init as init process\r\n[  OK  ] not a clock\n";
+        let once = normalise_console(raw);
+        assert_eq!(once, "[t] Run /sbin/init as init process\n[  OK  ] not a clock\n");
+        // Idempotent: the golden is fed back through this.
+        assert_eq!(normalise_console(once.as_bytes()), once);
     }
 
     #[test]

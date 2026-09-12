@@ -28,7 +28,7 @@ USAGE:
                instead, for reconnaissance on firmware the decoder is new to)
                              [--dump <hex>:<len>] [--disasm <hex>:<count>] [--patch <hex>=<hex>]
                              [--dump-fdt <path>] [--print-fdt] [--console-log <path>]
-                             [--mbox-property <tag>[,<tag>...]] [--arm]
+                             [--mbox-property <tag>[,<tag>...]] [--arm] [--until <text>]
     rpi-virt-fw boot-check <scenario.toml> --plan [--console <path>]
     rpi-virt-fw boot-check <scenario.toml> --log <path> --console <path> [--update]
     rpi-virt-fw disasm <file> [--base <hex>] [--count <n>] [--vaddr <hex>]
@@ -70,10 +70,13 @@ FLAGS:
               still-running `start4.elf` answers. Tags are hex, e.g.
               `0x00000001` (GET_FIRMWARE_REVISION) or `0x00030092`
               (GET_CRYPTO_HMAC_SHA256). See docs/diagnostics.md.
-    --arm     Model the ARM (#40): release Cortex-A72 core 0 when `arm_loader`
-              writes the ARM control block, at PC 0 in EL3 like the SoC, and
-              run it in lock-step with the VPU. The run ends when the ARM hits
-              something not modelled yet (today: turning its MMU on).
+    --arm     Model the ARM (#40): release the four Cortex-A72 cores when
+              `arm_loader` writes the ARM control block, at PC 0 in EL3 like
+              the SoC, and run them in lock-step with the VPU. The run ends if
+              a core hits something not modelled yet.
+    --until <text>
+              End the run once the console prints <text> (e.g. the shell
+              prompt of a Linux boot).
     --dram-map
               Report which DRAM pages are non-zero when the run ends, as
               address runs. Proof of concept for the QEMU hand-off: this is the
@@ -188,6 +191,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     let mut skip_signed_boot = false;
     let mut skip_unimpl = false;
     let mut arm = false;
+    let mut until: Option<String> = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -221,6 +225,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
             }
             "--trace-mmio" => trace_mmio = true,
             "--arm" => arm = true,
+            "--until" => until = Some(it.next().context("--until needs a text")?.to_string()),
             "--sd" => sd_image = Some(PathBuf::from(it.next().context("--sd needs a path")?)),
             "--console-log" => {
                 console_log = Some(PathBuf::from(
@@ -415,6 +420,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         // seconds, so this has plenty of headroom; when the boot wedges it
         // reports in seconds instead of running out the wall clock.
         silent_us: 60_000_000,
+        until,
     };
 
     let mut reboots = 0u32;
@@ -1432,7 +1438,7 @@ fn mbox_property_exchange(emu: &mut Emulator, limits: &RunLimits, tags: &[MboxTa
         max_wall: Some(std::time::Duration::from_millis(500)),
         idle_spin_limit: 0,
         silent_us: u64::MAX,
-        ..*limits
+        ..limits.clone()
     };
     let budget = std::time::Duration::from_secs(20);
     let started = std::time::Instant::now();

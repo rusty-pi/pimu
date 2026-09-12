@@ -1,0 +1,70 @@
+# The Linux boot (#40, milestone 5): the firmware boot of firmware-boot.toml,
+# with the four ARM cores modelled, carried on through the armstub into the
+# kernel, off the SD card's ext4 root partition, and into a busybox shell on
+# the serial console. `scripts/boot-check.sh --scenario=testdata/boot/linux-boot.toml`
+# runs it; CI runs that.
+#
+# The card is the one scripts/make-sd.sh builds; its root filesystem holds
+# Debian's static busybox (fetched by scripts/fetch-firmware.sh), an inittab
+# that runs /etc/init.d/rcS and a shell on ttyAMA0, and nothing else.
+#
+# The golden transcript carries the firmware's console and then the kernel's.
+# Every kernel line appears twice from `printk: console [ttyAMA0] enabled` on:
+# the harness keeps the early console (`keep_bootcon`, src/armstub.rs) and
+# the kernel replays its log to ttyAMA0 when that registers. The printk
+# timestamps are stripped like the firmware's clocks are.
+
+name = "linux-boot"
+description = "The firmware boot, then Linux on all four A72 cores to a busybox shell on the serial console."
+
+[boot]
+eeprom = "../../firmware/pieeprom.bin"
+sd = "../../firmware/sd.img"
+arm = true
+# The prompt. Nothing after it prints without input.
+until = "/ # "
+# A dev box reaches the prompt in about three minutes; the runners are roughly
+# 1.6x slower. RVF_BOOT_WALL overrides it.
+wall_secs = 600
+max_skipped = 0
+
+[golden]
+path = "golden/linux-boot.txt"
+
+[[milestone]]
+why = "The kernel is entered by the firmware's own armstub, at EL2, on the core the SoC starts, and reads the MIDR measured on the reference board (src/aarch64/sysreg.rs)."
+line = "Booting Linux on physical CPU 0x0000000000 [0x410fd083]"
+
+[[milestone]]
+why = "Cores 1..3 come out of the armstub's spin table when Linux releases them, instead of timing out 5 s each (#40)."
+line = "smp: Brought up 1 node, 4 CPUs"
+
+[[milestone]]
+why = "Every core went through the armstub's EL3 -> EL2 drop, as on the board."
+line = "CPU: All CPU(s) started at EL2"
+
+[[milestone]]
+why = "Linux's SDHCI driver reads the card and its partition table over eMMC2 (ADMA, DDR50)."
+line = "mmcblk0: p1 p2"
+
+[[milestone]]
+why = "The root filesystem mounts from the card's second partition."
+line = "VFS: Mounted root (ext4 filesystem) readonly on device 179:2."
+
+[[milestone]]
+why = "Userspace runs: busybox init, then rcS, which reads /proc to count the CPUs."
+line = ["rpi-virt-fw: userland up, Linux ", ", 4 CPUs"]
+
+[[milestone]]
+why = "A shell on the serial console (milestone 5)."
+line = "built-in shell (ash)"
+
+[[milestone]]
+why = "No panic on the way (the last one was the missing root filesystem, before the card had one)."
+line = "Kernel panic"
+absent = true
+
+[[milestone]]
+why = "No oops: a kernel fault would point at the interpreter or a device model."
+line = "Unable to handle kernel"
+absent = true
