@@ -9,7 +9,7 @@ const CF_TRACE_LEN: usize = 512;
 use super::decode::decode;
 use super::icache::DecodeCache;
 use super::insn::{
-    AddrMode, AluOp, Base, MemWidth, Op, RegOrImm, VecExec, VecInsn, VecPred, VecReg, VecRep,
+    AddrMode, AluOp, Base, Insn, MemWidth, Op, RegOrImm, VecExec, VecInsn, VecPred, VecReg, VecRep,
     Writeback,
 };
 use super::length::InsnClass;
@@ -377,19 +377,33 @@ impl Vpu {
 
         let cached = self.icache.cached_gen(pc);
         let gen = bus.code_gen(pc, cached);
-        let insn = if gen.is_some() && gen == cached {
-            self.icache.get(pc)
+        // Run the instruction out of the cache entry, by reference (see
+        // `src/vpu/icache.rs` for why the entries are taken out meanwhile).
+        let mut entries = self.icache.take_entries();
+        let step = if gen.is_some() && gen == cached {
+            self.icache.hits += 1;
+            self.execute(bus, pc, entries.get(pc))
         } else {
-            let (buf, len) = match self.fetch(bus, pc) {
-                Ok(v) => v,
-                Err(err) => return self.stop(Stop::Fault(Fault::Bus { pc, err })),
-            };
-            let insn = decode(&buf[..len as usize], pc);
-            if let Some(gen) = gen {
-                self.icache.fill(pc, gen, &insn);
+            match self.fetch(bus, pc) {
+                Err(err) => self.stop(Stop::Fault(Fault::Bus { pc, err })),
+                Ok((buf, len)) => {
+                    let insn = decode(&buf[..len as usize], pc);
+                    match gen {
+                        Some(gen) if DecodeCache::cacheable(pc, &insn) => {
+                            let insn = self.icache.fill(&mut entries, pc, gen, insn);
+                            self.execute(bus, pc, insn)
+                        }
+                        _ => self.execute(bus, pc, &insn),
+                    }
+                }
             }
-            insn
         };
+        self.icache.put_entries(entries);
+        step
+    }
+
+    /// Execute `insn`, fetched from `pc`.
+    fn execute(&mut self, bus: &mut dyn Bus, pc: u32, insn: &Insn) -> Step {
         let next = pc.wrapping_add(insn.len as u32);
 
         self.cycles += 1;
