@@ -177,6 +177,7 @@ use crate::machine::Machine;
 use crate::periph::gentimer::{self, GenericTimer, Which};
 use crate::periph::gic::{self, Accessor, Signal};
 use crate::periph::{armlocal, mbox, ArmLocal, Gic};
+use crate::soc::bcm2711::{EMMC2_BASE, EMMC2_SIZE};
 
 pub use crate::periph::gentimer::ARM_HZ;
 
@@ -536,6 +537,8 @@ pub struct ArmSide {
     pub slept: u64,
     /// `wfi`s the core halted in.
     pub wfis: u64,
+    /// Translation-cache flushes after eMMC2 DMA wrote RAM ([`Self::code_dirty`]).
+    pub tb_flushes: u64,
     /// Interrupts taken, by INTID.
     pub irqs: BTreeMap<u32, u64>,
     /// Generic-timer register accesses answered by [`on_mrs`] / [`on_msr`].
@@ -555,9 +558,14 @@ pub struct ArmSide {
     /// the routing that decides whether the core takes it.
     signal: Option<Signal>,
     route: Route,
-    /// The levels last driven onto the four timer PPIs ([`Which::ALL`] order)
-    /// and the mailbox SPI.
-    lines: [bool; 5],
+    /// The levels last driven onto the four timer PPIs ([`Which::ALL`] order),
+    /// the mailbox SPI and the eMMC2 SPI.
+    lines: [bool; 6],
+    /// The eMMC2 DMA engine wrote RAM since the last slice. It writes the
+    /// mapped host memory directly, which QEMU does not see, so code it had
+    /// translated from those pages would outlive them; the next slice starts
+    /// with the translation cache flushed.
+    code_dirty: bool,
     /// [`on_block`] stops the slice at the first block that starts at or
     /// after this cycle.
     stop_at: u64,
@@ -605,6 +613,11 @@ impl ArmSide {
         if level != self.lines[4] {
             self.lines[4] = level;
             self.gic.set_spi_level(gic::ID_MAILBOX, level);
+        }
+        let level = self.emu.machine.emmc2.irq_asserted();
+        if level != self.lines[5] {
+            self.lines[5] = level;
+            self.gic.set_spi_level(gic::ID_EMMC2, level);
         }
         self.signal = self.gic.signal(0);
     }
@@ -1012,8 +1025,14 @@ fn periph(uc: &mut Unicorn<'_, ArmSide>, off: u64, size: usize, write: Option<u6
     } else {
         Err("no device decodes this bus address".to_string())
     };
-    // Reading MAIL0 or writing its CONFIG moves the ARM's mailbox interrupt.
-    if (mbox::BASE..mbox::BASE + mbox::SIZE).contains(&bus) {
+    // Reading MAIL0 or writing its CONFIG moves the ARM's mailbox interrupt;
+    // any eMMC2 access can move its line (a command completes at once, a
+    // status write clears it).
+    let emmc2 = (EMMC2_BASE..EMMC2_BASE + EMMC2_SIZE).contains(&bus);
+    if emmc2 && !side.emu.machine.emmc2.take_dma_written().is_empty() {
+        side.code_dirty = true;
+    }
+    if emmc2 || (mbox::BASE..mbox::BASE + mbox::SIZE).contains(&bus) {
         side.sync_lines();
     }
     side.finish(PERIPH_ARM + off, size, write, r)
@@ -1132,6 +1151,7 @@ pub struct ArmReport {
     pub cycles: u64,
     pub slept: u64,
     pub wfis: u64,
+    pub tb_flushes: u64,
     pub vpu_steps: u64,
     /// ARM runs between two points where an interrupt could be taken.
     pub slices: u64,
@@ -1174,6 +1194,7 @@ impl ArmCore {
             cycles: 0,
             slept: 0,
             wfis: 0,
+            tb_flushes: 0,
             irqs: BTreeMap::new(),
             timer_accesses: 0,
             impdef: BTreeMap::new(),
@@ -1184,7 +1205,8 @@ impl ArmCore {
             exceptions_taken: 0,
             signal: None,
             route: Route::default(),
-            lines: [false; 5],
+            lines: [false; 6],
+            code_dirty: false,
             stop_at: u64::MAX,
             hit_stop: false,
             stop: None,
@@ -1365,6 +1387,17 @@ impl ArmCore {
         // first block, with no progress.
         side.stop_at = stop_at.max(side.cycles + 1);
         side.hit_stop = false;
+        // Between slices no TB is running, so a flush is safe here (not from
+        // inside the MMIO hook that started the DMA). The data cannot run
+        // before this: the transfer's interrupt ends the slice first.
+        if std::mem::take(&mut side.code_dirty) {
+            side.tb_flushes += 1;
+            self.uc.ctl_flush_tb().map_err(|e| ArmStop::Engine {
+                error: uce(e),
+                pc: self.pc(),
+                unmapped: None,
+            })?;
+        }
         let pc = self.pc();
         let r = self.uc.emu_start(pc, u64::MAX, 0, 0);
         self.finish_run(r)?;
@@ -1415,9 +1448,9 @@ impl ArmCore {
     pub fn run(&mut self, sched: Schedule, lim: &ArmLimits) -> ArmReport {
         let start = Instant::now();
         let insns0 = self.insns();
-        let (cycles0, slept0, wfis0) = {
+        let (cycles0, slept0, wfis0, flushes0) = {
             let s = self.side();
-            (s.cycles, s.slept, s.wfis)
+            (s.cycles, s.slept, s.wfis, s.tb_flushes)
         };
         let vpu_retired = |e: &Emulator| e.cpu.retired + e.cpu1.as_ref().map_or(0, |c| c.retired);
         let vpu0 = vpu_retired(&self.side().emu);
@@ -1493,6 +1526,7 @@ impl ArmCore {
             cycles: s.cycles - cycles0,
             slept: s.slept - slept0,
             wfis: s.wfis - wfis0,
+            tb_flushes: s.tb_flushes - flushes0,
             vpu_steps,
             slices,
             counter: s.timer.count(s.cycles),
@@ -1565,6 +1599,39 @@ mod tests {
         )]);
         core.run_slice(3).unwrap();
         assert_eq!(core.side().mmio_faults.len(), 1);
+    }
+
+    #[test]
+    fn the_emmc2_interrupt_is_a_level_on_spi_158() {
+        let mut core = core_with(&[(
+            0,
+            &[
+                0xd2bf_c681, // mov  x1, #0xfe340000      EMMC2
+                0x5280_0020, // mov  w0, #1
+                0xb900_3420, // str  w0, [x1, #0x34]      INT_STATUS_EN: command complete
+                0xb900_3820, // str  w0, [x1, #0x38]      INT_SIGNAL_EN: likewise
+                0x52a1_a340, // mov  w0, #0x0d1a0000      CMD13, R1
+                0xb900_0c20, // str  w0, [x1, #0x0c]      issue: completes at once
+                0x5280_0020, // mov  w0, #1
+                0xb900_3020, // str  w0, [x1, #0x30]      INT_STATUS: write 1 to clear
+            ],
+        )]);
+        // A level SPI reads back pending for as long as it is asserted.
+        let pending = |core: &mut ArmCore| {
+            let s = Accessor {
+                cpu: 0,
+                secure: true,
+            };
+            let ispendr = 0x1200 + 4 * (gic::ID_EMMC2 / 32);
+            let w = core.side().gic.read_as(s, ispendr, Width::Word).unwrap();
+            w & (1 << (gic::ID_EMMC2 % 32)) != 0
+        };
+        core.run_slice(4).unwrap();
+        assert!(!pending(&mut core), "enabled, nothing latched yet");
+        core.run_slice(2).unwrap();
+        assert!(pending(&mut core), "command complete, signalled");
+        core.run_slice(2).unwrap();
+        assert!(!pending(&mut core), "cleared by the W1C");
     }
 
     #[test]

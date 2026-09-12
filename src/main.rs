@@ -999,7 +999,7 @@ fn run_arm(mut emu: Emulator, console: &[u8], opts: &ArmOpts) -> Result<()> {
     }
     println!(
         "  ran       {} ARM instructions + {} cycles slept in {} wfi = {} cycles ({:.3} s modelled), \
-         {} VPU steps, {} slices, {:.1?}",
+         {} VPU steps, {} slices, {} TB flushes, {:.1?}",
         rep.insns,
         rep.slept,
         rep.wfis,
@@ -1007,6 +1007,7 @@ fn run_arm(mut emu: Emulator, console: &[u8], opts: &ArmOpts) -> Result<()> {
         rep.cycles as f64 / arm::ARM_HZ as f64,
         rep.vpu_steps,
         rep.slices,
+        rep.tb_flushes,
         rep.wall
     );
     println!(
