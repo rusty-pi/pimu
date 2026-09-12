@@ -1062,6 +1062,27 @@ mod tests {
         assert_eq!(g.signal(0), None);
     }
 
+    /// Linux's `gic_handle_irq` loop in split EOI mode, on a level SPI whose
+    /// line nobody clears: IAR, EOIR, handler, DIR, and IAR again returns the
+    /// same ID without the core ever leaving the exception. A run that shows
+    /// few interrupts taken, the SPI active and the running priority idle is
+    /// that loop, not a lost deactivation (docs/arm-side-findings.md).
+    #[test]
+    fn level_spi_split_eoi_is_acknowledged_again_after_each_dir() {
+        let mut g = booted();
+        enable(&mut g, S0, ID_PL011);
+        g.set_spi_level(ID_PL011, true);
+        for _ in 0..3 {
+            assert_eq!(rd(&mut g, S0, C + C_IAR), ID_PL011);
+            wr(&mut g, S0, C + C_EOIR, ID_PL011);
+            assert_eq!(rd(&mut g, S0, C + C_RPR), 0xff);
+            assert_eq!(g.signal(0), None, "active until GICC_DIR");
+            wr(&mut g, S0, C + C_DIR, ID_PL011);
+        }
+        g.set_spi_level(ID_PL011, false);
+        assert_eq!(rd(&mut g, S0, C + C_IAR), SPURIOUS);
+    }
+
     #[test]
     fn edge_spi_is_taken_once_and_a_new_edge_waits_for_deactivation() {
         let mut g = booted();
