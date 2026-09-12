@@ -4,6 +4,7 @@
 //! self-contained: they never reference each other or the bus. Anything one
 //! device needs from another is routed by [`Machine`](crate::machine::Machine).
 
+pub mod armlocal;
 pub mod asb;
 pub mod aux;
 pub mod avs;
@@ -19,6 +20,8 @@ pub mod dma_legacy;
 pub mod emmc2;
 pub mod fxl6408;
 pub mod genet;
+pub mod gentimer;
+pub mod gic;
 pub mod hdmi_ddc;
 pub mod hvs;
 pub mod mbox;
@@ -41,6 +44,7 @@ pub mod vce;
 pub mod vl805;
 pub mod xhci;
 
+pub use armlocal::ArmLocal;
 pub use asb::Asb;
 pub use aux::Aux;
 pub use avs::Avs;
@@ -53,6 +57,7 @@ pub use corectl::CoreCtl;
 pub use dma4::Dma4;
 pub use emmc2::Emmc2;
 pub use genet::Genet;
+pub use gic::Gic;
 pub use hdmi_ddc::HdmiDdc;
 pub use hvs::Hvs;
 pub use mbox::Mbox;
