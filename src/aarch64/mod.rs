@@ -22,6 +22,16 @@
 //! after the unmask, or Linux livelocks: its idle loop runs `wfi` with IRQs
 //! masked and unmasks for only a few instructions after waking
 //! (`default_idle_call`: `cpu_do_idle()` then `raw_local_irq_enable()`).
+//!
+//! The interpreter itself is [`Cpu`] (state, [`Cpu::step`]) and `exec`
+//! (decode and execute). `tests/a64_diff.rs` runs random instruction streams
+//! through it and through `qemu-aarch64 -cpu cortex-a72` and compares the
+//! results.
+
+mod cpu;
+mod exec;
+
+pub use cpu::{Abort, Cpu, Exception, Memory, Step, NZCV_C, NZCV_N, NZCV_V, NZCV_Z};
 
 /// ESR_ELx exception classes (ARM ARM D17.2.37).
 pub const EC_UNKNOWN: u64 = 0x00;
