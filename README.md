@@ -113,6 +113,14 @@ cargo run --release -- recon firmware/pieeprom.bin \
 scenarios in `testdata/boot/` carry the exact flags and EEPROM settings for
 each medium, and `rpi-virt-fw boot-check <scenario> --plan` prints them.
 
+`scripts/pgo-build.sh` does the release build with profile-guided
+optimisation: an instrumented build runs the firmware boot and the start of
+the Linux boot, and the release build is redone with what it counted. It needs
+what `boot-check.sh` needs and takes about 10 minutes on a Pi 4, where both
+boots then run 1.45x faster; the guest runs the same instructions either way.
+CI does not use it — the extra build and training cost more than the boot
+jobs would save.
+
 ### Getting the patched device tree out
 
 `arm_loader` patches `/chosen` — `rpi-machine-id`, `rpi-serial64`,
