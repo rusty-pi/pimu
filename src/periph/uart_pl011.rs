@@ -1,8 +1,21 @@
-//! PL011 UART (`UART0`), modelled well enough to be a firmware debug console.
+//! PL011 UART (`UART0`): the firmware's debug console and Linux's `ttyAMA0`.
 //!
-//! Transmit only: bytes written to `DR` are appended to an output buffer that the
-//! harness drains. The flag register always reports "ready to transmit, FIFO
-//! empty, not busy", so polling firmware never stalls. Receive returns 0.
+//! Transmit is instant: bytes written to `DR` are appended to an output buffer
+//! that the harness drains, and the flag register never reports the transmit
+//! FIFO full or busy, so polling code never stalls. The transmit interrupt is
+//! never raised either — Linux's PIO path writes until `TXFF`, finds room for
+//! everything, and never needs to wait for the FIFO to drain.
+//!
+//! Receive is modelled for the console (#40, milestone 6). Host input goes onto
+//! the *line* ([`Pl011::feed`]) and [`Pl011::pump`] moves it into the 32-entry
+//! receive FIFO at the baud rate the divisors set, against the modelled clock,
+//! so a scripted input sequence lands at the same guest instant on every run.
+//! Bytes wait on the line while the FIFO is full or the receiver is off rather
+//! than being dropped as an overrun: nothing here is worth losing input to.
+//! `RXIS` follows the `IFLS` trigger level and `RTIS` the receive timeout (32
+//! bit periods without a new character), which is what `amba-pl011` enables.
+
+use std::collections::VecDeque;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
@@ -13,38 +26,169 @@ const IBRD: u32 = 0x24;
 const FBRD: u32 = 0x28;
 const LCRH: u32 = 0x2C;
 const CR: u32 = 0x30;
+const IFLS: u32 = 0x34;
 const IMSC: u32 = 0x38;
 const RIS: u32 = 0x3C;
 const MIS: u32 = 0x40;
 const ICR: u32 = 0x44;
 
 // FR bits.
-const FR_BUSY: u32 = 1 << 3;
 const FR_RXFE: u32 = 1 << 4;
-const FR_TXFF: u32 = 1 << 5;
 const FR_RXFF: u32 = 1 << 6;
 const FR_TXFE: u32 = 1 << 7;
 
-#[derive(Default)]
+// Interrupt bits (RIS / MIS / IMSC / ICR).
+const INT_RX: u32 = 1 << 4;
+const INT_RT: u32 = 1 << 6;
+
+const CR_UARTEN: u32 = 1 << 0;
+const CR_RXE: u32 = 1 << 9;
+const LCRH_FEN: u32 = 1 << 4;
+
+const FIFO_DEPTH: usize = 32;
+
+/// `UARTCLK`: the firmware's `init_uart_clock` default on a Pi 4, and the rate
+/// `clk-bcm2835` reports for the UART clock the kernel divides.
+const UARTCLK_HZ: u64 = 48_000_000;
+
 pub struct Pl011 {
     pub out: Vec<u8>,
     ibrd: u32,
     fbrd: u32,
     lcrh: u32,
     cr: u32,
+    ifls: u32,
     imsc: u32,
+    ris: u32,
+    /// Receive FIFO (or holding register, with `LCRH.FEN` clear).
+    rx: VecDeque<u8>,
+    /// Host input not yet received: the serial line.
+    line: VecDeque<u8>,
+    /// Modelled time (µs) the next character on the line finishes arriving.
+    next_rx_us: u64,
+    /// Nothing was on the line at the last [`Pl011::pump`].
+    line_idle: bool,
+    /// Modelled time the last character entered the FIFO, for `RTIS`.
+    last_rx_us: u64,
+}
+
+impl Default for Pl011 {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Pl011 {
     pub fn new() -> Pl011 {
         Pl011 {
-            cr: 0x0301,
-            ..Default::default()
-        } // UARTEN|TXE|RXE at reset-ish
+            out: Vec::new(),
+            ibrd: 0,
+            fbrd: 0,
+            lcrh: 0,
+            cr: 0x0301, // UARTEN|TXE|RXE at reset-ish
+            ifls: 0x12, // reset: both triggers at half full
+            imsc: 0,
+            ris: 0,
+            rx: VecDeque::new(),
+            line: VecDeque::new(),
+            next_rx_us: 0,
+            line_idle: true,
+            last_rx_us: 0,
+        }
     }
 
     pub fn take_output(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.out)
+    }
+
+    /// Put host bytes on the receive line, behind anything still in flight.
+    pub fn feed(&mut self, bytes: &[u8]) {
+        self.line.extend(bytes);
+    }
+
+    /// Bytes fed but not yet read by the guest.
+    pub fn rx_backlog(&self) -> usize {
+        self.line.len() + self.rx.len()
+    }
+
+    /// The interrupt output (`UARTINTR`): any unmasked raw interrupt.
+    pub fn irq_line(&self) -> bool {
+        self.ris & self.imsc != 0
+    }
+
+    /// Advance the receiver to modelled time `now_us`: characters whose last
+    /// stop bit has gone by enter the FIFO, and a FIFO left alone for 32 bit
+    /// periods raises the receive timeout.
+    pub fn pump(&mut self, now_us: u64) {
+        if self.line.is_empty() && self.rx.is_empty() {
+            return;
+        }
+        let char_us = self.char_us();
+        let receiving = self.cr & (CR_UARTEN | CR_RXE) == CR_UARTEN | CR_RXE;
+        // Input fed onto an idle line starts its first character now.
+        if self.line_idle && !self.line.is_empty() {
+            self.line_idle = false;
+            self.next_rx_us = now_us;
+        }
+        while let Some(&b) = self.line.front() {
+            if !receiving || self.rx.len() >= self.depth() {
+                // Held back: the sender waits, and resumes a character
+                // time after there is room again.
+                self.next_rx_us = now_us;
+                break;
+            }
+            if self.next_rx_us + char_us > now_us {
+                break;
+            }
+            self.line.pop_front();
+            self.next_rx_us += char_us;
+            self.rx.push_back(b);
+            self.last_rx_us = self.next_rx_us;
+            if self.rx.len() >= self.rx_trigger() {
+                self.ris |= INT_RX;
+            }
+        }
+        if self.line.is_empty() {
+            self.line_idle = true;
+        }
+        // 32 bit periods = 3.2 characters of 10 bits.
+        if !self.rx.is_empty() && now_us >= self.last_rx_us + char_us * 16 / 5 {
+            self.ris |= INT_RT;
+        }
+    }
+
+    /// One 8N1 character (ten bit periods) at the programmed baud rate, in µs:
+    /// the divisor is `IBRD + FBRD/64` of `UARTCLK/16`. Before anything has
+    /// programmed it, 115200 baud.
+    fn char_us(&self) -> u64 {
+        let div64 = u64::from(self.ibrd) * 64 + u64::from(self.fbrd);
+        if div64 == 0 {
+            return 87;
+        }
+        // 10 bits * 16 * (div64/64) / UARTCLK, in µs.
+        (10 * 16 * div64 * 1_000_000 / 64 / UARTCLK_HZ).max(1)
+    }
+
+    fn depth(&self) -> usize {
+        if self.lcrh & LCRH_FEN != 0 {
+            FIFO_DEPTH
+        } else {
+            1
+        }
+    }
+
+    /// `IFLS.RXIFLSEL`: 1/8, 1/4, 1/2, 3/4 or 7/8 full.
+    fn rx_trigger(&self) -> usize {
+        if self.lcrh & LCRH_FEN == 0 {
+            return 1;
+        }
+        match (self.ifls >> 3) & 7 {
+            0 => 4,
+            1 => 8,
+            2 => 16,
+            3 => 24,
+            _ => 28,
+        }
     }
 }
 
@@ -55,14 +199,34 @@ impl MmioDevice for Pl011 {
 
     fn read(&mut self, offset: u32, _width: Width) -> BusResult<u32> {
         Ok(match offset {
-            DR => 0,
-            FR => FR_TXFE | FR_RXFE, // tx empty, rx empty, never busy/full
+            DR => {
+                let b = self.rx.pop_front().map_or(0, u32::from);
+                if self.rx.len() < self.rx_trigger() {
+                    self.ris &= !INT_RX;
+                }
+                if self.rx.is_empty() {
+                    self.ris &= !INT_RT;
+                }
+                b
+            }
+            FR => {
+                let mut fr = FR_TXFE; // transmit never busy or full
+                if self.rx.is_empty() {
+                    fr |= FR_RXFE;
+                }
+                if self.rx.len() >= self.depth() {
+                    fr |= FR_RXFF;
+                }
+                fr
+            }
             IBRD => self.ibrd,
             FBRD => self.fbrd,
             LCRH => self.lcrh,
             CR => self.cr,
+            IFLS => self.ifls,
             IMSC => self.imsc,
-            RIS | MIS => 0,
+            RIS => self.ris,
+            MIS => self.ris & self.imsc,
             _ => 0,
         })
     }
@@ -72,15 +236,102 @@ impl MmioDevice for Pl011 {
             DR => self.out.push(value as u8),
             IBRD => self.ibrd = value & 0xFFFF,
             FBRD => self.fbrd = value & 0x3F,
-            LCRH => self.lcrh = value,
+            LCRH => {
+                // Toggling FEN flushes the FIFO, as the TRM warns.
+                if (self.lcrh ^ value) & LCRH_FEN != 0 {
+                    self.rx.clear();
+                    self.ris &= !(INT_RX | INT_RT);
+                }
+                self.lcrh = value;
+            }
             CR => self.cr = value,
-            IMSC => self.imsc = value,
-            ICR => {}
+            IFLS => self.ifls = value & 0x3F,
+            IMSC => self.imsc = value & 0x7FF,
+            ICR => self.ris &= !value,
             _ => {}
         }
         Ok(())
     }
 }
 
-#[allow(dead_code)]
-const _UNUSED_FLAGS: u32 = FR_BUSY | FR_TXFF | FR_RXFF;
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn linux_setup() -> Pl011 {
+        let mut u = Pl011::new();
+        // 115200 off 48 MHz, 8N1 with FIFOs, RX + RT interrupts.
+        u.write(IBRD, Width::Word, 26).unwrap();
+        u.write(FBRD, Width::Word, 3).unwrap();
+        u.write(LCRH, Width::Word, 0x70).unwrap();
+        u.write(IMSC, Width::Word, INT_RX | INT_RT).unwrap();
+        u
+    }
+
+    #[test]
+    fn bytes_arrive_at_the_baud_rate() {
+        let mut u = linux_setup();
+        assert_eq!(u.char_us(), 86);
+        u.feed(b"ab");
+        u.pump(1_000);
+        u.pump(1_050);
+        assert_ne!(u.read(FR, Width::Word).unwrap() & FR_RXFE, 0);
+        u.pump(1_086);
+        assert_eq!(u.rx.len(), 1, "one character time has passed");
+        // A sparse pump catches up rather than losing time.
+        u.pump(5_000);
+        assert_eq!(u.rx.len(), 2);
+        assert_eq!(u.read(DR, Width::Word).unwrap(), u32::from(b'a'));
+        assert_eq!(u.read(DR, Width::Word).unwrap(), u32::from(b'b'));
+        assert_ne!(u.read(FR, Width::Word).unwrap() & FR_RXFE, 0);
+    }
+
+    #[test]
+    fn a_short_burst_interrupts_on_the_timeout_and_reading_clears_it() {
+        let mut u = linux_setup();
+        u.feed(b"ls\r");
+        u.pump(10_000);
+        u.pump(10_000 + 86 * 3);
+        assert_eq!(u.rx.len(), 3);
+        // Below the half-full trigger, so only the timeout can report it.
+        assert!(!u.irq_line());
+        u.pump(10_000 + 86 * 7);
+        assert!(u.irq_line());
+        assert_eq!(u.read(MIS, Width::Word).unwrap(), INT_RT);
+        while u.read(FR, Width::Word).unwrap() & FR_RXFE == 0 {
+            u.read(DR, Width::Word).unwrap();
+        }
+        assert!(!u.irq_line());
+    }
+
+    #[test]
+    fn a_full_fifo_holds_the_rest_on_the_line() {
+        let mut u = linux_setup();
+        u.feed(&[b'x'; 40]);
+        u.pump(1_000_000);
+        u.pump(2_000_000);
+        assert_eq!(u.rx.len(), FIFO_DEPTH);
+        assert_eq!(u.rx_backlog(), 40);
+        assert_ne!(u.read(RIS, Width::Word).unwrap() & INT_RX, 0);
+        assert_ne!(u.read(FR, Width::Word).unwrap() & FR_RXFF, 0);
+        for _ in 0..FIFO_DEPTH {
+            u.read(DR, Width::Word).unwrap();
+        }
+        u.pump(2_000_000 + 86 * 3);
+        assert_eq!(u.rx.len(), 3, "the sender resumes a character at a time");
+        u.pump(3_000_000);
+        assert_eq!(u.rx.len(), 8);
+    }
+
+    #[test]
+    fn nothing_is_received_with_the_receiver_off() {
+        let mut u = linux_setup();
+        u.write(CR, Width::Word, CR_UARTEN).unwrap();
+        u.feed(b"z");
+        u.pump(1_000);
+        assert!(u.rx.is_empty());
+        u.write(CR, Width::Word, CR_UARTEN | CR_RXE).unwrap();
+        u.pump(2_000);
+        assert_eq!(u.read(DR, Width::Word).unwrap(), u32::from(b'z'));
+    }
+}

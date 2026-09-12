@@ -595,4 +595,10 @@ rpi-virt-fw: userland up, Linux 6.18.46-v8+, 4 CPUs
 BusyBox v1.35.0 (Debian 1:1.35.0-4+deb12u1+b1) built-in shell (ash)
 Enter 'help' for a list of built-in commands.
 
+/ # \x1b[6nuname -sm
+Linux aarch64
+/ # \x1b[6necho cpus=$(grep -c ^processor /proc/cpuinfo)
+cpus=4
+/ # \x1b[6necj\x08\x1b[Jho rvf-$((6*7))
+rvf-42
 / # \x1b[6n

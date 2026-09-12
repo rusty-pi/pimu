@@ -1,7 +1,8 @@
 # The Linux boot (#40, milestone 5): the firmware boot of firmware-boot.toml,
 # with the four ARM cores modelled, carried on through the armstub into the
 # kernel, off the SD card's ext4 root partition, and into a busybox shell on
-# the serial console. `scripts/boot-check.sh --scenario=testdata/boot/linux-boot.toml`
+# the serial console, which then gets a few commands typed into it.
+# `scripts/boot-check.sh --scenario=testdata/boot/linux-boot.toml`
 # runs it; CI runs that.
 #
 # The card is the one scripts/make-sd.sh builds; its root filesystem holds
@@ -21,12 +22,30 @@ description = "The firmware boot, then Linux on all four A72 cores to a busybox 
 eeprom = "../../firmware/pieeprom.bin"
 sd = "../../firmware/sd.img"
 arm = true
-# The prompt. Nothing after it prints without input.
+# The prompt after the last line typed below. Nothing prints without input.
 until = "/ # "
 # A dev box reaches the prompt in about three minutes; the runners are roughly
 # 1.6x slower. RVF_BOOT_WALL overrides it.
 wall_secs = 600
 max_skipped = 0
+
+# Typed into the serial console (milestone 6), each once ash's line editor is
+# reading: it puts the tty in raw mode, prints the prompt, then asks the
+# terminal where the cursor is (`ESC [6n`, which nothing answers here).
+[[boot.input]]
+after = "/ # \u001b[6n"
+text = "uname -sm\n"
+
+# Longer than the receive FIFO's half-full trigger, so both the trigger-level
+# and the timeout interrupt carry it in.
+[[boot.input]]
+after = "/ # \u001b[6n"
+text = "echo cpus=$(grep -c ^processor /proc/cpuinfo)\n"
+
+# A typo and a DEL: the line editor's backspace handling, not just echo.
+[[boot.input]]
+after = "/ # \u001b[6n"
+text = "ecj\u007fho rvf-$((6*7))\n"
 
 [golden]
 path = "golden/linux-boot.txt"
@@ -58,6 +77,18 @@ line = ["rpi-virt-fw: userland up, Linux ", ", 4 CPUs"]
 [[milestone]]
 why = "A shell on the serial console (milestone 5)."
 line = "built-in shell (ash)"
+
+[[milestone]]
+why = "What is typed on the serial console reaches the shell: PL011 receive FIFO and interrupt, through the GIC (milestone 6)."
+line = "Linux aarch64"
+
+[[milestone]]
+why = "A command line longer than the receive FIFO's trigger level arrives whole, and the shell runs it."
+line = "cpus=4"
+
+[[milestone]]
+why = "DEL edits the line: the shell got the keys in order, typo included."
+line = "rvf-42"
 
 [[milestone]]
 why = "No panic on the way (the last one was the missing root filesystem, before the card had one)."

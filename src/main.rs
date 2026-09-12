@@ -31,6 +31,7 @@ USAGE:
                              [--dump <hex>:<len>] [--disasm <hex>:<count>] [--patch <hex>=<hex>]
                              [--dump-fdt <path>] [--print-fdt] [--console-log <path>]
                              [--mbox-property <tag>[,<tag>...]] [--arm] [--until <text>]
+                             [--send-after <prompt> <text>]... [--stdin]
     rpi-virt-fw boot-check <scenario.toml> --plan [--console <path>]
     rpi-virt-fw boot-check <scenario.toml> --log <path> --console <path> [--update]
     rpi-virt-fw disasm <file> [--base <hex>] [--count <n>] [--vaddr <hex>]
@@ -78,7 +79,16 @@ FLAGS:
               a core hits something not modelled yet.
     --until <text>
               End the run once the console prints <text> (e.g. the shell
-              prompt of a Linux boot).
+              prompt of a Linux boot), after the last --send-after went in.
+    --send-after <prompt> <text>
+              Type <text> into the serial console (PL011) once it prints
+              <prompt>. Repeatable; each prompt is looked for only in what the
+              console printed after the previous send. Both take \\n, \\r, \\t,
+              \\\\ and \\xHH escapes. Deterministic: keyed to the transcript.
+    --stdin   Interactive session: the host's stdin is the serial console's
+              input, and no wall-clock or silence limit ends the run. On a
+              terminal, keys go to the guest raw (Ctrl-C included); Ctrl-A x
+              quits, Ctrl-A Ctrl-A sends a Ctrl-A.
     --dram-map
               Report which DRAM pages are non-zero when the run ends, as
               address runs. Proof of concept for the QEMU hand-off: this is the
@@ -196,6 +206,8 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     let mut skip_unimpl = false;
     let mut arm = false;
     let mut until: Option<String> = None;
+    let mut sends: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut stdin = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -230,6 +242,14 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
             "--trace-mmio" => trace_mmio = true,
             "--arm" => arm = true,
             "--until" => until = Some(it.next().context("--until needs a text")?.to_string()),
+            "--send-after" => {
+                let prompt = it.next().context("--send-after needs <prompt> <text>")?;
+                let text = it.next().context("--send-after needs <prompt> <text>")?;
+                let prompt = String::from_utf8(harness::boot::unescape(prompt))
+                    .context("--send-after: the prompt must be UTF-8")?;
+                sends.push((prompt, harness::boot::unescape(text)));
+            }
+            "--stdin" => stdin = true,
             "--sd" => sd_image = Some(PathBuf::from(it.next().context("--sd needs a path")?)),
             "--console-log" => {
                 console_log = Some(PathBuf::from(
@@ -465,16 +485,21 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
 
     let limits = RunLimits {
         max_steps,
-        max_wall: Some(std::time::Duration::from_secs(max_wall_secs)),
+        // An interactive session lasts as long as its user wants it to.
+        max_wall: (!stdin).then(|| std::time::Duration::from_secs(max_wall_secs)),
         stop_pc: None,
         idle_spin_limit: 200_000,
         // Stop once the firmware has gone quiet for a minute of modelled time.
         // The model's worst legitimate gap is the kernel load, about thirteen
         // seconds, so this has plenty of headroom; when the boot wedges it
-        // reports in seconds instead of running out the wall clock.
-        silent_us: 60_000_000,
+        // reports in seconds instead of running out the wall clock. A shell
+        // waiting for its user is quiet too, though.
+        silent_us: if stdin { 0 } else { 60_000_000 },
         until,
     };
+    // Made once, outside the reboot loop: it owns the stdin reader and the
+    // terminal's raw mode.
+    let mut host_input = stdin.then(rpi_virt_fw::stdio::HostInput::stdin);
 
     let mut reboots = 0u32;
     #[allow(unused_mut)]
@@ -552,7 +577,10 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         if smp {
             emu.start_smp(start);
         }
+        emu.input.script = sends.iter().cloned().collect();
+        emu.input.host = host_input.take();
         let report = emu.run(&limits);
+        host_input = emu.input.host.take();
 
         // `RVF_DUMP_FLASH=<path>` writes the (self-update-modified) EEPROM image
         // after every run segment — `<path>.<n>` — so a run that reaches
@@ -584,6 +612,8 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         }
         break 'boot (report, emu, start);
     };
+    // The terminal back to cooked mode before the report.
+    drop(host_input);
     // Collapse consecutive-identical transfers so a spin doesn't hide the
     // history that led into it.
     let mut cf_tail: Vec<(u32, u32, u32)> = Vec::new();

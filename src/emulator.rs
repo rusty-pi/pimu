@@ -51,6 +51,7 @@ pub struct Emulator {
     pub arm_enabled: bool,
     /// ARM core 0, once released.
     pub arm: Option<crate::arm::ArmSide>,
+    pub input: ConsoleInput,
 }
 
 /// Stopping conditions for [`Emulator::run`].
@@ -133,8 +134,32 @@ pub enum RunEnd {
     Reset,
     /// The ARM core hit something the model does not do yet.
     ArmStopped(crate::arm::ArmStop),
-    /// The console printed [`RunLimits::until`].
+    /// The console printed [`RunLimits::until`] — after the last line of any
+    /// [`ConsoleInput::script`] went in.
     Until,
+    /// The user ended an interactive session (`Ctrl-A x`).
+    Quit,
+}
+
+/// What the run types into the serial console (#40, milestone 6).
+#[derive(Default)]
+pub struct ConsoleInput {
+    /// Scripted input: each text is sent once the console has printed its
+    /// prompt, in order, each prompt looked for only in what came out after
+    /// the previous send. Keyed to the transcript, not to time, so a scripted
+    /// session is as deterministic as the boot it follows.
+    pub script: std::collections::VecDeque<(String, Vec<u8>)>,
+    /// Interactive input from the host (`recon --stdin`).
+    pub host: Option<crate::stdio::HostInput>,
+}
+
+/// Does `hay[from..]` contain `needle`, where `from` backs up far enough from
+/// `seen` (what was already searched) to catch a match straddling the two, but
+/// never before `floor`?
+fn printed_since(hay: &[u8], seen: usize, floor: usize, needle: &str) -> bool {
+    let needle = needle.as_bytes();
+    let from = seen.saturating_sub(needle.len()).max(floor);
+    !needle.is_empty() && hay[from..].windows(needle.len()).any(|w| w == needle)
 }
 
 #[derive(Debug, Clone)]
@@ -181,6 +206,7 @@ impl Emulator {
             machine,
             arm_enabled: false,
             arm: None,
+            input: ConsoleInput::default(),
         }
     }
 
@@ -258,7 +284,11 @@ impl Emulator {
         // that substring appears in the console — for pinning down a code path
         // by the log line that precedes it.
         let mut console_seen = 0usize;
-        let mut until_seen = 0usize;
+        // Prompt / `until` search: how much of the console has been searched,
+        // and where the output after the last scripted send begins.
+        let mut prompt_seen = 0usize;
+        let mut prompt_floor = 0usize;
+        let mut host_poll = 0u32;
 
         // Spin detection: over a sliding window of steps, track the min/max PC
         // and whether any console output happened. If the PC stays within a
@@ -650,6 +680,21 @@ impl Emulator {
                 }
             }
 
+            // Console input: keystrokes from the host, now and then (a channel
+            // poll per step would cost more than the step), then whatever is on
+            // the line into the receive FIFO at the modelled time.
+            if let Some(host) = self.input.host.as_mut() {
+                host_poll = host_poll.wrapping_add(1);
+                if host_poll.is_multiple_of(1024) {
+                    match host.poll() {
+                        Some(crate::stdio::HostEvent::Bytes(b)) => self.machine.uart0.feed(&b),
+                        Some(crate::stdio::HostEvent::Quit) => break RunEnd::Quit,
+                        None => {}
+                    }
+                }
+            }
+            self.machine.uart0.pump(self.machine.systimer.now_us());
+
             // The ARM: out of reset when `arm_loader` writes the ARM control
             // block, then kept in step with the system timer.
             if self.arm_enabled && self.arm.is_none() && self.machine.armctrl.take_release() {
@@ -693,12 +738,22 @@ impl Emulator {
                 let _ = std::io::stderr().write_all(&fresh);
             }
             console.extend_from_slice(&fresh);
-            if let (Some(needle), true) = (&limits.until, had_output) {
-                let from = until_seen.saturating_sub(needle.len());
-                if String::from_utf8_lossy(&console[from..]).contains(needle.as_str()) {
-                    break RunEnd::Until;
+            if had_output {
+                while let Some((prompt, text)) = self.input.script.front() {
+                    if !printed_since(&console, prompt_seen, prompt_floor, prompt) {
+                        break;
+                    }
+                    self.machine.uart0.feed(text);
+                    self.input.script.pop_front();
+                    prompt_floor = console.len();
+                    prompt_seen = prompt_floor;
                 }
-                until_seen = console.len();
+                if let (Some(needle), true) = (&limits.until, self.input.script.is_empty()) {
+                    if printed_since(&console, prompt_seen, prompt_floor, needle) {
+                        break RunEnd::Until;
+                    }
+                }
+                prompt_seen = console.len();
             }
             if let Some(needle) = &diag.trace_on_console {
                 if !self.cpu.trace && console.len() > console_seen {
