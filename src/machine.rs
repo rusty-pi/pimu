@@ -387,6 +387,7 @@ impl Machine {
             return Some((&mut self.aux, off));
         }
         if let Some(off) = hit(map::MBOX_BASE, map::MBOX_SIZE) {
+            self.mbox.now_us = self.systimer.now_us();
             return Some((&mut self.mbox, off));
         }
         if let Some(off) = hit(map::ARMCTRL_BASE, map::ARMCTRL_SIZE) {
