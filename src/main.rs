@@ -704,6 +704,18 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         if let Some(stop) = &a.stopped {
             println!("  stopped   {stop:x?}");
         }
+        if let Some(prof) = &a.prof {
+            let total: u64 = prof.values().sum();
+            let mut v: Vec<_> = prof.iter().collect();
+            v.sort_by_key(|(_, &n)| std::cmp::Reverse(n));
+            println!("  RVF_ARM_PROF: steps by core, EL and 256-byte PC bucket (total {total})");
+            for ((core, el, pc), &n) in v.into_iter().take(30) {
+                println!(
+                    "    core {core} EL{el} {pc:#014x}  {n:>13}  {:5.1}%",
+                    100.0 * n as f64 / total as f64
+                );
+            }
+        }
     } else if arm {
         println!("\n--- ARM cores (#40) ---\n  never released");
     }

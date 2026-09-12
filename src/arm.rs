@@ -195,6 +195,8 @@ pub struct ArmSide {
     /// the bits there is exact, and the cycle loop visits just these cores —
     /// in the same order — instead of re-testing all four every cycle (#43).
     runnable: u32,
+    /// `RVF_ARM_PROF`: steps per `(core, EL, 256-byte PC bucket)`.
+    pub prof: Option<std::collections::HashMap<(usize, u32, u64), u64>>,
 }
 
 /// The device interrupt lines wired to the GIC: the mailbox, eMMC2, the two
@@ -248,6 +250,7 @@ impl ArmSide {
             timer_due: 0,
             spis: [false; SPIS.len()],
             runnable: (1 << n) - 1,
+            prof: std::env::var_os("RVF_ARM_PROF").map(|_| Default::default()),
         }
     }
 
@@ -370,6 +373,9 @@ impl ArmSide {
         let core = &mut self.cores[id];
         let secure = core.cpu.el == 3 || core.cpu.sys.scr_el3 & sysreg::SCR_NS == 0;
         let pc = core.cpu.pc;
+        if let Some(p) = &mut self.prof {
+            *p.entry((id, core.cpu.el, pc & !0xFF)).or_default() += 1;
+        }
         let mut bus = ArmBus {
             m,
             timer: &mut core.timer,
