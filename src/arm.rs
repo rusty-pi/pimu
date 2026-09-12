@@ -156,6 +156,9 @@ impl ArmSide {
         m.gic
             .set_spi_level(gic::ID_MAILBOX, m.mbox.arm_irq_asserted());
         m.gic.set_spi_level(gic::ID_EMMC2, m.emmc2.irq_asserted());
+        let [genet_a, genet_b] = m.genet.irq_lines();
+        m.gic.set_spi_level(gic::ID_GENET_A, genet_a);
+        m.gic.set_spi_level(gic::ID_GENET_B, genet_b);
         let s = m.gic.signal(0);
         self.cpu.irq_line = s.is_some_and(|s| !s.fiq);
         self.cpu.fiq_line = s.is_some_and(|s| s.fiq);
