@@ -760,6 +760,20 @@ impl Bus for Machine {
         Ok(len)
     }
 
+    /// Same condition as `read_insn`'s RAM fast path. A hit counts as the RAM
+    /// read that fetch would have made: `ram_reads` feeds the run loop's
+    /// progress heuristics, and a decode cache must not change what they see.
+    fn code_gen(&mut self, pc: u32, cached: Option<u64>) -> Option<u64> {
+        if Machine::in_mmio(pc) {
+            return None;
+        }
+        let gen = self.ram.page_gen(Machine::fold_ram_addr(pc))?;
+        if cached == Some(gen) {
+            self.ram_reads = self.ram_reads.wrapping_add(1);
+        }
+        Some(gen)
+    }
+
     fn timer_tick_slot(&mut self) -> Option<u32> {
         // Each system-timer compare channel is its own VPU interrupt source
         // (`SYS_IRQ_SRC + channel`), and start4's vector table has 128 entries /

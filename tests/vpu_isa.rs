@@ -47,6 +47,40 @@ fn step(v: &mut Vpu, m: &mut Machine) {
     assert_eq!(v.step(m), Step::Ran, "stopped: {:?}", v.stopped);
 }
 
+/// The decode cache (#43) serves an instruction again only while nothing has
+/// been written into its page. Here the firmware-style case: code patched in
+/// place after it already ran once.
+#[test]
+fn decode_cache_redecodes_after_a_store_into_the_page() {
+    let mut m = machine();
+    let mut v = Vpu::new(CODE);
+    load_code(&mut m, CODE, &[NOP]);
+    v.regs.set(25, STACK_TOP);
+
+    step(&mut v, &mut m);
+    v.regs.pc = CODE;
+    step(&mut v, &mut m);
+    assert_eq!(v.icache.hits, 1, "the second run of the same nop is a hit");
+    assert_eq!(v.regs.get(25), STACK_TOP);
+
+    // A store to another page leaves the entry alone.
+    m.store32(CODE + 0x1000, 0xFFFF_FFFF).unwrap();
+    v.regs.pc = CODE;
+    step(&mut v, &mut m);
+    assert_eq!(v.icache.hits, 2);
+
+    // Overwrite the nop with a push: the cached nop must not run again.
+    load_code(&mut m, CODE, &[PUSH_R0_R5_LR]);
+    v.regs.pc = CODE;
+    step(&mut v, &mut m);
+    assert_eq!(
+        v.regs.get(25),
+        STACK_TOP - 28,
+        "the push ran, not the stale nop"
+    );
+    assert_eq!(v.icache.stale, 1);
+}
+
 /// `stm` writes the register list with the **highest-numbered register at the
 /// lowest address**. Getting this backwards was commit `8d7c27a`: it rotated
 /// the register file on every preemptive context switch, because ThreadX builds

@@ -2,10 +2,22 @@
 
 use crate::bus::{BusError, BusResult, Width};
 
+/// Pages are 4 KiB for the purpose of [`Ram::page_gen`].
+const PAGE_SHIFT: u32 = 12;
+
 /// A contiguous block of little-endian RAM mapped at `base`.
 pub struct Ram {
     base: u32,
     data: Vec<u8>,
+    /// A write generation per 4 KiB page, bumped by every store into it.
+    ///
+    /// This is what lets the VPU cache decoded instructions (#43): a cached
+    /// instruction is still good while its page's generation is the one it
+    /// was decoded under. `data` is private and every writer — CPU stores on
+    /// either side, DMA, the loaders — goes through [`Ram::store`] or
+    /// [`Ram::write_slice`], so no write can get past it. 64 bits, so a page
+    /// can never wrap back to a generation a stale entry still holds.
+    gens: Vec<u64>,
 }
 
 impl Ram {
@@ -13,6 +25,24 @@ impl Ram {
         Ram {
             base,
             data: vec![0; size],
+            gens: vec![0; size.div_ceil(1 << PAGE_SHIFT)],
+        }
+    }
+
+    /// The write generation of the page holding `addr`, or `None` outside RAM.
+    #[inline]
+    pub fn page_gen(&self, addr: u32) -> Option<u64> {
+        let rel = addr.checked_sub(self.base)? as usize;
+        self.gens.get(rel >> PAGE_SHIFT).copied()
+    }
+
+    /// Bump the generation of every page `len > 0` bytes at `off` touch.
+    #[inline]
+    fn wrote(&mut self, off: usize, len: usize) {
+        let first = off >> PAGE_SHIFT;
+        let last = (off + len - 1) >> PAGE_SHIFT;
+        for g in &mut self.gens[first..=last] {
+            *g += 1;
         }
     }
 
@@ -37,6 +67,9 @@ impl Ram {
     pub fn write_slice(&mut self, addr: u32, bytes: &[u8]) -> BusResult<()> {
         let off = self.offset(addr, bytes.len())?;
         self.data[off..off + bytes.len()].copy_from_slice(bytes);
+        if !bytes.is_empty() {
+            self.wrote(off, bytes.len());
+        }
         Ok(())
     }
 
@@ -83,6 +116,7 @@ impl Ram {
             write: true,
         })?;
         self.data[off..off + n].copy_from_slice(&value.to_le_bytes()[..n]);
+        self.wrote(off, n);
         Ok(())
     }
 }

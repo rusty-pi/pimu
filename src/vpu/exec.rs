@@ -7,6 +7,7 @@ use crate::bus::{Bus, BusError, Width};
 const CF_TRACE_LEN: usize = 512;
 
 use super::decode::decode;
+use super::icache::DecodeCache;
 use super::insn::{
     AddrMode, AluOp, Base, MemWidth, Op, RegOrImm, VecExec, VecInsn, VecPred, VecReg, VecRep,
     Writeback,
@@ -175,6 +176,8 @@ pub struct Vpu {
     /// The vector unit's register file. See `src/vpu/vrf.rs`; only the parts of
     /// the vector ISA `VecInsn::executable` accepts ever reach it.
     pub vrf: Vrf,
+    /// Decoded instructions, per core (`src/vpu/icache.rs`).
+    pub icache: DecodeCache,
     /// Ring of recent taken control transfers `(from_pc, to_pc)`.
     ///
     /// A `VecDeque`, not a `Vec`: this is a ring, and dropping the oldest entry
@@ -372,11 +375,21 @@ impl Vpu {
         }
         let pc = self.regs.pc;
 
-        let (buf, len) = match self.fetch(bus, pc) {
-            Ok(v) => v,
-            Err(err) => return self.stop(Stop::Fault(Fault::Bus { pc, err })),
+        let cached = self.icache.cached_gen(pc);
+        let gen = bus.code_gen(pc, cached);
+        let insn = if gen.is_some() && gen == cached {
+            self.icache.get(pc)
+        } else {
+            let (buf, len) = match self.fetch(bus, pc) {
+                Ok(v) => v,
+                Err(err) => return self.stop(Stop::Fault(Fault::Bus { pc, err })),
+            };
+            let insn = decode(&buf[..len as usize], pc);
+            if let Some(gen) = gen {
+                self.icache.fill(pc, gen, &insn);
+            }
+            insn
         };
-        let insn = decode(&buf[..len as usize], pc);
         let next = pc.wrapping_add(insn.len as u32);
 
         self.cycles += 1;

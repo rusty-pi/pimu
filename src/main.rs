@@ -637,6 +637,11 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         report.stub_hits, report.bus_errors
     );
     println!("wall       {:?}", report.wall);
+    let ic = &emu.cpu.icache;
+    println!(
+        "decode     cache hits {}  fills {}  stale {}",
+        ic.hits, ic.fills, ic.stale
+    );
     if let Some(pc1) = report.core1_pc {
         println!(
             "core1      pc {:#010x}  retired {}  end {:?}",
