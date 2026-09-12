@@ -57,8 +57,15 @@
 //!   fails — the global monitor's part in a spinlock.
 //! - TLB maintenance: every `TLBI` flushes all the cores' TLBs, which covers
 //!   the broadcast (inner-shareable) forms; invalidating more is allowed.
-//! - `wfe` and `sev` are no-ops: a `wfe` may complete without an event, so
-//!   the loops that wait with it just spin.
+//! - `wfe` waits for an event (ARM ARM D1.16): `sev` on any core, the
+//!   global monitor clearing the core's mark (the exclusive monitor above),
+//!   an interrupt line, or an exception return. It also gives up at the next
+//!   generic-timer event-stream event if the stream is enabled, and after
+//!   [`WFE_BACKSTOP`] if not. The architecture allows a `wfe` to complete
+//!   early, so the backstop is always safe; it only bounds how long a wait
+//!   nobody signals can take. Before this, `wfe` was a no-op, so cores parked
+//!   in a holding pen (TF-A's, UEFI's) spun for the whole boot and the cycle
+//!   loop never found every core asleep.
 //!
 //! Not yet: stage 2 translation (a core that sets `HCR_EL2.VM` stops with
 //! [`ArmStop::Unsupported`]).
@@ -80,6 +87,15 @@ const PERIPH_TO_BUS: u64 = 0x8000_0000;
 /// The PCIe outbound window. What decodes in it — the VL805's BAR0, through
 /// `CPU_2_PCIE_MEM_WIN0` — is up to the root complex (`periph/pcie.rs`).
 const PCIE: std::ops::Range<u64> = 0x6_0000_0000..0x8_0000_0000;
+
+/// The longest a `wfe` waits when nothing else ends it: 1 ms of modelled time.
+const WFE_BACKSTOP: u64 = gentimer::ARM_HZ / 1000;
+
+/// `CNTKCTL_EL1` / `CNTHCTL_EL2`: the event stream's enable, and which counter
+/// bit it follows.
+const EVNTEN: u64 = 1 << 2;
+const CNTKCTL_EL1: u32 = sysreg::key(3, 0, 14, 1, 0);
+const CNTHCTL_EL2: u32 = sysreg::key(3, 4, 14, 1, 0);
 
 /// The armstub lives at physical 0 and is well under a page; a core whose PC
 /// gets past this has left it.
@@ -112,8 +128,13 @@ pub struct Core {
     pub insns: u64,
     pub exceptions: u64,
     pub interrupts: u64,
-    /// In `wfi`, waiting for an interrupt.
+    /// In `wfi`, waiting for an interrupt, or in `wfe` (then
+    /// [`Self::wfe_until`] is set).
     pub waiting: bool,
+    /// Waiting in `wfe`: the cycle it gives up and completes anyway — the
+    /// next event-stream event, or [`WFE_BACKSTOP`] (module docs, "Between
+    /// cores").
+    pub wfe_until: Option<u64>,
     /// The first time the core's PC left the armstub: `(cycle, EL, PC, x0)`.
     /// For core 0 that is the kernel entry.
     pub entered: Option<(u64, u32, u64, u64)>,
@@ -128,6 +149,7 @@ impl Core {
             exceptions: 0,
             interrupts: 0,
             waiting: false,
+            wfe_until: None,
             entered: None,
         }
     }
@@ -276,7 +298,8 @@ impl ArmSide {
         self.timer_due = self
             .cores
             .iter()
-            .filter_map(|c| c.timer.next_event(cycles))
+            .flat_map(|c| [c.timer.next_event(cycles), c.wfe_until])
+            .flatten()
             .min()
             .unwrap_or(u64::MAX);
         for id in 0..self.cores.len() {
@@ -289,7 +312,8 @@ impl ArmSide {
     #[inline]
     fn refresh_runnable(&mut self, id: usize) {
         let c = &self.cores[id];
-        if !c.waiting || c.cpu.irq_line || c.cpu.fiq_line {
+        let wfe_done = c.wfe_until.is_some_and(|t| c.cpu.event || t <= self.cycles);
+        if !c.waiting || c.cpu.irq_line || c.cpu.fiq_line || wfe_done {
             self.runnable |= 1 << id;
         } else {
             self.runnable &= !(1 << id);
@@ -314,8 +338,14 @@ impl ArmSide {
             while ids != 0 {
                 let id = ids.trailing_zeros() as usize;
                 ids &= ids - 1;
-                // Runnable and waiting means a line is up: it wakes.
-                self.cores[id].waiting = false;
+                // Runnable and waiting means a line is up, or a `wfe` saw its
+                // event or ran out: it wakes. A `wfe` that completes consumes
+                // the event.
+                let core = &mut self.cores[id];
+                core.waiting = false;
+                if core.wfe_until.take().is_some() {
+                    core.cpu.event = false;
+                }
                 awake = true;
                 if let Some(stop) = self.step_core(m, id) {
                     self.stopped = Some(stop);
@@ -353,8 +383,16 @@ impl ArmSide {
         let written = bus.written;
         self.dirty |= bus.io;
         let el = core.cpu.el;
+        let mut wfe_until = None;
         match step {
-            Step::Retired | Step::Wfe => core.insns += 1,
+            Step::Retired => core.insns += 1,
+            Step::Wfe => {
+                core.insns += 1;
+                core.waiting = true;
+                let until = cycles + wfe_timeout(core);
+                core.wfe_until = Some(until);
+                wfe_until = Some(until);
+            }
             Step::Wfi => {
                 core.insns += 1;
                 core.waiting = true;
@@ -395,16 +433,35 @@ impl ArmSide {
             core.entered = Some((cycles, el, core.cpu.pc, core.cpu.x[0]));
         }
         let broadcast = std::mem::take(&mut core.cpu.tlb.broadcast);
+        let sev = std::mem::take(&mut core.cpu.sev);
+        // Sleepers an event just reached: their runnable bits need a look.
+        let mut signalled = 0u32;
         for (k, other) in self.cores.iter_mut().enumerate() {
             if k == id {
                 continue;
             }
+            let mut event = false;
             if let Some((lo, hi)) = written {
-                other.cpu.snoop_write(lo, hi);
+                event |= other.cpu.snoop_write(lo, hi);
+            }
+            if sev {
+                other.cpu.event = true;
+                event = true;
+            }
+            if event && other.waiting {
+                signalled |= 1 << k;
             }
             if broadcast {
                 other.cpu.tlb.flush();
             }
+        }
+        while signalled != 0 {
+            let k = signalled.trailing_zeros() as usize;
+            signalled &= signalled - 1;
+            self.refresh_runnable(k);
+        }
+        if let Some(until) = wfe_until {
+            self.timer_due = self.timer_due.min(until);
         }
         None
     }
@@ -542,6 +599,25 @@ impl ArmBus<'_> {
         };
         r.map_err(|_| Abort { addr, write: true })
     }
+}
+
+/// How many cycles a `wfe` about to wait on `core` may take before it
+/// completes on its own: until the next event-stream event if the stream
+/// that applies at its EL is on (`CNTHCTL_EL2` at EL2, `CNTKCTL_EL1` below;
+/// an event every `2^(EVNTI + 1)` counter ticks), else [`WFE_BACKSTOP`].
+fn wfe_timeout(core: &Core) -> u64 {
+    let ctl = match core.cpu.el {
+        0 | 1 => CNTKCTL_EL1,
+        2 => CNTHCTL_EL2,
+        _ => return WFE_BACKSTOP,
+    };
+    let v = core.cpu.sys.plain.get(&ctl).copied().unwrap_or(0);
+    let hz = core.timer.hz();
+    if v & EVNTEN == 0 || hz == 0 {
+        return WFE_BACKSTOP;
+    }
+    let ticks = 2u64 << ((v >> 4) & 0xF);
+    (ticks * gentimer::ARM_HZ / hz).clamp(1, WFE_BACKSTOP)
 }
 
 fn dbg_arm_exc() -> bool {
@@ -813,5 +889,77 @@ mod tests {
         arm.run(&mut m, 1);
         assert_eq!(arm.cores[0].exceptions, 1);
         assert_eq!(arm.cores[0].cpu.sys.far[3], 0x6_3000_0000);
+    }
+
+    const WFE: u32 = 0xD503_205F;
+    const SEV: u32 = 0xD503_209F;
+    const SEVL: u32 = 0xD503_20BF;
+    const NOP: u32 = 0xD503_201F;
+    const B_SELF: u32 = 0x1400_0000;
+
+    /// Nothing signals a lone `wfe`: the core sleeps until the backstop, and
+    /// the cycle loop skips the time instead of spinning through it.
+    #[test]
+    fn an_unsignalled_wfe_sleeps_until_the_backstop() {
+        let mut m = machine_with(&[WFE, B_SELF]);
+        let mut arm = ArmSide::with_cores(1);
+        arm.run(&mut m, WFE_BACKSTOP - 1);
+        assert_eq!(arm.cores[0].insns, 1);
+        assert_eq!(arm.cores[0].cpu.pc, 4);
+        assert!(arm.slept >= WFE_BACKSTOP - 2);
+        arm.run(&mut m, 10);
+        assert!(arm.cores[0].insns > 1, "the backstop ends the wait");
+    }
+
+    /// `sevl; wfe` is the idiom that primes a wait loop: the local event is
+    /// consumed and the `wfe` does not wait.
+    #[test]
+    fn sevl_makes_the_next_wfe_complete_at_once() {
+        let mut m = machine_with(&[SEVL, WFE, NOP, B_SELF]);
+        let mut arm = ArmSide::with_cores(1);
+        arm.run(&mut m, 3);
+        assert_eq!(arm.cores[0].insns, 3);
+        assert_eq!(arm.cores[0].cpu.pc, 12);
+        assert!(!arm.cores[0].cpu.event);
+    }
+
+    /// A holding pen like TF-A's (`wfe; ldr; cbz`): the parked core sleeps
+    /// until another core writes its release word and signals with `sev`.
+    #[test]
+    fn a_parked_core_wakes_on_sev() {
+        let mut code = vec![NOP; 0x40 + 4];
+        // Core 0: movz x1, #1; str x1, [x0]; sev; b .
+        code[..4].copy_from_slice(&[0xD280_0021, 0xF900_0001, SEV, B_SELF]);
+        // Core 1 at 0x100: wfe; ldr x1, [x0]; cbz x1, 0x100; b .
+        code[0x40..].copy_from_slice(&[WFE, 0xF940_0001, 0xB4FF_FFC1, B_SELF]);
+        let mut m = machine_with(&code);
+        let mut arm = ArmSide::with_cores(2);
+        for c in &mut arm.cores {
+            c.cpu.x[0] = 0x800;
+        }
+        arm.cores[1].cpu.pc = 0x100;
+        // Cycle 0 core 1 waits; cycle 2 core 0 signals; cycles 3..5 core 1
+        // runs `ldr`, `cbz` and lands on its `b .`.
+        arm.run(&mut m, 6);
+        assert_eq!(arm.cores[1].cpu.pc, 0x10C, "released");
+        assert_eq!(arm.cores[1].insns, 4);
+    }
+
+    /// Without the `sev` the same pen stays asleep: a plain store to a
+    /// location nobody holds exclusively is not an event.
+    #[test]
+    fn a_parked_core_ignores_a_store_without_sev() {
+        let mut code = vec![NOP; 0x40 + 4];
+        code[..4].copy_from_slice(&[0xD280_0021, 0xF900_0001, B_SELF, B_SELF]);
+        code[0x40..].copy_from_slice(&[WFE, 0xF940_0001, 0xB4FF_FFC1, B_SELF]);
+        let mut m = machine_with(&code);
+        let mut arm = ArmSide::with_cores(2);
+        for c in &mut arm.cores {
+            c.cpu.x[0] = 0x800;
+        }
+        arm.cores[1].cpu.pc = 0x100;
+        arm.run(&mut m, 1000);
+        assert_eq!(arm.cores[1].insns, 1);
+        assert_eq!(arm.cores[1].cpu.pc, 0x104);
     }
 }

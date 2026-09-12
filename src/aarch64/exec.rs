@@ -552,8 +552,24 @@ fn system(cpu: &mut Cpu, insn: u32, mem: &mut dyn Memory) -> Exec {
         (false, 0) => match crn {
             // Hints. Unallocated hints execute as NOP.
             2 if rt == 31 => match (crm << 3) | op2 {
+                // WFE: a pending event is consumed instead of waiting.
+                2 if cpu.event => {
+                    cpu.event = false;
+                    Ok(())
+                }
                 2 => Err(Stop::Wfe),
                 3 => Err(Stop::Wfi),
+                // SEV: every core's Event Register, this one's included.
+                4 => {
+                    cpu.event = true;
+                    cpu.sev = true;
+                    Ok(())
+                }
+                // SEVL: this core's only.
+                5 => {
+                    cpu.event = true;
+                    Ok(())
+                }
                 _ => Ok(()),
             },
             // Barriers.
