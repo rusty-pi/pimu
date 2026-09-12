@@ -80,10 +80,21 @@ soc:firmware: Attached to firmware from 2026-08-10T18:21:35`, 71 mailbox
 interrupts — and the kernel reaches `Waiting for root device /dev/mmcblk0p2...`.
 Two runs print byte-identical consoles, timestamps included.
 
-What it waits on: the SD controller (`fe340000.mmc`) defers on
-`regulator-sd-io-1v8`, whose GPIO lives on the firmware's expander, and the
-firmware answers `Failed to get GPIO 4 config (0 ffffffff)`. The hwrng no
-longer gets in the way: the RNG model now implements the rng200 register map
+The SD controller used to defer on `regulator-sd-io-1v8`, whose GPIO lives on
+the firmware's expander: with no device at `0x43` on the PMIC bus the firmware
+answered `Failed to get GPIO 4 config (0 ffffffff)`. The FXL6408 is modelled
+now (`src/periph/fxl6408.rs`), the firmware answers `GET_GPIO_CONFIG` for pins
+128..135 the way a real board does, and the controller probes
+(`mmc0: Hardware doesn't specify timeout clock frequency.`).
+
+What it waits on: the card. The kernel still reaches `Waiting for root device
+/dev/mmcblk0p2...` and no card shows up, because the eMMC2 model is only what
+the VPU bootloader needed: PIO reads, no SDMA/ADMA2, no writes, no interrupt
+line to the GIC (INTID 158), and no UHS voltage switch. A real 4B runs the card
+with ADMA in DDR50 at 1.8 V. GENET (`fd580000.ethernet`) is unmapped too
+(#38), but it is not on the root-filesystem path.
+
+The hwrng no longer gets in the way: the RNG model now implements the rng200 register map
 that start4 and Linux both use (see `src/periph/rng.rs`), so `hwrng_fillfn`
 gets words instead of spinning in `bcm2711_rng200_read`, and the kernel idles
 in `cpu_do_idle` while it waits (1800 s of wall clock models 737 s, nearly all
