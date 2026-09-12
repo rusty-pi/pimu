@@ -83,6 +83,24 @@ modelled.
   source at CoreCtl when it was queued, not when it was vectored, so a source
   queued during the dispatcher's entry overwrote the one being taken.
   `RVF_DBG_MBOX` names each request's tag, which is how it was found.
+- A level SPI held high does not show up as a storm of interrupts in the run
+  report. Linux's `gic_handle_irq` reads `GICC_IAR` in a loop, and in split EOI
+  mode each round is IAR, EOIR, the handlers, DIR, and IAR again returns the
+  same ID: the core never leaves the exception. The report's per-core
+  interrupt count stays small and the GIC line reads `rpr 0xff … active [n]
+  pending [n] line [n]` — priority dropped, handler running, not a lost
+  deactivation. With the PCIe endpoint's INTA (175) forced high, core 0 acked
+  it 1.5 million times this way. What should end the loop is `note_interrupt`:
+  after 100 000 rounds of every handler returning `IRQ_NONE` it prints `irq
+  27: nobody cared` and disables the line. It did not, because `pcie_pme_irq`
+  returned `IRQ_HANDLED` every time: `pcie_pme_probe` clears the root port's
+  `PCI_EXP_RTSTA` PME status with `pcie_capability_set_dword`, a
+  read-modify-write that relies on the bit being write-one-to-clear, and the
+  model's root-port config past the header was plain storage, so the clear
+  set it for good. With the RW1C status bits modelled the same run prints
+  `nobody cared`, disables IRQ 27 and carries on. The GIC was right throughout
+  (`level_spi_split_eoi_is_acknowledged_again_after_each_dir` in
+  `src/periph/gic.rs`).
 
 ## Devices Linux touched, and what they needed
 
