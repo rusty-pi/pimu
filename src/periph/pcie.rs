@@ -314,6 +314,24 @@ fn rc_cfg_write_mask(off: u32) -> u32 {
     }
 }
 
+/// Status bits past the header that software clears by writing ones (RW1C):
+/// DevSta, LnkSta's bandwidth-management bits, SltSta, RootSta's PME status,
+/// and AER's uncorrectable, correctable and root error status. Linux clears
+/// the PME status with a read-modify-write (`pcie_clear_root_pme_status`), so
+/// as plain storage the clear would set it for good, and `pcie_pme_irq` would
+/// claim every interrupt on the line (docs/arm-side-findings.md).
+fn rc_cfg_w1c_mask(off: u32) -> u32 {
+    match off {
+        0x0B4 => 0x000F_0000,
+        0x0BC => 0xC000_0000,
+        0x0C4 => 0x011F_0000,
+        0x0CC => 0x0001_0000,
+        0x104 | 0x110 => 0xFFFF_FFFF,
+        0x130 => 0x0000_007F,
+        _ => 0,
+    }
+}
+
 pub struct Pcie {
     storage: BTreeMap<u32, u32>,
     /// Last value written to `RGR1_SW_INIT_1`.
@@ -750,8 +768,10 @@ impl MmioDevice for Pcie {
                 Width::Word => 0xFFFF_FFFF,
             } & rc_cfg_write_mask(word_off);
             let old = self.storage.get(&word_off).copied().unwrap_or(0);
-            self.storage
-                .insert(word_off, (old & !mask) | ((value << shift) & mask));
+            let w1c = rc_cfg_w1c_mask(word_off) & mask;
+            let ones = (value << shift) & mask;
+            let new = (old & !mask) | (ones & !w1c) | (old & w1c & !ones);
+            self.storage.insert(word_off, new);
             return Ok(());
         }
         self.storage.insert(offset & !3, value);
@@ -1103,5 +1123,23 @@ mod tests {
         p.write(0x22, Width::Half, 0x8000).unwrap();
         p.write(0x20, Width::Half, 0x1230).unwrap();
         assert_eq!(rd(&mut p, 0x20), 0x8000_1230);
+    }
+
+    /// `pcie_pme_probe` clears the root port's PME status with a
+    /// read-modify-write that sets the bit; on RW1C it must stay clear, or
+    /// `pcie_pme_irq` claims every interrupt on the line.
+    #[test]
+    fn root_status_pme_is_write_one_to_clear() {
+        let mut p = link_up_pcie();
+        let rtsta = rd(&mut p, 0xCC);
+        p.write(0xCC, Width::Word, rtsta | 1 << 16).unwrap();
+        assert_eq!(rd(&mut p, 0xCC) & 1 << 16, 0);
+        // A set bit is cleared by a one and kept by a zero; the RW bits of
+        // the same word (DevCtl) still take what is written.
+        p.storage.insert(0xB4, 0x0005_2C10);
+        p.write(0xB4, Width::Half, 0x2C1F).unwrap();
+        assert_eq!(rd(&mut p, 0xB4), 0x0005_2C1F);
+        p.write(0xB6, Width::Half, 0x0001).unwrap();
+        assert_eq!(rd(&mut p, 0xB4), 0x0004_2C1F);
     }
 }
