@@ -27,6 +27,10 @@ fn compare_channel(offset: u32) -> Option<usize> {
 /// and can be revisited once firmware clock programming is modelled.
 pub const VPU_HZ_DEFAULT: u64 = 54_000_000;
 
+/// VPU cycles per microsecond of the counter. A constant, so that the per-step
+/// arithmetic on it is a multiply rather than a division.
+const CYCLES_PER_US: u64 = VPU_HZ_DEFAULT / 1_000_000;
+
 /// Fallback re-arm interval (µs) for a compare channel written with a value that
 /// is already in the past — keeps a periodic tick going even if the firmware
 /// never rewrites the compare register itself.
@@ -35,7 +39,6 @@ const DEFAULT_INTERVAL_US: u64 = 10_000;
 pub struct SysTimer {
     micros: u64,
     frac_cycles: u64,
-    cycles_per_us: u64,
     cs: u32,
     cmp: [u32; 4],
     /// Absolute µs deadline of each armed channel (`None` = not armed).
@@ -77,7 +80,6 @@ impl SysTimer {
         SysTimer {
             micros: 0,
             frac_cycles: 0,
-            cycles_per_us: VPU_HZ_DEFAULT / 1_000_000,
             cs: 0,
             cmp: [0; 4],
             deadline: [None; 4],
@@ -141,7 +143,7 @@ impl SysTimer {
             return 0;
         }
         (us - self.micros)
-            .saturating_mul(self.cycles_per_us)
+            .saturating_mul(CYCLES_PER_US)
             .saturating_sub(self.frac_cycles)
     }
 
@@ -151,7 +153,7 @@ impl SysTimer {
     /// `sleep` and `usleep` fast-forwards as well as with retired cycles.
     pub fn cycles_at(&self, hz: u64) -> u64 {
         let per_us = hz / 1_000_000;
-        self.micros * per_us + self.frac_cycles * per_us / self.cycles_per_us
+        self.micros * per_us + self.frac_cycles * per_us / CYCLES_PER_US
     }
 
     /// Advance the counter by `cycles` VPU cycles, reporting whether the
@@ -163,12 +165,12 @@ impl SysTimer {
     /// time-derived work on those calls.
     pub fn advance(&mut self, cycles: u64) -> bool {
         let total = self.frac_cycles + cycles;
-        if total < self.cycles_per_us {
+        if total < CYCLES_PER_US {
             self.frac_cycles = total;
             return false;
         }
-        self.micros += total / self.cycles_per_us;
-        self.frac_cycles = total % self.cycles_per_us;
+        self.micros += total / CYCLES_PER_US;
+        self.frac_cycles = total % CYCLES_PER_US;
         self.service_matches();
         true
     }
