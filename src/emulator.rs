@@ -1168,6 +1168,15 @@ impl Emulator {
         let uart_busy = self.machine.uart0.rx_backlog() != 0;
         let host = self.input.host.is_some();
         let spin = limits.idle_spin_limit > 0;
+        // Core 1 steps only while it runs. It can stop or sleep in here, but
+        // only a slow step wakes it, and its vector-base pickup is done: the
+        // register it reads only moves with a peripheral write.
+        let mut core1_runs = self
+            .cpu1
+            .as_ref()
+            .is_some_and(|c| !c.is_stopped() && !c.halted);
+        // Only a register write releases the ARM, and that ends the run.
+        let arm_on = self.arm.is_some();
         self.cpu.event = false;
         let mut n = 0u64;
         let end = 'run: {
@@ -1182,11 +1191,15 @@ impl Emulator {
                 if self.machine.wake | self.cpu.event {
                     break 'run self.post_step(st, limits, pc, exc_depth, step, Resume::Core0);
                 }
-                if self.cpu1.is_some() {
+                if core1_runs {
                     self.step_core1(st);
                     if self.machine.wake {
                         break 'run self.post_step(st, limits, pc, exc_depth, step, Resume::Core1);
                     }
+                    core1_runs = self
+                        .cpu1
+                        .as_ref()
+                        .is_some_and(|c| !c.is_stopped() && !c.halted);
                 }
                 if host {
                     st.host_poll = st.host_poll.wrapping_add(1);
@@ -1194,11 +1207,13 @@ impl Emulator {
                 if uart_busy {
                     self.machine.uart0.pump(self.machine.systimer.now_us());
                 }
-                if let Some(end) = self.step_arm() {
-                    break 'run Some(end);
-                }
-                if self.machine.wake {
-                    break 'run self.post_step(st, limits, pc, exc_depth, step, Resume::Arm);
+                if arm_on {
+                    if let Some(end) = self.step_arm() {
+                        break 'run Some(end);
+                    }
+                    if self.machine.wake {
+                        break 'run self.post_step(st, limits, pc, exc_depth, step, Resume::Arm);
+                    }
                 }
                 if spin {
                     if self.machine.systimer.clo_reads != st.clo_reads_at_cf {
