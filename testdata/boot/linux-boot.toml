@@ -7,7 +7,8 @@
 #
 # The card is the one scripts/make-sd.sh builds; its root filesystem holds
 # Debian's static busybox (fetched by scripts/fetch-firmware.sh), an inittab
-# that runs /etc/init.d/rcS and a shell on ttyAMA0, and nothing else.
+# that runs /etc/init.d/rcS and a shell on ttyAMA0, and Raspberry Pi's
+# `rpi-fw-crypto` with the shared libraries it needs.
 #
 # The golden transcript carries the firmware's console and then the kernel's.
 # Every kernel line appears twice from `printk: console [ttyAMA0] enabled` on:
@@ -46,6 +47,15 @@ text = "echo cpus=$(grep -c ^processor /proc/cpuinfo)\n"
 [[boot.input]]
 after = "/ # \u001b[6n"
 text = "ecj\u007fho rvf-$((6*7))\n"
+
+# The HMAC firmware-boot.toml asks the crypto service for, with the same key
+# and the same 16 bytes, this time from Linux userspace: Raspberry Pi's own
+# `rpi-fw-crypto` (scripts/fetch-firmware.sh) through /dev/vcio_crypto, the
+# path rpi-mkosi's machine-id derivation takes (#40 milestone 4). It prints
+# the digest without a newline, hence the `echo`.
+[[boot.input]]
+after = "/ # \u001b[6n"
+text = "echo -ne 'Hello, world!\\0\\0\\0' | rpi-fw-crypto hmac --in /proc/self/fd/0 --key-id 1 --outform hex; echo\n"
 
 [golden]
 path = "golden/linux-boot.txt"
@@ -106,6 +116,15 @@ line = "cpus=4"
 [[milestone]]
 why = "DEL edits the line: the shell got the keys in order, typo included."
 line = "rvf-42"
+
+[[milestone]]
+why = """
+Linux userspace gets the same HMAC-SHA256 out of start4's crypto service that
+firmware-boot.toml's mailbox request does, byte for byte (its milestone prints
+the digest as little-endian words): Raspberry Pi's rpi-fw-crypto, through
+/dev/vcio_crypto, the kernel's firmware driver and the ARM mailbox, into the
+VPU's own mbedTLS with the OTP key (#40 milestone 4, rpi-mkosi#37)."""
+line = "0eb6f96f3a97b37bb065eb014f76fd488df48682ed6ab4f14cdae0e8a26e1e9d"
 
 [[milestone]]
 why = "No panic on the way (the last one was the missing root filesystem, before the card had one)."

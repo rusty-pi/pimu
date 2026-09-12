@@ -145,6 +145,22 @@ if [[ -f "$fw/busybox-aarch64" ]]; then
 else
   echo "  ! missing $fw/busybox-aarch64 (root filesystem left without init; run fetch-firmware.sh)" >&2
 fi
+# rpi-fw-crypto, to ask start4's crypto service for an HMAC from Linux
+# userspace (#40 milestone 4), with exactly the shared libraries it loads.
+userland="$fw/arm64-userland"
+if [[ -f "$userland/usr/bin/rpi-fw-crypto" ]]; then
+  mkdir -p "$rootfs"/{lib,usr/bin,usr/lib/aarch64-linux-gnu}
+  cp "$userland/usr/bin/rpi-fw-crypto" "$rootfs/usr/bin/"
+  for so in ld-linux-aarch64.so.1 libc.so.6 librpifwcrypto.so.0 libgnutls.so.30 \
+            libp11-kit.so.0 libffi.so.8 libidn2.so.0 libunistring.so.5 libtasn1.so.6 \
+            libnettle.so.8 libhogweed.so.6 libgmp.so.10; do
+    cp -L "$userland/usr/lib/aarch64-linux-gnu/$so" "$rootfs/usr/lib/aarch64-linux-gnu/$so"
+  done
+  ln -s ../usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1 "$rootfs/lib/ld-linux-aarch64.so.1"
+  echo "  + p2: rpi-fw-crypto and its libraries"
+else
+  echo "  ! missing $userland (no rpi-fw-crypto on the card; run fetch-firmware.sh)" >&2
+fi
 # The firmware's command line ends in `console=tty1`, which makes the
 # framebuffer /dev/console; name the serial port instead.
 cat >"$rootfs/etc/inittab" <<'EOF'
