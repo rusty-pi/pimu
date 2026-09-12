@@ -82,10 +82,12 @@ Two runs print byte-identical consoles, timestamps included.
 
 What it waits on: the SD controller (`fe340000.mmc`) defers on
 `regulator-sd-io-1v8`, whose GPIO lives on the firmware's expander, and the
-firmware answers `Failed to get GPIO 4 config (0 ffffffff)`. Meanwhile
-`hwrng_fillfn` spins in `bcm2711_rng200_read`, polling `0xfe10400c`, which the
-RNG model answers with start4's legacy register map (see `src/periph/rng.rs`)
-rather than the rng200 one Linux uses.
+firmware answers `Failed to get GPIO 4 config (0 ffffffff)`. The hwrng no
+longer gets in the way: the RNG model now implements the rng200 register map
+that start4 and Linux both use (see `src/periph/rng.rs`), so `hwrng_fillfn`
+gets words instead of spinning in `bcm2711_rng200_read`, and the kernel idles
+in `cpu_do_idle` while it waits (1800 s of wall clock models 737 s, nearly all
+of it `wfi`).
 
 Every line appears twice once `ttyAMA0` registers: `keep_bootcon` keeps
 `earlycon` on the same UART as the real console. That is the price of seeing
