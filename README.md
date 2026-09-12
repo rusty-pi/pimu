@@ -105,7 +105,7 @@ Every `recon` run that gets that far prints them:
 --- device tree handed to the ARM ---
   at 0x2eff1e00  totalsize 0xe1b5  version 17
   /chosen/rpi-serial64           "fa1e00231aa2bb31"
-  /chosen/rpi-machine-id         "2928640898f6b5035da98885da0ac498"
+  /chosen/rpi-machine-id         "ed96a9bc626d9d0869ce37ee4aea025d"
   ...
 ```
 

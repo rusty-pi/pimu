@@ -51,7 +51,7 @@
 //! Nothing regresses against this reimplementation, and nothing should. The
 //! guard that matters is the **pinned output**: given the fixed OTP rows in
 //! `src/periph/configotp.rs`, `/chosen/rpi-machine-id` must be exactly
-//! `2928640898f6b5035da98885da0ac498`, which `testdata/boot/firmware-boot.toml`
+//! `ed96a9bc626d9d0869ce37ee4aea025d`, which `testdata/boot/firmware-boot.toml`
 //! asserts directly against the transcript.
 //!
 //! Checking "our recomputation agrees with the firmware" instead would be
@@ -201,12 +201,12 @@ mod tests {
             0x1AA2_BB31,
             0xFA1E_0023,
             0x00D0_3115,
-            0x5E00_5301,
-            0x0000_0200,
+            0x5301_0000,
+            0x0200_5E00,
         ];
         assert_eq!(
             expected_machine_id_hex(&rows),
-            "2928640898f6b5035da98885da0ac498"
+            "ed96a9bc626d9d0869ce37ee4aea025d"
         );
     }
 
@@ -218,14 +218,14 @@ mod tests {
             0x1AA2_BB31,
             0xFA1E_0023,
             0x00D0_3115,
-            0x5E00_5301,
-            0x0000_0200,
+            0x5301_0000,
+            0x0200_5E00,
         ];
         let mut flipped = rows;
         flipped[0] = 0x1AA2_BB32;
         assert_eq!(
             expected_machine_id_hex(&flipped),
-            "075d24bb620ac951d7b20db02366b59b"
+            "4118472de608104951e495ece64b75f0"
         );
     }
 }

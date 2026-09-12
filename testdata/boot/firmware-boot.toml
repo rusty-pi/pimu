@@ -268,7 +268,7 @@ the derivation the way the firmware does: that reads from the same fuses, so
 changing them would move the published id and still agree with itself, masking
 exactly the event this exists to catch. `src/identity.rs` reproduces the
 algorithm for diagnosis only, and nothing asserts against it."""
-line = ["/chosen/rpi-machine-id ", "\"2928640898f6b5035da98885da0ac498\""]
+line = ["/chosen/rpi-machine-id ", "\"ed96a9bc626d9d0869ce37ee4aea025d\""]
 
 [[milestone]]
 why = """

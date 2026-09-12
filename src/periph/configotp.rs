@@ -44,8 +44,8 @@
 //!
 //! It does feed that derivation, which was worth checking rather than assuming:
 //! flipping row 28 by one bit changes every byte of the `rpi-machine-id`
-//! `arm_loader` publishes (`2928640898f6b5035da98885da0ac498` ->
-//! `075d24bb620ac951d7b20db02366b59b`). So the regression `scripts/boot-check.sh`
+//! `arm_loader` publishes (`ed96a9bc626d9d0869ce37ee4aea025d` ->
+//! `4118472de608104951e495ece64b75f0`). So the regression `scripts/boot-check.sh`
 //! pins is a real derivation being re-run, not a constant being copied — and
 //! changing the serial here invalidates that milestone, which is the point.
 
@@ -162,13 +162,21 @@ impl ConfigOtp {
         // `01:02:03:04:05:06` would be wrong: bit 0 of `01` marks it
         // multicast, which is not a legal source address.
         //
-        // The split — low four bytes in 64, high two in 65 — is inferred from
-        // Raspberry Pi's tooling, not verified against this firmware: the boot
-        // reads both rows but nothing modelled so far consumes them.
-        // `arm_loader`'s `rpi-machine-id` derivation is the consumer that will
-        // pin it down (#5), and this is the place to correct if it disagrees.
-        table.insert(64, 0x5E00_5301);
-        table.insert(65, 0x0000_0200);
+        // The split: row 65 holds the first four octets, most significant
+        // first, and bits 31:16 of row 64 the last two; bits 15:0 of row 64
+        // are not used. start4's `FUN_0ed1330e` (start4db decompile) builds
+        // the MAC that way from `{row 64, row 65}`, and the bootloader's
+        // network boot prints the same octets (`NETWORK: 02:00:5e:00:53:01`).
+        // An earlier guess with the four low octets in row 64 made the
+        // bootloader print `00:00:02:00:5e:00`.
+        //
+        // Programming these rows is optional. With both blank, start4
+        // (`FUN_0ec63338`) keeps the MAC the bootloader hands over or, without
+        // one, falls back to `b8:27:eb` plus the low 24 bits of the serial.
+        // They are programmed here because they are on the Pi 4B this table
+        // mirrors, and they feed `rpi-machine-id` (see `crate::identity`).
+        table.insert(64, 0x5301_0000);
+        table.insert(65, 0x0200_5E00);
         // 56-63: the 256-bit customer-private key. The reference board has
         // these *fused* — `vcgencmd otp_dump` prints them as `00000000`, but it
         // hides this region the same way it hides rows 19-26, and Linux's
