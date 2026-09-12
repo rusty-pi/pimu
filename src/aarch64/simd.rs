@@ -1489,10 +1489,10 @@ pub(super) fn ldst_structures(cpu: &mut Cpu, insn: u32, mem: &mut dyn Memory) ->
                     let k = (r + s) as usize;
                     let addr = base.wrapping_add(offs);
                     if load {
-                        let v = mem.read(addr, ebytes)?;
+                        let v = cpu.read(mem, addr, ebytes)?;
                         set_elem(&mut vals[k], e, esize, v);
                     } else {
-                        mem.write(addr, ebytes, elem(vals[k], e, esize))?;
+                        cpu.write(mem, addr, ebytes, elem(vals[k], e, esize))?;
                     }
                     offs += ebytes as u64;
                 }
@@ -1542,11 +1542,11 @@ pub(super) fn ldst_structures(cpu: &mut Cpu, insn: u32, mem: &mut dyn Memory) ->
         for v in vals.iter_mut().take(selem as usize) {
             let addr = base.wrapping_add(offs);
             if replicate_ {
-                *v = replicate(mem.read(addr, ebytes)?, esize);
+                *v = replicate(cpu.read(mem, addr, ebytes)?, esize);
             } else if load {
-                set_elem(v, index, esize, mem.read(addr, ebytes)?);
+                set_elem(v, index, esize, cpu.read(mem, addr, ebytes)?);
             } else {
-                mem.write(addr, ebytes, elem(*v, index, esize))?;
+                cpu.write(mem, addr, ebytes, elem(*v, index, esize))?;
             }
             offs += ebytes as u64;
         }

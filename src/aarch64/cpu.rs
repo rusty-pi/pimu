@@ -4,8 +4,9 @@
 //! The core never owns memory. [`Cpu::step`] takes `&mut dyn Memory`, the same
 //! shape as the VPU's [`Bus`](crate::bus::Bus), so the machine can hand both
 //! processors the same RAM and peripherals. Addresses here are 64-bit: the
-//! A72 sees the full 35-bit physical map of the BCM2711 and, once the MMU is
-//! modelled, 48-bit virtual addresses.
+//! A72 sees the full 35-bit physical map of the BCM2711 and, with the MMU on,
+//! 48-bit virtual addresses; [`Memory`] only ever sees physical ones
+//! (translation is `src/aarch64/mmu.rs`).
 //!
 //! Two ways to run it: [`Cpu::step`] executes one instruction and reports a
 //! synchronous exception without taking it — what a user-mode harness wants,
@@ -13,7 +14,8 @@
 //! taking exceptions and interrupts into the guest the way the hardware does.
 
 use super::exec;
-use super::sysreg::{SysRegs, HCR_TGE, HCR_TSC, SCR_HCE, SCR_NS, SCR_SMD, SCTLR_M};
+use super::mmu::Tlb;
+use super::sysreg::{SysRegs, HCR_TGE, HCR_TSC, HCR_VM, SCR_HCE, SCR_NS, SCR_SMD};
 use super::{irq_target, vector_group, VECTOR_FIQ, VECTOR_IRQ, VECTOR_SYNC};
 
 /// A memory access the bus refused. The address is the one the core asked
@@ -60,20 +62,18 @@ pub enum Exception {
     Hvc(u16),
     Smc(u16),
     Brk(u16),
-    /// A data access the bus refused.
+    /// A data access that faulted: translation, permission, the bus, or
+    /// alignment. `addr` is the virtual address; `fsc` the `DFSC`
+    /// ([`super::mmu`]'s `FSC_*`).
     DataAbort {
         addr: u64,
         write: bool,
+        fsc: u8,
     },
-    /// A data access that had to be aligned and was not (exclusives,
-    /// acquire/release).
-    Alignment {
-        addr: u64,
-        write: bool,
-    },
-    /// The instruction fetch itself failed.
+    /// The instruction fetch itself faulted; `fsc` is the `IFSC`.
     InsnAbort {
         addr: u64,
+        fsc: u8,
     },
     PcAlignment,
 }
@@ -86,24 +86,22 @@ impl Exception {
         use super::{EC_BRK64, EC_HVC64, EC_SMC64, EC_SVC64, EC_UNKNOWN, ESR_IL};
         let lower = from_el < to_el;
         let ec = |c: u64| (c << 26) | ESR_IL;
-        // DFSC/IFSC: synchronous external abort 0x10, alignment fault 0x21.
         match self {
             Exception::Undefined => (ec(EC_UNKNOWN), None),
             Exception::Svc(i) => (ec(EC_SVC64) | u64::from(i), None),
             Exception::Hvc(i) => (ec(EC_HVC64) | u64::from(i), None),
             Exception::Smc(i) => (ec(EC_SMC64) | u64::from(i), None),
             Exception::Brk(i) => (ec(EC_BRK64) | u64::from(i), None),
-            Exception::InsnAbort { addr } => {
-                (ec(if lower { 0x20 } else { 0x21 }) | 0x10, Some(addr))
-            }
-            Exception::DataAbort { addr, write } | Exception::Alignment { addr, write } => {
-                let fsc = if matches!(self, Exception::Alignment { .. }) {
-                    0x21
-                } else {
-                    0x10
-                };
+            Exception::InsnAbort { addr, fsc } => (
+                ec(if lower { 0x20 } else { 0x21 }) | u64::from(fsc),
+                Some(addr),
+            ),
+            Exception::DataAbort { addr, write, fsc } => {
                 let wnr = (write as u64) << 6;
-                (ec(if lower { 0x24 } else { 0x25 }) | wnr | fsc, Some(addr))
+                (
+                    ec(if lower { 0x24 } else { 0x25 }) | wnr | u64::from(fsc),
+                    Some(addr),
+                )
             }
             Exception::PcAlignment => (ec(0x22), Some(pc)),
         }
@@ -173,6 +171,10 @@ pub struct Cpu {
     /// them. [`Cpu::step_system`] takes them when routing and masking allow.
     pub irq_line: bool,
     pub fiq_line: bool,
+    /// Stage 1 translations (`src/aarch64/mmu.rs`).
+    pub tlb: Tlb,
+    /// Set by the executor while an `LDTR`/`STTR` accesses memory.
+    pub(super) unprivileged: bool,
     /// The local exclusive monitor: the address `ldxr` marked, if any.
     pub(super) exclusive: Option<u64>,
     /// Set by the executor for the instruction in flight: where to go next.
@@ -210,6 +212,8 @@ impl Cpu {
             sys: SysRegs::new(id),
             irq_line: false,
             fiq_line: false,
+            tlb: Tlb::new(),
+            unprivileged: false,
             exclusive: None,
             next_pc: 0,
         }
@@ -260,8 +264,7 @@ impl Cpu {
 
     /// Is the translation regime the core is in now running with its MMU on?
     pub fn mmu_on(&self) -> bool {
-        let regime = self.el.max(1) as usize;
-        self.sys.sctlr[regime] & SCTLR_M != 0
+        self.regime().is_some()
     }
 
     /// Exception entry to AArch64 `target` (ARM ARM D1.10.2): save `PSTATE`
@@ -359,9 +362,9 @@ impl Cpu {
         if pc & 3 != 0 {
             return Step::Exception(Exception::PcAlignment);
         }
-        let insn = match mem.fetch(pc) {
+        let insn = match self.fetch(mem, pc) {
             Ok(i) => i,
-            Err(a) => return Step::Exception(Exception::InsnAbort { addr: a.addr }),
+            Err(e) => return Step::Exception(e),
         };
         self.next_pc = pc.wrapping_add(4);
         match exec::execute(self, insn, mem) {
@@ -391,8 +394,8 @@ impl Cpu {
         if self.irq_line && self.take_interrupt(false) {
             return Step::Interrupt { fiq: false };
         }
-        if self.mmu_on() {
-            return Step::Unsupported("stage 1 translation (SCTLR_ELx.M = 1)");
+        if self.el < 2 && self.sys.scr_el3 & SCR_NS != 0 && self.sys.hcr_el2 & HCR_VM != 0 {
+            return Step::Unsupported("stage 2 translation (HCR_EL2.VM = 1)");
         }
         match self.step(mem) {
             Step::Exception(e) => {

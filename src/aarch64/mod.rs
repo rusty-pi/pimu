@@ -32,6 +32,7 @@ mod cpu;
 mod exec;
 pub mod fp;
 mod fpinsn;
+pub mod mmu;
 mod simd;
 pub mod sysreg;
 

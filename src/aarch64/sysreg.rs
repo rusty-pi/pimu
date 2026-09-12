@@ -13,8 +13,7 @@
 //!    fields cleared: BCM2711 does not implement it (`/proc/cpuinfo` there
 //!    lists `fp asimd evtstrm crc32 cpuid`).
 //! 3. Plain storage: registers that only matter to whoever reads them back
-//!    (translation-table and cache configuration until the MMU is modelled,
-//!    debug and PMU registers, IMPLEMENTATION DEFINED ones like
+//!    (cache configuration, `PAR_EL1`, debug and PMU registers, IMPLEMENTATION DEFINED ones like
 //!    `L2CTLR_EL1`), kept in a map but only for encodings on an allowlist.
 //! 4. The generic timer, which belongs to the machine rather than the core:
 //!    forwarded to [`Memory::sysreg_read`] / [`Memory::sysreg_write`].
@@ -46,6 +45,8 @@ pub const SCR_NS: u64 = 1 << 0;
 pub const SCR_SMD: u64 = 1 << 7;
 pub const SCR_HCE: u64 = 1 << 8;
 /// `HCR_EL2` bits the core consults.
+pub const HCR_VM: u64 = 1 << 0;
+pub const HCR_DC: u64 = 1 << 12;
 pub const HCR_TSC: u64 = 1 << 19;
 pub const HCR_TGE: u64 = 1 << 27;
 /// `SCTLR_ELx.M`: stage 1 translation on.
@@ -287,13 +288,29 @@ pub(super) fn read(cpu: &mut Cpu, k: u32, mem: &mut dyn Memory) -> Result<u64, S
 
 /// `MSR` (register).
 pub(super) fn write(cpu: &mut Cpu, k: u32, v: u64, mem: &mut dyn Memory) -> Result<(), Stop> {
-    let (op0, op1, crn) = (k >> 14, (k >> 11) & 7, (k >> 7) & 15);
+    let (op0, op1) = (k >> 14, (k >> 11) & 7);
     let Some(min) = min_el(op0, op1) else {
         return Err(UNDEF);
     };
     if cpu.el < min {
         return Err(UNDEF);
     }
+    let before = shaping(&cpu.sys);
+    write_reg(cpu, k, v, mem)?;
+    if shaping(&cpu.sys) != before {
+        cpu.tlb.flush();
+    }
+    Ok(())
+}
+
+/// The registers that decide what the TLB holds (see mmu.rs).
+#[allow(clippy::type_complexity)]
+fn shaping(s: &SysRegs) -> ([u64; 4], [u64; 4], [u64; 4], u64, u64, u64) {
+    (s.sctlr, s.tcr, s.ttbr0, s.ttbr1_el1, s.hcr_el2, s.scr_el3)
+}
+
+fn write_reg(cpu: &mut Cpu, k: u32, v: u64, mem: &mut dyn Memory) -> Result<(), Stop> {
+    let (op0, op1, crn) = (k >> 14, (k >> 11) & 7, (k >> 7) & 15);
     match k {
         k if k == key(3, 3, 4, 2, 0) => cpu.nzcv = v as u32 & 0xF000_0000,
         k if k == key(3, 3, 4, 2, 1) => cpu.daif = v as u32 & (0xF << 6),
