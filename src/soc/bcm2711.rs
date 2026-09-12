@@ -11,18 +11,20 @@
 pub const PERIPH_BASE: u32 = 0x7E00_0000;
 pub const PERIPH_SIZE: u32 = 0x0200_0000; // 32 MiB window (0x7E00_0000..0x8000_0000)
 
+// Blocks with a spec in `specs/*.toml` take their window from it (#39).
+
 /// System timer (1 MHz free-running).
-pub const SYSTIMER_BASE: u32 = 0x7E00_3000;
-pub const SYSTIMER_SIZE: u32 = 0x1000;
+pub const SYSTIMER_BASE: u32 = crate::spec::systimer::BASE;
+pub const SYSTIMER_SIZE: u32 = crate::spec::systimer::SIZE;
 
 /// Multicore-sync block (`0x7E00_0000`): inter-core doorbells / semaphores.
-pub const MCSYNC_BASE: u32 = 0x7E00_0000;
-pub const MCSYNC_SIZE: u32 = 0x1000;
+pub const MCSYNC_BASE: u32 = crate::spec::mcsync::BASE;
+pub const MCSYNC_SIZE: u32 = crate::spec::mcsync::SIZE;
 
 /// VPU core-control block (`0x7E00_2000`): per-core start vectors and run-state.
 /// `start4.elf` releases VPU core 1 through here.
-pub const CORECTL_BASE: u32 = 0x7E00_2000;
-pub const CORECTL_SIZE: u32 = 0x1000;
+pub const CORECTL_BASE: u32 = crate::spec::corectl::BASE;
+pub const CORECTL_SIZE: u32 = crate::spec::corectl::SIZE;
 
 /// DMA4 ("dma40") channel the main bootloader uses to scrub / move DRAM.
 pub const DMA4_BASE: u32 = 0x7E00_7B00;

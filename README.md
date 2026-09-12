@@ -37,6 +37,11 @@ Working:
   domains, DMA4, Arasan eMMC + SD-card read, BSC/I²C + DA9090 PMIC register
   file, the two HDMI DDC I²C masters, mcsync, the `0x7EE0` boot-box, and a
   logging catch-all for the rest.
+- **Register specs** (`specs/*.toml`) — machine-readable register maps with
+  per-register provenance. `build.rs` generates the constants the device
+  models match on, `tests/specs.rs` checks them against the model, and
+  [`docs/periph/`](docs/periph/) is generated from them. Converted so far:
+  mcsync, core-control, system timer.
 - **Firmware pipeline** — `pieeprom.bin` self-update trailer, EEPROM config
   parse, GPT/MBR + FAT32 walk, `fixup4.dat`, RSA signature check.
 - **Regression harness** (`src/harness/`) — TOML scenarios in, console

@@ -76,3 +76,8 @@ pub use uart_pl011::Pl011;
 pub use vce::Vce;
 pub use vl805::Vl805;
 pub use xhci::Xhci;
+
+/// Devices whose register map lives in `specs/*.toml`, with what each one
+/// models of it. `tests/specs.rs` checks these against the specs.
+pub const SPEC_COVERAGE: &[crate::spec::Coverage] =
+    &[corectl::COVERAGE, mcsync::COVERAGE, systimer::COVERAGE];

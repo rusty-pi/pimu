@@ -31,6 +31,7 @@ pub mod mem;
 pub mod payloads;
 pub mod periph;
 pub mod soc;
+pub mod spec;
 pub mod vpu;
 
 pub use emulator::{Emulator, RunEnd, RunLimits, RunReport};

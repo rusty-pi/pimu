@@ -6,14 +6,20 @@
 //! advances timed waits (see [`crate::bus::Bus::timer_tick_slot`]).
 
 use crate::bus::{BusResult, MmioDevice, Width};
+use crate::spec::systimer::{C, CHI, CLO, CS, CS_M0_MASK, C_COUNT, C_STRIDE};
+use crate::spec::Coverage;
 
-const CS: u32 = 0x00;
-const CLO: u32 = 0x04;
-const CHI: u32 = 0x08;
-const C0: u32 = 0x0C;
-const C1: u32 = 0x10;
-const C2: u32 = 0x14;
-const C3: u32 = 0x18;
+/// Every register in `specs/systimer.toml` is modelled.
+pub const COVERAGE: Coverage = Coverage {
+    block: "systimer",
+    decoded: &[CS, CLO, CHI, C],
+};
+
+/// The compare channel `offset` addresses, if it is one of `C0..C3`.
+fn compare_channel(offset: u32) -> Option<usize> {
+    let rel = offset.checked_sub(C)?;
+    (rel % C_STRIDE == 0 && rel / C_STRIDE < C_COUNT).then_some((rel / C_STRIDE) as usize)
+}
 
 /// Nominal VPU clock in Hz. Used only to convert executed cycles into
 /// microseconds for the timer. The real early-boot VPU clock is the crystal
@@ -157,7 +163,7 @@ impl SysTimer {
             if self.micros < d {
                 continue;
             }
-            self.cs |= 1 << c;
+            self.cs |= CS_M0_MASK << c;
             self.pending[c] = true;
             self.pending_any = true;
             self.deadline[c] = None;
@@ -242,11 +248,7 @@ impl MmioDevice for SysTimer {
                 self.clo_reads += 1;
                 (self.micros >> 32) as u32
             }
-            C0 => self.cmp[0],
-            C1 => self.cmp[1],
-            C2 => self.cmp[2],
-            C3 => self.cmp[3],
-            _ => 0,
+            o => compare_channel(o).map_or(0, |c| self.cmp[c]),
         })
     }
 
@@ -283,11 +285,11 @@ impl MmioDevice for SysTimer {
         };
         match offset {
             CS => self.cs &= !value, // write-1-to-clear match bits
-            C0 => arm(self, 0),
-            C1 => arm(self, 1),
-            C2 => arm(self, 2),
-            C3 => arm(self, 3),
-            _ => {}
+            o => {
+                if let Some(c) = compare_channel(o) {
+                    arm(self, c);
+                }
+            }
         }
         Ok(())
     }
