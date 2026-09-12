@@ -45,6 +45,9 @@ pub struct Machine {
     /// PCIe root complex (`0x7D50_0000`) — a register file only. The VL805
     /// xHCI controller behind it is not modelled; see `docs/usb-xhci.md`.
     pub pcie: crate::periph::pcie::Pcie,
+    /// GENET v5 Ethernet MAC (`0x7D58_0000`) with the BCM54213PE PHY on its
+    /// MDIO bus. No packet DMA; see [`crate::periph::genet`].
+    pub genet: crate::periph::Genet,
     /// Hardware RNG (`0x7E10_4000`), an RNG200 — start4 and Linux both read it.
     pub rng: Rng,
     /// VCE vector/codec engine (`0x7F10_0000`) — the codec licence check
@@ -152,6 +155,7 @@ impl Machine {
             pvt: crate::periph::Pvt::new(),
             asb: Asb::new(),
             pcie: crate::periph::pcie::Pcie::new(),
+            genet: crate::periph::Genet::new(),
             rng: Rng::new(),
             vce: Vce::new(),
             bsc0: Bsc::empty("bsc0"),
@@ -317,6 +321,7 @@ impl Machine {
             || (map::SDRAMC_BASE..map::SDRAMC_BASE + map::SDRAMC_SIZE).contains(&addr)
             || (map::CLKMON_BASE..map::CLKMON_BASE + map::CLKMON_SIZE).contains(&addr)
             || (map::PCIE_BASE..map::PCIE_BASE + map::PCIE_SIZE).contains(&addr)
+            || (map::GENET_BASE..map::GENET_BASE + map::GENET_SIZE).contains(&addr)
     }
 
     /// Should an access to `addr` be recorded in `mmio_events`? True when the
@@ -437,6 +442,9 @@ impl Machine {
         }
         if let Some(off) = hit(map::PCIE_BASE, map::PCIE_SIZE) {
             return Some((&mut self.pcie, off));
+        }
+        if let Some(off) = hit(map::GENET_BASE, map::GENET_SIZE) {
+            return Some((&mut self.genet, off));
         }
 
         if (map::PERIPH_BASE..map::PERIPH_BASE + map::PERIPH_SIZE).contains(&a) {

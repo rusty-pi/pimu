@@ -181,6 +181,13 @@ pub const SDRAMC_SIZE: u32 = 0x0004_0000; // 0x7DC0_0000..0x7DC4_0000
 pub const PCIE_BASE: u32 = 0x7D50_0000;
 pub const PCIE_SIZE: u32 = 0x0000_9310;
 
+/// GENET v5 Ethernet MAC (`ethernet@7d580000`, `reg = <0x7d580000 0x10000>`)
+/// with its UniMAC MDIO bus at `+0xE14`. Below the `0x7E…` window like
+/// [`PCIE_BASE`], so decoded ahead of the cache-alias fold. See
+/// [`crate::periph::genet`].
+pub const GENET_BASE: u32 = 0x7D58_0000;
+pub const GENET_SIZE: u32 = crate::periph::genet::SIZE;
+
 /// Main SDRAM as seen by the VPU (cached alias at 0, uncached at 0xC000_0000).
 pub const SDRAM_CACHED_BASE: u32 = 0x0000_0000;
 pub const SDRAM_UNCACHED_BASE: u32 = 0xC000_0000;
