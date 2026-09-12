@@ -12,8 +12,12 @@
 //! node that does not exist yet.
 //!
 //! This is deliberately not a general DTB library: no phandle resolution, no
-//! memory-reservation walk, no writing. Spec: Devicetree Specification v0.4,
-//! section 5 ("Flattened Devicetree Format").
+//! memory-reservation walk, and one narrow writer — [`Fdt::with_property`],
+//! which replaces the value of a property that already exists. That is all the
+//! ARM side needs (`earlycon` onto `/chosen/bootargs`,
+//! [`crate::armstub::add_bootargs`]).
+//! Spec: Devicetree Specification v0.4, section 5 ("Flattened Devicetree
+//! Format").
 //!
 //! [rpi-mkosi#37]: https://github.com/valtzu/rpi-mkosi/issues/37
 
@@ -277,6 +281,140 @@ impl<'a> Fdt<'a> {
         out
     }
 
+    /// The RAM the tree describes: `reg` of every `memory` node directly under
+    /// the root, as `(base, size)`, decoded with the root's `#address-cells` /
+    /// `#size-cells` (2 and 1 on a Pi 4, which are also the spec's defaults,
+    /// section 2.3.5).
+    pub fn memory_ranges(&self) -> Result<Vec<(u64, u64)>, String> {
+        let nodes = self.nodes();
+        let root = nodes.first().ok_or("empty tree")?;
+        let cells = |name: &str, default: usize| {
+            root.2
+                .iter()
+                .find(|p| p.name == name && p.value.len() == 4)
+                .map_or(default, |p| be32(&p.value) as usize)
+        };
+        let (ac, sc) = (cells("#address-cells", 2), cells("#size-cells", 1));
+        if !(1..=2).contains(&ac) || !(1..=2).contains(&sc) {
+            return Err(format!(
+                "unsupported #address-cells {ac} / #size-cells {sc}"
+            ));
+        }
+        let num = |b: &[u8]| {
+            b.chunks(4)
+                .fold(0u64, |acc, c| (acc << 32) | u64::from(be32(c)))
+        };
+        let mut out = Vec::new();
+        for (depth, path, props) in &nodes {
+            let name = path.rsplit('/').next().unwrap_or("");
+            if *depth != 1 || !(name == "memory" || name.starts_with("memory@")) {
+                continue;
+            }
+            let Some(reg) = props.iter().find(|p| p.name == "reg") else {
+                continue;
+            };
+            let stride = 4 * (ac + sc);
+            if reg.value.is_empty() || !reg.value.len().is_multiple_of(stride) {
+                return Err(format!("{path}/reg is {} bytes", reg.value.len()));
+            }
+            for entry in reg.value.chunks(stride) {
+                out.push((num(&entry[..4 * ac]), num(&entry[4 * ac..])));
+            }
+        }
+        if out.is_empty() {
+            return Err("no /memory node with a reg".into());
+        }
+        Ok(out)
+    }
+
+    /// A copy of the blob with one existing property's value replaced.
+    ///
+    /// The value may change length, so the structure block is re-emitted and
+    /// everything after it moves: the header's `totalsize`, `off_dt_strings`
+    /// and `size_dt_struct` are rewritten to match. The memory-reservation
+    /// block and the strings block are copied through byte for byte, and the
+    /// order the firmware laid them out in (header, reservations, structure,
+    /// strings — the order `dtc` uses too) is required rather than assumed.
+    /// Free space past the strings block is not carried over; the result is
+    /// exactly as long as its own `totalsize`.
+    ///
+    /// Only replaces: a node or property that does not exist is an error,
+    /// because adding one would also need a new entry in the strings block.
+    pub fn with_property(&self, path: &str, name: &str, value: &[u8]) -> Result<Vec<u8>, String> {
+        let h = self.header;
+        let (s_off, s_len) = (h.off_dt_struct as usize, h.size_dt_struct as usize);
+        let (t_off, t_len) = (h.off_dt_strings as usize, h.size_dt_strings as usize);
+        if s_off < 40 || t_off < s_off + s_len {
+            return Err(format!(
+                "unexpected block order: struct at {s_off:#x}+{s_len:#x}, strings at {t_off:#x}"
+            ));
+        }
+        let want: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+        let at_path = |stack: &[String]| {
+            stack.len() == want.len() + 1 && stack[1..].iter().zip(&want).all(|(a, b)| a == b)
+        };
+
+        let blob = &self.blob[s_off..s_off + s_len];
+        let mut out: Vec<u8> = Vec::with_capacity(s_len + value.len() + 8);
+        let mut stack: Vec<String> = Vec::new();
+        let mut replaced = false;
+        let mut p = 0usize;
+        while p + 4 <= blob.len() {
+            let token = be32(&blob[p..p + 4]);
+            let start = p;
+            p += 4;
+            match token {
+                FDT_BEGIN_NODE => {
+                    let rest = &blob[p..];
+                    let nlen = rest.iter().position(|&b| b == 0).unwrap_or(rest.len());
+                    stack.push(String::from_utf8_lossy(&rest[..nlen]).into_owned());
+                    p += (nlen + 4) & !3;
+                }
+                FDT_END_NODE => {
+                    stack.pop();
+                }
+                FDT_PROP => {
+                    if p + 8 > blob.len() {
+                        return Err("truncated property".into());
+                    }
+                    let len = be32(&blob[p..p + 4]) as usize;
+                    let nameoff = be32(&blob[p + 4..p + 8]);
+                    p += 8 + ((len + 3) & !3);
+                    if !replaced && at_path(&stack) && self.string(nameoff) == name {
+                        out.extend_from_slice(&FDT_PROP.to_be_bytes());
+                        out.extend_from_slice(&(value.len() as u32).to_be_bytes());
+                        out.extend_from_slice(&nameoff.to_be_bytes());
+                        out.extend_from_slice(value);
+                        out.resize(out.len().next_multiple_of(4), 0);
+                        replaced = true;
+                        continue;
+                    }
+                }
+                FDT_NOP => {}
+                FDT_END => {
+                    out.extend_from_slice(&blob[start..p]);
+                    break;
+                }
+                other => return Err(format!("unknown token {other:#x} at +{start:#x}")),
+            }
+            out.extend_from_slice(&blob[start..p.min(blob.len())]);
+        }
+        if !replaced {
+            return Err(format!("no property {path}/{name}"));
+        }
+
+        let new_strings = s_off + out.len();
+        let total = new_strings + t_len;
+        let mut b = Vec::with_capacity(total);
+        b.extend_from_slice(&self.blob[..s_off]);
+        b.extend_from_slice(&out);
+        b.extend_from_slice(&self.blob[t_off..t_off + t_len]);
+        b[4..8].copy_from_slice(&(total as u32).to_be_bytes());
+        b[12..16].copy_from_slice(&(new_strings as u32).to_be_bytes());
+        b[36..40].copy_from_slice(&(out.len() as u32).to_be_bytes());
+        Ok(b)
+    }
+
     /// The whole tree rendered as source, near enough to `dtc -O dts` output to
     /// diff two firmware versions by eye. Not a faithful `.dts`: values are
     /// rendered by [`Property::display`], which guesses string vs cell vs
@@ -318,8 +456,95 @@ impl<'a> Fdt<'a> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn memory_ranges_decode_reg_with_the_root_cells() {
+        // The shape of the tree start4 hands over on a 1 GB Pi 4:
+        // `#address-cells = <2>`, `#size-cells = <1>`, 948 MiB at 0.
+        let cells = |v: &[u32]| v.iter().flat_map(|w| w.to_be_bytes()).collect::<Vec<u8>>();
+        let blob = build(
+            &[
+                ("#address-cells", cells(&[2])),
+                ("#size-cells", cells(&[1])),
+            ],
+            &[(
+                "memory@0",
+                vec![
+                    ("device_type", b"memory\0".to_vec()),
+                    ("reg", cells(&[0, 0, 0x3b40_0000])),
+                ],
+            )],
+        );
+        let fdt = Fdt::parse(&blob).unwrap();
+        assert_eq!(fdt.memory_ranges().unwrap(), vec![(0, 0x3b40_0000)]);
+        // No memory node at all is an error, not an empty map.
+        let none = build(&[], &[("chosen", vec![])]);
+        assert!(Fdt::parse(&none).unwrap().memory_ranges().is_err());
+    }
+
+    /// `/ { <root props> <child> { <props> } ... }` as a blob.
+    #[allow(clippy::type_complexity)]
+    fn build(root: &[(&str, Vec<u8>)], children: &[(&str, Vec<(&str, Vec<u8>)>)]) -> Vec<u8> {
+        fn tok(s: &mut Vec<u8>, v: u32) {
+            s.extend_from_slice(&v.to_be_bytes());
+        }
+        fn pad(s: &mut Vec<u8>) {
+            s.resize(s.len().next_multiple_of(4), 0);
+        }
+        fn node(s: &mut Vec<u8>, name: &str) {
+            tok(s, FDT_BEGIN_NODE);
+            s.extend_from_slice(name.as_bytes());
+            s.push(0);
+            pad(s);
+        }
+        fn prop(s: &mut Vec<u8>, strings: &mut Vec<u8>, name: &str, v: &[u8]) {
+            let off = strings.len() as u32;
+            strings.extend_from_slice(name.as_bytes());
+            strings.push(0);
+            tok(s, FDT_PROP);
+            tok(s, v.len() as u32);
+            tok(s, off);
+            s.extend_from_slice(v);
+            pad(s);
+        }
+        let (mut s, mut strings) = (Vec::new(), Vec::new());
+        node(&mut s, "");
+        for (n, v) in root {
+            prop(&mut s, &mut strings, n, v);
+        }
+        for (name, props) in children {
+            node(&mut s, name);
+            for (n, v) in props {
+                prop(&mut s, &mut strings, n, v);
+            }
+            tok(&mut s, FDT_END_NODE);
+        }
+        tok(&mut s, FDT_END_NODE);
+        tok(&mut s, FDT_END);
+        let off_struct = 40u32;
+        let off_strings = off_struct + s.len() as u32;
+        let total = off_strings + strings.len() as u32;
+        let mut b = Vec::new();
+        for w in [
+            FDT_MAGIC,
+            total,
+            off_struct,
+            off_strings,
+            0,
+            17,
+            16,
+            0,
+            strings.len() as u32,
+            s.len() as u32,
+        ] {
+            b.extend_from_slice(&w.to_be_bytes());
+        }
+        b.extend_from_slice(&s);
+        b.extend_from_slice(&strings);
+        b
+    }
 
     #[test]
     fn nodes_walks_the_whole_tree_not_just_one_path() {
@@ -349,7 +574,7 @@ mod tests {
     }
 
     /// Build a tiny blob: `/ { chosen { bootargs = "hi"; rpi-machine-id = "ab\n"; } }`.
-    fn sample() -> Vec<u8> {
+    pub(crate) fn sample() -> Vec<u8> {
         let strings = b"bootargs\0rpi-machine-id\0".to_vec();
         let mut s: Vec<u8> = Vec::new();
         fn tok(s: &mut Vec<u8>, v: u32) {
@@ -406,6 +631,24 @@ mod tests {
         assert_eq!(props[1].name, "rpi-machine-id");
         // The trailing LF start4 appends is trimmed for display.
         assert_eq!(props[1].as_str().as_deref(), Some("ab"));
+    }
+
+    #[test]
+    fn with_property_grows_a_value_and_keeps_the_rest() {
+        let blob = sample();
+        let fdt = Fdt::parse(&blob).unwrap();
+        let patched = fdt
+            .with_property("/chosen", "bootargs", b"earlycon hi\0")
+            .unwrap();
+        let back = Fdt::parse(&patched).expect("still a valid blob");
+        assert_eq!(back.header().totalsize as usize, patched.len());
+        let props = back.properties_of("/chosen").unwrap();
+        assert_eq!(props[0].as_str().as_deref(), Some("earlycon hi"));
+        // The property after it, and its name in the moved strings block.
+        assert_eq!(props[1].name, "rpi-machine-id");
+        assert_eq!(props[1].as_str().as_deref(), Some("ab"));
+        assert!(fdt.with_property("/chosen", "nope", b"x").is_err());
+        assert!(fdt.with_property("/nope", "bootargs", b"x").is_err());
     }
 
     #[test]
