@@ -15,8 +15,9 @@ The files are used three ways:
    reaches the device rather than the catch-all stub, and the registers the
    model leaves stubbed are reported.
 3. `cargo run -- spec-docs --update` writes the Markdown under
-   [`docs/periph/`](../docs/periph/). That directory is generated in full;
-   `tests/specs.rs` fails when it is out of date.
+   [`docs/periph/`](../docs/periph/). That directory is generated in full and
+   committed; CI regenerates it and fails on any difference, so edit the spec,
+   never the Markdown.
 
 ## Format
 
