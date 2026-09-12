@@ -59,24 +59,44 @@
 //! is whatever the part itself puts on it: the output state where it drives
 //! the pin, otherwise its pull resistor, otherwise 0.
 
+use crate::spec::{fxl6408 as regs, Coverage};
+
 /// 7-bit I²C address.
-pub const ADDR: u8 = 0x43;
+pub const ADDR: u8 = regs::BASE as u8;
 
-const DEVICE_ID: u8 = 0x01;
-const IO_DIR: u8 = 0x03;
-const OUTPUT: u8 = 0x05;
-const OUTPUT_HIGH_Z: u8 = 0x07;
-const INPUT_DEFAULT: u8 = 0x09;
-const PULL_ENABLE: u8 = 0x0B;
-const PULL_UP: u8 = 0x0D;
-const INPUT_STATUS: u8 = 0x0F;
-const INT_MASK: u8 = 0x11;
-const INT_STATUS: u8 = 0x13;
+// Register numbers, as the byte the register pointer holds.
+const DEVICE_ID: u8 = regs::DEVICE_ID as u8;
+const IO_DIR: u8 = regs::IO_DIR as u8;
+const OUTPUT: u8 = regs::OUTPUT as u8;
+const OUTPUT_HIGH_Z: u8 = regs::OUTPUT_HIGH_Z as u8;
+const INPUT_DEFAULT: u8 = regs::INPUT_DEFAULT as u8;
+const PULL_ENABLE: u8 = regs::PULL_ENABLE as u8;
+const PULL_UP: u8 = regs::PULL_UP as u8;
+const INPUT_STATUS: u8 = regs::INPUT_STATUS as u8;
+const INT_MASK: u8 = regs::INT_MASK as u8;
+const INT_STATUS: u8 = regs::INT_STATUS as u8;
 
-/// Manufacturer field (Fairchild, `FXL6408_MF_FAIRCHILD`), bits 7..5 of
-/// register `0x01`. The rest of the register reads 0: nothing checks it.
-const ID_VALUE: u8 = 0b101 << 5;
-const SW_RESET: u8 = 1 << 0;
+/// Register `0x01` as it reads: the Fairchild manufacturer field
+/// (`FXL6408_MF_FAIRCHILD`) in bits 7..5, the rest 0 — nothing checks it.
+const ID_VALUE: u8 = regs::DEVICE_ID_RESET as u8;
+const SW_RESET: u8 = regs::DEVICE_ID_SW_RESET_MASK as u8;
+
+/// Every register in `specs/fxl6408.toml` is modelled.
+pub const COVERAGE: Coverage = Coverage {
+    block: "fxl6408",
+    decoded: &[
+        regs::DEVICE_ID,
+        regs::IO_DIR,
+        regs::OUTPUT,
+        regs::OUTPUT_HIGH_Z,
+        regs::INPUT_DEFAULT,
+        regs::PULL_ENABLE,
+        regs::PULL_UP,
+        regs::INPUT_STATUS,
+        regs::INT_MASK,
+        regs::INT_STATUS,
+    ],
+};
 
 #[derive(Debug, Clone)]
 pub struct Fxl6408 {
@@ -102,13 +122,13 @@ impl Default for Fxl6408 {
 impl Fxl6408 {
     pub fn new() -> Fxl6408 {
         Fxl6408 {
-            io_dir: 0x00,
-            output: 0x00,
-            high_z: 0xFF,
-            input_default: 0x00,
-            pull_enable: 0xFF,
-            pull_up: 0x00,
-            int_mask: 0x00,
+            io_dir: regs::IO_DIR_RESET as u8,
+            output: regs::OUTPUT_RESET as u8,
+            high_z: regs::OUTPUT_HIGH_Z_RESET as u8,
+            input_default: regs::INPUT_DEFAULT_RESET as u8,
+            pull_enable: regs::PULL_ENABLE_RESET as u8,
+            pull_up: regs::PULL_UP_RESET as u8,
+            int_mask: regs::INT_MASK_RESET as u8,
             ptr: 0,
             pending_ptr: false,
         }

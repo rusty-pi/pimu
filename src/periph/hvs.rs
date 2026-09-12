@@ -21,23 +21,18 @@ use std::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
-/// `SCALER_DISPID` — a read-only identification register. start4 gates its
-/// whole display bring-up on it: `0x3EC945CC` reads `[0x7E40_0008]`, compares
-/// it against `0x64647276` and returns -1 immediately if it does not match,
-/// which skips `hdmi_init` and therefore the HDMI provider registration at
-/// `0x3ECEC626` (issue #13). Returning 0 made the model look like a chip with
-/// no HVS at all.
-///
-/// The value is read off a running Pi 4, not guessed:
-/// `/sys/kernel/debug/dri/0/hvs_regs` reports `SCALER_DISPID = 0x64647276`.
-const DISPID: u32 = 0x08;
-const DISPID_VALUE: u32 = 0x6464_7276;
+use crate::spec::hvs::{
+    CURRENT, CURRENT_COUNT, CURRENT_STRIDE, DISPID, DISPID_RESET as DISPID_VALUE, REQUESTED,
+};
+use crate::spec::Coverage;
 
-/// First "requested frame" slot; four channels at stride 4.
-const REQUESTED_BASE: u32 = 0x20;
-/// First "current frame" slot, mirrored back from `REQUESTED_BASE`.
-const CURRENT_BASE: u32 = 0x30;
-const CHANNELS: u32 = 4;
+/// `DISPID` answers the measured id — start4 gates its whole display bring-up
+/// on it, and 0 read as "no HVS" (issue #13) — and the frame-swap words are
+/// modelled; the rest of the block is storage.
+pub const COVERAGE: Coverage = Coverage {
+    block: "hvs",
+    decoded: &[DISPID, REQUESTED, CURRENT],
+};
 
 #[derive(Default)]
 pub struct Hvs {
@@ -60,9 +55,9 @@ impl MmioDevice for Hvs {
         if off == DISPID {
             return Ok(DISPID_VALUE);
         }
-        if (CURRENT_BASE..CURRENT_BASE + 4 * CHANNELS).contains(&off) {
+        if (CURRENT..CURRENT + CURRENT_COUNT * CURRENT_STRIDE).contains(&off) {
             // Scanout instantly caught up to the requested frame.
-            let requested = REQUESTED_BASE + (off - CURRENT_BASE);
+            let requested = REQUESTED + (off - CURRENT);
             return Ok(self.storage.get(&requested).copied().unwrap_or(0));
         }
         Ok(self.storage.get(&off).copied().unwrap_or(0))

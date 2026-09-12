@@ -54,12 +54,16 @@
 
 use crate::bus::{BusError, BusResult, MmioDevice, Width};
 
+use crate::spec::armlocal::{ARM_CONTROL, CORE_TIMER_PRESCALER};
 /// The dtb's `reg = <0x40000000 0x100>`, through `soc`'s `ranges`.
-pub const BASE: u32 = 0xFF80_0000;
-pub const SIZE: u32 = 0x100;
+pub use crate::spec::armlocal::{BASE, SIZE};
+use crate::spec::Coverage;
 
-const ARM_CONTROL: u32 = 0x00;
-const CORE_TIMER_PRESCALER: u32 = 0x08;
+/// Both registers the spec lists; every other offset faults.
+pub const COVERAGE: Coverage = Coverage {
+    block: "armlocal",
+    decoded: &[ARM_CONTROL, CORE_TIMER_PRESCALER],
+};
 
 /// What the armstub writes, and with which the counter runs at the crystal.
 const STUB_CONTROL: u32 = 0;

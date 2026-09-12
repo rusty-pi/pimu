@@ -1,0 +1,652 @@
+[block]
+name    = "emmc2"
+base    = 0x7E340000
+size    = 0x1000
+summary = "EMMC2: the SD host controller (Arasan SDHCI 3.00) the bootloader, start4 and Linux boot from"
+notes   = "Command engine wired to a modelled card, with PIO, SDMA and ADMA2 (32-bit) data paths. Every register is a 32-bit word here; narrow accesses pick their lane."
+
+[[block.source]]
+kind       = "standard"
+ref        = "SD Host Controller Simplified Specification 3.00, section 2 (register map)"
+confidence = "high"
+
+[[block.source]]
+kind       = "datasheet"
+ref        = "BCM2835 ARM Peripherals, EMMC chapter: the same Arasan layout at the older block"
+confidence = "high"
+
+[[block.source]]
+kind       = "linux"
+ref        = "mmc@7e340000 driven by sdhci-iproc; 'mmc0: SDHCI controller on fe340000.mmc using ADMA' on the reference board"
+confidence = "high"
+
+[[register]]
+name   = "SDMA_ADDR"
+offset = 0x00
+access = "rw"
+notes  = "SDMA system address (or argument 2). Writing it resumes a paused SDMA."
+
+[[register.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.1"
+confidence = "high"
+
+[[register]]
+name   = "BLOCK_SIZE_COUNT"
+offset = 0x04
+access = "rw"
+notes  = "Block size, SDMA buffer boundary and block count."
+
+[[register.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.2 / 2.2.3"
+confidence = "high"
+
+[[register.field]]
+name  = "BLOCK_SIZE"
+bits  = "11:0"
+notes = "Transfer block size in bytes."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.2"
+confidence = "high"
+
+[[register.field]]
+name  = "SDMA_BOUNDARY"
+bits  = "14:12"
+notes = "SDMA buffer boundary: 4 KiB << n."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.2"
+confidence = "high"
+
+[[register.field]]
+name  = "BLOCK_COUNT"
+bits  = "31:16"
+notes = "Blocks to transfer."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.3"
+confidence = "high"
+
+[[register]]
+name   = "ARGUMENT"
+offset = 0x08
+access = "rw"
+notes  = "Command argument."
+
+[[register.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.4"
+confidence = "high"
+
+[[register]]
+name   = "CMD_XFER"
+offset = 0x0C
+access = "rw"
+notes  = "Transfer mode (low half) and command (high half). Writing the high half issues the command."
+
+[[register.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.5 / 2.2.6"
+confidence = "high"
+
+[[register.field]]
+name  = "DMA"
+bits  = "0"
+notes = "Transfer by DMA."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.5"
+confidence = "high"
+
+[[register.field]]
+name  = "BLOCK_COUNT_EN"
+bits  = "1"
+notes = "BLOCK_COUNT limits the transfer."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.5"
+confidence = "high"
+
+[[register.field]]
+name  = "AUTO_CMD"
+bits  = "3:2"
+notes = "1 = auto CMD12 after the data, 2 = auto CMD23 before it."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.5"
+confidence = "high"
+
+[[register.field]]
+name  = "READ"
+bits  = "4"
+notes = "Card to host."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.5"
+confidence = "high"
+
+[[register.field]]
+name  = "MULTI"
+bits  = "5"
+notes = "Multiple blocks."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.5"
+confidence = "high"
+
+[[register]]
+name   = "RESPONSE0"
+offset = 0x10
+access = "r"
+notes  = "Response bits 31:0 (39:8 of a long response)."
+
+[[register.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.7"
+confidence = "high"
+
+[[register]]
+name   = "RESPONSE1"
+offset = 0x14
+access = "r"
+notes  = "Response bits 63:32."
+
+[[register.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.7"
+confidence = "high"
+
+[[register]]
+name   = "RESPONSE2"
+offset = 0x18
+access = "r"
+notes  = "Response bits 95:64."
+
+[[register.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.7"
+confidence = "high"
+
+[[register]]
+name   = "RESPONSE3"
+offset = 0x1C
+access = "r"
+notes  = "Response bits 127:96."
+
+[[register.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.7"
+confidence = "high"
+
+[[register]]
+name   = "BUFFER_DATA"
+offset = 0x20
+access = "rw"
+notes  = "PIO buffer data port, least significant byte first."
+
+[[register.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.8"
+confidence = "high"
+
+[[register.source]]
+kind       = "decompile"
+ref        = "the bootloader and start4 read start4.elf and the kernel through it (CMD17 / CMD18 + CMD12)"
+confidence = "high"
+
+[[register]]
+name   = "PRESENT_STATE"
+offset = 0x24
+access = "r"
+reset  = 0x1FFF0000
+notes  = "Idle value: card inserted and stable, card-detect and write-protect pins high (writable), CMD and DAT[7:0] high."
+
+[[register.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.9"
+confidence = "high"
+
+[[register.source]]
+kind       = "measured"
+ref        = "/dev/mem read of 0xfe340024 on a Pi 4B rev 1.5 with Linux idle; start4 prints 'status: 0x1fff0000' in examples-on-real-hardware/sd-card-boot.log"
+confidence = "high"
+
+[[register.field]]
+name  = "BUF_WRITE_EN"
+bits  = "10"
+notes = "The buffer has room for a PIO write."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.9"
+confidence = "high"
+
+[[register.field]]
+name  = "BUF_READ_EN"
+bits  = "11"
+notes = "The buffer holds data for a PIO read."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.9"
+confidence = "high"
+
+[[register.field]]
+name  = "DAT_LINES"
+bits  = "23:20"
+notes = "DAT[3:0] line levels. The card holds them low during the CMD11 1.8 V switch."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.9"
+confidence = "high"
+
+[[register.field]]
+name  = "CMD_LINE"
+bits  = "24"
+notes = "CMD line level."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.9"
+confidence = "high"
+
+[[register]]
+name   = "HOST_CONTROL"
+offset = 0x28
+access = "rw"
+notes  = "Host control 1, power, block-gap and wakeup control."
+
+[[register.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.10..2.2.13"
+confidence = "high"
+
+[[register.field]]
+name  = "DMA_SELECT"
+bits  = "4:3"
+notes = "0 = SDMA, 2 = 32-bit ADMA2."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.10"
+confidence = "high"
+
+[[register.field]]
+name  = "BUS_POWER"
+bits  = "8"
+notes = "SD bus power. Turning it off takes VDD from the card."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.11"
+confidence = "high"
+
+[[register.field]]
+name   = "FIXED"
+bits   = "23"
+access = "r"
+notes  = "Reads 1 whatever is written."
+
+[[register.field.source]]
+kind       = "measured"
+ref        = "0x00800000 with Linux running; the real bootloader prints 'CTL0: 0x00800f00' right after writing 0x00000f00 (sd-card-boot.log)"
+confidence = "high"
+
+[[register]]
+name   = "CLOCK_CONTROL"
+offset = 0x2C
+access = "rw"
+notes  = "Clock control (15:0), data timeout (19:16) and the self-clearing software resets (26:24)."
+
+[[register.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.14..2.2.16"
+confidence = "high"
+
+[[register.source]]
+kind       = "measured"
+ref        = "the real board prints 'arasan_emmc_set_clock ... C1: 0x000e0047' (sd-card-boot.log)"
+confidence = "high"
+
+[[register.field]]
+name  = "INTERNAL_EN"
+bits  = "0"
+notes = "Internal clock on."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.14"
+confidence = "high"
+
+[[register.field]]
+name   = "STABLE"
+bits   = "1"
+access = "r"
+notes  = "Internal clock stable; immediately, in the model."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.14"
+confidence = "high"
+
+[[register.field]]
+name  = "SD_EN"
+bits  = "2"
+notes = "SD clock to the card on."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.14"
+confidence = "high"
+
+[[register.field]]
+name  = "SRST_ALL"
+bits  = "24"
+notes = "Reset everything."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.16"
+confidence = "high"
+
+[[register.field]]
+name  = "SRST_CMD"
+bits  = "25"
+notes = "Reset the command circuit."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.16"
+confidence = "high"
+
+[[register.field]]
+name  = "SRST_DATA"
+bits  = "26"
+notes = "Reset the data circuit."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.16"
+confidence = "high"
+
+[[register]]
+name   = "INT_STATUS"
+offset = 0x30
+access = "w1c"
+notes  = "Normal (15:0) and error (31:16) interrupt status, gated by INT_STATUS_EN."
+
+[[register.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.17 / 2.2.18"
+confidence = "high"
+
+[[register.field]]
+name  = "CMD_COMPLETE"
+bits  = "0"
+notes = "Command complete."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.17"
+confidence = "high"
+
+[[register.field]]
+name  = "XFER_COMPLETE"
+bits  = "1"
+notes = "Transfer complete."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.17"
+confidence = "high"
+
+[[register.field]]
+name  = "BLOCK_GAP"
+bits  = "2"
+notes = "Block gap event."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.17"
+confidence = "high"
+
+[[register.field]]
+name  = "DMA"
+bits  = "3"
+notes = "SDMA reached a buffer boundary, or an ADMA2 descriptor asked for an interrupt."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.17"
+confidence = "high"
+
+[[register.field]]
+name  = "BUF_WRITE_RDY"
+bits  = "4"
+notes = "Buffer write ready."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.17"
+confidence = "high"
+
+[[register.field]]
+name  = "BUF_READ_RDY"
+bits  = "5"
+notes = "Buffer read ready."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.17"
+confidence = "high"
+
+[[register.field]]
+name   = "ERROR"
+bits   = "15"
+access = "r"
+notes  = "Set while any error bit is."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.17"
+confidence = "high"
+
+[[register.field]]
+name  = "ERR_CMD_TIMEOUT"
+bits  = "16"
+notes = "Command timeout."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.18"
+confidence = "high"
+
+[[register.field]]
+name  = "ERR_ADMA"
+bits  = "25"
+notes = "ADMA error."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.18"
+confidence = "high"
+
+[[register]]
+name   = "INT_STATUS_EN"
+offset = 0x34
+access = "rw"
+notes  = "Which interrupt conditions latch into INT_STATUS."
+
+[[register.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.19 / 2.2.20"
+confidence = "high"
+
+[[register]]
+name   = "INT_SIGNAL_EN"
+offset = 0x38
+access = "rw"
+notes  = "Which INT_STATUS bits drive the interrupt line (INTID 158)."
+
+[[register.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.21 / 2.2.22"
+confidence = "high"
+
+[[register]]
+name   = "HOST_CONTROL2"
+offset = 0x3C
+access = "rw"
+notes  = "Auto CMD error status (15:0, read-only) and host control 2 (31:16)."
+
+[[register.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.23 / 2.2.24"
+confidence = "high"
+
+[[register.field]]
+name   = "AUTO_CMD_ERROR"
+bits   = "15:0"
+access = "r"
+notes  = "Auto CMD error status."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.23"
+confidence = "high"
+
+[[register.field]]
+name  = "SIGNAL_1V8"
+bits  = "19"
+notes = "1.8 V signalling."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.24"
+confidence = "high"
+
+[[register.field]]
+name  = "EXEC_TUNING"
+bits  = "22"
+notes = "Execute tuning."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.24"
+confidence = "high"
+
+[[register.field]]
+name  = "TUNED_CLK"
+bits  = "23"
+notes = "Sampling clock tuned."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.24"
+confidence = "high"
+
+[[register]]
+name   = "CAPABILITIES_0"
+offset = 0x40
+access = "r"
+reset  = 0x45EE6432
+notes  = "Timeout clock 50 kHz, base clock 100 MHz, 2048-byte blocks, 8-bit bus, ADMA2, high speed, SDMA, suspend/resume, 3.3 V and 1.8 V, no 64-bit system bus, embedded slot."
+
+[[register.source]]
+kind       = "measured"
+ref        = "/dev/mem read of 0xfe340040 on a Pi 4B rev 1.5, controller idle"
+confidence = "high"
+
+[[register]]
+name   = "CAPABILITIES_1"
+offset = 0x44
+access = "r"
+reset  = 0x0000A525
+notes  = "SDR50 and DDR50 (no SDR104), driver type C, re-tuning after 16 s in mode 3, SDR50 needs tuning."
+
+[[register.source]]
+kind       = "measured"
+ref        = "/dev/mem read of 0xfe340044 on a Pi 4B rev 1.5"
+confidence = "high"
+
+[[register]]
+name   = "MAX_CURRENT"
+offset = 0x48
+access = "r"
+reset  = 0x00080008
+notes  = "32 mA at 3.3 V and at 1.8 V."
+
+[[register.source]]
+kind       = "measured"
+ref        = "/dev/mem read of 0xfe340048 on a Pi 4B rev 1.5"
+confidence = "high"
+
+[[register]]
+name   = "ADMA_ERROR"
+offset = 0x54
+access = "r"
+notes  = "ADMA error status."
+
+[[register.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.29"
+confidence = "high"
+
+[[register.field]]
+name  = "STATE"
+bits  = "1:0"
+notes = "Engine state at the error: 1 = fetching a descriptor, 3 = transferring."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.29"
+confidence = "high"
+
+[[register.field]]
+name  = "LEN_MISMATCH"
+bits  = "2"
+notes = "Descriptor lengths and block count disagree."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.29"
+confidence = "high"
+
+[[register]]
+name   = "ADMA_ADDR"
+offset = 0x58
+access = "rw"
+notes  = "ADMA2 descriptor table address."
+
+[[register.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.30"
+confidence = "high"
+
+[[register]]
+name   = "CONTROLLER_VERSION"
+offset = 0xFC
+access = "r"
+reset  = 0x10020000
+notes  = "Slot interrupt status (low half) and version: vendor 0x10, SDHCI 3.00."
+
+[[register.source]]
+kind       = "measured"
+ref        = "/dev/mem read of 0xfe3400fc on a Pi 4B rev 1.5"
+confidence = "high"
+
+[[register.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.32 / 2.2.33"
+confidence = "high"

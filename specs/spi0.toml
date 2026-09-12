@@ -1,0 +1,184 @@
+[block]
+name    = "spi0"
+base    = 0x7E204000
+size    = 0x18
+summary = "SPI0 master, with the serial-NOR flash the EEPROM bootloader was loaded from"
+notes   = "Driven in polled single-byte mode. Every shift is instantaneous; the flash answers READ, FAST_READ, RDID, RDSR, WREN / WRDI, SE and PP."
+
+[[block.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, SPI chapter"
+confidence = "high"
+
+[[block.source]]
+kind       = "decompile"
+ref        = "EEPROM bootloader: wait TXD, write FIFO, wait RXD, read FIFO per byte; start4's EEPROM scanner 0x3ED77E00"
+confidence = "high"
+
+[[register]]
+name   = "CS"
+offset = 0x00
+access = "rw"
+notes  = "Control and status."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, SPI: CS"
+confidence = "high"
+
+[[register.field]]
+name  = "CS"
+bits  = "1:0"
+notes = "Chip select."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, SPI: CS"
+confidence = "high"
+
+[[register.field]]
+name   = "CLEAR_TX"
+bits   = "4"
+access = "w"
+notes  = "Clear the TX FIFO."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, SPI: CS.CLEAR"
+confidence = "high"
+
+[[register.field]]
+name   = "CLEAR_RX"
+bits   = "5"
+access = "w"
+notes  = "Clear the RX FIFO."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, SPI: CS.CLEAR"
+confidence = "high"
+
+[[register.field]]
+name  = "TA"
+bits  = "7"
+notes = "Transfer active; the whole command runs with it set."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, SPI: CS.TA"
+confidence = "high"
+
+[[register.field]]
+name   = "DONE"
+bits   = "16"
+access = "r"
+notes  = "Nothing left to shift. TX side only: start4's scanner checks it with RX bytes still queued."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, SPI: CS.DONE"
+confidence = "high"
+
+[[register.field.source]]
+kind       = "decompile"
+ref        = "0x3ED77E00 treats DONE = 0 as a transfer error"
+confidence = "high"
+
+[[register.field]]
+name   = "RXD"
+bits   = "17"
+access = "r"
+notes  = "RX FIFO holds data."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, SPI: CS.RXD"
+confidence = "high"
+
+[[register.field]]
+name   = "TXD"
+bits   = "18"
+access = "r"
+notes  = "TX FIFO has room."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, SPI: CS.TXD"
+confidence = "high"
+
+[[register.field]]
+name   = "RXR"
+bits   = "19"
+access = "r"
+notes  = "RX FIFO needs reading."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, SPI: CS.RXR"
+confidence = "high"
+
+[[register.field]]
+name   = "RXF"
+bits   = "20"
+access = "r"
+notes  = "RX FIFO full."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, SPI: CS.RXF"
+confidence = "high"
+
+[[register]]
+name   = "FIFO"
+offset = 0x04
+access = "rw"
+notes  = "Write shifts a byte out, read takes the byte shifted in."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, SPI: FIFO"
+confidence = "high"
+
+[[register]]
+name   = "CLK"
+offset = 0x08
+access = "rw"
+notes  = "Clock divider."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, SPI: CLK"
+confidence = "high"
+
+[[register]]
+name   = "DLEN"
+offset = 0x0C
+access = "rw"
+notes  = "DMA data length."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, SPI: DLEN"
+confidence = "high"
+
+[[register]]
+name   = "LTOH"
+offset = 0x10
+access = "rw"
+notes  = "LoSSI output hold delay."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, SPI: LTOH"
+confidence = "high"
+
+[[register]]
+name   = "DC"
+offset = 0x14
+access = "rw"
+notes  = "DMA DREQ controls."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, SPI: DC"
+confidence = "high"

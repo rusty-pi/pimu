@@ -53,16 +53,26 @@ use std::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
-const REG_CLKMUX: u32 = 0x04;
-const REG_PARAM_A: u32 = 0x08;
-const REG_STATUS: u32 = 0x10;
-const REG_DATA: u32 = 0x18;
-const REG_KEY: u32 = 0x1C;
+// `PARAM_A` bit 0 kicks off a transaction; `STATUS` **bit 1** reports
+// completion (the poll at `0x8000760e` is `btest [+0x10], #1`).
+use crate::spec::otp::{
+    CLKMUX as REG_CLKMUX, DATA as REG_DATA, KEY as REG_KEY, PARAM_A as REG_PARAM_A,
+    PARAM_A_GO_MASK as GO, PARAM_B, STATUS as REG_STATUS, STATUS_DONE_MASK as DONE,
+};
+use crate::spec::Coverage;
 
-/// `+0x08` bit 0 kicks off a transaction; `+0x10` **bit 1** reports completion
-/// (the poll at `0x8000760e` is `btest [+0x10], #1`).
-const GO: u32 = 1 << 0;
-const DONE: u32 = 1 << 1;
+/// `PARAM_B` and `CLKMUX` are storage; the rest is the row-read transaction.
+pub const COVERAGE: Coverage = Coverage {
+    block: "otp",
+    decoded: &[
+        REG_CLKMUX,
+        REG_PARAM_A,
+        PARAM_B,
+        REG_STATUS,
+        REG_DATA,
+        REG_KEY,
+    ],
+};
 
 /// Status bits unrelated firmware paths poll for on this block.
 const READY: u32 = (1 << 17) | (1 << 18) | (1 << 7);

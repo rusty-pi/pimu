@@ -1,0 +1,276 @@
+[block]
+name    = "bsc"
+base    = 0x7E205000
+size    = 0x20
+summary = "BSC (I²C master): instance 0 with nothing attached, and the instance the board PMICs and GPIO expander sit on"
+notes   = "A transfer takes its time on the wire at core_clock / DIV, 500 MHz core clock: TA stays set until the bytes have gone, then DONE (and ERR on an unacknowledged address) latch."
+
+[[block.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, BSC chapter"
+confidence = "high"
+
+[[block.source]]
+kind       = "decompile"
+ref        = "start4's I²C driver FUN_0ecf0ed0 picks the base from the bus id: 0 -> 0x7E205000, 8 -> 0x7E205E00, else 0x7E803000 + id * 0x1000"
+confidence = "high"
+
+[[block.source]]
+kind       = "trace"
+ref        = "late in the boot start4 probes 0x52 on instance 0 for a HAT EEPROM; unmapped, S read 0 and the poll never ended"
+confidence = "high"
+
+[[block.copy]]
+name  = "PMIC"
+base  = 0x7E205E00
+notes = "Bus 8: the PMICs at 0x1B / 0x1E and the FXL6408 at 0x43."
+
+[[block.copy.source]]
+kind       = "decompile"
+ref        = "FUN_0ecf0ed0: bus id 8; pmic_init 0x3ED4DAA8 uses it"
+confidence = "high"
+
+[[register]]
+name   = "C"
+offset = 0x00
+access = "rw"
+notes  = "Control."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, BSC: C"
+confidence = "high"
+
+[[register.field]]
+name  = "READ"
+bits  = "0"
+notes = "Read transfer."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, BSC: C.READ"
+confidence = "high"
+
+[[register.field]]
+name   = "CLEAR"
+bits   = "5:4"
+access = "w"
+notes  = "Clear the FIFO."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, BSC: C.CLEAR"
+confidence = "high"
+
+[[register.field]]
+name   = "ST"
+bits   = "7"
+access = "w"
+notes  = "Start a transfer."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, BSC: C.ST"
+confidence = "high"
+
+[[register.field]]
+name  = "I2CEN"
+bits  = "15"
+notes = "Controller on."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, BSC: C.I2CEN"
+confidence = "high"
+
+[[register]]
+name   = "S"
+offset = 0x04
+access = "rw"
+notes  = "Status; DONE, ERR and CLKT are write-1-to-clear."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, BSC: S"
+confidence = "high"
+
+[[register.field]]
+name   = "TA"
+bits   = "0"
+access = "r"
+notes  = "Transfer active."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, BSC: S.TA"
+confidence = "high"
+
+[[register.field]]
+name   = "DONE"
+bits   = "1"
+access = "w1c"
+notes  = "Transfer done."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, BSC: S.DONE"
+confidence = "high"
+
+[[register.field]]
+name   = "TXW"
+bits   = "2"
+access = "r"
+notes  = "FIFO needs writing. Kept clear."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, BSC: S.TXW"
+confidence = "high"
+
+[[register.field]]
+name   = "RXR"
+bits   = "3"
+access = "r"
+notes  = "FIFO needs reading. Kept clear."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, BSC: S.RXR"
+confidence = "high"
+
+[[register.field]]
+name   = "TXD"
+bits   = "4"
+access = "r"
+notes  = "FIFO can accept data."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, BSC: S.TXD"
+confidence = "high"
+
+[[register.field]]
+name   = "RXD"
+bits   = "5"
+access = "r"
+notes  = "FIFO contains data."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, BSC: S.RXD"
+confidence = "high"
+
+[[register.field]]
+name   = "TXE"
+bits   = "6"
+access = "r"
+notes  = "FIFO empty."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, BSC: S.TXE"
+confidence = "high"
+
+[[register.field]]
+name   = "RXF"
+bits   = "7"
+access = "r"
+notes  = "FIFO full."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, BSC: S.RXF"
+confidence = "high"
+
+[[register.field]]
+name   = "ERR"
+bits   = "8"
+access = "w1c"
+notes  = "Address not acknowledged."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, BSC: S.ERR"
+confidence = "high"
+
+[[register.field]]
+name   = "CLKT"
+bits   = "9"
+access = "w1c"
+notes  = "Clock-stretch timeout."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, BSC: S.CLKT"
+confidence = "high"
+
+[[register]]
+name   = "DLEN"
+offset = 0x08
+access = "rw"
+notes  = "Transfer length; reads back 0 once every byte has moved."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, BSC: DLEN"
+confidence = "high"
+
+[[register]]
+name   = "A"
+offset = 0x0C
+access = "rw"
+notes  = "7-bit slave address."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, BSC: A"
+confidence = "high"
+
+[[register]]
+name   = "FIFO"
+offset = 0x10
+access = "rw"
+notes  = "Data FIFO, 16 bytes each way."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, BSC: FIFO"
+confidence = "high"
+
+[[register]]
+name   = "DIV"
+offset = 0x14
+access = "rw"
+notes  = "Clock divisor. start4 programs 5000 (100 kHz) for the PMIC bus, 2500 for its probe sweep, 540 for HDMI DDC."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, BSC: DIV"
+confidence = "high"
+
+[[register.source]]
+kind       = "measured"
+ref        = "vcgencmd measure_clock core on rpi-dev: 500000992 Hz"
+confidence = "high"
+
+[[register]]
+name   = "DEL"
+offset = 0x18
+access = "rw"
+notes  = "Data delay. Stored, otherwise ignored."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, BSC: DEL"
+confidence = "high"
+
+[[register]]
+name   = "CLKT"
+offset = 0x1C
+access = "rw"
+notes  = "Clock-stretch timeout. Stored, otherwise ignored."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, BSC: CLKT"
+confidence = "high"

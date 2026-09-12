@@ -1,0 +1,308 @@
+[block]
+name    = "gicc"
+bus     = "arm"
+base    = 0xFF842000
+size    = 0x2000
+summary = "GIC-400 CPU interface, banked per CPU and per security state"
+notes   = "Word access only. Linux enters at EL2 and, because this window is 8 KiB, runs split EOI: priority drop on EOIR, deactivation on DIR. The virtualisation interface (GICH / GICV at 0xFF844000..) is not modelled and faults."
+
+[[block.source]]
+kind       = "linux"
+ref        = "dtb: interrupt-controller@40041000 reg <... 0x40042000 0x2000 ...> -> 0xFF842000, 8 KiB"
+confidence = "high"
+
+[[block.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), section 4.4"
+confidence = "high"
+
+[[block.source]]
+kind       = "measured"
+ref        = "reference board dmesg: 'GIC: Using split EOI/Deactivate mode'"
+confidence = "high"
+
+[[register]]
+name   = "CTLR"
+offset = 0x00
+access = "rw"
+notes  = "Stored in the secure layout; the non-secure view remaps four of its bits."
+
+[[register.source]]
+kind       = "standard"
+ref        = "GICv2 4.4.1 GICC_CTLR"
+confidence = "high"
+
+[[register.source]]
+kind       = "decompile"
+ref        = "armstub writes 0x1e7: EnableGrp0 | EnableGrp1 | AckCtl | bypass disables"
+confidence = "high"
+
+[[register.field]]
+name  = "ENABLE_GRP0"
+bits  = "0"
+notes = "Signal group-0 interrupts."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "GICv2 4.4.1"
+confidence = "high"
+
+[[register.field]]
+name  = "ENABLE_GRP1"
+bits  = "1"
+notes = "Signal group-1 interrupts."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "GICv2 4.4.1"
+confidence = "high"
+
+[[register.field]]
+name  = "ACKCTL"
+bits  = "2"
+notes = "Secure IAR may acknowledge group-1 interrupts."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "GICv2 4.4.1"
+confidence = "high"
+
+[[register.field]]
+name  = "FIQEN"
+bits  = "3"
+notes = "Group 0 signals as FIQ."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "GICv2 4.4.1"
+confidence = "high"
+
+[[register.field]]
+name  = "CBPR"
+bits  = "4"
+notes = "BPR governs both groups."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "GICv2 4.4.1"
+confidence = "high"
+
+[[register.field]]
+name  = "FIQBYPDIS_GRP1"
+bits  = "5"
+notes = "Bypass disable (stored)."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "GICv2 4.4.1"
+confidence = "high"
+
+[[register.field]]
+name  = "IRQBYPDIS_GRP1"
+bits  = "6"
+notes = "Bypass disable (stored)."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "GICv2 4.4.1"
+confidence = "high"
+
+[[register.field]]
+name  = "FIQBYPDIS_GRP0"
+bits  = "7"
+notes = "Bypass disable (stored)."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "GICv2 4.4.1"
+confidence = "high"
+
+[[register.field]]
+name  = "IRQBYPDIS_GRP0"
+bits  = "8"
+notes = "Bypass disable (stored)."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "GICv2 4.4.1"
+confidence = "high"
+
+[[register.field]]
+name  = "EOIMODE_S"
+bits  = "9"
+notes = "Secure split EOI."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "GICv2 4.4.1"
+confidence = "high"
+
+[[register.field]]
+name  = "EOIMODE_NS"
+bits  = "10"
+notes = "Non-secure split EOI; what Linux sets."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "GICv2 4.4.1"
+confidence = "high"
+
+[[register]]
+name   = "PMR"
+offset = 0x04
+access = "rw"
+notes  = "Priority mask."
+
+[[register.source]]
+kind       = "standard"
+ref        = "GICv2 4.4.2 GICC_PMR"
+confidence = "high"
+
+[[register]]
+name   = "BPR"
+offset = 0x08
+access = "rw"
+notes  = "Binary point; minimum 2 secure, 3 non-secure."
+
+[[register.source]]
+kind       = "standard"
+ref        = "GICv2 4.4.3 GICC_BPR"
+confidence = "high"
+
+[[register]]
+name   = "IAR"
+offset = 0x0C
+access = "r"
+notes  = "Acknowledge: returns the ID (with the source CPU for SGIs) and makes it active. 1023 spurious, 1022 group 1 refused to secure without AckCtl."
+
+[[register.source]]
+kind       = "standard"
+ref        = "GICv2 4.4.4 GICC_IAR"
+confidence = "high"
+
+[[register]]
+name   = "EOIR"
+offset = 0x10
+access = "w"
+notes  = "End of interrupt: priority drop, plus deactivation unless split EOI is on."
+
+[[register.source]]
+kind       = "standard"
+ref        = "GICv2 4.4.5 GICC_EOIR"
+confidence = "high"
+
+[[register]]
+name   = "RPR"
+offset = 0x14
+access = "r"
+notes  = "Running priority; 0xFF when nothing is active."
+
+[[register.source]]
+kind       = "standard"
+ref        = "GICv2 4.4.6 GICC_RPR"
+confidence = "high"
+
+[[register]]
+name   = "HPPIR"
+offset = 0x18
+access = "r"
+notes  = "What IAR would return, without taking it."
+
+[[register.source]]
+kind       = "standard"
+ref        = "GICv2 4.4.7 GICC_HPPIR"
+confidence = "high"
+
+[[register]]
+name   = "ABPR"
+offset = 0x1C
+access = "rw"
+notes  = "Aliased (group-1) binary point, secure access only."
+
+[[register.source]]
+kind       = "standard"
+ref        = "GICv2 4.4.8 GICC_ABPR"
+confidence = "high"
+
+[[register]]
+name   = "AIAR"
+offset = 0x20
+access = "r"
+notes  = "Aliased acknowledge: group-1 behaviour for secure software."
+
+[[register.source]]
+kind       = "standard"
+ref        = "GICv2 4.4.9 GICC_AIAR"
+confidence = "high"
+
+[[register]]
+name   = "AEOIR"
+offset = 0x24
+access = "w"
+notes  = "Aliased end of interrupt."
+
+[[register.source]]
+kind       = "standard"
+ref        = "GICv2 4.4.10 GICC_AEOIR"
+confidence = "high"
+
+[[register]]
+name   = "AHPPIR"
+offset = 0x28
+access = "r"
+notes  = "Aliased highest pending."
+
+[[register.source]]
+kind       = "standard"
+ref        = "GICv2 4.4.11 GICC_AHPPIR"
+confidence = "high"
+
+[[register]]
+name   = "APR0"
+offset = 0xD0
+access = "rw"
+notes  = "Active priorities."
+
+[[register.source]]
+kind       = "standard"
+ref        = "GICv2 4.4.12 GICC_APRn"
+confidence = "high"
+
+[[register]]
+name   = "NSAPR0"
+offset = 0xE0
+access = "rw"
+notes  = "Non-secure active priorities."
+
+[[register.source]]
+kind       = "standard"
+ref        = "GICv2 4.4.13 GICC_NSAPRn"
+confidence = "high"
+
+[[register]]
+name   = "IIDR"
+offset = 0xFC
+access = "r"
+reset  = 0x0202143B
+notes  = "ARM, GICv2 CPU interface."
+
+[[register.source]]
+kind       = "measured"
+ref        = "/dev/mem read of 0xFF8420FC on the reference board"
+confidence = "high"
+
+[[register]]
+name   = "DIR"
+offset = 0x1000
+access = "w"
+notes  = "Deactivate: the second half of split EOI."
+
+[[register.source]]
+kind       = "standard"
+ref        = "GICv2 4.4.15 GICC_DIR"
+confidence = "high"
+
+[[register.source]]
+kind       = "linux"
+ref        = "irq-gic.c deactivates through GICC_DIR in EOImodeNS"
+confidence = "high"

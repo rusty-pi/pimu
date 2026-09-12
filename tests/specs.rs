@@ -1,14 +1,17 @@
 //! The register specs in `specs/*.toml` against the model (#39).
 //!
 //! `build.rs` already refuses a malformed spec. These tests check the other
-//! direction: that what a device model claims to decode is in its spec, that
-//! every register the spec lists actually reaches the device, and that the
-//! generated `docs/periph/` is up to date. Registers a model leaves stubbed are
-//! reported, not failed — run with `--nocapture` to see them.
+//! direction: that every spec has a device model, that what a model claims to
+//! decode is in its spec, that every register the spec lists actually reaches
+//! the device, and that the generated `docs/periph/` is up to date. Registers a
+//! model leaves stubbed are reported, not failed — run with `--nocapture` to
+//! see them.
+
+use std::collections::BTreeSet;
 
 use rpi_virt_fw::bus::Bus;
 use rpi_virt_fw::periph::SPEC_COVERAGE;
-use rpi_virt_fw::spec::{self, schema::Spec};
+use rpi_virt_fw::spec::{self, schema::Bus as SpecBus, schema::Spec};
 use rpi_virt_fw::Machine;
 
 fn specs() -> Vec<Spec> {
@@ -20,6 +23,29 @@ fn spec_for<'a>(specs: &'a [Spec], block: &str) -> &'a Spec {
         .iter()
         .find(|s| s.block.name == block)
         .unwrap_or_else(|| panic!("no specs/{block}.toml for a device that claims it"))
+}
+
+/// Every block has a register spec now, so a spec with no device behind it is
+/// a typo or a stale file, and two devices claiming one spec is a mistake.
+#[test]
+fn every_spec_has_exactly_one_device_model() {
+    let specs = specs();
+    let mut claimed = BTreeSet::new();
+    for cov in SPEC_COVERAGE {
+        spec_for(&specs, cov.block);
+        assert!(
+            claimed.insert(cov.block),
+            "{} is claimed by two device models",
+            cov.block
+        );
+    }
+    for spec in &specs {
+        assert!(
+            claimed.contains(spec.block.name.as_str()),
+            "{} has no device model in periph::SPEC_COVERAGE",
+            spec.file
+        );
+    }
 }
 
 #[test]
@@ -43,43 +69,49 @@ fn every_decoded_offset_is_in_the_spec() {
     }
 }
 
-/// Every element of every register, in every bank, has to reach the device
-/// rather than the catch-all stub — a window mapped too small is exactly the
-/// bug `tests/memory_map.rs` was written for, and the spec knows the extent.
+/// Every element of every register, in every bank of every copy, has to reach
+/// the device rather than the catch-all stub or DRAM — a window mapped too
+/// small is exactly the bug `tests/memory_map.rs` was written for, and the
+/// spec knows the extent. Only the VPU's bus goes through [`Machine`]'s
+/// decoder; the ARM-only blocks and the ones behind PCIe, I²C and MDIO are
+/// reached through their own devices.
 #[test]
 fn every_spec_register_reaches_its_device() {
     let specs = specs();
-    for cov in SPEC_COVERAGE {
-        let spec = spec_for(&specs, cov.block);
+    for spec in specs.iter().filter(|s| s.block.bus == SpecBus::Vpu) {
+        let name = &spec.block.name;
         let mut m = Machine::new(1024 * 1024);
-        for bank in spec.bank_offsets() {
-            for r in &spec.registers {
-                for off in r.element_offsets() {
-                    let addr = spec.block.base + bank + (off & !3);
-                    let before = m.stub_hits;
-                    m.load32(addr)
-                        .unwrap_or_else(|e| panic!("{}.{} ({addr:#x}): {e}", cov.block, r.name));
-                    assert_eq!(
-                        m.stub_hits, before,
-                        "{}.{} ({addr:#x}) fell through to the peripheral stub",
-                        cov.block, r.name
-                    );
+        for base in spec.bases() {
+            for bank in spec.bank_offsets() {
+                for r in &spec.registers {
+                    for off in r.element_offsets() {
+                        let addr = base + bank + (off & !3);
+                        let (stub, ram) = (m.stub_hits, m.ram_reads);
+                        m.load32(addr)
+                            .unwrap_or_else(|e| panic!("{name}.{} ({addr:#x}): {e}", r.name));
+                        assert_eq!(
+                            m.stub_hits, stub,
+                            "{name}.{} ({addr:#x}) fell through to the peripheral stub",
+                            r.name
+                        );
+                        assert_eq!(
+                            m.ram_reads, ram,
+                            "{name}.{} ({addr:#x}) folded onto DRAM",
+                            r.name
+                        );
+                    }
                 }
             }
         }
     }
 }
 
-/// Not a failure: the list of what is still stubbed, per block, and the specs
-/// no device model claims yet.
+/// Not a failure: the list of what each model leaves stubbed.
 #[test]
 fn report_stubbed_registers() {
     let specs = specs();
-    for spec in &specs {
-        let Some(cov) = SPEC_COVERAGE.iter().find(|c| c.block == spec.block.name) else {
-            eprintln!("{}: no device model", spec.block.name);
-            continue;
-        };
+    for cov in SPEC_COVERAGE {
+        let spec = spec_for(&specs, cov.block);
         let stubbed: Vec<&str> = spec
             .registers
             .iter()
@@ -87,9 +119,9 @@ fn report_stubbed_registers() {
             .map(|r| r.name.as_str())
             .collect();
         if stubbed.is_empty() {
-            eprintln!("{}: every register modelled", spec.block.name);
+            eprintln!("{}: every register modelled", cov.block);
         } else {
-            eprintln!("{}: stubbed {}", spec.block.name, stubbed.join(", "));
+            eprintln!("{}: stubbed {}", cov.block, stubbed.join(", "));
         }
     }
 }
@@ -120,6 +152,17 @@ fn generated_constants_match_the_toml() {
     assert_eq!(spec::systimer::CS_M3_MASK, 1 << 3);
     assert_eq!(spec::corectl::IRQ_PENDING_SOURCE_MASK, 0x3F);
     assert_eq!(spec::corectl::IRQ_PENDING_VALID_SHIFT, 8);
+
+    // A copy gets its own base constant.
+    let bsc = spec_for(&specs, "bsc");
+    assert_eq!(bsc.block.copies[0].name, "PMIC");
+    assert_eq!(spec::bsc::PMIC_BASE, bsc.block.copies[0].base);
+    // On an indexed bus the base is the device address.
+    assert_eq!(spec::fxl6408::BASE, 0x43);
+    assert_eq!(spec::bcm54213pe::PHYSID2, 3);
+    // Widths below 32 bits keep their natural alignment.
+    assert_eq!(spec::xhci::HCIVERSION, 0x02);
+    assert_eq!(spec::xhci::HCIVERSION_RESET, 0x0100);
 }
 
 /// A spec with no provenance, or with overlapping registers, is refused. This
@@ -139,6 +182,18 @@ fn malformed_specs_are_refused() {
     "#;
     let src = r#"
         [[register.source]]
+        kind = "inferred"
+        ref = "test"
+        confidence = "low"
+    "#;
+    let i2c = r#"
+        [block]
+        name = "x"
+        bus = "i2c"
+        base = 0x80
+        size = 0x100
+        summary = "test"
+        [[block.source]]
         kind = "inferred"
         ref = "test"
         confidence = "low"
@@ -175,6 +230,16 @@ fn malformed_specs_are_refused() {
             "unknown key",
             format!("{head}\n[[register]]\nname = \"A\"\noffset = 0\naccess = \"r\"\ncolour = 1\n{src}"),
             "unknown field",
+        ),
+        (
+            "copy with no source",
+            format!("{head}\n[[block.copy]]\nname = \"B\"\nbase = 0x7E001000\n"),
+            "no [[block.copy.source]]",
+        ),
+        (
+            "I²C address past 7 bits",
+            format!("{i2c}\n[[register]]\nname = \"A\"\noffset = 1\nwidth = 8\naccess = \"r\"\n{src}"),
+            "does not fit the i2c bus",
         ),
     ];
     for (what, text, expect) in cases {

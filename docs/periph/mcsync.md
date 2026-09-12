@@ -2,6 +2,7 @@
 
 # `mcsync` – Doorbells / semaphores between the two VPU cores
 
+- Bus: `vpu` (VPU bus address)
 - Base: `0x7E000000`
 - Size: `0x1000`
 

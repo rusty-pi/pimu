@@ -29,9 +29,13 @@ pub struct Spec {
 pub struct Block {
     /// Name of the generated module; also the file stem.
     pub name: String,
-    /// Bus address as the VPU sees it (`0x7E…`).
+    /// What `base`, `size` and the register offsets are addresses on.
+    #[serde(default)]
+    pub bus: Bus,
+    /// Where the block sits on its bus: see [`Bus`].
     pub base: u32,
-    /// Size of the decoded window in bytes.
+    /// Size of the decoded window, in bytes — or in register numbers on an
+    /// indexed bus.
     pub size: u32,
     pub summary: String,
     #[serde(default)]
@@ -43,6 +47,80 @@ pub struct Block {
     /// Distance between banks; required when `instances > 1`.
     #[serde(default)]
     pub instance_stride: u32,
+    #[serde(default, rename = "source")]
+    pub sources: Vec<Source>,
+    /// Further instances of the same block at other bases.
+    #[serde(default, rename = "copy")]
+    pub copies: Vec<BlockCopy>,
+}
+
+/// The address space a block lives in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Bus {
+    /// VPU bus address (`0x7E…`, or the `0x7C…`/`0x7D…` blocks below it).
+    #[default]
+    Vpu,
+    /// ARM physical address in low-peripheral mode, for blocks the VPU has
+    /// no view of (`0xFF8…`).
+    Arm,
+    /// Offset into one PCI function's configuration space or BAR; `base` is 0.
+    Pci,
+    /// I²C slave: `base` is the 7-bit address, offsets are register numbers.
+    I2c,
+    /// MDIO (clause 22) PHY: `base` is the PHY address, offsets are register
+    /// numbers.
+    Mdio,
+}
+
+impl Bus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Bus::Vpu => "vpu",
+            Bus::Arm => "arm",
+            Bus::Pci => "pci",
+            Bus::I2c => "i2c",
+            Bus::Mdio => "mdio",
+        }
+    }
+
+    /// Offsets on this bus are register numbers, one per register whatever
+    /// its width, rather than byte addresses.
+    pub fn indexed(self) -> bool {
+        matches!(self, Bus::I2c | Bus::Mdio)
+    }
+
+    /// What `base` means, for the generated Markdown.
+    fn base_meaning(self) -> &'static str {
+        match self {
+            Bus::Vpu => "VPU bus address",
+            Bus::Arm => "ARM physical address, low-peripheral mode",
+            Bus::Pci => "offset in the PCI function",
+            Bus::I2c => "7-bit I²C address",
+            Bus::Mdio => "MDIO PHY address",
+        }
+    }
+
+    /// On an indexed bus: one past the highest device address, and the most
+    /// register numbers one device can have.
+    fn indexed_limits(self) -> Option<(u32, u32)> {
+        match self {
+            Bus::I2c => Some((0x80, 0x100)),
+            Bus::Mdio => Some((0x20, 0x20)),
+            Bus::Vpu | Bus::Arm | Bus::Pci => None,
+        }
+    }
+}
+
+/// Another instance of the whole block — same registers, different base.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BlockCopy {
+    /// Generates `<NAME>_BASE`.
+    pub name: String,
+    pub base: u32,
+    #[serde(default)]
+    pub notes: Option<String>,
     #[serde(default, rename = "source")]
     pub sources: Vec<Source>,
 }
@@ -128,8 +206,12 @@ pub struct Source {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SourceKind {
-    /// BCM2711 / BCM2835 ARM Peripherals.
+    /// BCM2711 / BCM2835 ARM Peripherals, or a third-party part's datasheet.
     Datasheet,
+    /// A published industry or architecture specification the block
+    /// implements (ARM GICv2, PCI / PCIe, xHCI, SDHCI, IEEE 802.3 clause 22),
+    /// with the section.
+    Standard,
     /// Upstream driver or DT binding.
     Linux,
     /// `firmware/source/*.c` or disassembly, with the address.
@@ -146,6 +228,7 @@ impl SourceKind {
     pub fn as_str(self) -> &'static str {
         match self {
             SourceKind::Datasheet => "datasheet",
+            SourceKind::Standard => "standard",
             SourceKind::Linux => "linux",
             SourceKind::Decompile => "decompile",
             SourceKind::Measured => "measured",
@@ -190,6 +273,21 @@ impl Spec {
     /// Offset of every bank within the block window.
     pub fn bank_offsets(&self) -> impl Iterator<Item = u32> + '_ {
         (0..self.block.instances).map(|i| i * self.block.instance_stride)
+    }
+
+    /// The block's base, then every copy's.
+    pub fn bases(&self) -> impl Iterator<Item = u32> + '_ {
+        std::iter::once(self.block.base).chain(self.block.copies.iter().map(|c| c.base))
+    }
+
+    /// Address units one element of `r` takes up: its width in bytes on a
+    /// memory bus, one register number on an indexed bus.
+    pub fn span(&self, r: &Register) -> u32 {
+        if self.block.bus.indexed() {
+            1
+        } else {
+            r.bytes()
+        }
     }
 
     /// The window one bank's registers have to fit in.
@@ -314,8 +412,54 @@ pub fn validate(spec: &Spec) -> Vec<String> {
     if b.size == 0 {
         errs.push("block size is 0".into());
     }
-    if u64::from(b.base) + u64::from(b.size) > 1 << 32 {
-        errs.push("block window runs past the end of the address space".into());
+    match b.bus.indexed_limits() {
+        Some((addrs, regs)) => {
+            for (name, base) in std::iter::once(("block", b.base))
+                .chain(b.copies.iter().map(|c| (c.name.as_str(), c.base)))
+            {
+                if base >= addrs {
+                    errs.push(format!(
+                        "{name}: address {base:#x} does not fit the {} bus",
+                        b.bus.as_str()
+                    ));
+                }
+            }
+            if b.size > regs {
+                errs.push(format!(
+                    "size {:#x}: a {} device has at most {regs:#x} registers",
+                    b.size,
+                    b.bus.as_str()
+                ));
+            }
+        }
+        None => {
+            for (name, base) in std::iter::once(("block", b.base))
+                .chain(b.copies.iter().map(|c| (c.name.as_str(), c.base)))
+            {
+                if u64::from(base) + u64::from(b.size) > 1 << 32 {
+                    errs.push(format!(
+                        "{name}: window runs past the end of the address space"
+                    ));
+                }
+            }
+        }
+    }
+    let mut copy_names = BTreeSet::new();
+    for c in &b.copies {
+        let what = format!("copy {}", c.name);
+        if !is_const_name(&c.name) {
+            errs.push(format!("{what}: name is not UPPER_SNAKE_CASE"));
+        }
+        if !copy_names.insert(c.name.as_str()) {
+            errs.push(format!("{what}: defined twice"));
+        }
+        if c.sources.is_empty() {
+            errs.push(format!("{what}: no [[block.copy.source]]"));
+        }
+        if c.base == b.base {
+            errs.push(format!("{what}: same base as the block"));
+        }
+        check_sources(&mut errs, &what, &c.sources);
     }
     match b.instances {
         0 => errs.push("instances = 0".into()),
@@ -349,7 +493,7 @@ pub fn validate(spec: &Spec) -> Vec<String> {
             errs.push(format!("{what}: width {} is not 8, 16 or 32", r.width));
             continue;
         }
-        let bytes = r.bytes();
+        let bytes = spec.span(r);
         if r.offset % bytes != 0 {
             errs.push(format!(
                 "{what}: offset {:#x} is not {bytes}-byte aligned",
@@ -371,7 +515,7 @@ pub fn validate(spec: &Spec) -> Vec<String> {
             }
             1 if r.stride != 0 => errs.push(format!("{what}: stride without count")),
             1 => {}
-            n if n > 4096 => {
+            n if n > 0x1_0000 => {
                 errs.push(format!("{what}: count {n} is implausibly large"));
                 continue;
             }
@@ -484,13 +628,24 @@ pub fn constants(spec: &Spec) -> Vec<Const> {
     push(
         "BASE".into(),
         b.base,
-        "Bus address of the block (VPU view).".into(),
+        format!("Where the block sits: {}.", b.bus.base_meaning()),
     );
     push(
         "SIZE".into(),
         b.size,
-        "Size of the decoded window in bytes.".into(),
+        if b.bus.indexed() {
+            "Number of register numbers the device decodes.".into()
+        } else {
+            "Size of the decoded window in bytes.".into()
+        },
     );
+    for c in &b.copies {
+        push(
+            format!("{}_BASE", c.name),
+            c.base,
+            format!("Where the `{}` copy of the block sits.", c.name),
+        );
+    }
     if b.instances > 1 {
         push(
             "INSTANCES".into(),
@@ -610,7 +765,11 @@ pub fn markdown(spec: &Spec) -> String {
     )
     .unwrap();
     writeln!(s, "# `{}` – {}\n", b.name, b.summary.trim()).unwrap();
-    writeln!(s, "- Base: `{:#010X}`", b.base).unwrap();
+    writeln!(s, "- Bus: `{}` ({})", b.bus.as_str(), b.bus.base_meaning()).unwrap();
+    writeln!(s, "- Base: `{}`", base_str(b.bus, b.base)).unwrap();
+    for c in &b.copies {
+        writeln!(s, "- `{}` copy: `{}`", c.name, base_str(b.bus, c.base)).unwrap();
+    }
     writeln!(s, "- Size: `{:#X}`", b.size).unwrap();
     if b.instances > 1 {
         writeln!(
@@ -625,6 +784,13 @@ pub fn markdown(spec: &Spec) -> String {
     }
     s.push_str("\nSources:\n\n");
     write_sources(&mut s, &b.sources);
+    for c in &b.copies {
+        writeln!(s, "\n`{}` copy:\n", c.name).unwrap();
+        if let Some(notes) = &c.notes {
+            writeln!(s, "{}\n", notes.trim()).unwrap();
+        }
+        write_sources(&mut s, &c.sources);
+    }
 
     s.push_str("\n## Register map\n\n");
     s.push_str("| Offset | Name | Access | Width | Sources |\n");
@@ -698,14 +864,15 @@ pub fn index_markdown(specs: &[Spec]) -> String {
         "Generated from the TOML specs in [`specs/`](../../specs/); see \
          [`specs/README.md`](../../specs/README.md) for the format and the rules.\n\n",
     );
-    s.push_str("| Block | Base | Size | Registers | Summary |\n|---|---|---|---|---|\n");
+    s.push_str("| Block | Bus | Base | Size | Registers | Summary |\n|---|---|---|---|---|---|\n");
     for spec in specs {
         let b = &spec.block;
         writeln!(
             s,
-            "| [`{0}`]({0}.md) | `{1:#010X}` | `{2:#X}` | {3} | {4} |",
+            "| [`{0}`]({0}.md) | {1} | `{2}` | `{3:#X}` | {4} | {5} |",
             b.name,
-            b.base,
+            b.bus.as_str(),
+            base_str(b.bus, b.base),
             b.size,
             spec.registers.len(),
             cell(&b.summary)
@@ -713,4 +880,14 @@ pub fn index_markdown(specs: &[Spec]) -> String {
         .unwrap();
     }
     s
+}
+
+/// A base as the Markdown shows it: a full 32-bit address on a memory bus, a
+/// short device address on an indexed one.
+fn base_str(bus: Bus, base: u32) -> String {
+    if bus.indexed() {
+        format!("{base:#04X}")
+    } else {
+        format!("{base:#010X}")
+    }
 }

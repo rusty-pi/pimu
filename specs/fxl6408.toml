@@ -1,0 +1,177 @@
+[block]
+name    = "fxl6408"
+bus     = "i2c"
+base    = 0x43
+size    = 0x100
+summary = "FXL6408 GPIO expander: the board's 'external' GPIOs 128..135"
+notes   = "On the `bsc` PMIC copy. Nothing outside drives the pins, so a pin reads its own output where driven, else its pull, else 0."
+
+[[block.source]]
+kind       = "datasheet"
+ref        = "onsemi FXL6408 datasheet (register map, reset values)"
+confidence = "high"
+
+[[block.source]]
+kind       = "linux"
+ref        = "drivers/gpio/gpio-fxl6408.c (names, FXL6408_MF_FAIRCHILD)"
+confidence = "high"
+
+[[block.source]]
+kind       = "decompile"
+ref        = "start4db gpio_expander_FXL6408.c: probe 0x0ED18984, FXL6408_readreg 0x0EC335A0; a d03115 with start_debug=1 logged no probe assert"
+confidence = "high"
+
+[[register]]
+name   = "DEVICE_ID"
+offset = 0x01
+width  = 8
+access = "rw"
+reset  = 0xA0
+notes  = "Device id / control. start4's probe reads it and accepts any value, then writes 1 (software reset)."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "FXL6408: Device ID and Control"
+confidence = "high"
+
+[[register.field]]
+name   = "SW_RESET"
+bits   = "0"
+access = "w"
+notes  = "Software reset."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "FXL6408: Device ID and Control, bit 0"
+confidence = "high"
+
+[[register.field]]
+name   = "MF"
+bits   = "7:5"
+access = "r"
+notes  = "Manufacturer: 0b101."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "gpio-fxl6408.c: FXL6408_MF_FAIRCHILD"
+confidence = "high"
+
+[[register]]
+name   = "IO_DIR"
+offset = 0x03
+width  = 8
+access = "rw"
+reset  = 0x00
+notes  = "1 = output."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "FXL6408: I/O Direction"
+confidence = "high"
+
+[[register]]
+name   = "OUTPUT"
+offset = 0x05
+width  = 8
+access = "rw"
+reset  = 0x00
+notes  = "1 = drive high."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "FXL6408: Output State"
+confidence = "high"
+
+[[register]]
+name   = "OUTPUT_HIGH_Z"
+offset = 0x07
+width  = 8
+access = "rw"
+reset  = 0xFF
+notes  = "1 = output high-Z."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "FXL6408: Output High-Z"
+confidence = "high"
+
+[[register]]
+name   = "INPUT_DEFAULT"
+offset = 0x09
+width  = 8
+access = "rw"
+reset  = 0x00
+notes  = "Default input state for interrupts."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "FXL6408: Input Default State"
+confidence = "high"
+
+[[register]]
+name   = "PULL_ENABLE"
+offset = 0x0B
+width  = 8
+access = "rw"
+reset  = 0xFF
+notes  = "1 = pull resistor on."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "FXL6408: Pull Enable"
+confidence = "high"
+
+[[register]]
+name   = "PULL_UP"
+offset = 0x0D
+width  = 8
+access = "rw"
+reset  = 0x00
+notes  = "1 = pull-up, 0 = pull-down."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "FXL6408: Pull-Down / Pull-Up"
+confidence = "high"
+
+[[register]]
+name   = "INPUT_STATUS"
+offset = 0x0F
+width  = 8
+access = "r"
+notes  = "Pin levels."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "FXL6408: Input Status"
+confidence = "high"
+
+[[register.source]]
+kind       = "decompile"
+ref        = "gpio_expander_FXL6408_get_level_internal reads 0x0F"
+confidence = "high"
+
+[[register]]
+name   = "INT_MASK"
+offset = 0x11
+width  = 8
+access = "rw"
+reset  = 0x00
+notes  = "Interrupt mask."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "FXL6408: Interrupt Mask"
+confidence = "high"
+
+[[register]]
+name   = "INT_STATUS"
+offset = 0x13
+width  = 8
+access = "r"
+notes  = "Interrupt status; no pin changes by itself, so always 0."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "FXL6408: Interrupt Status"
+confidence = "high"

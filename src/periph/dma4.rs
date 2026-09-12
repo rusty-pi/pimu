@@ -38,18 +38,21 @@
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
-pub const CS: u32 = 0x00;
-pub const CB: u32 = 0x04;
-pub const DEBUG: u32 = 0x0C;
+pub use crate::spec::dma4::{
+    CB, CS, CS_ACTIVE_MASK as CS_ACTIVE, CS_BUSY_MASK as CS_BUSY_EXTRA, CS_END_MASK as CS_END,
+    CS_ERROR_MASK as CS_ERROR, CS_INT_MASK as CS_INT, DEBUG,
+};
+use crate::spec::Coverage;
 
-pub const CS_ACTIVE: u32 = 1 << 0;
-pub const CS_END: u32 = 1 << 1;
-pub const CS_INT: u32 = 1 << 2;
-/// `TI` bit 0: raise the completion interrupt when this control block is done.
+/// Every register in `specs/dma4.toml` is modelled.
+pub const COVERAGE: Coverage = Coverage {
+    block: "dma4",
+    decoded: &[CS, CB, DEBUG],
+};
+
+/// `TI` bit 0 of a control block: raise the completion interrupt when this
+/// control block is done.
 pub const TI_INTEN: u32 = 1 << 0;
-pub const CS_ERROR: u32 = 1 << 10;
-/// Bit the status check (`0x0008b3f4`) treats as "still busy" alongside ACTIVE.
-pub const CS_BUSY_EXTRA: u32 = 1 << 24;
 
 /// One decoded control block, ready for [`Machine`](crate::machine::Machine) to
 /// execute.

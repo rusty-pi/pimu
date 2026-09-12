@@ -173,30 +173,35 @@ use std::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
-pub const BASE: u32 = 0x7D5D_2000;
-/// `reg = <0x7d5d2000 0xf00>` in the Pi 4 device tree.
-pub const SIZE: u32 = 0x0000_0F00;
+// `DISABLE_MASK` bits set mask a channel *off* (module docs). Start4 will not
+// accept a `RESULT` sample without `SETTLED`, which Linux ignores; that is why
+// a zero-returning stub stalled the boot.
+use crate::spec::avs::{
+    DISABLE_MASK, DISABLE_MASK_CHANNELS_MASK as DISABLE_MASK_BITS, LOWER, RAIL,
+    RAIL_COUNT as RAIL_CHANNELS, RAIL_SETTLED_MASK, RAIL_STRIDE, REG_040, REG_044, REG_06C,
+    REG_074, REG_078, RESULT, RESULT_COUNT as RESULT_CHANNELS, RESULT_SETTLED_MASK as SETTLED,
+    RESULT_STRIDE, RESULT_VALID_MASK as VALID, UPPER,
+};
+use crate::spec::Coverage;
 
-/// Channel results `FUN_0ed603e2` polls, `+0x200 + ch*4` for ch 0..5.
-const RESULT_BASE: u32 = 0x200;
-const RESULT_CHANNELS: u32 = 6;
-/// Per-channel ring-oscillator monitors `FUN_0ec3007a` polls, `+0x220 + ch*4`.
-const RAIL_BASE: u32 = 0x220;
-/// `FUN_0ec5f2c0` range-checks its channel against 0x23 before passing it to
-/// `FUN_0ec3007a`, and the boot reads every one of them.
-const RAIL_CHANNELS: u32 = 0x24;
-
-/// Channel disable mask, `~(1 << ch) & 0x7F` while a channel is being read and
-/// `0` at rest. See the module docs: bits set here mask a channel *off*.
-const DISABLE_MASK: u32 = 0x03C;
-/// Only the low 7 bits of `+0x03C` are channel bits.
-const DISABLE_MASK_BITS: u32 = 0x7F;
-
-/// Bit 10: the reading is valid (Linux calls this `BCM2711_TS_VALID_MASK`).
-const VALID: u32 = 1 << 10;
-/// Bit 16: the reading has settled. Linux ignores it; start4 will not accept a
-/// sample without it, which is why a zero-returning stub stalled the boot.
-const SETTLED: u32 = 1 << 16;
+/// The channel results, the rail monitors and the disable mask are modelled;
+/// the other masks and the bound tables are the plain storage the
+/// measurements call for (module docs).
+pub const COVERAGE: Coverage = Coverage {
+    block: "avs",
+    decoded: &[
+        DISABLE_MASK,
+        REG_040,
+        REG_044,
+        REG_06C,
+        REG_074,
+        REG_078,
+        RESULT,
+        RAIL,
+        LOWER,
+        UPPER,
+    ],
+};
 
 /// Per-channel counts, read straight off `rpi-dev` at `0x7D5D2200 + ch*4` — see
 /// the module docs for the raw dump and the conversion each one satisfies.
@@ -277,8 +282,8 @@ impl MmioDevice for Avs {
 
     fn read(&mut self, offset: u32, _width: Width) -> BusResult<u32> {
         let off = offset & !3;
-        if (RESULT_BASE..RESULT_BASE + RESULT_CHANNELS * 4).contains(&off) {
-            let ch = (off - RESULT_BASE) / 4;
+        if (RESULT..RESULT + RESULT_CHANNELS * RESULT_STRIDE).contains(&off) {
+            let ch = (off - RESULT) / RESULT_STRIDE;
             if self.channel_masked(ch) {
                 // Masked off: no valid, no settled. `FUN_0ed603e2` reads this
                 // as "no sample" and returns 0, which `FUN_0ed6040e` skips.
@@ -290,9 +295,9 @@ impl MmioDevice for Avs {
             };
             return Ok(SETTLED | VALID | count);
         }
-        if (RAIL_BASE..RAIL_BASE + RAIL_CHANNELS * 4).contains(&off) {
-            let ch = (off - RAIL_BASE) / 4;
-            return Ok(SETTLED | RAIL_COUNTS[ch as usize]);
+        if (RAIL..RAIL + RAIL_CHANNELS * RAIL_STRIDE).contains(&off) {
+            let ch = (off - RAIL) / RAIL_STRIDE;
+            return Ok(RAIL_SETTLED_MASK | RAIL_COUNTS[ch as usize]);
         }
         Ok(self.storage.get(&off).copied().unwrap_or(0))
     }

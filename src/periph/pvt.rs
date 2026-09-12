@@ -87,27 +87,29 @@ use std::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
-pub const BASE: u32 = 0x7D5D_8000;
-/// Eighteen channels of `0x40` bytes. start4 initialises exactly this many
-/// (`k = 0..17`), and channel 17 is the last one carrying the magic on
+use crate::spec::pvt::{
+    INDEX as REG_INDEX, INSTANCES, INSTANCE_STRIDE as STRIDE, MAGIC as REG_MAGIC,
+    MAGIC_RESET as MAGIC, READING as REG_READING, THRESHOLD_A as REG_THRESHOLD_A,
+    THRESHOLD_B as REG_THRESHOLD_B,
+};
+use crate::spec::Coverage;
+
+/// Eighteen channels, one register bank each. start4 initialises exactly this
+/// many (`k = 0..17`), and channel 17 is the last one carrying the magic on
 /// hardware.
-pub const CHANNELS: u32 = 18;
-pub const STRIDE: u32 = 0x40;
-pub const SIZE: u32 = CHANNELS * STRIDE;
+pub const CHANNELS: u32 = INSTANCES;
 
-/// `+0x00` — reads back the channel index.
-const REG_INDEX: u32 = 0x00;
-/// `+0x10` — the magic `FUN_0ec300fa` requires before it will read `+0x1C`.
-const REG_MAGIC: u32 = 0x10;
-/// `+0x14`, `+0x18` — read/write threshold pairs.
-const REG_THRESHOLD_A: u32 = 0x14;
-const REG_THRESHOLD_B: u32 = 0x18;
-/// `+0x1C` — the read-only measurement pair, `hi = [31:16]`, `lo = [15:0]`.
-const REG_READING: u32 = 0x1C;
-
-/// The value `FUN_0ec300fa` compares `+0x10` against. Present on all eighteen
-/// channels of the reference board.
-const MAGIC: u32 = 0x7FFF_50CF;
+/// Every register in `specs/pvt.toml` is modelled.
+pub const COVERAGE: Coverage = Coverage {
+    block: "pvt",
+    decoded: &[
+        REG_INDEX,
+        REG_MAGIC,
+        REG_THRESHOLD_A,
+        REG_THRESHOLD_B,
+        REG_READING,
+    ],
+};
 
 /// `+0x14` and `+0x18` as measured, per channel. Channels 2 and 3 really do
 /// read zero for both.

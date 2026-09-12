@@ -70,34 +70,37 @@
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
-pub const BASE: u32 = 0x7E10_4000;
-/// `reg = <0x7e104000 0x28>`.
-pub const SIZE: u32 = 0x28;
+// `PROBE` is not in the kernel's register list: start4's probe (`0x3ED64B0A`)
+// picks its rng200 driver iff bit 18 reads set, so on this block it does.
+pub use crate::spec::rng::PROBE;
+use crate::spec::rng::{
+    CTRL, CTRL_RBGEN_MASK as CTRL_RBGEN, FIFO_COUNT, FIFO_COUNT_THRESHOLD_MASK,
+    FIFO_COUNT_THRESHOLD_SHIFT, FIFO_DATA, INT_ENABLE, INT_STATUS,
+    INT_STATUS_FIFO_FULL_MASK as INT_FIFO_FULL, INT_STATUS_TOTAL_BITS_MASK as INT_TOTAL_BITS,
+    PROBE_RESET as PROBE_RNG200, RBG_SOFT_RESET, RNG_SOFT_RESET, TOTAL_BIT_COUNT,
+    TOTAL_BIT_COUNT_THRESHOLD,
+};
+use crate::spec::Coverage;
+
+/// Every register in `specs/rng.toml` is modelled.
+pub const COVERAGE: Coverage = Coverage {
+    block: "rng",
+    decoded: &[
+        CTRL,
+        RNG_SOFT_RESET,
+        RBG_SOFT_RESET,
+        TOTAL_BIT_COUNT,
+        TOTAL_BIT_COUNT_THRESHOLD,
+        PROBE,
+        INT_STATUS,
+        INT_ENABLE,
+        FIFO_DATA,
+        FIFO_COUNT,
+    ],
+};
 
 /// The interrupt start4 registers for this block (handler `0x3ED64BE8`).
 pub const IRQ_SRC: u32 = 125;
-
-const CTRL: u32 = 0x00;
-const RNG_SOFT_RESET: u32 = 0x04;
-const RBG_SOFT_RESET: u32 = 0x08;
-const TOTAL_BIT_COUNT: u32 = 0x0C;
-const TOTAL_BIT_COUNT_THRESHOLD: u32 = 0x10;
-/// Not in the kernel's register list. start4's probe (`0x3ED64B0A`) picks its
-/// rng200 driver iff bit 18 reads set, so on this block it does.
-pub const PROBE: u32 = 0x14;
-const INT_STATUS: u32 = 0x18;
-const INT_ENABLE: u32 = 0x1C;
-const FIFO_DATA: u32 = 0x20;
-const FIFO_COUNT: u32 = 0x24;
-
-/// `RNG_CTRL_RNG_RBGEN_MASK`: any bit set means the generator runs.
-const CTRL_RBGEN: u32 = 0x1FFF;
-/// What `+0x14` reads: bit 18, the rng200 marker start4 tests.
-const PROBE_RNG200: u32 = 1 << 18;
-/// `RNG_INT_STATUS_TOTAL_BITS_COUNT_IRQ_MASK`: warm-up threshold reached.
-const INT_TOTAL_BITS: u32 = 1 << 0;
-/// FIFO holds at least `FIFO_COUNT[15:8]` words (start4's handler, bit 2).
-const INT_FIFO_FULL: u32 = 1 << 2;
 /// Words the FIFO reports while the generator runs. Real hardware refills
 /// continuously; a warmed-up block is never empty for long.
 const FIFO_WORDS: u32 = 16;
@@ -222,7 +225,7 @@ impl MmioDevice for Rng {
                     0
                 }
             }
-            FIFO_COUNT => (self.fifo_threshold << 8) | self.available(),
+            FIFO_COUNT => (self.fifo_threshold << FIFO_COUNT_THRESHOLD_SHIFT) | self.available(),
             _ => 0,
         })
     }
@@ -235,7 +238,10 @@ impl MmioDevice for Rng {
             TOTAL_BIT_COUNT_THRESHOLD => self.bit_threshold = value,
             INT_STATUS => self.int_status &= !value,
             INT_ENABLE => self.int_enable = value,
-            FIFO_COUNT => self.fifo_threshold = (value >> 8) & 0xFF,
+            FIFO_COUNT => {
+                self.fifo_threshold =
+                    (value & FIFO_COUNT_THRESHOLD_MASK) >> FIFO_COUNT_THRESHOLD_SHIFT
+            }
             _ => {}
         }
         self.update();

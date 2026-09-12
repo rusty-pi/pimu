@@ -34,6 +34,19 @@ use std::collections::VecDeque;
 use crate::bus::{BusResult, MmioDevice, Width};
 use crate::periph::fxl6408::Fxl6408;
 use crate::periph::pmic::Pmic;
+use crate::spec::bsc::{
+    A, C, CLKT, C_CLEAR_MASK as C_CLEAR, C_I2CEN_MASK as C_I2CEN, C_READ_MASK as C_READ,
+    C_ST_MASK as C_ST, DEL, DIV, DLEN, FIFO, S, S_CLKT_MASK as S_CLKT, S_DONE_MASK as S_DONE,
+    S_ERR_MASK as S_ERR, S_RXD_MASK as S_RXD, S_RXF_MASK as S_RXF, S_RXR_MASK as S_RXR,
+    S_TA_MASK as S_TA, S_TXD_MASK as S_TXD, S_TXE_MASK as S_TXE, S_TXW_MASK as S_TXW,
+};
+use crate::spec::Coverage;
+
+/// Every register in `specs/bsc.toml` is modelled, in both instances.
+pub const COVERAGE: Coverage = Coverage {
+    block: "bsc",
+    decoded: &[C, S, DLEN, A, FIFO, DIV, DEL, CLKT],
+};
 
 /// The device side of an I²C transfer.
 pub trait I2cSlave {
@@ -46,33 +59,6 @@ pub trait I2cSlave {
     /// Slave to master.
     fn read_byte(&mut self) -> u8;
 }
-
-const C: u32 = 0x00;
-const S: u32 = 0x04;
-const DLEN: u32 = 0x08;
-const A: u32 = 0x0C;
-const FIFO: u32 = 0x10;
-const DIV: u32 = 0x14;
-const DEL: u32 = 0x18;
-const CLKT: u32 = 0x1C;
-
-// C register bits.
-const C_READ: u32 = 1 << 0;
-const C_CLEAR: u32 = 0b11 << 4;
-const C_ST: u32 = 1 << 7;
-const C_I2CEN: u32 = 1 << 15;
-
-// S register bits.
-const S_TA: u32 = 1 << 0;
-const S_DONE: u32 = 1 << 1;
-const S_TXW: u32 = 1 << 2;
-const S_RXR: u32 = 1 << 3;
-const S_TXD: u32 = 1 << 4;
-const S_RXD: u32 = 1 << 5;
-const S_TXE: u32 = 1 << 6;
-const S_RXF: u32 = 1 << 7;
-const S_ERR: u32 = 1 << 8;
-const S_CLKT: u32 = 1 << 9;
 
 pub struct Bsc {
     name: &'static str,

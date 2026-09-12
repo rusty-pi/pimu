@@ -2,6 +2,7 @@
 
 # `corectl` – VPU core control: per-core boot handshake and interrupt controller
 
+- Bus: `vpu` (VPU bus address)
 - Base: `0x7E002000`
 - Size: `0x1000`
 - Banks: 2 × `0x800`; offsets below are for bank 0

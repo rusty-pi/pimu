@@ -1,0 +1,121 @@
+[block]
+name    = "cm"
+base    = 0x7E101000
+size    = 0x2000
+summary = "Clock manager, with the A2W PLL control in the same window"
+notes   = "The analogue PLLs are not modelled: every PLL reads locked, every *_CTL register reads BUSY clear, and everything else is stored with the password byte masked on read-back."
+
+[[block.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, General Purpose GPIO Clocks: the CM_*CTL / CM_*DIV layout and the 0x5A password"
+confidence = "high"
+
+[[block.source]]
+kind       = "decompile"
+ref        = "EEPROM bootloader programs a PLL and polls for lock before trusting the SPI clock"
+confidence = "high"
+
+[[register]]
+name   = "UARTCTL"
+offset = 0x0F0
+access = "rw"
+notes  = "UART clock control. Linux later reprograms it to SRC 6 / MASH 1; start4 itself writes SRC 1."
+
+[[register.source]]
+kind       = "measured"
+ref        = "/dev/mem read of 0xFE1010F0 on rpi-dev, Linux idle: 0x00000296"
+confidence = "high"
+
+[[register.source]]
+kind       = "decompile"
+ref        = "console writer 0x3ED85E9C and clock-change callback 0x3EC799BC gate on ENAB"
+confidence = "high"
+
+[[register.field]]
+name  = "SRC"
+bits  = "3:0"
+notes = "Clock source: 1 = oscillator, 6 = PLLD."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, CM_GPxCTL: SRC"
+confidence = "high"
+
+[[register.field]]
+name  = "ENAB"
+bits  = "4"
+notes = "Generator on."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, CM_GPxCTL: ENAB"
+confidence = "high"
+
+[[register.field]]
+name   = "BUSY"
+bits   = "7"
+access = "r"
+notes  = "Generator running. Real silicon holds it at 1 while running; the model always reads 0, because the shutdown path 0x3EC7F0BA spins on it waiting for clocks the model stops instantly. Same position in every *_CTL register."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, CM_GPxCTL: BUSY"
+confidence = "high"
+
+[[register.field.source]]
+kind       = "decompile"
+ref        = "shutdown path 0x3EC7F0BA polls BUSY with a 1000-iteration escape"
+confidence = "high"
+
+[[register.field]]
+name  = "MASH"
+bits  = "10:9"
+notes = "MASH noise-shaping stages."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, CM_GPxCTL: MASH"
+confidence = "high"
+
+[[register.field]]
+name  = "PASSWD"
+bits  = "31:24"
+notes = "0x5A on write; reads back masked."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, CM_GPxCTL: PASSWD"
+confidence = "high"
+
+[[register]]
+name   = "UARTDIV"
+offset = 0x0F4
+access = "rw"
+notes  = "UART clock divisor."
+
+[[register.source]]
+kind       = "measured"
+ref        = "/dev/mem read of 0xFE1010F4 on rpi-dev, Linux idle: 0x0000fa00"
+confidence = "high"
+
+[[register]]
+name   = "DELAY"
+offset = 0x100
+access = "rw"
+notes  = "Self-clearing 'wait N clocks' register: written password | cycle count, polled until 0. Always reads 0."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "the bootloader's SDHCI register-write helper 0x00081dc0 writes it and spins at 0x00081de2"
+confidence = "high"
+
+[[register]]
+name   = "LOCK"
+offset = 0x114
+access = "r"
+notes  = "One bit per PLL, set once it has locked. Always all ones."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "the bootloader polls it after programming a PLL"
+confidence = "medium"

@@ -38,29 +38,33 @@ use std::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
-/// Status word the firmware polls for a lock/ready edge (`0x8000a3e0` reads
-/// `[0x7E00_1080 + 0x1C]`). Bit 31 is "ready"; we always report it set. The
-/// sub-controllers are 0x80 apart, so `…9C`, `…11C`, … are all status slots.
-const STATUS_SLOT: u32 = 0x1C;
-const STATUS_STRIDE: u32 = 0x80;
-const STATUS_READY: u32 = 1 << 31;
+// The command-word layout of the mode-register port is `STATUS`'s fields.
+use crate::spec::sdc::{
+    REFRESH as REFRESH_WORD, REFRESH_INTERVAL_SHIFT, STATUS, STATUS_ADDR_MASK as MR_ADDR,
+    STATUS_CHANNEL_MASK as MR_CHANNEL, STATUS_COUNT, STATUS_DEVICE_MASK as MR_DEVICE,
+    STATUS_DONE_MASK as STATUS_READY, STATUS_ERROR_MASK as MR_ERROR, STATUS_RDATA_MASK as MR_RDATA,
+    STATUS_RDATA_SHIFT as MR_RDATA_SHIFT, STATUS_STRIDE, STATUS_WDATA_SHIFT as MR_WDATA_SHIFT,
+    STATUS_WRITE_MASK as MR_WRITE, TIMING, TIMING0,
+};
+use crate::spec::Coverage;
 
-/// Mode-register access port: the `+0x1C` slot of the sub-controller at `+0x80`.
-const MR_PORT: u32 = STATUS_STRIDE + STATUS_SLOT;
+/// The timing words are storage; the status slots and the mode-register port
+/// are modelled.
+pub const COVERAGE: Coverage = Coverage {
+    block: "sdc",
+    decoded: &[TIMING0, REFRESH_WORD, TIMING, STATUS],
+};
 
-/// Command-word layout of [`MR_PORT`].
-const MR_ADDR: u32 = 0x0000_00FF;
-const MR_WDATA_SHIFT: u32 = 8;
-const MR_RDATA: u32 = 0x00FF_0000;
-const MR_RDATA_SHIFT: u32 = 16;
-const MR_CHANNEL: u32 = 1 << 24;
-const MR_DEVICE: u32 = 1 << 25;
-/// Set for a mode-register *write*; clear for a read.
-const MR_WRITE: u32 = 1 << 28;
-/// Transfer failed. Never set here: the modelled DRAM always answers.
-const MR_ERROR: u32 = 1 << 30;
+/// Mode-register access port: the first sub-controller's status slot.
+const MR_PORT: u32 = STATUS;
 /// Transfer complete — the same bit the plain ready polls look at.
 const MR_DONE: u32 = STATUS_READY;
+
+/// Is `off` one of the sub-controller status slots (`+0x9C`, `+0x11C`, …)?
+fn status_slot(off: u32) -> bool {
+    off.checked_sub(STATUS)
+        .is_some_and(|rel| rel % STATUS_STRIDE == 0 && rel / STATUS_STRIDE < STATUS_COUNT)
+}
 
 /// LPDDR4 MR4 (refresh rate / temperature). Value the reference board reports
 /// right after the ARM handover (`vc4-boot.log`: `sdram refresh 1562->3124 (2)`
@@ -68,10 +72,6 @@ const MR_DONE: u32 = STATUS_READY;
 /// die is cool enough to refresh at half the nominal rate).
 const MR4_REFRESH_RATE: u32 = 4;
 const MR4_RESET: u8 = 2;
-
-/// Refresh-interval word: `[+0x04] >> 16` is the interval start4 rescales from
-/// the MR4 code.
-const REFRESH_WORD: u32 = 0x04;
 
 /// A mode register is addressed by channel, device (rank) and register number.
 type MrKey = (bool, bool, u8);
@@ -151,7 +151,7 @@ impl MmioDevice for Sdc {
         // `+0x11C`, …); the plain timing-table words at `+0x00..+0x30` read back
         // whatever was written. `+0x9C` additionally carries the result of the
         // last mode-register transfer, which the write path already latched.
-        if off >= STATUS_STRIDE && off % STATUS_STRIDE == STATUS_SLOT {
+        if status_slot(off) {
             return Ok(stored | STATUS_READY);
         }
         Ok(stored)
@@ -165,7 +165,7 @@ impl MmioDevice for Sdc {
             value
         };
         if off == REFRESH_WORD {
-            let interval = value >> 16;
+            let interval = value >> REFRESH_INTERVAL_SHIFT;
             if self.refresh_history.last() != Some(&interval) {
                 self.refresh_history.push(interval);
             }
@@ -224,13 +224,11 @@ mod tests {
     fn plain_status_slots_still_read_ready() {
         let mut sdc = Sdc::new();
         assert_eq!(
-            sdc.read(STATUS_STRIDE * 2 + STATUS_SLOT, Width::Word)
-                .unwrap()
-                & STATUS_READY,
+            sdc.read(STATUS + STATUS_STRIDE, Width::Word).unwrap() & STATUS_READY,
             STATUS_READY
         );
         // Timing words are plain storage.
-        sdc.write(0x04, Width::Word, 0x061a_0474).unwrap();
-        assert_eq!(sdc.read(0x04, Width::Word).unwrap(), 0x061a_0474);
+        sdc.write(REFRESH_WORD, Width::Word, 0x061a_0474).unwrap();
+        assert_eq!(sdc.read(REFRESH_WORD, Width::Word).unwrap(), 0x061a_0474);
     }
 }

@@ -1,0 +1,358 @@
+[block]
+name    = "bcm54213pe"
+bus     = "mdio"
+base    = 0x01
+size    = 0x20
+summary = "BCM54213PE gigabit Ethernet PHY on GENET's MDIO bus"
+notes   = "Clause-22 registers. Without a cable there is no link partner: BMSR loses link and AN-complete and the partner registers read 0. With one, the partner is the reference board's switch port. The auxiliary-control, shadow and expansion spaces behind 0x18 / 0x1C / 0x15+0x17 are indirect and not listed. Registers with no behaviour read back what was last written."
+
+[[block.source]]
+kind       = "linux"
+ref        = "/scb/ethernet@7d580000/mdio@e14/ethernet-phy@1; drivers/net/phy/broadcom.c, bcm-phy-lib.c"
+confidence = "high"
+
+[[block.source]]
+kind       = "standard"
+ref        = "IEEE 802.3 clause 22.2.4 (registers 0..15)"
+confidence = "high"
+
+[[block.source]]
+kind       = "measured"
+ref        = "SIOCGMIIREG on eth0, Pi 4B rev 1.5 (d03115), Linux up with a 1 Gb/s link"
+confidence = "high"
+
+[[register]]
+name   = "BMCR"
+offset = 0x00
+width  = 16
+access = "rw"
+reset  = 0x1140
+notes  = "Control: AN on, full duplex, 1000 speed select."
+
+[[register.source]]
+kind       = "measured"
+ref        = "BMCR 0x1140"
+confidence = "high"
+
+[[register.field]]
+name  = "ANRESTART"
+bits  = "9"
+notes = "Restart auto-negotiation; self-clears."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "IEEE 802.3 22.2.4.1.7"
+confidence = "high"
+
+[[register.field]]
+name  = "SOFT_RESET"
+bits  = "15"
+notes = "Reset to defaults; self-clears."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "IEEE 802.3 22.2.4.1.1"
+confidence = "high"
+
+[[register]]
+name   = "BMSR"
+offset = 0x01
+width  = 16
+access = "r"
+notes  = "Status: 0x796d with a partner, 0x7949 without (no link, no AN complete)."
+
+[[register.source]]
+kind       = "measured"
+ref        = "BMSR 0x796d"
+confidence = "high"
+
+[[register.source]]
+kind       = "decompile"
+ref        = "bootloader wait-for-link polls registers 1, 5 and 10 from 0x0009196e"
+confidence = "high"
+
+[[register]]
+name   = "PHYSID1"
+offset = 0x02
+width  = 16
+access = "r"
+reset  = 0x600D
+notes  = "PHY id, high half."
+
+[[register.source]]
+kind       = "measured"
+ref        = "ID 0x600d 0x84a2"
+confidence = "high"
+
+[[register.source]]
+kind       = "linux"
+ref        = "include/linux/brcmphy.h: PHY_ID_BCM54213PE 0x600d84a2"
+confidence = "high"
+
+[[register]]
+name   = "PHYSID2"
+offset = 0x03
+width  = 16
+access = "r"
+reset  = 0x84A2
+notes  = "PHY id, low half."
+
+[[register.source]]
+kind       = "measured"
+ref        = "ID 0x600d 0x84a2"
+confidence = "high"
+
+[[register]]
+name   = "ADVERTISE"
+offset = 0x04
+width  = 16
+access = "rw"
+reset  = 0x01E1
+notes  = "Advertisement: 802.3, 10/100 half/full. Linux adds the pause bits (measured 0x0de1)."
+
+[[register.source]]
+kind       = "measured"
+ref        = "ANAR 0x0de1"
+confidence = "high"
+
+[[register]]
+name   = "LPA"
+offset = 0x05
+width  = 16
+access = "r"
+notes  = "Link partner ability: 0xc5e1 with a partner, 0 without."
+
+[[register.source]]
+kind       = "measured"
+ref        = "ANLPAR 0xc5e1"
+confidence = "high"
+
+[[register]]
+name   = "EXPANSION"
+offset = 0x06
+width  = 16
+access = "r"
+notes  = "AN expansion: 0x006d with a partner, 0x0004 without."
+
+[[register.source]]
+kind       = "measured"
+ref        = "ANER 0x006d"
+confidence = "high"
+
+[[register]]
+name   = "NPTX"
+offset = 0x07
+width  = 16
+access = "rw"
+reset  = 0x2001
+notes  = "Next-page transmit."
+
+[[register.source]]
+kind       = "measured"
+ref        = "NPTX 0x2001"
+confidence = "high"
+
+[[register]]
+name   = "LPNP"
+offset = 0x08
+width  = 16
+access = "r"
+notes  = "Link partner next page; 0."
+
+[[register.source]]
+kind       = "standard"
+ref        = "IEEE 802.3 22.2.4.1: register 8"
+confidence = "high"
+
+[[register]]
+name   = "CTRL1000"
+offset = 0x09
+width  = 16
+access = "rw"
+reset  = 0x0300
+notes  = "Advertise 1000BASE-T half and full."
+
+[[register.source]]
+kind       = "measured"
+ref        = "CTRL1000 0x0300"
+confidence = "high"
+
+[[register]]
+name   = "STAT1000"
+offset = 0x0A
+width  = 16
+access = "r"
+notes  = "1000BASE-T status: 0x0800 (partner 1000 full) with a partner, 0 without."
+
+[[register.source]]
+kind       = "measured"
+ref        = "STAT1000 0x0800"
+confidence = "high"
+
+[[register]]
+name   = "MMD_CTRL"
+offset = 0x0D
+width  = 16
+access = "rw"
+notes  = "Clause-45-over-22 MMD access control: device in 4:0, function in 15:14."
+
+[[register.source]]
+kind       = "standard"
+ref        = "IEEE 802.3 22.2.4.3.11 (register 13)"
+confidence = "high"
+
+[[register]]
+name   = "MMD_DATA"
+offset = 0x0E
+width  = 16
+access = "rw"
+notes  = "MMD address / data. phylib reads the EEE registers through it (100TX and 1000T supported and advertised)."
+
+[[register.source]]
+kind       = "standard"
+ref        = "IEEE 802.3 22.2.4.3.12 (register 14)"
+confidence = "high"
+
+[[register.source]]
+kind       = "measured"
+ref        = "ethtool --show-eee eth0: EEE for 100baseT/Full and 1000baseT/Full"
+confidence = "high"
+
+[[register]]
+name   = "ESTATUS"
+offset = 0x0F
+width  = 16
+access = "r"
+reset  = 0x3000
+notes  = "1000BASE-T full and half capable."
+
+[[register.source]]
+kind       = "measured"
+ref        = "ESTATUS 0x3000"
+confidence = "high"
+
+[[register]]
+name   = "ECR"
+offset = 0x10
+width  = 16
+access = "rw"
+notes  = "Extended control."
+
+[[register.source]]
+kind       = "linux"
+ref        = "brcmphy.h: MII_BCM54XX_ECR"
+confidence = "high"
+
+[[register]]
+name   = "COUNTER"
+offset = 0x11
+count  = 4
+stride = 1
+width  = 16
+access = "r"
+notes  = "Status and error counters 0x11..0x14; 0."
+
+[[register.source]]
+kind       = "linux"
+ref        = "brcmphy.h: MII_BCM54XX_ESR and the counters after it"
+confidence = "medium"
+
+[[register]]
+name   = "EXP_DATA"
+offset = 0x15
+width  = 16
+access = "rw"
+notes  = "Expansion register data, for the register EXP_SEL selects."
+
+[[register.source]]
+kind       = "linux"
+ref        = "brcmphy.h: MII_BCM54XX_EXP_DATA"
+confidence = "high"
+
+[[register]]
+name   = "EXP_SEL"
+offset = 0x17
+width  = 16
+access = "rw"
+notes  = "Expansion register selector (0x0Fxx / 0x0Dxx / 0x0Exx banks)."
+
+[[register.source]]
+kind       = "linux"
+ref        = "brcmphy.h: MII_BCM54XX_EXP_SEL"
+confidence = "high"
+
+[[register]]
+name   = "AUX_CTL"
+offset = 0x18
+width  = 16
+access = "rw"
+notes  = "Auxiliary control: eight shadows selected by 2:0; shadow 7 (misc) with bit 15 clear selects which shadow reads return."
+
+[[register.source]]
+kind       = "linux"
+ref        = "brcmphy.h: MII_BCM54XX_AUX_CTL"
+confidence = "high"
+
+[[register.source]]
+kind       = "measured"
+ref        = "AUX_CTL 0x71e7"
+confidence = "high"
+
+[[register]]
+name   = "AUX_STATUS"
+offset = 0x19
+width  = 16
+access = "r"
+notes  = "Auxiliary status; 0."
+
+[[register.source]]
+kind       = "linux"
+ref        = "brcmphy.h: MII_BCM54XX_AUX_STATUS"
+confidence = "high"
+
+[[register]]
+name   = "ISR"
+offset = 0x1A
+width  = 16
+access = "r"
+notes  = "Interrupt status; nothing is ever raised."
+
+[[register.source]]
+kind       = "linux"
+ref        = "brcmphy.h: MII_BCM54XX_ISR"
+confidence = "high"
+
+[[register]]
+name   = "IMR"
+offset = 0x1B
+width  = 16
+access = "rw"
+reset  = 0xFFFF
+notes  = "Interrupt mask; all masked at reset."
+
+[[register.source]]
+kind       = "linux"
+ref        = "bcm54xx_config_init: 'Initially all interrupts are masked in IMR'"
+confidence = "high"
+
+[[register.source]]
+kind       = "measured"
+ref        = "IMR 0xfff1 after Linux unmasked its bits"
+confidence = "high"
+
+[[register]]
+name   = "SHADOW"
+offset = 0x1C
+width  = 16
+access = "rw"
+notes  = "Thirty-two shadows: select in 14:10, write flag 15, data 9:0; a write without bit 15 selects what reads return."
+
+[[register.source]]
+kind       = "linux"
+ref        = "brcmphy.h: MII_BCM54XX_SHD"
+confidence = "high"
+
+[[register.source]]
+kind       = "measured"
+ref        = "SHADOW 0x386a"
+confidence = "high"

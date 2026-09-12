@@ -1,0 +1,319 @@
+[block]
+name    = "vl805"
+bus     = "pci"
+base    = 0x0
+size    = 0x1000
+summary = "VIA VL805 xHCI controller (1106:3483): its PCI configuration space"
+notes   = "Bus 1, device 0, function 0 behind the root complex, reached through `pcie` EXT_CFG_DATA. Reset values are the reference board's dump with the fields Linux had written (command, BAR0, MSI address / data, the PCIe control words) put back to power-on. Its xHCI registers are `xhci`."
+
+[[block.source]]
+kind       = "measured"
+ref        = "rpi-dev: sudo od -Ax -tx1 -v /sys/bus/pci/devices/0000:01:00.0/config; lspci -vvv"
+confidence = "high"
+
+[[block.source]]
+kind       = "standard"
+ref        = "PCI Local Bus 3.0 type-0 header; PCI Express Base 2.0 capability structure"
+confidence = "high"
+
+[[block.source]]
+kind       = "decompile"
+ref        = "bootloader bus scan 0x000A7118 ('PCIe scan %08x:%08x'); start4 XHCI_RESET 0x3EDC61F4 refuses anything but 1106:3483"
+confidence = "high"
+
+[[register]]
+name   = "ID"
+offset = 0x00
+access = "r"
+reset  = 0x34831106
+notes  = "Vendor 0x1106 (VIA), device 0x3483."
+
+[[register.source]]
+kind       = "measured"
+ref        = "config dump 0x00; sd-card-boot.log 'PCIe scan 00001106:00003483'"
+confidence = "high"
+
+[[register]]
+name   = "COMMAND_STATUS"
+offset = 0x04
+access = "rw"
+reset  = 0x00100000
+notes  = "Command (low half, writable bits 0x547) and status (capability list)."
+
+[[register.source]]
+kind       = "measured"
+ref        = "config dump 0x04: 0x00100546 running, command put back to 0"
+confidence = "high"
+
+[[register]]
+name   = "CLASS_REV"
+offset = 0x08
+access = "r"
+reset  = 0x0C033001
+notes  = "Revision 1, class 0C0330 (xHCI)."
+
+[[register.source]]
+kind       = "measured"
+ref        = "config dump 0x08"
+confidence = "high"
+
+[[register]]
+name   = "CACHE_LAT"
+offset = 0x0C
+access = "rw"
+reset  = 0x00000010
+notes  = "Cache line size and latency timer (low half writable)."
+
+[[register.source]]
+kind       = "measured"
+ref        = "config dump 0x0C"
+confidence = "high"
+
+[[register]]
+name   = "BAR0"
+offset = 0x10
+access = "rw"
+reset  = 0x00000004
+notes  = "4 KiB 64-bit memory BAR; the low 12 bits do not take writes, which is how sizing reads back the mask."
+
+[[register.source]]
+kind       = "measured"
+ref        = "lspci: Region 0: Memory at 600000000 (64-bit, non-prefetchable) [size=4K]"
+confidence = "high"
+
+[[register]]
+name   = "BAR0_HI"
+offset = 0x14
+access = "rw"
+notes  = "BAR0, high word."
+
+[[register.source]]
+kind       = "standard"
+ref        = "PCI 3.0, 6.2.5.1: a 64-bit BAR takes two dwords"
+confidence = "high"
+
+[[register]]
+name   = "SUBSYSTEM"
+offset = 0x2C
+access = "r"
+reset  = 0x34831106
+notes  = "Subsystem 1106:3483."
+
+[[register.source]]
+kind       = "measured"
+ref        = "config dump 0x2C"
+confidence = "high"
+
+[[register]]
+name   = "CAP_PTR"
+offset = 0x34
+access = "r"
+reset  = 0x00000080
+notes  = "Capability list starts at 0x80."
+
+[[register.source]]
+kind       = "measured"
+ref        = "config dump 0x34"
+confidence = "high"
+
+[[register]]
+name   = "INTERRUPT"
+offset = 0x3C
+access = "rw"
+reset  = 0x0000011B
+notes  = "Interrupt line 0x1B (writable), pin A."
+
+[[register.source]]
+kind       = "measured"
+ref        = "config dump 0x3C"
+confidence = "high"
+
+[[register]]
+name   = "VENDOR_INDEX"
+offset = 0x78
+access = "rw"
+notes  = "Vendor indirect port, index half. The bootloader and start4 stream the VL805's own firmware through the port and read it back to verify."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "bootloader around 0x000B6CE0 ('HUB2.0 fail' at 0x000B6DF8 on a mismatch); start4 0x3EDC5EF8 ('MCU FW: %x %x')"
+confidence = "high"
+
+[[register]]
+name   = "VENDOR_DATA"
+offset = 0x7C
+access = "rw"
+notes  = "Vendor indirect port, data half: reads back whatever the selected index holds."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "bootloader around 0x000B6CE0; start4 0x3EDC5EF8"
+confidence = "high"
+
+[[register]]
+name   = "PM_CAP"
+offset = 0x80
+access = "r"
+reset  = 0x89C39001
+notes  = "Power-management capability, next at 0x90."
+
+[[register.source]]
+kind       = "measured"
+ref        = "config dump 0x80"
+confidence = "high"
+
+[[register]]
+name   = "PM_CSR"
+offset = 0x84
+access = "rw"
+notes  = "Power-management control / status."
+
+[[register.source]]
+kind       = "standard"
+ref        = "PCI Power Management 1.2, PMCSR"
+confidence = "high"
+
+[[register]]
+name   = "MSI_CTRL"
+offset = 0x90
+access = "rw"
+reset  = 0x0080C405
+notes  = "MSI capability: 4 vectors, 64-bit, next at 0xC4; enable (16) and multiple-message enable writable."
+
+[[register.source]]
+kind       = "measured"
+ref        = "config dump 0x90; lspci 'MSI: Enable+ Count=4/4 Maskable- 64bit+'"
+confidence = "high"
+
+[[register]]
+name   = "MSI_ADDR_LO"
+offset = 0x94
+access = "rw"
+notes  = "MSI address, low word."
+
+[[register.source]]
+kind       = "measured"
+ref        = "lspci 'Address: 00000000fffffffc'"
+confidence = "high"
+
+[[register]]
+name   = "MSI_ADDR_HI"
+offset = 0x98
+access = "rw"
+notes  = "MSI address, high word."
+
+[[register.source]]
+kind       = "standard"
+ref        = "PCI 3.0, 6.8.1: 64-bit MSI capability layout"
+confidence = "high"
+
+[[register]]
+name   = "MSI_DATA"
+offset = 0x9C
+access = "rw"
+notes  = "MSI data (low half); Linux programs 0x6540."
+
+[[register.source]]
+kind       = "measured"
+ref        = "lspci 'Data: 6540'"
+confidence = "high"
+
+[[register]]
+name   = "PCIE_CAP"
+offset = 0xC4
+access = "r"
+reset  = 0x00020010
+notes  = "PCI Express capability (v2 endpoint), last in the list."
+
+[[register.source]]
+kind       = "measured"
+ref        = "config dump 0xC4"
+confidence = "high"
+
+[[register]]
+name   = "PCIE_DEVCAP"
+offset = 0xC8
+access = "r"
+notes  = "Device capabilities (0x00008001)."
+
+[[register.source]]
+kind       = "measured"
+ref        = "config dump 0xC8"
+confidence = "high"
+
+[[register]]
+name   = "PCIE_DEVCTL"
+offset = 0xCC
+access = "rw"
+notes  = "Device control / status (0x0019281F running)."
+
+[[register.source]]
+kind       = "measured"
+ref        = "config dump 0xCC"
+confidence = "high"
+
+[[register]]
+name   = "PCIE_LNKCAP"
+offset = 0xD0
+access = "r"
+notes  = "Link capabilities (0x00065C12: 5 GT/s x1)."
+
+[[register.source]]
+kind       = "measured"
+ref        = "config dump 0xD0"
+confidence = "high"
+
+[[register]]
+name   = "PCIE_LNKCTL"
+offset = 0xD4
+access = "rw"
+notes  = "Link control / status (0x10120143 running)."
+
+[[register.source]]
+kind       = "measured"
+ref        = "config dump 0xD4"
+confidence = "high"
+
+[[register]]
+name   = "PCIE_DEVCAP2"
+offset = 0xE8
+access = "r"
+notes  = "Device capabilities 2."
+
+[[register.source]]
+kind       = "standard"
+ref        = "PCIe 2.0, 7.8.15: capability + 0x24"
+confidence = "high"
+
+[[register]]
+name   = "PCIE_DEVCTL2"
+offset = 0xEC
+access = "rw"
+notes  = "Device control 2."
+
+[[register.source]]
+kind       = "standard"
+ref        = "PCIe 2.0, 7.8.16: capability + 0x28"
+confidence = "high"
+
+[[register]]
+name   = "PCIE_LNKCAP2"
+offset = 0xF0
+access = "r"
+notes  = "Link capabilities 2."
+
+[[register.source]]
+kind       = "standard"
+ref        = "PCIe 2.0: capability + 0x2C"
+confidence = "high"
+
+[[register]]
+name   = "PCIE_LNKCTL2"
+offset = 0xF4
+access = "rw"
+notes  = "Link control 2."
+
+[[register.source]]
+kind       = "standard"
+ref        = "PCIe 2.0, 7.8.19: capability + 0x30"
+confidence = "high"

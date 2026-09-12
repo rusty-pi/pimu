@@ -53,9 +53,50 @@ use std::collections::BTreeMap;
 use crate::bus::Width;
 use crate::periph::usb::UsbDevice;
 use crate::periph::xhci::{HostMem, Xhci};
+use crate::spec::vl805::{
+    BAR0, BAR0_HI, CACHE_LAT, CAP_PTR, CLASS_REV, COMMAND_STATUS, ID, INTERRUPT, MSI_ADDR_HI,
+    MSI_ADDR_LO, MSI_CTRL, MSI_DATA, PCIE_CAP, PCIE_DEVCAP, PCIE_DEVCAP2, PCIE_DEVCTL,
+    PCIE_DEVCTL2, PCIE_LNKCAP, PCIE_LNKCAP2, PCIE_LNKCTL, PCIE_LNKCTL2, PM_CAP, PM_CSR, SUBSYSTEM,
+    VENDOR_DATA, VENDOR_INDEX,
+};
+use crate::spec::Coverage;
 
-/// `lspci`: `Region 0: … [size=4K]`.
-pub const BAR0_SIZE: u32 = 0x1000;
+/// The whole configuration space is seeded storage behind a write mask, so
+/// every register in `specs/vl805.toml` is modelled.
+pub const COVERAGE: Coverage = Coverage {
+    block: "vl805",
+    decoded: &[
+        ID,
+        COMMAND_STATUS,
+        CLASS_REV,
+        CACHE_LAT,
+        BAR0,
+        BAR0_HI,
+        SUBSYSTEM,
+        CAP_PTR,
+        INTERRUPT,
+        VENDOR_INDEX,
+        VENDOR_DATA,
+        PM_CAP,
+        PM_CSR,
+        MSI_CTRL,
+        MSI_ADDR_LO,
+        MSI_ADDR_HI,
+        MSI_DATA,
+        PCIE_CAP,
+        PCIE_DEVCAP,
+        PCIE_DEVCTL,
+        PCIE_LNKCAP,
+        PCIE_LNKCTL,
+        PCIE_DEVCAP2,
+        PCIE_DEVCTL2,
+        PCIE_LNKCAP2,
+        PCIE_LNKCTL2,
+    ],
+};
+
+/// `lspci`: `Region 0: … [size=4K]` — the xHCI register block.
+pub const BAR0_SIZE: u32 = crate::spec::xhci::SIZE;
 
 /// A PCIe function's configuration space is 4 KiB; only the first 0x200 bytes
 /// are non-zero on this part.
@@ -118,29 +159,30 @@ const CFG_SEED: &[(usize, &[u8])] = &[
 /// listed is read-only, which is what makes BAR sizing work: writing all-ones
 /// to `0x10` has to read back the size mask, not the value written.
 fn cfg_write_mask(off: usize) -> u32 {
-    match off {
+    match off as u32 {
         // Cache line size / latency timer.
-        0x0c => 0x0000_FFFF,
+        CACHE_LAT => 0x0000_FFFF,
         // Command register (low half). Status (high half) is write-1-to-clear
         // on real silicon; nothing in the firmware reads it back, so it is
         // modelled read-only.
-        0x04 => 0x0000_0547,
+        COMMAND_STATUS => 0x0000_0547,
         // BAR0: 4 KiB, 64-bit memory. Bits [3:0] are the hard-wired type.
-        0x10 => !(BAR0_SIZE - 1),
-        // BAR0 upper half.
-        0x14 => 0xFFFF_FFFF,
+        BAR0 => !(BAR0_SIZE - 1),
+        BAR0_HI => 0xFFFF_FFFF,
         // Interrupt line.
-        0x3c => 0x0000_00FF,
+        INTERRUPT => 0x0000_00FF,
         // The vendor index/data port.
-        0x78 | 0x7c => 0xFFFF_FFFF,
-        // PM control/status.
-        0x84 => 0xFFFF_FFFF,
+        VENDOR_INDEX | VENDOR_DATA => 0xFFFF_FFFF,
+        PM_CSR => 0xFFFF_FFFF,
         // MSI control: the enable bit and Multiple Message Enable. The rest
         // (64-bit capable, Multiple Message Capable) is fixed.
-        0x90 => 0x0071_0000,
-        0x94 | 0x98 | 0x9c => 0xFFFF_FFFF,
-        // PCIe device control / link control / device control 2 / link ctl 2.
-        0xc8 | 0xd0 | 0xe8 | 0xf0 => 0x0000_FFFF,
+        MSI_CTRL => 0x0071_0000,
+        MSI_ADDR_LO | MSI_ADDR_HI | MSI_DATA => 0xFFFF_FFFF,
+        // Meant as device control / link control / device control 2 / link
+        // control 2. By the PCIe capability layout these four are the
+        // capability words, and each control word is the one after it
+        // (`specs/vl805.toml`).
+        PCIE_DEVCAP | PCIE_LNKCAP | PCIE_DEVCAP2 | PCIE_LNKCAP2 => 0x0000_FFFF,
         _ => 0,
     }
 }
@@ -236,10 +278,10 @@ impl Vl805 {
         let off = off as usize & (CFG_LEN - 1);
         // The data half of the vendor port reads back whatever the currently
         // selected index holds.
-        if off & !3 == 0x7c {
-            let idx = self.cfg_word(0x78);
+        if off & !3 == VENDOR_DATA as usize {
+            let idx = self.cfg_word(VENDOR_INDEX as usize);
             let word = self.vendor_regs.get(&idx).copied().unwrap_or(0);
-            self.set_cfg_word(0x7c, word);
+            self.set_cfg_word(VENDOR_DATA as usize, word);
         }
         let mut v = 0u32;
         for i in 0..width.bytes() as usize {
@@ -266,8 +308,8 @@ impl Vl805 {
         let new = (old & !mask) | ((value << shift) & mask);
         self.set_cfg_word(word_off, new);
 
-        if word_off == 0x7c {
-            let idx = self.cfg_word(0x78);
+        if word_off == VENDOR_DATA as usize {
+            let idx = self.cfg_word(VENDOR_INDEX as usize);
             self.vendor_regs.insert(idx, new);
             self.vendor_writes += 1;
         }
@@ -292,11 +334,12 @@ impl Vl805 {
     /// Data: 6540`. Only interrupter 0 is ever used, so the vector offset the
     /// function may OR into the data is always zero.
     pub fn msi_message(&self) -> Option<(u64, u32)> {
-        if self.cfg_word(0x90) & (1 << 16) == 0 {
+        if self.cfg_word(MSI_CTRL as usize) & (1 << 16) == 0 {
             return None;
         }
-        let addr = self.cfg_word(0x94) as u64 | ((self.cfg_word(0x98) as u64) << 32);
-        Some((addr, self.cfg_word(0x9C) & 0xFFFF))
+        let addr = self.cfg_word(MSI_ADDR_LO as usize) as u64
+            | ((self.cfg_word(MSI_ADDR_HI as usize) as u64) << 32);
+        Some((addr, self.cfg_word(MSI_DATA as usize) & 0xFFFF))
     }
 
     /// Command register Bus Master Enable: without it the function may not

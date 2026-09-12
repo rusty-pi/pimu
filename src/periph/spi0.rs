@@ -17,22 +17,18 @@ use std::collections::VecDeque;
 
 use crate::bus::{BusError, BusResult, MmioDevice, Width};
 
-const CS: u32 = 0x00;
-const FIFO: u32 = 0x04;
-const CLK: u32 = 0x08;
-const DLEN: u32 = 0x0C;
-const LTOH: u32 = 0x10;
-const DC: u32 = 0x14;
+use crate::spec::spi0::{
+    CLK, CS, CS_CLEAR_RX_MASK as CS_CLEAR_RX, CS_CLEAR_TX_MASK as CS_CLEAR_TX,
+    CS_DONE_MASK as CS_DONE, CS_RXD_MASK as CS_RXD, CS_RXF_MASK as CS_RXF, CS_RXR_MASK as CS_RXR,
+    CS_TA_MASK as CS_TA, CS_TXD_MASK as CS_TXD, DC, DLEN, FIFO, LTOH,
+};
+use crate::spec::Coverage;
 
-// CS register bits.
-const CS_TA: u32 = 1 << 7; // transfer active
-const CS_CLEAR_RX: u32 = 1 << 5;
-const CS_CLEAR_TX: u32 = 1 << 4;
-const CS_DONE: u32 = 1 << 16;
-const CS_RXD: u32 = 1 << 17; // RX FIFO contains data
-const CS_TXD: u32 = 1 << 18; // TX FIFO has space
-const CS_RXR: u32 = 1 << 19; // RX FIFO ¾ full
-const CS_RXF: u32 = 1 << 20; // RX FIFO full
+/// Every register in `specs/spi0.toml` is modelled.
+pub const COVERAGE: Coverage = Coverage {
+    block: "spi0",
+    decoded: &[CS, FIFO, CLK, DLEN, LTOH, DC],
+};
 
 /// Byte returned when nothing better applies (MISO idle-high).
 const MISO_IDLE: u8 = 0xFF;

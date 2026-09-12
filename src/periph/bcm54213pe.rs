@@ -64,38 +64,74 @@
 
 use std::collections::BTreeMap;
 
+use crate::spec::{bcm54213pe as regs, Coverage};
+
 /// MDIO address on the Pi 4B (`ethernet-phy@1`).
-pub const ADDR: u8 = 1;
-/// `PHY_ID_BCM54213PE` in `include/linux/brcmphy.h`; measured `0x600d` /
-/// `0x84a2` in registers 2 / 3.
-pub const PHY_ID: u32 = 0x600d_84a2;
+pub const ADDR: u8 = regs::BASE as u8;
+/// `PHY_ID_BCM54213PE` in `include/linux/brcmphy.h`: registers 2 / 3.
+pub const PHY_ID: u32 = regs::PHYSID1_RESET << 16 | regs::PHYSID2_RESET;
 
-pub const BMCR: u8 = 0x00;
-pub const BMSR: u8 = 0x01;
-pub const PHYSID1: u8 = 0x02;
-pub const PHYSID2: u8 = 0x03;
-pub const ADVERTISE: u8 = 0x04;
-pub const LPA: u8 = 0x05;
-pub const EXPANSION: u8 = 0x06;
-pub const NPTX: u8 = 0x07;
-pub const CTRL1000: u8 = 0x09;
-pub const STAT1000: u8 = 0x0a;
-pub const MMD_CTRL: u8 = 0x0d;
-pub const MMD_DATA: u8 = 0x0e;
-pub const ESTATUS: u8 = 0x0f;
-pub const ECR: u8 = 0x10;
-pub const EXP_DATA: u8 = 0x15;
-pub const EXP_SEL: u8 = 0x17;
-pub const AUX_CTL: u8 = 0x18;
-pub const ISR: u8 = 0x1a;
-pub const IMR: u8 = 0x1b;
-pub const SHADOW: u8 = 0x1c;
+// Register numbers, as an MDIO frame carries them.
+pub const BMCR: u8 = regs::BMCR as u8;
+pub const BMSR: u8 = regs::BMSR as u8;
+pub const PHYSID1: u8 = regs::PHYSID1 as u8;
+pub const PHYSID2: u8 = regs::PHYSID2 as u8;
+pub const ADVERTISE: u8 = regs::ADVERTISE as u8;
+pub const LPA: u8 = regs::LPA as u8;
+pub const EXPANSION: u8 = regs::EXPANSION as u8;
+pub const NPTX: u8 = regs::NPTX as u8;
+pub const LPNP: u8 = regs::LPNP as u8;
+pub const CTRL1000: u8 = regs::CTRL1000 as u8;
+pub const STAT1000: u8 = regs::STAT1000 as u8;
+pub const MMD_CTRL: u8 = regs::MMD_CTRL as u8;
+pub const MMD_DATA: u8 = regs::MMD_DATA as u8;
+pub const ESTATUS: u8 = regs::ESTATUS as u8;
+pub const ECR: u8 = regs::ECR as u8;
+/// The read-only counters, `0x11..=0x14`.
+const COUNTER: u8 = regs::COUNTER as u8;
+const COUNTER_LAST: u8 = (regs::COUNTER + regs::COUNTER_COUNT - 1) as u8;
+pub const EXP_DATA: u8 = regs::EXP_DATA as u8;
+pub const EXP_SEL: u8 = regs::EXP_SEL as u8;
+pub const AUX_CTL: u8 = regs::AUX_CTL as u8;
+pub const AUX_STATUS: u8 = regs::AUX_STATUS as u8;
+pub const ISR: u8 = regs::ISR as u8;
+pub const IMR: u8 = regs::IMR as u8;
+pub const SHADOW: u8 = regs::SHADOW as u8;
 
-pub const BMCR_RESET: u16 = 1 << 15;
-pub const BMCR_ANRESTART: u16 = 1 << 9;
-/// Reset value: auto-negotiation enabled, full duplex, speed-select 1000
-/// (measured `0x1140`).
-const BMCR_DEFAULT: u16 = 0x1140;
+/// Every register in `specs/bcm54213pe.toml` is modelled.
+pub const COVERAGE: Coverage = Coverage {
+    block: "bcm54213pe",
+    decoded: &[
+        regs::BMCR,
+        regs::BMSR,
+        regs::PHYSID1,
+        regs::PHYSID2,
+        regs::ADVERTISE,
+        regs::LPA,
+        regs::EXPANSION,
+        regs::NPTX,
+        regs::LPNP,
+        regs::CTRL1000,
+        regs::STAT1000,
+        regs::MMD_CTRL,
+        regs::MMD_DATA,
+        regs::ESTATUS,
+        regs::ECR,
+        regs::COUNTER,
+        regs::EXP_DATA,
+        regs::EXP_SEL,
+        regs::AUX_CTL,
+        regs::AUX_STATUS,
+        regs::ISR,
+        regs::IMR,
+        regs::SHADOW,
+    ],
+};
+
+pub const BMCR_RESET: u16 = regs::BMCR_SOFT_RESET_MASK as u16;
+pub const BMCR_ANRESTART: u16 = regs::BMCR_ANRESTART_MASK as u16;
+/// Reset value: auto-negotiation enabled, full duplex, speed-select 1000.
+const BMCR_DEFAULT: u16 = regs::BMCR_RESET as u16;
 
 /// BMSR as measured (`0x796d`) less link status (bit 2) and AN complete
 /// (bit 5): 10/100 half/full, extended status, preamble suppression, AN
@@ -113,17 +149,17 @@ const ANER_LINK: u16 = 0x006d;
 const STAT1000_LINK: u16 = 0x0800;
 /// Selector 802.3, 10/100 half/full, no pause. The measured `0x0de1` is this
 /// plus the pause bits Linux adds.
-const ADVERTISE_DEFAULT: u16 = 0x01e1;
+const ADVERTISE_DEFAULT: u16 = regs::ADVERTISE_RESET as u16;
 /// ANER with nobody on the other end: only "local next page able" (bit 2 of
 /// the measured `0x006d`).
 const ANER_NO_PARTNER: u16 = 0x0004;
-const NPTX_DEFAULT: u16 = 0x2001;
-/// Advertise 1000BASE-T half and full (measured `0x0300`).
-const CTRL1000_DEFAULT: u16 = 0x0300;
-/// 1000BASE-T full and half capable (measured `0x3000`).
-const ESTATUS_VALUE: u16 = 0x3000;
+const NPTX_DEFAULT: u16 = regs::NPTX_RESET as u16;
+/// Advertise 1000BASE-T half and full.
+const CTRL1000_DEFAULT: u16 = regs::CTRL1000_RESET as u16;
+/// 1000BASE-T full and half capable.
+const ESTATUS_VALUE: u16 = regs::ESTATUS_RESET as u16;
 /// "Initially all interrupts are masked in IMR" (`bcm54xx_config_init`).
-const IMR_DEFAULT: u16 = 0xffff;
+const IMR_DEFAULT: u16 = regs::IMR_RESET as u16;
 
 const AUX_SHDW_MISC: usize = 7;
 const AUX_MISC_WREN: u16 = 1 << 15;
@@ -234,7 +270,7 @@ impl Bcm54213pe {
             CTRL1000 => self.ctrl1000,
             // Nothing on the far end: no partner abilities, no 1000BASE-T
             // status, no AUX status (0x19), no interrupt pending.
-            LPA | 0x08 | STAT1000 | 0x11..=0x14 | 0x19 | ISR => 0,
+            LPA | LPNP | STAT1000 | COUNTER..=COUNTER_LAST | AUX_STATUS | ISR => 0,
             MMD_CTRL => self.mmd_ctrl,
             MMD_DATA => self.mmd_data_read(),
             ESTATUS => ESTATUS_VALUE,
@@ -317,11 +353,11 @@ impl Bcm54213pe {
             | PHYSID2
             | LPA
             | EXPANSION
-            | 0x08
+            | LPNP
             | STAT1000
             | ESTATUS
-            | 0x11..=0x14
-            | 0x19
+            | COUNTER..=COUNTER_LAST
+            | AUX_STATUS
             | ISR => {}
             r => self.plain[usize::from(r)] = v,
         }

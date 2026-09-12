@@ -71,17 +71,44 @@
 
 use std::collections::BTreeMap;
 
+use crate::spec::{pmic_core, pmic_rails, Coverage};
+
 /// 7-bit address of the PMIC that owns the SoC core rail (descriptor
 /// `0x3EDE9658`, type `0x82`).
-pub const ADDR_CORE: u8 = 0x1E;
+pub const ADDR_CORE: u8 = pmic_core::BASE as u8;
 /// 7-bit address of the PMIC that owns the SDRAM and I/O rails (descriptor
 /// `0x3EDE962C`, type `0x83`).
-pub const ADDR_RAILS: u8 = 0x1B;
+pub const ADDR_RAILS: u8 = pmic_rails::BASE as u8;
+/// The core-rail setpoint register on [`ADDR_CORE`], 10 mV a step.
+pub const CORE_SETPOINT: u8 = pmic_core::SETPOINT_CORE as u8;
 
-/// `0x1B` reg `0x00` bit 4 — "voltage change complete", polled by `0x3EC8C746`.
-const RAILS_SETTLED: u8 = 1 << 4;
-/// `0x1E` reg `0x02` bit 3 — the same thing, polled by `0x3EC8C9FC`.
-const CORE_SETTLED: u8 = 1 << 3;
+/// The "voltage change complete" bit each part's settle callback polls
+/// (`0x3EC8C746` / `0x3EC8C9FC`), as `(register, bit)`.
+const RAILS_SETTLED: (u8, u8) = (
+    pmic_rails::STATUS as u8,
+    pmic_rails::STATUS_SETTLED_MASK as u8,
+);
+const CORE_SETTLED: (u8, u8) = (
+    pmic_core::STATUS as u8,
+    pmic_core::STATUS_SETTLED_MASK as u8,
+);
+
+/// Every register the specs list is register-file storage; the status
+/// registers carry the settled latch.
+pub const COVERAGE_RAILS: Coverage = Coverage {
+    block: "pmic_rails",
+    decoded: &[
+        pmic_rails::STATUS,
+        pmic_rails::SETPOINT_SDRAM,
+        pmic_rails::SETPOINT_CORE,
+        pmic_rails::SETPOINT_RAIL6,
+        pmic_rails::SETPOINT_RAIL5,
+    ],
+};
+pub const COVERAGE_CORE: Coverage = Coverage {
+    block: "pmic_core",
+    decoded: &[pmic_core::STATUS, pmic_core::SETPOINT_CORE],
+};
 
 /// One PMIC: a byte-addressable register file with the auto-incrementing
 /// pointer the firmware's transport assumes (a one-byte write selects the
@@ -140,7 +167,14 @@ impl Pmic {
         // d03115 all report 1.1000 V. Inverting the `0x1B` decode for rails
         // 2..4 gives (1_100_000 - 900_000) / 5_000 = 40 in reg 0x09, which all
         // three rails share.
-        let rails = PmicRegs::new(ADDR_RAILS, (0x00, RAILS_SETTLED), &[(0x09, 40)]);
+        let rails = PmicRegs::new(
+            ADDR_RAILS,
+            RAILS_SETTLED,
+            &[(
+                pmic_rails::SETPOINT_SDRAM as u8,
+                pmic_rails::SETPOINT_SDRAM_RESET as u8,
+            )],
+        );
 
         // Core: no ground truth for the *power-on* setpoint. `vcgencmd
         // measure_volts core` on the real board reports 0.9260 V, but that is a
@@ -150,7 +184,11 @@ impl Pmic {
         // maps it to 850_000 µV — inside the descriptor's 0.3 V..1.9 V range
         // and at the bottom of the 0.84 V..1.10 V band this boot itself writes.
         // The value survives only until the first DVFS step.
-        let core = PmicRegs::new(ADDR_CORE, (0x02, CORE_SETTLED), &[(0x25, 85)]);
+        let core = PmicRegs::new(
+            ADDR_CORE,
+            CORE_SETTLED,
+            &[(CORE_SETPOINT, pmic_core::SETPOINT_CORE_RESET as u8)],
+        );
 
         // Rails 5 and 6 (`0x1B` regs 0x13 and 0x12, 20 mV steps off a 10 mV
         // base) and rail 1's register on `0x1B` (reg 0x0A, which `pmic_init`

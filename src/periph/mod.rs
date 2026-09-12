@@ -79,7 +79,47 @@ pub use vce::Vce;
 pub use vl805::Vl805;
 pub use xhci::Xhci;
 
-/// Devices whose register map lives in `specs/*.toml`, with what each one
-/// models of it. `tests/specs.rs` checks these against the specs.
-pub const SPEC_COVERAGE: &[crate::spec::Coverage] =
-    &[corectl::COVERAGE, mcsync::COVERAGE, systimer::COVERAGE];
+/// Every device's register map lives in `specs/*.toml`; this is what each one
+/// models of it. `tests/specs.rs` checks these against the specs, and that
+/// every spec has a device here.
+pub const SPEC_COVERAGE: &[crate::spec::Coverage] = &[
+    armctrl::COVERAGE,
+    armlocal::COVERAGE,
+    asb::COVERAGE,
+    aux::COVERAGE,
+    avs::COVERAGE,
+    bcm54213pe::COVERAGE,
+    bootbox::COVERAGE,
+    bsc::COVERAGE,
+    clkmon::COVERAGE,
+    clockman::COVERAGE,
+    configotp::COVERAGE,
+    corectl::COVERAGE,
+    dma4::COVERAGE,
+    dma_legacy::COVERAGE,
+    dma_legacy::COVERAGE_VPU,
+    emmc2::COVERAGE,
+    fxl6408::COVERAGE,
+    genet::COVERAGE,
+    gic::COVERAGE_CPU,
+    gic::COVERAGE_DIST,
+    hdmi_ddc::COVERAGE,
+    hvs::COVERAGE,
+    mbox::COVERAGE,
+    mcsync::COVERAGE,
+    pcie::COVERAGE,
+    pm::COVERAGE,
+    pmic::COVERAGE_CORE,
+    pmic::COVERAGE_RAILS,
+    pvt::COVERAGE,
+    rng::COVERAGE,
+    sdc::COVERAGE,
+    sdramc::COVERAGE,
+    spi0::COVERAGE,
+    systimer::COVERAGE,
+    uart_pl011::COVERAGE,
+    vce::COVERAGE,
+    vce::COVERAGE_CTRL,
+    vl805::COVERAGE,
+    xhci::COVERAGE,
+];

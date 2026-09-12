@@ -37,7 +37,7 @@
 //!
 //! ## The wake path
 //!
-//! A third block, at [`PEND_BASE`], carries the interrupt state, and
+//! A third block, at `0x7E00_B940`, carries the interrupt state, and
 //! `start4`'s ISR for it is `0x3EC58302`:
 //!
 //! ```text
@@ -97,60 +97,45 @@ use std::collections::VecDeque;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
-/// The ARM's view — what Linux's device tree calls `mailbox@7e00b880`.
-pub const ARM_BASE: u32 = 0x7E00_B880;
-/// The VideoCore's view, which is what `start4.elf` actually drives.
-pub const VPU_BASE: u32 = 0x7E00_B980;
-/// One window.
-pub const WINDOW: u32 = 0x40;
+// Every mailbox register is a two-element array: element 0 is the ARM's view
+// (what Linux's device tree calls `mailbox@7e00b880`), element 1 the
+// VideoCore's, which is what `start4.elf` actually drives. `CONFIG1` /
+// `STATUS1` have `CONFIG0` / `STATUS0`'s layout, and `PEND1` has `PEND0`'s.
+use crate::spec::mbox::{
+    CONFIG0, CONFIG0_CLEAR_MASK as CFG_CLEAR, CONFIG0_EN_HAVE_DATA_MASK as CFG_EN_HAVE_DATA,
+    CONFIG0_EN_HAVE_SPACE_MASK as CFG_EN_HAVE_SPACE, CONFIG0_EN_OPP_EMPTY_MASK as CFG_EN_OPP_EMPTY,
+    CONFIG0_PEND_HAVE_DATA_MASK as CFG_PEND_HAVE_DATA,
+    CONFIG0_PEND_HAVE_SPACE_MASK as CFG_PEND_HAVE_SPACE,
+    CONFIG0_PEND_OPP_EMPTY_MASK as CFG_PEND_OPP_EMPTY, CONFIG1, DATA0, DATA0_STRIDE, DATA1, PEEK0,
+    PEEK1, PEND0, PEND0_SERVICE_MASK as PEND_BIT, PEND1, SENDER0, SENDER1, STATUS0,
+    STATUS0_EMPTY_MASK as STATUS_EMPTY, STATUS0_FULL_MASK as STATUS_FULL, STATUS1,
+};
+use crate::spec::Coverage;
 
-/// Interrupt pending / enable block, between the two windows.
-pub const PEND_BASE: u32 = 0x7E00_B940;
-/// `+0x08` is mailbox 0's pending word, `+0x0C` is mailbox 1's.
-const PEND_MBOX0: u32 = 0x08;
-const PEND_MBOX1: u32 = 0x0C;
-/// Bit 2 of a pending word: this mailbox wants service.
-const PEND_BIT: u32 = 1 << 2;
+/// Every register in `specs/mbox.toml` is modelled.
+pub const COVERAGE: Coverage = Coverage {
+    block: "mbox",
+    decoded: &[
+        DATA0, PEEK0, SENDER0, STATUS0, CONFIG0, DATA1, PEEK1, SENDER1, STATUS1, CONFIG1, PEND0,
+        PEND1,
+    ],
+};
 
-/// Every block above, as one mapped region starting at [`ARM_BASE`].
-pub const BASE: u32 = ARM_BASE;
-pub const SIZE: u32 = (VPU_BASE - ARM_BASE) + WINDOW;
+/// Offset of the VPU's view: every register's second element.
+const VPU: u32 = DATA0_STRIDE;
+/// One view's registers, `DATA0..=CONFIG1`; the rest of a view aliases them.
+const WINDOW: u32 = CONFIG1 + 4;
+/// The interrupt block between the two views (`0x7E00_B940`), which holds the
+/// pending words.
+const PEND_BLOCK: std::ops::Range<u32> = PEND0 - 8..VPU;
 
 /// The interrupt source the mailbox arrives on. From the firmware's own
 /// handler table — `src 94 handler=0x3ec58302`.
 pub const IRQ_SRC: u32 = 94;
 
-const DATA0: u32 = 0x00;
-const PEEK0: u32 = 0x10;
-const SENDER0: u32 = 0x14;
-const STATUS0: u32 = 0x18;
-const CONFIG0: u32 = 0x1C;
-const DATA1: u32 = 0x20;
-const PEEK1: u32 = 0x30;
-const SENDER1: u32 = 0x34;
-const STATUS1: u32 = 0x38;
-const CONFIG1: u32 = 0x3C;
-
-/// `STATUS` bit 31: this mailbox cannot take another word.
-const STATUS_FULL: u32 = 1 << 31;
-/// `STATUS` bit 30: this mailbox has nothing queued.
-const STATUS_EMPTY: u32 = 1 << 30;
-
-/// `CONFIG` bit 0: raise the interrupt while this mailbox has data.
-const CFG_EN_HAVE_DATA: u32 = 1 << 0;
-/// `CONFIG` bit 1: raise it while this mailbox has room for another word.
-const CFG_EN_HAVE_SPACE: u32 = 1 << 1;
-/// `CONFIG` bit 2: raise it while the *opposite* mailbox is empty — how the
-/// send op waits for the far side to take a reply.
-const CFG_EN_OPP_EMPTY: u32 = 1 << 2;
-/// `CONFIG` bit 3: flush this mailbox's FIFO. Write-only, does not latch.
-const CFG_CLEAR: u32 = 1 << 3;
 /// `CONFIG` bits 0..2, the part that latches.
 const CFG_ENABLES: u32 = CFG_EN_HAVE_DATA | CFG_EN_HAVE_SPACE | CFG_EN_OPP_EMPTY;
-/// `CONFIG` bits 4..6: the interrupt-pending flag for each enable above.
-const CFG_PEND_HAVE_DATA: u32 = 1 << 4;
-const CFG_PEND_HAVE_SPACE: u32 = 1 << 5;
-const CFG_PEND_OPP_EMPTY: u32 = 1 << 6;
+/// `CONFIG` bits 4..6: the interrupt-pending flag for each enable.
 const CFG_PENDING: u32 = CFG_PEND_HAVE_DATA | CFG_PEND_HAVE_SPACE | CFG_PEND_OPP_EMPTY;
 
 /// Hardware FIFOs are 8 deep.
@@ -297,19 +282,18 @@ impl MmioDevice for Mbox {
 
     fn read(&mut self, offset: u32, _width: Width) -> BusResult<u32> {
         // The interrupt block sits between the two windows.
-        if (PEND_BASE - ARM_BASE..VPU_BASE - ARM_BASE).contains(&offset) {
-            let reg = (offset & !3) - (PEND_BASE - ARM_BASE);
-            return Ok(match reg {
+        if PEND_BLOCK.contains(&offset) {
+            return Ok(match offset & !3 {
                 // Mailbox 1 is the ARM->VPU direction — the one the receive op
                 // reads. Mailbox 0 never asks for service here: the VPU is the
                 // writer on that side, so nothing notifies it about its own
                 // outbox.
-                PEND_MBOX1 if self.irq_asserted() => PEND_BIT,
-                PEND_MBOX0 | PEND_MBOX1 => 0,
+                PEND1 if self.irq_asserted() => PEND_BIT,
+                PEND0 | PEND1 => 0,
                 _ => 0,
             });
         }
-        let vpu = offset >= (VPU_BASE - ARM_BASE);
+        let vpu = offset >= VPU;
         let reg = (offset & !3) % WINDOW;
         Ok(match reg {
             // `+0x00` / `+0x18`: the VPU->ARM FIFO. The VPU writes it, so from
@@ -340,12 +324,12 @@ impl MmioDevice for Mbox {
     }
 
     fn write(&mut self, offset: u32, _width: Width, value: u32) -> BusResult<()> {
-        if (PEND_BASE - ARM_BASE..VPU_BASE - ARM_BASE).contains(&offset) {
+        if PEND_BLOCK.contains(&offset) {
             // Pending bits are computed from the FIFO, so an ack does not
             // latch; the line drops when the firmware drains the request.
             return Ok(());
         }
-        let vpu = offset >= (VPU_BASE - ARM_BASE);
+        let vpu = offset >= VPU;
         let reg = (offset & !3) % WINDOW;
         match reg {
             // The VPU posting a reply for the ARM to read.
@@ -397,7 +381,7 @@ mod tests {
     #[test]
     fn a_posted_request_is_readable_once_from_mail1() {
         // Offsets the firmware itself uses: the VPU window, not the ARM one.
-        let vpu = VPU_BASE - ARM_BASE;
+        let vpu = VPU;
         let mut m = Mbox::default();
         assert_eq!(m.read(vpu + STATUS1, Width::Word).unwrap(), STATUS_EMPTY);
 
@@ -412,7 +396,7 @@ mod tests {
 
     #[test]
     fn a_reply_written_to_mail0_comes_back_to_the_arm_side() {
-        let vpu = VPU_BASE - ARM_BASE;
+        let vpu = VPU;
         let mut m = Mbox::default();
         assert_eq!(m.take_reply(), None);
         // The VPU writes its reply through its own window; the ARM reads it
@@ -426,7 +410,7 @@ mod tests {
 
     #[test]
     fn the_config_word_carries_the_pending_bit_the_isr_releases_on() {
-        let vpu = VPU_BASE - ARM_BASE;
+        let vpu = VPU;
         let mut m = Mbox::default();
         // The driver's init: flush, then arm "MAIL1 has data".
         m.write(vpu + CONFIG1, Width::Word, CFG_CLEAR).unwrap();
@@ -445,7 +429,7 @@ mod tests {
             CFG_EN_HAVE_DATA | CFG_PEND_HAVE_DATA
         );
         assert!(m.irq_asserted());
-        let pend1 = (PEND_BASE - ARM_BASE) + PEND_MBOX1;
+        let pend1 = PEND1;
         assert_eq!(m.read(pend1, Width::Word).unwrap(), PEND_BIT);
 
         // What `0x3EC58302` does with that: clear the enable it just served.
@@ -457,7 +441,7 @@ mod tests {
 
     #[test]
     fn opp_empty_only_pends_once_the_sender_asks_for_it() {
-        let vpu = VPU_BASE - ARM_BASE;
+        let vpu = VPU;
         let mut m = Mbox::default();
         // MAIL0 is empty, but nobody is waiting on it: no pending bit.
         m.write(vpu + CONFIG1, Width::Word, CFG_EN_HAVE_DATA)
@@ -477,7 +461,7 @@ mod tests {
 
     #[test]
     fn config_bit_three_flushes_the_fifo_and_does_not_latch() {
-        let vpu = VPU_BASE - ARM_BASE;
+        let vpu = VPU;
         let mut m = Mbox::default();
         assert!(m.post_from_arm(CHANNEL_PROPERTY));
         m.write(vpu + CONFIG1, Width::Word, CFG_CLEAR).unwrap();
@@ -492,7 +476,7 @@ mod tests {
             assert!(m.post_from_arm(0x1000 * i as u32 + CHANNEL_PROPERTY), "{i}");
         }
         assert_eq!(
-            m.read(VPU_BASE - ARM_BASE + STATUS1, Width::Word).unwrap() & STATUS_FULL,
+            m.read(VPU + STATUS1, Width::Word).unwrap() & STATUS_FULL,
             STATUS_FULL
         );
         assert!(!m.post_from_arm(CHANNEL_PROPERTY));

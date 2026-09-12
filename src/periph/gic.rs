@@ -116,15 +116,67 @@
 //!   ordering corner cases where software EOIs out of order.
 
 use crate::bus::{BusError, BusResult, MmioDevice, Width};
+// Distributor registers are offsets from GICD, CPU-interface ones from GICC.
+// The three ID words are measured on the reference board (module docs).
+use crate::spec::gicc::{
+    ABPR as C_ABPR, AEOIR as C_AEOIR, AHPPIR as C_AHPPIR, AIAR as C_AIAR, APR0 as C_APR0,
+    BPR as C_BPR, CTLR as C_CTLR, CTLR_ACKCTL_MASK as CTLR_ACKCTL, CTLR_CBPR_MASK as CTLR_CBPR,
+    CTLR_ENABLE_GRP0_MASK as CTLR_ENABLE_GRP0, CTLR_ENABLE_GRP1_MASK as CTLR_ENABLE_GRP1,
+    CTLR_EOIMODE_NS_MASK as CTLR_EOIMODE_NS, CTLR_EOIMODE_S_MASK as CTLR_EOIMODE_S,
+    CTLR_FIQEN_MASK as CTLR_FIQEN, DIR as C_DIR, EOIR as C_EOIR, HPPIR as C_HPPIR, IAR as C_IAR,
+    IIDR as C_IIDR, IIDR_RESET as GICC_IIDR, NSAPR0 as C_NSAPR0, PMR as C_PMR, RPR as C_RPR,
+};
+use crate::spec::gicd::{
+    CPENDSGIR as D_CPENDSGIR, CTLR as D_CTLR, ICACTIVER as D_ICACTIVER, ICENABLER as D_ICENABLER,
+    ICFGR as D_ICFGR, ICFGR_COUNT, ICFGR_STRIDE, ICPENDR as D_ICPENDR, IGROUPR as D_IGROUPR,
+    IIDR as D_IIDR, IIDR_RESET as GICD_IIDR, IPRIORITYR as D_IPRIORITYR, ISACTIVER as D_ISACTIVER,
+    ISENABLER as D_ISENABLER, ISPENDR as D_ISPENDR, ITARGETSR as D_ITARGETSR, SGIR as D_SGIR,
+    SPENDSGIR as D_SPENDSGIR, SPENDSGIR_COUNT, SPENDSGIR_STRIDE, TYPER as D_TYPER,
+    TYPER_RESET as TYPER,
+};
+use crate::spec::{gicc, gicd, Coverage};
+
+/// Every distributor register in `specs/gicd.toml` is modelled.
+pub const COVERAGE_DIST: Coverage = Coverage {
+    block: "gicd",
+    decoded: &[
+        D_CTLR,
+        D_TYPER,
+        D_IIDR,
+        D_IGROUPR,
+        D_ISENABLER,
+        D_ICENABLER,
+        D_ISPENDR,
+        D_ICPENDR,
+        D_ISACTIVER,
+        D_ICACTIVER,
+        D_IPRIORITYR,
+        D_ITARGETSR,
+        D_ICFGR,
+        D_SGIR,
+        D_CPENDSGIR,
+        D_SPENDSGIR,
+    ],
+};
+
+/// Every CPU-interface register in `specs/gicc.toml` is modelled.
+pub const COVERAGE_CPU: Coverage = Coverage {
+    block: "gicc",
+    decoded: &[
+        C_CTLR, C_PMR, C_BPR, C_IAR, C_EOIR, C_RPR, C_HPPIR, C_ABPR, C_AIAR, C_AEOIR, C_AHPPIR,
+        C_APR0, C_NSAPR0, C_IIDR, C_DIR,
+    ],
+};
 
 /// Where the ARM sees the GIC-400 in low-peripheral mode — the block's own 32
 /// KiB map, of which `+0x1000` is the distributor and `+0x2000` the CPU
-/// interface (see the module docs for the dtb `reg`).
+/// interface (see the module docs for the dtb `reg`); the virtualisation
+/// interface above them is not modelled.
 pub const BASE: u32 = 0xFF84_0000;
 pub const SIZE: u32 = 0x8000;
-pub const GICD_OFFSET: u32 = 0x1000;
-pub const GICC_OFFSET: u32 = 0x2000;
-const GICC_END: u32 = 0x4000;
+pub const GICD_OFFSET: u32 = gicd::BASE - BASE;
+pub const GICC_OFFSET: u32 = gicc::BASE - BASE;
+const GICC_END: u32 = GICC_OFFSET + gicc::SIZE;
 
 /// `GICD_TYPER.CPUNumber` = 3.
 pub const NUM_CPUS: usize = 4;
@@ -162,55 +214,16 @@ pub const ID_GENET_B: u32 = 32 + 158;
 pub const ID_PCIE_INTA: u32 = 32 + 143;
 pub const ID_PCIE_MSI: u32 = 32 + 148;
 
-/// Measured on the reference board (module docs).
-const TYPER: u32 = 0x0000_FC67;
-const GICD_IIDR: u32 = 0x0200_143B;
-const GICC_IIDR: u32 = 0x0202_143B;
+/// Ends of the distributor arrays with byte or pair fields, as far as
+/// [`NUM_IRQS`] implements them.
+const D_IPRIORITYR_END: u32 = D_IPRIORITYR + NUM_IRQS as u32;
+const D_ITARGETSR_END: u32 = D_ITARGETSR + NUM_IRQS as u32;
+const D_ICFGR_END: u32 = D_ICFGR + ICFGR_COUNT * ICFGR_STRIDE;
+/// End of `GICD_CPENDSGIR` / `GICD_SPENDSGIR`, one byte per SGI each.
+const D_SGI_END: u32 = D_SPENDSGIR + SPENDSGIR_COUNT * SPENDSGIR_STRIDE;
 
-// Distributor, offsets from GICD.
-const D_CTLR: u32 = 0x000;
-const D_TYPER: u32 = 0x004;
-const D_IIDR: u32 = 0x008;
-const D_IGROUPR: u32 = 0x080;
-const D_ISENABLER: u32 = 0x100;
-const D_ICENABLER: u32 = 0x180;
-const D_ISPENDR: u32 = 0x200;
-const D_ICPENDR: u32 = 0x280;
-const D_ISACTIVER: u32 = 0x300;
-const D_ICACTIVER: u32 = 0x380;
-const D_IPRIORITYR: u32 = 0x400;
-const D_ITARGETSR: u32 = 0x800;
-const D_ICFGR: u32 = 0xC00;
-const D_SGIR: u32 = 0xF00;
-const D_CPENDSGIR: u32 = 0xF10;
-const D_SPENDSGIR: u32 = 0xF20;
-
-// CPU interface, offsets from GICC.
-const C_CTLR: u32 = 0x00;
-const C_PMR: u32 = 0x04;
-const C_BPR: u32 = 0x08;
-const C_IAR: u32 = 0x0C;
-const C_EOIR: u32 = 0x10;
-const C_RPR: u32 = 0x14;
-const C_HPPIR: u32 = 0x18;
-const C_ABPR: u32 = 0x1C;
-const C_AIAR: u32 = 0x20;
-const C_AEOIR: u32 = 0x24;
-const C_AHPPIR: u32 = 0x28;
-const C_APR0: u32 = 0xD0;
-const C_NSAPR0: u32 = 0xE0;
-const C_IIDR: u32 = 0xFC;
-const C_DIR: u32 = 0x1000;
-
-// `GICC_CTLR`, secure-view layout (GICv2 4.4.1). Stored in this layout; the
+// `GICC_CTLR` is stored in the secure-view layout (GICv2 4.4.1); the
 // non-secure view is a remapping of four of its bits, `CTLR_NS_VIEW`.
-const CTLR_ENABLE_GRP0: u32 = 1 << 0;
-const CTLR_ENABLE_GRP1: u32 = 1 << 1;
-const CTLR_ACKCTL: u32 = 1 << 2;
-const CTLR_FIQEN: u32 = 1 << 3;
-const CTLR_CBPR: u32 = 1 << 4;
-const CTLR_EOIMODE_S: u32 = 1 << 9;
-const CTLR_EOIMODE_NS: u32 = 1 << 10;
 const CTLR_SECURE_MASK: u32 = 0x7FF;
 /// (non-secure bit, secure bit): EnableGrp1, FIQBypDisGrp1, IRQBypDisGrp1,
 /// EOImodeNS.
@@ -659,10 +672,10 @@ impl Gic {
             D_IIDR => GICD_IIDR,
             D_IGROUPR..D_ISENABLER if acc.secure => bitmap(&|id| self.irq(acc.cpu, id).group1),
             D_IGROUPR..D_ISENABLER => 0,
-            0x100..0x200 => bitmap(&|id| self.irq(acc.cpu, id).enabled),
-            0x200..0x300 => bitmap(&|id| self.pending(acc.cpu, id)),
-            0x300..0x400 => bitmap(&|id| self.irq(acc.cpu, id).active),
-            0xC00..0xD00 => {
+            D_ISENABLER..D_ISPENDR => bitmap(&|id| self.irq(acc.cpu, id).enabled),
+            D_ISPENDR..D_ISACTIVER => bitmap(&|id| self.pending(acc.cpu, id)),
+            D_ISACTIVER..D_IPRIORITYR => bitmap(&|id| self.irq(acc.cpu, id).active),
+            D_ICFGR..D_ICFGR_END => {
                 let first = (off - D_ICFGR) / 4 * 16;
                 (0..16)
                     .map(|i| (i, first + i))
@@ -722,7 +735,7 @@ impl Gic {
             D_ICACTIVER..D_IPRIORITYR => ids
                 .iter()
                 .for_each(|&id| self.irq_mut(acc.cpu, id).active = false),
-            0xC00..0xD00 => {
+            D_ICFGR..D_ICFGR_END => {
                 let first = (off - D_ICFGR) / 4 * 16;
                 for i in 0..16 {
                     let id = first + i;
@@ -867,14 +880,20 @@ enum ByteField {
 /// byte-accessible — Linux sets an SPI's affinity with a byte write — the
 /// rest of the distributor is word-only.
 fn byte_accessible(off: u32) -> bool {
-    matches!(off, 0x400..0x500 | 0x800..0x900 | 0xF10..0xF30)
+    matches!(
+        off,
+        D_IPRIORITYR..D_IPRIORITYR_END | D_ITARGETSR..D_ITARGETSR_END | D_CPENDSGIR..D_SGI_END
+    )
 }
 
 fn byte_field(off: u32) -> (u32, ByteField) {
     match off {
-        0x400..0x500 => (off - D_IPRIORITYR, ByteField::Priority),
-        0x800..0x900 => (off - D_ITARGETSR, ByteField::Targets),
-        _ => ((off - D_CPENDSGIR) % 16, ByteField::SgiSources),
+        D_IPRIORITYR..D_IPRIORITYR_END => (off - D_IPRIORITYR, ByteField::Priority),
+        D_ITARGETSR..D_ITARGETSR_END => (off - D_ITARGETSR, ByteField::Targets),
+        _ => (
+            (off - D_CPENDSGIR) % (D_SPENDSGIR - D_CPENDSGIR),
+            ByteField::SgiSources,
+        ),
     }
 }
 

@@ -1,0 +1,269 @@
+[block]
+name    = "hdmi_ddc"
+base    = 0x7EF04500
+size    = 0x100
+summary = "HDMI DDC I²C masters (brcm,bcm2711-hdmi-i2c), one per connector: the bus a monitor's EDID EEPROM sits on"
+notes   = "Not the BSC: a different block with a different layout. With no monitor attached (the reference board's state) every transfer completes INTRP | NOACK. The second reg window in the device tree, the auto-i2c block at 0x7EF00B00, is not used by start4 and not modelled."
+
+[[block.source]]
+kind       = "measured"
+ref        = "rpi-dev /proc/device-tree/soc/i2c@7ef04500: compatible brcm,bcm2711-hdmi-i2c, reg 0x7ef04500 0x100 0x7ef00b00 0x300, clock-frequency 97500"
+confidence = "high"
+
+[[block.source]]
+kind       = "linux"
+ref        = "drivers/i2c/busses/i2c-brcmstb.c: struct bsc_regs"
+confidence = "high"
+
+[[block.source]]
+kind       = "decompile"
+ref        = "start4's driver: read 0x3ECE69E2, write 0x3ECE6DEC, accessors 0x3ECE6B00 / 0x3ECE6EC8, completion wait 0x3ECE6D5C"
+confidence = "high"
+
+[[block.copy]]
+name  = "HDMI1"
+base  = 0x7EF09500
+notes = "HDMI1's DDC master; HDMI0's is the block base."
+
+[[block.copy.source]]
+kind       = "linux"
+ref        = "dtb node i2c@7ef09500, brcm,bcm2711-hdmi-i2c"
+confidence = "high"
+
+[[register]]
+name   = "CHIP_ADDRESS"
+offset = 0x00
+access = "rw"
+notes  = "Slave address, already shifted: addr << 1 | read."
+
+[[register.source]]
+kind       = "linux"
+ref        = "i2c-brcmstb.c: bsc_regs.chip_address"
+confidence = "high"
+
+[[register]]
+name   = "DATA_IN"
+offset = 0x04
+count  = 8
+stride = 4
+access = "rw"
+notes  = "Bytes to send, packed little-endian per word."
+
+[[register.source]]
+kind       = "linux"
+ref        = "i2c-brcmstb.c: bsc_regs.data_in[8]"
+confidence = "high"
+
+[[register]]
+name   = "CNT"
+offset = 0x24
+access = "rw"
+notes  = "Byte count."
+
+[[register.source]]
+kind       = "linux"
+ref        = "i2c-brcmstb.c: bsc_regs.cnt_reg"
+confidence = "high"
+
+[[register.field]]
+name  = "CNT1"
+bits  = "5:0"
+notes = "Bytes in this transfer."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "i2c-brcmstb.c: BSC_CNT_REG1_MASK"
+confidence = "high"
+
+[[register]]
+name   = "CTL"
+offset = 0x28
+access = "rw"
+notes  = "Transfer control."
+
+[[register.source]]
+kind       = "linux"
+ref        = "i2c-brcmstb.c: bsc_regs.ctl_reg"
+confidence = "high"
+
+[[register.field]]
+name  = "DTF"
+bits  = "1:0"
+notes = "Data transfer format; bit 0 set is a read."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "i2c-brcmstb.c: BSC_CTL_REG_DTF_MASK"
+confidence = "high"
+
+[[register.field]]
+name  = "SCL_SEL"
+bits  = "5:4"
+notes = "Bus clock select. Stored."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "i2c-brcmstb.c: BSC_CTL_REG_SCL_SEL_MASK"
+confidence = "high"
+
+[[register.field]]
+name  = "INT_EN"
+bits  = "6"
+notes = "Interrupt enable."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "i2c-brcmstb.c: BSC_CTL_REG_INT_EN_MASK"
+confidence = "high"
+
+[[register.field]]
+name  = "DIV_CLK"
+bits  = "7"
+notes = "Clock divide. Stored."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "i2c-brcmstb.c: BSC_CTL_REG_DIV_CLK_MASK"
+confidence = "high"
+
+[[register]]
+name   = "IIC_ENABLE"
+offset = 0x2C
+access = "rw"
+notes  = "Writing ENABLE starts a transfer; INTRP and NOACK are computed status."
+
+[[register.source]]
+kind       = "linux"
+ref        = "i2c-brcmstb.c: bsc_regs.iic_enable"
+confidence = "high"
+
+[[register.source]]
+kind       = "decompile"
+ref        = "0x3ECE6D5C: up to 20 polls of (read(0x2c) & 2) 5 ms apart ('timed out'), then read(0x2c) & 4 ('no ACK')"
+confidence = "high"
+
+[[register.field]]
+name  = "ENABLE"
+bits  = "0"
+notes = "Run the transfer."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "i2c-brcmstb.c: BSC_IIC_EN_ENABLE_MASK"
+confidence = "high"
+
+[[register.field]]
+name  = "INTRP"
+bits  = "1"
+notes = "Transfer finished (an interrupt enable when written)."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "i2c-brcmstb.c: BSC_IIC_EN_INTRP_MASK"
+confidence = "high"
+
+[[register.field]]
+name   = "NOACK"
+bits   = "2"
+access = "r"
+notes  = "The slave never acknowledged its address."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "i2c-brcmstb.c: BSC_IIC_EN_NOACK_MASK"
+confidence = "high"
+
+[[register.field]]
+name  = "NOSTOP"
+bits  = "4"
+notes = "Hold the bus after the transfer."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "i2c-brcmstb.c: BSC_IIC_EN_NOSTOP_MASK"
+confidence = "high"
+
+[[register.field]]
+name  = "NOSTART"
+bits  = "5"
+notes = "Continue without a start condition."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "i2c-brcmstb.c: BSC_IIC_EN_NOSTART_MASK"
+confidence = "high"
+
+[[register.field]]
+name  = "RESTART"
+bits  = "6"
+notes = "Repeated start."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "i2c-brcmstb.c: BSC_IIC_EN_RESTART_MASK"
+confidence = "high"
+
+[[register]]
+name   = "DATA_OUT"
+offset = 0x30
+count  = 8
+stride = 4
+access = "r"
+notes  = "Bytes received, packed as DATA_IN."
+
+[[register.source]]
+kind       = "linux"
+ref        = "i2c-brcmstb.c: bsc_regs.data_out[8]"
+confidence = "high"
+
+[[register]]
+name   = "CTLHI"
+offset = 0x50
+access = "rw"
+notes  = "More transfer control."
+
+[[register.source]]
+kind       = "linux"
+ref        = "i2c-brcmstb.c: bsc_regs.ctlhi_reg"
+confidence = "high"
+
+[[register.field]]
+name  = "WAIT_DIS"
+bits  = "0"
+notes = "No clock stretching."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "i2c-brcmstb.c: BSC_CTLHI_REG_WAIT_DIS_MASK"
+confidence = "high"
+
+[[register.field]]
+name  = "IGNORE_ACK"
+bits  = "1"
+notes = "Carry on regardless of ACK; NOACK is then not reported."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "i2c-brcmstb.c: BSC_CTLHI_REG_IGNORE_ACK_MASK"
+confidence = "high"
+
+[[register.field]]
+name  = "DATAREG_SIZE"
+bits  = "6"
+notes = "Data registers are 32 bits wide."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "i2c-brcmstb.c: BSC_CTLHI_REG_DATAREG_SIZE_MASK"
+confidence = "high"
+
+[[register]]
+name   = "SCL_PARAM"
+offset = 0x54
+access = "rw"
+notes  = "Bus timing. Stored, otherwise ignored."
+
+[[register.source]]
+kind       = "linux"
+ref        = "i2c-brcmstb.c: bsc_regs.scl_param"
+confidence = "high"

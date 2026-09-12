@@ -129,83 +129,77 @@ use std::collections::BTreeMap;
 use crate::bus::{BusResult, MmioDevice, Width};
 use crate::periph::vl805::Vl805;
 use crate::periph::xhci::HostMem;
-
 /// `reg = <0x0 0x7d500000 0x0 0x9310>` in the Pi 4 device tree
 /// (`/proc/device-tree/scb/pcie@7d500000/reg` on a real board).
-pub const BASE: u32 = 0x7D50_0000;
-pub const SIZE: u32 = 0x0000_9310;
+pub use crate::spec::pcie::{BASE, SIZE};
+// The SerDes MDIO write port has its DONE bit where the read port does.
+use crate::spec::pcie::{
+    EXT_CFG_DATA, EXT_CFG_DATA_COUNT, EXT_CFG_DATA_STRIDE, EXT_CFG_INDEX,
+    EXT_CFG_INDEX_BUSNUM_SHIFT as EXT_BUSNUM_SHIFT, EXT_CFG_INDEX_FUNC_SHIFT as EXT_FUNC_SHIFT,
+    EXT_CFG_INDEX_SLOT_SHIFT as EXT_SLOT_SHIFT, HARD_DEBUG, INTR2_CPU_CLR, INTR2_CPU_MASK_CLR,
+    INTR2_CPU_MASK_SET, INTR2_CPU_MASK_STATUS, INTR2_CPU_SET, INTR2_CPU_STATUS, MDIO_ADDR,
+    MDIO_ADDR_CMD_READ_MASK as MDIO_CMD_READ, MDIO_ADDR_REGAD_MASK as MDIO_REGAD, MDIO_RD_DATA,
+    MDIO_RD_DATA_DONE_MASK as MDIO_DONE, MDIO_WR_DATA, MEM_WIN0_BASE_HI, MEM_WIN0_BASE_LIMIT,
+    MEM_WIN0_HI, MEM_WIN0_LIMIT_HI, MEM_WIN0_LO, MISC_CTRL, MISC_PCIE_STATUS,
+    MISC_PCIE_STATUS_DL_ACTIVE_MASK as STATUS_DL_ACTIVE,
+    MISC_PCIE_STATUS_PHYLINKUP_MASK as STATUS_PHYLINKUP,
+    MISC_PCIE_STATUS_PORT_RC_MASK as STATUS_PORT_RC, MISC_REVISION, MISC_REVISION_RESET as HW_REV,
+    MSI_BAR_CONFIG_HI, MSI_BAR_CONFIG_LO, MSI_DATA_CONFIG, MSI_INTR2_CLR, MSI_INTR2_MASK_CLR,
+    MSI_INTR2_MASK_SET, MSI_INTR2_MASK_STATUS, MSI_INTR2_SET, MSI_INTR2_STATUS, PRIV1_ID_VAL3,
+    RC_BAR1_CONFIG_LO, RC_BAR2_CONFIG_HI, RC_BAR2_CONFIG_LO,
+    RC_BAR2_CONFIG_LO_SIZE_MASK as RC_BAR_SIZE_MASK, RC_BAR3_CONFIG_LO, RC_LNKCTL, RGR1_SW_INIT_1,
+};
+use crate::spec::Coverage;
+
+/// Every register in `specs/pcie.toml` is modelled; the ones with no
+/// behaviour of their own are storage.
+pub const COVERAGE: Coverage = Coverage {
+    block: "pcie",
+    decoded: &[
+        RC_LNKCTL,
+        PRIV1_ID_VAL3,
+        MDIO_ADDR,
+        MDIO_WR_DATA,
+        MDIO_RD_DATA,
+        MISC_CTRL,
+        MEM_WIN0_LO,
+        MEM_WIN0_HI,
+        RC_BAR1_CONFIG_LO,
+        RC_BAR2_CONFIG_LO,
+        RC_BAR2_CONFIG_HI,
+        RC_BAR3_CONFIG_LO,
+        MSI_BAR_CONFIG_LO,
+        MSI_BAR_CONFIG_HI,
+        MSI_DATA_CONFIG,
+        MISC_PCIE_STATUS,
+        MISC_REVISION,
+        MEM_WIN0_BASE_LIMIT,
+        MEM_WIN0_BASE_HI,
+        MEM_WIN0_LIMIT_HI,
+        HARD_DEBUG,
+        INTR2_CPU_STATUS,
+        INTR2_CPU_SET,
+        INTR2_CPU_CLR,
+        INTR2_CPU_MASK_STATUS,
+        INTR2_CPU_MASK_SET,
+        INTR2_CPU_MASK_CLR,
+        MSI_INTR2_STATUS,
+        MSI_INTR2_SET,
+        MSI_INTR2_CLR,
+        MSI_INTR2_MASK_STATUS,
+        MSI_INTR2_MASK_SET,
+        MSI_INTR2_MASK_CLR,
+        EXT_CFG_DATA,
+        EXT_CFG_INDEX,
+        RGR1_SW_INIT_1,
+    ],
+};
 
 /// The root port's own configuration space, directly mapped.
 const RC_CFG: u32 = 0x0000;
 const RC_CFG_SIZE: u32 = 0x1000;
-/// `PCIE_EXT_CFG_DATA` — a 4 KiB view of whichever function `EXT_CFG_INDEX`
-/// selected.
-const EXT_CFG_DATA: u32 = 0x8000;
-/// `PCIE_EXT_CFG_INDEX`.
-const EXT_CFG_INDEX: u32 = 0x9000;
-/// `PCIE_MISC_PCIE_STATUS`.
-const MISC_PCIE_STATUS: u32 = 0x4068;
-/// `CPU_2_PCIE_MEM_WIN0_LO` / `_HI` — the PCI bus address the outbound window
-/// maps to. The bootloader writes `0x8000_0000` / `0` at `0x000A725C`.
-const MEM_WIN0_LO: u32 = 0x400C;
-const MEM_WIN0_HI: u32 = 0x4010;
-/// `CPU_2_PCIE_MEM_WIN0_BASE_LIMIT` — the CPU-side extent, in MiB: base in bits
-/// `[15:4]`, limit in bits `[31:20]`, the same field order `pcie-brcmstb` uses
-/// (`PCIE_MEM_WIN0_BASE_LIMIT_BASE_MASK` = `0xFFF0`). The bootloader writes
-/// `0x3FF0_0000` at `0x000A72C6` — base 0, limit `0x3FF` MiB.
-const MEM_WIN0_BASE_LIMIT: u32 = 0x4070;
-/// The bits above `[31:20]` of the CPU-side base and limit. Both are written
-/// `6` (`0x000A72DE` / `0x000A72F0`), putting the window at CPU-physical
-/// `0x6_0000_0000..0x6_3FFF_FFFF` — exactly the 1 GiB `ranges` property and
-/// exactly what `dmesg` reports (`MEM 0x0600000000..0x063fffffff`).
-const MEM_WIN0_BASE_HI: u32 = 0x4080;
-const MEM_WIN0_LIMIT_HI: u32 = 0x4084;
-/// `PCIE_RGR1_SW_INIT_1`.
-const RGR1_SW_INIT_1: u32 = 0x9210;
-/// `PCIE_MISC_REVISION`. Linux picks its MSI block by it: below 3.3 the legacy
-/// one, eight vectors in the top byte of `INTR2_CPU` (`+0x4300`); from 3.3 on,
-/// 32 vectors at `+0x4500`. `rpi-dev`'s MSI domain is 32 wide
-/// (`/sys/kernel/debug/irq/domains/unknown-1`: `size: 32`), so the part is at
-/// least 3.3. The exact revision was not measured; 3.3 is that bound.
-const MISC_REVISION: u32 = 0x406C;
-const HW_REV: u32 = 0x0303;
-/// `PCIE_MISC_MSI_BAR_CONFIG_LO`/`_HI`: the PCI bus address MSI writes are
-/// caught at. Bit 0 of the low word is repurposed as the enable.
-const MSI_BAR_CONFIG_LO: u32 = 0x4044;
-/// `PCIE_MISC_RC_BAR2_CONFIG_LO`/`_HI`: inbound window 2, the one through
-/// which the endpoint's memory reads and writes reach system memory. The low
-/// word's bottom five bits encode the size (see [`ibar_size`]), the rest with
-/// the high word are the window's PCI bus base. Its CPU side is hard-wired to
-/// physical 0 (`brcm_pcie_get_inbound_wins()`: "the BAR2 cpu_addr is hardwired
-/// to the start of system memory"). Windows 1 and 3 are switched off by both
-/// the bootloader (`0x000A6D60`, `0x000A6D70`) and Linux, so they are not
-/// modelled.
-const RC_BAR2_CONFIG_LO: u32 = 0x4034;
-const RC_BAR2_CONFIG_HI: u32 = 0x4038;
-const RC_BAR_SIZE_MASK: u32 = 0x1F;
-const MSI_BAR_CONFIG_HI: u32 = 0x4048;
-/// `PCIE_MISC_MSI_DATA_CONFIG`: a match mask in the top half, the pattern in
-/// the bottom. Linux writes `0xFFE0_6540`: a message's data must match `0x6540`
-/// in its top eleven bits, and the low five pick the vector.
-const MSI_DATA_CONFIG: u32 = 0x404C;
-/// `PCIE_MSI_INTR2_BASE`, a Broadcom level-2 interrupt controller: status,
-/// set, clear, mask status, mask set, mask clear.
-const MSI_INTR2: u32 = 0x4500;
-const INTR2_STATUS: u32 = 0x00;
-const INTR2_SET: u32 = 0x04;
-const INTR2_CLR: u32 = 0x08;
-const INTR2_MASK_STATUS: u32 = 0x0C;
-const INTR2_MASK_SET: u32 = 0x10;
-const INTR2_MASK_CLR: u32 = 0x14;
-/// `PCIE_RC_DL_MDIO_ADDR` / `_WR_DATA` / `_RD_DATA`: the SerDes' MDIO port.
-const MDIO_ADDR: u32 = 0x1100;
-const MDIO_WR_DATA: u32 = 0x1104;
-const MDIO_RD_DATA: u32 = 0x1108;
-/// `MDIO_DATA_DONE_MASK`: in `RD_DATA`, set when a read has completed; in
-/// `WR_DATA`, set by the host to start a write and cleared when it is done.
-const MDIO_DONE: u32 = 1 << 31;
-const MDIO_CMD_READ: u32 = 1 << 20;
-const MDIO_REGAD: u32 = 0xFFFF;
+/// End of the `EXT_CFG_DATA` window: one function's 4 KiB configuration space.
+const EXT_CFG_END: u32 = EXT_CFG_DATA + EXT_CFG_DATA_COUNT * EXT_CFG_DATA_STRIDE;
 /// SerDes register `0x1F` selects the block the others address.
 const MDIO_BLOCK_SELECT: u32 = 0x1F;
 /// The spread-spectrum block and the two registers `brcm_pcie_set_ssc()` uses.
@@ -216,32 +210,11 @@ const SSC_CNTL: u32 = 0x2;
 const SSC_CNTL_OVRD: u16 = 0xC000;
 const SSC_STATUS_SSC: u16 = 0x400;
 const SSC_STATUS_PLL_LOCK: u16 = 0x800;
-/// `PCIE_RC_CFG_PRIV1_ID_VAL3`: revision in the top byte, class code below.
-/// The header's word at `0x08` is a view of it, which is how Linux turns the
-/// block from an endpoint into a PCI-to-PCI bridge.
-const PRIV1_ID_VAL3: u32 = 0x043C;
-/// `BRCM_PCIE_CAP_REGS` (`0xAC`) + `PCI_EXP_LNKCTL`: link control, link status
-/// in the top half.
-const RC_LNKCTL: u32 = 0x0BC;
 /// Link status of the trained link: 5 GT/s (`CLS` 2), x1, slot clock. That is
 /// `rpi-dev`'s `LnkSta: Speed 5GT/s, Width x1` / `SlotClk+`, and Linux prints
 /// it as `link up, 5.0 GT/s PCIe x1`.
 const LNKSTA_UP: u32 = 0x1012;
 const LNKSTA_SLOTCLK: u32 = 0x1000;
-
-/// `brcm_pcie_link_up()`: data-link active and PHY link up.
-const STATUS_PHYLINKUP: u32 = 1 << 4;
-const STATUS_DL_ACTIVE: u32 = 1 << 5;
-/// `brcm_pcie_rc_mode()`: set means the block is a root complex, not an
-/// endpoint. It is a strap, so it reads set whatever the link does. The
-/// bootloader's `PCIe timeout: 0x%08x` prints this whole word, so on a live
-/// link the value is `0xB0`.
-const STATUS_PORT_RC: u32 = 1 << 7;
-
-/// `pcie-brcmstb`'s `EXT_CFG_INDEX` field positions.
-const EXT_BUSNUM_SHIFT: u32 = 20;
-const EXT_SLOT_SHIFT: u32 = 15;
-const EXT_FUNC_SHIFT: u32 = 12;
 
 /// The bus number the root port assigns to its single downstream link. Fixed on
 /// this topology: `lspci` on `rpi-dev` shows `00:00.0` bridge, `01:00.0` VL805.
@@ -758,14 +731,14 @@ impl MmioDevice for Pcie {
         if offset == MDIO_WR_DATA {
             return Ok(self.mdio_wr);
         }
-        if (MSI_INTR2..MSI_INTR2 + 0x18).contains(&offset) {
-            return Ok(match offset - MSI_INTR2 {
-                INTR2_STATUS => self.msi_status,
-                INTR2_MASK_STATUS => self.msi_mask,
+        if (MSI_INTR2_STATUS..MSI_INTR2_MASK_CLR + 4).contains(&offset) {
+            return Ok(match offset {
+                MSI_INTR2_STATUS => self.msi_status,
+                MSI_INTR2_MASK_STATUS => self.msi_mask,
                 _ => 0,
             });
         }
-        if (EXT_CFG_DATA..EXT_CFG_DATA + 0x1000).contains(&offset) {
+        if (EXT_CFG_DATA..EXT_CFG_END).contains(&offset) {
             let cfg_off = offset - EXT_CFG_DATA;
             return Ok(match self.ext_target() {
                 CfgTarget::Endpoint => self.endpoint.cfg_read(cfg_off, width),
@@ -800,17 +773,17 @@ impl MmioDevice for Pcie {
         if offset == MDIO_ADDR {
             self.mdio_pkt = value;
         }
-        if (MSI_INTR2..MSI_INTR2 + 0x18).contains(&offset) {
-            match offset - MSI_INTR2 {
-                INTR2_SET => self.msi_status |= value,
-                INTR2_CLR => self.msi_status &= !value,
-                INTR2_MASK_SET => self.msi_mask |= value,
-                INTR2_MASK_CLR => self.msi_mask &= !value,
+        if (MSI_INTR2_STATUS..MSI_INTR2_MASK_CLR + 4).contains(&offset) {
+            match offset {
+                MSI_INTR2_SET => self.msi_status |= value,
+                MSI_INTR2_CLR => self.msi_status &= !value,
+                MSI_INTR2_MASK_SET => self.msi_mask |= value,
+                MSI_INTR2_MASK_CLR => self.msi_mask &= !value,
                 _ => {}
             }
             return Ok(());
         }
-        if (EXT_CFG_DATA..EXT_CFG_DATA + 0x1000).contains(&offset) {
+        if (EXT_CFG_DATA..EXT_CFG_END).contains(&offset) {
             let cfg_off = offset - EXT_CFG_DATA;
             match self.ext_target() {
                 CfgTarget::Endpoint => self.endpoint.cfg_write(cfg_off, width, value),
@@ -970,7 +943,7 @@ mod tests {
         use crate::periph::xhci::{HostMem, VecMem, RTSOFF};
         let mut p = enumerated_pcie();
         // What `brcm_msi_set_regs()` programs...
-        p.write(MSI_INTR2 + INTR2_MASK_CLR, Width::Word, 0xFFFF_FFFF)
+        p.write(MSI_INTR2_MASK_CLR, Width::Word, 0xFFFF_FFFF)
             .unwrap();
         p.write(MSI_BAR_CONFIG_LO, Width::Word, 0xFFFF_FFFD)
             .unwrap();
@@ -999,11 +972,11 @@ mod tests {
         // Reset root port 1, the hub's: a Port Status Change Event.
         p.mmio_write(bar + 0x420, Width::Word, (1 << 9) | (1 << 4), &mut mem);
         assert!(p.msi_line());
-        assert_eq!(rd(&mut p, MSI_INTR2 + INTR2_STATUS), 1);
+        assert_eq!(rd(&mut p, MSI_INTR2_STATUS), 1);
         assert!(!p.intx_line());
         // The driver acknowledges the interrupter, then the MSI block.
         p.mmio_write(ir0, Width::Word, 0x3, &mut mem);
-        p.write(MSI_INTR2 + INTR2_CLR, Width::Word, 1).unwrap();
+        p.write(MSI_INTR2_CLR, Width::Word, 1).unwrap();
         assert!(!p.msi_line());
     }
 

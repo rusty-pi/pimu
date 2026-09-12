@@ -51,12 +51,18 @@ use std::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
-/// `CM_LOCK` — one bit per PLL, set when that PLL has locked.
-const CM_LOCK: u32 = 0x114;
-/// Self-clearing calibrated-delay register — always reads back 0.
-const CM_DELAY: u32 = 0x100;
-/// `BUSY` bit in every `CM_*_CTL` register.
-const CTL_BUSY: u32 = 1 << 7;
+// `BUSY` is bit 7 of every `CM_*_CTL` register, not only `UARTCTL`'s.
+use crate::spec::cm::{
+    DELAY as CM_DELAY, LOCK as CM_LOCK, UARTCTL, UARTCTL_BUSY_MASK as CTL_BUSY, UARTDIV,
+};
+use crate::spec::Coverage;
+
+/// `LOCK` and `DELAY` are modelled; `UARTCTL` / `UARTDIV` get the storage
+/// every `*_CTL` / `*_DIV` register does.
+pub const COVERAGE: Coverage = Coverage {
+    block: "cm",
+    decoded: &[UARTCTL, UARTDIV, CM_DELAY, CM_LOCK],
+};
 /// Password byte the firmware ORs into every clock-manager write.
 const PASSWD: u32 = 0x5A00_0000;
 

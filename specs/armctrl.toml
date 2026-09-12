@@ -1,0 +1,59 @@
+[block]
+name    = "armctrl"
+base    = 0x7E00B000
+size    = 0x880
+summary = "ARM control block as the VPU sees it, below the mailboxes: where arm_loader releases the ARM"
+notes   = "The whole pinned boot touches this block a handful of times. Only the release bit has a known meaning; everything else is stored and read back."
+
+[[block.source]]
+kind       = "trace"
+ref        = "RVF_TRACE_MMIO=7e00b000-7e101000 recon: the writes right after 'arm_loader: Starting ARM', all from start4's MMIO write helper 0xFEC0043A"
+confidence = "high"
+
+[[block.source]]
+kind       = "inferred"
+ref        = "size: up to the mailboxes at 0x7E00B880"
+confidence = "high"
+
+[[register]]
+name   = "CONTROL"
+offset = 0x000
+access = "rw"
+notes  = "Written 0x200 early in the boot and 0x1000 as the last access before the ARM starts."
+
+[[register.source]]
+kind       = "trace"
+ref        = "0x7E00B000 <- 0x00000200 (early), <- 0x00001000 (after arm_loader)"
+confidence = "high"
+
+[[register.field]]
+name  = "RELEASE"
+bits  = "12"
+notes = "Let the ARM out of reset. The ARM starts at PC 0 in EL3."
+
+[[register.field.source]]
+kind       = "inferred"
+ref        = "it is the last write before the ARM runs, and nothing but PM housekeeping follows"
+confidence = "medium"
+
+[[register]]
+name   = "REG_008"
+offset = 0x008
+access = "rw"
+notes  = "Written 0x3030 at the ARM release. Meaning unknown."
+
+[[register.source]]
+kind       = "trace"
+ref        = "0x7E00B008 <- 0x00003030 after arm_loader"
+confidence = "high"
+
+[[register]]
+name   = "REG_41C"
+offset = 0x41C
+access = "rw"
+notes  = "Written 0xA at the ARM release. Meaning unknown."
+
+[[register.source]]
+kind       = "trace"
+ref        = "0x7E00B41C <- 0x0000000A after arm_loader"
+confidence = "high"

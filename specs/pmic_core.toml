@@ -1,0 +1,52 @@
+[block]
+name    = "pmic_core"
+bus     = "i2c"
+base    = 0x1E
+size    = 0x100
+summary = "Board PMIC owning the SoC core rail (start4 descriptor type 0x82)"
+notes   = "On the `bsc` PMIC copy. The AVS monitor's channel 3 follows this part's setpoint. start4's init sweeps 0x01..0x4B once to log it. Registers not listed read 0."
+
+[[block.source]]
+kind       = "decompile"
+ref        = "pmic_add 0x3ED4D85C; descriptor 0x3EDE9658: type 0x82, addr 0x1E, 0.3..1.9 V"
+confidence = "high"
+
+[[register]]
+name   = "STATUS"
+offset = 0x02
+width  = 8
+access = "r"
+notes  = "Status."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "settle callback 0x3EC8C9FC"
+confidence = "high"
+
+[[register.field]]
+name  = "SETTLED"
+bits  = "3"
+notes = "Voltage change complete."
+
+[[register.field.source]]
+kind       = "decompile"
+ref        = "0x3EC8C9FC polls reg 0x02 bit 3"
+confidence = "high"
+
+[[register]]
+name   = "SETPOINT_CORE"
+offset = 0x25
+width  = 8
+access = "rw"
+reset  = 85
+notes  = "Core-rail setpoint, 10 mV per step. The boot rewrites it across 0x54..0x6E as it moves the ARM clock."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "rail table image 0x3EE1360C; decode callback 0x3EC8C9F6: raw * 10000 uV"
+confidence = "high"
+
+[[register.source]]
+kind       = "inferred"
+ref        = "reset 85 (0.85 V): no power-on ground truth; the reference board's 0.926 V is a live DVFS point, not a multiple of the step. 85 is inside the descriptor range and the band the boot writes"
+confidence = "low"

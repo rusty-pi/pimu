@@ -5,15 +5,22 @@ One TOML file per modelled block, with provenance on every register and field
 the VideoCore-side ones especially — have no public register documentation, so
 where each fact came from matters as much as the fact itself.
 
+Every modelled register block has one — the VPU-side peripherals, the ARM-only
+GIC and local block, the xHCI controller and PCI function behind PCIe, and the
+I²C and MDIO devices on the board. Not covered, because they are not register
+maps: the generic timer (system registers, `src/periph/gentimer.rs`), the SD
+card and USB devices (command protocols), and the catch-all stubs.
+
 The files are used three ways:
 
 1. `build.rs` generates Rust constants from them (`crate::spec::<block>`), and
    the device models match on those instead of literals. A malformed spec fails
    the build.
-2. `tests/specs.rs` checks them against the model: every offset a device
-   claims to decode (its `COVERAGE`) is in its spec, every spec register
-   reaches the device rather than the catch-all stub, and the registers the
-   model leaves stubbed are reported.
+2. `tests/specs.rs` checks them against the model: every spec has exactly one
+   device, every offset a device claims to decode (its `COVERAGE`) is in its
+   spec, every register of a VPU-bus spec reaches the device rather than the
+   catch-all stub or DRAM, and the registers the model leaves stubbed are
+   reported.
 3. `cargo run -- spec-docs --update` writes the Markdown under
    [`docs/periph/`](../docs/periph/). That directory is generated in full and
    committed; CI regenerates it and fails on any difference, so edit the spec,
@@ -24,6 +31,7 @@ The files are used three ways:
 ```toml
 [block]
 name    = "mcsync"          # module name and file stem
+# bus   = "vpu"             # optional, see below
 base    = 0x7E000000        # VPU bus address
 size    = 0x1000            # decoded window
 summary = "Doorbells / semaphores between the two VPU cores"
@@ -35,6 +43,16 @@ notes   = "..."             # optional
 kind       = "decompile"
 ref        = "0x3ED3A114 / 0x3ED3A00C address the slot array at 0x7E000000"
 confidence = "high"
+
+# [[block.copy]]            # optional: the same block again at another base
+# name  = "PMIC"            # generates PMIC_BASE
+# base  = 0x7E205E00
+# notes = "..."
+#
+# [[block.copy.source]]     # a copy needs its own provenance
+# kind       = "decompile"
+# ref        = "..."
+# confidence = "high"
 
 [[register]]
 name   = "DOORBELL"
@@ -73,17 +91,33 @@ the `note`; don't silently pick one.
 Each source has `kind`, `ref`, `confidence` (`high` / `medium` / `low`) and an
 optional `note`. `kind` is one of:
 
-1. `datasheet` – BCM2711 / BCM2835 ARM Peripherals
-2. `linux` – upstream driver or DT binding
-3. `decompile` – `firmware/source/*.c` / disassembly, with the address
-4. `measured` – read on the reference board (debugfs etc.), with how it was read
-5. `trace` – observed in a `recon` run
-6. `inferred` – a guess; say why
+1. `datasheet` – BCM2711 / BCM2835 ARM Peripherals, or a third-party part's
+   datasheet (the FXL6408)
+2. `standard` – a published specification the block implements: ARM GICv2,
+   PCI / PCIe, xHCI, SDHCI, IEEE 802.3 clause 22 — with the section
+3. `linux` – upstream driver or DT binding
+4. `decompile` – `firmware/source/*.c` / disassembly, with the address
+5. `measured` – read on the reference board (debugfs etc.), with how it was read
+6. `trace` – observed in a `recon` run
+7. `inferred` – a guess; say why
+
+`bus` says what the base and the offsets address:
+
+| `bus` | `base` | offsets |
+|---|---|---|
+| `vpu` (default) | VPU bus address | bytes |
+| `arm` | ARM physical address, low-peripheral mode — for blocks the VPU has no view of | bytes |
+| `pci` | 0 | bytes into one PCI function's configuration space or BAR |
+| `i2c` | 7-bit slave address | register numbers |
+| `mdio` | PHY address | register numbers |
+
+On `i2c` and `mdio` a register takes up one register number whatever its
+width, and `size` is the number of register numbers the device decodes.
 
 The build also refuses overlapping registers, a register past the window (or
 past its bank), a field outside the register width or overlapping another
-field, an unaligned offset, unknown keys, and names that would generate the
-same constant twice.
+field, an unaligned offset, an address the bus cannot carry, a copy without a
+source, unknown keys, and names that would generate the same constant twice.
 
 ## Generated constants
 
@@ -99,9 +133,16 @@ pub mod mcsync {
 }
 ```
 
-A block with banks also gets `INSTANCES` / `INSTANCE_STRIDE`; a register with a
-`reset` gets `<REG>_RESET`; each field gets `<REG>_<FIELD>_SHIFT` and
-`<REG>_<FIELD>_MASK` (the mask is in place, i.e. already shifted).
+A block with banks also gets `INSTANCES` / `INSTANCE_STRIDE`; each copy gets
+`<COPY>_BASE`; a register with a `reset` gets `<REG>_RESET`; each field gets
+`<REG>_<FIELD>_SHIFT` and `<REG>_<FIELD>_MASK` (the mask is in place, i.e.
+already shifted).
+
+Measured read-only values (ID registers, capability words) go in as `reset`
+with a `measured` source, and the device returns the generated `<REG>_RESET`
+rather than a literal. Values that differ per bank (the PVT thresholds, the AVS
+channel counts) cannot be a single `reset` and stay in the device model, with
+the spec pointing at them.
 
 ## Rules
 
@@ -111,5 +152,6 @@ A block with banks also gets `INSTANCES` / `INSTANCE_STRIDE`; a register with a
   in our own words, not copied from datasheets or kernel headers.
 - Values measured on the reference board get baked in with
   `kind = "measured"`; nothing reads the board at build or test time.
-- Blocks are converted as they get touched, not in one sweep. A converted
-  device exports a `COVERAGE` and is listed in `periph::SPEC_COVERAGE`.
+- A new device model comes with its spec: it exports a `COVERAGE` and is
+  listed in `periph::SPEC_COVERAGE`, and `tests/specs.rs` fails until both
+  exist.

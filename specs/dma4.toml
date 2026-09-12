@@ -1,0 +1,99 @@
+[block]
+name    = "dma4"
+base    = 0x7E007B00
+size    = 0x100
+summary = "DMA4 ('dma40') channel: the 40-bit DMA engine the bootloader and start4 use"
+notes   = "Sits in channel 11's slot of the legacy controller (`dma`) and is decoded ahead of it. Its control blocks carry address bits 39:32 in SRCI / DESTI, which is how a 32-bit VPU reaches the PCIe window at 0x6_0000_0000."
+
+[[block.source]]
+kind       = "decompile"
+ref        = "bootloader submit 0x0008b0xx and status check 0x0008b3f4"
+confidence = "high"
+
+[[block.source]]
+kind       = "decompile"
+ref        = "start4 dmalib: dma_set_cs 0x3EC98E7C, dma_chain_start 0x3EC97544, channel 11 for the xHCI takeover"
+confidence = "high"
+
+[[register]]
+name   = "CS"
+offset = 0x00
+access = "rw"
+notes  = "Control and status. A transfer starts when ACTIVE is set with a chain in CB, or CB is written while ACTIVE."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "bootloader sets bit 0 to start and polls END / ACTIVE / ERROR (0x0008b3f4)"
+confidence = "high"
+
+[[register.field]]
+name  = "ACTIVE"
+bits  = "0"
+notes = "Channel running."
+
+[[register.field.source]]
+kind       = "decompile"
+ref        = "0x0008b3f4: success is END set, ACTIVE clear, ERROR clear"
+confidence = "high"
+
+[[register.field]]
+name  = "END"
+bits  = "1"
+notes = "Chain finished."
+
+[[register.field.source]]
+kind       = "decompile"
+ref        = "0x0008b3f4"
+confidence = "high"
+
+[[register.field]]
+name  = "INT"
+bits  = "2"
+notes = "Completion interrupt pending; set when a control block had INTEN."
+
+[[register.field.source]]
+kind       = "decompile"
+ref        = "dmalib's dma_interrupt only services a channel with CS & 4"
+confidence = "high"
+
+[[register.field]]
+name  = "ERROR"
+bits  = "10"
+notes = "Transfer failed."
+
+[[register.field.source]]
+kind       = "decompile"
+ref        = "0x0008b3f4 returns -1 on bit 10"
+confidence = "high"
+
+[[register.field]]
+name  = "BUSY"
+bits  = "24"
+notes = "Treated as 'still busy' alongside ACTIVE."
+
+[[register.field.source]]
+kind       = "decompile"
+ref        = "0x0008b3f4 tests bit 24 with ACTIVE"
+confidence = "medium"
+
+[[register]]
+name   = "CB"
+offset = 0x04
+access = "rw"
+notes  = "Control-block address >> 5. Null once the chain has run."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "bootloader writes the CB address >> 5; dma_chain_start 0x3EC97544 writes only this"
+confidence = "high"
+
+[[register]]
+name   = "DEBUG"
+offset = 0x0C
+access = "w1c"
+notes  = "Error latch; the bootloader writes 0x400 to clear it before each transfer."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "bootloader submit path writes DEBUG = 0x400 first"
+confidence = "high"

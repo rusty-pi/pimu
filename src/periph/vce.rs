@@ -131,41 +131,40 @@
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
-/// Base of the whole VCE aperture: data memory is the first window.
-pub const BASE: u32 = 0x7F10_0000;
+use crate::spec::vce_ctrl::{
+    BAD_ADDR, ENDCODE_ENABLE, INTCLR, PC as PC0, RUN, STATUS, STATUS_ENDCODE_MASK,
+    STATUS_ENDCODE_SHIFT, STATUS_INT_MASK as STATUS_INT,
+};
+use crate::spec::{vce, vce_ctrl, Coverage};
 
-/// Data memory (`vce_loaddata` / `vce_launch_complete`), 64 KiB.
-pub const DATA_OFF: u32 = 0x0_0000;
-/// Program memory (`vce_loadprogram`), 64 KiB.
-pub const PROG_OFF: u32 = 0x1_0000;
+/// Data memory, program memory and the register file are all modelled.
+pub const COVERAGE: Coverage = Coverage {
+    block: "vce",
+    decoded: &[vce::DATA, vce::PROG, vce::REG],
+};
+
+/// The control block. `PC[1..3]` read 0: nothing executes.
+pub const COVERAGE_CTRL: Coverage = Coverage {
+    block: "vce_ctrl",
+    decoded: &[STATUS, PC0, RUN, INTCLR, ENDCODE_ENABLE, BAD_ADDR],
+};
+
+/// Data memory (`vce_loaddata` / `vce_launch_complete`).
+const DATA_OFF: u32 = vce::DATA;
+/// Program memory (`vce_loadprogram`).
+const PROG_OFF: u32 = vce::PROG;
 /// Register file, register *n* at `+n*4`.
-pub const REGS_OFF: u32 = 0x2_0000;
-/// Control block at `0x7F14_0000`.
-pub const CTRL_OFF: u32 = 0x4_0000;
+const REGS_OFF: u32 = vce::REG;
+/// Where the control block's offsets start: the device is handed offsets
+/// from [`vce::BASE`] for both windows.
+pub const CTRL_OFF: u32 = vce_ctrl::BASE - vce::BASE;
 
-/// The data/program/register-file window: `0x7F10_0000`..`0x7F12_1000`.
-pub const MEM_SIZE: u32 = REGS_OFF + REGS_SIZE;
-/// Control block window size.
-pub const CTRL_SIZE: u32 = 0x1000;
-
-const MEM_WINDOW: u32 = 0x1_0000;
-/// 1024 registers. The highest one the firmware touches is 62
-/// (`vce_run` reads `0x7F1200F8` as the run's result word).
-const REGS_SIZE: u32 = 0x1000;
-
-const STATUS: u32 = 0x00;
-const PC0: u32 = 0x08;
-const RUN: u32 = 0x20;
-const INTCLR: u32 = 0x24;
-const ENDCODE_ENABLE: u32 = 0x28;
-const BAD_ADDR: u32 = 0x30;
-
-/// `STATUS` bit 31: an interrupt is pending. `vce_clear_interrupt` writes it to
-/// `INTCLR` and asserts it reads back clear.
-const STATUS_INT: u32 = 1 << 31;
-/// `STATUS[20:16]` holds the endcode the program halted on.
-const STATUS_ENDCODE_SHIFT: u32 = 16;
-const STATUS_ENDCODE_MASK: u32 = 0x1F;
+/// Each memory, 64 KiB.
+const MEM_WINDOW: u32 = vce::DATA_COUNT * vce::DATA_STRIDE;
+/// 1024 registers.
+const REGS_SIZE: u32 = vce::REG_COUNT * vce::REG_STRIDE;
+/// `STATUS.ENDCODE`, shifted down.
+const ENDCODE_BITS: u32 = STATUS_ENDCODE_MASK >> STATUS_ENDCODE_SHIFT;
 
 /// `vce_run_start` always ORs bit 5 into `ENDCODE_ENABLE`. The interrupt
 /// handler shows why: endcode 5 is a clock-stall condition it services and
@@ -232,7 +231,7 @@ impl Vce {
             if wanted == 0 {
                 0
             } else {
-                wanted.trailing_zeros() & STATUS_ENDCODE_MASK
+                wanted.trailing_zeros() & ENDCODE_BITS
             }
         } else {
             0
@@ -245,7 +244,7 @@ impl Vce {
     }
 
     fn status(&self) -> u32 {
-        let mut s = (self.endcode & STATUS_ENDCODE_MASK) << STATUS_ENDCODE_SHIFT;
+        let mut s = (self.endcode << STATUS_ENDCODE_SHIFT) & STATUS_ENDCODE_MASK;
         if self.int_pending {
             s |= STATUS_INT;
         }

@@ -572,7 +572,7 @@ impl ArmBus<'_> {
                 // first tag of each property request it posts, and its
                 // first value words. The address on the wire is the bus
                 // alias (`0xC000_0000 | phys`, module docs of `mbox`).
-                if a == crate::periph::mbox::ARM_BASE + 0x20 && self.m.mbox.debug() {
+                if a == crate::spec::mbox::BASE + crate::spec::mbox::DATA1 && self.m.mbox.debug() {
                     let buf = self.m.ram.base() + (v & 0x3FFF_FFF0);
                     let word = |o: u32| self.m.ram.load(buf + o, Width::Word).unwrap_or(0);
                     eprintln!(

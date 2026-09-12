@@ -23,13 +23,14 @@ use std::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
-pub const BASE: u32 = 0x7E00_B000;
-/// Up to the mailboxes.
-pub const SIZE: u32 = 0x880;
+use crate::spec::armctrl::{CONTROL, CONTROL_RELEASE_MASK as CONTROL_RELEASE, REG_008, REG_41C};
+use crate::spec::Coverage;
 
-/// `+0x000` bit 12, written as `arm_loader` lets the ARM go.
-const CONTROL: u32 = 0x000;
-const CONTROL_RELEASE: u32 = 1 << 12;
+/// Everything is storage apart from the release bit.
+pub const COVERAGE: Coverage = Coverage {
+    block: "armctrl",
+    decoded: &[CONTROL, REG_008, REG_41C],
+};
 
 #[derive(Default)]
 pub struct ArmCtrl {
@@ -76,11 +77,11 @@ mod tests {
         let mut c = ArmCtrl::new();
         c.write(0, Width::Word, 0x200).unwrap();
         assert!(!c.take_release());
-        c.write(0x41C, Width::Word, 0xA).unwrap();
-        c.write(0x008, Width::Word, 0x3030).unwrap();
-        c.write(0, Width::Word, 0x1000).unwrap();
+        c.write(REG_41C, Width::Word, 0xA).unwrap();
+        c.write(REG_008, Width::Word, 0x3030).unwrap();
+        c.write(CONTROL, Width::Word, 0x1000).unwrap();
         assert!(c.take_release());
         assert!(!c.take_release());
-        assert_eq!(c.read(0x008, Width::Word).unwrap(), 0x3030);
+        assert_eq!(c.read(REG_008, Width::Word).unwrap(), 0x3030);
     }
 }

@@ -6,23 +6,33 @@
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
-const AUX_IRQ: u32 = 0x00;
-const AUX_ENABLES: u32 = 0x04;
-const MU_IO: u32 = 0x40;
-const MU_IER: u32 = 0x44;
-const MU_IIR: u32 = 0x48;
-const MU_LCR: u32 = 0x4C;
-const MU_MCR: u32 = 0x50;
-const MU_LSR: u32 = 0x54;
-const MU_MSR: u32 = 0x58;
-const MU_SCRATCH: u32 = 0x5C;
-const MU_CNTL: u32 = 0x60;
-const MU_STAT: u32 = 0x64;
-const MU_BAUD: u32 = 0x68;
+use crate::spec::aux::{
+    ENABLES as AUX_ENABLES, IRQ as AUX_IRQ, MU_BAUD, MU_CNTL, MU_IER, MU_IIR, MU_IO, MU_LCR,
+    MU_LSR, MU_LSR_TX_EMPTY_MASK as LSR_TX_EMPTY, MU_LSR_TX_IDLE_MASK as LSR_TX_IDLE, MU_MCR,
+    MU_MSR, MU_SCRATCH, MU_STAT,
+};
+use crate::spec::Coverage;
 
-const LSR_RX_READY: u32 = 1 << 0;
-const LSR_TX_EMPTY: u32 = 1 << 5;
-const LSR_TX_IDLE: u32 = 1 << 6;
+/// Every register in `specs/aux.toml` is modelled; the SPI masters are not in
+/// it.
+pub const COVERAGE: Coverage = Coverage {
+    block: "aux",
+    decoded: &[
+        AUX_IRQ,
+        AUX_ENABLES,
+        MU_IO,
+        MU_IER,
+        MU_IIR,
+        MU_LCR,
+        MU_MCR,
+        MU_LSR,
+        MU_MSR,
+        MU_SCRATCH,
+        MU_CNTL,
+        MU_STAT,
+        MU_BAUD,
+    ],
+};
 
 #[derive(Default)]
 pub struct Aux {
@@ -86,6 +96,3 @@ impl MmioDevice for Aux {
         Ok(())
     }
 }
-
-#[allow(dead_code)]
-const _UNUSED: u32 = LSR_RX_READY;

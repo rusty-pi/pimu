@@ -25,35 +25,33 @@ use std::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
-const RSTC: u32 = 0x1C;
-const RSTS: u32 = 0x20;
-const WDOG: u32 = 0x24;
+// `RSTS` latches which reset source last fired — the debug (`HADDR*`, bits
+// 0..2), watchdog (`HADWR*`, bits 4..6) and software (`HADSR*`, bits 8..10)
+// groups plus `HADPOR` (bit 12). Its power-on value is exactly `HADWRF`, the
+// full watchdog reset the power sequencing performs, and not `HADPOR`
+// (matching the bootloader's own `power-on-reset 0`). Bit 5 is odd, so it adds
+// nothing to the partition the bootloader packs into the even bits 0..10.
+use crate::spec::pm::{
+    DOMAIN_STATUS, DOMAIN_STATUS_COUNT, DOMAIN_STATUS_RESET, DOMAIN_STATUS_STRIDE, GRAFX, IMAGE,
+    RSTC, RSTC_PASSWD_MASK as PASSWD_MASK, RSTC_WRCFG_SHIFT, RSTS, RSTS_RESET, WDOG,
+    WDOG_TIME_MASK,
+};
+use crate::spec::Coverage;
 
+/// The power-domain words answer "powered"; `IMAGE` / `GRAFX` are storage.
+pub const COVERAGE: Coverage = Coverage {
+    block: "pm",
+    decoded: &[RSTC, RSTS, WDOG, DOMAIN_STATUS, IMAGE, GRAFX],
+};
+
+/// The password byte every write carries.
 const PASSWD: u32 = 0x5A00_0000;
-const PASSWD_MASK: u32 = 0xFF00_0000;
 
-/// `RSTC` WRCFG field: `0b10` in bits [5:4] = full reset.
-const RSTC_WRCFG_FULL_RESET: u32 = 0x20;
-
-/// `RSTS` bit 5, `HADWRF`: "had a watchdog reset, full". `RSTS` latches which
-/// reset source last fired — the debug (`HADDR*`, bits 0..2), watchdog
-/// (`HADWR*`, bits 4..6) and software (`HADSR*`, bits 8..10) groups plus
-/// `HADPOR` (bit 12). A Pi 4 coming out of the power-on sequence reports
-/// exactly `HADWRF`: the last reset was the full watchdog reset the power
-/// sequencing performs, and `HADPOR` is *not* set (matching the bootloader's
-/// own `power-on-reset 0`).
-///
-/// Note the overlap with the "partition to boot" field, which the bootloader
-/// packs into the *even* bits 0, 2, 4, 6, 8 and 10 (mask `0x555`; see
-/// `FUN_00000578`/`FUN_00000666` in `firmware/source/pieeprom.bin.c`). Bit 5 is
-/// odd, so it contributes nothing to the decoded partition — `0x20` still
-/// decodes to partition 0, same as the all-zero value did.
-const RSTS_HADWRF: u32 = 0x20;
+/// `RSTC.WRCFG` = 2: full reset when the countdown expires.
+const RSTC_WRCFG_FULL_RESET: u32 = 2 << RSTC_WRCFG_SHIFT;
 
 /// The watchdog counts at 65536 Hz: one `WDOG` tick is 1 s / 65536 ≈ 15.26 µs.
 const WDOG_HZ: u64 = 65_536;
-/// `WDOG` timeout field.
-const WDOG_TIME_MASK: u32 = 0x000F_FFFF;
 
 #[derive(Default)]
 pub struct Pm {
@@ -68,10 +66,9 @@ pub struct Pm {
 impl Pm {
     pub fn new() -> Pm {
         let mut pm = Pm::default();
-        // Power-on state of `RSTS`, as measured on a real Pi 4: see the
-        // `RSTS_HADWRF` comment. The firmware latches this value early and
-        // prints it as `PM_RSTS %08x`.
-        pm.storage.insert(RSTS, RSTS_HADWRF);
+        // Power-on state of `RSTS`, as measured on a real Pi 4. The firmware
+        // latches this value early and prints it as `PM_RSTS %08x`.
+        pm.storage.insert(RSTS, RSTS_RESET);
         pm
     }
 
@@ -123,8 +120,10 @@ impl MmioDevice for Pm {
         // Power-domain status registers (`PM_GRAFX`, `PM_IMAGE`, ...): report
         // the domain powered and its clocks stable so that branch runs.
         // (`RSTS` is seeded in [`Pm::new`]; the rest of the block reads as 0.)
-        if (0x40..0x60).contains(&off) {
-            return Ok(0x0000_7040);
+        if (DOMAIN_STATUS..DOMAIN_STATUS + DOMAIN_STATUS_COUNT * DOMAIN_STATUS_STRIDE)
+            .contains(&off)
+        {
+            return Ok(DOMAIN_STATUS_RESET);
         }
         Ok(0)
     }
