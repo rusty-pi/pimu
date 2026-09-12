@@ -1,15 +1,16 @@
 //! Multicore-sync block at `0x7E00_0000` (doorbells / semaphores between the two
 //! VPU cores).
 //!
-//! Layout, decoded from start4 (2026-09-10):
+//! Register map: `specs/mcsync.toml` ([`crate::spec::mcsync`]), decoded from
+//! start4 (2026-09-10):
 //!
-//! * `[base + slot*4]`, `slot < 0x20` — the doorbell slots. `0x3ED3A114(slot)`
+//! * [`DOORBELL`]`[slot]`, `slot < 0x20` — the doorbell slots. `0x3ED3A114(slot)`
 //!   posts by writing 1; `0x3ED3A00C(slot)` waits by spinning **while** the
 //!   word is non-zero, i.e. the receiving core clears it once the work is done.
-//! * `+0x80` — pending mask; `+0x84` / `+0x88` — ack words for interrupt
+//! * `PENDING` — pending mask; `ACK76` / `ACK77` — ack words for interrupt
 //!   sources 76 and 77. The ISR at `0x3ED3A098` (handler table `gp+58004`)
-//!   only does `[+0x84] &= ~[+0x80]` (`+0x88` for source 77) and returns, so it
-//!   is an acknowledge path; the request itself is processed by a thread the
+//!   only does `[ACK76] &= ~[PENDING]` (`ACK77` for source 77) and returns, so
+//!   it is an acknowledge path; the request itself is processed by a thread the
 //!   interrupt wakes.
 //!
 //! Until we run core 1 for real, the register is modelled as
@@ -25,10 +26,19 @@
 //! interrupt is *not* how start4 is woken here — do not build on that theory.
 
 use crate::bus::{BusResult, MmioDevice, Width};
+use crate::spec::mcsync::{DOORBELL, DOORBELL_COUNT, DOORBELL_STRIDE};
+use crate::spec::Coverage;
+
+/// Only the doorbells are modelled; the pending / ack words read back 0 along
+/// with everything else.
+pub const COVERAGE: Coverage = Coverage {
+    block: "mcsync",
+    decoded: &[DOORBELL],
+};
 
 #[derive(Default)]
 pub struct McSync {
-    /// Number of nonzero tokens written (a rough count of core-1 requests).
+    /// Number of nonzero doorbell writes (a rough count of core-1 requests).
     pub posts: u64,
 }
 
@@ -47,8 +57,9 @@ impl MmioDevice for McSync {
         Ok(0)
     }
 
-    fn write(&mut self, _offset: u32, _width: Width, value: u32) -> BusResult<()> {
-        if value != 0 {
+    fn write(&mut self, offset: u32, _width: Width, value: u32) -> BusResult<()> {
+        let doorbell = (DOORBELL..DOORBELL + DOORBELL_COUNT * DOORBELL_STRIDE).contains(&offset);
+        if doorbell && value != 0 {
             self.posts += 1;
         }
         Ok(())
