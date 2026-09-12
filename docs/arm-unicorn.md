@@ -1,5 +1,17 @@
 # Running Linux against the live firmware, in-process
 
+> **Superseded by #40.** The project now builds its own AArch64 interpreter
+> instead of embedding Unicorn. This branch stays as a reference. Everything
+> here that does not depend on Unicorn is on `main`:
+> - the GIC-400, ARM-local and generic-timer models, and the mailbox and eMMC2
+>   interrupt lines;
+> - `src/armstub.rs` and `src/aarch64.rs`;
+> - the `fdt` helpers;
+> - the findings, in `docs/arm-side-findings.md`.
+>
+> What remains is the Unicorn glue: `src/arm.rs`, `recon --arm`, the `arm`
+> feature and its CI job.
+
 The simulated boot ends with `arm_loader: Starting ARM with 948MB` and the
 firmware parked in its ThreadX idle loop, still answering the property mailbox
 (#23). What is missing is the thing on the other side: an ARM that runs the
