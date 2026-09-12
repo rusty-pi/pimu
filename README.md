@@ -75,9 +75,8 @@ downloads a signed `boot.img` ramdisk and boots from that.
 `scripts/make-netboot.sh` builds both from the SD image, and
 `testdata/boot/http-boot.toml` has the EEPROM settings HTTP boot needs. CI
 boots the same files from SD, USB, TFTP and HTTP in parallel
-([#38](https://github.com/valtzu/rpi-virt-fw/issues/38)); USB gets as far as
-start4, which then idles — its own mass-storage path is not modelled yet
-(`testdata/boot/usb-boot.toml`).
+([#38](https://github.com/valtzu/rpi-virt-fw/issues/38)), every one of them
+through to `arm_loader`.
 
 Not done: the VPU vector/float unit, HTTPS network boot, and the ARM property
 mailbox — which is what a booted Linux needs to reach `/dev/vcio` and the

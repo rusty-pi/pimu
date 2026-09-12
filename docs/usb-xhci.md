@@ -950,6 +950,28 @@ boot-order: bootconf BOOT_ORDER=0xf14 @ 0x73067
 `ep 82#1024 01#1024` is the firmware reading back the measured endpoint
 descriptors, and the whole 2.3 MB of `start4.elf` arrives over SCSI `READ(10)`.
 
+**start4 then reads the rest over USB itself** — `config.txt`, the dtb, the
+overlays and the kernel — and the boot reaches `arm_loader: Starting ARM with
+947MB` (`testdata/boot/usb-boot.toml`). A `boot_ramdisk` image never needs
+this: the bootloader loads `boot.img` and start4 reads everything from RAM.
+Loose files needed three model fixes:
+
+1. For a USB boot the bootloader places start4 1 MiB below its link address
+   (`Starting start4.elf @ 0xfeb00200`, hence 947 MB, not 948). Core 1 was
+   released at the link-time entry and hit a breakpoint, so the main thread's
+   first inter-core wait never ended; it now enters where core 0 entered
+   start4, and the model's two start4-PC shortcuts (`SOLICITED_RESTORE_PC`,
+   the `udelay` fast-forward) move with the image.
+2. start4's dmalib takes DMA4 (channel 11) over for its xHCI accesses and
+   drives it like the legacy channels: `dma_set_cs` sets `CS.ACTIVE` with no
+   chain, `dma_chain_start` then only writes `CB`. The DMA4 model started on
+   every ACTIVE write — running an empty chain and clearing ACTIVE — and now
+   starts on a `CB` write to an active channel instead, clears `CB` when a
+   chain ends, and latches `CS.INT` when a control block has INTEN.
+3. The completion interrupt went to the wrong source. dmalib registers
+   `dma_interrupt` on 81/83/86/89/92/95 for channels 1/3/6/11/14/15; channel
+   11 is 89, not the `0x50 + 0xB` the model raised.
+
 **Not modelled, deliberately:** SCSI writes are accepted and discarded (nothing
 in the boot path writes), `REQUEST SENSE` always reports no sense, and the
 `MassStorage` capacity comes from the image rather than from the reference
