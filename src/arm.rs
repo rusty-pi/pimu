@@ -162,13 +162,14 @@ pub struct ArmSide {
     spis: [bool; SPIS.len()],
 }
 
-/// The device interrupt lines wired to the GIC: the mailbox, eMMC2 and the
-/// two GENET lines.
-const SPIS: [u32; 4] = [
+/// The device interrupt lines wired to the GIC: the mailbox, eMMC2, the two
+/// GENET lines and the PL011.
+const SPIS: [u32; 5] = [
     gic::ID_MAILBOX,
     gic::ID_EMMC2,
     gic::ID_GENET_A,
     gic::ID_GENET_B,
+    gic::ID_PL011,
 ];
 
 fn spi_levels(m: &Machine) -> [bool; SPIS.len()] {
@@ -178,6 +179,7 @@ fn spi_levels(m: &Machine) -> [bool; SPIS.len()] {
         m.emmc2.irq_asserted(),
         genet_a,
         genet_b,
+        m.uart0.irq_line(),
     ]
 }
 

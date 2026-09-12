@@ -88,9 +88,69 @@ pub struct BootSpec {
     /// Run the ARM cores too (`recon --arm`, #40): the boot goes on into Linux.
     #[serde(default)]
     pub arm: bool,
-    /// End the run once the console prints this (`recon --until`).
+    /// End the run once the console prints this (`recon --until`), after the
+    /// last [`Self::input`] line went in.
     #[serde(default)]
     pub until: Option<String>,
+    /// Lines typed into the serial console, each once its prompt has printed
+    /// (`recon --send-after`).
+    #[serde(default)]
+    pub input: Vec<ConsoleLine>,
+}
+
+/// `[[boot.input]]`: send `text` once the console prints `after`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ConsoleLine {
+    pub after: String,
+    pub text: String,
+}
+
+/// Make console text one plain line — `boot-check --plan` prints one `recon`
+/// argument per line — with C-style escapes for backslashes and control bytes.
+/// [`unescape`] reverses it.
+pub fn escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_ascii_control() => out.push_str(&format!("\\x{:02x}", c as u8)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// `\n`, `\r`, `\t`, `\\` and `\xHH` into bytes; anything else stays as typed.
+pub fn unescape(s: &str) -> Vec<u8> {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] != b'\\' || i + 1 == b.len() {
+            out.push(b[i]);
+            i += 1;
+            continue;
+        }
+        let hex = s
+            .get(i + 2..i + 4)
+            .and_then(|h| u8::from_str_radix(h, 16).ok());
+        match (b[i + 1], hex) {
+            (b'n', _) => out.push(b'\n'),
+            (b'r', _) => out.push(b'\r'),
+            (b't', _) => out.push(b'\t'),
+            (b'\\', _) => out.push(b'\\'),
+            (b'x', Some(h)) => {
+                out.push(h);
+                i += 2;
+            }
+            (other, _) => out.extend([b'\\', other]),
+        }
+        i += 2;
+    }
+    out
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -274,6 +334,11 @@ impl BootScenario {
         }
         if self.boot.arm {
             args.push("--arm".into());
+        }
+        for line in &self.boot.input {
+            args.push("--send-after".into());
+            args.push(escape(&line.after));
+            args.push(escape(&line.text));
         }
         if let Some(until) = &self.boot.until {
             args.push("--until".into());
@@ -514,6 +579,16 @@ pub fn check_run(scn: &BootScenario, log: &str, console: &str) -> Result<Vec<Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn console_input_escapes_round_trip() {
+        let text = "echo a\\b\tc\x03\r\n";
+        let line = escape(text);
+        assert!(!line.contains('\n'));
+        assert_eq!(line, "echo a\\\\b\\tc\\x03\\r\\n");
+        assert_eq!(unescape(&line), text.as_bytes());
+        assert_eq!(unescape("\\q \\x1"), b"\\q \\x1");
+    }
 
     #[test]
     fn bootloader_timestamps_are_stripped() {

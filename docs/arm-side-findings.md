@@ -102,6 +102,26 @@ through to its prompt on all four cores. Things that mattered:
   e2fsprogs 1.47 enables `orphan_file` (a read-only mount then logs an orphan
   cleanup); the script fixes all of those so the image is byte-reproducible.
 
+## Console input (milestone 6)
+
+- The PL011 receives: host bytes go onto a modelled line and enter the 32-entry
+  FIFO one character time apart (the `IBRD`/`FBRD` divisor of a 48 MHz
+  `UARTCLK`), against the modelled clock. `amba-pl011` enables `RXIM` and
+  `RTIM`; `RXIS` follows the `IFLS` trigger level and `RTIS` fires after 32
+  idle bit periods. Its line is GIC SPI 121 (ID 153).
+- The transmit interrupt is never raised: the transmit FIFO never fills, so the
+  PIO path writes everything at once and never waits for it.
+- Input waits on the line while the FIFO is full or the receiver is off, rather
+  than overrunning.
+- `recon --send-after <prompt> <text>` types a line once the console prints the
+  prompt; the Linux scenario uses it (`[[boot.input]]`), keyed to the
+  transcript so the golden stays deterministic. ash's line editor prints the
+  prompt and then `ESC [6n` (a cursor-position query) once its tty is raw; text
+  sent before that would be echoed twice, once by the cooked tty and once by the
+  editor, so the scenario waits for the query.
+- `recon --stdin` is the interactive console: raw terminal, `Ctrl-A x` quits.
+  A real terminal answers the `ESC [6n` itself, through stdin.
+
 ## Unicorn-specific lessons (for differential testing, if it is ever used)
 
 - Its C `UC_HOOK_INSN` system-register hook returns `uint32_t`, but the Rust
