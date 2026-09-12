@@ -17,6 +17,8 @@
 //!                  └── StubRegion (catch-all + log)      src/periph/stub.rs
 //! ```
 
+pub mod aarch64;
+pub mod armstub;
 pub mod bus;
 pub mod diag;
 pub mod emulator;
