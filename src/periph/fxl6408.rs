@@ -17,10 +17,14 @@
 //! any value, then `0x10` (`gpio_expander_gpak.c`, a GreenPAK) insists on
 //! `0x12` in register `0xFD`. Neither answered in the model, so the firmware
 //! re-probed both on every expander access, including from inside the
-//! mailbox handler. Which of the two a given 4B carries is not established
-//! here — the firmware log on rpi-dev is silent about it, and the part is only
-//! visible from the VPU side — so this models the one the firmware tries
-//! first, whose register map is public.
+//! mailbox handler.
+//!
+//! The part is only visible from the VPU side, and the release firmware's log
+//! does not name it. The debug build does, indirectly: `start4db.elf` asserts
+//! (`FXL6408_readreg`, `0x0EC335A0`) when a register read at `0x43` fails, and
+//! a Pi 4B rev 1.5 (d03115) booted with `start_debug=1` logged no assert at
+//! all (`vclog -a` empty), so its `0x43` read succeeded — the FXL6408 is the
+//! part on that revision. Other revisions may carry the GreenPAK instead.
 //!
 //! # What start4 does with it
 //!
