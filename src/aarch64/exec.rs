@@ -304,7 +304,7 @@ impl Cpu {
 }
 
 /// Execute `insn`, which was fetched from `cpu.pc`.
-pub(super) fn execute(cpu: &mut Cpu, insn: u32, mem: &mut dyn Memory) -> Exec {
+pub(super) fn execute<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M) -> Exec {
     match field(insn, 25, 4) {
         0b1000 | 0b1001 => dp_imm(cpu, insn),
         0b1010 | 0b1011 => branch_sys(cpu, insn, mem),
@@ -452,7 +452,7 @@ fn dp_imm(cpu: &mut Cpu, insn: u32) -> Exec {
 // ---------------------------------------------------------------------------
 // Branches, exception generating and system instructions (C4.1.87)
 
-fn branch_sys(cpu: &mut Cpu, insn: u32, mem: &mut dyn Memory) -> Exec {
+fn branch_sys<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M) -> Exec {
     let pc = cpu.pc;
     if insn & 0x7C00_0000 == 0x1400_0000 {
         // B / BL
@@ -540,7 +540,7 @@ fn branch_reg(cpu: &mut Cpu, insn: u32) -> Exec {
     Ok(())
 }
 
-fn system(cpu: &mut Cpu, insn: u32, mem: &mut dyn Memory) -> Exec {
+fn system<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M) -> Exec {
     let l = bit(insn, 21);
     let op0 = field(insn, 19, 2);
     let op1 = field(insn, 16, 3);
@@ -613,7 +613,7 @@ fn msr_imm(cpu: &mut Cpu, op1: u32, op2: u32, crm: u32) -> Exec {
 
 /// `SYS`/`SYSL`: cache, TLB and address-translation maintenance.
 #[allow(clippy::too_many_arguments)]
-fn sys(
+fn sys<M: Memory + ?Sized>(
     cpu: &mut Cpu,
     l: bool,
     op1: u32,
@@ -621,7 +621,7 @@ fn sys(
     crm: u32,
     op2: u32,
     rt: u32,
-    mem: &mut dyn Memory,
+    mem: &mut M,
 ) -> Exec {
     if l {
         return undef();
@@ -668,7 +668,7 @@ fn sys(
 // ---------------------------------------------------------------------------
 // Loads and stores (C4.1.88)
 
-fn ldst(cpu: &mut Cpu, insn: u32, mem: &mut dyn Memory) -> Exec {
+fn ldst<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M) -> Exec {
     if insn & 0x3F00_0000 == 0x0800_0000 {
         ld_st_exclusive(cpu, insn, mem)
     } else if insn & 0x3B00_0000 == 0x1800_0000 {
@@ -686,13 +686,13 @@ fn ldst(cpu: &mut Cpu, insn: u32, mem: &mut dyn Memory) -> Exec {
     }
 }
 
-fn read128(cpu: &mut Cpu, mem: &mut dyn Memory, addr: u64) -> Result<u128, Stop> {
+fn read128<M: Memory + ?Sized>(cpu: &mut Cpu, mem: &mut M, addr: u64) -> Result<u128, Stop> {
     let lo = cpu.read(mem, addr, 8)?;
     let hi = cpu.read(mem, addr.wrapping_add(8), 8)?;
     Ok(((hi as u128) << 64) | lo as u128)
 }
 
-fn write128(cpu: &mut Cpu, mem: &mut dyn Memory, addr: u64, v: u128) -> Exec {
+fn write128<M: Memory + ?Sized>(cpu: &mut Cpu, mem: &mut M, addr: u64, v: u128) -> Exec {
     cpu.write(mem, addr, 8, v as u64)?;
     cpu.write(mem, addr.wrapping_add(8), 8, (v >> 64) as u64)?;
     Ok(())
@@ -711,9 +711,9 @@ enum Access {
 
 /// Load or store one register. Returns the loaded value for loads to a
 /// general register so the caller can write it after any base write-back.
-fn transfer(
+fn transfer<M: Memory + ?Sized>(
     cpu: &mut Cpu,
-    mem: &mut dyn Memory,
+    mem: &mut M,
     simd: bool,
     scale: u32,
     access: Access,
@@ -783,7 +783,7 @@ fn single_access(size: u32, simd: bool, opc: u32) -> Result<Option<(u32, Access)
     Ok(Some((size, access)))
 }
 
-fn ld_literal(cpu: &mut Cpu, insn: u32, mem: &mut dyn Memory) -> Exec {
+fn ld_literal<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M) -> Exec {
     let opc = field(insn, 30, 2);
     let simd = bit(insn, 26);
     let rt = field(insn, 0, 5);
@@ -804,7 +804,7 @@ fn ld_literal(cpu: &mut Cpu, insn: u32, mem: &mut dyn Memory) -> Exec {
     Ok(())
 }
 
-fn ld_st_reg_uimm(cpu: &mut Cpu, insn: u32, mem: &mut dyn Memory) -> Exec {
+fn ld_st_reg_uimm<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M) -> Exec {
     let size = field(insn, 30, 2);
     let simd = bit(insn, 26);
     let opc = field(insn, 22, 2);
@@ -824,7 +824,7 @@ fn ld_st_reg_uimm(cpu: &mut Cpu, insn: u32, mem: &mut dyn Memory) -> Exec {
 
 /// The `bit 21` / `bits 11:10` sub-table: unscaled, post-indexed,
 /// unprivileged, pre-indexed and register-offset forms.
-fn ld_st_reg(cpu: &mut Cpu, insn: u32, mem: &mut dyn Memory) -> Exec {
+fn ld_st_reg<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M) -> Exec {
     let size = field(insn, 30, 2);
     let simd = bit(insn, 26);
     let opc = field(insn, 22, 2);
@@ -888,7 +888,7 @@ fn ld_st_reg(cpu: &mut Cpu, insn: u32, mem: &mut dyn Memory) -> Exec {
     Ok(())
 }
 
-fn ld_st_pair(cpu: &mut Cpu, insn: u32, mem: &mut dyn Memory) -> Exec {
+fn ld_st_pair<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M) -> Exec {
     let opc = field(insn, 30, 2);
     let simd = bit(insn, 26);
     let mode = field(insn, 23, 2);
@@ -930,7 +930,7 @@ fn ld_st_pair(cpu: &mut Cpu, insn: u32, mem: &mut dyn Memory) -> Exec {
     Ok(())
 }
 
-fn ld_st_exclusive(cpu: &mut Cpu, insn: u32, mem: &mut dyn Memory) -> Exec {
+fn ld_st_exclusive<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M) -> Exec {
     let size = field(insn, 30, 2);
     let o2 = bit(insn, 23);
     let load = bit(insn, 22);

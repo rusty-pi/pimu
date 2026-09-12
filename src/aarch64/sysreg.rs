@@ -209,7 +209,7 @@ fn plain_reset(k: u32) -> u64 {
 }
 
 /// `MRS`.
-pub(super) fn read(cpu: &mut Cpu, k: u32, mem: &mut dyn Memory) -> Result<u64, Stop> {
+pub(super) fn read<M: Memory + ?Sized>(cpu: &mut Cpu, k: u32, mem: &mut M) -> Result<u64, Stop> {
     let (op0, op1, crn, crm, op2) = (k >> 14, (k >> 11) & 7, (k >> 7) & 15, (k >> 3) & 15, k & 7);
     let Some(min) = min_el(op0, op1) else {
         return Err(UNDEF);
@@ -287,7 +287,12 @@ pub(super) fn read(cpu: &mut Cpu, k: u32, mem: &mut dyn Memory) -> Result<u64, S
 }
 
 /// `MSR` (register).
-pub(super) fn write(cpu: &mut Cpu, k: u32, v: u64, mem: &mut dyn Memory) -> Result<(), Stop> {
+pub(super) fn write<M: Memory + ?Sized>(
+    cpu: &mut Cpu,
+    k: u32,
+    v: u64,
+    mem: &mut M,
+) -> Result<(), Stop> {
     let (op0, op1) = (k >> 14, (k >> 11) & 7);
     let Some(min) = min_el(op0, op1) else {
         return Err(UNDEF);
@@ -309,7 +314,7 @@ fn shaping(s: &SysRegs) -> ([u64; 4], [u64; 4], [u64; 4], u64, u64, u64) {
     (s.sctlr, s.tcr, s.ttbr0, s.ttbr1_el1, s.hcr_el2, s.scr_el3)
 }
 
-fn write_reg(cpu: &mut Cpu, k: u32, v: u64, mem: &mut dyn Memory) -> Result<(), Stop> {
+fn write_reg<M: Memory + ?Sized>(cpu: &mut Cpu, k: u32, v: u64, mem: &mut M) -> Result<(), Stop> {
     let (op0, op1, crn) = (k >> 14, (k >> 11) & 7, (k >> 7) & 15);
     match k {
         k if k == key(3, 3, 4, 2, 0) => cpu.nzcv = v as u32 & 0xF000_0000,

@@ -1451,7 +1451,7 @@ fn ext(cpu: &mut Cpu, insn: u32) -> Exec {
 // --- Structure loads and stores ------------------------------------------------
 
 /// `LD1`-`LD4` / `ST1`-`ST4` (multiple and single structures), `LD1R`-`LD4R`.
-pub(super) fn ldst_structures(cpu: &mut Cpu, insn: u32, mem: &mut dyn Memory) -> Exec {
+pub(super) fn ldst_structures<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M) -> Exec {
     let q = bit(insn, 30);
     let single = bit(insn, 24);
     let post = bit(insn, 23);

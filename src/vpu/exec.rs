@@ -291,7 +291,7 @@ impl Vpu {
     /// `*(exc_vbase + slot*4)`. No-op if already in an exception or the vector
     /// entry is null. Used for both the `sleep`-instruction wake and the run
     /// loop's periodic ThreadX tick.
-    pub fn vector_irq(&mut self, bus: &mut dyn Bus, slot: u32) {
+    pub fn vector_irq<B: Bus + ?Sized>(&mut self, bus: &mut B, slot: u32) {
         if !self.irq_enabled() {
             return;
         }
@@ -302,7 +302,7 @@ impl Vpu {
     /// wake. ThreadX's scheduler idle loop parks as `…; sleep; di; b …` with
     /// interrupts already off and relies on the wake itself to service the
     /// pending periodic tick — nothing in that loop ever runs `ei`.
-    pub fn vector_irq_forced(&mut self, bus: &mut dyn Bus, slot: u32) {
+    pub fn vector_irq_forced<B: Bus + ?Sized>(&mut self, bus: &mut B, slot: u32) {
         self.event = true;
         // An interrupt is what `sleep` was waiting for.
         self.halted = false;
@@ -371,13 +371,13 @@ impl Vpu {
     }
 
     /// Fetch the instruction bytes at `pc` into a 10-byte buffer.
-    fn fetch(&self, bus: &mut dyn Bus, pc: u32) -> Result<([u8; 10], u8), BusError> {
+    fn fetch<B: Bus + ?Sized>(&self, bus: &mut B, pc: u32) -> Result<([u8; 10], u8), BusError> {
         let mut buf = [0u8; 10];
         let len = bus.read_insn(pc, &mut buf)?;
         Ok((buf, len))
     }
 
-    pub fn step(&mut self, bus: &mut dyn Bus) -> Step {
+    pub fn step<B: Bus + ?Sized>(&mut self, bus: &mut B) -> Step {
         if self.stopped.is_some() {
             return Step::Stopped;
         }
@@ -414,7 +414,7 @@ impl Vpu {
     }
 
     /// Execute `insn`, fetched from `pc`.
-    fn execute(&mut self, bus: &mut dyn Bus, pc: u32, insn: &Insn) -> Step {
+    fn execute<B: Bus + ?Sized>(&mut self, bus: &mut B, pc: u32, insn: &Insn) -> Step {
         let next = pc.wrapping_add(insn.len as u32);
 
         self.cycles += 1;
@@ -929,7 +929,7 @@ impl Vpu {
                 // order, then `lr` at the top word of the frame.
                 let total = count as u32 + include_lr as u32;
                 let sp = self.regs.get(SP).wrapping_sub(4 * total);
-                let put = |exec: &mut Self, bus: &mut dyn Bus, r: usize, at: u32| -> bool {
+                let put = |exec: &mut Self, bus: &mut B, r: usize, at: u32| -> bool {
                     let v = exec.regs.get(r);
                     match bus.store32(at, v) {
                         Ok(()) => true,
@@ -1252,9 +1252,9 @@ impl Vpu {
     /// naturally aligned and byte by byte when it is not — VC4's `v8` forms copy
     /// arbitrary byte alignments, and splitting an aligned word access would
     /// misreport itself to any MMIO register underneath.
-    fn vec_transfer(
+    fn vec_transfer<B: Bus + ?Sized>(
         &mut self,
-        bus: &mut dyn Bus,
+        bus: &mut B,
         store: bool,
         reg: VecReg,
         row: u8,
@@ -1298,7 +1298,12 @@ impl Vpu {
         Ok(())
     }
 
-    fn load_width(&self, bus: &mut dyn Bus, ea: u32, w: MemWidth) -> Result<u32, BusError> {
+    fn load_width<B: Bus + ?Sized>(
+        &self,
+        bus: &mut B,
+        ea: u32,
+        w: MemWidth,
+    ) -> Result<u32, BusError> {
         Ok(match w {
             MemWidth::Word => bus.load32(ea)?,
             MemWidth::Half => bus.load16(ea)? as u32,

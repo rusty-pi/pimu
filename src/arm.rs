@@ -502,6 +502,7 @@ struct ArmBus<'a> {
 }
 
 impl ArmBus<'_> {
+    #[inline]
     fn route(&self, addr: u64, size: u32, write: bool) -> Result<Target, Abort> {
         let abort = Abort { addr, write };
         let end = addr.checked_add(u64::from(size)).ok_or(abort)?;
@@ -540,6 +541,7 @@ impl ArmBus<'_> {
     }
 
     /// An access of at most 4 bytes.
+    #[inline]
     fn read32(&mut self, addr: u64, size: u32) -> Result<u64, Abort> {
         let w = Self::width(size);
         let target = self.route(addr, size, false)?;
@@ -564,6 +566,7 @@ impl ArmBus<'_> {
         r.map(u64::from).map_err(|_| Abort { addr, write: false })
     }
 
+    #[inline]
     fn write32(&mut self, addr: u64, size: u32, value: u64) -> Result<(), Abort> {
         let (w, v) = (Self::width(size), value as u32);
         let target = self.route(addr, size, true)?;
@@ -647,6 +650,7 @@ impl Memory for ArmBus<'_> {
     /// they were a measurable share of the Linux boot's host time (#43). The
     /// same access `read32` would make for a RAM target, which leaves `io`
     /// clear.
+    #[inline]
     fn fetch(&mut self, addr: u64) -> Result<u32, Abort> {
         if addr.saturating_add(4) <= self.m.ram.len() as u64 {
             return self
@@ -658,6 +662,7 @@ impl Memory for ArmBus<'_> {
         self.read(addr, 4).map(|v| v as u32)
     }
 
+    #[inline]
     fn read(&mut self, addr: u64, size: u32) -> Result<u64, Abort> {
         if size == 8 {
             let lo = self.read32(addr, 4)?;
@@ -667,6 +672,7 @@ impl Memory for ArmBus<'_> {
         self.read32(addr, size)
     }
 
+    #[inline]
     fn write(&mut self, addr: u64, size: u32, value: u64) -> Result<(), Abort> {
         let end = addr.saturating_add(u64::from(size));
         self.written = Some(match self.written {
