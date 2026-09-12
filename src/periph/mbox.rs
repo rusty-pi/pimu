@@ -230,6 +230,15 @@ impl Mbox {
         (self.config0_word() | self.config1_word()) & CFG_PENDING != 0
     }
 
+    /// The ARM's mailbox interrupt (GIC SPI 33 = INTID 65, `mailbox@7e00b880
+    /// { interrupts = <0x00 0x21 0x04>; }`): mailbox 0's pending bits, as the
+    /// ARM enabled them through its own `CONFIG` at `0x7E00_B89C`. Linux's
+    /// `bcm2835-mailbox` sets `ARM_MC_IHAVEDATAIRQEN` (bit 0) there, so this is
+    /// "a reply is waiting in MAIL0".
+    pub fn arm_irq_asserted(&self) -> bool {
+        self.config0_word() & CFG_PENDING != 0
+    }
+
     /// The interrupt-pending bits of one mailbox's `CONFIG`, from `enables`,
     /// the mailbox's own FIFO and the opposite one.
     ///
