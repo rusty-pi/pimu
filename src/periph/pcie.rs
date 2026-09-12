@@ -100,12 +100,19 @@
 //!   `MSI_INTR2` and a level on `GIC_SPI 148` ([`Pcie::msi_line`]).
 //!
 //! Endpoint MMIO reaches the ARM through the outbound window: [`crate::arm`]
-//! routes CPU-physical `0x6_0000_0000..` here. Inbound — the endpoint's DMA
-//! into DRAM — is not translated through the `RC_BAR2` window. Linux puts
-//! system memory at PCI `0x4_0000_0000` (`IB MEM 0x0000000000..0x003fffffff
-//! -> 0x0400000000`), the VPU uses its bus aliases, and the endpoint's
-//! [`HostMem`](crate::periph::xhci::HostMem) folds both onto DRAM by dropping
-//! the address bits above its 1 GiB.
+//! routes CPU-physical `0x6_0000_0000..` here.
+//!
+//! ## The inbound window
+//!
+//! The endpoint's DMA — TRB fetches, event writes, data buffers — goes the
+//! other way, through inbound window 2 (`RC_BAR2_CONFIG_LO`/`_HI`): a PCI bus
+//! address inside it reaches CPU-physical memory at the same offset from 0,
+//! and one outside it reaches nothing ([`Upstream`]). The bootloader programs
+//! the window at bus 0, 8 GiB wide, so its bus addresses are physical; Linux
+//! moves it to where `dma-ranges` puts system memory, PCI `0x4_0000_0000`
+//! (`IB MEM 0x0000000000..0x003fffffff -> 0x0400000000`), and hands the
+//! endpoint addresses up there. The window's size field is decoded as Linux
+//! encodes it ([`ibar_size`]).
 //!
 //! ## Register offsets the firmware actually touches
 //!
@@ -121,6 +128,7 @@ use std::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 use crate::periph::vl805::Vl805;
+use crate::periph::xhci::HostMem;
 
 /// `reg = <0x0 0x7d500000 0x0 0x9310>` in the Pi 4 device tree
 /// (`/proc/device-tree/scb/pcie@7d500000/reg` on a real board).
@@ -164,6 +172,17 @@ const HW_REV: u32 = 0x0303;
 /// `PCIE_MISC_MSI_BAR_CONFIG_LO`/`_HI`: the PCI bus address MSI writes are
 /// caught at. Bit 0 of the low word is repurposed as the enable.
 const MSI_BAR_CONFIG_LO: u32 = 0x4044;
+/// `PCIE_MISC_RC_BAR2_CONFIG_LO`/`_HI`: inbound window 2, the one through
+/// which the endpoint's memory reads and writes reach system memory. The low
+/// word's bottom five bits encode the size (see [`ibar_size`]), the rest with
+/// the high word are the window's PCI bus base. Its CPU side is hard-wired to
+/// physical 0 (`brcm_pcie_get_inbound_wins()`: "the BAR2 cpu_addr is hardwired
+/// to the start of system memory"). Windows 1 and 3 are switched off by both
+/// the bootloader (`0x000A6D60`, `0x000A6D70`) and Linux, so they are not
+/// modelled.
+const RC_BAR2_CONFIG_LO: u32 = 0x4034;
+const RC_BAR2_CONFIG_HI: u32 = 0x4038;
+const RC_BAR_SIZE_MASK: u32 = 0x1F;
 const MSI_BAR_CONFIG_HI: u32 = 0x4048;
 /// `PCIE_MISC_MSI_DATA_CONFIG`: a match mask in the top half, the pattern in
 /// the bottom. Linux writes `0xFFE0_6540`: a message's data must match `0x6540`
@@ -329,6 +348,59 @@ fn rc_cfg_w1c_mask(off: u32) -> u32 {
         0x104 | 0x110 => 0xFFFF_FFFF,
         0x130 => 0x0000_007F,
         _ => 0,
+    }
+}
+
+/// The size an `RC_BARn_CONFIG_LO` size field encodes, the inverse of
+/// `brcm_pcie_encode_ibar_size()`: `1..=0x15` is 64 KiB to 64 GiB, `0x1C..=0x1F`
+/// is 4 KiB to 32 KiB, and anything else — `0` included — switches the window
+/// off.
+fn ibar_size(code: u32) -> Option<u64> {
+    match code {
+        0x01..=0x15 => Some(1 << (code + 15)),
+        0x1C..=0x1F => Some(1 << (code - 0x1C + 12)),
+        _ => None,
+    }
+}
+
+/// The endpoint's upstream memory traffic, as the root complex forwards it:
+/// a PCI bus address inside inbound window 2 becomes the CPU-physical
+/// address that far into the window, and `mem` is system memory addressed
+/// that way. Anything outside the window reaches no memory — on silicon the
+/// request completes as Unsupported; here a read returns all-ones and a write
+/// is dropped.
+struct Upstream<'a> {
+    /// `(bus base, size)` of inbound window 2, if it is on.
+    window: Option<(u64, u64)>,
+    mem: &'a mut dyn HostMem,
+    dbg: bool,
+}
+
+impl Upstream<'_> {
+    fn phys(&self, bus: u64, write: bool) -> Option<u64> {
+        let phys = self
+            .window
+            .and_then(|(base, size)| bus.checked_sub(base).filter(|off| *off < size));
+        if phys.is_none() && self.dbg {
+            let dir = if write { "write" } else { "read" };
+            eprintln!("[pcie] endpoint {dir} at bus {bus:#x} is outside the inbound window");
+        }
+        phys
+    }
+}
+
+impl HostMem for Upstream<'_> {
+    fn read8(&self, addr: u64) -> u8 {
+        match self.phys(addr, false) {
+            Some(p) => self.mem.read8(p),
+            None => 0xFF,
+        }
+    }
+
+    fn write8(&mut self, addr: u64, value: u8) {
+        if let Some(p) = self.phys(addr, true) {
+            self.mem.write8(p, value);
+        }
     }
 }
 
@@ -559,19 +631,34 @@ impl Pcie {
         Some(self.endpoint.bar0_read(off, width))
     }
 
-    /// A write of endpoint MMIO, addressed CPU-physically. `mem` is host
-    /// memory: an xHCI doorbell write makes the endpoint fetch TRBs from DRAM
-    /// and post events back into it.
+    /// Inbound window 2 as `(bus base, size)`, if its size field switches it
+    /// on.
+    fn inbound_window(&self) -> Option<(u64, u64)> {
+        let lo = self.stored(RC_BAR2_CONFIG_LO);
+        let size = ibar_size(lo & RC_BAR_SIZE_MASK)?;
+        let base = ((self.stored(RC_BAR2_CONFIG_HI) as u64) << 32) | lo as u64;
+        Some((base & !(size - 1), size))
+    }
+
+    /// A write of endpoint MMIO, addressed CPU-physically. `mem` is system
+    /// memory by CPU-physical address: an xHCI doorbell write makes the
+    /// endpoint fetch TRBs from DRAM and post events back into it, through
+    /// the inbound window.
     pub fn mmio_write(
         &mut self,
         cpu: u64,
         width: Width,
         value: u32,
-        mem: &mut dyn crate::periph::xhci::HostMem,
+        mem: &mut dyn HostMem,
     ) -> bool {
         match self.bar0_offset(cpu) {
             Some(off) => {
-                self.endpoint.bar0_write(off, width, value, mem);
+                let mut up = Upstream {
+                    window: self.inbound_window(),
+                    mem,
+                    dbg: self.dbg,
+                };
+                self.endpoint.bar0_write(off, width, value, &mut up);
                 self.update_irq();
                 true
             }
@@ -775,6 +862,9 @@ impl MmioDevice for Pcie {
             return Ok(());
         }
         self.storage.insert(offset & !3, value);
+        if self.dbg && matches!(offset, RC_BAR2_CONFIG_LO | RC_BAR2_CONFIG_HI) {
+            eprintln!("[pcie] inbound window {:x?}", self.inbound_window());
+        }
         Ok(())
     }
 }
@@ -942,6 +1032,60 @@ mod tests {
         assert_eq!(p.endpoint.bar0_bus_addr(), None);
     }
 
+    /// Linux's inbound window: `dma-ranges` puts system memory at PCI
+    /// `0x4_0000_0000` (`IB MEM 0x0000000000..0x003fffffff -> 0x0400000000`),
+    /// and `set_inbound_win_registers()` writes the base with a 1 GiB size
+    /// code. The endpoint's DMA addresses are those bus addresses; the
+    /// memory behind the window is addressed physically.
+    #[test]
+    fn endpoint_dma_goes_through_the_inbound_window() {
+        use crate::periph::xhci::{VecMem, RTSOFF};
+        let mut p = enumerated_pcie();
+        p.write(RC_BAR2_CONFIG_LO, Width::Word, 0xF).unwrap();
+        p.write(RC_BAR2_CONFIG_HI, Width::Word, 4).unwrap();
+        assert_eq!(p.inbound_window(), Some((0x4_0000_0000, 1 << 30)));
+        let mut mem = VecMem::default();
+        // The event ring segment table at bus 0x4_0000_1000 = physical 0x1000.
+        mem.write32(0x1000, 0x2000);
+        mem.write32(0x1004, 4);
+        mem.write32(0x1008, 16);
+        let bar = 0x6_0200_0000u64;
+        let ir0 = bar + RTSOFF as u64 + 0x20;
+        p.mmio_write(ir0 + 0x08, Width::Word, 1, &mut mem); // ERSTSZ
+        p.mmio_write(ir0 + 0x10, Width::Word, 0x1000, &mut mem); // ERSTBA lo
+        p.mmio_write(ir0 + 0x14, Width::Word, 4, &mut mem); // ERSTBA hi
+        p.mmio_write(bar + 0x20, Width::Word, 0x1, &mut mem); // USBCMD RS
+                                                              // A root-port reset posts a Port Status Change Event to the ring's
+                                                              // first TRB, bus 0x4_0000_2000: physical 0x2000, port 1 in bits 31:24.
+        p.mmio_write(bar + 0x420, Width::Word, (1 << 9) | (1 << 4), &mut mem);
+        assert_eq!(mem.read32(0x2000) >> 24, 1);
+        assert!(mem.bytes.keys().all(|a| *a < 0x1_0000));
+
+        // Outside the window the endpoint reaches nothing: a segment table
+        // at bus 0x1000 reads all-ones, so no event lands anywhere new.
+        let before = mem.bytes.clone();
+        let mut p2 = enumerated_pcie();
+        p2.write(RC_BAR2_CONFIG_LO, Width::Word, 0xF).unwrap();
+        p2.write(RC_BAR2_CONFIG_HI, Width::Word, 4).unwrap();
+        p2.mmio_write(ir0 + 0x08, Width::Word, 1, &mut mem);
+        p2.mmio_write(ir0 + 0x10, Width::Word, 0x1000, &mut mem);
+        p2.mmio_write(bar + 0x20, Width::Word, 0x1, &mut mem);
+        p2.mmio_write(bar + 0x420, Width::Word, (1 << 9) | (1 << 4), &mut mem);
+        assert_eq!(mem.bytes, before);
+    }
+
+    #[test]
+    fn inbound_window_sizes_decode_like_linux_encodes_them() {
+        assert_eq!(ibar_size(0), None);
+        assert_eq!(ibar_size(0x1), Some(64 << 10));
+        assert_eq!(ibar_size(0xF), Some(1 << 30));
+        assert_eq!(ibar_size(0x12), Some(8 << 30));
+        assert_eq!(ibar_size(0x15), Some(64 << 30));
+        assert_eq!(ibar_size(0x1C), Some(4 << 10));
+        assert_eq!(ibar_size(0x1F), Some(32 << 10));
+        assert_eq!(ibar_size(0x16), None);
+    }
+
     fn link_up_pcie() -> Pcie {
         let mut p = Pcie::with_device(true);
         p.write(RGR1_SW_INIT_1, Width::Word, 0x3).unwrap();
@@ -1033,6 +1177,9 @@ mod tests {
     /// endpoint's registers, and it names them 40 bits wide.
     fn enumerated_pcie() -> Pcie {
         let mut p = link_up_pcie();
+        // Inbound window 2 at bus 0, 8 GiB: bus addresses are CPU-physical.
+        p.write(RC_BAR2_CONFIG_LO, Width::Word, 0x12).unwrap();
+        p.write(RC_BAR2_CONFIG_HI, Width::Word, 0).unwrap();
         p.write(MEM_WIN0_LO, Width::Word, 0x8000_0000).unwrap();
         p.write(MEM_WIN0_HI, Width::Word, 0).unwrap();
         p.write(MEM_WIN0_BASE_LIMIT, Width::Word, 0x3FF0_0000)

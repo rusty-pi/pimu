@@ -46,12 +46,11 @@ use crate::periph::usb::{Setup, Speed, UsbDevice, Xfer};
 // ---------------------------------------------------------------------------
 // Host memory, as the endpoint sees it.
 
-/// The endpoint's view of system memory. A PCI bus address written into
-/// `DCBAAP`, `CRCR` or a TRB reaches DRAM through the root complex's inbound
-/// window `RC_BAR2`, which the bootloader programs with base 0
-/// (`0x7D50_4034` ← `0x12`, `0x000A6D1C`) — so a bus address is a system
-/// physical address, and the low 30 bits index modelled DRAM the same way
-/// [`crate::machine::Machine::run_dma4`] indexes it.
+/// The memory the endpoint's DMA reaches. The controller calls it with the
+/// PCI bus addresses written into `DCBAAP`, `CRCR` and the TRBs; the root
+/// complex ([`crate::periph::pcie`]) translates those through its inbound
+/// window `RC_BAR2` and hands the result to system memory, itself a `HostMem`
+/// addressed CPU-physically.
 pub trait HostMem {
     fn read8(&self, addr: u64) -> u8;
     fn write8(&mut self, addr: u64, value: u8);
@@ -86,14 +85,21 @@ pub trait HostMem {
     }
 }
 
+/// DRAM by CPU-physical address, which on this SoC is the offset into it.
+/// Past its end nothing answers: reads return zero, writes are dropped.
 impl HostMem for crate::mem::Ram {
     fn read8(&self, addr: u64) -> u8 {
-        self.load((addr as u32) & 0x3FFF_FFFF, Width::Byte)
+        if addr >= self.len() as u64 {
+            return 0;
+        }
+        self.load(self.base() + addr as u32, Width::Byte)
             .unwrap_or(0) as u8
     }
 
     fn write8(&mut self, addr: u64, value: u8) {
-        let _ = self.store((addr as u32) & 0x3FFF_FFFF, Width::Byte, value as u32);
+        if addr < self.len() as u64 {
+            let _ = self.store(self.base() + addr as u32, Width::Byte, value as u32);
+        }
     }
 }
 
