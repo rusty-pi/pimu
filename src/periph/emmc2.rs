@@ -79,12 +79,16 @@ const CAPS1: u32 = 0x0000_A525;
 const MAX_CURRENT_VALUE: u32 = 0x0008_0008;
 /// Vendor 0x10, SDHCI spec 3.00, in `0xFE` (the high half).
 const VERSION: u32 = 0x1002_0000;
-/// Card inserted and stable, DAT0 and CMD high: the idle state. start4 prints
-/// this word (`SD HOST: ... status: 0x01130000`) into the golden transcript.
-/// The real board reads `0x1FFF0000` (card-detect and write-protect pins, all
-/// DAT lines high); adopting it moves that line, and without bit 19 (write
-/// protect switch: 1 = writable) Linux treats the card as read-only.
-const PRESENT_STATE_IDLE: u32 = 0x0113_0000;
+/// Card inserted and stable, card-detect pin high, write-protect pin high
+/// (bit 19: writable — Linux mounts the card read-only without it), CMD and
+/// DAT[7:0] lines high: the idle state, measured on a Pi 4B rev 1.5 with
+/// Linux running, and what start4 prints on the real board (`SD HOST: ...
+/// status: 0x1fff0000`, examples-on-real-hardware/sd-card-boot.log).
+const PRESENT_STATE_IDLE: u32 = 0x1FFF_0000;
+/// HOST_CONTROL bit 23 reads 1 whatever is written: measured `0x00800000`
+/// with Linux running, and the real board's bootloader prints `CTL0:
+/// 0x00800f00` right after writing `0x00000f00` (sd-card-boot.log).
+const HOST_CONTROL_FIXED: u32 = 0x0080_0000;
 
 /// PRESENT_STATE bits.
 const PS_BUF_WRITE_EN: u32 = 1 << 10;
@@ -777,10 +781,10 @@ impl Emmc2 {
             RESPONSE3 => self.resp[3],
             BUFFER_DATA => self.read_buffer_word(),
             CLOCK_CONTROL => {
-                // The timeout byte (bits 16..23) is not read back: start4
-                // prints this word (`arasan_emmc_set_clock ... C1:`) into the
-                // golden transcript.
-                let clk = self.get(CLOCK_CONTROL) & 0xFFFF;
+                // Clock control and the timeout byte (bits 16..23) read
+                // back; the real board prints `arasan_emmc_set_clock ... C1:
+                // 0x000e0047` (sd-card-boot.log).
+                let clk = self.get(CLOCK_CONTROL) & 0x00FF_FFFF;
                 // Internal clock reports stable as soon as it is enabled; the
                 // software-reset bits (high byte) always read back done.
                 if clk & CLK_INTLEN != 0 {
@@ -803,6 +807,7 @@ impl Emmc2 {
                 ps
             }
             INT_STATUS => self.int_status(),
+            HOST_CONTROL => self.get(HOST_CONTROL) | HOST_CONTROL_FIXED,
             CAPABILITIES_0 => CAPS0,
             CAPABILITIES_1 => CAPS1,
             MAX_CURRENT => MAX_CURRENT_VALUE,
@@ -818,8 +823,10 @@ impl Emmc2 {
                 // Software resets self-clear immediately. A DAT reset tears down
                 // the data path (FIFO + data-circuit interrupts) but leaves
                 // command-complete alone; a CMD reset clears command-complete; an
-                // ALL reset clears everything the host programmed for
-                // interrupts, DMA and signalling.
+                // ALL reset returns every register to its reset value (SDHCI
+                // 3.00, 2.2.18) — HOST_CONTROL included, which is why the real
+                // board's start4 prints `arasan_emmc_set_clock C0: 0x00800000`
+                // right after its reset (sd-card-boot.log).
                 if value & (SRST_ALL | SRST_DATA) != 0 {
                     self.reset_data();
                     let keep = if value & SRST_ALL != 0 {
@@ -830,15 +837,7 @@ impl Emmc2 {
                     self.reg.insert(INT_STATUS, keep);
                 }
                 if value & SRST_ALL != 0 {
-                    for r in [
-                        INT_STATUS_EN,
-                        INT_SIGNAL_EN,
-                        HOST_CONTROL2,
-                        ADMA_ERROR,
-                        ADMA_ADDR,
-                    ] {
-                        self.reg.remove(&r);
-                    }
+                    self.reg.clear();
                     self.switching_1v8 = false;
                 }
                 if value & (SRST_ALL | SRST_CMD) != 0 {
@@ -1027,7 +1026,9 @@ mod tests {
         assert_eq!(rd(&mut e, CAPABILITIES_1), 0x0000_A525);
         assert_eq!(rd(&mut e, CONTROLLER_VERSION), 0x1002_0000);
         assert_eq!(e.read(0xFE, Width::Half).unwrap(), 0x1002);
-        assert_eq!(rd(&mut e, PRESENT_STATE), 0x0113_0000);
+        assert_eq!(rd(&mut e, PRESENT_STATE), 0x1FFF_0000);
+        wr(&mut e, HOST_CONTROL, 0x0000_0F00);
+        assert_eq!(rd(&mut e, HOST_CONTROL), 0x0080_0F00, "bit 23 reads 1");
         assert_eq!(CAPS0 & (1 << 28), 0, "no 64-bit ADMA");
     }
 
@@ -1314,10 +1315,12 @@ mod tests {
         wr(&mut e, INT_SIGNAL_EN, 1);
         wr(&mut e, CLOCK_CONTROL, SRST_DATA | CLK_INTLEN);
         assert_eq!(rd(&mut e, INT_STATUS_EN), 0xFFFF_FFFF);
+        wr(&mut e, HOST_CONTROL, HC_BUS_POWER | (7 << 9) | 2);
         wr(&mut e, CLOCK_CONTROL, SRST_ALL | CLK_INTLEN);
         assert_eq!(rd(&mut e, INT_STATUS_EN), 0);
         assert_eq!(rd(&mut e, INT_SIGNAL_EN), 0);
-        assert_eq!(rd(&mut e, CLOCK_CONTROL), CLK_INTLEN | CLK_STABLE);
+        assert_eq!(rd(&mut e, CLOCK_CONTROL), 0, "clock back at reset too");
+        assert_eq!(rd(&mut e, HOST_CONTROL), HOST_CONTROL_FIXED);
     }
 
     #[test]
