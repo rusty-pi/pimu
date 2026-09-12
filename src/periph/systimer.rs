@@ -163,16 +163,24 @@ impl SysTimer {
     /// anything a compare could match on, and the run loop makes one per
     /// retired instruction. The caller uses the return value to skip its own
     /// time-derived work on those calls.
+    #[inline]
     pub fn advance(&mut self, cycles: u64) -> bool {
         let total = self.frac_cycles + cycles;
         if total < CYCLES_PER_US {
             self.frac_cycles = total;
             return false;
         }
+        self.advance_us(total);
+        true
+    }
+
+    /// The rest of [`Self::advance`], once `total` cycles make at least one
+    /// microsecond.
+    #[inline(never)]
+    fn advance_us(&mut self, total: u64) {
         self.micros += total / CYCLES_PER_US;
         self.frac_cycles = total % CYCLES_PER_US;
         self.service_matches();
-        true
     }
 
     /// Set any compare channels whose deadline the counter has now reached.

@@ -308,12 +308,21 @@ impl Machine {
     }
 
     /// Advance time-based peripheral state by `cycles` VPU cycles.
+    ///
+    /// Inline, because the run loop calls it on every step and on 53 of every
+    /// 54 there is nothing to do past the first comparison.
+    #[inline]
     pub fn tick(&mut self, cycles: u64) {
         // Everything below is derived from the microsecond counter, so when it
         // has not moved there is nothing for any of it to do.
-        if !self.systimer.advance(cycles) {
-            return;
+        if self.systimer.advance(cycles) {
+            self.tick_us();
         }
+    }
+
+    /// The rest of [`Self::tick`], for a step that moved the microsecond count.
+    #[inline(never)]
+    fn tick_us(&mut self) {
         if self.systimer.take_fired() {
             self.wake = true;
         }
