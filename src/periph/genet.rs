@@ -77,10 +77,21 @@
 //!   is sent as soon as the producer index is written; `SOP` / `EOP` delimit
 //!   a frame across descriptors. With `TBUF_64B_EN` the first 64 bytes are
 //!   the transmit status block and are not sent.
-//! * **Receive**: everything goes to the default ring 16 (no `HFB` filter
-//!   steers frames to rings 0..15). A frame is accepted when it is broadcast,
-//!   multicast, addressed to `UMAC_MAC0` / `UMAC_MAC1`, or `UMAC_CMD`'s
-//!   `PROMISC` is set. It lands in one buffer behind the 64-byte receive
+//! * **Receive**: a frame is accepted when it is broadcast, multicast,
+//!   addressed to `UMAC_MAC0` / `UMAC_MAC1`, or `UMAC_CMD`'s `PROMISC` is
+//!   set. With the Hardware Filter Block on (`HFB_CTRL` bit 0) the
+//!   highest-numbered enabled filter that matches picks the ring through
+//!   `DMA_INDEX2RING`; otherwise it goes to the default ring 16. The
+//!   bootloader and start4 never turn the HFB on. Linux since 3b5d4f5a820d
+//!   ("move DESC_INDEX flow to ring 0") does, with an empty 4-byte filter 0
+//!   that matches everything, and receives on ring 0 only (`RDMA_CTRL` 0x3,
+//!   as measured). Its ethtool rules sit at filters 1 and up, so a higher
+//!   filter has to win over that catch-all; which one real hardware picks
+//!   when several match is inferred from that layout, not measured. A frame
+//!   for a ring that is off while receive DMA runs is dropped; with receive
+//!   DMA off it waits in the backend.
+//!
+//!   A frame lands in one buffer behind the 64-byte receive
 //!   status block when `RBUF_64B_EN`, after two pad bytes when
 //!   `RBUF_ALIGN_2B`, followed by the FCS when `CMD_CRC_FWD`; frames shorter
 //!   than the Ethernet minimum are padded to 60 bytes the way the sender's
@@ -162,8 +173,24 @@ pub const RDMA_RINGS: u32 = 0x2c00;
 pub const TDMA_RINGS: u32 = 0x4c00;
 const RING_STRIDE: u32 = 0x40;
 const RINGS: usize = 17;
-/// The ring the bootloader, start4 and Linux's default queue all use.
+/// The ring frames go to when no HFB filter claims them: the one the
+/// bootloader and start4 use, and Linux before 3b5d4f5a820d.
 pub const DEFAULT_RING: usize = 16;
+/// `DMA_INDEX2RING_0..7` in the RDMA registers: a 4-bit ring number per HFB
+/// filter, eight to a word.
+const DMA_INDEX2RING: u32 = 0x70;
+// Hardware Filter Block. Filter RAM: 48 filters of 128 words, two frame bytes
+// a word (even byte in 15:8 with its high/low nibble mask in bits 19/18, odd
+// byte in 7:0 with bits 17/16), as `bcmgenet_hfb_insert_data` writes them.
+const HFB_RAM: u32 = 0x8000;
+const HFB_FILTERS: usize = 48;
+const HFB_FILTER_WORDS: usize = 128;
+pub const HFB_CTRL: u32 = 0xfc00;
+const HFB_EN: u32 = 1 << 0;
+/// Two enable words: filters 32..47 at `+0x04`, filters 0..31 at `+0x08`.
+const HFB_FLT_ENABLE: u32 = 0xfc04;
+/// Filter lengths in bytes, one byte a filter, filter 47 first.
+const HFB_FLT_LEN: u32 = 0xfc1c;
 // Ring registers.
 pub const RING_PTR: u32 = 0x00;
 pub const RDMA_PROD_INDEX: u32 = 0x08;
@@ -224,6 +251,8 @@ pub struct Genet {
     kick: bool,
     /// A transmit frame whose `EOP` descriptor has not been queued yet.
     tx_frame: Vec<u8>,
+    /// A received frame whose ring has no free buffer yet.
+    rx_pending: Option<Vec<u8>>,
     pub stats: Stats,
 }
 
@@ -275,6 +304,7 @@ impl Genet {
             phy: Bcm54213pe::new(),
             kick: false,
             tx_frame: Vec::new(),
+            rx_pending: None,
             stats: Stats::default(),
         }
     }
@@ -457,28 +487,47 @@ impl Genet {
         [a, b, c, d, e, f]
     }
 
+    /// The receive ring the Hardware Filter Block steers `frame` to, if the
+    /// block is on and one of its filters matches.
+    fn hfb_ring(&self, frame: &[u8]) -> Option<usize> {
+        if self.reg(HFB_CTRL) & HFB_EN == 0 {
+            return None;
+        }
+        let f = (0..HFB_FILTERS).rev().find(|&f| self.hfb_match(f, frame))?;
+        let map = self.reg(RDMA_REGS + DMA_INDEX2RING + 4 * (f / 8) as u32);
+        Some(((map >> (4 * (f % 8))) & 0xf) as usize)
+    }
+
+    fn hfb_match(&self, f: usize, frame: &[u8]) -> bool {
+        let enable = self.reg(HFB_FLT_ENABLE + if f < 32 { 4 } else { 0 });
+        if enable & (1 << (f % 32)) == 0 {
+            return false;
+        }
+        let lens = self.reg(HFB_FLT_LEN + 4 * ((HFB_FILTERS - 1 - f) / 4) as u32);
+        let len = ((lens >> (8 * (f % 4))) & 0xff) as usize;
+        frame.len() >= len
+            && (0..len).all(|i| {
+                let word = self.reg(HFB_RAM + 4 * (f * HFB_FILTER_WORDS + i / 2) as u32);
+                let (pattern, nibbles) = if i % 2 == 0 {
+                    ((word >> 8) as u8, (word >> 18) & 3)
+                } else {
+                    (word as u8, (word >> 16) & 3)
+                };
+                let mask = if nibbles & 2 != 0 { 0xf0 } else { 0 }
+                    | if nibbles & 1 != 0 { 0x0f } else { 0 };
+                (frame[i] ^ pattern) & mask == 0
+            })
+    }
+
     fn run_rx(&mut self, ram: &mut Ram, net: &mut Option<Box<dyn NetBackend>>) {
-        let ring = DEFAULT_RING;
         let Some(net) = net else { return };
-        if !self.ring_enabled(true, ring) || !self.link_active(CMD_RX_EN) {
+        let rdma_on = self.reg(RDMA_REGS + DMA_CTRL) & DMA_EN != 0;
+        if !rdma_on || !self.link_active(CMD_RX_EN) {
             return;
         }
-        let base = Self::ring_base(true, ring);
-        let size = self.reg(base + RING_BUF_SIZE) >> 16;
-        let buf_len = (self.reg(base + RING_BUF_SIZE) & 0xffff) as usize;
         let rbuf = self.reg(RBUF_CTRL);
         let cmd = self.reg(UMAC_CMD);
-        loop {
-            let prod = self.reg(base + RDMA_PROD_INDEX) & INDEX_MASK;
-            let cons = self.reg(base + RDMA_CONS_INDEX) & INDEX_MASK;
-            if prod.wrapping_sub(cons) & INDEX_MASK >= size {
-                break;
-            }
-            let ptr = self.reg(base + RING_PTR);
-            let Some(d) = Self::desc(RDMA_DESC, ptr) else {
-                break;
-            };
-            let Some(mut frame) = net.recv() else { break };
+        while let Some(mut frame) = self.rx_pending.take().or_else(|| net.recv()) {
             if frame.len() < 14 {
                 continue;
             }
@@ -488,6 +537,22 @@ impl Genet {
                 self.stats.rx_filtered += 1;
                 continue;
             }
+            let ring = self.hfb_ring(&frame).unwrap_or(DEFAULT_RING);
+            if !self.ring_enabled(true, ring) {
+                self.stats.rx_dropped += 1;
+                continue;
+            }
+            let base = Self::ring_base(true, ring);
+            let size = self.reg(base + RING_BUF_SIZE) >> 16;
+            let buf_len = (self.reg(base + RING_BUF_SIZE) & 0xffff) as usize;
+            let prod = self.reg(base + RDMA_PROD_INDEX) & INDEX_MASK;
+            let cons = self.reg(base + RDMA_CONS_INDEX) & INDEX_MASK;
+            let ptr = self.reg(base + RING_PTR);
+            let free = prod.wrapping_sub(cons) & INDEX_MASK < size;
+            let Some(d) = Self::desc(RDMA_DESC, ptr).filter(|_| free) else {
+                self.rx_pending = Some(frame);
+                break;
+            };
             if frame.len() < ETH_ZLEN {
                 frame.resize(ETH_ZLEN, 0);
             }
@@ -522,7 +587,11 @@ impl Genet {
             self.regs[(d / 4) as usize] = ls;
             self.regs[((base + RING_PTR) / 4) as usize] = self.next_ptr(base, ptr);
             self.set_index(base + RDMA_PROD_INDEX, prod + 1);
-            self.irq_stat[0] |= UMAC_IRQ_RXDMA_MBDONE;
+            if ring == DEFAULT_RING {
+                self.irq_stat[0] |= UMAC_IRQ_RXDMA_MBDONE;
+            } else {
+                self.irq_stat[1] |= 1 << (16 + ring);
+            }
             self.stats.rx += 1;
         }
     }
@@ -917,6 +986,66 @@ mod tests {
         assert_eq!(rd(&mut g, base + RDMA_PROD_INDEX), 3);
         assert_eq!(rd(&mut g, RDMA_DESC) >> 16, 64 + 2 + 300);
         assert_eq!(g.stats.rx, 3);
+    }
+
+    /// Linux since 3b5d4f5a820d (`bcmgenet_init_rx_queues`,
+    /// `bcmgenet_hfb_clear`): ring 0 over all 256 receive descriptors, ring 16
+    /// off, and an empty 4-byte HFB filter 0 sending the default flow to ring
+    /// 0.
+    fn linux_rx_ring_0(g: &mut Genet) {
+        wr(g, RDMA_RINGS + RING_BUF_SIZE, 256 << 16 | 2048);
+        wr(g, RDMA_RINGS + RING_START, 0);
+        wr(g, RDMA_RINGS + RING_PTR, 0);
+        wr(g, RDMA_RINGS + RING_END, 256 * 3 - 1);
+        // Filter 0's length is the low byte of the last length word.
+        wr(g, HFB_FLT_LEN + 4 * 11, 4);
+        wr(g, HFB_FLT_ENABLE + 4, 1);
+        wr(g, HFB_CTRL, HFB_EN);
+        wr(g, RDMA_REGS + DMA_CTRL, DMA_EN | 1 << 1);
+    }
+
+    #[test]
+    fn hfb_filter_0_routes_the_default_flow_to_ring_0() {
+        let mut g = Genet::new();
+        let mut ram = Ram::new(0, 1 << 20);
+        let (mut net, _) = attach(&mut g, vec![frame(MAC, 100)]);
+        bring_up(&mut g, 2);
+        linux_rx_ring_0(&mut g);
+        wr(&mut g, RDMA_DESC + 4, 0x4000);
+        g.service(&mut ram, &mut net);
+        assert_eq!(rd(&mut g, RDMA_RINGS + RDMA_PROD_INDEX), 1);
+        assert_eq!(rd(&mut g, RDMA_DESC) >> 16, 64 + 2 + 100);
+        assert_eq!(ram.read_slice(0x4000 + 66, 6).unwrap(), MAC);
+        // Ring 0's receive bit in INTRL2_1, not ring 16's in INTRL2_0.
+        assert_eq!(rd(&mut g, INTRL2_1), 1 << 16);
+        assert_eq!(rd(&mut g, INTRL2_0) & UMAC_IRQ_RXDMA_MBDONE, 0);
+        assert_eq!(g.stats.rx, 1);
+    }
+
+    #[test]
+    fn a_higher_hfb_filter_wins_over_the_catch_all() {
+        let mut g = Genet::new();
+        let mut ram = Ram::new(0, 1 << 20);
+        let (mut net, _) = attach(
+            &mut g,
+            vec![frame(MAC, 100), frame(crate::net::BROADCAST, 100)],
+        );
+        bring_up(&mut g, 2);
+        linux_rx_ring_0(&mut g);
+        // An ethtool rule at location 0 (filter 1): our destination MAC, to
+        // ring 1 — RX_CLS_FLOW_DISC with one receive queue, a ring that is off.
+        for (i, pair) in MAC.chunks(2).enumerate() {
+            let word = 0xf_0000 | u32::from(pair[0]) << 8 | u32::from(pair[1]);
+            wr(&mut g, HFB_RAM + 4 * (HFB_FILTER_WORDS + i) as u32, word);
+        }
+        wr(&mut g, HFB_FLT_LEN + 4 * 11, 6 << 8 | 4);
+        wr(&mut g, HFB_FLT_ENABLE + 4, 0b11);
+        wr(&mut g, RDMA_REGS + DMA_INDEX2RING, 1 << 4);
+        wr(&mut g, RDMA_DESC + 4, 0x4000);
+        g.service(&mut ram, &mut net);
+        assert_eq!(g.stats.rx_dropped, 1, "the rule's ring is off");
+        assert_eq!(g.stats.rx, 1);
+        assert_eq!(rd(&mut g, RDMA_DESC) & DESC_RX_BRDCAST, DESC_RX_BRDCAST);
     }
 
     #[test]
