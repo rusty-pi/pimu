@@ -45,7 +45,7 @@ pub struct Machine {
     /// PCIe root complex (`0x7D50_0000`) — a register file only. The VL805
     /// xHCI controller behind it is not modelled; see `docs/usb-xhci.md`.
     pub pcie: crate::periph::pcie::Pcie,
-    /// Hardware RNG (`0x7E10_4000`) — start4 blocks on its interrupt.
+    /// Hardware RNG (`0x7E10_4000`), an RNG200 — start4 and Linux both read it.
     pub rng: Rng,
     /// VCE vector/codec engine (`0x7F10_0000`) — the codec licence check
     /// launches a program on it and waits for interrupt source 68.
@@ -263,9 +263,9 @@ impl Machine {
         // timer, so they stay in step with it across the run loop's `sleep`
         // fast-forward (which jumps the counter without retiring cycles).
         self.advance_i2c();
-        // The RNG holds its line asserted while it has words ready and its
-        // interrupt is unmasked; start4's handler for source 125 masks it again
-        // and releases the gate the boot thread waits on. Only ever keep one
+        // The RNG holds its line asserted while an enabled `INT_STATUS` bit is
+        // set; start4's handler for source 125 disables the FIFO interrupt
+        // again and releases the gate its read op waits on. Only ever keep one
         // delivery outstanding.
         let src = crate::periph::rng::IRQ_SRC;
         if self.rng.irq_asserted() && !self.pending_irqs.contains(&src) {
