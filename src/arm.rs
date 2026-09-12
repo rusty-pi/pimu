@@ -21,6 +21,9 @@
 //!                                 bus address 0x7C00_0000 + x
 //!   0x0_FF80_0000                 ARM local block (periph/armlocal.rs)
 //!   0x0_FF84_0000                 GIC-400 (periph/gic.rs)
+//!   0x6_0000_0000 .. 0x8_0000_0000  PCIe outbound window (periph/pcie.rs):
+//!                                 the VL805's BAR0 wherever the root
+//!                                 complex and the endpoint put it
 //! ```
 //!
 //! Anything else is a bus abort. RAM accesses go straight to the backing
@@ -60,7 +63,7 @@
 //! Not yet: stage 2 translation (a core that sets `HCR_EL2.VM` stops with
 //! [`ArmStop::Unsupported`]).
 
-use crate::aarch64::{sysreg, Abort, Cpu, Memory, Step};
+use crate::aarch64::{sysreg, Abort, Cpu, Exception, Memory, Step};
 use crate::armstub::{self, Handoff};
 use crate::bus::{Bus, MmioDevice, Width};
 use crate::machine::Machine;
@@ -73,6 +76,10 @@ pub const CORES: usize = 4;
 /// The peripheral window, and how far below it the VPU sees the same thing.
 const PERIPH: std::ops::Range<u64> = 0xFC00_0000..0xFF80_0000;
 const PERIPH_TO_BUS: u64 = 0x8000_0000;
+
+/// The PCIe outbound window. What decodes in it — the VL805's BAR0, through
+/// `CPU_2_PCIE_MEM_WIN0` — is up to the root complex (`periph/pcie.rs`).
+const PCIE: std::ops::Range<u64> = 0x6_0000_0000..0x8_0000_0000;
 
 /// The armstub lives at physical 0 and is well under a page; a core whose PC
 /// gets past this has left it.
@@ -328,7 +335,19 @@ impl ArmSide {
                 core.insns += 1;
                 core.waiting = true;
             }
-            Step::Took(_) => core.exceptions += 1,
+            Step::Took(e) => {
+                core.exceptions += 1;
+                // `RVF_DBG_ARM_EXC`: every synchronous exception a core takes
+                // except `svc` (Linux's syscalls), with what the guest's own
+                // handler will see in `ESR_ELx`/`FAR_ELx`.
+                if dbg_arm_exc() && !matches!(e, Exception::Svc(_)) {
+                    let t = el as usize;
+                    eprintln!(
+                        "[arm-exc] core {id} pc {pc:#x} -> EL{el} {e:?} esr {:#x} far {:#x}",
+                        core.cpu.sys.esr[t], core.cpu.sys.far[t]
+                    );
+                }
+            }
             Step::Interrupt { .. } => core.interrupts += 1,
             Step::Unimplemented(insn) => {
                 return Some(ArmStop::Unimplemented {
@@ -374,6 +393,8 @@ enum Target {
     Periph(u32),
     Local(u32),
     Gic(u32),
+    /// A CPU-physical address in the PCIe outbound window.
+    Pcie(u64),
 }
 
 /// The ARM's view of the machine for one step.
@@ -409,6 +430,8 @@ impl ArmBus<'_> {
             Ok(Target::Local(off))
         } else if let Some(off) = within(gic::BASE, gic::SIZE) {
             Ok(Target::Gic(off))
+        } else if PCIE.contains(&addr) && end <= PCIE.end {
+            Ok(Target::Pcie(addr))
         } else {
             Err(abort)
         }
@@ -441,6 +464,14 @@ impl ArmBus<'_> {
             Target::Gic(o) => {
                 let acc = self.accessor();
                 self.m.gic.read_as(acc, o, w)
+            }
+            Target::Pcie(a) => {
+                return self
+                    .m
+                    .pcie
+                    .mmio_read(a, w)
+                    .map(u64::from)
+                    .ok_or(Abort { addr, write: false })
             }
         };
         r.map(u64::from).map_err(|_| Abort { addr, write: false })
@@ -477,9 +508,21 @@ impl ArmBus<'_> {
                 let acc = self.accessor();
                 self.m.gic.write_as(acc, o, w, v)
             }
+            Target::Pcie(a) => {
+                let m = &mut *self.m;
+                return match m.pcie.mmio_write(a, w, v, &mut m.ram) {
+                    true => Ok(()),
+                    false => Err(Abort { addr, write: true }),
+                };
+            }
         };
         r.map_err(|_| Abort { addr, write: true })
     }
+}
+
+fn dbg_arm_exc() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("RVF_DBG_ARM_EXC").is_some())
 }
 
 fn timer_reg(key: u32) -> Option<Reg> {
@@ -695,5 +738,41 @@ mod tests {
         assert_eq!(arm.cores[0].cpu.pc, 0x200);
         assert_eq!(arm.cores[0].cpu.sys.far[3], 0x1_0000_0000);
         assert_eq!(arm.cores[0].cpu.sys.esr[3] >> 26, 0x25);
+    }
+
+    /// UEFI's xHCI driver reads the VL805's registers straight through the
+    /// PCIe outbound window; it used to take an external abort at
+    /// `0x6_0000_0000`. Outside BAR0 the window still aborts.
+    #[test]
+    fn the_arm_reaches_the_vl805_through_the_pcie_window() {
+        use crate::periph::pcie;
+        // ldr w0, [x1]
+        let mut m = machine_with(&[0xB940_0020, 0xB940_0020]);
+        for (off, v) in [
+            (0x9210, 3),           // RGR1_SW_INIT_1: bridge + PERST# in reset...
+            (0x9210, 0),           // ...and out: the link trains
+            (0x400C, 0x8000_0000), // MEM_WIN0_LO: bus side
+            (0x4010, 0),
+            (0x4070, 0x3FF0_0000), // BASE_LIMIT: 1 GiB
+            (0x4080, 6),           // BASE_HI / LIMIT_HI: at 0x6_0000_0000
+            (0x4084, 6),
+            (0x9000, 1 << 20),     // EXT_CFG_INDEX: bus 1, the VL805
+            (0x8010, 0x8000_0000), // BAR0
+            (0x8014, 0),
+            (0x8004, 0x0146), // memory space + bus master
+        ] {
+            m.store(pcie::BASE + off, Width::Word, v).unwrap();
+        }
+        let caps = m.pcie.mmio_read(0x6_0000_0000, Width::Word).unwrap();
+        assert_ne!(caps, 0);
+        let mut arm = ArmSide::with_cores(1);
+        arm.cores[0].cpu.x[1] = 0x6_0000_0000;
+        arm.run(&mut m, 1);
+        assert_eq!(arm.cores[0].exceptions, 0);
+        assert_eq!(arm.cores[0].cpu.x[0], u64::from(caps));
+        arm.cores[0].cpu.x[1] = 0x6_3000_0000;
+        arm.run(&mut m, 1);
+        assert_eq!(arm.cores[0].exceptions, 1);
+        assert_eq!(arm.cores[0].cpu.sys.far[3], 0x6_3000_0000);
     }
 }
