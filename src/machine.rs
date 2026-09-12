@@ -198,6 +198,7 @@ impl Machine {
             mmio_events: Vec::new(),
             watch: std::env::var("RVF_WATCH")
                 .ok()
+                .filter(|_| crate::diag::ON)
                 .map(|v| {
                     v.split(',')
                         .filter_map(|t| {
@@ -207,7 +208,7 @@ impl Machine {
                         .collect()
                 })
                 .unwrap_or_default(),
-            dbg_dma: std::env::var_os("RVF_DBG_DMA").is_some(),
+            dbg_dma: crate::diag::ON && std::env::var_os("RVF_DBG_DMA").is_some(),
             pending_irqs: std::collections::VecDeque::new(),
             watch_pc: 0,
             phase_tags: Vec::new(),
@@ -350,7 +351,8 @@ impl Machine {
     /// Should an access to `addr` be recorded in `mmio_events`? True when the
     /// trace is on and `addr` passes `mmio_trace_range`, if one is set.
     fn mmio_traced(&self, addr: u32) -> bool {
-        self.mmio_trace
+        crate::diag::ON
+            && self.mmio_trace
             && self
                 .mmio_trace_range
                 .is_none_or(|(lo, hi)| (lo..hi).contains(&addr))
@@ -491,7 +493,7 @@ impl Machine {
     /// (DMA4, `0x7E00_7B00`) is modelled; start4's `dma_memcpy` uses one of the
     /// others, so those accesses currently fall through to the catch-all stub.
     fn dma_win_log(&self, rw: &str, addr: u32, value: u32) {
-        if self.dbg_dma && (0x7E00_7000..0x7E00_8000).contains(&addr) {
+        if crate::diag::ON && self.dbg_dma && (0x7E00_7000..0x7E00_8000).contains(&addr) {
             let ch = (addr - 0x7E00_7000) / 0x100;
             eprintln!(
                 "[dmawin] {rw} ch{ch} +{:#04x} ({addr:#x}) = {value:#x} pc={:#x}",
@@ -552,7 +554,7 @@ impl Machine {
             } else {
                 DmaLegacy::decode_cb([w[0], w[1], w[2], w[3], w[4], w[5]])
             };
-            if self.dbg_dma {
+            if crate::diag::ON && self.dbg_dma {
                 eprintln!(
                     "[dma-legacy] ch{ch} cb={cb:#x} ti={:#x} src={:#x} dest={:#x} len={:#x} stride={:#x} next={:#x}",
                     d.ti, d.src, d.dest, d.len, d.stride, d.next
@@ -649,7 +651,7 @@ impl Machine {
             let src40 = (((srci & ADDR_HI) as u64) << 32) | src as u64;
             let dest40 = (((desti & ADDR_HI) as u64) << 32) | dest as u64;
 
-            if self.dbg_dma {
+            if crate::diag::ON && self.dbg_dma {
                 eprintln!(
                     "[dma] cb={cb:#x} ti={:#x} src={src:#x} srci={srci:#x} dest={dest:#x} len={len:#x} next={next:#x}",
                     rd(&self.ram, cb)
@@ -840,7 +842,7 @@ impl Bus for Machine {
 
     fn store(&mut self, addr: u32, width: Width, value: u32) -> BusResult<()> {
         self.ram_writes = self.ram_writes.wrapping_add(1);
-        if !self.watch.is_empty() {
+        if crate::diag::ON && !self.watch.is_empty() {
             let a = Machine::fold_ram_addr(addr) & !3;
             if self
                 .watch

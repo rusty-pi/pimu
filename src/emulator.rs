@@ -435,7 +435,7 @@ impl Emulator {
                 self.start4_entry = Some(pc_before);
             }
 
-            if diag.heartbeat != 0 && self.cpu.retired >= next_beat {
+            if crate::diag::ON && diag.heartbeat != 0 && self.cpu.retired >= next_beat {
                 next_beat = self.cpu.retired + diag.heartbeat;
                 eprintln!(
                     "[beat] retired={} model_us={} pc={pc_before:#010x} in_exc={} irq_en={} tick_due={}",
@@ -446,11 +446,11 @@ impl Emulator {
                     self.machine.systimer.tick_pending(),
                 );
             }
-            if let Some(cur_ptr) = diag.prof_thread {
+            if let Some(cur_ptr) = diag.prof_thread.filter(|_| crate::diag::ON) {
                 let cur = self.machine.load(cur_ptr, Width::Word).unwrap_or(0);
                 *prof_thist.entry((cur, pc_before & !0xFF)).or_insert(0) += 1;
             }
-            if diag.prof {
+            if crate::diag::ON && diag.prof {
                 *prof_hist.entry(pc_before & !0xFF).or_insert(0) += 1;
             }
 
@@ -465,7 +465,7 @@ impl Emulator {
                 self.cpu.in_exception = 0;
             }
 
-            if let Some(from) = diag.mmio_from {
+            if let Some(from) = diag.mmio_from.filter(|_| crate::diag::ON) {
                 if !self.machine.mmio_trace && pc_before == from {
                     self.machine.mmio_trace = true;
                 }
@@ -496,7 +496,7 @@ impl Emulator {
             // core 0 reaches this address. The console-substring trigger cannot
             // reach a code path that runs after the firmware has stopped
             // printing — which is exactly where a wedged boot has to be read.
-            if let Some(pc) = diag.trace_on_pc {
+            if let Some(pc) = diag.trace_on_pc.filter(|_| crate::diag::ON) {
                 if !self.cpu.trace && pc_before == pc {
                     self.cpu.trace = true;
                     self.cpu.trace_armed = true;
@@ -507,7 +507,8 @@ impl Emulator {
                     }
                 }
             }
-            if !diag.traps.is_empty()
+            if crate::diag::ON
+                && !diag.traps.is_empty()
                 && self.cpu.retired >= diag.trap_from
                 && diag.traps.contains(&pc_before)
             {
@@ -530,7 +531,9 @@ impl Emulator {
                     );
                 }
             }
-            self.machine.watch_pc = pc_before;
+            if crate::diag::ON {
+                self.machine.watch_pc = pc_before;
+            }
             let exc_depth_before = self.cpu.in_exception;
             let step = self.cpu.step(&mut self.machine);
             self.machine.tick(1);
@@ -565,7 +568,7 @@ impl Emulator {
             // (source 78 on core 0, 79 on core 1). Nothing modelled these, so
             // every software-posted interrupt was silently dropped.
             while let Some((core, src)) = self.machine.corectl.take_sw_raised() {
-                if diag.dbg_swirq {
+                if crate::diag::ON && diag.dbg_swirq {
                     eprintln!(
                         "[sw-irq] core {core} src {src} pc={:#x} retired={}",
                         self.cpu.pc(),
@@ -588,7 +591,7 @@ impl Emulator {
             // vectoring path as the tick, but is not gated on a compare match.
             if self.cpu.in_exception == 0 && self.cpu.irq_enabled() && self.cpu.exc_vbase != 0 {
                 if let Some(src) = self.machine.take_pending_irq() {
-                    if diag.dbg_tick {
+                    if crate::diag::ON && diag.dbg_tick {
                         eprintln!(
                             "[irq] src={src} pc={:#x} retired={}",
                             self.cpu.pc(),
@@ -599,7 +602,8 @@ impl Emulator {
                 }
             }
             let tick_due = self.machine.systimer.tick_pending();
-            if diag.dbg_tick
+            if crate::diag::ON
+                && diag.dbg_tick
                 && tick_due
                 && self.cpu.exc_vbase != 0
                 && (self.cpu.in_exception != 0 || !self.cpu.irq_enabled())
@@ -623,7 +627,7 @@ impl Emulator {
                 if let Some(slot) = self.machine.timer_tick_slot() {
                     // Deliver now — consume the latched flag.
                     self.machine.systimer.take_tick_pending();
-                    if diag.dbg_tick {
+                    if crate::diag::ON && diag.dbg_tick {
                         tick_deliveries += 1;
                         if tick_deliveries <= 30 || tick_deliveries.is_multiple_of(500) {
                             let vb = self.cpu.exc_vbase;
@@ -647,7 +651,7 @@ impl Emulator {
                 }
             }
 
-            if self.machine.mmio_trace && !self.machine.mmio_events.is_empty() {
+            if crate::diag::ON && self.machine.mmio_trace && !self.machine.mmio_events.is_empty() {
                 for (addr, w, val, write) in self.machine.mmio_events.drain(..) {
                     eprintln!(
                         "mmio {:#010x}  {}{}  {:#010x} <- {:#0width$x}",
@@ -777,7 +781,7 @@ impl Emulator {
                 }
                 prompt_seen = console.len();
             }
-            if let Some(needle) = &diag.trace_on_console {
+            if let Some(needle) = diag.trace_on_console.as_ref().filter(|_| crate::diag::ON) {
                 if !self.cpu.trace && console.len() > console_seen {
                     let from = console_seen.saturating_sub(needle.len());
                     if String::from_utf8_lossy(&console[from..]).contains(needle.as_str()) {
@@ -901,7 +905,7 @@ impl Emulator {
                     if ff {
                         self.machine.systimer.jump(200_000);
                     }
-                    if diag.dbg_ff {
+                    if crate::diag::ON && diag.dbg_ff {
                         eprintln!(
                             "[ff] win close: clo_delta={clo_delta} w=[{w_lo:#x}..{w_hi:#x}] out={w_output} exc={} ff={ff} @{}",
                             self.cpu.in_exception, self.cpu.retired
@@ -929,7 +933,7 @@ impl Emulator {
         // Only the first 12 hits of each `RVF_TRAP` address are printed, so
         // report the totals as well - the print cap otherwise makes every
         // busy address look like it ran exactly 12 times.
-        if !trap_hits.is_empty() {
+        if crate::diag::ON && !trap_hits.is_empty() {
             let mut totals: Vec<(u32, u64)> = trap_hits.into_iter().collect();
             totals.sort_unstable();
             for (pc, n) in totals {
@@ -948,7 +952,7 @@ impl Emulator {
         // at exit. The generic dispatcher (`0x3EC3E9BC`) indexes it with the
         // source number to find the ISR, so a zero entry means "this source is
         // never handled" even if `enable_irq_source` turned it on.
-        if diag.dbg_irqtbl {
+        if crate::diag::ON && diag.dbg_irqtbl {
             let tbl = self.cpu.regs.get(24).wrapping_add(58004);
             let vb = self.cpu.exc_vbase;
             eprintln!(
@@ -981,7 +985,7 @@ impl Emulator {
             }
         }
 
-        if let Ok(list) = std::env::var("RVF_DBG_TCB") {
+        if let (true, Ok(list)) = (crate::diag::ON, std::env::var("RVF_DBG_TCB")) {
             for t in list.split(',') {
                 let Ok(tcb) = u32::from_str_radix(t.trim().trim_start_matches("0x"), 16) else {
                     continue;
@@ -1025,7 +1029,7 @@ impl Emulator {
             }
         }
 
-        if diag.prof {
+        if crate::diag::ON && diag.prof {
             let mut v: Vec<_> = prof_hist.iter().map(|(&k, &n)| (k, n)).collect();
             v.sort_by_key(|a| std::cmp::Reverse(a.1));
             let total: u64 = v.iter().map(|(_, n)| n).sum();
@@ -1037,7 +1041,7 @@ impl Emulator {
                 );
             }
         }
-        if diag.prof_thread.is_some() {
+        if crate::diag::ON && diag.prof_thread.is_some() {
             let total: u64 = prof_thist.values().sum();
             let mut by_thread: std::collections::HashMap<u32, u64> =
                 std::collections::HashMap::new();

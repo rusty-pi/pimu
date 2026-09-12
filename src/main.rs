@@ -220,6 +220,13 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
                 max_wall_secs = it.next().context("--max-wall needs seconds")?.parse()?
             }
             "--eeprom" => eeprom = true,
+            "--trace" | "--trace-full" | "--trace-from" | "--trace-mmio"
+                if !rpi_virt_fw::diag::ON =>
+            {
+                anyhow::bail!(
+                    "{a} needs a build with the `diag` feature: cargo build --release --features diag"
+                )
+            }
             "--trace" => trace = true,
             "--trace-full" => {
                 trace = true;

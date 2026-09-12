@@ -12,6 +12,13 @@ anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 
+[features]
+# The run-loop diagnostics: the per-step `RVF_*` switches and `--trace*`
+# (docs/diagnostics.md). Off by default, so every normal build — CI's included —
+# has those checks compiled out instead of paying a branch per instruction.
+# `cargo build --release --features diag` for an investigation.
+diag = []
+
 [build-dependencies]
 # build.rs generates src/spec.rs from specs/*.toml.
 serde = { version = "1", features = ["derive"] }
