@@ -18,11 +18,11 @@
 //! excuse for pinning one of these, and doing so is what version-locked the
 //! core-1 spawn gate until `16852e3`.
 //!
-//! **`*_PC` — code, and not derivable.** The run loop matches these against the
-//! program counter to correct for something the model does differently from
-//! hardware. Nothing in the machine state gives their address away, so they
-//! stay absolute. Each one below says what it is and what breaks without it, so
-//! that re-finding it on a new build is a bounded job rather than a mystery.
+//! **`*_PC` — code, and not derivable.** Addresses the run loop matched against
+//! the program counter, to correct for something the model did differently from
+//! the hardware. None are left: the last went with #25, once the model took and
+//! left exceptions the way the hardware does. Don't add one back; model the
+//! hardware behaviour the firmware relies on instead.
 //!
 //! A third group — the addresses the `RVF_DBG_*` and `RVF_TRAP` diagnostics
 //! watch — is deliberately *not* here. Those are reconnaissance aids: on a
@@ -36,19 +36,6 @@
 /// so spawning it before this is populated branches through a null vtable. The
 /// spawn is gated on it being non-zero.
 pub const SMP_DISPATCH_GP_OFFSET: u32 = 3672;
-
-/// `_tx_thread_schedule`'s *solicited* context restore (`0x3EC40034` → `bx r26`
-/// here).
-///
-/// This resumes a thread that yielded through a ThreadX call rather than an
-/// interrupt, so it does **not** `rti`. Without rebalancing here, the model's
-/// `in_exception` depth — bumped on the faked timer IRQ and dropped by
-/// `Op::Rti` — stays stuck above zero once the tick ISR preempts into such a
-/// thread, and every later interrupt is treated as nested.
-///
-/// On a new build: find the second exit path of `_tx_thread_schedule`, the one
-/// reached without an `rti`.
-pub const SOLICITED_RESTORE_PC: u32 = 0x3EC4_003E;
 
 #[cfg(test)]
 mod tests {

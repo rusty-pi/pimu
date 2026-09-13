@@ -251,16 +251,6 @@ impl Emulator {
             != 0
     }
 
-    /// Where a start4 address from the pinned build (its link address) is in
-    /// this run: shifted by however far the bootloader moved start4 from
-    /// [`START4_ENTRY`] (`0` on an SD boot, `-1 MiB` on a USB mass-storage one).
-    fn start4_pc(&self, link: u32) -> u32 {
-        let shift = self
-            .start4_entry
-            .map_or(0, |e| e.wrapping_sub(START4_ENTRY));
-        link.wrapping_add(shift)
-    }
-
     fn spawn_core1(&mut self, entry: u32) {
         let mut c1 = Vpu::new(entry);
         c1.core_id = 1;
@@ -582,17 +572,6 @@ impl Emulator {
             *st.prof_hist.entry(pc_before & !0xFF).or_insert(0) += 1;
         }
 
-        // `_tx_thread_schedule`'s *solicited* context restore (`0x3EC40034`
-        // → `bx r26` at `0x3EC4003E`) resumes a thread that yielded via a
-        // ThreadX call — it does NOT `rti`, so the model's `in_exception`
-        // depth (bumped on the faked timer IRQ, dropped by `Op::Rti`) would
-        // stay stuck above 0 after the tick ISR preempts into such a thread.
-        // Rebalance it here: reaching this point means we are back in thread
-        // context.
-        if pc_before == self.start4_pc(crate::firmware::addrs::SOLICITED_RESTORE_PC) {
-            self.cpu.in_exception = 0;
-        }
-
         if let Some(from) = st.diag.mmio_from.filter(|_| crate::diag::ON) {
             if !self.machine.mmio_trace && pc_before == from {
                 self.machine.mmio_trace = true;
@@ -686,7 +665,7 @@ impl Emulator {
 
             // A device-raised interrupt (DMA completion) takes the same
             // vectoring path as the tick, but is not gated on a compare match.
-            if self.cpu.in_exception == 0 && self.cpu.irq_enabled() && self.cpu.exc_vbase != 0 {
+            if self.cpu.irq_enabled() && self.cpu.exc_vbase != 0 {
                 if let Some(src) = self.machine.take_pending_irq() {
                     if crate::diag::ON && st.diag.dbg_tick {
                         eprintln!(
@@ -703,7 +682,7 @@ impl Emulator {
                 && st.diag.dbg_tick
                 && tick_due
                 && self.cpu.exc_vbase != 0
-                && (self.cpu.in_exception != 0 || !self.cpu.irq_enabled())
+                && !self.cpu.irq_enabled()
             {
                 st.tick_skips += 1;
                 if st.tick_skips <= 20 || st.tick_skips.is_multiple_of(100_000) {
@@ -717,11 +696,7 @@ impl Emulator {
                     );
                 }
             }
-            if tick_due
-                && self.cpu.in_exception == 0
-                && self.cpu.irq_enabled()
-                && self.cpu.exc_vbase != 0
-            {
+            if tick_due && self.cpu.irq_enabled() && self.cpu.exc_vbase != 0 {
                 if let Some(slot) = self.machine.timer_tick_slot() {
                     // Deliver now — consume the latched flag.
                     self.machine.systimer.take_tick_pending();
@@ -1078,9 +1053,8 @@ impl Emulator {
     ///    limit, the wall-clock check, host input, the detectors' window and
     ///    the console-silence watchdog. The budget stops short of the step
     ///    where any of them could fire.
-    /// 3. By the pc, for the checks tied to an address: `stop_pc`, the
-    ///    solicited restore and the start4 entry. Such a pc ends the fast
-    ///    run before its instruction.
+    /// 3. By the pc, for the checks tied to an address: `stop_pc` and the
+    ///    start4 entry. Such a pc ends the fast run before its instruction.
     ///
     /// A queued interrupt that only the interrupt-enable bit holds back is
     /// the one thing no flag covers, since any instruction can write `r30`,
@@ -1095,8 +1069,7 @@ impl Emulator {
         if self.machine.wake || self.cpu.is_stopped() {
             return None;
         }
-        if self.cpu.in_exception == 0
-            && self.cpu.exc_vbase != 0
+        if self.cpu.exc_vbase != 0
             && (self.machine.irq_queued() || self.machine.systimer.tick_pending())
         {
             return None;
@@ -1111,7 +1084,6 @@ impl Emulator {
         // The pcs a slow step has to handle before their instruction. A
         // `u32::MAX` that matches by accident only costs a slow step.
         let stop_pc = limits.stop_pc.unwrap_or(u32::MAX);
-        let solicited = self.start4_pc(crate::firmware::addrs::SOLICITED_RESTORE_PC);
         let entry = if self.start4_entry.is_none() {
             0xC000_0000
         } else {
@@ -1135,7 +1107,7 @@ impl Emulator {
         let end = 'run: {
             while n < budget {
                 let pc = self.cpu.pc();
-                if (pc == stop_pc) | (pc == solicited) | (pc >= entry) {
+                if (pc == stop_pc) | (pc >= entry) {
                     break 'run None;
                 }
                 let step = self.cpu.step(&mut self.machine);
