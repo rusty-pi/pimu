@@ -4,7 +4,7 @@ use crate::bus::{Bus, BusError, BusResult, MmioDevice, Width};
 use crate::mem::Ram;
 use crate::periph::{
     ArmCtrl, ArmLocal, Asb, Aux, Avs, BootBox, Bsc, ClkMon, ClockManager, ConfigOtp, CoreCtl, Dma4,
-    Dwc2, Emmc2, Gic, Hd, HdmiDdc, Hvs, Mbox, McSync, Pl011, Pm, Rng, Sdc, Sdramc, Spi0,
+    Dwc2, Emmc2, Gic, Hd, Hdmi, HdmiDdc, Hvs, Mbox, McSync, Pl011, Pm, Rng, Sdc, Sdramc, Spi0,
     StubRegion, SysTimer, Vce,
 };
 use crate::soc::bcm2711 as map;
@@ -73,6 +73,10 @@ pub struct Machine {
     /// The two HDMI connectors' DDC I²C masters, with no monitor on either.
     pub hdmi_ddc0: HdmiDdc,
     pub hdmi_ddc1: HdmiDdc,
+    /// The two HDMI controllers' core registers — the packet RAM start4
+    /// sends AV mute through when it stops its display (#61).
+    pub hdmi0: Hdmi,
+    pub hdmi1: Hdmi,
     /// Always-on config / OTP engine (`0x7E20_F000`) — board identity reads.
     pub config_otp: ConfigOtp,
     /// LPDDR4 controller + PHY (`0x7DC0_0000`, below the peripheral window) —
@@ -212,6 +216,8 @@ impl Machine {
             bsc_pmic: Bsc::new("bsc-pmic"),
             hdmi_ddc0: HdmiDdc::new("hdmi-ddc0"),
             hdmi_ddc1: HdmiDdc::new("hdmi-ddc1"),
+            hdmi0: Hdmi::new("hdmi0"),
+            hdmi1: Hdmi::new("hdmi1"),
             config_otp: ConfigOtp::new(),
             sdramc: Sdramc::new(),
             sdc: Sdc::new(),
@@ -378,6 +384,19 @@ impl Machine {
         if self.vce.irq_asserted() && !self.pending_irqs.contains(&src) {
             self.push_pending_irq(src);
         }
+        self.advance_hvs();
+    }
+
+    /// Let the HVS finish the frames the counter has reached, and hold source
+    /// 97 asserted while an end-of-frame flag it interrupts for is set.
+    /// start4's handler (`0x3ECEED5C`) clears the flag, and it is also what
+    /// completes a display pause — `NOTIFY_DISPLAY_DONE` waits on one (#61).
+    fn advance_hvs(&mut self) {
+        self.hvs.advance_to(self.systimer.now_us());
+        let src = crate::periph::hvs::IRQ_SRC;
+        if self.hvs.irq_asserted() && !self.pending_irqs.contains(&src) {
+            self.push_pending_irq(src);
+        }
     }
 
     /// Drain and return whatever the console UART has transmitted.
@@ -533,6 +552,12 @@ impl Machine {
         }
         if let Some(off) = hit(map::HDMI_DDC1_BASE, map::HDMI_DDC_SIZE) {
             return Some((&mut self.hdmi_ddc1, off));
+        }
+        if let Some(off) = hit(map::HDMI0_BASE, map::HDMI_SIZE) {
+            return Some((&mut self.hdmi0, off));
+        }
+        if let Some(off) = hit(map::HDMI1_BASE, map::HDMI_SIZE) {
+            return Some((&mut self.hdmi1, off));
         }
         if let Some(off) = hit(map::OTP_BASE, map::OTP_SIZE) {
             return Some((&mut self.config_otp, off));
@@ -809,6 +834,16 @@ impl Machine {
     pub fn wake_vpu_at(&mut self, us: u64) {
         self.systimer.advance_to(us);
         self.advance_i2c();
+        self.advance_hvs();
+    }
+
+    /// Where a VPU `sleep` ends: at the next compare, or at the next end of
+    /// frame the HVS interrupts it for, whichever comes first.
+    fn next_wake(&self) -> Option<u64> {
+        match (self.systimer.next_deadline(), self.hvs.deadline()) {
+            (Some(t), Some(frame)) => Some(t.min(frame)),
+            (t, frame) => t.or(frame),
+        }
     }
 
     /// The value a read of device register `addr` would return, for the
@@ -896,12 +931,20 @@ impl Bus for Machine {
         // `Self::wake_vpu_at`): an ARM write that interrupts the VPU has to
         // land before the counter moves past it (#53).
         if self.defer_sleep {
-            self.sleep_to = self.systimer.next_deadline();
+            self.sleep_to = self.next_wake();
             return self.sleep_to.is_some();
         }
-        let woke = self.systimer.wake_to_next_match().is_some();
+        // The HVS can end a frame it interrupts for before the next compare.
+        let woke = match (self.systimer.next_deadline(), self.hvs.deadline()) {
+            (next, Some(frame)) if next.is_none_or(|t| frame < t) => {
+                self.systimer.advance_to(frame);
+                true
+            }
+            _ => self.systimer.wake_to_next_match().is_some(),
+        };
         // The counter just jumped; anything timed against it has to catch up.
         self.advance_i2c();
+        self.advance_hvs();
         woke
     }
 
