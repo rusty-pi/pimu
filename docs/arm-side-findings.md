@@ -218,6 +218,13 @@ the armstub, so the ARM runs UEFI before any kernel. What it needed:
    VPU-side peripheral, and the counter moves only that far (#53,
    `ArmSide::run_until_store`).
 
+   Still open: a request posted while the VPU is finishing the previous reply
+   reaches its interrupt queue only at the next microsecond tick (`tick_us`),
+   and a `sleep` in between still sleeps to the next compare, so blocks still
+   come at about 214 a second. Queueing the request the step it is posted
+   gives UEFI 35950 blocks a boot instead of 1493, but every variant tried
+   stalls the Linux scenario at the kernel's PCIe probe (#53).
+
 With those, UEFI prints its boot manager prompt (`ESC (setup), F1 (shell),
 ENTER (boot)`) 0.7 s of guest time after its banner, and systemd-boot no
 longer times out on the SD card.
