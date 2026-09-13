@@ -640,10 +640,9 @@ impl Emulator {
         if crate::diag::ON {
             self.machine.watch_pc = pc_before;
         }
-        let exc_depth_before = self.cpu.in_exception;
         let step = self.cpu.step(&mut self.machine);
         self.machine.tick(1);
-        self.post_step(st, limits, pc_before, exc_depth_before, step, Resume::Core0)
+        self.post_step(st, limits, pc_before, step, Resume::Core0)
     }
 
     /// Everything a step does after core 0's instruction and the tick that
@@ -655,34 +654,10 @@ impl Emulator {
         st: &mut RunState,
         limits: &RunLimits,
         pc_before: u32,
-        exc_depth_before: u32,
         step: crate::vpu::Step,
         resume: Resume,
     ) -> Option<RunEnd> {
         if resume == Resume::Core0 {
-            // start4's interrupt entry (`0x3ED18004`) bumps a nesting counter
-            // (`[gp+4420]`) and indexes a per-nesting IRQ record by it; the
-            // matching decrement lives in `_tx_thread_context_restore`, which
-            // the model's `rti` shortcut skips. Left uncorrected the counter
-            // grows without bound and the record index walks off into garbage
-            // after a few interrupts. Undo one increment each time an `rti`
-            // unwinds a faked interrupt.
-            if self.cpu.in_exception < exc_depth_before {
-                // Resolved against the live `gp`, not pinned: see
-                // `firmware::addrs` for why an absolute here would version-lock
-                // the model (#25).
-                let nest = self
-                    .cpu
-                    .regs
-                    .get(crate::vpu::reg::GP)
-                    .wrapping_add(crate::firmware::addrs::IRQ_NEST_GP_OFFSET);
-                if let Ok(n) = self.machine.load(nest, Width::Word) {
-                    if n > 0 && n != 0xFFFF_FFFF {
-                        let _ = self.machine.store(nest, Width::Word, n - 1);
-                    }
-                }
-            }
-
             // The firmware raises an interrupt on a core in software by
             // setting its bit in that core's pending word (`0x7E002040` /
             // `+0x844`, `0x3ED01896`). start4 uses it for the clock service's
@@ -756,18 +731,10 @@ impl Emulator {
                             let vb = self.cpu.exc_vbase;
                             let h = self.machine.load(vb.wrapping_add(slot * 4), Width::Word);
                             eprintln!(
-                                "[tick] #{} slot={slot} vbase={vb:#x} handler={h:x?} resume={:#x} retired={} nest={:#x}",
+                                "[tick] #{} slot={slot} vbase={vb:#x} handler={h:x?} resume={:#x} retired={}",
                                 st.tick_deliveries,
                                 self.cpu.pc(),
                                 self.cpu.retired,
-                                {
-                                    let nest = self
-                                        .cpu
-                                        .regs
-                                        .get(crate::vpu::reg::GP)
-                                        .wrapping_add(crate::firmware::addrs::IRQ_NEST_GP_OFFSET);
-                                    self.machine.load(nest, Width::Word).unwrap_or(0xdead)
-                                },
                             );
                         }
                     }
@@ -1150,8 +1117,6 @@ impl Emulator {
         } else {
             u32::MAX
         };
-        // Unchanged by a step without an event.
-        let exc_depth = self.cpu.in_exception;
         // Only a slow step feeds the receive line.
         let uart_busy = self.machine.uart0.rx_backlog() != 0;
         let host = self.input.host.is_some();
@@ -1177,12 +1142,12 @@ impl Emulator {
                 n += 1;
                 self.machine.tick(1);
                 if self.machine.wake | self.cpu.event {
-                    break 'run self.post_step(st, limits, pc, exc_depth, step, Resume::Core0);
+                    break 'run self.post_step(st, limits, pc, step, Resume::Core0);
                 }
                 if core1_runs {
                     self.step_core1(st);
                     if self.machine.wake {
-                        break 'run self.post_step(st, limits, pc, exc_depth, step, Resume::Core1);
+                        break 'run self.post_step(st, limits, pc, step, Resume::Core1);
                     }
                     core1_runs = self
                         .cpu1
@@ -1200,12 +1165,12 @@ impl Emulator {
                         break 'run Some(end);
                     }
                     if self.machine.wake {
-                        break 'run self.post_step(st, limits, pc, exc_depth, step, Resume::Arm);
+                        break 'run self.post_step(st, limits, pc, step, Resume::Arm);
                     }
                 }
                 if spin {
                     if self.machine.systimer.clo_reads != st.clo_reads_at_cf {
-                        break 'run self.post_step(st, limits, pc, exc_depth, step, Resume::Arm);
+                        break 'run self.post_step(st, limits, pc, step, Resume::Arm);
                     }
                     if let Some(cf) = self.cpu.cf_last {
                         let p = progress_count(&self.machine);

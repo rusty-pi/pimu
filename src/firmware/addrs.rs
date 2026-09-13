@@ -37,16 +37,6 @@
 /// spawn is gated on it being non-zero.
 pub const SMP_DISPATCH_GP_OFFSET: u32 = 3672;
 
-/// `[gp+4420]`: start4's interrupt-nesting counter.
-///
-/// The interrupt entry at `0x3ED18004` increments it and indexes a per-nesting
-/// IRQ record by it. The matching decrement lives in
-/// `_tx_thread_context_restore`, which the model's `rti` shortcut skips, so the
-/// run loop undoes one increment whenever an `rti` unwinds a faked interrupt.
-/// Left uncorrected the counter grows without bound and the record index walks
-/// off into garbage after a few interrupts.
-pub const IRQ_NEST_GP_OFFSET: u32 = 4420;
-
 /// `_tx_thread_schedule`'s *solicited* context restore (`0x3EC40034` → `bx r26`
 /// here).
 ///
@@ -72,6 +62,5 @@ mod tests {
     fn the_gp_offsets_resolve_to_the_addresses_they_were_read_from() {
         const GP: u32 = 0x3EE0_2D20; // start of .sdata in the pinned build
         assert_eq!(GP + SMP_DISPATCH_GP_OFFSET, 0x3EE0_3B78);
-        assert_eq!(GP + IRQ_NEST_GP_OFFSET, 0x3EE0_3E64);
     }
 }
