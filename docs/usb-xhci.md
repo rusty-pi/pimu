@@ -983,8 +983,9 @@ Loose files needed three model fixes:
    (`Starting start4.elf @ 0xfeb00200`, hence 947 MB, not 948). Core 1 was
    released at the link-time entry and hit a breakpoint, so the main thread's
    first inter-core wait never ended; it now enters where core 0 entered
-   start4, and the model's start4-PC shortcuts (`SOLICITED_RESTORE_PC`, and
-   then also a `udelay` fast-forward, since removed) move with the image.
+   start4, and the model's start4-PC shortcuts of the time
+   (`SOLICITED_RESTORE_PC` and a `udelay` fast-forward, both since removed)
+   move with the image.
 2. start4's dmalib takes DMA4 (channel 11) over for its xHCI accesses and
    drives it like the legacy channels: `dma_set_cs` sets `CS.ACTIVE` with no
    chain, `dma_chain_start` then only writes `CB`. The DMA4 model started on

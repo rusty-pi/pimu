@@ -333,14 +333,15 @@ impl Vpu {
             {
                 self.regs.set(SP, sp);
                 self.in_exception = self.in_exception.wrapping_add(1);
-                // Taking an exception clears the interrupt-enable bit; the
-                // handler re-enables it explicitly (`ei`) or implicitly, by
-                // restoring the saved SR through `rti`. This — not a nesting
-                // count — is what serialises delivery, and it is the only model
-                // that works for ThreadX: `_tx_thread_schedule` enters its idle
-                // loop (`0x3EC3FFCA`..`0x3EC40016`) from *inside* the tick ISR
-                // and never returns from it, so any depth counter stays pinned
-                // above zero and wedges every later tick.
+                let masked = self.regs.get(30) & !(1 << 30);
+                self.regs.set(30, masked);
+                self.regs.sr = masked;
+                // Taking an exception clears the interrupt-enable bit. The SR
+                // pushed above keeps the old one, so `rti` restores it; a handler
+                // that allows nesting, or a scheduler that leaves without `rti`
+                // (ThreadX resumes a thread with `ei; b lr`), re-enables it with
+                // `ei`. This is what serialises delivery. `in_exception` is only
+                // a diagnostic: a thread switch out of a handler never unwinds it.
                 self.regs.pc = h;
             }
         }
@@ -565,31 +566,6 @@ impl Vpu {
                         Ok(v) => {
                             self.regs.set(rd as usize, v);
                             self.regs.pc = next;
-                            // `ld sp, (r0+8)` restores a thread's saved stack
-                            // pointer — ThreadX's `_tx_thread_schedule` /
-                            // `_tx_thread_context_restore` dispatching a thread
-                            // (`tx_thread_stack_ptr` is TCB field +8). Reaching
-                            // it while a handler is still "pending" means the
-                            // tick ISR concluded by switching threads rather
-                            // than running `rti` (the `b r26` cooperative-
-                            // restore path), so the pending-exception count
-                            // would otherwise leak and wedge periodic-tick
-                            // delivery for good. `ld sp, (r29+32)` (switch to
-                            // the ISR's own system stack) is *not* that — keep
-                            // the count until the real return.
-                            if rd as usize == SP
-                                && self.in_exception != 0
-                                && matches!(addr.base, super::insn::Base::R0)
-                            {
-                                if crate::diag::ON && self.dbg_tick {
-                                    eprintln!(
-                                        "[ctx-switch] pc={pc:#x} clear in_exc (was {}) sp<-{v:#x}",
-                                        self.in_exception
-                                    );
-                                }
-                                self.in_exception = 0;
-                                self.event = true;
-                            }
                         }
                         Err(err) => return self.stop(Stop::Fault(Fault::Bus { pc, err })),
                     }
@@ -943,6 +919,9 @@ impl Vpu {
                         }
                         self.regs.set(SP, sp);
                         self.in_exception = self.in_exception.wrapping_add(1);
+                        let masked = self.regs.get(30) & !(1 << 30);
+                        self.regs.set(30, masked);
+                        self.regs.sr = masked;
                         self.regs.pc = h;
                     }
                     None => {
