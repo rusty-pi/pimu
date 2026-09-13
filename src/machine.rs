@@ -142,6 +142,12 @@ pub struct Machine {
     /// compare fired, or a reset came due. The run loop clears it; while it
     /// stays clear, those checks have nothing to do (`Emulator::fast_steps`).
     pub wake: bool,
+    /// The ARM runs alongside: a VPU `sleep` leaves its jump to the next
+    /// compare in [`Self::sleep_to`] for `Emulator::step_arm`, which moves
+    /// the counter only as far as the first ARM write the VPU would wake for
+    /// (#53).
+    pub defer_sleep: bool,
+    pub sleep_to: Option<u64>,
     pub watch_pc: u32,
 
     /// `start4.elf` logs boot progress by writing 4-char ASCII tags (`_msh`,
@@ -242,6 +248,8 @@ impl Machine {
             dbg_dma: crate::diag::ON && std::env::var_os("RVF_DBG_DMA").is_some(),
             pending_irqs: std::collections::VecDeque::new(),
             wake: false,
+            defer_sleep: false,
+            sleep_to: None,
             watch_pc: 0,
             phase_tags: Vec::new(),
         }
@@ -795,6 +803,14 @@ impl Machine {
         })
     }
 
+    /// The end of a VPU `sleep` that [`Bus::sleep_advance`] left to the ARM:
+    /// the counter moves on to `us`, firing the compares it reaches, and what
+    /// is timed against it catches up.
+    pub fn wake_vpu_at(&mut self, us: u64) {
+        self.systimer.advance_to(us);
+        self.advance_i2c();
+    }
+
     /// The value a read of device register `addr` would return, for the
     /// registers where a read has no side effect; `None` for the rest. So far
     /// only the mailbox's, which is what UEFI busy-waits on (`arm.rs`,
@@ -876,6 +892,13 @@ impl Bus for Machine {
     }
 
     fn sleep_advance(&mut self) -> bool {
+        // With the ARM running, the jump waits for it (`Emulator::step_arm`,
+        // `Self::wake_vpu_at`): an ARM write that interrupts the VPU has to
+        // land before the counter moves past it (#53).
+        if self.defer_sleep {
+            self.sleep_to = self.systimer.next_deadline();
+            return self.sleep_to.is_some();
+        }
         let woke = self.systimer.wake_to_next_match().is_some();
         // The counter just jumped; anything timed against it has to catch up.
         self.advance_i2c();

@@ -46,9 +46,16 @@
 //! not, as the architecture says); when all of them wait, time skips ahead
 //! to the next generic-timer event inside the slice.
 //!
-//! A fast-forward slice runs with the VPU frozen, so a mailbox request the
-//! ARM makes in one is seen by the VPU only when the slice ends (at most one
-//! VPU timer interval late).
+//! A fast-forward slice runs with the VPU frozen. For `sleep` — the VPU
+//! waiting for an interrupt — the ARM runs the slice *before* the counter
+//! moves ([`ArmSide::run_until_store`]), and stops after the first cycle in
+//! which a core writes a VPU-side peripheral: that write, a mailbox request
+//! most often, is what would interrupt the VPU, so the counter only moves
+//! that far and the VPU wakes to it on time. Before this, every request
+//! UEFI made while the VPU slept waited for the slice to end — 1.9 ms on
+//! average, which made its SD card reads crawl (#53). The `usleep` and
+//! `udelay` fast-forwards still move the counter first, so a request made
+//! during one of those is seen when it ends.
 //!
 //! ## Between cores
 //!
@@ -255,6 +262,10 @@ pub struct ArmSide {
     woke: u32,
     /// `RVF_NO_PARK=1` turns parking off.
     park_on: bool,
+    /// [`Self::run_until_store`]: stop after the cycle in which a core first
+    /// writes a VPU-side peripheral, and whether one has.
+    stop_on_store: bool,
+    stored: bool,
 }
 
 /// The device interrupt lines wired to the GIC: the mailbox, eMMC2, the two
@@ -316,6 +327,8 @@ impl ArmSide {
             park_due: u64::MAX,
             woke: 0,
             park_on: std::env::var_os("RVF_NO_PARK").is_none(),
+            stop_on_store: false,
+            stored: false,
         }
     }
 
@@ -347,6 +360,29 @@ impl ArmSide {
         if since > self.cycles {
             self.run(m, since - self.cycles);
         }
+    }
+
+    /// The VPU sleeps until `until_us`, its next compare: run the ARM up to
+    /// then, but stop after the first cycle in which a core writes a VPU-side
+    /// peripheral — the write that would interrupt the VPU out of its
+    /// `sleep`. Returns the microsecond the VPU wakes in (module docs, "Time
+    /// and scheduling").
+    pub fn run_until_store(&mut self, m: &mut Machine, until_us: u64) -> u64 {
+        const PER_US: u64 = gentimer::ARM_HZ / 1_000_000;
+        let now = m.systimer.cycles_at(gentimer::ARM_HZ);
+        let released = *self.released_at.get_or_insert(now);
+        let end = (until_us * PER_US).saturating_sub(released);
+        if end <= self.cycles {
+            return until_us;
+        }
+        self.stop_on_store = true;
+        self.stored = false;
+        self.run(m, end - self.cycles);
+        self.stop_on_store = false;
+        if !std::mem::take(&mut self.stored) {
+            return until_us;
+        }
+        (released + self.cycles).div_ceil(PER_US).min(until_us)
     }
 
     /// Bring every core's interrupt inputs up to date (module docs, "Time
@@ -541,6 +577,9 @@ impl ArmSide {
                 continue;
             }
             self.cycles += 1;
+            if self.stop_on_store && self.stored {
+                break;
+            }
         }
     }
 
@@ -564,11 +603,14 @@ impl ArmSide {
             written: None,
             io: false,
             log: watching.then_some(&mut core.detect.log),
+            released_at: self.released_at.unwrap_or(0),
+            periph_store: false,
         };
         let step = core.cpu.step_system(&mut bus);
         let written = bus.written;
         let io = bus.io;
         self.dirty |= io;
+        self.stored |= bus.periph_store;
         let el = core.cpu.el;
         let mut wfe_until = None;
         if !matches!(step, Step::Retired) {
@@ -711,6 +753,11 @@ struct ArmBus<'a> {
     /// Where the step's data reads go while the core's loop is watched
     /// (module docs, "Busy-wait loops").
     log: Option<&'a mut Vec<park::Read>>,
+    /// The system timer, in ARM cycles, at release: `released_at + cycles`
+    /// is the ARM's own clock, for `RVF_DBG_MBOX`.
+    released_at: u64,
+    /// The step wrote a VPU-side peripheral: something the VPU may wake for.
+    periph_store: bool,
 }
 
 impl ArmBus<'_> {
@@ -796,14 +843,19 @@ impl ArmBus<'_> {
                 if a == crate::spec::mbox::BASE + crate::spec::mbox::DATA1 && self.m.mbox.debug() {
                     let buf = self.m.ram.base() + (v & 0x3FFF_FFF0);
                     let word = |o: u32| self.m.ram.load(buf + o, Width::Word).unwrap_or(0);
+                    // Inside a fast-forward slice the system timer is
+                    // already at the slice's end (module docs, "Time and
+                    // scheduling"), so the ARM's own clock too.
+                    let arm_us = (self.released_at + self.cycles) / (gentimer::ARM_HZ / 1_000_000);
                     eprintln!(
-                        "[mbox] {} us ARM request tag {:#010x} values {:#x} {:#x}",
+                        "[mbox] {} us ARM request (ARM at {arm_us} us) tag {:#010x} values {:#x} {:#x}",
                         self.m.systimer.now_us(),
                         word(8),
                         word(20),
                         word(24)
                     );
                 }
+                self.periph_store = true;
                 self.m.store(a, w, v)
             }
             Target::Local(o) => self.m.arm_local.write(o, w, v),
@@ -1263,6 +1315,27 @@ mod tests {
             arm.run(m, 2000);
             assert_eq!(arm.cores[0].cpu.x[5], 1, "left the loop");
         });
+    }
+
+    /// A VPU `sleep` ends at the ARM's first write to a VPU-side peripheral —
+    /// here a mailbox request — not at the compare it was waiting for (#53).
+    #[test]
+    fn a_sleeping_vpu_wakes_at_the_arms_mailbox_write() {
+        // movz x2, #1500; 1: subs x2, x2, #1; b.ne 1b; x1 = the ARM's
+        // mailbox 1 write register; str w3, [x1]; b .
+        let mut code = vec![0xD280_BB82, 0xF100_0442, 0x54FF_FFE1];
+        code.extend(mov32(1, 0xFE00_B8A0));
+        code.extend([0xB900_0023, B_SELF]);
+        let mut m = machine_with(&code);
+        let mut arm = ArmSide::with_cores(1);
+        let until = m.systimer.now_us() + 1000;
+        let woke = arm.run_until_store(&mut m, until);
+        // 3000-odd cycles of countdown at 1500 per microsecond.
+        assert!(woke <= 3, "woke at {woke} us");
+        assert!(m.wake, "the request reached the mailbox");
+        assert_eq!(arm.cores[0].cpu.pc, 0x18, "stopped right after the store");
+        // Nothing more to write: this time the sleep runs to its compare.
+        assert_eq!(arm.run_until_store(&mut m, until), until);
     }
 
     /// One core polls a flag in RAM, another sets it after a countdown:

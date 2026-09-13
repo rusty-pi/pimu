@@ -657,10 +657,10 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] PM: genpd: Disabling unused power domains
 [t] check access for rdinit=/init failed: -2, ignoring
 [t] check access for rdinit=/init failed: -2, ignoring
-[t] Waiting for root device /dev/mmcblk0p2...
-[t] Waiting for root device /dev/mmcblk0p2...
 [t] mmc0: SDHCI controller on fe340000.mmc [fe340000.mmc] using ADMA
 [t] mmc0: SDHCI controller on fe340000.mmc [fe340000.mmc] using ADMA
+[t] Waiting for root device /dev/mmcblk0p2...
+[t] Waiting for root device /dev/mmcblk0p2...
 [t] mmc0: new UHS-I speed DDR50 SDHC card at address 0001
 [t] mmc0: new UHS-I speed DDR50 SDHC card at address 0001
 [t] mmcblk0: mmc0:0001 VIRTF 288 MiB
@@ -686,12 +686,12 @@ BusyBox v1.35.0 (Debian 1:1.35.0-4+deb12u1+b1) built-in shell (ash)
 Enter 'help' for a list of built-in commands.
 
 / # \x1b[6nuname -sm
-[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
-[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
 Linux aarch64
 / # \x1b[6necho cpus=$(grep -c ^processor /proc/cpuinfo)
 cpus=4
 / # \x1b[6necj\x08\x1b[Jho rvf-$((6*7))
+[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
+[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
 rvf-42
 / # \x1b[6necho -ne 'Hello, world!\0\0\0' | rpi-fw-crypto hmac --in /proc/self/fd/0 --k
 

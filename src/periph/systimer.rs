@@ -224,6 +224,21 @@ impl SysTimer {
         Some(ch as u8)
     }
 
+    /// The earliest armed compare deadline, in µs: where a `sleep` wakes up.
+    pub fn next_deadline(&self) -> Option<u64> {
+        self.deadline.iter().flatten().copied().min()
+    }
+
+    /// Move the counter forward to `us` (never back), firing the compares it
+    /// reaches: [`Self::wake_to_next_match`] for a `sleep` something else
+    /// ended early.
+    pub fn advance_to(&mut self, us: u64) {
+        if self.micros < us {
+            self.micros = us;
+        }
+        self.service_matches();
+    }
+
     /// True if any compare channel is armed (the firmware has a tick running).
     pub fn any_armed(&self) -> bool {
         self.deadline.iter().any(Option::is_some)

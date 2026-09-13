@@ -206,6 +206,17 @@ the armstub, so the ARM runs UEFI before any kernel. What it needed:
    parks a core in such a loop instead of stepping it, and rebuilds its state
    when the loop ends or what it reads changes (#53, `src/arm/park.rs`,
    "Busy-wait loops" in `src/arm.rs`).
+7. That made the load quick in host time, but it still crawled in guest time
+   — about 230 blocks a second — so start4's 16 s early watchdog
+   (`dtparam=watchdog=on`, armed at `arm_loader`; edk2 never touches it)
+   reset the board half a megabyte in, every boot. The model was the cause:
+   when the VPU `sleep`s, the model jumped the system timer to the next
+   compare and then ran the ARM up to it with the VPU frozen, so every
+   mailbox request UEFI made in that slice waited for the slice to end —
+   1.9 ms on average, measured by logging both clocks at each request. The
+   ARM now runs such a slice first and stops at its first write to a
+   VPU-side peripheral, and the counter moves only that far (#53,
+   `ArmSide::run_until_store`).
 
 With those, UEFI prints its boot manager prompt (`ESC (setup), F1 (shell),
 ENTER (boot)`) 0.7 s of guest time after its banner, and systemd-boot no
