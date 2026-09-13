@@ -39,8 +39,14 @@ sd = "../../firmware/sd.img"
 # The last one is an HMAC-SHA256 over a fixed 16-byte message ("Hello, world!"),
 # keyed by the OTP key, which is the end-to-end proof that the crypto service
 # runs for real.
+#
+# `SET_POWER_STATE` for USB (device 3, on and wait) goes before the crypto
+# tags: its handler waits on two blocks with no timeout, and a wrong answer from
+# either parks it with every later request unanswered (#49). Its value buffer
+# is two words, so it names its size.
 mbox_property = [
   "0x00000001",
+  "0x00028001:8=3.3",
   "0x0003008f",
   "0x00030090=1",
   "0x0003009c=1",
@@ -298,6 +304,17 @@ this — when it does, re-pin it deliberately rather than loosening the match,
 since it is also the cheapest proof that the reply carries real data rather
 than a staged buffer read back."""
 line = ["tag 0x00000001", "answered", "0x6a7a16af"]
+
+[[milestone]]
+why = """
+`SET_POWER_STATE` for USB answers device 3, state `1`: powered. The handler
+asks for power at `0x7E80_8008` and waits for the acknowledge at `+0x20`, then
+resets the DWC2 core at `0x7E98_0000` and flushes its FIFOs, with no timeout on
+any of those waits. With both blocks on the catch-all stub it spun forever and
+every request after it went unanswered, which is how the rpi-mkosi image's UEFI
+looked stuck after its banner (#49, `src/periph/hd.rs`, `src/periph/dwc2.rs`).
+The reference board answers the same to `vcmailbox 0x00028001 8 8 3 3`."""
+line = ["tag 0x00028001", "answered", "0x00000003 0x00000001"]
 
 [[milestone]]
 why = """

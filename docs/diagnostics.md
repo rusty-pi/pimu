@@ -112,6 +112,7 @@ All of these are `=1`.
 | `RVF_DBG_PMIC` | DA9090 PMIC register traffic. |
 | `RVF_DBG_OTP` | Every OTP row the firmware reads, and what it got. |
 | `RVF_DBG_XHCI` | xHCI rings, TRBs and port state. |
+| `RVF_DBG_DWC2` | The DWC2 USB OTG controller (`0x7E98_0000`): every write, and every read that differs from the previous read of the same register, so a poll shows once. |
 | `RVF_DBG_MBOX` | Every word across the ARM↔VideoCore property mailbox, both directions. |
 | `RVF_DBG_PCIE` | Every change of the VL805's interrupt as the root complex sees it: INTA, or the MSI block's status and mask. Also every write to the inbound window `RC_BAR2`, and every endpoint DMA access that falls outside it (and so reaches no memory). |
 | `RVF_DBG_ARM_EXC` | With `--arm`: every synchronous exception an ARM core takes (not `svc`), with the `ESR`/`FAR` its handler sees. |

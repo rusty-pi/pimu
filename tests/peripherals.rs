@@ -51,6 +51,83 @@ fn hvs_frame_swap_completes_immediately() {
     }
 }
 
+/// start4's USB power-on (#49): request power at `0x7E80_8008` bit 2, wait for
+/// both acknowledge bits at `+0x20`, then reset the DWC2 core and flush its
+/// FIFOs, spinning on each `GRSTCTL` bit. None of those waits has a timeout, so
+/// a wrong answer parks the `SET_POWER_STATE` handler for good and every later
+/// property request goes unanswered. The values are what `rpi-dev` reads
+/// before and after the same request.
+#[test]
+fn usb_power_on_handshake_completes() {
+    let mut m = machine();
+    let (ctrl, status) = (map::HD_BASE + 0x08, map::HD_BASE + 0x20);
+    assert_eq!(m.load32(ctrl).unwrap(), 0x3);
+    assert_eq!(m.load32(status).unwrap(), 0x0);
+
+    let idle = m.load32(ctrl).unwrap();
+    m.store32(ctrl, idle | 4).unwrap();
+    assert_eq!(m.load32(status).unwrap(), 0x3, "power never acknowledged");
+    m.store32(ctrl, idle).unwrap();
+    assert_eq!(m.load32(status).unwrap(), 0x0);
+
+    let grstctl = map::DWC2_BASE + 0x10;
+    for (write, bit) in [(0x1, 0x1), (0x2, 0x2), (0x420, 0x20), (0x10, 0x10)] {
+        m.store32(grstctl, write).unwrap();
+        assert_eq!(
+            m.load32(grstctl).unwrap() & bit,
+            0,
+            "GRSTCTL {write:#x} never completes"
+        );
+    }
+    assert_eq!(m.load32(grstctl).unwrap(), 0x8000_0000);
+}
+
+/// `GSNPSID` names the core: OTG 2.80a on the reference board. Linux's dwc2
+/// refuses a core whose id lacks the `0x4F54` prefix, and UEFI's
+/// `DwUsbHostDxe` sizes its channel loops from `GHWCFG2`, where 0 reads as one
+/// channel. The board has eight.
+#[test]
+fn dwc2_identifies_itself() {
+    let mut m = machine();
+    assert_eq!(m.load32(map::DWC2_BASE + 0x40).unwrap(), 0x4F54_280A);
+    let hwcfg2 = m.load32(map::DWC2_BASE + 0x48).unwrap();
+    assert_eq!((hwcfg2 >> 14 & 0xF) + 1, 8);
+}
+
+/// What UEFI's `DwUsbHostDxe` does once USB has power (#49): halt every host
+/// channel and wait up to ten seconds, polled, for `CHENA` to clear; check
+/// `GINTSTS.CURMOD` before powering the root port; then read the port status.
+/// Storage that kept `CHENA` set cost ten guest seconds per channel.
+#[test]
+fn dwc2_host_channels_halt_and_the_port_is_empty() {
+    let mut m = machine();
+    let base = map::DWC2_BASE;
+    m.store32(base + 0x0C, 0x2040_2700).unwrap();
+    assert_eq!(m.load32(base + 0x14).unwrap() & 1, 1, "not in host mode");
+
+    for ch in 0..8 {
+        let (hcchar, hcint) = (base + 0x500 + ch * 0x20, base + 0x508 + ch * 0x20);
+        m.store32(hcchar, 0x4000_0000).unwrap();
+        m.store32(hcchar, 0xC000_0000).unwrap();
+        assert_eq!(
+            m.load32(hcchar).unwrap() & 0x8000_0000,
+            0,
+            "channel {ch} never halts"
+        );
+        assert_eq!(m.load32(hcint).unwrap(), 0x2, "no CHHLTD on channel {ch}");
+        m.store32(hcint, 0x2).unwrap();
+        assert_eq!(m.load32(hcint).unwrap(), 0);
+    }
+
+    // Port power sticks; nothing is connected, and writing the change bits or
+    // PRTENA does not make it look otherwise.
+    m.store32(base + 0x440, 0x1000 | 0x2F).unwrap();
+    assert_eq!(m.load32(base + 0x440).unwrap(), 0x1000);
+
+    m.store32(base + 0x0C, 0x4040_2700).unwrap();
+    assert_eq!(m.load32(base + 0x14).unwrap() & 1, 0, "forced device mode");
+}
+
 const CS: u32 = 0x00;
 const FIFO: u32 = 0x04;
 const CS_TA: u32 = 1 << 7;

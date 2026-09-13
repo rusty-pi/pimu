@@ -40,6 +40,8 @@ const MODELLED: &[(&str, u32)] = &[
     ("aux mini-uart", map::AUX_BASE + 0x40),
     ("emmc2", map::EMMC2_BASE),
     ("hvs", map::HVS_BASE),
+    ("usb power acknowledge", map::HD_BASE + 0x20),
+    ("dwc2 GRSTCTL", map::DWC2_BASE + 0x10),
     ("bootbox", map::BOOTBOX_BASE),
     ("vpu dma ch15", map::DMA_VPU_BASE + 0xF00),
     ("sdram controller", map::SDRAMC_BASE),

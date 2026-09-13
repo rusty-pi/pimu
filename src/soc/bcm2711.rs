@@ -160,6 +160,16 @@ pub const EMMC2_SIZE: u32 = spec::emmc2::SIZE;
 pub const HVS_BASE: u32 = spec::hvs::BASE;
 pub const HVS_SIZE: u32 = spec::hvs::SIZE;
 
+/// The control block at `0x7E80_8000` whose power acknowledge start4's USB
+/// power-on waits for, with no timeout (`src/periph/hd.rs`, #49).
+pub const HD_BASE: u32 = spec::hd::BASE;
+pub const HD_SIZE: u32 = spec::hd::SIZE;
+
+/// DesignWare USB 2.0 OTG controller (`usb@7e980000`), the USB-C port. start4
+/// resets it when USB power comes on (`src/periph/dwc2.rs`, #49).
+pub const DWC2_BASE: u32 = spec::dwc2::BASE;
+pub const DWC2_SIZE: u32 = spec::dwc2::SIZE;
+
 /// The two HDMI controllers' DDC I²C masters (`i2c@7ef04500`, `i2c@7ef09500`,
 /// `brcm,bcm2711-hdmi-i2c`) — the buses a monitor's EDID EEPROM sits on. Left
 /// on the catch-all stub they RAM-back, so every EDID read looked like a
