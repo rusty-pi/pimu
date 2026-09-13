@@ -2,8 +2,8 @@
 name    = "hdmi"
 base    = 0x7EF00700
 size    = 0x300
-summary = "HDMI controller core registers (the \"hdmi\" window of each connector): the packet-RAM handshake"
-notes   = "No encoder behind it. A packet slot's status bit follows its enable in RAM_PACKET_CONFIG at once, which is what start4 (and Linux's vc4) wait for around every packet write. Everything else is stored and read back."
+summary = "HDMI controller core registers (the \"hdmi\" window of each connector), with no monitor attached: the packet-RAM handshake, the FIFO recenter and the hotplug state"
+notes   = "No encoder or PHY behind it, and no sink on either connector. What firmware waits on is modelled: a packet slot's status bit follows its enable in RAM_PACKET_CONFIG at once, a FIFO recenter completes as soon as it is asked for, and HOTPLUG reports nothing plugged in. Everything else is stored and read back."
 
 [[block.source]]
 kind       = "linux"
@@ -23,6 +23,48 @@ notes = "HDMI1's core registers; HDMI0's are the block base."
 [[block.copy.source]]
 kind       = "linux"
 ref        = "arch/arm/boot/dts/broadcom/bcm2711.dtsi: hdmi1: hdmi@7ef05700, reg <0x7ef05700 0x300>"
+confidence = "high"
+
+[[register]]
+name   = "FIFO_CTL"
+offset = 0x74
+access = "rw"
+notes  = "Control of the FIFO between the pixel valve and the encoder. After a mode set, software pulses RECENTER and waits for RECENTER_DONE. The 2020-era bootcode does that on every boot, monitor or not, and spins with no timeout; on plain storage the bit never set and those EEPROM images went no further (#63). The model sets RECENTER_DONE on any write with RECENTER set. The other bits are stored: the bootcode writes 0x5, MASTER_SLAVE_N | CAPTURE_PTR in Linux's names."
+
+[[register.source]]
+kind       = "linux"
+ref        = "drivers/gpu/drm/vc4/vc4_hdmi_regs.h: VC4_HDMI_REG(HDMI_FIFO_CTL, 0x074) in vc5_hdmi_hdmi0_fields"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "pieeprom-2020-09-03 bootcode, RVF_TRACE_MMIO: 0x80007894 writes 0x5, 0x8000775e 0x45, 0x80007776 0x5, then 0x8000777e reads it forever"
+confidence = "high"
+
+[[register.field]]
+name   = "RECENTER"
+bits   = "6"
+notes  = "Starts a recenter."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "drivers/gpu/drm/vc4/vc4_regs.h: VC4_HDMI_FIFO_CTL_RECENTER BIT(6); vc4_hdmi.c: vc4_hdmi_recenter_fifo() writes it clear, then set, twice"
+confidence = "high"
+
+[[register.field]]
+name   = "RECENTER_DONE"
+bits   = "14"
+access = "r"
+notes  = "Set once a recenter has finished. Recentring needs no sink: headless boards boot the 2020 bootcode, which cannot get past this bit otherwise."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "drivers/gpu/drm/vc4/vc4_regs.h: VC4_HDMI_FIFO_CTL_RECENTER_DONE BIT(14); vc4_hdmi.c: vc4_hdmi_recenter_fifo() waits 1 ms for it and warns on timeout"
+confidence = "high"
+
+[[register.field.source]]
+kind       = "decompile"
+ref        = "pieeprom-2020-09-03 bootcode 0x8000777e..0x80007784: ld r0, [r2+0x74]; btest r0, #14; beq back, no timeout"
 confidence = "high"
 
 [[register]]
@@ -74,3 +116,29 @@ bits = "15:0"
 kind       = "linux"
 ref        = "drivers/gpu/drm/vc4/vc4_hdmi.c: HDMI_RAM_PACKET_STATUS & BIT(packet_id)"
 confidence = "medium"
+
+[[register]]
+name   = "HOTPLUG"
+offset = 0x1A8
+access = "r"
+notes  = "No monitor on either connector: CONNECTED reads 0 whatever was written, so Linux's vc4 reports both connectors disconnected, as on the reference board."
+
+[[register.source]]
+kind       = "linux"
+ref        = "drivers/gpu/drm/vc4/vc4_hdmi_regs.h: VC4_HDMI_REG(HDMI_HOTPLUG, 0x1a8) in vc5_hdmi_hdmi0_fields; vc4_hdmi.c: vc5_hdmi_hp_detect()"
+confidence = "high"
+
+[[register.source]]
+kind       = "measured"
+ref        = "rpi-dev, no monitor attached: /sys/class/drm/card1-HDMI-A-1/status and card1-HDMI-A-2/status read disconnected"
+confidence = "medium"
+note       = "The connector state, not the register: vc4 reports disconnected when CONNECTED is clear and the node has no hpd-gpios."
+
+[[register.field]]
+name = "CONNECTED"
+bits = "0"
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "drivers/gpu/drm/vc4/vc4_regs.h: VC4_HDMI_HOTPLUG_CONNECTED BIT(0); vc4_hdmi.c: vc5_hdmi_hp_detect() returns HDMI_HOTPLUG & VC4_HDMI_HOTPLUG_CONNECTED"
+confidence = "high"
