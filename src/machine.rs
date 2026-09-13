@@ -94,6 +94,9 @@ pub struct Machine {
     /// DMA4 channel (`0x7E00_7B00`) — the bootloader scrubs / moves DRAM through
     /// it; [`Machine::store`] runs the control-block chain after a `CS` write.
     pub dma4: Dma4,
+    /// The legacy EMMC controller (`0x7E30_0000`), with nothing on its bus —
+    /// the SD host of 2020-era bootcode.
+    pub emmc: Emmc2,
     /// EMMC2 SD host controller (`0x7E34_0000`).
     pub emmc2: Emmc2,
     /// HVS (`0x7E40_0000`) — display frame-swap registers auto-complete.
@@ -225,6 +228,7 @@ impl Machine {
             dma4: Dma4::new(),
             dma_legacy: crate::periph::dma_legacy::DmaLegacy::new(),
             dma_vpu: crate::periph::dma_legacy::DmaLegacy::new_vpu(),
+            emmc: Emmc2::new_legacy(),
             emmc2: Emmc2::new(),
             hvs: Hvs::new(),
             hd: Hd::new(),
@@ -494,6 +498,9 @@ impl Machine {
         }
         if let Some(off) = hit(map::DMA_VPU_BASE, map::DMA_VPU_SIZE) {
             return Some((&mut self.dma_vpu, off));
+        }
+        if let Some(off) = hit(map::EMMC_BASE, map::EMMC_SIZE) {
+            return Some((&mut self.emmc, off));
         }
         if let Some(off) = hit(map::EMMC2_BASE, map::EMMC2_SIZE) {
             return Some((&mut self.emmc2, off));

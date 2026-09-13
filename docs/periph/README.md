@@ -21,6 +21,7 @@ Generated from the TOML specs in [`specs/`](../../specs/); see [`specs/README.md
 | [`dma4`](dma4.md) | vpu | `0x7E007B00` | `0x100` | 3 | DMA4 ('dma40') channel: the 40-bit DMA engine the bootloader and start4 use |
 | [`dma_vpu`](dma_vpu.md) | vpu | `0x7EE04100` | `0x1000` | 9 | The DMA controller start4's dmalib drives: 16 channel slots, channel 15 at 0x7EE05000 |
 | [`dwc2`](dwc2.md) | vpu | `0x7E980000` | `0x10000` | 16 | DesignWare USB 2.0 OTG controller (the USB-C port): the reset start4 runs when USB power comes on, and a host port with nothing plugged in |
+| [`emmc`](emmc.md) | vpu | `0x7E300000` | `0x100` | 20 | The legacy EMMC controller (Arasan SDHCI): the Pi 4's WiFi SDIO host, and the host 2020-era bootcode reads the SD card through |
 | [`emmc2`](emmc2.md) | vpu | `0x7E340000` | `0x1000` | 22 | EMMC2: the SD host controller (Arasan SDHCI 3.00) the bootloader, start4 and Linux boot from |
 | [`fxl6408`](fxl6408.md) | i2c | `0x43` | `0x100` | 10 | FXL6408 GPIO expander: the board's 'external' GPIOs 128..135 |
 | [`genet`](genet.md) | vpu | `0x7D580000` | `0x10000` | 56 | GENET v5 Ethernet MAC with its UniMAC MDIO controller (the PHY is `bcm54213pe`) |

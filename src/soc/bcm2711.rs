@@ -151,6 +151,11 @@ pub const UART0_SIZE: u32 = spec::uart0::SIZE;
 pub const AUX_BASE: u32 = spec::aux::BASE;
 pub const AUX_SIZE: u32 = spec::aux::SIZE;
 
+/// The legacy EMMC controller (`mmcnr@7e300000`), `0x7E30_0000`: the WiFi
+/// SDIO host on a Pi 4, and the SD host 2020-era bootcode uses (#64).
+pub const EMMC_BASE: u32 = spec::emmc::BASE;
+pub const EMMC_SIZE: u32 = spec::emmc::SIZE;
+
 /// EMMC2 (SD card controller used for boot on Pi 4), `0x7E34_0000`.
 pub const EMMC2_BASE: u32 = spec::emmc2::BASE;
 pub const EMMC2_SIZE: u32 = spec::emmc2::SIZE;

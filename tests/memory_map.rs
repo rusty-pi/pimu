@@ -38,6 +38,7 @@ const MODELLED: &[(&str, u32)] = &[
     ("bsc pmic", map::BSC_PMIC_BASE),
     ("config/otp fifo", map::OTP_BASE),
     ("aux mini-uart", map::AUX_BASE + 0x40),
+    ("emmc CLOCK_CONTROL", map::EMMC_BASE + 0x2C),
     ("emmc2", map::EMMC2_BASE),
     ("hvs", map::HVS_BASE),
     ("usb power acknowledge", map::HD_BASE + 0x20),

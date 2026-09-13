@@ -281,8 +281,9 @@ pub struct ArmSide {
     stored: bool,
 }
 
-/// The device interrupt lines wired to the GIC: the mailbox, eMMC2, the two
-/// GENET lines, the PL011, and the PCIe endpoint's INTA and MSI.
+/// The device interrupt lines wired to the GIC: the mailbox, eMMC2 (which the
+/// legacy EMMC shares), the two GENET lines, the PL011, and the PCIe
+/// endpoint's INTA and MSI.
 const SPIS: [u32; 7] = [
     gic::ID_MAILBOX,
     gic::ID_EMMC2,
@@ -297,7 +298,7 @@ fn spi_levels(m: &Machine) -> [bool; SPIS.len()] {
     let [genet_a, genet_b] = m.genet.irq_lines();
     [
         m.mbox.arm_irq_asserted(),
-        m.emmc2.irq_asserted(),
+        m.emmc2.irq_asserted() || m.emmc.irq_asserted(),
         genet_a,
         genet_b,
         m.uart0.irq_line(),
