@@ -786,6 +786,13 @@ impl Machine {
                 self.mmio_events
                     .push((addr, width.bytes() as u8, value, true));
             }
+            if let Some(buf) = self.mbox.take_property_reply() {
+                let ram = &self.ram;
+                self.mbox.property.record(|o| {
+                    ram.load(Machine::fold_ram_addr(buf.wrapping_add(o)), Width::Word)
+                        .unwrap_or(0)
+                });
+            }
             if self.dma4.take_start() {
                 self.run_dma4();
             }

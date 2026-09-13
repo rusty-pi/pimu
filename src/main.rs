@@ -719,6 +719,23 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     } else if arm {
         println!("\n--- ARM cores (#40) ---\n  never released");
     }
+    // What the firmware answered on the property channel, from the reply
+    // buffers themselves: the only place a value Linux never checks shows up.
+    let prop = &emu.machine.mbox.property;
+    if prop.replies > 0 {
+        println!("\n--- property replies (0x7e00_b880) ---");
+        println!(
+            "  {} replies, {} with an error code",
+            prop.replies, prop.failed
+        );
+        for (tag, t) in prop.tags() {
+            let last = t.last.map_or("-".to_string(), |v| format!("{v:#010x}"));
+            println!(
+                "  tag {tag:#010x}  marked {:<4} unmarked {:<4} last value {last}",
+                t.marked, t.unmarked
+            );
+        }
+    }
     if report.core1_release_never_resolved {
         println!(
             "core1      RELEASED BUT NEVER SPAWNED — the ThreadX-SMP dispatch \

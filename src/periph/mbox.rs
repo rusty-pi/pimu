@@ -86,14 +86,20 @@
 //! already implements, which is why no translation happens here.
 //!
 //! Nothing in the boot touches this block: the firmware only services it once
-//! an ARM is running, and this bench has no ARM. It is modelled so that a
-//! request can be posted *as if* from the ARM — see `recon --mbox-property` —
-//! and answered by the `mbox_read` task `start4.elf` leaves running after
+//! an ARM is running. Under `recon --arm` that is Linux; without it, `recon
+//! --mbox-property` posts a request *as if* from the ARM. Either way the
+//! answer comes from the `mbox_read` task `start4.elf` leaves running after
 //! `arm_loader` (the blob says `Creating mailbox reading task ...`).
+//!
+//! Every property reply is decoded into a [`PropertyLog`] as the firmware posts
+//! it, whoever asked, and the run report prints it. That is the only place
+//! some answers can be seen: Linux checks the buffer's status word but not
+//! always the values, and by then the firmware's own prints go to its message
+//! ring, not the UART.
 //!
 //! [rpi-mkosi#37]: https://github.com/valtzu/rpi-mkosi/issues/37
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
@@ -145,6 +151,79 @@ const DEPTH: usize = 8;
 /// use, and the only one that carries a buffer address.
 pub const CHANNEL_PROPERTY: u32 = 8;
 
+/// Bit 31 of a property buffer's code word marks a response, and of a tag's
+/// third word the firmware's "handled" mark (with the response length below).
+const RESPONSE: u32 = 0x8000_0000;
+/// Largest buffer [`PropertyLog::record`] walks, so a bad size word cannot send
+/// it far.
+const MAX_BUFFER: u32 = 0x1_0000;
+
+/// What the firmware answered on the property channel, tag by tag.
+///
+/// A reply can carry a value nothing else checks. `NOTIFY_XHCI_RESET` is one:
+/// `reset-raspberrypi` only checks the buffer's status word, so a VL805
+/// firmware load that failed — the tag answered `0xffffffff` — would boot the
+/// same. Recording the answer is what lets a scenario pin it.
+#[derive(Default)]
+pub struct PropertyLog {
+    /// Property replies the firmware posted.
+    pub replies: u64,
+    /// Replies whose buffer-level code is not `0x8000_0000`, success.
+    pub failed: u64,
+    tags: BTreeMap<u32, TagLog>,
+}
+
+/// One tag's history in a [`PropertyLog`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TagLog {
+    /// Replies that carried the tag with the firmware's handled mark.
+    pub marked: u64,
+    /// Replies that carried it without. A tag the firmware does not know is
+    /// left exactly as it was staged, but not every handler sets the mark:
+    /// `SET_GPIO_STATE` and `SET_GPIO_CONFIG` come back unmarked with their
+    /// status, `0`, in the value, and Linux's `gpio-raspberrypi-exp` takes
+    /// that as success.
+    pub unmarked: u64,
+    /// The first word of the tag's value buffer as the latest reply left it,
+    /// if the buffer has one.
+    pub last: Option<u32>,
+}
+
+impl PropertyLog {
+    /// Decode one reply buffer. `word` reads the word at a byte offset into it.
+    /// The walk steps by each tag's value-buffer size, which the client sets
+    /// and the firmware leaves alone.
+    pub fn record(&mut self, word: impl Fn(u32) -> u32) {
+        self.replies += 1;
+        if word(4) != RESPONSE {
+            self.failed += 1;
+        }
+        let size = word(0).min(MAX_BUFFER);
+        let mut off = 8;
+        while off + 12 <= size {
+            let tag = word(off);
+            if tag == 0 {
+                break;
+            }
+            let slot = word(off + 4).min(MAX_BUFFER);
+            let code = word(off + 8);
+            let t = self.tags.entry(tag).or_default();
+            if code & RESPONSE != 0 {
+                t.marked += 1;
+            } else {
+                t.unmarked += 1;
+            }
+            t.last = (slot >= 4).then(|| word(off + 12));
+            off += 12 + ((slot + 3) & !3);
+        }
+    }
+
+    /// Every tag seen, in tag order.
+    pub fn tags(&self) -> impl Iterator<Item = (u32, TagLog)> + '_ {
+        self.tags.iter().map(|(&tag, &log)| (tag, log))
+    }
+}
+
 #[derive(Default)]
 pub struct Mbox {
     /// Replies we have written for the ARM to read (MAIL0).
@@ -166,6 +245,10 @@ pub struct Mbox {
     /// Model time at the latest access, for `RVF_DBG_MBOX`'s timestamps.
     /// [`crate::machine::Machine`] sets it on every mailbox access.
     pub now_us: u64,
+    /// The firmware's property replies, decoded.
+    pub property: PropertyLog,
+    /// A property reply posted and not yet decoded: its buffer's bus address.
+    reply_to_decode: Option<u32>,
 }
 
 impl Mbox {
@@ -202,6 +285,13 @@ impl Mbox {
     /// Take a reply the firmware left for the ARM, if any.
     pub fn take_reply(&mut self) -> Option<u32> {
         self.to_arm.pop_front()
+    }
+
+    /// The bus address of a property reply the firmware just posted, for
+    /// [`crate::machine::Machine`] to decode into [`Mbox::property`]: the
+    /// buffer is in DRAM, which this device cannot see.
+    pub fn take_property_reply(&mut self) -> Option<u32> {
+        self.reply_to_decode.take()
     }
 
     /// MAIL1's `CONFIG` word as the firmware reads it (`0x7E00_B9BC`) — the
@@ -341,6 +431,9 @@ impl MmioDevice for Mbox {
                     self.to_arm.push_back(value);
                     self.writes += 1;
                 }
+                if value & 0xF == CHANNEL_PROPERTY {
+                    self.reply_to_decode = Some(value & !0xF);
+                }
                 if self.dbg {
                     eprintln!("[mbox] {} us VPU -> ARM {value:#010x}", self.now_us);
                 }
@@ -470,6 +563,69 @@ mod tests {
         m.write(vpu + CONFIG1, Width::Word, CFG_CLEAR).unwrap();
         assert!(!m.request_outstanding());
         assert_eq!(m.read(vpu + CONFIG1, Width::Word).unwrap(), 0);
+    }
+
+    #[test]
+    fn a_property_reply_leaves_its_buffer_to_decode() {
+        let mut m = Mbox::default();
+        m.write(VPU + DATA0, Width::Word, 0xCEF0_0000 | CHANNEL_PROPERTY)
+            .unwrap();
+        assert_eq!(m.take_property_reply(), Some(0xCEF0_0000));
+        assert_eq!(m.take_property_reply(), None);
+        // Other channels carry no property buffer.
+        m.write(VPU + DATA0, Width::Word, 0xCEF0_0000 | 9).unwrap();
+        assert_eq!(m.take_property_reply(), None);
+    }
+
+    #[test]
+    fn a_property_reply_is_decoded_tag_by_tag() {
+        // What start4 leaves after a Linux request: NOTIFY_XHCI_RESET answered
+        // with the handler's return value, then a tag it does not know, left
+        // as staged, then the end tag.
+        let buf = [
+            48,
+            RESPONSE,
+            0x0003_0058,
+            4,
+            RESPONSE | 4,
+            0,
+            0x0003_0999,
+            4,
+            0,
+            0x1234,
+            0,
+            0,
+        ];
+        let mut log = PropertyLog::default();
+        log.record(|o| buf.get(o as usize / 4).copied().unwrap_or(0));
+        assert_eq!((log.replies, log.failed), (1, 0));
+        let tags: Vec<_> = log.tags().collect();
+        assert_eq!(
+            tags,
+            [
+                (
+                    0x0003_0058,
+                    TagLog {
+                        marked: 1,
+                        unmarked: 0,
+                        last: Some(0),
+                    }
+                ),
+                (
+                    0x0003_0999,
+                    TagLog {
+                        marked: 0,
+                        unmarked: 1,
+                        last: Some(0x1234),
+                    }
+                ),
+            ]
+        );
+
+        // A parse error: the firmware stamps the buffer and stops.
+        let bad = [16, RESPONSE | 1, 0, 0];
+        log.record(|o| bad.get(o as usize / 4).copied().unwrap_or(0));
+        assert_eq!((log.replies, log.failed), (2, 1));
     }
 
     #[test]

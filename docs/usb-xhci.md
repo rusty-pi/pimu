@@ -16,10 +16,10 @@ config router, endpoint identity), stage 2a (BAR0 over 40-bit DMA) and stage 3
 `--usb <img>`) are all done and on by default. The bootloader enumerates the
 hub exactly as the reference board does, and with `--usb` it reads
 `start4.elf` off a USB stick over SCSI `READ(10)`. Stage 2 (start4's
-`XHCI_RESET`, `MCU FW`, `VLI firmware load`) turns out to be unreachable for a
-reason that has nothing to do with PCIe: the ARM triggers it, and the lines are
-message-ring entries rather than console output. See
-[Recommendation](#7-recommendation).
+`XHCI_RESET`, `MCU FW`, `VLI firmware load`) runs too, but only under `--arm`:
+the ARM triggers it, with Linux's `NOTIFY_XHCI_RESET` request, and its lines
+are message-ring entries rather than console output, so the Linux scenario pins
+the firmware's answer instead. See [Recommendation](#7-recommendation).
 
 ---
 
@@ -828,20 +828,40 @@ transfers whose source or destination lies in the PCIe outbound window at
   `USBCMD`/`USBSTS` reset semantics, and five root ports that all read
   "powered, empty".
 
-**Stage 2 — start4's `XHCI_RESET`. Reachable after all, through the mailbox.**
+**Stage 2 — start4's `XHCI_RESET`. Done, under Linux.**
 
-*(Superseded below: the paragraph that follows was written before the property
-mailbox had a client. It is right that a plain boot never gets there, and right
-about why; it is wrong that nothing can drive it.)*
+Under `--arm`, Linux's `xhci_pci_probe` resets the controller through
+`reset-raspberrypi`, which sends `NOTIFY_XHCI_RESET` (`0x00030058`, `dev_addr =
+0x100000`), and the whole stage runs. A diag build of the Linux scenario, run
+until `xhci_hcd 0000:01:00.0: xHCI Host Controller` with
+`RVF_TRAP=0x3edc5f02,0x3edc5f76,0x3edc5f92,0x3ecdb722` and
+`RVF_TRACE_MMIO=0x7d508000-0x7d508080`:
 
-`--mbox-property 0x00030058=0x00100000` — `NOTIFY_XHCI_RESET`, the request
-Linux's driver sends — enters `0x3EDC61F4` (one trap hit), and the `pcie-base`
-argument the firmware derives is `0x4000`, matching the reference log's
-`pcie-base: 00004000` exactly. A control-flow trace from the entry shows it
-reaching the printf and then taking the `bne` at `0x3EDC6232`, the
-"VL805 device not recognized" path, and returning `0xffffffff`.
+```text
+mmio 0x3edc6204  R2  0x7d508000 <- 0x1106
+mmio 0x3edc620a  R2  0x7d508002 <- 0x3483
+[trap] 0x3edc5f02 #1 ... r3=0x10ffc800 r4=0x3ff20000    printf "MCU FW: %x %x"
+[trap] 0x3edc5f92 #1 ... r3=0x0                         printf "VLI firmware load complete status %d"
+[trap] 0x3ecdb722 #1 ... r0=0x0                         XHCI_RESET's return, in its caller
+```
 
-An MMIO trace says why, and it is a gap in *this model*:
+`MCU FW: 10ffc800 3ff20000` and `status 0` are the reference log's values
+exactly, and the `hub2 mismatch` print at `0x3edc5f76` never runs, so the
+verify pass read back what was uploaded. The upload goes through the vendor
+index/data port at config `0x78`/`0x7C`, which only has to store and return what
+the firmware writes (`Vl805::cfg_write`).
+
+`testdata/boot/linux-boot.toml` pins the result. Linux checks only the buffer's
+status word, so a failed load would boot the same. The model decodes every
+property reply as the firmware posts it (`PropertyLog`, `src/periph/mbox.rs`),
+and the run report prints `tag 0x00030058 ... last value 0x00000000`, which is
+what the milestone matches.
+
+**Without Linux, the same request still fails.**
+`--mbox-property 0x00030058=0x00100000` posts it on the firmware-only bench. It
+enters `0x3EDC61F4` (one trap hit), and the `pcie-base` argument the firmware
+derives is `0x4000`, matching the reference log's `pcie-base: 00004000`
+exactly. Then the config reads come back all ones:
 
 ```text
 mmio 0x3ed42d96  W4  0x7d509000 <- 0x00100000   EXT_CFG_INDEX: bus 1, slot 0, fn 0
@@ -849,12 +869,13 @@ mmio 0x3edc6204  R2  0x7d508000 <- 0xffff       vendor
 mmio 0x3edc620a  R2  0x7d508002 <- 0xffff       device
 ```
 
-The firmware selects the right function; `Pcie::ext_target` answers
-`CfgTarget::None` anyway, because `link_up` is false by then. It is only set on
-a `RGR1_SW_INIT_1` PERST# 1->0 *transition*, which happens once during the
-bootloader's bring-up; nothing re-establishes it for start4, so the endpoint has
-gone invisible between the two. Fixing that is what stands between here and
-driving `MCU FW` / `VLI firmware load complete`.
+The handler takes the `bne` at `0x3EDC6232` to "VL805 device not recognized"
+and the tag answers `0xffffffff`. The firmware selects the right function, but
+`Pcie::ext_target` answers `CfgTarget::None` because `link_up` is false by then
+(#30). It is only set on a `RGR1_SW_INIT_1` PERST# 1->0 *transition*, which the
+bootloader makes once during its bring-up and nothing makes again before the
+request. Under Linux, `pcie-brcmstb` asserts and releases PERST# itself, the
+link comes up, and the endpoint answers.
 
 **The original note, still true for a plain boot:**
 This was scoped as "make start4 recognise the device", and the model now
@@ -868,9 +889,9 @@ Two facts explain that, and together they move the stage off the VPU model's
 critical path entirely:
 
 1. **The trigger is the ARM.** In the reference capture `XHCI_RESET` lands
-   1.1 s *after* `arm_loader`, which is Linux's `vl805` driver asking the
-   firmware to load the controller's firmware over the property mailbox. This
-   bench has no ARM core, so nothing ever asks.
+   1.1 s *after* `arm_loader`, which is Linux's xHCI driver asking the
+   firmware to load the controller's firmware over the property mailbox.
+   Without `--arm` nothing ever asks.
 2. **The three lines are not console output.** `vc4-boot.log` is a `vcdbg` dump
    of the firmware's internal message ring, not a serial capture — the genuine
    UART logs in the same directory stop at `arm_loader`, and the ring shows two
@@ -879,11 +900,9 @@ critical path entirely:
    every byte.
 
 So `XHCI_RESET` / `MCU FW` / `VLI firmware load complete status 0` cannot be
-`want`ed in `boot-check.sh`: even a perfect model would not print them. If the
-path is ever driven — by modelling the property mailbox request the ARM would
-send — the evidence has to be a trap or an MMIO assertion (the config-space
-read at `0x7D50_8000`, then the vendor-port traffic at config `0x78`/`0x7C`),
-not a console line.
+console milestones: even a perfect model would not print them. The evidence has
+to come from elsewhere: a trap, an MMIO trace, or the reply buffer, which is
+what `linux-boot.toml` pins.
 
 **This stage is not on the USB-boot path** either, which is worth being
 explicit about because the ordering is easy to get backwards. USB *boot* is the
@@ -1031,14 +1050,15 @@ registers through the outbound window, takes its interrupts as MSIs through the
 root complex's MSI block, and registers both root hubs; `usb 1-1` (the VIA hub)
 starts enumerating just before the scenario's shell session ends. What that
 needed is in `src/periph/pcie.rs` (module docs, "Linux") and
-`docs/arm-side-findings.md`.
+`docs/arm-side-findings.md`. On the way, `xhci_pci_probe` sends
+`NOTIFY_XHCI_RESET`, which is what runs stage 2 (above).
 
 ---
 
 ## 7. Recommendation
 
-**Stages 0, 1, 2a and 3 are done and on by default. Stage 2 is closed as
-not-reachable.**
+**Stages 0, 1, 2a and 3 are done and on by default. Stage 2 runs under
+`--arm`.**
 
 Stage 0 fixed a genuine correctness bug — the firmware was writing PCIe
 registers into modelled DRAM — and made every later step observable through
@@ -1056,11 +1076,15 @@ with 40-bit DMA4 transfers through the PCIe outbound window (§5.1). Honouring
 whole of it. With BAR0 answering, the endpoint is attached by default and
 `boot-check.sh` asserts the bring-up.
 
-Stage 2 should not be attempted as scoped. Its three log lines are message-ring
-entries recorded after the UART belongs to Linux, and the path that produces
-them is entered on an ARM property-mailbox request that this bench, having no
-ARM core, never sends — measured, not assumed: zero trap hits on `0x3EDC61F4`
-and its two call sites over a full run with a live, enumerated VL805.
+Stage 2 cannot be reached from the firmware alone, and it is not console
+output. Its three log lines are message-ring entries recorded after the UART
+belongs to Linux, and the path that produces them is entered on an ARM
+property-mailbox request. Without an ARM nothing sends it — measured, not
+assumed: zero trap hits on `0x3EDC61F4` and its two call sites over a full
+firmware-only run with a live, enumerated VL805. Linux on the modelled ARM sends
+it from `xhci_pci_probe`, and the stage runs through to `VLI firmware load
+complete status 0` with the reference board's values. `linux-boot.toml` pins
+the answer from the reply buffer, since no console line carries it.
 
 Stage 3 landed the ring engine, the on-board VIA hub, a BOT/SCSI mass-storage
 device and the `--usb <img>` / `--boot-order <hex>` flags. The bootloader

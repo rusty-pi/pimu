@@ -94,6 +94,23 @@ why = "xhci-pci drives the VL805 through the outbound window: the capability reg
 line = "hub 2-0:1.0: 4 ports detected"
 
 [[milestone]]
+why = """
+start4 loads the VL805's firmware when Linux asks. `xhci_pci_probe` resets the
+controller through `reset-raspberrypi`, which sends `NOTIFY_XHCI_RESET`
+(`0x00030058`), and start4's `XHCI_RESET` (`0x3EDC61F4`) answers with its return
+value: 0 once it has found the VL805 at `1106:3483` and uploaded and verified
+the firmware through the vendor port at config `0x78`/`0x7C`, `0xffffffff` when
+it did not recognise the device. Traps on this path read `MCU FW: 10ffc800
+3ff20000` and `VLI firmware load complete status 0`, the values the reference
+board's vc4-boot.log records (docs/usb-xhci.md, stage 2).
+
+Linux checks only the buffer's status word, so a failed load would boot the
+same, and the firmware's own prints go to its message ring, not the UART. The
+answer is read out of the reply buffer instead (`PropertyLog`,
+src/periph/mbox.rs)."""
+line = ["tag 0x00030058", "unmarked 0 ", "last value 0x00000000"]
+
+[[milestone]]
 why = "The root filesystem mounts from the card's second partition."
 line = "VFS: Mounted root (ext4 filesystem) readonly on device 179:2."
 
