@@ -147,7 +147,8 @@ pub struct Machine {
     /// `start4.elf` logs boot progress by writing 4-char ASCII tags (`_msh`,
     /// `_osh`, `bfsp`, ...) to a register at `0xCEC0_2000`. We capture the
     /// sequence — it is the closest thing to an early-boot log before any UART
-    /// is up.
+    /// is up. Only a `--features diag` build does: the address is start4's, and
+    /// outside diagnostics the model knows nothing about start4 (#25).
     pub phase_tags: Vec<u32>,
 }
 
@@ -995,7 +996,8 @@ impl Bus for Machine {
         if !Machine::in_mmio(addr) {
             let phys = Machine::fold_ram_addr(addr);
             if self.ram.contains(phys) {
-                if addr & 0x03FF_FFFF == PHASE_TAG_SIG
+                if crate::diag::ON
+                    && addr & 0x03FF_FFFF == PHASE_TAG_SIG
                     && width == Width::Word
                     && self.phase_tags.last() != Some(&value)
                 {

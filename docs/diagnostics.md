@@ -28,7 +28,8 @@ every instruction, so a normal build (CI's included) compiles them out. Set on
 such a build they are reported and ignored, and `--trace*` is refused. A `diag`
 build also takes every step through every check of the run loop, instead of
 skipping the ones that cannot act (`Emulator::fast_steps`), so the switches see
-each instruction.
+each instruction. It also records start4's boot-progress tags (stores to
+`0x?EC0_2000`), which `recon` prints after the run.
 `RVF_LIVE_CONSOLE` is not a diagnostic and works everywhere, as do the
 device-model `RVF_DBG_*` switches, which are read once and only fire on rare
 device events.
