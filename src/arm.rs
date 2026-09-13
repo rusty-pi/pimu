@@ -590,12 +590,19 @@ impl ArmSide {
                     core.cpu.event = false;
                 }
                 awake = true;
-                if let Some(stop) = self.step_core(m, id) {
-                    self.stopped = Some(stop);
-                    break;
+                match self.step_core(m, id) {
+                    // Nothing changed that the runnable bits or the parked
+                    // cores depend on.
+                    Turn::Plain => {}
+                    Turn::Full => {
+                        self.refresh_runnable(id);
+                        ids |= std::mem::take(&mut self.woke);
+                    }
+                    Turn::Stop(stop) => {
+                        self.stopped = Some(stop);
+                        break;
+                    }
                 }
-                self.refresh_runnable(id);
-                ids |= std::mem::take(&mut self.woke);
             }
             if !awake {
                 let wake = self.timer_due.min(self.park_due).min(end);
@@ -616,8 +623,9 @@ impl ArmSide {
 
     /// One instruction (or exception or interrupt entry) on core `id`, and
     /// what it means for the others (module docs, "Between cores").
-    fn step_core(&mut self, m: &mut Machine, id: usize) -> Option<ArmStop> {
+    fn step_core(&mut self, m: &mut Machine, id: usize) -> Turn {
         let cycles = self.cycles;
+        let park_on = self.park_on;
         let core = &mut self.cores[id];
         let secure = core.cpu.el == 3 || core.cpu.sys.scr_el3 & sysreg::SCR_NS == 0;
         let pc = core.cpu.pc;
@@ -625,6 +633,7 @@ impl ArmSide {
             *p.entry((id, core.cpu.el, pc & !0xFF)).or_default() += 1;
         }
         let watching = core.detect.watching();
+        let effects = core.cpu.effects;
         let mut bus = ArmBus {
             m: &mut *m,
             timer: &mut core.timer,
@@ -645,7 +654,38 @@ impl ArmSide {
             io: bus.io,
             periph_store: bus.periph_store,
         };
-        self.after_step(m, id, done)
+        // Most steps are a plain instruction on registers and RAM: nothing
+        // [`Self::after_step`] does for them but count it, as long as a store
+        // clears no other core's exclusive mark and wakes no parked core
+        // (the same test [`Self::burst`] makes).
+        let plain = matches!(done.step, Step::Retired)
+            && !done.io
+            && !watching
+            && core.cpu.effects == effects
+            && core.entered.is_some();
+        if plain
+            && (done.written.is_none()
+                || (self.parked == 0
+                    && !self
+                        .cores
+                        .iter()
+                        .enumerate()
+                        .any(|(k, c)| k != id && c.cpu.marked())))
+        {
+            let core = &mut self.cores[id];
+            core.insns += 1;
+            if park_on {
+                let park = core
+                    .detect
+                    .retired(&core.cpu, cycles, pc, done.written.is_some());
+                debug_assert!(!park);
+            }
+            return Turn::Plain;
+        }
+        match self.after_step(m, id, done) {
+            Some(stop) => Turn::Stop(stop),
+            None => Turn::Full,
+        }
     }
 
     /// Core `id` is the only one taking turns and nothing is due before
@@ -869,6 +909,16 @@ impl ArmSide {
         }
         None
     }
+}
+
+/// How a core's turn in the cycle loop went.
+enum Turn {
+    /// A plain instruction: nobody else needs to hear of it.
+    Plain,
+    /// It went through [`ArmSide::after_step`]: the runnable bits and the
+    /// parked cores need a look.
+    Full,
+    Stop(ArmStop),
 }
 
 /// One step of a core, as [`ArmSide::after_step`] needs it: what the step
