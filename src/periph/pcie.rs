@@ -16,7 +16,15 @@
 //!   reset, the same bits `pcie-brcmstb` uses. The bootcode parks the block in
 //!   reset (`0x8000AB4A` writes `2` then `3`), the second-stage bootloader's
 //!   `pcie_reset` (`0x000A7034`) re-asserts both, then `pcie_init` releases the
-//!   bridge (`0x000A6CA2`) and finally PERST# (`0x000A6DCC`).
+//!   bridge (`0x000A6CA2`) and finally PERST# (`0x000A6DCC`). The bridge reset
+//!   also returns the MSI block to its reset state, nothing pending and every
+//!   vector masked, and the block takes no messages while it is held. Linux
+//!   depends on that: `brcm_pcie_setup()` never clears the block, and
+//!   `brcm_msi_set_regs()` unmasks before it clears. A vector the firmware's
+//!   USB traffic left pending (the VL805 signals while every vector is still
+//!   masked) used to survive into Linux, and when the ARM took the interrupt
+//!   between those two writes there was no handler to clear it: an interrupt
+//!   storm on `GIC_SPI 148` that hung the kernel in its PCIe probe.
 //! * **`MISC_PCIE_STATUS` (`+0x4068`)** — the link-up poll. The bootloader's
 //!   predicate at `0x000A6F7E` is
 //!
@@ -148,6 +156,7 @@ use crate::spec::pcie::{
     MSI_INTR2_MASK_SET, MSI_INTR2_MASK_STATUS, MSI_INTR2_SET, MSI_INTR2_STATUS, PRIV1_ID_VAL3,
     RC_BAR1_CONFIG_LO, RC_BAR2_CONFIG_HI, RC_BAR2_CONFIG_LO,
     RC_BAR2_CONFIG_LO_SIZE_MASK as RC_BAR_SIZE_MASK, RC_BAR3_CONFIG_LO, RC_LNKCTL, RGR1_SW_INIT_1,
+    RGR1_SW_INIT_1_INIT_MASK as SW_INIT_BRIDGE,
 };
 use crate::spec::Coverage;
 
@@ -505,6 +514,10 @@ impl Pcie {
     /// An upstream memory write of `data` to PCI bus address `addr`, which the
     /// root complex claims when it is its MSI target.
     fn receive_msi(&mut self, addr: u64, data: u32) {
+        if self.sw_init & SW_INIT_BRIDGE != 0 {
+            // A bridge held in reset takes no messages.
+            return;
+        }
         let lo = self.stored(MSI_BAR_CONFIG_LO);
         let target = ((self.stored(MSI_BAR_CONFIG_HI) as u64) << 32) | (lo & !0x3) as u64;
         let cfg = self.stored(MSI_DATA_CONFIG);
@@ -797,6 +810,12 @@ impl MmioDevice for Pcie {
         if offset == RGR1_SW_INIT_1 {
             let was_perst = self.sw_init & 1 != 0;
             self.sw_init = value;
+            if value & SW_INIT_BRIDGE != 0 {
+                // The bridge soft reset puts the MSI block back to its reset
+                // state (module docs): nothing pending, every vector masked.
+                self.msi_status = 0;
+                self.msi_mask = 0xFFFF_FFFF;
+            }
             if value & 1 != 0 {
                 self.link_up = false;
                 if !was_perst {
@@ -977,6 +996,24 @@ mod tests {
         // The driver acknowledges the interrupter, then the MSI block.
         p.mmio_write(ir0, Width::Word, 0x3, &mut mem);
         p.write(MSI_INTR2_CLR, Width::Word, 1).unwrap();
+        assert!(!p.msi_line());
+    }
+
+    /// A vector the firmware's USB traffic left pending behind the mask must
+    /// not survive Linux's bridge reset: `brcm_msi_set_regs()` unmasks before
+    /// it clears, and a stale vector has no handler to clear it.
+    #[test]
+    fn the_bridge_reset_clears_a_stale_msi() {
+        let mut p = enumerated_pcie();
+        p.write(MSI_INTR2_SET, Width::Word, 1).unwrap();
+        assert!(!p.msi_line(), "masked");
+        // `brcm_pcie_setup()`: bridge reset, PERST#, bridge out of reset.
+        for v in [0x2, 0x3, 0x1] {
+            p.write(RGR1_SW_INIT_1, Width::Word, v).unwrap();
+        }
+        p.write(MSI_INTR2_MASK_CLR, Width::Word, 0xFFFF_FFFF)
+            .unwrap();
+        assert_eq!(rd(&mut p, MSI_INTR2_STATUS), 0);
         assert!(!p.msi_line());
     }
 
