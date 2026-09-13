@@ -32,7 +32,16 @@
 //! `sdram: sdram refresh 1562->3124 (2)`. With the port returning 0 the
 //! firmware instead saw an out-of-range code and logged
 //! `Unexpected sdram refresh code (0)`, so the model seeds MR4 with the
-//! reference board's 2 and leaves every other mode register at its reset 0.
+//! reference board's 2.
+//!
+//! The other one that matters is **MR8**, the density. The bootloader sizes
+//! the DRAM from it (`Initialising SDRAM rank 2 total-size: <n>Gbit`), and
+//! start4 answers `GET_BOARD_REVISION` with a memory-size field to match, not
+//! the OTP's. The reference board is an 8 GB Pi 4B (`total-size: 64Gbit` in
+//! `examples-on-real-hardware/sd-card-boot-perfect.log`, 32 Gb per die); the
+//! model is a 2 GB one, which is what `recon --eeprom` backs by default: MR8
+//! says 8 Gb per die, x16, so two ranks make 16 Gbit. At its reset 0 (4 Gb)
+//! the board came out as 1 GB. Every other mode register reads its reset 0.
 
 use std::collections::BTreeMap;
 
@@ -73,6 +82,11 @@ fn status_slot(off: u32) -> bool {
 const MR4_REFRESH_RATE: u32 = 4;
 const MR4_RESET: u8 = 2;
 
+/// LPDDR4 MR8 (basic configuration 4): density per die in `OP[5:2]`, I/O
+/// width in `OP[7:6]`. `0b0010` is 8 Gb, and width 0 is x16.
+const MR8_BASIC_CONFIG: u32 = 8;
+const MR8_8GB_X16: u8 = 0b0010 << 2;
+
 /// A mode register is addressed by channel, device (rank) and register number.
 type MrKey = (bool, bool, u8);
 
@@ -100,6 +114,7 @@ impl Sdc {
         for chan in [false, true] {
             for dev in [false, true] {
                 mode_regs.insert((chan, dev, MR4_REFRESH_RATE as u8), MR4_RESET);
+                mode_regs.insert((chan, dev, MR8_BASIC_CONFIG as u8), MR8_8GB_X16);
             }
         }
         Sdc {
@@ -212,9 +227,16 @@ mod tests {
     }
 
     #[test]
+    fn mr8_describes_a_2_gb_board() {
+        let mut sdc = Sdc::new();
+        sdc.write(MR_PORT, Width::Word, 8 | MR_DEVICE).unwrap();
+        assert_eq!((port(&mut sdc) & MR_RDATA) >> MR_RDATA_SHIFT, 0x08);
+    }
+
+    #[test]
     fn unwritten_registers_read_as_zero_and_ready() {
         let mut sdc = Sdc::new();
-        sdc.write(MR_PORT, Width::Word, 8).unwrap();
+        sdc.write(MR_PORT, Width::Word, 6).unwrap();
         let got = port(&mut sdc);
         assert_eq!(got & MR_RDATA, 0);
         assert_eq!(got & MR_DONE, MR_DONE);

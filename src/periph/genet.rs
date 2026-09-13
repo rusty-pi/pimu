@@ -507,7 +507,7 @@ impl Genet {
                 self.tx_frame.clear();
             }
             if self.reg(d + 8) == 0 {
-                if let Ok(b) = ram.read_slice(dma_addr(self.reg(d + 4)), len) {
+                if let Ok(b) = ram.read_slice(dma_addr(self.reg(d + 4), ram.len()), len) {
                     self.tx_frame.extend_from_slice(b);
                 }
             }
@@ -639,7 +639,9 @@ impl Genet {
             }
             if buf.len() > buf_len
                 || self.reg(d + 8) != 0
-                || ram.write_slice(dma_addr(self.reg(d + 4)), &buf).is_err()
+                || ram
+                    .write_slice(dma_addr(self.reg(d + 4), ram.len()), &buf)
+                    .is_err()
             {
                 self.stats.rx_dropped += 1;
                 continue;
@@ -715,11 +717,16 @@ impl Genet {
     }
 }
 
-/// GENET is a 40-bit master on the SCB, which maps DRAM 1:1 (`dma-ranges`).
-/// Addresses the VPU hands it may carry its cache-alias bits; they fold away,
-/// as for EMMC2.
-fn dma_addr(addr: u32) -> u32 {
-    addr & 0x3FFF_FFFF
+/// GENET is a 40-bit master on the SCB, which maps DRAM 1:1 (`dma-ranges`),
+/// so an address inside the board's RAM is physical; on a 2 GB board Linux's
+/// buffers can sit above the first gigabyte. Only an address past the RAM
+/// carries the VPU's cache-alias bits, and folds away, as for EMMC2.
+fn dma_addr(addr: u32, ram_len: usize) -> u32 {
+    if (addr as usize) < ram_len {
+        addr
+    } else {
+        addr & 0x3FFF_FFFF
+    }
 }
 
 /// The Ethernet FCS (CRC-32, IEEE 802.3), as it follows the frame on the

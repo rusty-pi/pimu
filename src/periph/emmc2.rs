@@ -135,11 +135,17 @@ const ADMA_ST_TFR: u32 = 3;
 /// Descriptors walked per transfer before the engine gives up (a link loop).
 const ADMA_MAX_DESCRIPTORS: usize = 1 << 16;
 
-/// A DMA address as the RAM sees it: the ARM's physical addresses are the
-/// bus addresses on the emmc2bus (its `dma-ranges` is 1:1), and the VPU's
-/// cache aliases fold away.
-fn dma_ram_addr(addr: u32) -> u32 {
-    addr & 0x3FFF_FFFF
+/// A DMA address as the RAM sees it. The emmc2bus's `dma-ranges` is 1:1, so
+/// an address inside the board's RAM is physical: on a 2 GB board that
+/// includes `0x4000_0000..0x8000_0000`, where Linux's DMA32 zone puts block
+/// buffers. Only an address past the RAM is one of the VPU's cache aliases,
+/// and folds onto the first gigabyte.
+fn dma_ram_addr(addr: u32, ram_len: usize) -> u32 {
+    if (addr as usize) < ram_len {
+        addr
+    } else {
+        addr & 0x3FFF_FFFF
+    }
 }
 
 /// An SDMA or ADMA2 transfer in flight: the data (read from the card, or to be
@@ -551,7 +557,7 @@ impl Emmc2 {
 
     /// Move `n` bytes between the transfer buffer and RAM at `addr`.
     fn dma_copy(&mut self, d: &mut Dma, ram: &mut Ram, addr: u32, n: usize) -> bool {
-        let a = dma_ram_addr(addr);
+        let a = dma_ram_addr(addr, ram.len());
         let ok = if d.write {
             match ram.read_slice(a, n) {
                 Ok(src) => {
@@ -609,7 +615,7 @@ impl Emmc2 {
         let mut state = ADMA_ST_FDS;
         let mut mismatch = false;
         for _ in 0..ADMA_MAX_DESCRIPTORS {
-            let Ok(raw) = ram.read_slice(dma_ram_addr(desc), 8) else {
+            let Ok(raw) = ram.read_slice(dma_ram_addr(desc, ram.len()), 8) else {
                 break;
             };
             let attr = u16::from_le_bytes([raw[0], raw[1]]);
@@ -999,6 +1005,16 @@ mod tests {
     const TRAN: u16 = 0x21;
     const TRAN_END: u16 = 0x23;
     const NOP_END: u16 = 0x03;
+
+    /// On a 2 GB board Linux's DMA32 buffers sit above the first gigabyte;
+    /// they must not fold onto it. Past the RAM, the VPU's aliases still do.
+    #[test]
+    fn dma_addresses_inside_the_ram_are_physical() {
+        let two_gb = 2 << 30;
+        assert_eq!(dma_ram_addr(0x7F00_1000, two_gb), 0x7F00_1000);
+        assert_eq!(dma_ram_addr(0xC000_1000, two_gb), 0x1000);
+        assert_eq!(dma_ram_addr(0x4000_1000, 1 << 30), 0x1000);
+    }
 
     #[test]
     fn identity_registers_are_the_measured_ones() {
