@@ -23,12 +23,13 @@
 //!
 //! Which rows those are is not a matter of taste. `arm_loader` will not start
 //! the ARM until `FUN_0EC78F70` says the board is genuine, and that check reads
-//! **rows 19..26** as two four-word blocks and compares them against an
-//! obfuscated per-board-family constant in `.text` — first the block on its own,
-//! then the other block, then the two OR-ed together. With those rows reading
-//! back 0 no comparison can match, the check fails, and start4 blinks LED error
-//! code 4-4 ("unsupported board type") in a loop for the rest of the boot
-//! instead of reaching `arm_loader`.
+//! **rows 19..26** as two four-word blocks and compares them against obfuscated
+//! per-board-family constants in `.rdata` (see [`BOARD_IDENTITY`] for which) —
+//! for each constant, first one block on its own, then the other block, then
+//! the two OR-ed together. With those rows reading back 0 no comparison can
+//! match, the check fails, and start4 blinks LED error code 4-4 ("unsupported
+//! board type") in a loop for the rest of the boot instead of reaching
+//! `arm_loader`.
 //!
 //! `vcgencmd otp_dump` is no help in seeding them: from Linux those rows read
 //! back `0xFFFF_FFFF`, which cannot be their fused value because the firmware
@@ -80,12 +81,23 @@ const READY: u32 = (1 << 17) | (1 << 18) | (1 << 7);
 /// The board-identity block in OTP rows 19..22 (and again in 23..26).
 ///
 /// `FUN_0EC78F70`, the check `arm_loader` gates the ARM launch on, compares
-/// those rows against a per-board-family constant obfuscated with
-/// `^ 0xB0BE_5AD5` in start4's `.text`. It picks the constant by board type —
-/// `0x3EDE_DB18` for type 17, Pi 4 Model B, which is what OTP row 30's revision
-/// code says this machine is — so these four words are the value a genuine
-/// Pi 4 Model B must have fused. They come out of the firmware image itself,
-/// not off any particular board, and identify the model rather than the unit.
+/// those rows against entries of a six-entry table in start4's `.rdata` at
+/// `0x3EDE_DAC8`, each obfuscated with `^ 0xB0BE_5AD5`. It picks two entries
+/// by board type, a primary and a secondary, and passes if either one matches.
+/// For type 17, Pi 4 Model B, which is what OTP row 30's revision code says
+/// this machine is:
+///
+/// - the primary is `0x3EDE_DAD8`, the default shared by every board on a
+///   BCM2837, BCM2711 or BCM2712 whose type does not override it;
+/// - the secondary is `0x3EDE_DB18`, the entry for the BCM2711 boards (4B, 400,
+///   CM4, CM4S). It is skipped only when `board_info_trait_bool(15)` is set and
+///   a firmware flag bit is clear; this model gets past the check, so it is not
+///   skipped here.
+///
+/// These four words are the secondary. Which of the two a genuine Pi 4 Model B
+/// has fused is not known, since Linux reads those rows back redacted. Either
+/// way they come out of the firmware image itself, not off any particular
+/// board, and identify the model rather than the unit.
 ///
 /// The firmware accepts the value in either four-row block, or spread across
 /// both and OR-ed together (the redundancy real fuses need); storing it whole in
@@ -134,7 +146,7 @@ impl ConfigOtp {
         }
         // 19-26: the board-identity block `arm_loader` verifies (see the module
         // docs). Unlike its neighbours this one cannot be invented — the value
-        // is the Pi 4 Model B family constant start4 itself carries, so it
+        // is the BCM2711 boards' constant start4 itself carries, so it
         // identifies the model, not the unit. Stored in both four-row blocks so
         // all three of the firmware's comparisons agree.
         for (i, word) in BOARD_IDENTITY.iter().enumerate() {
