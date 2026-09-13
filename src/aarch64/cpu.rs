@@ -337,6 +337,11 @@ impl Cpu {
     /// Take a synchronous exception raised by the instruction at `pc`:
     /// route it (ARM ARM D1.10.3), turning `hvc`/`smc` into UNDEFINED where
     /// `SCR_EL3` disables them, and enter the vector.
+    ///
+    /// Out of line, like [`Self::take_interrupt`]: [`Self::step_system`] runs
+    /// every instruction, and the rare paths' registers made each one pay
+    /// for a bigger frame (#53).
+    #[inline(never)]
     pub fn take_sync(&mut self, e: Exception) {
         let el = self.el;
         let pc = self.pc;
@@ -375,6 +380,7 @@ impl Cpu {
 
     /// Take an IRQ (or FIQ) if routing and `PSTATE` allow it now; the return
     /// address is the instruction that would have executed next.
+    #[inline(never)]
     pub fn take_interrupt(&mut self, fiq: bool) -> bool {
         match irq_target(self.sys.scr_el3, self.sys.hcr_el2, self.pstate(), fiq) {
             Some(target) => {
@@ -411,6 +417,7 @@ impl Cpu {
     }
 
     /// Execute one instruction.
+    #[inline(always)]
     pub fn step<M: Memory + ?Sized>(&mut self, mem: &mut M) -> Step {
         let pc = self.pc;
         if pc & 3 != 0 {
@@ -441,6 +448,12 @@ impl Cpu {
 
     /// One step of the whole core: take a pending interrupt if it can be
     /// taken, else execute an instruction and take any exception it raises.
+    ///
+    /// Inlined, with [`Self::step`], into the ARM run loop: with interrupt
+    /// and exception entry, system instructions and the fetch's slow paths
+    /// out of line, what is left is small enough that every instruction no
+    /// longer pays for a call and a prologue of its own (#53).
+    #[inline(always)]
     pub fn step_system<M: Memory + ?Sized>(&mut self, mem: &mut M) -> Step {
         if self.fiq_line && self.take_interrupt(true) {
             return Step::Interrupt { fiq: true };

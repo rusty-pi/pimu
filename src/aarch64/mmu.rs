@@ -464,25 +464,35 @@ impl Cpu {
     }
 
     /// Fetch the instruction at `va` (4-byte aligned, so within one page).
+    #[inline]
     pub(super) fn fetch<M: Memory + ?Sized>(
         &mut self,
         mem: &mut M,
         va: u64,
     ) -> Result<u32, Exception> {
-        let abort = |fsc| Exception::InsnAbort { addr: va, fsc };
-        let page = va & !0xFFF;
         let pa = match self.tlb.fetch {
-            Some((v, el, pa)) if v == page && el == self.el => pa | (va & 0xFFF),
-            _ => {
-                let pa = self.translate(mem, va, Kind::Fetch).map_err(abort)?;
-                self.tlb.fetch = Some((page, self.el, pa & !0xFFF));
-                pa
-            }
+            Some((v, el, pa)) if v == va & !0xFFF && el == self.el => pa | (va & 0xFFF),
+            _ => self.fetch_page(mem, va)?,
         };
         mem.fetch(pa).map_err(|_| {
             self.abort_pa = pa;
-            abort(FSC_EXTERNAL)
+            Exception::InsnAbort {
+                addr: va,
+                fsc: FSC_EXTERNAL,
+            }
         })
+    }
+
+    /// [`Self::fetch`] from another page than the last instruction's:
+    /// translate, and remember the page. Out of line, so that the step
+    /// every instruction takes doesn't carry the translation's registers.
+    #[inline(never)]
+    fn fetch_page<M: Memory + ?Sized>(&mut self, mem: &mut M, va: u64) -> Result<u64, Exception> {
+        let pa = self
+            .translate(mem, va, Kind::Fetch)
+            .map_err(|fsc| Exception::InsnAbort { addr: va, fsc })?;
+        self.tlb.fetch = Some((va & !0xFFF, self.el, pa & !0xFFF));
+        Ok(pa)
     }
 }
 
