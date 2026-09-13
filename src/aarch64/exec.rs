@@ -723,6 +723,7 @@ enum Access {
 
 /// Load or store one register. Returns the loaded value for loads to a
 /// general register so the caller can write it after any base write-back.
+#[inline(always)]
 fn transfer<M: Memory + ?Sized>(
     cpu: &mut Cpu,
     mem: &mut M,

@@ -46,6 +46,16 @@
 //! not, as the architecture says); when all of them wait, time skips ahead
 //! to the next generic-timer event inside the slice.
 //!
+//! When one core is the only one taking turns — the others wait, none is
+//! parked — the cycles up to the next thing due (a timer event, the end of
+//! the slice) would visit only it, so [`ArmSide::burst`] steps it through
+//! them without the cycle loop's checks. A step that touches a device,
+//! stores where another core holds an exclusive mark, changes state beyond
+//! the registers and memory ([`Cpu::effects`]) or does not retire ends the
+//! burst, and is finished the ordinary way, so a run is the same either way.
+//! UEFI runs on one core, most of its time hashing the UKI (#53).
+//! `RVF_NO_BURST=1` turns this off, for comparison.
+//!
 //! A fast-forward slice runs with the VPU frozen. For `sleep` — the VPU
 //! waiting for an interrupt — the ARM runs the slice *before* the counter
 //! moves ([`ArmSide::run_until_store`]), and stops after the first cycle in
@@ -262,6 +272,9 @@ pub struct ArmSide {
     woke: u32,
     /// `RVF_NO_PARK=1` turns parking off.
     park_on: bool,
+    /// `RVF_NO_BURST=1` takes a lone core through the cycle loop too
+    /// ([`Self::burst`]).
+    burst_on: bool,
     /// [`Self::run_until_store`]: stop after the cycle in which a core first
     /// writes a VPU-side peripheral, and whether one has.
     stop_on_store: bool,
@@ -327,6 +340,7 @@ impl ArmSide {
             park_due: u64::MAX,
             woke: 0,
             park_on: std::env::var_os("RVF_NO_PARK").is_none(),
+            burst_on: std::env::var_os("RVF_NO_BURST").is_none(),
             stop_on_store: false,
             stored: false,
         }
@@ -545,6 +559,23 @@ impl ArmSide {
                 let t = self.cycles;
                 self.unpark_if(m, |p, _| p.until <= t, t);
             }
+            // One core takes turns and no other is parked: until something is
+            // due, the cycles below would visit just it.
+            if self.burst_on
+                && self.runnable.is_power_of_two()
+                && self.parked == 0
+                && self.prof.is_none()
+            {
+                let id = self.runnable.trailing_zeros() as usize;
+                let limit = end.min(self.timer_due).min(self.park_due);
+                if limit > self.cycles && !self.cores[id].detect.watching() {
+                    self.stopped = self.burst(m, id, limit);
+                    if self.stop_on_store && self.stored {
+                        break;
+                    }
+                    continue;
+                }
+            }
             let mut awake = false;
             let mut ids = self.runnable;
             while ids != 0 {
@@ -607,10 +638,116 @@ impl ArmSide {
             periph_store: false,
         };
         let step = core.cpu.step_system(&mut bus);
-        let written = bus.written;
-        let io = bus.io;
+        let done = Stepped {
+            step,
+            pc,
+            written: bus.written,
+            io: bus.io,
+            periph_store: bus.periph_store,
+        };
+        self.after_step(m, id, done)
+    }
+
+    /// Core `id` is the only one taking turns and nothing is due before
+    /// `limit`: step it cycle by cycle up to there without the cycle loop's
+    /// checks, for as long as each step leaves the others and the interrupt
+    /// state alone (module docs, "Time and scheduling"). The first step that
+    /// does not gets [`Self::after_step`] like any other and ends the burst.
+    fn burst(&mut self, m: &mut Machine, id: usize, limit: u64) -> Option<ArmStop> {
+        // Another core's exclusive mark is the one thing a plain store can
+        // change; nobody else runs, so no mark can appear meanwhile.
+        let marked = self
+            .cores
+            .iter()
+            .enumerate()
+            .any(|(k, c)| k != id && c.cpu.marked());
+        let park_on = self.park_on;
+        let released_at = self.released_at.unwrap_or(0);
+        let mut cycles = self.cycles;
+        let core = &mut self.cores[id];
+        core.waiting = false;
+        if core.wfe_until.take().is_some() {
+            core.cpu.event = false;
+        }
+        let Core {
+            cpu,
+            timer,
+            detect,
+            insns,
+            entered,
+            ..
+        } = core;
+        // An instruction that changes state beyond the registers and memory
+        // (`Cpu::effects`) may change what the next step is: an unmasked
+        // line, the security state, a TLB flush the others need.
+        let effects = cpu.effects;
+        let mut bus = ArmBus {
+            m: &mut *m,
+            timer,
+            cycles,
+            core: id,
+            secure: cpu.el == 3 || cpu.sys.scr_el3 & sysreg::SCR_NS == 0,
+            written: None,
+            io: false,
+            log: None,
+            released_at,
+            periph_store: false,
+        };
+        let last = loop {
+            bus.cycles = cycles;
+            bus.written = None;
+            let pc = cpu.pc;
+            let step = cpu.step_system(&mut bus);
+            let wrote = bus.written.is_some();
+            if !matches!(step, Step::Retired)
+                || bus.io
+                || cpu.effects != effects
+                || (wrote && marked)
+            {
+                break Some(Stepped {
+                    step,
+                    pc,
+                    written: bus.written,
+                    io: bus.io,
+                    periph_store: bus.periph_store,
+                });
+            }
+            *insns += 1;
+            // Not watching a loop yet, so this only counts backward jumps.
+            if park_on {
+                let park = detect.retired(cpu, cycles, pc, wrote);
+                debug_assert!(!park);
+            }
+            if entered.is_none() && cpu.pc >= STUB_END {
+                *entered = Some((cycles, cpu.el, cpu.pc, cpu.x[0]));
+            }
+            cycles += 1;
+            if cycles >= limit || detect.watching() {
+                break None;
+            }
+        };
+        self.cycles = cycles;
+        let done = last?;
+        let stop = self.after_step(m, id, done);
+        self.refresh_runnable(id);
+        self.cycles += 1;
+        stop
+    }
+
+    /// What one step on core `id` in cycle [`Self::cycles`] means for the
+    /// run loop and the other cores.
+    fn after_step(&mut self, m: &mut Machine, id: usize, done: Stepped) -> Option<ArmStop> {
+        let cycles = self.cycles;
+        let Stepped {
+            step,
+            pc,
+            written,
+            io,
+            periph_store,
+        } = done;
         self.dirty |= io;
-        self.stored |= bus.periph_store;
+        self.stored |= periph_store;
+        let core = &mut self.cores[id];
         let el = core.cpu.el;
         let mut wfe_until = None;
         if !matches!(step, Step::Retired) {
@@ -734,6 +871,16 @@ impl ArmSide {
     }
 }
 
+/// One step of a core, as [`ArmSide::after_step`] needs it: what the step
+/// did, from which PC, and what its bus saw.
+struct Stepped {
+    step: Step,
+    pc: u64,
+    written: Option<(u64, u64)>,
+    io: bool,
+    periph_store: bool,
+}
+
 /// Where an ARM physical address lands.
 enum Target {
     Ram(u32),
@@ -810,7 +957,7 @@ impl ArmBus<'_> {
     }
 
     /// An access of at most 4 bytes.
-    #[inline]
+    #[inline(always)]
     fn read32(&mut self, addr: u64, size: u32) -> Result<u64, Abort> {
         let w = Self::width(size);
         let target = self.route(addr, size, false)?;
@@ -835,7 +982,7 @@ impl ArmBus<'_> {
         r.map(u64::from).map_err(|_| Abort { addr, write: false })
     }
 
-    #[inline]
+    #[inline(always)]
     fn write32(&mut self, addr: u64, size: u32, value: u64) -> Result<(), Abort> {
         let (w, v) = (Self::width(size), value as u32);
         let target = self.route(addr, size, true)?;
@@ -1259,21 +1406,66 @@ mod tests {
     /// The same run with busy-wait parking on and off (module docs,
     /// "Busy-wait loops"): every core has to end up in the same state after
     /// the same number of instructions.
+    /// Parked or not, in bursts or not: `drive` has to see the same run.
     fn parks_exactly(code: &[u32], cores: usize, drive: impl Fn(&mut ArmSide, &mut Machine)) {
-        let run = |park: bool| {
+        let run = |park: bool, burst: bool| {
             let mut m = machine_with(code);
             let mut arm = ArmSide::with_cores(cores);
             arm.park_on = park;
+            arm.burst_on = burst;
             drive(&mut arm, &mut m);
             arm.settle(&m);
             arm
         };
-        let (on, off) = (run(true), run(false));
-        assert_eq!(on.cycles, off.cycles);
-        for (id, (a, b)) in on.cores.iter().zip(&off.cores).enumerate() {
-            let state = |c: &Core| (c.cpu.pc, c.cpu.x, c.cpu.nzcv, c.insns);
-            assert_eq!(state(a), state(b), "core {id}");
+        let reference = run(false, false);
+        for (park, burst) in [(true, true), (false, true), (true, false)] {
+            let other = run(park, burst);
+            assert_eq!(other.cycles, reference.cycles, "park {park} burst {burst}");
+            for (id, (a, b)) in other.cores.iter().zip(&reference.cores).enumerate() {
+                let state = |c: &Core| (c.cpu.pc, c.cpu.x, c.cpu.nzcv, c.insns, c.entered);
+                assert_eq!(state(a), state(b), "core {id}, park {park} burst {burst}");
+            }
         }
+    }
+
+    /// A lone running core goes in bursts even while another waits holding
+    /// an exclusive mark: each of its plain stores ends a burst, and the one
+    /// into the marked granule wakes the other.
+    #[test]
+    fn a_lone_core_bursts_past_another_cores_mark() {
+        // mrs x0, mpidr_el1; and x0, x0, #0xff; cbnz x0, 1f;
+        // x1 = 0x800; x2 = 0x2000; x3 = 100;
+        // 0: str x3, [x2]; ldr x4, [x2]; add x5, x5, x4; subs x3, x3, #1;
+        //    b.ne 0b; str x5, [x1]; b .
+        // 1: x1 = 0x800; 2: ldxr x2, [x1]; cbnz x2, 3f; wfe; b 2b;
+        // 3: add x6, x6, #1; b .
+        let code = [
+            0xD538_00A0,
+            0x9240_1C00,
+            0xB500_0160,
+            0xD281_0001,
+            0xD284_0002,
+            0xD280_0C83,
+            0xF900_0043,
+            0xF940_0044,
+            0x8B04_00A5,
+            0xF100_0463,
+            0x54FF_FF81,
+            0xF900_0025,
+            B_SELF,
+            0xD281_0001,
+            0xC85F_7C22,
+            0xB500_0062,
+            0xD503_205F,
+            0x17FF_FFFD,
+            0x9100_04C6,
+            B_SELF,
+        ];
+        parks_exactly(&code, 2, |arm, m| {
+            arm.run(m, 2_000);
+            assert_eq!(arm.cores[0].cpu.x[5], 5050);
+            assert_eq!(arm.cores[1].cpu.x[6], 1, "woken by the store");
+        });
     }
 
     /// `Stall`: spin on the counter until a deadline.

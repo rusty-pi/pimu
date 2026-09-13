@@ -291,6 +291,12 @@ impl Cpu {
         self.regime().is_some()
     }
 
+    /// Does the core hold an exclusive mark, which another core's store can
+    /// clear?
+    pub fn marked(&self) -> bool {
+        self.exclusive.is_some()
+    }
+
     /// Another core wrote physical `[lo, hi)`: the global monitor clears this
     /// core's exclusive mark if the write touched its 64-byte granule (the
     /// A72's reservation granule, `CTR_EL0.ERG`). Clearing the mark is a
