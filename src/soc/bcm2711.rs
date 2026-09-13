@@ -170,6 +170,14 @@ pub const HD_SIZE: u32 = spec::hd::SIZE;
 pub const DWC2_BASE: u32 = spec::dwc2::BASE;
 pub const DWC2_SIZE: u32 = spec::dwc2::SIZE;
 
+/// The two HDMI controllers' core registers (`hdmi@7ef00700`, `hdmi@7ef05700`,
+/// reg-name "hdmi"). start4 rewrites the AV-mute packet in their packet RAM
+/// when it stops its display, and waits for each slot's status with no
+/// timeout (`src/periph/hdmi.rs`, #61).
+pub const HDMI0_BASE: u32 = spec::hdmi::BASE;
+pub const HDMI1_BASE: u32 = spec::hdmi::HDMI1_BASE;
+pub const HDMI_SIZE: u32 = spec::hdmi::SIZE;
+
 /// The two HDMI controllers' DDC I²C masters (`i2c@7ef04500`, `i2c@7ef09500`,
 /// `brcm,bcm2711-hdmi-i2c`) — the buses a monitor's EDID EEPROM sits on. Left
 /// on the catch-all stub they RAM-back, so every EDID read looked like a
