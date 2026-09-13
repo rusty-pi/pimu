@@ -680,3 +680,41 @@ fn vector_store_with_an_unknown_predicate_faults() {
 
     assert_eq!(v.step(&mut m), Step::Stopped, "must not be executed");
 }
+
+/// `v32mov HY(0,0)++,#0 REP8` — the vector memory-clear at `0x60000446` in the
+/// BCM2711 boot ROM. This 80-bit `REP` broadcast used to fall through to
+/// `VecExec::NeedsVrf` and fault; the model now clears `reps` consecutive VRF
+/// rows so `--boot-rom` can execute the maskROM's RAM zeroing.
+#[test]
+fn boot_rom_vector_memclear_is_an_executable_rep_broadcast() {
+    use rpi_virt_fw::vpu::decode::decode;
+    use rpi_virt_fw::vpu::insn::{Op, RegOrImm, VecExec, VecRep};
+
+    let bytes = [0x03, 0xfe, 0x38, 0xc0, 0x00, 0x04, 0xc0, 0xfb, 0x00, 0x00];
+    let insn = decode(&bytes, 0x6000_0446);
+    assert_eq!(insn.len, 10, "80-bit vector instruction");
+    let Op::Vector(v) = insn.op else {
+        panic!("expected a vector op");
+    };
+    assert!(!v.mem && v.subop == 0 && v.lane_bits == 32, "v32mov");
+    match v.executable() {
+        VecExec::Broadcast {
+            src: RegOrImm::Imm(0),
+            reps: VecRep::Fixed(8),
+            step_row: true,
+            ..
+        } => {}
+        _ => panic!("expected an 8-row zero broadcast"),
+    }
+
+    // And it executes rather than faulting.
+    let mut m = machine();
+    let mut v = Vpu::new(CODE);
+    load_code(&mut m, CODE, &[]);
+    for (i, b) in bytes.iter().enumerate() {
+        m.store8(CODE + i as u32, *b).unwrap();
+    }
+    v.regs.pc = CODE;
+    assert_eq!(v.step(&mut m), Step::Ran, "stopped: {:?}", v.stopped);
+    assert_eq!(v.regs.pc, CODE + 10, "advanced past the 80-bit insn");
+}

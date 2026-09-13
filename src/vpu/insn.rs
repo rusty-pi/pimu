@@ -644,9 +644,17 @@ pub enum VecExec {
         reps: VecRep,
         pred: VecPred,
     },
-    /// `v<w>mov <reg>,r<n>` / `v<w>mov <reg>,#imm` — broadcast a scalar or a
-    /// 6-bit immediate across the 16 lanes of a VRF register.
-    Broadcast { reg: VecReg, src: RegOrImm },
+    /// `v<w>mov <reg>[++],r<n>` / `v<w>mov <reg>[++],#imm [REP n]` — broadcast a
+    /// scalar or an immediate across the 16 lanes of a VRF register, for `reps`
+    /// consecutive rows when `step_row` (the `++` modifier) is set. The 48-bit
+    /// form is a single row (`reps = Fixed(1)`, `step_row = false`); the 80-bit
+    /// `REP` form clears a band of rows, which is how the boot ROM zeroes memory.
+    Broadcast {
+        reg: VecReg,
+        src: RegOrImm,
+        reps: VecRep,
+        step_row: bool,
+    },
     /// `v<w>bitplanes -,r<n> SETF` — set the per-lane flags from the low 16 bits
     /// of a scalar; the vector result goes to a dash and is discarded.
     Bitplanes { src: u8 },
@@ -736,7 +744,7 @@ impl VecInsn {
             if let Some(e) = self.mem_transfer() {
                 return e;
             }
-        } else if let Some(e) = self.alu48() {
+        } else if let Some(e) = self.alu48().or_else(|| self.alu80()) {
             return e;
         }
         VecExec::NeedsVrf
@@ -892,6 +900,54 @@ impl VecInsn {
         Some(VecExec::Broadcast {
             reg: self.d.horizontal(self.lane_bits)?,
             src,
+            reps: VecRep::Fixed(1),
+            step_row: false,
+        })
+    }
+
+    /// The 80-bit broadcast the boot ROM clears memory with:
+    ///
+    /// ```text
+    ///   v<w>mov <reg>[++],#imm  [REP n]   1111 11L0 0000 0RRR DDDD dddddd 1110 000000 F1 ...
+    ///   v<w>mov <reg>[++],r<n>  [REP n]   1111 11L0 0000 0RRR DDDD dddddd 1110 000000 00 1110 nnnnnn ...
+    /// ```
+    ///
+    /// The A slot is a bare dash and the B slot is either a 16-bit immediate or a
+    /// scalar register; the destination is a horizontal register stepped by `++`
+    /// (or nothing) each of `REP` repetitions. Anything with an accumulator/SRU
+    /// writeback, `SETF`, lane predication, or a vector-register source falls
+    /// through to [`VecExec::NeedsVrf`] — those need the real vector ALU.
+    fn alu80(&self) -> Option<VecExec> {
+        if self.len != 10 || self.mem || self.subop != 0 {
+            return None; // `subop == 0` is `vmov`; only that broadcasts here.
+        }
+        let reg = self.d.horizontal(self.lane_bits)?;
+        let step_row = match self.d_mod {
+            0 => false,
+            2 => true,
+            _ => return None,
+        };
+        // A must be a bare dash; no scalar writeback, flag update, or predication.
+        if !self.a.is_dash() || self.a.coord != 0 || self.a_mod != 0 {
+            return None;
+        }
+        if self.setf || self.sru != VecSru::None || self.pred != 0 {
+            return None;
+        }
+        let src = match self.b {
+            VecOperandB::Imm(i) => RegOrImm::Imm(i as i32),
+            VecOperandB::Slot(s) if s.is_dash() && (s.coord as u32) < 32 => RegOrImm::Reg(s.coord),
+            _ => return None,
+        };
+        let reps = match self.rep {
+            7 => VecRep::FromR0,
+            n => VecRep::Fixed(1 << n),
+        };
+        Some(VecExec::Broadcast {
+            reg,
+            src,
+            reps,
+            step_row,
         })
     }
 
