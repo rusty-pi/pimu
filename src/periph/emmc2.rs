@@ -23,6 +23,13 @@
 //! ([`Emmc2::irq_asserted`], INTID 158 on the GIC) and status gating by
 //! INT_STATUS_EN, as the SDHCI spec has it.
 //!
+//! The same engine is the chip's other Arasan host too, the legacy EMMC at
+//! `0x7E30_0000` ([`Emmc2::new_legacy`], `specs/emmc.toml`): the WiFi chip's
+//! SDIO host on a Pi 4, and the host 2020-era bootcode reads the SD card
+//! through. Nothing is on its bus — the SD slot reaches it only through a mux
+//! the model does not follow — so every command that expects a response times
+//! out there (#64).
+//!
 //! SDHCI register map (word offsets):
 //! ```text
 //!   0x00 SDMA address / arg2      0x04 block size[11:0] | SDMA boundary[14:12] | count[31:16]
@@ -45,6 +52,7 @@ use crate::periph::sdcard::SdCard;
 // The read-only identity (`CAPABILITIES_*`, `MAX_CURRENT`,
 // `CONTROLLER_VERSION`), the idle `PRESENT_STATE` and `HOST_CONTROL.FIXED` are
 // measured on a Pi 4B rev 1.5 (`specs/emmc2.toml`).
+use crate::spec::emmc as legacy;
 use crate::spec::emmc2::{
     ADMA_ADDR, ADMA_ERROR, ADMA_ERROR_LEN_MISMATCH_MASK as ADMA_LEN_MISMATCH, ARGUMENT,
     BLOCK_SIZE_COUNT, BUFFER_DATA, CAPABILITIES_0, CAPABILITIES_0_RESET as CAPS0, CAPABILITIES_1,
@@ -101,6 +109,107 @@ pub const COVERAGE: Coverage = Coverage {
         ADMA_ADDR,
         CONTROLLER_VERSION,
     ],
+};
+
+/// The legacy EMMC: the command engine. Its identity registers are not
+/// measured, so they stay stubbed.
+pub const COVERAGE_LEGACY: Coverage = Coverage {
+    block: "emmc",
+    decoded: &[
+        legacy::SDMA_ADDR,
+        legacy::BLOCK_SIZE_COUNT,
+        legacy::ARGUMENT,
+        legacy::CMD_XFER,
+        legacy::RESPONSE0,
+        legacy::RESPONSE1,
+        legacy::RESPONSE2,
+        legacy::RESPONSE3,
+        legacy::BUFFER_DATA,
+        legacy::PRESENT_STATE,
+        legacy::HOST_CONTROL,
+        legacy::CLOCK_CONTROL,
+        legacy::INT_STATUS,
+        legacy::INT_STATUS_EN,
+        legacy::INT_SIGNAL_EN,
+        legacy::HOST_CONTROL2,
+    ],
+};
+
+// The engine decodes by EMMC2's offsets and bits, so the legacy spec has to
+// agree with them on everything it lists.
+const _: () = {
+    let same = [
+        (legacy::SDMA_ADDR, SDMA_ADDR),
+        (legacy::BLOCK_SIZE_COUNT, BLOCK_SIZE_COUNT),
+        (legacy::ARGUMENT, ARGUMENT),
+        (legacy::CMD_XFER, CMD_XFER),
+        (legacy::RESPONSE0, RESPONSE0),
+        (legacy::RESPONSE1, RESPONSE1),
+        (legacy::RESPONSE2, RESPONSE2),
+        (legacy::RESPONSE3, RESPONSE3),
+        (legacy::BUFFER_DATA, BUFFER_DATA),
+        (legacy::PRESENT_STATE, PRESENT_STATE),
+        (legacy::PRESENT_STATE_RESET, PRESENT_STATE_IDLE),
+        (legacy::HOST_CONTROL, HOST_CONTROL),
+        (legacy::CLOCK_CONTROL, CLOCK_CONTROL),
+        (legacy::CLOCK_CONTROL_INTERNAL_EN_MASK, CLK_INTLEN),
+        (legacy::CLOCK_CONTROL_STABLE_MASK, CLK_STABLE),
+        (legacy::CLOCK_CONTROL_SD_EN_MASK, CLK_SD_EN),
+        (legacy::CLOCK_CONTROL_SRST_ALL_MASK, SRST_ALL),
+        (legacy::CLOCK_CONTROL_SRST_CMD_MASK, SRST_CMD),
+        (legacy::CLOCK_CONTROL_SRST_DATA_MASK, SRST_DATA),
+        (legacy::INT_STATUS, INT_STATUS),
+        (legacy::INT_STATUS_CMD_COMPLETE_MASK, INT_CMD_COMPLETE),
+        (legacy::INT_STATUS_ERROR_MASK, INT_ERROR),
+        (legacy::INT_STATUS_ERR_CMD_TIMEOUT_MASK, INT_ERR_CMD_TIMEOUT),
+        (legacy::INT_STATUS_EN, INT_STATUS_EN),
+        (legacy::INT_SIGNAL_EN, INT_SIGNAL_EN),
+        (legacy::HOST_CONTROL2, HOST_CONTROL2),
+        (legacy::CAPABILITIES_0, CAPABILITIES_0),
+        (legacy::CAPABILITIES_1, CAPABILITIES_1),
+        (legacy::MAX_CURRENT, MAX_CURRENT),
+        (legacy::CONTROLLER_VERSION, CONTROLLER_VERSION),
+    ];
+    let mut i = 0;
+    while i < same.len() {
+        assert!(same[i].0 == same[i].1);
+        i += 1;
+    }
+};
+
+/// What a host says about itself: the read-only registers that tell the
+/// chip's two Arasan hosts apart.
+#[derive(Clone, Copy)]
+struct Identity {
+    name: &'static str,
+    caps0: u32,
+    caps1: u32,
+    max_current: u32,
+    version: u32,
+    /// HOST_CONTROL bits that read 1 whatever is written.
+    host_control_fixed: u32,
+}
+
+/// EMMC2's, measured on a Pi 4B rev 1.5 (`specs/emmc2.toml`).
+const EMMC2_ID: Identity = Identity {
+    name: "emmc2",
+    caps0: CAPS0,
+    caps1: CAPS1,
+    max_current: MAX_CURRENT_VALUE,
+    version: VERSION,
+    host_control_fixed: HOST_CONTROL_FIXED,
+};
+
+/// The legacy EMMC's. Real boards' bootloader logs show its HOST_CONTROL
+/// reading back just what was written (`specs/emmc.toml`); the capability and
+/// version registers are unmeasured there, and read 0 rather than EMMC2's.
+const LEGACY_ID: Identity = Identity {
+    name: "emmc",
+    caps0: 0,
+    caps1: 0,
+    max_current: 0,
+    version: 0,
+    host_control_fixed: 0,
 };
 
 /// DAT[3:0] and CMD line levels.
@@ -173,6 +282,7 @@ struct PioWrite {
 }
 
 pub struct Emmc2 {
+    id: Identity,
     /// Sticky storage for offsets without special behaviour.
     reg: BTreeMap<u32, u32>,
     /// The inserted card, if any. `None` is an empty slot: nothing drives
@@ -217,6 +327,7 @@ pub struct Emmc2 {
 impl Default for Emmc2 {
     fn default() -> Self {
         Emmc2 {
+            id: EMMC2_ID,
             reg: BTreeMap::new(),
             card: None,
             resp: [0; 4],
@@ -242,6 +353,14 @@ impl Default for Emmc2 {
 impl Emmc2 {
     pub fn new() -> Emmc2 {
         Emmc2::default()
+    }
+
+    /// The legacy EMMC at `0x7E30_0000`, with nothing on its bus.
+    pub fn new_legacy() -> Emmc2 {
+        Emmc2 {
+            id: LEGACY_ID,
+            ..Emmc2::default()
+        }
     }
 
     /// Insert a card backed by `image` (a raw block device: MBR + FAT + files).
@@ -794,11 +913,11 @@ impl Emmc2 {
                 ps
             }
             INT_STATUS => self.int_status(),
-            HOST_CONTROL => self.get(HOST_CONTROL) | HOST_CONTROL_FIXED,
-            CAPABILITIES_0 => CAPS0,
-            CAPABILITIES_1 => CAPS1,
-            MAX_CURRENT => MAX_CURRENT_VALUE,
-            CONTROLLER_VERSION => VERSION,
+            HOST_CONTROL => self.get(HOST_CONTROL) | self.id.host_control_fixed,
+            CAPABILITIES_0 => self.id.caps0,
+            CAPABILITIES_1 => self.id.caps1,
+            MAX_CURRENT => self.id.max_current,
+            CONTROLLER_VERSION => self.id.version,
             _ => self.get(off),
         }
     }
@@ -887,7 +1006,7 @@ impl Emmc2 {
 
 impl MmioDevice for Emmc2 {
     fn name(&self) -> &'static str {
-        "emmc2"
+        self.id.name
     }
 
     fn read(&mut self, offset: u32, width: Width) -> BusResult<u32> {
@@ -1374,5 +1493,46 @@ mod tests {
         assert_eq!(rd(&mut e, INT_STATUS), INT_CMD_COMPLETE);
         e.write(INT_STATUS, Width::Byte, 0x01).unwrap();
         assert_eq!(rd(&mut e, INT_STATUS), 0);
+    }
+
+    /// The legacy EMMC's two waits in 2020-era bootcode (#64): its software
+    /// reset clears, and the internal clock comes up stable once enabled. On
+    /// the catch-all stub neither happened and that boot hung.
+    #[test]
+    fn legacy_host_finishes_the_reset_and_clock_waits_of_2020_bootcode() {
+        let mut e = Emmc2::new_legacy();
+        wr(&mut e, CLOCK_CONTROL, SRST_MASK);
+        assert_eq!(rd(&mut e, CLOCK_CONTROL) & SRST_MASK, 0);
+        wr(&mut e, CLOCK_CONTROL, 0x000E_E201);
+        assert_eq!(rd(&mut e, CLOCK_CONTROL), 0x000E_E201 | CLK_STABLE);
+    }
+
+    /// What real boards' logs show of this host with no card: HOST_CONTROL
+    /// reads back just what was written, PRESENT_STATE idles at 0x1fff0000,
+    /// and CMD55 goes unanswered. None of EMMC2's identity shows through.
+    #[test]
+    fn legacy_host_is_an_empty_bus_with_its_own_identity() {
+        let mut e = Emmc2::new_legacy();
+        assert_eq!(e.name(), "emmc");
+        wr(&mut e, CLOCK_CONTROL, SRST_ALL);
+        assert_eq!(rd(&mut e, HOST_CONTROL), 0, "CTL0: 0x00000000");
+        wr(&mut e, HOST_CONTROL, 0x0000_0F00);
+        assert_eq!(rd(&mut e, HOST_CONTROL), 0x0000_0F00, "CTL0: 0x00000f00");
+        assert_eq!(rd(&mut e, PRESENT_STATE), 0x1FFF_0000);
+        for off in [
+            CAPABILITIES_0,
+            CAPABILITIES_1,
+            MAX_CURRENT,
+            CONTROLLER_VERSION,
+        ] {
+            assert_eq!(rd(&mut e, off), 0, "{off:#x}");
+        }
+
+        wr(&mut e, INT_STATUS_EN, 0xFFFF_FFFF);
+        cmd(&mut e, 0, 0, 0, 0);
+        assert_eq!(rd(&mut e, INT_STATUS), INT_CMD_COMPLETE);
+        wr(&mut e, INT_STATUS, 0xFFFF_FFFF);
+        cmd(&mut e, 55, 0, R1, 0);
+        assert_eq!(rd(&mut e, INT_STATUS), INT_ERR_CMD_TIMEOUT | INT_ERROR);
     }
 }

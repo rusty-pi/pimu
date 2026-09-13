@@ -106,6 +106,7 @@ pub const SPEC_COVERAGE: &[crate::spec::Coverage] = &[
     dma_legacy::COVERAGE_VPU,
     dwc2::COVERAGE,
     emmc2::COVERAGE,
+    emmc2::COVERAGE_LEGACY,
     fxl6408::COVERAGE,
     genet::COVERAGE,
     gic::COVERAGE_CPU,
