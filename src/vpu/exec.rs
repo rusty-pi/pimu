@@ -299,9 +299,10 @@ impl Vpu {
     }
 
     /// [`Self::vector_irq`] without the interrupt-enable check, for the `sleep`
-    /// wake. ThreadX's scheduler idle loop parks as `…; sleep; di; b …` with
-    /// interrupts already off and relies on the wake itself to service the
-    /// pending periodic tick — nothing in that loop ever runs `ei`.
+    /// wake: `sleep` takes the interrupt it waits for even with interrupts
+    /// disabled. Firmware parks as `sleep; di; b` (start4's idle loop, which runs
+    /// inside its tick handler with the enable bit clear), and that `di` only
+    /// makes sense if `sleep` enables interrupts while it waits.
     pub fn vector_irq_forced<B: Bus + ?Sized>(&mut self, bus: &mut B, slot: u32) {
         self.event = true;
         // An interrupt is what `sleep` was waiting for.
@@ -798,9 +799,10 @@ impl Vpu {
                         return Some(Step::Ran);
                     }
                     if self.exc_vbase != 0 && self.core_id == 0 {
-                        // The ThreadX idle loop parks here with interrupts
-                        // disabled, so the run loop's gated delivery never
-                        // fires; service a device interrupt here too.
+                        // `sleep` takes a pending interrupt even with interrupts
+                        // disabled (see `vector_irq_forced`), while the run
+                        // loop's delivery waits for the enable bit, so service a
+                        // device interrupt here.
                         //
                         // Core 0 only: the pending queue and the system-timer
                         // compare are the *shared* bus's, which in this model
@@ -817,14 +819,10 @@ impl Vpu {
                             self.vector_irq_forced(bus, src);
                             return Some(Step::Ran);
                         }
-                        // The ThreadX scheduler idle loop parks here as
-                        // `sleep; di; b` — interrupts already disabled, relying
-                        // on the wake to service the pending periodic tick. The
-                        // run loop's tick delivery gates on the SR interrupt-
-                        // enable bit and so never fires once the idle loop has
-                        // run its `di`; deliver the pending tick here instead.
-                        // Only when a compare has actually fired (not on every
-                        // `sleep`) so time isn't raced forward.
+                        // Likewise a compare that has fired, since the run loop's
+                        // tick delivery waits for the enable bit too. Only when
+                        // one has fired (not on every `sleep`), so time isn't
+                        // raced forward.
                         // Peek the slot *before* consuming the pending flag:
                         // the slot encodes which compare channel matched
                         // (source `64 + channel`), so consuming first would
