@@ -9,9 +9,10 @@
 //! Interrupt controller: `enable_irq_source(src, prio)` (start4 `0x3ED72374`)
 //! stores a 4-bit priority/enable field per source into the words at
 //! `0x10..0x20` (core 0) / `0x810..0x820` (core 1): `word = (src >> 3) & 3`,
-//! `field = (src & 7) * 4`. A nonzero field means "enabled, dispatch through
-//! vector-table slot `prio`". start4 enables source 64 (systimer, [`SYS_IRQ_SRC`])
-//! at priority 1 and arms a system-timer compare as its ThreadX tick.
+//! `field = (src & 7) * 4`. A nonzero field enables the source at that
+//! priority; the vector is the interrupt number, `64 + source`, not the field.
+//! start4 enables source 64 (systimer, [`SYS_IRQ_SRC`]) at priority 1 and arms a
+//! system-timer compare as its ThreadX tick.
 
 use std::collections::BTreeMap;
 
