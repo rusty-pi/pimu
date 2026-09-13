@@ -24,7 +24,12 @@
 //! a list: [`UsbDevice::child`] is how the controller walks an xHCI route
 //! string down to the device a slot addresses.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::fs::File;
+use std::os::unix::fs::FileExt;
+use std::path::Path;
+use std::rc::Rc;
 
 /// The `PORTSC` / slot-context speed encoding (xHCI 4.19.7 "Protocol Speed
 /// ID"), for the default speed IDs the VL805 reports in its supported-protocol
@@ -452,29 +457,157 @@ enum BotPhase {
     Command,
     /// Data to hand back on the bulk-IN endpoint, then a CSW.
     DataIn { data: Vec<u8>, tag: u32 },
-    /// Bytes still expected on the bulk-OUT endpoint before the CSW.
-    DataOut { remaining: usize, tag: u32 },
+    /// Bytes still expected on the bulk-OUT endpoint before the CSW. A SCSI
+    /// WRITE carries the block the data lands on and the part of a block
+    /// received so far; other OUT data is swallowed. `status` goes into the
+    /// CSW.
+    DataOut {
+        remaining: usize,
+        tag: u32,
+        write: Option<(u64, Vec<u8>)>,
+        status: u8,
+    },
     /// Command finished; the CSW is the next bulk-IN.
     Status { tag: u32, residue: u32, status: u8 },
 }
 
+/// The medium behind a [`MassStorage`]: a disk image read on demand, the
+/// blocks written since kept in memory, and a capacity that may be larger
+/// than the image.
+///
+/// A Pi boots an image written to the start of a bigger stick, and its first
+/// boot uses the rest: the rpi-mkosi initrd's `systemd-repart` creates the
+/// encrypted root partition there. So the stick can be bigger than its image
+/// (`recon --usb-mb`), reading as zeros past it. Writes stay in memory, keyed
+/// by block, so a run costs the blocks it writes rather than the image's size,
+/// and the image file is never modified: every run is a first boot. One `Disk`
+/// outlives the resets within a run, the way the stick keeps what the first
+/// boot wrote.
+pub struct Disk {
+    backing: Backing,
+    blocks: u64,
+    written: HashMap<u64, Box<[u8; BLOCK_SIZE]>>,
+}
+
+enum Backing {
+    Mem(Vec<u8>),
+    File { file: File, len: u64 },
+}
+
+impl Disk {
+    /// A disk exactly the size of `image`.
+    pub fn from_vec(image: Vec<u8>) -> Disk {
+        let blocks = (image.len() / BLOCK_SIZE) as u64;
+        Disk {
+            backing: Backing::Mem(image),
+            blocks,
+            written: HashMap::new(),
+        }
+    }
+
+    /// The image at `path`, on a stick of at least `min_bytes`.
+    pub fn open(path: &Path, min_bytes: u64) -> std::io::Result<Disk> {
+        let file = File::open(path)?;
+        let len = file.metadata()?.len();
+        Ok(Disk {
+            backing: Backing::File { file, len },
+            blocks: len.max(min_bytes) / BLOCK_SIZE as u64,
+            written: HashMap::new(),
+        })
+    }
+
+    pub fn blocks(&self) -> u64 {
+        self.blocks
+    }
+
+    /// How many blocks the host has written.
+    pub fn written_blocks(&self) -> usize {
+        self.written.len()
+    }
+
+    /// `count` blocks from `lba`, or `None` past the end of the stick.
+    pub fn read(&self, lba: u64, count: u64) -> Option<Vec<u8>> {
+        if lba.checked_add(count)? > self.blocks {
+            return None;
+        }
+        let mut out = vec![0u8; count as usize * BLOCK_SIZE];
+        for (i, block) in out.chunks_mut(BLOCK_SIZE).enumerate() {
+            let n = lba + i as u64;
+            if let Some(w) = self.written.get(&n) {
+                block.copy_from_slice(&w[..]);
+                continue;
+            }
+            let at = n * BLOCK_SIZE as u64;
+            match &self.backing {
+                Backing::Mem(image) => {
+                    if let Some(src) = image.get(at as usize..at as usize + BLOCK_SIZE) {
+                        block.copy_from_slice(src);
+                    }
+                }
+                Backing::File { file, len } if at < *len => {
+                    // The image's last block may be short; the rest is zeros.
+                    let n = BLOCK_SIZE.min((*len - at) as usize);
+                    if let Err(e) = file.read_exact_at(&mut block[..n], at) {
+                        panic!("reading the USB image at byte {at}: {e}");
+                    }
+                }
+                Backing::File { .. } => {}
+            }
+        }
+        Some(out)
+    }
+
+    /// Whole blocks of `data` at `lba`; `false` past the end of the stick.
+    pub fn write(&mut self, lba: u64, data: &[u8]) -> bool {
+        let count = (data.len() / BLOCK_SIZE) as u64;
+        if lba.saturating_add(count) > self.blocks {
+            return false;
+        }
+        for (i, block) in data.as_chunks::<BLOCK_SIZE>().0.iter().enumerate() {
+            self.written.insert(lba + i as u64, Box::new(*block));
+        }
+        true
+    }
+}
+
+/// A READ or WRITE command's LBA and block count, from its 10-, 12- or 16-byte
+/// form; `None` for anything else, or a command block too short for its form.
+fn lba_count(cdb: &[u8]) -> Option<(u64, u64)> {
+    let be = |r: std::ops::Range<usize>| {
+        cdb.get(r)
+            .map(|b| b.iter().fold(0u64, |v, &x| v << 8 | u64::from(x)))
+    };
+    match cdb.first()? {
+        0x28 | 0x2A => Some((be(2..6)?, be(7..9)?)),
+        0xA8 | 0xAA => Some((be(2..6)?, be(6..10)?)),
+        0x88 | 0x8A => Some((be(2..10)?, be(10..14)?)),
+        _ => None,
+    }
+}
+
 /// A USB mass-storage device: Bulk-Only Transport carrying SCSI, backed by a
-/// disk image.
+/// [`Disk`].
 ///
 /// Identity is the Samsung "Flash Drive FIT" (`090c:1000`) the stage-3 ground
 /// truth was captured from — descriptors verbatim from `docs/usb-xhci.md` §5.2,
-/// `INQUIRY` fields from `/sys/block/sda/device/*`. The capacity comes from the
-/// image rather than the stick, because that is the one field a fixture cannot
-/// borrow.
+/// `INQUIRY` fields from `/sys/block/sda/device/*`. The capacity is the
+/// [`Disk`]'s rather than the stick's, because that is the one field a fixture
+/// cannot borrow.
 pub struct MassStorage {
     common: CommonState,
     desc: Descriptors,
-    image: Vec<u8>,
+    disk: Rc<RefCell<Disk>>,
     phase: BotPhase,
 }
 
 impl MassStorage {
     pub fn new(image: Vec<u8>) -> MassStorage {
+        MassStorage::with_disk(Rc::new(RefCell::new(Disk::from_vec(image))))
+    }
+
+    /// The stick on a [`Disk`] shared with whoever holds the other handle: in
+    /// `recon`, the next boot after a reset.
+    pub fn with_disk(disk: Rc<RefCell<Disk>>) -> MassStorage {
         let mut strings = HashMap::new();
         strings.insert(0, lang_desc());
         strings.insert(1, string_desc("Samsung"));
@@ -500,13 +633,13 @@ impl MassStorage {
                 // Bus powered, no remote wakeup.
                 status: 0x00,
             },
-            image,
+            disk,
             phase: BotPhase::Command,
         }
     }
 
     fn blocks(&self) -> u64 {
-        (self.image.len() / BLOCK_SIZE) as u64
+        self.disk.borrow().blocks()
     }
 
     /// Run one SCSI command block, returning the IN payload (for a read) and
@@ -547,28 +680,10 @@ impl MassStorage {
             }
             // READ(10) / READ(12) / READ(16)
             0x28 | 0xA8 | 0x88 => {
-                let (lba, count) = match cdb[0] {
-                    0x28 => (
-                        u32::from_be_bytes([cdb[2], cdb[3], cdb[4], cdb[5]]) as u64,
-                        u16::from_be_bytes([cdb[7], cdb[8]]) as u64,
-                    ),
-                    0xA8 => (
-                        u32::from_be_bytes([cdb[2], cdb[3], cdb[4], cdb[5]]) as u64,
-                        u32::from_be_bytes([cdb[6], cdb[7], cdb[8], cdb[9]]) as u64,
-                    ),
-                    _ => (
-                        u64::from_be_bytes([
-                            cdb[2], cdb[3], cdb[4], cdb[5], cdb[6], cdb[7], cdb[8], cdb[9],
-                        ]),
-                        u32::from_be_bytes([cdb[10], cdb[11], cdb[12], cdb[13]]) as u64,
-                    ),
-                };
-                let start = lba as usize * BLOCK_SIZE;
-                let len = count as usize * BLOCK_SIZE;
-                if start + len > self.image.len() {
-                    return (Vec::new(), 1);
+                match lba_count(cdb).and_then(|(lba, n)| self.disk.borrow().read(lba, n)) {
+                    Some(data) => (data, 0),
+                    None => (Vec::new(), 1),
                 }
-                (self.image[start..start + len].to_vec(), 0)
             }
             // MODE SENSE(6): one header, no pages, not write protected.
             0x1A => (vec![3, 0, 0, 0], 0),
@@ -615,11 +730,23 @@ impl MassStorage {
                 };
             }
         } else {
-            // A write. Nothing the bootloader does writes, so the data is
-            // swallowed and the command reported good.
+            // WRITE(10) / WRITE(12) / WRITE(16): the data goes onto the disk as
+            // it arrives. Other OUT data is swallowed and reported good.
+            let (write, status) = match cdb.first().copied() {
+                Some(0x2A | 0xAA | 0x8A) => match lba_count(&cdb) {
+                    Some((lba, n)) if lba.saturating_add(n) <= self.blocks() => {
+                        (Some((lba, Vec::new())), 0)
+                    }
+                    // Past the end, or malformed: swallowed, and the command fails.
+                    _ => (None, 1),
+                },
+                _ => (None, 0),
+            };
             self.phase = BotPhase::DataOut {
                 remaining: len,
                 tag,
+                write,
+                status,
             };
         }
         Xfer::Ok(Vec::new())
@@ -702,18 +829,36 @@ impl UsbDevice for MassStorage {
         }
         match std::mem::replace(&mut self.phase, BotPhase::Command) {
             BotPhase::Command => self.handle_cbw(data),
-            BotPhase::DataOut { remaining, tag } => {
-                let left = remaining.saturating_sub(data.len());
+            BotPhase::DataOut {
+                remaining,
+                tag,
+                mut write,
+                status,
+            } => {
+                let take = data.len().min(remaining);
+                if let Some((lba, pending)) = &mut write {
+                    pending.extend_from_slice(&data[..take]);
+                    // Whole blocks go onto the disk as they complete.
+                    let whole = pending.len() / BLOCK_SIZE * BLOCK_SIZE;
+                    if whole > 0 {
+                        self.disk.borrow_mut().write(*lba, &pending[..whole]);
+                        *lba += (whole / BLOCK_SIZE) as u64;
+                        pending.drain(..whole);
+                    }
+                }
+                let left = remaining - take;
                 self.phase = if left == 0 {
                     BotPhase::Status {
                         tag,
                         residue: 0,
-                        status: 0,
+                        status,
                     }
                 } else {
                     BotPhase::DataOut {
                         remaining: left,
                         tag,
+                        write,
+                        status,
                     }
                 };
                 Xfer::Ok(Vec::new())
@@ -857,5 +1002,62 @@ mod tests {
         assert_eq!(data.len(), BLOCK_SIZE);
         assert_eq!(data[0], 0xAA);
         assert_eq!(data[511], 0x55);
+    }
+
+    /// A CBW for a 10-byte READ or WRITE of `count` blocks at `lba`.
+    fn rw10(op: u8, lba: u32, count: u16, dir_in: bool) -> Vec<u8> {
+        let mut cbw = vec![0u8; CBW_LEN];
+        cbw[..4].copy_from_slice(&CBW_SIGNATURE.to_le_bytes());
+        cbw[8..12].copy_from_slice(&(u32::from(count) * BLOCK_SIZE as u32).to_le_bytes());
+        cbw[12] = if dir_in { 0x80 } else { 0 };
+        cbw[14] = 10;
+        cbw[15] = op;
+        cbw[17..21].copy_from_slice(&lba.to_be_bytes());
+        cbw[22..24].copy_from_slice(&count.to_be_bytes());
+        cbw
+    }
+
+    /// What the rpi-mkosi initrd does to the stick on its first boot: repart
+    /// writes past the end of the image, and reads it back after a reset.
+    #[test]
+    fn writes_land_on_the_disk_and_outlive_the_device() {
+        let disk = Rc::new(RefCell::new(Disk::from_vec(vec![0x11; 4 * BLOCK_SIZE])));
+        disk.borrow_mut().blocks = 16; // a stick bigger than its image
+        let mut msd = MassStorage::with_disk(disk.clone());
+        let mut data = vec![0xAB; BLOCK_SIZE];
+        data.extend(vec![0xCD; BLOCK_SIZE]);
+        // Two blocks at LBA 9, in bulk-OUT chunks that split a block.
+        assert!(matches!(
+            msd.data_out(1, &rw10(0x2A, 9, 2, false)),
+            Xfer::Ok(_)
+        ));
+        msd.data_out(1, &data[..700]);
+        msd.data_out(1, &data[700..]);
+        let Xfer::Ok(csw) = msd.data_in(2, CSW_LEN) else {
+            panic!("stall")
+        };
+        assert_eq!(csw[12], 0, "write succeeded");
+        assert_eq!(disk.borrow().written_blocks(), 2);
+        // The next boot's device on the same disk reads them back.
+        let mut next = MassStorage::with_disk(disk.clone());
+        next.data_out(1, &rw10(0x28, 8, 3, true));
+        let Xfer::Ok(back) = next.data_in(2, 3 * BLOCK_SIZE) else {
+            panic!("stall")
+        };
+        assert_eq!(back[..BLOCK_SIZE], [0u8; BLOCK_SIZE][..], "past the image");
+        assert_eq!(back[BLOCK_SIZE..], data[..]);
+        // The image's own blocks are still the image's.
+        assert_eq!(disk.borrow().read(0, 1).unwrap(), vec![0x11; BLOCK_SIZE]);
+    }
+
+    #[test]
+    fn a_write_past_the_end_fails() {
+        let mut msd = MassStorage::new(vec![0; 4 * BLOCK_SIZE]);
+        msd.data_out(1, &rw10(0x2A, 3, 2, false));
+        msd.data_out(1, &[0; 2 * BLOCK_SIZE]);
+        let Xfer::Ok(csw) = msd.data_in(2, CSW_LEN) else {
+            panic!("stall")
+        };
+        assert_eq!(csw[12], 1);
     }
 }
