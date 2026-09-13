@@ -404,8 +404,9 @@ pub struct Pcie {
     /// The MSI block's pending vectors, and its mask (all masked at reset).
     msi_status: u32,
     msi_mask: u32,
-    /// The endpoint's interrupt has been signalled. An MSI is an edge: one
-    /// message per assertion.
+    /// An interrupt that stayed pending without a message (bus mastering was
+    /// off when it was asserted). An MSI is an edge, so that assertion sends
+    /// none.
     msi_sent: bool,
     /// The endpoint's INTA, while it is not using MSI.
     intx: bool,
@@ -499,10 +500,16 @@ impl Pcie {
         match self.endpoint.msi_message() {
             Some((addr, data)) => {
                 self.intx = false;
-                if pending && !self.msi_sent && self.endpoint.bus_master() {
+                let send = pending && !self.msi_sent && self.endpoint.bus_master();
+                if send {
                     self.receive_msi(addr, data);
+                    // `IMAN.IP` clears itself once the message is out (xHCI
+                    // 5.5.2.1), so the next event is a new assertion. Linux
+                    // relies on it: with MSI it never clears IP itself
+                    // (`ip_autoclear`).
+                    self.endpoint.xhci.msi_sent();
                 }
-                self.msi_sent = pending;
+                self.msi_sent = pending && !send;
             }
             None => {
                 self.msi_sent = false;
@@ -954,12 +961,11 @@ mod tests {
         assert_eq!(read(&mut p, SSC_STATUS) & 0xC00, 0xC00);
     }
 
-    /// The endpoint's first event, all the way to the GIC line: xHCI sets
-    /// `IMAN.IP`, the function sends its MSI, the root complex catches the
-    /// write at its target and raises vector 0.
-    #[test]
-    fn an_xhci_event_arrives_as_an_msi() {
-        use crate::periph::xhci::{HostMem, VecMem, RTSOFF};
+    /// `enumerated_pcie()` with MSI on at both ends, as Linux leaves it, and
+    /// interrupter 0 running with one event ring segment of 16 TRBs at
+    /// 0x2000. Returns BAR0 and interrupter 0's `IMAN`.
+    fn msi_pcie(mem: &mut crate::periph::xhci::VecMem) -> (Pcie, u64, u64) {
+        use crate::periph::xhci::{HostMem, RTSOFF};
         let mut p = enumerated_pcie();
         // What `brcm_msi_set_regs()` programs...
         p.write(MSI_INTR2_MASK_CLR, Width::Word, 0xFFFF_FFFF)
@@ -977,16 +983,46 @@ mod tests {
         ] {
             p.write(EXT_CFG_DATA + off, Width::Word, v).unwrap();
         }
-        let mut mem = VecMem::default();
-        // One event ring segment of 16 TRBs at 0x2000.
         mem.write32(0x1000, 0x2000);
         mem.write32(0x1008, 16);
         let bar = 0x6_0200_0000u64;
         let ir0 = bar + RTSOFF as u64 + 0x20;
-        p.mmio_write(ir0 + 0x08, Width::Word, 1, &mut mem); // ERSTSZ
-        p.mmio_write(ir0 + 0x10, Width::Word, 0x1000, &mut mem); // ERSTBA
-        p.mmio_write(ir0, Width::Word, 0x2, &mut mem); // IMAN.IE
-        p.mmio_write(bar + 0x20, Width::Word, 0x5, &mut mem); // USBCMD RS | INTE
+        p.mmio_write(ir0 + 0x08, Width::Word, 1, mem); // ERSTSZ
+        p.mmio_write(ir0 + 0x10, Width::Word, 0x1000, mem); // ERSTBA
+        p.mmio_write(ir0, Width::Word, 0x2, mem); // IMAN.IE
+        p.mmio_write(bar + 0x20, Width::Word, 0x5, mem); // USBCMD RS | INTE
+        (p, bar, ir0)
+    }
+
+    /// With MSI on, `IMAN.IP` clears itself as the message goes out (xHCI
+    /// 5.5.2.1), and Linux counts on it (`ip_autoclear`): it acknowledges only
+    /// the MSI block. The next event must still send a message of its own;
+    /// with `IP` left set, every completion after the first was silent and
+    /// the kernel's Address Device timed out.
+    #[test]
+    fn every_event_sends_its_own_msi() {
+        let mut mem = crate::periph::xhci::VecMem::default();
+        let (mut p, bar, ir0) = msi_pcie(&mut mem);
+        let port1 = bar + 0x420;
+        p.mmio_write(port1, Width::Word, (1 << 9) | (1 << 4), &mut mem);
+        assert!(p.msi_line());
+        assert_eq!(p.mmio_read(ir0, Width::Word).unwrap() & 1, 0, "IP");
+        p.write(MSI_INTR2_CLR, Width::Word, 1).unwrap();
+        assert!(!p.msi_line());
+        // Acknowledge the port's change bits, then reset it again.
+        let changes = (1 << 17) | (1 << 21);
+        p.mmio_write(port1, Width::Word, (1 << 9) | changes, &mut mem);
+        p.mmio_write(port1, Width::Word, (1 << 9) | (1 << 4), &mut mem);
+        assert!(p.msi_line(), "a second message");
+    }
+
+    /// The endpoint's first event, all the way to the GIC line: xHCI sets
+    /// `IMAN.IP`, the function sends its MSI, the root complex catches the
+    /// write at its target and raises vector 0.
+    #[test]
+    fn an_xhci_event_arrives_as_an_msi() {
+        let mut mem = crate::periph::xhci::VecMem::default();
+        let (mut p, bar, ir0) = msi_pcie(&mut mem);
         assert!(!p.msi_line());
         // Reset root port 1, the hub's: a Port Status Change Event.
         p.mmio_write(bar + 0x420, Width::Word, (1 << 9) | (1 << 4), &mut mem);

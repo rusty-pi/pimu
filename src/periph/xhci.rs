@@ -1125,6 +1125,13 @@ impl Xhci {
             && self.reg(USBCMD) & USBCMD_INTE != 0
     }
 
+    /// The function has sent the MSI for this interrupt. With MSI on,
+    /// `IMAN.IP` clears itself once the message is out (xHCI 5.5.2.1).
+    pub fn msi_sent(&mut self) {
+        let iman = self.reg(IMAN) & !IMAN_IP;
+        self.set_reg(IMAN, iman);
+    }
+
     /// The port status words, for tests and for `RVF_DBG_XHCI`.
     pub fn portsc(&self, port: usize) -> u32 {
         self.ports[port - 1].portsc
