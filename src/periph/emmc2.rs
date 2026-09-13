@@ -169,8 +169,8 @@ struct PioWrite {
 pub struct Emmc2 {
     /// Sticky storage for offsets without special behaviour.
     reg: BTreeMap<u32, u32>,
-    /// The inserted card, if any. `None` ⇒ commands still "complete" but every
-    /// data read returns zeros (keeps the driver from hanging).
+    /// The inserted card, if any. `None` is an empty slot: nothing drives
+    /// CMD, so every command that expects a response times out.
     card: Option<SdCard>,
     /// Latched response words the RESPONSE0..3 registers expose.
     resp: [u32; 4],
@@ -367,7 +367,10 @@ impl Emmc2 {
 
         let response = match self.card.as_mut() {
             Some(card) => card.command(index, arg),
-            None => crate::periph::sdcard::SdResponse::default(),
+            None => crate::periph::sdcard::SdResponse {
+                no_response: true,
+                ..Default::default()
+            },
         };
 
         if self.dbg {
@@ -1008,6 +1011,20 @@ mod tests {
         wr(&mut e, HOST_CONTROL, 0x0000_0F00);
         assert_eq!(rd(&mut e, HOST_CONTROL), 0x0080_0F00, "bit 23 reads 1");
         assert_eq!(CAPS0 & (1 << 28), 0, "no 64-bit ADMA");
+    }
+
+    /// With no card, CMD0 (no response) completes and CMD8 times out, which is
+    /// how edk2's `ArasanMmcHostDxe` decides the slot is empty. A phantom card
+    /// that answered zeros kept its `MmcDxe` retrying for the whole boot.
+    #[test]
+    fn an_empty_slot_times_out_every_command_that_expects_a_response() {
+        let mut e = Emmc2::new();
+        wr(&mut e, INT_STATUS_EN, 0xFFFF_FFFF);
+        cmd(&mut e, 0, 0, 0, 0);
+        assert_eq!(rd(&mut e, INT_STATUS), INT_CMD_COMPLETE);
+        wr(&mut e, INT_STATUS, 0xFFFF_FFFF);
+        cmd(&mut e, 8, 0x1AA, R1, 0);
+        assert_eq!(rd(&mut e, INT_STATUS), INT_ERR_CMD_TIMEOUT | INT_ERROR);
     }
 
     #[test]
