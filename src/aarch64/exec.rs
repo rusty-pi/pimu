@@ -531,6 +531,7 @@ fn branch_reg(cpu: &mut Cpu, insn: u32) -> Exec {
             cpu.branch_to(t);
         }
         4 if cpu.el > 0 && rn == 31 => {
+            cpu.effects += 1;
             if !cpu.eret() {
                 return Err(Stop::Unimplemented);
             }
@@ -548,6 +549,17 @@ fn system<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M) -> Exec {
     let crm = field(insn, 8, 4);
     let op2 = field(insn, 5, 3);
     let rt = field(insn, 0, 5);
+    // Everything but MRS, NOP, YIELD and the DSB/DMB/ISB barriers changes
+    // state outside the general registers and memory (`Cpu::effects`).
+    let quiet = match (l, op0, crn) {
+        (true, 2..=3, _) => true,
+        (false, 0, 2) => rt == 31 && (crm << 3) | op2 <= 1,
+        (false, 0, 3) => rt == 31 && op1 == 3 && (4..=6).contains(&op2),
+        _ => false,
+    };
+    if !quiet {
+        cpu.effects += 1;
+    }
     match (l, op0) {
         (false, 0) => match crn {
             // Hints. Unallocated hints execute as NOP.

@@ -197,6 +197,15 @@ the armstub, so the ARM runs UEFI before any kernel. What it needed:
    The card model had no ACMD22, so the Arasan driver waited for Buffer Read
    Ready until `EFI_TIMEOUT`, and systemd-boot stopped at `Error opening root
    path: Time out` (#51, `src/periph/sdcard.rs`).
+6. The entry's UKI (89.7 MB) then loads through the same driver in PIO mode.
+   Every 512-byte block costs two `SET_GPIO_STATE` mailbox round trips (the
+   activity LED, around each block in `MMCReadBlockData`) and the driver's
+   `Stall`s, and core 0 busy-waits through all of it: on the mailbox status
+   word in `RpiFirmwareDxe`, and on the counter in `NanoSecondDelay`. At one
+   instruction per cycle that was most of the host time, so the ARM side now
+   parks a core in such a loop instead of stepping it, and rebuilds its state
+   when the loop ends or what it reads changes (#53, `src/arm/park.rs`,
+   "Busy-wait loops" in `src/arm.rs`).
 
 With those, UEFI prints its boot manager prompt (`ESC (setup), F1 (shell),
 ENTER (boot)`) 0.7 s of guest time after its banner, and systemd-boot no

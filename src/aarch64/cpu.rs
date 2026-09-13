@@ -190,6 +190,11 @@ pub struct Cpu {
     /// Set by the executor when this step ran `sev`: the caller signals the
     /// other cores and clears it.
     pub sev: bool,
+    /// Counts the instructions that change state outside the general
+    /// registers, the flags and memory: MSR, SYS, ERET, and every hint and
+    /// barrier but NOP, YIELD, DSB, DMB and ISB. A busy-wait loop the ARM run
+    /// loop may skip executes none (`arm.rs`, "Busy-wait loops").
+    pub effects: u64,
 }
 
 impl Default for Cpu {
@@ -230,6 +235,7 @@ impl Cpu {
             next_pc: 0,
             event: false,
             sev: false,
+            effects: 0,
         }
     }
 
@@ -370,6 +376,11 @@ impl Cpu {
             }
             None => false,
         }
+    }
+
+    /// Would [`Self::take_interrupt`] take an IRQ (or FIQ) now?
+    pub fn can_take_interrupt(&self, fiq: bool) -> bool {
+        irq_target(self.sys.scr_el3, self.sys.hcr_el2, self.pstate(), fiq).is_some()
     }
 
     /// `ERET`: back to what `SPSR_ELx` / `ELR_ELx` describe. `false` for an

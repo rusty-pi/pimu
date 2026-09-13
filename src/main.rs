@@ -657,6 +657,11 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
             report.core1_end
         );
     }
+    // A core parked in a busy-wait loop is behind on its registers and its
+    // instruction count until it is brought up to date.
+    if let Some(a) = &mut emu.arm {
+        a.settle(&emu.machine);
+    }
     if let Some(a) = &emu.arm {
         println!("\n--- ARM cores (#40) ---");
         if let Some(h) = a.handoff {

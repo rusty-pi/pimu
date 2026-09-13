@@ -366,17 +366,15 @@ impl Mbox {
         }
         s
     }
-}
 
-impl MmioDevice for Mbox {
-    fn name(&self) -> &'static str {
-        "mbox"
-    }
-
-    fn read(&mut self, offset: u32, _width: Width) -> BusResult<u32> {
+    /// What a read of `offset` returns, for every register a read leaves as
+    /// it is — all but the two FIFOs' data words, which pop. The ARM run loop
+    /// watches these while a core busy-waits on one (`arm.rs`, "Busy-wait
+    /// loops").
+    pub fn peek(&self, offset: u32) -> Option<u32> {
         // The interrupt block sits between the two windows.
         if PEND_BLOCK.contains(&offset) {
-            return Ok(match offset & !3 {
+            return Some(match offset & !3 {
                 // Mailbox 1 is the ARM->VPU direction — the one the receive op
                 // reads. Mailbox 0 never asks for service here: the VPU is the
                 // writer on that side, so nothing notifies it about its own
@@ -387,15 +385,37 @@ impl MmioDevice for Mbox {
             });
         }
         let vpu = offset >= VPU;
+        Some(match (offset & !3) % WINDOW {
+            DATA0 if !vpu => return None,
+            DATA1 if vpu => return None,
+            PEEK0 => self.to_arm.front().copied().unwrap_or(0),
+            STATUS0 => Mbox::status(&self.to_arm),
+            SENDER0 => self.sender0,
+            CONFIG0 => self.config0_word(),
+            PEEK1 => self.to_vpu.front().copied().unwrap_or(0),
+            STATUS1 => Mbox::status(&self.to_vpu),
+            SENDER1 => self.sender1,
+            CONFIG1 => self.config1_word(),
+            _ => 0,
+        })
+    }
+}
+
+impl MmioDevice for Mbox {
+    fn name(&self) -> &'static str {
+        "mbox"
+    }
+
+    fn read(&mut self, offset: u32, _width: Width) -> BusResult<u32> {
+        if let Some(v) = self.peek(offset) {
+            return Ok(v);
+        }
+        let vpu = offset >= VPU;
         let reg = (offset & !3) % WINDOW;
         Ok(match reg {
             // `+0x00` / `+0x18`: the VPU->ARM FIFO. The VPU writes it, so from
             // this side a read is only meaningful for the ARM.
             DATA0 if !vpu => self.to_arm.pop_front().unwrap_or(0),
-            PEEK0 => self.to_arm.front().copied().unwrap_or(0),
-            STATUS0 => Mbox::status(&self.to_arm),
-            SENDER0 => self.sender0,
-            CONFIG0 => self.config0_word(),
             // `+0x20` / `+0x38`: the ARM->VPU FIFO. The VPU drains it here —
             // this is the read the `mbox_read` task's receive op makes.
             DATA1 if vpu => {
@@ -408,10 +428,6 @@ impl MmioDevice for Mbox {
                 }
                 v
             }
-            PEEK1 => self.to_vpu.front().copied().unwrap_or(0),
-            STATUS1 => Mbox::status(&self.to_vpu),
-            SENDER1 => self.sender1,
-            CONFIG1 => self.config1_word(),
             _ => 0,
         })
     }
