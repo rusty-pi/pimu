@@ -9,7 +9,9 @@ publish = false
 
 [dependencies]
 anyhow = "1"
+hmac = "0.12"
 serde = { version = "1", features = ["derive"] }
+sha1 = "0.10"
 toml = "0.8"
 
 [features]

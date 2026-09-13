@@ -1,11 +1,14 @@
 //! Loading firmware images into the machine.
 //!
 //! - [`addrs`] — every `start4.elf` address the model pins, and why.
+//! - [`bootrom`] — the BCM2711 maskROM first stage: the explicit boot entry that
+//!   verifies and stages the bootcode.
 //! - [`elf32`] — `start4.elf` and the vc4boot test programs.
 //! - [`eeprom`] — `pieeprom.bin` section table + bootcode extraction.
 //! - `fixup4.dat` parsing arrives with M3.
 
 pub mod addrs;
+pub mod bootrom;
 pub mod eeprom;
 pub mod elf32;
 
@@ -90,7 +93,7 @@ impl Payload {
 
 /// Write `bytes` to memory at `addr`, folding VC4 cache aliases and going
 /// straight to the backing store (bypasses MMIO — loaders only ever target RAM).
-fn write_folded(machine: &mut Machine, addr: u32, bytes: &[u8]) -> Result<()> {
+pub(crate) fn write_folded(machine: &mut Machine, addr: u32, bytes: &[u8]) -> Result<()> {
     let phys = addr & 0x3FFF_FFFF;
     machine.ram.write_slice(phys, bytes).map_err(|e| {
         anyhow::anyhow!(
