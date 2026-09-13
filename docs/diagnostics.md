@@ -144,6 +144,18 @@ It builds the request buffer, posts the doorbell, resumes the VPU until the
 answer comes back, and decodes the reply tag by tag — including whether the
 firmware marked each tag as handled at all.
 
+The model also decodes every property reply as the firmware posts it, whoever
+asked, and the run report lists the results under `--- property replies ---`.
+For each tag it shows how often the firmware set its handled mark and how often
+it did not, and the first word of the value buffer as the latest reply left it.
+Unmarked does not always mean ignored: `SET_GPIO_STATE` and `SET_GPIO_CONFIG`
+come back without the mark but with their status, `0`, in the value, which is
+what Linux's `gpio-raspberrypi-exp` checks. Under `--arm` the section covers
+every request Linux makes, so a value Linux never checks can still be pinned:
+`linux-boot.toml` does this for `NOTIFY_XHCI_RESET`. The report prints before
+an `--mbox-property` exchange runs, so for those requests read the exchange's
+own decode.
+
 The wake is worth understanding before debugging it, because it is four things
 in series and any of them failing looks the same from outside:
 
