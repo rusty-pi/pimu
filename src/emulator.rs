@@ -954,9 +954,22 @@ impl Emulator {
                 // (loop punctuated by a tick ISR) needs a firmer CLO-read
                 // ratio to be sure it isn't doing real work.
                 let tight = st.w_hi.wrapping_sub(st.w_lo) <= 0x40;
+                // Experimental `--boot-rom`: the maskROM's `udelay` helper sits
+                // ~12 KB from its callers, so the window is wide and the CLO-read
+                // ratio low — neither the tight nor the wide threshold below
+                // catches it. Loosen it for that path only; a normal boot never
+                // has the overlay set, so no golden is affected.
+                // Experimental `--boot-rom`: the maskROM's `udelay` helper sits
+                // ~12 KB from its callers, so the window is wide and the CLO-read
+                // ratio low — the wide `win/8` threshold below never catches it.
+                // Loosen it for that path only; a normal boot never has the
+                // overlay set, so no golden is affected.
+                let boot_rom = self.machine.executing_boot_rom();
                 let ff = !st.w_output
                     && if tight {
                         clo_delta > st.win / 20
+                    } else if boot_rom {
+                        clo_delta > st.win / 64 && self.cpu.in_exception == 0
                     } else {
                         clo_delta > st.win / 8 && self.cpu.in_exception == 0
                     };

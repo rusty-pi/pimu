@@ -19,6 +19,14 @@ pub enum Console {
 
 pub struct Machine {
     pub ram: Ram,
+    /// Experimental: a real BCM2711 boot-ROM image mapped read-only at
+    /// `0x6000_0000` (`--boot-rom`). When set, reads and instruction fetches in
+    /// `[base, base+len)` are served from these bytes instead of the DRAM alias,
+    /// so the VPU can execute the maskROM from its reset vector. Writes and every
+    /// address outside the range fall through to normal decoding, so the ROM's
+    /// scratch (above the code region) and its staging at `0x8000_0000` still
+    /// land in RAM. `None` on every normal boot — see `firmware::bootrom`.
+    boot_rom: Option<(u32, u32, Vec<u8>)>,
     pub systimer: SysTimer,
     pub uart0: Pl011,
     pub aux: Aux,
@@ -194,6 +202,7 @@ impl Machine {
     pub fn new(ram_bytes: usize) -> Machine {
         Machine {
             ram: Ram::new(map::SDRAM_CACHED_BASE, ram_bytes),
+            boot_rom: None,
             systimer: SysTimer::new(),
             uart0: Pl011::new(),
             aux: Aux::new(),
@@ -434,6 +443,45 @@ impl Machine {
                 || (map::CLKMON_BASE..map::CLKMON_BASE + map::CLKMON_SIZE).contains(&addr)
                 || (map::PCIE_BASE..map::PCIE_BASE + map::PCIE_SIZE).contains(&addr)
                 || (map::GENET_BASE..map::GENET_BASE + map::GENET_SIZE).contains(&addr))
+    }
+
+    /// Map a real boot-ROM image at `0x6000_0000` so the VPU can execute the
+    /// maskROM from its reset vector (experimental `--boot-rom`). Only the
+    /// code+rodata region is overlaid — the salt and SHA constants live there,
+    /// while the ROM's BSS/scratch above it and its bootcode staging at
+    /// `0x8000_0000` must stay writable DRAM. See the [`boot_rom`](Self::boot_rom)
+    /// field.
+    pub fn attach_boot_rom(&mut self, bytes: Vec<u8>) {
+        const BASE: u32 = 0x6000_0000;
+        const CODE_LEN: u32 = 0x8000;
+        let len = (bytes.len() as u32).min(CODE_LEN);
+        self.boot_rom = Some((BASE, BASE + len, bytes));
+    }
+
+    /// Whether a real boot-ROM image is mapped (experimental `--boot-rom`). The
+    /// run loop uses this to fast-forward the maskROM's `udelay` loops more
+    /// aggressively; it is never set on a normal boot, so no golden depends on it.
+    pub fn executing_boot_rom(&self) -> bool {
+        self.boot_rom.is_some()
+    }
+
+    /// If a boot-ROM overlay covers `addr`, the byte offset into its image.
+    #[inline]
+    fn boot_rom_at(&self, addr: u32) -> Option<usize> {
+        let (base, end, _) = self.boot_rom.as_ref()?;
+        (*base..*end)
+            .contains(&addr)
+            .then(|| (addr - *base) as usize)
+    }
+
+    /// Read `width` bytes little-endian out of the boot-ROM overlay.
+    fn boot_rom_load(&self, off: usize, width: Width) -> u32 {
+        let bytes = &self.boot_rom.as_ref().expect("overlay present").2;
+        let mut v = 0u32;
+        for i in 0..width.bytes() as usize {
+            v |= u32::from(bytes.get(off + i).copied().unwrap_or(0)) << (8 * i);
+        }
+        v
     }
 
     /// Should an access to `addr` be recorded in `mmio_events`? True when the
@@ -961,6 +1009,19 @@ impl Bus for Machine {
     /// halfword — two to five per instruction, across nearly two billion
     /// instructions a boot. Execution is essentially always out of RAM.
     fn read_insn(&mut self, pc: u32, out: &mut [u8; 10]) -> BusResult<u8> {
+        if let Some(off) = self.boot_rom_at(pc) {
+            let bytes = &self.boot_rom.as_ref().expect("overlay present").2;
+            let p0 = u16::from_le_bytes([
+                bytes.get(off).copied().unwrap_or(0),
+                bytes.get(off + 1).copied().unwrap_or(0),
+            ]);
+            let len = crate::vpu::length::insn_len_bytes(p0);
+            for (i, slot) in out.iter_mut().take(len as usize).enumerate() {
+                *slot = bytes.get(off + i).copied().unwrap_or(0);
+            }
+            self.ram_reads = self.ram_reads.wrapping_add(1);
+            return Ok(len);
+        }
         if !Machine::in_mmio(pc) {
             let phys = Machine::fold_ram_addr(pc);
             if let Ok(head) = self.ram.read_slice(phys, 2) {
@@ -990,6 +1051,15 @@ impl Bus for Machine {
     /// progress heuristics, and a decode cache must not change what they see.
     #[inline]
     fn code_gen(&mut self, pc: u32, cached: Option<u64>) -> Option<u64> {
+        if self.boot_rom_at(pc).is_some() {
+            // The ROM overlay is immutable, so a fixed generation lets the decode
+            // cache keep its instructions.
+            const ROM_GEN: u64 = u64::MAX;
+            if cached == Some(ROM_GEN) {
+                self.ram_reads = self.ram_reads.wrapping_add(1);
+            }
+            return Some(ROM_GEN);
+        }
         if Machine::in_mmio(pc) {
             return None;
         }
@@ -1031,6 +1101,10 @@ impl Bus for Machine {
 
     #[inline]
     fn load(&mut self, addr: u32, width: Width) -> BusResult<u32> {
+        if let Some(off) = self.boot_rom_at(addr) {
+            self.ram_reads = self.ram_reads.wrapping_add(1);
+            return Ok(self.boot_rom_load(off, width));
+        }
         if !Machine::in_mmio(addr) {
             let phys = Machine::fold_ram_addr(addr);
             if self.ram.contains(phys) {

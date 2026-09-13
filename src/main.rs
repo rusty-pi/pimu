@@ -23,7 +23,7 @@ USAGE:
                              [--max-wall <secs>] [--sd <img>] [--usb <img>] [--usb-mb <n>]
                              [--boot-order <hex>] [--bootconf <KEY=VALUE>]...
                              [--skip-signed-boot] [--netboot <dir>]
-                             [--eeprom-pubkey <pubkey.bin>]
+                             [--eeprom-pubkey <pubkey.bin>] [--boot-rom <rom.bin>]
                              [--skip-unimpl]
               (no --max-steps = no instruction cap; --max-wall defaults to 140s)
               (an unknown instruction stops the run; --skip-unimpl steps over it
@@ -202,6 +202,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     let mut boot_order: Option<String> = None;
     let mut bootconf: Vec<String> = Vec::new();
     let mut eeprom_pubkey: Option<PathBuf> = None;
+    let mut boot_rom_path: Option<PathBuf> = None;
     let mut dram_map = false;
     let mut skip_signed_boot = false;
     let mut skip_unimpl = false;
@@ -278,6 +279,9 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
                 eeprom_pubkey = Some(PathBuf::from(
                     it.next().context("--eeprom-pubkey needs a file")?,
                 ))
+            }
+            "--boot-rom" => {
+                boot_rom_path = Some(PathBuf::from(it.next().context("--boot-rom needs a file")?))
             }
             "--bootconf" => {
                 let kv = it.next().context("--bootconf needs KEY=VALUE")?;
@@ -513,14 +517,32 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     // terminal's raw mode.
     let mut host_input = stdin.then(rpi_virt_fw::stdio::HostInput::stdin);
 
+    // The boot ROM is the model's first stage for an EEPROM boot: it verifies
+    // and stages the bootcode (see `firmware::bootrom`). Its HMAC key, when the
+    // operator supplies one, comes from the environment and never the repo.
+    let bootrom = rpi_virt_fw::firmware::bootrom::BootRom::from_env()?;
+
+    // `--boot-rom <file>`: experimental. Map a real maskROM dump at 0x6000_0000
+    // and execute it from the reset vector instead of running the behavioural
+    // stage. Most people do not have a dump, so this is optional; the dump stays
+    // a local file and is never committed.
+    let boot_rom_image = match &boot_rom_path {
+        Some(p) => {
+            let b =
+                std::fs::read(p).with_context(|| format!("reading boot ROM {}", p.display()))?;
+            println!(
+                "boot-rom   {} ({} bytes, experimental)",
+                p.display(),
+                b.len()
+            );
+            Some(b)
+        }
+        None => None,
+    };
+
     let mut reboots = 0u32;
     #[allow(unused_mut)]
     let (report, mut emu, start) = 'boot: loop {
-        let payload = if eeprom {
-            Payload::from_eeprom_bytes(&flash)?
-        } else {
-            Payload::from_elf_bytes(&bytes)?
-        };
         let mut machine = Machine::new(ram_mb as usize * 1024 * 1024);
         if eeprom {
             machine.spi0.attach_flash(flash.clone());
@@ -555,13 +577,42 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
             machine.mmio_trace = true;
             machine.mmio_trace_range = Some((lo, hi));
         }
-        payload.load_into(&mut machine)?;
+        // Stage the first instruction stream. For an EEPROM boot that is the
+        // modelled boot ROM: it reads the image off the SPI flash, checks the
+        // bootcode signature and stages it (see `firmware::bootrom`), talking to
+        // the peripherals the real ROM does instead of reaching around them. For
+        // a raw ELF it is the loader placing its segments.
+        let start = if eeprom {
+            if let Some(rom) = &boot_rom_image {
+                // Execute the real maskROM from its reset vector. It reads the
+                // pieeprom off SPI0, the key rows out of OTP, and stages the
+                // bootcode itself — the peripherals do the rest.
+                machine.attach_boot_rom(rom.clone());
+                if reboots == 0 {
+                    println!(
+                        "boot ROM: executing real maskROM from reset vector 0x60000000 (experimental)"
+                    );
+                }
+                entry.unwrap_or(0x6000_0000)
+            } else {
+                let outcome = bootrom.boot(&mut machine)?;
+                if reboots == 0 {
+                    for line in &outcome.log {
+                        println!("{line}");
+                    }
+                }
+                entry.unwrap_or(outcome.entry)
+            }
+        } else {
+            let payload = Payload::from_elf_bytes(&bytes)?;
+            payload.load_into(&mut machine)?;
+            entry.unwrap_or(payload.entry())
+        };
         for &(a, v) in &patches {
             use rpi_virt_fw::bus::Bus;
             machine.store32(a, v).ok();
             println!("patch [{a:#010x}] = {v:#010x}");
         }
-        let start = entry.unwrap_or(payload.entry());
 
         let mut emu = Emulator::new(machine, start);
         // Faulting is the default: an instruction the decoder does not know

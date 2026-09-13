@@ -102,7 +102,10 @@ const READY: u32 = (1 << 17) | (1 << 18) | (1 << 7);
 /// The firmware accepts the value in either four-row block, or spread across
 /// both and OR-ed together (the redundancy real fuses need); storing it whole in
 /// both blocks satisfies every one of those comparisons.
-const BOARD_IDENTITY: [u32; 4] = [0x8AA9_6D38, 0x9111_243F, 0x38E4_E488, 0x8E02_2082];
+///
+/// The boot ROM also folds these rows into the bootcode HMAC key — see
+/// [`crate::firmware::bootrom`], whose `otp_key_words` cites them.
+pub(crate) const BOARD_IDENTITY: [u32; 4] = [0x8AA9_6D38, 0x9111_243F, 0x38E4_E488, 0x8E02_2082];
 
 pub struct ConfigOtp {
     storage: BTreeMap<u32, u32>,
