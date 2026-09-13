@@ -597,28 +597,6 @@ impl Emulator {
                 self.machine.mmio_trace = true;
             }
         }
-        // `0x3ED7BD2C` = start4's `udelay(r1)` primitive: `start = CLO;
-        // while (CLO - start) < r1 {}`. The clkm clock bring-up calls it
-        // hundreds of times inside tight outer loops — each call is only
-        // ~50 spin iterations so the generic delay-ff detector (which needs
-        // ~1000 identical edges) never trips, and they add up to the
-        // model's single biggest time sink (~68% of instructions in the
-        // post-config window). A pure busy-wait on the free-running counter
-        // is instantaneous in emulation: jump the timer straight to the
-        // deadline on entry so the loop exits on its first read. Capped so a
-        // garbage argument can't race sim-time away.
-        // `0x3ED7BD3A` is the loop body, reached once `r3 = start = CLO`
-        // has been captured (`0x3ED7BD36`) and `r1 = us` still holds the
-        // requested delay. Jump the counter a full `us` past `start` so the
-        // very next `(CLO - start) < us` check (`0x3ED7BD40`) fails and the
-        // loop exits. (Jumping on the `0x3ED7BD2C` entry instead is a no-op
-        // — `start` is captured *after* it, so the delta stays 0.)
-        if pc_before == self.start4_pc(UDELAY_LOOP_PC) {
-            let us = (self.cpu.regs.get(1) as u64).min(5_000_000);
-            if us != 0 {
-                self.machine.systimer.jump(us);
-            }
-        }
         // `RVF_TRACE_ON_PC=<hex>`: arm the instruction trace the first time
         // core 0 reaches this address. The console-substring trigger cannot
         // reach a code path that runs after the firmware has stopped
@@ -957,15 +935,15 @@ impl Emulator {
             // build up, then skip the counter forward a slice at a time.
             if let Some(cf) = self.cpu.cf_last {
                 let p = progress_count(&self.machine);
-                // Firmware `udelay` (e.g. `0x3ED7BD2C`: `while (CLO - start)
-                // < n`) spins the same 2-instruction edge thousands of times
-                // per call and the clock bring-up does hundreds of them —
-                // the model's biggest time sink. Recognise it: the same
-                // taken edge, the counter advancing, no console output. The
-                // periodic ThreadX tick ISR fires in the middle of a long
-                // delay and does a *bounded* amount of RAM traffic, so
-                // tolerate a small `progress` delta (a real memcpy/memtest
-                // in the loop would blow past it) rather than resetting.
+                // A firmware `udelay` (`while (CLO - start) < n`) spins the
+                // same 2-instruction edge thousands of times per call and the
+                // clock bring-up does hundreds of them — the model's biggest
+                // time sink. Recognise it: the same taken edge, the counter
+                // advancing, no console output. The periodic ThreadX tick ISR
+                // fires in the middle of a long delay and does a *bounded*
+                // amount of RAM traffic, so tolerate a small `progress` delta
+                // (a real memcpy/memtest in the loop would blow past it) rather
+                // than resetting.
                 let prog_delta = p.wrapping_sub(st.progress_at_delay);
                 if cf == st.delay_ff_cf && timer_polling && !had_output && prog_delta < 4_096 {
                     st.delay_ff += 1;
@@ -1123,8 +1101,8 @@ impl Emulator {
     ///    the console-silence watchdog. The budget stops short of the step
     ///    where any of them could fire.
     /// 3. By the pc, for the checks tied to an address: `stop_pc`, the
-    ///    solicited restore, the `udelay` hook and the start4 entry. Such a
-    ///    pc ends the fast run before its instruction.
+    ///    solicited restore and the start4 entry. Such a pc ends the fast
+    ///    run before its instruction.
     ///
     /// A queued interrupt that only the interrupt-enable bit holds back is
     /// the one thing no flag covers, since any instruction can write `r30`,
@@ -1156,7 +1134,6 @@ impl Emulator {
         // `u32::MAX` that matches by accident only costs a slow step.
         let stop_pc = limits.stop_pc.unwrap_or(u32::MAX);
         let solicited = self.start4_pc(crate::firmware::addrs::SOLICITED_RESTORE_PC);
-        let udelay = self.start4_pc(UDELAY_LOOP_PC);
         let entry = if self.start4_entry.is_none() {
             0xC000_0000
         } else {
@@ -1182,7 +1159,7 @@ impl Emulator {
         let end = 'run: {
             while n < budget {
                 let pc = self.cpu.pc();
-                if (pc == stop_pc) | (pc == solicited) | (pc == udelay) | (pc >= entry) {
+                if (pc == stop_pc) | (pc == solicited) | (pc >= entry) {
                     break 'run None;
                 }
                 let step = self.cpu.step(&mut self.machine);
@@ -1277,10 +1254,6 @@ impl Emulator {
         n
     }
 }
-
-/// start4's `udelay(r1)` loop body, which [`Emulator::slow_step`] jumps the
-/// clock through.
-const UDELAY_LOOP_PC: u32 = 0x3ED7_BD3A;
 
 /// How many instructions the console-silence watchdog wants on top of its
 /// modelled time ([`RunLimits::silent_us`]).
