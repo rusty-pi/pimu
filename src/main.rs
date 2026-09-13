@@ -603,6 +603,14 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
                 }
             }
         }
+        // `RVF_DUMP_RAM=<path>` writes SDRAM out the same way, before a reset
+        // replaces it: a kernel that dies before its console comes up still
+        // has its log buffer in there.
+        if let Ok(p) = std::env::var("RVF_DUMP_RAM") {
+            let ram = emu.machine.ram.as_slice();
+            let _ = std::fs::write(format!("{p}.{}", reboots + 1), ram);
+            eprintln!("wrote {p}.{} ({} bytes)", reboots + 1, ram.len());
+        }
 
         if report.end == rpi_virt_fw::emulator::RunEnd::Reset {
             reboots += 1;

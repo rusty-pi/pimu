@@ -649,8 +649,18 @@ impl ArmSide {
                 // handler will see in `ESR_ELx`/`FAR_ELx`.
                 if dbg_arm_exc() && !matches!(e, Exception::Svc(_)) {
                     let t = el as usize;
+                    // An external abort: nothing answered at this physical
+                    // address, the one to look up in the memory map.
+                    let pa = match &e {
+                        Exception::DataAbort { fsc, .. } | Exception::InsnAbort { fsc, .. }
+                            if *fsc == crate::aarch64::mmu::FSC_EXTERNAL =>
+                        {
+                            format!(" pa {:#x}", core.cpu.abort_pa)
+                        }
+                        _ => String::new(),
+                    };
                     eprintln!(
-                        "[arm-exc] core {id} pc {pc:#x} -> EL{el} {e:?} esr {:#x} far {:#x}",
+                        "[arm-exc] core {id} pc {pc:#x} -> EL{el} {e:?} esr {:#x} far {:#x}{pa}",
                         core.cpu.sys.esr[t], core.cpu.sys.far[t]
                     );
                 }
@@ -1134,6 +1144,7 @@ mod tests {
         assert_eq!(arm.cores[0].exceptions, 1);
         assert_eq!(arm.cores[0].cpu.pc, 0x200);
         assert_eq!(arm.cores[0].cpu.sys.far[3], 0x1_0000_0000);
+        assert_eq!(arm.cores[0].cpu.abort_pa, 0x1_0000_0000);
         assert_eq!(arm.cores[0].cpu.sys.esr[3] >> 26, 0x25);
     }
 

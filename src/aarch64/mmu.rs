@@ -399,7 +399,10 @@ impl Cpu {
             .map_err(|(a, f)| abort(a, f))?;
         self.last_pa = pa;
         let Some((in_page, pa2)) = split else {
-            return mem.read(pa, size).map_err(|_| abort(va, FSC_EXTERNAL));
+            return mem.read(pa, size).map_err(|_| {
+                self.abort_pa = pa;
+                abort(va, FSC_EXTERNAL)
+            });
         };
         let mut v = 0;
         for i in 0..u64::from(size) {
@@ -408,7 +411,10 @@ impl Cpu {
             } else {
                 pa2 + i - in_page
             };
-            let b = mem.read(p, 1).map_err(|_| abort(va + i, FSC_EXTERNAL))?;
+            let b = mem.read(p, 1).map_err(|_| {
+                self.abort_pa = p;
+                abort(va + i, FSC_EXTERNAL)
+            })?;
             v |= b << (8 * i);
         }
         Ok(v)
@@ -433,9 +439,10 @@ impl Cpu {
             .translate_access(mem, va, size, Kind::Write)
             .map_err(|(a, f)| abort(a, f))?;
         let Some((in_page, pa2)) = split else {
-            return mem
-                .write(pa, size, value)
-                .map_err(|_| abort(va, FSC_EXTERNAL));
+            return mem.write(pa, size, value).map_err(|_| {
+                self.abort_pa = pa;
+                abort(va, FSC_EXTERNAL)
+            });
         };
         for i in 0..u64::from(size) {
             let p = if i < in_page {
@@ -443,8 +450,10 @@ impl Cpu {
             } else {
                 pa2 + i - in_page
             };
-            mem.write(p, 1, value >> (8 * i))
-                .map_err(|_| abort(va + i, FSC_EXTERNAL))?;
+            mem.write(p, 1, value >> (8 * i)).map_err(|_| {
+                self.abort_pa = p;
+                abort(va + i, FSC_EXTERNAL)
+            })?;
         }
         Ok(())
     }
@@ -465,7 +474,10 @@ impl Cpu {
                 pa
             }
         };
-        mem.fetch(pa).map_err(|_| abort(FSC_EXTERNAL))
+        mem.fetch(pa).map_err(|_| {
+            self.abort_pa = pa;
+            abort(FSC_EXTERNAL)
+        })
     }
 }
 

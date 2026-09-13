@@ -181,6 +181,9 @@ pub struct Cpu {
     pub(super) exclusive: Option<(u64, u64)>,
     /// The physical address of the last data read, for `ldxr` to mark.
     pub(super) last_pa: u64,
+    /// The physical address of the last access that took an external abort:
+    /// nothing answered there. `FAR_ELx` only has the virtual one.
+    pub abort_pa: u64,
     /// Set by the executor for the instruction in flight: where to go next.
     pub(super) next_pc: u64,
     /// The Event Register (ARM ARM D1.16.1): set by `sev` on any core,
@@ -232,6 +235,7 @@ impl Cpu {
             unprivileged: false,
             exclusive: None,
             last_pa: 0,
+            abort_pa: 0,
             next_pc: 0,
             event: false,
             sev: false,

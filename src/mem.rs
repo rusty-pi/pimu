@@ -58,6 +58,11 @@ impl Ram {
         self.data.is_empty()
     }
 
+    /// Every byte, from `base` on — for dumping.
+    pub fn as_slice(&self) -> &[u8] {
+        &self.data
+    }
+
     #[inline]
     pub fn contains(&self, addr: u32) -> bool {
         let end = self.base as u64 + self.data.len() as u64;
