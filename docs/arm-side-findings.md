@@ -191,9 +191,16 @@ the armstub, so the ARM runs UEFI before any kernel. What it needed:
    halt. The DWC2 model answers the configuration words measured on `rpi-dev`,
    halts a channel at once and reports an empty root port
    (`src/periph/dwc2.rs`).
+5. systemd-boot writes its random seed back to the ESP before it starts an
+   entry. After every write, edk2's `MmcDxe` asks the card how many blocks it
+   took (CMD55 + ACMD22, a 4-byte read) and fails the write without an answer.
+   The card model had no ACMD22, so the Arasan driver waited for Buffer Read
+   Ready until `EFI_TIMEOUT`, and systemd-boot stopped at `Error opening root
+   path: Time out` (#51, `src/periph/sdcard.rs`).
 
 With those, UEFI prints its boot manager prompt (`ESC (setup), F1 (shell),
-ENTER (boot)`) 0.7 s of guest time after its banner.
+ENTER (boot)`) 0.7 s of guest time after its banner, and systemd-boot no
+longer times out on the SD card.
 
 ## Unicorn-specific lessons (for differential testing, if it is ever used)
 

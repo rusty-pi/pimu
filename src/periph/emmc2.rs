@@ -1226,6 +1226,29 @@ mod tests {
         );
     }
 
+    /// edk2's MmcDxe follows every write with CMD55 + ACMD22 on a 4-byte block
+    /// and fails the write unless Buffer Read Ready comes (#51).
+    #[test]
+    fn acmd22_reads_the_written_block_count_through_pio() {
+        let mut e = host();
+        enumerate(&mut e, 0x40FF_8000);
+        select(&mut e);
+        wr(&mut e, BLOCK_SIZE_COUNT, 512);
+        cmd(&mut e, 24, 5, R1_DATA, 0);
+        for i in 0..128u32 {
+            wr(&mut e, BUFFER_DATA, i);
+        }
+        wr(&mut e, INT_STATUS, 0xFFFF_FFFF);
+
+        cmd(&mut e, 55, 0x0001_0000, R1, 0);
+        wr(&mut e, BLOCK_SIZE_COUNT, 4);
+        cmd(&mut e, 22, 0, R1_DATA, TM_READ);
+        assert_ne!(rd(&mut e, INT_STATUS) & INT_BUF_READ_RDY, 0);
+        // One block, most significant byte first on the bus: 00 00 00 01.
+        assert_eq!(rd(&mut e, BUFFER_DATA), 0x0100_0000);
+        assert_ne!(rd(&mut e, INT_STATUS) & INT_XFER_COMPLETE, 0);
+    }
+
     #[test]
     fn voltage_switch_holds_the_lines_low_until_the_clock_returns_at_1v8() {
         let mut e = host();

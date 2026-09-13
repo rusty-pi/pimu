@@ -16,6 +16,7 @@
 //!   CMD7  SELECT_CARD            -> R1b                     stby <-> tran
 //!   ACMD6 SET_BUS_WIDTH          -> R1
 //!   ACMD13 SD_STATUS             -> R1 + 64-byte status block
+//!   ACMD22 SEND_NUM_WR_BLOCKS    -> R1 + 4-byte count of the last write's blocks
 //!   ACMD51 SEND_SCR              -> R1 + 8-byte SCR
 //!   CMD6  SWITCH_FUNC            -> R1 + 64-byte status block
 //!   CMD16 SET_BLOCKLEN           -> R1
@@ -157,6 +158,8 @@ pub struct SdCard {
     /// Blocks left before a counted transfer (CMD17/CMD24, or CMD18/CMD25 after
     /// CMD23) ends by itself; `None` = open-ended, ended by CMD12.
     blocks_left: Option<u32>,
+    /// Blocks the last CMD24/CMD25 wrote, which ACMD22 reports.
+    written_blocks: u32,
     /// CMD32/CMD33 erase range, inclusive block addresses.
     erase_start: u32,
     erase_end: u32,
@@ -188,6 +191,7 @@ impl SdCard {
             functions: [0; 6],
             preset_count: None,
             blocks_left: None,
+            written_blocks: 0,
             erase_start: 0,
             erase_end: 0,
             cid: default_cid(),
@@ -223,11 +227,13 @@ impl SdCard {
     }
 
     /// Store one block (up to 512 bytes) the host sent; ignored past the end.
+    /// A stored block counts towards what ACMD22 reports.
     pub fn write_block(&mut self, lba: u32, data: &[u8]) {
         let start = (lba as usize).wrapping_mul(512);
         let n = data.len().min(512);
         if let Some(dst) = self.image.get_mut(start..start + n) {
             dst.copy_from_slice(&data[..n]);
+            self.written_blocks += 1;
         }
     }
 
@@ -411,6 +417,7 @@ impl SdCard {
                 // sends data.
                 let status = self.status();
                 self.state = CardState::Rcv;
+                self.written_blocks = 0;
                 let count = if cmd == 24 {
                     Some(1)
                 } else {
@@ -468,6 +475,13 @@ impl SdCard {
                     ssr[0] = 0x80;
                 }
                 SdResponse::with_data(self.status(), ssr)
+            }
+            22 => {
+                // SEND_NUM_WR_BLOCKS -> R1 + the number of blocks the last
+                // write stored, 32 bits, most significant byte first. edk2's
+                // MmcDxe asks after every write and fails the write without
+                // an answer (#51).
+                SdResponse::with_data(self.status(), self.written_blocks.to_be_bytes().to_vec())
             }
             41 => {
                 // SD_SEND_OP_COND -> R3 (OCR). Report busy once, then ready with
@@ -694,6 +708,29 @@ mod tests {
         c.command(55, 0);
         let scr = c.command(51, 0).data.unwrap();
         assert_eq!(&scr[..4], &[0x02, 0x05, 0x80, 0x02]);
+    }
+
+    #[test]
+    fn acmd22_counts_the_blocks_the_last_write_stored() {
+        let mut c = card();
+        c.state = CardState::Tran;
+        c.command(25, 4);
+        for lba in 4..7 {
+            c.write_block(lba, &[0x11; 512]);
+            c.block_done();
+        }
+        c.command(12, 0);
+        c.command(55, 0);
+        let r = c.command(22, 0);
+        assert_eq!(r.data.unwrap(), vec![0, 0, 0, 3], "big-endian count");
+        assert_eq!(r.r1.unwrap() >> R1_CURRENT_STATE_SHIFT & 0xF, 4, "tran");
+
+        // The next write starts the count again.
+        c.command(24, 9);
+        c.write_block(9, &[0x22; 512]);
+        c.block_done();
+        c.command(55, 0);
+        assert_eq!(c.command(22, 0).data.unwrap(), vec![0, 0, 0, 1]);
     }
 
     #[test]
