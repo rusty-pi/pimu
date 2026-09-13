@@ -29,7 +29,7 @@ Generated from the TOML specs in [`specs/`](../../specs/); see [`specs/README.md
 | [`gich`](gich.md) | arm | `0xFF844000` | `0x2000` | 10 | GIC-400 virtual interface control, banked per CPU |
 | [`gicv`](gicv.md) | arm | `0xFF846000` | `0x2000` | 0 | GIC-400 virtual CPU interface |
 | [`hd`](hd.md) | vpu | `0x7E808000` | `0x100` | 2 | Control block at 0x7E80_8000: the power request and acknowledge start4 waits on before it resets the DWC2 USB controller |
-| [`hdmi`](hdmi.md) | vpu | `0x7EF00700` | `0x300` | 2 | HDMI controller core registers (the "hdmi" window of each connector): the packet-RAM handshake |
+| [`hdmi`](hdmi.md) | vpu | `0x7EF00700` | `0x300` | 4 | HDMI controller core registers (the "hdmi" window of each connector), with no monitor attached: the packet-RAM handshake, the FIFO recenter and the hotplug state |
 | [`hdmi_ddc`](hdmi_ddc.md) | vpu | `0x7EF04500` | `0x100` | 8 | HDMI DDC I²C masters (brcm,bcm2711-hdmi-i2c), one per connector: the bus a monitor's EDID EEPROM sits on |
 | [`hvs`](hvs.md) | vpu | `0x7E400000` | `0x1000` | 7 | HVS (Hardware Video Scaler): identification, the per-channel frame-swap words, and end of frame |
 | [`mbox`](mbox.md) | vpu | `0x7E00B880` | `0x140` | 12 | ARM <-> VideoCore mailboxes: two views of the same pair of FIFOs, and the interrupt block between them |

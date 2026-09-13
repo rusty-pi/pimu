@@ -171,9 +171,9 @@ pub const DWC2_BASE: u32 = spec::dwc2::BASE;
 pub const DWC2_SIZE: u32 = spec::dwc2::SIZE;
 
 /// The two HDMI controllers' core registers (`hdmi@7ef00700`, `hdmi@7ef05700`,
-/// reg-name "hdmi"). start4 rewrites the AV-mute packet in their packet RAM
-/// when it stops its display, and waits for each slot's status with no
-/// timeout (`src/periph/hdmi.rs`, #61).
+/// reg-name "hdmi"), with no monitor attached. start4 waits on the packet-RAM
+/// status when it stops its display (#61), and 2020-era bootcode on the FIFO
+/// recenter at every boot (#63), both with no timeout (`src/periph/hdmi.rs`).
 pub const HDMI0_BASE: u32 = spec::hdmi::BASE;
 pub const HDMI1_BASE: u32 = spec::hdmi::HDMI1_BASE;
 pub const HDMI_SIZE: u32 = spec::hdmi::SIZE;

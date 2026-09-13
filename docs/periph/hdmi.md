@@ -1,13 +1,13 @@
 <!-- generated from specs/hdmi.toml by `cargo run -- spec-docs --update` – do not edit -->
 
-# `hdmi` – HDMI controller core registers (the "hdmi" window of each connector): the packet-RAM handshake
+# `hdmi` – HDMI controller core registers (the "hdmi" window of each connector), with no monitor attached: the packet-RAM handshake, the FIFO recenter and the hotplug state
 
 - Bus: `vpu` (VPU bus address)
 - Base: `0x7EF00700`
 - `HDMI1` copy: `0x7EF05700`
 - Size: `0x300`
 
-No encoder behind it. A packet slot's status bit follows its enable in RAM_PACKET_CONFIG at once, which is what start4 (and Linux's vc4) wait for around every packet write. Everything else is stored and read back.
+No encoder or PHY behind it, and no sink on either connector. What firmware waits on is modelled: a packet slot's status bit follows its enable in RAM_PACKET_CONFIG at once, a FIFO recenter completes as soon as it is asked for, and HOTPLUG reports nothing plugged in. Everything else is stored and read back.
 
 Sources:
 
@@ -24,8 +24,35 @@ HDMI1's core registers; HDMI0's are the block base.
 
 | Offset | Name | Access | Width | Sources |
 |---|---|---|---|---|
+| `0x074` | [`FIFO_CTL`](#fifo_ctl) | rw | 32 | 2, best high |
 | `0x0BC` | [`RAM_PACKET_CONFIG`](#ram_packet_config) | rw | 32 | 2, best high |
 | `0x0C4` | [`RAM_PACKET_STATUS`](#ram_packet_status) | r | 32 | 2, best high |
+| `0x1A8` | [`HOTPLUG`](#hotplug) | r | 32 | 2, best high |
+
+## `FIFO_CTL`
+
+Offset `0x074` · access `rw` · 32 bits
+
+Control of the FIFO between the pixel valve and the encoder. After a mode set, software pulses RECENTER and waits for RECENTER_DONE. The 2020-era bootcode does that on every boot, monitor or not, and spins with no timeout; on plain storage the bit never set and those EEPROM images went no further (#63). The model sets RECENTER_DONE on any write with RECENTER set. The other bits are stored: the bootcode writes 0x5, MASTER_SLAVE_N | CAPTURE_PTR in Linux's names.
+
+| Bits | Field | Access | Notes |
+|---|---|---|---|
+| 6 | `RECENTER` | rw | Starts a recenter. |
+| 14 | `RECENTER_DONE` | r | Set once a recenter has finished. Recentring needs no sink: headless boards boot the 2020 bootcode, which cannot get past this bit otherwise. |
+
+Sources:
+
+- linux (high): drivers/gpu/drm/vc4/vc4_hdmi_regs.h: VC4_HDMI_REG(HDMI_FIFO_CTL, 0x074) in vc5_hdmi_hdmi0_fields
+- trace (high): pieeprom-2020-09-03 bootcode, RVF_TRACE_MMIO: 0x80007894 writes 0x5, 0x8000775e 0x45, 0x80007776 0x5, then 0x8000777e reads it forever
+
+`RECENTER` sources:
+
+- linux (high): drivers/gpu/drm/vc4/vc4_regs.h: VC4_HDMI_FIFO_CTL_RECENTER BIT(6); vc4_hdmi.c: vc4_hdmi_recenter_fifo() writes it clear, then set, twice
+
+`RECENTER_DONE` sources:
+
+- linux (high): drivers/gpu/drm/vc4/vc4_regs.h: VC4_HDMI_FIFO_CTL_RECENTER_DONE BIT(14); vc4_hdmi.c: vc4_hdmi_recenter_fifo() waits 1 ms for it and warns on timeout
+- decompile (high): pieeprom-2020-09-03 bootcode 0x8000777e..0x80007784: ld r0, [r2+0x74]; btest r0, #14; beq back, no timeout
 
 ## `RAM_PACKET_CONFIG`
 
@@ -64,3 +91,22 @@ Sources:
 `PACKETS` sources:
 
 - linux (medium): drivers/gpu/drm/vc4/vc4_hdmi.c: HDMI_RAM_PACKET_STATUS & BIT(packet_id)
+
+## `HOTPLUG`
+
+Offset `0x1A8` · access `r` · 32 bits
+
+No monitor on either connector: CONNECTED reads 0 whatever was written, so Linux's vc4 reports both connectors disconnected, as on the reference board.
+
+| Bits | Field | Access | Notes |
+|---|---|---|---|
+| 0 | `CONNECTED` | r |  |
+
+Sources:
+
+- linux (high): drivers/gpu/drm/vc4/vc4_hdmi_regs.h: VC4_HDMI_REG(HDMI_HOTPLUG, 0x1a8) in vc5_hdmi_hdmi0_fields; vc4_hdmi.c: vc5_hdmi_hp_detect()
+- measured (medium): rpi-dev, no monitor attached: /sys/class/drm/card1-HDMI-A-1/status and card1-HDMI-A-2/status read disconnected — _The connector state, not the register: vc4 reports disconnected when CONNECTED is clear and the node has no hpd-gpios._
+
+`CONNECTED` sources:
+
+- linux (high): drivers/gpu/drm/vc4/vc4_regs.h: VC4_HDMI_HOTPLUG_CONNECTED BIT(0); vc4_hdmi.c: vc5_hdmi_hp_detect() returns HDMI_HOTPLUG & VC4_HDMI_HOTPLUG_CONNECTED
