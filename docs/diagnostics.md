@@ -116,7 +116,7 @@ All of these are `=1`.
 | `RVF_DBG_DWC2` | The DWC2 USB OTG controller (`0x7E98_0000`): every write, and every read that differs from the previous read of the same register, so a poll shows once. |
 | `RVF_DBG_MBOX` | Every word across the ARM↔VideoCore property mailbox, both directions. |
 | `RVF_DBG_PCIE` | Every change of the VL805's interrupt as the root complex sees it: INTA, or the MSI block's status and mask. Also every write to the inbound window `RC_BAR2`, and every endpoint DMA access that falls outside it (and so reaches no memory). |
-| `RVF_DBG_ARM_EXC` | With `--arm`: every synchronous exception an ARM core takes (not `svc`), with the `ESR`/`FAR` its handler sees. |
+| `RVF_DBG_ARM_EXC` | With `--arm`: every synchronous exception an ARM core takes (not `svc`), with the `ESR`/`FAR` its handler sees, and for an external abort the physical address nothing answered at. |
 | `RVF_BOOTARGS="<args>"` | With `--arm`: more kernel arguments after the harness's own (`initcall_debug` to time every initcall, `nokaslr` for addresses that match `System.map`). |
 
 ## Output and fixtures
@@ -127,6 +127,7 @@ All of these are `=1`.
 | `RVF_SLOW_LOOP=1` | Take every step through every check of the run loop, as a `diag` build does, instead of skipping the checks that cannot act (`Emulator::fast_steps`). A run must come out the same either way; this is how to check that it does. |
 | `RVF_NO_PARK=1` | With `--arm`: execute every pass of a busy-wait loop instead of parking the core in it (`arm.rs`, "Busy-wait loops"). The same check for the ARM side: a run must come out the same either way. Works in every build. |
 | `RVF_DUMP_FLASH=<path>` | Write the EEPROM flash image out after the run, including any self-update the firmware applied. |
+| `RVF_DUMP_RAM=<path>` | Write SDRAM out after every boot, as `<path>.<n>` for boot `n`, before a reset replaces it. A kernel that dies before its console comes up still has its log buffer in there. Works in every build. |
 | `RVF_BOOT_WALL=<seconds>` | Overrides the boot scenario's `wall_secs` (default 330) for `scripts/boot-check.sh`. Raise it when other work is competing for the CPU — two concurrent boot runs will miss `arm_loader` on time. |
 | `RVF_PCIE_DEVICE=0` | Unsolder the VL805 from the modelled board. Describes the hardware, not the firmware: a real Pi 4B always has one, so it is attached by default. |
 
