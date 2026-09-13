@@ -1068,8 +1068,18 @@ impl Emulator {
     fn step_arm(&mut self) -> Option<RunEnd> {
         if self.arm_enabled && self.arm.is_none() && self.machine.armctrl.take_release() {
             self.arm = Some(crate::arm::ArmSide::released(&mut self.machine));
+            self.machine.defer_sleep = true;
         }
         if let Some(arm) = self.arm.as_mut() {
+            // The VPU went to `sleep`: it wakes at its next compare, or when
+            // the ARM writes something that interrupts it — a mailbox
+            // request, most often — whichever comes first. So the ARM runs
+            // up to that compare first, and the counter only moves as far as
+            // it got (#53; `arm.rs`, "Time and scheduling").
+            if let Some(to) = self.machine.sleep_to.take() {
+                let us = arm.run_until_store(&mut self.machine, to);
+                self.machine.wake_vpu_at(us);
+            }
             arm.catch_up(&mut self.machine);
             if let Some(stop) = &arm.stopped {
                 return Some(RunEnd::ArmStopped(stop.clone()));
