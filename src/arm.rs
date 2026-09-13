@@ -67,6 +67,42 @@
 //!   in a holding pen (TF-A's, UEFI's) spun for the whole boot and the cycle
 //!   loop never found every core asleep.
 //!
+//! ## Busy-wait loops
+//!
+//! Firmware on the ARM spends much of its time polling: UEFI's mailbox
+//! driver spins on the status word while the VPU works on a request, and its
+//! `Stall` spins on the counter. At one instruction per cycle that is most
+//! of the host time of a UEFI boot (#53). A core in such a loop is *parked*
+//! instead: it sits out its turns like a `wfi` sleeper, and its state is
+//! rebuilt exactly when the loop would have ended or something it reads
+//! changes. `RVF_NO_PARK=1` turns this off, for comparison.
+//!
+//! - Detection (`arm/park.rs`): a backward-jump target hit often enough gets
+//!   its loop watched for a few passes. They have to repeat the same PCs and
+//!   the same reads with the same values, store nothing, execute nothing
+//!   that changes state beyond the general registers and flags
+//!   ([`Cpu::effects`]), and read only RAM, the counter, and device
+//!   registers [`Machine::peek`] can read without side effects.
+//! - Model: a register that moves by the same step every pass is moved on
+//!   arithmetically; the state at pass `n` is that, taken to pass `n - 2`,
+//!   and the last two passes re-run off the machine, with the watched values
+//!   for reads and the right cycle for the counter — which puts back what
+//!   the loop computes from the counter. The model has to reproduce every
+//!   watched pass before the core parks.
+//! - End: the first pass that strays from the watched one. The first 32
+//!   passes are checked one by one — a loop about to end is left to run —
+//!   and the rest by doubling and halving, on the premise that a loop's exit
+//!   condition, once true, stays true (a countdown reaching zero, the counter
+//!   passing a deadline). That premise is why a register that moves every
+//!   pass has to be counting down to zero: one counting up is compared
+//!   against a limit, often for equality, which the halving would step over.
+//!   Moved-on registers also have to hold what the loop itself computes at
+//!   every pass the search looks at.
+//! - Wake: at that pass; when a store, a device access or the VPU changes an
+//!   input (a core after the storing one in core order still gets its turn
+//!   in the same cycle); or when an interrupt line comes up that the core
+//!   can take. The skipped instructions count as executed.
+//!
 //! Not yet: stage 2 translation (a core that sets `HCR_EL2.VM` stops with
 //! [`ArmStop::Unsupported`]).
 
@@ -76,6 +112,8 @@ use crate::bus::{Bus, MmioDevice, Width};
 use crate::machine::Machine;
 use crate::periph::gentimer::{self, GenericTimer, Reg, Which};
 use crate::periph::{armlocal, gic};
+
+mod park;
 
 /// The number of cores: BCM2711 has four A72s.
 pub const CORES: usize = 4;
@@ -138,6 +176,11 @@ pub struct Core {
     /// The first time the core's PC left the armstub: `(cycle, EL, PC, x0)`.
     /// For core 0 that is the kernel entry.
     pub entered: Option<(u64, u32, u64, u64)>,
+    /// Looks for a busy-wait loop to park the core in (module docs,
+    /// "Busy-wait loops").
+    detect: park::Detector,
+    /// The loop the core is parked in.
+    park: Option<Box<park::Park>>,
 }
 
 impl Core {
@@ -151,6 +194,8 @@ impl Core {
             waiting: false,
             wfe_until: None,
             entered: None,
+            detect: park::Detector::default(),
+            park: None,
         }
     }
 
@@ -197,6 +242,19 @@ pub struct ArmSide {
     runnable: u32,
     /// `RVF_ARM_PROF`: steps per `(core, EL, 256-byte PC bucket)`.
     pub prof: Option<std::collections::HashMap<(usize, u32, u64), u64>>,
+    /// `RVF_ARM_PROF=<us>`: the model time the profile starts at, until it
+    /// has.
+    prof_from: Option<u64>,
+    /// Bit `id` set while core `id` is parked in a busy-wait loop (module
+    /// docs, "Busy-wait loops"), and the earliest cycle one of them has to
+    /// be back.
+    parked: u32,
+    park_due: u64,
+    /// Parked cores an input change woke in the middle of a cycle, still to
+    /// take their turn in it.
+    woke: u32,
+    /// `RVF_NO_PARK=1` turns parking off.
+    park_on: bool,
 }
 
 /// The device interrupt lines wired to the GIC: the mailbox, eMMC2, the two
@@ -250,7 +308,14 @@ impl ArmSide {
             timer_due: 0,
             spis: [false; SPIS.len()],
             runnable: (1 << n) - 1,
-            prof: std::env::var_os("RVF_ARM_PROF").map(|_| Default::default()),
+            prof: None,
+            prof_from: std::env::var("RVF_ARM_PROF")
+                .ok()
+                .map(|v| v.parse().unwrap_or(0)),
+            parked: 0,
+            park_due: u64::MAX,
+            woke: 0,
+            park_on: std::env::var_os("RVF_NO_PARK").is_none(),
         }
     }
 
@@ -295,8 +360,30 @@ impl ArmSide {
         }
         let hz = m.arm_local.counter_hz().unwrap_or(0);
         let cycles = self.cycles;
+        // A parked core is rebuilt reading the counter at the rate it parked
+        // under: a new rate ends the park first.
+        if self.parked != 0
+            && self
+                .cores
+                .iter()
+                .any(|c| c.park.is_some() && c.timer.hz() != hz)
+        {
+            self.unpark_if(m, |_, _| true, cycles);
+        }
         for (id, core) in self.cores.iter_mut().enumerate() {
             core.sync(m, id, cycles, hz);
+        }
+        // A line the core can take ends its park: it takes it this cycle.
+        let mut ids = self.parked;
+        while ids != 0 {
+            let id = ids.trailing_zeros() as usize;
+            ids &= ids - 1;
+            let c = &self.cores[id].cpu;
+            if (c.irq_line && c.can_take_interrupt(false))
+                || (c.fiq_line && c.can_take_interrupt(true))
+            {
+                self.unpark(m, id, cycles);
+            }
         }
         self.timer_due = self
             .cores
@@ -316,25 +403,111 @@ impl ArmSide {
     fn refresh_runnable(&mut self, id: usize) {
         let c = &self.cores[id];
         let wfe_done = c.wfe_until.is_some_and(|t| c.cpu.event || t <= self.cycles);
-        if !c.waiting || c.cpu.irq_line || c.cpu.fiq_line || wfe_done {
+        if c.park.is_none() && (!c.waiting || c.cpu.irq_line || c.cpu.fiq_line || wfe_done) {
             self.runnable |= 1 << id;
         } else {
             self.runnable &= !(1 << id);
         }
     }
 
+    /// Bring parked core `id` up to date as of cycle `t`, and let it take
+    /// its turns again (module docs, "Busy-wait loops").
+    fn unpark(&mut self, m: &Machine, id: usize, t: u64) {
+        let core = &mut self.cores[id];
+        let Some(p) = core.park.take() else {
+            return;
+        };
+        debug_assert!(t <= p.until, "core {id} resumed past its park");
+        let n = p.resume(&mut core.cpu, m, &core.timer, t);
+        core.insns += n;
+        if let Some(prof) = &mut self.prof {
+            let (len, el) = (p.pcs().len() as u64, core.cpu.el);
+            for (i, &pc) in p.pcs().iter().enumerate() {
+                let k = n / len + u64::from((i as u64) < n % len);
+                *prof.entry((id, el, pc & !0xFF)).or_default() += k;
+            }
+        }
+        self.parked &= !(1 << id);
+        self.park_due = self
+            .cores
+            .iter()
+            .filter_map(|c| c.park.as_ref().map(|p| p.until))
+            .min()
+            .unwrap_or(u64::MAX);
+        self.refresh_runnable(id);
+    }
+
+    /// Unpark, as of cycle `t`, every parked core `wake` picks.
+    fn unpark_if(&mut self, m: &Machine, wake: impl Fn(&park::Park, &Machine) -> bool, t: u64) {
+        let mut ids = self.parked;
+        while ids != 0 {
+            let id = ids.trailing_zeros() as usize;
+            ids &= ids - 1;
+            if self.cores[id].park.as_ref().is_some_and(|p| wake(p, m)) {
+                self.unpark(m, id, t);
+            }
+        }
+    }
+
+    /// After core `by` stepped in cycle `t`: unpark the cores whose inputs
+    /// the step changed. One after `by` in core order still has its turn in
+    /// this cycle, which the returned bits ask for; one before it has had
+    /// it, and resumes in the next.
+    fn check_parked(&mut self, m: &Machine, by: usize, t: u64) -> u32 {
+        let mut woke = 0;
+        let mut ids = self.parked;
+        while ids != 0 {
+            let id = ids.trailing_zeros() as usize;
+            ids &= ids - 1;
+            if !self.cores[id]
+                .park
+                .as_ref()
+                .is_some_and(|p| p.inputs_changed(m))
+            {
+                continue;
+            }
+            if id > by {
+                self.unpark(m, id, t);
+                woke |= 1 << id;
+            } else {
+                self.unpark(m, id, t + 1);
+            }
+        }
+        woke
+    }
+
+    /// Bring every parked core up to date, for a report of where the cores
+    /// are.
+    pub fn settle(&mut self, m: &Machine) {
+        let t = self.cycles;
+        self.unpark_if(m, |_, _| true, t);
+    }
+
     /// Run for `budget` cycles, or until a core stops.
     pub fn run(&mut self, m: &mut Machine, budget: u64) {
         let end = self.cycles + budget;
+        if self.prof_from.is_some_and(|t| m.systimer.now_us() >= t) {
+            self.prof = Some(Default::default());
+            self.prof_from = None;
+        }
         // The VPU side moves these lines, and it is frozen while this runs.
         if spi_levels(m) != self.spis {
             self.dirty = true;
+        }
+        // It may also have answered what a parked core waits for.
+        if self.parked != 0 {
+            let t = self.cycles;
+            self.unpark_if(m, |p, m| p.inputs_changed(m), t);
         }
         while self.cycles < end && self.stopped.is_none() {
             // Interrupt state only moves when a core touches a device, the
             // GIC or a timer register, or a timer reaches its compare.
             if self.dirty || self.cycles >= self.timer_due {
                 self.sync(m);
+            }
+            if self.cycles >= self.park_due {
+                let t = self.cycles;
+                self.unpark_if(m, |p, _| p.until <= t, t);
             }
             let mut awake = false;
             let mut ids = self.runnable;
@@ -355,10 +528,15 @@ impl ArmSide {
                     break;
                 }
                 self.refresh_runnable(id);
+                ids |= std::mem::take(&mut self.woke);
             }
             if !awake {
-                let wake = self.timer_due.min(end).max(self.cycles + 1);
-                self.slept += wake - self.cycles;
+                let wake = self.timer_due.min(self.park_due).min(end);
+                let wake = wake.max(self.cycles + 1);
+                // A parked core is running, as far as the guest can tell.
+                if self.parked == 0 {
+                    self.slept += wake - self.cycles;
+                }
                 self.cycles = wake;
                 continue;
             }
@@ -376,22 +554,41 @@ impl ArmSide {
         if let Some(p) = &mut self.prof {
             *p.entry((id, core.cpu.el, pc & !0xFF)).or_default() += 1;
         }
+        let watching = core.detect.watching();
         let mut bus = ArmBus {
-            m,
+            m: &mut *m,
             timer: &mut core.timer,
             cycles,
             core: id,
             secure,
             written: None,
             io: false,
+            log: watching.then_some(&mut core.detect.log),
         };
         let step = core.cpu.step_system(&mut bus);
         let written = bus.written;
-        self.dirty |= bus.io;
+        let io = bus.io;
+        self.dirty |= io;
         let el = core.cpu.el;
         let mut wfe_until = None;
+        if !matches!(step, Step::Retired) {
+            core.detect.interrupted();
+        }
         match step {
-            Step::Retired => core.insns += 1,
+            Step::Retired => {
+                core.insns += 1;
+                if self.park_on
+                    && core
+                        .detect
+                        .retired(&core.cpu, cycles, pc, written.is_some())
+                {
+                    if let Some(p) = core.detect.park(&mut core.cpu, m, &core.timer) {
+                        self.park_due = self.park_due.min(p.until);
+                        self.parked |= 1 << id;
+                        core.park = Some(p);
+                    }
+                }
+            }
             Step::Wfe => {
                 core.insns += 1;
                 core.waiting = true;
@@ -476,6 +673,11 @@ impl ArmSide {
         if let Some(until) = wfe_until {
             self.timer_due = self.timer_due.min(until);
         }
+        // A store, or a device access with a side effect, may have changed
+        // what a parked core waits on.
+        if self.parked != 0 && (written.is_some() || io) {
+            self.woke |= self.check_parked(m, id, cycles);
+        }
         None
     }
 }
@@ -506,6 +708,9 @@ struct ArmBus<'a> {
     /// The step touched something besides RAM (a device, the GIC, a timer
     /// register), so interrupt state may have moved.
     io: bool,
+    /// Where the step's data reads go while the core's loop is watched
+    /// (module docs, "Busy-wait loops").
+    log: Option<&'a mut Vec<park::Read>>,
 }
 
 impl ArmBus<'_> {
@@ -671,12 +876,17 @@ impl Memory for ArmBus<'_> {
 
     #[inline]
     fn read(&mut self, addr: u64, size: u32) -> Result<u64, Abort> {
-        if size == 8 {
+        let value = if size == 8 {
             let lo = self.read32(addr, 4)?;
             let hi = self.read32(addr.wrapping_add(4), 4)?;
-            return Ok(lo | (hi << 32));
+            lo | (hi << 32)
+        } else {
+            self.read32(addr, size)?
+        };
+        if let Some(log) = &mut self.log {
+            log.push(park::Read { addr, size, value });
         }
-        self.read32(addr, size)
+        Ok(value)
     }
 
     #[inline]
@@ -981,5 +1191,110 @@ mod tests {
         arm.run(&mut m, 1000);
         assert_eq!(arm.cores[1].insns, 1);
         assert_eq!(arm.cores[1].cpu.pc, 0x104);
+    }
+
+    /// The same run with busy-wait parking on and off (module docs,
+    /// "Busy-wait loops"): every core has to end up in the same state after
+    /// the same number of instructions.
+    fn parks_exactly(code: &[u32], cores: usize, drive: impl Fn(&mut ArmSide, &mut Machine)) {
+        let run = |park: bool| {
+            let mut m = machine_with(code);
+            let mut arm = ArmSide::with_cores(cores);
+            arm.park_on = park;
+            drive(&mut arm, &mut m);
+            arm.settle(&m);
+            arm
+        };
+        let (on, off) = (run(true), run(false));
+        assert_eq!(on.cycles, off.cycles);
+        for (id, (a, b)) in on.cores.iter().zip(&off.cores).enumerate() {
+            let state = |c: &Core| (c.cpu.pc, c.cpu.x, c.cpu.nzcv, c.insns);
+            assert_eq!(state(a), state(b), "core {id}");
+        }
+    }
+
+    /// `Stall`: spin on the counter until a deadline.
+    #[test]
+    fn a_counter_delay_parks_and_ends_on_the_same_cycle() {
+        // Start the counter (as above); mrs x1, cntpct_el0; add x2, x1,
+        // #1000; 1: mrs x3, cntpct_el0; cmp x3, x2; b.lo 1b; add x5, x5, #1;
+        // b .
+        let mut code = mov32(3, 0xFF80_0000).to_vec();
+        code.push(0xB900_007F);
+        code.extend(mov32(4, 0x8000_0000));
+        code.push(0xB900_0864);
+        code.extend([0xD53B_E021, 0x910F_A022, 0xD53B_E023, 0xEB02_007F]);
+        code.extend([0x54FF_FFC3, 0x9100_04A5, B_SELF]);
+        parks_exactly(&code, 1, |arm, m| {
+            arm.run(m, 20_000);
+            assert_eq!(arm.cores[0].park.is_some(), arm.park_on);
+            arm.run(m, 20_000);
+            assert_eq!(arm.cores[0].cpu.x[5], 1, "left the loop");
+        });
+    }
+
+    /// UEFI's mailbox wait: poll the status word, counting down a timeout.
+    #[test]
+    fn a_mailbox_poll_parks_until_the_vpu_answers() {
+        // x1 = the ARM's mailbox 0 status; movz x19, #0x10, lsl #16;
+        // 1: ldr w0, [x1]; cbz w0, 2f; subs x19, x19, #1; b.ne 1b; 2: b .
+        let mut code = mov32(1, 0xFE00_B898).to_vec();
+        code.extend([0xD2A0_0213, 0xB940_0020, 0x3400_0060, 0xF100_0673]);
+        code.extend([0x54FF_FFA1, B_SELF]);
+        parks_exactly(&code, 1, |arm, m| {
+            arm.run(m, 5000);
+            assert_eq!(arm.cores[0].park.is_some(), arm.park_on);
+            m.mbox
+                .write(crate::spec::mbox::DATA0_STRIDE, Width::Word, 0x1234_5678)
+                .unwrap();
+            arm.run(m, 100);
+            assert_eq!(arm.cores[0].cpu.pc, 0x1C, "saw the answer");
+        });
+    }
+
+    /// A loop counting up to a limit with `b.ne`: the search for its end
+    /// could step over the one pass that ends it (UEFI's bitmap scan at
+    /// `0x383288a0`, `cmp w3, #8`), so it runs.
+    #[test]
+    fn a_count_up_loop_runs_to_its_limit() {
+        // 1: add w3, w3, #1; cmp w3, #200; b.ne 1b; add x5, x5, #1; b .
+        let code = [0x1100_0463, 0x7103_207F, 0x54FF_FFC1, 0x9100_04A5, B_SELF];
+        parks_exactly(&code, 1, |arm, m| {
+            arm.run(m, 2000);
+            assert_eq!(arm.cores[0].cpu.x[5], 1, "left the loop");
+        });
+    }
+
+    /// One core polls a flag in RAM, another sets it after a countdown:
+    /// the poller resumes on the cycle it would have seen the store, before
+    /// or after the writer in core order.
+    #[test]
+    fn a_ram_poll_parks_until_another_core_stores() {
+        let mut code = vec![NOP; 0x40 + 4];
+        // Writer: movz x2, #3000; 1: subs x2, x2, #1; b.ne 1b; movz x1, #1;
+        // str x1, [x0]; b .
+        code[..6].copy_from_slice(&[
+            0xD281_7702,
+            0xF100_0442,
+            0x54FF_FFE1,
+            0xD280_0021,
+            0xF900_0001,
+            B_SELF,
+        ]);
+        // Poller at 0x100: 1: ldr x1, [x0]; cbz x1, 1b; add x5, x5, #1; b .
+        code[0x40..].copy_from_slice(&[0xF940_0001, 0xB4FF_FFE1, 0x9100_04A5, B_SELF]);
+        for (writer, poller) in [(0, 1), (1, 0)] {
+            parks_exactly(&code, 2, |arm, m| {
+                for c in &mut arm.cores {
+                    c.cpu.x[0] = 0x800;
+                }
+                arm.cores[poller].cpu.pc = 0x100;
+                arm.cores[writer].cpu.pc = 0;
+                arm.run(m, 1000);
+                assert_eq!(arm.cores[poller].park.is_some(), arm.park_on);
+                arm.run(m, 9000);
+                assert_eq!(arm.cores[poller].cpu.x[5], 1, "saw the flag");
+            });
+        }
     }
 }

@@ -90,7 +90,7 @@ it with `SIGPIPE`.
 |---|---|
 | `RVF_PROF=1` | Bucket the core-0 PC into 256-byte slots and dump the hottest on exit. Finds the loop a stalled boot is spinning in. |
 | `RVF_PROF_THREAD=<hex>` | The same, attributed per ThreadX thread. Takes the address of the firmware's current-thread pointer (`_tx_thread_current_ptr`) — only the firmware knows where that lives, so it is a parameter rather than a constant baked into the model. |
-| `RVF_ARM_PROF=1` | With `--arm`: count every ARM step by core, EL and 256-byte PC bucket, and list the hottest in the run report. Asleep cores are not stepped, so they do not show. |
+| `RVF_ARM_PROF=<us>` | With `--arm`: from model time `<us>` on (`1` for the whole run), count every ARM step by core, EL and 256-byte PC bucket, and list the hottest in the run report. Asleep cores are not stepped, so they do not show. |
 | `RVF_HEARTBEAT=<n>` | Print progress every `n` instructions, for runs that look hung. |
 
 ## Subsystem logs
@@ -124,6 +124,7 @@ All of these are `=1`.
 |---|---|
 | `RVF_LIVE_CONSOLE=1` | Stream the UART console as it is produced instead of buffering it. `scripts/boot-check.sh` sets this. |
 | `RVF_SLOW_LOOP=1` | Take every step through every check of the run loop, as a `diag` build does, instead of skipping the checks that cannot act (`Emulator::fast_steps`). A run must come out the same either way; this is how to check that it does. |
+| `RVF_NO_PARK=1` | With `--arm`: execute every pass of a busy-wait loop instead of parking the core in it (`arm.rs`, "Busy-wait loops"). The same check for the ARM side: a run must come out the same either way. Works in every build. |
 | `RVF_DUMP_FLASH=<path>` | Write the EEPROM flash image out after the run, including any self-update the firmware applied. |
 | `RVF_BOOT_WALL=<seconds>` | Overrides the boot scenario's `wall_secs` (default 330) for `scripts/boot-check.sh`. Raise it when other work is competing for the CPU — two concurrent boot runs will miss `arm_loader` on time. |
 | `RVF_PCIE_DEVICE=0` | Unsolder the VL805 from the modelled board. Describes the hardware, not the firmware: a real Pi 4B always has one, so it is attached by default. |
