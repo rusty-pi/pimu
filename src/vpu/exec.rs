@@ -314,12 +314,7 @@ impl Vpu {
             .ok()
             .filter(|&h| h != 0)
             .map(|h| h & !1);
-        if let Some(mut h) = handler {
-            // start4's dispatching vector stubs begin with a `0x0000` guard
-            // parcel; the stub body follows.
-            if bus.load16(h) == Ok(0x0000) {
-                h = h.wrapping_add(2);
-            }
+        if let Some(h) = handler {
             if crate::diag::ON && self.dbg_vec {
                 eprintln!(
                     "[vec] slot={slot} vbase={:#x} entry={:#x} h={h:#x} pc={:#x} sp={:#x} cur={:#x} exec={:#x} nest={}",
