@@ -1116,6 +1116,16 @@ fn timer_reg(key: u32) -> Option<Reg> {
     )
 }
 
+impl ArmBus<'_> {
+    /// An instruction fetch from outside RAM: the whole data path. Out of
+    /// line, so that the step every instruction takes doesn't carry its
+    /// registers (#53).
+    #[inline(never)]
+    fn fetch_device(&mut self, addr: u64) -> Result<u32, Abort> {
+        self.read(addr, 4).map(|v| v as u32)
+    }
+}
+
 impl Memory for ArmBus<'_> {
     /// Straight out of RAM, where code runs, without `route`'s range checks:
     /// they were a measurable share of the Linux boot's host time (#43). The
@@ -1130,7 +1140,7 @@ impl Memory for ArmBus<'_> {
                 .load(self.m.ram.base() + addr as u32, Width::Word)
                 .map_err(|_| Abort { addr, write: false });
         }
-        self.read(addr, 4).map(|v| v as u32)
+        self.fetch_device(addr)
     }
 
     #[inline]

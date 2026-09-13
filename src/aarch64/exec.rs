@@ -541,6 +541,9 @@ fn branch_reg(cpu: &mut Cpu, insn: u32) -> Exec {
     Ok(())
 }
 
+// Out of line: rare, and big enough that inlined into the step it made every
+// instruction pay for its registers (#53).
+#[inline(never)]
 fn system<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M) -> Exec {
     let l = bit(insn, 21);
     let op0 = field(insn, 19, 2);
