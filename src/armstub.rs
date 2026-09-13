@@ -99,9 +99,11 @@ pub fn read_dtb(machine: &Machine, addr: u32) -> Result<Vec<u8>, String> {
 ///   firmware's `cmdline.txt`); everything after `printk: legacy bootconsole
 ///   [pl11] disabled` then goes to a framebuffer console nobody reads. The
 ///   price: once `ttyAMA0` registers, every line is printed twice.
-/// * `kvm-arm.mode=none` — KVM's vgic probe reads the GIC's virtualisation
-///   interface, which [`crate::periph::gic`] deliberately faults rather than
-///   invent.
+/// * `kvm-arm.mode=none` — keeps KVM out of this boot. Its vgic probe used to
+///   take an external abort on the GIC's virtualisation interface, which
+///   [`crate::periph::gic`] models now (#58); a UEFI boot, which cannot add
+///   the flag, runs KVM's bring-up, and this one keeps its transcript as it
+///   was recorded.
 pub const BOOTARGS: [&str; 3] = ["earlycon", "keep_bootcon", "kvm-arm.mode=none"];
 
 /// Put `args` on the kernel command line, in the device tree the firmware

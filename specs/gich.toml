@@ -1,0 +1,459 @@
+[block]
+name    = "gich"
+bus     = "arm"
+base    = 0xFF844000
+size    = 0x2000
+summary = "GIC-400 virtual interface control, banked per CPU"
+notes   = "Word access only. +0x0000 is the accessing CPU's own block; +0x1000 + 0x200 × n is CPU n's, for a hypervisor that manages another core's list registers (address bits [11:9] pick the CPU, and the four past this GIC's CPUs read as zero). Four list registers per CPU. Only KVM uses it: with no guest running, the host kernel reads VTR when it probes the vgic and clears the list registers on every core."
+
+[[block.source]]
+kind       = "linux"
+ref        = "dtb: interrupt-controller@40041000 reg <... 0x40044000 0x2000 ...> -> 0xFF844000, 8 KiB"
+confidence = "high"
+
+[[block.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), the GICH registers; GIC-400 TRM (ARM DDI 0471) for the memory map and the per-processor aliases"
+confidence = "high"
+
+[[block.source]]
+kind       = "measured"
+ref        = "reference board dmesg: 'kvm [1]: vgic interrupt IRQ9', 'kvm [1]: Hyp nVHE mode initialized successfully'"
+confidence = "high"
+
+[[register]]
+name   = "HCR"
+offset = 0x00
+access = "rw"
+reset  = 0
+notes  = "Bits 1..7 enable the matching MISR conditions; En gates the maintenance interrupt as a whole."
+
+[[register.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_HCR"
+confidence = "high"
+
+[[register.field]]
+name = "EN"
+bits = "0"
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_HCR"
+confidence = "high"
+
+[[register.field]]
+name = "UIE"
+bits = "1"
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_HCR"
+confidence = "high"
+
+[[register.field]]
+name = "LRENPIE"
+bits = "2"
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_HCR"
+confidence = "high"
+
+[[register.field]]
+name = "NPIE"
+bits = "3"
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_HCR"
+confidence = "high"
+
+[[register.field]]
+name = "VGRP0EIE"
+bits = "4"
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_HCR"
+confidence = "high"
+
+[[register.field]]
+name = "VGRP0DIE"
+bits = "5"
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_HCR"
+confidence = "high"
+
+[[register.field]]
+name = "VGRP1EIE"
+bits = "6"
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_HCR"
+confidence = "high"
+
+[[register.field]]
+name = "VGRP1DIE"
+bits = "7"
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_HCR"
+confidence = "high"
+
+[[register.field]]
+name = "EOICOUNT"
+bits = "31:27"
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_HCR"
+confidence = "high"
+
+[[register]]
+name   = "VTR"
+offset = 0x04
+access = "r"
+reset  = 0x90000003
+notes  = "Four list registers, five preemption bits, five priority bits. Linux's vgic_v2_probe reads it for the list-register count."
+
+[[register.source]]
+kind       = "standard"
+ref        = "GIC-400 TRM (ARM DDI 0471), virtual interface control register summary: GICH_VTR resets to 0x90000003"
+confidence = "high"
+
+[[register.field]]
+name = "LISTREGS"
+bits = "5:0"
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_VTR"
+confidence = "high"
+
+[[register.field]]
+name = "PREBITS"
+bits = "28:26"
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_VTR"
+confidence = "high"
+
+[[register.field]]
+name = "PRIBITS"
+bits = "31:29"
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_VTR"
+confidence = "high"
+
+[[register]]
+name   = "VMCR"
+offset = 0x08
+access = "rw"
+reset  = 0
+notes  = "The guest's GICV_CTLR, PMR and binary points, as the hypervisor saves and restores them."
+
+[[register.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_VMCR"
+confidence = "high"
+
+[[register.field]]
+name = "VMGRP0EN"
+bits = "0"
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_VMCR"
+confidence = "high"
+
+[[register.field]]
+name = "VMGRP1EN"
+bits = "1"
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_VMCR"
+confidence = "high"
+
+[[register.field]]
+name = "VMACKCTL"
+bits = "2"
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_VMCR"
+confidence = "high"
+
+[[register.field]]
+name = "VMFIQEN"
+bits = "3"
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_VMCR"
+confidence = "high"
+
+[[register.field]]
+name = "VMCBPR"
+bits = "4"
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_VMCR"
+confidence = "high"
+
+[[register.field]]
+name = "VEM"
+bits = "9"
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_VMCR"
+confidence = "high"
+
+[[register.field]]
+name = "VMABP"
+bits = "20:18"
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_VMCR"
+confidence = "high"
+
+[[register.field]]
+name = "VMBP"
+bits = "23:21"
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_VMCR"
+confidence = "high"
+
+[[register.field]]
+name = "VMPRIMASK"
+bits = "31:27"
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_VMCR"
+confidence = "high"
+
+[[register]]
+name   = "MISR"
+offset = 0x10
+access = "r"
+notes  = "Computed: EOI when any EISR bit is set; the others when their HCR enable is set and the condition holds. HCR.En with any bit set asserts the maintenance interrupt, PPI 9 (ID 25), level-sensitive."
+
+[[register.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_MISR"
+confidence = "high"
+
+[[register.field]]
+name  = "EOI"
+bits  = "0"
+notes = "Some list register has an EOI maintenance request (EISR)."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_MISR"
+confidence = "high"
+
+[[register.field]]
+name  = "U"
+bits  = "1"
+notes = "Underflow: at most one list register holds a valid interrupt."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_MISR"
+confidence = "high"
+
+[[register.field]]
+name  = "LRENP"
+bits  = "2"
+notes = "HCR.EOICount is non-zero."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_MISR"
+confidence = "high"
+
+[[register.field]]
+name  = "NP"
+bits  = "3"
+notes = "No list register is pending."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_MISR"
+confidence = "high"
+
+[[register.field]]
+name = "VGRP0E"
+bits = "4"
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_MISR"
+confidence = "high"
+
+[[register.field]]
+name = "VGRP0D"
+bits = "5"
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_MISR"
+confidence = "high"
+
+[[register.field]]
+name = "VGRP1E"
+bits = "6"
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_MISR"
+confidence = "high"
+
+[[register.field]]
+name = "VGRP1D"
+bits = "7"
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_MISR"
+confidence = "high"
+
+[[register]]
+name   = "EISR0"
+offset = 0x20
+access = "r"
+notes  = "Bit n: list register n is invalid, has HW clear and asks for an EOI maintenance interrupt (bit 19)."
+
+[[register.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_EISRn"
+confidence = "high"
+
+[[register]]
+name   = "EISR1"
+offset = 0x24
+access = "r"
+notes  = "List registers 32..63: none here, reads as zero."
+
+[[register.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_EISRn"
+confidence = "high"
+
+[[register]]
+name   = "ELRSR0"
+offset = 0x30
+access = "r"
+notes  = "Bit n: list register n holds no valid interrupt and no pending EOI request, so the hypervisor may reuse it."
+
+[[register.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_ELRSRn"
+confidence = "high"
+
+[[register]]
+name   = "ELRSR1"
+offset = 0x34
+access = "r"
+notes  = "List registers 32..63: none here, reads as zero."
+
+[[register.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_ELRSRn"
+confidence = "high"
+
+[[register]]
+name   = "APR"
+offset = 0xF0
+access = "rw"
+reset  = 0
+notes  = "The guest's active priorities, one bit per group priority."
+
+[[register.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_APR"
+confidence = "high"
+
+[[register]]
+name   = "LR"
+offset = 0x100
+count  = 4
+stride = 4
+access = "rw"
+reset  = 0
+notes  = "One virtual interrupt each. With HW clear, PHYSICALID holds the requesting CPU of an SGI in [12:10] and the EOI maintenance request in bit 19. Bits [22:20] are reserved."
+
+[[register.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_LRn"
+confidence = "high"
+
+[[register.field]]
+name = "VIRTUALID"
+bits = "9:0"
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_LR"
+confidence = "high"
+
+[[register.field]]
+name = "PHYSICALID"
+bits = "19:10"
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_LR"
+confidence = "high"
+
+[[register.field]]
+name = "PRIORITY"
+bits = "27:23"
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_LR"
+confidence = "high"
+
+[[register.field]]
+name  = "STATE"
+bits  = "29:28"
+notes = "0 invalid, 1 pending, 2 active, 3 pending and active."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_LR"
+confidence = "high"
+
+[[register.field]]
+name = "GRP1"
+bits = "30"
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_LR"
+confidence = "high"
+
+[[register.field]]
+name = "HW"
+bits = "31"
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "ARM IHI 0048B (GICv2), GICH_LR"
+confidence = "high"

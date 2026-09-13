@@ -26,6 +26,8 @@ Generated from the TOML specs in [`specs/`](../../specs/); see [`specs/README.md
 | [`genet`](genet.md) | vpu | `0x7D580000` | `0x10000` | 56 | GENET v5 Ethernet MAC with its UniMAC MDIO controller (the PHY is `bcm54213pe`) |
 | [`gicc`](gicc.md) | arm | `0xFF842000` | `0x2000` | 15 | GIC-400 CPU interface, banked per CPU and per security state |
 | [`gicd`](gicd.md) | arm | `0xFF841000` | `0x1000` | 16 | GIC-400 distributor |
+| [`gich`](gich.md) | arm | `0xFF844000` | `0x2000` | 10 | GIC-400 virtual interface control, banked per CPU |
+| [`gicv`](gicv.md) | arm | `0xFF846000` | `0x2000` | 0 | GIC-400 virtual CPU interface |
 | [`hd`](hd.md) | vpu | `0x7E808000` | `0x100` | 2 | Control block at 0x7E80_8000: the power request and acknowledge start4 waits on before it resets the DWC2 USB controller |
 | [`hdmi_ddc`](hdmi_ddc.md) | vpu | `0x7EF04500` | `0x100` | 8 | HDMI DDC I²C masters (brcm,bcm2711-hdmi-i2c), one per connector: the bus a monitor's EDID EEPROM sits on |
 | [`hvs`](hvs.md) | vpu | `0x7E400000` | `0x1000` | 3 | HVS (Hardware Video Scaler): identification and the per-channel frame-swap words |
