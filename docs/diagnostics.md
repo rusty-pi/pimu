@@ -91,7 +91,7 @@ it with `SIGPIPE`.
 |---|---|
 | `RVF_PROF=1` | Bucket the core-0 PC into 256-byte slots and dump the hottest on exit. Finds the loop a stalled boot is spinning in. |
 | `RVF_PROF_THREAD=<hex>` | The same, attributed per ThreadX thread. Takes the address of the firmware's current-thread pointer (`_tx_thread_current_ptr`) — only the firmware knows where that lives, so it is a parameter rather than a constant baked into the model. |
-| `RVF_ARM_PROF=<us>` | With `--arm`: from model time `<us>` on (`1` for the whole run), count every ARM step by core, EL and 256-byte PC bucket, and list the hottest in the run report. Asleep cores are not stepped, so they do not show. |
+| `RVF_ARM_PROF=<us>` | With `--arm`: from model time `<us>` on (`1` for the whole run), count every ARM step by core, EL and 256-byte PC bucket, and list the hottest in the run report — and at every reset, for the boot that ended. Asleep cores are not stepped, so they do not show; the passes a parked core skips count at the loop's PCs. |
 | `RVF_HEARTBEAT=<n>` | Print progress every `n` instructions, for runs that look hung. |
 
 ## Subsystem logs

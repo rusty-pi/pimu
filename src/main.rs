@@ -612,6 +612,15 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
             set_boot_order(&mut flash, false);
             set_pubkey(&mut flash, false);
             if reboots <= 4 {
+                // `RVF_ARM_PROF`: the next boot's ARM side starts a profile
+                // of its own, so this one's goes out now.
+                if let Some(a) = &mut emu.arm {
+                    a.settle(&emu.machine);
+                    if let Some(prof) = &a.prof {
+                        println!("\n--- ARM cores before the reset ---");
+                        print_arm_prof(prof);
+                    }
+                }
                 println!("\n=== RESET (reboot {reboots}) — re-running from updated flash ===\n");
                 continue 'boot;
             }
@@ -710,16 +719,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
             println!("  stopped   {stop:x?}");
         }
         if let Some(prof) = &a.prof {
-            let total: u64 = prof.values().sum();
-            let mut v: Vec<_> = prof.iter().collect();
-            v.sort_by_key(|(_, &n)| std::cmp::Reverse(n));
-            println!("  RVF_ARM_PROF: steps by core, EL and 256-byte PC bucket (total {total})");
-            for ((core, el, pc), &n) in v.into_iter().take(30) {
-                println!(
-                    "    core {core} EL{el} {pc:#014x}  {n:>13}  {:5.1}%",
-                    100.0 * n as f64 / total as f64
-                );
-            }
+            print_arm_prof(prof);
         }
     } else if arm {
         println!("\n--- ARM cores (#40) ---\n  never released");
@@ -1390,6 +1390,21 @@ fn locate_fdt(machine: &mut Machine, console: &[u8]) -> Option<(u32, Vec<u8>)> {
         logged_len.max(40)
     };
     Some((addr, read(machine, addr, len)))
+}
+
+/// `RVF_ARM_PROF`'s table: the hottest ARM steps by core, EL and 256-byte PC
+/// bucket.
+fn print_arm_prof(prof: &std::collections::HashMap<(usize, u32, u64), u64>) {
+    let total: u64 = prof.values().sum();
+    let mut v: Vec<_> = prof.iter().collect();
+    v.sort_by_key(|(_, &n)| std::cmp::Reverse(n));
+    println!("  RVF_ARM_PROF: steps by core, EL and 256-byte PC bucket (total {total})");
+    for ((core, el, pc), &n) in v.into_iter().take(30) {
+        println!(
+            "    core {core} EL{el} {pc:#014x}  {n:>13}  {:5.1}%",
+            100.0 * n as f64 / total as f64
+        );
+    }
 }
 
 /// Recompute `/chosen/rpi-machine-id` from the modelled OTP and say whether the
