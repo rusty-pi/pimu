@@ -20,11 +20,13 @@ Generated from the TOML specs in [`specs/`](../../specs/); see [`specs/README.md
 | [`dma`](dma.md) | vpu | `0x7E007000` | `0x1000` | 11 | Legacy DMA controller: 15 channels 0x100 apart plus the controller-wide interrupt status and enable words |
 | [`dma4`](dma4.md) | vpu | `0x7E007B00` | `0x100` | 3 | DMA4 ('dma40') channel: the 40-bit DMA engine the bootloader and start4 use |
 | [`dma_vpu`](dma_vpu.md) | vpu | `0x7EE04100` | `0x1000` | 9 | The DMA controller start4's dmalib drives: 16 channel slots, channel 15 at 0x7EE05000 |
+| [`dwc2`](dwc2.md) | vpu | `0x7E980000` | `0x10000` | 16 | DesignWare USB 2.0 OTG controller (the USB-C port): the reset start4 runs when USB power comes on, and a host port with nothing plugged in |
 | [`emmc2`](emmc2.md) | vpu | `0x7E340000` | `0x1000` | 22 | EMMC2: the SD host controller (Arasan SDHCI 3.00) the bootloader, start4 and Linux boot from |
 | [`fxl6408`](fxl6408.md) | i2c | `0x43` | `0x100` | 10 | FXL6408 GPIO expander: the board's 'external' GPIOs 128..135 |
 | [`genet`](genet.md) | vpu | `0x7D580000` | `0x10000` | 56 | GENET v5 Ethernet MAC with its UniMAC MDIO controller (the PHY is `bcm54213pe`) |
 | [`gicc`](gicc.md) | arm | `0xFF842000` | `0x2000` | 15 | GIC-400 CPU interface, banked per CPU and per security state |
 | [`gicd`](gicd.md) | arm | `0xFF841000` | `0x1000` | 16 | GIC-400 distributor |
+| [`hd`](hd.md) | vpu | `0x7E808000` | `0x100` | 2 | Control block at 0x7E80_8000: the power request and acknowledge start4 waits on before it resets the DWC2 USB controller |
 | [`hdmi_ddc`](hdmi_ddc.md) | vpu | `0x7EF04500` | `0x100` | 8 | HDMI DDC I²C masters (brcm,bcm2711-hdmi-i2c), one per connector: the bus a monitor's EDID EEPROM sits on |
 | [`hvs`](hvs.md) | vpu | `0x7E400000` | `0x1000` | 3 | HVS (Hardware Video Scaler): identification and the per-channel frame-swap words |
 | [`mbox`](mbox.md) | vpu | `0x7E00B880` | `0x140` | 12 | ARM <-> VideoCore mailboxes: two views of the same pair of FIFOs, and the interrupt block between them |

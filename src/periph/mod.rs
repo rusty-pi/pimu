@@ -18,11 +18,13 @@ pub mod configotp;
 pub mod corectl;
 pub mod dma4;
 pub mod dma_legacy;
+pub mod dwc2;
 pub mod emmc2;
 pub mod fxl6408;
 pub mod genet;
 pub mod gentimer;
 pub mod gic;
+pub mod hd;
 pub mod hdmi_ddc;
 pub mod hvs;
 pub mod mbox;
@@ -57,9 +59,11 @@ pub use clockman::ClockManager;
 pub use configotp::ConfigOtp;
 pub use corectl::CoreCtl;
 pub use dma4::Dma4;
+pub use dwc2::Dwc2;
 pub use emmc2::Emmc2;
 pub use genet::Genet;
 pub use gic::Gic;
+pub use hd::Hd;
 pub use hdmi_ddc::HdmiDdc;
 pub use hvs::Hvs;
 pub use mbox::Mbox;
@@ -98,11 +102,13 @@ pub const SPEC_COVERAGE: &[crate::spec::Coverage] = &[
     dma4::COVERAGE,
     dma_legacy::COVERAGE,
     dma_legacy::COVERAGE_VPU,
+    dwc2::COVERAGE,
     emmc2::COVERAGE,
     fxl6408::COVERAGE,
     genet::COVERAGE,
     gic::COVERAGE_CPU,
     gic::COVERAGE_DIST,
+    hd::COVERAGE,
     hdmi_ddc::COVERAGE,
     hvs::COVERAGE,
     mbox::COVERAGE,

@@ -4,8 +4,8 @@ use crate::bus::{Bus, BusError, BusResult, MmioDevice, Width};
 use crate::mem::Ram;
 use crate::periph::{
     ArmCtrl, ArmLocal, Asb, Aux, Avs, BootBox, Bsc, ClkMon, ClockManager, ConfigOtp, CoreCtl, Dma4,
-    Emmc2, Gic, HdmiDdc, Hvs, Mbox, McSync, Pl011, Pm, Rng, Sdc, Sdramc, Spi0, StubRegion,
-    SysTimer, Vce,
+    Dwc2, Emmc2, Gic, Hd, HdmiDdc, Hvs, Mbox, McSync, Pl011, Pm, Rng, Sdc, Sdramc, Spi0,
+    StubRegion, SysTimer, Vce,
 };
 use crate::soc::bcm2711 as map;
 
@@ -94,6 +94,11 @@ pub struct Machine {
     pub emmc2: Emmc2,
     /// HVS (`0x7E40_0000`) — display frame-swap registers auto-complete.
     pub hvs: Hvs,
+    /// The control block at `0x7E80_8000` — the power acknowledge start4's USB
+    /// power-on waits for.
+    pub hd: Hd,
+    /// DWC2 USB OTG controller (`0x7E98_0000`) — reset when USB power comes on.
+    pub dwc2: Dwc2,
     /// Catch-all for the rest of the peripheral window.
     pub periph_stub: StubRegion,
     pub console: Console,
@@ -209,6 +214,8 @@ impl Machine {
             dma_vpu: crate::periph::dma_legacy::DmaLegacy::new_vpu(),
             emmc2: Emmc2::new(),
             hvs: Hvs::new(),
+            hd: Hd::new(),
+            dwc2: Dwc2::new(),
             periph_stub: StubRegion::new("periph-window"),
             console: Console::default(),
             stub_hits: 0,
@@ -465,6 +472,12 @@ impl Machine {
         }
         if let Some(off) = hit(map::HVS_BASE, map::HVS_SIZE) {
             return Some((&mut self.hvs, off));
+        }
+        if let Some(off) = hit(map::HD_BASE, map::HD_SIZE) {
+            return Some((&mut self.hd, off));
+        }
+        if let Some(off) = hit(map::DWC2_BASE, map::DWC2_SIZE) {
+            return Some((&mut self.dwc2, off));
         }
         if let Some(off) = hit(map::BOOTBOX_BASE, map::BOOTBOX_SIZE) {
             return Some((&mut self.bootbox, off));

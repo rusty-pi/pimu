@@ -167,6 +167,34 @@ through to its prompt on all four cores. Things that mattered:
 - `recon --stdin` is the interactive console: raw terminal, `Ctrl-A x` quits.
   A real terminal answers the `ESC [6n` itself, through stdin.
 
+## UEFI (the rpi-mkosi image)
+
+The rpi-mkosi image's `config.txt` names `RPI_EFI.fd` (edk2 for the Pi 4) as
+the armstub, so the ARM runs UEFI before any kernel. What it needed:
+
+1. Its xHCI driver reads the VL805's BAR through the PCIe outbound window at
+   `0x6_0000_0000`, which the ARM bus did not route. The synchronous external
+   abort left UEFI in its exception handler until start4's watchdog reset the
+   board (`2f548e1`, found with `RVF_DBG_ARM_EXC`).
+2. `wfe` was a no-op, so TF-A's holding pen kept cores 1-3 spinning for the
+   whole boot (`1c58887`).
+3. `DwUsbHostDxe`, edk2's driver for the DWC2 controller behind the USB-C port,
+   asks the firmware for USB power (`SET_POWER_STATE`, device 3, on and wait)
+   soon after the banner. start4's handler asks the block at `0x7E80_8000` for
+   power, waits for its acknowledge, then resets the DWC2 core, and none of
+   those waits has a timeout. Both blocks were on the catch-all stub, so the
+   handler never returned: `RVF_DBG_MBOX` showed the VPU read the request, never
+   answer it and never read another. UEFI then gave each later property
+   request a second and looked hung after its banner (#49, `src/periph/hd.rs`).
+4. With power on, the driver brings the controller up as a host and halts all
+   eight host channels, waiting up to ten seconds, polled, for each one to
+   halt. The DWC2 model answers the configuration words measured on `rpi-dev`,
+   halts a channel at once and reports an empty root port
+   (`src/periph/dwc2.rs`).
+
+With those, UEFI prints its boot manager prompt (`ESC (setup), F1 (shell),
+ENTER (boot)`) 0.7 s of guest time after its banner.
+
 ## Unicorn-specific lessons (for differential testing, if it is ever used)
 
 - Its C `UC_HOOK_INSN` system-register hook returns `uint32_t`, but the Rust
