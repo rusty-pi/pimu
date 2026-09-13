@@ -24,7 +24,7 @@ Sources:
 | `0x32100` | [`PHY_RES_VALID`](#phy_res_valid) | rw | 32 | 1, best high |
 | `0x32104` | [`PHY_RES_CMD`](#phy_res_cmd) | rw | 32 | 1, best high |
 | `0x32108` | [`PHY_RES_PARAM`](#phy_res_param) | rw | 32 | 1, best medium |
-| `0x3210C` | [`PHY_RES_SIGNATURE`](#phy_res_signature) | rw | 32 | 1, best high |
+| `0x3210C` | [`PHY_RES_SIGNATURE`](#phy_res_signature) | rw | 32 | 2, best high |
 | `0x32110` | [`PHY_RES_STATUS`](#phy_res_status) | rw | 32 | 1, best high |
 | `0x32114` | [`PHY_RES_SUM5`](#phy_res_sum5) | rw | 32 | 1, best high |
 | `0x32118` | [`PHY_RES_SUM6`](#phy_res_sum6) | rw | 32 | 1, best high |
@@ -113,11 +113,12 @@ Sources:
 
 Offset `0x3210C` · access `rw` · 32 bits · reset `0x2230000`
 
-Seed on the way in; on the way out the PHY signature for command 0x101 (the header word of every memsys00..08.bin), else 0 for 'no error'. The reset value is the signature.
+Seed on the way in; on the way out the PHY signature for command 0x101, else 0 for 'no error'. The signature is a memsys version tag, not a constant: the bootloader loads it from the memsys config record it selected and compares the PHY's echo (Cmp r7, [+0x0C] at pc 0x800067de). The model reconstructs it from the PHY microcode the firmware wrote to PHY_B (marker 0x1860_02vv at +0x388, optional companion 0xA863_llll at +0x38C -> 0x02vv_llll); see src/periph/sdramc.rs report_signature. The reset value is the pinned board's 0x0223 memsys signature, used as the fall-back.
 
 Sources:
 
-- decompile (high): 0x800068ce compares it with the preset header; 0x800065f6 / 0x800066a6 want 0
+- decompile (high): 0x800067de compares [+0x0C] with r7 (the MCB signature); 0x800065f6 / 0x800066a6 want 0
+- trace (high): write of the version marker to 0x7DC3_8388 (pc 0x800066ba/0x8000675e) vs the expected r7 across the 0x0220/0x0222/0x0223 memsys versions
 
 ## `PHY_RES_STATUS`
 
