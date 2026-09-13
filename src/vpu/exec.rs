@@ -1150,19 +1150,35 @@ impl Vpu {
                             }
                         }
                     }
-                    VecExec::Broadcast { reg, src } => {
-                        // The 6-bit immediate is taken unsigned. Its only use in
-                        // this firmware (`memcpy`'s `v16mov HX(0,0),0x3f` at
-                        // `0x3EDA2918`) is dead — the lanes it writes are
-                        // overwritten or masked off before anything reads them —
-                        // so the choice is unobservable here.
+                    VecExec::Broadcast {
+                        reg,
+                        src,
+                        reps,
+                        step_row,
+                    } => {
+                        // Write the scalar/immediate into every lane of `reps`
+                        // consecutive rows. The 48-bit form is a single row; the
+                        // boot ROM's `v32mov HY(0,0)++,#0 REP8` clears eight. The
+                        // immediate is taken unsigned — its one dead use in libc
+                        // (`memcpy`'s `v16mov HX(0,0),0x3f` at `0x3EDA2918`) makes
+                        // the choice unobservable there.
                         let value = match src {
                             RegOrImm::Reg(r) => self.regs.get(r as usize),
                             RegOrImm::Imm(i) => i as u32,
                         };
-                        for lane in 0..vrf::LANES {
-                            self.vrf
-                                .write(reg.row, reg.x0, lane, reg.lane_bytes as u32, value);
+                        let reps = match reps {
+                            VecRep::Fixed(n) => n,
+                            VecRep::FromR0 => self.regs.get(0),
+                        };
+                        let mut row = reg.row;
+                        for _ in 0..reps {
+                            for lane in 0..vrf::LANES {
+                                self.vrf
+                                    .write(row, reg.x0, lane, reg.lane_bytes as u32, value);
+                            }
+                            if step_row {
+                                row = (row + 1) % vrf::DIM as u8;
+                            }
                         }
                     }
                     VecExec::Bitplanes { src } => {
