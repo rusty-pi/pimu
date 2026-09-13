@@ -190,6 +190,7 @@ fn pa_bits(ps: u64) -> u32 {
 /// The translation table walk (ARM ARM `AArch64.TranslationTableWalk` and
 /// `AArch64.CheckPermission`, v8.0). `va` is already untagged. Errors are
 /// fault status codes.
+#[inline(never)]
 fn walk<M: Memory + ?Sized>(s: &SysRegs, mem: &mut M, regime: u8, va: u64) -> Result<Leaf, u8> {
     let r = regime as usize;
     let tcr = s.tcr[r];
@@ -321,6 +322,7 @@ impl Cpu {
     }
 
     /// Translate `va` for an access of `kind`; errors are fault status codes.
+    #[inline(always)]
     fn translate<M: Memory + ?Sized>(
         &mut self,
         mem: &mut M,
@@ -363,6 +365,7 @@ impl Cpu {
     /// physical address, and for an access that crosses into the next page,
     /// how many bytes are in the first and where the rest go. Errors are
     /// `(faulting VA, fault status code)`.
+    #[inline(always)]
     fn translate_access<M: Memory + ?Sized>(
         &mut self,
         mem: &mut M,
@@ -381,6 +384,7 @@ impl Cpu {
     }
 
     /// A data read of `size` bytes at virtual address `va`.
+    #[inline(always)]
     pub(super) fn read<M: Memory + ?Sized>(
         &mut self,
         mem: &mut M,
@@ -421,6 +425,7 @@ impl Cpu {
     }
 
     /// A data write of the low `size` bytes of `value` at `va`.
+    #[inline(always)]
     pub(super) fn write<M: Memory + ?Sized>(
         &mut self,
         mem: &mut M,
