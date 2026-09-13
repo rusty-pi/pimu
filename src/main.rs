@@ -1617,9 +1617,9 @@ fn mbox_property_exchange(emu: &mut Emulator, limits: &RunLimits, tags: &[MboxTa
         Some(reply) => println!("  reply {reply:#010x}"),
         None if emu.machine.mbox.request_outstanding() => {
             println!("  no reply: the firmware never read the request off MAIL1");
-            println!("  (the `mbox_read` task at 0x3ed1d724 waits on its driver's receive");
-            println!("   lock, so this means the wake never arrived: check that the config");
-            println!("   word above carries the pending bit 4 that 0x3ec58302 releases on)");
+            println!("  (the firmware's mailbox reader waits for the mailbox interrupt, so");
+            println!("   that wake never arrived: check that the config word above carries");
+            println!("   the pending bit 4)");
             return Ok(());
         }
         None => println!("  the request was read, but no reply was written to MAIL0"),
