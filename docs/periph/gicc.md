@@ -6,7 +6,7 @@
 - Base: `0xFF842000`
 - Size: `0x2000`
 
-Word access only. Linux enters at EL2 and, because this window is 8 KiB, runs split EOI: priority drop on EOIR, deactivation on DIR. The virtualisation interface (GICH / GICV at 0xFF844000..) is not modelled and faults.
+Word access only. Linux enters at EL2 and, because this window is 8 KiB, runs split EOI: priority drop on EOIR, deactivation on DIR. The virtualisation interface follows it: gich at 0xFF844000, gicv at 0xFF846000.
 
 Sources:
 

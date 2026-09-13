@@ -101,12 +101,26 @@
 //! moved to group 1, and the secure view of each register Linux writes is a
 //! superset of the non-secure one at the same bit positions.
 //!
+//! ## Virtualisation interface
+//!
+//! A kernel UEFI starts runs at EL2 with KVM on, and `vgic_v2_probe` reads
+//! `GICH_VTR` for the number of list registers. With nothing at `+0x4000`
+//! that read took an external abort and killed init (#58); the reference
+//! board's `dmesg` has `kvm [1]: vgic interrupt IRQ9` and `Hyp nVHE mode
+//! initialized successfully`.
+//!
+//! GICH at `+0x4000` is the accessing CPU's own control block, and `+0x5000 +
+//! 0x200 × n` is CPU n's. Each has four list registers (`GICH_VTR` =
+//! `0x9000_0003` from the GIC-400 TRM: 4 list registers, 5 preemption and 5
+//! priority bits). `MISR`, `EISR` and `ELRSR` are computed from `HCR`, `VMCR`
+//! and the list registers, and `HCR.En` with a non-zero `MISR` holds the
+//! maintenance interrupt (ID 25) high on that CPU.
+//!
 //! ## Not modelled
 //!
-//! * GICH/GICV (`+0x4000..+0x8000`): the virtualisation interface. KVM's vgic
-//!   probe reads `GICH_VTR` there (the board's `kvm [1]: vgic interrupt IRQ9`);
-//!   accesses fault loudly rather than invent a value. Boot with KVM off until
-//!   someone models it.
+//! * GICV (`+0x6000..+0x8000`), the virtual CPU interface: only a guest
+//!   reaches it, and nothing here runs one. It reads as zero and ignores
+//!   writes.
 //! * The legacy bypass path (`GICC_CTLR` bypass-disable bits are stored, but a
 //!   disabled CPU interface simply signals nothing).
 //! * Peripheral ID registers (`0xFD0..0xFFC`) read as zero: Linux's GICv2
@@ -134,7 +148,21 @@ use crate::spec::gicd::{
     SPENDSGIR as D_SPENDSGIR, SPENDSGIR_COUNT, SPENDSGIR_STRIDE, TYPER as D_TYPER,
     TYPER_RESET as TYPER,
 };
-use crate::spec::{gicc, gicd, Coverage};
+// The virtual interface's registers are offsets from its own block.
+use crate::spec::gich::{
+    APR as H_APR, EISR0 as H_EISR0, EISR1 as H_EISR1, ELRSR0 as H_ELRSR0, ELRSR1 as H_ELRSR1,
+    HCR as H_HCR, HCR_EN_MASK as HCR_EN, HCR_EOICOUNT_MASK as HCR_EOICOUNT,
+    HCR_LRENPIE_MASK as HCR_LRENPIE, HCR_NPIE_MASK as HCR_NPIE, HCR_UIE_MASK as HCR_UIE,
+    HCR_VGRP0DIE_MASK as HCR_VGRP0DIE, HCR_VGRP0EIE_MASK as HCR_VGRP0EIE,
+    HCR_VGRP1DIE_MASK as HCR_VGRP1DIE, HCR_VGRP1EIE_MASK as HCR_VGRP1EIE, LR as H_LR, LR_COUNT,
+    LR_HW_MASK as LR_HW, LR_STATE_MASK as LR_STATE, LR_STATE_SHIFT, LR_STRIDE, MISR as H_MISR,
+    MISR_EOI_MASK as MISR_EOI, MISR_LRENP_MASK as MISR_LRENP, MISR_NP_MASK as MISR_NP,
+    MISR_U_MASK as MISR_U, MISR_VGRP0D_MASK as MISR_VGRP0D, MISR_VGRP0E_MASK as MISR_VGRP0E,
+    MISR_VGRP1D_MASK as MISR_VGRP1D, MISR_VGRP1E_MASK as MISR_VGRP1E, VMCR as H_VMCR,
+    VMCR_VMGRP0EN_MASK as VMCR_VMGRP0EN, VMCR_VMGRP1EN_MASK as VMCR_VMGRP1EN, VTR as H_VTR,
+    VTR_RESET as GICH_VTR,
+};
+use crate::spec::{gicc, gicd, gich, gicv, Coverage};
 
 /// Every distributor register in `specs/gicd.toml` is modelled.
 pub const COVERAGE_DIST: Coverage = Coverage {
@@ -168,15 +196,36 @@ pub const COVERAGE_CPU: Coverage = Coverage {
     ],
 };
 
+/// Every virtual-interface control register in `specs/gich.toml` is modelled.
+pub const COVERAGE_VIRT: Coverage = Coverage {
+    block: "gich",
+    decoded: &[
+        H_HCR, H_VTR, H_VMCR, H_MISR, H_EISR0, H_EISR1, H_ELRSR0, H_ELRSR1, H_APR, H_LR,
+    ],
+};
+
+/// `specs/gicv.toml` lists no registers: the frame reads as zero (module docs).
+pub const COVERAGE_VCPU: Coverage = Coverage {
+    block: "gicv",
+    decoded: &[],
+};
+
 /// Where the ARM sees the GIC-400 in low-peripheral mode — the block's own 32
-/// KiB map, of which `+0x1000` is the distributor and `+0x2000` the CPU
-/// interface (see the module docs for the dtb `reg`); the virtualisation
-/// interface above them is not modelled.
+/// KiB map, of which `+0x1000` is the distributor, `+0x2000` the CPU
+/// interface, and `+0x4000`/`+0x6000` the virtualisation interface's control
+/// block and virtual CPU interface (see the module docs for the dtb `reg`).
 pub const BASE: u32 = 0xFF84_0000;
 pub const SIZE: u32 = 0x8000;
 pub const GICD_OFFSET: u32 = gicd::BASE - BASE;
 pub const GICC_OFFSET: u32 = gicc::BASE - BASE;
 const GICC_END: u32 = GICC_OFFSET + gicc::SIZE;
+pub const GICH_OFFSET: u32 = gich::BASE - BASE;
+pub const GICV_OFFSET: u32 = gicv::BASE - BASE;
+const GICV_END: u32 = GICV_OFFSET + gicv::SIZE;
+/// Past the accessing CPU's own GICH block, one per CPU, picked by address
+/// bits [11:9] (the GIC-400 TRM's memory map).
+const GICH_ALIAS: u32 = 0x1000;
+const GICH_ALIAS_STRIDE: u32 = 0x200;
 
 /// `GICD_TYPER.CPUNumber` = 3.
 pub const NUM_CPUS: usize = 4;
@@ -236,6 +285,38 @@ const BPR_S_MIN: u8 = 2;
 const BPR_NS_MIN: u8 = 3;
 /// `GICC_RPR` with nothing active.
 const IDLE_PRIORITY: u8 = 0xFF;
+
+/// What software can set in `GICH_HCR`, `GICH_VMCR` and a list register; the
+/// rest reads as zero.
+const HCR_WRITABLE: u32 = HCR_EN
+    | HCR_UIE
+    | HCR_LRENPIE
+    | HCR_NPIE
+    | HCR_VGRP0EIE
+    | HCR_VGRP0DIE
+    | HCR_VGRP1EIE
+    | HCR_VGRP1DIE
+    | HCR_EOICOUNT;
+const VMCR_WRITABLE: u32 = VMCR_VMGRP0EN
+    | VMCR_VMGRP1EN
+    | gich::VMCR_VMACKCTL_MASK
+    | gich::VMCR_VMFIQEN_MASK
+    | gich::VMCR_VMCBPR_MASK
+    | gich::VMCR_VEM_MASK
+    | gich::VMCR_VMABP_MASK
+    | gich::VMCR_VMBP_MASK
+    | gich::VMCR_VMPRIMASK_MASK;
+const LR_WRITABLE: u32 = gich::LR_VIRTUALID_MASK
+    | gich::LR_PHYSICALID_MASK
+    | gich::LR_PRIORITY_MASK
+    | LR_STATE
+    | gich::LR_GRP1_MASK
+    | LR_HW;
+/// With `HW` clear, list-register bit 19 asks for an EOI maintenance
+/// interrupt once the guest deactivates the interrupt.
+const LR_EOI: u32 = 1 << 19;
+/// The state is pending, or pending and active.
+const LR_PENDING: u32 = 1 << LR_STATE_SHIFT;
 
 /// Which CPU, in which security state, an MMIO access comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -299,6 +380,96 @@ impl Default for CpuIf {
     }
 }
 
+/// One CPU's virtual interface control block (GICH).
+#[derive(Debug, Clone, Copy, Default)]
+struct VirtIf {
+    hcr: u32,
+    vmcr: u32,
+    apr: u32,
+    lr: [u32; LR_COUNT as usize],
+}
+
+impl VirtIf {
+    /// The list register at `off`, if there is one.
+    fn lr_index(off: u32) -> Option<usize> {
+        let rel = off.checked_sub(H_LR)?;
+        (rel % LR_STRIDE == 0 && rel / LR_STRIDE < LR_COUNT).then_some((rel / LR_STRIDE) as usize)
+    }
+
+    fn read(&self, off: u32) -> u32 {
+        match off {
+            H_HCR => self.hcr,
+            H_VTR => GICH_VTR,
+            H_VMCR => self.vmcr,
+            H_MISR => self.misr(),
+            H_EISR0 => self.eisr(),
+            H_ELRSR0 => self.elrsr(),
+            // No list registers past the fourth.
+            H_EISR1 | H_ELRSR1 => 0,
+            H_APR => self.apr,
+            _ => Self::lr_index(off).map_or(0, |i| self.lr[i]),
+        }
+    }
+
+    fn write(&mut self, off: u32, value: u32) {
+        match off {
+            H_HCR => self.hcr = value & HCR_WRITABLE,
+            H_VMCR => self.vmcr = value & VMCR_WRITABLE,
+            H_APR => self.apr = value,
+            _ => {
+                if let Some(i) = Self::lr_index(off) {
+                    self.lr[i] = value & LR_WRITABLE;
+                }
+            }
+        }
+    }
+
+    /// Bit n: list register n is done with and asks for an EOI maintenance
+    /// interrupt.
+    fn eisr(&self) -> u32 {
+        self.lr_bits(|lr| lr & (LR_STATE | LR_HW | LR_EOI) == LR_EOI)
+    }
+
+    /// Bit n: list register n is free for the hypervisor to reuse.
+    fn elrsr(&self) -> u32 {
+        self.lr_bits(|lr| lr & LR_STATE == 0 && (lr & LR_HW != 0 || lr & LR_EOI == 0))
+    }
+
+    fn lr_bits(&self, f: impl Fn(u32) -> bool) -> u32 {
+        self.lr
+            .iter()
+            .enumerate()
+            .filter(|&(_, &lr)| f(lr))
+            .fold(0, |bits, (i, _)| bits | 1 << i)
+    }
+
+    /// `GICH_MISR`: the EOI request, and every condition whose `HCR` enable
+    /// is set.
+    fn misr(&self) -> u32 {
+        let valid = self.lr.iter().filter(|&&lr| lr & LR_STATE != 0).count();
+        let pending = self.lr.iter().any(|&lr| lr & LR_PENDING != 0);
+        let grp0 = self.vmcr & VMCR_VMGRP0EN != 0;
+        let grp1 = self.vmcr & VMCR_VMGRP1EN != 0;
+        let hcr = self.hcr;
+        [
+            (MISR_EOI, self.eisr() != 0),
+            (MISR_U, hcr & HCR_UIE != 0 && valid <= 1),
+            (
+                MISR_LRENP,
+                hcr & HCR_LRENPIE != 0 && hcr & HCR_EOICOUNT != 0,
+            ),
+            (MISR_NP, hcr & HCR_NPIE != 0 && !pending),
+            (MISR_VGRP0E, hcr & HCR_VGRP0EIE != 0 && grp0),
+            (MISR_VGRP0D, hcr & HCR_VGRP0DIE != 0 && !grp0),
+            (MISR_VGRP1E, hcr & HCR_VGRP1EIE != 0 && grp1),
+            (MISR_VGRP1D, hcr & HCR_VGRP1DIE != 0 && !grp1),
+        ]
+        .iter()
+        .filter(|&&(_, on)| on)
+        .fold(0, |m, &(bit, _)| m | bit)
+    }
+}
+
 pub struct Gic {
     /// `GICD_CTLR`, secure view: bit 0 EnableGrp0, bit 1 EnableGrp1.
     ctlr: u32,
@@ -311,6 +482,8 @@ pub struct Gic {
     /// `GICC_IAR` reports which one it took in bits [12:10].
     sgi_sources: [[u8; 16]; NUM_CPUS],
     cpu: [CpuIf; NUM_CPUS],
+    /// GICH, banked per CPU.
+    virt: [VirtIf; NUM_CPUS],
     accessor: Accessor,
 }
 
@@ -334,6 +507,7 @@ impl Gic {
             spi: vec![Irq::default(); NUM_IRQS - 32],
             sgi_sources: [[0; 16]; NUM_CPUS],
             cpu: [CpuIf::default(); NUM_CPUS],
+            virt: [VirtIf::default(); NUM_CPUS],
             accessor: Accessor {
                 cpu: 0,
                 secure: true,
@@ -411,7 +585,13 @@ impl Gic {
                 word_only(offset, width, false)?;
                 Ok(self.cpu_read(acc, offset - GICC_OFFSET))
             }
-            _ => Err(virt_not_modelled(offset, width, false)),
+            GICH_OFFSET..GICV_OFFSET => {
+                word_only(offset, width, false)?;
+                Ok(gich_target(acc, offset).map_or(0, |(cpu, off)| self.virt[cpu].read(off)))
+            }
+            // No guest runs here to use it (module docs).
+            GICV_OFFSET..GICV_END => Ok(0),
+            _ => Err(outside(offset, width, false)),
         }
     }
 
@@ -431,7 +611,16 @@ impl Gic {
                 self.cpu_write(acc, offset - GICC_OFFSET, value);
                 Ok(())
             }
-            _ => Err(virt_not_modelled(offset, width, true)),
+            GICH_OFFSET..GICV_OFFSET => {
+                word_only(offset, width, true)?;
+                if let Some((cpu, off)) = gich_target(acc, offset) {
+                    self.virt[cpu].write(off, value);
+                    self.update_maintenance(cpu);
+                }
+                Ok(())
+            }
+            GICV_OFFSET..GICV_END => Ok(()),
+            _ => Err(outside(offset, width, true)),
         }
     }
 
@@ -854,6 +1043,15 @@ impl Gic {
             _ => {}
         }
     }
+
+    // ---- virtual interface control ---------------------------------------
+
+    /// The maintenance interrupt is a level: `HCR.En` and a non-zero `MISR`.
+    fn update_maintenance(&mut self, cpu: usize) {
+        let v = &self.virt[cpu];
+        let line = v.hcr & HCR_EN != 0 && v.misr() != 0;
+        Self::drive(&mut self.private[cpu][ID_GIC_MAINTENANCE as usize], line);
+    }
 }
 
 impl MmioDevice for Gic {
@@ -918,13 +1116,25 @@ fn word_only(offset: u32, width: Width, write: bool) -> BusResult<()> {
     })
 }
 
-fn virt_not_modelled(offset: u32, width: Width, write: bool) -> BusError {
+fn outside(offset: u32, width: Width, write: bool) -> BusError {
     BusError::Faulted {
         addr: BASE + offset,
         width,
         write,
-        reason: "GIC-400 virtualisation interface (GICH/GICV) not modelled",
+        reason: "past the end of the GIC-400",
     }
+}
+
+/// The CPU whose GICH an access at `offset` reaches, and the register offset
+/// in it: `+0x4000` is the accessor's own, `+0x5000 + 0x200 × n` CPU n's.
+/// `None` for the aliases of CPUs this GIC does not have.
+fn gich_target(acc: Accessor, offset: u32) -> Option<(usize, u32)> {
+    let rel = offset - GICH_OFFSET;
+    let Some(alias) = rel.checked_sub(GICH_ALIAS) else {
+        return Some((acc.cpu, rel));
+    };
+    let cpu = (alias / GICH_ALIAS_STRIDE) as usize;
+    (cpu < NUM_CPUS).then_some((cpu, alias % GICH_ALIAS_STRIDE))
 }
 
 #[cfg(test)]
@@ -954,6 +1164,79 @@ mod tests {
 
     const D: u32 = GICD_OFFSET;
     const C: u32 = GICC_OFFSET;
+    const H: u32 = GICH_OFFSET;
+
+    /// KVM's `vgic_v2_probe` and `vgic_v2_init_lrs`: the list-register count
+    /// out of `GICH_VTR`, then every list register cleared (#58).
+    #[test]
+    fn kvm_finds_four_list_registers_and_clears_them() {
+        let mut g = Gic::new();
+        let vtr = rd(&mut g, ns(1), H + H_VTR);
+        assert_eq!(vtr, 0x9000_0003);
+        let nr_lr = (vtr & 0x3f) + 1;
+        assert_eq!(nr_lr, 4);
+        for i in 0..nr_lr {
+            wr(&mut g, ns(1), H + H_LR + 4 * i, 0);
+        }
+        assert_eq!(rd(&mut g, ns(1), H + H_ELRSR0), 0xF, "all four free");
+        assert_eq!(rd(&mut g, ns(1), H + H_MISR), 0);
+        assert_eq!(rd(&mut g, ns(1), H + H_LR + 4 * nr_lr), 0, "no fifth");
+    }
+
+    /// `+0x5000 + 0x200 × n` is CPU n's block, `+0x4000` the accessor's own.
+    #[test]
+    fn the_alias_blocks_reach_each_cpus_own_list_registers() {
+        let mut g = Gic::new();
+        let pending = LR_PENDING | 42;
+        wr(
+            &mut g,
+            ns(0),
+            H + GICH_ALIAS + 2 * GICH_ALIAS_STRIDE + H_LR,
+            pending,
+        );
+        assert_eq!(rd(&mut g, ns(2), H + H_LR), pending);
+        assert_eq!(rd(&mut g, ns(0), H + H_LR), 0);
+        assert_eq!(rd(&mut g, ns(2), H + H_ELRSR0), 0xE);
+        // CPUs 4..7 are not there.
+        let absent = H + GICH_ALIAS + 5 * GICH_ALIAS_STRIDE + H_VTR;
+        assert_eq!(rd(&mut g, ns(0), absent), 0);
+    }
+
+    /// With `HCR.En` and `UIE`, fewer than two valid list registers is an
+    /// underflow: the maintenance interrupt goes up on that CPU only, and
+    /// comes down once a second list register fills.
+    #[test]
+    fn the_maintenance_interrupt_follows_misr() {
+        let mut g = Gic::new();
+        let maint = |g: &Gic, cpu: usize| g.private[cpu][ID_GIC_MAINTENANCE as usize].line;
+        wr(&mut g, ns(1), H + H_HCR, HCR_EN | HCR_UIE);
+        assert_eq!(rd(&mut g, ns(1), H + H_MISR), MISR_U);
+        assert!(maint(&g, 1));
+        assert!(!maint(&g, 0));
+        wr(&mut g, ns(1), H + H_LR, LR_PENDING | 40);
+        assert!(maint(&g, 1), "one valid entry is still an underflow");
+        wr(&mut g, ns(1), H + H_LR + 4, LR_PENDING | 41);
+        assert_eq!(rd(&mut g, ns(1), H + H_MISR), 0);
+        assert!(!maint(&g, 1));
+    }
+
+    /// A list register the guest is done with that asked for an EOI
+    /// maintenance interrupt: in `EISR`, and not free until handled.
+    #[test]
+    fn an_eoi_request_shows_until_the_hypervisor_handles_it() {
+        let mut g = Gic::new();
+        wr(&mut g, ns(0), H + H_LR + 8, LR_EOI | 33);
+        assert_eq!(rd(&mut g, ns(0), H + H_EISR0), 1 << 2);
+        assert_eq!(rd(&mut g, ns(0), H + H_ELRSR0), 0xB);
+        assert_eq!(rd(&mut g, ns(0), H + H_MISR), MISR_EOI);
+    }
+
+    #[test]
+    fn gicv_reads_as_zero() {
+        let mut g = Gic::new();
+        wr(&mut g, ns(0), GICV_OFFSET, 1);
+        assert_eq!(rd(&mut g, ns(0), GICV_OFFSET), 0);
+    }
 
     /// What the armstub start4 loads at ARM address 0 does on each core
     /// (`start4.elf` `0x1E41EC`), in EL3.
@@ -1316,11 +1599,12 @@ mod tests {
     }
 
     #[test]
-    fn the_virtualisation_interface_faults_instead_of_reading_zero() {
+    fn narrow_accesses_fault_where_the_gic_is_word_only() {
         let mut g = Gic::new();
-        assert!(g.read(0x4004, Width::Word).is_err());
         assert!(g.read(GICD_OFFSET + D_CTLR, Width::Byte).is_err());
+        assert!(g.read(GICH_OFFSET + H_VTR, Width::Half).is_err());
         // The byte-accessible distributor registers take bytes.
         assert!(g.read(GICD_OFFSET + D_ITARGETSR + 1, Width::Byte).is_ok());
+        assert!(g.read(SIZE, Width::Word).is_err(), "past the block");
     }
 }

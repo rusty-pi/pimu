@@ -108,6 +108,8 @@ pub const SPEC_COVERAGE: &[crate::spec::Coverage] = &[
     genet::COVERAGE,
     gic::COVERAGE_CPU,
     gic::COVERAGE_DIST,
+    gic::COVERAGE_VCPU,
+    gic::COVERAGE_VIRT,
     hd::COVERAGE,
     hdmi_ddc::COVERAGE,
     hvs::COVERAGE,
