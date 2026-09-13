@@ -61,7 +61,7 @@ offset = 0x10
 count  = 4
 stride = 4
 access = "rw"
-notes  = "One 4-bit enable/priority field per interrupt source, eight per word: source `src` lives in word `(src >> 3) & 3` at bit `(src & 7) * 4`. Zero disables the source; a non-zero value is the vector-table slot it dispatches through."
+notes  = "One 4-bit enable/priority field per interrupt source, eight per word: source `src` lives in word `(src >> 3) & 3` at bit `(src & 7) * 4`. Zero disables the source; a non-zero value enables it at that priority. The vector is the interrupt number, 64 + source, not this field."
 
 [[register.source]]
 kind       = "decompile"
@@ -79,6 +79,15 @@ ref        = "core 1 release: the model treats a code-address write (>= 0x1000) 
 confidence = "low"
 note       = "these words otherwise only ever hold small priority bitfields; the real release mechanism is not decoded"
 
+[[register.source]]
+kind       = "inferred"
+ref        = "hermanhermitage/videocoreiv, VideoCore IV Programmers Manual: 128 vector-table entries indexed by interrupt number, 0-31 exceptions, 32-63 swi, 64-127 external interrupts"
+confidence = "medium"
+note       = "a reverse-engineered manual, not a datasheet"
+[[register.source]]
+kind       = "trace"
+ref        = "vectoring at the field's value reached start4's exception stubs (dbe4e25, b9d53b8); vectoring at 64 + source reaches the per-source handlers (2bdbcbf)"
+confidence = "high"
 [[register]]
 name   = "VBASE"
 offset = 0x30

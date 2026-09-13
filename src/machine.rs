@@ -951,19 +951,13 @@ impl Bus for Machine {
     }
 
     fn timer_tick_slot(&mut self) -> Option<u32> {
-        // Each system-timer compare channel is its own VPU interrupt source
-        // (`SYS_IRQ_SRC + channel`), and start4's vector table has 128 entries /
-        // 0x200 bytes: [0..15] are the per-priority stubs, [64..127] the direct
-        // per-source handlers. Entry 64 is the ThreadX tick `0x3EC40B7C` (read
-        // back off a running Pi 4, issue #7) — the only code that acks `CS.M0`,
-        // re-arms `C0`, walks the 32-bucket timer wheel and calls
-        // `_tx_thread_system_resume`. Entry 66 is the clock service's timeout
-        // timer, which reaches `0x3ED6588A` through the generic dispatcher.
-        //
-        // So deliver the raw source, not the 4-bit priority
-        // `enable_irq_source(64, prio)` recorded. Routing through the priority
-        // stub reached `0x3ECB0BF0(slot)`, which does nothing for slot 1, so no
-        // timed wait ever expired and every blocking `msleep` hung forever.
+        // The VPU vectors an interrupt through the table entry of its interrupt
+        // number: 0-31 are exceptions, 32-63 `swi`, 64-127 the external sources
+        // (hermanhermitage's VideoCore IV programmers manual). Each system-timer
+        // compare channel is its own source, `SYS_IRQ_SRC + channel`, so that is
+        // the vector. The 4-bit field the firmware writes per source is its
+        // enable and priority, not a vector: a model that vectored through it
+        // landed in start4's exception stubs, and no timed wait ever expired.
         //
         // A channel that has already matched is what we are delivering, and
         // under one-shot compares it disarms at the moment it fires — so check
