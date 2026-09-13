@@ -20,7 +20,7 @@ USAGE:
     rpi-virt-fw run <scenario.toml> [--update] [-v]
     rpi-virt-fw run-all [<dir>] [--update] [-v]
     rpi-virt-fw recon <file> [--entry <hex>] [--ram-mb <n>] [--max-steps <n>] [--eeprom]
-                             [--max-wall <secs>] [--sd <img>] [--usb <img>]
+                             [--max-wall <secs>] [--sd <img>] [--usb <img>] [--usb-mb <n>]
                              [--boot-order <hex>] [--bootconf <KEY=VALUE>]...
                              [--skip-signed-boot] [--netboot <dir>]
                              [--eeprom-pubkey <pubkey.bin>]
@@ -167,6 +167,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     let mut path: Option<PathBuf> = None;
     let mut entry: Option<u32> = None;
     let mut ram_mb: Option<u32> = None;
+    let mut usb_mb: Option<u64> = None;
     // No instruction cap by default — a full boot retires well over a billion,
     // and the wall clock is the useful bound. `--max-steps` is for pinning a
     // run to an exact instruction count (bisecting, probes).
@@ -264,6 +265,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
                 ))
             }
             "--usb" => usb_image = Some(PathBuf::from(it.next().context("--usb needs a path")?)),
+            "--usb-mb" => usb_mb = Some(it.next().context("--usb-mb needs a value")?.parse()?),
             "--netboot" => {
                 netboot_root = Some(PathBuf::from(
                     it.next().context("--netboot needs a directory")?,
@@ -348,12 +350,15 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     // A, which is xHCI root port 2 — a SuperSpeed lane straight onto the root
     // hub, so no hub traversal is involved. See `docs/usb-xhci.md` §5.2 for the
     // socket map.
-    let usb_img = match &usb_image {
+    // `--usb-mb <n>`: the stick is that big, with the image at its start, as
+    // on a Pi whose first boot uses the rest. Read on demand; what the guest
+    // writes stays in memory and outlives the resets below.
+    let usb_disk = match &usb_image {
         Some(p) => {
-            let img =
-                std::fs::read(p).with_context(|| format!("reading USB image {}", p.display()))?;
-            println!("usb image  {} ({} blocks)", p.display(), img.len() / 512);
-            Some(img)
+            let disk = rpi_virt_fw::periph::usb::Disk::open(p, usb_mb.unwrap_or(0) << 20)
+                .with_context(|| format!("opening USB image {}", p.display()))?;
+            println!("usb image  {} ({} blocks)", p.display(), disk.blocks());
+            Some(std::rc::Rc::new(std::cell::RefCell::new(disk)))
         }
         None => None,
     };
@@ -523,10 +528,12 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         if let Some(img) = &sd_img {
             machine.emmc2.insert_card(img.clone());
         }
-        if let Some(img) = &usb_img {
+        if let Some(disk) = &usb_disk {
             machine.pcie.endpoint.attach(
                 USB_ROOT_PORT,
-                Box::new(rpi_virt_fw::periph::usb::MassStorage::new(img.clone())),
+                Box::new(rpi_virt_fw::periph::usb::MassStorage::with_disk(
+                    disk.clone(),
+                )),
             );
         }
         // `--netboot <dir>`: plug the Ethernet cable into the built-in network
