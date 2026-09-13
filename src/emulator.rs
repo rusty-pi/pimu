@@ -199,7 +199,8 @@ pub struct RunReport {
     pub core1_pc: Option<u32>,
     pub core1_retired: Option<u64>,
     pub core1_end: Option<RunEnd>,
-    /// `start4.elf` boot-progress tags (`0xCEC0_2000`), in order.
+    /// `start4.elf` boot-progress tags (`0xCEC0_2000`), in order. Empty
+    /// unless built with `--features diag`.
     pub phase_tags: Vec<u32>,
     /// The firmware released core 1, but the ThreadX-SMP dispatch global never
     /// became non-zero, so core 1 was never spawned.

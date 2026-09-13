@@ -26,9 +26,9 @@ rpi-virt-fw boot \
   themselves, exactly as the hardware does.
 - `fixup4.dat` is *applied*, not ignored — it sets the GPU/CPU memory split and
   patches `start4.elf` in place.
-- Output is the serial transcript (+ the boot-progress phases, + any captured
-  device-tree), suitable for `diff` against a golden or against another
-  firmware version.
+- Output is the serial transcript (+ any captured device-tree; a
+  `--features diag` build adds start4's boot-progress tags), suitable for
+  `diff` against a golden or against another firmware version.
 
 This is the shape the regression bench and the `/chosen` diff tool both plug
 into.
