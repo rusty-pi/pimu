@@ -31,11 +31,6 @@ pub const VPU_HZ_DEFAULT: u64 = 54_000_000;
 /// arithmetic on it is a multiply rather than a division.
 const CYCLES_PER_US: u64 = VPU_HZ_DEFAULT / 1_000_000;
 
-/// Fallback re-arm interval (µs) for a compare channel written with a value that
-/// is already in the past — keeps a periodic tick going even if the firmware
-/// never rewrites the compare register itself.
-const DEFAULT_INTERVAL_US: u64 = 10_000;
-
 pub struct SysTimer {
     micros: u64,
     frac_cycles: u64,
@@ -43,9 +38,6 @@ pub struct SysTimer {
     cmp: [u32; 4],
     /// Absolute µs deadline of each armed channel (`None` = not armed).
     deadline: [Option<u64>; 4],
-    /// Re-arm interval per channel, so a match reloads the compare and the tick
-    /// stays periodic.
-    interval: [u64; 4],
     /// Count of CLO/CHI reads. The run loop uses this to tell a firmware
     /// `usleep` (polls the counter, is time-bounded) apart from a hung
     /// peripheral poll (never terminates) — the former deserves patience.
@@ -83,7 +75,6 @@ impl SysTimer {
             cs: 0,
             cmp: [0; 4],
             deadline: [None; 4],
-            interval: [DEFAULT_INTERVAL_US; 4],
             clo_reads: 0,
             pending: [false; 4],
             pending_any: false,
@@ -324,19 +315,9 @@ impl MmioDevice for SysTimer {
             // `value` is an absolute CLO compare. Derive the period from how far
             // ahead of "now" it is.
             let delta = value.wrapping_sub(st.micros as u32) as u64;
-            if delta == 0 || delta > 0x8000_0000 {
-                // Already in the past. Real hardware would fire once and then
-                // not match again until the 32-bit counter wraps (~71 min); the
-                // firmware re-arms it every ISR, and if its `now + interval`
-                // math lands a hair behind `micros` (ISR latency, or a bad
-                // interval from an unmodelled clock RPC) that would re-fire
-                // every step — a runaway tick. Re-arm one retained interval
-                // ahead instead so it stays periodic and bounded.
-                st.deadline[c] = Some(st.micros + st.interval[c].max(1));
-            } else {
-                st.interval[c] = delta;
-                st.deadline[c] = Some(st.micros + delta);
-            }
+            // A compare matches when the 32-bit counter equals it, so one
+            // written in the past matches only after the counter wraps.
+            st.deadline[c] = Some(st.micros + delta);
         };
         match offset {
             CS => self.cs &= !value, // write-1-to-clear match bits
