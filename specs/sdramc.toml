@@ -107,11 +107,16 @@ name   = "PHY_RES_SIGNATURE"
 offset = 0x3210C
 access = "rw"
 reset  = 0x02230000
-notes  = "Seed on the way in; on the way out the PHY signature for command 0x101 (the header word of every memsys00..08.bin), else 0 for 'no error'. The reset value is the signature."
+notes  = "Seed on the way in; on the way out the PHY signature for command 0x101, else 0 for 'no error'. The signature is a memsys version tag, not a constant: the bootloader loads it from the memsys config record it selected and compares the PHY's echo (Cmp r7, [+0x0C] at pc 0x800067de). The model reconstructs it from the PHY microcode the firmware wrote to PHY_B (marker 0x1860_02vv at +0x388, optional companion 0xA863_llll at +0x38C -> 0x02vv_llll); see src/periph/sdramc.rs report_signature. The reset value is the pinned board's 0x0223 memsys signature, used as the fall-back."
 
 [[register.source]]
 kind       = "decompile"
-ref        = "0x800068ce compares it with the preset header; 0x800065f6 / 0x800066a6 want 0"
+ref        = "0x800067de compares [+0x0C] with r7 (the MCB signature); 0x800065f6 / 0x800066a6 want 0"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "write of the version marker to 0x7DC3_8388 (pc 0x800066ba/0x8000675e) vs the expected r7 across the 0x0220/0x0222/0x0223 memsys versions"
 confidence = "high"
 
 [[register]]

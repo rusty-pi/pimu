@@ -26,9 +26,14 @@
 //!   `[+0x0C] = <seed>` (a checksum for the `0x101` query, else a plain tag),
 //!   `[+0x10] = 0`, `[+0x14] = sum([+0x00..+0x14])`, then pulses the trigger.
 //!   The calibration engine writes back:
-//!   - `[+0x0C]` = the PHY signature `0x0223_0000` for command `0x101`
-//!     ("report signature", checked by `0x800068ce`), otherwise `0`
-//!     ("completed, no error", checked by `0x800065f6` / `0x800066a6`)
+//!   - `[+0x0C]` = the PHY signature for command `0x101` ("report signature"),
+//!     otherwise `0` ("completed, no error", checked by `0x800065f6` /
+//!     `0x800066a6`). The signature is a memsys version tag, not a constant:
+//!     the bootloader loads it from the memsys config record (MCB) it selected
+//!     and compares the PHY's echo against it (2025-11 fails right here with
+//!     `BOOT ERROR: code 8 - 'SDRAM failure'` when the model reports the wrong
+//!     one). The model has no MCB, so `report_signature` reconstructs it from
+//!     the PHY microcode the firmware wrote — see that function.
 //!   - `[+0x10]` = `<rank> << 8` for command `0x101` (`0x800068ce` checks
 //!     `([+0x10] >> 8) & 0xFF` against the rank it is verifying, 0 then 1),
 //!     otherwise `0`. The firmware seeds identical parameters for every rank,
@@ -45,9 +50,12 @@ use std::collections::BTreeMap;
 use crate::bus::{BusResult, MmioDevice, Width};
 
 // The calibration request / result block is five parameter words from
-// `PHY_RES_VALID` then the two checksum words. `PHY_SIGNATURE` is the header
-// word of every `memsys00.bin` .. `memsys08.bin`: a fixed PHY-block signature,
-// not a per-preset hash.
+// `PHY_RES_VALID` then the two checksum words. The signature the PHY reports is
+// not fixed across firmware: it is a memsys version tag that each bootloader
+// derives from the memsys config record it selected, and then expects the PHY
+// to echo. `run_phy_cal` reconstructs it from the PHY microcode the firmware
+// wrote (see `report_signature`); `PHY_SIGNATURE` is only the fall-back for a
+// memsys whose header the model does not recognise.
 use crate::spec::sdramc::{
     CTRL_CMD, CTRL_STATUS, CTRL_STATUS_DONE_MASK as CTRL_DONE, PHY_A, PHY_B, PHY_CAL_BUSY,
     PHY_CAL_TRIGGER, PHY_RES_CMD, PHY_RES_PARAM, PHY_RES_SIGNATURE,
@@ -98,6 +106,11 @@ pub struct Sdramc {
     /// firmware verifies each rank with byte-identical PHY parameters, so this
     /// count stands in for "which rank is being trained" in the result word.
     sig_cal_count: u32,
+    /// The memsys signature the model reports, latched from the version marker
+    /// the firmware wrote to the PHY_B array (see [`Sdramc::report_signature`]).
+    /// It is a property of the loaded memsys, so it is kept across the later
+    /// training passes that replace the header with other microcode.
+    phy_sig: u32,
     pub log: Vec<SdramcAccess>,
     pub log_limit: usize,
 }
@@ -114,6 +127,7 @@ impl Sdramc {
             storage: BTreeMap::new(),
             cmd_done: true,
             sig_cal_count: 0,
+            phy_sig: PHY_SIGNATURE,
             log: Vec::new(),
             log_limit: 8192,
         }
@@ -129,6 +143,64 @@ impl Sdramc {
         self.storage.get(&off).copied().unwrap_or(0)
     }
 
+    /// The signature the PHY reports for the "report signature" command,
+    /// reconstructed from the memsys PHY microcode the firmware has already
+    /// written (`self.storage`) rather than hard-coded.
+    ///
+    /// On real hardware the bootloader loads a memsys config record (MCB) and
+    /// then verifies the PHY reports the same version signature it holds; the
+    /// compare is `Cmp r7, [r8+12]` at VPU pc `0x800067de`, where `r7` is the
+    /// MCB's signature field and `[r8+12]` is `PHY_RES_SIGNATURE`. The MCB lives
+    /// in firmware RAM the model never sees, but the record's PHY microcode is
+    /// written verbatim into the PHY_B array, and it mirrors the signature in
+    /// two fixed slots:
+    ///
+    /// * `PHY_B + 0x388` (`0x7DC3_8388`) — the version marker command
+    ///   `0x1860_02vv` (first written from pc `0x800066ba` / `0x8000675e`). Its
+    ///   low halfword `0x02vv` is the signature's **high** halfword.
+    /// * `PHY_B + 0x38C` (`0x7DC3_8390 - 4`) — an optional value-load command
+    ///   `0xA863_llll` that follows the marker only when the low halfword is
+    ///   non-zero. When present, `0xllll` is the signature's **low** halfword;
+    ///   when the slot instead holds the next microcode word (a different
+    ///   command class, e.g. `0xD402_....`), the low halfword is `0`.
+    ///
+    /// Evidence (write to `+0x388` / `+0x38C` at the first `0x101` calibration
+    /// vs. the firmware's expected `r7`):
+    ///
+    /// | memsys (vintage)      | `+0x388`     | `+0x38C`     | signature    |
+    /// |-----------------------|--------------|--------------|--------------|
+    /// | `0x0220` (2023..2025-11) | `0x18600220` | `0xa8630100` | `0x02200100` |
+    /// | `0x0222` (2026-04-14)    | `0x18600222` | `0xa8630100` | `0x02220100` |
+    /// | `0x0223` (pinned 2026)   | `0x18600223` | `0xd402180c` | `0x02230000` |
+    ///
+    /// The `0x0223` memsys is the pinned board's, so this reproduces its
+    /// `0x02230000` unchanged (also the [`PHY_SIGNATURE`] fall-back). The
+    /// value is latched in [`Sdramc::phy_sig`]: a report can also run in a later
+    /// training pass, once the header has been replaced by other microcode
+    /// (e.g. `0x38388 = 0xa4630fff`), and the firmware still expects the
+    /// signature it loaded, so only a live version marker updates the latch.
+    fn report_signature(&mut self) -> u32 {
+        const SIG_MARKER: u32 = PHY_B + 0x388;
+        const SIG_COMPANION: u32 = PHY_B + 0x38C;
+        let marker = self.word(SIG_MARKER);
+        // The version marker is the PHY command class 0x1860_....; anything else
+        // in that slot is a later pass's microcode, so keep the latched value.
+        if marker >> 16 == 0x1860 {
+            let high = marker & 0xFFFF;
+            let companion = self.word(SIG_COMPANION);
+            // The low halfword is only present as an 0xA863_.... value-load
+            // command right after the marker; otherwise that slot holds the
+            // next microcode word and the low halfword is zero.
+            let low = if companion >> 16 == 0xA863 {
+                companion & 0xFFFF
+            } else {
+                0
+            };
+            self.phy_sig = (high << 16) | low;
+        }
+        self.phy_sig
+    }
+
     /// Rising edge on `PHY_CAL_TRIGGER`: run one "calibration" and fill in the
     /// result block the firmware reads back (`0x800065f6` / `0x800068ce` /
     /// `0x800066a6`).
@@ -136,7 +208,7 @@ impl Sdramc {
         let (signature, status) = if self.word(PHY_RES_CMD) == PHY_CMD_REPORT_SIGNATURE {
             let rank = self.sig_cal_count;
             self.sig_cal_count += 1;
-            (PHY_SIGNATURE, rank << 8)
+            (self.report_signature(), rank << 8)
         } else {
             (0, 0)
         };
@@ -206,5 +278,66 @@ impl MmioDevice for Sdramc {
             write: true,
         });
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Load the PHY microcode header the way the bootloader does, run the
+    /// "report signature" calibration, and return what the model reports back
+    /// in `PHY_RES_SIGNATURE`.
+    fn reported_signature(marker: u32, companion: u32) -> u32 {
+        let mut sdramc = Sdramc::new();
+        sdramc.write(PHY_B + 0x388, Width::Word, marker).unwrap();
+        sdramc.write(PHY_B + 0x38C, Width::Word, companion).unwrap();
+        // The firmware seeds the request block, then pulses the trigger.
+        sdramc.write(PHY_RES_BASE, Width::Word, 1).unwrap();
+        sdramc
+            .write(PHY_RES_CMD, Width::Word, PHY_CMD_REPORT_SIGNATURE)
+            .unwrap();
+        sdramc.write(PHY_CAL_TRIGGER, Width::Word, 1).unwrap();
+        sdramc.read(PHY_RES_SIGNATURE, Width::Word).unwrap()
+    }
+
+    #[test]
+    fn signature_is_derived_from_the_memsys_header() {
+        // The three memsys versions that reach the signature check, each with
+        // the version marker and (present-or-not) low-halfword companion the
+        // bootloader wrote — see `report_signature`'s evidence table.
+        assert_eq!(reported_signature(0x18600220, 0xa8630100), 0x02200100);
+        assert_eq!(reported_signature(0x18600222, 0xa8630100), 0x02220100);
+        // The pinned board's memsys has no companion (the slot holds the next
+        // microcode word), so the low halfword is zero — unchanged from the old
+        // hard-coded value.
+        assert_eq!(reported_signature(0x18600223, 0xd402180c), 0x02230000);
+    }
+
+    #[test]
+    fn unrecognised_marker_falls_back_to_the_reset_signature() {
+        // A header the model has not been shown keeps the previous behaviour.
+        assert_eq!(reported_signature(0, 0), PHY_SIGNATURE);
+    }
+
+    #[test]
+    fn sum6_is_self_consistent_after_a_report() {
+        let mut sdramc = Sdramc::new();
+        sdramc
+            .write(PHY_B + 0x388, Width::Word, 0x18600220)
+            .unwrap();
+        sdramc
+            .write(PHY_B + 0x38C, Width::Word, 0xa8630100)
+            .unwrap();
+        sdramc.write(PHY_RES_BASE, Width::Word, 1).unwrap();
+        sdramc
+            .write(PHY_RES_CMD, Width::Word, PHY_CMD_REPORT_SIGNATURE)
+            .unwrap();
+        sdramc.write(PHY_CAL_TRIGGER, Width::Word, 1).unwrap();
+        // The firmware's "sum the leading words, compare the trailing word"
+        // check: SUM6 must be twice SUM5.
+        let sum5 = sdramc.read(PHY_RES_SUM5, Width::Word).unwrap();
+        let sum6 = sdramc.read(PHY_RES_SUM6, Width::Word).unwrap();
+        assert_eq!(sum6, sum5.wrapping_add(sum5));
     }
 }
