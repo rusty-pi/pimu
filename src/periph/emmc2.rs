@@ -355,7 +355,8 @@ impl Emmc2 {
         Emmc2::default()
     }
 
-    /// The legacy EMMC at `0x7E30_0000`, with nothing on its bus.
+    /// The legacy EMMC at `0x7E30_0000`. Its bus is empty until the SD-slot
+    /// mux routes the card to it (`Machine::route_sd_slot`).
     pub fn new_legacy() -> Emmc2 {
         Emmc2 {
             id: LEGACY_ID,
@@ -366,6 +367,18 @@ impl Emmc2 {
     /// Insert a card backed by `image` (a raw block device: MBR + FAT + files).
     pub fn insert_card(&mut self, image: Vec<u8>) {
         self.card = Some(SdCard::new(image));
+    }
+
+    /// Disconnect the card from this host, state and all, the way the SD-slot
+    /// mux takes its lines away: to this host the slot is then empty.
+    pub fn take_card(&mut self) -> Option<SdCard> {
+        self.card.take()
+    }
+
+    /// Connect a card (or nothing) that another host had: the card keeps the
+    /// state it was in, since only the lines to it moved.
+    pub fn put_card(&mut self, card: Option<SdCard>) {
+        self.card = card;
     }
 
     pub fn has_card(&self) -> bool {
