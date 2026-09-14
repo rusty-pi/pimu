@@ -66,8 +66,9 @@ export RVF_LIVE_CONSOLE=1
 timeout --signal=INT "$(( wall + 40 ))" "$bin" "${args[@]}" 2>&1 | tee "$log"
 status=${PIPESTATUS[0]}
 echo "boot exit status: $status"
-# 124 = hit the wall clock; that is expected, not a failure.
-if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
+# 124 = hit the wall clock; that is expected, not a failure. 1 = the boot did
+# not get where it was meant to, and the check below says which milestone.
+if [ "$status" -ne 0 ] && [ "$status" -ne 1 ] && [ "$status" -ne 124 ]; then
   exit "$status"
 fi
 

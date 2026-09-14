@@ -99,13 +99,17 @@ cargo run -- disasm firmware/start4.elf --base 0xcec00200 --count 40
 
 # Run the real boot chain: EEPROM bootloader + start4.elf off an SD image.
 ./scripts/make-sd.sh                            # build firmware/sd.img
-cargo run --release -- boot firmware/pieeprom.bin \
-  --eeprom --sd firmware/sd.img
+cargo run --release -- boot --eeprom firmware/pieeprom.bin \
+  --sd firmware/sd.img
 
 # ...and on into Linux, with the terminal as the serial console.
-cargo run --release -- boot firmware/pieeprom.bin \
-  --eeprom --sd firmware/sd.img --arm --stdin
+cargo run --release -- boot --eeprom firmware/pieeprom.bin \
+  --sd firmware/sd.img --arm --stdin
 ```
+
+`boot` prints the serial console as it goes and ends with one line saying
+whether the boot got where it was meant to (`result: ok — the firmware started
+the ARM`), with exit status 1 when it did not. `-v` adds the full run report.
 
 `make-sd.sh` needs `sfdisk`, `mtools` and `e2fsprogs`; no root or loop devices.
 `--usb <img>` boots the same image as a USB stick instead, and
@@ -129,7 +133,7 @@ releases the ARM. Those are the values `rpi-mkosi`
 [#37](https://github.com/valtzu/rpi-mkosi/issues/37) needs to compare across a
 firmware bump, because `rpi-machine-id` feeds the root LUKS passphrase.
 
-Every `boot` run that gets that far prints them:
+`boot -v` prints them on every run that gets that far:
 
 ```text
 --- device tree handed to the ARM ---
@@ -143,7 +147,7 @@ and `--dump-fdt <path>` writes the blob itself, so two firmware versions can be
 compared byte for byte:
 
 ```bash
-cargo run --release -- boot firmware/pieeprom.bin --eeprom --sd firmware/sd.img \
+cargo run --release -- boot --eeprom firmware/pieeprom.bin --sd firmware/sd.img \
   --max-wall 200 --dump-fdt old.dtb
 # …bump firmware/, rebuild the SD image, run again into new.dtb…
 diff <(fdtdump old.dtb) <(fdtdump new.dtb)

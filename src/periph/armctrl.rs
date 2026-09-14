@@ -36,6 +36,7 @@ pub const COVERAGE: Coverage = Coverage {
 pub struct ArmCtrl {
     regs: BTreeMap<u32, u32>,
     release: bool,
+    released: bool,
 }
 
 impl ArmCtrl {
@@ -46,6 +47,12 @@ impl ArmCtrl {
     /// Has the firmware released the ARM since the last call?
     pub fn take_release(&mut self) -> bool {
         std::mem::take(&mut self.release)
+    }
+
+    /// Has the firmware ever released the ARM? True whether or not the ARM is
+    /// modelled: this is where a firmware boot hands over.
+    pub fn released(&self) -> bool {
+        self.released
     }
 }
 
@@ -62,6 +69,7 @@ impl MmioDevice for ArmCtrl {
         let reg = offset & !3;
         if reg == CONTROL && value & CONTROL_RELEASE != 0 {
             self.release = true;
+            self.released = true;
         }
         self.regs.insert(reg, value);
         Ok(())
