@@ -1,6 +1,6 @@
 //! Loading firmware images into the machine.
 //!
-//! - [`addrs`] — every `start4.elf` address the model pins, and why.
+//! - [`addrs`] — why the model pins no `start4.elf` addresses.
 //! - [`bootrom`] — the BCM2711 maskROM first stage: the explicit boot entry that
 //!   verifies and stages the bootcode.
 //! - [`elf32`] — `start4.elf` and the vc4boot test programs.

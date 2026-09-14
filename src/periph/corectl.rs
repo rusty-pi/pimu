@@ -1,10 +1,15 @@
-//! VPU core-control block at `0x7E00_2000`. This region carries both the
-//! per-core boot handshake and the VPU interrupt controller. Register map:
+//! VPU core-control block at `0x7E00_2000`: one interrupt controller per VPU
+//! core, core 0's bank at `+0x000` and core 1's at `+0x800`. Register map:
 //! `specs/corectl.toml` ([`crate::spec::corectl`]).
 //!
 //! `start4.elf`'s entry trampoline runs on both VPU cores; they diverge on
-//! `version` bit 16. Core 0 writes its vector base to offset `0x30` (core 1's
-//! copy would use `0x38`) early on, then continues the main boot.
+//! `version` bit 16. Each writes its vector base to its own bank's `VBASE`
+//! (`0x30` / `0x830`) early on.
+//!
+//! Core 1 sleeps until a start address is written to its bank's [`WAKEUP`]
+//! (`0x834`). start4 does that itself, once, when its power manager first
+//! powers domain `0x20000` — in a Linux boot shortly after `Booting Linux`, in
+//! a firmware-only boot not at all (#72).
 //!
 //! Interrupt controller: `enable_irq_source(src, prio)` (start4 `0x3ED72374`)
 //! stores a 4-bit priority/enable field per source into the words at
@@ -20,25 +25,27 @@ use crate::bus::{BusResult, MmioDevice, Width};
 use crate::spec::corectl::{
     INSTANCE_STRIDE as CORE_STRIDE, IRQ_PENDING, IRQ_PENDING_BITS, IRQ_PENDING_BITS_COUNT,
     IRQ_PENDING_BITS_STRIDE, IRQ_PENDING_SOURCE_MASK, IRQ_PENDING_SOURCE_SHIFT,
-    IRQ_PENDING_VALID_MASK, IRQ_PRIO, IRQ_PRIO_COUNT, IRQ_PRIO_STRIDE, VBASE,
+    IRQ_PENDING_VALID_MASK, IRQ_PRIO, IRQ_PRIO_COUNT, IRQ_PRIO_STRIDE, VBASE, WAKEUP,
+    WAKEUP_ADDR_MASK, WAKEUP_ADDR_SHIFT,
 };
 use crate::spec::Coverage;
 
 /// Everything else in the bank is plain read-back storage.
 pub const COVERAGE: Coverage = Coverage {
     block: "corectl",
-    decoded: &[IRQ_PENDING, IRQ_PRIO, VBASE, IRQ_PENDING_BITS],
+    decoded: &[IRQ_PENDING, IRQ_PRIO, VBASE, WAKEUP, IRQ_PENDING_BITS],
 };
 
 // Register notes beyond what `specs/corectl.toml` records:
 //
 // * `IRQ_PRIO` — start4 numbers its sources from 64, folded back into these
-//   four words by `(src >> 3) & 3`. Its first two words double as the model's
-//   core-1 release trigger, see `write`.
+//   four words by `(src >> 3) & 3`.
 // * `VBASE` — core 1's copy is one `CORE_STRIDE` higher like every other
 //   register in this block. `RVF_DBG_IRQEN` and the peripheral stub both show
 //   core 1 writing `0x7E002830`, not `+0x38`; with the old `0x38` guess
 //   `vbase[1]` was never populated, so core 1 could not be vectored at all.
+// * `WAKEUP` — only core 1's copy starts anything: core 0 is already running
+//   whenever firmware can write to this block.
 // * `IRQ_PENDING_BITS` — start4 drives the pending bitmask with three helpers,
 //   all of which pick the bank from a core-index argument:
 //   `0x3ED01896(src, core)` raises the source in software (`|= 1 << bit`),
@@ -51,11 +58,6 @@ pub const COVERAGE: Coverage = Coverage {
 //   / 7-bit mask to get the source number, and indexes the handler table at
 //   `gp+58004` with it.
 
-/// Run-state field words. A write of a code address here releases core 1 (small
-/// values are the interrupt-controller priority words, not a release vector).
-const RUNSTATE_LO: u32 = IRQ_PRIO;
-const RUNSTATE_HI: u32 = IRQ_PRIO + IRQ_PRIO_STRIDE;
-
 /// The interrupt source start4 wires to the BCM system timer (compare channel
 /// `src - SYS_IRQ_SRC`). Enabled via `enable_irq_source(64, 1)`.
 pub const SYS_IRQ_SRC: u32 = 64;
@@ -65,8 +67,8 @@ pub struct CoreCtl {
     /// Source raised by a peripheral and not yet read by the dispatcher.
     pending_src: Option<u32>,
     storage: BTreeMap<u32, u32>,
-    pending_core1_release: bool,
-    core1_started: bool,
+    /// Start address last written to core 1's [`WAKEUP`], not yet acted on.
+    core1_wake: Option<u32>,
     /// Last exception-vector base the firmware wrote for core 0 / core 1.
     pub vbase: [u32; 2],
     /// Sources newly raised in software through [`IRQ_PENDING_BITS`], as
@@ -105,8 +107,10 @@ impl CoreCtl {
         self.sw_raised.pop_front()
     }
 
-    pub fn take_core1_release(&mut self) -> bool {
-        std::mem::take(&mut self.pending_core1_release)
+    /// Where the firmware last told core 1 to start, once: the address written
+    /// to core 1's [`WAKEUP`] since the previous call.
+    pub fn take_core1_wake(&mut self) -> Option<u32> {
+        self.core1_wake.take()
     }
 
     /// The 4-bit priority/enable field for interrupt source `src` (as numbered by
@@ -190,20 +194,52 @@ impl MmioDevice for CoreCtl {
                 }
             }
         }
+        let value = if off == WAKEUP {
+            value & (WAKEUP_ADDR_MASK << WAKEUP_ADDR_SHIFT)
+        } else {
+            value
+        };
         self.storage.insert(offset, value);
-        if off == VBASE {
-            if let Some(vbase) = self.vbase.get_mut(core as usize) {
-                *vbase = value;
+        match (core, off) {
+            (_, VBASE) => {
+                if let Some(vbase) = self.vbase.get_mut(core as usize) {
+                    *vbase = value;
+                }
             }
-        }
-        // A code-address write to the run-state words releases core 1. The
-        // interrupt-controller priority words live at the same offsets but only
-        // ever hold small bitfields, so a small value is an IRQ-enable, not a
-        // release vector.
-        if matches!(offset, RUNSTATE_LO | RUNSTATE_HI) && value >= 0x1000 && !self.core1_started {
-            self.core1_started = true;
-            self.pending_core1_release = true;
+            (1, WAKEUP) => self.core1_wake = Some(value),
+            _ => {}
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_write_to_core_1s_wakeup_is_its_start_address_once() {
+        let mut c = CoreCtl::new();
+        c.write(CORE_STRIDE + WAKEUP, Width::Word, 0xFEC0_0201)
+            .unwrap();
+        assert_eq!(c.take_core1_wake(), Some(0xFEC0_0200));
+        assert_eq!(c.take_core1_wake(), None);
+        assert_eq!(
+            c.read(CORE_STRIDE + WAKEUP, Width::Word).unwrap(),
+            0xFEC0_0200
+        );
+    }
+
+    #[test]
+    fn nothing_else_in_the_block_starts_core_1() {
+        let mut c = CoreCtl::new();
+        // Core 0's own copy, and the priority words the model used to guess
+        // from: start4 writes 0x0100_1000 to IRQ_PRIO word 1 in every boot.
+        c.write(WAKEUP, Width::Word, 0xFEC0_0200).unwrap();
+        c.write(IRQ_PRIO + IRQ_PRIO_STRIDE, Width::Word, 0x0100_1000)
+            .unwrap();
+        c.write(CORE_STRIDE + VBASE, Width::Word, 0xFEC0_1E00)
+            .unwrap();
+        assert_eq!(c.take_core1_wake(), None);
     }
 }

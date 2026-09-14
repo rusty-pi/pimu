@@ -222,7 +222,6 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
     let mut trace_mmio = false;
     let mut exc_vbase: u32 = 0;
     let mut trace_from: u32 = 0;
-    let mut core1_entry: Option<u32> = None;
     let mut smp = false;
     let mut as_core1 = false;
     let mut patches: Vec<(u32, u32)> = Vec::new();
@@ -299,11 +298,6 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
             }
             "--smp" => smp = true,
             "--as-core1" => as_core1 = true,
-            "--core1-entry" => {
-                core1_entry = Some(parse_u32(
-                    it.next().context("--core1-entry needs a value")?,
-                )?)
-            }
             "--trace-from" => {
                 trace = true;
                 trace_from = parse_u32(it.next().context("--trace-from needs a value")?)?
@@ -799,7 +793,6 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
             4_000_000
         };
         emu.cpu.trace_from = trace_from;
-        emu.core1_entry = core1_entry;
         if as_core1 {
             emu.cpu.core_id = 1;
         }
@@ -979,14 +972,6 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
                 );
             }
         }
-    }
-    if report.core1_release_never_resolved {
-        println!(
-            "core1      RELEASED BUT NEVER SPAWNED — the ThreadX-SMP dispatch \
-             global at gp+3672 stayed zero.\n\
-             \x20          Most likely this firmware's .sdata layout differs \
-             from the one that offset was read from (#25)."
-        );
     }
     if verbose {
         print!("regs      ");

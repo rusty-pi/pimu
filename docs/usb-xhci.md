@@ -991,8 +991,10 @@ Loose files needed three model fixes:
 1. For a USB boot the bootloader places start4 1 MiB below its link address
    (`Starting start4.elf @ 0xfeb00200`, hence 947 MB, not 948). Core 1 was
    released at the link-time entry and hit a breakpoint, so the main thread's
-   first inter-core wait never ended; it now enters where core 0 entered
-   start4, and the model's start4-PC shortcuts of the time
+   first inter-core wait never ended. It then entered where core 0 entered
+   start4; since #72 it starts wherever start4 writes `IC1_WAKEUP`, which
+   start4 computes pc-relative, so it moves with the image too. The model's
+   start4-PC shortcuts of the time
    (`SOLICITED_RESTORE_PC` and a `udelay` fast-forward, both since removed)
    move with the image.
 2. start4's dmalib takes DMA4 (channel 11) over for its xHCI accesses and

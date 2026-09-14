@@ -22,8 +22,8 @@ pub const SYSTIMER_SIZE: u32 = spec::systimer::SIZE;
 pub const MCSYNC_BASE: u32 = spec::mcsync::BASE;
 pub const MCSYNC_SIZE: u32 = spec::mcsync::SIZE;
 
-/// VPU core-control block (`0x7E00_2000`): per-core start vectors and run-state.
-/// `start4.elf` releases VPU core 1 through here.
+/// VPU core-control block (`0x7E00_2000`): each core's interrupt controller,
+/// exception-vector base and start address.
 pub const CORECTL_BASE: u32 = spec::corectl::BASE;
 pub const CORECTL_SIZE: u32 = spec::corectl::SIZE;
 
