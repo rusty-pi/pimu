@@ -3,7 +3,7 @@ name    = "sdc"
 base    = 0x7E001000
 size    = 0x1000
 summary = "Legacy SDRAM-controller interface: DRAM timing table, sub-controller ready bits, LPDDR4 mode-register port"
-notes   = "The DRAM clock tree is not modelled: timing words read back, every sub-controller reports ready, and the mode registers are a table seeded with the reference board's MR4."
+notes   = "The DRAM clock tree is not modelled: timing words read back, every sub-controller reports ready, and the mode registers are a table seeded with the reference board's MR4 and a 2 GB board's MR8 (one rank of 16 Gb x16 dies; the second rank is not fitted)."
 
 [[block.source]]
 kind       = "decompile"
@@ -109,23 +109,28 @@ ref        = "0x3ED6BA90 takes the result from bits 23:16"
 confidence = "high"
 
 [[register.field]]
-name  = "CHANNEL"
+name  = "DEVICE"
 bits  = "24"
+notes = "Device (rank, i.e. chip select). A rank that is not fitted answers nothing, so every mode register reads 0 there."
+
+[[register.field.source]]
+kind       = "decompile"
+ref        = "0x3ED6BA90 logs 'RD: MR addr: %d device: %d channel: %d' with the argument it shifts to bit 24 as the device"
+confidence = "high"
+
+[[register.field.source]]
+kind       = "decompile"
+ref        = "2023-05-11 bootcode rank detection (0x800056a4): x2 only when MR8 reads the same with bit 24 clear and set"
+confidence = "high"
+
+[[register.field]]
+name  = "CHANNEL"
+bits  = "25"
 notes = "LPDDR4 channel."
 
 [[register.field.source]]
 kind       = "decompile"
-ref        = "0x3ED6BA90: chan << 24"
-confidence = "high"
-
-[[register.field]]
-name  = "DEVICE"
-bits  = "25"
-notes = "Device (rank) on the channel."
-
-[[register.field.source]]
-kind       = "decompile"
-ref        = "0x3ED6BA90: dev << 25"
+ref        = "0x3ED6BA90 logs the argument it shifts to bit 25 as the channel"
 confidence = "high"
 
 [[register.field]]

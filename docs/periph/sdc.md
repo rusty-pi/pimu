@@ -6,7 +6,7 @@
 - Base: `0x7E001000`
 - Size: `0x1000`
 
-The DRAM clock tree is not modelled: timing words read back, every sub-controller reports ready, and the mode registers are a table seeded with the reference board's MR4.
+The DRAM clock tree is not modelled: timing words read back, every sub-controller reports ready, and the mode registers are a table seeded with the reference board's MR4 and a 2 GB board's MR8 (one rank of 16 Gb x16 dies; the second rank is not fitted).
 
 Sources:
 
@@ -71,8 +71,8 @@ Per-sub-controller status, at +0x1C of each 0x80 block from +0x80; bit 31 is rea
 | 7:0 | `ADDR` | rw | Mode register number. |
 | 15:8 | `WDATA` | rw | Byte to write. |
 | 23:16 | `RDATA` | rw | Byte read back. |
-| 24 | `CHANNEL` | rw | LPDDR4 channel. |
-| 25 | `DEVICE` | rw | Device (rank) on the channel. |
+| 24 | `DEVICE` | rw | Device (rank, i.e. chip select). A rank that is not fitted answers nothing, so every mode register reads 0 there. |
+| 25 | `CHANNEL` | rw | LPDDR4 channel. |
 | 28 | `WRITE` | rw | Set for a write, clear for a read. |
 | 30 | `ERROR` | r | Transfer failed ('SD MR %08x R timeout'). Never set here. |
 | 31 | `DONE` | r | Ready / transfer complete. |
@@ -94,13 +94,14 @@ Sources:
 
 - decompile (high): 0x3ED6BA90 takes the result from bits 23:16
 
-`CHANNEL` sources:
-
-- decompile (high): 0x3ED6BA90: chan << 24
-
 `DEVICE` sources:
 
-- decompile (high): 0x3ED6BA90: dev << 25
+- decompile (high): 0x3ED6BA90 logs 'RD: MR addr: %d device: %d channel: %d' with the argument it shifts to bit 24 as the device
+- decompile (high): 2023-05-11 bootcode rank detection (0x800056a4): x2 only when MR8 reads the same with bit 24 clear and set
+
+`CHANNEL` sources:
+
+- decompile (high): 0x3ED6BA90 logs the argument it shifts to bit 25 as the channel
 
 `WRITE` sources:
 
