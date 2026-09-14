@@ -43,7 +43,9 @@
 //!     balance.
 //! * Everything else is sticky (read-after-write), default 0. The PHY preset
 //!   arrays the firmware copies in from `memsysNN.bin` and sum-checks land here
-//!   and read straight back, so those checks pass unchanged.
+//!   and read straight back, so those checks pass unchanged. Narrow accesses
+//!   get their lane: the 2022-04-26 bootcode decompresses `mcb.bin` straight
+//!   into `PHY_B` and hashes it a byte at a time (#69).
 
 use std::collections::BTreeMap;
 
@@ -229,7 +231,7 @@ impl MmioDevice for Sdramc {
     }
 
     fn read(&mut self, offset: u32, width: Width) -> BusResult<u32> {
-        let value = match offset & !3 {
+        let word = match offset & !3 {
             CTRL_STATUS => {
                 let base = self.word(CTRL_STATUS);
                 if self.cmd_done {
@@ -245,6 +247,13 @@ impl MmioDevice for Sdramc {
             }
             off => self.word(off),
         };
+        // Narrow reads get their lane, right-aligned: the 2022-04-26 bootcode
+        // hashes mcb.bin a byte at a time straight out of PHY_B (#69).
+        let value = match width {
+            Width::Word => word,
+            Width::Half => (word >> ((offset & 2) * 8)) & 0xFFFF,
+            Width::Byte => (word >> ((offset & 3) * 8)) & 0xFF,
+        };
         self.record(SdramcAccess {
             offset,
             width,
@@ -255,6 +264,16 @@ impl MmioDevice for Sdramc {
     }
 
     fn write(&mut self, offset: u32, width: Width, value: u32) -> BusResult<()> {
+        // Narrow writes merge into the word.
+        let merged = match width {
+            Width::Word => value,
+            _ => {
+                let shift = (offset & 3) * 8;
+                let mask = if width == Width::Half { 0xFFFF } else { 0xFF } << shift;
+                (self.word(offset & !3) & !mask) | ((value << shift) & mask)
+            }
+        };
+        let value = merged;
         match offset & !3 {
             CTRL_CMD => {
                 self.storage.insert(CTRL_CMD, value);
@@ -299,6 +318,24 @@ mod tests {
             .unwrap();
         sdramc.write(PHY_CAL_TRIGGER, Width::Word, 1).unwrap();
         sdramc.read(PHY_RES_SIGNATURE, Width::Word).unwrap()
+    }
+
+    /// The 2022-04-26 bootcode writes the decompressed `mcb.bin` into `PHY_B`
+    /// a word at a time and hashes it a byte at a time (#69).
+    #[test]
+    fn narrow_accesses_get_their_lane() {
+        let mut sdramc = Sdramc::new();
+        sdramc.write(PHY_B, Width::Word, 0x0000_061c).unwrap();
+        let bytes: Vec<u32> = (0..4)
+            .map(|i| sdramc.read(PHY_B + i, Width::Byte).unwrap())
+            .collect();
+        assert_eq!(bytes, [0x1c, 0x06, 0, 0]);
+        assert_eq!(sdramc.read(PHY_B + 2, Width::Half).unwrap(), 0);
+
+        sdramc.write(PHY_B + 3, Width::Byte, 0xAB).unwrap();
+        sdramc.write(PHY_B + 2, Width::Byte, 0x1CD).unwrap();
+        assert_eq!(sdramc.read(PHY_B, Width::Word).unwrap(), 0xabcd_061c);
+        assert_eq!(sdramc.read(PHY_B + 2, Width::Half).unwrap(), 0xabcd);
     }
 
     #[test]
