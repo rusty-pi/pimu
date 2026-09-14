@@ -9,6 +9,7 @@ use rpi_virt_fw::emulator::{Emulator, RunLimits};
 use rpi_virt_fw::firmware::Payload;
 use rpi_virt_fw::harness::{self, GoldenOutcome};
 use rpi_virt_fw::machine::Machine;
+use rpi_virt_fw::soc::{Board, Stepping};
 use rpi_virt_fw::vpu::decode::decode;
 use rpi_virt_fw::vpu::length::insn_len_bytes;
 use rpi_virt_fw::vpu::UnimplPolicy;
@@ -27,7 +28,9 @@ USAGE:
                              [--boot-order <hex>] [--bootconf <KEY=VALUE>]...
                              [--skip-signed-boot] [--netboot <dir> | --net passt:<socket>]
                              [--eeprom-pubkey <pubkey.bin>] [--boot-rom <rom.bin>] [--rom <rom.bin>]
-                             [--skip-unimpl]
+                             [--stepping b0|c0] [--board-rev <hex>] [--skip-unimpl]
+              (--stepping: the BCM2711 silicon, C0 by default; --board-rev: the
+               OTP revision code, by default a board that stepping shipped on)
               (no --max-steps = no instruction cap; --max-wall defaults to 140s)
               (an unknown instruction stops the run; --skip-unimpl steps over it
                instead, for reconnaissance on firmware the decoder is new to)
@@ -245,6 +248,8 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
     let mut eeprom_pubkey: Option<PathBuf> = None;
     let mut boot_rom_path: Option<PathBuf> = None;
     let mut rom_path: Option<PathBuf> = None;
+    let mut stepping: Option<Stepping> = None;
+    let mut board_rev: Option<u32> = None;
     let mut dram_map = false;
     let mut skip_signed_boot = false;
     let mut skip_unimpl = false;
@@ -358,6 +363,16 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
                 boot_rom_path = Some(PathBuf::from(it.next().context("--boot-rom needs a file")?))
             }
             "--rom" => rom_path = Some(PathBuf::from(it.next().context("--rom needs a file")?)),
+            "--stepping" => {
+                stepping = Some(Stepping::parse(
+                    it.next().context("--stepping needs b0 or c0")?,
+                )?)
+            }
+            "--board-rev" => {
+                board_rev = Some(Board::parse_revision(
+                    it.next().context("--board-rev needs a revision code")?,
+                )?)
+            }
             "--bootconf" => {
                 let kv = it.next().context("--bootconf needs KEY=VALUE")?;
                 if !kv.contains('=') {
@@ -652,10 +667,33 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
         None => None,
     };
 
+    // `--stepping` / `--board-rev`: the silicon and the board around it (#77).
+    // Naming only one gets a board that fits it.
+    let board = {
+        let mut board = Board::for_stepping(stepping.unwrap_or_default());
+        if let Some(rev) = board_rev {
+            board.revision = rev;
+        }
+        if let Some(why) = board.mismatch() {
+            eprintln!(
+                "warning: {} on a board it never shipped on: {why}",
+                board.stepping
+            );
+        }
+        if verbose && board != Board::default() {
+            println!(
+                "board      {}, revision {:06x}",
+                board.stepping, board.revision
+            );
+        }
+        board
+    };
+
     let mut reboots = 0u32;
     #[allow(unused_mut)]
     let (report, mut emu, start) = 'boot: loop {
         let mut machine = Machine::new(ram_mb as usize * 1024 * 1024);
+        machine.set_board(board);
         if eeprom {
             machine.spi0.attach_flash(flash.clone());
         }

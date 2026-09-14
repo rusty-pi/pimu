@@ -223,8 +223,9 @@ impl ConfigOtp {
         // 30: revision code. The one value taken from real hardware, because
         // the firmware decodes it into the board model it reports ("board:
         // boardrev d03115 otp d03115"). It identifies a model, not a board:
-        // Raspberry Pi 4 Model B, 8 GB, rev 1.5.
-        table.insert(30, 0x00D0_3115);
+        // Raspberry Pi 4 Model B, 8 GB, rev 1.5 unless `Machine::set_board`
+        // names another (#77).
+        table.insert(30, crate::soc::Board::default().revision);
         // 35: high 32 bits of the 64-bit serial.
         table.insert(35, 0xFA1E_0023);
         // 64/65: Ethernet MAC `02:00:5E:00:53:01` — locally administered
