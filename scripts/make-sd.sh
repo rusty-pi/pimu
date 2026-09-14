@@ -108,7 +108,29 @@ copy "$fw/dt-blob.bin"                dt-blob.bin
 
 # Kernel + overlays, so the boot has something to hand off to. The reference log
 # loads these right after the HDMI bring-up.
-copy "$fw/kernel8.img"                kernel8.img
+#
+# `KERNEL=halt` puts a kernel8.img there that parks the ARM instead: an arm64
+# Image header, then `msr daifset, #0xf; wfi; b .-4`. That is the card for the
+# boots that end at the handover (#52): the ARM is always modelled, and this
+# gives it nothing to do, so the run ends where the firmware goes quiet.
+if [[ "${KERNEL:-linux}" == halt ]]; then
+  tmpk="$(mktemp)"
+  {
+    printf '\x10\x00\x00\x14\x00\x00\x00\x00'   # b 0x40; code1
+    printf '\x00%.0s' $(seq 8)                   # text_offset 0
+    printf '\x4c\x00\x00\x00\x00\x00\x00\x00'   # image_size
+    printf '\x0a\x00\x00\x00\x00\x00\x00\x00'   # flags: LE, 4K pages, anywhere
+    printf '\x00%.0s' $(seq 24)                  # res2..res4
+    printf 'ARM\x64\x00\x00\x00\x00'            # magic, res5
+    printf '\xdf\x4f\x03\xd5'                   # msr daifset, #0xf
+    printf '\x7f\x20\x03\xd5'                   # wfi
+    printf '\xff\xff\xff\x17'                   # b .-4
+  } >"$tmpk"
+  copy "$tmpk" kernel8.img
+  rm -f "$tmpk"
+else
+  copy "$fw/kernel8.img"              kernel8.img
+fi
 
 tmpcmd="$(mktemp)"
 echo "console=serial0,115200 console=tty1 root=/dev/mmcblk0p2 rootfstype=ext4 fsck.repair=yes rootwait" >"$tmpcmd"

@@ -54,7 +54,9 @@ pub struct Emulator {
     core1_release_armed: bool,
     pub machine: Machine,
     /// Model the ARM: release core 0 when `arm_loader` writes the ARM control
-    /// block, then run it in lock-step with the VPU ([`crate::arm`]).
+    /// block, then run it in lock-step with the VPU ([`crate::arm`]). Always
+    /// on for a boot since #52 – a boot that should end at the handover puts a
+    /// kernel on the medium that parks the ARM; tests can still turn it off.
     pub arm_enabled: bool,
     /// ARM core 0, once released.
     pub arm: Option<crate::arm::ArmSide>,
@@ -220,7 +222,7 @@ impl Emulator {
             start4_entry: None,
             core1_release_armed: false,
             machine,
-            arm_enabled: false,
+            arm_enabled: true,
             arm: None,
             input: ConsoleInput::default(),
             // `RVF_SLOW_LOOP=1`: every step through every check, to hold the
