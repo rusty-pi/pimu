@@ -26,7 +26,7 @@ USAGE:
                              [--max-wall <secs>] [--sd <img>] [--usb <img>] [--usb-mb <n>]
                              [--boot-order <hex>] [--bootconf <KEY=VALUE>]...
                              [--skip-signed-boot] [--netboot <dir> | --net passt:<socket>]
-                             [--eeprom-pubkey <pubkey.bin>] [--boot-rom <rom.bin>]
+                             [--eeprom-pubkey <pubkey.bin>] [--boot-rom <rom.bin>] [--rom <rom.bin>]
                              [--skip-unimpl]
               (no --max-steps = no instruction cap; --max-wall defaults to 140s)
               (an unknown instruction stops the run; --skip-unimpl steps over it
@@ -244,6 +244,7 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
     let mut bootconf: Vec<String> = Vec::new();
     let mut eeprom_pubkey: Option<PathBuf> = None;
     let mut boot_rom_path: Option<PathBuf> = None;
+    let mut rom_path: Option<PathBuf> = None;
     let mut dram_map = false;
     let mut skip_signed_boot = false;
     let mut skip_unimpl = false;
@@ -356,6 +357,7 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
             "--boot-rom" => {
                 boot_rom_path = Some(PathBuf::from(it.next().context("--boot-rom needs a file")?))
             }
+            "--rom" => rom_path = Some(PathBuf::from(it.next().context("--rom needs a file")?)),
             "--bootconf" => {
                 let kv = it.next().context("--bootconf needs KEY=VALUE")?;
                 if !kv.contains('=') {
@@ -642,6 +644,14 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
         None => None,
     };
 
+    // `--rom <file>`: map a maskROM dump at 0x6000_0000 for bootcode that calls
+    // into it (2020-04-16 does, #71); the modelled ROM stage still boots. Also
+    // a local file only.
+    let rom_image = match &rom_path {
+        Some(p) => Some(std::fs::read(p).with_context(|| format!("reading ROM {}", p.display()))?),
+        None => None,
+    };
+
     let mut reboots = 0u32;
     #[allow(unused_mut)]
     let (report, mut emu, start) = 'boot: loop {
@@ -677,6 +687,9 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
             machine.attach_net(Box::new(net));
         }
         machine.config_otp.io = io.clone();
+        if let Some(rom) = &rom_image {
+            machine.map_boot_rom(rom.clone());
+        }
         machine.mmio_trace = trace_mmio;
         // `RVF_TRACE_MMIO=<lo>-<hi>` (hex): trace peripheral accesses from the
         // first instruction, but only inside that address range. Tracing the
