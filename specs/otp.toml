@@ -11,6 +11,22 @@ ref        = "EEPROM bootloader getconfig(key): key -> +0x1C, 0 -> +0x0C / +0x08
 confidence = "high"
 
 [[register]]
+name   = "BOOTMODE"
+offset = 0x00
+access = "r"
+notes  = "OTP_BOOTMODE_REG: the bootmode row (17) as the fuse block presents it at power-on. The boot ROM picks its boot source from it (bit 14, bits 5:4, and a bits[30:28] == ~bits[10:8] check) before it reads anything else; with the old 'always ready' placeholder here it skipped SPI and waited in USB device mode forever (#68). No later stage reads it."
+
+[[register.source]]
+kind       = "standard"
+ref        = "Broadcom OTP register map: OTP_BOOTMODE_REG at 0x7E20F000, OTP_CONFIG_REG +0x04, OTP_CTRL_LO/HI +0x08/+0x0C, OTP_STATUS +0x10, OTP_DATA +0x18, OTP_ADDR +0x1C"
+confidence = "medium"
+
+[[register.source]]
+kind       = "decompile"
+ref        = "C0 boot ROM 0x600009a6 reads it once; 0x6000038a / 0x60000394 take bit 14 and bits 5:4"
+confidence = "medium"
+
+[[register]]
 name   = "CLKMUX"
 offset = 0x04
 access = "rw"
