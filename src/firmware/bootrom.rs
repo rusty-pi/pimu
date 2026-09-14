@@ -63,8 +63,9 @@
 //!
 //! # The ROM's OTP helpers
 //!
-//! 2020-04-16 bootcode calls three ROM routines directly (#71); see
-//! [`ROM_HELPERS`] for the stand-ins this stage places.
+//! Bootcode up to 2020-06-15 calls ROM routines directly (#71, #75), at
+//! addresses that depend on the stepping (#77); see [`RomHelper`] for the
+//! stand-ins this stage places.
 
 use anyhow::{bail, Context, Result};
 use hmac::{Hmac, Mac};
@@ -75,6 +76,7 @@ use crate::firmware::eeprom::{EepromImage, BOOTCODE_ENTRY_OFFSET, BOOTCODE_LOAD_
 use crate::firmware::write_folded;
 use crate::machine::Machine;
 use crate::periph::configotp::BOARD_IDENTITY;
+use crate::soc::Stepping;
 use crate::spec::otp::{
     DATA as OTP_DATA, KEY as OTP_KEY, PARAM_A as OTP_PARAM_A, PARAM_A_GO_MASK as OTP_GO,
     STATUS as OTP_STATUS, STATUS_DONE_MASK as OTP_DONE,
@@ -95,47 +97,97 @@ const OTP_BASE: u32 = 0x7E20_F000;
 /// OTP rows the HMAC key is built from: rows 19..=22, the board-identity block.
 const OTP_KEY_ROWS: std::ops::RangeInclusive<u32> = 19..=22;
 
-/// The C0 ROM's OTP helpers that 2020-era bootcode calls directly: through
-/// its trampoline at `0x80001f68` (`version r2; eor r1, r2; bl r1`) 2020-04-16
-/// opens the OTP block (`0x6000_647a`), reads row 28 into `*r0` (`0x6000_09d0`)
-/// and closes the block again (`0x6000_1d50`, #71). 2020-01-17 and 2020-06-15
-/// call those three too, and a fourth, `0x6000_6278`, which returns the row
-/// named in `r0` in `r0` (#75) — without it they print their board revision
-/// as junk. Later bootcode reads OTP itself. The model has no ROM at
-/// `0x6000_0000` — the address folds onto DRAM — so the stage puts routines of
-/// its own there. They are not the ROM's code: opening and closing only set
+/// The mask ROM's OTP routines that bootcode up to 2020-06-15 calls directly,
+/// through a trampoline that keys the pointers by `version` (`version r2; eor
+/// r1, r2; bl r1`; 2020-04-16's is at `0x80001f68`). Later bootcode reads OTP
+/// itself. The model has no ROM at `0x6000_0000` — the address folds onto
+/// DRAM — so the stage puts routines of its own where the machine's stepping
+/// keeps the ROM's. They are not the ROM's code: opening and closing only set
 /// the block's clock mux, which the model absorbs, and the reads skip the
 /// `STATUS` poll because the model's transaction completes on `GO`.
-const ROM_HELPERS: [(u32, &[u8]); 4] = [
-    (0x6000_647A, &[0x5A, 0x00]), // b lr
-    (0x6000_1D50, &[0x5A, 0x00]), // b lr
-    (
-        0x6000_09D0,
-        &[
-            0x01, 0xE8, 0x00, 0xF0, 0x20, 0x7E, // mov r1, 0x7E20F000
-            0xC2, 0x61, // mov r2, 28
-            0x12, 0x37, // st r2, (r1+0x1C)    KEY
-            0x12, 0x60, // mov r2, 1
-            0x12, 0x32, // st r2, (r1+0x08)    PARAM_A.GO
-            0x12, 0x26, // ld r2, (r1+0x18)    DATA
-            0x02, 0x09, // st r2, (r0)
-            0x5A, 0x00, // b lr
-        ],
-    ),
-    (
-        0x6000_6278,
-        &[
-            0x01, 0xE8, 0x00, 0xF0, 0x20, 0x7E, // mov r1, 0x7E20F000
-            0x10, 0x37, // st r0, (r1+0x1C)    KEY
-            0x12, 0x60, // mov r2, 1
-            0x12, 0x32, // st r2, (r1+0x08)    PARAM_A.GO
-            0x10, 0x26, // ld r0, (r1+0x18)    DATA
-            0x5A, 0x00, // b lr
-        ],
-    ),
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RomHelper {
+    /// Opens the OTP block (#71).
+    OtpOpen,
+    /// Closes it again (#71).
+    OtpClose,
+    /// Reads row 28 into `*r0` (#71).
+    ReadRow28,
+    /// Returns the row named in `r0` in `r0` (#75). Without it 2020-01-17 and
+    /// 2020-06-15 print their board revision as junk.
+    ReadRow,
+}
+
+impl RomHelper {
+    const ALL: [RomHelper; 4] = [
+        RomHelper::OtpOpen,
+        RomHelper::OtpClose,
+        RomHelper::ReadRow28,
+        RomHelper::ReadRow,
+    ];
+
+    /// Where `stepping`'s ROM keeps it (#77). The bootcode picks the address
+    /// table by `version`: C0's outright, and on a B0 by fingerprinting the
+    /// ROM, because a B0 whose halfwords at `0x6000_0798:0x6000_0796` read
+    /// `0x1F1A_3364` takes C0's addresses, and anything else B0's own. The
+    /// table and the fingerprint check are the same in 2019-07-15, 2019-10-16,
+    /// 2020-01-17 and 2020-06-15.
+    const fn addr(self, stepping: Stepping) -> u32 {
+        match (stepping, self) {
+            (Stepping::C0, RomHelper::OtpOpen) => 0x6000_647A,
+            (Stepping::C0, RomHelper::OtpClose) => 0x6000_1D50,
+            (Stepping::C0, RomHelper::ReadRow28) => 0x6000_09D0,
+            (Stepping::C0, RomHelper::ReadRow) => 0x6000_6278,
+            (Stepping::B0, RomHelper::OtpOpen) => 0x6000_2D2A,
+            (Stepping::B0, RomHelper::OtpClose) => 0x6000_193A,
+            (Stepping::B0, RomHelper::ReadRow28) => 0x6000_0796,
+            (Stepping::B0, RomHelper::ReadRow) => 0x6000_2CC0,
+        }
+    }
+
+    /// The stand-in, the same on either stepping.
+    const fn code(self) -> &'static [u8] {
+        match self {
+            RomHelper::OtpOpen | RomHelper::OtpClose => RETURN,
+            RomHelper::ReadRow28 => READ_ROW_28,
+            RomHelper::ReadRow => READ_ROW,
+        }
+    }
+}
+
+const RETURN: &[u8] = &[0x5A, 0x00]; // b lr
+
+const READ_ROW_28: &[u8] = &[
+    0x01, 0xE8, 0x00, 0xF0, 0x20, 0x7E, // mov r1, 0x7E20F000
+    0xC2, 0x61, // mov r2, 28
+    0x12, 0x37, // st r2, (r1+0x1C)    KEY
+    0x12, 0x60, // mov r2, 1
+    0x12, 0x32, // st r2, (r1+0x08)    PARAM_A.GO
+    0x12, 0x26, // ld r2, (r1+0x18)    DATA
+    0x02, 0x09, // st r2, (r0)
+    0x5A, 0x00, // b lr
 ];
 
-// The row read above encodes these offsets.
+const READ_ROW: &[u8] = &[
+    0x01, 0xE8, 0x00, 0xF0, 0x20, 0x7E, // mov r1, 0x7E20F000
+    0x10, 0x37, // st r0, (r1+0x1C)    KEY
+    0x12, 0x60, // mov r2, 1
+    0x12, 0x32, // st r2, (r1+0x08)    PARAM_A.GO
+    0x10, 0x26, // ld r0, (r1+0x18)    DATA
+    0x5A, 0x00, // b lr
+];
+
+// On a B0 the row-28 stand-in sits where the bootcode fingerprints the ROM, so
+// it must not read as the fingerprint, or the bootcode calls C0's addresses.
+const _: () = {
+    let at = RomHelper::ReadRow28.addr(Stepping::B0);
+    let c = READ_ROW_28;
+    let lo = c[0] as u32 | (c[1] as u32) << 8;
+    let hi = c[2] as u32 | (c[3] as u32) << 8;
+    assert!(at == 0x6000_0796 && (hi << 16 | lo) != 0x1F1A_3364);
+};
+
+// The row reads above encode these offsets.
 const _: () = assert!(
     OTP_BASE == 0x7E20_F000
         && OTP_KEY == 0x1C
@@ -349,8 +401,9 @@ impl BootRom {
             .l2
             .hold(BOOTCODE_LOAD_ADDR & 0x3FFF_FFFF, body.len());
         // Where 0x6000_0000 folds to (512 MiB in); a smaller RAM goes without.
-        for (addr, code) in ROM_HELPERS {
-            let _ = write_folded(machine, addr, code);
+        let stepping = machine.board().stepping;
+        for helper in RomHelper::ALL {
+            let _ = write_folded(machine, helper.addr(stepping), helper.code());
         }
         Ok(BootOutcome {
             entry: BOOTCODE_LOAD_ADDR + BOOTCODE_ENTRY_OFFSET,
@@ -446,8 +499,7 @@ mod tests {
         const RET: u32 = 0x2000;
         const BUF: u32 = 0x3000;
         let mut machine = Machine::new(1 << 20);
-        let (_, code) = ROM_HELPERS.iter().find(|(a, _)| *a == 0x6000_09D0).unwrap();
-        write_folded(&mut machine, CODE, code).unwrap();
+        write_folded(&mut machine, CODE, RomHelper::ReadRow28.code()).unwrap();
         machine.store32(BUF, 0xDEAD_BEEF).unwrap();
         let mut cpu = Vpu::new(CODE);
         cpu.regs.set(0, BUF);
@@ -471,8 +523,7 @@ mod tests {
         const CODE: u32 = 0x1000;
         const RET: u32 = 0x2000;
         let mut machine = Machine::new(1 << 20);
-        let (_, code) = ROM_HELPERS.iter().find(|(a, _)| *a == 0x6000_6278).unwrap();
-        write_folded(&mut machine, CODE, code).unwrap();
+        write_folded(&mut machine, CODE, RomHelper::ReadRow.code()).unwrap();
         for row in [17, 28, 30] {
             let mut cpu = Vpu::new(CODE);
             cpu.regs.set(0, row);
@@ -487,6 +538,35 @@ mod tests {
             let want = read_otp_row(&mut machine, row);
             assert_eq!(cpu.regs.get(0), want, "row {row}");
         }
+    }
+
+    /// Each stepping's stand-ins fit side by side where its ROM keeps the
+    /// routines, and the two steppings put them in different places.
+    #[test]
+    fn each_stepping_s_helpers_have_room_of_their_own() {
+        for stepping in [Stepping::B0, Stepping::C0] {
+            let mut spans: Vec<(u32, u32)> = RomHelper::ALL
+                .iter()
+                .map(|h| (h.addr(stepping), h.addr(stepping) + h.code().len() as u32))
+                .collect();
+            spans.sort();
+            for pair in spans.windows(2) {
+                assert!(pair[0].1 <= pair[1].0, "{stepping}: {pair:x?} overlap");
+            }
+        }
+        for h in RomHelper::ALL {
+            assert_ne!(h.addr(Stepping::B0), h.addr(Stepping::C0), "{h:?}");
+        }
+    }
+
+    /// The row reader answers from OTP row 30, which follows the machine's board.
+    #[test]
+    fn the_row_reader_reports_the_board_the_machine_is() {
+        use crate::soc::Board;
+        let mut machine = Machine::new(1 << 20);
+        assert_eq!(read_otp_row(&mut machine, 30), 0x00D0_3115);
+        machine.set_board(Board::for_stepping(Stepping::B0));
+        assert_eq!(read_otp_row(&mut machine, 30), 0x00C0_3112);
     }
 
     /// Wrap a signed bootcode body in a minimal EEPROM image.

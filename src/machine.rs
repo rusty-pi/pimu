@@ -90,6 +90,9 @@ pub struct Machine {
     /// sends AV mute through when it stops its display (#61).
     pub hdmi0: Hdmi,
     pub hdmi1: Hdmi,
+    /// Which board this is and which BCM2711 stepping it carries. Changed only
+    /// through [`Machine::set_board`], which keeps OTP row 30 in step.
+    board: crate::soc::Board,
     /// Always-on config / OTP engine (`0x7E20_F000`) — board identity reads.
     pub config_otp: ConfigOtp,
     /// LPDDR4 controller + PHY (`0x7DC0_0000`, below the peripheral window) —
@@ -251,6 +254,7 @@ impl Machine {
             hdmi_ddc1: HdmiDdc::new("hdmi-ddc1"),
             hdmi0: Hdmi::new("hdmi0"),
             hdmi1: Hdmi::new("hdmi1"),
+            board: crate::soc::Board::default(),
             config_otp: ConfigOtp::new(),
             sdramc: Sdramc::new(),
             sdc: Sdc::new(),
@@ -294,6 +298,20 @@ impl Machine {
             watch_pc: 0,
             phase_tags: Vec::new(),
         }
+    }
+
+    /// The board this machine is, and the stepping on it.
+    pub fn board(&self) -> crate::soc::Board {
+        self.board
+    }
+
+    /// Make this machine `board`: OTP row 30 takes its revision code, and cores
+    /// an [`crate::emulator::Emulator`] builds afterwards its stepping's
+    /// `version`. Call it before anything runs; firmware reads the revision
+    /// once, early.
+    pub fn set_board(&mut self, board: crate::soc::Board) {
+        self.board = board;
+        self.config_otp.set(30, board.revision);
     }
 
     /// Plug GENET's cable into `backend`: the PHY sees a link partner, and

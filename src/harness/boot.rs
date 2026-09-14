@@ -71,6 +71,13 @@ pub struct BootSpec {
     /// that verify a signed `boot.img`; relative to the scenario file.
     #[serde(default)]
     pub eeprom_pubkey: Option<String>,
+    /// BCM2711 stepping, `b0` or `c0` (`boot --stepping`); C0 when left out.
+    #[serde(default)]
+    pub stepping: Option<String>,
+    /// OTP revision code, hex (`boot --board-rev`); a board the stepping
+    /// shipped on when left out.
+    #[serde(default)]
+    pub board_rev: Option<String>,
     /// Wall-clock budget for the run, in seconds.
     pub wall_secs: u64,
     /// Largest acceptable skipped-instruction count in the run report. `boot`
@@ -324,6 +331,12 @@ impl BootScenario {
         if let Some(k) = &b.eeprom_pubkey {
             args.push("--eeprom-pubkey".into());
             args.push(self.base_dir.join(k).display().to_string());
+        }
+        for (flag, value) in [("--stepping", &b.stepping), ("--board-rev", &b.board_rev)] {
+            if let Some(v) = value {
+                args.push(flag.into());
+                args.push(v.clone());
+            }
         }
         args.extend([
             "--max-wall".into(),

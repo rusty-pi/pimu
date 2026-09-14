@@ -44,6 +44,18 @@ binary plus a text config block (`BOOT_UART`, `BOOT_ORDER`, `BOOT_WATCHDOG_*`,
 that line was the first M2 regression target; the model now runs well past it
 (see `board: boardrev d03115` in a `boot --eeprom` transcript).
 
+## B0 and C0
+
+The model is a C0 BCM2711 on a Pi 4B rev 1.5 (`d03115`) unless `boot
+--stepping b0` makes it the first production stepping, on a rev 1.2 board
+(`c03112`); `--board-rev <hex>` names another board. The stepping sets the VPU
+`version` value (`0x0400_0161` on B0, `0x0400_0162` on C0) and where the ROM
+stage puts its stand-ins for the ROM's OTP routines, which bootcode up to
+2020-06-15 calls at per-stepping addresses (`src/soc/`,
+`src/firmware/bootrom.rs`, #77). A B0 part was never run against the model;
+the B0 facts come from the bootcode's own tables and the public B0 UART logs in
+the rpi-eeprom issues.
+
 ## Where `rpi-machine-id` comes from
 
 The string a `rpi-mkosi` image turns into its root-LUKS passphrase

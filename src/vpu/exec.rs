@@ -116,13 +116,14 @@ pub struct UnimplHit {
     pub count: u64,
 }
 
-/// Default chip-version value returned by `version rd`.
+/// Default chip-version value returned by `version rd`: a C0's. An
+/// [`crate::Emulator`] gives its cores its machine's stepping's instead
+/// ([`crate::soc::Stepping::vpu_version`]).
 ///
 /// The `start4.elf` entry trampoline (`.crypto`) compares `version` (after
 /// masking bits 3 and 16) against one of `{0x0400_0162, 0x0400_0161,
-/// 0x0400_0160, 0x0400_0140, 0x0400_0104}` and `bkpt`s otherwise. `0x0400_0162`
-/// is the newest accepted revision — the BCM2711 VPU value.
-pub const DEFAULT_VERSION: u32 = 0x0400_0162;
+/// 0x0400_0160, 0x0400_0140, 0x0400_0104}` and `bkpt`s otherwise.
+pub const DEFAULT_VERSION: u32 = crate::soc::Stepping::C0.vpu_version();
 
 #[derive(Default)]
 pub struct Vpu {

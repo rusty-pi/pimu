@@ -215,8 +215,10 @@ pub struct RunReport {
 
 impl Emulator {
     pub fn new(machine: Machine, entry: u32) -> Emulator {
+        let mut cpu = Vpu::new(entry);
+        cpu.version_value = machine.board().stepping.vpu_version();
         Emulator {
-            cpu: Vpu::new(entry),
+            cpu,
             cpu1: None,
             core1_entry: None,
             start4_entry: None,
@@ -253,9 +255,13 @@ impl Emulator {
             != 0
     }
 
+    /// Core 1, at `entry`: the same silicon as core 0, so the same `version`
+    /// apart from the core-id bit, and the same unimplemented-op and trace
+    /// settings.
     fn spawn_core1(&mut self, entry: u32) {
         let mut c1 = Vpu::new(entry);
         c1.core_id = 1;
+        c1.version_value = self.cpu.version_value;
         c1.on_unimpl = self.cpu.on_unimpl;
         c1.trace = self.cpu.trace;
         c1.trace_cf_only = self.cpu.trace_cf_only;
@@ -268,14 +274,7 @@ impl Emulator {
     /// boot ROM releases both VPU cores at `start4.elf`'s entry at once; they
     /// diverge on `version` bit 16 inside the trampoline.
     pub fn start_smp(&mut self, entry: u32) {
-        let mut c1 = Vpu::new(entry);
-        c1.core_id = 1;
-        c1.on_unimpl = self.cpu.on_unimpl;
-        c1.trace = self.cpu.trace;
-        c1.trace_cf_only = self.cpu.trace_cf_only;
-        c1.trace_cap = self.cpu.trace_cap;
-        c1.trace_from = self.cpu.trace_from;
-        self.cpu1 = Some(c1);
+        self.spawn_core1(entry);
     }
 
     pub fn set_console(&mut self, c: Console) {
