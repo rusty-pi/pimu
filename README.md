@@ -79,8 +79,8 @@ Working:
 - **CI** — `.github/workflows/boot-log.yml` runs fmt, clippy and the tests,
   then all five boots in parallel on every push / PR to `main`: the firmware
   boot from SD, USB, TFTP and HTTP, and the Linux boot to a shell.
-  `periph-docs.yml` fails when `docs/periph/` differs from what the specs
-  generate.
+  The tests include `tests/specs.rs`, which fails when `docs/periph/` differs
+  from what the specs generate.
 
 Not done: the VPU vector/float unit, HTTPS network boot, Linux reaching
 `start4`'s mailbox task through `/dev/vcio` (#40 milestone 4 — the firmware
