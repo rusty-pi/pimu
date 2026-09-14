@@ -168,7 +168,8 @@ pub struct Machine {
     /// act on: a peripheral register was written, an interrupt was queued, a
     /// compare fired, or a reset came due. The run loop clears it; while it
     /// stays clear, those checks have nothing to do (`Emulator::fast_steps`).
-    pub wake: bool,
+    /// `Vpu::recheck` is the same flag for the core's own state.
+    pub recheck: bool,
     /// The ARM runs alongside: a VPU `sleep` leaves its jump to the next
     /// compare in [`Self::sleep_to`] for `Emulator::step_arm`, which moves
     /// the counter only as far as the first ARM write the VPU would wake for
@@ -294,7 +295,7 @@ impl Machine {
                 .unwrap_or_default(),
             dbg_dma: crate::diag::ON && std::env::var_os("RVF_DBG_DMA").is_some(),
             pending_irqs: std::collections::VecDeque::new(),
-            wake: false,
+            recheck: false,
             defer_sleep: false,
             sleep_to: None,
             watch_pc: 0,
@@ -330,7 +331,7 @@ impl Machine {
     /// Queue an interrupt source for delivery to core 0 on the next step.
     pub fn push_pending_irq(&mut self, src: u32) {
         self.pending_irqs.push_back(src);
-        self.wake = true;
+        self.recheck = true;
     }
 
     /// Is an interrupt source queued for core 0?
@@ -407,11 +408,11 @@ impl Machine {
     #[inline(never)]
     fn tick_us(&mut self) {
         if self.systimer.take_fired() {
-            self.wake = true;
+            self.recheck = true;
         }
         self.pm.advance(self.systimer.now_us());
         if self.pm.reset_pending() {
-            self.wake = true;
+            self.recheck = true;
         }
         // A backend with its own clock (a host network) can deliver a frame
         // at any time, not only in reply to a register write.
@@ -1006,7 +1007,7 @@ impl Machine {
     /// [`Bus::store`] off the RAM path; see [`Self::load_device`].
     #[inline(never)]
     fn store_device(&mut self, addr: u32, width: Width, value: u32) -> BusResult<()> {
-        self.wake = true;
+        self.recheck = true;
         self.mmio_writes = self.mmio_writes.wrapping_add(1);
         self.dma_win_log("wr", addr, value);
         self.advance_hdmi_ddc(addr);

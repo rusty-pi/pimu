@@ -463,7 +463,7 @@ impl Emulator {
     fn slow_step(&mut self, st: &mut RunState, limits: &RunLimits) -> Option<RunEnd> {
         // Anything the checks act on from here on is seen by this step's
         // checks or by the next slow step's (see `fast_steps`).
-        self.machine.wake = false;
+        self.machine.recheck = false;
         if limits.max_steps.is_some_and(|max| {
             self.cpu.retired + self.cpu1.as_ref().map_or(0, |c| c.retired) >= max
         }) {
@@ -999,9 +999,9 @@ impl Emulator {
     ///
     /// 1. By a flag raised at the event it depends on. A peripheral write, a
     ///    queued interrupt, a compare that fires or a reset coming due set
-    ///    [`Machine::wake`]; core 0 entering or leaving an exception,
+    ///    [`Machine::recheck`]; core 0 entering or leaving an exception,
     ///    switching interrupts, sleeping, stopping or missing the decode cache
-    ///    sets [`Vpu::event`]; a read of the system timer's counter shows in
+    ///    sets [`Vpu::recheck`]; a read of the system timer's counter shows in
     ///    its `clo_reads`. The step that raises one is finished by
     ///    [`Self::post_step`] from where it got to, and the step after it is
     ///    a slow one, so a check that runs before core 0's instruction (the
@@ -1023,7 +1023,7 @@ impl Emulator {
     /// `progress` moved — both of their per-step updates take the "reset"
     /// branch, which is all this does.
     fn fast_steps(&mut self, st: &mut RunState, limits: &RunLimits) -> Option<RunEnd> {
-        if self.machine.wake || self.cpu.is_stopped() {
+        if self.machine.recheck || self.cpu.is_stopped() {
             return None;
         }
         if self.cpu.exc_vbase != 0
@@ -1051,7 +1051,7 @@ impl Emulator {
             .is_some_and(|c| !c.is_stopped() && !c.halted);
         // Only a register write releases the ARM, and that ends the run.
         let arm_on = self.arm.is_some();
-        self.cpu.event = false;
+        self.cpu.recheck = false;
         let mut n = 0u64;
         let end = 'run: {
             while n < budget {
@@ -1062,12 +1062,12 @@ impl Emulator {
                 let step = self.cpu.step(&mut self.machine);
                 n += 1;
                 self.machine.tick(1);
-                if self.machine.wake | self.cpu.event {
+                if self.machine.recheck | self.cpu.recheck {
                     break 'run self.post_step(st, limits, pc, step, Resume::Core0);
                 }
                 if core1_runs {
                     self.step_core1(st);
-                    if self.machine.wake {
+                    if self.machine.recheck {
                         break 'run self.post_step(st, limits, pc, step, Resume::Core1);
                     }
                     core1_runs = self
@@ -1085,7 +1085,7 @@ impl Emulator {
                     if let Some(end) = self.step_arm() {
                         break 'run Some(end);
                     }
-                    if self.machine.wake {
+                    if self.machine.recheck {
                         break 'run self.post_step(st, limits, pc, step, Resume::Arm);
                     }
                 }

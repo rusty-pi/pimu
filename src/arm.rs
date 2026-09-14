@@ -1596,7 +1596,7 @@ mod tests {
         let woke = arm.run_until_store(&mut m, until);
         // 3000-odd cycles of countdown at 1500 per microsecond.
         assert!(woke <= 3, "woke at {woke} us");
-        assert!(m.wake, "the request reached the mailbox");
+        assert!(m.recheck, "the request reached the mailbox");
         assert_eq!(arm.cores[0].cpu.pc, 0x18, "stopped right after the store");
         // Nothing more to write: this time the sleep runs to its compare.
         assert_eq!(arm.run_until_store(&mut m, until), until);
