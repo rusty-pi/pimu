@@ -1,0 +1,3 @@
+[build]
+# Keeps local builds off a fifth of the CPUs; a no-op under CI.
+rustc-wrapper = "scripts/rustc-wrapper.sh"
