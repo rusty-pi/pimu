@@ -160,6 +160,31 @@ fn min_el(op0: u32, op1: u32) -> Option<u32> {
     }
 }
 
+/// The registers only this core's own next instructions depend on: flags,
+/// interrupt masks, FP control, stack and thread pointers, and the banked
+/// exception registers. Writing one changes state beyond the general
+/// registers (`Cpu::effects`), but nothing the ARM run loop or another core
+/// has to hear about (`Cpu::shared_effects`).
+pub fn is_local(k: u32) -> bool {
+    let (op0, op1, crn, crm, op2) = (k >> 14, (k >> 11) & 7, (k >> 7) & 15, (k >> 3) & 15, k & 7);
+    op0 == 3
+        && matches!(
+            (op1, crn, crm, op2),
+            (3, 4, 2, 0 | 1)                 // NZCV, DAIF
+                | (3, 4, 4, 0 | 1)           // FPCR, FPSR
+                | (3, 13, 0, 2 | 3)          // TPIDR_EL0, TPIDRRO_EL0
+                | (0, 4, 2, 0)               // SPSel
+                | (0 | 4 | 6, 4, 1, 0)       // SP_EL0/1/2
+                | (0 | 4 | 6, 4, 0, 0 | 1)   // SPSR_ELx, ELR_ELx
+                | (0 | 4 | 6, 5, 2, 0)       // ESR_ELx
+                | (0 | 4 | 6, 6, 0, 0)       // FAR_ELx
+                | (0, 13, 0, 1 | 4)          // CONTEXTIDR_EL1, TPIDR_EL1
+                | (4 | 6, 13, 0, 2)          // TPIDR_EL2/3
+                | (2, 0, 0, 0)               // CSSELR_EL1
+                | (0, 7, 4, 0) // PAR_EL1
+        )
+}
+
 /// Registers kept as plain storage (module docs, kind 3).
 fn is_plain(k: u32) -> bool {
     let (op0, op1, crn, crm, op2) = (k >> 14, (k >> 11) & 7, (k >> 7) & 15, (k >> 3) & 15, k & 7);

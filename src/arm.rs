@@ -50,9 +50,13 @@
 //! parked — the cycles up to the next thing due (a timer event, the end of
 //! the slice) would visit only it, so [`ArmSide::burst`] steps it through
 //! them without the cycle loop's checks. A step that touches a device,
-//! stores where another core holds an exclusive mark, changes state beyond
-//! the registers and memory ([`Cpu::effects`]) or does not retire ends the
-//! burst, and is finished the ordinary way, so a run is the same either way.
+//! stores where another core holds an exclusive mark, changes state another
+//! core or the run loop depends on ([`Cpu::shared_effects`]) or does not
+//! retire ends the burst, and is finished the ordinary way, so a run is the
+//! same either way. Cache maintenance and the NOP-like hints change nothing
+//! in the model, and a core's own interrupt masks and thread pointers are
+//! its own business, so a kernel's `dc civac`, `paciasp` and `msr daif` no
+//! longer end one.
 //! UEFI runs on one core, most of its time hashing the UKI (#53).
 //! `RVF_NO_BURST=1` turns this off, for comparison.
 //!
@@ -634,7 +638,7 @@ impl ArmSide {
             *p.entry((id, core.cpu.el, pc & !0xFF)).or_default() += 1;
         }
         let watching = core.detect.watching();
-        let effects = core.cpu.effects;
+        let effects = core.cpu.shared_effects;
         let mut bus = ArmBus {
             m: &mut *m,
             timer: &mut core.timer,
@@ -662,7 +666,7 @@ impl ArmSide {
         let plain = matches!(done.step, Step::Retired)
             && !done.io
             && !watching
-            && core.cpu.effects == effects
+            && core.cpu.shared_effects == effects
             && core.entered.is_some();
         if plain
             && (done.written.is_none()
@@ -718,10 +722,13 @@ impl ArmSide {
             entered,
             ..
         } = core;
-        // An instruction that changes state beyond the registers and memory
-        // (`Cpu::effects`) may change what the next step is: an unmasked
-        // line, the security state, a TLB flush the others need.
-        let effects = cpu.effects;
+        // An instruction that changes state other cores or the run loop
+        // depend on (`Cpu::shared_effects`) may change what the next step is:
+        // the security state, a TLB flush the others need. A line this
+        // core's own `msr daif` unmasks needs no stop: the lines only move
+        // when a device is touched, and `step_system` takes one the step
+        // after the unmask, which ends the burst.
+        let effects = cpu.shared_effects;
         let mut bus = ArmBus {
             m: &mut *m,
             timer,
@@ -742,7 +749,7 @@ impl ArmSide {
             let wrote = bus.written.is_some();
             if !matches!(step, Step::Retired)
                 || bus.io
-                || cpu.effects != effects
+                || cpu.shared_effects != effects
                 || (wrote && marked)
             {
                 break Some(Stepped {
