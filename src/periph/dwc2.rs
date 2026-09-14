@@ -52,22 +52,35 @@
 //! ## Not modelled
 //!
 //! Transfers: nothing is attached to the port, so `HPRT0` reports no
-//! connection and a channel only ever halts. The latched `GINTSTS` interrupt
-//! bits never set. Everything else is plain storage, and a core soft reset
-//! does not return it to its reset values.
+//! connection and a channel only ever halts. Everything else is plain
+//! storage, and a core soft reset does not return it to its reset values.
+//!
+//! ## Device mode
+//!
+//! The boot ROM forces device mode for rpiboot (`GUSBCFG` `0x40402700`) and
+//! then polls `GINTSTS` for a host's bus reset. With no host the bus stays
+//! idle, and after 3 ms a connected device core reports a suspend
+//! (`ERLYSUSP` and `USBSUSP`, `DSTS.SUSPSTS`); the ROM's poll takes `USBSUSP`
+//! as "nobody there" and moves on (#68). The model latches the pair as the
+//! core connects – forced into device mode with `DCTL.SFTDISCON` clear, or
+//! `SFTDISCON` cleared in device mode – without the 3 ms. Those are the only
+//! latched `GINTSTS` bits that ever set; writing 1 clears them. The global NAK
+//! set / clear bits in `DCTL` take effect at once, since nothing is in flight.
 
 use std::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
 use crate::spec::dwc2::{
-    GHWCFG1, GHWCFG1_RESET, GHWCFG2, GHWCFG2_RESET, GHWCFG3, GHWCFG3_RESET, GHWCFG4, GHWCFG4_RESET,
-    GINTSTS, GINTSTS_CURMOD_MASK, GINTSTS_NPTXFEMP_MASK, GINTSTS_PTXFEMP_MASK, GRSTCTL,
-    GRSTCTL_AHBIDLE_MASK, GRSTCTL_TXFNUM_MASK, GSNPSID, GSNPSID_RESET, GUSBCFG,
-    GUSBCFG_FORCEDEVMODE_MASK, HCCHAR, HCCHAR_CHDIS_MASK, HCCHAR_CHENA_MASK, HCCHAR_COUNT,
-    HCCHAR_STRIDE, HCINT, HCINT_CHHLTD_MASK, HPRT0, HPRT0_PRTCONNDET_MASK, HPRT0_PRTCONNSTS_MASK,
-    HPRT0_PRTENA_MASK, HPRT0_PRTENCHNG_MASK, HPRT0_PRTLNSTS_MASK, HPRT0_PRTOVRCURRACT_MASK,
-    HPRT0_PRTOVRCURRCHNG_MASK, HPRT0_PRTSPD_MASK,
+    DCTL, DCTL_CGNPINNAK_MASK, DCTL_CGOUTNAK_MASK, DCTL_GNPINNAKSTS_MASK, DCTL_GOUTNAKSTS_MASK,
+    DCTL_SFTDISCON_MASK, DCTL_SGNPINNAK_MASK, DCTL_SGOUTNAK_MASK, DSTS, DSTS_SUSPSTS_MASK, GHWCFG1,
+    GHWCFG1_RESET, GHWCFG2, GHWCFG2_RESET, GHWCFG3, GHWCFG3_RESET, GHWCFG4, GHWCFG4_RESET, GINTSTS,
+    GINTSTS_CURMOD_MASK, GINTSTS_ERLYSUSP_MASK, GINTSTS_NPTXFEMP_MASK, GINTSTS_PTXFEMP_MASK,
+    GINTSTS_USBSUSP_MASK, GRSTCTL, GRSTCTL_AHBIDLE_MASK, GRSTCTL_TXFNUM_MASK, GSNPSID,
+    GSNPSID_RESET, GUSBCFG, GUSBCFG_FORCEDEVMODE_MASK, HCCHAR, HCCHAR_CHDIS_MASK,
+    HCCHAR_CHENA_MASK, HCCHAR_COUNT, HCCHAR_STRIDE, HCINT, HCINT_CHHLTD_MASK, HPRT0,
+    HPRT0_PRTCONNDET_MASK, HPRT0_PRTCONNSTS_MASK, HPRT0_PRTENA_MASK, HPRT0_PRTENCHNG_MASK,
+    HPRT0_PRTLNSTS_MASK, HPRT0_PRTOVRCURRACT_MASK, HPRT0_PRTOVRCURRCHNG_MASK, HPRT0_PRTSPD_MASK,
 };
 use crate::spec::Coverage;
 
@@ -76,7 +89,8 @@ use crate::spec::Coverage;
 pub const COVERAGE: Coverage = Coverage {
     block: "dwc2",
     decoded: &[
-        GRSTCTL, GINTSTS, GSNPSID, GHWCFG1, GHWCFG2, GHWCFG3, GHWCFG4, HPRT0, HCCHAR, HCINT,
+        GRSTCTL, GINTSTS, GSNPSID, GHWCFG1, GHWCFG2, GHWCFG3, GHWCFG4, HPRT0, HCCHAR, HCINT, DCTL,
+        DSTS,
     ],
 };
 
@@ -93,6 +107,15 @@ const HPRT0_STATUS: u32 = HPRT0_PRTCONNSTS_MASK
 
 const HALT: u32 = HCCHAR_CHENA_MASK | HCCHAR_CHDIS_MASK;
 
+/// What a connected device core with no host reports ([`Dwc2::connected`]).
+const SUSPEND: u32 = GINTSTS_ERLYSUSP_MASK | GINTSTS_USBSUSP_MASK;
+
+/// `DCTL`'s global NAK status bits, and the write-only bits that set and
+/// clear them.
+const NAK_STATUS: u32 = DCTL_GNPINNAKSTS_MASK | DCTL_GOUTNAKSTS_MASK;
+const NAK_SET_CLEAR: u32 =
+    DCTL_SGNPINNAK_MASK | DCTL_CGNPINNAK_MASK | DCTL_SGOUTNAK_MASK | DCTL_CGOUTNAK_MASK;
+
 #[derive(Default)]
 pub struct Dwc2 {
     storage: BTreeMap<u32, u32>,
@@ -101,6 +124,8 @@ pub struct Dwc2 {
     /// once rather than once per iteration.
     dbg: bool,
     last_read: BTreeMap<u32, u32>,
+    /// The latched `GINTSTS` bits: only [`SUSPEND`] ever sets.
+    latched: u32,
 }
 
 impl Dwc2 {
@@ -113,6 +138,16 @@ impl Dwc2 {
 
     fn stored(&self, off: u32) -> u32 {
         self.storage.get(&off).copied().unwrap_or(0)
+    }
+
+    fn device_mode(&self) -> bool {
+        self.stored(GUSBCFG) & GUSBCFG_FORCEDEVMODE_MASK != 0
+    }
+
+    /// A device-mode core with its pull-up on. Nothing is ever attached, so
+    /// the bus it is on is idle.
+    fn connected(&self) -> bool {
+        self.device_mode() && self.stored(DCTL) & DCTL_SFTDISCON_MASK == 0
     }
 
     /// The channel `n` for which `off` is `base + n * HCCHAR_STRIDE`, if any.
@@ -134,12 +169,19 @@ impl MmioDevice for Dwc2 {
         let value = match off {
             GRSTCTL => GRSTCTL_AHBIDLE_MASK | (stored & GRSTCTL_TXFNUM_MASK),
             GINTSTS => {
-                let host = if self.stored(GUSBCFG) & GUSBCFG_FORCEDEVMODE_MASK == 0 {
+                let host = if self.device_mode() {
+                    0
+                } else {
                     GINTSTS_CURMOD_MASK
+                };
+                host | GINTSTS_NPTXFEMP_MASK | GINTSTS_PTXFEMP_MASK | self.latched
+            }
+            DSTS => {
+                if self.connected() {
+                    DSTS_SUSPSTS_MASK
                 } else {
                     0
-                };
-                host | GINTSTS_NPTXFEMP_MASK | GINTSTS_PTXFEMP_MASK
+                }
             }
             GSNPSID => GSNPSID_RESET,
             GHWCFG1 => GHWCFG1_RESET,
@@ -172,9 +214,11 @@ impl MmioDevice for Dwc2 {
             self.storage.insert(off, left);
             return Ok(());
         }
+        let was_connected = self.connected();
+        let dctl_before = self.stored(DCTL);
         match off {
-            // The latched interrupt bits never set, and the levels are derived.
-            GINTSTS => {}
+            // Write 1 to clear; the levels are derived.
+            GINTSTS => self.latched &= !value,
             HPRT0 => {
                 self.storage.insert(off, value & !HPRT0_STATUS);
             }
@@ -182,6 +226,85 @@ impl MmioDevice for Dwc2 {
                 self.storage.insert(off, value);
             }
         }
+        if self.connected() && !was_connected {
+            self.latched |= SUSPEND;
+        }
+        if off == DCTL {
+            // The set / clear bits are write-only; they act on the status bits.
+            let mut v = value & !(NAK_SET_CLEAR | NAK_STATUS);
+            v |= dctl_before & NAK_STATUS;
+            for (set, clear, status) in [
+                (
+                    DCTL_SGNPINNAK_MASK,
+                    DCTL_CGNPINNAK_MASK,
+                    DCTL_GNPINNAKSTS_MASK,
+                ),
+                (DCTL_SGOUTNAK_MASK, DCTL_CGOUTNAK_MASK, DCTL_GOUTNAKSTS_MASK),
+            ] {
+                if value & set != 0 {
+                    v |= status;
+                }
+                if value & clear != 0 {
+                    v &= !status;
+                }
+            }
+            self.storage.insert(DCTL, v);
+        }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The boot ROM's rpiboot attempt (#68): device mode, no host, so the
+    /// core reports a suspend, which the ROM clears by writing it back.
+    #[test]
+    fn a_device_with_no_host_reports_a_suspend() {
+        let mut d = Dwc2::new();
+        assert_eq!(d.read(GINTSTS, Width::Word).unwrap() & SUSPEND, 0);
+        d.write(GUSBCFG, Width::Word, 0x4040_2700).unwrap();
+        let sts = d.read(GINTSTS, Width::Word).unwrap();
+        assert_eq!(sts & (SUSPEND | GINTSTS_CURMOD_MASK), SUSPEND);
+        assert_eq!(d.read(DSTS, Width::Word).unwrap(), DSTS_SUSPSTS_MASK);
+        d.write(GINTSTS, Width::Word, sts).unwrap();
+        assert_eq!(d.read(GINTSTS, Width::Word).unwrap() & SUSPEND, 0);
+    }
+
+    /// start4's host mode, and a device core that is soft-disconnected, see
+    /// no suspend.
+    #[test]
+    fn a_host_or_a_disconnected_device_reports_none() {
+        let mut d = Dwc2::new();
+        d.write(GUSBCFG, Width::Word, 0x2040_2700).unwrap();
+        assert_eq!(d.read(GINTSTS, Width::Word).unwrap() & SUSPEND, 0);
+
+        let mut d = Dwc2::new();
+        d.write(DCTL, Width::Word, DCTL_SFTDISCON_MASK).unwrap();
+        d.write(GUSBCFG, Width::Word, 0x4040_2700).unwrap();
+        assert_eq!(d.read(GINTSTS, Width::Word).unwrap() & SUSPEND, 0);
+        assert_eq!(d.read(DSTS, Width::Word).unwrap(), 0);
+        // Connecting later reports it then.
+        d.write(DCTL, Width::Word, 0).unwrap();
+        assert_eq!(d.read(GINTSTS, Width::Word).unwrap() & SUSPEND, SUSPEND);
+    }
+
+    /// What the boot ROM does on that suspend (0x60001bf6, #68): set the
+    /// global OUT NAK, wait for its status, clear it again.
+    #[test]
+    fn the_global_nak_bits_take_effect_at_once() {
+        let mut d = Dwc2::new();
+        let dctl = d.read(DCTL, Width::Word).unwrap();
+        d.write(DCTL, Width::Word, dctl | DCTL_SGOUTNAK_MASK)
+            .unwrap();
+        let dctl = d.read(DCTL, Width::Word).unwrap();
+        assert_eq!(dctl, DCTL_GOUTNAKSTS_MASK);
+        d.write(DCTL, Width::Word, dctl | DCTL_SGNPINNAK_MASK)
+            .unwrap();
+        assert_eq!(d.read(DCTL, Width::Word).unwrap(), NAK_STATUS);
+        d.write(DCTL, Width::Word, DCTL_CGOUTNAK_MASK | DCTL_CGNPINNAK_MASK)
+            .unwrap();
+        assert_eq!(d.read(DCTL, Width::Word).unwrap(), 0);
     }
 }
