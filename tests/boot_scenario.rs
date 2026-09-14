@@ -310,10 +310,59 @@ fn every_boot_scenario_loads_and_plans_its_media() {
                 assert!(joined.contains(&format!("{flag} {v}")), "{joined}");
             }
         }
+        // Every medium the run attaches is looked for before it starts.
+        let media = [
+            &scn.boot.sd,
+            &scn.boot.usb,
+            &scn.boot.netboot,
+            &scn.boot.eeprom_pubkey,
+        ];
+        assert_eq!(
+            scn.inputs().len(),
+            1 + media.iter().filter(|m| m.is_some()).count(),
+            "{}",
+            path.display()
+        );
         seen.push(scn.name);
     }
     seen.sort();
     for name in ["b0-boot", "firmware-boot", "tftp-boot", "usb-boot"] {
         assert!(seen.iter().any(|s| s == name), "{name} missing: {seen:?}");
     }
+}
+
+/// A fresh checkout or worktree has none of the boot media. `boot-check
+/// --plan` refuses then, naming each missing file and the command that makes
+/// it; before, `scripts/boot-check.sh` booted without a card and then diffed
+/// whatever console an earlier run had left behind.
+#[test]
+fn missing_boot_media_are_named_with_the_command_that_makes_them() {
+    let root = std::env::temp_dir().join(format!("rvf-boot-inputs-{}", std::process::id()));
+    let mut scn = scenario();
+    scn.base_dir = root.join("testdata/boot");
+    std::fs::create_dir_all(&scn.base_dir).unwrap();
+    std::fs::create_dir_all(root.join("firmware")).unwrap();
+
+    let missing = scn.missing_inputs();
+    let names: Vec<String> = missing
+        .iter()
+        .map(|i| i.path.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, ["pieeprom.bin", "sd-halt.img"]);
+    assert_eq!(missing[0].make, "scripts/fetch-firmware.sh");
+    let make_sd = &missing[1].make;
+    assert!(
+        make_sd.starts_with("KERNEL=halt scripts/make-sd.sh /"),
+        "{make_sd}"
+    );
+    assert!(
+        make_sd.ends_with("/firmware/sd-halt.img") && !make_sd.contains(".."),
+        "{make_sd}"
+    );
+
+    for i in &missing {
+        std::fs::write(&i.path, b"").unwrap();
+    }
+    assert!(scn.missing_inputs().is_empty());
+    std::fs::remove_dir_all(&root).unwrap();
 }

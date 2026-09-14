@@ -19,7 +19,7 @@
 //! UART (the device tree handed to the ARM, the SDRAM refresh history, the
 //! retired/skipped counters).
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -268,6 +268,34 @@ impl Milestone {
     }
 }
 
+/// A file or directory a boot scenario's run reads, and how to make it.
+#[derive(Debug, Clone)]
+pub struct BootInput {
+    pub path: PathBuf,
+    /// The command that fetches or builds it, run from the repository root.
+    pub make: String,
+}
+
+/// `path` for a message: `..` folded away without touching the filesystem (it
+/// may not exist yet), and relative to the working directory when under it.
+pub fn tidy_path(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in path.components() {
+        match c {
+            Component::ParentDir
+                if matches!(out.components().next_back(), Some(Component::Normal(_))) =>
+            {
+                out.pop();
+            }
+            c => out.push(c),
+        }
+    }
+    match std::env::current_dir() {
+        Ok(cwd) => out.strip_prefix(&cwd).map(Path::to_path_buf).unwrap_or(out),
+        Err(_) => out,
+    }
+}
+
 impl BootScenario {
     pub fn load(path: &Path) -> Result<BootScenario> {
         let text = std::fs::read_to_string(path)
@@ -288,6 +316,47 @@ impl BootScenario {
 
     pub fn golden_path(&self) -> PathBuf {
         self.base_dir.join(&self.golden.path)
+    }
+
+    /// Every file the run reads, each with the command that makes it. None of
+    /// them is committed and a fresh checkout or worktree has none, so
+    /// `boot-check --plan` names the missing ones instead of planning a boot
+    /// that cannot open its card.
+    pub fn inputs(&self) -> Vec<BootInput> {
+        let b = &self.boot;
+        let mut v = vec![BootInput {
+            path: self.eeprom_path(),
+            make: "scripts/fetch-firmware.sh".into(),
+        }];
+        for img in [&b.sd, &b.usb].into_iter().flatten() {
+            let path = self.base_dir.join(img);
+            // `-halt` is how the repository names the card whose kernel parks
+            // the ARM (#52).
+            let kernel = if img.contains("-halt") {
+                "KERNEL=halt "
+            } else {
+                ""
+            };
+            let make = format!("{kernel}scripts/make-sd.sh {}", tidy_path(&path).display());
+            v.push(BootInput { path, make });
+        }
+        for p in [&b.netboot, &b.eeprom_pubkey].into_iter().flatten() {
+            v.push(BootInput {
+                path: self.base_dir.join(p),
+                make: "KERNEL=halt scripts/make-sd.sh firmware/sd-halt.img \
+                       && scripts/make-netboot.sh firmware/sd-halt.img"
+                    .into(),
+            });
+        }
+        v
+    }
+
+    /// The [`Self::inputs`] that are not there.
+    pub fn missing_inputs(&self) -> Vec<BootInput> {
+        self.inputs()
+            .into_iter()
+            .filter(|i| !i.path.exists())
+            .collect()
     }
 
     /// The wall budget, with the `RVF_BOOT_WALL` override applied.

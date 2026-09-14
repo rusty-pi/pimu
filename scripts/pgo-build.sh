@@ -47,6 +47,8 @@ train() {
   shift
   local plan args=() i
   mapfile -t plan < <("$instr" boot-check "$scenario" --plan --console "$work/console")
+  # `--plan` names any boot medium that is not built yet.
+  [ "${#plan[@]}" -ge 2 ] || exit 1
   for ((i = 1; i < ${#plan[@]}; i++)); do
     if [ "${plan[i]}" = --send-after ]; then
       i=$((i + 2))

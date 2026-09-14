@@ -56,7 +56,8 @@ COMMANDS:
               golden console transcript plus every named milestone. `--plan`
               prints the `boot` invocation the scenario describes, which is
               how `scripts/boot-check.sh` runs the boot without repeating the
-              workload description.
+              workload description. It fails instead when a file the run reads
+              is missing, naming the command that makes each.
     disasm    Disassemble a flat binary / ELF with the (partial) VPU decoder.
     spec-docs Check docs/periph/ against the register specs in specs/*.toml;
               --update regenerates it.
@@ -1518,6 +1519,26 @@ fn cmd_boot_check(args: &[String]) -> Result<ExitCode> {
     let scn = harness::BootScenario::load(&path)?;
 
     if plan {
+        // Name what is missing, and how to make it, rather than plan a boot
+        // that cannot open its card.
+        let missing = scn.missing_inputs();
+        if !missing.is_empty() {
+            eprintln!("{}: the run needs files that are not there:", scn.name);
+            // The network root and its key come out of one command.
+            let mut make: Vec<&str> = Vec::new();
+            for i in &missing {
+                eprintln!("  {}", harness::boot::tidy_path(&i.path).display());
+                if !make.contains(&i.make.as_str()) {
+                    make.push(&i.make);
+                }
+            }
+            let them = if missing.len() == 1 { "it" } else { "them" };
+            eprintln!("make {them} with:");
+            for m in make {
+                eprintln!("  {m}");
+            }
+            return Ok(ExitCode::FAILURE);
+        }
         // Shell-readable and quoting-proof: `wall=<n>` on the first line for
         // the outer timeout, then one `boot` argument per line.
         let console = console.unwrap_or_else(|| PathBuf::from("boot-console.bin"));
