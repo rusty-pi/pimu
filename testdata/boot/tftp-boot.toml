@@ -56,7 +56,7 @@ line = ["/chosen/rpi-machine-id ", "\"ed96a9bc626d9d0869ce37ee4aea025d\""]
 
 [[milestone]]
 why = "The peer's own record: the kernel went out in full, not only started."
-line = "tftp: kernel8.img sent, 10474929 bytes"
+line = "tftp: kernel8.img sent, 76 bytes"
 
 [[milestone]]
 why = "No nop-slides at all."

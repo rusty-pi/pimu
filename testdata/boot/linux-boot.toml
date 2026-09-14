@@ -22,7 +22,6 @@ description = "The firmware boot, then Linux on all four A72 cores to a busybox 
 [boot]
 eeprom = "../../firmware/pieeprom.bin"
 sd = "../../firmware/sd.img"
-arm = true
 # The prompt after the last line typed below. Nothing prints without input.
 until = "/ # "
 # A dev box reaches the prompt in about three minutes; the runners are roughly

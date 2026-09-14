@@ -91,7 +91,7 @@ it with `SIGPIPE`.
 |---|---|
 | `RVF_PROF=1` | Bucket the core-0 PC into 256-byte slots and dump the hottest on exit. Finds the loop a stalled boot is spinning in. |
 | `RVF_PROF_THREAD=<hex>` | The same, attributed per ThreadX thread. Takes the address of the firmware's current-thread pointer (`_tx_thread_current_ptr`) — only the firmware knows where that lives, so it is a parameter rather than a constant baked into the model. |
-| `RVF_ARM_PROF=<us>` | With `--arm`: from model time `<us>` on (`1` for the whole run), count every ARM step by core, EL and 256-byte PC bucket, and list the hottest in the run report — and at every reset, for the boot that ended. Asleep cores are not stepped, so they do not show; the passes a parked core skips count at the loop's PCs. |
+| `RVF_ARM_PROF=<us>` | From model time `<us>` on (`1` for the whole run), count every ARM step by core, EL and 256-byte PC bucket, and list the hottest in the run report — and at every reset, for the boot that ended. Asleep cores are not stepped, so they do not show; the passes a parked core skips count at the loop's PCs. |
 | `RVF_HEARTBEAT=<n>` | Print progress every `n` instructions, for runs that look hung. |
 
 ## Subsystem logs
@@ -116,8 +116,8 @@ All of these are `=1`.
 | `RVF_DBG_DWC2` | The DWC2 USB OTG controller (`0x7E98_0000`): every write, and every read that differs from the previous read of the same register, so a poll shows once. |
 | `RVF_DBG_MBOX` | Every word across the ARM↔VideoCore property mailbox, both directions. |
 | `RVF_DBG_PCIE` | Every change of the VL805's interrupt as the root complex sees it: INTA, or the MSI block's status and mask. Also every write to the inbound window `RC_BAR2`, and every endpoint DMA access that falls outside it (and so reaches no memory). |
-| `RVF_DBG_ARM_EXC` | With `--arm`: every synchronous exception an ARM core takes (not `svc`), with the `ESR`/`FAR` its handler sees, and for an external abort the physical address nothing answered at. |
-| `RVF_BOOTARGS="<args>"` | With `--arm`: more kernel arguments after the harness's own (`initcall_debug` to time every initcall, `nokaslr` for addresses that match `System.map`). |
+| `RVF_DBG_ARM_EXC` | Every synchronous exception an ARM core takes (not `svc`), with the `ESR`/`FAR` its handler sees, and for an external abort the physical address nothing answered at. |
+| `RVF_BOOTARGS="<args>"` | More kernel arguments after the harness's own (`initcall_debug` to time every initcall, `nokaslr` for addresses that match `System.map`). |
 
 ## Output and fixtures
 
@@ -125,8 +125,8 @@ All of these are `=1`.
 |---|---|
 | `RVF_LIVE_CONSOLE=1` | Stream the UART console as it is produced instead of buffering it. `scripts/boot-check.sh` sets this. |
 | `RVF_SLOW_LOOP=1` | Take every step through every check of the run loop, as a `diag` build does, instead of skipping the checks that cannot act (`Emulator::fast_steps`). A run must come out the same either way; this is how to check that it does. |
-| `RVF_NO_PARK=1` | With `--arm`: execute every pass of a busy-wait loop instead of parking the core in it (`arm.rs`, "Busy-wait loops"). The same check for the ARM side: a run must come out the same either way. Works in every build. |
-| `RVF_NO_BURST=1` | With `--arm`: take a core that is the only one running through the whole cycle loop, one instruction at a time, instead of stepping it in bursts (`arm.rs`, "Time and scheduling"). Another same-either-way check. Works in every build. |
+| `RVF_NO_PARK=1` | Execute every pass of a busy-wait loop instead of parking the core in it (`arm.rs`, "Busy-wait loops"). The same check for the ARM side: a run must come out the same either way. Works in every build. |
+| `RVF_NO_BURST=1` | Take a core that is the only one running through the whole cycle loop, one instruction at a time, instead of stepping it in bursts (`arm.rs`, "Time and scheduling"). Another same-either-way check. Works in every build. |
 | `RVF_DUMP_FLASH=<path>` | Write the EEPROM flash image out after the run, including any self-update the firmware applied. |
 | `RVF_DUMP_RAM=<path>` | Write SDRAM out after every boot, as `<path>.<n>` for boot `n`, before a reset replaces it. A kernel that dies before its console comes up still has its log buffer in there. Works in every build. |
 | `RVF_BOOT_WALL=<seconds>` | Overrides the boot scenario's `wall_secs` (default 330) for `scripts/boot-check.sh`. Raise it when other work is competing for the CPU — two concurrent boot runs will miss `arm_loader` on time. |
@@ -137,11 +137,11 @@ All of these are `=1`.
 ## Asking the firmware a question after it has booted
 
 `start4.elf` does not stop at `arm_loader` — it leaves a `mbox_read` task
-running and answers the property interface for the ARM it just released. This
-bench has no ARM, so `--mbox-property` stands in for one:
+running and answers the property interface for the ARM it just released. A
+kernel that parks the ARM never asks, so `--mbox-property` stands in for it:
 
 ```bash
-boot firmware/pieeprom.bin --eeprom --sd firmware/sd.img \
+boot firmware/pieeprom.bin --eeprom --sd firmware/sd-halt.img \
   --mbox-property 0x00000001,0x00030090
 ```
 
@@ -155,7 +155,7 @@ For each tag it shows how often the firmware set its handled mark and how often
 it did not, and the first word of the value buffer as the latest reply left it.
 Unmarked does not always mean ignored: `SET_GPIO_STATE` and `SET_GPIO_CONFIG`
 come back without the mark but with their status, `0`, in the value, which is
-what Linux's `gpio-raspberrypi-exp` checks. Under `--arm` the section covers
+what Linux's `gpio-raspberrypi-exp` checks. In a Linux boot the section covers
 every request Linux makes, so a value Linux never checks can still be pinned:
 `linux-boot.toml` does this for `NOTIFY_XHCI_RESET`. The report prints before
 an `--mbox-property` exchange runs, so for those requests read the exchange's
@@ -185,7 +185,7 @@ exchanges against one booted firmware — which is the only way to read
 *previous* request:
 
 ```bash
-boot firmware/pieeprom.bin --eeprom --sd firmware/sd.img \
+boot firmware/pieeprom.bin --eeprom --sd firmware/sd-halt.img \
   --mbox-property 0x00030090 --mbox-property 0x0003008e
 ```
 

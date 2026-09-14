@@ -85,7 +85,8 @@ pub struct BootSpec {
     /// do not exchange anything.
     #[serde(default)]
     pub mbox_property: Vec<String>,
-    /// Run the ARM cores too (`boot --arm`, #40): the boot goes on into Linux.
+    /// Ignored: the ARM is always modelled since #52. Kept so a scenario file
+    /// that still says `arm = true` loads.
     #[serde(default)]
     pub arm: bool,
     /// End the run once the console prints this (`boot --until`), after the
@@ -333,9 +334,6 @@ impl BootScenario {
         if !self.boot.mbox_property.is_empty() {
             args.push("--mbox-property".into());
             args.push(self.boot.mbox_property.join(","));
-        }
-        if self.boot.arm {
-            args.push("--arm".into());
         }
         for line in &self.boot.input {
             args.push("--send-after".into());

@@ -86,10 +86,10 @@
 //! already implements, which is why no translation happens here.
 //!
 //! Nothing in the boot touches this block: the firmware only services it once
-//! an ARM is running. Under `boot --arm` that is Linux; without it, `boot
-//! --mbox-property` posts a request *as if* from the ARM. Either way the
-//! answer comes from the `mbox_read` task `start4.elf` leaves running after
-//! `arm_loader` (the blob says `Creating mailbox reading task ...`).
+//! an ARM is running. Under Linux that is the kernel; when the kernel parks
+//! the ARM, `boot --mbox-property` posts a request *as if* from it. Either
+//! way the answer comes from the `mbox_read` task `start4.elf` leaves running
+//! after `arm_loader` (the blob says `Creating mailbox reading task ...`).
 //!
 //! Every property reply is decoded into a [`PropertyLog`] as the firmware posts
 //! it, whoever asked, and the run report prints it. That is the only place

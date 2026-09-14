@@ -5,8 +5,9 @@
 #   scripts/boot-check.sh [--update] [--scenario=<toml>] [boot.log]
 #
 # Assumes `cargo build --release` and the boot media the scenario names: an SD
-# image built by scripts/make-sd.sh, and for the network boots the root
-# scripts/make-netboot.sh builds from it.
+# image built by scripts/make-sd.sh (with `KERNEL=halt` for the boots that end
+# at the handover, firmware/sd-halt.img), and for the network boots the root
+# scripts/make-netboot.sh builds from that.
 #
 # What is checked, and where it is written down, both live in the scenario —
 # `testdata/boot/firmware-boot.toml` (the SD boot) unless `--scenario` names

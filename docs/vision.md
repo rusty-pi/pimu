@@ -67,7 +67,8 @@ still-running VideoCore, and the QEMU route fell short of carrying it:
 
 ### Where it stands
 
-`boot --arm` releases the cores when `arm_loader` writes the ARM control block,
+The ARM is always modelled (#52): `arm_loader` releases the cores when it writes
+the ARM control block,
 at PC 0 in EL3 like the SoC. The firmware's own armstub drops them to EL2, and
 Linux boots off the SD card's ext4 root to a shell on the serial console
 (`testdata/boot/linux-boot.toml`, run by CI). From that shell Raspberry Pi's
@@ -82,8 +83,6 @@ Linux boots off the SD card's ext4 root to a shell on the serial console
 - **A debugger** – breakpoints, watchpoints, a gdb stub for both kinds of core –
   to replace most of the `RVF_*` probes in `docs/diagnostics.md`.
 - **Fast-forwarding the VPU's idle loop** once Linux is up.
-- **Always modelling the ARM** (#52): a firmware-only boot then ends in a kernel
-  that halts, instead of the `--arm` switch.
 
 The line between the two sides is the SoC's own now – the mailbox, the
 doorbells and shared DRAM – all inside one process.

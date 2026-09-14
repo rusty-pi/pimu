@@ -23,7 +23,10 @@ description = "pieeprom.bin + start4.elf boot from the SD image, through to the 
 
 [boot]
 eeprom = "../../firmware/pieeprom.bin"
-sd = "../../firmware/sd.img"
+# The card from `KERNEL=halt scripts/make-sd.sh firmware/sd-halt.img`: the same
+# as the Linux boot's, but its kernel8.img parks the ARM, so the run ends where
+# the firmware goes quiet after the handover (#52).
+sd = "../../firmware/sd-halt.img"
 # Ask the still-running firmware for a property after the hand-off, the way a
 # booted Linux would through `/dev/vcio` (#23): the firmware revision, which
 # pins that the mailbox round trip works at all, the number of OTP key slots,

@@ -21,7 +21,7 @@ in one host thread so a run is deterministic.
 
 The full EEPROM → BOOTLOADER → `start4.elf` → `arm_loader` chain runs in the
 model, from every boot medium CI checks: SD card, USB mass storage, TFTP and
-HTTP network boot. With `--arm`, `arm_loader` releases the four A72 cores, the
+HTTP network boot. `arm_loader` then releases the four A72 cores, the
 firmware's own armstub drops them to EL2 and enters the kernel, and Linux boots
 off the SD card's ext4 root partition to a busybox shell on the serial console
 (a dev box reaches the prompt in about three minutes).
@@ -102,15 +102,20 @@ cargo run -- run testdata/scenarios/hello-vpu.toml -v
 ./scripts/fetch-firmware.sh       # pull the real blobs, kernel and busybox into firmware/ (gitignored)
 cargo run -- disasm firmware/start4.elf --base 0xcec00200 --count 40
 
-# Run the real boot chain: EEPROM bootloader + start4.elf off an SD image.
+# Run the real boot chain: EEPROM bootloader + start4.elf off an SD image,
+# up to a kernel that parks the ARM.
+KERNEL=halt ./scripts/make-sd.sh firmware/sd-halt.img
+cargo run --release -- boot --eeprom firmware/pieeprom.bin \
+  --sd firmware/sd-halt.img
+
+# ...or on into Linux, with the terminal as the serial console.
 ./scripts/make-sd.sh                            # build firmware/sd.img
 cargo run --release -- boot --eeprom firmware/pieeprom.bin \
-  --sd firmware/sd.img
-
-# ...and on into Linux, with the terminal as the serial console.
-cargo run --release -- boot --eeprom firmware/pieeprom.bin \
-  --sd firmware/sd.img --arm --stdin
+  --sd firmware/sd.img --stdin
 ```
+
+The ARM is always modelled (#52): the boot goes wherever the card's
+`kernel8.img` takes it.
 
 `boot` prints the serial console as it goes and ends with one line saying
 whether the boot got where it was meant to (`result: ok — the firmware started
@@ -174,7 +179,7 @@ and `--dump-fdt <path>` writes the blob itself, so two firmware versions can be
 compared byte for byte:
 
 ```bash
-cargo run --release -- boot --eeprom firmware/pieeprom.bin --sd firmware/sd.img \
+cargo run --release -- boot --eeprom firmware/pieeprom.bin --sd firmware/sd-halt.img \
   --max-wall 200 --dump-fdt old.dtb
 # …bump firmware/, rebuild the SD image, run again into new.dtb…
 diff <(fdtdump old.dtb) <(fdtdump new.dtb)
@@ -183,8 +188,8 @@ diff <(fdtdump old.dtb) <(fdtdump new.dtb)
 The blob is found through the firmware's own `Device tree loaded to 0x… (size
 0x…)` log line and its FDT header is validated before anything is written, so
 no address is hard-coded and the flag keeps working across firmware versions.
-Without `--arm` nothing overwrites the tree afterwards, so reading it out at
-the end of the run is safe.
+With a kernel that parks the ARM nothing overwrites the tree afterwards, so
+reading it out at the end of the run is safe.
 
 `arm_loader` does not compute `rpi-machine-id` itself. `0x3ECC5190` first looks
 for the `BVER` block in the handoff table the EEPROM bootloader left behind and,
@@ -218,7 +223,7 @@ asserted about it:
 | `usb-boot.toml` | USB mass storage (`BOOT_ORDER` 0x4), no SD card |
 | `tftp-boot.toml` | network boot over TFTP |
 | `http-boot.toml` | HTTP boot of a signed `boot.img` ramdisk |
-| `linux-boot.toml` | SD card with `--arm`: Linux to a busybox shell, then a few commands typed into it |
+| `linux-boot.toml` | SD card, on into Linux: a busybox shell, then a few commands typed into it |
 
 Each one has:
 

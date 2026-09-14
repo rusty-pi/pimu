@@ -63,8 +63,13 @@ jobs:
       - name: Build SD image
         run: ./scripts/make-sd.sh
 
+      # The same card with a kernel that parks the ARM, for the boots that end
+      # at the handover (#52).
+      - name: Build SD image with a halting kernel
+        run: KERNEL=halt ./scripts/make-sd.sh firmware/sd-halt.img
+
       - name: Build network-boot root
-        run: ./scripts/make-netboot.sh
+        run: ./scripts/make-netboot.sh firmware/sd-halt.img
 
       - name: Build rpi-virt-fw
         run: cargo build --release

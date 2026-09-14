@@ -16,7 +16,7 @@ config router, endpoint identity), stage 2a (BAR0 over 40-bit DMA) and stage 3
 `--usb <img>`) are all done and on by default. The bootloader enumerates the
 hub exactly as the reference board does, and with `--usb` it reads
 `start4.elf` off a USB stick over SCSI `READ(10)`. Stage 2 (start4's
-`XHCI_RESET`, `MCU FW`, `VLI firmware load`) runs too, but only under `--arm`:
+`XHCI_RESET`, `MCU FW`, `VLI firmware load`) runs too, but only under Linux:
 the ARM triggers it, with Linux's `NOTIFY_XHCI_RESET` request, and its lines
 are message-ring entries rather than console output, so the Linux scenario pins
 the firmware's answer instead. See [Recommendation](#7-recommendation).
@@ -830,7 +830,7 @@ transfers whose source or destination lies in the PCIe outbound window at
 
 **Stage 2 — start4's `XHCI_RESET`. Done, under Linux.**
 
-Under `--arm`, Linux's `xhci_pci_probe` resets the controller through
+Once Linux runs, its `xhci_pci_probe` resets the controller through
 `reset-raspberrypi`, which sends `NOTIFY_XHCI_RESET` (`0x00030058`, `dev_addr =
 0x100000`), and the whole stage runs. A diag build of the Linux scenario, run
 until `xhci_hcd 0000:01:00.0: xHCI Host Controller` with
@@ -891,7 +891,7 @@ critical path entirely:
 1. **The trigger is the ARM.** In the reference capture `XHCI_RESET` lands
    1.1 s *after* `arm_loader`, which is Linux's xHCI driver asking the
    firmware to load the controller's firmware over the property mailbox.
-   Without `--arm` nothing ever asks.
+   A kernel that parks the ARM never asks.
 2. **The three lines are not console output.** `vc4-boot.log` is a `vcdbg` dump
    of the firmware's internal message ring, not a serial capture — the genuine
    UART logs in the same directory stop at `arm_loader`, and the ring shows two
@@ -1059,7 +1059,7 @@ needed is in `src/periph/pcie.rs` (module docs, "Linux") and
 ## 7. Recommendation
 
 **Stages 0, 1, 2a and 3 are done and on by default. Stage 2 runs under
-`--arm`.**
+Linux.**
 
 Stage 0 fixed a genuine correctness bug — the firmware was writing PCIe
 registers into modelled DRAM — and made every later step observable through

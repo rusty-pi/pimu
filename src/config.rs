@@ -3,8 +3,8 @@
 //! Every command-line option can come from a file instead:
 //!
 //! ```text
-//! rpi-virt-fw boot --eeprom firmware/pieeprom.bin --max-wall=600 --arm
-//! rpi-virt-fw boot --config=<(echo '{"eeprom": "firmware/pieeprom.bin", "max-wall": 600, "arm": true}')
+//! rpi-virt-fw boot --eeprom firmware/pieeprom.bin --max-wall=600 --stdin
+//! rpi-virt-fw boot --config=<(echo '{"eeprom": "firmware/pieeprom.bin", "max-wall": 600, "stdin": true}')
 //! ```
 //!
 //! The file is a JSON object, or a TOML table. Each key is an option's long
@@ -377,7 +377,7 @@ mod tests {
     #[test]
     fn a_json_config_expands_in_place() {
         let got = expand_with(
-            r#"{"eeprom": "fw/pieeprom.bin", "max-wall": 600, "arm": true, "stdin": false,
+            r#"{"eeprom": "fw/pieeprom.bin", "max-wall": 600, "stdin": true, "verbose": false,
                 "bootconf": ["A=1", "B=2"], "send-after": [["/ # ", "uname\n"]], "v": true}"#,
             &["boot"],
         );
@@ -389,7 +389,7 @@ mod tests {
                 "fw/pieeprom.bin",
                 "--max-wall",
                 "600",
-                "--arm",
+                "--stdin",
                 "--bootconf",
                 "A=1",
                 "--bootconf",

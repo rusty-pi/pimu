@@ -33,7 +33,7 @@ USAGE:
                instead, for reconnaissance on firmware the decoder is new to)
                              [--dump <hex>:<len>] [--disasm <hex>:<count>] [--patch <hex>=<hex>]
                              [--dump-fdt <path>] [--print-fdt] [--console-log <path>]
-                             [--mbox-property <tag>[,<tag>...]] [--arm] [--until <text>]
+                             [--mbox-property <tag>[,<tag>...]] [--until <text>]
                              [--send-after <prompt> <text>]... [--stdin]
                              [--io-log <path>] [--io-log-format text|jsonl]
     rpi-virt-fw boot-check <scenario.toml> --plan [--console <path>]
@@ -65,7 +65,7 @@ FLAGS:
               Take options from <file> as well, at that point in the command
               line: a JSON object (or TOML table) keyed by long option name,
               e.g. {\"eeprom\": \"firmware/pieeprom.bin\", \"max-wall\": 600,
-              \"arm\": true, \"bootconf\": [\"A=1\", \"B=2\"]}. `true` is a flag,
+              \"v\": true, \"bootconf\": [\"A=1\", \"B=2\"]}. `true` is a flag,
               an array repeats the option, `\"file\"` is the positional argument.
               Options after it on the command line win. Any option also takes
               the `--option=value` form.
@@ -88,10 +88,6 @@ FLAGS:
               still-running `start4.elf` answers. Tags are hex, e.g.
               `0x00000001` (GET_FIRMWARE_REVISION) or `0x00030092`
               (GET_CRYPTO_HMAC_SHA256). See docs/diagnostics.md.
-    --arm     Model the ARM (#40): release the four Cortex-A72 cores when
-              `arm_loader` writes the ARM control block, at PC 0 in EL3 like
-              the SoC, and run them in lock-step with the VPU. The run ends if
-              a core hits something not modelled yet.
     --until <text>
               End the run once the console prints <text> (e.g. the shell
               prompt of a Linux boot), after the last --send-after went in.
@@ -251,7 +247,6 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
     let mut dram_map = false;
     let mut skip_signed_boot = false;
     let mut skip_unimpl = false;
-    let mut arm = false;
     let mut until: Option<String> = None;
     let mut sends: Vec<(String, Vec<u8>)> = Vec::new();
     let mut stdin = false;
@@ -308,7 +303,9 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
                 trace_from = parse_u32(it.next().context("--trace-from needs a value")?)?
             }
             "--trace-mmio" => trace_mmio = true,
-            "--arm" => arm = true,
+            // The ARM is always modelled since #52; old command lines keep
+            // working.
+            "--arm" => {}
             "--until" => until = Some(it.next().context("--until needs a text")?.to_string()),
             "--send-after" => {
                 let prompt = it.next().context("--send-after needs <prompt> <text>")?;
@@ -752,7 +749,6 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
         };
         emu.cpu.trace_from = trace_from;
         emu.core1_entry = core1_entry;
-        emu.arm_enabled = arm;
         if as_core1 {
             emu.cpu.core_id = 1;
         }
@@ -912,7 +908,7 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
             if let Some(prof) = &a.prof {
                 print_arm_prof(prof);
             }
-        } else if arm {
+        } else if eeprom {
             println!("\n--- ARM cores (#40) ---\n  never released");
         }
         // What the firmware answered on the property channel, from the reply

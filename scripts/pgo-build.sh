@@ -7,7 +7,8 @@
 # boot, `llvm-profdata` merges what it counted, and the release build is done
 # again with that profile. Needs the llvm-tools rustup component (added here
 # if it is missing) and what scripts/boot-check.sh needs: the firmware blobs
-# and the SD image scripts/make-sd.sh builds.
+# and both SD images scripts/make-sd.sh builds (firmware/sd.img, and
+# firmware/sd-halt.img with KERNEL=halt).
 #
 # The profile only steers code layout and inlining. The guest runs exactly the
 # same instructions either way, which boot-check's retired counts show. A plain
