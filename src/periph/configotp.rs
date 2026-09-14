@@ -116,6 +116,8 @@ pub struct ConfigOtp {
     done: bool,
     /// key -> config value.
     table: BTreeMap<u32, u32>,
+    /// Rows read go to the I/O log too, when there is one (#35).
+    pub io: Option<crate::iolog::IoLogRef>,
 }
 
 impl Default for ConfigOtp {
@@ -245,6 +247,7 @@ impl ConfigOtp {
             data: 0,
             done: false,
             table,
+            io: None,
         }
     }
 
@@ -264,6 +267,10 @@ impl ConfigOtp {
 
     fn resolve(&mut self) {
         self.data = self.table.get(&self.key).copied().unwrap_or(0);
+        if let Some(io) = &self.io {
+            io.borrow_mut()
+                .otp_read(self.key, self.data, self.table.contains_key(&self.key));
+        }
         if std::env::var_os("RVF_DBG_OTP").is_some() {
             eprintln!(
                 "[otp] key {} (0x{:x}) -> 0x{:08x}{}",

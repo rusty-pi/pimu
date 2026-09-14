@@ -125,6 +125,28 @@ boots then run 1.45x faster; the guest runs the same instructions either way.
 CI does not use it — the extra build and training cost more than the boot
 jobs would save.
 
+### What the machine read and wrote
+
+`--io-log <path>` (`-` for stderr) writes what crossed the peripherals, apart
+from the console: block runs on the SD card and the USB stick with the files
+they belong to, the OTP rows the firmware read, and what the network peer did
+([#35](https://github.com/valtzu/rpi-virt-fw/issues/35)). The file names come
+from the bench reading the image's partition table and FAT itself, so the
+firmware stays a black box:
+
+```text
+sd   read  lba 0x0+2  (partition table)
+sd   read  lba 0x800+2  p1:(boot sector)
+sd   read  lba 0x1014+5  p1:/config.txt, p1:/start4.elf
+sd   read  lba 0x101c+4489  p1:/start4.elf, p1:/fixup4.dat
+otp  read  row 28  = 0x1aa2bb31
+sd   read  lba 0x72b4+8  p1:/overlays/vc4-kms-v3d-pi4.dtbo
+sd   read  lba 0x22ac+20459  p1:/kernel8.img
+net  dhcp: DISCOVER from 02:00:5e:00:53:01 (PXEClient) -> OFFER 192.0.2.100
+```
+
+`--io-log-format jsonl` writes one JSON object per line instead, for tools.
+
 ### Getting the patched device tree out
 
 `arm_loader` patches `/chosen` — `rpi-machine-id`, `rpi-serial64`,

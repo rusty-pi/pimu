@@ -234,7 +234,7 @@ impl SdCard {
     pub fn write_block(&mut self, lba: u32, data: &[u8]) {
         let mut block = [0u8; 512];
         // A short block only replaces the start of what is there.
-        if !self.disk.read_block(u64::from(lba), &mut block) {
+        if !self.disk.peek_block(u64::from(lba), &mut block) {
             return;
         }
         let n = data.len().min(512);

@@ -173,6 +173,8 @@ pub struct BuiltinPeer {
     /// TCP connections by (client IP, client port, server port).
     conns: BTreeMap<([u8; 4], u16, u16), TcpConn>,
     conn_count: u32,
+    /// Where each [`Self::note`] also goes, for `boot --io-log` (#35).
+    io: Option<crate::iolog::IoLogRef>,
 }
 
 impl Default for BuiltinPeer {
@@ -194,6 +196,7 @@ impl BuiltinPeer {
             ip_id: 0,
             conns: BTreeMap::new(),
             conn_count: 0,
+            io: None,
         }
     }
 
@@ -203,6 +206,21 @@ impl BuiltinPeer {
             root: Some(dir.into()),
             ..BuiltinPeer::new()
         }
+    }
+
+    /// Also write what the peer does to the I/O log.
+    pub fn with_io(mut self, io: crate::iolog::IoLogRef) -> BuiltinPeer {
+        self.io = Some(io);
+        self
+    }
+
+    /// Record one thing the peer did, for the run report and the I/O log.
+    fn note(&mut self, what: impl Into<String>) {
+        let what = what.into();
+        if let Some(io) = &self.io {
+            io.borrow_mut().net(&what);
+        }
+        self.log.push(what);
     }
 
     /// Serve `data` as `name` (a path relative to the TFTP root, `/`
@@ -358,7 +376,7 @@ impl BuiltinPeer {
         let pxe = options
             .get(&60)
             .is_some_and(|v| v.starts_with(b"PXEClient"));
-        self.log.push(format!(
+        self.note(format!(
             "dhcp: {} from {}{} -> {} {}",
             if reply == DHCPOFFER {
                 "DISCOVER"
@@ -433,7 +451,7 @@ impl BuiltinPeer {
         let (qtype, qclass) = (be16(q, i + 1), be16(q, i + 3));
         let name = labels.join(".");
         let answer = qtype == DNS_TYPE_A && qclass == DNS_CLASS_IN;
-        self.log.push(format!(
+        self.note(format!(
             "dns: {name} type {qtype} -> {}",
             if answer {
                 fmt_ip(SERVER_IP)
@@ -724,7 +742,7 @@ impl BuiltinPeer {
         };
         let head_only = method == "HEAD";
         if method != "GET" && !head_only {
-            self.log.push(format!("http: {method} {target} -> 405"));
+            self.note(format!("http: {method} {target} -> 405"));
             return reply(
                 "405 Method Not Allowed",
                 &["Allow: GET, HEAD".into()],
@@ -733,7 +751,7 @@ impl BuiltinPeer {
             );
         }
         let Some(data) = self.lookup(path) else {
-            self.log.push(format!("http: {method} {path} -> 404"));
+            self.note(format!("http: {method} {path} -> 404"));
             return reply("404 Not Found", &[], b"not found\n", head_only);
         };
         let total = data.len();
@@ -745,7 +763,7 @@ impl BuiltinPeer {
                 reply("200 OK", &[octets], &data, head_only)
             }
             Some(Some((first, last))) => {
-                self.log.push(format!(
+                self.note(format!(
                     "http: {method} {path} bytes {first}-{last}/{total} -> 206"
                 ));
                 let cr = format!("Content-Range: bytes {first}-{last}/{total}");
@@ -796,7 +814,7 @@ impl BuiltinPeer {
             .map(|s| String::from_utf8_lossy(s).into_owned())
             .collect();
         if op == TFTP_WRQ {
-            self.log.push("tftp: WRQ refused".into());
+            self.note("tftp: WRQ refused");
             self.tftp_error(mac, ip, tid, port, 2, "read only");
             return;
         }
@@ -805,7 +823,7 @@ impl BuiltinPeer {
         }
         let name = fields[0].clone();
         let Some(data) = self.lookup(&name) else {
-            self.log.push(format!("tftp: RRQ {name} -> not found"));
+            self.note(format!("tftp: RRQ {name} -> not found"));
             self.tftp_error(mac, ip, tid, port, 1, "File not found");
             return;
         };
@@ -881,7 +899,7 @@ impl BuiltinPeer {
             TFTP_ERROR => {
                 let t = self.transfers.remove(&tid).unwrap();
                 let msg = String::from_utf8_lossy(&p[4..]);
-                self.log.push(format!(
+                self.note(format!(
                     "tftp: {} aborted by client (error {}: {})",
                     t.name,
                     be16(p, 2),

@@ -35,6 +35,7 @@ USAGE:
                              [--dump-fdt <path>] [--print-fdt] [--console-log <path>]
                              [--mbox-property <tag>[,<tag>...]] [--arm] [--until <text>]
                              [--send-after <prompt> <text>]... [--stdin]
+                             [--io-log <path>] [--io-log-format text|jsonl]
     rpi-virt-fw boot-check <scenario.toml> --plan [--console <path>]
     rpi-virt-fw boot-check <scenario.toml> --log <path> --console <path> [--update]
     rpi-virt-fw disasm <file> [--base <hex>] [--count <n>] [--vaddr <hex>]
@@ -103,6 +104,12 @@ FLAGS:
               input, and no wall-clock or silence limit ends the run. On a
               terminal, keys go to the guest raw (Ctrl-C included); Ctrl-A x
               quits, Ctrl-A Ctrl-A sends a Ctrl-A.
+    --io-log <path>
+              Write what the machine read and wrote to <path> (`-` for
+              stderr), apart from the console: SD card and USB stick block
+              runs with the files they belong to, OTP rows read, and what the
+              network peer did (DHCP, DNS, TFTP, HTTP). Captured at the
+              peripherals; `--io-log-format jsonl` for one JSON object a line.
     --dram-map
               Report which DRAM pages are non-zero when the run ends, as
               address runs. Proof of concept for the QEMU hand-off: this is the
@@ -245,6 +252,8 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
     // Without `-v` the run prints the serial console, the outcome and whatever
     // was asked for by name (#55); the full run report is for investigating.
     let mut verbose = false;
+    let mut io_log: Option<String> = None;
+    let mut io_log_format = rpi_virt_fw::iolog::Format::Text;
     let mut it = args.iter().peekable();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -304,6 +313,14 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
             }
             "--stdin" => stdin = true,
             "-v" | "--verbose" => verbose = true,
+            "--io-log" => io_log = Some(it.next().context("--io-log needs a path")?.clone()),
+            "--io-log-format" => {
+                io_log_format = it
+                    .next()
+                    .context("--io-log-format needs text or jsonl")?
+                    .parse()
+                    .map_err(anyhow::Error::msg)?
+            }
             "--sd" => sd_image = Some(PathBuf::from(it.next().context("--sd needs a path")?)),
             "--console-log" => {
                 console_log = Some(PathBuf::from(
@@ -402,10 +419,28 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
     // `--usb-mb <n>`: the stick is that big, with the image at its start, as
     // on a Pi whose first boot uses the rest. Read on demand; what the guest
     // writes stays in memory and outlives the resets below.
+    // `--io-log <path>` (`-` for stderr): what the machine read and wrote, seen
+    // from the peripherals (#35, `src/iolog.rs`). Made once, so it spans the
+    // resets of an EEPROM self-update.
+    let io = match &io_log {
+        Some(p) => {
+            let out: Box<dyn std::io::Write> = if p == "-" {
+                Box::new(std::io::stderr())
+            } else {
+                Box::new(std::fs::File::create(p).with_context(|| format!("creating {p}"))?)
+            };
+            Some(rpi_virt_fw::iolog::IoLog::new(out, io_log_format).shared())
+        }
+        None => None,
+    };
+
     let usb_disk = match &usb_image {
         Some(p) => {
-            let disk = rpi_virt_fw::periph::usb::Disk::open(p, usb_mb.unwrap_or(0) << 20)
+            let mut disk = rpi_virt_fw::periph::usb::Disk::open(p, usb_mb.unwrap_or(0) << 20)
                 .with_context(|| format!("opening USB image {}", p.display()))?;
+            if let Some(io) = &io {
+                disk = disk.with_io(io.clone(), "usb");
+            }
             if verbose {
                 println!("usb image  {} ({} blocks)", p.display(), disk.blocks());
             }
@@ -418,6 +453,10 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
     // after a reset starts from the file again, writes forgotten.
     let open_sd = |p: &std::path::Path| {
         rpi_virt_fw::periph::disk::Disk::open(p, 0)
+            .map(|d| match &io {
+                Some(io) => d.with_io(io.clone(), "sd"),
+                None => d,
+            })
             .with_context(|| format!("opening SD image {}", p.display()))
     };
     if let Some(sd_path) = sd_image.as_ref().filter(|_| verbose) {
@@ -610,10 +649,13 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
         // `--netboot <dir>`: plug the Ethernet cable into the built-in network
         // peer (`src/net/peer.rs`): DHCP, DNS, and `<dir>` over TFTP and HTTP.
         if let Some(dir) = &netboot_root {
-            machine.attach_net(Box::new(rpi_virt_fw::net::BuiltinPeer::with_root(
-                dir.clone(),
-            )));
+            let mut peer = rpi_virt_fw::net::BuiltinPeer::with_root(dir.clone());
+            if let Some(io) = &io {
+                peer = peer.with_io(io.clone());
+            }
+            machine.attach_net(Box::new(peer));
         }
+        machine.config_otp.io = io.clone();
         machine.mmio_trace = trace_mmio;
         // `RVF_TRACE_MMIO=<lo>-<hi>` (hex): trace peripheral accesses from the
         // first instruction, but only inside that address range. Tracing the
@@ -751,6 +793,9 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
     };
     // The terminal back to cooked mode before the report.
     drop(host_input);
+    if let Some(io) = &io {
+        io.borrow_mut().flush_run();
+    }
     // Collapse consecutive-identical transfers so a spin doesn't hide the
     // history that led into it.
     let mut cf_tail: Vec<(u32, u32, u32)> = Vec::new();

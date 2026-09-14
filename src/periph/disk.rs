@@ -11,6 +11,8 @@ use std::fs::File;
 use std::os::unix::fs::FileExt;
 use std::path::Path;
 
+use crate::iolog::IoLogRef;
+
 pub const BLOCK_SIZE: usize = 512;
 
 /// A disk image read on demand, the blocks written since kept in memory, and a
@@ -24,6 +26,8 @@ pub struct Disk {
     backing: Backing,
     blocks: u64,
     written: HashMap<u64, Box<[u8; BLOCK_SIZE]>>,
+    /// The I/O log and the name this disk goes by in it (#35).
+    io: Option<(IoLogRef, &'static str)>,
 }
 
 enum Backing {
@@ -39,6 +43,24 @@ impl Disk {
             backing: Backing::Mem(image),
             blocks,
             written: HashMap::new(),
+            io: None,
+        }
+    }
+
+    /// Record this disk's transfers in the I/O log as `name`, and name its
+    /// files there.
+    pub fn with_io(mut self, io: IoLogRef, name: &'static str) -> Disk {
+        io.borrow_mut().map_files(name, &|lba| {
+            let mut b = [0u8; BLOCK_SIZE];
+            self.peek_block(lba, &mut b).then_some(b)
+        });
+        self.io = Some((io, name));
+        self
+    }
+
+    fn log(&self, op: &'static str, lba: u64, count: u64) {
+        if let Some((io, name)) = &self.io {
+            io.borrow_mut().blocks(name, op, lba, count);
         }
     }
 
@@ -50,6 +72,7 @@ impl Disk {
             backing: Backing::File { file, len },
             blocks: len.max(min_bytes) / BLOCK_SIZE as u64,
             written: HashMap::new(),
+            io: None,
         })
     }
 
@@ -68,8 +91,19 @@ impl Disk {
         self.written.len()
     }
 
-    /// Block `lba` into `out`; `false` (and zeros) past the end of the disk.
+    /// Block `lba` into `out`, as the guest reads it; `false` (and zeros) past
+    /// the end of the disk.
     pub fn read_block(&self, lba: u64, out: &mut [u8; BLOCK_SIZE]) -> bool {
+        let ok = self.peek_block(lba, out);
+        if ok {
+            self.log("read", lba, 1);
+        }
+        ok
+    }
+
+    /// [`Self::read_block`] without it counting as a guest read, for the
+    /// model's own look at the disk.
+    pub fn peek_block(&self, lba: u64, out: &mut [u8; BLOCK_SIZE]) -> bool {
         out.fill(0);
         if lba >= self.blocks {
             return false;
@@ -104,8 +138,9 @@ impl Disk {
         }
         let mut out = vec![0u8; count as usize * BLOCK_SIZE];
         for (i, block) in out.as_chunks_mut::<BLOCK_SIZE>().0.iter_mut().enumerate() {
-            self.read_block(lba + i as u64, block);
+            self.peek_block(lba + i as u64, block);
         }
+        self.log("read", lba, count);
         Some(out)
     }
 
@@ -118,6 +153,7 @@ impl Disk {
         for (i, block) in data.as_chunks::<BLOCK_SIZE>().0.iter().enumerate() {
             self.written.insert(lba + i as u64, Box::new(*block));
         }
+        self.log("write", lba, count);
         true
     }
 
@@ -126,6 +162,9 @@ impl Disk {
         let last = last.min(self.blocks.saturating_sub(1));
         for lba in first..=last {
             self.written.insert(lba, Box::new([0; BLOCK_SIZE]));
+        }
+        if first <= last {
+            self.log("erase", first, last - first + 1);
         }
     }
 }
