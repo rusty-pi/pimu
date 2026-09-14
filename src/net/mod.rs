@@ -9,10 +9,13 @@
 //!
 //! [`BuiltinPeer`] is the backend that needs nothing outside the emulator: a
 //! deterministic DHCP, DNS, TFTP and HTTP server, for tests and CI.
+//! [`StreamBackend`] is the host's network, through passt (#45).
 
 pub mod peer;
+pub mod stream;
 
 pub use peer::BuiltinPeer;
+pub use stream::StreamBackend;
 
 /// A link partner: the switch port, and everything behind it.
 pub trait NetBackend {
