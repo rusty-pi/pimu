@@ -369,6 +369,12 @@ impl Emmc2 {
         self.card = Some(SdCard::new(image));
     }
 
+    /// Insert a card on `disk` — an image file read on demand, so a big card
+    /// costs only the blocks the guest touches.
+    pub fn insert_disk(&mut self, disk: crate::periph::disk::Disk) {
+        self.card = Some(SdCard::with_disk(disk));
+    }
+
     /// Disconnect the card from this host, state and all, the way the SD-slot
     /// mux takes its lines away: to this host the slot is then empty.
     pub fn take_card(&mut self) -> Option<SdCard> {
@@ -1304,7 +1310,7 @@ mod tests {
         cmd(&mut e, 25, 40, R1_DATA, mode);
         e.run_dma(&mut ram);
         assert_eq!(rd(&mut e, INT_STATUS), INT_CMD_COMPLETE | INT_XFER_COMPLETE);
-        assert_eq!(&e.card().unwrap().image()[40 * 512..42 * 512], &data[..]);
+        assert_eq!(e.card().unwrap().disk().read(40, 2).unwrap(), &data[..]);
         // CMD23's count ended the transfer: the card is back in tran.
         assert_eq!(
             e.card().unwrap().state(),

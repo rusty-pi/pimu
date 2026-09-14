@@ -26,10 +26,11 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::fs::File;
-use std::os::unix::fs::FileExt;
-use std::path::Path;
 use std::rc::Rc;
+
+/// The medium behind a [`MassStorage`], shared with the SD card model.
+pub use super::disk::Disk;
+use super::disk::BLOCK_SIZE;
 
 /// The `PORTSC` / slot-context speed encoding (xHCI 4.19.7 "Protocol Speed
 /// ID"), for the default speed IDs the VL805 reports in its supported-protocol
@@ -449,8 +450,6 @@ const CSW_SIGNATURE: u32 = 0x5342_5355;
 const CBW_LEN: usize = 31;
 const CSW_LEN: usize = 13;
 
-const BLOCK_SIZE: usize = 512;
-
 /// What the device is in the middle of, between the CBW and the CSW.
 enum BotPhase {
     /// Waiting for the next command block.
@@ -469,105 +468,6 @@ enum BotPhase {
     },
     /// Command finished; the CSW is the next bulk-IN.
     Status { tag: u32, residue: u32, status: u8 },
-}
-
-/// The medium behind a [`MassStorage`]: a disk image read on demand, the
-/// blocks written since kept in memory, and a capacity that may be larger
-/// than the image.
-///
-/// A Pi boots an image written to the start of a bigger stick, and its first
-/// boot uses the rest: the rpi-mkosi initrd's `systemd-repart` creates the
-/// encrypted root partition there. So the stick can be bigger than its image
-/// (`recon --usb-mb`), reading as zeros past it. Writes stay in memory, keyed
-/// by block, so a run costs the blocks it writes rather than the image's size,
-/// and the image file is never modified: every run is a first boot. One `Disk`
-/// outlives the resets within a run, the way the stick keeps what the first
-/// boot wrote.
-pub struct Disk {
-    backing: Backing,
-    blocks: u64,
-    written: HashMap<u64, Box<[u8; BLOCK_SIZE]>>,
-}
-
-enum Backing {
-    Mem(Vec<u8>),
-    File { file: File, len: u64 },
-}
-
-impl Disk {
-    /// A disk exactly the size of `image`.
-    pub fn from_vec(image: Vec<u8>) -> Disk {
-        let blocks = (image.len() / BLOCK_SIZE) as u64;
-        Disk {
-            backing: Backing::Mem(image),
-            blocks,
-            written: HashMap::new(),
-        }
-    }
-
-    /// The image at `path`, on a stick of at least `min_bytes`.
-    pub fn open(path: &Path, min_bytes: u64) -> std::io::Result<Disk> {
-        let file = File::open(path)?;
-        let len = file.metadata()?.len();
-        Ok(Disk {
-            backing: Backing::File { file, len },
-            blocks: len.max(min_bytes) / BLOCK_SIZE as u64,
-            written: HashMap::new(),
-        })
-    }
-
-    pub fn blocks(&self) -> u64 {
-        self.blocks
-    }
-
-    /// How many blocks the host has written.
-    pub fn written_blocks(&self) -> usize {
-        self.written.len()
-    }
-
-    /// `count` blocks from `lba`, or `None` past the end of the stick.
-    pub fn read(&self, lba: u64, count: u64) -> Option<Vec<u8>> {
-        if lba.checked_add(count)? > self.blocks {
-            return None;
-        }
-        let mut out = vec![0u8; count as usize * BLOCK_SIZE];
-        for (i, block) in out.chunks_mut(BLOCK_SIZE).enumerate() {
-            let n = lba + i as u64;
-            if let Some(w) = self.written.get(&n) {
-                block.copy_from_slice(&w[..]);
-                continue;
-            }
-            let at = n * BLOCK_SIZE as u64;
-            match &self.backing {
-                Backing::Mem(image) => {
-                    if let Some(src) = image.get(at as usize..at as usize + BLOCK_SIZE) {
-                        block.copy_from_slice(src);
-                    }
-                }
-                Backing::File { file, len } if at < *len => {
-                    // The image's last block may be short; the rest is zeros.
-                    let n = BLOCK_SIZE.min((*len - at) as usize);
-                    if let Err(e) = file.read_exact_at(&mut block[..n], at) {
-                        panic!("reading the USB image at byte {at}: {e}");
-                    }
-                }
-                Backing::File { .. } => {}
-            }
-        }
-        Some(out)
-    }
-
-    /// Whole blocks of `data` at `lba`; `false` past the end of the stick.
-    pub fn write(&mut self, lba: u64, data: &[u8]) -> bool {
-        let count = (data.len() / BLOCK_SIZE) as u64;
-        if lba.saturating_add(count) > self.blocks {
-            return false;
-        }
-        for (i, block) in data.as_chunks::<BLOCK_SIZE>().0.iter().enumerate() {
-            self.written.insert(lba + i as u64, Box::new(*block));
-        }
-        true
-    }
 }
 
 /// A READ or WRITE command's LBA and block count, from its 10-, 12- or 16-byte
@@ -1022,7 +922,7 @@ mod tests {
     #[test]
     fn writes_land_on_the_disk_and_outlive_the_device() {
         let disk = Rc::new(RefCell::new(Disk::from_vec(vec![0x11; 4 * BLOCK_SIZE])));
-        disk.borrow_mut().blocks = 16; // a stick bigger than its image
+        disk.borrow_mut().set_blocks(16); // a stick bigger than its image
         let mut msd = MassStorage::with_disk(disk.clone());
         let mut data = vec![0xAB; BLOCK_SIZE];
         data.extend(vec![0xCD; BLOCK_SIZE]);

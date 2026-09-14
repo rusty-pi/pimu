@@ -367,19 +367,19 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         None => None,
     };
 
-    let sd_img = match &sd_image {
-        Some(sd_path) => {
-            let img = std::fs::read(sd_path)
-                .with_context(|| format!("reading SD image {}", sd_path.display()))?;
-            println!(
-                "sd image   {} ({} blocks)",
-                sd_path.display(),
-                img.len() / 512
-            );
-            Some(img)
-        }
-        None => None,
+    // `--sd <img>`: the card reads the image file on demand (#54), and each boot
+    // after a reset starts from the file again, writes forgotten.
+    let open_sd = |p: &std::path::Path| {
+        rpi_virt_fw::periph::disk::Disk::open(p, 0)
+            .with_context(|| format!("opening SD image {}", p.display()))
     };
+    if let Some(sd_path) = &sd_image {
+        println!(
+            "sd image   {} ({} blocks)",
+            sd_path.display(),
+            open_sd(sd_path)?.blocks()
+        );
+    }
 
     // `--skip-signed-boot`: flip `SIGNED_BOOT=1` -> `=0` in the EEPROM's
     // `bootconf.txt`. That flag gates the bootloader's signature enforcement, so
@@ -547,8 +547,8 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         if eeprom {
             machine.spi0.attach_flash(flash.clone());
         }
-        if let Some(img) = &sd_img {
-            machine.emmc2.insert_card(img.clone());
+        if let Some(p) = &sd_image {
+            machine.emmc2.insert_disk(open_sd(p)?);
         }
         if let Some(disk) = &usb_disk {
             machine.pcie.endpoint.attach(

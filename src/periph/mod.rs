@@ -16,6 +16,7 @@ pub mod clkmon;
 pub mod clockman;
 pub mod configotp;
 pub mod corectl;
+pub mod disk;
 pub mod dma4;
 pub mod dma_legacy;
 pub mod dwc2;
