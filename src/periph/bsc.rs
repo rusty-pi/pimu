@@ -122,7 +122,7 @@ impl Bsc {
             rx: VecDeque::new(),
             writing: None,
             deferred_read: None,
-            slave: Some(Pmic::pi4b()),
+            slave: Some(Pmic::default()),
             expander: Some(Fxl6408::new()),
         }
     }
@@ -138,6 +138,12 @@ impl Bsc {
             expander: None,
             ..Bsc::new(name)
         }
+    }
+
+    /// Put `pmic` on the bus in place of the PMICs there, for a board that has
+    /// other ones fitted.
+    pub fn fit_pmics(&mut self, pmic: Pmic) {
+        self.slave = Some(pmic);
     }
 
     /// Read-only view of the attached PMICs, for tests and probes.

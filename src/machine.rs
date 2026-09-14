@@ -305,13 +305,16 @@ impl Machine {
         self.board
     }
 
-    /// Make this machine `board`: OTP row 30 takes its revision code, and cores
-    /// an [`crate::emulator::Emulator`] builds afterwards its stepping's
+    /// Make this machine `board`: OTP row 30 takes its revision code, the
+    /// PMIC bus the PMICs it has fitted, and cores an
+    /// [`crate::emulator::Emulator`] builds afterwards its stepping's
     /// `version`. Call it before anything runs; firmware reads the revision
     /// once, early.
     pub fn set_board(&mut self, board: crate::soc::Board) {
         self.board = board;
         self.config_otp.set(30, board.revision);
+        self.bsc_pmic
+            .fit_pmics(crate::periph::Pmic::for_board(board));
     }
 
     /// Plug GENET's cable into `backend`: the PHY sees a link partner, and
@@ -366,8 +369,9 @@ impl Machine {
     /// of that block.
     ///
     /// Channel 3 of the AVS monitor is a voltage sensor sitting on the SoC core
-    /// rail, and the rail is driven over I²C by the `0x1E` PMIC (register
-    /// `0x25`, 10 mV per step — see [`crate::periph::pmic`]). start4's DVFS
+    /// rail, and the rail is driven over I²C by a board PMIC (the `0x1E` one,
+    /// or the `0x1D` one on a 4B rev 1.1/1.2 — see [`crate::periph::pmic`]).
+    /// start4's DVFS
     /// calibration `FUN_0ec303e8` programs two voltages an appreciable step
     /// apart and requires the sensor to report a difference of at least 10 mV
     /// between them; a channel that answers with one fixed count reads as a
@@ -378,14 +382,8 @@ impl Machine {
         if !(map::AVS_BASE..map::AVS_BASE + map::AVS_SIZE).contains(&addr) {
             return;
         }
-        // `0x3EC8C9F6`, the `0x1E` descriptor's raw-to-microvolts callback.
-        let raw = self
-            .bsc_pmic
-            .slave()
-            .and_then(|p| p.part(crate::periph::pmic::ADDR_CORE))
-            .map(|part| part.reg(crate::periph::pmic::CORE_SETPOINT));
-        if let Some(raw) = raw {
-            self.avs.set_core_rail_uv(u32::from(raw) * 10_000);
+        if let Some(uv) = self.bsc_pmic.slave().and_then(|p| p.core_rail_uv()) {
+            self.avs.set_core_rail_uv(uv);
         }
     }
 

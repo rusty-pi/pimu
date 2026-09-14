@@ -124,6 +124,7 @@ pub const SPEC_COVERAGE: &[crate::spec::Coverage] = &[
     pm::COVERAGE,
     pmic::COVERAGE_CORE,
     pmic::COVERAGE_RAILS,
+    pmic::COVERAGE_1D,
     pvt::COVERAGE,
     rng::COVERAGE,
     sdc::COVERAGE,
