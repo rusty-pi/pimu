@@ -16,12 +16,24 @@ Sources:
 
 | Offset | Name | Access | Width | Sources |
 |---|---|---|---|---|
+| `0x000` | [`BOOTMODE`](#bootmode) | r | 32 | 2, best medium |
 | `0x004` | [`CLKMUX`](#clkmux) | rw | 32 | 1, best medium |
 | `0x008` | [`PARAM_A`](#param_a) | rw | 32 | 1, best high |
 | `0x00C` | [`PARAM_B`](#param_b) | rw | 32 | 1, best medium |
 | `0x010` | [`STATUS`](#status) | rw | 32 | 1, best high |
 | `0x018` | [`DATA`](#data) | r | 32 | 1, best high |
 | `0x01C` | [`KEY`](#key) | rw | 32 | 2, best high |
+
+## `BOOTMODE`
+
+Offset `0x000` · access `r` · 32 bits
+
+OTP_BOOTMODE_REG: the bootmode row (17) as the fuse block presents it at power-on. The boot ROM picks its boot source from it (bit 14, bits 5:4, and a bits[30:28] == ~bits[10:8] check) before it reads anything else; with the old 'always ready' placeholder here it skipped SPI and waited in USB device mode forever (#68). No later stage reads it.
+
+Sources:
+
+- standard (medium): Broadcom OTP register map: OTP_BOOTMODE_REG at 0x7E20F000, OTP_CONFIG_REG +0x04, OTP_CTRL_LO/HI +0x08/+0x0C, OTP_STATUS +0x10, OTP_DATA +0x18, OTP_ADDR +0x1C
+- decompile (medium): C0 boot ROM 0x600009a6 reads it once; 0x6000038a / 0x60000394 take bit 14 and bits 5:4
 
 ## `CLKMUX`
 

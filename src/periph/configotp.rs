@@ -57,8 +57,9 @@ use crate::bus::{BusResult, MmioDevice, Width};
 // `PARAM_A` bit 0 kicks off a transaction; `STATUS` **bit 1** reports
 // completion (the poll at `0x8000760e` is `btest [+0x10], #1`).
 use crate::spec::otp::{
-    CLKMUX as REG_CLKMUX, DATA as REG_DATA, KEY as REG_KEY, PARAM_A as REG_PARAM_A,
-    PARAM_A_GO_MASK as GO, PARAM_B, STATUS as REG_STATUS, STATUS_DONE_MASK as DONE,
+    BOOTMODE as REG_BOOTMODE, CLKMUX as REG_CLKMUX, DATA as REG_DATA, KEY as REG_KEY,
+    PARAM_A as REG_PARAM_A, PARAM_A_GO_MASK as GO, PARAM_B, STATUS as REG_STATUS,
+    STATUS_DONE_MASK as DONE,
 };
 use crate::spec::Coverage;
 
@@ -66,6 +67,7 @@ use crate::spec::Coverage;
 pub const COVERAGE: Coverage = Coverage {
     block: "otp",
     decoded: &[
+        REG_BOOTMODE,
         REG_CLKMUX,
         REG_PARAM_A,
         PARAM_B,
@@ -77,6 +79,12 @@ pub const COVERAGE: Coverage = Coverage {
 
 /// Status bits unrelated firmware paths poll for on this block.
 const READY: u32 = (1 << 17) | (1 << 18) | (1 << 7);
+
+/// The bootmode row, which `OTP_BOOTMODE_REG` ([`REG_BOOTMODE`]) presents
+/// without a transaction. The boot ROM picks its boot source from it before
+/// anything else (#68); with the "always ready" placeholder there instead it
+/// skipped the SPI flash and waited for a USB host that never comes.
+const BOOTMODE_ROW: u32 = 17;
 
 /// The board-identity block in OTP rows 19..22 (and again in 23..26).
 ///
@@ -302,6 +310,7 @@ impl MmioDevice for ConfigOtp {
                     0
                 }
             }
+            REG_BOOTMODE => self.row(BOOTMODE_ROW),
             REG_DATA => self.data,
             REG_KEY => self.key,
             off => self.storage.get(&off).copied().unwrap_or(READY),
@@ -334,5 +343,20 @@ impl MmioDevice for ConfigOtp {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The register the boot ROM reads its boot source from is the bootmode
+    /// row, not the placeholder the rest of the block reads back (#68).
+    #[test]
+    fn bootmode_reg_presents_the_bootmode_row() {
+        let mut otp = ConfigOtp::new();
+        assert_eq!(otp.read(REG_BOOTMODE, Width::Word).unwrap(), 0x0000_08B0);
+        otp.set(BOOTMODE_ROW, 0x1234);
+        assert_eq!(otp.read(REG_BOOTMODE, Width::Word).unwrap(), 0x1234);
     }
 }
