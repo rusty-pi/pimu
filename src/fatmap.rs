@@ -92,7 +92,13 @@ fn partitions(read: &ReadBlock) -> (Vec<(usize, u64, u64)>, u64) {
         .filter_map(|i| {
             let e = entry(i);
             let (start, size) = (le32(e, 8), le32(e, 12));
-            (e[4] != 0 && size != 0).then_some((i + 1, start, start + size - 1))
+            // Not `then_some`: its argument is evaluated even for an empty
+            // slot, and `start + size - 1` underflows there.
+            if e[4] != 0 && size != 0 {
+                Some((i + 1, start, start + size - 1))
+            } else {
+                None
+            }
         })
         .collect();
     (parts, 0)
