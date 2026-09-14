@@ -301,10 +301,19 @@ fn every_boot_scenario_loads_and_plans_its_media() {
                 "{joined}"
             );
         }
+        for (flag, value) in [
+            ("--stepping", &scn.boot.stepping),
+            ("--board-rev", &scn.boot.board_rev),
+        ] {
+            assert_eq!(joined.contains(flag), value.is_some(), "{joined}");
+            if let Some(v) = value {
+                assert!(joined.contains(&format!("{flag} {v}")), "{joined}");
+            }
+        }
         seen.push(scn.name);
     }
     seen.sort();
-    for name in ["firmware-boot", "tftp-boot", "usb-boot"] {
+    for name in ["b0-boot", "firmware-boot", "tftp-boot", "usb-boot"] {
         assert!(seen.iter().any(|s| s == name), "{name} missing: {seen:?}");
     }
 }

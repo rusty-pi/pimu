@@ -1,0 +1,161 @@
+
+[t] RPi: BOOTSYS release VERSION:0a7ef05f DATE: 2026/08/04 TIME: 12:38:13
+[t] MFG_VER: 1
+[t] BOOTMODE: 0x00 partition 0 build-ts BUILD_TIMESTAMP=1785847093 serial 1aa2bb31 boardrev c03112 stc [n]
+[t] PM_RSTS 00000020
+[t] POWER_OFF_ON_HALT: 0 WAIT_FOR_POWER_BUTTON 0 power-on-reset 0
+[t] EEPROM ID 0xef4018
+[t] SFDP None
+[t] part 00000000 reset_info 00000000
+[t] uSD voltage 3.3V
+[t] init_sdram_1350
+[t] Initialising SDRAM rank 1 total-size: 16Gbit part: 0 (0x06 0x00) odt: 0
+[t] memsys_init: 0 16Gbit MCB 0x80015ff0: 11696
+[t] DDR 3200 Mbps dual-rank:0 byte-mode:0 size-gbit:16 part-config:0 odt:0
+[t] SD_SB 11003120
+[t] OTP boardrev c03112 bootrom 8b0 8b0
+[t] Customer key hash 0000000000000000000000000000000000000000000000000000000000000000
+[t] VC-JTAG unlocked
+
+
+[t] RPi: BOOTLOADER release VERSION:0a7ef05f DATE: 2026/08/04 TIME: 12:38:13
+[t] MFG_VER: 1
+[t] BOOTMODE: 0x00 partition 0 build-ts BUILD_TIMESTAMP=1785847093 serial 1aa2bb31 boardrev c03112 stc [n]
+[t] EEPROM ID 0xef4018
+[t] SFDP None
+[t] PCI0 init
+[t] PCI0 reset
+[t] PCIe scan 00001106:00003483
+[t] XHCI-STOP
+[t] xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb
+[t] USBSTS 1
+[t] xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb
+[t] xHC0 ports 5 slots 32 intrs 4
+[t] Reset USB port-power 1000 ms
+[t] xhci_set_port_power 1 0
+[t] xhci_set_port_power 2 0
+[t] xhci_set_port_power 3 0
+[t] xhci_set_port_power 4 0
+[t] xhci_set_port_power 5 0
+[t] xhci_set_port_power 1 1
+[t] xhci_set_port_power 2 1
+[t] xhci_set_port_power 3 1
+[t] xhci_set_port_power 4 1
+[t] xhci_set_port_power 5 1
+[t] XHCI-STOP
+[t] xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb
+[t] USBSTS 0
+[t] XHCI-STOP
+[t] xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb
+[t] USBSTS 1
+[t] xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb
+[t] xHC0 ports 5 slots 32 intrs 4
+[t] SD_OC: 0
+[t] Boot mode: SD (01) order f4
+[t] USB2[1] 400202e1 connected
+[t] USB2 root HUB port 1 init
+[t] DEV [01:00] 2.16 000000:01 class 9 VID 2109 PID 3431
+[t] HUB init [01:00] 2.16 000000:01
+[t] SD HOST: 200000000 CTL0: 0x00800000 BUS: 400000 Hz actual: 390625 HZ div: 512 (256) status: 0x1fff0000 delay: 276
+[t] SD HOST: 200000000 CTL0: 0x00800f00 BUS: 400000 Hz actual: 390625 HZ div: 512 (256) status: 0x1fff0000 delay: 276
+[t] OCR c0ff8000 [2]
+CID: 00005049564952544601123456780015
+CSD: 400e00325b590000023f7f800a400000
+[t] SD: bus-width: 4 spec: 2 SCR: 0x02058002 0x00000000
+[t] SD HOST: 200000000 CTL0: 0x00800f04 BUS: 50000000 Hz actual: 50000000 HZ div: 4 (2) status: 0x1fff0000 delay: 2
+[t] MBR: 0x00000800,  522240 type: 0x0c
+[t] MBR: 0x00080000,   65536 type: 0x83
+[t] MBR: 0x00000000,       0 type: 0x00
+[t] MBR: 0x00000000,       0 type: 0x00
+[t] Trying partition: 0
+[t] type: 32 lba: 2048 '[oem]' ' RPIBOOT    ' clusters 130044 (4)
+[t] rsc 32 fat-sectors 1016 root dir cluster 2 sectors 0 entries 0
+[t] FAT32 clusters 130044
+[t] [sdcard] autoboot.txt not found
+[t] Select partition rsts 0 C(boot_partition) 0 EEPROM config 0 result 1
+[t] Trying partition: 1
+[t] type: 32 lba: 2048 '[oem]' ' RPIBOOT    ' clusters 130044 (4)
+[t] rsc 32 fat-sectors 1016 root dir cluster 2 sectors 0 entries 0
+[t] FAT32 clusters 130044
+[t] Read config.txt bytes      279 hnd 0x3
+[t] [sdcard] vl805.bin not found
+[t] [sdcard] pieeprom.upd not found
+[t] [sdcard] recover4.elf not found
+[t] [sdcard] recovery.elf not found
+[t] Read start4.elf bytes  2298048 hnd 0x4
+[t] Read fixup4.dat bytes     5512 hnd 0x467
+[t] 0x00c03112 0x00000000 0x00003fff
+[t] MEM GPU: 76 ARM: 948 TOTAL: 1024
+[t] Starting start4.elf @ 0xfec00200 partition 1
+[t] XHCI-STOP
+[t] xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb
+[t] USBSTS 18
+[t] PCI0 reset
+[t] +
+
+MESS:[t]:0: arasan: arasan_emmc_open
+MESS:[t]:0: arasan: arasan_emmc_set_clock C0: 0x00800000 C1: 0x000e0047 emmc: 200000000 actual: 390625 div: 0x00000100 target: 400000 min: 400000 max: 400000 delay: 5
+MESS:[t]:0: arasan: arasan_emmc_set_clock C0: 0x00800000 C1: 0x000e0047 emmc: 200000000 actual: 390625 div: 0x00000100 target: 400000 min: 400000 max: 400000 delay: 5
+MESS:[t]:0: arasan: arasan_emmc_set_clock C0: 0x00800f00 C1: 0x000e0047 emmc: 200000000 actual: 390625 div: 0x00000100 target: 400000 min: 390000 max: 400000 delay: 5
+MESS:[t]:0: boot-part: 0 fs-type: 0
+MESS:[t]:0: boot-part: 0 fs-type: 3
+MESS:[t]:0: arasan: arasan_emmc_set_clock C0: 0x00800f06 C1: 0x000e0207 emmc: 200000000 actual: 50000000 div: 0x00000002 target: 50000000 min: 0 max: 50000000 delay: 1
+MESS:[t]:0: brfs: File read: /mfs/sd/config.txt
+MESS:[t]:0: board: boardrev c03112 otp c03112
+MESS:[t]:0: brfs: File read: 279 bytes
+MESS:[t]:0: brfs: File read: /mfs/sd/dt-blob.bin
+MESS:[t]:0: HDMI0:EDID error reading EDID block 0 attempt 0
+MESS:[t]:0: HDMI0:EDID giving up on reading EDID block 0
+MESS:[t]:0: HDMI1:EDID error reading EDID block 0 attempt 0
+MESS:[t]:0: HDMI1:EDID giving up on reading EDID block 0
+MESS:[t]:0: brfs: File read: 71582 bytes
+MESS:[t]:0: brfs: File read: /mfs/sd/config.txt
+MESS:[t]:0: gpioman: gpioman_get_pin_num: pin DISPLAY_DSI_PORT not defined
+MESS:[t]:0: gpioman: gpioman_get_pin_num: pin DISPLAY_DSI_PORT not defined
+MESS:[t]:0: *** Restart logging
+MESS:[t]:0: brfs: File read: 279 bytes
+MESS:[t]:0: hdmi: HDMI0:EDID error reading EDID block 0 attempt 0
+MESS:[t]:0: hdmi: HDMI0:EDID giving up on reading EDID block 0
+MESS:[t]:0: hdmi: HDMI0:EDID error reading EDID block 0 attempt 0
+MESS:[t]:0: hdmi: HDMI0:EDID giving up on reading EDID block 0
+MESS:[t]:0: hdmi: HDMI:hdmi_get_state is deprecated, use hdmi_get_display_state instead
+MESS:[t]:0: hdmi: HDMI1:EDID error reading EDID block 0 attempt 0
+MESS:[t]:0: hdmi: HDMI1:EDID giving up on reading EDID block 0
+MESS:[t]:0: hdmi: HDMI1:EDID error reading EDID block 0 attempt 0
+MESS:[t]:0: hdmi: HDMI1:EDID giving up on reading EDID block 0
+MESS:[t]:0: hdmi: HDMI:hdmi_get_state is deprecated, use hdmi_get_display_state instead
+MESS:[t]:0: HDMI0: hdmi_pixel_freq_limit: 300000000
+MESS:[t]:0: HDMI1: hdmi_pixel_freq_limit: 300000000
+MESS:[t]:0: No matching initramfs found (expected initramfs8) - auto_initramfs disabled
+MESS:[t]:0: dtb_file 'bcm2711-rpi-4-b.dtb'
+MESS:[t]:0: brfs: File read: /mfs/sd/bcm2711-rpi-4-b.dtb
+MESS:[t]:0: Loaded 'bcm2711-rpi-4-b.dtb' to 0x100 size 0xdc57
+MESS:[t]:0: brfs: File read: 56407 bytes
+MESS:[t]:0: brfs: File read: /mfs/sd/config.txt
+MESS:[t]:0: dtparam: spi=on
+MESS:[t]:0: dtparam: audio=off
+MESS:[t]:0: brfs: File read: 279 bytes
+MESS:[t]:0: brfs: File read: /mfs/sd/overlays/overlay_map.dtb
+MESS:[t]:0: brfs: File read: 6115 bytes
+MESS:[t]:0: brfs: File read: /mfs/sd/overlays/disable-bt.dtbo
+MESS:[t]:0: Loaded overlay 'disable-bt'
+MESS:[t]:0: brfs: File read: 1073 bytes
+MESS:[t]:0: brfs: File read: /mfs/sd/overlays/disable-wifi.dtbo
+MESS:[t]:0: Loaded overlay 'disable-wifi'
+MESS:[t]:0: brfs: File read: 387 bytes
+MESS:[t]:0: brfs: File read: /mfs/sd/overlays/vc4-kms-v3d-pi4.dtbo
+MESS:[t]:0: Loaded overlay 'vc4-kms-v3d-pi4'
+MESS:[t]:0: brfs: File read: 3913 bytes
+MESS:[t]:0: brfs: File read: /mfs/sd/cmdline.txt
+MESS:[t]:0: Read command line from file 'cmdline.txt':
+MESS:[t]:0: 'console=serial0,115200 console=tty1 root=/dev/mmcblk0p2 rootfstype=ext4 fsck.repair=yes rootwait'
+MESS:[t]:0: brfs: File read: 97 bytes
+MESS:[t]:0: brfs: File read: /mfs/sd/kernel8.img
+MESS:[t]:0: Loaded 'kernel8.img' to 0x200000 size 0x4c
+MESS:[t]:0: Device tree loaded to 0x2eff1e00 (size 0xe1c1)
+MESS:[t]:0: uart: Set PL011 baud rate to 103448.300000 Hz
+MESS:[t]:0: uart: Baud rate change done...
+MESS:[t]:0: uart: Baud rate change done...
+MESS:[t]:0: gpioman: gpioman_get_pin_num: pin SDCARD_CONTROL_POWER not defined
+MESS:[t]:0: Watchdog stopped
+MESS:[t]:0: arm_loader: Starting ARM with 948MB
