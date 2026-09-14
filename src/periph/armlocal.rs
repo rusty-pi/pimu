@@ -4,7 +4,7 @@
 //! On BCM2836/7 this block *was* the interrupt controller: per-core timer and
 //! mailbox interrupts, routed through `irq-bcm2836`. BCM2711 put a GIC-400
 //! next to it ([`super::gic`]) and Linux on a Pi 4 uses that instead. The
-//! device tree this firmware hands to Linux (`recon … --dump-fdt`) still
+//! device tree this firmware hands to Linux (`boot … --dump-fdt`) still
 //! carries the node, but inertly:
 //!
 //! ```text

@@ -2,7 +2,7 @@
 //! the mailboxes (`0x7E00_B880`, [`crate::periph::mbox`]).
 //!
 //! What matters here is how the firmware lets the ARM cores out of reset.
-//! Traced on the pinned firmware (`RVF_TRACE_MMIO=7e00b000-7e101000 recon
+//! Traced on the pinned firmware (`RVF_TRACE_MMIO=7e00b000-7e101000 boot
 //! …`, #40): the whole boot touches this block only a handful of times, and
 //! the writes right after `arm_loader: Starting ARM with 948MB` are
 //!

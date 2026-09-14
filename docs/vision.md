@@ -8,7 +8,7 @@ target we're aiming the design at.
 
 ## 1. One command, all the blobs
 
-Today the entry points are `recon` / `run` with a pile of flags and manual
+Today the entry points are `boot` / `run` with a pile of flags and manual
 `--patch` arguments. The target is a **single command** that takes the firmware
 set the way a real Pi consumes it:
 
@@ -68,7 +68,7 @@ instead of a disk image — lower priority.
 ## 3. Reaching Linux — keep the VideoCore running alongside QEMU
 
 We reach Linux now: the boot runs to `arm_loader: Starting ARM with 948MB`, and
-`recon --dump-fdt` yields a device tree a stock
+`boot --dump-fdt` yields a device tree a stock
 `qemu-system-aarch64 -M raspi4b -m 2G -kernel kernel8.img -dtb handoff.dtb`
 boots the real kernel from, as far as `Waiting for root device`.
 
@@ -88,7 +88,7 @@ real.**
   (`/soc` carries `dma-ranges = <0xc0000000 0x0 0x0 0x40000000>`), which is the
   uncached SDRAM alias the model already implements — so a shared mapping needs
   no address translation at all.
-- **The hand-off is a file copy, not a subsystem.** `recon --dram-map` reports
+- **The hand-off is a file copy, not a subsystem.** `boot --dram-map` reports
   39 MiB non-zero in 24 regions at `arm_loader`: the armstub and spin table at
   `0x0..0x1b000`, the kernel at `0x200000`, the patched DTB at `0x2eff1e00`, and
   `start4`'s own image around `0x3ebe4000`. Nothing above `0x4000_0000`. The
@@ -129,7 +129,7 @@ real.**
 **Model the ARM mailbox in our own machine first**, and prove `start4`'s mailbox
 task — it exists, the blob says `Creating mailbox reading task ...` — answers
 `GET_FIRMWARE_REVISION` and then `GET_CRYPTO_HMAC_SHA256`, with no ARM anywhere
-in the picture. That single step answers #37 in CI in one `recon` run. Only then
+in the picture. That single step answers #37 in CI in one `boot` run. Only then
 is it worth choosing a QEMU transport, because the transport is a deployment
 detail on top of a proven mailbox rather than the thing the idea is gated on.
 

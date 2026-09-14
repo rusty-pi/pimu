@@ -98,7 +98,7 @@ optional `note`. `kind` is one of:
 3. `linux` – upstream driver or DT binding
 4. `decompile` – `firmware/source/*.c` / disassembly, with the address
 5. `measured` – read on the reference board (debugfs etc.), with how it was read
-6. `trace` – observed in a `recon` run
+6. `trace` – observed in a `boot` run
 7. `inferred` – a guess; say why
 
 `bus` says what the base and the offsets address:

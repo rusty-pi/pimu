@@ -29,7 +29,7 @@ such a build they are reported and ignored, and `--trace*` is refused. A `diag`
 build also takes every step through every check of the run loop, instead of
 skipping the ones that cannot act (`Emulator::fast_steps`), so the switches see
 each instruction. It also records start4's boot-progress tags (stores to
-`0x?EC0_2000`), which `recon` prints after the run.
+`0x?EC0_2000`), which `boot` prints after the run.
 `RVF_LIVE_CONSOLE` is not a diagnostic and works everywhere, as do the
 device-model `RVF_DBG_*` switches, which are read once and only fire on rare
 device events.
@@ -43,16 +43,16 @@ trace just before it, then watch the state it depends on.
 
 ```bash
 # 1. Where did it stop?  The run report's `end` and `final pc` say.
-recon firmware/pieeprom.bin --eeprom --sd firmware/sd.img
+boot firmware/pieeprom.bin --eeprom --sd firmware/sd.img
 
 # 2. Arm the instruction trace when the boot first reaches that pc.
-RVF_TRACE_ON_PC=0x3ec568f8 RVF_TRACE_CAP=4000 recon … 2> trace.log
+RVF_TRACE_ON_PC=0x3ec568f8 RVF_TRACE_CAP=4000 boot … 2> trace.log
 
 # 3. Trap the call sites you suspect, with registers.
-RVF_TRAP=0x3ecc5190,0x3ec568f8 recon … 2> traps.log
+RVF_TRAP=0x3ecc5190,0x3ec568f8 boot … 2> traps.log
 
 # 4. Watch the memory the firmware is branching on.
-RVF_WATCH=0x3ef6b04c recon … 2> writes.log
+RVF_WATCH=0x3ef6b04c boot … 2> writes.log
 ```
 
 `RVF_TRACE_ON_PC` exists because the console-substring trigger cannot reach code
@@ -141,7 +141,7 @@ running and answers the property interface for the ARM it just released. This
 bench has no ARM, so `--mbox-property` stands in for one:
 
 ```bash
-recon firmware/pieeprom.bin --eeprom --sd firmware/sd.img \
+boot firmware/pieeprom.bin --eeprom --sd firmware/sd.img \
   --mbox-property 0x00000001,0x00030090
 ```
 
@@ -185,7 +185,7 @@ exchanges against one booted firmware — which is the only way to read
 *previous* request:
 
 ```bash
-recon firmware/pieeprom.bin --eeprom --sd firmware/sd.img \
+boot firmware/pieeprom.bin --eeprom --sd firmware/sd.img \
   --mbox-property 0x00030090 --mbox-property 0x0003008e
 ```
 

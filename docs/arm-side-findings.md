@@ -158,13 +158,13 @@ through to its prompt on all four cores. Things that mattered:
   PIO path writes everything at once and never waits for it.
 - Input waits on the line while the FIFO is full or the receiver is off, rather
   than overrunning.
-- `recon --send-after <prompt> <text>` types a line once the console prints the
+- `boot --send-after <prompt> <text>` types a line once the console prints the
   prompt; the Linux scenario uses it (`[[boot.input]]`), keyed to the
   transcript so the golden stays deterministic. ash's line editor prints the
   prompt and then `ESC [6n` (a cursor-position query) once its tty is raw; text
   sent before that would be echoed twice, once by the cooked tty and once by the
   editor, so the scenario waits for the query.
-- `recon --stdin` is the interactive console: raw terminal, `Ctrl-A x` quits.
+- `boot --stdin` is the interactive console: raw terminal, `Ctrl-A x` quits.
   A real terminal answers the `ESC [6n` itself, through stdin.
 
 ## UEFI (the rpi-mkosi image)

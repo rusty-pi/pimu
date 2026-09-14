@@ -179,7 +179,7 @@ impl EepromImage {
         self.config_text().map(|t| BootConf::parse(&t))
     }
 
-    /// A one-line-per-section summary for `recon --eeprom` startup output.
+    /// A one-line-per-section summary for `boot --eeprom` startup output.
     pub fn summary(&self) -> String {
         let mut out = String::new();
         for s in &self.sections {

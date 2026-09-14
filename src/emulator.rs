@@ -163,7 +163,7 @@ pub struct ConsoleInput {
     /// the previous send. Keyed to the transcript, not to time, so a scripted
     /// session is as deterministic as the boot it follows.
     pub script: std::collections::VecDeque<(String, Vec<u8>)>,
-    /// Interactive input from the host (`recon --stdin`).
+    /// Interactive input from the host (`boot --stdin`).
     pub host: Option<crate::stdio::HostInput>,
 }
 

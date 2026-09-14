@@ -82,7 +82,7 @@ pub enum UnimplPolicy {
     #[default]
     Fault,
     /// Fault on an unknown instruction, but keep the reconnaissance leniencies
-    /// so a whole boot can run. What `recon` uses unless told otherwise.
+    /// so a whole boot can run. What `boot` uses unless told otherwise.
     ReconFault,
     /// Advance past it (correct length) and keep going. For "how far does the
     /// firmware get / what does it touch" reconnaissance runs on firmware the

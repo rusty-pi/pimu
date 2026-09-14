@@ -86,7 +86,7 @@
 //! already implements, which is why no translation happens here.
 //!
 //! Nothing in the boot touches this block: the firmware only services it once
-//! an ARM is running. Under `recon --arm` that is Linux; without it, `recon
+//! an ARM is running. Under `boot --arm` that is Linux; without it, `boot
 //! --mbox-property` posts a request *as if* from the ARM. Either way the
 //! answer comes from the `mbox_read` task `start4.elf` leaves running after
 //! `arm_loader` (the blob says `Creating mailbox reading task ...`).

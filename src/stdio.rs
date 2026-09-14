@@ -1,5 +1,5 @@
 //! The host's standard input as the serial console's receive line (#40,
-//! milestone 6): `recon --stdin`.
+//! milestone 6): `boot --stdin`.
 //!
 //! A reader thread hands whatever arrives to the run loop, which feeds it to
 //! the PL011. On a terminal the input side is put into raw mode for the length

@@ -6,7 +6,7 @@ VL805** (`1106:3483`) sitting behind the BCM2711's PCIe root complex, not on
 the peripheral bus, and it needs a firmware blob uploaded to it at boot.
 
 Every address, register offset and log line below was measured — either from a
-`recon` run of this bench, from a static disassembly of the real blobs, or from
+`boot` run of this bench, from a static disassembly of the real blobs, or from
 `ssh rpi-dev` (a real Pi 4B with a VL805). Provenance is given inline. Nothing
 here is recalled from memory.
 
@@ -57,7 +57,7 @@ second-stage bootloader's strings are visible in its uncompressed sibling
 | `Using bootloader MCU %p %d` | `start4.elf` | `0x3EDC6158` |
 
 The bootloader's unpacked image was recovered with
-`recon ... --dump 0xa0000:0x60000` and re-disassembled with the `disasm`
+`boot ... --dump 0xa0000:0x60000` and re-disassembled with the `disasm`
 subcommand; `start4.elf` addresses are runtime (`0x3E…` = ELF `0x0E…`
 + `0x3000_0000`).
 
@@ -384,7 +384,7 @@ result to start4 in RAM.
 `55 AA` is the EEPROM section magic, `F3 3F` the packed-file section type, then
 a big-endian length (`0x1B74` = 7028 bytes for the hub image, `0xEC23` = 60451
 for the MCU image) and the file name. The bench's own section walk shows these
-as the two `packed 0xf33f` entries in the `recon --eeprom` header:
+as the two `packed 0xf33f` entries in the `boot --eeprom` header:
 
 ```
 0x05f090..0x060c0c  packed 0xf33f
@@ -451,7 +451,7 @@ only traced access was the system timer:
 **Cost of the timeout, measured.** `PCI0 init` at `2.34` to `PCIe timeout` at
 `3.66` in the firmware's own timeline = **1.32 s of modelled time**. The poll
 body is three instructions per `CLO` read, so ~2.9 M VPU instructions — about
-**0.4 %** of the 715 M a 150 s `recon` run retires. It costs a little over a
+**0.4 %** of the 715 M a 150 s `boot` run retires. It costs a little over a
 second of the transcript's timestamps and essentially no wall clock.
 
 ---
@@ -955,7 +955,7 @@ image and followed by erased flash, so this is a length-field bump and an
 append; nothing moves):
 
 ```text
-$ recon firmware/pieeprom.bin --eeprom --usb firmware/sd.img --boot-order 0xf14
+$ boot firmware/pieeprom.bin --eeprom --usb firmware/sd.img --boot-order 0xf14
 boot-order: bootconf BOOT_ORDER=0xf14 @ 0x73067
            BOOT_ORDER: USB-MSD -> SD CARD -> RESTART
   4.44 Boot mode: USB-MSD (04) order f1

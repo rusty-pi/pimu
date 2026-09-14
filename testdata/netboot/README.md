@@ -8,7 +8,7 @@ HTTP boot only accepts a signed `boot.img`. `scripts/make-netboot.sh` signs the
 test image with this key (the `rsa2048:` line of `boot.sig`, as
 `rpi-eeprom-digest -k` writes it), and writes the public half in the format
 `rpi-eeprom-config --pubkey` puts in the EEPROM's `pubkey.bin` slot.
-`recon --eeprom-pubkey` (scenario key `eeprom_pubkey`) installs it in the
+`boot --eeprom-pubkey` (scenario key `eeprom_pubkey`) installs it in the
 model's copy of the EEPROM, so the bootloader verifies the image against it —
 the same steps as Raspberry Pi's signed-boot flow, minus the OTP.
 

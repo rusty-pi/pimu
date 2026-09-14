@@ -57,7 +57,7 @@ mbox_property = [
 # licence check, which is what exercises the VCE guard below. RVF_BOOT_WALL
 # overrides it.
 wall_secs = 330
-# `recon` stops on an instruction the decoder does not implement rather than
+# `boot` stops on an instruction the decoder does not implement rather than
 # stepping over it, so a skip can only come from the remaining recon leniencies
 # (`bkpt` padding, `sleep`, an unhandled `swi`). Nothing in a clean boot should
 # need even those.
@@ -248,7 +248,7 @@ line = "arm_loader: Starting ARM with 948MB"
 why = """
 The point of the bench (#5, rpi-mkosi#37). Before releasing the ARM,
 `arm_loader` patches `/chosen` and publishes `rpi-machine-id` at `0x3EC568F8` —
-the string a `rpi-mkosi` image turns into its root-LUKS passphrase. `recon` reads
+the string a `rpi-mkosi` image turns into its root-LUKS passphrase. `boot` reads
 the patched blob back out of DRAM at the address the firmware logged and prints
 the identity properties, so a firmware bump that changes the derivation fails
 right here instead of on deployed cards."""

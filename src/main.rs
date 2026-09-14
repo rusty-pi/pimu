@@ -19,7 +19,8 @@ rpi-virt-fw — virtual bench for Raspberry Pi VideoCore boot firmware
 USAGE:
     rpi-virt-fw run <scenario.toml> [--update] [-v]
     rpi-virt-fw run-all [<dir>] [--update] [-v]
-    rpi-virt-fw recon <file> [--entry <hex>] [--ram-mb <n>] [--max-steps <n>] [--eeprom]
+    rpi-virt-fw boot --eeprom <pieeprom.bin> | <file.elf>
+                             [--entry <hex>] [--ram-mb <n>] [--max-steps <n>]
                              [--max-wall <secs>] [--sd <img>] [--usb <img>] [--usb-mb <n>]
                              [--boot-order <hex>] [--bootconf <KEY=VALUE>]...
                              [--skip-signed-boot] [--netboot <dir>]
@@ -40,13 +41,14 @@ USAGE:
 COMMANDS:
     run       Run one scenario and check it against its golden transcript.
     run-all   Run every *.toml scenario in <dir> (default: testdata/scenarios).
-    recon     Load an ELF (or --eeprom image) and run it, reporting how far it
-              got and what it touched. Stops on an instruction the decoder does
-              not implement (--skip-unimpl steps over it instead).
+    boot      Boot the machine from an EEPROM image (--eeprom), as a Pi 4 does,
+              or run a VPU ELF. Stops on an instruction the decoder does not
+              implement (--skip-unimpl steps over it instead). `boot <file>
+              --eeprom` is the same as `boot --eeprom <file>`.
     boot-check
               Check a finished firmware boot against a boot scenario: the
               golden console transcript plus every named milestone. `--plan`
-              prints the `recon` invocation the scenario describes, which is
+              prints the `boot` invocation the scenario describes, which is
               how `scripts/boot-check.sh` runs the boot without repeating the
               workload description.
     disasm    Disassemble a flat binary / ELF with the (partial) VPU decoder.
@@ -127,7 +129,9 @@ fn run(args: &[String]) -> Result<ExitCode> {
     match cmd.as_str() {
         "run" => cmd_run(&args[1..]),
         "run-all" => cmd_run_all(&args[1..]),
-        "recon" => cmd_recon(&args[1..]),
+        // `recon` is the old name, from when most of a boot was unknown
+        // instructions (#57).
+        "boot" | "recon" => cmd_boot(&args[1..]),
         "boot-check" => cmd_boot_check(&args[1..]),
         "disasm" => cmd_disasm(&args[1..]),
         "spec-docs" => cmd_spec_docs(&args[1..]),
@@ -163,7 +167,7 @@ fn cmd_spec_docs(args: &[String]) -> Result<ExitCode> {
     }
 }
 
-fn cmd_recon(args: &[String]) -> Result<ExitCode> {
+fn cmd_boot(args: &[String]) -> Result<ExitCode> {
     let mut path: Option<PathBuf> = None;
     let mut entry: Option<u32> = None;
     let mut ram_mb: Option<u32> = None;
@@ -210,10 +214,20 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
     let mut until: Option<String> = None;
     let mut sends: Vec<(String, Vec<u8>)> = Vec::new();
     let mut stdin = false;
-    let mut it = args.iter();
+    let mut it = args.iter().peekable();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--entry" => entry = Some(parse_u32(it.next().context("--entry needs a value")?)?),
+            // `--eeprom <image>`, or the older `<image> --eeprom` with the image
+            // given as the positional argument.
+            "--eeprom" => {
+                eeprom = true;
+                if path.is_none() {
+                    if let Some(p) = it.next_if(|p| !p.starts_with('-')) {
+                        path = Some(PathBuf::from(p));
+                    }
+                }
+            }
             "--ram-mb" => ram_mb = Some(it.next().context("--ram-mb needs a value")?.parse()?),
             "--max-steps" => {
                 max_steps = Some(it.next().context("--max-steps needs a value")?.parse()?)
@@ -221,7 +235,6 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
             "--max-wall" => {
                 max_wall_secs = it.next().context("--max-wall needs seconds")?.parse()?
             }
-            "--eeprom" => eeprom = true,
             "--trace" | "--trace-full" | "--trace-from" | "--trace-mmio"
                 if !rpi_virt_fw::diag::ON =>
             {
@@ -344,7 +357,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
             s => bail!("unexpected argument '{s}'"),
         }
     }
-    let path = path.context("recon: missing <file>")?;
+    let path = path.context("boot: missing <file>")?;
     let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
 
     // The EEPROM bootloader touches the 0x6000_0000 L2-SRAM window, which
@@ -650,7 +663,7 @@ fn cmd_recon(args: &[String]) -> Result<ExitCode> {
         // `RVF_DUMP_FLASH=<path>` writes the (self-update-modified) EEPROM image
         // after every run segment — `<path>.<n>` — so a run that reaches
         // "BOOT-EEPROM: UPDATED" but stops before RESET still yields the burned
-        // image. Feed it back as `recon <path>.<n> --eeprom` for a fast, already
+        // image. Feed it back as `boot <path>.<n> --eeprom` for a fast, already
         // provisioned boot (no self-update, no reboot).
         if eeprom {
             if let Ok(p) = std::env::var("RVF_DUMP_FLASH") {
@@ -1244,7 +1257,7 @@ fn run_one(scn: &harness::Scenario, update: bool, verbose: bool) -> Result<bool>
 /// Two modes, because the boot itself is expensive (minutes) and must be run
 /// exactly once per check:
 ///
-/// * `--plan` prints the `recon` invocation the scenario describes, for
+/// * `--plan` prints the `boot` invocation the scenario describes, for
 ///   `scripts/boot-check.sh` to run. The scenario file stays the only place
 ///   the workload is written down.
 /// * `--log <combined.log> --console <console.bin>` checks that finished run:
@@ -1274,10 +1287,10 @@ fn cmd_boot_check(args: &[String]) -> Result<ExitCode> {
 
     if plan {
         // Shell-readable and quoting-proof: `wall=<n>` on the first line for
-        // the outer timeout, then one `recon` argument per line.
+        // the outer timeout, then one `boot` argument per line.
         let console = console.unwrap_or_else(|| PathBuf::from("boot-console.bin"));
         println!("wall={}", scn.wall_secs());
-        for a in scn.recon_args(&console) {
+        for a in scn.boot_args(&console) {
             println!("{a}");
         }
         return Ok(ExitCode::SUCCESS);
@@ -1289,7 +1302,7 @@ fn cmd_boot_check(args: &[String]) -> Result<ExitCode> {
     let console_path = console.context("boot-check: --console <path> is required with --log")?;
     let console_bytes = std::fs::read(&console_path).with_context(|| {
         format!(
-            "reading console log {} (recon writes it with --console-log)",
+            "reading console log {} (boot writes it with --console-log)",
             console_path.display()
         )
     })?;
@@ -1782,7 +1795,7 @@ fn mbox_property_exchange(emu: &mut Emulator, limits: &RunLimits, tags: &[MboxTa
         off += 12 + ((slot.max(len) + 3) & !3);
     }
     // A trace armed by `RVF_TRACE_ON_PC` inside the exchange is collected here,
-    // after the recon report that normally prints one has already run — so
+    // after the run report that normally prints one has already run — so
     // print it, or investigating a tag handler silently produces nothing.
     if !emu.cpu.trace_log.is_empty() {
         println!(

@@ -2,7 +2,7 @@
 # Write the "self-update timestamp" trailer into a pieeprom image, the way the
 # bootloader does after applying an EEPROM update. A provisioned image boots
 # straight through — `SELF-UPDATE ... skip` — instead of self-updating and
-# rebooting on the first run under `recon`.
+# rebooting on the first run under `boot`.
 #
 # The trailer is the last 8 bytes of the image:
 #     [len-8 .. len-4)  ~timestamp   (u32 LE)
