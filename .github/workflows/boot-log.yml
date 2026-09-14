@@ -7,11 +7,17 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Every job runs on the hosted runners unless the repository variables
+# RUNNER_BUILD and RUNNER_BOOT name a self-hosted pool instead: the compiles
+# (tests, build) and the boots each get their own, sized for them, from
+# valtzu/gh-action-nas-runner. Deleting the variables brings CI back here.
+# Those runners have no sudo and already carry the packages, so the apt steps
+# only run on the hosted ones.
 jobs:
   # Fast lane: the decoder, peripheral and address-decode tests. No firmware
   # blobs, no boot — if one of these fails the boot check below is noise.
   tests:
-    runs-on: ubuntu-26.04
+    runs-on: ${{ vars.RUNNER_BUILD || 'ubuntu-26.04' }}
     timeout-minutes: 15
 
     steps:
@@ -26,6 +32,7 @@ jobs:
       # tests/a64_diff.rs checks the A64 interpreter against qemu-aarch64
       # user-mode emulation.
       - name: Install qemu-user
+        if: runner.environment == 'github-hosted'
         run: sudo apt-get update && sudo apt-get install -y qemu-user
 
       - name: Format
@@ -44,13 +51,14 @@ jobs:
 
   # Build once: the binary, the firmware blobs and every boot medium.
   build:
-    runs-on: ubuntu-26.04
+    runs-on: ${{ vars.RUNNER_BUILD || 'ubuntu-26.04' }}
     timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v7
 
       - name: Install mtools and e2fsprogs
+        if: runner.environment == 'github-hosted'
         run: sudo apt-get update && sudo apt-get install -y mtools e2fsprogs
 
       - uses: dtolnay/rust-toolchain@stable
@@ -86,7 +94,7 @@ jobs:
   # from each medium, and the Linux boot to a shell (#40).
   boot:
     needs: build
-    runs-on: ubuntu-26.04
+    runs-on: ${{ vars.RUNNER_BOOT || 'ubuntu-26.04' }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
