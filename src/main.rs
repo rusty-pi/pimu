@@ -1582,7 +1582,8 @@ fn cmd_disasm(args: &[String]) -> Result<ExitCode> {
     let raw = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
 
     // ELF: locate the segment containing `vaddr` (or the entry) and disassemble
-    // from there. Flat binary: disassemble from file offset 0 at `--base`.
+    // from there. Flat binary: file offset 0 sits at `--base`, and `--vaddr`
+    // starts that far into it.
     let (bytes, mut pc): (Vec<u8>, u32) = if eeprom {
         use rpi_virt_fw::firmware::eeprom::{
             EepromImage, BOOTCODE_ENTRY_OFFSET, BOOTCODE_LOAD_ADDR,
@@ -1605,7 +1606,15 @@ fn cmd_disasm(args: &[String]) -> Result<ExitCode> {
         let skip = (target - seg.vaddr) as usize;
         (seg.data[skip..].to_vec(), target)
     } else {
-        (raw, vaddr.unwrap_or(base))
+        let target = vaddr.unwrap_or(base);
+        let skip = target
+            .checked_sub(base)
+            .map(|s| s as usize)
+            .filter(|&s| s < raw.len())
+            .with_context(|| {
+                format!("--vaddr {target:#x} is outside the file at --base {base:#x}")
+            })?;
+        (raw[skip..].to_vec(), target)
     };
 
     let mut off = 0usize;
