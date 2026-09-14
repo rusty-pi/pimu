@@ -27,6 +27,9 @@ pub struct Machine {
     /// scratch (above the code region) and its staging at `0x8000_0000` still
     /// land in RAM. `None` on every normal boot — see `firmware::bootrom`.
     boot_rom: Option<(u32, u32, Vec<u8>)>,
+    /// The VPU starts in [`Self::boot_rom`] (`--boot-rom`), rather than the
+    /// ROM only being there for bootcode that calls into it (`--rom`).
+    rom_executes: bool,
     /// The L2 the bootcode runs out of, until its flush ([`crate::l2`], #70).
     pub l2: crate::l2::CacheAsRam,
     pub systimer: SysTimer,
@@ -219,6 +222,7 @@ impl Machine {
         Machine {
             ram: Ram::new(map::SDRAM_CACHED_BASE, ram_bytes),
             boot_rom: None,
+            rom_executes: false,
             l2: Default::default(),
             systimer: SysTimer::new(),
             uart0: Pl011::new(),
@@ -474,15 +478,25 @@ impl Machine {
         const CODE_LEN: u32 = 0x8000;
         let len = (bytes.len() as u32).min(CODE_LEN);
         self.boot_rom = Some((BASE, BASE + len, bytes));
+        self.rom_executes = true;
         // The ROM stages the bootcode into the L2 with ordinary stores.
         self.l2.hold(0, 0);
     }
 
-    /// Whether a real boot-ROM image is mapped (experimental `--boot-rom`). The
-    /// run loop uses this to fast-forward the maskROM's `udelay` loops more
-    /// aggressively; it is never set on a normal boot, so no golden depends on it.
+    /// Map a real boot-ROM image at `0x6000_0000` for bootcode that calls into
+    /// it (`--rom`, #71: 2020-04-16 does), while the modelled ROM stage still
+    /// starts the machine.
+    pub fn map_boot_rom(&mut self, bytes: Vec<u8>) {
+        self.attach_boot_rom(bytes);
+        self.rom_executes = false;
+    }
+
+    /// Whether the VPU starts in a real boot-ROM image (experimental
+    /// `--boot-rom`). The run loop uses this to fast-forward the maskROM's
+    /// `udelay` loops more aggressively; it is never set on a normal boot, so no
+    /// golden depends on it.
     pub fn executing_boot_rom(&self) -> bool {
-        self.boot_rom.is_some()
+        self.rom_executes
     }
 
     /// If a boot-ROM overlay covers `addr`, the byte offset into its image.
