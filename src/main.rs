@@ -25,7 +25,7 @@ USAGE:
                              [--entry <hex>] [--ram-mb <n>] [--max-steps <n>]
                              [--max-wall <secs>] [--sd <img>] [--usb <img>] [--usb-mb <n>]
                              [--boot-order <hex>] [--bootconf <KEY=VALUE>]...
-                             [--skip-signed-boot] [--netboot <dir>]
+                             [--skip-signed-boot] [--netboot <dir> | --net passt:<socket>]
                              [--eeprom-pubkey <pubkey.bin>] [--boot-rom <rom.bin>]
                              [--skip-unimpl]
               (no --max-steps = no instruction cap; --max-wall defaults to 140s)
@@ -100,6 +100,11 @@ FLAGS:
               <prompt>. Repeatable; each prompt is looked for only in what the
               console printed after the previous send. Both take \\n, \\r, \\t,
               \\\\ and \\xHH escapes. Deterministic: keyed to the transcript.
+    --net passt:<socket>
+              Plug the Ethernet cable into the host's network instead of the
+              built-in peer: passt (`passt -f -s <socket>`) or anything else
+              speaking QEMU's `-netdev stream` framing on that UNIX socket.
+              Runs on the host's clock, so not deterministic (#45).
     --stdin   Interactive session: the host's stdin is the serial console's
               input, and no wall-clock or silence limit ends the run. On a
               terminal, keys go to the guest raw (Ctrl-C included); Ctrl-A x
@@ -238,6 +243,7 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
     let mut mbox_tags: Vec<Vec<MboxTag>> = Vec::new();
     let mut usb_image: Option<PathBuf> = None;
     let mut netboot_root: Option<PathBuf> = None;
+    let mut net_socket: Option<PathBuf> = None;
     let mut boot_order: Option<String> = None;
     let mut bootconf: Vec<String> = Vec::new();
     let mut eeprom_pubkey: Option<PathBuf> = None;
@@ -329,6 +335,14 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
             }
             "--usb" => usb_image = Some(PathBuf::from(it.next().context("--usb needs a path")?)),
             "--usb-mb" => usb_mb = Some(it.next().context("--usb-mb needs a value")?.parse()?),
+            "--net" => {
+                let spec = it.next().context("--net needs passt:<socket>")?;
+                let sock = spec
+                    .strip_prefix("passt:")
+                    .or_else(|| spec.strip_prefix("stream:"))
+                    .with_context(|| format!("--net {spec}: expected passt:<socket>"))?;
+                net_socket = Some(PathBuf::from(sock));
+            }
             "--netboot" => {
                 netboot_root = Some(PathBuf::from(
                     it.next().context("--netboot needs a directory")?,
@@ -407,6 +421,9 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
         }
     }
     let path = path.context("boot: missing <file>")?;
+    if netboot_root.is_some() && net_socket.is_some() {
+        bail!("--netboot and --net both plug in the Ethernet cable; give one");
+    }
     let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
 
     // The EEPROM bootloader touches the 0x6000_0000 L2-SRAM window, which
@@ -654,6 +671,13 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
                 peer = peer.with_io(io.clone());
             }
             machine.attach_net(Box::new(peer));
+        }
+        // `--net passt:<socket>`: the host's network (#45). A new connection
+        // for every boot, like a cable plugged in again after a reset.
+        if let Some(sock) = &net_socket {
+            let net = rpi_virt_fw::net::StreamBackend::connect(sock)
+                .with_context(|| format!("connecting to {}", sock.display()))?;
+            machine.attach_net(Box::new(net));
         }
         machine.config_otp.io = io.clone();
         machine.mmio_trace = trace_mmio;
