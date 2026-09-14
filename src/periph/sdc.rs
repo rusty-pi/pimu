@@ -15,33 +15,47 @@
 //! access port**. start4's SDRAM driver (the `.drivers` entry at `0x3EDFDF68`)
 //! drives it from two ops:
 //!
-//! * read (`0x3ED6BA90`): write `addr | chan<<24 | dev<<25`, poll bit 31 for
+//! * read (`0x3ED6BA90`): write `addr | dev<<24 | chan<<25`, poll bit 31 for
 //!   "complete", check bit 30 for "error" (it prints `SD MR %08x R timeout …`
-//!   when that is set), then take the returned byte from bits 23:16.
+//!   when that is set), then take the returned byte from bits 23:16. Its debug
+//!   line, `RD: MR addr: %d device: %d channel: %d`, is what names bit 24 the
+//!   device (rank, i.e. chip select) and bit 25 the channel.
 //! * write (`0x3ED6C084`): the same word plus the data in bits 15:8 and bit 28
 //!   set to mark it a write.
 //!
 //! The one mode register the boot actually needs is **MR4**, the LPDDR4
 //! temperature-controlled-refresh register: once the ARM has been started,
-//! `0x3ED6BBA0` polls MR4 on every channel/device once a second and rescales
-//! the refresh interval in `[0x7E00_1004] >> 16` by `1 << (3 - code)` — code 3
-//! is the nominal 1x interval, a lower code means the die is cool enough to
-//! refresh less often. The reference board reports code 2 just after the
-//! handover and the firmware doubles the interval, which is what
-//! `examples-on-real-hardware/vc4-boot.log` logs as
-//! `sdram: sdram refresh 1562->3124 (2)`. With the port returning 0 the
+//! `0x3ED6BBA0` polls MR4 once a second and rescales the refresh interval in
+//! `[0x7E00_1004] >> 16` by `1 << (3 - code)` — code 3 is the nominal 1x
+//! interval, a lower code means the die is cool enough to refresh less often.
+//! The reference board reports code 2 just after the handover and the firmware
+//! doubles the interval, which is what `examples-on-real-hardware/vc4-boot.log`
+//! logs as `sdram: sdram refresh 1562->3124 (2)`. With the port returning 0 the
 //! firmware instead saw an out-of-range code and logged
 //! `Unexpected sdram refresh code (0)`, so the model seeds MR4 with the
 //! reference board's 2.
 //!
-//! The other one that matters is **MR8**, the density. The bootloader sizes
-//! the DRAM from it (`Initialising SDRAM rank 2 total-size: <n>Gbit`), and
-//! start4 answers `GET_BOARD_REVISION` with a memory-size field to match, not
-//! the OTP's. The reference board is an 8 GB Pi 4B (`total-size: 64Gbit` in
-//! `examples-on-real-hardware/sd-card-boot-perfect.log`, 32 Gb per die); the
-//! model is a 2 GB one, which is what `recon --eeprom` backs by default: MR8
-//! says 8 Gb per die, x16, so two ranks make 16 Gbit. At its reset 0 (4 Gb)
-//! the board came out as 1 GB. Every other mode register reads its reset 0.
+//! The other one that matters is **MR8**, the density, together with which
+//! ranks answer at all. The bootloader identifies the part from them and looks
+//! up a memsys config record (MCB) for it; every bootloader carries its own MCB
+//! table, so the part has to be one that all of them know. The 2023-05-11
+//! bootcode's identify step (`0x800056a4`) reads MR5, MR6 and MR8 on both
+//! devices and both channels, takes the density per die from MR8 `OP[5:2]`,
+//! and counts two ranks only when device 1's MR8 reads the same as device 0's.
+//! Its MCB key is then (size, dual-rank, byte-mode) (`0x8000544c`), and its
+//! table has a 16 Gbit record only for a **single** rank — a dual-rank 16 Gbit
+//! part dies with `MCB 4 16 1 not found` — while the 2026 tables carry both.
+//! A 2 GB Pi 4 boots every release, so its part is one rank of 16 Gb x16 dies:
+//! that is what the model is, which is also what `recon --eeprom` backs by
+//! default. The second chip select has nothing on it, so a transfer to device
+//! 1 reaches no die: every mode register reads 0 there and a write is lost.
+//! The reference board is an 8 GB Pi 4B (`total-size: 64Gbit` and `rank 2` in
+//! `examples-on-real-hardware/sd-card-boot-perfect.log`, 32 Gb per die).
+//!
+//! MR5 (the manufacturer) stays at its reset 0, which the bootloader prints as
+//! `'Unknown'`: it is only printed, never part of the MCB key — Samsung (1),
+//! Hynix (6) and Micron (0xFF) all gave the same key on the 2023 bootcode.
+//! Every other mode register reads its reset 0.
 
 use std::collections::BTreeMap;
 
@@ -83,16 +97,17 @@ const MR4_REFRESH_RATE: u32 = 4;
 const MR4_RESET: u8 = 2;
 
 /// LPDDR4 MR8 (basic configuration 4): density per die in `OP[5:2]`, I/O
-/// width in `OP[7:6]`. `0b0010` is 8 Gb, and width 0 is x16.
+/// width in `OP[7:6]`. `0b0100` is 16 Gb, and width 0 is x16.
 const MR8_BASIC_CONFIG: u32 = 8;
-const MR8_8GB_X16: u8 = 0b0010 << 2;
+const MR8_16GB_X16: u8 = 0b0100 << 2;
 
-/// A mode register is addressed by channel, device (rank) and register number.
+/// A mode register is addressed by device (rank), channel and register number.
 type MrKey = (bool, bool, u8);
 
 pub struct Sdc {
     storage: BTreeMap<u32, u32>,
-    /// The DRAM's mode registers, as the firmware's reads and writes see them.
+    /// The fitted rank's mode registers, as the firmware's reads and writes
+    /// see them. Only device 0 has any: see the module docs.
     mode_regs: BTreeMap<MrKey, u8>,
     /// Every distinct refresh interval the firmware has programmed, in order.
     /// The boot is expected to leave two entries here: the bootloader's value
@@ -112,10 +127,8 @@ impl Sdc {
     pub fn new() -> Sdc {
         let mut mode_regs = BTreeMap::new();
         for chan in [false, true] {
-            for dev in [false, true] {
-                mode_regs.insert((chan, dev, MR4_REFRESH_RATE as u8), MR4_RESET);
-                mode_regs.insert((chan, dev, MR8_BASIC_CONFIG as u8), MR8_8GB_X16);
-            }
+            mode_regs.insert((false, chan, MR4_REFRESH_RATE as u8), MR4_RESET);
+            mode_regs.insert((false, chan, MR8_BASIC_CONFIG as u8), MR8_16GB_X16);
         }
         Sdc {
             storage: BTreeMap::new(),
@@ -139,13 +152,18 @@ impl Sdc {
     /// read back from [`MR_PORT`].
     fn mode_register_access(&mut self, cmd: u32) -> u32 {
         let key: MrKey = (
-            cmd & MR_CHANNEL != 0,
             cmd & MR_DEVICE != 0,
+            cmd & MR_CHANNEL != 0,
             (cmd & MR_ADDR) as u8,
         );
+        // Device 1 is the rank that is not fitted: nothing drives the data
+        // back, and a write lands nowhere.
+        let fitted = !key.0;
         if cmd & MR_WRITE != 0 {
-            let data = (cmd >> MR_WDATA_SHIFT) as u8;
-            self.mode_regs.insert(key, data);
+            if fitted {
+                let data = (cmd >> MR_WDATA_SHIFT) as u8;
+                self.mode_regs.insert(key, data);
+            }
             return (cmd & !MR_ERROR) | MR_DONE;
         }
         self.mr_reads += 1;
@@ -198,12 +216,17 @@ mod tests {
         sdc.read(MR_PORT, Width::Word).unwrap()
     }
 
+    fn read_mr(sdc: &mut Sdc, cmd: u32) -> u32 {
+        sdc.write(MR_PORT, Width::Word, cmd).unwrap();
+        (port(sdc) & MR_RDATA) >> MR_RDATA_SHIFT
+    }
+
     #[test]
     fn mr4_reports_the_reference_boards_refresh_code() {
         let mut sdc = Sdc::new();
-        // Read MR4 on channel 1 / device 1, the way `0x3ED6BA90` builds it.
-        sdc.write(MR_PORT, Width::Word, 4 | MR_CHANNEL | MR_DEVICE)
-            .unwrap();
+        // Read MR4 on channel 1 of the fitted rank, the way `0x3ED6BA90`
+        // builds it.
+        sdc.write(MR_PORT, Width::Word, 4 | MR_CHANNEL).unwrap();
         let got = port(&mut sdc);
         assert_eq!(got & MR_DONE, MR_DONE, "transfer must report complete");
         assert_eq!(got & MR_ERROR, 0, "transfer must not report an error");
@@ -219,18 +242,34 @@ mod tests {
             MR_WRITE | (0x5A << MR_WDATA_SHIFT) | 13,
         )
         .unwrap();
-        sdc.write(MR_PORT, Width::Word, 13).unwrap();
-        assert_eq!((port(&mut sdc) & MR_RDATA) >> MR_RDATA_SHIFT, 0x5A);
-        // ... and only for the channel/device it was written to.
-        sdc.write(MR_PORT, Width::Word, MR_CHANNEL | 13).unwrap();
-        assert_eq!((port(&mut sdc) & MR_RDATA) >> MR_RDATA_SHIFT, 0);
+        assert_eq!(read_mr(&mut sdc, 13), 0x5A);
+        // ... and only for the channel it was written to.
+        assert_eq!(read_mr(&mut sdc, MR_CHANNEL | 13), 0);
     }
 
     #[test]
-    fn mr8_describes_a_2_gb_board() {
+    fn mr8_describes_one_rank_of_16_gb_dies() {
         let mut sdc = Sdc::new();
-        sdc.write(MR_PORT, Width::Word, 8 | MR_DEVICE).unwrap();
-        assert_eq!((port(&mut sdc) & MR_RDATA) >> MR_RDATA_SHIFT, 0x08);
+        // 16 Gb x16 on both channels of device 0: 16 Gbit, a 2 GB board.
+        assert_eq!(read_mr(&mut sdc, 8), 0x10);
+        assert_eq!(read_mr(&mut sdc, 8 | MR_CHANNEL), 0x10);
+        // The bootloader counts a second rank only when device 1's MR8 matches.
+        assert_eq!(read_mr(&mut sdc, 8 | MR_DEVICE), 0);
+        assert_eq!(read_mr(&mut sdc, 8 | MR_DEVICE | MR_CHANNEL), 0);
+    }
+
+    #[test]
+    fn the_rank_that_is_not_fitted_reads_zero_and_drops_writes() {
+        let mut sdc = Sdc::new();
+        sdc.write(
+            MR_PORT,
+            Width::Word,
+            MR_DEVICE | MR_WRITE | (0x5A << MR_WDATA_SHIFT) | 13,
+        )
+        .unwrap();
+        assert_eq!(port(&mut sdc) & MR_DONE, MR_DONE);
+        assert_eq!(read_mr(&mut sdc, MR_DEVICE | 13), 0);
+        assert_eq!(read_mr(&mut sdc, MR_DEVICE | 4), 0);
     }
 
     #[test]
