@@ -75,12 +75,6 @@ confidence = "high"
 
 [[register.source]]
 kind       = "inferred"
-ref        = "core 1 release: the model treats a code-address write (>= 0x1000) to the first two words of bank 0 as core 1's start vector"
-confidence = "low"
-note       = "these words otherwise only ever hold small priority bitfields; the real release mechanism is not decoded"
-
-[[register.source]]
-kind       = "inferred"
 ref        = "hermanhermitage/videocoreiv, VideoCore IV Programmers Manual: 128 vector-table entries indexed by interrupt number, 0-31 exceptions, 32-63 swi, 64-127 external interrupts"
 confidence = "medium"
 note       = "a reverse-engineered manual, not a datasheet"
@@ -104,6 +98,51 @@ kind       = "trace"
 ref        = "core-control write trace: +0x30 and +0x830 both take 0xFEC01E00, nothing writes +0x38"
 confidence = "high"
 note       = "replaced an earlier +0x38 guess for core 1 (commit 06a8447)"
+
+[[register]]
+name   = "WAKEUP"
+offset = 0x34
+access = "rw"
+notes  = "Start address. Core 1 sleeps until its copy (0x7E002834) is written, then starts there. start4 writes it once, with its own entry point, when its power manager first powers domain 0x20000."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "power-domain switch 0x3ED55412, case 0x20000: clears core 1's check-in slot, calls interrupt-controller op +0x1c (0x3ED01B8A, secure service 12 at 0xCEC006F6: st r1 -> 0x7E002834) with `entry`, then spins until core 1 checks in"
+confidence = "high"
+note       = "`entry` comes from a pc-relative lea, so it follows start4 wherever the bootloader loaded it"
+
+[[register.source]]
+kind       = "trace"
+ref        = "linux-boot: vcos_threadx.c's sysman user asks for bit 5 after `Booting Linux`, which powers domain 0x20000 and writes the wake once; nothing writes it before arm_loader"
+confidence = "high"
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "Broadcom bcm2708_chip/intctrl1.h (in the published brcm_usrlib headers): IC1_WAKEUP at 0x7e002834, RW, mask 0xfffffffe, reset 0x10000000; IC0_WAKEUP at 0x7e002034"
+confidence = "medium"
+note       = "a BCM2708 header, but the masks and VADDR around it match what start4 uses on the BCM2711"
+
+[[register.source]]
+kind       = "inferred"
+ref        = "librerpi/lk-overlay arch/vpu/arch.c (1c942f5) starts the second VPU core with `*REG32(IC1_WAKEUP) = &core2_start` and nothing else"
+confidence = "medium"
+note       = "open firmware that runs on the board: a working example rather than a guess"
+
+[[register.source]]
+kind       = "measured"
+ref        = "rpi-1 (d03115, C0) after a Linux boot, busybox devmem 0xFE002814: 0x10000000, the IPI enable that only core 1 writes (the model leaves it 0 with core 1 held)"
+confidence = "medium"
+note       = "so core 1 does run on the board; VADDR and WAKEUP themselves read 0 from the ARM even where start4 has written them"
+
+[[register.field]]
+name  = "ADDR"
+bits  = "31:1"
+notes = "Where the core starts. Bit 0 is not stored."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "Broadcom bcm2708_chip/intctrl1.h: IC1_WAKEUP_MASK 0xfffffffe"
+confidence = "medium"
 
 [[register]]
 name   = "IRQ_PENDING_BITS"

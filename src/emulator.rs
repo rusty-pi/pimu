@@ -8,50 +8,12 @@ use crate::bus::{Bus, Width};
 use crate::machine::{Console, Machine};
 use crate::vpu::{Stop, UnimplPolicy, Vpu};
 
-/// The VPU reset vector `start4.elf` is entered at (`.crypto` region). The
-/// BCM2711 boot ROM releases both VPU cores here; the bootloader also jumps
-/// here after loading the image. Used as core 1's default entry.
-pub const START4_ENTRY: u32 = 0xFEC0_0200;
-
-/// Offset of `start4.elf`'s ThreadX-SMP dispatch-module global within `.sdata`.
-///
-/// It holds a pointer to the per-core scheduler object once `_tx_thread_smp`
-/// init has registered it. Core 1's very first instructions after the
-/// trampoline (`0x3EC2_CC28` → `0x3ED6_50B4`) do `b *([[gp+3672]] + 24)`, so
-/// releasing core 1 before this is populated jumps it through a null vtable.
-/// The core-1 spawn is gated on it being set.
-///
-/// This is an offset from `gp`, not an absolute address, and it is resolved
-/// against the live `gp` register — see [`Emulator::smp_dispatch_global`].
-/// Hardcoding the absolute (`0x3EE0_3B78` in the build this was read from)
-/// silently version-locked the model: a firmware bump that moves `.sdata`
-/// leaves that address holding something else, and core 1 then either never
-/// spawns or spawns at the wrong moment, with nothing reporting it. For a
-/// bench whose whole purpose is diffing one firmware version against another
-/// (#5, #25) that is the worst available failure mode.
-const SMP_DISPATCH_GP_OFFSET: u32 = crate::firmware::addrs::SMP_DISPATCH_GP_OFFSET;
-
 pub struct Emulator {
     pub cpu: Vpu,
-    /// VPU core 1. `None` until `start4.elf`'s trampoline releases it by writing
-    /// a start vector to the core-control block; then the run loop interleaves
-    /// it with core 0 over the shared bus.
+    /// VPU core 1. `None` until the firmware wakes it by writing a start
+    /// address to its core-control `WAKEUP` register ([`crate::periph::corectl`]);
+    /// then the run loop interleaves it with core 0 over the shared bus.
     pub cpu1: Option<Vpu>,
-    /// Reset PC for VPU core 1 when the firmware releases it via the core-control
-    /// block. Defaults to [`START4_ENTRY`] — the shared VPU reset vector the boot
-    /// ROM releases *both* cores at; core 1 runs start4's trampoline from there
-    /// and diverges on `version` bit 16. Override for tests / direct-load runs.
-    pub core1_entry: Option<u32>,
-    /// Where core 0 entered `start4.elf`: the first instruction it fetched
-    /// from the `0xC000_0000` uncached alias start4 runs in (the bootloader
-    /// runs below it). Not always [`START4_ENTRY`]: for a USB mass-storage
-    /// boot the bootloader places start4 1 MiB lower (`Starting start4.elf @
-    /// 0xfeb00200`), and core 1 has to run the same trampoline.
-    pub start4_entry: Option<u32>,
-    /// Latched once the firmware signals it wants core 1 up (a code-address
-    /// write to the CoreCtl run-state words). The actual spawn is deferred
-    /// until the dispatch global is populated — see [`SMP_DISPATCH_GP_OFFSET`].
-    core1_release_armed: bool,
     pub machine: Machine,
     /// Model the ARM: release core 0 when `arm_loader` writes the ARM control
     /// block, then run it in lock-step with the VPU ([`crate::arm`]). Always
@@ -204,13 +166,6 @@ pub struct RunReport {
     /// `start4.elf` boot-progress tags (`0xCEC0_2000`), in order. Empty
     /// unless built with `--features diag`.
     pub phase_tags: Vec<u32>,
-    /// The firmware released core 1, but the ThreadX-SMP dispatch global never
-    /// became non-zero, so core 1 was never spawned.
-    ///
-    /// Worth reporting rather than passing over in silence: the most likely
-    /// cause is a firmware whose `.sdata` layout moved, which would make
-    /// [`SMP_DISPATCH_GP_OFFSET`] point at the wrong word (#25).
-    pub core1_release_never_resolved: bool,
 }
 
 impl Emulator {
@@ -220,9 +175,6 @@ impl Emulator {
         Emulator {
             cpu,
             cpu1: None,
-            core1_entry: None,
-            start4_entry: None,
-            core1_release_armed: false,
             machine,
             arm_enabled: true,
             arm: None,
@@ -234,31 +186,13 @@ impl Emulator {
         }
     }
 
-    /// Release VPU core 1 at `entry` (the shared trampoline), inheriting core 0's
-    /// unimpl policy. Core 1 sets its own exception-vector base from the
-    /// trampoline, so leave `exc_vbase` at 0 here.
-    /// Has `_tx_thread_smp` init registered the per-core scheduler object yet?
-    ///
-    /// Resolved against the live `gp` rather than a baked-in address, so a
-    /// firmware whose `.sdata` sits somewhere else still gates correctly. `gp`
-    /// is zero until the firmware establishes it, and an unresolved gate reads
-    /// as "not ready", which is the safe direction: core 1 stays parked rather
-    /// than branching through a null vtable.
-    fn smp_dispatch_ready(&mut self) -> bool {
-        let gp = self.cpu.regs.get(crate::vpu::reg::GP);
-        if gp == 0 {
-            return false;
-        }
-        self.machine
-            .load(gp.wrapping_add(SMP_DISPATCH_GP_OFFSET), Width::Word)
-            .unwrap_or(0)
-            != 0
-    }
-
     /// Core 1, at `entry`: the same silicon as core 0, so the same `version`
     /// apart from the core-id bit, and the same unimplemented-op and trace
-    /// settings.
+    /// settings. It sets its own exception-vector base, so `exc_vbase` stays 0.
     fn spawn_core1(&mut self, entry: u32) {
+        if crate::diag::ON {
+            eprintln!("[core1] released at {entry:#010x}");
+        }
         let mut c1 = Vpu::new(entry);
         c1.core_id = 1;
         c1.version_value = self.cpu.version_value;
@@ -270,9 +204,9 @@ impl Emulator {
         self.cpu1 = Some(c1);
     }
 
-    /// Bring up VPU core 1 immediately at `entry` (same as core 0). The BCM2711
-    /// boot ROM releases both VPU cores at `start4.elf`'s entry at once; they
-    /// diverge on `version` bit 16 inside the trampoline.
+    /// Bring up VPU core 1 at `entry` now, for payloads that run both cores
+    /// from the start (`--smp`, tests). A firmware boot needs none of this:
+    /// start4 wakes core 1 itself through its core-control `WAKEUP` register.
     pub fn start_smp(&mut self, entry: u32) {
         self.spawn_core1(entry);
     }
@@ -520,7 +454,6 @@ impl Emulator {
             core1_retired: self.cpu1.as_ref().map(|c| c.retired),
             core1_end,
             phase_tags: self.machine.phase_tags.clone(),
-            core1_release_never_resolved: self.core1_release_armed && self.cpu1.is_none(),
         }
     }
 
@@ -550,9 +483,6 @@ impl Emulator {
         }
 
         let pc_before = self.cpu.pc();
-        if self.start4_entry.is_none() && pc_before >= 0xC000_0000 {
-            self.start4_entry = Some(pc_before);
-        }
 
         if crate::diag::ON && st.diag.heartbeat != 0 && self.cpu.retired >= st.next_beat {
             st.next_beat = self.cpu.retired + st.diag.heartbeat;
@@ -619,6 +549,7 @@ impl Emulator {
         }
         if crate::diag::ON {
             self.machine.watch_pc = pc_before;
+            self.machine.watch_core = 0;
         }
         let step = self.cpu.step(&mut self.machine);
         self.machine.tick(1);
@@ -738,24 +669,12 @@ impl Emulator {
                 return Some(RunEnd::Reset);
             }
 
-            // Core 1 (re)enters at the shared start4 reset vector — where core 0
-            // entered start4 — not core 0's `entry`, which on the EEPROM path is
-            // the *bootcode*, long gone by the time start4 brings its sibling up.
-            //
-            // The CoreCtl run-state write the model keys on also overlaps the
-            // interrupt-priority words, so it fires early (during driver
-            // bring-up) — well before start4's ThreadX-SMP init registers the
-            // per-core scheduler object that core 1 immediately dereferences.
-            // Latch the intent, but defer the spawn until that object exists.
-            if self.cpu1.is_none() {
-                if self.machine.corectl.take_core1_release() {
-                    self.core1_release_armed = true;
-                }
-                if self.core1_release_armed && self.smp_dispatch_ready() {
-                    let entry = self
-                        .core1_entry
-                        .or(self.start4_entry)
-                        .unwrap_or(START4_ENTRY);
+            // The firmware wrote a start address to core 1's WAKEUP register.
+            // A store hands a fast loop back, so this runs right after the
+            // storing instruction. The model never powers core 1 down, so a
+            // second write finds it running and has nothing to wake.
+            if let Some(entry) = self.machine.corectl.take_core1_wake() {
+                if self.cpu1.is_none() {
                     self.spawn_core1(entry);
                 }
             }
@@ -1014,6 +933,10 @@ impl Emulator {
             }
             if !c1.is_stopped() && !c1.halted {
                 let pc_before = c1.pc();
+                if crate::diag::ON {
+                    self.machine.watch_pc = pc_before;
+                    self.machine.watch_core = 1;
+                }
                 if let crate::vpu::Step::Stopped = c1.step(&mut self.machine) {
                     st.core1_end = Some(RunEnd::Core1Halted(
                         c1.stopped.clone().expect("stop reason"),
@@ -1108,9 +1031,6 @@ impl Emulator {
         {
             return None;
         }
-        if self.cpu1.is_none() && self.core1_release_armed {
-            return None;
-        }
         let budget = self.fast_budget(st, limits);
         if budget == 0 {
             return None;
@@ -1118,11 +1038,6 @@ impl Emulator {
         // The pcs a slow step has to handle before their instruction. A
         // `u32::MAX` that matches by accident only costs a slow step.
         let stop_pc = limits.stop_pc.unwrap_or(u32::MAX);
-        let entry = if self.start4_entry.is_none() {
-            0xC000_0000
-        } else {
-            u32::MAX
-        };
         // Only a slow step feeds the receive line.
         let uart_busy = self.machine.uart0.rx_backlog() != 0;
         let host = self.input.host.is_some();
@@ -1141,7 +1056,7 @@ impl Emulator {
         let end = 'run: {
             while n < budget {
                 let pc = self.cpu.pc();
-                if (pc == stop_pc) | (pc >= entry) {
+                if pc == stop_pc {
                     break 'run None;
                 }
                 let step = self.cpu.step(&mut self.machine);

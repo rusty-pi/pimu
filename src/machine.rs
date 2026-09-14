@@ -176,6 +176,8 @@ pub struct Machine {
     pub defer_sleep: bool,
     pub sleep_to: Option<u64>,
     pub watch_pc: u32,
+    /// Which VPU core `watch_pc` belongs to.
+    pub watch_core: u32,
 
     /// `start4.elf` logs boot progress by writing 4-char ASCII tags (`_msh`,
     /// `_osh`, `bfsp`, ...) to a register at `0xCEC0_2000`. We capture the
@@ -296,6 +298,7 @@ impl Machine {
             defer_sleep: false,
             sleep_to: None,
             watch_pc: 0,
+            watch_core: 0,
             phase_tags: Vec::new(),
         }
     }
@@ -1227,7 +1230,8 @@ impl Bus for Machine {
                 .any(|&w| Machine::fold_ram_addr(w) & !3 == a)
             {
                 eprintln!(
-                    "[watch] pc={:#010x} store{} {:#010x} <- {:#x}",
+                    "[watch] core{} pc={:#010x} store{} {:#010x} <- {:#x}",
+                    self.watch_core,
                     self.watch_pc,
                     width.bytes() * 8,
                     addr,
