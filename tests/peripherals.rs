@@ -10,6 +10,7 @@
 use rpi_virt_fw::bus::{Bus, MmioDevice, Width};
 use rpi_virt_fw::periph::Spi0;
 use rpi_virt_fw::soc::bcm2711 as map;
+use rpi_virt_fw::soc::{Board, Stepping};
 use rpi_virt_fw::Machine;
 
 fn machine() -> Machine {
@@ -380,6 +381,31 @@ fn pmic_addresses_are_separate_register_files() {
     pmic_write(&mut m, 0x1E, 0x40, 0x5A);
     assert_eq!(pmic_read(&mut m, 0x1E, 0x40), 0x5A);
     assert_eq!(pmic_read(&mut m, 0x1B, 0x40), 0x00);
+}
+
+/// A 4B up to rev 1.4 has one PMIC, at `0x1D`, in place of rev 1.5's pair
+/// (#78). Its setpoints decode, through `0x3EDD259A`, to the same voltages;
+/// its settled bit is reg `0x1A` bit 4 (`0x3EDD25AE`); and it passes the check
+/// `pmic_get_voltage` makes of it, `0x0F == 0x14 ^ 0xAD`.
+#[test]
+fn a_rev_1_2_board_has_the_one_0x1d_pmic() {
+    let mut m = machine();
+    m.set_board(Board::for_stepping(Stepping::B0));
+    let pmic = m.bsc_pmic.slave().unwrap();
+    assert!(pmic.responds_to(0x1D));
+    assert!(!pmic.responds_to(0x1B) && !pmic.responds_to(0x1E));
+
+    assert_eq!(pmic_read(&mut m, 0x1D, 0x13) as u32 * 6_250, 1_100_000);
+    let core = pmic_read(&mut m, 0x1D, 0x14);
+    assert_eq!(pmic_read(&mut m, 0x1D, 0x0F), core ^ 0xAD);
+
+    pmic_write(&mut m, 0x1D, 0x14, 0x90);
+    assert_eq!(pmic_read(&mut m, 0x1D, 0x14), 0x90);
+    assert_ne!(pmic_read(&mut m, 0x1D, 0x1A) & 0x10, 0, "0x1D settled bit");
+    assert_eq!(
+        m.bsc_pmic.slave().unwrap().core_rail_uv(),
+        Some(0x90 * 6_250)
+    );
 }
 
 /// The FXL6408 GPIO expander shares the bus at `0x43`; start4 probes it by

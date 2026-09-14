@@ -1,0 +1,117 @@
+[block]
+name    = "pmic_1d"
+bus     = "i2c"
+base    = 0x1D
+size    = 0x100
+summary = "Board PMIC at 0x1D on every Pi 4-family board but the 4B rev 1.5 (start4 descriptor type 0x81)"
+notes   = "On the `bsc` PMIC copy (#78). Alone on a 4B rev 1.1 or 1.2, where it owns every rail; next to pmic_core on a 4B rev 1.4, a Pi 400 or a CM4, where pmic_core takes the core rail. start4's probe sweeps 0x00..0x1B once, skipping 0x0C..0x0F, to log it; it then writes a 4-byte config to 0x03..0x06, writes 0xA5 to 0x14 on boards with pmic_core, 0x1E to 0x18 on a CM4, and on a 4B sets 0x16 bit 0 and writes 1 to 0x01. Registers not listed read 0 until written."
+
+[[block.source]]
+kind       = "decompile"
+ref        = "pmic_init 0x3ED4DAA8: board flag 10 -> probe 0x3EDD20F2 -> pmic_add 0x3ED4D85C; descriptor 0x3EE00570: type 0x81, addr 0x1D, 0..1.39375 V"
+confidence = "high"
+
+[[block.source]]
+kind       = "trace"
+ref        = "board-flags word gp+0x3BAF0 (--dump 0x3EE3E810:4) per revision code: a03111/c03111/c03112 0x05DE04D7 (flag 10), b03114/d03114 0x055E0CF7, c03130 0x0D5E0CF7, a03140/d03140 0x05184CF7 (flags 10 + 11), b03115/d03115 0x055E18F7 (flags 11 + 12)"
+confidence = "high"
+
+[[register]]
+name   = "ID"
+offset = 0x0F
+width  = 8
+access = "r"
+reset  = 0x08
+notes  = "Read once by the probe, straight after four reads of 0x14. start4 keeps it ^ 0x57, and pmic_get_voltage then requires 0x0F == (0x14 as the probe read it) ^ 0xAD, or stops with fatal error 0x46."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "probe 0x3EDD20F2 stores 0x14 at gp+0xD361B and 0x0F ^ 0x57 at gp+0xD3640; pmic_get_voltage 0x3ED4D960 requires gp+0xD361B ^ 0xC9 == gp+0xD3640 ^ 0x33"
+confidence = "high"
+
+[[register.source]]
+kind       = "inferred"
+ref        = "0x08 = 0xA5 ^ 0xAD: on boards with pmic_core the probe writes 0xA5 to 0x14 before reading it, so a fixed 0x0F has to be 0x08 there"
+confidence = "medium"
+
+[[register]]
+name   = "SETPOINT_SDRAM"
+offset = 0x13
+width  = 8
+access = "rw"
+reset  = 176
+notes  = "Setpoint of rails 2..4 (sdram_c / sdram_p / sdram_i): raw * 6.25 mV."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "rail table image 0x3EE312D0; decode callback 0x3EDD259A"
+confidence = "high"
+
+[[register.source]]
+kind       = "inferred"
+ref        = "176 = 1.1 V, what the rev 1.5 board measures on the same rails; no board with this part to measure"
+confidence = "low"
+
+[[register]]
+name   = "SETPOINT_CORE"
+offset = 0x14
+width  = 8
+access = "rw"
+reset  = 0xA5
+notes  = "Rail 1 (core) setpoint, 6.25 mV per step; the core rail only where pmic_core is not fitted. The probe reads it four times and keeps the last read for the check described under ID."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "rail table image 0x3EE312D0; decode callback 0x3EDD259A: raw * 6250 uV; encode 0x3ED20BB8: (uV + 6249) / 6250"
+confidence = "high"
+
+[[register.source]]
+kind       = "inferred"
+ref        = "power-on 0xA5 (1.031 V): with ID fixed at 0x08, the boards whose probe does not write 0x14 pass the check only from 0xA5. It is also what the probe writes there on boards with pmic_core (encode(1030000)), and what the 0x1B probe falls back to for the same check"
+confidence = "medium"
+
+[[register]]
+name   = "STATUS"
+offset = 0x1A
+width  = 8
+access = "r"
+notes  = "Status."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "settle callback 0x3EDD25AE"
+confidence = "high"
+
+[[register.field]]
+name  = "SETTLED"
+bits  = "4"
+notes = "Voltage change complete; polled after every setpoint write."
+
+[[register.field.source]]
+kind       = "decompile"
+ref        = "0x3EDD25AE polls reg 0x1A bit 4"
+confidence = "high"
+
+[[register]]
+name   = "SETPOINT_RAIL6"
+offset = 0x1C
+width  = 8
+access = "rw"
+notes  = "Rail 6 setpoint: raw * 10 mV."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "rail table image 0x3EE312D0; decode callback 0x3EDD259A"
+confidence = "high"
+
+[[register]]
+name   = "SETPOINT_RAIL5"
+offset = 0x1D
+width  = 8
+access = "rw"
+notes  = "Rail 5 setpoint: raw * 10 mV."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "rail table image 0x3EE312D0; decode callback 0x3EDD259A"
+confidence = "high"

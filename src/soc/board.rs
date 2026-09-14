@@ -23,8 +23,10 @@ pub const PI4B_8GB_REV_1_5: u32 = 0x00D0_3115;
 /// logs come from (raspberrypi/rpi-eeprom#251, #466).
 pub const PI4B_4GB_REV_1_2: u32 = 0x00C0_3112;
 
-/// Board type `0x11` in bits 11:4 of the revision code.
-const TYPE_PI4B: u32 = 0x11;
+/// Board types, bits 11:4 of the revision code.
+pub const TYPE_PI4B: u32 = 0x11;
+pub const TYPE_PI400: u32 = 0x13;
+pub const TYPE_CM4: u32 = 0x14;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Board {
@@ -55,11 +57,16 @@ impl Board {
         self.revision & 0xF
     }
 
+    /// The board type: [`TYPE_PI4B`], [`TYPE_PI400`], [`TYPE_CM4`], ...
+    pub const fn board_type(self) -> u32 {
+        (self.revision >> 4) & 0xFF
+    }
+
     /// Why this stepping on this board is not a combination that shipped, if it
     /// is not one. Only the 4B is checked: rev 1.1 and 1.2 predate C0 silicon,
     /// rev 1.4 came with either, and every rev 1.5 measured is a C0.
     pub fn mismatch(self) -> Option<String> {
-        if (self.revision >> 4) & 0xFF != TYPE_PI4B {
+        if self.board_type() != TYPE_PI4B {
             return None;
         }
         match (self.stepping, self.pcb_revision()) {
