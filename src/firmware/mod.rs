@@ -1,13 +1,19 @@
 //! Loading firmware images into the machine.
 //!
-//! - [`addrs`] — why the model pins no `start4.elf` addresses.
 //! - [`bootrom`] — the BCM2711 maskROM first stage: the explicit boot entry that
 //!   verifies and stages the bootcode.
 //! - [`elf32`] — `start4.elf` and the vc4boot test programs.
 //! - [`eeprom`] — `pieeprom.bin` section table + bootcode extraction.
 //! - `fixup4.dat` parsing arrives with M3.
+//!
+//! The model knows no `start4.elf` pcs, addresses or `gp` offsets. The bench
+//! runs different firmware builds through the same model (#5), and an address
+//! baked in goes quietly wrong on a build where it moved. The last pc hook went
+//! with #25 and the last `gp` offset, core 1's start gate, with #72. Model the
+//! hardware behaviour the firmware relies on instead. Addresses the `RVF_DBG_*`
+//! and `RVF_TRAP` diagnostics watch are fine: on another build they just print
+//! nothing (`docs/diagnostics.md`).
 
-pub mod addrs;
 pub mod bootrom;
 pub mod eeprom;
 pub mod elf32;
