@@ -4,10 +4,11 @@
 #
 #   scripts/boot-check.sh [--update] [--scenario=<toml>] [boot.log]
 #
-# Assumes `cargo build --release` and the boot media the scenario names: an SD
+# Needs `cargo build --release` and the boot media the scenario names: an SD
 # image built by scripts/make-sd.sh (with `KERNEL=halt` for the boots that end
 # at the handover, firmware/sd-halt.img), and for the network boots the root
-# scripts/make-netboot.sh builds from that.
+# scripts/make-netboot.sh builds from that. A missing one stops the run before
+# it starts, with the command that makes it.
 #
 # What is checked, and where it is written down, both live in the scenario —
 # `testdata/boot/firmware-boot.toml` (the SD boot) unless `--scenario` names
@@ -49,16 +50,32 @@ done
 # is what the milestones and the CI artifact want.
 console="$log.console"
 
+# The binary is never rebuilt here: CI hands over the one its build job made.
+if [ ! -x "$bin" ]; then
+  echo "$bin is not built: cargo build --release" >&2
+  exit 1
+fi
+# Only a warning, and not in CI, where file times say nothing about the build.
+if [ -z "${CI:-}" ] && [ -n "$(find "$here/src" "$here/build.rs" "$here/Cargo.toml" \
+    "$here/Cargo.lock" -newer "$bin" -print -quit)" ]; then
+  echo "warning: $bin is older than the sources; cargo build --release to test them" >&2
+fi
+
 # One boot, two sets of assertions. The wall clock has little headroom — two
 # concurrent boots miss `arm_loader` — so the run happens exactly once here and
 # both checks read what it left behind.
 mapfile -t plan < <("$bin" boot-check "$scenario" --plan --console "$console")
 if [ "${#plan[@]}" -lt 2 ]; then
-  echo "boot-check --plan produced nothing; is $bin built?" >&2
+  # `--plan` said why: most often a boot medium that is not built yet.
+  echo "boot-check --plan failed; nothing was run" >&2
   exit 1
 fi
 wall="${plan[0]#wall=}"
 args=("${plan[@]:1}")
+
+# Never check a console an earlier run left behind: a boot that cannot start
+# writes none, and the check would diff the stale one instead.
+rm -f "$console"
 
 # Stream the UART console (incl. `MESS:` lines) as it is produced.
 export RVF_LIVE_CONSOLE=1
@@ -71,6 +88,12 @@ echo "boot exit status: $status"
 # not get where it was meant to, and the check below says which milestone.
 if [ "$status" -ne 0 ] && [ "$status" -ne 1 ] && [ "$status" -ne 124 ]; then
   exit "$status"
+fi
+# ...or `boot` itself failed, before it ran or part-way through, and then it
+# writes no console: its `error:` line above is the whole story.
+if [ ! -e "$console" ]; then
+  echo "the boot wrote no console ($console): see the error above; nothing to check" >&2
+  exit "$(( status == 0 ? 1 : status ))"
 fi
 
 "$bin" boot-check "$scenario" --log "$log" --console "$console" "${update[@]+"${update[@]}"}"
