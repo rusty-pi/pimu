@@ -1014,10 +1014,26 @@ impl Emulator {
                 c1.exc_vbase = self.machine.corectl.vbase[1];
             }
             if !c1.is_stopped() && !c1.halted {
+                let pc_before = c1.pc();
                 if let crate::vpu::Step::Stopped = c1.step(&mut self.machine) {
                     st.core1_end = Some(RunEnd::Core1Halted(
                         c1.stopped.clone().expect("stop reason"),
                     ));
+                }
+                // Core 1's accesses under its own pc, or the next core-0
+                // step prints them against core 0's.
+                if crate::diag::ON && self.machine.mmio_trace {
+                    for (addr, w, val, write) in self.machine.mmio_events.drain(..) {
+                        eprintln!(
+                            "mmio {:#010x}  {}{}  {:#010x} <- {:#0width$x}  core1",
+                            pc_before,
+                            if write { "W" } else { "R" },
+                            w,
+                            addr,
+                            val,
+                            width = (w as usize) * 2 + 2,
+                        );
+                    }
                 }
             }
         }
