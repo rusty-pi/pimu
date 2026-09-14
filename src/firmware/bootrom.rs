@@ -95,16 +95,18 @@ const OTP_BASE: u32 = 0x7E20_F000;
 /// OTP rows the HMAC key is built from: rows 19..=22, the board-identity block.
 const OTP_KEY_ROWS: std::ops::RangeInclusive<u32> = 19..=22;
 
-/// The C0 ROM's OTP helpers that 2020-04-16 bootcode calls directly: through
-/// its trampoline at `0x80001f68` (`version r2; eor r1, r2; bl r1`) it opens
-/// the OTP block (`0x6000_647a`), reads row 28 into `*r0` (`0x6000_09d0`) and
-/// closes the block again (`0x6000_1d50`, #71). Later bootcode reads OTP
-/// itself. The model has no ROM at `0x6000_0000` — the address folds onto
-/// DRAM — so the stage puts routines of its own there. They are not the ROM's
-/// code: opening and closing only set the block's clock mux, which the model
-/// absorbs, and the read skips the `STATUS` poll because the model's
-/// transaction completes on `GO`.
-const ROM_HELPERS: [(u32, &[u8]); 3] = [
+/// The C0 ROM's OTP helpers that 2020-era bootcode calls directly: through
+/// its trampoline at `0x80001f68` (`version r2; eor r1, r2; bl r1`) 2020-04-16
+/// opens the OTP block (`0x6000_647a`), reads row 28 into `*r0` (`0x6000_09d0`)
+/// and closes the block again (`0x6000_1d50`, #71). 2020-01-17 and 2020-06-15
+/// call those three too, and a fourth, `0x6000_6278`, which returns the row
+/// named in `r0` in `r0` (#75) — without it they print their board revision
+/// as junk. Later bootcode reads OTP itself. The model has no ROM at
+/// `0x6000_0000` — the address folds onto DRAM — so the stage puts routines of
+/// its own there. They are not the ROM's code: opening and closing only set
+/// the block's clock mux, which the model absorbs, and the reads skip the
+/// `STATUS` poll because the model's transaction completes on `GO`.
+const ROM_HELPERS: [(u32, &[u8]); 4] = [
     (0x6000_647A, &[0x5A, 0x00]), // b lr
     (0x6000_1D50, &[0x5A, 0x00]), // b lr
     (
@@ -117,6 +119,17 @@ const ROM_HELPERS: [(u32, &[u8]); 3] = [
             0x12, 0x32, // st r2, (r1+0x08)    PARAM_A.GO
             0x12, 0x26, // ld r2, (r1+0x18)    DATA
             0x02, 0x09, // st r2, (r0)
+            0x5A, 0x00, // b lr
+        ],
+    ),
+    (
+        0x6000_6278,
+        &[
+            0x01, 0xE8, 0x00, 0xF0, 0x20, 0x7E, // mov r1, 0x7E20F000
+            0x10, 0x37, // st r0, (r1+0x1C)    KEY
+            0x12, 0x60, // mov r2, 1
+            0x12, 0x32, // st r2, (r1+0x08)    PARAM_A.GO
+            0x10, 0x26, // ld r0, (r1+0x18)    DATA
             0x5A, 0x00, // b lr
         ],
     ),
@@ -448,6 +461,32 @@ mod tests {
         assert_eq!(cpu.regs.pc, RET);
         let want = read_otp_row(&mut machine, 28);
         assert_eq!(machine.load32(BUF).unwrap(), want);
+    }
+
+    /// The row reader 2020-01-17 and 2020-06-15 call at `0x6000_6278` (#75)
+    /// takes the row in `r0` and returns its value there.
+    #[test]
+    fn the_rom_s_row_reader_returns_the_row_named_in_r0() {
+        use crate::vpu::{Step, Vpu};
+        const CODE: u32 = 0x1000;
+        const RET: u32 = 0x2000;
+        let mut machine = Machine::new(1 << 20);
+        let (_, code) = ROM_HELPERS.iter().find(|(a, _)| *a == 0x6000_6278).unwrap();
+        write_folded(&mut machine, CODE, code).unwrap();
+        for row in [17, 28, 30] {
+            let mut cpu = Vpu::new(CODE);
+            cpu.regs.set(0, row);
+            cpu.regs.set(26, RET);
+            for _ in 0..16 {
+                if cpu.regs.pc == RET {
+                    break;
+                }
+                assert_eq!(cpu.step(&mut machine), Step::Ran);
+            }
+            assert_eq!(cpu.regs.pc, RET);
+            let want = read_otp_row(&mut machine, row);
+            assert_eq!(cpu.regs.get(0), want, "row {row}");
+        }
     }
 
     /// Wrap a signed bootcode body in a minimal EEPROM image.
