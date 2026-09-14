@@ -672,6 +672,15 @@ port *n + 1*.
 0x40000e03   the VIA hub with a device below it
 ```
 
+`0x00001203` is a trained link. Right after power-on, PERST# or `HCRST` a
+SuperSpeed port reads `0x000002a0` for a while even with a stick in it, then
+comes up as `0x00021203` with a Port Status Change Event. Real 2020-09-03
+bootloader logs catch it mid-way (raspberrypi/rpi-eeprom#227: `USB3 rport 3
+status 000002a0 -> 00021203`; #241: `000002b1 -> 00281203`), and that
+bootloader depends on it: its first scan writes every `PORTSC` back as read,
+which on an already-enabled port sets `PED` and so disables it (#74). The model
+trains a link in `LINK_TRAIN_US` (100 ms, the length of a warm reset).
+
 Ports 2-5 sometimes read `0x0a0002a0` instead of `0x000002a0`: bits 25 and 27
 are `WCE`/`WOE`, wake-on-connect and wake-on-over-current, which Linux sets
 when it idles a port. They are power management, not presence — model

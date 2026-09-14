@@ -263,6 +263,16 @@ struct ControlState {
     out: Vec<u8>,
 }
 
+/// How long a SuperSpeed link takes to train after power-on or `HCRST`, in
+/// modelled microseconds.
+///
+/// Real 2020-09-03 bootloader logs catch the VL805 in the middle of it: the
+/// scan right after `HCRST` reads `0x2a0` (nothing detected yet) or `0x2b1`
+/// (a reset in flight), and the port turns up enabled later, after the
+/// USB2 hub has been set up (raspberrypi/rpi-eeprom#227, #241). A warm reset
+/// alone is 80-120 ms of LFPS (USB 3.2, `tReset`).
+pub const LINK_TRAIN_US: u64 = 100_000;
+
 /// One root port.
 struct Port {
     device: Option<Box<dyn UsbDevice>>,
@@ -270,6 +280,8 @@ struct Port {
     /// USB2 ports need an explicit reset before they enable; USB3 ports train
     /// their link themselves and come up enabled.
     usb2: bool,
+    /// When a SuperSpeed link that is still training comes up.
+    train_at: Option<u64>,
 }
 
 impl Port {
@@ -278,25 +290,22 @@ impl Port {
             device: None,
             portsc: PORTSC_EMPTY | if usb2 { PORTSC_DR } else { 0 },
             usb2,
+            train_at: None,
         }
     }
 
     /// The resting value with whatever is attached, as measured on a real
-    /// board. Called on power-on and on `HCRST`.
-    fn settle(&mut self) {
+    /// board. Called on power-on and on `HCRST`, at modelled time `now`.
+    fn settle(&mut self, now: u64) {
         let base = PORTSC_EMPTY | if self.usb2 { PORTSC_DR } else { 0 };
+        self.train_at = None;
         self.portsc = match self.device.as_ref().map(|d| d.speed()) {
             None => base,
             Some(Speed::Super) => {
-                // `0x00021203` plus the connect-change bit: a SuperSpeed link
-                // trains without host intervention, so the port is already
-                // enabled when the driver first looks.
-                PORTSC_CCS
-                    | PORTSC_PED
-                    | PORTSC_PP
-                    | ((Speed::Super as u32) << PORTSC_SPEED_SHIFT)
-                    | (PLS_U0 << PORTSC_PLS_SHIFT)
-                    | PORTSC_CSC
+                // The link retrains without host intervention; until it has,
+                // the port reads like an empty one.
+                self.train_at = Some(now + LINK_TRAIN_US);
+                base
             }
             Some(_) => {
                 // `0x400202e1` — connected, link polling, waiting for the host
@@ -304,6 +313,18 @@ impl Port {
                 PORTSC_CCS | PORTSC_PP | PORTSC_DR | (PLS_POLLING << PORTSC_PLS_SHIFT) | PORTSC_CSC
             }
         };
+    }
+
+    /// The link finished training: `0x00021203` plus the connect-change bit,
+    /// enabled in U0 with nothing asked of the host.
+    fn link_up(&mut self) {
+        self.train_at = None;
+        self.portsc = PORTSC_CCS
+            | PORTSC_PED
+            | PORTSC_PP
+            | ((Speed::Super as u32) << PORTSC_SPEED_SHIFT)
+            | (PLS_U0 << PORTSC_PLS_SHIFT)
+            | PORTSC_CSC;
     }
 }
 
@@ -338,6 +359,11 @@ pub struct Xhci {
     cmd_ccs: bool,
     running: bool,
     dbg: bool,
+    /// Modelled time, as [`Xhci::link_due`] last saw it.
+    now_us: u64,
+    /// The earliest [`Port::train_at`], `u64::MAX` with none training — a
+    /// field, because the machine asks every microsecond.
+    link_deadline: u64,
     /// Observables for tests: how many commands and transfers the engine has
     /// completed.
     pub commands: u64,
@@ -370,6 +396,8 @@ impl Xhci {
             cmd_ccs: true,
             running: false,
             dbg: std::env::var("RVF_DBG_XHCI").is_ok(),
+            now_us: 0,
+            link_deadline: u64::MAX,
             commands: 0,
             transfers: 0,
         };
@@ -380,7 +408,8 @@ impl Xhci {
     /// Plug `device` into root port `port` (1-based).
     pub fn attach(&mut self, port: usize, device: Box<dyn UsbDevice>) {
         self.ports[port - 1].device = Some(device);
-        self.ports[port - 1].settle();
+        self.ports[port - 1].settle(self.now_us);
+        self.update_link_deadline();
     }
 
     /// The device on root port `port`, for attaching something below a hub.
@@ -390,8 +419,38 @@ impl Xhci {
 
     fn settle_ports(&mut self) {
         for p in &mut self.ports {
-            p.settle();
+            p.settle(self.now_us);
         }
+        self.update_link_deadline();
+    }
+
+    fn update_link_deadline(&mut self) {
+        self.link_deadline = self
+            .ports
+            .iter()
+            .filter_map(|p| p.train_at)
+            .min()
+            .unwrap_or(u64::MAX);
+    }
+
+    /// Note the modelled time; true when a link has finished training and
+    /// [`Xhci::train_links`] has something to do.
+    #[inline]
+    pub fn link_due(&mut self, now_us: u64) -> bool {
+        self.now_us = now_us;
+        now_us >= self.link_deadline
+    }
+
+    /// Bring up every port whose link has finished training, each with a
+    /// Port Status Change Event.
+    pub fn train_links(&mut self, mem: &mut dyn HostMem) {
+        for i in 0..self.ports.len() {
+            if self.ports[i].train_at.is_some_and(|t| t <= self.now_us) {
+                self.ports[i].link_up();
+                self.port_status_change(i, mem);
+            }
+        }
+        self.update_link_deadline();
     }
 
     fn reg(&self, off: u32) -> u32 {
@@ -572,7 +631,8 @@ impl Xhci {
     fn write_portsc(&mut self, i: usize, value: u32, mask: u32, mem: &mut dyn HostMem) {
         if self.dbg {
             eprintln!(
-                "[xhci] PORTSC{} {:#010x} <- {value:#010x}",
+                "[xhci] {} us PORTSC{} {:#010x} <- {value:#010x}",
+                self.now_us,
                 i + 1,
                 self.ports[i].portsc
             );
@@ -1186,6 +1246,37 @@ mod tests {
         hc.reset_port(0, &mut mem);
         // `0x40000e03` plus the reset-change bit the driver then clears.
         assert_eq!(hc.portsc(1) & !PORTSC_PRC & !PORTSC_CSC, 0x4000_0E03);
+    }
+
+    /// A SuperSpeed port reads empty while its link trains, then comes up
+    /// enabled with a Port Status Change Event; `HCRST` starts it over (#74).
+    #[test]
+    fn a_superspeed_link_trains_before_the_port_comes_up() {
+        use crate::periph::usb::MassStorage;
+        let (mut hc, mut mem) = started();
+        hc.attach(2, Box::new(MassStorage::new(vec![0; 4096])));
+        assert_eq!(hc.portsc(2), 0x0000_02A0, "training");
+        assert!(!hc.link_due(LINK_TRAIN_US - 1));
+        assert_eq!(hc.portsc(2), 0x0000_02A0);
+        assert!(hc.link_due(LINK_TRAIN_US));
+        hc.train_links(&mut mem);
+        assert_eq!(hc.portsc(2), 0x0002_1203, "up, with CSC");
+        let ev = [0, 1, 2, 3].map(|i| mem.read32(EVENT_RING + 4 * i));
+        assert_eq!((ev[3] >> 10) & 0x3F, TRB_PORT_STATUS_CHANGE);
+        assert_eq!(ev[0] >> 24, 2);
+        assert!(!hc.link_due(4 * LINK_TRAIN_US), "nothing left to train");
+
+        // `HCRST` drops the link, and it trains again from the reset.
+        let t = 5 * LINK_TRAIN_US;
+        hc.link_due(t);
+        hc.write(USBCMD, Width::Word, USBCMD_HCRST, &mut mem);
+        assert_eq!(hc.portsc(2), 0x0000_02A0, "retraining after HCRST");
+        // What 2020-09-03 does right after the reset: write each port back as
+        // read. The port it finds later is still intact.
+        hc.write(PORTSC + PORTSC_STRIDE, Width::Word, 0x0000_02A0, &mut mem);
+        assert!(hc.link_due(t + LINK_TRAIN_US));
+        hc.train_links(&mut mem);
+        assert_eq!(hc.portsc(2) & PORTSC_PED, PORTSC_PED);
     }
 
     #[test]

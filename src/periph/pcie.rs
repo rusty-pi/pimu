@@ -624,6 +624,22 @@ impl Pcie {
         Some(self.endpoint.bar0_read(off, width))
     }
 
+    /// Bring the endpoint's clock to `now_us`. A SuperSpeed link that has
+    /// finished training comes up then, and its Port Status Change Event goes
+    /// out through the inbound window like any other.
+    pub fn advance_to(&mut self, now_us: u64, mem: &mut dyn HostMem) {
+        if !self.endpoint.xhci.link_due(now_us) {
+            return;
+        }
+        let mut up = Upstream {
+            window: self.inbound_window(),
+            mem,
+            dbg: self.dbg,
+        };
+        self.endpoint.xhci.train_links(&mut up);
+        self.update_irq();
+    }
+
     /// Inbound window 2 as `(bus base, size)`, if its size field switches it
     /// on.
     fn inbound_window(&self) -> Option<(u64, u64)> {
