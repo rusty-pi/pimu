@@ -13,6 +13,8 @@ use rpi_virt_fw::vpu::decode::decode;
 use rpi_virt_fw::vpu::length::insn_len_bytes;
 use rpi_virt_fw::vpu::UnimplPolicy;
 
+mod config;
+
 const USAGE: &str = "\
 rpi-virt-fw — virtual bench for Raspberry Pi VideoCore boot firmware
 
@@ -55,7 +57,17 @@ COMMANDS:
     spec-docs Check docs/periph/ against the register specs in specs/*.toml;
               --update regenerates it.
 
+    With no command, the options are `boot`'s: `rpi-virt-fw --eeprom <file> ...`.
+
 FLAGS:
+    --config <file>
+              Take options from <file> as well, at that point in the command
+              line: a JSON object (or TOML table) keyed by long option name,
+              e.g. {\"eeprom\": \"firmware/pieeprom.bin\", \"max-wall\": 600,
+              \"arm\": true, \"bootconf\": [\"A=1\", \"B=2\"]}. `true` is a flag,
+              an array repeats the option, `\"file\"` is the positional argument.
+              Options after it on the command line win. Any option also takes
+              the `--option=value` form.
     --update  Rewrite golden files instead of failing on mismatch.
     --console-log <path>
               Write the raw UART bytes of the run to <path>, with none of the
@@ -128,6 +140,15 @@ fn main() -> ExitCode {
 }
 
 fn run(args: &[String]) -> Result<ExitCode> {
+    // No command, only options: `boot` is the one they are for. Decided before
+    // a config file expands, since its `"file"` would look like a command.
+    let implicit_boot = args
+        .first()
+        .is_some_and(|a| a.starts_with('-') && !matches!(a.as_str(), "-h" | "--help"));
+    let args = config::expand(args)?;
+    if implicit_boot {
+        return cmd_boot(&args);
+    }
     let Some(cmd) = args.first() else {
         print!("{USAGE}");
         return Ok(ExitCode::SUCCESS);
