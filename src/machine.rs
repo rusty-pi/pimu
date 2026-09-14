@@ -102,9 +102,13 @@ pub struct Machine {
     /// DMA4 channel (`0x7E00_7B00`) — the bootloader scrubs / moves DRAM through
     /// it; [`Machine::store`] runs the control-block chain after a `CS` write.
     pub dma4: Dma4,
-    /// The legacy EMMC controller (`0x7E30_0000`), with nothing on its bus —
-    /// the SD host of 2020-era bootcode.
+    /// The legacy EMMC controller (`0x7E30_0000`) — the SD host of 2020-era
+    /// bootcode. The card is on its bus only while [`Self::sd_slot_legacy`].
     pub emmc: Emmc2,
+    /// Bit 1 of the SD-slot mux word at GPIO `+0xD0` (`0x7E20_00D0`): the card
+    /// is routed to the legacy EMMC instead of EMMC2 (#66). See
+    /// [`Self::route_sd_slot`].
+    pub sd_slot_legacy: bool,
     /// EMMC2 SD host controller (`0x7E34_0000`).
     pub emmc2: Emmc2,
     /// HVS (`0x7E40_0000`) — display frame-swap registers auto-complete.
@@ -180,6 +184,11 @@ pub struct Machine {
 /// that regardless of which alias the write used.
 const PHASE_TAG_SIG: u32 = 0x02C0_2000;
 
+/// The SD-slot mux word in the GPIO block, and the bit that routes the card to
+/// the legacy EMMC (see [`Machine::route_sd_slot`]).
+const SD_SLOT_MUX: u32 = map::GPIO_BASE + 0xD0;
+const SD_SLOT_MUX_LEGACY: u32 = 1 << 1;
+
 /// The 64 MiB every peripheral window the VPU decodes lies in.
 const MMIO_WINDOW: std::ops::Range<u32> = 0x7C00_0000..0x8000_0000;
 const _: () = {
@@ -238,6 +247,7 @@ impl Machine {
             dma_legacy: crate::periph::dma_legacy::DmaLegacy::new(),
             dma_vpu: crate::periph::dma_legacy::DmaLegacy::new_vpu(),
             emmc: Emmc2::new_legacy(),
+            sd_slot_legacy: false,
             emmc2: Emmc2::new(),
             hvs: Hvs::new(),
             hd: Hd::new(),
@@ -913,6 +923,30 @@ impl Machine {
         self.mbox.peek(off)
     }
 
+    /// A write to the SD-slot mux word (GPIO `+0xD0`): bit 1 set routes the
+    /// card to the legacy EMMC, clear to EMMC2.
+    ///
+    /// From the traces (#66): 2020-era bootcode (pieeprom-2020-09-03, pc
+    /// `0x8000f60a`) writes `0x2` there right before its SD init on
+    /// `0x7E30_0000` and never touches EMMC2; the 2026 bootcode never writes it
+    /// and boots from EMMC2; start4 writes 0 and then sets bit 0, and start4db's
+    /// decompile clears bit 1 explicitly (`_DAT_7e2000d0 & 0xfffffffd`) before
+    /// it uses EMMC2. What bit 0 does is not known, and GPIO itself stays on the
+    /// catch-all stub: only the routing is modelled.
+    fn route_sd_slot(&mut self, value: u32) {
+        let legacy = value & SD_SLOT_MUX_LEGACY != 0;
+        if legacy == self.sd_slot_legacy {
+            return;
+        }
+        self.sd_slot_legacy = legacy;
+        let (from, to) = if legacy {
+            (&mut self.emmc2, &mut self.emmc)
+        } else {
+            (&mut self.emmc, &mut self.emmc2)
+        };
+        to.put_card(from.take_card());
+    }
+
     /// [`Bus::store`] off the RAM path; see [`Self::load_device`].
     #[inline(never)]
     fn store_device(&mut self, addr: u32, width: Width, value: u32) -> BusResult<()> {
@@ -920,6 +954,9 @@ impl Machine {
         self.mmio_writes = self.mmio_writes.wrapping_add(1);
         self.dma_win_log("wr", addr, value);
         self.advance_hdmi_ddc(addr);
+        if addr == SD_SLOT_MUX && width == Width::Word {
+            self.route_sd_slot(value);
+        }
         let trace = self.mmio_traced(addr);
         if let Some((dev, off)) = self.device_for(addr) {
             let r = dev.write(off, width, value);
@@ -1154,6 +1191,23 @@ impl Bus for Machine {
 #[cfg(test)]
 mod tests {
     use super::dma_irq_source;
+    use super::{Machine, SD_SLOT_MUX};
+    use crate::bus::Bus;
+
+    /// 2020-era bootcode writes `0x2` to the mux before its SD init on the
+    /// legacy EMMC; start4 writes 0 before it uses EMMC2 (#66).
+    #[test]
+    fn the_sd_slot_mux_moves_the_card_between_hosts() {
+        let mut m = Machine::new(1 << 20);
+        m.emmc2.insert_card(vec![0; 512 * 16]);
+        m.store32(SD_SLOT_MUX, 0x2).unwrap();
+        assert!(m.emmc.has_card() && !m.emmc2.has_card());
+        // Bit 0 alone leaves the card on EMMC2's side.
+        m.store32(SD_SLOT_MUX, 0x1).unwrap();
+        assert!(!m.emmc.has_card() && m.emmc2.has_card());
+        m.store32(SD_SLOT_MUX, 0x0).unwrap();
+        assert!(!m.emmc.has_card() && m.emmc2.has_card());
+    }
 
     /// The sources start4's dmalib registers `dma_interrupt` on, from its own
     /// source -> channel table (`gp+0x556b8`).
