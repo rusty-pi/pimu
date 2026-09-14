@@ -733,9 +733,19 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
         // after a reset.
         if let Some(host_net) = &host_net {
             let net = match host_net {
-                HostNet::Passt => {
-                    rpi_virt_fw::net::StreamBackend::spawn_passt().context("starting passt")?
-                }
+                HostNet::Passt => rpi_virt_fw::net::StreamBackend::spawn_passt().map_err(|e| {
+                    if e.kind() == std::io::ErrorKind::NotFound {
+                        anyhow::anyhow!(
+                            "--net passt starts passt, and there is no `passt` in PATH. \
+                             Install it with one of:\n  \
+                             sudo apt install passt    (Debian, Ubuntu)\n  \
+                             sudo dnf install passt    (Fedora)\n\
+                             or see https://passt.top/"
+                        )
+                    } else {
+                        anyhow::Error::new(e).context("starting passt")
+                    }
+                })?,
                 HostNet::Socket(sock) => rpi_virt_fw::net::StreamBackend::connect(sock)
                     .with_context(|| format!("connecting to {}", sock.display()))?,
             };
