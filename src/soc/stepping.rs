@@ -11,6 +11,8 @@
 //! * the VPU's `version` value ([`Stepping::vpu_version`]);
 //! * the mask ROM's layout, which bootcode up to 2020-06-15 calls into
 //!   ([`crate::firmware::bootrom`]);
+//! * whether DMA channel 15 is a 40-bit channel
+//!   ([`Stepping::dma_channel_15_is_40_bit`]);
 //! * which boards carried it ([`crate::soc::Board`]).
 //!
 //! Linux learns it from the device tree the firmware hands over: `/emmc2bus`
@@ -43,6 +45,15 @@ impl Stepping {
             Stepping::B0 => 0x0400_0161,
             Stepping::C0 => 0x0400_0162,
         }
+    }
+
+    /// Whether DMA channel 15, the one at `0x7EE0_5000`, is a 40-bit ("dma40")
+    /// channel that takes DMA4-layout control blocks. start4 only drives it as
+    /// one when its chip-feature switch says C0 (`version - 0x0400_0160`
+    /// selects which feature words it sets); on B0 it builds legacy control
+    /// blocks for the same copies, so there the channel must be a legacy one.
+    pub const fn dma_channel_15_is_40_bit(self) -> bool {
+        matches!(self, Stepping::C0)
     }
 
     pub const fn name(self) -> &'static str {
