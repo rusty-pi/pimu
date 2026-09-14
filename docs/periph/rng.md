@@ -23,7 +23,7 @@ Sources:
 | `0x00C` | [`TOTAL_BIT_COUNT`](#total_bit_count) | r | 32 | 1, best high |
 | `0x010` | [`TOTAL_BIT_COUNT_THRESHOLD`](#total_bit_count_threshold) | rw | 32 | 2, best high |
 | `0x014` | [`PROBE`](#probe) | r | 32 | 1, best high |
-| `0x018` | [`INT_STATUS`](#int_status) | w1c | 32 | 2, best high |
+| `0x018` | [`INT_STATUS`](#int_status) | w1c | 32 | 3, best high |
 | `0x01C` | [`INT_ENABLE`](#int_enable) | rw | 32 | 1, best high |
 | `0x020` | [`FIFO_DATA`](#fifo_data) | r | 32 | 2, best high |
 | `0x024` | [`FIFO_COUNT`](#fifo_count) | rw | 32 | 1, best high |
@@ -115,7 +115,7 @@ Sources:
 
 Offset `0x018` · access `w1c` · 32 bits
 
-Interrupt status (source 125). 0x80000022 are the failure bits, which the model never raises.
+Interrupt status (source 125). Each bit latches when its condition becomes true, and a write-one clear sticks until the condition goes false and true again. 0x80000022 are the failure bits, which the model never raises.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -127,6 +127,7 @@ Interrupt status (source 125). 0x80000022 are the failure bits, which the model 
 Sources:
 
 - linux (high): iproc-rng200.c: RNG_INT_STATUS
+- decompile (medium): start4 1.20210303: open arms INT_ENABLE = 0x80000026 with FIFO_COUNT = 0x200, and the handler 0x0ED565C6 only acks bit 2 (|= 4), leaving it enabled with the FIFO still full — _that build boots on hardware, so the bits are latched events, not levels (#73)_
 - decompile (high): irq 0x3ED64BE8 reads it, acks with |= 4 or |= 0x80000022
 
 `TOTAL_BITS` sources:
