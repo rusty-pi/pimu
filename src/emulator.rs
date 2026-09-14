@@ -188,7 +188,7 @@ pub struct RunReport {
     pub pc: u32,
     /// Everything the console UART transmitted during the run.
     pub console: Vec<u8>,
-    /// True if [`Self::console`] was already streamed to stderr as it was
+    /// True if [`Self::console`] was already streamed to stdout as it was
     /// produced, so the summary does not need to repeat it.
     pub console_streamed: bool,
     /// Distinct unimplemented instructions encountered (reconnaissance).
@@ -286,7 +286,7 @@ impl Emulator {
 
     pub fn run(&mut self, limits: &RunLimits) -> RunReport {
         let start = Instant::now();
-        // UART output is echoed to stderr as it happens, so a run can be
+        // UART output goes to stdout as it happens, so a run can be
         // watched instead of waiting for the summary at the end. Set
         // `RVF_LIVE_CONSOLE=0` to get the buffered-only behaviour back (the
         // summary still prints the whole console either way, but it is not
@@ -811,7 +811,11 @@ impl Emulator {
         }
         if st.diag.live_console && had_output {
             use std::io::Write;
-            let _ = std::io::stderr().write_all(&fresh);
+            // The serial console is what a run is for, so it is stdout (#55),
+            // flushed at once: a prompt does not end in a newline.
+            let mut out = std::io::stdout().lock();
+            let _ = out.write_all(&fresh);
+            let _ = out.flush();
         }
         st.console.extend_from_slice(&fresh);
         if had_output {

@@ -298,6 +298,8 @@ impl BootScenario {
             "boot".into(),
             self.eeprom_path().display().to_string(),
             "--eeprom".into(),
+            // The milestones read the run report too, not only the console.
+            "--verbose".into(),
         ];
         let b = &self.boot;
         for (flag, path) in [

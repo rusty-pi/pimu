@@ -68,7 +68,7 @@ FLAGS:
               publishes (rpi-mkosi#37).
     --print-fdt
               Print that whole device tree as source, every node and property,
-              not only the `/chosen` summary the run report gives by default.
+              not only the `/chosen` summary the `-v` run report gives.
     --mbox-property <tag>[,<tag>...]
               After the boot, post a property-interface request to the firmware
               the way a booted Linux would (`/dev/vcio`), and print what the
@@ -95,7 +95,14 @@ FLAGS:
               Report which DRAM pages are non-zero when the run ends, as
               address runs. Proof of concept for the QEMU hand-off: this is the
               state that would have to cross the line (docs/vision.md §3).
-    -v        Print the full run report and transcript.
+    -v, --verbose
+              `boot`: print the full run report as well — the EEPROM layout,
+              registers, the ARM cores, the property replies, the peripherals
+              that fell through to the stub, the device tree's `/chosen`.
+              Without it `boot` prints the serial console, what was asked for
+              by name (`--dump`, `--print-fdt`, `--mbox-property`, …) and one
+              `result: ok|FAILED — <why>` line; the exit status is 1 on
+              failure. `run`: print the full report and transcript.
 ";
 
 /// The offset of the `bootconf.txt` `MAGIC_FILE` section header in an EEPROM
@@ -214,6 +221,9 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
     let mut until: Option<String> = None;
     let mut sends: Vec<(String, Vec<u8>)> = Vec::new();
     let mut stdin = false;
+    // Without `-v` the run prints the serial console, the outcome and whatever
+    // was asked for by name (#55); the full run report is for investigating.
+    let mut verbose = false;
     let mut it = args.iter().peekable();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -272,6 +282,7 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
                 sends.push((prompt, harness::boot::unescape(text)));
             }
             "--stdin" => stdin = true,
+            "-v" | "--verbose" => verbose = true,
             "--sd" => sd_image = Some(PathBuf::from(it.next().context("--sd needs a path")?)),
             "--console-log" => {
                 console_log = Some(PathBuf::from(
@@ -374,7 +385,9 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
         Some(p) => {
             let disk = rpi_virt_fw::periph::usb::Disk::open(p, usb_mb.unwrap_or(0) << 20)
                 .with_context(|| format!("opening USB image {}", p.display()))?;
-            println!("usb image  {} ({} blocks)", p.display(), disk.blocks());
+            if verbose {
+                println!("usb image  {} ({} blocks)", p.display(), disk.blocks());
+            }
             Some(std::rc::Rc::new(std::cell::RefCell::new(disk)))
         }
         None => None,
@@ -386,7 +399,7 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
         rpi_virt_fw::periph::disk::Disk::open(p, 0)
             .with_context(|| format!("opening SD image {}", p.display()))
     };
-    if let Some(sd_path) = &sd_image {
+    if let Some(sd_path) = sd_image.as_ref().filter(|_| verbose) {
         println!(
             "sd image   {} ({} blocks)",
             sd_path.display(),
@@ -489,14 +502,14 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
     // `flash` may be rewritten by an EEPROM self-update; on a firmware-requested
     // reset we rebuild from the updated image and run again.
     let mut flash = bytes.clone();
-    unsign(&mut flash, true);
-    set_boot_order(&mut flash, true);
-    set_pubkey(&mut flash, true);
+    unsign(&mut flash, verbose);
+    set_boot_order(&mut flash, verbose);
+    set_pubkey(&mut flash, verbose);
 
     // Show the EEPROM section table `bootloader_eeprom_find_files` walks, plus
     // the decoded `bootconf.txt`, so a boot that consults EEPROM config (boot
     // order etc.) can be followed.
-    if eeprom {
+    if eeprom && verbose {
         if let Ok(img) = rpi_virt_fw::firmware::eeprom::EepromImage::parse(&flash) {
             println!("eeprom     {} sections", img.sections.len());
             print!("{}", img.summary());
@@ -543,11 +556,13 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
         Some(p) => {
             let b =
                 std::fs::read(p).with_context(|| format!("reading boot ROM {}", p.display()))?;
-            println!(
-                "boot-rom   {} ({} bytes, experimental)",
-                p.display(),
-                b.len()
-            );
+            if verbose {
+                println!(
+                    "boot-rom   {} ({} bytes, experimental)",
+                    p.display(),
+                    b.len()
+                );
+            }
             Some(b)
         }
         None => None,
@@ -601,7 +616,7 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
                 // pieeprom off SPI0, the key rows out of OTP, and stages the
                 // bootcode itself — the peripherals do the rest.
                 machine.attach_boot_rom(rom.clone());
-                if reboots == 0 {
+                if reboots == 0 && verbose {
                     println!(
                         "boot ROM: executing real maskROM from reset vector 0x60000000 (experimental)"
                     );
@@ -609,7 +624,7 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
                 entry.unwrap_or(0x6000_0000)
             } else {
                 let outcome = bootrom.boot(&mut machine)?;
-                if reboots == 0 {
+                if reboots == 0 && verbose {
                     for line in &outcome.log {
                         println!("{line}");
                     }
@@ -624,7 +639,9 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
         for &(a, v) in &patches {
             use rpi_virt_fw::bus::Bus;
             machine.store32(a, v).ok();
-            println!("patch [{a:#010x}] = {v:#010x}");
+            if verbose {
+                println!("patch [{a:#010x}] = {v:#010x}");
+            }
         }
 
         let mut emu = Emulator::new(machine, start);
@@ -685,7 +702,11 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
 
         if report.end == rpi_virt_fw::emulator::RunEnd::Reset {
             reboots += 1;
-            print!("{}", String::from_utf8_lossy(&report.console));
+            // Already on the terminal if it was streamed; the run report keeps
+            // its copy.
+            if verbose || !report.console_streamed {
+                print!("{}", String::from_utf8_lossy(&report.console));
+            }
             flash = emu.machine.spi0.flash_bytes().to_vec();
             unsign(&mut flash, false); // self-update restored SIGNED_BOOT=1
             set_boot_order(&mut flash, false);
@@ -720,64 +741,65 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
     }
     let cf_tail: Vec<(u32, u32, u32)> = cf_tail.into_iter().rev().take(30).collect();
 
-    println!("entry      {start:#010x}");
-    println!("end        {:?}", report.end);
-    println!("final pc   {:#010x}", report.pc);
-    println!(
-        "retired    {}  (skipped {}, cycles {})",
-        report.retired, report.skipped, report.cycles
-    );
-    println!(
-        "stub hits  {}   bus errors {}",
-        report.stub_hits, report.bus_errors
-    );
-    println!("wall       {:?}", report.wall);
-    let ic = &emu.cpu.icache;
-    println!(
-        "decode     cache hits {}  fills {}  stale {}",
-        ic.hits, ic.fills, ic.stale
-    );
-    if let Some(pc1) = report.core1_pc {
-        println!(
-            "core1      pc {:#010x}  retired {}  end {:?}",
-            pc1,
-            report.core1_retired.unwrap_or(0),
-            report.core1_end
-        );
-    }
     // A core parked in a busy-wait loop is behind on its registers and its
     // instruction count until it is brought up to date.
     if let Some(a) = &mut emu.arm {
         a.settle(&emu.machine);
     }
-    if let Some(a) = &emu.arm {
-        println!("\n--- ARM cores (#40) ---");
-        if let Some(h) = a.handoff {
+    if verbose {
+        println!("entry      {start:#010x}");
+        println!("end        {:?}", report.end);
+        println!("final pc   {:#010x}", report.pc);
+        println!(
+            "retired    {}  (skipped {}, cycles {})",
+            report.retired, report.skipped, report.cycles
+        );
+        println!(
+            "stub hits  {}   bus errors {}",
+            report.stub_hits, report.bus_errors
+        );
+        println!("wall       {:?}", report.wall);
+        let ic = &emu.cpu.icache;
+        println!(
+            "decode     cache hits {}  fills {}  stale {}",
+            ic.hits, ic.fills, ic.stale
+        );
+        if let Some(pc1) = report.core1_pc {
             println!(
-                "  armstub   kernel_entry32 {:#010x}  dtb_ptr32 {:#010x}",
-                h.kernel, h.dtb
+                "core1      pc {:#010x}  retired {}  end {:?}",
+                pc1,
+                report.core1_retired.unwrap_or(0),
+                report.core1_end
             );
         }
-        match &a.bootargs {
-            Some(Ok((old, new))) if old != new => println!(
-                "  bootargs  \"{}\" prepended",
-                new.strip_suffix(old.as_str()).unwrap_or(new).trim_end()
-            ),
-            Some(Err(e)) => println!("  bootargs  not patched: {e}"),
-            _ => {}
-        }
-        println!(
-            "  ran       {} cycles, {} of them with every core asleep",
-            a.cycles, a.slept
-        );
-        for (i, c) in a.cores.iter().enumerate() {
-            match c.entered {
+        if let Some(a) = &emu.arm {
+            println!("\n--- ARM cores (#40) ---");
+            if let Some(h) = a.handoff {
+                println!(
+                    "  armstub   kernel_entry32 {:#010x}  dtb_ptr32 {:#010x}",
+                    h.kernel, h.dtb
+                );
+            }
+            match &a.bootargs {
+                Some(Ok((old, new))) if old != new => println!(
+                    "  bootargs  \"{}\" prepended",
+                    new.strip_suffix(old.as_str()).unwrap_or(new).trim_end()
+                ),
+                Some(Err(e)) => println!("  bootargs  not patched: {e}"),
+                _ => {}
+            }
+            println!(
+                "  ran       {} cycles, {} of them with every core asleep",
+                a.cycles, a.slept
+            );
+            for (i, c) in a.cores.iter().enumerate() {
+                match c.entered {
                 Some((cycles, el, pc, x0)) => println!(
                     "  core {i}    left the armstub at cycle {cycles} for {pc:#x} in EL{el}, x0 = {x0:#x}"
                 ),
                 None => println!("  core {i}    still in the armstub"),
             }
-            println!(
+                println!(
                 "            {} instructions, {} exceptions, {} interrupts; now pc {:#x}  EL{}  sp {:#x}{}",
                 c.insns,
                 c.exceptions,
@@ -787,37 +809,38 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
                 c.cpu.sp(),
                 if c.waiting { "  (wfi)" } else { "" }
             );
+                println!(
+                    "            daif {:#x}  irq line {}  gic {}",
+                    c.cpu.daif >> 6,
+                    u8::from(c.cpu.irq_line),
+                    emu.machine.gic.describe(i)
+                );
+            }
+            if let Some(stop) = &a.stopped {
+                println!("  stopped   {stop:x?}");
+            }
+            if let Some(prof) = &a.prof {
+                print_arm_prof(prof);
+            }
+        } else if arm {
+            println!("\n--- ARM cores (#40) ---\n  never released");
+        }
+        // What the firmware answered on the property channel, from the reply
+        // buffers themselves: the only place a value Linux never checks shows up.
+        let prop = &emu.machine.mbox.property;
+        if prop.replies > 0 {
+            println!("\n--- property replies (0x7e00_b880) ---");
             println!(
-                "            daif {:#x}  irq line {}  gic {}",
-                c.cpu.daif >> 6,
-                u8::from(c.cpu.irq_line),
-                emu.machine.gic.describe(i)
+                "  {} replies, {} with an error code",
+                prop.replies, prop.failed
             );
-        }
-        if let Some(stop) = &a.stopped {
-            println!("  stopped   {stop:x?}");
-        }
-        if let Some(prof) = &a.prof {
-            print_arm_prof(prof);
-        }
-    } else if arm {
-        println!("\n--- ARM cores (#40) ---\n  never released");
-    }
-    // What the firmware answered on the property channel, from the reply
-    // buffers themselves: the only place a value Linux never checks shows up.
-    let prop = &emu.machine.mbox.property;
-    if prop.replies > 0 {
-        println!("\n--- property replies (0x7e00_b880) ---");
-        println!(
-            "  {} replies, {} with an error code",
-            prop.replies, prop.failed
-        );
-        for (tag, t) in prop.tags() {
-            let last = t.last.map_or("-".to_string(), |v| format!("{v:#010x}"));
-            println!(
-                "  tag {tag:#010x}  marked {:<4} unmarked {:<4} last value {last}",
-                t.marked, t.unmarked
-            );
+            for (tag, t) in prop.tags() {
+                let last = t.last.map_or("-".to_string(), |v| format!("{v:#010x}"));
+                println!(
+                    "  tag {tag:#010x}  marked {:<4} unmarked {:<4} last value {last}",
+                    t.marked, t.unmarked
+                );
+            }
         }
     }
     if report.core1_release_never_resolved {
@@ -828,14 +851,16 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
              from the one that offset was read from (#25)."
         );
     }
-    print!("regs      ");
-    for (i, r) in report.regs.iter().enumerate() {
-        if i % 8 == 0 {
-            print!("\n  r{i:<2}");
+    if verbose {
+        print!("regs      ");
+        for (i, r) in report.regs.iter().enumerate() {
+            if i % 8 == 0 {
+                print!("\n  r{i:<2}");
+            }
+            print!(" {r:08x}");
         }
-        print!(" {r:08x}");
+        println!();
     }
-    println!();
 
     // `--console-log <path>`: the UART bytes on their own, with none of the
     // run report interleaved. `boot-check` normalises this into the golden
@@ -847,14 +872,16 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
     if let Some(p) = &console_log {
         std::fs::write(p, &report.console)
             .with_context(|| format!("writing console log {}", p.display()))?;
-        println!(
-            "console log {} ({} bytes)",
-            p.display(),
-            report.console.len()
-        );
+        if verbose {
+            println!(
+                "console log {} ({} bytes)",
+                p.display(),
+                report.console.len()
+            );
+        }
     }
 
-    if let Some(net) = emu.machine.net.as_mut() {
+    if let Some(net) = emu.machine.net.as_mut().filter(|_| verbose) {
         let st = emu.machine.genet.stats;
         println!("\n--- network (GENET <-> {}) ---", net.name());
         println!(
@@ -866,14 +893,16 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
         }
     }
 
-    if !report.console.is_empty() {
+    if !report.console.is_empty() && verbose {
         println!("\n--- console ({} bytes) ---", report.console.len());
         if report.console_streamed {
-            // Already echoed to stderr line by line while the run was going.
+            // Already written out line by line while the run was going.
             println!("(streamed above; RVF_LIVE_CONSOLE=0 to buffer it here instead)");
         } else {
             println!("{}", String::from_utf8_lossy(&report.console));
         }
+    } else if !report.console_streamed {
+        print!("{}", String::from_utf8_lossy(&report.console));
     }
 
     for &(a, n) in &dumps {
@@ -913,7 +942,7 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
         }
     }
 
-    if !report.phase_tags.is_empty() {
+    if verbose && !report.phase_tags.is_empty() {
         let tags: Vec<String> = report
             .phase_tags
             .iter()
@@ -956,7 +985,7 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
         }
     }
 
-    if !cf_tail.is_empty() {
+    if verbose && !cf_tail.is_empty() {
         println!("\n--- last control transfers (newest first, repeats collapsed) ---");
         for (from, to, n) in &cf_tail {
             let tag = if *n > 1 {
@@ -970,7 +999,7 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
 
     {
         let log = &emu.machine.periph_stub.log;
-        if !log.is_empty() {
+        if verbose && !log.is_empty() {
             use std::collections::BTreeMap;
             let mut per: BTreeMap<u32, (u32, u32, u32)> = BTreeMap::new(); // off -> (reads, writes, last_val)
             for a in log {
@@ -1051,7 +1080,7 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
         // the controller state is the console-independent way to check it.
         let sdc = &emu.machine.sdc;
         let history = sdc.refresh_history();
-        if !history.is_empty() {
+        if verbose && !history.is_empty() {
             let steps: Vec<String> = history.iter().map(|v| v.to_string()).collect();
             println!("\n--- sdram controller (0x7e00_1000) ---");
             println!(
@@ -1079,52 +1108,57 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
         // start4 says about the blob before it releases the ARM. The header is
         // validated before anything is believed or written out.
         match locate_fdt(&mut emu.machine, &report.console) {
-            Some((addr, blob)) => match rpi_virt_fw::fdt::Fdt::parse(&blob) {
-                Ok(fdt) => {
-                    let h = fdt.header();
-                    println!("\n--- device tree handed to the ARM ---");
-                    println!(
-                        "  at {addr:#010x}  totalsize {:#x}  version {}",
-                        h.totalsize, h.version
-                    );
-                    let nodes = fdt.nodes();
-                    println!(
-                        "  {} nodes, {} properties",
-                        nodes.len(),
-                        nodes.iter().map(|n| n.2.len()).sum::<usize>()
-                    );
-                    // `/chosen` is what the regression pins today, so it is
-                    // always in the report. It is not special otherwise — the
-                    // subject is the whole tree, and a firmware bump may move
-                    // what it publishes into a node that does not exist yet,
-                    // which is what `--print-fdt` and `--dump-fdt` are for.
-                    match fdt.properties_of("/chosen") {
-                        Some(props) => {
-                            for p in &props {
-                                // `bootargs` is the kernel command line and can
-                                // be long; everything else in /chosen is short.
-                                println!("  /chosen/{:<22} {}", p.name, p.display());
+            Some((addr, blob)) => {
+                match rpi_virt_fw::fdt::Fdt::parse(&blob) {
+                    Ok(fdt) => {
+                        if verbose {
+                            let h = fdt.header();
+                            println!("\n--- device tree handed to the ARM ---");
+                            println!(
+                                "  at {addr:#010x}  totalsize {:#x}  version {}",
+                                h.totalsize, h.version
+                            );
+                            let nodes = fdt.nodes();
+                            println!(
+                                "  {} nodes, {} properties",
+                                nodes.len(),
+                                nodes.iter().map(|n| n.2.len()).sum::<usize>()
+                            );
+                            // `/chosen` is what the regression pins today, so it is
+                            // always in the report. It is not special otherwise — the
+                            // subject is the whole tree, and a firmware bump may move
+                            // what it publishes into a node that does not exist yet,
+                            // which is what `--print-fdt` and `--dump-fdt` are for.
+                            match fdt.properties_of("/chosen") {
+                                Some(props) => {
+                                    for p in &props {
+                                        // `bootargs` is the kernel command line and can
+                                        // be long; everything else in /chosen is short.
+                                        println!("  /chosen/{:<22} {}", p.name, p.display());
+                                    }
+                                }
+                                None => println!("  (no /chosen node)"),
                             }
+                            if !print_fdt {
+                                println!("  (--print-fdt for every node, --dump-fdt <path> for the blob)");
+                            }
+                            report_machine_id_derivation(&emu.machine, &fdt);
                         }
-                        None => println!("  (no /chosen node)"),
+                        if print_fdt {
+                            println!("\n{}", fdt.to_dts());
+                        }
+                        if let Some(out) = &dump_fdt {
+                            std::fs::write(out, fdt.bytes())
+                                .with_context(|| format!("writing {}", out.display()))?;
+                            println!("  wrote {} ({} bytes)", out.display(), fdt.bytes().len());
+                        }
                     }
-                    if !print_fdt {
-                        println!("  (--print-fdt for every node, --dump-fdt <path> for the blob)");
+                    Err(e) if verbose || print_fdt || dump_fdt.is_some() => {
+                        println!("\n--- device tree handed to the ARM ---\n  at {addr:#010x}: {e}")
                     }
-                    report_machine_id_derivation(&emu.machine, &fdt);
-                    if print_fdt {
-                        println!("\n{}", fdt.to_dts());
-                    }
-                    if let Some(out) = &dump_fdt {
-                        std::fs::write(out, fdt.bytes())
-                            .with_context(|| format!("writing {}", out.display()))?;
-                        println!("  wrote {} ({} bytes)", out.display(), fdt.bytes().len());
-                    }
+                    Err(_) => {}
                 }
-                Err(e) => {
-                    println!("\n--- device tree handed to the ARM ---\n  at {addr:#010x}: {e}")
-                }
-            },
+            }
             None => {
                 if dump_fdt.is_some() {
                     bail!(
@@ -1136,7 +1170,7 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
         }
     }
 
-    if !report.unimpl.is_empty() {
+    if verbose && !report.unimpl.is_empty() {
         println!(
             "\n--- distinct unimplemented instructions ({}, top 40 by hit count) ---",
             report.unimpl.len()
@@ -1157,7 +1191,83 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
         );
     }
 
-    Ok(ExitCode::SUCCESS)
+    let (ok, why) = boot_outcome(&report, &emu, eeprom, limits.until.as_deref(), reboots);
+    println!("\nresult: {} — {why}", if ok { "ok" } else { "FAILED" });
+    Ok(if ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    })
+}
+
+/// Did the boot do what it was run for, and in a word, what happened (#55).
+///
+/// An EEPROM boot succeeds once the firmware has started the ARM, which is
+/// where a Pi's boot firmware is done; what the run does after that (the
+/// firmware idling until the silence limit, a Linux boot) does not undo it.
+/// With `--until` the text has to appear. A VPU ELF succeeds by halting.
+/// Anything the model could not do — an unknown instruction, a bus fault, an
+/// ARM core stopping — fails the run whenever it happens.
+fn boot_outcome(
+    report: &rpi_virt_fw::emulator::RunReport,
+    emu: &Emulator,
+    eeprom: bool,
+    until: Option<&str>,
+    reboots: u32,
+) -> (bool, String) {
+    use rpi_virt_fw::emulator::RunEnd;
+    use rpi_virt_fw::vpu::exec::Stop;
+
+    let end = match &report.end {
+        RunEnd::Until => {
+            return (
+                true,
+                format!("the console printed {:?}", until.unwrap_or("")),
+            )
+        }
+        RunEnd::Quit => return (true, "the session was ended".into()),
+        RunEnd::Halted(Stop::Fault(f)) => return (false, format!("the VPU faulted: {f:x?}")),
+        RunEnd::Core1Halted(Stop::Fault(f)) => {
+            return (false, format!("VPU core 1 faulted: {f:x?}"))
+        }
+        RunEnd::ArmStopped(s) => {
+            return (
+                false,
+                format!("an ARM core hit something not modelled: {s:x?}"),
+            )
+        }
+        RunEnd::Reset => {
+            return (
+                false,
+                format!("the firmware kept resetting ({reboots} reboots)"),
+            )
+        }
+        RunEnd::Halted(Stop::Halt(h)) | RunEnd::Core1Halted(Stop::Halt(h)) => {
+            if !eeprom && until.is_none() {
+                return (true, format!("the program halted ({h:?})"));
+            }
+            format!("the VPU halted ({h:?})")
+        }
+        RunEnd::StopPc(pc) => format!("reached pc {pc:#010x}"),
+        RunEnd::StepLimit => "the instruction limit was reached".into(),
+        RunEnd::TimeLimit => "the wall-clock limit was reached".into(),
+        RunEnd::IdleSpin(pc) => format!("it spun at {pc:#010x} with no output"),
+        RunEnd::Stuck { pc, silent_us, .. } => format!(
+            "no console output for {:.1} s of modelled time, at pc {pc:?}",
+            *silent_us as f64 / 1e6
+        ),
+    };
+    if let Some(text) = until {
+        return (false, format!("the console never printed {text:?}: {end}"));
+    }
+    if !eeprom {
+        return (false, end);
+    }
+    if emu.machine.armctrl.released() {
+        (true, "the firmware started the ARM".into())
+    } else {
+        (false, format!("the firmware never started the ARM: {end}"))
+    }
 }
 
 fn cmd_run(args: &[String]) -> Result<ExitCode> {
