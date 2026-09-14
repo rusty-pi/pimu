@@ -16,36 +16,57 @@ ref        = "size: stops short of the dmalib DMA controller at 0x7EE04100"
 confidence = "medium"
 
 [[register]]
-name   = "DOORBELL_A"
+name   = "L2_CTRL"
 offset = 0x1000
 access = "rw"
-notes  = "Doorbell rung by the relocated stub: trigger in bits 2:1, polled until clear."
+notes  = "The L2 cache's maintenance port, as far as the evidence goes. The stub the bootcode relocates to 0x60010000 writes a range to L2_FLUSH_START / L2_FLUSH_END, then 0x14 here, and polls until it reads back 0x10, right before it jumps to the next stage; bootmain does the same with 0x44 over single buffers. The low bits read back clear. The model takes FLUSH as clean-and-invalidate over the range, which ends the bootcode's cache-as-RAM window (src/l2.rs, #70)."
 
 [[register.source]]
 kind       = "decompile"
 ref        = "stub at 0x60010000 writes a trigger to 0x7EE01000 and polls it"
 confidence = "medium"
 
+[[register.source]]
+kind       = "trace"
+ref        = "2022-04-26 and pinned bootcode: 0x7EE01004 = 0, 0x7EE01008 = 0x0FFFFFE0, then 0x14 to 0x7EE01000; pinned bootmain: 0x00A20000..0x00A20116, then 0x44 (#70)"
+confidence = "medium"
+
 [[register.field]]
-name  = "CONTROL"
-bits  = "3:0"
-notes = "Ready / busy / trigger; always reads back clear."
+name  = "FLUSH"
+bits  = "2"
+notes = "Clean and invalidate L2_FLUSH_START..=L2_FLUSH_END; reads back clear."
 
 [[register.field.source]]
-kind       = "decompile"
-ref        = "every caller spins until the bits it set read back clear"
+kind       = "trace"
+ref        = "set in both commands that follow a range, clear in the 0x50 written between them"
+confidence = "low"
+
+[[register]]
+name   = "L2_FLUSH_START"
+offset = 0x1004
+access = "rw"
+notes  = "First address of the range L2_CTRL.FLUSH acts on."
+
+[[register.source]]
+kind       = "trace"
+ref        = "written right before L2_FLUSH_END and the L2_CTRL command (#70)"
 confidence = "medium"
 
 [[register]]
-name   = "DOORBELL_A_SIZE"
+name   = "L2_FLUSH_END"
 offset = 0x1008
 access = "rw"
-notes  = "Size parameter for DOORBELL_A."
+notes  = "Last address of the range L2_CTRL.FLUSH acts on: 0x0FFFFFE0 from the bootcode's stub, so the lines are 32 bytes. It was taken for a size before #70."
 
 [[register.source]]
 kind       = "decompile"
 ref        = "stub at 0x60010000 pokes +0x08 before the trigger"
 confidence = "low"
+
+[[register.source]]
+kind       = "trace"
+ref        = "bootmain writes 0x00A20000 to +0x04 and 0x00A20116 to +0x08 (#70)"
+confidence = "medium"
 
 [[register]]
 name   = "IRQ_STATUS"

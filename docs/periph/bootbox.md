@@ -17,8 +17,9 @@ Sources:
 
 | Offset | Name | Access | Width | Sources |
 |---|---|---|---|---|
-| `0x1000` | [`DOORBELL_A`](#doorbell_a) | rw | 32 | 1, best medium |
-| `0x1008` | [`DOORBELL_A_SIZE`](#doorbell_a_size) | rw | 32 | 1, best low |
+| `0x1000` | [`L2_CTRL`](#l2_ctrl) | rw | 32 | 2, best medium |
+| `0x1004` | [`L2_FLUSH_START`](#l2_flush_start) | rw | 32 | 1, best medium |
+| `0x1008` | [`L2_FLUSH_END`](#l2_flush_end) | rw | 32 | 2, best medium |
 | `0x1080` | [`IRQ_STATUS`](#irq_status) | rw | 32 | 1, best medium |
 | `0x1084` | [`IRQ_SOURCE`](#irq_source) | rw | 32 | 1, best medium |
 | `0x1088` | [`IRQ_PAYLOAD`](#irq_payload) | rw | 32 | 1, best medium |
@@ -26,33 +27,45 @@ Sources:
 | `0x2100` | [`DOORBELL_C`](#doorbell_c) | rw | 32 | 1, best medium |
 | `0x2108` | [`DOORBELL_C_SIZE`](#doorbell_c_size) | rw | 32 | 1, best low |
 
-## `DOORBELL_A`
+## `L2_CTRL`
 
 Offset `0x1000` · access `rw` · 32 bits
 
-Doorbell rung by the relocated stub: trigger in bits 2:1, polled until clear.
+The L2 cache's maintenance port, as far as the evidence goes. The stub the bootcode relocates to 0x60010000 writes a range to L2_FLUSH_START / L2_FLUSH_END, then 0x14 here, and polls until it reads back 0x10, right before it jumps to the next stage; bootmain does the same with 0x44 over single buffers. The low bits read back clear. The model takes FLUSH as clean-and-invalidate over the range, which ends the bootcode's cache-as-RAM window (src/l2.rs, #70).
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
-| 3:0 | `CONTROL` | rw | Ready / busy / trigger; always reads back clear. |
+| 2 | `FLUSH` | rw | Clean and invalidate L2_FLUSH_START..=L2_FLUSH_END; reads back clear. |
 
 Sources:
 
 - decompile (medium): stub at 0x60010000 writes a trigger to 0x7EE01000 and polls it
+- trace (medium): 2022-04-26 and pinned bootcode: 0x7EE01004 = 0, 0x7EE01008 = 0x0FFFFFE0, then 0x14 to 0x7EE01000; pinned bootmain: 0x00A20000..0x00A20116, then 0x44 (#70)
 
-`CONTROL` sources:
+`FLUSH` sources:
 
-- decompile (medium): every caller spins until the bits it set read back clear
+- trace (low): set in both commands that follow a range, clear in the 0x50 written between them
 
-## `DOORBELL_A_SIZE`
+## `L2_FLUSH_START`
+
+Offset `0x1004` · access `rw` · 32 bits
+
+First address of the range L2_CTRL.FLUSH acts on.
+
+Sources:
+
+- trace (medium): written right before L2_FLUSH_END and the L2_CTRL command (#70)
+
+## `L2_FLUSH_END`
 
 Offset `0x1008` · access `rw` · 32 bits
 
-Size parameter for DOORBELL_A.
+Last address of the range L2_CTRL.FLUSH acts on: 0x0FFFFFE0 from the bootcode's stub, so the lines are 32 bytes. It was taken for a size before #70.
 
 Sources:
 
 - decompile (low): stub at 0x60010000 pokes +0x08 before the trigger
+- trace (medium): bootmain writes 0x00A20000 to +0x04 and 0x00A20116 to +0x08 (#70)
 
 ## `IRQ_STATUS`
 

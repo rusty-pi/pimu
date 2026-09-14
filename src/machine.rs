@@ -27,6 +27,8 @@ pub struct Machine {
     /// scratch (above the code region) and its staging at `0x8000_0000` still
     /// land in RAM. `None` on every normal boot — see `firmware::bootrom`.
     boot_rom: Option<(u32, u32, Vec<u8>)>,
+    /// The L2 the bootcode runs out of, until its flush ([`crate::l2`], #70).
+    pub l2: crate::l2::CacheAsRam,
     pub systimer: SysTimer,
     pub uart0: Pl011,
     pub aux: Aux,
@@ -189,6 +191,11 @@ const PHASE_TAG_SIG: u32 = 0x02C0_2000;
 const SD_SLOT_MUX: u32 = map::GPIO_BASE + 0xD0;
 const SD_SLOT_MUX_LEGACY: u32 = 1 << 1;
 
+/// The L2's maintenance port (`specs/bootbox.toml`): the bootcode's flush
+/// ends its cache-as-RAM window ([`crate::l2`], #70).
+const L2_CTRL: u32 = map::BOOTBOX_BASE + crate::spec::bootbox::L2_CTRL;
+const L2_FLUSH: u32 = crate::spec::bootbox::L2_CTRL_FLUSH_MASK;
+
 /// The 64 MiB every peripheral window the VPU decodes lies in.
 const MMIO_WINDOW: std::ops::Range<u32> = 0x7C00_0000..0x8000_0000;
 const _: () = {
@@ -212,6 +219,7 @@ impl Machine {
         Machine {
             ram: Ram::new(map::SDRAM_CACHED_BASE, ram_bytes),
             boot_rom: None,
+            l2: Default::default(),
             systimer: SysTimer::new(),
             uart0: Pl011::new(),
             aux: Aux::new(),
@@ -466,6 +474,8 @@ impl Machine {
         const CODE_LEN: u32 = 0x8000;
         let len = (bytes.len() as u32).min(CODE_LEN);
         self.boot_rom = Some((BASE, BASE + len, bytes));
+        // The ROM stages the bootcode into the L2 with ordinary stores.
+        self.l2.hold(0, 0);
     }
 
     /// Whether a real boot-ROM image is mapped (experimental `--boot-rom`). The
@@ -506,8 +516,9 @@ impl Machine {
 
     /// Fold the four VC4 cache aliases (`0x0`, `0x4000_0000`, `0x8000_0000`,
     /// `0xC000_0000`) of physical memory onto a single backing store. Before
-    /// SDRAM training this backing *is* the ~128 KiB of L2-as-SRAM the bootcode
-    /// runs from; afterwards it stands in for DRAM.
+    /// SDRAM training this backing *is* the L2-as-SRAM the bootcode runs from;
+    /// afterwards it stands in for DRAM. Until the bootcode flushes the L2, an
+    /// uncached write does not reach the lines it holds ([`crate::l2`]).
     fn fold_ram_addr(addr: u32) -> u32 {
         addr & 0x3FFF_FFFF
     }
@@ -957,6 +968,12 @@ impl Machine {
         if addr == SD_SLOT_MUX && width == Width::Word {
             self.route_sd_slot(value);
         }
+        if addr == L2_CTRL && value & L2_FLUSH != 0 {
+            self.l2.flush(
+                self.bootbox.word(crate::spec::bootbox::L2_FLUSH_START),
+                self.bootbox.word(crate::spec::bootbox::L2_FLUSH_END),
+            );
+        }
         let trace = self.mmio_traced(addr);
         if let Some((dev, off)) = self.device_for(addr) {
             let r = dev.write(off, width, value);
@@ -1059,7 +1076,8 @@ impl Bus for Machine {
             self.ram_reads = self.ram_reads.wrapping_add(1);
             return Ok(len);
         }
-        if !Machine::in_mmio(pc) {
+        // An uncached fetch from a line the L2 holds takes the slow path.
+        if !Machine::in_mmio(pc) && !self.l2.diverts(pc, Machine::fold_ram_addr(pc)) {
             let phys = Machine::fold_ram_addr(pc);
             if let Ok(head) = self.ram.read_slice(phys, 2) {
                 let p0 = u16::from_le_bytes([head[0], head[1]]);
@@ -1097,7 +1115,7 @@ impl Bus for Machine {
             }
             return Some(ROM_GEN);
         }
-        if Machine::in_mmio(pc) {
+        if Machine::in_mmio(pc) || self.l2.diverts(pc, Machine::fold_ram_addr(pc)) {
             return None;
         }
         let gen = self.ram.page_gen(Machine::fold_ram_addr(pc))?;
@@ -1146,6 +1164,9 @@ impl Bus for Machine {
             let phys = Machine::fold_ram_addr(addr);
             if self.ram.contains(phys) {
                 self.ram_reads = self.ram_reads.wrapping_add(1);
+                if self.l2.covers(phys) {
+                    return self.l2.load(&self.ram, addr, phys, width);
+                }
                 return self.ram.load(phys, width);
             }
         }
@@ -1181,6 +1202,9 @@ impl Bus for Machine {
                 {
                     self.phase_tags.push(value);
                 }
+                if self.l2.covers(phys) {
+                    return self.l2.store(&mut self.ram, addr, phys, width, value);
+                }
                 return self.ram.store(phys, width, value);
             }
         }
@@ -1191,7 +1215,7 @@ impl Bus for Machine {
 #[cfg(test)]
 mod tests {
     use super::dma_irq_source;
-    use super::{Machine, SD_SLOT_MUX};
+    use super::{map, Machine, L2_CTRL, SD_SLOT_MUX};
     use crate::bus::Bus;
 
     /// 2020-era bootcode writes `0x2` to the mux before its SD init on the
@@ -1207,6 +1231,24 @@ mod tests {
         assert!(!m.emmc.has_card() && m.emmc2.has_card());
         m.store32(SD_SLOT_MUX, 0x0).unwrap();
         assert!(!m.emmc.has_card() && m.emmc2.has_card());
+    }
+
+    /// 2022-04-26 bootcode keeps its config in the L2 at `0x8001_8020` and
+    /// loads a file to `0xC001_8000` across it; the flush its stub does before
+    /// bootmain ends that (#70).
+    #[test]
+    fn the_l2_keeps_the_bootcode_s_lines_until_its_flush() {
+        let mut m = Machine::new(1 << 20);
+        m.l2.hold(0, 0x100);
+        m.store32(0x8001_80C8, 0xF41).unwrap();
+        m.store32(0xC001_80C8, 0).unwrap();
+        assert_eq!(m.load32(0x8001_80C8), Ok(0xF41));
+
+        m.store32(map::BOOTBOX_BASE + 0x1004, 0).unwrap();
+        m.store32(map::BOOTBOX_BASE + 0x1008, 0x0FFF_FFE0).unwrap();
+        m.store32(L2_CTRL, 0x14).unwrap();
+        m.store32(0xC001_80C8, 0).unwrap();
+        assert_eq!(m.load32(0x8001_80C8), Ok(0));
     }
 
     /// The sources start4's dmalib registers `dma_interrupt` on, from its own

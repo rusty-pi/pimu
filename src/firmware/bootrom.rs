@@ -291,6 +291,9 @@ impl BootRom {
 
         // Stage the second stage into L2-as-SRAM, then hand off at its entry.
         write_folded(machine, BOOTCODE_LOAD_ADDR, &body).context("boot ROM: staging bootcode")?;
+        machine
+            .l2
+            .hold(BOOTCODE_LOAD_ADDR & 0x3FFF_FFFF, body.len());
         Ok(BootOutcome {
             entry: BOOTCODE_LOAD_ADDR + BOOTCODE_ENTRY_OFFSET,
             log,
