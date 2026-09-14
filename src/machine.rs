@@ -750,12 +750,15 @@ impl Machine {
                 *slot = self.ram.load(cb + (i as u32) * 4, Width::Word).unwrap_or(0);
             }
             // Channel 15 of the `0x7EE0_4100` controller is a 40-bit ("dma40")
-            // channel - `dma_memcpy` builds its CB with
-            // `dma_transfer_setup_memcpy_vpu40` (`0x3EC99EE0`) - so it uses the
-            // DMA4 control-block layout, not the legacy one:
+            // channel on C0 and a legacy one on B0 (#77). On C0 `dma_memcpy`
+            // builds its CB with `dma_transfer_setup_memcpy_vpu40`
+            // (`0x3EC99EE0`), in the DMA4 control-block layout:
             //   +0x00 TI  +0x04 SRC  +0x08 SRCI  +0x0C DEST  +0x10 DESTI
             //   +0x14 LEN +0x18 NEXT_CB(>>5)
-            let d = if vpu {
+            // On B0 it uses `dma_transfer_setup_memcpy` (`0x3EC99A7C`) and the
+            // legacy layout, increments and all.
+            let dma40 = vpu && self.board.stepping.dma_channel_15_is_40_bit();
+            let d = if dma40 {
                 crate::periph::dma_legacy::Cb {
                     ti: w[0],
                     src: w[1],
@@ -779,12 +782,12 @@ impl Machine {
             let mut dest = d.dest & 0x3FFF_FFFF;
             for _ in 0..rows {
                 for i in 0..xlen {
-                    let sa = if vpu || d.src_inc() {
+                    let sa = if dma40 || d.src_inc() {
                         src.wrapping_add(i)
                     } else {
                         src
                     };
-                    let da = if vpu || d.dest_inc() {
+                    let da = if dma40 || d.dest_inc() {
                         dest.wrapping_add(i)
                     } else {
                         dest
@@ -1291,6 +1294,42 @@ mod tests {
         m.store32(L2_CTRL, 0x14).unwrap();
         m.store32(0xC001_80C8, 0).unwrap();
         assert_eq!(m.load32(0x8001_80C8), Ok(0));
+    }
+
+    /// Channel 15 reads a DMA4-layout control block on C0 and a legacy one on
+    /// B0, the layouts start4 builds for each (#77).
+    #[test]
+    fn channel_15_takes_the_control_blocks_of_its_stepping() {
+        use crate::soc::{Board, Stepping};
+        const CS: u32 = 0x7EE0_5000;
+        const CB: u32 = 0x1000;
+        const SRC: u32 = 0x2000;
+        const DEST: u32 = 0x3000;
+        for stepping in [Stepping::B0, Stepping::C0] {
+            let mut m = Machine::new(1 << 20);
+            m.set_board(Board::for_stepping(stepping));
+            for i in 0..16 {
+                m.store32(SRC + i * 4, 0x0101_0101 * (i + 1)).unwrap();
+            }
+            let cb: [u32; 7] = match stepping {
+                // TI, SOURCE_AD, DEST_AD, TXFR_LEN, STRIDE, NEXTCONBK
+                Stepping::B0 => [0xF331, 0x8000_0000 | SRC, 0x8000_0000 | DEST, 64, 0, 0, 0],
+                // TI, SRC, SRCI, DEST, DESTI, LEN, NEXT_CB
+                Stepping::C0 => [0, SRC, 0, DEST, 0, 64, 0],
+            };
+            for (i, w) in cb.iter().enumerate() {
+                m.store32(CB + i as u32 * 4, *w).unwrap();
+            }
+            m.store32(CS, 1).unwrap();
+            m.store32(CS + 4, 0x8000_0000 | CB).unwrap();
+            for i in 0..16 {
+                assert_eq!(
+                    m.load32(DEST + i * 4),
+                    Ok(0x0101_0101 * (i + 1)),
+                    "{stepping}"
+                );
+            }
+        }
     }
 
     /// The sources start4's dmalib registers `dma_interrupt` on, from its own
