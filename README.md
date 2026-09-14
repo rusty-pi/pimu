@@ -135,6 +135,11 @@ boots then run 1.45x faster; the guest runs the same instructions either way.
 CI does not use it — the extra build and training cost more than the boot
 jobs would save.
 
+Cargo runs rustc through `scripts/rustc-wrapper.sh` (`.cargo/config.toml`),
+which outside CI keeps the compiler on 80% of the CPUs so a build does not make
+the desktop lag. `RVF_BUILD_CPU_PERCENT` changes the share (`100` lifts the
+limit); with `CI` set the build gets every CPU.
+
 ### What the machine read and wrote
 
 `--io-log <path>` (`-` for stderr) writes what crossed the peripherals, apart
