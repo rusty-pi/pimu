@@ -178,7 +178,7 @@ confidence = "high"
 name   = "GINTSTS"
 offset = 0x14
 access = "w1c"
-notes  = "Core interrupt status. Only the levels are modelled: the latched interrupt bits never set, because nothing on the port raises them."
+notes  = "Core interrupt status. The levels are derived. Of the latched bits only the suspend pair is modelled: in device mode, connected, with no host on the port the bus is idle, so the core reports a suspend (#68). Nothing else on the port raises anything."
 
 [[register.source]]
 kind       = "standard"
@@ -216,6 +216,33 @@ notes  = "Non-periodic TX FIFO empty. Always 1: nothing is ever queued."
 kind       = "standard"
 ref        = "Linux drivers/usb/dwc2/hw.h GINTSTS_NPTXFEMP"
 confidence = "high"
+
+[[register.field]]
+name   = "ERLYSUSP"
+bits   = "10"
+access = "w1c"
+notes  = "Early suspend: 3 ms of idle bus in device mode. Set with USBSUSP when the core connects as a device with no host."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "Linux drivers/usb/dwc2/hw.h GINTSTS_ERLYSUSP"
+confidence = "high"
+
+[[register.field]]
+name   = "USBSUSP"
+bits   = "11"
+access = "w1c"
+notes  = "USB suspend. The boot ROM's device-mode poll (0x60001bb0) takes it as 'no host', resets its USB state and gives up on rpiboot (#68)."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "Linux drivers/usb/dwc2/hw.h GINTSTS_USBSUSP"
+confidence = "high"
+
+[[register.field.source]]
+kind       = "decompile"
+ref        = "C0 boot ROM 0x60001bea: btest GINTSTS, 11"
+confidence = "medium"
 
 [[register.field]]
 name   = "PTXFEMP"
@@ -550,7 +577,7 @@ confidence = "high"
 name   = "DCTL"
 offset = 0x804
 access = "rw"
-notes  = "Device control. Plain storage."
+notes  = "Device control. Storage, except that SFTDISCON decides whether a device-mode core is on the bus and the global NAK set/clear bits act on their status bits at once."
 
 [[register.source]]
 kind       = "standard"
@@ -560,4 +587,102 @@ confidence = "high"
 [[register.source]]
 kind       = "decompile"
 ref        = "0x3ED895C0..0x3ED895C4 set bit 1 (soft disconnect)"
+confidence = "high"
+
+[[register.field]]
+name   = "GNPINNAKSTS"
+bits   = "2"
+access = "r"
+notes  = "Global non-periodic IN NAK in effect: set by SGNPINNAK, cleared by CGNPINNAK, at once."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "Linux drivers/usb/dwc2/hw.h DCTL_GNPINNAKSTS"
+confidence = "high"
+
+[[register.field]]
+name   = "GOUTNAKSTS"
+bits   = "3"
+access = "r"
+notes  = "Global OUT NAK in effect: set by SGOUTNAK, cleared by CGOUTNAK, at once. The boot ROM spins on it after a suspend (0x60001bfc, #68)."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "Linux drivers/usb/dwc2/hw.h DCTL_GOUTNAKSTS"
+confidence = "high"
+
+[[register.field]]
+name   = "SGNPINNAK"
+bits   = "7"
+access = "w"
+notes  = "Set global non-periodic IN NAK. Write-only."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "Linux drivers/usb/dwc2/hw.h DCTL_SGNPINNAK"
+confidence = "high"
+
+[[register.field]]
+name   = "CGNPINNAK"
+bits   = "8"
+access = "w"
+notes  = "Clear global non-periodic IN NAK. Write-only."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "Linux drivers/usb/dwc2/hw.h DCTL_CGNPINNAK"
+confidence = "high"
+
+[[register.field]]
+name   = "SGOUTNAK"
+bits   = "9"
+access = "w"
+notes  = "Set global OUT NAK. Write-only."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "Linux drivers/usb/dwc2/hw.h DCTL_SGOUTNAK"
+confidence = "high"
+
+[[register.field]]
+name   = "CGOUTNAK"
+bits   = "10"
+access = "w"
+notes  = "Clear global OUT NAK. Write-only."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "Linux drivers/usb/dwc2/hw.h DCTL_CGOUTNAK"
+confidence = "high"
+
+[[register.field]]
+name  = "SFTDISCON"
+bits  = "1"
+notes = "Soft disconnect. Reads 0 out of reset: the boot ROM never writes DCTL before it waits for a host, so a core that reset with it set could not be rpiboot'ed."
+
+[[register.field.source]]
+kind       = "inferred"
+ref        = "C0 boot ROM: GUSBCFG 0x40402700 and DCFG, then straight into the GINTSTS poll"
+confidence = "medium"
+
+[[register]]
+name   = "DSTS"
+offset = 0x808
+access = "r"
+notes  = "Device status. SUSPSTS follows the suspend a device-mode core reports with no host; the rest reads 0."
+
+[[register.source]]
+kind       = "standard"
+ref        = "DWC2 device register at 0x808; Linux drivers/usb/dwc2/hw.h DSTS"
+confidence = "high"
+
+[[register.field]]
+name   = "SUSPSTS"
+bits   = "0"
+access = "r"
+notes  = "The bus is suspended."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "Linux drivers/usb/dwc2/hw.h DSTS_SUSPSTS"
 confidence = "high"

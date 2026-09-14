@@ -34,6 +34,7 @@ Sources:
 | `0x508`–`0x5E8` (8 × 0x20) | [`HCINT`](#hcint) | w1c | 32 | 2, best high |
 | `0x800` | [`DCFG`](#dcfg) | rw | 32 | 2, best high |
 | `0x804` | [`DCTL`](#dctl) | rw | 32 | 2, best high |
+| `0x808` | [`DSTS`](#dsts) | r | 32 | 1, best high |
 
 ## `GAHBCFG`
 
@@ -126,12 +127,14 @@ Sources:
 
 Offset `0x014` · access `w1c` · 32 bits
 
-Core interrupt status. Only the levels are modelled: the latched interrupt bits never set, because nothing on the port raises them.
+Core interrupt status. The levels are derived. Of the latched bits only the suspend pair is modelled: in device mode, connected, with no host on the port the bus is idle, so the core reports a suspend (#68). Nothing else on the port raises anything.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
 | 0 | `CURMOD` | r | 1 in host mode. The ID pin reads as an A-device (GOTGCTL.CONIDSTS 0 on the reference board), so the core is a host unless GUSBCFG.FORCEDEVMODE is set. |
 | 5 | `NPTXFEMP` | r | Non-periodic TX FIFO empty. Always 1: nothing is ever queued. |
+| 10 | `ERLYSUSP` | w1c | Early suspend: 3 ms of idle bus in device mode. Set with USBSUSP when the core connects as a device with no host. |
+| 11 | `USBSUSP` | w1c | USB suspend. The boot ROM's device-mode poll (0x60001bb0) takes it as 'no host', resets its USB state and gives up on rpiboot (#68). |
 | 26 | `PTXFEMP` | r | Periodic TX FIFO empty. Always 1. |
 
 Sources:
@@ -147,6 +150,15 @@ Sources:
 `NPTXFEMP` sources:
 
 - standard (high): Linux drivers/usb/dwc2/hw.h GINTSTS_NPTXFEMP
+
+`ERLYSUSP` sources:
+
+- standard (high): Linux drivers/usb/dwc2/hw.h GINTSTS_ERLYSUSP
+
+`USBSUSP` sources:
+
+- standard (high): Linux drivers/usb/dwc2/hw.h GINTSTS_USBSUSP
+- decompile (medium): C0 boot ROM 0x60001bea: btest GINTSTS, 11
 
 `PTXFEMP` sources:
 
@@ -356,9 +368,65 @@ Sources:
 
 Offset `0x804` · access `rw` · 32 bits
 
-Device control. Plain storage.
+Device control. Storage, except that SFTDISCON decides whether a device-mode core is on the bus and the global NAK set/clear bits act on their status bits at once.
+
+| Bits | Field | Access | Notes |
+|---|---|---|---|
+| 2 | `GNPINNAKSTS` | r | Global non-periodic IN NAK in effect: set by SGNPINNAK, cleared by CGNPINNAK, at once. |
+| 3 | `GOUTNAKSTS` | r | Global OUT NAK in effect: set by SGOUTNAK, cleared by CGOUTNAK, at once. The boot ROM spins on it after a suspend (0x60001bfc, #68). |
+| 7 | `SGNPINNAK` | w | Set global non-periodic IN NAK. Write-only. |
+| 8 | `CGNPINNAK` | w | Clear global non-periodic IN NAK. Write-only. |
+| 9 | `SGOUTNAK` | w | Set global OUT NAK. Write-only. |
+| 10 | `CGOUTNAK` | w | Clear global OUT NAK. Write-only. |
+| 1 | `SFTDISCON` | rw | Soft disconnect. Reads 0 out of reset: the boot ROM never writes DCTL before it waits for a host, so a core that reset with it set could not be rpiboot'ed. |
 
 Sources:
 
 - standard (high): DWC2 device register at 0x804; Linux drivers/usb/dwc2/hw.h DCTL
 - decompile (high): 0x3ED895C0..0x3ED895C4 set bit 1 (soft disconnect)
+
+`GNPINNAKSTS` sources:
+
+- standard (high): Linux drivers/usb/dwc2/hw.h DCTL_GNPINNAKSTS
+
+`GOUTNAKSTS` sources:
+
+- standard (high): Linux drivers/usb/dwc2/hw.h DCTL_GOUTNAKSTS
+
+`SGNPINNAK` sources:
+
+- standard (high): Linux drivers/usb/dwc2/hw.h DCTL_SGNPINNAK
+
+`CGNPINNAK` sources:
+
+- standard (high): Linux drivers/usb/dwc2/hw.h DCTL_CGNPINNAK
+
+`SGOUTNAK` sources:
+
+- standard (high): Linux drivers/usb/dwc2/hw.h DCTL_SGOUTNAK
+
+`CGOUTNAK` sources:
+
+- standard (high): Linux drivers/usb/dwc2/hw.h DCTL_CGOUTNAK
+
+`SFTDISCON` sources:
+
+- inferred (medium): C0 boot ROM: GUSBCFG 0x40402700 and DCFG, then straight into the GINTSTS poll
+
+## `DSTS`
+
+Offset `0x808` · access `r` · 32 bits
+
+Device status. SUSPSTS follows the suspend a device-mode core reports with no host; the rest reads 0.
+
+| Bits | Field | Access | Notes |
+|---|---|---|---|
+| 0 | `SUSPSTS` | r | The bus is suspended. |
+
+Sources:
+
+- standard (high): DWC2 device register at 0x808; Linux drivers/usb/dwc2/hw.h DSTS
+
+`SUSPSTS` sources:
+
+- standard (high): Linux drivers/usb/dwc2/hw.h DSTS_SUSPSTS
