@@ -76,7 +76,15 @@
 //! * **Transmit**: every descriptor between the consumer and producer index
 //!   is sent as soon as the producer index is written; `SOP` / `EOP` delimit
 //!   a frame across descriptors. With `TBUF_64B_EN` the first 64 bytes are
-//!   the transmit status block and are not sent.
+//!   the transmit status block and are not sent. With `DMA_TX_OW_CRC` in the
+//!   `SOP` descriptor the last four bytes are the slot the MAC writes the FCS
+//!   into, so they are not handed to the backend either. The bootloader and
+//!   start4 set it, next to `DMA_TX_APPEND_CRC`, on every frame and leave
+//!   four zero bytes there (a minimum-size ARP is a 64-byte buffer); Linux
+//!   sets `APPEND_CRC` alone. That the MAC overwrites rather than appends
+//!   with both bits set is inferred from those buffers, not measured. Passing
+//!   the slot on as payload made passt drop every DHCP DISCOVER (#45): its
+//!   DHCP server wants the UDP length to match the frame exactly.
 //! * **Receive**: a frame is accepted when it is broadcast, multicast,
 //!   addressed to `UMAC_MAC0` / `UMAC_MAC1`, or `UMAC_CMD`'s `PROMISC` is
 //!   set. With the Hardware Filter Block on (`HFB_CTRL` bit 0) the
@@ -266,11 +274,15 @@ const DESC_LEN_SHIFT: u32 = 16;
 const DESC_LEN_MASK: u32 = 0xfff;
 pub const DESC_EOP: u32 = 0x4000;
 pub const DESC_SOP: u32 = 0x2000;
+/// Transmit: the MAC writes the FCS over the buffer's last four bytes
+/// (bcmgenet.h `DMA_TX_OW_CRC`).
+const DESC_TX_OW_CRC: u32 = 0x0020;
 pub const DESC_RX_BRDCAST: u32 = 0x0040;
 pub const DESC_RX_MULT: u32 = 0x0020;
 /// Transmit and receive status block size (`struct status_64`).
 const STATUS_BLOCK: usize = 64;
 const ETH_ZLEN: usize = 60;
+const FCS_LEN: usize = 4;
 
 // UMAC_CMD bits
 const CMD_TX_EN: u32 = regs::UMAC_CMD_TX_EN_MASK;
@@ -312,6 +324,8 @@ pub struct Genet {
     kick: bool,
     /// A transmit frame whose `EOP` descriptor has not been queued yet.
     tx_frame: Vec<u8>,
+    /// The frame being gathered ends in the slot for its FCS (`DMA_TX_OW_CRC`).
+    tx_ow_crc: bool,
     /// A received frame whose ring has no free buffer yet.
     rx_pending: Option<Vec<u8>>,
     pub stats: Stats,
@@ -364,6 +378,7 @@ impl Genet {
             phy: Bcm54213pe::new(),
             kick: false,
             tx_frame: Vec::new(),
+            tx_ow_crc: false,
             rx_pending: None,
             stats: Stats::default(),
         }
@@ -505,6 +520,7 @@ impl Genet {
             let len = ((ls >> DESC_LEN_SHIFT) & DESC_LEN_MASK) as usize;
             if ls & DESC_SOP != 0 {
                 self.tx_frame.clear();
+                self.tx_ow_crc = ls & DESC_TX_OW_CRC != 0;
             }
             if self.reg(d + 8) == 0 {
                 if let Ok(b) = ram.read_slice(dma_addr(self.reg(d + 4), ram.len()), len) {
@@ -530,6 +546,11 @@ impl Genet {
     fn transmit(&mut self, mut frame: Vec<u8>, net: &mut Option<Box<dyn NetBackend>>) {
         if self.reg(TBUF_CTRL) & TBUF_64B_EN != 0 {
             frame.drain(..STATUS_BLOCK.min(frame.len()));
+        }
+        // The MAC writes the FCS over the last four bytes, and a backend takes
+        // frames without one.
+        if self.tx_ow_crc {
+            frame.truncate(frame.len().saturating_sub(FCS_LEN));
         }
         match net {
             Some(net) if self.link_active(CMD_TX_EN) && frame.len() >= 14 => {
@@ -1008,6 +1029,27 @@ mod tests {
         g.service(&mut ram, &mut net);
         assert_eq!(rd(&mut g, base + TDMA_CONS_INDEX), 1);
         assert_eq!(g.stats.tx_dropped, 1);
+    }
+
+    #[test]
+    fn ow_crc_keeps_the_fcs_slot_off_the_wire() {
+        let mut g = Genet::new();
+        let mut ram = Ram::new(0, 1 << 20);
+        let (mut net, sent) = attach(&mut g, vec![]);
+        bring_up(&mut g, 4);
+        wr(&mut g, TBUF_CTRL, 0);
+        // The bootloader's ARP: 60 bytes and four zero bytes for the FCS, with
+        // the length_status flags it and start4 always use (0x7fe0: SOP, EOP,
+        // the qtag bits, APPEND_CRC and OW_CRC).
+        let payload = frame(crate::net::BROADCAST, 60);
+        let mut buf = payload.clone();
+        buf.extend_from_slice(&[0; FCS_LEN]);
+        ram.write_slice(0x1000, &buf).unwrap();
+        wr(&mut g, TDMA_DESC, (buf.len() as u32) << 16 | 0x7fe0);
+        wr(&mut g, TDMA_DESC + 4, 0x1000);
+        wr(&mut g, TDMA_RINGS + 16 * 0x40 + TDMA_PROD_INDEX, 1);
+        g.service(&mut ram, &mut net);
+        assert_eq!(*sent.borrow(), vec![payload]);
     }
 
     #[test]
