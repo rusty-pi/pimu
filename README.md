@@ -56,9 +56,10 @@ Working:
   ARM-local block and the generic timer. A logging catch-all takes the rest.
 - **Network peer** (`src/net/`) — `--netboot <dir>` plugs the Ethernet cable
   into a built-in DHCP, DNS, TFTP and plain HTTP server serving `<dir>`
-  ([#38](https://github.com/valtzu/rpi-virt-fw/issues/38)). `--net
-  passt:<socket>` plugs it into the host's network through
-  [passt](https://passt.top/) instead (`passt -f -s <socket>`), for reaching a
+  ([#38](https://github.com/valtzu/rpi-virt-fw/issues/38)). `--net passt`
+  plugs it into the host's network through [passt](https://passt.top/)
+  instead, started on a socket pair (`--net passt:<socket>` connects to one
+  already listening), for reaching a
   server on the host such as `mkosi serve`; that runs on the host's clock, so it
   is not deterministic and CI stays on the built-in peer
   ([#45](https://github.com/valtzu/rpi-virt-fw/issues/45)).
