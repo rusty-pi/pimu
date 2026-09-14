@@ -102,6 +102,8 @@ jobs:
             scenario: testdata/boot/http-boot.toml
           - medium: linux
             scenario: testdata/boot/linux-boot.toml
+          - medium: b0
+            scenario: testdata/boot/b0-boot.toml
 
     steps:
       - uses: actions/checkout@v7
