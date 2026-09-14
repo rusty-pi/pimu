@@ -12,7 +12,7 @@ Generated from the TOML specs in [`specs/`](../../specs/); see [`specs/README.md
 | [`aux`](aux.md) | vpu | `0x7E215000` | `0x100` | 13 | AUX: mini-UART (UART1) and the SPI1 / SPI2 masters |
 | [`avs`](avs.md) | vpu | `0x7D5D2000` | `0xF00` | 10 | AVS monitor: on-die temperature sensor and the ring-oscillator / rail voltage monitors |
 | [`bcm54213pe`](bcm54213pe.md) | mdio | `0x01` | `0x20` | 23 | BCM54213PE gigabit Ethernet PHY on GENET's MDIO bus |
-| [`bootbox`](bootbox.md) | vpu | `0x7EE00000` | `0x4000` | 8 | Boot-info handoff doorbells, and the VPU interrupt window start4's exception-12 handler reads |
+| [`bootbox`](bootbox.md) | vpu | `0x7EE00000` | `0x4000` | 9 | Boot-info handoff doorbells, and the VPU interrupt window start4's exception-12 handler reads |
 | [`bsc`](bsc.md) | vpu | `0x7E205000` | `0x20` | 8 | BSC (I²C master): instance 0 with nothing attached, and the instance the board PMICs and GPIO expander sit on |
 | [`clkmon`](clkmon.md) | vpu | `0x7D5D0000` | `0x10000` | 5 | VPU clock block (PLLs and frequency monitors) below the 0x7E window |
 | [`cm`](cm.md) | vpu | `0x7E101000` | `0x2000` | 4 | Clock manager, with the A2W PLL control in the same window |

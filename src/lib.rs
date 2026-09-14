@@ -29,6 +29,7 @@ pub mod firmware;
 pub mod harness;
 pub mod identity;
 pub mod iolog;
+pub mod l2;
 pub mod machine;
 pub mod mem;
 pub mod net;

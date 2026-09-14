@@ -12,6 +12,11 @@
 //! We do not model whatever consumes these (a VPU sub-core / secure
 //! processor). Every doorbell self-clears its low control bits so the
 //! handshakes complete; parameter words the firmware writes read straight back.
+//!
+//! `0x7EE0_1000` looks like the L2 cache's maintenance port rather than a
+//! doorbell: a range at `+0x04` / `+0x08`, then a command. The machine acts on
+//! its flush (`Machine::store_device`, `crate::l2`, #70); here it is storage
+//! like the rest.
 
 use std::collections::BTreeMap;
 
@@ -19,8 +24,8 @@ use crate::bus::{BusResult, MmioDevice, Width};
 
 // Every doorbell has its ready / busy / trigger bits in the same place.
 use crate::spec::bootbox::{
-    DOORBELL_A, DOORBELL_A_SIZE, DOORBELL_B, DOORBELL_B_CONTROL_MASK as CONTROL_BITS, DOORBELL_C,
-    DOORBELL_C_SIZE, IRQ_PAYLOAD, IRQ_SOURCE, IRQ_STATUS, IRQ_STATUS_PENDING_MASK,
+    DOORBELL_B, DOORBELL_B_CONTROL_MASK as CONTROL_BITS, DOORBELL_C, DOORBELL_C_SIZE, IRQ_PAYLOAD,
+    IRQ_SOURCE, IRQ_STATUS, IRQ_STATUS_PENDING_MASK, L2_CTRL, L2_FLUSH_END, L2_FLUSH_START,
 };
 use crate::spec::Coverage;
 
@@ -30,8 +35,9 @@ use crate::spec::Coverage;
 pub const COVERAGE: Coverage = Coverage {
     block: "bootbox",
     decoded: &[
-        DOORBELL_A,
-        DOORBELL_A_SIZE,
+        L2_CTRL,
+        L2_FLUSH_START,
+        L2_FLUSH_END,
         IRQ_STATUS,
         IRQ_SOURCE,
         IRQ_PAYLOAD,
@@ -56,6 +62,11 @@ impl BootBox {
         self.storage.insert(IRQ_STATUS, IRQ_STATUS_PENDING_MASK);
         self.storage.insert(IRQ_SOURCE, source);
         self.storage.insert(IRQ_PAYLOAD, payload);
+    }
+
+    /// The word the firmware last wrote at `off`.
+    pub fn word(&self, off: u32) -> u32 {
+        self.storage.get(&(off & !3)).copied().unwrap_or(0)
     }
 
     /// True while a raised source has not yet been acked by the handler.
