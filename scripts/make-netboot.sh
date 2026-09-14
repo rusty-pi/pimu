@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the network-boot root the built-in peer serves (`recon --netboot <dir>`,
+# Build the network-boot root the built-in peer serves (`boot --netboot <dir>`,
 # src/net/peer.rs) from the SD image scripts/make-sd.sh built:
 #
 #   <out>/                       the SD boot partition's files, for TFTP boot
@@ -8,7 +8,7 @@
 #                                rpi-eeprom-digest format
 #   <out>-pubkey.bin             the signing key's public half as
 #                                `rpi-eeprom-config --pubkey` stores it, for
-#                                `recon --eeprom-pubkey`
+#                                `boot --eeprom-pubkey`
 #
 # `net_install` is the bootloader's default HTTP_PATH. The peer answers every
 # DNS query with its own address, so any HTTP_HOST reaches it.

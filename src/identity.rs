@@ -43,7 +43,7 @@
 //! That last point is the useful one for rpi-mkosi#37. The passphrase depends on
 //! five public fuses and on this function staying put across firmware versions;
 //! [`expected_machine_id`] recomputes it independently of the firmware so a
-//! `recon` run can say whether the value the firmware published is still the one
+//! `boot` run can say whether the value the firmware published is still the one
 //! the algorithm predicts, instead of only noticing after the fact that it
 //! moved.
 //! # This is a diagnostic, not an assertion

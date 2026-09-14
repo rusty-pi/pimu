@@ -42,7 +42,7 @@ binary plus a text config block (`BOOT_UART`, `BOOT_ORDER`, `BOOT_WATCHDOG_*`,
 `FREEZE_VERSION`, ...) and format strings including
 `"BOOTMODE: 0x%02x partition %d build-ts %s serial %08x boardrev %x stc %u"` —
 that line was the first M2 regression target; the model now runs well past it
-(see `board: boardrev d03115` in a `recon --eeprom` transcript).
+(see `board: boardrev d03115` in a `boot --eeprom` transcript).
 
 ## Where `rpi-machine-id` comes from
 
@@ -75,7 +75,7 @@ such block — a different function, `SHA-256(otp[28] ‖ otp[35] ‖ otp[30])` 
 on a normal boot it is never reached.
 
 `src/identity.rs` recomputes the derivation from the modelled fuses, and a
-`recon` run prints the prediction next to what the firmware actually published.
+`boot` run prints the prediction next to what the firmware actually published.
 That is what lets CI answer "does this firmware pair keep the passphrase stable"
 instead of only noticing afterwards that the value moved.
 

@@ -71,7 +71,7 @@
 //! the matching release sequence waits for `ACK` to clear before clearing
 //! `REQ_STOP`. No mirroring of `REQ_STOP` into `ACK` satisfies both. The
 //! decompiler has sunk the stores below the loops; the instructions
-//! (`rpi-virt-fw recon firmware/start4.elf --disasm 0xced550a2:12`, ELF vaddr =
+//! (`rpi-virt-fw boot firmware/start4.elf --disasm 0xced550a2:12`, ELF vaddr =
 //! runtime + `0x9000_0000`) say otherwise:
 //!
 //! ```text

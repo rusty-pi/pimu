@@ -2,7 +2,7 @@
 # Build a bootable SD-card image for the model: MBR, a FAT32 boot partition
 # holding the real Raspberry Pi 4 firmware (start4.elf + fixup4.dat), a config
 # and the device tree, and an ext4 root filesystem with busybox for Linux.
-# Consumed by `rpi-virt-fw recon --sd <img>`.
+# Consumed by `rpi-virt-fw boot --sd <img>`.
 #
 # No root / loop devices — sfdisk writes the partition table, mtools and
 # `mke2fs -d` write the filesystems at byte offsets.

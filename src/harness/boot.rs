@@ -14,7 +14,7 @@
 //!   invariant* broke, which a raw diff cannot.
 //!
 //! Both are checked against a single boot run: the golden against the console
-//! bytes the run wrote out (`recon --console-log`), the milestones against the
+//! bytes the run wrote out (`boot --console-log`), the milestones against the
 //! combined log, which also holds the parts of the evidence that never reach a
 //! UART (the device tree handed to the ARM, the SDRAM refresh history, the
 //! retired/skipped counters).
@@ -73,7 +73,7 @@ pub struct BootSpec {
     pub eeprom_pubkey: Option<String>,
     /// Wall-clock budget for the run, in seconds.
     pub wall_secs: u64,
-    /// Largest acceptable skipped-instruction count in the run report. `recon`
+    /// Largest acceptable skipped-instruction count in the run report. `boot`
     /// stops on an instruction the decoder does not implement rather than
     /// stepping over it, so a skip can only come from the remaining recon
     /// leniencies (`bkpt` padding, `sleep`, an unhandled `swi`) — nothing in a
@@ -81,19 +81,19 @@ pub struct BootSpec {
     #[serde(default)]
     pub max_skipped: u64,
     /// Property-interface tags to ask the still-running firmware for once the
-    /// boot has handed over, as `recon --mbox-property` would (#23). Empty =
+    /// boot has handed over, as `boot --mbox-property` would (#23). Empty =
     /// do not exchange anything.
     #[serde(default)]
     pub mbox_property: Vec<String>,
-    /// Run the ARM cores too (`recon --arm`, #40): the boot goes on into Linux.
+    /// Run the ARM cores too (`boot --arm`, #40): the boot goes on into Linux.
     #[serde(default)]
     pub arm: bool,
-    /// End the run once the console prints this (`recon --until`), after the
+    /// End the run once the console prints this (`boot --until`), after the
     /// last [`Self::input`] line went in.
     #[serde(default)]
     pub until: Option<String>,
     /// Lines typed into the serial console, each once its prompt has printed
-    /// (`recon --send-after`).
+    /// (`boot --send-after`).
     #[serde(default)]
     pub input: Vec<ConsoleLine>,
 }
@@ -105,7 +105,7 @@ pub struct ConsoleLine {
     pub text: String,
 }
 
-/// Make console text one plain line — `boot-check --plan` prints one `recon`
+/// Make console text one plain line — `boot-check --plan` prints one `boot`
 /// argument per line — with C-style escapes for backslashes and control bytes.
 /// [`unescape`] reverses it.
 pub fn escape(s: &str) -> String {
@@ -290,12 +290,12 @@ impl BootScenario {
             .unwrap_or(self.boot.wall_secs)
     }
 
-    /// The `recon` argument vector that runs this scenario. `scripts/boot-check.sh`
+    /// The `boot` argument vector that runs this scenario. `scripts/boot-check.sh`
     /// asks for this rather than spelling the run out a second time, so the
     /// scenario file stays the only description of the workload.
-    pub fn recon_args(&self, console_log: &Path) -> Vec<String> {
+    pub fn boot_args(&self, console_log: &Path) -> Vec<String> {
         let mut args: Vec<String> = vec![
-            "recon".into(),
+            "boot".into(),
             self.eeprom_path().display().to_string(),
             "--eeprom".into(),
         ];

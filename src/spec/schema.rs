@@ -218,7 +218,7 @@ pub enum SourceKind {
     Decompile,
     /// Read on the reference board, with how it was read.
     Measured,
-    /// Observed in a `recon` run.
+    /// Observed in a `boot` run.
     Trace,
     /// A guess, with the reasoning.
     Inferred,

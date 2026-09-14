@@ -506,7 +506,7 @@ impl MassStorage {
     }
 
     /// The stick on a [`Disk`] shared with whoever holds the other handle: in
-    /// `recon`, the next boot after a reset.
+    /// `boot`, the next boot after a reset.
     pub fn with_disk(disk: Rc<RefCell<Disk>>) -> MassStorage {
         let mut strings = HashMap::new();
         strings.insert(0, lang_desc());

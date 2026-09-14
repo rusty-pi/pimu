@@ -46,7 +46,7 @@
 //! table has a 16 Gbit record only for a **single** rank — a dual-rank 16 Gbit
 //! part dies with `MCB 4 16 1 not found` — while the 2026 tables carry both.
 //! A 2 GB Pi 4 boots every release, so its part is one rank of 16 Gb x16 dies:
-//! that is what the model is, which is also what `recon --eeprom` backs by
+//! that is what the model is, which is also what `boot --eeprom` backs by
 //! default. The second chip select has nothing on it, so a transfer to device
 //! 1 reaches no die: every mode register reads 0 there and a write is lost.
 //! The reference board is an 8 GB Pi 4B (`total-size: 64Gbit` and `rank 2` in

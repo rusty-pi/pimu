@@ -13,7 +13,7 @@
 //!
 //! ## What Linux will use — ground truth
 //!
-//! From the device tree **this firmware hands to Linux** (`recon … --dump-fdt`,
+//! From the device tree **this firmware hands to Linux** (`boot … --dump-fdt`,
 //! decoded with `dtc`), not from other Pi generations' documentation:
 //!
 //! ```text

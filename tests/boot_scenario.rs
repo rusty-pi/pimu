@@ -23,7 +23,7 @@ fn scenario() -> BootScenario {
 
 /// A stand-in for the combined run log: the console the golden recorded, plus
 /// the parts of the evidence that never reach a UART and only exist in the
-/// `recon` report. Spelling them out here is the point — it documents which
+/// `boot` report. Spelling them out here is the point — it documents which
 /// milestones are *not* provable from the transcript alone.
 fn fake_log(console: &str) -> String {
     format!(
@@ -94,9 +94,9 @@ fn the_boot_scenario_parses_and_every_milestone_says_why() {
 #[test]
 fn the_run_plan_is_the_only_place_the_workload_is_written_down() {
     let scn = scenario();
-    let args = scn.recon_args(Path::new("/tmp/console.bin"));
+    let args = scn.boot_args(Path::new("/tmp/console.bin"));
     let joined = args.join(" ");
-    assert!(joined.starts_with("recon "), "{joined}");
+    assert!(joined.starts_with("boot "), "{joined}");
     assert!(joined.contains("pieeprom.bin"), "{joined}");
     assert!(joined.contains("--eeprom"), "{joined}");
     assert!(joined.contains("--sd "), "{joined}");
@@ -287,7 +287,7 @@ fn every_boot_scenario_loads_and_plans_its_media() {
             "{}: every milestone says why",
             path.display()
         );
-        let joined = scn.recon_args(Path::new("/tmp/c")).join(" ");
+        let joined = scn.boot_args(Path::new("/tmp/c")).join(" ");
         for (flag, media) in [
             ("--sd ", &scn.boot.sd),
             ("--usb ", &scn.boot.usb),

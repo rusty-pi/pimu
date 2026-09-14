@@ -65,7 +65,7 @@ export RVF_LIVE_CONSOLE=1
 # No instruction cap: the wall clock is what ends the run.
 timeout --signal=INT "$(( wall + 40 ))" "$bin" "${args[@]}" 2>&1 | tee "$log"
 status=${PIPESTATUS[0]}
-echo "recon exit status: $status"
+echo "boot exit status: $status"
 # 124 = hit the wall clock; that is expected, not a failure.
 if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
   exit "$status"
