@@ -86,6 +86,33 @@ const READY: u32 = (1 << 17) | (1 << 18) | (1 << 7);
 /// skipped the SPI flash and waited for a USB host that never comes.
 const BOOTMODE_ROW: u32 = 17;
 
+/// The Hamming check bits over the 128-bit identity block, as the boot ROM
+/// computes them before it derives the bootcode's HMAC key (`0x60000838`):
+/// the data bits, least significant first in each row, fill positions 1..=136
+/// that are not powers of two, and check bit `j` is the parity of the data
+/// bits whose position has bit `j` set.
+const fn identity_check(words: [u32; 4]) -> u32 {
+    let mut check = 0;
+    let mut j = 0;
+    while j < 8 {
+        let mut parity = 0;
+        let mut d = 0;
+        let mut p: u32 = 1;
+        while p <= 136 {
+            if !p.is_power_of_two() {
+                if (p >> j) & 1 != 0 {
+                    parity ^= (words[d >> 5] >> (d & 31)) & 1;
+                }
+                d += 1;
+            }
+            p += 1;
+        }
+        check |= parity << j;
+        j += 1;
+    }
+    check
+}
+
 /// The board-identity block in OTP rows 19..22 (and again in 23..26).
 ///
 /// `FUN_0EC78F70`, the check `arm_loader` gates the ARM launch on, compares
@@ -166,6 +193,15 @@ impl ConfigOtp {
             table.insert(19 + i as u32, *word);
             table.insert(23 + i as u32, *word);
         }
+        // 27: the Hamming check bits over that block. The boot ROM corrects
+        // the block with them before it derives the bootcode's HMAC key;
+        // left blank, it "corrects" a bit that was right and the bootcode's
+        // signature no longer matches (#68). It ORs bits 15:8 into 7:0 the
+        // way it ORs the two copies, so my guess is one byte per copy; the
+        // same byte goes in both. Computed from `BOARD_IDENTITY`, so it is a
+        // model constant like the block itself.
+        let check = identity_check(BOARD_IDENTITY);
+        table.insert(27, check | check << 8);
         // 16: OTP control. Bits 26 and 27 disable VC JTAG; both stay clear so
         // the boot reports "VC-JTAG unlocked" as the reference log does.
         table.insert(16, 0x0000_0001);
@@ -349,6 +385,34 @@ impl MmioDevice for ConfigOtp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// With row 27 in place the boot ROM's check over the identity block finds
+    /// nothing to correct (#68). The syndrome is worked out independently here,
+    /// the way the ROM does it: rows 19..22 OR 23..26, check byte from row 27.
+    #[test]
+    fn identity_check_bits_leave_nothing_to_correct() {
+        let otp = ConfigOtp::new();
+        let words: Vec<u32> = (19..23).map(|r| otp.row(r) | otp.row(r + 4)).collect();
+        let row27 = otp.row(27);
+        let check = ((row27 >> 8) | row27) & 0xff;
+        assert_eq!(check, 0x5d);
+        let mut syndrome = 0;
+        for j in 0..8 {
+            let mut c = (check >> j) & 1;
+            let mut d = 0usize;
+            for p in 1u32..=136 {
+                if p.is_power_of_two() {
+                    continue;
+                }
+                if (p >> j) & 1 != 0 {
+                    c ^= (words[d / 32] >> (d % 32)) & 1;
+                }
+                d += 1;
+            }
+            syndrome |= c << j;
+        }
+        assert_eq!(syndrome, 0);
+    }
 
     /// The register the boot ROM reads its boot source from is the bootmode
     /// row, not the placeholder the rest of the block reads back (#68).
