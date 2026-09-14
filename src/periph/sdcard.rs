@@ -1,5 +1,5 @@
 //! A minimal SD card (SDHC / v3, high-capacity, UHS-I) state machine, backed by
-//! a flat block image in RAM. Enough of the physical-layer command set for the
+//! a block image. Enough of the physical-layer command set for the
 //! main bootloader to read `start4.elf` off a FAT partition, and for Linux's
 //! `mmc` core to bring the card up at 1.8 V DDR50 and mount a filesystem on it:
 //!
@@ -36,8 +36,10 @@
 //! expose (bits `[39:8]` of the card response) — for R2 the caller passes the
 //! full 120-bit CID/CSD out through [`SdResponse::r2`].
 //!
-//! Writes land in the in-memory image only; nothing here touches the file the
-//! image was loaded from.
+//! The card's blocks are a [`Disk`]: the image is read on demand and writes stay
+//! in memory, so the file the image was loaded from is never touched.
+
+use crate::periph::disk::Disk;
 
 /// SD card operating states (subset), per the physical-layer spec.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,8 +135,8 @@ const TUNING_BLOCK_4BIT: [u8; 64] = [
 ];
 
 pub struct SdCard {
-    /// Flat card contents, 512-byte blocks. FAT image lives here.
-    image: Vec<u8>,
+    /// The card's contents, 512-byte blocks. The FAT image lives here.
+    disk: Disk,
     state: CardState,
     /// Relative card address, assigned by CMD3.
     rca: u16,
@@ -178,9 +180,14 @@ impl SdCard {
         if image.is_empty() {
             image.resize(512, 0);
         }
-        let blocks = (image.len() / 512) as u64;
+        SdCard::with_disk(Disk::from_vec(image))
+    }
+
+    /// A card on `disk`, typically a file opened with [`Disk::open`].
+    pub fn with_disk(disk: Disk) -> SdCard {
+        let blocks = disk.blocks();
         SdCard {
-            image,
+            disk,
             state: CardState::Idle,
             rca: 0,
             app_cmd: false,
@@ -200,7 +207,7 @@ impl SdCard {
     }
 
     pub fn block_count(&self) -> u64 {
-        (self.image.len() / 512) as u64
+        self.disk.blocks()
     }
 
     pub fn state(&self) -> CardState {
@@ -212,29 +219,28 @@ impl SdCard {
         self.signal_1v8
     }
 
-    /// The whole card image, writes included.
-    pub fn image(&self) -> &[u8] {
-        &self.image
+    /// The card's blocks, writes included.
+    pub fn disk(&self) -> &Disk {
+        &self.disk
     }
 
-    /// Copy one 512-byte block out of the card image (zero-padded past the end).
+    /// Copy one 512-byte block out of the card (zeros past the end).
     pub fn read_block(&self, lba: u32, out: &mut [u8; 512]) {
-        let start = (lba as usize).wrapping_mul(512);
-        out.fill(0);
-        if let Some(src) = self.image.get(start..start + 512) {
-            out.copy_from_slice(src);
-        }
+        self.disk.read_block(u64::from(lba), out);
     }
 
     /// Store one block (up to 512 bytes) the host sent; ignored past the end.
     /// A stored block counts towards what ACMD22 reports.
     pub fn write_block(&mut self, lba: u32, data: &[u8]) {
-        let start = (lba as usize).wrapping_mul(512);
-        let n = data.len().min(512);
-        if let Some(dst) = self.image.get_mut(start..start + n) {
-            dst.copy_from_slice(&data[..n]);
-            self.written_blocks += 1;
+        let mut block = [0u8; 512];
+        // A short block only replaces the start of what is there.
+        if !self.disk.read_block(u64::from(lba), &mut block) {
+            return;
         }
+        let n = data.len().min(512);
+        block[..n].copy_from_slice(&data[..n]);
+        self.disk.write(u64::from(lba), &block);
+        self.written_blocks += 1;
     }
 
     /// One data block of the current transfer went over the bus. A counted
@@ -444,9 +450,7 @@ impl SdCard {
                 // (SCR.DATA_STAT_AFTER_ERASE = 0), discard likewise.
                 let (lo, hi) = (self.erase_start, self.erase_end);
                 if lo <= hi {
-                    let start = (lo as usize).saturating_mul(512).min(self.image.len());
-                    let end = (hi as usize + 1).saturating_mul(512).min(self.image.len());
-                    self.image[start..end].fill(0);
+                    self.disk.zero(u64::from(lo), u64::from(hi));
                 }
                 SdResponse::r1(self.status())
             }
