@@ -570,6 +570,13 @@ impl Xhci {
     }
 
     fn write_portsc(&mut self, i: usize, value: u32, mask: u32, mem: &mut dyn HostMem) {
+        if self.dbg {
+            eprintln!(
+                "[xhci] PORTSC{} {:#010x} <- {value:#010x}",
+                i + 1,
+                self.ports[i].portsc
+            );
+        }
         let port = &mut self.ports[i];
         // Write-1-to-clear change bits.
         port.portsc &= !(value & PORTSC_RW1C & mask);
