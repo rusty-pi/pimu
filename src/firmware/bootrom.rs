@@ -60,6 +60,11 @@
 //! existed. The public half of the derivation — the board-identity OTP words — is
 //! [`crate::periph::configotp::BOARD_IDENTITY`], which the model's OTP block
 //! already serves.
+//!
+//! # The ROM's OTP helpers
+//!
+//! 2020-04-16 bootcode calls three ROM routines directly (#71); see
+//! [`ROM_HELPERS`] for the stand-ins this stage places.
 
 use anyhow::{bail, Context, Result};
 use hmac::{Hmac, Mac};
@@ -89,6 +94,42 @@ const OTP_BASE: u32 = 0x7E20_F000;
 
 /// OTP rows the HMAC key is built from: rows 19..=22, the board-identity block.
 const OTP_KEY_ROWS: std::ops::RangeInclusive<u32> = 19..=22;
+
+/// The C0 ROM's OTP helpers that 2020-04-16 bootcode calls directly: through
+/// its trampoline at `0x80001f68` (`version r2; eor r1, r2; bl r1`) it opens
+/// the OTP block (`0x6000_647a`), reads row 28 into `*r0` (`0x6000_09d0`) and
+/// closes the block again (`0x6000_1d50`, #71). Later bootcode reads OTP
+/// itself. The model has no ROM at `0x6000_0000` — the address folds onto
+/// DRAM — so the stage puts routines of its own there. They are not the ROM's
+/// code: opening and closing only set the block's clock mux, which the model
+/// absorbs, and the read skips the `STATUS` poll because the model's
+/// transaction completes on `GO`.
+const ROM_HELPERS: [(u32, &[u8]); 3] = [
+    (0x6000_647A, &[0x5A, 0x00]), // b lr
+    (0x6000_1D50, &[0x5A, 0x00]), // b lr
+    (
+        0x6000_09D0,
+        &[
+            0x01, 0xE8, 0x00, 0xF0, 0x20, 0x7E, // mov r1, 0x7E20F000
+            0xC2, 0x61, // mov r2, 28
+            0x12, 0x37, // st r2, (r1+0x1C)    KEY
+            0x12, 0x60, // mov r2, 1
+            0x12, 0x32, // st r2, (r1+0x08)    PARAM_A.GO
+            0x12, 0x26, // ld r2, (r1+0x18)    DATA
+            0x02, 0x09, // st r2, (r0)
+            0x5A, 0x00, // b lr
+        ],
+    ),
+];
+
+// The row read above encodes these offsets.
+const _: () = assert!(
+    OTP_BASE == 0x7E20_F000
+        && OTP_KEY == 0x1C
+        && OTP_PARAM_A == 0x08
+        && OTP_DATA == 0x18
+        && OTP_GO == 1
+);
 
 /// The 20-byte OTP contribution to the HMAC key derived from a constant, for
 /// tests and documentation: OTP rows 19..=22 written little-endian into a 20-byte
@@ -294,6 +335,10 @@ impl BootRom {
         machine
             .l2
             .hold(BOOTCODE_LOAD_ADDR & 0x3FFF_FFFF, body.len());
+        // Where 0x6000_0000 folds to (512 MiB in); a smaller RAM goes without.
+        for (addr, code) in ROM_HELPERS {
+            let _ = write_folded(machine, addr, code);
+        }
         Ok(BootOutcome {
             entry: BOOTCODE_LOAD_ADDR + BOOTCODE_ENTRY_OFFSET,
             log,
@@ -377,6 +422,32 @@ mod tests {
         assert_eq!(read_otp_key_words(&mut machine), otp_key_words());
         // Last four bytes are zero (only rows 19..=22 populate 16 bytes).
         assert_eq!(&otp_key_words()[16..20], &[0, 0, 0, 0]);
+    }
+
+    /// The row-28 helper 2020-04-16 calls at `0x6000_09d0` (#71) does the OTP
+    /// transaction and stores the row where `r0` points.
+    #[test]
+    fn the_rom_s_row_28_helper_stores_the_row() {
+        use crate::vpu::{Step, Vpu};
+        const CODE: u32 = 0x1000;
+        const RET: u32 = 0x2000;
+        const BUF: u32 = 0x3000;
+        let mut machine = Machine::new(1 << 20);
+        let (_, code) = ROM_HELPERS.iter().find(|(a, _)| *a == 0x6000_09D0).unwrap();
+        write_folded(&mut machine, CODE, code).unwrap();
+        machine.store32(BUF, 0xDEAD_BEEF).unwrap();
+        let mut cpu = Vpu::new(CODE);
+        cpu.regs.set(0, BUF);
+        cpu.regs.set(26, RET);
+        for _ in 0..16 {
+            if cpu.regs.pc == RET {
+                break;
+            }
+            assert_eq!(cpu.step(&mut machine), Step::Ran);
+        }
+        assert_eq!(cpu.regs.pc, RET);
+        let want = read_otp_row(&mut machine, 28);
+        assert_eq!(machine.load32(BUF).unwrap(), want);
     }
 
     /// Wrap a signed bootcode body in a minimal EEPROM image.
