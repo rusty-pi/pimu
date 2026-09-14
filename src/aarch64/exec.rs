@@ -532,6 +532,7 @@ fn branch_reg(cpu: &mut Cpu, insn: u32) -> Exec {
         }
         4 if cpu.el > 0 && rn == 31 => {
             cpu.effects += 1;
+            cpu.shared_effects += 1;
             if !cpu.eret() {
                 return Err(Stop::Unimplemented);
             }
@@ -552,16 +553,40 @@ fn system<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M) -> Exec {
     let crm = field(insn, 8, 4);
     let op2 = field(insn, 5, 3);
     let rt = field(insn, 0, 5);
-    // Everything but MRS, NOP, YIELD and the DSB/DMB/ISB barriers changes
-    // state outside the general registers and memory (`Cpu::effects`).
+    // What changes state outside the general registers and memory
+    // (`Cpu::effects`) is everything but MRS, the barriers, the hints but
+    // WFE/WFI/SEV/SEVL (NOP and YIELD, and on this ARMv8.0 core the pointer
+    // authentication, BTI and CSDB hints too) and the cache maintenance the
+    // model has no caches for. DC ZVA only writes memory, which the bus
+    // reports like any store. A Linux kernel runs these by the million —
+    // `paciasp`/`autiasp` around every call, `dc civac`/`dc zva` over every
+    // buffer and page — and each one used to end an ARM burst.
     let quiet = match (l, op0, crn) {
         (true, 2..=3, _) => true,
-        (false, 0, 2) => rt == 31 && (crm << 3) | op2 <= 1,
+        (false, 0, 2) => rt == 31 && !(2..=5).contains(&((crm << 3) | op2)),
         (false, 0, 3) => rt == 31 && op1 == 3 && (4..=6).contains(&op2),
+        (false, 1, 7) => matches!(
+            (op1, crm, op2),
+            (3, 4 | 5 | 10 | 11 | 14, 1) | (0, 6 | 10 | 14, 1 | 2) | (0, 1 | 5, 0)
+        ),
+        _ => false,
+    };
+    // Of the rest, a write to this core's own interrupt masks, flags, FP
+    // control, stack or thread pointers or banked exception registers reaches
+    // no further than its own next instructions, so it is left out of
+    // `Cpu::shared_effects`: an ARM burst runs on through the `msr daifset` /
+    // `msr daif` pairs a kernel brackets every spinlock with.
+    let local = match (l, op0) {
+        // MSR (immediate): SPSel, DAIFSet, DAIFClr.
+        (false, 0) => crn == 4,
+        (false, 2..=3) => super::sysreg::is_local(super::sysreg::key(op0, op1, crn, crm, op2)),
         _ => false,
     };
     if !quiet {
         cpu.effects += 1;
+        if !local {
+            cpu.shared_effects += 1;
+        }
     }
     match (l, op0) {
         (false, 0) => match crn {

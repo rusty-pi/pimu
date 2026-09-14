@@ -198,6 +198,11 @@ pub struct Cpu {
     /// barrier but NOP, YIELD, DSB, DMB and ISB. A busy-wait loop the ARM run
     /// loop may skip executes none (`arm.rs`, "Busy-wait loops").
     pub effects: u64,
+    /// The part of [`Self::effects`] that other cores or the ARM run loop
+    /// have to hear about: everything but writes to this core's own flags,
+    /// interrupt masks, FP control, stack and thread pointers and banked
+    /// exception registers (`sysreg::is_local`). An ARM burst stops on these.
+    pub shared_effects: u64,
 }
 
 impl Default for Cpu {
@@ -240,6 +245,7 @@ impl Cpu {
             event: false,
             sev: false,
             effects: 0,
+            shared_effects: 0,
         }
     }
 
@@ -560,5 +566,60 @@ mod tests {
         assert_eq!(c.sys.spsr[1], 0b0101);
         // Masked now: the next step executes the handler.
         assert_eq!(c.daif, 0xF << 6);
+    }
+
+    #[test]
+    fn nop_hints_and_cache_maintenance_change_no_state() {
+        // paciasp, autiasp, bti c, csdb, dc civac x0, dc cvac x0, ic ivau x0,
+        // dc ivac x0, ic iallu, dc zva x0
+        let quiet = [
+            0xd503_233f,
+            0xd503_23bf,
+            0xd503_245f,
+            0xd503_229f,
+            0xd50b_7e20,
+            0xd50b_7a20,
+            0xd50b_7520,
+            0xd508_7620,
+            0xd508_751f,
+            0xd50b_7420,
+        ];
+        let mut m = mem(&quiet);
+        for i in 0..8 {
+            m.write(0x1000 + i * 8, 8, !0).unwrap();
+        }
+        let mut c = Cpu::new();
+        c.x[0] = 0x1010;
+        for _ in 0..quiet.len() {
+            assert_eq!(c.step_system(&mut m), Step::Retired);
+        }
+        assert_eq!(c.effects, 0);
+        // DC ZVA zeroes the whole 64-byte block around the address.
+        for i in 0..8 {
+            assert_eq!(m.read(0x1000 + i * 8, 8).unwrap(), 0);
+        }
+        assert_eq!(c.shared_effects, 0);
+    }
+
+    #[test]
+    fn only_writes_other_cores_may_depend_on_are_shared() {
+        // msr daifset, #2; msr daif, x0; msr tpidr_el1, x0; msr elr_el1, x0:
+        // this core's own state.
+        let local = [0xd503_42df, 0xd51b_4220, 0xd518_d080, 0xd518_4020];
+        let mut m = mem(&local);
+        let mut c = Cpu::new();
+        c.x[0] = 0x3C0;
+        for _ in 0..local.len() {
+            assert_eq!(c.step_system(&mut m), Step::Retired);
+        }
+        assert_eq!((c.effects, c.shared_effects), (4, 0));
+        // sev; msr vbar_el1, x0; tlbi vmalle1is.
+        let shared = [0xd503_209f, 0xd518_c000, 0xd508_831f];
+        let mut m = mem(&shared);
+        let mut c = Cpu::new();
+        for _ in 0..shared.len() {
+            assert_eq!(c.step_system(&mut m), Step::Retired);
+        }
+        assert_eq!((c.effects, c.shared_effects), (3, 3));
     }
 }
