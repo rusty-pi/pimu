@@ -1007,10 +1007,13 @@ Loose files needed three model fixes:
    `dma_interrupt` on 81/83/86/89/92/95 for channels 1/3/6/11/14/15; channel
    11 is 89, not the `0x50 + 0xB` the model raised.
 
-**Not modelled, deliberately:** SCSI writes are accepted and discarded (nothing
-in the boot path writes), `REQUEST SENSE` always reports no sense, and the
-`MassStorage` capacity comes from the image rather than from the reference
-stick's 125313283 blocks — that is the one field a fixture cannot borrow.
+**Not modelled, deliberately:** `REQUEST SENSE` always reports no sense.
+
+Writes land on the disk since e8e78c9 (#62). They stay in memory and the image
+file is never modified, so every run is a first boot. The capacity is the
+image's, or `--usb-mb`'s when that is larger (the rpi-mkosi image grows its
+partitions on its first boot), rather than the reference stick's 125313283
+blocks — that is the one field a fixture cannot borrow.
 
 ---
 

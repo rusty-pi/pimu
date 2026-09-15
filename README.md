@@ -69,8 +69,8 @@ Working:
 - **Register specs** (`specs/*.toml`) — machine-readable register maps with
   per-register provenance. `build.rs` generates the constants the device
   models match on, `tests/specs.rs` checks them against the model, and
-  [`docs/periph/`](docs/periph/) is generated from them. Converted so far:
-  mcsync, core-control, system timer.
+  [`docs/periph/`](docs/periph/) is generated from them; its
+  [README](docs/periph/README.md) lists every block converted so far.
 - **Firmware pipeline** — `pieeprom.bin` self-update trailer, EEPROM config
   parse, GPT/MBR + FAT32 walk, `fixup4.dat`, RSA signature check.
 - **Regression harness** (`src/harness/`) — TOML scenarios in, console
@@ -78,14 +78,18 @@ Working:
   Each boot is a scenario in `testdata/boot/`: a golden transcript of the whole
   console plus named milestones, each carrying the invariant it guards.
 - **CI** — `.github/workflows/boot-log.yml` runs fmt, clippy and the tests,
-  then all five boots in parallel on every push / PR to `main`: the firmware
-  boot from SD, USB, TFTP and HTTP, and the Linux boot to a shell.
+  then all six boots in parallel on every push / PR to `main`: the firmware
+  boot from SD, USB, TFTP and HTTP, the SD boot again on a B0 board (#77), and
+  the Linux boot to a shell.
   The tests include `tests/specs.rs`, which fails when `docs/periph/` differs
   from what the specs generate.
 
-Not done: the VPU vector/float unit, HTTPS network boot, Linux reaching
-`start4`'s mailbox task through `/dev/vcio` (#40 milestone 4 — the firmware
-crypto service rpi-mkosi#37 needs), and USB, network and display under Linux.
+Not done: most of the VPU vector unit (a short list of exactly matched forms
+runs, the rest stop as `Unimpl`), HTTPS network boot (#44), and under Linux a
+display and networking past the `bcmgenet` probe. Linux does reach `start4`'s
+crypto service through `/dev/vcio_crypto` (`linux-boot.toml` checks the HMAC
+rpi-mkosi#37 needs), and USB mass storage far enough to boot the rpi-mkosi
+image with `--usb`.
 See [`docs/boot-chain.md`](docs/boot-chain.md) for the stage-by-stage map,
 [`docs/arm-side-findings.md`](docs/arm-side-findings.md) for what the ARM
 hand-off needs, [`docs/diagnostics.md`](docs/diagnostics.md) for the
