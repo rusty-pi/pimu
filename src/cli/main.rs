@@ -9,6 +9,7 @@ mod boot;
 mod config;
 mod disasm;
 mod mbox;
+mod otp;
 mod scenario;
 
 const USAGE: &str = "\
@@ -34,6 +35,7 @@ USAGE:
                              [--mbox-property <tag>[,<tag>...]] [--until <text>]
                              [--send-after <prompt> <text>]... [--stdin]
                              [--io-log <path>] [--io-log-format text|jsonl]
+                             [--otp json:<file> | binary:<file>]
     rpi-virt-fw boot-check <scenario.toml> --plan [--console <path>]
     rpi-virt-fw boot-check <scenario.toml> --log <path> --console <path> [--update]
     rpi-virt-fw disasm <file> [--base <hex>] [--count <n>] [--vaddr <hex>]
@@ -111,8 +113,15 @@ FLAGS:
               stderr), apart from the console: SD card and USB stick block
               runs with the files they belong to, OTP rows read and
               programmed, and what the network peer did (DHCP, DNS, TFTP,
-              HTTP). Captured at the
-              peripherals; `--io-log-format jsonl` for one JSON object a line.
+              HTTP). Captured at the peripherals; `--io-log-format jsonl` for
+              one JSON object a line.
+    --otp json:<file> | binary:<file>
+              The OTP fuses, kept across runs: read before the boot when
+              <file> exists, written back after the run when the firmware
+              programmed a row, created from the model's own fuses when it
+              does not exist. json: row -> value, one a line; binary: row n
+              at byte 4n, little-endian. A file with a real board's fuses
+              holds its secrets: keep it out of the repository.
     --dram-map
               Report which DRAM pages are non-zero when the run ends, as
               address runs: the RAM a snapshot of the machine would have to

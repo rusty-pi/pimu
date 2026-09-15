@@ -172,9 +172,7 @@ net  dhcp: DISCOVER from 02:00:5e:00:53:01 (PXEClient) -> OFFER 192.0.2.100
 A row the firmware programs shows as `otp  write row <n> = <new>  (was <old>)`.
 Programming works the way start4 drives the OTP block, key sequence first, and
 a fuse only ever goes from 0 to 1
-([#92](https://github.com/valtzu/rpi-virt-fw/issues/92)). The fuses last until
-the run ends: a reset keeps them, the next run starts from the model's own.
-To watch it, program two words of customer OTP (rows 36 and 37) the way
+([#92](https://github.com/valtzu/rpi-virt-fw/issues/92)). To watch it, program two words of customer OTP (rows 36 and 37) the way
 `vcmailbox 0x00038021 16 16 0 2 ...` does on a Pi, and read them back, on the
 halt-kernel card (`KERNEL=halt scripts/make-sd.sh firmware/sd-halt.img`):
 
@@ -184,6 +182,16 @@ cargo run --release -- boot --eeprom firmware/pieeprom.bin \
   --mbox-property 0x00038021:16=0.2.0x11111111.0x22222222 \
   --mbox-property 0x00030021:16=0.2
 ```
+
+A reset keeps the fuses, but the next run starts from the model's own unless
+`--otp json:<file>` or `--otp binary:<file>` keeps them
+([#93](https://github.com/valtzu/rpi-virt-fw/issues/93)). The file is read
+before the boot when it exists, and written back after the run when the
+firmware programmed a row. A missing file is created from the model's own
+fuses, so it is also the way to get the array out, edit it, and boot a board
+fused differently. `json:` is an object of row to value, one a line; `binary:`
+has row n at byte 4n, little-endian. A file made from a real board's fuses
+holds that board's secrets (see `CLAUDE.md`): keep it out of the repository.
 
 `--io-log-format jsonl` writes one JSON object per line instead, for tools.
 

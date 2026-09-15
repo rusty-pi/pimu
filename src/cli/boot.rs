@@ -2,6 +2,7 @@
 //! VPU ELF; then report on the run.
 
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::rc::Rc;
@@ -19,6 +20,7 @@ use rpi_virt_fw::vpu::length::insn_len_bytes;
 use rpi_virt_fw::vpu::UnimplPolicy;
 
 use crate::mbox::{mbox_property_exchange, MboxTag};
+use crate::otp::OtpFile;
 use crate::parse_u32;
 
 /// Blue socket A. Root port 1 is the USB2 port feeding the on-board VIA
@@ -84,6 +86,8 @@ struct BootOpts {
     verbose: bool,
     io_log: Option<String>,
     io_log_format: rpi_virt_fw::iolog::Format,
+    /// `--otp <format>:<file>`: the fuse array across runs (#93).
+    otp: Option<OtpFile>,
 }
 
 impl BootOpts {
@@ -128,6 +132,7 @@ impl BootOpts {
         let mut verbose = false;
         let mut io_log: Option<String> = None;
         let mut io_log_format = rpi_virt_fw::iolog::Format::Text;
+        let mut otp: Option<OtpFile> = None;
         let mut it = args.iter().peekable();
         while let Some(a) = it.next() {
             match a.as_str() {
@@ -191,6 +196,13 @@ impl BootOpts {
                         .context("--io-log-format needs text or jsonl")?
                         .parse()
                         .map_err(anyhow::Error::msg)?
+                }
+                "--otp" => {
+                    otp = Some(
+                        it.next()
+                            .context("--otp needs json:<file> or binary:<file>")?
+                            .parse()?,
+                    )
                 }
                 "--sd" => sd_image = Some(PathBuf::from(it.next().context("--sd needs a path")?)),
                 "--console-log" => {
@@ -349,6 +361,7 @@ impl BootOpts {
             verbose,
             io_log,
             io_log_format,
+            otp,
         })
     }
 }
@@ -363,6 +376,9 @@ struct Booted {
     limits: RunLimits,
     /// How many times the firmware reset the machine.
     reboots: u32,
+    /// The OTP fuses the first boot started with, to tell what the firmware
+    /// programmed (#93).
+    fuses_at_start: BTreeMap<u32, u32>,
 }
 
 pub fn cmd_boot(args: &[String]) -> Result<ExitCode> {
@@ -404,13 +420,15 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
 
     let mut reboots = 0u32;
     // A reset does not blank OTP: each boot's machine starts with the rows
-    // the one before programmed (#92).
-    let mut fuses = None;
+    // the one before programmed (#92), the first one with `--otp`'s (#93).
+    let mut fuses = load_otp(opts, rig.board)?;
+    let mut fuses_at_start = None;
     let (report, emu, start) = 'boot: loop {
         let mut machine = rig.machine(&flash)?;
         if let Some(fuses) = fuses.take() {
             machine.config_otp.set_fuses(fuses);
         }
+        fuses_at_start.get_or_insert_with(|| machine.config_otp.fuses().clone());
         let start = rig.stage(&mut machine, reboots)?;
         let mut emu = rig.emulator(machine, start);
         emu.input.script = opts.sends.iter().cloned().collect();
@@ -457,7 +475,57 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
         start,
         limits,
         reboots,
+        fuses_at_start: fuses_at_start.unwrap_or_default(),
     })
+}
+
+/// `--otp <format>:<file>`: the fuses a run before left, when there is a file
+/// (#93). It replaces the whole array, and row 30 is the revision code, so it
+/// has to be this board's.
+fn load_otp(opts: &BootOpts, board: Board) -> Result<Option<BTreeMap<u32, u32>>> {
+    let Some(file) = &opts.otp else {
+        return Ok(None);
+    };
+    let Some(fuses) = file.load()? else {
+        return Ok(None);
+    };
+    if let Some(&revision) = fuses.get(&30) {
+        if revision != board.revision {
+            bail!(
+                "--otp {}: row 30 is revision {revision:06x}, but the board is {:06x} \
+                 (--board-rev picks another)",
+                file.path.display(),
+                board.revision
+            );
+        }
+    }
+    Ok(Some(fuses))
+}
+
+/// `--otp`: write the fuses back when the firmware programmed a row, or when
+/// there is no file yet (#93).
+fn save_otp(file: &OtpFile, before: &BTreeMap<u32, u32>, now: &BTreeMap<u32, u32>) -> Result<()> {
+    let programmed: Vec<String> = now
+        .iter()
+        .filter(|(row, word)| before.get(row) != Some(word))
+        .map(|(row, _)| row.to_string())
+        .collect();
+    let exists = file.path.exists();
+    if exists && programmed.is_empty() {
+        return Ok(());
+    }
+    file.save(now)?;
+    println!(
+        "otp: {} {}{}",
+        if exists { "updated" } else { "created" },
+        file.path.display(),
+        if programmed.is_empty() {
+            String::new()
+        } else {
+            format!(", rows programmed: {}", programmed.join(" "))
+        }
+    );
+    Ok(())
 }
 
 /// `--io-log <path>` (`-` for stderr): what the machine read and wrote, seen
@@ -978,6 +1046,7 @@ fn print_report(opts: &BootOpts, booted: Booted) -> Result<ExitCode> {
         start,
         limits,
         reboots,
+        fuses_at_start,
     } = booted;
     let verbose = opts.verbose;
 
@@ -1021,6 +1090,10 @@ fn print_report(opts: &BootOpts, booted: Booted) -> Result<ExitCode> {
     }
     for group in &opts.mbox_tags {
         mbox_property_exchange(&mut emu, &limits, group)?;
+    }
+    // After the exchanges: they are where a firmware-only boot programs.
+    if let Some(file) = &opts.otp {
+        save_otp(file, &fuses_at_start, emu.machine.config_otp.fuses())?;
     }
     report_fdt(opts, &mut emu.machine, &report.console)?;
     if verbose {
