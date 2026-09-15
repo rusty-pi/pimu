@@ -1,14 +1,17 @@
 //! `boot`: boot the machine from an EEPROM image, as a Pi 4 does, or run a
 //! VPU ELF; then report on the run.
 
-use std::path::PathBuf;
+use std::cell::RefCell;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::rc::Rc;
 
 use anyhow::{bail, Context, Result};
 
 use rpi_virt_fw::emulator::{Emulator, RunLimits, RunReport};
 use rpi_virt_fw::firmware::Payload;
 use rpi_virt_fw::harness;
+use rpi_virt_fw::iolog::IoLogRef;
 use rpi_virt_fw::machine::Machine;
 use rpi_virt_fw::soc::{Board, Stepping};
 use rpi_virt_fw::vpu::decode::decode;
@@ -376,112 +379,198 @@ pub fn cmd_boot(args: &[String]) -> Result<ExitCode> {
 /// EEPROM self-update) builds it again from the updated flash, up to four
 /// times.
 fn run_boot(opts: &BootOpts) -> Result<Booted> {
-    let BootOpts {
-        ref path,
-        entry,
-        ram_mb,
-        usb_mb,
-        max_steps,
-        max_wall_secs,
-        eeprom,
-        trace,
-        trace_full,
-        trace_mmio,
-        exc_vbase,
-        trace_from,
-        smp,
-        as_core1,
-        ref patches,
-        ref sd_image,
-        ref usb_image,
-        ref netboot_root,
-        ref host_net,
-        ref boot_order,
-        ref bootconf,
-        ref eeprom_pubkey,
-        ref boot_rom_path,
-        ref rom_path,
-        stepping,
-        board_rev,
-        skip_signed_boot,
-        skip_unimpl,
-        ref until,
-        ref sends,
-        stdin,
-        verbose,
-        ref io_log,
-        io_log_format,
-        ..
-    } = *opts;
+    let image =
+        std::fs::read(&opts.path).with_context(|| format!("reading {}", opts.path.display()))?;
+    let io = open_io_log(opts)?;
+    let usb_disk = open_usb_disk(opts, io.as_ref())?;
+    if let Some(sd_path) = opts.sd_image.as_ref().filter(|_| opts.verbose) {
+        println!(
+            "sd image   {} ({} blocks)",
+            sd_path.display(),
+            open_sd(sd_path, io.as_ref())?.blocks()
+        );
+    }
+    let edits = FlashEdits::new(opts)?;
 
-    let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    // `flash` may be rewritten by an EEPROM self-update; on a firmware-requested
+    // reset we rebuild from the updated image and run again.
+    let mut flash = image.clone();
+    edits.apply(&mut flash, opts.verbose);
+    if opts.eeprom && opts.verbose {
+        print_eeprom(&flash);
+    }
 
-    // The EEPROM bootloader touches the 0x6000_0000 L2-SRAM window, which
-    // our model folds into DRAM past the 512 MiB mark — give it room by default.
-    let ram_mb = ram_mb.unwrap_or(if eeprom { 2048 } else { 512 });
-    // `--usb <img>`: a Bulk-Only Transport mass-storage device in blue socket
-    // A, which is xHCI root port 2 — a SuperSpeed lane straight onto the root
-    // hub, so no hub traversal is involved. See `docs/usb-xhci.md` §5.2 for the
-    // socket map.
-    // `--usb-mb <n>`: the stick is that big, with the image at its start, as
-    // on a Pi whose first boot uses the rest. Read on demand; what the guest
-    // writes stays in memory and outlives the resets below.
-    // `--io-log <path>` (`-` for stderr): what the machine read and wrote, seen
-    // from the peripherals (#35, `src/iolog/`). Made once, so it spans the
-    // resets of an EEPROM self-update.
-    let io = match &io_log {
+    let limits = run_limits(opts);
+    // Made once, outside the reboot loop: it owns the stdin reader and the
+    // terminal's raw mode.
+    let mut host_input = opts.stdin.then(rpi_virt_fw::stdio::HostInput::stdin);
+    let rig = Rig::new(opts, image, io, usb_disk)?;
+
+    let mut reboots = 0u32;
+    let (report, emu, start) = 'boot: loop {
+        let mut machine = rig.machine(&flash)?;
+        let start = rig.stage(&mut machine, reboots)?;
+        let mut emu = rig.emulator(machine, start);
+        emu.input.script = opts.sends.iter().cloned().collect();
+        emu.input.host = host_input.take();
+        let report = emu.run(&limits);
+        host_input = emu.input.host.take();
+        rig.dump_segment(&emu, &flash, reboots);
+
+        if report.end == rpi_virt_fw::emulator::RunEnd::Reset {
+            reboots += 1;
+            // Already on the terminal if it was streamed; the run report keeps
+            // its copy.
+            if opts.verbose || !report.console_streamed {
+                print!("{}", String::from_utf8_lossy(&report.console));
+            }
+            flash = emu.machine.spi0.flash_bytes().to_vec();
+            edits.apply(&mut flash, false); // self-update restored SIGNED_BOOT=1
+            if reboots <= 4 {
+                // `RVF_ARM_PROF`: the next boot's ARM side starts a profile
+                // of its own, so this one's goes out now.
+                if let Some(a) = &mut emu.arm {
+                    a.settle(&emu.machine);
+                    if let Some(prof) = &a.prof {
+                        println!("\n--- ARM cores before the reset ---");
+                        print_arm_prof(prof);
+                    }
+                }
+                println!("\n=== RESET (reboot {reboots}) — re-running from updated flash ===\n");
+                continue 'boot;
+            }
+            println!("\n=== RESET (reboot {reboots}) — giving up after 4 reboots ===");
+        }
+        break 'boot (report, emu, start);
+    };
+    // The terminal back to cooked mode before the report.
+    drop(host_input);
+    if let Some(io) = &rig.io {
+        io.borrow_mut().flush_run();
+    }
+    Ok(Booted {
+        report,
+        emu,
+        start,
+        limits,
+        reboots,
+    })
+}
+
+/// `--io-log <path>` (`-` for stderr): what the machine read and wrote, seen
+/// from the peripherals (#35, `src/iolog/`). Made once, so it spans the
+/// resets of an EEPROM self-update.
+fn open_io_log(opts: &BootOpts) -> Result<Option<IoLogRef>> {
+    Ok(match &opts.io_log {
         Some(p) => {
             let out: Box<dyn std::io::Write> = if p == "-" {
                 Box::new(std::io::stderr())
             } else {
                 Box::new(std::fs::File::create(p).with_context(|| format!("creating {p}"))?)
             };
-            Some(rpi_virt_fw::iolog::IoLog::new(out, io_log_format).shared())
+            Some(rpi_virt_fw::iolog::IoLog::new(out, opts.io_log_format).shared())
         }
         None => None,
-    };
+    })
+}
 
-    let usb_disk = match &usb_image {
+/// The USB stick, shared: what the guest writes to it outlives the resets.
+type SharedUsbDisk = Rc<RefCell<rpi_virt_fw::periph::usb::Disk>>;
+
+/// `--usb <img>`: a Bulk-Only Transport mass-storage device in blue socket
+/// A, which is xHCI root port 2 — a SuperSpeed lane straight onto the root
+/// hub, so no hub traversal is involved. See `docs/usb-xhci.md` §5.2 for the
+/// socket map.
+///
+/// `--usb-mb <n>`: the stick is that big, with the image at its start, as
+/// on a Pi whose first boot uses the rest. Read on demand; what the guest
+/// writes stays in memory and outlives the resets.
+fn open_usb_disk(opts: &BootOpts, io: Option<&IoLogRef>) -> Result<Option<SharedUsbDisk>> {
+    Ok(match &opts.usb_image {
         Some(p) => {
-            let mut disk = rpi_virt_fw::periph::usb::Disk::open(p, usb_mb.unwrap_or(0) << 20)
+            let mut disk = rpi_virt_fw::periph::usb::Disk::open(p, opts.usb_mb.unwrap_or(0) << 20)
                 .with_context(|| format!("opening USB image {}", p.display()))?;
-            if let Some(io) = &io {
+            if let Some(io) = io {
                 disk = disk.with_io(io.clone(), "usb");
             }
-            if verbose {
+            if opts.verbose {
                 println!("usb image  {} ({} blocks)", p.display(), disk.blocks());
             }
             Some(std::rc::Rc::new(std::cell::RefCell::new(disk)))
         }
         None => None,
-    };
+    })
+}
 
-    // `--sd <img>`: the card reads the image file on demand (#54), and each boot
-    // after a reset starts from the file again, writes forgotten.
-    let open_sd = |p: &std::path::Path| {
-        rpi_virt_fw::periph::disk::Disk::open(p, 0)
-            .map(|d| match &io {
-                Some(io) => d.with_io(io.clone(), "sd"),
-                None => d,
-            })
-            .with_context(|| format!("opening SD image {}", p.display()))
-    };
-    if let Some(sd_path) = sd_image.as_ref().filter(|_| verbose) {
-        println!(
-            "sd image   {} ({} blocks)",
-            sd_path.display(),
-            open_sd(sd_path)?.blocks()
-        );
+/// `--sd <img>`: the card reads the image file on demand (#54), and each boot
+/// after a reset starts from the file again, writes forgotten.
+fn open_sd(p: &Path, io: Option<&IoLogRef>) -> Result<rpi_virt_fw::periph::disk::Disk> {
+    rpi_virt_fw::periph::disk::Disk::open(p, 0)
+        .map(|d| match io {
+            Some(io) => d.with_io(io.clone(), "sd"),
+            None => d,
+        })
+        .with_context(|| format!("opening SD image {}", p.display()))
+}
+
+/// The `bootconf.txt` edits the options ask for. Applied to the image before
+/// the first boot, and again after every self-update reset, since the update
+/// brings back the image's own settings.
+struct FlashEdits {
+    eeprom: bool,
+    skip_signed_boot: bool,
+    /// `--boot-order` as a `BOOT_ORDER=` line, then every `--bootconf`.
+    conf_lines: Vec<String>,
+    /// `--eeprom-pubkey`: n then e, 264 bytes.
+    pubkey: Option<Vec<u8>>,
+}
+
+impl FlashEdits {
+    fn new(opts: &BootOpts) -> Result<Self> {
+        let conf_lines = opts
+            .boot_order
+            .iter()
+            .map(|o| format!("BOOT_ORDER={o}"))
+            .chain(opts.bootconf.iter().cloned())
+            .collect();
+        let pubkey = match &opts.eeprom_pubkey {
+            Some(p) => {
+                let k = std::fs::read(p).with_context(|| format!("reading {}", p.display()))?;
+                if k.len() != 264 {
+                    bail!(
+                        "{}: {} bytes, want 264 (RSA-2048 n + e)",
+                        p.display(),
+                        k.len()
+                    );
+                }
+                Some(k)
+            }
+            None => None,
+        };
+        Ok(Self {
+            eeprom: opts.eeprom,
+            skip_signed_boot: opts.skip_signed_boot,
+            conf_lines,
+            pubkey,
+        })
     }
 
-    // `--skip-signed-boot`: flip `SIGNED_BOOT=1` -> `=0` in the EEPROM's
-    // `bootconf.txt`. That flag gates the bootloader's signature enforcement, so
-    // clearing it skips the (very slow, ~0.5 G interpreted instructions) SHA-256
-    // + RSA-2048 verify of `boot.img`. Same length, so the byte layout is
-    // preserved; the now-stale `bootconf.sig` is not checked once the flag is 0.
-    // Re-applied after every EEPROM self-update (which restores `SIGNED_BOOT=1`).
-    let unsign = |flash: &mut Vec<u8>, announce: bool| {
-        if !(skip_signed_boot && eeprom) {
+    /// Every edit, in order; `announce` says what each one did.
+    fn apply(&self, flash: &mut Vec<u8>, announce: bool) {
+        self.unsign(flash, announce);
+        self.append_conf(flash, announce);
+        self.set_pubkey(flash, announce);
+    }
+
+    /// `--skip-signed-boot`: flip `SIGNED_BOOT=1` -> `=0` in the EEPROM's
+    /// `bootconf.txt`. That flag gates the bootloader's signature enforcement, so
+    /// clearing it skips the (very slow, ~0.5 G interpreted instructions)
+    /// SHA-256 + RSA-2048 verify of `boot.img`. Same length, so the byte layout
+    /// is preserved; the now-stale `bootconf.sig` is not checked once the flag
+    /// is 0.
+    /// Re-applied after every EEPROM self-update (which restores `SIGNED_BOOT=1`).
+    fn unsign(&self, flash: &mut [u8], announce: bool) {
+        if !(self.skip_signed_boot && self.eeprom) {
             return;
         }
         let needle = b"SIGNED_BOOT=1";
@@ -493,25 +582,20 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
         } else if announce {
             eprintln!("skip-signed-boot: 'SIGNED_BOOT=1' not found in EEPROM image");
         }
-    };
+    }
 
-    // `--boot-order <hex>`: append a `BOOT_ORDER=` line to the EEPROM's
-    // `bootconf.txt`. The pinned image does not carry one, so the bootloader
-    // falls back to its built-in `0xf4` — SD card, then restart — and never
-    // tries the USB entry, which makes `--usb` unexercisable. The section is
-    // the last one in the image and is followed by erased flash, so growing it
-    // is a length-field bump and an append; nothing moves.
-    //
-    // `--bootconf KEY=VALUE` appends any other line the same way (e.g.
-    // `HTTP_HOST` / `HTTP_PORT` / `HTTP_PATH` for HTTP boot). A later line
-    // overrides an earlier one with the same key.
-    let conf_lines: Vec<String> = boot_order
-        .iter()
-        .map(|o| format!("BOOT_ORDER={o}"))
-        .chain(bootconf.iter().cloned())
-        .collect();
-    let set_boot_order = |flash: &mut Vec<u8>, announce: bool| {
-        if conf_lines.is_empty() || !eeprom {
+    /// `--boot-order <hex>`: append a `BOOT_ORDER=` line to the EEPROM's
+    /// `bootconf.txt`. The pinned image does not carry one, so the bootloader
+    /// falls back to its built-in `0xf4` — SD card, then restart — and never
+    /// tries the USB entry, which makes `--usb` unexercisable. The section is
+    /// the last one in the image and is followed by erased flash, so growing it
+    /// is a length-field bump and an append; nothing moves.
+    ///
+    /// `--bootconf KEY=VALUE` appends any other line the same way (e.g.
+    /// `HTTP_HOST` / `HTTP_PORT` / `HTTP_PATH` for HTTP boot). A later line
+    /// overrides an earlier one with the same key.
+    fn append_conf(&self, flash: &mut Vec<u8>, announce: bool) {
+        if self.conf_lines.is_empty() || !self.eeprom {
             return;
         }
         let Some(hdr) = find_bootconf_header(flash) else {
@@ -526,73 +610,61 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
             flash[hdr + 6],
             flash[hdr + 7],
         ]) as usize;
-        let text: String = conf_lines.iter().map(|l| format!("{l}\n")).collect();
+        let text: String = self.conf_lines.iter().map(|l| format!("{l}\n")).collect();
         let end = hdr + 8 + len;
         let new_len = len + text.len();
         flash.splice(end..end + text.len(), text.bytes());
         flash[hdr + 4..hdr + 8].copy_from_slice(&(new_len as u32).to_be_bytes());
         if announce {
-            for l in &conf_lines {
+            for l in &self.conf_lines {
                 println!("bootconf: appended {l} @ {:#x}", end);
             }
         }
-    };
+    }
 
-    // `--eeprom-pubkey <pubkey.bin>`: put an RSA-2048 public key in the
-    // EEPROM's `pubkey.bin` slot, as `rpi-eeprom-config --pubkey` does (n then
-    // e, little-endian, 256 + 8 bytes). Signed images — an HTTP-booted
-    // `boot.img` among them — are verified against it; the pinned image's slot
-    // is all zeros, which verifies nothing.
-    let pubkey = match &eeprom_pubkey {
-        Some(p) => {
-            let k = std::fs::read(p).with_context(|| format!("reading {}", p.display()))?;
-            if k.len() != 264 {
-                bail!(
-                    "{}: {} bytes, want 264 (RSA-2048 n + e)",
-                    p.display(),
-                    k.len()
-                );
-            }
-            Some(k)
-        }
-        None => None,
-    };
-    let set_pubkey = |flash: &mut Vec<u8>, announce: bool| {
-        let Some(k) = &pubkey else { return };
+    /// `--eeprom-pubkey <pubkey.bin>`: put an RSA-2048 public key in the
+    /// EEPROM's `pubkey.bin` slot, as `rpi-eeprom-config --pubkey` does (n then
+    /// e, little-endian, 256 + 8 bytes). Signed images — an HTTP-booted
+    /// `boot.img` among them — are verified against it; the pinned image's slot
+    /// is all zeros, which verifies nothing.
+    fn set_pubkey(&self, flash: &mut [u8], announce: bool) {
+        let Some(k) = &self.pubkey else { return };
         match rpi_virt_fw::firmware::eeprom::replace_file(flash, "pubkey.bin", k) {
             Ok(()) if announce => println!("eeprom-pubkey: pubkey.bin replaced"),
             Ok(()) => {}
             Err(e) => eprintln!("eeprom-pubkey: {e:#}"),
         }
-    };
+    }
+}
 
-    // `flash` may be rewritten by an EEPROM self-update; on a firmware-requested
-    // reset we rebuild from the updated image and run again.
-    let mut flash = bytes.clone();
-    unsign(&mut flash, verbose);
-    set_boot_order(&mut flash, verbose);
-    set_pubkey(&mut flash, verbose);
-
-    // Show the EEPROM section table `bootloader_eeprom_find_files` walks, plus
-    // the decoded `bootconf.txt`, so a boot that consults EEPROM config (boot
-    // order etc.) can be followed.
-    if eeprom && verbose {
-        if let Ok(img) = rpi_virt_fw::firmware::eeprom::EepromImage::parse(&flash) {
-            println!("eeprom     {} sections", img.sections.len());
-            print!("{}", img.summary());
-            if let Some(conf) = img.bootconf() {
-                for (g, k, v) in &conf.entries {
-                    let g = if g.is_empty() { "all" } else { g.as_str() };
-                    println!("           [{g}] {k}={v}");
-                }
-                if let Some(order) = conf.boot_order_names() {
-                    println!("           BOOT_ORDER: {order}");
-                }
+/// Show the EEPROM section table `bootloader_eeprom_find_files` walks, plus
+/// the decoded `bootconf.txt`, so a boot that consults EEPROM config (boot
+/// order etc.) can be followed.
+fn print_eeprom(flash: &[u8]) {
+    if let Ok(img) = rpi_virt_fw::firmware::eeprom::EepromImage::parse(flash) {
+        println!("eeprom     {} sections", img.sections.len());
+        print!("{}", img.summary());
+        if let Some(conf) = img.bootconf() {
+            for (g, k, v) in &conf.entries {
+                let g = if g.is_empty() { "all" } else { g.as_str() };
+                println!("           [{g}] {k}={v}");
+            }
+            if let Some(order) = conf.boot_order_names() {
+                println!("           BOOT_ORDER: {order}");
             }
         }
     }
+}
 
-    let limits = RunLimits {
+fn run_limits(opts: &BootOpts) -> RunLimits {
+    let BootOpts {
+        max_steps,
+        max_wall_secs,
+        stdin,
+        ref until,
+        ..
+    } = *opts;
+    RunLimits {
         max_steps,
         // An interactive session lasts as long as its user wants it to.
         max_wall: (!stdin).then(|| std::time::Duration::from_secs(max_wall_secs)),
@@ -605,77 +677,133 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
         // waiting for its user is quiet too, though.
         silent_us: if stdin { 0 } else { 60_000_000 },
         until: until.clone(),
-    };
-    // Made once, outside the reboot loop: it owns the stdin reader and the
-    // terminal's raw mode.
-    let mut host_input = stdin.then(rpi_virt_fw::stdio::HostInput::stdin);
+    }
+}
 
-    // The boot ROM is the model's first stage for an EEPROM boot: it verifies
-    // and stages the bootcode (see `firmware::bootrom`). Its HMAC key, when the
-    // operator supplies one, comes from the environment and never the repo.
-    let bootrom = rpi_virt_fw::firmware::bootrom::BootRom::from_env()?;
+/// What every boot of the run shares. Made once, so it outlives the resets of
+/// an EEPROM self-update.
+struct Rig<'a> {
+    opts: &'a BootOpts,
+    /// The file `boot` was given: an EEPROM image or a VPU ELF.
+    image: Vec<u8>,
+    ram_mb: u32,
+    io: Option<IoLogRef>,
+    usb_disk: Option<SharedUsbDisk>,
+    bootrom: rpi_virt_fw::firmware::bootrom::BootRom,
+    boot_rom_image: Option<Vec<u8>>,
+    rom_image: Option<Vec<u8>>,
+    board: Board,
+}
 
-    // `--boot-rom <file>`: experimental. Map a real maskROM dump at 0x6000_0000
-    // and execute it from the reset vector instead of running the behavioural
-    // stage. Most people do not have a dump, so this is optional; the dump stays
-    // a local file and is never committed.
-    let boot_rom_image = match &boot_rom_path {
-        Some(p) => {
-            let b =
-                std::fs::read(p).with_context(|| format!("reading boot ROM {}", p.display()))?;
-            if verbose {
-                println!(
-                    "boot-rom   {} ({} bytes, experimental)",
-                    p.display(),
-                    b.len()
+impl<'a> Rig<'a> {
+    fn new(
+        opts: &'a BootOpts,
+        image: Vec<u8>,
+        io: Option<IoLogRef>,
+        usb_disk: Option<SharedUsbDisk>,
+    ) -> Result<Self> {
+        let BootOpts {
+            eeprom,
+            ram_mb,
+            ref boot_rom_path,
+            ref rom_path,
+            stepping,
+            board_rev,
+            verbose,
+            ..
+        } = *opts;
+        // The EEPROM bootloader touches the 0x6000_0000 L2-SRAM window, which
+        // our model folds into DRAM past the 512 MiB mark — give it room by default.
+        let ram_mb = ram_mb.unwrap_or(if eeprom { 2048 } else { 512 });
+
+        // The boot ROM is the model's first stage for an EEPROM boot: it verifies
+        // and stages the bootcode (see `firmware::bootrom`). Its HMAC key, when the
+        // operator supplies one, comes from the environment and never the repo.
+        let bootrom = rpi_virt_fw::firmware::bootrom::BootRom::from_env()?;
+
+        // `--boot-rom <file>`: experimental. Map a real maskROM dump at 0x6000_0000
+        // and execute it from the reset vector instead of running the behavioural
+        // stage. Most people do not have a dump, so this is optional; the dump stays
+        // a local file and is never committed.
+        let boot_rom_image = match &boot_rom_path {
+            Some(p) => {
+                let b = std::fs::read(p)
+                    .with_context(|| format!("reading boot ROM {}", p.display()))?;
+                if verbose {
+                    println!(
+                        "boot-rom   {} ({} bytes, experimental)",
+                        p.display(),
+                        b.len()
+                    );
+                }
+                Some(b)
+            }
+            None => None,
+        };
+
+        // `--rom <file>`: map a maskROM dump at 0x6000_0000 for bootcode that calls
+        // into it (2020-04-16 does, #71); the modelled ROM stage still boots. Also
+        // a local file only.
+        let rom_image = match &rom_path {
+            Some(p) => {
+                Some(std::fs::read(p).with_context(|| format!("reading ROM {}", p.display()))?)
+            }
+            None => None,
+        };
+
+        // `--stepping` / `--board-rev`: the silicon and the board around it (#77).
+        // Naming only one gets a board that fits it.
+        let board = {
+            let mut board = Board::for_stepping(stepping.unwrap_or_default());
+            if let Some(rev) = board_rev {
+                board.revision = rev;
+            }
+            if let Some(why) = board.mismatch() {
+                eprintln!(
+                    "warning: {} on a board it never shipped on: {why}",
+                    board.stepping
                 );
             }
-            Some(b)
-        }
-        None => None,
-    };
+            if verbose && board != Board::default() {
+                println!(
+                    "board      {}, revision {:06x}",
+                    board.stepping, board.revision
+                );
+            }
+            board
+        };
+        Ok(Self {
+            opts,
+            image,
+            ram_mb,
+            io,
+            usb_disk,
+            bootrom,
+            boot_rom_image,
+            rom_image,
+            board,
+        })
+    }
 
-    // `--rom <file>`: map a maskROM dump at 0x6000_0000 for bootcode that calls
-    // into it (2020-04-16 does, #71); the modelled ROM stage still boots. Also
-    // a local file only.
-    let rom_image = match &rom_path {
-        Some(p) => Some(std::fs::read(p).with_context(|| format!("reading ROM {}", p.display()))?),
-        None => None,
-    };
-
-    // `--stepping` / `--board-rev`: the silicon and the board around it (#77).
-    // Naming only one gets a board that fits it.
-    let board = {
-        let mut board = Board::for_stepping(stepping.unwrap_or_default());
-        if let Some(rev) = board_rev {
-            board.revision = rev;
-        }
-        if let Some(why) = board.mismatch() {
-            eprintln!(
-                "warning: {} on a board it never shipped on: {why}",
-                board.stepping
-            );
-        }
-        if verbose && board != Board::default() {
-            println!(
-                "board      {}, revision {:06x}",
-                board.stepping, board.revision
-            );
-        }
-        board
-    };
-
-    let mut reboots = 0u32;
-    let (report, emu, start) = 'boot: loop {
-        let mut machine = Machine::new(ram_mb as usize * 1024 * 1024);
-        machine.set_board(board);
+    /// One boot's machine, with the media, the network and the ROM plugged in.
+    fn machine(&self, flash: &[u8]) -> Result<Machine> {
+        let BootOpts {
+            eeprom,
+            ref sd_image,
+            ref netboot_root,
+            ref host_net,
+            trace_mmio,
+            ..
+        } = *self.opts;
+        let mut machine = Machine::new(self.ram_mb as usize * 1024 * 1024);
+        machine.set_board(self.board);
         if eeprom {
-            machine.spi0.attach_flash(flash.clone());
+            machine.spi0.attach_flash(flash.to_vec());
         }
         if let Some(p) = &sd_image {
-            machine.emmc2.insert_disk(open_sd(p)?);
+            machine.emmc2.insert_disk(open_sd(p, self.io.as_ref())?);
         }
-        if let Some(disk) = &usb_disk {
+        if let Some(disk) = &self.usb_disk {
             machine.pcie.endpoint.attach(
                 USB_ROOT_PORT,
                 Box::new(rpi_virt_fw::periph::usb::MassStorage::with_disk(
@@ -687,7 +815,7 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
         // peer (`src/net/peer.rs`): DHCP, DNS, and `<dir>` over TFTP and HTTP.
         if let Some(dir) = &netboot_root {
             let mut peer = rpi_virt_fw::net::BuiltinPeer::with_root(dir.clone());
-            if let Some(io) = &io {
+            if let Some(io) = &self.io {
                 peer = peer.with_io(io.clone());
             }
             machine.attach_net(Box::new(peer));
@@ -715,8 +843,8 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
             };
             machine.attach_net(Box::new(net));
         }
-        machine.config_otp.io = io.clone();
-        if let Some(rom) = &rom_image {
+        machine.config_otp.io = self.io.clone();
+        if let Some(rom) = &self.rom_image {
             machine.map_boot_rom(rom.clone());
         }
         machine.mmio_trace = trace_mmio;
@@ -731,13 +859,26 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
             machine.mmio_trace = true;
             machine.mmio_trace_range = Some((lo, hi));
         }
+        Ok(machine)
+    }
+
+    /// Stage the first instruction stream, apply the `--patch`es, and return
+    /// where to start.
+    fn stage(&self, machine: &mut Machine, reboots: u32) -> Result<u32> {
+        let BootOpts {
+            eeprom,
+            entry,
+            ref patches,
+            verbose,
+            ..
+        } = *self.opts;
         // Stage the first instruction stream. For an EEPROM boot that is the
         // modelled boot ROM: it reads the image off the SPI flash, checks the
         // bootcode signature and stages it (see `firmware::bootrom`), talking to
         // the peripherals the real ROM does instead of reaching around them. For
         // a raw ELF it is the loader placing its segments.
         let start = if eeprom {
-            if let Some(rom) = &boot_rom_image {
+            if let Some(rom) = &self.boot_rom_image {
                 // Execute the real maskROM from its reset vector. It reads the
                 // pieeprom off SPI0, the key rows out of OTP, and stages the
                 // bootcode itself — the peripherals do the rest.
@@ -749,7 +890,7 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
                 }
                 entry.unwrap_or(0x6000_0000)
             } else {
-                let outcome = bootrom.boot(&mut machine)?;
+                let outcome = self.bootrom.boot(machine)?;
                 if reboots == 0 && verbose {
                     for line in &outcome.log {
                         println!("{line}");
@@ -758,8 +899,8 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
                 entry.unwrap_or(outcome.entry)
             }
         } else {
-            let payload = Payload::from_elf_bytes(&bytes)?;
-            payload.load_into(&mut machine)?;
+            let payload = Payload::from_elf_bytes(&self.image)?;
+            payload.load_into(machine)?;
             entry.unwrap_or(payload.entry())
         };
         for &(a, v) in patches {
@@ -769,7 +910,21 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
                 println!("patch [{a:#010x}] = {v:#010x}");
             }
         }
+        Ok(start)
+    }
 
+    /// The emulator around one boot's machine, set up the way the options say.
+    fn emulator(&self, machine: Machine, start: u32) -> Emulator {
+        let BootOpts {
+            skip_unimpl,
+            trace,
+            trace_full,
+            exc_vbase,
+            trace_from,
+            as_core1,
+            smp,
+            ..
+        } = *self.opts;
         let mut emu = Emulator::new(machine, start);
         // Faulting is the default: an instruction the decoder does not know
         // would otherwise be silently stepped over, and the firmware would
@@ -796,20 +951,20 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
         if smp {
             emu.start_smp(start);
         }
-        emu.input.script = sends.iter().cloned().collect();
-        emu.input.host = host_input.take();
-        let report = emu.run(&limits);
-        host_input = emu.input.host.take();
+        emu
+    }
 
+    /// `RVF_DUMP_FLASH` and `RVF_DUMP_RAM`, after every run segment.
+    fn dump_segment(&self, emu: &Emulator, flash: &[u8], reboots: u32) {
         // `RVF_DUMP_FLASH=<path>` writes the (self-update-modified) EEPROM image
         // after every run segment — `<path>.<n>` — so a run that reaches
         // "BOOT-EEPROM: UPDATED" but stops before RESET still yields the burned
         // image. Feed it back as `boot <path>.<n> --eeprom` for a fast, already
         // provisioned boot (no self-update, no reboot).
-        if eeprom {
+        if self.opts.eeprom {
             if let Ok(p) = std::env::var("RVF_DUMP_FLASH") {
                 let cur = emu.machine.spi0.flash_bytes();
-                if cur != flash.as_slice() {
+                if cur != flash {
                     let _ = std::fs::write(format!("{p}.{}", reboots + 1), cur);
                     eprintln!("wrote {p}.{} ({} bytes)", reboots + 1, cur.len());
                 }
@@ -823,67 +978,13 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
             let _ = std::fs::write(format!("{p}.{}", reboots + 1), ram);
             eprintln!("wrote {p}.{} ({} bytes)", reboots + 1, ram.len());
         }
-
-        if report.end == rpi_virt_fw::emulator::RunEnd::Reset {
-            reboots += 1;
-            // Already on the terminal if it was streamed; the run report keeps
-            // its copy.
-            if verbose || !report.console_streamed {
-                print!("{}", String::from_utf8_lossy(&report.console));
-            }
-            flash = emu.machine.spi0.flash_bytes().to_vec();
-            unsign(&mut flash, false); // self-update restored SIGNED_BOOT=1
-            set_boot_order(&mut flash, false);
-            set_pubkey(&mut flash, false);
-            if reboots <= 4 {
-                // `RVF_ARM_PROF`: the next boot's ARM side starts a profile
-                // of its own, so this one's goes out now.
-                if let Some(a) = &mut emu.arm {
-                    a.settle(&emu.machine);
-                    if let Some(prof) = &a.prof {
-                        println!("\n--- ARM cores before the reset ---");
-                        print_arm_prof(prof);
-                    }
-                }
-                println!("\n=== RESET (reboot {reboots}) — re-running from updated flash ===\n");
-                continue 'boot;
-            }
-            println!("\n=== RESET (reboot {reboots}) — giving up after 4 reboots ===");
-        }
-        break 'boot (report, emu, start);
-    };
-    // The terminal back to cooked mode before the report.
-    drop(host_input);
-    if let Some(io) = &io {
-        io.borrow_mut().flush_run();
     }
-    Ok(Booted {
-        report,
-        emu,
-        start,
-        limits,
-        reboots,
-    })
 }
 
 /// What `boot` prints once the run is over: the console unless it was
 /// streamed, whatever was asked for by name, the full report with `-v`, and
 /// the `result:` line.
 fn print_report(opts: &BootOpts, booted: Booted) -> Result<ExitCode> {
-    let BootOpts {
-        ref path,
-        eeprom,
-        trace,
-        ref dumps,
-        ref disasms,
-        ref console_log,
-        ref dump_fdt,
-        print_fdt,
-        ref mbox_tags,
-        dram_map,
-        verbose,
-        ..
-    } = *opts;
     let Booted {
         report,
         mut emu,
@@ -891,17 +992,7 @@ fn print_report(opts: &BootOpts, booted: Booted) -> Result<ExitCode> {
         limits,
         reboots,
     } = booted;
-
-    // Collapse consecutive-identical transfers so a spin doesn't hide the
-    // history that led into it.
-    let mut cf_tail: Vec<(u32, u32, u32)> = Vec::new();
-    for &(f, t) in &emu.cpu.cf_trace {
-        match cf_tail.last_mut() {
-            Some((lf, lt, n)) if *lf == f && *lt == t => *n += 1,
-            _ => cf_tail.push((f, t, 1)),
-        }
-    }
-    let cf_tail: Vec<(u32, u32, u32)> = cf_tail.into_iter().rev().take(30).collect();
+    let verbose = opts.verbose;
 
     // A core parked in a busy-wait loop is behind on its registers and its
     // instruction count until it is brought up to date.
@@ -909,140 +1000,198 @@ fn print_report(opts: &BootOpts, booted: Booted) -> Result<ExitCode> {
         a.settle(&emu.machine);
     }
     if verbose {
-        println!("entry      {start:#010x}");
-        println!("end        {:?}", report.end);
-        println!("final pc   {:#010x}", report.pc);
-        println!(
-            "retired    {}  (skipped {}, cycles {})",
-            report.retired, report.skipped, report.cycles
-        );
-        println!(
-            "stub hits  {}   bus errors {}",
-            report.stub_hits, report.bus_errors
-        );
-        println!("wall       {:?}", report.wall);
-        let ic = &emu.cpu.icache;
-        println!(
-            "decode     cache hits {}  fills {}  stale {}",
-            ic.hits, ic.fills, ic.stale
-        );
-        if let Some(pc1) = report.core1_pc {
-            println!(
-                "core1      pc {:#010x}  retired {}  end {:?}",
-                pc1,
-                report.core1_retired.unwrap_or(0),
-                report.core1_end
-            );
-        }
-        if let Some(a) = &emu.arm {
-            println!("\n--- ARM cores (#40) ---");
-            if let Some(h) = a.handoff {
-                println!(
-                    "  armstub   kernel_entry32 {:#010x}  dtb_ptr32 {:#010x}",
-                    h.kernel, h.dtb
-                );
-            }
-            match &a.bootargs {
-                Some(Ok((old, new))) if old != new => println!(
-                    "  bootargs  \"{}\" prepended",
-                    new.strip_suffix(old.as_str()).unwrap_or(new).trim_end()
-                ),
-                Some(Err(e)) => println!("  bootargs  not patched: {e}"),
-                _ => {}
-            }
-            println!(
-                "  ran       {} cycles, {} of them with every core asleep",
-                a.cycles, a.slept
-            );
-            for (i, c) in a.cores.iter().enumerate() {
-                match c.entered {
-                Some((cycles, el, pc, x0)) => println!(
-                    "  core {i}    left the armstub at cycle {cycles} for {pc:#x} in EL{el}, x0 = {x0:#x}"
-                ),
-                None => println!("  core {i}    still in the armstub"),
-            }
-                println!(
-                "            {} instructions, {} exceptions, {} interrupts; now pc {:#x}  EL{}  sp {:#x}{}",
-                c.insns,
-                c.exceptions,
-                c.interrupts,
-                c.cpu.pc,
-                c.cpu.el,
-                c.cpu.sp(),
-                if c.waiting { "  (wfi)" } else { "" }
-            );
-                if c.sha_blocks > 0 {
-                    println!(
-                    "            {} SHA-256 block loop(s), {} blocks hashed natively (RVF_NO_SHA_SKIP=1 to compare)",
-                    c.sha_loops, c.sha_blocks
-                );
-                }
-                println!(
-                    "            daif {:#x}  irq line {}  gic {}",
-                    c.cpu.daif >> 6,
-                    u8::from(c.cpu.irq_line),
-                    emu.machine.gic.describe(i)
-                );
-            }
-            if let Some(stop) = &a.stopped {
-                println!("  stopped   {stop:x?}");
-            }
-            if let Some(prof) = &a.prof {
-                print_arm_prof(prof);
-            }
-        } else if eeprom {
-            println!("\n--- ARM cores (#40) ---\n  never released");
-        }
-        // What the firmware answered on the property channel, from the reply
-        // buffers themselves: the only place a value Linux never checks shows up.
-        let prop = &emu.machine.mbox.property;
-        if prop.replies > 0 {
-            println!("\n--- property replies (0x7e00_b880) ---");
-            println!(
-                "  {} replies, {} with an error code",
-                prop.replies, prop.failed
-            );
-            for (tag, t) in prop.tags() {
-                let last = t.last.map_or("-".to_string(), |v| format!("{v:#010x}"));
-                println!(
-                    "  tag {tag:#010x}  marked {:<4} unmarked {:<4} last value {last}",
-                    t.marked, t.unmarked
-                );
-            }
-        }
+        print_summary(&report, &emu, start);
+        print_arm_cores(&emu, opts.eeprom);
+        print_property_replies(&emu.machine);
+        print_regs(&report);
+    }
+    if let Some(p) = &opts.console_log {
+        write_console_log(p, &report.console, verbose)?;
     }
     if verbose {
-        print!("regs      ");
-        for (i, r) in report.regs.iter().enumerate() {
-            if i % 8 == 0 {
-                print!("\n  r{i:<2}");
-            }
-            print!(" {r:08x}");
-        }
-        println!();
+        print_network(&mut emu.machine);
+    }
+    print_console(&report, verbose);
+    for &(a, n) in &opts.dumps {
+        print_dump(&mut emu.machine, a, n);
+    }
+    for &(a, count) in &opts.disasms {
+        print_disasm(&mut emu.machine, a, count);
+    }
+    if verbose {
+        print_phase_tags(&report);
+    }
+    print_traces(&emu, opts.trace);
+    if verbose {
+        print_control_transfers(&emu);
+        print_stub_log(&emu.machine);
+    }
+    if opts.dram_map {
+        print_dram_map(&emu.machine);
+    }
+    if verbose {
+        print_sdram_refresh(&emu.machine);
+    }
+    for group in &opts.mbox_tags {
+        mbox_property_exchange(&mut emu, &limits, group)?;
+    }
+    report_fdt(opts, &mut emu.machine, &report.console)?;
+    if verbose {
+        print_unimpl(&report, &opts.path);
     }
 
-    // `--console-log <path>`: the UART bytes on their own, with none of the
-    // run report interleaved. `boot-check` normalises this into the golden
-    // transcript; picking the console out of the combined log afterwards would
-    // be guesswork, since both streams land in the same file.
-    //
-    // On a run that rebooted (EEPROM self-update) this is the last segment
-    // only, which is the one the assertions are about.
-    if let Some(p) = &console_log {
-        std::fs::write(p, &report.console)
-            .with_context(|| format!("writing console log {}", p.display()))?;
-        if verbose {
+    let (ok, why) = boot_outcome(&report, &emu, opts.eeprom, limits.until.as_deref(), reboots);
+    println!("\nresult: {} — {why}", if ok { "ok" } else { "FAILED" });
+    Ok(if ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    })
+}
+
+/// The run in numbers: where it started and ended, and what it retired.
+fn print_summary(report: &RunReport, emu: &Emulator, start: u32) {
+    println!("entry      {start:#010x}");
+    println!("end        {:?}", report.end);
+    println!("final pc   {:#010x}", report.pc);
+    println!(
+        "retired    {}  (skipped {}, cycles {})",
+        report.retired, report.skipped, report.cycles
+    );
+    println!(
+        "stub hits  {}   bus errors {}",
+        report.stub_hits, report.bus_errors
+    );
+    println!("wall       {:?}", report.wall);
+    let ic = &emu.cpu.icache;
+    println!(
+        "decode     cache hits {}  fills {}  stale {}",
+        ic.hits, ic.fills, ic.stale
+    );
+    if let Some(pc1) = report.core1_pc {
+        println!(
+            "core1      pc {:#010x}  retired {}  end {:?}",
+            pc1,
+            report.core1_retired.unwrap_or(0),
+            report.core1_end
+        );
+    }
+}
+
+/// The ARM side (#40): the hand-off, each core, and where it stopped.
+fn print_arm_cores(emu: &Emulator, eeprom: bool) {
+    if let Some(a) = &emu.arm {
+        println!("\n--- ARM cores (#40) ---");
+        if let Some(h) = a.handoff {
             println!(
-                "console log {} ({} bytes)",
-                p.display(),
-                report.console.len()
+                "  armstub   kernel_entry32 {:#010x}  dtb_ptr32 {:#010x}",
+                h.kernel, h.dtb
+            );
+        }
+        match &a.bootargs {
+            Some(Ok((old, new))) if old != new => println!(
+                "  bootargs  \"{}\" prepended",
+                new.strip_suffix(old.as_str()).unwrap_or(new).trim_end()
+            ),
+            Some(Err(e)) => println!("  bootargs  not patched: {e}"),
+            _ => {}
+        }
+        println!(
+            "  ran       {} cycles, {} of them with every core asleep",
+            a.cycles, a.slept
+        );
+        for (i, c) in a.cores.iter().enumerate() {
+            match c.entered {
+            Some((cycles, el, pc, x0)) => println!(
+                "  core {i}    left the armstub at cycle {cycles} for {pc:#x} in EL{el}, x0 = {x0:#x}"
+            ),
+            None => println!("  core {i}    still in the armstub"),
+        }
+            println!(
+            "            {} instructions, {} exceptions, {} interrupts; now pc {:#x}  EL{}  sp {:#x}{}",
+            c.insns,
+            c.exceptions,
+            c.interrupts,
+            c.cpu.pc,
+            c.cpu.el,
+            c.cpu.sp(),
+            if c.waiting { "  (wfi)" } else { "" }
+        );
+            if c.sha_blocks > 0 {
+                println!(
+                "            {} SHA-256 block loop(s), {} blocks hashed natively (RVF_NO_SHA_SKIP=1 to compare)",
+                c.sha_loops, c.sha_blocks
+            );
+            }
+            println!(
+                "            daif {:#x}  irq line {}  gic {}",
+                c.cpu.daif >> 6,
+                u8::from(c.cpu.irq_line),
+                emu.machine.gic.describe(i)
+            );
+        }
+        if let Some(stop) = &a.stopped {
+            println!("  stopped   {stop:x?}");
+        }
+        if let Some(prof) = &a.prof {
+            print_arm_prof(prof);
+        }
+    } else if eeprom {
+        println!("\n--- ARM cores (#40) ---\n  never released");
+    }
+}
+
+/// What the firmware answered on the property channel, from the reply
+/// buffers themselves: the only place a value Linux never checks shows up.
+fn print_property_replies(machine: &Machine) {
+    let prop = &machine.mbox.property;
+    if prop.replies > 0 {
+        println!("\n--- property replies (0x7e00_b880) ---");
+        println!(
+            "  {} replies, {} with an error code",
+            prop.replies, prop.failed
+        );
+        for (tag, t) in prop.tags() {
+            let last = t.last.map_or("-".to_string(), |v| format!("{v:#010x}"));
+            println!(
+                "  tag {tag:#010x}  marked {:<4} unmarked {:<4} last value {last}",
+                t.marked, t.unmarked
             );
         }
     }
+}
 
-    if let Some(net) = emu.machine.net.as_mut().filter(|_| verbose) {
-        let st = emu.machine.genet.stats;
+/// The VPU's registers where the run ended.
+fn print_regs(report: &RunReport) {
+    print!("regs      ");
+    for (i, r) in report.regs.iter().enumerate() {
+        if i % 8 == 0 {
+            print!("\n  r{i:<2}");
+        }
+        print!(" {r:08x}");
+    }
+    println!();
+}
+
+/// `--console-log <path>`: the UART bytes on their own, with none of the
+/// run report interleaved. `boot-check` normalises this into the golden
+/// transcript; picking the console out of the combined log afterwards would
+/// be guesswork, since both streams land in the same file.
+///
+/// On a run that rebooted (EEPROM self-update) this is the last segment
+/// only, which is the one the assertions are about.
+fn write_console_log(p: &Path, console: &[u8], verbose: bool) -> Result<()> {
+    std::fs::write(p, console).with_context(|| format!("writing console log {}", p.display()))?;
+    if verbose {
+        println!("console log {} ({} bytes)", p.display(), console.len());
+    }
+    Ok(())
+}
+
+/// What went over the Ethernet cable, and what the other end logged.
+fn print_network(machine: &mut Machine) {
+    if let Some(net) = machine.net.as_mut() {
+        let st = machine.genet.stats;
         println!("\n--- network (GENET <-> {}) ---", net.name());
         println!(
             "  tx {} (dropped {})  rx {} (filtered {}, dropped {})",
@@ -1052,7 +1201,10 @@ fn print_report(opts: &BootOpts, booted: Booted) -> Result<ExitCode> {
             println!("  {line}");
         }
     }
+}
 
+/// The console: in full with `-v`, or whatever was not streamed already.
+fn print_console(report: &RunReport, verbose: bool) {
     if !report.console.is_empty() && verbose {
         println!("\n--- console ({} bytes) ---", report.console.len());
         if report.console_streamed {
@@ -1064,45 +1216,49 @@ fn print_report(opts: &BootOpts, booted: Booted) -> Result<ExitCode> {
     } else if !report.console_streamed {
         print!("{}", String::from_utf8_lossy(&report.console));
     }
+}
 
-    for &(a, n) in dumps {
-        use rpi_virt_fw::bus::Bus;
-        print!("dump {a:#010x}:");
-        for i in 0..n {
-            if i % 32 == 0 {
-                print!("\n  {:#010x} ", a + i);
-            }
-            print!(
-                "{:02x}",
-                emu.machine
-                    .load(a + i, rpi_virt_fw::bus::Width::Byte)
-                    .unwrap_or(0) as u8
-            );
+/// `--dump <addr>:<len>`: memory as the VPU sees it, in hex.
+fn print_dump(machine: &mut Machine, a: u32, n: u32) {
+    use rpi_virt_fw::bus::Bus;
+    print!("dump {a:#010x}:");
+    for i in 0..n {
+        if i % 32 == 0 {
+            print!("\n  {:#010x} ", a + i);
         }
-        println!();
+        print!(
+            "{:02x}",
+            machine
+                .load(a + i, rpi_virt_fw::bus::Width::Byte)
+                .unwrap_or(0) as u8
+        );
     }
+    println!();
+}
 
-    for &(a, count) in disasms {
-        use rpi_virt_fw::bus::Bus;
-        println!("disasm {a:#010x}:");
-        let mut pc = a;
-        let mut buf = [0u8; 10];
-        for _ in 0..count {
-            for (i, b) in buf.iter_mut().enumerate() {
-                *b = emu
-                    .machine
-                    .load(pc + i as u32, rpi_virt_fw::bus::Width::Byte)
-                    .unwrap_or(0) as u8;
-            }
-            let len = insn_len_bytes(u16::from_le_bytes([buf[0], buf[1]])) as usize;
-            let insn = decode(&buf[..len], pc);
-            let hex: String = buf[..len].iter().map(|b| format!("{b:02x}")).collect();
-            println!("  {pc:#010x}:  {hex:<20}  {:?}", insn.op);
-            pc = pc.wrapping_add(len as u32);
+/// `--disasm <addr>:<count>`: VPU instructions from memory.
+fn print_disasm(machine: &mut Machine, a: u32, count: u32) {
+    use rpi_virt_fw::bus::Bus;
+    println!("disasm {a:#010x}:");
+    let mut pc = a;
+    let mut buf = [0u8; 10];
+    for _ in 0..count {
+        for (i, b) in buf.iter_mut().enumerate() {
+            *b = machine
+                .load(pc + i as u32, rpi_virt_fw::bus::Width::Byte)
+                .unwrap_or(0) as u8;
         }
+        let len = insn_len_bytes(u16::from_le_bytes([buf[0], buf[1]])) as usize;
+        let insn = decode(&buf[..len], pc);
+        let hex: String = buf[..len].iter().map(|b| format!("{b:02x}")).collect();
+        println!("  {pc:#010x}:  {hex:<20}  {:?}", insn.op);
+        pc = pc.wrapping_add(len as u32);
     }
+}
 
-    if verbose && !report.phase_tags.is_empty() {
+/// The boot-progress tags start4 writes (0xcec02000), as text.
+fn print_phase_tags(report: &RunReport) {
+    if !report.phase_tags.is_empty() {
         let tags: Vec<String> = report
             .phase_tags
             .iter()
@@ -1122,7 +1278,10 @@ fn print_report(opts: &BootOpts, booted: Booted) -> Result<ExitCode> {
         println!("\n--- start4 boot-progress tags (0xcec02000) ---");
         println!("  {}", tags.join(" -> "));
     }
+}
 
+/// The VPU instruction traces (`--trace*`, `RVF_TRACE_ON_*`).
+fn print_traces(emu: &Emulator, trace: bool) {
     if trace || !emu.cpu.trace_log.is_empty() {
         println!(
             "\n--- instruction trace ({} lines) ---",
@@ -1144,8 +1303,22 @@ fn print_report(opts: &BootOpts, booted: Booted) -> Result<ExitCode> {
             }
         }
     }
+}
 
-    if verbose && !cf_tail.is_empty() {
+/// The VPU's last control transfers, newest first.
+fn print_control_transfers(emu: &Emulator) {
+    // Collapse consecutive-identical transfers so a spin doesn't hide the
+    // history that led into it.
+    let mut cf_tail: Vec<(u32, u32, u32)> = Vec::new();
+    for &(f, t) in &emu.cpu.cf_trace {
+        match cf_tail.last_mut() {
+            Some((lf, lt, n)) if *lf == f && *lt == t => *n += 1,
+            _ => cf_tail.push((f, t, 1)),
+        }
+    }
+    let cf_tail: Vec<(u32, u32, u32)> = cf_tail.into_iter().rev().take(30).collect();
+
+    if !cf_tail.is_empty() {
         println!("\n--- last control transfers (newest first, repeats collapsed) ---");
         for (from, to, n) in &cf_tail {
             let tag = if *n > 1 {
@@ -1156,180 +1329,185 @@ fn print_report(opts: &BootOpts, booted: Booted) -> Result<ExitCode> {
             println!("  {from:#010x}  ->  {to:#010x}{tag}");
         }
     }
+}
 
-    {
-        let log = &emu.machine.periph_stub.log;
-        if verbose && !log.is_empty() {
-            use std::collections::BTreeMap;
-            let mut per: BTreeMap<u32, (u32, u32, u32)> = BTreeMap::new(); // off -> (reads, writes, last_val)
-            for a in log {
-                let e = per.entry(a.offset).or_insert((0, 0, 0));
-                if a.write {
-                    e.1 += 1;
-                } else {
-                    e.0 += 1;
-                }
-                e.2 = a.value;
+/// The peripheral-window offsets nothing models, which fell through to the stub.
+fn print_stub_log(machine: &Machine) {
+    let log = &machine.periph_stub.log;
+    if !log.is_empty() {
+        use std::collections::BTreeMap;
+        let mut per: BTreeMap<u32, (u32, u32, u32)> = BTreeMap::new(); // off -> (reads, writes, last_val)
+        for a in log {
+            let e = per.entry(a.offset).or_insert((0, 0, 0));
+            if a.write {
+                e.1 += 1;
+            } else {
+                e.0 += 1;
             }
+            e.2 = a.value;
+        }
+        println!(
+            "\n--- peripheral-window stub: {} distinct offsets ({} accesses logged) ---",
+            per.len(),
+            log.len()
+        );
+        for (off, (r, w, v)) in &per {
             println!(
-                "\n--- peripheral-window stub: {} distinct offsets ({} accesses logged) ---",
-                per.len(),
-                log.len()
+                "  0x7e00_{:04x}  r={:<5} w={:<5} last={:#010x}",
+                off, r, w, v
             );
-            for (off, (r, w, v)) in &per {
-                println!(
-                    "  0x7e00_{:04x}  r={:<5} w={:<5} last={:#010x}",
-                    off, r, w, v
+        }
+    }
+}
+
+/// `--dram-map`: which DRAM pages are non-zero when the run ends, and where –
+/// the RAM a snapshot of the machine would have to carry (#50).
+///
+/// "Dirty" is approximated as "not all zero", which is exact for that: the
+/// model starts RAM zeroed, so a zero page needs no saving.
+fn print_dram_map(machine: &Machine) {
+    const PAGE: usize = 4096;
+    let ram = &machine.ram;
+    let base = ram.base();
+    let mut runs: Vec<(u32, u32)> = Vec::new();
+    let mut nonzero_pages = 0usize;
+    let total_pages = ram.len() / PAGE;
+    for p in 0..total_pages {
+        let addr = base + (p * PAGE) as u32;
+        let dirty = ram
+            .read_slice(addr, PAGE)
+            .map(|s| s.iter().any(|&b| b != 0))
+            .unwrap_or(false);
+        if !dirty {
+            continue;
+        }
+        nonzero_pages += 1;
+        match runs.last_mut() {
+            // Bridge gaps of up to 64 KiB so the report is readable; the
+            // bytes in the gap are zero and are counted separately.
+            Some(last) if addr <= last.1 + 0x1_0000 => last.1 = addr + PAGE as u32,
+            _ => runs.push((addr, addr + PAGE as u32)),
+        }
+    }
+    println!("\n--- DRAM occupancy when the run ended ---");
+    println!(
+        "  {} MiB of RAM, {} of {} 4K pages non-zero ({} MiB), {} regions",
+        ram.len() >> 20,
+        nonzero_pages,
+        total_pages,
+        (nonzero_pages * PAGE) >> 20,
+        runs.len()
+    );
+    for (lo, hi) in &runs {
+        println!("  {lo:#010x}..{hi:#010x}  {:>8} KiB", (hi - lo) / 1024);
+    }
+}
+
+/// The DRAM refresh interval start4 rescales from the LPDDR4 MR4 code
+/// once the ARM is running. The firmware logs the change as
+/// `sdram: sdram refresh 1562->3124 (2)`, but by then it has handed the
+/// UART to Linux and only its internal message ring sees that line, so
+/// the controller state is the console-independent way to check it.
+fn print_sdram_refresh(machine: &Machine) {
+    let sdc = &machine.sdc;
+    let history = sdc.refresh_history();
+    if !history.is_empty() {
+        let steps: Vec<String> = history.iter().map(|v| v.to_string()).collect();
+        println!("\n--- sdram controller (0x7e00_1000) ---");
+        println!(
+            "  refresh interval {}  ({} mode-register reads)",
+            steps.join(" -> "),
+            sdc.mode_register_reads()
+        );
+    }
+}
+
+/// The device tree `arm_loader` leaves behind for the ARM, and the
+/// `/chosen` identity properties it patched into it. This is the point
+/// of the bench (rpi-mkosi#37): `rpi-machine-id` feeds the root LUKS
+/// passphrase, so a firmware bump that changes how it is derived has to
+/// be caught here rather than on a thousand deployed cards.
+///
+/// The blob's address is taken from the firmware's own `Device tree
+/// loaded to 0x%x (size 0x%x)` line, which is the last word start4 says
+/// about the blob before it releases the ARM. The header is validated
+/// before anything is believed or written out.
+fn report_fdt(opts: &BootOpts, machine: &mut Machine, console: &[u8]) -> Result<()> {
+    let BootOpts {
+        verbose,
+        print_fdt,
+        ref dump_fdt,
+        ..
+    } = *opts;
+    match locate_fdt(machine, console) {
+        Some((addr, blob)) => {
+            match rpi_virt_fw::fdt::Fdt::parse(&blob) {
+                Ok(fdt) => {
+                    if verbose {
+                        let h = fdt.header();
+                        println!("\n--- device tree handed to the ARM ---");
+                        println!(
+                            "  at {addr:#010x}  totalsize {:#x}  version {}",
+                            h.totalsize, h.version
+                        );
+                        let nodes = fdt.nodes();
+                        println!(
+                            "  {} nodes, {} properties",
+                            nodes.len(),
+                            nodes.iter().map(|n| n.2.len()).sum::<usize>()
+                        );
+                        // `/chosen` is what the regression pins today, so it is
+                        // always in the report. It is not special otherwise — the
+                        // subject is the whole tree, and a firmware bump may move
+                        // what it publishes into a node that does not exist yet,
+                        // which is what `--print-fdt` and `--dump-fdt` are for.
+                        match fdt.properties_of("/chosen") {
+                            Some(props) => {
+                                for p in &props {
+                                    // `bootargs` is the kernel command line and can
+                                    // be long; everything else in /chosen is short.
+                                    println!("  /chosen/{:<22} {}", p.name, p.display());
+                                }
+                            }
+                            None => println!("  (no /chosen node)"),
+                        }
+                        if !print_fdt {
+                            println!(
+                                "  (--print-fdt for every node, --dump-fdt <path> for the blob)"
+                            );
+                        }
+                        report_machine_id_derivation(machine, &fdt);
+                    }
+                    if print_fdt {
+                        println!("\n{}", fdt.to_dts());
+                    }
+                    if let Some(out) = &dump_fdt {
+                        std::fs::write(out, fdt.bytes())
+                            .with_context(|| format!("writing {}", out.display()))?;
+                        println!("  wrote {} ({} bytes)", out.display(), fdt.bytes().len());
+                    }
+                }
+                Err(e) if verbose || print_fdt || dump_fdt.is_some() => {
+                    println!("\n--- device tree handed to the ARM ---\n  at {addr:#010x}: {e}")
+                }
+                Err(_) => {}
+            }
+        }
+        None => {
+            if dump_fdt.is_some() {
+                bail!(
+                    "--dump-fdt: the boot never printed 'Device tree loaded to ...', \
+                     so there is no device tree to dump"
                 );
             }
         }
     }
+    Ok(())
+}
 
-    if dram_map {
-        // Proof of concept for the QEMU hand-off (docs/vision.md section 3):
-        // how much of DRAM is actually dirty when `arm_loader` releases the
-        // ARM, and where. Everything QEMU would have to be told about has to
-        // come out of here, so the size and the shape of it decide whether a
-        // hand-off is a file copy or a subsystem.
-        //
-        // "Dirty" is approximated as "not all zero", which is exact for this
-        // purpose: the model starts RAM zeroed and QEMU's guest RAM is zeroed
-        // too, so a zero page needs no transfer either way.
-        const PAGE: usize = 4096;
-        let ram = &emu.machine.ram;
-        let base = ram.base();
-        let mut runs: Vec<(u32, u32)> = Vec::new();
-        let mut nonzero_pages = 0usize;
-        let total_pages = ram.len() / PAGE;
-        for p in 0..total_pages {
-            let addr = base + (p * PAGE) as u32;
-            let dirty = ram
-                .read_slice(addr, PAGE)
-                .map(|s| s.iter().any(|&b| b != 0))
-                .unwrap_or(false);
-            if !dirty {
-                continue;
-            }
-            nonzero_pages += 1;
-            match runs.last_mut() {
-                // Bridge gaps of up to 64 KiB so the report is readable; the
-                // bytes in the gap are zero and are counted separately.
-                Some(last) if addr <= last.1 + 0x1_0000 => last.1 = addr + PAGE as u32,
-                _ => runs.push((addr, addr + PAGE as u32)),
-            }
-        }
-        println!("\n--- DRAM occupancy at the ARM hand-off ---");
-        println!(
-            "  {} MiB of RAM, {} of {} 4K pages non-zero ({} MiB), {} regions",
-            ram.len() >> 20,
-            nonzero_pages,
-            total_pages,
-            (nonzero_pages * PAGE) >> 20,
-            runs.len()
-        );
-        for (lo, hi) in &runs {
-            println!("  {lo:#010x}..{hi:#010x}  {:>8} KiB", (hi - lo) / 1024);
-        }
-    }
-
-    {
-        // The DRAM refresh interval start4 rescales from the LPDDR4 MR4 code
-        // once the ARM is running. The firmware logs the change as
-        // `sdram: sdram refresh 1562->3124 (2)`, but by then it has handed the
-        // UART to Linux and only its internal message ring sees that line, so
-        // the controller state is the console-independent way to check it.
-        let sdc = &emu.machine.sdc;
-        let history = sdc.refresh_history();
-        if verbose && !history.is_empty() {
-            let steps: Vec<String> = history.iter().map(|v| v.to_string()).collect();
-            println!("\n--- sdram controller (0x7e00_1000) ---");
-            println!(
-                "  refresh interval {}  ({} mode-register reads)",
-                steps.join(" -> "),
-                sdc.mode_register_reads()
-            );
-        }
-    }
-
-    for group in mbox_tags {
-        mbox_property_exchange(&mut emu, &limits, group)?;
-    }
-
-    {
-        // The device tree `arm_loader` leaves behind for the ARM, and the
-        // `/chosen` identity properties it patched into it. This is the point
-        // of the bench (rpi-mkosi#37): `rpi-machine-id` feeds the root LUKS
-        // passphrase, so a firmware bump that changes how it is derived has to
-        // be caught here rather than on a thousand deployed cards.
-        //
-        // The blob's address is taken from the firmware's own `Device tree
-        // loaded to 0x%x (size 0x%x)` line, which is the last word start4 says
-        // about the blob before it releases the ARM. The header is validated
-        // before anything is believed or written out.
-        match locate_fdt(&mut emu.machine, &report.console) {
-            Some((addr, blob)) => {
-                match rpi_virt_fw::fdt::Fdt::parse(&blob) {
-                    Ok(fdt) => {
-                        if verbose {
-                            let h = fdt.header();
-                            println!("\n--- device tree handed to the ARM ---");
-                            println!(
-                                "  at {addr:#010x}  totalsize {:#x}  version {}",
-                                h.totalsize, h.version
-                            );
-                            let nodes = fdt.nodes();
-                            println!(
-                                "  {} nodes, {} properties",
-                                nodes.len(),
-                                nodes.iter().map(|n| n.2.len()).sum::<usize>()
-                            );
-                            // `/chosen` is what the regression pins today, so it is
-                            // always in the report. It is not special otherwise — the
-                            // subject is the whole tree, and a firmware bump may move
-                            // what it publishes into a node that does not exist yet,
-                            // which is what `--print-fdt` and `--dump-fdt` are for.
-                            match fdt.properties_of("/chosen") {
-                                Some(props) => {
-                                    for p in &props {
-                                        // `bootargs` is the kernel command line and can
-                                        // be long; everything else in /chosen is short.
-                                        println!("  /chosen/{:<22} {}", p.name, p.display());
-                                    }
-                                }
-                                None => println!("  (no /chosen node)"),
-                            }
-                            if !print_fdt {
-                                println!("  (--print-fdt for every node, --dump-fdt <path> for the blob)");
-                            }
-                            report_machine_id_derivation(&emu.machine, &fdt);
-                        }
-                        if print_fdt {
-                            println!("\n{}", fdt.to_dts());
-                        }
-                        if let Some(out) = &dump_fdt {
-                            std::fs::write(out, fdt.bytes())
-                                .with_context(|| format!("writing {}", out.display()))?;
-                            println!("  wrote {} ({} bytes)", out.display(), fdt.bytes().len());
-                        }
-                    }
-                    Err(e) if verbose || print_fdt || dump_fdt.is_some() => {
-                        println!("\n--- device tree handed to the ARM ---\n  at {addr:#010x}: {e}")
-                    }
-                    Err(_) => {}
-                }
-            }
-            None => {
-                if dump_fdt.is_some() {
-                    bail!(
-                        "--dump-fdt: the boot never printed 'Device tree loaded to ...', \
-                         so there is no device tree to dump"
-                    );
-                }
-            }
-        }
-    }
-
-    if verbose && !report.unimpl.is_empty() {
+/// The instructions the decoder did not know, by hit count.
+fn print_unimpl(report: &RunReport, path: &Path) {
+    if !report.unimpl.is_empty() {
         println!(
             "\n--- distinct unimplemented instructions ({}, top 40 by hit count) ---",
             report.unimpl.len()
@@ -1349,14 +1527,6 @@ fn print_report(opts: &BootOpts, booted: Booted) -> Result<ExitCode> {
             path.display()
         );
     }
-
-    let (ok, why) = boot_outcome(&report, &emu, eeprom, limits.until.as_deref(), reboots);
-    println!("\nresult: {} — {why}", if ok { "ok" } else { "FAILED" });
-    Ok(if ok {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::FAILURE
-    })
 }
 
 /// Did the boot do what it was run for, and in a word, what happened (#55).

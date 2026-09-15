@@ -114,8 +114,8 @@ FLAGS:
               peripherals; `--io-log-format jsonl` for one JSON object a line.
     --dram-map
               Report which DRAM pages are non-zero when the run ends, as
-              address runs. Proof of concept for the QEMU hand-off: this is the
-              state that would have to cross the line (docs/vision.md §3).
+              address runs: the RAM a snapshot of the machine would have to
+              carry (#50).
     -v, --verbose
               `boot`: print the full run report as well — the EEPROM layout,
               registers, the ARM cores, the property replies, the peripherals
