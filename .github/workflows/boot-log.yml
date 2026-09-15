@@ -1,10 +1,22 @@
 name: simulated-boot-log
 
+# A change to Markdown or docs/ alone runs nothing (#86). docs/periph/ is the
+# exception: it is generated from specs/*.toml, and cargo test checks it.
 on:
   push:
     branches: [main]
+    paths:
+      - '**'
+      - '!**.md'
+      - '!docs/**'
+      - 'docs/periph/**'
   pull_request:
     branches: [main]
+    paths:
+      - '**'
+      - '!**.md'
+      - '!docs/**'
+      - 'docs/periph/**'
   workflow_dispatch:
 
 # Every job runs on the hosted runners unless the repository variables
