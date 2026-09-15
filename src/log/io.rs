@@ -107,35 +107,38 @@ impl Io {
 }
 
 /// An OTP row the firmware read. `fused`: the row is programmed on the
-/// modelled board; a blank one reads 0, as on the hardware.
-pub(super) fn otp_read(row: u32, value: u32, fused: bool) -> Event {
+/// modelled board; a blank one reads 0, as on the hardware. `meaning`: what
+/// the row is for (#101).
+pub(super) fn otp_read(row: u32, value: u32, fused: bool, meaning: &str) -> Event {
     let value = format!("{value:#010x}");
     Event {
         text: format!(
-            "otp  read  row {row:<3} = {value}{}",
-            if fused { "" } else { "  (blank)" }
+            "otp  read  row {row:<3} = {value}  {meaning}{}",
+            if fused { "" } else { " (blank)" }
         ),
         json: fields(&[
             ("dev", "otp"),
             ("op", "read"),
             ("row", &row.to_string()),
             ("value", &value),
+            ("meaning", meaning),
         ]),
     }
 }
 
 /// An OTP row the firmware programmed: `value` is what the row holds now,
 /// `was` what it held before.
-pub(super) fn otp_write(row: u32, value: u32, was: u32) -> Event {
+pub(super) fn otp_write(row: u32, value: u32, was: u32, meaning: &str) -> Event {
     let (value, was) = (format!("{value:#010x}"), format!("{was:#010x}"));
     Event {
-        text: format!("otp  write row {row:<3} = {value}  (was {was})"),
+        text: format!("otp  write row {row:<3} = {value}  {meaning} (was {was})"),
         json: fields(&[
             ("dev", "otp"),
             ("op", "write"),
             ("row", &row.to_string()),
             ("value", &value),
             ("was", &was),
+            ("meaning", meaning),
         ]),
     }
 }

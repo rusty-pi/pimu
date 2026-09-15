@@ -167,6 +167,40 @@ const fn identity_check(words: [u32; 4]) -> u32 {
 /// [`crate::firmware::bootrom`], whose `otp_key_words` cites them.
 pub(crate) const BOARD_IDENTITY: [u32; 4] = [0x8AA9_6D38, 0x9111_243F, 0x38E4_E488, 0x8E02_2082];
 
+/// What an OTP row is for, in a few words, for the `io` and `otp` log lines
+/// (#101). The meanings are the ones Raspberry Pi documents for boards before
+/// the BCM2712, in
+/// <https://github.com/raspberrypi/documentation/blob/ecd7a8129d4f2cb908d6cbd6ea5a994e0091285d/documentation/asciidoc/computers/raspberry-pi/otp-bits.adoc>,
+/// apart from rows 19-27, which it does not make public; those are what this
+/// model found (the module docs, #68). A field over several rows says which
+/// word it is.
+pub fn row_meaning(row: u32) -> String {
+    let word = |first: u32, words: u32| format!("word {} of {words}", row - first + 1);
+    match row {
+        16 => "OTP control: VideoCore JTAG lock".into(),
+        17 => "boot mode".into(),
+        18 => "boot mode, copy".into(),
+        19..=22 => format!("board identity, {}", word(19, 4)),
+        23..=26 => format!("board identity, second copy, {}", word(23, 4)),
+        27 => "board identity check bits".into(),
+        28 => "serial number".into(),
+        29 => "serial number, bits inverted".into(),
+        30 => "revision code: board model, RAM size, maker".into(),
+        33 => "extended board revision".into(),
+        35 => "serial number, high 32 bits".into(),
+        36..=43 => format!("customer OTP, {}", word(36, 8)),
+        45 => "MPEG-2 codec licence key".into(),
+        46 => "VC-1 codec licence key".into(),
+        47..=54 => format!("secure-boot key hash, {}", word(47, 8)),
+        55 => "secure-boot flags".into(),
+        56..=63 => format!("device private key, {}", word(56, 8)),
+        64 => "MAC address, bytes 5-6".into(),
+        65 => "MAC address, bytes 1-4".into(),
+        66 => "advanced boot, not used on BCM2711".into(),
+        _ => "not documented".into(),
+    }
+}
+
 pub struct ConfigOtp {
     storage: BTreeMap<u32, u32>,
     /// Row latched via `+0x1C`, for the next read or program command.
@@ -404,30 +438,28 @@ impl ConfigOtp {
         if value != was {
             self.table.insert(row, value);
         }
-        self.log.otp_write(row, value, was);
+        let meaning = row_meaning(row);
+        self.log.otp_write(row, value, was, &meaning);
         crate::log!(
             self.log,
             Channel::Otp,
-            "program row {row} (0x{row:x}): 0x{was:08x} -> 0x{value:08x}"
+            "program row {row} (0x{row:x}): 0x{was:08x} -> 0x{value:08x}  {meaning}"
         );
     }
 
     fn read_row(&mut self) {
+        let fused = self.table.contains_key(&self.key);
         self.data = self.table.get(&self.key).copied().unwrap_or(0);
-        self.log
-            .otp_read(self.key, self.data, self.table.contains_key(&self.key));
+        let meaning = row_meaning(self.key);
+        self.log.otp_read(self.key, self.data, fused, &meaning);
         crate::log!(
             self.log,
             Channel::Otp,
-            "key {} (0x{:x}) -> 0x{:08x}{}",
+            "key {} (0x{:x}) -> 0x{:08x}  {meaning}{}",
             self.key,
             self.key,
             self.data,
-            if self.table.contains_key(&self.key) {
-                ""
-            } else {
-                "  (UNMODELLED)"
-            }
+            if fused { "" } else { "  (UNMODELLED)" }
         );
     }
 }
@@ -537,6 +569,22 @@ mod tests {
             otp.write(REG_DATA, Width::Word, word).unwrap();
             command(otp, CMD_PROG_ENABLE);
         }
+    }
+
+    /// A field over several rows counts its words from 1, first row to last
+    /// (#101).
+    #[test]
+    fn row_meanings_count_the_words_of_a_field_from_one() {
+        assert_eq!(row_meaning(19), "board identity, word 1 of 4");
+        assert_eq!(row_meaning(26), "board identity, second copy, word 4 of 4");
+        assert_eq!(row_meaning(36), "customer OTP, word 1 of 8");
+        assert_eq!(row_meaning(43), "customer OTP, word 8 of 8");
+        assert_eq!(row_meaning(63), "device private key, word 8 of 8");
+        assert_eq!(
+            row_meaning(30),
+            "revision code: board model, RAM size, maker"
+        );
+        assert_eq!(row_meaning(31), "not documented");
     }
 
     fn program(otp: &mut ConfigOtp, row: u32, bits: u32) {
