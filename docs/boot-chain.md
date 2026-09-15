@@ -97,31 +97,18 @@ instead of only noticing afterwards that the value moved.
 
 ## Peripheral scope
 
-Only what boot needs. Modelled so far (`src/periph/`):
+Only what boot needs. Every modelled register block has a spec in `specs/`,
+and [`docs/periph/README.md`](periph/README.md) is generated from them: that
+is the current list of what the model covers, with provenance per register.
+What isn't a spec'd register block:
 
-- **Serial** — PL011 + mini-UART (transmit capture)
-- **System timer** — 1 MHz, with a busy-wait fast-forward
-- **SDRAM controller** + the `0xC000_0000` uncached alias, including the LPDDR4
-  mode-register port at `0x7E00_109C` — start4 polls MR4 (temperature-controlled
-  refresh) once a second after the ARM handover and rescales the refresh
-  interval from it
-- **Clock manager** + A2W PLL (`0x7E10_1000`) and the `0x7D5D` VPU clock/PLL
-  block — status bits forced ready; the analogue PLLs / frequency counters are
-  *not* modelled (the current wall, [issue #1])
-- **Arasan eMMC** (`0x7E34_0000`) + a read-only SD-card / FAT image backend
-- **BSC/I²C master** + DA9090 PMIC register file (`0x7E20_5E00`)
-- **HDMI DDC I²C masters** (`0x7EF0_4500`, `0x7EF0_9500`) — the EDID buses, with
-  no monitor on either, so start4 gives up on EDID the way the reference board
-  does
-- **DMA4**, **power domains**, **config-OTP**, **CoreCtl**, **mcsync**, the
-  `0x7EE0` boot-box, and a logging catch-all for everything else
-
-- **PCIe root complex** (`0x7D50_0000`) — a register file only, so the block
-  stops aliasing into DRAM; the link never comes up (see
-  [`usb-xhci.md`](usb-xhci.md))
-
-- **GENET** (`0x7D58_0000`) with its BCM54213PE PHY and packet DMA, plus a
-  built-in network peer on the other end of the cable (`src/net/peer.rs`:
+- **Storage** — the SD card and the USB stick are disk images read on demand.
+  Writes stay in memory and the image file is never modified, so every run is
+  a first boot (#54, #62); `--usb-mb` makes the stick bigger than its image.
+- **The catch-all stub** — any peripheral offset nothing models reads back
+  what was last written there (0 otherwise), and every access is logged, so an
+  unimplemented poke becomes a triage note instead of a crash.
+- **A network peer** on the other end of the GENET cable (`src/net/peer.rs`:
   DHCP, DNS, TFTP, plain HTTP over a minimal TCP). `--netboot <dir>` serves
   `<dir>`:
   - TFTP (`--boot-order 0xf2`): the bootloader TFTPs `start4.elf` /
@@ -133,10 +120,9 @@ Only what boot needs. Modelled so far (`src/periph/`):
     `HTTP_PORT=80`; the image must be RSA-signed and the key must be in the
     EEPROM's `pubkey.bin` (`--eeprom-pubkey`, test key in `testdata/netboot/`)
 
-Still out: **USB3** (the VL805 xHCI behind that PCIe root complex — surveyed in
-[`usb-xhci.md`](usb-xhci.md)); HTTPS network boot; HDMI/display, camera, the 3D/QPU unit; and the VPU
-*scalar* vector ALU (`memcpy`-style bulk ops are special-cased, the rest fall
-through to `Unimpl`).
+Still out: HTTPS network boot (#44); a display, camera and the 3D/QPU unit;
+and most of the VPU vector ALU (`memcpy`-style bulk ops and a short list of
+other exactly matched forms run, the rest fall through to `Unimpl`).
 
 ## Milestones
 
