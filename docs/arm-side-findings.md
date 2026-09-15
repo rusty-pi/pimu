@@ -205,7 +205,7 @@ the armstub, so the ARM runs UEFI before any kernel. What it needed:
    instruction per cycle that was most of the host time, so the ARM side now
    parks a core in such a loop instead of stepping it, and rebuilds its state
    when the loop ends or what it reads changes (#53, `src/arm/park.rs`,
-   "Busy-wait loops" in `src/arm.rs`).
+   "Busy-wait loops" in `src/arm/mod.rs`).
 7. That made the load quick in host time, but it still crawled in guest time
    — about 230 blocks a second — so start4's 16 s early watchdog
    (`dtparam=watchdog=on`, armed at `arm_loader`; edk2 never touches it)
@@ -233,7 +233,7 @@ the armstub, so the ARM runs UEFI before any kernel. What it needed:
    (#79): cache maintenance, the NOP-like hints and a core's own `msr daif`
    no longer end an ARM burst (a few percent), and a SHA-256 block loop is
    recognised by what one pass does and its middle blocks are hashed
-   natively (`src/arm/sha.rs`, module docs of `arm.rs`, "SHA-256 loops").
+   natively (`src/arm/sha.rs`, module docs of `arm/mod.rs`, "SHA-256 loops").
 
 With those, UEFI prints its boot manager prompt (`ESC (setup), F1 (shell),
 ENTER (boot)`) 0.7 s of guest time after its banner, and systemd-boot no

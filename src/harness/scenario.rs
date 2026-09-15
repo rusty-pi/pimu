@@ -28,7 +28,7 @@ pub struct Scenario {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PayloadKind {
-    /// A named payload from [`crate::payloads`].
+    /// A named payload from [`crate::harness::payloads`].
     Builtin,
     /// An ELF32 file on disk.
     Elf,

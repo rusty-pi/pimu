@@ -44,7 +44,7 @@ Working:
   the system registers Linux touches. `tests/a64_diff.rs` checks it
   differentially against `qemu-aarch64` user-mode on random instruction
   streams. Four cores run in lock-step with the VPU, paced by the system timer
-  (`src/arm.rs`, `src/armstub.rs`).
+  (`src/arm/`, `src/armstub.rs`).
 - **Machine model** (`src/machine.rs`, `src/periph/`) — RAM + the
   `0xC000_0000` uncached SDRAM alias + address decode + peripherals: PL011
   (transmit and receive) and mini-UART, system timer, SDRAM controller, clock
@@ -290,26 +290,32 @@ path = "../golden/hello-vpu.txt"
 
 ```
 src/
+  lib.rs        the library; its crate docs map the modules
+  bin/rpi-virt-fw/
+                the command line: main.rs = usage + dispatch, one file per
+                command (boot, scenario, disasm), mbox.rs, config.rs
   vpu/          VideoCore IV scalar core: length, decode, exec, registers
   aarch64/      A64 core: integer, SIMD/FP, MMU, system registers
-  arm.rs        the four A72 cores, released at arm_loader, lock-stepped
+  arm/          the four A72 cores, released at arm_loader, lock-stepped
   armstub.rs    armstub hand-off words, image check, bootargs patch
   bus.rs        Bus + MmioDevice traits
   mem.rs        RAM region
+  l2.rs         the VPU's L2 while the bootcode runs out of it
   machine.rs    Machine: owns RAM + peripherals, decodes addresses
   periph/       one file per block (see Status), stub.rs = catch-all + log
-  net/          built-in DHCP/DNS/TFTP/HTTP peer for --netboot
-  soc/          BCM2711 memory map
+  net/          built-in DHCP/DNS/TFTP/HTTP peer for --netboot; passt for --net
+  soc/          BCM2711 memory map, stepping, board
   spec/         register-spec schema (specs/*.toml, via build.rs)
-  firmware/     ELF32 loader; EEPROM image parse; dt-blob; Payload
+  firmware/     boot ROM stage; ELF32 loader; EEPROM image parse; dt-blob; Payload
   fdt.rs        device tree reader/patcher
   identity.rs   the rpi-machine-id derivation
+  iolog/        --io-log; fatmap.rs = which file a disk block belongs to
   stdio.rs      host terminal as the serial console (--stdin)
   diag.rs       RVF_* diagnostics
-  emulator.rs   Emulator = Vpu + Machine, run loop
+  emulator.rs   Emulator = VPU cores + ARM side + Machine, run loop
   harness/      scenario parsing, transcript capture, golden diff,
-                boot.rs = the boot scenarios and their milestones
-  payloads.rs   hand-assembled VPU test programs
+                boot.rs = the boot scenarios and their milestones,
+                payloads.rs = hand-assembled VPU test programs
 specs/          register maps with provenance; docs/periph/ is generated
 docs/           boot-chain, arm-side-findings, diagnostics, usb-xhci, vpu-isa,
                 references, vision, periph/

@@ -1,7 +1,8 @@
-//! AArch64 architecture facts the ARM core will need (#40): exception entry,
-//! interrupt routing, and the system-register move encoding.
+//! The AArch64 core (#40). This module holds the architecture facts the
+//! interpreter and the ARM side share: exception entry, interrupt routing, and
+//! the system-register move encoding.
 //!
-//! Lifted from the in-process Unicorn core on the `arm-unicorn` branch
+//! They were lifted from the in-process Unicorn core on the `arm-unicorn` branch
 //! (PR #36). Unicorn takes no exception into the guest and has no interrupt
 //! input, so that core did exception and IRQ entry by hand, and these are the
 //! pieces of it that are pure architecture rather than Unicorn glue. With them

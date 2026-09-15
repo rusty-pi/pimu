@@ -1,21 +1,31 @@
 //! `rpi-virt-fw` — a virtual bench for Raspberry Pi VideoCore boot firmware.
 //!
-//! The goal is to execute the real `pieeprom.bin` / `start4.elf` / `fixup4.dat`
-//! blobs in a modelled BCM2711 and regression-test their behaviour (primarily
-//! serial output) against a known-good baseline.
-//!
-//! Milestone M1 (current): a VideoCore IV scalar interpreter, a small set of
-//! peripherals (UARTs, system timer), and the regression harness. Proven with
-//! hand-assembled payloads, not yet real firmware.
+//! It executes the real `pieeprom.bin` / `start4.elf` / `fixup4.dat` blobs in
+//! a modelled BCM2711, on into Linux, and regression-tests their behaviour
+//! (primarily serial output) against a known-good baseline.
 //!
 //! ```text
-//!   Emulator
-//!   ├── Vpu        scalar core (fetch/decode/execute)   src/vpu/
-//!   └── Machine    RAM + peripherals + address decode    src/machine.rs
-//!                  ├── SysTimer                          src/periph/systimer.rs
-//!                  ├── Pl011 / Aux (UART capture)        src/periph/
-//!                  └── StubRegion (catch-all + log)      src/periph/stub.rs
+//!   Emulator     the run loop                              emulator
+//!   ├── Vpu      VideoCore IV scalar core, cores 0 and 1   vpu/
+//!   ├── ArmSide  the four Cortex-A72 cores                 arm/, aarch64/
+//!   └── Machine  RAM + peripherals + address decode        machine
+//!                ├── one model per peripheral block        periph/
+//!                ├── the SoC and board around them         soc/
+//!                └── the other end of the Ethernet cable   net/
 //! ```
+//!
+//! Around those:
+//!
+//! - [`bus`], [`mem`] and [`l2`]: what the cores load and store through.
+//! - [`firmware`]: loading firmware images, and the boot ROM stage.
+//! - [`armstub`], [`fdt`] and [`identity`]: what `arm_loader` hands the ARM,
+//!   and the board identity (`rpi-machine-id`) in it.
+//! - [`harness`]: scenario files in, pass/fail and a transcript out.
+//! - [`iolog`], [`diag`] and [`stdio`]: the I/O log, the `RVF_*` diagnostics,
+//!   and the host terminal as the serial console.
+//! - [`spec`]: register maps generated from `specs/*.toml`.
+//!
+//! The command line is a separate binary crate, in `src/bin/rpi-virt-fw/`.
 
 pub mod aarch64;
 pub mod arm;
@@ -23,7 +33,6 @@ pub mod armstub;
 pub mod bus;
 pub mod diag;
 pub mod emulator;
-pub mod fatmap;
 pub mod fdt;
 pub mod firmware;
 pub mod harness;
@@ -33,7 +42,6 @@ pub mod l2;
 pub mod machine;
 pub mod mem;
 pub mod net;
-pub mod payloads;
 pub mod periph;
 pub mod soc;
 pub mod spec;

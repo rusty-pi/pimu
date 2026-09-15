@@ -950,7 +950,7 @@ impl Emulator {
             // the ARM writes something that interrupts it — a mailbox
             // request, most often — whichever comes first. So the ARM runs
             // up to that compare first, and the counter only moves as far as
-            // it got (#53; `arm.rs`, "Time and scheduling").
+            // it got (#53; `arm/mod.rs`, "Time and scheduling").
             if let Some(to) = self.machine.sleep_to.take() {
                 let us = arm.run_until_store(&mut self.machine, to);
                 self.machine.wake_vpu_at(us);

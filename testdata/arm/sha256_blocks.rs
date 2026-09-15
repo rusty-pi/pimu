@@ -1,4 +1,4 @@
-// The SHA-256 block loops `src/arm.rs`'s tests run (`SHA_MEM`, `SHA_REGS`):
+// The SHA-256 block loops `src/arm/mod.rs`'s tests run (`SHA_MEM`, `SHA_REGS`):
 // plain Rust, compiled with
 //   rustc --edition 2021 --target aarch64-unknown-none -C opt-level=2 \
 //     -C panic=abort --crate-type=lib --emit=obj sha256_blocks.rs

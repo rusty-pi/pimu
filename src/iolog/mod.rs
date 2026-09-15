@@ -4,7 +4,7 @@
 //! `boot --io-log <path>` records, apart from the serial console:
 //!
 //! * block reads and writes on the SD card and the USB stick, contiguous runs
-//!   merged, with the files they belong to ([`crate::fatmap`])
+//!   merged, with the files they belong to ([`fatmap`])
 //! * OTP rows the firmware read, with their values
 //! * what the network peer did: DHCP, DNS, TFTP and HTTP
 //!
@@ -22,7 +22,9 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::rc::Rc;
 
-use crate::fatmap::FileMap;
+use fatmap::FileMap;
+
+pub mod fatmap;
 
 /// A shared handle: the log is written to from several peripherals.
 pub type IoLogRef = Rc<RefCell<IoLog>>;
@@ -77,7 +79,7 @@ impl IoLog {
     }
 
     /// Name the files on block device `dev`, once.
-    pub fn map_files(&mut self, dev: &'static str, read: &crate::fatmap::ReadBlock) {
+    pub fn map_files(&mut self, dev: &'static str, read: &fatmap::ReadBlock) {
         self.files
             .entry(dev)
             .or_insert_with(|| FileMap::build(read));
