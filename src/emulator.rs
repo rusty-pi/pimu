@@ -24,6 +24,10 @@ pub struct Emulator {
     /// ARM core 0, once released.
     pub arm: Option<crate::arm::ArmSide>,
     pub input: ConsoleInput,
+    /// Stream the console to stdout as the run goes, unless
+    /// `RVF_LIVE_CONSOLE=0`. `boot --quiet` turns it off and prints no console
+    /// at all (#100).
+    pub stream_console: bool,
     /// Take the steps no per-step check can act on through
     /// [`Self::fast_steps`], which skips those checks. On unless this is a
     /// `diag` build, whose diagnostics watch every step; tests turn it off to
@@ -181,6 +185,7 @@ impl Emulator {
             arm_enabled: true,
             arm: None,
             input: ConsoleInput::default(),
+            stream_console: true,
             // `RVF_SLOW_LOOP=1`: every step through every check, to hold the
             // fast loop to the same run.
             fast_loop: !crate::diag::ON && std::env::var_os("RVF_SLOW_LOOP").is_none(),
@@ -224,8 +229,9 @@ impl Emulator {
         // watched instead of waiting for the summary at the end. Set
         // `RVF_LIVE_CONSOLE=0` to get the buffered-only behaviour back (the
         // summary still prints the whole console either way, but it is not
-        // repeated once it has been streamed).
-        let diag = crate::diag::DiagConfig::from_env();
+        // repeated once it has been streamed), or turn `stream_console` off.
+        let mut diag = crate::diag::DiagConfig::from_env();
+        diag.live_console &= self.stream_console;
         // `RVF_MMIO_FROM=<hex>` arms `--trace-mmio`-style logging only once the
         // PC first reaches that address — lets you capture a late boot stage
         // (e.g. start4.elf) without drowning in the bootloader's MMIO.

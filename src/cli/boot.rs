@@ -42,11 +42,12 @@ USAGE:
     `--config <file>` and `--option=value` work as for every command (see
     `rpi-virt-fw --help`).
 
-    The run prints the serial console, what was asked for by name (`--dump`,
-    `--print-fdt`, `--mbox-property`, …) and one `result: ok|FAILED — <why>`
-    line; the exit status is 1 on failure. Besides the limits below, a run
-    ends at an instruction the decoder does not implement, and once the
-    firmware has been quiet for a minute of model time.
+    The run prints the serial console (not with -q), what was asked for by
+    name (`--dump`, `--print-fdt`, `--mbox-property`, …) and one
+    `result: ok|FAILED — <why>` line; the exit status is 1 on failure.
+    Besides the limits below, a run ends at an instruction the decoder does
+    not implement, and once the firmware has printed nothing for a minute of
+    model time.
 
 MACHINE:
     --eeprom <pieeprom.bin>
@@ -145,6 +146,11 @@ OUTPUT:
               Print the full run report as well — the EEPROM layout,
               registers, the ARM cores, the property replies, the peripherals
               that fell through to the stub, the device tree's `/chosen`.
+    -q, --quiet
+              Leave the serial console out: not streamed, not printed after the
+              run, not in the -v report. --console-log still gets it, and
+              --until and --send-after still see it. For a run whose log
+              channels are the point, e.g. with --log jsonl:io.
     --console-log <path>
               Write the raw UART bytes of the run to <path>, with none of the
               run report interleaved. This is what `boot-check` normalises into
@@ -276,6 +282,8 @@ struct BootOpts {
     /// Without `-v` the run prints the serial console, the outcome and whatever
     /// was asked for by name (#55); the full run report is for investigating.
     verbose: bool,
+    /// `-q`: no serial console on stdout (#100).
+    quiet: bool,
     /// `--log`: the channels to log, and how (#95).
     log: Spec,
     /// `--log-file`: where they go, stderr without it.
@@ -325,6 +333,7 @@ impl BootOpts {
         let mut sends: Vec<(String, Vec<u8>)> = Vec::new();
         let mut stdin = false;
         let mut verbose = false;
+        let mut quiet = false;
         let mut log = Spec::default();
         let mut log_file: Option<String> = None;
         let mut otp: Option<OtpFile> = None;
@@ -384,6 +393,7 @@ impl BootOpts {
                 }
                 "--stdin" => stdin = true,
                 "-v" | "--verbose" => verbose = true,
+                "-q" | "--quiet" => quiet = true,
                 "--log" => {
                     let spec = it
                         .next()
@@ -560,6 +570,7 @@ impl BootOpts {
             sends,
             stdin,
             verbose,
+            quiet,
             log,
             log_file,
             otp,
@@ -645,8 +656,8 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
         if report.end == rpi_virt_fw::emulator::RunEnd::Reset {
             reboots += 1;
             // Already on the terminal if it was streamed; the run report keeps
-            // its copy.
-            if opts.verbose || !report.console_streamed {
+            // its copy. `--quiet` wants neither.
+            if !opts.quiet && (opts.verbose || !report.console_streamed) {
                 print!("{}", String::from_utf8_lossy(&report.console));
             }
             flash = emu.machine.spi0.flash_bytes().to_vec();
@@ -1170,9 +1181,11 @@ impl<'a> Rig<'a> {
             trace_from,
             as_core1,
             smp,
+            quiet,
             ..
         } = *self.opts;
         let mut emu = Emulator::new(machine, start);
+        emu.stream_console = !quiet;
         // Faulting is the default: an instruction the decoder does not know
         // would otherwise be silently stepped over, and the firmware would
         // quietly not do whatever it was for. `--skip-unimpl` restores the old
@@ -1259,7 +1272,9 @@ fn print_report(opts: &BootOpts, booted: Booted) -> Result<ExitCode> {
     if verbose {
         print_network(&mut emu.machine);
     }
-    print_console(&report, verbose);
+    if !opts.quiet {
+        print_console(&report, verbose);
+    }
     for &(a, n) in &opts.dumps {
         print_dump(&mut emu.machine, a, n);
     }
