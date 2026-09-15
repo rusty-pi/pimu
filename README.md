@@ -62,7 +62,10 @@ Working:
   already listening), for reaching a
   server on the host such as `mkosi serve`; that runs on the host's clock, so it
   is not deterministic and CI stays on the built-in peer
-  ([#45](https://github.com/valtzu/rpi-virt-fw/issues/45)).
+  ([#45](https://github.com/valtzu/rpi-virt-fw/issues/45)). HTTP boot works
+  through it as is. TFTP boot needs static addresses, since passt's DHCP has no
+  PXE option 43, and a TFTP server on the host's port 69
+  ([recipe](https://github.com/valtzu/rpi-virt-fw/issues/45#issuecomment-5676281814)).
 - **Serial console input** — `--send-after <prompt> <text>` types into the
   PL011 deterministically, keyed to the transcript; `--stdin` makes the host
   terminal the console for an interactive session (Ctrl-A x quits).
