@@ -27,6 +27,198 @@ use crate::parse_u32;
 /// hub, so a SuperSpeed fixture goes on port 2 (`docs/usb-xhci.md` §5.2).
 const USB_ROOT_PORT: usize = 2;
 
+/// `boot --help` (#99). Every option `BootOpts::parse` takes is here, one to a
+/// line, bar the no-op `--arm`; a test holds the two to that.
+const HELP: &str = "\
+rpi-virt-fw boot — boot the machine from an EEPROM image, as a Pi 4 does, or
+run a VPU ELF
+
+USAGE:
+    rpi-virt-fw boot --eeprom <pieeprom.bin> [<options>]
+    rpi-virt-fw boot <file.elf> [<options>]
+
+    `boot <file> --eeprom` is the same as `boot --eeprom <file>`, and with no
+    command the options are `boot`'s: `rpi-virt-fw --eeprom <file> ...`.
+    `--config <file>` and `--option=value` work as for every command (see
+    `rpi-virt-fw --help`).
+
+    The run prints the serial console, what was asked for by name (`--dump`,
+    `--print-fdt`, `--mbox-property`, …) and one `result: ok|FAILED — <why>`
+    line; the exit status is 1 on failure. Besides the limits below, a run
+    ends at an instruction the decoder does not implement, and once the
+    firmware has been quiet for a minute of model time.
+
+MACHINE:
+    --eeprom <pieeprom.bin>
+              Put this image on the SPI flash and boot from it, through the
+              modelled boot ROM. Without it the file is a VPU ELF, loaded and
+              run from its entry point.
+    --stepping b0|c0
+              The BCM2711 silicon, C0 by default.
+    --board-rev <hex>
+              The OTP revision code; by default a board that stepping shipped
+              on.
+    --ram-mb <n>
+              The RAM behind the bus, in MiB: 2048 by default with --eeprom,
+              512 for an ELF.
+    --otp json:<file> | binary:<file>
+              The OTP fuses, kept across runs: read before the boot when
+              <file> exists, written back after the run when the firmware
+              programmed a row, created from the model's own fuses when it
+              does not exist. json: row -> value, one a line; binary: row n
+              at byte 4n, little-endian. A file with a real board's fuses
+              holds its secrets: keep it out of the repository.
+    --boot-rom <rom.bin>
+              Execute a real VPU maskROM dump from its reset vector,
+              0x60000000, instead of the modelled boot ROM stage.
+              Experimental. The dump stays a local file: never commit it.
+
+MEDIA AND NETWORK:
+    --sd <img>
+              An SD card with this image. Read on demand; writes stay in
+              memory, and the boot after a firmware reset starts from the file
+              again.
+    --usb <img>
+              A USB mass-storage stick with this image, in blue socket A (xHCI
+              root port 2, SuperSpeed). Read on demand; writes stay in memory
+              and outlive a firmware reset.
+    --usb-mb <n>
+              The stick is <n> MiB, with the image at its start, as on a Pi
+              whose first boot uses the rest.
+    --netboot <dir>
+              Plug the Ethernet cable into the built-in network peer: DHCP,
+              DNS, and <dir> over TFTP and HTTP.
+    --net passt[:<socket>]
+              Plug the Ethernet cable into the host's network instead of the
+              built-in peer, through passt: `passt` starts one (from PATH) on a
+              socket pair, `passt:<socket>` connects to one already listening
+              (`passt -f -s <socket>`), or to anything else speaking QEMU's
+              `-netdev stream` framing on that UNIX socket. Runs on the host's
+              clock, so not deterministic (#45).
+
+EEPROM IMAGE (edits made before the first boot, and again after every
+self-update, which brings back the image's own):
+    --boot-order <hex>
+              Add a BOOT_ORDER=<hex> line to bootconf.txt. Without one the
+              bootloader uses its built-in 0xf4: SD card, then restart, and
+              never USB.
+    --bootconf <KEY=VALUE>
+              Add any other line to bootconf.txt, e.g. HTTP_HOST=<host> for
+              HTTP boot. Repeatable; a later line wins over an earlier one with
+              the same key.
+    --skip-signed-boot
+              Set SIGNED_BOOT=0 in bootconf.txt: skip the bootloader's
+              SHA-256 + RSA-2048 verify of boot.img, about half a billion
+              interpreted instructions.
+    --eeprom-pubkey <pubkey.bin>
+              Put this RSA-2048 public key (n then e, 264 bytes) in the
+              pubkey.bin slot, as `rpi-eeprom-config --pubkey` does. Signed
+              images, an HTTP-booted boot.img among them, are verified against
+              it.
+
+RUNNING:
+    --max-wall <secs>
+              Stop after this much wall-clock time: 140 s by default, no limit
+              with --stdin.
+    --max-steps <n>
+              Stop after <n> instructions. No cap by default: this is for
+              pinning a run to an exact count (bisecting, probes).
+    --until <text>
+              End the run once the console prints <text> (e.g. the shell
+              prompt of a Linux boot), after the last --send-after went in.
+    --send-after <prompt> <text>
+              Type <text> into the serial console (PL011) once it prints
+              <prompt>. Repeatable; each prompt is looked for only in what the
+              console printed after the previous send. Both take \\n, \\r, \\t,
+              \\\\ and \\xHH escapes. Deterministic: keyed to the transcript.
+    --stdin   Interactive session: the host's stdin is the serial console's
+              input, and no wall-clock or silence limit ends the run. On a
+              terminal, keys go to the guest raw (Ctrl-C included); Ctrl-A x
+              quits, Ctrl-A Ctrl-A sends a Ctrl-A.
+    --skip-unimpl
+              Step over an instruction the decoder does not implement instead
+              of stopping the run: reconnaissance on firmware the decoder is
+              new to.
+
+OUTPUT:
+    -v, --verbose
+              Print the full run report as well — the EEPROM layout,
+              registers, the ARM cores, the property replies, the peripherals
+              that fell through to the stub, the device tree's `/chosen`.
+    --console-log <path>
+              Write the raw UART bytes of the run to <path>, with none of the
+              run report interleaved. This is what `boot-check` normalises into
+              the golden boot transcript.
+    --log [text:|jsonl:]<channel>[,<channel>...]
+              Say what these subsystems did, on stderr or to --log-file
+              <path>. `io` is what the machine read and wrote apart from the
+              console: SD card and USB stick block runs with the files they
+              belong to, OTP rows read and programmed, and what the network
+              peer did (DHCP, DNS, TFTP, HTTP). The rest are one device or
+              core each: arm-exc cmp dwc2 emmc expander irqen mbox otp pcie
+              pmic spi xhci, and in a `diag` build derail dma ff irqtbl sleep
+              swirq tick vec. Repeatable; `jsonl:` for one JSON object a line.
+              See docs/diagnostics.md.
+    --log-file <path>
+              Write the --log channels to <path> instead of stderr.
+    --dump <hex>:<len>
+              After the run, print <len> bytes of memory at <hex>, as the VPU
+              sees it. Repeatable.
+    --disasm <hex>:<count>
+              After the run, disassemble <count> VPU instructions at <hex>.
+              Repeatable.
+    --dump-fdt <path>
+              After the run, write the flattened device tree `arm_loader` handed
+              to the ARM to <path>. Diff two firmware versions with
+              `fdtdump`/`dtc` to catch a bump that changes what the firmware
+              publishes (rpi-mkosi#37).
+    --print-fdt
+              Print that whole device tree as source, every node and property,
+              not only the `/chosen` summary the `-v` run report gives.
+    --mbox-property <tag>[,<tag>...]
+              After the boot, post a property-interface request to the firmware
+              the way a booted Linux would (`/dev/vcio`), and print what the
+              still-running `start4.elf` answers. Tags are hex, e.g.
+              `0x00000001` (GET_FIRMWARE_REVISION) or `0x00030092`
+              (GET_CRYPTO_HMAC_SHA256). Repeatable, one request each. See
+              docs/diagnostics.md.
+    --dram-map
+              Report which DRAM pages are non-zero when the run ends, as
+              address runs: the RAM a snapshot of the machine would have to
+              carry (#50).
+    -h, --help
+              Print this help.
+
+VPU:
+    --entry <hex>
+              Start there instead of at the ELF's entry point, or at the one
+              the boot ROM stage hands on with --eeprom.
+    --patch <hex>=<hex>
+              Store a word at an address once the image is staged, before the
+              first instruction of every boot. Repeatable.
+    --exc-vbase <hex>
+              The exception vector base to start with, for an ELF that does
+              not set its own. start4 does.
+    --smp     Start core 1 at the entry too, for payloads that run both cores
+              from the start. A firmware boot needs none of this: start4 wakes
+              core 1 itself.
+    --as-core1
+              Run the payload as core 1: bit 16 of `version` reads 1.
+
+DIAGNOSTICS (a `diag` build only: cargo build --release --features diag; the
+RVF_* environment variables are in docs/diagnostics.md):
+    --trace   Record core 0's control transfers (branches and calls), up to
+              4000000, and print them after the run.
+    --trace-full
+              Every instruction instead, up to 200000.
+    --trace-from <hex>
+              Every instruction from when core 0 first reaches <hex>, up to
+              200000.
+    --trace-mmio
+              Log every peripheral access with the PC that made it
+              (RVF_TRACE_MMIO=<lo>-<hi> for one address range).
+";
+
 /// `--net`: what on the host the Ethernet cable plugs into (#45).
 enum HostNet {
     /// `--net passt`: a passt of our own, on a socket pair.
@@ -93,7 +285,8 @@ struct BootOpts {
 }
 
 impl BootOpts {
-    fn parse(args: &[String]) -> Result<Self> {
+    /// The options, or `None` for `-h` / `--help`.
+    fn parse(args: &[String]) -> Result<Option<Self>> {
         let mut path: Option<PathBuf> = None;
         let mut entry: Option<u32> = None;
         let mut ram_mb: Option<u32> = None;
@@ -316,18 +509,19 @@ impl BootOpts {
                     let (a, v) = spec.split_once('=').context("--patch: expected addr=val")?;
                     patches.push((parse_u32(a)?, parse_u32(v)?));
                 }
+                "-h" | "--help" => return Ok(None),
                 s if !s.starts_with('-') => path = Some(PathBuf::from(s)),
-                s => bail!("unexpected argument '{s}'"),
+                s => bail!("unexpected argument '{s}' (try boot --help)"),
             }
         }
-        let path = path.context("boot: missing <file>")?;
+        let path = path.context("boot: missing <file> (try boot --help)")?;
         if netboot_root.is_some() && host_net.is_some() {
             bail!("--netboot and --net both plug in the Ethernet cable; give one");
         }
         if log.is_empty() && log_file.is_some() {
             bail!("--log-file needs --log <channel>[,<channel>...]");
         }
-        Ok(Self {
+        Ok(Some(Self {
             path,
             entry,
             ram_mb,
@@ -369,7 +563,7 @@ impl BootOpts {
             log,
             log_file,
             otp,
-        })
+        }))
     }
 }
 
@@ -389,7 +583,10 @@ struct Booted {
 }
 
 pub fn cmd_boot(args: &[String]) -> Result<ExitCode> {
-    let opts = BootOpts::parse(args)?;
+    let Some(opts) = BootOpts::parse(args)? else {
+        print!("{HELP}");
+        return Ok(ExitCode::SUCCESS);
+    };
     rpi_virt_fw::log::warn_replaced_env();
     let booted = run_boot(&opts)?;
     print_report(&opts, booted)
@@ -1782,4 +1979,76 @@ fn parse_addr_range(s: &str) -> Option<(u32, u32)> {
     let p = |t: &str| u32::from_str_radix(t.trim().trim_start_matches("0x"), 16).ok();
     let (lo, hi) = (p(lo)?, p(hi)?);
     (lo < hi).then_some((lo, hi))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::*;
+
+    fn args(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn help_wherever_an_option_can_go() {
+        assert!(BootOpts::parse(&args(&["--help"])).unwrap().is_none());
+        assert!(BootOpts::parse(&args(&["--eeprom", "x.bin", "-h"]))
+            .unwrap()
+            .is_none());
+        // A value is not an option.
+        assert!(BootOpts::parse(&args(&["x.elf", "--until", "--help"]))
+            .unwrap()
+            .is_some());
+    }
+
+    /// The options `boot --help` lists: the lines that start with one, such as
+    /// `    -v, --verbose` or `    --stdin   Interactive session: ...`.
+    fn documented() -> BTreeSet<&'static str> {
+        HELP.lines()
+            .filter(|l| l.starts_with("    -"))
+            .flat_map(|l| l.trim_start().split("  ").next().unwrap_or("").split(", "))
+            .filter_map(|o| o.split(' ').next())
+            .collect()
+    }
+
+    /// The options `BootOpts::parse` matches on, read out of its source: the
+    /// string literals there that are an option name and nothing else. (A
+    /// double quote in a comment inside `parse` would throw this off.)
+    fn parsed() -> BTreeSet<&'static str> {
+        let src = include_str!("boot.rs");
+        let start = src.find("fn parse(").unwrap();
+        let end = start + src[start..].find("let path = path.context").unwrap();
+        src[start..end]
+            .split('"')
+            .skip(1)
+            .step_by(2)
+            .filter(|s| {
+                s.len() > 1
+                    && s.starts_with('-')
+                    && s.bytes()
+                        .all(|b| b == b'-' || b.is_ascii_lowercase() || b.is_ascii_digit())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn help_lists_every_option_the_parser_takes() {
+        // A no-op since #52, kept for old command lines.
+        let hidden = ["--arm"];
+        let (documented, parsed) = (documented(), parsed());
+        for o in &parsed {
+            assert!(
+                documented.contains(o) || hidden.contains(o),
+                "{o} is missing from boot --help"
+            );
+        }
+        for o in &documented {
+            assert!(
+                parsed.contains(o),
+                "boot --help lists {o}, which boot does not take"
+            );
+        }
+    }
 }
