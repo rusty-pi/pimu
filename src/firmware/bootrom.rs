@@ -82,13 +82,11 @@ use crate::spec::otp::{
     STATUS as OTP_STATUS, STATUS_DONE_MASK as OTP_DONE,
 };
 
-/// Length of the HMAC-SHA1 signature the ROM appends and checks.
+/// Length of the HMAC-SHA1 signature the ROM appends and checks: the last
+/// field of the signed-image footer (`length:u32`, `keyindex:u32`,
+/// `rsa[256]`, `hmac_sha1[20]`). Only the HMAC matters to the old-style check
+/// the ROM enforces; the RSA block is verified only under secure boot.
 pub const HMAC_LEN: usize = 20;
-
-/// The full signed-image footer, for reference: `length:u32`, `keyindex:u32`,
-/// `rsa[256]`, `hmac_sha1[20]`. Only the trailing HMAC matters to the old-style
-/// check the ROM enforces; the RSA block is verified only under secure boot.
-pub const SIG_FOOTER_LEN: usize = 4 + 4 + 256 + HMAC_LEN;
 
 /// The config/OTP block base (`0x7E20_F000`, `specs/otp.toml`), where the ROM
 /// reads the board-identity fuses that form the OTP half of the HMAC key.

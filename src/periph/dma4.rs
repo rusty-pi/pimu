@@ -54,23 +54,14 @@ pub const COVERAGE: Coverage = Coverage {
 /// control block is done.
 pub const TI_INTEN: u32 = 1 << 0;
 
-/// One decoded control block, ready for [`Machine`](crate::machine::Machine) to
-/// execute.
-#[derive(Debug, Clone, Copy)]
-pub struct Dma4Cb {
-    pub src: u32,
-    pub dest: u32,
-    pub len: u32,
-    pub next: u32,
-}
-
 #[derive(Default)]
 pub struct Dma4 {
     cs: u32,
     cb: u32,
     debug: u32,
-    /// Set when a register write starts a chain; [`Machine`] clears it by
-    /// calling [`Dma4::take_start`].
+    /// Set when a register write starts a chain;
+    /// [`Machine`](crate::machine::Machine) clears it by calling
+    /// [`Dma4::take_start`].
     start_pending: bool,
 }
 
@@ -84,8 +75,9 @@ impl Dma4 {
         self.cb << 5
     }
 
-    /// If a start was just requested, consume it. [`Machine`] then walks the CB
-    /// chain and calls [`Dma4::finish`].
+    /// If a start was just requested, consume it.
+    /// [`Machine`](crate::machine::Machine) then walks the CB chain and calls
+    /// [`Dma4::finish`].
     pub fn take_start(&mut self) -> bool {
         std::mem::take(&mut self.start_pending)
     }

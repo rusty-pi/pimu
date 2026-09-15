@@ -53,8 +53,7 @@ pub const VECTOR_SYNC: u64 = 0x000;
 pub const VECTOR_IRQ: u64 = 0x080;
 pub const VECTOR_FIQ: u64 = 0x100;
 
-/// `PSTATE.{D,A,I,F}`.
-pub const PSTATE_DAIF: u64 = 0xF << 6;
+/// `PSTATE.I` and `PSTATE.F`, the IRQ and FIQ masks.
 pub const PSTATE_I: u64 = 1 << 7;
 pub const PSTATE_F: u64 = 1 << 6;
 
