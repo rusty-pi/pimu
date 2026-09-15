@@ -2,7 +2,7 @@
 //!
 //! `testdata/boot/firmware-boot.toml` describes a run that takes minutes and
 //! needs firmware blobs that are never committed, so `cargo test` cannot boot
-//! it — `scripts/boot-check.sh` does that, and CI runs it in its own job. What
+//! it — `rpi-virt-fw boot-check` does that, and CI runs it in its own job. What
 //! is testable here is everything around the run, and it is the part that has
 //! silently rotted before: that the scenario still parses, that every milestone
 //! carries the reason it exists, and — the point of the whole exercise — that a
@@ -333,7 +333,7 @@ fn every_boot_scenario_loads_and_plans_its_media() {
 
 /// A fresh checkout or worktree has none of the boot media. `boot-check
 /// --plan` refuses then, naming each missing file and the command that makes
-/// it; before, `scripts/boot-check.sh` booted without a card and then diffed
+/// it; before, the boot check booted without a card and then diffed
 /// whatever console an earlier run had left behind.
 #[test]
 fn missing_boot_media_are_named_with_the_command_that_makes_them() {

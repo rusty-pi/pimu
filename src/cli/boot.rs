@@ -1728,7 +1728,7 @@ fn print_arm_prof(prof: &std::collections::HashMap<(usize, u32, u64), u64>) {
 /// firmware's own value still matches.
 ///
 /// This is the one thing in the report that is a *prediction* rather than an
-/// observation. `scripts/boot-check.sh` pins the published string, which catches
+/// observation. `boot-check` pins the published string, which catches
 /// a firmware bump that moves the root-LUKS passphrase — but only after the fact
 /// and only for this board's fuses. The derivation is documented in
 /// `src/identity.rs`; recomputing it here turns "the value changed" into "the
