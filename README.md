@@ -150,26 +150,27 @@ limit); with `CI` set the build gets every CPU.
 
 ### What the machine read and wrote
 
-`--io-log <path>` (`-` for stderr) writes what crossed the peripherals, apart
-from the console: block runs on the SD card and the USB stick with the files
-they belong to, the OTP rows the firmware read and programmed, and what the
-network peer did ([#35](https://github.com/valtzu/rpi-virt-fw/issues/35)). The
-file names come
+`--log io` writes what crossed the peripherals to stderr (or to `--log-file
+<path>`), apart from the console: block runs on the SD card and the USB stick
+with the files they belong to, the OTP rows the firmware read and programmed,
+and what the network peer did
+([#35](https://github.com/valtzu/rpi-virt-fw/issues/35)). The file names come
 from the bench reading the image's partition table and FAT itself, so the
 firmware stays a black box:
 
 ```text
-sd   read  lba 0x0+2  (partition table)
-sd   read  lba 0x800+2  p1:(boot sector)
-sd   read  lba 0x1014+5  p1:/config.txt, p1:/start4.elf
-sd   read  lba 0x101c+4489  p1:/start4.elf, p1:/fixup4.dat
-otp  read  row 28  = 0x1aa2bb31
-sd   read  lba 0x72b4+8  p1:/overlays/vc4-kms-v3d-pi4.dtbo
-sd   read  lba 0x22ac+20459  p1:/kernel8.img
-net  dhcp: DISCOVER from 02:00:5e:00:53:01 (PXEClient) -> OFFER 192.0.2.100
+   0.000944 io: otp  read  row 28  = 0x1aa2bb31
+   6.270753 io: sd   read  lba 0x0+2  (partition table)
+   6.271470 io: sd   read  lba 0x800+2  p1:(boot sector)
+   6.278862 io: sd   read  lba 0x1014+5  p1:/config.txt, p1:/start4.elf
+   6.291327 io: sd   read  lba 0x101c+4489  p1:/start4.elf, p1:/fixup4.dat
+   6.393364 io: sd   read  lba 0x21a8+9  p1:/fixup4.dat, p1:/bcm2711-rpi-4-b.dtb
 ```
 
-A row the firmware programs shows as `otp  write row <n> = <new>  (was <old>)`.
+Each line starts with the model time in seconds, the way the firmware and
+Linux stamp their own logs. A row the firmware programs shows as
+`io: otp  write row <n> = <new>  (was <old>)`, and what the network peer did
+as `io: net  dhcp: ...`.
 Programming works the way start4 drives the OTP block, key sequence first, and
 a fuse only ever goes from 0 to 1
 ([#92](https://github.com/valtzu/rpi-virt-fw/issues/92)). To watch it, program two words of customer OTP (rows 36 and 37) the way
@@ -178,7 +179,7 @@ halt-kernel card (`KERNEL=halt scripts/make-sd.sh firmware/sd-halt.img`):
 
 ```bash
 cargo run --release -- boot --eeprom firmware/pieeprom.bin \
-  --sd firmware/sd-halt.img --io-log - \
+  --sd firmware/sd-halt.img --log io \
   --mbox-property 0x00038021:16=0.2.0x11111111.0x22222222 \
   --mbox-property 0x00030021:16=0.2
 ```
@@ -193,7 +194,12 @@ fused differently. `json:` is an object of row to value, one a line; `binary:`
 has row n at byte 4n, little-endian. A file made from a real board's fuses
 holds that board's secrets (see `CLAUDE.md`): keep it out of the repository.
 
-`--io-log-format jsonl` writes one JSON object per line instead, for tools.
+`io` is one of the `--log` channels
+([#95](https://github.com/valtzu/rpi-virt-fw/issues/95)); the others are one
+device or core each, e.g. `--log io,pcie,xhci` for a USB boot, and
+`docs/diagnostics.md` lists them. They share one output, so the lines come out
+in the order things happened. `--log jsonl:io` writes one JSON object per line
+instead, for tools.
 
 ### Getting the patched device tree out
 
@@ -333,7 +339,7 @@ src/
   firmware/     boot ROM stage; ELF32 loader; EEPROM image parse; dt-blob; Payload
   fdt.rs        device tree reader/patcher
   identity.rs   the rpi-machine-id derivation
-  iolog/        --io-log; fatmap.rs = which file a disk block belongs to
+  log/          --log channels; fatmap.rs = which file a disk block belongs to
   stdio.rs      host terminal as the serial console (--stdin)
   diag.rs       RVF_* diagnostics
   emulator.rs   Emulator = VPU cores + ARM side + Machine, run loop

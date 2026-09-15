@@ -612,7 +612,7 @@ The read path, traced end to end:
 
 `SRC_INFO` and `DEST_INFO` carry address bits `[39:32]` in their low byte
 alongside the burst and increment fields, which is the whole point of the
-40-bit channel. `RVF_DBG_DMA=1` shows the resulting control block verbatim:
+40-bit channel. `--log dma` shows the resulting control block verbatim:
 
 ```text
 [dma] cb=0x309d80 ti=0x0 src=0x2000004 srci=0x1006 dest=0x31b000 len=0x4 next=0x0
@@ -797,7 +797,7 @@ arithmetic implies: the bootloader's window sits at bus 0, 8 GiB wide, so the
 bus addresses it hands the VL805 are physical addresses. start4 never
 reprograms it in the model (the SD and USB boots included); Linux moves it to
 bus `0x4_0000_0000`, 1 GiB, and `src/periph/pcie.rs` translates the
-endpoint's DMA through whichever window is programmed (`RVF_DBG_PCIE` shows
+endpoint's DMA through whichever window is programmed (`--log pcie` shows
 both).
 
 **Verified by:** `scripts/boot-check.sh` passing unchanged, and the transcript

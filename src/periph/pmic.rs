@@ -108,6 +108,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::log::{Channel, Log};
 use crate::soc::board::{TYPE_CM4, TYPE_PI400, TYPE_PI4B};
 use crate::soc::Board;
 use crate::spec::{pmic_1d, pmic_core, pmic_rails, Coverage};
@@ -286,6 +287,8 @@ pub struct Pmic {
     parts: Vec<PmicRegs>,
     /// Index into `parts` of the transfer in progress.
     active: Option<usize>,
+    /// Where [`Channel::Pmic`] goes: every register access.
+    pub log: Log,
 }
 
 impl Default for Pmic {
@@ -310,6 +313,7 @@ impl Pmic {
         Pmic {
             parts,
             active: None,
+            log: Log::default(),
         }
     }
 
@@ -355,9 +359,14 @@ impl Pmic {
             part.pending_ptr = false;
             return;
         }
-        if dbg() {
-            eprintln!("[pmic {:02x}] W {:02x} = {:02x}", part.addr, part.ptr, b);
-        }
+        crate::log!(
+            self.log,
+            Channel::Pmic,
+            "{:02x} W {:02x} = {:02x}",
+            part.addr,
+            part.ptr,
+            b
+        );
         part.regs.insert(part.ptr, b);
         // Writing a rail setpoint starts a voltage ramp on real silicon; the
         // firmware then polls the part's "settled" bit until it sets. There is
@@ -373,9 +382,14 @@ impl Pmic {
         let Some(i) = self.active else { return 0 };
         let part = &mut self.parts[i];
         let v = part.regs.get(&part.ptr).copied().unwrap_or(0);
-        if dbg() {
-            eprintln!("[pmic {:02x}] R {:02x} -> {:02x}", part.addr, part.ptr, v);
-        }
+        crate::log!(
+            self.log,
+            Channel::Pmic,
+            "{:02x} R {:02x} -> {:02x}",
+            part.addr,
+            part.ptr,
+            v
+        );
         part.ptr = part.ptr.wrapping_add(1);
         v
     }
@@ -397,12 +411,6 @@ impl crate::periph::bsc::I2cSlave for Pmic {
     fn read_byte(&mut self) -> u8 {
         Pmic::read_byte(self)
     }
-}
-
-/// `RVF_DBG_PMIC=1` logs every register access, in the style of the other
-/// `RVF_DBG_*` probes. Off by default.
-fn dbg() -> bool {
-    std::env::var_os("RVF_DBG_PMIC").is_some()
 }
 
 #[cfg(test)]

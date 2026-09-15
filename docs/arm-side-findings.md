@@ -82,7 +82,7 @@ modelled.
   was dispatched as a mailbox interrupt. The model presented a device's
   source at CoreCtl when it was queued, not when it was vectored, so a source
   queued during the dispatcher's entry overwrote the one being taken.
-  `RVF_DBG_MBOX` names each request's tag, which is how it was found.
+  `--log mbox` names each request's tag, which is how it was found.
 - A level SPI held high does not show up as a storm of interrupts in the run
   report. Linux's `gic_handle_irq` reads `GICC_IAR` in a loop, and in split EOI
   mode each round is IAR, EOIR, the handlers, DIR, and IAR again returns the
@@ -175,7 +175,7 @@ the armstub, so the ARM runs UEFI before any kernel. What it needed:
 1. Its xHCI driver reads the VL805's BAR through the PCIe outbound window at
    `0x6_0000_0000`, which the ARM bus did not route. The synchronous external
    abort left UEFI in its exception handler until start4's watchdog reset the
-   board (`2f548e1`, found with `RVF_DBG_ARM_EXC`).
+   board (`2f548e1`, found with `--log arm-exc`).
 2. `wfe` was a no-op, so TF-A's holding pen kept cores 1-3 spinning for the
    whole boot (`1c58887`).
 3. `DwUsbHostDxe`, edk2's driver for the DWC2 controller behind the USB-C port,
@@ -183,7 +183,7 @@ the armstub, so the ARM runs UEFI before any kernel. What it needed:
    soon after the banner. start4's handler asks the block at `0x7E80_8000` for
    power, waits for its acknowledge, then resets the DWC2 core, and none of
    those waits has a timeout. Both blocks were on the catch-all stub, so the
-   handler never returned: `RVF_DBG_MBOX` showed the VPU read the request, never
+   handler never returned: `--log mbox` showed the VPU read the request, never
    answer it and never read another. UEFI then gave each later property
    request a second and looked hung after its banner (#49, `src/periph/hd.rs`).
 4. With power on, the driver brings the controller up as a host and halts all

@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use crate::bus::{Bus, Width};
+use crate::log::Channel;
 use crate::machine::Machine;
 use crate::vpu::{Stop, UnimplPolicy, Vpu};
 
@@ -172,6 +173,7 @@ impl Emulator {
     pub fn new(machine: Machine, entry: u32) -> Emulator {
         let mut cpu = Vpu::new(entry);
         cpu.version_value = machine.board().stepping.vpu_version();
+        cpu.log = machine.log.clone();
         Emulator {
             cpu,
             cpu1: None,
@@ -201,6 +203,7 @@ impl Emulator {
         c1.trace_cf_only = self.cpu.trace_cf_only;
         c1.trace_cap = self.cpu.trace_cap;
         c1.trace_from = self.cpu.trace_from;
+        c1.log = self.cpu.log.clone();
         self.cpu1 = Some(c1);
     }
 
@@ -264,22 +267,24 @@ impl Emulator {
             }
         }
 
-        // `RVF_DBG_TCB=<hex>[,<hex>...]`: at exit, decode each ThreadX thread's
+        // `RVF_TCB=<hex>[,<hex>...]`: at exit, decode each ThreadX thread's
         // saved context and report the pc it is parked at. `[tcb+8]` is the
         // saved stack pointer and the word at it is the frame discriminator
         // (`_tx_thread_schedule`, `0x3EC4002C`): 1 = an interrupt frame
         // `[1][r16-r23][r0-r15][lr][SR][PC]`, 0 = a solicited frame
         // `[0][r16-r23][r6-r15][lr]` whose `lr` is the resume address. That pc
         // is the answer to "what is this thread blocked on".
-        // `RVF_DBG_IRQTBL=1`: dump the per-source handler table at `gp+58004`
-        // at exit. The generic dispatcher (`0x3EC3E9BC`) indexes it with the
+        // `--log irqtbl`: dump the per-source handler table at `gp+58004` at
+        // exit. The generic dispatcher (`0x3EC3E9BC`) indexes it with the
         // source number to find the ISR, so a zero entry means "this source is
         // never handled" even if `enable_irq_source` turned it on.
-        if crate::diag::ON && diag.dbg_irqtbl {
+        if crate::diag::ON && self.machine.log.on(Channel::IrqTbl) {
             let tbl = self.cpu.regs.get(24).wrapping_add(58004);
             let vb = self.cpu.exc_vbase;
-            eprintln!(
-                "[irqtbl] gp={:#x} table={tbl:#x} vbase={vb:#x}",
+            crate::log!(
+                self.machine.log,
+                Channel::IrqTbl,
+                "gp={:#x} table={tbl:#x} vbase={vb:#x}",
                 self.cpu.regs.get(24)
             );
             // Two dispatch routes exist. The vector table's [64..127] entries are
@@ -303,16 +308,17 @@ impl Emulator {
                     } else {
                         ""
                     };
-                    eprintln!("[irqtbl]   src {src} handler={h:#x} vector={v:#x}{direct}");
+                    crate::log!(
+                        self.machine.log,
+                        Channel::IrqTbl,
+                        "  src {src} handler={h:#x} vector={v:#x}{direct}"
+                    );
                 }
             }
         }
 
-        if let (true, Ok(list)) = (crate::diag::ON, std::env::var("RVF_DBG_TCB")) {
-            for t in list.split(',') {
-                let Ok(tcb) = u32::from_str_radix(t.trim().trim_start_matches("0x"), 16) else {
-                    continue;
-                };
+        if crate::diag::ON {
+            for &tcb in &diag.tcbs {
                 let mut ld = |a: u32| self.machine.load(a, Width::Word).unwrap_or(0xdead_dead);
                 let sp = ld(tcb.wrapping_add(8));
                 let disc = ld(sp);
@@ -536,9 +542,11 @@ impl Emulator {
             // (source 78 on core 0, 79 on core 1). Nothing modelled these, so
             // every software-posted interrupt was silently dropped.
             while let Some((core, src)) = self.machine.corectl.take_sw_raised() {
-                if crate::diag::ON && st.diag.dbg_swirq {
-                    eprintln!(
-                        "[sw-irq] core {core} src {src} pc={:#x} retired={}",
+                if crate::diag::ON {
+                    crate::log!(
+                        self.machine.log,
+                        Channel::SwIrq,
+                        "core {core} src {src} pc={:#x} retired={}",
                         self.cpu.pc(),
                         self.cpu.retired
                     );
@@ -560,9 +568,11 @@ impl Emulator {
             // vectoring path as the tick, but is not gated on a compare match.
             if self.cpu.irq_enabled() && self.cpu.exc_vbase != 0 {
                 if let Some(src) = self.machine.take_pending_irq() {
-                    if crate::diag::ON && st.diag.dbg_tick {
-                        eprintln!(
-                            "[irq] src={src} pc={:#x} retired={}",
+                    if crate::diag::ON {
+                        crate::log!(
+                            self.machine.log,
+                            Channel::Tick,
+                            "irq src={src} pc={:#x} retired={}",
                             self.cpu.pc(),
                             self.cpu.retired
                         );
@@ -572,15 +582,17 @@ impl Emulator {
             }
             let tick_due = self.machine.timer_irq_due();
             if crate::diag::ON
-                && st.diag.dbg_tick
+                && self.machine.log.on(Channel::Tick)
                 && tick_due
                 && self.cpu.exc_vbase != 0
                 && !self.cpu.irq_enabled()
             {
                 st.tick_skips += 1;
                 if st.tick_skips <= 20 || st.tick_skips.is_multiple_of(100_000) {
-                    eprintln!(
-                        "[tick-skip #{}] in_exc={} irq_en={} pc={:#x} retired={}",
+                    crate::log!(
+                        self.machine.log,
+                        Channel::Tick,
+                        "skip #{} in_exc={} irq_en={} pc={:#x} retired={}",
                         st.tick_skips,
                         self.cpu.in_exception,
                         self.cpu.irq_enabled(),
@@ -593,13 +605,15 @@ impl Emulator {
                 if let Some(slot) = self.machine.timer_tick_slot() {
                     // Deliver now — consume the latched flag.
                     self.machine.take_tick_pending();
-                    if crate::diag::ON && st.diag.dbg_tick {
+                    if crate::diag::ON && self.machine.log.on(Channel::Tick) {
                         st.tick_deliveries += 1;
                         if st.tick_deliveries <= 30 || st.tick_deliveries.is_multiple_of(500) {
                             let vb = self.cpu.exc_vbase;
                             let h = self.machine.load(vb.wrapping_add(slot * 4), Width::Word);
-                            eprintln!(
-                                "[tick] #{} slot={slot} vbase={vb:#x} handler={h:x?} resume={:#x} retired={}",
+                            crate::log!(
+                                self.machine.log,
+                                Channel::Tick,
+                                "#{} slot={slot} vbase={vb:#x} handler={h:x?} resume={:#x} retired={}",
                                 st.tick_deliveries,
                                 self.cpu.pc(),
                                 self.cpu.retired,
@@ -861,9 +875,11 @@ impl Emulator {
                 if ff {
                     self.machine.systimer.jump(200_000);
                 }
-                if crate::diag::ON && st.diag.dbg_ff {
-                    eprintln!(
-                        "[ff] win close: clo_delta={clo_delta} w=[{:#x}..{:#x}] out={} exc={} ff={ff} @{}",
+                if crate::diag::ON {
+                    crate::log!(
+                        self.machine.log,
+                        Channel::Ff,
+                        "win close: clo_delta={clo_delta} w=[{:#x}..{:#x}] out={} exc={} ff={ff} @{}",
                         st.w_lo, st.w_hi, st.w_output, self.cpu.in_exception, self.cpu.retired
                     );
                 }

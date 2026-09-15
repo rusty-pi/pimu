@@ -12,7 +12,7 @@ use anyhow::{bail, Context, Result};
 use rpi_virt_fw::emulator::{Emulator, RunLimits, RunReport};
 use rpi_virt_fw::firmware::Payload;
 use rpi_virt_fw::harness;
-use rpi_virt_fw::iolog::IoLogRef;
+use rpi_virt_fw::log::{Log, Spec};
 use rpi_virt_fw::machine::Machine;
 use rpi_virt_fw::soc::{Board, Stepping};
 use rpi_virt_fw::vpu::decode::decode;
@@ -84,8 +84,10 @@ struct BootOpts {
     /// Without `-v` the run prints the serial console, the outcome and whatever
     /// was asked for by name (#55); the full run report is for investigating.
     verbose: bool,
-    io_log: Option<String>,
-    io_log_format: rpi_virt_fw::iolog::Format,
+    /// `--log`: the channels to log, and how (#95).
+    log: Spec,
+    /// `--log-file`: where they go, stderr without it.
+    log_file: Option<String>,
     /// `--otp <format>:<file>`: the fuse array across runs (#93).
     otp: Option<OtpFile>,
 }
@@ -130,8 +132,8 @@ impl BootOpts {
         let mut sends: Vec<(String, Vec<u8>)> = Vec::new();
         let mut stdin = false;
         let mut verbose = false;
-        let mut io_log: Option<String> = None;
-        let mut io_log_format = rpi_virt_fw::iolog::Format::Text;
+        let mut log = Spec::default();
+        let mut log_file: Option<String> = None;
         let mut otp: Option<OtpFile> = None;
         let mut it = args.iter().peekable();
         while let Some(a) = it.next() {
@@ -189,13 +191,15 @@ impl BootOpts {
                 }
                 "--stdin" => stdin = true,
                 "-v" | "--verbose" => verbose = true,
-                "--io-log" => io_log = Some(it.next().context("--io-log needs a path")?.clone()),
-                "--io-log-format" => {
-                    io_log_format = it
+                "--log" => {
+                    let spec = it
                         .next()
-                        .context("--io-log-format needs text or jsonl")?
-                        .parse()
+                        .context("--log needs [text:|jsonl:]<channel>[,<channel>...]")?;
+                    log.add(Spec::parse(spec).map_err(anyhow::Error::msg)?)
                         .map_err(anyhow::Error::msg)?
+                }
+                "--log-file" => {
+                    log_file = Some(it.next().context("--log-file needs a path")?.clone())
                 }
                 "--otp" => {
                     otp = Some(
@@ -320,6 +324,9 @@ impl BootOpts {
         if netboot_root.is_some() && host_net.is_some() {
             bail!("--netboot and --net both plug in the Ethernet cable; give one");
         }
+        if log.is_empty() && log_file.is_some() {
+            bail!("--log-file needs --log <channel>[,<channel>...]");
+        }
         Ok(Self {
             path,
             entry,
@@ -359,8 +366,8 @@ impl BootOpts {
             sends,
             stdin,
             verbose,
-            io_log,
-            io_log_format,
+            log,
+            log_file,
             otp,
         })
     }
@@ -383,6 +390,7 @@ struct Booted {
 
 pub fn cmd_boot(args: &[String]) -> Result<ExitCode> {
     let opts = BootOpts::parse(args)?;
+    rpi_virt_fw::log::warn_replaced_env();
     let booted = run_boot(&opts)?;
     print_report(&opts, booted)
 }
@@ -393,13 +401,13 @@ pub fn cmd_boot(args: &[String]) -> Result<ExitCode> {
 fn run_boot(opts: &BootOpts) -> Result<Booted> {
     let image =
         std::fs::read(&opts.path).with_context(|| format!("reading {}", opts.path.display()))?;
-    let io = open_io_log(opts)?;
-    let usb_disk = open_usb_disk(opts, io.as_ref())?;
+    let log = open_log(opts)?;
+    let usb_disk = open_usb_disk(opts, &log)?;
     if let Some(sd_path) = opts.sd_image.as_ref().filter(|_| opts.verbose) {
         println!(
             "sd image   {} ({} blocks)",
             sd_path.display(),
-            open_sd(sd_path, io.as_ref())?.blocks()
+            open_sd(sd_path, &log)?.blocks()
         );
     }
     let edits = FlashEdits::new(opts)?;
@@ -416,7 +424,7 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
     // Made once, outside the reboot loop: it owns the stdin reader and the
     // terminal's raw mode.
     let mut host_input = opts.stdin.then(rpi_virt_fw::stdio::HostInput::stdin);
-    let rig = Rig::new(opts, image, io, usb_disk)?;
+    let rig = Rig::new(opts, image, log, usb_disk)?;
 
     let mut reboots = 0u32;
     // A reset does not blank OTP: each boot's machine starts with the rows
@@ -466,9 +474,7 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
     };
     // The terminal back to cooked mode before the report.
     drop(host_input);
-    if let Some(io) = &rig.io {
-        io.borrow_mut().flush_run();
-    }
+    rig.log.flush();
     Ok(Booted {
         report,
         emu,
@@ -528,21 +534,17 @@ fn save_otp(file: &OtpFile, before: &BTreeMap<u32, u32>, now: &BTreeMap<u32, u32
     Ok(())
 }
 
-/// `--io-log <path>` (`-` for stderr): what the machine read and wrote, seen
-/// from the peripherals (#35, `src/iolog/`). Made once, so it spans the
-/// resets of an EEPROM self-update.
-fn open_io_log(opts: &BootOpts) -> Result<Option<IoLogRef>> {
-    Ok(match &opts.io_log {
-        Some(p) => {
-            let out: Box<dyn std::io::Write> = if p == "-" {
-                Box::new(std::io::stderr())
-            } else {
-                Box::new(std::fs::File::create(p).with_context(|| format!("creating {p}"))?)
-            };
-            Some(rpi_virt_fw::iolog::IoLog::new(out, opts.io_log_format).shared())
-        }
-        None => None,
-    })
+/// `--log` and `--log-file` (#95, `src/log/`): the channels, to stderr or a
+/// file. Made once, so it spans the resets of an EEPROM self-update.
+fn open_log(opts: &BootOpts) -> Result<Log> {
+    if opts.log.is_empty() {
+        return Ok(Log::default());
+    }
+    let out: Box<dyn std::io::Write> = match opts.log_file.as_deref() {
+        None | Some("-") => Box::new(std::io::stderr()),
+        Some(p) => Box::new(std::fs::File::create(p).with_context(|| format!("creating {p}"))?),
+    };
+    Ok(Log::new(opts.log, out))
 }
 
 /// The USB stick, shared: what the guest writes to it outlives the resets.
@@ -556,14 +558,12 @@ type SharedUsbDisk = Rc<RefCell<rpi_virt_fw::periph::usb::Disk>>;
 /// `--usb-mb <n>`: the stick is that big, with the image at its start, as
 /// on a Pi whose first boot uses the rest. Read on demand; what the guest
 /// writes stays in memory and outlives the resets.
-fn open_usb_disk(opts: &BootOpts, io: Option<&IoLogRef>) -> Result<Option<SharedUsbDisk>> {
+fn open_usb_disk(opts: &BootOpts, log: &Log) -> Result<Option<SharedUsbDisk>> {
     Ok(match &opts.usb_image {
         Some(p) => {
-            let mut disk = rpi_virt_fw::periph::usb::Disk::open(p, opts.usb_mb.unwrap_or(0) << 20)
-                .with_context(|| format!("opening USB image {}", p.display()))?;
-            if let Some(io) = io {
-                disk = disk.with_io(io.clone(), "usb");
-            }
+            let disk = rpi_virt_fw::periph::usb::Disk::open(p, opts.usb_mb.unwrap_or(0) << 20)
+                .with_context(|| format!("opening USB image {}", p.display()))?
+                .with_log(log.clone(), "usb");
             if opts.verbose {
                 println!("usb image  {} ({} blocks)", p.display(), disk.blocks());
             }
@@ -575,12 +575,9 @@ fn open_usb_disk(opts: &BootOpts, io: Option<&IoLogRef>) -> Result<Option<Shared
 
 /// `--sd <img>`: the card reads the image file on demand (#54), and each boot
 /// after a reset starts from the file again, writes forgotten.
-fn open_sd(p: &Path, io: Option<&IoLogRef>) -> Result<rpi_virt_fw::periph::disk::Disk> {
+fn open_sd(p: &Path, log: &Log) -> Result<rpi_virt_fw::periph::disk::Disk> {
     rpi_virt_fw::periph::disk::Disk::open(p, 0)
-        .map(|d| match io {
-            Some(io) => d.with_io(io.clone(), "sd"),
-            None => d,
-        })
+        .map(|d| d.with_log(log.clone(), "sd"))
         .with_context(|| format!("opening SD image {}", p.display()))
 }
 
@@ -758,7 +755,7 @@ struct Rig<'a> {
     /// The file `boot` was given: an EEPROM image or a VPU ELF.
     image: Vec<u8>,
     ram_mb: u32,
-    io: Option<IoLogRef>,
+    log: Log,
     usb_disk: Option<SharedUsbDisk>,
     bootrom: rpi_virt_fw::firmware::bootrom::BootRom,
     boot_rom_image: Option<Vec<u8>>,
@@ -769,7 +766,7 @@ impl<'a> Rig<'a> {
     fn new(
         opts: &'a BootOpts,
         image: Vec<u8>,
-        io: Option<IoLogRef>,
+        log: Log,
         usb_disk: Option<SharedUsbDisk>,
     ) -> Result<Self> {
         let BootOpts {
@@ -835,7 +832,7 @@ impl<'a> Rig<'a> {
             opts,
             image,
             ram_mb,
-            io,
+            log,
             usb_disk,
             bootrom,
             boot_rom_image,
@@ -855,11 +852,12 @@ impl<'a> Rig<'a> {
         } = *self.opts;
         let mut machine = Machine::new(self.ram_mb as usize * 1024 * 1024);
         machine.set_board(self.board);
+        machine.set_log(self.log.clone());
         if eeprom {
             machine.spi0.attach_flash(flash.to_vec());
         }
         if let Some(p) = &sd_image {
-            machine.emmc2.insert_disk(open_sd(p, self.io.as_ref())?);
+            machine.emmc2.insert_disk(open_sd(p, &self.log)?);
         }
         if let Some(disk) = &self.usb_disk {
             machine.pcie.endpoint.attach(
@@ -872,10 +870,8 @@ impl<'a> Rig<'a> {
         // `--netboot <dir>`: plug the Ethernet cable into the built-in network
         // peer (`src/net/peer.rs`): DHCP, DNS, and `<dir>` over TFTP and HTTP.
         if let Some(dir) = &netboot_root {
-            let mut peer = rpi_virt_fw::net::BuiltinPeer::with_root(dir.clone());
-            if let Some(io) = &self.io {
-                peer = peer.with_io(io.clone());
-            }
+            let peer =
+                rpi_virt_fw::net::BuiltinPeer::with_root(dir.clone()).with_log(self.log.clone());
             machine.attach_net(Box::new(peer));
         }
         // `--net passt[:<socket>]`: the host's network (#45). A new connection
@@ -901,7 +897,6 @@ impl<'a> Rig<'a> {
             };
             machine.attach_net(Box::new(net));
         }
-        machine.config_otp.io = self.io.clone();
         machine.mmio_trace = trace_mmio;
         // `RVF_TRACE_MMIO=<lo>-<hi>` (hex): trace peripheral accesses from the
         // first instruction, but only inside that address range. Tracing the

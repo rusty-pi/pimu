@@ -22,7 +22,7 @@
 //! nothing on the far side to clear a slot, `0x3ED3A00C` spins forever and the
 //! boot emits no `MESS:` output at all. Modelling the doorbell honestly
 //! requires core 1 actually servicing it. Note also that neither core ever
-//! calls `enable_irq_source` for 76 or 77 (`RVF_DBG_IRQEN`), so the doorbell
+//! calls `enable_irq_source` for 76 or 77 (`--log irqen`), so the doorbell
 //! interrupt is *not* how start4 is woken here — do not build on that theory.
 
 use crate::bus::{BusResult, MmioDevice, Width};

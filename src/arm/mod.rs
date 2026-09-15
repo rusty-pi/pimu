@@ -170,6 +170,7 @@
 use crate::aarch64::{sysreg, Abort, Cpu, Exception, Memory, Step};
 use crate::armstub::{self, Handoff};
 use crate::bus::{Bus, MmioDevice, Width};
+use crate::log::{Channel, Log};
 use crate::machine::Machine;
 use crate::periph::gentimer::{self, GenericTimer, Reg, Which};
 use crate::periph::{armlocal, gic};
@@ -336,6 +337,8 @@ pub struct ArmSide {
     /// writes a VPU-side peripheral, and whether one has.
     stop_on_store: bool,
     stored: bool,
+    /// Where [`Channel::ArmExc`] goes: the machine's, taken at release.
+    log: Log,
 }
 
 /// The device interrupt lines wired to the GIC: the mailbox, eMMC2 (which the
@@ -402,6 +405,7 @@ impl ArmSide {
             sha_on: std::env::var_os("RVF_NO_SHA_SKIP").is_none(),
             stop_on_store: false,
             stored: false,
+            log: Log::default(),
         };
         arm.set_detectors();
         arm
@@ -420,6 +424,7 @@ impl ArmSide {
     /// before the first instruction runs.
     pub fn released(m: &mut Machine) -> ArmSide {
         let mut arm = Self::new();
+        arm.log = m.log.clone();
         if let Ok(h) = armstub::read_handoff(m) {
             arm.handoff = Some(h);
             // `RVF_BOOTARGS="initcall_debug nokaslr"`: more kernel arguments,
@@ -949,10 +954,10 @@ impl ArmSide {
             }
             Step::Took(e) => {
                 core.exceptions += 1;
-                // `RVF_DBG_ARM_EXC`: every synchronous exception a core takes
+                // `--log arm-exc`: every synchronous exception a core takes
                 // except `svc` (Linux's syscalls), with what the guest's own
                 // handler will see in `ESR_ELx`/`FAR_ELx`.
-                if dbg_arm_exc() && !matches!(e, Exception::Svc(_)) {
+                if self.log.on(Channel::ArmExc) && !matches!(e, Exception::Svc(_)) {
                     let t = el as usize;
                     // An external abort: nothing answered at this physical
                     // address, the one to look up in the memory map.
@@ -964,9 +969,12 @@ impl ArmSide {
                         }
                         _ => String::new(),
                     };
-                    eprintln!(
-                        "[arm-exc] core {id} pc {pc:#x} -> EL{el} {e:?} esr {:#x} far {:#x}{pa}",
-                        core.cpu.sys.esr[t], core.cpu.sys.far[t]
+                    crate::log!(
+                        self.log,
+                        Channel::ArmExc,
+                        "core {id} pc {pc:#x} -> EL{el} {e:?} esr {:#x} far {:#x}{pa}",
+                        core.cpu.sys.esr[t],
+                        core.cpu.sys.far[t]
                     );
                 }
             }
@@ -1091,7 +1099,7 @@ struct ArmBus<'a> {
     /// Where its stores go then, for a SHA-256 recording ("SHA-256 loops").
     stores: Option<&'a mut Vec<park::Read>>,
     /// The system timer, in ARM cycles, at release: `released_at + cycles`
-    /// is the ARM's own clock, for `RVF_DBG_MBOX`.
+    /// is the ARM's own clock, for `--log mbox`.
     released_at: u64,
     /// The step wrote a VPU-side peripheral: something the VPU may wake for.
     periph_store: bool,
@@ -1173,20 +1181,23 @@ impl ArmBus<'_> {
                 self.m.ram.store(base + a, w, v)
             }
             Target::Periph(a) => {
-                // `RVF_DBG_MBOX`: name what Linux asks the firmware for — the
+                // `--log mbox`: name what Linux asks the firmware for — the
                 // first tag of each property request it posts, and its
                 // first value words. The address on the wire is the bus
                 // alias (`0xC000_0000 | phys`, module docs of `mbox`).
-                if a == crate::spec::mbox::BASE + crate::spec::mbox::DATA1 && self.m.mbox.debug() {
+                if a == crate::spec::mbox::BASE + crate::spec::mbox::DATA1
+                    && self.m.log.on(Channel::Mbox)
+                {
                     let buf = self.m.ram.base() + (v & 0x3FFF_FFF0);
                     let word = |o: u32| self.m.ram.load(buf + o, Width::Word).unwrap_or(0);
                     // Inside a fast-forward slice the system timer is
                     // already at the slice's end (module docs, "Time and
                     // scheduling"), so the ARM's own clock too.
                     let arm_us = (self.released_at + self.cycles) / (gentimer::ARM_HZ / 1_000_000);
-                    eprintln!(
-                        "[mbox] {} us ARM request (ARM at {arm_us} us) tag {:#010x} values {:#x} {:#x}",
-                        self.m.systimer.now_us(),
+                    crate::log!(
+                        self.m.log,
+                        Channel::Mbox,
+                        "ARM request (ARM at {arm_us} us) tag {:#010x} values {:#x} {:#x}",
                         word(8),
                         word(20),
                         word(24)
@@ -1229,11 +1240,6 @@ fn wfe_timeout(core: &Core) -> u64 {
     }
     let ticks = 2u64 << ((v >> 4) & 0xF);
     (ticks * gentimer::ARM_HZ / hz).clamp(1, WFE_BACKSTOP)
-}
-
-fn dbg_arm_exc() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("RVF_DBG_ARM_EXC").is_some())
 }
 
 fn timer_reg(key: u32) -> Option<Reg> {

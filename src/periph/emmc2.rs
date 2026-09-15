@@ -46,6 +46,7 @@
 use std::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
+use crate::log::{Channel, Log};
 use crate::mem::Ram;
 use crate::periph::sdcard::SdCard;
 
@@ -321,7 +322,8 @@ pub struct Emmc2 {
     switching_1v8: bool,
     /// Debug: 32-bit words handed out through the Buffer Data Port this transfer.
     words_out: u64,
-    dbg: bool,
+    /// Where [`Channel::Emmc`] goes.
+    pub log: Log,
 }
 
 impl Default for Emmc2 {
@@ -345,7 +347,7 @@ impl Default for Emmc2 {
             dma_written: Vec::new(),
             switching_1v8: false,
             words_out: 0,
-            dbg: std::env::var_os("EMMC_DBG").is_some(),
+            log: Log::default(),
         }
     }
 }
@@ -517,18 +519,18 @@ impl Emmc2 {
             },
         };
 
-        if self.dbg {
-            eprintln!(
-                "  emmc CMD{index} arg={arg:#010x} mode={mode:#06x} rt={resp_type} data={data_present} \
-                 -> r1={:?} silent={} rd={}@{:#x} wr={}@{:#x}",
-                response.r1,
-                response.no_response,
-                response.read_blocks,
-                response.read_lba,
-                response.write_blocks,
-                response.write_lba,
-            );
-        }
+        crate::log!(
+            self.log,
+            Channel::Emmc,
+            "CMD{index} arg={arg:#010x} mode={mode:#06x} rt={resp_type} data={data_present} \
+             -> r1={:?} silent={} rd={}@{:#x} wr={}@{:#x}",
+            response.r1,
+            response.no_response,
+            response.read_blocks,
+            response.read_lba,
+            response.write_blocks,
+            response.write_lba,
+        );
 
         if response.no_response && resp_type != 0 {
             // Nothing answered: command timeout, no completion.
@@ -824,10 +826,12 @@ impl Emmc2 {
         self.data_pos = 0;
         self.read_blocks_left = self.read_blocks_left.saturating_sub(1);
         self.set_int(INT_BUF_READ_RDY);
-        if self.dbg {
+        if self.log.on(Channel::Emmc) {
             let lba = self.read_lba.wrapping_sub(1);
-            eprintln!(
-                "  emmc  block lba={lba:#x} ({} bytes) first={:02x}{:02x}{:02x}{:02x} left={} open={}",
+            crate::log!(
+                self.log,
+                Channel::Emmc,
+                "block lba={lba:#x} ({} bytes) first={:02x}{:02x}{:02x}{:02x} left={} open={}",
                 self.data.len(),
                 block[0],
                 block[1],
@@ -1031,14 +1035,15 @@ impl MmioDevice for Emmc2 {
     fn read(&mut self, offset: u32, width: Width) -> BusResult<u32> {
         let off = offset & !3;
         let word = self.read_word(off);
-        if self.dbg {
-            if off == BUFFER_DATA {
-                if self.words_out % 64 == 1 {
-                    eprintln!("  emmc R [0x20] -> {word:#010x}  (word {})", self.words_out);
-                }
-            } else {
-                eprintln!("  emmc R [{off:#04x}] -> {word:#010x}");
-            }
+        if off != BUFFER_DATA {
+            crate::log!(self.log, Channel::Emmc, "R [{off:#04x}] -> {word:#010x}");
+        } else if self.words_out % 64 == 1 {
+            crate::log!(
+                self.log,
+                Channel::Emmc,
+                "R [0x20] -> {word:#010x}  (word {})",
+                self.words_out
+            );
         }
         // Narrow reads get their lane, right-aligned.
         Ok(match width {
@@ -1050,8 +1055,12 @@ impl MmioDevice for Emmc2 {
 
     fn write(&mut self, offset: u32, width: Width, value: u32) -> BusResult<()> {
         let off = offset & !3;
-        if self.dbg && off != BUFFER_DATA {
-            eprintln!("  emmc W [{off:#04x}] <- {value:#010x} ({width:?})");
+        if off != BUFFER_DATA {
+            crate::log!(
+                self.log,
+                Channel::Emmc,
+                "W [{off:#04x}] <- {value:#010x} ({width:?})"
+            );
         }
         if off == BUFFER_DATA {
             let n = width.bytes() as usize;

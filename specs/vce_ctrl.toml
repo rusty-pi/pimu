@@ -12,7 +12,7 @@ confidence = "high"
 
 [[block.source]]
 kind       = "trace"
-ref        = "RVF_DBG_IRQTBL=1: src 68 handler=0x3ed9d1ea"
+ref        = "--log irqtbl: src 68 handler=0x3ed9d1ea"
 confidence = "high"
 
 [[register]]

@@ -161,5 +161,5 @@ confidence = "high"
 
 [[register.source]]
 kind       = "trace"
-ref        = "RVF_DBG_OTP: the keys are row numbers (19..26 for the board-identity check, 28 serial, 30 revision)"
+ref        = "--log otp: the keys are row numbers (19..26 for the board-identity check, 28 serial, 30 revision)"
 confidence = "high"

@@ -288,5 +288,5 @@ confidence = "high"
 
 [[register.source]]
 kind       = "trace"
-ref        = "RVF_DBG_IRQTBL: src 94 handler=0x3ec58302"
+ref        = "--log irqtbl: src 94 handler=0x3ec58302"
 confidence = "high"
