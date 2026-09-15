@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use rpi_virt_fw::bus::Bus;
 use rpi_virt_fw::emulator::{Emulator, RunEnd, RunLimits, RunReport};
-use rpi_virt_fw::soc::bcm2711::{SYSTIMER_BASE, UART0_BASE};
+use rpi_virt_fw::soc::bcm2711::{CORECTL_BASE, SYSTIMER_BASE, UART0_BASE};
 use rpi_virt_fw::vpu::UnimplPolicy;
 use rpi_virt_fw::Machine;
 
@@ -147,6 +147,10 @@ fn handler(m: &mut Machine) {
     h.op(RTI);
     h.load(m);
     m.store32(VBASE + 4 * TICK_SLOT, HANDLER).unwrap();
+    // Source 64's field in core 0's CoreCtl `IRQ_PRIO` word 0, set the way
+    // firmware's `enable_irq_source(64, 1)` sets it: the controller takes no
+    // source whose field is 0.
+    m.store32(CORECTL_BASE + 0x10, 1).unwrap();
 }
 
 /// Core 1 prints `#` every 333 steps, for ever.

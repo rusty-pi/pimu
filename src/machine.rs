@@ -343,6 +343,28 @@ impl Machine {
             .any(|&src| self.corectl.irq_priority(src) != 0)
     }
 
+    /// The lowest system-timer channel whose compare has fired and whose
+    /// source, `SYS_IRQ_SRC + channel`, core 0's CoreCtl bank enables. A
+    /// channel that fired with its source disabled stays latched, and doesn't
+    /// hold up the channels above it.
+    fn timer_channel_due(&self) -> Option<u8> {
+        if !self.systimer.tick_pending() {
+            return None;
+        }
+        (0..4u8).find(|&c| {
+            self.systimer.channel_pending(c)
+                && self
+                    .corectl
+                    .irq_priority(crate::periph::corectl::SYS_IRQ_SRC + c as u32)
+                    != 0
+        })
+    }
+
+    /// Has a compare fired whose interrupt core 0 can take?
+    pub fn timer_irq_due(&self) -> bool {
+        self.timer_channel_due().is_some()
+    }
+
     /// Settle any I²C transfer whose time on the wire has elapsed.
     fn advance_i2c(&mut self) {
         let now = self.systimer.now_us();
@@ -1093,7 +1115,10 @@ impl Bus for Machine {
     }
 
     fn take_tick_pending(&mut self) -> bool {
-        self.systimer.take_tick_pending()
+        match self.timer_channel_due() {
+            Some(c) => self.systimer.take_channel(c),
+            None => false,
+        }
     }
 
     fn sleep_advance(&mut self) -> bool {
@@ -1196,14 +1221,12 @@ impl Bus for Machine {
         // enable and priority, not a vector: a model that vectored through it
         // landed in start4's exception stubs, and no timed wait ever expired.
         //
-        // A channel that has already matched is what we are delivering, and
-        // under one-shot compares it disarms at the moment it fires — so check
-        // "something is pending" first and only fall back to "something is
-        // armed". Testing `any_armed()` alone dropped every one-shot match.
-        if self.systimer.pending_channel().is_none() && !self.systimer.any_armed() {
-            return None;
-        }
-        let ch = self.systimer.pending_channel().unwrap_or(0) as u32;
+        // The channel is the lowest one that has matched and whose source core
+        // 0's CoreCtl bank enables, the one `take_tick_pending` then takes. It
+        // goes by the latched match, never by what is still armed: a one-shot
+        // compare disarms at the moment it fires, and testing `any_armed()`
+        // dropped every one-shot match.
+        let ch = self.timer_channel_due()? as u32;
         let src = crate::periph::corectl::SYS_IRQ_SRC + ch;
         // The generic dispatcher `0x3EC3E9BC` does not take the source from the
         // vector number — it re-reads it from CoreCtl `+0x04` and indexes the
@@ -1378,5 +1401,30 @@ mod tests {
         m.store32(IRQ_PRIO, 0x10).unwrap();
         assert_eq!(m.take_pending_irq(), Some(97));
         assert!(!m.irq_queued());
+    }
+
+    /// A compare whose source core 0 hasn't enabled stays latched, and the
+    /// enabled channel above it goes out first (#80).
+    #[test]
+    fn a_timer_match_waits_for_its_source_s_enable() {
+        const IRQ_PRIO: u32 = 0x7E00_2010;
+        const C0: u32 = 0x7E00_300C;
+        let mut m = Machine::new(1 << 20);
+        m.store32(C0, 10).unwrap();
+        m.store32(C0 + 8, 20).unwrap();
+        m.systimer.advance_to(30);
+        assert!(m.systimer.tick_pending());
+        assert!(!m.timer_irq_due());
+        assert_eq!(m.timer_tick_slot(), None);
+        // Source 66, channel 2: word 0, bits 8..12.
+        m.store32(IRQ_PRIO, 0x100).unwrap();
+        assert_eq!(m.timer_tick_slot(), Some(66));
+        assert!(m.take_tick_pending());
+        assert!(!m.timer_irq_due() && m.systimer.tick_pending());
+        // Source 64, channel 0: bits 0..4.
+        m.store32(IRQ_PRIO, 0x101).unwrap();
+        assert_eq!(m.timer_tick_slot(), Some(64));
+        assert!(m.take_tick_pending());
+        assert!(!m.systimer.tick_pending());
     }
 }
