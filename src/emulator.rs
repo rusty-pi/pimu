@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use crate::bus::{Bus, Width};
-use crate::machine::{Console, Machine};
+use crate::machine::Machine;
 use crate::vpu::{Stop, UnimplPolicy, Vpu};
 
 pub struct Emulator {
@@ -211,10 +211,6 @@ impl Emulator {
         self.spawn_core1(entry);
     }
 
-    pub fn set_console(&mut self, c: Console) {
-        self.machine.console = c;
-    }
-
     pub fn set_unimpl_policy(&mut self, p: UnimplPolicy) {
         self.cpu.on_unimpl = p;
     }
@@ -234,42 +230,6 @@ impl Emulator {
             self.machine.mmio_trace = false;
         }
         let mut st = RunState::new(self, limits, diag, start);
-
-        // `RVF_MBOX_KICK` used to live here: from the idle loop it called the
-        // lock-release `0x3ED651E6` on a hard-coded object address whenever that
-        // word showed a queued waiter, on the theory that an unmodelled
-        // "0x7EE0 mailbox completer" owed the release. The object it was pointed
-        // at (`0xBEF6D458`, the uncached alias of a stack frame) is a dmalib
-        // transfer control block - `dma_transfer_init` (`0x3EC996CE`) zeroes it
-        // and `dma_transfer_queue_post` (`0x3EC99898`) marks it 1 - and the
-        // release is the firmware's own `dma_chan_interrupt`, reached from
-        // `dma_interrupt` (`0x3EC980E8`) on the channel's completion interrupt
-        // (source `0x50 + channel`). That interrupt is modelled now, in
-        // `Machine::run_dma_legacy`, so the firmware retires its own transfers:
-        // `RVF_WATCH=0xbef6d458` shows the word cycling 0 -> 1 -> 0 through
-        // `0x3ED651C8` / `0x3ED65208` for the whole boot and never parking on a
-        // waiter pointer. The shim has been removed rather than left armed.
-
-        // RVF_DBG_MAINSUS: catch the boot thread (0x3EF248C4) suspending — dump
-        // the control-flow tail the one time it stops being the current thread
-        // for good.
-
-        // RVF_CZ_LOG=<n>: raise confzilla's own log level (byte at `0x3EE4ABD8`)
-        // to <n> just before `gpioman_init` kicks off the schema walk
-        // (`0x3ECC9DB0`, `bl 0x3EC89B38`), and dump the schema root descriptor
-        // at `0x3EE19114` (its `.name` is patched to "pins_<variant>" at
-        // runtime). confzilla is the FDT front end that is supposed to invoke
-        // the `pin_config/pin` (`0x3ECC9DC4`) and `pin_defines/pin_define`
-        // (`0x3ECC9EC4`) handlers which register the GPIO providers
-        // (`[gp+807672/676/680]`); none of them fire, so gpioman reports
-        // `error 1`. Its own diagnostics say why.
-
-        // RVF_DBG_EVGET: log every distinct (event-group, caller) pair passed to
-        // `_tx_event_flags_get` (`0x3EC3E3BE`), so the groups the boot actually
-        // blocks on can be told apart from the ones a shim must not touch.
-        // Hoisted out of the per-instruction loop: `std::env::var_os` is a
-        // locking lookup over the whole environment and these were being
-        // evaluated on every step, which dominated run time.
 
         let end = loop {
             if let Some(end) = self.slow_step(&mut st, limits) {

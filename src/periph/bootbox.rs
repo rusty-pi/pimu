@@ -25,7 +25,7 @@ use crate::bus::{BusResult, MmioDevice, Width};
 // Every doorbell has its ready / busy / trigger bits in the same place.
 use crate::spec::bootbox::{
     DOORBELL_B, DOORBELL_B_CONTROL_MASK as CONTROL_BITS, DOORBELL_C, DOORBELL_C_SIZE, IRQ_PAYLOAD,
-    IRQ_SOURCE, IRQ_STATUS, IRQ_STATUS_PENDING_MASK, L2_CTRL, L2_FLUSH_END, L2_FLUSH_START,
+    IRQ_SOURCE, IRQ_STATUS, L2_CTRL, L2_FLUSH_END, L2_FLUSH_START,
 };
 use crate::spec::Coverage;
 
@@ -57,21 +57,9 @@ impl BootBox {
         BootBox::default()
     }
 
-    /// Latch a pending VPU interrupt source for the exc-12 handler to pick up.
-    pub fn raise_irq(&mut self, source: u32, payload: u32) {
-        self.storage.insert(IRQ_STATUS, IRQ_STATUS_PENDING_MASK);
-        self.storage.insert(IRQ_SOURCE, source);
-        self.storage.insert(IRQ_PAYLOAD, payload);
-    }
-
     /// The word the firmware last wrote at `off`.
     pub fn word(&self, off: u32) -> u32 {
         self.storage.get(&(off & !3)).copied().unwrap_or(0)
-    }
-
-    /// True while a raised source has not yet been acked by the handler.
-    pub fn irq_pending(&self) -> bool {
-        self.storage.get(&IRQ_STATUS).copied().unwrap_or(0) & IRQ_STATUS_PENDING_MASK != 0
     }
 }
 

@@ -58,11 +58,6 @@ pub const PSTATE_DAIF: u64 = 0xF << 6;
 pub const PSTATE_I: u64 = 1 << 7;
 pub const PSTATE_F: u64 = 1 << 6;
 
-/// `PSTATE.M` for ELx using `SP_ELx` ("ELxh").
-pub fn pstate_elh(el: u32) -> u64 {
-    (u64::from(el) << 2) | 1
-}
-
 /// The exception level in a `PSTATE`/`SPSR` value.
 pub fn pstate_el(pstate: u64) -> u32 {
     ((pstate >> 2) & 3) as u32

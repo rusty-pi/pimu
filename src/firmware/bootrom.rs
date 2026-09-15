@@ -328,11 +328,6 @@ impl BootRom {
         Ok(BootRom::unkeyed())
     }
 
-    /// Is the signature check armed (a secret is available)?
-    pub fn checks_signature(&self) -> bool {
-        self.key.is_some() || self.salt.is_some()
-    }
-
     /// The effective HMAC key for this run, deriving it from the salt and the
     /// machine's OTP rows when only a salt was supplied. `None` = unkeyed.
     fn effective_key(&self, machine: &mut Machine) -> Option<[u8; HMAC_LEN]> {

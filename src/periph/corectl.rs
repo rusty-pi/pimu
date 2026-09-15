@@ -94,12 +94,6 @@ impl CoreCtl {
         self.pending_src = Some(src);
     }
 
-    /// Non-destructive view of [`Self::raise_source`]'s pending value, for
-    /// diagnostics (the register itself is read-to-clear).
-    pub fn peek_pending(&self) -> Option<u32> {
-        self.pending_src
-    }
-
     /// Next `(core, source)` the firmware raised in software by setting a bit in
     /// [`IRQ_PENDING_BITS`]. Real hardware asserts the line as soon as the bit
     /// goes up; the model vectors it on the next step.

@@ -679,15 +679,6 @@ const fn vfield(raw: u128, width: u32, pos: u32, n: u32) -> u32 {
 }
 
 impl VecInsn {
-    /// Does any slot name a real vector register?
-    pub fn touches_vrf(&self) -> bool {
-        let b_vrf = match self.b {
-            VecOperandB::Slot(s) => !s.is_dash(),
-            VecOperandB::Imm(_) => false,
-        };
-        !self.d.is_dash() || !self.a.is_dash() || b_vrf
-    }
-
     /// Number of lanes in a vector register. Fixed by the architecture.
     pub const LANES: u32 = 16;
 

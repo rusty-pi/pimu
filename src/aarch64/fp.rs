@@ -62,14 +62,6 @@ impl Fmt {
     const fn frac_mask(self) -> u64 {
         (1 << self.f()) - 1
     }
-    /// The format of an element of `size` (log2 bytes: 1 = H, 2 = S, 3 = D).
-    pub fn from_size(size: u32) -> Fmt {
-        match size {
-            1 => Fmt::H,
-            2 => Fmt::S,
-            _ => Fmt::D,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
