@@ -41,6 +41,7 @@
 use std::collections::BTreeMap;
 
 use crate::bus::Width;
+use crate::log::{Channel, Log};
 use crate::periph::usb::{Setup, Speed, UsbDevice, Xfer};
 use crate::spec::xhci as regs;
 use crate::spec::xhci::{
@@ -358,7 +359,8 @@ pub struct Xhci {
     cmd_ptr: u64,
     cmd_ccs: bool,
     running: bool,
-    dbg: bool,
+    /// Where [`Channel::Xhci`] goes.
+    pub log: Log,
     /// Modelled time, as [`Xhci::link_due`] last saw it.
     now_us: u64,
     /// The earliest [`Port::train_at`], `u64::MAX` with none training — a
@@ -395,7 +397,7 @@ impl Xhci {
             cmd_ptr: 0,
             cmd_ccs: true,
             running: false,
-            dbg: std::env::var("RVF_DBG_XHCI").is_ok(),
+            log: Log::default(),
             now_us: 0,
             link_deadline: u64::MAX,
             commands: 0,
@@ -629,14 +631,14 @@ impl Xhci {
     }
 
     fn write_portsc(&mut self, i: usize, value: u32, mask: u32, mem: &mut dyn HostMem) {
-        if self.dbg {
-            eprintln!(
-                "[xhci] {} us PORTSC{} {:#010x} <- {value:#010x}",
-                self.now_us,
-                i + 1,
-                self.ports[i].portsc
-            );
-        }
+        crate::log!(
+            self.log,
+            Channel::Xhci,
+            "{} us PORTSC{} {:#010x} <- {value:#010x}",
+            self.now_us,
+            i + 1,
+            self.ports[i].portsc
+        );
         let port = &mut self.ports[i];
         // Write-1-to-clear change bits.
         port.portsc &= !(value & PORTSC_RW1C & mask);
@@ -708,16 +710,16 @@ impl Xhci {
         for (i, w) in trb.iter().enumerate() {
             mem.write32(at + 4 * i as u64, *w);
         }
-        if self.dbg {
-            eprintln!(
-                "[xhci] event@{at:#x} type={} {:08x} {:08x} {:08x} {:08x}",
-                (trb[3] >> 10) & 0x3F,
-                trb[0],
-                trb[1],
-                trb[2],
-                trb[3]
-            );
-        }
+        crate::log!(
+            self.log,
+            Channel::Xhci,
+            "event@{at:#x} type={} {:08x} {:08x} {:08x} {:08x}",
+            (trb[3] >> 10) & 0x3F,
+            trb[0],
+            trb[1],
+            trb[2],
+            trb[3]
+        );
 
         // Advance within the segment, then to the next segment, toggling the
         // cycle when the whole ring wraps.
@@ -781,12 +783,16 @@ impl Xhci {
                 self.cmd_ptr = next;
                 continue;
             }
-            if self.dbg {
-                eprintln!(
-                    "[xhci] cmd@{:#x} type={kind} {:08x} {:08x} {:08x} {:08x}",
-                    self.cmd_ptr, trb[0], trb[1], trb[2], trb[3]
-                );
-            }
+            crate::log!(
+                self.log,
+                Channel::Xhci,
+                "cmd@{:#x} type={kind} {:08x} {:08x} {:08x} {:08x}",
+                self.cmd_ptr,
+                trb[0],
+                trb[1],
+                trb[2],
+                trb[3]
+            );
             let this = self.cmd_ptr;
             let (code, slot) = self.run_command(kind, &trb, mem);
             self.commands += 1;
@@ -1016,12 +1022,15 @@ impl Xhci {
                 ptr = next;
                 continue;
             }
-            if self.dbg {
-                eprintln!(
-                    "[xhci] xfer slot={slot} dci={dci} @{ptr:#x} type={kind} {:08x} {:08x} {:08x} {:08x}",
-                    trb[0], trb[1], trb[2], trb[3]
-                );
-            }
+            crate::log!(
+                self.log,
+                Channel::Xhci,
+                "xfer slot={slot} dci={dci} @{ptr:#x} type={kind} {:08x} {:08x} {:08x} {:08x}",
+                trb[0],
+                trb[1],
+                trb[2],
+                trb[3]
+            );
             let (code, residue) =
                 self.run_transfer_trb(slot as u32, dci, kind, &trb, &mut ctrl, mem);
             self.transfers += 1;
@@ -1199,7 +1208,7 @@ impl Xhci {
         self.set_reg(IMAN, iman);
     }
 
-    /// The port status words, for tests and for `RVF_DBG_XHCI`.
+    /// The port status words, for tests and for [`Channel::Xhci`].
     pub fn portsc(&self, port: usize) -> u32 {
         self.ports[port - 1].portsc
     }

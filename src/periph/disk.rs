@@ -11,7 +11,7 @@ use std::fs::File;
 use std::os::unix::fs::FileExt;
 use std::path::Path;
 
-use crate::iolog::IoLogRef;
+use crate::log::Log;
 
 pub const BLOCK_SIZE: usize = 512;
 
@@ -26,8 +26,9 @@ pub struct Disk {
     backing: Backing,
     blocks: u64,
     written: HashMap<u64, Box<[u8; BLOCK_SIZE]>>,
-    /// The I/O log and the name this disk goes by in it (#35).
-    io: Option<(IoLogRef, &'static str)>,
+    /// Where its transfers go (the `io` channel, #35), and the name this disk
+    /// goes by there.
+    io: Option<(Log, &'static str)>,
 }
 
 enum Backing {
@@ -47,20 +48,20 @@ impl Disk {
         }
     }
 
-    /// Record this disk's transfers in the I/O log as `name`, and name its
+    /// Log this disk's transfers on the `io` channel as `name`, and name its
     /// files there.
-    pub fn with_io(mut self, io: IoLogRef, name: &'static str) -> Disk {
-        io.borrow_mut().map_files(name, &|lba| {
+    pub fn with_log(mut self, log: Log, name: &'static str) -> Disk {
+        log.map_files(name, &|lba| {
             let mut b = [0u8; BLOCK_SIZE];
             self.peek_block(lba, &mut b).then_some(b)
         });
-        self.io = Some((io, name));
+        self.io = Some((log, name));
         self
     }
 
     fn log(&self, op: &'static str, lba: u64, count: u64) {
-        if let Some((io, name)) = &self.io {
-            io.borrow_mut().blocks(name, op, lba, count);
+        if let Some((log, name)) = &self.io {
+            log.blocks(name, op, lba, count);
         }
     }
 

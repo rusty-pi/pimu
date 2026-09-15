@@ -11,7 +11,7 @@ Same device as `vce`; its offsets are relative to 0x7F140000. A completed launch
 Sources:
 
 - decompile (high): vce_run_start, vce_run_complete, vce_clear_interrupt and the source-68 handler 0x3ED9D1EA
-- trace (high): RVF_DBG_IRQTBL=1: src 68 handler=0x3ed9d1ea
+- trace (high): --log irqtbl: src 68 handler=0x3ed9d1ea
 
 ## Register map
 

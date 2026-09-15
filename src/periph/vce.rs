@@ -72,7 +72,7 @@
 //! `vce_obtain_semaphore` enables it and `vce_release_semaphore` disables it,
 //! both via the interrupt driver's `[+0x18]` op, and the VCE driver's init
 //! registers `0x3ED9D1EA` as its handler (confirmed at runtime —
-//! `RVF_DBG_IRQTBL=1` prints `src 68 handler=0x3ed9d1ea`). That handler is:
+//! `--log irqtbl` prints `src 68 handler=0x3ed9d1ea`). That handler is:
 //!
 //! ```text
 //! vce_clear_interrupt()                  ; [0x7F140024] = 0x80000000

@@ -32,6 +32,7 @@
 use std::collections::VecDeque;
 
 use crate::bus::{BusResult, MmioDevice, Width};
+use crate::log::Log;
 use crate::periph::fxl6408::Fxl6408;
 use crate::periph::pmic::Pmic;
 use crate::spec::bsc::{
@@ -101,6 +102,8 @@ pub struct Bsc {
     slave: Option<Pmic>,
     /// The GPIO expander sharing the PMIC bus.
     expander: Option<Fxl6408>,
+    /// Handed to what is on the bus, for the `pmic` and `expander` channels.
+    log: Log,
 }
 
 impl Bsc {
@@ -124,6 +127,7 @@ impl Bsc {
             deferred_read: None,
             slave: Some(Pmic::default()),
             expander: Some(Fxl6408::new()),
+            log: Log::default(),
         }
     }
 
@@ -142,8 +146,20 @@ impl Bsc {
 
     /// Put `pmic` on the bus in place of the PMICs there, for a board that has
     /// other ones fitted.
-    pub fn fit_pmics(&mut self, pmic: Pmic) {
+    pub fn fit_pmics(&mut self, mut pmic: Pmic) {
+        pmic.log = self.log.clone();
         self.slave = Some(pmic);
+    }
+
+    /// Hand `log` to the devices on the bus, and to PMICs fitted later.
+    pub fn set_log(&mut self, log: Log) {
+        if let Some(pmic) = &mut self.slave {
+            pmic.log = log.clone();
+        }
+        if let Some(expander) = &mut self.expander {
+            expander.log = log.clone();
+        }
+        self.log = log;
     }
 
     /// Read-only view of the attached PMICs, for tests and probes.

@@ -1,8 +1,9 @@
 # Diagnostics
 
-Every wall in this repo was found with one of these. They are environment
-variables because they are reconnaissance tools, not configuration: none of them
-changes what the firmware sees.
+Every wall in this repo was found with one of these: the `--log` channels, which
+say what a subsystem did, and the `RVF_*` environment variables, which trace,
+trap and profile. They are reconnaissance tools, not configuration: none of
+them changes what the firmware sees.
 
 That is the rule they are held to. **A knob that changes what the firmware
 observes is a shim**, needs an issue and a deletion plan, and several were
@@ -15,24 +16,24 @@ a diagnostic and belongs here.
 The two exceptions, which describe the *board* rather than the firmware, are
 `RVF_PCIE_DEVICE` and `RVF_BOOT_WALL`.
 
-**Build with the `diag` feature to use them:**
+**Build with the `diag` feature to use most of them:**
 
 ```bash
 cargo build --release --features diag
 ```
 
 The run-loop switches — tracing (`RVF_TRACE_*`, `RVF_MMIO_FROM`, `--trace*`),
-`RVF_TRAP*`, `RVF_PROF*`, `RVF_HEARTBEAT`, `RVF_WATCH`, and the `RVF_DBG_*`
-switches of the run loop, the VPU core and the DMA window — are checked on
+`RVF_TRAP*`, `RVF_PROF*`, `RVF_HEARTBEAT`, `RVF_WATCH`, `RVF_TCB`, and the log
+channels of the run loop, the VPU core and the DMA window — are checked on
 every instruction, so a normal build (CI's included) compiles them out. Set on
-such a build they are reported and ignored, and `--trace*` is refused. A `diag`
-build also takes every step through every check of the run loop, instead of
-skipping the ones that cannot act (`Emulator::fast_steps`), so the switches see
-each instruction. It also records start4's boot-progress tags (stores to
-`0x?EC0_2000`), which `boot` prints after the run.
-`RVF_LIVE_CONSOLE` is not a diagnostic and works everywhere, as do the
-device-model `RVF_DBG_*` switches, which are read once and only fire on rare
-device events.
+such a build the variables are reported and ignored, and `--trace*` and those
+channels are refused. A `diag` build also takes every step through every check
+of the run loop, instead of skipping the ones that cannot act
+(`Emulator::fast_steps`), so the switches see each instruction. It also records
+start4's boot-progress tags (stores to `0x?EC0_2000`), which `boot` prints
+after the run.
+`RVF_LIVE_CONSOLE` is not a diagnostic and works everywhere, as do the device
+log channels, which only fire on rare device events.
 
 ---
 
@@ -53,6 +54,9 @@ RVF_TRAP=0x3ecc5190,0x3ec568f8 boot … 2> traps.log
 
 # 4. Watch the memory the firmware is branching on.
 RVF_WATCH=0x3ef6b04c boot … 2> writes.log
+
+# 5. Ask the devices it talks to what they saw.
+boot … --log pcie,xhci 2> devices.log
 ```
 
 `RVF_TRACE_ON_PC` exists because the console-substring trigger cannot reach code
@@ -84,6 +88,7 @@ it with `SIGPIPE`.
 | `RVF_TRAP_FROM=<n>` | Ignore traps until `n` instructions have retired. |
 | `RVF_TRAP_MAX=<n>` | Stop printing after `n` hits. |
 | `RVF_WATCH=<hex>[,<hex>…]` | Log every store to these word-aligned addresses, tagged with the PC. The way to find who fills a structure. |
+| `RVF_TCB=<hex>[,<hex>…]` | At exit, decode these ThreadX thread control blocks: where each thread is parked and what it is waiting on, with a rough backtrace. |
 
 ## Profiling
 
@@ -94,36 +99,60 @@ it with `SIGPIPE`.
 | `RVF_ARM_PROF=<us>` | From model time `<us>` on (`1` for the whole run), count every ARM step by core, EL and 256-byte PC bucket, and list the hottest in the run report — and at every reset, for the boot that ended. Asleep cores are not stepped, so they do not show; the passes a parked core skips count at the loop's PCs. |
 | `RVF_HEARTBEAT=<n>` | Print progress every `n` instructions, for runs that look hung. |
 
-## Subsystem logs
+## Log channels
 
-All of these are `=1`.
+`boot --log [text:|jsonl:]<channel>[,<channel>...]` turns channels on
+([#95](https://github.com/valtzu/rpi-virt-fw/issues/95)). It can be repeated,
+and the lines go to stderr unless `--log-file <path>` says otherwise. The
+channels share one output, so the lines come out in the order things happened:
+`[<channel>] <message>` in `text`, the default, or one JSON object a line in
+`jsonl` — `{"channel":"pcie","msg":"..."}`, except that `io` keeps its fields
+(`dev`, `op`, `lba`, `blocks`, `files`, ...).
 
-| Variable | What it prints |
+```bash
+boot … --log pcie,xhci 2> usb.log
+boot … --log jsonl:io --log-file io.jsonl
+```
+
+| Channel | What it prints |
 |---|---|
-| `RVF_DBG_TICK` | ThreadX tick delivery and skips. |
-| `RVF_DBG_VEC` | Interrupt vectoring: slot, vector base, handler. |
-| `RVF_DBG_IRQEN` / `RVF_DBG_IRQTBL` | Interrupt enables; the firmware's interrupt table. |
-| `RVF_DBG_SWIRQ` | Software-posted interrupts via CoreCtl. |
-| `RVF_DBG_TCB` | ThreadX thread control blocks — who is suspended and on what. |
-| `RVF_DBG_SLEEP` | `sleep` instructions and what woke the core. |
-| `RVF_DBG_CMP` | Every system-timer compare arm. |
-| `RVF_DBG_DMA` | Every DMA4 control block executed. |
-| `RVF_DBG_DERAIL` | Execution derailing into unmapped or zeroed memory. |
-| `RVF_DBG_SPI` | SPI0 transactions against the EEPROM flash. |
-| `RVF_DBG_PMIC` | DA9090 PMIC register traffic. |
-| `RVF_DBG_OTP` | Every OTP row the firmware reads, and what it got; every row it programs, before and after. |
-| `RVF_DBG_XHCI` | xHCI rings, TRBs and port state. |
-| `RVF_DBG_DWC2` | The DWC2 USB OTG controller (`0x7E98_0000`): every write, and every read that differs from the previous read of the same register, so a poll shows once. |
-| `RVF_DBG_MBOX` | Every word across the ARM↔VideoCore property mailbox, both directions. |
-| `RVF_DBG_PCIE` | Every change of the VL805's interrupt as the root complex sees it: INTA, or the MSI block's status and mask. Also every write to the inbound window `RC_BAR2`, and every endpoint DMA access that falls outside it (and so reaches no memory). |
-| `RVF_DBG_ARM_EXC` | Every synchronous exception an ARM core takes (not `svc`), with the `ESR`/`FAR` its handler sees, and for an external abort the physical address nothing answered at. |
-| `RVF_BOOTARGS="<args>"` | More kernel arguments after the harness's own (`initcall_debug` to time every initcall, `nokaslr` for addresses that match `System.map`). |
+| `io` | What crossed the peripherals apart from the console: SD card and USB stick block runs with the files they belong to, OTP rows read and programmed, and what the network peer did (the README's "What the machine read and wrote"). |
+| `arm-exc` | Every synchronous exception an ARM core takes (not `svc`), with the `ESR`/`FAR` its handler sees, and for an external abort the physical address nothing answered at. |
+| `cmp` | Every system-timer compare arm. |
+| `dwc2` | The DWC2 USB OTG controller (`0x7E98_0000`): every write, and every read that differs from the previous read of the same register, so a poll shows once. |
+| `emmc` | The SD host controllers, EMMC2 and the legacy EMMC: every command and its response, every block read, every register access. |
+| `expander` | FXL6408 GPIO expander register traffic. |
+| `irqen` | Interrupt enables, decoded back into the `enable_irq_source(src, prio)` calls that wrote them. |
+| `mbox` | Every word across the ARM↔VideoCore property mailbox, both directions, and the first tag of each property request Linux posts. |
+| `otp` | Every OTP row the firmware reads, and what it got; every row it programs, before and after; commands the model does not know. |
+| `pcie` | Every change of the VL805's interrupt as the root complex sees it: INTA, or the MSI block's status and mask. Also every write to the inbound window `RC_BAR2`, and every endpoint DMA access that falls outside it (and so reaches no memory). |
+| `pmic` | DA9090 PMIC register traffic. |
+| `spi` | SPI0 transactions against the EEPROM flash. |
+| `xhci` | xHCI rings, TRBs and port state. |
+
+These need a `diag` build:
+
+| Channel | What it prints |
+|---|---|
+| `derail` | Execution derailing out of start4's code, into unmapped or zeroed memory. |
+| `dma` | Every DMA control block executed, and every access to the legacy DMA controller window. |
+| `ff` | The run loop's idle windows, and whether each one fast-forwarded the system timer. |
+| `irqtbl` | At exit, the firmware's per-source interrupt handler table next to its vector table. |
+| `sleep` | `sleep` instructions and what woke the core. |
+| `swirq` | Software-posted interrupts via CoreCtl. |
+| `tick` | ThreadX tick delivery and skips, device interrupts vectored, and an `rti` that returns outside start4's code. |
+| `vec` | Interrupt vectoring: slot, vector base, handler. |
+
+Before #95 each channel was an `RVF_DBG_<NAME>=1` variable (the eMMC one
+`EMMC_DBG`), and the I/O log was `--io-log`. `boot` warns about a variable
+that is still set and names the channel that replaced it.
 
 ## Output and fixtures
 
 | Variable | Effect |
 |---|---|
 | `RVF_LIVE_CONSOLE=1` | Stream the UART console as it is produced instead of buffering it. `scripts/boot-check.sh` sets this. |
+| `RVF_BOOTARGS="<args>"` | More kernel arguments after the harness's own (`initcall_debug` to time every initcall, `nokaslr` for addresses that match `System.map`). |
 | `RVF_SLOW_LOOP=1` | Take every step through every check of the run loop, as a `diag` build does, instead of skipping the checks that cannot act (`Emulator::fast_steps`). A run must come out the same either way; this is how to check that it does. |
 | `RVF_NO_PARK=1` | Execute every pass of a busy-wait loop instead of parking the core in it (`arm/mod.rs`, "Busy-wait loops"). The same check for the ARM side: a run must come out the same either way. Works in every build. |
 | `RVF_NO_BURST=1` | Take a core that is the only one running through the whole cycle loop, one instruction at a time, instead of stepping it in bursts (`arm/mod.rs`, "Time and scheduling"). Another same-either-way check. Works in every build. |

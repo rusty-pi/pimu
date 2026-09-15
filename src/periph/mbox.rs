@@ -52,7 +52,7 @@
 //! Bit 2 of each pending word is "this mailbox wants service", and the ISR
 //! dispatches through per-mailbox callbacks the driver registered. It arrives
 //! as **interrupt source 94** — read out of the firmware's own handler table
-//! (`RVF_DBG_IRQTBL`: `src 94 handler=0x3ec58302`), not guessed, and the boot
+//! (`--log irqtbl`:`src 94 handler=0x3ec58302`), not guessed, and the boot
 //! does enable that source.
 //!
 //! The callbacks are not the wake, though. The tail of the ISR is:
@@ -102,6 +102,7 @@
 use std::collections::{BTreeMap, VecDeque};
 
 use crate::bus::{BusResult, MmioDevice, Width};
+use crate::log::{Channel, Log};
 
 // Every mailbox register is a two-element array: element 0 is the ARM's view
 // (what Linux's device tree calls `mailbox@7e00b880`), element 1 the
@@ -240,9 +241,9 @@ pub struct Mbox {
     pub reads: u64,
     /// Replies the firmware has written to MAIL0.
     pub writes: u64,
-    /// `RVF_DBG_MBOX`, read once — this device sits on the step path.
-    dbg: bool,
-    /// Model time at the latest access, for `RVF_DBG_MBOX`'s timestamps.
+    /// Where [`Channel::Mbox`] goes.
+    pub log: Log,
+    /// Model time at the latest access, for [`Channel::Mbox`]'s timestamps.
     /// [`crate::machine::Machine`] sets it on every mailbox access.
     pub now_us: u64,
     /// The firmware's property replies, decoded.
@@ -253,10 +254,7 @@ pub struct Mbox {
 
 impl Mbox {
     pub fn new() -> Mbox {
-        Mbox {
-            dbg: std::env::var_os("RVF_DBG_MBOX").is_some(),
-            ..Mbox::default()
-        }
+        Mbox::default()
     }
 
     /// Post a request as the ARM would: `(bus_addr & !0xF) | channel`.
@@ -265,21 +263,16 @@ impl Mbox {
         if self.to_vpu.len() >= DEPTH {
             return false;
         }
-        if self.dbg {
-            eprintln!(
-                "[mbox] ARM -> VPU {:#010x} (channel {}, addr {:#010x})",
-                message,
-                message & 0xF,
-                message & !0xF
-            );
-        }
+        crate::log!(
+            self.log,
+            Channel::Mbox,
+            "ARM -> VPU {:#010x} (channel {}, addr {:#010x})",
+            message,
+            message & 0xF,
+            message & !0xF
+        );
         self.to_vpu.push_back(message);
         true
-    }
-
-    /// `RVF_DBG_MBOX` is set.
-    pub fn debug(&self) -> bool {
-        self.dbg
     }
 
     /// Take a reply the firmware left for the ARM, if any.
@@ -422,9 +415,12 @@ impl MmioDevice for Mbox {
                 let v = self.to_vpu.pop_front().unwrap_or(0);
                 if v != 0 {
                     self.reads += 1;
-                    if self.dbg {
-                        eprintln!("[mbox] {} us VPU read request {v:#010x}", self.now_us);
-                    }
+                    crate::log!(
+                        self.log,
+                        Channel::Mbox,
+                        "{} us VPU read request {v:#010x}",
+                        self.now_us
+                    );
                 }
                 v
             }
@@ -450,9 +446,12 @@ impl MmioDevice for Mbox {
                 if value & 0xF == CHANNEL_PROPERTY {
                     self.reply_to_decode = Some(value & !0xF);
                 }
-                if self.dbg {
-                    eprintln!("[mbox] {} us VPU -> ARM {value:#010x}", self.now_us);
-                }
+                crate::log!(
+                    self.log,
+                    Channel::Mbox,
+                    "{} us VPU -> ARM {value:#010x}",
+                    self.now_us
+                );
             }
             // The ARM posting a request. Nothing in this bench does it through
             // MMIO — `post_from_arm` is the entry point — but model it anyway

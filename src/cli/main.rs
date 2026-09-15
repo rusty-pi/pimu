@@ -34,7 +34,7 @@ USAGE:
                              [--dump-fdt <path>] [--print-fdt] [--console-log <path>]
                              [--mbox-property <tag>[,<tag>...]] [--until <text>]
                              [--send-after <prompt> <text>]... [--stdin]
-                             [--io-log <path>] [--io-log-format text|jsonl]
+                             [--log [text:|jsonl:]<channel>[,...]]... [--log-file <path>]
                              [--otp json:<file> | binary:<file>]
     rpi-virt-fw boot-check <scenario.toml> --plan [--console <path>]
     rpi-virt-fw boot-check <scenario.toml> --log <path> --console <path> [--update]
@@ -108,13 +108,16 @@ FLAGS:
               input, and no wall-clock or silence limit ends the run. On a
               terminal, keys go to the guest raw (Ctrl-C included); Ctrl-A x
               quits, Ctrl-A Ctrl-A sends a Ctrl-A.
-    --io-log <path>
-              Write what the machine read and wrote to <path> (`-` for
-              stderr), apart from the console: SD card and USB stick block
-              runs with the files they belong to, OTP rows read and
-              programmed, and what the network peer did (DHCP, DNS, TFTP,
-              HTTP). Captured at the peripherals; `--io-log-format jsonl` for
-              one JSON object a line.
+    --log [text:|jsonl:]<channel>[,<channel>...]
+              Say what these subsystems did, on stderr or to --log-file
+              <path>. `io` is what the machine read and wrote apart from the
+              console: SD card and USB stick block runs with the files they
+              belong to, OTP rows read and programmed, and what the network
+              peer did (DHCP, DNS, TFTP, HTTP). The rest are one device or
+              core each: arm-exc cmp dwc2 emmc expander irqen mbox otp pcie
+              pmic spi xhci, and in a `diag` build derail dma ff irqtbl sleep
+              swirq tick vec. Repeatable; `jsonl:` for one JSON object a line.
+              See docs/diagnostics.md.
     --otp json:<file> | binary:<file>
               The OTP fuses, kept across runs: read before the boot when
               <file> exists, written back after the run when the firmware

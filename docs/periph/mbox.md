@@ -211,4 +211,4 @@ Mailbox 1 (ARM -> VPU) wants service; set while CONFIG1 has an enabled condition
 Sources:
 
 - decompile (high): ISR 0x3EC58302: Load r5, [0x7E00B940 + 12]; Btest r5, #2
-- trace (high): RVF_DBG_IRQTBL: src 94 handler=0x3ec58302
+- trace (high): --log irqtbl: src 94 handler=0x3ec58302

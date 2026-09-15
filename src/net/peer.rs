@@ -173,8 +173,8 @@ pub struct BuiltinPeer {
     /// TCP connections by (client IP, client port, server port).
     conns: BTreeMap<([u8; 4], u16, u16), TcpConn>,
     conn_count: u32,
-    /// Where each [`Self::note`] also goes, for `boot --io-log` (#35).
-    io: Option<crate::iolog::IoLogRef>,
+    /// Where each [`Self::note`] also goes: the `io` channel (#35).
+    io: crate::log::Log,
 }
 
 impl Default for BuiltinPeer {
@@ -196,7 +196,7 @@ impl BuiltinPeer {
             ip_id: 0,
             conns: BTreeMap::new(),
             conn_count: 0,
-            io: None,
+            io: crate::log::Log::default(),
         }
     }
 
@@ -208,18 +208,16 @@ impl BuiltinPeer {
         }
     }
 
-    /// Also write what the peer does to the I/O log.
-    pub fn with_io(mut self, io: crate::iolog::IoLogRef) -> BuiltinPeer {
-        self.io = Some(io);
+    /// Also log what the peer does, on the `io` channel.
+    pub fn with_log(mut self, log: crate::log::Log) -> BuiltinPeer {
+        self.io = log;
         self
     }
 
-    /// Record one thing the peer did, for the run report and the I/O log.
+    /// Record one thing the peer did, for the run report and the `io` channel.
     fn note(&mut self, what: impl Into<String>) {
         let what = what.into();
-        if let Some(io) = &self.io {
-            io.borrow_mut().net(&what);
-        }
+        self.io.net(&what);
         self.log.push(what);
     }
 
