@@ -7,7 +7,7 @@
 - `HDMI1` copy: `0x7EF09500`
 - Size: `0x100`
 
-Not the BSC: a different block with a different layout. With no monitor attached (the reference board's state) every transfer completes INTRP | NOACK. The second reg window in the device tree, the auto-i2c block at 0x7EF00B00, is not used by start4 and not modelled.
+Not the BSC: a different block with a different layout. With no monitor attached (the reference board's state) every transfer completes INTRP | NOACK. The second reg window in the device tree, the auto-i2c block at 0x7EF00B00, is its own block (hdmi_auto_i2c); the same device answers both.
 
 Sources:
 

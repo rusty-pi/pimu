@@ -117,6 +117,7 @@ pub const SPEC_COVERAGE: &[crate::spec::Coverage] = &[
     hd::COVERAGE,
     hdmi::COVERAGE,
     hdmi_ddc::COVERAGE,
+    hdmi_ddc::COVERAGE_AUTO,
     hvs::COVERAGE,
     mbox::COVERAGE,
     mcsync::COVERAGE,

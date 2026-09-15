@@ -14,8 +14,12 @@
 //! /proc/device-tree/soc/i2c@7ef04500/clock-frequency 97500
 //! ```
 //!
-//! (The second `reg` window is the "auto-i2c" block, which start4 does not
-//! use; only the master below is modelled.)
+//! The node's second `reg` window is the "auto-i2c" block: sequencers that
+//! write a list of values into this master and report when the transfer they
+//! start has finished. start4 1.20190925 to 1.20200601 run one such list at
+//! boot and wait for it with no timeout; later builds leave the block alone.
+//! What they use of it is modelled here (`specs/hdmi_auto_i2c.toml`), and the
+//! machine maps that window onto this device at [`AUTO_WINDOW`].
 //!
 //! Register map, offsets from the instance base — the `bsc_regs` struct of the
 //! Linux driver, and exactly what start4's own driver drives (`0x3ECE69E2`
@@ -66,6 +70,11 @@
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
+use crate::spec::hdmi_auto_i2c::{
+    CLEAR as AUTO_CLEAR, CTL2 as AUTO_CTL2, DONE as AUTO_DONE, LIST2 as AUTO_LIST2,
+    LIST2_COUNT as AUTO_LIST2_COUNT, LIST2_STRIDE as AUTO_LIST2_STRIDE, SIZE as AUTO_SIZE,
+    START as AUTO_START,
+};
 use crate::spec::hdmi_ddc::{
     CHIP_ADDRESS, CNT, CNT_CNT1_MASK, CTL, CTLHI, CTLHI_IGNORE_ACK_MASK as CTLHI_IGNORE_ACK,
     CTL_DTF_SHIFT, DATA_IN, DATA_IN_COUNT, DATA_IN_STRIDE, DATA_OUT, DATA_OUT_COUNT,
@@ -88,6 +97,22 @@ pub const COVERAGE: Coverage = Coverage {
         SCL_PARAM,
     ],
 };
+
+/// What start4 uses of the auto-i2c window is modelled; the rest is stored.
+pub const COVERAGE_AUTO: Coverage = Coverage {
+    block: "hdmi_auto_i2c",
+    decoded: &[AUTO_CTL2, AUTO_LIST2, AUTO_START, AUTO_CLEAR, AUTO_DONE],
+};
+
+/// The machine adds this to an access in the auto-i2c window, so that one
+/// device answers both of its device-tree node's `reg` windows.
+pub const AUTO_WINDOW: u32 = 0x1000;
+const AUTO_WORDS: usize = (AUTO_SIZE / 4) as usize;
+/// The one channel whose list is known to sit at `LIST2`.
+const AUTO_CHANNEL: u32 = 2;
+/// A list command that writes its value to the master's register at
+/// `4 * (command & 0xFF)`.
+const AUTO_CMD_WRITE: u32 = 0x100;
 
 /// Eight data registers each way, four bytes apiece.
 const DATA_REGS: usize = DATA_IN_COUNT as usize;
@@ -124,6 +149,12 @@ pub struct HdmiDdc {
     /// offset its address pointer currently sits at.
     edid: Option<Vec<u8>>,
     edid_ptr: usize,
+    /// The auto-i2c window, as written.
+    auto: [u32; AUTO_WORDS],
+    /// Channels whose list has run and whose transfer is still on the wire.
+    auto_busy: u32,
+    /// `DONE`.
+    auto_done: u32,
 }
 
 impl HdmiDdc {
@@ -145,6 +176,9 @@ impl HdmiDdc {
             now_us: 0,
             edid: None,
             edid_ptr: 0,
+            auto: [0; AUTO_WORDS],
+            auto_busy: 0,
+            auto_done: 0,
         }
     }
 
@@ -246,6 +280,74 @@ impl HdmiDdc {
         }
         self.edid_ptr = (self.edid_ptr + count) % edid.len();
     }
+
+    fn auto_word(&self, off: u32) -> u32 {
+        self.auto.get((off / 4) as usize).copied().unwrap_or(0)
+    }
+
+    fn auto_read(&mut self, off: u32) -> u32 {
+        match off {
+            AUTO_DONE => {
+                self.auto_settle();
+                self.auto_done
+            }
+            _ => self.auto_word(off),
+        }
+    }
+
+    fn auto_write(&mut self, off: u32, value: u32) {
+        if let Some(word) = self.auto.get_mut((off / 4) as usize) {
+            *word = value;
+        }
+        match off {
+            AUTO_START => self.auto_start(value),
+            AUTO_CLEAR => self.auto_done &= !value,
+            _ => {}
+        }
+    }
+
+    /// Run the list of each channel set in a `START` write. Only channel 2's
+    /// list location is known; any other channel reports done at once.
+    fn auto_start(&mut self, channels: u32) {
+        for ch in 0..32 {
+            let bit = 1 << ch;
+            if channels & bit == 0 {
+                continue;
+            }
+            if ch == AUTO_CHANNEL && self.auto_run_list() {
+                self.auto_busy |= bit;
+            } else {
+                self.auto_done |= bit;
+            }
+        }
+    }
+
+    /// Write channel 2's list into the master, pair by pair. True if it
+    /// started a transfer, which the channel then waits for.
+    fn auto_run_list(&mut self) -> bool {
+        let mut started = false;
+        for i in (0..AUTO_LIST2_COUNT - 1).step_by(2) {
+            let cmd = self.auto_word(AUTO_LIST2 + i * AUTO_LIST2_STRIDE);
+            if cmd & AUTO_CMD_WRITE == 0 {
+                break;
+            }
+            let value = self.auto_word(AUTO_LIST2 + (i + 1) * AUTO_LIST2_STRIDE);
+            let reg = (cmd & 0xFF) * 4;
+            let _ = self.write(reg, Width::Word, value);
+            if reg == IIC_ENABLE {
+                started = value & EN_ENABLE != 0;
+            }
+        }
+        started
+    }
+
+    /// Move the channels whose transfer has finished from busy to `DONE`.
+    fn auto_settle(&mut self) {
+        if self.auto_busy != 0 && self.pending.is_none() {
+            self.auto_done |= self.auto_busy;
+            self.auto_busy = 0;
+        }
+    }
 }
 
 impl MmioDevice for HdmiDdc {
@@ -255,6 +357,9 @@ impl MmioDevice for HdmiDdc {
 
     fn read(&mut self, offset: u32, _width: Width) -> BusResult<u32> {
         let off = offset & !3;
+        if let Some(auto) = off.checked_sub(AUTO_WINDOW) {
+            return Ok(self.auto_read(auto));
+        }
         Ok(match off {
             CHIP_ADDRESS => self.chip_address,
             DATA_IN..=DATA_IN_LAST => self.data_in[((off - DATA_IN) / DATA_IN_STRIDE) as usize],
@@ -272,6 +377,10 @@ impl MmioDevice for HdmiDdc {
 
     fn write(&mut self, offset: u32, _width: Width, value: u32) -> BusResult<()> {
         let off = offset & !3;
+        if let Some(auto) = off.checked_sub(AUTO_WINDOW) {
+            self.auto_write(auto, value);
+            return Ok(());
+        }
         match off {
             CHIP_ADDRESS => self.chip_address = value,
             DATA_IN..=DATA_IN_LAST => {
@@ -296,5 +405,43 @@ impl MmioDevice for HdmiDdc {
             _ => {}
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn auto(d: &mut HdmiDdc, off: u32, value: u32) {
+        d.write(AUTO_WINDOW + off, Width::Word, value).unwrap();
+    }
+
+    /// The one list start4 1.20190925 runs, on a connector with nothing on
+    /// it: the master runs the transfer the list sets up, and channel 2's
+    /// `DONE` bit comes up once that has finished (#76).
+    #[test]
+    fn an_auto_i2c_list_runs_through_the_master() {
+        let mut d = HdmiDdc::new("hdmi-ddc0");
+        let list = [
+            0x10B, 0, 0x100, 0x60, 0x10A, 0xD0, 0x109, 2, 0x114, 0x40, 0x101, 0, 0x10B, 1,
+        ];
+        auto(&mut d, AUTO_CLEAR, 1 << 2);
+        for (i, v) in list.into_iter().enumerate() {
+            auto(&mut d, AUTO_LIST2 + i as u32 * AUTO_LIST2_STRIDE, v);
+        }
+        auto(&mut d, AUTO_CTL2, 0x180C_0005);
+        auto(&mut d, AUTO_START, 1 << 2);
+        assert_eq!(d.read(CHIP_ADDRESS, Width::Word), Ok(0x60));
+        assert_eq!(d.read(CNT, Width::Word), Ok(2));
+        assert_eq!(d.read(AUTO_WINDOW + AUTO_DONE, Width::Word), Ok(0));
+
+        d.advance_to(1_000);
+        assert_eq!(d.read(AUTO_WINDOW + AUTO_DONE, Width::Word), Ok(1 << 2));
+        assert_eq!(
+            d.read(IIC_ENABLE, Width::Word),
+            Ok(EN_ENABLE | EN_INTRP | EN_NOACK)
+        );
+        auto(&mut d, AUTO_CLEAR, 1 << 2);
+        assert_eq!(d.read(AUTO_WINDOW + AUTO_DONE, Width::Word), Ok(0));
     }
 }

@@ -1,0 +1,88 @@
+[block]
+name    = "hdmi_auto_i2c"
+base    = 0x7EF00B00
+size    = 0x300
+summary = "HDMI auto-i2c sequencers (the second reg window of each DDC master's node): channels that write a list of values into their connector's DDC I²C master and report when the transfer it starts has finished"
+notes   = "Only what start4 1.20190925, 1.20200212 and 1.20200601 use is modelled, from their accesses: channel 2's list, START, CLEAR and DONE. They run channel 2 once at boot and wait for its DONE bit with no timeout, so on the catch-all stub (which reads 0) they never started the ARM. Later builds leave the block alone. Everything else in the window is stored and read back."
+
+[[block.source]]
+kind       = "measured"
+ref        = "rpi-dev /proc/device-tree/soc/i2c@7ef04500: reg 0x7ef04500 0x100 0x7ef00b00 0x300"
+confidence = "high"
+
+[[block.source]]
+kind       = "trace"
+ref        = "start4 1.20190925 on a B0 (RVF_TRACE_MMIO=0x7ef00b00-0x7ef00e00): zeroes 0x130..0x1A0, writes 4 to 0x264, a (0x100 | n, value) list from 0x134 and 0x180C0005 to 0x130, then 4 to 0x260, then polls 0x268 for bit 2"
+confidence = "high"
+
+[[block.copy]]
+name  = "HDMI1"
+base  = 0x7EF05B00
+notes = "HDMI1's sequencers; HDMI0's are the block base."
+
+[[block.copy.source]]
+kind       = "decompile"
+ref        = "start4 1.20190925 takes 0x7EF00B00 or 0x7EF05B00 as the base by connector (0x0ED11486 / 0x0ED11490)"
+confidence = "high"
+
+[[register]]
+name   = "CTL2"
+offset = 0x130
+access = "rw"
+notes  = "Channel 2's control word. start4 writes 0x180C0005 before it starts the channel; the fields are unknown. Stored."
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4 1.20190925: 0x7EF00C30 <- 0x180C0005"
+confidence = "high"
+
+[[register]]
+name   = "LIST2"
+offset = 0x134
+count  = 28
+stride = 4
+access = "rw"
+notes  = "Channel 2's command list, as (command, value) pairs. A command 0x100 | n writes the value to the DDC master's register at 4 × n. No other command is known, so anything else, the zeroed tail of the list included, ends it. start4's one list sets up and starts a two-byte write: IIC_ENABLE 0, CHIP_ADDRESS 0x60, CTL 0xD0, CNT 2, CTLHI 0x40, DATA_IN 0, IIC_ENABLE 1."
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4 1.20190925: (0x10B, 0) (0x100, 0x60) (0x10A, 0xD0) (0x109, 2) (0x114, 0x40) (0x101, 0) (0x10B, 1) at 0x7EF00C34..0x7EF00C68, after zeroing the list"
+confidence = "high"
+
+[[register.source]]
+kind       = "inferred"
+ref        = "the low byte of each command is a word index into the DDC master's registers, i2c-brcmstb.c struct bsc_regs: 0x00 chip_address, 0x01 data_in[0], 0x09 cnt_reg, 0x0A ctl_reg, 0x0B iic_enable, 0x14 ctlhi_reg"
+confidence = "medium"
+
+[[register]]
+name   = "START"
+offset = 0x260
+access = "w"
+notes  = "Write 1 << n to run channel n's list. Only channel 2's list location is known; any other channel reports done at once."
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4 1.20190925: 0x7EF00D60 <- 4 once the list is written, then it waits on DONE bit 2"
+confidence = "medium"
+
+[[register]]
+name   = "CLEAR"
+offset = 0x264
+access = "w"
+notes  = "Write 1 << n to clear channel n's DONE bit. start4 writes it before it programs the channel. That it clears DONE is a guess; it could as well be an interrupt enable."
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4 1.20190925: 0x7EF00D64 <- 4 before programming channel 2"
+confidence = "low"
+
+[[register]]
+name   = "DONE"
+offset = 0x268
+access = "r"
+notes  = "Bit n: channel n's list has run and the transfer it started has finished. start4 waits for its channel's bit with no timeout."
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4 1.20190925 at 0x3ED114D4: ld r3, (r2+0x268); cmp r3, 0; btest r3, 2, looping until set"
+confidence = "high"
