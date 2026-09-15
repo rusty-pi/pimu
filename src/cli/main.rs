@@ -22,7 +22,7 @@ USAGE:
                              [--max-wall <secs>] [--sd <img>] [--usb <img>] [--usb-mb <n>]
                              [--boot-order <hex>] [--bootconf <KEY=VALUE>]...
                              [--skip-signed-boot] [--netboot <dir> | --net passt[:<socket>]]
-                             [--eeprom-pubkey <pubkey.bin>] [--boot-rom <rom.bin>] [--rom <rom.bin>]
+                             [--eeprom-pubkey <pubkey.bin>] [--boot-rom <rom.bin>]
                              [--stepping b0|c0] [--board-rev <hex>] [--skip-unimpl]
               (--stepping: the BCM2711 silicon, C0 by default; --board-rev: the
                OTP revision code, by default a board that stepping shipped on)

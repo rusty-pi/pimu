@@ -71,7 +71,6 @@ struct BootOpts {
     bootconf: Vec<String>,
     eeprom_pubkey: Option<PathBuf>,
     boot_rom_path: Option<PathBuf>,
-    rom_path: Option<PathBuf>,
     stepping: Option<Stepping>,
     board_rev: Option<u32>,
     dram_map: bool,
@@ -118,7 +117,6 @@ impl BootOpts {
         let mut bootconf: Vec<String> = Vec::new();
         let mut eeprom_pubkey: Option<PathBuf> = None;
         let mut boot_rom_path: Option<PathBuf> = None;
-        let mut rom_path: Option<PathBuf> = None;
         let mut stepping: Option<Stepping> = None;
         let mut board_rev: Option<u32> = None;
         let mut dram_map = false;
@@ -235,7 +233,6 @@ impl BootOpts {
                     boot_rom_path =
                         Some(PathBuf::from(it.next().context("--boot-rom needs a file")?))
                 }
-                "--rom" => rom_path = Some(PathBuf::from(it.next().context("--rom needs a file")?)),
                 "--stepping" => {
                     stepping = Some(Stepping::parse(
                         it.next().context("--stepping needs b0 or c0")?,
@@ -341,7 +338,6 @@ impl BootOpts {
             bootconf,
             eeprom_pubkey,
             boot_rom_path,
-            rom_path,
             stepping,
             board_rev,
             dram_map,
@@ -691,7 +687,6 @@ struct Rig<'a> {
     usb_disk: Option<SharedUsbDisk>,
     bootrom: rpi_virt_fw::firmware::bootrom::BootRom,
     boot_rom_image: Option<Vec<u8>>,
-    rom_image: Option<Vec<u8>>,
     board: Board,
 }
 
@@ -706,7 +701,6 @@ impl<'a> Rig<'a> {
             eeprom,
             ram_mb,
             ref boot_rom_path,
-            ref rom_path,
             stepping,
             board_rev,
             verbose,
@@ -741,16 +735,6 @@ impl<'a> Rig<'a> {
             None => None,
         };
 
-        // `--rom <file>`: map a maskROM dump at 0x6000_0000 for bootcode that calls
-        // into it (2020-04-16 does, #71); the modelled ROM stage still boots. Also
-        // a local file only.
-        let rom_image = match &rom_path {
-            Some(p) => {
-                Some(std::fs::read(p).with_context(|| format!("reading ROM {}", p.display()))?)
-            }
-            None => None,
-        };
-
         // `--stepping` / `--board-rev`: the silicon and the board around it (#77).
         // Naming only one gets a board that fits it.
         let board = {
@@ -780,7 +764,6 @@ impl<'a> Rig<'a> {
             usb_disk,
             bootrom,
             boot_rom_image,
-            rom_image,
             board,
         })
     }
@@ -844,9 +827,6 @@ impl<'a> Rig<'a> {
             machine.attach_net(Box::new(net));
         }
         machine.config_otp.io = self.io.clone();
-        if let Some(rom) = &self.rom_image {
-            machine.map_boot_rom(rom.clone());
-        }
         machine.mmio_trace = trace_mmio;
         // `RVF_TRACE_MMIO=<lo>-<hi>` (hex): trace peripheral accesses from the
         // first instruction, but only inside that address range. Tracing the
