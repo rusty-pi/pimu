@@ -2,9 +2,10 @@
 //!
 //! Real firmware touches dozens of blocks we do not model yet (clock manager,
 //! PM/watchdog, SDRAM PHY, mailbox internals, ...). Rather than fault, the stub
-//! records every access and returns a configurable value, so an unimplemented
-//! poke becomes a triage note instead of a crash. Per-offset "sticky" storage
-//! makes the common "write reg then read it back" pattern behave.
+//! records every access and reads 0 where nothing was written, so an
+//! unimplemented poke becomes a triage note instead of a crash. Per-offset
+//! "sticky" storage makes the common "write reg then read it back" pattern
+//! behave.
 
 use std::collections::BTreeMap;
 
@@ -21,9 +22,6 @@ pub struct StubAccess {
 pub struct StubRegion {
     name: &'static str,
     storage: BTreeMap<u32, u32>,
-    /// Value returned for offsets never written. `!0` (all-ones) is often a
-    /// better default than 0 for "is this bit set yet" polls; callers pick.
-    default_read: u32,
     pub log: Vec<StubAccess>,
     pub log_limit: usize,
 }
@@ -33,15 +31,9 @@ impl StubRegion {
         StubRegion {
             name,
             storage: BTreeMap::new(),
-            default_read: 0,
             log: Vec::new(),
             log_limit: 4096,
         }
-    }
-
-    pub fn with_default_read(mut self, v: u32) -> StubRegion {
-        self.default_read = v;
-        self
     }
 
     fn record(&mut self, a: StubAccess) {
@@ -57,11 +49,7 @@ impl MmioDevice for StubRegion {
     }
 
     fn read(&mut self, offset: u32, width: Width) -> BusResult<u32> {
-        let value = self
-            .storage
-            .get(&offset)
-            .copied()
-            .unwrap_or(self.default_read);
+        let value = self.storage.get(&offset).copied().unwrap_or(0);
         self.record(StubAccess {
             offset,
             width,

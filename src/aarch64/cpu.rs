@@ -292,11 +292,6 @@ impl Cpu {
         self.spsel = self.el != 0 && spsr & 1 != 0;
     }
 
-    /// Is the translation regime the core is in now running with its MMU on?
-    pub fn mmu_on(&self) -> bool {
-        self.regime().is_some()
-    }
-
     /// Does the core hold an exclusive mark, which another core's store can
     /// clear?
     pub fn marked(&self) -> bool {

@@ -44,7 +44,7 @@ pub struct SysTimer {
     pub clo_reads: u64,
     /// Per-channel "this compare fired and its interrupt has not been taken
     /// yet" flag, set by [`Self::service_matches`] and cleared by
-    /// [`Self::take_pending_channel`].
+    /// [`Self::take_channel`].
     ///
     /// Each compare channel is its own VPU interrupt source (`64 + channel`)
     /// with its own vector-table entry, and start4 uses more than one: channel 0
@@ -82,20 +82,6 @@ impl SysTimer {
             dbg_cmp: std::env::var_os("RVF_DBG_CMP").is_some(),
             arms: 0,
         }
-    }
-
-    /// Consume the lowest-numbered channel whose compare has fired, if any.
-    /// The caller is expected to vector interrupt source `64 + channel`.
-    pub fn take_pending_channel(&mut self) -> Option<u8> {
-        let c = self.pending_channel()?;
-        self.pending[c as usize] = false;
-        self.pending_any = self.pending.iter().any(|&p| p);
-        Some(c)
-    }
-
-    /// Consume the "a compare fired since last checked" flag.
-    pub fn take_tick_pending(&mut self) -> bool {
-        self.take_pending_channel().is_some()
     }
 
     /// Has channel `c`'s compare fired, with its interrupt not taken yet?

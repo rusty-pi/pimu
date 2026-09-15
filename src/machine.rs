@@ -501,11 +501,6 @@ impl Machine {
         }
     }
 
-    /// Drain both UARTs regardless of console selection (for tracing).
-    pub fn take_all_uart_output(&mut self) -> (Vec<u8>, Vec<u8>) {
-        (self.uart0.take_output(), self.aux.take_output())
-    }
-
     pub fn irq_pending(&self) -> bool {
         self.uart0.irq_pending() || self.aux.irq_pending()
     }
