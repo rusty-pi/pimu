@@ -159,7 +159,7 @@ from the bench reading the image's partition table and FAT itself, so the
 firmware stays a black box:
 
 ```text
-   0.000944 io: otp  read  row 28  = 0x1aa2bb31
+   0.000944 io: otp  read  row 28  = 0x1aa2bb31  serial number
    6.270753 io: sd   read  lba 0x0+2  (partition table)
    6.271470 io: sd   read  lba 0x800+2  p1:(boot sector)
    6.278862 io: sd   read  lba 0x1014+5  p1:/config.txt, p1:/start4.elf
@@ -168,9 +168,13 @@ firmware stays a black box:
 ```
 
 Each line starts with the model time in seconds, the way the firmware and
-Linux stamp their own logs. A row the firmware programs shows as
-`io: otp  write row <n> = <new>  (was <old>)`, and what the network peer did
-as `io: net  dhcp: ...`.
+Linux stamp their own logs. An OTP line ends with what the row is for, after
+Raspberry Pi's
+[OTP register list](https://github.com/raspberrypi/documentation/blob/ecd7a8129d4f2cb908d6cbd6ea5a994e0091285d/documentation/asciidoc/computers/raspberry-pi/otp-bits.adoc)
+([#101](https://github.com/valtzu/rpi-virt-fw/issues/101)), and with
+`(blank)` when none of its fuses are programmed. A row the firmware programs
+shows as `io: otp  write row <n> = <new>  <meaning> (was <old>)`, and what the
+network peer did as `io: net  dhcp: ...`.
 Programming works the way start4 drives the OTP block, key sequence first, and
 a fuse only ever goes from 0 to 1
 ([#92](https://github.com/valtzu/rpi-virt-fw/issues/92)). To watch it, program two words of customer OTP (rows 36 and 37) the way

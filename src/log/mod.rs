@@ -389,18 +389,19 @@ impl Log {
     }
 
     /// `io`: an OTP row the firmware read. `fused`: the row is programmed on
-    /// the modelled board; a blank one reads 0, as on the hardware.
-    pub fn otp_read(&self, row: u32, value: u32, fused: bool) {
+    /// the modelled board; a blank one reads 0, as on the hardware. `meaning`
+    /// says what the row is for (#101).
+    pub fn otp_read(&self, row: u32, value: u32, fused: bool, meaning: &str) {
         if self.on(Channel::Io) {
-            self.io_line(io::otp_read(row, value, fused));
+            self.io_line(io::otp_read(row, value, fused, meaning));
         }
     }
 
     /// `io`: an OTP row the firmware programmed: `value` is what the row holds
     /// now, `was` what it held before. Fuses only go from 0 to 1 (#92).
-    pub fn otp_write(&self, row: u32, value: u32, was: u32) {
+    pub fn otp_write(&self, row: u32, value: u32, was: u32, meaning: &str) {
         if self.on(Channel::Io) {
-            self.io_line(io::otp_write(row, value, was));
+            self.io_line(io::otp_write(row, value, was, meaning));
         }
     }
 
@@ -657,7 +658,7 @@ mod tests {
         let (log, buf) = open("io,pcie");
         log.blocks("sd", "read", 0x800, 1);
         log.blocks("sd", "read", 0x801, 7);
-        log.otp_read(19, 0x8aa9_6d38, true);
+        log.otp_read(19, 0x8aa9_6d38, true, "board identity, word 1 of 4");
         log.blocks("sd", "read", 0x808, 1);
         crate::log!(log, Channel::Pcie, "endpoint irq");
         log.blocks("sd", "read", 0x809, 1);
@@ -666,7 +667,7 @@ mod tests {
         assert_eq!(
             text(&buf),
             "   0.000000 io: sd   read  lba 0x800+8\n   \
-             0.000000 io: otp  read  row 19  = 0x8aa96d38\n   \
+             0.000000 io: otp  read  row 19  = 0x8aa96d38  board identity, word 1 of 4\n   \
              0.000000 io: sd   read  lba 0x808+1\n   \
              0.000000 pcie: endpoint irq\n   \
              0.000000 io: sd   read  lba 0x809+1\n   \
@@ -690,18 +691,20 @@ mod tests {
     #[test]
     fn otp_writes_say_what_the_row_held_before() {
         let (log, buf) = open("io");
-        log.otp_write(36, 0x1111_1111, 0);
+        log.otp_write(36, 0x1111_1111, 0, "customer OTP, word 1 of 8");
         assert_eq!(
             text(&buf),
-            "   0.000000 io: otp  write row 36  = 0x11111111  (was 0x00000000)\n"
+            "   0.000000 io: otp  write row 36  = 0x11111111  customer OTP, word 1 of 8 \
+             (was 0x00000000)\n"
         );
 
         let (log, buf) = open("jsonl:io");
-        log.otp_write(36, 0x1111_1111, 0);
+        log.otp_write(36, 0x1111_1111, 0, "customer OTP, word 1 of 8");
         assert_eq!(
             text(&buf),
             "{\"us\":0,\"channel\":\"io\",\"dev\":\"otp\",\"op\":\"write\",\"row\":\"36\",\
-             \"value\":\"0x11111111\",\"was\":\"0x00000000\"}\n"
+             \"value\":\"0x11111111\",\"was\":\"0x00000000\",\
+             \"meaning\":\"customer OTP, word 1 of 8\"}\n"
         );
     }
 
@@ -709,7 +712,7 @@ mod tests {
     fn io_events_need_the_io_channel() {
         let (log, buf) = open("pcie");
         log.blocks("sd", "read", 0, 1);
-        log.otp_read(19, 1, true);
+        log.otp_read(19, 1, true, "board identity, word 1 of 4");
         log.net("dhcp");
         drop(log);
         assert_eq!(text(&buf), "");
