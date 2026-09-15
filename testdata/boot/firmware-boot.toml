@@ -1,7 +1,7 @@
 # The firmware boot: the regression this project actually exists for.
 #
 # One EEPROM image, one SD card, one wall budget, and every assertion made
-# about the run. `scripts/boot-check.sh` runs it; CI runs that.
+# about the run. `rpi-virt-fw boot-check` runs it, and so does CI.
 #
 # Two kinds of assertion, checked against a single boot:
 #
@@ -11,7 +11,7 @@
 #     commit or issue that made it pass, which is what a raw diff cannot say.
 #
 # After an intentional change, re-record the golden with:
-#   scripts/boot-check.sh --update
+#   rpi-virt-fw boot-check testdata/boot/firmware-boot.toml --update
 # and read the diff in the commit before you believe it.
 #
 # This file is deliberately not under `testdata/scenarios/`: those are the
@@ -57,8 +57,8 @@ mbox_property = [
 ]
 # The runners are roughly 1.6x slower than a dev box, where the last milestone
 # lands around 90 s. The budget went 290 -> 330 s so the run reaches the codec
-# licence check, which is what exercises the VCE guard below. RVF_BOOT_WALL
-# overrides it.
+# licence check, which is what exercises the VCE guard below. `boot-check
+# --max-wall` overrides it.
 wall_secs = 330
 # `boot` stops on an instruction the decoder does not implement rather than
 # stepping over it, so a skip can only come from the remaining recon leniencies

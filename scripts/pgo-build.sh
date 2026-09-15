@@ -6,7 +6,7 @@
 # An instrumented build runs the firmware boot and the first part of the Linux
 # boot, `llvm-profdata` merges what it counted, and the release build is done
 # again with that profile. Needs the llvm-tools rustup component (added here
-# if it is missing) and what scripts/boot-check.sh needs: the firmware blobs
+# if it is missing) and what `boot-check` needs: the firmware blobs
 # and both SD images scripts/make-sd.sh builds (firmware/sd.img, and
 # firmware/sd-halt.img with KERNEL=halt).
 #
@@ -38,7 +38,7 @@ mkdir -p "$work/raw"
 RUSTFLAGS="-Cprofile-generate=$work/raw" cargo build --release --target-dir "$work/build"
 instr="$work/build/release/rpi-virt-fw"
 
-# A boot scenario's workload as boot-check.sh runs it, minus what it types into
+# A boot scenario's workload as boot-check runs it, minus what it types into
 # the console, plus any extra arguments (a later `--until` wins). The typed
 # input has to go: `--until` only searches what the console prints after the
 # last scripted line went in.
@@ -46,7 +46,7 @@ train() {
   local scenario="$1"
   shift
   local plan args=() i
-  mapfile -t plan < <("$instr" boot-check "$scenario" --plan --console "$work/console")
+  mapfile -t plan < <("$instr" boot-check "$scenario" --plan --output "$work/boot")
   # `--plan` names any boot medium that is not built yet.
   [ "${#plan[@]}" -ge 2 ] || exit 1
   for ((i = 1; i < ${#plan[@]}; i++)); do

@@ -36,8 +36,9 @@ USAGE:
                              [--send-after <prompt> <text>]... [--stdin]
                              [--log [text:|jsonl:]<channel>[,...]]... [--log-file <path>]
                              [--otp json:<file> | binary:<file>]
-    rpi-virt-fw boot-check <scenario.toml> --plan [--console <path>]
-    rpi-virt-fw boot-check <scenario.toml> --log <path> --console <path> [--update]
+    rpi-virt-fw boot-check <scenario.toml> [--update] [--output <log>] [--max-wall <secs>]
+    rpi-virt-fw boot-check <scenario.toml> --from <log> [--update]
+    rpi-virt-fw boot-check <scenario.toml> --plan [--output <log>] [--max-wall <secs>]
     rpi-virt-fw disasm <file> [--base <hex>] [--count <n>] [--vaddr <hex>]
     rpi-virt-fw spec-docs [--update]
 
@@ -49,12 +50,15 @@ COMMANDS:
               implement (--skip-unimpl steps over it instead). `boot <file>
               --eeprom` is the same as `boot --eeprom <file>`.
     boot-check
-              Check a finished firmware boot against a boot scenario: the
-              golden console transcript plus every named milestone. `--plan`
-              prints the `boot` invocation the scenario describes, which is
-              how `scripts/boot-check.sh` runs the boot without repeating the
-              workload description. It fails instead when a file the run reads
-              is missing, naming the command that makes each.
+              Run the firmware boot a boot scenario describes and check it:
+              the golden console transcript plus every named milestone. The
+              combined output goes to --output (boot.log), the console next to
+              it as <log>.console; --from checks such a pair from an earlier
+              run (a CI artifact, say) without booting. --update re-records
+              the golden; --max-wall overrides the scenario's wall budget.
+              `--plan` prints the `boot` invocation instead, one argument a
+              line. Both refuse when a file the run reads is missing, naming
+              the command that makes each.
     disasm    Disassemble a flat binary / ELF with the (partial) VPU decoder.
     spec-docs Check docs/periph/ against the register specs in specs/*.toml;
               --update regenerates it.

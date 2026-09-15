@@ -138,7 +138,7 @@ each medium, and `rpi-virt-fw boot-check <scenario> --plan` prints them.
 `scripts/pgo-build.sh` does the release build with profile-guided
 optimisation: an instrumented build runs the firmware boot and the start of
 the Linux boot, and the release build is redone with what it counted. It needs
-what `boot-check.sh` needs and takes about 10 minutes on a Pi 4, where both
+what `boot-check` needs and takes about 10 minutes on a Pi 4, where both
 boots then run 1.45x faster; the guest runs the same instructions either way.
 CI does not use it — the extra build and training cost more than the boot
 jobs would save.
@@ -251,7 +251,7 @@ involved is invented in `src/periph/configotp.rs`. See the OTP rule in
 `--max-wall` defaults to 140 s (none with `--stdin`) and there is no
 instruction cap unless you pass `--max-steps`. Reaching the last milestone takes
 longer than 140 s, so each boot scenario carries its own budget (`wall_secs`,
-overridable with `RVF_BOOT_WALL`). `scripts/boot-check.sh` runs one boot and
+overridable with `boot-check --max-wall`). `boot-check` runs one boot and
 checks it two ways; it is what CI runs, so run it locally to reproduce a CI
 failure.
 
@@ -285,11 +285,16 @@ Both are checked against a single boot; the wall clock has little headroom, so
 nothing here runs the firmware twice.
 
 ```
-scripts/boot-check.sh                  # run the SD boot, check it
-scripts/boot-check.sh --scenario=testdata/boot/linux-boot.toml
-scripts/boot-check.sh --update         # re-record the golden from this run
-RVF_BOOT_WALL=600 scripts/boot-check.sh   # slower machine, busier machine
+cargo run --release -- boot-check testdata/boot/firmware-boot.toml   # the SD boot
+cargo run --release -- boot-check testdata/boot/linux-boot.toml
+cargo run --release -- boot-check testdata/boot/firmware-boot.toml --update       # re-record the golden
+cargo run --release -- boot-check testdata/boot/firmware-boot.toml --max-wall 600 # slower, busier machine
+cargo run --release -- boot-check testdata/boot/usb-boot.toml --from boot-usb.log # a CI run's artifact
 ```
+
+The combined output goes to `boot.log` (`--output` names another file) and the
+console to `boot.log.console` beside it: the pair CI uploads, and what `--from`
+checks again without booting.
 
 After an intentional change, `--update` and then read the golden diff in the
 commit: it is the change, spelled out.
@@ -349,7 +354,7 @@ src/
 specs/          register maps with provenance; docs/periph/ is generated
 docs/           boot-chain, arm-side-findings, diagnostics, usb-xhci, vpu-isa,
                 references, vision, periph/
-scripts/        fetch-firmware.sh, make-sd.sh, make-netboot.sh, boot-check.sh,
+scripts/        fetch-firmware.sh, make-sd.sh, make-netboot.sh, pgo-build.sh,
                 provision-eeprom.sh, make-dt-blob.py, vc4-xref.py
 testdata/       scenarios/*.toml + golden/*.txt  (in-process, millisecond)
                 boot/*.toml + boot/golden/  (the firmware and Linux boots)

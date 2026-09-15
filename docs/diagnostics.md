@@ -13,8 +13,8 @@ deleted for exactly that reason (`RVF_PMIC_EVENT`, `RVF_TICK_CALL`,
 `RVF_SCHED_TICK`, `RVF_MCSYNC_RPC`). A knob that only changes what *we* print is
 a diagnostic and belongs here.
 
-The two exceptions, which describe the *board* rather than the firmware, are
-`RVF_PCIE_DEVICE` and `RVF_BOOT_WALL`.
+The one exception, which describes the *board* rather than the firmware, is
+`RVF_PCIE_DEVICE`.
 
 **Build with the `diag` feature to use most of them:**
 
@@ -161,7 +161,7 @@ that is still set and names the channel that replaced it.
 
 | Variable | Effect |
 |---|---|
-| `RVF_LIVE_CONSOLE=1` | Stream the UART console as it is produced instead of buffering it. `scripts/boot-check.sh` sets this. |
+| `RVF_LIVE_CONSOLE=0` | Buffer the UART console and print it with the run report, instead of streaming it as it is produced (the default). |
 | `RVF_BOOTARGS="<args>"` | More kernel arguments after the harness's own (`initcall_debug` to time every initcall, `nokaslr` for addresses that match `System.map`). |
 | `RVF_SLOW_LOOP=1` | Take every step through every check of the run loop, as a `diag` build does, instead of skipping the checks that cannot act (`Emulator::fast_steps`). A run must come out the same either way; this is how to check that it does. |
 | `RVF_NO_PARK=1` | Execute every pass of a busy-wait loop instead of parking the core in it (`arm/mod.rs`, "Busy-wait loops"). The same check for the ARM side: a run must come out the same either way. Works in every build. |
@@ -169,7 +169,6 @@ that is still set and names the channel that replaced it.
 | `RVF_NO_SHA_SKIP=1` | Run a SHA-256 block loop block by block instead of hashing the blocks in the middle of a slice natively (`arm/mod.rs`, "SHA-256 loops"). Same either way, cycle count included. Works in every build. |
 | `RVF_DUMP_FLASH=<path>` | Write the EEPROM flash image out after the run, including any self-update the firmware applied. |
 | `RVF_DUMP_RAM=<path>` | Write SDRAM out after every boot, as `<path>.<n>` for boot `n`, before a reset replaces it. A kernel that dies before its console comes up still has its log buffer in there. Works in every build. |
-| `RVF_BOOT_WALL=<seconds>` | Overrides the boot scenario's `wall_secs` (default 330) for `scripts/boot-check.sh`. Raise it when other work is competing for the CPU — two concurrent boot runs will miss `arm_loader` on time. |
 | `RVF_PCIE_DEVICE=0` | Unsolder the VL805 from the modelled board. Describes the hardware, not the firmware: a real Pi 4B always has one, so it is attached by default. |
 
 ---
