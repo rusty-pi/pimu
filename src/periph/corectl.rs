@@ -114,7 +114,8 @@ impl CoreCtl {
     }
 
     /// The 4-bit priority/enable field for interrupt source `src` (as numbered by
-    /// start4, i.e. 64.. for the first word). 0 = disabled.
+    /// start4, i.e. 64.. for the first word) in core 0's bank. 0 = disabled: a
+    /// source queued for core 0 waits until this is non-zero.
     pub fn irq_priority(&self, src: u32) -> u8 {
         let word = IRQ_PRIO + ((src >> 3) % IRQ_PRIO_COUNT) * IRQ_PRIO_STRIDE;
         let field = (src & 7) * 4;
