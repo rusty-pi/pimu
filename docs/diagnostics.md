@@ -111,7 +111,7 @@ All of these are `=1`.
 | `RVF_DBG_DERAIL` | Execution derailing into unmapped or zeroed memory. |
 | `RVF_DBG_SPI` | SPI0 transactions against the EEPROM flash. |
 | `RVF_DBG_PMIC` | DA9090 PMIC register traffic. |
-| `RVF_DBG_OTP` | Every OTP row the firmware reads, and what it got. |
+| `RVF_DBG_OTP` | Every OTP row the firmware reads, and what it got; every row it programs, before and after. |
 | `RVF_DBG_XHCI` | xHCI rings, TRBs and port state. |
 | `RVF_DBG_DWC2` | The DWC2 USB OTG controller (`0x7E98_0000`): every write, and every read that differs from the previous read of the same register, so a poll shows once. |
 | `RVF_DBG_MBOX` | Every word across the ARM↔VideoCore property mailbox, both directions. |

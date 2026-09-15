@@ -403,8 +403,14 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
     let rig = Rig::new(opts, image, io, usb_disk)?;
 
     let mut reboots = 0u32;
+    // A reset does not blank OTP: each boot's machine starts with the rows
+    // the one before programmed (#92).
+    let mut fuses = None;
     let (report, emu, start) = 'boot: loop {
         let mut machine = rig.machine(&flash)?;
+        if let Some(fuses) = fuses.take() {
+            machine.config_otp.set_fuses(fuses);
+        }
         let start = rig.stage(&mut machine, reboots)?;
         let mut emu = rig.emulator(machine, start);
         emu.input.script = opts.sends.iter().cloned().collect();
@@ -422,6 +428,7 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
             }
             flash = emu.machine.spi0.flash_bytes().to_vec();
             edits.apply(&mut flash, false); // self-update restored SIGNED_BOOT=1
+            fuses = Some(emu.machine.config_otp.fuses().clone());
             if reboots <= 4 {
                 // `RVF_ARM_PROF`: the next boot's ARM side starts a profile
                 // of its own, so this one's goes out now.

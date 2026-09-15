@@ -36,7 +36,7 @@ Generated from the TOML specs in [`specs/`](../../specs/); see [`specs/README.md
 | [`hvs`](hvs.md) | vpu | `0x7E400000` | `0x1000` | 7 | HVS (Hardware Video Scaler): identification, the per-channel frame-swap words, and end of frame |
 | [`mbox`](mbox.md) | vpu | `0x7E00B880` | `0x140` | 12 | ARM <-> VideoCore mailboxes: two views of the same pair of FIFOs, and the interrupt block between them |
 | [`mcsync`](mcsync.md) | vpu | `0x7E000000` | `0x1000` | 4 | Doorbells / semaphores between the two VPU cores |
-| [`otp`](otp.md) | vpu | `0x7E20F000` | `0x1000` | 7 | Always-on config / OTP engine: one-row-at-a-time reads of the fuse array |
+| [`otp`](otp.md) | vpu | `0x7E20F000` | `0x1000` | 7 | Always-on config / OTP engine: the fuse array, one row at a time – reads and programming |
 | [`pcie`](pcie.md) | vpu | `0x7D500000` | `0x9310` | 36 | PCIe root complex (pcie-brcmstb), with the VL805 xHCI controller behind it |
 | [`pm`](pm.md) | vpu | `0x7E100000` | `0x1000` | 6 | Power management: reset control, reset status, watchdog, power-domain registers |
 | [`pmic_1d`](pmic_1d.md) | i2c | `0x1D` | `0x100` | 6 | Board PMIC at 0x1D on every Pi 4-family board but the 4B rev 1.5 (start4 descriptor type 0x81) |
