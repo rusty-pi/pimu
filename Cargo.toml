@@ -7,6 +7,10 @@ description = "A virtual bench for Raspberry Pi VideoCore boot firmware (start4.
 license = "MIT OR Apache-2.0"
 publish = false
 
+[[bin]]
+name = "rpi-virt-fw"
+path = "src/cli/main.rs"
+
 [dependencies]
 anyhow = "1"
 hmac = "0.12"
