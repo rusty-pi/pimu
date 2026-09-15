@@ -494,6 +494,13 @@ impl Cpu {
         self.tlb.fetch = Some((va & !0xFFF, self.el, pa & !0xFFF));
         Ok(pa)
     }
+
+    /// Where a data read of `va` would go, the way a load translates it,
+    /// or `None` if it would fault. Table walks go through
+    /// `mem`.
+    pub fn data_pa<M: Memory + ?Sized>(&mut self, mem: &mut M, va: u64) -> Option<u64> {
+        self.translate(mem, va, Kind::Read).ok()
+    }
 }
 
 /// `AT S1Ex{R,W}` / `AT S12Ex{R,W}` (stage 2 is not modelled, so the latter

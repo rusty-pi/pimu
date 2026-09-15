@@ -124,6 +124,46 @@
 //!   in the same cycle); or when an interrupt line comes up that the core
 //!   can take. The skipped instructions count as executed.
 //!
+//! ## SHA-256 loops
+//!
+//! Before it starts a kernel, UEFI's secure boot hashes the whole image with
+//! SHA-256 in C, block after block: 89.7 MB for the mkosi UKI, minutes at one
+//! instruction per cycle (#79). A core in such a loop has the blocks in the
+//! middle of a slice hashed natively instead (`arm/sha.rs`), and comes out
+//! with the registers, memory and cycle count it would have had running
+//! them. `RVF_NO_SHA_SKIP=1` turns this off, for comparison.
+//!
+//! - Recognition: by what the loop does, not by its code. A backward-jump
+//!   target reached after three passes in a row of one length, long enough
+//!   not to be a busy-wait, gets two passes recorded: their PCs, the flags
+//!   after every instruction, every read and store. The passes have to run
+//!   the same PCs, touch only RAM and change nothing beyond the general
+//!   registers and flags ([`Cpu::effects`]); what each stores has to include
+//!   32 bytes that are SHA-256's compression of the 32 the pass before
+//!   stored and 64 bytes read — the state and the block. Memory one pass
+//!   leaves for the next has to be that state. When the state a pass stores
+//!   is that of the block the pass before read (the backward-jump target
+//!   is in the middle of a block's work, the way LLVM rotates a `while`
+//!   loop), the loop is recorded again from just after the store, and a
+//!   core arriving at the target runs the way to there off the machine.
+//! - Registers: each general register keeps its value, moves by one step
+//!   every pass (the block pointer), holds a state word, or is dead:
+//!   written in a pass before it is read. The recorded pass is re-run off
+//!   the machine with the dead ones scrambled, and has to come out the same.
+//! - Skip: at the loop's head, the blocks ahead are hashed natively, and
+//!   pass `n` is probed off the machine from the state that gives. It has to
+//!   run the recorded PCs, with the recorded flags wherever the two recorded
+//!   passes agree, and come back to the head with the next state, so the
+//!   loop's own end test (a pointer compared with the end, for equality)
+//!   fails it at the last block. Leaving the loop is for good, so a doubling
+//!   and a halving search find the last pass that comes back; the core
+//!   skips the ones before it and runs that one itself, which puts back
+//!   what the loop only uses inside a pass.
+//! - Bounds: a lone runnable core, none parked, no other core's exclusive
+//!   mark, no interrupt it could take; the skip stays inside the slice and
+//!   before the next timer event. The skipped instructions count as
+//!   executed.
+//!
 //! Not yet: stage 2 translation (a core that sets `HCR_EL2.VM` stops with
 //! [`ArmStop::Unsupported`]).
 
@@ -135,6 +175,7 @@ use crate::periph::gentimer::{self, GenericTimer, Reg, Which};
 use crate::periph::{armlocal, gic};
 
 mod park;
+mod sha;
 
 /// The number of cores: BCM2711 has four A72s.
 pub const CORES: usize = 4;
@@ -202,6 +243,12 @@ pub struct Core {
     detect: park::Detector,
     /// The loop the core is parked in.
     park: Option<Box<park::Park>>,
+    /// The SHA-256 block loop the core was last fitted to (module docs,
+    /// "SHA-256 loops"), how many it was fitted to, and how many blocks it
+    /// had hashed natively.
+    sha: Option<Box<sha::Loop>>,
+    pub sha_loops: u64,
+    pub sha_blocks: u64,
 }
 
 impl Core {
@@ -217,6 +264,9 @@ impl Core {
             entered: None,
             detect: park::Detector::default(),
             park: None,
+            sha: None,
+            sha_loops: 0,
+            sha_blocks: 0,
         }
     }
 
@@ -279,6 +329,9 @@ pub struct ArmSide {
     /// `RVF_NO_BURST=1` takes a lone core through the cycle loop too
     /// ([`Self::burst`]).
     burst_on: bool,
+    /// `RVF_NO_SHA_SKIP=1` runs SHA-256 block loops block by block too
+    /// (module docs, "SHA-256 loops").
+    sha_on: bool,
     /// [`Self::run_until_store`]: stop after the cycle in which a core first
     /// writes a VPU-side peripheral, and whether one has.
     stop_on_store: bool,
@@ -325,7 +378,7 @@ impl ArmSide {
 
     /// The first `n` cores only.
     pub fn with_cores(n: usize) -> ArmSide {
-        ArmSide {
+        let mut arm = ArmSide {
             cores: (0..n).map(Core::new).collect(),
             cycles: 0,
             slept: 0,
@@ -346,8 +399,19 @@ impl ArmSide {
             woke: 0,
             park_on: std::env::var_os("RVF_NO_PARK").is_none(),
             burst_on: std::env::var_os("RVF_NO_BURST").is_none(),
+            sha_on: std::env::var_os("RVF_NO_SHA_SKIP").is_none(),
             stop_on_store: false,
             stored: false,
+        };
+        arm.set_detectors();
+        arm
+    }
+
+    /// Tell every core's loop detector what to look for.
+    fn set_detectors(&mut self) {
+        for c in &mut self.cores {
+            c.detect.park_on = self.park_on;
+            c.detect.sha_on = self.sha_on;
         }
     }
 
@@ -564,6 +628,16 @@ impl ArmSide {
                 let t = self.cycles;
                 self.unpark_if(m, |p, _| p.until <= t, t);
             }
+            // A lone core just back at the head of the SHA-256 block loop it
+            // was fitted to: hash what the time up to the next thing due has
+            // room for (module docs, "SHA-256 loops").
+            if self.parked == 0 && self.runnable.is_power_of_two() {
+                let id = self.runnable.trailing_zeros() as usize;
+                if self.cores[id].detect.sha_stop {
+                    let limit = end.min(self.timer_due).min(self.park_due);
+                    self.sha_skip(m, id, limit);
+                }
+            }
             // One core takes turns and no other is parked: until something is
             // due, the cycles below would visit just it.
             if self.burst_on
@@ -630,7 +704,7 @@ impl ArmSide {
     /// what it means for the others (module docs, "Between cores").
     fn step_core(&mut self, m: &mut Machine, id: usize) -> Turn {
         let cycles = self.cycles;
-        let park_on = self.park_on;
+        let track = self.park_on || self.sha_on;
         let core = &mut self.cores[id];
         let secure = core.cpu.el == 3 || core.cpu.sys.scr_el3 & sysreg::SCR_NS == 0;
         let pc = core.cpu.pc;
@@ -648,6 +722,7 @@ impl ArmSide {
             written: None,
             io: false,
             log: watching.then_some(&mut core.detect.log),
+            stores: watching.then_some(&mut core.detect.stores),
             released_at: self.released_at.unwrap_or(0),
             periph_store: false,
         };
@@ -679,7 +754,7 @@ impl ArmSide {
         {
             let core = &mut self.cores[id];
             core.insns += 1;
-            if park_on {
+            if track {
                 let park = core
                     .detect
                     .retired(&core.cpu, cycles, pc, done.written.is_some());
@@ -706,7 +781,7 @@ impl ArmSide {
             .iter()
             .enumerate()
             .any(|(k, c)| k != id && c.cpu.marked());
-        let park_on = self.park_on;
+        let track = self.park_on || self.sha_on;
         let released_at = self.released_at.unwrap_or(0);
         let mut cycles = self.cycles;
         let core = &mut self.cores[id];
@@ -738,6 +813,7 @@ impl ArmSide {
             written: None,
             io: false,
             log: None,
+            stores: None,
             released_at,
             periph_store: false,
         };
@@ -762,7 +838,7 @@ impl ArmSide {
             }
             *insns += 1;
             // Not watching a loop yet, so this only counts backward jumps.
-            if park_on {
+            if track {
                 let park = detect.retired(cpu, cycles, pc, wrote);
                 debug_assert!(!park);
             }
@@ -780,6 +856,41 @@ impl ArmSide {
         self.refresh_runnable(id);
         self.cycles += 1;
         stop
+    }
+
+    /// Core `id`, alone and just back at the head of the SHA-256 block loop
+    /// it was fitted to: skip the passes the cycles up to `limit` have room
+    /// for, or forget the loop if the core is not in it any more (module
+    /// docs, "SHA-256 loops").
+    fn sha_skip(&mut self, m: &mut Machine, id: usize, limit: u64) {
+        let marked = self
+            .cores
+            .iter()
+            .enumerate()
+            .any(|(k, c)| k != id && c.cpu.marked());
+        let cycles = self.cycles;
+        let core = &mut self.cores[id];
+        core.detect.sha_stop = false;
+        let Some(l) = core.sha.as_ref() else {
+            return;
+        };
+        let c = &core.cpu;
+        let takes = (c.irq_line && c.can_take_interrupt(false))
+            || (c.fiq_line && c.can_take_interrupt(true));
+        if marked || takes || core.detect.watching() || limit <= cycles {
+            return;
+        }
+        match l.skip(&mut core.cpu, m, limit - cycles) {
+            Ok((n, k)) => {
+                self.cycles += n;
+                core.insns += n;
+                core.sha_blocks += k;
+            }
+            Err(()) => {
+                core.sha = None;
+                core.detect.sha_head = None;
+            }
+        }
     }
 
     /// What one step on core `id` in cycle [`Self::cycles`] means for the
@@ -804,7 +915,7 @@ impl ArmSide {
         match step {
             Step::Retired => {
                 core.insns += 1;
-                if self.park_on
+                if (self.park_on || self.sha_on)
                     && core
                         .detect
                         .retired(&core.cpu, cycles, pc, written.is_some())
@@ -814,6 +925,15 @@ impl ArmSide {
                         self.parked |= 1 << id;
                         core.park = Some(p);
                     }
+                }
+                // Two passes of a long loop recorded: is it a SHA-256 block
+                // loop? The core is at its head, so the run loop can skip
+                // right away.
+                if core.detect.sha.ready() {
+                    core.sha = core.detect.sha.fit(&core.cpu, m);
+                    core.detect.sha_head = core.sha.as_ref().map(|l| l.entry);
+                    core.detect.sha_stop = core.sha.is_some();
+                    core.sha_loops += u64::from(core.sha.is_some());
                 }
             }
             Step::Wfe => {
@@ -968,6 +1088,8 @@ struct ArmBus<'a> {
     /// Where the step's data reads go while the core's loop is watched
     /// (module docs, "Busy-wait loops").
     log: Option<&'a mut Vec<park::Read>>,
+    /// Where its stores go then, for a SHA-256 recording ("SHA-256 loops").
+    stores: Option<&'a mut Vec<park::Read>>,
     /// The system timer, in ARM cycles, at release: `released_at + cycles`
     /// is the ARM's own clock, for `RVF_DBG_MBOX`.
     released_at: u64,
@@ -1168,6 +1290,9 @@ impl Memory for ArmBus<'_> {
 
     #[inline]
     fn write(&mut self, addr: u64, size: u32, value: u64) -> Result<(), Abort> {
+        if let Some(stores) = &mut self.stores {
+            stores.push(park::Read { addr, size, value });
+        }
         let end = addr.saturating_add(u64::from(size));
         self.written = Some(match self.written {
             Some((lo, hi)) => (lo.min(addr), hi.max(end)),
@@ -1481,6 +1606,7 @@ mod tests {
             let mut arm = ArmSide::with_cores(cores);
             arm.park_on = park;
             arm.burst_on = burst;
+            arm.set_detectors();
             drive(&mut arm, &mut m);
             arm.settle(&m);
             arm
@@ -1640,5 +1766,388 @@ mod tests {
                 assert_eq!(arm.cores[poller].cpu.x[5], 1, "saw the flag");
             });
         }
+    }
+
+    /// `sha256_blocks(state, data, blocks, k)` from `testdata/arm/
+    /// sha256_blocks.rs`, built the way its header says: a textbook SHA-256
+    /// block loop that reads the state back from memory every block.
+    const SHA_MEM: [u32; 133] = [
+        0xd37a_e448,
+        0xb400_1068,
+        0xd102_c3ff,
+        0xa905_7bfd,
+        0xa906_6ffc,
+        0xa907_67fa,
+        0xa908_5ff8,
+        0xa909_57f6,
+        0xa90a_4ff4,
+        0x6f00_e400,
+        0x8b08_0028,
+        0x9100_0429,
+        0x9100_43ea,
+        0xf900_07e8,
+        0x1400_0016,
+        0x0b11_0371,
+        0x0b12_02b2,
+        0x0b10_00d0,
+        0x0b0c_02cc,
+        0xb900_0011,
+        0x9101_0021,
+        0xb900_0412,
+        0x0b0b_008b,
+        0x9101_0129,
+        0xb900_0810,
+        0xb900_0c0c,
+        0x0b0d_032c,
+        0xb900_100c,
+        0x0b0e_026c,
+        0xb900_140c,
+        0x0b0f_004c,
+        0xb900_180c,
+        0xf940_07e8,
+        0xb900_1c0b,
+        0xeb08_003f,
+        0x5400_0b40,
+        0xb940_0011,
+        0xb940_0412,
+        0xaa1f_03e5,
+        0xb940_0810,
+        0xb940_0c0c,
+        0xaa09_03e7,
+        0xb940_100d,
+        0xb940_140e,
+        0x2a12_03f8,
+        0xb940_180f,
+        0xb940_1c0b,
+        0x2a10_03e6,
+        0x2a0c_03f4,
+        0x2a0e_03fa,
+        0x2a11_03fb,
+        0x2a0f_03e2,
+        0x2a0b_03f7,
+        0x2a0d_03f9,
+        0xad00_83e0,
+        0xad01_83e0,
+        0x1400_0032,
+        0x9240_0f19,
+        0x1100_38ba,
+        0x1100_24bd,
+        0xb879_7959,
+        0x9240_0f5a,
+        0x9240_0cbe,
+        0xb87a_795a,
+        0x9240_0fbd,
+        0xb87e_7948,
+        0x1399_1f3b,
+        0xb87d_795d,
+        0x139a_475c,
+        0x4ad9_4b7b,
+        0x0b1d_0108,
+        0x4ada_4f9c,
+        0x4a59_0f79,
+        0x4a5a_2b9a,
+        0x0b08_0328,
+        0x0b1a_0119,
+        0xb83e_7959,
+        0x1393_1a68,
+        0x0a13_005a,
+        0x0a33_009b,
+        0x1395_0abc,
+        0x2a1b_035a,
+        0xb865_7865,
+        0x4ad3_2d08,
+        0x0b1a_02f7,
+        0x4a16_00db,
+        0x4ad5_379a,
+        0x0a15_037b,
+        0x9100_10e7,
+        0x4ad3_6508,
+        0xf101_031f,
+        0x4ad5_5b5a,
+        0x0b17_0108,
+        0x0a16_00d7,
+        0x4a17_0377,
+        0x0b05_0108,
+        0xaa18_03e5,
+        0x0b1a_02f7,
+        0x0b19_0108,
+        0x2a15_03f8,
+        0x0b14_0119,
+        0x0b08_02fb,
+        0x2a16_03f4,
+        0x2a13_03fa,
+        0x2a04_03f7,
+        0x54ff_f4c0,
+        0x2a19_03f3,
+        0x2a1b_03f5,
+        0x2a02_03e4,
+        0x2a1a_03e2,
+        0xf100_3cbf,
+        0x2a06_03f6,
+        0x2a18_03e6,
+        0x9100_04b8,
+        0x54ff_f8e8,
+        0x385f_f0f9,
+        0x3940_00fa,
+        0x3940_04fb,
+        0x2a1a_2339,
+        0x3940_08fa,
+        0x2a1b_4339,
+        0x2a1a_6339,
+        0x5ac0_0b39,
+        0xb825_7959,
+        0x17ff_ffd1,
+        0xa94a_4ff4,
+        0xa949_57f6,
+        0xa948_5ff8,
+        0xa947_67fa,
+        0xa946_6ffc,
+        0xa945_7bfd,
+        0x9102_c3ff,
+        0xd65f_03c0,
+    ];
+
+    /// `sha256_blocks_regs` from the same file: the state stays in registers
+    /// from block to block and is only stored, the way OpenSSL's assembly
+    /// does it.
+    const SHA_REGS: [u32; 133] = [
+        0xb940_0008,
+        0xb940_0409,
+        0xd37a_e450,
+        0xb940_080a,
+        0xb940_0c0b,
+        0xb940_100c,
+        0xb940_140d,
+        0xb940_180e,
+        0xb940_1c0f,
+        0xb400_0f70,
+        0xd102_c3ff,
+        0xa905_7bfd,
+        0xa906_6ffc,
+        0xa907_67fa,
+        0xa908_5ff8,
+        0xa909_57f6,
+        0xa90a_4ff4,
+        0x6f00_e400,
+        0x8b10_0030,
+        0x9100_0431,
+        0x9100_43f2,
+        0xf900_07f0,
+        0x1400_0016,
+        0x0b08_0368,
+        0x0b09_02a9,
+        0x0b0a_00ca,
+        0x0b0b_02cb,
+        0x0b0c_032c,
+        0x0b0d_00ad,
+        0x0b0e_004e,
+        0xb900_0008,
+        0x9101_0021,
+        0xb900_0409,
+        0x0b0f_008f,
+        0x9101_0231,
+        0xb900_080a,
+        0xb900_0c0b,
+        0xb900_100c,
+        0xb900_140d,
+        0xb900_180e,
+        0xf940_07f0,
+        0xb900_1c0f,
+        0xeb10_003f,
+        0x5400_0a40,
+        0xaa1f_03f3,
+        0xaa11_03e7,
+        0x2a09_03f8,
+        0x2a0a_03e6,
+        0x2a0b_03f4,
+        0x2a0d_03fa,
+        0x2a0e_03e2,
+        0x2a0f_03f7,
+        0x2a08_03fb,
+        0x2a0c_03f9,
+        0xad00_83e0,
+        0xad01_83e0,
+        0x1400_0032,
+        0x9240_0f19,
+        0x1100_3a7a,
+        0x1100_267d,
+        0xb879_7a59,
+        0x9240_0f5a,
+        0x9240_0e7e,
+        0xb87a_7a5a,
+        0x9240_0fbd,
+        0xb87e_7a50,
+        0x1399_1f3b,
+        0xb87d_7a5d,
+        0x139a_475c,
+        0x4ad9_4b7b,
+        0x0b1d_0210,
+        0x4ada_4f9c,
+        0x4a59_0f79,
+        0x4a5a_2b9a,
+        0x0b10_0330,
+        0x0b1a_0219,
+        0xb83e_7a59,
+        0x1385_18b0,
+        0x0a05_005a,
+        0x0a25_009b,
+        0x1395_0abc,
+        0x2a1b_035a,
+        0xb873_7873,
+        0x4ac5_2e10,
+        0x0b1a_02f7,
+        0x4a16_00db,
+        0x4ad5_379a,
+        0x0a15_037b,
+        0x9100_10e7,
+        0x4ac5_6610,
+        0xf101_031f,
+        0x4ad5_5b5a,
+        0x0b17_0210,
+        0x0a16_00d7,
+        0x4a17_0377,
+        0x0b13_0210,
+        0xaa18_03f3,
+        0x0b1a_02f7,
+        0x0b19_0210,
+        0x2a15_03f8,
+        0x0b14_0219,
+        0x0b10_02fb,
+        0x2a16_03f4,
+        0x2a05_03fa,
+        0x2a04_03f7,
+        0x54ff_f5c0,
+        0x2a19_03e5,
+        0x2a1b_03f5,
+        0x2a02_03e4,
+        0x2a1a_03e2,
+        0xf100_3e7f,
+        0x2a06_03f6,
+        0x2a18_03e6,
+        0x9100_0678,
+        0x54ff_f8e8,
+        0x385f_f0f9,
+        0x3940_00fa,
+        0x3940_04fb,
+        0x2a1a_2339,
+        0x3940_08fa,
+        0x2a1b_4339,
+        0x2a1a_6339,
+        0x5ac0_0b39,
+        0xb833_7a59,
+        0x17ff_ffd1,
+        0xa94a_4ff4,
+        0xa949_57f6,
+        0xa948_5ff8,
+        0xa947_67fa,
+        0xa946_6ffc,
+        0xa945_7bfd,
+        0x9102_c3ff,
+        0xd65f_03c0,
+    ];
+
+    const SHA_IV: [u32; 8] = [
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+        0x5be0cd19,
+    ];
+
+    /// Run `func(0x8000, 0x10000, blocks, 0x9000)` at 0x1000 from a driver
+    /// at 0 that then spins at 0x30, `slice` cycles a call to `run`, with
+    /// the SHA-256 skip on and off (module docs, "SHA-256 loops"): the cores,
+    /// the cycle count and every byte of RAM have to come out the same.
+    /// Returns the hash the loop left at 0x8000 and how many blocks the
+    /// skip hashed.
+    fn hashes_exactly(func: &[u32], k: &[u32; 64], blocks: u32, slice: u64) -> ([u32; 8], u64) {
+        let mut code = [
+            mov32(0, 0x8000),
+            mov32(1, 0x1_0000),
+            mov32(2, blocks),
+            mov32(3, 0x9000),
+            mov32(4, 0xF000),
+        ]
+        .concat();
+        // mov sp, x4; bl 0x1000; b .
+        code.extend([0x9100_009F, 0x9400_03F5, B_SELF]);
+        let data: Vec<u8> = (0..64 * blocks).map(|i| (i * 7 + 3) as u8).collect();
+        let run = |sha: bool| {
+            let mut m = machine_with(&code);
+            let base = m.ram.base();
+            let words = func.iter().map(|&w| (0x1000, w));
+            let words = words.enumerate().map(|(i, (a, w))| (a + 4 * i as u32, w));
+            let consts = SHA_IV
+                .iter()
+                .enumerate()
+                .map(|(i, &w)| (0x8000 + 4 * i as u32, w));
+            let consts = consts.chain(
+                k.iter()
+                    .enumerate()
+                    .map(|(i, &w)| (0x9000 + 4 * i as u32, w)),
+            );
+            for (a, w) in words.chain(consts) {
+                m.ram.store(base + a, Width::Word, w).unwrap();
+            }
+            for (i, &b) in data.iter().enumerate() {
+                let a = base + 0x1_0000 + i as u32;
+                m.ram.store(a, Width::Byte, u32::from(b)).unwrap();
+            }
+            let mut arm = ArmSide::with_cores(1);
+            arm.sha_on = sha;
+            arm.set_detectors();
+            while arm.cores[0].cpu.pc != 0x30 && arm.cycles < 50_000_000 {
+                arm.run(&mut m, slice);
+            }
+            arm.settle(&m);
+            assert_eq!(arm.stopped, None);
+            (arm, m)
+        };
+        let (off, m_off) = run(false);
+        let (on, m_on) = run(true);
+        assert_eq!(off.cores[0].cpu.pc, 0x30, "the loop finished");
+        assert_eq!(off.cores[0].sha_blocks, 0);
+        assert_eq!(on.cycles, off.cycles);
+        let state = |c: &Core| (c.cpu.pc, c.cpu.x, c.cpu.sp_el, c.cpu.nzcv, c.cpu.v, c.insns);
+        assert_eq!(state(&on.cores[0]), state(&off.cores[0]));
+        assert!(m_on.ram.as_slice() == m_off.ram.as_slice(), "RAM differs");
+        let hash = std::array::from_fn(|i| {
+            m_on.ram
+                .load(m_on.ram.base() + 0x8000 + 4 * i as u32, Width::Word)
+                .unwrap()
+        });
+        (hash, on.cores[0].sha_blocks)
+    }
+
+    fn sha256_of(blocks: u32) -> [u32; 8] {
+        let mut state = SHA_IV;
+        for n in 0..blocks {
+            let block = std::array::from_fn(|i| ((64 * n + i as u32) * 7 + 3) as u8);
+            sha::compress(&mut state, &block);
+        }
+        state
+    }
+
+    #[test]
+    fn a_sha256_block_loop_is_hashed_natively_and_exactly() {
+        for (func, blocks, slice) in [
+            (&SHA_MEM, 3000, 5_000_000),
+            (&SHA_MEM, 700, 50_000),
+            (&SHA_REGS, 3000, 5_000_000),
+            (&SHA_REGS, 700, 50_000),
+        ] {
+            let (hash, skipped) = hashes_exactly(func, &sha::K, blocks, slice);
+            assert_eq!(hash, sha256_of(blocks));
+            assert!(
+                skipped > blocks as u64 / 2,
+                "{skipped} of {blocks} blocks skipped"
+            );
+        }
+    }
+
+    #[test]
+    fn a_loop_that_is_almost_sha256_runs_block_by_block() {
+        let mut k = sha::K;
+        k[40] ^= 1;
+        let (hash, skipped) = hashes_exactly(&SHA_MEM, &k, 300, 5_000_000);
+        assert_ne!(hash, sha256_of(300));
+        assert_eq!(skipped, 0);
     }
 }

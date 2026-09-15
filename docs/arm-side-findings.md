@@ -224,6 +224,16 @@ the armstub, so the ARM runs UEFI before any kernel. What it needed:
    come at about 214 a second. Queueing the request the step it is posted
    gives UEFI 35950 blocks a boot instead of 1493, but every variant tried
    stalls the Linux scenario at the kernel's PCIe probe (#53).
+8. Booting the UKI from USB, the console goes quiet for ~100 s of host time
+   once systemd-boot clears the screen: about 5 s of guest time, most of it
+   SecurityStubDxe hashing the whole 89.7 MB UKI with OpenSSL's C SHA-256
+   (the A72 has no crypto extensions), the rest the kernel before its
+   console comes up (the UKI's command line has no `earlycon`, and Secure
+   Boot rules out changing it). Nothing hangs. Two things came out of it
+   (#79): cache maintenance, the NOP-like hints and a core's own `msr daif`
+   no longer end an ARM burst (a few percent), and a SHA-256 block loop is
+   recognised by what one pass does and its middle blocks are hashed
+   natively (`src/arm/sha.rs`, module docs of `arm.rs`, "SHA-256 loops").
 
 With those, UEFI prints its boot manager prompt (`ESC (setup), F1 (shell),
 ENTER (boot)`) 0.7 s of guest time after its banner, and systemd-boot no
