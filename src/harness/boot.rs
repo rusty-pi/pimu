@@ -27,10 +27,6 @@ use serde::Deserialize;
 use crate::harness::capture::transcript;
 use crate::harness::regression::unified_diff;
 
-/// Wall-clock budget override, the same knob `scripts/boot-check.sh` has always
-/// had. The scenario's own `wall_secs` is the default.
-pub const WALL_ENV: &str = "RVF_BOOT_WALL";
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct BootScenario {
     pub name: String,
@@ -359,17 +355,15 @@ impl BootScenario {
             .collect()
     }
 
-    /// The wall budget, with the `RVF_BOOT_WALL` override applied.
+    /// The wall budget: the scenario's `wall_secs`, which `boot-check
+    /// --max-wall` overrides.
     pub fn wall_secs(&self) -> u64 {
-        std::env::var(WALL_ENV)
-            .ok()
-            .and_then(|v| v.trim().parse().ok())
-            .unwrap_or(self.boot.wall_secs)
+        self.boot.wall_secs
     }
 
-    /// The `boot` argument vector that runs this scenario. `scripts/boot-check.sh`
-    /// asks for this rather than spelling the run out a second time, so the
-    /// scenario file stays the only description of the workload.
+    /// The `boot` argument vector that runs this scenario. `boot-check` runs
+    /// exactly this and `--plan` prints it, so the scenario file stays the
+    /// only description of the workload.
     pub fn boot_args(&self, console_log: &Path) -> Vec<String> {
         let mut args: Vec<String> = vec![
             "boot".into(),

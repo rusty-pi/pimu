@@ -59,7 +59,7 @@
 //! It does feed that derivation, which was worth checking rather than assuming:
 //! flipping row 28 by one bit changes every byte of the `rpi-machine-id`
 //! `arm_loader` publishes (`ed96a9bc626d9d0869ce37ee4aea025d` ->
-//! `4118472de608104951e495ece64b75f0`). So the regression `scripts/boot-check.sh`
+//! `4118472de608104951e495ece64b75f0`). So the regression `boot-check`
 //! pins is a real derivation being re-run, not a constant being copied — and
 //! changing the serial here invalidates that milestone, which is the point.
 
