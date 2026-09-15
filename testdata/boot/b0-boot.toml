@@ -12,7 +12,7 @@
 # `firmware-boot.toml` covers it.
 #
 # Re-record the golden with:
-#   scripts/boot-check.sh --update --scenario=testdata/boot/b0-boot.toml
+#   rpi-virt-fw boot-check testdata/boot/b0-boot.toml --update
 
 name = "b0-boot"
 description = "pieeprom.bin + start4.elf on a B0 Pi 4B rev 1.2, through to the ARM hand-off."

@@ -192,7 +192,7 @@ mod tests {
     }
 
     /// The identity this bench's invented OTP produces, and the one
-    /// `scripts/boot-check.sh` pins on the firmware's own output. The two
+    /// `boot-check` pins on the firmware's own output. The two
     /// agreeing is the whole claim of #22: the model can predict the value
     /// rather than only observe it.
     #[test]

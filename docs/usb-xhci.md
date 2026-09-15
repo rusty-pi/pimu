@@ -522,7 +522,7 @@ Measured, with stage 1 landed and `RVF_PCIE_DEVICE=1`:
 ```
 
 …and then nothing. `end Stuck { pc: 0x000AA3C0 }` — a `udelay` poll, 60 s of
-modelled silence, no `SD_OC`, no `Boot mode`, no `arm_loader`. `boot-check.sh`
+modelled silence, no `SD_OC`, no `Boot mode`, no `arm_loader`. `boot-check`
 fails with the whole file-loading phase missing. This is #18's warning made
 concrete, and the reason the flag defaults off.
 
@@ -800,7 +800,7 @@ bus `0x4_0000_0000`, 1 GiB, and `src/periph/pcie.rs` translates the
 endpoint's DMA through whichever window is programmed (`--log pcie` shows
 both).
 
-**Verified by:** `scripts/boot-check.sh` passing unchanged, and the transcript
+**Verified by:** `boot-check` passing unchanged, and the transcript
 being byte-identical across the change (`PCI0 init` / `PCI0 reset` / `PCIe
 timeout: 0x00000000` / `USB xHC init failed` / `Boot mode: SD (01) order f4`,
 same timestamps).
@@ -818,7 +818,7 @@ it and reproduces the pre-stage-1 transcript (`PCIe timeout: 0x00000000`,
 `USB xHC init failed`), which is all that escape hatch is for. Attaching it
 only became viable once BAR0 answered; see stage 2a below.
 
-**Verified by:** `boot-check.sh` passing with new `want`s for
+**Verified by:** `boot-check` passing with new `want`s for
 `PCIe scan 00001106:00003483`, the capability line and the port counts, and
 `must_not`s for `PCIe timeout` / `USB xHC init failed`; plus `cargo test`
 (nine cases in `src/periph/pcie.rs`, two in `tests/peripherals.rs`).
@@ -940,7 +940,7 @@ over to Linux. The pairing that matters is **1 + 3**.
 root port 1 whether or not anything is plugged in. That is the whole of what a
 stock board shows on the bus, and it is what the reference log records.
 
-**Verified by:** four new `boot-check.sh` milestones whose lines are
+**Verified by:** four new `boot-check` milestones whose lines are
 byte-identical to `examples-on-real-hardware/sd-card-boot.log:36-39` —
 
 ```text
@@ -1089,7 +1089,7 @@ with 40-bit DMA4 transfers through the PCIe outbound window (§5.1). Honouring
 `SRC_INFO`/`DEST_INFO` address bits `[39:32]` in `Machine::run_dma4`, decoding
 `CPU_2_PCIE_MEM_WIN0`, and answering with the measured capability block is the
 whole of it. With BAR0 answering, the endpoint is attached by default and
-`boot-check.sh` asserts the bring-up.
+`boot-check` asserts the bring-up.
 
 Stage 2 cannot be reached from the firmware alone, and it is not console
 output. Its three log lines are message-ring entries recorded after the UART
