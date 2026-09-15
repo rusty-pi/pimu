@@ -122,7 +122,12 @@ the time starts from 0 again, as after a reboot.
 ```bash
 boot … --log pcie,xhci 2> usb.log
 boot … --log jsonl:io --log-file io.jsonl
+boot … --quiet --log jsonl:io 2>&1 >/dev/null | jq .
 ```
+
+`--quiet` ([#100](https://github.com/valtzu/rpi-virt-fw/issues/100)) keeps the
+serial console off stdout, for a run whose log is the point; `--console-log`
+still records it.
 
 | Channel | What it prints |
 |---|---|
