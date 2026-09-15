@@ -98,6 +98,18 @@ impl SysTimer {
         self.take_pending_channel().is_some()
     }
 
+    /// Has channel `c`'s compare fired, with its interrupt not taken yet?
+    pub fn channel_pending(&self, c: u8) -> bool {
+        self.pending[c as usize]
+    }
+
+    /// Consume channel `c`'s fired compare; false if it had none.
+    pub fn take_channel(&mut self, c: u8) -> bool {
+        let was = std::mem::take(&mut self.pending[c as usize]);
+        self.pending_any = self.pending.iter().any(|&p| p);
+        was
+    }
+
     /// Peek the lowest-numbered pending channel without consuming it. The run
     /// loop uses this so a match that becomes due while interrupts are masked /
     /// an ISR is running stays latched until it can actually be delivered (real

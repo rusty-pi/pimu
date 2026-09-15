@@ -609,7 +609,7 @@ impl Emulator {
                     self.cpu.vector_irq(&mut self.machine, src);
                 }
             }
-            let tick_due = self.machine.systimer.tick_pending();
+            let tick_due = self.machine.timer_irq_due();
             if crate::diag::ON
                 && st.diag.dbg_tick
                 && tick_due
@@ -631,7 +631,7 @@ impl Emulator {
             if tick_due && self.cpu.irq_enabled() && self.cpu.exc_vbase != 0 {
                 if let Some(slot) = self.machine.timer_tick_slot() {
                     // Deliver now — consume the latched flag.
-                    self.machine.systimer.take_tick_pending();
+                    self.machine.take_tick_pending();
                     if crate::diag::ON && st.diag.dbg_tick {
                         st.tick_deliveries += 1;
                         if st.tick_deliveries <= 30 || st.tick_deliveries.is_multiple_of(500) {
@@ -1026,9 +1026,7 @@ impl Emulator {
         if self.machine.recheck || self.cpu.is_stopped() {
             return None;
         }
-        if self.cpu.exc_vbase != 0
-            && (self.machine.irq_queued() || self.machine.systimer.tick_pending())
-        {
+        if self.cpu.exc_vbase != 0 && (self.machine.irq_queued() || self.machine.timer_irq_due()) {
             return None;
         }
         let budget = self.fast_budget(st, limits);
