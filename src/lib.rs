@@ -25,7 +25,7 @@
 //!   and the host terminal as the serial console.
 //! - [`spec`]: register maps generated from `specs/*.toml`.
 //!
-//! The command line is a separate binary crate, in `src/bin/rpi-virt-fw/`.
+//! The command line is a separate binary crate, in `src/cli/`.
 
 pub mod aarch64;
 pub mod arm;

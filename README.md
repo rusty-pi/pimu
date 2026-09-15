@@ -291,8 +291,7 @@ path = "../golden/hello-vpu.txt"
 ```
 src/
   lib.rs        the library; its crate docs map the modules
-  bin/rpi-virt-fw/
-                the command line: main.rs = usage + dispatch, one file per
+  cli/          the command line: main.rs = usage + dispatch, one file per
                 command (boot, scenario, disasm), mbox.rs, config.rs
   vpu/          VideoCore IV scalar core: length, decode, exec, registers
   aarch64/      A64 core: integer, SIMD/FP, MMU, system registers
