@@ -2,6 +2,7 @@
 
 pub mod boot;
 pub mod capture;
+pub mod payloads;
 pub mod regression;
 pub mod scenario;
 

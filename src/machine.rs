@@ -1022,7 +1022,7 @@ impl Machine {
 
     /// The value a read of device register `addr` would return, for the
     /// registers where a read has no side effect; `None` for the rest. So far
-    /// only the mailbox's, which is what UEFI busy-waits on (`arm.rs`,
+    /// only the mailbox's, which is what UEFI busy-waits on (`arm/mod.rs`,
     /// "Busy-wait loops").
     pub fn peek(&self, addr: u32) -> Option<u32> {
         let off = addr.checked_sub(map::MBOX_BASE)?;

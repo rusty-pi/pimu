@@ -196,7 +196,7 @@ pub struct Cpu {
     /// Counts the instructions that change state outside the general
     /// registers, the flags and memory: MSR, SYS, ERET, and every hint and
     /// barrier but NOP, YIELD, DSB, DMB and ISB. A busy-wait loop the ARM run
-    /// loop may skip executes none (`arm.rs`, "Busy-wait loops").
+    /// loop may skip executes none (`arm/mod.rs`, "Busy-wait loops").
     pub effects: u64,
     /// The part of [`Self::effects`] that other cores or the ARM run loop
     /// have to hear about: everything but writes to this core's own flags,

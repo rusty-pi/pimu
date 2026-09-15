@@ -1,4 +1,5 @@
-//! Generates the register constants in `src/spec.rs` from `specs/*.toml` (#39).
+//! Generates the register constants `src/spec/mod.rs` includes, from
+//! `specs/*.toml` (#39).
 //! A malformed spec fails the build.
 
 use std::path::PathBuf;

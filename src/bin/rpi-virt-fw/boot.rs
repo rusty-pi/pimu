@@ -1,213 +1,26 @@
-//! `rpi-virt-fw` command-line entry point.
+//! `boot`: boot the machine from an EEPROM image, as a Pi 4 does, or run a
+//! VPU ELF; then report on the run.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::{bail, Context, Result};
 
-use rpi_virt_fw::emulator::{Emulator, RunLimits};
+use rpi_virt_fw::emulator::{Emulator, RunLimits, RunReport};
 use rpi_virt_fw::firmware::Payload;
-use rpi_virt_fw::harness::{self, GoldenOutcome};
+use rpi_virt_fw::harness;
 use rpi_virt_fw::machine::Machine;
 use rpi_virt_fw::soc::{Board, Stepping};
 use rpi_virt_fw::vpu::decode::decode;
 use rpi_virt_fw::vpu::length::insn_len_bytes;
 use rpi_virt_fw::vpu::UnimplPolicy;
 
-mod config;
+use crate::mbox::{mbox_property_exchange, MboxTag};
+use crate::parse_u32;
 
-const USAGE: &str = "\
-rpi-virt-fw — virtual bench for Raspberry Pi VideoCore boot firmware
-
-USAGE:
-    rpi-virt-fw run <scenario.toml> [--update] [-v]
-    rpi-virt-fw run-all [<dir>] [--update] [-v]
-    rpi-virt-fw boot --eeprom <pieeprom.bin> | <file.elf>
-                             [--entry <hex>] [--ram-mb <n>] [--max-steps <n>]
-                             [--max-wall <secs>] [--sd <img>] [--usb <img>] [--usb-mb <n>]
-                             [--boot-order <hex>] [--bootconf <KEY=VALUE>]...
-                             [--skip-signed-boot] [--netboot <dir> | --net passt[:<socket>]]
-                             [--eeprom-pubkey <pubkey.bin>] [--boot-rom <rom.bin>] [--rom <rom.bin>]
-                             [--stepping b0|c0] [--board-rev <hex>] [--skip-unimpl]
-              (--stepping: the BCM2711 silicon, C0 by default; --board-rev: the
-               OTP revision code, by default a board that stepping shipped on)
-              (no --max-steps = no instruction cap; --max-wall defaults to 140s)
-              (an unknown instruction stops the run; --skip-unimpl steps over it
-               instead, for reconnaissance on firmware the decoder is new to)
-                             [--dump <hex>:<len>] [--disasm <hex>:<count>] [--patch <hex>=<hex>]
-                             [--dump-fdt <path>] [--print-fdt] [--console-log <path>]
-                             [--mbox-property <tag>[,<tag>...]] [--until <text>]
-                             [--send-after <prompt> <text>]... [--stdin]
-                             [--io-log <path>] [--io-log-format text|jsonl]
-    rpi-virt-fw boot-check <scenario.toml> --plan [--console <path>]
-    rpi-virt-fw boot-check <scenario.toml> --log <path> --console <path> [--update]
-    rpi-virt-fw disasm <file> [--base <hex>] [--count <n>] [--vaddr <hex>]
-    rpi-virt-fw spec-docs [--update]
-
-COMMANDS:
-    run       Run one scenario and check it against its golden transcript.
-    run-all   Run every *.toml scenario in <dir> (default: testdata/scenarios).
-    boot      Boot the machine from an EEPROM image (--eeprom), as a Pi 4 does,
-              or run a VPU ELF. Stops on an instruction the decoder does not
-              implement (--skip-unimpl steps over it instead). `boot <file>
-              --eeprom` is the same as `boot --eeprom <file>`.
-    boot-check
-              Check a finished firmware boot against a boot scenario: the
-              golden console transcript plus every named milestone. `--plan`
-              prints the `boot` invocation the scenario describes, which is
-              how `scripts/boot-check.sh` runs the boot without repeating the
-              workload description. It fails instead when a file the run reads
-              is missing, naming the command that makes each.
-    disasm    Disassemble a flat binary / ELF with the (partial) VPU decoder.
-    spec-docs Check docs/periph/ against the register specs in specs/*.toml;
-              --update regenerates it.
-
-    With no command, the options are `boot`'s: `rpi-virt-fw --eeprom <file> ...`.
-
-FLAGS:
-    --config <file>
-              Take options from <file> as well, at that point in the command
-              line: a JSON object (or TOML table) keyed by long option name,
-              e.g. {\"eeprom\": \"firmware/pieeprom.bin\", \"max-wall\": 600,
-              \"v\": true, \"bootconf\": [\"A=1\", \"B=2\"]}. `true` is a flag,
-              an array repeats the option, `\"file\"` is the positional argument.
-              Options after it on the command line win. Any option also takes
-              the `--option=value` form.
-    --update  Rewrite golden files instead of failing on mismatch.
-    --console-log <path>
-              Write the raw UART bytes of the run to <path>, with none of the
-              run report interleaved. This is what `boot-check` normalises into
-              the golden boot transcript.
-    --dump-fdt <path>
-              After the run, write the flattened device tree `arm_loader` handed
-              to the ARM to <path>. Diff two firmware versions with
-              `fdtdump`/`dtc` to catch a bump that changes what the firmware
-              publishes (rpi-mkosi#37).
-    --print-fdt
-              Print that whole device tree as source, every node and property,
-              not only the `/chosen` summary the `-v` run report gives.
-    --mbox-property <tag>[,<tag>...]
-              After the boot, post a property-interface request to the firmware
-              the way a booted Linux would (`/dev/vcio`), and print what the
-              still-running `start4.elf` answers. Tags are hex, e.g.
-              `0x00000001` (GET_FIRMWARE_REVISION) or `0x00030092`
-              (GET_CRYPTO_HMAC_SHA256). See docs/diagnostics.md.
-    --until <text>
-              End the run once the console prints <text> (e.g. the shell
-              prompt of a Linux boot), after the last --send-after went in.
-    --send-after <prompt> <text>
-              Type <text> into the serial console (PL011) once it prints
-              <prompt>. Repeatable; each prompt is looked for only in what the
-              console printed after the previous send. Both take \\n, \\r, \\t,
-              \\\\ and \\xHH escapes. Deterministic: keyed to the transcript.
-    --net passt[:<socket>]
-              Plug the Ethernet cable into the host's network instead of the
-              built-in peer, through passt: `passt` starts one (from PATH) on a
-              socket pair, `passt:<socket>` connects to one already listening
-              (`passt -f -s <socket>`), or to anything else speaking QEMU's
-              `-netdev stream` framing on that UNIX socket. Runs on the host's
-              clock, so not deterministic (#45).
-    --stdin   Interactive session: the host's stdin is the serial console's
-              input, and no wall-clock or silence limit ends the run. On a
-              terminal, keys go to the guest raw (Ctrl-C included); Ctrl-A x
-              quits, Ctrl-A Ctrl-A sends a Ctrl-A.
-    --io-log <path>
-              Write what the machine read and wrote to <path> (`-` for
-              stderr), apart from the console: SD card and USB stick block
-              runs with the files they belong to, OTP rows read, and what the
-              network peer did (DHCP, DNS, TFTP, HTTP). Captured at the
-              peripherals; `--io-log-format jsonl` for one JSON object a line.
-    --dram-map
-              Report which DRAM pages are non-zero when the run ends, as
-              address runs. Proof of concept for the QEMU hand-off: this is the
-              state that would have to cross the line (docs/vision.md §3).
-    -v, --verbose
-              `boot`: print the full run report as well — the EEPROM layout,
-              registers, the ARM cores, the property replies, the peripherals
-              that fell through to the stub, the device tree's `/chosen`.
-              Without it `boot` prints the serial console, what was asked for
-              by name (`--dump`, `--print-fdt`, `--mbox-property`, …) and one
-              `result: ok|FAILED — <why>` line; the exit status is 1 on
-              failure. `run`: print the full report and transcript.
-";
-
-/// The offset of the `bootconf.txt` `MAGIC_FILE` section header in an EEPROM
-/// image, found through the section walk rather than by searching for the name
-/// — the bootcode carries a string table with the same names in it.
-fn find_bootconf_header(flash: &[u8]) -> Option<usize> {
-    let img = rpi_virt_fw::firmware::eeprom::EepromImage::parse(flash).ok()?;
-    img.sections
-        .iter()
-        .find(|s| s.filename.as_deref() == Some("bootconf.txt"))
-        .map(|s| s.header_offset)
-}
-
-fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    match run(&args) {
-        Ok(code) => code,
-        Err(e) => {
-            eprintln!("error: {e:#}");
-            ExitCode::FAILURE
-        }
-    }
-}
-
-fn run(args: &[String]) -> Result<ExitCode> {
-    // No command, only options: `boot` is the one they are for. Decided before
-    // a config file expands, since its `"file"` would look like a command.
-    let implicit_boot = args
-        .first()
-        .is_some_and(|a| a.starts_with('-') && !matches!(a.as_str(), "-h" | "--help"));
-    let args = config::expand(args)?;
-    if implicit_boot {
-        return cmd_boot(&args);
-    }
-    let Some(cmd) = args.first() else {
-        print!("{USAGE}");
-        return Ok(ExitCode::SUCCESS);
-    };
-
-    match cmd.as_str() {
-        "run" => cmd_run(&args[1..]),
-        "run-all" => cmd_run_all(&args[1..]),
-        // `recon` is the old name, from when most of a boot was unknown
-        // instructions (#57).
-        "boot" | "recon" => cmd_boot(&args[1..]),
-        "boot-check" => cmd_boot_check(&args[1..]),
-        "disasm" => cmd_disasm(&args[1..]),
-        "spec-docs" => cmd_spec_docs(&args[1..]),
-        "-h" | "--help" | "help" => {
-            print!("{USAGE}");
-            Ok(ExitCode::SUCCESS)
-        }
-        other => bail!("unknown command '{other}' (try --help)"),
-    }
-}
-
-/// `spec-docs [--update]`: the Markdown under `docs/periph/` is generated from
-/// `specs/*.toml`; report (or with `--update`, rewrite) whatever is out of date.
-fn cmd_spec_docs(args: &[String]) -> Result<ExitCode> {
-    let mut update = false;
-    for a in args {
-        match a.as_str() {
-            "--update" => update = true,
-            other => bail!("unknown argument '{other}'"),
-        }
-    }
-    let stale = rpi_virt_fw::spec::sync_docs(update).map_err(anyhow::Error::msg)?;
-    let dir = rpi_virt_fw::spec::doc_dir();
-    for name in &stale {
-        let verb = if update { "updated" } else { "stale" };
-        println!("{verb}: {}", dir.join(name).display());
-    }
-    if stale.is_empty() || update {
-        Ok(ExitCode::SUCCESS)
-    } else {
-        eprintln!("docs/periph is out of date; run `cargo run -- spec-docs --update`");
-        Ok(ExitCode::FAILURE)
-    }
-}
+/// Blue socket A. Root port 1 is the USB2 port feeding the on-board VIA
+/// hub, so a SuperSpeed fixture goes on port 2 (`docs/usb-xhci.md` §5.2).
+const USB_ROOT_PORT: usize = 2;
 
 /// `--net`: what on the host the Ethernet cable plugs into (#45).
 enum HostNet {
@@ -217,239 +30,391 @@ enum HostNet {
     Socket(PathBuf),
 }
 
-fn cmd_boot(args: &[String]) -> Result<ExitCode> {
-    let mut path: Option<PathBuf> = None;
-    let mut entry: Option<u32> = None;
-    let mut ram_mb: Option<u32> = None;
-    let mut usb_mb: Option<u64> = None;
-    // No instruction cap by default — a full boot retires well over a billion,
-    // and the wall clock is the useful bound. `--max-steps` is for pinning a
-    // run to an exact instruction count (bisecting, probes).
-    let mut max_steps: Option<u64> = None;
-    let mut max_wall_secs: u64 = 140;
-    let mut eeprom = false;
-    let mut trace = false;
-    let mut trace_full = false;
-    let mut trace_mmio = false;
-    let mut exc_vbase: u32 = 0;
-    let mut trace_from: u32 = 0;
-    let mut smp = false;
-    let mut as_core1 = false;
-    let mut patches: Vec<(u32, u32)> = Vec::new();
-    let mut dumps: Vec<(u32, u32)> = Vec::new();
-    let mut disasms: Vec<(u32, u32)> = Vec::new();
-    /// Blue socket A. Root port 1 is the USB2 port feeding the on-board VIA
-    /// hub, so a SuperSpeed fixture goes on port 2 (`docs/usb-xhci.md` §5.2).
-    const USB_ROOT_PORT: usize = 2;
+/// `boot`'s options, as the command line gave them.
+struct BootOpts {
+    path: PathBuf,
+    entry: Option<u32>,
+    ram_mb: Option<u32>,
+    usb_mb: Option<u64>,
+    /// No instruction cap by default — a full boot retires well over a billion,
+    /// and the wall clock is the useful bound. `--max-steps` is for pinning a
+    /// run to an exact instruction count (bisecting, probes).
+    max_steps: Option<u64>,
+    max_wall_secs: u64,
+    eeprom: bool,
+    trace: bool,
+    trace_full: bool,
+    trace_mmio: bool,
+    exc_vbase: u32,
+    trace_from: u32,
+    smp: bool,
+    as_core1: bool,
+    patches: Vec<(u32, u32)>,
+    dumps: Vec<(u32, u32)>,
+    disasms: Vec<(u32, u32)>,
+    sd_image: Option<PathBuf>,
+    console_log: Option<PathBuf>,
+    dump_fdt: Option<PathBuf>,
+    print_fdt: bool,
+    /// One entry per `--mbox-property`, so several exchanges can be made
+    /// against the same booted firmware. A crypto tag that fails leaves an
+    /// error code behind that only the *next* request can ask for
+    /// (`0x0003008e`).
+    mbox_tags: Vec<Vec<MboxTag>>,
+    usb_image: Option<PathBuf>,
+    netboot_root: Option<PathBuf>,
+    host_net: Option<HostNet>,
+    boot_order: Option<String>,
+    bootconf: Vec<String>,
+    eeprom_pubkey: Option<PathBuf>,
+    boot_rom_path: Option<PathBuf>,
+    rom_path: Option<PathBuf>,
+    stepping: Option<Stepping>,
+    board_rev: Option<u32>,
+    dram_map: bool,
+    skip_signed_boot: bool,
+    skip_unimpl: bool,
+    until: Option<String>,
+    sends: Vec<(String, Vec<u8>)>,
+    stdin: bool,
+    /// Without `-v` the run prints the serial console, the outcome and whatever
+    /// was asked for by name (#55); the full run report is for investigating.
+    verbose: bool,
+    io_log: Option<String>,
+    io_log_format: rpi_virt_fw::iolog::Format,
+}
 
-    let mut sd_image: Option<PathBuf> = None;
-    let mut console_log: Option<PathBuf> = None;
-    let mut dump_fdt: Option<PathBuf> = None;
-    let mut print_fdt = false;
-    // One entry per `--mbox-property`, so several exchanges can be made
-    // against the same booted firmware. A crypto tag that fails leaves an error
-    // code behind that only the *next* request can ask for (`0x0003008e`).
-    let mut mbox_tags: Vec<Vec<MboxTag>> = Vec::new();
-    let mut usb_image: Option<PathBuf> = None;
-    let mut netboot_root: Option<PathBuf> = None;
-    let mut host_net: Option<HostNet> = None;
-    let mut boot_order: Option<String> = None;
-    let mut bootconf: Vec<String> = Vec::new();
-    let mut eeprom_pubkey: Option<PathBuf> = None;
-    let mut boot_rom_path: Option<PathBuf> = None;
-    let mut rom_path: Option<PathBuf> = None;
-    let mut stepping: Option<Stepping> = None;
-    let mut board_rev: Option<u32> = None;
-    let mut dram_map = false;
-    let mut skip_signed_boot = false;
-    let mut skip_unimpl = false;
-    let mut until: Option<String> = None;
-    let mut sends: Vec<(String, Vec<u8>)> = Vec::new();
-    let mut stdin = false;
-    // Without `-v` the run prints the serial console, the outcome and whatever
-    // was asked for by name (#55); the full run report is for investigating.
-    let mut verbose = false;
-    let mut io_log: Option<String> = None;
-    let mut io_log_format = rpi_virt_fw::iolog::Format::Text;
-    let mut it = args.iter().peekable();
-    while let Some(a) = it.next() {
-        match a.as_str() {
-            "--entry" => entry = Some(parse_u32(it.next().context("--entry needs a value")?)?),
-            // `--eeprom <image>`, or the older `<image> --eeprom` with the image
-            // given as the positional argument.
-            "--eeprom" => {
-                eeprom = true;
-                if path.is_none() {
-                    if let Some(p) = it.next_if(|p| !p.starts_with('-')) {
-                        path = Some(PathBuf::from(p));
+impl BootOpts {
+    fn parse(args: &[String]) -> Result<Self> {
+        let mut path: Option<PathBuf> = None;
+        let mut entry: Option<u32> = None;
+        let mut ram_mb: Option<u32> = None;
+        let mut usb_mb: Option<u64> = None;
+        let mut max_steps: Option<u64> = None;
+        let mut max_wall_secs: u64 = 140;
+        let mut eeprom = false;
+        let mut trace = false;
+        let mut trace_full = false;
+        let mut trace_mmio = false;
+        let mut exc_vbase: u32 = 0;
+        let mut trace_from: u32 = 0;
+        let mut smp = false;
+        let mut as_core1 = false;
+        let mut patches: Vec<(u32, u32)> = Vec::new();
+        let mut dumps: Vec<(u32, u32)> = Vec::new();
+        let mut disasms: Vec<(u32, u32)> = Vec::new();
+        let mut sd_image: Option<PathBuf> = None;
+        let mut console_log: Option<PathBuf> = None;
+        let mut dump_fdt: Option<PathBuf> = None;
+        let mut print_fdt = false;
+        let mut mbox_tags: Vec<Vec<MboxTag>> = Vec::new();
+        let mut usb_image: Option<PathBuf> = None;
+        let mut netboot_root: Option<PathBuf> = None;
+        let mut host_net: Option<HostNet> = None;
+        let mut boot_order: Option<String> = None;
+        let mut bootconf: Vec<String> = Vec::new();
+        let mut eeprom_pubkey: Option<PathBuf> = None;
+        let mut boot_rom_path: Option<PathBuf> = None;
+        let mut rom_path: Option<PathBuf> = None;
+        let mut stepping: Option<Stepping> = None;
+        let mut board_rev: Option<u32> = None;
+        let mut dram_map = false;
+        let mut skip_signed_boot = false;
+        let mut skip_unimpl = false;
+        let mut until: Option<String> = None;
+        let mut sends: Vec<(String, Vec<u8>)> = Vec::new();
+        let mut stdin = false;
+        let mut verbose = false;
+        let mut io_log: Option<String> = None;
+        let mut io_log_format = rpi_virt_fw::iolog::Format::Text;
+        let mut it = args.iter().peekable();
+        while let Some(a) = it.next() {
+            match a.as_str() {
+                "--entry" => entry = Some(parse_u32(it.next().context("--entry needs a value")?)?),
+                // `--eeprom <image>`, or the older `<image> --eeprom` with the image
+                // given as the positional argument.
+                "--eeprom" => {
+                    eeprom = true;
+                    if path.is_none() {
+                        if let Some(p) = it.next_if(|p| !p.starts_with('-')) {
+                            path = Some(PathBuf::from(p));
+                        }
                     }
                 }
-            }
-            "--ram-mb" => ram_mb = Some(it.next().context("--ram-mb needs a value")?.parse()?),
-            "--max-steps" => {
-                max_steps = Some(it.next().context("--max-steps needs a value")?.parse()?)
-            }
-            "--max-wall" => {
-                max_wall_secs = it.next().context("--max-wall needs seconds")?.parse()?
-            }
-            "--trace" | "--trace-full" | "--trace-from" | "--trace-mmio"
-                if !rpi_virt_fw::diag::ON =>
-            {
-                anyhow::bail!(
-                    "{a} needs a build with the `diag` feature: cargo build --release --features diag"
-                )
-            }
-            "--trace" => trace = true,
-            "--trace-full" => {
-                trace = true;
-                trace_full = true;
-            }
-            "--exc-vbase" => {
-                exc_vbase = parse_u32(it.next().context("--exc-vbase needs a value")?)?
-            }
-            "--smp" => smp = true,
-            "--as-core1" => as_core1 = true,
-            "--trace-from" => {
-                trace = true;
-                trace_from = parse_u32(it.next().context("--trace-from needs a value")?)?
-            }
-            "--trace-mmio" => trace_mmio = true,
-            // The ARM is always modelled since #52; old command lines keep
-            // working.
-            "--arm" => {}
-            "--until" => until = Some(it.next().context("--until needs a text")?.to_string()),
-            "--send-after" => {
-                let prompt = it.next().context("--send-after needs <prompt> <text>")?;
-                let text = it.next().context("--send-after needs <prompt> <text>")?;
-                let prompt = String::from_utf8(harness::boot::unescape(prompt))
-                    .context("--send-after: the prompt must be UTF-8")?;
-                sends.push((prompt, harness::boot::unescape(text)));
-            }
-            "--stdin" => stdin = true,
-            "-v" | "--verbose" => verbose = true,
-            "--io-log" => io_log = Some(it.next().context("--io-log needs a path")?.clone()),
-            "--io-log-format" => {
-                io_log_format = it
-                    .next()
-                    .context("--io-log-format needs text or jsonl")?
-                    .parse()
-                    .map_err(anyhow::Error::msg)?
-            }
-            "--sd" => sd_image = Some(PathBuf::from(it.next().context("--sd needs a path")?)),
-            "--console-log" => {
-                console_log = Some(PathBuf::from(
-                    it.next().context("--console-log needs a path")?,
-                ))
-            }
-            "--usb" => usb_image = Some(PathBuf::from(it.next().context("--usb needs a path")?)),
-            "--usb-mb" => usb_mb = Some(it.next().context("--usb-mb needs a value")?.parse()?),
-            "--net" => {
-                let spec = it.next().context("--net needs passt or passt:<socket>")?;
-                host_net = Some(if spec == "passt" {
-                    HostNet::Passt
-                } else {
-                    let sock = spec
-                        .strip_prefix("passt:")
-                        .or_else(|| spec.strip_prefix("stream:"))
-                        .with_context(|| {
-                            format!("--net {spec}: expected passt or passt:<socket>")
-                        })?;
-                    HostNet::Socket(PathBuf::from(sock))
-                });
-            }
-            "--netboot" => {
-                netboot_root = Some(PathBuf::from(
-                    it.next().context("--netboot needs a directory")?,
-                ))
-            }
-            "--boot-order" => {
-                boot_order = Some(it.next().context("--boot-order needs a value")?.to_string())
-            }
-            "--eeprom-pubkey" => {
-                eeprom_pubkey = Some(PathBuf::from(
-                    it.next().context("--eeprom-pubkey needs a file")?,
-                ))
-            }
-            "--boot-rom" => {
-                boot_rom_path = Some(PathBuf::from(it.next().context("--boot-rom needs a file")?))
-            }
-            "--rom" => rom_path = Some(PathBuf::from(it.next().context("--rom needs a file")?)),
-            "--stepping" => {
-                stepping = Some(Stepping::parse(
-                    it.next().context("--stepping needs b0 or c0")?,
-                )?)
-            }
-            "--board-rev" => {
-                board_rev = Some(Board::parse_revision(
-                    it.next().context("--board-rev needs a revision code")?,
-                )?)
-            }
-            "--bootconf" => {
-                let kv = it.next().context("--bootconf needs KEY=VALUE")?;
-                if !kv.contains('=') {
-                    bail!("--bootconf: expected KEY=VALUE, got '{kv}'");
+                "--ram-mb" => ram_mb = Some(it.next().context("--ram-mb needs a value")?.parse()?),
+                "--max-steps" => {
+                    max_steps = Some(it.next().context("--max-steps needs a value")?.parse()?)
                 }
-                bootconf.push(kv.to_string())
-            }
-            "--skip-signed-boot" => skip_signed_boot = true,
-            "--skip-unimpl" => skip_unimpl = true,
-            "--dump" => {
-                let spec = it.next().context("--dump needs <hexaddr>:<len>")?;
-                let (a, n) = spec.split_once(':').context("--dump: expected addr:len")?;
-                dumps.push((parse_u32(a)?, parse_u32(n)?));
-            }
-            "--disasm" => {
-                let spec = it.next().context("--disasm needs <hexaddr>:<count>")?;
-                let (a, n) = spec
-                    .split_once(':')
-                    .context("--disasm: expected addr:count")?;
-                disasms.push((parse_u32(a)?, parse_u32(n)?));
-            }
-            "--print-fdt" => print_fdt = true,
-            "--mbox-property" => {
-                let list = it.next().context("--mbox-property needs a tag list")?;
-                let mut group: Vec<MboxTag> = Vec::new();
-                for t in list.split(',') {
-                    // `<tag>[:<value-buffer bytes>][=<word>.<word>...]`.
-                    // The size override exists because start4's idea of how
-                    // much room a tag needs is not always its Linux client's
-                    // `sizeof`; the request words exist because most crypto
-                    // tags take a `key_id`, and those are **1-based** — asking
-                    // for key 0 answers `KEY_NOT_FOUND` on a part whose only
-                    // key is key 1.
-                    let (head, req) = match t.split_once('=') {
-                        Some((a, b)) => (
-                            a,
-                            b.split('.').map(parse_u32).collect::<Result<Vec<u32>>>()?,
-                        ),
-                        None => (t, Vec::new()),
-                    };
-                    let (tag, size) = match head.split_once(':') {
-                        Some((a, b)) => (parse_u32(a)?, Some(parse_u32(b)?)),
-                        None => (parse_u32(head)?, None),
-                    };
-                    group.push((tag, size, req));
+                "--max-wall" => {
+                    max_wall_secs = it.next().context("--max-wall needs seconds")?.parse()?
                 }
-                mbox_tags.push(group);
+                "--trace" | "--trace-full" | "--trace-from" | "--trace-mmio"
+                    if !rpi_virt_fw::diag::ON =>
+                {
+                    anyhow::bail!(
+                        "{a} needs a build with the `diag` feature: cargo build --release --features diag"
+                    )
+                }
+                "--trace" => trace = true,
+                "--trace-full" => {
+                    trace = true;
+                    trace_full = true;
+                }
+                "--exc-vbase" => {
+                    exc_vbase = parse_u32(it.next().context("--exc-vbase needs a value")?)?
+                }
+                "--smp" => smp = true,
+                "--as-core1" => as_core1 = true,
+                "--trace-from" => {
+                    trace = true;
+                    trace_from = parse_u32(it.next().context("--trace-from needs a value")?)?
+                }
+                "--trace-mmio" => trace_mmio = true,
+                // The ARM is always modelled since #52; old command lines keep
+                // working.
+                "--arm" => {}
+                "--until" => until = Some(it.next().context("--until needs a text")?.to_string()),
+                "--send-after" => {
+                    let prompt = it.next().context("--send-after needs <prompt> <text>")?;
+                    let text = it.next().context("--send-after needs <prompt> <text>")?;
+                    let prompt = String::from_utf8(harness::boot::unescape(prompt))
+                        .context("--send-after: the prompt must be UTF-8")?;
+                    sends.push((prompt, harness::boot::unescape(text)));
+                }
+                "--stdin" => stdin = true,
+                "-v" | "--verbose" => verbose = true,
+                "--io-log" => io_log = Some(it.next().context("--io-log needs a path")?.clone()),
+                "--io-log-format" => {
+                    io_log_format = it
+                        .next()
+                        .context("--io-log-format needs text or jsonl")?
+                        .parse()
+                        .map_err(anyhow::Error::msg)?
+                }
+                "--sd" => sd_image = Some(PathBuf::from(it.next().context("--sd needs a path")?)),
+                "--console-log" => {
+                    console_log = Some(PathBuf::from(
+                        it.next().context("--console-log needs a path")?,
+                    ))
+                }
+                "--usb" => {
+                    usb_image = Some(PathBuf::from(it.next().context("--usb needs a path")?))
+                }
+                "--usb-mb" => usb_mb = Some(it.next().context("--usb-mb needs a value")?.parse()?),
+                "--net" => {
+                    let spec = it.next().context("--net needs passt or passt:<socket>")?;
+                    host_net = Some(if spec == "passt" {
+                        HostNet::Passt
+                    } else {
+                        let sock = spec
+                            .strip_prefix("passt:")
+                            .or_else(|| spec.strip_prefix("stream:"))
+                            .with_context(|| {
+                                format!("--net {spec}: expected passt or passt:<socket>")
+                            })?;
+                        HostNet::Socket(PathBuf::from(sock))
+                    });
+                }
+                "--netboot" => {
+                    netboot_root = Some(PathBuf::from(
+                        it.next().context("--netboot needs a directory")?,
+                    ))
+                }
+                "--boot-order" => {
+                    boot_order = Some(it.next().context("--boot-order needs a value")?.to_string())
+                }
+                "--eeprom-pubkey" => {
+                    eeprom_pubkey = Some(PathBuf::from(
+                        it.next().context("--eeprom-pubkey needs a file")?,
+                    ))
+                }
+                "--boot-rom" => {
+                    boot_rom_path =
+                        Some(PathBuf::from(it.next().context("--boot-rom needs a file")?))
+                }
+                "--rom" => rom_path = Some(PathBuf::from(it.next().context("--rom needs a file")?)),
+                "--stepping" => {
+                    stepping = Some(Stepping::parse(
+                        it.next().context("--stepping needs b0 or c0")?,
+                    )?)
+                }
+                "--board-rev" => {
+                    board_rev = Some(Board::parse_revision(
+                        it.next().context("--board-rev needs a revision code")?,
+                    )?)
+                }
+                "--bootconf" => {
+                    let kv = it.next().context("--bootconf needs KEY=VALUE")?;
+                    if !kv.contains('=') {
+                        bail!("--bootconf: expected KEY=VALUE, got '{kv}'");
+                    }
+                    bootconf.push(kv.to_string())
+                }
+                "--skip-signed-boot" => skip_signed_boot = true,
+                "--skip-unimpl" => skip_unimpl = true,
+                "--dump" => {
+                    let spec = it.next().context("--dump needs <hexaddr>:<len>")?;
+                    let (a, n) = spec.split_once(':').context("--dump: expected addr:len")?;
+                    dumps.push((parse_u32(a)?, parse_u32(n)?));
+                }
+                "--disasm" => {
+                    let spec = it.next().context("--disasm needs <hexaddr>:<count>")?;
+                    let (a, n) = spec
+                        .split_once(':')
+                        .context("--disasm: expected addr:count")?;
+                    disasms.push((parse_u32(a)?, parse_u32(n)?));
+                }
+                "--print-fdt" => print_fdt = true,
+                "--mbox-property" => {
+                    let list = it.next().context("--mbox-property needs a tag list")?;
+                    let mut group: Vec<MboxTag> = Vec::new();
+                    for t in list.split(',') {
+                        // `<tag>[:<value-buffer bytes>][=<word>.<word>...]`.
+                        // The size override exists because start4's idea of how
+                        // much room a tag needs is not always its Linux client's
+                        // `sizeof`; the request words exist because most crypto
+                        // tags take a `key_id`, and those are **1-based** — asking
+                        // for key 0 answers `KEY_NOT_FOUND` on a part whose only
+                        // key is key 1.
+                        let (head, req) = match t.split_once('=') {
+                            Some((a, b)) => (
+                                a,
+                                b.split('.').map(parse_u32).collect::<Result<Vec<u32>>>()?,
+                            ),
+                            None => (t, Vec::new()),
+                        };
+                        let (tag, size) = match head.split_once(':') {
+                            Some((a, b)) => (parse_u32(a)?, Some(parse_u32(b)?)),
+                            None => (parse_u32(head)?, None),
+                        };
+                        group.push((tag, size, req));
+                    }
+                    mbox_tags.push(group);
+                }
+                "--dram-map" => dram_map = true,
+                "--dump-fdt" => {
+                    dump_fdt = Some(PathBuf::from(it.next().context("--dump-fdt needs a path")?))
+                }
+                "--patch" => {
+                    let spec = it.next().context("--patch needs <hexaddr>=<hexval>")?;
+                    let (a, v) = spec.split_once('=').context("--patch: expected addr=val")?;
+                    patches.push((parse_u32(a)?, parse_u32(v)?));
+                }
+                s if !s.starts_with('-') => path = Some(PathBuf::from(s)),
+                s => bail!("unexpected argument '{s}'"),
             }
-            "--dram-map" => dram_map = true,
-            "--dump-fdt" => {
-                dump_fdt = Some(PathBuf::from(it.next().context("--dump-fdt needs a path")?))
-            }
-            "--patch" => {
-                let spec = it.next().context("--patch needs <hexaddr>=<hexval>")?;
-                let (a, v) = spec.split_once('=').context("--patch: expected addr=val")?;
-                patches.push((parse_u32(a)?, parse_u32(v)?));
-            }
-            s if !s.starts_with('-') => path = Some(PathBuf::from(s)),
-            s => bail!("unexpected argument '{s}'"),
         }
+        let path = path.context("boot: missing <file>")?;
+        if netboot_root.is_some() && host_net.is_some() {
+            bail!("--netboot and --net both plug in the Ethernet cable; give one");
+        }
+        Ok(Self {
+            path,
+            entry,
+            ram_mb,
+            usb_mb,
+            max_steps,
+            max_wall_secs,
+            eeprom,
+            trace,
+            trace_full,
+            trace_mmio,
+            exc_vbase,
+            trace_from,
+            smp,
+            as_core1,
+            patches,
+            dumps,
+            disasms,
+            sd_image,
+            console_log,
+            dump_fdt,
+            print_fdt,
+            mbox_tags,
+            usb_image,
+            netboot_root,
+            host_net,
+            boot_order,
+            bootconf,
+            eeprom_pubkey,
+            boot_rom_path,
+            rom_path,
+            stepping,
+            board_rev,
+            dram_map,
+            skip_signed_boot,
+            skip_unimpl,
+            until,
+            sends,
+            stdin,
+            verbose,
+            io_log,
+            io_log_format,
+        })
     }
-    let path = path.context("boot: missing <file>")?;
-    if netboot_root.is_some() && host_net.is_some() {
-        bail!("--netboot and --net both plug in the Ethernet cable; give one");
-    }
-    let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+}
+
+/// A finished boot: its last run (the one after the last reset) and the
+/// machine that run left behind.
+struct Booted {
+    report: RunReport,
+    emu: Emulator,
+    /// Where the last run started.
+    start: u32,
+    limits: RunLimits,
+    /// How many times the firmware reset the machine.
+    reboots: u32,
+}
+
+pub fn cmd_boot(args: &[String]) -> Result<ExitCode> {
+    let opts = BootOpts::parse(args)?;
+    let booted = run_boot(&opts)?;
+    print_report(&opts, booted)
+}
+
+/// Build the machine and run it. A reset the firmware asks for (after an
+/// EEPROM self-update) builds it again from the updated flash, up to four
+/// times.
+fn run_boot(opts: &BootOpts) -> Result<Booted> {
+    let BootOpts {
+        ref path,
+        entry,
+        ram_mb,
+        usb_mb,
+        max_steps,
+        max_wall_secs,
+        eeprom,
+        trace,
+        trace_full,
+        trace_mmio,
+        exc_vbase,
+        trace_from,
+        smp,
+        as_core1,
+        ref patches,
+        ref sd_image,
+        ref usb_image,
+        ref netboot_root,
+        ref host_net,
+        ref boot_order,
+        ref bootconf,
+        ref eeprom_pubkey,
+        ref boot_rom_path,
+        ref rom_path,
+        stepping,
+        board_rev,
+        skip_signed_boot,
+        skip_unimpl,
+        ref until,
+        ref sends,
+        stdin,
+        verbose,
+        ref io_log,
+        io_log_format,
+        ..
+    } = *opts;
+
+    let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
 
     // The EEPROM bootloader touches the 0x6000_0000 L2-SRAM window, which
     // our model folds into DRAM past the 512 MiB mark — give it room by default.
@@ -462,7 +427,7 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
     // on a Pi whose first boot uses the rest. Read on demand; what the guest
     // writes stays in memory and outlives the resets below.
     // `--io-log <path>` (`-` for stderr): what the machine read and wrote, seen
-    // from the peripherals (#35, `src/iolog.rs`). Made once, so it spans the
+    // from the peripherals (#35, `src/iolog/`). Made once, so it spans the
     // resets of an EEPROM self-update.
     let io = match &io_log {
         Some(p) => {
@@ -639,7 +604,7 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
         // reports in seconds instead of running out the wall clock. A shell
         // waiting for its user is quiet too, though.
         silent_us: if stdin { 0 } else { 60_000_000 },
-        until,
+        until: until.clone(),
     };
     // Made once, outside the reboot loop: it owns the stdin reader and the
     // terminal's raw mode.
@@ -701,8 +666,7 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
     };
 
     let mut reboots = 0u32;
-    #[allow(unused_mut)]
-    let (report, mut emu, start) = 'boot: loop {
+    let (report, emu, start) = 'boot: loop {
         let mut machine = Machine::new(ram_mb as usize * 1024 * 1024);
         machine.set_board(board);
         if eeprom {
@@ -798,7 +762,7 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
             payload.load_into(&mut machine)?;
             entry.unwrap_or(payload.entry())
         };
-        for &(a, v) in &patches {
+        for &(a, v) in patches {
             use rpi_virt_fw::bus::Bus;
             machine.store32(a, v).ok();
             if verbose {
@@ -893,6 +857,41 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
     if let Some(io) = &io {
         io.borrow_mut().flush_run();
     }
+    Ok(Booted {
+        report,
+        emu,
+        start,
+        limits,
+        reboots,
+    })
+}
+
+/// What `boot` prints once the run is over: the console unless it was
+/// streamed, whatever was asked for by name, the full report with `-v`, and
+/// the `result:` line.
+fn print_report(opts: &BootOpts, booted: Booted) -> Result<ExitCode> {
+    let BootOpts {
+        ref path,
+        eeprom,
+        trace,
+        ref dumps,
+        ref disasms,
+        ref console_log,
+        ref dump_fdt,
+        print_fdt,
+        ref mbox_tags,
+        dram_map,
+        verbose,
+        ..
+    } = *opts;
+    let Booted {
+        report,
+        mut emu,
+        start,
+        limits,
+        reboots,
+    } = booted;
+
     // Collapse consecutive-identical transfers so a spin doesn't hide the
     // history that led into it.
     let mut cf_tail: Vec<(u32, u32, u32)> = Vec::new();
@@ -1066,7 +1065,7 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
         print!("{}", String::from_utf8_lossy(&report.console));
     }
 
-    for &(a, n) in &dumps {
+    for &(a, n) in dumps {
         use rpi_virt_fw::bus::Bus;
         print!("dump {a:#010x}:");
         for i in 0..n {
@@ -1083,7 +1082,7 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
         println!();
     }
 
-    for &(a, count) in &disasms {
+    for &(a, count) in disasms {
         use rpi_virt_fw::bus::Bus;
         println!("disasm {a:#010x}:");
         let mut pc = a;
@@ -1252,7 +1251,7 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
         }
     }
 
-    for group in &mbox_tags {
+    for group in mbox_tags {
         mbox_property_exchange(&mut emu, &limits, group)?;
     }
 
@@ -1263,11 +1262,10 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
         // passphrase, so a firmware bump that changes how it is derived has to
         // be caught here rather than on a thousand deployed cards.
         //
-        // Nothing hands the blob's address over in a register we can read — no
-        // ARM core runs on this bench — so it is taken from the firmware's own
-        // `Device tree loaded to 0x%x (size 0x%x)` line, which is the last word
-        // start4 says about the blob before it releases the ARM. The header is
-        // validated before anything is believed or written out.
+        // The blob's address is taken from the firmware's own `Device tree
+        // loaded to 0x%x (size 0x%x)` line, which is the last word start4 says
+        // about the blob before it releases the ARM. The header is validated
+        // before anything is believed or written out.
         match locate_fdt(&mut emu.machine, &report.console) {
             Some((addr, blob)) => {
                 match rpi_virt_fw::fdt::Fdt::parse(&blob) {
@@ -1431,299 +1429,15 @@ fn boot_outcome(
     }
 }
 
-fn cmd_run(args: &[String]) -> Result<ExitCode> {
-    let mut path: Option<PathBuf> = None;
-    let mut update = false;
-    let mut verbose = false;
-    for a in args {
-        match a.as_str() {
-            "--update" => update = true,
-            "-v" | "--verbose" => verbose = true,
-            s if !s.starts_with('-') => path = Some(PathBuf::from(s)),
-            s => bail!("unexpected argument '{s}'"),
-        }
-    }
-    let path = path.context("run: missing <scenario.toml>")?;
-    let scn = harness::Scenario::load(&path)?;
-    let outcome = run_one(&scn, update, verbose)?;
-    Ok(if outcome {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::FAILURE
-    })
-}
-
-fn cmd_run_all(args: &[String]) -> Result<ExitCode> {
-    let mut dir = PathBuf::from("testdata/scenarios");
-    let mut update = false;
-    let mut verbose = false;
-    for a in args {
-        match a.as_str() {
-            "--update" => update = true,
-            "-v" | "--verbose" => verbose = true,
-            s if !s.starts_with('-') => dir = PathBuf::from(s),
-            s => bail!("unexpected argument '{s}'"),
-        }
-    }
-
-    let files = harness::discover(&dir)
-        .with_context(|| format!("discovering scenarios in {}", dir.display()))?;
-    if files.is_empty() {
-        bail!("no *.toml scenarios in {}", dir.display());
-    }
-
-    let mut failed = 0;
-    for f in &files {
-        let scn = harness::Scenario::load(f)?;
-        if !run_one(&scn, update, verbose)? {
-            failed += 1;
-        }
-    }
-
-    println!("\n{} scenario(s), {} failed", files.len(), failed);
-    Ok(if failed == 0 {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::FAILURE
-    })
-}
-
-fn run_one(scn: &harness::Scenario, update: bool, verbose: bool) -> Result<bool> {
-    let run = harness::run_scenario(scn)?;
-    let outcome = harness::check_golden(scn, &run.transcript)?;
-
-    let (ok, tag, note) = match &outcome {
-        GoldenOutcome::Match => (true, "PASS", String::new()),
-        GoldenOutcome::Missing { .. } if update => {
-            harness::regression::write_golden(scn, &run.transcript)?;
-            (true, "NEW ", " (golden created)".into())
-        }
-        GoldenOutcome::Mismatch { .. } if update => {
-            harness::regression::write_golden(scn, &run.transcript)?;
-            (true, "UPD ", " (golden updated)".into())
-        }
-        GoldenOutcome::Missing { .. } => (false, "MISS", " (no golden; run --update)".into()),
-        GoldenOutcome::Mismatch { expected, actual } => (
-            false,
-            "FAIL",
-            format!("\n{}", harness::unified_diff(expected, actual)),
-        ),
-    };
-
-    println!(
-        "[{tag}] {:<24} {:>10} insn  end={:?}  stub={}  skipped={}{note}",
-        scn.name, run.report.retired, run.report.end, run.report.stub_hits, run.report.skipped,
-    );
-
-    if verbose {
-        println!("--- report ---\n{:#?}", run.report);
-        println!("--- transcript ---\n{}", run.transcript);
-    }
-
-    Ok(ok)
-}
-
-/// `boot-check <scenario.toml> ...` — the firmware-boot regression.
-///
-/// Two modes, because the boot itself is expensive (minutes) and must be run
-/// exactly once per check:
-///
-/// * `--plan` prints the `boot` invocation the scenario describes, for
-///   `scripts/boot-check.sh` to run. The scenario file stays the only place
-///   the workload is written down.
-/// * `--log <combined.log> --console <console.bin>` checks that finished run:
-///   the console against the golden transcript, the log against the
-///   milestones. `--update` rewrites the golden instead of failing on it.
-fn cmd_boot_check(args: &[String]) -> Result<ExitCode> {
-    let mut path: Option<PathBuf> = None;
-    let mut log: Option<PathBuf> = None;
-    let mut console: Option<PathBuf> = None;
-    let mut plan = false;
-    let mut update = false;
-    let mut it = args.iter();
-    while let Some(a) = it.next() {
-        match a.as_str() {
-            "--plan" => plan = true,
-            "--update" => update = true,
-            "--log" => log = Some(PathBuf::from(it.next().context("--log needs a path")?)),
-            "--console" => {
-                console = Some(PathBuf::from(it.next().context("--console needs a path")?))
-            }
-            s if !s.starts_with('-') => path = Some(PathBuf::from(s)),
-            s => bail!("unexpected argument '{s}'"),
-        }
-    }
-    let path = path.context("boot-check: missing <scenario.toml>")?;
-    let scn = harness::BootScenario::load(&path)?;
-
-    if plan {
-        // Name what is missing, and how to make it, rather than plan a boot
-        // that cannot open its card.
-        let missing = scn.missing_inputs();
-        if !missing.is_empty() {
-            eprintln!("{}: the run needs files that are not there:", scn.name);
-            // The network root and its key come out of one command.
-            let mut make: Vec<&str> = Vec::new();
-            for i in &missing {
-                eprintln!("  {}", harness::boot::tidy_path(&i.path).display());
-                if !make.contains(&i.make.as_str()) {
-                    make.push(&i.make);
-                }
-            }
-            let them = if missing.len() == 1 { "it" } else { "them" };
-            eprintln!("make {them} with:");
-            for m in make {
-                eprintln!("  {m}");
-            }
-            return Ok(ExitCode::FAILURE);
-        }
-        // Shell-readable and quoting-proof: `wall=<n>` on the first line for
-        // the outer timeout, then one `boot` argument per line.
-        let console = console.unwrap_or_else(|| PathBuf::from("boot-console.bin"));
-        println!("wall={}", scn.wall_secs());
-        for a in scn.boot_args(&console) {
-            println!("{a}");
-        }
-        return Ok(ExitCode::SUCCESS);
-    }
-
-    let log_path = log.context("boot-check: --log <path> (or --plan)")?;
-    let log_text = std::fs::read_to_string(&log_path)
-        .with_context(|| format!("reading run log {}", log_path.display()))?;
-    let console_path = console.context("boot-check: --console <path> is required with --log")?;
-    let console_bytes = std::fs::read(&console_path).with_context(|| {
-        format!(
-            "reading console log {} (boot writes it with --console-log)",
-            console_path.display()
-        )
-    })?;
-    let transcript = harness::boot::normalise_console(&console_bytes);
-
-    if update {
-        // Never record a bad run as the new truth. A boot that was starved of
-        // CPU stops at the wall clock part-way through, and its transcript
-        // looks like a perfectly good — and much shorter — boot.
-        let milestones = harness::boot::check_milestones(&scn, &log_text);
-        if !milestones.is_empty() {
-            for f in &milestones {
-                eprintln!("{f}");
-            }
-            eprintln!(
-                "refusing to update the golden: this run failed {} milestone(s), so it is \
-                 not a baseline. Fix the run (or raise RVF_BOOT_WALL if it was starved) first.",
-                milestones.len()
-            );
-            return Ok(ExitCode::FAILURE);
-        }
-        harness::boot::write_golden(&scn, &transcript)?;
-        println!(
-            "updated golden {} ({} lines)",
-            scn.golden_path().display(),
-            transcript.lines().count()
-        );
-    }
-
-    let failures = harness::boot::check_run(&scn, &log_text, &transcript)?;
-    println!(
-        "\n{}: {} milestone(s) + golden transcript ({} lines)",
-        scn.name,
-        scn.milestones.len(),
-        transcript.lines().count()
-    );
-    if failures.is_empty() {
-        println!("boot check passed");
-        return Ok(ExitCode::SUCCESS);
-    }
-    for f in &failures {
-        eprintln!("{f}");
-    }
-    eprintln!("boot check FAILED ({} problem(s))", failures.len());
-    Ok(ExitCode::FAILURE)
-}
-
-fn cmd_disasm(args: &[String]) -> Result<ExitCode> {
-    let mut path: Option<PathBuf> = None;
-    let mut base: u32 = 0;
-    let mut count: usize = 64;
-    let mut vaddr: Option<u32> = None;
-    let mut lengths_only = false;
-    let mut eeprom = false;
-    let mut it = args.iter();
-    while let Some(a) = it.next() {
-        match a.as_str() {
-            "--base" => base = parse_u32(it.next().context("--base needs a value")?)?,
-            "--count" => count = it.next().context("--count needs a value")?.parse()?,
-            "--vaddr" => vaddr = Some(parse_u32(it.next().context("--vaddr needs a value")?)?),
-            "--lengths" => lengths_only = true,
-            "--eeprom" => eeprom = true,
-            s if !s.starts_with('-') => path = Some(PathBuf::from(s)),
-            s => bail!("unexpected argument '{s}'"),
-        }
-    }
-    let path = path.context("disasm: missing <file>")?;
-    let raw = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
-
-    // ELF: locate the segment containing `vaddr` (or the entry) and disassemble
-    // from there. Flat binary: file offset 0 sits at `--base`, and `--vaddr`
-    // starts that far into it.
-    let (bytes, mut pc): (Vec<u8>, u32) = if eeprom {
-        use rpi_virt_fw::firmware::eeprom::{
-            EepromImage, BOOTCODE_ENTRY_OFFSET, BOOTCODE_LOAD_ADDR,
-        };
-        let img = EepromImage::parse(&raw)?;
-        let bc = img
-            .bootcode()
-            .context("EEPROM image has no bootcode section")?;
-        let target = vaddr.unwrap_or(BOOTCODE_LOAD_ADDR + BOOTCODE_ENTRY_OFFSET);
-        let skip = (target - BOOTCODE_LOAD_ADDR) as usize;
-        (bc.body[skip..].to_vec(), target)
-    } else if raw.starts_with(b"\x7fELF") {
-        let elf = rpi_virt_fw::firmware::elf32::Elf32::parse(&raw)?;
-        let target = vaddr.unwrap_or(elf.entry);
-        let seg = elf
-            .segments
-            .iter()
-            .find(|s| target >= s.vaddr && (target as u64) < s.vaddr as u64 + s.data.len() as u64)
-            .with_context(|| format!("no loadable segment contains vaddr {target:#x}"))?;
-        let skip = (target - seg.vaddr) as usize;
-        (seg.data[skip..].to_vec(), target)
-    } else {
-        let target = vaddr.unwrap_or(base);
-        let skip = target
-            .checked_sub(base)
-            .map(|s| s as usize)
-            .filter(|&s| s < raw.len())
-            .with_context(|| {
-                format!("--vaddr {target:#x} is outside the file at --base {base:#x}")
-            })?;
-        (raw[skip..].to_vec(), target)
-    };
-
-    let mut off = 0usize;
-    for _ in 0..count {
-        if off + 2 > bytes.len() {
-            break;
-        }
-        let p0 = u16::from_le_bytes([bytes[off], bytes[off + 1]]);
-        let len = insn_len_bytes(p0) as usize;
-        if off + len > bytes.len() {
-            println!("{pc:#010x}:  (truncated {len}-byte insn)");
-            break;
-        }
-        let insn = decode(&bytes[off..off + len], pc);
-        if lengths_only {
-            println!("{pc:#010x} {len} {}", insn.op.mnemonic());
-        } else {
-            let hex: String = bytes[off..off + len]
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect();
-            println!("{pc:#010x}:  {hex:<20}  {:?}", insn.op);
-        }
-        pc = pc.wrapping_add(len as u32);
-        off += len;
-    }
-    Ok(ExitCode::SUCCESS)
+/// The offset of the `bootconf.txt` `MAGIC_FILE` section header in an EEPROM
+/// image, found through the section walk rather than by searching for the name
+/// — the bootcode carries a string table with the same names in it.
+fn find_bootconf_header(flash: &[u8]) -> Option<usize> {
+    let img = rpi_virt_fw::firmware::eeprom::EepromImage::parse(flash).ok()?;
+    img.sections
+        .iter()
+        .find(|s| s.filename.as_deref() == Some("bootconf.txt"))
+        .map(|s| s.header_offset)
 }
 
 /// Find the device tree blob `arm_loader` left for the ARM, using the
@@ -1733,8 +1447,7 @@ fn cmd_disasm(args: &[String]) -> Result<ExitCode> {
 /// Reading it out of the log rather than hard-coding an address is what keeps
 /// this working across firmware versions — which is the entire point, since the
 /// bench exists to diff one version against another. The line is emitted after
-/// the overlays are merged and `/chosen` is patched, and nothing overwrites the
-/// blob afterwards: the ARM that would consume it is not modelled.
+/// the overlays are merged and `/chosen` is patched.
 ///
 /// The length in the log is the tree's own `totalsize`, but the header is read
 /// first and trusted over it, so a firmware that logs a rounded figure still
@@ -1844,284 +1557,4 @@ fn parse_addr_range(s: &str) -> Option<(u32, u32)> {
     let p = |t: &str| u32::from_str_radix(t.trim().trim_start_matches("0x"), 16).ok();
     let (lo, hi) = (p(lo)?, p(hi)?);
     (lo < hi).then_some((lo, hi))
-}
-
-/// Where the request buffer is built. Well clear of everything `--dram-map`
-/// reports dirty at `arm_loader` — the kernel ends below `0x0280_0000`, the
-/// device tree sits at `0x2eff_1e00`, and start4's own image is above
-/// `0x3ebe_4000`.
-const MBOX_BUFFER: u32 = 0x1000_0000;
-
-/// Post a property-interface request to the still-running firmware, the way a
-/// booted Linux does through `/dev/vcio`, and report what comes back.
-///
-/// The ARM is not modelled, so this stands in for it: build the buffer, ring
-/// the doorbell, keep stepping the VPU, and read the reply. The address on the
-/// wire is `0xC000_0000 | phys` because Linux allocates the buffer coherently
-/// and `/soc` carries `dma-ranges = <0xc0000000 0x0 0x0 0x40000000>` — the
-/// uncached alias, which the model already maps to the same DRAM.
-/// One tag in a `--mbox-property` request: the tag, an optional override of the
-/// value-buffer size, and optional request words (a `key_id`, most often).
-type MboxTag = (u32, Option<u32>, Vec<u32>);
-
-fn mbox_property_exchange(emu: &mut Emulator, limits: &RunLimits, tags: &[MboxTag]) -> Result<()> {
-    use rpi_virt_fw::bus::{Bus, Width};
-
-    println!("\n--- ARM property mailbox (0x7e00_b880) ---");
-
-    // Each tag names its own value-buffer size, and the firmware walks the
-    // request by those sizes — so one wrong size desynchronises every tag after
-    // it and the whole buffer comes back `0x80000001` (parse error). A fixed
-    // 64-byte slot for everything did exactly that.
-    //
-    // Sizes and request payloads follow raspberrypi/utils `rpifwcrypto.c`,
-    // which is the Linux-side client of the same interface. The service itself
-    // lives in `start4.elf` (`arm_crypto_*`, with its own mbedTLS) — this is
-    // only the caller, standing in for an ARM the bench does not have.
-    let spec = |tag: u32| -> (u32, Vec<u32>) {
-        match tag {
-            // `flags, key_id` in; `status, length, key[]` back. The buffer has
-            // to hold the key, so it is sized by the client's maxima:
-            // 512 bytes of public key, 1024 of private key.
-            0x0003_0093 => (8 + 512, vec![0, 0]),
-            0x0003_0094 => (8 + 1024, vec![0, 0]),
-            // `flags, key_id` in, nothing back.
-            0x0003_0095 => (8, vec![0, 0]),
-            // `key_id, status` / `key_id, usage` in.
-            0x0003_8090 | 0x0003_809c => (8, vec![0, 0]),
-            // `key_id` in, one word back.
-            0x0003_0090 | 0x0003_009c => (4, vec![0]),
-            // `flags, key_id, length, hash[32]` in; `status, length, sig[]`
-            // back, so the buffer has to be the larger of the two.
-            0x0003_0091 => (128, vec![0, 0, 32]),
-            // `flags, key_id, length, message[]` in; `status, length,
-            // hmac[32]` back. A fixed short message keeps the result stable
-            // across runs, which is what makes it a regression.
-            0x0003_0092 => {
-                let mut v = vec![0, 0, 16];
-                v.extend_from_slice(&[0x6c6c6548, 0x77202c6f, 0x646c726f, 0x00000021]);
-                (128, v)
-            }
-            // Everything else: one word in, one word back.
-            _ => (4, vec![0]),
-        }
-    };
-
-    let mut words: Vec<u32> = vec![0, 0];
-    for (tag, override_size, override_req) in tags {
-        let (tag, override_size) = (*tag, *override_size);
-        let (size, payload) = spec(tag);
-        let size = override_size.unwrap_or(size);
-        let payload = if override_req.is_empty() {
-            payload
-        } else {
-            override_req.clone()
-        };
-        words.push(tag);
-        words.push(size);
-        words.push(0);
-        let slot = (size / 4) as usize;
-        for i in 0..slot {
-            words.push(payload.get(i).copied().unwrap_or(0));
-        }
-    }
-    // End marker, then slack. The firmware rejects a buffer whose declared
-    // total ends exactly at the marker: the last tag comes back unhandled and
-    // the whole buffer gets `0x80000001`, whichever tag is last. `rpifwcrypto.c`
-    // never hits this because it declares `sizeof(msg)` — its value arrays are
-    // bigger than the `tag_buf_size` it asks for, so its total always carries
-    // spare room past the marker.
-    words.push(0);
-    words.extend_from_slice(&[0; 4]);
-    words[0] = (words.len() as u32) * 4;
-
-    for (i, w) in words.iter().enumerate() {
-        emu.machine
-            .store(MBOX_BUFFER + (i as u32) * 4, Width::Word, *w)
-            .map_err(|e| anyhow::anyhow!("staging the request buffer: {e}"))?;
-    }
-
-    let bus_addr = 0xC000_0000 | MBOX_BUFFER;
-    let message = (bus_addr & !0xF) | rpi_virt_fw::periph::mbox::CHANNEL_PROPERTY;
-    println!(
-        "  posting {message:#010x}  ({} tags, {} byte buffer at {MBOX_BUFFER:#010x})",
-        tags.len(),
-        words.len() * 4
-    );
-    if !emu.machine.mbox.post_from_arm(message) {
-        bail!("the mailbox is full — the firmware has not drained earlier requests");
-    }
-
-    // Let the firmware run. It is parked in the ThreadX idle loop by now, so a
-    // short budget is plenty if it is going to answer at all.
-    // The firmware is parked in the ThreadX idle loop by now, so the two stop
-    // conditions that end a *boot* would end this instantly and wrongly: the
-    // idle-spin detector fires on the idle loop itself, and the silence
-    // watchdog fires because a serviced mailbox request prints nothing.
-    //
-    // Nothing in `RunLimits` can say "stop when the reply lands", so run in
-    // short slices and check between them. The answer takes a few million
-    // instructions once the interrupt gets through; the budget is there for
-    // the case where it does not.
-    // Short slices, because the check between them is also what dates the
-    // reply: the firmware idles through `sleep`, so half a second of wall
-    // clock is ten of modelled time — ten times what a Linux client waits.
-    let slice = RunLimits {
-        max_steps: None,
-        max_wall: Some(std::time::Duration::from_millis(10)),
-        idle_spin_limit: 0,
-        silent_us: u64::MAX,
-        ..limits.clone()
-    };
-    let budget = std::time::Duration::from_secs(20);
-    let started = std::time::Instant::now();
-    let retired_before = emu.cpu.retired;
-    let us_before = emu.machine.systimer.now_us();
-    let replies_before = emu.machine.mbox.writes;
-    let mut console = Vec::new();
-    let mut report = emu.run(&slice);
-    loop {
-        console.extend_from_slice(&report.console);
-        let answered =
-            !emu.machine.mbox.request_outstanding() && emu.machine.mbox.writes > replies_before;
-        if answered || started.elapsed() >= budget {
-            break;
-        }
-        report = emu.run(&slice);
-    }
-    // Modelled time is what a real client's timeout counts (Linux's
-    // `raspberrypi-firmware` gives up after one second); the wall clock only
-    // says how long the interpreter took.
-    println!(
-        "  resumed: {} instructions, {} us modelled, over {:.1?}, ended {:?} at {:#010x}",
-        report.retired.saturating_sub(retired_before),
-        emu.machine.systimer.now_us().saturating_sub(us_before),
-        started.elapsed(),
-        report.end,
-        report.pc
-    );
-    println!(
-        "  mailbox: config1 {:#x}, {} requests taken, {} replies written",
-        emu.machine.mbox.interrupt_armed(),
-        emu.machine.mbox.reads,
-        emu.machine.mbox.writes
-    );
-
-    match emu.machine.mbox.take_reply() {
-        Some(reply) => println!("  reply {reply:#010x}"),
-        None if emu.machine.mbox.request_outstanding() => {
-            println!("  no reply: the firmware never read the request off MAIL1");
-            println!("  (the firmware's mailbox reader waits for the mailbox interrupt, so");
-            println!("   that wake never arrived: check that the config word above carries");
-            println!("   the pending bit 4)");
-            return Ok(());
-        }
-        None => println!("  the request was read, but no reply was written to MAIL0"),
-    }
-
-    let code = emu.machine.load(MBOX_BUFFER + 4, Width::Word).unwrap_or(0);
-    println!(
-        "  response code {code:#010x} ({})",
-        match code {
-            0x8000_0000 => "success",
-            0x8000_0001 => "parse error",
-            _ => "not a response",
-        }
-    );
-    let total = emu.machine.load(MBOX_BUFFER, Width::Word).unwrap_or(0);
-    if code != 0x8000_0000 {
-        // The tag walk below trusts the sizes it staged. When the firmware
-        // disagrees about them that walk is exactly what cannot be trusted, so
-        // print the buffer as the firmware left it and decode by hand.
-        println!("  raw reply buffer ({total} bytes by its own header):");
-        let n = (total.min(1024) / 4).max(4);
-        for row in 0..n.div_ceil(4) {
-            let mut line = format!("  {:#010x} ", MBOX_BUFFER + row * 16);
-            for col in 0..4 {
-                let i = row * 4 + col;
-                if i < n {
-                    let w = emu
-                        .machine
-                        .load(MBOX_BUFFER + i * 4, Width::Word)
-                        .unwrap_or(0);
-                    line.push_str(&format!(" {w:08x}"));
-                }
-            }
-            println!("{line}");
-        }
-    }
-    let mut off = 8;
-    while off + 12 <= total.min(4096) {
-        let tag = emu
-            .machine
-            .load(MBOX_BUFFER + off, Width::Word)
-            .unwrap_or(0);
-        if tag == 0 {
-            break;
-        }
-        // Bit 31 of the third word is the firmware's "I handled this" mark. A
-        // tag it does not know is left exactly as it was staged, so the word
-        // reads back 0 — which is how an unknown tag is told apart from a
-        // handler that answered with nothing.
-        let resp = emu
-            .machine
-            .load(MBOX_BUFFER + off + 8, Width::Word)
-            .unwrap_or(0);
-        let len = resp & 0x7FFF_FFFF;
-        let mut vals = Vec::new();
-        // Enough for the longest answer worth reading inline: a
-        // 32-byte HMAC plus its status and length words.
-        for i in 0..(len / 4).min(16) {
-            vals.push(format!(
-                "{:#010x}",
-                emu.machine
-                    .load(MBOX_BUFFER + off + 12 + i * 4, Width::Word)
-                    .unwrap_or(0)
-            ));
-        }
-        let mark = if resp & 0x8000_0000 != 0 {
-            "answered"
-        } else {
-            "not handled"
-        };
-        println!(
-            "  tag {tag:#010x}  {mark:>11}  {len:>3} bytes  {}",
-            vals.join(" ")
-        );
-        let slot = emu
-            .machine
-            .load(MBOX_BUFFER + off + 4, Width::Word)
-            .unwrap_or(0);
-        off += 12 + ((slot.max(len) + 3) & !3);
-    }
-    // A trace armed by `RVF_TRACE_ON_PC` inside the exchange is collected here,
-    // after the run report that normally prints one has already run — so
-    // print it, or investigating a tag handler silently produces nothing.
-    if !emu.cpu.trace_log.is_empty() {
-        println!(
-            "\n--- instruction trace while servicing the request ({} entries) ---",
-            emu.cpu.trace_log.len()
-        );
-        for l in &emu.cpu.trace_log {
-            println!("{l}");
-        }
-    }
-    if !console.is_empty() {
-        // Anything the firmware printed while servicing the request.
-        let tail = String::from_utf8_lossy(&console);
-        for line in tail.lines().filter(|l| !l.is_empty()) {
-            println!("  console: {line}");
-        }
-    }
-    Ok(())
-}
-
-fn parse_u32(s: &str) -> Result<u32> {
-    let s = s.trim();
-    let v = if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
-        u32::from_str_radix(hex, 16)?
-    } else {
-        s.parse()?
-    };
-    Ok(v)
 }

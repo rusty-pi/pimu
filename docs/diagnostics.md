@@ -125,9 +125,9 @@ All of these are `=1`.
 |---|---|
 | `RVF_LIVE_CONSOLE=1` | Stream the UART console as it is produced instead of buffering it. `scripts/boot-check.sh` sets this. |
 | `RVF_SLOW_LOOP=1` | Take every step through every check of the run loop, as a `diag` build does, instead of skipping the checks that cannot act (`Emulator::fast_steps`). A run must come out the same either way; this is how to check that it does. |
-| `RVF_NO_PARK=1` | Execute every pass of a busy-wait loop instead of parking the core in it (`arm.rs`, "Busy-wait loops"). The same check for the ARM side: a run must come out the same either way. Works in every build. |
-| `RVF_NO_BURST=1` | Take a core that is the only one running through the whole cycle loop, one instruction at a time, instead of stepping it in bursts (`arm.rs`, "Time and scheduling"). Another same-either-way check. Works in every build. |
-| `RVF_NO_SHA_SKIP=1` | Run a SHA-256 block loop block by block instead of hashing the blocks in the middle of a slice natively (`arm.rs`, "SHA-256 loops"). Same either way, cycle count included. Works in every build. |
+| `RVF_NO_PARK=1` | Execute every pass of a busy-wait loop instead of parking the core in it (`arm/mod.rs`, "Busy-wait loops"). The same check for the ARM side: a run must come out the same either way. Works in every build. |
+| `RVF_NO_BURST=1` | Take a core that is the only one running through the whole cycle loop, one instruction at a time, instead of stepping it in bursts (`arm/mod.rs`, "Time and scheduling"). Another same-either-way check. Works in every build. |
+| `RVF_NO_SHA_SKIP=1` | Run a SHA-256 block loop block by block instead of hashing the blocks in the middle of a slice natively (`arm/mod.rs`, "SHA-256 loops"). Same either way, cycle count included. Works in every build. |
 | `RVF_DUMP_FLASH=<path>` | Write the EEPROM flash image out after the run, including any self-update the firmware applied. |
 | `RVF_DUMP_RAM=<path>` | Write SDRAM out after every boot, as `<path>.<n>` for boot `n`, before a reset replaces it. A kernel that dies before its console comes up still has its log buffer in there. Works in every build. |
 | `RVF_BOOT_WALL=<seconds>` | Overrides the boot scenario's `wall_secs` (default 330) for `scripts/boot-check.sh`. Raise it when other work is competing for the CPU — two concurrent boot runs will miss `arm_loader` on time. |

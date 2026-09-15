@@ -6,9 +6,9 @@ use anyhow::{bail, Context, Result};
 use crate::emulator::{Emulator, RunLimits, RunReport};
 use crate::firmware::Payload;
 use crate::harness::capture::transcript;
+use crate::harness::payloads;
 use crate::harness::scenario::{PayloadKind, Scenario};
 use crate::machine::Machine;
-use crate::payloads;
 
 /// Outcome of comparing a run against its golden.
 #[derive(Debug)]

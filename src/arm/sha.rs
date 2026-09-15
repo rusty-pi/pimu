@@ -1,4 +1,4 @@
-//! SHA-256 block loops (#79): see the module docs of `arm.rs`, "SHA-256
+//! SHA-256 block loops (#79): see the module docs of `arm/mod.rs`, "SHA-256
 //! loops".
 
 use std::collections::{HashMap, HashSet};

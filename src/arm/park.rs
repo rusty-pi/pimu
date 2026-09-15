@@ -1,4 +1,4 @@
-//! Busy-wait parking (#53): see the module docs of `arm.rs`, "Busy-wait
+//! Busy-wait parking (#53): see the module docs of `arm/mod.rs`, "Busy-wait
 //! loops".
 
 use crate::aarch64::{Abort, Cpu, Memory, Step};

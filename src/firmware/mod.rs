@@ -4,7 +4,6 @@
 //!   verifies and stages the bootcode.
 //! - [`elf32`] — `start4.elf` and the vc4boot test programs.
 //! - [`eeprom`] — `pieeprom.bin` section table + bootcode extraction.
-//! - `fixup4.dat` parsing arrives with M3.
 //!
 //! The model knows no `start4.elf` pcs, addresses or `gp` offsets. The bench
 //! runs different firmware builds through the same model (#5), and an address

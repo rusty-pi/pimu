@@ -22,7 +22,7 @@ toml = "0.8"
 diag = []
 
 [build-dependencies]
-# build.rs generates src/spec.rs from specs/*.toml.
+# build.rs generates the register constants in src/spec/ from specs/*.toml.
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 

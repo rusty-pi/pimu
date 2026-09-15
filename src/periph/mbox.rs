@@ -369,7 +369,7 @@ impl Mbox {
 
     /// What a read of `offset` returns, for every register a read leaves as
     /// it is — all but the two FIFOs' data words, which pop. The ARM run loop
-    /// watches these while a core busy-waits on one (`arm.rs`, "Busy-wait
+    /// watches these while a core busy-waits on one (`arm/mod.rs`, "Busy-wait
     /// loops").
     pub fn peek(&self, offset: u32) -> Option<u32> {
         // The interrupt block sits between the two windows.
