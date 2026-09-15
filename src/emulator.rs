@@ -897,6 +897,9 @@ impl Emulator {
             // which takes one even with them off, as on core 0.
             if c1.exc_vbase != 0 && !c1.is_stopped() && (c1.halted || c1.irq_enabled()) {
                 if let Some(src) = self.machine.take_core1_irq() {
+                    // Presented at core 1's `IRQ_PENDING` as it is vectored,
+                    // for start4's dispatcher, the same as core 0's.
+                    self.machine.corectl.raise_source(1, src);
                     if c1.halted {
                         c1.vector_irq_forced(&mut self.machine, src);
                     } else {
