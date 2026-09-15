@@ -162,7 +162,8 @@ pub struct Machine {
     pub watch: Vec<u32>,
     /// `RVF_DBG_DMA=1`: log every control block the DMA4 channel executes.
     dbg_dma: bool,
-    /// Interrupt sources raised by peripherals, waiting to be vectored.
+    /// Interrupt sources raised by peripherals, waiting to be vectored. A
+    /// source stays here until core 0's CoreCtl bank enables it.
     pending_irqs: std::collections::VecDeque<u32>,
     /// Something happened that the run loop's per-step checks may have to
     /// act on: a peripheral register was written, an interrupt was queued, a
@@ -328,15 +329,18 @@ impl Machine {
         self.net = Some(backend);
     }
 
-    /// Queue an interrupt source for delivery to core 0 on the next step.
+    /// Queue an interrupt source for core 0. It is delivered on the next step
+    /// if core 0's CoreCtl bank enables it, and waits for that otherwise.
     pub fn push_pending_irq(&mut self, src: u32) {
         self.pending_irqs.push_back(src);
         self.recheck = true;
     }
 
-    /// Is an interrupt source queued for core 0?
+    /// Is an interrupt source queued for core 0 that its CoreCtl bank enables?
     pub fn irq_queued(&self) -> bool {
-        !self.pending_irqs.is_empty()
+        self.pending_irqs
+            .iter()
+            .any(|&src| self.corectl.irq_priority(src) != 0)
     }
 
     /// Settle any I²C transfer whose time on the wire has elapsed.
@@ -1072,7 +1076,18 @@ impl Bus for Machine {
         // service waiting on a timer that had already fired — every later
         // `msleep` in the firmware then hung, starting with the SD card
         // power-off Linux asks for on its way to reboot.
-        let src = self.pending_irqs.pop_front()?;
+        //
+        // The controller only takes a source whose enable field is non-zero;
+        // the others stay queued until the firmware enables them. In the HTTP
+        // boot the HVS interrupt (97) is already asserted when start4 starts,
+        // and start4 never enables that source there. It used to be taken off
+        // the queue anyway, before start4 had enabled any source; only its
+        // still-empty vector-table entry kept it from running.
+        let i = self
+            .pending_irqs
+            .iter()
+            .position(|&src| self.corectl.irq_priority(src) != 0)?;
+        let src = self.pending_irqs.remove(i)?;
         self.corectl.raise_source(src);
         Some(src)
     }
@@ -1342,5 +1357,26 @@ mod tests {
         for (ch, src) in [(1, 81), (3, 83), (6, 86), (11, 89), (14, 92), (15, 95)] {
             assert_eq!(dma_irq_source(ch), src, "channel {ch}");
         }
+    }
+
+    /// A queued source goes out once core 0's CoreCtl bank enables it, and
+    /// until then it doesn't hold up the enabled sources behind it (#25).
+    #[test]
+    fn a_queued_source_waits_for_its_corectl_enable() {
+        const IRQ_PRIO: u32 = 0x7E00_2010;
+        let mut m = Machine::new(1 << 20);
+        m.push_pending_irq(97);
+        m.push_pending_irq(94);
+        assert!(!m.irq_queued());
+        assert_eq!(m.take_pending_irq(), None);
+        // Source 94: word 3, bits 24..28.
+        m.store32(IRQ_PRIO + 0xC, 0x0100_0000).unwrap();
+        assert!(m.irq_queued());
+        assert_eq!(m.take_pending_irq(), Some(94));
+        assert_eq!(m.take_pending_irq(), None);
+        // Source 97: word 0, bits 4..8.
+        m.store32(IRQ_PRIO, 0x10).unwrap();
+        assert_eq!(m.take_pending_irq(), Some(97));
+        assert!(!m.irq_queued());
     }
 }
