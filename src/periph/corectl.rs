@@ -64,8 +64,9 @@ pub const SYS_IRQ_SRC: u32 = 64;
 
 #[derive(Default)]
 pub struct CoreCtl {
-    /// Source raised by a peripheral and not yet read by the dispatcher.
-    pending_src: Option<u32>,
+    /// Per core: the source being vectored, not yet read by that core's
+    /// dispatcher through its bank's [`IRQ_PENDING`].
+    pending_src: [Option<u32>; 2],
     storage: BTreeMap<u32, u32>,
     /// Start address last written to core 1's [`WAKEUP`], not yet acted on.
     core1_wake: Option<u32>,
@@ -86,12 +87,14 @@ impl CoreCtl {
         }
     }
 
-    /// Present `src` (64..127) at [`IRQ_PENDING`] for the dispatcher to pick up.
-    /// Call it as the source is vectored, never when it is merely queued: the
-    /// register holds one value, and the dispatcher reads it only after its
-    /// entry sequence.
-    pub fn raise_source(&mut self, src: u32) {
-        self.pending_src = Some(src);
+    /// Present `src` (64..127) at `core`'s [`IRQ_PENDING`] for its dispatcher to
+    /// pick up. Call it as the source is vectored, never when it is merely
+    /// queued: the register holds one value, and the dispatcher reads it only
+    /// after its entry sequence.
+    pub fn raise_source(&mut self, core: u32, src: u32) {
+        if let Some(slot) = self.pending_src.get_mut(core as usize) {
+            *slot = Some(src);
+        }
     }
 
     /// Next `(core, source)` the firmware raised in software by setting a bit in
@@ -148,10 +151,16 @@ impl MmioDevice for CoreCtl {
     }
 
     fn read(&mut self, offset: u32, _width: Width) -> BusResult<u32> {
-        if offset == IRQ_PENDING {
+        let (core, off) = bank(offset);
+        if off == IRQ_PENDING {
             // Read-to-clear: the dispatcher reads this once per entry, then the
-            // handler acks the device itself.
-            if let Some(src) = self.pending_src.take() {
+            // handler acks the device itself. It runs on both cores and reaches
+            // its own bank through a per-core pointer, so each bank has its own.
+            if let Some(src) = self
+                .pending_src
+                .get_mut(core as usize)
+                .and_then(Option::take)
+            {
                 return Ok(IRQ_PENDING_VALID_MASK
                     | ((src << IRQ_PENDING_SOURCE_SHIFT) & IRQ_PENDING_SOURCE_MASK));
             }

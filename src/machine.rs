@@ -1136,7 +1136,7 @@ impl Bus for Machine {
             .iter()
             .position(|&src| self.corectl.irq_priority(0, src) != 0)?;
         let src = self.pending_irqs.remove(i)?;
-        self.corectl.raise_source(src);
+        self.corectl.raise_source(0, src);
         Some(src)
     }
 
@@ -1260,7 +1260,7 @@ impl Bus for Machine {
         // looks, so leaving a stale pending value there would only shadow a
         // device interrupt's own source.
         if src != crate::periph::corectl::SYS_IRQ_SRC {
-            self.corectl.raise_source(src);
+            self.corectl.raise_source(0, src);
         }
         Some(src)
     }

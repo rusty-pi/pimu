@@ -230,6 +230,35 @@ fn software_posted_interrupts_are_queued_per_core() {
     assert_eq!(m.corectl.take_sw_raised(), None);
 }
 
+/// Each bank has its own `IRQ_PENDING` (`+0x04` / `+0x804`): start4's
+/// dispatcher runs on both cores and reads it through its own bank pointer.
+/// It reads `VALID` (bit 8) with the source minus 64, then 0 (#80).
+#[test]
+fn irq_pending_is_per_core_and_read_to_clear() {
+    let mut m = machine();
+
+    m.corectl.raise_source(1, 79);
+    assert_eq!(
+        m.load32(map::CORECTL_BASE + 0x04).unwrap(),
+        0,
+        "core 0's copy"
+    );
+    assert_eq!(m.load32(map::CORECTL_BASE + 0x804).unwrap(), 0x100 | 15);
+    assert_eq!(
+        m.load32(map::CORECTL_BASE + 0x804).unwrap(),
+        0,
+        "read-to-clear"
+    );
+
+    m.corectl.raise_source(0, 66);
+    assert_eq!(
+        m.load32(map::CORECTL_BASE + 0x804).unwrap(),
+        0,
+        "core 1's copy"
+    );
+    assert_eq!(m.load32(map::CORECTL_BASE + 0x04).unwrap(), 0x100 | 2);
+}
+
 /// `enable_irq_source(src, prio)` packs a 4-bit field per source into the words
 /// at `+0x10`: `word = (src >> 3) & 3`, `field = (src & 7) * 4`. The tick only
 /// gets delivered if that decode round-trips.

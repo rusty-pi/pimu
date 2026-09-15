@@ -4,13 +4,16 @@
 //! it once its own bank enables the source and it can take an interrupt: with
 //! interrupts on, or asleep in `sleep`, which takes one even with them off.
 //! Until then the source stays pending. It used to be dropped when core 1 had
-//! interrupts off. Each case runs through the fast and the slow run loop,
-//! which must make the same run.
+//! interrupts off. As core 1 takes it, core 1's own `IRQ_PENDING` (`+0x804`)
+//! presents it for start4's dispatcher. Each case runs through the fast and the
+//! slow run loop, which must make the same run.
 
 use rpi_virt_fw::bus::Bus;
 use rpi_virt_fw::emulator::{Emulator, RunEnd, RunLimits, RunReport};
 use rpi_virt_fw::soc::bcm2711::{CORECTL_BASE, UART0_BASE};
-use rpi_virt_fw::spec::corectl::{INSTANCE_STRIDE, IRQ_PENDING_BITS, IRQ_PRIO, IRQ_PRIO_STRIDE};
+use rpi_virt_fw::spec::corectl::{
+    INSTANCE_STRIDE, IRQ_PENDING, IRQ_PENDING_BITS, IRQ_PRIO, IRQ_PRIO_STRIDE,
+};
 use rpi_virt_fw::vpu::UnimplPolicy;
 use rpi_virt_fw::Machine;
 
@@ -18,9 +21,15 @@ const CODE: u32 = 0x1000;
 const VBASE1: u32 = 0x2000;
 const HANDLER: u32 = 0x3000;
 const CORE1: u32 = 0x4000;
+/// Where the handler stores the two values it reads from core 1's
+/// `IRQ_PENDING`.
+const SEEN: u32 = 0x6000;
 const STACK1: u32 = 0x8000;
 /// ThreadX's reschedule IPI for core 1, the source start4 raises for it.
 const SRC: u32 = 79;
+/// Core 1's `IRQ_PENDING` as its handler should find it: `VALID` (bit 8) with
+/// the source minus 64, then 0 on the second, read-to-clear read.
+const SEEN_OK: [u32; 2] = [0x100 | (SRC - 64), 0];
 
 const NE: u16 = 0x1;
 const AL: u16 = 0xE;
@@ -29,6 +38,10 @@ const EI: u16 = 0x0004;
 const DI: u16 = 0x0005;
 const RTI: u16 = 0x000A;
 
+/// `ld rd, (rs)`
+const fn ld(rd: u16, rs: u16) -> u16 {
+    0x0800 | (rs << 4) | rd
+}
 /// `st rd, (rs)`
 const fn st(rd: u16, rs: u16) -> u16 {
     0x0900 | (rs << 4) | rd
@@ -131,17 +144,28 @@ fn raise(a: &mut Asm) {
 }
 
 /// Run both cores until the console shows `until`, through the fast or the
-/// slow loop. Core 1 starts with interrupts on, a stack and the UART in r6,
-/// and its vector for `SRC` prints `!`.
-fn run(core0: &Asm, core1: &Asm, until: &str, fast: bool) -> RunReport {
+/// slow loop. Core 1 starts with interrupts on, a stack and the UART in r6.
+/// Its vector for `SRC` reads core 1's `IRQ_PENDING` twice into `SEEN`, then
+/// prints `!`. Returns the report and the two values the handler read.
+fn run(core0: &Asm, core1: &Asm, until: &str, fast: bool) -> (RunReport, [u32; 2]) {
     let mut m = Machine::new(1 << 20);
     core0.load(&mut m);
     core1.load(&mut m);
     let mut h = Asm::new(HANDLER);
+    h.mov32(2, CORECTL_BASE + INSTANCE_STRIDE + IRQ_PENDING);
+    h.mov32(4, SEEN);
+    h.mov32(5, SEEN + 4);
+    h.op(ld(3, 2));
+    h.op(st(3, 4));
+    h.op(ld(3, 2));
+    h.op(st(3, 5));
     h.putc(b'!');
     h.op(RTI);
     h.load(&mut m);
     m.store32(VBASE1 + 4 * SRC, HANDLER).unwrap();
+    // Something the handler has to overwrite, so one that never ran shows.
+    m.store32(SEEN, 0xDEAD_BEEF).unwrap();
+    m.store32(SEEN + 4, 0xDEAD_BEEF).unwrap();
     let mut emu = Emulator::new(m, CODE);
     emu.fast_loop = fast;
     // `sleep` waits for an interrupt rather than halting the run.
@@ -152,17 +176,20 @@ fn run(core0: &Asm, core1: &Asm, until: &str, fast: bool) -> RunReport {
     c1.exc_vbase = VBASE1;
     c1.regs.set(25, STACK1);
     c1.regs.set(6, UART0_BASE);
-    emu.run(&RunLimits {
+    let report = emu.run(&RunLimits {
         max_steps: Some(50_000),
         until: Some(until.into()),
         ..RunLimits::default()
-    })
+    });
+    let seen = [SEEN, SEEN + 4].map(|a| emu.machine.load32(a).unwrap());
+    (report, seen)
 }
 
-/// Run both ways, require the same run, and return its console.
-fn both(core0: &Asm, core1: &Asm, until: &str) -> String {
-    let fast = run(core0, core1, until, true);
-    let slow = run(core0, core1, until, false);
+/// Run both ways, require the same run, and return its console and what the
+/// handler read from `IRQ_PENDING`.
+fn both(core0: &Asm, core1: &Asm, until: &str) -> (String, [u32; 2]) {
+    let (fast, fast_seen) = run(core0, core1, until, true);
+    let (slow, slow_seen) = run(core0, core1, until, false);
     let console = String::from_utf8_lossy(&fast.console).into_owned();
     assert_eq!(
         console,
@@ -174,12 +201,13 @@ fn both(core0: &Asm, core1: &Asm, until: &str) -> String {
         fast.core1_retired, slow.core1_retired,
         "core 1 retired, fast vs slow"
     );
+    assert_eq!(fast_seen, slow_seen, "IRQ_PENDING, fast vs slow");
     assert_eq!(
         fast.end,
         RunEnd::Until,
         "never printed {until:?}: {console:?}"
     );
-    console
+    (console, fast_seen)
 }
 
 /// Raised while core 1 has interrupts off: taken right after its `ei`.
@@ -197,7 +225,9 @@ fn a_source_raised_with_interrupts_off_waits_for_ei() {
     c1.putc(b'b');
     c1.op(EI);
     c1.spin();
-    assert_eq!(both(&c0, &c1, "!"), "Rab!");
+    let (console, seen) = both(&c0, &c1, "!");
+    assert_eq!(console, "Rab!");
+    assert_eq!(seen, SEEN_OK);
 }
 
 /// Raised while core 1 sleeps with interrupts off: `sleep` takes it, and core
@@ -216,7 +246,9 @@ fn a_source_raised_during_sleep_wakes_core_1() {
     c1.op(SLEEP);
     c1.putc(b'w');
     c1.spin();
-    assert_eq!(both(&c0, &c1, "w"), "aR!w");
+    let (console, seen) = both(&c0, &c1, "w");
+    assert_eq!(console, "aR!w");
+    assert_eq!(seen, SEEN_OK);
 }
 
 /// Raised before core 1's bank enables the source: taken once it does.
@@ -231,5 +263,7 @@ fn a_source_waits_for_its_enable_in_core_1s_bank() {
     c0.spin();
     let mut c1 = Asm::new(CORE1);
     c1.spin();
-    assert_eq!(both(&c0, &c1, "!"), "RE!");
+    let (console, seen) = both(&c0, &c1, "!");
+    assert_eq!(console, "RE!");
+    assert_eq!(seen, SEEN_OK);
 }
