@@ -1,6 +1,7 @@
 //! The `Machine`: RAM + peripherals + address decode. Implements [`Bus`].
 
 use crate::bus::{Bus, BusError, BusResult, MmioDevice, Width};
+use crate::log::{Channel, Log};
 use crate::mem::Ram;
 use crate::periph::hdmi_ddc::AUTO_WINDOW;
 use crate::periph::{
@@ -158,8 +159,9 @@ pub struct Machine {
     /// with the current PC (`watch_pc`, refreshed by the run loop each step).
     /// Complements `mmio_trace` for pinning down who writes a given RAM word.
     pub watch: Vec<u32>,
-    /// `RVF_DBG_DMA=1`: log every control block the DMA4 channel executes.
-    dbg_dma: bool,
+    /// Where the machine's channels go ([`Self::set_log`]): [`Channel::Dma`]
+    /// is the machine's own, the rest belong to the devices it hands a clone.
+    pub log: Log,
     /// Interrupt sources raised by peripherals, waiting to be vectored. A
     /// source stays here until core 0's CoreCtl bank enables it.
     pending_irqs: std::collections::VecDeque<u32>,
@@ -293,7 +295,7 @@ impl Machine {
                         .collect()
                 })
                 .unwrap_or_default(),
-            dbg_dma: crate::diag::ON && std::env::var_os("RVF_DBG_DMA").is_some(),
+            log: Log::default(),
             pending_irqs: std::collections::VecDeque::new(),
             pending_irqs1: std::collections::VecDeque::new(),
             recheck: false,
@@ -320,6 +322,22 @@ impl Machine {
         self.config_otp.set(30, board.revision);
         self.bsc_pmic
             .fit_pmics(crate::periph::Pmic::for_board(board));
+    }
+
+    /// Send the machine's channels to `log` (#95): keep it for the machine's
+    /// own, and hand every device that logs a clone.
+    pub fn set_log(&mut self, log: Log) {
+        self.systimer.set_log(log.clone());
+        self.mbox.log = log.clone();
+        self.corectl.log = log.clone();
+        self.pcie.set_log(log.clone());
+        self.spi0.log = log.clone();
+        self.bsc_pmic.set_log(log.clone());
+        self.config_otp.log = log.clone();
+        self.emmc.log = log.clone();
+        self.emmc2.log = log.clone();
+        self.dwc2.log = log.clone();
+        self.log = log;
     }
 
     /// Plug GENET's cable into `backend`: the PHY sees a link partner, and
@@ -619,7 +637,6 @@ impl Machine {
             return Some((&mut self.aux, off));
         }
         if let Some(off) = hit(map::MBOX_BASE, map::MBOX_SIZE) {
-            self.mbox.now_us = self.systimer.now_us();
             return Some((&mut self.mbox, off));
         }
         if let Some(off) = hit(map::ARMCTRL_BASE, map::ARMCTRL_SIZE) {
@@ -742,15 +759,17 @@ impl Machine {
     /// `SRC`→`DEST`. Both addresses are 40 bits wide — `SRCI`/`DESTI` bits
     /// `[7:0]` carry bits `[39:32]` — and an address the PCIe outbound window
     /// covers reaches the VL805's registers instead of DRAM.
-    /// `RVF_DBG_DMA=1`: trace every access to the legacy DMA controller window
+    /// [`Channel::Dma`]: every access to the legacy DMA controller window
     /// (`0x7E00_7000..0x7E00_8000`, 15 channels x 0x100). Only channel 11
     /// (DMA4, `0x7E00_7B00`) is modelled; start4's `dma_memcpy` uses one of the
     /// others, so those accesses currently fall through to the catch-all stub.
     fn dma_win_log(&self, rw: &str, addr: u32, value: u32) {
-        if crate::diag::ON && self.dbg_dma && (0x7E00_7000..0x7E00_8000).contains(&addr) {
+        if crate::diag::ON && (0x7E00_7000..0x7E00_8000).contains(&addr) {
             let ch = (addr - 0x7E00_7000) / 0x100;
-            eprintln!(
-                "[dmawin] {rw} ch{ch} +{:#04x} ({addr:#x}) = {value:#x} pc={:#x}",
+            crate::log!(
+                self.log,
+                Channel::Dma,
+                "window {rw} ch{ch} +{:#04x} ({addr:#x}) = {value:#x} pc={:#x}",
                 (addr - 0x7E00_7000) % 0x100,
                 self.watch_pc
             );
@@ -811,9 +830,11 @@ impl Machine {
             } else {
                 DmaLegacy::decode_cb([w[0], w[1], w[2], w[3], w[4], w[5]])
             };
-            if crate::diag::ON && self.dbg_dma {
-                eprintln!(
-                    "[dma-legacy] ch{ch} cb={cb:#x} ti={:#x} src={:#x} dest={:#x} len={:#x} stride={:#x} next={:#x}",
+            if crate::diag::ON {
+                crate::log!(
+                    self.log,
+                    Channel::Dma,
+                    "legacy ch{ch} cb={cb:#x} ti={:#x} src={:#x} dest={:#x} len={:#x} stride={:#x} next={:#x}",
                     d.ti, d.src, d.dest, d.len, d.stride, d.next
                 );
             }
@@ -908,9 +929,11 @@ impl Machine {
             let src40 = (((srci & ADDR_HI) as u64) << 32) | src as u64;
             let dest40 = (((desti & ADDR_HI) as u64) << 32) | dest as u64;
 
-            if crate::diag::ON && self.dbg_dma {
-                eprintln!(
-                    "[dma] cb={cb:#x} ti={:#x} src={src:#x} srci={srci:#x} dest={dest:#x} len={len:#x} next={next:#x}",
+            if crate::diag::ON {
+                crate::log!(
+                    self.log,
+                    Channel::Dma,
+                    "cb={cb:#x} ti={:#x} src={src:#x} srci={srci:#x} dest={dest:#x} len={len:#x} next={next:#x}",
                     rd(&self.ram, cb)
                 );
             }

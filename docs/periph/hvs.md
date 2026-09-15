@@ -11,7 +11,7 @@ No display is modelled. Scanout catches up with a queued frame immediately, and 
 Sources:
 
 - decompile (high): bootloader diagnostic-display channel-swap wait 0x0008adc0; start4 display bring-up 0x3EC945CC
-- linux (high): arch/arm/boot/dts/broadcom/bcm2711.dtsi: hvs@7e400000 interrupts = <GIC_SPI 97>; start4 registers its HVS handler 0x3ECEED5C on VPU source 97 (RVF_DBG_IRQTBL)
+- linux (high): arch/arm/boot/dts/broadcom/bcm2711.dtsi: hvs@7e400000 interrupts = <GIC_SPI 97>; start4 registers its HVS handler 0x3ECEED5C on VPU source 97 (--log irqtbl)
 
 ## Register map
 

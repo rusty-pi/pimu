@@ -6,6 +6,7 @@
 //! advances timed waits (see [`crate::bus::Bus::timer_tick_slot`]).
 
 use crate::bus::{BusResult, MmioDevice, Width};
+use crate::log::{Channel, Log};
 use crate::spec::systimer::{C, CHI, CLO, CS, CS_M0_MASK, C_COUNT, C_STRIDE};
 use crate::spec::Coverage;
 
@@ -62,8 +63,9 @@ pub struct SysTimer {
     /// A compare fired since [`Self::take_fired`] last looked: the run loop's
     /// cue that an interrupt may be due.
     fired: bool,
-    /// `RVF_DBG_CMP=1`: log every compare-register arm.
-    dbg_cmp: bool,
+    /// Where [`Channel::Cmp`] goes: every compare-register arm. The log's
+    /// clock follows this counter ([`Self::set_log`]).
+    log: Log,
     arms: u64,
 }
 
@@ -79,7 +81,7 @@ impl SysTimer {
             pending: [false; 4],
             pending_any: false,
             fired: false,
-            dbg_cmp: std::env::var_os("RVF_DBG_CMP").is_some(),
+            log: Log::default(),
             arms: 0,
         }
     }
@@ -118,6 +120,13 @@ impl SysTimer {
 
     pub fn now_us(&self) -> u64 {
         self.micros
+    }
+
+    /// Where [`Channel::Cmp`] goes. The log takes its clock from this
+    /// counter: every line is stamped with the model time it went out at.
+    pub fn set_log(&mut self, log: Log) {
+        log.set_time(self.micros);
+        self.log = log;
     }
 
     /// Did a compare fire since the last call?
@@ -186,6 +195,10 @@ impl SysTimer {
     /// reload only made a channel armed once as a timeout fire forever,
     /// flooding the CPU with spurious `64 + channel` interrupts.
     fn service_matches(&mut self) {
+        // Every move of the counter ends here, so this is where the log's
+        // clock follows it: at most once per microsecond, off the per-cycle
+        // path.
+        self.log.set_time(self.micros);
         for c in 0..4 {
             let Some(d) = self.deadline[c] else { continue };
             if self.micros < d {
@@ -298,11 +311,13 @@ impl MmioDevice for SysTimer {
 
     fn write(&mut self, offset: u32, _width: Width, value: u32) -> BusResult<()> {
         let arm = |st: &mut SysTimer, c: usize| {
-            if st.dbg_cmp {
+            if st.log.on(Channel::Cmp) {
                 st.arms += 1;
                 if st.arms <= 40 || st.arms.is_multiple_of(2000) {
-                    eprintln!(
-                        "[cmp] #{} C{c} <- {value:#x} now={} delta={}",
+                    crate::log!(
+                        st.log,
+                        Channel::Cmp,
+                        "#{} C{c} <- {value:#x} now={} delta={}",
                         st.arms,
                         st.micros as u32,
                         value.wrapping_sub(st.micros as u32)

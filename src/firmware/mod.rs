@@ -9,9 +9,9 @@
 //! runs different firmware builds through the same model (#5), and an address
 //! baked in goes quietly wrong on a build where it moved. The last pc hook went
 //! with #25 and the last `gp` offset, core 1's start gate, with #72. Model the
-//! hardware behaviour the firmware relies on instead. Addresses the `RVF_DBG_*`
-//! and `RVF_TRAP` diagnostics watch are fine: on another build they just print
-//! nothing (`docs/diagnostics.md`).
+//! hardware behaviour the firmware relies on instead. Addresses the diagnostics
+//! watch (`RVF_TRAP`, the `diag`-only `--log` channels) are fine: on another
+//! build they just print nothing (`docs/diagnostics.md`).
 
 pub mod bootrom;
 pub mod eeprom;

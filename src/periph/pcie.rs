@@ -135,6 +135,7 @@
 use std::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
+use crate::log::{Channel, Log};
 use crate::periph::vl805::Vl805;
 use crate::periph::xhci::HostMem;
 /// `reg = <0x0 0x7d500000 0x0 0x9310>` in the Pi 4 device tree
@@ -355,7 +356,7 @@ struct Upstream<'a> {
     /// `(bus base, size)` of inbound window 2, if it is on.
     window: Option<(u64, u64)>,
     mem: &'a mut dyn HostMem,
-    dbg: bool,
+    log: &'a Log,
 }
 
 impl Upstream<'_> {
@@ -363,9 +364,13 @@ impl Upstream<'_> {
         let phys = self
             .window
             .and_then(|(base, size)| bus.checked_sub(base).filter(|off| *off < size));
-        if phys.is_none() && self.dbg {
+        if phys.is_none() {
             let dir = if write { "write" } else { "read" };
-            eprintln!("[pcie] endpoint {dir} at bus {bus:#x} is outside the inbound window");
+            crate::log!(
+                self.log,
+                Channel::Pcie,
+                "endpoint {dir} at bus {bus:#x} is outside the inbound window"
+            );
         }
         phys
     }
@@ -410,8 +415,8 @@ pub struct Pcie {
     msi_sent: bool,
     /// The endpoint's INTA, while it is not using MSI.
     intx: bool,
-    /// `RVF_DBG_PCIE`: trace every change of the endpoint's interrupt.
-    dbg: bool,
+    /// Where [`Channel::Pcie`] goes.
+    log: Log,
 }
 
 impl Default for Pcie {
@@ -448,8 +453,14 @@ impl Pcie {
             msi_mask: 0xFFFF_FFFF,
             msi_sent: false,
             intx: false,
-            dbg: std::env::var("RVF_DBG_PCIE").is_ok(),
+            log: Log::default(),
         }
+    }
+
+    /// Where [`Channel::Pcie`] goes, and the endpoint's [`Channel::Xhci`].
+    pub fn set_log(&mut self, log: Log) {
+        self.endpoint.xhci.log = log.clone();
+        self.log = log;
     }
 
     pub fn link_up(&self) -> bool {
@@ -488,10 +499,14 @@ impl Pcie {
         let pending = self.link_up && self.endpoint.xhci.interrupt_pending();
         let before = (self.intx, self.msi_status);
         self.route_irq(pending);
-        if self.dbg && before != (self.intx, self.msi_status) {
-            eprintln!(
-                "[pcie] endpoint irq {pending}: intx {} msi status {:#x} mask {:#x}",
-                self.intx, self.msi_status, self.msi_mask
+        if before != (self.intx, self.msi_status) {
+            crate::log!(
+                self.log,
+                Channel::Pcie,
+                "endpoint irq {pending}: intx {} msi status {:#x} mask {:#x}",
+                self.intx,
+                self.msi_status,
+                self.msi_mask
             );
         }
     }
@@ -634,7 +649,7 @@ impl Pcie {
         let mut up = Upstream {
             window: self.inbound_window(),
             mem,
-            dbg: self.dbg,
+            log: &self.log,
         };
         self.endpoint.xhci.train_links(&mut up);
         self.update_irq();
@@ -665,7 +680,7 @@ impl Pcie {
                 let mut up = Upstream {
                     window: self.inbound_window(),
                     mem,
-                    dbg: self.dbg,
+                    log: &self.log,
                 };
                 self.endpoint.bar0_write(off, width, value, &mut up);
                 self.update_irq();
@@ -877,8 +892,13 @@ impl MmioDevice for Pcie {
             return Ok(());
         }
         self.storage.insert(offset & !3, value);
-        if self.dbg && matches!(offset, RC_BAR2_CONFIG_LO | RC_BAR2_CONFIG_HI) {
-            eprintln!("[pcie] inbound window {:x?}", self.inbound_window());
+        if matches!(offset, RC_BAR2_CONFIG_LO | RC_BAR2_CONFIG_HI) {
+            crate::log!(
+                self.log,
+                Channel::Pcie,
+                "inbound window {:x?}",
+                self.inbound_window()
+            );
         }
         Ok(())
     }

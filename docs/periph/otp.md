@@ -125,4 +125,4 @@ Sources:
 
 - decompile (high): getconfig writes the key to +0x1C
 - decompile (high): start4 0x3ED3FC52 writes the row before command 10
-- trace (high): RVF_DBG_OTP: the keys are row numbers (19..26 for the board-identity check, 28 serial, 30 revision)
+- trace (high): --log otp: the keys are row numbers (19..26 for the board-identity check, 28 serial, 30 revision)

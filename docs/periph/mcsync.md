@@ -50,7 +50,7 @@ Acknowledge word for VPU interrupt source 76. The ISR does `[+0x84] &= ~[+0x80]`
 Sources:
 
 - decompile (medium): ISR 0x3ED3A098 (handler table gp+58004)
-- trace (medium): RVF_DBG_IRQEN: neither core calls enable_irq_source for 76 or 77 — _so the interrupt path itself is not exercised by the boot so far_
+- trace (medium): --log irqen: neither core calls enable_irq_source for 76 or 77 — _so the interrupt path itself is not exercised by the boot so far_
 
 ## `ACK77`
 
@@ -61,4 +61,4 @@ Acknowledge word for VPU interrupt source 77. The ISR does `[+0x88] &= ~[+0x80]`
 Sources:
 
 - decompile (medium): ISR 0x3ED3A098 (handler table gp+58004)
-- trace (medium): RVF_DBG_IRQEN: neither core calls enable_irq_source for 76 or 77 — _so the interrupt path itself is not exercised by the boot so far_
+- trace (medium): --log irqen: neither core calls enable_irq_source for 76 or 77 — _so the interrupt path itself is not exercised by the boot so far_

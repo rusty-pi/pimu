@@ -22,6 +22,7 @@
 use std::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
+use crate::log::{Channel, Log};
 use crate::spec::corectl::{
     INSTANCE_STRIDE as CORE_STRIDE, IRQ_PENDING, IRQ_PENDING_BITS, IRQ_PENDING_BITS_COUNT,
     IRQ_PENDING_BITS_STRIDE, IRQ_PENDING_SOURCE_MASK, IRQ_PENDING_SOURCE_SHIFT,
@@ -41,7 +42,7 @@ pub const COVERAGE: Coverage = Coverage {
 // * `IRQ_PRIO` — start4 numbers its sources from 64, folded back into these
 //   four words by `(src >> 3) & 3`.
 // * `VBASE` — core 1's copy is one `CORE_STRIDE` higher like every other
-//   register in this block. `RVF_DBG_IRQEN` and the peripheral stub both show
+//   register in this block. `--log irqen` and the peripheral stub both show
 //   core 1 writing `0x7E002830`, not `+0x38`; with the old `0x38` guess
 //   `vbase[1]` was never populated, so core 1 could not be vectored at all.
 // * `WAKEUP` — only core 1's copy starts anything: core 0 is already running
@@ -75,16 +76,13 @@ pub struct CoreCtl {
     /// Sources newly raised in software through [`IRQ_PENDING_BITS`], as
     /// `(core, source)`, waiting to be vectored on that core.
     sw_raised: std::collections::VecDeque<(u32, u32)>,
-    /// `RVF_DBG_IRQEN`, read once — this device is written from the step loop.
-    dbg_irqen: bool,
+    /// Where [`Channel::IrqEn`] goes.
+    pub log: Log,
 }
 
 impl CoreCtl {
     pub fn new() -> CoreCtl {
-        CoreCtl {
-            dbg_irqen: std::env::var_os("RVF_DBG_IRQEN").is_some(),
-            ..CoreCtl::default()
-        }
+        CoreCtl::default()
     }
 
     /// Present `src` (64..127) at `core`'s [`IRQ_PENDING`] for its dispatcher to
@@ -169,19 +167,23 @@ impl MmioDevice for CoreCtl {
     }
 
     fn write(&mut self, offset: u32, _width: Width, value: u32) -> BusResult<()> {
-        // `RVF_DBG_IRQEN=1`: decode writes to the interrupt-priority words back
+        // `--log irqen`: decode writes to the interrupt-priority words back
         // into the `enable_irq_source(src, prio)` calls that produced them, for
         // core 0 (`0x10..0x20`) and core 1 (`0x810..0x820`). Which sources core 1
         // enables is how we find the inter-core doorbell's interrupt number.
         let (core, off) = bank(offset);
         let prio_word = element(off, IRQ_PRIO, IRQ_PRIO_COUNT, IRQ_PRIO_STRIDE);
-        if let (true, Some(word)) = (self.dbg_irqen, prio_word) {
+        if let (true, Some(word)) = (self.log.on(Channel::IrqEn), prio_word) {
             let prev = self.storage.get(&offset).copied().unwrap_or(0);
             for f in 0..8u32 {
                 let (a, b) = ((prev >> (f * 4)) & 0xF, (value >> (f * 4)) & 0xF);
                 if a != b {
                     let src = word * 8 + f + 64;
-                    eprintln!("[irqen] core{core} src={src} prio {a} -> {b}");
+                    crate::log!(
+                        self.log,
+                        Channel::IrqEn,
+                        "core{core} src={src} prio {a} -> {b}"
+                    );
                 }
             }
         }

@@ -16,6 +16,7 @@
 use std::collections::VecDeque;
 
 use crate::bus::{BusError, BusResult, MmioDevice, Width};
+use crate::log::{Channel, Log};
 
 use crate::spec::spi0::{
     CLK, CS, CS_CLEAR_RX_MASK as CS_CLEAR_RX, CS_CLEAR_TX_MASK as CS_CLEAR_TX,
@@ -59,17 +60,13 @@ pub struct Spi0 {
     /// `true` once anything wrote to `flash` — a signal to the run loop that an
     /// EEPROM self-update landed and a re-run from the new image is due.
     pub dirty: bool,
-    /// `RVF_DBG_SPI`, read once. This device is written from the step loop, so
-    /// an `std::env::var_os` here is a per-access syscall.
-    dbg: bool,
+    /// Where [`Channel::Spi`] goes.
+    pub log: Log,
 }
 
 impl Spi0 {
     pub fn new() -> Spi0 {
-        Spi0 {
-            dbg: std::env::var_os("RVF_DBG_SPI").is_some(),
-            ..Spi0::default()
-        }
+        Spi0::default()
     }
 
     /// Attach the serial-NOR flash contents (the EEPROM image).
@@ -132,8 +129,8 @@ impl Spi0 {
                 self.addr = (self.addr << 8) | mosi as u32;
                 MISO_IDLE
             }
-            (4, 0x03) if self.dbg => {
-                eprintln!("[spi0] READ {:#08x}", self.addr);
+            (4, 0x03) if self.log.on(Channel::Spi) => {
+                crate::log!(self.log, Channel::Spi, "READ {:#08x}", self.addr);
                 self.read_flash_byte()
             }
             (_, 0x03) => self.read_flash_byte(),
@@ -232,9 +229,12 @@ impl MmioDevice for Spi0 {
                     self.rx.clear();
                 }
                 if !was_ta && value & CS_TA != 0 {
-                    if self.dbg {
-                        eprintln!("[spi0] TA begin: CS={value:#x} (cs-select={})", value & 3);
-                    }
+                    crate::log!(
+                        self.log,
+                        Channel::Spi,
+                        "TA begin: CS={value:#x} (cs-select={})",
+                        value & 3
+                    );
                     self.begin();
                 }
                 if was_ta && value & CS_TA == 0 {
