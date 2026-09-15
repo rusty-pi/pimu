@@ -149,8 +149,21 @@ impl Detector {
     /// The core retired the instruction at `pc` in `cycle`, and stored
     /// something if `wrote`. True when a watch has seen enough passes for
     /// [`Self::park`].
-    #[inline]
+    ///
+    /// This runs after every instruction, so the common case (nothing
+    /// watched or recorded, no skip pending, no backward jump) is inline and
+    /// the rest is not: left to LLVM, the whole of it stopped being inlined
+    /// and the call cost the SHA-256 bench 15% of its cycles (#90).
+    #[inline(always)]
     pub(super) fn retired(&mut self, cpu: &Cpu, cycle: u64, pc: u64, wrote: bool) -> bool {
+        if !self.sha_stop && self.watch.is_none() && !self.sha.recording() && cpu.pc > pc {
+            return false;
+        }
+        self.retired_slow(cpu, cycle, pc, wrote)
+    }
+
+    #[inline(never)]
+    fn retired_slow(&mut self, cpu: &Cpu, cycle: u64, pc: u64, wrote: bool) -> bool {
         // A skip that did not happen: what the step logged goes nowhere.
         if self.sha_stop {
             self.sha_stop = false;
