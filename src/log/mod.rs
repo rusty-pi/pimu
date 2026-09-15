@@ -11,9 +11,15 @@
 //! formats a line only when its channel is on.
 //!
 //! The channels share one output, so lines come out in the order things
-//! happened, in one of two formats: `text`, `[<channel>] <message>` for
-//! reading, and `jsonl`, one JSON object a line for tools. Each line is
-//! written as it happens, so a log can be followed while the run goes on.
+//! happened, in one of two formats: `text` for reading, stamped with model
+//! time in seconds the way the firmware and Linux stamp their logs
+//! (`   9.002222 pcie: <message>`), and `jsonl` for tools, one JSON object a
+//! line with the time in `us`. Each line is written as it happens, so a log
+//! can be followed while the run goes on.
+//!
+//! The clock is the system timer's: it tells the log whenever its counter
+//! moves ([`Log::set_time`]), at most once per modelled microsecond. A reset
+//! builds a new machine, so the time starts from 0 again, as after a reboot.
 //!
 //! [`Channel::Io`] is what crossed the peripherals apart from the serial
 //! console (#35, `io.rs`): block runs on the SD card and the USB stick with
@@ -25,7 +31,7 @@
 //! The channels [`Channel::needs_diag`] names exist only in a `diag` build,
 //! like the rest of the per-step diagnostics ([`crate::diag`]).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::io::Write;
 use std::rc::Rc;
@@ -283,7 +289,22 @@ pub struct Log {
     /// The channels that are on, a bit each. Every clone has its own copy, so
     /// [`Self::on`] is one load and no pointer chase.
     mask: u32,
-    sink: Option<Rc<RefCell<Sink>>>,
+    shared: Option<Rc<Shared>>,
+}
+
+/// What every clone of a [`Log`] shares: the output, and the clock its lines
+/// are stamped with.
+struct Shared {
+    /// Model time in µs, as the system timer last set it ([`Log::set_time`]).
+    now_us: Cell<u64>,
+    sink: RefCell<Sink>,
+}
+
+/// A line before it is formatted: its message, and its fields for `jsonl`
+/// (`"key":value` pairs, without the braces).
+struct Event {
+    text: String,
+    json: String,
 }
 
 impl fmt::Debug for Log {
@@ -310,7 +331,10 @@ impl Log {
         };
         Log {
             mask: spec.mask,
-            sink: Some(Rc::new(RefCell::new(sink))),
+            shared: Some(Rc::new(Shared {
+                now_us: Cell::new(0),
+                sink: RefCell::new(sink),
+            })),
         }
     }
 
@@ -319,73 +343,97 @@ impl Log {
         self.mask & channel.bit() != 0
     }
 
+    /// Model time, in µs, for the lines from here on. The system timer calls
+    /// it whenever its counter moves; with no channel on, it is one test.
+    #[inline]
+    pub fn set_time(&self, us: u64) {
+        if let Some(shared) = &self.shared {
+            shared.now_us.set(us);
+        }
+    }
+
     /// One line on `channel`, if it is on. [`crate::log!`] is the way to call
     /// it: that formats the line only when the channel is on.
     pub fn write(&self, channel: Channel, args: fmt::Arguments<'_>) {
-        if let Some(sink) = self.sink_for(channel) {
-            sink.borrow_mut().message(channel, &args.to_string());
+        if let Some(shared) = self.shared_for(channel) {
+            let msg = args.to_string();
+            let event = Event {
+                json: fields(&[("msg", &msg)]),
+                text: msg,
+            };
+            shared
+                .sink
+                .borrow_mut()
+                .line(channel, shared.now_us.get(), &event);
         }
     }
 
     /// `io`: name the files on block device `dev`, once. The image is only
     /// read when the channel is on.
     pub fn map_files(&self, dev: &'static str, read: &fatmap::ReadBlock) {
-        if let Some(sink) = self.sink_for(Channel::Io) {
-            sink.borrow_mut().io.map_files(dev, read);
+        if let Some(shared) = self.shared_for(Channel::Io) {
+            shared.sink.borrow_mut().io.map_files(dev, read);
         }
     }
 
     /// `io`: `count` blocks from `lba` read (or written, erased) on `dev`.
-    /// Contiguous runs make one line.
+    /// Contiguous runs make one line, stamped with the time of their first
+    /// block.
     pub fn blocks(&self, dev: &'static str, op: &'static str, lba: u64, count: u64) {
-        if let Some(sink) = self.sink_for(Channel::Io) {
-            sink.borrow_mut().blocks(dev, op, lba, count);
+        if let Some(shared) = self.shared_for(Channel::Io) {
+            shared
+                .sink
+                .borrow_mut()
+                .blocks(shared.now_us.get(), dev, op, lba, count);
         }
     }
 
     /// `io`: an OTP row the firmware read. `fused`: the row is programmed on
     /// the modelled board; a blank one reads 0, as on the hardware.
     pub fn otp_read(&self, row: u32, value: u32, fused: bool) {
-        if let Some(sink) = self.sink_for(Channel::Io) {
-            let mut sink = sink.borrow_mut();
-            let line = io::otp_read(row, value, fused, sink.format);
-            sink.line(&line);
+        if self.on(Channel::Io) {
+            self.io_line(io::otp_read(row, value, fused));
         }
     }
 
     /// `io`: an OTP row the firmware programmed: `value` is what the row holds
     /// now, `was` what it held before. Fuses only go from 0 to 1 (#92).
     pub fn otp_write(&self, row: u32, value: u32, was: u32) {
-        if let Some(sink) = self.sink_for(Channel::Io) {
-            let mut sink = sink.borrow_mut();
-            let line = io::otp_write(row, value, was, sink.format);
-            sink.line(&line);
+        if self.on(Channel::Io) {
+            self.io_line(io::otp_write(row, value, was));
         }
     }
 
     /// `io`: something the network peer did, as the peer words it.
     pub fn net(&self, what: &str) {
-        if let Some(sink) = self.sink_for(Channel::Io) {
-            let mut sink = sink.borrow_mut();
-            let line = io::net(what, sink.format);
-            sink.line(&line);
+        if self.on(Channel::Io) {
+            self.io_line(io::net(what));
         }
     }
 
     /// Write out the block run `io` is merging, rather than when the next
     /// line comes or the last clone goes.
     pub fn flush(&self) {
-        if let Some(sink) = &self.sink {
-            sink.borrow_mut().flush_run();
+        if let Some(shared) = &self.shared {
+            shared.sink.borrow_mut().flush_run();
         }
     }
 
-    fn sink_for(&self, channel: Channel) -> Option<&Rc<RefCell<Sink>>> {
-        self.sink.as_ref().filter(|_| self.on(channel))
+    fn io_line(&self, event: Event) {
+        if let Some(shared) = &self.shared {
+            shared
+                .sink
+                .borrow_mut()
+                .line(Channel::Io, shared.now_us.get(), &event);
+        }
+    }
+
+    fn shared_for(&self, channel: Channel) -> Option<&Rc<Shared>> {
+        self.shared.as_ref().filter(|_| self.on(channel))
     }
 }
 
-/// The output every clone of a [`Log`] shares.
+/// The output every clone of a [`Log`] writes to.
 struct Sink {
     out: Box<dyn Write>,
     format: Format,
@@ -393,37 +441,48 @@ struct Sink {
 }
 
 impl Sink {
-    fn message(&mut self, channel: Channel, msg: &str) {
-        let line = match self.format {
-            Format::Text => format!("[{}] {msg}", channel.name()),
-            Format::Jsonl => json(&[("channel", channel.name()), ("msg", msg)]),
-        };
-        self.line(&line);
-    }
-
-    fn blocks(&mut self, dev: &'static str, op: &'static str, lba: u64, count: u64) {
-        if let Some(run) = self.io.blocks(dev, op, lba, count) {
-            let line = self.io.run_line(run, self.format);
-            self.write(&line);
+    fn blocks(&mut self, us: u64, dev: &'static str, op: &'static str, lba: u64, count: u64) {
+        if let Some(run) = self.io.blocks(us, dev, op, lba, count) {
+            self.write_run(&run);
         }
     }
 
-    /// `line`, after the block run being merged: every line goes out in the
+    /// One line, after the block run being merged: every line goes out in the
     /// order its event happened.
-    fn line(&mut self, line: &str) {
+    fn line(&mut self, channel: Channel, us: u64, event: &Event) {
         self.flush_run();
-        self.write(line);
+        self.write(channel, us, event);
     }
 
     fn flush_run(&mut self) {
         if let Some(run) = self.io.take_run() {
-            let line = self.io.run_line(run, self.format);
-            self.write(&line);
+            self.write_run(&run);
         }
     }
 
-    fn write(&mut self, line: &str) {
-        let _ = writeln!(self.out, "{line}");
+    fn write_run(&mut self, run: &io::Run) {
+        let event = self.io.run_event(run);
+        self.write(Channel::Io, run.us, &event);
+    }
+
+    /// `   9.002222 pcie: <message>`, or `{"us":9002222,"channel":"pcie",...}`.
+    fn write(&mut self, channel: Channel, us: u64, event: &Event) {
+        let _ = match self.format {
+            Format::Text => writeln!(
+                self.out,
+                "{:4}.{:06} {}: {}",
+                us / 1_000_000,
+                us % 1_000_000,
+                channel.name(),
+                event.text
+            ),
+            Format::Jsonl => writeln!(
+                self.out,
+                "{{\"us\":{us},\"channel\":{},{}}}",
+                quote(channel.name()),
+                event.json
+            ),
+        };
         let _ = self.out.flush();
     }
 }
@@ -452,13 +511,13 @@ pub fn warn_replaced_env() {
     }
 }
 
-/// A JSON object of string fields.
-fn json(fields: &[(&str, &str)]) -> String {
-    let body: Vec<String> = fields
+/// String fields for a `jsonl` line: `"key":"value"` pairs, without the braces.
+fn fields(pairs: &[(&str, &str)]) -> String {
+    let body: Vec<String> = pairs
         .iter()
         .map(|(k, v)| format!("{}:{}", quote(k), quote(v)))
         .collect();
-    format!("{{{}}}", body.join(","))
+    body.join(",")
 }
 
 fn quote(s: &str) -> String {
@@ -554,17 +613,42 @@ mod tests {
     }
 
     #[test]
-    fn a_line_is_its_channel_and_message() {
+    fn a_line_is_the_time_its_channel_and_message() {
         let (log, buf) = open("pcie");
         let bus = 0x1000;
         crate::log!(log, Channel::Pcie, "endpoint read at bus {bus:#x}");
-        assert_eq!(text(&buf), "[pcie] endpoint read at bus 0x1000\n");
+        log.set_time(9_002_222);
+        crate::log!(log, Channel::Pcie, "inbound window");
+        log.set_time(12_345_000_001);
+        crate::log!(log, Channel::Pcie, "much later");
+        assert_eq!(
+            text(&buf),
+            "   0.000000 pcie: endpoint read at bus 0x1000\n   \
+             9.002222 pcie: inbound window\n\
+             12345.000001 pcie: much later\n"
+        );
 
         let (log, buf) = open("jsonl:arm-exc");
+        log.set_time(9_002_222);
         crate::log!(log, Channel::ArmExc, "pc \"here\"");
         assert_eq!(
             text(&buf),
-            "{\"channel\":\"arm-exc\",\"msg\":\"pc \\\"here\\\"\"}\n"
+            "{\"us\":9002222,\"channel\":\"arm-exc\",\"msg\":\"pc \\\"here\\\"\"}\n"
+        );
+    }
+
+    #[test]
+    fn a_block_run_carries_the_time_of_its_first_block() {
+        let (log, buf) = open("io,pcie");
+        log.set_time(1_000_000);
+        log.blocks("sd", "read", 0x800, 1);
+        log.set_time(2_000_000);
+        log.blocks("sd", "read", 0x801, 7);
+        log.set_time(3_000_000);
+        crate::log!(log, Channel::Pcie, "endpoint irq");
+        assert_eq!(
+            text(&buf),
+            "   1.000000 io: sd   read  lba 0x800+8\n   3.000000 pcie: endpoint irq\n"
         );
     }
 
@@ -581,12 +665,12 @@ mod tests {
         drop(log);
         assert_eq!(
             text(&buf),
-            "[io] sd   read  lba 0x800+8\n\
-             [io] otp  read  row 19  = 0x8aa96d38\n\
-             [io] sd   read  lba 0x808+1\n\
-             [pcie] endpoint irq\n\
-             [io] sd   read  lba 0x809+1\n\
-             [io] sd   write lba 0x80a+1\n"
+            "   0.000000 io: sd   read  lba 0x800+8\n   \
+             0.000000 io: otp  read  row 19  = 0x8aa96d38\n   \
+             0.000000 io: sd   read  lba 0x808+1\n   \
+             0.000000 pcie: endpoint irq\n   \
+             0.000000 io: sd   read  lba 0x809+1\n   \
+             0.000000 io: sd   write lba 0x80a+1\n"
         );
     }
 
@@ -598,8 +682,8 @@ mod tests {
         drop(log);
         assert_eq!(
             text(&buf),
-            "{\"channel\":\"io\",\"dev\":\"net\",\"event\":\"tftp: RRQ \\\"start4.elf\\\"\"}\n\
-             {\"channel\":\"io\",\"dev\":\"usb\",\"op\":\"read\",\"lba\":2,\"blocks\":3,\"files\":[]}\n"
+            "{\"us\":0,\"channel\":\"io\",\"dev\":\"net\",\"event\":\"tftp: RRQ \\\"start4.elf\\\"\"}\n\
+             {\"us\":0,\"channel\":\"io\",\"dev\":\"usb\",\"op\":\"read\",\"lba\":2,\"blocks\":3,\"files\":[]}\n"
         );
     }
 
@@ -609,14 +693,14 @@ mod tests {
         log.otp_write(36, 0x1111_1111, 0);
         assert_eq!(
             text(&buf),
-            "[io] otp  write row 36  = 0x11111111  (was 0x00000000)\n"
+            "   0.000000 io: otp  write row 36  = 0x11111111  (was 0x00000000)\n"
         );
 
         let (log, buf) = open("jsonl:io");
         log.otp_write(36, 0x1111_1111, 0);
         assert_eq!(
             text(&buf),
-            "{\"channel\":\"io\",\"dev\":\"otp\",\"op\":\"write\",\"row\":\"36\",\
+            "{\"us\":0,\"channel\":\"io\",\"dev\":\"otp\",\"op\":\"write\",\"row\":\"36\",\
              \"value\":\"0x11111111\",\"was\":\"0x00000000\"}\n"
         );
     }

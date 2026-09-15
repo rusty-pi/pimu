@@ -104,10 +104,20 @@ it with `SIGPIPE`.
 `boot --log [text:|jsonl:]<channel>[,<channel>...]` turns channels on
 ([#95](https://github.com/valtzu/rpi-virt-fw/issues/95)). It can be repeated,
 and the lines go to stderr unless `--log-file <path>` says otherwise. The
-channels share one output, so the lines come out in the order things happened:
-`[<channel>] <message>` in `text`, the default, or one JSON object a line in
-`jsonl` — `{"channel":"pcie","msg":"..."}`, except that `io` keeps its fields
-(`dev`, `op`, `lba`, `blocks`, `files`, ...).
+channels share one output, so the lines come out in the order things happened,
+each stamped with the model time — the system timer's, in seconds, the way the
+firmware and Linux stamp their own logs:
+
+```text
+   2.959261 pcie: inbound window Some((0, 200000000))
+   4.950839 pcie: endpoint irq true: intx false msi status 0x1 mask 0xffffffff
+   6.653907 cmp: #1 C0 <- 0x65aee3 now=6653907 delta=10000
+```
+
+`jsonl:` gives one JSON object a line instead, with the time in µs:
+`{"us":2959261,"channel":"pcie","msg":"..."}`. `io` keeps its own fields there
+(`dev`, `op`, `lba`, `blocks`, `files`, ...). A reset builds a new machine, so
+the time starts from 0 again, as after a reboot.
 
 ```bash
 boot … --log pcie,xhci 2> usb.log
