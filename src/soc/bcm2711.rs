@@ -139,7 +139,6 @@ pub const CLKMON_SIZE: u32 = spec::clkmon::SIZE;
 /// GPIO (`0x7E20_0000`). Not modelled, so it has no spec and stays on the
 /// catch-all stub.
 pub const GPIO_BASE: u32 = 0x7E20_0000;
-pub const GPIO_SIZE: u32 = 0x1000;
 
 /// PL011 UART0 (`0x7E20_1000`). Primary firmware debug console when
 /// `BOOT_UART=1` and the console is routed to the PL011.
@@ -225,14 +224,6 @@ pub const GENET_SIZE: u32 = spec::genet::SIZE;
 
 /// Main SDRAM as seen by the VPU (cached alias at 0, uncached at 0xC000_0000).
 pub const SDRAM_CACHED_BASE: u32 = 0x0000_0000;
-pub const SDRAM_UNCACHED_BASE: u32 = 0xC000_0000;
-
-/// Where the boot ROM parks the second-stage bootloader extracted from
-/// `pieeprom.bin` before jumping to it. This is an approximation for the model;
-/// the real BCM2711 boot ROM runs the recovery/bootloader from L2-as-SRAM.
-///
-/// TODO(pieeprom milestone): confirm the real load/entry address.
-pub const BOOTLOADER_LOAD_ADDR: u32 = 0x6000_0000;
 
 /// Region kinds the [`Machine`](crate::machine::Machine) address decoder knows about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

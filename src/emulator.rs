@@ -1189,17 +1189,17 @@ struct RunState {
     /// thread (`_tx_thread_current_ptr`, `0x3EE35900`) as well, so "which
     /// thread is spinning, and where" can be read off directly.
     prof_thist: HashMap<(u32, u32), u64>,
-    /// RVF_HEARTBEAT=<n>: every <n> retired instructions, print model
+    /// `RVF_HEARTBEAT=<n>`: every `<n>` retired instructions, print model
     /// time, the running ThreadX thread and the PC. The one diagnostic that
     /// says whether a stalled boot is wedged or merely slow.
     next_beat: u64,
-    /// RVF_TRAP=<hex>[,<hex>...]: print pc / lr / r0-r5 every time core 0
+    /// `RVF_TRAP=<hex>[,<hex>...]`: print pc / lr / r0-r5 every time core 0
     /// reaches one of these addresses. Generic "who calls this, with what"
     /// probe - the linear disassembler can't xref (it desyncs on inline
     /// data), so callers have to be found at runtime. `RVF_TRAP_MAX=<n>`:
     /// how many hits of each trap address to print (default 12); the totals
-    /// are always reported at exit. RVF_TRAP_FROM=<n>: ignore trap hits
-    /// before <n> million retired instructions, so the steady state can be
+    /// are always reported at exit. `RVF_TRAP_FROM=<n>`: ignore trap hits
+    /// before `<n>` million retired instructions, so the steady state can be
     /// sampled instead of only early boot.
     trap_hits: HashMap<u32, u64>,
     core1_end: Option<RunEnd>,
