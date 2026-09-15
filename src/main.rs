@@ -972,6 +972,12 @@ fn cmd_boot(args: &[String]) -> Result<ExitCode> {
                 c.cpu.sp(),
                 if c.waiting { "  (wfi)" } else { "" }
             );
+                if c.sha_blocks > 0 {
+                    println!(
+                    "            {} SHA-256 block loop(s), {} blocks hashed natively (RVF_NO_SHA_SKIP=1 to compare)",
+                    c.sha_loops, c.sha_blocks
+                );
+                }
                 println!(
                     "            daif {:#x}  irq line {}  gic {}",
                     c.cpu.daif >> 6,

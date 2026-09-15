@@ -32,15 +32,15 @@ pub(super) struct Read {
 
 /// The state a pass may change: the general registers, the stack pointers
 /// and the flags.
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct Regs {
-    x: [u64; 31],
-    sp: [u64; 4],
-    nzcv: u32,
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) struct Regs {
+    pub(super) x: [u64; 31],
+    pub(super) sp: [u64; 4],
+    pub(super) nzcv: u32,
 }
 
 impl Regs {
-    fn of(c: &Cpu) -> Regs {
+    pub(super) fn of(c: &Cpu) -> Regs {
         Regs {
             x: c.x,
             sp: c.sp_el,
@@ -48,7 +48,7 @@ impl Regs {
         }
     }
 
-    fn put(&self, c: &mut Cpu) {
+    pub(super) fn put(&self, c: &mut Cpu) {
         c.x = self.x;
         c.sp_el = self.sp;
         c.nzcv = self.nzcv;
@@ -69,7 +69,7 @@ impl Regs {
 /// The rest of the state a pass could touch, which a parked loop has to
 /// leave as it is.
 #[derive(PartialEq)]
-struct Fixed {
+pub(super) struct Fixed {
     daif: u32,
     el: u32,
     spsel: bool,
@@ -79,7 +79,7 @@ struct Fixed {
 }
 
 impl Fixed {
-    fn of(c: &Cpu) -> Fixed {
+    pub(super) fn of(c: &Cpu) -> Fixed {
         Fixed {
             daif: c.daif,
             el: c.el,
@@ -114,6 +114,17 @@ pub(super) struct Detector {
     watch: Option<Box<Watch>>,
     /// The reads of the step in flight, while watching.
     pub(super) log: Vec<Read>,
+    /// Its stores, which only a SHA-256 recording wants.
+    pub(super) stores: Vec<Read>,
+    /// Looks for SHA-256 block loops (`sha.rs`), and the head of the one the
+    /// core was last fitted to. `sha_stop` says the core has just jumped
+    /// back to that head: the run loop has a skip to consider.
+    pub(super) sha: super::sha::Finder,
+    pub(super) sha_head: Option<u64>,
+    pub(super) sha_stop: bool,
+    /// Which of the two to look for (`RVF_NO_PARK`, `RVF_NO_SHA_SKIP`).
+    pub(super) park_on: bool,
+    pub(super) sha_on: bool,
 }
 
 fn slot(target: u64) -> usize {
@@ -122,14 +133,17 @@ fn slot(target: u64) -> usize {
 
 impl Detector {
     pub(super) fn watching(&self) -> bool {
-        self.watch.is_some()
+        self.watch.is_some() || self.sha_stop || self.sha.recording()
     }
 
     /// The core took an exception or an interrupt, or waited: what was being
     /// watched was not one loop.
     pub(super) fn interrupted(&mut self) {
         self.watch = None;
+        self.sha.abandon();
+        self.sha_stop = false;
         self.log.clear();
+        self.stores.clear();
     }
 
     /// The core retired the instruction at `pc` in `cycle`, and stored
@@ -137,8 +151,19 @@ impl Detector {
     /// [`Self::park`].
     #[inline]
     pub(super) fn retired(&mut self, cpu: &Cpu, cycle: u64, pc: u64, wrote: bool) -> bool {
+        // A skip that did not happen: what the step logged goes nowhere.
+        if self.sha_stop {
+            self.sha_stop = false;
+            self.log.clear();
+            self.stores.clear();
+        }
         if self.watch.is_some() {
+            self.stores.clear();
             return self.watched(cpu, cycle, pc, wrote);
+        }
+        if self.sha.recording() {
+            self.sha.record(cpu, pc, &mut self.log, &mut self.stores);
+            return false;
         }
         if cpu.pc <= pc {
             self.backward(cpu, cycle);
@@ -148,6 +173,16 @@ impl Detector {
 
     fn backward(&mut self, cpu: &Cpu, cycle: u64) {
         let t = cpu.pc;
+        if self.sha_head == Some(t) {
+            self.sha_stop = true;
+            return;
+        }
+        if self.sha_on && self.sha.backward(cpu, cycle) {
+            return;
+        }
+        if !self.park_on {
+            return;
+        }
         let e = &mut self.hot[slot(t)];
         if e.0 != t {
             *e = (t, 0);
@@ -531,7 +566,7 @@ impl Park {
 }
 
 /// A RAM read of at most 8 bytes, the way `ArmBus` routes one.
-fn ram(m: &Machine, addr: u64, size: u32) -> Option<u64> {
+pub(super) fn ram(m: &Machine, addr: u64, size: u32) -> Option<u64> {
     if size > 8 || addr.checked_add(u64::from(size))? > m.ram.len() as u64 {
         return None;
     }
