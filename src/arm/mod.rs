@@ -1197,8 +1197,7 @@ impl ArmBus<'_> {
                     crate::log!(
                         self.m.log,
                         Channel::Mbox,
-                        "{} us ARM request (ARM at {arm_us} us) tag {:#010x} values {:#x} {:#x}",
-                        self.m.systimer.now_us(),
+                        "ARM request (ARM at {arm_us} us) tag {:#010x} values {:#x} {:#x}",
                         word(8),
                         word(20),
                         word(24)

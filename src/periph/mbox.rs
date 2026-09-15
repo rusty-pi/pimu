@@ -243,9 +243,6 @@ pub struct Mbox {
     pub writes: u64,
     /// Where [`Channel::Mbox`] goes.
     pub log: Log,
-    /// Model time at the latest access, for [`Channel::Mbox`]'s timestamps.
-    /// [`crate::machine::Machine`] sets it on every mailbox access.
-    pub now_us: u64,
     /// The firmware's property replies, decoded.
     pub property: PropertyLog,
     /// A property reply posted and not yet decoded: its buffer's bus address.
@@ -415,12 +412,7 @@ impl MmioDevice for Mbox {
                 let v = self.to_vpu.pop_front().unwrap_or(0);
                 if v != 0 {
                     self.reads += 1;
-                    crate::log!(
-                        self.log,
-                        Channel::Mbox,
-                        "{} us VPU read request {v:#010x}",
-                        self.now_us
-                    );
+                    crate::log!(self.log, Channel::Mbox, "VPU read request {v:#010x}");
                 }
                 v
             }
@@ -446,12 +438,7 @@ impl MmioDevice for Mbox {
                 if value & 0xF == CHANNEL_PROPERTY {
                     self.reply_to_decode = Some(value & !0xF);
                 }
-                crate::log!(
-                    self.log,
-                    Channel::Mbox,
-                    "{} us VPU -> ARM {value:#010x}",
-                    self.now_us
-                );
+                crate::log!(self.log, Channel::Mbox, "VPU -> ARM {value:#010x}");
             }
             // The ARM posting a request. Nothing in this bench does it through
             // MMIO — `post_from_arm` is the entry point — but model it anyway

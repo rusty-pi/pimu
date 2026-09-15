@@ -634,8 +634,7 @@ impl Xhci {
         crate::log!(
             self.log,
             Channel::Xhci,
-            "{} us PORTSC{} {:#010x} <- {value:#010x}",
-            self.now_us,
+            "PORTSC{} {:#010x} <- {value:#010x}",
             i + 1,
             self.ports[i].portsc
         );

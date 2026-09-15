@@ -159,17 +159,18 @@ from the bench reading the image's partition table and FAT itself, so the
 firmware stays a black box:
 
 ```text
-[io] sd   read  lba 0x0+2  (partition table)
-[io] sd   read  lba 0x800+2  p1:(boot sector)
-[io] sd   read  lba 0x1014+5  p1:/config.txt, p1:/start4.elf
-[io] sd   read  lba 0x101c+4489  p1:/start4.elf, p1:/fixup4.dat
-[io] otp  read  row 28  = 0x1aa2bb31
-[io] sd   read  lba 0x72b4+8  p1:/overlays/vc4-kms-v3d-pi4.dtbo
-[io] sd   read  lba 0x22ac+20459  p1:/kernel8.img
-[io] net  dhcp: DISCOVER from 02:00:5e:00:53:01 (PXEClient) -> OFFER 192.0.2.100
+   0.000944 io: otp  read  row 28  = 0x1aa2bb31
+   6.270753 io: sd   read  lba 0x0+2  (partition table)
+   6.271470 io: sd   read  lba 0x800+2  p1:(boot sector)
+   6.278862 io: sd   read  lba 0x1014+5  p1:/config.txt, p1:/start4.elf
+   6.291327 io: sd   read  lba 0x101c+4489  p1:/start4.elf, p1:/fixup4.dat
+   6.393364 io: sd   read  lba 0x21a8+9  p1:/fixup4.dat, p1:/bcm2711-rpi-4-b.dtb
 ```
 
-A row the firmware programs shows as `[io] otp  write row <n> = <new>  (was <old>)`.
+Each line starts with the model time in seconds, the way the firmware and
+Linux stamp their own logs. A row the firmware programs shows as
+`io: otp  write row <n> = <new>  (was <old>)`, and what the network peer did
+as `io: net  dhcp: ...`.
 Programming works the way start4 drives the OTP block, key sequence first, and
 a fuse only ever goes from 0 to 1
 ([#92](https://github.com/valtzu/rpi-virt-fw/issues/92)). To watch it, program two words of customer OTP (rows 36 and 37) the way

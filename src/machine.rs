@@ -327,7 +327,7 @@ impl Machine {
     /// Send the machine's channels to `log` (#95): keep it for the machine's
     /// own, and hand every device that logs a clone.
     pub fn set_log(&mut self, log: Log) {
-        self.systimer.log = log.clone();
+        self.systimer.set_log(log.clone());
         self.mbox.log = log.clone();
         self.corectl.log = log.clone();
         self.pcie.set_log(log.clone());
@@ -637,7 +637,6 @@ impl Machine {
             return Some((&mut self.aux, off));
         }
         if let Some(off) = hit(map::MBOX_BASE, map::MBOX_SIZE) {
-            self.mbox.now_us = self.systimer.now_us();
             return Some((&mut self.mbox, off));
         }
         if let Some(off) = hit(map::ARMCTRL_BASE, map::ARMCTRL_SIZE) {

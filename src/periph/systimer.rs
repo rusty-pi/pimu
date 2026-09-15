@@ -63,8 +63,9 @@ pub struct SysTimer {
     /// A compare fired since [`Self::take_fired`] last looked: the run loop's
     /// cue that an interrupt may be due.
     fired: bool,
-    /// Where [`Channel::Cmp`] goes: every compare-register arm.
-    pub log: Log,
+    /// Where [`Channel::Cmp`] goes: every compare-register arm. The log's
+    /// clock follows this counter ([`Self::set_log`]).
+    log: Log,
     arms: u64,
 }
 
@@ -119,6 +120,13 @@ impl SysTimer {
 
     pub fn now_us(&self) -> u64 {
         self.micros
+    }
+
+    /// Where [`Channel::Cmp`] goes. The log takes its clock from this
+    /// counter: every line is stamped with the model time it went out at.
+    pub fn set_log(&mut self, log: Log) {
+        log.set_time(self.micros);
+        self.log = log;
     }
 
     /// Did a compare fire since the last call?
@@ -187,6 +195,10 @@ impl SysTimer {
     /// reload only made a channel armed once as a timeout fire forever,
     /// flooding the CPU with spurious `64 + channel` interrupts.
     fn service_matches(&mut self) {
+        // Every move of the counter ends here, so this is where the log's
+        // clock follows it: at most once per microsecond, off the per-cycle
+        // path.
+        self.log.set_time(self.micros);
         for c in 0..4 {
             let Some(d) = self.deadline[c] else { continue };
             if self.micros < d {
