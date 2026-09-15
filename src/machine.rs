@@ -166,6 +166,8 @@ pub struct Machine {
     /// Interrupt sources raised by peripherals, waiting to be vectored. A
     /// source stays here until core 0's CoreCtl bank enables it.
     pending_irqs: std::collections::VecDeque<u32>,
+    /// The same for core 1: sources start4 raised for it in software.
+    pending_irqs1: std::collections::VecDeque<u32>,
     /// Something happened that the run loop's per-step checks may have to
     /// act on: a peripheral register was written, an interrupt was queued, a
     /// compare fired, or a reset came due. The run loop clears it; while it
@@ -297,6 +299,7 @@ impl Machine {
                 .unwrap_or_default(),
             dbg_dma: crate::diag::ON && std::env::var_os("RVF_DBG_DMA").is_some(),
             pending_irqs: std::collections::VecDeque::new(),
+            pending_irqs1: std::collections::VecDeque::new(),
             recheck: false,
             defer_sleep: false,
             sleep_to: None,
@@ -341,7 +344,24 @@ impl Machine {
     pub fn irq_queued(&self) -> bool {
         self.pending_irqs
             .iter()
-            .any(|&src| self.corectl.irq_priority(src) != 0)
+            .any(|&src| self.corectl.irq_priority(0, src) != 0)
+    }
+
+    /// Queue an interrupt source start4 raised for core 1. Like core 0's, it
+    /// waits until core 1's CoreCtl bank enables it, and until core 1 can take
+    /// it (`Emulator::step_core1`), instead of being lost.
+    pub fn push_core1_irq(&mut self, src: u32) {
+        self.pending_irqs1.push_back(src);
+        self.recheck = true;
+    }
+
+    /// Take the first source queued for core 1 that core 1's bank enables.
+    pub fn take_core1_irq(&mut self) -> Option<u32> {
+        let i = self
+            .pending_irqs1
+            .iter()
+            .position(|&src| self.corectl.irq_priority(1, src) != 0)?;
+        self.pending_irqs1.remove(i)
     }
 
     /// The lowest system-timer channel whose compare has fired and whose
@@ -356,7 +376,7 @@ impl Machine {
             self.systimer.channel_pending(c)
                 && self
                     .corectl
-                    .irq_priority(crate::periph::corectl::SYS_IRQ_SRC + c as u32)
+                    .irq_priority(0, crate::periph::corectl::SYS_IRQ_SRC + c as u32)
                     != 0
         })
     }
@@ -1114,7 +1134,7 @@ impl Bus for Machine {
         let i = self
             .pending_irqs
             .iter()
-            .position(|&src| self.corectl.irq_priority(src) != 0)?;
+            .position(|&src| self.corectl.irq_priority(0, src) != 0)?;
         let src = self.pending_irqs.remove(i)?;
         self.corectl.raise_source(src);
         Some(src)

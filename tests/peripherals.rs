@@ -240,10 +240,15 @@ fn interrupt_priority_fields_round_trip() {
     // enable_irq_source(64, 1) and enable_irq_source(66, 3).
     m.store32(map::CORECTL_BASE + 0x10, 1 | (3 << 8)).unwrap();
 
-    assert_eq!(m.corectl.irq_priority(64), 1);
-    assert_eq!(m.corectl.irq_priority(66), 3);
-    assert_eq!(m.corectl.irq_priority(65), 0, "unenabled source");
-    assert_eq!(m.corectl.irq_priority(72), 0, "next word along");
+    assert_eq!(m.corectl.irq_priority(0, 64), 1);
+    assert_eq!(m.corectl.irq_priority(0, 66), 3);
+    assert_eq!(m.corectl.irq_priority(0, 65), 0, "unenabled source");
+    assert_eq!(m.corectl.irq_priority(0, 72), 0, "next word along");
+
+    // Core 1's bank is 0x800 up, and its own: enable_irq_source(79, 1) there.
+    m.store32(map::CORECTL_BASE + 0x814, 1 << 28).unwrap();
+    assert_eq!(m.corectl.irq_priority(1, 79), 1);
+    assert_eq!(m.corectl.irq_priority(0, 79), 0, "core 0's copy");
 }
 
 // ---------------------------------------------------------------------------
