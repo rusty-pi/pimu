@@ -2,6 +2,7 @@
 
 use crate::bus::{Bus, BusError, BusResult, MmioDevice, Width};
 use crate::mem::Ram;
+use crate::periph::hdmi_ddc::AUTO_WINDOW;
 use crate::periph::{
     ArmCtrl, ArmLocal, Asb, Aux, Avs, BootBox, Bsc, ClkMon, ClockManager, ConfigOtp, CoreCtl, Dma4,
     Dwc2, Emmc2, Gic, Hd, Hdmi, HdmiDdc, Hvs, Mbox, McSync, Pl011, Pm, Rng, Sdc, Sdramc, Spi0,
@@ -387,8 +388,12 @@ impl Machine {
     /// every single retired instruction cost a measurable few percent of the
     /// model's throughput.
     fn advance_hdmi_ddc(&mut self, addr: u32) {
-        let in_window = |base: u32| addr >= base && addr < base + map::HDMI_DDC_SIZE;
-        if in_window(map::HDMI_DDC0_BASE) || in_window(map::HDMI_DDC1_BASE) {
+        let in_window = |base: u32, size: u32| addr >= base && addr < base + size;
+        if in_window(map::HDMI_DDC0_BASE, map::HDMI_DDC_SIZE)
+            || in_window(map::HDMI_DDC1_BASE, map::HDMI_DDC_SIZE)
+            || in_window(map::HDMI_AUTO_I2C0_BASE, map::HDMI_AUTO_I2C_SIZE)
+            || in_window(map::HDMI_AUTO_I2C1_BASE, map::HDMI_AUTO_I2C_SIZE)
+        {
             let now = self.systimer.now_us();
             self.hdmi_ddc0.advance_to(now);
             self.hdmi_ddc1.advance_to(now);
@@ -696,6 +701,12 @@ impl Machine {
         }
         if let Some(off) = hit(map::HDMI_DDC1_BASE, map::HDMI_DDC_SIZE) {
             return Some((&mut self.hdmi_ddc1, off));
+        }
+        if let Some(off) = hit(map::HDMI_AUTO_I2C0_BASE, map::HDMI_AUTO_I2C_SIZE) {
+            return Some((&mut self.hdmi_ddc0, AUTO_WINDOW + off));
+        }
+        if let Some(off) = hit(map::HDMI_AUTO_I2C1_BASE, map::HDMI_AUTO_I2C_SIZE) {
+            return Some((&mut self.hdmi_ddc1, AUTO_WINDOW + off));
         }
         if let Some(off) = hit(map::HDMI0_BASE, map::HDMI_SIZE) {
             return Some((&mut self.hdmi0, off));

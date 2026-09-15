@@ -192,6 +192,14 @@ pub const HDMI_DDC0_BASE: u32 = spec::hdmi_ddc::BASE;
 pub const HDMI_DDC1_BASE: u32 = spec::hdmi_ddc::HDMI1_BASE;
 pub const HDMI_DDC_SIZE: u32 = spec::hdmi_ddc::SIZE;
 
+/// The same nodes' second `reg` window, the auto-i2c sequencers. start4
+/// 1.20190925 to 1.20200601 run one list through HDMI0's at boot and wait for
+/// it with no timeout, so on the catch-all stub they never started the ARM
+/// (`src/periph/hdmi_ddc.rs`, #76).
+pub const HDMI_AUTO_I2C0_BASE: u32 = spec::hdmi_auto_i2c::BASE;
+pub const HDMI_AUTO_I2C1_BASE: u32 = spec::hdmi_auto_i2c::HDMI1_BASE;
+pub const HDMI_AUTO_I2C_SIZE: u32 = spec::hdmi_auto_i2c::SIZE;
+
 /// BCM2711 LPDDR4 controller + PHY, mapped *below* the legacy peripheral
 /// window: the `init_sdram_*` path pokes `0x7DC2_0000` (command/status at
 /// `+0x10`..`+0x28`) and per-byte-lane PHY blocks at `0x7DC2_0400`,

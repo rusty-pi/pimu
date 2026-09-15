@@ -3,7 +3,7 @@ name    = "hdmi_ddc"
 base    = 0x7EF04500
 size    = 0x100
 summary = "HDMI DDC I²C masters (brcm,bcm2711-hdmi-i2c), one per connector: the bus a monitor's EDID EEPROM sits on"
-notes   = "Not the BSC: a different block with a different layout. With no monitor attached (the reference board's state) every transfer completes INTRP | NOACK. The second reg window in the device tree, the auto-i2c block at 0x7EF00B00, is not used by start4 and not modelled."
+notes   = "Not the BSC: a different block with a different layout. With no monitor attached (the reference board's state) every transfer completes INTRP | NOACK. The second reg window in the device tree, the auto-i2c block at 0x7EF00B00, is its own block (hdmi_auto_i2c); the same device answers both."
 
 [[block.source]]
 kind       = "measured"
