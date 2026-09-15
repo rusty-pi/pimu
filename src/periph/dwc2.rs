@@ -70,6 +70,7 @@
 use std::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
+use crate::log::{Channel, Log};
 
 use crate::spec::dwc2::{
     DCTL, DCTL_CGNPINNAK_MASK, DCTL_CGOUTNAK_MASK, DCTL_GNPINNAKSTS_MASK, DCTL_GOUTNAKSTS_MASK,
@@ -119,10 +120,10 @@ const NAK_SET_CLEAR: u32 =
 #[derive(Default)]
 pub struct Dwc2 {
     storage: BTreeMap<u32, u32>,
-    /// `RVF_DBG_DWC2`: log every write, and every read that returns something
-    /// other than the previous read of the same register, so a poll shows up
-    /// once rather than once per iteration.
-    dbg: bool,
+    /// Where [`Channel::Dwc2`] goes: every write, and every read that returns
+    /// something other than the previous read of the same register, so a poll
+    /// shows up once rather than once per iteration.
+    pub log: Log,
     last_read: BTreeMap<u32, u32>,
     /// The latched `GINTSTS` bits: only [`SUSPEND`] ever sets.
     latched: u32,
@@ -130,10 +131,7 @@ pub struct Dwc2 {
 
 impl Dwc2 {
     pub fn new() -> Dwc2 {
-        Dwc2 {
-            dbg: std::env::var_os("RVF_DBG_DWC2").is_some(),
-            ..Dwc2::default()
-        }
+        Dwc2::default()
     }
 
     fn stored(&self, off: u32) -> u32 {
@@ -190,17 +188,23 @@ impl MmioDevice for Dwc2 {
             GHWCFG4 => GHWCFG4_RESET,
             _ => stored,
         };
-        if self.dbg && self.last_read.insert(off, value) != Some(value) {
-            eprintln!("[dwc2] read  +{off:#05x} -> {value:#010x}");
+        if self.log.on(Channel::Dwc2) && self.last_read.insert(off, value) != Some(value) {
+            crate::log!(
+                self.log,
+                Channel::Dwc2,
+                "read  +{off:#05x} -> {value:#010x}"
+            );
         }
         Ok(value)
     }
 
     fn write(&mut self, offset: u32, _width: Width, value: u32) -> BusResult<()> {
         let off = offset & !3;
-        if self.dbg {
-            eprintln!("[dwc2] write +{off:#05x} <- {value:#010x}");
-        }
+        crate::log!(
+            self.log,
+            Channel::Dwc2,
+            "write +{off:#05x} <- {value:#010x}"
+        );
         if let Some(ch) = Dwc2::channel(off, HCCHAR) {
             if value & HALT == HALT {
                 // No channel ever has a transfer in flight, so a halt request

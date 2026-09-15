@@ -12,7 +12,7 @@ One register bank per VPU core: core 0 at +0x000, core 1 at +0x800. start4 reach
 Sources:
 
 - decompile (high): per-core init 0x3EC3E938 sets [blk+12] = 0x7E002000 + core * 0x800
-- trace (high): RVF_DBG_IRQEN and the peripheral stub show core 1 writing 0x7E002810..0x7E002844 — _the window was mapped 0x100 wide until commit 7bd21a3, which hid core 1's bank_
+- trace (high): --log irqen and the peripheral stub show core 1 writing 0x7E002810..0x7E002844 — _the window was mapped 0x100 wide until commit 7bd21a3, which hid core 1's bank_
 - inferred (medium): size: the system timer starts at 0x7E003000
 
 ## Register map

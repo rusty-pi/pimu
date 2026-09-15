@@ -6,6 +6,7 @@
 //! advances timed waits (see [`crate::bus::Bus::timer_tick_slot`]).
 
 use crate::bus::{BusResult, MmioDevice, Width};
+use crate::log::{Channel, Log};
 use crate::spec::systimer::{C, CHI, CLO, CS, CS_M0_MASK, C_COUNT, C_STRIDE};
 use crate::spec::Coverage;
 
@@ -62,8 +63,8 @@ pub struct SysTimer {
     /// A compare fired since [`Self::take_fired`] last looked: the run loop's
     /// cue that an interrupt may be due.
     fired: bool,
-    /// `RVF_DBG_CMP=1`: log every compare-register arm.
-    dbg_cmp: bool,
+    /// Where [`Channel::Cmp`] goes: every compare-register arm.
+    pub log: Log,
     arms: u64,
 }
 
@@ -79,7 +80,7 @@ impl SysTimer {
             pending: [false; 4],
             pending_any: false,
             fired: false,
-            dbg_cmp: std::env::var_os("RVF_DBG_CMP").is_some(),
+            log: Log::default(),
             arms: 0,
         }
     }
@@ -298,11 +299,13 @@ impl MmioDevice for SysTimer {
 
     fn write(&mut self, offset: u32, _width: Width, value: u32) -> BusResult<()> {
         let arm = |st: &mut SysTimer, c: usize| {
-            if st.dbg_cmp {
+            if st.log.on(Channel::Cmp) {
                 st.arms += 1;
                 if st.arms <= 40 || st.arms.is_multiple_of(2000) {
-                    eprintln!(
-                        "[cmp] #{} C{c} <- {value:#x} now={} delta={}",
+                    crate::log!(
+                        st.log,
+                        Channel::Cmp,
+                        "#{} C{c} <- {value:#x} now={} delta={}",
                         st.arms,
                         st.micros as u32,
                         value.wrapping_sub(st.micros as u32)

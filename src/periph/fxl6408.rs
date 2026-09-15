@@ -59,6 +59,7 @@
 //! is whatever the part itself puts on it: the output state where it drives
 //! the pin, otherwise its pull resistor, otherwise 0.
 
+use crate::log::{Channel, Log};
 use crate::spec::{fxl6408 as regs, Coverage};
 
 /// 7-bit I²C address.
@@ -111,6 +112,8 @@ pub struct Fxl6408 {
     /// Set between the start of a write transfer and its first data byte: that
     /// byte is the register offset.
     pending_ptr: bool,
+    /// Where [`Channel::Expander`] goes: every register access.
+    pub log: Log,
 }
 
 impl Default for Fxl6408 {
@@ -131,12 +134,14 @@ impl Fxl6408 {
             int_mask: regs::INT_MASK_RESET as u8,
             ptr: 0,
             pending_ptr: false,
+            log: Log::default(),
         }
     }
 
     fn reset(&mut self) {
         *self = Fxl6408 {
             ptr: self.ptr,
+            log: std::mem::take(&mut self.log),
             ..Fxl6408::new()
         };
     }
@@ -196,26 +201,29 @@ impl crate::periph::bsc::I2cSlave for Fxl6408 {
             self.pending_ptr = false;
             return;
         }
-        if dbg() {
-            eprintln!("[fxl6408] W {:02x} = {:02x}", self.ptr, b);
-        }
+        crate::log!(
+            self.log,
+            Channel::Expander,
+            "W {:02x} = {:02x}",
+            self.ptr,
+            b
+        );
         self.write_reg(self.ptr, b);
         self.ptr = self.ptr.wrapping_add(1);
     }
 
     fn read_byte(&mut self) -> u8 {
         let v = self.reg(self.ptr);
-        if dbg() {
-            eprintln!("[fxl6408] R {:02x} -> {:02x}", self.ptr, v);
-        }
+        crate::log!(
+            self.log,
+            Channel::Expander,
+            "R {:02x} -> {:02x}",
+            self.ptr,
+            v
+        );
         self.ptr = self.ptr.wrapping_add(1);
         v
     }
-}
-
-/// `RVF_DBG_EXPANDER=1` logs every register access. Off by default.
-fn dbg() -> bool {
-    std::env::var_os("RVF_DBG_EXPANDER").is_some()
 }
 
 #[cfg(test)]

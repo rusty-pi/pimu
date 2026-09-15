@@ -731,7 +731,7 @@ fn pcie_link_trains_and_finds_the_vl805() {
 /// through the bus the way the firmware drives it: enumerate the endpoint,
 /// program the outbound window, then read BAR0 with a 40-bit DMA4 transfer
 /// (`0x0008B42C` builds the control block, `0x000A701E` reads the bounce
-/// buffer). The source word is the one `RVF_DBG_DMA` shows the real firmware
+/// buffer). The source word is the one `--log dma` shows the real firmware
 /// using — `src = 0x0200_0004`, `srci = 0x1006`, i.e. `0x6_0200_0004`.
 ///
 /// Before the 40-bit address was honoured this read landed in DRAM, every

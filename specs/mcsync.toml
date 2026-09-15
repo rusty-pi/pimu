@@ -56,7 +56,7 @@ confidence = "medium"
 
 [[register.source]]
 kind       = "trace"
-ref        = "RVF_DBG_IRQEN: neither core calls enable_irq_source for 76 or 77"
+ref        = "--log irqen: neither core calls enable_irq_source for 76 or 77"
 confidence = "medium"
 note       = "so the interrupt path itself is not exercised by the boot so far"
 
@@ -73,6 +73,6 @@ confidence = "medium"
 
 [[register.source]]
 kind       = "trace"
-ref        = "RVF_DBG_IRQEN: neither core calls enable_irq_source for 76 or 77"
+ref        = "--log irqen: neither core calls enable_irq_source for 76 or 77"
 confidence = "medium"
 note       = "so the interrupt path itself is not exercised by the boot so far"

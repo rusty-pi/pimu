@@ -21,8 +21,8 @@
 //! - [`armstub`], [`fdt`] and [`identity`]: what `arm_loader` hands the ARM,
 //!   and the board identity (`rpi-machine-id`) in it.
 //! - [`harness`]: scenario files in, pass/fail and a transcript out.
-//! - [`iolog`], [`diag`] and [`stdio`]: the I/O log, the `RVF_*` diagnostics,
-//!   and the host terminal as the serial console.
+//! - [`log`], [`diag`] and [`stdio`]: the log channels (`--log`), the `RVF_*`
+//!   diagnostics, and the host terminal as the serial console.
 //! - [`spec`]: register maps generated from `specs/*.toml`.
 //!
 //! The command line is a separate binary crate, in `src/cli/`.
@@ -37,8 +37,8 @@ pub mod fdt;
 pub mod firmware;
 pub mod harness;
 pub mod identity;
-pub mod iolog;
 pub mod l2;
+pub mod log;
 pub mod machine;
 pub mod mem;
 pub mod net;

@@ -1,6 +1,7 @@
 //! The VPU scalar executor: fetch → decode → execute one instruction.
 
 use crate::bus::{Bus, BusError, Width};
+use crate::log::{Channel, Log};
 
 /// How many control transfers [`Vpu::cf_trace`] keeps. The run report prints
 /// the tail of it when a boot derails, which is the main thing it is for.
@@ -173,7 +174,7 @@ pub struct Vpu {
     pub exc_vbase: u32,
     /// True while executing inside an exception handler (before `rti`).
     pub in_exception: u32,
-    /// `RVF_DBG_SLEEP` counter: how many times the idle loop's `sleep` has
+    /// [`Channel::Sleep`] counter: how many times the idle loop's `sleep` has
     /// been reached.
     pub sleep_dbg: u64,
     /// System-coprocessor register file (`mov p<n>,r` / `mov r,p<n>`). Not real
@@ -210,13 +211,9 @@ pub struct Vpu {
     pub trace_from: u32,
     /// Flips true once `trace_from` has been reached (always true when it is 0).
     pub trace_armed: bool,
-    /// Diagnostic switches, read once at construction. Reading them from the
-    /// environment inside the step loop instead costs a `getenv` per `sleep`
-    /// instruction, and ThreadX's idle loop is nothing but `sleep`.
-    dbg_tick: bool,
-    dbg_vec: bool,
-    dbg_sleep: bool,
-    dbg_derail: bool,
+    /// Where the core's channels go: [`Channel::Tick`], [`Channel::Vec`],
+    /// [`Channel::Sleep`] and [`Channel::Derail`], all of them `diag`-only.
+    pub log: Log,
 }
 
 impl Vpu {
@@ -227,11 +224,6 @@ impl Vpu {
         v.cf_trace = std::collections::VecDeque::with_capacity(CF_TRACE_LEN);
         v.cf_last = None;
         v.trace_cap = 20_000;
-        let on = |n: &str| crate::diag::ON && std::env::var_os(n).is_some();
-        v.dbg_tick = on("RVF_DBG_TICK");
-        v.dbg_vec = on("RVF_DBG_VEC");
-        v.dbg_sleep = on("RVF_DBG_SLEEP");
-        v.dbg_derail = on("RVF_DBG_DERAIL");
         // VC4 comes out of reset with interrupts enabled; ThreadX runs threads
         // that way too. `di`/`ei` toggle it from here.
         v.regs.set(30, 1 << 30);
@@ -318,9 +310,11 @@ impl Vpu {
             .filter(|&h| h != 0)
             .map(|h| h & !1);
         if let Some(h) = handler {
-            if crate::diag::ON && self.dbg_vec {
-                eprintln!(
-                    "[vec] slot={slot} vbase={:#x} entry={:#x} h={h:#x} pc={:#x} sp={:#x} cur={:#x} exec={:#x} nest={}",
+            if crate::diag::ON {
+                crate::log!(
+                    self.log,
+                    Channel::Vec,
+                    "slot={slot} vbase={:#x} entry={:#x} h={h:#x} pc={:#x} sp={:#x} cur={:#x} exec={:#x} nest={}",
                     self.exc_vbase,
                     bus.load32(self.exc_vbase.wrapping_add(slot.wrapping_mul(4))).unwrap_or(0),
                     self.regs.pc,
@@ -738,16 +732,18 @@ impl Vpu {
             if self.regs.pc != next {
                 // Reconnaissance: flag the exact instruction that first jumps
                 // out of start4's code range (a derail — bad computed branch,
-                // corrupt return address). `RVF_DBG_DERAIL=1`.
+                // corrupt return address). `--log derail`.
                 let in_code = |a: u32| (0x3E00_0000..0x3F00_0000).contains(&a);
                 if crate::diag::ON
-                    && self.dbg_derail
+                    && self.log.on(Channel::Derail)
                     && in_code(pc)
                     && !in_code(self.regs.pc)
                     && self.core_id == 0
                 {
-                    eprintln!(
-                        "[derail] {pc:#x} ({:?}) -> {:#x}  regs r0-9: {:08x?}",
+                    crate::log!(
+                        self.log,
+                        Channel::Derail,
+                        "{pc:#x} ({:?}) -> {:#x}  regs r0-9: {:08x?}",
                         insn.op,
                         self.regs.pc,
                         (0..10).map(|i| self.regs.get(i)).collect::<Vec<_>>(),
@@ -831,12 +827,16 @@ impl Vpu {
                         // mis-route the interrupt.
                         let slot = bus.timer_tick_slot();
                         let took = slot.is_some() && bus.take_tick_pending();
-                        if crate::diag::ON && self.dbg_sleep {
+                        if crate::diag::ON && self.log.on(Channel::Sleep) {
                             self.sleep_dbg += 1;
                             if self.sleep_dbg <= 20 || self.sleep_dbg.is_multiple_of(20000) {
-                                eprintln!(
-                                    "[sleep] #{} pc={:#x} slot={slot:?} took={took} retired={}",
-                                    self.sleep_dbg, self.regs.pc, self.retired
+                                crate::log!(
+                                    self.log,
+                                    Channel::Sleep,
+                                    "#{} pc={:#x} slot={slot:?} took={took} retired={}",
+                                    self.sleep_dbg,
+                                    self.regs.pc,
+                                    self.retired
                                 );
                             }
                         }
@@ -950,9 +950,11 @@ impl Vpu {
                     Ok(v) => v,
                     Err(err) => return Some(self.stop(Stop::Fault(Fault::Bus { pc, err }))),
                 };
-                if crate::diag::ON && self.dbg_tick && !(0x3E00_0000..0x3F00_0000).contains(&ret) {
-                    eprintln!(
-                        "[rti-bad] pc={pc:#x} sp={sp:#x} -> ret={ret:#x} sr={sr:#x} nest={} frame=[{:#x} {:#x} {:#x} {:#x}]",
+                if crate::diag::ON && !(0x3E00_0000..0x3F00_0000).contains(&ret) {
+                    crate::log!(
+                        self.log,
+                        Channel::Tick,
+                        "rti-bad pc={pc:#x} sp={sp:#x} -> ret={ret:#x} sr={sr:#x} nest={} frame=[{:#x} {:#x} {:#x} {:#x}]",
                         self.in_exception,
                         bus.load32(sp).unwrap_or(0),
                         bus.load32(sp.wrapping_add(4)).unwrap_or(0),

@@ -43,15 +43,7 @@ const GATED: &[&str] = &[
     "RVF_PROF_THREAD",
     "RVF_HEARTBEAT",
     "RVF_WATCH",
-    "RVF_DBG_TICK",
-    "RVF_DBG_SWIRQ",
-    "RVF_DBG_IRQTBL",
-    "RVF_DBG_FF",
-    "RVF_DBG_TCB",
-    "RVF_DBG_VEC",
-    "RVF_DBG_SLEEP",
-    "RVF_DBG_DERAIL",
-    "RVF_DBG_DMA",
+    "RVF_TCB",
 ];
 
 /// One `RVF_*` switch that is either on or off.
@@ -64,6 +56,17 @@ fn hex(name: &str) -> Option<u32> {
     std::env::var(name)
         .ok()
         .and_then(|v| u32::from_str_radix(v.trim().trim_start_matches("0x"), 16).ok())
+}
+
+/// A `RVF_*` switch carrying hex addresses, comma-separated.
+fn hex_list(name: &str) -> Vec<u32> {
+    std::env::var(name)
+        .map(|v| {
+            v.split(',')
+                .filter_map(|t| u32::from_str_radix(t.trim().trim_start_matches("0x"), 16).ok())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// A `RVF_*` switch carrying a decimal number.
@@ -106,20 +109,16 @@ pub struct DiagConfig {
     pub prof: bool,
     /// The same, attributed per ThreadX thread — set to the address of the
     /// firmware's current-thread pointer (`_tx_thread_current_ptr`), since
-    /// only the firmware knows where that lives. `RVF_DBG_IRQTBL` prints `gp`,
+    /// only the firmware knows where that lives. `--log irqtbl` prints `gp`,
     /// and the pointer is findable from a `RVF_TRACE_ON_PC` trace of a context
     /// switch.
     pub prof_thread: Option<u32>,
     /// Print progress every N instructions.
     pub heartbeat: u64,
 
-    // Subsystem logs.
-    pub dbg_tick: bool,
-    pub dbg_swirq: bool,
-    /// Dump the firmware's per-source interrupt handler table at exit. Derived
-    /// from `gp`, so it survives a firmware whose layout moved.
-    pub dbg_irqtbl: bool,
-    pub dbg_ff: bool,
+    /// Decode these ThreadX thread control blocks at exit: where each thread
+    /// is parked, and a rough backtrace.
+    pub tcbs: Vec<u32>,
 }
 
 impl DiagConfig {
@@ -153,16 +152,7 @@ impl DiagConfig {
             trace_mmio: flag("RVF_TRACE_MMIO"),
             mmio_from: hex("RVF_MMIO_FROM"),
 
-            traps: std::env::var("RVF_TRAP")
-                .ok()
-                .map(|v| {
-                    v.split(',')
-                        .filter_map(|t| {
-                            u32::from_str_radix(t.trim().trim_start_matches("0x"), 16).ok()
-                        })
-                        .collect()
-                })
-                .unwrap_or_default(),
+            traps: hex_list("RVF_TRAP"),
             trap_from: num("RVF_TRAP_FROM").unwrap_or(0),
             trap_max: num("RVF_TRAP_MAX").unwrap_or(40),
 
@@ -170,10 +160,7 @@ impl DiagConfig {
             prof_thread: hex("RVF_PROF_THREAD"),
             heartbeat: num("RVF_HEARTBEAT").unwrap_or(0),
 
-            dbg_tick: flag("RVF_DBG_TICK"),
-            dbg_swirq: flag("RVF_DBG_SWIRQ"),
-            dbg_irqtbl: flag("RVF_DBG_IRQTBL"),
-            dbg_ff: flag("RVF_DBG_FF"),
+            tcbs: hex_list("RVF_TCB"),
         }
     }
 }
@@ -189,8 +176,8 @@ mod tests {
         // `from_env` reads the real environment, so build the quiet case
         // directly — this pins the defaults, not the parsing.
         let d = DiagConfig::default();
-        assert!(!d.trace_cf && !d.trace_mmio && !d.prof && !d.dbg_tick);
-        assert!(d.traps.is_empty());
+        assert!(!d.trace_cf && !d.trace_mmio && !d.prof);
+        assert!(d.traps.is_empty() && d.tcbs.is_empty());
         assert_eq!(d.heartbeat, 0);
         assert!(d.trace_on_pc.is_none());
     }

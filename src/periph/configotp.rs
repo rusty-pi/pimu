@@ -66,6 +66,7 @@
 use std::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
+use crate::log::{Channel, Log};
 
 // `PARAM_A` bit 0 kicks off a transaction; `STATUS` **bit 1** reports
 // completion (the poll at `0x8000760e` is `btest [+0x10], #1`).
@@ -180,9 +181,9 @@ pub struct ConfigOtp {
     prog_enabled: bool,
     /// key -> config value.
     table: BTreeMap<u32, u32>,
-    /// Rows read and programmed go to the I/O log too, when there is one
-    /// (#35).
-    pub io: Option<crate::iolog::IoLogRef>,
+    /// Where [`Channel::Otp`] goes, and the rows read and programmed on
+    /// [`Channel::Io`] (#35).
+    pub log: Log,
 }
 
 impl Default for ConfigOtp {
@@ -324,7 +325,7 @@ impl ConfigOtp {
             unlock: 0,
             prog_enabled: false,
             table,
-            io: None,
+            log: Log::default(),
         }
     }
 
@@ -377,11 +378,12 @@ impl ConfigOtp {
                 self.unlock = 0;
             }
             CMD_PROGRAM => self.program_row(),
-            _ => {
-                if std::env::var_os("RVF_DBG_OTP").is_some() {
-                    eprintln!("[otp] command {cmd} (unmodelled) on row {}", self.key);
-                }
-            }
+            _ => crate::log!(
+                self.log,
+                Channel::Otp,
+                "command {cmd} (unmodelled) on row {}",
+                self.key
+            ),
         }
         self.done = true;
     }
@@ -390,44 +392,43 @@ impl ConfigOtp {
     /// goes from 0 to 1, so this ORs; without the key nothing changes.
     fn program_row(&mut self) {
         let (row, was) = (self.key, self.row(self.key));
-        let dbg = std::env::var_os("RVF_DBG_OTP").is_some();
         if !self.prog_enabled {
-            if dbg {
-                eprintln!("[otp] program row {row} ignored: programming is not enabled");
-            }
+            crate::log!(
+                self.log,
+                Channel::Otp,
+                "program row {row} ignored: programming is not enabled"
+            );
             return;
         }
         let value = was | self.data;
         if value != was {
             self.table.insert(row, value);
         }
-        if let Some(io) = &self.io {
-            io.borrow_mut().otp_write(row, value, was);
-        }
-        if dbg {
-            eprintln!("[otp] program row {row} (0x{row:x}): 0x{was:08x} -> 0x{value:08x}");
-        }
+        self.log.otp_write(row, value, was);
+        crate::log!(
+            self.log,
+            Channel::Otp,
+            "program row {row} (0x{row:x}): 0x{was:08x} -> 0x{value:08x}"
+        );
     }
 
     fn read_row(&mut self) {
         self.data = self.table.get(&self.key).copied().unwrap_or(0);
-        if let Some(io) = &self.io {
-            io.borrow_mut()
-                .otp_read(self.key, self.data, self.table.contains_key(&self.key));
-        }
-        if std::env::var_os("RVF_DBG_OTP").is_some() {
-            eprintln!(
-                "[otp] key {} (0x{:x}) -> 0x{:08x}{}",
-                self.key,
-                self.key,
-                self.data,
-                if self.table.contains_key(&self.key) {
-                    ""
-                } else {
-                    "  (UNMODELLED)"
-                }
-            );
-        }
+        self.log
+            .otp_read(self.key, self.data, self.table.contains_key(&self.key));
+        crate::log!(
+            self.log,
+            Channel::Otp,
+            "key {} (0x{:x}) -> 0x{:08x}{}",
+            self.key,
+            self.key,
+            self.data,
+            if self.table.contains_key(&self.key) {
+                ""
+            } else {
+                "  (UNMODELLED)"
+            }
+        );
     }
 }
 
