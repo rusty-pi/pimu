@@ -548,10 +548,11 @@ impl Emulator {
                     // CoreCtl `+0x04`; `take_pending_irq` presents it there
                     // when it is vectored.
                     self.machine.push_pending_irq(src);
-                } else if let Some(c1) = self.cpu1.as_mut() {
-                    if c1.exc_vbase != 0 {
-                        c1.vector_irq(&mut self.machine, src);
-                    }
+                } else {
+                    // Queued, not vectored here: core 1 may have interrupts
+                    // off or not be running yet, and the pending bit stays up
+                    // until it can take the source (`Self::step_core1`).
+                    self.machine.push_core1_irq(src);
                 }
             }
 
@@ -890,6 +891,18 @@ impl Emulator {
         if let Some(c1) = self.cpu1.as_mut() {
             if c1.exc_vbase == 0 && self.machine.corectl.vbase[1] != 0 {
                 c1.exc_vbase = self.machine.corectl.vbase[1];
+            }
+            // A source raised for core 1 is taken once core 1's bank enables it
+            // and core 1 can take it: with interrupts on, or asleep in `sleep`,
+            // which takes one even with them off, as on core 0.
+            if c1.exc_vbase != 0 && !c1.is_stopped() && (c1.halted || c1.irq_enabled()) {
+                if let Some(src) = self.machine.take_core1_irq() {
+                    if c1.halted {
+                        c1.vector_irq_forced(&mut self.machine, src);
+                    } else {
+                        c1.vector_irq(&mut self.machine, src);
+                    }
+                }
             }
             if !c1.is_stopped() && !c1.halted {
                 let pc_before = c1.pc();
