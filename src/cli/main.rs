@@ -109,8 +109,9 @@ FLAGS:
     --io-log <path>
               Write what the machine read and wrote to <path> (`-` for
               stderr), apart from the console: SD card and USB stick block
-              runs with the files they belong to, OTP rows read, and what the
-              network peer did (DHCP, DNS, TFTP, HTTP). Captured at the
+              runs with the files they belong to, OTP rows read and
+              programmed, and what the network peer did (DHCP, DNS, TFTP,
+              HTTP). Captured at the
               peripherals; `--io-log-format jsonl` for one JSON object a line.
     --dram-map
               Report which DRAM pages are non-zero when the run ends, as

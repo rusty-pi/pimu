@@ -5,7 +5,7 @@
 //!
 //! * block reads and writes on the SD card and the USB stick, contiguous runs
 //!   merged, with the files they belong to ([`fatmap`])
-//! * OTP rows the firmware read, with their values
+//! * OTP rows the firmware read or programmed, with their values
 //! * what the network peer did: DHCP, DNS, TFTP and HTTP
 //!
 //! Everything is captured where the data crosses a peripheral – the firmware
@@ -118,6 +118,28 @@ impl IoLog {
                 ("op", "read"),
                 ("row", &row_s),
                 ("value", &value_s),
+            ]),
+        };
+        self.line(&line);
+    }
+
+    /// An OTP row the firmware programmed: `value` is what the row holds now,
+    /// `was` what it held before. Fuses only go from 0 to 1 (#92).
+    pub fn otp_write(&mut self, row: u32, value: u32, was: u32) {
+        self.flush_run();
+        let (row_s, value_s, was_s) = (
+            row.to_string(),
+            format!("{value:#010x}"),
+            format!("{was:#010x}"),
+        );
+        let line = match self.format {
+            Format::Text => format!("otp  write row {row:<3} = {value_s}  (was {was_s})"),
+            Format::Jsonl => json(&[
+                ("dev", "otp"),
+                ("op", "write"),
+                ("row", &row_s),
+                ("value", &value_s),
+                ("was", &was_s),
             ]),
         };
         self.line(&line);
@@ -263,6 +285,28 @@ mod tests {
             text(&buf),
             "{\"dev\":\"net\",\"event\":\"tftp: RRQ \\\"start4.elf\\\"\"}\n\
              {\"dev\":\"usb\",\"op\":\"read\",\"lba\":2,\"blocks\":3,\"files\":[]}\n"
+        );
+    }
+
+    #[test]
+    fn otp_writes_say_what_the_row_held_before() {
+        let buf = Buf::default();
+        let mut log = IoLog::new(Box::new(buf.clone()), Format::Text);
+        log.otp_write(36, 0x1111_1111, 0);
+        drop(log);
+        assert_eq!(
+            text(&buf),
+            "otp  write row 36  = 0x11111111  (was 0x00000000)\n"
+        );
+
+        let buf = Buf::default();
+        let mut log = IoLog::new(Box::new(buf.clone()), Format::Jsonl);
+        log.otp_write(36, 0x1111_1111, 0);
+        drop(log);
+        assert_eq!(
+            text(&buf),
+            "{\"dev\":\"otp\",\"op\":\"write\",\"row\":\"36\",\
+             \"value\":\"0x11111111\",\"was\":\"0x00000000\"}\n"
         );
     }
 }

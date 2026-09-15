@@ -152,8 +152,9 @@ limit); with `CI` set the build gets every CPU.
 
 `--io-log <path>` (`-` for stderr) writes what crossed the peripherals, apart
 from the console: block runs on the SD card and the USB stick with the files
-they belong to, the OTP rows the firmware read, and what the network peer did
-([#35](https://github.com/valtzu/rpi-virt-fw/issues/35)). The file names come
+they belong to, the OTP rows the firmware read and programmed, and what the
+network peer did ([#35](https://github.com/valtzu/rpi-virt-fw/issues/35)). The
+file names come
 from the bench reading the image's partition table and FAT itself, so the
 firmware stays a black box:
 
@@ -166,6 +167,22 @@ otp  read  row 28  = 0x1aa2bb31
 sd   read  lba 0x72b4+8  p1:/overlays/vc4-kms-v3d-pi4.dtbo
 sd   read  lba 0x22ac+20459  p1:/kernel8.img
 net  dhcp: DISCOVER from 02:00:5e:00:53:01 (PXEClient) -> OFFER 192.0.2.100
+```
+
+A row the firmware programs shows as `otp  write row <n> = <new>  (was <old>)`.
+Programming works the way start4 drives the OTP block, key sequence first, and
+a fuse only ever goes from 0 to 1
+([#92](https://github.com/valtzu/rpi-virt-fw/issues/92)). The fuses last until
+the run ends: a reset keeps them, the next run starts from the model's own.
+To watch it, program two words of customer OTP (rows 36 and 37) the way
+`vcmailbox 0x00038021 16 16 0 2 ...` does on a Pi, and read them back, on the
+halt-kernel card (`KERNEL=halt scripts/make-sd.sh firmware/sd-halt.img`):
+
+```bash
+cargo run --release -- boot --eeprom firmware/pieeprom.bin \
+  --sd firmware/sd-halt.img --io-log - \
+  --mbox-property 0x00038021:16=0.2.0x11111111.0x22222222 \
+  --mbox-property 0x00030021:16=0.2
 ```
 
 `--io-log-format jsonl` writes one JSON object per line instead, for tools.

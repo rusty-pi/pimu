@@ -1,15 +1,28 @@
-//! The always-on config / OTP engine at `0x7E20_F000`.
+//! The always-on config / OTP engine at `0x7E20_F000`: the fuse array, one row
+//! at a time.
 //!
-//! The EEPROM bootloader's `getconfig(key)` path reads board identity through
-//! this block:
+//! Every stage drives it the same way. The command goes into `PARAM_A`
+//! (`+0x08`) as `cmd << 1`, `PARAM_B` (`+0x0C`) takes a second word (0 so
+//! far), and `PARAM_A |= 1` starts it; `STATUS` (`+0x10`) bit 1 says it is
+//! done. The row is in `KEY` (`+0x1C`), and `DATA` (`+0x18`) carries a word in
+//! either direction:
 //!
 //! ```text
-//!   write key            -> +0x1C
-//!   write 0, 0           -> +0x0C, +0x08     (transaction params)
-//!   set  +0x08 |= 1                          (trigger)
-//!   poll +0x10 bit 0                         (done)
-//!   read value           <- +0x18
+//!   read     KEY = row, command 0             DATA <- the row
+//!   enable   DATA = key word, command 2       0xf, 0x4, 0x8, 0xd in turn;
+//!                                             then STATUS bit 2 is set
+//!   program  DATA = bits, KEY = row, cmd 10   the row |= DATA
+//!   disable  command 3                        STATUS bit 2 clears
 //! ```
+//!
+//! The EEPROM bootloader's `getconfig(key)` and start4's `0x3ED3FAA2` read.
+//! start4's `0x3ED3FC52` (slot 10 of its OTP driver's table at `0x3EDF_B5F8`)
+//! programs: it sends the key from `.rdata` `0x3EDD_E6E4`, reads each row,
+//! programs `old | new` and disables programming again (#92). A fuse only goes
+//! from 0 to 1, so programming ORs, and without the key it does nothing.
+//! start4 carries a second path for another controller too (done on bit 0,
+//! the key in `+0x14`, one bit at a time), for when its flag at `gp+0x1564` is
+//! clear; that flag is set on every boot the model runs (see `hvs.rs`).
 //!
 //! The same block also takes some clock-mux pokes at `+0x04` (values 3/0/2)
 //! which we just absorb. Anything we don't recognise keeps the old "always
@@ -58,12 +71,23 @@ use crate::bus::{BusResult, MmioDevice, Width};
 // completion (the poll at `0x8000760e` is `btest [+0x10], #1`).
 use crate::spec::otp::{
     BOOTMODE as REG_BOOTMODE, CLKMUX as REG_CLKMUX, DATA as REG_DATA, KEY as REG_KEY,
-    PARAM_A as REG_PARAM_A, PARAM_A_GO_MASK as GO, PARAM_B, STATUS as REG_STATUS,
-    STATUS_DONE_MASK as DONE,
+    PARAM_A as REG_PARAM_A, PARAM_A_CMD_MASK as CMD, PARAM_A_CMD_SHIFT as CMD_SHIFT,
+    PARAM_A_GO_MASK as GO, PARAM_B, STATUS as REG_STATUS, STATUS_DONE_MASK as DONE,
+    STATUS_PROG_ENABLED_MASK as PROG_ENABLED,
 };
 use crate::spec::Coverage;
 
-/// `PARAM_B` and `CLKMUX` are storage; the rest is the row-read transaction.
+/// The commands in `PARAM_A.CMD` (start4's OTP driver, #92).
+const CMD_READ: u32 = 0;
+const CMD_PROG_ENABLE: u32 = 2;
+const CMD_PROG_DISABLE: u32 = 3;
+const CMD_PROGRAM: u32 = 10;
+
+/// What start4 puts in `DATA` for its four `CMD_PROG_ENABLE`s, one word each,
+/// before it waits for `STATUS.PROG_ENABLED` (`.rdata` `0x3EDD_E6E4`).
+const PROG_ENABLE_KEY: [u32; 4] = [0xF, 0x4, 0x8, 0xD];
+
+/// `PARAM_B` and `CLKMUX` are storage; the rest is the command interface.
 pub const COVERAGE: Coverage = Coverage {
     block: "otp",
     decoded: &[
@@ -144,14 +168,20 @@ pub(crate) const BOARD_IDENTITY: [u32; 4] = [0x8AA9_6D38, 0x9111_243F, 0x38E4_E4
 
 pub struct ConfigOtp {
     storage: BTreeMap<u32, u32>,
-    /// Key latched via `+0x1C`, resolved on the next triggered transaction.
+    /// Row latched via `+0x1C`, for the next read or program command.
     key: u32,
-    /// Result presented at `+0x18`.
+    /// `+0x18`: what the last read found, or what the firmware wrote for the
+    /// next enable or program command.
     data: u32,
     done: bool,
+    /// How many words of [`PROG_ENABLE_KEY`] came in, in order.
+    unlock: usize,
+    /// `STATUS.PROG_ENABLED`: the key went in, and program commands fuse.
+    prog_enabled: bool,
     /// key -> config value.
     table: BTreeMap<u32, u32>,
-    /// Rows read go to the I/O log too, when there is one (#35).
+    /// Rows read and programmed go to the I/O log too, when there is one
+    /// (#35).
     pub io: Option<crate::iolog::IoLogRef>,
 }
 
@@ -291,6 +321,8 @@ impl ConfigOtp {
             key: 0,
             data: 0,
             done: false,
+            unlock: 0,
+            prog_enabled: false,
             table,
             io: None,
         }
@@ -310,7 +342,74 @@ impl ConfigOtp {
         self.table.get(&key).copied().unwrap_or(0)
     }
 
-    fn resolve(&mut self) {
+    /// The fuse array as it stands, rows the firmware programmed included. A
+    /// reset does not blank a fuse, so `boot` hands this to the machine of
+    /// the next boot (#92).
+    pub fn fuses(&self) -> &BTreeMap<u32, u32> {
+        &self.table
+    }
+
+    /// Take over an earlier machine's [`ConfigOtp::fuses`].
+    pub fn set_fuses(&mut self, fuses: BTreeMap<u32, u32>) {
+        self.table = fuses;
+    }
+
+    /// `PARAM_A.GO`: run `cmd`. The model answers at once, so the command is
+    /// done before the firmware first polls.
+    fn command(&mut self, cmd: u32) {
+        match cmd {
+            CMD_READ => self.read_row(),
+            CMD_PROG_ENABLE => {
+                // What the hardware does with a wrong word is not known;
+                // starting the sequence over is the guess.
+                self.unlock = if self.data == PROG_ENABLE_KEY[self.unlock] {
+                    self.unlock + 1
+                } else {
+                    usize::from(self.data == PROG_ENABLE_KEY[0])
+                };
+                if self.unlock == PROG_ENABLE_KEY.len() {
+                    self.prog_enabled = true;
+                    self.unlock = 0;
+                }
+            }
+            CMD_PROG_DISABLE => {
+                self.prog_enabled = false;
+                self.unlock = 0;
+            }
+            CMD_PROGRAM => self.program_row(),
+            _ => {
+                if std::env::var_os("RVF_DBG_OTP").is_some() {
+                    eprintln!("[otp] command {cmd} (unmodelled) on row {}", self.key);
+                }
+            }
+        }
+        self.done = true;
+    }
+
+    /// `CMD_PROGRAM`: fuse the bits of `DATA` into row `KEY`. A fuse only
+    /// goes from 0 to 1, so this ORs; without the key nothing changes.
+    fn program_row(&mut self) {
+        let (row, was) = (self.key, self.row(self.key));
+        let dbg = std::env::var_os("RVF_DBG_OTP").is_some();
+        if !self.prog_enabled {
+            if dbg {
+                eprintln!("[otp] program row {row} ignored: programming is not enabled");
+            }
+            return;
+        }
+        let value = was | self.data;
+        if value != was {
+            self.table.insert(row, value);
+        }
+        if let Some(io) = &self.io {
+            io.borrow_mut().otp_write(row, value, was);
+        }
+        if dbg {
+            eprintln!("[otp] program row {row} (0x{row:x}): 0x{was:08x} -> 0x{value:08x}");
+        }
+    }
+
+    fn read_row(&mut self) {
         self.data = self.table.get(&self.key).copied().unwrap_or(0);
         if let Some(io) = &self.io {
             io.borrow_mut()
@@ -329,7 +428,6 @@ impl ConfigOtp {
                 }
             );
         }
-        self.done = true;
     }
 }
 
@@ -341,11 +439,8 @@ impl MmioDevice for ConfigOtp {
     fn read(&mut self, offset: u32, _width: Width) -> BusResult<u32> {
         Ok(match offset & !3 {
             REG_STATUS => {
-                if self.done {
-                    DONE
-                } else {
-                    0
-                }
+                (if self.done { DONE } else { 0 })
+                    | if self.prog_enabled { PROG_ENABLED } else { 0 }
             }
             REG_BOOTMODE => self.row(BOOTMODE_ROW),
             REG_DATA => self.data,
@@ -363,9 +458,10 @@ impl MmioDevice for ConfigOtp {
             REG_PARAM_A => {
                 self.storage.insert(REG_PARAM_A, value);
                 if value & GO != 0 {
-                    self.resolve();
+                    self.command((value & CMD) >> CMD_SHIFT);
                 }
             }
+            REG_DATA => self.data = value,
             REG_STATUS => {
                 // write-1-to-clear the done latch
                 if value & DONE != 0 {
@@ -423,5 +519,86 @@ mod tests {
         assert_eq!(otp.read(REG_BOOTMODE, Width::Word).unwrap(), 0x0000_08B0);
         otp.set(BOOTMODE_ROW, 0x1234);
         assert_eq!(otp.read(REG_BOOTMODE, Width::Word).unwrap(), 0x1234);
+    }
+
+    /// One command, the way start4's `0x3ED3F24C` issues it.
+    fn command(otp: &mut ConfigOtp, cmd: u32) {
+        otp.write(REG_PARAM_A, Width::Word, cmd << CMD_SHIFT)
+            .unwrap();
+        otp.write(PARAM_B, Width::Word, 0).unwrap();
+        otp.write(REG_PARAM_A, Width::Word, cmd << CMD_SHIFT | GO)
+            .unwrap();
+        assert_ne!(otp.read(REG_STATUS, Width::Word).unwrap() & DONE, 0);
+    }
+
+    fn send_key(otp: &mut ConfigOtp, key: [u32; 4]) {
+        for word in key {
+            otp.write(REG_DATA, Width::Word, word).unwrap();
+            command(otp, CMD_PROG_ENABLE);
+        }
+    }
+
+    fn program(otp: &mut ConfigOtp, row: u32, bits: u32) {
+        otp.write(REG_DATA, Width::Word, bits).unwrap();
+        otp.write(REG_KEY, Width::Word, row).unwrap();
+        command(otp, CMD_PROGRAM);
+    }
+
+    fn read_row(otp: &mut ConfigOtp, row: u32) -> u32 {
+        otp.write(REG_KEY, Width::Word, row).unwrap();
+        command(otp, CMD_READ);
+        otp.read(REG_DATA, Width::Word).unwrap()
+    }
+
+    fn prog_enabled(otp: &mut ConfigOtp) -> bool {
+        otp.read(REG_STATUS, Width::Word).unwrap() & PROG_ENABLED != 0
+    }
+
+    /// start4's program sequence (`0x3ED3FC52`): the key, a program command
+    /// per row, then disable. A fuse, once set, stays set (#92).
+    #[test]
+    fn programming_ors_bits_into_rows_until_disabled() {
+        let mut otp = ConfigOtp::new();
+        send_key(&mut otp, PROG_ENABLE_KEY);
+        assert!(prog_enabled(&mut otp));
+        program(&mut otp, 36, 0x0000_00F0);
+        program(&mut otp, 36, 0x0000_000F);
+        program(&mut otp, 36, 0);
+        assert_eq!(read_row(&mut otp, 36), 0x0000_00FF);
+        command(&mut otp, CMD_PROG_DISABLE);
+        assert!(!prog_enabled(&mut otp));
+        program(&mut otp, 37, 1);
+        assert_eq!(read_row(&mut otp, 37), 0);
+        assert_eq!(otp.fuses().get(&36), Some(&0x0000_00FF));
+    }
+
+    /// Without the whole key, in order, program commands leave the fuses
+    /// alone.
+    #[test]
+    fn programming_needs_the_key_in_order() {
+        let mut otp = ConfigOtp::new();
+        program(&mut otp, 36, 1);
+        send_key(&mut otp, [0xF, 0x4, 0xD, 0x8]);
+        assert!(!prog_enabled(&mut otp));
+        program(&mut otp, 36, 1);
+        assert_eq!(otp.row(36), 0);
+        // A stray word, then the key: the sequence starts over and takes.
+        send_key(&mut otp, [0x4, 0xF, 0x4, 0x8]);
+        assert!(!prog_enabled(&mut otp));
+        otp.write(REG_DATA, Width::Word, 0xD).unwrap();
+        command(&mut otp, CMD_PROG_ENABLE);
+        assert!(prog_enabled(&mut otp));
+    }
+
+    /// Only a read loads `DATA`; the other commands leave what the firmware
+    /// wrote there.
+    #[test]
+    fn only_a_read_loads_data() {
+        let mut otp = ConfigOtp::new();
+        assert_eq!(read_row(&mut otp, 28), 0x1AA2_BB31);
+        otp.write(REG_DATA, Width::Word, PROG_ENABLE_KEY[0])
+            .unwrap();
+        command(&mut otp, CMD_PROG_ENABLE);
+        assert_eq!(otp.read(REG_DATA, Width::Word).unwrap(), PROG_ENABLE_KEY[0]);
     }
 }
