@@ -21,9 +21,11 @@ Sources:
 | `0x01C` | [`RSTC`](#rstc) | rw | 32 | 1, best high |
 | `0x020` | [`RSTS`](#rsts) | rw | 32 | 2, best high |
 | `0x024` | [`WDOG`](#wdog) | rw | 32 | 1, best high |
-| `0x02C` | [`PADS2`](#pads2) | rw | 32 | 3, best high |
+| `0x028` | [`PADS0`](#pads0) | rw | 32 | 2, best high |
+| `0x02C` | [`PADS2`](#pads2) | rw | 32 | 4, best high |
 | `0x030` | [`PADS3`](#pads3) | rw | 32 | 3, best high |
 | `0x034` | [`PADS4`](#pads4) | rw | 32 | 3, best high |
+| `0x038` | [`PADS5`](#pads5) | rw | 32 | 2, best high |
 | `0x040`–`0x05C` (8 × 0x4) | [`DOMAIN_STATUS`](#domain_status) | rw | 32 | 1, best low |
 | `0x074` | [`SPAREW`](#sparew) | rw | 32 | 2, best high |
 | `0x07C` | [`AVS_RSTDR`](#avs_rstdr) | rw | 32 | 2, best high |
@@ -99,26 +101,50 @@ Sources:
 
 - linux (high): bcm2835_wdt.c: PM_PASSWORD
 
+## `PADS0`
+
+Offset `0x028` · access `rw` · 32 bits
+
+Linux's first pad register. start4's pad writer can address it (index 2), with the same doubled drive code as PADS2 and PADS3; the pinned firmware does not write it on the Pi 4B.
+
+Sources:
+
+- linux (high): bcm2835-power.c: PM_PADS0
+- decompile (high): pad writer 0x3ED55F20: switch at 0x3ED55F6E, index 2 writes 0x7E100028 at 0x3ED55F7E
+
 ## `PADS2`
 
-Offset `0x02C` · access `rw` · 32 bits
+Offset `0x02C` · access `rw` · 32 bits · reset `0x1B`
 
-Pad control for GPIO bank 0 (GPIO 0-27). start4 writes 0x19 with each pin it sets up from dt-blob.bin, and ends on 0x1F. Bits 3 and 4 are set in every value it writes.
+Pad control for GPIO 0-27. start4 applies dt-blob.bin's pin_config last pin first; for each pin it sets the function if it differs, drives an output to its startup level, writes the pull, then rewrites PADS2, PADS3 and PADS4 from the drive strengths the pins so far have named. On the Pi 4B this register stays 0x19 until GPIO 15 (8 mA) and ends on 0x1F.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
-| 2:0 | `DRIVE` | rw | Drive strength, in 2 mA steps from 2 mA. |
+| 2:0 | `DRIVE` | rw | Drive strength: 0 is 2 mA up to 7 for 16 mA, with the current halved on 4-series boards. start4's pad writer writes min(2n + 1, 7) to PADS0, PADS2 and PADS3 when the flag at gp+5476 is set, and n unchanged to PADS4 and PADS5. With n = mA / 2 - 1 of dt-blob.bin's drive_strength_mA, the Pi 4B's numbers all fit: 8 mA and 16 mA give 7 in PADS2 / PADS3, 14 mA gives 6 in PADS4, and a bank no pin names a strength for gets 1. |
+| 3 | `HYST` | rw | Input hysteresis on. start4 sets it in every value it writes. |
+| 4 | `SLEW` | rw | 1 turns slew rate limiting off. start4 sets it in every value it writes. |
 | 31:24 | `PASSWD` | rw | Must be 0x5A. |
 
 Sources:
 
 - linux (high): drivers/pmdomain/bcm/bcm2835-power.c: PM_PADS2
-- trace (high): start4 0x3ED55F88, interleaved with the GPIO function and pull writes of its pin configuration
-- inferred (medium): bank: PADS3 and PADS4 end on the drive dt-blob.bin gives GPIO 40/41 and GPIO 46, which leaves bank 0 here
+- datasheet (high): raspberrypi/documentation b01a5c1, documentation/asciidoc/computers/raspberry-pi/gpio-pad-controls.adoc: 0x7E10002C is the pads of GPIO 0-27; PASSWRD, SLEW, HYST, DRIVE and their reset values
+- trace (high): start4 0x3ED55F88, after each pin's function (0x3ECC9548 / 0x3ECC9562), level (0x3ECC8018) and pull (0x3ECC8414) writes: GPIO 46, 45 .. 40, 39 .. 34, 15, 14; again for GPIO 30 and 31 just before the board clock set-up
+- decompile (high): pad writer 0x3ED55F20: PASSWD | (r2 & 1) << 4 | (r3 & 1) << 3 | drive, index 3 written at 0x3ED55F88
 
 `DRIVE` sources:
 
-- inferred (medium): the Pi 4B pin_config asks 16 mA of GPIO 40/41 (PADS3 ends on 7) and 14 mA of GPIO 46 (PADS4 ends on 6)
+- datasheet (high): raspberrypi/documentation b01a5c1, documentation/asciidoc/computers/raspberry-pi/gpio-pad-controls.adoc: drive strength list, and 'On 4-series devices, the current level is half the value shown'
+- decompile (high): 0x3ED55F2E..0x3ED55F44: for index 2..4, r4 = min(2 * r4 + 1, 7)
+- inferred (medium): n = mA / 2 - 1: fitted to the trace against pins_4b (GPIO 15 at 8 mA, 40/41 at 16 mA, 46 at 14 mA)
+
+`HYST` sources:
+
+- datasheet (high): raspberrypi/documentation b01a5c1, documentation/asciidoc/computers/raspberry-pi/gpio-pad-controls.adoc: HYST
+
+`SLEW` sources:
+
+- datasheet (high): raspberrypi/documentation b01a5c1, documentation/asciidoc/computers/raspberry-pi/gpio-pad-controls.adoc: SLEW, 0 = slew rate limited, 1 = not limited
 
 `PASSWD` sources:
 
@@ -126,27 +152,38 @@ Sources:
 
 ## `PADS3`
 
-Offset `0x030` · access `rw` · 32 bits
+Offset `0x030` · access `rw` · 32 bits · reset `0x1B`
 
-Pad control for GPIO bank 1 (GPIO 28-45), laid out as PADS2. start4 writes 0x19 with each pin it sets up and ends on 0x1F, the 16 mA dt-blob.bin gives the audio PWM pins.
+Pad control for GPIO 28-45, laid out as PADS2. On the Pi 4B start4 writes 0x19 until GPIO 41 (16 mA) and 0x1F from then on.
 
 Sources:
 
 - linux (high): bcm2835-power.c: PM_PADS3
-- trace (high): start4 0x3ED55F92
-- inferred (medium): dt-blob.dts pins_4b: pin@p40 / pin@p41 drive_strength_mA = <16>
+- datasheet (high): raspberrypi/documentation b01a5c1, documentation/asciidoc/computers/raspberry-pi/gpio-pad-controls.adoc: 0x7E100030 is the pads of GPIO 28-45
+- trace (high): start4 0x3ED55F92, with PADS2
 
 ## `PADS4`
 
-Offset `0x034` · access `rw` · 32 bits
+Offset `0x034` · access `rw` · 32 bits · reset `0x1B`
 
-Pad control for GPIO bank 2 (GPIO 46 up), laid out as PADS2. start4 writes 0x1E, the 14 mA dt-blob.bin asks of this bank.
+Pad control for GPIO 46 up, laid out as PADS2 but with the drive code written as it is. On the Pi 4B start4 writes 0x1E from the first pin on, the 14 mA pins_4b gives GPIO 46 ('Dummy pin for HSTL drive on bank 2').
 
 Sources:
 
 - linux (high): bcm2835-power.c: PM_PADS4
-- trace (high): start4 0x3ED55F9C
-- inferred (medium): dt-blob.dts pins_4b: pin@p46 drive_strength_mA = <14>, 'Dummy pin for HSTL drive on bank 2'
+- datasheet (high): raspberrypi/documentation b01a5c1, documentation/asciidoc/computers/raspberry-pi/gpio-pad-controls.adoc: 0x7E100034 is the pads of GPIO 46-53
+- trace (high): start4 0x3ED55F9C, with PADS2
+
+## `PADS5`
+
+Offset `0x038` · access `rw` · 32 bits
+
+Linux's next pad register. start4's pad writer can address it (index 6) and keeps its bit 6 when it does; the pinned firmware does not write it on the Pi 4B.
+
+Sources:
+
+- linux (high): bcm2835-power.c: PM_PADS5
+- decompile (high): pad writer 0x3ED55F20: index 6 reads 0x7E100038, keeps bit 6 and writes at 0x3ED55FAE
 
 ## `DOMAIN_STATUS`
 
