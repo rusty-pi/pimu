@@ -80,7 +80,7 @@ offset = 0x05
 width  = 8
 access = "rw"
 reset  = 0x00
-notes  = "1 = drive high. start4 writes the whole register each time, each write in a bus session of its own: 0x40 (SD_PWR_ON) in its set-up, then twice more, the two pins_4b nodes that name a startup state being GPIO 134 and 130; after ~200 ms WL_ON (bit 1) and after another ~200 ms BT_ON (bit 0); bit 5 (the camera's power) around its camera detection. Once it has the command line it clears BT_ON if the device tree's bt node is disabled, then WL_ON if mmcnr is."
+notes  = "1 = drive high. start4 writes the whole register each time, each write in a bus session of its own: 0x40 (SD_PWR_ON) in its set-up, then twice more, the two pins_4b nodes that name a startup state being GPIO 134 and 130; after ~200 ms WL_ON (bit 1) and after another ~200 ms BT_ON (bit 0); with camera_auto_detect, bit 5 (the camera's power) cleared, set ~5 ms later, and cleared twice after the sensor probes. Once it has the command line it clears BT_ON if the device tree's bt node is disabled, then WL_ON if mmcnr is."
 
 [[register.source]]
 kind       = "datasheet"
