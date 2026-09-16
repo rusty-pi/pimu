@@ -67,7 +67,7 @@ Sources:
 `DONE` sources:
 
 - datasheet (high): BCM2711 ARM Peripherals, SPI: CS.DONE
-- decompile (high): 0x3ED77E00: do {} while ((CS & 0x10000) == 0) after its byte loop, read at 0x3ED77EE8
+- decompile (high): 0x3ED77E00: `do {} while ((CS & 0x10000) == 0)` after its byte loop, read at 0x3ED77EE8
 
 `RXD` sources:
 
@@ -99,12 +99,12 @@ Sources:
 
 Offset `0x008` · access `rw` · 32 bits
 
-Clock divider. start4 writes 63 before every transfer: max(ceil(source / 8 MHz), 2), its flash configuration asking for 8 MHz from a source of about 500 MHz.
+Clock divider. start4 writes 63 before every transfer: `max(ceil(source / 8 MHz), 2)`, its flash configuration asking for 8 MHz from a source of about 500 MHz.
 
 Sources:
 
 - datasheet (high): BCM2711 ARM Peripherals, SPI: CLK
-- decompile (high): 0x3ED77E00: 64-bit ceil(rate / speed) then max(.., 2); speed 8000000 from the configuration at DAT_0edfe1c8
+- decompile (high): 0x3ED77E00: 64-bit `ceil(rate / speed)` then `max(.., 2)`; speed 8000000 from the configuration at DAT_0edfe1c8
 - trace (high): start4 0x3ED77E74 writes 0x3F
 
 ## `DLEN`
