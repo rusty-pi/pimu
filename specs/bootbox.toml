@@ -152,7 +152,7 @@ confidence = "medium"
 name   = "DOORBELL_B"
 offset = 0x2000
 access = "rw"
-notes  = "Boot-info doorbell: the bootloader stages a `BSTE` / `BVER` block at `0xC0040000`, sets bit 1 and spins until it clears."
+notes  = "Boot-info doorbell: the bootloader stages a `BSTE` / `BVER` block at `0xC0040000`, sets bit 1 and spins until it clears. start4 tests bit 0 as it starts (`0x3EC7111A`), and its cache-flush routine sets bit 1 for its flag bit 0 without waiting."
 
 [[register.source]]
 kind       = "decompile"
@@ -170,15 +170,97 @@ ref        = "`0x80009594` spins until bit 1 reads back clear"
 confidence = "high"
 
 [[register]]
+name   = "REG_2004"
+offset = 0x2004
+access = "rw"
+notes  = "start4 writes `0x1139` here as it starts, and the same to `REG_2084`. Meaning unknown."
+
+[[register.source]]
+kind       = "trace"
+ref        = "pinned start4 entry: `0x00001139` at `0x3EC711A4`"
+confidence = "high"
+
+[[register]]
+name   = "REG_2008"
+offset = 0x2008
+access = "rw"
+notes  = "start4 writes `0` here as it starts, and the same to `REG_2088`. With `REG_200C` it may be a range, like the pair after `DOORBELL_C`; a guess."
+
+[[register.source]]
+kind       = "trace"
+ref        = "pinned start4 entry: `0x00000000` at `0x3EC711B0`"
+confidence = "high"
+
+[[register]]
+name   = "REG_200C"
+offset = 0x200C
+access = "rw"
+notes  = "start4 writes `0xFFFFFFFF` here as it starts, and the same to `REG_208C`. Meaning unknown."
+
+[[register.source]]
+kind       = "trace"
+ref        = "pinned start4 entry: `0xFFFFFFFF` at `0x3EC711B6`"
+confidence = "high"
+
+[[register]]
+name   = "REG_2080"
+offset = 0x2080
+access = "rw"
+notes  = "Set up like `DOORBELL_B`: start4 tests its bit 0 as it starts, and its cache-flush routine sets bit 1 here for flag bit 1, where `DOORBELL_B` takes flag bit 0."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "start4 entry `0x3EC71134` tests bit 0; cache-flush routine `0x3EC7153E`..`0x3EC71550` sets bit 1 of `0x7EE02000` for flag bit 0 and of `0x7EE02080` for flag bit 1"
+confidence = "high"
+
+[[register]]
+name   = "REG_2084"
+offset = 0x2084
+access = "rw"
+notes  = "start4 writes `0x1139` here as it starts, as to `REG_2004`."
+
+[[register.source]]
+kind       = "trace"
+ref        = "pinned start4 entry: `0x00001139` at `0x3EC711A8`"
+confidence = "high"
+
+[[register]]
+name   = "REG_2088"
+offset = 0x2088
+access = "rw"
+notes  = "start4 writes `0` here as it starts, as to `REG_2008`."
+
+[[register.source]]
+kind       = "trace"
+ref        = "pinned start4 entry: `0x00000000` at `0x3EC711B2`"
+confidence = "high"
+
+[[register]]
+name   = "REG_208C"
+offset = 0x208C
+access = "rw"
+notes  = "start4 writes `0xFFFFFFFF` here as it starts, as to `REG_200C`."
+
+[[register.source]]
+kind       = "trace"
+ref        = "pinned start4 entry: `0xFFFFFFFF` at `0x3EC711B8`"
+confidence = "high"
+
+[[register]]
 name   = "DOORBELL_C"
 offset = 0x2100
 access = "rw"
-notes  = "Doorbell rung by the relocated stub, like `DOORBELL_A`."
+notes  = "Doorbell rung by the relocated stub, like `DOORBELL_A`. start4 tests bit 0 as it starts (`0x3EC71168`). Its cache-flush routine (`0x3EC714FC`, and a copy at `0x3EC715C4`) takes a first address, a length and flags: it writes the first and last address to `DOORBELL_C_START` / `DOORBELL_C_SIZE` and to `L2_FLUSH_START` / `L2_FLUSH_END`, sets bit 1 of `DOORBELL_B` / `REG_2080` for flag bits 0 / 1, sets bits 1 / 2 here for flag bits 2 / 3 and waits for both to read clear, then for flag bit 4 writes `(L2_CTRL & ~0x18) | 4` and waits for bit 2 to clear. Just before the ARM starts it runs over `0x00000000`..`0x2EFFFFFF`, which holds the kernel and the device tree, with flags `0x1C`: `6` here, `0x430044` to `L2_CTRL`."
 
 [[register.source]]
 kind       = "decompile"
 ref        = "stub at `0x60010000` writes a trigger to `0x7EE02100` and polls it"
 confidence = "medium"
+
+[[register.source]]
+kind       = "trace"
+ref        = "pinned start4 before the ARM starts: `DOORBELL_C_START` `0` at `0x3EC71516`, `DOORBELL_C_SIZE` `0x2EFFFFFF` at `0x3EC71518`, the same to `L2_FLUSH_START` / `L2_FLUSH_END` at `0x3EC71526` / `0x3EC71528`, `6` here at `0x3EC71580` polled at `0x3EC71582`, `L2_CTRL` `0x430044` at `0x3EC715A0` polled at `0x3EC715A2`"
+confidence = "high"
 
 [[register.field]]
 name  = "CONTROL"
@@ -191,12 +273,34 @@ ref        = "the stub spins until the trigger reads back clear"
 confidence = "medium"
 
 [[register]]
+name   = "DOORBELL_C_START"
+offset = 0x2104
+access = "rw"
+notes  = "First address of the range a `DOORBELL_C` command acts on. start4's cache-flush routine writes it right before `DOORBELL_C_SIZE`."
+
+[[register.source]]
+kind       = "trace"
+ref        = "pinned start4: `0x00000000` at `0x3EC71516` before the ARM starts; ranges such as `0xBEF27640` at `0x3EC715DE` all through the boot"
+confidence = "high"
+
+[[register]]
 name   = "DOORBELL_C_SIZE"
 offset = 0x2108
 access = "rw"
-notes  = "Size parameter for `DOORBELL_C`."
+notes  = "Taken for a size parameter for `DOORBELL_C`; start4 writes the last address of the range here (first address + length - 1), as it does to `L2_FLUSH_END`."
 
 [[register.source]]
 kind       = "decompile"
 ref        = "stub at `0x60010000` pokes `+0x08` before the trigger"
 confidence = "low"
+
+[[register]]
+name   = "REG_210C"
+offset = 0x210C
+access = "rw"
+notes  = "start4 writes `0x02220222` here as it starts, between `REG_2084` and `REG_2008`. Meaning unknown."
+
+[[register.source]]
+kind       = "trace"
+ref        = "pinned start4 entry: `0x02220222` at `0x3EC711AC`"
+confidence = "high"

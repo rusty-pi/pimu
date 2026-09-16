@@ -26,8 +26,17 @@ Sources:
 | `0x1084` | [`IRQ_SOURCE`](#irq_source) | rw | 32 | 1, best medium |
 | `0x1088` | [`IRQ_PAYLOAD`](#irq_payload) | rw | 32 | 1, best medium |
 | `0x2000` | [`DOORBELL_B`](#doorbell_b) | rw | 32 | 1, best high |
-| `0x2100` | [`DOORBELL_C`](#doorbell_c) | rw | 32 | 1, best medium |
+| `0x2004` | [`REG_2004`](#reg_2004) | rw | 32 | 1, best high |
+| `0x2008` | [`REG_2008`](#reg_2008) | rw | 32 | 1, best high |
+| `0x200C` | [`REG_200C`](#reg_200c) | rw | 32 | 1, best high |
+| `0x2080` | [`REG_2080`](#reg_2080) | rw | 32 | 1, best high |
+| `0x2084` | [`REG_2084`](#reg_2084) | rw | 32 | 1, best high |
+| `0x2088` | [`REG_2088`](#reg_2088) | rw | 32 | 1, best high |
+| `0x208C` | [`REG_208C`](#reg_208c) | rw | 32 | 1, best high |
+| `0x2100` | [`DOORBELL_C`](#doorbell_c) | rw | 32 | 2, best high |
+| `0x2104` | [`DOORBELL_C_START`](#doorbell_c_start) | rw | 32 | 1, best high |
 | `0x2108` | [`DOORBELL_C_SIZE`](#doorbell_c_size) | rw | 32 | 1, best low |
+| `0x210C` | [`REG_210C`](#reg_210c) | rw | 32 | 1, best high |
 
 ## `REG_03C`
 
@@ -134,7 +143,7 @@ Sources:
 
 Offset `0x2000` · access `rw` · 32 bits
 
-Boot-info doorbell: the bootloader stages a `BSTE` / `BVER` block at `0xC0040000`, sets bit 1 and spins until it clears.
+Boot-info doorbell: the bootloader stages a `BSTE` / `BVER` block at `0xC0040000`, sets bit 1 and spins until it clears. start4 tests bit 0 as it starts (`0x3EC7111A`), and its cache-flush routine sets bit 1 for its flag bit 0 without waiting.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -148,11 +157,81 @@ Sources:
 
 - decompile (high): `0x80009594` spins until bit 1 reads back clear
 
+## `REG_2004`
+
+Offset `0x2004` · access `rw` · 32 bits
+
+start4 writes `0x1139` here as it starts, and the same to `REG_2084`. Meaning unknown.
+
+Sources:
+
+- trace (high): pinned start4 entry: `0x00001139` at `0x3EC711A4`
+
+## `REG_2008`
+
+Offset `0x2008` · access `rw` · 32 bits
+
+start4 writes `0` here as it starts, and the same to `REG_2088`. With `REG_200C` it may be a range, like the pair after `DOORBELL_C`; a guess.
+
+Sources:
+
+- trace (high): pinned start4 entry: `0x00000000` at `0x3EC711B0`
+
+## `REG_200C`
+
+Offset `0x200C` · access `rw` · 32 bits
+
+start4 writes `0xFFFFFFFF` here as it starts, and the same to `REG_208C`. Meaning unknown.
+
+Sources:
+
+- trace (high): pinned start4 entry: `0xFFFFFFFF` at `0x3EC711B6`
+
+## `REG_2080`
+
+Offset `0x2080` · access `rw` · 32 bits
+
+Set up like `DOORBELL_B`: start4 tests its bit 0 as it starts, and its cache-flush routine sets bit 1 here for flag bit 1, where `DOORBELL_B` takes flag bit 0.
+
+Sources:
+
+- decompile (high): start4 entry `0x3EC71134` tests bit 0; cache-flush routine `0x3EC7153E`..`0x3EC71550` sets bit 1 of `0x7EE02000` for flag bit 0 and of `0x7EE02080` for flag bit 1
+
+## `REG_2084`
+
+Offset `0x2084` · access `rw` · 32 bits
+
+start4 writes `0x1139` here as it starts, as to `REG_2004`.
+
+Sources:
+
+- trace (high): pinned start4 entry: `0x00001139` at `0x3EC711A8`
+
+## `REG_2088`
+
+Offset `0x2088` · access `rw` · 32 bits
+
+start4 writes `0` here as it starts, as to `REG_2008`.
+
+Sources:
+
+- trace (high): pinned start4 entry: `0x00000000` at `0x3EC711B2`
+
+## `REG_208C`
+
+Offset `0x208C` · access `rw` · 32 bits
+
+start4 writes `0xFFFFFFFF` here as it starts, as to `REG_200C`.
+
+Sources:
+
+- trace (high): pinned start4 entry: `0xFFFFFFFF` at `0x3EC711B8`
+
 ## `DOORBELL_C`
 
 Offset `0x2100` · access `rw` · 32 bits
 
-Doorbell rung by the relocated stub, like `DOORBELL_A`.
+Doorbell rung by the relocated stub, like `DOORBELL_A`. start4 tests bit 0 as it starts (`0x3EC71168`). Its cache-flush routine (`0x3EC714FC`, and a copy at `0x3EC715C4`) takes a first address, a length and flags: it writes the first and last address to `DOORBELL_C_START` / `DOORBELL_C_SIZE` and to `L2_FLUSH_START` / `L2_FLUSH_END`, sets bit 1 of `DOORBELL_B` / `REG_2080` for flag bits 0 / 1, sets bits 1 / 2 here for flag bits 2 / 3 and waits for both to read clear, then for flag bit 4 writes `(L2_CTRL & ~0x18) | 4` and waits for bit 2 to clear. Just before the ARM starts it runs over `0x00000000`..`0x2EFFFFFF`, which holds the kernel and the device tree, with flags `0x1C`: `6` here, `0x430044` to `L2_CTRL`.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -161,17 +240,38 @@ Doorbell rung by the relocated stub, like `DOORBELL_A`.
 Sources:
 
 - decompile (medium): stub at `0x60010000` writes a trigger to `0x7EE02100` and polls it
+- trace (high): pinned start4 before the ARM starts: `DOORBELL_C_START` `0` at `0x3EC71516`, `DOORBELL_C_SIZE` `0x2EFFFFFF` at `0x3EC71518`, the same to `L2_FLUSH_START` / `L2_FLUSH_END` at `0x3EC71526` / `0x3EC71528`, `6` here at `0x3EC71580` polled at `0x3EC71582`, `L2_CTRL` `0x430044` at `0x3EC715A0` polled at `0x3EC715A2`
 
 `CONTROL` sources:
 
 - decompile (medium): the stub spins until the trigger reads back clear
 
+## `DOORBELL_C_START`
+
+Offset `0x2104` · access `rw` · 32 bits
+
+First address of the range a `DOORBELL_C` command acts on. start4's cache-flush routine writes it right before `DOORBELL_C_SIZE`.
+
+Sources:
+
+- trace (high): pinned start4: `0x00000000` at `0x3EC71516` before the ARM starts; ranges such as `0xBEF27640` at `0x3EC715DE` all through the boot
+
 ## `DOORBELL_C_SIZE`
 
 Offset `0x2108` · access `rw` · 32 bits
 
-Size parameter for `DOORBELL_C`.
+Taken for a size parameter for `DOORBELL_C`; start4 writes the last address of the range here (first address + length - 1), as it does to `L2_FLUSH_END`.
 
 Sources:
 
 - decompile (low): stub at `0x60010000` pokes `+0x08` before the trigger
+
+## `REG_210C`
+
+Offset `0x210C` · access `rw` · 32 bits
+
+start4 writes `0x02220222` here as it starts, between `REG_2084` and `REG_2008`. Meaning unknown.
+
+Sources:
+
+- trace (high): pinned start4 entry: `0x02220222` at `0x3EC711AC`
