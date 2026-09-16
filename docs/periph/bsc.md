@@ -30,9 +30,9 @@ Bus 8: the PMICs at 0x1B / 0x1E and the FXL6408 at 0x43.
 | `0x008` | [`DLEN`](#dlen) | rw | 32 | 1, best high |
 | `0x00C` | [`A`](#a) | rw | 32 | 1, best high |
 | `0x010` | [`FIFO`](#fifo) | rw | 32 | 1, best high |
-| `0x014` | [`DIV`](#div) | rw | 32 | 2, best high |
+| `0x014` | [`DIV`](#div) | rw | 32 | 3, best high |
 | `0x018` | [`DEL`](#del) | rw | 32 | 1, best high |
-| `0x01C` | [`CLKT`](#clkt) | rw | 32 | 1, best high |
+| `0x01C` | [`CLKT`](#clkt) | rw | 32 | 2, best high |
 
 ## `C`
 
@@ -164,18 +164,19 @@ Sources:
 
 Offset `0x014` · access `rw` · 32 bits
 
-Clock divisor. start4 programs 5000 (100 kHz) for the PMIC bus, 2500 for its probe sweep, 540 for HDMI DDC.
+Clock divisor. start4 programs 5000 (100 kHz) for its PMIC sessions and 2500 for its FXL6408 sessions on the PMIC bus, 2500 for its probe sweep, 540 for HDMI DDC. Each session starts with DIV, then DEL, then CLKT.
 
 Sources:
 
 - datasheet (high): BCM2711 ARM Peripherals, BSC: DIV
 - measured (high): vcgencmd measure_clock core on rpi-dev: 500000992 Hz
+- trace (high): pinned start4 on 0x7E205E00: 0x9C4 at 0x3ECF2E56 before its FXL6408 transfers, 0x1388 before the ones to 0x1B / 0x1E
 
 ## `DEL`
 
 Offset `0x018` · access `rw` · 32 bits
 
-Data delay. Stored, otherwise ignored.
+Data delay. Stored, otherwise ignored. start4 pairs it with DIV: 0x9C0271 with 2500, 0x13804E2 with 5000.
 
 Sources:
 
@@ -185,8 +186,9 @@ Sources:
 
 Offset `0x01C` · access `rw` · 32 bits
 
-Clock-stretch timeout. Stored, otherwise ignored.
+Clock-stretch timeout. Stored, otherwise ignored. start4 writes 0x100 when it opens a session, before every transfer, and again after it closes one.
 
 Sources:
 
 - datasheet (high): BCM2711 ARM Peripherals, BSC: CLKT
+- trace (high): pinned start4: 0x100 at 0x3ECF2DD6 (session open, transfer start) and 0x3ECF2DFE (after the close at 0x3ECF2ECC)
