@@ -6,6 +6,11 @@ summary = "PCIe root complex (`pcie-brcmstb`), with the VL805 xHCI controller be
 notes   = "`+0x0000..+0x0FFF` is the root port's own configuration space (seeded from a Raspberry Pi 4B d03115; its layout is PCI's, not listed here beyond the two words with behaviour). The VPU reaches the endpoint's BAR0 only by 40-bit DMA through the outbound window; the endpoint's DMA comes back through inbound window 2."
 
 [[block.source]]
+kind       = "trace"
+ref        = "pinned bootloader, after the link trains: the root port's capability words `+0xB4 |= 0xF` (`0x000A6E30`), `+0xC8 |= 0x18` (`0x000A6E44`), `+0x188 &= ~0xC` (`0x000A6E60`), and before it `+0xDC` target speed `2` (`0x000A6DBC`); after the outbound window, its type-1 header, each write read back: memory base / limit `0x8000` / `0xBFF0`, prefetchable base / limit `0xFFF0` / `0`, their upper halves `0`, I/O upper halves `0`, bridge control `1`, interrupt line `0x35`, cache line `0x10`, command `0x146` (`0x000A68FA` 16-bit, `0x000A6918` 32-bit, `0x000A6934` 8-bit writes)"
+confidence = "high"
+
+[[block.source]]
 kind       = "measured"
 ref        = "`/proc/device-tree/scb/pcie@7d500000/reg` on a real board: `<0x0 0x7d500000 0x0 0x9310>`"
 confidence = "high"
@@ -135,11 +140,16 @@ confidence = "high"
 name   = "MISC_CTRL"
 offset = 0x4008
 access = "rw"
-notes  = "Miscellaneous control. Stored."
+notes  = "Miscellaneous control. Stored. The pinned bootloader writes `0x3000` and then sets the top five bits (SCB0 size) to `0x12`, leaving `0x90003000`; Linux later writes `0x90003480`."
 
 [[register.source]]
 kind       = "linux"
 ref        = "`pcie-brcmstb.c`: `PCIE_MISC_MISC_CTRL`"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "pinned bootloader: `0x00003000` at `0x000A6CC2`, `0x90003000` at `0x000A6CF6`, each read back; Linux under the pinned start4: `0x90003480`"
 confidence = "high"
 
 [[register]]
@@ -210,11 +220,16 @@ confidence = "high"
 name   = "RC_BAR2_CONFIG_HI"
 offset = 0x4038
 access = "rw"
-notes  = "Inbound window 2 PCI bus base, high word."
+notes  = "Inbound window 2 PCI bus base, high word. The pinned bootloader writes `0` (with `RC_BAR2_CONFIG_LO` `0x12`), so its window starts at bus address 0; Linux writes `4` (with `0x10`), the `0x4_0000_0000` the device tree names. start4 reads both words to give the VL805 its MCU image address."
 
 [[register.source]]
 kind       = "linux"
 ref        = "`pcie-brcmstb.c`: `PCIE_MISC_RC_BAR2_CONFIG_HI`"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "pinned bootloader: `RC_BAR2_CONFIG_LO` `0x12` at `0x000A6D1C`, `0` here at `0x000A6D22`; Linux under the pinned start4: `0x10`, `4`; start4 reads `+0x4038` then `+0x4034` at `0x3EDC5ED8` / `0x3EDC5EDA`"
 confidence = "high"
 
 [[register]]
@@ -264,6 +279,17 @@ notes  = "Match mask (top half) and pattern (bottom half) for MSI data; Linux wr
 [[register.source]]
 kind       = "linux"
 ref        = "`pcie-brcmstb.c`: `PCIE_MISC_MSI_DATA_CONFIG`"
+confidence = "high"
+
+[[register]]
+name   = "MISC_405C"
+offset = 0x405C
+access = "rw"
+notes  = "Written `1` by the pinned bootloader once the link is up, between `HARD_DEBUG` and the outbound window. Linux's `pcie-brcmstb` does not name it. Stored."
+
+[[register.source]]
+kind       = "trace"
+ref        = "pinned bootloader: `0x00000001` at `0x000A6E7A`"
 confidence = "high"
 
 [[register]]
@@ -382,11 +408,16 @@ confidence = "high"
 name   = "HARD_DEBUG"
 offset = 0x4204
 access = "rw"
-notes  = "PCIe hard-debug control. Stored."
+notes  = "PCIe hard-debug control. Stored. The pinned bootloader clears it (read-modify-write, the SerDes power-down bit off) before the link comes up and ORs in `0x200000` (Linux's L1 substates enable) once it is."
 
 [[register.source]]
 kind       = "linux"
 ref        = "`pcie-brcmstb.c`: `PCIE_MISC_HARD_PCIE_HARD_DEBUG`"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "pinned bootloader: `0` at `0x000A6CB0`, `0x00200000` at `0x000A6E74`"
 confidence = "high"
 
 [[register]]
@@ -415,12 +446,17 @@ confidence = "medium"
 name   = "INTR2_CPU_CLR"
 offset = 0x4308
 access = "rw"
-notes  = "Clear status bits. Stored."
+notes  = "Clear status bits. Stored. The pinned bootloader writes `0xFFFFFFFF` before releasing PERST# and `0x1000` after its bus scan."
 
 [[register.source]]
 kind       = "linux"
 ref        = "`pcie-brcmstb.c`: `PCIE_INTR2_CPU_BASE + 0x8`"
 confidence = "medium"
+
+[[register.source]]
+kind       = "trace"
+ref        = "pinned bootloader: `0xFFFFFFFF` at `0x000A6D98`, `0x00001000` at `0x000A7208`"
+confidence = "high"
 
 [[register]]
 name   = "INTR2_CPU_MASK_STATUS"
@@ -448,12 +484,17 @@ confidence = "medium"
 name   = "INTR2_CPU_MASK_CLR"
 offset = 0x4314
 access = "rw"
-notes  = "Unmask bits. Stored."
+notes  = "Unmask bits. Stored. The pinned bootloader writes `0xFFFFFFFF` right after programming the root port's bridge header."
 
 [[register.source]]
 kind       = "linux"
 ref        = "`pcie-brcmstb.c`: `PCIE_INTR2_CPU_BASE + 0x14`"
 confidence = "medium"
+
+[[register.source]]
+kind       = "trace"
+ref        = "pinned bootloader: `0xFFFFFFFF` at `0x000A6F28`"
+confidence = "high"
 
 [[register]]
 name   = "MSI_INTR2_STATUS"

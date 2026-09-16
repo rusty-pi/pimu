@@ -408,6 +408,34 @@ buffer the bootloader decompressed into and left behind.
 not used in a normal boot, where the firmware is uploaded to RAM on the device
 each time.
 
+**The packing.** A `0xf33f` section is not LZ4 (the `0xf44f` sections are).
+After the 16-byte name comes an LZSS stream, and the last 32 bytes of the
+section are the SHA-256 of what it unpacks to. The stream is a flag byte, then
+eight items, one per flag bit from the lowest: a literal byte for a clear bit,
+and for a set bit a two-byte match, distance minus one then length minus one,
+copied from the output so far. The stream ends with the section's data, part
+way through a flag byte. Unpacked, `vl805hub.bin` is 9446 bytes and
+`vl805mcu.bin` 86680 bytes, and both digests check out; the hub image is byte
+for byte what the bootloader streams to the chip (below).
+
+**The hand-off.** The bootloader keeps the unpacked hub image at `0x3FF00000`,
+the MCU image at `0x3FF20000` and its own xHCI memory from `0x3FF40000`, and
+fills the `BUSB` tag of its boot-state block just before it starts `start4.elf`
+(the tag is still zero when `Starting start4.elf` prints): `+0x0C`/`+0x10` the
+hub image's address (`0xFFF00000`, the uncached alias) and length, `+0x14`/
+`+0x18` the MCU image's, `+0x1C` `2`, `+0x24`/`+0x28` `0xFFF40000`/`0xFFF8F000`.
+start4 looks the tag up by name (`0x3EDC609E`, `mov r0,0x42535542`) and keeps
+`+0x0C..+0x18`.
+
+**The upload**, in both stages: open the vendor port (`VL805` `VENDOR_ACCESS`),
+write the hub image a byte per index from `0x52000` through
+`VENDOR_INDEX`/`VENDOR_DATA`, let it run (`0x51000`/`0x51004` ← `0x4C`/`0x80`),
+read every byte back, hold it (`0x48`/`0`), give the MCU its image's bus address
+(`0x30000`, in 64-byte units) and start it (`0x30004`, `0x3000C`, `0x30008`),
+close the port. start4 first writes the whole image range with zeros and holds
+the hub, and waits 5 ms between steps where the bootloader waits 4 ms. The
+`vl805` spec has the indices and values.
+
 **Consequence for a model:** the firmware content never has to be interpreted.
 A model can accept the upload, checksum-compare it against what it was given
 (so the `hub2 mismatch` verify pass passes), and report `status 0`. Retaining

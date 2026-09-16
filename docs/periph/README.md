@@ -37,7 +37,7 @@ Generated from the TOML specs in [`specs/`](../../specs/); see [`specs/README.md
 | [`mbox`](mbox.md) | vpu | `0x7E00B880` | `0x140` | 12 | ARM <-> VideoCore mailboxes: two views of the same pair of FIFOs, and the interrupt block between them |
 | [`mcsync`](mcsync.md) | vpu | `0x7E000000` | `0x1000` | 5 | Doorbells / semaphores between the two VPU cores |
 | [`otp`](otp.md) | vpu | `0x7E20F000` | `0x1000` | 7 | Always-on config / OTP engine: the fuse array, one row at a time – reads and programming |
-| [`pcie`](pcie.md) | vpu | `0x7D500000` | `0x9310` | 36 | PCIe root complex (`pcie-brcmstb`), with the VL805 xHCI controller behind it |
+| [`pcie`](pcie.md) | vpu | `0x7D500000` | `0x9310` | 37 | PCIe root complex (`pcie-brcmstb`), with the VL805 xHCI controller behind it |
 | [`pm`](pm.md) | vpu | `0x7E100000` | `0x1000` | 17 | Power management: reset control, reset status, watchdog, power-domain registers |
 | [`pmic_1d`](pmic_1d.md) | i2c | `0x1D` | `0x100` | 6 | Board PMIC at `0x1D` on every Pi 4-family board but the 4B rev 1.5 (start4 descriptor type `0x81`) |
 | [`pmic_core`](pmic_core.md) | i2c | `0x1E` | `0x100` | 3 | Board PMIC owning the SoC core rail (start4 descriptor type `0x82`) |
@@ -51,5 +51,5 @@ Generated from the TOML specs in [`specs/`](../../specs/); see [`specs/README.md
 | [`uart0`](uart0.md) | vpu | `0x7E201000` | `0x1000` | 11 | PL011 UART0: the firmware's debug console and Linux's `ttyAMA0` |
 | [`vce`](vce.md) | vpu | `0x7F100000` | `0x21000` | 3 | VCE vector/codec engine: data memory, program memory and register file |
 | [`vce_ctrl`](vce_ctrl.md) | vpu | `0x7F140000` | `0x1000` | 6 | VCE control block: status, launch, interrupt clear and endcode enables |
-| [`vl805`](vl805.md) | pci | `0x00000000` | `0x1000` | 26 | VIA VL805 xHCI controller (`1106:3483`): its PCI configuration space |
+| [`vl805`](vl805.md) | pci | `0x00000000` | `0x1000` | 27 | VIA VL805 xHCI controller (`1106:3483`): its PCI configuration space |
 | [`xhci`](xhci.md) | pci | `0x00000000` | `0x1000` | 39 | xHCI register block behind the VL805's BAR0: capability, operational, runtime and doorbell registers |

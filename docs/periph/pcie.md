@@ -10,6 +10,7 @@
 
 Sources:
 
+- trace (high): pinned bootloader, after the link trains: the root port's capability words `+0xB4 |= 0xF` (`0x000A6E30`), `+0xC8 |= 0x18` (`0x000A6E44`), `+0x188 &= ~0xC` (`0x000A6E60`), and before it `+0xDC` target speed `2` (`0x000A6DBC`); after the outbound window, its type-1 header, each write read back: memory base / limit `0x8000` / `0xBFF0`, prefetchable base / limit `0xFFF0` / `0`, their upper halves `0`, I/O upper halves `0`, bridge control `1`, interrupt line `0x35`, cache line `0x10`, command `0x146` (`0x000A68FA` 16-bit, `0x000A6918` 32-bit, `0x000A6934` 8-bit writes)
 - measured (high): `/proc/device-tree/scb/pcie@7d500000/reg` on a real board: `<0x0 0x7d500000 0x0 0x9310>`
 - linux (high): `drivers/pci/controller/pcie-brcmstb.c`
 - decompile (high): bootcode `0x8000AB4A`; second-stage bootloader `pcie_reset` `0x000A7034`, `pcie_init` `0x000A6CA2` / `0x000A6DCC`, link poll `0x000A6F7E`, bus scan `0x000A712C`
@@ -23,28 +24,29 @@ Sources:
 | `0x1100` | [`MDIO_ADDR`](#mdio_addr) | rw | 32 | 1, best high |
 | `0x1104` | [`MDIO_WR_DATA`](#mdio_wr_data) | rw | 32 | 1, best high |
 | `0x1108` | [`MDIO_RD_DATA`](#mdio_rd_data) | r | 32 | 1, best high |
-| `0x4008` | [`MISC_CTRL`](#misc_ctrl) | rw | 32 | 1, best high |
+| `0x4008` | [`MISC_CTRL`](#misc_ctrl) | rw | 32 | 2, best high |
 | `0x400C` | [`MEM_WIN0_LO`](#mem_win0_lo) | rw | 32 | 2, best high |
 | `0x4010` | [`MEM_WIN0_HI`](#mem_win0_hi) | rw | 32 | 1, best high |
 | `0x402C` | [`RC_BAR1_CONFIG_LO`](#rc_bar1_config_lo) | rw | 32 | 2, best high |
 | `0x4034` | [`RC_BAR2_CONFIG_LO`](#rc_bar2_config_lo) | rw | 32 | 1, best high |
-| `0x4038` | [`RC_BAR2_CONFIG_HI`](#rc_bar2_config_hi) | rw | 32 | 1, best high |
+| `0x4038` | [`RC_BAR2_CONFIG_HI`](#rc_bar2_config_hi) | rw | 32 | 2, best high |
 | `0x403C` | [`RC_BAR3_CONFIG_LO`](#rc_bar3_config_lo) | rw | 32 | 2, best high |
 | `0x4044` | [`MSI_BAR_CONFIG_LO`](#msi_bar_config_lo) | rw | 32 | 1, best high |
 | `0x4048` | [`MSI_BAR_CONFIG_HI`](#msi_bar_config_hi) | rw | 32 | 1, best high |
 | `0x404C` | [`MSI_DATA_CONFIG`](#msi_data_config) | rw | 32 | 1, best high |
+| `0x405C` | [`MISC_405C`](#misc_405c) | rw | 32 | 1, best high |
 | `0x4068` | [`MISC_PCIE_STATUS`](#misc_pcie_status) | r | 32 | 2, best high |
 | `0x406C` | [`MISC_REVISION`](#misc_revision) | r | 32 | 2, best high |
 | `0x4070` | [`MEM_WIN0_BASE_LIMIT`](#mem_win0_base_limit) | rw | 32 | 2, best high |
 | `0x4080` | [`MEM_WIN0_BASE_HI`](#mem_win0_base_hi) | rw | 32 | 2, best high |
 | `0x4084` | [`MEM_WIN0_LIMIT_HI`](#mem_win0_limit_hi) | rw | 32 | 2, best high |
-| `0x4204` | [`HARD_DEBUG`](#hard_debug) | rw | 32 | 1, best high |
+| `0x4204` | [`HARD_DEBUG`](#hard_debug) | rw | 32 | 2, best high |
 | `0x4300` | [`INTR2_CPU_STATUS`](#intr2_cpu_status) | rw | 32 | 1, best high |
 | `0x4304` | [`INTR2_CPU_SET`](#intr2_cpu_set) | rw | 32 | 1, best medium |
-| `0x4308` | [`INTR2_CPU_CLR`](#intr2_cpu_clr) | rw | 32 | 1, best medium |
+| `0x4308` | [`INTR2_CPU_CLR`](#intr2_cpu_clr) | rw | 32 | 2, best high |
 | `0x430C` | [`INTR2_CPU_MASK_STATUS`](#intr2_cpu_mask_status) | rw | 32 | 1, best medium |
 | `0x4310` | [`INTR2_CPU_MASK_SET`](#intr2_cpu_mask_set) | rw | 32 | 1, best medium |
-| `0x4314` | [`INTR2_CPU_MASK_CLR`](#intr2_cpu_mask_clr) | rw | 32 | 1, best medium |
+| `0x4314` | [`INTR2_CPU_MASK_CLR`](#intr2_cpu_mask_clr) | rw | 32 | 2, best high |
 | `0x4500` | [`MSI_INTR2_STATUS`](#msi_intr2_status) | r | 32 | 1, best high |
 | `0x4504` | [`MSI_INTR2_SET`](#msi_intr2_set) | w | 32 | 1, best high |
 | `0x4508` | [`MSI_INTR2_CLR`](#msi_intr2_clr) | w | 32 | 1, best high |
@@ -141,11 +143,12 @@ Sources:
 
 Offset `0x4008` · access `rw` · 32 bits
 
-Miscellaneous control. Stored.
+Miscellaneous control. Stored. The pinned bootloader writes `0x3000` and then sets the top five bits (SCB0 size) to `0x12`, leaving `0x90003000`; Linux later writes `0x90003480`.
 
 Sources:
 
 - linux (high): `pcie-brcmstb.c`: `PCIE_MISC_MISC_CTRL`
+- trace (high): pinned bootloader: `0x00003000` at `0x000A6CC2`, `0x90003000` at `0x000A6CF6`, each read back; Linux under the pinned start4: `0x90003480`
 
 ## `MEM_WIN0_LO`
 
@@ -201,11 +204,12 @@ Sources:
 
 Offset `0x4038` · access `rw` · 32 bits
 
-Inbound window 2 PCI bus base, high word.
+Inbound window 2 PCI bus base, high word. The pinned bootloader writes `0` (with `RC_BAR2_CONFIG_LO` `0x12`), so its window starts at bus address 0; Linux writes `4` (with `0x10`), the `0x4_0000_0000` the device tree names. start4 reads both words to give the VL805 its MCU image address.
 
 Sources:
 
 - linux (high): `pcie-brcmstb.c`: `PCIE_MISC_RC_BAR2_CONFIG_HI`
+- trace (high): pinned bootloader: `RC_BAR2_CONFIG_LO` `0x12` at `0x000A6D1C`, `0` here at `0x000A6D22`; Linux under the pinned start4: `0x10`, `4`; start4 reads `+0x4038` then `+0x4034` at `0x3EDC5ED8` / `0x3EDC5EDA`
 
 ## `RC_BAR3_CONFIG_LO`
 
@@ -247,6 +251,16 @@ Match mask (top half) and pattern (bottom half) for MSI data; Linux writes `0xFF
 Sources:
 
 - linux (high): `pcie-brcmstb.c`: `PCIE_MISC_MSI_DATA_CONFIG`
+
+## `MISC_405C`
+
+Offset `0x405C` · access `rw` · 32 bits
+
+Written `1` by the pinned bootloader once the link is up, between `HARD_DEBUG` and the outbound window. Linux's `pcie-brcmstb` does not name it. Stored.
+
+Sources:
+
+- trace (high): pinned bootloader: `0x00000001` at `0x000A6E7A`
 
 ## `MISC_PCIE_STATUS`
 
@@ -325,11 +339,12 @@ Sources:
 
 Offset `0x4204` · access `rw` · 32 bits
 
-PCIe hard-debug control. Stored.
+PCIe hard-debug control. Stored. The pinned bootloader clears it (read-modify-write, the SerDes power-down bit off) before the link comes up and ORs in `0x200000` (Linux's L1 substates enable) once it is.
 
 Sources:
 
 - linux (high): `pcie-brcmstb.c`: `PCIE_MISC_HARD_PCIE_HARD_DEBUG`
+- trace (high): pinned bootloader: `0` at `0x000A6CB0`, `0x00200000` at `0x000A6E74`
 
 ## `INTR2_CPU_STATUS`
 
@@ -355,11 +370,12 @@ Sources:
 
 Offset `0x4308` · access `rw` · 32 bits
 
-Clear status bits. Stored.
+Clear status bits. Stored. The pinned bootloader writes `0xFFFFFFFF` before releasing PERST# and `0x1000` after its bus scan.
 
 Sources:
 
 - linux (medium): `pcie-brcmstb.c`: `PCIE_INTR2_CPU_BASE + 0x8`
+- trace (high): pinned bootloader: `0xFFFFFFFF` at `0x000A6D98`, `0x00001000` at `0x000A7208`
 
 ## `INTR2_CPU_MASK_STATUS`
 
@@ -385,11 +401,12 @@ Sources:
 
 Offset `0x4314` · access `rw` · 32 bits
 
-Unmask bits. Stored.
+Unmask bits. Stored. The pinned bootloader writes `0xFFFFFFFF` right after programming the root port's bridge header.
 
 Sources:
 
 - linux (medium): `pcie-brcmstb.c`: `PCIE_INTR2_CPU_BASE + 0x14`
+- trace (high): pinned bootloader: `0xFFFFFFFF` at `0x000A6F28`
 
 ## `MSI_INTR2_STATUS`
 
