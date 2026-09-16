@@ -14,7 +14,7 @@ Sources:
 - datasheet (high): BCM2711 ARM Peripherals, BSC chapter
 - decompile (high): start4's I²C driver FUN_0ecf0ed0 picks the base from the bus id: 0 -> 0x7E205000, 8 -> 0x7E205E00, else 0x7E803000 + id * 0x1000
 - trace (high): late in the boot start4 probes 0x52 on instance 0 for a HAT EEPROM; unmapped, S read 0 and the poll never ended
-- trace (high): pinned start4 on instance 0, each probe in a session of its own at DIV 0x1388 with I2C0 muxed to GPIO 44/45 (ALT1) and released after: camera_auto_detect reads 0x10 reg 0x0000, 0x36 reg 0x300A, 0x1A reg 0x0016, 32 bytes from 0x40, 0x1A reg 0x303E, 0x1A reg 0x0016 and 0x1A reg 0x3254 (twice each); after each 'DISPLAY_DSI_PORT not defined' it reads 0x45 reg 0x80, then reg 0x01, whether or not display_auto_detect is set; later 0x50-0x53 ten times each on GPIO 0/1 (ALT0) — _checked by booting with camera_auto_detect and display_auto_detect removed from config.txt in turn_
+- trace (high): pinned start4 on instance 0, each probe in a session of its own at DIV 0x1388 with I2C0 muxed to GPIO 44/45 (ALT1) and released after: camera_auto_detect reads 0x10 reg 0x0000, 0x36 reg 0x300A, 0x1A reg 0x0016, 32 bytes from 0x40, 0x1A reg 0x303E, 0x1A reg 0x0016 and 0x1A reg 0x3254 (twice each); after each 'DISPLAY_DSI_PORT not defined' it reads 0x45 reg 0x80, then reg 0x01, whether or not display_auto_detect is set; later, unless force_eeprom_read=0, 0x50-0x53 in a session each on GPIO 0/1 (ALT0), up to ten queued reads of 4 bytes from reg 0x0000 per address — _checked by booting with camera_auto_detect and display_auto_detect removed from config.txt in turn, and with force_eeprom_read=0 added_
 
 `PMIC` copy:
 
