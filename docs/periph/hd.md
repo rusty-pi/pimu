@@ -31,7 +31,7 @@ start4 sets POWER before it resets the DWC2 core. Nothing clears it again, not e
 
 Sources:
 
-- measured (high): rpi-dev (start4 f5e89631, Linux idle), 32-bit /dev/mem read of 0xFE808008: 0x3 before any USB power request, 0x7 after vcmailbox SET_POWER_STATE(USB, on|wait), still 0x7 after SET_POWER_STATE(USB, off|wait)
+- measured (high): Raspberry Pi 4B d03115 (start4 f5e89631, Linux idle), 32-bit /dev/mem read of 0xFE808008: 0x3 before any USB power request, 0x7 after vcmailbox SET_POWER_STATE(USB, on|wait), still 0x7 after SET_POWER_STATE(USB, off|wait)
 - decompile (high): 0x3ED89564, 0x3EC607B6 and 0x3ECACB14 set bit 2; 0x3ECACB1A..0x3ECACB28 then clear bits 0 and 1
 
 `POWER` sources:
@@ -50,9 +50,9 @@ Both ACK bits read 1 while CTRL.POWER is set and 0 while it is clear. The model 
 
 Sources:
 
-- measured (high): rpi-dev, 32-bit /dev/mem read of 0xFE808020: 0x0 while CTRL read 0x3, 0x3 while CTRL read 0x7 (the same three points as CTRL)
+- measured (high): Raspberry Pi 4B d03115, 32-bit /dev/mem read of 0xFE808020: 0x0 while CTRL read 0x3, 0x3 while CTRL read 0x7 (the same three points as CTRL)
 - decompile (high): 0x3ED8956A and 0x3EC607BC spin until [+0x20] & 3 == 3 after setting CTRL.POWER, with no timeout; 0x3ECACB2A spins until bit 0 is set
 
 `ACK` sources:
 
-- measured (high): rpi-dev: 0 without CTRL.POWER, 3 with it
+- measured (high): Raspberry Pi 4B d03115: 0 without CTRL.POWER, 3 with it

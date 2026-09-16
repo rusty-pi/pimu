@@ -9,10 +9,11 @@
 //!
 //! ## Where the numbers come from
 //!
-//! Every capability value is measured on `rpi-dev` through `/dev/mem`
-//! (`docs/usb-xhci.md` §2); `dmesg`'s `hcc params 0x002841eb hci version 0x100`
-//! cross-checks the pair that matters. The `PORTSC` values are measured too,
-//! by moving a stick between sockets and re-reading:
+//! Every capability value is measured on a Raspberry Pi 4B d03115 through
+//! `/dev/mem` (`docs/usb-xhci.md` §2); `dmesg`'s
+//! `hcc params 0x002841eb hci version 0x100` cross-checks the pair that
+//! matters. The `PORTSC` values are measured too, by moving a stick between
+//! sockets and re-reading:
 //!
 //! ```text
 //! 0x400202e1  USB2 port, device just connected     (CCS=1 PLS=Polling CSC=1 DR=1)
@@ -383,7 +384,8 @@ impl Xhci {
         let mut ports = Vec::with_capacity(PORTS);
         // Port 1 is the USB2 root port; ports 2-5 are the four USB3 lanes. That
         // split is the VL805's own supported-protocol extended capabilities,
-        // read back from `rpi-dev`: `id=2 "USB " rev 2.0 portoff=1 count=1` and
+        // read back from a Raspberry Pi 4B d03115:
+        // `id=2 "USB " rev 2.0 portoff=1 count=1` and
         // `id=2 "USB " rev 3.0 portoff=2 count=4`.
         ports.push(Port::new(true));
         for _ in 1..PORTS {
@@ -1430,7 +1432,7 @@ mod tests {
                 0x12, 0x01, 0x10, 0x02, 0x09, 0x00, 0x01, 0x40, 0x09, 0x21, 0x31, 0x34, 0x21, 0x04,
                 0x00, 0x01, 0x00, 0x01
             ],
-            "the hub's device descriptor, byte for byte off rpi-dev"
+            "the hub's device descriptor, byte for byte off a Raspberry Pi 4B d03115"
         );
         // The Status Stage asked for an interrupt, so a Transfer Event landed
         // on the event ring naming slot 1, endpoint 0.
@@ -1501,9 +1503,10 @@ mod tests {
     }
 
     /// The capability block is what `xHC0 ver: … HCS: … HCC: …` prints, and it
-    /// has to stay byte-identical to the values read off `rpi-dev`.
+    /// has to stay byte-identical to the values read off a
+    /// Raspberry Pi 4B d03115.
     #[test]
-    fn capability_registers_match_rpi_dev() {
+    fn capability_registers_match_the_real_board() {
         let mut hc = Xhci::new();
         assert_eq!(hc.read(0x00, Width::Word), 0x0100_0020);
         assert_eq!(hc.read(0x04, Width::Word), 0x0500_0420);

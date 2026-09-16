@@ -56,8 +56,8 @@ fn hvs_frame_swap_completes_immediately() {
 /// both acknowledge bits at `+0x20`, then reset the DWC2 core and flush its
 /// FIFOs, spinning on each `GRSTCTL` bit. None of those waits has a timeout, so
 /// a wrong answer parks the `SET_POWER_STATE` handler for good and every later
-/// property request goes unanswered. The values are what `rpi-dev` reads
-/// before and after the same request.
+/// property request goes unanswered. The values are what a
+/// Raspberry Pi 4B d03115 reads before and after the same request.
 #[test]
 fn usb_power_on_handshake_completes() {
     let mut m = machine();
@@ -378,7 +378,7 @@ fn pmic_setpoints_decode_to_the_real_boards_voltages() {
     let sdram = pmic_read(&mut m, 0x1B, 0x09) as u32 * 5_000 + 900_000;
     assert_eq!(
         sdram, 1_100_000,
-        "vcgencmd measure_volts sdram_c on rpi-dev"
+        "vcgencmd measure_volts sdram_c on a Raspberry Pi 4B d03115"
     );
 
     // 0x1E rail 1 (`0x3EC8C9F6`): raw * 10_000 µV, within the descriptor's
@@ -772,7 +772,7 @@ fn xhci_capability_registers_arrive_by_forty_bit_dma() {
     assert_eq!(
         m.load32(dst).unwrap(),
         0x0500_0420,
-        "HCSPARAMS1 as measured on rpi-dev: MaxSlots 32, MaxIntrs 4, MaxPorts 5"
+        "HCSPARAMS1 as measured on a Raspberry Pi 4B d03115: MaxSlots 32, MaxIntrs 4, MaxPorts 5"
     );
     // END set, ACTIVE and ERROR clear — what 0x0008B3F4 polls for.
     let cs = m.load32(map::DMA4_BASE).unwrap();
@@ -983,13 +983,13 @@ fn ddc_stop(m: &mut Machine, base: u32) {
 }
 
 /// Nothing is plugged into either HDMI connector on the reference board
-/// (`rpi-dev` reports both `card1-HDMI-A-*/status` as `disconnected`), so the
-/// EDID EEPROM's address goes unacknowledged and the transfer has to complete
-/// `INTRP | NOACK`. That is the whole point of the block: with `IIC_ENABLE`
-/// RAM-backing on the catch-all stub it read back the `ENABLE | INTRP` the
-/// driver had just written, so every read looked like an instant, successful
-/// transfer of 32 zero bytes — start4 failed the EDID checksum, never bumped
-/// its attempt counter, and re-read EDID forever (#15).
+/// (a Raspberry Pi 4B d03115 reports both `card1-HDMI-A-*/status` as
+/// `disconnected`), so the EDID EEPROM's address goes unacknowledged and the
+/// transfer has to complete `INTRP | NOACK`. That is the whole point of the
+/// block: with `IIC_ENABLE` RAM-backing on the catch-all stub it read back the
+/// `ENABLE | INTRP` the driver had just written, so every read looked like an
+/// instant, successful transfer of 32 zero bytes — start4 failed the EDID
+/// checksum, never bumped its attempt counter, and re-read EDID forever (#15).
 #[test]
 fn hdmi_ddc_nacks_when_no_monitor_answers() {
     for base in [map::HDMI_DDC0_BASE, map::HDMI_DDC1_BASE] {

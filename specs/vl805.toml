@@ -8,7 +8,7 @@ notes   = "Bus 1, device 0, function 0 behind the root complex, reached through 
 
 [[block.source]]
 kind       = "measured"
-ref        = "rpi-dev: sudo od -Ax -tx1 -v /sys/bus/pci/devices/0000:01:00.0/config; lspci -vvv"
+ref        = "Raspberry Pi 4B d03115: sudo od -Ax -tx1 -v /sys/bus/pci/devices/0000:01:00.0/config; lspci -vvv"
 confidence = "high"
 
 [[block.source]]

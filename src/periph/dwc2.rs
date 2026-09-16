@@ -31,8 +31,8 @@
 //!
 //! ## Ground truth
 //!
-//! Read on `rpi-dev` through `/dev/mem` after `vcmailbox` asked the firmware
-//! for USB power (the window was not read with USB off):
+//! Read on a Raspberry Pi 4B d03115 through `/dev/mem` after `vcmailbox` asked
+//! the firmware for USB power (the window was not read with USB off):
 //!
 //! ```text
 //!   GOTGCTL  0x001C0000   GSNPSID  0x4F54280A   (OTG 2.80a)

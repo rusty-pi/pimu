@@ -24,8 +24,8 @@
 //! - the PL011 clock-change callback `0x3EC799BC`, whose phase-0 leg drains
 //!   `UART_FR.BUSY` before it writes `UARTCR = 0`.
 //!
-//! Read off `rpi-dev` (Pi 4, Linux up, idle) at the `0xFE10_10F0` alias, one
-//! enumerated offset at a time through `/dev/mem`:
+//! Read off a Raspberry Pi 4B d03115 (Linux up, idle) at the `0xFE10_10F0`
+//! alias, one enumerated offset at a time through `/dev/mem`:
 //!
 //! ```text
 //! 0x7e1010f0  CM_UARTCTL  0x00000296     (MASH=1, BUSY=1, ENAB=1, SRC=6/PLLD)

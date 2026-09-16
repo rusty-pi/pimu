@@ -32,7 +32,7 @@ FUN_0ec2ffb4 sets bit 2 from the measured core voltage.
 Sources:
 
 - decompile (high): FUN_0ec2ffb4
-- measured (high): 0x00000004 on rpi-dev (post-start4 state)
+- measured (high): 0x00000004 on a Raspberry Pi 4B d03115 (post-start4 state)
 
 ## `REG_1814`
 
@@ -43,7 +43,7 @@ FUN_0ec2ffdc tests (reg & 0x14) != 0 as the condition of a voltage-ramp loop. Ha
 Sources:
 
 - decompile (high): FUN_0ec2ffdc, loop in FUN_0ec303e8 behind a FUN_0ec30196() != 0 guard
-- measured (high): 0x00000016 on rpi-dev — _deliberately not reproduced; see notes_
+- measured (high): 0x00000016 on a Raspberry Pi 4B d03115 — _deliberately not reproduced; see notes_
 
 ## `REG_1820`
 
@@ -54,7 +54,7 @@ FUN_0ec30196 takes bit 10 as a predicate and FUN_0ec301a6 decodes bits 23:11. Re
 Sources:
 
 - decompile (high): FUN_0ec30196 / FUN_0ec301a6
-- measured (high): 0x00000000 on rpi-dev
+- measured (high): 0x00000000 on a Raspberry Pi 4B d03115
 
 ## `CHAR_DONE`
 
@@ -65,7 +65,7 @@ start4's own 'characterisation done' flag.
 Sources:
 
 - decompile (high): FUN_0ec302e2 writes it
-- measured (high): 0x00000001 on rpi-dev
+- measured (high): 0x00000001 on a Raspberry Pi 4B d03115
 
 ## `REG_A000`
 

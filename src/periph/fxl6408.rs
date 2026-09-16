@@ -7,8 +7,8 @@
 //! firmware (`GET_GPIO_CONFIG` / `GET_GPIO_STATE` / `SET_GPIO_STATE`). With no
 //! device at `0x43` every one of those answers `0xffffffff`, the 1.8 V SD I/O
 //! regulator (`regulator-sd-io-1v8`, expander pin 4) never probes, and Linux's
-//! SD controller defers forever. rpi-dev (d03115, rev 1.5) answers status 0 for
-//! all eight pins.
+//! SD controller defers forever. A Raspberry Pi 4B d03115 (rev 1.5) answers
+//! status 0 for all eight pins.
 //!
 //! # Which part
 //!

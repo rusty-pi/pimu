@@ -11,7 +11,7 @@ Offsets are into BAR0 (4 KiB). The VPU reaches it only by 40-bit DMA through the
 Sources:
 
 - standard (high): eXtensible Host Controller Interface 1.1, section 5
-- measured (high): capability registers and PORTSC read on rpi-dev through /dev/mem (docs/usb-xhci.md section 2); dmesg 'hcc params 0x002841eb hci version 0x100'
+- measured (high): capability registers and PORTSC read on a Raspberry Pi 4B d03115 through /dev/mem (docs/usb-xhci.md section 2); dmesg 'hcc params 0x002841eb hci version 0x100'
 - measured (high): examples-on-real-hardware/sd-card-boot.log: 'xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb'
 
 ## Register map
@@ -66,7 +66,7 @@ Where the operational registers start.
 
 Sources:
 
-- measured (high): rpi-dev /dev/mem
+- measured (high): Raspberry Pi 4B d03115 /dev/mem
 
 ## `HCIVERSION`
 
@@ -76,7 +76,7 @@ xHCI 1.0.
 
 Sources:
 
-- measured (high): rpi-dev dmesg: hci version 0x100
+- measured (high): Raspberry Pi 4B d03115 dmesg: hci version 0x100
 
 ## `HCSPARAMS1`
 
@@ -86,7 +86,7 @@ MaxSlots 32, MaxIntrs 4, MaxPorts 5.
 
 Sources:
 
-- measured (high): rpi-dev /dev/mem; sd-card-boot.log 'xHC0 ports 5 slots 32 intrs 4'
+- measured (high): Raspberry Pi 4B d03115 /dev/mem; sd-card-boot.log 'xHC0 ports 5 slots 32 intrs 4'
 
 ## `HCSPARAMS2`
 
@@ -96,7 +96,7 @@ IST 1, ERSTMax 3, MaxScratchpad 31.
 
 Sources:
 
-- measured (high): rpi-dev /dev/mem
+- measured (high): Raspberry Pi 4B d03115 /dev/mem
 
 ## `HCSPARAMS3`
 
@@ -106,7 +106,7 @@ Exit latencies.
 
 Sources:
 
-- measured (high): rpi-dev /dev/mem
+- measured (high): Raspberry Pi 4B d03115 /dev/mem
 
 ## `HCCPARAMS1`
 
@@ -116,7 +116,7 @@ AC64, 32-byte contexts, PPC, xECP 0x28 (BAR0 + 0xA0).
 
 Sources:
 
-- measured (high): rpi-dev dmesg: hcc params 0x002841eb
+- measured (high): Raspberry Pi 4B d03115 dmesg: hcc params 0x002841eb
 
 ## `DBOFF`
 
@@ -126,7 +126,7 @@ Doorbell array offset.
 
 Sources:
 
-- measured (high): rpi-dev /dev/mem
+- measured (high): Raspberry Pi 4B d03115 /dev/mem
 
 ## `RTSOFF`
 
@@ -136,7 +136,7 @@ Runtime register offset.
 
 Sources:
 
-- measured (high): rpi-dev /dev/mem
+- measured (high): Raspberry Pi 4B d03115 /dev/mem
 
 ## `HCCPARAMS2`
 
@@ -146,7 +146,7 @@ No extended capabilities of version 1.1.
 
 Sources:
 
-- measured (high): rpi-dev /dev/mem
+- measured (high): Raspberry Pi 4B d03115 /dev/mem
 
 ## `USBCMD`
 
@@ -306,7 +306,7 @@ Extended capability: USB legacy support, next at +0x10 dwords (0xB0).
 
 Sources:
 
-- measured (high): rpi-dev /dev/mem
+- measured (high): Raspberry Pi 4B d03115 /dev/mem
 
 ## `SUPPORTED_USB2`
 
@@ -316,7 +316,7 @@ Supported protocol: USB 2.0, next at 0xD0.
 
 Sources:
 
-- measured (high): rpi-dev: id=2 'USB ' rev 2.0 portoff=1 count=1
+- measured (high): Raspberry Pi 4B d03115: id=2 'USB ' rev 2.0 portoff=1 count=1
 
 ## `SUPPORTED_USB2_NAME`
 
@@ -326,7 +326,7 @@ Offset `0x0B4` · access `r` · 32 bits · reset `0x20425355`
 
 Sources:
 
-- measured (high): rpi-dev /dev/mem
+- measured (high): Raspberry Pi 4B d03115 /dev/mem
 
 ## `SUPPORTED_USB2_PORTS`
 
@@ -336,7 +336,7 @@ Port offset 1, count 1.
 
 Sources:
 
-- measured (high): rpi-dev /dev/mem
+- measured (high): Raspberry Pi 4B d03115 /dev/mem
 
 ## `SUPPORTED_USB3`
 
@@ -346,7 +346,7 @@ Supported protocol: USB 3.0, next at 0x300.
 
 Sources:
 
-- measured (high): rpi-dev: id=2 'USB ' rev 3.0 portoff=2 count=4
+- measured (high): Raspberry Pi 4B d03115: id=2 'USB ' rev 3.0 portoff=2 count=4
 
 ## `SUPPORTED_USB3_NAME`
 
@@ -356,7 +356,7 @@ Offset `0x0D4` · access `r` · 32 bits · reset `0x20425355`
 
 Sources:
 
-- measured (high): rpi-dev /dev/mem
+- measured (high): Raspberry Pi 4B d03115 /dev/mem
 
 ## `SUPPORTED_USB3_PORTS`
 
@@ -366,7 +366,7 @@ Port offset 2, count 4.
 
 Sources:
 
-- measured (high): rpi-dev /dev/mem
+- measured (high): Raspberry Pi 4B d03115 /dev/mem
 
 ## `DOORBELL`
 
@@ -487,7 +487,7 @@ Extended capability 10 (debug capability), the last in the list.
 
 Sources:
 
-- measured (high): rpi-dev /dev/mem
+- measured (high): Raspberry Pi 4B d03115 /dev/mem
 
 ## `PORTSC`
 
@@ -516,7 +516,7 @@ Port status and control. Empty but powered is 0x2A0; the USB2 port adds DR.
 Sources:
 
 - standard (high): xHCI 1.1, 5.4.8 PORTSC
-- measured (high): rpi-dev, moving a stick between sockets: 0x400202e1 USB2 just connected, 0x40000e03 USB2 enumerated, 0x00021203 USB3 SuperSpeed, 0x000002a0 empty
+- measured (high): Raspberry Pi 4B d03115, moving a stick between sockets: 0x400202e1 USB2 just connected, 0x40000e03 USB2 enumerated, 0x00021203 USB3 SuperSpeed, 0x000002a0 empty
 
 `CCS` sources:
 

@@ -14,7 +14,7 @@ confidence = "high"
 
 [[block.source]]
 kind       = "measured"
-ref        = "/dev/mem at 0xFD5D8000 on rpi-dev: all eighteen channels carry the magic"
+ref        = "/dev/mem at 0xFD5D8000 on a Raspberry Pi 4B d03115: all eighteen channels carry the magic"
 confidence = "high"
 
 [[register]]
@@ -25,7 +25,7 @@ notes  = "The channel's own index."
 
 [[register.source]]
 kind       = "measured"
-ref        = "reads 0..17 across the channels on rpi-dev"
+ref        = "reads 0..17 across the channels on a Raspberry Pi 4B d03115"
 confidence = "high"
 
 [[register]]
@@ -42,7 +42,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "0x7fff50cf on all eighteen channels of rpi-dev"
+ref        = "0x7fff50cf on all eighteen channels of a Raspberry Pi 4B d03115"
 confidence = "high"
 
 [[register]]
@@ -100,7 +100,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "per-channel values off rpi-dev, e.g. 0x04270799 on channel 0"
+ref        = "per-channel values off a Raspberry Pi 4B d03115, e.g. 0x04270799 on channel 0"
 confidence = "high"
 
 [[register.field]]

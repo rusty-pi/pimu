@@ -23,8 +23,8 @@
 //!
 //! ## Ground truth
 //!
-//! Read on `rpi-dev` (our pinned start4, Linux idle) through `/dev/mem`, before
-//! and after asking the firmware with `vcmailbox`:
+//! Read on a Raspberry Pi 4B d03115 (our pinned start4, Linux idle) through
+//! `/dev/mem`, before and after asking the firmware with `vcmailbox`:
 //!
 //! ```text
 //!                                  +0x08 CTRL   +0x20 STATUS

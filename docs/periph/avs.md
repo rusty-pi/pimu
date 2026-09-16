@@ -115,7 +115,7 @@ Sources:
 
 - linux (high): bcm2711_thermal reads +0x200: temp_mC = 410040 - 487 * count
 - decompile (high): FUN_0ed603e2 indexes the DAT_0edfbe9c table of these six words; FUN_0ecc6488 converts
-- measured (high): /dev/mem reads of 0x7d5d2200..0x7d5d2214 on rpi-dev, freshly booted and idle
+- measured (high): /dev/mem reads of 0x7d5d2200..0x7d5d2214 on a Raspberry Pi 4B d03115, freshly booted and idle
 
 `COUNT` sources:
 
@@ -143,7 +143,7 @@ Per-channel ring-oscillator monitors. Channels 0x20..0x23 settle with a count of
 Sources:
 
 - decompile (high): FUN_0ec3007a polls bit 16 and takes bits 14:0; FUN_0ec5f2c0 range-checks its channel against 0x23
-- measured (high): /dev/mem reads one word at a time on rpi-dev
+- measured (high): /dev/mem reads one word at a time on a Raspberry Pi 4B d03115
 
 `COUNT` sources:
 

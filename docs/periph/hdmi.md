@@ -105,7 +105,7 @@ No monitor on either connector: CONNECTED reads 0 whatever was written, so Linux
 Sources:
 
 - linux (high): drivers/gpu/drm/vc4/vc4_hdmi_regs.h: VC4_HDMI_REG(HDMI_HOTPLUG, 0x1a8) in vc5_hdmi_hdmi0_fields; vc4_hdmi.c: vc5_hdmi_hp_detect()
-- measured (medium): rpi-dev, no monitor attached: /sys/class/drm/card1-HDMI-A-1/status and card1-HDMI-A-2/status read disconnected — _The connector state, not the register: vc4 reports disconnected when CONNECTED is clear and the node has no hpd-gpios._
+- measured (medium): Raspberry Pi 4B d03115, no monitor attached: /sys/class/drm/card1-HDMI-A-1/status and card1-HDMI-A-2/status read disconnected — _The connector state, not the register: vc4 reports disconnected when CONNECTED is clear and the node has no hpd-gpios._
 
 `CONNECTED` sources:
 

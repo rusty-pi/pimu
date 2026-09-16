@@ -11,7 +11,7 @@ Not the BSC: a different block with a different layout. With no monitor attached
 
 Sources:
 
-- measured (high): rpi-dev /proc/device-tree/soc/i2c@7ef04500: compatible brcm,bcm2711-hdmi-i2c, reg 0x7ef04500 0x100 0x7ef00b00 0x300, clock-frequency 97500
+- measured (high): Raspberry Pi 4B d03115 /proc/device-tree/soc/i2c@7ef04500: compatible brcm,bcm2711-hdmi-i2c, reg 0x7ef04500 0x100 0x7ef00b00 0x300, clock-frequency 97500
 - linux (high): drivers/i2c/busses/i2c-brcmstb.c: struct bsc_regs
 - decompile (high): start4's driver: read 0x3ECE69E2, write 0x3ECE6DEC, accessors 0x3ECE6B00 / 0x3ECE6EC8, completion wait 0x3ECE6D5C
 

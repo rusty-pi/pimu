@@ -11,7 +11,7 @@ Only what start4 1.20190925, 1.20200212 and 1.20200601 use is modelled, from the
 
 Sources:
 
-- measured (high): rpi-dev /proc/device-tree/soc/i2c@7ef04500: reg 0x7ef04500 0x100 0x7ef00b00 0x300
+- measured (high): Raspberry Pi 4B d03115 /proc/device-tree/soc/i2c@7ef04500: reg 0x7ef04500 0x100 0x7ef00b00 0x300
 - trace (high): start4 1.20190925 on a B0 (RVF_TRACE_MMIO=0x7ef00b00-0x7ef00e00): zeroes 0x130..0x1A0, writes 4 to 0x264, a (0x100 | n, value) list from 0x134 and 0x180C0005 to 0x130, then 4 to 0x260, then polls 0x268 for bit 2
 
 `HDMI1` copy:

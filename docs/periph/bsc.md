@@ -171,7 +171,7 @@ Clock divisor. start4 programs 5000 (100 kHz) for its PMIC sessions and 2500 for
 Sources:
 
 - datasheet (high): BCM2711 ARM Peripherals, BSC: DIV
-- measured (high): vcgencmd measure_clock core on rpi-dev: 500000992 Hz
+- measured (high): vcgencmd measure_clock core on a Raspberry Pi 4B d03115: 500000992 Hz
 - trace (high): pinned start4 on 0x7E205E00: 0x9C4 at 0x3ECF2E56 before its FXL6408 transfers, 0x1388 before the ones to 0x1B / 0x1E
 
 ## `DEL`

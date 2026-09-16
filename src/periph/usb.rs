@@ -6,9 +6,9 @@
 //! transfers with descriptors and class requests and moves bytes on its bulk
 //! and interrupt endpoints; it knows nothing about TRBs.
 //!
-//! Two devices are modelled, both from bytes measured on `rpi-dev`
-//! (`docs/usb-xhci.md` §5.2, and the `lsusb -v` capture that produced the
-//! tables below):
+//! Two devices are modelled, both from bytes measured on a
+//! Raspberry Pi 4B d03115 (`docs/usb-xhci.md` §5.2, and the `lsusb -v` capture
+//! that produced the tables below):
 //!
 //! * [`Hub`] — the VIA Labs `2109:3431` four-port hub that a Pi 4B has soldered
 //!   to xHCI root port 1. It is the *only* thing a stock board has on the bus
@@ -242,7 +242,7 @@ struct HubPort {
 }
 
 /// The VIA Labs `2109:3431` four-port hub soldered to xHCI root port 1 of every
-/// Pi 4B. Descriptor bytes below are verbatim from `rpi-dev`:
+/// Pi 4B. Descriptor bytes below are verbatim from a Raspberry Pi 4B d03115:
 ///
 /// ```text
 /// $ od -An -tx1 -v /sys/bus/usb/devices/1-1/descriptors
@@ -790,7 +790,7 @@ mod tests {
     }
 
     #[test]
-    fn hub_device_descriptor_matches_rpi_dev() {
+    fn hub_device_descriptor_matches_the_real_board() {
         let mut hub = Hub::new();
         let d = ctrl(&mut hub, 0x80, REQ_GET_DESCRIPTOR, 0x0100, 0, 18);
         assert_eq!(

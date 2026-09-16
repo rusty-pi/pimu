@@ -6,7 +6,7 @@
 - Base: `0x7D500000`
 - Size: `0x9310`
 
-+0x0000..+0x0FFF is the root port's own configuration space (seeded from rpi-dev; its layout is PCI's, not listed here beyond the two words with behaviour). The VPU reaches the endpoint's BAR0 only by 40-bit DMA through the outbound window; the endpoint's DMA comes back through inbound window 2.
++0x0000..+0x0FFF is the root port's own configuration space (seeded from a Raspberry Pi 4B d03115; its layout is PCI's, not listed here beyond the two words with behaviour). The VPU reaches the endpoint's BAR0 only by 40-bit DMA through the outbound window; the endpoint's DMA comes back through inbound window 2.
 
 Sources:
 
@@ -64,7 +64,7 @@ Root port link control; link status in the top half (5 GT/s x1 with slot clock o
 Sources:
 
 - linux (high): pcie-brcmstb.c: BRCM_PCIE_CAP_REGS (0xAC) + PCI_EXP_LNKCTL
-- measured (high): rpi-dev lspci: LnkSta: Speed 5GT/s, Width x1, SlotClk+
+- measured (high): Raspberry Pi 4B d03115 lspci: LnkSta: Speed 5GT/s, Width x1, SlotClk+
 
 ## `PRIV1_ID_VAL3`
 
@@ -75,7 +75,7 @@ Revision (top byte) and class code; the header word at +0x08 is a view of it, wh
 Sources:
 
 - linux (high): pcie-brcmstb.c: PCIE_RC_CFG_PRIV1_ID_VAL3
-- measured (high): rpi-dev /sys/bus/pci/devices/0000:00:00.0/config at 0x43C
+- measured (high): Raspberry Pi 4B d03115 /sys/bus/pci/devices/0000:00:00.0/config at 0x43C
 - decompile (high): the bootloader writes it at 0x000A6E20
 
 ## `MDIO_ADDR`
@@ -286,7 +286,7 @@ Hardware revision. Linux picks the 32-vector MSI block at +0x4500 from 3.3 on.
 Sources:
 
 - linux (high): pcie-brcmstb.c: PCIE_MISC_REVISION, BRCM_PCIE_HW_REV_33
-- measured (medium): rpi-dev's MSI domain is 32 wide (/sys/kernel/debug/irq/domains/unknown-1: size: 32), so at least 3.3 — _the exact revision was not read; 3.3 is the lower bound_
+- measured (medium): the MSI domain on a Raspberry Pi 4B d03115 is 32 wide (/sys/kernel/debug/irq/domains/unknown-1: size: 32), so at least 3.3 — _the exact revision was not read; 3.3 is the lower bound_
 
 ## `MEM_WIN0_BASE_LIMIT`
 

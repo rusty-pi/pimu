@@ -99,9 +99,9 @@
 //!   link, and fails the probe with `PCIe RC controller misconfigured as
 //!   Endpoint` when it reads clear;
 //! * the root port's config space as a real type-1 header with capabilities
-//!   (the `rpi-dev` dump, [`RC_CFG_SEED`]): no BARs to size, writable bus
-//!   numbers and windows, the PCIe capability that makes it a root port and
-//!   reports the trained link;
+//!   (the Raspberry Pi 4B d03115 dump, [`RC_CFG_SEED`]): no BARs to size,
+//!   writable bus numbers and windows, the PCIe capability that makes it a root
+//!   port and reports the trained link;
 //! * the SerDes MDIO port, for `brcm_pcie_set_ssc()`;
 //! * the MSI block. The endpoint's MSI is a memory write to the address in
 //!   `MSI_BAR_CONFIG`; the root complex catches it and turns it into a bit in
@@ -221,16 +221,18 @@ const SSC_CNTL_OVRD: u16 = 0xC000;
 const SSC_STATUS_SSC: u16 = 0x400;
 const SSC_STATUS_PLL_LOCK: u16 = 0x800;
 /// Link status of the trained link: 5 GT/s (`CLS` 2), x1, slot clock. That is
-/// `rpi-dev`'s `LnkSta: Speed 5GT/s, Width x1` / `SlotClk+`, and Linux prints
-/// it as `link up, 5.0 GT/s PCIe x1`.
+/// what a Raspberry Pi 4B d03115 reports as `LnkSta: Speed 5GT/s, Width x1` /
+/// `SlotClk+`, and Linux prints it as `link up, 5.0 GT/s PCIe x1`.
 const LNKSTA_UP: u32 = 0x1012;
 const LNKSTA_SLOTCLK: u32 = 0x1000;
 
 /// The bus number the root port assigns to its single downstream link. Fixed on
-/// this topology: `lspci` on `rpi-dev` shows `00:00.0` bridge, `01:00.0` VL805.
+/// this topology: `lspci` on a Raspberry Pi 4B d03115 shows `00:00.0` bridge,
+/// `01:00.0` VL805.
 const ENDPOINT_BUS: u32 = 1;
 
-/// The root port's own configuration space, measured on `rpi-dev`:
+/// The root port's own configuration space, measured on a
+/// Raspberry Pi 4B d03115:
 ///
 /// ```text
 /// $ sudo od -Ax -tx4 -v /sys/bus/pci/devices/0000:00:00.0/config
@@ -1280,9 +1282,10 @@ mod tests {
     #[test]
     fn outbound_window_spans_one_gib_at_six() {
         let p = enumerated_pcie();
-        // `dmesg` on rpi-dev: `MEM 0x0600000000..0x063fffffff -> 0x00c0000000`.
-        // The firmware picks `0x8000_0000` for the bus side rather than Linux's
-        // `0xC000_0000`, so the model has to read the register, not the DT.
+        // `dmesg` on a Raspberry Pi 4B d03115:
+        // `MEM 0x0600000000..0x063fffffff -> 0x00c0000000`. The firmware picks
+        // `0x8000_0000` for the bus side rather than Linux's `0xC000_0000`, so
+        // the model has to read the register, not the DT.
         assert_eq!(p.outbound_bus_addr(0x6_0000_0000), Some(0x8000_0000));
         assert_eq!(p.outbound_bus_addr(0x6_3FFF_FFFF), Some(0xBFFF_FFFF));
         assert_eq!(p.outbound_bus_addr(0x5_FFFF_FFFF), None);
