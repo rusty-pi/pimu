@@ -650,3 +650,25 @@ confidence = "high"
 kind       = "standard"
 ref        = "SDHCI 3.00, 2.2.32 / 2.2.33"
 confidence = "high"
+
+[[register]]
+name   = "REG_100"
+offset = 0x100
+access = "rw"
+notes  = "Past the SDHCI registers. start4 sets bit 31 as it hands the card over, right after REG_154. Meaning unknown."
+
+[[register.source]]
+kind       = "trace"
+ref        = "pinned start4 reads it at 0x3ED4A1DE and writes 0x80000000 at 0x3ED4A1E6; just before: GPIO +0xD0 <- 1, REG_154 <- 1, and CM EMMC2DIV <- 0x7800"
+confidence = "high"
+
+[[register]]
+name   = "REG_154"
+offset = 0x154
+access = "rw"
+notes  = "Past the SDHCI registers. start4 writes 1 here as it hands the card over, between setting GPIO +0xD0 and REG_100. Meaning unknown."
+
+[[register.source]]
+kind       = "trace"
+ref        = "pinned start4 writes 0x00000001 at 0x3ED4A1D8"
+confidence = "high"
