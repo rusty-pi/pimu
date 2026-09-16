@@ -3,7 +3,7 @@ name    = "clkmon"
 base    = 0x7D5D0000
 size    = 0x10000
 summary = "VPU clock block (PLLs and frequency monitors) below the 0x7E window"
-notes   = "The AVS monitor (`avs`, +0x2000) and the PVT monitors (`pvt`, +0x8000) sit inside this window and are decoded ahead of it. A full traced boot touches no PLL divider or lock register here; the registers below are the complete list outside the two sub-blocks, and all are plain storage with the password byte masked."
+notes   = "The AVS monitor (`avs`, +0x2000) and the PVT monitors (`pvt`, +0x8000) sit inside this window and are decoded ahead of it. A full traced boot touches no PLL divider or lock register here; the registers below are the complete list outside the two sub-blocks (REG_1818 only matters on a die whose REG_1820 bit 10 is set), and all are plain storage with the password byte masked."
 
 [[block.source]]
 kind       = "decompile"
@@ -19,7 +19,7 @@ confidence = "high"
 name   = "REG_1800"
 offset = 0x1800
 access = "rw"
-notes  = "FUN_0ec2ffb4 sets bit 2 from the measured core voltage."
+notes  = "FUN_0ec2ffb4 sets bit 2 when the core rail (AVS channel 3) reads below 0.94 V (9400 tenths of a mV), and clears it otherwise. start4 updates it after its voltage calibration and again after its monitoring pass."
 
 [[register.source]]
 kind       = "decompile"
@@ -35,11 +35,11 @@ confidence = "high"
 name   = "REG_1814"
 offset = 0x1814
 access = "rw"
-notes  = "FUN_0ec2ffdc tests (reg & 0x14) != 0 as the condition of a voltage-ramp loop. Hardware reads 0x16; the model keeps 0 ('settled'), because nothing in that loop writes the register and a constant 'true' would never exit."
+notes  = "FUN_0ec2ffdc tests (reg & 0x14) != 0 as the condition of a voltage-ramp loop: while it holds, start4 raises the core voltage by 16 codes and measures again. It only runs when REG_1820 bit 10 is set, and writes REG_1818 to 0 (then waits 5 ms) before each test. Hardware reads 0x16; the model keeps 0 ('settled'), because nothing in that loop writes the register and a constant 'true' would never exit."
 
 [[register.source]]
 kind       = "decompile"
-ref        = "FUN_0ec2ffdc, loop in FUN_0ec303e8 behind a FUN_0ec30196() != 0 guard"
+ref        = "FUN_0ec2ffdc, loop in FUN_0ec31bb2 behind a FUN_0ec30196() != 0 guard"
 confidence = "high"
 
 [[register.source]]
@@ -49,10 +49,26 @@ confidence = "high"
 note       = "deliberately not reproduced; see notes"
 
 [[register]]
+name   = "REG_1818"
+offset = 0x1818
+access = "rw"
+notes  = "start4 writes 0 here, then waits 5 ms, before each test of REG_1814 (FUN_0ec30010). Not reached on a board whose REG_1820 bit 10 is clear."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "FUN_0ec30010: _DAT_7d5d1818 = 0; sleep 5000 us"
+confidence = "high"
+
+[[register.source]]
+kind       = "measured"
+ref        = "0x00000000 on a Raspberry Pi 4B d03115"
+confidence = "high"
+
+[[register]]
 name   = "REG_1820"
 offset = 0x1820
 access = "rw"
-notes  = "FUN_0ec30196 takes bit 10 as a predicate and FUN_0ec301a6 decodes bits 23:11. Reads 0 on hardware too: not a blanked status register."
+notes  = "FUN_0ec30196 takes bit 10 as a predicate and FUN_0ec301a6 decodes bits 23:11. Reads 0 on hardware too: not a blanked status register. With bit 10 set, start4 keeps the core voltage at or above a floor: bits 20:17 and 16:14 index two millivolt tables (DAT_0ee00510, 16 entries from 808; DAT_0ee00550, 8 entries from 808), and the floor is the larger entry times 10 plus 500, in tenths of a mV. It also runs the REG_1814 loop."
 
 [[register.source]]
 kind       = "decompile"
@@ -68,11 +84,21 @@ confidence = "high"
 name   = "CHAR_DONE"
 offset = 0x183C
 access = "rw"
-notes  = "start4's own 'characterisation done' flag."
+notes  = "start4's own 'characterisation done' flag. start4 reads it before its core-voltage calibration and clears it; if it was already set, the calibration is skipped and the monitor windows from the earlier run are used as they are. It is set to 1 once a calibration succeeds."
 
 [[register.source]]
 kind       = "decompile"
 ref        = "FUN_0ec302e2 writes it"
+confidence = "high"
+
+[[register.source]]
+kind       = "decompile"
+ref        = "FUN_0ec2fe38: FUN_0ec300c4 reads it, FUN_0ec302e2(0) clears it, FUN_0ec309ec only runs when it read 0, FUN_0ec302e2(1) on success"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4: read at 0x3EC300CA, 0 written at 0x3EC302E8 and later 1 at the same PC"
 confidence = "high"
 
 [[register.source]]
@@ -84,9 +110,19 @@ confidence = "high"
 name   = "REG_A000"
 offset = 0xA000
 access = "rw"
-notes  = "Written 0xA0, never read back."
+notes  = "Written 0xA0, never read back, as start4's core-voltage calibration starts."
 
 [[register.source]]
 kind       = "decompile"
 ref        = "FUN_0ec30200"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4 0x3EC3020A"
+confidence = "high"
+
+[[register.source]]
+kind       = "measured"
+ref        = "0x000000a0 on a Raspberry Pi 4B d03115"
 confidence = "high"

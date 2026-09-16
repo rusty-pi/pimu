@@ -25,6 +25,8 @@ Sources:
 | `0x024` | [`PERIIDIV`](#periidiv) | rw | 32 | 1, best high |
 | `0x030` | [`ISPCTL`](#ispctl) | rw | 32 | 2, best high |
 | `0x034` | [`ISPDIV`](#ispdiv) | rw | 32 | 2, best high |
+| `0x0E0` | [`TSENSCTL`](#tsensctl) | rw | 32 | 3, best high |
+| `0x0E4` | [`TSENSDIV`](#tsensdiv) | rw | 32 | 3, best high |
 | `0x0E8` | [`TIMERCTL`](#timerctl) | rw | 32 | 2, best high |
 | `0x0EC` | [`TIMERDIV`](#timerdiv) | rw | 32 | 2, best high |
 | `0x0F0` | [`UARTCTL`](#uartctl) | rw | 32 | 3, best high |
@@ -153,6 +155,30 @@ Sources:
 
 - linux (high): clk-bcm2835.c: CM_ISPDIV
 - trace (high): start4: 0x5A000000 at 0x3ED48742, later 0x5A001000 at 0x3EC7DE34
+
+## `TSENSCTL`
+
+Offset `0x0E0` · access `rw` · 32 bits
+
+The on-die temperature sensor's clock generator, off the oscillator. start4 starts it (SRC 1, divider first) just before its first temperature reading, as part of the core-voltage characterisation.
+
+Sources:
+
+- linux (high): clk-bcm2835.c: CM_TSENSCTL
+- trace (high): start4: 0x5A000000 at 0x3EC7DDBA, 0x5A000041 at 0x3EC7DE96, 0x5A000051 at 0x3EC7DEC4, then the first read of the AVS temperature channel at 0x3ED7C92C
+- measured (high): /dev/mem read of 0xFE1010E0 on a Raspberry Pi 4B d03115, Linux idle: 0x00000091 (BUSY, ENAB, SRC 1)
+
+## `TSENSDIV`
+
+Offset `0x0E4` · access `rw` · 32 bits
+
+Temperature sensor clock divider: 0x10000 is 16, 3.375 MHz off the 54 MHz oscillator.
+
+Sources:
+
+- linux (high): clk-bcm2835.c: CM_TSENSDIV
+- trace (high): start4: 0x5A010000 at 0x3EC7DE34
+- measured (high): /dev/mem read of 0xFE1010E4 on a Raspberry Pi 4B d03115, Linux idle: 0x00010000
 
 ## `TIMERCTL`
 
