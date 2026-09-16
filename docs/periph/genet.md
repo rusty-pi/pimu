@@ -6,13 +6,13 @@
 - Base: `0x7D580000`
 - Size: `0x10000`
 
-GENET v4/v5 layout. Each DMA direction has 256 three-word descriptors and 17 ring register blocks 0x40 apart; ring 16 is the default ring. Reset values below are the measured values of registers no client writes on the reference board's boot path.
+GENET v4/v5 layout. Each DMA direction has 256 three-word descriptors and 17 ring register blocks `0x40` apart; ring 16 is the default ring. Reset values below are the measured values of registers no client writes on the reference board's boot path.
 
 Sources:
 
-- linux (high): /scb/ethernet@7d580000, reg = <0x7d580000 0x10000>; drivers/net/ethernet/broadcom/genet/bcmgenet.h, drivers/net/mdio/mdio-bcm-unimac.c
-- decompile (high): EEPROM bootloader network boot (disassembled LZ4 BOOTLOADER stage); start4 MDIO FUN_0ecc3198 / FUN_0ecc3280, UMAC start FUN_0ecc3b6c, ring 16 setup FUN_0ecc2d54 / FUN_0ecc2e4c
-- measured (high): read-only /dev/mem reads of named registers on a Pi 4B rev 1.5 running Linux 6.12, link up
+- linux (high): `/scb/ethernet@7d580000`, `reg = <0x7d580000 0x10000>`; `drivers/net/ethernet/broadcom/genet/bcmgenet.h`, `drivers/net/mdio/mdio-bcm-unimac.c`
+- decompile (high): EEPROM bootloader network boot (disassembled LZ4 BOOTLOADER stage); start4 MDIO `FUN_0ecc3198` / `FUN_0ecc3280`, UMAC start `FUN_0ecc3b6c`, ring 16 setup `FUN_0ecc2d54` / `FUN_0ecc2e4c`
+- measured (high): read-only `/dev/mem` reads of named registers on a Pi 4B rev 1.5 running Linux 6.12, link up
 
 ## Register map
 
@@ -79,12 +79,12 @@ Sources:
 
 Offset `0x000` · access `r` · 32 bits · reset `0x6000000`
 
-Major 6 in 27:24, which bcmgenet maps to GENET v5.
+Major 6 in 27:24, which `bcmgenet` maps to GENET v5.
 
 Sources:
 
-- measured (high): SYS_REV_CTRL 0x06000000
-- linux (high): bcmgenet_set_hw_params: 'GENET 5.0 EPHY: 0x0000'
+- measured (high): `SYS_REV_CTRL` `0x06000000`
+- linux (high): `bcmgenet_set_hw_params`: `GENET 5.0 EPHY: 0x0000`
 
 ## `SYS_PORT_CTRL`
 
@@ -94,7 +94,7 @@ Port mode.
 
 Sources:
 
-- linux (high): bcmgenet.h: SYS_PORT_CTRL
+- linux (high): `bcmgenet.h`: `SYS_PORT_CTRL`
 
 ## `SYS_RBUF_FLUSH_CTRL`
 
@@ -104,7 +104,7 @@ Receive buffer flush.
 
 Sources:
 
-- linux (high): bcmgenet.h: SYS_RBUF_FLUSH_CTRL
+- linux (high): `bcmgenet.h`: `SYS_RBUF_FLUSH_CTRL`
 
 ## `SYS_TBUF_FLUSH_CTRL`
 
@@ -114,7 +114,7 @@ Transmit buffer flush.
 
 Sources:
 
-- linux (high): bcmgenet.h: SYS_TBUF_FLUSH_CTRL
+- linux (high): `bcmgenet.h`: `SYS_TBUF_FLUSH_CTRL`
 
 ## `EXT_PWR_MGMT`
 
@@ -124,17 +124,17 @@ EXT block power management.
 
 Sources:
 
-- measured (high): EXT_PWR_MGMT 0x051f02c3
+- measured (high): `EXT_PWR_MGMT` `0x051f02c3`
 
 ## `EXT_RGMII_OOB_CTRL`
 
 Offset `0x08C` · access `rw` · 32 bits · reset `0xF00000`
 
-RGMII out-of-band control. Measured 0x00f00050: Linux adds RGMII_MODE_EN (6) and RGMII_LINK (4) to the 23:20 the bootloader leaves.
+RGMII out-of-band control. Measured `0x00f00050`: Linux adds `RGMII_MODE_EN` (6) and `RGMII_LINK` (4) to the 23:20 the bootloader leaves.
 
 Sources:
 
-- measured (high): EXT_RGMII_OOB_CTRL 0x00f00050
+- measured (high): `EXT_RGMII_OOB_CTRL` `0x00f00050`
 
 ## `EXT_GPHY_CTRL`
 
@@ -144,40 +144,40 @@ Internal GPHY control; unused with the external RGMII PHY.
 
 Sources:
 
-- measured (high): EXT_GPHY_CTRL 0x00000000
+- measured (high): `EXT_GPHY_CTRL` `0x00000000`
 
 ## `INTRL2_CPU_STAT`
 
 Offset `0x200`, 2 elements 0x40 apart · access `r` · 32 bits
 
-Interrupt status of INTRL2_0 (ring 16 and MDIO) and INTRL2_1 (rings 0..15: TX 15:0, RX 31:16). Each drives a line while an unmasked bit is set: GIC SPI 157 and 158.
+Interrupt status of `INTRL2_0` (ring 16 and MDIO) and `INTRL2_1` (rings 0..15: TX 15:0, RX 31:16). Each drives a line while an unmasked bit is set: GIC SPI 157 and 158.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
-| 13 | `RXDMA_MBDONE` | r | INTRL2_0: ring 16 received. |
-| 16 | `TXDMA_MBDONE` | r | INTRL2_0: ring 16 sent. |
-| 23 | `MDIO_DONE` | r | INTRL2_0: MDIO frame done. |
-| 24 | `MDIO_ERROR` | r | INTRL2_0: MDIO read failed. |
+| 13 | `RXDMA_MBDONE` | r | `INTRL2_0`: ring 16 received. |
+| 16 | `TXDMA_MBDONE` | r | `INTRL2_0`: ring 16 sent. |
+| 23 | `MDIO_DONE` | r | `INTRL2_0`: MDIO frame done. |
+| 24 | `MDIO_ERROR` | r | `INTRL2_0`: MDIO read failed. |
 
 Sources:
 
-- linux (high): bcmgenet.h: INTRL2_CPU_STAT, UMAC_IRQ_*
+- linux (high): `bcmgenet.h`: `INTRL2_CPU_STAT`, `UMAC_IRQ_*`
 
 `RXDMA_MBDONE` sources:
 
-- linux (high): bcmgenet.h: UMAC_IRQ_RXDMA_MBDONE
+- linux (high): `bcmgenet.h`: `UMAC_IRQ_RXDMA_MBDONE`
 
 `TXDMA_MBDONE` sources:
 
-- linux (high): bcmgenet.h: UMAC_IRQ_TXDMA_MBDONE
+- linux (high): `bcmgenet.h`: `UMAC_IRQ_TXDMA_MBDONE`
 
 `MDIO_DONE` sources:
 
-- linux (high): bcmgenet.h: UMAC_IRQ_MDIO_DONE
+- linux (high): `bcmgenet.h`: `UMAC_IRQ_MDIO_DONE`
 
 `MDIO_ERROR` sources:
 
-- linux (high): bcmgenet.h: UMAC_IRQ_MDIO_ERROR
+- linux (high): `bcmgenet.h`: `UMAC_IRQ_MDIO_ERROR`
 
 ## `INTRL2_CPU_SET`
 
@@ -187,7 +187,7 @@ Set status bits.
 
 Sources:
 
-- linux (high): bcmgenet.h: INTRL2_CPU_SET
+- linux (high): `bcmgenet.h`: `INTRL2_CPU_SET`
 
 ## `INTRL2_CPU_CLEAR`
 
@@ -197,7 +197,7 @@ Clear status bits.
 
 Sources:
 
-- linux (high): bcmgenet.h: INTRL2_CPU_CLEAR
+- linux (high): `bcmgenet.h`: `INTRL2_CPU_CLEAR`
 
 ## `INTRL2_CPU_MASK_STATUS`
 
@@ -207,7 +207,7 @@ Mask; everything masked until a driver unmasks it.
 
 Sources:
 
-- linux (high): bcmgenet.h: INTRL2_CPU_MASK_STATUS
+- linux (high): `bcmgenet.h`: `INTRL2_CPU_MASK_STATUS`
 
 ## `INTRL2_CPU_MASK_SET`
 
@@ -217,7 +217,7 @@ Mask bits.
 
 Sources:
 
-- linux (high): bcmgenet.h: INTRL2_CPU_MASK_SET
+- linux (high): `bcmgenet.h`: `INTRL2_CPU_MASK_SET`
 
 ## `INTRL2_CPU_MASK_CLEAR`
 
@@ -227,13 +227,13 @@ Unmask bits.
 
 Sources:
 
-- linux (high): bcmgenet.h: INTRL2_CPU_MASK_CLEAR
+- linux (high): `bcmgenet.h`: `INTRL2_CPU_MASK_CLEAR`
 
 ## `RBUF_CTRL`
 
 Offset `0x300` · access `rw` · 32 bits · reset `0xC040`
 
-Receive buffer control. Measured 0xc043 with Linux's two low bits set.
+Receive buffer control. Measured `0xc043` with Linux's two low bits set.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -242,15 +242,15 @@ Receive buffer control. Measured 0xc043 with Linux's two low bits set.
 
 Sources:
 
-- measured (high): RBUF_CTRL 0x0000c043
+- measured (high): `RBUF_CTRL` `0x0000c043`
 
 `STATUS64` sources:
 
-- linux (high): bcmgenet.h: RBUF_64B_EN
+- linux (high): `bcmgenet.h`: `RBUF_64B_EN`
 
 `ALIGN_2B` sources:
 
-- linux (high): bcmgenet.h: RBUF_ALIGN_2B
+- linux (high): `bcmgenet.h`: `RBUF_ALIGN_2B`
 
 ## `RBUF_CHK_CTRL`
 
@@ -260,7 +260,7 @@ Receive checksum control.
 
 Sources:
 
-- linux (high): bcmgenet.h: RBUF_CHK_CTRL
+- linux (high): `bcmgenet.h`: `RBUF_CHK_CTRL`
 
 ## `RBUF_TBUF_SIZE_CTRL`
 
@@ -270,7 +270,7 @@ Transmit buffer size control.
 
 Sources:
 
-- linux (high): bcmgenet.h: RBUF_TBUF_SIZE_CTRL
+- linux (high): `bcmgenet.h`: `RBUF_TBUF_SIZE_CTRL`
 
 ## `TBUF_CTRL`
 
@@ -284,11 +284,11 @@ Transmit buffer control.
 
 Sources:
 
-- linux (high): bcmgenet.h: TBUF_CTRL
+- linux (high): `bcmgenet.h`: `TBUF_CTRL`
 
 `STATUS64` sources:
 
-- linux (high): bcmgenet.h: TBUF_64B_EN
+- linux (high): `bcmgenet.h`: `TBUF_64B_EN`
 
 ## `TBUF_BP_MC`
 
@@ -298,7 +298,7 @@ Back-pressure mask.
 
 Sources:
 
-- measured (high): TBUF_BP_MC 0x0000ffff
+- measured (high): `TBUF_BP_MC` `0x0000ffff`
 
 ## `UMAC_HD_BKP_CTRL`
 
@@ -308,7 +308,7 @@ Half-duplex back-pressure.
 
 Sources:
 
-- measured (high): UMAC_HD_BKP_CTRL 0x00000014
+- measured (high): `UMAC_HD_BKP_CTRL` `0x00000014`
 
 ## `UMAC_CMD`
 
@@ -329,40 +329,40 @@ MAC command. Turning the MAC on kicks the rings.
 
 Sources:
 
-- linux (high): unimac.h: UMAC_CMD
-- measured (high): UMAC_CMD 0x0000000b with the link up
+- linux (high): `unimac.h`: `UMAC_CMD`
+- measured (high): `UMAC_CMD` `0x0000000b` with the link up
 
 `TX_EN` sources:
 
-- linux (high): unimac.h: CMD_TX_EN
+- linux (high): `unimac.h`: `CMD_TX_EN`
 
 `RX_EN` sources:
 
-- linux (high): unimac.h: CMD_RX_EN
+- linux (high): `unimac.h`: `CMD_RX_EN`
 
 `SPEED` sources:
 
-- linux (high): unimac.h: CMD_SPEED_SHIFT / CMD_SPEED_MASK
+- linux (high): `unimac.h`: `CMD_SPEED_SHIFT` / `CMD_SPEED_MASK`
 
 `PROMISC` sources:
 
-- linux (high): unimac.h: CMD_PROMISC
+- linux (high): `unimac.h`: `CMD_PROMISC`
 
 `CRC_FWD` sources:
 
-- linux (high): unimac.h: CMD_CRC_FWD
+- linux (high): `unimac.h`: `CMD_CRC_FWD`
 
 `RX_PAUSE_IGNORE` sources:
 
-- linux (high): unimac.h: CMD_RX_PAUSE_IGNORE
+- linux (high): `unimac.h`: `CMD_RX_PAUSE_IGNORE`
 
 `HD_EN` sources:
 
-- linux (high): unimac.h: CMD_HD_EN
+- linux (high): `unimac.h`: `CMD_HD_EN`
 
 `TX_PAUSE_IGNORE` sources:
 
-- linux (high): unimac.h: CMD_TX_PAUSE_IGNORE
+- linux (high): `unimac.h`: `CMD_TX_PAUSE_IGNORE`
 
 ## `UMAC_MAC0`
 
@@ -372,7 +372,7 @@ First four octets of the station address, most significant first.
 
 Sources:
 
-- linux (high): unimac.h: UMAC_MAC0
+- linux (high): `unimac.h`: `UMAC_MAC0`
 
 ## `UMAC_MAC1`
 
@@ -382,7 +382,7 @@ Last two octets of the station address, in 15:0.
 
 Sources:
 
-- linux (high): unimac.h: UMAC_MAC1
+- linux (high): `unimac.h`: `UMAC_MAC1`
 
 ## `UMAC_MAX_FRAME_LEN`
 
@@ -392,7 +392,7 @@ Largest frame accepted.
 
 Sources:
 
-- linux (high): unimac.h: UMAC_MAX_FRAME_LEN
+- linux (high): `unimac.h`: `UMAC_MAX_FRAME_LEN`
 
 ## `UMAC_PAUSE_QUANTA`
 
@@ -402,18 +402,18 @@ Pause quanta.
 
 Sources:
 
-- measured (high): UMAC_PAUSE_QUANTA 0x0000ffff
+- measured (high): `UMAC_PAUSE_QUANTA` `0x0000ffff`
 
 ## `UMAC_MODE`
 
 Offset `0x844` · access `r` · 32 bits
 
-Speed (1:0), half duplex (2), RX / TX pause (3 / 4), link (5); follows UMAC_CMD and the PHY.
+Speed (1:0), half duplex (2), RX / TX pause (3 / 4), link (5); follows `UMAC_CMD` and the PHY.
 
 Sources:
 
-- linux (high): unimac.h: UMAC_MODE
-- measured (high): UMAC_MODE 0x0000003a with UMAC_CMD 0xb and the link up
+- linux (high): `unimac.h`: `UMAC_MODE`
+- measured (high): `UMAC_MODE` `0x0000003a` with `UMAC_CMD` `0xb` and the link up
 
 ## `UMAC_TX_IPG_LEN`
 
@@ -423,17 +423,17 @@ Inter-packet gap.
 
 Sources:
 
-- measured (high): UMAC_TX_IPG_LEN 0x00003c00
+- measured (high): `UMAC_TX_IPG_LEN` `0x00003c00`
 
 ## `UMAC_EEE_CTRL`
 
 Offset `0x864` · access `rw` · 32 bits · reset `0x40`
 
-EEE control. Measured 0x48 once Linux has EEE active (EEE_EN, bit 3).
+EEE control. Measured `0x48` once Linux has EEE active (`EEE_EN`, bit 3).
 
 Sources:
 
-- measured (high): UMAC_EEE_CTRL 0x00000048
+- measured (high): `UMAC_EEE_CTRL` `0x00000048`
 
 ## `UMAC_MIB`
 
@@ -443,7 +443,7 @@ MIB counters. Nothing is counted; a MIB reset clears them anyway.
 
 Sources:
 
-- linux (high): bcmgenet.h: UMAC_MIB_START
+- linux (high): `bcmgenet.h`: `UMAC_MIB_START`
 
 ## `UMAC_MIB_CTRL`
 
@@ -453,13 +453,13 @@ MIB control; bits 2:0 reset the RX / RUNT / TX counters.
 
 Sources:
 
-- linux (high): bcmgenet.h: UMAC_MIB_CTRL, MIB_RESET_RX / _RUNT / _TX
+- linux (high): `bcmgenet.h`: `UMAC_MIB_CTRL`, `MIB_RESET_RX` / `_RUNT` / `_TX`
 
 ## `UMAC_MDIO_CMD`
 
 Offset `0xE14` · access `rw` · 32 bits
 
-MDIO command. With START_BUSY set the clause-22 frame runs and completes before the next access.
+MDIO command. With `START_BUSY` set the clause-22 frame runs and completes before the next access.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -472,32 +472,32 @@ MDIO command. With START_BUSY set the clause-22 frame runs and completes before 
 
 Sources:
 
-- linux (high): mdio-bcm-unimac.c: MDIO_CMD
-- measured (high): MDIO_CMD 0x0821796d (last op: read of PHY 1 BMSR = 0x796d)
+- linux (high): `mdio-bcm-unimac.c`: `MDIO_CMD`
+- measured (high): `MDIO_CMD` `0x0821796d` (last op: read of PHY 1 `BMSR = 0x796d`)
 
 `DATA` sources:
 
-- linux (high): mdio-bcm-unimac.c
+- linux (high): `mdio-bcm-unimac.c`
 
 `REG` sources:
 
-- linux (high): mdio-bcm-unimac.c: MDIO_REG_SHIFT
+- linux (high): `mdio-bcm-unimac.c`: `MDIO_REG_SHIFT`
 
 `PMD` sources:
 
-- linux (high): mdio-bcm-unimac.c: MDIO_PMD_SHIFT
+- linux (high): `mdio-bcm-unimac.c`: `MDIO_PMD_SHIFT`
 
 `OP` sources:
 
-- linux (high): mdio-bcm-unimac.c: MDIO_WR / MDIO_RD
+- linux (high): `mdio-bcm-unimac.c`: `MDIO_WR` / `MDIO_RD`
 
 `READ_FAIL` sources:
 
-- linux (high): mdio-bcm-unimac.c: MDIO_READ_FAIL
+- linux (high): `mdio-bcm-unimac.c`: `MDIO_READ_FAIL`
 
 `START_BUSY` sources:
 
-- linux (high): mdio-bcm-unimac.c: MDIO_START_BUSY
+- linux (high): `mdio-bcm-unimac.c`: `MDIO_START_BUSY`
 
 ## `UMAC_MDIO_CFG`
 
@@ -507,17 +507,17 @@ MDIO configuration; left in clause-22 mode by every client.
 
 Sources:
 
-- measured (high): MDIO_CFG 0x00000091
+- measured (high): `MDIO_CFG` `0x00000091`
 
 ## `RDMA_DESC`
 
 Offset `0x2000`, 768 elements 0x4 apart · access `rw` · 32 bits
 
-Receive descriptor RAM: 256 descriptors of length_status, address_lo, address_hi.
+Receive descriptor RAM: 256 descriptors of `length_status`, `address_lo`, `address_hi`.
 
 Sources:
 
-- linux (high): bcmgenet.h: GENET_RDMA_REG_OFF, DMA_DESC_LENGTH_STATUS / ADDRESS_LO / ADDRESS_HI
+- linux (high): `bcmgenet.h`: `GENET_RDMA_REG_OFF`, `DMA_DESC_LENGTH_STATUS` / `ADDRESS_LO` / `ADDRESS_HI`
 
 ## `RDMA_RING_WRITE_PTR`
 
@@ -527,7 +527,7 @@ Per-ring write pointer, in descriptor-RAM words.
 
 Sources:
 
-- linux (high): bcmgenet.c: genet_dma_ring_regs_v4, RDMA_WRITE_PTR
+- linux (high): `bcmgenet.c`: `genet_dma_ring_regs_v4`, `RDMA_WRITE_PTR`
 
 ## `RDMA_RING_PROD_INDEX`
 
@@ -537,7 +537,7 @@ Per-ring producer index (16 bits, wraps).
 
 Sources:
 
-- linux (high): bcmgenet.c: RDMA_PROD_INDEX
+- linux (high): `bcmgenet.c`: `RDMA_PROD_INDEX`
 
 ## `RDMA_RING_CONS_INDEX`
 
@@ -547,7 +547,7 @@ Per-ring consumer index.
 
 Sources:
 
-- linux (high): bcmgenet.c: RDMA_CONS_INDEX
+- linux (high): `bcmgenet.c`: `RDMA_CONS_INDEX`
 
 ## `RDMA_RING_BUF_SIZE`
 
@@ -557,7 +557,7 @@ Ring size (31:16) and buffer length (15:0).
 
 Sources:
 
-- linux (high): bcmgenet.c: DMA_RING_BUF_SIZE
+- linux (high): `bcmgenet.c`: `DMA_RING_BUF_SIZE`
 
 ## `RDMA_RING_START_ADDR`
 
@@ -567,7 +567,7 @@ First word of the ring in descriptor RAM.
 
 Sources:
 
-- linux (high): bcmgenet.c: DMA_START_ADDR
+- linux (high): `bcmgenet.c`: `DMA_START_ADDR`
 
 ## `RDMA_RING_END_ADDR`
 
@@ -577,7 +577,7 @@ Last word of the ring, inclusive.
 
 Sources:
 
-- linux (high): bcmgenet.c: DMA_END_ADDR
+- linux (high): `bcmgenet.c`: `DMA_END_ADDR`
 
 ## `RDMA_RING_CFG`
 
@@ -587,13 +587,13 @@ Ring configuration.
 
 Sources:
 
-- linux (high): bcmgenet.h: DMA_RING_CFG
+- linux (high): `bcmgenet.h`: `DMA_RING_CFG`
 
 ## `RDMA_CTRL`
 
 Offset `0x3044` · access `rw` · 32 bits
 
-DMA enable (bit 0) and one enable per ring (bit ring + 1).
+DMA enable (bit 0) and one enable per ring (bit `ring + 1`).
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -601,22 +601,22 @@ DMA enable (bit 0) and one enable per ring (bit ring + 1).
 
 Sources:
 
-- linux (high): bcmgenet.h: DMA_CTRL, DMA_EN
-- measured (high): RDMA_CTRL 0x00000003 (Linux receives on ring 0 only)
+- linux (high): `bcmgenet.h`: `DMA_CTRL`, `DMA_EN`
+- measured (high): `RDMA_CTRL` `0x00000003` (Linux receives on ring 0 only)
 
 `EN` sources:
 
-- linux (high): bcmgenet.h: DMA_EN
+- linux (high): `bcmgenet.h`: `DMA_EN`
 
 ## `RDMA_STATUS`
 
 Offset `0x3048` · access `r` · 32 bits
 
-Bit 0 DMA disabled, bits 1..17 ring n - 1 disabled, bit 18 descriptor RAM init busy (never, here).
+Bit 0 DMA disabled, bits 1..17 ring `n - 1` disabled, bit 18 descriptor RAM init busy (never, here).
 
 Sources:
 
-- measured (high): RDMA_CTRL 0x03 / RDMA_STATUS 0x3fffc and TDMA_CTRL 0x3f / TDMA_STATUS 0x3ffc0 fit exactly this
+- measured (high): `RDMA_CTRL` `0x03` / `RDMA_STATUS` `0x3fffc` and `TDMA_CTRL` `0x3f` / `TDMA_STATUS` `0x3ffc0` fit exactly this
 - decompile (high): the bootloader waits for bit 18 after reset and bit 0 after a stop
 
 ## `RDMA_INDEX2RING`
@@ -627,17 +627,17 @@ HFB filter to receive ring: 4 bits per filter, eight filters per word.
 
 Sources:
 
-- linux (high): bcmgenet.h: DMA_INDEX2RING_0..7
+- linux (high): `bcmgenet.h`: `DMA_INDEX2RING_0..7`
 
 ## `TDMA_DESC`
 
 Offset `0x4000`, 768 elements 0x4 apart · access `rw` · 32 bits
 
-Transmit descriptor RAM, laid out as RDMA_DESC.
+Transmit descriptor RAM, laid out as `RDMA_DESC`.
 
 Sources:
 
-- linux (high): bcmgenet.h: GENET_TDMA_REG_OFF
+- linux (high): `bcmgenet.h`: `GENET_TDMA_REG_OFF`
 
 ## `TDMA_RING_READ_PTR`
 
@@ -647,7 +647,7 @@ Per-ring read pointer.
 
 Sources:
 
-- linux (high): bcmgenet.c: TDMA_READ_PTR
+- linux (high): `bcmgenet.c`: `TDMA_READ_PTR`
 
 ## `TDMA_RING_CONS_INDEX`
 
@@ -657,7 +657,7 @@ Per-ring consumer index.
 
 Sources:
 
-- linux (high): bcmgenet.c: TDMA_CONS_INDEX
+- linux (high): `bcmgenet.c`: `TDMA_CONS_INDEX`
 
 ## `TDMA_RING_PROD_INDEX`
 
@@ -667,7 +667,7 @@ Per-ring producer index; writing it sends what lies between the two indices.
 
 Sources:
 
-- linux (high): bcmgenet.c: TDMA_PROD_INDEX
+- linux (high): `bcmgenet.c`: `TDMA_PROD_INDEX`
 
 ## `TDMA_RING_BUF_SIZE`
 
@@ -677,7 +677,7 @@ Ring size and buffer length.
 
 Sources:
 
-- linux (high): bcmgenet.c: DMA_RING_BUF_SIZE
+- linux (high): `bcmgenet.c`: `DMA_RING_BUF_SIZE`
 
 ## `TDMA_RING_START_ADDR`
 
@@ -687,7 +687,7 @@ First word of the ring.
 
 Sources:
 
-- linux (high): bcmgenet.c: DMA_START_ADDR
+- linux (high): `bcmgenet.c`: `DMA_START_ADDR`
 
 ## `TDMA_RING_END_ADDR`
 
@@ -697,7 +697,7 @@ Last word of the ring, inclusive.
 
 Sources:
 
-- linux (high): bcmgenet.c: DMA_END_ADDR
+- linux (high): `bcmgenet.c`: `DMA_END_ADDR`
 
 ## `TDMA_RING_CFG`
 
@@ -707,27 +707,27 @@ Ring configuration.
 
 Sources:
 
-- linux (high): bcmgenet.h: DMA_RING_CFG
+- linux (high): `bcmgenet.h`: `DMA_RING_CFG`
 
 ## `TDMA_CTRL`
 
 Offset `0x5044` · access `rw` · 32 bits
 
-As RDMA_CTRL.
+As `RDMA_CTRL`.
 
 Sources:
 
-- measured (high): TDMA_CTRL 0x0000003f
+- measured (high): `TDMA_CTRL` `0x0000003f`
 
 ## `TDMA_STATUS`
 
 Offset `0x5048` · access `r` · 32 bits
 
-As RDMA_STATUS.
+As `RDMA_STATUS`.
 
 Sources:
 
-- measured (high): TDMA_STATUS 0x0003ffc0
+- measured (high): `TDMA_STATUS` `0x0003ffc0`
 
 ## `HFB_RAM`
 
@@ -737,7 +737,7 @@ Hardware Filter Block RAM: 48 filters of 128 words, two frame bytes per word wit
 
 Sources:
 
-- linux (high): bcmgenet.c: bcmgenet_hfb_insert_data
+- linux (high): `bcmgenet.c`: `bcmgenet_hfb_insert_data`
 
 ## `HFB_CTRL`
 
@@ -751,11 +751,11 @@ HFB control. The bootloader and start4 never turn it on; Linux does, with a catc
 
 Sources:
 
-- linux (high): bcmgenet.h: HFB_CTRL; commit 3b5d4f5a820d moves the DESC_INDEX flow to ring 0
+- linux (high): `bcmgenet.h`: `HFB_CTRL`; commit 3b5d4f5a820d moves the `DESC_INDEX` flow to ring 0
 
 `EN` sources:
 
-- linux (high): bcmgenet.h: RBUF_HFB_EN
+- linux (high): `bcmgenet.h`: `RBUF_HFB_EN`
 
 ## `HFB_FLT_ENABLE`
 
@@ -765,7 +765,7 @@ Filter enables: filters 32..47 in word 0, 0..31 in word 1.
 
 Sources:
 
-- linux (high): bcmgenet.h: HFB_FLT_ENABLE_V3PLUS
+- linux (high): `bcmgenet.h`: `HFB_FLT_ENABLE_V3PLUS`
 
 ## `HFB_FLT_LEN`
 
@@ -775,4 +775,4 @@ Filter lengths in bytes, one byte per filter, filter 47 first.
 
 Sources:
 
-- linux (high): bcmgenet.h: HFB_FLT_LEN_V3PLUS
+- linux (high): `bcmgenet.h`: `HFB_FLT_LEN_V3PLUS`

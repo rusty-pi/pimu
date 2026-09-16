@@ -3,16 +3,16 @@ name    = "asb"
 base    = 0x7E00A000
 size    = 0x1000
 summary = "AXI async slave bridges: the stop / acknowledge handshake before gating the V3D, ISP and H264 power domains"
-notes   = "ACK mirrors REQ_STOP immediately (no AXI traffic to drain), queues always read empty. The bridges gate nothing: there is no V3D / ISP / H264 block behind them."
+notes   = "`ACK` mirrors `REQ_STOP` immediately (no AXI traffic to drain), queues always read empty. The bridges gate nothing: there is no V3D / ISP / H264 block behind them."
 
 [[block.source]]
 kind       = "linux"
-ref        = "drivers/pmdomain/bcm/bcm2835-power.c names every register and bit and maps this base"
+ref        = "`drivers/pmdomain/bcm/bcm2835-power.c` names every register and bit and maps this base"
 confidence = "high"
 
 [[block.source]]
 kind       = "decompile"
-ref        = "start4 power-domain switch FUN_0ED54E40: domain bit 0x40 -> +0x08/+0x0C, 0x08 -> +0x10/+0x14, 0x04 -> +0x18/+0x1C, each followed by the matching PM reset bit"
+ref        = "start4 power-domain switch `FUN_0ED54E40`: domain bit `0x40` -> `+0x08`/`+0x0C`, `0x08` -> `+0x10`/`+0x14`, `0x04` -> `+0x18`/`+0x1C`, each followed by the matching PM reset bit"
 confidence = "high"
 
 [[register]]
@@ -23,7 +23,7 @@ notes  = "Bridge version. Plain storage reading 0: nothing reads it."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcm2835-power.c: ASB_BRDG_VERSION"
+ref        = "`bcm2835-power.c`: `ASB_BRDG_VERSION`"
 confidence = "high"
 
 [[register]]
@@ -34,7 +34,7 @@ notes  = "Clock / power-reduction control. Plain storage."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcm2835-power.c: ASB_CPR_CTRL"
+ref        = "`bcm2835-power.c`: `ASB_CPR_CTRL`"
 confidence = "high"
 
 [[register]]
@@ -43,16 +43,16 @@ offset = 0x08
 count  = 6
 stride = 4
 access = "rw"
-notes  = "One control word per bridge: V3D slave, V3D master, ISP slave, ISP master, H264 slave, H264 master. Request first, then wait for ACK to follow."
+notes  = "One control word per bridge: V3D slave, V3D master, ISP slave, ISP master, H264 slave, H264 master. Request first, then wait for `ACK` to follow."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcm2835-power.c: ASB_V3D_S_CTRL .. ASB_H264_M_CTRL at 0x08..0x1C; bcm2835_asb_control() polls ACK after setting REQ_STOP"
+ref        = "`bcm2835-power.c`: `ASB_V3D_S_CTRL` .. `ASB_H264_M_CTRL` at `0x08..0x1C`; `bcm2835_asb_control()` polls `ACK` after setting `REQ_STOP`"
 confidence = "high"
 
 [[register.source]]
 kind       = "decompile"
-ref        = "0xced550a2..0xced550ac: bset REQ_STOP at [r4+28], then spin while ACK == 0 (the boot's wall before this block was mapped)"
+ref        = "`0xced550a2..0xced550ac`: bset `REQ_STOP` at `[r4+28]`, then spin while `ACK == 0` (the boot's wall before this block was mapped)"
 confidence = "high"
 
 [[register.field]]
@@ -62,18 +62,18 @@ notes = "Ask the bridge to stop. The only writable bit."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "bcm2835-power.c: ASB_REQ_STOP"
+ref        = "`bcm2835-power.c`: `ASB_REQ_STOP`"
 confidence = "high"
 
 [[register.field]]
 name   = "ACK"
 bits   = "1"
 access = "r"
-notes  = "The bridge has stopped (follows REQ_STOP)."
+notes  = "The bridge has stopped (follows `REQ_STOP`)."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "bcm2835-power.c: ASB_ACK"
+ref        = "`bcm2835-power.c`: `ASB_ACK`"
 confidence = "high"
 
 [[register.field]]
@@ -84,7 +84,7 @@ notes  = "Transaction queue empty."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "bcm2835-power.c: ASB_EMPTY"
+ref        = "`bcm2835-power.c`: `ASB_EMPTY`"
 confidence = "high"
 
 [[register.field]]
@@ -95,7 +95,7 @@ notes  = "Transaction queue full."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "bcm2835-power.c: ASB_FULL"
+ref        = "`bcm2835-power.c`: `ASB_FULL`"
 confidence = "high"
 
 [[register]]
@@ -103,9 +103,9 @@ name   = "AXI_BRDG_ID"
 offset = 0x20
 access = "r"
 reset  = 0x62726467
-notes  = "'brdg' little-endian; Linux's probe requires it."
+notes  = "`brdg` little-endian; Linux's probe requires it."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcm2835-power.c: ASB_AXI_BRDG_ID must read BCM2835_BRDG_ID"
+ref        = "`bcm2835-power.c`: `ASB_AXI_BRDG_ID` must read `BCM2835_BRDG_ID`"
 confidence = "high"

@@ -3,32 +3,32 @@ name    = "hvs"
 base    = 0x7E400000
 size    = 0x1000
 summary = "HVS (Hardware Video Scaler): identification, the per-channel frame-swap words, and end of frame"
-notes   = "No display is modelled. Scanout catches up with a queued frame immediately, and a running channel raises its DISPSTAT frame flags once per 640x480@60 frame time (16683 µs) and, with their interrupts enabled, VPU interrupt source 97. Everything else is stored and read back."
+notes   = "No display is modelled. Scanout catches up with a queued frame immediately, and a running channel raises its `DISPSTAT` frame flags once per 640x480@60 frame time (16683 µs) and, with their interrupts enabled, VPU interrupt source 97. Everything else is stored and read back."
 
 [[block.source]]
 kind       = "decompile"
-ref        = "bootloader diagnostic-display channel-swap wait 0x0008adc0; start4 display bring-up 0x3EC945CC"
+ref        = "bootloader diagnostic-display channel-swap wait `0x0008adc0`; start4 display bring-up `0x3EC945CC`"
 confidence = "high"
 
 [[block.source]]
 kind       = "linux"
-ref        = "arch/arm/boot/dts/broadcom/bcm2711.dtsi: hvs@7e400000 interrupts = <GIC_SPI 97>; start4 registers its HVS handler 0x3ECEED5C on VPU source 97 (--log irqtbl)"
+ref        = "`arch/arm/boot/dts/broadcom/bcm2711.dtsi`: `hvs@7e400000` `interrupts = <GIC_SPI 97>`; start4 registers its HVS handler `0x3ECEED5C` on VPU source 97 (`--log irqtbl`)"
 confidence = "high"
 
 [[register]]
 name   = "DISPCTRL"
 offset = 0x00
 access = "rw"
-notes  = "Global control. The per-channel frame-interrupt enables are the HVS5 ones, four bits a channel (vc4_regs.h SCALER5_DISPCTRL_*); the SLUR enables in between are not modelled."
+notes  = "Global control. The per-channel frame-interrupt enables are the HVS5 ones, four bits a channel (`vc4_regs.h` `SCALER5_DISPCTRL_*`); the SLUR enables in between are not modelled."
 
 [[register.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_regs.h: SCALER_DISPCTRL"
+ref        = "`drivers/gpu/drm/vc4/vc4_regs.h`: `SCALER_DISPCTRL`"
 confidence = "high"
 
 [[register.source]]
 kind       = "decompile"
-ref        = "0x3ECED90C writes 3 << (chan * 2 + 7) | 1 << (chan + 1) | 0x80000000; 0x3ECEDE98 and 0x3ECEF33C clear the same bits"
+ref        = "`0x3ECED90C` writes `3 << (chan * 2 + 7) | 1 << (chan + 1) | 0x80000000`; `0x3ECEDE98` and `0x3ECEF33C` clear the same bits"
 confidence = "high"
 
 [[register.field]]
@@ -37,7 +37,7 @@ bits = "31"
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_regs.h: SCALER_DISPCTRL_ENABLE"
+ref        = "`drivers/gpu/drm/vc4/vc4_regs.h`: `SCALER_DISPCTRL_ENABLE`"
 confidence = "high"
 
 [[register.field]]
@@ -46,7 +46,7 @@ bits = "16"
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_regs.h: SCALER5_DISPCTRL_DSPEIEOLN(x) BIT(8 + 4x)"
+ref        = "`drivers/gpu/drm/vc4/vc4_regs.h`: `SCALER5_DISPCTRL_DSPEIEOLN(x)` `BIT(8 + 4x)`"
 confidence = "high"
 
 [[register.field]]
@@ -55,7 +55,7 @@ bits = "15"
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_regs.h: SCALER5_DISPCTRL_DSPEIEOF(x) BIT(7 + 4x)"
+ref        = "`drivers/gpu/drm/vc4/vc4_regs.h`: `SCALER5_DISPCTRL_DSPEIEOF(x)` `BIT(7 + 4x)`"
 confidence = "high"
 
 [[register.field]]
@@ -64,7 +64,7 @@ bits = "14"
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_regs.h: SCALER5_DISPCTRL_DSPEIVST(x) BIT(6 + 4x)"
+ref        = "`drivers/gpu/drm/vc4/vc4_regs.h`: `SCALER5_DISPCTRL_DSPEIVST(x)` `BIT(6 + 4x)`"
 confidence = "high"
 
 [[register.field]]
@@ -73,7 +73,7 @@ bits = "12"
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_regs.h: SCALER5_DISPCTRL_DSPEIEOLN(x) BIT(8 + 4x)"
+ref        = "`drivers/gpu/drm/vc4/vc4_regs.h`: `SCALER5_DISPCTRL_DSPEIEOLN(x)` `BIT(8 + 4x)`"
 confidence = "high"
 
 [[register.field]]
@@ -82,7 +82,7 @@ bits = "11"
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_regs.h: SCALER5_DISPCTRL_DSPEIEOF(x) BIT(7 + 4x)"
+ref        = "`drivers/gpu/drm/vc4/vc4_regs.h`: `SCALER5_DISPCTRL_DSPEIEOF(x)` `BIT(7 + 4x)`"
 confidence = "high"
 
 [[register.field]]
@@ -91,12 +91,12 @@ bits = "10"
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_regs.h: SCALER5_DISPCTRL_DSPEIVST(x) BIT(6 + 4x)"
+ref        = "`drivers/gpu/drm/vc4/vc4_regs.h`: `SCALER5_DISPCTRL_DSPEIVST(x)` `BIT(6 + 4x)`"
 confidence = "high"
 
 [[register.field.source]]
 kind       = "measured"
-ref        = "start4 leaves DISPCTRL = 0x9a0ddfff with channel 1 running: every enable of all three channels set (RVF_TRACE_MMIO)"
+ref        = "start4 leaves `DISPCTRL = 0x9a0ddfff` with channel 1 running: every enable of all three channels set (`RVF_TRACE_MMIO`)"
 confidence = "high"
 
 [[register.field]]
@@ -105,7 +105,7 @@ bits = "8"
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_regs.h: SCALER5_DISPCTRL_DSPEIEOLN(x) BIT(8 + 4x)"
+ref        = "`drivers/gpu/drm/vc4/vc4_regs.h`: `SCALER5_DISPCTRL_DSPEIEOLN(x)` `BIT(8 + 4x)`"
 confidence = "high"
 
 [[register.field]]
@@ -114,7 +114,7 @@ bits = "7"
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_regs.h: SCALER5_DISPCTRL_DSPEIEOF(x) BIT(7 + 4x)"
+ref        = "`drivers/gpu/drm/vc4/vc4_regs.h`: `SCALER5_DISPCTRL_DSPEIEOF(x)` `BIT(7 + 4x)`"
 confidence = "high"
 
 [[register.field]]
@@ -123,7 +123,7 @@ bits = "6"
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_regs.h: SCALER5_DISPCTRL_DSPEIVST(x) BIT(6 + 4x)"
+ref        = "`drivers/gpu/drm/vc4/vc4_regs.h`: `SCALER5_DISPCTRL_DSPEIVST(x)` `BIT(6 + 4x)`"
 confidence = "high"
 
 [[register.field]]
@@ -132,7 +132,7 @@ bits = "3"
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_regs.h: SCALER_DISPCTRL_DISPEIRQ(x) BIT(1 + x)"
+ref        = "`drivers/gpu/drm/vc4/vc4_regs.h`: `SCALER_DISPCTRL_DISPEIRQ(x)` `BIT(1 + x)`"
 confidence = "high"
 
 [[register.field]]
@@ -141,7 +141,7 @@ bits = "2"
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_regs.h: SCALER_DISPCTRL_DISPEIRQ(x) BIT(1 + x)"
+ref        = "`drivers/gpu/drm/vc4/vc4_regs.h`: `SCALER_DISPCTRL_DISPEIRQ(x)` `BIT(1 + x)`"
 confidence = "high"
 
 [[register.field]]
@@ -150,23 +150,23 @@ bits = "1"
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_regs.h: SCALER_DISPCTRL_DISPEIRQ(x) BIT(1 + x)"
+ref        = "`drivers/gpu/drm/vc4/vc4_regs.h`: `SCALER_DISPCTRL_DISPEIRQ(x)` `BIT(1 + x)`"
 confidence = "high"
 
 [[register]]
 name   = "DISPSTAT"
 offset = 0x04
 access = "w1c"
-notes  = "Only the frame flags are modelled: a running channel raises EOLN half-way through each frame, EOF after its last active line and VSTART as the next frame starts. IRQDISPx reads as set while one of channel x's flags is set with its enable; start4's handler writes back what it read less those bits. On this HVS (start4's flag gp+0x1564 = 1) the handler posts a channel's display events on VSTART."
+notes  = "Only the frame flags are modelled: a running channel raises `EOLN` half-way through each frame, `EOF` after its last active line and `VSTART` as the next frame starts. `IRQDISPx` reads as set while one of channel x's flags is set with its enable; start4's handler writes back what it read less those bits. On this HVS (start4's flag `gp+0x1564 = 1`) the handler posts a channel's display events on `VSTART`."
 
 [[register.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_regs.h: SCALER_DISPSTAT"
+ref        = "`drivers/gpu/drm/vc4/vc4_regs.h`: `SCALER_DISPSTAT`"
 confidence = "high"
 
 [[register.source]]
 kind       = "decompile"
-ref        = "the source-97 handler 0x3ECEED5C reads [0x7E400004] and writes the value back & ~0xE; with gp+0x1564 set it posts channel x's display event on bit 14 + 8x (0x3ECEEFCE), without it it does the channel's display-list work on bit 12 + 8x when bit 8 + 8x is clear (0x3ECEF014)"
+ref        = "the source-97 handler `0x3ECEED5C` reads `[0x7E400004]` and writes the value back `& ~0xE`; with `gp+0x1564` set it posts channel x's display event on bit `14 + 8x` (`0x3ECEEFCE`), without it it does the channel's display-list work on bit `12 + 8x` when bit `8 + 8x` is clear (`0x3ECEF014`)"
 confidence = "high"
 
 [[register.field]]
@@ -175,7 +175,7 @@ bits = "30"
 
 [[register.field.source]]
 kind       = "decompile"
-ref        = "0x3ECEEFFE: with gp+0x1564 set, the source-97 handler posts channel 2's display event on bit 30"
+ref        = "`0x3ECEEFFE`: with `gp+0x1564` set, the source-97 handler posts channel 2's display event on bit 30"
 confidence = "high"
 
 [[register.field]]
@@ -184,7 +184,7 @@ bits = "22"
 
 [[register.field.source]]
 kind       = "decompile"
-ref        = "0x3ECEEFEA: with gp+0x1564 set, the source-97 handler posts channel 1's display event on bit 22"
+ref        = "`0x3ECEEFEA`: with `gp+0x1564` set, the source-97 handler posts channel 1's display event on bit 22"
 confidence = "high"
 
 [[register.field]]
@@ -193,7 +193,7 @@ bits = "14"
 
 [[register.field.source]]
 kind       = "decompile"
-ref        = "0x3ECEEFD6: with gp+0x1564 set, the source-97 handler posts channel 0's display event on bit 14"
+ref        = "`0x3ECEEFD6`: with `gp+0x1564` set, the source-97 handler posts channel 0's display event on bit 14"
 confidence = "high"
 
 [[register.field]]
@@ -202,7 +202,7 @@ bits = "28"
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_regs.h: SCALER_DISPSTAT_EOLN(x) BIT(12 + 8x)"
+ref        = "`drivers/gpu/drm/vc4/vc4_regs.h`: `SCALER_DISPSTAT_EOLN(x)` `BIT(12 + 8x)`"
 confidence = "high"
 
 [[register.field]]
@@ -211,12 +211,12 @@ bits = "20"
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_regs.h: SCALER_DISPSTAT_EOLN(x) BIT(12 + 8x)"
+ref        = "`drivers/gpu/drm/vc4/vc4_regs.h`: `SCALER_DISPSTAT_EOLN(x)` `BIT(12 + 8x)`"
 confidence = "high"
 
 [[register.field.source]]
 kind       = "decompile"
-ref        = "0x3ECEEF66 tests bit 20 before channel 1's display-list work"
+ref        = "`0x3ECEEF66` tests bit 20 before channel 1's display-list work"
 confidence = "high"
 
 [[register.field]]
@@ -225,12 +225,12 @@ bits = "12"
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_regs.h: SCALER_DISPSTAT_EOLN(x) BIT(12 + 8x)"
+ref        = "`drivers/gpu/drm/vc4/vc4_regs.h`: `SCALER_DISPSTAT_EOLN(x)` `BIT(12 + 8x)`"
 confidence = "high"
 
 [[register.field.source]]
 kind       = "decompile"
-ref        = "0x3ECEEF32 tests bit 12 before channel 0's display-list work"
+ref        = "`0x3ECEEF32` tests bit 12 before channel 0's display-list work"
 confidence = "high"
 
 [[register.field]]
@@ -239,7 +239,7 @@ bits = "24"
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_regs.h: SCALER_DISPSTAT_EOF(x) BIT(8 + 8x)"
+ref        = "`drivers/gpu/drm/vc4/vc4_regs.h`: `SCALER_DISPSTAT_EOF(x)` `BIT(8 + 8x)`"
 confidence = "high"
 
 [[register.field]]
@@ -248,7 +248,7 @@ bits = "16"
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_regs.h: SCALER_DISPSTAT_EOF(x) BIT(8 + 8x)"
+ref        = "`drivers/gpu/drm/vc4/vc4_regs.h`: `SCALER_DISPSTAT_EOF(x)` `BIT(8 + 8x)`"
 confidence = "high"
 
 [[register.field]]
@@ -257,7 +257,7 @@ bits = "8"
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_regs.h: SCALER_DISPSTAT_EOF(x) BIT(8 + 8x)"
+ref        = "`drivers/gpu/drm/vc4/vc4_regs.h`: `SCALER_DISPSTAT_EOF(x)` `BIT(8 + 8x)`"
 confidence = "high"
 
 [[register.field]]
@@ -266,7 +266,7 @@ bits = "3"
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_regs.h: SCALER_DISPSTAT_IRQDISP(x) BIT(1 + x)"
+ref        = "`drivers/gpu/drm/vc4/vc4_regs.h`: `SCALER_DISPSTAT_IRQDISP(x)` `BIT(1 + x)`"
 confidence = "high"
 
 [[register.field]]
@@ -275,7 +275,7 @@ bits = "2"
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_regs.h: SCALER_DISPSTAT_IRQDISP(x) BIT(1 + x)"
+ref        = "`drivers/gpu/drm/vc4/vc4_regs.h`: `SCALER_DISPSTAT_IRQDISP(x)` `BIT(1 + x)`"
 confidence = "high"
 
 [[register.field]]
@@ -284,7 +284,7 @@ bits = "1"
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_regs.h: SCALER_DISPSTAT_IRQDISP(x) BIT(1 + x)"
+ref        = "`drivers/gpu/drm/vc4/vc4_regs.h`: `SCALER_DISPSTAT_IRQDISP(x)` `BIT(1 + x)`"
 confidence = "high"
 
 [[register]]
@@ -296,12 +296,12 @@ notes  = "Identification. start4 gates its whole display bring-up, and with it t
 
 [[register.source]]
 kind       = "measured"
-ref        = "/sys/kernel/debug/dri/0/hvs_regs on the reference board: SCALER_DISPID = 0x64647276"
+ref        = "`/sys/kernel/debug/dri/0/hvs_regs` on the reference board: `SCALER_DISPID = 0x64647276`"
 confidence = "high"
 
 [[register.source]]
 kind       = "decompile"
-ref        = "0x3EC945CC compares [0x7E400008] with 0x64647276 and returns -1 on a mismatch"
+ref        = "`0x3EC945CC` compares `[0x7E400008]` with `0x64647276` and returns -1 on a mismatch"
 confidence = "high"
 
 [[register]]
@@ -314,7 +314,7 @@ notes  = "Frame each channel has queued."
 
 [[register.source]]
 kind       = "decompile"
-ref        = "0x0008adc0 spins until (*current & 0xFFFF) == (*requested & 0xFFF), requested at +0x20 + 4 * chan"
+ref        = "`0x0008adc0` spins until `(*current & 0xFFFF) == (*requested & 0xFFF)`, requested at `+0x20 + 4 * chan`"
 confidence = "medium"
 
 [[register]]
@@ -323,11 +323,11 @@ offset = 0x30
 count  = 4
 stride = 4
 access = "r"
-notes  = "Frame each channel is scanning out. The model mirrors REQUESTED."
+notes  = "Frame each channel is scanning out. The model mirrors `REQUESTED`."
 
 [[register.source]]
 kind       = "decompile"
-ref        = "0x0008adc0 reads current at +0x30 + 4 * chan"
+ref        = "`0x0008adc0` reads current at `+0x30 + 4 * chan`"
 confidence = "medium"
 
 [[register]]
@@ -336,16 +336,16 @@ offset = 0x40
 count  = 3
 stride = 0x10
 access = "rw"
-notes  = "Per-channel control. A channel runs while this ENABLE and DISPCTRL.ENABLE are both set."
+notes  = "Per-channel control. A channel runs while this `ENABLE` and `DISPCTRL.ENABLE` are both set."
 
 [[register.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_regs.h: SCALER_DISPCTRL0, SCALER_DISPCTRLX(x)"
+ref        = "`drivers/gpu/drm/vc4/vc4_regs.h`: `SCALER_DISPCTRL0`, `SCALER_DISPCTRLX(x)`"
 confidence = "high"
 
 [[register.source]]
 kind       = "decompile"
-ref        = "0x3ECED90C sets bit 31 of [0x7E400040 + chan * 0x10] to start a channel; 0x3ECEF584 clears it to finish a pause"
+ref        = "`0x3ECED90C` sets bit 31 of `[0x7E400040 + chan * 0x10]` to start a channel; `0x3ECEF584` clears it to finish a pause"
 confidence = "high"
 
 [[register.field]]
@@ -354,7 +354,7 @@ bits = "31"
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_regs.h: SCALER_DISPCTRLX_ENABLE"
+ref        = "`drivers/gpu/drm/vc4/vc4_regs.h`: `SCALER_DISPCTRLX_ENABLE`"
 confidence = "high"
 
 [[register]]
@@ -363,16 +363,16 @@ offset = 0x48
 count  = 3
 stride = 0x10
 access = "r"
-notes  = "Per-channel status: a running channel reads MODE run, a stopped one MODE disabled with its FIFO EMPTY. start4 pauses a channel at once only in that last state (0x3ECEF33C tests (stat & 0xD0000000) == 0x10000000); otherwise it waits for the channel's end of frame."
+notes  = "Per-channel status: a running channel reads `MODE` run, a stopped one `MODE` disabled with its FIFO `EMPTY`. start4 pauses a channel at once only in that last state (`0x3ECEF33C` tests `(stat & 0xD0000000) == 0x10000000`); otherwise it waits for the channel's end of frame."
 
 [[register.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_regs.h: SCALER_DISPSTAT0, SCALER_DISPSTATX_*"
+ref        = "`drivers/gpu/drm/vc4/vc4_regs.h`: `SCALER_DISPSTAT0`, `SCALER_DISPSTATX_*`"
 confidence = "high"
 
 [[register.source]]
 kind       = "decompile"
-ref        = "0x3ECEF33C reads [0x7E400048 + chan * 0x10] before choosing an immediate or a delayed pause"
+ref        = "`0x3ECEF33C` reads `[0x7E400048 + chan * 0x10]` before choosing an immediate or a delayed pause"
 confidence = "high"
 
 [[register.field]]
@@ -381,7 +381,7 @@ bits = "31:30"
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_regs.h: SCALER_DISPSTATX_MODE (0 disabled, 1 init, 2 run, 3 EOF)"
+ref        = "`drivers/gpu/drm/vc4/vc4_regs.h`: `SCALER_DISPSTATX_MODE` (0 disabled, 1 init, 2 run, 3 `EOF`)"
 confidence = "high"
 
 [[register.field]]
@@ -390,5 +390,5 @@ bits = "28"
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_regs.h: SCALER_DISPSTATX_EMPTY"
+ref        = "`drivers/gpu/drm/vc4/vc4_regs.h`: `SCALER_DISPSTATX_EMPTY`"
 confidence = "high"

@@ -2,22 +2,22 @@
 name    = "hdmi_ddc"
 base    = 0x7EF04500
 size    = 0x100
-summary = "HDMI DDC I²C masters (brcm,bcm2711-hdmi-i2c), one per connector: the bus a monitor's EDID EEPROM sits on"
-notes   = "Not the BSC: a different block with a different layout. With no monitor attached (the reference board's state) every transfer completes INTRP | NOACK. The second reg window in the device tree, the auto-i2c block at 0x7EF00B00, is its own block (hdmi_auto_i2c); the same device answers both."
+summary = "HDMI DDC I²C masters (`brcm,bcm2711-hdmi-i2c`), one per connector: the bus a monitor's EDID EEPROM sits on"
+notes   = "Not the BSC: a different block with a different layout. With no monitor attached (the reference board's state) every transfer completes `INTRP | NOACK`. The second reg window in the device tree, the auto-i2c block at `0x7EF00B00`, is its own block (`hdmi_auto_i2c`); the same device answers both."
 
 [[block.source]]
 kind       = "measured"
-ref        = "Raspberry Pi 4B d03115 /proc/device-tree/soc/i2c@7ef04500: compatible brcm,bcm2711-hdmi-i2c, reg 0x7ef04500 0x100 0x7ef00b00 0x300, clock-frequency 97500"
+ref        = "Raspberry Pi 4B d03115 `/proc/device-tree/soc/i2c@7ef04500`: `compatible brcm,bcm2711-hdmi-i2c`, `reg 0x7ef04500 0x100 0x7ef00b00 0x300`, `clock-frequency 97500`"
 confidence = "high"
 
 [[block.source]]
 kind       = "linux"
-ref        = "drivers/i2c/busses/i2c-brcmstb.c: struct bsc_regs"
+ref        = "`drivers/i2c/busses/i2c-brcmstb.c`: `struct bsc_regs`"
 confidence = "high"
 
 [[block.source]]
 kind       = "decompile"
-ref        = "start4's driver: read 0x3ECE69E2, write 0x3ECE6DEC, accessors 0x3ECE6B00 / 0x3ECE6EC8, completion wait 0x3ECE6D5C"
+ref        = "start4's driver: read `0x3ECE69E2`, write `0x3ECE6DEC`, accessors `0x3ECE6B00` / `0x3ECE6EC8`, completion wait `0x3ECE6D5C`"
 confidence = "high"
 
 [[block.copy]]
@@ -27,18 +27,18 @@ notes = "HDMI1's DDC master; HDMI0's is the block base."
 
 [[block.copy.source]]
 kind       = "linux"
-ref        = "dtb node i2c@7ef09500, brcm,bcm2711-hdmi-i2c"
+ref        = "dtb node `i2c@7ef09500`, `brcm,bcm2711-hdmi-i2c`"
 confidence = "high"
 
 [[register]]
 name   = "CHIP_ADDRESS"
 offset = 0x00
 access = "rw"
-notes  = "Slave address, already shifted: addr << 1 | read."
+notes  = "Slave address, already shifted: `addr << 1 | read`."
 
 [[register.source]]
 kind       = "linux"
-ref        = "i2c-brcmstb.c: bsc_regs.chip_address"
+ref        = "`i2c-brcmstb.c`: `bsc_regs.chip_address`"
 confidence = "high"
 
 [[register]]
@@ -51,7 +51,7 @@ notes  = "Bytes to send, packed little-endian per word."
 
 [[register.source]]
 kind       = "linux"
-ref        = "i2c-brcmstb.c: bsc_regs.data_in[8]"
+ref        = "`i2c-brcmstb.c`: `bsc_regs.data_in[8]`"
 confidence = "high"
 
 [[register]]
@@ -62,7 +62,7 @@ notes  = "Byte count."
 
 [[register.source]]
 kind       = "linux"
-ref        = "i2c-brcmstb.c: bsc_regs.cnt_reg"
+ref        = "`i2c-brcmstb.c`: `bsc_regs.cnt_reg`"
 confidence = "high"
 
 [[register.field]]
@@ -72,7 +72,7 @@ notes = "Bytes in this transfer."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "i2c-brcmstb.c: BSC_CNT_REG1_MASK"
+ref        = "`i2c-brcmstb.c`: `BSC_CNT_REG1_MASK`"
 confidence = "high"
 
 [[register]]
@@ -83,7 +83,7 @@ notes  = "Transfer control."
 
 [[register.source]]
 kind       = "linux"
-ref        = "i2c-brcmstb.c: bsc_regs.ctl_reg"
+ref        = "`i2c-brcmstb.c`: `bsc_regs.ctl_reg`"
 confidence = "high"
 
 [[register.field]]
@@ -93,7 +93,7 @@ notes = "Data transfer format; bit 0 set is a read."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "i2c-brcmstb.c: BSC_CTL_REG_DTF_MASK"
+ref        = "`i2c-brcmstb.c`: `BSC_CTL_REG_DTF_MASK`"
 confidence = "high"
 
 [[register.field]]
@@ -103,7 +103,7 @@ notes = "Bus clock select. Stored."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "i2c-brcmstb.c: BSC_CTL_REG_SCL_SEL_MASK"
+ref        = "`i2c-brcmstb.c`: `BSC_CTL_REG_SCL_SEL_MASK`"
 confidence = "high"
 
 [[register.field]]
@@ -113,7 +113,7 @@ notes = "Interrupt enable."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "i2c-brcmstb.c: BSC_CTL_REG_INT_EN_MASK"
+ref        = "`i2c-brcmstb.c`: `BSC_CTL_REG_INT_EN_MASK`"
 confidence = "high"
 
 [[register.field]]
@@ -123,23 +123,23 @@ notes = "Clock divide. Stored."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "i2c-brcmstb.c: BSC_CTL_REG_DIV_CLK_MASK"
+ref        = "`i2c-brcmstb.c`: `BSC_CTL_REG_DIV_CLK_MASK`"
 confidence = "high"
 
 [[register]]
 name   = "IIC_ENABLE"
 offset = 0x2C
 access = "rw"
-notes  = "Writing ENABLE starts a transfer; INTRP and NOACK are computed status."
+notes  = "Writing `ENABLE` starts a transfer; `INTRP` and `NOACK` are computed status."
 
 [[register.source]]
 kind       = "linux"
-ref        = "i2c-brcmstb.c: bsc_regs.iic_enable"
+ref        = "`i2c-brcmstb.c`: `bsc_regs.iic_enable`"
 confidence = "high"
 
 [[register.source]]
 kind       = "decompile"
-ref        = "0x3ECE6D5C: up to 20 polls of (read(0x2c) & 2) 5 ms apart ('timed out'), then read(0x2c) & 4 ('no ACK')"
+ref        = "`0x3ECE6D5C`: up to 20 polls of `read(0x2c) & 2` 5 ms apart ('timed out'), then `read(0x2c) & 4` ('no ACK')"
 confidence = "high"
 
 [[register.field]]
@@ -149,7 +149,7 @@ notes = "Run the transfer."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "i2c-brcmstb.c: BSC_IIC_EN_ENABLE_MASK"
+ref        = "`i2c-brcmstb.c`: `BSC_IIC_EN_ENABLE_MASK`"
 confidence = "high"
 
 [[register.field]]
@@ -159,7 +159,7 @@ notes = "Transfer finished (an interrupt enable when written)."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "i2c-brcmstb.c: BSC_IIC_EN_INTRP_MASK"
+ref        = "`i2c-brcmstb.c`: `BSC_IIC_EN_INTRP_MASK`"
 confidence = "high"
 
 [[register.field]]
@@ -170,7 +170,7 @@ notes  = "The slave never acknowledged its address."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "i2c-brcmstb.c: BSC_IIC_EN_NOACK_MASK"
+ref        = "`i2c-brcmstb.c`: `BSC_IIC_EN_NOACK_MASK`"
 confidence = "high"
 
 [[register.field]]
@@ -180,7 +180,7 @@ notes = "Hold the bus after the transfer."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "i2c-brcmstb.c: BSC_IIC_EN_NOSTOP_MASK"
+ref        = "`i2c-brcmstb.c`: `BSC_IIC_EN_NOSTOP_MASK`"
 confidence = "high"
 
 [[register.field]]
@@ -190,7 +190,7 @@ notes = "Continue without a start condition."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "i2c-brcmstb.c: BSC_IIC_EN_NOSTART_MASK"
+ref        = "`i2c-brcmstb.c`: `BSC_IIC_EN_NOSTART_MASK`"
 confidence = "high"
 
 [[register.field]]
@@ -200,7 +200,7 @@ notes = "Repeated start."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "i2c-brcmstb.c: BSC_IIC_EN_RESTART_MASK"
+ref        = "`i2c-brcmstb.c`: `BSC_IIC_EN_RESTART_MASK`"
 confidence = "high"
 
 [[register]]
@@ -209,11 +209,11 @@ offset = 0x30
 count  = 8
 stride = 4
 access = "r"
-notes  = "Bytes received, packed as DATA_IN."
+notes  = "Bytes received, packed as `DATA_IN`."
 
 [[register.source]]
 kind       = "linux"
-ref        = "i2c-brcmstb.c: bsc_regs.data_out[8]"
+ref        = "`i2c-brcmstb.c`: `bsc_regs.data_out[8]`"
 confidence = "high"
 
 [[register]]
@@ -224,7 +224,7 @@ notes  = "More transfer control."
 
 [[register.source]]
 kind       = "linux"
-ref        = "i2c-brcmstb.c: bsc_regs.ctlhi_reg"
+ref        = "`i2c-brcmstb.c`: `bsc_regs.ctlhi_reg`"
 confidence = "high"
 
 [[register.field]]
@@ -234,17 +234,17 @@ notes = "No clock stretching."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "i2c-brcmstb.c: BSC_CTLHI_REG_WAIT_DIS_MASK"
+ref        = "`i2c-brcmstb.c`: `BSC_CTLHI_REG_WAIT_DIS_MASK`"
 confidence = "high"
 
 [[register.field]]
 name  = "IGNORE_ACK"
 bits  = "1"
-notes = "Carry on regardless of ACK; NOACK is then not reported."
+notes = "Carry on regardless of ACK; `NOACK` is then not reported."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "i2c-brcmstb.c: BSC_CTLHI_REG_IGNORE_ACK_MASK"
+ref        = "`i2c-brcmstb.c`: `BSC_CTLHI_REG_IGNORE_ACK_MASK`"
 confidence = "high"
 
 [[register.field]]
@@ -254,7 +254,7 @@ notes = "Data registers are 32 bits wide."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "i2c-brcmstb.c: BSC_CTLHI_REG_DATAREG_SIZE_MASK"
+ref        = "`i2c-brcmstb.c`: `BSC_CTLHI_REG_DATAREG_SIZE_MASK`"
 confidence = "high"
 
 [[register]]
@@ -265,5 +265,5 @@ notes  = "Bus timing. Stored, otherwise ignored."
 
 [[register.source]]
 kind       = "linux"
-ref        = "i2c-brcmstb.c: bsc_regs.scl_param"
+ref        = "`i2c-brcmstb.c`: `bsc_regs.scl_param`"
 confidence = "high"

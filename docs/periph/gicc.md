@@ -6,13 +6,13 @@
 - Base: `0xFF842000`
 - Size: `0x2000`
 
-Word access only. Linux enters at EL2 and, because this window is 8 KiB, runs split EOI: priority drop on EOIR, deactivation on DIR. The virtualisation interface follows it: gich at 0xFF844000, gicv at 0xFF846000.
+Word access only. Linux enters at EL2 and, because this window is 8 KiB, runs split EOI: priority drop on `EOIR`, deactivation on `DIR`. The virtualisation interface follows it: `gich` at `0xFF844000`, `gicv` at `0xFF846000`.
 
 Sources:
 
-- linux (high): dtb: interrupt-controller@40041000 reg <... 0x40042000 0x2000 ...> -> 0xFF842000, 8 KiB
+- linux (high): dtb: `interrupt-controller@40041000` `reg <... 0x40042000 0x2000 ...>` -> `0xFF842000`, 8 KiB
 - standard (high): ARM IHI 0048B (GICv2), section 4.4
-- measured (high): reference board dmesg: 'GIC: Using split EOI/Deactivate mode'
+- measured (high): reference board `dmesg`: `GIC: Using split EOI/Deactivate mode`
 
 ## Register map
 
@@ -44,9 +44,9 @@ Stored in the secure layout; the non-secure view remaps four of its bits.
 |---|---|---|---|
 | 0 | `ENABLE_GRP0` | rw | Signal group-0 interrupts. |
 | 1 | `ENABLE_GRP1` | rw | Signal group-1 interrupts. |
-| 2 | `ACKCTL` | rw | Secure IAR may acknowledge group-1 interrupts. |
+| 2 | `ACKCTL` | rw | Secure `IAR` may acknowledge group-1 interrupts. |
 | 3 | `FIQEN` | rw | Group 0 signals as FIQ. |
-| 4 | `CBPR` | rw | BPR governs both groups. |
+| 4 | `CBPR` | rw | `BPR` governs both groups. |
 | 5 | `FIQBYPDIS_GRP1` | rw | Bypass disable (stored). |
 | 6 | `IRQBYPDIS_GRP1` | rw | Bypass disable (stored). |
 | 7 | `FIQBYPDIS_GRP0` | rw | Bypass disable (stored). |
@@ -56,8 +56,8 @@ Stored in the secure layout; the non-secure view remaps four of its bits.
 
 Sources:
 
-- standard (high): GICv2 4.4.1 GICC_CTLR
-- decompile (high): armstub writes 0x1e7: EnableGrp0 | EnableGrp1 | AckCtl | bypass disables
+- standard (high): GICv2 4.4.1 `GICC_CTLR`
+- decompile (high): armstub writes `0x1e7`: `EnableGrp0 | EnableGrp1 | AckCtl` | bypass disables
 
 `ENABLE_GRP0` sources:
 
@@ -111,7 +111,7 @@ Priority mask.
 
 Sources:
 
-- standard (high): GICv2 4.4.2 GICC_PMR
+- standard (high): GICv2 4.4.2 `GICC_PMR`
 
 ## `BPR`
 
@@ -121,17 +121,17 @@ Binary point; minimum 2 secure, 3 non-secure.
 
 Sources:
 
-- standard (high): GICv2 4.4.3 GICC_BPR
+- standard (high): GICv2 4.4.3 `GICC_BPR`
 
 ## `IAR`
 
 Offset `0x00C` · access `r` · 32 bits
 
-Acknowledge: returns the ID (with the source CPU for SGIs) and makes it active. 1023 spurious, 1022 group 1 refused to secure without AckCtl.
+Acknowledge: returns the ID (with the source CPU for SGIs) and makes it active. 1023 spurious, 1022 group 1 refused to secure without `AckCtl`.
 
 Sources:
 
-- standard (high): GICv2 4.4.4 GICC_IAR
+- standard (high): GICv2 4.4.4 `GICC_IAR`
 
 ## `EOIR`
 
@@ -141,27 +141,27 @@ End of interrupt: priority drop, plus deactivation unless split EOI is on.
 
 Sources:
 
-- standard (high): GICv2 4.4.5 GICC_EOIR
+- standard (high): GICv2 4.4.5 `GICC_EOIR`
 
 ## `RPR`
 
 Offset `0x014` · access `r` · 32 bits
 
-Running priority; 0xFF when nothing is active.
+Running priority; `0xFF` when nothing is active.
 
 Sources:
 
-- standard (high): GICv2 4.4.6 GICC_RPR
+- standard (high): GICv2 4.4.6 `GICC_RPR`
 
 ## `HPPIR`
 
 Offset `0x018` · access `r` · 32 bits
 
-What IAR would return, without taking it.
+What `IAR` would return, without taking it.
 
 Sources:
 
-- standard (high): GICv2 4.4.7 GICC_HPPIR
+- standard (high): GICv2 4.4.7 `GICC_HPPIR`
 
 ## `ABPR`
 
@@ -171,7 +171,7 @@ Aliased (group-1) binary point, secure access only.
 
 Sources:
 
-- standard (high): GICv2 4.4.8 GICC_ABPR
+- standard (high): GICv2 4.4.8 `GICC_ABPR`
 
 ## `AIAR`
 
@@ -181,7 +181,7 @@ Aliased acknowledge: group-1 behaviour for secure software.
 
 Sources:
 
-- standard (high): GICv2 4.4.9 GICC_AIAR
+- standard (high): GICv2 4.4.9 `GICC_AIAR`
 
 ## `AEOIR`
 
@@ -191,7 +191,7 @@ Aliased end of interrupt.
 
 Sources:
 
-- standard (high): GICv2 4.4.10 GICC_AEOIR
+- standard (high): GICv2 4.4.10 `GICC_AEOIR`
 
 ## `AHPPIR`
 
@@ -201,7 +201,7 @@ Aliased highest pending.
 
 Sources:
 
-- standard (high): GICv2 4.4.11 GICC_AHPPIR
+- standard (high): GICv2 4.4.11 `GICC_AHPPIR`
 
 ## `APR0`
 
@@ -211,7 +211,7 @@ Active priorities.
 
 Sources:
 
-- standard (high): GICv2 4.4.12 GICC_APRn
+- standard (high): GICv2 4.4.12 `GICC_APRn`
 
 ## `NSAPR0`
 
@@ -221,7 +221,7 @@ Non-secure active priorities.
 
 Sources:
 
-- standard (high): GICv2 4.4.13 GICC_NSAPRn
+- standard (high): GICv2 4.4.13 `GICC_NSAPRn`
 
 ## `IIDR`
 
@@ -231,7 +231,7 @@ ARM, GICv2 CPU interface.
 
 Sources:
 
-- measured (high): /dev/mem read of 0xFF8420FC on the reference board
+- measured (high): `/dev/mem` read of `0xFF8420FC` on the reference board
 
 ## `DIR`
 
@@ -241,5 +241,5 @@ Deactivate: the second half of split EOI.
 
 Sources:
 
-- standard (high): GICv2 4.4.15 GICC_DIR
-- linux (high): irq-gic.c deactivates through GICC_DIR in EOImodeNS
+- standard (high): GICv2 4.4.15 `GICC_DIR`
+- linux (high): `irq-gic.c` deactivates through `GICC_DIR` in `EOImodeNS`

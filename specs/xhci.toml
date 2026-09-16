@@ -4,7 +4,7 @@ bus     = "pci"
 base    = 0x0
 size    = 0x1000
 summary = "xHCI register block behind the VL805's BAR0: capability, operational, runtime and doorbell registers"
-notes   = "Offsets are into BAR0 (4 KiB). The VPU reaches it only by 40-bit DMA through the PCIe outbound window, the ARM through that window at 0x6_0000_0000. Five root ports: port 1 USB2, ports 2..5 USB3; a VIA hub sits on port 1 on every board."
+notes   = "Offsets are into BAR0 (4 KiB). The VPU reaches it only by 40-bit DMA through the PCIe outbound window, the ARM through that window at `0x6_0000_0000`. Five root ports: port 1 USB2, ports 2..5 USB3; a VIA hub sits on port 1 on every board."
 
 [[block.source]]
 kind       = "standard"
@@ -13,12 +13,12 @@ confidence = "high"
 
 [[block.source]]
 kind       = "measured"
-ref        = "capability registers and PORTSC read on a Raspberry Pi 4B d03115 through /dev/mem (docs/usb-xhci.md section 2); dmesg 'hcc params 0x002841eb hci version 0x100'"
+ref        = "capability registers and `PORTSC` read on a Raspberry Pi 4B d03115 through `/dev/mem` (`docs/usb-xhci.md` section 2); `dmesg` `hcc params 0x002841eb hci version 0x100`"
 confidence = "high"
 
 [[block.source]]
 kind       = "measured"
-ref        = "examples-on-real-hardware/sd-card-boot.log: 'xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb'"
+ref        = "`examples-on-real-hardware/sd-card-boot.log`: `xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb`"
 confidence = "high"
 
 [[register]]
@@ -31,7 +31,7 @@ notes  = "Where the operational registers start."
 
 [[register.source]]
 kind       = "measured"
-ref        = "Raspberry Pi 4B d03115 /dev/mem"
+ref        = "Raspberry Pi 4B d03115 `/dev/mem`"
 confidence = "high"
 
 [[register]]
@@ -44,7 +44,7 @@ notes  = "xHCI 1.0."
 
 [[register.source]]
 kind       = "measured"
-ref        = "Raspberry Pi 4B d03115 dmesg: hci version 0x100"
+ref        = "Raspberry Pi 4B d03115 `dmesg`: `hci version 0x100`"
 confidence = "high"
 
 [[register]]
@@ -52,11 +52,11 @@ name   = "HCSPARAMS1"
 offset = 0x04
 access = "r"
 reset  = 0x05000420
-notes  = "MaxSlots 32, MaxIntrs 4, MaxPorts 5."
+notes  = "`MaxSlots` 32, `MaxIntrs` 4, `MaxPorts` 5."
 
 [[register.source]]
 kind       = "measured"
-ref        = "Raspberry Pi 4B d03115 /dev/mem; sd-card-boot.log 'xHC0 ports 5 slots 32 intrs 4'"
+ref        = "Raspberry Pi 4B d03115 `/dev/mem`; `sd-card-boot.log` `xHC0 ports 5 slots 32 intrs 4`"
 confidence = "high"
 
 [[register]]
@@ -64,11 +64,11 @@ name   = "HCSPARAMS2"
 offset = 0x08
 access = "r"
 reset  = 0xFC000031
-notes  = "IST 1, ERSTMax 3, MaxScratchpad 31."
+notes  = "`IST` 1, `ERSTMax` 3, `MaxScratchpad` 31."
 
 [[register.source]]
 kind       = "measured"
-ref        = "Raspberry Pi 4B d03115 /dev/mem"
+ref        = "Raspberry Pi 4B d03115 `/dev/mem`"
 confidence = "high"
 
 [[register]]
@@ -80,7 +80,7 @@ notes  = "Exit latencies."
 
 [[register.source]]
 kind       = "measured"
-ref        = "Raspberry Pi 4B d03115 /dev/mem"
+ref        = "Raspberry Pi 4B d03115 `/dev/mem`"
 confidence = "high"
 
 [[register]]
@@ -88,11 +88,11 @@ name   = "HCCPARAMS1"
 offset = 0x10
 access = "r"
 reset  = 0x002841EB
-notes  = "AC64, 32-byte contexts, PPC, xECP 0x28 (BAR0 + 0xA0)."
+notes  = "`AC64`, 32-byte contexts, `PPC`, `xECP` `0x28` (BAR0 + `0xA0`)."
 
 [[register.source]]
 kind       = "measured"
-ref        = "Raspberry Pi 4B d03115 dmesg: hcc params 0x002841eb"
+ref        = "Raspberry Pi 4B d03115 `dmesg`: `hcc params 0x002841eb`"
 confidence = "high"
 
 [[register]]
@@ -104,7 +104,7 @@ notes  = "Doorbell array offset."
 
 [[register.source]]
 kind       = "measured"
-ref        = "Raspberry Pi 4B d03115 /dev/mem"
+ref        = "Raspberry Pi 4B d03115 `/dev/mem`"
 confidence = "high"
 
 [[register]]
@@ -116,7 +116,7 @@ notes  = "Runtime register offset."
 
 [[register.source]]
 kind       = "measured"
-ref        = "Raspberry Pi 4B d03115 /dev/mem"
+ref        = "Raspberry Pi 4B d03115 `/dev/mem`"
 confidence = "high"
 
 [[register]]
@@ -128,7 +128,7 @@ notes  = "No extended capabilities of version 1.1."
 
 [[register.source]]
 kind       = "measured"
-ref        = "Raspberry Pi 4B d03115 /dev/mem"
+ref        = "Raspberry Pi 4B d03115 `/dev/mem`"
 confidence = "high"
 
 [[register]]
@@ -139,7 +139,7 @@ notes  = "Run / stop and resets."
 
 [[register.source]]
 kind       = "standard"
-ref        = "xHCI 1.1, 5.4.1 USBCMD"
+ref        = "xHCI 1.1, 5.4.1 `USBCMD`"
 confidence = "high"
 
 [[register.field]]
@@ -190,12 +190,12 @@ notes  = "Status; the event and change bits are write-1-to-clear. The bring-up's
 
 [[register.source]]
 kind       = "standard"
-ref        = "xHCI 1.1, 5.4.2 USBSTS"
+ref        = "xHCI 1.1, 5.4.2 `USBSTS`"
 confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "reference log pre-handover XHCI-STOP prints 'USBSTS 18' (EINT | PCD) because of the hub"
+ref        = "reference log pre-handover `XHCI-STOP` prints `USBSTS 18` (`EINT | PCD`) because of the hub"
 confidence = "high"
 
 [[register.field]]
@@ -262,7 +262,7 @@ notes  = "4 KiB pages."
 
 [[register.source]]
 kind       = "standard"
-ref        = "xHCI 1.1, 5.4.3 PAGESIZE"
+ref        = "xHCI 1.1, 5.4.3 `PAGESIZE`"
 confidence = "high"
 
 [[register]]
@@ -273,7 +273,7 @@ notes  = "Device notification control. Stored."
 
 [[register.source]]
 kind       = "standard"
-ref        = "xHCI 1.1, 5.4.4 DNCTRL"
+ref        = "xHCI 1.1, 5.4.4 `DNCTRL`"
 confidence = "high"
 
 [[register]]
@@ -284,7 +284,7 @@ notes  = "Command ring pointer and consumer cycle; the pointer reads as 0, only 
 
 [[register.source]]
 kind       = "standard"
-ref        = "xHCI 1.1, 5.4.5 CRCR"
+ref        = "xHCI 1.1, 5.4.5 `CRCR`"
 confidence = "high"
 
 [[register.field]]
@@ -306,7 +306,7 @@ notes  = "Command ring pointer, high word; reads 0."
 
 [[register.source]]
 kind       = "standard"
-ref        = "xHCI 1.1, 5.4.5 CRCR"
+ref        = "xHCI 1.1, 5.4.5 `CRCR`"
 confidence = "high"
 
 [[register]]
@@ -317,18 +317,18 @@ notes  = "Device context base address array pointer."
 
 [[register.source]]
 kind       = "standard"
-ref        = "xHCI 1.1, 5.4.6 DCBAAP"
+ref        = "xHCI 1.1, 5.4.6 `DCBAAP`"
 confidence = "high"
 
 [[register]]
 name   = "DCBAAP_HI"
 offset = 0x54
 access = "rw"
-notes  = "DCBAAP, high word."
+notes  = "`DCBAAP`, high word."
 
 [[register.source]]
 kind       = "standard"
-ref        = "xHCI 1.1, 5.4.6 DCBAAP"
+ref        = "xHCI 1.1, 5.4.6 `DCBAAP`"
 confidence = "high"
 
 [[register]]
@@ -339,7 +339,7 @@ notes  = "Slots enabled. Stored."
 
 [[register.source]]
 kind       = "standard"
-ref        = "xHCI 1.1, 5.4.7 CONFIG"
+ref        = "xHCI 1.1, 5.4.7 `CONFIG`"
 confidence = "high"
 
 [[register]]
@@ -347,11 +347,11 @@ name   = "USBLEGSUP"
 offset = 0xA0
 access = "r"
 reset  = 0x00000401
-notes  = "Extended capability: USB legacy support, next at +0x10 dwords (0xB0)."
+notes  = "Extended capability: USB legacy support, next at `+0x10` dwords (`0xB0`)."
 
 [[register.source]]
 kind       = "measured"
-ref        = "Raspberry Pi 4B d03115 /dev/mem"
+ref        = "Raspberry Pi 4B d03115 `/dev/mem`"
 confidence = "high"
 
 [[register]]
@@ -359,11 +359,11 @@ name   = "SUPPORTED_USB2"
 offset = 0xB0
 access = "r"
 reset  = 0x02000802
-notes  = "Supported protocol: USB 2.0, next at 0xD0."
+notes  = "Supported protocol: USB 2.0, next at `0xD0`."
 
 [[register.source]]
 kind       = "measured"
-ref        = "Raspberry Pi 4B d03115: id=2 'USB ' rev 2.0 portoff=1 count=1"
+ref        = "Raspberry Pi 4B d03115: `id=2 'USB ' rev 2.0 portoff=1 count=1`"
 confidence = "high"
 
 [[register]]
@@ -371,11 +371,11 @@ name   = "SUPPORTED_USB2_NAME"
 offset = 0xB4
 access = "r"
 reset  = 0x20425355
-notes  = "'USB '."
+notes  = "`USB `."
 
 [[register.source]]
 kind       = "measured"
-ref        = "Raspberry Pi 4B d03115 /dev/mem"
+ref        = "Raspberry Pi 4B d03115 `/dev/mem`"
 confidence = "high"
 
 [[register]]
@@ -387,7 +387,7 @@ notes  = "Port offset 1, count 1."
 
 [[register.source]]
 kind       = "measured"
-ref        = "Raspberry Pi 4B d03115 /dev/mem"
+ref        = "Raspberry Pi 4B d03115 `/dev/mem`"
 confidence = "high"
 
 [[register]]
@@ -395,11 +395,11 @@ name   = "SUPPORTED_USB3"
 offset = 0xD0
 access = "r"
 reset  = 0x03008C02
-notes  = "Supported protocol: USB 3.0, next at 0x300."
+notes  = "Supported protocol: USB 3.0, next at `0x300`."
 
 [[register.source]]
 kind       = "measured"
-ref        = "Raspberry Pi 4B d03115: id=2 'USB ' rev 3.0 portoff=2 count=4"
+ref        = "Raspberry Pi 4B d03115: `id=2 'USB ' rev 3.0 portoff=2 count=4`"
 confidence = "high"
 
 [[register]]
@@ -407,11 +407,11 @@ name   = "SUPPORTED_USB3_NAME"
 offset = 0xD4
 access = "r"
 reset  = 0x20425355
-notes  = "'USB '."
+notes  = "`USB `."
 
 [[register.source]]
 kind       = "measured"
-ref        = "Raspberry Pi 4B d03115 /dev/mem"
+ref        = "Raspberry Pi 4B d03115 `/dev/mem`"
 confidence = "high"
 
 [[register]]
@@ -423,7 +423,7 @@ notes  = "Port offset 2, count 4."
 
 [[register.source]]
 kind       = "measured"
-ref        = "Raspberry Pi 4B d03115 /dev/mem"
+ref        = "Raspberry Pi 4B d03115 `/dev/mem`"
 confidence = "high"
 
 [[register]]
@@ -447,7 +447,7 @@ notes  = "Microframe index."
 
 [[register.source]]
 kind       = "standard"
-ref        = "xHCI 1.1, 5.5.1 MFINDEX"
+ref        = "xHCI 1.1, 5.5.1 `MFINDEX`"
 confidence = "high"
 
 [[register]]
@@ -460,7 +460,7 @@ notes  = "Interrupter management. Only interrupter 0 is used."
 
 [[register.source]]
 kind       = "standard"
-ref        = "xHCI 1.1, 5.5.2.1 IMAN"
+ref        = "xHCI 1.1, 5.5.2.1 `IMAN`"
 confidence = "high"
 
 [[register.field]]
@@ -494,7 +494,7 @@ notes  = "Interrupter moderation. Stored."
 
 [[register.source]]
 kind       = "standard"
-ref        = "xHCI 1.1, 5.5.2.2 IMOD"
+ref        = "xHCI 1.1, 5.5.2.2 `IMOD`"
 confidence = "high"
 
 [[register]]
@@ -507,7 +507,7 @@ notes  = "Event ring segment table size."
 
 [[register.source]]
 kind       = "standard"
-ref        = "xHCI 1.1, 5.5.2.3.1 ERSTSZ"
+ref        = "xHCI 1.1, 5.5.2.3.1 `ERSTSZ`"
 confidence = "high"
 
 [[register]]
@@ -520,7 +520,7 @@ notes  = "Event ring segment table base."
 
 [[register.source]]
 kind       = "standard"
-ref        = "xHCI 1.1, 5.5.2.3.2 ERSTBA"
+ref        = "xHCI 1.1, 5.5.2.3.2 `ERSTBA`"
 confidence = "high"
 
 [[register]]
@@ -529,11 +529,11 @@ offset = 0x234
 count  = 4
 stride = 0x20
 access = "rw"
-notes  = "ERSTBA, high word."
+notes  = "`ERSTBA`, high word."
 
 [[register.source]]
 kind       = "standard"
-ref        = "xHCI 1.1, 5.5.2.3.2 ERSTBA"
+ref        = "xHCI 1.1, 5.5.2.3.2 `ERSTBA`"
 confidence = "high"
 
 [[register]]
@@ -546,7 +546,7 @@ notes  = "Event ring dequeue pointer."
 
 [[register.source]]
 kind       = "standard"
-ref        = "xHCI 1.1, 5.5.2.3.3 ERDP"
+ref        = "xHCI 1.1, 5.5.2.3.3 `ERDP`"
 confidence = "high"
 
 [[register.field]]
@@ -566,11 +566,11 @@ offset = 0x23C
 count  = 4
 stride = 0x20
 access = "rw"
-notes  = "ERDP, high word."
+notes  = "`ERDP`, high word."
 
 [[register.source]]
 kind       = "standard"
-ref        = "xHCI 1.1, 5.5.2.3.3 ERDP"
+ref        = "xHCI 1.1, 5.5.2.3.3 `ERDP`"
 confidence = "high"
 
 [[register]]
@@ -582,7 +582,7 @@ notes  = "Extended capability 10 (debug capability), the last in the list."
 
 [[register.source]]
 kind       = "measured"
-ref        = "Raspberry Pi 4B d03115 /dev/mem"
+ref        = "Raspberry Pi 4B d03115 `/dev/mem`"
 confidence = "high"
 
 [[register]]
@@ -591,16 +591,16 @@ offset = 0x420
 count  = 5
 stride = 0x10
 access = "rw"
-notes  = "Port status and control. Empty but powered is 0x2A0; the USB2 port adds DR."
+notes  = "Port status and control. Empty but powered is `0x2A0`; the USB2 port adds `DR`."
 
 [[register.source]]
 kind       = "standard"
-ref        = "xHCI 1.1, 5.4.8 PORTSC"
+ref        = "xHCI 1.1, 5.4.8 `PORTSC`"
 confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "Raspberry Pi 4B d03115, moving a stick between sockets: 0x400202e1 USB2 just connected, 0x40000e03 USB2 enumerated, 0x00021203 USB3 SuperSpeed, 0x000002a0 empty"
+ref        = "Raspberry Pi 4B d03115, moving a stick between sockets: `0x400202e1` USB2 just connected, `0x40000e03` USB2 enumerated, `0x00021203` USB3 SuperSpeed, `0x000002a0` empty"
 confidence = "high"
 
 [[register.field]]
@@ -637,7 +637,7 @@ confidence = "high"
 [[register.field]]
 name  = "PLS"
 bits  = "8:5"
-notes = "Link state: 0 U0, 5 RxDetect, 7 Polling."
+notes = "Link state: 0 U0, 5 `RxDetect`, 7 Polling."
 
 [[register.field.source]]
 kind       = "standard"
@@ -750,7 +750,7 @@ notes  = "Device removable; set on the USB2 root port."
 
 [[register.field.source]]
 kind       = "measured"
-ref        = "top bit of the measured 0x400202e1"
+ref        = "top bit of the measured `0x400202e1`"
 confidence = "high"
 
 [[register.field]]
@@ -773,7 +773,7 @@ notes  = "Port power management. Stored."
 
 [[register.source]]
 kind       = "standard"
-ref        = "xHCI 1.1, 5.4.9 PORTPMSC"
+ref        = "xHCI 1.1, 5.4.9 `PORTPMSC`"
 confidence = "high"
 
 [[register]]
@@ -786,7 +786,7 @@ notes  = "Port link info."
 
 [[register.source]]
 kind       = "standard"
-ref        = "xHCI 1.1, 5.4.10 PORTLI"
+ref        = "xHCI 1.1, 5.4.10 `PORTLI`"
 confidence = "high"
 
 [[register]]
@@ -799,5 +799,5 @@ notes  = "Port hardware LPM control. Stored."
 
 [[register.source]]
 kind       = "standard"
-ref        = "xHCI 1.1, 5.4.11 PORTHLPMC"
+ref        = "xHCI 1.1, 5.4.11 `PORTHLPMC`"
 confidence = "high"

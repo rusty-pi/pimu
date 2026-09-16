@@ -12,12 +12,12 @@ confidence = "high"
 
 [[block.source]]
 kind       = "linux"
-ref        = "bcm283x.dtsi: brcm,bcm2835-system-timer, reg = <0x7e003000 0x1000>"
+ref        = "`bcm283x.dtsi`: `brcm,bcm2835-system-timer`, `reg = <0x7e003000 0x1000>`"
 confidence = "high"
 
 [[block.source]]
 kind       = "trace"
-ref        = "start4 arms C0 as its ThreadX tick (source 64) and C2 as the clock service's timeout (source 66)"
+ref        = "start4 arms `C0` as its ThreadX tick (source 64) and `C2` as the clock service's timeout (source 66)"
 confidence = "high"
 
 [[register]]
@@ -28,12 +28,12 @@ notes  = "Match flags, one per compare channel. Write 1 to clear."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, System Timer: CS"
+ref        = "BCM2711 ARM Peripherals, System Timer: `CS`"
 confidence = "high"
 
 [[register.source]]
 kind       = "linux"
-ref        = "drivers/clocksource/bcm2835_timer.c acks its channel by writing its bit to +0x00"
+ref        = "`drivers/clocksource/bcm2835_timer.c` acks its channel by writing its bit to `+0x00`"
 confidence = "high"
 
 [[register.field]]
@@ -43,7 +43,7 @@ notes = "Channel 0 matched."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, System Timer: CS"
+ref        = "BCM2711 ARM Peripherals, System Timer: `CS`"
 confidence = "high"
 
 [[register.field]]
@@ -53,7 +53,7 @@ notes = "Channel 1 matched."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, System Timer: CS"
+ref        = "BCM2711 ARM Peripherals, System Timer: `CS`"
 confidence = "high"
 
 [[register.field]]
@@ -63,7 +63,7 @@ notes = "Channel 2 matched."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, System Timer: CS"
+ref        = "BCM2711 ARM Peripherals, System Timer: `CS`"
 confidence = "high"
 
 [[register.field]]
@@ -73,7 +73,7 @@ notes = "Channel 3 matched."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, System Timer: CS"
+ref        = "BCM2711 ARM Peripherals, System Timer: `CS`"
 confidence = "high"
 
 [[register]]
@@ -84,12 +84,12 @@ notes  = "Counter, low 32 bits."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, System Timer: CLO"
+ref        = "BCM2711 ARM Peripherals, System Timer: `CLO`"
 confidence = "high"
 
 [[register.source]]
 kind       = "linux"
-ref        = "drivers/clocksource/bcm2835_timer.c reads the counter at +0x04"
+ref        = "`drivers/clocksource/bcm2835_timer.c` reads the counter at `+0x04`"
 confidence = "high"
 
 [[register]]
@@ -100,7 +100,7 @@ notes  = "Counter, high 32 bits."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, System Timer: CHI"
+ref        = "BCM2711 ARM Peripherals, System Timer: `CHI`"
 confidence = "high"
 
 [[register]]
@@ -109,19 +109,19 @@ offset = 0x0C
 count  = 4
 stride = 4
 access = "rw"
-notes  = "Compare values. Channel n matches once when CLO reaches C[n]; it does not reload."
+notes  = "Compare values. Channel n matches once when `CLO` reaches `C[n]`; it does not reload."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, System Timer: C0..C3"
+ref        = "BCM2711 ARM Peripherals, System Timer: `C0..C3`"
 confidence = "high"
 
 [[register.source]]
 kind       = "linux"
-ref        = "drivers/clocksource/bcm2835_timer.c programs channel n at +0x0C + 4 * n"
+ref        = "`drivers/clocksource/bcm2835_timer.c` programs channel n at `+0x0C + 4 * n`"
 confidence = "high"
 
 [[register.source]]
 kind       = "trace"
-ref        = "start4 re-arms C0 from its tick ISR 0x3EC40B7C on every tick"
+ref        = "start4 re-arms `C0` from its tick ISR `0x3EC40B7C` on every tick"
 confidence = "high"

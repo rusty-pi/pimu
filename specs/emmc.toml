@@ -3,7 +3,7 @@ name    = "emmc"
 base    = 0x7E300000
 size    = 0x100
 summary = "The legacy EMMC controller (Arasan SDHCI): the Pi 4's WiFi SDIO host, and the host 2020-era bootcode reads the SD card through"
-notes   = "EMMC2's command engine (src/periph/emmc2.rs) with nothing on the bus: the software resets self-clear, the internal clock reports stable once enabled, CMD0 completes and every command that expects a response times out. 2020-era bootcode routes the SD slot here (GPIO block +0xD0, bit 1) and boots from SD through this host; the model does not follow that mux, so the card stays on EMMC2 and such bootcode reports \"Failed to open device: 'sdcard'\" and tries its next boot mode. The interrupt output is GIC SPI 126, the line EMMC2 drives too."
+notes   = "EMMC2's command engine (`src/periph/emmc2.rs`) with nothing on the bus: the software resets self-clear, the internal clock reports stable once enabled, CMD0 completes and every command that expects a response times out. 2020-era bootcode routes the SD slot here (GPIO block `+0xD0`, bit 1) and boots from SD through this host; the model does not follow that mux, so the card stays on EMMC2 and such bootcode reports `Failed to open device: 'sdcard'` and tries its next boot mode. The interrupt output is GIC SPI 126, the line EMMC2 drives too."
 
 [[block.source]]
 kind       = "datasheet"
@@ -12,24 +12,24 @@ confidence = "high"
 
 [[block.source]]
 kind       = "linux"
-ref        = "bcm2711-rpi-4-b.dtb (raspberrypi/firmware): mmcnr@7e300000, compatible brcm,bcm2835-mmc / brcm,bcm2835-sdhci, reg <0x7e300000 0x100>, interrupts <GIC_SPI 0x7e>, with wifi@1 (brcm,bcm4329-fmac) on it"
+ref        = "`bcm2711-rpi-4-b.dtb` (raspberrypi/firmware): `mmcnr@7e300000`, compatible `brcm,bcm2835-mmc` / `brcm,bcm2835-sdhci`, `reg <0x7e300000 0x100>`, `interrupts <GIC_SPI 0x7e>`, with `wifi@1` (`brcm,bcm4329-fmac`) on it"
 confidence = "high"
-note       = "The SD image's disable-wifi overlay turns the node off, so Linux never touches the block in the model's boots."
+note       = "The SD image's `disable-wifi` overlay turns the node off, so Linux never touches the block in the model's boots."
 
 [[block.source]]
 kind       = "trace"
-ref        = "pieeprom-2020-09-03 bootcode, RVF_TRACE_MMIO=7e300000-7e341000: its whole SD init runs on this block and EMMC2 is never touched; it writes 0x2 to 0x7E2000D0 first (0x8000f60a). The 2026 bootcode and start4 never touch this block."
+ref        = "pieeprom-2020-09-03 bootcode, `RVF_TRACE_MMIO=7e300000-7e341000`: its whole SD init runs on this block and EMMC2 is never touched; it writes `0x2` to `0x7E2000D0` first (`0x8000f60a`). The 2026 bootcode and start4 never touch this block."
 confidence = "high"
 
 [[block.source]]
 kind       = "trace"
-ref        = "pinned start4 keeps the SD slot on EMMC2: it clears bit 1 of 0x7E2000D0 when it opens EMMC2 (0x3EC51DFC), when it closes it (0x3EC51A4E) and just before it releases the ARM (0x3EC5A7E2), and sets bit 0 in its board clock set-up (0x3ED4A1CE)"
+ref        = "pinned start4 keeps the SD slot on EMMC2: it clears bit 1 of `0x7E2000D0` when it opens EMMC2 (`0x3EC51DFC`), when it closes it (`0x3EC51A4E`) and just before it releases the ARM (`0x3EC5A7E2`), and sets bit 0 in its board clock set-up (`0x3ED4A1CE`)"
 confidence = "high"
 note       = "what bit 0 does is not known"
 
 [[block.source]]
 kind       = "measured"
-ref        = "UART logs of the 2020 bootloaders, which print this host's HOST_CONTROL and PRESENT_STATE on every clock change: raspberrypi/rpi-eeprom#139, #227, #242 (no card in the slot), #282 (booting from the SD card)"
+ref        = "UART logs of the 2020 bootloaders, which print this host's `HOST_CONTROL` and `PRESENT_STATE` on every clock change: raspberrypi/rpi-eeprom#139, #227, #242 (no card in the slot), #282 (booting from the SD card)"
 confidence = "high"
 note       = "Other people's boards, not the reference board."
 
@@ -37,7 +37,7 @@ note       = "Other people's boards, not the reference board."
 name   = "SDMA_ADDR"
 offset = 0x00
 access = "rw"
-notes  = "ARG2 in the BCM2835 datasheet: the argument auto-CMD23 sends."
+notes  = "`ARG2` in the BCM2835 datasheet: the argument auto-CMD23 sends."
 
 [[register.source]]
 kind       = "standard"
@@ -46,14 +46,14 @@ confidence = "high"
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2835 ARM Peripherals, EMMC: ARG2"
+ref        = "BCM2835 ARM Peripherals, EMMC: `ARG2`"
 confidence = "high"
 
 [[register]]
 name   = "BLOCK_SIZE_COUNT"
 offset = 0x04
 access = "rw"
-notes  = "BLKSIZECNT: block size and block count."
+notes  = "`BLKSIZECNT`: block size and block count."
 
 [[register.source]]
 kind       = "standard"
@@ -62,14 +62,14 @@ confidence = "high"
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2835 ARM Peripherals, EMMC: BLKSIZECNT"
+ref        = "BCM2835 ARM Peripherals, EMMC: `BLKSIZECNT`"
 confidence = "high"
 
 [[register]]
 name   = "ARGUMENT"
 offset = 0x08
 access = "rw"
-notes  = "ARG1: the command argument."
+notes  = "`ARG1`: the command argument."
 
 [[register.source]]
 kind       = "standard"
@@ -78,14 +78,14 @@ confidence = "high"
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2835 ARM Peripherals, EMMC: ARG1"
+ref        = "BCM2835 ARM Peripherals, EMMC: `ARG1`"
 confidence = "high"
 
 [[register]]
 name   = "CMD_XFER"
 offset = 0x0C
 access = "rw"
-notes  = "CMDTM: transfer mode (low half) and command (high half). Writing the high half issues the command."
+notes  = "`CMDTM`: transfer mode (low half) and command (high half). Writing the high half issues the command."
 
 [[register.source]]
 kind       = "standard"
@@ -94,14 +94,14 @@ confidence = "high"
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2835 ARM Peripherals, EMMC: CMDTM"
+ref        = "BCM2835 ARM Peripherals, EMMC: `CMDTM`"
 confidence = "high"
 
 [[register]]
 name   = "RESPONSE0"
 offset = 0x10
 access = "r"
-notes  = "RESP0: response bits 31:0 (39:8 of a long response)."
+notes  = "`RESP0`: response bits 31:0 (39:8 of a long response)."
 
 [[register.source]]
 kind       = "standard"
@@ -112,7 +112,7 @@ confidence = "high"
 name   = "RESPONSE1"
 offset = 0x14
 access = "r"
-notes  = "RESP1: response bits 63:32."
+notes  = "`RESP1`: response bits 63:32."
 
 [[register.source]]
 kind       = "standard"
@@ -123,7 +123,7 @@ confidence = "high"
 name   = "RESPONSE2"
 offset = 0x18
 access = "r"
-notes  = "RESP2: response bits 95:64."
+notes  = "`RESP2`: response bits 95:64."
 
 [[register.source]]
 kind       = "standard"
@@ -134,7 +134,7 @@ confidence = "high"
 name   = "RESPONSE3"
 offset = 0x1C
 access = "r"
-notes  = "RESP3: response bits 127:96."
+notes  = "`RESP3`: response bits 127:96."
 
 [[register.source]]
 kind       = "standard"
@@ -145,7 +145,7 @@ confidence = "high"
 name   = "BUFFER_DATA"
 offset = 0x20
 access = "rw"
-notes  = "DATA: the PIO buffer data port."
+notes  = "`DATA`: the PIO buffer data port."
 
 [[register.source]]
 kind       = "standard"
@@ -154,7 +154,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2835 ARM Peripherals, EMMC: DATA"
+ref        = "BCM2835 ARM Peripherals, EMMC: `DATA`"
 confidence = "high"
 
 [[register]]
@@ -162,7 +162,7 @@ name   = "PRESENT_STATE"
 offset = 0x24
 access = "r"
 reset  = 0x1FFF0000
-notes  = "STATUS. Idle: card inserted and stable, CMD and DAT[7:0] high, with or without a card in the slot. After a command times out the real host keeps CMD_INHIBIT (bit 0) set until a command-line reset, so the bootcode's failure message says status 1fff0001; the model lets it go at once and says 1fff0000."
+notes  = "`STATUS`. Idle: card inserted and stable, CMD and DAT[7:0] high, with or without a card in the slot. After a command times out the real host keeps `CMD_INHIBIT` (bit 0) set until a command-line reset, so the bootcode's failure message says `status 1fff0001`; the model lets it go at once and says `1fff0000`."
 
 [[register.source]]
 kind       = "standard"
@@ -171,14 +171,14 @@ confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "raspberrypi/rpi-eeprom#227, bootloader 2020-09-03, no card: 'status: 0x1fff0000' on every 'SD HOST:' line, then \"Failed to open device: 'sdcard' (cmd 371a0010 status 1fff0001)\""
+ref        = "raspberrypi/rpi-eeprom#227, bootloader 2020-09-03, no card: `status: 0x1fff0000` on every `SD HOST:` line, then `Failed to open device: 'sdcard' (cmd 371a0010 status 1fff0001)`"
 confidence = "high"
 
 [[register]]
 name   = "HOST_CONTROL"
 offset = 0x28
 access = "rw"
-notes  = "CONTROL0: host control 1, power, block-gap and wakeup control. Reads back what was written: unlike EMMC2's, no bit reads 1 regardless."
+notes  = "`CONTROL0`: host control 1, power, block-gap and wakeup control. Reads back what was written: unlike EMMC2's, no bit reads 1 regardless."
 
 [[register.source]]
 kind       = "standard"
@@ -187,14 +187,14 @@ confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "raspberrypi/rpi-eeprom#139, #227, #282: the 2020 bootloaders print 'CTL0: 0x00000000' after the reset and 'CTL0: 0x00000f00' once bus power and voltage are set, where EMMC2 reads 0x00800f00"
+ref        = "raspberrypi/rpi-eeprom#139, #227, #282: the 2020 bootloaders print `CTL0: 0x00000000` after the reset and `CTL0: 0x00000f00` once bus power and voltage are set, where EMMC2 reads `0x00800f00`"
 confidence = "high"
 
 [[register]]
 name   = "CLOCK_CONTROL"
 offset = 0x2C
 access = "rw"
-notes  = "CONTROL1: clock control (15:0), data timeout (19:16) and the self-clearing software resets (26:24). 2020-era bootcode waits here twice: for its software reset to clear, and for the internal clock to report stable once enabled. On the catch-all stub neither happened, and that boot hung before its first line of output (#64)."
+notes  = "`CONTROL1`: clock control (15:0), data timeout (19:16) and the self-clearing software resets (26:24). 2020-era bootcode waits here twice: for its software reset to clear, and for the internal clock to report stable once enabled. On the catch-all stub neither happened, and that boot hung before its first line of output (#64)."
 
 [[register.source]]
 kind       = "standard"
@@ -203,13 +203,13 @@ confidence = "high"
 
 [[register.source]]
 kind       = "decompile"
-ref        = "pieeprom-2020-09-03 bootcode: 0x80000ed6 'ld r0, [r3+0x2c]; and r0, r8; beq done', polled for 100 ms of the system timer after writing SRST 0x07000000; 0x80000a40 'ld r0, [r5+0x2c]; btest r0, #1; beq back' after writing 0x000ee201, with no timeout"
+ref        = "pieeprom-2020-09-03 bootcode: `0x80000ed6` `ld r0, [r3+0x2c]; and r0, r8; beq done`, polled for 100 ms of the system timer after writing `SRST` `0x07000000`; `0x80000a40` `ld r0, [r5+0x2c]; btest r0, #1; beq back` after writing `0x000ee201`, with no timeout"
 confidence = "high"
 
 [[register.field]]
 name  = "INTERNAL_EN"
 bits  = "0"
-notes = "CLK_INTLEN: internal clock on."
+notes = "`CLK_INTLEN`: internal clock on."
 
 [[register.field.source]]
 kind       = "standard"
@@ -220,7 +220,7 @@ confidence = "high"
 name   = "STABLE"
 bits   = "1"
 access = "r"
-notes  = "CLK_STABLE: internal clock stable; immediately, in the model."
+notes  = "`CLK_STABLE`: internal clock stable; immediately, in the model."
 
 [[register.field.source]]
 kind       = "standard"
@@ -230,7 +230,7 @@ confidence = "high"
 [[register.field]]
 name  = "SD_EN"
 bits  = "2"
-notes = "CLK_EN: SD clock to the card on."
+notes = "`CLK_EN`: SD clock to the card on."
 
 [[register.field.source]]
 kind       = "standard"
@@ -240,7 +240,7 @@ confidence = "high"
 [[register.field]]
 name  = "SRST_ALL"
 bits  = "24"
-notes = "SRST_HC: reset everything."
+notes = "`SRST_HC`: reset everything."
 
 [[register.field.source]]
 kind       = "standard"
@@ -271,7 +271,7 @@ confidence = "high"
 name   = "INT_STATUS"
 offset = 0x30
 access = "w1c"
-notes  = "INTERRUPT: normal (15:0) and error (31:16) status, gated by INT_STATUS_EN. With nothing on the bus, a command that expects a response ends in ERR_CMD_TIMEOUT."
+notes  = "`INTERRUPT`: normal (15:0) and error (31:16) status, gated by `INT_STATUS_EN`. With nothing on the bus, a command that expects a response ends in `ERR_CMD_TIMEOUT`."
 
 [[register.source]]
 kind       = "standard"
@@ -281,7 +281,7 @@ confidence = "high"
 [[register.field]]
 name  = "CMD_COMPLETE"
 bits  = "0"
-notes = "CMD_DONE: command complete."
+notes = "`CMD_DONE`: command complete."
 
 [[register.field.source]]
 kind       = "standard"
@@ -292,7 +292,7 @@ confidence = "high"
 name   = "ERROR"
 bits   = "15"
 access = "r"
-notes  = "ERR: set while any error bit is."
+notes  = "`ERR`: set while any error bit is."
 
 [[register.field.source]]
 kind       = "standard"
@@ -302,7 +302,7 @@ confidence = "high"
 [[register.field]]
 name  = "ERR_CMD_TIMEOUT"
 bits  = "16"
-notes = "CTO_ERR: command timeout."
+notes = "`CTO_ERR`: command timeout."
 
 [[register.field.source]]
 kind       = "standard"
@@ -313,7 +313,7 @@ confidence = "high"
 name   = "INT_STATUS_EN"
 offset = 0x34
 access = "rw"
-notes  = "IRPT_MASK: which interrupt conditions latch into INT_STATUS."
+notes  = "`IRPT_MASK`: which interrupt conditions latch into `INT_STATUS`."
 
 [[register.source]]
 kind       = "standard"
@@ -324,7 +324,7 @@ confidence = "high"
 name   = "INT_SIGNAL_EN"
 offset = 0x38
 access = "rw"
-notes  = "IRPT_EN: which INT_STATUS bits drive the interrupt line, GIC SPI 126, shared with EMMC2."
+notes  = "`IRPT_EN`: which `INT_STATUS` bits drive the interrupt line, GIC SPI 126, shared with EMMC2."
 
 [[register.source]]
 kind       = "standard"
@@ -333,14 +333,14 @@ confidence = "high"
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcm2711-rpi-4-b.dtb: interrupts <GIC_SPI 0x7e IRQ_TYPE_LEVEL_HIGH> on both mmcnr@7e300000 and mmc@7e340000"
+ref        = "`bcm2711-rpi-4-b.dtb`: `interrupts <GIC_SPI 0x7e IRQ_TYPE_LEVEL_HIGH>` on both `mmcnr@7e300000` and `mmc@7e340000`"
 confidence = "high"
 
 [[register]]
 name   = "HOST_CONTROL2"
 offset = 0x3C
 access = "rw"
-notes  = "CONTROL2: auto-CMD error status (15:0, read-only) and host control 2 (31:16)."
+notes  = "`CONTROL2`: auto-CMD error status (15:0, read-only) and host control 2 (31:16)."
 
 [[register.source]]
 kind       = "standard"
@@ -355,18 +355,18 @@ notes  = "Not measured on this block, and not in the BCM2835 datasheet; Linux su
 
 [[register.source]]
 kind       = "linux"
-ref        = "drivers/mmc/host/sdhci-iproc.c: bcm2835_data for brcm,bcm2835-sdhci has its own .caps / .caps1 and .missing_caps = true"
+ref        = "`drivers/mmc/host/sdhci-iproc.c`: `bcm2835_data` for `brcm,bcm2835-sdhci` has its own `.caps` / `.caps1` and `.missing_caps = true`"
 confidence = "high"
 
 [[register]]
 name   = "CAPABILITIES_1"
 offset = 0x44
 access = "r"
-notes  = "Not measured on this block; see CAPABILITIES_0. The model reads 0."
+notes  = "Not measured on this block; see `CAPABILITIES_0`. The model reads 0."
 
 [[register.source]]
 kind       = "linux"
-ref        = "drivers/mmc/host/sdhci-iproc.c: bcm2835_data, .missing_caps = true"
+ref        = "`drivers/mmc/host/sdhci-iproc.c`: `bcm2835_data`, `.missing_caps = true`"
 confidence = "high"
 
 [[register]]
@@ -384,11 +384,11 @@ confidence = "high"
 name   = "CONTROLLER_VERSION"
 offset = 0xFC
 access = "r"
-notes  = "SLOTISR_VER: slot interrupt status (low half), vendor and SDHCI version. Not measured on this block. The model reads 0."
+notes  = "`SLOTISR_VER`: slot interrupt status (low half), vendor and SDHCI version. Not measured on this block. The model reads 0."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2835 ARM Peripherals, EMMC: SLOTISR_VER"
+ref        = "BCM2835 ARM Peripherals, EMMC: `SLOTISR_VER`"
 confidence = "high"
 
 [[register.source]]

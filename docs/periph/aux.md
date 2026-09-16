@@ -6,7 +6,7 @@
 - Base: `0x7E215000`
 - Size: `0x100`
 
-Only the mini-UART is modelled, transmit-only with a line that is always ready. The SPI masters at +0x80 / +0xC0 read 0.
+Only the mini-UART is modelled, transmit-only with a line that is always ready. The SPI masters at `+0x80` / `+0xC0` read 0.
 
 Sources:
 
@@ -38,7 +38,7 @@ Which auxiliary has an interrupt pending. Always 0 here.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: AUX_IRQ
+- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: `AUX_IRQ`
 
 ## `ENABLES`
 
@@ -54,19 +54,19 @@ Per-auxiliary enables.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: AUX_ENABLES
+- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: `AUX_ENABLES`
 
 `UART` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: AUX_ENABLES
+- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: `AUX_ENABLES`
 
 `SPI1` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: AUX_ENABLES
+- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: `AUX_ENABLES`
 
 `SPI2` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: AUX_ENABLES
+- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: `AUX_ENABLES`
 
 ## `MU_IO`
 
@@ -76,7 +76,7 @@ Data: write transmits a byte; nothing is ever received.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: AUX_MU_IO_REG
+- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_IO_REG`
 
 ## `MU_IER`
 
@@ -86,7 +86,7 @@ Interrupt enables.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: AUX_MU_IER_REG
+- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_IER_REG`
 
 ## `MU_IIR`
 
@@ -96,7 +96,7 @@ Interrupt identity on read (FIFOs on, nothing pending), FIFO clear on write.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: AUX_MU_IIR_REG
+- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_IIR_REG`
 
 ## `MU_LCR`
 
@@ -106,7 +106,7 @@ Line control.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: AUX_MU_LCR_REG
+- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_LCR_REG`
 
 ## `MU_MCR`
 
@@ -116,7 +116,7 @@ Modem control.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: AUX_MU_MCR_REG
+- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_MCR_REG`
 
 ## `MU_LSR`
 
@@ -132,19 +132,19 @@ Line status.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: AUX_MU_LSR_REG
+- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_LSR_REG`
 
 `DATA_READY` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: AUX_MU_LSR_REG
+- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_LSR_REG`
 
 `TX_EMPTY` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: AUX_MU_LSR_REG
+- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_LSR_REG`
 
 `TX_IDLE` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: AUX_MU_LSR_REG
+- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_LSR_REG`
 
 ## `MU_MSR`
 
@@ -154,7 +154,7 @@ Modem status.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: AUX_MU_MSR_REG
+- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_MSR_REG`
 
 ## `MU_SCRATCH`
 
@@ -164,7 +164,7 @@ One byte of scratch storage.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: AUX_MU_SCRATCH
+- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_SCRATCH`
 
 ## `MU_CNTL`
 
@@ -174,17 +174,17 @@ Extra control: receiver / transmitter enables, flow control.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: AUX_MU_CNTL_REG
+- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_CNTL_REG`
 
 ## `MU_STAT`
 
 Offset `0x064` · access `r` · 32 bits
 
-Extra status. The model reports the same ready bits as MU_LSR.
+Extra status. The model reports the same ready bits as `MU_LSR`.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: AUX_MU_STAT_REG
+- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_STAT_REG`
 
 ## `MU_BAUD`
 
@@ -194,4 +194,4 @@ Baud-rate counter (16 bits).
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: AUX_MU_BAUD_REG
+- datasheet (high): BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_BAUD_REG`

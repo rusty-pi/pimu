@@ -1,6 +1,6 @@
 <!-- generated from specs/dma_vpu.toml by `cargo run -- spec-docs --update` – do not edit -->
 
-# `dma_vpu` – The DMA controller start4's dmalib drives: 16 channel slots, channel 15 at 0x7EE05000
+# `dma_vpu` – The DMA controller start4's dmalib drives: 16 channel slots, channel 15 at `0x7EE05000`
 
 - Bus: `vpu` (VPU bus address)
 - Base: `0x7EE04100`
@@ -10,7 +10,7 @@ Same channel layout as the legacy controller (`dma`), but all 16 slots are chann
 
 Sources:
 
-- decompile (high): dma_set_cs 0x3EC98E7C / dma_chain_start 0x3EC97544: base = ch < 15 ? 0x7E007000 : 0x7EE04100, registers at base + ch * 0x100; the transfer queue runs on channel 15
+- decompile (high): `dma_set_cs` `0x3EC98E7C` / `dma_chain_start` `0x3EC97544`: `base = ch < 15 ? 0x7E007000 : 0x7EE04100`, registers at `base + ch * 0x100`; the transfer queue runs on channel 15
 
 ## Register map
 
@@ -30,11 +30,11 @@ Sources:
 
 Offset `0x000`, 16 elements 0x100 apart · access `rw` · 32 bits
 
-Channel control and status, laid out as `dma` CS.
+Channel control and status, laid out as `dma` `CS`.
 
 Sources:
 
-- decompile (high): dma_set_cs 0x3EC98E7C writes flags | 1
+- decompile (high): `dma_set_cs` `0x3EC98E7C` writes `flags | 1`
 
 ## `CONBLK_AD`
 
@@ -44,7 +44,7 @@ Control-block address.
 
 Sources:
 
-- decompile (high): dma_chain_start 0x3EC97544 writes base + ch * 0x100 + 4
+- decompile (high): `dma_chain_start` `0x3EC97544` writes `base + ch * 0x100 + 4`
 
 ## `TI`
 
@@ -54,7 +54,7 @@ Transfer information.
 
 Sources:
 
-- inferred (medium): the legacy channel layout, which the base selection in dma_set_cs treats as interchangeable
+- inferred (medium): the legacy channel layout, which the base selection in `dma_set_cs` treats as interchangeable
 
 ## `SOURCE_AD`
 

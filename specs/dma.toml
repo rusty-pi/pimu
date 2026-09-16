@@ -2,17 +2,17 @@
 name    = "dma"
 base    = 0x7E007000
 size    = 0x1000
-summary = "Legacy DMA controller: 15 channels 0x100 apart plus the controller-wide interrupt status and enable words"
-notes   = "start4 copies anything of 1 KiB or more through here (dma_memcpy). Channel 11's slot at +0xB00 is the DMA4 channel (`dma4`), decoded ahead of this block. The 0x7EE04100 controller (`dma_vpu`) has the same channel layout."
+summary = "Legacy DMA controller: 15 channels `0x100` apart plus the controller-wide interrupt status and enable words"
+notes   = "start4 copies anything of 1 KiB or more through here (`dma_memcpy`). Channel 11's slot at `+0xB00` is the DMA4 channel (`dma4`), decoded ahead of this block. The `0x7EE04100` controller (`dma_vpu`) has the same channel layout."
 
 [[block.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, DMA Controller chapter: channel register blocks 0x100 apart, INT_STATUS / ENABLE at 0xFE0 / 0xFF0"
+ref        = "BCM2711 ARM Peripherals, DMA Controller chapter: channel register blocks `0x100` apart, `INT_STATUS` / `ENABLE` at `0xFE0` / `0xFF0`"
 confidence = "high"
 
 [[block.source]]
 kind       = "decompile"
-ref        = "dma_memcpy 0x3EC981CC; dma_set_cs 0x3EC98E7C: base = ch < 15 ? 0x7E007000 : 0x7EE04100, start = *(base + ch * 0x100) = flags | 1"
+ref        = "`dma_memcpy` `0x3EC981CC`; `dma_set_cs` `0x3EC98E7C`: `base = ch < 15 ? 0x7E007000 : 0x7EE04100`, `start = *(base + ch * 0x100) = flags | 1`"
 confidence = "high"
 
 [[register]]
@@ -25,7 +25,7 @@ notes  = "Channel control and status."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, DMA: CS"
+ref        = "BCM2711 ARM Peripherals, DMA: `CS`"
 confidence = "high"
 
 [[register.field]]
@@ -35,7 +35,7 @@ notes = "Channel running."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, DMA: CS"
+ref        = "BCM2711 ARM Peripherals, DMA: `CS`"
 confidence = "high"
 
 [[register.field]]
@@ -45,7 +45,7 @@ notes = "Chain finished."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, DMA: CS"
+ref        = "BCM2711 ARM Peripherals, DMA: `CS`"
 confidence = "high"
 
 [[register.field]]
@@ -55,7 +55,7 @@ notes = "Interrupt pending."
 
 [[register.field.source]]
 kind       = "decompile"
-ref        = "dma_interrupt 0x3EC980E8 only enters dma_chan_interrupt for a channel with CS & 4"
+ref        = "`dma_interrupt` `0x3EC980E8` only enters `dma_chan_interrupt` for a channel with `CS & 4`"
 confidence = "high"
 
 [[register]]
@@ -64,16 +64,16 @@ offset = 0x04
 count  = 15
 stride = 0x100
 access = "rw"
-notes  = "Control-block address. Writing a non-null chain while ACTIVE starts it, which is how dmalib starts every transfer."
+notes  = "Control-block address. Writing a non-null chain while `ACTIVE` starts it, which is how dmalib starts every transfer."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, DMA: CONBLK_AD"
+ref        = "BCM2711 ARM Peripherals, DMA: `CONBLK_AD`"
 confidence = "high"
 
 [[register.source]]
 kind       = "decompile"
-ref        = "dma_chain_start 0x3EC97544 writes only *(base + ch * 0x100 + 4) = cb"
+ref        = "`dma_chain_start` `0x3EC97544` writes only `*(base + ch * 0x100 + 4) = cb`"
 confidence = "high"
 
 [[register]]
@@ -86,7 +86,7 @@ notes  = "Transfer information, loaded from the control block. Control blocks us
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, DMA: TI"
+ref        = "BCM2711 ARM Peripherals, DMA: `TI`"
 confidence = "high"
 
 [[register.field]]
@@ -96,17 +96,17 @@ notes = "Interrupt when this control block is done."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, DMA: TI"
+ref        = "BCM2711 ARM Peripherals, DMA: `TI`"
 confidence = "high"
 
 [[register.field]]
 name  = "TDMODE"
 bits  = "1"
-notes = "2D mode: TXFR_LEN is YLENGTH:XLENGTH and STRIDE applies."
+notes = "2D mode: `TXFR_LEN` is `YLENGTH:XLENGTH` and `STRIDE` applies."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, DMA: TI"
+ref        = "BCM2711 ARM Peripherals, DMA: `TI`"
 confidence = "high"
 
 [[register.field]]
@@ -116,7 +116,7 @@ notes = "Increment the destination address."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, DMA: TI"
+ref        = "BCM2711 ARM Peripherals, DMA: `TI`"
 confidence = "high"
 
 [[register.field]]
@@ -126,7 +126,7 @@ notes = "Increment the source address."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, DMA: TI"
+ref        = "BCM2711 ARM Peripherals, DMA: `TI`"
 confidence = "high"
 
 [[register]]
@@ -139,7 +139,7 @@ notes  = "Source address."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, DMA: SOURCE_AD"
+ref        = "BCM2711 ARM Peripherals, DMA: `SOURCE_AD`"
 confidence = "high"
 
 [[register]]
@@ -152,7 +152,7 @@ notes  = "Destination address."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, DMA: DEST_AD"
+ref        = "BCM2711 ARM Peripherals, DMA: `DEST_AD`"
 confidence = "high"
 
 [[register]]
@@ -161,11 +161,11 @@ offset = 0x14
 count  = 15
 stride = 0x100
 access = "r"
-notes  = "Transfer length; YLENGTH (29:16) and XLENGTH (15:0) in 2D mode."
+notes  = "Transfer length; `YLENGTH` (29:16) and `XLENGTH` (15:0) in 2D mode."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, DMA: TXFR_LEN"
+ref        = "BCM2711 ARM Peripherals, DMA: `TXFR_LEN`"
 confidence = "high"
 
 [[register]]
@@ -178,7 +178,7 @@ notes  = "2D strides: signed destination (31:16) and source (15:0) advance per r
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, DMA: STRIDE"
+ref        = "BCM2711 ARM Peripherals, DMA: `STRIDE`"
 confidence = "high"
 
 [[register]]
@@ -191,7 +191,7 @@ notes  = "Next control block in the chain."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, DMA: NEXTCONBK"
+ref        = "BCM2711 ARM Peripherals, DMA: `NEXTCONBK`"
 confidence = "high"
 
 [[register]]
@@ -204,7 +204,7 @@ notes  = "Error flags."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, DMA: DEBUG"
+ref        = "BCM2711 ARM Peripherals, DMA: `DEBUG`"
 confidence = "high"
 
 [[register]]
@@ -215,7 +215,7 @@ notes  = "One interrupt bit per channel."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, DMA: INT_STATUS"
+ref        = "BCM2711 ARM Peripherals, DMA: `INT_STATUS`"
 confidence = "high"
 
 [[register]]
@@ -226,5 +226,5 @@ notes  = "One enable bit per channel."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, DMA: ENABLE"
+ref        = "BCM2711 ARM Peripherals, DMA: `ENABLE`"
 confidence = "high"

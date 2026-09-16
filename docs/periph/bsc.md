@@ -7,20 +7,20 @@
 - `PMIC` copy: `0x7E205E00`
 - Size: `0x20`
 
-A transfer takes its time on the wire at core_clock / DIV, 500 MHz core clock: TA stays set until the bytes have gone, then DONE (and ERR on an unacknowledged address) latch.
+A transfer takes its time on the wire at `core_clock / DIV`, 500 MHz core clock: `TA` stays set until the bytes have gone, then `DONE` (and `ERR` on an unacknowledged address) latch.
 
 Sources:
 
 - datasheet (high): BCM2711 ARM Peripherals, BSC chapter
-- decompile (high): start4's I²C driver FUN_0ecf0ed0 picks the base from the bus id: 0 -> 0x7E205000, 8 -> 0x7E205E00, else 0x7E803000 + id * 0x1000
-- trace (high): late in the boot start4 probes 0x52 on instance 0 for a HAT EEPROM; unmapped, S read 0 and the poll never ended
-- trace (high): pinned start4 on instance 0, each probe in a session of its own at DIV 0x1388 with I2C0 muxed to GPIO 44/45 (ALT1) and released after: camera_auto_detect reads 0x10 reg 0x0000, 0x36 reg 0x300A, 0x1A reg 0x0016, 32 bytes from 0x40, 0x1A reg 0x303E, 0x1A reg 0x0016 and 0x1A reg 0x3254 (twice each); after each 'DISPLAY_DSI_PORT not defined' it reads 0x45 reg 0x80, then reg 0x01, whether or not display_auto_detect is set; later, unless force_eeprom_read=0, 0x50-0x53 in a session each on GPIO 0/1 (ALT0), up to ten queued reads of 4 bytes from reg 0x0000 per address — _checked by booting with camera_auto_detect and display_auto_detect removed from config.txt in turn, and with force_eeprom_read=0 added_
+- decompile (high): start4's I²C driver `FUN_0ecf0ed0` picks the base from the bus id: 0 -> `0x7E205000`, 8 -> `0x7E205E00`, else `0x7E803000 + id * 0x1000`
+- trace (high): late in the boot start4 probes `0x52` on instance 0 for a HAT EEPROM; unmapped, `S` read 0 and the poll never ended
+- trace (high): pinned start4 on instance 0, each probe in a session of its own at `DIV` `0x1388` with I2C0 muxed to GPIO 44/45 (ALT1) and released after: `camera_auto_detect` reads `0x10` reg `0x0000`, `0x36` reg `0x300A`, `0x1A` reg `0x0016`, 32 bytes from `0x40`, `0x1A` reg `0x303E`, `0x1A` reg `0x0016` and `0x1A` reg `0x3254` (twice each); after each `DISPLAY_DSI_PORT not defined` it reads `0x45` reg `0x80`, then reg `0x01`, whether or not `display_auto_detect` is set; later, unless `force_eeprom_read=0`, `0x50-0x53` in a session each on GPIO 0/1 (ALT0), up to ten queued reads of 4 bytes from reg `0x0000` per address — _checked by booting with `camera_auto_detect` and `display_auto_detect` removed from `config.txt` in turn, and with `force_eeprom_read=0` added_
 
 `PMIC` copy:
 
-Bus 8: the PMICs at 0x1B / 0x1E and the FXL6408 at 0x43.
+Bus 8: the PMICs at `0x1B` / `0x1E` and the FXL6408 at `0x43`.
 
-- decompile (high): FUN_0ecf0ed0: bus id 8; pmic_init 0x3ED4DAA8 uses it
+- decompile (high): `FUN_0ecf0ed0`: bus id 8; `pmic_init` `0x3ED4DAA8` uses it
 
 ## Register map
 
@@ -39,7 +39,7 @@ Bus 8: the PMICs at 0x1B / 0x1E and the FXL6408 at 0x43.
 
 Offset `0x000` · access `rw` · 32 bits
 
-Control. start4 reads a register in one of two ways. Either it sets ST for the write, then sets DLEN and ST | READ for the read before it puts the register bytes in the FIFO, so the read follows as a repeated start (sensor probes, the expander's id). Or it writes the register, waits for DONE, then starts the read (the display probe). Every read ends with C written back as read, S cleared, the FIFO cleared twice and C <- 0.
+Control. start4 reads a register in one of two ways. Either it sets `ST` for the write, then sets `DLEN` and `ST | READ` for the read before it puts the register bytes in the FIFO, so the read follows as a repeated start (sensor probes, the expander's id). Or it writes the register, waits for `DONE`, then starts the read (the display probe). Every read ends with `C` written back as read, `S` cleared, the FIFO cleared twice and `C` <- 0.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -50,30 +50,30 @@ Control. start4 reads a register in one of two ways. Either it sets ST for the w
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: C
-- trace (high): pinned start4: queued read at 0x3ECF0FD8 / 0x3ECF1150 with the FIFO writes at 0x3ECF115A after it; write-then-read at 0x3ECF0FD8, FIFO at 0x3ECF1046, then 0x3ECF1100; the common end at 0x3ECF2F92, 0x3ECF2FFC, 0x3ECF1826 / 0x3ECF185A, 0x3ECF3028
+- datasheet (high): BCM2711 ARM Peripherals, BSC: `C`
+- trace (high): pinned start4: queued read at `0x3ECF0FD8` / `0x3ECF1150` with the FIFO writes at `0x3ECF115A` after it; write-then-read at `0x3ECF0FD8`, FIFO at `0x3ECF1046`, then `0x3ECF1100`; the common end at `0x3ECF2F92`, `0x3ECF2FFC`, `0x3ECF1826` / `0x3ECF185A`, `0x3ECF3028`
 
 `READ` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: C.READ
+- datasheet (high): BCM2711 ARM Peripherals, BSC: `C.READ`
 
 `CLEAR` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: C.CLEAR
+- datasheet (high): BCM2711 ARM Peripherals, BSC: `C.CLEAR`
 
 `ST` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: C.ST
+- datasheet (high): BCM2711 ARM Peripherals, BSC: `C.ST`
 
 `I2CEN` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: C.I2CEN
+- datasheet (high): BCM2711 ARM Peripherals, BSC: `C.I2CEN`
 
 ## `S`
 
 Offset `0x004` · access `rw` · 32 bits
 
-Status; DONE, ERR and CLKT are write-1-to-clear.
+Status; `DONE`, `ERR` and `CLKT` are write-1-to-clear.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -90,47 +90,47 @@ Status; DONE, ERR and CLKT are write-1-to-clear.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: S
+- datasheet (high): BCM2711 ARM Peripherals, BSC: `S`
 
 `TA` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: S.TA
+- datasheet (high): BCM2711 ARM Peripherals, BSC: `S.TA`
 
 `DONE` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: S.DONE
+- datasheet (high): BCM2711 ARM Peripherals, BSC: `S.DONE`
 
 `TXW` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: S.TXW
+- datasheet (high): BCM2711 ARM Peripherals, BSC: `S.TXW`
 
 `RXR` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: S.RXR
+- datasheet (high): BCM2711 ARM Peripherals, BSC: `S.RXR`
 
 `TXD` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: S.TXD
+- datasheet (high): BCM2711 ARM Peripherals, BSC: `S.TXD`
 
 `RXD` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: S.RXD
+- datasheet (high): BCM2711 ARM Peripherals, BSC: `S.RXD`
 
 `TXE` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: S.TXE
+- datasheet (high): BCM2711 ARM Peripherals, BSC: `S.TXE`
 
 `RXF` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: S.RXF
+- datasheet (high): BCM2711 ARM Peripherals, BSC: `S.RXF`
 
 `ERR` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: S.ERR
+- datasheet (high): BCM2711 ARM Peripherals, BSC: `S.ERR`
 
 `CLKT` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: S.CLKT
+- datasheet (high): BCM2711 ARM Peripherals, BSC: `S.CLKT`
 
 ## `DLEN`
 
@@ -140,7 +140,7 @@ Transfer length; reads back 0 once every byte has moved.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: DLEN
+- datasheet (high): BCM2711 ARM Peripherals, BSC: `DLEN`
 
 ## `A`
 
@@ -150,7 +150,7 @@ Offset `0x00C` · access `rw` · 32 bits
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: A
+- datasheet (high): BCM2711 ARM Peripherals, BSC: `A`
 
 ## `FIFO`
 
@@ -160,37 +160,37 @@ Data FIFO, 16 bytes each way.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: FIFO
+- datasheet (high): BCM2711 ARM Peripherals, BSC: `FIFO`
 
 ## `DIV`
 
 Offset `0x014` · access `rw` · 32 bits
 
-Clock divisor. start4 programs 5000 (100 kHz) for its PMIC sessions and 2500 for its FXL6408 sessions on the PMIC bus, 2500 for its probe sweep, 540 for HDMI DDC. Each session starts with DIV, then DEL, then CLKT.
+Clock divisor. start4 programs 5000 (100 kHz) for its PMIC sessions and 2500 for its FXL6408 sessions on the PMIC bus, 2500 for its probe sweep, 540 for HDMI DDC. Each session starts with `DIV`, then `DEL`, then `CLKT`.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: DIV
-- measured (high): vcgencmd measure_clock core on a Raspberry Pi 4B d03115: 500000992 Hz
-- trace (high): pinned start4 on 0x7E205E00: 0x9C4 at 0x3ECF2E56 before its FXL6408 transfers, 0x1388 before the ones to 0x1B / 0x1E
+- datasheet (high): BCM2711 ARM Peripherals, BSC: `DIV`
+- measured (high): `vcgencmd measure_clock core` on a Raspberry Pi 4B d03115: 500000992 Hz
+- trace (high): pinned start4 on `0x7E205E00`: `0x9C4` at `0x3ECF2E56` before its FXL6408 transfers, `0x1388` before the ones to `0x1B` / `0x1E`
 
 ## `DEL`
 
 Offset `0x018` · access `rw` · 32 bits
 
-Data delay. Stored, otherwise ignored. start4 pairs it with DIV: 0x9C0271 with 2500, 0x13804E2 with 5000.
+Data delay. Stored, otherwise ignored. start4 pairs it with `DIV`: `0x9C0271` with 2500, `0x13804E2` with 5000.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: DEL
+- datasheet (high): BCM2711 ARM Peripherals, BSC: `DEL`
 
 ## `CLKT`
 
 Offset `0x01C` · access `rw` · 32 bits
 
-Clock-stretch timeout. Stored, otherwise ignored. start4 writes the session's timeout (0x100, or 0x200 for the display probe) when it opens a session and before every transfer, and 0x100 again after it closes one.
+Clock-stretch timeout. Stored, otherwise ignored. start4 writes the session's timeout (`0x100`, or `0x200` for the display probe) when it opens a session and before every transfer, and `0x100` again after it closes one.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: CLKT
-- trace (high): pinned start4: 0x100 at 0x3ECF2DD6 (session open, transfer start) and 0x3ECF2DFE (after the close at 0x3ECF2ECC)
+- datasheet (high): BCM2711 ARM Peripherals, BSC: `CLKT`
+- trace (high): pinned start4: `0x100` at `0x3ECF2DD6` (session open, transfer start) and `0x3ECF2DFE` (after the close at `0x3ECF2ECC`)

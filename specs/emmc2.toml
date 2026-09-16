@@ -17,7 +17,7 @@ confidence = "high"
 
 [[block.source]]
 kind       = "linux"
-ref        = "mmc@7e340000 driven by sdhci-iproc; 'mmc0: SDHCI controller on fe340000.mmc using ADMA' on the reference board"
+ref        = "`mmc@7e340000` driven by `sdhci-iproc`; `mmc0: SDHCI controller on fe340000.mmc using ADMA` on the reference board"
 confidence = "high"
 
 [[register]]
@@ -55,7 +55,7 @@ confidence = "high"
 [[register.field]]
 name  = "SDMA_BOUNDARY"
 bits  = "14:12"
-notes = "SDMA buffer boundary: 4 KiB << n."
+notes = "SDMA buffer boundary: `4 KiB << n`."
 
 [[register.field.source]]
 kind       = "standard"
@@ -107,7 +107,7 @@ confidence = "high"
 [[register.field]]
 name  = "BLOCK_COUNT_EN"
 bits  = "1"
-notes = "BLOCK_COUNT limits the transfer."
+notes = "`BLOCK_COUNT` limits the transfer."
 
 [[register.field.source]]
 kind       = "standard"
@@ -201,7 +201,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "decompile"
-ref        = "the bootloader and start4 read start4.elf and the kernel through it (CMD17 / CMD18 + CMD12)"
+ref        = "the bootloader and start4 read `start4.elf` and the kernel through it (CMD17 / CMD18 + CMD12)"
 confidence = "high"
 
 [[register]]
@@ -218,7 +218,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "/dev/mem read of 0xfe340024 on a Pi 4B rev 1.5 with Linux idle; start4 prints 'status: 0x1fff0000' in examples-on-real-hardware/sd-card-boot.log"
+ref        = "`/dev/mem` read of `0xfe340024` on a Pi 4B rev 1.5 with Linux idle; start4 prints `status: 0x1fff0000` in `examples-on-real-hardware/sd-card-boot.log`"
 confidence = "high"
 
 [[register.field]]
@@ -300,14 +300,14 @@ notes  = "Reads 1 whatever is written."
 
 [[register.field.source]]
 kind       = "measured"
-ref        = "0x00800000 with Linux running; the real bootloader prints 'CTL0: 0x00800f00' right after writing 0x00000f00 (sd-card-boot.log)"
+ref        = "`0x00800000` with Linux running; the real bootloader prints `CTL0: 0x00800f00` right after writing `0x00000f00` (`sd-card-boot.log`)"
 confidence = "high"
 
 [[register]]
 name   = "CLOCK_CONTROL"
 offset = 0x2C
 access = "rw"
-notes  = "Clock control (15:0), data timeout (19:16) and the self-clearing software resets (26:24). Before it releases the ARM, start4 leaves the host reset twice over: after its last read it sets SRST_ALL and then writes 0 (clock off); after clearing INT_SIGNAL_EN and INT_STATUS_EN and writing all ones to INT_STATUS, it sets SRST_ALL, then SRST_CMD and SRST_DATA together, polling each until it clears."
+notes  = "Clock control (15:0), data timeout (19:16) and the self-clearing software resets (26:24). Before it releases the ARM, start4 leaves the host reset twice over: after its last read it sets `SRST_ALL` and then writes 0 (clock off); after clearing `INT_SIGNAL_EN` and `INT_STATUS_EN` and writing all ones to `INT_STATUS`, it sets `SRST_ALL`, then `SRST_CMD` and `SRST_DATA` together, polling each until it clears."
 
 [[register.source]]
 kind       = "standard"
@@ -316,12 +316,12 @@ confidence = "high"
 
 [[register.source]]
 kind       = "trace"
-ref        = "pinned start4, host write helper 0x3EC52C2E and read helper 0x3EC51F5E: 0x010E0207, 0 after the console handover; then INT_SIGNAL_EN, INT_STATUS_EN <- 0, INT_STATUS <- 0xFFFFFFFF, 0x01000000, 0x06000000 once the SD power pin lookup has failed"
+ref        = "pinned start4, host write helper `0x3EC52C2E` and read helper `0x3EC51F5E`: `0x010E0207`, 0 after the console handover; then `INT_SIGNAL_EN`, `INT_STATUS_EN` <- 0, `INT_STATUS` <- `0xFFFFFFFF`, `0x01000000`, `0x06000000` once the SD power pin lookup has failed"
 confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "the real board prints 'arasan_emmc_set_clock ... C1: 0x000e0047' (sd-card-boot.log)"
+ref        = "the real board prints `arasan_emmc_set_clock ... C1: 0x000e0047` (`sd-card-boot.log`)"
 confidence = "high"
 
 [[register.field]]
@@ -389,7 +389,7 @@ confidence = "high"
 name   = "INT_STATUS"
 offset = 0x30
 access = "w1c"
-notes  = "Normal (15:0) and error (31:16) interrupt status, gated by INT_STATUS_EN."
+notes  = "Normal (15:0) and error (31:16) interrupt status, gated by `INT_STATUS_EN`."
 
 [[register.source]]
 kind       = "standard"
@@ -491,7 +491,7 @@ confidence = "high"
 name   = "INT_STATUS_EN"
 offset = 0x34
 access = "rw"
-notes  = "Which interrupt conditions latch into INT_STATUS."
+notes  = "Which interrupt conditions latch into `INT_STATUS`."
 
 [[register.source]]
 kind       = "standard"
@@ -502,7 +502,7 @@ confidence = "high"
 name   = "INT_SIGNAL_EN"
 offset = 0x38
 access = "rw"
-notes  = "Which INT_STATUS bits drive the interrupt line (INTID 158)."
+notes  = "Which `INT_STATUS` bits drive the interrupt line (INTID 158)."
 
 [[register.source]]
 kind       = "standard"
@@ -570,7 +570,7 @@ notes  = "Timeout clock 50 kHz, base clock 100 MHz, 2048-byte blocks, 8-bit bus,
 
 [[register.source]]
 kind       = "measured"
-ref        = "/dev/mem read of 0xfe340040 on a Pi 4B rev 1.5, controller idle"
+ref        = "`/dev/mem` read of `0xfe340040` on a Pi 4B rev 1.5, controller idle"
 confidence = "high"
 
 [[register]]
@@ -582,7 +582,7 @@ notes  = "SDR50 and DDR50 (no SDR104), driver type C, re-tuning after 16 s in mo
 
 [[register.source]]
 kind       = "measured"
-ref        = "/dev/mem read of 0xfe340044 on a Pi 4B rev 1.5"
+ref        = "`/dev/mem` read of `0xfe340044` on a Pi 4B rev 1.5"
 confidence = "high"
 
 [[register]]
@@ -594,7 +594,7 @@ notes  = "32 mA at 3.3 V and at 1.8 V."
 
 [[register.source]]
 kind       = "measured"
-ref        = "/dev/mem read of 0xfe340048 on a Pi 4B rev 1.5"
+ref        = "`/dev/mem` read of `0xfe340048` on a Pi 4B rev 1.5"
 confidence = "high"
 
 [[register]]
@@ -644,11 +644,11 @@ name   = "CONTROLLER_VERSION"
 offset = 0xFC
 access = "r"
 reset  = 0x10020000
-notes  = "Slot interrupt status (low half) and version: vendor 0x10, SDHCI 3.00."
+notes  = "Slot interrupt status (low half) and version: vendor `0x10`, SDHCI 3.00."
 
 [[register.source]]
 kind       = "measured"
-ref        = "/dev/mem read of 0xfe3400fc on a Pi 4B rev 1.5"
+ref        = "`/dev/mem` read of `0xfe3400fc` on a Pi 4B rev 1.5"
 confidence = "high"
 
 [[register.source]]
@@ -660,25 +660,25 @@ confidence = "high"
 name   = "REG_100"
 offset = 0x100
 access = "rw"
-notes  = "Past the SDHCI registers. start4 clears bit 30 and sets bit 31 in the board clock set-up it runs once config.txt is read, right after REG_154, and goes on reading the card afterwards. Those writes depend on board feature bits (the helper at 0x3EC64902 tests one bit of a feature word). Meaning unknown."
+notes  = "Past the SDHCI registers. start4 clears bit 30 and sets bit 31 in the board clock set-up it runs once `config.txt` is read, right after `REG_154`, and goes on reading the card afterwards. Those writes depend on board feature bits (the helper at `0x3EC64902` tests one bit of a feature word). Meaning unknown."
 
 [[register.source]]
 kind       = "trace"
-ref        = "pinned start4 reads it at 0x3ED4A1DE and writes 0x80000000 at 0x3ED4A1E6; just before: GPIO +0xD0 <- 1, REG_154 <- 1, and CM EMMC2DIV <- 0x7800"
+ref        = "pinned start4 reads it at `0x3ED4A1DE` and writes `0x80000000` at `0x3ED4A1E6`; just before: GPIO `+0xD0` <- 1, `REG_154` <- 1, and CM `EMMC2DIV` <- `0x7800`"
 confidence = "high"
 
 [[register.source]]
 kind       = "decompile"
-ref        = "start4 0x3ED4A1DE..0x3ED4A1E6: bitclear 30, bitset 31; the path runs when feature bits 0x19 and 0x1C are clear"
+ref        = "start4 `0x3ED4A1DE..0x3ED4A1E6`: `bitclear 30`, `bitset 31`; the path runs when feature bits `0x19` and `0x1C` are clear"
 confidence = "high"
 
 [[register]]
 name   = "REG_154"
 offset = 0x154
 access = "rw"
-notes  = "Past the SDHCI registers. start4 writes 1 here in its board clock set-up, between setting GPIO +0xD0 bit 0 and REG_100. Meaning unknown."
+notes  = "Past the SDHCI registers. start4 writes 1 here in its board clock set-up, between setting GPIO `+0xD0` bit 0 and `REG_100`. Meaning unknown."
 
 [[register.source]]
 kind       = "trace"
-ref        = "pinned start4 writes 0x00000001 at 0x3ED4A1D8"
+ref        = "pinned start4 writes `0x00000001` at `0x3ED4A1D8`"
 confidence = "high"

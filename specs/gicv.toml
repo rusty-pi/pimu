@@ -8,7 +8,7 @@ notes   = "The CPU interface a guest sees, fed from the list registers in GICH. 
 
 [[block.source]]
 kind       = "linux"
-ref        = "dtb: interrupt-controller@40041000 reg <... 0x40046000 0x2000> -> 0xFF846000, 8 KiB"
+ref        = "dtb: `interrupt-controller@40041000` `reg <... 0x40046000 0x2000>` -> `0xFF846000`, 8 KiB"
 confidence = "high"
 
 [[block.source]]

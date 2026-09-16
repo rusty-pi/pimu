@@ -4,11 +4,11 @@ bus     = "mdio"
 base    = 0x01
 size    = 0x20
 summary = "BCM54213PE gigabit Ethernet PHY on GENET's MDIO bus"
-notes   = "Clause-22 registers. Without a cable there is no link partner: BMSR loses link and AN-complete and the partner registers read 0. With one, the partner is the reference board's switch port. The auxiliary-control, shadow and expansion spaces behind 0x18 / 0x1C / 0x15+0x17 are indirect and not listed. Registers with no behaviour read back what was last written."
+notes   = "Clause-22 registers. Without a cable there is no link partner: `BMSR` loses link and AN-complete and the partner registers read 0. With one, the partner is the reference board's switch port. The auxiliary-control, shadow and expansion spaces behind `0x18` / `0x1C` / `0x15`+`0x17` are indirect and not listed. Registers with no behaviour read back what was last written."
 
 [[block.source]]
 kind       = "linux"
-ref        = "/scb/ethernet@7d580000/mdio@e14/ethernet-phy@1; drivers/net/phy/broadcom.c, bcm-phy-lib.c"
+ref        = "`/scb/ethernet@7d580000/mdio@e14/ethernet-phy@1`; `drivers/net/phy/broadcom.c`, `bcm-phy-lib.c`"
 confidence = "high"
 
 [[block.source]]
@@ -18,7 +18,7 @@ confidence = "high"
 
 [[block.source]]
 kind       = "measured"
-ref        = "SIOCGMIIREG on eth0, Pi 4B rev 1.5 (d03115), Linux up with a 1 Gb/s link"
+ref        = "`SIOCGMIIREG` on `eth0`, Pi 4B rev 1.5 (d03115), Linux up with a 1 Gb/s link"
 confidence = "high"
 
 [[register]]
@@ -31,7 +31,7 @@ notes  = "Control: AN on, full duplex, 1000 speed select."
 
 [[register.source]]
 kind       = "measured"
-ref        = "BMCR 0x1140"
+ref        = "`BMCR` `0x1140`"
 confidence = "high"
 
 [[register.field]]
@@ -59,16 +59,16 @@ name   = "BMSR"
 offset = 0x01
 width  = 16
 access = "r"
-notes  = "Status: 0x796d with a partner, 0x7949 without (no link, no AN complete)."
+notes  = "Status: `0x796d` with a partner, `0x7949` without (no link, no AN complete)."
 
 [[register.source]]
 kind       = "measured"
-ref        = "BMSR 0x796d"
+ref        = "`BMSR` `0x796d`"
 confidence = "high"
 
 [[register.source]]
 kind       = "decompile"
-ref        = "bootloader wait-for-link polls registers 1, 5 and 10 from 0x0009196e"
+ref        = "bootloader wait-for-link polls registers 1, 5 and 10 from `0x0009196e`"
 confidence = "high"
 
 [[register]]
@@ -81,12 +81,12 @@ notes  = "PHY id, high half."
 
 [[register.source]]
 kind       = "measured"
-ref        = "ID 0x600d 0x84a2"
+ref        = "ID `0x600d` `0x84a2`"
 confidence = "high"
 
 [[register.source]]
 kind       = "linux"
-ref        = "include/linux/brcmphy.h: PHY_ID_BCM54213PE 0x600d84a2"
+ref        = "`include/linux/brcmphy.h`: `PHY_ID_BCM54213PE` `0x600d84a2`"
 confidence = "high"
 
 [[register]]
@@ -99,7 +99,7 @@ notes  = "PHY id, low half."
 
 [[register.source]]
 kind       = "measured"
-ref        = "ID 0x600d 0x84a2"
+ref        = "ID `0x600d` `0x84a2`"
 confidence = "high"
 
 [[register]]
@@ -108,11 +108,11 @@ offset = 0x04
 width  = 16
 access = "rw"
 reset  = 0x01E1
-notes  = "Advertisement: 802.3, 10/100 half/full. Linux adds the pause bits (measured 0x0de1)."
+notes  = "Advertisement: 802.3, 10/100 half/full. Linux adds the pause bits (measured `0x0de1`)."
 
 [[register.source]]
 kind       = "measured"
-ref        = "ANAR 0x0de1"
+ref        = "ANAR `0x0de1`"
 confidence = "high"
 
 [[register]]
@@ -120,11 +120,11 @@ name   = "LPA"
 offset = 0x05
 width  = 16
 access = "r"
-notes  = "Link partner ability: 0xc5e1 with a partner, 0 without."
+notes  = "Link partner ability: `0xc5e1` with a partner, 0 without."
 
 [[register.source]]
 kind       = "measured"
-ref        = "ANLPAR 0xc5e1"
+ref        = "ANLPAR `0xc5e1`"
 confidence = "high"
 
 [[register]]
@@ -132,11 +132,11 @@ name   = "EXPANSION"
 offset = 0x06
 width  = 16
 access = "r"
-notes  = "AN expansion: 0x006d with a partner, 0x0004 without."
+notes  = "AN expansion: `0x006d` with a partner, `0x0004` without."
 
 [[register.source]]
 kind       = "measured"
-ref        = "ANER 0x006d"
+ref        = "ANER `0x006d`"
 confidence = "high"
 
 [[register]]
@@ -149,7 +149,7 @@ notes  = "Next-page transmit."
 
 [[register.source]]
 kind       = "measured"
-ref        = "NPTX 0x2001"
+ref        = "`NPTX` `0x2001`"
 confidence = "high"
 
 [[register]]
@@ -174,7 +174,7 @@ notes  = "Advertise 1000BASE-T half and full."
 
 [[register.source]]
 kind       = "measured"
-ref        = "CTRL1000 0x0300"
+ref        = "`CTRL1000` `0x0300`"
 confidence = "high"
 
 [[register]]
@@ -182,11 +182,11 @@ name   = "STAT1000"
 offset = 0x0A
 width  = 16
 access = "r"
-notes  = "1000BASE-T status: 0x0800 (partner 1000 full) with a partner, 0 without."
+notes  = "1000BASE-T status: `0x0800` (partner 1000 full) with a partner, 0 without."
 
 [[register.source]]
 kind       = "measured"
-ref        = "STAT1000 0x0800"
+ref        = "`STAT1000` `0x0800`"
 confidence = "high"
 
 [[register]]
@@ -215,7 +215,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "ethtool --show-eee eth0: EEE for 100baseT/Full and 1000baseT/Full"
+ref        = "`ethtool --show-eee eth0`: EEE for `100baseT/Full` and `1000baseT/Full`"
 confidence = "high"
 
 [[register]]
@@ -228,7 +228,7 @@ notes  = "1000BASE-T full and half capable."
 
 [[register.source]]
 kind       = "measured"
-ref        = "ESTATUS 0x3000"
+ref        = "`ESTATUS` `0x3000`"
 confidence = "high"
 
 [[register]]
@@ -240,7 +240,7 @@ notes  = "Extended control."
 
 [[register.source]]
 kind       = "linux"
-ref        = "brcmphy.h: MII_BCM54XX_ECR"
+ref        = "`brcmphy.h`: `MII_BCM54XX_ECR`"
 confidence = "high"
 
 [[register]]
@@ -250,11 +250,11 @@ count  = 4
 stride = 1
 width  = 16
 access = "r"
-notes  = "Status and error counters 0x11..0x14; 0."
+notes  = "Status and error counters `0x11..0x14`; 0."
 
 [[register.source]]
 kind       = "linux"
-ref        = "brcmphy.h: MII_BCM54XX_ESR and the counters after it"
+ref        = "`brcmphy.h`: `MII_BCM54XX_ESR` and the counters after it"
 confidence = "medium"
 
 [[register]]
@@ -262,11 +262,11 @@ name   = "EXP_DATA"
 offset = 0x15
 width  = 16
 access = "rw"
-notes  = "Expansion register data, for the register EXP_SEL selects."
+notes  = "Expansion register data, for the register `EXP_SEL` selects."
 
 [[register.source]]
 kind       = "linux"
-ref        = "brcmphy.h: MII_BCM54XX_EXP_DATA"
+ref        = "`brcmphy.h`: `MII_BCM54XX_EXP_DATA`"
 confidence = "high"
 
 [[register]]
@@ -274,11 +274,11 @@ name   = "EXP_SEL"
 offset = 0x17
 width  = 16
 access = "rw"
-notes  = "Expansion register selector (0x0Fxx / 0x0Dxx / 0x0Exx banks)."
+notes  = "Expansion register selector (`0x0Fxx` / `0x0Dxx` / `0x0Exx` banks)."
 
 [[register.source]]
 kind       = "linux"
-ref        = "brcmphy.h: MII_BCM54XX_EXP_SEL"
+ref        = "`brcmphy.h`: `MII_BCM54XX_EXP_SEL`"
 confidence = "high"
 
 [[register]]
@@ -290,12 +290,12 @@ notes  = "Auxiliary control: eight shadows selected by 2:0; shadow 7 (misc) with
 
 [[register.source]]
 kind       = "linux"
-ref        = "brcmphy.h: MII_BCM54XX_AUX_CTL"
+ref        = "`brcmphy.h`: `MII_BCM54XX_AUX_CTL`"
 confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "AUX_CTL 0x71e7"
+ref        = "`AUX_CTL` `0x71e7`"
 confidence = "high"
 
 [[register]]
@@ -307,7 +307,7 @@ notes  = "Auxiliary status; 0."
 
 [[register.source]]
 kind       = "linux"
-ref        = "brcmphy.h: MII_BCM54XX_AUX_STATUS"
+ref        = "`brcmphy.h`: `MII_BCM54XX_AUX_STATUS`"
 confidence = "high"
 
 [[register]]
@@ -319,7 +319,7 @@ notes  = "Interrupt status; nothing is ever raised."
 
 [[register.source]]
 kind       = "linux"
-ref        = "brcmphy.h: MII_BCM54XX_ISR"
+ref        = "`brcmphy.h`: `MII_BCM54XX_ISR`"
 confidence = "high"
 
 [[register]]
@@ -332,12 +332,12 @@ notes  = "Interrupt mask; all masked at reset."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcm54xx_config_init: 'Initially all interrupts are masked in IMR'"
+ref        = "`bcm54xx_config_init`: 'Initially all interrupts are masked in IMR'"
 confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "IMR 0xfff1 after Linux unmasked its bits"
+ref        = "`IMR` `0xfff1` after Linux unmasked its bits"
 confidence = "high"
 
 [[register]]
@@ -349,10 +349,10 @@ notes  = "Thirty-two shadows: select in 14:10, write flag 15, data 9:0; a write 
 
 [[register.source]]
 kind       = "linux"
-ref        = "brcmphy.h: MII_BCM54XX_SHD"
+ref        = "`brcmphy.h`: `MII_BCM54XX_SHD`"
 confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "SHADOW 0x386a"
+ref        = "`SHADOW` `0x386a`"
 confidence = "high"

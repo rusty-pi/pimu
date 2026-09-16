@@ -10,7 +10,7 @@ The CPU interface a guest sees, fed from the list registers in GICH. KVM maps it
 
 Sources:
 
-- linux (high): dtb: interrupt-controller@40041000 reg <... 0x40046000 0x2000> -> 0xFF846000, 8 KiB
+- linux (high): dtb: `interrupt-controller@40041000` `reg <... 0x40046000 0x2000>` -> `0xFF846000`, 8 KiB
 - standard (high): ARM IHI 0048B (GICv2), the GICV registers
 
 ## Register map

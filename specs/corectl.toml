@@ -5,22 +5,22 @@ size            = 0x1000
 summary         = "VPU core control: per-core boot handshake and interrupt controller"
 instances       = 2
 instance_stride = 0x800
-notes           = "One register bank per VPU core: core 0 at +0x000, core 1 at +0x800. start4 reaches its bank through a per-core pointer, so both cores run the same code."
+notes           = "One register bank per VPU core: core 0 at `+0x000`, core 1 at `+0x800`. start4 reaches its bank through a per-core pointer, so both cores run the same code."
 
 [[block.source]]
 kind       = "decompile"
-ref        = "per-core init 0x3EC3E938 sets [blk+12] = 0x7E002000 + core * 0x800"
+ref        = "per-core init `0x3EC3E938` sets `[blk+12] = 0x7E002000 + core * 0x800`"
 confidence = "high"
 
 [[block.source]]
 kind       = "trace"
-ref        = "--log irqen and the peripheral stub show core 1 writing 0x7E002810..0x7E002844"
+ref        = "`--log irqen` and the peripheral stub show core 1 writing `0x7E002810..0x7E002844`"
 confidence = "high"
-note       = "the window was mapped 0x100 wide until commit 7bd21a3, which hid core 1's bank"
+note       = "the window was mapped `0x100` wide until commit 7bd21a3, which hid core 1's bank"
 
 [[block.source]]
 kind       = "inferred"
-ref        = "size: the system timer starts at 0x7E003000"
+ref        = "size: the system timer starts at `0x7E003000`"
 confidence = "medium"
 
 [[register]]
@@ -31,7 +31,7 @@ notes  = "Which interrupt the dispatcher should service next."
 
 [[register.source]]
 kind       = "decompile"
-ref        = "dispatcher 0x3EC3E9BC: r0 = [blk+4], btest r0, 8, or 64, mask to 7 bits, index the handler table at gp+58004"
+ref        = "dispatcher `0x3EC3E9BC`: `r0 = [blk+4]`, `btest r0, 8`, or 64, mask to 7 bits, index the handler table at `gp+58004`"
 confidence = "medium"
 
 [[register.field]]
@@ -41,7 +41,7 @@ notes = "Set while an interrupt is pending."
 
 [[register.field.source]]
 kind       = "decompile"
-ref        = "dispatcher 0x3EC3E9BC: btest r0, 8"
+ref        = "dispatcher `0x3EC3E9BC`: `btest r0, 8`"
 confidence = "high"
 
 [[register.field]]
@@ -51,7 +51,7 @@ notes = "Source number minus 64; the dispatcher ORs 64 back in."
 
 [[register.field.source]]
 kind       = "decompile"
-ref        = "dispatcher 0x3EC3E9BC: or r0, 64, then a 7-bit mask"
+ref        = "dispatcher `0x3EC3E9BC`: `or r0, 64`, then a 7-bit mask"
 confidence = "medium"
 note       = "the dispatcher keeps 7 bits after the OR, so bit 6 may belong to the field too"
 
@@ -65,12 +65,12 @@ notes  = "One 4-bit enable/priority field per interrupt source, eight per word: 
 
 [[register.source]]
 kind       = "decompile"
-ref        = "enable_irq_source(src, prio) at 0x3ED72374"
+ref        = "`enable_irq_source(src, prio)` at `0x3ED72374`"
 confidence = "high"
 
 [[register.source]]
 kind       = "trace"
-ref        = "start4 calls enable_irq_source(64, 1) for its ThreadX tick"
+ref        = "start4 calls `enable_irq_source(64, 1)` for its ThreadX tick"
 confidence = "high"
 
 [[register.source]]
@@ -90,49 +90,49 @@ notes  = "Exception-vector base for this core."
 
 [[register.source]]
 kind       = "decompile"
-ref        = "start4 entry trampoline: mov r1, #0x7E002030, then stores the vector base through it"
+ref        = "start4 entry trampoline: `mov r1, #0x7E002030`, then stores the vector base through it"
 confidence = "high"
 
 [[register.source]]
 kind       = "trace"
-ref        = "core-control write trace: +0x30 and +0x830 both take 0xFEC01E00, nothing writes +0x38"
+ref        = "core-control write trace: `+0x30` and `+0x830` both take `0xFEC01E00`, nothing writes `+0x38`"
 confidence = "high"
-note       = "replaced an earlier +0x38 guess for core 1 (commit 06a8447)"
+note       = "replaced an earlier `+0x38` guess for core 1 (commit 06a8447)"
 
 [[register]]
 name   = "WAKEUP"
 offset = 0x34
 access = "rw"
-notes  = "Start address. Core 1 sleeps until its copy (0x7E002834) is written, then starts there. start4 writes it once, with its own entry point, when its power manager first powers domain 0x20000."
+notes  = "Start address. Core 1 sleeps until its copy (`0x7E002834`) is written, then starts there. start4 writes it once, with its own entry point, when its power manager first powers domain `0x20000`."
 
 [[register.source]]
 kind       = "decompile"
-ref        = "power-domain switch 0x3ED55412, case 0x20000: clears core 1's check-in slot, calls interrupt-controller op +0x1c (0x3ED01B8A, secure service 12 at 0xCEC006F6: st r1 -> 0x7E002834) with `entry`, then spins until core 1 checks in"
+ref        = "power-domain switch `0x3ED55412`, case `0x20000`: clears core 1's check-in slot, calls interrupt-controller op `+0x1c` (`0x3ED01B8A`, secure service 12 at `0xCEC006F6`: `st r1 -> 0x7E002834`) with `entry`, then spins until core 1 checks in"
 confidence = "high"
 note       = "`entry` comes from a pc-relative lea, so it follows start4 wherever the bootloader loaded it"
 
 [[register.source]]
 kind       = "trace"
-ref        = "linux-boot: vcos_threadx.c's sysman user asks for bit 5 after `Booting Linux`, which powers domain 0x20000 and writes the wake once; nothing writes it before arm_loader"
+ref        = "`linux-boot`: `vcos_threadx.c`'s sysman user asks for bit 5 after `Booting Linux`, which powers domain `0x20000` and writes the wake once; nothing writes it before `arm_loader`"
 confidence = "high"
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "Broadcom bcm2708_chip/intctrl1.h (in the published brcm_usrlib headers): IC1_WAKEUP at 0x7e002834, RW, mask 0xfffffffe, reset 0x10000000; IC0_WAKEUP at 0x7e002034"
+ref        = "Broadcom `bcm2708_chip/intctrl1.h` (in the published `brcm_usrlib` headers): `IC1_WAKEUP` at `0x7e002834`, RW, mask `0xfffffffe`, reset `0x10000000`; `IC0_WAKEUP` at `0x7e002034`"
 confidence = "medium"
-note       = "a BCM2708 header, but the masks and VADDR around it match what start4 uses on the BCM2711"
+note       = "a BCM2708 header, but the masks and `VADDR` around it match what start4 uses on the BCM2711"
 
 [[register.source]]
 kind       = "inferred"
-ref        = "librerpi/lk-overlay arch/vpu/arch.c (1c942f5) starts the second VPU core with `*REG32(IC1_WAKEUP) = &core2_start` and nothing else"
+ref        = "librerpi/lk-overlay `arch/vpu/arch.c` (1c942f5) starts the second VPU core with `*REG32(IC1_WAKEUP) = &core2_start` and nothing else"
 confidence = "medium"
 note       = "open firmware that runs on the board: a working example rather than a guess"
 
 [[register.source]]
 kind       = "measured"
-ref        = "Raspberry Pi 4B d03115 (C0) after a Linux boot, busybox devmem 0xFE002814: 0x10000000, the IPI enable that only core 1 writes (the model leaves it 0 with core 1 held)"
+ref        = "Raspberry Pi 4B d03115 (C0) after a Linux boot, `busybox devmem 0xFE002814`: `0x10000000`, the IPI enable that only core 1 writes (the model leaves it 0 with core 1 held)"
 confidence = "medium"
-note       = "so core 1 does run on the board; VADDR and WAKEUP themselves read 0 from the ARM even where start4 has written them"
+note       = "so core 1 does run on the board; `VADDR` and `WAKEUP` themselves read 0 from the ARM even where start4 has written them"
 
 [[register.field]]
 name  = "ADDR"
@@ -141,7 +141,7 @@ notes = "Where the core starts. Bit 0 is not stored."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "Broadcom bcm2708_chip/intctrl1.h: IC1_WAKEUP_MASK 0xfffffffe"
+ref        = "Broadcom `bcm2708_chip/intctrl1.h`: `IC1_WAKEUP_MASK` `0xfffffffe`"
 confidence = "medium"
 
 [[register]]
@@ -154,7 +154,7 @@ notes  = "Pending bitmask, one bit per source: word 0 covers sources 64..95, wor
 
 [[register.source]]
 kind       = "decompile"
-ref        = "0x3ED01896 raises (|= 1 << bit), 0x3ED01792 acknowledges (&= ~(1 << bit)), 0x3ED01980 reads one bit"
+ref        = "`0x3ED01896` raises (`|= 1 << bit`), `0x3ED01792` acknowledges (`&= ~(1 << bit)`), `0x3ED01980` reads one bit"
 confidence = "high"
 
 [[register.source]]
