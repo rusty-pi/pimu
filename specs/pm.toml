@@ -24,11 +24,21 @@ confidence = "high"
 name   = "RSTC"
 offset = 0x1C
 access = "rw"
-notes  = "Reset control. Arming a full reset starts the watchdog; clearing WRCFG stops it."
+notes  = "Reset control. Arming a full reset starts the watchdog; clearing WRCFG stops it. As it starts, start4 ORs 0x3000 into it (bits 13:12, meaning unknown) just before the PLL power words, then does the same watchdog set-up as the bootcode: WRCFG cleared, bits 9:8 set to 2, bits 1:0 set to 2 (0x3202 in the trace), and RSTS cleared if HADWRF is set. It skips the set-up when the bootloader's `PWRB` tag says so."
 
 [[register.source]]
 kind       = "linux"
 ref        = "bcm2835_wdt_start writes PM_PASSWORD | 0x3222 style values, bcm2835_wdt_stop writes 0x102"
+confidence = "high"
+
+[[register.source]]
+kind       = "decompile"
+ref        = "start4: `_DAT_7e10001c |= 0x5a003000` in 0x3ED55D20; watchdog set-up 0x3ED6226E: `(v & ~0x30)`, `(v & ~0x300) | 0x200`, `(v & ~3) | 2`, unless the `PWRB` tag's word at +140 is non-zero"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4: reads 0x202 and writes 0x5A003202 at 0x3ED55D38, then 0x5A003202 at 0x3ED6229E, 0x3ED622AC and 0x3ED622BC"
 confidence = "high"
 
 [[register.field]]
@@ -56,11 +66,16 @@ name   = "RSTS"
 offset = 0x20
 access = "rw"
 reset  = 0x00000020
-notes  = "Which reset source fired last. The bootloader also packs the partition to boot into the even bits 0..10, which the odd HADWRF bit does not disturb."
+notes  = "Which reset source fired last. The bootloader also packs the partition to boot into the even bits 0..10, which the odd HADWRF bit does not disturb. start4's watchdog set-up writes the password alone (0) here when HADWRF is set."
 
 [[register.source]]
 kind       = "measured"
 ref        = "the reference board's bootloader prints 'PM_RSTS 00000020' after power-on"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4: reads 0x20 twice at 0x3ED622BE / 0x3ED622C0, writes 0x5A000000 at 0x3ED622CC"
 confidence = "high"
 
 [[register.source]]
