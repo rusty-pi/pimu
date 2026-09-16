@@ -34,7 +34,7 @@ Sources:
 | `0x1C0` | [`EMMCCTL`](#emmcctl) | rw | 32 | 2, best high |
 | `0x1C4` | [`EMMCDIV`](#emmcdiv) | rw | 32 | 2, best high |
 | `0x1D0` | [`EMMC2CTL`](#emmc2ctl) | rw | 32 | 2, best high |
-| `0x1D4` | [`EMMC2DIV`](#emmc2div) | rw | 32 | 2, best high |
+| `0x1D4` | [`EMMC2DIV`](#emmc2div) | rw | 32 | 3, best high |
 | `0x1010`–`0x101C` (4 × 0x4) | [`PLLA_ANA`](#plla_ana) | rw | 32 | 2, best high |
 | `0x1030`–`0x103C` (4 × 0x4) | [`PLLC_ANA`](#pllc_ana) | rw | 32 | 2, best high |
 | `0x1050`–`0x105C` (4 × 0x4) | [`PLLD_ANA`](#plld_ana) | rw | 32 | 2, best high |
@@ -126,11 +126,12 @@ UART clock control. The bootloader runs the UART off the oscillator (SRC 1); jus
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
-| 3:0 | `SRC` | rw | Clock source: 0 ground, 1 oscillator, 4 PLLA, 5 PLLC, 6 PLLD, 7 PLLH's aux channel. For the VPU generator 8 and 9 are PLLC's other core channels. |
+| 3:0 | `SRC` | rw | Clock source: 0 ground, 1 oscillator, 4 PLLA, 5 PLLC, 6 PLLD, 7 PLLH's aux channel. For the VPU generator 8 and 9 are PLLC's other core channels. start4's generator helper changes the source only with the generator stopped: it clears ENAB, waits for BUSY, writes SRC \| GATE, and then ENAB as well. The new divider goes in before the source when it is larger than the old one (a slower clock), and after the source and a second BUSY wait when it is not, so the output never runs faster than its old or new rate. A running generator that keeps its source gets the new divider first, with no stop. |
 | 4 | `ENAB` | rw | Generator on. |
-| 5 | `KILL` | rw | Stop the generator immediately. |
+| 5 | `KILL` | rw | Stop the generator immediately. start4 sets it when a generator's BUSY (or BIT8) fails to clear. |
 | 6 | `GATE` | rw | start4 sets it together with a PLL source, one write before ENAB, on every generator it moves. |
 | 7 | `BUSY` | r | Generator running. Real silicon holds it at 1 while running; the model always reads 0, because the shutdown path 0x3EC7F0BA spins on it waiting for clocks the model stops instantly. Same position in every *_CTL register. |
+| 8 | `BIT8` | r | No Linux name. start4 waits for it to clear after it changes the divider of a generator that is running (ENAB set), and sets KILL if it does not. Reads 0 in the model. |
 | 10:9 | `MASH` | rw | MASH noise-shaping stages. |
 | 31:24 | `PASSWD` | rw | 0x5A on write; reads back masked. |
 
@@ -144,6 +145,8 @@ Sources:
 
 - datasheet (high): BCM2711 ARM Peripherals, CM_GPxCTL: SRC
 - linux (high): clk-bcm2835.c: CM_SRC_OSC, CM_SRC_PLLA_PER, CM_SRC_PLLC_PER, CM_SRC_PLLD_PER, CM_SRC_PLLH_AUX, CM_SRC_PLLC_CORE1 / CORE2
+- decompile (high): start4's generator helper: ENAB cleared at 0x3EC7DDBA, old divider read at 0x3EC7DE1A and compared at 0x3EC7DE1C, divider first at 0x3EC7DE34, SRC | GATE at 0x3EC7DE96, divider after at 0x3EC7DEAA, ENAB at 0x3EC7DEC4
+- trace (high): start4 moves UARTCTL (0x5DC0 to 0xFA00: divider first) and EMMCCTL (0x3C00 to 0x3000: divider after); it changes EMMC2DIV live (0x3C00 to 0x7800) on an unchanged source
 
 `ENAB` sources:
 
@@ -152,6 +155,7 @@ Sources:
 `KILL` sources:
 
 - linux (high): clk-bcm2835.c: CM_KILL
+- decompile (high): start4 0x3EC7F908 polls BUSY up to 2000 times, then ORs in 0x20 at 0x3EC7F928; 0x3EC7F956 does the same for bit 8 at 0x3EC7F97C
 
 `GATE` sources:
 
@@ -162,6 +166,10 @@ Sources:
 
 - datasheet (high): BCM2711 ARM Peripherals, CM_GPxCTL: BUSY
 - decompile (high): shutdown path 0x3EC7F0BA polls BUSY with a 1000-iteration escape
+
+`BIT8` sources:
+
+- decompile (high): start4 0x3EC7F956: only with ENAB set, polls bit 8 up to 2000 times at 0x3EC7F962; called right after the divider write at 0x3EC7DE34
 
 `MASH` sources:
 
@@ -418,12 +426,13 @@ Sources:
 
 Offset `0x1D4` · access `rw` · 32 bits
 
-EMMC2 clock divider. bootmain writes 0x3C00; start4 writes 0x3C00 off PLLD's 750 MHz channel (200 MHz, the rate its driver logs) and 0x7800 (100 MHz) when it hands the card over.
+EMMC2 clock divider. bootmain writes 0x3C00; start4 writes 0x3C00 off PLLD's 750 MHz channel (200 MHz, the rate its driver logs), then 0x7800 (100 MHz) in the board clock set-up it runs once config.txt is read. It keeps reading the card after that, with the card clock divider unchanged.
 
 Sources:
 
 - linux (high): clk-bcm2835.c: CM_EMMC2DIV
-- trace (high): bootmain: 0x5A003C00 at 0x000AE0C4; start4: 0x5A003C00 at 0x3EC7DEAA, later 0x5A007800 next to the EMMC2 REG_154 / REG_100 writes
+- trace (high): bootmain: 0x5A003C00 at 0x000AE0C4; start4: 0x5A003C00 at 0x3EC7DEAA, later 0x5A007800 at 0x3EC7DE34
+- decompile (high): the board clock set-up asks for clock 51 at 100000000 Hz (0x3ED4A110..0x3ED4A122), between the 'ETH_CLK' / 'WL_LPO_CLK' clocks and the EMMC2 REG_154 / REG_100 writes
 
 ## `PLLA_ANA`
 
