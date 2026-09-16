@@ -29,7 +29,7 @@ Sources:
 | `0x020` | [`BUFFER_DATA`](#buffer_data) | rw | 32 | 2, best high |
 | `0x024` | [`PRESENT_STATE`](#present_state) | r | 32 | 2, best high |
 | `0x028` | [`HOST_CONTROL`](#host_control) | rw | 32 | 1, best high |
-| `0x02C` | [`CLOCK_CONTROL`](#clock_control) | rw | 32 | 2, best high |
+| `0x02C` | [`CLOCK_CONTROL`](#clock_control) | rw | 32 | 3, best high |
 | `0x030` | [`INT_STATUS`](#int_status) | w1c | 32 | 1, best high |
 | `0x034` | [`INT_STATUS_EN`](#int_status_en) | rw | 32 | 1, best high |
 | `0x038` | [`INT_SIGNAL_EN`](#int_signal_en) | rw | 32 | 1, best high |
@@ -40,7 +40,7 @@ Sources:
 | `0x054` | [`ADMA_ERROR`](#adma_error) | r | 32 | 1, best high |
 | `0x058` | [`ADMA_ADDR`](#adma_addr) | rw | 32 | 1, best high |
 | `0x0FC` | [`CONTROLLER_VERSION`](#controller_version) | r | 32 | 2, best high |
-| `0x100` | [`REG_100`](#reg_100) | rw | 32 | 1, best high |
+| `0x100` | [`REG_100`](#reg_100) | rw | 32 | 2, best high |
 | `0x154` | [`REG_154`](#reg_154) | rw | 32 | 1, best high |
 
 ## `SDMA_ADDR`
@@ -246,7 +246,7 @@ Sources:
 
 Offset `0x02C` · access `rw` · 32 bits
 
-Clock control (15:0), data timeout (19:16) and the self-clearing software resets (26:24).
+Clock control (15:0), data timeout (19:16) and the self-clearing software resets (26:24). Before it releases the ARM, start4 leaves the host reset twice over: after its last read it sets SRST_ALL and then writes 0 (clock off); after clearing INT_SIGNAL_EN and INT_STATUS_EN and writing all ones to INT_STATUS, it sets SRST_ALL, then SRST_CMD and SRST_DATA together, polling each until it clears.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -260,6 +260,7 @@ Clock control (15:0), data timeout (19:16) and the self-clearing software resets
 Sources:
 
 - standard (high): SDHCI 3.00, 2.2.14..2.2.16
+- trace (high): pinned start4, host write helper 0x3EC52C2E and read helper 0x3EC51F5E: 0x010E0207, 0 after the console handover; then INT_SIGNAL_EN, INT_STATUS_EN <- 0, INT_STATUS <- 0xFFFFFFFF, 0x01000000, 0x06000000 once the SD power pin lookup has failed
 - measured (high): the real board prints 'arasan_emmc_set_clock ... C1: 0x000e0047' (sd-card-boot.log)
 
 `INTERNAL_EN` sources:
@@ -475,17 +476,18 @@ Sources:
 
 Offset `0x100` · access `rw` · 32 bits
 
-Past the SDHCI registers. start4 sets bit 31 as it hands the card over, right after REG_154. Meaning unknown.
+Past the SDHCI registers. start4 clears bit 30 and sets bit 31 in the board clock set-up it runs once config.txt is read, right after REG_154, and goes on reading the card afterwards. Those writes depend on board feature bits (the helper at 0x3EC64902 tests one bit of a feature word). Meaning unknown.
 
 Sources:
 
 - trace (high): pinned start4 reads it at 0x3ED4A1DE and writes 0x80000000 at 0x3ED4A1E6; just before: GPIO +0xD0 <- 1, REG_154 <- 1, and CM EMMC2DIV <- 0x7800
+- decompile (high): start4 0x3ED4A1DE..0x3ED4A1E6: bitclear 30, bitset 31; the path runs when feature bits 0x19 and 0x1C are clear
 
 ## `REG_154`
 
 Offset `0x154` · access `rw` · 32 bits
 
-Past the SDHCI registers. start4 writes 1 here as it hands the card over, between setting GPIO +0xD0 and REG_100. Meaning unknown.
+Past the SDHCI registers. start4 writes 1 here in its board clock set-up, between setting GPIO +0xD0 bit 0 and REG_100. Meaning unknown.
 
 Sources:
 
