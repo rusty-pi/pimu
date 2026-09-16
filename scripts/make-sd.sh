@@ -29,6 +29,23 @@ root_mb=32               # the root filesystem after it
 part_start=2048          # sectors (1 MiB alignment)
 sector=512
 
+# `START4=start4cd` (the cut-down firmware, #105) or `START4=start4db` (the
+# debug build) puts that variant on the card next to the full pair, with the
+# config.txt line that makes the bootloader pick it, as on a real card.
+start4="${START4:-start4}"
+case "$start4" in
+  start4)   select= ;;
+  start4cd) select=gpu_mem=16 ;;
+  start4db) select=start_debug=1 ;;
+  *) echo "unknown START4=$start4 (start4, start4cd or start4db)" >&2; exit 1 ;;
+esac
+fixup4="${start4/start/fixup}"
+if [[ "$start4" != start4 ]]; then
+  for f in "$start4.elf" "$fixup4.dat"; do
+    [[ -f "$fw/$f" ]] || { echo "missing $fw/$f (run fetch-firmware.sh)" >&2; exit 1; }
+  done
+fi
+
 echo "building $out ($(( size_mb + root_mb )) MiB: FAT32 boot, ext4 root)"
 rm -f "$out"
 truncate -s "$(( size_mb + root_mb ))M" "$out"
@@ -85,12 +102,17 @@ arm_64bit=1
 disable_overscan=1
 arm_boost=1
 EOF
+if [[ -n "$select" ]]; then echo "$select" >>"$tmpcfg"; fi
 mcopy -i "$out@@${part_offset}" -o "$tmpcfg" ::config.txt
 echo "  + config.txt"
 rm -f "$tmpcfg"
 
 copy "$fw/start4.elf"                 start4.elf
 copy "$fw/fixup4.dat"                 fixup4.dat
+if [[ "$start4" != start4 ]]; then
+  copy "$fw/$start4.elf"              "$start4.elf"
+  copy "$fw/$fixup4.dat"              "$fixup4.dat"
+fi
 
 # The ARM device tree (used by start4 late, at the ARM handoff). Prefer a
 # repo-local copy; fall back to the rpi-mkosi cache (flat or firmware/ subdir).

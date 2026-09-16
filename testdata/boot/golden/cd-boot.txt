@@ -1,0 +1,75 @@
+
+[t] RPi: BOOTSYS release VERSION:0a7ef05f DATE: 2026/08/04 TIME: 12:38:13
+[t] MFG_VER: 1
+[t] BOOTMODE: 0x00 partition 0 build-ts BUILD_TIMESTAMP=1785847093 serial 1aa2bb31 boardrev d03115 stc [n]
+[t] PM_RSTS 00000020
+[t] POWER_OFF_ON_HALT: 0 WAIT_FOR_POWER_BUTTON 0 power-on-reset 0
+[t] EEPROM ID 0xef4018
+[t] SFDP None
+[t] part 00000000 reset_info 00000000
+[t] uSD voltage 3.3V
+[t] init_sdram_1350
+[t] Initialising SDRAM rank 1 total-size: 16Gbit part: 0 (0x06 0x00) odt: 0
+[t] memsys_init: 0 16Gbit MCB 0x80015ff0: 11696
+[t] DDR 3200 Mbps dual-rank:0 byte-mode:0 size-gbit:16 part-config:0 odt:0
+[t] SD_SB 11003120
+[t] OTP boardrev d03115 bootrom 8b0 8b0
+[t] Customer key hash 0000000000000000000000000000000000000000000000000000000000000000
+[t] VC-JTAG unlocked
+
+
+[t] RPi: BOOTLOADER release VERSION:0a7ef05f DATE: 2026/08/04 TIME: 12:38:13
+[t] MFG_VER: 1
+[t] BOOTMODE: 0x00 partition 0 build-ts BUILD_TIMESTAMP=1785847093 serial 1aa2bb31 boardrev d03115 stc [n]
+[t] EEPROM ID 0xef4018
+[t] SFDP None
+[t] PCI0 init
+[t] PCI0 reset
+[t] PCIe scan 00001106:00003483
+[t] XHCI-STOP
+[t] xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb
+[t] USBSTS 1
+[t] xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb
+[t] xHC0 ports 5 slots 32 intrs 4
+[t] SD_OC: 0
+[t] Boot mode: SD (01) order f4
+[t] USB2[1] 400202e1 connected
+[t] USB2 root HUB port 1 init
+[t] DEV [01:00] 2.16 000000:01 class 9 VID 2109 PID 3431
+[t] HUB init [01:00] 2.16 000000:01
+[t] SD HOST: 200000000 CTL0: 0x00800000 BUS: 400000 Hz actual: 390625 HZ div: 512 (256) status: 0x1fff0000 delay: 276
+[t] SD HOST: 200000000 CTL0: 0x00800f00 BUS: 400000 Hz actual: 390625 HZ div: 512 (256) status: 0x1fff0000 delay: 276
+[t] OCR c0ff8000 [2]
+CID: 00005049564952544601123456780015
+CSD: 400e00325b590000023f7f800a400000
+[t] SD: bus-width: 4 spec: 2 SCR: 0x02058002 0x00000000
+[t] SD HOST: 200000000 CTL0: 0x00800f04 BUS: 50000000 Hz actual: 50000000 HZ div: 4 (2) status: 0x1fff0000 delay: 2
+[t] MBR: 0x00000800,  522240 type: 0x0c
+[t] MBR: 0x00080000,   65536 type: 0x83
+[t] MBR: 0x00000000,       0 type: 0x00
+[t] MBR: 0x00000000,       0 type: 0x00
+[t] Trying partition: 0
+[t] type: 32 lba: 2048 '[oem]' ' RPIBOOT    ' clusters 130044 (4)
+[t] rsc 32 fat-sectors 1016 root dir cluster 2 sectors 0 entries 0
+[t] FAT32 clusters 130044
+[t] [sdcard] autoboot.txt not found
+[t] Select partition rsts 0 C(boot_partition) 0 EEPROM config 0 result 1
+[t] Trying partition: 1
+[t] type: 32 lba: 2048 '[oem]' ' RPIBOOT    ' clusters 130044 (4)
+[t] rsc 32 fat-sectors 1016 root dir cluster 2 sectors 0 entries 0
+[t] FAT32 clusters 130044
+[t] Read config.txt bytes      290 hnd 0x3
+[t] [sdcard] pieeprom.upd not found
+[t] [sdcard] recover4.elf not found
+[t] [sdcard] recovery.elf not found
+[t] Read start4cd.elf bytes   843580 hnd 0x46a
+[t] Read fixup4cd.dat bytes     3282 hnd 0x606
+[t] 0x00d03115 0x00000000 0x00003fff
+[t] MEM GPU: 16 ARM: 998 TOTAL: 1014
+[t] Starting start4cd.elf @ 0xff000200 partition 1
+[t] XHCI-STOP
+[t] xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb
+[t] USBSTS 18
+[t] PCI0 reset
+[t] +
+

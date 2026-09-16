@@ -255,8 +255,8 @@ why = """
 The point of the bench (#5, rpi-mkosi#37). Before releasing the ARM,
 `arm_loader` patches `/chosen` and publishes `rpi-machine-id` at `0x3EC568F8` —
 the string a `rpi-mkosi` image turns into its root-LUKS passphrase. `boot` reads
-the patched blob back out of DRAM at the address the firmware logged and prints
-the identity properties, so a firmware bump that changes the derivation fails
+the patched blob back out of DRAM at the address the armstub hands the ARM and
+prints the identity properties, so a firmware bump that changes the derivation fails
 right here instead of on deployed cards."""
 line = "device tree handed to the ARM"
 

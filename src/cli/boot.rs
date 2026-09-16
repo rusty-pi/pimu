@@ -9,6 +9,7 @@ use std::rc::Rc;
 
 use anyhow::{bail, Context, Result};
 
+use rpi_virt_fw::armstub::Handoff;
 use rpi_virt_fw::emulator::{Emulator, RunLimits, RunReport};
 use rpi_virt_fw::firmware::Payload;
 use rpi_virt_fw::harness;
@@ -1302,7 +1303,8 @@ fn print_report(opts: &BootOpts, booted: Booted) -> Result<ExitCode> {
     if let Some(file) = &opts.otp {
         save_otp(file, &fuses_at_start, emu.machine.config_otp.fuses())?;
     }
-    report_fdt(opts, &mut emu.machine, &report.console)?;
+    let handoff = emu.arm.as_ref().and_then(|a| a.handoff);
+    report_fdt(opts, &mut emu.machine, handoff, &report.console)?;
     if verbose {
         print_unimpl(&report, &opts.path);
     }
@@ -1695,18 +1697,23 @@ fn print_sdram_refresh(machine: &Machine) {
 /// passphrase, so a firmware bump that changes how it is derived has to
 /// be caught here rather than on a thousand deployed cards.
 ///
-/// The blob's address is taken from the firmware's own `Device tree
-/// loaded to 0x%x (size 0x%x)` line, which is the last word start4 says
-/// about the blob before it releases the ARM. The header is validated
-/// before anything is believed or written out.
-fn report_fdt(opts: &BootOpts, machine: &mut Machine, console: &[u8]) -> Result<()> {
+/// The blob is the one the armstub hands the ARM (`dtb_ptr32`), or, for a
+/// run whose ARM was never released, the one the firmware's `Device tree
+/// loaded to 0x%x (size 0x%x)` line names ([`locate_fdt`]). The header is
+/// validated before anything is believed or written out.
+fn report_fdt(
+    opts: &BootOpts,
+    machine: &mut Machine,
+    handoff: Option<Handoff>,
+    console: &[u8],
+) -> Result<()> {
     let BootOpts {
         verbose,
         print_fdt,
         ref dump_fdt,
         ..
     } = *opts;
-    match locate_fdt(machine, console) {
+    match locate_fdt(machine, handoff, console) {
         Some((addr, blob)) => {
             match rpi_virt_fw::fdt::Fdt::parse(&blob) {
                 Ok(fdt) => {
@@ -1763,8 +1770,8 @@ fn report_fdt(opts: &BootOpts, machine: &mut Machine, console: &[u8]) -> Result<
         None => {
             if dump_fdt.is_some() {
                 bail!(
-                    "--dump-fdt: the boot never printed 'Device tree loaded to ...', \
-                     so there is no device tree to dump"
+                    "--dump-fdt: the ARM was never released and the boot never printed \
+                     'Device tree loaded to ...', so there is no device tree to dump"
                 );
             }
         }
@@ -1877,30 +1884,46 @@ fn find_bootconf_header(flash: &[u8]) -> Option<usize> {
         .map(|s| s.header_offset)
 }
 
-/// Find the device tree blob `arm_loader` left for the ARM, using the
-/// firmware's own `Device tree loaded to 0x<addr> (size 0x<len>)` console line
-/// as the pointer.
+/// Find the device tree blob `arm_loader` left for the ARM.
 ///
-/// Reading it out of the log rather than hard-coding an address is what keeps
-/// this working across firmware versions — which is the entire point, since the
-/// bench exists to diff one version against another. The line is emitted after
-/// the overlays are merged and `/chosen` is patched.
+/// The pointer is the armstub's `dtb_ptr32`, the word the primary core puts in
+/// `x0` for the kernel, so the blob is by definition the one the ARM is handed.
+/// Only a run whose ARM was never released falls back to the firmware's own
+/// `Device tree loaded to 0x<addr> (size 0x<len>)` console line. The console
+/// cannot be the only source: the cut-down `start4cd.elf` prints nothing after
+/// the bootloader starts it (#105). Neither way hard-codes an address, which
+/// keeps this working across firmware versions — the entire point, since the
+/// bench exists to diff one version against another.
 ///
-/// The length in the log is the tree's own `totalsize`, but the header is read
-/// first and trusted over it, so a firmware that logs a rounded figure still
-/// yields an exact blob. Returns the address and the bytes.
-fn locate_fdt(machine: &mut Machine, console: &[u8]) -> Option<(u32, Vec<u8>)> {
+/// The header's `totalsize` is trusted over the logged length, so a firmware
+/// that logs a rounded figure still yields an exact blob, and so does the tree
+/// [`rpi_virt_fw::armstub::add_bootargs`] grew in place. Returns the address and
+/// the bytes.
+fn locate_fdt(
+    machine: &mut Machine,
+    handoff: Option<Handoff>,
+    console: &[u8],
+) -> Option<(u32, Vec<u8>)> {
     use rpi_virt_fw::bus::{Bus, Width};
 
     let text = String::from_utf8_lossy(console);
     // Last one wins: a `tryboot` retry would load the tree more than once.
-    let tail = text.rsplit_once("Device tree loaded to 0x")?.1;
-    let (addr_hex, rest) = tail.split_once(" (size 0x")?;
-    let addr = u32::from_str_radix(addr_hex.trim(), 16).ok()?;
-    let logged_len = rest
-        .split_once(')')
-        .and_then(|(l, _)| u32::from_str_radix(l.trim(), 16).ok())
-        .unwrap_or(0);
+    let logged = text
+        .rsplit_once("Device tree loaded to 0x")
+        .and_then(|(_, tail)| {
+            let (addr_hex, rest) = tail.split_once(" (size 0x")?;
+            let addr = u32::from_str_radix(addr_hex.trim(), 16).ok()?;
+            let len = rest
+                .split_once(')')
+                .and_then(|(l, _)| u32::from_str_radix(l.trim(), 16).ok())
+                .unwrap_or(0);
+            Some((addr, len))
+        });
+    // The armstub itself lives at 0, so a zero pointer is no tree at all.
+    let (addr, logged_len) = match handoff.map(|h| h.dtb).filter(|&a| a != 0) {
+        Some(addr) => (addr, logged.filter(|l| l.0 == addr).map_or(0, |l| l.1)),
+        None => logged?,
+    };
 
     let byte = |m: &mut Machine, a: u32| m.load(a, Width::Byte).unwrap_or(0) as u8;
     let read = |m: &mut Machine, a: u32, n: u32| -> Vec<u8> {

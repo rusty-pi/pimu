@@ -337,13 +337,21 @@ impl BootScenario {
         for img in [&b.sd, &b.usb].into_iter().flatten() {
             let path = self.base_dir.join(img);
             // `-halt` is how the repository names the card whose kernel parks
-            // the ARM (#52).
+            // the ARM (#52), and a firmware variant's name the card that boots
+            // it (#105).
+            let start4 = ["start4cd", "start4db"]
+                .into_iter()
+                .find(|v| img.contains(v))
+                .map_or(String::new(), |v| format!("START4={v} "));
             let kernel = if img.contains("-halt") {
                 "KERNEL=halt "
             } else {
                 ""
             };
-            let make = format!("{kernel}scripts/make-sd.sh {}", tidy_path(&path).display());
+            let make = format!(
+                "{start4}{kernel}scripts/make-sd.sh {}",
+                tidy_path(&path).display()
+            );
             v.push(BootInput { path, make });
         }
         for p in [&b.netboot, &b.eeprom_pubkey].into_iter().flatten() {
