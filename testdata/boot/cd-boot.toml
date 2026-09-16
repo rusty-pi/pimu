@@ -9,6 +9,14 @@
 # everything past `Starting start4cd.elf` comes from the run report: the device
 # tree is found through the armstub's `dtb_ptr32`, not a console line.
 #
+# The silence is by design. Raspberry Pi's config.txt documentation says the
+# cut-down firmware "removes support for codecs, 3D and debug logging", and
+# that `gpu_mem=16` is the only way to select it
+# (https://github.com/raspberrypi/documentation/blob/ecd7a8129d4f2cb908d6cbd6ea5a994e0091285d/documentation/asciidoc/computers/config_txt/boot.adoc#L12).
+# The binary agrees: `Device tree loaded`, `Starting ARM`, `File read` and the
+# other log format strings of `start4.elf` are not in `start4cd.elf` at all,
+# and its device tree has no `/chosen/log` message ring either.
+#
 # The card is `START4=start4cd KERNEL=halt scripts/make-sd.sh
 # firmware/sd-halt-start4cd.img`. Re-record the golden and the retired counts
 # with:
