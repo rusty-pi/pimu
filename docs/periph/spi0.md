@@ -6,12 +6,14 @@
 - Base: `0x7E204000`
 - Size: `0x18`
 
-Driven in polled single-byte mode. Every shift is instantaneous; the flash answers READ, FAST_READ, RDID, RDSR, WREN / WRDI, SE and PP.
+Driven in polled single-byte mode. Every shift is instantaneous; the flash answers READ, FAST_READ, RDID, RDSR, WREN / WRDI, SE and PP. start4 reads the flash once, before it touches the SD card: it saves the functions of GPIO 40..43, puts them on ALT4, reads every section header of the image (a 28-byte full-duplex READ: command, three address bytes, the 24-byte header; at most 33 sections, stopping at a bad magic or at 512 KiB), then the data of the first `pubkey.bin` and `bootconf.txt` (data length + 4 bytes in one transfer), and gives the pins their functions back. Each transfer's buffer is also what goes out after the address, so the header reads send the previous header, and the first one whatever was on the stack.
 
 Sources:
 
 - datasheet (high): BCM2711 ARM Peripherals, SPI chapter
 - decompile (high): EEPROM bootloader: wait TXD, write FIFO, wait RXD, read FIFO per byte; start4's EEPROM scanner 0x3ED77E00
+- decompile (high): start4 platform init 0x3ED4947A (BCM2711 only): GPIO 40..43 saved and set to ALT4 through the GPIO driver, bootloader_eeprom_find_files 0x3EC649BC (header walk 0x3EC64ED0, file read 0x3EC655B0), pins restored
+- trace (high): start4: GPFSEL4 0x40 -> 0x6DB at 0x3ECC9562 (pins 40..43 to ALT4), 27 header reads and reads of 512 and 79 bytes from the stock image, GPFSEL4 back to 0x40, then the first log line
 
 ## Register map
 
@@ -19,7 +21,7 @@ Sources:
 |---|---|---|---|---|
 | `0x000` | [`CS`](#cs) | rw | 32 | 1, best high |
 | `0x004` | [`FIFO`](#fifo) | rw | 32 | 1, best high |
-| `0x008` | [`CLK`](#clk) | rw | 32 | 1, best high |
+| `0x008` | [`CLK`](#clk) | rw | 32 | 3, best high |
 | `0x00C` | [`DLEN`](#dlen) | rw | 32 | 1, best high |
 | `0x010` | [`LTOH`](#ltoh) | rw | 32 | 1, best high |
 | `0x014` | [`DC`](#dc) | rw | 32 | 1, best high |
@@ -35,8 +37,8 @@ Control and status.
 | 1:0 | `CS` | rw | Chip select. |
 | 4 | `CLEAR_TX` | w | Clear the TX FIFO. |
 | 5 | `CLEAR_RX` | w | Clear the RX FIFO. |
-| 7 | `TA` | rw | Transfer active; the whole command runs with it set. |
-| 16 | `DONE` | r | Nothing left to shift. TX side only: start4's scanner checks it with RX bytes still queued. |
+| 7 | `TA` | rw | Transfer active; the whole command runs with it set. start4 writes CS = 0 (its mode bits for the flash), sets TA with a read-modify-write, and clears it the same way once the transfer is done. |
+| 16 | `DONE` | r | Nothing left to shift. start4's transfer waits for it, with no timeout, once it has written and read back every byte, then clears TA. |
 | 17 | `RXD` | r | RX FIFO holds data. |
 | 18 | `TXD` | r | TX FIFO has room. |
 | 19 | `RXR` | r | RX FIFO needs reading. |
@@ -65,7 +67,7 @@ Sources:
 `DONE` sources:
 
 - datasheet (high): BCM2711 ARM Peripherals, SPI: CS.DONE
-- decompile (high): 0x3ED77E00 treats DONE = 0 as a transfer error
+- decompile (high): 0x3ED77E00: do {} while ((CS & 0x10000) == 0) after its byte loop, read at 0x3ED77EE8
 
 `RXD` sources:
 
@@ -97,11 +99,13 @@ Sources:
 
 Offset `0x008` · access `rw` · 32 bits
 
-Clock divider.
+Clock divider. start4 writes 63 before every transfer: max(ceil(source / 8 MHz), 2), its flash configuration asking for 8 MHz from a source of about 500 MHz.
 
 Sources:
 
 - datasheet (high): BCM2711 ARM Peripherals, SPI: CLK
+- decompile (high): 0x3ED77E00: 64-bit ceil(rate / speed) then max(.., 2); speed 8000000 from the configuration at DAT_0edfe1c8
+- trace (high): start4 0x3ED77E74 writes 0x3F
 
 ## `DLEN`
 
