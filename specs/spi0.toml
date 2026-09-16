@@ -91,7 +91,7 @@ confidence = "high"
 
 [[register.field.source]]
 kind       = "decompile"
-ref        = "0x3ED77E00: do {} while ((CS & 0x10000) == 0) after its byte loop, read at 0x3ED77EE8"
+ref        = "0x3ED77E00: `do {} while ((CS & 0x10000) == 0)` after its byte loop, read at 0x3ED77EE8"
 confidence = "high"
 
 [[register.field]]
@@ -153,7 +153,7 @@ confidence = "high"
 name   = "CLK"
 offset = 0x08
 access = "rw"
-notes  = "Clock divider. start4 writes 63 before every transfer: max(ceil(source / 8 MHz), 2), its flash configuration asking for 8 MHz from a source of about 500 MHz."
+notes  = "Clock divider. start4 writes 63 before every transfer: `max(ceil(source / 8 MHz), 2)`, its flash configuration asking for 8 MHz from a source of about 500 MHz."
 
 [[register.source]]
 kind       = "datasheet"
@@ -162,7 +162,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "decompile"
-ref        = "0x3ED77E00: 64-bit ceil(rate / speed) then max(.., 2); speed 8000000 from the configuration at DAT_0edfe1c8"
+ref        = "0x3ED77E00: 64-bit `ceil(rate / speed)` then `max(.., 2)`; speed 8000000 from the configuration at DAT_0edfe1c8"
 confidence = "high"
 
 [[register.source]]
