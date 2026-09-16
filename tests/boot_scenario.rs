@@ -400,7 +400,13 @@ fn every_boot_scenario_loads_and_plans_its_media() {
         seen.push(scn.name);
     }
     seen.sort();
-    for name in ["b0-boot", "firmware-boot", "tftp-boot", "usb-boot"] {
+    for name in [
+        "b0-boot",
+        "cd-boot",
+        "firmware-boot",
+        "tftp-boot",
+        "usb-boot",
+    ] {
         assert!(seen.iter().any(|s| s == name), "{name} missing: {seen:?}");
     }
 }

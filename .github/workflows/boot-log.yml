@@ -88,6 +88,10 @@ jobs:
       - name: Build SD image with a halting kernel
         run: KERNEL=halt ./scripts/make-sd.sh firmware/sd-halt.img
 
+      # And with the cut-down firmware (#105).
+      - name: Build SD image with the cut-down firmware
+        run: START4=start4cd KERNEL=halt ./scripts/make-sd.sh firmware/sd-halt-start4cd.img
+
       - name: Build network-boot root
         run: ./scripts/make-netboot.sh firmware/sd-halt.img
 
@@ -124,6 +128,8 @@ jobs:
             scenario: testdata/boot/linux-boot.toml
           - medium: b0
             scenario: testdata/boot/b0-boot.toml
+          - medium: cd
+            scenario: testdata/boot/cd-boot.toml
 
     steps:
       - uses: actions/checkout@v7

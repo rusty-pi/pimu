@@ -234,9 +234,11 @@ cargo run --release -- boot --eeprom firmware/pieeprom.bin --sd firmware/sd-halt
 diff <(fdtdump old.dtb) <(fdtdump new.dtb)
 ```
 
-The blob is found through the firmware's own `Device tree loaded to 0x… (size
-0x…)` log line and its FDT header is validated before anything is written, so
-no address is hard-coded and the flag keeps working across firmware versions.
+The blob is the one the armstub hands the ARM (its `dtb_ptr32` word; the
+firmware's own `Device tree loaded to 0x… (size 0x…)` log line when the ARM was
+never released) and its FDT header is validated before anything is written, so
+no address is hard-coded and the flag keeps working across firmware versions,
+the cut-down `start4cd.elf` included, which logs nothing after it starts.
 With a kernel that parks the ARM nothing overwrites the tree afterwards, so
 reading it out at the end of the run is safe.
 

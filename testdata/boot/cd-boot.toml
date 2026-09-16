@@ -1,0 +1,127 @@
+# The firmware boot with the cut-down firmware (#105): `start4cd.elf` and
+# `fixup4cd.dat`, picked by `gpu_mem=16` in config.txt the way a real card
+# picks them. It is the variant a headless board runs, with no camera or codec
+# support and 16 MB for the VideoCore.
+#
+# What it pins beyond `firmware-boot.toml`: the identity this bench guards
+# (rpi-mkosi#37) is the same whichever variant a card boots. The cut-down
+# firmware prints nothing on the UART after the bootloader starts it, so
+# everything past `Starting start4cd.elf` comes from the run report: the device
+# tree is found through the armstub's `dtb_ptr32`, not a console line.
+#
+# The card is `START4=start4cd KERNEL=halt scripts/make-sd.sh
+# firmware/sd-halt-start4cd.img`. Re-record the golden and the retired counts
+# with:
+#   rpi-virt-fw boot-check testdata/boot/cd-boot.toml --update
+
+name = "cd-boot"
+description = "pieeprom.bin + start4cd.elf boot from the SD image, through to the ARM hand-off."
+
+[boot]
+eeprom = "../../firmware/pieeprom.bin"
+sd = "../../firmware/sd-halt-start4cd.img"
+# The same requests as `firmware-boot.toml`, which explains each one.
+mbox_property = [
+  "0x00000001",
+  "0x00028001:8=3.3",
+  "0x0003008f",
+  "0x00030090=1",
+  "0x0003009c=1",
+  "0x00030092=0.1.16.0x6c6c6548.0x77202c6f.0x646c726f.0x00000021",
+]
+# Around 10 s on a dev box: the run ends a minute of model time after the
+# firmware's last console byte, which here comes early.
+wall_secs = 120
+max_skipped = 0
+
+[golden]
+path = "golden/cd-boot.txt"
+
+[[milestone]]
+why = "`gpu_mem=16` made the bootloader pick the cut-down pair."
+line = ["Read start4cd.elf", "843580"]
+
+[[milestone]]
+why = "Its fixup file comes with it."
+line = ["Read fixup4cd.dat", "3282"]
+
+[[milestone]]
+why = "`fixup4cd.dat` gives the VideoCore 16 MB, and the ARM the rest below 1 GB."
+line = "MEM GPU: 16 ARM: 998 TOTAL: 1014"
+
+[[milestone]]
+why = "The bootloader hands over to the cut-down firmware, at its own load address."
+line = "Starting start4cd.elf @ 0xff000200"
+
+[[milestone]]
+why = """
+The cut-down firmware logs nothing once started, so this boot never has the
+line `boot` used to find the device tree by. Its absence is what makes the
+milestones below a test of the armstub path (#105)."""
+line = "Device tree loaded to"
+absent = true
+
+[[milestone]]
+why = """
+The firmware released the ARM: the armstub handed core 0 the kernel, at the
+address `kernel8.img` is loaded to."""
+line = ["core 0    left the armstub", "for 0x200000 in EL2"]
+
+[[milestone]]
+why = """
+The report reads the tree the armstub hands the ARM (`dtb_ptr32`). Before #105
+it needed the console line above and skipped this section without a word."""
+line = "device tree handed to the ARM"
+
+[[milestone]]
+why = "The same serial as with `start4.elf` (`firmware-boot.toml`)."
+line = ["/chosen/rpi-serial64 ", "\"fa1e00231aa2bb31\""]
+
+[[milestone]]
+why = """
+The same machine id as with `start4.elf`: an image keyed to it unlocks
+whichever variant the card boots (rpi-mkosi#37)."""
+line = ["/chosen/rpi-machine-id ", "\"ed96a9bc626d9d0869ce37ee4aea025d\""]
+
+[[milestone]]
+why = "The ARM property mailbox answers after the hand-off (#23)."
+line = "1 requests taken, 1 replies written"
+
+[[milestone]]
+why = """
+`GET_FIRMWARE_REVISION` is this build's own timestamp (`0x6a7a16be` =
+2026-08-10 18:21:50 UTC), 15 s after `start4.elf`'s. It is the proof that the
+cut-down firmware, not the full one, is answering."""
+line = ["tag 0x00000001", "answered", "0x6a7a16be"]
+
+[[milestone]]
+why = "`SET_POWER_STATE` for USB powers device 3, as with `start4.elf` (#49)."
+line = ["tag 0x00028001", "answered", "0x00000003 0x00000001"]
+
+[[milestone]]
+why = "One OTP key slot."
+line = ["tag 0x0003008f", "answered", "0x00000001"]
+
+[[milestone]]
+why = "Key 1 is a device private key."
+line = ["tag 0x00030090", "answered", "0x00000001"]
+
+[[milestone]]
+why = "Key 1 has no usage set."
+line = ["tag 0x0003009c", "answered", "0x00000000"]
+
+[[milestone]]
+why = """
+The crypto service is in the cut-down firmware too, and gives the same
+HMAC-SHA256 as `start4.elf` for the same OTP key and message."""
+line = ["tag 0x00030092", "answered", "0x6ff9b60e 0x7bb3973a 0x01eb65b0 0x48fd764f 0x8286f48d 0xf1b46aed 0xe8e0da4c 0x9d1e6ea2"]
+
+[[milestone]]
+why = "No nop-slides."
+line = "[derail]"
+absent = true
+
+[[milestone]]
+why = "No instruction the decoder does not know."
+line = "Unimplemented"
+absent = true
