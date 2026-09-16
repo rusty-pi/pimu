@@ -307,11 +307,16 @@ confidence = "high"
 name   = "CLOCK_CONTROL"
 offset = 0x2C
 access = "rw"
-notes  = "Clock control (15:0), data timeout (19:16) and the self-clearing software resets (26:24)."
+notes  = "Clock control (15:0), data timeout (19:16) and the self-clearing software resets (26:24). Before it releases the ARM, start4 leaves the host reset twice over: after its last read it sets SRST_ALL and then writes 0 (clock off); after clearing INT_SIGNAL_EN and INT_STATUS_EN and writing all ones to INT_STATUS, it sets SRST_ALL, then SRST_CMD and SRST_DATA together, polling each until it clears."
 
 [[register.source]]
 kind       = "standard"
 ref        = "SDHCI 3.00, 2.2.14..2.2.16"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "pinned start4, host write helper 0x3EC52C2E and read helper 0x3EC51F5E: 0x010E0207, 0 after the console handover; then INT_SIGNAL_EN, INT_STATUS_EN <- 0, INT_STATUS <- 0xFFFFFFFF, 0x01000000, 0x06000000 once the SD power pin lookup has failed"
 confidence = "high"
 
 [[register.source]]
@@ -655,18 +660,23 @@ confidence = "high"
 name   = "REG_100"
 offset = 0x100
 access = "rw"
-notes  = "Past the SDHCI registers. start4 sets bit 31 as it hands the card over, right after REG_154. Meaning unknown."
+notes  = "Past the SDHCI registers. start4 clears bit 30 and sets bit 31 in the board clock set-up it runs once config.txt is read, right after REG_154, and goes on reading the card afterwards. Those writes depend on board feature bits (the helper at 0x3EC64902 tests one bit of a feature word). Meaning unknown."
 
 [[register.source]]
 kind       = "trace"
 ref        = "pinned start4 reads it at 0x3ED4A1DE and writes 0x80000000 at 0x3ED4A1E6; just before: GPIO +0xD0 <- 1, REG_154 <- 1, and CM EMMC2DIV <- 0x7800"
 confidence = "high"
 
+[[register.source]]
+kind       = "decompile"
+ref        = "start4 0x3ED4A1DE..0x3ED4A1E6: bitclear 30, bitset 31; the path runs when feature bits 0x19 and 0x1C are clear"
+confidence = "high"
+
 [[register]]
 name   = "REG_154"
 offset = 0x154
 access = "rw"
-notes  = "Past the SDHCI registers. start4 writes 1 here as it hands the card over, between setting GPIO +0xD0 and REG_100. Meaning unknown."
+notes  = "Past the SDHCI registers. start4 writes 1 here in its board clock set-up, between setting GPIO +0xD0 bit 0 and REG_100. Meaning unknown."
 
 [[register.source]]
 kind       = "trace"
