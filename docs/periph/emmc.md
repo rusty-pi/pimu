@@ -13,6 +13,7 @@ Sources:
 - datasheet (high): BCM2835 ARM Peripherals, EMMC chapter: this controller and its register map, at the same bus address
 - linux (high): bcm2711-rpi-4-b.dtb (raspberrypi/firmware): mmcnr@7e300000, compatible brcm,bcm2835-mmc / brcm,bcm2835-sdhci, reg <0x7e300000 0x100>, interrupts <GIC_SPI 0x7e>, with wifi@1 (brcm,bcm4329-fmac) on it — _The SD image's disable-wifi overlay turns the node off, so Linux never touches the block in the model's boots._
 - trace (high): pieeprom-2020-09-03 bootcode, RVF_TRACE_MMIO=7e300000-7e341000: its whole SD init runs on this block and EMMC2 is never touched; it writes 0x2 to 0x7E2000D0 first (0x8000f60a). The 2026 bootcode and start4 never touch this block.
+- trace (high): pinned start4 keeps the SD slot on EMMC2: it clears bit 1 of 0x7E2000D0 when it opens EMMC2 (0x3EC51DFC), when it closes it (0x3EC51A4E) and just before it releases the ARM (0x3EC5A7E2), and sets bit 0 in its board clock set-up (0x3ED4A1CE) — _what bit 0 does is not known_
 - measured (high): UART logs of the 2020 bootloaders, which print this host's HOST_CONTROL and PRESENT_STATE on every clock change: raspberrypi/rpi-eeprom#139, #227, #242 (no card in the slot), #282 (booting from the SD card) — _Other people's boards, not the reference board._
 
 ## Register map

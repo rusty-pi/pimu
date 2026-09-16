@@ -115,7 +115,7 @@ note       = "an earlier note had start4 writing SRC 1 only; SRC 1 is what it st
 [[register.field]]
 name  = "SRC"
 bits  = "3:0"
-notes = "Clock source: 0 ground, 1 oscillator, 4 PLLA, 5 PLLC, 6 PLLD, 7 PLLH's aux channel. For the VPU generator 8 and 9 are PLLC's other core channels."
+notes = "Clock source: 0 ground, 1 oscillator, 4 PLLA, 5 PLLC, 6 PLLD, 7 PLLH's aux channel. For the VPU generator 8 and 9 are PLLC's other core channels. start4's generator helper changes the source only with the generator stopped: it clears ENAB, waits for BUSY, writes SRC | GATE, and then ENAB as well. The new divider goes in before the source when it is larger than the old one (a slower clock), and after the source and a second BUSY wait when it is not, so the output never runs faster than its old or new rate. A running generator that keeps its source gets the new divider first, with no stop."
 
 [[register.field.source]]
 kind       = "datasheet"
@@ -125,6 +125,16 @@ confidence = "high"
 [[register.field.source]]
 kind       = "linux"
 ref        = "clk-bcm2835.c: CM_SRC_OSC, CM_SRC_PLLA_PER, CM_SRC_PLLC_PER, CM_SRC_PLLD_PER, CM_SRC_PLLH_AUX, CM_SRC_PLLC_CORE1 / CORE2"
+confidence = "high"
+
+[[register.field.source]]
+kind       = "decompile"
+ref        = "start4's generator helper: ENAB cleared at 0x3EC7DDBA, old divider read at 0x3EC7DE1A and compared at 0x3EC7DE1C, divider first at 0x3EC7DE34, SRC | GATE at 0x3EC7DE96, divider after at 0x3EC7DEAA, ENAB at 0x3EC7DEC4"
+confidence = "high"
+
+[[register.field.source]]
+kind       = "trace"
+ref        = "start4 moves UARTCTL (0x5DC0 to 0xFA00: divider first) and EMMCCTL (0x3C00 to 0x3000: divider after); it changes EMMC2DIV live (0x3C00 to 0x7800) on an unchanged source"
 confidence = "high"
 
 [[register.field]]
@@ -140,11 +150,16 @@ confidence = "high"
 [[register.field]]
 name  = "KILL"
 bits  = "5"
-notes = "Stop the generator immediately."
+notes = "Stop the generator immediately. start4 sets it when a generator's BUSY (or BIT8) fails to clear."
 
 [[register.field.source]]
 kind       = "linux"
 ref        = "clk-bcm2835.c: CM_KILL"
+confidence = "high"
+
+[[register.field.source]]
+kind       = "decompile"
+ref        = "start4 0x3EC7F908 polls BUSY up to 2000 times, then ORs in 0x20 at 0x3EC7F928; 0x3EC7F956 does the same for bit 8 at 0x3EC7F97C"
 confidence = "high"
 
 [[register.field]]
@@ -176,6 +191,17 @@ confidence = "high"
 [[register.field.source]]
 kind       = "decompile"
 ref        = "shutdown path 0x3EC7F0BA polls BUSY with a 1000-iteration escape"
+confidence = "high"
+
+[[register.field]]
+name   = "BIT8"
+bits   = "8"
+access = "r"
+notes  = "No Linux name. start4 waits for it to clear after it changes the divider of a generator that is running (ENAB set), and sets KILL if it does not. Reads 0 in the model."
+
+[[register.field.source]]
+kind       = "decompile"
+ref        = "start4 0x3EC7F956: only with ENAB set, polls bit 8 up to 2000 times at 0x3EC7F962; called right after the divider write at 0x3EC7DE34"
 confidence = "high"
 
 [[register.field]]
@@ -608,7 +634,7 @@ confidence = "high"
 name   = "EMMC2DIV"
 offset = 0x1D4
 access = "rw"
-notes  = "EMMC2 clock divider. bootmain writes 0x3C00; start4 writes 0x3C00 off PLLD's 750 MHz channel (200 MHz, the rate its driver logs) and 0x7800 (100 MHz) when it hands the card over."
+notes  = "EMMC2 clock divider. bootmain writes 0x3C00; start4 writes 0x3C00 off PLLD's 750 MHz channel (200 MHz, the rate its driver logs), then 0x7800 (100 MHz) in the board clock set-up it runs once config.txt is read. It keeps reading the card after that, with the card clock divider unchanged."
 
 [[register.source]]
 kind       = "linux"
@@ -617,7 +643,12 @@ confidence = "high"
 
 [[register.source]]
 kind       = "trace"
-ref        = "bootmain: 0x5A003C00 at 0x000AE0C4; start4: 0x5A003C00 at 0x3EC7DEAA, later 0x5A007800 next to the EMMC2 REG_154 / REG_100 writes"
+ref        = "bootmain: 0x5A003C00 at 0x000AE0C4; start4: 0x5A003C00 at 0x3EC7DEAA, later 0x5A007800 at 0x3EC7DE34"
+confidence = "high"
+
+[[register.source]]
+kind       = "decompile"
+ref        = "the board clock set-up asks for clock 51 at 100000000 Hz (0x3ED4A110..0x3ED4A122), between the 'ETH_CLK' / 'WL_LPO_CLK' clocks and the EMMC2 REG_154 / REG_100 writes"
 confidence = "high"
 
 [[register]]
