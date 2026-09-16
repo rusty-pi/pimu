@@ -69,7 +69,7 @@
 //! * ch3, scale `100571`: `(758 * 100571) >> 13 = 9305` tenths of a mV =
 //!   930.5 mV, against `measure_volts core` = 0.9260 V. One count is 12.3 mV,
 //!   so that is the sensor's own granularity, not a modelling error.
-//! * ch2, same scale: 821.2 mV. ch5, scale `175488`: 1801.6 mV — the 1.8 V
+//! * ch2, same scale: 821.2 mV. ch5, scale `176000`: 1806.8 mV — the 1.8 V
 //!   rail. Neither has a `vcgencmd` name to check against, but both land on a
 //!   plausible rail voltage, which the old shared count did not.
 //! * ch1 and ch4 genuinely read ~0 on real silicon (count 2, i.e. 2.4 mV).
