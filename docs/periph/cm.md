@@ -19,12 +19,16 @@ Sources:
 
 | Offset | Name | Access | Width | Sources |
 |---|---|---|---|---|
-| `0x008` | [`VPUCTL`](#vpuctl) | rw | 32 | 3, best high |
+| `0x008` | [`VPUCTL`](#vpuctl) | rw | 32 | 4, best high |
 | `0x00C` | [`VPUDIV`](#vpudiv) | rw | 32 | 2, best high |
 | `0x020` | [`PERIICTL`](#periictl) | rw | 32 | 2, best high |
 | `0x024` | [`PERIIDIV`](#periidiv) | rw | 32 | 1, best high |
+| `0x028` | [`H264CTL`](#h264ctl) | rw | 32 | 2, best high |
+| `0x02C` | [`H264DIV`](#h264div) | rw | 32 | 2, best high |
 | `0x030` | [`ISPCTL`](#ispctl) | rw | 32 | 2, best high |
 | `0x034` | [`ISPDIV`](#ispdiv) | rw | 32 | 2, best high |
+| `0x038` | [`V3DCTL`](#v3dctl) | rw | 32 | 2, best high |
+| `0x03C` | [`V3DDIV`](#v3ddiv) | rw | 32 | 2, best high |
 | `0x0E0` | [`TSENSCTL`](#tsensctl) | rw | 32 | 3, best high |
 | `0x0E4` | [`TSENSDIV`](#tsensdiv) | rw | 32 | 3, best high |
 | `0x0E8` | [`TIMERCTL`](#timerctl) | rw | 32 | 2, best high |
@@ -40,8 +44,10 @@ Sources:
 | `0x12C` | [`REG_12C`](#reg_12c) | rw | 32 | 1, best high |
 | `0x160` | [`DSI1PCTL`](#dsi1pctl) | rw | 32 | 3, best high |
 | `0x170` | [`PLLB`](#pllb) | rw | 32 | 2, best high |
-| `0x1C0` | [`EMMCCTL`](#emmcctl) | rw | 32 | 2, best high |
+| `0x1C0` | [`EMMCCTL`](#emmcctl) | rw | 32 | 3, best high |
 | `0x1C4` | [`EMMCDIV`](#emmcdiv) | rw | 32 | 2, best high |
+| `0x1C8` | [`GEN_1C8_CTL`](#gen_1c8_ctl) | rw | 32 | 1, best high |
+| `0x1CC` | [`GEN_1C8_DIV`](#gen_1c8_div) | rw | 32 | 1, best high |
 | `0x1D0` | [`EMMC2CTL`](#emmc2ctl) | rw | 32 | 2, best high |
 | `0x1D4` | [`EMMC2DIV`](#emmc2div) | rw | 32 | 3, best high |
 | `0x1E0` | [`GEN_1E0_CTL`](#gen_1e0_ctl) | rw | 32 | 2, best high |
@@ -102,13 +108,14 @@ Sources:
 
 Offset `0x008` · access `rw` · 32 bits
 
-The VPU's own clock generator. start4 writes `0x71` early, and `SRC` 4 (PLLA's core channel) with `ENAB` and `GATE` once PLLA runs. `0x71` is the oscillator: start4 moves the VPU there (`(value & ~0xF) | 1`, divider 1) before it switches PLLC off, parks it there again around PLLA's reprogramming and writes its saved words back once PLLA has locked. The move to `SRC` 4 goes the way its generator code moves a running clock that keeps its source: divider first, no stop, the control word written twice.
+The VPU's own clock generator. start4 writes `0x71` early, and `SRC` 4 (PLLA's core channel) with `ENAB` and `GATE` once PLLA runs. `0x71` is the oscillator: start4 moves the VPU there (`(value & ~0xF) | 1`, divider 1) before it switches PLLC off, parks it there again around PLLA's reprogramming and writes its saved words back once PLLA has locked. The move to `SRC` 4 goes the way its generator code moves a running clock that keeps its source: divider first, no stop, the control word written twice. It sets the same words again the same way once PLLB (the ARM's PLL) has started, just before the ARM does.
 
 Sources:
 
 - linux (high): `clk-bcm2835.c`: `CM_VPUCTL`
 - trace (high): start4: `0x5A000071` at `0x3EC7C434`, later `0x5A000054` at `0x3EC7DE96`
 - trace (high): start4 PLLA bring-up: `VPUCTL` rewritten `0x5A000071` at `0x3EC7ECEA` and `VPUDIV` `0x5A001000` at `0x3EC7ECF8` before the PLL words, both written back at `0x3EC7EF04` / `0x3EC7EF0C` after the lock
+- trace (high): start4 after PLLB's channel: `VPUDIV` `0x5A001000` at `0x3EC7DE34`, then `VPUCTL` `0x5A000054` at `0x3EC7DE96` and again at `0x3EC7DEC4`
 
 ## `VPUDIV`
 
@@ -142,11 +149,33 @@ Sources:
 
 - linux (high): `clk-bcm2835.c`: `CM_PERIIDIV`
 
+## `H264CTL`
+
+Offset `0x028` · access `rw` · 32 bits
+
+The H.264 block's clock generator. start4 starts it on `SRC` 4 (PLLA's core channel) with `H264DIV` `0x1000` just before the ARM starts, between `V3DCTL` and `ISPCTL`, with its generator helper's stop-and-restart sequence: `0`, `0x44`, `0x54`.
+
+Sources:
+
+- linux (high): `clk-bcm2835.c`: `CM_H264CTL`
+- trace (high): start4 just before the ARM starts: stopped (`0x5A000000` at `0x3EC7DDBA`), then `SRC` 4 with `GATE` (`0x5A000044` at `0x3EC7DE96`) and with `ENAB` (`0x5A000054` at `0x3EC7DEC4`)
+
+## `H264DIV`
+
+Offset `0x02C` · access `rw` · 32 bits
+
+Divider for `H264CTL`: `0x1000` (divide by one), written between the stop and the new source.
+
+Sources:
+
+- linux (high): `clk-bcm2835.c`: `CM_H264DIV`
+- trace (high): start4: `0x5A001000` at `0x3EC7DE34`
+
 ## `ISPCTL`
 
 Offset `0x030` · access `rw` · 32 bits
 
-The ISP's clock generator. start4 starts it on the oscillator (`0x1`, then `0x11`) with `ISPDIV` 0 as it applies `config.txt`, and moves it to `SRC` 4 (`0x44`, `0x54`) with `ISPDIV` `0x1000` just before the ARM starts, along with Linux's `H264CTL` (`+0x028`) and `V3DCTL` (`+0x038`).
+The ISP's clock generator. start4 starts it on the oscillator (`0x1`, then `0x11`) with `ISPDIV` 0 as it applies `config.txt`, and moves it to `SRC` 4 (`0x44`, `0x54`) with `ISPDIV` `0x1000` just before the ARM starts, after `V3DCTL` and `H264CTL` and before `GEN_1C8_CTL`.
 
 Sources:
 
@@ -163,6 +192,28 @@ Sources:
 
 - linux (high): `clk-bcm2835.c`: `CM_ISPDIV`
 - trace (high): start4: `0x5A000000` at `0x3ED48742`, later `0x5A001000` at `0x3EC7DE34`
+
+## `V3DCTL`
+
+Offset `0x038` · access `rw` · 32 bits
+
+The 3D core's clock generator. start4 starts it on `SRC` 4 (PLLA's core channel) with `V3DDIV` `0x1000` just before the ARM starts, the first of the four it moves there then (`V3DCTL`, `H264CTL`, `ISPCTL`, `GEN_1C8_CTL`), right after it sets `VPUCTL` again and its I2C master's divider.
+
+Sources:
+
+- linux (high): `clk-bcm2835.c`: `CM_V3DCTL`
+- trace (high): start4 just before the ARM starts: stopped (`0x5A000000` at `0x3EC7DDBA`), then `SRC` 4 with `GATE` (`0x5A000044` at `0x3EC7DE96`) and with `ENAB` (`0x5A000054` at `0x3EC7DEC4`)
+
+## `V3DDIV`
+
+Offset `0x03C` · access `rw` · 32 bits
+
+Divider for `V3DCTL`: `0x1000` (divide by one).
+
+Sources:
+
+- linux (high): `clk-bcm2835.c`: `CM_V3DDIV`
+- trace (high): start4: `0x5A001000` at `0x3EC7DE34`
 
 ## `TSENSCTL`
 
@@ -517,12 +568,13 @@ Sources:
 
 Offset `0x1C0` · access `rw` · 32 bits
 
-The legacy EMMC block's clock generator. bootmain starts it on `SRC` 5 (PLLC) before it touches an SD host; start4 moves it to `SRC` 6 (PLLD) before its own SD access.
+The legacy EMMC block's clock generator. bootmain starts it on `SRC` 5 (PLLC) before it touches an SD host; start4 moves it to `SRC` 6 (PLLD) before its own SD access, and sets it again to the same words (`EMMCDIV` first, then `0x56` twice, with no stop) after the core-voltage raise and before PLLB, as the ARM start nears.
 
 Sources:
 
 - linux (high): `clk-bcm2835.c`: `CM_EMMCCTL`
 - trace (high): bootmain: `0x5A000000` at `0x000AE0B2`, `0x5A000015` at `0x000AE0CE`; start4: `0x5A000005`, `0x5A000046`, `0x5A000056` from `0x3EC7DDBA`
+- trace (high): start4 before PLLB: `EMMCDIV` `0x5A003000` at `0x3EC7DE34`, then `0x5A000056` at `0x3EC7DE96` and `0x3EC7DEC4`
 
 ## `EMMCDIV`
 
@@ -534,6 +586,26 @@ Sources:
 
 - linux (high): `clk-bcm2835.c`: `CM_EMMCDIV`
 - trace (high): bootmain: `0x5A003C00` at `0x000AE0C4`; start4: `0x5A003000` at `0x3EC7DEAA`
+
+## `GEN_1C8_CTL`
+
+Offset `0x1C8` · access `rw` · 32 bits
+
+A clock generator Linux's clk-bcm2835 does not list, laid out as `UARTCTL`. start4 starts it on `SRC` 4 (PLLA's core channel) with `GEN_1C8_DIV` `0x1000` just before the ARM starts, the last of the four it moves there, after `ISPCTL`.
+
+Sources:
+
+- trace (high): start4 just before the ARM starts: stopped (`0x5A000000` at `0x3EC7DDBA`), then `SRC` 4 with `GATE` (`0x5A000044` at `0x3EC7DE96`) and with `ENAB` (`0x5A000054` at `0x3EC7DEC4`)
+
+## `GEN_1C8_DIV`
+
+Offset `0x1CC` · access `rw` · 32 bits
+
+Divider for `GEN_1C8_CTL`: `0x1000` (divide by one).
+
+Sources:
+
+- trace (high): start4: `0x5A001000` at `0x3EC7DE34`
 
 ## `EMMC2CTL`
 
@@ -646,7 +718,7 @@ Sources:
 
 Offset `0x208` · access `rw` · 32 bits
 
-A clock generator Linux's clk-bcm2835 does not list, laid out as `UARTCTL`. start4's platform init starts it on `SRC` 5, PLLC's peripheral channel, at 81 MHz.
+A clock generator Linux's clk-bcm2835 does not list, laid out as `UARTCTL`. start4's platform init starts it on `SRC` 5, PLLC's peripheral channel, at 81 MHz, and takes it down to 75 MHz (`GEN_208_DIV` `0x8A40`) without a stop just before the ARM starts, after the four generators it moves to `SRC` 4.
 
 Sources:
 
@@ -657,11 +729,11 @@ Sources:
 
 Offset `0x20C` · access `rw` · 32 bits
 
-Divider for `GEN_208_CTL`, 12 fractional bits. `0x8000` (8) off PLLC's 648 MHz channel: 81 MHz.
+Divider for `GEN_208_CTL`, 12 fractional bits. `0x8000` (8) off PLLC's 648 MHz channel: 81 MHz; later `0x8A40` (8.640625): 75 MHz.
 
 Sources:
 
-- trace (high): start4: `0x5A008000` at `0x3EC7DE34`
+- trace (high): start4: `0x5A008000` at `0x3EC7DE34`; before the ARM starts `0x5A008A40` at `0x3EC7DE34`, then `GEN_208_CTL` `0x5A000055` at `0x3EC7DE96` and `0x3EC7DEC4`
 
 ## `GEN_210_CTL`
 
