@@ -40,6 +40,8 @@ Sources:
 | `0x054` | [`ADMA_ERROR`](#adma_error) | r | 32 | 1, best high |
 | `0x058` | [`ADMA_ADDR`](#adma_addr) | rw | 32 | 1, best high |
 | `0x0FC` | [`CONTROLLER_VERSION`](#controller_version) | r | 32 | 2, best high |
+| `0x100` | [`REG_100`](#reg_100) | rw | 32 | 1, best high |
+| `0x154` | [`REG_154`](#reg_154) | rw | 32 | 1, best high |
 
 ## `SDMA_ADDR`
 
@@ -468,3 +470,23 @@ Sources:
 
 - measured (high): /dev/mem read of 0xfe3400fc on a Pi 4B rev 1.5
 - standard (high): SDHCI 3.00, 2.2.32 / 2.2.33
+
+## `REG_100`
+
+Offset `0x100` · access `rw` · 32 bits
+
+Past the SDHCI registers. start4 sets bit 31 as it hands the card over, right after REG_154. Meaning unknown.
+
+Sources:
+
+- trace (high): pinned start4 reads it at 0x3ED4A1DE and writes 0x80000000 at 0x3ED4A1E6; just before: GPIO +0xD0 <- 1, REG_154 <- 1, and CM EMMC2DIV <- 0x7800
+
+## `REG_154`
+
+Offset `0x154` · access `rw` · 32 bits
+
+Past the SDHCI registers. start4 writes 1 here as it hands the card over, between setting GPIO +0xD0 and REG_100. Meaning unknown.
+
+Sources:
+
+- trace (high): pinned start4 writes 0x00000001 at 0x3ED4A1D8

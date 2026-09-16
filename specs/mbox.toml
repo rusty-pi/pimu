@@ -254,6 +254,11 @@ kind       = "decompile"
 ref        = "receive op 0x3EC5AC0C arms it on empty; ISR 0x3EC58302 reads and re-arms 0x7E00B9BC"
 confidence = "high"
 
+[[register.source]]
+kind       = "trace"
+ref        = "pinned start4 writes the VPU's element (0x7E00B9BC) 0x8 at 0x3EC5AF6C and 0x1 at 0x3EC5AF7C, shortly before it releases the ARM"
+confidence = "high"
+
 [[register]]
 name   = "PEND0"
 offset = 0xC8

@@ -16,6 +16,28 @@ ref        = "size: stops short of the dmalib DMA controller at 0x7EE04100"
 confidence = "medium"
 
 [[register]]
+name   = "REG_03C"
+offset = 0x03C
+access = "rw"
+notes  = "start4 writes 0x0EC00000 here as it starts, then 0x0EC01FFF to REG_040, then 0x0EC00001 here: a base, a limit and bit 0 set last, over the start of the range start4 is linked at. Meaning unknown."
+
+[[register.source]]
+kind       = "trace"
+ref        = "pinned start4 entry: 0x0EC00000 at 0xFEC00DF6, 0x0EC00001 at 0xFEC00E0C"
+confidence = "high"
+
+[[register]]
+name   = "REG_040"
+offset = 0x040
+access = "rw"
+notes  = "start4 writes 0x0EC01FFF here between its two REG_03C writes. Meaning unknown."
+
+[[register.source]]
+kind       = "trace"
+ref        = "pinned start4 entry: 0x0EC01FFF at 0xFEC00E02"
+confidence = "high"
+
+[[register]]
 name   = "L2_CTRL"
 offset = 0x1000
 access = "rw"
@@ -50,6 +72,11 @@ notes  = "First address of the range L2_CTRL.FLUSH acts on."
 [[register.source]]
 kind       = "trace"
 ref        = "written right before L2_FLUSH_END and the L2_CTRL command (#70)"
+confidence = "medium"
+
+[[register.source]]
+kind       = "trace"
+ref        = "pinned start4 writes ranges here all through the boot (0x3EC715EE; e.g. 0xBEF27640 with L2_FLUSH_END 0xBEF4763F), the same pair to 0x7EE02104 / DOORBELL_C_SIZE just before, and L2_CTRL commands 0x430000 / 0x430014 (0x3EC7119E, 0x3EC71668)"
 confidence = "medium"
 
 [[register]]
