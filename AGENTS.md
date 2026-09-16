@@ -12,9 +12,13 @@
   revision code (`Revision` in `/proc/cpuinfo`) says which model, PCB revision
   and RAM size the value came from.
 - **Use backticks for code in `specs/*.toml` text.** `summary`, `notes`, `ref`
-  and `note` end up as Markdown under `docs/periph/`, so a code expression,
-  snippet or command in them goes in backticks, as Markdown inline code:
-  "start4 writes 63 before every transfer: `max(ceil(source / 8 MHz), 2)`".
+  and `note` are copied as they are into the Markdown under `docs/periph/`, so
+  mark register and field names, addresses, function names, log lines, commands
+  and paths as Markdown inline code — not with single quotes, not as bare text:
+
+  ```toml
+  ref = "`dmesg` on a Raspberry Pi 4B d03115: `hcc params 0x002841eb hci version 0x100`"
+  ```
 - **Never let CI or anything in `scripts/` depend on real hardware.** The
   reference boards are ad-hoc and only sometimes reachable, and CI runs in the
   cloud. Measured values belong baked into the model with a source comment
