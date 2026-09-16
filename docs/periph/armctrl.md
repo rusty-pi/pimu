@@ -20,7 +20,7 @@ Sources:
 | `0x000` | [`CONTROL`](#control) | rw | 32 | 2, best high |
 | `0x008` | [`REG_008`](#reg_008) | rw | 32 | 1, best high |
 | `0x41C` | [`REG_41C`](#reg_41c) | rw | 32 | 2, best high |
-| `0x440` | [`REG_440`](#reg_440) | rw | 32 | 1, best high |
+| `0x440` | [`REG_440`](#reg_440) | rw | 32 | 2, best high |
 
 ## `CONTROL`
 
@@ -66,8 +66,9 @@ Sources:
 
 Offset `0x440` · access `rw` · 32 bits
 
-Written 0 just after the ARM release. Meaning unknown.
+start4 clears bit 9 (read-modify-write) just after the ARM release; the value read then is 0. Another routine sets bit 9 and waits for bit 31 of `+0x444`. Meaning unknown.
 
 Sources:
 
 - trace (high): `0x7E00B440` <- `0x00000000` at `0x3EC81F8A`, after the release
+- decompile (high): start4 `0x3EC81F80`..`0x3EC81F8A` (`bitclear 9`); `0x3EC81F8E`..`0x3EC81F9E` (`bitset 9`, then spin until `+0x444` bit 31)

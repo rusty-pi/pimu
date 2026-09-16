@@ -24,8 +24,8 @@ Sources:
 | `0x010` | [`TOTAL_BIT_COUNT_THRESHOLD`](#total_bit_count_threshold) | rw | 32 | 2, best high |
 | `0x014` | [`PROBE`](#probe) | r | 32 | 1, best high |
 | `0x018` | [`INT_STATUS`](#int_status) | w1c | 32 | 3, best high |
-| `0x01C` | [`INT_ENABLE`](#int_enable) | rw | 32 | 1, best high |
-| `0x020` | [`FIFO_DATA`](#fifo_data) | r | 32 | 2, best high |
+| `0x01C` | [`INT_ENABLE`](#int_enable) | rw | 32 | 2, best high |
+| `0x020` | [`FIFO_DATA`](#fifo_data) | r | 32 | 3, best high |
 | `0x024` | [`FIFO_COUNT`](#fifo_count) | rw | 32 | 1, best high |
 
 ## `CTRL`
@@ -150,22 +150,24 @@ Sources:
 
 Offset `0x01C` · access `rw` · 32 bits
 
-Interrupt enables, same layout as `INT_STATUS`.
+Interrupt enables, same layout as `INT_STATUS`. start4 writes `0` just before it releases the ARM.
 
 Sources:
 
 - decompile (high): start4 open writes `0x80000022`, read writes `0x80000026` before it blocks
+- trace (high): pinned start4: `0x00000000` at `0x3ED64AD4`, after `arm_loader: Starting ARM` and before the release
 
 ## `FIFO_DATA`
 
 Offset `0x020` · access `r` · 32 bits
 
-Pops one word.
+Pops one word. start4 reads `FIFO_COUNT` before each word; the device tree it hands Linux takes `kaslr-seed` from the first two words and `rng-seed` from the next sixteen, each word little-endian.
 
 Sources:
 
 - linux (high): `iproc-rng200.c`: `RNG_FIFO_DATA`
 - decompile (high): start4 read `0x3ED64DD0` returns `[+0x20]`
+- trace (high): pinned start4: `FIFO_COUNT` at `0x3ED64DE4` then `FIFO_DATA` at `0x3ED64E0A`, 2 words and then 16; the handed-over `/chosen/kaslr-seed` is the first two words' bytes and `/chosen/rng-seed` the other sixteen's
 
 ## `FIFO_COUNT`
 

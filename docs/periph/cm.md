@@ -63,6 +63,8 @@ Sources:
 | `0x210` | [`GEN_210_CTL`](#gen_210_ctl) | rw | 32 | 2, best high |
 | `0x214` | [`GEN_210_DIV`](#gen_210_div) | rw | 32 | 1, best high |
 | `0x218` | [`REG_218`](#reg_218) | rw | 32 | 2, best high |
+| `0x22C` | [`GEN_22C_CTL`](#gen_22c_ctl) | rw | 32 | 1, best high |
+| `0x230` | [`GEN_22C_DIV`](#gen_22c_div) | rw | 32 | 1, best high |
 | `0x23C` | [`GEN_23C_CTL`](#gen_23c_ctl) | rw | 32 | 2, best high |
 | `0x240` | [`GEN_23C_DIV`](#gen_23c_div) | rw | 32 | 1, best high |
 | `0x1010`–`0x101C` (4 × 0x4) | [`PLLA_ANA`](#plla_ana) | rw | 32 | 2, best high |
@@ -767,6 +769,26 @@ Sources:
 - decompile (high): start4 `0x3ED4949A..0x3ED494A4`: `Ld r0, [0x7E101218]; Or r0, 0x5A000080; St r0`
 - trace (high): start4: `0x5A000080` at `0x3ED494A4`
 
+## `GEN_22C_CTL`
+
+Offset `0x22C` · access `rw` · 32 bits
+
+A clock generator Linux's clk-bcm2835 does not list, laid out as `UARTCTL`. start4 starts it on `SRC` 6 (PLLD's peripheral channel) with `GEN_22C_DIV` `0x5000`, 150 MHz, right after it reads `dt-blob.bin` and before its first HDMI register access, and turns PLLD's core channel on (`PLLD_CORE`, divider 5) right after.
+
+Sources:
+
+- trace (high): start4: `0x5A000000` at `0x3EC7DDBA`, `0x5A000046` at `0x3EC7DE96`, `0x5A000056` at `0x3EC7DEC4`, then the first HDMI DDC write at `0x3ECE6ED0`
+
+## `GEN_22C_DIV`
+
+Offset `0x230` · access `rw` · 32 bits
+
+Divider for `GEN_22C_CTL`: `0x5000` (5).
+
+Sources:
+
+- trace (high): start4: `0x5A005000` at `0x3EC7DE34`
+
 ## `GEN_23C_CTL`
 
 Offset `0x23C` · access `rw` · 32 bits
@@ -1048,7 +1070,7 @@ Sources:
 
 Offset `0x1440` · access `rw` · 32 bits
 
-PLLD's core channel: start4 sets the divider to 5.
+PLLD's core channel: start4 sets the divider to 5 (read-modify-write, then `PLLD` read and written back) right after it starts `GEN_22C_CTL`, before its first HDMI access.
 
 Sources:
 

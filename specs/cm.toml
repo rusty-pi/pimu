@@ -1076,6 +1076,28 @@ ref        = "start4: `0x5A000080` at `0x3ED494A4`"
 confidence = "high"
 
 [[register]]
+name   = "GEN_22C_CTL"
+offset = 0x22C
+access = "rw"
+notes  = "A clock generator Linux's clk-bcm2835 does not list, laid out as `UARTCTL`. start4 starts it on `SRC` 6 (PLLD's peripheral channel) with `GEN_22C_DIV` `0x5000`, 150 MHz, right after it reads `dt-blob.bin` and before its first HDMI register access, and turns PLLD's core channel on (`PLLD_CORE`, divider 5) right after."
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4: `0x5A000000` at `0x3EC7DDBA`, `0x5A000046` at `0x3EC7DE96`, `0x5A000056` at `0x3EC7DEC4`, then the first HDMI DDC write at `0x3ECE6ED0`"
+confidence = "high"
+
+[[register]]
+name   = "GEN_22C_DIV"
+offset = 0x230
+access = "rw"
+notes  = "Divider for `GEN_22C_CTL`: `0x5000` (5)."
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4: `0x5A005000` at `0x3EC7DE34`"
+confidence = "high"
+
+[[register]]
 name   = "GEN_23C_CTL"
 offset = 0x23C
 access = "rw"
@@ -1497,7 +1519,7 @@ confidence = "high"
 name   = "PLLD_CORE"
 offset = 0x1440
 access = "rw"
-notes  = "PLLD's core channel: start4 sets the divider to 5."
+notes  = "PLLD's core channel: start4 sets the divider to 5 (read-modify-write, then `PLLD` read and written back) right after it starts `GEN_22C_CTL`, before its first HDMI access."
 
 [[register.source]]
 kind       = "linux"

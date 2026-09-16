@@ -73,9 +73,14 @@ confidence = "high"
 name   = "REG_440"
 offset = 0x440
 access = "rw"
-notes  = "Written 0 just after the ARM release. Meaning unknown."
+notes  = "start4 clears bit 9 (read-modify-write) just after the ARM release; the value read then is 0. Another routine sets bit 9 and waits for bit 31 of `+0x444`. Meaning unknown."
 
 [[register.source]]
 kind       = "trace"
 ref        = "`0x7E00B440` <- `0x00000000` at `0x3EC81F8A`, after the release"
+confidence = "high"
+
+[[register.source]]
+kind       = "decompile"
+ref        = "start4 `0x3EC81F80`..`0x3EC81F8A` (`bitclear 9`); `0x3EC81F8E`..`0x3EC81F9E` (`bitset 9`, then spin until `+0x444` bit 31)"
 confidence = "high"
