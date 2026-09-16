@@ -2,7 +2,7 @@
 //! EEPROM image, which SD card, what wall budget) and every assertion made
 //! about the run.
 //!
-//! There are two complementary kinds of assertion and they catch different
+//! There are three complementary kinds of assertion and they catch different
 //! things:
 //!
 //! * The **golden transcript** — the whole normalised UART console, diffed
@@ -12,12 +12,16 @@
 //! * The **milestones** — named substring assertions, each carrying the reason
 //!   it exists (the commit and issue that made it pass). They say *which
 //!   invariant* broke, which a raw diff cannot.
+//! * The **retired counts** — how many instructions each core ran (#85). The
+//!   transcript has its clocks stripped, so a change that makes the firmware
+//!   or Linux run differently without printing anything different gets past
+//!   it; the counts catch that.
 //!
-//! Both are checked against a single boot run: the golden against the console
-//! bytes the run wrote out (`boot --console-log`), the milestones against the
-//! combined log, which also holds the parts of the evidence that never reach a
-//! UART (the device tree handed to the ARM, the SDRAM refresh history, the
-//! retired/skipped counters).
+//! All three are checked against a single boot run: the golden against the
+//! console bytes the run wrote out (`boot --console-log`), the milestones and
+//! the counts against the combined log, which also holds the parts of the
+//! evidence that never reach a UART (the device tree handed to the ARM, the
+//! SDRAM refresh history, the retired/skipped counters).
 
 use std::path::{Component, Path, PathBuf};
 
@@ -314,6 +318,12 @@ impl BootScenario {
         self.base_dir.join(&self.golden.path)
     }
 
+    /// The pinned [`RetiredCounts`], beside the golden transcript:
+    /// `golden/firmware-boot.txt` has `golden/firmware-boot.retired.toml`.
+    pub fn retired_path(&self) -> PathBuf {
+        self.golden_path().with_extension("retired.toml")
+    }
+
     /// Every file the run reads, each with the command that makes it. None of
     /// them is committed and a fresh checkout or worktree has none, so
     /// `boot-check --plan` names the missing ones instead of planning a boot
@@ -586,6 +596,160 @@ pub fn write_golden(scn: &BootScenario, actual: &str) -> Result<()> {
     std::fs::write(&path, actual).with_context(|| format!("writing golden {}", path.display()))
 }
 
+/// How many instructions each core retired, as the `boot --verbose` report
+/// gives them: `vpu0`, `vpu1` once the firmware has woken VPU core 1, then
+/// `arm0`.. for each ARM core once released (#85).
+///
+/// The model's clock is driven by retired cycles, and so is everything that
+/// ends a scenario's run (console silence in modelled time, or a prompt), so
+/// the counts reproduce exactly from one machine to the next. Pinning them
+/// catches a change that makes a boot run differently without printing
+/// anything different.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RetiredCounts(pub Vec<(String, u64)>);
+
+impl RetiredCounts {
+    /// The counts in the report in `log`; `None` when it has no `retired`
+    /// line.
+    pub fn from_log(log: &str) -> Option<RetiredCounts> {
+        let lines: Vec<&str> = log.lines().collect();
+        let last = |prefix: &str| lines.iter().rev().find(|l| l.starts_with(prefix));
+        // `retired    419898464  (skipped 0, cycles 419898467)`
+        let vpu0 = last("retired ")?.split_whitespace().nth(1)?.parse().ok()?;
+        let mut counts = vec![("vpu0".to_string(), vpu0)];
+        // `core1      pc 0x3ec40014  retired 125  end None`
+        let vpu1 = last("core1 ")
+            .and_then(|l| l.split_once(" retired "))
+            .and_then(|(_, rest)| rest.split_whitespace().next()?.parse().ok());
+        if let Some(n) = vpu1 {
+            counts.push(("vpu1".into(), n));
+        }
+        // `  core 1    still in the armstub`, then
+        // `            180077 instructions, 0 exceptions, ...`
+        if let Some(at) = lines.iter().rposition(|l| *l == "--- ARM cores (#40) ---") {
+            let mut core: Option<usize> = None;
+            let section = lines[at + 1..]
+                .iter()
+                .take_while(|l| l.is_empty() || l.starts_with(' '));
+            for l in section {
+                if let Some(rest) = l.strip_prefix("  core ") {
+                    core = rest.split_whitespace().next().and_then(|i| i.parse().ok());
+                } else if let Some((n, _)) = l.trim_start().split_once(" instructions, ") {
+                    if let (Some(i), Ok(n)) = (core.take(), n.parse::<u64>()) {
+                        counts.push((format!("arm{i}"), n));
+                    }
+                }
+            }
+        }
+        Some(RetiredCounts(counts))
+    }
+
+    /// A counts file: TOML, one `name = count` line per core.
+    pub fn parse(text: &str) -> Result<RetiredCounts> {
+        let table: toml::Table = toml::from_str(text)?;
+        let mut counts = Vec::with_capacity(table.len());
+        for (name, value) in table {
+            match value.as_integer().map(u64::try_from) {
+                Some(Ok(n)) => counts.push((name, n)),
+                _ => anyhow::bail!("{name} = {value}: not an instruction count"),
+            }
+        }
+        Ok(RetiredCounts(counts))
+    }
+
+    /// The counts file for these counts.
+    pub fn render(&self) -> String {
+        let mut out = String::from(
+            "# Instructions each core retired in this boot (#85): vpu0 and vpu1 on the\n\
+             # VideoCore, vpu1 only once the firmware woke it, then arm0.. once the ARM\n\
+             # is released. `boot-check <scenario> --update` rewrites this file.\n",
+        );
+        for (name, n) in &self.0 {
+            out.push_str(&format!("{name} = {}\n", grouped(*n)));
+        }
+        out
+    }
+
+    pub fn get(&self, name: &str) -> Option<u64> {
+        self.0.iter().find(|(k, _)| k == name).map(|&(_, n)| n)
+    }
+
+    /// One line for each count that differs from `expected`, empty when none
+    /// does.
+    pub fn diff(expected: &RetiredCounts, actual: &RetiredCounts) -> Vec<String> {
+        let mut names: Vec<&str> = actual.0.iter().map(|(k, _)| k.as_str()).collect();
+        for (k, _) in &expected.0 {
+            if !names.contains(&k.as_str()) {
+                names.push(k);
+            }
+        }
+        let show = |n: Option<u64>| n.map_or_else(|| "none".to_string(), grouped);
+        names
+            .into_iter()
+            .filter_map(|name| {
+                let (old, new) = (expected.get(name), actual.get(name));
+                if old == new {
+                    return None;
+                }
+                let delta = match (old, new) {
+                    (Some(o), Some(n)) => {
+                        let sign = if n < o { '-' } else { '+' };
+                        format!("  ({sign}{})", grouped(n.abs_diff(o)))
+                    }
+                    _ => String::new(),
+                };
+                Some(format!("{name:<5} {} -> {}{delta}", show(old), show(new)))
+            })
+            .collect()
+    }
+}
+
+/// `419898464` as `419_898_464`, which TOML reads back as the same integer.
+fn grouped(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push('_');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Compare a run's counts against the scenario's pinned ones. A mismatch
+/// carries [`RetiredCounts::diff`], a line per count.
+pub fn check_retired(scn: &BootScenario, actual: &RetiredCounts) -> Result<GoldenCheck> {
+    let path = scn.retired_path();
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(GoldenCheck::Missing),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    };
+    let expected =
+        RetiredCounts::parse(&text).with_context(|| format!("parsing {}", path.display()))?;
+    let diff = RetiredCounts::diff(&expected, actual);
+    Ok(if diff.is_empty() {
+        GoldenCheck::Match
+    } else {
+        GoldenCheck::Mismatch(diff.join("\n"))
+    })
+}
+
+pub fn write_retired(scn: &BootScenario, counts: &RetiredCounts) -> Result<()> {
+    let path = scn.retired_path();
+    std::fs::write(&path, counts.render()).with_context(|| format!("writing {}", path.display()))
+}
+
+/// How the run ended, from the report's `end` line: `Until`, `Stuck { .. }`,
+/// `TimeLimit`.
+pub fn run_end(log: &str) -> Option<&str> {
+    log.lines()
+        .rev()
+        .find_map(|l| l.strip_prefix("end "))
+        .map(str::trim)
+}
+
 /// The skipped-instruction count from the last `retired ...` report line.
 pub fn skipped_count(log: &str) -> Option<u64> {
     log.lines()
@@ -623,6 +787,16 @@ pub fn check_milestones(scn: &BootScenario, log: &str) -> Vec<String> {
         )),
         Some(_) => {}
     }
+
+    if run_end(log) == Some("TimeLimit") {
+        failures.push(
+            "END:     the run ended on the wall clock (--max-wall), not on its own\n         \
+             why: a scenario's run ends on console silence in modelled time or on a prompt, \
+             so its retired counts reproduce; cut off by the host instead, they only say how \
+             fast the host was\n"
+                .into(),
+        );
+    }
     failures
 }
 
@@ -646,6 +820,35 @@ pub fn check_run(scn: &BootScenario, log: &str, console: &str) -> Result<Vec<Str
              understood and wanted)\n",
             scn.golden_path().display()
         )),
+    }
+
+    // Without a report line there is nothing to compare, and the milestones
+    // already fail on that.
+    if let Some(counts) = RetiredCounts::from_log(log) {
+        match check_retired(scn, &counts)? {
+            GoldenCheck::Match => {}
+            GoldenCheck::Missing => failures.push(format!(
+                "MISSING: no retired counts at {}\n         \
+                 why: the boot has no instruction counts to be compared against; \
+                 re-run with --update to record them\n",
+                scn.retired_path().display()
+            )),
+            GoldenCheck::Mismatch(diff) => {
+                let mut f = format!(
+                    "RETIRED: the cores ran a different number of instructions than {} says\n",
+                    scn.retired_path().display()
+                );
+                for line in diff.lines() {
+                    f.push_str(&format!("         {line}\n"));
+                }
+                f.push_str(
+                    "         why: the counts reproduce exactly, so the boot ran differently, \
+                     even where the console does not show it (#85)\n         \
+                     (--update rewrites the counts once the change is understood and wanted)\n",
+                );
+                failures.push(f);
+            }
+        }
     }
 
     failures.extend(check_milestones(scn, log));
@@ -791,5 +994,93 @@ mod tests {
         let log = "retired 10  (skipped 3, cycles 1)\nretired 99  (skipped 0, cycles 2)\n";
         assert_eq!(skipped_count(log), Some(0));
         assert_eq!(skipped_count("no report here\n"), None);
+    }
+
+    /// Cut from a CI run of `linux-boot.toml`, with the `RVF_ARM_PROF` lines a
+    /// diag build adds.
+    const LINUX_REPORT: &str = "\
+end        Until
+final pc   0x3ec40014
+retired    930349796  (skipped 0, cycles 930349868)
+core1      pc 0x3ec40014  retired 125  end None
+
+--- ARM cores (#40) ---
+  ran       2383170777 cycles, 802580388 of them with every core asleep
+  core 0    left the armstub at cycle 72 for 0x200000 in EL2, x0 = 0x2eff1e00
+            191482186 instructions, 833 exceptions, 689 interrupts; now pc 0xffffffe5d4c75e00  EL1  sp 0xffffffe5d5733d80  (wfi)
+            daif 0x0  irq line 0  gic -
+  core 1    left the armstub at cycle 124611862 for 0x15a04b0 in EL2, x0 = 0x0
+            1376195290 instructions, 823 exceptions, 747 interrupts; now pc 0xffffffe5d3f39f18  EL1  sp 0xffffffc080a7bb90
+  core 2    still in the armstub
+            180077 instructions, 0 exceptions, 0 interrupts; now pc 0x80  EL2  sp 0x0  (wfi)
+  RVF_ARM_PROF: steps by core, EL and 256-byte PC bucket (total 5)
+    core 3 EL1 0x00000000000080              5  100.0%
+
+--- property replies (0x7e00_b880) ---
+  1 replies, 0 with an error code
+";
+
+    #[test]
+    fn retired_counts_come_from_the_report() {
+        let counts = RetiredCounts::from_log(LINUX_REPORT).expect("counts");
+        let want = [
+            ("vpu0", 930349796),
+            ("vpu1", 125),
+            ("arm0", 191482186),
+            ("arm1", 1376195290),
+            ("arm2", 180077),
+        ];
+        let want: Vec<(String, u64)> = want.iter().map(|&(k, n)| (k.into(), n)).collect();
+        assert_eq!(counts.0, want);
+        assert_eq!(run_end(LINUX_REPORT), Some("Until"));
+
+        let firmware_only = "retired    419898464  (skipped 0, cycles 419898467)\n\n\
+                             --- ARM cores (#40) ---\n  never released\nregs\n";
+        let counts = RetiredCounts::from_log(firmware_only).expect("counts");
+        assert_eq!(counts.0, vec![("vpu0".to_string(), 419898464)]);
+        assert_eq!(RetiredCounts::from_log("no report here\n"), None);
+    }
+
+    #[test]
+    fn a_counts_file_reads_back_what_was_written() {
+        let counts = RetiredCounts::from_log(LINUX_REPORT).expect("counts");
+        let text = counts.render();
+        assert!(text.contains("\nvpu0 = 930_349_796\n"), "{text}");
+        assert!(text.contains("\nvpu1 = 125\n"), "{text}");
+        assert!(text.contains("\narm1 = 1_376_195_290\n"), "{text}");
+        let back = RetiredCounts::parse(&text).expect("parse");
+        assert!(RetiredCounts::diff(&counts, &back).is_empty());
+        assert!(RetiredCounts::parse("vpu0 = -1\n").is_err());
+        assert!(RetiredCounts::parse("vpu0 = \"1\"\n").is_err());
+    }
+
+    #[test]
+    fn a_counts_diff_shows_each_change() {
+        let old = RetiredCounts(vec![("vpu0".into(), 1_000), ("vpu1".into(), 125)]);
+        let new = RetiredCounts(vec![("vpu0".into(), 998), ("arm0".into(), 1_234_567)]);
+        assert_eq!(
+            RetiredCounts::diff(&old, &new),
+            [
+                "vpu0  1_000 -> 998  (-2)",
+                "arm0  none -> 1_234_567",
+                "vpu1  125 -> none",
+            ]
+        );
+        assert_eq!(grouped(0), "0");
+        assert_eq!(grouped(100), "100");
+        assert_eq!(grouped(1000), "1_000");
+    }
+
+    #[test]
+    fn a_run_cut_off_by_the_wall_clock_is_no_baseline() {
+        let scn: BootScenario = toml::from_str(
+            "name = \"x\"\n[boot]\neeprom = \"e\"\nwall_secs = 1\n[golden]\npath = \"g\"\n",
+        )
+        .expect("scenario");
+        let log = "end        TimeLimit\nretired    5  (skipped 0, cycles 5)\n";
+        let failures = check_milestones(&scn, log);
+        assert_eq!(failures.len(), 1, "{failures:?}");
+        assert!(failures[0].contains("wall clock"), "{}", failures[0]);
+        assert!(check_milestones(&scn, &log.replace("TimeLimit", "Until")).is_empty());
     }
 }

@@ -11,7 +11,7 @@
 # (`Starting start4.elf @ 0xfeb00200`), which is why the ARM gets 947 MB rather
 # than 948.
 #
-# Re-record the golden with:
+# Re-record the golden and the retired counts with:
 #   rpi-virt-fw boot-check testdata/boot/usb-boot.toml --update
 
 name = "usb-boot"

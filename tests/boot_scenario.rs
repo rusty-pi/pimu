@@ -11,7 +11,7 @@
 
 use std::path::{Path, PathBuf};
 
-use rpi_virt_fw::harness::boot::{self, BootScenario, GoldenCheck};
+use rpi_virt_fw::harness::boot::{self, BootScenario, GoldenCheck, RetiredCounts};
 
 fn scenario_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/boot/firmware-boot.toml")
@@ -43,8 +43,36 @@ fn fake_log(console: &str) -> String {
          \x20 tag 0x00030090     answered    4 bytes  0x00000001\n\
          \x20 tag 0x0003009c     answered    4 bytes  0x00000000\n\
          \x20 tag 0x00030092     answered   40 bytes  0x00000000 0x00000020 0x6ff9b60e 0x7bb3973a 0x01eb65b0 0x48fd764f 0x8286f48d 0xf1b46aed 0xe8e0da4c 0x9d1e6ea2\n\
-         retired 1234  (skipped 0, cycles 5678)\n"
+         {}",
+        report(&scenario())
     )
+}
+
+/// The run report's counter lines, carrying the counts the scenario pins.
+fn report(scn: &BootScenario) -> String {
+    let text =
+        std::fs::read_to_string(scn.retired_path()).expect("the retired counts are committed");
+    let counts = RetiredCounts::parse(&text).expect("the retired counts parse");
+    let mut out = format!(
+        "end        Stuck {{ pc: 0x3ec40014, silent_us: 60001165, retired: 68775692 }}\n\
+         retired    {}  (skipped 0, cycles 5678)\n",
+        counts.get("vpu0").expect("VPU core 0 is pinned")
+    );
+    if let Some(n) = counts.get("vpu1") {
+        out.push_str(&format!(
+            "core1      pc 0x3ec40014  retired {n}  end None\n"
+        ));
+    }
+    out.push_str("\n--- ARM cores (#40) ---\n");
+    for i in 0..4 {
+        if let Some(n) = counts.get(&format!("arm{i}")) {
+            out.push_str(&format!(
+                "  core {i}    still in the armstub\n            \
+                 {n} instructions, 0 exceptions, 0 interrupts; now pc 0x80  EL2  sp 0x0  (wfi)\n"
+            ));
+        }
+    }
+    out
 }
 
 /// The fixture has to be a passing run, or none of the failure tests below
@@ -270,6 +298,47 @@ fn the_skipped_instruction_guard_still_bites() {
     assert!(f[0].contains("could not read the skipped"), "{}", f[0]);
 }
 
+/// The counts guard, demonstrated: a run whose console and milestones all
+/// pass, but whose cores ran a different number of instructions, fails (#85).
+#[test]
+fn a_changed_retired_count_fails_the_check() {
+    let scn = scenario();
+    let golden = std::fs::read_to_string(scn.golden_path()).expect("read golden");
+    let log = fake_log(&golden);
+    let vpu0 = RetiredCounts::from_log(&log)
+        .and_then(|c| c.get("vpu0"))
+        .expect("the fixture has the report");
+
+    let moved = log.replace(
+        &format!("retired    {vpu0} "),
+        &format!("retired    {} ", vpu0 + 1),
+    );
+    let f = boot::check_run(&scn, &moved, &golden).expect("check");
+    assert_eq!(f.len(), 1, "{f:?}");
+    assert!(f[0].starts_with("RETIRED:"), "{}", f[0]);
+    assert!(f[0].contains("vpu0 ") && f[0].contains("(+1)"), "{}", f[0]);
+
+    // A core that no longer runs at all is a change too.
+    let (head, _) = log
+        .split_once("\n--- ARM cores (#40) ---\n")
+        .expect("the fixture releases the ARM");
+    let f = boot::check_run(&scn, &format!("{head}\n"), &golden).expect("check");
+    assert_eq!(f.len(), 1, "{f:?}");
+    assert!(f[0].contains("arm0  76 -> none"), "{}", f[0]);
+
+    // And a scenario with nothing pinned is not a pass.
+    let dir = std::env::temp_dir().join(format!("rvf-retired-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut unpinned = scenario();
+    let copy = dir.join("firmware-boot.txt");
+    std::fs::copy(scn.golden_path(), &copy).unwrap();
+    unpinned.golden.path = copy.display().to_string();
+    let f = boot::check_run(&unpinned, &log, &golden).expect("check");
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(f.len(), 1, "{f:?}");
+    assert!(f[0].contains("MISSING: no retired counts"), "{}", f[0]);
+}
+
 /// Every boot medium has its own scenario (`testdata/boot/*.toml`), and each
 /// one's run plan attaches exactly the media it names.
 #[test]
@@ -323,6 +392,11 @@ fn every_boot_scenario_loads_and_plans_its_media() {
             "{}",
             path.display()
         );
+        // ...and pins what its cores retired (#85).
+        let text = std::fs::read_to_string(scn.retired_path())
+            .unwrap_or_else(|e| panic!("{}: {e}", scn.retired_path().display()));
+        let counts = RetiredCounts::parse(&text).expect("the retired counts parse");
+        assert!(counts.get("vpu0").is_some(), "{}", path.display());
         seen.push(scn.name);
     }
     seen.sort();

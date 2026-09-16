@@ -5,7 +5,7 @@
 # No SD card: the bootloader TFTPs start4.elf / fixup4.dat, and start4's own
 # GENET driver fetches config.txt, the overlays, the dtb and the kernel.
 #
-# Re-record the golden with:
+# Re-record the golden and the retired counts with:
 #   rpi-virt-fw boot-check testdata/boot/tftp-boot.toml --update
 
 name = "tftp-boot"

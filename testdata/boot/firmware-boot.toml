@@ -3,14 +3,17 @@
 # One EEPROM image, one SD card, one wall budget, and every assertion made
 # about the run. `rpi-virt-fw boot-check` runs it, and so does CI.
 #
-# Two kinds of assertion, checked against a single boot:
+# Three kinds of assertion, checked against a single boot:
 #
 #   * the golden transcript below — the whole normalised console, diffed line
 #     by line, which catches output that moved or a value that shifted;
 #   * the milestones — each one naming the invariant it guards and citing the
-#     commit or issue that made it pass, which is what a raw diff cannot say.
+#     commit or issue that made it pass, which is what a raw diff cannot say;
+#   * the retired counts beside the golden (`golden/firmware-boot.retired.toml`)
+#     — how many instructions each core ran, which catches a change that makes
+#     the boot run differently without printing anything different (#85).
 #
-# After an intentional change, re-record the golden with:
+# After an intentional change, re-record the golden and the counts with:
 #   rpi-virt-fw boot-check testdata/boot/firmware-boot.toml --update
 # and read the diff in the commit before you believe it.
 #
