@@ -15,6 +15,11 @@ kind       = "decompile"
 ref        = "bootloader self-update reset (WDOG = PASSWORD | 10, RSTC = PASSWORD | full reset); start4 arms the dog at 0x3ED62334 / 0x3ED62342 with dtparam=watchdog=on"
 confidence = "high"
 
+[[block.source]]
+kind       = "trace"
+ref        = "--trace-mmio of the pinned firmware (pieeprom.bin and start4.elf as firmware.sha256 lists them) booted through the ARM release; every PC cited below is in those images"
+confidence = "high"
+
 [[register]]
 name   = "RSTC"
 offset = 0x1C
@@ -105,6 +110,89 @@ ref        = "bcm2835_wdt.c: PM_PASSWORD"
 confidence = "high"
 
 [[register]]
+name   = "PADS2"
+offset = 0x2C
+access = "rw"
+notes  = "Pad control for GPIO bank 0 (GPIO 0-27). start4 writes 0x19 with each pin it sets up from dt-blob.bin, and ends on 0x1F. Bits 3 and 4 are set in every value it writes."
+
+[[register.source]]
+kind       = "linux"
+ref        = "drivers/pmdomain/bcm/bcm2835-power.c: PM_PADS2"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4 0x3ED55F88, interleaved with the GPIO function and pull writes of its pin configuration"
+confidence = "high"
+
+[[register.source]]
+kind       = "inferred"
+ref        = "bank: PADS3 and PADS4 end on the drive dt-blob.bin gives GPIO 40/41 and GPIO 46, which leaves bank 0 here"
+confidence = "medium"
+
+[[register.field]]
+name  = "DRIVE"
+bits  = "2:0"
+notes = "Drive strength, in 2 mA steps from 2 mA."
+
+[[register.field.source]]
+kind       = "inferred"
+ref        = "the Pi 4B pin_config asks 16 mA of GPIO 40/41 (PADS3 ends on 7) and 14 mA of GPIO 46 (PADS4 ends on 6)"
+confidence = "medium"
+
+[[register.field]]
+name  = "PASSWD"
+bits  = "31:24"
+notes = "Must be 0x5A."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "bcm2835-power.c: PM_PASSWORD"
+confidence = "high"
+
+[[register]]
+name   = "PADS3"
+offset = 0x30
+access = "rw"
+notes  = "Pad control for GPIO bank 1 (GPIO 28-45), laid out as PADS2. start4 writes 0x19 with each pin it sets up and ends on 0x1F, the 16 mA dt-blob.bin gives the audio PWM pins."
+
+[[register.source]]
+kind       = "linux"
+ref        = "bcm2835-power.c: PM_PADS3"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4 0x3ED55F92"
+confidence = "high"
+
+[[register.source]]
+kind       = "inferred"
+ref        = "dt-blob.dts pins_4b: pin@p40 / pin@p41 drive_strength_mA = <16>"
+confidence = "medium"
+
+[[register]]
+name   = "PADS4"
+offset = 0x34
+access = "rw"
+notes  = "Pad control for GPIO bank 2 (GPIO 46 up), laid out as PADS2. start4 writes 0x1E, the 14 mA dt-blob.bin asks of this bank."
+
+[[register.source]]
+kind       = "linux"
+ref        = "bcm2835-power.c: PM_PADS4"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4 0x3ED55F9C"
+confidence = "high"
+
+[[register.source]]
+kind       = "inferred"
+ref        = "dt-blob.dts pins_4b: pin@p46 drive_strength_mA = <14>, 'Dummy pin for HSTL drive on bank 2'"
+confidence = "medium"
+
+[[register]]
 name   = "DOMAIN_STATUS"
 offset = 0x40
 count  = 8
@@ -117,6 +205,90 @@ notes  = "Power-domain words the firmware reads for 'powered, clocks stable'. Wh
 kind       = "inferred"
 ref        = "the model's choice: status reads here gate a branch the boot has to take"
 confidence = "low"
+
+[[register]]
+name   = "SPAREW"
+offset = 0x74
+access = "rw"
+notes  = "Linux's spare writable word. bootmain writes 0x400001 early on."
+
+[[register.source]]
+kind       = "linux"
+ref        = "bcm2835-power.c: PM_SPAREW"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "bootmain: 0x5A400001 at 0x000804AE"
+confidence = "high"
+
+[[register]]
+name   = "AVS_RSTDR"
+offset = 0x7C
+access = "rw"
+notes  = "Linux's BCM2835 name. start4 writes 0x4 to it and the next three words before it touches its first PLL, which on this SoC looks more like PLL power than AVS."
+
+[[register.source]]
+kind       = "linux"
+ref        = "bcm2835-power.c: PM_AVS_RSTDR"
+confidence = "medium"
+note       = "a BCM2835 define; the BCM2711 firmware's use does not fit the name"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4: 0x5A000004 at 0x3ED55D4E"
+confidence = "high"
+
+[[register]]
+name   = "AVS_STAT"
+offset = 0x80
+access = "rw"
+notes  = "Linux's BCM2835 name. start4 writes 0x4 to it with AVS_RSTDR."
+
+[[register.source]]
+kind       = "linux"
+ref        = "bcm2835-power.c: PM_AVS_STAT"
+confidence = "medium"
+note       = "a BCM2835 define; the BCM2711 firmware's use does not fit the name"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4: 0x5A000004 at 0x3ED55D52"
+confidence = "high"
+
+[[register]]
+name   = "AVS_EVENT"
+offset = 0x84
+access = "rw"
+notes  = "Linux's BCM2835 name. The bootcode pulses it (0x800004, then 0x4) right before it brings PLLC up, and start4 writes 0x4 with AVS_RSTDR."
+
+[[register.source]]
+kind       = "linux"
+ref        = "bcm2835-power.c: PM_AVS_EVENT"
+confidence = "medium"
+note       = "a BCM2835 define; the BCM2711 firmware uses it as PLLC's power control"
+
+[[register.source]]
+kind       = "trace"
+ref        = "bootcode 0x8000AB8A / 0x8000AB8E, and bootmain again at 0x000AE4EE / 0x000AE4F2: 0x5A800004, 0x5A000004; start4: 0x5A000004 at 0x3ED55D54"
+confidence = "high"
+
+[[register]]
+name   = "AVS_INTEN"
+offset = 0x88
+access = "rw"
+notes  = "Linux's BCM2835 name. The bootcode pulses it (0x800004, then 0x4) right before it brings PLLD up, and start4 writes 0x4 with AVS_RSTDR."
+
+[[register.source]]
+kind       = "linux"
+ref        = "bcm2835-power.c: PM_AVS_INTEN"
+confidence = "medium"
+note       = "a BCM2835 define; the BCM2711 firmware uses it as PLLD's power control"
+
+[[register.source]]
+kind       = "trace"
+ref        = "bootcode 0x8000AB8A / 0x8000AB8E, and bootmain again at 0x000AE4EE / 0x000AE4F2: 0x5A800004, 0x5A000004; start4: 0x5A000004 at 0x3ED55D56"
+confidence = "high"
 
 [[register]]
 name   = "IMAGE"
@@ -134,6 +306,11 @@ kind       = "decompile"
 ref        = "power-domain switch 0x3ED54E40 writes 0x7E100108 & ~BIT(8) / & ~BIT(7)"
 confidence = "high"
 
+[[register.source]]
+kind       = "trace"
+ref        = "start4: 0x5A0003C0 at 0x3ED48734, during its graphics bring-up"
+confidence = "high"
+
 [[register]]
 name   = "GRAFX"
 offset = 0x10C
@@ -148,4 +325,20 @@ confidence = "high"
 [[register.source]]
 kind       = "decompile"
 ref        = "power-domain switch 0x3ED54E40 writes 0x7E10010C & ~BIT(6)"
+confidence = "high"
+
+[[register]]
+name   = "PROC"
+offset = 0x110
+access = "rw"
+notes  = "Linux's name for the processor power domain. The pinned start4 writes 0, 0x400, 0xC00 and 0xFFF to it after it has released the ARM, between PLLB hold and release writes. What the bits do here is not known."
+
+[[register.source]]
+kind       = "linux"
+ref        = "bcm2835-power.c: PM_PROC"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4: 0x5A000000 at 0x3EC82024, 0x5A000400 at 0x3EC82066, 0x5A000C00 at 0x3EC820AA, 0x5A000FFF at 0x3EC820EE"
 confidence = "high"

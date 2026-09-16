@@ -3,7 +3,7 @@ name    = "cm"
 base    = 0x7E101000
 size    = 0x2000
 summary = "Clock manager, with the A2W PLL control in the same window"
-notes   = "The analogue PLLs are not modelled: every PLL reads locked, every *_CTL register reads BUSY clear, and everything else is stored with the password byte masked on read-back."
+notes   = "The analogue PLLs are not modelled: every PLL reads locked, every *_CTL register reads BUSY clear, and everything else is stored with the password byte masked on read-back. The A2W half (from 0x1000) holds each PLL's analogue words, control word, fraction and output channels. The BCM2711 bootcode programs PLLC and PLLD through a second copy of that half 0x800 higher (the *R registers); start4 reprograms PLLA, PLLC, PLLD and PLLB, and writes PLLH's analogue words, through the base copy."
 
 [[block.source]]
 kind       = "datasheet"
@@ -15,11 +15,86 @@ kind       = "decompile"
 ref        = "EEPROM bootloader programs a PLL and polls for lock before trusting the SPI clock"
 confidence = "high"
 
+[[block.source]]
+kind       = "linux"
+ref        = "drivers/clk/bcm/clk-bcm2835.c: the CM_* and A2W_* offsets, the generator control bits, the PLL hold and reset bits, the lock bits and the A2W control fields"
+confidence = "high"
+note       = "written for the BCM2835; every offset below that the BCM2711 firmware was seen to use lines up with it"
+
+[[block.source]]
+kind       = "trace"
+ref        = "--trace-mmio of the pinned firmware (pieeprom.bin and start4.elf as firmware.sha256 lists them) booted through the ARM release; every PC cited below is in those images"
+confidence = "high"
+
+[[register]]
+name   = "VPUCTL"
+offset = 0x008
+access = "rw"
+notes  = "The VPU's own clock generator. start4 writes 0x71 early, and SRC 4 (PLLA's core channel) with ENAB and GATE once PLLA runs."
+
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_VPUCTL"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4: 0x5A000071 at 0x3EC7C434, later 0x5A000054 at 0x3EC7DE96"
+confidence = "high"
+
+[[register]]
+name   = "VPUDIV"
+offset = 0x00C
+access = "rw"
+notes  = "VPU clock divider, 12 fractional bits. start4 writes 0x1000, divide by one."
+
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_VPUDIV, CM_DIV_FRAC_BITS = 12"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4: 0x5A001000 at 0x3EC7C448"
+confidence = "high"
+
+[[register]]
+name   = "TIMERCTL"
+offset = 0x0E8
+access = "rw"
+notes  = "The timer's clock generator, off the oscillator. The bootcode enables it on SRC 1; start4 writes it again with GATE set."
+
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_TIMERCTL"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "bootcode: 0x5A000000 at 0x8000A7B2, 0x5A000011 at 0x8000A7CC; start4: 0x5A000051 at 0x3EC7DE96"
+confidence = "high"
+
+[[register]]
+name   = "TIMERDIV"
+offset = 0x0EC
+access = "rw"
+notes  = "Timer clock divider: 0x36000 is 54, a 1 MHz tick off the 54 MHz oscillator."
+
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_TIMERDIV"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "bootcode 0x8000A7CA and start4 0x3EC7DE34 write 0x5A036000; bootmain reads it back at 0x0008EB2A"
+confidence = "high"
+
 [[register]]
 name   = "UARTCTL"
 offset = 0x0F0
 access = "rw"
-notes  = "UART clock control. Linux later reprograms it to SRC 6 / MASH 1; start4 itself writes SRC 1."
+notes  = "UART clock control. The bootloader runs the UART off the oscillator (SRC 1); just before the ARM starts, start4 stops it on SRC 1 and moves it to SRC 6, PLLD's peripheral channel, which is where Linux finds it (with MASH 1)."
 
 [[register.source]]
 kind       = "measured"
@@ -31,14 +106,25 @@ kind       = "decompile"
 ref        = "console writer 0x3ED85E9C and clock-change callback 0x3EC799BC gate on ENAB"
 confidence = "high"
 
+[[register.source]]
+kind       = "trace"
+ref        = "start4 0x3EC7DDBA..0x3EC7DEC4: 0x5A000001, UARTDIV 0x5A00FA00, 0x5A000046, 0x5A000056, with UART0 CR cleared before and set to 0x301 after"
+confidence = "high"
+note       = "an earlier note had start4 writing SRC 1 only; SRC 1 is what it stops the generator on before it moves it"
+
 [[register.field]]
 name  = "SRC"
 bits  = "3:0"
-notes = "Clock source: 1 = oscillator, 6 = PLLD."
+notes = "Clock source: 0 ground, 1 oscillator, 4 PLLA, 5 PLLC, 6 PLLD, 7 PLLH's aux channel. For the VPU generator 8 and 9 are PLLC's other core channels."
 
 [[register.field.source]]
 kind       = "datasheet"
 ref        = "BCM2711 ARM Peripherals, CM_GPxCTL: SRC"
+confidence = "high"
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_SRC_OSC, CM_SRC_PLLA_PER, CM_SRC_PLLC_PER, CM_SRC_PLLD_PER, CM_SRC_PLLH_AUX, CM_SRC_PLLC_CORE1 / CORE2"
 confidence = "high"
 
 [[register.field]]
@@ -49,6 +135,31 @@ notes = "Generator on."
 [[register.field.source]]
 kind       = "datasheet"
 ref        = "BCM2711 ARM Peripherals, CM_GPxCTL: ENAB"
+confidence = "high"
+
+[[register.field]]
+name  = "KILL"
+bits  = "5"
+notes = "Stop the generator immediately."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_KILL"
+confidence = "high"
+
+[[register.field]]
+name  = "GATE"
+bits  = "6"
+notes = "start4 sets it together with a PLL source, one write before ENAB, on every generator it moves."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_GATE_BIT"
+confidence = "high"
+
+[[register.field.source]]
+kind       = "trace"
+ref        = "start4's generator helper: SRC | 0x40 at 0x3EC7DE96, then SRC | 0x50 at 0x3EC7DEC4"
 confidence = "high"
 
 [[register.field]]
@@ -91,31 +202,1024 @@ confidence = "high"
 name   = "UARTDIV"
 offset = 0x0F4
 access = "rw"
-notes  = "UART clock divisor."
+notes  = "UART clock divider, 12 fractional bits: the bootloader's 0x5DC0 off the oscillator, then start4's 0xFA00 (15.625) off PLLD's 750 MHz peripheral channel, the 48 MHz the ARM's PL011 driver expects."
 
 [[register.source]]
 kind       = "measured"
 ref        = "/dev/mem read of 0xFE1010F4 on rpi-dev, Linux idle: 0x0000fa00"
 confidence = "high"
 
+[[register.source]]
+kind       = "trace"
+ref        = "bootcode 0x8000A7CA and bootmain 0x000AE0C4: 0x5A005DC0; start4: 0x5A00FA00 at 0x3EC7DE34"
+confidence = "high"
+
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_DIV_FRAC_BITS = 12"
+confidence = "high"
+
 [[register]]
 name   = "DELAY"
 offset = 0x100
 access = "rw"
-notes  = "Self-clearing 'wait N clocks' register: written password | cycle count, polled until 0. Always reads 0."
+notes  = "Self-clearing countdown: written password | count, polled until it reads 0. Always reads 0. The bootloader's SD host helper waits 108000000 / card clock on it after every host register write (2160 before a clock is set, 276 at 390625 Hz, 2 at 50 MHz); start4 waits 0x36 in its PLL bring-up, and 8 and 0x21C around the PLLB change after the ARM release."
 
 [[register.source]]
 kind       = "decompile"
 ref        = "the bootloader's SDHCI register-write helper 0x00081dc0 writes it and spins at 0x00081de2"
 confidence = "high"
 
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c names the offset CM_OSCCOUNT"
+confidence = "high"
+note       = "a count of oscillator cycles fits the numbers: 108000000 / f ticks of the 54 MHz crystal is two periods of the card clock"
+
+[[register.source]]
+kind       = "trace"
+ref        = "bootmain after EMMC2 writes: 0x5A000870, 0x5A000114, 0x5A000002; start4 0x3EC7EE22: 0x5A000036; after the release 0x3EC82082: 0x5A000008 and 0x3EC7E940: 0x5A00021C"
+confidence = "high"
+
+[[register]]
+name   = "PLLA"
+offset = 0x104
+access = "rw"
+notes  = "PLLA's analogue reset and the hold bits of its output channels. start4 writes 0x6AA, then 0x72A, programs the A2W words, releases ANARST with 0x62A, waits for lock and clears the lot. Bits 9 and 10 are set in all three values; what they do is not known."
+
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_PLLA, CM_PLL_ANARST, CM_PLLA_HOLD*"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4: 0x5A0006AA at 0x3EC7EDFA, 0x5A00072A at 0x3EC7EE38, 0x5A00062A at 0x3EC7EED2, 0x5A000000 at 0x3EC7EEF2"
+confidence = "high"
+
+[[register.field]]
+name  = "ANARST"
+bits  = "8"
+notes = "Hold the PLL's analogue side in reset."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_PLL_ANARST"
+confidence = "high"
+
+[[register.field]]
+name  = "HOLDPER"
+bits  = "7"
+notes = "Hold the peripheral channel."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_PLLA_HOLDPER"
+confidence = "high"
+
+[[register.field]]
+name  = "HOLDCORE"
+bits  = "5"
+notes = "Hold the core channel."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_PLLA_HOLDCORE"
+confidence = "high"
+
+[[register.field]]
+name  = "HOLDCCP2"
+bits  = "3"
+notes = "Hold the CCP2 channel."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_PLLA_HOLDCCP2"
+confidence = "high"
+
+[[register.field]]
+name  = "HOLDDSI0"
+bits  = "1"
+notes = "Hold the DSI0 channel."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_PLLA_HOLDDSI0"
+confidence = "high"
+
+[[register]]
+name   = "PLLC"
+offset = 0x108
+access = "rw"
+notes  = "PLLC's analogue reset and channel holds. start4 first puts it in reset (0x100), then brings it up as PLLA (0x7AA, 0x72A, 0x62A, 0); the bootcode's bring-up through the *R registers holds it with 0x6AA and clears it after lock."
+
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_PLLC, CM_PLLC_HOLD*"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4: 0x5A000100 at 0x3EC7C452, 0x5A0007AA / 0x5A00072A / 0x5A00062A / 0x5A000000 from 0x3EC7EDFA; bootcode 0x8000ABFA / 0x8000AC66 and bootmain 0x000AE564 / 0x000AE5DC: 0x5A0006AA, then 0x5A000000"
+confidence = "high"
+
+[[register.field]]
+name  = "ANARST"
+bits  = "8"
+notes = "Hold the PLL's analogue side in reset."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_PLL_ANARST"
+confidence = "high"
+
+[[register.field]]
+name  = "HOLDPER"
+bits  = "7"
+notes = "Hold the peripheral channel."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_PLLC_HOLDPER"
+confidence = "high"
+
+[[register.field]]
+name  = "HOLDCORE2"
+bits  = "5"
+notes = "Hold core channel 2."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_PLLC_HOLDCORE2"
+confidence = "high"
+
+[[register.field]]
+name  = "HOLDCORE1"
+bits  = "3"
+notes = "Hold core channel 1."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_PLLC_HOLDCORE1"
+confidence = "high"
+
+[[register.field]]
+name  = "HOLDCORE0"
+bits  = "1"
+notes = "Hold core channel 0."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_PLLC_HOLDCORE0"
+confidence = "high"
+
+[[register]]
+name   = "PLLD"
+offset = 0x10C
+access = "rw"
+notes  = "PLLD's analogue reset and channel holds, brought up the same way as PLLC by both the bootcode and start4."
+
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_PLLD, CM_PLLD_HOLD*"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "bootcode 0x8000ABFA / 0x8000AC66 and bootmain 0x000AE564 / 0x000AE5DC: 0x5A0006AA, then 0x5A000000; start4: 0x5A0006AA / 0x5A00072A / 0x5A00062A / 0x5A000000 from 0x3EC7EDFA"
+confidence = "high"
+
+[[register.field]]
+name  = "ANARST"
+bits  = "8"
+notes = "Hold the PLL's analogue side in reset."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_PLL_ANARST"
+confidence = "high"
+
+[[register.field]]
+name  = "HOLDPER"
+bits  = "7"
+notes = "Hold the peripheral channel."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_PLLD_HOLDPER"
+confidence = "high"
+
+[[register.field]]
+name  = "HOLDCORE"
+bits  = "5"
+notes = "Hold the core channel."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_PLLD_HOLDCORE"
+confidence = "high"
+
+[[register.field]]
+name  = "HOLDDSI1"
+bits  = "3"
+notes = "Hold the DSI1 channel."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_PLLD_HOLDDSI1"
+confidence = "high"
+
+[[register.field]]
+name  = "HOLDDSI0"
+bits  = "1"
+notes = "Hold the DSI0 channel."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_PLLD_HOLDDSI0"
+confidence = "high"
+
 [[register]]
 name   = "LOCK"
 offset = 0x114
 access = "r"
-notes  = "One bit per PLL, set once it has locked. Always all ones."
+notes  = "One bit per PLL, set once it has locked. Always all ones. start4 polls it up to 2000 times per PLL and carries on either way."
 
 [[register.source]]
 kind       = "decompile"
 ref        = "the bootloader polls it after programming a PLL"
 confidence = "medium"
+
+[[register.source]]
+kind       = "decompile"
+ref        = "start4's PLL enable at 0x3EC7EED4..0x3EC7EEE4: 2000 reads, masked with a per-PLL lock bit from its table"
+confidence = "high"
+
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_LOCK_FLOCKA..FLOCKH"
+confidence = "high"
+
+[[register.field]]
+name  = "FLOCKA"
+bits  = "8"
+notes = "PLLA locked."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_LOCK_FLOCKA"
+confidence = "high"
+
+[[register.field]]
+name  = "FLOCKB"
+bits  = "9"
+notes = "PLLB locked."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_LOCK_FLOCKB"
+confidence = "high"
+
+[[register.field]]
+name  = "FLOCKC"
+bits  = "10"
+notes = "PLLC locked."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_LOCK_FLOCKC"
+confidence = "high"
+
+[[register.field]]
+name  = "FLOCKD"
+bits  = "11"
+notes = "PLLD locked."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_LOCK_FLOCKD"
+confidence = "high"
+
+[[register.field]]
+name  = "FLOCKH"
+bits  = "12"
+notes = "PLLH locked."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_LOCK_FLOCKH"
+confidence = "high"
+
+[[register]]
+name   = "PLLB"
+offset = 0x170
+access = "rw"
+notes  = "PLLB, the ARM cores' clock: analogue reset and the ARM channel's hold. start4 brings it up as the last clock before the console handover (0x2, 0x102, then 0x2 after the A2W words, 0 after lock) and toggles HOLDARM again around PROC after the ARM release."
+
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_PLLB, CM_PLLB_HOLDARM, CM_PLLB_LOADARM"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4: 0x5A000002 at 0x3EC7EDFA, 0x5A000102 at 0x3EC7EE38, 0x5A000002 at 0x3EC7EED2, 0x5A000000 at 0x3EC7EEF2 and 0x3EC7E964; after the release 0x5A000002 / 0x5A000000 from 0x3EC82096"
+confidence = "high"
+
+[[register.field]]
+name  = "ANARST"
+bits  = "8"
+notes = "Hold the PLL's analogue side in reset."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_PLL_ANARST"
+confidence = "high"
+
+[[register.field]]
+name  = "HOLDARM"
+bits  = "1"
+notes = "Hold the ARM channel."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_PLLB_HOLDARM"
+confidence = "high"
+
+[[register.field]]
+name  = "LOADARM"
+bits  = "0"
+notes = "Load the ARM channel's divider."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_PLLB_LOADARM"
+confidence = "high"
+
+[[register]]
+name   = "EMMCCTL"
+offset = 0x1C0
+access = "rw"
+notes  = "The legacy EMMC block's clock generator. bootmain starts it on SRC 5 (PLLC) before it touches an SD host; start4 moves it to SRC 6 (PLLD) before its own SD access."
+
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_EMMCCTL"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "bootmain: 0x5A000000 at 0x000AE0B2, 0x5A000015 at 0x000AE0CE; start4: 0x5A000005, 0x5A000046, 0x5A000056 from 0x3EC7DDBA"
+confidence = "high"
+
+[[register]]
+name   = "EMMCDIV"
+offset = 0x1C4
+access = "rw"
+notes  = "Legacy EMMC clock divider: 0x3C00 from bootmain, 0x3000 from start4."
+
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_EMMCDIV"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "bootmain: 0x5A003C00 at 0x000AE0C4; start4: 0x5A003000 at 0x3EC7DEAA"
+confidence = "high"
+
+[[register]]
+name   = "EMMC2CTL"
+offset = 0x1D0
+access = "rw"
+notes  = "EMMC2's clock generator, the SD card's host. bootmain starts it on SRC 5 (PLLC) before its first host register write; start4 moves it to SRC 6 (PLLD) before its own."
+
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_EMMC2CTL"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "bootmain: 0x5A000000 at 0x000AE0B2, 0x5A000015 at 0x000AE0CE; start4: 0x5A000005, 0x5A000046, 0x5A000056 from 0x3EC7DDBA"
+confidence = "high"
+
+[[register]]
+name   = "EMMC2DIV"
+offset = 0x1D4
+access = "rw"
+notes  = "EMMC2 clock divider. bootmain writes 0x3C00; start4 writes 0x3C00 off PLLD's 750 MHz channel (200 MHz, the rate its driver logs) and 0x7800 (100 MHz) when it hands the card over."
+
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: CM_EMMC2DIV"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "bootmain: 0x5A003C00 at 0x000AE0C4; start4: 0x5A003C00 at 0x3EC7DEAA, later 0x5A007800 next to the EMMC2 REG_154 / REG_100 writes"
+confidence = "high"
+
+[[register]]
+name   = "PLLA_ANA"
+offset = 0x1010
+count  = 4
+stride = 4
+access = "rw"
+notes  = "PLLA's four analogue words, written from the last to the first: 0, 0x4000, 0x11C000, 0."
+
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: A2W_PLLA_ANA0"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4 0x3EC7EE3C, 0x3EC7EE4C, 0x3EC7EE56, 0x3EC7EE6C"
+confidence = "high"
+
+[[register]]
+name   = "PLLC_ANA"
+offset = 0x1030
+count  = 4
+stride = 4
+access = "rw"
+notes  = "PLLC's four analogue words. start4 writes 0x180, 0, 0x1D0000, 0 while it holds PLLC in reset, and 0, 0x4000, 0x11C000 when it brings it up."
+
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: A2W_PLLC_ANA0"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4 0x3EC7C480..0x3EC7C48E, then 0x3EC7EE3C..0x3EC7EE56"
+confidence = "high"
+
+[[register]]
+name   = "PLLD_ANA"
+offset = 0x1050
+count  = 4
+stride = 4
+access = "rw"
+notes  = "PLLD's four analogue words, as PLLA's."
+
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: A2W_PLLD_ANA0"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4 0x3EC7EE3C..0x3EC7EE6C"
+confidence = "high"
+
+[[register]]
+name   = "PLLH_ANA"
+offset = 0x1070
+count  = 4
+stride = 4
+access = "rw"
+notes  = "PLLH's four analogue words. start4 writes 0, 0x4C, 0x2C00, 0 just before it brings PLLB up, without enabling PLLH."
+
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: A2W_PLLH_ANA0"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4 0x3EC7CCDA..0x3EC7CCEA"
+confidence = "high"
+
+[[register]]
+name   = "PLLB_ANA"
+offset = 0x10F0
+count  = 4
+stride = 4
+access = "rw"
+notes  = "PLLB's four analogue words, as PLLA's."
+
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: A2W_PLLB_ANA0"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4 0x3EC7EE3C..0x3EC7EE6C"
+confidence = "high"
+
+[[register]]
+name   = "PLLA_CTRL"
+offset = 0x1100
+access = "rw"
+notes  = "PLLA's multiplier. start4 writes 0x1037, then sets PRST_DISABLE after lock: 55 plus FRAC 0x8E38E, 3000 MHz off the 54 MHz oscillator."
+
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: A2W_PLLA_CTRL and its fields"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4: 0x5A001037 at 0x3EC7EEC6, 0x5A021037 at 0x3EC7EF28"
+confidence = "high"
+
+[[register.field]]
+name  = "NDIV"
+bits  = "9:0"
+notes = "Integer part of the multiplier."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: A2W_PLL_CTRL_NDIV_MASK"
+confidence = "high"
+
+[[register.field]]
+name  = "PDIV"
+bits  = "14:12"
+notes = "Pre-divider."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: A2W_PLL_CTRL_PDIV_MASK"
+confidence = "high"
+
+[[register.field]]
+name  = "PWRDN"
+bits  = "16"
+notes = "PLL powered down."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: A2W_PLL_CTRL_PWRDN"
+confidence = "high"
+
+[[register.field]]
+name  = "PRST_DISABLE"
+bits  = "17"
+notes = "Set once the PLL has locked."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: A2W_PLL_CTRL_PRST_DISABLE"
+confidence = "high"
+
+[[register]]
+name   = "PLLC_CTRL"
+offset = 0x1120
+access = "rw"
+notes  = "PLLC's multiplier, laid out as PLLA_CTRL. start4 powers PLLC down (0x10000) early, then writes 0x11030 and 0x31030: 48, no fraction."
+
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: A2W_PLLC_CTRL"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4: 0x5A010000 at 0x3EC7C466, 0x5A011030 at 0x3EC7EEC6, 0x5A031030 at 0x3EC7EF28"
+confidence = "high"
+
+[[register]]
+name   = "PLLD_CTRL"
+offset = 0x1140
+access = "rw"
+notes  = "PLLD's multiplier, laid out as PLLA_CTRL: start4 writes 0x1037 and 0x21037, 3000 MHz with FRAC 0x8E38E."
+
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: A2W_PLLD_CTRL"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4: 0x5A001037 at 0x3EC7EEC6, 0x5A021037 at 0x3EC7EF28"
+confidence = "high"
+
+[[register]]
+name   = "PLLB_CTRL"
+offset = 0x11E0
+access = "rw"
+notes  = "PLLB's multiplier, laid out as PLLA_CTRL: start4 writes 0x1042 and 0x21042, 66 plus FRAC 0xAAAAB, 3600 MHz. After the ARM release it steps NDIV up from 0x22 to 0x42 one write at a time."
+
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: A2W_PLLB_CTRL"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4: 0x5A001042 at 0x3EC7EEC6, 0x5A021042 at 0x3EC7EF28; after the release 0x5A021022..0x5A021042 at 0x3EC7EEA0"
+confidence = "high"
+
+[[register]]
+name   = "PLLA_FRAC"
+offset = 0x1200
+access = "rw"
+notes  = "Fractional part of PLLA's multiplier, 20 bits: start4 writes 0x8E38E."
+
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: A2W_PLLA_FRAC, A2W_PLL_FRAC_BITS = 20"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4 0x3EC7EEB0"
+confidence = "high"
+
+[[register]]
+name   = "PLLC_FRAC"
+offset = 0x1220
+access = "rw"
+notes  = "Fractional part of PLLC's multiplier: start4 clears it while PLLC is held in reset."
+
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: A2W_PLLC_FRAC"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4 0x3EC7C45C"
+confidence = "high"
+
+[[register]]
+name   = "PLLD_FRAC"
+offset = 0x1240
+access = "rw"
+notes  = "Fractional part of PLLD's multiplier: start4 writes 0x8E38E."
+
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: A2W_PLLD_FRAC"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4 0x3EC7EEB0"
+confidence = "high"
+
+[[register]]
+name   = "PLLB_FRAC"
+offset = 0x12E0
+access = "rw"
+notes  = "Fractional part of PLLB's multiplier: start4 writes 0xAAAAB, before and again during the ramp after the ARM release."
+
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: A2W_PLLB_FRAC"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4 0x3EC7EEB0 and 0x3EC7EE7E"
+confidence = "high"
+
+[[register]]
+name   = "PLLC_CORE2"
+offset = 0x1320
+access = "rw"
+notes  = "PLLC core channel 2. start4 disables it while PLLC is held in reset."
+
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: A2W_PLLC_CORE2, A2W_PLL_CHANNEL_DISABLE, A2W_PLL_DIV_BITS"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4: 0x5A000100 at 0x3EC7C478"
+confidence = "high"
+
+[[register.field]]
+name  = "DIV"
+bits  = "7:0"
+notes = "Channel divider."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: A2W_PLL_DIV_BITS = 8"
+confidence = "high"
+
+[[register.field]]
+name  = "DISABLE"
+bits  = "8"
+notes = "Channel off."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: A2W_PLL_CHANNEL_DISABLE"
+confidence = "high"
+
+[[register]]
+name   = "A2W_1330"
+offset = 0x1330
+access = "rw"
+notes  = "The bootcode writes 0x23 here before it programs PLLC through the *R registers. Not named by Linux; meaning unknown."
+
+[[register.source]]
+kind       = "trace"
+ref        = "bootcode 0x8000ABBE, and bootmain again at 0x000AE528: 0x5A000023"
+confidence = "high"
+
+[[register]]
+name   = "A2W_1350"
+offset = 0x1350
+access = "rw"
+notes  = "The bootcode writes 0x23 here before it programs PLLD through the *R registers. Not named by Linux; meaning unknown."
+
+[[register.source]]
+kind       = "trace"
+ref        = "bootcode 0x8000ABBE, and bootmain again at 0x000AE528: 0x5A000023"
+confidence = "high"
+
+[[register]]
+name   = "A2W_1390"
+offset = 0x1390
+access = "rw"
+notes  = "The bootcode writes 1 here early, later reads it back and ORs in 0x300020 (writing 0x300021) before it starts the PLLs, right before it sets bit 9 of 0x7E500220; bootmain and start4 write the same value. Meaning unknown."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "bootcode 0x8000A7F6..0x8000A804: Ld r0, [0x7E102390]; Or r0, 0x5A300020; St r0"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "bootcode: 0x5A000001 at 0x80002118, 0x5A300021 at 0x8000A804; bootmain 0x0008BE5C / 0x000AE118 and start4 0x3ED494C4: 0x5A300021"
+confidence = "high"
+
+[[register]]
+name   = "PLLB_ARM"
+offset = 0x13E0
+access = "rw"
+notes  = "PLLB's ARM channel, the clock the ARM cores run from: start4 sets the divider to 2 (1800 MHz from 3600) before the ARM starts, then 3 and back to 2 around the ramp after it. Laid out as PLLC_CORE2."
+
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: A2W_PLLB_ARM"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4: 0x5A000002 at 0x3EC7E954; after the release 0x5A000003 at 0x3EC8211A, 0x5A000002 at 0x3EC7E920 / 0x3EC7E954"
+confidence = "high"
+
+[[register]]
+name   = "PLLA_CORE"
+offset = 0x1400
+access = "rw"
+notes  = "PLLA's core channel, the VPU's clock once VPUCTL selects it: start4 sets the divider to 6, 500 MHz."
+
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: A2W_PLLA_CORE"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4: 0x5A000006 at 0x3EC7E954"
+confidence = "high"
+
+[[register]]
+name   = "PLLC_CORE1"
+offset = 0x1420
+access = "rw"
+notes  = "PLLC core channel 1, laid out as PLLC_CORE2: start4 disables it while PLLC is held in reset."
+
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: A2W_PLLC_CORE1"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4: 0x5A000100 at 0x3EC7C474"
+confidence = "high"
+
+[[register]]
+name   = "PLLD_CORE"
+offset = 0x1440
+access = "rw"
+notes  = "PLLD's core channel: start4 sets the divider to 5."
+
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: A2W_PLLD_CORE"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4: 0x5A000005 at 0x3EC7E954"
+confidence = "high"
+
+[[register]]
+name   = "PLLC_PER"
+offset = 0x1520
+access = "rw"
+notes  = "PLLC's peripheral channel: start4 disables it while PLLC is held in reset and sets the divider to 4 once PLLC is up."
+
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: A2W_PLLC_PER"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4: 0x5A000100 at 0x3EC7C47C, 0x5A000004 at 0x3EC7E954"
+confidence = "high"
+
+[[register]]
+name   = "PLLD_PER"
+offset = 0x1540
+access = "rw"
+notes  = "PLLD's peripheral channel: start4 sets the divider to 4, 750 MHz, which the UART and both SD hosts then run from."
+
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: A2W_PLLD_PER"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4: 0x5A000004 at 0x3EC7E954"
+confidence = "high"
+
+[[register]]
+name   = "PLLC_CORE0"
+offset = 0x1620
+access = "rw"
+notes  = "PLLC core channel 0: start4 disables it while PLLC is held in reset."
+
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c: A2W_PLLC_CORE0"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4: 0x5A000100 at 0x3EC7C470"
+confidence = "high"
+
+[[register]]
+name   = "PLLC_CTRLR"
+offset = 0x1920
+access = "rw"
+notes  = "PLLC_CTRL's copy 0x800 up, laid out the same. The bootcode programs PLLC through it: 0x1037, then 0x21037 after lock."
+
+[[register.source]]
+kind       = "linux"
+ref        = "clk-bcm2835.c defines the same copy for PLLH only: A2W_PLLH_CTRLR = A2W_PLLH_CTRL + 0x800, and A2W_PLLH_*R for its other registers"
+confidence = "medium"
+note       = "the name follows Linux's PLLH one; that PLLC and PLLD have the copy too is from the firmware's use"
+
+[[register.source]]
+kind       = "trace"
+ref        = "bootcode 0x8000ABE0 / 0x8000AC3C, and bootmain again at 0x000AE54C / 0x000AE5B0: 0x5A001037, then 0x5A021037"
+confidence = "high"
+
+[[register]]
+name   = "PLLD_CTRLR"
+offset = 0x1940
+access = "rw"
+notes  = "PLLD_CTRL's copy 0x800 up: the bootcode programs PLLD through it, 0x1037 then 0x21037."
+
+[[register.source]]
+kind       = "trace"
+ref        = "bootcode 0x8000ABE0 / 0x8000AC3C, and bootmain again at 0x000AE54C / 0x000AE5B0: 0x5A001037, then 0x5A021037"
+confidence = "high"
+
+[[register]]
+name   = "PLLC_FRACR"
+offset = 0x1A20
+access = "rw"
+notes  = "PLLC_FRAC's copy 0x800 up: the bootcode writes 0x8E390."
+
+[[register.source]]
+kind       = "trace"
+ref        = "bootcode 0x8000ABCE, and bootmain again at 0x000AE53E: 0x5A08E390"
+confidence = "high"
+
+[[register]]
+name   = "PLLD_FRACR"
+offset = 0x1A40
+access = "rw"
+notes  = "PLLD_FRAC's copy 0x800 up: the bootcode writes 0x8E390."
+
+[[register.source]]
+kind       = "trace"
+ref        = "bootcode 0x8000ABCE, and bootmain again at 0x000AE53E: 0x5A08E390"
+confidence = "high"
+
+[[register]]
+name   = "PLLC_CORE2R"
+offset = 0x1B20
+access = "rw"
+notes  = "PLLC_CORE2's copy 0x800 up: the bootcode sets the divider to 6 and disables the channel after lock."
+
+[[register.source]]
+kind       = "trace"
+ref        = "bootcode 0x8000AC32 / 0x8000AC5A, and bootmain again at 0x000AE586 / 0x000AE5D2: 0x5A000006, later 0x5A000100"
+confidence = "high"
+
+[[register]]
+name   = "PLLD_DSI0R"
+offset = 0x1B40
+access = "rw"
+notes  = "PLLD_DSI0's copy 0x800 up: the bootcode sets the divider to 0x10 and disables the channel after lock."
+
+[[register.source]]
+kind       = "trace"
+ref        = "bootcode 0x8000AC32 / 0x8000AC5A, and bootmain again at 0x000AE586 / 0x000AE5D2: 0x5A000010, later 0x5A000100"
+confidence = "high"
+
+[[register]]
+name   = "PLLC_CORE1R"
+offset = 0x1C20
+access = "rw"
+notes  = "PLLC_CORE1's copy 0x800 up: the bootcode sets the divider to 6 and disables the channel after lock."
+
+[[register.source]]
+kind       = "trace"
+ref        = "bootcode 0x8000AC32 / 0x8000AC5A, and bootmain again at 0x000AE586 / 0x000AE5D2: 0x5A000006, later 0x5A000100"
+confidence = "high"
+
+[[register]]
+name   = "PLLD_CORER"
+offset = 0x1C40
+access = "rw"
+notes  = "PLLD_CORE's copy 0x800 up: the bootcode sets the divider to 5."
+
+[[register.source]]
+kind       = "trace"
+ref        = "bootcode 0x8000AC32, and bootmain again at 0x000AE586: 0x5A000005"
+confidence = "high"
+
+[[register]]
+name   = "PLLC_PERR"
+offset = 0x1D20
+access = "rw"
+notes  = "PLLC_PER's copy 0x800 up: the bootcode sets the divider to 5, and bootmain's SD host clocks run from this channel."
+
+[[register.source]]
+kind       = "trace"
+ref        = "bootcode 0x8000AC32, and bootmain again at 0x000AE586: 0x5A000005"
+confidence = "high"
+
+[[register]]
+name   = "PLLD_PERR"
+offset = 0x1D40
+access = "rw"
+notes  = "PLLD_PER's copy 0x800 up: the bootcode sets the divider to 4."
+
+[[register.source]]
+kind       = "trace"
+ref        = "bootcode 0x8000AC32, and bootmain again at 0x000AE586: 0x5A000004"
+confidence = "high"
+
+[[register]]
+name   = "PLLC_CORE0R"
+offset = 0x1E20
+access = "rw"
+notes  = "PLLC_CORE0's copy 0x800 up: the bootcode sets the divider to 6."
+
+[[register.source]]
+kind       = "trace"
+ref        = "bootcode 0x8000AC32, and bootmain again at 0x000AE586: 0x5A000006"
+confidence = "high"
+
+[[register]]
+name   = "PLLD_DSI1R"
+offset = 0x1E40
+access = "rw"
+notes  = "PLLD_DSI1's copy 0x800 up: the bootcode sets the divider to 0x10 and disables the channel after lock."
+
+[[register.source]]
+kind       = "trace"
+ref        = "bootcode 0x8000AC32 / 0x8000AC5A, and bootmain again at 0x000AE586 / 0x000AE5D2: 0x5A000010, later 0x5A000100"
+confidence = "high"
+
+[[register]]
+name   = "A2W_1F20"
+offset = 0x1F20
+access = "rw"
+notes  = "The bootcode clears it while it brings PLLC up through the *R registers, before and after lock. Not named by Linux."
+
+[[register.source]]
+kind       = "trace"
+ref        = "bootcode 0x8000ABE4 / 0x8000AC40 / 0x8000AC62, and bootmain again at 0x000AE550 / 0x000AE5B4 / 0x000AE5D8: 0x5A000000"
+confidence = "high"
+
+[[register]]
+name   = "A2W_1F40"
+offset = 0x1F40
+access = "rw"
+notes  = "The bootcode clears it while it brings PLLD up through the *R registers, before and after lock. Not named by Linux."
+
+[[register.source]]
+kind       = "trace"
+ref        = "bootcode 0x8000ABE4 / 0x8000AC40 / 0x8000AC62, and bootmain again at 0x000AE550 / 0x000AE5B4 / 0x000AE5D8: 0x5A000000"
+confidence = "high"

@@ -26,7 +26,7 @@ Sources:
 | `0x030`–`0x130` (2 × 0x100) | [`PEEK1`](#peek1) | r | 32 | 1, best medium |
 | `0x034`–`0x134` (2 × 0x100) | [`SENDER1`](#sender1) | rw | 32 | 1, best medium |
 | `0x038`–`0x138` (2 × 0x100) | [`STATUS1`](#status1) | r | 32 | 2, best high |
-| `0x03C`–`0x13C` (2 × 0x100) | [`CONFIG1`](#config1) | rw | 32 | 1, best high |
+| `0x03C`–`0x13C` (2 × 0x100) | [`CONFIG1`](#config1) | rw | 32 | 2, best high |
 | `0x0C8` | [`PEND0`](#pend0) | rw | 32 | 1, best high |
 | `0x0CC` | [`PEND1`](#pend1) | rw | 32 | 2, best high |
 
@@ -183,6 +183,7 @@ MAIL1 interrupt enables and pending flags, laid out as CONFIG0.
 Sources:
 
 - decompile (high): receive op 0x3EC5AC0C arms it on empty; ISR 0x3EC58302 reads and re-arms 0x7E00B9BC
+- trace (high): pinned start4 writes the VPU's element (0x7E00B9BC) 0x8 at 0x3EC5AF6C and 0x1 at 0x3EC5AF7C, shortly before it releases the ARM
 
 ## `PEND0`
 
