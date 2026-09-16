@@ -21,6 +21,10 @@ Sources:
 |---|---|---|---|---|
 | `0x008` | [`VPUCTL`](#vpuctl) | rw | 32 | 2, best high |
 | `0x00C` | [`VPUDIV`](#vpudiv) | rw | 32 | 2, best high |
+| `0x020` | [`PERIICTL`](#periictl) | rw | 32 | 2, best high |
+| `0x024` | [`PERIIDIV`](#periidiv) | rw | 32 | 1, best high |
+| `0x030` | [`ISPCTL`](#ispctl) | rw | 32 | 2, best high |
+| `0x034` | [`ISPDIV`](#ispdiv) | rw | 32 | 2, best high |
 | `0x0E8` | [`TIMERCTL`](#timerctl) | rw | 32 | 2, best high |
 | `0x0EC` | [`TIMERDIV`](#timerdiv) | rw | 32 | 2, best high |
 | `0x0F0` | [`UARTCTL`](#uartctl) | rw | 32 | 3, best high |
@@ -30,6 +34,8 @@ Sources:
 | `0x108` | [`PLLC`](#pllc) | rw | 32 | 2, best high |
 | `0x10C` | [`PLLD`](#plld) | rw | 32 | 2, best high |
 | `0x114` | [`LOCK`](#lock) | r | 32 | 3, best high |
+| `0x128` | [`REG_128`](#reg_128) | rw | 32 | 1, best high |
+| `0x12C` | [`REG_12C`](#reg_12c) | rw | 32 | 1, best high |
 | `0x160` | [`DSI1PCTL`](#dsi1pctl) | rw | 32 | 3, best high |
 | `0x170` | [`PLLB`](#pllb) | rw | 32 | 2, best high |
 | `0x1C0` | [`EMMCCTL`](#emmcctl) | rw | 32 | 2, best high |
@@ -60,7 +66,7 @@ Sources:
 | `0x1320` | [`PLLC_CORE2`](#pllc_core2) | rw | 32 | 2, best high |
 | `0x1330` | [`A2W_1330`](#a2w_1330) | rw | 32 | 1, best high |
 | `0x1350` | [`A2W_1350`](#a2w_1350) | rw | 32 | 1, best high |
-| `0x1390` | [`A2W_1390`](#a2w_1390) | rw | 32 | 2, best high |
+| `0x1390` | [`A2W_1390`](#a2w_1390) | rw | 32 | 4, best high |
 | `0x13E0` | [`PLLB_ARM`](#pllb_arm) | rw | 32 | 2, best high |
 | `0x1400` | [`PLLA_CORE`](#plla_core) | rw | 32 | 2, best high |
 | `0x1420` | [`PLLC_CORE1`](#pllc_core1) | rw | 32 | 2, best high |
@@ -104,6 +110,49 @@ Sources:
 
 - linux (high): clk-bcm2835.c: CM_VPUDIV, CM_DIV_FRAC_BITS = 12
 - trace (high): start4: 0x5A001000 at 0x3EC7C448
+
+## `PERIICTL`
+
+Offset `0x020` · access `rw` · 32 bits
+
+Linux's image peripheral clock. start4 writes 0x40 (GATE alone: no source, not enabled) as it applies config.txt.
+
+Sources:
+
+- linux (high): clk-bcm2835.c: CM_PERIICTL
+- trace (high): start4: 0x5A000040 at 0x3ED48740
+
+## `PERIIDIV`
+
+Offset `0x024` · access `rw` · 32 bits
+
+Divider for PERIICTL. The pinned firmware does not write it.
+
+Sources:
+
+- linux (high): clk-bcm2835.c: CM_PERIIDIV
+
+## `ISPCTL`
+
+Offset `0x030` · access `rw` · 32 bits
+
+The ISP's clock generator. start4 starts it on the oscillator (0x1, then 0x11) with ISPDIV 0 as it applies config.txt, and moves it to SRC 4 (0x44, 0x54) with ISPDIV 0x1000 just before the ARM starts, along with Linux's H264CTL (+0x028) and V3DCTL (+0x038).
+
+Sources:
+
+- linux (high): clk-bcm2835.c: CM_ISPCTL
+- trace (high): start4: 0x5A000001 at 0x3ED48744, 0x5A000011 at 0x3ED48746; later 0x5A000001, 0x5A000044, 0x5A000054 from the generator helper (0x3EC7DDBA..0x3EC7DEC4)
+
+## `ISPDIV`
+
+Offset `0x034` · access `rw` · 32 bits
+
+Divider for ISPCTL: 0 as start4 applies config.txt, 0x1000 (divide by one) later.
+
+Sources:
+
+- linux (high): clk-bcm2835.c: CM_ISPDIV
+- trace (high): start4: 0x5A000000 at 0x3ED48742, later 0x5A001000 at 0x3EC7DE34
 
 ## `TIMERCTL`
 
@@ -368,6 +417,26 @@ Sources:
 `FLOCKH` sources:
 
 - linux (high): clk-bcm2835.c: CM_LOCK_FLOCKH
+
+## `REG_128`
+
+Offset `0x128` · access `rw` · 32 bits
+
+Not named by Linux (between CM_EVENT and CM_DSI1ECTL). start4 writes 0x36 here as it applies config.txt, then 0 to REG_12C. Whether this is a generator is not known.
+
+Sources:
+
+- trace (high): start4: 0x5A000036 at 0x3ED486EC
+
+## `REG_12C`
+
+Offset `0x12C` · access `rw` · 32 bits
+
+Not named by Linux. start4 writes 0 here right after REG_128.
+
+Sources:
+
+- trace (high): start4: 0x5A000000 at 0x3ED486F6
 
 ## `DSI1PCTL`
 
@@ -753,12 +822,14 @@ Sources:
 
 Offset `0x1390` · access `rw` · 32 bits
 
-The bootcode writes 1 here early, later reads it back and ORs in 0x300020 (writing 0x300021) before it starts the PLLs, right before it sets bit 9 of 0x7E500220; bootmain and start4 write the same value. Meaning unknown.
+The bootcode writes 1 here early, later reads it back and ORs in 0x300020 (writing 0x300021) before it starts the PLLs, right before it sets bit 9 of 0x7E500220; bootmain and start4 write the same value, and start4 ORs in 0x200001 again as it applies config.txt. Meaning unknown. Bits 0 and 5 sit where Linux's A2W_XOSC_CTRL (0x1190 on the BCM2835) keeps the PLLC and PLLD enables, the two PLLs the bootcode brings up.
 
 Sources:
 
 - decompile (high): bootcode 0x8000A7F6..0x8000A804: Ld r0, [0x7E102390]; Or r0, 0x5A300020; St r0
 - trace (high): bootcode: 0x5A000001 at 0x80002118, 0x5A300021 at 0x8000A804; bootmain 0x0008BE5C / 0x000AE118 and start4 0x3ED494C4: 0x5A300021
+- decompile (high): start4 0x3ED48700..0x3ED4870C: Ld r1, [0x7E102390]; Or r1, 0x5A200001; St r1 (0x5A300021 in the trace)
+- inferred (low): clk-bcm2835.c: A2W_XOSC_CTRL_PLLC_ENABLE = BIT(0), A2W_XOSC_CTRL_PLLD_ENABLE = BIT(5) — _a layout match only; 0x1390 is not 0x1190_
 
 ## `PLLB_ARM`
 

@@ -217,13 +217,13 @@ Sources:
 
 Offset `0x108` · access `rw` · 32 bits
 
-Image power domain: ISP and H264 resets among others.
+Image power domain: ISP and H264 resets among others. start4 writes 0x3C0 outright as it applies config.txt: PERIRSTN, H264RSTN and ISPRSTN, plus bit 9, which Linux does not name, with POWUP and the rest clear.
 
 Sources:
 
-- linux (high): bcm2835-power.c: PM_IMAGE, PM_ISPRSTN = BIT(8), PM_H264RSTN = BIT(7)
+- linux (high): bcm2835-power.c: PM_IMAGE, PM_ISPRSTN = BIT(8), PM_H264RSTN = BIT(7), PM_PERIRSTN = BIT(6)
 - decompile (high): power-domain switch 0x3ED54E40 writes 0x7E100108 & ~BIT(8) / & ~BIT(7)
-- trace (high): start4: 0x5A0003C0 at 0x3ED48734, during its graphics bring-up
+- trace (high): start4: 0x5A0003C0 at 0x3ED48734, in the routine at 0x3ED48528 that applies config.txt (the write is skipped when the flag at gp+5476 is clear)
 
 ## `GRAFX`
 
