@@ -5,15 +5,21 @@
   repository conventions and avoid unrelated cleanup.
 - Run the smallest relevant tests or build checks before finishing.
 - Do not commit secrets or generated firmware blobs.
-- **Never let CI or anything in `scripts/` depend on `rpi-dev`.** It is an
-  ad-hoc reference board that is only sometimes reachable, and CI runs in the
-  cloud. Measured values from it belong baked into the model with a source
-  comment saying where they came from — that is what `src/periph/avs.rs`,
-  `pvt.rs` and `xhci.rs` do. Anything that has to *reach* the board at build or
-  test time is a broken build waiting to happen. Benchmarking on it is fine, but
-  it is load-sensitive: check `/proc/loadavg` and skip rather than report a
-  number taken under contention.
-- **Never commit an OTP dump.** `vcgencmd otp_dump` on the reference board
+- **Name real hardware by board type, never by hostname.** When a doc,
+  comment, test, commit or issue cites a measurement or a test run on a real
+  board, write the model and revision code — `Raspberry Pi 4B d03114`, not
+  `rpi-dev`. A hostname only means something on one person's network; the
+  revision code (`Revision` in `/proc/cpuinfo`) says which model, PCB revision
+  and RAM size the value came from.
+- **Never let CI or anything in `scripts/` depend on real hardware.** The
+  reference boards are ad-hoc and only sometimes reachable, and CI runs in the
+  cloud. Measured values belong baked into the model with a source comment
+  saying which board they came from — that is what `src/periph/avs.rs`,
+  `pvt.rs` and `xhci.rs` do. Anything that has to *reach* a board at build or
+  test time is a broken build waiting to happen. Benchmarking on a board is
+  fine, but it is load-sensitive: check `/proc/loadavg` and skip rather than
+  report a number taken under contention.
+- **Never commit an OTP dump.** `vcgencmd otp_dump` on a real board
   includes device-unique and secret material — the board serial, the customer
   key hash, and the private key the `rpi-machine-id` / LUKS derivation depends
   on. Quoting one or two named rows whose value is genuinely needed as ground
