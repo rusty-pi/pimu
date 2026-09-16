@@ -17,8 +17,10 @@ Sources:
 
 | Offset | Name | Access | Width | Sources |
 |---|---|---|---|---|
+| `0x03C` | [`REG_03C`](#reg_03c) | rw | 32 | 1, best high |
+| `0x040` | [`REG_040`](#reg_040) | rw | 32 | 1, best high |
 | `0x1000` | [`L2_CTRL`](#l2_ctrl) | rw | 32 | 2, best medium |
-| `0x1004` | [`L2_FLUSH_START`](#l2_flush_start) | rw | 32 | 1, best medium |
+| `0x1004` | [`L2_FLUSH_START`](#l2_flush_start) | rw | 32 | 2, best medium |
 | `0x1008` | [`L2_FLUSH_END`](#l2_flush_end) | rw | 32 | 2, best medium |
 | `0x1080` | [`IRQ_STATUS`](#irq_status) | rw | 32 | 1, best medium |
 | `0x1084` | [`IRQ_SOURCE`](#irq_source) | rw | 32 | 1, best medium |
@@ -26,6 +28,26 @@ Sources:
 | `0x2000` | [`DOORBELL_B`](#doorbell_b) | rw | 32 | 1, best high |
 | `0x2100` | [`DOORBELL_C`](#doorbell_c) | rw | 32 | 1, best medium |
 | `0x2108` | [`DOORBELL_C_SIZE`](#doorbell_c_size) | rw | 32 | 1, best low |
+
+## `REG_03C`
+
+Offset `0x03C` · access `rw` · 32 bits
+
+start4 writes 0x0EC00000 here as it starts, then 0x0EC01FFF to REG_040, then 0x0EC00001 here: a base, a limit and bit 0 set last, over the start of the range start4 is linked at. Meaning unknown.
+
+Sources:
+
+- trace (high): pinned start4 entry: 0x0EC00000 at 0xFEC00DF6, 0x0EC00001 at 0xFEC00E0C
+
+## `REG_040`
+
+Offset `0x040` · access `rw` · 32 bits
+
+start4 writes 0x0EC01FFF here between its two REG_03C writes. Meaning unknown.
+
+Sources:
+
+- trace (high): pinned start4 entry: 0x0EC01FFF at 0xFEC00E02
 
 ## `L2_CTRL`
 
@@ -55,6 +77,7 @@ First address of the range L2_CTRL.FLUSH acts on.
 Sources:
 
 - trace (medium): written right before L2_FLUSH_END and the L2_CTRL command (#70)
+- trace (medium): pinned start4 writes ranges here all through the boot (0x3EC715EE; e.g. 0xBEF27640 with L2_FLUSH_END 0xBEF4763F), the same pair to 0x7EE02104 / DOORBELL_C_SIZE just before, and L2_CTRL commands 0x430000 / 0x430014 (0x3EC7119E, 0x3EC71668)
 
 ## `L2_FLUSH_END`
 

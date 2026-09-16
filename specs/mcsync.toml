@@ -76,3 +76,19 @@ kind       = "trace"
 ref        = "--log irqen: neither core calls enable_irq_source for 76 or 77"
 confidence = "medium"
 note       = "so the interrupt path itself is not exercised by the boot so far"
+
+[[register]]
+name   = "LOCK"
+offset = 0xC0
+access = "rw"
+notes  = "start4 reads this word and writes its own address back into it from dozens of places, tens of thousands of times a boot; it reads 0 in the model. By the look of it a lock word the two cores claim."
+
+[[register.source]]
+kind       = "trace"
+ref        = "pinned start4: reads at 0x3EC3C6F6, 0x3EC3E1CC and others, each followed by 0x7E0000C0 <- 0x7E0000C0 (0x3EC3C756, 0x3EC3E23A, ...); the busiest pair of sites is 0x3ED651D8 / 0x3ED65216"
+confidence = "high"
+
+[[register.source]]
+kind       = "inferred"
+ref        = "read, then write your own address, is a claim protocol; nothing in the boot reads it back as anything but 0"
+confidence = "low"
