@@ -15,7 +15,7 @@ Generated from the TOML specs in [`specs/`](../../specs/); see [`specs/README.md
 | [`bootbox`](bootbox.md) | vpu | `0x7EE00000` | `0x4000` | 11 | Boot-info handoff doorbells, and the VPU interrupt window start4's exception-12 handler reads |
 | [`bsc`](bsc.md) | vpu | `0x7E205000` | `0x20` | 8 | BSC (I²C master): instance 0 with nothing attached, and the instance the board PMICs and GPIO expander sit on |
 | [`clkmon`](clkmon.md) | vpu | `0x7D5D0000` | `0x10000` | 5 | VPU clock block (PLLs and frequency monitors) below the 0x7E window |
-| [`cm`](cm.md) | vpu | `0x7E101000` | `0x2000` | 54 | Clock manager, with the A2W PLL control in the same window |
+| [`cm`](cm.md) | vpu | `0x7E101000` | `0x2000` | 69 | Clock manager, with the A2W PLL control in the same window |
 | [`corectl`](corectl.md) | vpu | `0x7E002000` | `0x1000` | 5 | VPU core control: per-core boot handshake and interrupt controller |
 | [`dma`](dma.md) | vpu | `0x7E007000` | `0x1000` | 11 | Legacy DMA controller: 15 channels 0x100 apart plus the controller-wide interrupt status and enable words |
 | [`dma4`](dma4.md) | vpu | `0x7E007B00` | `0x100` | 3 | DMA4 ('dma40') channel: the 40-bit DMA engine the bootloader and start4 use |
@@ -38,7 +38,7 @@ Generated from the TOML specs in [`specs/`](../../specs/); see [`specs/README.md
 | [`mcsync`](mcsync.md) | vpu | `0x7E000000` | `0x1000` | 5 | Doorbells / semaphores between the two VPU cores |
 | [`otp`](otp.md) | vpu | `0x7E20F000` | `0x1000` | 7 | Always-on config / OTP engine: the fuse array, one row at a time – reads and programming |
 | [`pcie`](pcie.md) | vpu | `0x7D500000` | `0x9310` | 36 | PCIe root complex (pcie-brcmstb), with the VL805 xHCI controller behind it |
-| [`pm`](pm.md) | vpu | `0x7E100000` | `0x1000` | 15 | Power management: reset control, reset status, watchdog, power-domain registers |
+| [`pm`](pm.md) | vpu | `0x7E100000` | `0x1000` | 17 | Power management: reset control, reset status, watchdog, power-domain registers |
 | [`pmic_1d`](pmic_1d.md) | i2c | `0x1D` | `0x100` | 6 | Board PMIC at 0x1D on every Pi 4-family board but the 4B rev 1.5 (start4 descriptor type 0x81) |
 | [`pmic_core`](pmic_core.md) | i2c | `0x1E` | `0x100` | 2 | Board PMIC owning the SoC core rail (start4 descriptor type 0x82) |
 | [`pmic_rails`](pmic_rails.md) | i2c | `0x1B` | `0x100` | 5 | Board PMIC owning the SDRAM and I/O rails (start4 descriptor type 0x83) |

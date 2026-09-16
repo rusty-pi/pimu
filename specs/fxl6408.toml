@@ -56,13 +56,18 @@ kind       = "linux"
 ref        = "gpio-fxl6408.c: FXL6408_MF_FAIRCHILD"
 confidence = "high"
 
+[[block.source]]
+kind       = "trace"
+ref        = "pinned start4, once its board clock set-up is done: DEVICE_ID read, then DEVICE_ID <- 1 in one session; INT_MASK 0xFF, PULL_ENABLE 0, PULL_UP 0, INPUT_DEFAULT 0x84, OUTPUT 0x40, IO_DIR 0x7F, OUTPUT_HIGH_Z 0 in the next (write helper 0x3ECF141E); the same with dtoverlay=disable-bt or disable-wifi removed, except for the OUTPUT write at the end"
+confidence = "high"
+
 [[register]]
 name   = "IO_DIR"
 offset = 0x03
 width  = 8
 access = "rw"
 reset  = 0x00
-notes  = "1 = output."
+notes  = "1 = output. start4 writes 0x7F: the seven pins pins_4b configures as outputs, GPIO 128-134."
 
 [[register.source]]
 kind       = "datasheet"
@@ -75,7 +80,7 @@ offset = 0x05
 width  = 8
 access = "rw"
 reset  = 0x00
-notes  = "1 = drive high."
+notes  = "1 = drive high. start4 writes the whole register each time, each write in a bus session of its own: 0x40 (SD_PWR_ON) in its set-up, then twice more, the two pins_4b nodes that name a startup state being GPIO 134 and 130; after ~200 ms WL_ON (bit 1) and after another ~200 ms BT_ON (bit 0); with camera_auto_detect, bit 5 (the camera's power) cleared, set ~5 ms later, and cleared twice after the sensor probes. Once it has the command line it clears BT_ON if the device tree's bt node is disabled, then WL_ON if mmcnr is."
 
 [[register.source]]
 kind       = "datasheet"
@@ -101,7 +106,7 @@ offset = 0x09
 width  = 8
 access = "rw"
 reset  = 0x00
-notes  = "Default input state for interrupts."
+notes  = "Default input state for interrupts. start4 writes 0x84: bit 2 is PWR_LED_OFF, the one active-low pin in pins_4b, and bit 7 is SD_OC_N, which pin_config does not list."
 
 [[register.source]]
 kind       = "datasheet"
@@ -114,7 +119,7 @@ offset = 0x0B
 width  = 8
 access = "rw"
 reset  = 0xFF
-notes  = "1 = pull resistor on."
+notes  = "1 = pull resistor on. start4 writes 0, since every expander pin in pins_4b is no_pulling; the bootloader had enabled one on SD_OC_N (0x80)."
 
 [[register.source]]
 kind       = "datasheet"
@@ -127,7 +132,7 @@ offset = 0x0D
 width  = 8
 access = "rw"
 reset  = 0x00
-notes  = "1 = pull-up, 0 = pull-down."
+notes  = "1 = pull-up, 0 = pull-down. start4 writes 0."
 
 [[register.source]]
 kind       = "datasheet"
@@ -157,7 +162,7 @@ offset = 0x11
 width  = 8
 access = "rw"
 reset  = 0x00
-notes  = "Interrupt mask."
+notes  = "Interrupt mask. start4 writes 0xFF first in its set-up."
 
 [[register.source]]
 kind       = "datasheet"
