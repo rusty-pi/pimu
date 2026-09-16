@@ -19,7 +19,7 @@ Sources:
 |---|---|---|---|---|
 | `0x03C` | [`REG_03C`](#reg_03c) | rw | 32 | 1, best high |
 | `0x040` | [`REG_040`](#reg_040) | rw | 32 | 1, best high |
-| `0x1000` | [`L2_CTRL`](#l2_ctrl) | rw | 32 | 2, best medium |
+| `0x1000` | [`L2_CTRL`](#l2_ctrl) | rw | 32 | 4, best high |
 | `0x1004` | [`L2_FLUSH_START`](#l2_flush_start) | rw | 32 | 2, best medium |
 | `0x1008` | [`L2_FLUSH_END`](#l2_flush_end) | rw | 32 | 2, best medium |
 | `0x1080` | [`IRQ_STATUS`](#irq_status) | rw | 32 | 1, best medium |
@@ -53,7 +53,7 @@ Sources:
 
 Offset `0x1000` · access `rw` · 32 bits
 
-The L2 cache's maintenance port, as far as the evidence goes. The stub the bootcode relocates to 0x60010000 writes a range to L2_FLUSH_START / L2_FLUSH_END, then 0x14 here, and polls until it reads back 0x10, right before it jumps to the next stage; bootmain does the same with 0x44 over single buffers. The low bits read back clear. The model takes FLUSH as clean-and-invalidate over the range, which ends the bootcode's cache-as-RAM window (src/l2.rs, #70).
+The L2 cache's maintenance port, as far as the evidence goes. The stub the bootcode relocates to 0x60010000 writes a range to L2_FLUSH_START / L2_FLUSH_END, then 0x14 here, and polls until it reads back 0x10, right before it jumps to the next stage; bootmain does the same with 0x44 over single buffers. The low bits read back clear. The model takes FLUSH as clean-and-invalidate over the range, which ends the bootcode's cache-as-RAM window (src/l2.rs, #70). start4 configures it as it starts, (value & 0xFFF0FFE5) | 0x430000, and uses 0x430014, 0x430044, 0x430050 and 0x430054 from then on; bit 1 it sets once, as it applies config.txt (0x430042 in the trace).
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -63,6 +63,8 @@ Sources:
 
 - decompile (medium): stub at 0x60010000 writes a trigger to 0x7EE01000 and polls it
 - trace (medium): 2022-04-26 and pinned bootcode: 0x7EE01004 = 0, 0x7EE01008 = 0x0FFFFFE0, then 0x14 to 0x7EE01000; pinned bootmain: 0x00A20000..0x00A20116, then 0x44 (#70)
+- decompile (high): start4 entry 0x3EC7114E..0x3EC7119E: reads it (bit 0 test), then And 0xFFF0FFE5, Or 0x430000, St; 0x3ED486CE..0x3ED486D2 sets bit 1 when the word at gp+838588 is 0
+- trace (high): pinned start4: 0x430000 at 0x3EC7119E, 0x430044 at 0x3EC715A0, 0x430014 / 0x430054 at 0x3EC71668, 0x430050 at 0x3EC9806A, 0x430042 at 0x3ED486D2
 
 `FLUSH` sources:
 

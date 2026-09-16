@@ -294,11 +294,11 @@ confidence = "high"
 name   = "IMAGE"
 offset = 0x108
 access = "rw"
-notes  = "Image power domain: ISP and H264 resets among others."
+notes  = "Image power domain: ISP and H264 resets among others. start4 writes 0x3C0 outright as it applies config.txt: PERIRSTN, H264RSTN and ISPRSTN, plus bit 9, which Linux does not name, with POWUP and the rest clear."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcm2835-power.c: PM_IMAGE, PM_ISPRSTN = BIT(8), PM_H264RSTN = BIT(7)"
+ref        = "bcm2835-power.c: PM_IMAGE, PM_ISPRSTN = BIT(8), PM_H264RSTN = BIT(7), PM_PERIRSTN = BIT(6)"
 confidence = "high"
 
 [[register.source]]
@@ -308,7 +308,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "trace"
-ref        = "start4: 0x5A0003C0 at 0x3ED48734, during its graphics bring-up"
+ref        = "start4: 0x5A0003C0 at 0x3ED48734, in the routine at 0x3ED48528 that applies config.txt (the write is skipped when the flag at gp+5476 is clear)"
 confidence = "high"
 
 [[register]]
