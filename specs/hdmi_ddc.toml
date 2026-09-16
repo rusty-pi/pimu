@@ -130,7 +130,7 @@ confidence = "high"
 name   = "IIC_ENABLE"
 offset = 0x2C
 access = "rw"
-notes  = "Writing `ENABLE` starts a transfer; `INTRP` and `NOACK` are computed status."
+notes  = "Writing `ENABLE` starts a transfer; `INTRP` and `NOACK` are computed status. start4 runs a transfer as `CTL` `0xD0`, `CTLHI` `0x40`, a read of the core's hotplug word, `CHIP_ADDRESS`, `CTLHI |= 0x40`, `CNT`, `DATA_IN`, `CTL` direction bits set, then this register `|= 0x53`; after the polls and one more status read it writes `CTL` `0x90`, `CNT` `0` and `0` here."
 
 [[register.source]]
 kind       = "linux"
@@ -140,6 +140,11 @@ confidence = "high"
 [[register.source]]
 kind       = "decompile"
 ref        = "`0x3ECE6D5C`: up to 20 polls of `read(0x2c) & 2` 5 ms apart ('timed out'), then `read(0x2c) & 4` ('no ACK')"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "pinned start4, HDMI0 with nothing attached: `0x7EF04528` `0xD0`, `0x7EF04550` `0x40`, `0x7EF008A8` read, `0x7EF04500` `0xA0`, `0x7EF04550` `0x40`, `0x7EF04524` `1`, `0x7EF04504` `0`, `0x7EF04528` `0xD0`, `0x53` here (reads `0x51`, `0x57`, `0x57`), then `0x7EF04528` `0x90`, `0x7EF04524` `0`, `0` here; all written at `0x3ECE6ED0`"
 confidence = "high"
 
 [[register.field]]

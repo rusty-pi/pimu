@@ -29,7 +29,7 @@ HDMI1's DDC master; HDMI0's is the block base.
 | `0x004`–`0x020` (8 × 0x4) | [`DATA_IN`](#data_in) | rw | 32 | 1, best high |
 | `0x024` | [`CNT`](#cnt) | rw | 32 | 1, best high |
 | `0x028` | [`CTL`](#ctl) | rw | 32 | 1, best high |
-| `0x02C` | [`IIC_ENABLE`](#iic_enable) | rw | 32 | 2, best high |
+| `0x02C` | [`IIC_ENABLE`](#iic_enable) | rw | 32 | 3, best high |
 | `0x030`–`0x04C` (8 × 0x4) | [`DATA_OUT`](#data_out) | r | 32 | 1, best high |
 | `0x050` | [`CTLHI`](#ctlhi) | rw | 32 | 1, best high |
 | `0x054` | [`SCL_PARAM`](#scl_param) | rw | 32 | 1, best high |
@@ -109,7 +109,7 @@ Sources:
 
 Offset `0x02C` · access `rw` · 32 bits
 
-Writing `ENABLE` starts a transfer; `INTRP` and `NOACK` are computed status.
+Writing `ENABLE` starts a transfer; `INTRP` and `NOACK` are computed status. start4 runs a transfer as `CTL` `0xD0`, `CTLHI` `0x40`, a read of the core's hotplug word, `CHIP_ADDRESS`, `CTLHI |= 0x40`, `CNT`, `DATA_IN`, `CTL` direction bits set, then this register `|= 0x53`; after the polls and one more status read it writes `CTL` `0x90`, `CNT` `0` and `0` here.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -124,6 +124,7 @@ Sources:
 
 - linux (high): `i2c-brcmstb.c`: `bsc_regs.iic_enable`
 - decompile (high): `0x3ECE6D5C`: up to 20 polls of `read(0x2c) & 2` 5 ms apart ('timed out'), then `read(0x2c) & 4` ('no ACK')
+- trace (high): pinned start4, HDMI0 with nothing attached: `0x7EF04528` `0xD0`, `0x7EF04550` `0x40`, `0x7EF008A8` read, `0x7EF04500` `0xA0`, `0x7EF04550` `0x40`, `0x7EF04524` `1`, `0x7EF04504` `0`, `0x7EF04528` `0xD0`, `0x53` here (reads `0x51`, `0x57`, `0x57`), then `0x7EF04528` `0x90`, `0x7EF04524` `0`, `0` here; all written at `0x3ECE6ED0`
 
 `ENABLE` sources:
 
