@@ -14,6 +14,7 @@ Sources:
 - datasheet (high): BCM2711 ARM Peripherals, BSC chapter
 - decompile (high): start4's I²C driver FUN_0ecf0ed0 picks the base from the bus id: 0 -> 0x7E205000, 8 -> 0x7E205E00, else 0x7E803000 + id * 0x1000
 - trace (high): late in the boot start4 probes 0x52 on instance 0 for a HAT EEPROM; unmapped, S read 0 and the poll never ended
+- trace (high): pinned start4 on instance 0, each probe in a session of its own at DIV 0x1388 with I2C0 muxed to GPIO 44/45 (ALT1) and released after: camera_auto_detect reads 0x10 reg 0x0000, 0x36 reg 0x300A, 0x1A reg 0x0016, 32 bytes from 0x40, 0x1A reg 0x303E, 0x1A reg 0x0016 and 0x1A reg 0x3254 (twice each); after each 'DISPLAY_DSI_PORT not defined' it reads 0x45 reg 0x80, then reg 0x01, whether or not display_auto_detect is set; later, unless force_eeprom_read=0, 0x50-0x53 in a session each on GPIO 0/1 (ALT0), up to ten queued reads of 4 bytes from reg 0x0000 per address — _checked by booting with camera_auto_detect and display_auto_detect removed from config.txt in turn, and with force_eeprom_read=0 added_
 
 `PMIC` copy:
 
@@ -25,20 +26,20 @@ Bus 8: the PMICs at 0x1B / 0x1E and the FXL6408 at 0x43.
 
 | Offset | Name | Access | Width | Sources |
 |---|---|---|---|---|
-| `0x000` | [`C`](#c) | rw | 32 | 1, best high |
+| `0x000` | [`C`](#c) | rw | 32 | 2, best high |
 | `0x004` | [`S`](#s) | rw | 32 | 1, best high |
 | `0x008` | [`DLEN`](#dlen) | rw | 32 | 1, best high |
 | `0x00C` | [`A`](#a) | rw | 32 | 1, best high |
 | `0x010` | [`FIFO`](#fifo) | rw | 32 | 1, best high |
-| `0x014` | [`DIV`](#div) | rw | 32 | 2, best high |
+| `0x014` | [`DIV`](#div) | rw | 32 | 3, best high |
 | `0x018` | [`DEL`](#del) | rw | 32 | 1, best high |
-| `0x01C` | [`CLKT`](#clkt) | rw | 32 | 1, best high |
+| `0x01C` | [`CLKT`](#clkt) | rw | 32 | 2, best high |
 
 ## `C`
 
 Offset `0x000` · access `rw` · 32 bits
 
-Control.
+Control. start4 reads a register in one of two ways. Either it sets ST for the write, then sets DLEN and ST | READ for the read before it puts the register bytes in the FIFO, so the read follows as a repeated start (sensor probes, the expander's id). Or it writes the register, waits for DONE, then starts the read (the display probe). Every read ends with C written back as read, S cleared, the FIFO cleared twice and C <- 0.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -50,6 +51,7 @@ Control.
 Sources:
 
 - datasheet (high): BCM2711 ARM Peripherals, BSC: C
+- trace (high): pinned start4: queued read at 0x3ECF0FD8 / 0x3ECF1150 with the FIFO writes at 0x3ECF115A after it; write-then-read at 0x3ECF0FD8, FIFO at 0x3ECF1046, then 0x3ECF1100; the common end at 0x3ECF2F92, 0x3ECF2FFC, 0x3ECF1826 / 0x3ECF185A, 0x3ECF3028
 
 `READ` sources:
 
@@ -164,18 +166,19 @@ Sources:
 
 Offset `0x014` · access `rw` · 32 bits
 
-Clock divisor. start4 programs 5000 (100 kHz) for the PMIC bus, 2500 for its probe sweep, 540 for HDMI DDC.
+Clock divisor. start4 programs 5000 (100 kHz) for its PMIC sessions and 2500 for its FXL6408 sessions on the PMIC bus, 2500 for its probe sweep, 540 for HDMI DDC. Each session starts with DIV, then DEL, then CLKT.
 
 Sources:
 
 - datasheet (high): BCM2711 ARM Peripherals, BSC: DIV
 - measured (high): vcgencmd measure_clock core on rpi-dev: 500000992 Hz
+- trace (high): pinned start4 on 0x7E205E00: 0x9C4 at 0x3ECF2E56 before its FXL6408 transfers, 0x1388 before the ones to 0x1B / 0x1E
 
 ## `DEL`
 
 Offset `0x018` · access `rw` · 32 bits
 
-Data delay. Stored, otherwise ignored.
+Data delay. Stored, otherwise ignored. start4 pairs it with DIV: 0x9C0271 with 2500, 0x13804E2 with 5000.
 
 Sources:
 
@@ -185,8 +188,9 @@ Sources:
 
 Offset `0x01C` · access `rw` · 32 bits
 
-Clock-stretch timeout. Stored, otherwise ignored.
+Clock-stretch timeout. Stored, otherwise ignored. start4 writes the session's timeout (0x100, or 0x200 for the display probe) when it opens a session and before every transfer, and 0x100 again after it closes one.
 
 Sources:
 
 - datasheet (high): BCM2711 ARM Peripherals, BSC: CLKT
+- trace (high): pinned start4: 0x100 at 0x3ECF2DD6 (session open, transfer start) and 0x3ECF2DFE (after the close at 0x3ECF2ECC)
