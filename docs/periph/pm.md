@@ -18,8 +18,8 @@ Sources:
 
 | Offset | Name | Access | Width | Sources |
 |---|---|---|---|---|
-| `0x01C` | [`RSTC`](#rstc) | rw | 32 | 1, best high |
-| `0x020` | [`RSTS`](#rsts) | rw | 32 | 2, best high |
+| `0x01C` | [`RSTC`](#rstc) | rw | 32 | 3, best high |
+| `0x020` | [`RSTS`](#rsts) | rw | 32 | 3, best high |
 | `0x024` | [`WDOG`](#wdog) | rw | 32 | 1, best high |
 | `0x028` | [`PADS0`](#pads0) | rw | 32 | 2, best high |
 | `0x02C` | [`PADS2`](#pads2) | rw | 32 | 4, best high |
@@ -40,7 +40,7 @@ Sources:
 
 Offset `0x01C` · access `rw` · 32 bits
 
-Reset control. Arming a full reset starts the watchdog; clearing WRCFG stops it.
+Reset control. Arming a full reset starts the watchdog; clearing WRCFG stops it. As it starts, start4 ORs 0x3000 into it (bits 13:12, meaning unknown) just before the PLL power words, then does the same watchdog set-up as the bootcode: WRCFG cleared, bits 9:8 set to 2, bits 1:0 set to 2 (0x3202 in the trace), and RSTS cleared if HADWRF is set. It skips the set-up when the bootloader's `PWRB` tag says so.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -50,6 +50,8 @@ Reset control. Arming a full reset starts the watchdog; clearing WRCFG stops it.
 Sources:
 
 - linux (high): bcm2835_wdt_start writes PM_PASSWORD | 0x3222 style values, bcm2835_wdt_stop writes 0x102
+- decompile (high): start4: `_DAT_7e10001c |= 0x5a003000` in 0x3ED55D20; watchdog set-up 0x3ED6226E: `(v & ~0x30)`, `(v & ~0x300) | 0x200`, `(v & ~3) | 2`, unless the `PWRB` tag's word at +140 is non-zero
+- trace (high): start4: reads 0x202 and writes 0x5A003202 at 0x3ED55D38, then 0x5A003202 at 0x3ED6229E, 0x3ED622AC and 0x3ED622BC
 
 `WRCFG` sources:
 
@@ -63,7 +65,7 @@ Sources:
 
 Offset `0x020` · access `rw` · 32 bits · reset `0x20`
 
-Which reset source fired last. The bootloader also packs the partition to boot into the even bits 0..10, which the odd HADWRF bit does not disturb.
+Which reset source fired last. The bootloader also packs the partition to boot into the even bits 0..10, which the odd HADWRF bit does not disturb. start4's watchdog set-up writes the password alone (0) here when HADWRF is set.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -72,6 +74,7 @@ Which reset source fired last. The bootloader also packs the partition to boot i
 Sources:
 
 - measured (high): the reference board's bootloader prints 'PM_RSTS 00000020' after power-on
+- trace (high): start4: reads 0x20 twice at 0x3ED622BE / 0x3ED622C0, writes 0x5A000000 at 0x3ED622CC
 - decompile (high): partition field in the even bits (mask 0x555): FUN_00000578 / FUN_00000666 in firmware/source/pieeprom.bin.c
 
 `HADWRF` sources:

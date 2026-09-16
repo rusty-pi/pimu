@@ -19,7 +19,7 @@ Sources:
 
 | Offset | Name | Access | Width | Sources |
 |---|---|---|---|---|
-| `0x008` | [`VPUCTL`](#vpuctl) | rw | 32 | 2, best high |
+| `0x008` | [`VPUCTL`](#vpuctl) | rw | 32 | 3, best high |
 | `0x00C` | [`VPUDIV`](#vpudiv) | rw | 32 | 2, best high |
 | `0x020` | [`PERIICTL`](#periictl) | rw | 32 | 2, best high |
 | `0x024` | [`PERIIDIV`](#periidiv) | rw | 32 | 1, best high |
@@ -48,8 +48,15 @@ Sources:
 | `0x1E4` | [`GEN_1E0_DIV`](#gen_1e0_div) | rw | 32 | 1, best high |
 | `0x1E8` | [`GEN_1E8_CTL`](#gen_1e8_ctl) | rw | 32 | 2, best high |
 | `0x1EC` | [`GEN_1E8_DIV`](#gen_1e8_div) | rw | 32 | 1, best high |
+| `0x1F0` | [`GEN_1F0_CTL`](#gen_1f0_ctl) | rw | 32 | 2, best high |
+| `0x1F4` | [`GEN_1F0_DIV`](#gen_1f0_div) | rw | 32 | 1, best high |
+| `0x200` | [`GEN_200_CTL`](#gen_200_ctl) | rw | 32 | 2, best high |
+| `0x204` | [`GEN_200_DIV`](#gen_200_div) | rw | 32 | 1, best high |
+| `0x208` | [`GEN_208_CTL`](#gen_208_ctl) | rw | 32 | 2, best high |
+| `0x20C` | [`GEN_208_DIV`](#gen_208_div) | rw | 32 | 1, best high |
 | `0x210` | [`GEN_210_CTL`](#gen_210_ctl) | rw | 32 | 2, best high |
 | `0x214` | [`GEN_210_DIV`](#gen_210_div) | rw | 32 | 1, best high |
+| `0x218` | [`REG_218`](#reg_218) | rw | 32 | 2, best high |
 | `0x23C` | [`GEN_23C_CTL`](#gen_23c_ctl) | rw | 32 | 2, best high |
 | `0x240` | [`GEN_23C_DIV`](#gen_23c_div) | rw | 32 | 1, best high |
 | `0x1010`–`0x101C` (4 × 0x4) | [`PLLA_ANA`](#plla_ana) | rw | 32 | 2, best high |
@@ -95,12 +102,13 @@ Sources:
 
 Offset `0x008` · access `rw` · 32 bits
 
-The VPU's own clock generator. start4 writes 0x71 early, and SRC 4 (PLLA's core channel) with ENAB and GATE once PLLA runs.
+The VPU's own clock generator. start4 writes 0x71 early, and SRC 4 (PLLA's core channel) with ENAB and GATE once PLLA runs. 0x71 is the oscillator: start4 moves the VPU there (`(value & ~0xF) | 1`, divider 1) before it switches PLLC off, parks it there again around PLLA's reprogramming and writes its saved words back once PLLA has locked. The move to SRC 4 goes the way its generator code moves a running clock that keeps its source: divider first, no stop, the control word written twice.
 
 Sources:
 
 - linux (high): clk-bcm2835.c: CM_VPUCTL
 - trace (high): start4: 0x5A000071 at 0x3EC7C434, later 0x5A000054 at 0x3EC7DE96
+- trace (high): start4 PLLA bring-up: `VPUCTL` rewritten 0x5A000071 at 0x3EC7ECEA and `VPUDIV` 0x5A001000 at 0x3EC7ECF8 before the PLL words, both written back at 0x3EC7EF04 / 0x3EC7EF0C after the lock
 
 ## `VPUDIV`
 
@@ -592,6 +600,69 @@ Sources:
 
 - trace (high): start4: 0x5A003000 at 0x3EC7DE34
 
+## `GEN_1F0_CTL`
+
+Offset `0x1F0` · access `rw` · 32 bits
+
+A clock generator Linux's clk-bcm2835 does not list, laid out as UARTCTL. The bootcode leaves it running on the oscillator (0x11, divider 0x2000); start4's platform init asks for 27 MHz from it and, the source unchanged, rewrites it with GATE (0x51) without stopping it.
+
+Sources:
+
+- trace (high): start4: reads 0x11 at 0x3EC7DBBC, writes 0x5A000051 at 0x3EC7DE96 and 0x3EC7DEC4
+- decompile (high): start4 platform init 0x3ED4947A asks for clock 72 at 27 MHz (0x3ED494BC..0x3ED494E2)
+
+## `GEN_1F0_DIV`
+
+Offset `0x1F4` · access `rw` · 32 bits
+
+Divider for GEN_1F0_CTL, 12 fractional bits. 0x2000 (2) off the 54 MHz oscillator: 27 MHz.
+
+Sources:
+
+- trace (high): start4: 0x5A002000 at 0x3EC7DE34
+
+## `GEN_200_CTL`
+
+Offset `0x200` · access `rw` · 32 bits
+
+A clock generator Linux's clk-bcm2835 does not list, laid out as UARTCTL. start4's platform init starts it on SRC 5, PLLC's peripheral channel, at 108 MHz, right after it has programmed PLLC and before it turns that channel on.
+
+Sources:
+
+- trace (high): start4: 0x5A000000 at 0x3EC7DDBA, 0x5A000045 at 0x3EC7DE96, 0x5A000055 at 0x3EC7DEC4, then `A2W_PLLC_PER` 0x5A000004 at 0x3EC7E954
+- decompile (high): start4 platform init 0x3ED4947A asks for clock 74 at 108 MHz (0x3ED494E6..0x3ED49504)
+
+## `GEN_200_DIV`
+
+Offset `0x204` · access `rw` · 32 bits
+
+Divider for GEN_200_CTL, 12 fractional bits. 0x6000 (6) off PLLC's 648 MHz channel: 108 MHz.
+
+Sources:
+
+- trace (high): start4: 0x5A006000 at 0x3EC7DE34
+
+## `GEN_208_CTL`
+
+Offset `0x208` · access `rw` · 32 bits
+
+A clock generator Linux's clk-bcm2835 does not list, laid out as UARTCTL. start4's platform init starts it on SRC 5, PLLC's peripheral channel, at 81 MHz.
+
+Sources:
+
+- trace (high): start4: 0x5A000000 at 0x3EC7DDBA, 0x5A000045 at 0x3EC7DE96, 0x5A000055 at 0x3EC7DEC4
+- decompile (high): start4 platform init 0x3ED4947A asks for clock 32 at 81 MHz (0x3ED49508..0x3ED49526)
+
+## `GEN_208_DIV`
+
+Offset `0x20C` · access `rw` · 32 bits
+
+Divider for GEN_208_CTL, 12 fractional bits. 0x8000 (8) off PLLC's 648 MHz channel: 81 MHz.
+
+Sources:
+
+- trace (high): start4: 0x5A008000 at 0x3EC7DE34
+
 ## `GEN_210_CTL`
 
 Offset `0x210` · access `rw` · 32 bits
@@ -612,6 +683,17 @@ Divider for GEN_210_CTL, 12 fractional bits. 0x6000 (6) off PLLD's 750 MHz chann
 Sources:
 
 - trace (high): start4: 0x5A006000 at 0x3EC7DE34
+
+## `REG_218`
+
+Offset `0x218` · access `rw` · 32 bits
+
+start4's platform init sets bit 7 here (read, OR 0x80, write) before it asks for any clock. Meaning unknown; reads 0 before that in the model.
+
+Sources:
+
+- decompile (high): start4 0x3ED4949A..0x3ED494A4: `Ld r0, [0x7E101218]; Or r0, 0x5A000080; St r0`
+- trace (high): start4: 0x5A000080 at 0x3ED494A4
 
 ## `GEN_23C_CTL`
 
