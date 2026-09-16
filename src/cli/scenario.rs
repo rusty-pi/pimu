@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 
+use rpi_virt_fw::harness::boot::{GoldenCheck, RetiredCounts};
 use rpi_virt_fw::harness::{self, GoldenOutcome};
 
 /// `run <scenario.toml>`: one in-process scenario against its golden
@@ -109,9 +110,10 @@ fn run_one(scn: &harness::Scenario, update: bool, verbose: bool) -> Result<bool>
 /// `boot-check <scenario.toml>`: the firmware-boot regression (#97).
 ///
 /// Runs the boot the scenario describes, once — it takes minutes, and the wall
-/// clock has little headroom — and checks what it left behind two ways: the
+/// clock has little headroom — and checks what it left behind three ways: the
 /// console against the golden transcript, the combined output against the
-/// milestones. `--update` rewrites the golden instead of failing on it.
+/// milestones and the pinned retired counts (#85). `--update` rewrites the
+/// golden and the counts instead of failing on them.
 ///
 /// * `--output <log>`: where the combined stdout and stderr go (`boot.log`),
 ///   with the console next to it as `<log>.console` — the two files CI keeps.
@@ -296,8 +298,8 @@ fn run_boot(scn: &harness::BootScenario, log: &Path, console: &Path) -> Result<O
 }
 
 /// Check a finished run: the console against the golden transcript, `log`
-/// against the milestones. `update` rewrites the golden first, unless the run
-/// failed a milestone.
+/// against the milestones and the retired counts. `update` rewrites the golden
+/// and the counts first, unless the run failed a milestone.
 fn check_boot(
     scn: &harness::BootScenario,
     log_path: &Path,
@@ -336,14 +338,27 @@ fn check_boot(
             scn.golden_path().display(),
             transcript.lines().count()
         );
+        // The milestones passed, so the report is there.
+        let counts = RetiredCounts::from_log(&log_text)
+            .context("the run log has no retired counts to record")?;
+        let changed = match harness::boot::check_retired(scn, &counts) {
+            Ok(GoldenCheck::Mismatch(diff)) => diff,
+            _ => String::new(),
+        };
+        harness::boot::write_retired(scn, &counts)?;
+        println!("updated retired counts {}", scn.retired_path().display());
+        for line in changed.lines() {
+            println!("  {line}");
+        }
     }
 
     let failures = harness::boot::check_run(scn, &log_text, &transcript)?;
     println!(
-        "\n{}: {} milestone(s) + golden transcript ({} lines)",
+        "\n{}: {} milestone(s) + golden transcript ({} lines) + retired counts ({} core(s))",
         scn.name,
         scn.milestones.len(),
-        transcript.lines().count()
+        transcript.lines().count(),
+        RetiredCounts::from_log(&log_text).map_or(0, |c| c.0.len())
     );
     if failures.is_empty() {
         println!("boot check passed");

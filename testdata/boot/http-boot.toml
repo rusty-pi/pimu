@@ -13,7 +13,7 @@
 # model's copy of the EEPROM (`eeprom_pubkey`, as `rpi-eeprom-config --pubkey`
 # would put it there).
 #
-# Re-record the golden with:
+# Re-record the golden and the retired counts with:
 #   rpi-virt-fw boot-check testdata/boot/http-boot.toml --update
 
 name = "http-boot"

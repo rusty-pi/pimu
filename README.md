@@ -79,7 +79,8 @@ Working:
 - **Regression harness** (`src/harness/`) — TOML scenarios in, console
   transcript out, diffed against a golden file. `--update` to re-baseline.
   Each boot is a scenario in `testdata/boot/`: a golden transcript of the whole
-  console plus named milestones, each carrying the invariant it guards.
+  console, named milestones, each carrying the invariant it guards, and the
+  instruction count each core retired.
 - **CI** — `.github/workflows/boot-log.yml` runs fmt, clippy and the tests,
   then all six boots in parallel on every push / PR to `main`: the firmware
   boot from SD, USB, TFTP and HTTP, the SD boot again on a B0 board (#77), and
@@ -284,14 +285,20 @@ Each one has:
 - the **milestones**, substring assertions each carrying the reason it exists:
   the commit or issue that made it pass. This is what a raw diff cannot say —
   which invariant broke.
+- the **retired counts** beside the golden (`golden/<name>.retired.toml`): how
+  many instructions each VPU and ARM core ran (#85). They reproduce exactly
+  from one machine to the next, so a change that makes a boot run differently
+  without printing anything different fails here instead of going unnoticed.
+  A run the wall clock cut off (`end TimeLimit`) fails outright: its counts
+  only say how fast the host was.
 
-Both are checked against a single boot; the wall clock has little headroom, so
-nothing here runs the firmware twice.
+All three are checked against a single boot; the wall clock has little
+headroom, so nothing here runs the firmware twice.
 
 ```
 cargo run --release -- boot-check testdata/boot/firmware-boot.toml   # the SD boot
 cargo run --release -- boot-check testdata/boot/linux-boot.toml
-cargo run --release -- boot-check testdata/boot/firmware-boot.toml --update       # re-record the golden
+cargo run --release -- boot-check testdata/boot/firmware-boot.toml --update       # re-record the golden and counts
 cargo run --release -- boot-check testdata/boot/firmware-boot.toml --max-wall 600 # slower, busier machine
 cargo run --release -- boot-check testdata/boot/usb-boot.toml --from boot-usb.log # a CI run's artifact
 ```
@@ -300,8 +307,9 @@ The combined output goes to `boot.log` (`--output` names another file) and the
 console to `boot.log.console` beside it: the pair CI uploads, and what `--from`
 checks again without booting.
 
-After an intentional change, `--update` and then read the golden diff in the
-commit: it is the change, spelled out.
+After an intentional change, `--update` and then read the golden and counts
+diff in the commit: it is the change, spelled out. A change that only moves
+the counts still needs the re-record, and the diff then documents that it did.
 
 ### Scenario file
 
