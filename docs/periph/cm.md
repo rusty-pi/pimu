@@ -30,11 +30,20 @@ Sources:
 | `0x108` | [`PLLC`](#pllc) | rw | 32 | 2, best high |
 | `0x10C` | [`PLLD`](#plld) | rw | 32 | 2, best high |
 | `0x114` | [`LOCK`](#lock) | r | 32 | 3, best high |
+| `0x160` | [`DSI1PCTL`](#dsi1pctl) | rw | 32 | 3, best high |
 | `0x170` | [`PLLB`](#pllb) | rw | 32 | 2, best high |
 | `0x1C0` | [`EMMCCTL`](#emmcctl) | rw | 32 | 2, best high |
 | `0x1C4` | [`EMMCDIV`](#emmcdiv) | rw | 32 | 2, best high |
 | `0x1D0` | [`EMMC2CTL`](#emmc2ctl) | rw | 32 | 2, best high |
 | `0x1D4` | [`EMMC2DIV`](#emmc2div) | rw | 32 | 3, best high |
+| `0x1E0` | [`GEN_1E0_CTL`](#gen_1e0_ctl) | rw | 32 | 2, best high |
+| `0x1E4` | [`GEN_1E0_DIV`](#gen_1e0_div) | rw | 32 | 1, best high |
+| `0x1E8` | [`GEN_1E8_CTL`](#gen_1e8_ctl) | rw | 32 | 2, best high |
+| `0x1EC` | [`GEN_1E8_DIV`](#gen_1e8_div) | rw | 32 | 1, best high |
+| `0x210` | [`GEN_210_CTL`](#gen_210_ctl) | rw | 32 | 2, best high |
+| `0x214` | [`GEN_210_DIV`](#gen_210_div) | rw | 32 | 1, best high |
+| `0x23C` | [`GEN_23C_CTL`](#gen_23c_ctl) | rw | 32 | 2, best high |
+| `0x240` | [`GEN_23C_DIV`](#gen_23c_div) | rw | 32 | 1, best high |
 | `0x1010`–`0x101C` (4 × 0x4) | [`PLLA_ANA`](#plla_ana) | rw | 32 | 2, best high |
 | `0x1030`–`0x103C` (4 × 0x4) | [`PLLC_ANA`](#pllc_ana) | rw | 32 | 2, best high |
 | `0x1050`–`0x105C` (4 × 0x4) | [`PLLD_ANA`](#plld_ana) | rw | 32 | 2, best high |
@@ -129,7 +138,7 @@ UART clock control. The bootloader runs the UART off the oscillator (SRC 1); jus
 | 3:0 | `SRC` | rw | Clock source: 0 ground, 1 oscillator, 4 PLLA, 5 PLLC, 6 PLLD, 7 PLLH's aux channel. For the VPU generator 8 and 9 are PLLC's other core channels. start4's generator helper changes the source only with the generator stopped: it clears ENAB, waits for BUSY, writes SRC \| GATE, and then ENAB as well. The new divider goes in before the source when it is larger than the old one (a slower clock), and after the source and a second BUSY wait when it is not, so the output never runs faster than its old or new rate. A running generator that keeps its source gets the new divider first, with no stop. |
 | 4 | `ENAB` | rw | Generator on. |
 | 5 | `KILL` | rw | Stop the generator immediately. start4 sets it when a generator's BUSY (or BIT8) fails to clear. |
-| 6 | `GATE` | rw | start4 sets it together with a PLL source, one write before ENAB, on every generator it moves. |
+| 6 | `GATE` | rw | start4 sets it together with the source, one write before ENAB, on every generator it starts or moves, oscillator-fed ones (TIMERCTL, GEN_23C_CTL) included. |
 | 7 | `BUSY` | r | Generator running. Real silicon holds it at 1 while running; the model always reads 0, because the shutdown path 0x3EC7F0BA spins on it waiting for clocks the model stops instantly. Same position in every *_CTL register. |
 | 8 | `BIT8` | r | No Linux name. start4 waits for it to clear after it changes the divider of a generator that is running (ENAB set), and sets KILL if it does not. Reads 0 in the model. |
 | 10:9 | `MASH` | rw | MASH noise-shaping stages. |
@@ -360,6 +369,18 @@ Sources:
 
 - linux (high): clk-bcm2835.c: CM_LOCK_FLOCKH
 
+## `DSI1PCTL`
+
+Offset `0x160` · access `rw` · 32 bits
+
+Linux's BCM2835 name. start4 treats it as a clock select: in its board set-up it asks for clock 8 to be fed from 0x13, which ORs 0x18 into the cleared low nibble.
+
+Sources:
+
+- linux (medium): clk-bcm2835.c: CM_DSI1PCTL — _a BCM2835 define; source 8 is outside the DSI1 pixel clock's parents there_
+- decompile (high): start4's clock-select routine: select 0x13 at 0x3EC7E478 writes (value & ~0xF) | 0x18 at 0x3EC7E4C6..0x3EC7E4DC; the board set-up calls it with (8, 0x13) at 0x3ED4A0D4
+- trace (high): start4: 0x5A000018 at 0x3EC7E4DC
+
 ## `PLLB`
 
 Offset `0x170` · access `rw` · 32 bits
@@ -433,6 +454,90 @@ Sources:
 - linux (high): clk-bcm2835.c: CM_EMMC2DIV
 - trace (high): bootmain: 0x5A003C00 at 0x000AE0C4; start4: 0x5A003C00 at 0x3EC7DEAA, later 0x5A007800 at 0x3EC7DE34
 - decompile (high): the board clock set-up asks for clock 51 at 100000000 Hz (0x3ED4A110..0x3ED4A122), between the 'ETH_CLK' / 'WL_LPO_CLK' clocks and the EMMC2 REG_154 / REG_100 writes
+
+## `GEN_1E0_CTL`
+
+Offset `0x1E0` · access `rw` · 32 bits
+
+A clock generator Linux's clk-bcm2835 does not list, laid out as UARTCTL. The bootcode starts it on SRC 6 (0x16, no GATE) at 250 MHz; start4's board set-up asks for 250 MHz again and, the source unchanged, rewrites it with GATE (0x56) without stopping it.
+
+Sources:
+
+- trace (high): bootcode: 0x5A000000 at 0x8000A7B2, 0x5A000016 at 0x8000A7CC; start4: 0x5A000056 at 0x3EC7DE96 and 0x3EC7DEC4
+- decompile (high): start4's board set-up asks for clock 71 at 250000000 Hz (0x3ED4A13C..0x3ED4A14A)
+
+## `GEN_1E0_DIV`
+
+Offset `0x1E4` · access `rw` · 32 bits
+
+Divider for GEN_1E0_CTL, 12 fractional bits. 0x3000 (3) off PLLD's 750 MHz channel: 250 MHz.
+
+Sources:
+
+- trace (high): bootcode: 0x5A003000 at 0x8000A7CA; start4: 0x5A003000 at 0x3EC7DE34
+
+## `GEN_1E8_CTL`
+
+Offset `0x1E8` · access `rw` · 32 bits
+
+A clock generator Linux's clk-bcm2835 does not list, laid out as UARTCTL. start4's board set-up starts it on SRC 6 at 250 MHz.
+
+Sources:
+
+- trace (high): start4: 0x5A000000 at 0x3EC7DDBA, 0x5A000046 at 0x3EC7DE96, 0x5A000056 at 0x3EC7DEC4
+- decompile (high): start4's board set-up asks for clock 0x1E at 250000000 Hz (0x3ED4A0EC..0x3ED4A0F8)
+
+## `GEN_1E8_DIV`
+
+Offset `0x1EC` · access `rw` · 32 bits
+
+Divider for GEN_1E8_CTL, 12 fractional bits. 0x3000 (3) off PLLD's 750 MHz channel: 250 MHz.
+
+Sources:
+
+- trace (high): start4: 0x5A003000 at 0x3EC7DE34
+
+## `GEN_210_CTL`
+
+Offset `0x210` · access `rw` · 32 bits
+
+A clock generator Linux's clk-bcm2835 does not list, laid out as UARTCTL. start4's board set-up starts it on SRC 6 at 125 MHz.
+
+Sources:
+
+- trace (high): start4: 0x5A000000 at 0x3EC7DDBA, 0x5A000046 at 0x3EC7DE96, 0x5A000056 at 0x3EC7DEC4
+- decompile (high): start4's board set-up asks for clock 0x1F at 125000000 Hz (0x3ED4A0FC..0x3ED4A10C)
+
+## `GEN_210_DIV`
+
+Offset `0x214` · access `rw` · 32 bits
+
+Divider for GEN_210_CTL, 12 fractional bits. 0x6000 (6) off PLLD's 750 MHz channel: 125 MHz.
+
+Sources:
+
+- trace (high): start4: 0x5A006000 at 0x3EC7DE34
+
+## `GEN_23C_CTL`
+
+Offset `0x23C` · access `rw` · 32 bits
+
+A clock generator Linux's clk-bcm2835 does not list, laid out as UARTCTL. start4's board set-up starts it on SRC 1, the oscillator, at 27 MHz.
+
+Sources:
+
+- trace (high): start4: 0x5A000000 at 0x3EC7DDBA, 0x5A000041 at 0x3EC7DE96, 0x5A000051 at 0x3EC7DEC4
+- decompile (high): start4's board set-up asks for clock 52 at 27000000 Hz (0x3ED4A126..0x3ED4A138)
+
+## `GEN_23C_DIV`
+
+Offset `0x240` · access `rw` · 32 bits
+
+Divider for GEN_23C_CTL, 12 fractional bits. 0x2000 (2) off the 54 MHz oscillator: 27 MHz.
+
+Sources:
+
+- trace (high): start4: 0x5A002000 at 0x3EC7DE34
 
 ## `PLLA_ANA`
 
