@@ -208,10 +208,10 @@ impl Bsc {
 
     /// BSC core clock. The BCM2835 ARM Peripherals datasheet gives the bus
     /// speed as `core_clock / CDIV`; on a Pi 4 that clock is the 500 MHz VPU
-    /// core clock (`vcgencmd measure_clock core` on rpi-dev reports
-    /// 500 000 992 Hz). start4's own divisors agree: it programs `DIV` = 5000
-    /// for the PMIC bus, 2500 for its probe sweep and 540 for HDMI DDC — i.e.
-    /// 100 kHz, 200 kHz and ~926 kHz.
+    /// core clock (`vcgencmd measure_clock core` on a Raspberry Pi 4B d03115
+    /// reports 500 000 992 Hz). start4's own divisors agree: it programs
+    /// `DIV` = 5000 for the PMIC bus, 2500 for its probe sweep and 540 for HDMI
+    /// DDC — i.e. 100 kHz, 200 kHz and ~926 kHz.
     const CORE_HZ: u64 = 500_000_000;
     /// Divisor to assume while `DIV` has not been programmed.
     const DEFAULT_CDIV: u64 = 5000;

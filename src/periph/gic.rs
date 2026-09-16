@@ -37,8 +37,8 @@
 //!   serial@7e201000  { interrupts = <0x00 0x79 0x04>; };  // SPI 121 = ID 153, level
 //! ```
 //!
-//! The reference board (`ssh rpi-dev`) agrees, and settles which of the four
-//! timer lines matters — `/proc/interrupts` there:
+//! The reference board (a Raspberry Pi 4B d03115) agrees, and settles which of
+//! the four timer lines matters — `/proc/interrupts` there:
 //!
 //! ```text
 //!    9:  ...  GICv2  25 Level  vgic
@@ -258,8 +258,8 @@ pub const ID_GENET_A: u32 = 32 + 157;
 pub const ID_GENET_B: u32 = 32 + 158;
 /// The PCIe root complex (`pcie@7d500000`): the `interrupt-map` routes the
 /// endpoint's INTA to `GIC_SPI 143`, and `interrupt-names = "pcie", "msi"`
-/// puts the MSI controller's output on `GIC_SPI 148`. `rpi-dev` shows the
-/// former as `GICv2 175 Level PCIe PME, aerdrv`.
+/// puts the MSI controller's output on `GIC_SPI 148`. A Raspberry Pi 4B d03115
+/// shows the former as `GICv2 175 Level PCIe PME, aerdrv`.
 pub const ID_PCIE_INTA: u32 = 32 + 143;
 pub const ID_PCIE_MSI: u32 = 32 + 148;
 

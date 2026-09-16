@@ -126,7 +126,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "/dev/mem reads of 0x7d5d2200..0x7d5d2214 on rpi-dev, freshly booted and idle"
+ref        = "/dev/mem reads of 0x7d5d2200..0x7d5d2214 on a Raspberry Pi 4B d03115, freshly booted and idle"
 confidence = "high"
 
 [[register.field]]
@@ -174,7 +174,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "/dev/mem reads one word at a time on rpi-dev"
+ref        = "/dev/mem reads one word at a time on a Raspberry Pi 4B d03115"
 confidence = "high"
 
 [[register.field]]

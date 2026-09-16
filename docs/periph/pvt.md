@@ -12,7 +12,7 @@ Eighteen channels, one bank each. Carved out of the `clkmon` window and decoded 
 Sources:
 
 - decompile (high): FUN_0ec300fa(ch, ...) reads ch * 0x40 + 0x7d5d8010 / +0x1c; start4 initialises k = 0..17
-- measured (high): /dev/mem at 0xFD5D8000 on rpi-dev: all eighteen channels carry the magic
+- measured (high): /dev/mem at 0xFD5D8000 on a Raspberry Pi 4B d03115: all eighteen channels carry the magic
 
 ## Register map
 
@@ -32,7 +32,7 @@ The channel's own index.
 
 Sources:
 
-- measured (high): reads 0..17 across the channels on rpi-dev
+- measured (high): reads 0..17 across the channels on a Raspberry Pi 4B d03115
 
 ## `MAGIC`
 
@@ -43,7 +43,7 @@ Present marker. Reading 0 would say the channel is absent.
 Sources:
 
 - decompile (high): FUN_0ec300fa only reads +0x1C when *(ch * 0x40 + 0x7d5d8010) == 0x7fff50cf
-- measured (high): 0x7fff50cf on all eighteen channels of rpi-dev
+- measured (high): 0x7fff50cf on all eighteen channels of a Raspberry Pi 4B d03115
 
 ## `THRESHOLD_A`
 
@@ -92,7 +92,7 @@ Measurement pair. Held constant in the model: a stable reading means 'no adaptiv
 Sources:
 
 - decompile (high): FUN_0ec300fa: hi = reading >> 16, lo = (ushort)reading; both zeroed below 10
-- measured (high): per-channel values off rpi-dev, e.g. 0x04270799 on channel 0
+- measured (high): per-channel values off a Raspberry Pi 4B d03115, e.g. 0x04270799 on channel 0
 
 `LO` sources:
 

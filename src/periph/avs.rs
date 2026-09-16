@@ -45,8 +45,8 @@
 //! The channel results were originally *inverted* from what the firmware
 //! reports, because `/dev/mem` was believed to be locked on the reference
 //! board. It is not (`# CONFIG_STRICT_DEVMEM is not set`), so `+0x200 + ch*4`
-//! is now read directly off `rpi-dev` — a Pi 4 running Linux, freshly booted
-//! and idle:
+//! is now read directly off a Raspberry Pi 4B d03115 running Linux, freshly
+//! booted and idle:
 //!
 //! ```text
 //! 0x7d5d2200  0x000106e8   ch0  valid|settled  count 744
@@ -92,9 +92,9 @@
 //! The width was wrong: `FUN_0ec5f2c0`, the sensor API behind
 //! `vcgencmd`-style rail reads, range-checks its channel against 0x23 and
 //! hands it straight to `FUN_0ec3007a`, and the boot does sweep all 36. Read
-//! one word at a time off `rpi-dev`, channels 0x18..0x1F report real, small
-//! counts and 0x20..0x23 report `0x00010000` — settled, with a count of
-//! exactly 0.
+//! one word at a time off a Raspberry Pi 4B d03115, channels 0x18..0x1F report
+//! real, small counts and 0x20..0x23 report `0x00010000` — settled, with a
+//! count of exactly 0.
 //!
 //! "Settled with a count of 0" is not the same as "never settles", and the
 //! model used to answer both the same way. Every one of those twelve reads
@@ -203,8 +203,9 @@ pub const COVERAGE: Coverage = Coverage {
     ],
 };
 
-/// Per-channel counts, read straight off `rpi-dev` at `0x7D5D2200 + ch*4` — see
-/// the module docs for the raw dump and the conversion each one satisfies.
+/// Per-channel counts, read straight off a Raspberry Pi 4B d03115 at
+/// `0x7D5D2200 + ch*4` — see the module docs for the raw dump and the
+/// conversion each one satisfies.
 ///
 /// Channel 0 carries the 752 that matches the recorded 43.816 degC rather than
 /// the 744 in that dump; the two are the same sensor a few degrees apart.
@@ -215,9 +216,9 @@ pub const COVERAGE: Coverage = Coverage {
 /// nothing has told about a rail.
 const CHANNEL_COUNTS: [u32; RESULT_CHANNELS as usize] = [752, 2, 669, 758, 2, 841];
 
-/// `+0x220 + ch*4` counts, read one word at a time off `rpi-dev`. Channels
-/// 0x20..0x23 really do report a count of 0 (the register reads `0x00010000`:
-/// settled, nothing to report).
+/// `+0x220 + ch*4` counts, read one word at a time off a
+/// Raspberry Pi 4B d03115. Channels 0x20..0x23 really do report a count of 0
+/// (the register reads `0x00010000`: settled, nothing to report).
 const RAIL_COUNTS: [u32; RAIL_CHANNELS as usize] = [
     0x07FD, 0x07BC, 0x0650, 0x043C, 0x0A83, 0x0A99, 0x084B, 0x05C2, // ch 0x00..0x07
     0x1ED6, 0x1E17, 0x184A, 0x1077, 0x15B1, 0x14BB, 0x10E7, 0x0B23, // ch 0x08..0x0F

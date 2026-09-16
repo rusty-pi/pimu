@@ -195,7 +195,7 @@ UART clock control. The bootloader runs the UART off the oscillator (SRC 1); jus
 
 Sources:
 
-- measured (high): /dev/mem read of 0xFE1010F0 on rpi-dev, Linux idle: 0x00000296
+- measured (high): /dev/mem read of 0xFE1010F0 on a Raspberry Pi 4B d03115, Linux idle: 0x00000296
 - decompile (high): console writer 0x3ED85E9C and clock-change callback 0x3EC799BC gate on ENAB
 - trace (high): start4 0x3EC7DDBA..0x3EC7DEC4: 0x5A000001, UARTDIV 0x5A00FA00, 0x5A000046, 0x5A000056, with UART0 CR cleared before and set to 0x301 after — _an earlier note had start4 writing SRC 1 only; SRC 1 is what it stops the generator on before it moves it_
 
@@ -245,7 +245,7 @@ UART clock divider, 12 fractional bits: the bootloader's 0x5DC0 off the oscillat
 
 Sources:
 
-- measured (high): /dev/mem read of 0xFE1010F4 on rpi-dev, Linux idle: 0x0000fa00
+- measured (high): /dev/mem read of 0xFE1010F4 on a Raspberry Pi 4B d03115, Linux idle: 0x0000fa00
 - trace (high): bootcode 0x8000A7CA and bootmain 0x000AE0C4: 0x5A005DC0; start4: 0x5A00FA00 at 0x3EC7DE34
 - linux (high): clk-bcm2835.c: CM_DIV_FRAC_BITS = 12
 

@@ -16,8 +16,8 @@
 //! ## What is left as plain storage here, and why
 //!
 //! Beyond those two sub-blocks, start4 touches only a handful of registers in
-//! this window. All of them were read off `rpi-dev` through `/dev/mem` at the
-//! `0xFD5D…` alias, on a Linux-booted, idle Pi 4:
+//! this window. All of them were read off a Raspberry Pi 4B d03115 through
+//! `/dev/mem` at the `0xFD5D…` alias, on a Linux-booted, idle Pi 4:
 //!
 //! ```text
 //! 0x7d5d1800  0x00000004     0x7d5d1818  0x00000000

@@ -28,7 +28,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "0x00000004 on rpi-dev (post-start4 state)"
+ref        = "0x00000004 on a Raspberry Pi 4B d03115 (post-start4 state)"
 confidence = "high"
 
 [[register]]
@@ -44,7 +44,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "0x00000016 on rpi-dev"
+ref        = "0x00000016 on a Raspberry Pi 4B d03115"
 confidence = "high"
 note       = "deliberately not reproduced; see notes"
 
@@ -61,7 +61,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "0x00000000 on rpi-dev"
+ref        = "0x00000000 on a Raspberry Pi 4B d03115"
 confidence = "high"
 
 [[register]]
@@ -77,7 +77,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "0x00000001 on rpi-dev"
+ref        = "0x00000001 on a Raspberry Pi 4B d03115"
 confidence = "high"
 
 [[register]]

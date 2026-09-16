@@ -19,7 +19,7 @@
 //!
 //! ## Ground truth
 //!
-//! Every config-space byte below was read off a real Pi 4B (`ssh rpi-dev`):
+//! Every config-space byte below was read off a Raspberry Pi 4B d03115:
 //!
 //! ```text
 //! $ sudo od -Ax -tx1 -v /sys/bus/pci/devices/0000:01:00.0/config
@@ -343,10 +343,10 @@ impl Vl805 {
 
     /// The MSI the function sends when its interrupt fires, as `(address,
     /// data)`, if the host has enabled MSI in the capability at `0x90` (64-bit
-    /// layout: address at `0x94`/`0x98`, data at `0x9C`). `lspci` on `rpi-dev`:
-    /// `MSI: Enable+ Count=4/4 Maskable- 64bit+`, `Address: 00000000fffffffc
-    /// Data: 6540`. Only interrupter 0 is ever used, so the vector offset the
-    /// function may OR into the data is always zero.
+    /// layout: address at `0x94`/`0x98`, data at `0x9C`). `lspci` on a
+    /// Raspberry Pi 4B d03115: `MSI: Enable+ Count=4/4 Maskable- 64bit+`,
+    /// `Address: 00000000fffffffc Data: 6540`. Only interrupter 0 is ever used,
+    /// so the vector offset the function may OR into the data is always zero.
     pub fn msi_message(&self) -> Option<(u64, u32)> {
         if self.cfg_word(MSI_CTRL as usize) & (1 << 16) == 0 {
             return None;

@@ -7,7 +7,7 @@ the peripheral bus, and it needs a firmware blob uploaded to it at boot.
 
 Every address, register offset and log line below was measured — either from a
 `boot` run of this bench, from a static disassembly of the real blobs, or from
-`ssh rpi-dev` (a real Pi 4B with a VL805). Provenance is given inline. Nothing
+a Raspberry Pi 4B d03115, which has a VL805. Provenance is given inline. Nothing
 here is recalled from memory.
 
 **Bottom line up front:** USB boot works. Stage 0 (decode), stage 1 (link,
@@ -140,9 +140,9 @@ call at `0x000A6C8E`). Its full register conversation, in order:
 
 The `0x060400` at `0x000A6E08` is a nice cross-check: it is exactly the class
 code Linux reports for the root port (`pci 0000:00:00.0: [14e4:2711] type 01
-class 0x060400`, `dmesg` on `rpi-dev`), and `0x146` at `0x000A6F1C` is exactly
-the command register `lspci` reports on the endpoint (`Mem+ BusMaster+ ParErr+
-SERR+`).
+class 0x060400`, `dmesg` on a Raspberry Pi 4B d03115), and `0x146` at
+`0x000A6F1C` is exactly the command register `lspci` reports on the endpoint
+(`Mem+ BusMaster+ ParErr+ SERR+`).
 
 The link wait is the generic helper at `0x000A9038`:
 
@@ -209,7 +209,7 @@ complex exposes the configuration space of whatever
 `PCIE_EXT_CFG_INDEX` (`0x7D50_9000`) selects. So start4 identifies the endpoint
 by reading its config-space vendor/device pair through the bridge, and refuses
 to touch anything that is not `1106:3483`. That matches `lspci -nn` on
-`rpi-dev`:
+a Raspberry Pi 4B d03115:
 
 ```
 00:00.0 PCI bridge [0604]: Broadcom Inc. BCM2711 PCIe Bridge [14e4:2711] (rev 20)
@@ -262,7 +262,8 @@ not yet traced.
 
 ## 2. The hardware blocks, and where they live
 
-All from `rpi-dev` (`/proc/device-tree`, `lspci`, `dmesg`) — not guessed.
+All from a Raspberry Pi 4B d03115 (`/proc/device-tree`, `lspci`, `dmesg`) — not
+guessed.
 
 **PCIe root complex** — `pcie@7d500000`, `compatible = "brcm,bcm2711-pcie",
 "brcm,bcm7445-pcie"`:
@@ -301,7 +302,7 @@ Register offsets the firmware actually touches, all within that window:
 | `0x9210` | `RGR1_SW_INIT_1` | bootcode, bootloader `pcie_reset`, `pcie_init` |
 
 **VL805 configuration space** — `lspci -vvv -s 01:00.0` plus the raw config
-dump on `rpi-dev`:
+dump on a Raspberry Pi 4B d03115:
 
 ```
 06 11 83 34 46 05 10 00 01 30 03 0c 10 00 00 00
@@ -316,10 +317,10 @@ dump on `rpi-dev`:
 - link: 5 GT/s x1
 
 **xHCI MMIO** — 4 KiB at BAR0. An earlier draft of this document said
-`/dev/mem` was locked on `rpi-dev` and that these registers could not be read.
-**That was wrong** and got repeated for several sessions: the kernel there has
-`# CONFIG_STRICT_DEVMEM is not set`, so `sudo` plus `mmap` reads any physical
-address, MMIO included. BAR0 is at physical `0x6_0000_0000`
+`/dev/mem` was locked on the Raspberry Pi 4B d03115 and that these registers
+could not be read. **That was wrong** and got repeated for several sessions: the
+kernel there has `# CONFIG_STRICT_DEVMEM is not set`, so `sudo` plus `mmap`
+reads any physical address, MMIO included. BAR0 is at physical `0x6_0000_0000`
 (`/sys/bus/pci/devices/0000:01:00.0/resource`):
 
 ```python
@@ -468,13 +469,13 @@ like this — each layer only exists because the one above it asks for it:
    select a `(bus, dev, fn)`, and accesses to the `EXT_CFG_DATA` window at
    `+0x8000` are forwarded to that function's config space.
 2. **A PCI function model for the VL805.** Its config space is only 256 bytes
-   plus the AER extended block, and `rpi-dev` gives the exact bytes. BAR0 must
-   be sizeable (write all-ones, read back `0xFFFFF000`-style) and, once
-   programmed, must make a 4 KiB MMIO region appear in the outbound window. On
-   a 32-bit VPU the outbound aperture is not `0x6_0000_0000`, so the model has
-   to place it wherever start4's own allocator puts it — `pcie-base: 00004000`
-   in the reference log is the clue, and pinning down that allocator is part of
-   stage 2.
+   plus the AER extended block, and a Raspberry Pi 4B d03115 gives the exact
+   bytes. BAR0 must be sizeable (write all-ones, read back `0xFFFFF000`-style)
+   and, once programmed, must make a 4 KiB MMIO region appear in the outbound
+   window. On a 32-bit VPU the outbound aperture is not `0x6_0000_0000`, so the
+   model has to place it wherever start4's own allocator puts it —
+   `pcie-base: 00004000` in the reference log is the clue, and pinning down that
+   allocator is part of stage 2.
 3. **The VL805 vendor layer.** The indirect index/data port at config offsets
    `0x78`/`0x7C`, enough state for the register writes at indices
    `0x7C`/`0x7D`/`0x7E`, and a firmware sink that stores the uploaded image so
@@ -634,8 +635,8 @@ really is just a driver buffer — that part was right.
 
 ### 5.2 Live ground truth for stage 3
 
-Captured on `rpi-dev` with a Samsung "Flash Drive FIT" plugged in, so stage 3
-does not have to invent descriptor bytes.
+Captured on a Raspberry Pi 4B d03115 with a Samsung "Flash Drive FIT" plugged
+in, so stage 3 does not have to invent descriptor bytes.
 
 **Topology, and how the sockets are wired.** The VL805 has five xHCI root
 ports; the board routes them like this, pinned by moving the stick between
@@ -736,9 +737,9 @@ usb1 (high speed): 12 01 00 02 09 00 01 40 6b 1d 02 00 12 06 03 02 01 01
                    07 05 81 03 04 00 0c
 ```
 
-**SCSI.** `sg3-utils` is not installed on `rpi-dev` and was not installed for
-this, so the `INQUIRY` and `READ CAPACITY(10)` payloads were not read as raw
-bytes; the fields the kernel parsed out of them are:
+**SCSI.** `sg3-utils` is not installed on a Raspberry Pi 4B d03115 and was not
+installed for this, so the `INQUIRY` and `READ CAPACITY(10)` payloads were not
+read as raw bytes; the fields the kernel parsed out of them are:
 
 ```text
 /sys/block/sda/device/vendor      "Samsung "
@@ -809,8 +810,8 @@ same timestamps).
 (`src/periph/pcie.rs`, `src/periph/vl805.rs`). `RGR1_SW_INIT_1` reset
 semantics, `MISC_PCIE_STATUS` reporting link-up + RC mode once PERST# is
 de-asserted, the `EXT_CFG_INDEX`/`EXT_CFG_DATA` router, and a VL805
-config-space model seeded from the `rpi-dev` dump — including BAR sizing, so
-writing all-ones to `0x10` reads back `0xFFFF_F004`.
+config-space model seeded from the Raspberry Pi 4B d03115 dump — including BAR
+sizing, so writing all-ones to `0x10` reads back `0xFFFF_F004`.
 
 The endpoint is **attached by default** — a Pi 4B has the VL805 soldered on, so
 that is the honest model of the reference board. `RVF_PCIE_DEVICE=0` unsolders
@@ -932,9 +933,9 @@ over to Linux. The pairing that matters is **1 + 3**.
   buffers the firmware allocates are never touched.
 * `src/periph/usb.rs` — a `UsbDevice` trait, the VIA Labs `2109:3431` hub and a
   Bulk-Only Transport / SCSI `MassStorage`. Descriptor bytes are verbatim from
-  `rpi-dev`; the hub answers `GET_PORT_STATUS` / `SET_FEATURE` / `CLEAR_FEATURE`
-  and has its interrupt-IN status-change endpoint, so a device behind it (a
-  black socket) works as well as one on a root port.
+  a Raspberry Pi 4B d03115; the hub answers `GET_PORT_STATUS` / `SET_FEATURE` /
+  `CLEAR_FEATURE` and has its interrupt-IN status-change endpoint, so a device
+  behind it (a black socket) works as well as one on a root port.
 
 **The hub is attached unconditionally**, because a Pi 4B has one soldered to
 root port 1 whether or not anything is plugged in. That is the whole of what a
@@ -1059,13 +1060,13 @@ hub enumeration are byte-identical. One difference remains, and two that stage
 the 1.32 s of modelled time the failed link used to cost.
 
 Linux (#40) now drives the same hardware from the ARM. `pcie-brcmstb`
-enumerates the root port and the VL805 the way `rpi-dev` does (`link up, 5.0
-GT/s PCIe x1 (SSC)`, BAR0 at `0x6_0000_0000`), `xhci-pci` reads the capability
-registers through the outbound window, takes its interrupts as MSIs through the
-root complex's MSI block, and registers both root hubs; `usb 1-1` (the VIA hub)
-starts enumerating just before the scenario's shell session ends. What that
-needed is in `src/periph/pcie.rs` (module docs, "Linux") and
-`docs/arm-side-findings.md`. On the way, `xhci_pci_probe` sends
+enumerates the root port and the VL805 the way a Raspberry Pi 4B d03115 does
+(`link up, 5.0 GT/s PCIe x1 (SSC)`, BAR0 at `0x6_0000_0000`), `xhci-pci` reads
+the capability registers through the outbound window, takes its interrupts as
+MSIs through the root complex's MSI block, and registers both root hubs;
+`usb 1-1` (the VIA hub) starts enumerating just before the scenario's shell
+session ends. What that needed is in `src/periph/pcie.rs` (module docs, "Linux")
+and `docs/arm-side-findings.md`. On the way, `xhci_pci_probe` sends
 `NOTIFY_XHCI_RESET`, which is what runs stage 2 (above).
 
 ---

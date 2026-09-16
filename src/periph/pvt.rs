@@ -39,9 +39,9 @@
 //!
 //! ## Ground truth
 //!
-//! Read off `rpi-dev` — a Pi 4 running Linux, freshly booted and idle — through
-//! `/dev/mem` at `0xFD5D_8000` (the `0x7C…`/`0xFC…` alias of this window).
-//! Every one of the eighteen channels carries the magic:
+//! Read off a Raspberry Pi 4B d03115 running Linux, freshly booted and idle,
+//! through `/dev/mem` at `0xFD5D_8000` (the `0x7C…`/`0xFC…` alias of this
+//! window). Every one of the eighteen channels carries the magic:
 //!
 //! ```text
 //!        +0x00  +0x10       +0x14       +0x18       +0x1C

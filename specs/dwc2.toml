@@ -54,7 +54,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "rpi-dev after vcmailbox SET_POWER_STATE(USB, on|wait): 0x20402700, the host-mode value start4 writes"
+ref        = "Raspberry Pi 4B d03115 after vcmailbox SET_POWER_STATE(USB, on|wait): 0x20402700, the host-mode value start4 writes"
 confidence = "high"
 
 [[register.field]]
@@ -85,7 +85,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "rpi-dev, 32-bit /dev/mem read of 0xFE980010 after vcmailbox SET_POWER_STATE(USB, on|wait): 0x80000000"
+ref        = "Raspberry Pi 4B d03115, 32-bit /dev/mem read of 0xFE980010 after vcmailbox SET_POWER_STATE(USB, on|wait): 0x80000000"
 confidence = "high"
 
 [[register.field]]
@@ -171,7 +171,7 @@ confidence = "high"
 
 [[register.field.source]]
 kind       = "measured"
-ref        = "rpi-dev: GRSTCTL 0x80000000 with USB powered"
+ref        = "Raspberry Pi 4B d03115: GRSTCTL 0x80000000 with USB powered"
 confidence = "high"
 
 [[register]]
@@ -187,7 +187,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "rpi-dev after vcmailbox SET_POWER_STATE(USB, on|wait): 0x5400002B (CURMOD, NPTXFEMP and PTXFEMP, plus latched MODEMIS, SOF, CONIDSTSCHNG and SESSREQINT)"
+ref        = "Raspberry Pi 4B d03115 after vcmailbox SET_POWER_STATE(USB, on|wait): 0x5400002B (CURMOD, NPTXFEMP and PTXFEMP, plus latched MODEMIS, SOF, CONIDSTSCHNG and SESSREQINT)"
 confidence = "high"
 
 [[register.field]]
@@ -203,7 +203,7 @@ confidence = "high"
 
 [[register.field.source]]
 kind       = "measured"
-ref        = "rpi-dev: 1 with GUSBCFG 0x20402700; GOTGCTL read 0x001C0000"
+ref        = "Raspberry Pi 4B d03115: 1 with GUSBCFG 0x20402700; GOTGCTL read 0x001C0000"
 confidence = "high"
 
 [[register.field]]
@@ -264,7 +264,7 @@ notes  = "Core id: OTG, release 2.80a. Linux's dwc2 refuses a core whose id lack
 
 [[register.source]]
 kind       = "measured"
-ref        = "rpi-dev, 32-bit /dev/mem read of 0xFE980040 after vcmailbox SET_POWER_STATE(USB, on|wait): 0x4F54280A"
+ref        = "Raspberry Pi 4B d03115, 32-bit /dev/mem read of 0xFE980040 after vcmailbox SET_POWER_STATE(USB, on|wait): 0x4F54280A"
 confidence = "high"
 
 [[register.source]]
@@ -281,7 +281,7 @@ notes  = "Hardware configuration 1: endpoint directions."
 
 [[register.source]]
 kind       = "measured"
-ref        = "rpi-dev, /dev/mem read of 0xFE980044 with USB powered: 0x00000000"
+ref        = "Raspberry Pi 4B d03115, /dev/mem read of 0xFE980044 with USB powered: 0x00000000"
 confidence = "high"
 
 [[register]]
@@ -293,7 +293,7 @@ notes  = "Hardware configuration 2. DwUsbHostDxe sizes its channel loops from NU
 
 [[register.source]]
 kind       = "measured"
-ref        = "rpi-dev, /dev/mem read of 0xFE980048 with USB powered: 0x228DDD50"
+ref        = "Raspberry Pi 4B d03115, /dev/mem read of 0xFE980048 with USB powered: 0x228DDD50"
 confidence = "high"
 
 [[register.field]]
@@ -315,7 +315,7 @@ notes  = "Hardware configuration 3: FIFO depth and transfer-size widths."
 
 [[register.source]]
 kind       = "measured"
-ref        = "rpi-dev, /dev/mem read of 0xFE98004C with USB powered: 0x0FF000E8"
+ref        = "Raspberry Pi 4B d03115, /dev/mem read of 0xFE98004C with USB powered: 0x0FF000E8"
 confidence = "high"
 
 [[register]]
@@ -327,7 +327,7 @@ notes  = "Hardware configuration 4."
 
 [[register.source]]
 kind       = "measured"
-ref        = "rpi-dev, /dev/mem read of 0xFE980050 with USB powered: 0x1FF00020"
+ref        = "Raspberry Pi 4B d03115, /dev/mem read of 0xFE980050 with USB powered: 0x1FF00020"
 confidence = "high"
 
 [[register]]
@@ -375,7 +375,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "rpi-dev, /dev/mem read of 0xFE980440 with USB powered and nothing on the USB-C data lines: 0x00000000"
+ref        = "Raspberry Pi 4B d03115, /dev/mem read of 0xFE980440 with USB powered and nothing on the USB-C data lines: 0x00000000"
 confidence = "high"
 
 [[register.field]]
@@ -506,7 +506,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "rpi-dev, /dev/mem read of 0xFE980500 with USB powered: 0x00000000"
+ref        = "Raspberry Pi 4B d03115, /dev/mem read of 0xFE980500 with USB powered: 0x00000000"
 confidence = "high"
 
 [[register.field]]
@@ -544,7 +544,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "rpi-dev, /dev/mem read of 0xFE980508 with USB powered: 0x00000000"
+ref        = "Raspberry Pi 4B d03115, /dev/mem read of 0xFE980508 with USB powered: 0x00000000"
 confidence = "high"
 
 [[register.field]]

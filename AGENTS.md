@@ -7,7 +7,7 @@
 - Do not commit secrets or generated firmware blobs.
 - **Name real hardware by board type, never by hostname.** When a doc,
   comment, test, commit or issue cites a measurement or a test run on a real
-  board, write the model and revision code — `Raspberry Pi 4B d03114`, not
+  board, write the model and revision code — `Raspberry Pi 4B d03115`, not
   `rpi-dev`. A hostname only means something on one person's network; the
   revision code (`Revision` in `/proc/cpuinfo`) says which model, PCB revision
   and RAM size the value came from.

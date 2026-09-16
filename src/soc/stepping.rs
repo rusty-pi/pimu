@@ -3,8 +3,8 @@
 //! The Pi 4 family shipped two production steppings: **B0**, on the first
 //! Pi 4 Model B boards (rev 1.1, 1.2 and early 1.4), and **C0**, on the Pi 400,
 //! every CM4 and the later 4B (late rev 1.4 and all of rev 1.5). The model is a
-//! C0 unless told otherwise; every board it has been checked against (rpi-1 to
-//! rpi-4 and rpi-dev, all rev 1.5) is one.
+//! C0 unless told otherwise; every board it has been checked against (five
+//! Raspberry Pi 4B d03115 boards, rev 1.5) is one.
 //!
 //! What the stepping changes, as far as the firmware can tell:
 //!

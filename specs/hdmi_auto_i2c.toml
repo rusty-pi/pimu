@@ -7,7 +7,7 @@ notes   = "Only what start4 1.20190925, 1.20200212 and 1.20200601 use is modelle
 
 [[block.source]]
 kind       = "measured"
-ref        = "rpi-dev /proc/device-tree/soc/i2c@7ef04500: reg 0x7ef04500 0x100 0x7ef00b00 0x300"
+ref        = "Raspberry Pi 4B d03115 /proc/device-tree/soc/i2c@7ef04500: reg 0x7ef04500 0x100 0x7ef00b00 0x300"
 confidence = "high"
 
 [[block.source]]

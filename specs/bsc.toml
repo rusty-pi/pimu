@@ -261,7 +261,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "vcgencmd measure_clock core on rpi-dev: 500000992 Hz"
+ref        = "vcgencmd measure_clock core on a Raspberry Pi 4B d03115: 500000992 Hz"
 confidence = "high"
 
 [[register.source]]

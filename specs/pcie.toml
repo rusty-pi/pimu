@@ -3,7 +3,7 @@ name    = "pcie"
 base    = 0x7D500000
 size    = 0x9310
 summary = "PCIe root complex (pcie-brcmstb), with the VL805 xHCI controller behind it"
-notes   = "+0x0000..+0x0FFF is the root port's own configuration space (seeded from rpi-dev; its layout is PCI's, not listed here beyond the two words with behaviour). The VPU reaches the endpoint's BAR0 only by 40-bit DMA through the outbound window; the endpoint's DMA comes back through inbound window 2."
+notes   = "+0x0000..+0x0FFF is the root port's own configuration space (seeded from a Raspberry Pi 4B d03115; its layout is PCI's, not listed here beyond the two words with behaviour). The VPU reaches the endpoint's BAR0 only by 40-bit DMA through the outbound window; the endpoint's DMA comes back through inbound window 2."
 
 [[block.source]]
 kind       = "measured"
@@ -33,7 +33,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "rpi-dev lspci: LnkSta: Speed 5GT/s, Width x1, SlotClk+"
+ref        = "Raspberry Pi 4B d03115 lspci: LnkSta: Speed 5GT/s, Width x1, SlotClk+"
 confidence = "high"
 
 [[register]]
@@ -50,7 +50,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "rpi-dev /sys/bus/pci/devices/0000:00:00.0/config at 0x43C"
+ref        = "Raspberry Pi 4B d03115 /sys/bus/pci/devices/0000:00:00.0/config at 0x43C"
 confidence = "high"
 
 [[register.source]]
@@ -326,7 +326,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "rpi-dev's MSI domain is 32 wide (/sys/kernel/debug/irq/domains/unknown-1: size: 32), so at least 3.3"
+ref        = "the MSI domain on a Raspberry Pi 4B d03115 is 32 wide (/sys/kernel/debug/irq/domains/unknown-1: size: 32), so at least 3.3"
 confidence = "medium"
 note       = "the exact revision was not read; 3.3 is the lower bound"
 

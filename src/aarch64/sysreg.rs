@@ -8,10 +8,10 @@
 //!    kept as fields of [`SysRegs`] or of the [`Cpu`].
 //! 2. Identification registers, constant. `MIDR_EL1` / `REVIDR_EL1` are read
 //!    off the reference board (`/sys/devices/system/cpu/cpu0/regs/
-//!    identification/` on `rpi-dev`: `0x410fd083`, `0`). The rest are the
-//!    Cortex-A72 r0p3 TRM's reset values, with the Cryptographic Extension
-//!    fields cleared: BCM2711 does not implement it (`/proc/cpuinfo` there
-//!    lists `fp asimd evtstrm crc32 cpuid`).
+//!    identification/` on a Raspberry Pi 4B d03115: `0x410fd083`, `0`). The
+//!    rest are the Cortex-A72 r0p3 TRM's reset values, with the Cryptographic
+//!    Extension fields cleared: BCM2711 does not implement it (`/proc/cpuinfo`
+//!    there lists `fp asimd evtstrm crc32 cpuid`).
 //! 3. Plain storage: registers that only matter to whoever reads them back
 //!    (cache configuration, `PAR_EL1`, debug and PMU registers, IMPLEMENTATION DEFINED ones like
 //!    `L2CTLR_EL1`), kept in a map but only for encodings on an allowlist.

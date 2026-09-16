@@ -157,7 +157,7 @@ notes  = "UART clock control. The bootloader runs the UART off the oscillator (S
 
 [[register.source]]
 kind       = "measured"
-ref        = "/dev/mem read of 0xFE1010F0 on rpi-dev, Linux idle: 0x00000296"
+ref        = "/dev/mem read of 0xFE1010F0 on a Raspberry Pi 4B d03115, Linux idle: 0x00000296"
 confidence = "high"
 
 [[register.source]]
@@ -291,7 +291,7 @@ notes  = "UART clock divider, 12 fractional bits: the bootloader's 0x5DC0 off th
 
 [[register.source]]
 kind       = "measured"
-ref        = "/dev/mem read of 0xFE1010F4 on rpi-dev, Linux idle: 0x0000fa00"
+ref        = "/dev/mem read of 0xFE1010F4 on a Raspberry Pi 4B d03115, Linux idle: 0x0000fa00"
 confidence = "high"
 
 [[register.source]]

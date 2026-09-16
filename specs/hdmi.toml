@@ -130,7 +130,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "rpi-dev, no monitor attached: /sys/class/drm/card1-HDMI-A-1/status and card1-HDMI-A-2/status read disconnected"
+ref        = "Raspberry Pi 4B d03115, no monitor attached: /sys/class/drm/card1-HDMI-A-1/status and card1-HDMI-A-2/status read disconnected"
 confidence = "medium"
 note       = "The connector state, not the register: vc4 reports disconnected when CONNECTED is clear and the node has no hpd-gpios."
 

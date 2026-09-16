@@ -107,7 +107,7 @@
 //! on this board".
 //!
 //! That is the right answer for the board this model reproduces, and it is
-//! measured, not assumed. On the reference Pi 4 (`rpi-dev`):
+//! measured, not assumed. On the reference Raspberry Pi 4B d03115:
 //!
 //! ```text
 //! $ vcgencmd otp_dump | sed -n '45p;46p'

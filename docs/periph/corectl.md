@@ -88,7 +88,7 @@ Sources:
 - trace (high): linux-boot: vcos_threadx.c's sysman user asks for bit 5 after `Booting Linux`, which powers domain 0x20000 and writes the wake once; nothing writes it before arm_loader
 - datasheet (medium): Broadcom bcm2708_chip/intctrl1.h (in the published brcm_usrlib headers): IC1_WAKEUP at 0x7e002834, RW, mask 0xfffffffe, reset 0x10000000; IC0_WAKEUP at 0x7e002034 — _a BCM2708 header, but the masks and VADDR around it match what start4 uses on the BCM2711_
 - inferred (medium): librerpi/lk-overlay arch/vpu/arch.c (1c942f5) starts the second VPU core with `*REG32(IC1_WAKEUP) = &core2_start` and nothing else — _open firmware that runs on the board: a working example rather than a guess_
-- measured (medium): rpi-1 (d03115, C0) after a Linux boot, busybox devmem 0xFE002814: 0x10000000, the IPI enable that only core 1 writes (the model leaves it 0 with core 1 held) — _so core 1 does run on the board; VADDR and WAKEUP themselves read 0 from the ARM even where start4 has written them_
+- measured (medium): Raspberry Pi 4B d03115 (C0) after a Linux boot, busybox devmem 0xFE002814: 0x10000000, the IPI enable that only core 1 writes (the model leaves it 0 with core 1 held) — _so core 1 does run on the board; VADDR and WAKEUP themselves read 0 from the ARM even where start4 has written them_
 
 `ADDR` sources:
 

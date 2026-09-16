@@ -122,11 +122,11 @@ Each of these was found by the Linux run and fixed in the device model on
    `pcie-brcmstb` checks the port-mode bit of `MISC_PCIE_STATUS` with PERST#
    still asserted, and the model only reported it with the link up; it is a
    strap. Beyond that Linux needed a real type-1 header for the root port
-   (seeded from `rpi-dev`'s config dump: no BARs, writable bus numbers and
-   windows, the PCIe capability with the trained link's status), the SerDes
-   MDIO port for spread spectrum, and the 32-vector MSI block at `+0x4500`
-   (`src/periph/pcie.rs`). It now enumerates the bridge and the VL805 the way
-   the real board does, `link up, 5.0 GT/s PCIe x1 (SSC)` included.
+   (seeded from the config dump of a Raspberry Pi 4B d03115: no BARs, writable
+   bus numbers and windows, the PCIe capability with the trained link's status),
+   the SerDes MDIO port for spread spectrum, and the 32-vector MSI block at
+   `+0x4500` (`src/periph/pcie.rs`). It now enumerates the bridge and the VL805
+   the way the real board does, `link up, 5.0 GT/s PCIe x1 (SSC)` included.
 
 The run ended with the kernel idling in `cpu_do_idle` at `Waiting for root
 device`, because the test image had no ext4 `p2` and the card's CSD packing
@@ -188,9 +188,9 @@ the armstub, so the ARM runs UEFI before any kernel. What it needed:
    request a second and looked hung after its banner (#49, `src/periph/hd.rs`).
 4. With power on, the driver brings the controller up as a host and halts all
    eight host channels, waiting up to ten seconds, polled, for each one to
-   halt. The DWC2 model answers the configuration words measured on `rpi-dev`,
-   halts a channel at once and reports an empty root port
-   (`src/periph/dwc2.rs`).
+   halt. The DWC2 model answers the configuration words measured on a
+   Raspberry Pi 4B d03115, halts a channel at once and reports an empty root
+   port (`src/periph/dwc2.rs`).
 5. systemd-boot writes its random seed back to the ESP before it starts an
    entry. After every write, edk2's `MmcDxe` asks the card how many blocks it
    took (CMD55 + ACMD22, a 4-byte read) and fails the write without an answer.

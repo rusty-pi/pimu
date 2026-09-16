@@ -5,7 +5,7 @@
 //! This is *not* the BSC of [`crate::periph::bsc`]: the Pi 4 device tree calls
 //! it `brcm,bcm2711-hdmi-i2c` (Linux `drivers/i2c/busses/i2c-brcmstb.c`), a
 //! different block with a different register layout. Ground truth from
-//! `rpi-dev`:
+//! a Raspberry Pi 4B d03115:
 //!
 //! ```text
 //! /proc/device-tree/soc/i2c@7ef04500/compatible      brcm,bcm2711-hdmi-i2c
@@ -61,12 +61,13 @@
 //! once the bytes would have been clocked out at the bus rate, so it can never
 //! appear inside the register write that started the transfer.
 //!
-//! The reference board has no monitor on either connector — `rpi-dev` reports
-//! both `card1-HDMI-A-{1,2}/status` as `disconnected` — so by default no slave
-//! answers and every transfer completes `INTRP | NOACK`, which is what makes
-//! start4 log `HDMI%d:EDID error reading EDID block 0 attempt 0` and give up.
-//! [`HdmiDdc::with_edid`] attaches an EDID EEPROM instead, for the day the
-//! HDMI mode-set path is worth exercising.
+//! The reference board has no monitor on either connector — a
+//! Raspberry Pi 4B d03115 reports both `card1-HDMI-A-{1,2}/status` as
+//! `disconnected` — so by default no slave answers and every transfer completes
+//! `INTRP | NOACK`, which is what makes start4 log
+//! `HDMI%d:EDID error reading EDID block 0 attempt 0` and give up.
+//! [`HdmiDdc::with_edid`] attaches an EDID EEPROM instead, for the day the HDMI
+//! mode-set path is worth exercising.
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
