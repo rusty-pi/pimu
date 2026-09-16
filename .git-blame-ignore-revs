@@ -1,0 +1,5 @@
+# Commits that only reformat, skipped by `git blame` (GitHub reads this file too).
+# Locally: git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# specs: code in backticks in the text fields
+21d2ac1e956ebfd7fa62890cc4550ceeb7fdd1c7
