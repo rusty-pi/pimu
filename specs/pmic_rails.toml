@@ -3,12 +3,12 @@ name    = "pmic_rails"
 bus     = "i2c"
 base    = 0x1B
 size    = 0x100
-summary = "Board PMIC owning the SDRAM and I/O rails (start4 descriptor type 0x83)"
-notes   = "On the `bsc` PMIC copy. The board revision, not a probe, selects the driver: there is no part-id register to get right. start4's init sweeps 0x00..0x14 once to log it. Registers not listed read 0."
+summary = "Board PMIC owning the SDRAM and I/O rails (start4 descriptor type `0x83`)"
+notes   = "On the `bsc` PMIC copy. The board revision, not a probe, selects the driver: there is no part-id register to get right. start4's init sweeps `0x00..0x14` once to log it. Registers not listed read 0."
 
 [[block.source]]
 kind       = "decompile"
-ref        = "pmic_init 0x3ED4DAA8 / pmic_add 0x3ED4D85C; descriptor 0x3EDE962C: type 0x83, addr 0x1B, 0.8..1.4 V"
+ref        = "`pmic_init` `0x3ED4DAA8` / `pmic_add` `0x3ED4D85C`; descriptor `0x3EDE962C`: type `0x83`, addr `0x1B`, 0.8..1.4 V"
 confidence = "high"
 
 [[register]]
@@ -20,7 +20,7 @@ notes  = "Status."
 
 [[register.source]]
 kind       = "decompile"
-ref        = "settle callback 0x3EC8C746"
+ref        = "settle callback `0x3EC8C746`"
 confidence = "high"
 
 [[register.field]]
@@ -30,7 +30,7 @@ notes = "Voltage change complete; polled after every setpoint write."
 
 [[register.field.source]]
 kind       = "decompile"
-ref        = "0x3EC8C746 polls reg 0x00 bit 4"
+ref        = "`0x3EC8C746` polls reg `0x00` bit 4"
 confidence = "high"
 
 [[register]]
@@ -39,16 +39,16 @@ offset = 0x09
 width  = 8
 access = "rw"
 reset  = 40
-notes  = "Setpoint of rails 2..4 (sdram_c / sdram_p / sdram_i): raw * 5 mV + 0.9 V."
+notes  = "Setpoint of rails 2..4 (`sdram_c` / `sdram_p` / `sdram_i`): `raw * 5 mV + 0.9 V`."
 
 [[register.source]]
 kind       = "decompile"
-ref        = "rail table image 0x3EE135AC; decode callback 0x3EC8C710"
+ref        = "rail table image `0x3EE135AC`; decode callback `0x3EC8C710`"
 confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "vcgencmd measure_volts sdram_c|sdram_i|sdram_p on a d03115: 1.1000 V each, i.e. raw 40"
+ref        = "`vcgencmd measure_volts sdram_c|sdram_i|sdram_p` on a d03115: 1.1000 V each, i.e. raw 40"
 confidence = "high"
 
 [[register]]
@@ -56,11 +56,11 @@ name   = "SETPOINT_CORE"
 offset = 0x0A
 width  = 8
 access = "rw"
-notes  = "Rail 1 on this part; pmic_init hands rail 1 to the 0x1E part instead, so nothing uses it."
+notes  = "Rail 1 on this part; `pmic_init` hands rail 1 to the `0x1E` part instead, so nothing uses it."
 
 [[register.source]]
 kind       = "decompile"
-ref        = "rail table image 0x3EE135AC; pmic_init does mask[0] &= ~mask[1]"
+ref        = "rail table image `0x3EE135AC`; `pmic_init` does `mask[0] &= ~mask[1]`"
 confidence = "high"
 
 [[register]]
@@ -68,11 +68,11 @@ name   = "SETPOINT_RAIL6"
 offset = 0x12
 width  = 8
 access = "rw"
-notes  = "Rail 6 setpoint: raw * 20 mV + 10 mV."
+notes  = "Rail 6 setpoint: `raw * 20 mV + 10 mV`."
 
 [[register.source]]
 kind       = "decompile"
-ref        = "rail table image 0x3EE135AC; decode callback 0x3EC8C710"
+ref        = "rail table image `0x3EE135AC`; decode callback `0x3EC8C710`"
 confidence = "high"
 
 [[register]]
@@ -80,9 +80,9 @@ name   = "SETPOINT_RAIL5"
 offset = 0x13
 width  = 8
 access = "rw"
-notes  = "Rail 5 setpoint: raw * 20 mV + 10 mV."
+notes  = "Rail 5 setpoint: `raw * 20 mV + 10 mV`."
 
 [[register.source]]
 kind       = "decompile"
-ref        = "rail table image 0x3EE135AC; decode callback 0x3EC8C710"
+ref        = "rail table image `0x3EE135AC`; decode callback `0x3EC8C710`"
 confidence = "high"

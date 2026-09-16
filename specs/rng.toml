@@ -7,23 +7,23 @@ notes   = "Output comes from a fixed-seed xorshift so transcripts stay byte-iden
 
 [[block.source]]
 kind       = "linux"
-ref        = "rng@7e104000, brcm,bcm2711-rng200, reg = <0x7e104000 0x28>; drivers/char/hw_random/iproc-rng200.c (rpi-6.12.y at aa731bab)"
+ref        = "`rng@7e104000`, `brcm,bcm2711-rng200`, `reg = <0x7e104000 0x28>`; `drivers/char/hw_random/iproc-rng200.c` (`rpi-6.12.y` at aa731bab)"
 confidence = "high"
 
 [[block.source]]
 kind       = "decompile"
-ref        = "start4's RNG accesses, all in 0x3ED64A4E..0x3ED64E28; bootloader init 0x8000378E"
+ref        = "start4's RNG accesses, all in `0x3ED64A4E..0x3ED64E28`; bootloader init `0x8000378E`"
 confidence = "high"
 
 [[register]]
 name   = "CTRL"
 offset = 0x00
 access = "rw"
-notes  = "Generator control. Linux and start4 leave a block with RBGEN already set alone."
+notes  = "Generator control. Linux and start4 leave a block with `RBGEN` already set alone."
 
 [[register.source]]
 kind       = "linux"
-ref        = "iproc-rng200.c: RNG_CTRL = (3 << 13) | 0x1FFF"
+ref        = "`iproc-rng200.c`: `RNG_CTRL = (3 << 13) | 0x1FFF`"
 confidence = "high"
 
 [[register.field]]
@@ -33,7 +33,7 @@ notes = "Any bit set runs the generator."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "iproc-rng200.c: RNG_CTRL_RNG_RBGEN_MASK = 0x1FFF"
+ref        = "`iproc-rng200.c`: `RNG_CTRL_RNG_RBGEN_MASK = 0x1FFF`"
 confidence = "high"
 
 [[register.field]]
@@ -43,7 +43,7 @@ notes = "Sample-rate divider."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "iproc-rng200.c writes 3 << 13"
+ref        = "`iproc-rng200.c` writes `3 << 13`"
 confidence = "medium"
 
 [[register]]
@@ -54,12 +54,12 @@ notes  = "Bit 0 holds the generator in reset."
 
 [[register.source]]
 kind       = "linux"
-ref        = "iproc-rng200.c: RNG_SOFT_RESET"
+ref        = "`iproc-rng200.c`: `RNG_SOFT_RESET`"
 confidence = "high"
 
 [[register.source]]
 kind       = "decompile"
-ref        = "bootloader 0x8000378E pulses it 1 then 0"
+ref        = "bootloader `0x8000378E` pulses it 1 then 0"
 confidence = "high"
 
 [[register]]
@@ -70,7 +70,7 @@ notes  = "Bit 0 holds the bit generator in reset."
 
 [[register.source]]
 kind       = "linux"
-ref        = "iproc-rng200.c: RBG_SOFT_RESET"
+ref        = "`iproc-rng200.c`: `RBG_SOFT_RESET`"
 confidence = "high"
 
 [[register]]
@@ -81,7 +81,7 @@ notes  = "Bits generated since reset. Linux spins until it passes 16."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcm2711_rng200_read spins on RNG_TOTAL_BIT_COUNT > 16"
+ref        = "`bcm2711_rng200_read` spins on `RNG_TOTAL_BIT_COUNT > 16`"
 confidence = "high"
 
 [[register]]
@@ -92,12 +92,12 @@ notes  = "Warm-up bits to discard."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcm2711_rng200_init writes 0x40000"
+ref        = "`bcm2711_rng200_init` writes `0x40000`"
 confidence = "high"
 
 [[register.source]]
 kind       = "decompile"
-ref        = "start4 open 0x3ED64CDC writes 0x40000"
+ref        = "start4 open `0x3ED64CDC` writes `0x40000`"
 confidence = "high"
 
 [[register]]
@@ -105,11 +105,11 @@ name   = "PROBE"
 offset = 0x14
 access = "r"
 reset  = 0x00040000
-notes  = "Not in the kernel's list. start4 picks its RNG200 driver when bit 18 reads set, and the legacy BCM2835 driver (whose STATUS / DATA sit where the soft resets are) otherwise."
+notes  = "Not in the kernel's list. start4 picks its RNG200 driver when bit 18 reads set, and the legacy BCM2835 driver (whose `STATUS` / `DATA` sit where the soft resets are) otherwise."
 
 [[register.source]]
 kind       = "decompile"
-ref        = "probe 0x3ED64B0A returns the driver table at 0x3EDFC0BC on bit 18, 0x3EDFC0D4 without; start4db FUN_0ee13458 makes the same choice"
+ref        = "probe `0x3ED64B0A` returns the driver table at `0x3EDFC0BC` on bit 18, `0x3EDFC0D4` without; start4db `FUN_0ee13458` makes the same choice"
 confidence = "high"
 
 [[register.field]]
@@ -119,29 +119,29 @@ notes = "This is an RNG200."
 
 [[register.field.source]]
 kind       = "decompile"
-ref        = "probe 0x3ED64B0A tests bit 18"
+ref        = "probe `0x3ED64B0A` tests bit 18"
 confidence = "high"
 
 [[register]]
 name   = "INT_STATUS"
 offset = 0x18
 access = "w1c"
-notes  = "Interrupt status (source 125). Each bit latches when its condition becomes true, and a write-one clear sticks until the condition goes false and true again. 0x80000022 are the failure bits, which the model never raises."
+notes  = "Interrupt status (source 125). Each bit latches when its condition becomes true, and a write-one clear sticks until the condition goes false and true again. `0x80000022` are the failure bits, which the model never raises."
 
 [[register.source]]
 kind       = "linux"
-ref        = "iproc-rng200.c: RNG_INT_STATUS"
+ref        = "`iproc-rng200.c`: `RNG_INT_STATUS`"
 confidence = "high"
 
 [[register.source]]
 kind       = "decompile"
-ref        = "start4 1.20210303: open arms INT_ENABLE = 0x80000026 with FIFO_COUNT = 0x200, and the handler 0x0ED565C6 only acks bit 2 (|= 4), leaving it enabled with the FIFO still full"
+ref        = "start4 1.20210303: open arms `INT_ENABLE = 0x80000026` with `FIFO_COUNT = 0x200`, and the handler `0x0ED565C6` only acks bit 2 (`|= 4`), leaving it enabled with the FIFO still full"
 confidence = "medium"
 note       = "that build boots on hardware, so the bits are latched events, not levels (#73)"
 
 [[register.source]]
 kind       = "decompile"
-ref        = "irq 0x3ED64BE8 reads it, acks with |= 4 or |= 0x80000022"
+ref        = "irq `0x3ED64BE8` reads it, acks with `|= 4` or `|= 0x80000022`"
 confidence = "high"
 
 [[register.field]]
@@ -151,17 +151,17 @@ notes = "Warm-up threshold reached."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "iproc-rng200.c: RNG_INT_STATUS_TOTAL_BITS_COUNT_IRQ_MASK"
+ref        = "`iproc-rng200.c`: `RNG_INT_STATUS_TOTAL_BITS_COUNT_IRQ_MASK`"
 confidence = "high"
 
 [[register.field]]
 name  = "FIFO_FULL"
 bits  = "2"
-notes = "The FIFO holds FIFO_COUNT.THRESHOLD words."
+notes = "The FIFO holds `FIFO_COUNT.THRESHOLD` words."
 
 [[register.field.source]]
 kind       = "decompile"
-ref        = "irq 0x3ED64BE8: on bit 2, re-arms and releases the reader waiting on gp+879560"
+ref        = "irq `0x3ED64BE8`: on bit 2, re-arms and releases the reader waiting on `gp+879560`"
 confidence = "high"
 
 [[register.field]]
@@ -171,7 +171,7 @@ notes = "Health test failed."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "iproc-rng200.c: RNG_INT_STATUS_NIST_FAIL_IRQ_MASK"
+ref        = "`iproc-rng200.c`: `RNG_INT_STATUS_NIST_FAIL_IRQ_MASK`"
 confidence = "high"
 
 [[register.field]]
@@ -181,18 +181,18 @@ notes = "Generator locked out."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "iproc-rng200.c: RNG_INT_STATUS_MASTER_FAIL_LOCKOUT_IRQ_MASK"
+ref        = "`iproc-rng200.c`: `RNG_INT_STATUS_MASTER_FAIL_LOCKOUT_IRQ_MASK`"
 confidence = "high"
 
 [[register]]
 name   = "INT_ENABLE"
 offset = 0x1C
 access = "rw"
-notes  = "Interrupt enables, same layout as INT_STATUS."
+notes  = "Interrupt enables, same layout as `INT_STATUS`."
 
 [[register.source]]
 kind       = "decompile"
-ref        = "start4 open writes 0x80000022, read writes 0x80000026 before it blocks"
+ref        = "start4 open writes `0x80000022`, read writes `0x80000026` before it blocks"
 confidence = "high"
 
 [[register]]
@@ -203,12 +203,12 @@ notes  = "Pops one word."
 
 [[register.source]]
 kind       = "linux"
-ref        = "iproc-rng200.c: RNG_FIFO_DATA"
+ref        = "`iproc-rng200.c`: `RNG_FIFO_DATA`"
 confidence = "high"
 
 [[register.source]]
 kind       = "decompile"
-ref        = "start4 read 0x3ED64DD0 returns [+0x20]"
+ref        = "start4 read `0x3ED64DD0` returns `[+0x20]`"
 confidence = "high"
 
 [[register]]
@@ -219,7 +219,7 @@ notes  = "Words ready, and the FIFO-full interrupt level."
 
 [[register.source]]
 kind       = "linux"
-ref        = "iproc-rng200.c: RNG_FIFO_COUNT"
+ref        = "`iproc-rng200.c`: `RNG_FIFO_COUNT`"
 confidence = "high"
 
 [[register.field]]
@@ -230,7 +230,7 @@ notes  = "Words ready."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "iproc-rng200.c: RNG_FIFO_COUNT_RNG_FIFO_COUNT_MASK"
+ref        = "`iproc-rng200.c`: `RNG_FIFO_COUNT_RNG_FIFO_COUNT_MASK`"
 confidence = "high"
 
 [[register.field]]
@@ -240,5 +240,5 @@ notes = "FIFO-full interrupt level; 0 never fires."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "bcm2711_rng200_init writes 2 << 8"
+ref        = "`bcm2711_rng200_init` writes `2 << 8`"
 confidence = "high"

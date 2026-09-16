@@ -1,17 +1,17 @@
 <!-- generated from specs/dma.toml by `cargo run -- spec-docs --update` – do not edit -->
 
-# `dma` – Legacy DMA controller: 15 channels 0x100 apart plus the controller-wide interrupt status and enable words
+# `dma` – Legacy DMA controller: 15 channels `0x100` apart plus the controller-wide interrupt status and enable words
 
 - Bus: `vpu` (VPU bus address)
 - Base: `0x7E007000`
 - Size: `0x1000`
 
-start4 copies anything of 1 KiB or more through here (dma_memcpy). Channel 11's slot at +0xB00 is the DMA4 channel (`dma4`), decoded ahead of this block. The 0x7EE04100 controller (`dma_vpu`) has the same channel layout.
+start4 copies anything of 1 KiB or more through here (`dma_memcpy`). Channel 11's slot at `+0xB00` is the DMA4 channel (`dma4`), decoded ahead of this block. The `0x7EE04100` controller (`dma_vpu`) has the same channel layout.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, DMA Controller chapter: channel register blocks 0x100 apart, INT_STATUS / ENABLE at 0xFE0 / 0xFF0
-- decompile (high): dma_memcpy 0x3EC981CC; dma_set_cs 0x3EC98E7C: base = ch < 15 ? 0x7E007000 : 0x7EE04100, start = *(base + ch * 0x100) = flags | 1
+- datasheet (high): BCM2711 ARM Peripherals, DMA Controller chapter: channel register blocks `0x100` apart, `INT_STATUS` / `ENABLE` at `0xFE0` / `0xFF0`
+- decompile (high): `dma_memcpy` `0x3EC981CC`; `dma_set_cs` `0x3EC98E7C`: `base = ch < 15 ? 0x7E007000 : 0x7EE04100`, `start = *(base + ch * 0x100) = flags | 1`
 
 ## Register map
 
@@ -43,30 +43,30 @@ Channel control and status.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, DMA: CS
+- datasheet (high): BCM2711 ARM Peripherals, DMA: `CS`
 
 `ACTIVE` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, DMA: CS
+- datasheet (high): BCM2711 ARM Peripherals, DMA: `CS`
 
 `END` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, DMA: CS
+- datasheet (high): BCM2711 ARM Peripherals, DMA: `CS`
 
 `INT` sources:
 
-- decompile (high): dma_interrupt 0x3EC980E8 only enters dma_chan_interrupt for a channel with CS & 4
+- decompile (high): `dma_interrupt` `0x3EC980E8` only enters `dma_chan_interrupt` for a channel with `CS & 4`
 
 ## `CONBLK_AD`
 
 Offset `0x004`, 15 elements 0x100 apart · access `rw` · 32 bits
 
-Control-block address. Writing a non-null chain while ACTIVE starts it, which is how dmalib starts every transfer.
+Control-block address. Writing a non-null chain while `ACTIVE` starts it, which is how dmalib starts every transfer.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, DMA: CONBLK_AD
-- decompile (high): dma_chain_start 0x3EC97544 writes only *(base + ch * 0x100 + 4) = cb
+- datasheet (high): BCM2711 ARM Peripherals, DMA: `CONBLK_AD`
+- decompile (high): `dma_chain_start` `0x3EC97544` writes only `*(base + ch * 0x100 + 4) = cb`
 
 ## `TI`
 
@@ -77,29 +77,29 @@ Transfer information, loaded from the control block. Control blocks use the same
 | Bits | Field | Access | Notes |
 |---|---|---|---|
 | 0 | `INTEN` | r | Interrupt when this control block is done. |
-| 1 | `TDMODE` | r | 2D mode: TXFR_LEN is YLENGTH:XLENGTH and STRIDE applies. |
+| 1 | `TDMODE` | r | 2D mode: `TXFR_LEN` is `YLENGTH:XLENGTH` and `STRIDE` applies. |
 | 4 | `DEST_INC` | r | Increment the destination address. |
 | 8 | `SRC_INC` | r | Increment the source address. |
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, DMA: TI
+- datasheet (high): BCM2711 ARM Peripherals, DMA: `TI`
 
 `INTEN` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, DMA: TI
+- datasheet (high): BCM2711 ARM Peripherals, DMA: `TI`
 
 `TDMODE` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, DMA: TI
+- datasheet (high): BCM2711 ARM Peripherals, DMA: `TI`
 
 `DEST_INC` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, DMA: TI
+- datasheet (high): BCM2711 ARM Peripherals, DMA: `TI`
 
 `SRC_INC` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, DMA: TI
+- datasheet (high): BCM2711 ARM Peripherals, DMA: `TI`
 
 ## `SOURCE_AD`
 
@@ -109,7 +109,7 @@ Source address.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, DMA: SOURCE_AD
+- datasheet (high): BCM2711 ARM Peripherals, DMA: `SOURCE_AD`
 
 ## `DEST_AD`
 
@@ -119,17 +119,17 @@ Destination address.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, DMA: DEST_AD
+- datasheet (high): BCM2711 ARM Peripherals, DMA: `DEST_AD`
 
 ## `TXFR_LEN`
 
 Offset `0x014`, 15 elements 0x100 apart · access `r` · 32 bits
 
-Transfer length; YLENGTH (29:16) and XLENGTH (15:0) in 2D mode.
+Transfer length; `YLENGTH` (29:16) and `XLENGTH` (15:0) in 2D mode.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, DMA: TXFR_LEN
+- datasheet (high): BCM2711 ARM Peripherals, DMA: `TXFR_LEN`
 
 ## `STRIDE`
 
@@ -139,7 +139,7 @@ Offset `0x018`, 15 elements 0x100 apart · access `r` · 32 bits
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, DMA: STRIDE
+- datasheet (high): BCM2711 ARM Peripherals, DMA: `STRIDE`
 
 ## `NEXTCONBK`
 
@@ -149,7 +149,7 @@ Next control block in the chain.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, DMA: NEXTCONBK
+- datasheet (high): BCM2711 ARM Peripherals, DMA: `NEXTCONBK`
 
 ## `DEBUG`
 
@@ -159,7 +159,7 @@ Error flags.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, DMA: DEBUG
+- datasheet (high): BCM2711 ARM Peripherals, DMA: `DEBUG`
 
 ## `INT_STATUS`
 
@@ -169,7 +169,7 @@ One interrupt bit per channel.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, DMA: INT_STATUS
+- datasheet (high): BCM2711 ARM Peripherals, DMA: `INT_STATUS`
 
 ## `ENABLE`
 
@@ -179,4 +179,4 @@ One enable bit per channel.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, DMA: ENABLE
+- datasheet (high): BCM2711 ARM Peripherals, DMA: `ENABLE`

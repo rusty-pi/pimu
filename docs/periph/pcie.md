@@ -1,18 +1,18 @@
 <!-- generated from specs/pcie.toml by `cargo run -- spec-docs --update` – do not edit -->
 
-# `pcie` – PCIe root complex (pcie-brcmstb), with the VL805 xHCI controller behind it
+# `pcie` – PCIe root complex (`pcie-brcmstb`), with the VL805 xHCI controller behind it
 
 - Bus: `vpu` (VPU bus address)
 - Base: `0x7D500000`
 - Size: `0x9310`
 
-+0x0000..+0x0FFF is the root port's own configuration space (seeded from a Raspberry Pi 4B d03115; its layout is PCI's, not listed here beyond the two words with behaviour). The VPU reaches the endpoint's BAR0 only by 40-bit DMA through the outbound window; the endpoint's DMA comes back through inbound window 2.
+`+0x0000..+0x0FFF` is the root port's own configuration space (seeded from a Raspberry Pi 4B d03115; its layout is PCI's, not listed here beyond the two words with behaviour). The VPU reaches the endpoint's BAR0 only by 40-bit DMA through the outbound window; the endpoint's DMA comes back through inbound window 2.
 
 Sources:
 
-- measured (high): /proc/device-tree/scb/pcie@7d500000/reg on a real board: <0x0 0x7d500000 0x0 0x9310>
-- linux (high): drivers/pci/controller/pcie-brcmstb.c
-- decompile (high): bootcode 0x8000AB4A; second-stage bootloader pcie_reset 0x000A7034, pcie_init 0x000A6CA2 / 0x000A6DCC, link poll 0x000A6F7E, bus scan 0x000A712C
+- measured (high): `/proc/device-tree/scb/pcie@7d500000/reg` on a real board: `<0x0 0x7d500000 0x0 0x9310>`
+- linux (high): `drivers/pci/controller/pcie-brcmstb.c`
+- decompile (high): bootcode `0x8000AB4A`; second-stage bootloader `pcie_reset` `0x000A7034`, `pcie_init` `0x000A6CA2` / `0x000A6DCC`, link poll `0x000A6F7E`, bus scan `0x000A712C`
 
 ## Register map
 
@@ -63,20 +63,20 @@ Root port link control; link status in the top half (5 GT/s x1 with slot clock o
 
 Sources:
 
-- linux (high): pcie-brcmstb.c: BRCM_PCIE_CAP_REGS (0xAC) + PCI_EXP_LNKCTL
-- measured (high): Raspberry Pi 4B d03115 lspci: LnkSta: Speed 5GT/s, Width x1, SlotClk+
+- linux (high): `pcie-brcmstb.c`: `BRCM_PCIE_CAP_REGS` (`0xAC`) + `PCI_EXP_LNKCTL`
+- measured (high): Raspberry Pi 4B d03115 `lspci`: `LnkSta: Speed 5GT/s, Width x1, SlotClk+`
 
 ## `PRIV1_ID_VAL3`
 
 Offset `0x43C` · access `rw` · 32 bits · reset `0x20060400`
 
-Revision (top byte) and class code; the header word at +0x08 is a view of it, which is how Linux turns the block into a PCI-to-PCI bridge.
+Revision (top byte) and class code; the header word at `+0x08` is a view of it, which is how Linux turns the block into a PCI-to-PCI bridge.
 
 Sources:
 
-- linux (high): pcie-brcmstb.c: PCIE_RC_CFG_PRIV1_ID_VAL3
-- measured (high): Raspberry Pi 4B d03115 /sys/bus/pci/devices/0000:00:00.0/config at 0x43C
-- decompile (high): the bootloader writes it at 0x000A6E20
+- linux (high): `pcie-brcmstb.c`: `PCIE_RC_CFG_PRIV1_ID_VAL3`
+- measured (high): Raspberry Pi 4B d03115 `/sys/bus/pci/devices/0000:00:00.0/config` at `0x43C`
+- decompile (high): the bootloader writes it at `0x000A6E20`
 
 ## `MDIO_ADDR`
 
@@ -86,20 +86,20 @@ SerDes MDIO command packet: register address and direction.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
-| 15:0 | `REGAD` | rw | SerDes register; 0x1F selects the block the others address. |
+| 15:0 | `REGAD` | rw | SerDes register; `0x1F` selects the block the others address. |
 | 20 | `CMD_READ` | rw | Read, rather than write. |
 
 Sources:
 
-- linux (high): pcie-brcmstb.c: PCIE_RC_DL_MDIO_ADDR, brcm_pcie_mdio_form_pkt
+- linux (high): `pcie-brcmstb.c`: `PCIE_RC_DL_MDIO_ADDR`, `brcm_pcie_mdio_form_pkt`
 
 `REGAD` sources:
 
-- linux (high): pcie-brcmstb.c: MDIO_REGAD
+- linux (high): `pcie-brcmstb.c`: `MDIO_REGAD`
 
 `CMD_READ` sources:
 
-- linux (high): pcie-brcmstb.c: MDIO_CMD_READ << 20
+- linux (high): `pcie-brcmstb.c`: `MDIO_CMD_READ << 20`
 
 ## `MDIO_WR_DATA`
 
@@ -113,11 +113,11 @@ SerDes MDIO write data.
 
 Sources:
 
-- linux (high): pcie-brcmstb.c: PCIE_RC_DL_MDIO_WR_DATA
+- linux (high): `pcie-brcmstb.c`: `PCIE_RC_DL_MDIO_WR_DATA`
 
 `DONE` sources:
 
-- linux (high): pcie-brcmstb.c: MDIO_DATA_DONE_MASK
+- linux (high): `pcie-brcmstb.c`: `MDIO_DATA_DONE_MASK`
 
 ## `MDIO_RD_DATA`
 
@@ -131,11 +131,11 @@ SerDes MDIO read data.
 
 Sources:
 
-- linux (high): pcie-brcmstb.c: PCIE_RC_DL_MDIO_RD_DATA
+- linux (high): `pcie-brcmstb.c`: `PCIE_RC_DL_MDIO_RD_DATA`
 
 `DONE` sources:
 
-- linux (high): pcie-brcmstb.c: MDIO_DATA_DONE_MASK
+- linux (high): `pcie-brcmstb.c`: `MDIO_DATA_DONE_MASK`
 
 ## `MISC_CTRL`
 
@@ -145,18 +145,18 @@ Miscellaneous control. Stored.
 
 Sources:
 
-- linux (high): pcie-brcmstb.c: PCIE_MISC_MISC_CTRL
+- linux (high): `pcie-brcmstb.c`: `PCIE_MISC_MISC_CTRL`
 
 ## `MEM_WIN0_LO`
 
 Offset `0x400C` · access `rw` · 32 bits
 
-PCI bus address of the outbound window, low word; the bootloader writes 0x80000000.
+PCI bus address of the outbound window, low word; the bootloader writes `0x80000000`.
 
 Sources:
 
-- linux (high): pcie-brcmstb.c: PCIE_MISC_CPU_2_PCIE_MEM_WIN0_LO
-- decompile (high): 0x000A725C
+- linux (high): `pcie-brcmstb.c`: `PCIE_MISC_CPU_2_PCIE_MEM_WIN0_LO`
+- decompile (high): `0x000A725C`
 
 ## `MEM_WIN0_HI`
 
@@ -166,7 +166,7 @@ PCI bus address of the outbound window, high word.
 
 Sources:
 
-- linux (high): pcie-brcmstb.c: PCIE_MISC_CPU_2_PCIE_MEM_WIN0_HI
+- linux (high): `pcie-brcmstb.c`: `PCIE_MISC_CPU_2_PCIE_MEM_WIN0_HI`
 
 ## `RC_BAR1_CONFIG_LO`
 
@@ -176,8 +176,8 @@ Inbound window 1; switched off by the bootloader and Linux. Stored.
 
 Sources:
 
-- linux (high): pcie-brcmstb.c: PCIE_MISC_RC_BAR1_CONFIG_LO
-- decompile (high): the bootloader clears it at 0x000A6D60
+- linux (high): `pcie-brcmstb.c`: `PCIE_MISC_RC_BAR1_CONFIG_LO`
+- decompile (high): the bootloader clears it at `0x000A6D60`
 
 ## `RC_BAR2_CONFIG_LO`
 
@@ -187,15 +187,15 @@ Inbound window 2, the endpoint's path to system memory: size code in the low bit
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
-| 4:0 | `SIZE` | rw | 1..0x15 = 64 KiB..64 GiB, 0x1C..0x1F = 4..32 KiB, anything else off. |
+| 4:0 | `SIZE` | rw | `1..0x15` = 64 KiB..64 GiB, `0x1C..0x1F` = 4..32 KiB, anything else off. |
 
 Sources:
 
-- linux (high): pcie-brcmstb.c: PCIE_MISC_RC_BAR2_CONFIG_LO, brcm_pcie_encode_ibar_size(); brcm_pcie_get_inbound_wins(): 'the BAR2 cpu_addr is hardwired to the start of system memory'
+- linux (high): `pcie-brcmstb.c`: `PCIE_MISC_RC_BAR2_CONFIG_LO`, `brcm_pcie_encode_ibar_size()`; `brcm_pcie_get_inbound_wins()`: 'the BAR2 cpu_addr is hardwired to the start of system memory'
 
 `SIZE` sources:
 
-- linux (high): pcie-brcmstb.c: brcm_pcie_encode_ibar_size()
+- linux (high): `pcie-brcmstb.c`: `brcm_pcie_encode_ibar_size()`
 
 ## `RC_BAR2_CONFIG_HI`
 
@@ -205,7 +205,7 @@ Inbound window 2 PCI bus base, high word.
 
 Sources:
 
-- linux (high): pcie-brcmstb.c: PCIE_MISC_RC_BAR2_CONFIG_HI
+- linux (high): `pcie-brcmstb.c`: `PCIE_MISC_RC_BAR2_CONFIG_HI`
 
 ## `RC_BAR3_CONFIG_LO`
 
@@ -215,8 +215,8 @@ Inbound window 3; switched off. Stored.
 
 Sources:
 
-- linux (high): pcie-brcmstb.c: PCIE_MISC_RC_BAR3_CONFIG_LO
-- decompile (high): the bootloader clears it at 0x000A6D70
+- linux (high): `pcie-brcmstb.c`: `PCIE_MISC_RC_BAR3_CONFIG_LO`
+- decompile (high): the bootloader clears it at `0x000A6D70`
 
 ## `MSI_BAR_CONFIG_LO`
 
@@ -226,7 +226,7 @@ PCI bus address MSI writes are caught at; bit 0 is the enable.
 
 Sources:
 
-- linux (high): pcie-brcmstb.c: PCIE_MISC_MSI_BAR_CONFIG_LO
+- linux (high): `pcie-brcmstb.c`: `PCIE_MISC_MSI_BAR_CONFIG_LO`
 
 ## `MSI_BAR_CONFIG_HI`
 
@@ -236,23 +236,23 @@ MSI catch address, high word.
 
 Sources:
 
-- linux (high): pcie-brcmstb.c: PCIE_MISC_MSI_BAR_CONFIG_HI
+- linux (high): `pcie-brcmstb.c`: `PCIE_MISC_MSI_BAR_CONFIG_HI`
 
 ## `MSI_DATA_CONFIG`
 
 Offset `0x404C` · access `rw` · 32 bits
 
-Match mask (top half) and pattern (bottom half) for MSI data; Linux writes 0xFFE06540, the low five bits pick the vector.
+Match mask (top half) and pattern (bottom half) for MSI data; Linux writes `0xFFE06540`, the low five bits pick the vector.
 
 Sources:
 
-- linux (high): pcie-brcmstb.c: PCIE_MISC_MSI_DATA_CONFIG
+- linux (high): `pcie-brcmstb.c`: `PCIE_MISC_MSI_DATA_CONFIG`
 
 ## `MISC_PCIE_STATUS`
 
 Offset `0x4068` · access `r` · 32 bits
 
-Link state. A live link reads 0xB0; with no endpoint only the port-mode strap.
+Link state. A live link reads `0xB0`; with no endpoint only the port-mode strap.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -262,53 +262,53 @@ Link state. A live link reads 0xB0; with no endpoint only the port-mode strap.
 
 Sources:
 
-- linux (high): pcie-brcmstb.c: brcm_pcie_link_up() and brcm_pcie_rc_mode()
-- decompile (high): link-up predicate 0x000A6F7E; 'PCIe timeout: 0x%08x' prints the whole word
+- linux (high): `pcie-brcmstb.c`: `brcm_pcie_link_up()` and `brcm_pcie_rc_mode()`
+- decompile (high): link-up predicate `0x000A6F7E`; `PCIe timeout: 0x%08x` prints the whole word
 
 `PHYLINKUP` sources:
 
-- linux (high): pcie-brcmstb.c: PCIE_MISC_PCIE_STATUS_PCIE_PHYLINKUP_MASK
+- linux (high): `pcie-brcmstb.c`: `PCIE_MISC_PCIE_STATUS_PCIE_PHYLINKUP_MASK`
 
 `DL_ACTIVE` sources:
 
-- linux (high): pcie-brcmstb.c: PCIE_MISC_PCIE_STATUS_PCIE_DL_ACTIVE_MASK
+- linux (high): `pcie-brcmstb.c`: `PCIE_MISC_PCIE_STATUS_PCIE_DL_ACTIVE_MASK`
 
 `PORT_RC` sources:
 
-- linux (high): pcie-brcmstb.c: PCIE_MISC_PCIE_STATUS_PCIE_PORT_MASK; 'PCIe RC controller misconfigured as Endpoint' when clear
+- linux (high): `pcie-brcmstb.c`: `PCIE_MISC_PCIE_STATUS_PCIE_PORT_MASK`; `PCIe RC controller misconfigured as Endpoint` when clear
 
 ## `MISC_REVISION`
 
 Offset `0x406C` · access `r` · 32 bits · reset `0x303`
 
-Hardware revision. Linux picks the 32-vector MSI block at +0x4500 from 3.3 on.
+Hardware revision. Linux picks the 32-vector MSI block at `+0x4500` from 3.3 on.
 
 Sources:
 
-- linux (high): pcie-brcmstb.c: PCIE_MISC_REVISION, BRCM_PCIE_HW_REV_33
-- measured (medium): the MSI domain on a Raspberry Pi 4B d03115 is 32 wide (/sys/kernel/debug/irq/domains/unknown-1: size: 32), so at least 3.3 — _the exact revision was not read; 3.3 is the lower bound_
+- linux (high): `pcie-brcmstb.c`: `PCIE_MISC_REVISION`, `BRCM_PCIE_HW_REV_33`
+- measured (medium): the MSI domain on a Raspberry Pi 4B d03115 is 32 wide (`/sys/kernel/debug/irq/domains/unknown-1`: `size: 32`), so at least 3.3 — _the exact revision was not read; 3.3 is the lower bound_
 
 ## `MEM_WIN0_BASE_LIMIT`
 
 Offset `0x4070` · access `rw` · 32 bits
 
-CPU-side extent of the outbound window in MiB: base in 15:4, limit in 31:20. The bootloader writes 0x3FF00000.
+CPU-side extent of the outbound window in MiB: base in 15:4, limit in 31:20. The bootloader writes `0x3FF00000`.
 
 Sources:
 
-- linux (high): pcie-brcmstb.c: PCIE_MISC_CPU_2_PCIE_MEM_WIN0_BASE_LIMIT
-- decompile (high): 0x000A72C6
+- linux (high): `pcie-brcmstb.c`: `PCIE_MISC_CPU_2_PCIE_MEM_WIN0_BASE_LIMIT`
+- decompile (high): `0x000A72C6`
 
 ## `MEM_WIN0_BASE_HI`
 
 Offset `0x4080` · access `rw` · 32 bits
 
-CPU-side base above bit 31; written 6, putting the window at 0x6_0000_0000.
+CPU-side base above bit 31; written 6, putting the window at `0x6_0000_0000`.
 
 Sources:
 
-- linux (high): pcie-brcmstb.c: PCIE_MISC_CPU_2_PCIE_MEM_WIN0_BASE_HI
-- decompile (high): 0x000A72DE
+- linux (high): `pcie-brcmstb.c`: `PCIE_MISC_CPU_2_PCIE_MEM_WIN0_BASE_HI`
+- decompile (high): `0x000A72DE`
 
 ## `MEM_WIN0_LIMIT_HI`
 
@@ -318,8 +318,8 @@ CPU-side limit above bit 31; written 6.
 
 Sources:
 
-- linux (high): pcie-brcmstb.c: PCIE_MISC_CPU_2_PCIE_MEM_WIN0_LIMIT_HI
-- decompile (high): 0x000A72F0
+- linux (high): `pcie-brcmstb.c`: `PCIE_MISC_CPU_2_PCIE_MEM_WIN0_LIMIT_HI`
+- decompile (high): `0x000A72F0`
 
 ## `HARD_DEBUG`
 
@@ -329,7 +329,7 @@ PCIe hard-debug control. Stored.
 
 Sources:
 
-- linux (high): pcie-brcmstb.c: PCIE_MISC_HARD_PCIE_HARD_DEBUG
+- linux (high): `pcie-brcmstb.c`: `PCIE_MISC_HARD_PCIE_HARD_DEBUG`
 
 ## `INTR2_CPU_STATUS`
 
@@ -339,7 +339,7 @@ Root-complex level-2 interrupt controller (legacy MSI block). Stored.
 
 Sources:
 
-- linux (high): pcie-brcmstb.c: PCIE_INTR2_CPU_BASE
+- linux (high): `pcie-brcmstb.c`: `PCIE_INTR2_CPU_BASE`
 
 ## `INTR2_CPU_SET`
 
@@ -349,7 +349,7 @@ Set status bits. Stored.
 
 Sources:
 
-- linux (medium): pcie-brcmstb.c: PCIE_INTR2_CPU_BASE + 0x4
+- linux (medium): `pcie-brcmstb.c`: `PCIE_INTR2_CPU_BASE + 0x4`
 
 ## `INTR2_CPU_CLR`
 
@@ -359,7 +359,7 @@ Clear status bits. Stored.
 
 Sources:
 
-- linux (medium): pcie-brcmstb.c: PCIE_INTR2_CPU_BASE + 0x8
+- linux (medium): `pcie-brcmstb.c`: `PCIE_INTR2_CPU_BASE + 0x8`
 
 ## `INTR2_CPU_MASK_STATUS`
 
@@ -369,7 +369,7 @@ Mask. Stored.
 
 Sources:
 
-- linux (medium): pcie-brcmstb.c: PCIE_INTR2_CPU_BASE + 0xC
+- linux (medium): `pcie-brcmstb.c`: `PCIE_INTR2_CPU_BASE + 0xC`
 
 ## `INTR2_CPU_MASK_SET`
 
@@ -379,7 +379,7 @@ Mask bits. Stored.
 
 Sources:
 
-- linux (medium): pcie-brcmstb.c: PCIE_INTR2_CPU_BASE + 0x10
+- linux (medium): `pcie-brcmstb.c`: `PCIE_INTR2_CPU_BASE + 0x10`
 
 ## `INTR2_CPU_MASK_CLR`
 
@@ -389,7 +389,7 @@ Unmask bits. Stored.
 
 Sources:
 
-- linux (medium): pcie-brcmstb.c: PCIE_INTR2_CPU_BASE + 0x14
+- linux (medium): `pcie-brcmstb.c`: `PCIE_INTR2_CPU_BASE + 0x14`
 
 ## `MSI_INTR2_STATUS`
 
@@ -399,7 +399,7 @@ MSI vectors pending; a caught MSI write sets its bit and drives GIC SPI 148 whil
 
 Sources:
 
-- linux (high): pcie-brcmstb.c: PCIE_MSI_INTR2_BASE, status at +0x0
+- linux (high): `pcie-brcmstb.c`: `PCIE_MSI_INTR2_BASE`, status at `+0x0`
 
 ## `MSI_INTR2_SET`
 
@@ -409,7 +409,7 @@ Set pending bits.
 
 Sources:
 
-- linux (high): pcie-brcmstb.c: PCIE_MSI_INTR2_BASE + 0x4
+- linux (high): `pcie-brcmstb.c`: `PCIE_MSI_INTR2_BASE + 0x4`
 
 ## `MSI_INTR2_CLR`
 
@@ -419,7 +419,7 @@ Clear pending bits.
 
 Sources:
 
-- linux (high): pcie-brcmstb.c: PCIE_MSI_INTR2_BASE + 0x8
+- linux (high): `pcie-brcmstb.c`: `PCIE_MSI_INTR2_BASE + 0x8`
 
 ## `MSI_INTR2_MASK_STATUS`
 
@@ -429,7 +429,7 @@ Mask.
 
 Sources:
 
-- linux (high): pcie-brcmstb.c: PCIE_MSI_INTR2_BASE + 0xC
+- linux (high): `pcie-brcmstb.c`: `PCIE_MSI_INTR2_BASE + 0xC`
 
 ## `MSI_INTR2_MASK_SET`
 
@@ -439,7 +439,7 @@ Mask vectors.
 
 Sources:
 
-- linux (high): pcie-brcmstb.c: PCIE_MSI_INTR2_BASE + 0x10
+- linux (high): `pcie-brcmstb.c`: `PCIE_MSI_INTR2_BASE + 0x10`
 
 ## `MSI_INTR2_MASK_CLR`
 
@@ -449,24 +449,24 @@ Unmask vectors.
 
 Sources:
 
-- linux (high): pcie-brcmstb.c: PCIE_MSI_INTR2_BASE + 0x14
+- linux (high): `pcie-brcmstb.c`: `PCIE_MSI_INTR2_BASE + 0x14`
 
 ## `EXT_CFG_DATA`
 
 Offset `0x8000`, 1024 elements 0x4 apart · access `rw` · 32 bits
 
-4 KiB view of the configuration space of the function EXT_CFG_INDEX selects. Bus 1 device 0 is the VL805; everything else, bus 0 included, reads all-ones.
+4 KiB view of the configuration space of the function `EXT_CFG_INDEX` selects. Bus 1 device 0 is the VL805; everything else, bus 0 included, reads all-ones.
 
 Sources:
 
-- linux (high): pcie-brcmstb.c: PCIE_EXT_CFG_DATA; brcm_pcie_map_conf() sends the root bus to base + where instead
-- measured (high): examples-on-real-hardware/sd-card-boot.log: the bus scan prints only 00001106:00003483
+- linux (high): `pcie-brcmstb.c`: `PCIE_EXT_CFG_DATA`; `brcm_pcie_map_conf()` sends the root bus to `base + where` instead
+- measured (high): `examples-on-real-hardware/sd-card-boot.log`: the bus scan prints only `00001106:00003483`
 
 ## `EXT_CFG_INDEX`
 
 Offset `0x9000` · access `rw` · 32 bits
 
-Selects the function EXT_CFG_DATA shows.
+Selects the function `EXT_CFG_DATA` shows.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -476,19 +476,19 @@ Selects the function EXT_CFG_DATA shows.
 
 Sources:
 
-- linux (high): pcie-brcmstb.c: PCIE_EXT_CFG_INDEX, bus << 20 | slot << 15 | fn << 12
+- linux (high): `pcie-brcmstb.c`: `PCIE_EXT_CFG_INDEX`, `bus << 20 | slot << 15 | fn << 12`
 
 `FUNC` sources:
 
-- linux (high): pcie-brcmstb.c: PCIE_EXT_FUNC_SHIFT
+- linux (high): `pcie-brcmstb.c`: `PCIE_EXT_FUNC_SHIFT`
 
 `SLOT` sources:
 
-- linux (high): pcie-brcmstb.c: PCIE_EXT_SLOT_SHIFT
+- linux (high): `pcie-brcmstb.c`: `PCIE_EXT_SLOT_SHIFT`
 
 `BUSNUM` sources:
 
-- linux (high): pcie-brcmstb.c: PCIE_EXT_BUSNUM_SHIFT
+- linux (high): `pcie-brcmstb.c`: `PCIE_EXT_BUSNUM_SHIFT`
 
 ## `RGR1_SW_INIT_1`
 
@@ -503,13 +503,13 @@ Resets. Releasing PERST# with the endpoint present trains the link on the spot; 
 
 Sources:
 
-- linux (high): pcie-brcmstb.c: PCIE_RGR1_SW_INIT_1
-- decompile (high): bootcode 0x8000AB4A writes 2 then 3; pcie_init releases the bridge at 0x000A6CA2 and PERST# at 0x000A6DCC
+- linux (high): `pcie-brcmstb.c`: `PCIE_RGR1_SW_INIT_1`
+- decompile (high): bootcode `0x8000AB4A` writes 2 then 3; `pcie_init` releases the bridge at `0x000A6CA2` and PERST# at `0x000A6DCC`
 
 `PERST` sources:
 
-- linux (high): pcie-brcmstb.c: RGR1_SW_INIT_1_PERST_MASK
+- linux (high): `pcie-brcmstb.c`: `RGR1_SW_INIT_1_PERST_MASK`
 
 `INIT` sources:
 
-- linux (high): pcie-brcmstb.c: RGR1_SW_INIT_1_INIT_GENERIC_MASK
+- linux (high): `pcie-brcmstb.c`: `RGR1_SW_INIT_1_INIT_GENERIC_MASK`

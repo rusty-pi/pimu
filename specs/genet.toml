@@ -3,21 +3,21 @@ name    = "genet"
 base    = 0x7D580000
 size    = 0x10000
 summary = "GENET v5 Ethernet MAC with its UniMAC MDIO controller (the PHY is `bcm54213pe`)"
-notes   = "GENET v4/v5 layout. Each DMA direction has 256 three-word descriptors and 17 ring register blocks 0x40 apart; ring 16 is the default ring. Reset values below are the measured values of registers no client writes on the reference board's boot path."
+notes   = "GENET v4/v5 layout. Each DMA direction has 256 three-word descriptors and 17 ring register blocks `0x40` apart; ring 16 is the default ring. Reset values below are the measured values of registers no client writes on the reference board's boot path."
 
 [[block.source]]
 kind       = "linux"
-ref        = "/scb/ethernet@7d580000, reg = <0x7d580000 0x10000>; drivers/net/ethernet/broadcom/genet/bcmgenet.h, drivers/net/mdio/mdio-bcm-unimac.c"
+ref        = "`/scb/ethernet@7d580000`, `reg = <0x7d580000 0x10000>`; `drivers/net/ethernet/broadcom/genet/bcmgenet.h`, `drivers/net/mdio/mdio-bcm-unimac.c`"
 confidence = "high"
 
 [[block.source]]
 kind       = "decompile"
-ref        = "EEPROM bootloader network boot (disassembled LZ4 BOOTLOADER stage); start4 MDIO FUN_0ecc3198 / FUN_0ecc3280, UMAC start FUN_0ecc3b6c, ring 16 setup FUN_0ecc2d54 / FUN_0ecc2e4c"
+ref        = "EEPROM bootloader network boot (disassembled LZ4 BOOTLOADER stage); start4 MDIO `FUN_0ecc3198` / `FUN_0ecc3280`, UMAC start `FUN_0ecc3b6c`, ring 16 setup `FUN_0ecc2d54` / `FUN_0ecc2e4c`"
 confidence = "high"
 
 [[block.source]]
 kind       = "measured"
-ref        = "read-only /dev/mem reads of named registers on a Pi 4B rev 1.5 running Linux 6.12, link up"
+ref        = "read-only `/dev/mem` reads of named registers on a Pi 4B rev 1.5 running Linux 6.12, link up"
 confidence = "high"
 
 [[register]]
@@ -25,16 +25,16 @@ name   = "SYS_REV_CTRL"
 offset = 0x0000
 access = "r"
 reset  = 0x06000000
-notes  = "Major 6 in 27:24, which bcmgenet maps to GENET v5."
+notes  = "Major 6 in 27:24, which `bcmgenet` maps to GENET v5."
 
 [[register.source]]
 kind       = "measured"
-ref        = "SYS_REV_CTRL 0x06000000"
+ref        = "`SYS_REV_CTRL` `0x06000000`"
 confidence = "high"
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet_set_hw_params: 'GENET 5.0 EPHY: 0x0000'"
+ref        = "`bcmgenet_set_hw_params`: `GENET 5.0 EPHY: 0x0000`"
 confidence = "high"
 
 [[register]]
@@ -45,7 +45,7 @@ notes  = "Port mode."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet.h: SYS_PORT_CTRL"
+ref        = "`bcmgenet.h`: `SYS_PORT_CTRL`"
 confidence = "high"
 
 [[register]]
@@ -56,7 +56,7 @@ notes  = "Receive buffer flush."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet.h: SYS_RBUF_FLUSH_CTRL"
+ref        = "`bcmgenet.h`: `SYS_RBUF_FLUSH_CTRL`"
 confidence = "high"
 
 [[register]]
@@ -67,7 +67,7 @@ notes  = "Transmit buffer flush."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet.h: SYS_TBUF_FLUSH_CTRL"
+ref        = "`bcmgenet.h`: `SYS_TBUF_FLUSH_CTRL`"
 confidence = "high"
 
 [[register]]
@@ -79,7 +79,7 @@ notes  = "EXT block power management."
 
 [[register.source]]
 kind       = "measured"
-ref        = "EXT_PWR_MGMT 0x051f02c3"
+ref        = "`EXT_PWR_MGMT` `0x051f02c3`"
 confidence = "high"
 
 [[register]]
@@ -87,11 +87,11 @@ name   = "EXT_RGMII_OOB_CTRL"
 offset = 0x008C
 access = "rw"
 reset  = 0x00F00000
-notes  = "RGMII out-of-band control. Measured 0x00f00050: Linux adds RGMII_MODE_EN (6) and RGMII_LINK (4) to the 23:20 the bootloader leaves."
+notes  = "RGMII out-of-band control. Measured `0x00f00050`: Linux adds `RGMII_MODE_EN` (6) and `RGMII_LINK` (4) to the 23:20 the bootloader leaves."
 
 [[register.source]]
 kind       = "measured"
-ref        = "EXT_RGMII_OOB_CTRL 0x00f00050"
+ref        = "`EXT_RGMII_OOB_CTRL` `0x00f00050`"
 confidence = "high"
 
 [[register]]
@@ -102,7 +102,7 @@ notes  = "Internal GPHY control; unused with the external RGMII PHY."
 
 [[register.source]]
 kind       = "measured"
-ref        = "EXT_GPHY_CTRL 0x00000000"
+ref        = "`EXT_GPHY_CTRL` `0x00000000`"
 confidence = "high"
 
 [[register]]
@@ -111,51 +111,51 @@ offset = 0x0200
 count  = 2
 stride = 0x40
 access = "r"
-notes  = "Interrupt status of INTRL2_0 (ring 16 and MDIO) and INTRL2_1 (rings 0..15: TX 15:0, RX 31:16). Each drives a line while an unmasked bit is set: GIC SPI 157 and 158."
+notes  = "Interrupt status of `INTRL2_0` (ring 16 and MDIO) and `INTRL2_1` (rings 0..15: TX 15:0, RX 31:16). Each drives a line while an unmasked bit is set: GIC SPI 157 and 158."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet.h: INTRL2_CPU_STAT, UMAC_IRQ_*"
+ref        = "`bcmgenet.h`: `INTRL2_CPU_STAT`, `UMAC_IRQ_*`"
 confidence = "high"
 
 [[register.field]]
 name  = "RXDMA_MBDONE"
 bits  = "13"
-notes = "INTRL2_0: ring 16 received."
+notes = "`INTRL2_0`: ring 16 received."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "bcmgenet.h: UMAC_IRQ_RXDMA_MBDONE"
+ref        = "`bcmgenet.h`: `UMAC_IRQ_RXDMA_MBDONE`"
 confidence = "high"
 
 [[register.field]]
 name  = "TXDMA_MBDONE"
 bits  = "16"
-notes = "INTRL2_0: ring 16 sent."
+notes = "`INTRL2_0`: ring 16 sent."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "bcmgenet.h: UMAC_IRQ_TXDMA_MBDONE"
+ref        = "`bcmgenet.h`: `UMAC_IRQ_TXDMA_MBDONE`"
 confidence = "high"
 
 [[register.field]]
 name  = "MDIO_DONE"
 bits  = "23"
-notes = "INTRL2_0: MDIO frame done."
+notes = "`INTRL2_0`: MDIO frame done."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "bcmgenet.h: UMAC_IRQ_MDIO_DONE"
+ref        = "`bcmgenet.h`: `UMAC_IRQ_MDIO_DONE`"
 confidence = "high"
 
 [[register.field]]
 name  = "MDIO_ERROR"
 bits  = "24"
-notes = "INTRL2_0: MDIO read failed."
+notes = "`INTRL2_0`: MDIO read failed."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "bcmgenet.h: UMAC_IRQ_MDIO_ERROR"
+ref        = "`bcmgenet.h`: `UMAC_IRQ_MDIO_ERROR`"
 confidence = "high"
 
 [[register]]
@@ -168,7 +168,7 @@ notes  = "Set status bits."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet.h: INTRL2_CPU_SET"
+ref        = "`bcmgenet.h`: `INTRL2_CPU_SET`"
 confidence = "high"
 
 [[register]]
@@ -181,7 +181,7 @@ notes  = "Clear status bits."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet.h: INTRL2_CPU_CLEAR"
+ref        = "`bcmgenet.h`: `INTRL2_CPU_CLEAR`"
 confidence = "high"
 
 [[register]]
@@ -194,7 +194,7 @@ notes  = "Mask; everything masked until a driver unmasks it."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet.h: INTRL2_CPU_MASK_STATUS"
+ref        = "`bcmgenet.h`: `INTRL2_CPU_MASK_STATUS`"
 confidence = "high"
 
 [[register]]
@@ -207,7 +207,7 @@ notes  = "Mask bits."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet.h: INTRL2_CPU_MASK_SET"
+ref        = "`bcmgenet.h`: `INTRL2_CPU_MASK_SET`"
 confidence = "high"
 
 [[register]]
@@ -220,7 +220,7 @@ notes  = "Unmask bits."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet.h: INTRL2_CPU_MASK_CLEAR"
+ref        = "`bcmgenet.h`: `INTRL2_CPU_MASK_CLEAR`"
 confidence = "high"
 
 [[register]]
@@ -228,11 +228,11 @@ name   = "RBUF_CTRL"
 offset = 0x0300
 access = "rw"
 reset  = 0x0000C040
-notes  = "Receive buffer control. Measured 0xc043 with Linux's two low bits set."
+notes  = "Receive buffer control. Measured `0xc043` with Linux's two low bits set."
 
 [[register.source]]
 kind       = "measured"
-ref        = "RBUF_CTRL 0x0000c043"
+ref        = "`RBUF_CTRL` `0x0000c043`"
 confidence = "high"
 
 [[register.field]]
@@ -242,7 +242,7 @@ notes = "Each received frame is preceded by a 64-byte status block."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "bcmgenet.h: RBUF_64B_EN"
+ref        = "`bcmgenet.h`: `RBUF_64B_EN`"
 confidence = "high"
 
 [[register.field]]
@@ -252,7 +252,7 @@ notes = "Two pad bytes before the frame."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "bcmgenet.h: RBUF_ALIGN_2B"
+ref        = "`bcmgenet.h`: `RBUF_ALIGN_2B`"
 confidence = "high"
 
 [[register]]
@@ -263,7 +263,7 @@ notes  = "Receive checksum control."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet.h: RBUF_CHK_CTRL"
+ref        = "`bcmgenet.h`: `RBUF_CHK_CTRL`"
 confidence = "high"
 
 [[register]]
@@ -274,7 +274,7 @@ notes  = "Transmit buffer size control."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet.h: RBUF_TBUF_SIZE_CTRL"
+ref        = "`bcmgenet.h`: `RBUF_TBUF_SIZE_CTRL`"
 confidence = "high"
 
 [[register]]
@@ -285,7 +285,7 @@ notes  = "Transmit buffer control."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet.h: TBUF_CTRL"
+ref        = "`bcmgenet.h`: `TBUF_CTRL`"
 confidence = "high"
 
 [[register.field]]
@@ -295,7 +295,7 @@ notes = "The first 64 bytes of each frame are a transmit status block, not sent.
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "bcmgenet.h: TBUF_64B_EN"
+ref        = "`bcmgenet.h`: `TBUF_64B_EN`"
 confidence = "high"
 
 [[register]]
@@ -307,7 +307,7 @@ notes  = "Back-pressure mask."
 
 [[register.source]]
 kind       = "measured"
-ref        = "TBUF_BP_MC 0x0000ffff"
+ref        = "`TBUF_BP_MC` `0x0000ffff`"
 confidence = "high"
 
 [[register]]
@@ -319,7 +319,7 @@ notes  = "Half-duplex back-pressure."
 
 [[register.source]]
 kind       = "measured"
-ref        = "UMAC_HD_BKP_CTRL 0x00000014"
+ref        = "`UMAC_HD_BKP_CTRL` `0x00000014`"
 confidence = "high"
 
 [[register]]
@@ -330,12 +330,12 @@ notes  = "MAC command. Turning the MAC on kicks the rings."
 
 [[register.source]]
 kind       = "linux"
-ref        = "unimac.h: UMAC_CMD"
+ref        = "`unimac.h`: `UMAC_CMD`"
 confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "UMAC_CMD 0x0000000b with the link up"
+ref        = "`UMAC_CMD` `0x0000000b` with the link up"
 confidence = "high"
 
 [[register.field]]
@@ -345,7 +345,7 @@ notes = "Transmit on."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "unimac.h: CMD_TX_EN"
+ref        = "`unimac.h`: `CMD_TX_EN`"
 confidence = "high"
 
 [[register.field]]
@@ -355,7 +355,7 @@ notes = "Receive on."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "unimac.h: CMD_RX_EN"
+ref        = "`unimac.h`: `CMD_RX_EN`"
 confidence = "high"
 
 [[register.field]]
@@ -365,7 +365,7 @@ notes = "0 = 10, 1 = 100, 2 = 1000 Mb/s."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "unimac.h: CMD_SPEED_SHIFT / CMD_SPEED_MASK"
+ref        = "`unimac.h`: `CMD_SPEED_SHIFT` / `CMD_SPEED_MASK`"
 confidence = "high"
 
 [[register.field]]
@@ -375,7 +375,7 @@ notes = "Accept every frame."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "unimac.h: CMD_PROMISC"
+ref        = "`unimac.h`: `CMD_PROMISC`"
 confidence = "high"
 
 [[register.field]]
@@ -385,7 +385,7 @@ notes = "Keep the FCS on received frames."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "unimac.h: CMD_CRC_FWD"
+ref        = "`unimac.h`: `CMD_CRC_FWD`"
 confidence = "high"
 
 [[register.field]]
@@ -395,7 +395,7 @@ notes = "Ignore received pause frames."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "unimac.h: CMD_RX_PAUSE_IGNORE"
+ref        = "`unimac.h`: `CMD_RX_PAUSE_IGNORE`"
 confidence = "high"
 
 [[register.field]]
@@ -405,7 +405,7 @@ notes = "Half duplex."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "unimac.h: CMD_HD_EN"
+ref        = "`unimac.h`: `CMD_HD_EN`"
 confidence = "high"
 
 [[register.field]]
@@ -415,7 +415,7 @@ notes = "Do not send pause frames."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "unimac.h: CMD_TX_PAUSE_IGNORE"
+ref        = "`unimac.h`: `CMD_TX_PAUSE_IGNORE`"
 confidence = "high"
 
 [[register]]
@@ -426,7 +426,7 @@ notes  = "First four octets of the station address, most significant first."
 
 [[register.source]]
 kind       = "linux"
-ref        = "unimac.h: UMAC_MAC0"
+ref        = "`unimac.h`: `UMAC_MAC0`"
 confidence = "high"
 
 [[register]]
@@ -437,7 +437,7 @@ notes  = "Last two octets of the station address, in 15:0."
 
 [[register.source]]
 kind       = "linux"
-ref        = "unimac.h: UMAC_MAC1"
+ref        = "`unimac.h`: `UMAC_MAC1`"
 confidence = "high"
 
 [[register]]
@@ -448,7 +448,7 @@ notes  = "Largest frame accepted."
 
 [[register.source]]
 kind       = "linux"
-ref        = "unimac.h: UMAC_MAX_FRAME_LEN"
+ref        = "`unimac.h`: `UMAC_MAX_FRAME_LEN`"
 confidence = "high"
 
 [[register]]
@@ -460,23 +460,23 @@ notes  = "Pause quanta."
 
 [[register.source]]
 kind       = "measured"
-ref        = "UMAC_PAUSE_QUANTA 0x0000ffff"
+ref        = "`UMAC_PAUSE_QUANTA` `0x0000ffff`"
 confidence = "high"
 
 [[register]]
 name   = "UMAC_MODE"
 offset = 0x0844
 access = "r"
-notes  = "Speed (1:0), half duplex (2), RX / TX pause (3 / 4), link (5); follows UMAC_CMD and the PHY."
+notes  = "Speed (1:0), half duplex (2), RX / TX pause (3 / 4), link (5); follows `UMAC_CMD` and the PHY."
 
 [[register.source]]
 kind       = "linux"
-ref        = "unimac.h: UMAC_MODE"
+ref        = "`unimac.h`: `UMAC_MODE`"
 confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "UMAC_MODE 0x0000003a with UMAC_CMD 0xb and the link up"
+ref        = "`UMAC_MODE` `0x0000003a` with `UMAC_CMD` `0xb` and the link up"
 confidence = "high"
 
 [[register]]
@@ -488,7 +488,7 @@ notes  = "Inter-packet gap."
 
 [[register.source]]
 kind       = "measured"
-ref        = "UMAC_TX_IPG_LEN 0x00003c00"
+ref        = "`UMAC_TX_IPG_LEN` `0x00003c00`"
 confidence = "high"
 
 [[register]]
@@ -496,11 +496,11 @@ name   = "UMAC_EEE_CTRL"
 offset = 0x0864
 access = "rw"
 reset  = 0x00000040
-notes  = "EEE control. Measured 0x48 once Linux has EEE active (EEE_EN, bit 3)."
+notes  = "EEE control. Measured `0x48` once Linux has EEE active (`EEE_EN`, bit 3)."
 
 [[register.source]]
 kind       = "measured"
-ref        = "UMAC_EEE_CTRL 0x00000048"
+ref        = "`UMAC_EEE_CTRL` `0x00000048`"
 confidence = "high"
 
 [[register]]
@@ -513,7 +513,7 @@ notes  = "MIB counters. Nothing is counted; a MIB reset clears them anyway."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet.h: UMAC_MIB_START"
+ref        = "`bcmgenet.h`: `UMAC_MIB_START`"
 confidence = "high"
 
 [[register]]
@@ -524,23 +524,23 @@ notes  = "MIB control; bits 2:0 reset the RX / RUNT / TX counters."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet.h: UMAC_MIB_CTRL, MIB_RESET_RX / _RUNT / _TX"
+ref        = "`bcmgenet.h`: `UMAC_MIB_CTRL`, `MIB_RESET_RX` / `_RUNT` / `_TX`"
 confidence = "high"
 
 [[register]]
 name   = "UMAC_MDIO_CMD"
 offset = 0x0E14
 access = "rw"
-notes  = "MDIO command. With START_BUSY set the clause-22 frame runs and completes before the next access."
+notes  = "MDIO command. With `START_BUSY` set the clause-22 frame runs and completes before the next access."
 
 [[register.source]]
 kind       = "linux"
-ref        = "mdio-bcm-unimac.c: MDIO_CMD"
+ref        = "`mdio-bcm-unimac.c`: `MDIO_CMD`"
 confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "MDIO_CMD 0x0821796d (last op: read of PHY 1 BMSR = 0x796d)"
+ref        = "`MDIO_CMD` `0x0821796d` (last op: read of PHY 1 `BMSR = 0x796d`)"
 confidence = "high"
 
 [[register.field]]
@@ -550,7 +550,7 @@ notes = "Data written, or read back."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "mdio-bcm-unimac.c"
+ref        = "`mdio-bcm-unimac.c`"
 confidence = "high"
 
 [[register.field]]
@@ -560,7 +560,7 @@ notes = "PHY register."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "mdio-bcm-unimac.c: MDIO_REG_SHIFT"
+ref        = "`mdio-bcm-unimac.c`: `MDIO_REG_SHIFT`"
 confidence = "high"
 
 [[register.field]]
@@ -570,7 +570,7 @@ notes = "PHY address."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "mdio-bcm-unimac.c: MDIO_PMD_SHIFT"
+ref        = "`mdio-bcm-unimac.c`: `MDIO_PMD_SHIFT`"
 confidence = "high"
 
 [[register.field]]
@@ -580,7 +580,7 @@ notes = "1 = write, 2 = read."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "mdio-bcm-unimac.c: MDIO_WR / MDIO_RD"
+ref        = "`mdio-bcm-unimac.c`: `MDIO_WR` / `MDIO_RD`"
 confidence = "high"
 
 [[register.field]]
@@ -591,7 +591,7 @@ notes  = "Nothing answered the read."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "mdio-bcm-unimac.c: MDIO_READ_FAIL"
+ref        = "`mdio-bcm-unimac.c`: `MDIO_READ_FAIL`"
 confidence = "high"
 
 [[register.field]]
@@ -601,7 +601,7 @@ notes = "Run the frame; clear once done."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "mdio-bcm-unimac.c: MDIO_START_BUSY"
+ref        = "`mdio-bcm-unimac.c`: `MDIO_START_BUSY`"
 confidence = "high"
 
 [[register]]
@@ -613,7 +613,7 @@ notes  = "MDIO configuration; left in clause-22 mode by every client."
 
 [[register.source]]
 kind       = "measured"
-ref        = "MDIO_CFG 0x00000091"
+ref        = "`MDIO_CFG` `0x00000091`"
 confidence = "high"
 
 [[register]]
@@ -622,11 +622,11 @@ offset = 0x2000
 count  = 768
 stride = 4
 access = "rw"
-notes  = "Receive descriptor RAM: 256 descriptors of length_status, address_lo, address_hi."
+notes  = "Receive descriptor RAM: 256 descriptors of `length_status`, `address_lo`, `address_hi`."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet.h: GENET_RDMA_REG_OFF, DMA_DESC_LENGTH_STATUS / ADDRESS_LO / ADDRESS_HI"
+ref        = "`bcmgenet.h`: `GENET_RDMA_REG_OFF`, `DMA_DESC_LENGTH_STATUS` / `ADDRESS_LO` / `ADDRESS_HI`"
 confidence = "high"
 
 [[register]]
@@ -639,7 +639,7 @@ notes  = "Per-ring write pointer, in descriptor-RAM words."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet.c: genet_dma_ring_regs_v4, RDMA_WRITE_PTR"
+ref        = "`bcmgenet.c`: `genet_dma_ring_regs_v4`, `RDMA_WRITE_PTR`"
 confidence = "high"
 
 [[register]]
@@ -652,7 +652,7 @@ notes  = "Per-ring producer index (16 bits, wraps)."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet.c: RDMA_PROD_INDEX"
+ref        = "`bcmgenet.c`: `RDMA_PROD_INDEX`"
 confidence = "high"
 
 [[register]]
@@ -665,7 +665,7 @@ notes  = "Per-ring consumer index."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet.c: RDMA_CONS_INDEX"
+ref        = "`bcmgenet.c`: `RDMA_CONS_INDEX`"
 confidence = "high"
 
 [[register]]
@@ -678,7 +678,7 @@ notes  = "Ring size (31:16) and buffer length (15:0)."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet.c: DMA_RING_BUF_SIZE"
+ref        = "`bcmgenet.c`: `DMA_RING_BUF_SIZE`"
 confidence = "high"
 
 [[register]]
@@ -691,7 +691,7 @@ notes  = "First word of the ring in descriptor RAM."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet.c: DMA_START_ADDR"
+ref        = "`bcmgenet.c`: `DMA_START_ADDR`"
 confidence = "high"
 
 [[register]]
@@ -704,7 +704,7 @@ notes  = "Last word of the ring, inclusive."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet.c: DMA_END_ADDR"
+ref        = "`bcmgenet.c`: `DMA_END_ADDR`"
 confidence = "high"
 
 [[register]]
@@ -715,23 +715,23 @@ notes  = "Ring configuration."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet.h: DMA_RING_CFG"
+ref        = "`bcmgenet.h`: `DMA_RING_CFG`"
 confidence = "high"
 
 [[register]]
 name   = "RDMA_CTRL"
 offset = 0x3044
 access = "rw"
-notes  = "DMA enable (bit 0) and one enable per ring (bit ring + 1)."
+notes  = "DMA enable (bit 0) and one enable per ring (bit `ring + 1`)."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet.h: DMA_CTRL, DMA_EN"
+ref        = "`bcmgenet.h`: `DMA_CTRL`, `DMA_EN`"
 confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "RDMA_CTRL 0x00000003 (Linux receives on ring 0 only)"
+ref        = "`RDMA_CTRL` `0x00000003` (Linux receives on ring 0 only)"
 confidence = "high"
 
 [[register.field]]
@@ -741,18 +741,18 @@ notes = "DMA on."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "bcmgenet.h: DMA_EN"
+ref        = "`bcmgenet.h`: `DMA_EN`"
 confidence = "high"
 
 [[register]]
 name   = "RDMA_STATUS"
 offset = 0x3048
 access = "r"
-notes  = "Bit 0 DMA disabled, bits 1..17 ring n - 1 disabled, bit 18 descriptor RAM init busy (never, here)."
+notes  = "Bit 0 DMA disabled, bits 1..17 ring `n - 1` disabled, bit 18 descriptor RAM init busy (never, here)."
 
 [[register.source]]
 kind       = "measured"
-ref        = "RDMA_CTRL 0x03 / RDMA_STATUS 0x3fffc and TDMA_CTRL 0x3f / TDMA_STATUS 0x3ffc0 fit exactly this"
+ref        = "`RDMA_CTRL` `0x03` / `RDMA_STATUS` `0x3fffc` and `TDMA_CTRL` `0x3f` / `TDMA_STATUS` `0x3ffc0` fit exactly this"
 confidence = "high"
 
 [[register.source]]
@@ -770,7 +770,7 @@ notes  = "HFB filter to receive ring: 4 bits per filter, eight filters per word.
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet.h: DMA_INDEX2RING_0..7"
+ref        = "`bcmgenet.h`: `DMA_INDEX2RING_0..7`"
 confidence = "high"
 
 [[register]]
@@ -779,11 +779,11 @@ offset = 0x4000
 count  = 768
 stride = 4
 access = "rw"
-notes  = "Transmit descriptor RAM, laid out as RDMA_DESC."
+notes  = "Transmit descriptor RAM, laid out as `RDMA_DESC`."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet.h: GENET_TDMA_REG_OFF"
+ref        = "`bcmgenet.h`: `GENET_TDMA_REG_OFF`"
 confidence = "high"
 
 [[register]]
@@ -796,7 +796,7 @@ notes  = "Per-ring read pointer."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet.c: TDMA_READ_PTR"
+ref        = "`bcmgenet.c`: `TDMA_READ_PTR`"
 confidence = "high"
 
 [[register]]
@@ -809,7 +809,7 @@ notes  = "Per-ring consumer index."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet.c: TDMA_CONS_INDEX"
+ref        = "`bcmgenet.c`: `TDMA_CONS_INDEX`"
 confidence = "high"
 
 [[register]]
@@ -822,7 +822,7 @@ notes  = "Per-ring producer index; writing it sends what lies between the two in
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet.c: TDMA_PROD_INDEX"
+ref        = "`bcmgenet.c`: `TDMA_PROD_INDEX`"
 confidence = "high"
 
 [[register]]
@@ -835,7 +835,7 @@ notes  = "Ring size and buffer length."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet.c: DMA_RING_BUF_SIZE"
+ref        = "`bcmgenet.c`: `DMA_RING_BUF_SIZE`"
 confidence = "high"
 
 [[register]]
@@ -848,7 +848,7 @@ notes  = "First word of the ring."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet.c: DMA_START_ADDR"
+ref        = "`bcmgenet.c`: `DMA_START_ADDR`"
 confidence = "high"
 
 [[register]]
@@ -861,7 +861,7 @@ notes  = "Last word of the ring, inclusive."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet.c: DMA_END_ADDR"
+ref        = "`bcmgenet.c`: `DMA_END_ADDR`"
 confidence = "high"
 
 [[register]]
@@ -872,29 +872,29 @@ notes  = "Ring configuration."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet.h: DMA_RING_CFG"
+ref        = "`bcmgenet.h`: `DMA_RING_CFG`"
 confidence = "high"
 
 [[register]]
 name   = "TDMA_CTRL"
 offset = 0x5044
 access = "rw"
-notes  = "As RDMA_CTRL."
+notes  = "As `RDMA_CTRL`."
 
 [[register.source]]
 kind       = "measured"
-ref        = "TDMA_CTRL 0x0000003f"
+ref        = "`TDMA_CTRL` `0x0000003f`"
 confidence = "high"
 
 [[register]]
 name   = "TDMA_STATUS"
 offset = 0x5048
 access = "r"
-notes  = "As RDMA_STATUS."
+notes  = "As `RDMA_STATUS`."
 
 [[register.source]]
 kind       = "measured"
-ref        = "TDMA_STATUS 0x0003ffc0"
+ref        = "`TDMA_STATUS` `0x0003ffc0`"
 confidence = "high"
 
 [[register]]
@@ -907,7 +907,7 @@ notes  = "Hardware Filter Block RAM: 48 filters of 128 words, two frame bytes pe
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet.c: bcmgenet_hfb_insert_data"
+ref        = "`bcmgenet.c`: `bcmgenet_hfb_insert_data`"
 confidence = "high"
 
 [[register]]
@@ -918,7 +918,7 @@ notes  = "HFB control. The bootloader and start4 never turn it on; Linux does, w
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet.h: HFB_CTRL; commit 3b5d4f5a820d moves the DESC_INDEX flow to ring 0"
+ref        = "`bcmgenet.h`: `HFB_CTRL`; commit 3b5d4f5a820d moves the `DESC_INDEX` flow to ring 0"
 confidence = "high"
 
 [[register.field]]
@@ -928,7 +928,7 @@ notes = "Filtering on."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "bcmgenet.h: RBUF_HFB_EN"
+ref        = "`bcmgenet.h`: `RBUF_HFB_EN`"
 confidence = "high"
 
 [[register]]
@@ -941,7 +941,7 @@ notes  = "Filter enables: filters 32..47 in word 0, 0..31 in word 1."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet.h: HFB_FLT_ENABLE_V3PLUS"
+ref        = "`bcmgenet.h`: `HFB_FLT_ENABLE_V3PLUS`"
 confidence = "high"
 
 [[register]]
@@ -954,5 +954,5 @@ notes  = "Filter lengths in bytes, one byte per filter, filter 47 first."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcmgenet.h: HFB_FLT_LEN_V3PLUS"
+ref        = "`bcmgenet.h`: `HFB_FLT_LEN_V3PLUS`"
 confidence = "high"

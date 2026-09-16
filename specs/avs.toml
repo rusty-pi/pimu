@@ -3,27 +3,27 @@ name    = "avs"
 base    = 0x7D5D2000
 size    = 0xF00
 summary = "AVS monitor: on-die temperature sensor and the ring-oscillator / rail voltage monitors"
-notes   = "Carved out of the `clkmon` window and decoded ahead of it. The per-channel counts are measured and live in src/periph/avs.rs; channel 3 follows the core-rail PMIC setpoint so start4's DVFS calibration converges. That calibration runs once per power-up, right after start4's PMIC log sweep: it walks the core rail until channel 3 reads 1.030 V (10300 tenths of a mV, within 50), measures every ring oscillator and PVT monitor there and 32 rail codes lower, works out the voltage at which each would run at its target speed, and sets the rail to the highest of them, held to 8300..11000. It does that twice, then writes the target windows (LOWER / UPPER and the PVT thresholds) and makes one monitoring pass: out of range, move the rail back by 4 codes; else raise it by 4 if any monitor is below its window, or lower it by 2 if none is inside one. A rail code is about 1.76 mV: uV = ((code * 0x119400) >> 16) * 100."
+notes   = "Carved out of the `clkmon` window and decoded ahead of it. The per-channel counts are measured and live in `src/periph/avs.rs`; channel 3 follows the core-rail PMIC setpoint so start4's DVFS calibration converges. That calibration runs once per power-up, right after start4's PMIC log sweep: it walks the core rail until channel 3 reads 1.030 V (10300 tenths of a mV, within 50), measures every ring oscillator and PVT monitor there and 32 rail codes lower, works out the voltage at which each would run at its target speed, and sets the rail to the highest of them, held to 8300..11000. It does that twice, then writes the target windows (`LOWER` / `UPPER` and the PVT thresholds) and makes one monitoring pass: out of range, move the rail back by 4 codes; else raise it by 4 if any monitor is below its window, or lower it by 2 if none is inside one. A rail code is about 1.76 mV: `uV = ((code * 0x119400) >> 16) * 100`."
 
 [[block.source]]
 kind       = "linux"
-ref        = "avs-monitor@7d5d2000, brcm,bcm2711-avs-monitor, reg = <0x7d5d2000 0xf00>"
+ref        = "`avs-monitor@7d5d2000`, `brcm,bcm2711-avs-monitor`, `reg = <0x7d5d2000 0xf00>`"
 confidence = "high"
 
 [[block.source]]
 kind       = "decompile"
-ref        = "start4 DVFS code: FUN_0ed603e2, FUN_0ed6040e, FUN_0ec3007a, FUN_0ec303e8, FUN_0ec302c2"
+ref        = "start4 DVFS code: `FUN_0ed603e2`, `FUN_0ed6040e`, `FUN_0ec3007a`, `FUN_0ec303e8`, `FUN_0ec302c2`"
 confidence = "high"
 
 [[register]]
 name   = "DISABLE_MASK"
 offset = 0x03C
 access = "rw"
-notes  = "Channel disable mask: a set bit masks a channel off. Written ~(1 << ch) & 0x7F around a reading, 0 at rest."
+notes  = "Channel disable mask: a set bit masks a channel off. Written `~(1 << ch) & 0x7F` around a reading, 0 at rest."
 
 [[register.source]]
 kind       = "decompile"
-ref        = "FUN_0ed6040e writes ~(1 << ch) & 0x7F, then 0"
+ref        = "`FUN_0ed6040e` writes `~(1 << ch) & 0x7F`, then 0"
 confidence = "high"
 
 [[register.source]]
@@ -38,7 +38,7 @@ notes = "One bit per channel."
 
 [[register.field.source]]
 kind       = "decompile"
-ref        = "FUN_0ed6040e masks with 0x7F"
+ref        = "`FUN_0ed6040e` masks with `0x7F`"
 confidence = "high"
 
 [[register]]
@@ -49,7 +49,7 @@ notes  = "Enable mask written all-ones during a measurement. Reads 0 at rest on 
 
 [[register.source]]
 kind       = "decompile"
-ref        = "FUN_0ed6040e"
+ref        = "`FUN_0ed6040e`"
 confidence = "medium"
 
 [[register.source]]
@@ -61,11 +61,11 @@ confidence = "high"
 name   = "REG_044"
 offset = 0x044
 access = "rw"
-notes  = "Second enable mask, same behaviour as REG_040."
+notes  = "Second enable mask, same behaviour as `REG_040`."
 
 [[register.source]]
 kind       = "decompile"
-ref        = "FUN_0ed6040e"
+ref        = "`FUN_0ed6040e`"
 confidence = "medium"
 
 [[register.source]]
@@ -81,12 +81,12 @@ notes  = "Written, never read back. start4 pulses it, all-ones then 0, each time
 
 [[register.source]]
 kind       = "trace"
-ref        = "RVF_TRACE_MMIO=0x7d5d0000-0x7d5e0000 over a boot to arm_loader"
+ref        = "`RVF_TRACE_MMIO=0x7d5d0000-0x7d5e0000` over a boot to `arm_loader`"
 confidence = "high"
 
 [[register.source]]
 kind       = "trace"
-ref        = "start4: 0xFFFFFFFF at 0x3EC30224, 0 at 0x3EC30226"
+ref        = "start4: `0xFFFFFFFF` at `0x3EC30224`, 0 at `0x3EC30226`"
 confidence = "high"
 
 [[register.source]]
@@ -98,21 +98,21 @@ confidence = "high"
 name   = "REG_074"
 offset = 0x074
 access = "rw"
-notes  = "start4 sets its low seven bits (read, OR 0x7F, write) each time it arms the monitors."
+notes  = "start4 sets its low seven bits (read, OR `0x7F`, write) each time it arms the monitors."
 
 [[register.source]]
 kind       = "trace"
-ref        = "RVF_TRACE_MMIO=0x7d5d0000-0x7d5e0000 over a boot to arm_loader"
+ref        = "`RVF_TRACE_MMIO=0x7d5d0000-0x7d5e0000` over a boot to `arm_loader`"
 confidence = "high"
 
 [[register.source]]
 kind       = "decompile"
-ref        = "FUN_0ec3020e: _DAT_7d5d2074 |= 0x7f"
+ref        = "`FUN_0ec3020e`: `_DAT_7d5d2074 |= 0x7f`"
 confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "0x0000007f on a Raspberry Pi 4B d03115"
+ref        = "`0x0000007f` on a Raspberry Pi 4B d03115"
 confidence = "high"
 
 [[register]]
@@ -123,17 +123,17 @@ notes  = "Written 1 each time start4 arms the monitors, never read back."
 
 [[register.source]]
 kind       = "trace"
-ref        = "RVF_TRACE_MMIO=0x7d5d0000-0x7d5e0000 over a boot to arm_loader"
+ref        = "`RVF_TRACE_MMIO=0x7d5d0000-0x7d5e0000` over a boot to `arm_loader`"
 confidence = "high"
 
 [[register.source]]
 kind       = "decompile"
-ref        = "FUN_0ec3020e"
+ref        = "`FUN_0ec3020e`"
 confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "0x00000001 on a Raspberry Pi 4B d03115"
+ref        = "`0x00000001` on a Raspberry Pi 4B d03115"
 confidence = "high"
 
 [[register]]
@@ -142,26 +142,26 @@ offset = 0x200
 count  = 6
 stride = 4
 access = "r"
-notes  = "Per-channel sample. Channel 0 is the temperature sensor (410040 - 487 * count mdegC), 2 / 3 / 5 are rail voltages, 1 and 4 read ~0 on real silicon. start4 converts a channel as (count * scale) >> shift: channel 0 scale -498739, shift 10, plus 410040 (mdegC); channels 1..4 scale 100571 and channel 5 scale 176000, shift 13 (tenths of a mV). Channel 3 is the SoC core rail its voltage calibration reads, as the average of up to 150 samples with every other channel masked. The thermal driver instead waits for VALID on channel 0 and reads the word once more."
+notes  = "Per-channel sample. Channel 0 is the temperature sensor (`410040 - 487 * count` mdegC), 2 / 3 / 5 are rail voltages, 1 and 4 read ~0 on real silicon. start4 converts a channel as `(count * scale) >> shift`: channel 0 scale -498739, shift 10, plus 410040 (mdegC); channels 1..4 scale 100571 and channel 5 scale 176000, shift 13 (tenths of a mV). Channel 3 is the SoC core rail its voltage calibration reads, as the average of up to 150 samples with every other channel masked. The thermal driver instead waits for `VALID` on channel 0 and reads the word once more."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcm2711_thermal reads +0x200: temp_mC = 410040 - 487 * count"
+ref        = "`bcm2711_thermal` reads `+0x200`: `temp_mC = 410040 - 487 * count`"
 confidence = "high"
 
 [[register.source]]
 kind       = "decompile"
-ref        = "FUN_0ed603e2 indexes the DAT_0edfbe9c table of these six words; FUN_0ecc6488 converts with the scales at DAT_0edfbe84"
+ref        = "`FUN_0ed603e2` indexes the `DAT_0edfbe9c` table of these six words; `FUN_0ecc6488` converts with the scales at `DAT_0edfbe84`"
 confidence = "high"
 
 [[register.source]]
 kind       = "trace"
-ref        = "start4 0x3ED7C92C / 0x3ED7C932: the thermal driver's two reads of channel 0, the first right after TSENSCTL is started"
+ref        = "start4 `0x3ED7C92C` / `0x3ED7C932`: the thermal driver's two reads of channel 0, the first right after `TSENSCTL` is started"
 confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "/dev/mem reads of 0x7d5d2200..0x7d5d2214 on a Raspberry Pi 4B d03115, freshly booted and idle"
+ref        = "`/dev/mem` reads of `0x7d5d2200..0x7d5d2214` on a Raspberry Pi 4B d03115, freshly booted and idle"
 confidence = "high"
 
 [[register.field]]
@@ -171,7 +171,7 @@ notes = "Sample."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "bcm2711_thermal: BCM2711_TS_DATA_MASK"
+ref        = "`bcm2711_thermal`: `BCM2711_TS_DATA_MASK`"
 confidence = "high"
 
 [[register.field]]
@@ -181,7 +181,7 @@ notes = "Sample valid."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "bcm2711_thermal: BCM2711_TS_VALID_MASK"
+ref        = "`bcm2711_thermal`: `BCM2711_TS_VALID_MASK`"
 confidence = "high"
 
 [[register.field]]
@@ -191,7 +191,7 @@ notes = "Sample settled. Linux ignores it; start4 will not take a sample without
 
 [[register.field.source]]
 kind       = "decompile"
-ref        = "FUN_0ed603e2 spins until bits 10 and 16 are both set"
+ref        = "`FUN_0ed603e2` spins until bits 10 and 16 are both set"
 confidence = "high"
 
 [[register]]
@@ -200,16 +200,16 @@ offset = 0x220
 count  = 36
 stride = 4
 access = "r"
-notes  = "Per-channel ring-oscillator monitors. Channels 0x20..0x23 settle with a count of 0 on real silicon. start4 reads all 36 once before its voltage calibration, which then uses channels 0..21 (22 and 23 are masked, 0xC00000 in FUN_0ec3503e); speed = ((count * 54000) / 0x7FFF) * 10."
+notes  = "Per-channel ring-oscillator monitors. Channels `0x20..0x23` settle with a count of 0 on real silicon. start4 reads all 36 once before its voltage calibration, which then uses channels 0..21 (22 and 23 are masked, `0xC00000` in `FUN_0ec3503e`); `speed = ((count * 54000) / 0x7FFF) * 10`."
 
 [[register.source]]
 kind       = "decompile"
-ref        = "FUN_0ec3007a polls bit 16 and takes bits 14:0; FUN_0ec5f2c0 range-checks its channel against 0x23"
+ref        = "`FUN_0ec3007a` polls bit 16 and takes bits 14:0; `FUN_0ec5f2c0` range-checks its channel against `0x23`"
 confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "/dev/mem reads one word at a time on a Raspberry Pi 4B d03115"
+ref        = "`/dev/mem` reads one word at a time on a Raspberry Pi 4B d03115"
 confidence = "high"
 
 [[register.field]]
@@ -219,7 +219,7 @@ notes = "Oscillator count."
 
 [[register.field.source]]
 kind       = "decompile"
-ref        = "FUN_0ec3007a takes bits 14:0"
+ref        = "`FUN_0ec3007a` takes bits 14:0"
 confidence = "high"
 
 [[register.field]]
@@ -229,7 +229,7 @@ notes = "Count settled."
 
 [[register.field.source]]
 kind       = "decompile"
-ref        = "FUN_0ec3007a polls bit 16"
+ref        = "`FUN_0ec3007a` polls bit 16"
 confidence = "high"
 
 [[register]]
@@ -238,26 +238,26 @@ offset = 0xD00
 count  = 24
 stride = 4
 access = "rw"
-notes  = "Per-channel lower bounds FUN_0ec302c2 writes and FUN_0ec311d2 compares against. start4's own output, not calibration data: count(target) with count(s) = (s / 54) * 0x7FFF / 10000 and the channel's target speed. start4's parameter block (all offsets 0) makes the bounds independent of anything it measured, which is why a model with made-up counts writes the same 44 words as hardware. Channels 22 and 23 are never written. start4 also sets slot 0x34 (+0xDD0) to all-ones each time it arms the monitors."
+notes  = "Per-channel lower bounds `FUN_0ec302c2` writes and `FUN_0ec311d2` compares against. start4's own output, not calibration data: `count(target)` with `count(s) = (s / 54) * 0x7FFF / 10000` and the channel's target speed. start4's parameter block (all offsets 0) makes the bounds independent of anything it measured, which is why a model with made-up counts writes the same 44 words as hardware. Channels 22 and 23 are never written. start4 also sets slot `0x34` (`+0xDD0`) to all-ones each time it arms the monitors."
 
 [[register.source]]
 kind       = "decompile"
-ref        = "FUN_0ec302c2 writes them, FUN_0ec300a4 reads them back"
+ref        = "`FUN_0ec302c2` writes them, `FUN_0ec300a4` reads them back"
 confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "the model's computed bounds match the 44 words read off the reference board, starting 0x683 / 0x6A1 for channel 0"
+ref        = "the model's computed bounds match the 44 words read off the reference board, starting `0x683` / `0x6A1` for channel 0"
 confidence = "high"
 
 [[register.source]]
 kind       = "decompile"
-ref        = "FUN_0ec30828 through FUN_0ec313c0, targets DAT_0ede6ae0; FUN_0ec301f0 writes 0xffffffff to 0x7d5d2dd0 and 0x7d5d2ed0"
+ref        = "`FUN_0ec30828` through `FUN_0ec313c0`, targets `DAT_0ede6ae0`; `FUN_0ec301f0` writes `0xffffffff` to `0x7d5d2dd0` and `0x7d5d2ed0`"
 confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "0x7d5d2dd0 and 0x7d5d2ed0 read 0xffffffff on a Raspberry Pi 4B d03115; channels 22 and 23 read 0"
+ref        = "`0x7d5d2dd0` and `0x7d5d2ed0` read `0xffffffff` on a Raspberry Pi 4B d03115; channels 22 and 23 read 0"
 confidence = "high"
 
 [[register]]
@@ -266,9 +266,9 @@ offset = 0xE00
 count  = 24
 stride = 4
 access = "rw"
-notes  = "Per-channel upper bounds, as LOWER: count(target + slope / 100), the speed 10 mV above the target, with the per-channel slopes at DAT_0ede6a80. The monitoring pass lowers the core voltage only if every channel reads above its upper bound, and raises it if any reads below its lower one. Slot 0x34 (+0xED0) is set to all-ones with LOWER's."
+notes  = "Per-channel upper bounds, as `LOWER`: `count(target + slope / 100)`, the speed 10 mV above the target, with the per-channel slopes at `DAT_0ede6a80`. The monitoring pass lowers the core voltage only if every channel reads above its upper bound, and raises it if any reads below its lower one. Slot `0x34` (`+0xED0`) is set to all-ones with `LOWER`'s."
 
 [[register.source]]
 kind       = "decompile"
-ref        = "FUN_0ec302c2 writes them, FUN_0ec300a4 reads them back"
+ref        = "`FUN_0ec302c2` writes them, `FUN_0ec300a4` reads them back"
 confidence = "high"

@@ -10,7 +10,7 @@ The DRAM clock tree is not modelled: timing words read back, every sub-controlle
 
 Sources:
 
-- decompile (high): bootloader timing setup (0x80006380 prints one word as SD_SB) and ready poll 0x8000a3e0; start4's SDRAM driver in the .drivers entry at 0x3EDFDF68
+- decompile (high): bootloader timing setup (`0x80006380` prints one word as `SD_SB`) and ready poll `0x8000a3e0`; start4's SDRAM driver in the `.drivers` entry at `0x3EDFDF68`
 
 ## Register map
 
@@ -29,7 +29,7 @@ First word of the DRAM timing table the bootloader programs.
 
 Sources:
 
-- decompile (medium): bootloader writes +0x00..+0x30 after PHY training
+- decompile (medium): bootloader writes `+0x00..+0x30` after PHY training
 
 ## `REFRESH`
 
@@ -43,28 +43,28 @@ Timing word carrying the refresh interval, which start4 rescales from MR4 once t
 
 Sources:
 
-- decompile (high): 0x3ED6BBA0 rescales [0x7E001004] >> 16 by 1 << (3 - MR4 code)
-- measured (high): examples-on-real-hardware/vc4-boot.log: 'sdram: sdram refresh 1562->3124 (2)'
+- decompile (high): `0x3ED6BBA0` rescales `[0x7E001004] >> 16` by `1 << (3 - MR4 code)`
+- measured (high): `examples-on-real-hardware/vc4-boot.log`: `sdram: sdram refresh 1562->3124 (2)`
 
 `INTERVAL` sources:
 
-- decompile (high): 0x3ED6BBA0 reads and writes bits 31:16
+- decompile (high): `0x3ED6BBA0` reads and writes bits 31:16
 
 ## `TIMING`
 
 Offset `0x008`, 11 elements 0x4 apart · access `rw` · 32 bits
 
-The rest of the timing table (+0x08..+0x30): packed tRAS / tRC / tRCD / tRFC-style fields.
+The rest of the timing table (`+0x08..+0x30`): packed tRAS / tRC / tRCD / tRFC-style fields.
 
 Sources:
 
-- decompile (medium): bootloader writes +0x00..+0x30 after PHY training
+- decompile (medium): bootloader writes `+0x00..+0x30` after PHY training
 
 ## `STATUS`
 
 Offset `0x09C`, 31 elements 0x80 apart · access `rw` · 32 bits
 
-Per-sub-controller status, at +0x1C of each 0x80 block from +0x80; bit 31 is ready. Element 0 is also the LPDDR4 mode-register access port: write a command, poll DONE, take the byte from RDATA.
+Per-sub-controller status, at `+0x1C` of each `0x80` block from `+0x80`; bit 31 is ready. Element 0 is also the LPDDR4 mode-register access port: write a command, poll `DONE`, take the byte from `RDATA`.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -74,43 +74,43 @@ Per-sub-controller status, at +0x1C of each 0x80 block from +0x80; bit 31 is rea
 | 24 | `DEVICE` | rw | Device (rank, i.e. chip select). A rank that is not fitted answers nothing, so every mode register reads 0 there. |
 | 25 | `CHANNEL` | rw | LPDDR4 channel. |
 | 28 | `WRITE` | rw | Set for a write, clear for a read. |
-| 30 | `ERROR` | r | Transfer failed ('SD MR %08x R timeout'). Never set here. |
+| 30 | `ERROR` | r | Transfer failed (`SD MR %08x R timeout`). Never set here. |
 | 31 | `DONE` | r | Ready / transfer complete. |
 
 Sources:
 
-- decompile (high): 0x8000a3e0 polls [0x7E00109C] & 0x80000000 ten times with 1 ms sleeps ('block device timeout')
-- decompile (high): start4 mode-register read 0x3ED6BA90 and write 0x3ED6C084
+- decompile (high): `0x8000a3e0` polls `[0x7E00109C] & 0x80000000` ten times with 1 ms sleeps ('block device timeout')
+- decompile (high): start4 mode-register read `0x3ED6BA90` and write `0x3ED6C084`
 
 `ADDR` sources:
 
-- decompile (high): 0x3ED6BA90: addr | chan << 24 | dev << 25
+- decompile (high): `0x3ED6BA90`: `addr | chan << 24 | dev << 25`
 
 `WDATA` sources:
 
-- decompile (high): 0x3ED6C084 puts the data in bits 15:8
+- decompile (high): `0x3ED6C084` puts the data in bits 15:8
 
 `RDATA` sources:
 
-- decompile (high): 0x3ED6BA90 takes the result from bits 23:16
+- decompile (high): `0x3ED6BA90` takes the result from bits 23:16
 
 `DEVICE` sources:
 
-- decompile (high): 0x3ED6BA90 logs 'RD: MR addr: %d device: %d channel: %d' with the argument it shifts to bit 24 as the device
-- decompile (high): 2023-05-11 bootcode rank detection (0x800056a4): x2 only when MR8 reads the same with bit 24 clear and set
+- decompile (high): `0x3ED6BA90` logs `RD: MR addr: %d device: %d channel: %d` with the argument it shifts to bit 24 as the device
+- decompile (high): 2023-05-11 bootcode rank detection (`0x800056a4`): x2 only when MR8 reads the same with bit 24 clear and set
 
 `CHANNEL` sources:
 
-- decompile (high): 0x3ED6BA90 logs the argument it shifts to bit 25 as the channel
+- decompile (high): `0x3ED6BA90` logs the argument it shifts to bit 25 as the channel
 
 `WRITE` sources:
 
-- decompile (high): 0x3ED6C084 sets bit 28
+- decompile (high): `0x3ED6C084` sets bit 28
 
 `ERROR` sources:
 
-- decompile (high): 0x3ED6BA90 checks bit 30 and logs the timeout
+- decompile (high): `0x3ED6BA90` checks bit 30 and logs the timeout
 
 `DONE` sources:
 
-- decompile (high): 0x8000a3e0 and 0x3ED6BA90 both poll bit 31
+- decompile (high): `0x8000a3e0` and `0x3ED6BA90` both poll bit 31

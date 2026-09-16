@@ -2,17 +2,17 @@
 name    = "sdramc"
 base    = 0x7DC00000
 size    = 0x40000
-summary = "LPDDR4 controller and PHY, below the 0x7E window"
-notes   = "DRAM is not simulated electrically: every training step reports success with the values the firmware's self-consistency checks expect. The PHY preset arrays copied in from memsysNN.bin read straight back. The per-byte-lane PHY blocks around +0x400..+0xC00 and +0x30000 are plain storage and not listed."
+summary = "LPDDR4 controller and PHY, below the `0x7E` window"
+notes   = "DRAM is not simulated electrically: every training step reports success with the values the firmware's self-consistency checks expect. The PHY preset arrays copied in from `memsysNN.bin` read straight back. The per-byte-lane PHY blocks around `+0x400..+0xC00` and `+0x30000` are plain storage and not listed."
 
 [[block.source]]
 kind       = "decompile"
-ref        = "EEPROM bootcode init_sdram_* path, driven by the memsysNN.bin PHY presets from pieeprom.bin"
+ref        = "EEPROM bootcode `init_sdram_*` path, driven by the `memsysNN.bin` PHY presets from `pieeprom.bin`"
 confidence = "high"
 
 [[block.source]]
 kind       = "trace"
-ref        = "--trace-mmio over the SDRAM bring-up"
+ref        = "`--trace-mmio` over the SDRAM bring-up"
 confidence = "high"
 
 [[register]]
@@ -23,7 +23,7 @@ notes  = "Controller status."
 
 [[register.source]]
 kind       = "decompile"
-ref        = "0x80003898 polls btest [+0x10], #0"
+ref        = "`0x80003898` polls `btest [+0x10], #0`"
 confidence = "high"
 
 [[register.field]]
@@ -33,29 +33,29 @@ notes = "Last command complete."
 
 [[register.field.source]]
 kind       = "decompile"
-ref        = "0x80003898"
+ref        = "`0x80003898`"
 confidence = "high"
 
 [[register]]
 name   = "CTRL_CMD"
 offset = 0x20014
 access = "rw"
-notes  = "Controller command port (0x55010000 style words); retires at once."
+notes  = "Controller command port (`0x55010000` style words); retires at once."
 
 [[register.source]]
 kind       = "trace"
-ref        = "the bootcode writes 0x5501_0000 and then polls CTRL_STATUS"
+ref        = "the bootcode writes `0x5501_0000` and then polls `CTRL_STATUS`"
 confidence = "high"
 
 [[register]]
 name   = "PHY_CAL_TRIGGER"
 offset = 0x32010
 access = "rw"
-notes  = "PHY calibration handshake: write 1, wait for PHY_CAL_BUSY, write 0."
+notes  = "PHY calibration handshake: write 1, wait for `PHY_CAL_BUSY`, write 0."
 
 [[register.source]]
 kind       = "decompile"
-ref        = "0x8000685e"
+ref        = "`0x8000685e`"
 confidence = "high"
 
 [[register]]
@@ -66,7 +66,7 @@ notes  = "Non-zero while a calibration runs; the firmware wants it stable 10 tim
 
 [[register.source]]
 kind       = "decompile"
-ref        = "0x8000685e"
+ref        = "`0x8000685e`"
 confidence = "high"
 
 [[register]]
@@ -77,18 +77,18 @@ notes  = "Calibration request / result block, word 0: seeded 1 (valid)."
 
 [[register.source]]
 kind       = "decompile"
-ref        = "the firmware seeds [+0x00] = 1 before pulsing the trigger"
+ref        = "the firmware seeds `[+0x00] = 1` before pulsing the trigger"
 confidence = "high"
 
 [[register]]
 name   = "PHY_RES_CMD"
 offset = 0x32104
 access = "rw"
-notes  = "Calibration command; 0x101 asks the PHY to report its signature."
+notes  = "Calibration command; `0x101` asks the PHY to report its signature."
 
 [[register.source]]
 kind       = "decompile"
-ref        = "signature check 0x800068ce"
+ref        = "signature check `0x800068ce`"
 confidence = "high"
 
 [[register]]
@@ -99,7 +99,7 @@ notes  = "Sub-parameter."
 
 [[register.source]]
 kind       = "decompile"
-ref        = "the firmware seeds [+0x08]"
+ref        = "the firmware seeds `[+0x08]`"
 confidence = "medium"
 
 [[register]]
@@ -107,34 +107,34 @@ name   = "PHY_RES_SIGNATURE"
 offset = 0x3210C
 access = "rw"
 reset  = 0x02230000
-notes  = "Seed on the way in; on the way out the PHY signature for command 0x101, else 0 for 'no error'. The signature is a memsys version tag, not a constant: the bootloader loads it from the memsys config record it selected and compares the PHY's echo (Cmp r7, [+0x0C] at pc 0x800067de). The model reconstructs it from the PHY microcode the firmware wrote to PHY_B (marker 0x1860_02vv at +0x388, optional companion 0xA863_llll at +0x38C -> 0x02vv_llll); see src/periph/sdramc.rs report_signature. The reset value is the pinned board's 0x0223 memsys signature, used as the fall-back."
+notes  = "Seed on the way in; on the way out the PHY signature for command `0x101`, else 0 for 'no error'. The signature is a memsys version tag, not a constant: the bootloader loads it from the memsys config record it selected and compares the PHY's echo (`Cmp r7, [+0x0C]` at pc `0x800067de`). The model reconstructs it from the PHY microcode the firmware wrote to `PHY_B` (marker `0x1860_02vv` at `+0x388`, optional companion `0xA863_llll` at `+0x38C` -> `0x02vv_llll`); see `src/periph/sdramc.rs` `report_signature`. The reset value is the pinned board's `0x0223` memsys signature, used as the fall-back."
 
 [[register.source]]
 kind       = "decompile"
-ref        = "0x800067de compares [+0x0C] with r7 (the MCB signature); 0x800065f6 / 0x800066a6 want 0"
+ref        = "`0x800067de` compares `[+0x0C]` with r7 (the MCB signature); `0x800065f6` / `0x800066a6` want 0"
 confidence = "high"
 
 [[register.source]]
 kind       = "trace"
-ref        = "write of the version marker to 0x7DC3_8388 (pc 0x800066ba/0x8000675e) vs the expected r7 across the 0x0220/0x0222/0x0223 memsys versions"
+ref        = "write of the version marker to `0x7DC3_8388` (pc `0x800066ba`/`0x8000675e`) vs the expected r7 across the `0x0220`/`0x0222`/`0x0223` memsys versions"
 confidence = "high"
 
 [[register]]
 name   = "PHY_RES_STATUS"
 offset = 0x32110
 access = "rw"
-notes  = "Result: rank << 8 for command 0x101, else 0."
+notes  = "Result: `rank << 8` for command `0x101`, else 0."
 
 [[register.source]]
 kind       = "decompile"
-ref        = "0x800068ce checks ([+0x10] >> 8) & 0xFF against the rank it verifies"
+ref        = "`0x800068ce` checks `([+0x10] >> 8) & 0xFF` against the rank it verifies"
 confidence = "high"
 
 [[register]]
 name   = "PHY_RES_SUM5"
 offset = 0x32114
 access = "rw"
-notes  = "Sum of words +0x00..+0x10."
+notes  = "Sum of words `+0x00..+0x10`."
 
 [[register.source]]
 kind       = "decompile"
@@ -145,7 +145,7 @@ confidence = "high"
 name   = "PHY_RES_SUM6"
 offset = 0x32118
 access = "rw"
-notes  = "Sum of words +0x00..+0x14."
+notes  = "Sum of words `+0x00..+0x14`."
 
 [[register.source]]
 kind       = "decompile"
@@ -171,7 +171,7 @@ offset = 0x38000
 count  = 4096
 stride = 4
 access = "rw"
-notes  = "Larger PHY register array, as PHY_A. Byte-addressable: the 2022-04-26 bootcode decompresses mcb.bin straight into it (a 16 KB buffer at +0x38000) and hashes it a byte at a time, so narrow reads get their lane and narrow writes merge (#69)."
+notes  = "Larger PHY register array, as `PHY_A`. Byte-addressable: the 2022-04-26 bootcode decompresses `mcb.bin` straight into it (a 16 KB buffer at `+0x38000`) and hashes it a byte at a time, so narrow reads get their lane and narrow writes merge (#69)."
 
 [[register.source]]
 kind       = "trace"
@@ -180,5 +180,5 @@ confidence = "medium"
 
 [[register.source]]
 kind       = "trace"
-ref        = "2022-04-26 bootcode: mcb.bin decompressed to 0x7DC3_8000 (0x1540 of the buffer's 0x4000 bytes), then SHA-256 over it; a wrong lane there is 'mcb.bin mismatch' / 'Missing SDRAM FW' (#69)"
+ref        = "2022-04-26 bootcode: `mcb.bin` decompressed to `0x7DC3_8000` (`0x1540` of the buffer's `0x4000` bytes), then SHA-256 over it; a wrong lane there is `mcb.bin mismatch` / `Missing SDRAM FW` (#69)"
 confidence = "high"

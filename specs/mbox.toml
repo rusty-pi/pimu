@@ -3,16 +3,16 @@ name    = "mbox"
 base    = 0x7E00B880
 size    = 0x140
 summary = "ARM <-> VideoCore mailboxes: two views of the same pair of FIFOs, and the interrupt block between them"
-notes   = "Every mailbox register is a two-element array 0x100 apart: element 0 is the ARM's view (what Linux's device tree names), element 1 the VPU's (what start4 drives). The two views are mirror images: the ARM posts requests into MAIL1 and reads replies from MAIL0, the VPU the other way round. The pending words sit in a block at +0xC0 between the views."
+notes   = "Every mailbox register is a two-element array `0x100` apart: element 0 is the ARM's view (what Linux's device tree names), element 1 the VPU's (what start4 drives). The two views are mirror images: the ARM posts requests into MAIL1 and reads replies from MAIL0, the VPU the other way round. The pending words sit in a block at `+0xC0` between the views."
 
 [[block.source]]
 kind       = "linux"
-ref        = "mailbox@7e00b880, brcm,bcm2835-mbox, reg = <0x7e00b880 0x40>; confirmed in the reference board's /proc/device-tree"
+ref        = "`mailbox@7e00b880`, `brcm,bcm2835-mbox`, `reg = <0x7e00b880 0x40>`; confirmed in the reference board's `/proc/device-tree`"
 confidence = "high"
 
 [[block.source]]
 kind       = "decompile"
-ref        = "start4's receive op 0x3EC5AC0C loads 0x7E00B980 as a literal; its ISR 0x3EC58302 reads 0x7E00B940"
+ref        = "start4's receive op `0x3EC5AC0C` loads `0x7E00B980` as a literal; its ISR `0x3EC58302` reads `0x7E00B940`"
 confidence = "high"
 
 [[register]]
@@ -25,7 +25,7 @@ notes  = "MAIL0 data: the VPU writes replies, the ARM reads them."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcm2835-mailbox.c reads replies at +0x00"
+ref        = "`bcm2835-mailbox.c` reads replies at `+0x00`"
 confidence = "high"
 
 [[register]]
@@ -38,7 +38,7 @@ notes  = "MAIL0 head, without popping it."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcm2835-mailbox.c register list (MAIL0_PEEK)"
+ref        = "`bcm2835-mailbox.c` register list (`MAIL0_PEEK`)"
 confidence = "medium"
 
 [[register]]
@@ -51,7 +51,7 @@ notes  = "MAIL0 sender tag."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcm2835-mailbox.c register list (MAIL0_SENDER)"
+ref        = "`bcm2835-mailbox.c` register list (`MAIL0_SENDER`)"
 confidence = "medium"
 
 [[register]]
@@ -60,11 +60,11 @@ offset = 0x18
 count  = 2
 stride = 0x100
 access = "r"
-notes  = "MAIL0 FIFO state. STATUS1 has the same layout."
+notes  = "MAIL0 FIFO state. `STATUS1` has the same layout."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcm2835-mailbox.c: ARM_MS_FULL / ARM_MS_EMPTY"
+ref        = "`bcm2835-mailbox.c`: `ARM_MS_FULL` / `ARM_MS_EMPTY`"
 confidence = "high"
 
 [[register.field]]
@@ -74,7 +74,7 @@ notes = "Nothing queued."
 
 [[register.field.source]]
 kind       = "decompile"
-ref        = "receive op 0x3EC5AC0C tests bit 30 of the status word"
+ref        = "receive op `0x3EC5AC0C` tests bit 30 of the status word"
 confidence = "high"
 
 [[register.field]]
@@ -84,7 +84,7 @@ notes = "No room for another word; the FIFOs are 8 deep."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "bcm2835-mailbox.c: ARM_MS_FULL"
+ref        = "`bcm2835-mailbox.c`: `ARM_MS_FULL`"
 confidence = "high"
 
 [[register]]
@@ -93,16 +93,16 @@ offset = 0x1C
 count  = 2
 stride = 0x100
 access = "rw"
-notes  = "MAIL0 interrupt enables and pending flags. CONFIG1 has the same layout. A pending flag is its condition AND its enable, not the raw condition."
+notes  = "MAIL0 interrupt enables and pending flags. `CONFIG1` has the same layout. A pending flag is its condition AND its enable, not the raw condition."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcm2835-mailbox.c sets ARM_MC_IHAVEDATAIRQEN (bit 0) at +0x1C"
+ref        = "`bcm2835-mailbox.c` sets `ARM_MC_IHAVEDATAIRQEN` (bit 0) at `+0x1C`"
 confidence = "high"
 
 [[register.source]]
 kind       = "decompile"
-ref        = "ISR 0x3EC58302 reads 0x7E00B9BC, releases the receive lock on bit 4 and the send lock on bit 6, writes the rest back"
+ref        = "ISR `0x3EC58302` reads `0x7E00B9BC`, releases the receive lock on bit 4 and the send lock on bit 6, writes the rest back"
 confidence = "high"
 
 [[register.field]]
@@ -112,7 +112,7 @@ notes = "Interrupt while this mailbox has data."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "bcm2835-mailbox.c: ARM_MC_IHAVEDATAIRQEN"
+ref        = "`bcm2835-mailbox.c`: `ARM_MC_IHAVEDATAIRQEN`"
 confidence = "high"
 
 [[register.field]]
@@ -132,7 +132,7 @@ notes = "Interrupt while the opposite mailbox is empty: how a sender waits for t
 
 [[register.field.source]]
 kind       = "decompile"
-ref        = "send op arms it; ISR 0x3EC58302 releases the send lock on the matching pending bit 6"
+ref        = "send op arms it; ISR `0x3EC58302` releases the send lock on the matching pending bit 6"
 confidence = "medium"
 
 [[register.field]]
@@ -143,25 +143,25 @@ notes  = "Flush this mailbox's FIFO. Does not latch."
 
 [[register.field.source]]
 kind       = "decompile"
-ref        = "the driver's init writes 8, then 1, to CONFIG1"
+ref        = "the driver's init writes 8, then 1, to `CONFIG1`"
 confidence = "medium"
 
 [[register.field]]
 name   = "PEND_HAVE_DATA"
 bits   = "4"
 access = "r"
-notes  = "EN_HAVE_DATA's condition is true."
+notes  = "`EN_HAVE_DATA`'s condition is true."
 
 [[register.field.source]]
 kind       = "decompile"
-ref        = "ISR 0x3EC58302: bit 4 releases the mbox_read task's lock gp+243076"
+ref        = "ISR `0x3EC58302`: bit 4 releases the `mbox_read` task's lock `gp+243076`"
 confidence = "high"
 
 [[register.field]]
 name   = "PEND_HAVE_SPACE"
 bits   = "5"
 access = "r"
-notes  = "EN_HAVE_SPACE's condition is true."
+notes  = "`EN_HAVE_SPACE`'s condition is true."
 
 [[register.field.source]]
 kind       = "inferred"
@@ -172,11 +172,11 @@ confidence = "low"
 name   = "PEND_OPP_EMPTY"
 bits   = "6"
 access = "r"
-notes  = "EN_OPP_EMPTY's condition is true."
+notes  = "`EN_OPP_EMPTY`'s condition is true."
 
 [[register.field.source]]
 kind       = "decompile"
-ref        = "ISR 0x3EC58302: bit 6 releases the send lock gp+243080"
+ref        = "ISR `0x3EC58302`: bit 6 releases the send lock `gp+243080`"
 confidence = "high"
 
 [[register]]
@@ -189,12 +189,12 @@ notes  = "MAIL1 data: the ARM posts requests, the VPU reads them. A message is t
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcm2835-mailbox.c writes requests at +0x20"
+ref        = "`bcm2835-mailbox.c` writes requests at `+0x20`"
 confidence = "high"
 
 [[register.source]]
 kind       = "decompile"
-ref        = "receive op 0x3EC5AC0C reads 0x7E00B9A0"
+ref        = "receive op `0x3EC5AC0C` reads `0x7E00B9A0`"
 confidence = "high"
 
 [[register]]
@@ -207,7 +207,7 @@ notes  = "MAIL1 head, without popping it."
 
 [[register.source]]
 kind       = "inferred"
-ref        = "MAIL0's layout, 0x20 higher"
+ref        = "MAIL0's layout, `0x20` higher"
 confidence = "medium"
 
 [[register]]
@@ -220,7 +220,7 @@ notes  = "MAIL1 sender tag."
 
 [[register.source]]
 kind       = "inferred"
-ref        = "MAIL0's layout, 0x20 higher"
+ref        = "MAIL0's layout, `0x20` higher"
 confidence = "medium"
 
 [[register]]
@@ -229,16 +229,16 @@ offset = 0x38
 count  = 2
 stride = 0x100
 access = "r"
-notes  = "MAIL1 FIFO state, laid out as STATUS0."
+notes  = "MAIL1 FIFO state, laid out as `STATUS0`."
 
 [[register.source]]
 kind       = "linux"
-ref        = "bcm2835-mailbox.c polls +0x38 for FULL before posting"
+ref        = "`bcm2835-mailbox.c` polls `+0x38` for `FULL` before posting"
 confidence = "high"
 
 [[register.source]]
 kind       = "decompile"
-ref        = "receive op 0x3EC5AC0C tests bit 30 of 0x7E00B9B8"
+ref        = "receive op `0x3EC5AC0C` tests bit 30 of `0x7E00B9B8`"
 confidence = "high"
 
 [[register]]
@@ -247,16 +247,16 @@ offset = 0x3C
 count  = 2
 stride = 0x100
 access = "rw"
-notes  = "MAIL1 interrupt enables and pending flags, laid out as CONFIG0."
+notes  = "MAIL1 interrupt enables and pending flags, laid out as `CONFIG0`."
 
 [[register.source]]
 kind       = "decompile"
-ref        = "receive op 0x3EC5AC0C arms it on empty; ISR 0x3EC58302 reads and re-arms 0x7E00B9BC"
+ref        = "receive op `0x3EC5AC0C` arms it on empty; ISR `0x3EC58302` reads and re-arms `0x7E00B9BC`"
 confidence = "high"
 
 [[register.source]]
 kind       = "trace"
-ref        = "pinned start4 writes the VPU's element (0x7E00B9BC) 0x8 at 0x3EC5AF6C and 0x1 at 0x3EC5AF7C, shortly before it releases the ARM"
+ref        = "pinned start4 writes the VPU's element (`0x7E00B9BC`) `0x8` at `0x3EC5AF6C` and `0x1` at `0x3EC5AF7C`, shortly before it releases the ARM"
 confidence = "high"
 
 [[register]]
@@ -267,7 +267,7 @@ notes  = "Mailbox 0 wants service. Computed; writes do not latch."
 
 [[register.source]]
 kind       = "decompile"
-ref        = "ISR 0x3EC58302: Load r0, [0x7E00B940 + 8]; Btest r0, #2"
+ref        = "ISR `0x3EC58302`: `Load r0, [0x7E00B940 + 8]; Btest r0, #2`"
 confidence = "high"
 
 [[register.field]]
@@ -277,21 +277,21 @@ notes = "Dispatch this mailbox's registered callback."
 
 [[register.field.source]]
 kind       = "decompile"
-ref        = "ISR 0x3EC58302 calls [gp+243092] on bit 2"
+ref        = "ISR `0x3EC58302` calls `[gp+243092]` on bit 2"
 confidence = "high"
 
 [[register]]
 name   = "PEND1"
 offset = 0xCC
 access = "rw"
-notes  = "Mailbox 1 (ARM -> VPU) wants service; set while CONFIG1 has an enabled condition pending. Same layout as PEND0."
+notes  = "Mailbox 1 (ARM -> VPU) wants service; set while `CONFIG1` has an enabled condition pending. Same layout as `PEND0`."
 
 [[register.source]]
 kind       = "decompile"
-ref        = "ISR 0x3EC58302: Load r5, [0x7E00B940 + 12]; Btest r5, #2"
+ref        = "ISR `0x3EC58302`: `Load r5, [0x7E00B940 + 12]; Btest r5, #2`"
 confidence = "high"
 
 [[register.source]]
 kind       = "trace"
-ref        = "--log irqtbl: src 94 handler=0x3ec58302"
+ref        = "`--log irqtbl`: `src 94 handler=0x3ec58302`"
 confidence = "high"

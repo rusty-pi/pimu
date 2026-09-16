@@ -4,11 +4,11 @@ bus     = "arm"
 base    = 0xFF842000
 size    = 0x2000
 summary = "GIC-400 CPU interface, banked per CPU and per security state"
-notes   = "Word access only. Linux enters at EL2 and, because this window is 8 KiB, runs split EOI: priority drop on EOIR, deactivation on DIR. The virtualisation interface follows it: gich at 0xFF844000, gicv at 0xFF846000."
+notes   = "Word access only. Linux enters at EL2 and, because this window is 8 KiB, runs split EOI: priority drop on `EOIR`, deactivation on `DIR`. The virtualisation interface follows it: `gich` at `0xFF844000`, `gicv` at `0xFF846000`."
 
 [[block.source]]
 kind       = "linux"
-ref        = "dtb: interrupt-controller@40041000 reg <... 0x40042000 0x2000 ...> -> 0xFF842000, 8 KiB"
+ref        = "dtb: `interrupt-controller@40041000` `reg <... 0x40042000 0x2000 ...>` -> `0xFF842000`, 8 KiB"
 confidence = "high"
 
 [[block.source]]
@@ -18,7 +18,7 @@ confidence = "high"
 
 [[block.source]]
 kind       = "measured"
-ref        = "reference board dmesg: 'GIC: Using split EOI/Deactivate mode'"
+ref        = "reference board `dmesg`: `GIC: Using split EOI/Deactivate mode`"
 confidence = "high"
 
 [[register]]
@@ -29,12 +29,12 @@ notes  = "Stored in the secure layout; the non-secure view remaps four of its bi
 
 [[register.source]]
 kind       = "standard"
-ref        = "GICv2 4.4.1 GICC_CTLR"
+ref        = "GICv2 4.4.1 `GICC_CTLR`"
 confidence = "high"
 
 [[register.source]]
 kind       = "decompile"
-ref        = "armstub writes 0x1e7: EnableGrp0 | EnableGrp1 | AckCtl | bypass disables"
+ref        = "armstub writes `0x1e7`: `EnableGrp0 | EnableGrp1 | AckCtl` | bypass disables"
 confidence = "high"
 
 [[register.field]]
@@ -60,7 +60,7 @@ confidence = "high"
 [[register.field]]
 name  = "ACKCTL"
 bits  = "2"
-notes = "Secure IAR may acknowledge group-1 interrupts."
+notes = "Secure `IAR` may acknowledge group-1 interrupts."
 
 [[register.field.source]]
 kind       = "standard"
@@ -80,7 +80,7 @@ confidence = "high"
 [[register.field]]
 name  = "CBPR"
 bits  = "4"
-notes = "BPR governs both groups."
+notes = "`BPR` governs both groups."
 
 [[register.field.source]]
 kind       = "standard"
@@ -155,7 +155,7 @@ notes  = "Priority mask."
 
 [[register.source]]
 kind       = "standard"
-ref        = "GICv2 4.4.2 GICC_PMR"
+ref        = "GICv2 4.4.2 `GICC_PMR`"
 confidence = "high"
 
 [[register]]
@@ -166,18 +166,18 @@ notes  = "Binary point; minimum 2 secure, 3 non-secure."
 
 [[register.source]]
 kind       = "standard"
-ref        = "GICv2 4.4.3 GICC_BPR"
+ref        = "GICv2 4.4.3 `GICC_BPR`"
 confidence = "high"
 
 [[register]]
 name   = "IAR"
 offset = 0x0C
 access = "r"
-notes  = "Acknowledge: returns the ID (with the source CPU for SGIs) and makes it active. 1023 spurious, 1022 group 1 refused to secure without AckCtl."
+notes  = "Acknowledge: returns the ID (with the source CPU for SGIs) and makes it active. 1023 spurious, 1022 group 1 refused to secure without `AckCtl`."
 
 [[register.source]]
 kind       = "standard"
-ref        = "GICv2 4.4.4 GICC_IAR"
+ref        = "GICv2 4.4.4 `GICC_IAR`"
 confidence = "high"
 
 [[register]]
@@ -188,29 +188,29 @@ notes  = "End of interrupt: priority drop, plus deactivation unless split EOI is
 
 [[register.source]]
 kind       = "standard"
-ref        = "GICv2 4.4.5 GICC_EOIR"
+ref        = "GICv2 4.4.5 `GICC_EOIR`"
 confidence = "high"
 
 [[register]]
 name   = "RPR"
 offset = 0x14
 access = "r"
-notes  = "Running priority; 0xFF when nothing is active."
+notes  = "Running priority; `0xFF` when nothing is active."
 
 [[register.source]]
 kind       = "standard"
-ref        = "GICv2 4.4.6 GICC_RPR"
+ref        = "GICv2 4.4.6 `GICC_RPR`"
 confidence = "high"
 
 [[register]]
 name   = "HPPIR"
 offset = 0x18
 access = "r"
-notes  = "What IAR would return, without taking it."
+notes  = "What `IAR` would return, without taking it."
 
 [[register.source]]
 kind       = "standard"
-ref        = "GICv2 4.4.7 GICC_HPPIR"
+ref        = "GICv2 4.4.7 `GICC_HPPIR`"
 confidence = "high"
 
 [[register]]
@@ -221,7 +221,7 @@ notes  = "Aliased (group-1) binary point, secure access only."
 
 [[register.source]]
 kind       = "standard"
-ref        = "GICv2 4.4.8 GICC_ABPR"
+ref        = "GICv2 4.4.8 `GICC_ABPR`"
 confidence = "high"
 
 [[register]]
@@ -232,7 +232,7 @@ notes  = "Aliased acknowledge: group-1 behaviour for secure software."
 
 [[register.source]]
 kind       = "standard"
-ref        = "GICv2 4.4.9 GICC_AIAR"
+ref        = "GICv2 4.4.9 `GICC_AIAR`"
 confidence = "high"
 
 [[register]]
@@ -243,7 +243,7 @@ notes  = "Aliased end of interrupt."
 
 [[register.source]]
 kind       = "standard"
-ref        = "GICv2 4.4.10 GICC_AEOIR"
+ref        = "GICv2 4.4.10 `GICC_AEOIR`"
 confidence = "high"
 
 [[register]]
@@ -254,7 +254,7 @@ notes  = "Aliased highest pending."
 
 [[register.source]]
 kind       = "standard"
-ref        = "GICv2 4.4.11 GICC_AHPPIR"
+ref        = "GICv2 4.4.11 `GICC_AHPPIR`"
 confidence = "high"
 
 [[register]]
@@ -265,7 +265,7 @@ notes  = "Active priorities."
 
 [[register.source]]
 kind       = "standard"
-ref        = "GICv2 4.4.12 GICC_APRn"
+ref        = "GICv2 4.4.12 `GICC_APRn`"
 confidence = "high"
 
 [[register]]
@@ -276,7 +276,7 @@ notes  = "Non-secure active priorities."
 
 [[register.source]]
 kind       = "standard"
-ref        = "GICv2 4.4.13 GICC_NSAPRn"
+ref        = "GICv2 4.4.13 `GICC_NSAPRn`"
 confidence = "high"
 
 [[register]]
@@ -288,7 +288,7 @@ notes  = "ARM, GICv2 CPU interface."
 
 [[register.source]]
 kind       = "measured"
-ref        = "/dev/mem read of 0xFF8420FC on the reference board"
+ref        = "`/dev/mem` read of `0xFF8420FC` on the reference board"
 confidence = "high"
 
 [[register]]
@@ -299,10 +299,10 @@ notes  = "Deactivate: the second half of split EOI."
 
 [[register.source]]
 kind       = "standard"
-ref        = "GICv2 4.4.15 GICC_DIR"
+ref        = "GICv2 4.4.15 `GICC_DIR`"
 confidence = "high"
 
 [[register.source]]
 kind       = "linux"
-ref        = "irq-gic.c deactivates through GICC_DIR in EOImodeNS"
+ref        = "`irq-gic.c` deactivates through `GICC_DIR` in `EOImodeNS`"
 confidence = "high"

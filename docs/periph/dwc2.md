@@ -6,13 +6,13 @@
 - Base: `0x7E980000`
 - Size: `0x10000`
 
-GRSTCTL's reset and flush bits complete as soon as they are written and AHBIDLE always reads 1. The id and hardware-configuration words answer the measured values. The core is a host unless GUSBCFG forces device mode, a host channel asked to halt halts at once, and the root port reports nothing attached. Everything else is plain storage, and a core soft reset does not return it to its reset values.
+`GRSTCTL`'s reset and flush bits complete as soon as they are written and `AHBIDLE` always reads 1. The id and hardware-configuration words answer the measured values. The core is a host unless `GUSBCFG` forces device mode, a host channel asked to halt halts at once, and the root port reports nothing attached. Everything else is plain storage, and a core soft reset does not return it to its reset values.
 
 Sources:
 
-- linux (high): bcm283x.dtsi usb@7e980000 (brcm,bcm2835-usb, the dwc2 driver), reg size 0x10000; bcm2711.dtsi keeps the node
-- decompile (high): SET_POWER_STATE USB handler 0x3ED89520..0x3ED89802, BCM2711 branch: core soft reset and FIFO flushes, then GUSBCFG with HCFG / HFIR, or DCFG / DCTL
-- standard (high): edk2-platforms Platform/RaspberryPi/Drivers/DwUsbHostDxe (in the rpi-mkosi image's RPI_EFI.fd): DwCoreInit / DwHcInit / DwHcGetRootHubPortStatus
+- linux (high): `bcm283x.dtsi` `usb@7e980000` (`brcm,bcm2835-usb`, the dwc2 driver), reg size `0x10000`; `bcm2711.dtsi` keeps the node
+- decompile (high): `SET_POWER_STATE` USB handler `0x3ED89520..0x3ED89802`, BCM2711 branch: core soft reset and FIFO flushes, then `GUSBCFG` with `HCFG` / `HFIR`, or `DCFG` / `DCTL`
+- standard (high): edk2-platforms `Platform/RaspberryPi/Drivers/DwUsbHostDxe` (in the rpi-mkosi image's `RPI_EFI.fd`): `DwCoreInit` / `DwHcInit` / `DwHcGetRootHubPortStatus`
 
 ## Register map
 
@@ -44,14 +44,14 @@ AHB configuration. Plain storage.
 
 Sources:
 
-- standard (high): DWC2 global register at 0x008; Linux drivers/usb/dwc2/hw.h GAHBCFG
-- decompile (high): 0x3ED895D8 writes 1 on the device-mode path
+- standard (high): DWC2 global register at `0x008`; Linux `drivers/usb/dwc2/hw.h` `GAHBCFG`
+- decompile (high): `0x3ED895D8` writes 1 on the device-mode path
 
 ## `GUSBCFG`
 
 Offset `0x00C` · access `rw` · 32 bits
 
-USB configuration. Stored; FORCEDEVMODE decides GINTSTS.CURMOD.
+USB configuration. Stored; `FORCEDEVMODE` decides `GINTSTS.CURMOD`.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -59,13 +59,13 @@ USB configuration. Stored; FORCEDEVMODE decides GINTSTS.CURMOD.
 
 Sources:
 
-- standard (high): DWC2 global register at 0x00C; Linux drivers/usb/dwc2/hw.h GUSBCFG
-- decompile (high): 0x3ED895D6 writes 0x40402700 (device mode), 0x3ED897CC writes 0x20402700 (host mode)
-- measured (high): Raspberry Pi 4B d03115 after vcmailbox SET_POWER_STATE(USB, on|wait): 0x20402700, the host-mode value start4 writes
+- standard (high): DWC2 global register at `0x00C`; Linux `drivers/usb/dwc2/hw.h` `GUSBCFG`
+- decompile (high): `0x3ED895D6` writes `0x40402700` (device mode), `0x3ED897CC` writes `0x20402700` (host mode)
+- measured (high): Raspberry Pi 4B d03115 after `vcmailbox` `SET_POWER_STATE(USB, on|wait)`: `0x20402700`, the host-mode value start4 writes
 
 `FORCEDEVMODE` sources:
 
-- standard (high): Linux drivers/usb/dwc2/hw.h GUSBCFG_FORCEDEVMODE
+- standard (high): Linux `drivers/usb/dwc2/hw.h` `GUSBCFG_FORCEDEVMODE`
 
 ## `GRSTCTL`
 
@@ -81,47 +81,47 @@ Reset control. start4 writes one reset or flush bit at a time and spins until it
 | 3 | `INTKNQFLSH` | rw | IN token queue flush. Completes at once. |
 | 4 | `RXFFLSH` | rw | RX FIFO flush. Completes at once. |
 | 5 | `TXFFLSH` | rw | TX FIFO flush. Completes at once. |
-| 10:6 | `TXFNUM` | rw | Which TX FIFO TXFFLSH flushes; 0x10 is all of them. Stored. |
+| 10:6 | `TXFNUM` | rw | Which TX FIFO `TXFFLSH` flushes; `0x10` is all of them. Stored. |
 | 31 | `AHBIDLE` | r | AHB master idle. Always 1: nothing is ever in flight. |
 
 Sources:
 
-- standard (high): DWC2 global register at 0x010; Linux drivers/usb/dwc2/hw.h GRSTCTL
-- decompile (high): 0x3ED8958A..0x3ED895B2: write 1, 2, 0x420 and 0x10 in turn, spinning on bits 0, 1, 5 and 4
-- measured (high): Raspberry Pi 4B d03115, 32-bit /dev/mem read of 0xFE980010 after vcmailbox SET_POWER_STATE(USB, on|wait): 0x80000000
+- standard (high): DWC2 global register at `0x010`; Linux `drivers/usb/dwc2/hw.h` `GRSTCTL`
+- decompile (high): `0x3ED8958A..0x3ED895B2`: write 1, 2, `0x420` and `0x10` in turn, spinning on bits 0, 1, 5 and 4
+- measured (high): Raspberry Pi 4B d03115, 32-bit `/dev/mem` read of `0xFE980010` after `vcmailbox` `SET_POWER_STATE(USB, on|wait)`: `0x80000000`
 
 `CSFTRST` sources:
 
-- standard (high): Linux drivers/usb/dwc2/hw.h GRSTCTL_CSFTRST
+- standard (high): Linux `drivers/usb/dwc2/hw.h` `GRSTCTL_CSFTRST`
 
 `HSFTRST` sources:
 
-- standard (high): Linux drivers/usb/dwc2/hw.h GRSTCTL_HSFTRST
+- standard (high): Linux `drivers/usb/dwc2/hw.h` `GRSTCTL_HSFTRST`
 
 `FRMCNTRRST` sources:
 
-- standard (high): Linux drivers/usb/dwc2/hw.h GRSTCTL_FRMCNTRRST
+- standard (high): Linux `drivers/usb/dwc2/hw.h` `GRSTCTL_FRMCNTRRST`
 
 `INTKNQFLSH` sources:
 
-- standard (high): Linux drivers/usb/dwc2/hw.h GRSTCTL_IN_TKNQ_FLSH
+- standard (high): Linux `drivers/usb/dwc2/hw.h` `GRSTCTL_IN_TKNQ_FLSH`
 
 `RXFFLSH` sources:
 
-- standard (high): Linux drivers/usb/dwc2/hw.h GRSTCTL_RXFFLSH
+- standard (high): Linux `drivers/usb/dwc2/hw.h` `GRSTCTL_RXFFLSH`
 
 `TXFFLSH` sources:
 
-- standard (high): Linux drivers/usb/dwc2/hw.h GRSTCTL_TXFFLSH
+- standard (high): Linux `drivers/usb/dwc2/hw.h` `GRSTCTL_TXFFLSH`
 
 `TXFNUM` sources:
 
-- standard (high): Linux drivers/usb/dwc2/hw.h GRSTCTL_TXFNUM_MASK
+- standard (high): Linux `drivers/usb/dwc2/hw.h` `GRSTCTL_TXFNUM_MASK`
 
 `AHBIDLE` sources:
 
-- standard (high): Linux drivers/usb/dwc2/hw.h GRSTCTL_AHBIDLE; dwc2_core_reset and DwUsbHostDxe's DwCoreReset wait for it before a soft reset
-- measured (high): Raspberry Pi 4B d03115: GRSTCTL 0x80000000 with USB powered
+- standard (high): Linux `drivers/usb/dwc2/hw.h` `GRSTCTL_AHBIDLE`; `dwc2_core_reset` and `DwUsbHostDxe`'s `DwCoreReset` wait for it before a soft reset
+- measured (high): Raspberry Pi 4B d03115: `GRSTCTL` `0x80000000` with USB powered
 
 ## `GINTSTS`
 
@@ -131,49 +131,49 @@ Core interrupt status. The levels are derived. Of the latched bits only the susp
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
-| 0 | `CURMOD` | r | 1 in host mode. The ID pin reads as an A-device (GOTGCTL.CONIDSTS 0 on the reference board), so the core is a host unless GUSBCFG.FORCEDEVMODE is set. |
+| 0 | `CURMOD` | r | 1 in host mode. The ID pin reads as an A-device (`GOTGCTL.CONIDSTS` 0 on the reference board), so the core is a host unless `GUSBCFG.FORCEDEVMODE` is set. |
 | 5 | `NPTXFEMP` | r | Non-periodic TX FIFO empty. Always 1: nothing is ever queued. |
-| 10 | `ERLYSUSP` | w1c | Early suspend: 3 ms of idle bus in device mode. Set with USBSUSP when the core connects as a device with no host. |
-| 11 | `USBSUSP` | w1c | USB suspend. The boot ROM's device-mode poll (0x60001bb0) takes it as 'no host', resets its USB state and gives up on rpiboot (#68). |
+| 10 | `ERLYSUSP` | w1c | Early suspend: 3 ms of idle bus in device mode. Set with `USBSUSP` when the core connects as a device with no host. |
+| 11 | `USBSUSP` | w1c | USB suspend. The boot ROM's device-mode poll (`0x60001bb0`) takes it as 'no host', resets its USB state and gives up on rpiboot (#68). |
 | 26 | `PTXFEMP` | r | Periodic TX FIFO empty. Always 1. |
 
 Sources:
 
-- standard (high): DWC2 global register at 0x014; Linux drivers/usb/dwc2/hw.h GINTSTS
-- measured (high): Raspberry Pi 4B d03115 after vcmailbox SET_POWER_STATE(USB, on|wait): 0x5400002B (CURMOD, NPTXFEMP and PTXFEMP, plus latched MODEMIS, SOF, CONIDSTSCHNG and SESSREQINT)
+- standard (high): DWC2 global register at `0x014`; Linux `drivers/usb/dwc2/hw.h` `GINTSTS`
+- measured (high): Raspberry Pi 4B d03115 after `vcmailbox` `SET_POWER_STATE(USB, on|wait)`: `0x5400002B` (`CURMOD`, `NPTXFEMP` and `PTXFEMP`, plus latched `MODEMIS`, `SOF`, `CONIDSTSCHNG` and `SESSREQINT`)
 
 `CURMOD` sources:
 
-- standard (high): Linux drivers/usb/dwc2/hw.h GINTSTS_CURMODE_HOST; DwUsbHostDxe's DwHcInit powers the root port only when it is set
-- measured (high): Raspberry Pi 4B d03115: 1 with GUSBCFG 0x20402700; GOTGCTL read 0x001C0000
+- standard (high): Linux `drivers/usb/dwc2/hw.h` `GINTSTS_CURMODE_HOST`; `DwUsbHostDxe`'s `DwHcInit` powers the root port only when it is set
+- measured (high): Raspberry Pi 4B d03115: 1 with `GUSBCFG` `0x20402700`; `GOTGCTL` read `0x001C0000`
 
 `NPTXFEMP` sources:
 
-- standard (high): Linux drivers/usb/dwc2/hw.h GINTSTS_NPTXFEMP
+- standard (high): Linux `drivers/usb/dwc2/hw.h` `GINTSTS_NPTXFEMP`
 
 `ERLYSUSP` sources:
 
-- standard (high): Linux drivers/usb/dwc2/hw.h GINTSTS_ERLYSUSP
+- standard (high): Linux `drivers/usb/dwc2/hw.h` `GINTSTS_ERLYSUSP`
 
 `USBSUSP` sources:
 
-- standard (high): Linux drivers/usb/dwc2/hw.h GINTSTS_USBSUSP
-- decompile (medium): C0 boot ROM 0x60001bea: btest GINTSTS, 11
+- standard (high): Linux `drivers/usb/dwc2/hw.h` `GINTSTS_USBSUSP`
+- decompile (medium): C0 boot ROM `0x60001bea`: `btest GINTSTS, 11`
 
 `PTXFEMP` sources:
 
-- standard (high): Linux drivers/usb/dwc2/hw.h GINTSTS_PTXFEMP
+- standard (high): Linux `drivers/usb/dwc2/hw.h` `GINTSTS_PTXFEMP`
 
 ## `GSNPSID`
 
 Offset `0x040` · access `r` · 32 bits · reset `0x4F54280A`
 
-Core id: OTG, release 2.80a. Linux's dwc2 refuses a core whose id lacks the 0x4F54 prefix.
+Core id: OTG, release 2.80a. Linux's dwc2 refuses a core whose id lacks the `0x4F54` prefix.
 
 Sources:
 
-- measured (high): Raspberry Pi 4B d03115, 32-bit /dev/mem read of 0xFE980040 after vcmailbox SET_POWER_STATE(USB, on|wait): 0x4F54280A
-- linux (high): drivers/usb/dwc2/params.c dwc2_get_hwparams checks GSNPSID against DWC2_OTG_ID (0x4F540000)
+- measured (high): Raspberry Pi 4B d03115, 32-bit `/dev/mem` read of `0xFE980040` after `vcmailbox` `SET_POWER_STATE(USB, on|wait)`: `0x4F54280A`
+- linux (high): `drivers/usb/dwc2/params.c` `dwc2_get_hwparams` checks `GSNPSID` against `DWC2_OTG_ID` (`0x4F540000`)
 
 ## `GHWCFG1`
 
@@ -183,13 +183,13 @@ Hardware configuration 1: endpoint directions.
 
 Sources:
 
-- measured (high): Raspberry Pi 4B d03115, /dev/mem read of 0xFE980044 with USB powered: 0x00000000
+- measured (high): Raspberry Pi 4B d03115, `/dev/mem` read of `0xFE980044` with USB powered: `0x00000000`
 
 ## `GHWCFG2`
 
 Offset `0x048` · access `r` · 32 bits · reset `0x228DDD50`
 
-Hardware configuration 2. DwUsbHostDxe sizes its channel loops from NUM_HOST_CHAN; 0 reads as one channel.
+Hardware configuration 2. `DwUsbHostDxe` sizes its channel loops from `NUM_HOST_CHAN`; 0 reads as one channel.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -197,11 +197,11 @@ Hardware configuration 2. DwUsbHostDxe sizes its channel loops from NUM_HOST_CHA
 
 Sources:
 
-- measured (high): Raspberry Pi 4B d03115, /dev/mem read of 0xFE980048 with USB powered: 0x228DDD50
+- measured (high): Raspberry Pi 4B d03115, `/dev/mem` read of `0xFE980048` with USB powered: `0x228DDD50`
 
 `NUM_HOST_CHAN` sources:
 
-- standard (high): Linux drivers/usb/dwc2/hw.h GHWCFG2_NUM_HOST_CHAN_MASK; edk2 DwcHw.h DWC2_HWCFG2_NUM_HOST_CHAN_MASK
+- standard (high): Linux `drivers/usb/dwc2/hw.h` `GHWCFG2_NUM_HOST_CHAN_MASK`; edk2 `DwcHw.h` `DWC2_HWCFG2_NUM_HOST_CHAN_MASK`
 
 ## `GHWCFG3`
 
@@ -211,7 +211,7 @@ Hardware configuration 3: FIFO depth and transfer-size widths.
 
 Sources:
 
-- measured (high): Raspberry Pi 4B d03115, /dev/mem read of 0xFE98004C with USB powered: 0x0FF000E8
+- measured (high): Raspberry Pi 4B d03115, `/dev/mem` read of `0xFE98004C` with USB powered: `0x0FF000E8`
 
 ## `GHWCFG4`
 
@@ -221,7 +221,7 @@ Hardware configuration 4.
 
 Sources:
 
-- measured (high): Raspberry Pi 4B d03115, /dev/mem read of 0xFE980050 with USB powered: 0x1FF00020
+- measured (high): Raspberry Pi 4B d03115, `/dev/mem` read of `0xFE980050` with USB powered: `0x1FF00020`
 
 ## `HCFG`
 
@@ -231,8 +231,8 @@ Host configuration. Plain storage.
 
 Sources:
 
-- standard (high): DWC2 host register at 0x400; Linux drivers/usb/dwc2/hw.h HCFG
-- decompile (high): 0x3ED897DE writes 1 on the host-mode path
+- standard (high): DWC2 host register at `0x400`; Linux `drivers/usb/dwc2/hw.h` `HCFG`
+- decompile (high): `0x3ED897DE` writes 1 on the host-mode path
 
 ## `HFIR`
 
@@ -242,8 +242,8 @@ Host frame interval. Plain storage.
 
 Sources:
 
-- standard (high): DWC2 host register at 0x404; Linux drivers/usb/dwc2/hw.h HFIR
-- decompile (high): 0x3ED897E2 writes 48000 on the host-mode path
+- standard (high): DWC2 host register at `0x404`; Linux `drivers/usb/dwc2/hw.h` `HFIR`
+- decompile (high): `0x3ED897E2` writes 48000 on the host-mode path
 
 ## `HPRT0`
 
@@ -266,54 +266,54 @@ Root port control and status. Nothing is plugged in: the status and change bits 
 
 Sources:
 
-- standard (high): DWC2 host register at 0x440; Linux drivers/usb/dwc2/hw.h HPRT0; edk2 DwcHw.h DWC2_HPRT0_*
-- measured (high): Raspberry Pi 4B d03115, /dev/mem read of 0xFE980440 with USB powered and nothing on the USB-C data lines: 0x00000000
+- standard (high): DWC2 host register at `0x440`; Linux `drivers/usb/dwc2/hw.h` `HPRT0`; edk2 `DwcHw.h` `DWC2_HPRT0_*`
+- measured (high): Raspberry Pi 4B d03115, `/dev/mem` read of `0xFE980440` with USB powered and nothing on the USB-C data lines: `0x00000000`
 
 `PRTCONNSTS` sources:
 
-- standard (high): Linux drivers/usb/dwc2/hw.h HPRT0_CONNSTS
+- standard (high): Linux `drivers/usb/dwc2/hw.h` `HPRT0_CONNSTS`
 
 `PRTCONNDET` sources:
 
-- standard (high): Linux drivers/usb/dwc2/hw.h HPRT0_CONNDET
+- standard (high): Linux `drivers/usb/dwc2/hw.h` `HPRT0_CONNDET`
 
 `PRTENA` sources:
 
-- standard (high): Linux drivers/usb/dwc2/hw.h HPRT0_ENA
+- standard (high): Linux `drivers/usb/dwc2/hw.h` `HPRT0_ENA`
 
 `PRTENCHNG` sources:
 
-- standard (high): Linux drivers/usb/dwc2/hw.h HPRT0_ENACHG
+- standard (high): Linux `drivers/usb/dwc2/hw.h` `HPRT0_ENACHG`
 
 `PRTOVRCURRACT` sources:
 
-- standard (high): Linux drivers/usb/dwc2/hw.h HPRT0_OVRCURRACT
+- standard (high): Linux `drivers/usb/dwc2/hw.h` `HPRT0_OVRCURRACT`
 
 `PRTOVRCURRCHNG` sources:
 
-- standard (high): Linux drivers/usb/dwc2/hw.h HPRT0_OVRCURRCHG
+- standard (high): Linux `drivers/usb/dwc2/hw.h` `HPRT0_OVRCURRCHG`
 
 `PRTRST` sources:
 
-- standard (high): Linux drivers/usb/dwc2/hw.h HPRT0_RST
+- standard (high): Linux `drivers/usb/dwc2/hw.h` `HPRT0_RST`
 
 `PRTLNSTS` sources:
 
-- standard (high): Linux drivers/usb/dwc2/hw.h HPRT0_LNSTS_MASK
+- standard (high): Linux `drivers/usb/dwc2/hw.h` `HPRT0_LNSTS_MASK`
 
 `PRTPWR` sources:
 
-- standard (high): Linux drivers/usb/dwc2/hw.h HPRT0_PWR
+- standard (high): Linux `drivers/usb/dwc2/hw.h` `HPRT0_PWR`
 
 `PRTSPD` sources:
 
-- standard (high): Linux drivers/usb/dwc2/hw.h HPRT0_SPD_MASK
+- standard (high): Linux `drivers/usb/dwc2/hw.h` `HPRT0_SPD_MASK`
 
 ## `HCCHAR`
 
 Offset `0x500`, 8 elements 0x20 apart · access `rw` · 32 bits
 
-Host channel characteristics, one per channel. Writing CHENA and CHDIS together halts the channel at once: both clear and HCINT.CHHLTD sets, since no channel ever has a transfer in flight. A transfer start (CHENA alone) is stored and goes nowhere.
+Host channel characteristics, one per channel. Writing `CHENA` and `CHDIS` together halts the channel at once: both clear and `HCINT.CHHLTD` sets, since no channel ever has a transfer in flight. A transfer start (`CHENA` alone) is stored and goes nowhere.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -322,17 +322,17 @@ Host channel characteristics, one per channel. Writing CHENA and CHDIS together 
 
 Sources:
 
-- standard (high): DWC2 host channel registers at 0x500 + 0x20 * n; Linux drivers/usb/dwc2/hw.h HCCHAR; dwc2_core_host_init halts every channel and waits for CHENA to clear
-- standard (high): DwUsbHostDxe DwHcInit: writes CHENA | CHDIS to each channel and waits up to DW_HC_RESET_TIMEOUT_MS (10 s) for CHENA to clear
-- measured (high): Raspberry Pi 4B d03115, /dev/mem read of 0xFE980500 with USB powered: 0x00000000
+- standard (high): DWC2 host channel registers at `0x500 + 0x20 * n`; Linux `drivers/usb/dwc2/hw.h` `HCCHAR`; `dwc2_core_host_init` halts every channel and waits for `CHENA` to clear
+- standard (high): `DwUsbHostDxe` `DwHcInit`: writes `CHENA | CHDIS` to each channel and waits up to `DW_HC_RESET_TIMEOUT_MS` (10 s) for `CHENA` to clear
+- measured (high): Raspberry Pi 4B d03115, `/dev/mem` read of `0xFE980500` with USB powered: `0x00000000`
 
 `CHDIS` sources:
 
-- standard (high): Linux drivers/usb/dwc2/hw.h HCCHAR_CHDIS; edk2 DwcHw.h DWC2_HCCHAR_CHDIS
+- standard (high): Linux `drivers/usb/dwc2/hw.h` `HCCHAR_CHDIS`; edk2 `DwcHw.h` `DWC2_HCCHAR_CHDIS`
 
 `CHENA` sources:
 
-- standard (high): Linux drivers/usb/dwc2/hw.h HCCHAR_CHENA; edk2 DwcHw.h DWC2_HCCHAR_CHEN
+- standard (high): Linux `drivers/usb/dwc2/hw.h` `HCCHAR_CHENA`; edk2 `DwcHw.h` `DWC2_HCCHAR_CHEN`
 
 ## `HCINT`
 
@@ -346,12 +346,12 @@ Host channel interrupt status, one per channel.
 
 Sources:
 
-- standard (high): DWC2 host channel registers at 0x508 + 0x20 * n; Linux drivers/usb/dwc2/hw.h HCINT
-- measured (high): Raspberry Pi 4B d03115, /dev/mem read of 0xFE980508 with USB powered: 0x00000000
+- standard (high): DWC2 host channel registers at `0x508 + 0x20 * n`; Linux `drivers/usb/dwc2/hw.h` `HCINT`
+- measured (high): Raspberry Pi 4B d03115, `/dev/mem` read of `0xFE980508` with USB powered: `0x00000000`
 
 `CHHLTD` sources:
 
-- standard (high): Linux drivers/usb/dwc2/hw.h HCINTMSK_CHHLTD
+- standard (high): Linux `drivers/usb/dwc2/hw.h` `HCINTMSK_CHHLTD`
 
 ## `DCFG`
 
@@ -361,63 +361,63 @@ Device configuration. Plain storage.
 
 Sources:
 
-- standard (high): DWC2 device register at 0x800; Linux drivers/usb/dwc2/hw.h DCFG
-- decompile (high): 0x3ED895C6 writes 0x00200200
+- standard (high): DWC2 device register at `0x800`; Linux `drivers/usb/dwc2/hw.h` `DCFG`
+- decompile (high): `0x3ED895C6` writes `0x00200200`
 
 ## `DCTL`
 
 Offset `0x804` · access `rw` · 32 bits
 
-Device control. Storage, except that SFTDISCON decides whether a device-mode core is on the bus and the global NAK set/clear bits act on their status bits at once.
+Device control. Storage, except that `SFTDISCON` decides whether a device-mode core is on the bus and the global NAK set/clear bits act on their status bits at once.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
-| 2 | `GNPINNAKSTS` | r | Global non-periodic IN NAK in effect: set by SGNPINNAK, cleared by CGNPINNAK, at once. |
-| 3 | `GOUTNAKSTS` | r | Global OUT NAK in effect: set by SGOUTNAK, cleared by CGOUTNAK, at once. The boot ROM spins on it after a suspend (0x60001bfc, #68). |
+| 2 | `GNPINNAKSTS` | r | Global non-periodic IN NAK in effect: set by `SGNPINNAK`, cleared by `CGNPINNAK`, at once. |
+| 3 | `GOUTNAKSTS` | r | Global OUT NAK in effect: set by `SGOUTNAK`, cleared by `CGOUTNAK`, at once. The boot ROM spins on it after a suspend (`0x60001bfc`, #68). |
 | 7 | `SGNPINNAK` | w | Set global non-periodic IN NAK. Write-only. |
 | 8 | `CGNPINNAK` | w | Clear global non-periodic IN NAK. Write-only. |
 | 9 | `SGOUTNAK` | w | Set global OUT NAK. Write-only. |
 | 10 | `CGOUTNAK` | w | Clear global OUT NAK. Write-only. |
-| 1 | `SFTDISCON` | rw | Soft disconnect. Reads 0 out of reset: the boot ROM never writes DCTL before it waits for a host, so a core that reset with it set could not be rpiboot'ed. |
+| 1 | `SFTDISCON` | rw | Soft disconnect. Reads 0 out of reset: the boot ROM never writes `DCTL` before it waits for a host, so a core that reset with it set could not be rpiboot'ed. |
 
 Sources:
 
-- standard (high): DWC2 device register at 0x804; Linux drivers/usb/dwc2/hw.h DCTL
-- decompile (high): 0x3ED895C0..0x3ED895C4 set bit 1 (soft disconnect)
+- standard (high): DWC2 device register at `0x804`; Linux `drivers/usb/dwc2/hw.h` `DCTL`
+- decompile (high): `0x3ED895C0..0x3ED895C4` set bit 1 (soft disconnect)
 
 `GNPINNAKSTS` sources:
 
-- standard (high): Linux drivers/usb/dwc2/hw.h DCTL_GNPINNAKSTS
+- standard (high): Linux `drivers/usb/dwc2/hw.h` `DCTL_GNPINNAKSTS`
 
 `GOUTNAKSTS` sources:
 
-- standard (high): Linux drivers/usb/dwc2/hw.h DCTL_GOUTNAKSTS
+- standard (high): Linux `drivers/usb/dwc2/hw.h` `DCTL_GOUTNAKSTS`
 
 `SGNPINNAK` sources:
 
-- standard (high): Linux drivers/usb/dwc2/hw.h DCTL_SGNPINNAK
+- standard (high): Linux `drivers/usb/dwc2/hw.h` `DCTL_SGNPINNAK`
 
 `CGNPINNAK` sources:
 
-- standard (high): Linux drivers/usb/dwc2/hw.h DCTL_CGNPINNAK
+- standard (high): Linux `drivers/usb/dwc2/hw.h` `DCTL_CGNPINNAK`
 
 `SGOUTNAK` sources:
 
-- standard (high): Linux drivers/usb/dwc2/hw.h DCTL_SGOUTNAK
+- standard (high): Linux `drivers/usb/dwc2/hw.h` `DCTL_SGOUTNAK`
 
 `CGOUTNAK` sources:
 
-- standard (high): Linux drivers/usb/dwc2/hw.h DCTL_CGOUTNAK
+- standard (high): Linux `drivers/usb/dwc2/hw.h` `DCTL_CGOUTNAK`
 
 `SFTDISCON` sources:
 
-- inferred (medium): C0 boot ROM: GUSBCFG 0x40402700 and DCFG, then straight into the GINTSTS poll
+- inferred (medium): C0 boot ROM: `GUSBCFG` `0x40402700` and `DCFG`, then straight into the `GINTSTS` poll
 
 ## `DSTS`
 
 Offset `0x808` · access `r` · 32 bits
 
-Device status. SUSPSTS follows the suspend a device-mode core reports with no host; the rest reads 0.
+Device status. `SUSPSTS` follows the suspend a device-mode core reports with no host; the rest reads 0.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -425,8 +425,8 @@ Device status. SUSPSTS follows the suspend a device-mode core reports with no ho
 
 Sources:
 
-- standard (high): DWC2 device register at 0x808; Linux drivers/usb/dwc2/hw.h DSTS
+- standard (high): DWC2 device register at `0x808`; Linux `drivers/usb/dwc2/hw.h` `DSTS`
 
 `SUSPSTS` sources:
 
-- standard (high): Linux drivers/usb/dwc2/hw.h DSTS_SUSPSTS
+- standard (high): Linux `drivers/usb/dwc2/hw.h` `DSTS_SUSPSTS`

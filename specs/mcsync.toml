@@ -6,12 +6,12 @@ summary = "Doorbells / semaphores between the two VPU cores"
 
 [[block.source]]
 kind       = "decompile"
-ref        = "0x3ED3A114 / 0x3ED3A00C address the slot array at 0x7E000000"
+ref        = "`0x3ED3A114` / `0x3ED3A00C` address the slot array at `0x7E000000`"
 confidence = "high"
 
 [[block.source]]
 kind       = "inferred"
-ref        = "size: the SDC block starts at 0x7E001000"
+ref        = "size: the SDC block starts at `0x7E001000`"
 confidence = "medium"
 
 [[register]]
@@ -24,12 +24,12 @@ notes  = "Poster writes 1; the receiving core clears it once the work is done."
 
 [[register.source]]
 kind       = "decompile"
-ref        = "0x3ED3A114 (post), 0x3ED3A00C (wait while non-zero)"
+ref        = "`0x3ED3A114` (post), `0x3ED3A00C` (wait while non-zero)"
 confidence = "high"
 
 [[register.source]]
 kind       = "trace"
-ref        = "recon run: clock-service manager posts slot 6, then suspends"
+ref        = "`recon` run: clock-service manager posts slot 6, then suspends"
 confidence = "high"
 
 [[register]]
@@ -40,7 +40,7 @@ notes  = "Doorbells pending for this core's interrupt; the ISR clears exactly th
 
 [[register.source]]
 kind       = "decompile"
-ref        = "ISR 0x3ED3A098"
+ref        = "ISR `0x3ED3A098`"
 confidence = "medium"
 
 [[register]]
@@ -51,12 +51,12 @@ notes  = "Acknowledge word for VPU interrupt source 76. The ISR does `[+0x84] &=
 
 [[register.source]]
 kind       = "decompile"
-ref        = "ISR 0x3ED3A098 (handler table gp+58004)"
+ref        = "ISR `0x3ED3A098` (handler table `gp+58004`)"
 confidence = "medium"
 
 [[register.source]]
 kind       = "trace"
-ref        = "--log irqen: neither core calls enable_irq_source for 76 or 77"
+ref        = "`--log irqen`: neither core calls `enable_irq_source` for 76 or 77"
 confidence = "medium"
 note       = "so the interrupt path itself is not exercised by the boot so far"
 
@@ -68,12 +68,12 @@ notes  = "Acknowledge word for VPU interrupt source 77. The ISR does `[+0x88] &=
 
 [[register.source]]
 kind       = "decompile"
-ref        = "ISR 0x3ED3A098 (handler table gp+58004)"
+ref        = "ISR `0x3ED3A098` (handler table `gp+58004`)"
 confidence = "medium"
 
 [[register.source]]
 kind       = "trace"
-ref        = "--log irqen: neither core calls enable_irq_source for 76 or 77"
+ref        = "`--log irqen`: neither core calls `enable_irq_source` for 76 or 77"
 confidence = "medium"
 note       = "so the interrupt path itself is not exercised by the boot so far"
 
@@ -85,7 +85,7 @@ notes  = "start4 reads this word and writes its own address back into it from do
 
 [[register.source]]
 kind       = "trace"
-ref        = "pinned start4: reads at 0x3EC3C6F6, 0x3EC3E1CC and others, each followed by 0x7E0000C0 <- 0x7E0000C0 (0x3EC3C756, 0x3EC3E23A, ...); the busiest pair of sites is 0x3ED651D8 / 0x3ED65216"
+ref        = "pinned start4: reads at `0x3EC3C6F6`, `0x3EC3E1CC` and others, each followed by `0x7E0000C0` <- `0x7E0000C0` (`0x3EC3C756`, `0x3EC3E23A`, ...); the busiest pair of sites is `0x3ED651D8` / `0x3ED65216`"
 confidence = "high"
 
 [[register.source]]

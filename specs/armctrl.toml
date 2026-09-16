@@ -2,35 +2,35 @@
 name    = "armctrl"
 base    = 0x7E00B000
 size    = 0x880
-summary = "ARM control block as the VPU sees it, below the mailboxes: where arm_loader releases the ARM"
+summary = "ARM control block as the VPU sees it, below the mailboxes: where `arm_loader` releases the ARM"
 notes   = "The whole pinned boot touches this block a handful of times. Only the release bit has a known meaning; everything else is stored and read back."
 
 [[block.source]]
 kind       = "trace"
-ref        = "RVF_TRACE_MMIO=7e00b000-7e101000 recon: the writes right after 'arm_loader: Starting ARM', all from start4's MMIO write helper 0xFEC0043A"
+ref        = "`RVF_TRACE_MMIO=7e00b000-7e101000 recon`: the writes right after `arm_loader: Starting ARM`, all from start4's MMIO write helper `0xFEC0043A`"
 confidence = "high"
 
 [[block.source]]
 kind       = "inferred"
-ref        = "size: up to the mailboxes at 0x7E00B880"
+ref        = "size: up to the mailboxes at `0x7E00B880`"
 confidence = "high"
 
 [[register]]
 name   = "CONTROL"
 offset = 0x000
 access = "rw"
-notes  = "Written 0x200 shortly before the ARM starts, and 0x1000 as the last access before it does, which clears 0x200 again."
+notes  = "Written `0x200` shortly before the ARM starts, and `0x1000` as the last access before it does, which clears `0x200` again."
 
 [[register.source]]
 kind       = "trace"
-ref        = "0x7E00B000 <- 0x00000200 (early), <- 0x00001000 (after arm_loader)"
+ref        = "`0x7E00B000` <- `0x00000200` (early), <- `0x00001000` (after `arm_loader`)"
 confidence = "high"
 
 [[register.source]]
 kind       = "trace"
-ref        = "--trace-mmio through the ARM release: the 0x200 write comes after the UART handover and the PLLB bring-up, some 1300 accesses before the release"
+ref        = "`--trace-mmio` through the ARM release: the `0x200` write comes after the UART handover and the PLLB bring-up, some 1300 accesses before the release"
 confidence = "high"
-note       = "the recon above calls the 0x200 write early; a trace that runs past the release puts it close to the release"
+note       = "the `recon` above calls the `0x200` write early; a trace that runs past the release puts it close to the release"
 
 [[register.field]]
 name  = "RELEASE"
@@ -46,27 +46,27 @@ confidence = "medium"
 name   = "REG_008"
 offset = 0x008
 access = "rw"
-notes  = "Written 0x3030 at the ARM release. Meaning unknown."
+notes  = "Written `0x3030` at the ARM release. Meaning unknown."
 
 [[register.source]]
 kind       = "trace"
-ref        = "0x7E00B008 <- 0x00003030 after arm_loader"
+ref        = "`0x7E00B008` <- `0x00003030` after `arm_loader`"
 confidence = "high"
 
 [[register]]
 name   = "REG_41C"
 offset = 0x41C
 access = "rw"
-notes  = "Written 0x1F3 shortly before the release and 0xA at it. Meaning unknown."
+notes  = "Written `0x1F3` shortly before the release and `0xA` at it. Meaning unknown."
 
 [[register.source]]
 kind       = "trace"
-ref        = "0x7E00B41C <- 0x0000000A after arm_loader"
+ref        = "`0x7E00B41C` <- `0x0000000A` after `arm_loader`"
 confidence = "high"
 
 [[register.source]]
 kind       = "trace"
-ref        = "0x7E00B41C <- 0x000001F3 at 0x3EC53594, before the release"
+ref        = "`0x7E00B41C` <- `0x000001F3` at `0x3EC53594`, before the release"
 confidence = "high"
 
 [[register]]
@@ -77,5 +77,5 @@ notes  = "Written 0 just after the ARM release. Meaning unknown."
 
 [[register.source]]
 kind       = "trace"
-ref        = "0x7E00B440 <- 0x00000000 at 0x3EC81F8A, after the release"
+ref        = "`0x7E00B440` <- `0x00000000` at `0x3EC81F8A`, after the release"
 confidence = "high"

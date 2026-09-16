@@ -2,17 +2,17 @@
 name    = "hdmi"
 base    = 0x7EF00700
 size    = 0x300
-summary = "HDMI controller core registers (the \"hdmi\" window of each connector), with no monitor attached: the packet-RAM handshake, the FIFO recenter and the hotplug state"
-notes   = "No encoder or PHY behind it, and no sink on either connector. What firmware waits on is modelled: a packet slot's status bit follows its enable in RAM_PACKET_CONFIG at once, a FIFO recenter completes as soon as it is asked for, and HOTPLUG reports nothing plugged in. Everything else is stored and read back."
+summary = "HDMI controller core registers (the `hdmi` window of each connector), with no monitor attached: the packet-RAM handshake, the FIFO recenter and the hotplug state"
+notes   = "No encoder or PHY behind it, and no sink on either connector. What firmware waits on is modelled: a packet slot's status bit follows its enable in `RAM_PACKET_CONFIG` at once, a FIFO recenter completes as soon as it is asked for, and `HOTPLUG` reports nothing plugged in. Everything else is stored and read back."
 
 [[block.source]]
 kind       = "linux"
-ref        = "arch/arm/boot/dts/broadcom/bcm2711.dtsi: hdmi0: hdmi@7ef00700, reg <0x7ef00700 0x300>, reg-names \"hdmi\""
+ref        = "`arch/arm/boot/dts/broadcom/bcm2711.dtsi`: `hdmi0: hdmi@7ef00700`, `reg <0x7ef00700 0x300>`, `reg-names \"hdmi\"`"
 confidence = "high"
 
 [[block.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_hdmi_regs.h: vc5_hdmi_hdmi0_fields, vc5_hdmi_hdmi1_fields"
+ref        = "`drivers/gpu/drm/vc4/vc4_hdmi_regs.h`: `vc5_hdmi_hdmi0_fields`, `vc5_hdmi_hdmi1_fields`"
 confidence = "high"
 
 [[block.copy]]
@@ -22,23 +22,23 @@ notes = "HDMI1's core registers; HDMI0's are the block base."
 
 [[block.copy.source]]
 kind       = "linux"
-ref        = "arch/arm/boot/dts/broadcom/bcm2711.dtsi: hdmi1: hdmi@7ef05700, reg <0x7ef05700 0x300>"
+ref        = "`arch/arm/boot/dts/broadcom/bcm2711.dtsi`: `hdmi1: hdmi@7ef05700`, `reg <0x7ef05700 0x300>`"
 confidence = "high"
 
 [[register]]
 name   = "FIFO_CTL"
 offset = 0x74
 access = "rw"
-notes  = "Control of the FIFO between the pixel valve and the encoder. After a mode set, software pulses RECENTER and waits for RECENTER_DONE. The 2020-era bootcode does that on every boot, monitor or not, and spins with no timeout; on plain storage the bit never set and those EEPROM images went no further (#63). The model sets RECENTER_DONE on any write with RECENTER set. The other bits are stored: the bootcode writes 0x5, MASTER_SLAVE_N | CAPTURE_PTR in Linux's names."
+notes  = "Control of the FIFO between the pixel valve and the encoder. After a mode set, software pulses `RECENTER` and waits for `RECENTER_DONE`. The 2020-era bootcode does that on every boot, monitor or not, and spins with no timeout; on plain storage the bit never set and those EEPROM images went no further (#63). The model sets `RECENTER_DONE` on any write with `RECENTER` set. The other bits are stored: the bootcode writes `0x5`, `MASTER_SLAVE_N | CAPTURE_PTR` in Linux's names."
 
 [[register.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_hdmi_regs.h: VC4_HDMI_REG(HDMI_FIFO_CTL, 0x074) in vc5_hdmi_hdmi0_fields"
+ref        = "`drivers/gpu/drm/vc4/vc4_hdmi_regs.h`: `VC4_HDMI_REG(HDMI_FIFO_CTL, 0x074)` in `vc5_hdmi_hdmi0_fields`"
 confidence = "high"
 
 [[register.source]]
 kind       = "trace"
-ref        = "pieeprom-2020-09-03 bootcode, RVF_TRACE_MMIO: 0x80007894 writes 0x5, 0x8000775e 0x45, 0x80007776 0x5, then 0x8000777e reads it forever"
+ref        = "pieeprom-2020-09-03 bootcode, `RVF_TRACE_MMIO`: `0x80007894` writes `0x5`, `0x8000775e` `0x45`, `0x80007776` `0x5`, then `0x8000777e` reads it forever"
 confidence = "high"
 
 [[register.field]]
@@ -48,7 +48,7 @@ notes  = "Starts a recenter."
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_regs.h: VC4_HDMI_FIFO_CTL_RECENTER BIT(6); vc4_hdmi.c: vc4_hdmi_recenter_fifo() writes it clear, then set, twice"
+ref        = "`drivers/gpu/drm/vc4/vc4_regs.h`: `VC4_HDMI_FIFO_CTL_RECENTER` `BIT(6)`; `vc4_hdmi.c`: `vc4_hdmi_recenter_fifo()` writes it clear, then set, twice"
 confidence = "high"
 
 [[register.field]]
@@ -59,28 +59,28 @@ notes  = "Set once a recenter has finished. Recentring needs no sink: headless b
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_regs.h: VC4_HDMI_FIFO_CTL_RECENTER_DONE BIT(14); vc4_hdmi.c: vc4_hdmi_recenter_fifo() waits 1 ms for it and warns on timeout"
+ref        = "`drivers/gpu/drm/vc4/vc4_regs.h`: `VC4_HDMI_FIFO_CTL_RECENTER_DONE` `BIT(14)`; `vc4_hdmi.c`: `vc4_hdmi_recenter_fifo()` waits 1 ms for it and warns on timeout"
 confidence = "high"
 
 [[register.field.source]]
 kind       = "decompile"
-ref        = "pieeprom-2020-09-03 bootcode 0x8000777e..0x80007784: ld r0, [r2+0x74]; btest r0, #14; beq back, no timeout"
+ref        = "pieeprom-2020-09-03 bootcode `0x8000777e..0x80007784`: `ld r0, [r2+0x74]; btest r0, #14; beq back`, no timeout"
 confidence = "high"
 
 [[register]]
 name   = "RAM_PACKET_CONFIG"
 offset = 0xBC
 access = "rw"
-notes  = "One enable bit per packet slot. To rewrite a packet start4 clears its slot's bit, waits for the status to drop, writes the packet and sets the bit again (0x3ECDFD68, the AV-mute general control packet in slot 0)."
+notes  = "One enable bit per packet slot. To rewrite a packet start4 clears its slot's bit, waits for the status to drop, writes the packet and sets the bit again (`0x3ECDFD68`, the AV-mute general control packet in slot 0)."
 
 [[register.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_hdmi_regs.h: VC4_HDMI_REG(HDMI_RAM_PACKET_CONFIG, 0x0bc) in vc5_hdmi_hdmi0_fields"
+ref        = "`drivers/gpu/drm/vc4/vc4_hdmi_regs.h`: `VC4_HDMI_REG(HDMI_RAM_PACKET_CONFIG, 0x0bc)` in `vc5_hdmi_hdmi0_fields`"
 confidence = "high"
 
 [[register.source]]
 kind       = "decompile"
-ref        = "0x3ECDFD68 clears and sets bit 0 of [ctx+0xe8]+0xbc around a packet write"
+ref        = "`0x3ECDFD68` clears and sets bit 0 of `[ctx+0xe8]+0xbc` around a packet write"
 confidence = "high"
 
 [[register.field]]
@@ -89,23 +89,23 @@ bits = "15:0"
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_hdmi.c: HDMI_RAM_PACKET_CONFIG & ~BIT(packet_id), | BIT(packet_id) around each infoframe write"
+ref        = "`drivers/gpu/drm/vc4/vc4_hdmi.c`: `HDMI_RAM_PACKET_CONFIG & ~BIT(packet_id)`, `| BIT(packet_id)` around each infoframe write"
 confidence = "medium"
 
 [[register]]
 name   = "RAM_PACKET_STATUS"
 offset = 0xC4
 access = "r"
-notes  = "Which packet slots the encoder is sending. The model mirrors RAM_PACKET_CONFIG.PACKETS, so both of start4's waits (bit clear after disabling, bit set after enabling) finish on the first read."
+notes  = "Which packet slots the encoder is sending. The model mirrors `RAM_PACKET_CONFIG.PACKETS`, so both of start4's waits (bit clear after disabling, bit set after enabling) finish on the first read."
 
 [[register.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_hdmi.c: wait_for(!(HDMI_READ(HDMI_RAM_PACKET_STATUS) & BIT(packet_id)), 100), then wait_for(HDMI_READ(HDMI_RAM_PACKET_STATUS) & BIT(packet_id), 100)"
+ref        = "`drivers/gpu/drm/vc4/vc4_hdmi.c`: `wait_for(!(HDMI_READ(HDMI_RAM_PACKET_STATUS) & BIT(packet_id)), 100)`, then `wait_for(HDMI_READ(HDMI_RAM_PACKET_STATUS) & BIT(packet_id), 100)`"
 confidence = "high"
 
 [[register.source]]
 kind       = "decompile"
-ref        = "0x3ECDFD68 spins on bit 0 of [ctx+0xe8]+0xc4, with no timeout, after each change of the enable"
+ref        = "`0x3ECDFD68` spins on bit 0 of `[ctx+0xe8]+0xc4`, with no timeout, after each change of the enable"
 confidence = "high"
 
 [[register.field]]
@@ -114,25 +114,25 @@ bits = "15:0"
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_hdmi.c: HDMI_RAM_PACKET_STATUS & BIT(packet_id)"
+ref        = "`drivers/gpu/drm/vc4/vc4_hdmi.c`: `HDMI_RAM_PACKET_STATUS & BIT(packet_id)`"
 confidence = "medium"
 
 [[register]]
 name   = "HOTPLUG"
 offset = 0x1A8
 access = "r"
-notes  = "No monitor on either connector: CONNECTED reads 0 whatever was written, so Linux's vc4 reports both connectors disconnected, as on the reference board."
+notes  = "No monitor on either connector: `CONNECTED` reads 0 whatever was written, so Linux's `vc4` reports both connectors disconnected, as on the reference board."
 
 [[register.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_hdmi_regs.h: VC4_HDMI_REG(HDMI_HOTPLUG, 0x1a8) in vc5_hdmi_hdmi0_fields; vc4_hdmi.c: vc5_hdmi_hp_detect()"
+ref        = "`drivers/gpu/drm/vc4/vc4_hdmi_regs.h`: `VC4_HDMI_REG(HDMI_HOTPLUG, 0x1a8)` in `vc5_hdmi_hdmi0_fields`; `vc4_hdmi.c`: `vc5_hdmi_hp_detect()`"
 confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "Raspberry Pi 4B d03115, no monitor attached: /sys/class/drm/card1-HDMI-A-1/status and card1-HDMI-A-2/status read disconnected"
+ref        = "Raspberry Pi 4B d03115, no monitor attached: `/sys/class/drm/card1-HDMI-A-1/status` and `card1-HDMI-A-2/status` read disconnected"
 confidence = "medium"
-note       = "The connector state, not the register: vc4 reports disconnected when CONNECTED is clear and the node has no hpd-gpios."
+note       = "The connector state, not the register: `vc4` reports disconnected when `CONNECTED` is clear and the node has no `hpd-gpios`."
 
 [[register.field]]
 name = "CONNECTED"
@@ -140,5 +140,5 @@ bits = "0"
 
 [[register.field.source]]
 kind       = "linux"
-ref        = "drivers/gpu/drm/vc4/vc4_regs.h: VC4_HDMI_HOTPLUG_CONNECTED BIT(0); vc4_hdmi.c: vc5_hdmi_hp_detect() returns HDMI_HOTPLUG & VC4_HDMI_HOTPLUG_CONNECTED"
+ref        = "`drivers/gpu/drm/vc4/vc4_regs.h`: `VC4_HDMI_HOTPLUG_CONNECTED` `BIT(0)`; `vc4_hdmi.c`: `vc5_hdmi_hp_detect()` returns `HDMI_HOTPLUG & VC4_HDMI_HOTPLUG_CONNECTED`"
 confidence = "high"

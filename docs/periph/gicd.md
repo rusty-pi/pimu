@@ -6,11 +6,11 @@
 - Base: `0xFF841000`
 - Size: `0x1000`
 
-256 interrupt IDs, 4 CPUs, Security Extensions. The bit-per-interrupt arrays are listed at their architectural extent (1020 IDs); IDs past 255 read as zero. IPRIORITYR, ITARGETSR and the SGI source registers are byte-accessible. The armstub moves every interrupt to group 1 before Linux runs non-secure.
+256 interrupt IDs, 4 CPUs, Security Extensions. The bit-per-interrupt arrays are listed at their architectural extent (1020 IDs); IDs past 255 read as zero. `IPRIORITYR`, `ITARGETSR` and the SGI source registers are byte-accessible. The armstub moves every interrupt to group 1 before Linux runs non-secure.
 
 Sources:
 
-- linux (high): dtb: interrupt-controller@40041000, arm,gic-400, reg <0x40041000 0x1000 ...> -> 0xFF841000
+- linux (high): dtb: `interrupt-controller@40041000`, `arm,gic-400`, `reg <0x40041000 0x1000 ...>` -> `0xFF841000`
 - standard (high): ARM IHI 0048B (GICv2), section 4.3, and the GIC-400 TRM
 
 ## Register map
@@ -38,11 +38,11 @@ Sources:
 
 Offset `0x000` · access `rw` · 32 bits
 
-Secure view: EnableGrp0 (0), EnableGrp1 (1). Non-secure view: EnableGrp1 in bit 0.
+Secure view: `EnableGrp0` (0), `EnableGrp1` (1). Non-secure view: `EnableGrp1` in bit 0.
 
 Sources:
 
-- standard (high): GICv2 4.3.1 GICD_CTLR
+- standard (high): GICv2 4.3.1 `GICD_CTLR`
 - decompile (high): armstub writes 3 on the secondary cores
 
 ## `TYPER`
@@ -53,17 +53,17 @@ Offset `0x004` · access `r` · 32 bits · reset `0xFC67`
 
 Sources:
 
-- measured (high): /dev/mem read of 0xFF841004 on the reference board
+- measured (high): `/dev/mem` read of `0xFF841004` on the reference board
 
 ## `IIDR`
 
 Offset `0x008` · access `r` · 32 bits · reset `0x200143B`
 
-ARM (0x43B), GIC-400 distributor r0p1.
+ARM (`0x43B`), GIC-400 distributor r0p1.
 
 Sources:
 
-- measured (high): /dev/mem read of 0xFF841008 on the reference board
+- measured (high): `/dev/mem` read of `0xFF841008` on the reference board
 
 ## `IGROUPR`
 
@@ -73,8 +73,8 @@ Group per interrupt: 1 = group 1 (non-secure). Secure access only.
 
 Sources:
 
-- standard (high): GICv2 4.3.4 GICD_IGROUPRn
-- decompile (high): armstub writes ~0 to IGROUPR0..7
+- standard (high): GICv2 4.3.4 `GICD_IGROUPRn`
+- decompile (high): armstub writes `~0` to `IGROUPR0..7`
 
 ## `ISENABLER`
 
@@ -84,7 +84,7 @@ Set-enable, one bit per interrupt.
 
 Sources:
 
-- standard (high): GICv2 4.3.5 GICD_ISENABLERn
+- standard (high): GICv2 4.3.5 `GICD_ISENABLERn`
 
 ## `ICENABLER`
 
@@ -94,7 +94,7 @@ Clear-enable.
 
 Sources:
 
-- standard (high): GICv2 4.3.6 GICD_ICENABLERn
+- standard (high): GICv2 4.3.6 `GICD_ICENABLERn`
 
 ## `ISPENDR`
 
@@ -104,7 +104,7 @@ Set-pending. SGI bits are read-only here.
 
 Sources:
 
-- standard (high): GICv2 4.3.7 GICD_ISPENDRn
+- standard (high): GICv2 4.3.7 `GICD_ISPENDRn`
 
 ## `ICPENDR`
 
@@ -114,7 +114,7 @@ Clear-pending.
 
 Sources:
 
-- standard (high): GICv2 4.3.8 GICD_ICPENDRn
+- standard (high): GICv2 4.3.8 `GICD_ICPENDRn`
 
 ## `ISACTIVER`
 
@@ -124,7 +124,7 @@ Set-active.
 
 Sources:
 
-- standard (high): GICv2 4.3.9 GICD_ISACTIVERn
+- standard (high): GICv2 4.3.9 `GICD_ISACTIVERn`
 
 ## `ICACTIVER`
 
@@ -134,7 +134,7 @@ Clear-active.
 
 Sources:
 
-- standard (high): GICv2 4.3.10 GICD_ICACTIVERn
+- standard (high): GICv2 4.3.10 `GICD_ICACTIVERn`
 
 ## `IPRIORITYR`
 
@@ -144,7 +144,7 @@ One priority byte per interrupt; 32 levels, the low three bits read 0. Non-secur
 
 Sources:
 
-- standard (high): GICv2 4.3.11 GICD_IPRIORITYRn
+- standard (high): GICv2 4.3.11 `GICD_IPRIORITYRn`
 
 ## `ITARGETSR`
 
@@ -154,8 +154,8 @@ One CPU-target byte per interrupt; banked IDs read back as 'this CPU'.
 
 Sources:
 
-- standard (high): GICv2 4.3.12 GICD_ITARGETSRn
-- linux (high): irq-gic.c gic_get_cpumask relies on the banked read-back
+- standard (high): GICv2 4.3.12 `GICD_ITARGETSRn`
+- linux (high): `irq-gic.c` `gic_get_cpumask` relies on the banked read-back
 
 ## `ICFGR`
 
@@ -165,17 +165,17 @@ Two bits per interrupt, bit 1 set = edge. SGIs are fixed at edge.
 
 Sources:
 
-- standard (high): GICv2 4.3.13 GICD_ICFGRn
+- standard (high): GICv2 4.3.13 `GICD_ICFGRn`
 
 ## `SGIR`
 
 Offset `0xF00` · access `w` · 32 bits
 
-Raise an SGI: ID 3:0, target list 23:16, filter 25:24, NSATT 15.
+Raise an SGI: ID 3:0, target list 23:16, filter 25:24, `NSATT` 15.
 
 Sources:
 
-- standard (high): GICv2 4.3.15 GICD_SGIR
+- standard (high): GICv2 4.3.15 `GICD_SGIR`
 
 ## `CPENDSGIR`
 
@@ -185,7 +185,7 @@ Clear SGI pending, one source-CPU byte per SGI.
 
 Sources:
 
-- standard (high): GICv2 4.3.16 GICD_CPENDSGIRn
+- standard (high): GICv2 4.3.16 `GICD_CPENDSGIRn`
 
 ## `SPENDSGIR`
 
@@ -195,4 +195,4 @@ Set SGI pending, one source-CPU byte per SGI.
 
 Sources:
 
-- standard (high): GICv2 4.3.17 GICD_SPENDSGIRn
+- standard (high): GICv2 4.3.17 `GICD_SPENDSGIRn`

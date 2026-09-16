@@ -12,7 +12,7 @@ Sources:
 
 - standard (high): SD Host Controller Simplified Specification 3.00, section 2 (register map)
 - datasheet (high): BCM2835 ARM Peripherals, EMMC chapter: the same Arasan layout at the older block
-- linux (high): mmc@7e340000 driven by sdhci-iproc; 'mmc0: SDHCI controller on fe340000.mmc using ADMA' on the reference board
+- linux (high): `mmc@7e340000` driven by `sdhci-iproc`; `mmc0: SDHCI controller on fe340000.mmc using ADMA` on the reference board
 
 ## Register map
 
@@ -62,7 +62,7 @@ Block size, SDMA buffer boundary and block count.
 | Bits | Field | Access | Notes |
 |---|---|---|---|
 | 11:0 | `BLOCK_SIZE` | rw | Transfer block size in bytes. |
-| 14:12 | `SDMA_BOUNDARY` | rw | SDMA buffer boundary: 4 KiB << n. |
+| 14:12 | `SDMA_BOUNDARY` | rw | SDMA buffer boundary: `4 KiB << n`. |
 | 31:16 | `BLOCK_COUNT` | rw | Blocks to transfer. |
 
 Sources:
@@ -100,7 +100,7 @@ Transfer mode (low half) and command (high half). Writing the high half issues t
 | Bits | Field | Access | Notes |
 |---|---|---|---|
 | 0 | `DMA` | rw | Transfer by DMA. |
-| 1 | `BLOCK_COUNT_EN` | rw | BLOCK_COUNT limits the transfer. |
+| 1 | `BLOCK_COUNT_EN` | rw | `BLOCK_COUNT` limits the transfer. |
 | 3:2 | `AUTO_CMD` | rw | 1 = auto CMD12 after the data, 2 = auto CMD23 before it. |
 | 4 | `READ` | rw | Card to host. |
 | 5 | `MULTI` | rw | Multiple blocks. |
@@ -178,7 +178,7 @@ PIO buffer data port, least significant byte first.
 Sources:
 
 - standard (high): SDHCI 3.00, 2.2.8
-- decompile (high): the bootloader and start4 read start4.elf and the kernel through it (CMD17 / CMD18 + CMD12)
+- decompile (high): the bootloader and start4 read `start4.elf` and the kernel through it (CMD17 / CMD18 + CMD12)
 
 ## `PRESENT_STATE`
 
@@ -196,7 +196,7 @@ Idle value: card inserted and stable, card-detect and write-protect pins high (w
 Sources:
 
 - standard (high): SDHCI 3.00, 2.2.9
-- measured (high): /dev/mem read of 0xfe340024 on a Pi 4B rev 1.5 with Linux idle; start4 prints 'status: 0x1fff0000' in examples-on-real-hardware/sd-card-boot.log
+- measured (high): `/dev/mem` read of `0xfe340024` on a Pi 4B rev 1.5 with Linux idle; start4 prints `status: 0x1fff0000` in `examples-on-real-hardware/sd-card-boot.log`
 
 `BUF_WRITE_EN` sources:
 
@@ -240,13 +240,13 @@ Sources:
 
 `FIXED` sources:
 
-- measured (high): 0x00800000 with Linux running; the real bootloader prints 'CTL0: 0x00800f00' right after writing 0x00000f00 (sd-card-boot.log)
+- measured (high): `0x00800000` with Linux running; the real bootloader prints `CTL0: 0x00800f00` right after writing `0x00000f00` (`sd-card-boot.log`)
 
 ## `CLOCK_CONTROL`
 
 Offset `0x02C` · access `rw` · 32 bits
 
-Clock control (15:0), data timeout (19:16) and the self-clearing software resets (26:24). Before it releases the ARM, start4 leaves the host reset twice over: after its last read it sets SRST_ALL and then writes 0 (clock off); after clearing INT_SIGNAL_EN and INT_STATUS_EN and writing all ones to INT_STATUS, it sets SRST_ALL, then SRST_CMD and SRST_DATA together, polling each until it clears.
+Clock control (15:0), data timeout (19:16) and the self-clearing software resets (26:24). Before it releases the ARM, start4 leaves the host reset twice over: after its last read it sets `SRST_ALL` and then writes 0 (clock off); after clearing `INT_SIGNAL_EN` and `INT_STATUS_EN` and writing all ones to `INT_STATUS`, it sets `SRST_ALL`, then `SRST_CMD` and `SRST_DATA` together, polling each until it clears.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -260,8 +260,8 @@ Clock control (15:0), data timeout (19:16) and the self-clearing software resets
 Sources:
 
 - standard (high): SDHCI 3.00, 2.2.14..2.2.16
-- trace (high): pinned start4, host write helper 0x3EC52C2E and read helper 0x3EC51F5E: 0x010E0207, 0 after the console handover; then INT_SIGNAL_EN, INT_STATUS_EN <- 0, INT_STATUS <- 0xFFFFFFFF, 0x01000000, 0x06000000 once the SD power pin lookup has failed
-- measured (high): the real board prints 'arasan_emmc_set_clock ... C1: 0x000e0047' (sd-card-boot.log)
+- trace (high): pinned start4, host write helper `0x3EC52C2E` and read helper `0x3EC51F5E`: `0x010E0207`, 0 after the console handover; then `INT_SIGNAL_EN`, `INT_STATUS_EN` <- 0, `INT_STATUS` <- `0xFFFFFFFF`, `0x01000000`, `0x06000000` once the SD power pin lookup has failed
+- measured (high): the real board prints `arasan_emmc_set_clock ... C1: 0x000e0047` (`sd-card-boot.log`)
 
 `INTERNAL_EN` sources:
 
@@ -291,7 +291,7 @@ Sources:
 
 Offset `0x030` · access `w1c` · 32 bits
 
-Normal (15:0) and error (31:16) interrupt status, gated by INT_STATUS_EN.
+Normal (15:0) and error (31:16) interrupt status, gated by `INT_STATUS_EN`.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -349,7 +349,7 @@ Sources:
 
 Offset `0x034` · access `rw` · 32 bits
 
-Which interrupt conditions latch into INT_STATUS.
+Which interrupt conditions latch into `INT_STATUS`.
 
 Sources:
 
@@ -359,7 +359,7 @@ Sources:
 
 Offset `0x038` · access `rw` · 32 bits
 
-Which INT_STATUS bits drive the interrupt line (INTID 158).
+Which `INT_STATUS` bits drive the interrupt line (INTID 158).
 
 Sources:
 
@@ -406,7 +406,7 @@ Timeout clock 50 kHz, base clock 100 MHz, 2048-byte blocks, 8-bit bus, ADMA2, hi
 
 Sources:
 
-- measured (high): /dev/mem read of 0xfe340040 on a Pi 4B rev 1.5, controller idle
+- measured (high): `/dev/mem` read of `0xfe340040` on a Pi 4B rev 1.5, controller idle
 
 ## `CAPABILITIES_1`
 
@@ -416,7 +416,7 @@ SDR50 and DDR50 (no SDR104), driver type C, re-tuning after 16 s in mode 3, SDR5
 
 Sources:
 
-- measured (high): /dev/mem read of 0xfe340044 on a Pi 4B rev 1.5
+- measured (high): `/dev/mem` read of `0xfe340044` on a Pi 4B rev 1.5
 
 ## `MAX_CURRENT`
 
@@ -426,7 +426,7 @@ Offset `0x048` · access `r` · 32 bits · reset `0x80008`
 
 Sources:
 
-- measured (high): /dev/mem read of 0xfe340048 on a Pi 4B rev 1.5
+- measured (high): `/dev/mem` read of `0xfe340048` on a Pi 4B rev 1.5
 
 ## `ADMA_ERROR`
 
@@ -465,30 +465,30 @@ Sources:
 
 Offset `0x0FC` · access `r` · 32 bits · reset `0x10020000`
 
-Slot interrupt status (low half) and version: vendor 0x10, SDHCI 3.00.
+Slot interrupt status (low half) and version: vendor `0x10`, SDHCI 3.00.
 
 Sources:
 
-- measured (high): /dev/mem read of 0xfe3400fc on a Pi 4B rev 1.5
+- measured (high): `/dev/mem` read of `0xfe3400fc` on a Pi 4B rev 1.5
 - standard (high): SDHCI 3.00, 2.2.32 / 2.2.33
 
 ## `REG_100`
 
 Offset `0x100` · access `rw` · 32 bits
 
-Past the SDHCI registers. start4 clears bit 30 and sets bit 31 in the board clock set-up it runs once config.txt is read, right after REG_154, and goes on reading the card afterwards. Those writes depend on board feature bits (the helper at 0x3EC64902 tests one bit of a feature word). Meaning unknown.
+Past the SDHCI registers. start4 clears bit 30 and sets bit 31 in the board clock set-up it runs once `config.txt` is read, right after `REG_154`, and goes on reading the card afterwards. Those writes depend on board feature bits (the helper at `0x3EC64902` tests one bit of a feature word). Meaning unknown.
 
 Sources:
 
-- trace (high): pinned start4 reads it at 0x3ED4A1DE and writes 0x80000000 at 0x3ED4A1E6; just before: GPIO +0xD0 <- 1, REG_154 <- 1, and CM EMMC2DIV <- 0x7800
-- decompile (high): start4 0x3ED4A1DE..0x3ED4A1E6: bitclear 30, bitset 31; the path runs when feature bits 0x19 and 0x1C are clear
+- trace (high): pinned start4 reads it at `0x3ED4A1DE` and writes `0x80000000` at `0x3ED4A1E6`; just before: GPIO `+0xD0` <- 1, `REG_154` <- 1, and CM `EMMC2DIV` <- `0x7800`
+- decompile (high): start4 `0x3ED4A1DE..0x3ED4A1E6`: `bitclear 30`, `bitset 31`; the path runs when feature bits `0x19` and `0x1C` are clear
 
 ## `REG_154`
 
 Offset `0x154` · access `rw` · 32 bits
 
-Past the SDHCI registers. start4 writes 1 here in its board clock set-up, between setting GPIO +0xD0 bit 0 and REG_100. Meaning unknown.
+Past the SDHCI registers. start4 writes 1 here in its board clock set-up, between setting GPIO `+0xD0` bit 0 and `REG_100`. Meaning unknown.
 
 Sources:
 
-- trace (high): pinned start4 writes 0x00000001 at 0x3ED4A1D8
+- trace (high): pinned start4 writes `0x00000001` at `0x3ED4A1D8`
