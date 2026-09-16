@@ -92,9 +92,8 @@ impl Spi0 {
         // to shift" (BCM2711 datasheet — cleared by writing more TX data or
         // TA=0, unrelated to the RX FIFO). Every shift is instantaneous in this
         // model, so with TA asserted there is never a byte mid-flight. Gating
-        // this on `rx.is_empty()` was wrong: start4's EEPROM scanner
-        // (`0x3ED77E00`) clocks a block, then checks DONE while RX bytes are
-        // still queued, and treated DONE=0 as a transfer error.
+        // this on `rx.is_empty()` was wrong. start4's transfer (`0x3ED77E00`)
+        // spins on DONE, with no timeout, as soon as its byte loop ends.
         if self.cs & CS_TA != 0 {
             cs |= CS_DONE;
         }
