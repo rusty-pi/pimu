@@ -97,18 +97,60 @@ const MR4_REFRESH_RATE: u32 = 4;
 const MR4_RESET: u8 = 2;
 
 /// LPDDR4 MR8 (basic configuration 4): density per die in `OP[5:2]`, I/O
-/// width in `OP[7:6]`. `0b0100` is 16 Gb, and width 0 is x16.
+/// width in `OP[7:6]`. `0b0100` is 16 Gb and `0b0110` 32 Gb; width 0 is x16.
 const MR8_BASIC_CONFIG: u32 = 8;
 const MR8_16GB_X16: u8 = 0b0100 << 2;
+const MR8_32GB_X16: u8 = 0b0110 << 2;
+
+/// What the board is fitted with: the density of one die, and whether the
+/// second chip select answers like the first. The firmware multiplies the two
+/// into the size it logs (`total-size: NNGbit`) and keys its MCB record on it,
+/// so this is what decides how much memory the board appears to have: 16 Gb
+/// single-rank is a 2 GB Pi 4, 32 Gb single-rank a 4 GB one and 32 Gb
+/// dual-rank the 8 GB reference board.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Dram {
+    pub die_gbit: u32,
+    pub dual_rank: bool,
+}
+
+impl Dram {
+    /// The parts a board with `ram_bytes` behind the bus would be fitted
+    /// with. Anything under 4 GiB keeps the 2 GB part, which every bootloader
+    /// release has an MCB record for.
+    pub fn for_ram(ram_bytes: usize) -> Dram {
+        match ram_bytes {
+            n if n >= 8 << 30 => Dram { die_gbit: 32, dual_rank: true },
+            n if n >= 4 << 30 => Dram { die_gbit: 32, dual_rank: false },
+            _ => Dram { die_gbit: 16, dual_rank: false },
+        }
+    }
+
+    fn mr8(&self) -> u8 {
+        match self.die_gbit {
+            32 => MR8_32GB_X16,
+            _ => MR8_16GB_X16,
+        }
+    }
+}
+
+impl Default for Dram {
+    fn default() -> Dram {
+        Dram { die_gbit: 16, dual_rank: false }
+    }
+}
 
 /// A mode register is addressed by device (rank), channel and register number.
 type MrKey = (bool, bool, u8);
 
 pub struct Sdc {
     storage: BTreeMap<u32, u32>,
-    /// The fitted rank's mode registers, as the firmware's reads and writes
-    /// see them. Only device 0 has any: see the module docs.
+    /// The fitted ranks' mode registers, as the firmware's reads and writes
+    /// see them. Device 1 has any only on a dual-rank part: see the module
+    /// docs.
     mode_regs: BTreeMap<MrKey, u8>,
+    /// What the board is fitted with.
+    dram: Dram,
     /// Every distinct refresh interval the firmware has programmed, in order.
     /// The boot is expected to leave two entries here: the bootloader's value
     /// and the one start4 rescales to once the ARM is running.
@@ -125,17 +167,31 @@ impl Default for Sdc {
 
 impl Sdc {
     pub fn new() -> Sdc {
+        Sdc::with_dram(Dram::default())
+    }
+
+    /// A controller in front of the parts `dram` describes.
+    pub fn with_dram(dram: Dram) -> Sdc {
         let mut mode_regs = BTreeMap::new();
-        for chan in [false, true] {
-            mode_regs.insert((false, chan, MR4_REFRESH_RATE as u8), MR4_RESET);
-            mode_regs.insert((false, chan, MR8_BASIC_CONFIG as u8), MR8_16GB_X16);
+        let ranks: &[bool] = if dram.dual_rank { &[false, true] } else { &[false] };
+        for &device in ranks {
+            for chan in [false, true] {
+                mode_regs.insert((device, chan, MR4_REFRESH_RATE as u8), MR4_RESET);
+                mode_regs.insert((device, chan, MR8_BASIC_CONFIG as u8), dram.mr8());
+            }
         }
         Sdc {
             storage: BTreeMap::new(),
             mode_regs,
+            dram,
             refresh_history: Vec::new(),
             mr_reads: 0,
         }
+    }
+
+    /// What the board is fitted with.
+    pub fn dram(&self) -> Dram {
+        self.dram
     }
 
     /// Every distinct DRAM refresh interval the firmware has programmed.
@@ -156,9 +212,9 @@ impl Sdc {
             cmd & MR_CHANNEL != 0,
             (cmd & MR_ADDR) as u8,
         );
-        // Device 1 is the rank that is not fitted: nothing drives the data
-        // back, and a write lands nowhere.
-        let fitted = !key.0;
+        // An unfitted rank has nothing to drive the data back, and a write
+        // to it lands nowhere.
+        let fitted = !key.0 || self.dram.dual_rank;
         if cmd & MR_WRITE != 0 {
             if fitted {
                 let data = (cmd >> MR_WDATA_SHIFT) as u8;
@@ -245,6 +301,21 @@ mod tests {
         assert_eq!(read_mr(&mut sdc, 13), 0x5A);
         // ... and only for the channel it was written to.
         assert_eq!(read_mr(&mut sdc, MR_CHANNEL | 13), 0);
+    }
+
+    #[test]
+    fn a_bigger_board_is_fitted_with_bigger_parts() {
+        assert_eq!(Dram::for_ram(2 << 30), Dram { die_gbit: 16, dual_rank: false });
+        assert_eq!(Dram::for_ram(4 << 30), Dram { die_gbit: 32, dual_rank: false });
+        assert_eq!(Dram::for_ram(8 << 30), Dram { die_gbit: 32, dual_rank: true });
+    }
+
+    #[test]
+    fn the_8_gb_board_answers_on_both_ranks_with_32_gb_dies() {
+        let mut sdc = Sdc::with_dram(Dram::for_ram(8 << 30));
+        for key in [8, 8 | MR_CHANNEL, 8 | MR_DEVICE, 8 | MR_DEVICE | MR_CHANNEL] {
+            assert_eq!(read_mr(&mut sdc, key), u32::from(MR8_32GB_X16));
+        }
     }
 
     #[test]

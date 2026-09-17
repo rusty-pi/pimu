@@ -62,7 +62,10 @@ MACHINE:
               on.
     --ram-mb <n>
               The RAM behind the bus, in MiB: 2048 by default with --eeprom,
-              512 for an ELF.
+              512 for an ELF. It also decides which LPDDR4 parts the DRAM
+              controller reports, so the firmware trains and publishes the
+              size of a 2 GB board below 4096, a 4 GB board at 4096 and up,
+              and the 8 GB reference board at 8192 and up.
     --otp json:<file> | binary:<file>
               The OTP fuses, kept across runs: read before the boot when
               <file> exists, written back after the run when the firmware
