@@ -6,7 +6,7 @@
 - Base: `0x1D`
 - Size: `0x100`
 
-On the `bsc` PMIC copy (#78). Alone on a 4B rev 1.1 or 1.2, where it owns every rail; next to `pmic_core` on a 4B rev 1.4, a Pi 400 or a CM4, where `pmic_core` takes the core rail. start4's probe sweeps `0x00..0x1B` once, skipping `0x0C..0x0F`, to log it; it then writes a 4-byte config to `0x03..0x06`, writes `0xA5` to `0x14` on boards with `pmic_core`, `0x1E` to `0x18` on a CM4, and on a 4B sets `0x16` bit 0 and writes 1 to `0x01`. Registers not listed read 0 until written.
+On the `bsc` PMIC copy (#78). Alone on a 4B rev 1.1 or 1.2, where it owns every rail; next to `pmic_core` on a 4B rev 1.4, a Pi 400 or a CM4, where `pmic_core` takes the core rail. start4's probe sweeps `0x00..0x1B` once, skipping `0x0C..0x0F`, to log it; it then writes a 4-byte config to `0x03..0x06` (`0x04`, `0x23`, `0x32`, `0x43` on a 4B rev 1.2), writes `0xA5` to `0x14` on boards with `pmic_core`, `0x1E` to `0x18` on a CM4, and on a 4B sets `0x16` bit 0 and writes 1 to `0x01`. Registers not listed read 0 until written.
 
 Sources:
 
@@ -19,7 +19,7 @@ Sources:
 |---|---|---|---|---|
 | `0x00F` | [`ID`](#id) | r | 8 | 2, best high |
 | `0x013` | [`SETPOINT_SDRAM`](#setpoint_sdram) | rw | 8 | 2, best high |
-| `0x014` | [`SETPOINT_CORE`](#setpoint_core) | rw | 8 | 2, best high |
+| `0x014` | [`SETPOINT_CORE`](#setpoint_core) | rw | 8 | 3, best high |
 | `0x01A` | [`STATUS`](#status) | r | 8 | 1, best high |
 | `0x01C` | [`SETPOINT_RAIL6`](#setpoint_rail6) | rw | 8 | 1, best high |
 | `0x01D` | [`SETPOINT_RAIL5`](#setpoint_rail5) | rw | 8 | 1, best high |
@@ -50,12 +50,13 @@ Sources:
 
 Offset `0x014` · access `rw` · 8 bits · reset `0xA5`
 
-Rail 1 (core) setpoint, 6.25 mV per step; the core rail only where `pmic_core` is not fitted. The probe reads it four times and keeps the last read for the check described under `ID`.
+Rail 1 (core) setpoint, 6.25 mV per step; the core rail only where `pmic_core` is not fitted. The probe reads it four times and keeps the last read for the check described under `ID`. On a 4B rev 1.2 start4 writes `0x8D` (880 mV) after the config words, then its AVS calibration moves it (`0xA5`, `0x9C`, `0xA5`, `0x9C`, ending at `0x9B` in the model), and it writes nothing more before the ARM starts at 1500 MHz.
 
 Sources:
 
 - decompile (high): rail table image `0x3EE312D0`; decode callback `0x3EDD259A`: `raw * 6250 uV`; encode `0x3ED20BB8`: `(uV + 6249) / 6250`
 - inferred (medium): power-on `0xA5` (1.031 V): with `ID` fixed at `0x08`, the boards whose probe does not write `0x14` pass the check only from `0xA5`. It is also what the probe writes there on boards with `pmic_core` (`encode(1030000)`), and what the `0x1B` probe falls back to for the same check
+- trace (high): the pinned firmware on `--board-rev c03112` under `--log pmic`: `1d W 03 = 04`, `04 = 23`, `05 = 32`, `06 = 43`, `16 = 01`, `01 = 01`, `14 = 8d`, then `14` = `a5`, `9c`, `a5`, `9c`, `9b`
 
 ## `STATUS`
 

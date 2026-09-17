@@ -17,7 +17,7 @@ Sources:
 | Offset | Name | Access | Width | Sources |
 |---|---|---|---|---|
 | `0x002` | [`STATUS`](#status) | r | 8 | 1, best high |
-| `0x024` | [`MODE`](#mode) | rw | 8 | 2, best high |
+| `0x024` | [`MODE`](#mode) | rw | 8 | 3, best high |
 | `0x025` | [`SETPOINT_CORE`](#setpoint_core) | rw | 8 | 4, best high |
 
 ## `STATUS`
@@ -48,12 +48,13 @@ Sources:
 
 - decompile (high): descriptor `0x3EDE9658` callback `+0x1C` (`0x3EC8C97C`): `r3 = arg ? 5 : 15`, written to reg 36 if it differs from the byte cached at `gp+6916`; called from the DVFS clock change `FUN_0ed71e8c` when clock 3's new rate exceeds `[gp+0xccd84]` MHz
 - trace (high): `0x1E` W `0x24 = 0x05`, then W `0x25 = 0x68` and a `STATUS` read, before PLLB goes to 3600 MHz
+- trace (high): the pinned firmware on `--board-rev d03115` without `arm_boost`: `0x1E` W `0x24 = 0x05` and no `0x25` write before PLLB goes to 3000 MHz
 
 ## `SETPOINT_CORE`
 
 Offset `0x025` · access `rw` · 8 bits · reset `0x55`
 
-Core-rail setpoint, 10 mV per step. start4 encodes a voltage as `ceil(uV / 10000)`, after holding it to 0.835..1.1 V on a Pi 4. The boot writes `0x58` (880 mV) right after the log sweep, then its AVS calibration moves it (`0x67`, `0x62`, `0x67`, `0x62` in the model, ending at `0x61`), and before the ARM clock goes to 1800 MHz it writes 880 mV + the calibration's gain + 3.3 mV per percent above 1500 MHz: `0x68` in the model.
+Core-rail setpoint, 10 mV per step. start4 encodes a voltage as `ceil(uV / 10000)`, after holding it to 0.835..1.1 V on a Pi 4. The boot writes `0x58` (880 mV) right after the log sweep, then its AVS calibration moves it (`0x67`, `0x62`, `0x67`, `0x62` in the model, ending at `0x61`), and before the ARM clock goes to 1800 MHz it writes 880 mV + the calibration's gain + 3.3 mV per percent above 1500 MHz: `0x68` in the model. For a 1500 MHz ARM that sum is the setpoint already written, so nothing is written; `MODE` still gets 5.
 
 Sources:
 
