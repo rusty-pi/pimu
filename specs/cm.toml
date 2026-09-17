@@ -1076,6 +1076,22 @@ ref        = "start4: `0x5A000080` at `0x3ED494A4`"
 confidence = "high"
 
 [[register]]
+name   = "REG_21C"
+offset = 0x21C
+access = "rw"
+notes  = "A word the bootloader steps up one bit group at a time around SDRAM bring-up: `0x341`, `0x343`, `0x347`, `0x34F`, then after the SDRAM is up `0x35F` and `0x37F`, the last just before it puts the PCIe bridge in reset. On a board whose VL805 takes its firmware from the bootloader (all but a 4B before rev 1.4) it first waits until `USB_MSD_PWR_OFF_TIME` ms have passed since power-on, if that is set. bootmain's copy of the routine does nothing once the word reads `0x37F` in its low bits (`& 0x37F`). Meaning unknown."
+
+[[register.source]]
+kind       = "trace"
+ref        = "bootsys: read at `0x8000AACE`, `0x5A000341`/`343`/`347`/`34F` at `0x8000AAE8..0x8000AAFA`, `0x5A00035F` at `0x8000AB3C`, `0x5A00037F` at `0x8000AB44`"
+confidence = "high"
+
+[[register.source]]
+kind       = "decompile"
+ref        = "bootsys `0x8000AB00`: board predicate `0x800084EA` (not a 4B below PCB rev 4), then `USB_MSD_PWR_OFF_TIME` against `STC / 1000` and a sleep for the rest; bootmain `0xAE402` compares `& 0x37F` first"
+confidence = "high"
+
+[[register]]
 name   = "GEN_22C_CTL"
 offset = 0x22C
 access = "rw"

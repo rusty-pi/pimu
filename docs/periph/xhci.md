@@ -53,7 +53,7 @@ Sources:
 | `0x238`–`0x298` (4 × 0x20) | [`ERDP_LO`](#erdp_lo) | rw | 32 | 1, best high |
 | `0x23C`–`0x29C` (4 × 0x20) | [`ERDP_HI`](#erdp_hi) | rw | 32 | 1, best high |
 | `0x300` | [`DEBUG_CAP`](#debug_cap) | r | 32 | 1, best high |
-| `0x420`–`0x460` (5 × 0x10) | [`PORTSC`](#portsc) | rw | 32 | 3, best high |
+| `0x420`–`0x460` (5 × 0x10) | [`PORTSC`](#portsc) | rw | 32 | 4, best high |
 | `0x424`–`0x464` (5 × 0x10) | [`PORTPMSC`](#portpmsc) | rw | 32 | 1, best high |
 | `0x428`–`0x468` (5 × 0x10) | [`PORTLI`](#portli) | r | 32 | 1, best high |
 | `0x42C`–`0x46C` (5 × 0x10) | [`PORTHLPMC`](#porthlpmc) | rw | 32 | 1, best high |
@@ -495,7 +495,7 @@ Sources:
 
 Offset `0x420`, 5 elements 0x10 apart · access `rw` · 32 bits
 
-Port status and control. Empty but powered is `0x2A0`; the USB2 port adds `DR`. The bootloader resets root port 1 by writing back the value it read with `PR` set (`0x400202E1` becomes `0x400202F1`, which also clears `CSC`), and sends `Enable Slot` on its next 200 ms poll after the Port Status Change Event.
+Port status and control. Empty but powered is `0x2A0`; the USB2 port adds `DR`. The bootloader resets root port 1 by writing back the value it read with `PR` set (`0x400202E1` becomes `0x400202F1`, which also clears `CSC`), and sends `Enable Slot` on its next 200 ms poll after the Port Status Change Event. On a 4B before rev 1.4, once the controller runs, it switches every port's power off and on (`PP`, bit 9), each port written back as it reads with only `PP` changed, `USB_MSD_PWR_OFF_TIME` (1000 ms by default) apart, logging `xhci_set_port_power <port> <on>`, then stops and restarts the controller.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -518,6 +518,7 @@ Port status and control. Empty but powered is `0x2A0`; the USB2 port adds `DR`. 
 Sources:
 
 - standard (high): xHCI 1.1, 5.4.8 `PORTSC`
+- decompile (high): bootmain `0xBC2A8` (`xhci_set_port_power`): `PORTSC` read through `0xBBF4C`, `| 0x200` or `& ~0x200`, written through `0xBCC78`, for ports 1 to the port count; called from `0xB617C` (`Reset USB port-power %d ms`) only when the board predicate `0xA83D2` says 4B below PCB rev 4
 - measured (high): Raspberry Pi 4B d03115, moving a stick between sockets: `0x400202e1` USB2 just connected, `0x40000e03` USB2 enumerated, `0x00021203` USB3 SuperSpeed, `0x000002a0` empty
 - trace (high): the pinned bootloader under `--log xhci`: `PORTSC1 0x400202e1 <- 0x400202f1` at 4.950839 s, `Enable Slot` at 5.155671 s
 

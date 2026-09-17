@@ -601,11 +601,16 @@ offset = 0x420
 count  = 5
 stride = 0x10
 access = "rw"
-notes  = "Port status and control. Empty but powered is `0x2A0`; the USB2 port adds `DR`. The bootloader resets root port 1 by writing back the value it read with `PR` set (`0x400202E1` becomes `0x400202F1`, which also clears `CSC`), and sends `Enable Slot` on its next 200 ms poll after the Port Status Change Event."
+notes  = "Port status and control. Empty but powered is `0x2A0`; the USB2 port adds `DR`. The bootloader resets root port 1 by writing back the value it read with `PR` set (`0x400202E1` becomes `0x400202F1`, which also clears `CSC`), and sends `Enable Slot` on its next 200 ms poll after the Port Status Change Event. On a 4B before rev 1.4, once the controller runs, it switches every port's power off and on (`PP`, bit 9), each port written back as it reads with only `PP` changed, `USB_MSD_PWR_OFF_TIME` (1000 ms by default) apart, logging `xhci_set_port_power <port> <on>`, then stops and restarts the controller."
 
 [[register.source]]
 kind       = "standard"
 ref        = "xHCI 1.1, 5.4.8 `PORTSC`"
+confidence = "high"
+
+[[register.source]]
+kind       = "decompile"
+ref        = "bootmain `0xBC2A8` (`xhci_set_port_power`): `PORTSC` read through `0xBBF4C`, `| 0x200` or `& ~0x200`, written through `0xBCC78`, for ports 1 to the port count; called from `0xB617C` (`Reset USB port-power %d ms`) only when the board predicate `0xA83D2` says 4B below PCB rev 4"
 confidence = "high"
 
 [[register.source]]
