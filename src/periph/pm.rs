@@ -107,7 +107,25 @@ impl Pm {
     pub fn take_reset(&mut self) -> bool {
         std::mem::take(&mut self.reset_pending)
     }
+
+    /// The partition bits of `RSTS`, which a watchdog reset leaves alone:
+    /// that is how Linux's `bcm2835_restart` tells the bootloader which
+    /// partition to boot, and its power-off asks for partition 63 (`0x555`)
+    /// to mean "halt".
+    pub fn partition_bits(&self) -> u32 {
+        self.storage.get(&RSTS).copied().unwrap_or(0) & RSTS_PARTITION
+    }
+
+    /// Carry `bits` from [`Self::partition_bits`] over a reset: `RSTS` comes up
+    /// with them as well as the reset flags.
+    pub fn keep_partition_bits(&mut self, bits: u32) {
+        self.storage
+            .insert(RSTS, RSTS_RESET | (bits & RSTS_PARTITION));
+    }
 }
+
+/// `RSTS` bits 0, 2, .. 10: the partition field.
+const RSTS_PARTITION: u32 = 0x555;
 
 impl MmioDevice for Pm {
     fn name(&self) -> &'static str {
@@ -158,9 +176,6 @@ impl MmioDevice for Pm {
 mod tests {
     use super::*;
 
-    /// Partition field: `RSTS` bits 0, 2, 4, 6, 8, 10.
-    const RSTS_PARTITION: u32 = 0x555;
-
     #[test]
     fn rsts_powers_up_as_a_watchdog_reset() {
         let mut pm = Pm::new();
@@ -169,6 +184,15 @@ mod tests {
         assert_eq!(rsts, 0x0000_0020);
         // ...and it must not disturb the partition the bootloader decodes.
         assert_eq!(rsts & RSTS_PARTITION, 0);
+    }
+
+    #[test]
+    fn the_partition_survives_a_reset() {
+        let mut pm = Pm::new();
+        pm.write(RSTS, Width::Word, PASSWD | 0x555).unwrap();
+        let mut next = Pm::new();
+        next.keep_partition_bits(pm.partition_bits());
+        assert_eq!(next.read(RSTS, Width::Word).unwrap(), 0x0000_0575);
     }
 
     #[test]

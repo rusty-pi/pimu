@@ -19,7 +19,7 @@ Sources:
 | Offset | Name | Access | Width | Sources |
 |---|---|---|---|---|
 | `0x01C` | [`RSTC`](#rstc) | rw | 32 | 3, best high |
-| `0x020` | [`RSTS`](#rsts) | rw | 32 | 3, best high |
+| `0x020` | [`RSTS`](#rsts) | rw | 32 | 6, best high |
 | `0x024` | [`WDOG`](#wdog) | rw | 32 | 1, best high |
 | `0x028` | [`PADS0`](#pads0) | rw | 32 | 2, best high |
 | `0x02C` | [`PADS2`](#pads2) | rw | 32 | 4, best high |
@@ -65,7 +65,7 @@ Sources:
 
 Offset `0x020` · access `rw` · 32 bits · reset `0x20`
 
-Which reset source fired last. The bootloader also packs the partition to boot into the even bits 0..10, which the odd `HADWRF` bit does not disturb. start4's watchdog set-up writes the password alone (0) here when `HADWRF` is set.
+Which reset source fired last. The bootloader also packs the partition to boot into the even bits 0..10, which the odd `HADWRF` bit does not disturb, and a watchdog reset keeps them: that is how Linux names the partition to boot next, and partition 63 (`0x555`) is its power-off asking for a halt. The bootloader's halt (`0x800005AC`, on a 4B whenever the partition is 63) writes the password alone here, blinks the activity LED ten times, disables every interrupt source on both VPU cores and sleeps until GPIO 3 falls (`GPFEN0` bit 3, source 116, whose handler writes `0xA` to `GPEDS0`), then boots as usual. start4's watchdog set-up writes the password alone (0) here when `HADWRF` is set.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -76,6 +76,9 @@ Sources:
 - measured (high): the reference board's bootloader prints `PM_RSTS 00000020` after power-on
 - trace (high): start4: reads `0x20` twice at `0x3ED622BE` / `0x3ED622C0`, writes `0x5A000000` at `0x3ED622CC`
 - decompile (high): partition field in the even bits (mask `0x555`): `FUN_00000578` / `FUN_00000666` in `firmware/source/pieeprom.bin.c`
+- linux (high): `bcm2835_wdt.c`: `__bcm2835_restart` ORs the partition into `RSTS` before arming a 10-tick full reset, and `bcm2835_power_off` asks for partition 63
+- trace (high): `boot --send-after '/ # ' 'poweroff -f\n'` on the Linux card: after the reset the bootloader prints `partition 63`, `PM_RSTS 00000575` and `Halt: wake: 1 power_off: 0`; `RVF_MMIO_FROM=0x800005AC` shows `RSTS <- 0x5A000000`, ten `GPSET1`/`GPCLR1` bit 10 pairs, zeros to `0x7E002010..2C` and `0x7E002810..2C`, `VBASE <- 0x80000000`, `GPFEN0 <- 8`, `+0x28 <- 0x10000`, `sleep`, and all three undone
+- decompile (high): call site `0x80000DFE`: the halt runs with `WAKE_ON_GPIO` (`FCEB+0x18`) and `POWER_OFF_ON_HALT` (`+0x1C`) unless the board is a Pi 400 (`0x8000884A`) and `WAKE_ON_GPIO` is not 2; `0x80008490` powers off through the board's PMIC op `+0x78` only when wake is 0 and power-off is set; wake GPIO from `0x80000A20` (3)
 
 `HADWRF` sources:
 
