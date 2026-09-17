@@ -28,6 +28,7 @@ Sources:
 | `0x038` | [`PADS5`](#pads5) | rw | 32 | 2, best high |
 | `0x040`–`0x05C` (8 × 0x4) | [`DOMAIN_STATUS`](#domain_status) | rw | 32 | 1, best low |
 | `0x074` | [`SPAREW`](#sparew) | rw | 32 | 2, best high |
+| `0x078` | [`SPARER`](#sparer) | r | 32 | 3, best high |
 | `0x07C` | [`AVS_RSTDR`](#avs_rstdr) | rw | 32 | 2, best high |
 | `0x080` | [`AVS_STAT`](#avs_stat) | rw | 32 | 2, best high |
 | `0x084` | [`AVS_EVENT`](#avs_event) | rw | 32 | 2, best high |
@@ -205,12 +206,24 @@ Sources:
 
 Offset `0x074` · access `rw` · 32 bits
 
-Linux's spare writable word. bootmain writes `0x400001` late, right after it puts the PCIe bridge back into reset (`RGR1_SW_INIT_1` `0x3`) before start4 is loaded.
+Linux's spare writable word, read back through `SPARER`. bootmain writes it late, right after it puts the PCIe bridge back into reset (`RGR1_SW_INIT_1` `0x3`) before start4 is loaded: bit 22 set and the partition it booted in the low bits, `0x400001` for the first, `0x400002` when `PARTITION=2` chose the second.
 
 Sources:
 
 - linux (high): `bcm2835-power.c`: `PM_SPAREW`
-- trace (high): bootmain: `0x5A400001` at `0x000804AE`
+- trace (high): bootmain: `0x5A400001` at `0x000804AE`, `0x5A400002` with `--bootconf PARTITION=2` and a second FAT32 partition
+
+## `SPARER`
+
+Offset `0x078` · access `r` · 32 bits
+
+Reads what was last written to `SPAREW`, without the password byte. This is how start4 learns the partition the bootloader booted (`0x3ECC44E8`): with bit 22 set, the low 22 bits are the partition; otherwise it decodes the partition field of the `RSTS` it saved as it started. It logs the result as `boot-part: N` and reports it as `/chosen/bootloader/partition`.
+
+Sources:
+
+- linux (high): `bcm2835-power.c`: `PM_SPARER`
+- measured (high): `/dev/mem` on a Raspberry Pi 4B d03115 after a stock boot from the first partition: `SPAREW` and `SPARER` both `0x00400001`, `/chosen/bootloader/partition` 1, and the board's log prints `boot-part: 1` (`examples-on-real-hardware/sd-card-boot.log:80`)
+- decompile (high): start4 `0x3ECC44E8`: PM op `+0x1C` (`0x3ED62214`, reads `+0x78`), bit 22 tested; else PM op `+0x18` (`0x3ED62204`, the saved `RSTS`) through the partition decoder `0x3EC723F2`
 
 ## `AVS_RSTDR`
 

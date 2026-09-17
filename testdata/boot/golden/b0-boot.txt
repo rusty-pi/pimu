@@ -97,8 +97,8 @@ MESS:[t]:0: arasan: arasan_emmc_open
 MESS:[t]:0: arasan: arasan_emmc_set_clock C0: 0x00800000 C1: 0x000e0047 emmc: 200000000 actual: 390625 div: 0x00000100 target: 400000 min: 400000 max: 400000 delay: 5
 MESS:[t]:0: arasan: arasan_emmc_set_clock C0: 0x00800000 C1: 0x000e0047 emmc: 200000000 actual: 390625 div: 0x00000100 target: 400000 min: 400000 max: 400000 delay: 5
 MESS:[t]:0: arasan: arasan_emmc_set_clock C0: 0x00800f00 C1: 0x000e0047 emmc: 200000000 actual: 390625 div: 0x00000100 target: 400000 min: 390000 max: 400000 delay: 5
-MESS:[t]:0: boot-part: 0 fs-type: 0
-MESS:[t]:0: boot-part: 0 fs-type: 3
+MESS:[t]:0: boot-part: 1 fs-type: 0
+MESS:[t]:0: boot-part: 1 fs-type: 3
 MESS:[t]:0: arasan: arasan_emmc_set_clock C0: 0x00800f06 C1: 0x000e0207 emmc: 200000000 actual: 50000000 div: 0x00000002 target: 50000000 min: 0 max: 50000000 delay: 1
 MESS:[t]:0: brfs: File read: /mfs/sd/config.txt
 MESS:[t]:0: board: boardrev c03112 otp c03112

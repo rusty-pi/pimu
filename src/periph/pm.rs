@@ -33,15 +33,25 @@ use crate::bus::{BusResult, MmioDevice, Width};
 // nothing to the partition the bootloader packs into the even bits 0..10.
 use crate::spec::pm::{
     DOMAIN_STATUS, DOMAIN_STATUS_COUNT, DOMAIN_STATUS_RESET, DOMAIN_STATUS_STRIDE, GRAFX, IMAGE,
-    RSTC, RSTC_PASSWD_MASK as PASSWD_MASK, RSTC_WRCFG_SHIFT, RSTS, RSTS_RESET, WDOG,
-    WDOG_TIME_MASK,
+    RSTC, RSTC_PASSWD_MASK as PASSWD_MASK, RSTC_WRCFG_SHIFT, RSTS, RSTS_RESET, SPARER, SPAREW,
+    WDOG, WDOG_TIME_MASK,
 };
 use crate::spec::Coverage;
 
-/// The power-domain words answer "powered"; `IMAGE` / `GRAFX` are storage.
+/// The power-domain words answer "powered"; `IMAGE` / `GRAFX` are storage,
+/// and `SPARER` reads back `SPAREW`.
 pub const COVERAGE: Coverage = Coverage {
     block: "pm",
-    decoded: &[RSTC, RSTS, WDOG, DOMAIN_STATUS, IMAGE, GRAFX],
+    decoded: &[
+        RSTC,
+        RSTS,
+        WDOG,
+        DOMAIN_STATUS,
+        IMAGE,
+        GRAFX,
+        SPAREW,
+        SPARER,
+    ],
 };
 
 /// The password byte every write carries.
@@ -137,6 +147,9 @@ impl MmioDevice for Pm {
         if off == WDOG {
             return Ok(self.ticks_left());
         }
+        // The spare word is written at one offset and read at the next:
+        // the bootloader leaves the partition it booted there for start4.
+        let off = if off == SPARER { SPAREW } else { off };
         if let Some(&v) = self.storage.get(&off) {
             return Ok(v & !PASSWD_MASK);
         }
@@ -205,6 +218,15 @@ mod tests {
 
     /// The bootloader's reboot: a 10-tick timeout, then the arm. The reset
     /// lands when the countdown expires, not on the arm itself.
+    #[test]
+    fn the_spare_word_reads_back_on_the_next_offset() {
+        let mut pm = Pm::new();
+        assert_eq!(pm.read(SPARER, Width::Word).unwrap(), 0);
+        pm.write(SPAREW, Width::Word, 0x5A40_0002).unwrap();
+        assert_eq!(pm.read(SPARER, Width::Word).unwrap(), 0x0040_0002);
+        assert_eq!(pm.read(SPAREW, Width::Word).unwrap(), 0x0040_0002);
+    }
+
     #[test]
     fn a_short_watchdog_resets_when_it_expires() {
         let mut pm = Pm::new();
