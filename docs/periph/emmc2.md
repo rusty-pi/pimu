@@ -31,7 +31,7 @@ Sources:
 | `0x028` | [`HOST_CONTROL`](#host_control) | rw | 32 | 1, best high |
 | `0x02C` | [`CLOCK_CONTROL`](#clock_control) | rw | 32 | 3, best high |
 | `0x030` | [`INT_STATUS`](#int_status) | w1c | 32 | 2, best high |
-| `0x034` | [`INT_STATUS_EN`](#int_status_en) | rw | 32 | 1, best high |
+| `0x034` | [`INT_STATUS_EN`](#int_status_en) | rw | 32 | 3, best high |
 | `0x038` | [`INT_SIGNAL_EN`](#int_signal_en) | rw | 32 | 1, best high |
 | `0x03C` | [`HOST_CONTROL2`](#host_control2) | rw | 32 | 1, best high |
 | `0x040` | [`CAPABILITIES_0`](#capabilities_0) | r | 32 | 1, best high |
@@ -351,11 +351,13 @@ Sources:
 
 Offset `0x034` · access `rw` · 32 bits
 
-Which interrupt conditions latch into `INT_STATUS`.
+Which interrupt conditions latch into `INT_STATUS`. The EEPROM bootloader writes `0x007E0037`, which leaves `ERR_CMD_TIMEOUT` out: with no card nothing latches, and it gives each command 100 ms before it gives up. Its probe is CMD0, CMD8 (`0x1AA`); on no answer it logs `EMMC` and tries CMD1 (`0x40100000`), resets the host (`SRST_ALL`, about 200 ms before the clock is set again, one `SD HOST` line) and tries CMD0 and CMD1 again, then once more CMD0 and CMD8, logs `SDV1` and sends CMD55, whose timeout ends the open (`SD CMD: 0x371a0010 (55) 0x0 0x1fff0000`, `Failed to open device`). Each reset is logged `SD retry N oc M`, 10 ms before it. After a failed open it resets `SRST_CMD` and `SRST_DAT`, then `SRST_ALL`, and with `SD_BOOT_MAX_RETRIES=1` opens once more about 300 ms later.
 
 Sources:
 
 - standard (high): SDHCI 3.00, 2.2.19 / 2.2.20
+- trace (high): `boot` of the pinned EEPROM with no `--sd`, `--log emmc`: `W [0x34] <- 0x007e0037`, then CMD0, CMD8 and 14478 reads of `INT_STATUS` returning 0 over 100 ms; the command order and the host resets as described, and `R [0x0c]`, `R [0x08]`, `R [0x24]` for the `SD CMD` line
+- decompile (medium): bootmain probe state machine `0xACB74` (`EMMC` / `SDV1` flags at `+64` / `+68`) and its retry `0xAC640` (`SD retry %d oc %d`, a 10 000 us wait, then the host reset op) — _event-driven code; the order above is what the trace shows_
 
 ## `INT_SIGNAL_EN`
 
