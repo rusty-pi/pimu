@@ -70,6 +70,7 @@ Which reset source fired last. The bootloader also packs the partition to boot i
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
+| 1 | `TRYBOOT` | rw | A one-shot request to boot with `tryboot.txt`: start4 sets or clears it for the `SET_REBOOT_FLAGS` property tag (value 1), and answers `GET_REBOOT_FLAGS` from it. It has to survive the watchdog reset Linux reboots with, so the model keeps it with the partition field. The bootcode reads the register twice as it starts, writes it back without this bit, logs `TRYBOOT` after `VC-JTAG`, and passes the request on in bit 0 of the `BVER` block's reset-info word, which the bootloader logs as `reset_info 00000001`. |
 | 5 | `HADWRF` | rw | Last reset was a full watchdog reset: what power-on sequencing leaves. |
 
 Sources:
@@ -80,6 +81,10 @@ Sources:
 - linux (high): `bcm2835_wdt.c`: `__bcm2835_restart` ORs the partition into `RSTS` before arming a 10-tick full reset, and `bcm2835_power_off` asks for partition 63
 - trace (high): `boot --send-after '/ # ' 'poweroff -f\n'` on the Linux card: after the reset the bootloader prints `partition 63`, `PM_RSTS 00000575` and `Halt: wake: 1 power_off: 0`; `RVF_MMIO_FROM=0x800005AC` shows `RSTS <- 0x5A000000`, ten `GPSET1`/`GPCLR1` bit 10 pairs, zeros to `0x7E002010..2C` and `0x7E002810..2C`, `VBASE <- 0x80000000`, `GPFEN0 <- 8`, `+0x28 <- 0x10000`, `sleep`, and all three undone
 - decompile (high): call site `0x80000DFE`: the halt runs with `WAKE_ON_GPIO` (`FCEB+0x18`) and `POWER_OFF_ON_HALT` (`+0x1C`) unless the board is a Pi 400 (`0x8000884A`) and `WAKE_ON_GPIO` is not 2; `0x80008490` powers off through the board's PMIC op `+0x78` only when wake is 0 and power-off is set; wake GPIO from `0x80000A20` (3)
+
+`TRYBOOT` sources:
+
+- trace (high): `--mbox-property 0x00038064:4=1`: start4 reads `0x20` twice and writes `0x5A000002` (`0x3ED622F4`), then `GET_REBOOT_FLAGS` answers 1. With `--patch 0x7E100020=0x5A000022`: the bootcode reads `0x22` at `0x80007EFE` / `0x80007F06` and writes `0x5A000020` at `0x80007F12`
 
 `HADWRF` sources:
 

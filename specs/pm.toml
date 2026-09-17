@@ -99,6 +99,16 @@ ref        = "call site `0x80000DFE`: the halt runs with `WAKE_ON_GPIO` (`FCEB+0
 confidence = "high"
 
 [[register.field]]
+name  = "TRYBOOT"
+bits  = "1"
+notes = "A one-shot request to boot with `tryboot.txt`: start4 sets or clears it for the `SET_REBOOT_FLAGS` property tag (value 1), and answers `GET_REBOOT_FLAGS` from it. It has to survive the watchdog reset Linux reboots with, so the model keeps it with the partition field. The bootcode reads the register twice as it starts, writes it back without this bit, logs `TRYBOOT` after `VC-JTAG`, and passes the request on in bit 0 of the `BVER` block's reset-info word, which the bootloader logs as `reset_info 00000001`."
+
+[[register.field.source]]
+kind       = "trace"
+ref        = "`--mbox-property 0x00038064:4=1`: start4 reads `0x20` twice and writes `0x5A000002` (`0x3ED622F4`), then `GET_REBOOT_FLAGS` answers 1. With `--patch 0x7E100020=0x5A000022`: the bootcode reads `0x22` at `0x80007EFE` / `0x80007F06` and writes `0x5A000020` at `0x80007F12`"
+confidence = "high"
+
+[[register.field]]
 name  = "HADWRF"
 bits  = "5"
 notes = "Last reset was a full watchdog reset: what power-on sequencing leaves."

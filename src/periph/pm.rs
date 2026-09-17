@@ -33,8 +33,8 @@ use crate::bus::{BusResult, MmioDevice, Width};
 // nothing to the partition the bootloader packs into the even bits 0..10.
 use crate::spec::pm::{
     DOMAIN_STATUS, DOMAIN_STATUS_COUNT, DOMAIN_STATUS_RESET, DOMAIN_STATUS_STRIDE, GRAFX, IMAGE,
-    RSTC, RSTC_PASSWD_MASK as PASSWD_MASK, RSTC_WRCFG_SHIFT, RSTS, RSTS_RESET, SPARER, SPAREW,
-    WDOG, WDOG_TIME_MASK,
+    RSTC, RSTC_PASSWD_MASK as PASSWD_MASK, RSTC_WRCFG_SHIFT, RSTS, RSTS_RESET, RSTS_TRYBOOT_MASK,
+    SPARER, SPAREW, WDOG, WDOG_TIME_MASK,
 };
 use crate::spec::Coverage;
 
@@ -134,8 +134,9 @@ impl Pm {
     }
 }
 
-/// `RSTS` bits 0, 2, .. 10: the partition field.
-const RSTS_PARTITION: u32 = 0x555;
+/// `RSTS` bits 0, 2, .. 10: the partition field, and bit 1, the tryboot
+/// request, which a reboot has to carry as well.
+const RSTS_PARTITION: u32 = 0x555 | RSTS_TRYBOOT_MASK;
 
 impl MmioDevice for Pm {
     fn name(&self) -> &'static str {
@@ -218,6 +219,16 @@ mod tests {
 
     /// The bootloader's reboot: a 10-tick timeout, then the arm. The reset
     /// lands when the countdown expires, not on the arm itself.
+    #[test]
+    fn a_tryboot_request_survives_a_reset() {
+        let mut pm = Pm::new();
+        pm.write(RSTS, Width::Word, PASSWD | 0x22).unwrap();
+        let kept = pm.partition_bits();
+        let mut after = Pm::new();
+        after.keep_partition_bits(kept);
+        assert_eq!(after.read(RSTS, Width::Word).unwrap(), RSTS_RESET | 0x2);
+    }
+
     #[test]
     fn the_spare_word_reads_back_on_the_next_offset() {
         let mut pm = Pm::new();
