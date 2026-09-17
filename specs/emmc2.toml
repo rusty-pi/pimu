@@ -234,11 +234,16 @@ confidence = "high"
 [[register.field]]
 name  = "BUF_READ_EN"
 bits  = "11"
-notes = "The buffer holds data for a PIO read."
+notes = "The buffer holds data for a PIO read. It is a level, not a latch: it drops after the last word of a block and comes back once the next block has arrived. Both stock stages read `PRESENT_STATE` before every `BUFFER_DATA` read and read the word only while this bit is set. `BUF_READ_RDY` in `INT_STATUS` stays latched from the first block on, so it cannot pace later blocks of a `CMD18`. The model fills the buffer at once, so a driver that paces on the latch works in the model but would read later blocks too early on silicon."
 
 [[register.field.source]]
 kind       = "standard"
-ref        = "SDHCI 3.00, 2.2.9"
+ref        = "SDHCI 3.00, 2.2.9 and 2.2.17"
+confidence = "high"
+
+[[register.field.source]]
+kind       = "trace"
+ref        = "bootloader: `PRESENT_STATE` at `0x000815DA`, then `BUFFER_DATA` at `0x000815C8`, per word; start4: `0x3EC51F5E`, then `0x3ED6A71C`"
 confidence = "high"
 
 [[register.field]]
@@ -389,11 +394,16 @@ confidence = "high"
 name   = "INT_STATUS"
 offset = 0x30
 access = "w1c"
-notes  = "Normal (15:0) and error (31:16) interrupt status, gated by `INT_STATUS_EN`."
+notes  = "Normal (15:0) and error (31:16) interrupt status, gated by `INT_STATUS_EN`. The bootloader writes `0x31` before each command, then `0x1` once a command without data completes, or `0x21` (`CMD_COMPLETE | BUF_READ_RDY`) once a data command does. start4 writes all-ones before each command, and `0x1` after an R1b command (`CMD7`) before it waits for `XFER_COMPLETE`."
 
 [[register.source]]
 kind       = "standard"
 ref        = "SDHCI 3.00, 2.2.17 / 2.2.18"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "bootloader register-write helper `0x00081DC2`: 39 × `0x31`, 25 × `0x1`, 14 × `0x21`; start4 `0x3EC52C2E`: 104 × `0xFFFFFFFF`, 4 × `0x1`"
 confidence = "high"
 
 [[register.field]]
