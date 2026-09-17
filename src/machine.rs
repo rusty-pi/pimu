@@ -141,6 +141,10 @@ pub struct Machine {
     /// (a DRAM memtest read-back walks fresh addresses, no writes) from a hung
     /// poll (re-reads one MMIO register forever).
     pub ram_reads: u64,
+    /// Loads off the RAM path, the system timer's included. The run
+    /// loop's busy-wait detector compares it with the timer's `clo_reads`: a
+    /// `udelay` reads nothing else.
+    pub mmio_reads: u64,
 
     /// When set, every peripheral (non-RAM) access is appended to `mmio_events`
     /// as `(addr, width_bytes, value, is_write)`. The run loop drains and prints
@@ -280,6 +284,7 @@ impl Machine {
             ram_writes: 0,
             mmio_writes: 0,
             ram_reads: 0,
+            mmio_reads: 0,
             mmio_trace: false,
             mmio_trace_range: None,
             mmio_events: Vec::new(),
@@ -577,14 +582,6 @@ impl Machine {
         self.boot_rom = Some((BASE, BASE + len, bytes));
         // The ROM stages the bootcode into the L2 with ordinary stores.
         self.l2.hold(0, 0);
-    }
-
-    /// Whether the VPU starts in a real boot-ROM image (experimental
-    /// `--boot-rom`). The run loop uses this to fast-forward the maskROM's
-    /// `udelay` loops more aggressively; it is never set on a normal boot, so no
-    /// golden depends on it.
-    pub fn executing_boot_rom(&self) -> bool {
-        self.boot_rom.is_some()
     }
 
     /// If a boot-ROM overlay covers `addr`, the byte offset into its image.
@@ -999,6 +996,7 @@ impl Machine {
     /// line so that the RAM path inlines into the cores' executors.
     #[inline(never)]
     fn load_device(&mut self, addr: u32, width: Width) -> BusResult<u32> {
+        self.mmio_reads = self.mmio_reads.wrapping_add(1);
         self.advance_hdmi_ddc(addr);
         self.sync_avs_core_rail(addr);
         let trace = self.mmio_traced(addr);

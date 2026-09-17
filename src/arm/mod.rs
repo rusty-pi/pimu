@@ -38,7 +38,7 @@
 //! every VPU step the run loop calls [`ArmSide::catch_up`], which runs the
 //! ARM until it has had as many cycles as the system timer says have passed
 //! since release: about 28 per VPU step, and a whole slice at once when the
-//! VPU's `sleep` or `usleep` fast-forward jumps the counter. Either way a run
+//! VPU's `sleep` or busy-wait fast-forward jumps the counter. Either way a run
 //! is a pure function of its inputs — the reproducibility the regression
 //! bench depends on — and the ARM's clock never falls behind the VPU's.
 //!
@@ -67,9 +67,9 @@
 //! most often, is what would interrupt the VPU, so the counter only moves
 //! that far and the VPU wakes to it on time. Before this, every request
 //! UEFI made while the VPU slept waited for the slice to end — 1.9 ms on
-//! average, which made its SD card reads crawl (#53). The `usleep` and
-//! `udelay` fast-forwards still move the counter first, so a request made
-//! during one of those is seen when it ends.
+//! average, which made its SD card reads crawl (#53). The busy-wait
+//! fast-forward still moves the counter first, so a request made during a
+//! jump is seen when it ends.
 //!
 //! ## Between cores
 //!

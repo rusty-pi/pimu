@@ -52,15 +52,15 @@
 [t] YI_ADDR 192.0.2.100
 [t] SI_ADDR 192.0.2.1
 [t] OPTIONS:-
-	op: 53 len:   1 DHCP recv OFFER (2) expect OFFER  6.28 
-	op: 54 len:   4 192.0.2.1  6.28 
-	op: 51 len:   4   6.28 
-	op:  1 len:   4 255.255.255.0  6.28 
-	op:  3 len:   4 192.0.2.1  6.28 
-	op:  6 len:   4 192.0.2.1  6.28 
-	op: 66 len:   9 192.0.2.1  6.84 [66]: 192.0.2.1
+	op: 53 len:   1 DHCP recv OFFER (2) expect OFFER  2.80 
+	op: 54 len:   4 192.0.2.1  2.80 
+	op: 51 len:   4   2.80 
+	op:  1 len:   4 255.255.255.0  2.80 
+	op:  3 len:   4 192.0.2.1  2.80 
+	op:  6 len:   4 192.0.2.1  2.80 
+	op: 66 len:   9 192.0.2.1  2.07 [66]: 192.0.2.1
 [t] 
-	op: 60 len:   9   6.28 
+	op: 60 len:   9   2.80 
 	op: 43 len:  32 
 		PXE op:  6 len:   1 
 		PXE op: 10 len:   4 
@@ -74,15 +74,15 @@
 [t] YI_ADDR 192.0.2.100
 [t] SI_ADDR 192.0.2.1
 [t] OPTIONS:-
-	op: 53 len:   1 DHCP recv ACK (5) expect ACK  6.28 
-	op: 54 len:   4 192.0.2.1  6.28 
-	op: 51 len:   4   6.28 
-	op:  1 len:   4 255.255.255.0  6.28 
-	op:  3 len:   4 192.0.2.1  6.28 
-	op:  6 len:   4 192.0.2.1  6.28 
-	op: 66 len:   9 192.0.2.1  6.86 [66]: 192.0.2.1
+	op: 53 len:   1 DHCP recv ACK (5) expect ACK  2.80 
+	op: 54 len:   4 192.0.2.1  2.80 
+	op: 51 len:   4   2.80 
+	op:  1 len:   4 255.255.255.0  2.80 
+	op:  3 len:   4 192.0.2.1  2.80 
+	op:  6 len:   4 192.0.2.1  2.80 
+	op: 66 len:   9 192.0.2.1  2.08 [66]: 192.0.2.1
 [t] 
-	op: 60 len:   9   6.28 
+	op: 60 len:   9   2.80 
 	op: 43 len:  32 
 		PXE op:  6 len:   1 
 		PXE op: 10 len:   4 
@@ -97,16 +97,18 @@
 [t] RX: 2 IP: 0 IPV4: 2 MAC: 2 UDP: 2 UDP RECV: 2 IP_CSUM_ERR: 0 UDP_CSUM_ERR: 0
 [t] Loading boot.img ...
 [t] HTTP: GET request for http://netboot.test:80/net_install/boot.sig
+[t] HTTP: got 100% at 602 Bps
 [t] boot.sig
 [t] hash: [sha256]
 [t] ts: 1785847093
 [t] rsa2048: [signature]
 [t] HTTP: GET request for http://netboot.test:80/net_install/boot.img
 [t] HTTP: got 0% at 1 kB/s
-[t] HTTP: got 25% at 2127 kB/s
-[t] HTTP: got 52% at 2841 kB/s
-[t] HTTP: got 77% at 3187 kB/s
-[t] HTTP: got 100% at 4096 kB/s
+[t] HTTP: got 19% at 1573 kB/s
+[t] HTTP: got 44% at 2457 kB/s
+[t] HTTP: got 70% at 2898 kB/s
+[t] HTTP: got 96% at 3160 kB/s
+[t] HTTP: got 100% at 3276 kB/s
 [t] Verifying
 [t] RSA verify
 [t] rsa-verify pass (0x0)

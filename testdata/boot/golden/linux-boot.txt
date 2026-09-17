@@ -696,10 +696,10 @@ Linux aarch64
 / # \x1b[6necho cpus=$(grep -c ^processor /proc/cpuinfo)
 cpus=4
 / # \x1b[6necj\x08\x1b[Jho rvf-$((6*7))
-rvf-42
-/ # \x1b[6necho -ne 'Hello, wo[    1.483256] usb 1-1: new high-speed USB device number 2 using xhci_hcd
 [t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
-rld!\0\0\0' | rpi-fw-crypto hmac --in /proc/self/fd/0 --k
+[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
+rvf-42
+/ # \x1b[6necho -ne 'Hello, world!\0\0\0' | rpi-fw-crypto hmac --in /proc/self/fd/0 --k
 
 ey-id 1 --outform hex; echo
 0eb6f96f3a97b37bb065eb014f76fd488df48682ed6ab4f14cdae0e8a26e1e9d
