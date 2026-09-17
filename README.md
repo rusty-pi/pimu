@@ -302,12 +302,13 @@ cargo run --release -- boot-check testdata/boot/firmware-boot.toml   # the SD bo
 cargo run --release -- boot-check testdata/boot/linux-boot.toml
 cargo run --release -- boot-check testdata/boot/firmware-boot.toml --update       # re-record the golden and counts
 cargo run --release -- boot-check testdata/boot/firmware-boot.toml --max-wall 600 # slower, busier machine
-cargo run --release -- boot-check testdata/boot/usb-boot.toml --from boot-usb.log # a CI run's artifact
+cargo run --release -- boot-check testdata/boot/usb-boot.toml --from boot-usb.log # an earlier run's pair
 ```
 
 The combined output goes to `boot.log` (`--output` names another file) and the
-console to `boot.log.console` beside it: the pair CI uploads, and what `--from`
-checks again without booting.
+console to `boot.log.console` beside it: the pair `--from` checks again
+without booting. CI keeps neither; a failed boot prints `boot.log` into the
+job log.
 
 After an intentional change, `--update` and then read the golden and counts
 diff in the commit: it is the change, spelled out. A change that only moves

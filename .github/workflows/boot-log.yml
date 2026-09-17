@@ -98,10 +98,13 @@ jobs:
       - name: Build rpi-virt-fw
         run: cargo build --release
 
-      - uses: actions/upload-artifact@v7
+      # The boots get all of this through the Actions cache rather than as an
+      # artifact: artifacts count against the account's storage quota, and a
+      # few dozen runs a day of these images used it up (every upload then
+      # failed). The cleanup job deletes the entry once the run is over.
+      - uses: actions/cache/save@v6
         with:
-          name: boot-inputs
-          retention-days: 1
+          key: boot-inputs-${{ github.run_id }}
           path: |
             target/release/rpi-virt-fw
             firmware/
@@ -134,32 +137,28 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v7
+      - uses: actions/cache/restore@v6
         with:
-          name: boot-inputs
-
-      - name: Restore the executable bit
-        run: chmod +x target/release/rpi-virt-fw
+          key: boot-inputs-${{ github.run_id }}
+          fail-on-cache-miss: true
+          path: |
+            target/release/rpi-virt-fw
+            firmware/
 
       - name: Simulated boot (${{ matrix.medium }})
         run: target/release/rpi-virt-fw boot-check ${{ matrix.scenario }} --output boot-${{ matrix.medium }}.log
 
-      - uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: boot-log-${{ matrix.medium }}
-          # The console file is the golden transcript's raw material: download
-          # both while the run is still going (the cleanup job below deletes
-          # them) and `boot-check <scenario> --from boot-<medium>.log --update`
-          # to see exactly what the boot did differently.
-          path: |
-            boot-${{ matrix.medium }}.log
-            boot-${{ matrix.medium }}.log.console
+      # Nothing is uploaded: a failed boot's combined output goes to the job
+      # log instead. Reproduce it locally for the console file that
+      # `boot-check <scenario> --from boot-<medium>.log --update` wants.
+      - name: Boot output
+        if: failure()
+        run: cat boot-${{ matrix.medium }}.log
 
-  # Nothing a run uploads is needed once it has finished, and artifacts count
-  # against the account's storage quota until they expire; once the quota is
-  # hit, every upload fails. So the run deletes its own artifacts at the end,
-  # whatever the boots did.
+  # Nothing a run stores is needed once it has finished: the boot inputs'
+  # cache entry goes at the end, whatever the boots did, and so does any
+  # artifact, which would count against the account's storage quota until it
+  # expired.
   cleanup:
     needs: [build, boot]
     if: always()
@@ -169,10 +168,17 @@ jobs:
       actions: write
 
     steps:
-      - name: Delete this run's artifacts
+      - name: Delete this run's cache entry and artifacts
         uses: actions/github-script@v9
         with:
           script: |
+            const key = `boot-inputs-${context.runId}`;
+            try {
+              await github.rest.actions.deleteActionsCacheByKey({ ...context.repo, key });
+              core.info(`deleted cache ${key}`);
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
             const artifacts = await github.paginate(
               github.rest.actions.listWorkflowRunArtifacts,
               { ...context.repo, run_id: context.runId, per_page: 100 },
