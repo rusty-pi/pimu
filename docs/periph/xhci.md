@@ -27,8 +27,8 @@ Sources:
 | `0x014` | [`DBOFF`](#dboff) | r | 32 | 1, best high |
 | `0x018` | [`RTSOFF`](#rtsoff) | r | 32 | 1, best high |
 | `0x01C` | [`HCCPARAMS2`](#hccparams2) | r | 32 | 1, best high |
-| `0x020` | [`USBCMD`](#usbcmd) | rw | 32 | 1, best high |
-| `0x024` | [`USBSTS`](#usbsts) | rw | 32 | 2, best high |
+| `0x020` | [`USBCMD`](#usbcmd) | rw | 32 | 2, best high |
+| `0x024` | [`USBSTS`](#usbsts) | rw | 32 | 3, best high |
 | `0x028` | [`PAGESIZE`](#pagesize) | r | 32 | 1, best high |
 | `0x034` | [`DNCTRL`](#dnctrl) | rw | 32 | 1, best high |
 | `0x038` | [`CRCR_LO`](#crcr_lo) | rw | 32 | 1, best high |
@@ -53,7 +53,7 @@ Sources:
 | `0x238`–`0x298` (4 × 0x20) | [`ERDP_LO`](#erdp_lo) | rw | 32 | 1, best high |
 | `0x23C`–`0x29C` (4 × 0x20) | [`ERDP_HI`](#erdp_hi) | rw | 32 | 1, best high |
 | `0x300` | [`DEBUG_CAP`](#debug_cap) | r | 32 | 1, best high |
-| `0x420`–`0x460` (5 × 0x10) | [`PORTSC`](#portsc) | rw | 32 | 2, best high |
+| `0x420`–`0x460` (5 × 0x10) | [`PORTSC`](#portsc) | rw | 32 | 3, best high |
 | `0x424`–`0x464` (5 × 0x10) | [`PORTPMSC`](#portpmsc) | rw | 32 | 1, best high |
 | `0x428`–`0x468` (5 × 0x10) | [`PORTLI`](#portli) | r | 32 | 1, best high |
 | `0x42C`–`0x46C` (5 × 0x10) | [`PORTHLPMC`](#porthlpmc) | rw | 32 | 1, best high |
@@ -152,7 +152,7 @@ Sources:
 
 Offset `0x020` · access `rw` · 32 bits
 
-Run / stop and resets.
+Run / stop and resets. The bootloader's controller set-up, right after it prints the port, slot and interrupter counts, sets `HCRST` (read-modify-write) and reads `USBCMD` until it clears: read, wait 1 ms, test, up to 5000 times, then `xHC HCRST timeout %x`. After the rings and `USBSTS` it sets `HSEE` (bit 3), `INTE` and `RS`, one read-modify-write each, in that order.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -164,6 +164,7 @@ Run / stop and resets.
 Sources:
 
 - standard (high): xHCI 1.1, 5.4.1 `USBCMD`
+- decompile (high): bootloader controller set-up `0x000BAE6C`: `HCRST` at `0x000BAEF4..0x000BAF26`, `HSEE` / `INTE` / `RS` at `0x000BB036..0x000BB080`
 
 `RS` sources:
 
@@ -185,7 +186,7 @@ Sources:
 
 Offset `0x024` · access `rw` · 32 bits
 
-Status; the event and change bits are write-1-to-clear. The bring-up's stop path writes all-ones here.
+Status; the event and change bits are write-1-to-clear. The bootloader's controller set-up writes all-ones here after the event ring and before `RS`. Its stop routine prints `USBSTS` first, and only a controller that reads neither `HCH` nor `CNR` gets `RS` cleared. It then reads `USBSTS` until `HCH` shows: read, wait 1 ms, test, up to 5000 times, then `xHC stop USBSTS: %x`. Its reset routine waits for `CNR` to clear the same way (`xHC reset USBSTS: %x`).
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -199,6 +200,7 @@ Sources:
 
 - standard (high): xHCI 1.1, 5.4.2 `USBSTS`
 - measured (high): reference log pre-handover `XHCI-STOP` prints `USBSTS 18` (`EINT | PCD`) because of the hub
+- decompile (high): bootloader: stop `0x000BC62C` (`HCH` loop `0x000BC6B0..0x000BC6D2`), reset `0x000BBFD0` (`CNR` loop `0x000BC000..0x000BC020`), all-ones write `0x000BB02A..0x000BB032`
 
 `HCH` sources:
 
@@ -493,7 +495,7 @@ Sources:
 
 Offset `0x420`, 5 elements 0x10 apart · access `rw` · 32 bits
 
-Port status and control. Empty but powered is `0x2A0`; the USB2 port adds `DR`.
+Port status and control. Empty but powered is `0x2A0`; the USB2 port adds `DR`. The bootloader resets root port 1 by writing back the value it read with `PR` set (`0x400202E1` becomes `0x400202F1`, which also clears `CSC`), and sends `Enable Slot` on its next 200 ms poll after the Port Status Change Event.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -517,6 +519,7 @@ Sources:
 
 - standard (high): xHCI 1.1, 5.4.8 `PORTSC`
 - measured (high): Raspberry Pi 4B d03115, moving a stick between sockets: `0x400202e1` USB2 just connected, `0x40000e03` USB2 enumerated, `0x00021203` USB3 SuperSpeed, `0x000002a0` empty
+- trace (high): the pinned bootloader under `--log xhci`: `PORTSC1 0x400202e1 <- 0x400202f1` at 4.950839 s, `Enable Slot` at 5.155671 s
 
 `CCS` sources:
 

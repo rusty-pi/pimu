@@ -30,7 +30,7 @@ Sources:
 | `0x024` | [`PRESENT_STATE`](#present_state) | r | 32 | 2, best high |
 | `0x028` | [`HOST_CONTROL`](#host_control) | rw | 32 | 1, best high |
 | `0x02C` | [`CLOCK_CONTROL`](#clock_control) | rw | 32 | 3, best high |
-| `0x030` | [`INT_STATUS`](#int_status) | w1c | 32 | 1, best high |
+| `0x030` | [`INT_STATUS`](#int_status) | w1c | 32 | 2, best high |
 | `0x034` | [`INT_STATUS_EN`](#int_status_en) | rw | 32 | 1, best high |
 | `0x038` | [`INT_SIGNAL_EN`](#int_signal_en) | rw | 32 | 1, best high |
 | `0x03C` | [`HOST_CONTROL2`](#host_control2) | rw | 32 | 1, best high |
@@ -189,7 +189,7 @@ Idle value: card inserted and stable, card-detect and write-protect pins high (w
 | Bits | Field | Access | Notes |
 |---|---|---|---|
 | 10 | `BUF_WRITE_EN` | r | The buffer has room for a PIO write. |
-| 11 | `BUF_READ_EN` | r | The buffer holds data for a PIO read. |
+| 11 | `BUF_READ_EN` | r | The buffer holds data for a PIO read. It is a level, not a latch: it drops after the last word of a block and comes back once the next block has arrived. Both stock stages read `PRESENT_STATE` before every `BUFFER_DATA` read and read the word only while this bit is set. `BUF_READ_RDY` in `INT_STATUS` stays latched from the first block on, so it cannot pace later blocks of a `CMD18`. The model fills the buffer at once, so a driver that paces on the latch works in the model but would read later blocks too early on silicon. |
 | 23:20 | `DAT_LINES` | r | DAT[3:0] line levels. The card holds them low during the CMD11 1.8 V switch. |
 | 24 | `CMD_LINE` | r | CMD line level. |
 
@@ -204,7 +204,8 @@ Sources:
 
 `BUF_READ_EN` sources:
 
-- standard (high): SDHCI 3.00, 2.2.9
+- standard (high): SDHCI 3.00, 2.2.9 and 2.2.17
+- trace (high): bootloader: `PRESENT_STATE` at `0x000815DA`, then `BUFFER_DATA` at `0x000815C8`, per word; start4: `0x3EC51F5E`, then `0x3ED6A71C`
 
 `DAT_LINES` sources:
 
@@ -291,7 +292,7 @@ Sources:
 
 Offset `0x030` · access `w1c` · 32 bits
 
-Normal (15:0) and error (31:16) interrupt status, gated by `INT_STATUS_EN`.
+Normal (15:0) and error (31:16) interrupt status, gated by `INT_STATUS_EN`. The bootloader writes `0x31` before each command, then `0x1` once a command without data completes, or `0x21` (`CMD_COMPLETE | BUF_READ_RDY`) once a data command does. start4 writes all-ones before each command, and `0x1` after an R1b command (`CMD7`) before it waits for `XFER_COMPLETE`.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -308,6 +309,7 @@ Normal (15:0) and error (31:16) interrupt status, gated by `INT_STATUS_EN`.
 Sources:
 
 - standard (high): SDHCI 3.00, 2.2.17 / 2.2.18
+- trace (high): bootloader register-write helper `0x00081DC2`: 39 × `0x31`, 25 × `0x1`, 14 × `0x21`; start4 `0x3EC52C2E`: 104 × `0xFFFFFFFF`, 4 × `0x1`
 
 `CMD_COMPLETE` sources:
 

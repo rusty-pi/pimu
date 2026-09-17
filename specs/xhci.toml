@@ -135,11 +135,16 @@ confidence = "high"
 name   = "USBCMD"
 offset = 0x20
 access = "rw"
-notes  = "Run / stop and resets."
+notes  = "Run / stop and resets. The bootloader's controller set-up, right after it prints the port, slot and interrupter counts, sets `HCRST` (read-modify-write) and reads `USBCMD` until it clears: read, wait 1 ms, test, up to 5000 times, then `xHC HCRST timeout %x`. After the rings and `USBSTS` it sets `HSEE` (bit 3), `INTE` and `RS`, one read-modify-write each, in that order."
 
 [[register.source]]
 kind       = "standard"
 ref        = "xHCI 1.1, 5.4.1 `USBCMD`"
+confidence = "high"
+
+[[register.source]]
+kind       = "decompile"
+ref        = "bootloader controller set-up `0x000BAE6C`: `HCRST` at `0x000BAEF4..0x000BAF26`, `HSEE` / `INTE` / `RS` at `0x000BB036..0x000BB080`"
 confidence = "high"
 
 [[register.field]]
@@ -186,7 +191,7 @@ confidence = "high"
 name   = "USBSTS"
 offset = 0x24
 access = "rw"
-notes  = "Status; the event and change bits are write-1-to-clear. The bring-up's stop path writes all-ones here."
+notes  = "Status; the event and change bits are write-1-to-clear. The bootloader's controller set-up writes all-ones here after the event ring and before `RS`. Its stop routine prints `USBSTS` first, and only a controller that reads neither `HCH` nor `CNR` gets `RS` cleared. It then reads `USBSTS` until `HCH` shows: read, wait 1 ms, test, up to 5000 times, then `xHC stop USBSTS: %x`. Its reset routine waits for `CNR` to clear the same way (`xHC reset USBSTS: %x`)."
 
 [[register.source]]
 kind       = "standard"
@@ -196,6 +201,11 @@ confidence = "high"
 [[register.source]]
 kind       = "measured"
 ref        = "reference log pre-handover `XHCI-STOP` prints `USBSTS 18` (`EINT | PCD`) because of the hub"
+confidence = "high"
+
+[[register.source]]
+kind       = "decompile"
+ref        = "bootloader: stop `0x000BC62C` (`HCH` loop `0x000BC6B0..0x000BC6D2`), reset `0x000BBFD0` (`CNR` loop `0x000BC000..0x000BC020`), all-ones write `0x000BB02A..0x000BB032`"
 confidence = "high"
 
 [[register.field]]
@@ -591,7 +601,7 @@ offset = 0x420
 count  = 5
 stride = 0x10
 access = "rw"
-notes  = "Port status and control. Empty but powered is `0x2A0`; the USB2 port adds `DR`."
+notes  = "Port status and control. Empty but powered is `0x2A0`; the USB2 port adds `DR`. The bootloader resets root port 1 by writing back the value it read with `PR` set (`0x400202E1` becomes `0x400202F1`, which also clears `CSC`), and sends `Enable Slot` on its next 200 ms poll after the Port Status Change Event."
 
 [[register.source]]
 kind       = "standard"
@@ -601,6 +611,11 @@ confidence = "high"
 [[register.source]]
 kind       = "measured"
 ref        = "Raspberry Pi 4B d03115, moving a stick between sockets: `0x400202e1` USB2 just connected, `0x40000e03` USB2 enumerated, `0x00021203` USB3 SuperSpeed, `0x000002a0` empty"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "the pinned bootloader under `--log xhci`: `PORTSC1 0x400202e1 <- 0x400202f1` at 4.950839 s, `Enable Slot` at 5.155671 s"
 confidence = "high"
 
 [[register.field]]
