@@ -19,6 +19,8 @@ Sources:
 | `0x080` | [`PENDING`](#pending) | r | 32 | 1, best medium |
 | `0x084` | [`ACK76`](#ack76) | rw | 32 | 2, best medium |
 | `0x088` | [`ACK77`](#ack77) | rw | 32 | 2, best medium |
+| `0x0B4` | [`SECURE_MARK`](#secure_mark) | rw | 32 | 2, best high |
+| `0x0BC` | [`REG_0BC`](#reg_0bc) | r | 32 | 1, best high |
 | `0x0C0` | [`LOCK`](#lock) | rw | 32 | 2, best high |
 
 ## `DOORBELL`
@@ -63,6 +65,27 @@ Sources:
 
 - decompile (medium): ISR `0x3ED3A098` (handler table `gp+58004`)
 - trace (medium): `--log irqen`: neither core calls `enable_irq_source` for 76 or 77 — _so the interrupt path itself is not exercised by the boot so far_
+
+## `SECURE_MARK`
+
+Offset `0x0B4` · access `rw` · 32 bits
+
+Both bootloader stages write 0 here as they start, OR bit 31 of it into their secure-boot flags each time they work them out, and set bit 31 once any flag is set (`SIGNED_BOOT`, or the OTP secure-boot rows), so a later look within the stage sees secure boot even if the settings no longer say so. Reads 0 in the model, so there every look starts afresh.
+
+Sources:
+
+- decompile (high): EEPROM bootmain: `0xA7B88` (clear at start), `0xA92C6` (read into the flags), `0xA934A` / `0xA9352` (set bit 31 when the flags are non-zero)
+- trace (high): `--trace-mmio`, `--bootconf SIGNED_BOOT=1`: bootsys writes 0 at `0x80007ED0` and reads / sets it at `0x8000902C`, `0x800090A4` / `0x800090A8`; bootmain clears it, then every flags check reads it twice and writes `0x80000000`
+
+## `REG_0BC`
+
+Offset `0x0BC` · access `r` · 32 bits
+
+Both bootloader stages read this as they start, just before clearing `SECURE_MARK`, and keep bits 16-23. Meaning unknown; it reads 0 in the model.
+
+Sources:
+
+- trace (high): `--trace-mmio`: bootsys `0x80007EBE`, bootmain `0xA7B70`, each followed by a read of the system timer and the write to `SECURE_MARK`
 
 ## `LOCK`
 
