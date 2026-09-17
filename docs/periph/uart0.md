@@ -5,6 +5,7 @@
 - Bus: `vpu` (VPU bus address)
 - Base: `0x7E201000`
 - Size: `0x1000`
+- Interrupts: GIC id 153 (`GIC_SPI 121`)
 
 Transmit completes instantly in the model; receive is paced at the programmed baud rate against the modelled clock.
 
@@ -13,6 +14,12 @@ Sources:
 - datasheet (high): BCM2711 ARM Peripherals, UART chapter (ARM PL011)
 - linux (high): dtb start4 hands to Linux: `serial@7e201000`, `arm,pl011`, GIC SPI 121
 - inferred (medium): size: one 4 KiB page, the granularity of this window
+
+Interrupts (GIC id 153 (`GIC_SPI 121`)):
+
+Linux's `ttyAMA0`. The firmware polls the FIFO instead of taking the line.
+
+- linux (high): the dtb start4 hands to Linux: `serial@7e201000`, `arm,pl011`, GIC SPI 121
 
 ## Register map
 

@@ -5,6 +5,7 @@
 - Bus: `vpu` (VPU bus address)
 - Base: `0x7D5D2000`
 - Size: `0xF00`
+- Carried by: [`clkmon`](clkmon.md)
 
 Carved out of the `clkmon` window and decoded ahead of it. The per-channel counts are measured and live in `src/periph/avs.rs`; channel 3 follows the core-rail PMIC setpoint so start4's DVFS calibration converges. That calibration runs once per power-up, right after start4's PMIC log sweep: it walks the core rail until channel 3 reads 1.030 V (10300 tenths of a mV, within 50), measures every ring oscillator and PVT monitor there and 32 rail codes lower, works out the voltage at which each would run at its target speed, and sets the rail to the highest of them, held to 8300..11000. It does that twice, then writes the target windows (`LOWER` / `UPPER` and the PVT thresholds) and makes one monitoring pass: out of range, move the rail back by 4 codes; else raise it by 4 if any monitor is below its window, or lower it by 2 if none is inside one. A rail code is about 1.76 mV: `uV = ((code * 0x119400) >> 16) * 100`.
 
@@ -12,6 +13,12 @@ Sources:
 
 - linux (high): `avs-monitor@7d5d2000`, `brcm,bcm2711-avs-monitor`, `reg = <0x7d5d2000 0xf00>`
 - decompile (high): start4 DVFS code: `FUN_0ed603e2`, `FUN_0ed6040e`, `FUN_0ec3007a`, `FUN_0ec303e8`, `FUN_0ec302c2`
+
+Carried by [`clkmon`](clkmon.md):
+
+Carved out of the clock block's window and decoded ahead of it.
+
+- linux (high): `avs-monitor@7d5d2000` sits inside `clkmon`'s `reg = <0x7d5d0000 0x10000>`
 
 ## Register map
 

@@ -54,6 +54,25 @@ confidence = "high"
 # ref        = "..."
 # confidence = "high"
 
+# [block.parent]            # what carries this block: see below
+# name  = "bsc.PMIC"
+# notes = "..."
+#
+# [[block.parent.source]]
+# kind       = "decompile"
+# ref        = "..."
+# confidence = "high"
+
+# [block.irq]               # the interrupt lines it drives: see below
+# vpu     = 76              # or { ACK76 = 76, ACK77 = 77 }
+# gic_spi = 33
+# notes   = "..."
+#
+# [[block.irq.source]]
+# kind       = "linux"
+# ref        = "..."
+# confidence = "high"
+
 [[register]]
 name   = "DOORBELL"
 offset = 0x00
@@ -114,10 +133,30 @@ optional `note`. `kind` is one of:
 On `i2c` and `mdio` a register takes up one register number whatever its
 width, and `size` is the number of register numbers the device decodes.
 
+`parent` says *which* instance decodes that base — the thing `bus` cannot say.
+Four devices sit on `i2c`, but only on the BSC copy at `0x7E205E00`, and both
+PCI blocks are behind something different: `vl805` behind the root complex,
+`xhci` behind `vl805`'s BAR0. The same key records a window carved out of
+another window and decoded ahead of it (`avs` inside `clkmon`), because that is
+the same statement about who decodes an address. It names a block, optionally
+with the copy that carries the device (`"bsc.PMIC"`), and is **required** on
+`pci`, `i2c` and `mdio`, where nothing is memory-mapped. The build refuses a
+parent that is not a spec, a copy the parent does not have, a cycle, and a
+parent that cannot carry the child (only a `vpu` / `arm` block can, or another
+`pci` function for `pci` registers).
+
+`irq` records the lines the block drives: `vpu` is the interrupt number a VPU
+core vectors (64..127, what the logs and notes call the source), `gic_spi` the
+SPI number the device tree writes. Either is one line (`vpu = 97`) or several
+named ones (`gic_spi = { INTA = 143, MSI = 148 }`), and a name becomes part of
+the generated constant. The GIC constant is the id Linux reports, 32 above the
+SPI number.
+
 The build also refuses overlapping registers, a register past the window (or
 past its bank), a field outside the register width or overlapping another
 field, an unaligned offset, an address the bus cannot carry, a copy without a
-source, unknown keys, and names that would generate the same constant twice.
+source, an interrupt number outside its controller's range, unknown keys, and
+names that would generate the same constant twice.
 
 ## Generated constants
 
@@ -134,9 +173,12 @@ pub mod mcsync {
 ```
 
 A block with banks also gets `INSTANCES` / `INSTANCE_STRIDE`; each copy gets
-`<COPY>_BASE`; a register with a `reset` gets `<REG>_RESET`; each field gets
-`<REG>_<FIELD>_SHIFT` and `<REG>_<FIELD>_MASK` (the mask is in place, i.e.
-already shifted).
+`<COPY>_BASE`; an `irq` gets `IRQ_VPU` / `IRQ_GIC`, with the line's name
+appended where it has one (`IRQ_GIC_INTA`); a register with a `reset` gets
+`<REG>_RESET`; each field gets `<REG>_<FIELD>_SHIFT` and `<REG>_<FIELD>_MASK`
+(the mask is in place, i.e. already shifted). A device model uses the generated
+interrupt constant rather than its own literal — `src/periph/gic.rs`'s `ID_*`
+list and every `IRQ_SRC` come from the specs.
 
 Measured read-only values (ID registers, capability words) go in as `reset`
 with a `measured` source, and the device returns the generated `<REG>_RESET`
@@ -155,3 +197,9 @@ the spec pointing at them.
 - A new device model comes with its spec: it exports a `COVERAGE` and is
   listed in `periph::SPEC_COVERAGE`, and `tests/specs.rs` fails until both
   exist.
+- A new block, `parent`, copy or base also goes on the board sheet,
+  [`docs/board-sheet.svg`](../docs/board-sheet.svg), which is drawn by hand;
+  `tests/board_sheet.rs` fails until it is there, and
+  `cargo run -- spec-docs --update` rewrites the sheet's dark twin. The generated
+  [`docs/periph/README.md`](../docs/periph/README.md) carries the same
+  relations as a list, and the interrupt lines as a table.

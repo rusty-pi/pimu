@@ -26,6 +26,15 @@ kind       = "decompile"
 ref        = "start4db `gpio_expander_FXL6408.c`: probe `0x0ED18984`, `FXL6408_readreg` `0x0EC335A0`; a d03115 with `start_debug=1` logged no probe assert"
 confidence = "high"
 
+[block.parent]
+name  = "bsc.PMIC"
+notes = "The same bus as the PMICs, bus 8."
+
+[[block.parent.source]]
+kind       = "decompile"
+ref        = "`FUN_0ecf0ed0`: bus id 8 -> `0x7E205E00`; the expander driver's transfers open that bus (write helper `0x3ECF141E`)"
+confidence = "high"
+
 [[register]]
 name   = "DEVICE_ID"
 offset = 0x01

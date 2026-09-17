@@ -5,6 +5,7 @@
 - Bus: `vpu` (VPU bus address)
 - Base: `0x7E400000`
 - Size: `0x1000`
+- Interrupts: VPU source 97 · GIC id 129 (`GIC_SPI 97`)
 
 No display is modelled. Scanout catches up with a queued frame immediately, and a running channel raises its `DISPSTAT` frame flags once per 640x480@60 frame time (16683 µs) and, with their interrupts enabled, VPU interrupt source 97. Everything else is stored and read back.
 
@@ -12,6 +13,13 @@ Sources:
 
 - decompile (high): bootloader diagnostic-display channel-swap wait `0x0008adc0`; start4 display bring-up `0x3EC945CC`
 - linux (high): `arch/arm/boot/dts/broadcom/bcm2711.dtsi`: `hvs@7e400000` `interrupts = <GIC_SPI 97>`; start4 registers its HVS handler `0x3ECEED5C` on VPU source 97 (`--log irqtbl`)
+
+Interrupts (VPU source 97 · GIC id 129 (`GIC_SPI 97`)):
+
+A channel with `DISPEIRQx` and the flag enabled drives the line once per frame; the same number on both controllers is a coincidence.
+
+- linux (high): `arch/arm/boot/dts/broadcom/bcm2711.dtsi`: `hvs@7e400000`, `interrupts = <GIC_SPI 97 IRQ_TYPE_LEVEL_HIGH>`
+- trace (high): start4 registers its HVS handler `0x3ECEED5C` on VPU source 97 (`--log irqtbl`)
 
 ## Register map
 

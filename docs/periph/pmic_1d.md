@@ -5,6 +5,7 @@
 - Bus: `i2c` (7-bit I²C address)
 - Base: `0x1D`
 - Size: `0x100`
+- Carried by: [`bsc`](bsc.md), `PMIC` copy
 
 On the `bsc` PMIC copy (#78). Alone on a 4B rev 1.1 or 1.2, where it owns every rail; next to `pmic_core` on a 4B rev 1.4, a Pi 400 or a CM4, where `pmic_core` takes the core rail. start4's probe sweeps `0x00..0x1B` once, skipping `0x0C..0x0F`, to log it; it then writes a 4-byte config to `0x03..0x06` (`0x04`, `0x23`, `0x32`, `0x43` on a 4B rev 1.2), writes `0xA5` to `0x14` on boards with `pmic_core`, `0x1E` to `0x18` on a CM4, and on a 4B sets `0x16` bit 0 and writes 1 to `0x01`. Registers not listed read 0 until written.
 
@@ -12,6 +13,12 @@ Sources:
 
 - decompile (high): `pmic_init` `0x3ED4DAA8`: board flag 10 -> probe `0x3EDD20F2` -> `pmic_add` `0x3ED4D85C`; descriptor `0x3EE00570`: type `0x81`, addr `0x1D`, 0..1.39375 V
 - trace (high): board-flags word `gp+0x3BAF0` (`--dump 0x3EE3E810:4`) per revision code: a03111/c03111/c03112 `0x05DE04D7` (flag 10), b03114/d03114 `0x055E0CF7`, c03130 `0x0D5E0CF7`, a03140/d03140 `0x05184CF7` (flags 10 + 11), b03115/d03115 `0x055E18F7` (flags 11 + 12)
+
+Carried by [`bsc`](bsc.md), `PMIC` copy:
+
+start4's I²C driver picks its base from the bus id, and this part sits on bus 8.
+
+- decompile (high): `FUN_0ecf0ed0`: bus id 8 -> `0x7E205E00`; `pmic_init` `0x3ED4DAA8` opens that bus before it probes
 
 ## Register map
 

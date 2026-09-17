@@ -5,6 +5,7 @@
 - Bus: `vpu` (VPU bus address)
 - Base: `0x7E104000`
 - Size: `0x28`
+- Interrupts: VPU source 125
 
 Output comes from a fixed-seed xorshift so transcripts stay byte-identical. A running generator always has words waiting.
 
@@ -12,6 +13,12 @@ Sources:
 
 - linux (high): `rng@7e104000`, `brcm,bcm2711-rng200`, `reg = <0x7e104000 0x28>`; `drivers/char/hw_random/iproc-rng200.c` (`rpi-6.12.y` at aa731bab)
 - decompile (high): start4's RNG accesses, all in `0x3ED64A4E..0x3ED64E28`; bootloader init `0x8000378E`
+
+Interrupts (VPU source 125):
+
+`INT_STATUS` drives the line while an enabled condition is latched.
+
+- decompile (high): start4's RNG interrupt handler `0x3ED64BE8` reads `INT_STATUS`; its table entry is source 125
 
 ## Register map
 

@@ -5,6 +5,7 @@
 - Bus: `vpu` (VPU bus address)
 - Base: `0x7E340000`
 - Size: `0x1000`
+- Interrupts: GIC id 158 (`GIC_SPI 126`)
 
 Command engine wired to a modelled card, with PIO, SDMA and ADMA2 (32-bit) data paths. Every register is a 32-bit word here; narrow accesses pick their lane.
 
@@ -13,6 +14,12 @@ Sources:
 - standard (high): SD Host Controller Simplified Specification 3.00, section 2 (register map)
 - datasheet (high): BCM2835 ARM Peripherals, EMMC chapter: the same Arasan layout at the older block
 - linux (high): `mmc@7e340000` driven by `sdhci-iproc`; `mmc0: SDHCI controller on fe340000.mmc using ADMA` on the reference board
+
+Interrupts (GIC id 158 (`GIC_SPI 126`)):
+
+Shared with the legacy `emmc` controller.
+
+- linux (high): `mmc@7e340000`, `interrupts = <GIC_SPI 0x7e IRQ_TYPE_LEVEL_HIGH>`
 
 ## Register map
 

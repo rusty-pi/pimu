@@ -14,6 +14,20 @@ kind       = "inferred"
 ref        = "size: the SDC block starts at `0x7E001000`"
 confidence = "medium"
 
+[block.irq]
+vpu   = { ACK76 = 76, ACK77 = 77 }
+notes = "Each line is acked through the word named after it. Neither core enables them on the pinned boot, so the doorbells are polled rather than taken."
+
+[[block.irq.source]]
+kind       = "decompile"
+ref        = "ISR `0x3ED3A098` (handler table `gp+58004`) does `[ACK76] &= ~[PENDING]`, and `ACK77` for 77"
+confidence = "high"
+
+[[block.irq.source]]
+kind       = "trace"
+ref        = "`--log irqen`: neither core calls `enable_irq_source` for 76 or 77"
+confidence = "high"
+
 [[register]]
 name   = "DOORBELL"
 offset = 0x00

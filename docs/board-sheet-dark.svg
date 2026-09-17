@@ -1,0 +1,458 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1320 910" width="1320" height="910" data-board="d03115" role="img" aria-labelledby="sheet-title sheet-desc">
+  <title id="sheet-title">Raspberry Pi 4 Model B, as rpi-virt-fw models it</title>
+  <desc id="sheet-desc">Board block diagram. The BCM2711 in the centre with its controller ports on the edges. Left: the SPI NOR flash on SPI0; the PMICs at 0x1E and 0x1B and the FXL6408 expander on I2C bus 8; LPDDR4 on the SDRAM controller. Right: the BCM54213PE PHY on GENET's MDIO bus; the VL805 xHCI controller and the VIA hub behind the PCIe root complex; the two HDMI outputs. Bottom: the microSD slot on EMMC2, the WiFi and Bluetooth module on the legacy EMMC, the USB-C port on DWC2, the 40-pin header on UART0 and BSC0, the camera and display connectors on BSC0. Every part carries the name of its spec in specs/, and every wire the parent link it draws.</desc>
+  <style>
+    /* palette: dark. Generated from the light sheet beside it by
+       `cargo run -- spec-docs --update` — edit that file, not this one. */
+    svg {
+      --paper: #0D1117;
+      --sheet: #161B22;
+      --soc: #172227;
+      --grp: #1F2B31;
+      --ink: #E6EDF3;
+      --muted: #9FB0B8;
+      --dim: #7D8B91;
+      --wire: #56D399;
+      --part: #E8917A;
+      --net: #8DB0F4;
+      --power: #E8A33D;
+    }
+    /* end palette */
+    .bg { fill: var(--paper); }
+    text { font-family: "DejaVu Sans", "Liberation Sans", Helvetica, Arial, sans-serif; }
+    .t  { font-size: 13px; font-weight: 600; fill: var(--ink); }
+    .tb { font-size: 18px; font-weight: 700; fill: var(--ink); }
+    .ts { font-size: 11.5px; font-weight: 600; fill: var(--ink); }
+    .m  { font-family: "DejaVu Sans Mono", "Liberation Mono", Menlo, Consolas, monospace; font-size: 9px; fill: var(--muted); }
+    .mw { font-family: "DejaVu Sans Mono", "Liberation Mono", Menlo, Consolas, monospace; font-size: 9px; fill: var(--wire); }
+    .mp { font-family: "DejaVu Sans Mono", "Liberation Mono", Menlo, Consolas, monospace; font-size: 9px; fill: var(--power); }
+    .md { font-family: "DejaVu Sans Mono", "Liberation Mono", Menlo, Consolas, monospace; font-size: 9px; fill: var(--dim); }
+    .mn { font-family: "DejaVu Sans Mono", "Liberation Mono", Menlo, Consolas, monospace; font-size: 9px; fill: var(--net); }
+    .tk { font-family: "DejaVu Sans Mono", "Liberation Mono", Menlo, Consolas, monospace; font-size: 7px; fill: var(--muted); letter-spacing: 0.1em; }
+    .w  { stroke: var(--wire); stroke-width: 1.6; fill: none; }
+    .wd { stroke: var(--dim); stroke-width: 1.4; fill: none; stroke-dasharray: 5 4; }
+    .wc { stroke: var(--dim); stroke-width: 1.1; fill: none; stroke-dasharray: 2 3; }
+    .pw { stroke: var(--power); stroke-width: 2.4; fill: none; stroke-linejoin: round; }
+    .ln { stroke: var(--ink); stroke-width: 1.2; fill: none; }
+    .dot { fill: var(--wire); }
+    .dotd { fill: var(--dim); }
+    .soc { fill: var(--soc); stroke: var(--ink); stroke-width: 2; }
+    .grp { fill: var(--grp); stroke: var(--ink); stroke-width: 1.1; }
+    .port { fill: var(--sheet); stroke: var(--ink); stroke-width: 1.2; }
+    .tag { fill: var(--sheet); stroke: var(--muted); stroke-width: 1; }
+    .tagd { fill: var(--sheet); stroke: var(--dim); stroke-width: 1; stroke-dasharray: 4 3; }
+    .part { fill: var(--sheet); stroke: var(--part); stroke-width: 1.7; }
+    .partd { fill: var(--sheet); stroke: var(--dim); stroke-width: 1.4; stroke-dasharray: 5 4; }
+    .conn { fill: var(--grp); stroke: var(--part); stroke-width: 1.4; }
+    .flag { fill: var(--sheet); stroke: var(--net); stroke-width: 1; }
+    .tblk { fill: var(--sheet); stroke: var(--ink); stroke-width: 1.4; }
+    .ah-w { fill: var(--wire); }
+    .ah-i { fill: var(--ink); }
+    .ah-p { fill: var(--power); }
+    .ah-c { fill: var(--dim); }
+  </style>
+  <defs>
+    <marker id="ahw" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-w" d="M0,0 L8,4 L0,8 z"/></marker>
+    <marker id="ahi" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-i" d="M0,0 L8,4 L0,8 z"/></marker>
+    <marker id="ahp" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="ah-p" d="M0,0 L8,4 L0,8 z"/></marker>
+    <marker id="ahc" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="ah-c" d="M0,0 L8,4 L0,8 z"/></marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1320" height="910"/>
+
+  <!-- power rails -->
+  <polyline class="pw" points="56,300 24,300 24,118 420,118 420,148" marker-end="url(#ahp)"/>
+  <text class="mp" x="96" y="112">VDD_CORE</text>
+  <text class="mp" x="426" y="140">AVS ch 3 senses it</text>
+  <polyline class="pw" points="56,370 38,370 38,595 54,595" marker-end="url(#ahp)"/>
+  <text class="mp" x="33" y="482" text-anchor="middle" transform="rotate(-90 33 482)">SDRAM rails</text>
+
+  <!-- clock -->
+  <g>
+    <rect class="part" x="590" y="58" width="80" height="38" rx="2"/>
+    <text class="ts" x="630" y="76" text-anchor="middle">54 MHz</text>
+    <text class="m" x="630" y="89" text-anchor="middle">crystal</text>
+  </g>
+  <line class="w" x1="630" y1="96" x2="630" y2="163" marker-end="url(#ahw)"/>
+
+  <!-- SoC -->
+  <rect class="soc" x="330" y="150" width="600" height="560" rx="4"/>
+  <text class="tb" x="346" y="178">BCM2711 C0</text>
+
+  <g data-block="cm clkmon">
+    <rect class="tag" x="560" y="165" width="140" height="34" rx="2"/>
+    <text class="ts" x="630" y="180" text-anchor="middle">CM · PLLs</text>
+    <text class="m" x="630" y="193" text-anchor="middle">cm · clkmon</text>
+  </g>
+
+  <g data-block="corectl mcsync systimer bootbox">
+    <rect class="grp" x="450" y="222" width="160" height="104" rx="3"/>
+    <text class="t" x="530" y="244" text-anchor="middle">VideoCore VPU ×2</text>
+    <text class="m" x="530" y="263" text-anchor="middle">corectl · mcsync</text>
+    <text class="m" x="530" y="277" text-anchor="middle">systimer · bootbox</text>
+    <text class="m" x="530" y="291" text-anchor="middle">bootcode · start4</text>
+  </g>
+
+  <g data-block="gicd gicc gich gicv armlocal">
+    <rect class="grp" x="660" y="222" width="160" height="104" rx="3"/>
+    <text class="t" x="740" y="244" text-anchor="middle">Cortex-A72 ×4</text>
+    <text class="m" x="740" y="263" text-anchor="middle">gicd · gicc · gich</text>
+    <text class="m" x="740" y="277" text-anchor="middle">gicv · armlocal</text>
+    <text class="m" x="740" y="291" text-anchor="middle">armstub · UEFI · Linux</text>
+  </g>
+
+  <g data-block="mbox armctrl">
+    <line class="ln" x1="613" y1="268" x2="657" y2="268" marker-start="url(#ahi)" marker-end="url(#ahi)"/>
+    <text class="m" x="635" y="262" text-anchor="middle">mbox</text>
+    <line class="ln" x1="613" y1="300" x2="657" y2="300" marker-end="url(#ahi)"/>
+    <text class="m" x="635" y="294" text-anchor="middle">armctrl</text>
+  </g>
+
+  <!-- the VPU reaches the endpoint's BAR0 only through the 40-bit engine -->
+  <polyline class="w" points="502,390 502,355 832,355" marker-end="url(#ahw)"/>
+  <text class="mw" x="512" y="349">40-bit DMA → VL805 BAR0</text>
+
+  <!-- on-die blocks -->
+  <g data-block="dma" data-base="0x7E007000">
+    <rect class="tag" x="450" y="390" width="105" height="44" rx="2"/>
+    <text class="ts" x="502" y="408" text-anchor="middle">DMA</text>
+    <text class="m" x="502" y="422" text-anchor="middle">0x7E007000</text>
+  </g>
+  <g data-block="dma4 dma_vpu">
+    <rect class="tag" x="570" y="390" width="105" height="44" rx="2"/>
+    <text class="ts" x="622" y="408" text-anchor="middle">DMA4 · dmalib</text>
+    <text class="m" x="622" y="422" text-anchor="middle">0x7E007B00</text>
+  </g>
+  <line class="wc" x1="568" y1="412" x2="557" y2="412" data-edge="dma4-&gt;dma" marker-end="url(#ahc)"/>
+  <g data-block="otp" data-base="0x7E20F000">
+    <rect class="tag" x="690" y="390" width="105" height="44" rx="2"/>
+    <text class="ts" x="742" y="408" text-anchor="middle">OTP fuses</text>
+    <text class="m" x="742" y="422" text-anchor="middle">0x7E20F000</text>
+  </g>
+
+  <g data-block="pm" data-base="0x7E100000">
+    <rect class="tag" x="450" y="450" width="105" height="44" rx="2"/>
+    <text class="ts" x="502" y="468" text-anchor="middle">PM · watchdog</text>
+    <text class="m" x="502" y="482" text-anchor="middle">0x7E100000</text>
+  </g>
+  <g data-block="avs pvt">
+    <rect class="tag" x="570" y="450" width="105" height="44" rx="2"/>
+    <text class="ts" x="622" y="468" text-anchor="middle">AVS · PVT ×18</text>
+    <text class="m" x="622" y="482" text-anchor="middle">0x7D5D2000</text>
+  </g>
+  <polyline class="wc" points="568,472 440,472 440,190 558,190" data-edge="avs-&gt;clkmon pvt-&gt;clkmon" marker-end="url(#ahc)"/>
+  <text class="md" x="446" y="206">carved out of clkmon</text>
+  <g data-block="rng" data-base="0x7E104000">
+    <rect class="tag" x="690" y="450" width="105" height="44" rx="2"/>
+    <text class="ts" x="742" y="468" text-anchor="middle">RNG200</text>
+    <text class="m" x="742" y="482" text-anchor="middle">0x7E104000</text>
+  </g>
+
+  <g data-block="vce vce_ctrl">
+    <rect class="tag" x="450" y="510" width="105" height="44" rx="2"/>
+    <text class="ts" x="502" y="528" text-anchor="middle">VCE codec</text>
+    <text class="m" x="502" y="542" text-anchor="middle">0x7F100000</text>
+  </g>
+  <g data-block="asb" data-base="0x7E00A000">
+    <rect class="tagd" x="570" y="510" width="105" height="44" rx="2"/>
+    <text class="ts" x="622" y="528" text-anchor="middle">ASB bridges</text>
+    <text class="md" x="622" y="542" text-anchor="middle">0x7E00A000</text>
+  </g>
+  <g data-block="hvs" data-base="0x7E400000">
+    <rect class="tag" x="690" y="510" width="105" height="44" rx="2"/>
+    <text class="ts" x="742" y="528" text-anchor="middle">HVS</text>
+    <text class="m" x="742" y="542" text-anchor="middle">0x7E400000</text>
+  </g>
+  <line class="w" x1="795" y1="520" x2="832" y2="520" marker-end="url(#ahw)"/>
+  <polyline class="w" points="815,520 815,590 832,590" marker-end="url(#ahw)"/>
+  <circle class="dot" cx="815" cy="520" r="2.8"/>
+
+  <g data-block="aux" data-base="0x7E215000">
+    <rect class="tag" x="450" y="570" width="105" height="44" rx="2"/>
+    <text class="ts" x="502" y="588" text-anchor="middle">AUX mini-UART</text>
+    <text class="m" x="502" y="602" text-anchor="middle">0x7E215000</text>
+  </g>
+  <g data-block="hd" data-base="0x7E808000">
+    <rect class="tag" x="570" y="570" width="105" height="44" rx="2"/>
+    <text class="ts" x="622" y="588" text-anchor="middle">USB power</text>
+    <text class="m" x="622" y="602" text-anchor="middle">0x7E808000</text>
+  </g>
+  <g>
+    <rect class="tagd" x="690" y="570" width="105" height="44" rx="2"/>
+    <text class="ts" x="742" y="588" text-anchor="middle">GPIO mux</text>
+    <text class="md" x="742" y="602" text-anchor="middle">stub, no spec</text>
+  </g>
+
+  <!-- left ports -->
+  <g data-block="spi0" data-base="0x7E204000">
+    <rect class="port" x="330" y="190" width="96" height="34"/>
+    <text class="ts" x="378" y="204" text-anchor="middle">SPI0</text>
+    <text class="m" x="378" y="217" text-anchor="middle">0x7E204000</text>
+  </g>
+  <g data-block="bsc" data-base="0x7E205E00">
+    <rect class="port" x="330" y="300" width="96" height="34"/>
+    <text class="ts" x="378" y="314" text-anchor="middle">BSC bus 8</text>
+    <text class="m" x="378" y="327" text-anchor="middle">0x7E205E00</text>
+  </g>
+  <g data-block="sdramc sdc">
+    <rect class="port" x="330" y="578" width="96" height="34"/>
+    <text class="ts" x="378" y="592" text-anchor="middle">SDRAMC</text>
+    <text class="m" x="378" y="605" text-anchor="middle">0x7DC00000</text>
+  </g>
+
+  <!-- right ports -->
+  <g data-block="genet" data-base="0x7D580000">
+    <rect class="port" x="834" y="190" width="96" height="34"/>
+    <text class="ts" x="882" y="204" text-anchor="middle">GENET v5</text>
+    <text class="m" x="882" y="217" text-anchor="middle">0x7D580000</text>
+  </g>
+  <g data-block="pcie" data-base="0x7D500000">
+    <rect class="port" x="834" y="338" width="96" height="34"/>
+    <text class="ts" x="882" y="352" text-anchor="middle">PCIe RC</text>
+    <text class="m" x="882" y="365" text-anchor="middle">0x7D500000</text>
+  </g>
+  <g data-block="hdmi hdmi_ddc hdmi_auto_i2c">
+    <rect class="port" x="834" y="503" width="96" height="34"/>
+    <text class="ts" x="882" y="517" text-anchor="middle">HDMI0</text>
+    <text class="m" x="882" y="530" text-anchor="middle">0x7EF00700</text>
+  </g>
+  <g>
+    <rect class="port" x="834" y="573" width="96" height="34"/>
+    <text class="ts" x="882" y="587" text-anchor="middle">HDMI1</text>
+    <text class="m" x="882" y="600" text-anchor="middle">0x7EF05700</text>
+  </g>
+
+  <!-- bottom ports -->
+  <g data-block="emmc2" data-base="0x7E340000">
+    <rect class="port" x="340" y="676" width="100" height="34"/>
+    <text class="ts" x="390" y="690" text-anchor="middle">EMMC2</text>
+    <text class="m" x="390" y="703" text-anchor="middle">0x7E340000</text>
+  </g>
+  <g data-block="emmc" data-base="0x7E300000">
+    <rect class="port" x="460" y="676" width="100" height="34"/>
+    <text class="ts" x="510" y="690" text-anchor="middle">EMMC legacy</text>
+    <text class="m" x="510" y="703" text-anchor="middle">0x7E300000</text>
+  </g>
+  <g data-block="dwc2" data-base="0x7E980000">
+    <rect class="port" x="580" y="676" width="100" height="34"/>
+    <text class="ts" x="630" y="690" text-anchor="middle">DWC2 OTG</text>
+    <text class="m" x="630" y="703" text-anchor="middle">0x7E980000</text>
+  </g>
+  <g data-block="uart0" data-base="0x7E201000">
+    <rect class="port" x="700" y="676" width="100" height="34"/>
+    <text class="ts" x="750" y="690" text-anchor="middle">UART0</text>
+    <text class="m" x="750" y="703" text-anchor="middle">0x7E201000</text>
+  </g>
+  <g data-block="bsc" data-base="0x7E205000">
+    <rect class="port" x="820" y="676" width="100" height="34"/>
+    <text class="ts" x="870" y="690" text-anchor="middle">BSC0</text>
+    <text class="m" x="870" y="703" text-anchor="middle">0x7E205000</text>
+  </g>
+
+  <!-- left: the boot flash -->
+  <g>
+    <rect class="part" x="56" y="177" width="190" height="60" rx="2"/>
+    <text class="t" x="151" y="198" text-anchor="middle">SPI NOR flash</text>
+    <text class="m" x="151" y="213" text-anchor="middle">pieeprom.bin</text>
+    <text class="m" x="151" y="226" text-anchor="middle">GPIO 40-43 · ALT4</text>
+  </g>
+  <line class="w" x1="246" y1="207" x2="330" y2="207"/>
+
+  <!-- left: I2C bus 8 -->
+  <g data-block="pmic_core" data-base="0x1E">
+    <rect class="part" x="56" y="272" width="190" height="56" rx="2"/>
+    <text class="t" x="151" y="292" text-anchor="middle">PMIC 0x1E</text>
+    <text class="m" x="151" y="307" text-anchor="middle">core rail · type 0x82</text>
+    <text class="m" x="151" y="320" text-anchor="middle">setpoint reg 0x25</text>
+  </g>
+  <g data-block="pmic_rails" data-base="0x1B">
+    <rect class="part" x="56" y="342" width="190" height="56" rx="2"/>
+    <text class="t" x="151" y="362" text-anchor="middle">PMIC 0x1B</text>
+    <text class="m" x="151" y="377" text-anchor="middle">SDRAM + I/O · type 0x83</text>
+  </g>
+  <text class="m" x="151" y="390" text-anchor="middle" data-block-alt="pmic_1d">0x1D instead, on rev &lt;= 1.4</text>
+  <g data-block="fxl6408" data-base="0x43">
+    <rect class="part" x="56" y="415" width="190" height="136" rx="2"/>
+    <text class="t" x="151" y="434" text-anchor="middle">FXL6408 expander</text>
+    <text class="m" x="151" y="448" text-anchor="middle">0x43 · GPIO 128-135</text>
+    <text class="mn" x="68" y="467">128 BT_ON</text><text class="m" x="236" y="467" text-anchor="end">WiFi · BT</text>
+    <text class="mn" x="68" y="478">129 WL_ON</text><text class="m" x="236" y="478" text-anchor="end">WiFi · BT</text>
+    <text class="mn" x="68" y="489">130 PWR_LED_OFF</text><text class="m" x="236" y="489" text-anchor="end">PWR LED</text>
+    <text class="mn" x="68" y="500">131 GLOBAL_RESET</text>
+    <text class="mn" x="68" y="511">132 VDD_SD_IO_SEL</text><text class="m" x="236" y="511" text-anchor="end">SD 1.8 V</text>
+    <text class="mn" x="68" y="522">133 CAM_GPIO</text><text class="m" x="236" y="522" text-anchor="end">camera</text>
+    <text class="mn" x="68" y="533">134 SD_PWR_ON</text><text class="m" x="236" y="533" text-anchor="end">SD slot</text>
+    <text class="mn" x="68" y="544">135 SD_OC_N</text><text class="m" x="236" y="544" text-anchor="end">SD, input</text>
+  </g>
+  <polyline class="w" points="282,300 282,434"/>
+  <line class="w" x1="246" y1="300" x2="282" y2="300" data-edge="pmic_core-&gt;bsc.PMIC"/>
+  <line class="w" x1="246" y1="370" x2="282" y2="370" data-edge="pmic_rails-&gt;bsc.PMIC pmic_1d-&gt;bsc.PMIC"/>
+  <line class="w" x1="246" y1="434" x2="282" y2="434" data-edge="fxl6408-&gt;bsc.PMIC"/>
+  <line class="w" x1="282" y1="317" x2="330" y2="317"/>
+  <circle class="dot" cx="282" cy="317" r="2.8"/>
+  <circle class="dot" cx="282" cy="370" r="2.8"/>
+  <text class="mw" x="289" y="404">I2C</text>
+
+  <!-- left: DRAM -->
+  <g>
+    <rect class="part" x="56" y="565" width="190" height="60" rx="2"/>
+    <text class="t" x="151" y="585" text-anchor="middle">LPDDR4 SDRAM</text>
+    <text class="m" x="151" y="600" text-anchor="middle">8 GB: 32 Gb dies, 2 ranks</text>
+    <text class="m" x="151" y="613" text-anchor="middle">MR8 is where the size comes from</text>
+  </g>
+  <line class="w" x1="246" y1="595" x2="330" y2="595"/>
+
+  <!-- right: Ethernet -->
+  <g data-block="bcm54213pe" data-base="1">
+    <rect class="part" x="1000" y="177" width="180" height="60" rx="2"/>
+    <text class="t" x="1090" y="198" text-anchor="middle">BCM54213PE</text>
+    <text class="m" x="1090" y="213" text-anchor="middle">gigabit PHY · MDIO addr 1</text>
+    <text class="m" x="1090" y="226" text-anchor="middle">no cable: link down</text>
+  </g>
+  <line class="w" x1="930" y1="207" x2="1000" y2="207" data-edge="bcm54213pe-&gt;genet"/>
+  <text class="mw" x="965" y="201" text-anchor="middle">RGMII · MDIO</text>
+  <g>
+    <rect class="conn" x="1220" y="187" width="80" height="40" rx="2"/>
+    <text class="ts" x="1260" y="211" text-anchor="middle">RJ45</text>
+  </g>
+  <line class="w" x1="1180" y1="207" x2="1220" y2="207"/>
+
+  <!-- right: USB 3 -->
+  <g data-block="vl805">
+    <rect class="part" x="1000" y="310" width="180" height="90" rx="2"/>
+    <text class="t" x="1090" y="330" text-anchor="middle">VL805 xHCI</text>
+    <text class="m" x="1090" y="345" text-anchor="middle">1106:3483 · bus 1 dev 0</text>
+    <text class="m" x="1090" y="358" text-anchor="middle">fw upload via cfg 0x78/0x7C</text>
+  </g>
+  <line class="wc" x1="1008" y1="366" x2="1172" y2="366" data-edge="xhci-&gt;vl805"/>
+  <g data-block="xhci">
+    <text class="m" x="1090" y="380" text-anchor="middle">xhci behind BAR0</text>
+    <text class="m" x="1090" y="392" text-anchor="middle">ports 2-5 USB 3.0</text>
+  </g>
+  <line class="w" x1="930" y1="355" x2="1000" y2="355" data-edge="vl805-&gt;pcie"/>
+  <text class="mw" x="965" y="349" text-anchor="middle">PCIe link</text>
+  <g>
+    <rect class="part" x="1000" y="425" width="180" height="50" rx="2"/>
+    <text class="t" x="1090" y="445" text-anchor="middle">VIA Labs hub</text>
+    <text class="m" x="1090" y="460" text-anchor="middle">2109:3431 · 4 ports</text>
+  </g>
+  <line class="w" x1="1090" y1="400" x2="1090" y2="425"/>
+  <text class="mw" x="1096" y="414">root port 1</text>
+  <g>
+    <rect class="conn" x="1220" y="325" width="80" height="145" rx="2"/>
+    <text class="ts" x="1260" y="393" text-anchor="middle">USB-A</text>
+    <text class="m" x="1260" y="407" text-anchor="middle">×4</text>
+  </g>
+  <line class="w" x1="1180" y1="345" x2="1220" y2="345"/>
+  <line class="w" x1="1180" y1="450" x2="1220" y2="450"/>
+  <text class="m" x="1260" y="484" text-anchor="middle">--usb disk</text>
+  <text class="m" x="1260" y="495" text-anchor="middle">090c:1000</text>
+
+  <!-- right: display -->
+  <line class="w" x1="930" y1="520" x2="1220" y2="520"/>
+  <text class="mw" x="1075" y="514" text-anchor="middle">DDC 0x7EF04500 · no monitor</text>
+  <line class="w" x1="930" y1="590" x2="1220" y2="590"/>
+  <text class="mw" x="1075" y="584" text-anchor="middle">DDC 0x7EF09500 · no monitor</text>
+  <g>
+    <rect class="conn" x="1220" y="506" width="80" height="28" rx="2"/>
+    <text class="ts" x="1260" y="524" text-anchor="middle">HDMI0</text>
+  </g>
+  <g>
+    <rect class="conn" x="1220" y="576" width="80" height="28" rx="2"/>
+    <text class="ts" x="1260" y="594" text-anchor="middle">HDMI1</text>
+  </g>
+
+  <!-- bottom wires -->
+  <line class="w" x1="390" y1="710" x2="390" y2="780"/>
+  <text class="mw" x="396" y="748">SD bus</text>
+  <line class="wd" x1="510" y1="710" x2="510" y2="780"/>
+  <text class="md" x="516" y="748">SDIO</text>
+  <line class="w" x1="630" y1="710" x2="630" y2="780"/>
+  <text class="mw" x="636" y="740">USB 2.0</text>
+  <line class="w" x1="720" y1="710" x2="720" y2="780"/>
+  <text class="mw" x="714" y="766" text-anchor="end">GPIO 14/15</text>
+  <line class="wd" x1="870" y1="710" x2="870" y2="780"/>
+  <polyline class="wd" points="870,745 780,745 780,780"/>
+  <circle class="dotd" cx="870" cy="745" r="2.8"/>
+  <text class="md" x="786" y="770">GPIO 0/1</text>
+  <text class="md" x="876" y="766">GPIO 44/45</text>
+
+  <!-- bottom parts -->
+  <g>
+    <rect class="part" x="335" y="780" width="110" height="60" rx="2"/>
+    <text class="t" x="390" y="800" text-anchor="middle">microSD slot</text>
+    <text class="m" x="390" y="814" text-anchor="middle">card: sdcard.rs</text>
+    <text class="m" x="390" y="827" text-anchor="middle">boot medium</text>
+  </g>
+  <g>
+    <rect class="partd" x="455" y="780" width="110" height="60" rx="2"/>
+    <text class="t" x="510" y="800" text-anchor="middle">WiFi · BT</text>
+    <text class="md" x="510" y="814" text-anchor="middle">not modelled</text>
+    <text class="md" x="510" y="827" text-anchor="middle">empty SDIO bus</text>
+  </g>
+  <g>
+    <rect class="part" x="575" y="780" width="110" height="60" rx="2"/>
+    <text class="t" x="630" y="800" text-anchor="middle">USB-C</text>
+    <text class="m" x="630" y="814" text-anchor="middle">power in + OTG</text>
+    <text class="m" x="630" y="827" text-anchor="middle">host, nothing on it</text>
+  </g>
+  <g>
+    <rect class="part" x="695" y="780" width="110" height="60" rx="2"/>
+    <text class="t" x="750" y="800" text-anchor="middle">40-pin header</text>
+    <text class="m" x="750" y="814" text-anchor="middle">ttyAMA0 console</text>
+    <text class="m" x="750" y="827" text-anchor="middle">HAT EEPROM probed</text>
+  </g>
+  <g>
+    <rect class="part" x="815" y="780" width="110" height="60" rx="2"/>
+    <text class="t" x="870" y="800" text-anchor="middle">CSI · DSI FPC</text>
+    <text class="m" x="870" y="814" text-anchor="middle">camera, display</text>
+    <text class="m" x="870" y="827" text-anchor="middle">probed, empty</text>
+  </g>
+
+  <!-- net labels: expander pins, joined by name -->
+  <polygon class="flag" points="335,848 394,848 400,854.5 394,861 335,861"/>
+  <text class="mn" x="340" y="857.5">SD_PWR_ON</text>
+  <polygon class="flag" points="335,864 415,864 421,870.5 415,877 335,877"/>
+  <text class="mn" x="340" y="873.5">VDD_SD_IO_SEL</text>
+  <polygon class="flag" points="335,880 383,880 389,886.5 383,893 335,893"/>
+  <text class="mn" x="340" y="889.5">SD_OC_N</text>
+  <polygon class="flag" points="455,848 492,848 498,854.5 492,861 455,861"/>
+  <text class="mn" x="460" y="857.5">WL_ON</text>
+  <polygon class="flag" points="455,864 492,864 498,870.5 492,877 455,877"/>
+  <text class="mn" x="460" y="873.5">BT_ON</text>
+  <polygon class="flag" points="815,848 868,848 874,854.5 868,861 815,861"/>
+  <text class="mn" x="820" y="857.5">CAM_GPIO</text>
+
+  <!-- legend -->
+  <line class="w" x1="60" y1="662" x2="92" y2="662"/>
+  <text class="m" x="98" y="665">modelled link</text>
+  <line class="wd" x1="60" y1="678" x2="92" y2="678"/>
+  <text class="m" x="98" y="681">probed or not modelled</text>
+  <line class="wc" x1="60" y1="694" x2="92" y2="694"/>
+  <text class="m" x="98" y="697">carried by, without a wire</text>
+  <line class="pw" x1="60" y1="710" x2="92" y2="710"/>
+  <text class="m" x="98" y="713">power rail</text>
+  <polygon class="flag" points="60,720 86,720 92,726.5 86,733 60,733"/>
+  <text class="m" x="98" y="729">net label, joined by name</text>
+
+  <!-- title block -->
+  <rect class="tblk" x="950" y="780" width="350" height="120"/>
+  <line class="ln" x1="950" y1="812" x2="1300" y2="812"/>
+  <line class="ln" x1="950" y1="840" x2="1300" y2="840"/>
+  <line class="ln" x1="950" y1="868" x2="1300" y2="868"/>
+  <line class="ln" x1="1125" y1="812" x2="1125" y2="900"/>
+  <text class="tk" x="958" y="791">TITLE</text>
+  <text class="t" x="958" y="806">Pi 4 Model B, as modelled</text>
+  <text class="tk" x="958" y="822">REVISION CODE</text>
+  <text class="m" x="958" y="835">d03115 · PCB rev 1.5</text>
+  <text class="tk" x="1133" y="822">SOC</text>
+  <text class="m" x="1133" y="835">BCM2711 C0</text>
+  <text class="tk" x="958" y="850">SOURCE</text>
+  <text class="m" x="958" y="863">specs/*.toml</text>
+  <text class="tk" x="1133" y="850">CHECKED BY</text>
+  <text class="m" x="1133" y="863">tests/board_sheet.rs</text>
+  <text class="tk" x="958" y="878">HAND-DRAWN</text>
+  <text class="m" x="958" y="892">edit this file, not a generator</text>
+  <text class="tk" x="1133" y="878">SHEET</text>
+  <text class="m" x="1133" y="892">1 / 1</text>
+</svg>

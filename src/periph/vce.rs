@@ -171,9 +171,9 @@ const ENDCODE_BITS: u32 = STATUS_ENDCODE_MASK >> STATUS_ENDCODE_SHIFT;
 /// re-arms itself, never a result a launch waits for.
 const ENDCODE_STALL: u32 = 5;
 
-/// The interrupt source `vce_obtain_semaphore` enables (`0x44`). start4's
-/// handler for it is `0x3ED9D1EA`.
-pub const IRQ_SRC: u32 = 68;
+/// The interrupt source `vce_obtain_semaphore` enables (`0x44`), from
+/// `specs/vce_ctrl.toml`. start4's handler for it is `0x3ED9D1EA`.
+pub const IRQ_SRC: u32 = vce_ctrl::IRQ_VPU;
 
 pub struct Vce {
     data: Vec<u8>,
