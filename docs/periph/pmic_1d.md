@@ -20,7 +20,7 @@ Sources:
 | `0x00F` | [`ID`](#id) | r | 8 | 2, best high |
 | `0x013` | [`SETPOINT_SDRAM`](#setpoint_sdram) | rw | 8 | 2, best high |
 | `0x014` | [`SETPOINT_CORE`](#setpoint_core) | rw | 8 | 3, best high |
-| `0x01A` | [`STATUS`](#status) | r | 8 | 2, best high |
+| `0x01A` | [`STATUS`](#status) | r | 8 | 4, best high |
 | `0x016` | [`REG_16`](#reg_16) | rw | 8 | 2, best high |
 | `0x019` | [`REG_19`](#reg_19) | rw | 8 | 2, best high |
 | `0x01C` | [`SETPOINT_RAIL6`](#setpoint_rail6) | rw | 8 | 1, best high |
@@ -62,20 +62,22 @@ Sources:
 
 ## `STATUS`
 
-Offset `0x01A` · access `r` · 8 bits
+Offset `0x01A` · access `r` · 8 bits · reset `0x30`
 
-Status. start4 polls it every 100 ms once the ARM runs. Its status callback reports under-voltage unless `STATUS & mask == 0x20`, where the mask is a byte it sets to `0x60` at the end of each call, so a healthy part has to read bit 5 set and bit 6 clear. When bit 6 is set it writes `0x40` back. The model's reset value `0x10` has bit 5 clear. With it, the pinned firmware on `--board-rev b03112` answers `GET_THROTTLED` with `0x50005` (under-voltage now and throttled). On `b03112` and `b03114` it then slows the ARM and, on `b03114`, drops `pmic_core`'s setpoint and `MODE` after the release. It also writes the expander's `OUTPUT` to `0x44` after every poll. A reset value with bit 5 set would match a board with good input power; which value a real part reads is not measured.
+Status. start4 polls it every 100 ms once the ARM runs. Its status callback reports under-voltage unless `STATUS & mask == 0x20`, where the mask is a byte it sets to `0x60` at the end of each call, so a healthy part has to read bit 5 set and bit 6 clear. When bit 6 is set it writes `0x40` back. The model's reset value `0x30` is that healthy part, settled and with good input power: `SETTLED` and `POWER_OK` set, `LATCHED` clear. Which value a real part reads is not measured; there is no board with this part to read it on. Writes change only `LATCHED`. With an earlier reset value of `0x10`, `POWER_OK` clear, the pinned firmware on `--board-rev b03112` answered `GET_THROTTLED` with `0x50005` (under-voltage now and throttled). On `b03112` and `b03114` it then slowed the ARM and, on `b03114`, dropped `pmic_core`'s setpoint and `MODE` after the release. It also wrote the expander's `OUTPUT` to `0x44` after every poll.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
 | 4 | `SETTLED` | r | Voltage change complete; polled after every setpoint write. |
 | 5 | `POWER_OK` | r | Our name. start4's status poll takes the part's input power as good only while this reads 1 (with `LATCHED` clear). |
-| 6 | `LATCHED` | r | Our name. start4's status poll writes `0x40` to the register when this bit is set, which reads as clearing a latched event. |
+| 6 | `LATCHED` | w1c | Our name. start4's status poll writes `0x40` to the register when this bit is set, which reads as clearing a latched event. The model clears it on that write; nothing in the model sets it. |
 
 Sources:
 
 - decompile (high): settle callback `0x3EDD25AE`
-- trace (high): the pinned firmware with `--board-rev b03112` and `--mbox-property 0x00030046`: reply `0x00050005`; with `b03112` and `b03114` under `--log pmic,expander`: `1d R 1a -> 10` then `expander: W 05 = 44` every 100 ms after the ARM release
+- inferred (low): reset `0x30`: what the settle callback `0x3EDD25AE` and the status callback `0x3EDD23F4` take as a settled part with good input power. Not measured
+- trace (high): the pinned firmware with a reset value of `0x10`, `--board-rev b03112` and `--mbox-property 0x00030046`: reply `0x00050005`; with `b03112` and `b03114` under `--log pmic,expander`: `1d R 1a -> 10` then `expander: W 05 = 44` every 100 ms after the ARM release
+- trace (high): the pinned firmware with the reset value `0x30` on `--board-rev b03112` and `b03114`, with `--ram-mb 2048`, `--mbox-property 0x00030046` and `--log pmic,expander`: reply `0x00000000`; `1d R 1a -> 30` every 100 ms and no write to `0x1A`; the expander's last `OUTPUT` write is `W 05 = 40` at the ARM release; on `b03114` `pmic_core` keeps setpoint `0x68` and `MODE` `0x05`
 
 `SETTLED` sources:
 
