@@ -419,8 +419,9 @@ fn pmic_addresses_are_separate_register_files() {
 
 /// A 4B up to rev 1.4 has one PMIC, at `0x1D`, in place of rev 1.5's pair
 /// (#78). Its setpoints decode, through `0x3EDD259A`, to the same voltages;
-/// its settled bit is reg `0x1A` bit 4 (`0x3EDD25AE`); and it passes the check
-/// `pmic_get_voltage` makes of it, `0x0F == 0x14 ^ 0xAD`.
+/// its settled bit is reg `0x1A` bit 4 (`0x3EDD25AE`); it passes the check
+/// `pmic_get_voltage` makes of it, `0x0F == 0x14 ^ 0xAD`; and its status poll
+/// (`0x3EDD23F4`) reads good input power, `0x1A & 0x60 == 0x20`.
 #[test]
 fn a_rev_1_2_board_has_the_one_0x1d_pmic() {
     let mut m = machine();
@@ -429,6 +430,11 @@ fn a_rev_1_2_board_has_the_one_0x1d_pmic() {
     assert!(pmic.responds_to(0x1D));
     assert!(!pmic.responds_to(0x1B) && !pmic.responds_to(0x1E));
 
+    assert_eq!(
+        pmic_read(&mut m, 0x1D, 0x1A) & 0x60,
+        0x20,
+        "0x1D power good"
+    );
     assert_eq!(pmic_read(&mut m, 0x1D, 0x13) as u32 * 6_250, 1_100_000);
     let core = pmic_read(&mut m, 0x1D, 0x14);
     assert_eq!(pmic_read(&mut m, 0x1D, 0x0F), core ^ 0xAD);

@@ -101,8 +101,15 @@
 //! `0x14` powers on at `0xA5` (1.031 V) so that the check passes where it
 //! does not. Its SDRAM rails get 1.1 V, as on rev 1.5.
 //!
+//! The `0x1D` part's status, reg `0x1A`, powers on at `0x30`: settled, and
+//! bit 5 set with bit 6 clear, which start4's 100 ms status poll
+//! (`0x3EDD23F4`) takes as good input power. With bit 5 clear it reports
+//! under-voltage and throttles the ARM. The poll writes `0x40` back when bit 6
+//! is set, so bit 6 clears on that write and the rest of the register ignores
+//! writes. The real part's value is not measured.
+//!
 //! Everything else reads back 0 until written. That is deliberate. Outside
-//! the setpoint registers, the settled bits and the `0x1D` part's check, the
+//! the setpoint registers, the status bits and the `0x1D` part's check, the
 //! firmware only *logs* what it reads, so inventing contents would be fiction
 //! with no observable effect.
 
@@ -139,6 +146,13 @@ const SETTLED_1D: (u8, u8) = (pmic_1d::STATUS as u8, pmic_1d::STATUS_SETTLED_MAS
 
 // The `0x1D` part's power-on values have to pass `pmic_get_voltage`'s check.
 const _: () = assert!(pmic_1d::ID_RESET == pmic_1d::SETPOINT_CORE_RESET ^ 0xAD);
+// Its power-on status has to read settled, and as good input power to the
+// status poll (`0x3EDD23F4`): `POWER_OK` set, `LATCHED` clear.
+const _: () = assert!(pmic_1d::STATUS_RESET & pmic_1d::STATUS_SETTLED_MASK != 0);
+const _: () = assert!(
+    pmic_1d::STATUS_RESET & (pmic_1d::STATUS_POWER_OK_MASK | pmic_1d::STATUS_LATCHED_MASK)
+        == pmic_1d::STATUS_POWER_OK_MASK
+);
 
 /// Every register the specs list is register-file storage; the status
 /// registers carry the settled latch.
@@ -182,6 +196,9 @@ pub struct PmicRegs {
     /// Which bit of which register the firmware polls for "the setpoint I just
     /// wrote has taken effect".
     settled: (u8, u8),
+    /// A register that a write only clears bits of: those of the mask it
+    /// writes as 1. As `(register, mask)`.
+    w1c: Option<(u8, u8)>,
     /// On the part that owns the SoC core rail: its setpoint register and the
     /// microvolts per step the descriptor's decode callback applies.
     core: Option<(u8, u32)>,
@@ -197,6 +214,7 @@ impl PmicRegs {
             ptr: 0,
             pending_ptr: false,
             settled,
+            w1c: None,
             core: None,
         }
     }
@@ -205,6 +223,15 @@ impl PmicRegs {
     fn owning_core(self, setpoint: u8, uv_per_step: u32) -> PmicRegs {
         PmicRegs {
             core: Some((setpoint, uv_per_step)),
+            ..self
+        }
+    }
+
+    /// Writes to `reg` clear the bits of `mask` they write as 1, and change
+    /// nothing else.
+    fn clearing_on_write(self, reg: u8, mask: u8) -> PmicRegs {
+        PmicRegs {
+            w1c: Some((reg, mask)),
             ..self
         }
     }
@@ -265,8 +292,10 @@ impl PmicRegs {
                     pmic_1d::SETPOINT_SDRAM as u8,
                     pmic_1d::SETPOINT_SDRAM_RESET as u8,
                 ),
+                (pmic_1d::STATUS as u8, pmic_1d::STATUS_RESET as u8),
             ],
-        );
+        )
+        .clearing_on_write(pmic_1d::STATUS as u8, pmic_1d::STATUS_LATCHED_MASK as u8);
         if alone {
             part.owning_core(pmic_1d::SETPOINT_CORE as u8, 6_250)
         } else {
@@ -367,7 +396,14 @@ impl Pmic {
             part.ptr,
             b
         );
-        part.regs.insert(part.ptr, b);
+        match part.w1c {
+            Some((reg, mask)) if reg == part.ptr => {
+                *part.regs.entry(reg).or_insert(0) &= !(b & mask);
+            }
+            _ => {
+                part.regs.insert(part.ptr, b);
+            }
+        }
         // Writing a rail setpoint starts a voltage ramp on real silicon; the
         // firmware then polls the part's "settled" bit until it sets. There is
         // nothing to ramp here, so latch it set immediately — the alternative
@@ -458,5 +494,30 @@ mod tests {
         assert_eq!(fitted(0x00D0_3115).core_rail_uv(), Some(850_000));
         assert_eq!(fitted(0x00D0_3114).core_rail_uv(), Some(850_000));
         assert_eq!(fitted(0x00C0_3112).core_rail_uv(), Some(0xA5 * 6_250));
+    }
+
+    /// start4's status poll (`0x3EDD23F4`) takes the `0x1D` part's input power
+    /// as good only while `STATUS & 0x60 == 0x20`, and writes `0x40` back when
+    /// bit 6 is set.
+    #[test]
+    fn the_0x1d_status_reads_as_good_power_and_clears_its_latch_on_write() {
+        let status = pmic_1d::STATUS as u8;
+        for rev in [0x00B0_3112, 0x00B0_3114] {
+            let mut pmic = fitted(rev);
+            assert_eq!(pmic.part(ADDR_1D).unwrap().reg(status), 0x30, "{rev:06x}");
+
+            let part = pmic.parts.iter_mut().find(|p| p.addr == ADDR_1D);
+            part.unwrap().regs.insert(status, 0x70);
+            pmic.begin(ADDR_1D, false);
+            pmic.write_byte(status);
+            pmic.write_byte(0x40);
+            assert_eq!(pmic.part(ADDR_1D).unwrap().reg(status), 0x30, "{rev:06x}");
+
+            // The other bits ignore writes.
+            pmic.begin(ADDR_1D, false);
+            pmic.write_byte(status);
+            pmic.write_byte(0x00);
+            assert_eq!(pmic.part(ADDR_1D).unwrap().reg(status), 0x30, "{rev:06x}");
+        }
     }
 }
