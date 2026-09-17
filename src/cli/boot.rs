@@ -59,13 +59,10 @@ MACHINE:
               The BCM2711 silicon, C0 by default.
     --board-rev <hex>
               The OTP revision code; by default a board that stepping shipped
-              on.
-    --ram-mb <n>
-              The RAM behind the bus, in MiB: 2048 by default with --eeprom,
-              512 for an ELF. It also decides which LPDDR4 parts the DRAM
-              controller reports, so the firmware trains and publishes the
-              size of a 2 GB board below 4096, a 4 GB board at 4096 and up,
-              and the 8 GB reference board at 8192 and up.
+              on. Its memory field is the board's memory: the RAM behind the
+              bus, and the LPDDR4 parts the DRAM controller reports, so the
+              firmware trains and publishes that size. `total_mem` in
+              `config.txt` cuts it down from there.
     --otp json:<file> | binary:<file>
               The OTP fuses, kept across runs: read before the boot when
               <file> exists, written back after the run when the firmware
@@ -241,7 +238,6 @@ enum HostNet {
 struct BootOpts {
     path: PathBuf,
     entry: Option<u32>,
-    ram_mb: Option<u32>,
     usb_mb: Option<u64>,
     /// No instruction cap by default — a full boot retires well over a billion,
     /// and the wall clock is the useful bound. `--max-steps` is for pinning a
@@ -301,7 +297,6 @@ impl BootOpts {
     fn parse(args: &[String]) -> Result<Option<Self>> {
         let mut path: Option<PathBuf> = None;
         let mut entry: Option<u32> = None;
-        let mut ram_mb: Option<u32> = None;
         let mut usb_mb: Option<u64> = None;
         let mut max_steps: Option<u64> = None;
         let mut max_wall_secs: u64 = 140;
@@ -355,7 +350,6 @@ impl BootOpts {
                         }
                     }
                 }
-                "--ram-mb" => ram_mb = Some(it.next().context("--ram-mb needs a value")?.parse()?),
                 "--max-steps" => {
                     max_steps = Some(it.next().context("--max-steps needs a value")?.parse()?)
                 }
@@ -538,7 +532,6 @@ impl BootOpts {
         Ok(Some(Self {
             path,
             entry,
-            ram_mb,
             usb_mb,
             max_steps,
             max_wall_secs,
@@ -969,7 +962,6 @@ struct Rig<'a> {
     opts: &'a BootOpts,
     /// The file `boot` was given: an EEPROM image or a VPU ELF.
     image: Vec<u8>,
-    ram_mb: u32,
     log: Log,
     usb_disk: Option<SharedUsbDisk>,
     bootrom: rpi_virt_fw::firmware::bootrom::BootRom,
@@ -985,17 +977,12 @@ impl<'a> Rig<'a> {
         usb_disk: Option<SharedUsbDisk>,
     ) -> Result<Self> {
         let BootOpts {
-            eeprom,
-            ram_mb,
             ref boot_rom_path,
             stepping,
             board_rev,
             verbose,
             ..
         } = *opts;
-        // The EEPROM bootloader touches the 0x6000_0000 L2-SRAM window, which
-        // our model folds into DRAM past the 512 MiB mark — give it room by default.
-        let ram_mb = ram_mb.unwrap_or(if eeprom { 2048 } else { 512 });
 
         // The boot ROM is the model's first stage for an EEPROM boot: it verifies
         // and stages the bootcode (see `firmware::bootrom`). Its HMAC key, when the
@@ -1046,7 +1033,6 @@ impl<'a> Rig<'a> {
         Ok(Self {
             opts,
             image,
-            ram_mb,
             log,
             usb_disk,
             bootrom,
@@ -1065,7 +1051,11 @@ impl<'a> Rig<'a> {
             trace_mmio,
             ..
         } = *self.opts;
-        let mut machine = Machine::new(self.ram_mb as usize * 1024 * 1024);
+        // The board's own memory, as its revision code gives it. The EEPROM
+        // bootloader also touches the `0x6000_0000` L2-SRAM window, which the
+        // model folds into DRAM past the 512 MiB mark, so every board that
+        // ships has room for it.
+        let mut machine = Machine::new(self.board.memory_bytes());
         machine.set_board(self.board);
         machine.set_log(self.log.clone());
         if eeprom {

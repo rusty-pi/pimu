@@ -77,7 +77,7 @@ Sources:
 - decompile (high): settle callback `0x3EDD25AE`
 - inferred (low): reset `0x30`: what the settle callback `0x3EDD25AE` and the status callback `0x3EDD23F4` take as a settled part with good input power. Not measured
 - trace (high): the pinned firmware with a reset value of `0x10`, `--board-rev b03112` and `--mbox-property 0x00030046`: reply `0x00050005`; with `b03112` and `b03114` under `--log pmic,expander`: `1d R 1a -> 10` then `expander: W 05 = 44` every 100 ms after the ARM release
-- trace (high): the pinned firmware with the reset value `0x30` on `--board-rev b03112` and `b03114`, with `--ram-mb 2048`, `--mbox-property 0x00030046` and `--log pmic,expander`: reply `0x00000000`; `1d R 1a -> 30` every 100 ms and no write to `0x1A`; the expander's last `OUTPUT` write is `W 05 = 40` at the ARM release; on `b03114` `pmic_core` keeps setpoint `0x68` and `MODE` `0x05`
+- trace (high): the pinned firmware with the reset value `0x30` on `--board-rev b03112` and `b03114`, with `--mbox-property 0x00030046` and `--log pmic,expander`: reply `0x00000000`; `1d R 1a -> 30` every 100 ms and no write to `0x1A`; the expander's last `OUTPUT` write is `W 05 = 40` at the ARM release; on `b03114` `pmic_core` keeps setpoint `0x68` and `MODE` `0x05`
 
 `SETTLED` sources:
 

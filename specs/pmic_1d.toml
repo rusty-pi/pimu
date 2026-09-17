@@ -131,7 +131,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "trace"
-ref        = "the pinned firmware with the reset value `0x30` on `--board-rev b03112` and `b03114`, with `--ram-mb 2048`, `--mbox-property 0x00030046` and `--log pmic,expander`: reply `0x00000000`; `1d R 1a -> 30` every 100 ms and no write to `0x1A`; the expander's last `OUTPUT` write is `W 05 = 40` at the ARM release; on `b03114` `pmic_core` keeps setpoint `0x68` and `MODE` `0x05`"
+ref        = "the pinned firmware with the reset value `0x30` on `--board-rev b03112` and `b03114`, with `--mbox-property 0x00030046` and `--log pmic,expander`: reply `0x00000000`; `1d R 1a -> 30` every 100 ms and no write to `0x1A`; the expander's last `OUTPUT` write is `W 05 = 40` at the ARM release; on `b03114` `pmic_core` keeps setpoint `0x68` and `MODE` `0x05`"
 confidence = "high"
 
 [[register]]

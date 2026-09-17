@@ -9,10 +9,10 @@
 [t] part 00000000 reset_info 00000000
 [t] uSD voltage 3.3V
 [t] init_sdram_1350
-[t] Initialising SDRAM rank 1 total-size: 16Gbit part: 0 (0x06 0x00) odt: 0
-[t] memsys_init: 0 16Gbit MCB 0x80015ff0: 11696
-[t] DDR 3200 Mbps dual-rank:0 byte-mode:0 size-gbit:16 part-config:0 odt:0
-[t] SD_SB 11003120
+[t] Initialising SDRAM rank 1 total-size: 32Gbit part: 0 (0x05 0x00) odt: 0
+[t] memsys_init: 0 32Gbit MCB 0x80015ff0: 11696
+[t] DDR 3200 Mbps dual-rank:0 byte-mode:0 size-gbit:32 part-config:0 odt:0
+[t] SD_SB 11003130
 [t] OTP boardrev c03112 bootrom 8b0 8b0
 [t] Customer key hash 0000000000000000000000000000000000000000000000000000000000000000
 [t] VC-JTAG unlocked

@@ -580,21 +580,25 @@ impl Park {
 
 /// A RAM read of at most 8 bytes, the way `ArmBus` routes one.
 pub(super) fn ram(m: &Machine, addr: u64, size: u32) -> Option<u64> {
-    if size > 8 || addr.checked_add(u64::from(size))? > m.ram.len() as u64 {
+    let end = addr.checked_add(u64::from(size))?;
+    if size > 8 || end > m.ram.len() as u64 {
         return None;
     }
-    let base = m.ram.base() + addr as u32;
-    let load = |a: u32, s: u32| {
+    // The peripherals shadow the DRAM under them, as they do for the bus.
+    if end > super::RAM_LOW_END && addr < super::RAM_HIGH_BASE {
+        return None;
+    }
+    let load = |off: u64, s: u32| {
         let w = match s {
             1 => Width::Byte,
             2 => Width::Half,
             _ => Width::Word,
         };
-        m.ram.load(a, w).ok().map(u64::from)
+        m.ram.load_at(off, w).ok().map(u64::from)
     };
     match size {
-        8 => Some(load(base, 4)? | load(base + 4, 4)? << 32),
-        _ => load(base, size),
+        8 => Some(load(addr, 4)? | load(addr + 4, 4)? << 32),
+        _ => load(addr, size),
     }
 }
 

@@ -9,10 +9,10 @@
 [t] part 00000000 reset_info 00000000
 [t] uSD voltage 3.3V
 [t] init_sdram_1350
-[t] Initialising SDRAM rank 1 total-size: 16Gbit part: 0 (0x06 0x00) odt: 0
-[t] memsys_init: 0 16Gbit MCB 0x80015ff0: 11696
-[t] DDR 3200 Mbps dual-rank:0 byte-mode:0 size-gbit:16 part-config:0 odt:0
-[t] SD_SB 11003120
+[t] Initialising SDRAM rank 2 total-size: 64Gbit part: 0 (0x14 0x00) odt: 0
+[t] memsys_init: 0 64Gbit MCB 0x80015ff0: 11696
+[t] DDR 3200 Mbps dual-rank:1 byte-mode:0 size-gbit:64 part-config:0 odt:0
+[t] SD_SB 11013130
 [t] OTP boardrev d03115 bootrom 8b0 8b0
 [t] Customer key hash 0000000000000000000000000000000000000000000000000000000000000000
 [t] VC-JTAG unlocked
@@ -132,7 +132,7 @@ MESS:[t]:0: 'console=serial0,115200 console=tty1 root=/dev/mmcblk0p2 rootfstype=
 MESS:[t]:0: brfs: File read: 97 bytes
 MESS:[t]:0: brfs: File read: /mfs/sd/kernel8.img
 MESS:[t]:0: Loaded 'kernel8.img' to 0x200000 size 0x9fd5b1
-MESS:[t]:0: Device tree loaded to 0x2eff1e00 (size 0xe1c1)
+MESS:[t]:0: Device tree loaded to 0x2eff1e00 (size 0xe1d9)
 MESS:[t]:0: uart: Set PL011 baud rate to 103448.300000 Hz
 MESS:[t]:0: uart: Baud rate change done...
 MESS:[t]:0: uart: Baud rate change done...
@@ -153,19 +153,25 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] OF: reserved mem: 0x000000000ec00000..0x000000002ebfffff (524288 KiB) map reusable linux,cma
 [t] OF: reserved mem: 0x000000003ef735c0..0x000000003ef7360e (0 KiB) nomap non-reusable nvram@0
 [t] OF: reserved mem: 0x000000003ef73380..0x000000003ef7357f (0 KiB) nomap non-reusable nvram@1
-[t] NUMA: Faking a node at [mem 0x0000000000000000-0x000000007fffffff]
-[t] Faking node 0 at [mem 0x0000000000000000-0x000000007fffffff] (2048MB)
-[t] NODE_DATA(0) allocated [mem 0x7fbdc280-0x7fbdefff]
+[t] NUMA: Faking a node at [mem 0x0000000000000000-0x00000001ffffffff]
+[t] Faking node 0 at [mem 0x0000000000000000-0x0000000103ffffff] (4160MB)
+[t] Faking node 1 at [mem 0x0000000104000000-0x00000001ffffffff] (4032MB)
+[t] NODE_DATA(0) allocated [mem 0x103ffd280-0x103ffffff]
+[t] NODE_DATA(1) allocated [mem 0x1feff6280-0x1feff8fff]
 [t] Zone ranges:
 [t]   DMA      [mem 0x0000000000000000-0x000000003fffffff]
-[t]   DMA32    [mem 0x0000000040000000-0x000000007fffffff]
-[t]   Normal   empty
+[t]   DMA32    [mem 0x0000000040000000-0x00000000ffffffff]
+[t]   Normal   [mem 0x0000000100000000-0x00000001ffffffff]
 [t] Movable zone start for each node
 [t] Early memory node ranges
 [t]   node   0: [mem 0x0000000000000000-0x000000003b3fffff]
-[t]   node   0: [mem 0x0000000040000000-0x000000007fffffff]
-[t] Initmem setup node 0 [mem 0x0000000000000000-0x000000007fffffff]
+[t]   node   0: [mem 0x0000000040000000-0x00000000fbffffff]
+[t]   node   0: [mem 0x0000000100000000-0x0000000103ffffff]
+[t]   node   1: [mem 0x0000000104000000-0x00000001ffffffff]
+[t] Initmem setup node 0 [mem 0x0000000000000000-0x0000000103ffffff]
+[t] Initmem setup node 1 [mem 0x0000000104000000-0x00000001ffffffff]
 [t] On node 0, zone DMA32: 19456 pages in unavailable ranges
+[t] On node 0, zone Normal: 16384 pages in unavailable ranges
 [t] percpu: Embedded 33 pages/cpu s95896 r8192 d31080 u135168
 [t] Detected PIPT I-cache on CPU0
 [t] CPU features: detected: Spectre-v2
@@ -177,20 +183,19 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] CPU features: detected: ARM erratum 1742098
 [t] CPU features: detected: ARM errata 1165522, 1319367, or 1530923
 [t] alternatives: applying boot alternatives
-[t] Kernel command line: earlycon keep_bootcon kvm-arm.mode=none coherent_pool=1M 8250.nr_uarts=1 snd_bcm2835.enable_headphones=0 cgroup_disable=memory numa_policy=interleave nvme.max_host_mem_size_mb=32 snd_bcm2835.enable_headphones=0 snd_bcm2835.enable_hdmi=0 snd_bcm2835.enable_hdmi=0  numa=fake=1 system_heap.max_order=0 iommu_dma_numa_policy=interleave smsc95xx.macaddr=02:00:5E:00:53:01 vc_mem.mem_base=0x3ec00000 vc_mem.mem_size=0x40000000  console=ttyAMA0,115200 console=tty1 root=/dev/mmcblk0p2 rootfstype=ext4 fsck.repair=yes rootwait
+[t] Kernel command line: earlycon keep_bootcon kvm-arm.mode=none coherent_pool=1M 8250.nr_uarts=1 snd_bcm2835.enable_headphones=0 cgroup_disable=memory numa_policy=interleave nvme.max_host_mem_size_mb=32 snd_bcm2835.enable_headphones=0 snd_bcm2835.enable_hdmi=0 snd_bcm2835.enable_hdmi=0  numa=fake=2 system_heap.max_order=0 iommu_dma_numa_policy=interleave smsc95xx.macaddr=02:00:5E:00:53:01 vc_mem.mem_base=0x3ec00000 vc_mem.mem_size=0x40000000  console=ttyAMA0,115200 console=tty1 root=/dev/mmcblk0p2 rootfstype=ext4 fsck.repair=yes rootwait
 [t] cgroup: Disabling memory control group subsystem
-[t] mempolicy: NUMA default policy overridden to 'interleave:0'
-[t] DMA IOMMU NUMA default policy overridden to 'interleave:0'
+[t] mempolicy: NUMA default policy overridden to 'interleave:0-1'
+[t] DMA IOMMU NUMA default policy overridden to 'interleave:0-1'
 [t] printk: log buffer data + meta data: 131072 + 458752 = 589824 bytes
-[t] Dentry cache hash table entries: 262144 (order: 9, 2097152 bytes, linear)
-[t] Inode-cache hash table entries: 131072 (order: 8, 1048576 bytes, linear)
 [t] software IO TLB: area num 4.
 [t] software IO TLB: mapped [mem 0x0000000037400000-0x000000003b400000] (64MB)
-[t] Fallback order for Node 0: 0 
-[t] Built 1 zonelists, mobility grouping on.  Total pages: 504832
-[t] Policy zone: DMA32
+[t] Fallback order for Node 0: 0 1 
+[t] Fallback order for Node 1: 1 0 
+[t] Built 2 zonelists, mobility grouping on.  Total pages: 2061312
+[t] Policy zone: Normal
 [t] mem auto-init: stack:off, heap alloc:off, heap free:off
-[t] SLUB: HWalign=64, Order=0-3, MinObjects=0, CPUs=4, Nodes=1
+[t] SLUB: HWalign=64, Order=0-3, MinObjects=0, CPUs=4, Nodes=2
 [t] ftrace: allocating 46837 entries in 184 pages
 [t] ftrace: allocated 184 pages with 4 groups
 [t] rcu: Preemptible hierarchical RCU implementation.
@@ -215,11 +220,13 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] Calibrating delay loop (skipped), value calculated using timer frequency.. 108.00 BogoMIPS (lpj=216000)
 [t] pid_max: default: 32768 minimum: 301
 [t] LSM: initializing lsm=capability
-[t] Mount-cache hash table entries: 4096 (order: 3, 32768 bytes, linear)
-[t] Mountpoint-cache hash table entries: 4096 (order: 3, 32768 bytes, linear)
+[t] Dentry cache hash table entries: 1048576 (order: 11, 8388608 bytes, vmalloc hugepage)
+[t] Inode-cache hash table entries: 524288 (order: 10, 4194304 bytes, vmalloc hugepage)
+[t] Mount-cache hash table entries: 16384 (order: 5, 131072 bytes, vmalloc hugepage)
+[t] Mountpoint-cache hash table entries: 16384 (order: 5, 131072 bytes, vmalloc hugepage)
 [t] rcu: Hierarchical SRCU implementation.
 [t] rcu: 	Max phase no-delay instances is 1000.
-[t] Timer migration: 1 hierarchy levels; 8 children per group; 1 crossnode level
+[t] Timer migration: 2 hierarchy levels; 8 children per group; 1 crossnode level
 [t] EFI services will not be available.
 [t] smp: Bringing up secondary CPUs ...
 [t] Detected PIPT I-cache on CPU1
@@ -228,7 +235,7 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] CPU2: Booted secondary processor 0x0000000002 [0x410fd083]
 [t] Detected PIPT I-cache on CPU3
 [t] CPU3: Booted secondary processor 0x0000000003 [0x410fd083]
-[t] smp: Brought up 1 node, 4 CPUs
+[t] smp: Brought up 2 nodes, 4 CPUs
 [t] SMP: Total of 4 processors activated.
 [t] CPU: All CPU(s) started at EL2
 [t] CPU features: detected: 32-bit EL0 Support
@@ -236,12 +243,12 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] CPU features: detected: CRC32 instructions
 [t] CPU features: detected: PMUv3
 [t] alternatives: applying system-wide alternatives
-[t] Memory: 1353700K/2019328K available (14912K kernel code, 2446K rwdata, 5080K rodata, 5632K init, 505K bss, 135852K reserved, 524288K cma-reserved)
+[t] Memory: 7459940K/8245248K available (14912K kernel code, 2446K rwdata, 5080K rodata, 5632K init, 505K bss, 243292K reserved, 524288K cma-reserved)
 [t] devtmpfs: initialized
 [t] Enabled cp15_barrier support
 [t] Enabled setend support
-[t] posixtimers hash table entries: 2048 (order: 3, 32768 bytes, linear)
-[t] futex hash table entries: 1024 (65536 bytes on 1 NUMA nodes, total 64 KiB, linear).
+[t] posixtimers hash table entries: 2048 (order: 3, 32768 bytes, vmalloc)
+[t] futex hash table entries: 512 (32768 bytes on 2 NUMA nodes, total 64 KiB, linear).
 [t] 2G module region forced by RANDOMIZE_MODULE_REGION_FULL
 [t] 0 pages in range for non-PLT usage
 [t] 517088 pages in range for PLT usage
@@ -279,15 +286,15 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] VFS: Disk quotas dquot_6.6.0
 [t] VFS: Dquot-cache hash table entries: 512 (order 0, 4096 bytes)
 [t] NET: Registered PF_INET protocol family
-[t] IP idents hash table entries: 32768 (order: 6, 262144 bytes, linear)
-[t] tcp_listen_portaddr_hash hash table entries: 1024 (order: 2, 16384 bytes, linear)
-[t] Table-perturb hash table entries: 65536 (order: 6, 262144 bytes, linear)
-[t] TCP established hash table entries: 16384 (order: 5, 131072 bytes, linear)
-[t] TCP bind hash table entries: 16384 (order: 7, 524288 bytes, linear)
-[t] TCP: Hash tables configured (established 16384 bind 16384)
-[t] MPTCP token hash table entries: 2048 (order: 4, 49152 bytes, linear)
-[t] UDP hash table entries: 1024 (order: 4, 65536 bytes, linear)
-[t] UDP-Lite hash table entries: 1024 (order: 4, 65536 bytes, linear)
+[t] IP idents hash table entries: 131072 (order: 8, 1048576 bytes, vmalloc hugepage)
+[t] tcp_listen_portaddr_hash hash table entries: 4096 (order: 4, 65536 bytes, vmalloc hugepage)
+[t] Table-perturb hash table entries: 65536 (order: 6, 262144 bytes, vmalloc hugepage)
+[t] TCP established hash table entries: 65536 (order: 7, 524288 bytes, vmalloc hugepage)
+[t] TCP bind hash table entries: 65536 (order: 9, 2097152 bytes, vmalloc hugepage)
+[t] TCP: Hash tables configured (established 65536 bind 65536)
+[t] MPTCP token hash table entries: 8192 (order: 6, 196608 bytes, vmalloc hugepage)
+[t] UDP hash table entries: 4096 (order: 6, 262144 bytes, vmalloc hugepage)
+[t] UDP-Lite hash table entries: 4096 (order: 6, 262144 bytes, vmalloc hugepage)
 [t] NET: Registered PF_UNIX/PF_LOCAL protocol family
 [t] RPC: Registered named UNIX socket transport module.
 [t] RPC: Registered udp transport module.
@@ -297,7 +304,7 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] PCI: CLS 0 bytes, default 64
 [t] kvm [1]: KVM disabled from command line
 [t] Initialise system trusted keyrings
-[t] workingset: timestamp_bits=42 max_order=19 bucket_order=0
+[t] workingset: timestamp_bits=42 max_order=21 bucket_order=0
 [t] NFS: Registering the id_resolver key type
 [t] Key type id_resolver registered
 [t] Key type id_legacy registered
@@ -314,7 +321,7 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] ledtrig-cpu: registered to indicate activity on CPUs
 [t] brcm-pcie fd500000.pcie: host bridge /scb/pcie@7d500000 ranges:
 [t] brcm-pcie fd500000.pcie:      MEM 0x0600000000..0x063fffffff -> 0x00c0000000
-[t] brcm-pcie fd500000.pcie:   IB MEM 0x0000000000..0x007fffffff -> 0x0400000000
+[t] brcm-pcie fd500000.pcie:   IB MEM 0x0000000000..0x01ffffffff -> 0x0400000000
 [t] brcm-pcie fd500000.pcie: PCI host bridge to bus 0000:00
 [t] pci_bus 0000:00: root bus resource [bus 00-ff]
 [t] pci_bus 0000:00: root bus resource [mem 0x600000000-0x63fffffff] (bus address [0xc0000000-0xffffffff])
@@ -388,6 +395,7 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] registered taskstats version 1
 [t] Loading compiled-in X.509 certificates
 [t] Demotion targets for Node 0: null
+[t] Demotion targets for Node 1: null
 [t] Key type .fscrypt registered
 [t] Key type fscrypt-provisioning registered
 [t] bcm2835-wdt bcm2835-wdt: Broadcom BCM2835 watchdog timer
@@ -410,19 +418,25 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] OF: reserved mem: 0x000000000ec00000..0x000000002ebfffff (524288 KiB) map reusable linux,cma
 [t] OF: reserved mem: 0x000000003ef735c0..0x000000003ef7360e (0 KiB) nomap non-reusable nvram@0
 [t] OF: reserved mem: 0x000000003ef73380..0x000000003ef7357f (0 KiB) nomap non-reusable nvram@1
-[t] NUMA: Faking a node at [mem 0x0000000000000000-0x000000007fffffff]
-[t] Faking node 0 at [mem 0x0000000000000000-0x000000007fffffff] (2048MB)
-[t] NODE_DATA(0) allocated [mem 0x7fbdc280-0x7fbdefff]
+[t] NUMA: Faking a node at [mem 0x0000000000000000-0x00000001ffffffff]
+[t] Faking node 0 at [mem 0x0000000000000000-0x0000000103ffffff] (4160MB)
+[t] Faking node 1 at [mem 0x0000000104000000-0x00000001ffffffff] (4032MB)
+[t] NODE_DATA(0) allocated [mem 0x103ffd280-0x103ffffff]
+[t] NODE_DATA(1) allocated [mem 0x1feff6280-0x1feff8fff]
 [t] Zone ranges:
 [t]   DMA      [mem 0x0000000000000000-0x000000003fffffff]
-[t]   DMA32    [mem 0x0000000040000000-0x000000007fffffff]
-[t]   Normal   empty
+[t]   DMA32    [mem 0x0000000040000000-0x00000000ffffffff]
+[t]   Normal   [mem 0x0000000100000000-0x00000001ffffffff]
 [t] Movable zone start for each node
 [t] Early memory node ranges
 [t]   node   0: [mem 0x0000000000000000-0x000000003b3fffff]
-[t]   node   0: [mem 0x0000000040000000-0x000000007fffffff]
-[t] Initmem setup node 0 [mem 0x0000000000000000-0x000000007fffffff]
+[t]   node   0: [mem 0x0000000040000000-0x00000000fbffffff]
+[t]   node   0: [mem 0x0000000100000000-0x0000000103ffffff]
+[t]   node   1: [mem 0x0000000104000000-0x00000001ffffffff]
+[t] Initmem setup node 0 [mem 0x0000000000000000-0x0000000103ffffff]
+[t] Initmem setup node 1 [mem 0x0000000104000000-0x00000001ffffffff]
 [t] On node 0, zone DMA32: 19456 pages in unavailable ranges
+[t] On node 0, zone Normal: 16384 pages in unavailable ranges
 [t] percpu: Embedded 33 pages/cpu s95896 r8192 d31080 u135168
 [t] Detected PIPT I-cache on CPU0
 [t] CPU features: detected: Spectre-v2
@@ -434,20 +448,19 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] CPU features: detected: ARM erratum 1742098
 [t] CPU features: detected: ARM errata 1165522, 1319367, or 1530923
 [t] alternatives: applying boot alternatives
-[t] Kernel command line: earlycon keep_bootcon kvm-arm.mode=none coherent_pool=1M 8250.nr_uarts=1 snd_bcm2835.enable_headphones=0 cgroup_disable=memory numa_policy=interleave nvme.max_host_mem_size_mb=32 snd_bcm2835.enable_headphones=0 snd_bcm2835.enable_hdmi=0 snd_bcm2835.enable_hdmi=0  numa=fake=1 system_heap.max_order=0 iommu_dma_numa_policy=interleave smsc95xx.macaddr=02:00:5E:00:53:01 vc_mem.mem_base=0x3ec00000 vc_mem.mem_size=0x40000000  console=ttyAMA0,115200 console=tty1 root=/dev/mmcblk0p2 rootfstype=ext4 fsck.repair=yes rootwait
+[t] Kernel command line: earlycon keep_bootcon kvm-arm.mode=none coherent_pool=1M 8250.nr_uarts=1 snd_bcm2835.enable_headphones=0 cgroup_disable=memory numa_policy=interleave nvme.max_host_mem_size_mb=32 snd_bcm2835.enable_headphones=0 snd_bcm2835.enable_hdmi=0 snd_bcm2835.enable_hdmi=0  numa=fake=2 system_heap.max_order=0 iommu_dma_numa_policy=interleave smsc95xx.macaddr=02:00:5E:00:53:01 vc_mem.mem_base=0x3ec00000 vc_mem.mem_size=0x40000000  console=ttyAMA0,115200 console=tty1 root=/dev/mmcblk0p2 rootfstype=ext4 fsck.repair=yes rootwait
 [t] cgroup: Disabling memory control group subsystem
-[t] mempolicy: NUMA default policy overridden to 'interleave:0'
-[t] DMA IOMMU NUMA default policy overridden to 'interleave:0'
+[t] mempolicy: NUMA default policy overridden to 'interleave:0-1'
+[t] DMA IOMMU NUMA default policy overridden to 'interleave:0-1'
 [t] printk: log buffer data + meta data: 131072 + 458752 = 589824 bytes
-[t] Dentry cache hash table entries: 262144 (order: 9, 2097152 bytes, linear)
-[t] Inode-cache hash table entries: 131072 (order: 8, 1048576 bytes, linear)
 [t] software IO TLB: area num 4.
 [t] software IO TLB: mapped [mem 0x0000000037400000-0x000000003b400000] (64MB)
-[t] Fallback order for Node 0: 0 
-[t] Built 1 zonelists, mobility grouping on.  Total pages: 504832
-[t] Policy zone: DMA32
+[t] Fallback order for Node 0: 0 1 
+[t] Fallback order for Node 1: 1 0 
+[t] Built 2 zonelists, mobility grouping on.  Total pages: 2061312
+[t] Policy zone: Normal
 [t] mem auto-init: stack:off, heap alloc:off, heap free:off
-[t] SLUB: HWalign=64, Order=0-3, MinObjects=0, CPUs=4, Nodes=1
+[t] SLUB: HWalign=64, Order=0-3, MinObjects=0, CPUs=4, Nodes=2
 [t] ftrace: allocating 46837 entries in 184 pages
 [t] ftrace: allocated 184 pages with 4 groups
 [t] rcu: Preemptible hierarchical RCU implementation.
@@ -472,11 +485,13 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] Calibrating delay loop (skipped), value calculated using timer frequency.. 108.00 BogoMIPS (lpj=216000)
 [t] pid_max: default: 32768 minimum: 301
 [t] LSM: initializing lsm=capability
-[t] Mount-cache hash table entries: 4096 (order: 3, 32768 bytes, linear)
-[t] Mountpoint-cache hash table entries: 4096 (order: 3, 32768 bytes, linear)
+[t] Dentry cache hash table entries: 1048576 (order: 11, 8388608 bytes, vmalloc hugepage)
+[t] Inode-cache hash table entries: 524288 (order: 10, 4194304 bytes, vmalloc hugepage)
+[t] Mount-cache hash table entries: 16384 (order: 5, 131072 bytes, vmalloc hugepage)
+[t] Mountpoint-cache hash table entries: 16384 (order: 5, 131072 bytes, vmalloc hugepage)
 [t] rcu: Hierarchical SRCU implementation.
 [t] rcu: 	Max phase no-delay instances is 1000.
-[t] Timer migration: 1 hierarchy levels; 8 children per group; 1 crossnode level
+[t] Timer migration: 2 hierarchy levels; 8 children per group; 1 crossnode level
 [t] EFI services will not be available.
 [t] smp: Bringing up secondary CPUs ...
 [t] Detected PIPT I-cache on CPU1
@@ -485,7 +500,7 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] CPU2: Booted secondary processor 0x0000000002 [0x410fd083]
 [t] Detected PIPT I-cache on CPU3
 [t] CPU3: Booted secondary processor 0x0000000003 [0x410fd083]
-[t] smp: Brought up 1 node, 4 CPUs
+[t] smp: Brought up 2 nodes, 4 CPUs
 [t] SMP: Total of 4 processors activated.
 [t] CPU: All CPU(s) started at EL2
 [t] CPU features: detected: 32-bit EL0 Support
@@ -493,12 +508,12 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] CPU features: detected: CRC32 instructions
 [t] CPU features: detected: PMUv3
 [t] alternatives: applying system-wide alternatives
-[t] Memory: 1353700K/2019328K available (14912K kernel code, 2446K rwdata, 5080K rodata, 5632K init, 505K bss, 135852K reserved, 524288K cma-reserved)
+[t] Memory: 7459940K/8245248K available (14912K kernel code, 2446K rwdata, 5080K rodata, 5632K init, 505K bss, 243292K reserved, 524288K cma-reserved)
 [t] devtmpfs: initialized
 [t] Enabled cp15_barrier support
 [t] Enabled setend support
-[t] posixtimers hash table entries: 2048 (order: 3, 32768 bytes, linear)
-[t] futex hash table entries: 1024 (65536 bytes on 1 NUMA nodes, total 64 KiB, linear).
+[t] posixtimers hash table entries: 2048 (order: 3, 32768 bytes, vmalloc)
+[t] futex hash table entries: 512 (32768 bytes on 2 NUMA nodes, total 64 KiB, linear).
 [t] 2G module region forced by RANDOMIZE_MODULE_REGION_FULL
 [t] 0 pages in range for non-PLT usage
 [t] 517088 pages in range for PLT usage
@@ -536,15 +551,15 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] VFS: Disk quotas dquot_6.6.0
 [t] VFS: Dquot-cache hash table entries: 512 (order 0, 4096 bytes)
 [t] NET: Registered PF_INET protocol family
-[t] IP idents hash table entries: 32768 (order: 6, 262144 bytes, linear)
-[t] tcp_listen_portaddr_hash hash table entries: 1024 (order: 2, 16384 bytes, linear)
-[t] Table-perturb hash table entries: 65536 (order: 6, 262144 bytes, linear)
-[t] TCP established hash table entries: 16384 (order: 5, 131072 bytes, linear)
-[t] TCP bind hash table entries: 16384 (order: 7, 524288 bytes, linear)
-[t] TCP: Hash tables configured (established 16384 bind 16384)
-[t] MPTCP token hash table entries: 2048 (order: 4, 49152 bytes, linear)
-[t] UDP hash table entries: 1024 (order: 4, 65536 bytes, linear)
-[t] UDP-Lite hash table entries: 1024 (order: 4, 65536 bytes, linear)
+[t] IP idents hash table entries: 131072 (order: 8, 1048576 bytes, vmalloc hugepage)
+[t] tcp_listen_portaddr_hash hash table entries: 4096 (order: 4, 65536 bytes, vmalloc hugepage)
+[t] Table-perturb hash table entries: 65536 (order: 6, 262144 bytes, vmalloc hugepage)
+[t] TCP established hash table entries: 65536 (order: 7, 524288 bytes, vmalloc hugepage)
+[t] TCP bind hash table entries: 65536 (order: 9, 2097152 bytes, vmalloc hugepage)
+[t] TCP: Hash tables configured (established 65536 bind 65536)
+[t] MPTCP token hash table entries: 8192 (order: 6, 196608 bytes, vmalloc hugepage)
+[t] UDP hash table entries: 4096 (order: 6, 262144 bytes, vmalloc hugepage)
+[t] UDP-Lite hash table entries: 4096 (order: 6, 262144 bytes, vmalloc hugepage)
 [t] NET: Registered PF_UNIX/PF_LOCAL protocol family
 [t] RPC: Registered named UNIX socket transport module.
 [t] RPC: Registered udp transport module.
@@ -554,7 +569,7 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] PCI: CLS 0 bytes, default 64
 [t] kvm [1]: KVM disabled from command line
 [t] Initialise system trusted keyrings
-[t] workingset: timestamp_bits=42 max_order=19 bucket_order=0
+[t] workingset: timestamp_bits=42 max_order=21 bucket_order=0
 [t] NFS: Registering the id_resolver key type
 [t] Key type id_resolver registered
 [t] Key type id_legacy registered
@@ -571,7 +586,7 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] ledtrig-cpu: registered to indicate activity on CPUs
 [t] brcm-pcie fd500000.pcie: host bridge /scb/pcie@7d500000 ranges:
 [t] brcm-pcie fd500000.pcie:      MEM 0x0600000000..0x063fffffff -> 0x00c0000000
-[t] brcm-pcie fd500000.pcie:   IB MEM 0x0000000000..0x007fffffff -> 0x0400000000
+[t] brcm-pcie fd500000.pcie:   IB MEM 0x0000000000..0x01ffffffff -> 0x0400000000
 [t] brcm-pcie fd500000.pcie: PCI host bridge to bus 0000:00
 [t] pci_bus 0000:00: root bus resource [bus 00-ff]
 [t] pci_bus 0000:00: root bus resource [mem 0x600000000-0x63fffffff] (bus address [0xc0000000-0xffffffff])
@@ -645,6 +660,7 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] registered taskstats version 1
 [t] Loading compiled-in X.509 certificates
 [t] Demotion targets for Node 0: null
+[t] Demotion targets for Node 1: null
 [t] Key type .fscrypt registered
 [t] Key type fscrypt-provisioning registered
 [t] bcm2835-wdt bcm2835-wdt: Broadcom BCM2835 watchdog timer
@@ -696,11 +712,9 @@ Linux aarch64
 / # \x1b[6necho cpus=$(grep -c ^processor /proc/cpuinfo)
 cpus=4
 / # \x1b[6necj\x08\x1b[Jho rvf-$((6*7))
-[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
-[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
 rvf-42
 / # \x1b[6necho -ne 'Hello, world!\0\0\0' | rpi-fw-crypto hmac --in /proc/self/fd/0 --k
 
 ey-id 1 --outform hex; echo
 0eb6f96f3a97b37bb065eb014f76fd488df48682ed6ab4f14cdae0e8a26e1e9d
-/ # \x1b[6n
+/ # 
