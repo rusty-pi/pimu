@@ -4,11 +4,16 @@ bus     = "i2c"
 base    = 0x43
 size    = 0x100
 summary = "FXL6408 GPIO expander: the board's 'external' GPIOs 128..135"
-notes   = "On the `bsc` PMIC copy. Nothing outside drives the pins, so a pin reads its own output where driven, else its pull, else 0."
+notes   = "On the `bsc` PMIC copy. Nothing outside drives the pins, so a pin reads its own output where driven, else its pull, else 0. The bootloader stage after the bootcode starts by resetting the part the way the bootcode does (`DEVICE_ID` <- 1, `OUTPUT` `0x40`, `IO_DIR` `0x7F`, `PULL_ENABLE` and `PULL_UP` `0x80`, `OUTPUT_HIGH_Z` 0). It then takes the card's power away (`OUTPUT` 0) and sets `IO_DIR` to `0x7B`, each as a read of `IO_DIR`, `OUTPUT` and `OUTPUT_HIGH_Z` written back changed. The power comes back once its PCIe bring-up is done. It then reads `IO_DIR`, `INPUT_STATUS` and `OUTPUT` every 200 ms for about 1.2 s before it prints `SD_OC: 0`. After that it takes the power away and gives it back 1 ms later, and writes `OUTPUT` `0x40` once more just before its SD host comes up."
 
 [[block.source]]
 kind       = "datasheet"
 ref        = "onsemi FXL6408 datasheet (register map, reset values)"
+confidence = "high"
+
+[[block.source]]
+kind       = "trace"
+ref        = "the pinned bootloader under `--log expander`: reset at 2.0999 s, `OUTPUT` 0 at 2.1019 s, `IO_DIR` `0x7B` at 2.1031 s, `OUTPUT` `0x40` at 3.7282 s, reads from 3.9316 s to 4.9485 s, `OUTPUT` 0 / `0x40` at 4.9494 / 4.9504 s, `OUTPUT` `0x40` at 6.4354 s"
 confidence = "high"
 
 [[block.source]]

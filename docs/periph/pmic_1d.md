@@ -20,7 +20,8 @@ Sources:
 | `0x00F` | [`ID`](#id) | r | 8 | 2, best high |
 | `0x013` | [`SETPOINT_SDRAM`](#setpoint_sdram) | rw | 8 | 2, best high |
 | `0x014` | [`SETPOINT_CORE`](#setpoint_core) | rw | 8 | 3, best high |
-| `0x01A` | [`STATUS`](#status) | r | 8 | 1, best high |
+| `0x01A` | [`STATUS`](#status) | r | 8 | 2, best high |
+| `0x019` | [`REG_19`](#reg_19) | rw | 8 | 2, best high |
 | `0x01C` | [`SETPOINT_RAIL6`](#setpoint_rail6) | rw | 8 | 1, best high |
 | `0x01D` | [`SETPOINT_RAIL5`](#setpoint_rail5) | rw | 8 | 1, best high |
 
@@ -62,19 +63,41 @@ Sources:
 
 Offset `0x01A` · access `r` · 8 bits
 
-Status.
+Status. start4 polls it every 100 ms once the ARM runs. Its status callback reports under-voltage unless `STATUS & mask == 0x20`, where the mask is a byte it sets to `0x60` at the end of each call, so a healthy part has to read bit 5 set and bit 6 clear. When bit 6 is set it writes `0x40` back. The model's reset value `0x10` has bit 5 clear. With it, the pinned firmware on `--board-rev b03112` answers `GET_THROTTLED` with `0x50005` (under-voltage now and throttled). On `b03112` and `b03114` it then slows the ARM and, on `b03114`, drops `pmic_core`'s setpoint and `MODE` after the release. It also writes the expander's `OUTPUT` to `0x44` after every poll. A reset value with bit 5 set would match a board with good input power; which value a real part reads is not measured.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
 | 4 | `SETTLED` | r | Voltage change complete; polled after every setpoint write. |
+| 5 | `POWER_OK` | r | Our name. start4's status poll takes the part's input power as good only while this reads 1 (with `LATCHED` clear). |
+| 6 | `LATCHED` | r | Our name. start4's status poll writes `0x40` to the register when this bit is set, which reads as clearing a latched event. |
 
 Sources:
 
 - decompile (high): settle callback `0x3EDD25AE`
+- trace (high): the pinned firmware with `--board-rev b03112` and `--mbox-property 0x00030046`: reply `0x00050005`; with `b03112` and `b03114` under `--log pmic,expander`: `1d R 1a -> 10` then `expander: W 05 = 44` every 100 ms after the ARM release
 
 `SETTLED` sources:
 
 - decompile (high): `0x3EDD25AE` polls reg `0x1A` bit 4
+
+`POWER_OK` sources:
+
+- decompile (medium): status callback `0x3EDD23F4` (descriptor `0x3EE00570` `+0x24`): `(reg & [gp+5188]) == 0x20` keeps the result 0, else it stays 1; `[gp+5188] = 0x60` before return
+
+`LATCHED` sources:
+
+- decompile (medium): status callback `0x3EDD23F4`: `btest r1, 6`, then a 1-byte write of `0x40` to `0x1A` through the bus ops' `+0x20` call
+
+## `REG_19`
+
+Offset `0x019` · access `rw` · 8 bits
+
+Both bootloader stages touch it on a board with `pmic_core` (their 2-bit board flag equal to 3; `d03114` in the model). They first write `0xA5` to `SETPOINT_CORE`, then read this register. They step its low nibble towards 9 one write at a time, each write `0xE0 | n`: from a reset value of 0 that is `0xE1`..`0xE9`. A failed transfer goes to their error handler. What the register controls is not known.
+
+Sources:
+
+- decompile (high): bootcode `0x800037A2` (in the bus ops table at `0x80011BF0`), bootloader `0x00094FC4`: `(flags & 3) == 3`, write `0x14 = 165`, read `0x19`, `n = value & 0xF`, then `while n != 9 { n += n < 9 ? 1 : -1; write 0x19 = n | 0xE0 }`
+- trace (high): `--board-rev d03114` under `--log pmic`: bootcode `1d W 14 = a5`, `1d R 19 -> 00`, `1d W 19 = e1` .. `e9` (0.000793 to 0.000903 s); bootloader `1d W 14 = a5`, `1d R 19 -> e9` (2.1025 s); none on `d03115`, `c03112` or `b03112`
 
 ## `SETPOINT_RAIL6`
 
