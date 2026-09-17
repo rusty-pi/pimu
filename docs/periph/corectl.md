@@ -20,7 +20,7 @@ Sources:
 | Offset | Name | Access | Width | Sources |
 |---|---|---|---|---|
 | `0x004` | [`IRQ_PENDING`](#irq_pending) | r | 32 | 1, best medium |
-| `0x010`–`0x01C` (4 × 0x4) | [`IRQ_PRIO`](#irq_prio) | rw | 32 | 4, best high |
+| `0x010`–`0x02C` (8 × 0x4) | [`IRQ_PRIO`](#irq_prio) | rw | 32 | 5, best high |
 | `0x030` | [`VBASE`](#vbase) | rw | 32 | 2, best high |
 | `0x034` | [`WAKEUP`](#wakeup) | rw | 32 | 5, best high |
 | `0x040`–`0x044` (2 × 0x4) | [`IRQ_PENDING_BITS`](#irq_pending_bits) | rw | 32 | 2, best high |
@@ -50,13 +50,14 @@ Sources:
 
 ## `IRQ_PRIO`
 
-Offset `0x010`, 4 elements 0x4 apart · access `rw` · 32 bits
+Offset `0x010`, 8 elements 0x4 apart · access `rw` · 32 bits
 
-One 4-bit enable/priority field per interrupt source, eight per word: source `src` lives in word `(src >> 3) & 3` at bit `(src & 7) * 4`. Zero disables the source; a non-zero value enables it at that priority. The vector is the interrupt number, 64 + source, not this field.
+One 4-bit enable/priority field per interrupt source, eight per word: source `src` (64 to 127) lives in word `(src >> 3) & 7` at bit `(src & 7) * 4`. Zero disables the source; a non-zero value enables it at that priority. The vector is the interrupt number, 64 + source, not this field.
 
 Sources:
 
-- decompile (high): `enable_irq_source(src, prio)` at `0x3ED72374`
+- decompile (high): secure service `0xCEC006A6` (`r1` core, `r2` source, `r3` priority): `lsr r4, r2, 3; bmask r4, 3` picks the word from `0x7E002010 + core * 0x800`, then `bmask r2, 3` the field — _the non-secure `enable_irq_source(src, prio)` at `0x3ED72374` masks the word with `bmask r3, 2` instead; start4 only calls it for sources 64 and 78, which land in the same words either way_
+- trace (high): `linux-boot`, `RVF_TRACE_MMIO=0x7e002000-0x7e002060`: the secure service at `0xFEC006CA` writes all eight words, `+0x20 <- 0x10` (source 97, the HVS), `+0x28 <- 0x10000000` (119) and `+0x2c <- 0x100000` (125, the RNG) among them
 - trace (high): start4 calls `enable_irq_source(64, 1)` for its ThreadX tick
 - inferred (medium): hermanhermitage/videocoreiv, VideoCore IV Programmers Manual: 128 vector-table entries indexed by interrupt number, 0-31 exceptions, 32-63 swi, 64-127 external interrupts — _a reverse-engineered manual, not a datasheet_
 - trace (high): vectoring at the field's value reached start4's exception stubs (dbe4e25, b9d53b8); vectoring at 64 + source reaches the per-source handlers (2bdbcbf)

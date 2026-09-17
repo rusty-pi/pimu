@@ -1433,8 +1433,10 @@ mod tests {
         assert!(m.irq_queued());
         assert_eq!(m.take_pending_irq(), Some(94));
         assert_eq!(m.take_pending_irq(), None);
-        // Source 97: word 0, bits 4..8.
+        // Source 97: word 4, bits 4..8, not source 65's field in word 0.
         m.store32(IRQ_PRIO, 0x10).unwrap();
+        assert_eq!(m.take_pending_irq(), None);
+        m.store32(IRQ_PRIO + 0x10, 0x10).unwrap();
         assert_eq!(m.take_pending_irq(), Some(97));
         assert!(!m.irq_queued());
     }
