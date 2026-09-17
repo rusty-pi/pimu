@@ -1,6 +1,7 @@
 //! `rpi-virt-fw` command-line entry point: the usage text and the command
 //! dispatch. Each command lives in a module of its own.
 
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::{bail, Result};
@@ -41,8 +42,9 @@ COMMANDS:
               line. Both refuse when a file the run reads is missing, naming
               the command that makes each.
     disasm    Disassemble a flat binary / ELF with the (partial) VPU decoder.
-    spec-docs Check docs/periph/ against the register specs in specs/*.toml;
-              --update regenerates it.
+    spec-docs Check the generated docs — docs/periph/ against the register
+              specs in specs/*.toml, and docs/board-sheet-dark.svg against the
+              hand-drawn docs/board-sheet.svg; --update regenerates them.
 
     With no command, the options are `boot`'s: `rpi-virt-fw --eeprom <file> ...`.
 
@@ -105,7 +107,9 @@ fn run(args: &[String]) -> Result<ExitCode> {
 }
 
 /// `spec-docs [--update]`: the Markdown under `docs/periph/` is generated from
-/// `specs/*.toml`; report (or with `--update`, rewrite) whatever is out of date.
+/// `specs/*.toml`, and `docs/board-sheet-dark.svg` from the hand-drawn
+/// `docs/board-sheet.svg`; report (or with `--update`, rewrite) whatever is out
+/// of date.
 fn cmd_spec_docs(args: &[String]) -> Result<ExitCode> {
     let mut update = false;
     for a in args {
@@ -114,16 +118,23 @@ fn cmd_spec_docs(args: &[String]) -> Result<ExitCode> {
             other => bail!("unknown argument '{other}'"),
         }
     }
-    let stale = rpi_virt_fw::spec::sync_docs(update).map_err(anyhow::Error::msg)?;
+    let mut stale: Vec<PathBuf> = Vec::new();
     let dir = rpi_virt_fw::spec::doc_dir();
-    for name in &stale {
+    stale.extend(
+        rpi_virt_fw::spec::sync_docs(update)
+            .map_err(anyhow::Error::msg)?
+            .iter()
+            .map(|name| dir.join(name)),
+    );
+    stale.extend(rpi_virt_fw::sheet::sync(update).map_err(anyhow::Error::msg)?);
+    for path in &stale {
         let verb = if update { "updated" } else { "stale" };
-        println!("{verb}: {}", dir.join(name).display());
+        println!("{verb}: {}", path.display());
     }
     if stale.is_empty() || update {
         Ok(ExitCode::SUCCESS)
     } else {
-        eprintln!("docs/periph is out of date; run `cargo run -- spec-docs --update`");
+        eprintln!("generated docs are out of date; run `cargo run -- spec-docs --update`");
         Ok(ExitCode::FAILURE)
     }
 }

@@ -2,20 +2,20 @@
   <title id="sheet-title">Raspberry Pi 4 Model B, as rpi-virt-fw models it</title>
   <desc id="sheet-desc">Board block diagram. The BCM2711 in the centre with its controller ports on the edges. Left: the SPI NOR flash on SPI0; the PMICs at 0x1E and 0x1B and the FXL6408 expander on I2C bus 8; LPDDR4 on the SDRAM controller. Right: the BCM54213PE PHY on GENET's MDIO bus; the VL805 xHCI controller and the VIA hub behind the PCIe root complex; the two HDMI outputs. Bottom: the microSD slot on EMMC2, the WiFi and Bluetooth module on the legacy EMMC, the USB-C port on DWC2, the 40-pin header on UART0 and BSC0, the camera and display connectors on BSC0. Every part carries the name of its spec in specs/, and every wire the parent link it draws.</desc>
   <style>
-    /* palette: light. The dark twin is generated from this block —
-       `cargo run -- spec-docs --update` after changing a colour here. */
+    /* palette: dark. Generated from the light sheet beside it by
+       `cargo run -- spec-docs --update` — edit that file, not this one. */
     svg {
-      --paper: #F7F8F6;
-      --sheet: #FBFCFB;
-      --soc: #E7EEEB;
-      --grp: #DCE6E2;
-      --ink: #16232B;
-      --muted: #4C5C63;
-      --dim: #6A787E;
-      --wire: #136B43;
-      --part: #8C2F1E;
-      --net: #2B55A6;
-      --power: #9C5200;
+      --paper: #0D1117;
+      --sheet: #161B22;
+      --soc: #172227;
+      --grp: #1F2B31;
+      --ink: #E6EDF3;
+      --muted: #9FB0B8;
+      --dim: #7D8B91;
+      --wire: #56D399;
+      --part: #E8917A;
+      --net: #8DB0F4;
+      --power: #E8A33D;
     }
     /* end palette */
     .bg { fill: var(--paper); }

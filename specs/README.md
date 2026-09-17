@@ -199,6 +199,7 @@ the spec pointing at them.
   exist.
 - A new block, `parent`, copy or base also goes on the board sheet,
   [`docs/board-sheet.svg`](../docs/board-sheet.svg), which is drawn by hand;
-  `tests/board_sheet.rs` fails until it is there. The generated
+  `tests/board_sheet.rs` fails until it is there, and
+  `cargo run -- spec-docs --update` rewrites the sheet's dark twin. The generated
   [`docs/periph/README.md`](../docs/periph/README.md) carries the same
   relations as a list, and the interrupt lines as a table.
