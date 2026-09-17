@@ -103,6 +103,77 @@ impl Ram {
         }
     }
 
+    /// The `N` bytes `off` bytes into RAM, for a bus that addresses memory by
+    /// offset instead of through a 32-bit window — the A72, which sees all of
+    /// an 8 GB board's DRAM.
+    #[inline]
+    fn bytes_at<const N: usize>(&self, off: u64) -> Option<[u8; N]> {
+        let off = usize::try_from(off).ok()?;
+        self.data.get(off..off.checked_add(N)?)?.try_into().ok()
+    }
+
+    #[inline]
+    fn bytes_at_mut<const N: usize>(&mut self, off: u64) -> Option<(usize, &mut [u8; N])> {
+        let off = usize::try_from(off).ok()?;
+        let b = self
+            .data
+            .get_mut(off..off.checked_add(N)?)?
+            .try_into()
+            .ok()?;
+        Some((off, b))
+    }
+
+    /// One value `off` bytes into RAM. The error carries the offset's low 32
+    /// bits, which is all [`BusError`] has room for.
+    #[inline]
+    pub fn load_at(&self, off: u64, width: Width) -> BusResult<u32> {
+        let v = match width {
+            Width::Byte => self.bytes_at::<1>(off).map(|b| u32::from(b[0])),
+            Width::Half => self
+                .bytes_at::<2>(off)
+                .map(|b| u32::from(u16::from_le_bytes(b))),
+            Width::Word => self.bytes_at::<4>(off).map(u32::from_le_bytes),
+        };
+        v.ok_or(BusError::Unmapped {
+            addr: off as u32,
+            width,
+            write: false,
+        })
+    }
+
+    #[inline]
+    pub fn store_at(&mut self, off: u64, width: Width, value: u32) -> BusResult<()> {
+        let unmapped = BusError::Unmapped {
+            addr: off as u32,
+            width,
+            write: true,
+        };
+        let (off, n) = match width {
+            Width::Byte => {
+                let (off, b) = self.bytes_at_mut::<1>(off).ok_or(unmapped)?;
+                *b = [value as u8];
+                (off, 1)
+            }
+            Width::Half => {
+                let (off, b) = self.bytes_at_mut::<2>(off).ok_or(unmapped)?;
+                *b = (value as u16).to_le_bytes();
+                (off, 2)
+            }
+            Width::Word => {
+                let (off, b) = self.bytes_at_mut::<4>(off).ok_or(unmapped)?;
+                *b = value.to_le_bytes();
+                (off, 4)
+            }
+        };
+        let first = off >> PAGE_SHIFT;
+        let last = (off + n - 1) >> PAGE_SHIFT;
+        self.gens[first] += 1;
+        if last != first {
+            self.gens[last] += 1;
+        }
+        Ok(())
+    }
+
     /// The `N` bytes at `addr`, if they are all in RAM.
     #[inline]
     fn bytes<const N: usize>(&self, addr: u32) -> Option<[u8; N]> {

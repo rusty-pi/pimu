@@ -183,6 +183,12 @@ pub const CORES: usize = 4;
 
 /// The peripheral window, and how far below it the VPU sees the same thing.
 const PERIPH: std::ops::Range<u64> = 0xFC00_0000..0xFF80_0000;
+/// Where the DRAM the peripherals shadow gives way to them, and where the rest
+/// of it comes back: a board with more than `0xFC00_0000` bytes has the 64 MB
+/// behind the window and everything above it at 4 GB, which is why the
+/// firmware's `/memory@0` stops the low bank there and carries on above.
+const RAM_LOW_END: u64 = PERIPH.start;
+const RAM_HIGH_BASE: u64 = 0x1_0000_0000;
 const PERIPH_TO_BUS: u64 = 0x8000_0000;
 
 /// The PCIe outbound window. What decodes in it — the VL805's BAR0, through
@@ -1069,7 +1075,9 @@ struct Stepped {
 
 /// Where an ARM physical address lands.
 enum Target {
-    Ram(u32),
+    /// An offset into DRAM: the A72 sees it from 0, all 8 GB of it on the
+    /// board that carries that much, so this is not a 32-bit address.
+    Ram(u64),
     /// A VPU bus address in the peripheral window.
     Periph(u32),
     Local(u32),
@@ -1114,8 +1122,8 @@ impl ArmBus<'_> {
             let base = u64::from(base);
             (addr >= base && end <= base + u64::from(len)).then(|| (addr - base) as u32)
         };
-        if end <= self.m.ram.len() as u64 {
-            Ok(Target::Ram(addr as u32))
+        if end <= self.m.ram.len() as u64 && (end <= RAM_LOW_END || addr >= RAM_HIGH_BASE) {
+            Ok(Target::Ram(addr))
         } else if PERIPH.contains(&addr) && end <= PERIPH.end {
             Ok(Target::Periph((addr - PERIPH_TO_BUS) as u32))
         } else if let Some(off) = within(armlocal::BASE, armlocal::SIZE) {
@@ -1151,7 +1159,7 @@ impl ArmBus<'_> {
         let target = self.route(addr, size, false)?;
         self.io |= !matches!(target, Target::Ram(_));
         let r = match target {
-            Target::Ram(a) => self.m.ram.load(self.m.ram.base() + a, w),
+            Target::Ram(off) => self.m.ram.load_at(off, w),
             Target::Periph(a) => self.m.load(a, w),
             Target::Local(o) => self.m.arm_local.read(o, w),
             Target::Gic(o) => {
@@ -1176,10 +1184,7 @@ impl ArmBus<'_> {
         let target = self.route(addr, size, true)?;
         self.io |= !matches!(target, Target::Ram(_));
         let r = match target {
-            Target::Ram(a) => {
-                let base = self.m.ram.base();
-                self.m.ram.store(base + a, w, v)
-            }
+            Target::Ram(off) => self.m.ram.store_at(off, w, v),
             Target::Periph(a) => {
                 // `--log mbox`: name what Linux asks the firmware for — the
                 // first tag of each property request it posts, and its
@@ -1269,11 +1274,12 @@ impl Memory for ArmBus<'_> {
     /// clear.
     #[inline]
     fn fetch(&mut self, addr: u64) -> Result<u32, Abort> {
-        if addr.saturating_add(4) <= self.m.ram.len() as u64 {
+        let end = addr.saturating_add(4);
+        if end <= self.m.ram.len() as u64 && (end <= RAM_LOW_END || addr >= RAM_HIGH_BASE) {
             return self
                 .m
                 .ram
-                .load(self.m.ram.base() + addr as u32, Width::Word)
+                .load_at(addr, Width::Word)
                 .map_err(|_| Abort { addr, write: false });
         }
         self.fetch_device(addr)

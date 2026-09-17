@@ -619,10 +619,9 @@ impl Loop {
                 return Ok((0, 0));
             }
             let over = std::mem::take(&mut bus.over);
-            let base = m.ram.base();
             for (a, b) in over {
                 m.ram
-                    .store(base + a as u32, Width::Byte, u32::from(b))
+                    .store_at(a, Width::Byte, u32::from(b))
                     .map_err(|_| ())?;
             }
             *cpu = c;
@@ -733,10 +732,10 @@ impl Loop {
             }
         }
         regs.put(cpu);
-        let base = m.ram.base();
         for (i, w) in state.iter().enumerate() {
-            let a = base + (self.state_pa + 4 * i as u64) as u32;
-            m.ram.store(a, Width::Word, *w).map_err(|_| ())?;
+            m.ram
+                .store_at(self.state_pa + 4 * i as u64, Width::Word, *w)
+                .map_err(|_| ())?;
         }
         Ok((gone + k * len, k))
     }

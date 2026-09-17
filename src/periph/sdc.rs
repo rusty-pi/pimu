@@ -101,6 +101,7 @@ const MR4_RESET: u8 = 2;
 const MR8_BASIC_CONFIG: u32 = 8;
 const MR8_16GB_X16: u8 = 0b0100 << 2;
 const MR8_32GB_X16: u8 = 0b0110 << 2;
+const MR8_8GB_X16: u8 = 0b0010 << 2;
 
 /// What the board is fitted with: the density of one die, and whether the
 /// second chip select answers like the first. The firmware multiplies the two
@@ -115,20 +116,33 @@ pub struct Dram {
 }
 
 impl Dram {
-    /// The parts a board with `ram_bytes` behind the bus would be fitted
-    /// with. Anything under 4 GiB keeps the 2 GB part, which every bootloader
-    /// release has an MCB record for.
-    pub fn for_ram(ram_bytes: usize) -> Dram {
-        match ram_bytes {
-            n if n >= 8 << 30 => Dram { die_gbit: 32, dual_rank: true },
-            n if n >= 4 << 30 => Dram { die_gbit: 32, dual_rank: false },
-            _ => Dram { die_gbit: 16, dual_rank: false },
+    /// The parts a board with `bytes` of memory is fitted with: a die twice
+    /// the size past 2 GB, and a second rank past 4 GB.
+    pub fn for_memory(bytes: usize) -> Dram {
+        match bytes {
+            n if n >= 8 << 30 => Dram {
+                die_gbit: 32,
+                dual_rank: true,
+            },
+            n if n >= 4 << 30 => Dram {
+                die_gbit: 32,
+                dual_rank: false,
+            },
+            n if n >= 2 << 30 => Dram {
+                die_gbit: 16,
+                dual_rank: false,
+            },
+            _ => Dram {
+                die_gbit: 8,
+                dual_rank: false,
+            },
         }
     }
 
     fn mr8(&self) -> u8 {
         match self.die_gbit {
             32 => MR8_32GB_X16,
+            8 => MR8_8GB_X16,
             _ => MR8_16GB_X16,
         }
     }
@@ -136,7 +150,10 @@ impl Dram {
 
 impl Default for Dram {
     fn default() -> Dram {
-        Dram { die_gbit: 16, dual_rank: false }
+        Dram {
+            die_gbit: 16,
+            dual_rank: false,
+        }
     }
 }
 
@@ -173,7 +190,11 @@ impl Sdc {
     /// A controller in front of the parts `dram` describes.
     pub fn with_dram(dram: Dram) -> Sdc {
         let mut mode_regs = BTreeMap::new();
-        let ranks: &[bool] = if dram.dual_rank { &[false, true] } else { &[false] };
+        let ranks: &[bool] = if dram.dual_rank {
+            &[false, true]
+        } else {
+            &[false]
+        };
         for &device in ranks {
             for chan in [false, true] {
                 mode_regs.insert((device, chan, MR4_REFRESH_RATE as u8), MR4_RESET);
@@ -305,14 +326,39 @@ mod tests {
 
     #[test]
     fn a_bigger_board_is_fitted_with_bigger_parts() {
-        assert_eq!(Dram::for_ram(2 << 30), Dram { die_gbit: 16, dual_rank: false });
-        assert_eq!(Dram::for_ram(4 << 30), Dram { die_gbit: 32, dual_rank: false });
-        assert_eq!(Dram::for_ram(8 << 30), Dram { die_gbit: 32, dual_rank: true });
+        assert_eq!(
+            Dram::for_memory(1 << 30),
+            Dram {
+                die_gbit: 8,
+                dual_rank: false
+            }
+        );
+        assert_eq!(
+            Dram::for_memory(2 << 30),
+            Dram {
+                die_gbit: 16,
+                dual_rank: false
+            }
+        );
+        assert_eq!(
+            Dram::for_memory(4 << 30),
+            Dram {
+                die_gbit: 32,
+                dual_rank: false
+            }
+        );
+        assert_eq!(
+            Dram::for_memory(8 << 30),
+            Dram {
+                die_gbit: 32,
+                dual_rank: true
+            }
+        );
     }
 
     #[test]
     fn the_8_gb_board_answers_on_both_ranks_with_32_gb_dies() {
-        let mut sdc = Sdc::with_dram(Dram::for_ram(8 << 30));
+        let mut sdc = Sdc::with_dram(Dram::for_memory(8 << 30));
         for key in [8, 8 | MR_CHANNEL, 8 | MR_DEVICE, 8 | MR_DEVICE | MR_CHANNEL] {
             assert_eq!(read_mr(&mut sdc, key), u32::from(MR8_32GB_X16));
         }

@@ -249,7 +249,7 @@ What the firmware answers today:
 | `0x00030092` `GET_CRYPTO_HMAC_SHA256` | status `0`, length `0x20`, and a real HMAC. Ask with `0x00030092=<flags>.<key_id>.<len>.<message words>`. |
 | `0x00030095` `GET_CRYPTO_GEN_ECDSA_KEY` | `0x80000000` for `key_id` 0, for the same reason. |
 | `0x00010001` `GET_BOARD_MODEL` | `0`. |
-| `0x00010002` `GET_BOARD_REVISION` | The revision code with the memory the ARM got: `0x00b03115` on the default 2 GB board, whose fuses say `d03115`. |
+| `0x00010002` `GET_BOARD_REVISION` | The revision code with the memory the ARM got, which on the default board is the `d03115` its fuses say. |
 | `0x00010003` `GET_BOARD_MAC_ADDRESS` | Six bytes: OTP row 65 most significant byte first, then the top two bytes of row 64. |
 | `0x00010004` `GET_BOARD_SERIAL` | The serial (OTP row 28), then `0x10000000`. |
 | `0x00010005` `GET_ARM_MEMORY` | `0`, `0x3b400000` with `fixup4.dat` on the card; `0`, `0x08000000` without it, when `arm_loader` also says 128MB. |

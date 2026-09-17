@@ -266,7 +266,7 @@ impl Machine {
             board: crate::soc::Board::default(),
             config_otp: ConfigOtp::new(),
             sdramc: Sdramc::new(),
-            sdc: Sdc::with_dram(crate::periph::sdc::Dram::for_ram(ram_bytes)),
+            sdc: Sdc::new(),
             bootbox: BootBox::new(),
             dma4: Dma4::new(),
             dma_legacy: crate::periph::dma_legacy::DmaLegacy::new(),
@@ -325,6 +325,9 @@ impl Machine {
     pub fn set_board(&mut self, board: crate::soc::Board) {
         self.board = board;
         self.config_otp.set(30, board.revision);
+        // The DRAM parts are the ones a board of that size is fitted with, so
+        // the firmware trains and publishes the memory the revision claims.
+        self.sdc = Sdc::with_dram(crate::periph::sdc::Dram::for_memory(board.memory_bytes()));
         self.bsc_pmic
             .fit_pmics(crate::periph::Pmic::for_board(board));
     }

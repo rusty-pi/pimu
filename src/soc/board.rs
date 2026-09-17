@@ -52,6 +52,12 @@ impl Board {
         Board { stepping, revision }
     }
 
+    /// The memory the revision code says the board has: 256 MB shifted left
+    /// by bits 22:20, so a rev 1.5 4B (`d03115`) is the 8 GB board.
+    pub const fn memory_bytes(self) -> usize {
+        (256 << 20) << ((self.revision >> 20) & 7)
+    }
+
     /// The PCB revision: 2 for rev 1.2, 5 for rev 1.5.
     pub const fn pcb_revision(self) -> u32 {
         self.revision & 0xF
