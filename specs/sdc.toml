@@ -3,7 +3,7 @@ name    = "sdc"
 base    = 0x7E001000
 size    = 0x1000
 summary = "Legacy SDRAM-controller interface: DRAM timing table, sub-controller ready bits, LPDDR4 mode-register port"
-notes   = "The DRAM clock tree is not modelled: timing words read back, every sub-controller reports ready, and the mode registers are a table seeded with the reference board's MR4 and a 2 GB board's MR8 (one rank of 16 Gb x16 dies; the second rank is not fitted)."
+notes   = "The DRAM clock tree is not modelled: timing words read back, every sub-controller reports ready, and the mode registers are a table seeded with the reference board's MR4 and an MR8 for the parts the board is fitted with. MR8 `OP[5:2]` is the density of one die (`0b0100` 16 Gb, `0b0110` 32 Gb) and `OP[7:6]` its width; the firmware multiplies the density by the ranks it finds into the size it logs (`total-size: NNGbit`) and keys its MCB record on, so the parts decide how much memory the board has: one rank of 16 Gb dies is a 2 GB Pi 4, one rank of 32 Gb dies a 4 GB one, and two ranks of 32 Gb dies the 8 GB reference board, whose `/memory@0` then carries four ranges (the 32-bit size cell cannot hold a bank above 4 GB in one). The model picks them from the RAM behind the bus."
 
 [[block.source]]
 kind       = "decompile"
@@ -121,7 +121,7 @@ confidence = "high"
 [[register.field]]
 name  = "DEVICE"
 bits  = "24"
-notes = "Device (rank, i.e. chip select). A rank that is not fitted answers nothing, so every mode register reads 0 there."
+notes = "Device (rank, i.e. chip select). A rank that is not fitted answers nothing, so every mode register reads 0 there; on a dual-rank board both answer alike, which is how the firmware counts the second one."
 
 [[register.field.source]]
 kind       = "decompile"

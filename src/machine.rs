@@ -266,7 +266,7 @@ impl Machine {
             board: crate::soc::Board::default(),
             config_otp: ConfigOtp::new(),
             sdramc: Sdramc::new(),
-            sdc: Sdc::new(),
+            sdc: Sdc::with_dram(crate::periph::sdc::Dram::for_ram(ram_bytes)),
             bootbox: BootBox::new(),
             dma4: Dma4::new(),
             dma_legacy: crate::periph::dma_legacy::DmaLegacy::new(),
