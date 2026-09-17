@@ -19,12 +19,13 @@ Sources:
 | Offset | Name | Access | Width | Sources |
 |---|---|---|---|---|
 | `0x000` | [`SYS_REV_CTRL`](#sys_rev_ctrl) | r | 32 | 2, best high |
-| `0x004` | [`SYS_PORT_CTRL`](#sys_port_ctrl) | rw | 32 | 1, best high |
+| `0x004` | [`SYS_PORT_CTRL`](#sys_port_ctrl) | rw | 32 | 2, best high |
 | `0x008` | [`SYS_RBUF_FLUSH_CTRL`](#sys_rbuf_flush_ctrl) | rw | 32 | 1, best high |
 | `0x00C` | [`SYS_TBUF_FLUSH_CTRL`](#sys_tbuf_flush_ctrl) | rw | 32 | 1, best high |
 | `0x080` | [`EXT_PWR_MGMT`](#ext_pwr_mgmt) | rw | 32 | 1, best high |
-| `0x08C` | [`EXT_RGMII_OOB_CTRL`](#ext_rgmii_oob_ctrl) | rw | 32 | 1, best high |
-| `0x09C` | [`EXT_GPHY_CTRL`](#ext_gphy_ctrl) | rw | 32 | 1, best high |
+| `0x08C` | [`EXT_RGMII_OOB_CTRL`](#ext_rgmii_oob_ctrl) | rw | 32 | 2, best high |
+| `0x09C` | [`EXT_GPHY_CTRL`](#ext_gphy_ctrl) | rw | 32 | 2, best high |
+| `0x0A4` | [`EXT_24`](#ext_24) | rw | 32 | 2, best high |
 | `0x200`–`0x240` (2 × 0x40) | [`INTRL2_CPU_STAT`](#intrl2_cpu_stat) | r | 32 | 1, best high |
 | `0x204`–`0x244` (2 × 0x40) | [`INTRL2_CPU_SET`](#intrl2_cpu_set) | w | 32 | 1, best high |
 | `0x208`–`0x248` (2 × 0x40) | [`INTRL2_CPU_CLEAR`](#intrl2_cpu_clear) | w | 32 | 1, best high |
@@ -37,39 +38,57 @@ Sources:
 | `0x600` | [`TBUF_CTRL`](#tbuf_ctrl) | rw | 32 | 1, best high |
 | `0x60C` | [`TBUF_BP_MC`](#tbuf_bp_mc) | rw | 32 | 1, best high |
 | `0x804` | [`UMAC_HD_BKP_CTRL`](#umac_hd_bkp_ctrl) | rw | 32 | 1, best high |
-| `0x808` | [`UMAC_CMD`](#umac_cmd) | rw | 32 | 2, best high |
+| `0x808` | [`UMAC_CMD`](#umac_cmd) | rw | 32 | 3, best high |
 | `0x80C` | [`UMAC_MAC0`](#umac_mac0) | rw | 32 | 1, best high |
 | `0x810` | [`UMAC_MAC1`](#umac_mac1) | rw | 32 | 1, best high |
-| `0x814` | [`UMAC_MAX_FRAME_LEN`](#umac_max_frame_len) | rw | 32 | 1, best high |
+| `0x814` | [`UMAC_MAX_FRAME_LEN`](#umac_max_frame_len) | rw | 32 | 2, best high |
 | `0x818` | [`UMAC_PAUSE_QUANTA`](#umac_pause_quanta) | rw | 32 | 1, best high |
 | `0x844` | [`UMAC_MODE`](#umac_mode) | r | 32 | 2, best high |
 | `0x85C` | [`UMAC_TX_IPG_LEN`](#umac_tx_ipg_len) | rw | 32 | 1, best high |
 | `0x864` | [`UMAC_EEE_CTRL`](#umac_eee_ctrl) | rw | 32 | 1, best high |
 | `0xC00`–`0xD7C` (96 × 0x4) | [`UMAC_MIB`](#umac_mib) | r | 32 | 1, best high |
 | `0xD80` | [`UMAC_MIB_CTRL`](#umac_mib_ctrl) | rw | 32 | 1, best high |
+| `0xE04` | [`UMAC_604`](#umac_604) | rw | 32 | 2, best high |
+| `0xE08` | [`UMAC_608`](#umac_608) | rw | 32 | 2, best high |
 | `0xE14` | [`UMAC_MDIO_CMD`](#umac_mdio_cmd) | rw | 32 | 2, best high |
-| `0xE18` | [`UMAC_MDIO_CFG`](#umac_mdio_cfg) | rw | 32 | 1, best high |
+| `0xE18` | [`UMAC_MDIO_CFG`](#umac_mdio_cfg) | rw | 32 | 2, best high |
 | `0x2000`–`0x2BFC` (768 × 0x4) | [`RDMA_DESC`](#rdma_desc) | rw | 32 | 1, best high |
 | `0x2C00`–`0x3000` (17 × 0x40) | [`RDMA_RING_WRITE_PTR`](#rdma_ring_write_ptr) | rw | 32 | 1, best high |
+| `0x2C04`–`0x3004` (17 × 0x40) | [`RDMA_RING_WRITE_PTR_HI`](#rdma_ring_write_ptr_hi) | rw | 32 | 2, best high |
 | `0x2C08`–`0x3008` (17 × 0x40) | [`RDMA_RING_PROD_INDEX`](#rdma_ring_prod_index) | rw | 32 | 1, best high |
 | `0x2C0C`–`0x300C` (17 × 0x40) | [`RDMA_RING_CONS_INDEX`](#rdma_ring_cons_index) | rw | 32 | 1, best high |
-| `0x2C10`–`0x3010` (17 × 0x40) | [`RDMA_RING_BUF_SIZE`](#rdma_ring_buf_size) | rw | 32 | 1, best high |
+| `0x2C10`–`0x3010` (17 × 0x40) | [`RDMA_RING_BUF_SIZE`](#rdma_ring_buf_size) | rw | 32 | 2, best high |
 | `0x2C14`–`0x3014` (17 × 0x40) | [`RDMA_RING_START_ADDR`](#rdma_ring_start_addr) | rw | 32 | 1, best high |
+| `0x2C18`–`0x3018` (17 × 0x40) | [`RDMA_RING_START_ADDR_HI`](#rdma_ring_start_addr_hi) | rw | 32 | 2, best high |
 | `0x2C1C`–`0x301C` (17 × 0x40) | [`RDMA_RING_END_ADDR`](#rdma_ring_end_addr) | rw | 32 | 1, best high |
+| `0x2C20`–`0x3020` (17 × 0x40) | [`RDMA_RING_END_ADDR_HI`](#rdma_ring_end_addr_hi) | rw | 32 | 2, best high |
+| `0x2C24`–`0x3024` (17 × 0x40) | [`RDMA_RING_MBUF_DONE_THRESH`](#rdma_ring_mbuf_done_thresh) | rw | 32 | 2, best high |
+| `0x2C28`–`0x3028` (17 × 0x40) | [`RDMA_RING_XON_XOFF_THRESH`](#rdma_ring_xon_xoff_thresh) | rw | 32 | 2, best high |
+| `0x2C2C`–`0x302C` (17 × 0x40) | [`RDMA_RING_READ_PTR`](#rdma_ring_read_ptr) | rw | 32 | 1, best high |
+| `0x2C30`–`0x3030` (17 × 0x40) | [`RDMA_RING_READ_PTR_HI`](#rdma_ring_read_ptr_hi) | rw | 32 | 1, best high |
 | `0x3040` | [`RDMA_RING_CFG`](#rdma_ring_cfg) | rw | 32 | 1, best high |
 | `0x3044` | [`RDMA_CTRL`](#rdma_ctrl) | rw | 32 | 2, best high |
 | `0x3048` | [`RDMA_STATUS`](#rdma_status) | r | 32 | 2, best high |
+| `0x304C` | [`RDMA_SCB_BURST_SIZE`](#rdma_scb_burst_size) | rw | 32 | 3, best high |
 | `0x30B0`–`0x30CC` (8 × 0x4) | [`RDMA_INDEX2RING`](#rdma_index2ring) | rw | 32 | 1, best high |
 | `0x4000`–`0x4BFC` (768 × 0x4) | [`TDMA_DESC`](#tdma_desc) | rw | 32 | 1, best high |
 | `0x4C00`–`0x5000` (17 × 0x40) | [`TDMA_RING_READ_PTR`](#tdma_ring_read_ptr) | rw | 32 | 1, best high |
+| `0x4C04`–`0x5004` (17 × 0x40) | [`TDMA_RING_READ_PTR_HI`](#tdma_ring_read_ptr_hi) | rw | 32 | 2, best high |
 | `0x4C08`–`0x5008` (17 × 0x40) | [`TDMA_RING_CONS_INDEX`](#tdma_ring_cons_index) | rw | 32 | 1, best high |
 | `0x4C0C`–`0x500C` (17 × 0x40) | [`TDMA_RING_PROD_INDEX`](#tdma_ring_prod_index) | rw | 32 | 1, best high |
-| `0x4C10`–`0x5010` (17 × 0x40) | [`TDMA_RING_BUF_SIZE`](#tdma_ring_buf_size) | rw | 32 | 1, best high |
+| `0x4C10`–`0x5010` (17 × 0x40) | [`TDMA_RING_BUF_SIZE`](#tdma_ring_buf_size) | rw | 32 | 2, best high |
 | `0x4C14`–`0x5014` (17 × 0x40) | [`TDMA_RING_START_ADDR`](#tdma_ring_start_addr) | rw | 32 | 1, best high |
+| `0x4C18`–`0x5018` (17 × 0x40) | [`TDMA_RING_START_ADDR_HI`](#tdma_ring_start_addr_hi) | rw | 32 | 2, best high |
 | `0x4C1C`–`0x501C` (17 × 0x40) | [`TDMA_RING_END_ADDR`](#tdma_ring_end_addr) | rw | 32 | 1, best high |
+| `0x4C20`–`0x5020` (17 × 0x40) | [`TDMA_RING_END_ADDR_HI`](#tdma_ring_end_addr_hi) | rw | 32 | 2, best high |
+| `0x4C24`–`0x5024` (17 × 0x40) | [`TDMA_RING_MBUF_DONE_THRESH`](#tdma_ring_mbuf_done_thresh) | rw | 32 | 2, best high |
+| `0x4C28`–`0x5028` (17 × 0x40) | [`TDMA_RING_FLOW_PERIOD`](#tdma_ring_flow_period) | rw | 32 | 2, best high |
+| `0x4C2C`–`0x502C` (17 × 0x40) | [`TDMA_RING_WRITE_PTR`](#tdma_ring_write_ptr) | rw | 32 | 2, best high |
+| `0x4C30`–`0x5030` (17 × 0x40) | [`TDMA_RING_WRITE_PTR_HI`](#tdma_ring_write_ptr_hi) | rw | 32 | 2, best high |
 | `0x5040` | [`TDMA_RING_CFG`](#tdma_ring_cfg) | rw | 32 | 1, best high |
 | `0x5044` | [`TDMA_CTRL`](#tdma_ctrl) | rw | 32 | 1, best high |
 | `0x5048` | [`TDMA_STATUS`](#tdma_status) | r | 32 | 1, best high |
+| `0x504C` | [`TDMA_SCB_BURST_SIZE`](#tdma_scb_burst_size) | rw | 32 | 3, best high |
 | `0x8000`–`0xDFFC` (6144 × 0x4) | [`HFB_RAM`](#hfb_ram) | rw | 32 | 1, best high |
 | `0xFC00` | [`HFB_CTRL`](#hfb_ctrl) | rw | 32 | 1, best high |
 | `0xFC04`–`0xFC08` (2 × 0x4) | [`HFB_FLT_ENABLE`](#hfb_flt_enable) | rw | 32 | 1, best high |
@@ -95,6 +114,7 @@ Port mode.
 Sources:
 
 - linux (high): `bcmgenet.h`: `SYS_PORT_CTRL`
+- trace (high): `tftp-boot`: the bootloader writes 0 when it resets the port and 3 (external gigabit PHY, `PORT_MODE_EXT_GPHY`) when it sets the MAC up
 
 ## `SYS_RBUF_FLUSH_CTRL`
 
@@ -135,6 +155,7 @@ RGMII out-of-band control. Measured `0x00f00050`: Linux adds `RGMII_MODE_EN` (6)
 Sources:
 
 - measured (high): `EXT_RGMII_OOB_CTRL` `0x00f00050`
+- trace (high): `tftp-boot`: the bootloader writes `0x00f00000` when it resets the port and `0x00f00050` when it sets the MAC up
 
 ## `EXT_GPHY_CTRL`
 
@@ -145,6 +166,18 @@ Internal GPHY control; unused with the external RGMII PHY.
 Sources:
 
 - measured (high): `EXT_GPHY_CTRL` `0x00000000`
+- trace (high): `tftp-boot`: the bootloader writes `0x10b` when it resets the port and 0 when it sets the MAC up
+
+## `EXT_24`
+
+Offset `0x0A4` · access `rw` · 32 bits
+
+An `EXT` register Linux does not name. The bootloader's network boot writes `0xf8` to it when it resets the port and again when it sets the MAC up.
+
+Sources:
+
+- decompile (high): EEPROM bootloader network boot: `0x91AFC` and `0x91504` store `0xf8`
+- trace (high): `tftp-boot`: written `0x000000f8` twice before the rings are set up
 
 ## `INTRL2_CPU_STAT`
 
@@ -331,6 +364,7 @@ Sources:
 
 - linux (high): `unimac.h`: `UMAC_CMD`
 - measured (high): `UMAC_CMD` `0x0000000b` with the link up
+- trace (high): `tftp-boot`: the bootloader writes `0x010000d8` before the PHY reset, `0x0000a000` (`SW_RESET` and `LCL_LOOP_EN`) while it sets the rings up, and `0x1000010b` (`PRBL_EN`, `RX_PAUSE_IGNORE`, 1000 Mbit/s, `RX_EN`, `TX_EN`) to start; start4 writes `0x1000010b` only
 
 `TX_EN` sources:
 
@@ -393,6 +427,7 @@ Largest frame accepted.
 Sources:
 
 - linux (high): `unimac.h`: `UMAC_MAX_FRAME_LEN`
+- trace (high): `tftp-boot`: both stages write 1536
 
 ## `UMAC_PAUSE_QUANTA`
 
@@ -455,6 +490,28 @@ Sources:
 
 - linux (high): `bcmgenet.h`: `UMAC_MIB_CTRL`, `MIB_RESET_RX` / `_RUNT` / `_TX`
 
+## `UMAC_604`
+
+Offset `0xE04` · access `rw` · 32 bits
+
+Written `0x00030418` by the bootloader's network boot and by start4 before they set the rings up; not named in Linux, and nothing reads it.
+
+Sources:
+
+- decompile (high): EEPROM bootloader network boot: `0x92070`; start4 `0x0ECC39DC`
+- trace (high): `tftp-boot`: `0x00030418` from both stages
+
+## `UMAC_608`
+
+Offset `0xE08` · access `rw` · 32 bits
+
+Written 1518 (`0x5ee`), the longest frame with its FCS, by the bootloader's network boot and by start4 just before `UMAC_604`; not named in Linux.
+
+Sources:
+
+- decompile (high): EEPROM bootloader network boot: `0x9206A`; start4 `0x0ECC39D6`
+- trace (high): `tftp-boot`: `0x000005ee` from both stages
+
 ## `UMAC_MDIO_CMD`
 
 Offset `0xE14` · access `rw` · 32 bits
@@ -508,6 +565,7 @@ MDIO configuration; left in clause-22 mode by every client.
 Sources:
 
 - measured (high): `MDIO_CFG` `0x00000091`
+- decompile (high): EEPROM bootloader network boot: `0x91B40` writes `0xc1` (divider 12, clause 22) for the BCM54213PE, `0x3f1` (divider 63) for its third PHY kind
 
 ## `RDMA_DESC`
 
@@ -528,6 +586,17 @@ Per-ring write pointer, in descriptor-RAM words.
 Sources:
 
 - linux (high): `bcmgenet.c`: `genet_dma_ring_regs_v4`, `RDMA_WRITE_PTR`
+
+## `RDMA_RING_WRITE_PTR_HI`
+
+Offset `0x2C04`, 17 elements 0x40 apart · access `rw` · 32 bits
+
+Upper address word; both stages write 0 (32-bit DMA).
+
+Sources:
+
+- linux (high): `bcmgenet.c`: `genet_dma_ring_regs_v4` `RDMA_WRITE_PTR_HI`
+- trace (high): `tftp-boot`: ring 16 written 0 by both stages
 
 ## `RDMA_RING_PROD_INDEX`
 
@@ -558,6 +627,7 @@ Ring size (31:16) and buffer length (15:0).
 Sources:
 
 - linux (high): `bcmgenet.c`: `DMA_RING_BUF_SIZE`
+- trace (high): `tftp-boot`: ring 16 gets `0x00400800` (64 x 2048) from the bootloader and `0x00800800` (128 x 2048) from start4
 
 ## `RDMA_RING_START_ADDR`
 
@@ -569,6 +639,17 @@ Sources:
 
 - linux (high): `bcmgenet.c`: `DMA_START_ADDR`
 
+## `RDMA_RING_START_ADDR_HI`
+
+Offset `0x2C18`, 17 elements 0x40 apart · access `rw` · 32 bits
+
+Upper address word; both stages write 0 (32-bit DMA).
+
+Sources:
+
+- linux (high): `bcmgenet.c`: `genet_dma_ring_regs_v4` `DMA_START_ADDR_HI`
+- trace (high): `tftp-boot`: ring 16 written 0 by both stages
+
 ## `RDMA_RING_END_ADDR`
 
 Offset `0x2C1C`, 17 elements 0x40 apart · access `rw` · 32 bits
@@ -578,6 +659,59 @@ Last word of the ring, inclusive.
 Sources:
 
 - linux (high): `bcmgenet.c`: `DMA_END_ADDR`
+
+## `RDMA_RING_END_ADDR_HI`
+
+Offset `0x2C20`, 17 elements 0x40 apart · access `rw` · 32 bits
+
+Upper address word; both stages write 0 (32-bit DMA).
+
+Sources:
+
+- linux (high): `bcmgenet.c`: `genet_dma_ring_regs_v4` `DMA_END_ADDR_HI`
+- trace (high): `tftp-boot`: ring 16 written 0 by both stages
+
+## `RDMA_RING_MBUF_DONE_THRESH`
+
+Offset `0x2C24`, 17 elements 0x40 apart · access `rw` · 32 bits
+
+Frames before a done interrupt; both stages write 1 for ring 16.
+
+Sources:
+
+- linux (high): `bcmgenet.c`: `genet_dma_ring_regs_v4` `DMA_MBUF_DONE_THRESH`
+- trace (high): `tftp-boot`: ring 16 written 1 by both stages
+
+## `RDMA_RING_XON_XOFF_THRESH`
+
+Offset `0x2C28`, 17 elements 0x40 apart · access `rw` · 32 bits
+
+Flow-control thresholds; both stages write `0x0005000a` (5 and 10) for ring 16.
+
+Sources:
+
+- linux (high): `bcmgenet.c`: `genet_dma_ring_regs_v4` `RDMA_XON_XOFF_THRESH`
+- trace (high): `tftp-boot`: ring 16 written `0x0005000a` by both stages
+
+## `RDMA_RING_READ_PTR`
+
+Offset `0x2C2C`, 17 elements 0x40 apart · access `rw` · 32 bits
+
+Receive read pointer; neither stage writes it.
+
+Sources:
+
+- linux (high): `bcmgenet.c`: `genet_dma_ring_regs_v4` `RDMA_READ_PTR`
+
+## `RDMA_RING_READ_PTR_HI`
+
+Offset `0x2C30`, 17 elements 0x40 apart · access `rw` · 32 bits
+
+Upper word of the receive read pointer.
+
+Sources:
+
+- linux (high): `bcmgenet.c`: `genet_dma_ring_regs_v4` `RDMA_READ_PTR_HI`
 
 ## `RDMA_RING_CFG`
 
@@ -619,6 +753,18 @@ Sources:
 - measured (high): `RDMA_CTRL` `0x03` / `RDMA_STATUS` `0x3fffc` and `TDMA_CTRL` `0x3f` / `TDMA_STATUS` `0x3ffc0` fit exactly this
 - decompile (high): the bootloader waits for bit 18 after reset and bit 0 after a stop
 
+## `RDMA_SCB_BURST_SIZE`
+
+Offset `0x304C` · access `rw` · 32 bits
+
+Bus burst length; the bootloader's network boot writes 8 when it sets the MAC up, start4 leaves it.
+
+Sources:
+
+- linux (high): `bcmgenet.h`: `DMA_SCB_BURST_SIZE` (DMA `+0x0c`)
+- decompile (high): EEPROM bootloader network boot: `0x91512`
+- trace (high): `tftp-boot`: `0x00000008`
+
 ## `RDMA_INDEX2RING`
 
 Offset `0x30B0`, 8 elements 0x4 apart · access `rw` · 32 bits
@@ -649,6 +795,17 @@ Sources:
 
 - linux (high): `bcmgenet.c`: `TDMA_READ_PTR`
 
+## `TDMA_RING_READ_PTR_HI`
+
+Offset `0x4C04`, 17 elements 0x40 apart · access `rw` · 32 bits
+
+Upper address word; both stages write 0 (32-bit DMA).
+
+Sources:
+
+- linux (high): `bcmgenet.c`: `genet_dma_ring_regs_v4` `TDMA_READ_PTR_HI`
+- trace (high): `tftp-boot`: ring 16 written 0 by both stages
+
 ## `TDMA_RING_CONS_INDEX`
 
 Offset `0x4C08`, 17 elements 0x40 apart · access `rw` · 32 bits
@@ -678,6 +835,7 @@ Ring size and buffer length.
 Sources:
 
 - linux (high): `bcmgenet.c`: `DMA_RING_BUF_SIZE`
+- trace (high): `tftp-boot`: ring 16 gets `0x00200800` (32 x 2048) from the bootloader and `0x00080800` (8 x 2048) from start4
 
 ## `TDMA_RING_START_ADDR`
 
@@ -689,6 +847,17 @@ Sources:
 
 - linux (high): `bcmgenet.c`: `DMA_START_ADDR`
 
+## `TDMA_RING_START_ADDR_HI`
+
+Offset `0x4C18`, 17 elements 0x40 apart · access `rw` · 32 bits
+
+Upper address word; both stages write 0 (32-bit DMA).
+
+Sources:
+
+- linux (high): `bcmgenet.c`: `genet_dma_ring_regs_v4` `DMA_START_ADDR_HI`
+- trace (high): `tftp-boot`: ring 16 written 0 by both stages
+
 ## `TDMA_RING_END_ADDR`
 
 Offset `0x4C1C`, 17 elements 0x40 apart · access `rw` · 32 bits
@@ -698,6 +867,61 @@ Last word of the ring, inclusive.
 Sources:
 
 - linux (high): `bcmgenet.c`: `DMA_END_ADDR`
+
+## `TDMA_RING_END_ADDR_HI`
+
+Offset `0x4C20`, 17 elements 0x40 apart · access `rw` · 32 bits
+
+Upper address word; both stages write 0 (32-bit DMA).
+
+Sources:
+
+- linux (high): `bcmgenet.c`: `genet_dma_ring_regs_v4` `DMA_END_ADDR_HI`
+- trace (high): `tftp-boot`: ring 16 written 0 by both stages
+
+## `TDMA_RING_MBUF_DONE_THRESH`
+
+Offset `0x4C24`, 17 elements 0x40 apart · access `rw` · 32 bits
+
+Frames before a done interrupt; both stages write 1 for ring 16.
+
+Sources:
+
+- linux (high): `bcmgenet.c`: `genet_dma_ring_regs_v4` `DMA_MBUF_DONE_THRESH`
+- trace (high): `tftp-boot`: ring 16 written 1 by both stages
+
+## `TDMA_RING_FLOW_PERIOD`
+
+Offset `0x4C28`, 17 elements 0x40 apart · access `rw` · 32 bits
+
+Transmit flow period; both stages write 0 for ring 16.
+
+Sources:
+
+- linux (high): `bcmgenet.c`: `genet_dma_ring_regs_v4` `TDMA_FLOW_PERIOD`
+- trace (high): `tftp-boot`: ring 16 written 0 by both stages
+
+## `TDMA_RING_WRITE_PTR`
+
+Offset `0x4C2C`, 17 elements 0x40 apart · access `rw` · 32 bits
+
+Transmit write pointer; both stages write the ring's start (0) for ring 16.
+
+Sources:
+
+- linux (high): `bcmgenet.c`: `genet_dma_ring_regs_v4` `TDMA_WRITE_PTR`
+- trace (high): `tftp-boot`: ring 16 written 0 by both stages
+
+## `TDMA_RING_WRITE_PTR_HI`
+
+Offset `0x4C30`, 17 elements 0x40 apart · access `rw` · 32 bits
+
+Upper address word; both stages write 0 (32-bit DMA).
+
+Sources:
+
+- linux (high): `bcmgenet.c`: `genet_dma_ring_regs_v4` `TDMA_WRITE_PTR_HI`
+- trace (high): `tftp-boot`: ring 16 written 0 by both stages
 
 ## `TDMA_RING_CFG`
 
@@ -728,6 +952,18 @@ As `RDMA_STATUS`.
 Sources:
 
 - measured (high): `TDMA_STATUS` `0x0003ffc0`
+
+## `TDMA_SCB_BURST_SIZE`
+
+Offset `0x504C` · access `rw` · 32 bits
+
+Bus burst length; the bootloader's network boot writes 8 when it sets the MAC up, start4 leaves it.
+
+Sources:
+
+- linux (high): `bcmgenet.h`: `DMA_SCB_BURST_SIZE` (DMA `+0x0c`)
+- decompile (high): EEPROM bootloader network boot: `0x91518`
+- trace (high): `tftp-boot`: `0x00000008`
 
 ## `HFB_RAM`
 

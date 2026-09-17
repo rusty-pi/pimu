@@ -48,6 +48,11 @@ kind       = "linux"
 ref        = "`bcmgenet.h`: `SYS_PORT_CTRL`"
 confidence = "high"
 
+[[register.source]]
+kind       = "trace"
+ref        = "`tftp-boot`: the bootloader writes 0 when it resets the port and 3 (external gigabit PHY, `PORT_MODE_EXT_GPHY`) when it sets the MAC up"
+confidence = "high"
+
 [[register]]
 name   = "SYS_RBUF_FLUSH_CTRL"
 offset = 0x0008
@@ -94,6 +99,11 @@ kind       = "measured"
 ref        = "`EXT_RGMII_OOB_CTRL` `0x00f00050`"
 confidence = "high"
 
+[[register.source]]
+kind       = "trace"
+ref        = "`tftp-boot`: the bootloader writes `0x00f00000` when it resets the port and `0x00f00050` when it sets the MAC up"
+confidence = "high"
+
 [[register]]
 name   = "EXT_GPHY_CTRL"
 offset = 0x009C
@@ -103,6 +113,27 @@ notes  = "Internal GPHY control; unused with the external RGMII PHY."
 [[register.source]]
 kind       = "measured"
 ref        = "`EXT_GPHY_CTRL` `0x00000000`"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "`tftp-boot`: the bootloader writes `0x10b` when it resets the port and 0 when it sets the MAC up"
+confidence = "high"
+
+[[register]]
+name   = "EXT_24"
+offset = 0x00A4
+access = "rw"
+notes  = "An `EXT` register Linux does not name. The bootloader's network boot writes `0xf8` to it when it resets the port and again when it sets the MAC up."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "EEPROM bootloader network boot: `0x91AFC` and `0x91504` store `0xf8`"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "`tftp-boot`: written `0x000000f8` twice before the rings are set up"
 confidence = "high"
 
 [[register]]
@@ -338,6 +369,11 @@ kind       = "measured"
 ref        = "`UMAC_CMD` `0x0000000b` with the link up"
 confidence = "high"
 
+[[register.source]]
+kind       = "trace"
+ref        = "`tftp-boot`: the bootloader writes `0x010000d8` before the PHY reset, `0x0000a000` (`SW_RESET` and `LCL_LOOP_EN`) while it sets the rings up, and `0x1000010b` (`PRBL_EN`, `RX_PAUSE_IGNORE`, 1000 Mbit/s, `RX_EN`, `TX_EN`) to start; start4 writes `0x1000010b` only"
+confidence = "high"
+
 [[register.field]]
 name  = "TX_EN"
 bits  = "0"
@@ -451,6 +487,11 @@ kind       = "linux"
 ref        = "`unimac.h`: `UMAC_MAX_FRAME_LEN`"
 confidence = "high"
 
+[[register.source]]
+kind       = "trace"
+ref        = "`tftp-boot`: both stages write 1536"
+confidence = "high"
+
 [[register]]
 name   = "UMAC_PAUSE_QUANTA"
 offset = 0x0818
@@ -525,6 +566,38 @@ notes  = "MIB control; bits 2:0 reset the RX / RUNT / TX counters."
 [[register.source]]
 kind       = "linux"
 ref        = "`bcmgenet.h`: `UMAC_MIB_CTRL`, `MIB_RESET_RX` / `_RUNT` / `_TX`"
+confidence = "high"
+
+[[register]]
+name   = "UMAC_604"
+offset = 0x0E04
+access = "rw"
+notes  = "Written `0x00030418` by the bootloader's network boot and by start4 before they set the rings up; not named in Linux, and nothing reads it."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "EEPROM bootloader network boot: `0x92070`; start4 `0x0ECC39DC`"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "`tftp-boot`: `0x00030418` from both stages"
+confidence = "high"
+
+[[register]]
+name   = "UMAC_608"
+offset = 0x0E08
+access = "rw"
+notes  = "Written 1518 (`0x5ee`), the longest frame with its FCS, by the bootloader's network boot and by start4 just before `UMAC_604`; not named in Linux."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "EEPROM bootloader network boot: `0x9206A`; start4 `0x0ECC39D6`"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "`tftp-boot`: `0x000005ee` from both stages"
 confidence = "high"
 
 [[register]]
@@ -616,6 +689,11 @@ kind       = "measured"
 ref        = "`MDIO_CFG` `0x00000091`"
 confidence = "high"
 
+[[register.source]]
+kind       = "decompile"
+ref        = "EEPROM bootloader network boot: `0x91B40` writes `0xc1` (divider 12, clause 22) for the BCM54213PE, `0x3f1` (divider 63) for its third PHY kind"
+confidence = "high"
+
 [[register]]
 name   = "RDMA_DESC"
 offset = 0x2000
@@ -640,6 +718,24 @@ notes  = "Per-ring write pointer, in descriptor-RAM words."
 [[register.source]]
 kind       = "linux"
 ref        = "`bcmgenet.c`: `genet_dma_ring_regs_v4`, `RDMA_WRITE_PTR`"
+confidence = "high"
+
+[[register]]
+name   = "RDMA_RING_WRITE_PTR_HI"
+offset = 0x2C04
+count  = 17
+stride = 0x40
+access = "rw"
+notes  = "Upper address word; both stages write 0 (32-bit DMA)."
+
+[[register.source]]
+kind       = "linux"
+ref        = "`bcmgenet.c`: `genet_dma_ring_regs_v4` `RDMA_WRITE_PTR_HI`"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "`tftp-boot`: ring 16 written 0 by both stages"
 confidence = "high"
 
 [[register]]
@@ -681,6 +777,11 @@ kind       = "linux"
 ref        = "`bcmgenet.c`: `DMA_RING_BUF_SIZE`"
 confidence = "high"
 
+[[register.source]]
+kind       = "trace"
+ref        = "`tftp-boot`: ring 16 gets `0x00400800` (64 x 2048) from the bootloader and `0x00800800` (128 x 2048) from start4"
+confidence = "high"
+
 [[register]]
 name   = "RDMA_RING_START_ADDR"
 offset = 0x2C14
@@ -695,6 +796,24 @@ ref        = "`bcmgenet.c`: `DMA_START_ADDR`"
 confidence = "high"
 
 [[register]]
+name   = "RDMA_RING_START_ADDR_HI"
+offset = 0x2C18
+count  = 17
+stride = 0x40
+access = "rw"
+notes  = "Upper address word; both stages write 0 (32-bit DMA)."
+
+[[register.source]]
+kind       = "linux"
+ref        = "`bcmgenet.c`: `genet_dma_ring_regs_v4` `DMA_START_ADDR_HI`"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "`tftp-boot`: ring 16 written 0 by both stages"
+confidence = "high"
+
+[[register]]
 name   = "RDMA_RING_END_ADDR"
 offset = 0x2C1C
 count  = 17
@@ -705,6 +824,86 @@ notes  = "Last word of the ring, inclusive."
 [[register.source]]
 kind       = "linux"
 ref        = "`bcmgenet.c`: `DMA_END_ADDR`"
+confidence = "high"
+
+[[register]]
+name   = "RDMA_RING_END_ADDR_HI"
+offset = 0x2C20
+count  = 17
+stride = 0x40
+access = "rw"
+notes  = "Upper address word; both stages write 0 (32-bit DMA)."
+
+[[register.source]]
+kind       = "linux"
+ref        = "`bcmgenet.c`: `genet_dma_ring_regs_v4` `DMA_END_ADDR_HI`"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "`tftp-boot`: ring 16 written 0 by both stages"
+confidence = "high"
+
+[[register]]
+name   = "RDMA_RING_MBUF_DONE_THRESH"
+offset = 0x2C24
+count  = 17
+stride = 0x40
+access = "rw"
+notes  = "Frames before a done interrupt; both stages write 1 for ring 16."
+
+[[register.source]]
+kind       = "linux"
+ref        = "`bcmgenet.c`: `genet_dma_ring_regs_v4` `DMA_MBUF_DONE_THRESH`"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "`tftp-boot`: ring 16 written 1 by both stages"
+confidence = "high"
+
+[[register]]
+name   = "RDMA_RING_XON_XOFF_THRESH"
+offset = 0x2C28
+count  = 17
+stride = 0x40
+access = "rw"
+notes  = "Flow-control thresholds; both stages write `0x0005000a` (5 and 10) for ring 16."
+
+[[register.source]]
+kind       = "linux"
+ref        = "`bcmgenet.c`: `genet_dma_ring_regs_v4` `RDMA_XON_XOFF_THRESH`"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "`tftp-boot`: ring 16 written `0x0005000a` by both stages"
+confidence = "high"
+
+[[register]]
+name   = "RDMA_RING_READ_PTR"
+offset = 0x2C2C
+count  = 17
+stride = 0x40
+access = "rw"
+notes  = "Receive read pointer; neither stage writes it."
+
+[[register.source]]
+kind       = "linux"
+ref        = "`bcmgenet.c`: `genet_dma_ring_regs_v4` `RDMA_READ_PTR`"
+confidence = "high"
+
+[[register]]
+name   = "RDMA_RING_READ_PTR_HI"
+offset = 0x2C30
+count  = 17
+stride = 0x40
+access = "rw"
+notes  = "Upper word of the receive read pointer."
+
+[[register.source]]
+kind       = "linux"
+ref        = "`bcmgenet.c`: `genet_dma_ring_regs_v4` `RDMA_READ_PTR_HI`"
 confidence = "high"
 
 [[register]]
@@ -761,6 +960,27 @@ ref        = "the bootloader waits for bit 18 after reset and bit 0 after a stop
 confidence = "high"
 
 [[register]]
+name   = "RDMA_SCB_BURST_SIZE"
+offset = 0x304C
+access = "rw"
+notes  = "Bus burst length; the bootloader's network boot writes 8 when it sets the MAC up, start4 leaves it."
+
+[[register.source]]
+kind       = "linux"
+ref        = "`bcmgenet.h`: `DMA_SCB_BURST_SIZE` (DMA `+0x0c`)"
+confidence = "high"
+
+[[register.source]]
+kind       = "decompile"
+ref        = "EEPROM bootloader network boot: `0x91512`"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "`tftp-boot`: `0x00000008`"
+confidence = "high"
+
+[[register]]
 name   = "RDMA_INDEX2RING"
 offset = 0x30B0
 count  = 8
@@ -797,6 +1017,24 @@ notes  = "Per-ring read pointer."
 [[register.source]]
 kind       = "linux"
 ref        = "`bcmgenet.c`: `TDMA_READ_PTR`"
+confidence = "high"
+
+[[register]]
+name   = "TDMA_RING_READ_PTR_HI"
+offset = 0x4C04
+count  = 17
+stride = 0x40
+access = "rw"
+notes  = "Upper address word; both stages write 0 (32-bit DMA)."
+
+[[register.source]]
+kind       = "linux"
+ref        = "`bcmgenet.c`: `genet_dma_ring_regs_v4` `TDMA_READ_PTR_HI`"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "`tftp-boot`: ring 16 written 0 by both stages"
 confidence = "high"
 
 [[register]]
@@ -838,6 +1076,11 @@ kind       = "linux"
 ref        = "`bcmgenet.c`: `DMA_RING_BUF_SIZE`"
 confidence = "high"
 
+[[register.source]]
+kind       = "trace"
+ref        = "`tftp-boot`: ring 16 gets `0x00200800` (32 x 2048) from the bootloader and `0x00080800` (8 x 2048) from start4"
+confidence = "high"
+
 [[register]]
 name   = "TDMA_RING_START_ADDR"
 offset = 0x4C14
@@ -852,6 +1095,24 @@ ref        = "`bcmgenet.c`: `DMA_START_ADDR`"
 confidence = "high"
 
 [[register]]
+name   = "TDMA_RING_START_ADDR_HI"
+offset = 0x4C18
+count  = 17
+stride = 0x40
+access = "rw"
+notes  = "Upper address word; both stages write 0 (32-bit DMA)."
+
+[[register.source]]
+kind       = "linux"
+ref        = "`bcmgenet.c`: `genet_dma_ring_regs_v4` `DMA_START_ADDR_HI`"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "`tftp-boot`: ring 16 written 0 by both stages"
+confidence = "high"
+
+[[register]]
 name   = "TDMA_RING_END_ADDR"
 offset = 0x4C1C
 count  = 17
@@ -862,6 +1123,96 @@ notes  = "Last word of the ring, inclusive."
 [[register.source]]
 kind       = "linux"
 ref        = "`bcmgenet.c`: `DMA_END_ADDR`"
+confidence = "high"
+
+[[register]]
+name   = "TDMA_RING_END_ADDR_HI"
+offset = 0x4C20
+count  = 17
+stride = 0x40
+access = "rw"
+notes  = "Upper address word; both stages write 0 (32-bit DMA)."
+
+[[register.source]]
+kind       = "linux"
+ref        = "`bcmgenet.c`: `genet_dma_ring_regs_v4` `DMA_END_ADDR_HI`"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "`tftp-boot`: ring 16 written 0 by both stages"
+confidence = "high"
+
+[[register]]
+name   = "TDMA_RING_MBUF_DONE_THRESH"
+offset = 0x4C24
+count  = 17
+stride = 0x40
+access = "rw"
+notes  = "Frames before a done interrupt; both stages write 1 for ring 16."
+
+[[register.source]]
+kind       = "linux"
+ref        = "`bcmgenet.c`: `genet_dma_ring_regs_v4` `DMA_MBUF_DONE_THRESH`"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "`tftp-boot`: ring 16 written 1 by both stages"
+confidence = "high"
+
+[[register]]
+name   = "TDMA_RING_FLOW_PERIOD"
+offset = 0x4C28
+count  = 17
+stride = 0x40
+access = "rw"
+notes  = "Transmit flow period; both stages write 0 for ring 16."
+
+[[register.source]]
+kind       = "linux"
+ref        = "`bcmgenet.c`: `genet_dma_ring_regs_v4` `TDMA_FLOW_PERIOD`"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "`tftp-boot`: ring 16 written 0 by both stages"
+confidence = "high"
+
+[[register]]
+name   = "TDMA_RING_WRITE_PTR"
+offset = 0x4C2C
+count  = 17
+stride = 0x40
+access = "rw"
+notes  = "Transmit write pointer; both stages write the ring's start (0) for ring 16."
+
+[[register.source]]
+kind       = "linux"
+ref        = "`bcmgenet.c`: `genet_dma_ring_regs_v4` `TDMA_WRITE_PTR`"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "`tftp-boot`: ring 16 written 0 by both stages"
+confidence = "high"
+
+[[register]]
+name   = "TDMA_RING_WRITE_PTR_HI"
+offset = 0x4C30
+count  = 17
+stride = 0x40
+access = "rw"
+notes  = "Upper address word; both stages write 0 (32-bit DMA)."
+
+[[register.source]]
+kind       = "linux"
+ref        = "`bcmgenet.c`: `genet_dma_ring_regs_v4` `TDMA_WRITE_PTR_HI`"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "`tftp-boot`: ring 16 written 0 by both stages"
 confidence = "high"
 
 [[register]]
@@ -895,6 +1246,27 @@ notes  = "As `RDMA_STATUS`."
 [[register.source]]
 kind       = "measured"
 ref        = "`TDMA_STATUS` `0x0003ffc0`"
+confidence = "high"
+
+[[register]]
+name   = "TDMA_SCB_BURST_SIZE"
+offset = 0x504C
+access = "rw"
+notes  = "Bus burst length; the bootloader's network boot writes 8 when it sets the MAC up, start4 leaves it."
+
+[[register.source]]
+kind       = "linux"
+ref        = "`bcmgenet.h`: `DMA_SCB_BURST_SIZE` (DMA `+0x0c`)"
+confidence = "high"
+
+[[register.source]]
+kind       = "decompile"
+ref        = "EEPROM bootloader network boot: `0x91518`"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "`tftp-boot`: `0x00000008`"
 confidence = "high"
 
 [[register]]
