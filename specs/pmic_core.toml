@@ -34,6 +34,23 @@ ref        = "`0x3EC8C9FC` polls reg `0x02` bit 3"
 confidence = "high"
 
 [[register]]
+name   = "STATUS_05"
+offset = 0x05
+width  = 8
+access = "rw"
+notes  = "Our name. start4 reads it every 100 ms once the ARM runs, after `pmic_rails`' or `pmic_1d`'s status. Its status callback takes bit 1 as a fault: when it is set it writes `0x02` back and reports trouble with the supply, as it does when the read fails."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "status callback `0x3EC8C8B0` (descriptor `0x3EDE9658` `+0x24`): read `0x05`; `value & 2 == 0` returns 0, else a 1-byte write of `value & 2` to `0x05` and 1"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "the pinned firmware under `--log pmic`: `1b R 00 -> 10` then `1e R 05 -> 00` every 100 ms after the ARM release"
+confidence = "high"
+
+[[register]]
 name   = "MODE"
 offset = 0x24
 width  = 8

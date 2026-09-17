@@ -17,6 +17,7 @@ Sources:
 | Offset | Name | Access | Width | Sources |
 |---|---|---|---|---|
 | `0x002` | [`STATUS`](#status) | r | 8 | 1, best high |
+| `0x005` | [`STATUS_05`](#status_05) | rw | 8 | 2, best high |
 | `0x024` | [`MODE`](#mode) | rw | 8 | 3, best high |
 | `0x025` | [`SETPOINT_CORE`](#setpoint_core) | rw | 8 | 4, best high |
 
@@ -37,6 +38,17 @@ Sources:
 `SETTLED` sources:
 
 - decompile (high): `0x3EC8C9FC` polls reg `0x02` bit 3
+
+## `STATUS_05`
+
+Offset `0x005` · access `rw` · 8 bits
+
+Our name. start4 reads it every 100 ms once the ARM runs, after `pmic_rails`' or `pmic_1d`'s status. Its status callback takes bit 1 as a fault: when it is set it writes `0x02` back and reports trouble with the supply, as it does when the read fails.
+
+Sources:
+
+- decompile (high): status callback `0x3EC8C8B0` (descriptor `0x3EDE9658` `+0x24`): read `0x05`; `value & 2 == 0` returns 0, else a 1-byte write of `value & 2` to `0x05` and 1
+- trace (high): the pinned firmware under `--log pmic`: `1b R 00 -> 10` then `1e R 05 -> 00` every 100 ms after the ARM release
 
 ## `MODE`
 

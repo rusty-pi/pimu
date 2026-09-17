@@ -16,7 +16,7 @@ Sources:
 
 | Offset | Name | Access | Width | Sources |
 |---|---|---|---|---|
-| `0x000` | [`STATUS`](#status) | r | 8 | 1, best high |
+| `0x000` | [`STATUS`](#status) | r | 8 | 2, best high |
 | `0x009` | [`SETPOINT_SDRAM`](#setpoint_sdram) | rw | 8 | 2, best high |
 | `0x00A` | [`SETPOINT_CORE`](#setpoint_core) | rw | 8 | 1, best high |
 | `0x012` | [`SETPOINT_RAIL6`](#setpoint_rail6) | rw | 8 | 1, best high |
@@ -26,7 +26,7 @@ Sources:
 
 Offset `0x000` · access `r` · 8 bits
 
-Status.
+Status. start4 also reads it every 100 ms once the ARM runs. Its status callback takes bits 5 and 6 as a fault: when either is set it writes the value it read back, and the callback reports trouble with the supply, as it does when the read fails. The model's `0x10` has neither.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -35,6 +35,7 @@ Status.
 Sources:
 
 - decompile (high): settle callback `0x3EC8C746`
+- decompile (high): status callback `0x3EC8C5C8` (descriptor `0x3EDE962C` `+0x24`): read `0x00`; `(value & 0x60) == 0` returns 0, else a 1-byte write of the value to `0x00` and 1
 
 `SETTLED` sources:
 
