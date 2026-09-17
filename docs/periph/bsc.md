@@ -31,7 +31,7 @@ Bus 8: the PMICs at `0x1B` / `0x1E` and the FXL6408 at `0x43`.
 | `0x008` | [`DLEN`](#dlen) | rw | 32 | 1, best high |
 | `0x00C` | [`A`](#a) | rw | 32 | 1, best high |
 | `0x010` | [`FIFO`](#fifo) | rw | 32 | 1, best high |
-| `0x014` | [`DIV`](#div) | rw | 32 | 3, best high |
+| `0x014` | [`DIV`](#div) | rw | 32 | 4, best high |
 | `0x018` | [`DEL`](#del) | rw | 32 | 1, best high |
 | `0x01C` | [`CLKT`](#clkt) | rw | 32 | 2, best high |
 
@@ -166,12 +166,13 @@ Sources:
 
 Offset `0x014` · access `rw` · 32 bits
 
-Clock divisor. start4 programs 5000 (100 kHz) for its PMIC sessions and 2500 for its FXL6408 sessions on the PMIC bus, 2500 for its probe sweep, 540 for HDMI DDC. Each session starts with `DIV`, then `DEL`, then `CLKT`.
+Clock divisor. start4 programs 5000 (100 kHz) for its PMIC sessions and 2500 for its FXL6408 sessions on the PMIC bus, 2500 for its probe sweep, 540 for HDMI DDC. Each session starts with `DIV`, then `DEL`, then `CLKT`. The bootloader aims at 100 kHz from the core clock as it reckons it: 540 while the core runs from the 54 MHz crystal, 5000 once its PLLs are started (bit 9 of `0x7E50_0220` set), with `DEL` at an eighth and a half of the divider (`0x0043010E`, `0x027109C4`) and `CLKT` `0x100` written between them.
 
 Sources:
 
 - datasheet (high): BCM2711 ARM Peripherals, BSC: `DIV`
 - measured (high): `vcgencmd measure_clock core` on a Raspberry Pi 4B d03115: 500000992 Hz
+- decompile (high): bootsys `0x8000346E`: `DIV = rate_mhz * 1e6 / 100000` from the frequency query `0x800026F6`, `DEL = max(DIV >> 3, 1) << 16 | max(DIV >> 1, 1)`; the pinned bootloader in the model, as a Raspberry Pi 4B d03115, makes 32 transfers at 540, then 27 in bootsys and all of bootmain's at 5000
 - trace (high): pinned start4 on `0x7E205E00`: `0x9C4` at `0x3ECF2E56` before its FXL6408 transfers, `0x1388` before the ones to `0x1B` / `0x1E`
 
 ## `DEL`
