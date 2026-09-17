@@ -378,7 +378,7 @@ Device control. Storage, except that `SFTDISCON` decides whether a device-mode c
 | 8 | `CGNPINNAK` | w | Clear global non-periodic IN NAK. Write-only. |
 | 9 | `SGOUTNAK` | w | Set global OUT NAK. Write-only. |
 | 10 | `CGOUTNAK` | w | Clear global OUT NAK. Write-only. |
-| 1 | `SFTDISCON` | rw | Soft disconnect. Reads 0 out of reset: the boot ROM never writes `DCTL` before it waits for a host, so a core that reset with it set could not be rpiboot'ed. |
+| 1 | `SFTDISCON` | rw | Soft disconnect. Reads 0 out of reset: the boot ROM never writes `DCTL` before it waits for a host, so a core that reset with it set could not be rpiboot'ed. The EEPROM stages set it, without starting the core at all, on the path that stops a boot for good (`USB-OTG disconnect`). |
 
 Sources:
 
@@ -412,6 +412,7 @@ Sources:
 `SFTDISCON` sources:
 
 - inferred (medium): C0 boot ROM: `GUSBCFG` `0x40402700` and `DCFG`, then straight into the `GINTSTS` poll
+- decompile (high): pinned bootcode `0x8000C348` and bootmain `0xB5F10`: print, then read `0x7E980804`, set bit 1, write it back
 
 ## `DSTS`
 
