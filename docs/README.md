@@ -55,9 +55,6 @@ joined by name to an FXL6408 pin.
 |---|---|
 | [`boot-chain.md`](boot-chain.md) | The boot stages, from the VPU ROM to Linux, and what each one reads |
 | [`periph/`](periph/) | Generated from `specs/*.toml`: one page per register block, with provenance, plus the `parent` tree and the interrupt lines |
-| [`arm-side-findings.md`](arm-side-findings.md) | What the ARM hand-off needs: armstub, GIC, UEFI, the PCIe and MSI paths |
-| [`usb-xhci.md`](usb-xhci.md) | The PCIe root complex and the VL805, measured register by register |
 | [`vpu-isa.md`](vpu-isa.md) | The VideoCore IV instruction encodings the interpreter implements |
 | [`diagnostics.md`](diagnostics.md) | The log channels and `RVF_*` switches that find a wall |
 | [`references.md`](references.md) | Outside sources: datasheets, kernel drivers, other people's reverse engineering |
-| [`vision.md`](vision.md) | Where this is going, and what §3 got wrong |

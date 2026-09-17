@@ -98,12 +98,11 @@ display and networking past the `bcmgenet` probe. Linux does reach `start4`'s
 crypto service through `/dev/vcio_crypto` (`linux-boot.toml` checks the HMAC
 rpi-mkosi#37 needs), and USB mass storage far enough to boot the rpi-mkosi
 image with `--usb`.
-See [`docs/boot-chain.md`](docs/boot-chain.md) for the stage-by-stage map,
-[`docs/arm-side-findings.md`](docs/arm-side-findings.md) for what the ARM
-hand-off needs, [`docs/diagnostics.md`](docs/diagnostics.md) for the
-environment variables that find a wall, and [`docs/vision.md`](docs/vision.md)
-for the longer-term direction (single `boot` command, disk-image mode). Its §3
-— keeping the VideoCore running alongside QEMU — is superseded by #40.
+See [`docs/`](docs/) for the board sheet and the rest:
+[`boot-chain.md`](docs/boot-chain.md) for the stage-by-stage map,
+[`diagnostics.md`](docs/diagnostics.md) for the environment variables that find
+a wall, and [`vpu-isa.md`](docs/vpu-isa.md) for what the VPU interpreter
+assumes.
 
 ## Quick start
 
@@ -371,8 +370,8 @@ src/
                 boot.rs = the boot scenarios and their milestones,
                 payloads.rs = hand-assembled VPU test programs
 specs/          register maps with provenance; docs/periph/ is generated
-docs/           boot-chain, arm-side-findings, diagnostics, usb-xhci, vpu-isa,
-                references, vision, periph/
+docs/           board-sheet.svg + README, boot-chain, diagnostics, vpu-isa,
+                references, periph/
 scripts/        fetch-firmware.sh, make-sd.sh, make-netboot.sh, pgo-build.sh,
                 provision-eeprom.sh, make-dt-blob.py, vc4-xref.py
 testdata/       scenarios/*.toml + golden/*.txt  (in-process, millisecond)

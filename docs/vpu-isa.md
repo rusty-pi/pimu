@@ -30,6 +30,22 @@ Parcel packing: 32-bit = `p0` then `p1`, each LE. 48-bit stream order is
   flag-consuming forms use dedicated encodings.
 - Flags: N / Z / C / V with ARM semantics (`src/vpu/reg.rs`).
 
+## Two encodings that are easy to get backwards (confirmed)
+
+- **`switch` table entries are signed.** The table starts right after the
+  2-byte instruction, and `entry[idx]` is a *signed* displacement in halfwords
+  from that base: a handler defined before the `switch` is reached through a
+  negative entry, and the default case is a small negative offset back to the
+  fallback. Read unsigned, a firmware `switch` lands in the middle of
+  unrelated code (fixed 2026-09-07).
+- **`ldm` / `stm` put the highest register at the lowest address**, with `lr`
+  in the top word of a frame. ThreadX's interrupt frame is the proof: the ISR
+  stub pushes `{r0-r5, lr}`, `_tx_thread_context_save` (`0x3EC3FA34`) then
+  pushes `{r6-r15}` and `{r16-r23}`, and `_tx_thread_schedule` (`0x3EC40040`)
+  undoes all three with `pop {r16-r23}; pop {r0-r15}; ld r26,(sp)++; rti` —
+  which only composes if each block runs downwards in register number
+  (fixed 2026-09-10).
+
 ## Flag-setting policy (assumption — `src/vpu/insn.rs`)
 
 `cmp` / `cmn` / `btest` set flags and discard their result. Explicit `adds` /
@@ -60,7 +76,9 @@ scalar broadcast, `bitplanes` + lane predication, and the two forms that touch
 no vector register at all (see below); everything else faults.
 
 Machine side: exception / timer-IRQ delivery through the firmware's vector
-table, dual VPU cores (core 1 brought up at the `start4` trampoline).
+table, and two VPU cores. Core 1 starts where `start4` writes its entry to
+`IC1_WAKEUP` (`corectl` `+0x834`, `0x7E00_2834`), which on this bench happens
+only on a boot that goes on to Linux.
 
 ## The vector unit (confirmed against two references)
 
@@ -94,10 +112,10 @@ silence.
 | form | example | what it does here |
 |---|---|---|
 | `v<w>{ld,st} <reg>[++],(rB[+=rI]) [REP n]` | `v32ld HY(0,0)++,(r1+=r4) REP r0` | 16 lanes between one VRF row and memory, `n` times, stepping the address by `rI` and (with `++`) the row by one. `rB` is **not** written back |
-| `v<w>mov <reg>,rN` / `,#imm` | `v32mov HY(0,0),r1` | broadcast a scalar or a 6-bit immediate over the 16 lanes |
+| `v<w>mov <reg>[++],rN` / `,#imm` `[REP n]` | `v32mov HY(0,0),r1` | broadcast a scalar or a 6-bit immediate over the 16 lanes; the 80-bit form repeats it down the rows, which is how the boot ROM clears memory |
 | `v<w>bitplanes -,rN SETF` | `08 f4 38 e0 c0 03` | one flag per lane, holding that lane's bit of `rN` |
 | `v8ld -,(rN)` | `00 f0 38 e0 80 03` | reads 16 bytes at `rN` and discards them; no register changes |
-| `v16mov -,rN SUMS rK` | `00 fc 38 e0 80 03 c0 f3 00 12` | `rK = 16 * sext16(rN)`, and the scalar N/Z flags follow |
+| `v16mov -,rN SUM{U,S} rK` | `00 fc 38 e0 80 03 c0 f3 00 12` | `rK = 16 * rN`, sign- or zero-extended to the lane width, and the scalar N/Z flags follow |
 
 Predicates 2 and 3 on a transfer select the lanes whose `bitplanes` bit was 0
 and 1 respectively. Both polarities are in the firmware and they disagree, so

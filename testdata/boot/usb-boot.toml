@@ -5,7 +5,7 @@
 # reads config.txt, start4.elf and fixup4.dat over SCSI READ(10) through the
 # VL805, then start4 takes the xHCI over ("USB boot mode 2") and reads the rest
 # itself — through DMA4 transfers into the PCIe window, started by dmalib's
-# completion interrupt (docs/usb-xhci.md).
+# completion interrupt.
 #
 # For this boot the bootloader places start4 1 MiB below its link address
 # (`Starting start4.elf @ 0xfeb00200`), which is why the ARM gets 947 MB rather
@@ -33,7 +33,7 @@ why = "BOOT_ORDER 0xf4 reached the bootloader: USB mass storage first."
 line = "Boot mode: USB-MSD (04)"
 
 [[milestone]]
-why = "The stick enumerates on root port 2 with the measured endpoint descriptors (docs/usb-xhci.md)."
+why = "The stick enumerates on root port 2 with the endpoint descriptors measured on a Raspberry Pi 4B d03115."
 line = ["MSD device [01:00]", "ep 82#1024 01#1024"]
 
 [[milestone]]
