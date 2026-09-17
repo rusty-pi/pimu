@@ -85,9 +85,15 @@ MEDIA AND NETWORK:
               A USB mass-storage stick with this image, in blue socket A (xHCI
               root port 2, SuperSpeed). Read on demand; writes stay in memory
               and outlive a firmware reset.
+    --otg <img>
+              A USB mass-storage stick with this image in the USB-C socket
+              instead, on the BCM2711's own xHCI. --boot-order 0x5
+              (BCM-USB-MSD) boots from it. Linux is given that controller when
+              the firmware booted from it, and otherwise only when the card's
+              config.txt says otg_mode=1 (OTG=1 scripts/make-sd.sh).
     --usb-mb <n>
-              The stick is <n> MiB, with the image at its start, as on a Pi
-              whose first boot uses the rest.
+              A stick given by --usb or --otg is <n> MiB, with the image at its
+              start, as on a Pi whose first boot uses the rest.
     --netboot <dir>
               Plug the Ethernet cable into the built-in network peer: DHCP,
               DNS, and <dir> over TFTP and HTTP.
@@ -266,6 +272,8 @@ struct BootOpts {
     /// (`0x0003008e`).
     mbox_tags: Vec<Vec<MboxTag>>,
     usb_image: Option<PathBuf>,
+    /// `--otg <img>`: the same, in the USB-C socket (#113).
+    otg_image: Option<PathBuf>,
     netboot_root: Option<PathBuf>,
     host_net: Option<HostNet>,
     boot_order: Option<String>,
@@ -318,6 +326,7 @@ impl BootOpts {
         let mut print_fdt = false;
         let mut mbox_tags: Vec<Vec<MboxTag>> = Vec::new();
         let mut usb_image: Option<PathBuf> = None;
+        let mut otg_image: Option<PathBuf> = None;
         let mut netboot_root: Option<PathBuf> = None;
         let mut host_net: Option<HostNet> = None;
         let mut boot_order: Option<String> = None;
@@ -418,6 +427,9 @@ impl BootOpts {
                 }
                 "--usb" => {
                     usb_image = Some(PathBuf::from(it.next().context("--usb needs a path")?))
+                }
+                "--otg" => {
+                    otg_image = Some(PathBuf::from(it.next().context("--otg needs a path")?))
                 }
                 "--usb-mb" => usb_mb = Some(it.next().context("--usb-mb needs a value")?.parse()?),
                 "--net" => {
@@ -553,6 +565,7 @@ impl BootOpts {
             print_fdt,
             mbox_tags,
             usb_image,
+            otg_image,
             netboot_root,
             host_net,
             boot_order,
@@ -608,7 +621,8 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
     let image =
         std::fs::read(&opts.path).with_context(|| format!("reading {}", opts.path.display()))?;
     let log = open_log(opts)?;
-    let usb_disk = open_usb_disk(opts, &log)?;
+    let usb_disk = open_usb_disk(&opts.usb_image, "usb", opts, &log)?;
+    let otg_disk = open_usb_disk(&opts.otg_image, "otg", opts, &log)?;
     if let Some(sd_path) = opts.sd_image.as_ref().filter(|_| opts.verbose) {
         println!(
             "sd image   {} ({} blocks)",
@@ -630,7 +644,7 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
     // Made once, outside the reboot loop: it owns the stdin reader and the
     // terminal's raw mode.
     let mut host_input = opts.stdin.then(rpi_virt_fw::stdio::HostInput::stdin);
-    let rig = Rig::new(opts, image, log, usb_disk)?;
+    let rig = Rig::new(opts, image, log, usb_disk, otg_disk)?;
 
     let mut reboots = 0u32;
     // A reset does not blank OTP: each boot's machine starts with the rows
@@ -762,19 +776,25 @@ type SharedUsbDisk = Rc<RefCell<rpi_virt_fw::periph::usb::Disk>>;
 /// `--usb <img>`: a Bulk-Only Transport mass-storage device in blue socket
 /// A, which is xHCI root port 2 — a SuperSpeed lane straight onto the root
 /// hub, so no hub traversal is involved. The socket map is in
-/// [`crate::periph::xhci`].
+/// [`crate::periph::xhci`]. `--otg <img>` is the same device in the USB-C
+/// socket, on the BCM2711's own xHCI ([`crate::periph::xhci_otg`]).
 ///
 /// `--usb-mb <n>`: the stick is that big, with the image at its start, as
 /// on a Pi whose first boot uses the rest. Read on demand; what the guest
 /// writes stays in memory and outlives the resets.
-fn open_usb_disk(opts: &BootOpts, log: &Log) -> Result<Option<SharedUsbDisk>> {
-    Ok(match &opts.usb_image {
+fn open_usb_disk(
+    image: &Option<PathBuf>,
+    what: &'static str,
+    opts: &BootOpts,
+    log: &Log,
+) -> Result<Option<SharedUsbDisk>> {
+    Ok(match image {
         Some(p) => {
             let disk = rpi_virt_fw::periph::usb::Disk::open(p, opts.usb_mb.unwrap_or(0) << 20)
                 .with_context(|| format!("opening USB image {}", p.display()))?
-                .with_log(log.clone(), "usb");
+                .with_log(log.clone(), what);
             if opts.verbose {
-                println!("usb image  {} ({} blocks)", p.display(), disk.blocks());
+                println!("{what} image  {} ({} blocks)", p.display(), disk.blocks());
             }
             Some(std::rc::Rc::new(std::cell::RefCell::new(disk)))
         }
@@ -965,6 +985,8 @@ struct Rig<'a> {
     image: Vec<u8>,
     log: Log,
     usb_disk: Option<SharedUsbDisk>,
+    /// `--otg <img>`: the stick in the USB-C socket (#113).
+    otg_disk: Option<SharedUsbDisk>,
     bootrom: rpi_virt_fw::firmware::bootrom::BootRom,
     boot_rom_image: Option<Vec<u8>>,
     board: Board,
@@ -976,6 +998,7 @@ impl<'a> Rig<'a> {
         image: Vec<u8>,
         log: Log,
         usb_disk: Option<SharedUsbDisk>,
+        otg_disk: Option<SharedUsbDisk>,
     ) -> Result<Self> {
         let BootOpts {
             ref boot_rom_path,
@@ -1036,6 +1059,7 @@ impl<'a> Rig<'a> {
             image,
             log,
             usb_disk,
+            otg_disk,
             bootrom,
             boot_rom_image,
             board,
@@ -1072,6 +1096,15 @@ impl<'a> Rig<'a> {
                     disk.clone(),
                 )),
             );
+        }
+        // `--otg <img>`: the same device in the USB-C socket, on the BCM2711's
+        // own xHCI — what `BOOT_ORDER` digit `0x5` (BCM-USB-MSD) boots from
+        // and what `otg_mode=1` gives Linux (#113).
+        if let Some(disk) = &self.otg_disk {
+            // A USB 2.0 socket, so the stick enumerates at high speed.
+            machine.xhci_otg.attach(Box::new(
+                rpi_virt_fw::periph::usb::MassStorage::with_disk_hs(disk.clone()),
+            ));
         }
         // `--netboot <dir>`: plug the Ethernet cable into the built-in network
         // peer (`src/net/peer.rs`): DHCP, DNS, and `<dir>` over TFTP and HTTP.

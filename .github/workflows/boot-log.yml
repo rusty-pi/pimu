@@ -123,6 +123,8 @@ jobs:
             scenario: testdata/boot/firmware-boot.toml
           - medium: usb
             scenario: testdata/boot/usb-boot.toml
+          - medium: otg
+            scenario: testdata/boot/otg-boot.toml
           - medium: tftp
             scenario: testdata/boot/tftp-boot.toml
           - medium: http

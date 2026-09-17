@@ -262,6 +262,8 @@ pub const ID_GENET_B: u32 = crate::spec::genet::IRQ_GIC_INTRL2_1;
 pub const ID_PCIE_INTA: u32 = crate::spec::pcie::IRQ_GIC_INTA;
 /// The root complex's own MSI block.
 pub const ID_PCIE_MSI: u32 = crate::spec::pcie::IRQ_GIC_MSI;
+/// The BCM2711's own xHCI, the USB-C port's host controller (`otg_mode=1`).
+pub const ID_XHCI_OTG: u32 = crate::spec::xhci_otg::IRQ_GIC;
 
 /// Ends of the distributor arrays with byte or pair fields, as far as
 /// [`NUM_IRQS`] implements them.

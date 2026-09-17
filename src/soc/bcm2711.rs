@@ -174,6 +174,13 @@ pub const HD_SIZE: u32 = spec::hd::SIZE;
 pub const DWC2_BASE: u32 = spec::dwc2::BASE;
 pub const DWC2_SIZE: u32 = spec::dwc2::SIZE;
 
+/// The BCM2711's own xHCI controller (`xhci@7e9c0000`), the other controller
+/// on the USB-C port: what the bootloader boots from as `BCM-USB-MSD`
+/// (`BOOT_ORDER` digit `0x5`) and what `otg_mode=1` gives Linux
+/// (`src/periph/xhci_otg.rs`, #113).
+pub const XHCI_OTG_BASE: u32 = spec::xhci_otg::BASE;
+pub const XHCI_OTG_SIZE: u32 = spec::xhci_otg::SIZE;
+
 /// The two HDMI controllers' core registers (`hdmi@7ef00700`, `hdmi@7ef05700`,
 /// reg-name "hdmi"), with no monitor attached. start4 waits on the packet-RAM
 /// status when it stops its display (#61), and 2020-era bootcode on the FIFO

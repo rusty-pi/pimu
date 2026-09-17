@@ -20,8 +20,8 @@ in one host thread so a run is deterministic.
 ## Status
 
 The full EEPROM → BOOTLOADER → `start4.elf` → `arm_loader` chain runs in the
-model, from every boot medium CI checks: SD card, USB mass storage, TFTP and
-HTTP network boot. `arm_loader` then releases the four A72 cores, the
+model, from every boot medium CI checks: SD card, USB mass storage on the
+VL805 and on the USB-C port's own xHCI, TFTP and HTTP network boot. `arm_loader` then releases the four A72 cores, the
 firmware's own armstub drops them to EL2 and enters the kernel, and Linux boots
 off the SD card's ext4 root partition to a busybox shell on the serial console
 (a dev box reaches the prompt in about three minutes).
@@ -86,9 +86,9 @@ Working:
   console, named milestones, each carrying the invariant it guards, and the
   instruction count each core retired.
 - **CI** — `.github/workflows/boot-log.yml` runs fmt, clippy and the tests,
-  then all six boots in parallel on every push / PR to `main`: the firmware
-  boot from SD, USB, TFTP and HTTP, the SD boot again on a B0 board (#77), and
-  the Linux boot to a shell.
+  then every boot in parallel on every push / PR to `main`: the firmware
+  boot from SD, USB, the USB-C port, TFTP and HTTP, the SD boot again on a B0
+  board (#77), the cut-down firmware (#105), and the Linux boot to a shell.
   The tests include `tests/specs.rs`, which fails when `docs/periph/` differs
   from what the specs generate.
 
@@ -134,7 +134,9 @@ whether the boot got where it was meant to (`result: ok — the firmware started
 the ARM`), with exit status 1 when it did not. `-v` adds the full run report.
 
 `make-sd.sh` needs `sfdisk`, `mtools` and `e2fsprogs`; no root or loop devices.
-`--usb <img>` boots the same image as a USB stick instead, and
+`--usb <img>` boots the same image as a USB stick instead, `--otg <img>` as a
+stick in the USB-C socket (`BOOT_ORDER` 0x5, and `OTG=1 scripts/make-sd.sh` for
+a card whose `config.txt` hands that controller to Linux), and
 `scripts/make-netboot.sh` builds the root `--netboot` serves — the boot
 scenarios in `testdata/boot/` carry the exact flags and EEPROM settings for
 each medium, and `rpi-virt-fw boot-check <scenario> --plan` prints them.
@@ -275,6 +277,7 @@ asserted about it:
 |---|---|
 | `firmware-boot.toml` | SD card, through to `arm_loader` |
 | `usb-boot.toml` | USB mass storage (`BOOT_ORDER` 0x4), no SD card |
+| `otg-boot.toml` | USB mass storage on the USB-C port (`BOOT_ORDER` 0x5), no SD card |
 | `tftp-boot.toml` | network boot over TFTP |
 | `http-boot.toml` | HTTP boot of a signed `boot.img` ramdisk |
 | `linux-boot.toml` | SD card, on into Linux: a busybox shell, then a few commands typed into it |

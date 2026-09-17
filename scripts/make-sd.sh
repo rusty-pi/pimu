@@ -32,6 +32,11 @@ root_mb=32               # the root filesystem after it
 part_start=2048          # sectors (1 MiB alignment)
 sector=512
 
+# `OTG=1` adds `otg_mode=1` to config.txt: the firmware then gives Linux the
+# BCM2711's own xHCI on the USB-C port (`xhci@7e9c0000`) instead of the DWC2
+# core, which is what `boot --otg <img>` plugs a stick into (#113). A card that
+# the firmware *booted* from that port gets the node either way.
+#
 # `START4=start4cd` (the cut-down firmware, #105) or `START4=start4db` (the
 # debug build) puts that variant on the card next to the full pair, with the
 # config.txt line that makes the bootloader pick it, as on a real card.
@@ -106,6 +111,7 @@ disable_overscan=1
 arm_boost=1
 EOF
 if [[ -n "$select" ]]; then echo "$select" >>"$tmpcfg"; fi
+if [[ "${OTG:-0}" == 1 ]]; then echo "otg_mode=1" >>"$tmpcfg"; fi
 mcopy -i "$out@@${part_offset}" -o "$tmpcfg" ::config.txt
 echo "  + config.txt"
 rm -f "$tmpcfg"

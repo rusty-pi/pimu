@@ -57,6 +57,10 @@ pub struct BootSpec {
     /// Mass-storage image in USB socket A, relative to the scenario file.
     #[serde(default)]
     pub usb: Option<String>,
+    /// Mass-storage image in the USB-C socket, on the BCM2711's own xHCI
+    /// (`boot --otg`, #113); relative to the scenario file.
+    #[serde(default)]
+    pub otg: Option<String>,
     /// Directory the built-in network peer serves over TFTP and HTTP (plugs
     /// the Ethernet cable in), relative to the scenario file.
     #[serde(default)]
@@ -334,7 +338,7 @@ impl BootScenario {
             path: self.eeprom_path(),
             make: "scripts/fetch-firmware.sh".into(),
         }];
-        for img in [&b.sd, &b.usb].into_iter().flatten() {
+        for img in [&b.sd, &b.usb, &b.otg].into_iter().flatten() {
             let path = self.base_dir.join(img);
             // `-halt` is how the repository names the card whose kernel parks
             // the ARM (#52), and a firmware variant's name the card that boots
@@ -394,6 +398,7 @@ impl BootScenario {
         for (flag, path) in [
             ("--sd", &b.sd),
             ("--usb", &b.usb),
+            ("--otg", &b.otg),
             ("--netboot", &b.netboot),
         ] {
             if let Some(p) = path {

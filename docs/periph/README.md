@@ -53,6 +53,7 @@ Generated from the TOML specs in [`specs/`](../../specs/); see [`specs/README.md
 | [`vce_ctrl`](vce_ctrl.md) | vpu | `0x7F140000` | `0x1000` | 6 | VCE control block: status, launch, interrupt clear and endcode enables |
 | [`vl805`](vl805.md) | pci | `0x00000000` | `0x1000` | 27 | VIA VL805 xHCI controller (`1106:3483`): its PCI configuration space |
 | [`xhci`](xhci.md) | pci | `0x00000000` | `0x1000` | 39 | xHCI register block behind the VL805's BAR0: capability, operational, runtime and doorbell registers |
+| [`xhci_otg`](xhci_otg.md) | vpu | `0x7E9C0000` | `0x100000` | 35 | The BCM2711's own xHCI controller: the USB-C port as a USB 2.0 host, which the bootloader boots from as `BCM-USB-MSD` and Linux uses with `otg_mode=1` |
 
 ## What carries what
 
@@ -97,3 +98,4 @@ The `parent` of a block: the master of its bus, or the window it is carved out o
 | GIC id | 180 | [`pcie`](pcie.md) `MSI` | `GIC_SPI 148` |
 | GIC id | 189 | [`genet`](genet.md) `INTRL2_0` | `GIC_SPI 157` |
 | GIC id | 190 | [`genet`](genet.md) `INTRL2_1` | `GIC_SPI 158` |
+| GIC id | 208 | [`xhci_otg`](xhci_otg.md) | `GIC_SPI 176` |
