@@ -10,6 +10,11 @@
 //! at: a periodic system-timer interrupt acked and re-armed by its handler,
 //! `ei`/`di`, `sleep`, reads of the free-running counter, console writes from
 //! both cores, and core 1 running alongside core 0.
+//!
+//! The busy-wait fast-forward (#111) is held to the same rule, and to what it
+//! is for: a long `udelay` is jumped by about as long as it asks for, and a
+//! train of short ones, or a loop that only takes a timestamp, is not jumped
+//! at all.
 
 use std::time::Duration;
 
@@ -54,6 +59,14 @@ const fn add5(rd: u16, u: u16) -> u16 {
 /// `cmp rd, rs`
 const fn cmp(rd: u16, rs: u16) -> u16 {
     0x4A00 | (rs << 4) | rd
+}
+/// `add rd, rs`
+const fn add(rd: u16, rs: u16) -> u16 {
+    0x4200 | (rs << 4) | rd
+}
+/// `sub rd, rs`
+const fn sub(rd: u16, rs: u16) -> u16 {
+    0x4600 | (rs << 4) | rd
 }
 
 /// Halfwords at consecutive addresses, from `at`.
@@ -280,5 +293,183 @@ fn the_step_limit_lands_on_the_same_step() {
         let runs = both(max);
         assert_same(&runs, &format!("max_steps {max}"));
         assert_eq!(runs[0].0.end, RunEnd::StepLimit, "max_steps {max}");
+    }
+}
+
+/// The system timer's counter, `CLO`.
+const CLO: u32 = SYSTIMER_BASE + 0x04;
+/// VPU cycles per µs of the counter (`CYCLES_PER_US` in `periph/systimer.rs`).
+const CYCLES_PER_US: u64 = 54;
+const HI: u16 = 0x8;
+
+/// A firmware `udelay(r1)`, in the shape the bootloaders have it:
+/// `r3 = CLO; do r2 = CLO - r3; while (r1 > r2)`. `r4` holds `CLO`'s address.
+fn udelay(a: &mut Asm) {
+    a.op(ld(3, 4));
+    let spin = a.pc();
+    a.op(ld(2, 4));
+    a.op(sub(2, 3));
+    a.op(cmp(1, 2));
+    a.b(HI, spin);
+}
+
+/// Load `code` at [`CODE`] and run it to `done`, fast or slow, with the
+/// detectors on.
+fn run_payload(code: impl Fn(&mut Machine) -> u32, fast: bool) -> (RunReport, Emulator) {
+    let mut m = Machine::new(1 << 20);
+    let done = code(&mut m);
+    let mut emu = Emulator::new(m, CODE);
+    emu.fast_loop = fast;
+    emu.cpu.exc_vbase = VBASE;
+    emu.cpu.regs.set(25, STACK_TOP);
+    let report = emu.run(&RunLimits {
+        max_steps: Some(20_000_000),
+        max_wall: Some(Duration::from_secs(60)),
+        stop_pc: Some(done),
+        idle_spin_limit: 200_000,
+        silent_us: 0,
+        until: None,
+    });
+    assert!(
+        matches!(report.end, RunEnd::StopPc(_)),
+        "the payload runs to its end: {:?}",
+        report.end
+    );
+    (report, emu)
+}
+
+/// Both ways, held to each other.
+fn both_payload(code: impl Fn(&mut Machine) -> u32 + Copy, what: &str) -> (RunReport, Emulator) {
+    let runs = [true, false].map(|fast| run_payload(code, fast));
+    assert_same(&runs, what);
+    let [fast, _] = runs;
+    fast
+}
+
+/// A 20 ms `udelay`, with interrupts on and a 1 ms tick whose handler counts
+/// itself at `TICKS` when `tick` is set.
+fn long_wait(m: &mut Machine, tick: bool) -> u32 {
+    let mut a = Asm::new(CODE);
+    a.mov32(4, CLO);
+    a.mov32(1, 20_000);
+    if tick {
+        a.mov32(5, SYSTIMER_BASE + 0x0C); // C0
+        a.mov32(8, SYSTIMER_BASE); // CS
+        a.op(mov5(9, 1));
+        a.mov32(11, TICKS);
+        a.mov32(10, 1_000);
+        a.op(ld(3, 4));
+        a.op(add(3, 10));
+        a.op(st(3, 5));
+        a.op(EI);
+        let mut h = Asm::new(HANDLER);
+        h.op(st(9, 8));
+        h.op(ld(12, 4));
+        h.op(add(12, 10));
+        h.op(st(12, 5));
+        h.op(ld(13, 11));
+        h.op(add5(13, 1));
+        h.op(st(13, 11));
+        h.op(RTI);
+        h.load(m);
+        m.store32(VBASE + 4 * TICK_SLOT, HANDLER).unwrap();
+        m.store32(CORECTL_BASE + 0x10, 1).unwrap();
+    }
+    udelay(&mut a);
+    let done = a.pc();
+    a.op(NOP);
+    a.load(m);
+    done
+}
+const TICKS: u32 = 0x6000;
+
+#[test]
+fn a_long_wait_is_jumped_by_about_its_length() {
+    for tick in [false, true] {
+        let (report, mut emu) = both_payload(|m| long_wait(m, tick), &format!("tick {tick}"));
+        let now = emu.machine.systimer.now_us();
+        // Each jump is as long as the wait so far, so the last one ends
+        // before twice the wait.
+        assert!(
+            (20_000..41_000).contains(&now),
+            "tick {tick}: a 20 ms wait took {now} us"
+        );
+        // Unjumped, the wait spins 20 ms worth of cycles.
+        let spun = 20_000 * CYCLES_PER_US;
+        assert!(
+            report.retired < spun / 10,
+            "tick {tick}: {} instructions for a wait of {spun}",
+            report.retired
+        );
+        if tick {
+            let ticks = emu.machine.load32(TICKS).unwrap();
+            assert!(ticks > 0, "the tick never fired");
+        }
+    }
+}
+
+/// `udelay(4)` 2000 times, with a peripheral read after each when `poll` is
+/// set, as a sampling loop has it.
+fn short_waits(m: &mut Machine, poll: bool) -> u32 {
+    let mut a = Asm::new(CODE);
+    a.mov32(4, CLO);
+    a.mov32(5, UART0_BASE + 0x18); // FR
+    a.op(mov5(1, 4));
+    a.mov32(0, 2_000);
+    a.op(mov5(8, 0));
+    a.op(mov5(9, 1));
+    let call = a.pc();
+    udelay(&mut a);
+    if poll {
+        a.op(ld(6, 5));
+    }
+    a.op(sub(0, 9));
+    a.op(cmp(0, 8));
+    a.b(NE, call);
+    let done = a.pc();
+    a.op(NOP);
+    a.load(m);
+    done
+}
+
+/// 5000 turns of a loop that reads the counter once and a peripheral once:
+/// a timestamp, not a wait.
+fn timestamps(m: &mut Machine) -> u32 {
+    let mut a = Asm::new(CODE);
+    a.mov32(4, CLO);
+    a.mov32(5, UART0_BASE + 0x18); // FR
+    a.mov32(0, 5_000);
+    a.op(mov5(8, 0));
+    a.op(mov5(9, 1));
+    let top = a.pc();
+    a.op(ld(2, 4));
+    a.op(ld(6, 5));
+    a.op(sub(0, 9));
+    a.op(cmp(0, 8));
+    a.b(NE, top);
+    let done = a.pc();
+    a.op(NOP);
+    a.load(m);
+    done
+}
+
+/// Loads a payload, returning the pc where it is done.
+type Payload = fn(&mut Machine) -> u32;
+
+#[test]
+fn short_waits_and_timestamps_are_not_jumped() {
+    let runs: [(&str, Payload); 3] = [
+        ("short waits", |m| short_waits(m, false)),
+        ("short waits and polls", |m| short_waits(m, true)),
+        ("timestamps", timestamps),
+    ];
+    for (what, code) in runs {
+        let (report, emu) = both_payload(code, what);
+        // Unjumped, the counter shows exactly the cycles that ran.
+        assert_eq!(
+            emu.machine.systimer.now_us(),
+            report.cycles / CYCLES_PER_US,
+            "{what}: the counter was jumped"
+        );
     }
 }

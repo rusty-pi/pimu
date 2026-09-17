@@ -97,8 +97,7 @@ pub enum Channel {
     /// Every DMA control block executed, and every access to the legacy DMA
     /// controller window.
     Dma,
-    /// The run loop's idle windows, and whether each one fast-forwarded the
-    /// system timer.
+    /// Every jump of the system timer through a firmware busy-wait.
     Ff,
     /// At exit, the firmware's per-source interrupt handler table next to its
     /// vector table. Found from `gp`, so it survives a firmware whose layout

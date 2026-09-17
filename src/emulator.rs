@@ -779,38 +779,7 @@ impl Emulator {
             // many iterations it takes. `max_steps` / `max_wall` still cap
             // a pathological one.
             let timer_polling = self.machine.systimer.clo_reads != st.clo_reads_at_cf;
-            // Firmware busy-wait on the free-running counter: same edge,
-            // timer advancing, nothing else changing, no output. Let it
-            // build up, then skip the counter forward a slice at a time.
-            if let Some(cf) = self.cpu.cf_last {
-                let p = progress_count(&self.machine);
-                // A firmware `udelay` (`while (CLO - start) < n`) spins the
-                // same 2-instruction edge thousands of times per call and the
-                // clock bring-up does hundreds of them — the model's biggest
-                // time sink. Recognise it: the same taken edge, the counter
-                // advancing, no console output. The periodic ThreadX tick ISR
-                // fires in the middle of a long delay and does a *bounded*
-                // amount of RAM traffic, so tolerate a small `progress` delta
-                // (a real memcpy/memtest in the loop would blow past it) rather
-                // than resetting.
-                let prog_delta = p.wrapping_sub(st.progress_at_delay);
-                if cf == st.delay_ff_cf && timer_polling && !had_output && prog_delta < 4_096 {
-                    st.delay_ff += 1;
-                    st.progress_at_delay = p;
-                    if st.delay_ff >= 1_000 {
-                        // Jump (not `skip_ahead`) so one long `udelay` clears
-                        // in a few detections instead of being chopped at
-                        // every tick deadline; `service_matches` collapses
-                        // any ticks the jump skips to a single delivery.
-                        self.machine.systimer.jump(50_000);
-                        st.delay_ff = 0;
-                    }
-                } else {
-                    st.delay_ff = 0;
-                    st.delay_ff_cf = cf;
-                    st.progress_at_delay = p;
-                }
-            }
+            self.busy_wait_ff(st, pc_before, had_output, timer_polling);
             if let Some(cf) = self.cpu.cf_last {
                 // A bare read-only poll counts as a spin, but firmware
                 // delay/lock loops legitimately iterate 10k+ times before
@@ -835,60 +804,10 @@ impl Emulator {
             st.w_output |= had_output;
             st.w_steps += 1;
             if st.w_steps >= st.win {
-                let clo_delta = self
-                    .machine
-                    .systimer
-                    .clo_reads
-                    .wrapping_sub(st.clo_reads_at_window);
                 let stalled = progress_count(&self.machine) == st.progress_at_window
                     && self.machine.systimer.clo_reads == st.clo_reads_at_window;
                 if !st.w_output && stalled && st.w_hi.wrapping_sub(st.w_lo) <= 4096 {
                     return Some(RunEnd::IdleSpin(st.w_lo));
-                }
-                // A window that spent >1/8 of its instructions reading the
-                // free-running counter, with no console output, is
-                // dominated by a firmware `usleep(n)`. The plain delay-ff
-                // path above stalls on it because the periodic tick ISR
-                // keeps bumping `progress` and briefly widening the PC
-                // range. Jump the counter forward so a multi-100 ms
-                // rail-settle delay (PMIC bring-up does several) doesn't run
-                // in real time.
-                // A tight PC window (a single small loop) that spent the
-                // whole window polling the free-running counter, no console
-                // output, is a firmware `usleep(n)` — jump the counter
-                // forward so it doesn't run in real time. A wider window
-                // (loop punctuated by a tick ISR) needs a firmer CLO-read
-                // ratio to be sure it isn't doing real work.
-                let tight = st.w_hi.wrapping_sub(st.w_lo) <= 0x40;
-                // Experimental `--boot-rom`: the maskROM's `udelay` helper sits
-                // ~12 KB from its callers, so the window is wide and the CLO-read
-                // ratio low — neither the tight nor the wide threshold below
-                // catches it. Loosen it for that path only; a normal boot never
-                // has the overlay set, so no golden is affected.
-                // Experimental `--boot-rom`: the maskROM's `udelay` helper sits
-                // ~12 KB from its callers, so the window is wide and the CLO-read
-                // ratio low — the wide `win/8` threshold below never catches it.
-                // Loosen it for that path only; a normal boot never has the
-                // overlay set, so no golden is affected.
-                let boot_rom = self.machine.executing_boot_rom();
-                let ff = !st.w_output
-                    && if tight {
-                        clo_delta > st.win / 20
-                    } else if boot_rom {
-                        clo_delta > st.win / 64 && self.cpu.in_exception == 0
-                    } else {
-                        clo_delta > st.win / 8 && self.cpu.in_exception == 0
-                    };
-                if ff {
-                    self.machine.systimer.jump(200_000);
-                }
-                if crate::diag::ON {
-                    crate::log!(
-                        self.machine.log,
-                        Channel::Ff,
-                        "win close: clo_delta={clo_delta} w=[{:#x}..{:#x}] out={} exc={} ff={ff} @{}",
-                        st.w_lo, st.w_hi, st.w_output, self.cpu.in_exception, self.cpu.retired
-                    );
                 }
                 st.clo_reads_at_window = self.machine.systimer.clo_reads;
                 st.w_lo = u32::MAX;
@@ -906,6 +825,94 @@ impl Emulator {
             }
         }
         None
+    }
+
+    /// Fast-forward a firmware busy-wait on the free-running counter, a
+    /// `udelay` (`start = CLO; while (CLO - start) < n`): start4 and the
+    /// bootloaders make thousands of calls, each spinning a 3- or
+    /// 4-instruction loop for the whole delay. `timer_read` says whether this
+    /// step read the counter.
+    ///
+    /// The wait is recognised by its counter reads: the same instruction
+    /// reads it every time round, with the same control transfer before it,
+    /// and nothing else happens in between — no other peripheral read, only
+    /// a little RAM traffic, no output. The `start` read is a different
+    /// instruction (or the same `get_time` reached over a different call), so
+    /// every call starts a new run of spins, and only a wait that is still
+    /// going after 1000 of them is jumped.
+    ///
+    /// The jump is as long as the wait has taken so far, up to 50 ms: a long
+    /// delay clears in a few dozen detections, doubling each time and
+    /// overshooting by less than 2x, and a short one ends before it is ever
+    /// jumped. A fixed jump turns a train of µs waits — most of those calls
+    /// are `udelay(1)` — into seconds of modelled time (#111).
+    ///
+    /// The periodic ThreadX tick fires in the middle of a long delay (a jump
+    /// usually crosses its deadline). Its handler reads peripherals (start4's
+    /// reads the counter as well), does a *bounded* amount of RAM traffic,
+    /// and returns into the loop with its own last transfer in `cf_last`. So
+    /// once an exception was taken or returned from since the last read, a
+    /// few counter reads elsewhere are passed over, and the loop's next read
+    /// only has to come from the same instruction with a small `progress`
+    /// delta (a real memcpy/memtest in the loop would blow past it).
+    /// `in_exception` is not an "inside a handler" flag — a thread switch
+    /// never unwinds it — but it moves on every entry and `rti`.
+    fn busy_wait_ff(&mut self, st: &mut RunState, pc: u32, had_output: bool, timer_read: bool) {
+        /// Counter reads passed over after an exception before the run
+        /// starts again from one of them: a thread switch out of the handler
+        /// never comes back to the loop.
+        const HANDLER_READS: u32 = 16;
+        if self.cpu.in_exception != st.delay_ff_exc {
+            st.delay_ff_exc = self.cpu.in_exception;
+            st.delay_ff_irq = true;
+        }
+        if had_output {
+            st.delay_ff = 0;
+            st.delay_ff_pc = u32::MAX;
+            return;
+        }
+        if !timer_read {
+            return;
+        }
+        let m = &mut self.machine;
+        let cf = self.cpu.cf_last.unwrap_or((u32::MAX, u32::MAX));
+        let now = m.systimer.now_us();
+        let p = progress_count(m);
+        let small = p.wrapping_sub(st.progress_at_delay) < 4_096;
+        let reads = m.mmio_reads.wrapping_sub(st.mmio_reads_at_delay);
+        let timer_only = reads == m.systimer.clo_reads.wrapping_sub(st.clo_reads_at_delay);
+        let spin = pc == st.delay_ff_pc
+            && small
+            && (st.delay_ff_irq || (cf == st.delay_ff_cf && timer_only));
+        if spin {
+            st.delay_ff += 1;
+            if st.delay_ff >= 1_000 {
+                // Jump (not `skip_ahead`) so one long `udelay` is not chopped
+                // at every tick deadline; `service_matches` collapses any
+                // ticks the jump skips to a single delivery.
+                let waited = now.saturating_sub(st.delay_ff_start).clamp(1, 50_000);
+                if crate::diag::ON {
+                    crate::log!(m.log, Channel::Ff, "pc={pc:#x} jump={waited} us");
+                }
+                m.systimer.jump(waited);
+                st.delay_ff = 0;
+            }
+        } else if st.delay_ff_irq && st.delay_ff_handler_reads < HANDLER_READS {
+            // Most likely the handler's own read: leave the run, and the
+            // snapshots it is compared against, as they are.
+            st.delay_ff_handler_reads += 1;
+            return;
+        } else {
+            st.delay_ff = 0;
+            st.delay_ff_pc = pc;
+            st.delay_ff_cf = cf;
+            st.delay_ff_start = now;
+        }
+        st.progress_at_delay = p;
+        st.mmio_reads_at_delay = m.mmio_reads;
+        st.clo_reads_at_delay = m.systimer.clo_reads;
+        st.delay_ff_irq = false;
+        st.delay_ff_handler_reads = 0;
     }
 
     /// Core 1's step: one per core-0 step, over the shared bus.
@@ -1019,8 +1026,10 @@ impl Emulator {
     ///
     /// The detectors keep their running state exactly. On a step with no
     /// timer read and a decode-cache hit — which counts as a RAM read, so
-    /// `progress` moved — both of their per-step updates take the "reset"
-    /// branch, which is all this does.
+    /// `progress` moved — the spin detector's per-step update takes the
+    /// "reset" branch, which is all this does. The busy-wait detector acts
+    /// only on a timer read, console output or a change of `in_exception`,
+    /// and each of those ends the fast run.
     fn fast_steps(&mut self, st: &mut RunState, limits: &RunLimits) -> Option<RunEnd> {
         if self.machine.recheck || self.cpu.is_stopped() {
             return None;
@@ -1091,13 +1100,9 @@ impl Emulator {
                         break 'run self.post_step(st, limits, pc, step, Resume::Arm);
                     }
                     if let Some(cf) = self.cpu.cf_last {
-                        let p = progress_count(&self.machine);
-                        st.delay_ff = 0;
-                        st.delay_ff_cf = cf;
-                        st.progress_at_delay = p;
                         st.cf_repeat = 0;
                         st.last_cf = cf;
-                        st.progress_at_cf = p;
+                        st.progress_at_cf = progress_count(&self.machine);
                     }
                     st.w_lo = st.w_lo.min(pc);
                     st.w_hi = st.w_hi.max(pc);
@@ -1210,13 +1215,27 @@ struct RunState {
     cf_repeat: u64,
     progress_at_cf: u64,
     clo_reads_at_cf: u64,
-    // Busy-wait fast-forward: a repeating control-flow edge that only
-    // advances the system-timer counter is a firmware `usleep`
-    // (`while now - start < N`). Count the iterations and jump the timer
-    // ahead so a multi-millisecond delay doesn't eat the step budget.
+    // Busy-wait fast-forward (`Emulator::busy_wait_ff`): a firmware `udelay`
+    // (`while now - start < N`) reads the system-timer counter from one
+    // instruction, after one control transfer, over and over. Count those
+    // reads and jump the timer ahead so a multi-millisecond delay doesn't eat
+    // the step budget.
     delay_ff: u64,
+    /// The instruction that read the counter, and the control transfer before it.
+    delay_ff_pc: u32,
     delay_ff_cf: (u32, u32),
+    /// The counter when the run of reads started: how long the wait has taken.
+    delay_ff_start: u64,
+    /// `in_exception` when last looked at, and whether it moved since the
+    /// last counted read: a handler ran in between.
+    delay_ff_exc: u32,
+    delay_ff_irq: bool,
+    /// Counter reads passed over since then, as the handler's.
+    delay_ff_handler_reads: u32,
+    /// Where the machine's counters stood at the last counted read.
     progress_at_delay: u64,
+    mmio_reads_at_delay: u64,
+    clo_reads_at_delay: u64,
 
     tick_deliveries: u64,
     tick_skips: u64,
@@ -1276,8 +1295,15 @@ impl RunState {
             progress_at_cf: progress_count(m),
             clo_reads_at_cf: m.systimer.clo_reads,
             delay_ff: 0,
+            delay_ff_pc: u32::MAX,
             delay_ff_cf: (u32::MAX, u32::MAX),
+            delay_ff_start: 0,
+            delay_ff_exc: emu.cpu.in_exception,
+            delay_ff_irq: false,
+            delay_ff_handler_reads: 0,
             progress_at_delay: progress_count(m),
+            mmio_reads_at_delay: m.mmio_reads,
+            clo_reads_at_delay: m.systimer.clo_reads,
             tick_deliveries: 0,
             tick_skips: 0,
             prof_hist: HashMap::new(),

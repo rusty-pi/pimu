@@ -151,7 +151,7 @@ These need a `diag` build:
 |---|---|
 | `derail` | Execution derailing out of start4's code, into unmapped or zeroed memory. |
 | `dma` | Every DMA control block executed, and every access to the legacy DMA controller window. |
-| `ff` | The run loop's idle windows, and whether each one fast-forwarded the system timer. |
+| `ff` | Every jump of the system timer through a firmware busy-wait. |
 | `irqtbl` | At exit, the firmware's per-source interrupt handler table next to its vector table. |
 | `sleep` | `sleep` instructions and what woke the core. |
 | `swirq` | Software-posted interrupts via CoreCtl. |

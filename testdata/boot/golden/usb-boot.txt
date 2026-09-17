@@ -56,9 +56,6 @@
 [t] DEV [01:00] 3.16 000000:02 class 0 VID 090c PID 1000
 [t] MSD device [01:00] 3.16 000000:02 conf 0 iface 0 ep 82#1024 01#1024
 [t] MSD [01:00] 3.16 000000:02 register MSD
-[t] USB2 root HUB port 1 init
-[t] DEV [02:00] 2.16 000000:01 class 9 VID 2109 PID 3431
-[t] HUB init [02:00] 2.16 000000:01
 [t] MSD [01:00] 3.16 000000:02 LUN 0
 [t] MSD READ_CAPACITY [01:00] 3.16 000000:02 lun 0 block-count 589824 block-size 512
 [t] MBR: 0x00000800,  522240 type: 0x0c
