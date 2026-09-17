@@ -24,7 +24,7 @@ Generated from the TOML specs in [`specs/`](../../specs/); see [`specs/README.md
 | [`emmc`](emmc.md) | vpu | `0x7E300000` | `0x100` | 20 | The legacy EMMC controller (Arasan SDHCI): the Pi 4's WiFi SDIO host, and the host 2020-era bootcode reads the SD card through |
 | [`emmc2`](emmc2.md) | vpu | `0x7E340000` | `0x1000` | 24 | EMMC2: the SD host controller (Arasan SDHCI 3.00) the bootloader, start4 and Linux boot from |
 | [`fxl6408`](fxl6408.md) | i2c | `0x43` | `0x100` | 10 | FXL6408 GPIO expander: the board's 'external' GPIOs 128..135 |
-| [`genet`](genet.md) | vpu | `0x7D580000` | `0x10000` | 56 | GENET v5 Ethernet MAC with its UniMAC MDIO controller (the PHY is `bcm54213pe`) |
+| [`genet`](genet.md) | vpu | `0x7D580000` | `0x10000` | 75 | GENET v5 Ethernet MAC with its UniMAC MDIO controller (the PHY is `bcm54213pe`) |
 | [`gicc`](gicc.md) | arm | `0xFF842000` | `0x2000` | 15 | GIC-400 CPU interface, banked per CPU and per security state |
 | [`gicd`](gicd.md) | arm | `0xFF841000` | `0x1000` | 16 | GIC-400 distributor |
 | [`gich`](gich.md) | arm | `0xFF844000` | `0x2000` | 10 | GIC-400 virtual interface control, banked per CPU |
