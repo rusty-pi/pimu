@@ -39,9 +39,9 @@ Generated from the TOML specs in [`specs/`](../../specs/); see [`specs/README.md
 | [`otp`](otp.md) | vpu | `0x7E20F000` | `0x1000` | 7 | Always-on config / OTP engine: the fuse array, one row at a time – reads and programming |
 | [`pcie`](pcie.md) | vpu | `0x7D500000` | `0x9310` | 37 | PCIe root complex (`pcie-brcmstb`), with the VL805 xHCI controller behind it |
 | [`pm`](pm.md) | vpu | `0x7E100000` | `0x1000` | 17 | Power management: reset control, reset status, watchdog, power-domain registers |
-| [`pmic_1d`](pmic_1d.md) | i2c | `0x1D` | `0x100` | 7 | Board PMIC at `0x1D` on every Pi 4-family board but the 4B rev 1.5 (start4 descriptor type `0x81`) |
+| [`pmic_1d`](pmic_1d.md) | i2c | `0x1D` | `0x100` | 8 | Board PMIC at `0x1D` on every Pi 4-family board but the 4B rev 1.5 (start4 descriptor type `0x81`) |
 | [`pmic_core`](pmic_core.md) | i2c | `0x1E` | `0x100` | 4 | Board PMIC owning the SoC core rail (start4 descriptor type `0x82`) |
-| [`pmic_rails`](pmic_rails.md) | i2c | `0x1B` | `0x100` | 5 | Board PMIC owning the SDRAM and I/O rails (start4 descriptor type `0x83`) |
+| [`pmic_rails`](pmic_rails.md) | i2c | `0x1B` | `0x100` | 6 | Board PMIC owning the SDRAM and I/O rails (start4 descriptor type `0x83`) |
 | [`pvt`](pvt.md) | vpu | `0x7D5D8000` | `0x480` | 5 | Per-channel PVT (process / voltage / temperature) monitors |
 | [`rng`](rng.md) | vpu | `0x7E104000` | `0x28` | 10 | Hardware RNG (RNG200): generator control, warm-up counter, interrupt and FIFO |
 | [`sdc`](sdc.md) | vpu | `0x7E001000` | `0x1000` | 4 | Legacy SDRAM-controller interface: DRAM timing table, sub-controller ready bits, LPDDR4 mode-register port |

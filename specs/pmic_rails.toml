@@ -39,6 +39,23 @@ ref        = "`0x3EC8C746` polls reg `0x00` bit 4"
 confidence = "high"
 
 [[register]]
+name   = "REG_05"
+offset = 0x05
+width  = 8
+access = "rw"
+notes  = "start4 reads it once more after its init sweep, then writes 1 here and 1 to register 4. The bootloader's power-off (`POWER_OFF_ON_HALT=1` with `WAKE_ON_GPIO=0`, after Linux powers the board off) writes `0x3F` here, after its ten LED blinks, and then sleeps for good: this is what switches a 0x1B board off. What the bits mean is not known."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "bootloader power-off op `0x80009ED2`: with board feature bit 2 (`[gp+776]`), `session(0x1B)` then write `0x05 = 0x3F`, then `sleep` in a loop"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "`boot --bootconf POWER_OFF_ON_HALT=1 --bootconf WAKE_ON_GPIO=0 --send-after '/ # ' 'poweroff -f\\n' --log pmic` on `d03115`: after `Halt: wake: 0 power_off: 1`, `1b W 05 = 3f` at 4.08 s and nothing after"
+confidence = "high"
+
+[[register]]
 name   = "SETPOINT_SDRAM"
 offset = 0x09
 width  = 8

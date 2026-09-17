@@ -123,6 +123,23 @@ ref        = "the pinned firmware with `--board-rev b03112` and `--mbox-property
 confidence = "high"
 
 [[register]]
+name   = "REG_16"
+offset = 0x16
+width  = 8
+access = "rw"
+notes  = "start4 sets bit 0 as it configures the part on a 4B. The bootloader's power-off (`POWER_OFF_ON_HALT=1` with `WAKE_ON_GPIO=0`, after Linux powers the board off) writes 0 here, after its ten LED blinks, and then sleeps for good: this is what switches a 0x1D board off. What the other bits do is not known."
+
+[[register.source]]
+kind       = "decompile"
+ref        = "bootloader power-off op `0x80009ED2`: without board feature bit 2 (`[gp+776]`), `session(0x1D)` then write `0x16 = 0`, then `sleep` in a loop"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "`boot --bootconf POWER_OFF_ON_HALT=1 --bootconf WAKE_ON_GPIO=0 --send-after '/ # ' 'poweroff -f\\n' --log pmic` with `--board-rev b03112` and `b03114`: after `Halt: wake: 0 power_off: 1`, `1d W 16 = 00` at 4.08 s and nothing after"
+confidence = "high"
+
+[[register]]
 name   = "REG_19"
 offset = 0x19
 width  = 8

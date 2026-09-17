@@ -21,6 +21,7 @@ Sources:
 | `0x013` | [`SETPOINT_SDRAM`](#setpoint_sdram) | rw | 8 | 2, best high |
 | `0x014` | [`SETPOINT_CORE`](#setpoint_core) | rw | 8 | 3, best high |
 | `0x01A` | [`STATUS`](#status) | r | 8 | 2, best high |
+| `0x016` | [`REG_16`](#reg_16) | rw | 8 | 2, best high |
 | `0x019` | [`REG_19`](#reg_19) | rw | 8 | 2, best high |
 | `0x01C` | [`SETPOINT_RAIL6`](#setpoint_rail6) | rw | 8 | 1, best high |
 | `0x01D` | [`SETPOINT_RAIL5`](#setpoint_rail5) | rw | 8 | 1, best high |
@@ -87,6 +88,17 @@ Sources:
 `LATCHED` sources:
 
 - decompile (medium): status callback `0x3EDD23F4`: `btest r1, 6`, then a 1-byte write of `0x40` to `0x1A` through the bus ops' `+0x20` call
+
+## `REG_16`
+
+Offset `0x016` · access `rw` · 8 bits
+
+start4 sets bit 0 as it configures the part on a 4B. The bootloader's power-off (`POWER_OFF_ON_HALT=1` with `WAKE_ON_GPIO=0`, after Linux powers the board off) writes 0 here, after its ten LED blinks, and then sleeps for good: this is what switches a 0x1D board off. What the other bits do is not known.
+
+Sources:
+
+- decompile (high): bootloader power-off op `0x80009ED2`: without board feature bit 2 (`[gp+776]`), `session(0x1D)` then write `0x16 = 0`, then `sleep` in a loop
+- trace (high): `boot --bootconf POWER_OFF_ON_HALT=1 --bootconf WAKE_ON_GPIO=0 --send-after '/ # ' 'poweroff -f\n' --log pmic` with `--board-rev b03112` and `b03114`: after `Halt: wake: 0 power_off: 1`, `1d W 16 = 00` at 4.08 s and nothing after
 
 ## `REG_19`
 
