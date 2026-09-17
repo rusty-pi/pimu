@@ -248,6 +248,27 @@ What the firmware answers today:
 | `0x0003009c` `GET_CRYPTO_KEY_USAGE` | `0` for key 1, `RPI_FW_CRYPTO_KEY_USAGE_UNDEFINED`. |
 | `0x00030092` `GET_CRYPTO_HMAC_SHA256` | status `0`, length `0x20`, and a real HMAC. Ask with `0x00030092=<flags>.<key_id>.<len>.<message words>`. |
 | `0x00030095` `GET_CRYPTO_GEN_ECDSA_KEY` | `0x80000000` for `key_id` 0, for the same reason. |
+| `0x00010001` `GET_BOARD_MODEL` | `0`. |
+| `0x00010002` `GET_BOARD_REVISION` | The revision code with the memory the ARM got: `0x00b03115` on the default 2 GB board, whose fuses say `d03115`. |
+| `0x00010003` `GET_BOARD_MAC_ADDRESS` | Six bytes: OTP row 65 most significant byte first, then the top two bytes of row 64. |
+| `0x00010004` `GET_BOARD_SERIAL` | The serial (OTP row 28), then `0x10000000`. |
+| `0x00010005` `GET_ARM_MEMORY` | `0`, `0x3b400000` with `fixup4.dat` on the card; `0`, `0x08000000` without it, when `arm_loader` also says 128MB. |
+| `0x00010006` `GET_VC_MEMORY` | `0x3b400000`, `0x04c00000` with `fixup4.dat`. |
+| `0x00020001` `GET_POWER_STATE` | `1` for device 0, the SD card; `0` for devices 3 and 9. Ask with `0x00020001:8=0`. |
+| `0x00020002` `GET_TIMING` | `1` for device 0. |
+| `0x00030003` `GET_VOLTAGE` | Microvolts. Id 1 is the core voltage the firmware asked for (`1036000`, where `pmic_core` holds setpoint `0x68`); ids 2 to 4 are `1100000`; id 0 answers `0x80000000`. Ask with `0x00030003:8=1`. |
+| `0x00030005` `GET_MAX_VOLTAGE` | Id 1: `970000`, the calibrated core voltage without the ARM's share; id 2: `1100000`. |
+| `0x00030008` `GET_MIN_VOLTAGE` | Id 1: `880000`; id 2: `1100000`. |
+| `0x00030006` `GET_TEMPERATURE` | Millidegrees, whatever the id: `43779` from the model's count of 752. The scaled count is divided rather than shifted, so it rounds towards zero. |
+| `0x0003000a` `GET_MAX_TEMPERATURE` | `85000`. |
+| `0x0003000b` `GET_STC` | `0`, then the system timer's low word. |
+| `0x00030021` `GET_CUSTOMER_OTP` | The start and the count, then that many rows from row 36. A start of 8 or more comes back as `0x80000000`. Ask with `0x00030021:16=0.2`. |
+| `0x00030047` `GET_CLOCK_RATE_MEASURED` | `0` for clocks 3 and 4. |
+| `0x00030048` `NOTIFY_REBOOT` | Answered, with no value. |
+| `0x00030064` `GET_REBOOT_FLAGS` | `0`. |
+| `0x00030066` | Not handled. |
+| `0x00050001` `GET_COMMAND_LINE` | The last 256 bytes of `/chosen/bootargs`, without the terminator. |
+| `0x00060001` `GET_DMA_CHANNELS` | `0x37f5`. |
 
 A failing crypto handler is fatal for the whole request: the tag itself is
 marked answered, but the buffer-level code becomes `0x80000001` and the walk
