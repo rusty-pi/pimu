@@ -17,6 +17,7 @@ Sources:
 | Offset | Name | Access | Width | Sources |
 |---|---|---|---|---|
 | `0x000` | [`STATUS`](#status) | r | 8 | 2, best high |
+| `0x005` | [`REG_05`](#reg_05) | rw | 8 | 2, best high |
 | `0x009` | [`SETPOINT_SDRAM`](#setpoint_sdram) | rw | 8 | 2, best high |
 | `0x00A` | [`SETPOINT_CORE`](#setpoint_core) | rw | 8 | 1, best high |
 | `0x012` | [`SETPOINT_RAIL6`](#setpoint_rail6) | rw | 8 | 1, best high |
@@ -40,6 +41,17 @@ Sources:
 `SETTLED` sources:
 
 - decompile (high): `0x3EC8C746` polls reg `0x00` bit 4
+
+## `REG_05`
+
+Offset `0x005` · access `rw` · 8 bits
+
+start4 reads it once more after its init sweep, then writes 1 here and 1 to register 4. The bootloader's power-off (`POWER_OFF_ON_HALT=1` with `WAKE_ON_GPIO=0`, after Linux powers the board off) writes `0x3F` here, after its ten LED blinks, and then sleeps for good: this is what switches a 0x1B board off. What the bits mean is not known.
+
+Sources:
+
+- decompile (high): bootloader power-off op `0x80009ED2`: with board feature bit 2 (`[gp+776]`), `session(0x1B)` then write `0x05 = 0x3F`, then `sleep` in a loop
+- trace (high): `boot --bootconf POWER_OFF_ON_HALT=1 --bootconf WAKE_ON_GPIO=0 --send-after '/ # ' 'poweroff -f\n' --log pmic` on `d03115`: after `Halt: wake: 0 power_off: 1`, `1b W 05 = 3f` at 4.08 s and nothing after
 
 ## `SETPOINT_SDRAM`
 
