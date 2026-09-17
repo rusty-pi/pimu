@@ -149,9 +149,38 @@ jobs:
         with:
           name: boot-log-${{ matrix.medium }}
           # The console file is the golden transcript's raw material: download
-          # both from a failed run and `boot-check <scenario> --from
-          # boot-<medium>.log --update` to see exactly what the boot did
-          # differently.
+          # both while the run is still going (the cleanup job below deletes
+          # them) and `boot-check <scenario> --from boot-<medium>.log --update`
+          # to see exactly what the boot did differently.
           path: |
             boot-${{ matrix.medium }}.log
             boot-${{ matrix.medium }}.log.console
+
+  # Nothing a run uploads is needed once it has finished, and artifacts count
+  # against the account's storage quota until they expire; once the quota is
+  # hit, every upload fails. So the run deletes its own artifacts at the end,
+  # whatever the boots did.
+  cleanup:
+    needs: [build, boot]
+    if: always()
+    runs-on: ${{ vars.RUNNER_BUILD || 'ubuntu-26.04' }}
+    timeout-minutes: 5
+    permissions:
+      actions: write
+
+    steps:
+      - name: Delete this run's artifacts
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const artifacts = await github.paginate(
+              github.rest.actions.listWorkflowRunArtifacts,
+              { ...context.repo, run_id: context.runId, per_page: 100 },
+            );
+            for (const artifact of artifacts) {
+              await github.rest.actions.deleteArtifact({
+                ...context.repo,
+                artifact_id: artifact.id,
+              });
+              core.info(`deleted ${artifact.name}`);
+            }
