@@ -195,7 +195,7 @@ Idle value: card inserted and stable, card-detect and write-protect pins high (w
 | 0 | `CMD_INHIBIT` | r | A command is in progress. The model completes commands at once, so it never shows this bit. |
 | 1 | `DAT_INHIBIT` | r | A data transfer is in progress: set from the data command until its transfer completes, or until a reset of the data side. A driver ending an open-ended read must not wait for it before CMD12. Before CMD0, CMD12 and CMD13, start4 waits only for `CMD_INHIBIT`; before any other command, for both bits, up to 4 s. The bootloader does not wait on either. The model sets this bit while a PIO or DMA transfer has data left, including the read-ahead of an open-ended `CMD18`. |
 | 10 | `BUF_WRITE_EN` | r | The buffer has room for a PIO write. |
-| 11 | `BUF_READ_EN` | r | The buffer holds data for a PIO read. It is a level, not a latch: it drops after the last word of a block and comes back once the next block has arrived. Both stock stages read `PRESENT_STATE` before every `BUFFER_DATA` read and read the word only while this bit is set. `BUF_READ_RDY` in `INT_STATUS` stays latched from the first block on, so it cannot pace later blocks of a `CMD18`. The model fills the buffer at once, so a driver that paces on the latch works in the model but would read later blocks too early on silicon. |
+| 11 | `BUF_READ_EN` | r | The buffer holds data for a PIO read. It is a level, not a latch: it drops after the last word of a block and comes back once the next block has arrived. Both stock stages read `PRESENT_STATE` before every `BUFFER_DATA` read and read the word only while this bit is set. `BUF_READ_RDY` in `INT_STATUS` latches again as each block arrives, but stays set until the driver clears it, so a driver that never clears it cannot pace the later blocks of a `CMD18` by it. The model drops this bit after every block of a read except the last. The next block arrives on the second read of `PRESENT_STATE` or `INT_STATUS` after that, or 21 µs later if nothing polls (a 512-byte block on a 4-bit bus at the 50 MHz both stock stages clock the card at). A `BUFFER_DATA` read before then returns 0 and uses up no data, and `--log emmc` reports it as a guest bug. The first block of a transfer is there as soon as the command completes. |
 | 23:20 | `DAT_LINES` | r | DAT[3:0] line levels. The card holds them low during the CMD11 1.8 V switch. |
 | 24 | `CMD_LINE` | r | CMD line level. |
 
@@ -221,6 +221,7 @@ Sources:
 
 - standard (high): SDHCI 3.00, 2.2.9 and 2.2.17
 - trace (high): bootloader: `PRESENT_STATE` at `0x000815DA`, then `BUFFER_DATA` at `0x000815C8`, per word; start4: `0x3EC51F5E`, then `0x3ED6A71C`
+- trace (high): `boot --log emmc` on the firmware boot: after each block both stock stages read `PRESENT_STATE` as `0x1fff0002` once, then `0x1fff0802`, and read on; no `BUFFER_DATA` read falls in a gap
 
 `DAT_LINES` sources:
 
@@ -335,7 +336,7 @@ Normal (15:0) and error (31:16) interrupt status, gated by `INT_STATUS_EN`. The 
 | 2 | `BLOCK_GAP` | w1c | Block gap event. |
 | 3 | `DMA` | w1c | SDMA reached a buffer boundary, or an ADMA2 descriptor asked for an interrupt. |
 | 4 | `BUF_WRITE_RDY` | w1c | Buffer write ready. |
-| 5 | `BUF_READ_RDY` | w1c | Buffer read ready. |
+| 5 | `BUF_READ_RDY` | w1c | Buffer read ready. Latches when a PIO read block arrives in the buffer, every block of a multi-block read included, and stays set until cleared. edk2's `ArasanMmcHostDxe` clears it before it reads each block and then waits for it again, polling this register only; the model counts those polls toward the next block's arrival as it does `PRESENT_STATE` reads. |
 | 15 | `ERROR` | r | Set while any error bit is. |
 | 16 | `ERR_CMD_TIMEOUT` | w1c | Command timeout. |
 | 25 | `ERR_ADMA` | w1c | ADMA error. |
@@ -368,6 +369,7 @@ Sources:
 `BUF_READ_RDY` sources:
 
 - standard (high): SDHCI 3.00, 2.2.17
+- standard (high): edk2-platforms `Platform/RaspberryPi/Drivers/ArasanMmcHostDxe/ArasanMmcHostDxe.c` `MMCReadBlockData`: `MMCHS_INT_STAT` polled for `BRR`, cleared, then 512 bytes from `MMCHS_DATA`, per block
 
 `ERROR` sources:
 

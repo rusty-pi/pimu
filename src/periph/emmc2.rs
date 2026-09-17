@@ -7,7 +7,9 @@
 //!
 //! * **PIO** through the Buffer Data Port, both directions — what the
 //!   bootloader and start4 use (CMD17/CMD18 + CMD12) to pull `start4.elf` and
-//!   the kernel;
+//!   the kernel. Between read blocks `BUF_READ_EN` drops, as on silicon: the
+//!   next block arrives on the second status poll or 21 µs later, whichever
+//!   comes first, and latches Buffer Read Ready again (#109);
 //! * **SDMA** — a single system address, pausing with a DMA interrupt at each
 //!   buffer boundary until the host writes the next address;
 //! * **ADMA2**, 32-bit descriptors (CAPS0 bit 28 says no 64-bit system bus) —
@@ -275,6 +277,28 @@ struct Dma {
     auto_cmd12: bool,
 }
 
+/// Status polls (`PRESENT_STATE` or `INT_STATUS` reads) after a PIO block is
+/// drained until the next one arrives: the first poll sees `BUF_READ_EN`
+/// clear, the second sees it set again. The stock stages poll
+/// `PRESENT_STATE` before every word; edk2's `ArasanMmcHostDxe` polls only
+/// `INT_STATUS` for `BUF_READ_RDY`, so both count.
+const BLOCK_POLLS: u8 = 2;
+
+/// Modelled time for the next PIO block to arrive when nothing polls for it,
+/// for a driver that waits for the interrupt: 512 bytes, CRC, start and end
+/// bits on a 4-bit bus are 1042 clocks, 21 µs at the 50 MHz both stock stages
+/// clock the card at on a Raspberry Pi 4B d03115
+/// (`examples-on-real-hardware/`: the bootloader's `BUS: 50000000 Hz` in
+/// `sd-card-boot.log`, start4's `C0: 0x00800f06 ... actual: 50000000` in
+/// `vc4-boot.log`).
+const BLOCK_WIRE_US: u64 = 21;
+
+/// The next PIO read block, on its way after the host drained the last one.
+struct NextBlock {
+    polls_left: u8,
+    due_us: u64,
+}
+
 /// A PIO write in flight: blocks the host pushes through the Buffer Data Port.
 struct PioWrite {
     lba: u32,
@@ -309,6 +333,11 @@ pub struct Emmc2 {
     read_synthetic: Option<Vec<u8>>,
     /// Issue CMD12 when the PIO read's last block has been drained.
     read_auto_cmd12: bool,
+    /// The buffer is drained and the read's next block is on its way;
+    /// `BUF_READ_EN` stays clear until it arrives.
+    next_block: Option<NextBlock>,
+    /// Model time as [`Self::advance_to`] last set it.
+    now_us: u64,
     /// PIO write state and the partly filled block.
     pio_write: Option<PioWrite>,
     wbuf: Vec<u8>,
@@ -341,6 +370,8 @@ impl Default for Emmc2 {
             read_open_ended: false,
             read_synthetic: None,
             read_auto_cmd12: false,
+            next_block: None,
+            now_us: 0,
             pio_write: None,
             wbuf: Vec::new(),
             dma: None,
@@ -466,6 +497,31 @@ impl Emmc2 {
             || self.dma.is_some()
     }
 
+    /// Bring the host to model time `now_us`: a PIO block due by then
+    /// arrives, even if nothing polls for it.
+    #[inline]
+    pub fn advance_to(&mut self, now_us: u64) {
+        self.now_us = now_us;
+        if self.next_block.as_ref().is_some_and(|n| n.due_us <= now_us) {
+            self.block_arrives();
+        }
+    }
+
+    /// A status register was read: count it toward the next block's arrival.
+    fn poll(&mut self) {
+        if let Some(n) = self.next_block.as_mut() {
+            n.polls_left -= 1;
+            if n.polls_left == 0 {
+                self.block_arrives();
+            }
+        }
+    }
+
+    fn block_arrives(&mut self) {
+        self.next_block = None;
+        self.fill_next_block();
+    }
+
     /// Stop whatever data transfer is in flight.
     fn reset_data(&mut self) {
         self.data.clear();
@@ -474,6 +530,7 @@ impl Emmc2 {
         self.read_open_ended = false;
         self.read_synthetic = None;
         self.read_auto_cmd12 = false;
+        self.next_block = None;
         self.pio_write = None;
         self.wbuf.clear();
         self.dma = None;
@@ -855,18 +912,51 @@ impl Emmc2 {
         }
     }
 
+    /// `PRESENT_STATE.BUF_READ_EN`: the buffer holds a block not yet read out.
+    fn buf_read_en(&self) -> bool {
+        self.data_pos < self.data.len()
+    }
+
     /// Read the next little-endian word out of the PIO buffer.
     fn read_buffer_word(&mut self) -> u32 {
+        if !self.buf_read_en() {
+            // Nothing to read: silicon hands out whatever its FIFO holds, and
+            // a driver that gets here did not wait for the next block.
+            crate::log!(
+                self.log,
+                Channel::Emmc,
+                "R [0x20] with BUF_READ_EN clear (guest bug) -> 0, {}",
+                if self.next_block.is_some() {
+                    "next block not there yet"
+                } else {
+                    "no read in progress"
+                }
+            );
+            return 0;
+        }
         let mut w = [0u8; 4];
         for b in w.iter_mut() {
             *b = self.data.get(self.data_pos).copied().unwrap_or(0);
             self.data_pos += 1;
         }
         self.words_out += 1;
+        let word = u32::from_le_bytes(w);
+        if self.words_out % 64 == 1 {
+            crate::log!(
+                self.log,
+                Channel::Emmc,
+                "R [0x20] -> {word:#010x}  (word {})",
+                self.words_out
+            );
+        }
         if self.data_pos >= self.data.len() {
-            // Block drained: fetch the next one, or finish the transfer.
+            // Block drained: the next one is on its way, or the transfer is
+            // finished.
             if self.read_blocks_left > 0 || self.read_open_ended {
-                self.fill_next_block();
+                self.next_block = Some(NextBlock {
+                    polls_left: BLOCK_POLLS,
+                    due_us: self.now_us + BLOCK_WIRE_US,
+                });
             } else if !self.data.is_empty() {
                 let cur = self.get(INT_STATUS) & !INT_BUF_READ_RDY;
                 self.reg.insert(INT_STATUS, cur);
@@ -876,7 +966,7 @@ impl Emmc2 {
                 self.finish_data(auto);
             }
         }
-        u32::from_le_bytes(w)
+        word
     }
 
     /// Push bytes the host wrote to the Buffer Data Port; each full block goes
@@ -935,8 +1025,9 @@ impl Emmc2 {
                 }
             }
             PRESENT_STATE => {
+                self.poll();
                 let mut ps = PRESENT_STATE_IDLE;
-                if !self.data.is_empty() && self.data_pos < self.data.len() {
+                if self.buf_read_en() {
                     ps |= PS_BUF_READ_EN;
                 }
                 if self.pio_write.is_some() {
@@ -950,7 +1041,10 @@ impl Emmc2 {
                 }
                 ps
             }
-            INT_STATUS => self.int_status(),
+            INT_STATUS => {
+                self.poll();
+                self.int_status()
+            }
             HOST_CONTROL => self.get(HOST_CONTROL) | self.id.host_control_fixed,
             CAPABILITIES_0 => self.id.caps0,
             CAPABILITIES_1 => self.id.caps1,
@@ -1050,15 +1144,9 @@ impl MmioDevice for Emmc2 {
     fn read(&mut self, offset: u32, width: Width) -> BusResult<u32> {
         let off = offset & !3;
         let word = self.read_word(off);
+        // The buffer port logs its own reads, a sample of them.
         if off != BUFFER_DATA {
             crate::log!(self.log, Channel::Emmc, "R [{off:#04x}] -> {word:#010x}");
-        } else if self.words_out % 64 == 1 {
-            crate::log!(
-                self.log,
-                Channel::Emmc,
-                "R [0x20] -> {word:#010x}  (word {})",
-                self.words_out
-            );
         }
         // Narrow reads get their lane, right-aligned.
         Ok(match width {
@@ -1421,6 +1509,115 @@ mod tests {
         );
     }
 
+    /// One 512-byte block through the Buffer Data Port the way both stock
+    /// stages read it: `PRESENT_STATE` before every word, and the word only
+    /// once `BUF_READ_EN` is set.
+    fn pio_block(e: &mut Emmc2) -> Vec<u8> {
+        let mut out = Vec::new();
+        while out.len() < 512 {
+            let mut polls = 0;
+            while rd(e, PRESENT_STATE) & PS_BUF_READ_EN == 0 {
+                polls += 1;
+                assert!(polls < 100, "the block never arrived");
+            }
+            out.extend_from_slice(&rd(e, BUFFER_DATA).to_le_bytes());
+        }
+        out
+    }
+
+    fn card_block(e: &Emmc2, lba: u32) -> Vec<u8> {
+        let mut b = [0u8; 512];
+        e.card().unwrap().read_block(lba, &mut b);
+        b.to_vec()
+    }
+
+    /// `BUF_READ_EN` is a level: it drops after a block's last word, and the
+    /// next block (and its `BUF_READ_RDY`) is there on the second status
+    /// poll. A driver pacing on a `BUF_READ_RDY` it never clears would read
+    /// the gap (#109).
+    #[test]
+    fn pio_read_drops_buffer_read_enable_between_blocks() {
+        let mut e = host();
+        enumerate(&mut e, 0x40FF_8000);
+        select(&mut e);
+        wr(&mut e, BLOCK_SIZE_COUNT, (3 << 16) | 512);
+        cmd(
+            &mut e,
+            18,
+            5,
+            R1_DATA,
+            TM_BLOCK_COUNT_EN | TM_READ | TM_MULTI | (TM_AUTO_CMD12 << TM_AUTO_CMD_SHIFT),
+        );
+        assert_eq!(rd(&mut e, INT_STATUS), INT_CMD_COMPLETE | INT_BUF_READ_RDY);
+        // What the bootloader acks once a data command completes.
+        wr(&mut e, INT_STATUS, INT_CMD_COMPLETE | INT_BUF_READ_RDY);
+        assert_eq!(pio_block(&mut e), card_block(&e, 5));
+
+        // First poll after the drain: nothing latched. The second brings the
+        // block.
+        assert_eq!(rd(&mut e, INT_STATUS), 0);
+        assert_eq!(
+            rd(&mut e, PRESENT_STATE) & (PS_BUF_READ_EN | PS_DAT_INHIBIT),
+            PS_BUF_READ_EN | PS_DAT_INHIBIT
+        );
+        assert_eq!(rd(&mut e, INT_STATUS), INT_BUF_READ_RDY);
+        assert_eq!(pio_block(&mut e), card_block(&e, 6));
+
+        // Same gap before the third block, seen through PRESENT_STATE.
+        assert_eq!(
+            rd(&mut e, PRESENT_STATE) & (PS_BUF_READ_EN | PS_DAT_INHIBIT),
+            PS_DAT_INHIBIT
+        );
+        assert_eq!(pio_block(&mut e), card_block(&e, 7));
+
+        // The last block ends the transfer straight away.
+        assert_eq!(
+            rd(&mut e, PRESENT_STATE) & (PS_BUF_READ_EN | PS_DAT_INHIBIT),
+            0
+        );
+        assert_ne!(rd(&mut e, INT_STATUS) & INT_XFER_COMPLETE, 0);
+    }
+
+    /// A `BUFFER_DATA` read before the next block has arrived gets 0 and
+    /// loses nothing: the block still starts at its first word.
+    #[test]
+    fn a_buffer_read_in_the_gap_does_not_advance() {
+        let mut e = host();
+        enumerate(&mut e, 0x40FF_8000);
+        select(&mut e);
+        wr(&mut e, BLOCK_SIZE_COUNT, 512);
+        cmd(&mut e, 18, 9, R1_DATA, TM_READ | TM_MULTI);
+        assert_eq!(pio_block(&mut e), card_block(&e, 9));
+        for _ in 0..3 {
+            assert_eq!(rd(&mut e, BUFFER_DATA), 0);
+        }
+        assert_eq!(pio_block(&mut e), card_block(&e, 10));
+        // Nothing in flight at all reads 0 too.
+        cmd(&mut e, 12, 0, 0x1B, 0);
+        assert_eq!(rd(&mut e, BUFFER_DATA), 0);
+    }
+
+    /// With nobody polling, the block arrives on time and raises the
+    /// interrupt, for a driver that waits for it.
+    #[test]
+    fn the_next_block_arrives_on_time_without_polls() {
+        let mut e = host();
+        enumerate(&mut e, 0x40FF_8000);
+        select(&mut e);
+        wr(&mut e, BLOCK_SIZE_COUNT, 512);
+        e.advance_to(1000);
+        cmd(&mut e, 18, 0, R1_DATA, TM_READ | TM_MULTI);
+        wr(&mut e, INT_STATUS, 0xFFFF_FFFF);
+        wr(&mut e, INT_SIGNAL_EN, INT_BUF_READ_RDY);
+        assert_eq!(pio_block(&mut e), card_block(&e, 0));
+        assert!(!e.irq_asserted());
+        e.advance_to(1000 + BLOCK_WIRE_US - 1);
+        assert!(!e.irq_asserted());
+        e.advance_to(1000 + BLOCK_WIRE_US);
+        assert!(e.irq_asserted());
+        assert_eq!(rd(&mut e, BUFFER_DATA), u32::from_le_bytes([1, 0, 3, 2]));
+    }
+
     /// The data lines stay busy for as long as a transfer has data left; an
     /// open-ended read keeps them busy until CMD12 ends it.
     #[test]
@@ -1439,8 +1636,8 @@ mod tests {
         assert_eq!(rd(&mut e, PRESENT_STATE) & PS_DAT_INHIBIT, 0, "CMD17 done");
 
         cmd(&mut e, 18, 5, R1_DATA, TM_READ | TM_MULTI);
-        for _ in 0..256 {
-            rd(&mut e, BUFFER_DATA);
+        for _ in 0..2 {
+            pio_block(&mut e);
         }
         assert_ne!(
             rd(&mut e, PRESENT_STATE) & PS_DAT_INHIBIT,

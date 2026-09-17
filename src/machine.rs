@@ -407,6 +407,14 @@ impl Machine {
         self.bsc0.advance_to(now);
     }
 
+    /// Let the SD hosts deliver a PIO block that has come due, for a driver
+    /// that waits for the interrupt rather than polling (#109).
+    fn advance_sd(&mut self) {
+        let now = self.systimer.now_us();
+        self.emmc2.advance_to(now);
+        self.emmc.advance_to(now);
+    }
+
     /// Let the PCIe endpoint's clock catch up, so a USB3 link it is training
     /// comes up on time even while nothing polls it.
     fn advance_pcie(&mut self) {
@@ -488,6 +496,7 @@ impl Machine {
         // timer, so they stay in step with it across the run loop's `sleep`
         // fast-forward (which jumps the counter without retiring cycles).
         self.advance_i2c();
+        self.advance_sd();
         self.advance_pcie();
         // The RNG holds its line asserted while an enabled `INT_STATUS` bit is
         // set; start4's handler for source 125 disables the FIFO interrupt
@@ -1017,6 +1026,7 @@ impl Machine {
     pub fn wake_vpu_at(&mut self, us: u64) {
         self.systimer.advance_to(us);
         self.advance_i2c();
+        self.advance_sd();
         self.advance_pcie();
         self.advance_hvs();
     }
