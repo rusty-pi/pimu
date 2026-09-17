@@ -35,7 +35,7 @@ Generated from the TOML specs in [`specs/`](../../specs/); see [`specs/README.md
 | [`hdmi_ddc`](hdmi_ddc.md) | vpu | `0x7EF04500` | `0x100` | 8 | HDMI DDC I²C masters (`brcm,bcm2711-hdmi-i2c`), one per connector: the bus a monitor's EDID EEPROM sits on |
 | [`hvs`](hvs.md) | vpu | `0x7E400000` | `0x1000` | 7 | HVS (Hardware Video Scaler): identification, the per-channel frame-swap words, and end of frame |
 | [`mbox`](mbox.md) | vpu | `0x7E00B880` | `0x140` | 12 | ARM <-> VideoCore mailboxes: two views of the same pair of FIFOs, and the interrupt block between them |
-| [`mcsync`](mcsync.md) | vpu | `0x7E000000` | `0x1000` | 5 | Doorbells / semaphores between the two VPU cores |
+| [`mcsync`](mcsync.md) | vpu | `0x7E000000` | `0x1000` | 7 | Doorbells / semaphores between the two VPU cores |
 | [`otp`](otp.md) | vpu | `0x7E20F000` | `0x1000` | 7 | Always-on config / OTP engine: the fuse array, one row at a time – reads and programming |
 | [`pcie`](pcie.md) | vpu | `0x7D500000` | `0x9310` | 37 | PCIe root complex (`pcie-brcmstb`), with the VL805 xHCI controller behind it |
 | [`pm`](pm.md) | vpu | `0x7E100000` | `0x1000` | 18 | Power management: reset control, reset status, watchdog, power-domain registers |
