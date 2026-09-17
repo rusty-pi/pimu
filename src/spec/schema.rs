@@ -5,7 +5,7 @@
 //! `build.rs` pulls this file in with `#[path]`, so it depends on nothing but
 //! `std`, `serde` and `toml`. See `specs/README.md` for the format.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -47,11 +47,84 @@ pub struct Block {
     /// Distance between banks; required when `instances > 1`.
     #[serde(default)]
     pub instance_stride: u32,
+    /// What carries this block: the master of its bus, or the window it is
+    /// carved out of. Required on a bus that is not memory-mapped.
+    #[serde(default)]
+    pub parent: Option<Parent>,
+    /// The interrupt lines the block drives.
+    #[serde(default)]
+    pub irq: Option<Irq>,
     #[serde(default, rename = "source")]
     pub sources: Vec<Source>,
     /// Further instances of the same block at other bases.
     #[serde(default, rename = "copy")]
     pub copies: Vec<BlockCopy>,
+}
+
+/// What a block hangs off: `name` is another spec's block name, optionally with
+/// the copy that carries it — `"bsc"` or `"bsc.PMIC"`.
+///
+/// Two relations share this key, because they are the same statement about who
+/// decodes an address: the master of an indexed or PCI bus (the `bsc` copy the
+/// PMICs answer on, the PCI function the xHCI registers live behind), and the
+/// window a block is carved out of and decoded ahead of (`avs` inside
+/// `clkmon`).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Parent {
+    pub name: String,
+    #[serde(default)]
+    pub notes: Option<String>,
+    #[serde(default, rename = "source")]
+    pub sources: Vec<Source>,
+}
+
+impl Parent {
+    /// `(block, copy)`.
+    pub fn split(&self) -> (&str, Option<&str>) {
+        match self.name.split_once('.') {
+            Some((block, copy)) => (block, Some(copy)),
+            None => (self.name.as_str(), None),
+        }
+    }
+}
+
+/// The interrupt lines a block drives: a VPU interrupt source, a GIC-400 SPI,
+/// or both. One line stays unnamed (`vpu = 97`); several are named
+/// (`gic_spi = { INTA = 143, MSI = 148 }`), and the name goes in the generated
+/// constant.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Irq {
+    /// Source number in a VPU core's interrupt controller (`corectl`).
+    #[serde(default)]
+    pub vpu: Option<Lines>,
+    /// Shared peripheral interrupt of the GIC-400, as the device tree writes
+    /// it. The interrupt id Linux reports is 32 higher.
+    #[serde(default)]
+    pub gic_spi: Option<Lines>,
+    #[serde(default)]
+    pub notes: Option<String>,
+    #[serde(default, rename = "source")]
+    pub sources: Vec<Source>,
+}
+
+/// One interrupt line, or several named ones.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum Lines {
+    One(u32),
+    Named(BTreeMap<String, u32>),
+}
+
+impl Lines {
+    /// Every line as `(name, number)`; the name is empty for a lone line.
+    pub fn each(&self) -> Vec<(&str, u32)> {
+        match self {
+            Lines::One(n) => vec![("", *n)],
+            Lines::Named(map) => map.iter().map(|(k, v)| (k.as_str(), *v)).collect(),
+        }
+    }
 }
 
 /// The address space a block lives in.
@@ -88,6 +161,12 @@ impl Bus {
     /// its width, rather than byte addresses.
     pub fn indexed(self) -> bool {
         matches!(self, Bus::I2c | Bus::Mdio)
+    }
+
+    /// The SoC decodes this bus itself. Everything else is reached through a
+    /// master on it, which is what [`Block::parent`] names.
+    pub fn memory_mapped(self) -> bool {
+        matches!(self, Bus::Vpu | Bus::Arm)
     }
 
     /// What `base` means, for the generated Markdown.
@@ -380,10 +459,79 @@ pub fn load_dir(root: &Path) -> Result<Vec<Spec>, String> {
         }
     }
     if errors.is_empty() {
+        errors = validate_all(&specs);
+    }
+    if errors.is_empty() {
         Ok(specs)
     } else {
         Err(errors.join("\n"))
     }
+}
+
+/// Everything wrong across the whole set: the `parent` links, which can only
+/// be resolved once every spec is loaded. One message per problem, each
+/// prefixed with the file it is in.
+pub fn validate_all(specs: &[Spec]) -> Vec<String> {
+    let mut errs = Vec::new();
+    let by_name: BTreeMap<&str, &Spec> = specs.iter().map(|s| (s.block.name.as_str(), s)).collect();
+
+    for spec in specs {
+        let Some(p) = &spec.block.parent else {
+            continue;
+        };
+        let (name, copy) = p.split();
+        let Some(target) = by_name.get(name) else {
+            errs.push(format!(
+                "{}: parent {:?}: there is no specs/{name}.toml",
+                spec.file, p.name
+            ));
+            continue;
+        };
+        if let Some(copy) = copy {
+            if !target.block.copies.iter().any(|c| c.name == copy) {
+                errs.push(format!(
+                    "{}: parent {:?}: {name} has no {copy} copy",
+                    spec.file, p.name
+                ));
+            }
+        }
+        // A block is carried either by a window the SoC decodes, or — for the
+        // registers behind a PCI function's BAR — by another PCI function.
+        let (child, parent) = (spec.block.bus, target.block.bus);
+        if !parent.memory_mapped() && !(child == Bus::Pci && parent == Bus::Pci) {
+            errs.push(format!(
+                "{}: parent {:?}: a {} block cannot carry a {} one",
+                spec.file,
+                p.name,
+                parent.as_str(),
+                child.as_str()
+            ));
+        }
+    }
+
+    // Walking up from every block has to end at one without a parent.
+    for spec in specs {
+        let mut seen = BTreeSet::from([spec.block.name.as_str()]);
+        let mut at = spec;
+        while let Some(p) = &at.block.parent {
+            let Some(next) = by_name.get(p.split().0) else {
+                break;
+            };
+            if !seen.insert(next.block.name.as_str()) {
+                errs.push(format!(
+                    "{}: parent {:?} closes a cycle",
+                    at.file,
+                    at.block.parent.as_ref().unwrap().name
+                ));
+                break;
+            }
+            at = next;
+        }
+    }
+
+    errs.sort();
+    errs.dedup();
+    errs
 }
 
 fn is_module_name(s: &str) -> bool {
@@ -473,6 +621,65 @@ pub fn validate(spec: &Spec) -> Vec<String> {
         _ => {}
     }
     check_sources(&mut errs, "block", &b.sources);
+
+    match &b.parent {
+        Some(p) => {
+            let (block, copy) = p.split();
+            if !is_module_name(block) {
+                errs.push(format!("parent {:?}: not a block name", p.name));
+            }
+            if copy.is_some_and(|c| !is_const_name(c)) {
+                errs.push(format!("parent {:?}: copy is not UPPER_SNAKE_CASE", p.name));
+            }
+            if block == b.name {
+                errs.push(format!("parent {:?}: a block cannot carry itself", p.name));
+            }
+            if p.sources.is_empty() {
+                errs.push("parent has no [[block.parent.source]]".into());
+            }
+            check_sources(&mut errs, "parent", &p.sources);
+        }
+        None if !b.bus.memory_mapped() => errs.push(format!(
+            "a block on the {} bus needs a [block.parent] saying what carries it",
+            b.bus.as_str()
+        )),
+        None => {}
+    }
+
+    if let Some(irq) = &b.irq {
+        if irq.vpu.is_none() && irq.gic_spi.is_none() {
+            errs.push("[block.irq] names no line".into());
+        }
+        if irq.sources.is_empty() {
+            errs.push("irq has no [[block.irq.source]]".into());
+        }
+        check_sources(&mut errs, "irq", &irq.sources);
+        // A VPU core vectors its 64 sources as interrupt numbers 64..=127
+        // (`src/periph/corectl.rs`), which is the number every spec and every
+        // firmware log calls the source. The GIC-400 here has 256 ids, of
+        // which 0..=31 are SGIs and PPIs rather than peripheral lines.
+        for (what, lines, range) in [
+            ("vpu", irq.vpu.as_ref(), 64..128),
+            ("gic_spi", irq.gic_spi.as_ref(), 0..224),
+        ] {
+            let Some(lines) = lines else { continue };
+            let mut seen = BTreeSet::new();
+            for (name, n) in lines.each() {
+                if !name.is_empty() && !is_const_name(name) {
+                    errs.push(format!("irq {what}.{name}: name is not UPPER_SNAKE_CASE"));
+                }
+                if !range.contains(&n) {
+                    errs.push(format!(
+                        "irq {what}: {n} is outside {}..{}, the lines that controller has",
+                        range.start, range.end
+                    ));
+                }
+                if !seen.insert(n) {
+                    errs.push(format!("irq {what}: line {n} is listed twice"));
+                }
+            }
+        }
+    }
 
     let bank = u64::from(spec.bank_size());
     let mut names = BTreeSet::new();
@@ -658,6 +865,32 @@ pub fn constants(spec: &Spec) -> Vec<Const> {
             "Distance between register banks; offsets below are for bank 0.".into(),
         );
     }
+    if let Some(irq) = &b.irq {
+        for (prefix, lines, bias) in [
+            ("IRQ_VPU", irq.vpu.as_ref(), 0u32),
+            ("IRQ_GIC", irq.gic_spi.as_ref(), 32),
+        ] {
+            let Some(lines) = lines else { continue };
+            for (name, n) in lines.each() {
+                let const_name = if name.is_empty() {
+                    prefix.to_string()
+                } else {
+                    format!("{prefix}_{name}")
+                };
+                let line = if name.is_empty() {
+                    String::new()
+                } else {
+                    format!(" `{name}`")
+                };
+                let doc = if bias == 0 {
+                    format!("VPU interrupt source the block raises{line}.")
+                } else {
+                    format!("GIC-400 interrupt id of the block's{line} line (`GIC_SPI {n}`).")
+                };
+                push(const_name, n + bias, doc);
+            }
+        }
+    }
     for r in &spec.registers {
         let mut doc = format!("`{}`", r.access.as_str());
         if let Some(notes) = &r.notes {
@@ -711,8 +944,9 @@ pub fn rust_module(spec: &Spec) -> String {
     writeln!(s, "pub mod {} {{", spec.block.name).unwrap();
     for c in constants(spec) {
         writeln!(s, "    #[doc = {:?}]", c.doc).unwrap();
-        // Counts read better in decimal; addresses, offsets and masks in hex.
-        if c.name == "INSTANCES" || c.name.ends_with("_COUNT") {
+        // Counts and interrupt numbers read better in decimal; addresses,
+        // offsets and masks in hex.
+        if c.name == "INSTANCES" || c.name.ends_with("_COUNT") || c.name.starts_with("IRQ_") {
             writeln!(s, "    pub const {}: u32 = {};", c.name, c.value).unwrap();
         } else {
             writeln!(s, "    pub const {}: u32 = {:#X};", c.name, c.value).unwrap();
@@ -754,6 +988,41 @@ fn source_summary(sources: &[Source]) -> String {
     }
 }
 
+/// A `parent` as the Markdown shows it: a link to the block's page, and the
+/// copy that carries the device where it is one.
+fn parent_link(p: &Parent) -> String {
+    match p.split() {
+        (name, Some(copy)) => format!("[`{name}`]({name}.md), `{copy}` copy"),
+        (name, None) => format!("[`{name}`]({name}.md)"),
+    }
+}
+
+/// The lines an `irq` names, as one line of prose.
+fn irq_summary(irq: &Irq) -> String {
+    let mut parts = Vec::new();
+    if let Some(lines) = &irq.vpu {
+        for (name, n) in lines.each() {
+            let named = if name.is_empty() {
+                String::new()
+            } else {
+                format!("`{name}` ")
+            };
+            parts.push(format!("{named}VPU source {n}"));
+        }
+    }
+    if let Some(lines) = &irq.gic_spi {
+        for (name, n) in lines.each() {
+            let named = if name.is_empty() {
+                String::new()
+            } else {
+                format!("`{name}` ")
+            };
+            parts.push(format!("{named}GIC id {} (`GIC_SPI {n}`)", n + 32));
+        }
+    }
+    parts.join(" · ")
+}
+
 /// `docs/periph/<block>.md` for `spec`.
 pub fn markdown(spec: &Spec) -> String {
     let b = &spec.block;
@@ -779,6 +1048,12 @@ pub fn markdown(spec: &Spec) -> String {
         )
         .unwrap();
     }
+    if let Some(p) = &b.parent {
+        writeln!(s, "- Carried by: {}", parent_link(p)).unwrap();
+    }
+    if let Some(irq) = &b.irq {
+        writeln!(s, "- Interrupts: {}", irq_summary(irq)).unwrap();
+    }
     if let Some(notes) = &b.notes {
         writeln!(s, "\n{}", notes.trim()).unwrap();
     }
@@ -790,6 +1065,20 @@ pub fn markdown(spec: &Spec) -> String {
             writeln!(s, "{}\n", notes.trim()).unwrap();
         }
         write_sources(&mut s, &c.sources);
+    }
+    if let Some(p) = &b.parent {
+        writeln!(s, "\nCarried by {}:\n", parent_link(p)).unwrap();
+        if let Some(notes) = &p.notes {
+            writeln!(s, "{}\n", notes.trim()).unwrap();
+        }
+        write_sources(&mut s, &p.sources);
+    }
+    if let Some(irq) = &b.irq {
+        writeln!(s, "\nInterrupts ({}):\n", irq_summary(irq)).unwrap();
+        if let Some(notes) = &irq.notes {
+            writeln!(s, "{}\n", notes.trim()).unwrap();
+        }
+        write_sources(&mut s, &irq.sources);
     }
 
     s.push_str("\n## Register map\n\n");
@@ -879,7 +1168,95 @@ pub fn index_markdown(specs: &[Spec]) -> String {
         )
         .unwrap();
     }
+
+    write_tree(&mut s, specs);
+    write_irq_table(&mut s, specs);
     s
+}
+
+/// The `parent` links as a nested list: only the blocks that carry something,
+/// so the section says what is attached to what rather than repeating the
+/// table above.
+fn write_tree(s: &mut String, specs: &[Spec]) {
+    let children = |name: &str| -> Vec<&Spec> {
+        specs
+            .iter()
+            .filter(|s| s.block.parent.as_ref().is_some_and(|p| p.split().0 == name))
+            .collect()
+    };
+
+    s.push_str("\n## What carries what\n\n");
+    s.push_str(
+        "The `parent` of a block: the master of its bus, or the window it is carved out of \
+         and decoded ahead of. Drawn by hand in [`board-sheet.svg`](../board-sheet.svg), \
+         which `tests/board_sheet.rs` checks against these specs.\n\n",
+    );
+    for spec in specs {
+        if spec.block.parent.is_some() || children(&spec.block.name).is_empty() {
+            continue;
+        }
+        writeln!(s, "- [`{0}`]({0}.md)", spec.block.name).unwrap();
+        let mut stack: Vec<(usize, &Spec)> = children(&spec.block.name)
+            .into_iter()
+            .rev()
+            .map(|c| (1, c))
+            .collect();
+        while let Some((depth, child)) = stack.pop() {
+            let b = &child.block;
+            let copy = match b.parent.as_ref().and_then(|p| p.split().1) {
+                Some(copy) => format!(", `{copy}` copy"),
+                None => String::new(),
+            };
+            writeln!(
+                s,
+                "{}- [`{}`]({}.md) — {} `{}`{copy}",
+                "  ".repeat(depth),
+                b.name,
+                b.name,
+                b.bus.as_str(),
+                base_str(b.bus, b.base),
+            )
+            .unwrap();
+            stack.extend(children(&b.name).into_iter().rev().map(|c| (depth + 1, c)));
+        }
+    }
+}
+
+/// Every interrupt line the specs name, lowest number first.
+fn write_irq_table(s: &mut String, specs: &[Spec]) {
+    let mut rows: Vec<((u32, u32), String)> = Vec::new();
+    for spec in specs {
+        let Some(irq) = &spec.block.irq else { continue };
+        for (which, lines, bias) in [
+            ("VPU source", irq.vpu.as_ref(), 0u32),
+            ("GIC id", irq.gic_spi.as_ref(), 32),
+        ] {
+            let Some(lines) = lines else { continue };
+            for (name, n) in lines.each() {
+                let line = if name.is_empty() {
+                    format!("[`{0}`]({0}.md)", spec.block.name)
+                } else {
+                    format!("[`{0}`]({0}.md) `{name}`", spec.block.name)
+                };
+                let spi = if bias == 0 {
+                    "—".to_string()
+                } else {
+                    format!("`GIC_SPI {n}`")
+                };
+                rows.push((
+                    (bias, n + bias),
+                    format!("| {which} | {} | {line} | {spi} |", n + bias),
+                ));
+            }
+        }
+    }
+    rows.sort();
+
+    s.push_str("\n## Interrupt lines\n\n");
+    s.push_str("| Controller | Number | Block | Device tree |\n|---|---|---|---|\n");
+    for (_, row) in rows {
+        writeln!(s, "{row}").unwrap();
+    }
 }
 
 /// A base as the Markdown shows it: a full 32-bit address on a memory bus, a

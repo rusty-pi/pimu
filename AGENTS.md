@@ -19,6 +19,14 @@
   ```toml
   ref = "`dmesg` on a Raspberry Pi 4B d03115: `hcc params 0x002841eb hci version 0x100`"
   ```
+- **A new or moved spec means editing `docs/board-sheet.svg`.** The board sheet
+  is drawn by hand — no generator produces a schematic — so `tests/specs.rs`
+  and `tests/board_sheet.rs` are what keep it honest: every block has to be
+  named in a `data-block`, every `parent` drawn as a `data-edge`, and an
+  address written on a part has to be the one its spec gives. When a spec
+  gains a block, a `parent`, a copy or a new base, draw it and rerun
+  `cargo test --test board_sheet`. Adding the name to an existing part's
+  `data-block` list is fine for a block with nothing of its own to show.
 - **Never let CI or anything in `scripts/` depend on real hardware.** The
   reference boards are ad-hoc and only sometimes reachable, and CI runs in the
   cloud. Measured values belong baked into the model with a source comment

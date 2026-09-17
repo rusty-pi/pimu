@@ -15,6 +15,21 @@ kind       = "linux"
 ref        = "`arch/arm/boot/dts/broadcom/bcm2711.dtsi`: `hvs@7e400000` `interrupts = <GIC_SPI 97>`; start4 registers its HVS handler `0x3ECEED5C` on VPU source 97 (`--log irqtbl`)"
 confidence = "high"
 
+[block.irq]
+vpu     = 97
+gic_spi = 97
+notes   = "A channel with `DISPEIRQx` and the flag enabled drives the line once per frame; the same number on both controllers is a coincidence."
+
+[[block.irq.source]]
+kind       = "linux"
+ref        = "`arch/arm/boot/dts/broadcom/bcm2711.dtsi`: `hvs@7e400000`, `interrupts = <GIC_SPI 97 IRQ_TYPE_LEVEL_HIGH>`"
+confidence = "high"
+
+[[block.irq.source]]
+kind       = "trace"
+ref        = "start4 registers its HVS handler `0x3ECEED5C` on VPU source 97 (`--log irqtbl`)"
+confidence = "high"
+
 [[register]]
 name   = "DISPCTRL"
 offset = 0x00

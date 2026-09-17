@@ -5,6 +5,7 @@
 - Bus: `vpu` (VPU bus address)
 - Base: `0x7D580000`
 - Size: `0x10000`
+- Interrupts: `INTRL2_0` GIC id 189 (`GIC_SPI 157`) · `INTRL2_1` GIC id 190 (`GIC_SPI 158`)
 
 GENET v4/v5 layout. Each DMA direction has 256 three-word descriptors and 17 ring register blocks `0x40` apart; ring 16 is the default ring. Reset values below are the measured values of registers no client writes on the reference board's boot path.
 
@@ -13,6 +14,12 @@ Sources:
 - linux (high): `/scb/ethernet@7d580000`, `reg = <0x7d580000 0x10000>`; `drivers/net/ethernet/broadcom/genet/bcmgenet.h`, `drivers/net/mdio/mdio-bcm-unimac.c`
 - decompile (high): EEPROM bootloader network boot (disassembled LZ4 BOOTLOADER stage); start4 MDIO `FUN_0ecc3198` / `FUN_0ecc3280`, UMAC start `FUN_0ecc3b6c`, ring 16 setup `FUN_0ecc2d54` / `FUN_0ecc2e4c`
 - measured (high): read-only `/dev/mem` reads of named registers on a Pi 4B rev 1.5 running Linux 6.12, link up
+
+Interrupts (`INTRL2_0` GIC id 189 (`GIC_SPI 157`) · `INTRL2_1` GIC id 190 (`GIC_SPI 158`)):
+
+Each level-2 controller drives its own line while an unmasked status bit is set.
+
+- linux (high): `ethernet@7d580000`, `interrupts = <GIC_SPI 157 IRQ_TYPE_LEVEL_HIGH>, <GIC_SPI 158 IRQ_TYPE_LEVEL_HIGH>`; `bcmgenet.c` takes them as `INTRL2_0`, `INTRL2_1`
 
 ## Register map
 

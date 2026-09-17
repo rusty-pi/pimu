@@ -11,6 +11,15 @@ kind       = "decompile"
 ref        = "`pmic_init` `0x3ED4DAA8` / `pmic_add` `0x3ED4D85C`; descriptor `0x3EDE962C`: type `0x83`, addr `0x1B`, 0.8..1.4 V"
 confidence = "high"
 
+[block.parent]
+name  = "bsc.PMIC"
+notes = "start4's I²C driver picks its base from the bus id, and this part sits on bus 8."
+
+[[block.parent.source]]
+kind       = "decompile"
+ref        = "`FUN_0ecf0ed0`: bus id 8 -> `0x7E205E00`; `pmic_init` `0x3ED4DAA8` opens that bus before it probes"
+confidence = "high"
+
 [[register]]
 name   = "STATUS"
 offset = 0x00

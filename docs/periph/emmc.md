@@ -5,6 +5,7 @@
 - Bus: `vpu` (VPU bus address)
 - Base: `0x7E300000`
 - Size: `0x100`
+- Interrupts: GIC id 158 (`GIC_SPI 126`)
 
 EMMC2's command engine (`src/periph/emmc2.rs`) with nothing on the bus: the software resets self-clear, the internal clock reports stable once enabled, CMD0 completes and every command that expects a response times out. 2020-era bootcode routes the SD slot here (GPIO block `+0xD0`, bit 1) and boots from SD through this host; the model does not follow that mux, so the card stays on EMMC2 and such bootcode reports `Failed to open device: 'sdcard'` and tries its next boot mode. The interrupt output is GIC SPI 126, the line EMMC2 drives too.
 
@@ -15,6 +16,12 @@ Sources:
 - trace (high): pieeprom-2020-09-03 bootcode, `RVF_TRACE_MMIO=7e300000-7e341000`: its whole SD init runs on this block and EMMC2 is never touched; it writes `0x2` to `0x7E2000D0` first (`0x8000f60a`). The 2026 bootcode and start4 never touch this block.
 - trace (high): pinned start4 keeps the SD slot on EMMC2: it clears bit 1 of `0x7E2000D0` when it opens EMMC2 (`0x3EC51DFC`), when it closes it (`0x3EC51A4E`) and just before it releases the ARM (`0x3EC5A7E2`), and sets bit 0 in its board clock set-up (`0x3ED4A1CE`) — _what bit 0 does is not known_
 - measured (high): UART logs of the 2020 bootloaders, which print this host's `HOST_CONTROL` and `PRESENT_STATE` on every clock change: raspberrypi/rpi-eeprom#139, #227, #242 (no card in the slot), #282 (booting from the SD card) — _Other people's boards, not the reference board._
+
+Interrupts (GIC id 158 (`GIC_SPI 126`)):
+
+The line EMMC2 drives too.
+
+- linux (high): `mmcnr@7e300000` and `mmc@7e340000` name the same `GIC_SPI 0x7e`
 
 ## Register map
 

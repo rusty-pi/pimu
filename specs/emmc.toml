@@ -33,6 +33,15 @@ ref        = "UART logs of the 2020 bootloaders, which print this host's `HOST_C
 confidence = "high"
 note       = "Other people's boards, not the reference board."
 
+[block.irq]
+gic_spi = 126
+notes   = "The line EMMC2 drives too."
+
+[[block.irq.source]]
+kind       = "linux"
+ref        = "`mmcnr@7e300000` and `mmc@7e340000` name the same `GIC_SPI 0x7e`"
+confidence = "high"
+
 [[register]]
 name   = "SDMA_ADDR"
 offset = 0x00

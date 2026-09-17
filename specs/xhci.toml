@@ -21,6 +21,15 @@ kind       = "measured"
 ref        = "`examples-on-real-hardware/sd-card-boot.log`: `xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb`"
 confidence = "high"
 
+[block.parent]
+name  = "vl805"
+notes = "The registers behind the endpoint's BAR0, so they move with whatever address is programmed into it."
+
+[[block.parent.source]]
+kind       = "standard"
+ref        = "PCI Local Bus 3.0: a type-0 BAR maps the function's register block; xHCI 1.1 section 5 is what lives there"
+confidence = "high"
+
 [[register]]
 name   = "CAPLENGTH"
 offset = 0x00

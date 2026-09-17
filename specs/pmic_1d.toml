@@ -16,6 +16,15 @@ kind       = "trace"
 ref        = "board-flags word `gp+0x3BAF0` (`--dump 0x3EE3E810:4`) per revision code: a03111/c03111/c03112 `0x05DE04D7` (flag 10), b03114/d03114 `0x055E0CF7`, c03130 `0x0D5E0CF7`, a03140/d03140 `0x05184CF7` (flags 10 + 11), b03115/d03115 `0x055E18F7` (flags 11 + 12)"
 confidence = "high"
 
+[block.parent]
+name  = "bsc.PMIC"
+notes = "start4's I²C driver picks its base from the bus id, and this part sits on bus 8."
+
+[[block.parent.source]]
+kind       = "decompile"
+ref        = "`FUN_0ecf0ed0`: bus id 8 -> `0x7E205E00`; `pmic_init` `0x3ED4DAA8` opens that bus before it probes"
+confidence = "high"
+
 [[register]]
 name   = "ID"
 offset = 0x0F

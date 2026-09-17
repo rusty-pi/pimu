@@ -110,8 +110,9 @@ pub const COVERAGE: Coverage = Coverage {
     ],
 };
 
-/// The interrupt start4 registers for this block (handler `0x3ED64BE8`).
-pub const IRQ_SRC: u32 = 125;
+/// The interrupt start4 registers for this block (handler `0x3ED64BE8`), from
+/// `specs/rng.toml`.
+pub const IRQ_SRC: u32 = crate::spec::rng::IRQ_VPU;
 /// Words the FIFO reports while the generator runs. Real hardware refills
 /// continuously; a warmed-up block is never empty for long.
 const FIFO_WORDS: u32 = 16;

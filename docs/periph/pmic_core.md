@@ -5,12 +5,19 @@
 - Bus: `i2c` (7-bit I²C address)
 - Base: `0x1E`
 - Size: `0x100`
+- Carried by: [`bsc`](bsc.md), `PMIC` copy
 
 On the `bsc` PMIC copy. The AVS monitor's channel 3 follows this part's setpoint. start4's init sweeps `0x01..0x15`, `0x20..0x27` and `0x48..0x4B` once to log it. Registers not listed read 0. start4's driver keeps the last voltage asked for and the last setpoint written, writes `SETPOINT_CORE` only when the setpoint changes, and then polls `STATUS` until `SETTLED`.
 
 Sources:
 
 - decompile (high): `pmic_add` `0x3ED4D85C`; descriptor `0x3EDE9658`: type `0x82`, addr `0x1E`, 0.3..1.9 V
+
+Carried by [`bsc`](bsc.md), `PMIC` copy:
+
+start4's I²C driver picks its base from the bus id, and this part sits on bus 8.
+
+- decompile (high): `FUN_0ecf0ed0`: bus id 8 -> `0x7E205E00`; `pmic_init` `0x3ED4DAA8` opens that bus before it probes
 
 ## Register map
 

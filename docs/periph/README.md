@@ -53,3 +53,47 @@ Generated from the TOML specs in [`specs/`](../../specs/); see [`specs/README.md
 | [`vce_ctrl`](vce_ctrl.md) | vpu | `0x7F140000` | `0x1000` | 6 | VCE control block: status, launch, interrupt clear and endcode enables |
 | [`vl805`](vl805.md) | pci | `0x00000000` | `0x1000` | 27 | VIA VL805 xHCI controller (`1106:3483`): its PCI configuration space |
 | [`xhci`](xhci.md) | pci | `0x00000000` | `0x1000` | 39 | xHCI register block behind the VL805's BAR0: capability, operational, runtime and doorbell registers |
+
+## What carries what
+
+The `parent` of a block: the master of its bus, or the window it is carved out of and decoded ahead of. Drawn by hand in [`board-sheet.svg`](../board-sheet.svg), which `tests/board_sheet.rs` checks against these specs.
+
+- [`bsc`](bsc.md)
+  - [`fxl6408`](fxl6408.md) — i2c `0x43`, `PMIC` copy
+  - [`pmic_1d`](pmic_1d.md) — i2c `0x1D`, `PMIC` copy
+  - [`pmic_core`](pmic_core.md) — i2c `0x1E`, `PMIC` copy
+  - [`pmic_rails`](pmic_rails.md) — i2c `0x1B`, `PMIC` copy
+- [`clkmon`](clkmon.md)
+  - [`avs`](avs.md) — vpu `0x7D5D2000`
+  - [`pvt`](pvt.md) — vpu `0x7D5D8000`
+- [`dma`](dma.md)
+  - [`dma4`](dma4.md) — vpu `0x7E007B00`
+- [`genet`](genet.md)
+  - [`bcm54213pe`](bcm54213pe.md) — mdio `0x01`
+- [`pcie`](pcie.md)
+  - [`vl805`](vl805.md) — pci `0x00000000`
+    - [`xhci`](xhci.md) — pci `0x00000000`
+
+## Interrupt lines
+
+| Controller | Number | Block | Device tree |
+|---|---|---|---|
+| VPU source | 64 | [`systimer`](systimer.md) `C0` | — |
+| VPU source | 65 | [`systimer`](systimer.md) `C1` | — |
+| VPU source | 66 | [`systimer`](systimer.md) `C2` | — |
+| VPU source | 67 | [`systimer`](systimer.md) `C3` | — |
+| VPU source | 68 | [`vce_ctrl`](vce_ctrl.md) | — |
+| VPU source | 76 | [`mcsync`](mcsync.md) `ACK76` | — |
+| VPU source | 77 | [`mcsync`](mcsync.md) `ACK77` | — |
+| VPU source | 94 | [`mbox`](mbox.md) | — |
+| VPU source | 97 | [`hvs`](hvs.md) | — |
+| VPU source | 125 | [`rng`](rng.md) | — |
+| GIC id | 65 | [`mbox`](mbox.md) | `GIC_SPI 33` |
+| GIC id | 129 | [`hvs`](hvs.md) | `GIC_SPI 97` |
+| GIC id | 153 | [`uart0`](uart0.md) | `GIC_SPI 121` |
+| GIC id | 158 | [`emmc2`](emmc2.md) | `GIC_SPI 126` |
+| GIC id | 158 | [`emmc`](emmc.md) | `GIC_SPI 126` |
+| GIC id | 175 | [`pcie`](pcie.md) `INTA` | `GIC_SPI 143` |
+| GIC id | 180 | [`pcie`](pcie.md) `MSI` | `GIC_SPI 148` |
+| GIC id | 189 | [`genet`](genet.md) `INTRL2_0` | `GIC_SPI 157` |
+| GIC id | 190 | [`genet`](genet.md) `INTRL2_1` | `GIC_SPI 158` |

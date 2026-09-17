@@ -20,6 +20,15 @@ kind       = "trace"
 ref        = "start4 arms `C0` as its ThreadX tick (source 64) and `C2` as the clock service's timeout (source 66)"
 confidence = "high"
 
+[block.irq]
+vpu   = { C0 = 64, C1 = 65, C2 = 66, C3 = 67 }
+notes = "Compare channel `n` raises `64 + n`. start4 arms `C0` as its ThreadX tick and `C2` as the clock service's timeout."
+
+[[block.irq.source]]
+kind       = "decompile"
+ref        = "start4 `enable_irq_source(64, 1)` before it arms `C0`; the clock service waits on `C2` with source 66"
+confidence = "high"
+
 [[register]]
 name   = "CS"
 offset = 0x00
