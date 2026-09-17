@@ -63,6 +63,7 @@ Sources:
 | `0x210` | [`GEN_210_CTL`](#gen_210_ctl) | rw | 32 | 2, best high |
 | `0x214` | [`GEN_210_DIV`](#gen_210_div) | rw | 32 | 1, best high |
 | `0x218` | [`REG_218`](#reg_218) | rw | 32 | 2, best high |
+| `0x21C` | [`REG_21C`](#reg_21c) | rw | 32 | 2, best high |
 | `0x22C` | [`GEN_22C_CTL`](#gen_22c_ctl) | rw | 32 | 1, best high |
 | `0x230` | [`GEN_22C_DIV`](#gen_22c_div) | rw | 32 | 1, best high |
 | `0x23C` | [`GEN_23C_CTL`](#gen_23c_ctl) | rw | 32 | 2, best high |
@@ -768,6 +769,17 @@ Sources:
 
 - decompile (high): start4 `0x3ED4949A..0x3ED494A4`: `Ld r0, [0x7E101218]; Or r0, 0x5A000080; St r0`
 - trace (high): start4: `0x5A000080` at `0x3ED494A4`
+
+## `REG_21C`
+
+Offset `0x21C` · access `rw` · 32 bits
+
+A word the bootloader steps up one bit group at a time around SDRAM bring-up: `0x341`, `0x343`, `0x347`, `0x34F`, then after the SDRAM is up `0x35F` and `0x37F`, the last just before it puts the PCIe bridge in reset. On a board whose VL805 takes its firmware from the bootloader (all but a 4B before rev 1.4) it first waits until `USB_MSD_PWR_OFF_TIME` ms have passed since power-on, if that is set. bootmain's copy of the routine does nothing once the word reads `0x37F` in its low bits (`& 0x37F`). Meaning unknown.
+
+Sources:
+
+- trace (high): bootsys: read at `0x8000AACE`, `0x5A000341`/`343`/`347`/`34F` at `0x8000AAE8..0x8000AAFA`, `0x5A00035F` at `0x8000AB3C`, `0x5A00037F` at `0x8000AB44`
+- decompile (high): bootsys `0x8000AB00`: board predicate `0x800084EA` (not a 4B below PCB rev 4), then `USB_MSD_PWR_OFF_TIME` against `STC / 1000` and a sleep for the rest; bootmain `0xAE402` compares `& 0x37F` first
 
 ## `GEN_22C_CTL`
 
