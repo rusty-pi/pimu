@@ -279,7 +279,7 @@ confidence = "high"
 [[register.field]]
 name  = "BUF_READ_EN"
 bits  = "11"
-notes = "The buffer holds data for a PIO read. It is a level, not a latch: it drops after the last word of a block and comes back once the next block has arrived. Both stock stages read `PRESENT_STATE` before every `BUFFER_DATA` read and read the word only while this bit is set. `BUF_READ_RDY` in `INT_STATUS` stays latched from the first block on, so it cannot pace later blocks of a `CMD18`. The model fills the buffer at once, so a driver that paces on the latch works in the model but would read later blocks too early on silicon."
+notes = "The buffer holds data for a PIO read. It is a level, not a latch: it drops after the last word of a block and comes back once the next block has arrived. Both stock stages read `PRESENT_STATE` before every `BUFFER_DATA` read and read the word only while this bit is set. `BUF_READ_RDY` in `INT_STATUS` latches again as each block arrives, but stays set until the driver clears it, so a driver that never clears it cannot pace the later blocks of a `CMD18` by it. The model drops this bit after every block of a read except the last. The next block arrives on the second read of `PRESENT_STATE` or `INT_STATUS` after that, or 21 µs later if nothing polls (a 512-byte block on a 4-bit bus at the 50 MHz both stock stages clock the card at). A `BUFFER_DATA` read before then returns 0 and uses up no data, and `--log emmc` reports it as a guest bug. The first block of a transfer is there as soon as the command completes."
 
 [[register.field.source]]
 kind       = "standard"
@@ -289,6 +289,11 @@ confidence = "high"
 [[register.field.source]]
 kind       = "trace"
 ref        = "bootloader: `PRESENT_STATE` at `0x000815DA`, then `BUFFER_DATA` at `0x000815C8`, per word; start4: `0x3EC51F5E`, then `0x3ED6A71C`"
+confidence = "high"
+
+[[register.field.source]]
+kind       = "trace"
+ref        = "`boot --log emmc` on the firmware boot: after each block both stock stages read `PRESENT_STATE` as `0x1fff0002` once, then `0x1fff0802`, and read on; no `BUFFER_DATA` read falls in a gap"
 confidence = "high"
 
 [[register.field]]
@@ -554,11 +559,16 @@ confidence = "high"
 [[register.field]]
 name  = "BUF_READ_RDY"
 bits  = "5"
-notes = "Buffer read ready."
+notes = "Buffer read ready. Latches when a PIO read block arrives in the buffer, every block of a multi-block read included, and stays set until cleared. edk2's `ArasanMmcHostDxe` clears it before it reads each block and then waits for it again, polling this register only; the model counts those polls toward the next block's arrival as it does `PRESENT_STATE` reads."
 
 [[register.field.source]]
 kind       = "standard"
 ref        = "SDHCI 3.00, 2.2.17"
+confidence = "high"
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "edk2-platforms `Platform/RaspberryPi/Drivers/ArasanMmcHostDxe/ArasanMmcHostDxe.c` `MMCReadBlockData`: `MMCHS_INT_STAT` polled for `BRR`, cleared, then 512 bytes from `MMCHS_DATA`, per block"
 confidence = "high"
 
 [[register.field]]
