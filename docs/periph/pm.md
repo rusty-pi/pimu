@@ -202,7 +202,7 @@ Sources:
 
 Offset `0x074` · access `rw` · 32 bits
 
-Linux's spare writable word. bootmain writes `0x400001` early on.
+Linux's spare writable word. bootmain writes `0x400001` late, right after it puts the PCIe bridge back into reset (`RGR1_SW_INIT_1` `0x3`) before start4 is loaded.
 
 Sources:
 
@@ -280,9 +280,9 @@ Sources:
 
 Offset `0x110` · access `rw` · 32 bits
 
-Linux's name for the processor power domain. The pinned start4 writes 0, `0x400`, `0xC00` and `0xFFF` to it after it has released the ARM, between PLLB hold and release writes. What the bits do here is not known.
+Linux's name for the processor power domain. The pinned start4 runs a sequence on it twice after it has released the ARM and slowed it to 600 MHz. It sets `PLLB_ARM`'s divider to PLLB's `NDIV` and reads PM `0xFC`. It clears the low 12 bits and waits a `0x10` `DELAY`. Then it sets `0x400`, `0x800` and `0x3FF` in turn; each is set with PLLB's `HOLDARM` on and an 8-tick `DELAY` before, after and after the release. Last it restores `PLLB_ARM` and reads `0xFC` again. The writes are 0, `0x400`, `0xC00`, `0xFFF` each time. Its wrapper for mode 1 then clears bit 9 of the ARM control block's `0x440`; modes 0 and 2 set that bit, wait for bit 31 of `0x444` and clear the low 12 bits here instead. What the bits do here is not known.
 
 Sources:
 
 - linux (high): `bcm2835-power.c`: `PM_PROC`
-- trace (high): start4: `0x5A000000` at `0x3EC82024`, `0x5A000400` at `0x3EC82066`, `0x5A000C00` at `0x3EC820AA`, `0x5A000FFF` at `0x3EC820EE`
+- trace (high): start4: `0x5A000000` at `0x3EC82024`, `0x5A000400` at `0x3EC82066`, `0x5A000C00` at `0x3EC820AA`, `0x5A000FFF` at `0x3EC820EE`; routine `0x3EC81FC0`, wrappers `0x3EC81F44` and `0x3EC81FA2`
