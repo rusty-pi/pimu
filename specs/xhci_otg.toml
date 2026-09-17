@@ -1,0 +1,443 @@
+[block]
+name    = "xhci_otg"
+base    = 0x7E9C0000
+size    = 0x100000
+summary = "The BCM2711's own xHCI controller: the USB-C port as a USB 2.0 host, which the bootloader boots from as `BCM-USB-MSD` and Linux uses with `otg_mode=1`"
+notes   = "One USB2 root port, and the same ring engine as the xHCI behind the VL805 (`src/periph/xhci.rs`), so the register layout is the standard one and only the capability values differ: one port, one interrupter, no streams and no scratchpad buffers. Its DMA reaches memory by CPU-physical address — `/scb dma-ranges` is the identity over 16 GB — and those addresses are 64 bits wide: the firmware builds its rings in the low gigabyte, Linux wherever it allocated them, above 4 GB on a board with that much DRAM. `--otg <img>` plugs a mass-storage device into the port; with nothing plugged in the port reads empty and powered, as the other root ports do. The DWC2 core at `0x7E980000` (`specs/dwc2.toml`) is the *other* controller on the same socket: the two are alternatives, and `otg_mode` picks between them."
+
+[[block.source]]
+kind       = "linux"
+ref        = "`bcm2711-rpi-4-b.dtb` (raspberrypi/firmware): `/scb/xhci@7e9c0000`, compatible `generic-xhci`, `reg <0x0 0x7e9c0000 0x0 0x00100000>`, `interrupts <0x0 0xb0 0x4>`, `status = \"disabled\"` — the firmware enables the node when `config.txt` says `otg_mode=1`, and leaves `usb@7e980000` (the DWC2 core) disabled instead"
+confidence = "high"
+
+[[block.source]]
+kind       = "standard"
+ref        = "eXtensible Host Controller Interface 1.1, section 5: the register layout at the base"
+confidence = "high"
+
+[[block.source]]
+kind       = "trace"
+ref        = "`boot --eeprom firmware/pieeprom.bin --boot-order 0x5 -v`: after `Boot mode: BCM-USB-MSD (05) order 0` the bootloader reads `0x7E9C0000` `+0x00`..`+0x1C` — the capability registers — and nothing else; with the block on the catch-all stub it read zeroes and printed `xHC0 ver: 0 HCS: 00000000 00000000 00000000 HCC: 00000000`, `xHC0 ports 0 slots 0 intrs 0` and `USB xHC init failed`. The `dwc2` log channel is empty for that whole run: this boot mode never touches the DWC2 core"
+confidence = "high"
+
+[[block.source]]
+kind       = "decompile"
+ref        = "`start4.elf` has `bfs_xhci_init` beside `bfs_xhci_init_pcie`, the `otg_mode` config key and the `CLK_USBXHCI` clock name: a second, non-PCIe xHCI to bring up"
+confidence = "medium"
+
+[block.irq]
+gic_spi = 176
+notes   = "Level-triggered, so the line follows interrupter 0's `IMAN.IP` (GIC id 208 — Linux reports 32 higher than the device tree's number). The VPU has no source of its own for this block: the bootloader polls `USBSTS` and the event ring, as it does behind the VL805."
+
+[[block.irq.source]]
+kind       = "linux"
+ref        = "`bcm2711-rpi-4-b.dtb` `/scb/xhci@7e9c0000`: `interrupts <0x0 0xb0 0x4>`"
+confidence = "high"
+
+[[register]]
+name   = "CAPLENGTH"
+offset = 0x00
+width  = 8
+access = "r"
+reset  = 0x20
+notes  = "Where the operational registers start."
+
+[[register.source]]
+kind       = "inferred"
+ref        = "the standard layout, the same one the VL805's controller uses (`specs/xhci.toml`); the model shares one ring engine between the two, and a driver finds the operational registers through this value whatever it is"
+confidence = "medium"
+
+[[register]]
+name   = "HCIVERSION"
+offset = 0x02
+width  = 16
+access = "r"
+reset  = 0x0100
+notes  = "xHCI 1.0, the version the bootloader prints as `xHC0 ver: 256`."
+
+[[register.source]]
+kind       = "inferred"
+ref        = "every xHCI on this board reports 1.0; the bootloader refuses a controller whose capability word reads 0"
+confidence = "medium"
+
+[[register]]
+name   = "HCSPARAMS1"
+offset = 0x04
+access = "r"
+reset  = 0x01000120
+notes  = "`MaxSlots` 32, `MaxIntrs` 1, `MaxPorts` 1 — the one USB2 port on the USB-C socket."
+
+[[register.source]]
+kind       = "inferred"
+ref        = "the socket has one port and the model uses one interrupter; 32 slots is what the VL805's controller reports and what the bootloader's slot array is sized for"
+confidence = "medium"
+
+[[register]]
+name   = "HCSPARAMS2"
+offset = 0x08
+access = "r"
+reset  = 0x00000031
+notes  = "`IST` 1, `ERSTMax` 3 (8 segments), no scratchpad buffers."
+
+[[register.source]]
+kind       = "inferred"
+ref        = "the model's engine needs no scratchpad (`src/periph/xhci.rs`), so the honest value is zero rather than the VL805's 31"
+confidence = "medium"
+
+[[register]]
+name   = "HCSPARAMS3"
+offset = 0x0C
+access = "r"
+reset  = 0x00000000
+notes  = "U1 / U2 exit latencies: none, this is a USB 2.0 controller."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.3.4: the latencies describe SuperSpeed link states, which a USB2-only controller has none of"
+confidence = "high"
+
+[[register]]
+name   = "HCCPARAMS1"
+offset = 0x10
+access = "r"
+reset  = 0x00280029
+notes  = "`AC64`, 32-byte contexts, `PPC`, `LHRC`, no streams, `xECP` `0x28` (base + `0xA0`)."
+
+[[register.source]]
+kind       = "inferred"
+ref        = "what the shared ring engine implements: 64-bit pointers, 32-byte contexts, port power control, a light host controller reset, and no stream support"
+confidence = "medium"
+
+[[register]]
+name   = "DBOFF"
+offset = 0x14
+access = "r"
+reset  = 0x00000100
+notes  = "Doorbell array offset."
+
+[[register.source]]
+kind       = "inferred"
+ref        = "the standard layout, as `specs/xhci.toml`"
+confidence = "medium"
+
+[[register]]
+name   = "RTSOFF"
+offset = 0x18
+access = "r"
+reset  = 0x00000200
+notes  = "Runtime register offset."
+
+[[register.source]]
+kind       = "inferred"
+ref        = "the standard layout, as `specs/xhci.toml`"
+confidence = "medium"
+
+[[register]]
+name   = "HCCPARAMS2"
+offset = 0x1C
+access = "r"
+reset  = 0x00000000
+notes  = "No xHCI 1.1 capabilities."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.3.9: every bit is a 1.1 feature the engine does not implement"
+confidence = "high"
+
+[[register]]
+name   = "USBCMD"
+offset = 0x20
+access = "rw"
+notes  = "Run / stop and resets, exactly as behind the VL805: the bootloader sets `HCRST` and polls it clear, then `HSEE`, `INTE` and `RS`."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.1 `USBCMD`"
+confidence = "high"
+
+[[register]]
+name   = "USBSTS"
+offset = 0x24
+access = "rw"
+notes  = "Status; the event and change bits are write-1-to-clear. `HCH` follows the run bit."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.2 `USBSTS`"
+confidence = "high"
+
+[[register]]
+name   = "PAGESIZE"
+offset = 0x28
+access = "r"
+reset  = 0x00000001
+notes  = "4 KiB pages."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.3 `PAGESIZE`"
+confidence = "high"
+
+[[register]]
+name   = "DNCTRL"
+offset = 0x34
+access = "rw"
+notes  = "Device notification control. Stored."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.4 `DNCTRL`"
+confidence = "high"
+
+[[register]]
+name   = "CRCR_LO"
+offset = 0x38
+access = "rw"
+notes  = "Command ring pointer and consumer cycle; the pointer reads as 0, only Command Ring Running is visible."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.5 `CRCR`"
+confidence = "high"
+
+[[register]]
+name   = "CRCR_HI"
+offset = 0x3C
+access = "rw"
+notes  = "Command ring pointer, high word; reads 0."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.5 `CRCR`"
+confidence = "high"
+
+[[register]]
+name   = "DCBAAP_LO"
+offset = 0x50
+access = "rw"
+notes  = "Device context base address array pointer."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.6 `DCBAAP`"
+confidence = "high"
+
+[[register]]
+name   = "DCBAAP_HI"
+offset = 0x54
+access = "rw"
+notes  = "`DCBAAP`, high word."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.6 `DCBAAP`"
+confidence = "high"
+
+[[register]]
+name   = "CONFIG"
+offset = 0x58
+access = "rw"
+notes  = "Slots enabled. Stored."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.7 `CONFIG`"
+confidence = "high"
+
+[[register]]
+name   = "USBLEGSUP"
+offset = 0xA0
+access = "r"
+reset  = 0x00000401
+notes  = "Extended capability: USB legacy support, next at `+0x10` dwords (`0xB0`)."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 7.1: capability id 1, with the next pointer in bits 15:8"
+confidence = "high"
+
+[[register]]
+name   = "SUPPORTED_USB2"
+offset = 0xB0
+access = "r"
+reset  = 0x02000002
+notes  = "Supported protocol: USB 2.0, and the last capability in the list — there is no SuperSpeed half here."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 7.2: capability id 2, revision 2.0, next pointer 0"
+confidence = "high"
+
+[[register]]
+name   = "SUPPORTED_USB2_NAME"
+offset = 0xB4
+access = "r"
+reset  = 0x20425355
+notes  = "`USB `."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 7.2: the name string of a supported-protocol capability"
+confidence = "high"
+
+[[register]]
+name   = "SUPPORTED_USB2_PORTS"
+offset = 0xB8
+access = "r"
+reset  = 0x00000101
+notes  = "Port offset 1, count 1."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 7.2, with the one root port of `HCSPARAMS1`"
+confidence = "high"
+
+[[register]]
+name   = "DOORBELL"
+offset = 0x100
+count  = 33
+stride = 4
+access = "rw"
+notes  = "Doorbell 0 is the command ring, doorbell n slot n; a write runs the ring to completion before it returns."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.6 Doorbell registers"
+confidence = "high"
+
+[[register]]
+name   = "MFINDEX"
+offset = 0x200
+access = "r"
+notes  = "Microframe index."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.5.1 `MFINDEX`"
+confidence = "high"
+
+[[register]]
+name   = "IMAN"
+offset = 0x220
+access = "rw"
+notes  = "Interrupter management. One interrupter, whose `IP` drives GIC SPI 176."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.5.2.1 `IMAN`"
+confidence = "high"
+
+[[register]]
+name   = "IMOD"
+offset = 0x224
+access = "rw"
+notes  = "Interrupter moderation. Stored."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.5.2.2 `IMOD`"
+confidence = "high"
+
+[[register]]
+name   = "ERSTSZ"
+offset = 0x228
+access = "rw"
+notes  = "Event ring segment table size."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.5.2.3.1 `ERSTSZ`"
+confidence = "high"
+
+[[register]]
+name   = "ERSTBA_LO"
+offset = 0x230
+access = "rw"
+notes  = "Event ring segment table base."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.5.2.3.2 `ERSTBA`"
+confidence = "high"
+
+[[register]]
+name   = "ERSTBA_HI"
+offset = 0x234
+access = "rw"
+notes  = "`ERSTBA`, high word."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.5.2.3.2 `ERSTBA`"
+confidence = "high"
+
+[[register]]
+name   = "ERDP_LO"
+offset = 0x238
+access = "rw"
+notes  = "Event ring dequeue pointer; `EHB` is write-1-to-clear."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.5.2.3.3 `ERDP`"
+confidence = "high"
+
+[[register]]
+name   = "ERDP_HI"
+offset = 0x23C
+access = "rw"
+notes  = "`ERDP`, high word."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.5.2.3.3 `ERDP`"
+confidence = "high"
+
+[[register]]
+name   = "PORTSC"
+offset = 0x420
+access = "rw"
+notes  = "The one root port. Empty but powered reads `0x2A0` with `DR` set, as the VL805's USB2 port does; a device attached reads `0x400202E1` until the host resets the port, and `0x40000E03` once it is enabled at high speed."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.8 `PORTSC`"
+confidence = "high"
+
+[[register.source]]
+kind       = "measured"
+ref        = "the same words measured on the VL805's USB2 root port, Raspberry Pi 4B d03115: `0x400202e1` just connected, `0x40000e03` enumerated, `0x000002a0` empty"
+confidence = "high"
+
+[[register]]
+name   = "PORTPMSC"
+offset = 0x424
+access = "rw"
+notes  = "Port power management. Stored."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.9 `PORTPMSC`"
+confidence = "high"
+
+[[register]]
+name   = "PORTLI"
+offset = 0x428
+access = "r"
+notes  = "Port link info."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.10 `PORTLI`"
+confidence = "high"
+
+[[register]]
+name   = "PORTHLPMC"
+offset = 0x42C
+access = "rw"
+notes  = "Port hardware LPM control. Stored."
+
+[[register.source]]
+kind       = "standard"
+ref        = "xHCI 1.1, 5.4.11 `PORTHLPMC`"
+confidence = "high"

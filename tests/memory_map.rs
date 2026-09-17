@@ -43,6 +43,8 @@ const MODELLED: &[(&str, u32)] = &[
     ("hvs", map::HVS_BASE),
     ("usb power acknowledge", map::HD_BASE + 0x20),
     ("dwc2 GRSTCTL", map::DWC2_BASE + 0x10),
+    ("xhci_otg HCSPARAMS1", map::XHCI_OTG_BASE + 0x04),
+    ("xhci_otg PORTSC", map::XHCI_OTG_BASE + 0x420),
     ("bootbox", map::BOOTBOX_BASE),
     ("vpu dma ch15", map::DMA_VPU_BASE + 0xF00),
     ("sdram controller", map::SDRAMC_BASE),

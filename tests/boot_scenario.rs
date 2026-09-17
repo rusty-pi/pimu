@@ -360,6 +360,7 @@ fn every_boot_scenario_loads_and_plans_its_media() {
         for (flag, media) in [
             ("--sd ", &scn.boot.sd),
             ("--usb ", &scn.boot.usb),
+            ("--otg ", &scn.boot.otg),
             ("--netboot ", &scn.boot.netboot),
         ] {
             assert_eq!(joined.contains(flag), media.is_some(), "{joined}");
@@ -383,6 +384,7 @@ fn every_boot_scenario_loads_and_plans_its_media() {
         let media = [
             &scn.boot.sd,
             &scn.boot.usb,
+            &scn.boot.otg,
             &scn.boot.netboot,
             &scn.boot.eeprom_pubkey,
         ];

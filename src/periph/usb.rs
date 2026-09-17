@@ -16,7 +16,9 @@
 //!   `XHCI-STOP` prints `USBSTS 18` instead of `USBSTS 0`.
 //! * [`MassStorage`] — a Bulk-Only Transport / SCSI disk, modelled on the
 //!   Samsung "Flash Drive FIT" (`090c:1000`) the ground-truth capture used.
-//!   This is what `--usb <img>` attaches.
+//!   This is what `--usb <img>` attaches, and — as the high-speed device a USB
+//!   3 stick is in a USB 2.0 socket — what `--otg <img>` puts on the USB-C
+//!   port ([`MassStorage::with_disk_hs`]).
 //!
 //! ## Topology
 //!
@@ -498,6 +500,9 @@ pub struct MassStorage {
     desc: Descriptors,
     disk: Rc<RefCell<Disk>>,
     phase: BotPhase,
+    /// What the port reports with this stick in it: SuperSpeed in a blue
+    /// socket, high speed in a USB 2.0 one ([`MassStorage::with_disk_hs`]).
+    speed: Speed,
 }
 
 impl MassStorage {
@@ -535,7 +540,37 @@ impl MassStorage {
             },
             disk,
             phase: BotPhase::Command,
+            speed: Speed::Super,
         }
+    }
+
+    /// The same stick in a USB 2.0 socket — the USB-C port on the BCM2711's
+    /// own xHCI (`--otg`, [`crate::periph::xhci_otg`]), which has no
+    /// SuperSpeed half to fall back from.
+    ///
+    /// A USB 3 device in a USB 2.0 port enumerates as a high-speed device, and
+    /// what it reports then follows from the measured SuperSpeed descriptors by
+    /// the USB 2.0 rules rather than from a second capture: `bcdUSB` 2.00,
+    /// endpoint zero 64 bytes instead of the SuperSpeed `2^9`, bulk endpoints
+    /// 512 bytes and no SuperSpeed companion descriptors, and the configuration
+    /// draws the same current in the 2 mA units USB 2.0 counts it in
+    /// (`0x26` × 8 mA = `0x98` × 2 mA). Everything else — the identity strings,
+    /// the interface, the endpoint numbers, the SCSI answers — is the stick's
+    /// own.
+    pub fn with_disk_hs(disk: Rc<RefCell<Disk>>) -> MassStorage {
+        let mut dev = MassStorage::with_disk(disk);
+        dev.speed = Speed::High;
+        dev.desc.device = vec![
+            0x12, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x40, 0x0c, 0x09, 0x00, 0x10, 0x00, 0x11,
+            0x01, 0x02, 0x03, 0x01,
+        ];
+        dev.desc.config = vec![
+            0x09, 0x02, 0x20, 0x00, 0x01, 0x01, 0x00, 0x80, 0x98, // configuration
+            0x09, 0x04, 0x00, 0x00, 0x02, 0x08, 0x06, 0x50, 0x00, // interface
+            0x07, 0x05, 0x01, 0x02, 0x00, 0x02, 0x00, // bulk OUT 0x01
+            0x07, 0x05, 0x82, 0x02, 0x00, 0x02, 0x00, // bulk IN 0x82
+        ];
+        dev
     }
 
     fn blocks(&self) -> u64 {
@@ -664,7 +699,7 @@ impl MassStorage {
 
 impl UsbDevice for MassStorage {
     fn speed(&self) -> Speed {
-        Speed::Super
+        self.speed
     }
 
     fn reset(&mut self) {

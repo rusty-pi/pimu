@@ -143,7 +143,7 @@ still records it.
 | `pcie` | Every change of the VL805's interrupt as the root complex sees it: INTA, or the MSI block's status and mask. Also every write to the inbound window `RC_BAR2`, and every endpoint DMA access that falls outside it (and so reaches no memory). |
 | `pmic` | DA9090 PMIC register traffic. |
 | `spi` | SPI0 transactions against the EEPROM flash. |
-| `xhci` | xHCI rings, TRBs and port state. |
+| `xhci` | xHCI rings, TRBs and port state. Both controllers: the VL805's, and the BCM2711's own on the USB-C port, whose lines carry an `otg` tag. |
 
 These need a `diag` build:
 

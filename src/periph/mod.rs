@@ -48,6 +48,7 @@ pub mod usb;
 pub mod vce;
 pub mod vl805;
 pub mod xhci;
+pub mod xhci_otg;
 
 pub use armctrl::ArmCtrl;
 pub use armlocal::ArmLocal;
@@ -85,6 +86,7 @@ pub use uart_pl011::Pl011;
 pub use vce::Vce;
 pub use vl805::Vl805;
 pub use xhci::Xhci;
+pub use xhci_otg::XhciOtg;
 
 /// Every device's register map lives in `specs/*.toml`; this is what each one
 /// models of it. `tests/specs.rs` checks these against the specs, and that
@@ -137,4 +139,5 @@ pub const SPEC_COVERAGE: &[crate::spec::Coverage] = &[
     vce::COVERAGE_CTRL,
     vl805::COVERAGE,
     xhci::COVERAGE,
+    xhci_otg::COVERAGE,
 ];

@@ -105,6 +105,10 @@ What isn't a spec'd register block:
 - **Storage** — the SD card and the USB stick are disk images read on demand.
   Writes stay in memory and the image file is never modified, so every run is
   a first boot (#54, #62); `--usb-mb` makes the stick bigger than its image.
+  `--usb <img>` puts the stick in blue socket A, on the VL805; `--otg <img>`
+  puts it in the USB-C socket, on the BCM2711's own xHCI, which is what
+  `BOOT_ORDER` digit `0x5` (`BCM-USB-MSD`) boots from and what `otg_mode=1` in
+  `config.txt` hands to Linux (#113).
 - **The catch-all stub** — any peripheral offset nothing models reads back
   what was last written there (0 otherwise), and every access is logged, so an
   unimplemented poke becomes a triage note instead of a crash.

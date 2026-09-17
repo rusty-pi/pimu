@@ -1,0 +1,84 @@
+# The firmware boot from a USB stick in the USB-C socket (BOOT_ORDER 0x5).
+#
+# The SD image (`firmware-boot.toml`) as a stick on the BCM2711's own xHCI
+# (`xhci@7e9c0000`, `src/periph/xhci_otg.rs`), with no SD card and nothing in
+# the type-A sockets: the bootloader calls this boot mode `BCM-USB-MSD`, brings
+# that controller up itself — the VL805 is stopped first — enumerates the stick
+# at high speed and reads config.txt, start4.elf and fixup4.dat over SCSI
+# READ(10). start4 then takes the controller over ("USB boot mode 4") and reads
+# the kernel and the device tree through it.
+#
+# A USB 3 stick in a USB 2.0 socket enumerates as a high-speed device, which is
+# why the endpoints here are 512 bytes where `usb-boot.toml` has 1024
+# (`MassStorage::with_disk_hs`).
+#
+# Re-record the golden and the retired counts with:
+#   rpi-virt-fw boot-check testdata/boot/otg-boot.toml --update
+
+name = "otg-boot"
+description = "pieeprom.bin boot from a USB mass-storage device on the USB-C port, through to the ARM hand-off."
+
+[boot]
+eeprom = "../../firmware/pieeprom.bin"
+# The firmware boot's card, whose kernel parks the ARM (#52).
+otg = "../../firmware/sd-halt.img"
+boot_order = "0x5"
+wall_secs = 330
+max_skipped = 0
+
+[golden]
+path = "golden/otg-boot.txt"
+
+[[milestone]]
+why = "BOOT_ORDER 0x5 reached the bootloader: the Broadcom USB controller, not the VL805."
+line = "Boot mode: BCM-USB-MSD (05)"
+
+[[milestone]]
+why = "The bootloader reads the capability registers of the block at 0x7E9C0000 and has to find a controller with one root port: on the catch-all stub it read zeroes and printed `USB xHC init failed`."
+line = "xHC0 ports 1 slots 32 intrs 1"
+
+[[milestone]]
+why = "The stick enumerates on the one root port, at high speed: 512-byte bulk endpoints, not the SuperSpeed 1024."
+line = ["MSD device [01:00] 2.00", "ep 82#512 01#512"]
+
+[[milestone]]
+why = "SCSI READ CAPACITY answers with the image's size: the 288 MiB scripts/make-sd.sh image in 512-byte blocks."
+line = "MSD READ_CAPACITY [01:00] 2.00 000000:01 lun 0 block-count 589824 block-size 512"
+
+[[milestone]]
+why = "The bootloader reads all of start4.elf over SCSI."
+line = "Read start4.elf bytes  2298048"
+
+[[milestone]]
+why = "...and fixup4.dat, the last file it loads before handing over."
+line = "Read fixup4.dat bytes     5512"
+
+[[milestone]]
+why = "start4 runs, and knows which USB controller it came from."
+line = ["MESS:", "USB boot mode 4"]
+
+[[milestone]]
+why = "start4 reads the kernel over the same controller itself."
+line = ["MESS:", "Loaded 'kernel8.img'"]
+
+[[milestone]]
+why = "start4 stops the controller through its non-PCIe path (`bfs_xhci_stop`), which reads the same capability values back."
+line = ["MESS:", "xHC0 ver: 256 HCS: 01000120 00000031 00000000 HCC: 00280029"]
+
+[[milestone]]
+why = "The goal: the VPU hands the board over to the ARM with the boot medium on the USB-C port."
+line = "arm_loader: Starting ARM with 947MB"
+
+[[milestone]]
+why = "The identity is the same however the board booted (src/identity.rs)."
+line = ["/chosen/rpi-machine-id ", "\"ed96a9bc626d9d0869ce37ee4aea025d\""]
+
+[[milestone]]
+why = "No nop-slides at all."
+line = "[derail]"
+absent = true
+
+[[milestone]]
+why = "An unknown instruction must be reported as a fault, with its pc and raw bytes."
+line = "Unimplemented"
+absent = true

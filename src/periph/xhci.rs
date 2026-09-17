@@ -1,5 +1,6 @@
 //! The xHCI register block and ring engine behind the VL805's BAR0 — issue #18
-//! stage 3.
+//! stage 3 — and, told a different [`Caps`], the BCM2711's own controller on
+//! the USB-C port ([`super::xhci_otg`], #113).
 //!
 //! Stage 2a made the capability registers readable (the firmware reaches them
 //! by 40-bit DMA, not by a load — see [`super::pcie`]). This file is the half
@@ -204,6 +205,70 @@ pub const PORTS: usize = (regs::HCSPARAMS1_RESET >> 24) as usize;
 const MAX_SLOTS: usize = (regs::HCSPARAMS1_RESET & 0xFF) as usize;
 const _: () =
     assert!(PORTS == regs::PORTSC_COUNT as usize && MAX_SLOTS + 1 == DOORBELL_COUNT as usize);
+
+/// What one controller reports about itself: the read-only capability and
+/// extended-capability words, its root ports and how many slots it has. Two
+/// controllers on this SoC run the engine below — the one behind the VL805's
+/// BAR0 ([`VL805`]) and the BCM2711's own at `0x7E9C_0000`
+/// ([`super::xhci_otg`]) — and this is everything that differs between them.
+/// The operational, runtime and doorbell offsets do not: both announce the
+/// layout the engine is written for, which the assertion above pins.
+pub struct Caps {
+    /// The read-only words by offset: the capability registers (the word at 0
+    /// being `CAPLENGTH` with `HCIVERSION` above it) and the whole
+    /// extended-capability list.
+    pub words: &'static [(u32, u32)],
+    /// One entry per root port, `true` for a USB2 port: those report a device
+    /// as connected and wait for the host to reset them, where a USB3 port
+    /// trains its link itself.
+    pub usb2_ports: &'static [bool],
+    /// `HCSPARAMS1.MaxSlots`.
+    pub max_slots: usize,
+    /// Prefixes this controller's [`Channel::Xhci`] lines; empty for the
+    /// VL805's, whose lines predate there being a second controller.
+    pub tag: &'static str,
+}
+
+impl Caps {
+    /// The value of the read-only word at `off`, if it is one.
+    fn word(&self, off: u32) -> Option<u32> {
+        self.words
+            .iter()
+            .find_map(|&(at, v)| (at == off).then_some(v))
+    }
+}
+
+/// The VL805's controller, as measured on a Raspberry Pi 4B d03115
+/// (`specs/xhci.toml`): five root ports, port 1 USB2 and ports 2-5 USB3.
+pub const VL805: Caps = Caps {
+    words: &[
+        (
+            regs::CAPLENGTH,
+            regs::CAPLENGTH_RESET | regs::HCIVERSION_RESET << 16,
+        ),
+        (regs::HCSPARAMS1, regs::HCSPARAMS1_RESET),
+        (regs::HCSPARAMS2, regs::HCSPARAMS2_RESET),
+        (regs::HCSPARAMS3, regs::HCSPARAMS3_RESET),
+        (regs::HCCPARAMS1, regs::HCCPARAMS1_RESET),
+        (regs::DBOFF, regs::DBOFF_RESET),
+        (regs::RTSOFF, regs::RTSOFF_RESET),
+        (regs::HCCPARAMS2, regs::HCCPARAMS2_RESET),
+        // Extended capabilities, walked from `HCCPARAMS1.xECP` = 0xA0.
+        (regs::USBLEGSUP, regs::USBLEGSUP_RESET),
+        (regs::SUPPORTED_USB2, regs::SUPPORTED_USB2_RESET),
+        (regs::SUPPORTED_USB2_NAME, regs::SUPPORTED_USB2_NAME_RESET),
+        (regs::SUPPORTED_USB2_PORTS, regs::SUPPORTED_USB2_PORTS_RESET),
+        (regs::SUPPORTED_USB3, regs::SUPPORTED_USB3_RESET),
+        (regs::SUPPORTED_USB3_NAME, regs::SUPPORTED_USB3_NAME_RESET),
+        (regs::SUPPORTED_USB3_PORTS, regs::SUPPORTED_USB3_PORTS_RESET),
+        (regs::DEBUG_CAP, regs::DEBUG_CAP_RESET),
+    ],
+    usb2_ports: &[true, false, false, false, false],
+    max_slots: MAX_SLOTS,
+    tag: "",
+};
+const _: () = assert!(VL805.usb2_ports.len() == PORTS);
+
 /// The write-1-to-clear half of `USBSTS`.
 const USBSTS_RW1C: u32 = USBSTS_HSE | USBSTS_EINT | USBSTS_PCD | USBSTS_SRE;
 
@@ -296,12 +361,24 @@ impl Port {
         }
     }
 
+    /// The speed this port reports the device on it at. A SuperSpeed device in
+    /// a USB 2.0 port has no SuperSpeed link to train and enumerates as a
+    /// high-speed one, which is what a socket wired for USB 2.0 alone — the
+    /// USB-C port on [`super::xhci_otg`] — does to a stick
+    /// ([`super::usb::MassStorage::with_disk_hs`] is that stick).
+    fn speed(&self) -> Option<Speed> {
+        match self.device.as_ref().map(|d| d.speed()) {
+            Some(Speed::Super) if self.usb2 => Some(Speed::High),
+            speed => speed,
+        }
+    }
+
     /// The resting value with whatever is attached, as measured on a real
     /// board. Called on power-on and on `HCRST`, at modelled time `now`.
     fn settle(&mut self, now: u64) {
         let base = PORTSC_EMPTY | if self.usb2 { PORTSC_DR } else { 0 };
         self.train_at = None;
-        self.portsc = match self.device.as_ref().map(|d| d.speed()) {
+        self.portsc = match self.speed() {
             None => base,
             Some(Speed::Super) => {
                 // The link retrains without host intervention; until it has,
@@ -351,10 +428,14 @@ struct EventRing {
 }
 
 pub struct Xhci {
+    /// What this controller reports about itself; everything the two
+    /// controllers differ in ([`Caps`]).
+    caps: &'static Caps,
     /// Sticky operational and runtime registers, keyed by BAR0 offset.
     regs: BTreeMap<u32, u32>,
     ports: Vec<Port>,
-    slots: [Slot; MAX_SLOTS + 1],
+    /// Slot 0 is the reserved one, so there are `caps.max_slots + 1` entries.
+    slots: Vec<Slot>,
     event: EventRing,
     /// The command ring dequeue pointer and its Consumer Cycle State.
     cmd_ptr: u64,
@@ -380,21 +461,23 @@ impl Default for Xhci {
 }
 
 impl Xhci {
+    /// The controller behind the VL805's BAR0. Port 1 is its USB2 root port
+    /// and ports 2-5 the four USB3 lanes — the split its own
+    /// supported-protocol extended capabilities report, read back from a
+    /// Raspberry Pi 4B d03115: `id=2 "USB " rev 2.0 portoff=1 count=1` and
+    /// `id=2 "USB " rev 3.0 portoff=2 count=4`.
     pub fn new() -> Xhci {
-        let mut ports = Vec::with_capacity(PORTS);
-        // Port 1 is the USB2 root port; ports 2-5 are the four USB3 lanes. That
-        // split is the VL805's own supported-protocol extended capabilities,
-        // read back from a Raspberry Pi 4B d03115:
-        // `id=2 "USB " rev 2.0 portoff=1 count=1` and
-        // `id=2 "USB " rev 3.0 portoff=2 count=4`.
-        ports.push(Port::new(true));
-        for _ in 1..PORTS {
-            ports.push(Port::new(false));
-        }
+        Xhci::with_caps(&VL805)
+    }
+
+    /// A controller reporting `caps`, with its ports empty.
+    pub fn with_caps(caps: &'static Caps) -> Xhci {
+        let ports = caps.usb2_ports.iter().map(|&u| Port::new(u)).collect();
         let mut hc = Xhci {
+            caps,
             regs: BTreeMap::new(),
             ports,
-            slots: [Slot::default(); MAX_SLOTS + 1],
+            slots: vec![Slot::default(); caps.max_slots + 1],
             event: EventRing::default(),
             cmd_ptr: 0,
             cmd_ccs: true,
@@ -469,9 +552,9 @@ impl Xhci {
         self.reg(lo) as u64 | ((self.reg(lo + 4) as u64) << 32)
     }
 
-    fn portsc_index(off: u32) -> Option<usize> {
+    fn portsc_index(&self, off: u32) -> Option<usize> {
         let rel = off.checked_sub(PORTSC)?;
-        (rel % PORTSC_STRIDE == 0 && rel / PORTSC_STRIDE < PORTS as u32)
+        (rel % PORTSC_STRIDE == 0 && (rel / PORTSC_STRIDE) < self.ports.len() as u32)
             .then_some((rel / PORTSC_STRIDE) as usize)
     }
 
@@ -490,26 +573,11 @@ impl Xhci {
     }
 
     fn read_word(&mut self, off: u32) -> u32 {
-        match off {
-            // The word at 0 is CAPLENGTH with HCIVERSION in its top half.
-            regs::CAPLENGTH => return regs::CAPLENGTH_RESET | regs::HCIVERSION_RESET << 16,
-            regs::HCSPARAMS1 => return regs::HCSPARAMS1_RESET,
-            regs::HCSPARAMS2 => return regs::HCSPARAMS2_RESET,
-            regs::HCSPARAMS3 => return regs::HCSPARAMS3_RESET,
-            regs::HCCPARAMS1 => return regs::HCCPARAMS1_RESET,
-            regs::DBOFF => return regs::DBOFF_RESET,
-            regs::RTSOFF => return regs::RTSOFF_RESET,
-            regs::HCCPARAMS2 => return regs::HCCPARAMS2_RESET,
-            // Extended capabilities, walked from `HCCPARAMS1.xECP` = 0xA0.
-            regs::USBLEGSUP => return regs::USBLEGSUP_RESET,
-            regs::SUPPORTED_USB2 => return regs::SUPPORTED_USB2_RESET,
-            regs::SUPPORTED_USB2_NAME => return regs::SUPPORTED_USB2_NAME_RESET,
-            regs::SUPPORTED_USB2_PORTS => return regs::SUPPORTED_USB2_PORTS_RESET,
-            regs::SUPPORTED_USB3 => return regs::SUPPORTED_USB3_RESET,
-            regs::SUPPORTED_USB3_NAME => return regs::SUPPORTED_USB3_NAME_RESET,
-            regs::SUPPORTED_USB3_PORTS => return regs::SUPPORTED_USB3_PORTS_RESET,
-            regs::DEBUG_CAP => return regs::DEBUG_CAP_RESET,
-            _ => {}
+        // The capability registers and the extended-capability list the
+        // controller announces, the word at 0 being `CAPLENGTH` with
+        // `HCIVERSION` in its top half.
+        if let Some(v) = self.caps.word(off) {
+            return v;
         }
         if off == PAGESIZE {
             return PAGESIZE_RESET; // 4 KiB pages
@@ -534,7 +602,7 @@ impl Xhci {
         if off == CRCR_HI {
             return 0;
         }
-        if let Some(i) = Xhci::portsc_index(off) {
+        if let Some(i) = self.portsc_index(off) {
             return self.ports[i].portsc;
         }
         self.reg(off)
@@ -556,7 +624,7 @@ impl Xhci {
         };
         let value = (value << shift) & mask;
 
-        if let Some(i) = Xhci::portsc_index(word_off) {
+        if let Some(i) = self.portsc_index(word_off) {
             self.write_portsc(i, value, mask, mem);
             return;
         }
@@ -624,7 +692,7 @@ impl Xhci {
     /// controller.
     pub fn reset(&mut self) {
         self.regs.clear();
-        self.slots = [Slot::default(); MAX_SLOTS + 1];
+        self.slots = vec![Slot::default(); self.caps.max_slots + 1];
         self.event = EventRing::default();
         self.cmd_ptr = 0;
         self.cmd_ccs = true;
@@ -636,7 +704,8 @@ impl Xhci {
         crate::log!(
             self.log,
             Channel::Xhci,
-            "PORTSC{} {:#010x} <- {value:#010x}",
+            "{}PORTSC{} {:#010x} <- {value:#010x}",
+            self.caps.tag,
             i + 1,
             self.ports[i].portsc
         );
@@ -660,14 +729,16 @@ impl Xhci {
     fn reset_port(&mut self, i: usize, mem: &mut dyn HostMem) {
         let speed = {
             let port = &mut self.ports[i];
-            let Some(dev) = port.device.as_mut() else {
+            if port.device.is_none() {
                 // Resetting an empty port just sets the change bit.
                 port.portsc &= !PORTSC_PR;
                 port.portsc |= PORTSC_PRC;
                 return;
-            };
-            dev.reset();
-            dev.speed()
+            }
+            if let Some(dev) = port.device.as_mut() {
+                dev.reset();
+            }
+            port.speed().expect("a device is attached")
         };
         let port = &mut self.ports[i];
         port.portsc &= !(PORTSC_PR | PORTSC_PLS_MASK);
@@ -714,7 +785,8 @@ impl Xhci {
         crate::log!(
             self.log,
             Channel::Xhci,
-            "event@{at:#x} type={} {:08x} {:08x} {:08x} {:08x}",
+            "{}event@{at:#x} type={} {:08x} {:08x} {:08x} {:08x}",
+            self.caps.tag,
             (trb[3] >> 10) & 0x3F,
             trb[0],
             trb[1],
@@ -787,7 +859,8 @@ impl Xhci {
             crate::log!(
                 self.log,
                 Channel::Xhci,
-                "cmd@{:#x} type={kind} {:08x} {:08x} {:08x} {:08x}",
+                "{}cmd@{:#x} type={kind} {:08x} {:08x} {:08x} {:08x}",
+                self.caps.tag,
                 self.cmd_ptr,
                 trb[0],
                 trb[1],
@@ -815,7 +888,7 @@ impl Xhci {
         let slot_id = (trb[3] >> 24) & 0xFF;
         match kind {
             TRB_NO_OP_COMMAND | TRB_NO_OP => (CC_SUCCESS, 0),
-            TRB_ENABLE_SLOT => match (1..=MAX_SLOTS).find(|i| !self.slots[*i].enabled) {
+            TRB_ENABLE_SLOT => match (1..=self.caps.max_slots).find(|i| !self.slots[*i].enabled) {
                 Some(i) => {
                     self.slots[i].enabled = true;
                     (CC_SUCCESS, i as u32)
@@ -859,7 +932,7 @@ impl Xhci {
     /// The output device context for `slot`, from the Device Context Base
     /// Address Array.
     fn device_context(&self, slot: u32, mem: &dyn HostMem) -> Option<u64> {
-        if slot == 0 || slot as usize > MAX_SLOTS || !self.slots[slot as usize].enabled {
+        if slot == 0 || slot as usize > self.caps.max_slots || !self.slots[slot as usize].enabled {
             return None;
         }
         let dcbaap = self.reg64(DCBAAP_LO) & !0x3F;
@@ -966,7 +1039,7 @@ impl Xhci {
     /// The device a slot context addresses: root port, then one hub tier per
     /// non-zero nibble of the route string.
     fn resolve(&mut self, root_port: usize, route: u32) -> Option<&mut (dyn UsbDevice + 'static)> {
-        if root_port == 0 || root_port > PORTS {
+        if root_port == 0 || root_port > self.ports.len() {
             return None;
         }
         let mut dev: &mut (dyn UsbDevice + 'static) =
@@ -1026,7 +1099,8 @@ impl Xhci {
             crate::log!(
                 self.log,
                 Channel::Xhci,
-                "xfer slot={slot} dci={dci} @{ptr:#x} type={kind} {:08x} {:08x} {:08x} {:08x}",
+                "{}xfer slot={slot} dci={dci} @{ptr:#x} type={kind} {:08x} {:08x} {:08x} {:08x}",
+                self.caps.tag,
                 trb[0],
                 trb[1],
                 trb[2],

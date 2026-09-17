@@ -7,7 +7,7 @@ use crate::periph::hdmi_ddc::AUTO_WINDOW;
 use crate::periph::{
     ArmCtrl, ArmLocal, Asb, Aux, Avs, BootBox, Bsc, ClkMon, ClockManager, ConfigOtp, CoreCtl, Dma4,
     Dwc2, Emmc2, Gic, Hd, Hdmi, HdmiDdc, Hvs, Mbox, McSync, Pl011, Pm, Rng, Sdc, Sdramc, Spi0,
-    StubRegion, SysTimer, Vce,
+    StubRegion, SysTimer, Vce, XhciOtg,
 };
 use crate::soc::bcm2711 as map;
 
@@ -126,6 +126,9 @@ pub struct Machine {
     pub hd: Hd,
     /// DWC2 USB OTG controller (`0x7E98_0000`) — reset when USB power comes on.
     pub dwc2: Dwc2,
+    /// The BCM2711's own xHCI (`0x7E9C_0000`) — the USB-C port as a USB 2.0
+    /// host, which `--otg` plugs a stick into (#113).
+    pub xhci_otg: XhciOtg,
     /// Catch-all for the rest of the peripheral window.
     pub periph_stub: StubRegion,
     pub console: Console,
@@ -278,6 +281,7 @@ impl Machine {
             hvs: Hvs::new(),
             hd: Hd::new(),
             dwc2: Dwc2::new(),
+            xhci_otg: XhciOtg::new(),
             periph_stub: StubRegion::new("periph-window"),
             console: Console::default(),
             stub_hits: 0,
@@ -346,6 +350,7 @@ impl Machine {
         self.emmc.log = log.clone();
         self.emmc2.log = log.clone();
         self.dwc2.log = log.clone();
+        self.xhci_otg.set_log(log.clone());
         self.log = log;
     }
 
@@ -684,6 +689,9 @@ impl Machine {
         }
         if let Some(off) = hit(map::DWC2_BASE, map::DWC2_SIZE) {
             return Some((&mut self.dwc2, off));
+        }
+        if let Some(off) = hit(map::XHCI_OTG_BASE, map::XHCI_OTG_SIZE) {
+            return Some((&mut self.xhci_otg, off));
         }
         if let Some(off) = hit(map::BOOTBOX_BASE, map::BOOTBOX_SIZE) {
             return Some((&mut self.bootbox, off));
@@ -1119,6 +1127,11 @@ impl Machine {
             }
             if self.emmc2.dma_pending() {
                 self.emmc2.run_dma(&mut self.ram);
+            }
+            // A register write on the USB-C port's xHCI can run a ring, which
+            // needs DRAM the device itself has no view of (`xhci_otg`).
+            if self.xhci_otg.write_pending() {
+                self.xhci_otg.run_pending(&mut self.ram);
             }
             if self.genet.take_kick() {
                 self.genet.service(&mut self.ram, &mut self.net);
