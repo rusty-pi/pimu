@@ -19,13 +19,13 @@ Sources:
 |---|---|---|---|---|
 | `0x03C` | [`REG_03C`](#reg_03c) | rw | 32 | 1, best high |
 | `0x040` | [`REG_040`](#reg_040) | rw | 32 | 1, best high |
-| `0x1000` | [`L2_CTRL`](#l2_ctrl) | rw | 32 | 4, best high |
-| `0x1004` | [`L2_FLUSH_START`](#l2_flush_start) | rw | 32 | 2, best medium |
+| `0x1000` | [`L2_CTRL`](#l2_ctrl) | rw | 32 | 6, best high |
+| `0x1004` | [`L2_FLUSH_START`](#l2_flush_start) | rw | 32 | 3, best high |
 | `0x1008` | [`L2_FLUSH_END`](#l2_flush_end) | rw | 32 | 2, best medium |
 | `0x1080` | [`IRQ_STATUS`](#irq_status) | rw | 32 | 1, best medium |
 | `0x1084` | [`IRQ_SOURCE`](#irq_source) | rw | 32 | 1, best medium |
 | `0x1088` | [`IRQ_PAYLOAD`](#irq_payload) | rw | 32 | 1, best medium |
-| `0x2000` | [`DOORBELL_B`](#doorbell_b) | rw | 32 | 1, best high |
+| `0x2000` | [`DOORBELL_B`](#doorbell_b) | rw | 32 | 2, best high |
 | `0x2004` | [`REG_2004`](#reg_2004) | rw | 32 | 1, best high |
 | `0x2008` | [`REG_2008`](#reg_2008) | rw | 32 | 1, best high |
 | `0x200C` | [`REG_200C`](#reg_200c) | rw | 32 | 1, best high |
@@ -62,7 +62,7 @@ Sources:
 
 Offset `0x1000` · access `rw` · 32 bits
 
-The L2 cache's maintenance port, as far as the evidence goes. The stub the bootcode relocates to `0x60010000` writes a range to `L2_FLUSH_START` / `L2_FLUSH_END`, then `0x14` here, and polls until it reads back `0x10`, right before it jumps to the next stage; bootmain does the same with `0x44` over single buffers. The low bits read back clear. The model takes `FLUSH` as clean-and-invalidate over the range, which ends the bootcode's cache-as-RAM window (`src/l2.rs`, #70). start4 configures it as it starts, `(value & 0xFFF0FFE5) | 0x430000`, and uses `0x430014`, `0x430044`, `0x430050` and `0x430054` from then on; bit 1 it sets once, as it applies `config.txt` (`0x430042` in the trace).
+The L2 cache's maintenance port, as far as the evidence goes. The stub the bootcode relocates to `0x60010000` writes a range to `L2_FLUSH_START` / `L2_FLUSH_END`, then `0x14` here, and polls until it reads back `0x10`, right before it jumps to the next stage. bootmain leaves through the same stub, so start4 reads `0x10` whatever bootmain left. bootmain sets bit 6 once, as it sets up its heap (`0x10` becomes `0x50`), and its cache-flush routine (`0x87DD4`, the start4 routine's twin) writes `(value & ~0x18) | 4` over each file it has read, `0x44`; a second routine (`0x87E84`) writes `(value & ~0x18) | 0x14` instead, `0x54`. The low bits read back clear. The model takes `FLUSH` as clean-and-invalidate over the range, which ends the bootcode's cache-as-RAM window (`src/l2.rs`, #70). start4 configures it as it starts, `(value & 0xFFF0FFE5) | 0x430000`, and uses `0x430014`, `0x430044`, `0x430050` and `0x430054` from then on; bit 1 it sets once, as it applies `config.txt` (`0x430042` in the trace).
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -72,6 +72,8 @@ Sources:
 
 - decompile (medium): stub at `0x60010000` writes a trigger to `0x7EE01000` and polls it
 - trace (medium): 2022-04-26 and pinned bootcode: `0x7EE01004 = 0`, `0x7EE01008 = 0x0FFFFFE0`, then `0x14` to `0x7EE01000`; pinned bootmain: `0x00A20000..0x00A20116`, then `0x44` (#70)
+- decompile (high): pinned bootmain: heap setup `0x8B35C` reads it at `0x8B3D2` and writes it back with bit 6 set at `0x8B3E0`; flush routines `0x87DD4` (`Bic 0x18`, `Or 4` at `0x87E6C..0x87E74`) and `0x87E84` (`Or 0x14` at `0x87F20`), both polling bit 2; the stub copied from `0x802CC` to `0x60010000` at `0xA9766` and entered at `0xA97D6`
+- trace (high): pinned bootmain: `0x10` read at `0x8B3D2`, `0x50` written at `0x8B3E0`, then `0x44` at `0x87E74` (reads back `0x40`) after each file; `0x54` at `0x87F24` (reads back `0x50`) around the display's redraws; the stub's `0x14` at `0x60010066` before start4 reads `0x10`
 - decompile (high): start4 entry `0x3EC7114E..0x3EC7119E`: reads it (bit 0 test), then `And 0xFFF0FFE5`, `Or 0x430000`, `St`; `0x3ED486CE..0x3ED486D2` sets bit 1 when the word at `gp+838588` is 0
 - trace (high): pinned start4: `0x430000` at `0x3EC7119E`, `0x430044` at `0x3EC715A0`, `0x430014` / `0x430054` at `0x3EC71668`, `0x430050` at `0x3EC9806A`, `0x430042` at `0x3ED486D2`
 
@@ -83,12 +85,13 @@ Sources:
 
 Offset `0x1004` · access `rw` · 32 bits
 
-First address of the range `L2_CTRL.FLUSH` acts on.
+First address of the range `L2_CTRL.FLUSH` acts on. bootmain flushes each file it reads, from the buffer's first address, before it logs the read (`0x905C4`), and everything (`0`..`0xFFFFFFFE`) right after it logs `Starting` (`0x866FA`); a quiet read (a signed `boot.img` and its signature) is not flushed. Its display brackets each redraw of the two channels' `0x12C000`-byte buffers (`0x16000000`, `0x1612C000`) with both flush routines.
 
 Sources:
 
 - trace (medium): written right before `L2_FLUSH_END` and the `L2_CTRL` command (#70)
 - trace (medium): pinned start4 writes ranges here all through the boot (`0x3EC715EE`; e.g. `0xBEF27640` with `L2_FLUSH_END` `0xBEF4763F`), the same pair to `0x7EE02104` / `DOORBELL_C_SIZE` just before, and `L2_CTRL` commands `0x430000` / `0x430014` (`0x3EC7119E`, `0x3EC71668`)
+- trace (high): pinned bootmain: `0x00A20000` (`config.txt`, 279 bytes), `0x00FF0000` (`start4.elf`), `0x00CF0000` (`fixup4.dat`) at `0x87DFA`, each before its `Read` line; `0` with `L2_FLUSH_END` `0xFFFFFFFE` after `Starting`; `0x16000000` / `0x1612C000` with `L2_FLUSH_END` `0x1612BFFF` / `0x16257FFF` from `0x87EAA` and `0x87DFA` in a signed `boot.img` boot
 
 ## `L2_FLUSH_END`
 
@@ -143,7 +146,7 @@ Sources:
 
 Offset `0x2000` · access `rw` · 32 bits
 
-Boot-info doorbell: the bootloader stages a `BSTE` / `BVER` block at `0xC0040000`, sets bit 1 and spins until it clears. start4 tests bit 0 as it starts (`0x3EC7111A`), and its cache-flush routine sets bit 1 for its flag bit 0 without waiting.
+Boot-info doorbell: the bootloader stages a `BSTE` / `BVER` block at `0xC0040000`, sets bit 1 and spins until it clears; bootcode and bootmain both do so just before they enter the stub at `0x60010000`, and both only ever set bit 1 here. start4 tests bit 0 as it starts (`0x3EC7111A`), and the start4 and bootmain cache-flush routines set bit 1 for their flag bit 0 without waiting.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -152,6 +155,7 @@ Boot-info doorbell: the bootloader stages a `BSTE` / `BVER` block at `0xC0040000
 Sources:
 
 - decompile (high): `0x80009594` sets bit 1 of `0x7EE02000` and spins
+- decompile (high): pinned bootmain `0xA97AC..0xA97CC` sets bit 1 and spins, then enters the stub; flush routine `0x87DD4` sets bit 1 at `0x87E22`
 
 `CONTROL` sources:
 
@@ -191,7 +195,7 @@ Sources:
 
 Offset `0x2080` · access `rw` · 32 bits
 
-Set up like `DOORBELL_B`: start4 tests its bit 0 as it starts, and its cache-flush routine sets bit 1 here for flag bit 1, where `DOORBELL_B` takes flag bit 0.
+Set up like `DOORBELL_B`: start4 tests its bit 0 as it starts, and the start4 and bootmain cache-flush routines set bit 1 here for flag bit 1, where `DOORBELL_B` takes flag bit 0.
 
 Sources:
 
