@@ -19,9 +19,9 @@ Sources:
 | Offset | Name | Access | Width | Sources |
 |---|---|---|---|---|
 | `0x000` | [`SDMA_ADDR`](#sdma_addr) | rw | 32 | 1, best high |
-| `0x004` | [`BLOCK_SIZE_COUNT`](#block_size_count) | rw | 32 | 1, best high |
-| `0x008` | [`ARGUMENT`](#argument) | rw | 32 | 1, best high |
-| `0x00C` | [`CMD_XFER`](#cmd_xfer) | rw | 32 | 1, best high |
+| `0x004` | [`BLOCK_SIZE_COUNT`](#block_size_count) | rw | 32 | 2, best high |
+| `0x008` | [`ARGUMENT`](#argument) | rw | 32 | 3, best high |
+| `0x00C` | [`CMD_XFER`](#cmd_xfer) | rw | 32 | 2, best high |
 | `0x010` | [`RESPONSE0`](#response0) | r | 32 | 1, best high |
 | `0x014` | [`RESPONSE1`](#response1) | r | 32 | 1, best high |
 | `0x018` | [`RESPONSE2`](#response2) | r | 32 | 1, best high |
@@ -32,7 +32,7 @@ Sources:
 | `0x02C` | [`CLOCK_CONTROL`](#clock_control) | rw | 32 | 3, best high |
 | `0x030` | [`INT_STATUS`](#int_status) | w1c | 32 | 2, best high |
 | `0x034` | [`INT_STATUS_EN`](#int_status_en) | rw | 32 | 3, best high |
-| `0x038` | [`INT_SIGNAL_EN`](#int_signal_en) | rw | 32 | 1, best high |
+| `0x038` | [`INT_SIGNAL_EN`](#int_signal_en) | rw | 32 | 2, best high |
 | `0x03C` | [`HOST_CONTROL2`](#host_control2) | rw | 32 | 1, best high |
 | `0x040` | [`CAPABILITIES_0`](#capabilities_0) | r | 32 | 1, best high |
 | `0x044` | [`CAPABILITIES_1`](#capabilities_1) | r | 32 | 1, best high |
@@ -57,7 +57,7 @@ Sources:
 
 Offset `0x004` · access `rw` · 32 bits
 
-Block size, SDMA buffer boundary and block count.
+Block size, SDMA buffer boundary and block count. Neither stock stage uses the count: before a card register read they write the register's length alone (8 for the SCR, `0x40` for a SWITCH_FUNC status). start4 writes `0x200` back after each such read; the bootloader instead writes `0x200` three times over before every `CMD18`.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -68,6 +68,7 @@ Block size, SDMA buffer boundary and block count.
 Sources:
 
 - standard (high): SDHCI 3.00, 2.2.2 / 2.2.3
+- trace (high): start4 writes it at `0x3EC5270A`: 8, `0x200`, `0x40`, `0x200`, `0x40`, `0x200` around ACMD51 and the two CMD6 reads; the bootloader writes 8 and `0x40` once each, then `0x200` three times before each of its `CMD18`s
 
 `BLOCK_SIZE` sources:
 
@@ -85,17 +86,19 @@ Sources:
 
 Offset `0x008` · access `rw` · 32 bits
 
-Command argument.
+Command argument. The two stock stages identify a card differently. The bootloader sends ACMD41 with `0x00100000` (3.2-3.3 V), plus bit 30 once CMD8 has been answered, then after CMD2, CMD3, CMD9 and CMD7 reads the SCR (ACMD51, with the card's RCA as argument) and asks SWITCH_FUNC in check mode for high speed only (`0x00000001`); it goes to 50 MHz and sends ACMD6 (`2`) without switching the card. start4 sends CMD8 with `0x155`, ACMD41 with `0x40200000`, then CMD2, CMD3, CMD9, CMD7, CMD13, ACMD42 (`0`), ACMD6 (`2`), ACMD51 (`0`), CMD6 `0x00FFFFF1` (check), CMD6 `0x80FFFFF1` (switch) and CMD16 (`0x200`).
 
 Sources:
 
 - standard (high): SDHCI 3.00, 2.2.4
+- trace (high): `boot --log emmc` of the pinned EEPROM and card: the command and argument sequence of each stage; start4 writes arguments at `0x3EC52358`
+- decompile (high): bootmain `0xACD74..0xACDAA`: ACMD41 argument `0x100000`, or-ed with `1 << 30` unless the `SDV1` flag is set; `0xACD32`: CMD1 argument `0x40100000` for eMMC
 
 ## `CMD_XFER`
 
 Offset `0x00C` · access `rw` · 32 bits
 
-Transfer mode (low half) and command (high half). Writing the high half issues the command.
+Transfer mode (low half) and command (high half). Writing the high half issues the command. The bootloader reads every run of sectors, one or many, with an open-ended `CMD18` (`0x123A0030`) and ends it with CMD12 as R1b (`0x0C1B0030`, the multi-block read mode kept). start4 reads a single sector with `CMD17` (`0x113A0010`) and a longer run with `CMD18`, ended by CMD12 with mode `0x10` (`0x0C1B0010`) and followed by CMD13. Neither sets `BLOCK_COUNT_EN` or `AUTO_CMD`.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -108,6 +111,7 @@ Transfer mode (low half) and command (high half). Writing the high half issues t
 Sources:
 
 - standard (high): SDHCI 3.00, 2.2.5 / 2.2.6
+- trace (high): start4 writes commands at `0x3EC52394`: 7 × `0x113A0010`, 16 × `0x123A0030`, 16 × `0x0C1B0010`, 17 × `0x0D1A0010` up to its first `config.txt` read; the bootloader's are all `0x123A0030` / `0x0C1B0030`
 
 `DMA` sources:
 
@@ -223,13 +227,26 @@ Host control 1, power, block-gap and wakeup control.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
+| 1 | `DATA_WIDTH` | rw | 4-bit bus. start4 sets it right after ACMD6; the bootloader after its 50 MHz clock change. |
+| 2 | `HIGH_SPEED` | rw | High-speed timing. Both stock stages set it in the same write sequence as their 50 MHz clock: `CLOCK_CONTROL` <- 0, this bit, then the new divider. start4 does it after reading the MBR, with the card already switched; the bootloader after only asking the card. |
 | 4:3 | `DMA_SELECT` | rw | 0 = SDMA, 2 = 32-bit ADMA2. |
 | 8 | `BUS_POWER` | rw | SD bus power. Turning it off takes VDD from the card. |
+| 16 | `STOP_AT_GAP` | rw | Stop at block gap request. start4 writes host control before every command: with this bit set before the CMD12 that ends a `CMD18`, clear before any other. Not modelled: the model ends the transfer on CMD12 either way. |
 | 23 | `FIXED` | r | Reads 1 whatever is written. |
 
 Sources:
 
 - standard (high): SDHCI 3.00, 2.2.10..2.2.13
+
+`DATA_WIDTH` sources:
+
+- standard (high): SDHCI 3.00, 2.2.10
+- trace (high): start4 writes `0x00800F02` at `0x3EC5275A` after ACMD6
+
+`HIGH_SPEED` sources:
+
+- standard (high): SDHCI 3.00, 2.2.10
+- trace (high): start4 writes `0x00800F06` at `0x3EC527F6` between `CLOCK_CONTROL` <- 0 (`0x3EC527A0`) and <- `0x000E0201` (`0x3EC52814`); the bootloader prints `CTL0: 0x00800f04` with its 50 MHz `SD HOST` line
 
 `DMA_SELECT` sources:
 
@@ -238,6 +255,11 @@ Sources:
 `BUS_POWER` sources:
 
 - standard (high): SDHCI 3.00, 2.2.11
+
+`STOP_AT_GAP` sources:
+
+- standard (high): SDHCI 3.00, 2.2.12
+- trace (high): start4 writes `0x00810F06` at `0x3EC521AA` before each of its 16 CMD12s, and host control without the bit at `0x3EC521C4` before its other commands
 
 `FIXED` sources:
 
@@ -256,7 +278,7 @@ Clock control (15:0), data timeout (19:16) and the self-clearing software resets
 | 2 | `SD_EN` | rw | SD clock to the card on. |
 | 24 | `SRST_ALL` | rw | Reset everything. |
 | 25 | `SRST_CMD` | rw | Reset the command circuit. |
-| 26 | `SRST_DATA` | rw | Reset the data circuit. |
+| 26 | `SRST_DATA` | rw | Reset the data circuit. Both stock stages set it after the CMD12 that ends an open-ended read, polling until it clears, rather than waiting for the stop's busy end: the bootloader right after issuing CMD12 and again once it completes, start4 once it completes. |
 
 Sources:
 
@@ -287,6 +309,7 @@ Sources:
 `SRST_DATA` sources:
 
 - standard (high): SDHCI 3.00, 2.2.16
+- trace (high): start4 writes `0x040E0207` at `0x3EC52026` once per CMD12 (16 up to its first `config.txt` read); the bootloader writes it twice per CMD12, before and after it reads `INT_STATUS`
 
 ## `INT_STATUS`
 
@@ -363,11 +386,12 @@ Sources:
 
 Offset `0x038` · access `rw` · 32 bits
 
-Which `INT_STATUS` bits drive the interrupt line (INTID 158).
+Which `INT_STATUS` bits drive the interrupt line (INTID 158). start4 writes it before every command: 1 (`CMD_COMPLETE`) for a command with a data phase or an R1b response, 0 for any other. The bootloader does not touch it per command.
 
 Sources:
 
 - standard (high): SDHCI 3.00, 2.2.21 / 2.2.22
+- trace (high): start4 writes it at `0x3EC52386`: 43 × 1 (CMD7, CMD12, CMD17, CMD18, ACMD51, both CMD6) and 32 × 0 up to its first `config.txt` read
 
 ## `HOST_CONTROL2`
 

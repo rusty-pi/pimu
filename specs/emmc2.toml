@@ -35,11 +35,16 @@ confidence = "high"
 name   = "BLOCK_SIZE_COUNT"
 offset = 0x04
 access = "rw"
-notes  = "Block size, SDMA buffer boundary and block count."
+notes  = "Block size, SDMA buffer boundary and block count. Neither stock stage uses the count: before a card register read they write the register's length alone (8 for the SCR, `0x40` for a SWITCH_FUNC status). start4 writes `0x200` back after each such read; the bootloader instead writes `0x200` three times over before every `CMD18`."
 
 [[register.source]]
 kind       = "standard"
 ref        = "SDHCI 3.00, 2.2.2 / 2.2.3"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4 writes it at `0x3EC5270A`: 8, `0x200`, `0x40`, `0x200`, `0x40`, `0x200` around ACMD51 and the two CMD6 reads; the bootloader writes 8 and `0x40` once each, then `0x200` three times before each of its `CMD18`s"
 confidence = "high"
 
 [[register.field]]
@@ -76,22 +81,37 @@ confidence = "high"
 name   = "ARGUMENT"
 offset = 0x08
 access = "rw"
-notes  = "Command argument."
+notes  = "Command argument. The two stock stages identify a card differently. The bootloader sends ACMD41 with `0x00100000` (3.2-3.3 V), plus bit 30 once CMD8 has been answered, then after CMD2, CMD3, CMD9 and CMD7 reads the SCR (ACMD51, with the card's RCA as argument) and asks SWITCH_FUNC in check mode for high speed only (`0x00000001`); it goes to 50 MHz and sends ACMD6 (`2`) without switching the card. start4 sends CMD8 with `0x155`, ACMD41 with `0x40200000`, then CMD2, CMD3, CMD9, CMD7, CMD13, ACMD42 (`0`), ACMD6 (`2`), ACMD51 (`0`), CMD6 `0x00FFFFF1` (check), CMD6 `0x80FFFFF1` (switch) and CMD16 (`0x200`)."
 
 [[register.source]]
 kind       = "standard"
 ref        = "SDHCI 3.00, 2.2.4"
 confidence = "high"
 
+[[register.source]]
+kind       = "trace"
+ref        = "`boot --log emmc` of the pinned EEPROM and card: the command and argument sequence of each stage; start4 writes arguments at `0x3EC52358`"
+confidence = "high"
+
+[[register.source]]
+kind       = "decompile"
+ref        = "bootmain `0xACD74..0xACDAA`: ACMD41 argument `0x100000`, or-ed with `1 << 30` unless the `SDV1` flag is set; `0xACD32`: CMD1 argument `0x40100000` for eMMC"
+confidence = "high"
+
 [[register]]
 name   = "CMD_XFER"
 offset = 0x0C
 access = "rw"
-notes  = "Transfer mode (low half) and command (high half). Writing the high half issues the command."
+notes  = "Transfer mode (low half) and command (high half). Writing the high half issues the command. The bootloader reads every run of sectors, one or many, with an open-ended `CMD18` (`0x123A0030`) and ends it with CMD12 as R1b (`0x0C1B0030`, the multi-block read mode kept). start4 reads a single sector with `CMD17` (`0x113A0010`) and a longer run with `CMD18`, ended by CMD12 with mode `0x10` (`0x0C1B0010`) and followed by CMD13. Neither sets `BLOCK_COUNT_EN` or `AUTO_CMD`."
 
 [[register.source]]
 kind       = "standard"
 ref        = "SDHCI 3.00, 2.2.5 / 2.2.6"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4 writes commands at `0x3EC52394`: 7 × `0x113A0010`, 16 × `0x123A0030`, 16 × `0x0C1B0010`, 17 × `0x0D1A0010` up to its first `config.txt` read; the bootloader's are all `0x123A0030` / `0x0C1B0030`"
 confidence = "high"
 
 [[register.field]]
@@ -278,6 +298,36 @@ ref        = "SDHCI 3.00, 2.2.10..2.2.13"
 confidence = "high"
 
 [[register.field]]
+name  = "DATA_WIDTH"
+bits  = "1"
+notes = "4-bit bus. start4 sets it right after ACMD6; the bootloader after its 50 MHz clock change."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.10"
+confidence = "high"
+
+[[register.field.source]]
+kind       = "trace"
+ref        = "start4 writes `0x00800F02` at `0x3EC5275A` after ACMD6"
+confidence = "high"
+
+[[register.field]]
+name  = "HIGH_SPEED"
+bits  = "2"
+notes = "High-speed timing. Both stock stages set it in the same write sequence as their 50 MHz clock: `CLOCK_CONTROL` <- 0, this bit, then the new divider. start4 does it after reading the MBR, with the card already switched; the bootloader after only asking the card."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.10"
+confidence = "high"
+
+[[register.field.source]]
+kind       = "trace"
+ref        = "start4 writes `0x00800F06` at `0x3EC527F6` between `CLOCK_CONTROL` <- 0 (`0x3EC527A0`) and <- `0x000E0201` (`0x3EC52814`); the bootloader prints `CTL0: 0x00800f04` with its 50 MHz `SD HOST` line"
+confidence = "high"
+
+[[register.field]]
 name  = "DMA_SELECT"
 bits  = "4:3"
 notes = "0 = SDMA, 2 = 32-bit ADMA2."
@@ -295,6 +345,21 @@ notes = "SD bus power. Turning it off takes VDD from the card."
 [[register.field.source]]
 kind       = "standard"
 ref        = "SDHCI 3.00, 2.2.11"
+confidence = "high"
+
+[[register.field]]
+name  = "STOP_AT_GAP"
+bits  = "16"
+notes = "Stop at block gap request. start4 writes host control before every command: with this bit set before the CMD12 that ends a `CMD18`, clear before any other. Not modelled: the model ends the transfer on CMD12 either way."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.12"
+confidence = "high"
+
+[[register.field.source]]
+kind       = "trace"
+ref        = "start4 writes `0x00810F06` at `0x3EC521AA` before each of its 16 CMD12s, and host control without the bit at `0x3EC521C4` before its other commands"
 confidence = "high"
 
 [[register.field]]
@@ -383,11 +448,16 @@ confidence = "high"
 [[register.field]]
 name  = "SRST_DATA"
 bits  = "26"
-notes = "Reset the data circuit."
+notes = "Reset the data circuit. Both stock stages set it after the CMD12 that ends an open-ended read, polling until it clears, rather than waiting for the stop's busy end: the bootloader right after issuing CMD12 and again once it completes, start4 once it completes."
 
 [[register.field.source]]
 kind       = "standard"
 ref        = "SDHCI 3.00, 2.2.16"
+confidence = "high"
+
+[[register.field.source]]
+kind       = "trace"
+ref        = "start4 writes `0x040E0207` at `0x3EC52026` once per CMD12 (16 up to its first `config.txt` read); the bootloader writes it twice per CMD12, before and after it reads `INT_STATUS`"
 confidence = "high"
 
 [[register]]
@@ -523,11 +593,16 @@ note       = "event-driven code; the order above is what the trace shows"
 name   = "INT_SIGNAL_EN"
 offset = 0x38
 access = "rw"
-notes  = "Which `INT_STATUS` bits drive the interrupt line (INTID 158)."
+notes  = "Which `INT_STATUS` bits drive the interrupt line (INTID 158). start4 writes it before every command: 1 (`CMD_COMPLETE`) for a command with a data phase or an R1b response, 0 for any other. The bootloader does not touch it per command."
 
 [[register.source]]
 kind       = "standard"
 ref        = "SDHCI 3.00, 2.2.21 / 2.2.22"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4 writes it at `0x3EC52386`: 43 × 1 (CMD7, CMD12, CMD17, CMD18, ACMD51, both CMD6) and 32 × 0 up to its first `config.txt` read"
 confidence = "high"
 
 [[register]]
