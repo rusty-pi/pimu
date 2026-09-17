@@ -6,7 +6,7 @@
 - Base: `0x7E204000`
 - Size: `0x18`
 
-Driven in polled single-byte mode. Every shift is instantaneous; the flash answers `READ`, `FAST_READ`, `RDID`, `RDSR`, `WREN` / `WRDI`, `SE` and `PP`. start4 reads the flash once, before it touches the SD card: it saves the functions of GPIO 40..43, puts them on ALT4, reads every section header of the image (a 28-byte full-duplex `READ`: command, three address bytes, the 24-byte header; at most 33 sections, stopping at a bad magic or at 512 KiB), then the data of the first `pubkey.bin` and `bootconf.txt` (data length + 4 bytes in one transfer), and gives the pins their functions back. Each transfer's buffer is also what goes out after the address, so the header reads send the previous header, and the first one whatever was on the stack.
+Driven in polled single-byte mode. Every shift is instantaneous; the flash answers `READ`, `FAST_READ`, `RDID`, `RDSR`, `WREN` / `WRDI`, `SE` and `PP`. start4 reads the flash once, before it touches the SD card: it saves the functions of GPIO 40..43, puts them on ALT4, reads every section header of the image (a 28-byte full-duplex `READ`: command, three address bytes, the 24-byte header; at most 33 sections, stopping at a bad magic or at 512 KiB), then the data of the first `pubkey.bin` and `bootconf.txt` (data length + 4 bytes in one transfer), and gives the pins their functions back. Each transfer's buffer is also what goes out after the address, so the header reads send the previous header, and the first one whatever was on the stack. The two EEPROM stages instead switch GPIO 43, 40, 41 and 42 to ALT4, in that order, for every flash session. Afterwards they clear `CS` and `CLK` and put the four pins back to inputs in the same order. GPIO 42 is also the activity LED, so they then drive it to the state they last set it to, which makes it an output again. After an error code has been flashed, that state is off.
 
 Sources:
 
@@ -14,6 +14,8 @@ Sources:
 - decompile (high): EEPROM bootloader: wait `TXD`, write FIFO, wait `RXD`, read FIFO per byte; start4's EEPROM scanner `0x3ED77E00`
 - decompile (high): start4 platform init `0x3ED4947A` (BCM2711 only): GPIO 40..43 saved and set to ALT4 through the GPIO driver, `bootloader_eeprom_find_files` `0x3EC649BC` (header walk `0x3EC64ED0`, file read `0x3EC655B0`), pins restored
 - trace (high): start4: `GPFSEL4` `0x40` -> `0x6DB` at `0x3ECC9562` (pins 40..43 to ALT4), 27 header reads and reads of 512 and 79 bytes from the stock image, `GPFSEL4` back to `0x40`, then the first log line
+- decompile (high): bootloader: session end `0xAEDDC` (`CS`, `CLK` <- 0, pins 43 and 40..42 to function 0), then `0xA937A`, which drives the LED from the state `0xA9534` records; the error flash `0xA817A` ends with `0xA9534(0)`
+- trace (high): bootcode and bootloader: `GPFSEL4` `0x40`, `0x640`, `0x643`, `0x65B`, `0x6DB` into a session; `0xDB`, `0xD8`, `0xC0`, `0` after it, then `GPSET1` (or `GPCLR1`) <- `0x400` and `GPFSEL4` <- `0x40`
 
 ## Register map
 
