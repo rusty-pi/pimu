@@ -25,11 +25,21 @@ confidence = "medium"
 name   = "REFRESH"
 offset = 0x04
 access = "rw"
-notes  = "Timing word carrying the refresh interval, which start4 rescales from MR4 once the ARM runs."
+notes  = "Timing word carrying the refresh interval, which start4 rescales from MR4 once the ARM runs. At most once a second it reads MR4 from every rank on every channel and takes the highest code (bits 2:0; a failed read counts as 7). If that differs from the last one (3 to begin with), the interval becomes the bootloader's value shifted left by `3 - code` for codes 1 and 2, right by `code - 3` for 3 to 5, and left as it was for anything else (`Unexpected sdram refresh code`); bits 15:0 are kept."
 
 [[register.source]]
 kind       = "decompile"
 ref        = "`0x3ED6BBA0` rescales `[0x7E001004] >> 16` by `1 << (3 - MR4 code)`"
+confidence = "high"
+
+[[register.source]]
+kind       = "decompile"
+ref        = "`0x3ED6BBA0`: returns early unless 1 000 000 us have passed (the first call backdates its timestamp by that much), `bmask r0, 3` / `max` over `MR4` reads, compares with `[gp+4380]`, `shl` for codes below 3, `asr` above, `(v << 16) | (old & 0xffff)`; its caller `0x3ED7C75C` sleeps 100 ms per pass and passes the rank count (2 if the `BSDR` boot-info word at `+0x0C` is set, else 1) and the channel count (`BSDR` `+0x14`, at least 1)"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "`boot` of the pinned EEPROM, `RVF_TRAP=0x3ED6BC14`: previous code 3 on the first pass, then 2; `RVF_TRACE_MMIO`: one pass reads `MR4` with `+0x9C <- 0x4` and `0x2000004`, then `+0x04 <- 0x0C3406F4` from `0x061A06F4`; 589 calls and 59 reads between the ARM start and the end of the run"
 confidence = "high"
 
 [[register.source]]
