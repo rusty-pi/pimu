@@ -149,7 +149,7 @@ name   = "INPUT_STATUS"
 offset = 0x0F
 width  = 8
 access = "r"
-notes  = "Pin levels."
+notes  = "Pin levels. On a 4B the bootloader watches `SD_OC_N` (pin 7) once it powers the card: 20 ms after `SD_PWR_ON`, ten reads 2 ms apart, each reading `IO_DIR`, `INPUT_STATUS` and `OUTPUT`; eight or more lows count as an over-current, and it logs `SD_OC: <lows>` before switching the card off again. In the model every other read takes 200 ms longer, so the watch spans a second."
 
 [[register.source]]
 kind       = "datasheet"
@@ -159,6 +159,11 @@ confidence = "high"
 [[register.source]]
 kind       = "decompile"
 ref        = "`gpio_expander_FXL6408_get_level_internal` reads `0x0F`"
+confidence = "high"
+
+[[register.source]]
+kind       = "decompile"
+ref        = "bootmain `0xABD48`: board type `0x11` only (`0xA85AC`), card on, `20000` µs, then ten times `2000` µs and the pin read `0x9293A` (`0x03`, `0x0F`, `0x05`), count of lows, `SD_OC: %d`, card off, `count >= 8`"
 confidence = "high"
 
 [[register]]
