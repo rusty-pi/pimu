@@ -116,9 +116,8 @@ fn run_one(scn: &harness::Scenario, update: bool, verbose: bool) -> Result<bool>
 /// golden and the counts instead of failing on them.
 ///
 /// * `--output <log>`: where the combined stdout and stderr go (`boot.log`),
-///   with the console next to it as `<log>.console` — the two files CI keeps.
-/// * `--from <log>`: check the pair an earlier run left, a CI artifact say,
-///   instead of booting.
+///   with the console next to it as `<log>.console`.
+/// * `--from <log>`: check the pair an earlier run left instead of booting.
 /// * `--max-wall <secs>`: the wall budget, instead of the scenario's.
 /// * `--plan`: print the `boot` invocation instead of running it — a
 ///   `wall=<secs>` line, then one argument a line — for running the workload

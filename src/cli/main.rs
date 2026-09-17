@@ -35,8 +35,8 @@ COMMANDS:
               the golden console transcript plus every named milestone. The
               combined output goes to --output (boot.log), the console next to
               it as <log>.console; --from checks such a pair from an earlier
-              run (a CI artifact, say) without booting. --update re-records
-              the golden; --max-wall overrides the scenario's wall budget.
+              run without booting. --update re-records the golden; --max-wall
+              overrides the scenario's wall budget.
               `--plan` prints the `boot` invocation instead, one argument a
               line. Both refuse when a file the run reads is missing, naming
               the command that makes each.
