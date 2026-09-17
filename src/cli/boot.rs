@@ -640,11 +640,13 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
     // the one before programmed (#92), the first one with `--otp`'s (#93).
     let mut fuses = load_otp(opts, rig.board)?;
     let mut fuses_at_start = None;
+    let mut partition = 0;
     let (report, emu, start) = 'boot: loop {
         let mut machine = rig.machine(&flash)?;
         if let Some(fuses) = fuses.take() {
             machine.config_otp.set_fuses(fuses);
         }
+        machine.pm.keep_partition_bits(partition);
         fuses_at_start.get_or_insert_with(|| machine.config_otp.fuses().clone());
         let start = rig.stage(&mut machine, reboots)?;
         let mut emu = rig.emulator(machine, start);
@@ -664,6 +666,7 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
             flash = emu.machine.spi0.flash_bytes().to_vec();
             edits.apply(&mut flash, false); // self-update restored SIGNED_BOOT=1
             fuses = Some(emu.machine.config_otp.fuses().clone());
+            partition = emu.machine.pm.partition_bits();
             if reboots <= 4 {
                 // `RVF_ARM_PROF`: the next boot's ARM side starts a profile
                 // of its own, so this one's goes out now.
