@@ -155,7 +155,7 @@ Sources:
 
 Offset `0x028` · access `rw` · 32 bits
 
-The H.264 block's clock generator. start4 starts it on `SRC` 4 (PLLA's core channel) with `H264DIV` `0x1000` just before the ARM starts, between `V3DCTL` and `ISPCTL`, with its generator helper's stop-and-restart sequence: `0`, `0x44`, `0x54`.
+The H.264 block's clock generator. start4 starts it on `SRC` 4 (PLLA's core channel) with `H264DIV` `0x1000` just before the ARM starts, between `V3DCTL` and `ISPCTL`, with its generator helper's stop-and-restart sequence: `0`, `0x44`, `0x54`. Once PLLB is back at full rate after the ARM release it writes `0x44` (`ENAB` cleared) and polls `BUSY`.
 
 Sources:
 
@@ -177,7 +177,7 @@ Sources:
 
 Offset `0x030` · access `rw` · 32 bits
 
-The ISP's clock generator. start4 starts it on the oscillator (`0x1`, then `0x11`) with `ISPDIV` 0 as it applies `config.txt`, and moves it to `SRC` 4 (`0x44`, `0x54`) with `ISPDIV` `0x1000` just before the ARM starts, after `V3DCTL` and `H264CTL` and before `GEN_1C8_CTL`.
+The ISP's clock generator. start4 starts it on the oscillator (`0x1`, then `0x11`) with `ISPDIV` 0 as it applies `config.txt`, and moves it to `SRC` 4 (`0x44`, `0x54`) with `ISPDIV` `0x1000` just before the ARM starts, after `V3DCTL` and `H264CTL` and before `GEN_1C8_CTL`. After the ARM release it turns it off again (`0x44`), right after `H264CTL`.
 
 Sources:
 
@@ -340,13 +340,13 @@ Sources:
 
 Offset `0x100` · access `rw` · 32 bits
 
-Self-clearing countdown: written `password | count`, polled until it reads 0. Always reads 0. The bootloader's SD host helper waits `108000000 / card clock` on it after every host register write (2160 before a clock is set, 276 at 390625 Hz, 2 at 50 MHz); start4 waits `0x36` in its PLL bring-up, and 8 and `0x21C` around the PLLB change after the ARM release.
+Self-clearing countdown: written `password | count`, polled until it reads 0. Always reads 0. The bootloader's SD host helper waits `108000000 / card clock` on it after every host register write (2160 before a clock is set, 276 at 390625 Hz, 2 at 50 MHz); start4 waits `0x36` in its PLL bring-up. After the ARM release it waits `0x10` and 8 in its `PROC` sequence, and `0x21C` (10 µs, `10 * 54000000 / 1000000`) after each one-step cut of a PLL channel divider.
 
 Sources:
 
 - decompile (high): the bootloader's SDHCI register-write helper `0x00081dc0` writes it and spins at `0x00081de2`
 - linux (high): `clk-bcm2835.c` names the offset `CM_OSCCOUNT` — _a count of oscillator cycles fits the numbers: `108000000 / f` ticks of the 54 MHz crystal is two periods of the card clock_
-- trace (high): bootmain after EMMC2 writes: `0x5A000870`, `0x5A000114`, `0x5A000002`; start4 `0x3EC7EE22`: `0x5A000036`; after the release `0x3EC82082`: `0x5A000008` and `0x3EC7E940`: `0x5A00021C`
+- trace (high): bootmain after EMMC2 writes: `0x5A000870`, `0x5A000114`, `0x5A000002`; start4 `0x3EC7EE22`: `0x5A000036`; after the release `0x3EC8202A`: `0x5A000010`, `0x3EC82082`: `0x5A000008` and `0x3EC7E940`: `0x5A00021C`
 
 ## `PLLA`
 
@@ -541,7 +541,7 @@ Sources:
 
 Offset `0x170` · access `rw` · 32 bits
 
-PLLB, the ARM cores' clock: analogue reset and the ARM channel's hold. start4 brings it up as the last clock before the console handover (`0x2`, `0x102`, then `0x2` after the A2W words, 0 after lock) and toggles `HOLDARM` again around `PROC` after the ARM release.
+PLLB, the ARM cores' clock: analogue reset and the ARM channel's hold. start4 brings it up as the last clock before the console handover (`0x2`, `0x102`, then `0x2` after the A2W words, 0 after lock) and toggles `HOLDARM` again around `PROC` after the ARM release. Its PLL rate routine reads the word before it starts, clears `ANARST` once the multiplier is in, polls `LOCK` and then writes back the current word ANDed with the one it read first; its channel routine clears the channel's hold bit last.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -925,12 +925,12 @@ Sources:
 
 Offset `0x11E0` · access `rw` · 32 bits
 
-PLLB's multiplier, laid out as `PLLA_CTRL`: start4 writes `0x1042` and `0x21042`, 66 plus FRAC `0xAAAAB`, 3600 MHz. After the ARM release it steps `NDIV` up from `0x22` to `0x42` one write at a time.
+PLLB's multiplier, laid out as `PLLA_CTRL`: start4 writes `0x1042` and `0x21042`, 66 plus FRAC `0xAAAAB`, 3600 MHz. After the ARM release it changes the running PLL without a reset: FRAC first, then `NDIV` one step per write, each write `(read & ~0x73FF) | 0x1000 | ndiv`. It goes down from `0x42` to `0x21` (FRAC `0x55555`, 1800 MHz) and later back up to `0x42`.
 
 Sources:
 
 - linux (high): `clk-bcm2835.c`: `A2W_PLLB_CTRL`
-- trace (high): start4: `0x5A001042` at `0x3EC7EEC6`, `0x5A021042` at `0x3EC7EF28`; after the release `0x5A021022..0x5A021042` at `0x3EC7EEA0`
+- trace (high): start4: `0x5A001042` at `0x3EC7EEC6`, `0x5A021042` at `0x3EC7EF28`; after the release `0x5A021041..0x5A021021`, then `0x5A021022..0x5A021042`, at `0x3EC7EEA0`
 
 ## `PLLA_FRAC`
 
@@ -969,7 +969,7 @@ Sources:
 
 Offset `0x12E0` · access `rw` · 32 bits
 
-Fractional part of PLLB's multiplier: start4 writes `0xAAAAB`, before and again during the ramp after the ARM release.
+Fractional part of PLLB's multiplier: start4 writes `0xAAAAB` as it brings PLLB up. After the ARM release it writes `0x55555` before it steps `NDIV` down to `0x21`, and `0xAAAAB` again before it steps back up.
 
 Sources:
 
@@ -1037,12 +1037,12 @@ Sources:
 
 Offset `0x13E0` · access `rw` · 32 bits
 
-PLLB's ARM channel, the clock the ARM cores run from: start4 sets the divider to 2 (1800 MHz from 3600) before the ARM starts, then 3 and back to 2 around the ramp after it. Laid out as `PLLC_CORE2`.
+PLLB's ARM channel, the clock the ARM cores run from: start4 sets the divider to 2 (1800 MHz from 3600) before the ARM starts. After the release it sets 3 once PLLB is down at 1800 MHz (600 MHz out). Its `PROC` sequence then writes `(read & ~0xFF) | NDIV` (`0x21`) and puts the old word back when done. Back at 3600 MHz, the divider goes to 2 again: a divider that comes down is written one step at a time, each step followed by a `0x21C` `DELAY`, then written once more. The channel routine writes only the divider byte. Laid out as `PLLC_CORE2`.
 
 Sources:
 
 - linux (high): `clk-bcm2835.c`: `A2W_PLLB_ARM`
-- trace (high): start4: `0x5A000002` at `0x3EC7E954`; after the release `0x5A000003` at `0x3EC8211A`, `0x5A000002` at `0x3EC7E920` / `0x3EC7E954`
+- trace (high): start4: `0x5A000002` at `0x3EC7E954`; after the release `0x5A000003` at `0x3EC7E954`, `0x5A000021` at `0x3EC82006`, `0x5A000003` at `0x3EC8211A`, `0x5A000002` at `0x3EC7E920` and `0x3EC7E954`
 
 ## `PLLA_CORE`
 
