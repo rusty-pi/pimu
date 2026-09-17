@@ -409,6 +409,12 @@ impl Emmc2 {
         self.card = Some(SdCard::with_disk(disk));
     }
 
+    /// Solder an e-MMC part on `disk` to this host, as a Compute Module has
+    /// in place of a card slot.
+    pub fn insert_mmc_disk(&mut self, disk: crate::periph::disk::Disk) {
+        self.card = Some(SdCard::mmc_with_disk(disk));
+    }
+
     /// Disconnect the card from this host, state and all, the way the SD-slot
     /// mux takes its lines away: to this host the slot is then empty.
     pub fn take_card(&mut self) -> Option<SdCard> {

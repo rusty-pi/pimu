@@ -32,6 +32,26 @@
 //! The SDIO / MMC probes Linux sends first (CMD5, CMD52, CMD1) get no response,
 //! as from a real SD memory card.
 //!
+//! The same type also plays an **e-MMC** part ([`CardKind::Mmc`]), the flash
+//! soldered to a Compute Module, which answers a different identification
+//! sequence (JEDEC JESD84-B51):
+//!
+//! ```text
+//!   CMD0  GO_IDLE_STATE          -> idle
+//!   CMD1  SEND_OP_COND           -> R3  (OCR; busy bit set once "powered up",
+//!                                        sector mode when the host offers it)
+//!   CMD2  ALL_SEND_CID           -> R2  (CID)                    ready -> ident
+//!   CMD3  SET_RELATIVE_ADDR      -> R1  (the *host* picks the RCA) ident -> stby
+//!   CMD9  SEND_CSD               -> R2  (CSD; C_SIZE saturated, see EXT_CSD)
+//!   CMD7  SELECT_CARD            -> R1b                          stby <-> tran
+//!   CMD8  SEND_EXT_CSD           -> R1 + the 512-byte EXT_CSD
+//!   CMD6  SWITCH                 -> R1b (writes one EXT_CSD byte)
+//! ```
+//!
+//! An e-MMC has no application commands (CMD55 is illegal), does not answer
+//! CMD8 as SEND_IF_COND, and has no SCR or SD status; CMD12, CMD13, CMD16 and
+//! the block transfers are the same as for an SD card.
+//!
 //! Responses are returned as the 32-bit payload the SDHCI RESPONSE registers
 //! expose (bits `[39:8]` of the card response) — for R2 the caller passes the
 //! full 120-bit CID/CSD out through [`SdResponse::r2`].
@@ -40,6 +60,15 @@
 //! in memory, so the file the image was loaded from is never touched.
 
 use crate::periph::disk::Disk;
+
+/// What is in the slot: a removable SD memory card, or an e-MMC part soldered
+/// to the board (a Compute Module's flash).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CardKind {
+    #[default]
+    Sd,
+    Mmc,
+}
 
 /// SD card operating states (subset), per the physical-layer spec.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,6 +137,7 @@ impl SdResponse {
 
 /// R1 card-status bits the hosts look at.
 const R1_APP_CMD: u32 = 1 << 5;
+const R1_ILLEGAL_COMMAND: u32 = 1 << 22;
 const R1_READY_FOR_DATA: u32 = 1 << 8;
 const R1_CURRENT_STATE_SHIFT: u32 = 9; // bits [12:9]
 
@@ -118,6 +148,21 @@ const OCR_CCS: u32 = 1 << 30;
 /// card accepts (S18A).
 const OCR_S18: u32 = 1 << 24;
 const OCR_VOLTAGE_WINDOW: u32 = 0x00FF_8000;
+/// CMD1 access mode `10b` in OCR `[30:29]`: block (sector) addressing. A part
+/// of 2 GiB or less is byte-addressed and never sets it.
+const MMC_OCR_SECTOR: u32 = 0b10 << 29;
+/// 2 GiB in 512-byte blocks.
+const BYTE_ADDR_BLOCKS: u64 = 2 * 1024 * 1024 * 1024 / 512;
+
+/// EXT_CSD byte offsets this part implements (JESD84-B51 table 39).
+const EXT_CSD_PARTITION_CONFIG: usize = 179;
+const EXT_CSD_BUS_WIDTH: usize = 183;
+const EXT_CSD_HS_TIMING: usize = 185;
+const EXT_CSD_REV: usize = 192;
+const EXT_CSD_CARD_TYPE: usize = 196;
+const EXT_CSD_SEC_COUNT: usize = 212;
+const EXT_CSD_HC_ERASE_GRP_SIZE: usize = 224;
+const EXT_CSD_BOOT_SIZE_MULT: usize = 226;
 
 /// CMD6 group-1 (bus speed) functions this card supports: SDR12, SDR25/high
 /// speed, SDR50 and DDR50. At 3.3 V signalling a UHS card offers only the
@@ -137,6 +182,15 @@ const TUNING_BLOCK_4BIT: [u8; 64] = [
 pub struct SdCard {
     /// The card's contents, 512-byte blocks. The FAT image lives here.
     disk: Disk,
+    /// SD card or e-MMC part: which identification sequence it answers.
+    kind: CardKind,
+    /// An e-MMC's EXT_CSD, the 512-byte register CMD8 reads and CMD6 writes
+    /// a byte of at a time. Empty for an SD card.
+    ext_csd: Vec<u8>,
+    /// Transfer addresses are byte offsets, not block numbers: where an
+    /// e-MMC starts, and where one of 2 GiB or less stays. CMD1 moves a
+    /// larger part to sector addressing when the host offers it.
+    byte_addressed: bool,
     state: CardState,
     /// Relative card address, assigned by CMD3.
     rca: u16,
@@ -185,9 +239,25 @@ impl SdCard {
 
     /// A card on `disk`, typically a file opened with [`Disk::open`].
     pub fn with_disk(disk: Disk) -> SdCard {
+        SdCard::with_disk_kind(disk, CardKind::Sd)
+    }
+
+    /// An e-MMC part on `disk`: the flash soldered to a Compute Module.
+    pub fn mmc_with_disk(disk: Disk) -> SdCard {
+        SdCard::with_disk_kind(disk, CardKind::Mmc)
+    }
+
+    /// A card or an e-MMC part on `disk`.
+    pub fn with_disk_kind(disk: Disk, kind: CardKind) -> SdCard {
         let blocks = disk.blocks();
         SdCard {
             disk,
+            kind,
+            ext_csd: match kind {
+                CardKind::Sd => Vec::new(),
+                CardKind::Mmc => ext_csd(blocks),
+            },
+            byte_addressed: kind == CardKind::Mmc,
             state: CardState::Idle,
             rca: 0,
             app_cmd: false,
@@ -201,13 +271,24 @@ impl SdCard {
             written_blocks: 0,
             erase_start: 0,
             erase_end: 0,
-            cid: default_cid(),
-            csd: csd_v2(blocks),
+            cid: match kind {
+                CardKind::Sd => default_cid(),
+                CardKind::Mmc => mmc_cid(),
+            },
+            csd: match kind {
+                CardKind::Sd => csd_v2(blocks),
+                CardKind::Mmc => mmc_csd(),
+            },
         }
     }
 
     pub fn block_count(&self) -> u64 {
         self.disk.blocks()
+    }
+
+    /// SD card or e-MMC part.
+    pub fn kind(&self) -> CardKind {
+        self.kind
     }
 
     pub fn state(&self) -> CardState {
@@ -270,6 +351,19 @@ impl SdCard {
         self.functions = [0; 6];
         self.preset_count = None;
         self.blocks_left = None;
+        if self.kind == CardKind::Mmc {
+            self.ext_csd = ext_csd(self.disk.blocks());
+        }
+    }
+
+    /// The block a transfer argument names: an e-MMC of 2 GiB or less is
+    /// addressed in bytes, everything else in 512-byte sectors.
+    fn lba(&self, arg: u32) -> u32 {
+        if self.byte_addressed {
+            arg / 512
+        } else {
+            arg
+        }
     }
 
     fn status(&self) -> u32 {
@@ -296,6 +390,12 @@ impl SdCard {
 
         if is_app {
             return self.app_command(cmd, arg);
+        }
+
+        if self.kind == CardKind::Mmc {
+            if let Some(response) = self.mmc_command(cmd, arg) {
+                return response;
+            }
         }
 
         match cmd {
@@ -403,7 +503,7 @@ impl SdCard {
                 self.blocks_left = count;
                 SdResponse {
                     r1: Some(status),
-                    read_lba: arg,
+                    read_lba: self.lba(arg),
                     read_blocks: count.unwrap_or(u32::MAX),
                     ..Default::default()
                 }
@@ -432,17 +532,17 @@ impl SdCard {
                 self.blocks_left = count;
                 SdResponse {
                     r1: Some(status),
-                    write_lba: arg,
+                    write_lba: self.lba(arg),
                     write_blocks: count.unwrap_or(u32::MAX),
                     ..Default::default()
                 }
             }
             32 => {
-                self.erase_start = arg;
+                self.erase_start = self.lba(arg);
                 SdResponse::r1(self.status())
             }
             33 => {
-                self.erase_end = arg;
+                self.erase_end = self.lba(arg);
                 SdResponse::r1(self.status())
             }
             38 => {
@@ -460,6 +560,71 @@ impl SdCard {
                 SdResponse::r1(self.status() | R1_APP_CMD)
             }
             _ => SdResponse::r1(self.status()),
+        }
+    }
+
+    /// The commands an e-MMC part answers differently from an SD card;
+    /// `None` leaves the command to the shared arms.
+    fn mmc_command(&mut self, cmd: u8, arg: u32) -> Option<SdResponse> {
+        match cmd {
+            1 => {
+                // SEND_OP_COND -> R3. Busy once, then ready. `[30:29]` is
+                // the access mode: the host offers what it supports and the
+                // part answers with what it will use, which for anything over
+                // 2 GiB is sectors rather than bytes whatever the host said
+                // (JESD84-B51 7.4.3) — the stock firmware's own driver offers
+                // byte addressing and is expected to follow.
+                let ocr = if self.powered_up {
+                    self.state = CardState::Ready;
+                    let sector = self.disk.blocks() > BYTE_ADDR_BLOCKS;
+                    self.byte_addressed = !sector;
+                    let mode = if sector { MMC_OCR_SECTOR } else { 0 };
+                    OCR_BUSY_DONE | mode | OCR_VOLTAGE_WINDOW
+                } else {
+                    self.powered_up = true;
+                    OCR_VOLTAGE_WINDOW
+                };
+                Some(SdResponse::r1(ocr))
+            }
+            3 => {
+                // SET_RELATIVE_ADDR -> R1: the host picks the address, and an
+                // e-MMC only acknowledges it. ident -> stby.
+                self.rca = (arg >> 16) as u16;
+                self.state = CardState::Stby;
+                Some(SdResponse::r1(self.status()))
+            }
+            6 => {
+                // SWITCH -> R1b: access [25:24], EXT_CSD index [23:16], value
+                // [15:8]. Access 0 selects a command set, which this part does
+                // not have.
+                let access = (arg >> 24) & 3;
+                let index = ((arg >> 16) & 0xFF) as usize;
+                let value = ((arg >> 8) & 0xFF) as u8;
+                if let Some(byte) = self.ext_csd.get_mut(index) {
+                    match access {
+                        1 => *byte |= value,
+                        2 => *byte &= !value,
+                        3 => *byte = value,
+                        _ => {}
+                    }
+                }
+                self.wide_bus = self.ext_csd[EXT_CSD_BUS_WIDTH] & 0xF != 0;
+                Some(SdResponse::r1(self.status()))
+            }
+            8 => {
+                // SEND_EXT_CSD -> R1 + the 512-byte register. (CMD8 on an SD
+                // card is SEND_IF_COND, which an e-MMC does not have.)
+                Some(SdResponse::with_data(self.status(), self.ext_csd.clone()))
+            }
+            // SEND_TUNING_BLOCK is CMD21 here, not CMD19.
+            19 => Some(SdResponse::silent()),
+            21 => Some(SdResponse::with_data(
+                self.status(),
+                TUNING_BLOCK_4BIT.to_vec(),
+            )),
+            // No application commands: APP_CMD is illegal and latches nothing.
+            55 => Some(SdResponse::r1(self.status() | R1_ILLEGAL_COMMAND)),
+            _ => None,
         }
     }
 
@@ -596,6 +761,60 @@ fn csd_v2(blocks: u64) -> u128 {
     csd
 }
 
+/// An e-MMC CID: MID 0x15 with PNM "VIRTF" and the same alignment as the SD
+/// one. An e-MMC's PNM is 6 characters, not 5, and CBX ([113:112]) says the
+/// part is embedded.
+fn mmc_cid() -> u128 {
+    let mut cid: u128 = 0;
+    cid |= 0x15 << 120; // MID
+    cid |= 0x01 << 112; // CBX = 1 (BGA)
+    cid |= 0x00 << 104; // OID
+    for (i, c) in b"VIRTF4".iter().enumerate() {
+        cid |= u128::from(*c) << (96 - 8 * i as u32);
+    }
+    cid |= 0x01 << 48; // PRV = 1.0
+    cid |= 0x1234_5678 << 16; // PSN
+    cid |= 0x15 << 8; // MDT
+    cid
+}
+
+/// An e-MMC CSD (JESD84-B51 7.3): CSD_STRUCTURE 3 and SPEC_VERS 4 say the
+/// real capacity and features are in the EXT_CSD, so C_SIZE is left at its
+/// saturated 0xFFF and the host reads SEC_COUNT instead.
+fn mmc_csd() -> u128 {
+    let mut csd: u128 = 0;
+    csd |= 3 << 126; // [127:126] CSD_STRUCTURE = 3 (EXT_CSD)
+    csd |= 4 << 122; // [125:122] SPEC_VERS = 4 (v4.1 and later)
+    csd |= 0x0E << 112; // [119:112] TAAC = 1 ms
+    csd |= 0x01 << 104; // [111:104] NSAC
+    csd |= 0x32 << 96; // [103:96] TRAN_SPEED = 25 MHz
+    csd |= 0x0F5 << 84; // [95:84] CCC: classes 0, 2, 4, 5, 6, 7
+    csd |= 0x9 << 80; // [83:80] READ_BL_LEN = 512
+    csd |= 0xFFF << 62; // [73:62] C_SIZE saturated: see EXT_CSD SEC_COUNT
+    csd |= 0x7 << 47; // [49:47] C_SIZE_MULT
+    csd |= 0x1F << 42; // [46:42] ERASE_GRP_SIZE
+    csd |= 0x1F << 37; // [41:37] ERASE_GRP_MULT
+    csd |= 0x2 << 26; // [28:26] R2W_FACTOR
+    csd |= 0x9 << 22; // [25:22] WRITE_BL_LEN = 512
+    csd
+}
+
+/// An e-MMC's EXT_CSD for a part of `blocks` sectors: the handful of bytes a
+/// bootloader or Linux reads, and zero everywhere else.
+fn ext_csd(blocks: u64) -> Vec<u8> {
+    let mut e = vec![0u8; 512];
+    e[EXT_CSD_PARTITION_CONFIG] = 0; // boot from the user area
+    e[EXT_CSD_BUS_WIDTH] = 0; // 1-bit until a CMD6 widens it
+    e[EXT_CSD_HS_TIMING] = 0; // backwards-compatible timing
+    e[EXT_CSD_REV] = 8; // v5.1
+    e[EXT_CSD_CARD_TYPE] = 0x57; // HS26, HS52, HS_DDR 1.8 V, HS200 1.8 V
+    let sectors = u32::try_from(blocks).unwrap_or(u32::MAX);
+    e[EXT_CSD_SEC_COUNT..EXT_CSD_SEC_COUNT + 4].copy_from_slice(&sectors.to_le_bytes());
+    e[EXT_CSD_HC_ERASE_GRP_SIZE] = 1; // 512 KiB erase groups
+    e[EXT_CSD_BOOT_SIZE_MULT] = 0; // no boot partitions
+    e
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -613,6 +832,68 @@ mod tests {
             ocr = c.command(41, arg).r1.unwrap();
         }
         ocr
+    }
+
+    fn mmc(blocks: usize) -> SdCard {
+        SdCard::mmc_with_disk(Disk::from_vec(vec![0u8; blocks * 512]))
+    }
+
+    /// CMD0 then CMD1 until the part reports it is ready; returns the OCR.
+    fn mmc_ocr(c: &mut SdCard, arg: u32) -> u32 {
+        c.command(0, 0);
+        let mut ocr = 0;
+        for _ in 0..8 {
+            ocr = c.command(1, arg).r1.unwrap();
+            if ocr & OCR_BUSY_DONE != 0 {
+                break;
+            }
+        }
+        ocr
+    }
+
+    #[test]
+    fn mmc_answers_cmd1_and_sizes_itself_by_capacity() {
+        // A small part stays byte-addressed however the host asks, so the
+        // transfer argument is divided down to a block number.
+        let mut c = mmc(2048);
+        assert_eq!(mmc_ocr(&mut c, 0x4010_0000) & MMC_OCR_SECTOR, 0);
+        c.command(3, 0x0001_0000);
+        c.command(7, 0x0001_0000);
+        assert_eq!(c.command(17, 4 * 512).read_lba, 4);
+
+        // Over 2 GiB it answers sector mode even though this host offered
+        // byte addressing, and the argument is already a block number.
+        let mut big = mmc(5 * 1024 * 1024);
+        assert_ne!(mmc_ocr(&mut big, 0x0020_0000) & MMC_OCR_SECTOR, 0);
+        big.command(3, 0x0001_0000);
+        big.command(7, 0x0001_0000);
+        assert_eq!(big.command(17, 4).read_lba, 4);
+    }
+
+    #[test]
+    fn mmc_has_no_app_commands_and_an_ext_csd() {
+        let mut c = mmc(2048);
+        mmc_ocr(&mut c, 0x4010_0000);
+        assert_ne!(c.command(55, 0).r1.unwrap() & R1_ILLEGAL_COMMAND, 0);
+        // ...and the command after it is not taken as an ACMD.
+        assert_eq!(c.command(13, 0).r1.unwrap() & R1_ILLEGAL_COMMAND, 0);
+
+        let ext = c.command(8, 0).data.expect("EXT_CSD");
+        assert_eq!(ext.len(), 512);
+        assert_eq!(
+            u32::from_le_bytes(
+                ext[EXT_CSD_SEC_COUNT..EXT_CSD_SEC_COUNT + 4]
+                    .try_into()
+                    .unwrap()
+            ),
+            2048
+        );
+        // CMD6 writes one byte of it; the host's own width follows.
+        c.command(6, 0x03b7_0100);
+        let ext = c.command(8, 0).data.unwrap();
+        assert_eq!(ext[EXT_CSD_BUS_WIDTH], 1);
+        c.command(6, 0x03b9_0100);
+        assert_eq!(c.command(8, 0).data.unwrap()[EXT_CSD_HS_TIMING], 1);
     }
 
     #[test]

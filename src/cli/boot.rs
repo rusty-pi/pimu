@@ -81,6 +81,11 @@ MEDIA AND NETWORK:
               An SD card with this image. Read on demand; writes stay in
               memory, and the boot after a firmware reset starts from the file
               again.
+    --emmc <img>
+              An e-MMC part with this image soldered to the SD host, as a
+              Compute Module has in place of a card slot. Answers CMD1 and the
+              EXT_CSD instead of an SD card's ACMD41 and SCR. Mutually
+              exclusive with --sd.
     --usb <img>
               A USB mass-storage stick with this image, in blue socket A (xHCI
               root port 2, SuperSpeed). Read on demand; writes stay in memory
@@ -263,6 +268,8 @@ struct BootOpts {
     dumps: Vec<(u32, u32)>,
     disasms: Vec<(u32, u32)>,
     sd_image: Option<PathBuf>,
+    /// `--emmc <img>`: the same slot, but an e-MMC part rather than a card.
+    emmc_image: Option<PathBuf>,
     console_log: Option<PathBuf>,
     dump_fdt: Option<PathBuf>,
     print_fdt: bool,
@@ -321,6 +328,7 @@ impl BootOpts {
         let mut dumps: Vec<(u32, u32)> = Vec::new();
         let mut disasms: Vec<(u32, u32)> = Vec::new();
         let mut sd_image: Option<PathBuf> = None;
+        let mut emmc_image: Option<PathBuf> = None;
         let mut console_log: Option<PathBuf> = None;
         let mut dump_fdt: Option<PathBuf> = None;
         let mut print_fdt = false;
@@ -420,6 +428,9 @@ impl BootOpts {
                     )
                 }
                 "--sd" => sd_image = Some(PathBuf::from(it.next().context("--sd needs a path")?)),
+                "--emmc" => {
+                    emmc_image = Some(PathBuf::from(it.next().context("--emmc needs a path")?))
+                }
                 "--console-log" => {
                     console_log = Some(PathBuf::from(
                         it.next().context("--console-log needs a path")?,
@@ -542,6 +553,9 @@ impl BootOpts {
         if log.is_empty() && log_file.is_some() {
             bail!("--log-file needs --log <channel>[,<channel>...]");
         }
+        if sd_image.is_some() && emmc_image.is_some() {
+            bail!("--sd and --emmc are the same host: give one");
+        }
         Ok(Some(Self {
             path,
             entry,
@@ -560,6 +574,7 @@ impl BootOpts {
             dumps,
             disasms,
             sd_image,
+            emmc_image,
             console_log,
             dump_fdt,
             print_fdt,
@@ -1071,6 +1086,7 @@ impl<'a> Rig<'a> {
         let BootOpts {
             eeprom,
             ref sd_image,
+            ref emmc_image,
             ref netboot_root,
             ref host_net,
             trace_mmio,
@@ -1088,6 +1104,9 @@ impl<'a> Rig<'a> {
         }
         if let Some(p) = &sd_image {
             machine.emmc2.insert_disk(open_sd(p, &self.log)?);
+        }
+        if let Some(p) = &emmc_image {
+            machine.emmc2.insert_mmc_disk(open_sd(p, &self.log)?);
         }
         if let Some(disk) = &self.usb_disk {
             machine.pcie.endpoint.attach(
