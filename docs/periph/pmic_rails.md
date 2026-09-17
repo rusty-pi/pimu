@@ -5,12 +5,19 @@
 - Bus: `i2c` (7-bit I²C address)
 - Base: `0x1B`
 - Size: `0x100`
+- Carried by: [`bsc`](bsc.md), `PMIC` copy
 
 On the `bsc` PMIC copy. The board revision, not a probe, selects the driver: there is no part-id register to get right. start4's init sweeps `0x00..0x14` once to log it. Registers not listed read 0.
 
 Sources:
 
 - decompile (high): `pmic_init` `0x3ED4DAA8` / `pmic_add` `0x3ED4D85C`; descriptor `0x3EDE962C`: type `0x83`, addr `0x1B`, 0.8..1.4 V
+
+Carried by [`bsc`](bsc.md), `PMIC` copy:
+
+start4's I²C driver picks its base from the bus id, and this part sits on bus 8.
+
+- decompile (high): `FUN_0ecf0ed0`: bus id 8 -> `0x7E205E00`; `pmic_init` `0x3ED4DAA8` opens that bus before it probes
 
 ## Register map
 

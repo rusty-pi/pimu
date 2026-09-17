@@ -136,9 +136,9 @@ const WINDOW: u32 = CONFIG1 + 4;
 /// pending words.
 const PEND_BLOCK: std::ops::Range<u32> = PEND0 - 8..VPU;
 
-/// The interrupt source the mailbox arrives on. From the firmware's own
-/// handler table — `src 94 handler=0x3ec58302`.
-pub const IRQ_SRC: u32 = 94;
+/// The interrupt source the mailbox arrives on, from `specs/mbox.toml`: the
+/// firmware's own handler table has `src 94 handler=0x3ec58302`.
+pub const IRQ_SRC: u32 = crate::spec::mbox::IRQ_VPU;
 
 /// `CONFIG` bits 0..2, the part that latches.
 const CFG_ENABLES: u32 = CFG_EN_HAVE_DATA | CFG_EN_HAVE_SPACE | CFG_EN_OPP_EMPTY;

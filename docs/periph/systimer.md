@@ -5,6 +5,7 @@
 - Bus: `vpu` (VPU bus address)
 - Base: `0x7E003000`
 - Size: `0x1000`
+- Interrupts: `C0` VPU source 64 · `C1` VPU source 65 · `C2` VPU source 66 · `C3` VPU source 67
 
 Compare channel n raises VPU interrupt source 64 + n when it matches.
 
@@ -13,6 +14,12 @@ Sources:
 - datasheet (high): BCM2711 ARM Peripherals, System Timer chapter
 - linux (high): `bcm283x.dtsi`: `brcm,bcm2835-system-timer`, `reg = <0x7e003000 0x1000>`
 - trace (high): start4 arms `C0` as its ThreadX tick (source 64) and `C2` as the clock service's timeout (source 66)
+
+Interrupts (`C0` VPU source 64 · `C1` VPU source 65 · `C2` VPU source 66 · `C3` VPU source 67):
+
+Compare channel `n` raises `64 + n`. start4 arms `C0` as its ThreadX tick and `C2` as the clock service's timeout.
+
+- decompile (high): start4 `enable_irq_source(64, 1)` before it arms `C0`; the clock service waits on `C2` with source 66
 
 ## Register map
 

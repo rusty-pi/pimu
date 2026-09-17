@@ -5,6 +5,7 @@
 - Bus: `vpu` (VPU bus address)
 - Base: `0x7D500000`
 - Size: `0x9310`
+- Interrupts: `INTA` GIC id 175 (`GIC_SPI 143`) · `MSI` GIC id 180 (`GIC_SPI 148`)
 
 `+0x0000..+0x0FFF` is the root port's own configuration space (seeded from a Raspberry Pi 4B d03115; its layout is PCI's, not listed here beyond the two words with behaviour). The VPU reaches the endpoint's BAR0 only by 40-bit DMA through the outbound window; the endpoint's DMA comes back through inbound window 2.
 
@@ -14,6 +15,13 @@ Sources:
 - measured (high): `/proc/device-tree/scb/pcie@7d500000/reg` on a real board: `<0x0 0x7d500000 0x0 0x9310>`
 - linux (high): `drivers/pci/controller/pcie-brcmstb.c`
 - decompile (high): bootcode `0x8000AB4A`; second-stage bootloader `pcie_reset` `0x000A7034`, `pcie_init` `0x000A6CA2` / `0x000A6DCC`, link poll `0x000A6F7E`, bus scan `0x000A712C`
+
+Interrupts (`INTA` GIC id 175 (`GIC_SPI 143`) · `MSI` GIC id 180 (`GIC_SPI 148`)):
+
+`INTA` is the endpoint's legacy line as the root port reports it; `MSI` is the root complex's own MSI block.
+
+- linux (high): `pcie@7d500000`: the `interrupt-map` routes INTA to `GIC_SPI 143`, and `interrupt-names = "pcie", "msi"` puts the MSI controller on `GIC_SPI 148`
+- measured (high): Raspberry Pi 4B d03115: `/proc/interrupts` shows id 175 as `GICv2 175 Level PCIe PME, aerdrv`
 
 ## Register map
 

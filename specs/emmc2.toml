@@ -20,6 +20,15 @@ kind       = "linux"
 ref        = "`mmc@7e340000` driven by `sdhci-iproc`; `mmc0: SDHCI controller on fe340000.mmc using ADMA` on the reference board"
 confidence = "high"
 
+[block.irq]
+gic_spi = 126
+notes   = "Shared with the legacy `emmc` controller."
+
+[[block.irq.source]]
+kind       = "linux"
+ref        = "`mmc@7e340000`, `interrupts = <GIC_SPI 0x7e IRQ_TYPE_LEVEL_HIGH>`"
+confidence = "high"
+
 [[register]]
 name   = "SDMA_ADDR"
 offset = 0x00

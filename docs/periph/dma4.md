@@ -5,6 +5,7 @@
 - Bus: `vpu` (VPU bus address)
 - Base: `0x7E007B00`
 - Size: `0x100`
+- Carried by: [`dma`](dma.md)
 
 Sits in channel 11's slot of the legacy controller (`dma`) and is decoded ahead of it. Its control blocks carry address bits 39:32 in `SRCI` / `DESTI`, which is how a 32-bit VPU reaches the PCIe window at `0x6_0000_0000`.
 
@@ -12,6 +13,12 @@ Sources:
 
 - decompile (high): bootloader submit `0x0008b0xx` and status check `0x0008b3f4`
 - decompile (high): start4 dmalib: `dma_set_cs` `0x3EC98E7C`, `dma_chain_start` `0x3EC97544`, channel 11 for the xHCI takeover
+
+Carried by [`dma`](dma.md):
+
+Sits in channel 11's slot of the legacy controller and is decoded ahead of it.
+
+- decompile (high): start4 dmalib `dma_set_cs` `0x3EC98E7C` computes `0x7E007000 + ch * 0x100`; channel 11 is this 40-bit engine
 
 ## Register map
 

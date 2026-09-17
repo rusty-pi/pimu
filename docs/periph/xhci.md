@@ -5,6 +5,7 @@
 - Bus: `pci` (offset in the PCI function)
 - Base: `0x00000000`
 - Size: `0x1000`
+- Carried by: [`vl805`](vl805.md)
 
 Offsets are into BAR0 (4 KiB). The VPU reaches it only by 40-bit DMA through the PCIe outbound window, the ARM through that window at `0x6_0000_0000`. Five root ports: port 1 USB2, ports 2..5 USB3; a VIA hub sits on port 1 on every board.
 
@@ -13,6 +14,12 @@ Sources:
 - standard (high): eXtensible Host Controller Interface 1.1, section 5
 - measured (high): capability registers and `PORTSC` read on a Raspberry Pi 4B d03115 through `/dev/mem` (`docs/usb-xhci.md` section 2); `dmesg` `hcc params 0x002841eb hci version 0x100`
 - measured (high): `examples-on-real-hardware/sd-card-boot.log`: `xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb`
+
+Carried by [`vl805`](vl805.md):
+
+The registers behind the endpoint's BAR0, so they move with whatever address is programmed into it.
+
+- standard (high): PCI Local Bus 3.0: a type-0 BAR maps the function's register block; xHCI 1.1 section 5 is what lives there
 
 ## Register map
 

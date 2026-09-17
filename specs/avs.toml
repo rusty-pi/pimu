@@ -15,6 +15,15 @@ kind       = "decompile"
 ref        = "start4 DVFS code: `FUN_0ed603e2`, `FUN_0ed6040e`, `FUN_0ec3007a`, `FUN_0ec303e8`, `FUN_0ec302c2`"
 confidence = "high"
 
+[block.parent]
+name  = "clkmon"
+notes = "Carved out of the clock block's window and decoded ahead of it."
+
+[[block.parent.source]]
+kind       = "linux"
+ref        = "`avs-monitor@7d5d2000` sits inside `clkmon`'s `reg = <0x7d5d0000 0x10000>`"
+confidence = "high"
+
 [[register]]
 name   = "DISABLE_MASK"
 offset = 0x03C

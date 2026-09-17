@@ -15,6 +15,15 @@ kind       = "decompile"
 ref        = "start4 dmalib: `dma_set_cs` `0x3EC98E7C`, `dma_chain_start` `0x3EC97544`, channel 11 for the xHCI takeover"
 confidence = "high"
 
+[block.parent]
+name  = "dma"
+notes = "Sits in channel 11's slot of the legacy controller and is decoded ahead of it."
+
+[[block.parent.source]]
+kind       = "decompile"
+ref        = "start4 dmalib `dma_set_cs` `0x3EC98E7C` computes `0x7E007000 + ch * 0x100`; channel 11 is this 40-bit engine"
+confidence = "high"
+
 [[register]]
 name   = "CS"
 offset = 0x00

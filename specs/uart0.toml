@@ -20,6 +20,15 @@ kind       = "inferred"
 ref        = "size: one 4 KiB page, the granularity of this window"
 confidence = "medium"
 
+[block.irq]
+gic_spi = 121
+notes   = "Linux's `ttyAMA0`. The firmware polls the FIFO instead of taking the line."
+
+[[block.irq.source]]
+kind       = "linux"
+ref        = "the dtb start4 hands to Linux: `serial@7e201000`, `arm,pl011`, GIC SPI 121"
+confidence = "high"
+
 [[register]]
 name   = "DR"
 offset = 0x00

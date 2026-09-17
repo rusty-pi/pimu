@@ -15,6 +15,15 @@ kind       = "trace"
 ref        = "`--log irqtbl`: `src 68 handler=0x3ed9d1ea`"
 confidence = "high"
 
+[block.irq]
+vpu   = 68
+notes = "A completed launch drives the line while `STATUS.INT` is set; the handler clears it through `INTCLR`."
+
+[[block.irq.source]]
+kind       = "decompile"
+ref        = "`vce_obtain_semaphore` enables source 68 (`0x44`); start4's handler for it is `0x3ED9D1EA`"
+confidence = "high"
+
 [[register]]
 name   = "STATUS"
 offset = 0x00
