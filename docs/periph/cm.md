@@ -75,7 +75,7 @@ Sources:
 | `0x1100` | [`PLLA_CTRL`](#plla_ctrl) | rw | 32 | 2, best high |
 | `0x1120` | [`PLLC_CTRL`](#pllc_ctrl) | rw | 32 | 2, best high |
 | `0x1140` | [`PLLD_CTRL`](#plld_ctrl) | rw | 32 | 2, best high |
-| `0x11E0` | [`PLLB_CTRL`](#pllb_ctrl) | rw | 32 | 2, best high |
+| `0x11E0` | [`PLLB_CTRL`](#pllb_ctrl) | rw | 32 | 3, best high |
 | `0x1200` | [`PLLA_FRAC`](#plla_frac) | rw | 32 | 2, best high |
 | `0x1220` | [`PLLC_FRAC`](#pllc_frac) | rw | 32 | 2, best high |
 | `0x1240` | [`PLLD_FRAC`](#plld_frac) | rw | 32 | 2, best high |
@@ -847,7 +847,7 @@ Sources:
 
 Offset `0x1070`, 4 elements 0x4 apart · access `rw` · 32 bits
 
-PLLH's four analogue words. start4 writes 0, `0x4C`, `0x2C00`, 0 just before it brings PLLB up, without enabling PLLH.
+PLLH's four analogue words. start4 writes 0, `0x4C`, `0x2C00`, 0 just before it brings PLLB up, without enabling PLLH. The words are the same whether PLLB goes to 3000 or 3600 MHz.
 
 Sources:
 
@@ -925,12 +925,13 @@ Sources:
 
 Offset `0x11E0` · access `rw` · 32 bits
 
-PLLB's multiplier, laid out as `PLLA_CTRL`: start4 writes `0x1042` and `0x21042`, 66 plus FRAC `0xAAAAB`, 3600 MHz. After the ARM release it changes the running PLL without a reset: FRAC first, then `NDIV` one step per write, each write `(read & ~0x73FF) | 0x1000 | ndiv`. It goes down from `0x42` to `0x21` (FRAC `0x55555`, 1800 MHz) and later back up to `0x42`.
+PLLB's multiplier, laid out as `PLLA_CTRL`: start4 writes `0x1042` and `0x21042`, 66 plus FRAC `0xAAAAB`, 3600 MHz, for an 1800 MHz ARM. That is what a 4B rev 1.4 or 1.5 gets with `arm_boost=1`. A 4B rev 1.5 without `arm_boost`, and a 4B rev 1.2 even with it, get `0x1037` and `0x21037` with FRAC `0x8E38E`: 3000 MHz, for a 1500 MHz ARM. After the ARM release it changes the running PLL without a reset: FRAC first, then `NDIV` one step per write, each write `(read & ~0x73FF) | 0x1000 | ndiv`. It goes down to `0x21` (FRAC `0x55555`, 1800 MHz) and later back up to where it started.
 
 Sources:
 
 - linux (high): `clk-bcm2835.c`: `A2W_PLLB_CTRL`
 - trace (high): start4: `0x5A001042` at `0x3EC7EEC6`, `0x5A021042` at `0x3EC7EF28`; after the release `0x5A021041..0x5A021021`, then `0x5A021022..0x5A021042`, at `0x3EC7EEA0`
+- trace (high): the pinned firmware with `--board-rev` `d03115`, `d03114` and `c03112`, `config.txt` with and without `arm_boost=1`: `0x5A001042` / `0x5A021042` for `d03115` and `d03114` with it, `0x5A001037` / `0x5A021037` for `d03115` without it and for `c03112` with it
 
 ## `PLLA_FRAC`
 
@@ -969,7 +970,7 @@ Sources:
 
 Offset `0x12E0` · access `rw` · 32 bits
 
-Fractional part of PLLB's multiplier: start4 writes `0xAAAAB` as it brings PLLB up. After the ARM release it writes `0x55555` before it steps `NDIV` down to `0x21`, and `0xAAAAB` again before it steps back up.
+Fractional part of PLLB's multiplier: start4 writes `0xAAAAB` (3600 MHz) or `0x8E38E` (3000 MHz) as it brings PLLB up. After the ARM release it writes `0x55555` before it steps `NDIV` down to `0x21`, and the first value again before it steps back up. All three are the fraction of the rate over 54 MHz, rounded to the nearest 2^-20.
 
 Sources:
 
@@ -1037,7 +1038,7 @@ Sources:
 
 Offset `0x13E0` · access `rw` · 32 bits
 
-PLLB's ARM channel, the clock the ARM cores run from: start4 sets the divider to 2 (1800 MHz from 3600) before the ARM starts. After the release it sets 3 once PLLB is down at 1800 MHz (600 MHz out). Its `PROC` sequence then writes `(read & ~0xFF) | NDIV` (`0x21`) and puts the old word back when done. Back at 3600 MHz, the divider goes to 2 again: a divider that comes down is written one step at a time, each step followed by a `0x21C` `DELAY`, then written once more. The channel routine writes only the divider byte. Laid out as `PLLC_CORE2`.
+PLLB's ARM channel, the clock the ARM cores run from: start4 sets the divider to 2 (1800 MHz from 3600, or 1500 MHz from 3000) before the ARM starts. After the release it sets 3 once PLLB is down at 1800 MHz (600 MHz out). Its `PROC` sequence then writes `(read & ~0xFF) | NDIV` (`0x21`) and puts the old word back when done. Back at full rate, the divider goes to 2 again: a divider that comes down is written one step at a time, each step followed by a `0x21C` `DELAY`, then written once more. The channel routine writes only the divider byte. Laid out as `PLLC_CORE2`.
 
 Sources:
 
