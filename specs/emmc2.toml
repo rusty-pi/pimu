@@ -242,6 +242,31 @@ ref        = "`/dev/mem` read of `0xfe340024` on a Pi 4B rev 1.5 with Linux idle
 confidence = "high"
 
 [[register.field]]
+name  = "CMD_INHIBIT"
+bits  = "0"
+notes = "A command is in progress. The model completes commands at once, so it never shows this bit."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.9"
+confidence = "high"
+
+[[register.field]]
+name  = "DAT_INHIBIT"
+bits  = "1"
+notes = "A data transfer is in progress: set from the data command until its transfer completes, or until a reset of the data side. A driver ending an open-ended read must not wait for it before CMD12. Before CMD0, CMD12 and CMD13, start4 waits only for `CMD_INHIBIT`; before any other command, for both bits, up to 4 s. The bootloader does not wait on either. The model sets this bit while a PIO or DMA transfer has data left, including the read-ahead of an open-ended `CMD18`."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.9 (and 3.7.1, which leaves the check out for an abort command)"
+confidence = "high"
+
+[[register.field.source]]
+kind       = "decompile"
+ref        = "start4 command routine `0x3EC52084`: the busy-wait `0x3EC52BAE` gets mask 1 for codes 1024 (CMD0), 13 and 2060 (CMD12) and mask 3 otherwise, with a 4 000 000 us timeout; before CMD0 it waits up to 2000 us for mask 1, then resets `SRST_CMD` if no error is pending (`0x3EC520CA`)"
+confidence = "high"
+
+[[register.field]]
 name  = "BUF_WRITE_EN"
 bits  = "10"
 notes = "The buffer has room for a PIO write."

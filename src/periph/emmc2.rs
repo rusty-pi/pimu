@@ -78,8 +78,9 @@ use crate::spec::emmc2::{
     MAX_CURRENT_RESET as MAX_CURRENT_VALUE, PRESENT_STATE,
     PRESENT_STATE_BUF_READ_EN_MASK as PS_BUF_READ_EN,
     PRESENT_STATE_BUF_WRITE_EN_MASK as PS_BUF_WRITE_EN, PRESENT_STATE_CMD_LINE_MASK,
-    PRESENT_STATE_DAT_LINES_MASK, PRESENT_STATE_RESET as PRESENT_STATE_IDLE, RESPONSE0, RESPONSE1,
-    RESPONSE2, RESPONSE3, SDMA_ADDR,
+    PRESENT_STATE_DAT_INHIBIT_MASK as PS_DAT_INHIBIT, PRESENT_STATE_DAT_LINES_MASK,
+    PRESENT_STATE_RESET as PRESENT_STATE_IDLE, RESPONSE0, RESPONSE1, RESPONSE2, RESPONSE3,
+    SDMA_ADDR,
 };
 use crate::spec::Coverage;
 
@@ -452,6 +453,17 @@ impl Emmc2 {
     /// SDMA buffer boundary: 4 KiB << BLOCK_SIZE[14:12].
     fn sdma_boundary(&self) -> u32 {
         4096 << ((self.get(BLOCK_SIZE_COUNT) >> 12) & 7)
+    }
+
+    /// A data transfer has data left to move: PIO blocks still owed or in the
+    /// buffer (an open-ended read always has its next block), a PIO write, or
+    /// a DMA run.
+    fn transfer_active(&self) -> bool {
+        !self.data.is_empty()
+            || self.read_blocks_left > 0
+            || self.read_open_ended
+            || self.pio_write.is_some()
+            || self.dma.is_some()
     }
 
     /// Stop whatever data transfer is in flight.
@@ -930,6 +942,9 @@ impl Emmc2 {
                 if self.pio_write.is_some() {
                     ps |= PS_BUF_WRITE_EN;
                 }
+                if self.transfer_active() {
+                    ps |= PS_DAT_INHIBIT;
+                }
                 if self.switching_1v8 {
                     ps &= !PS_LINES_CMD_DAT;
                 }
@@ -1404,6 +1419,40 @@ mod tests {
             rd(&mut e, INT_STATUS) & INT_XFER_COMPLETE,
             INT_XFER_COMPLETE
         );
+    }
+
+    /// The data lines stay busy for as long as a transfer has data left; an
+    /// open-ended read keeps them busy until CMD12 ends it.
+    #[test]
+    fn data_inhibit_follows_the_transfer() {
+        let mut e = host();
+        enumerate(&mut e, 0x40FF_8000);
+        select(&mut e);
+        wr(&mut e, BLOCK_SIZE_COUNT, 512);
+        assert_eq!(rd(&mut e, PRESENT_STATE) & PS_DAT_INHIBIT, 0);
+
+        cmd(&mut e, 17, 5, R1_DATA, TM_READ);
+        assert_ne!(rd(&mut e, PRESENT_STATE) & PS_DAT_INHIBIT, 0);
+        for _ in 0..128 {
+            rd(&mut e, BUFFER_DATA);
+        }
+        assert_eq!(rd(&mut e, PRESENT_STATE) & PS_DAT_INHIBIT, 0, "CMD17 done");
+
+        cmd(&mut e, 18, 5, R1_DATA, TM_READ | TM_MULTI);
+        for _ in 0..256 {
+            rd(&mut e, BUFFER_DATA);
+        }
+        assert_ne!(
+            rd(&mut e, PRESENT_STATE) & PS_DAT_INHIBIT,
+            0,
+            "still reading ahead"
+        );
+        cmd(&mut e, 12, 0, 0x1B, TM_READ);
+        assert_eq!(rd(&mut e, PRESENT_STATE) & PS_DAT_INHIBIT, 0, "stopped");
+
+        cmd(&mut e, 18, 5, R1_DATA, TM_READ | TM_MULTI);
+        wr(&mut e, CLOCK_CONTROL, SRST_DATA);
+        assert_eq!(rd(&mut e, PRESENT_STATE) & PS_DAT_INHIBIT, 0, "reset");
     }
 
     /// edk2's MmcDxe follows every write with CMD55 + ACMD22 on a 4-byte block
