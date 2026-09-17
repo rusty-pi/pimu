@@ -447,11 +447,12 @@ impl Emulator {
             }
         }
 
-        // The firmware's trampoline writes each core's exception-vector base
-        // to CoreCtl (0x7E00_2030 / 0x38); pick it up so `swi` diag.traps into
-        // the firmware's own handler table. An explicit `--exc-vbase` wins.
-        if self.cpu.exc_vbase == 0 && self.machine.corectl.vbase[0] != 0 {
-            self.cpu.exc_vbase = self.machine.corectl.vbase[0];
+        // The core takes its exception-vector base from CoreCtl
+        // (0x7E00_2030 / 0x830) for every exception, so each write moves it:
+        // the bootloader's halt points it at its own table and start4 later
+        // at its own. An explicit `--exc-vbase` stands until the first write.
+        if let Some(vbase) = self.machine.corectl.take_vbase(0) {
+            self.cpu.exc_vbase = vbase;
         }
 
         let pc_before = self.cpu.pc();
@@ -911,8 +912,8 @@ impl Emulator {
     #[inline]
     fn step_core1(&mut self, st: &mut RunState) {
         if let Some(c1) = self.cpu1.as_mut() {
-            if c1.exc_vbase == 0 && self.machine.corectl.vbase[1] != 0 {
-                c1.exc_vbase = self.machine.corectl.vbase[1];
+            if let Some(vbase) = self.machine.corectl.take_vbase(1) {
+                c1.exc_vbase = vbase;
             }
             // A source raised for core 1 is taken once core 1's bank enables it
             // and core 1 can take it: with interrupts on, or asleep in `sleep`,

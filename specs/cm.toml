@@ -1184,7 +1184,7 @@ offset = 0x1070
 count  = 4
 stride = 4
 access = "rw"
-notes  = "PLLH's four analogue words. start4 writes 0, `0x4C`, `0x2C00`, 0 just before it brings PLLB up, without enabling PLLH. The words are the same whether PLLB goes to 3000 or 3600 MHz."
+notes  = "PLLH's four analogue words. start4 writes 0, `0x4C`, `0x2C00`, 0 just before it brings PLLB up, without enabling PLLH. Bits 6:5 of word 2 are a divider: 2 on C0 silicon or with the ARM above 1500 MHz, 1 otherwise, so a B0 at the default 1500 MHz gets `0x2C`. On C0 the words are the same whether PLLB goes to 3000 or 3600 MHz."
 
 [[register.source]]
 kind       = "linux"
@@ -1194,6 +1194,11 @@ confidence = "high"
 [[register.source]]
 kind       = "trace"
 ref        = "start4 `0x3EC7CCDA..0x3EC7CCEA`"
+confidence = "high"
+
+[[register.source]]
+kind       = "decompile"
+ref        = "start4 `0x3EC7CC84`: word 2 is `div << 5 | 0xC`, `div` 2 when the C0 feature flag `board_info_early_init` sets for `version` `0x0400_0162` is on, else 1, and 2 whenever `arm_freq` is above 1500; a config override can give bits 13:12 instead"
 confidence = "high"
 
 [[register]]

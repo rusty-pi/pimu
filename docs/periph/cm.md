@@ -70,7 +70,7 @@ Sources:
 | `0x1010`–`0x101C` (4 × 0x4) | [`PLLA_ANA`](#plla_ana) | rw | 32 | 2, best high |
 | `0x1030`–`0x103C` (4 × 0x4) | [`PLLC_ANA`](#pllc_ana) | rw | 32 | 2, best high |
 | `0x1050`–`0x105C` (4 × 0x4) | [`PLLD_ANA`](#plld_ana) | rw | 32 | 2, best high |
-| `0x1070`–`0x107C` (4 × 0x4) | [`PLLH_ANA`](#pllh_ana) | rw | 32 | 2, best high |
+| `0x1070`–`0x107C` (4 × 0x4) | [`PLLH_ANA`](#pllh_ana) | rw | 32 | 3, best high |
 | `0x10F0`–`0x10FC` (4 × 0x4) | [`PLLB_ANA`](#pllb_ana) | rw | 32 | 2, best high |
 | `0x1100` | [`PLLA_CTRL`](#plla_ctrl) | rw | 32 | 2, best high |
 | `0x1120` | [`PLLC_CTRL`](#pllc_ctrl) | rw | 32 | 2, best high |
@@ -847,12 +847,13 @@ Sources:
 
 Offset `0x1070`, 4 elements 0x4 apart · access `rw` · 32 bits
 
-PLLH's four analogue words. start4 writes 0, `0x4C`, `0x2C00`, 0 just before it brings PLLB up, without enabling PLLH. The words are the same whether PLLB goes to 3000 or 3600 MHz.
+PLLH's four analogue words. start4 writes 0, `0x4C`, `0x2C00`, 0 just before it brings PLLB up, without enabling PLLH. Bits 6:5 of word 2 are a divider: 2 on C0 silicon or with the ARM above 1500 MHz, 1 otherwise, so a B0 at the default 1500 MHz gets `0x2C`. On C0 the words are the same whether PLLB goes to 3000 or 3600 MHz.
 
 Sources:
 
 - linux (high): `clk-bcm2835.c`: `A2W_PLLH_ANA0`
 - trace (high): start4 `0x3EC7CCDA..0x3EC7CCEA`
+- decompile (high): start4 `0x3EC7CC84`: word 2 is `div << 5 | 0xC`, `div` 2 when the C0 feature flag `board_info_early_init` sets for `version` `0x0400_0162` is on, else 1, and 2 whenever `arm_freq` is above 1500; a config override can give bits 13:12 instead
 
 ## `PLLB_ANA`
 

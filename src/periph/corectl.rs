@@ -73,6 +73,8 @@ pub struct CoreCtl {
     core1_wake: Option<u32>,
     /// Last exception-vector base the firmware wrote for core 0 / core 1.
     pub vbase: [u32; 2],
+    /// A write to core 0's / core 1's [`VBASE`] the core has not picked up yet.
+    vbase_written: [Option<u32>; 2],
     /// Sources newly raised in software through [`IRQ_PENDING_BITS`], as
     /// `(core, source)`, waiting to be vectored on that core.
     sw_raised: std::collections::VecDeque<(u32, u32)>,
@@ -100,6 +102,12 @@ impl CoreCtl {
     /// goes up; the model vectors it on the next step.
     pub fn take_sw_raised(&mut self) -> Option<(u32, u32)> {
         self.sw_raised.pop_front()
+    }
+
+    /// The vector base last written for `core` (0 or 1), once: the core reads
+    /// the register for every exception, so a later write moves its table.
+    pub fn take_vbase(&mut self, core: u32) -> Option<u32> {
+        self.vbase_written.get_mut(core as usize)?.take()
     }
 
     /// Where the firmware last told core 1 to start, once: the address written
@@ -210,6 +218,7 @@ impl MmioDevice for CoreCtl {
             (_, VBASE) => {
                 if let Some(vbase) = self.vbase.get_mut(core as usize) {
                     *vbase = value;
+                    self.vbase_written[core as usize] = Some(value);
                 }
             }
             (1, WAKEUP) => self.core1_wake = Some(value),
@@ -234,6 +243,18 @@ mod tests {
             c.read(CORE_STRIDE + WAKEUP, Width::Word).unwrap(),
             0xFEC0_0200
         );
+    }
+
+    #[test]
+    fn every_write_to_vbase_is_picked_up_once() {
+        let mut c = CoreCtl::new();
+        assert_eq!(c.take_vbase(0), None);
+        c.write(VBASE, Width::Word, 0x8000_94B8).unwrap();
+        c.write(VBASE, Width::Word, 0).unwrap();
+        c.write(VBASE, Width::Word, 0xFEC0_1E00).unwrap();
+        assert_eq!(c.take_vbase(0), Some(0xFEC0_1E00));
+        assert_eq!(c.take_vbase(0), None);
+        assert_eq!(c.take_vbase(1), None);
     }
 
     #[test]
