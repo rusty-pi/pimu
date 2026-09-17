@@ -297,8 +297,8 @@
   <g>
     <rect class="part" x="56" y="565" width="190" height="60" rx="2"/>
     <text class="t" x="151" y="585" text-anchor="middle">LPDDR4 SDRAM</text>
-    <text class="m" x="151" y="600" text-anchor="middle">MR8: 2 GB, one rank</text>
-    <text class="m" x="151" y="613" text-anchor="middle">a real d03115 has 8 GB</text>
+    <text class="m" x="151" y="600" text-anchor="middle">8 GB: 32 Gb dies, 2 ranks</text>
+    <text class="m" x="151" y="613" text-anchor="middle">MR8 is where the size comes from</text>
   </g>
   <line class="w" x1="246" y1="595" x2="330" y2="595"/>
 
