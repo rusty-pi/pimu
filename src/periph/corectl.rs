@@ -11,11 +11,11 @@
 //! powers domain `0x20000` — in a Linux boot shortly after `Booting Linux`, in
 //! a firmware-only boot not at all (#72).
 //!
-//! Interrupt controller: `enable_irq_source(src, prio)` (start4 `0x3ED72374`)
-//! stores a 4-bit priority/enable field per source into the words at
-//! `0x10..0x20` (core 0) / `0x810..0x820` (core 1): `word = (src >> 3) & 3`,
-//! `field = (src & 7) * 4`. A nonzero field enables the source at that
-//! priority; the vector is the interrupt number, `64 + source`, not the field.
+//! Interrupt controller: start4's secure service `0xCEC006A6` stores a 4-bit
+//! priority/enable field per source into the words at `0x10..0x30` (core 0) /
+//! `0x810..0x830` (core 1): `word = (src >> 3) & 7`, `field = (src & 7) * 4`.
+//! A nonzero field enables the source at that priority; the vector is the
+//! interrupt number, `64 + source`, not the field.
 //! start4 enables source 64 (systimer, [`SYS_IRQ_SRC`]) at priority 1 and arms a
 //! system-timer compare as its ThreadX tick.
 
@@ -40,7 +40,7 @@ pub const COVERAGE: Coverage = Coverage {
 // Register notes beyond what `specs/corectl.toml` records:
 //
 // * `IRQ_PRIO` — start4 numbers its sources from 64, folded back into these
-//   four words by `(src >> 3) & 3`.
+//   eight words by `(src >> 3) & 7`.
 // * `VBASE` — core 1's copy is one `CORE_STRIDE` higher like every other
 //   register in this block. `--log irqen` and the peripheral stub both show
 //   core 1 writing `0x7E002830`, not `+0x38`; with the old `0x38` guess
@@ -169,7 +169,7 @@ impl MmioDevice for CoreCtl {
     fn write(&mut self, offset: u32, _width: Width, value: u32) -> BusResult<()> {
         // `--log irqen`: decode writes to the interrupt-priority words back
         // into the `enable_irq_source(src, prio)` calls that produced them, for
-        // core 0 (`0x10..0x20`) and core 1 (`0x810..0x820`). Which sources core 1
+        // core 0 (`0x10..0x30`) and core 1 (`0x810..0x830`). Which sources core 1
         // enables is how we find the inter-core doorbell's interrupt number.
         let (core, off) = bank(offset);
         let prio_word = element(off, IRQ_PRIO, IRQ_PRIO_COUNT, IRQ_PRIO_STRIDE);
