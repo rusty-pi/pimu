@@ -17,6 +17,15 @@ kind       = "measured"
 ref        = "`/dev/mem` at `0xFD5D8000` on a Raspberry Pi 4B d03115: all eighteen channels carry the magic"
 confidence = "high"
 
+[block.parent]
+name  = "clkmon"
+notes = "Carved out of the clock block's window and decoded ahead of it, like `avs`."
+
+[[block.parent.source]]
+kind       = "decompile"
+ref        = "`FUN_0ec300fa(ch, ...)` addresses `ch * 0x40 + 0x7d5d8010`, inside `clkmon`'s window"
+confidence = "high"
+
 [[register]]
 name   = "INDEX"
 offset = 0x00

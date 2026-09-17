@@ -20,6 +20,15 @@ kind       = "measured"
 ref        = "read-only `/dev/mem` reads of named registers on a Pi 4B rev 1.5 running Linux 6.12, link up"
 confidence = "high"
 
+[block.irq]
+gic_spi = { INTRL2_0 = 157, INTRL2_1 = 158 }
+notes   = "Each level-2 controller drives its own line while an unmasked status bit is set."
+
+[[block.irq.source]]
+kind       = "linux"
+ref        = "`ethernet@7d580000`, `interrupts = <GIC_SPI 157 IRQ_TYPE_LEVEL_HIGH>, <GIC_SPI 158 IRQ_TYPE_LEVEL_HIGH>`; `bcmgenet.c` takes them as `INTRL2_0`, `INTRL2_1`"
+confidence = "high"
+
 [[register]]
 name   = "SYS_REV_CTRL"
 offset = 0x0000

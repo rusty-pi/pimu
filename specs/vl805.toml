@@ -21,6 +21,20 @@ kind       = "decompile"
 ref        = "bootloader bus scan `0x000A7118` (`PCIe scan %08x:%08x`); start4 `XHCI_RESET` `0x3EDC61F4` refuses anything but `1106:3483`"
 confidence = "high"
 
+[block.parent]
+name  = "pcie"
+notes = "Bus 1, device 0, function 0 behind the root complex; the configuration space is reached through `EXT_CFG_INDEX` / `EXT_CFG_DATA`."
+
+[[block.parent.source]]
+kind       = "linux"
+ref        = "`pcie-brcmstb.c` `brcm_pcie_map_conf()`: anything but the root bus goes through `PCIE_EXT_CFG_INDEX`"
+confidence = "high"
+
+[[block.parent.source]]
+kind       = "decompile"
+ref        = "bootloader bus scan `0x000A7118` (`PCIe scan %08x:%08x`) finds it at bus 1 device 0"
+confidence = "high"
+
 [[register]]
 name   = "ID"
 offset = 0x00

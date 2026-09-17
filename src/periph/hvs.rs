@@ -77,9 +77,9 @@ pub const COVERAGE: Coverage = Coverage {
     ],
 };
 
-/// The HVS's VPU interrupt source: GIC SPI 97 in the device tree, and the
-/// source start4 registers its HVS handler (`0x3ECEED5C`) on.
-pub const IRQ_SRC: u32 = 97;
+/// The HVS's VPU interrupt source, from `specs/hvs.toml`: the source start4
+/// registers its HVS handler (`0x3ECEED5C`) on.
+pub const IRQ_SRC: u32 = crate::spec::hvs::IRQ_VPU;
 
 /// One frame of 640x480 at 60 Hz (CEA-861 VIC 1: 800 × 525 pixels at
 /// 25.175 MHz), in µs.

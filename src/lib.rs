@@ -43,6 +43,7 @@ pub mod machine;
 pub mod mem;
 pub mod net;
 pub mod periph;
+pub mod sheet;
 pub mod soc;
 pub mod spec;
 pub mod stdio;

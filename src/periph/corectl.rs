@@ -60,8 +60,9 @@ pub const COVERAGE: Coverage = Coverage {
 //   `gp+58004` with it.
 
 /// The interrupt source start4 wires to the BCM system timer (compare channel
-/// `src - SYS_IRQ_SRC`). Enabled via `enable_irq_source(64, 1)`.
-pub const SYS_IRQ_SRC: u32 = 64;
+/// `src - SYS_IRQ_SRC`), from `specs/systimer.toml`. Enabled via
+/// `enable_irq_source(64, 1)`.
+pub const SYS_IRQ_SRC: u32 = crate::spec::systimer::IRQ_VPU_C0;
 
 #[derive(Default)]
 pub struct CoreCtl {

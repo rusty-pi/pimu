@@ -6,6 +6,7 @@
 - Base: `0x7D5D8000`
 - Size: `0x480`
 - Banks: 18 × `0x40`; offsets below are for bank 0
+- Carried by: [`clkmon`](clkmon.md)
 
 Eighteen channels, one bank each. Carved out of the `clkmon` window and decoded ahead of it. The measured per-channel thresholds and readings live in `src/periph/pvt.rs`; a register can only carry one reset value, and these differ per channel. start4 leaves channels 2 and 3 out of its core-voltage characterisation (mask `0xC`, `FUN_0ec3503e`), which is why their thresholds read 0 on hardware.
 
@@ -13,6 +14,12 @@ Sources:
 
 - decompile (high): `FUN_0ec300fa(ch, ...)` reads `ch * 0x40 + 0x7d5d8010` / `+0x1c`; start4 initialises `k = 0..17`
 - measured (high): `/dev/mem` at `0xFD5D8000` on a Raspberry Pi 4B d03115: all eighteen channels carry the magic
+
+Carried by [`clkmon`](clkmon.md):
+
+Carved out of the clock block's window and decoded ahead of it, like `avs`.
+
+- decompile (high): `FUN_0ec300fa(ch, ...)` addresses `ch * 0x40 + 0x7d5d8010`, inside `clkmon`'s window
 
 ## Register map
 

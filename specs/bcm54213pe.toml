@@ -21,6 +21,20 @@ kind       = "measured"
 ref        = "`SIOCGMIIREG` on `eth0`, Pi 4B rev 1.5 (d03115), Linux up with a 1 Gb/s link"
 confidence = "high"
 
+[block.parent]
+name  = "genet"
+notes = "GENET's UniMAC MDIO controller at `+0xE14` drives the clause-22 frames."
+
+[[block.parent.source]]
+kind       = "linux"
+ref        = "`/scb/ethernet@7d580000/mdio@e14/ethernet-phy@1`"
+confidence = "high"
+
+[[block.parent.source]]
+kind       = "decompile"
+ref        = "start4 MDIO `FUN_0ecc3198` / `FUN_0ecc3280` write `UMAC_MDIO_CMD` at `0x7D580E14`"
+confidence = "high"
+
 [[register]]
 name   = "BMCR"
 offset = 0x00

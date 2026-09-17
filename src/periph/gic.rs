@@ -247,21 +247,21 @@ pub const ID_VIRT_TIMER: u32 = 27;
 pub const ID_SEC_PHYS_TIMER: u32 = 29;
 /// The one Linux actually uses as `arch_timer` (EL2, no VHE).
 pub const ID_NS_PHYS_TIMER: u32 = 30;
-pub const ID_MAILBOX: u32 = 65;
-pub const ID_PL011: u32 = 153;
-/// EMMC2 (`mmc@7e340000`, `interrupts = <GIC_SPI 0x7e IRQ_TYPE_LEVEL_HIGH>`).
-pub const ID_EMMC2: u32 = 32 + 0x7E;
-/// GENET's two lines (`ethernet@7d580000`, `interrupts = <GIC_SPI 157
-/// IRQ_TYPE_LEVEL_HIGH>, <GIC_SPI 158 IRQ_TYPE_LEVEL_HIGH>`): `INTRL2_0`, then
-/// `INTRL2_1`.
-pub const ID_GENET_A: u32 = 32 + 157;
-pub const ID_GENET_B: u32 = 32 + 158;
-/// The PCIe root complex (`pcie@7d500000`): the `interrupt-map` routes the
-/// endpoint's INTA to `GIC_SPI 143`, and `interrupt-names = "pcie", "msi"`
-/// puts the MSI controller's output on `GIC_SPI 148`. A Raspberry Pi 4B d03115
-/// shows the former as `GICv2 175 Level PCIe PME, aerdrv`.
-pub const ID_PCIE_INTA: u32 = 32 + 143;
-pub const ID_PCIE_MSI: u32 = 32 + 148;
+/// The peripheral lines below come from the `[block.irq]` of the block that
+/// drives each one, with that spec's provenance; the names here are how the
+/// model refers to them.
+pub const ID_MAILBOX: u32 = crate::spec::mbox::IRQ_GIC;
+pub const ID_PL011: u32 = crate::spec::uart0::IRQ_GIC;
+/// EMMC2, and the legacy EMMC with it.
+pub const ID_EMMC2: u32 = crate::spec::emmc2::IRQ_GIC;
+/// GENET's two lines: `INTRL2_0`, then `INTRL2_1`.
+pub const ID_GENET_A: u32 = crate::spec::genet::IRQ_GIC_INTRL2_0;
+pub const ID_GENET_B: u32 = crate::spec::genet::IRQ_GIC_INTRL2_1;
+/// The endpoint's legacy line as the root port reports it. A Raspberry Pi 4B
+/// d03115 shows it as `GICv2 175 Level PCIe PME, aerdrv`.
+pub const ID_PCIE_INTA: u32 = crate::spec::pcie::IRQ_GIC_INTA;
+/// The root complex's own MSI block.
+pub const ID_PCIE_MSI: u32 = crate::spec::pcie::IRQ_GIC_MSI;
 
 /// Ends of the distributor arrays with byte or pair fields, as far as
 /// [`NUM_IRQS`] implements them.

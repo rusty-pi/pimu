@@ -25,6 +25,20 @@ kind       = "decompile"
 ref        = "bootcode `0x8000AB4A`; second-stage bootloader `pcie_reset` `0x000A7034`, `pcie_init` `0x000A6CA2` / `0x000A6DCC`, link poll `0x000A6F7E`, bus scan `0x000A712C`"
 confidence = "high"
 
+[block.irq]
+gic_spi = { INTA = 143, MSI = 148 }
+notes   = "`INTA` is the endpoint's legacy line as the root port reports it; `MSI` is the root complex's own MSI block."
+
+[[block.irq.source]]
+kind       = "linux"
+ref        = "`pcie@7d500000`: the `interrupt-map` routes INTA to `GIC_SPI 143`, and `interrupt-names = \"pcie\", \"msi\"` puts the MSI controller on `GIC_SPI 148`"
+confidence = "high"
+
+[[block.irq.source]]
+kind       = "measured"
+ref        = "Raspberry Pi 4B d03115: `/proc/interrupts` shows id 175 as `GICv2 175 Level PCIe PME, aerdrv`"
+confidence = "high"
+
 [[register]]
 name   = "RC_LNKCTL"
 offset = 0x0BC

@@ -5,11 +5,19 @@
 - Bus: `vpu` (VPU bus address)
 - Base: `0x7E000000`
 - Size: `0x1000`
+- Interrupts: `ACK76` VPU source 76 · `ACK77` VPU source 77
 
 Sources:
 
 - decompile (high): `0x3ED3A114` / `0x3ED3A00C` address the slot array at `0x7E000000`
 - inferred (medium): size: the SDC block starts at `0x7E001000`
+
+Interrupts (`ACK76` VPU source 76 · `ACK77` VPU source 77):
+
+Each line is acked through the word named after it. Neither core enables them on the pinned boot, so the doorbells are polled rather than taken.
+
+- decompile (high): ISR `0x3ED3A098` (handler table `gp+58004`) does `[ACK76] &= ~[PENDING]`, and `ACK77` for 77
+- trace (high): `--log irqen`: neither core calls `enable_irq_source` for 76 or 77
 
 ## Register map
 

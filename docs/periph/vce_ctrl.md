@@ -5,6 +5,7 @@
 - Bus: `vpu` (VPU bus address)
 - Base: `0x7F140000`
 - Size: `0x1000`
+- Interrupts: VPU source 68
 
 Same device as `vce`; its offsets are relative to `0x7F140000`. A completed launch raises interrupt source 68 with `STATUS.INT` set until `vce_clear_interrupt` acks it.
 
@@ -12,6 +13,12 @@ Sources:
 
 - decompile (high): `vce_run_start`, `vce_run_complete`, `vce_clear_interrupt` and the source-68 handler `0x3ED9D1EA`
 - trace (high): `--log irqtbl`: `src 68 handler=0x3ed9d1ea`
+
+Interrupts (VPU source 68):
+
+A completed launch drives the line while `STATUS.INT` is set; the handler clears it through `INTCLR`.
+
+- decompile (high): `vce_obtain_semaphore` enables source 68 (`0x44`); start4's handler for it is `0x3ED9D1EA`
 
 ## Register map
 

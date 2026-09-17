@@ -15,6 +15,15 @@ kind       = "decompile"
 ref        = "start4's RNG accesses, all in `0x3ED64A4E..0x3ED64E28`; bootloader init `0x8000378E`"
 confidence = "high"
 
+[block.irq]
+vpu   = 125
+notes = "`INT_STATUS` drives the line while an enabled condition is latched."
+
+[[block.irq.source]]
+kind       = "decompile"
+ref        = "start4's RNG interrupt handler `0x3ED64BE8` reads `INT_STATUS`; its table entry is source 125"
+confidence = "high"
+
 [[register]]
 name   = "CTRL"
 offset = 0x00

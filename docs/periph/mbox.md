@@ -5,6 +5,7 @@
 - Bus: `vpu` (VPU bus address)
 - Base: `0x7E00B880`
 - Size: `0x140`
+- Interrupts: VPU source 94 · GIC id 65 (`GIC_SPI 33`)
 
 Every mailbox register is a two-element array `0x100` apart: element 0 is the ARM's view (what Linux's device tree names), element 1 the VPU's (what start4 drives). The two views are mirror images: the ARM posts requests into MAIL1 and reads replies from MAIL0, the VPU the other way round. The pending words sit in a block at `+0xC0` between the views.
 
@@ -12,6 +13,13 @@ Sources:
 
 - linux (high): `mailbox@7e00b880`, `brcm,bcm2835-mbox`, `reg = <0x7e00b880 0x40>`; confirmed in the reference board's `/proc/device-tree`
 - decompile (high): start4's receive op `0x3EC5AC0C` loads `0x7E00B980` as a literal; its ISR `0x3EC58302` reads `0x7E00B940`
+
+Interrupts (VPU source 94 · GIC id 65 (`GIC_SPI 33`)):
+
+The VPU takes the line the ARM's requests arrive on; the ARM takes the one the replies arrive on.
+
+- decompile (high): start4's handler table: `src 94 handler=0x3ec58302`
+- measured (medium): Raspberry Pi 4B d03115: Linux binds id 65 for the firmware mailbox (`/proc/interrupts`, and the dtb node's `interrupts`) — _Recorded as `ID_MAILBOX` in `src/periph/gic.rs` before this key existed._
 
 ## Register map
 

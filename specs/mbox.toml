@@ -15,6 +15,22 @@ kind       = "decompile"
 ref        = "start4's receive op `0x3EC5AC0C` loads `0x7E00B980` as a literal; its ISR `0x3EC58302` reads `0x7E00B940`"
 confidence = "high"
 
+[block.irq]
+vpu     = 94
+gic_spi = 33
+notes   = "The VPU takes the line the ARM's requests arrive on; the ARM takes the one the replies arrive on."
+
+[[block.irq.source]]
+kind       = "decompile"
+ref        = "start4's handler table: `src 94 handler=0x3ec58302`"
+confidence = "high"
+
+[[block.irq.source]]
+kind       = "measured"
+ref        = "Raspberry Pi 4B d03115: Linux binds id 65 for the firmware mailbox (`/proc/interrupts`, and the dtb node's `interrupts`)"
+confidence = "medium"
+note       = "Recorded as `ID_MAILBOX` in `src/periph/gic.rs` before this key existed."
+
 [[register]]
 name   = "DATA0"
 offset = 0x00
