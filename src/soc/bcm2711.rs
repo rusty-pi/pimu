@@ -212,7 +212,7 @@ pub const SDRAMC_SIZE: u32 = spec::sdramc::SIZE;
 /// controller sits behind. Like [`SDRAMC_BASE`] and [`CLKMON_BASE`] it lives
 /// *below* the `0x7E…` peripheral window, so it must be decoded before the
 /// cache-alias fold or its registers land in DRAM at `0x3D50_0000`. See
-/// `docs/usb-xhci.md`.
+/// [`crate::periph::pcie`].
 pub const PCIE_BASE: u32 = spec::pcie::BASE;
 pub const PCIE_SIZE: u32 = spec::pcie::SIZE;
 

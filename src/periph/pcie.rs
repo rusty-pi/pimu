@@ -2,8 +2,9 @@
 //! `pcie@7d500000` and drives with `pcie-brcmstb`.
 //!
 //! Behind it sits the Pi 4B's VIA VL805 xHCI controller (`1106:3483`), modelled
-//! in [`super::vl805`]. See [`docs/usb-xhci.md`](../../../docs/usb-xhci.md) for
-//! the register-level survey and the staged plan; this file is stages 0 and 1.
+//! in [`super::vl805`], with its register block in [`super::xhci`]. This file is
+//! the root complex itself: the config-space router, the windows and the
+//! interrupts.
 //!
 //! The window sits outside the `0x7E…` legacy peripheral aperture, so without
 //! it every PCIe access folds onto DRAM (`addr & 0x3FFF_FFFF` = `0x3D50_xxxx`)
@@ -55,7 +56,7 @@
 //! channel** instead: `0x000A701E` builds a control block whose `SRC` is
 //! `0x6_0200_0004` (`src = 0x0200_0004`, `srci = 0x1006`, high byte 6), DMAs
 //! four bytes into a bounce buffer at `0xC031B000`, and reads the buffer.
-//! `docs/usb-xhci.md` §5.1 has the full trace.
+//! `boot --log io` over a USB boot shows the whole sequence.
 //!
 //! So this file translates CPU-physical → PCI bus → BAR0 offset
 //! ([`Pcie::mmio_read`] / [`Pcie::mmio_write`]), and
@@ -81,8 +82,7 @@
 //! What it does *not* find is a device: the model has no USB device behind the
 //! root hub and no VIA hub on port 1, so all five ports read "powered, empty"
 //! and the bootloader falls through to the SD entry of `BOOT_ORDER` without the
-//! `USB2[1] … connected` / `HUB init` lines the real board prints. That is
-//! stage 3 of `docs/usb-xhci.md`.
+//! `USB2[1] … connected` / `HUB init` lines the real board prints.
 //!
 //! `RVF_PCIE_DEVICE=0` unsolders the endpoint again — the link never trains,
 //! `MISC_PCIE_STATUS` reads only its port-mode strap and the bootloader prints
@@ -323,7 +323,7 @@ fn rc_cfg_write_mask(off: u32) -> u32 {
 /// and AER's uncorrectable, correctable and root error status. Linux clears
 /// the PME status with a read-modify-write (`pcie_clear_root_pme_status`), so
 /// as plain storage the clear would set it for good, and `pcie_pme_irq` would
-/// claim every interrupt on the line (docs/arm-side-findings.md).
+/// claim every interrupt on the line, which hung Linux silently (#18).
 fn rc_cfg_w1c_mask(off: u32) -> u32 {
     match off {
         0x0B4 => 0x000F_0000,

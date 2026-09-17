@@ -25,7 +25,8 @@ use crate::otp::OtpFile;
 use crate::parse_u32;
 
 /// Blue socket A. Root port 1 is the USB2 port feeding the on-board VIA
-/// hub, so a SuperSpeed fixture goes on port 2 (`docs/usb-xhci.md` §5.2).
+/// hub, so a SuperSpeed fixture goes on port 2 — measured on a Raspberry Pi 4B
+/// d03115 by moving a stick between sockets and re-reading `PORTSC`.
 const USB_ROOT_PORT: usize = 2;
 
 /// `boot --help` (#99). Every option `BootOpts::parse` takes is here, one to a
@@ -760,8 +761,8 @@ type SharedUsbDisk = Rc<RefCell<rpi_virt_fw::periph::usb::Disk>>;
 
 /// `--usb <img>`: a Bulk-Only Transport mass-storage device in blue socket
 /// A, which is xHCI root port 2 — a SuperSpeed lane straight onto the root
-/// hub, so no hub traversal is involved. See `docs/usb-xhci.md` §5.2 for the
-/// socket map.
+/// hub, so no hub traversal is involved. The socket map is in
+/// [`crate::periph::xhci`].
 ///
 /// `--usb-mb <n>`: the stick is that big, with the image at its start, as
 /// on a Pi whose first boot uses the rest. Read on demand; what the guest

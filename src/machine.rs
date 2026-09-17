@@ -62,8 +62,9 @@ pub struct Machine {
     /// AXI async slave bridges (`0x7E00_A000`) — the stop/acknowledge handshake
     /// start4 runs before gating the V3D / ISP / H264 power domains.
     pub asb: Asb,
-    /// PCIe root complex (`0x7D50_0000`) — a register file only. The VL805
-    /// xHCI controller behind it is not modelled; see `docs/usb-xhci.md`.
+    /// PCIe root complex (`0x7D50_0000`). The VL805 xHCI controller behind it
+    /// is [`crate::periph::Vl805`], reached through this block's
+    /// `EXT_CFG_DATA` and its outbound window.
     pub pcie: crate::periph::pcie::Pcie,
     /// GENET v5 Ethernet MAC (`0x7D58_0000`) with the BCM54213PE PHY on its
     /// MDIO bus; see [`crate::periph::genet`].

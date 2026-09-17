@@ -16,8 +16,8 @@
 //! `SRCI` / `DESTI` are not just the increment flag: bits `[7:0]` are address
 //! bits `[39:32]`, which is what makes this the 40-bit channel. The bootloader
 //! uses that to reach the PCIe outbound window at `0x6_0000_0000` — the only
-//! way a 32-bit VPU can touch the VL805's registers at all. See
-//! `docs/usb-xhci.md` §5.1; the caller composes the full address and routes it.
+//! way a 32-bit VPU can touch the VL805's registers at all; the caller composes
+//! the full address and routes it ([`crate::periph::pcie`]).
 //!
 //! start4's dmalib drives the channel too (channel 11 of its `0x7E00_7000`
 //! controller, when it takes the xHCI over for a USB mass-storage boot), and

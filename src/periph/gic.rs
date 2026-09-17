@@ -1368,7 +1368,7 @@ mod tests {
     /// line nobody clears: IAR, EOIR, handler, DIR, and IAR again returns the
     /// same ID without the core ever leaving the exception. A run that shows
     /// few interrupts taken, the SPI active and the running priority idle is
-    /// that loop, not a lost deactivation (docs/arm-side-findings.md).
+    /// that loop, not a lost deactivation.
     #[test]
     fn level_spi_split_eoi_is_acknowledged_again_after_each_dir() {
         let mut g = booted();

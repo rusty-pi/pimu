@@ -101,7 +101,7 @@ value: 0 once it has found the VL805 at `1106:3483` and uploaded and verified
 the firmware through the vendor port at config `0x78`/`0x7C`, `0xffffffff` when
 it did not recognise the device. Traps on this path read `MCU FW: 10ffc800
 3ff20000` and `VLI firmware load complete status 0`, the values the reference
-board's vc4-boot.log records (docs/usb-xhci.md, stage 2).
+board's vc4-boot.log records.
 
 Linux checks only the buffer's status word, so a failed load would boot the
 same, and the firmware's own prints go to its message ring, not the UART. The

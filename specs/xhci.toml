@@ -13,7 +13,7 @@ confidence = "high"
 
 [[block.source]]
 kind       = "measured"
-ref        = "capability registers and `PORTSC` read on a Raspberry Pi 4B d03115 through `/dev/mem` (`docs/usb-xhci.md` section 2); `dmesg` `hcc params 0x002841eb hci version 0x100`"
+ref        = "capability registers and `PORTSC` read on a Raspberry Pi 4B d03115 through `/dev/mem`, `sudo od -Ax -tx4 -v /dev/mem` at the BAR0 address `lspci -vvv` reports for `01:00.0`; `dmesg` `hcc params 0x002841eb hci version 0x100`"
 confidence = "high"
 
 [[block.source]]

@@ -7,8 +7,8 @@
 //! and interrupt endpoints; it knows nothing about TRBs.
 //!
 //! Two devices are modelled, both from bytes measured on a
-//! Raspberry Pi 4B d03115 (`docs/usb-xhci.md` §5.2, and the `lsusb -v` capture
-//! that produced the tables below):
+//! Raspberry Pi 4B d03115 with a Samsung "Flash Drive FIT" plugged in, from the
+//! `lsusb -v` capture that produced the tables below:
 //!
 //! * [`Hub`] — the VIA Labs `2109:3431` four-port hub that a Pi 4B has soldered
 //!   to xHCI root port 1. It is the *only* thing a stock board has on the bus
@@ -488,9 +488,9 @@ fn lba_count(cdb: &[u8]) -> Option<(u64, u64)> {
 /// A USB mass-storage device: Bulk-Only Transport carrying SCSI, backed by a
 /// [`Disk`].
 ///
-/// Identity is the Samsung "Flash Drive FIT" (`090c:1000`) the stage-3 ground
-/// truth was captured from — descriptors verbatim from `docs/usb-xhci.md` §5.2,
-/// `INQUIRY` fields from `/sys/block/sda/device/*`. The capacity is the
+/// Identity is the Samsung "Flash Drive FIT" (`090c:1000`) the ground truth was
+/// captured from — descriptors verbatim from `lsusb -v` on a Raspberry Pi 4B
+/// d03115, `INQUIRY` fields from `/sys/block/sda/device/*`. The capacity is the
 /// [`Disk`]'s rather than the stick's, because that is the one field a fixture
 /// cannot borrow.
 pub struct MassStorage {

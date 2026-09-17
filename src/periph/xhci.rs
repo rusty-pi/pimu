@@ -10,7 +10,7 @@
 //! ## Where the numbers come from
 //!
 //! Every capability value is measured on a Raspberry Pi 4B d03115 through
-//! `/dev/mem` (`docs/usb-xhci.md` §2); `dmesg`'s
+//! `/dev/mem`, at the BAR0 address `lspci -vvv` reports for `01:00.0`; `dmesg`'s
 //! `hcc params 0x002841eb hci version 0x100` cross-checks the pair that
 //! matters. The `PORTSC` values are measured too, by moving a stick between
 //! sockets and re-reading:
@@ -219,7 +219,7 @@ const PLS_RXDETECT: u32 = 5;
 const PLS_POLLING: u32 = 7;
 
 /// `CCS=0 PED=0 PLS=RxDetect PP=1` — powered, nothing attached, the value every
-/// unpopulated VL805 port reads (`docs/usb-xhci.md` §5.2).
+/// unpopulated VL805 port reads on a Raspberry Pi 4B d03115.
 const PORTSC_EMPTY: u32 = PORTSC_PP | (PLS_RXDETECT << PORTSC_PLS_SHIFT);
 
 /// `ERDP.EHB`, the Event Handler Busy bit the driver clears when it is done.
