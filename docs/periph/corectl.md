@@ -21,7 +21,7 @@ Sources:
 |---|---|---|---|---|
 | `0x004` | [`IRQ_PENDING`](#irq_pending) | r | 32 | 1, best medium |
 | `0x010`–`0x02C` (8 × 0x4) | [`IRQ_PRIO`](#irq_prio) | rw | 32 | 5, best high |
-| `0x030` | [`VBASE`](#vbase) | rw | 32 | 2, best high |
+| `0x030` | [`VBASE`](#vbase) | rw | 32 | 3, best high |
 | `0x034` | [`WAKEUP`](#wakeup) | rw | 32 | 5, best high |
 | `0x040`–`0x044` (2 × 0x4) | [`IRQ_PENDING_BITS`](#irq_pending_bits) | rw | 32 | 2, best high |
 
@@ -66,12 +66,13 @@ Sources:
 
 Offset `0x030` · access `rw` · 32 bits
 
-Exception-vector base for this core.
+Exception-vector base for this core. The core takes its vector from the base as it stands when the exception comes, so every write moves the table: the bootloader's halt points it at its own table and clears it again once woken, and start4, which runs after a wake without a reset in between, writes its own.
 
 Sources:
 
 - decompile (high): start4 entry trampoline: `mov r1, #0x7E002030`, then stores the vector base through it
 - trace (high): core-control write trace: `+0x30` and `+0x830` both take `0xFEC01E00`, nothing writes `+0x38` — _replaced an earlier `+0x38` guess for core 1 (commit 06a8447)_
+- decompile (high): bootsys halt `0x800005AC`: zeroes both cores' priority words and `+0x30`, sets vector 116 of a table at `0x80000000`, writes `0x80000000` here (`0x8000063A`) around its `sleep`, then 0 (`0x80000654`); after a wake the boot goes on to start4, which writes `0xFEC01E00`
 
 ## `WAKEUP`
 
