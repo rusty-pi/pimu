@@ -24,6 +24,10 @@ set -euo pipefail
 # mtools stamps directory entries with this instead of the build time, so
 # boot.img, its hash and its signature are the same on every build.
 export SOURCE_DATE_EPOCH=315532800   # 1980-01-01, the FAT epoch
+# mtools writes that time in the local timezone: without this a builder east
+# of UTC stamps 02:00, changing the image's bytes (and boot.img's hash and
+# signature, which the HTTP boot's instruction counts follow).
+export TZ=UTC
 # Sorted file lists, whatever the builder's locale.
 export LC_ALL=C
 
