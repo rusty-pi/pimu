@@ -192,6 +192,8 @@ Idle value: card inserted and stable, card-detect and write-protect pins high (w
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
+| 0 | `CMD_INHIBIT` | r | A command is in progress. The model completes commands at once, so it never shows this bit. |
+| 1 | `DAT_INHIBIT` | r | A data transfer is in progress: set from the data command until its transfer completes, or until a reset of the data side. A driver ending an open-ended read must not wait for it before CMD12. Before CMD0, CMD12 and CMD13, start4 waits only for `CMD_INHIBIT`; before any other command, for both bits, up to 4 s. The bootloader does not wait on either. The model sets this bit while a PIO or DMA transfer has data left, including the read-ahead of an open-ended `CMD18`. |
 | 10 | `BUF_WRITE_EN` | r | The buffer has room for a PIO write. |
 | 11 | `BUF_READ_EN` | r | The buffer holds data for a PIO read. It is a level, not a latch: it drops after the last word of a block and comes back once the next block has arrived. Both stock stages read `PRESENT_STATE` before every `BUFFER_DATA` read and read the word only while this bit is set. `BUF_READ_RDY` in `INT_STATUS` stays latched from the first block on, so it cannot pace later blocks of a `CMD18`. The model fills the buffer at once, so a driver that paces on the latch works in the model but would read later blocks too early on silicon. |
 | 23:20 | `DAT_LINES` | r | DAT[3:0] line levels. The card holds them low during the CMD11 1.8 V switch. |
@@ -201,6 +203,15 @@ Sources:
 
 - standard (high): SDHCI 3.00, 2.2.9
 - measured (high): `/dev/mem` read of `0xfe340024` on a Pi 4B rev 1.5 with Linux idle; start4 prints `status: 0x1fff0000` in `examples-on-real-hardware/sd-card-boot.log`
+
+`CMD_INHIBIT` sources:
+
+- standard (high): SDHCI 3.00, 2.2.9
+
+`DAT_INHIBIT` sources:
+
+- standard (high): SDHCI 3.00, 2.2.9 (and 3.7.1, which leaves the check out for an abort command)
+- decompile (high): start4 command routine `0x3EC52084`: the busy-wait `0x3EC52BAE` gets mask 1 for codes 1024 (CMD0), 13 and 2060 (CMD12) and mask 3 otherwise, with a 4 000 000 us timeout; before CMD0 it waits up to 2000 us for mask 1, then resets `SRST_CMD` if no error is pending (`0x3EC520CA`)
 
 `BUF_WRITE_EN` sources:
 
