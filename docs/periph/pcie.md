@@ -27,7 +27,13 @@ Interrupts (`INTA` GIC id 175 (`GIC_SPI 143`) · `MSI` GIC id 180 (`GIC_SPI 148`
 
 | Offset | Name | Access | Width | Sources |
 |---|---|---|---|---|
+| `0x0B4` | [`RC_DEVCTL`](#rc_devctl) | rw | 32 | 2, best high |
+| `0x0B8` | [`RC_LNKCAP`](#rc_lnkcap) | rw | 32 | 2, best high |
 | `0x0BC` | [`RC_LNKCTL`](#rc_lnkctl) | rw | 32 | 2, best high |
+| `0x0C8` | [`RC_RTCTL`](#rc_rtctl) | rw | 32 | 2, best high |
+| `0x0D0` | [`RC_DEVCAP2`](#rc_devcap2) | r | 32 | 2, best high |
+| `0x0DC` | [`RC_LNKCTL2`](#rc_lnkctl2) | rw | 32 | 2, best high |
+| `0x188` | [`RC_VENDOR_REG1`](#rc_vendor_reg1) | rw | 32 | 2, best high |
 | `0x43C` | [`PRIV1_ID_VAL3`](#priv1_id_val3) | rw | 32 | 3, best high |
 | `0x1100` | [`MDIO_ADDR`](#mdio_addr) | rw | 32 | 1, best high |
 | `0x1104` | [`MDIO_WR_DATA`](#mdio_wr_data) | rw | 32 | 1, best high |
@@ -65,6 +71,28 @@ Interrupts (`INTA` GIC id 175 (`GIC_SPI 143`) · `MSI` GIC id 180 (`GIC_SPI 148`
 | `0x9000` | [`EXT_CFG_INDEX`](#ext_cfg_index) | rw | 32 | 1, best high |
 | `0x9210` | [`RGR1_SW_INIT_1`](#rgr1_sw_init_1) | rw | 32 | 2, best high |
 
+## `RC_DEVCTL`
+
+Offset `0x0B4` · access `rw` · 32 bits
+
+Root port device control (low half) and status (high half). The bootloader turns the four error reports on before it walks the bus: `0x2C10` read back, `0x2C1F` written.
+
+Sources:
+
+- linux (high): `pcie-brcmstb.c`: `BRCM_PCIE_CAP_REGS` (`0xAC`) + `PCI_EXP_DEVCTL`
+- trace (high): bootmain `0x000A6E26` reads `0x00002C10`, `0x000A6E30` writes `0x00002C1F`
+
+## `RC_LNKCAP`
+
+Offset `0x0B8` · access `rw` · 32 bits
+
+Root port link capabilities: 5 GT/s, x1, port 0 (`0x0064CC12`). The bootloader reads it before it sets the target speed.
+
+Sources:
+
+- linux (high): `pcie-brcmstb.c`: `BRCM_PCIE_CAP_REGS` (`0xAC`) + `PCI_EXP_LNKCAP`
+- trace (high): bootmain `0x000A6D9E` reads `0x0064CC12`
+
 ## `RC_LNKCTL`
 
 Offset `0x0BC` · access `rw` · 32 bits
@@ -75,6 +103,50 @@ Sources:
 
 - linux (high): `pcie-brcmstb.c`: `BRCM_PCIE_CAP_REGS` (`0xAC`) + `PCI_EXP_LNKCTL`
 - measured (high): Raspberry Pi 4B d03115 `lspci`: `LnkSta: Speed 5GT/s, Width x1, SlotClk+`
+
+## `RC_RTCTL`
+
+Offset `0x0C8` · access `rw` · 32 bits
+
+Root control (low half) and root capabilities (high half, `CRS` software visibility). The bootloader sets `0x18` in the low half — PME interrupt enable and `CRS` software visibility enable — leaving the capability half as it reads, `0x0001`.
+
+Sources:
+
+- linux (high): `pcie-brcmstb.c`: `BRCM_PCIE_CAP_REGS` (`0xAC`) + `PCI_EXP_RTCTL`
+- trace (high): bootmain `0x000A6E36` reads `0x00010000`, `0x000A6E44` writes `0x00010018`
+
+## `RC_DEVCAP2`
+
+Offset `0x0D0` · access `r` · 32 bits
+
+Root port device capabilities 2 (`0x0008081F`): completion-timeout ranges A to D with the timeout disable, LTR. The bootloader reads it once, at the end of its bus walk, and nothing acts on the value.
+
+Sources:
+
+- linux (high): `pcie-brcmstb.c`: `BRCM_PCIE_CAP_REGS` (`0xAC`) + `PCI_EXP_DEVCAP2`
+- trace (high): bootmain `0x000A714C` reads `0x0008081F`
+
+## `RC_LNKCTL2`
+
+Offset `0x0DC` · access `rw` · 32 bits
+
+Root port link control 2: `TLS` (bits 3:0) is the speed the next training aims at. The bootloader writes 2 (5 GT/s) before it takes `PERST#` off the endpoint, which is what the link then trains to.
+
+Sources:
+
+- linux (high): `pcie-brcmstb.c`: `brcm_pcie_set_gen()` writes `BRCM_PCIE_CAP_REGS` (`0xAC`) + `PCI_EXP_LNKCTL2`
+- trace (high): bootmain `0x000A6DA4` reads `0x00000002`, `0x000A6DBC` writes it back
+
+## `RC_VENDOR_REG1`
+
+Offset `0x188` · access `rw` · 32 bits
+
+Vendor-specific register 1. Bits 3:2 are the endianness the inbound window presents, which both the bootloader and Linux leave at 0, little-endian.
+
+Sources:
+
+- linux (high): `pcie-brcmstb.c`: `PCIE_RC_CFG_VENDOR_VENDOR_SPECIFIC_REG1` (`0x188`), `..._ENDIAN_MODE_BAR2_MASK` `0xC`, `..._LITTLE_ENDIAN` 0
+- trace (high): bootmain `0x000A6E4A` reads 0, `0x000A6E60` writes 0
 
 ## `PRIV1_ID_VAL3`
 

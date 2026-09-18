@@ -33,6 +33,7 @@ Sources:
 | `0x080` | [`AVS_STAT`](#avs_stat) | rw | 32 | 2, best high |
 | `0x084` | [`AVS_EVENT`](#avs_event) | rw | 32 | 2, best high |
 | `0x088` | [`AVS_INTEN`](#avs_inten) | rw | 32 | 2, best high |
+| `0x0FC` | [`REG_FC`](#reg_fc) | r | 32 | 1, best high |
 | `0x108` | [`IMAGE`](#image) | rw | 32 | 3, best high |
 | `0x10C` | [`GRAFX`](#grafx) | rw | 32 | 2, best high |
 | `0x110` | [`PROC`](#proc) | rw | 32 | 2, best high |
@@ -273,6 +274,16 @@ Sources:
 
 - linux (medium): `bcm2835-power.c`: `PM_AVS_INTEN` — _a BCM2835 define; the BCM2711 firmware uses it as PLLD's power control_
 - trace (high): bootcode `0x8000AB8A` / `0x8000AB8E`, and bootmain again at `0x000AE4EE` / `0x000AE4F2`: `0x5A800004`, `0x5A000004`; start4: `0x5A000004` at `0x3ED55D56`
+
+## `REG_FC`
+
+Offset `0x0FC` · access `r` · 32 bits
+
+Read twice by each pass of start4's `PROC` sequence, once before it clears the low bits of `PROC` and once after it has restored `PLLB_ARM`, and never written. Reads 0 in the model, and nothing acts on the value. Meaning unknown; Linux names no register here.
+
+Sources:
+
+- trace (high): start4 `0x3EC82008` and `0x3EC8211C`, twice each over a boot, reading `0x00000000`; the `PROC` routine is `0x3EC81FC0`
 
 ## `IMAGE`
 
