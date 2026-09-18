@@ -3,6 +3,7 @@
 use crate::bus::{Bus, BusError, BusResult, MmioDevice, Width};
 use crate::log::{Channel, Log};
 use crate::mem::Ram;
+use crate::periph::gpio;
 use crate::periph::hdmi_ddc::AUTO_WINDOW;
 use crate::periph::{
     ArmCtrl, ArmLocal, Asb, Aux, Avs, BootBox, Bsc, ClkMon, ClockManager, ConfigOtp, CoreCtl, Dma4,
@@ -209,6 +210,13 @@ pub struct Machine {
 /// that regardless of which alias the write used.
 const PHASE_TAG_SIG: u32 = 0x02C0_2000;
 
+/// The function-select registers of the GPIO block: a write to one of them can
+/// move a peripheral's pads (see [`Machine::route_gpio_pins`]).
+const GPFSEL_WINDOW: std::ops::Range<u32> = {
+    let base = map::GPIO_BASE + crate::spec::gpio::GPFSEL;
+    base..base + crate::spec::gpio::GPFSEL_COUNT * crate::spec::gpio::GPFSEL_STRIDE
+};
+
 /// The SD-slot mux word in the GPIO block, and the bit that routes the card to
 /// the legacy EMMC (see [`Machine::route_sd_slot`]).
 const SD_SLOT_MUX: u32 = map::GPIO_BASE + crate::spec::gpio::PIN_MUX;
@@ -263,9 +271,19 @@ impl Machine {
             net: None,
             rng: Rng::new(),
             vce: Vce::new(),
-            bsc0: Bsc::empty("bsc0"),
+            bsc0: {
+                // Every pin is an input out of reset, so no master has its
+                // pads until the firmware says so (`route_gpio_pins`).
+                let mut bsc0 = Bsc::empty("bsc0");
+                bsc0.set_pins(false);
+                bsc0
+            },
             gpio: Gpio::new(),
-            spi0: Spi0::new(),
+            spi0: {
+                let mut spi0 = Spi0::new();
+                spi0.set_pins(false);
+                spi0
+            },
             bsc_pmic: Bsc::new("bsc-pmic"),
             hdmi_ddc0: HdmiDdc::new("hdmi-ddc0"),
             hdmi_ddc1: HdmiDdc::new("hdmi-ddc1"),
@@ -1096,6 +1114,26 @@ impl Machine {
         to.put_card(from.take_card());
     }
 
+    /// Put each master's pads where the pin functions say they are. The pins
+    /// are the GPIO block's and the masters are their own devices, so the
+    /// machine is what joins them, as it does for the SD slot.
+    ///
+    /// SPI0 reaches the boot flash only while GPIO 40..43 are on ALT4: every
+    /// EEPROM-stage flash session moves them there and back
+    /// (`specs/spi0.toml`), and in between the pins are PWM audio and the
+    /// activity LED. I²C 0 reaches the 40-pin header — a HAT's ID EEPROM —
+    /// only while GPIO 0/1 are on ALT0; start4's own probe sets them
+    /// (`GPFSEL0` `0x4` then `0x24`) and puts them back afterwards, and its
+    /// camera and display probes run the same master on GPIO 44/45, where no
+    /// HAT is.
+    fn route_gpio_pins(&mut self) {
+        let alt = |gpio: &Gpio, pin, n| gpio.function(pin) == gpio::Function::Alt(n);
+        let flash = (40..=43).all(|pin| alt(&self.gpio, pin, 4));
+        self.spi0.set_pins(flash);
+        let header = alt(&self.gpio, 0, 0) && alt(&self.gpio, 1, 0);
+        self.bsc0.set_pins(header);
+    }
+
     /// [`Bus::store`] off the RAM path; see [`Self::load_device`].
     #[inline(never)]
     fn store_device(&mut self, addr: u32, width: Width, value: u32) -> BusResult<()> {
@@ -1145,6 +1183,9 @@ impl Machine {
             }
             if self.genet.take_kick() {
                 self.genet.service(&mut self.ram, &mut self.net);
+            }
+            if GPFSEL_WINDOW.contains(&addr) {
+                self.route_gpio_pins();
             }
             return r;
         }

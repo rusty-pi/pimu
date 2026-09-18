@@ -7,7 +7,7 @@
 - `PMIC` copy: `0x7E205E00`
 - Size: `0x20`
 
-A transfer takes its time on the wire at `core_clock / DIV`, 500 MHz core clock: `TA` stays set until the bytes have gone, then `DONE` (and `ERR` on an unacknowledged address) latch.
+A transfer takes its time on the wire at `core_clock / DIV`, 500 MHz core clock: `TA` stays set until the bytes have gone, then `DONE` (and `ERR` on an unacknowledged address) latch. Instance 0 is on GPIO 0/1, 28/29 or 44/45 (`specs/gpio.toml`), and only the first pair is the 40-pin header: a HAT's ID EEPROM answers while the pins are there and not otherwise. The `0x7E205E00` instance has pins of its own and is not muxed.
 
 Sources:
 

@@ -104,6 +104,12 @@ pub struct Bsc {
     expander: Option<Fxl6408>,
     /// A HAT's ID EEPROM on the header bus.
     eeprom: Option<super::hat::HatEeprom>,
+    /// Whether the pins this instance's devices sit on are muxed to it. I²C 0
+    /// is on GPIO 0/1, 28/29 or 44/45, and only the first pair reaches the
+    /// 40-pin header: a probe made with the bus somewhere else is a probe of a
+    /// bus the HAT is not on. The machine follows the pin functions and says
+    /// ([`Self::set_pins`]); an instance nobody tells has its pads.
+    pins: bool,
     /// Handed to what is on the bus, for the `pmic` and `expander` channels.
     log: Log,
 }
@@ -130,6 +136,7 @@ impl Bsc {
             slave: Some(Pmic::default()),
             expander: Some(Fxl6408::new()),
             eeprom: None,
+            pins: true,
             log: Log::default(),
         }
     }
@@ -181,8 +188,18 @@ impl Bsc {
         self.eeprom = Some(eeprom);
     }
 
+    /// Say whether the bus this instance's devices are on is the one its pins
+    /// are muxed to. Clear: every address goes unACKed, which is what a
+    /// master whose pads are somewhere else finds.
+    pub fn set_pins(&mut self, on: bool) {
+        self.pins = on;
+    }
+
     /// The device that answers the address currently in `A`, if any.
     fn target(&mut self) -> Option<&mut dyn I2cSlave> {
+        if !self.pins {
+            return None;
+        }
         let addr = (self.addr as u8) & 0x7F;
         if let Some(p) = self.slave.as_mut().filter(|p| p.responds_to(addr)) {
             return Some(p);
@@ -255,6 +272,9 @@ impl Bsc {
 
     /// Does an attached slave answer the address currently in `A`?
     fn addressed(&self) -> bool {
+        if !self.pins {
+            return false;
+        }
         let addr = (self.addr as u8) & 0x7F;
         self.slave.as_ref().is_some_and(|s| s.responds_to(addr))
             || self.eeprom.as_ref().is_some_and(|e| e.responds_to(addr))

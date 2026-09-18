@@ -50,11 +50,11 @@ Working:
   (transmit and receive) and mini-UART, system timer, SDRAM controller, clock
   manager + PLLs, config-OTP, power domains and watchdog, DMA4 and legacy DMA,
   Arasan eMMC2 (ADMA2/SDMA, writes, 1.8 V) + SD card, SPI0 EEPROM, GPIO with
-  the board's pin map, BSC/I²C with the DA9090 PMIC and FXL6408 GPIO expander,
-  HDMI DDC, HVS, mailbox with the crypto service, RNG, AVS/PVT, PCIe + VL805
-  xHCI + a USB mass-storage device, GENET with its BCM54213PE PHY, and on the
-  ARM side the GIC-400, the ARM-local block and the generic timer. A logging
-  catch-all takes the rest.
+  the board's pin map and the pads it hands the SPI and I²C masters, BSC/I²C
+  with the DA9090 PMIC and FXL6408 GPIO expander, HDMI DDC, HVS, mailbox with
+  the crypto service, RNG, AVS/PVT, PCIe + VL805 xHCI + a USB mass-storage
+  device, GENET with its BCM54213PE PHY, and on the ARM side the GIC-400, the
+  ARM-local block and the generic timer. A logging catch-all takes the rest.
 - **Network peer** (`src/net/`) — `--netboot <dir>` plugs the Ethernet cable
   into a built-in DHCP, DNS, TFTP and plain HTTP server serving `<dir>`
   ([#38](https://github.com/valtzu/rpi-virt-fw/issues/38)). `--net passt`

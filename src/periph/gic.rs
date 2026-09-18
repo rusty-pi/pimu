@@ -264,6 +264,9 @@ pub const ID_PCIE_INTA: u32 = crate::spec::pcie::IRQ_GIC_INTA;
 pub const ID_PCIE_MSI: u32 = crate::spec::pcie::IRQ_GIC_MSI;
 /// The BCM2711's own xHCI, the USB-C port's host controller (`otg_mode=1`).
 pub const ID_XHCI_OTG: u32 = crate::spec::xhci_otg::IRQ_GIC;
+/// The GPIO block's two lines, one a bank of pins.
+pub const ID_GPIO_BANK0: u32 = crate::spec::gpio::IRQ_GIC_BANK0;
+pub const ID_GPIO_BANK1: u32 = crate::spec::gpio::IRQ_GIC_BANK1;
 
 /// Ends of the distributor arrays with byte or pair fields, as far as
 /// [`NUM_IRQS`] implements them.

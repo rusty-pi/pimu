@@ -407,13 +407,13 @@
     <rect class="part" x="695" y="780" width="110" height="60" rx="2"/>
     <text class="t" x="750" y="800" text-anchor="middle">40-pin header</text>
     <text class="m" x="750" y="814" text-anchor="middle">ttyAMA0 console</text>
-    <text class="m" x="750" y="827" text-anchor="middle">HAT EEPROM probed</text>
+    <text class="m" x="750" y="827" text-anchor="middle">HAT EEPROM · GPIO 0/1 ALT0</text>
   </g>
   <g>
     <rect class="part" x="815" y="780" width="110" height="60" rx="2"/>
     <text class="t" x="870" y="800" text-anchor="middle">CSI · DSI FPC</text>
     <text class="m" x="870" y="814" text-anchor="middle">camera, display</text>
-    <text class="m" x="870" y="827" text-anchor="middle">probed, empty</text>
+    <text class="m" x="870" y="827" text-anchor="middle">GPIO 44/45 ALT1, empty</text>
   </g>
 
   <!-- net labels: expander pins, joined by name -->
