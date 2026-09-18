@@ -25,6 +25,7 @@ pub mod fxl6408;
 pub mod genet;
 pub mod gentimer;
 pub mod gic;
+pub mod hat;
 pub mod hd;
 pub mod hdmi;
 pub mod hdmi_ddc;

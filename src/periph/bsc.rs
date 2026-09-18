@@ -102,6 +102,8 @@ pub struct Bsc {
     slave: Option<Pmic>,
     /// The GPIO expander sharing the PMIC bus.
     expander: Option<Fxl6408>,
+    /// A HAT's ID EEPROM on the header bus.
+    eeprom: Option<super::hat::HatEeprom>,
     /// Handed to what is on the bus, for the `pmic` and `expander` channels.
     log: Log,
 }
@@ -127,6 +129,7 @@ impl Bsc {
             deferred_read: None,
             slave: Some(Pmic::default()),
             expander: Some(Fxl6408::new()),
+            eeprom: None,
             log: Log::default(),
         }
     }
@@ -140,6 +143,7 @@ impl Bsc {
         Bsc {
             slave: None,
             expander: None,
+            eeprom: None,
             ..Bsc::new(name)
         }
     }
@@ -172,11 +176,19 @@ impl Bsc {
         self.expander.as_ref()
     }
 
+    /// A HAT's ID EEPROM on this bus.
+    pub fn attach_eeprom(&mut self, eeprom: super::hat::HatEeprom) {
+        self.eeprom = Some(eeprom);
+    }
+
     /// The device that answers the address currently in `A`, if any.
     fn target(&mut self) -> Option<&mut dyn I2cSlave> {
         let addr = (self.addr as u8) & 0x7F;
         if let Some(p) = self.slave.as_mut().filter(|p| p.responds_to(addr)) {
             return Some(p);
+        }
+        if let Some(e) = self.eeprom.as_mut().filter(|e| e.responds_to(addr)) {
+            return Some(e);
         }
         self.expander
             .as_mut()
@@ -245,6 +257,7 @@ impl Bsc {
     fn addressed(&self) -> bool {
         let addr = (self.addr as u8) & 0x7F;
         self.slave.as_ref().is_some_and(|s| s.responds_to(addr))
+            || self.eeprom.as_ref().is_some_and(|e| e.responds_to(addr))
             || self.expander.as_ref().is_some_and(|x| x.responds_to(addr))
     }
 
