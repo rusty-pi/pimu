@@ -21,7 +21,7 @@ use rpi_virt_fw::vpu::length::insn_len_bytes;
 use rpi_virt_fw::vpu::UnimplPolicy;
 
 use crate::mbox::{mbox_property_exchange, MboxTag};
-use crate::otp::OtpFile;
+use crate::otp::{Format, OtpFile};
 use crate::parse_u32;
 
 /// Blue socket A. Root port 1 is the USB2 port feeding the on-board VIA
@@ -50,6 +50,22 @@ USAGE:
     Besides the limits below, a run ends at an instruction the decoder does
     not implement, and once the firmware has printed nothing for a minute of
     model time.
+
+ZERO CONFIG:
+    An option left out takes the file of that name in the working directory,
+    when there is one, so a directory holding these boots with a bare
+    `rpi-virt-fw boot`:
+
+        pieeprom.bin  --eeprom            otp.json      --otp json:<file>
+        sd.img        --sd                otp.bin       --otp binary:<file>
+        usb.img       --usb               bootconf.txt  --bootconf, a line each
+        otg.img       --otg               pubkey.bin    --eeprom-pubkey
+        netboot/      --netboot
+
+    An option that rules another one out keeps its file out too: --emmc leaves
+    sd.img alone, --net leaves netboot/. otp.json and otp.bin together say
+    nothing about which to read, so that asks for an explicit --otp. The run
+    names on stderr what it picked up.
 
 MACHINE:
     --eeprom <pieeprom.bin>
@@ -315,9 +331,122 @@ struct BootOpts {
     otp: Option<OtpFile>,
 }
 
+/// Zero-config (#114): an option left out takes the file of that name in the
+/// working directory, when there is one, so a directory holding `pieeprom.bin`
+/// and `sd.img` boots with a bare `rpi-virt-fw boot`. The names are the ones
+/// the Pi's own tooling gives: `rpi-eeprom-config` writes `bootconf.txt` and
+/// `pubkey.bin`, and the rest name the medium they are.
+///
+/// Only an option the command line is silent about is filled in, and only when
+/// no option that rules it out was given: `--emmc` is the same host as `--sd`,
+/// `--net` the same cable as `--netboot`.
+struct ZeroConfig<'a> {
+    /// Where to look; empty for the working directory, a temporary one under
+    /// test.
+    dir: &'a Path,
+    /// What was picked up, in the order it was, for the line the run prints.
+    found: Vec<String>,
+}
+
+impl<'a> ZeroConfig<'a> {
+    fn new(dir: &'a Path) -> Self {
+        Self {
+            dir,
+            found: Vec::new(),
+        }
+    }
+
+    /// `<dir>/<name>`, when `slot` is empty and the file is there.
+    fn file(&mut self, slot: &mut Option<PathBuf>, name: &str) {
+        self.pick(slot, name, |p| p.is_file())
+    }
+
+    /// The same for a directory, which is what `--netboot` serves.
+    fn dir(&mut self, slot: &mut Option<PathBuf>, name: &str) {
+        self.pick(slot, name, |p| p.is_dir())
+    }
+
+    fn pick(&mut self, slot: &mut Option<PathBuf>, name: &str, there: fn(&Path) -> bool) {
+        if slot.is_some() {
+            return;
+        }
+        let path = self.dir.join(name);
+        if there(&path) {
+            self.found.push(name.to_string());
+            *slot = Some(path);
+        }
+    }
+
+    /// `otp.json` / `otp.bin`: the name carries the format, so the two together
+    /// say nothing about which array to read — that asks for an explicit
+    /// `--otp`.
+    fn otp(&mut self) -> Result<Option<OtpFile>> {
+        let mut file: Option<OtpFile> = None;
+        for (name, format) in [("otp.json", Format::Json), ("otp.bin", Format::Binary)] {
+            let path = self.dir.join(name);
+            if !path.is_file() {
+                continue;
+            }
+            if file.is_some() {
+                bail!(
+                    "otp.json and otp.bin are both here: say which with \
+                     --otp json:<file> or --otp binary:<file>"
+                );
+            }
+            self.found.push(name.to_string());
+            file = Some(OtpFile { format, path });
+        }
+        Ok(file)
+    }
+
+    /// `bootconf.txt`: every line of it, as `--bootconf` gives one. Blank lines
+    /// and `#` comments go; a `[section]` header stays, since the file the
+    /// lines are appended to has those too.
+    fn bootconf(&mut self) -> Result<Vec<String>> {
+        let name = "bootconf.txt";
+        let path = self.dir.join(name);
+        if !path.is_file() {
+            return Ok(Vec::new());
+        }
+        let text = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading {}", path.display()))?;
+        let mut lines = Vec::new();
+        for (n, line) in text.lines().enumerate() {
+            let line = line.split('#').next().unwrap_or("").trim();
+            if line.is_empty() {
+                continue;
+            }
+            let section = line.starts_with('[') && line.ends_with(']');
+            if !section && !line.contains('=') {
+                bail!(
+                    "{}:{}: expected KEY=VALUE or [section], got '{line}'",
+                    path.display(),
+                    n + 1
+                );
+            }
+            lines.push(line.to_string());
+        }
+        if !lines.is_empty() {
+            self.found.push(name.to_string());
+        }
+        Ok(lines)
+    }
+
+    /// Name what was picked up: those options are not on the command line, so
+    /// nothing else says what the run booted from. On stderr, to leave the
+    /// serial console on stdout alone.
+    fn announce(&self) {
+        if !self.found.is_empty() {
+            eprintln!("zero-config: {}", self.found.join(" "));
+        }
+    }
+}
+
 impl BootOpts {
-    /// The options, or `None` for `-h` / `--help`.
-    fn parse(args: &[String]) -> Result<Option<Self>> {
+    /// The options, or `None` for `-h` / `--help`. `dir` is where zero-config
+    /// looks for the files an option leaves out (see [`ZeroConfig`]): empty for
+    /// the working directory.
+    fn parse(args: &[String], dir: &Path) -> Result<Option<Self>> {
         let mut path: Option<PathBuf> = None;
         let mut entry: Option<u32> = None;
         let mut usb_mb: Option<u64> = None;
@@ -557,6 +686,31 @@ impl BootOpts {
                 s => bail!("unexpected argument '{s}' (try boot --help)"),
             }
         }
+        // Zero-config (#114): whatever the command line left out, and the
+        // working directory has under the name that option's medium goes by.
+        let mut zero = ZeroConfig::new(dir);
+        if path.is_none() {
+            zero.file(&mut path, "pieeprom.bin");
+            // Found, it is an EEPROM image: nothing else is called that.
+            eeprom |= path.is_some();
+        }
+        if emmc_image.is_none() {
+            zero.file(&mut sd_image, "sd.img");
+        }
+        zero.file(&mut usb_image, "usb.img");
+        zero.file(&mut otg_image, "otg.img");
+        if host_net.is_none() {
+            zero.dir(&mut netboot_root, "netboot");
+        }
+        if otp.is_none() {
+            otp = zero.otp()?;
+        }
+        if bootconf.is_empty() {
+            bootconf = zero.bootconf()?;
+        }
+        zero.file(&mut eeprom_pubkey, "pubkey.bin");
+        zero.announce();
+
         let path = path.context("boot: missing <file> (try boot --help)")?;
         if netboot_root.is_some() && host_net.is_some() {
             bail!("--netboot and --net both plug in the Ethernet cable; give one");
@@ -632,7 +786,7 @@ struct Booted {
 }
 
 pub fn cmd_boot(args: &[String]) -> Result<ExitCode> {
-    let Some(opts) = BootOpts::parse(args)? else {
+    let Some(opts) = BootOpts::parse(args, Path::new(""))? else {
         print!("{HELP}");
         return Ok(ExitCode::SUCCESS);
     };
@@ -2099,14 +2253,134 @@ mod tests {
 
     #[test]
     fn help_wherever_an_option_can_go() {
-        assert!(BootOpts::parse(&args(&["--help"])).unwrap().is_none());
-        assert!(BootOpts::parse(&args(&["--eeprom", "x.bin", "-h"]))
+        assert!(BootOpts::parse(&args(&["--help"]), Path::new(""))
             .unwrap()
             .is_none());
+        assert!(
+            BootOpts::parse(&args(&["--eeprom", "x.bin", "-h"]), Path::new(""))
+                .unwrap()
+                .is_none()
+        );
         // A value is not an option.
-        assert!(BootOpts::parse(&args(&["x.elf", "--until", "--help"]))
+        assert!(
+            BootOpts::parse(&args(&["x.elf", "--until", "--help"]), Path::new(""))
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    /// A directory with the zero-config files in it, named after the test so
+    /// two of them never share one.
+    fn zero_dir(what: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("rvf-zero-{what}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn put(dir: &Path, name: &str, body: &str) {
+        std::fs::write(dir.join(name), body).unwrap();
+    }
+
+    #[test]
+    fn zero_config_takes_the_files_the_command_line_left_out() {
+        let dir = zero_dir("all");
+        for name in ["pieeprom.bin", "sd.img", "usb.img", "otg.img", "pubkey.bin"] {
+            put(&dir, name, "");
+        }
+        put(&dir, "otp.json", "{}");
+        put(
+            &dir,
+            "bootconf.txt",
+            "# a comment\n\n[all]\nBOOT_ORDER=0xf41  # trailing\n",
+        );
+        std::fs::create_dir_all(dir.join("netboot")).unwrap();
+
+        let o = BootOpts::parse(&args(&[]), &dir).unwrap().unwrap();
+        assert_eq!(o.path, dir.join("pieeprom.bin"));
+        assert!(o.eeprom, "pieeprom.bin is an EEPROM image");
+        assert_eq!(o.sd_image, Some(dir.join("sd.img")));
+        assert_eq!(o.usb_image, Some(dir.join("usb.img")));
+        assert_eq!(o.otg_image, Some(dir.join("otg.img")));
+        assert_eq!(o.netboot_root, Some(dir.join("netboot")));
+        assert_eq!(o.eeprom_pubkey, Some(dir.join("pubkey.bin")));
+        assert_eq!(
+            o.otp,
+            Some(OtpFile {
+                format: Format::Json,
+                path: dir.join("otp.json"),
+            })
+        );
+        assert_eq!(o.bootconf, vec!["[all]", "BOOT_ORDER=0xf41"]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_command_line_wins_over_the_files_beside_it() {
+        let dir = zero_dir("given");
+        for name in ["pieeprom.bin", "sd.img", "otp.bin"] {
+            put(&dir, name, "");
+        }
+        put(&dir, "bootconf.txt", "HTTP_HOST=files\n");
+
+        let o = BootOpts::parse(
+            &args(&[
+                "given.elf",
+                "--sd",
+                "given.img",
+                "--otp",
+                "json:given.json",
+                "--bootconf",
+                "HTTP_HOST=given",
+            ]),
+            &dir,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(o.path, PathBuf::from("given.elf"));
+        assert!(!o.eeprom, "an ELF given by name is not an EEPROM boot");
+        assert_eq!(o.sd_image, Some(PathBuf::from("given.img")));
+        assert_eq!(o.otp.unwrap().path, PathBuf::from("given.json"));
+        assert_eq!(o.bootconf, vec!["HTTP_HOST=given"]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The two mutually exclusive pairs: filling one in from the directory
+    /// would make a command line that `parse` then refuses.
+    #[test]
+    fn an_option_keeps_the_one_it_rules_out_from_being_picked_up() {
+        let dir = zero_dir("exclusive");
+        put(&dir, "sd.img", "");
+        std::fs::create_dir_all(dir.join("netboot")).unwrap();
+
+        let o = BootOpts::parse(&args(&["x.elf", "--emmc", "e.img", "--net", "passt"]), &dir)
             .unwrap()
-            .is_some());
+            .unwrap();
+        assert_eq!(o.sd_image, None);
+        assert_eq!(o.netboot_root, None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn both_otp_formats_at_once_asks_for_an_explicit_otp() {
+        let dir = zero_dir("otp");
+        put(&dir, "otp.json", "{}");
+        put(&dir, "otp.bin", "");
+        let Err(e) = BootOpts::parse(&args(&["x.elf"]), &dir) else {
+            panic!("two OTP files are ambiguous")
+        };
+        assert!(e.to_string().contains("--otp"), "{e:#}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_empty_directory_leaves_the_missing_file_an_error() {
+        let dir = zero_dir("empty");
+        let Err(e) = BootOpts::parse(&args(&[]), &dir) else {
+            panic!("nothing to boot, and nothing beside it")
+        };
+        assert!(e.to_string().contains("missing <file>"), "{e:#}");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// The options `boot --help` lists: the lines that start with one, such as

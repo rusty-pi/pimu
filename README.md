@@ -134,6 +134,12 @@ The ARM is always modelled (#52): the boot goes wherever the card's
 whether the boot got where it was meant to (`result: ok — the firmware started
 the ARM`), with exit status 1 when it did not. `-v` adds the full run report.
 
+In a directory that holds the files themselves, every option naming one can be
+left out: `pieeprom.bin` is `--eeprom`, and so are `sd.img`, `usb.img`,
+`otg.img`, `netboot/`, `otp.json` or `otp.bin`, `bootconf.txt` (a `--bootconf`
+line each) and `pubkey.bin` (#114). `rpi-virt-fw boot` on its own then boots
+from what is there, and names on stderr what it picked up.
+
 `make-sd.sh` needs `sfdisk`, `mtools` and `e2fsprogs`; no root or loop devices.
 `--usb <img>` boots the same image as a USB stick instead, `--otg <img>` as a
 stick in the USB-C socket (`BOOT_ORDER` 0x5, and `OTG=1 scripts/make-sd.sh` for

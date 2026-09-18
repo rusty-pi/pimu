@@ -30,7 +30,12 @@ COMMANDS:
     run       Run one scenario and check it against its golden transcript.
     run-all   Run every *.toml scenario in <dir> (default: testdata/scenarios).
     boot      Boot the machine from an EEPROM image (--eeprom), as a Pi 4 does,
-              or run a VPU ELF. `rpi-virt-fw boot --help` lists its options.
+              or run a VPU ELF. An option left out takes the file of that name
+              in the working directory when there is one — `pieeprom.bin`,
+              `sd.img`, `usb.img`, `otg.img`, `netboot/`, `otp.json`/`otp.bin`,
+              `bootconf.txt`, `pubkey.bin` — so a directory holding those boots
+              with a bare `rpi-virt-fw boot`.
+              `rpi-virt-fw boot --help` lists its options.
     boot-check
               Run the firmware boot a boot scenario describes and check it:
               the golden console transcript plus every named milestone. The
