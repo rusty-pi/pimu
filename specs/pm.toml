@@ -422,6 +422,17 @@ ref        = "bootcode `0x8000AB8A` / `0x8000AB8E`, and bootmain again at `0x000
 confidence = "high"
 
 [[register]]
+name   = "REG_FC"
+offset = 0xFC
+access = "r"
+notes  = "Read twice by each pass of start4's `PROC` sequence, once before it clears the low bits of `PROC` and once after it has restored `PLLB_ARM`, and never written. Reads 0 in the model, and nothing acts on the value. Meaning unknown; Linux names no register here."
+
+[[register.source]]
+kind       = "trace"
+ref        = "start4 `0x3EC82008` and `0x3EC8211C`, twice each over a boot, reading `0x00000000`; the `PROC` routine is `0x3EC81FC0`"
+confidence = "high"
+
+[[register]]
 name   = "IMAGE"
 offset = 0x108
 access = "rw"

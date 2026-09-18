@@ -27,6 +27,7 @@ Sits in channel 11's slot of the legacy controller and is decoded ahead of it.
 | `0x000` | [`CS`](#cs) | rw | 32 | 1, best high |
 | `0x004` | [`CB`](#cb) | rw | 32 | 1, best high |
 | `0x00C` | [`DEBUG`](#debug) | w1c | 32 | 1, best high |
+| `0x028` | [`REG_28`](#reg_28) | rw | 32 | 1, best high |
 
 ## `CS`
 
@@ -85,3 +86,13 @@ Error latch; the bootloader writes `0x400` to clear it before each transfer.
 Sources:
 
 - decompile (high): bootloader submit path writes `DEBUG = 0x400` first
+
+## `REG_28`
+
+Offset `0x028` · access `rw` · 32 bits
+
+Past the channel's control-block registers. The bootloader writes 0 here once, as it puts the channel away after its last transfer, and never reads it. Meaning unknown.
+
+Sources:
+
+- trace (high): bootmain `0x0008B668`: `0x00000000` to `0x7E007B28`, the only access to the word in a boot
