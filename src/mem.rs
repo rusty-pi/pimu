@@ -86,6 +86,7 @@ impl Ram {
 
     pub fn read_slice(&self, addr: u32, len: usize) -> BusResult<&[u8]> {
         let off = self.offset(addr, len)?;
+        self.note_read(off, len);
         Ok(&self.data[off..off + len])
     }
 
@@ -132,6 +133,9 @@ impl Ram {
     /// bits, which is all [`BusError`] has room for.
     #[inline]
     pub fn load_at(&self, off: u64, width: Width) -> BusResult<u32> {
+        if let Ok(at) = usize::try_from(off) {
+            self.note_read(at, width.bytes() as usize);
+        }
         let v = match width {
             Width::Byte => self.bytes_at::<1>(off).map(|b| u32::from(b[0])),
             Width::Half => self
@@ -202,6 +206,9 @@ impl Ram {
     // rather than a copy of a run-time length.
     #[inline]
     pub fn load(&self, addr: u32, width: Width) -> BusResult<u32> {
+        if let Some(off) = addr.checked_sub(self.base) {
+            self.note_read(off as usize, width.bytes() as usize);
+        }
         let v = match width {
             Width::Byte => self.bytes::<1>(addr).map(|b| u32::from(b[0])),
             Width::Half => self
@@ -219,10 +226,34 @@ impl Ram {
     /// A write that did not come from the VPU leaves the caches out of date.
     #[inline]
     fn note_write(&mut self, off: usize, len: usize) {
-        if self.coherency.is_on() && self.coherency.master() != crate::coherency::Master::Vpu {
-            self.coherency
-                .wrote_by_other(self.base.wrapping_add(off as u32), len as u32);
+        if !self.coherency.is_on() {
+            return;
         }
+        let at = self.base.wrapping_add(off as u32);
+        match self.coherency.writer() {
+            // The VPU's own writes are the bus's to mark: it knows which
+            // alias they came through.
+            crate::coherency::Master::Vpu => {}
+            // Through the caches, which is where a cached read lands too.
+            crate::coherency::Master::Vc4Dma(_) => self.coherency.wrote_through_l2(at, len as u32),
+            _ => self.coherency.wrote_by_other(at, len as u32),
+        }
+    }
+
+    /// A read that did not come from the VPU sees memory, not the cache: a
+    /// line the VPU wrote through a cached alias and has not flushed reads
+    /// back as whatever was there before. The VPU's own reads are left to the
+    /// bus, which knows which alias they came through.
+    #[inline]
+    fn note_read(&self, off: usize, len: usize) {
+        if !self.coherency.is_on() || self.coherency.reader().is_coherent() {
+            return;
+        }
+        self.coherency.read_by(
+            self.base.wrapping_add(off as u32),
+            len as u32,
+            self.coherency.reader(),
+        );
     }
 
     #[inline]

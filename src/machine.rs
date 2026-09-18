@@ -647,18 +647,48 @@ impl Machine {
     }
 
     /// Run `f` with the tracker told that this peripheral, not the VPU, is
-    /// the one writing memory: its writes go behind the caches.
+    /// the one using memory: it reads and writes behind the caches. Nests —
+    /// a DMA engine's own doorbell can set another one going.
     #[inline]
     fn with_dma_master(&mut self, who: &'static str, f: impl FnOnce(&mut Machine)) {
         if !self.ram.coherency.is_on() {
             f(self);
             return;
         }
-        self.ram
-            .coherency
-            .set_master(crate::coherency::Master::Dma(who));
+        self.with_master(crate::coherency::Master::Dma(who), f);
+    }
+
+    /// The same for an engine on the VPU's side of the L2.
+    #[inline]
+    fn with_vc4_dma_master(&mut self, who: &'static str, f: impl FnOnce(&mut Machine)) {
+        self.with_master(crate::coherency::Master::Vc4Dma(who), f);
+    }
+
+    #[inline]
+    fn with_master(&mut self, who: crate::coherency::Master, f: impl FnOnce(&mut Machine)) {
+        if !self.ram.coherency.is_on() {
+            f(self);
+            return;
+        }
+        let was = self.ram.coherency.masters();
+        self.ram.coherency.set_master(who);
         f(self);
-        self.ram.coherency.set_master(crate::coherency::Master::Vpu);
+        self.ram.coherency.set_masters(was.0, was.1);
+    }
+
+    /// What a legacy-DMA bus address means for the caches. That engine sits
+    /// behind the L2, which is where a cached VPU access lands as well, so a
+    /// transfer only goes past the caches when its address is in the alias
+    /// that bypasses them (`0xC000_0000`). Stock's `dma_memcpy` copies
+    /// megabytes through the `0x0` alias and reads them straight back cached,
+    /// which is only sound because of this.
+    #[inline]
+    fn dma_master(addr: u32, who: &'static str) -> crate::coherency::Master {
+        if addr >> 30 == 3 {
+            crate::coherency::Master::Dma(who)
+        } else {
+            crate::coherency::Master::Vc4Dma(who)
+        }
     }
 
     /// Fold the four VC4 cache aliases (`0x0`, `0x4000_0000`, `0x8000_0000`,
@@ -860,11 +890,15 @@ impl Machine {
         // Shifting back by 5 restores the alias bits for the `| 0x20000000`
         // form (0x25F7B6A5 << 5 == 0xBEF6D4A0).
         let cb_addr = if raw >> 30 != 0 { raw } else { raw << 5 };
+        let who = if vpu { "the VPU DMA" } else { "the legacy DMA" };
+        // The control block comes through the same alias its address is in.
+        let fetch = Machine::dma_master(cb_addr, who);
         let mut cb = cb_addr & 0x3FFF_FFFF;
         for _ in 0..4096 {
             if cb == 0 || !self.ram.contains(cb) {
                 break;
             }
+            self.ram.coherency.set_master(fetch);
             let mut w = [0u32; 7];
             for (i, slot) in w.iter_mut().enumerate() {
                 *slot = self.ram.load(cb + (i as u32) * 4, Width::Word).unwrap_or(0);
@@ -898,6 +932,12 @@ impl Machine {
                     d.ti, d.src, d.dest, d.len, d.stride, d.next
                 );
             }
+            // Each end of the copy is on whichever side of the L2 its own bus
+            // address says.
+            self.ram.coherency.set_masters(
+                Machine::dma_master(d.src, who),
+                Machine::dma_master(d.dest, who),
+            );
             let (rows, xlen) = d.rows();
             let (src_stride, dest_stride) = d.strides();
             let mut src = d.src & 0x3FFF_FFFF;
@@ -923,6 +963,7 @@ impl Machine {
             }
             cb = d.next & 0x3FFF_FFFF;
         }
+        self.ram.coherency.set_master(crate::coherency::Master::Vpu);
         if vpu {
             self.dma_vpu.finish(ch);
         } else {
@@ -1180,7 +1221,11 @@ impl Machine {
                 });
             }
             if self.dma4.take_start() {
-                self.run_dma4();
+                // The 40-bit engine takes CPU-physical addresses, with no
+                // alias bits to say where its accesses land. It is behind the
+                // L2: stock writes its control block through `0x8000_0000`
+                // and starts the channel without flushing.
+                self.with_vc4_dma_master("the 40-bit DMA", |m| m.run_dma4());
             }
             if let Some(ch) = self.dma_legacy.take_start() {
                 self.run_dma_legacy(ch, false);
