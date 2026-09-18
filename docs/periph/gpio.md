@@ -7,7 +7,7 @@
 - Size: `0x1000`
 - Interrupts: `BANK0` GIC id 145 (`GIC_SPI 113`) · `BANK1` GIC id 146 (`GIC_SPI 114`)
 
-Pins 0..57, in two banks of 32. Every register but `GPFSEL` is a pair (`0` for pins 0..31, `1` for 32..57), and the model keeps a function, an output latch and a termination per pin. A `GPLEV` bit is the output latch for a pin whose function is `output`, and the termination otherwise — pull-up reads 1, pull-down and no pulling read 0 — because nothing outside the model drives a pin. So no edge is ever detected: the `GPEDS` bits stay clear and the block's interrupt lines stay low, whatever the six detect-enable registers say. What each pin is wired to is the board's, not the chip's: `src/periph/gpio.rs` carries that map for the 4B, the CM4 and the Pi 400, and the `gpio` log channel names the pin it reports.
+Pins 0..57, in two banks of 32. Every register but `GPFSEL` is a pair (`0` for pins 0..31, `1` for 32..57), and the model keeps a function, an output latch and a termination per pin. A `GPLEV` bit is the output latch for a pin whose function is `output`, and the termination otherwise — pull-up reads 1, pull-down and no pulling read 0 — because nothing outside the model drives a pin. A pin the firmware drives itself does move, though, so the detect enables work: an edge or a level latches `GPEDS` and raises the bank's interrupt line. What each pin is wired to is the board's, not the chip's: `src/periph/gpio.rs` carries that map for the 4B, the CM4 and the Pi 400, and the `gpio` log channel names the pin it reports. Which pins are muxed also decides what two masters reach: SPI0 the boot flash (GPIO 40..43 on ALT4, `specs/spi0.toml`) and I²C 0 the 40-pin header (GPIO 0/1 on ALT0, `specs/bsc.toml`).
 
 Sources:
 
@@ -19,7 +19,7 @@ Sources:
 
 Interrupts (`BANK0` GIC id 145 (`GIC_SPI 113`) · `BANK1` GIC id 146 (`GIC_SPI 114`)):
 
-Nothing in the model drives a pin from outside, so no edge is latched and neither line is ever raised; they are here because the device tree names them.
+One line a bank, up while any pin of that bank has its `GPEDS` bit latched. Nothing outside the model drives a pin, so the only edges are the ones the firmware makes itself — driving an output, or moving the termination of an input — and no firmware in a boot enables a detector, so the lines have yet to go up in a run.
 
 - linux (high): `gpio@7e200000`, `interrupts = <GIC_SPI 0x71 IRQ_TYPE_LEVEL_HIGH>, <GIC_SPI 0x72 IRQ_TYPE_LEVEL_HIGH>` (`firmware/bcm2711-rpi-4-b.dtb`)
 
@@ -92,7 +92,7 @@ Sources:
 
 Offset `0x040`, 2 elements 0x4 apart · access `w1c` · 32 bits · reset `0x0`
 
-Edge / level detect status, one bit a pin, cleared by writing 1. No pin ever changes on its own here, so these stay 0.
+Edge / level detect status, one bit a pin, cleared by writing 1, and the two interrupt lines follow it. A level detect re-latches its bit for as long as the pin sits at that level, so clearing it there only holds until the next access. A detector watches the pad, so a pin the firmware drives itself is detected like any other — that part is the model's reading of the block, not something a boot has shown.
 
 Sources:
 
@@ -102,7 +102,7 @@ Sources:
 
 Offset `0x04C`, 2 elements 0x4 apart · access `rw` · 32 bits · reset `0x0`
 
-Rising-edge detect enable. Kept as state; nothing acts on it.
+Rising-edge detect enable.
 
 Sources:
 
@@ -183,7 +183,7 @@ Sources:
 
 Offset `0x0D0` · access `rw` · 32 bits · reset `0x0`
 
-Undocumented, and the firmware writes it on every boot. Bit 1 routes the SD card slot: set for the legacy EMMC controller at `0x7E300000`, clear for EMMC2 — which is what the model acts on. Bit 0 goes up right after start4 gives GPIO 46..57 their functions, and a running board reads `1`, so it looks like something about the RGMII pad bank; that part is a guess and the model only stores it.
+Undocumented, and the firmware writes it on every boot. Bit 1 routes the SD card slot: set for the legacy EMMC controller at `0x7E300000`, clear for EMMC2 — which is what the model acts on. Bit 0 is the first thing start4's Ethernet pin setup does, before it puts GPIO 28/29 on ALT5 (the RGMII MDIO bus) and terminates 46..57, and a running board reads `1`: it looks like the RGMII pad bank, but nothing proves that, and the model only stores the bit.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -191,7 +191,7 @@ Undocumented, and the firmware writes it on every boot. Bit 1 routes the SD card
 
 Sources:
 
-- decompile (medium): start4db: `_DAT_7e2000d0 = _DAT_7e2000d0 | 1` after the loop over pins `0x2e`..`0x39`, `_DAT_7e2000d0 & 0xfffffffd | 1` on the other branch, and `& 0xfffffffd` before EMMC2 is used
+- decompile (medium): start4db `FUN_0ed0fd54`, whose neighbours assert out of `tools/bootrom/rpiboot/genet.c`: `_DAT_7e2000d0 | 1` first, then GPIO 28/29 to function 2 (ALT5), 28 pulled up and 29 down (the driver's pull enum is the BCM2835 one, 1 down / 2 up), then 46..57 pulled down. Elsewhere `_DAT_7e2000d0 & 0xfffffffd | 1`, and `& 0xfffffffd` before EMMC2 is used
 - trace (high): pieeprom-2020-09-03 writes `0x2` right before it drives the legacy EMMC and never touches EMMC2 (#66); the 2026 bootloader never writes the register; start4 sets bit 0 at `0x3ED4A1CE` and boots from EMMC2
 - measured (high): `/dev/gpiomem` on a Raspberry Pi 4B d03115 booted from an SD card: `0xd0` reads `0x00000001`
 
@@ -203,11 +203,11 @@ Sources:
 
 Offset `0x0D4` · access `rw` · 32 bits · reset `0x0`
 
-Undocumented. Only the EEPROM bootloader writes it, `0xc000` or `0`, next to two words at `0x7C40_4380` and `0x7C40_43A8` — some kind of speed change. A running board reads 0, and the model only stores the word.
+Undocumented. Only the EEPROM bootloader writes it, and only from its DRAM bring-up: `0xc000` in one case and `0` in the other, each with a pair of words at `0x7C40_4380` / `0x7C40_43A8`. A running board reads 0, and the model only stores the word.
 
 Sources:
 
-- decompile (medium): bootloader `FUN_00006394`: one branch writes `0x7f` / `0` / `0` to `0x7C404380`, `0x7C4043A8` and `PAD_CFG`, the other `0x10` / `0x1e000000` / `0xc000`
+- decompile (medium): bootloader `FUN_00006394`: one branch writes `0x7f` / `0` / `0` to `0x7C404380`, `0x7C4043A8` and `PAD_CFG`, the other `0x10` / `0x1e000000` / `0xc000`. Its callers are the DRAM path — `FUN_000064ec`, which trains through `0x7DC30000` and writes `SDC` at `0x7E001000`, calls it with 0 when it is done and 1 while it runs
 - measured (high): `/dev/gpiomem` on a Raspberry Pi 4B d03115: `0xd4` reads 0
 
 ## `PUP_PDN`

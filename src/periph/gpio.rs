@@ -34,14 +34,26 @@
 //! it is harmless here for the same reason: the latch keeps the bits, and
 //! [`Gpio::level`] ignores them for a pin that is not an output.
 //!
-//! ## Pin levels
+//! ## Pin levels, and what watches them
 //!
 //! Nothing outside the model drives a pin. A `GPLEV` bit is therefore the
 //! output latch for a pin whose function is `output`, and the pin's
-//! termination otherwise: pull-up reads 1, pull-down and no pulling read 0. No
-//! pin ever changes on its own, so no edge is ever detected: `GPEDS` stays
-//! clear whatever the six detect-enable registers say, and the block's two
-//! interrupt lines (`GIC_SPI` 113 and 114) stay low.
+//! termination otherwise: pull-up reads 1, pull-down and no pulling read 0.
+//!
+//! Pins do still move — the firmware drives the activity LED, and a write to
+//! `PUP_PDN` moves what holds an input — so the six detect enables work:
+//! an edge or a level latches `GPEDS`, and a bank with a latched bit raises
+//! its interrupt line (`GIC_SPI` 113 for pins 0..31, 114 for 32..57, through
+//! [`Gpio::irq_lines`]). No firmware in a boot enables a detector, so this
+//! has yet to fire in a run.
+//!
+//! ## What the pins carry
+//!
+//! Two masters reach what they reach only while their pins are muxed to them,
+//! which [`crate::machine::Machine`] follows: SPI0 the boot flash while GPIO
+//! 40..43 are on ALT4 ([`super::spi0`]), and I²C 0 a HAT's ID EEPROM while
+//! GPIO 0/1 are on ALT0 ([`super::hat`]) — the same master runs on GPIO 44/45
+//! for the camera and display probes, where no HAT is.
 //!
 //! ## Ground truth
 //!
@@ -99,8 +111,15 @@ pub const PINS: usize = 58;
 /// Registers with one bit a pin come in two banks.
 const BANKS: usize = 2;
 
-/// The six edge / level detect enables, in the order they sit in the window.
+/// The six edge / level detect enables, in the order they sit in the window,
+/// and their places in it.
 const DETECTS: [u32; 6] = [GPREN, GPFEN, GPHEN, GPLEN, GPAREN, GPAFEN];
+const REN: usize = 0;
+const FEN: usize = 1;
+const HEN: usize = 2;
+const LEN: usize = 3;
+const AREN: usize = 4;
+const AFEN: usize = 5;
 
 /// What a pin is doing, as its three `GPFSEL` bits say.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -372,6 +391,46 @@ impl Gpio {
         v
     }
 
+    /// The level of every pin, a word a bank.
+    fn levels_all(&self) -> [u32; BANKS] {
+        [self.levels(0), self.levels(1)]
+    }
+
+    /// The bits of `bank` that are a pin: 32 in bank 0, 26 in bank 1.
+    fn pins_of(bank: usize) -> u32 {
+        let n = PINS.min((bank + 1) * 32) - bank * 32;
+        u32::MAX >> (32 - n)
+    }
+
+    /// What the six detect enables make of the levels moving from `before` to
+    /// where they are now: an edge latches `GPEDS` for the pin whose rising /
+    /// falling enable is set, and a level detect latches it for as long as the
+    /// pin sits at that level — so a `GPEDS` write clears a level detect's bit
+    /// only until the next access.
+    ///
+    /// A detector watches the pad, so a pin the firmware drives itself is
+    /// detected the same as one something outside drives. Nothing in a boot
+    /// enables one, so the model has never seen it happen on hardware.
+    fn detect_edges(&mut self, before: [u32; BANKS]) {
+        let now = self.levels_all();
+        for bank in 0..BANKS {
+            let (rose, fell) = (now[bank] & !before[bank], before[bank] & !now[bank]);
+            let d = &self.detect;
+            let mut eds = self.eds[bank];
+            eds |= rose & (d[REN][bank] | d[AREN][bank]);
+            eds |= fell & (d[FEN][bank] | d[AFEN][bank]);
+            eds |= now[bank] & d[HEN][bank];
+            eds |= !now[bank] & d[LEN][bank];
+            self.eds[bank] = eds & Gpio::pins_of(bank);
+        }
+    }
+
+    /// The block's two interrupt lines, one a bank: up while any pin of that
+    /// bank has its `GPEDS` bit latched.
+    pub fn irq_lines(&self) -> [bool; BANKS] {
+        [self.eds[0] != 0, self.eds[1] != 0]
+    }
+
     /// A word in the window as one of `count` elements `4` apart from `base`,
     /// if it is one.
     fn element(off: u32, base: u32, count: u32) -> Option<usize> {
@@ -501,61 +560,70 @@ impl MmioDevice for Gpio {
     }
 
     fn write(&mut self, offset: u32, _width: Width, value: u32) -> BusResult<()> {
-        let off = offset & !3;
+        // Every register here can move a pin's level or what watches it, so
+        // the detectors run over the whole block after the write.
+        let before = self.levels_all();
+        self.store(offset & !3, value);
+        self.detect_edges(before);
+        Ok(())
+    }
+}
+
+impl Gpio {
+    /// One word into the block.
+    fn store(&mut self, off: u32, value: u32) {
         if let Some(reg) = Gpio::element(off, GPFSEL, GPFSEL_COUNT) {
             let was = std::mem::replace(&mut self.fsel[reg], value);
             if was != value {
                 self.log_fsel(reg, was, value);
             }
-            return Ok(());
+            return;
         }
         if let Some(bank) = Gpio::bank(off, GPSET) {
             self.log_drive(bank, value & !self.out[bank], true);
             self.out[bank] |= value;
-            return Ok(());
+            return;
         }
         if let Some(bank) = Gpio::bank(off, GPCLR) {
             self.log_drive(bank, value & self.out[bank], false);
             self.out[bank] &= !value;
-            return Ok(());
+            return;
         }
         if let Some(bank) = Gpio::bank(off, GPEDS) {
             self.eds[bank] &= !value;
-            return Ok(());
+            return;
         }
         for (i, &base) in DETECTS.iter().enumerate() {
             if let Some(bank) = Gpio::bank(off, base) {
                 self.detect[i][bank] = value;
-                return Ok(());
+                return;
             }
         }
         // The BCM2835 pull registers: the BCM2711 pads do not listen to them,
         // so the words are kept and no termination moves.
         if off == GPPUD {
             self.pud = value;
-            return Ok(());
+            return;
         }
         if let Some(bank) = Gpio::bank(off, GPPUDCLK) {
             self.pudclk[bank] = value;
-            return Ok(());
+            return;
         }
         if off == PIN_MUX {
             self.pin_mux = value;
-            return Ok(());
+            return;
         }
         if off == PAD_CFG {
             self.pad_cfg = value;
-            return Ok(());
+            return;
         }
         if let Some(reg) = Gpio::element(off, PUP_PDN, PUP_PDN_COUNT) {
             let was = std::mem::replace(&mut self.pup_pdn[reg], value);
             if was != value {
                 self.log_pull(reg, was, value);
             }
-            return Ok(());
         }
         // GPLEV, and everything the block does not decode: dropped.
-        Ok(())
     }
 }
 
@@ -671,21 +739,85 @@ mod tests {
         assert_eq!(rd(&mut g, GPPUD), 2);
     }
 
-    /// Nothing drives a pin from outside, so no edge is ever latched — and
-    /// `GPEDS` is write-1-to-clear, not storage.
+    /// An edge detector latches `GPEDS` and raises its bank's line; `GPEDS`
+    /// is write-1-to-clear, not storage. The pin here is the activity LED,
+    /// which the firmware drives itself.
     #[test]
-    fn no_edge_is_ever_detected() {
+    fn an_edge_latches_gpeds_and_raises_the_line() {
         let mut g = gpio();
-        wr(&mut g, GPREN, 0xFFFF_FFFF);
-        wr(&mut g, GPFEN, 0xFFFF_FFFF);
-        wr(&mut g, GPFSEL + 16, 0x40);
+        wr(&mut g, GPFSEL + 16, 0x40); // GPIO 42 an output
         wr(&mut g, GPSET + 4, 0x400);
         wr(&mut g, GPCLR + 4, 0x400);
-        assert_eq!(rd(&mut g, GPEDS), 0);
+        assert_eq!(rd(&mut g, GPEDS + 4), 0, "no detector is enabled");
+        assert_eq!(g.irq_lines(), [false, false]);
+
+        wr(&mut g, GPREN + 4, 0x400);
+        wr(&mut g, GPSET + 4, 0x400);
+        assert_eq!(rd(&mut g, GPEDS + 4), 0x400);
+        assert_eq!(g.irq_lines(), [false, true]);
+
+        wr(&mut g, GPEDS + 4, 0x400);
         assert_eq!(rd(&mut g, GPEDS + 4), 0);
-        assert_eq!(rd(&mut g, GPREN), 0xFFFF_FFFF);
-        wr(&mut g, GPEDS, 0xFFFF_FFFF);
-        assert_eq!(rd(&mut g, GPEDS), 0);
+        assert_eq!(g.irq_lines(), [false, false]);
+
+        // The falling edge needs its own enable.
+        wr(&mut g, GPCLR + 4, 0x400);
+        assert_eq!(rd(&mut g, GPEDS + 4), 0);
+        wr(&mut g, GPFEN + 4, 0x400);
+        wr(&mut g, GPSET + 4, 0x400);
+        wr(&mut g, GPEDS + 4, 0x400);
+        wr(&mut g, GPCLR + 4, 0x400);
+        assert_eq!(rd(&mut g, GPEDS + 4), 0x400);
+    }
+
+    /// The asynchronous enables detect the same edges here: the model has no
+    /// sampling clock to miss a pulse between.
+    #[test]
+    fn the_asynchronous_enables_detect_the_same_edges() {
+        let mut g = gpio();
+        wr(&mut g, GPFSEL + 16, 0x40);
+        wr(&mut g, GPAREN + 4, 0x400);
+        wr(&mut g, GPSET + 4, 0x400);
+        assert_eq!(rd(&mut g, GPEDS + 4), 0x400);
+        wr(&mut g, GPEDS + 4, 0x400);
+        wr(&mut g, GPAFEN + 4, 0x400);
+        wr(&mut g, GPCLR + 4, 0x400);
+        assert_eq!(rd(&mut g, GPEDS + 4), 0x400);
+    }
+
+    /// A level detector holds its bit: clearing it while the pin is still at
+    /// that level latches it again.
+    #[test]
+    fn a_level_detector_latches_again_while_the_level_lasts() {
+        let mut g = gpio();
+        wr(&mut g, GPFSEL + 16, 0x40);
+        wr(&mut g, GPHEN + 4, 0x400);
+        assert_eq!(rd(&mut g, GPEDS + 4), 0, "the pin is low");
+        wr(&mut g, GPSET + 4, 0x400);
+        assert_eq!(rd(&mut g, GPEDS + 4), 0x400);
+        wr(&mut g, GPEDS + 4, 0x400);
+        assert_eq!(rd(&mut g, GPEDS + 4), 0x400, "still high");
+        wr(&mut g, GPCLR + 4, 0x400);
+        wr(&mut g, GPEDS + 4, 0x400);
+        assert_eq!(rd(&mut g, GPEDS + 4), 0);
+
+        // And a low-level detector on an input that a pull holds down.
+        wr(&mut g, GPLEN, 1 << 4);
+        assert_eq!(rd(&mut g, GPEDS) & (1 << 4), 1 << 4);
+        assert_eq!(g.irq_lines(), [true, false]);
+        wr(&mut g, PUP_PDN, 1 << 8); // GPIO 4 pulled up
+        wr(&mut g, GPEDS, 1 << 4);
+        assert_eq!(rd(&mut g, GPEDS) & (1 << 4), 0);
+    }
+
+    /// A pin that does not exist is in no `GPEDS` bit, whatever a detector
+    /// enable says about the bits above 57.
+    #[test]
+    fn the_bits_above_pin_57_latch_nothing() {
+        let mut g = gpio();
+        wr(&mut g, GPLEN + 4, 0xFFFF_FFFF);
+        assert_eq!(rd(&mut g, GPEDS + 4), 0x03FF_FFFF);
+        assert_eq!(g.irq_lines(), [false, true]);
     }
 
     /// Bit 1 of the undocumented word routes the card; the rest is storage.

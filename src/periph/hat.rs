@@ -2,7 +2,10 @@
 //!
 //! An AT24C32-class part at 7-bit address `0x50` on I²C0 (`bsc0`, GPIO 0 and 1
 //! on ALT0), which is the bus the firmware gives to the header while it looks
-//! for one. Addresses 0x51..0x53 are what a stacked HAT would answer; only the
+//! for one. Only while: the part answers when those two pins carry the master
+//! and goes unACKed otherwise, since the firmware runs the same master on GPIO
+//! 44/45 for the camera and display, where no HAT is
+//! ([`crate::machine::Machine::route_gpio_pins`]). Addresses 0x51..0x53 are what a stacked HAT would answer; only the
 //! first is modelled.
 //!
 //! The protocol is the usual two-byte-addressed serial EEPROM: a write

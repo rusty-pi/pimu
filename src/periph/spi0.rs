@@ -5,6 +5,12 @@
 //! then reads the miso byte back out of `FIFO`. `CS.TA` stays asserted for the
 //! whole command; deasserting it ends the transaction.
 //!
+//! The master's pads are GPIO 40..43, which carry the flash only on ALT4 — a
+//! 4B has PWM audio on 40/41 and the activity LED on 42 the rest of the time —
+//! so every session moves the four pins there and back, and a transfer made
+//! with them elsewhere clocks its bytes into the air and reads MISO idle-high
+//! ([`crate::machine::Machine::route_gpio_pins`]).
+//!
 //! We model enough of a serial-NOR flash for the bootloader to scan the
 //! `pieeprom.bin` image it was itself loaded from and to apply an EEPROM
 //! self-update: `READ` (0x03) / `FAST_READ` (0x0B) stream image bytes, `RDID`
@@ -60,18 +66,35 @@ pub struct Spi0 {
     /// `true` once anything wrote to `flash` — a signal to the run loop that an
     /// EEPROM self-update landed and a re-run from the new image is due.
     pub dirty: bool,
+    /// Whether GPIO 40..43 are on ALT4, which is what puts the master's pads
+    /// on the flash ([`crate::periph::gpio`]). Clear: the bytes go to pins
+    /// that are somebody else's, and MISO reads idle-high.
+    pins: bool,
     /// Where [`Channel::Spi`] goes.
     pub log: Log,
 }
 
 impl Spi0 {
+    /// A master whose pads are on the flash: a device on its own has nothing
+    /// to tell it otherwise. In a machine the GPIO block does
+    /// ([`Self::set_pins`]).
     pub fn new() -> Spi0 {
-        Spi0::default()
+        Spi0 {
+            pins: true,
+            ..Spi0::default()
+        }
     }
 
     /// Attach the serial-NOR flash contents (the EEPROM image).
     pub fn attach_flash(&mut self, image: Vec<u8>) {
         self.flash = image;
+    }
+
+    /// Say whether GPIO 40..43 carry the master (`ALT4`). The machine follows
+    /// the pin functions and tells the device; a session with the pins
+    /// elsewhere clocks bytes into the air.
+    pub fn set_pins(&mut self, on: bool) {
+        self.pins = on;
     }
 
     /// The current flash contents — reflects any EEPROM self-update writes.
@@ -109,6 +132,12 @@ impl Spi0 {
 
     /// Clock one byte out (`mosi`) and one byte in (`miso`).
     fn shift(&mut self, mosi: u8) {
+        // The pads are not on the flash: nothing hears the byte, and MISO is
+        // whatever holds the pin.
+        if !self.pins {
+            self.rx.push_back(MISO_IDLE);
+            return;
+        }
         let n = self.beat;
         self.beat += 1;
 

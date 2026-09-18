@@ -1099,3 +1099,132 @@ fn hdmi_ddc_reads_an_attached_edid() {
     let v = ddc_wait(&mut m, base1).expect("the transfer must complete");
     assert_ne!(v & DDC_EN_NOACK, 0, "HDMI1 has no monitor");
 }
+
+// ---------------------------------------------------------------------------
+// GPIO: the pins a master's pads are on decide what it reaches (#115).
+// ---------------------------------------------------------------------------
+
+const GPFSEL0: u32 = map::GPIO_BASE;
+const GPFSEL4: u32 = map::GPIO_BASE + 0x10;
+
+/// GPIO 0 and 1 on ALT0 — I²C 0 out to the 40-pin header.
+const HEADER_I2C: u32 = 0b100 | 0b100 << 3;
+/// GPIO 40..43 on ALT4 — SPI0 on the boot flash.
+const FLASH_SPI: u32 = 0b011 | 0b011 << 3 | 0b011 << 6 | 0b011 << 9;
+
+/// Read `len` bytes from `addr` on the I²C master at `base`, and say whether
+/// the address was acknowledged.
+fn i2c_read(m: &mut Machine, base: u32, addr: u8, len: u32) -> Option<Vec<u8>> {
+    m.store32(base + BSC_A, addr as u32).unwrap();
+    m.store32(base + BSC_DLEN, len).unwrap();
+    m.store32(base + BSC_C, C_I2CEN | C_ST | C_READ).unwrap();
+    settle(m);
+    let s = m.load32(base + BSC_S).unwrap();
+    let mut got = Vec::new();
+    for _ in 0..len {
+        got.push(m.load32(base + BSC_FIFO).unwrap() as u8);
+    }
+    m.store32(base + BSC_S, S_DONE | S_ERR).unwrap();
+    (s & S_ERR == 0).then_some(got)
+}
+
+/// A HAT's ID EEPROM is on the header pins, so it answers only while I²C 0 is
+/// muxed there. start4 probes it that way — `GPFSEL0` `0x4`, then `0x24`, then
+/// back to inputs — and runs the same master on GPIO 44/45 for the camera and
+/// display, where no HAT is: a probe made from there must find nothing.
+#[test]
+fn the_hat_eeprom_answers_only_on_the_header_pins() {
+    let mut m = machine();
+    m.bsc0
+        .attach_eeprom(rpi_virt_fw::periph::hat::HatEeprom::new(
+            b"R-Pi\x01\x00\x02\x00".to_vec(),
+        ));
+
+    // Out of reset every pin is an input: the master's pads are elsewhere.
+    assert_eq!(i2c_read(&mut m, map::BSC0_BASE, 0x50, 4), None);
+
+    m.store32(GPFSEL0, HEADER_I2C).unwrap();
+    assert_eq!(
+        i2c_read(&mut m, map::BSC0_BASE, 0x50, 4).as_deref(),
+        Some(&b"R-Pi"[..]),
+        "the header bus reaches the HAT"
+    );
+
+    // And back to inputs, as start4 leaves them after the probe.
+    m.store32(GPFSEL0, 0).unwrap();
+    assert_eq!(i2c_read(&mut m, map::BSC0_BASE, 0x50, 4), None);
+}
+
+/// The PMIC bus is not on the header: its instance is unaffected by the pins.
+#[test]
+fn the_pmic_bus_does_not_care_what_the_pins_do() {
+    let mut m = machine();
+    assert_eq!(pmic_read(&mut m, 0x43, 0x01) >> 5, 0b101);
+    m.store32(GPFSEL0, HEADER_I2C).unwrap();
+    assert_eq!(pmic_read(&mut m, 0x43, 0x01) >> 5, 0b101);
+}
+
+/// GPIO 40..43 are the boot flash on ALT4 and PWM audio plus the activity LED
+/// otherwise, so a flash session only reads the image while the four pins are
+/// on ALT4. Both EEPROM stages and start4 move them there and back around
+/// every session (`specs/spi0.toml`).
+#[test]
+fn spi0_reads_the_flash_only_while_its_pins_are_on_alt4() {
+    const CS_TA: u32 = 1 << 7;
+    let mut m = machine();
+    m.spi0.attach_flash(vec![0xAA; 0x1000]);
+
+    let read_byte = |m: &mut Machine| {
+        let base = map::SPI0_BASE;
+        m.store32(base, CS_TA).unwrap();
+        for byte in [0x03, 0x00, 0x00, 0x00, 0xFF] {
+            m.store32(base + 0x04, byte).unwrap();
+        }
+        for _ in 0..4 {
+            m.load32(base + 0x04).unwrap(); // command + address echoes
+        }
+        let v = m.load32(base + 0x04).unwrap() as u8;
+        m.store32(base, 0).unwrap();
+        v
+    };
+
+    // Pins still inputs: the bytes go nowhere and MISO idles high.
+    assert_eq!(read_byte(&mut m), 0xFF);
+
+    m.store32(GPFSEL4, FLASH_SPI).unwrap();
+    assert_eq!(read_byte(&mut m), 0xAA, "ALT4 puts the pads on the flash");
+
+    // GPIO 42 back to the activity LED (an output) ends the session's pads.
+    m.store32(GPFSEL4, FLASH_SPI & !(0b111 << 6) | 0b001 << 6)
+        .unwrap();
+    assert_eq!(read_byte(&mut m), 0xFF);
+}
+
+/// The block's two interrupt lines follow `GPEDS`, and a detector watches the
+/// pad whatever drives it — here the activity LED the firmware drives itself.
+#[test]
+fn a_gpio_edge_raises_the_banks_line() {
+    const GPSET1: u32 = map::GPIO_BASE + 0x20;
+    const GPCLR1: u32 = map::GPIO_BASE + 0x2C;
+    const GPEDS1: u32 = map::GPIO_BASE + 0x44;
+    const GPREN1: u32 = map::GPIO_BASE + 0x50;
+    const LED: u32 = 1 << 10; // GPIO 42
+
+    let mut m = machine();
+    m.store32(GPFSEL4, 0b001 << 6).unwrap(); // GPIO 42 an output
+    assert_eq!(m.gpio.irq_lines(), [false, false]);
+
+    // No detector enabled: driving the pin latches nothing.
+    m.store32(GPSET1, LED).unwrap();
+    assert_eq!(m.load32(GPEDS1).unwrap(), 0);
+    m.store32(GPCLR1, LED).unwrap();
+
+    m.store32(GPREN1, LED).unwrap();
+    m.store32(GPSET1, LED).unwrap();
+    assert_eq!(m.load32(GPEDS1).unwrap(), LED, "the rising edge latched");
+    assert_eq!(m.gpio.irq_lines(), [false, true]);
+
+    m.store32(GPEDS1, LED).unwrap();
+    assert_eq!(m.load32(GPEDS1).unwrap(), 0, "write 1 clears it");
+    assert_eq!(m.gpio.irq_lines(), [false, false]);
+}
