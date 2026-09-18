@@ -106,3 +106,14 @@ notes  = "Error latch; the bootloader writes `0x400` to clear it before each tra
 kind       = "decompile"
 ref        = "bootloader submit path writes `DEBUG = 0x400` first"
 confidence = "high"
+
+[[register]]
+name   = "REG_28"
+offset = 0x28
+access = "rw"
+notes  = "Past the channel's control-block registers. The bootloader writes 0 here once, as it puts the channel away after its last transfer, and never reads it. Meaning unknown."
+
+[[register.source]]
+kind       = "trace"
+ref        = "bootmain `0x0008B668`: `0x00000000` to `0x7E007B28`, the only access to the word in a boot"
+confidence = "high"

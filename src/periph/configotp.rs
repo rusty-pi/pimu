@@ -172,8 +172,10 @@ pub(crate) const BOARD_IDENTITY: [u32; 4] = [0x8AA9_6D38, 0x9111_243F, 0x38E4_E4
 /// the BCM2712, in
 /// <https://github.com/raspberrypi/documentation/blob/ecd7a8129d4f2cb908d6cbd6ea5a994e0091285d/documentation/asciidoc/computers/raspberry-pi/otp-bits.adoc>,
 /// apart from rows 19-27, which it does not make public; those are what this
-/// model found (the module docs, #68). A field over several rows says which
-/// word it is.
+/// model found (the module docs, #68). Row 44 is not public either: start4
+/// reads it with the identity rows and adds 10 mV to the core rail for every
+/// bit set in it (`specs/pmic_core.toml`). A field over several rows says
+/// which word it is.
 pub fn row_meaning(row: u32) -> String {
     let word = |first: u32, words: u32| format!("word {} of {words}", row - first + 1);
     match row {
@@ -189,6 +191,7 @@ pub fn row_meaning(row: u32) -> String {
         33 => "extended board revision".into(),
         35 => "serial number, high 32 bits".into(),
         36..=43 => format!("customer OTP, {}", word(36, 8)),
+        44 => "core-voltage trim: 10 mV a set bit (not public)".into(),
         45 => "MPEG-2 codec licence key".into(),
         46 => "VC-1 codec licence key".into(),
         47..=54 => format!("secure-boot key hash, {}", word(47, 8)),

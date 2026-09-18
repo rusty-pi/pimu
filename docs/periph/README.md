@@ -18,7 +18,7 @@ Generated from the TOML specs in [`specs/`](../../specs/); see [`specs/README.md
 | [`cm`](cm.md) | vpu | `0x7E101000` | `0x2000` | 87 | Clock manager, with the A2W PLL control in the same window |
 | [`corectl`](corectl.md) | vpu | `0x7E002000` | `0x1000` | 5 | VPU core control: per-core boot handshake and interrupt controller |
 | [`dma`](dma.md) | vpu | `0x7E007000` | `0x1000` | 11 | Legacy DMA controller: 15 channels `0x100` apart plus the controller-wide interrupt status and enable words |
-| [`dma4`](dma4.md) | vpu | `0x7E007B00` | `0x100` | 3 | DMA4 (`dma40`) channel: the 40-bit DMA engine the bootloader and start4 use |
+| [`dma4`](dma4.md) | vpu | `0x7E007B00` | `0x100` | 4 | DMA4 (`dma40`) channel: the 40-bit DMA engine the bootloader and start4 use |
 | [`dma_vpu`](dma_vpu.md) | vpu | `0x7EE04100` | `0x1000` | 9 | The DMA controller start4's dmalib drives: 16 channel slots, channel 15 at `0x7EE05000` |
 | [`dwc2`](dwc2.md) | vpu | `0x7E980000` | `0x10000` | 17 | DesignWare USB 2.0 OTG controller (the USB-C port): the reset start4 runs when USB power comes on, and a host port with nothing plugged in |
 | [`emmc`](emmc.md) | vpu | `0x7E300000` | `0x100` | 20 | The legacy EMMC controller (Arasan SDHCI): the Pi 4's WiFi SDIO host, and the host 2020-era bootcode reads the SD card through |
@@ -38,8 +38,8 @@ Generated from the TOML specs in [`specs/`](../../specs/); see [`specs/README.md
 | [`mbox`](mbox.md) | vpu | `0x7E00B880` | `0x140` | 12 | ARM <-> VideoCore mailboxes: two views of the same pair of FIFOs, and the interrupt block between them |
 | [`mcsync`](mcsync.md) | vpu | `0x7E000000` | `0x1000` | 7 | Doorbells / semaphores between the two VPU cores |
 | [`otp`](otp.md) | vpu | `0x7E20F000` | `0x1000` | 7 | Always-on config / OTP engine: the fuse array, one row at a time – reads and programming |
-| [`pcie`](pcie.md) | vpu | `0x7D500000` | `0x9310` | 37 | PCIe root complex (`pcie-brcmstb`), with the VL805 xHCI controller behind it |
-| [`pm`](pm.md) | vpu | `0x7E100000` | `0x1000` | 18 | Power management: reset control, reset status, watchdog, power-domain registers |
+| [`pcie`](pcie.md) | vpu | `0x7D500000` | `0x9310` | 43 | PCIe root complex (`pcie-brcmstb`), with the VL805 xHCI controller behind it |
+| [`pm`](pm.md) | vpu | `0x7E100000` | `0x1000` | 19 | Power management: reset control, reset status, watchdog, power-domain registers |
 | [`pmic_1d`](pmic_1d.md) | i2c | `0x1D` | `0x100` | 8 | Board PMIC at `0x1D` on every Pi 4-family board but the 4B rev 1.5 (start4 descriptor type `0x81`) |
 | [`pmic_core`](pmic_core.md) | i2c | `0x1E` | `0x100` | 4 | Board PMIC owning the SoC core rail (start4 descriptor type `0x82`) |
 | [`pmic_rails`](pmic_rails.md) | i2c | `0x1B` | `0x100` | 6 | Board PMIC owning the SDRAM and I/O rails (start4 descriptor type `0x83`) |
@@ -94,6 +94,8 @@ The `parent` of a block: the master of its bus, or the window it is carved out o
 | GIC id | 129 | [`hvs`](hvs.md) | `GIC_SPI 97` |
 | GIC id | 145 | [`gpio`](gpio.md) `BANK0` | `GIC_SPI 113` |
 | GIC id | 146 | [`gpio`](gpio.md) `BANK1` | `GIC_SPI 114` |
+| GIC id | 147 | [`gpio`](gpio.md) `BANK1_MIRROR` | `GIC_SPI 115` |
+| GIC id | 148 | [`gpio`](gpio.md) `ANY` | `GIC_SPI 116` |
 | GIC id | 153 | [`uart0`](uart0.md) | `GIC_SPI 121` |
 | GIC id | 158 | [`emmc2`](emmc2.md) | `GIC_SPI 126` |
 | GIC id | 158 | [`emmc`](emmc.md) | `GIC_SPI 126` |
