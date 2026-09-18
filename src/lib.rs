@@ -28,6 +28,7 @@
 //! The command line is a separate binary crate, in `src/cli/`.
 
 pub mod aarch64;
+pub mod align;
 pub mod arm;
 pub mod armstub;
 pub mod bus;

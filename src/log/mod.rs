@@ -63,6 +63,9 @@ pub enum Channel {
     /// `ESR`/`FAR` its handler sees, and for an external abort the physical
     /// address nothing answered at.
     ArmExc,
+    /// Scalar accesses the VPU makes that are not naturally aligned, which
+    /// the core cannot do in one (`--check-alignment`).
+    Alignment,
     /// Every system-timer compare arm.
     Cmp,
     /// Reads of memory the VPU has written through a cached alias and not
@@ -122,9 +125,10 @@ pub enum Channel {
 
 impl Channel {
     /// Every channel, in the order an unknown name lists them.
-    pub const ALL: [Channel; 23] = [
+    pub const ALL: [Channel; 24] = [
         Channel::Io,
         Channel::ArmExc,
+        Channel::Alignment,
         Channel::Cmp,
         Channel::Coherency,
         Channel::Dwc2,
@@ -153,6 +157,7 @@ impl Channel {
         match self {
             Channel::Io => "io",
             Channel::ArmExc => "arm-exc",
+            Channel::Alignment => "alignment",
             Channel::Cmp => "cmp",
             Channel::Coherency => "coherency",
             Channel::Dwc2 => "dwc2",

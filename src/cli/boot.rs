@@ -99,9 +99,15 @@ MEDIA AND NETWORK:
               again.
     --check-coherency
               Report every read of memory the VPU wrote through a cached alias
-              (`0x0`, `0x4000_0000`, `0x8000_0000`) and did not flush: on real
-              silicon those reads see stale bytes. Goes to the `coherency` log
-              channel.
+              (`0x0`, `0x4000_0000`, `0x8000_0000`) and did not flush, and
+              every cached read of memory an ARM-side master wrote behind
+              those caches: on real silicon both see the wrong bytes. Goes to
+              the `coherency` log channel.
+    --check-alignment
+              Report every scalar VPU access that is not naturally aligned.
+              The model reads memory by offset; the core cannot, so such an
+              access reads other bytes on silicon. Goes to the `alignment`
+              log channel.
     --hat <eep>
               A HAT on the 40-pin header, with this ID EEPROM image at 0x50 on
               I2C0 (`eepmake` output). The firmware reads it where it probes
@@ -301,6 +307,9 @@ struct BootOpts {
     /// `--check-coherency`: report reads of memory the VPU wrote through a
     /// cached alias and has not flushed.
     check_coherency: bool,
+    /// `--check-alignment`: report scalar VPU accesses that are not
+    /// naturally aligned.
+    check_alignment: bool,
     console_log: Option<PathBuf>,
     dump_fdt: Option<PathBuf>,
     print_fdt: bool,
@@ -475,6 +484,7 @@ impl BootOpts {
         let mut emmc_image: Option<PathBuf> = None;
         let mut hat_eeprom: Option<PathBuf> = None;
         let mut check_coherency = false;
+        let mut check_alignment = false;
         let mut console_log: Option<PathBuf> = None;
         let mut dump_fdt: Option<PathBuf> = None;
         let mut print_fdt = false;
@@ -643,6 +653,7 @@ impl BootOpts {
                 "--skip-signed-boot" => skip_signed_boot = true,
                 "--skip-unimpl" => skip_unimpl = true,
                 "--check-coherency" => check_coherency = true,
+                "--check-alignment" => check_alignment = true,
                 "--dump" => {
                     let spec = it.next().context("--dump needs <hexaddr>:<len>")?;
                     let (a, n) = spec.split_once(':').context("--dump: expected addr:len")?;
@@ -752,6 +763,7 @@ impl BootOpts {
             emmc_image,
             hat_eeprom,
             check_coherency,
+            check_alignment,
             console_log,
             dump_fdt,
             print_fdt,
@@ -896,6 +908,12 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
             emu.machine.ram.coherency.marks(),
             emu.machine.ram.coherency.dma_marks(),
             emu.machine.ram.coherency.reports()
+        );
+    }
+    if emu.machine.alignment.is_on() {
+        println!(
+            "alignment: {} misaligned scalar accesses",
+            emu.machine.alignment.reports()
         );
     }
     rig.log.flush();
@@ -1275,6 +1293,7 @@ impl<'a> Rig<'a> {
             ref emmc_image,
             ref hat_eeprom,
             check_coherency,
+            check_alignment,
             ref netboot_root,
             ref host_net,
             trace_mmio,
@@ -1298,6 +1317,9 @@ impl<'a> Rig<'a> {
         }
         if check_coherency {
             machine.ram.coherency = rpi_virt_fw::coherency::Coherency::on(self.log.clone());
+        }
+        if check_alignment {
+            machine.alignment = rpi_virt_fw::align::Alignment::on(self.log.clone());
         }
         if let Some(p) = &hat_eeprom {
             let bytes = std::fs::read(p).with_context(|| format!("reading {}", p.display()))?;

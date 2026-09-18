@@ -107,6 +107,9 @@ pub struct Machine {
     pub sdc: Sdc,
     /// Boot-info handoff doorbell (`0x7EE0_2000`).
     pub bootbox: BootBox,
+    /// Scalar VPU accesses that are not naturally aligned, which the model
+    /// performs and the core cannot (`--check-alignment`).
+    pub alignment: crate::align::Alignment,
     /// Legacy DMA controller (`0x7E00_7000`) — start4's bulk memory copies.
     pub dma_legacy: crate::periph::dma_legacy::DmaLegacy,
     /// The `0x7EE0_4100` DMA controller (channel 15 at `0x7EE0_5000`).
@@ -294,6 +297,7 @@ impl Machine {
             sdramc: Sdramc::new(),
             sdc: Sdc::new(),
             bootbox: BootBox::new(),
+            alignment: crate::align::Alignment::off(),
             dma4: Dma4::new(),
             dma_legacy: crate::periph::dma_legacy::DmaLegacy::new(),
             dma_vpu: crate::periph::dma_legacy::DmaLegacy::new_vpu(),
@@ -1413,6 +1417,9 @@ impl Bus for Machine {
 
     #[inline]
     fn load(&mut self, addr: u32, width: Width) -> BusResult<u32> {
+        if self.alignment.is_on() {
+            self.alignment.note(addr, width, self.watch_pc, false);
+        }
         if let Some(off) = self.boot_rom_at(addr) {
             self.ram_reads = self.ram_reads.wrapping_add(1);
             return Ok(self.boot_rom_load(off, width));
@@ -1444,6 +1451,9 @@ impl Bus for Machine {
 
     #[inline]
     fn store(&mut self, addr: u32, width: Width, value: u32) -> BusResult<()> {
+        if self.alignment.is_on() {
+            self.alignment.note(addr, width, self.watch_pc, true);
+        }
         self.ram_writes = self.ram_writes.wrapping_add(1);
         if crate::diag::ON && !self.watch.is_empty() {
             let a = Machine::fold_ram_addr(addr) & !3;
