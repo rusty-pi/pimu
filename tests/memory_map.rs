@@ -49,6 +49,8 @@ const MODELLED: &[(&str, u32)] = &[
     ("vpu dma ch15", map::DMA_VPU_BASE + 0xF00),
     ("sdram controller", map::SDRAMC_BASE),
     ("sdram phy lane 3", map::SDRAMC_BASE + 0x30000),
+    ("gpio", map::GPIO_BASE),
+    ("gpio PUP_PDN3", map::GPIO_BASE + 0xF0),
     ("clkmon", map::CLKMON_BASE),
     ("avs", map::AVS_BASE),
 ];
@@ -73,8 +75,9 @@ fn modelled_windows_do_not_fall_through_to_the_stub() {
 fn unmodelled_peripherals_still_reach_the_stub() {
     let mut m = machine();
     let before = m.stub_hits;
-    m.load32(map::GPIO_BASE).unwrap();
-    assert_eq!(m.stub_hits, before + 1, "GPIO is not modelled yet");
+    // PWM0 (`0x7E20_C000`): in the window, and nothing models it.
+    m.load32(0x7E20_C000).unwrap();
+    assert_eq!(m.stub_hits, before + 1, "PWM is not modelled yet");
 }
 
 /// The AVS monitor is carved out of the middle of the VPU clock-block window,

@@ -177,10 +177,10 @@
     <text class="ts" x="622" y="588" text-anchor="middle">USB power</text>
     <text class="m" x="622" y="602" text-anchor="middle">0x7E808000</text>
   </g>
-  <g>
-    <rect class="tagd" x="690" y="570" width="105" height="44" rx="2"/>
-    <text class="ts" x="742" y="588" text-anchor="middle">GPIO mux</text>
-    <text class="md" x="742" y="602" text-anchor="middle">stub, no spec</text>
+  <g data-block="gpio" data-base="0x7E200000">
+    <rect class="tag" x="690" y="570" width="105" height="44" rx="2"/>
+    <text class="ts" x="742" y="588" text-anchor="middle">GPIO 58 pins</text>
+    <text class="m" x="742" y="602" text-anchor="middle">0x7E200000</text>
   </g>
 
   <!-- left ports -->

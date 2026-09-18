@@ -25,6 +25,7 @@ pub mod fxl6408;
 pub mod genet;
 pub mod gentimer;
 pub mod gic;
+pub mod gpio;
 pub mod hat;
 pub mod hd;
 pub mod hdmi;
@@ -67,6 +68,7 @@ pub use dwc2::Dwc2;
 pub use emmc2::Emmc2;
 pub use genet::Genet;
 pub use gic::Gic;
+pub use gpio::Gpio;
 pub use hd::Hd;
 pub use hdmi::Hdmi;
 pub use hdmi_ddc::HdmiDdc;
@@ -117,6 +119,7 @@ pub const SPEC_COVERAGE: &[crate::spec::Coverage] = &[
     gic::COVERAGE_DIST,
     gic::COVERAGE_VCPU,
     gic::COVERAGE_VIRT,
+    gpio::COVERAGE,
     hd::COVERAGE,
     hdmi::COVERAGE,
     hdmi_ddc::COVERAGE,

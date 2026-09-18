@@ -137,6 +137,7 @@ still records it.
 | `dwc2` | The DWC2 USB OTG controller (`0x7E98_0000`): every write, and every read that differs from the previous read of the same register, so a poll shows once. |
 | `emmc` | The SD host controllers, EMMC2 and the legacy EMMC: every command and its response, every block read, every register access. |
 | `expander` | FXL6408 GPIO expander register traffic. |
+| `gpio` | The GPIO block: every pin whose function, level or termination changes, named the way the board wires it — `42 (STATUS_LED_G_CLK) input -> output, high` for the activity LED, `40 (PWM0_MISO) input -> ALT4` for a flash session. |
 | `irqen` | Interrupt enables, decoded back into the `enable_irq_source(src, prio)` calls that wrote them. |
 | `mbox` | Every word across the ARM↔VideoCore property mailbox, both directions, and the first tag of each property request Linux posts. |
 | `otp` | Every OTP row the firmware reads, and what it got; every row it programs, before and after; commands the model does not know. |
