@@ -349,8 +349,10 @@ pub struct ArmSide {
 
 /// The device interrupt lines wired to the GIC: the mailbox, eMMC2 (which the
 /// legacy EMMC shares), the two GENET lines, the PL011, the PCIe endpoint's
-/// INTA and MSI, and the USB-C port's own xHCI (#113).
-const SPIS: [u32; 10] = [
+/// INTA and MSI, the USB-C port's own xHCI (#113), and the GPIO block's four
+/// (a bank each, the third-bank output that mirrors bank 1's, and the one
+/// either bank raises).
+const SPIS: [u32; 12] = [
     gic::ID_MAILBOX,
     gic::ID_EMMC2,
     gic::ID_GENET_A,
@@ -361,6 +363,8 @@ const SPIS: [u32; 10] = [
     gic::ID_XHCI_OTG,
     gic::ID_GPIO_BANK0,
     gic::ID_GPIO_BANK1,
+    gic::ID_GPIO_BANK1_MIRROR,
+    gic::ID_GPIO_ANY,
 ];
 
 fn spi_levels(m: &Machine) -> [bool; SPIS.len()] {
@@ -377,6 +381,8 @@ fn spi_levels(m: &Machine) -> [bool; SPIS.len()] {
         m.xhci_otg.irq_asserted(),
         gpio0,
         gpio1,
+        gpio1,
+        gpio0 || gpio1,
     ]
 }
 

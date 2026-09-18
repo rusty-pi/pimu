@@ -5,7 +5,7 @@
 - Bus: `vpu` (VPU bus address)
 - Base: `0x7E200000`
 - Size: `0x1000`
-- Interrupts: `BANK0` GIC id 145 (`GIC_SPI 113`) · `BANK1` GIC id 146 (`GIC_SPI 114`)
+- Interrupts: `ANY` GIC id 148 (`GIC_SPI 116`) · `BANK0` GIC id 145 (`GIC_SPI 113`) · `BANK1` GIC id 146 (`GIC_SPI 114`) · `BANK1_MIRROR` GIC id 147 (`GIC_SPI 115`)
 
 Pins 0..57, in two banks of 32. Every register but `GPFSEL` is a pair (`0` for pins 0..31, `1` for 32..57), and the model keeps a function, an output latch and a termination per pin. A `GPLEV` bit is the output latch for a pin whose function is `output`, and the termination otherwise — pull-up reads 1, pull-down and no pulling read 0 — because nothing outside the model drives a pin. A pin the firmware drives itself does move, though, so the detect enables work: an edge or a level latches `GPEDS` and raises the bank's interrupt line. What each pin is wired to is the board's, not the chip's: `src/periph/gpio.rs` carries that map for the 4B, the CM4 and the Pi 400, and the `gpio` log channel names the pin it reports. Which pins are muxed also decides what two masters reach: SPI0 the boot flash (GPIO 40..43 on ALT4, `specs/spi0.toml`) and I²C 0 the 40-pin header (GPIO 0/1 on ALT0, `specs/bsc.toml`).
 
@@ -17,11 +17,13 @@ Sources:
 - decompile (high): start4's GPIO driver: function select `FUN_0ecc94f8` (`&DAT_7e200000 + reg * 4`, three bits a pin), level `FUN_0ecc7fca` / `FUN_0ecc9478` (`GPSET`/`GPCLR`, pins up to `0x39`), pull `FUN_0ecc95ec` (the 2835 `GPPUD` path, `vcfw/drivers/chip/vciv/2708/gpio.c`) or `FUN_0ecc9762` -> `FUN_0ecc83e4(&DAT_7e2000e4, pin, pull)` (the BCM2711 one, which is what a Pi 4 takes)
 - trace (high): a `firmware-boot` run touches `GPFSEL0`..`GPFSEL4`, `GPSET1`, `GPCLR1`, `PIN_MUX`, `PAD_CFG` and all four `PUP_PDN` registers, and nothing else in the window: no `GPLEV`, no edge detect and no legacy pull register
 
-Interrupts (`BANK0` GIC id 145 (`GIC_SPI 113`) · `BANK1` GIC id 146 (`GIC_SPI 114`)):
+Interrupts (`ANY` GIC id 148 (`GIC_SPI 116`) · `BANK0` GIC id 145 (`GIC_SPI 113`) · `BANK1` GIC id 146 (`GIC_SPI 114`) · `BANK1_MIRROR` GIC id 147 (`GIC_SPI 115`)):
 
-One line a bank, up while any pin of that bank has its `GPEDS` bit latched. Nothing outside the model drives a pin, so the only edges are the ones the firmware makes itself — driving an output, or moving the termination of an input — and no firmware in a boot enables a detector, so the lines have yet to go up in a run.
+Four lines, up while a pin they cover has its `GPEDS` bit latched: one a bank, and an 'any bank' line. The block is built for three banks and this SoC fills two, so bank 1's output is mirrored onto the third bank's line as well — a bank 0 edge raises `BANK0` and `ANY`, a bank 1 edge raises `BANK1`, `BANK1_MIRROR` and `ANY`. The VPU's own controller takes the same four as sources 113 to 116 (`64 + GPU IRQ`, as for `systimer` and `uart0`), and a firmware that wants an edge while the ARM is down enables `ANY` there. Nothing outside the model drives a pin, so the only edges are the ones the firmware makes itself — driving an output, or moving the termination of an input — and no firmware in a boot enables a detector, so the lines have yet to go up in a run.
 
-- linux (high): `gpio@7e200000`, `interrupts = <GIC_SPI 0x71 IRQ_TYPE_LEVEL_HIGH>, <GIC_SPI 0x72 IRQ_TYPE_LEVEL_HIGH>` (`firmware/bcm2711-rpi-4-b.dtb`)
+- linux (high): `bcm2711.dtsi`: `&gpio { interrupts = <GIC_SPI 113 ...>, <GIC_SPI 114 ...>, <GIC_SPI 115 ...>, <GIC_SPI 116 ...> }`, and the `bcm283x.dtsi` comment above the node for which bank reaches which line
+- linux (high): `gpio@7e200000`, `interrupts = <GIC_SPI 0x71 IRQ_TYPE_LEVEL_HIGH>, <GIC_SPI 0x72 IRQ_TYPE_LEVEL_HIGH>` (`firmware/bcm2711-rpi-4-b.dtb`) — _The device tree the pinned firmware carries names only the two bank lines; the kernel tree it came from names all four._
+- inferred (medium): VPU sources 113 to 116: the legacy blocks' VPU source and `GIC_SPI` number are both `64 + GPU IRQ` (`systimer` 64 to 67, `uart0` 121, `emmc` 126), and the GPIO lines are GPU IRQs 49 to 52 — _Not seen in a trace: no boot enables a detector, so no line has been observed on either controller._
 
 ## Register map
 

@@ -43,9 +43,10 @@
 //! Pins do still move — the firmware drives the activity LED, and a write to
 //! `PUP_PDN` moves what holds an input — so the six detect enables work:
 //! an edge or a level latches `GPEDS`, and a bank with a latched bit raises
-//! its interrupt line (`GIC_SPI` 113 for pins 0..31, 114 for 32..57, through
-//! [`Gpio::irq_lines`]). No firmware in a boot enables a detector, so this
-//! has yet to fire in a run.
+//! its interrupt lines ([`Gpio::irq_lines`]): `GIC_SPI` 113 for pins 0..31,
+//! 114 for 32..57, 115 the mirror of the second bank's line the block's
+//! third-bank output is, and 116 the 'any bank' line either raises. No
+//! firmware in a boot enables a detector, so this has yet to fire in a run.
 //!
 //! ## What the pins carry
 //!
@@ -425,8 +426,9 @@ impl Gpio {
         }
     }
 
-    /// The block's two interrupt lines, one a bank: up while any pin of that
-    /// bank has its `GPEDS` bit latched.
+    /// The block's two bank interrupt lines: up while any pin of that bank has
+    /// its `GPEDS` bit latched. The other two lines the block drives follow
+    /// from these — see [`crate::arm`].
     pub fn irq_lines(&self) -> [bool; BANKS] {
         [self.eds[0] != 0, self.eds[1] != 0]
     }
