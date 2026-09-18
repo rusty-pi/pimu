@@ -81,6 +81,10 @@ MEDIA AND NETWORK:
               An SD card with this image. Read on demand; writes stay in
               memory, and the boot after a firmware reset starts from the file
               again.
+    --hat <eep>
+              A HAT on the 40-pin header, with this ID EEPROM image at 0x50 on
+              I2C0 (`eepmake` output). The firmware reads it where it probes
+              the header, and applies the device-tree overlay in it.
     --emmc <img>
               An e-MMC part with this image soldered to the SD host, as a
               Compute Module has in place of a card slot. Answers CMD1 and the
@@ -270,6 +274,8 @@ struct BootOpts {
     sd_image: Option<PathBuf>,
     /// `--emmc <img>`: the same slot, but an e-MMC part rather than a card.
     emmc_image: Option<PathBuf>,
+    /// `--hat <eep>`: a HAT's ID EEPROM image on I2C0.
+    hat_eeprom: Option<PathBuf>,
     console_log: Option<PathBuf>,
     dump_fdt: Option<PathBuf>,
     print_fdt: bool,
@@ -329,6 +335,7 @@ impl BootOpts {
         let mut disasms: Vec<(u32, u32)> = Vec::new();
         let mut sd_image: Option<PathBuf> = None;
         let mut emmc_image: Option<PathBuf> = None;
+        let mut hat_eeprom: Option<PathBuf> = None;
         let mut console_log: Option<PathBuf> = None;
         let mut dump_fdt: Option<PathBuf> = None;
         let mut print_fdt = false;
@@ -430,6 +437,9 @@ impl BootOpts {
                 "--sd" => sd_image = Some(PathBuf::from(it.next().context("--sd needs a path")?)),
                 "--emmc" => {
                     emmc_image = Some(PathBuf::from(it.next().context("--emmc needs a path")?))
+                }
+                "--hat" => {
+                    hat_eeprom = Some(PathBuf::from(it.next().context("--hat needs a path")?))
                 }
                 "--console-log" => {
                     console_log = Some(PathBuf::from(
@@ -575,6 +585,7 @@ impl BootOpts {
             disasms,
             sd_image,
             emmc_image,
+            hat_eeprom,
             console_log,
             dump_fdt,
             print_fdt,
@@ -1087,6 +1098,7 @@ impl<'a> Rig<'a> {
             eeprom,
             ref sd_image,
             ref emmc_image,
+            ref hat_eeprom,
             ref netboot_root,
             ref host_net,
             trace_mmio,
@@ -1107,6 +1119,12 @@ impl<'a> Rig<'a> {
         }
         if let Some(p) = &emmc_image {
             machine.emmc2.insert_mmc_disk(open_sd(p, &self.log)?);
+        }
+        if let Some(p) = &hat_eeprom {
+            let bytes = std::fs::read(p).with_context(|| format!("reading {}", p.display()))?;
+            machine
+                .bsc0
+                .attach_eeprom(rpi_virt_fw::periph::hat::HatEeprom::new(bytes));
         }
         if let Some(disk) = &self.usb_disk {
             machine.pcie.endpoint.attach(
