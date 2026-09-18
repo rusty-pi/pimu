@@ -107,10 +107,6 @@ pub struct Machine {
     pub sdc: Sdc,
     /// Boot-info handoff doorbell (`0x7EE0_2000`).
     pub bootbox: BootBox,
-    /// Which lines the VPU has written through a cached alias and not
-    /// flushed, so a read of one by anyone else can be reported
-    /// (`--check-coherency`).
-    pub coherency: crate::coherency::Coherency,
     /// Legacy DMA controller (`0x7E00_7000`) — start4's bulk memory copies.
     pub dma_legacy: crate::periph::dma_legacy::DmaLegacy,
     /// The `0x7EE0_4100` DMA controller (channel 15 at `0x7EE0_5000`).
@@ -298,7 +294,6 @@ impl Machine {
             sdramc: Sdramc::new(),
             sdc: Sdc::new(),
             bootbox: BootBox::new(),
-            coherency: crate::coherency::Coherency::off(),
             dma4: Dma4::new(),
             dma_legacy: crate::periph::dma_legacy::DmaLegacy::new(),
             dma_vpu: crate::periph::dma_legacy::DmaLegacy::new_vpu(),
@@ -462,7 +457,7 @@ impl Machine {
     /// comes up on time even while nothing polls it.
     fn advance_pcie(&mut self) {
         let now = self.systimer.now_us();
-        self.pcie.advance_to(now, &mut self.ram);
+        self.with_dma_master("the xHCI / VL805", |m| m.pcie.advance_to(now, &mut m.ram));
     }
 
     /// Settle the HDMI DDC masters, which time their transfers the same way.
@@ -533,7 +528,7 @@ impl Machine {
         // A backend with its own clock (a host network) can deliver a frame
         // at any time, not only in reply to a register write.
         if self.net.is_some() {
-            self.genet.service(&mut self.ram, &mut self.net);
+            self.with_dma_master("the GENET", |m| m.genet.service(&mut m.ram, &mut m.net));
         }
         // The I²C masters time their transfers in microseconds off the system
         // timer, so they stay in step with it across the run loop's `sleep`
@@ -649,6 +644,21 @@ impl Machine {
             && self
                 .mmio_trace_range
                 .is_none_or(|(lo, hi)| (lo..hi).contains(&addr))
+    }
+
+    /// Run `f` with the tracker told that this peripheral, not the VPU, is
+    /// the one writing memory: its writes go behind the caches.
+    #[inline]
+    fn with_dma_master(&mut self, who: &'static str, f: impl FnOnce(&mut Machine)) {
+        if !self.ram.coherency.is_on() {
+            f(self);
+            return;
+        }
+        self.ram
+            .coherency
+            .set_master(crate::coherency::Master::Dma(who));
+        f(self);
+        self.ram.coherency.set_master(crate::coherency::Master::Vpu);
     }
 
     /// Fold the four VC4 cache aliases (`0x0`, `0x4000_0000`, `0x8000_0000`,
@@ -941,18 +951,16 @@ impl Machine {
             .unwrap_or(0)
     }
 
-    /// One word to a 40-bit DMA4 address.
+    /// One word to a 40-bit DMA4 address. Both what the engine itself writes
+    /// and what the controller behind the window writes (a doorbell here sets
+    /// an xHCI transfer going) come from behind the VPU's caches.
     fn dma40_store(&mut self, addr: u64, value: u32) {
-        if addr >> 32 != 0
-            && self
-                .pcie
-                .mmio_write(addr, Width::Word, value, &mut self.ram)
-        {
-            return;
-        }
-        let _ = self
-            .ram
-            .store((addr as u32) & 0x3FFF_FFFF, Width::Word, value);
+        self.with_dma_master("the 40-bit DMA / xHCI", |m| {
+            if addr >> 32 != 0 && m.pcie.mmio_write(addr, Width::Word, value, &mut m.ram) {
+                return;
+            }
+            let _ = m.ram.store((addr as u32) & 0x3FFF_FFFF, Width::Word, value);
+        });
     }
 
     fn run_dma4(&mut self) {
@@ -1155,7 +1163,7 @@ impl Machine {
                 self.bootbox.word(crate::spec::bootbox::L2_FLUSH_END),
             );
             self.l2.flush(first, last);
-            self.coherency.flushed(first, last);
+            self.ram.coherency.flushed(first, last);
         }
         let trace = self.mmio_traced(addr);
         if let Some((dev, off)) = self.device_for(addr) {
@@ -1181,15 +1189,15 @@ impl Machine {
                 self.run_dma_legacy(ch, true);
             }
             if self.emmc2.dma_pending() {
-                self.emmc2.run_dma(&mut self.ram);
+                self.with_dma_master("the EMMC2 DMA", |m| m.emmc2.run_dma(&mut m.ram));
             }
             // A register write on the USB-C port's xHCI can run a ring, which
             // needs DRAM the device itself has no view of (`xhci_otg`).
             if self.xhci_otg.write_pending() {
-                self.xhci_otg.run_pending(&mut self.ram);
+                self.with_dma_master("the OTG xHCI", |m| m.xhci_otg.run_pending(&mut m.ram));
             }
             if self.genet.take_kick() {
-                self.genet.service(&mut self.ram, &mut self.net);
+                self.with_dma_master("the GENET", |m| m.genet.service(&mut m.ram, &mut m.net));
             }
             if GPFSEL_WINDOW.contains(&addr) {
                 self.route_gpio_pins();
@@ -1368,12 +1376,17 @@ impl Bus for Machine {
             let phys = Machine::fold_ram_addr(addr);
             if self.ram.contains(phys) {
                 self.ram_reads = self.ram_reads.wrapping_add(1);
-                if self.coherency.is_on() && addr >> 30 == 3 {
-                    self.coherency.read_by(
-                        phys,
-                        width.bytes() as u32,
-                        crate::coherency::Master::VpuUncached,
-                    );
+                if self.ram.coherency.is_on() {
+                    if addr >> 30 == 3 {
+                        self.ram.coherency.read_by(
+                            phys,
+                            width.bytes(),
+                            crate::coherency::Master::VpuUncached,
+                        );
+                    } else {
+                        let pc = self.watch_pc;
+                        self.ram.coherency.read_cached(phys, width.bytes(), pc);
+                    }
                 }
                 if self.l2.covers(phys) {
                     return self.l2.load(&self.ram, addr, phys, width);
@@ -1408,8 +1421,8 @@ impl Bus for Machine {
             let phys = Machine::fold_ram_addr(addr);
             if self.ram.contains(phys) {
                 // Bits 31:30 pick the alias; only `0b11` bypasses the caches.
-                if self.coherency.is_on() && addr >> 30 != 3 {
-                    self.coherency.wrote_cached(phys, width.bytes() as u32);
+                if self.ram.coherency.is_on() && addr >> 30 != 3 {
+                    self.ram.coherency.wrote_cached(phys, width.bytes());
                 }
                 if crate::diag::ON
                     && addr & 0x03FF_FFFF == PHASE_TAG_SIG

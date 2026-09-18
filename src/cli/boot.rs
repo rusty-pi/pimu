@@ -889,11 +889,13 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
     };
     // The terminal back to cooked mode before the report.
     drop(host_input);
-    if emu.machine.coherency.is_on() {
+    if emu.machine.ram.coherency.is_on() {
         println!(
-            "coherency: {} lines written through a cached alias, {} read stale",
-            emu.machine.coherency.marks(),
-            emu.machine.coherency.reports()
+            "coherency: {} lines written through a cached alias, {} written by DMA, \
+             {} read stale",
+            emu.machine.ram.coherency.marks(),
+            emu.machine.ram.coherency.dma_marks(),
+            emu.machine.ram.coherency.reports()
         );
     }
     rig.log.flush();
@@ -1295,7 +1297,7 @@ impl<'a> Rig<'a> {
             machine.emmc2.insert_mmc_disk(open_sd(p, &self.log)?);
         }
         if check_coherency {
-            machine.coherency = rpi_virt_fw::coherency::Coherency::on(self.log.clone());
+            machine.ram.coherency = rpi_virt_fw::coherency::Coherency::on(self.log.clone());
         }
         if let Some(p) = &hat_eeprom {
             let bytes = std::fs::read(p).with_context(|| format!("reading {}", p.display()))?;

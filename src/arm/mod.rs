@@ -1173,10 +1173,10 @@ impl ArmBus<'_> {
         self.io |= !matches!(target, Target::Ram(_));
         let r = match target {
             Target::Ram(off) => {
-                if self.m.coherency.is_on() {
-                    self.m.coherency.read_by(
+                if self.m.ram.coherency.is_on() {
+                    self.m.ram.coherency.read_by(
                         off as u32,
-                        w.bytes() as u32,
+                        w.bytes(),
                         crate::coherency::Master::Arm,
                     );
                 }

@@ -29,6 +29,8 @@ const LINES: usize = (SPACE >> LINE_SHIFT) as usize;
 /// Who read a line that the VPU had left dirty.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Master {
+    /// The VPU itself, writing or reading through a cached alias.
+    Vpu,
     /// The VPU itself, through the uncached alias.
     VpuUncached,
     /// An ARM core.
@@ -40,6 +42,7 @@ pub enum Master {
 impl Master {
     fn name(self) -> &'static str {
         match self {
+            Master::Vpu => "the VPU",
             Master::VpuUncached => "the VPU through the uncached alias",
             Master::Arm => "an ARM core",
             Master::Dma(which) => which,
@@ -51,6 +54,12 @@ pub struct Coherency {
     /// One bit per line: the VPU wrote it through a cached alias and nothing
     /// has written it back since.
     dirty: Vec<u64>,
+    /// One bit per line: a DMA engine wrote it, so whatever the VPU still
+    /// holds in cache for it is out of date until an invalidate.
+    stale: Vec<u64>,
+    /// Who is writing RAM at the moment. Everything but the VPU writes
+    /// straight to memory, behind the caches.
+    master: Master,
     on: bool,
     /// Lines reported already, so a poll of the same address says it once.
     reported: Vec<u64>,
@@ -58,6 +67,8 @@ pub struct Coherency {
     /// How many lines have been written through a cached alias, so a run that
     /// reports nothing can be told from one that watched nothing.
     marks: usize,
+    /// How many lines something other than the VPU has written.
+    dma_marks: usize,
     log: Log,
 }
 
@@ -66,10 +77,13 @@ impl Coherency {
     pub fn off() -> Coherency {
         Coherency {
             dirty: Vec::new(),
+            stale: Vec::new(),
+            master: Master::Vpu,
             on: false,
             reported: Vec::new(),
             reports: 0,
             marks: 0,
+            dma_marks: 0,
             log: Log::default(),
         }
     }
@@ -77,10 +91,13 @@ impl Coherency {
     pub fn on(log: Log) -> Coherency {
         Coherency {
             dirty: vec![0; LINES / 64],
+            stale: vec![0; LINES / 64],
+            master: Master::Vpu,
             on: true,
             reported: vec![0; LINES / 64],
             reports: 0,
             marks: 0,
+            dma_marks: 0,
             log,
         }
     }
@@ -98,6 +115,11 @@ impl Coherency {
     /// How many lines the VPU has written through a cached alias.
     pub fn marks(&self) -> usize {
         self.marks
+    }
+
+    /// How many lines a DMA engine has written.
+    pub fn dma_marks(&self) -> usize {
+        self.dma_marks
     }
 
     /// The VPU wrote `len` bytes at physical `phys` through a cached alias.
@@ -118,6 +140,63 @@ impl Coherency {
         self.marks += fresh;
     }
 
+    /// Who writes RAM until the next call. The machine sets this around the
+    /// peripherals it hands `&mut Ram` to, so their writes can be told from
+    /// the VPU's own.
+    #[inline]
+    pub fn set_master(&mut self, master: Master) {
+        self.master = master;
+    }
+
+    #[inline]
+    pub fn master(&self) -> Master {
+        self.master
+    }
+
+    /// Something other than the VPU wrote `len` bytes at `phys`: what the VPU
+    /// holds in cache for those lines is now out of date.
+    #[inline]
+    pub fn wrote_by_other(&mut self, phys: u32, len: u32) {
+        if !self.on {
+            return;
+        }
+        for i in Coherency::lines(phys, len) {
+            let bit = 1 << (i % 64);
+            if self.stale[i / 64] & bit == 0 {
+                self.dma_marks += 1;
+            }
+            self.stale[i / 64] |= bit;
+            self.reported[i / 64] &= !bit;
+        }
+    }
+
+    /// The VPU read `len` bytes at `phys` through a cached alias. A line a
+    /// DMA engine has written since the last invalidate is reported: on real
+    /// silicon that read comes out of the cache and misses what landed in
+    /// memory.
+    #[inline]
+    pub fn read_cached(&mut self, phys: u32, len: u32, pc: u32) {
+        if !self.on {
+            return;
+        }
+        for i in Coherency::lines(phys, len) {
+            let bit = 1 << (i % 64);
+            if self.stale[i / 64] & bit != 0 && self.reported[i / 64] & bit == 0 {
+                self.reported[i / 64] |= bit;
+                self.reports += 1;
+                crate::log!(
+                    self.log,
+                    Channel::Coherency,
+                    "{:#010x}: read through a cached alias at pc {:#010x} after a DMA \
+                     engine wrote it, with no invalidate in between",
+                    (i as u32) << LINE_SHIFT,
+                    pc
+                );
+                return;
+            }
+        }
+    }
+
     /// A flush covering `first..=last` wrote those lines back.
     pub fn flushed(&mut self, first: u32, last: u32) {
         if !self.on {
@@ -125,9 +204,13 @@ impl Coherency {
         }
         let (first, last) = (first & !(LINE - 1), last.min(SPACE - 1));
         let len = last.saturating_sub(first).saturating_add(1);
-        self.each_line(first, len, |dirty, _reported, i| {
-            dirty[i / 64] &= !(1 << (i % 64));
-        });
+        // The bootbox's maintenance op writes the dirty lines back *and*
+        // drops them, so the same range stops being stale as well.
+        for i in Coherency::lines(first, len) {
+            let bit = 1 << (i % 64);
+            self.dirty[i / 64] &= !bit;
+            self.stale[i / 64] &= !bit;
+        }
     }
 
     /// `who` read `len` bytes at physical `phys`. A line the VPU has left in
@@ -163,13 +246,21 @@ impl Coherency {
 
     #[inline]
     fn each_line(&mut self, phys: u32, len: u32, mut f: impl FnMut(&mut [u64], &mut [u64], usize)) {
-        if phys >= SPACE || len == 0 {
-            return;
+        for line in Coherency::lines(phys, len) {
+            f(&mut self.dirty, &mut self.reported, line);
         }
-        let last = phys.saturating_add(len - 1).min(SPACE - 1);
-        for line in (phys >> LINE_SHIFT)..=(last >> LINE_SHIFT) {
-            f(&mut self.dirty, &mut self.reported, line as usize);
-        }
+    }
+
+    /// The lines `len` bytes at `phys` touch, clipped to what the VPU can
+    /// address. Empty for an access outside it.
+    #[inline]
+    fn lines(phys: u32, len: u32) -> impl Iterator<Item = usize> {
+        let (first, last) = (phys >> LINE_SHIFT, {
+            let end = phys.saturating_add(len.max(1) - 1).min(SPACE - 1);
+            end >> LINE_SHIFT
+        });
+        let empty = phys >= SPACE || len == 0;
+        (if empty { 1 } else { first }..=if empty { 0 } else { last }).map(|l| l as usize)
     }
 }
 
@@ -211,6 +302,39 @@ mod tests {
         assert_eq!(c.reports(), 0);
         c.read_by(0x3010, 4, Master::Dma("emmc2"));
         assert_eq!(c.reports(), 1, "the rest of the line is dirty too");
+    }
+
+    #[test]
+    fn a_dma_write_is_seen_by_a_later_cached_read() {
+        let mut c = tracker();
+        c.set_master(Master::Dma("the EMMC2 DMA"));
+        c.wrote_by_other(0x5000, 4);
+        c.set_master(Master::Vpu);
+        assert_eq!(c.dma_marks(), 1);
+        c.read_cached(0x5000, 4, 0x8000_0000);
+        assert_eq!(c.reports(), 1);
+        // Once said, not said again for the same line.
+        c.read_cached(0x5000, 4, 0x8000_0000);
+        assert_eq!(c.reports(), 1);
+    }
+
+    #[test]
+    fn an_invalidate_makes_a_dma_written_line_readable() {
+        let mut c = tracker();
+        c.wrote_by_other(0x6000, 64);
+        c.flushed(0x6000, 0x603f);
+        c.read_cached(0x6000, 64, 0x8000_0000);
+        assert_eq!(c.reports(), 0);
+    }
+
+    #[test]
+    fn an_access_past_the_vpus_gigabyte_is_ignored() {
+        let mut c = tracker();
+        c.wrote_by_other(SPACE - 16, 64);
+        assert_eq!(c.dma_marks(), 1, "only the last line, not past the end");
+        c.wrote_cached(SPACE, 4);
+        c.read_cached(SPACE, 4, 0);
+        assert_eq!((c.marks(), c.reports()), (0, 0));
     }
 
     #[test]

@@ -18,6 +18,9 @@ pub struct Ram {
     /// [`Ram::write_slice`], so no write can get past it. 64 bits, so a page
     /// can never wrap back to a generation a stale entry still holds.
     gens: Vec<u64>,
+    /// Which lines the VPU holds in cache, and which a DMA engine has written
+    /// behind its back (`--check-coherency`). Off unless asked for.
+    pub coherency: crate::coherency::Coherency,
 }
 
 impl Ram {
@@ -26,6 +29,7 @@ impl Ram {
             base,
             data: vec![0; size],
             gens: vec![0; size.div_ceil(1 << PAGE_SHIFT)],
+            coherency: crate::coherency::Coherency::off(),
         }
     }
 
@@ -44,6 +48,7 @@ impl Ram {
         for g in &mut self.gens[first..=last] {
             *g += 1;
         }
+        self.note_write(off, len);
     }
 
     pub fn base(&self) -> u32 {
@@ -171,6 +176,7 @@ impl Ram {
         if last != first {
             self.gens[last] += 1;
         }
+        self.note_write(off, n);
         Ok(())
     }
 
@@ -210,6 +216,15 @@ impl Ram {
         })
     }
 
+    /// A write that did not come from the VPU leaves the caches out of date.
+    #[inline]
+    fn note_write(&mut self, off: usize, len: usize) {
+        if self.coherency.is_on() && self.coherency.master() != crate::coherency::Master::Vpu {
+            self.coherency
+                .wrote_by_other(self.base.wrapping_add(off as u32), len as u32);
+        }
+    }
+
     #[inline]
     pub fn store(&mut self, addr: u32, width: Width, value: u32) -> BusResult<()> {
         let unmapped = BusError::Unmapped {
@@ -241,6 +256,7 @@ impl Ram {
         if last != first {
             self.gens[last] += 1;
         }
+        self.note_write(off, n);
         Ok(())
     }
 }
