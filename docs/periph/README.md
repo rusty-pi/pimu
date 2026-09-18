@@ -29,6 +29,7 @@ Generated from the TOML specs in [`specs/`](../../specs/); see [`specs/README.md
 | [`gicd`](gicd.md) | arm | `0xFF841000` | `0x1000` | 16 | GIC-400 distributor |
 | [`gich`](gich.md) | arm | `0xFF844000` | `0x2000` | 10 | GIC-400 virtual interface control, banked per CPU |
 | [`gicv`](gicv.md) | arm | `0xFF846000` | `0x2000` | 0 | GIC-400 virtual CPU interface |
+| [`gpio`](gpio.md) | vpu | `0x7E200000` | `0x1000` | 16 | The 58 GPIO pins: function select, output latch, pin levels, edge detect and the BCM2711 pull control |
 | [`hd`](hd.md) | vpu | `0x7E808000` | `0x100` | 2 | Control block at `0x7E80_8000`: the power request and acknowledge start4 waits on before it resets the DWC2 USB controller |
 | [`hdmi`](hdmi.md) | vpu | `0x7EF00700` | `0x300` | 4 | HDMI controller core registers (the `hdmi` window of each connector), with no monitor attached: the packet-RAM handshake, the FIFO recenter and the hotplug state |
 | [`hdmi_auto_i2c`](hdmi_auto_i2c.md) | vpu | `0x7EF00B00` | `0x300` | 5 | HDMI auto-i2c sequencers (the second reg window of each DDC master's node): channels that write a list of values into their connector's DDC I²C master and report when the transfer it starts has finished |
@@ -91,6 +92,8 @@ The `parent` of a block: the master of its bus, or the window it is carved out o
 | VPU source | 125 | [`rng`](rng.md) | — |
 | GIC id | 65 | [`mbox`](mbox.md) | `GIC_SPI 33` |
 | GIC id | 129 | [`hvs`](hvs.md) | `GIC_SPI 97` |
+| GIC id | 145 | [`gpio`](gpio.md) `BANK0` | `GIC_SPI 113` |
+| GIC id | 146 | [`gpio`](gpio.md) `BANK1` | `GIC_SPI 114` |
 | GIC id | 153 | [`uart0`](uart0.md) | `GIC_SPI 121` |
 | GIC id | 158 | [`emmc2`](emmc2.md) | `GIC_SPI 126` |
 | GIC id | 158 | [`emmc`](emmc.md) | `GIC_SPI 126` |

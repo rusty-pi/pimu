@@ -6,8 +6,8 @@ use crate::mem::Ram;
 use crate::periph::hdmi_ddc::AUTO_WINDOW;
 use crate::periph::{
     ArmCtrl, ArmLocal, Asb, Aux, Avs, BootBox, Bsc, ClkMon, ClockManager, ConfigOtp, CoreCtl, Dma4,
-    Dwc2, Emmc2, Gic, Hd, Hdmi, HdmiDdc, Hvs, Mbox, McSync, Pl011, Pm, Rng, Sdc, Sdramc, Spi0,
-    StubRegion, SysTimer, Vce, XhciOtg,
+    Dwc2, Emmc2, Gic, Gpio, Hd, Hdmi, HdmiDdc, Hvs, Mbox, McSync, Pl011, Pm, Rng, Sdc, Sdramc,
+    Spi0, StubRegion, SysTimer, Vce, XhciOtg,
 };
 use crate::soc::bcm2711 as map;
 
@@ -78,6 +78,9 @@ pub struct Machine {
     pub vce: Vce,
     /// BSC instance 0 (`0x7E20_5000`) — nothing attached; probes go unACKed.
     pub bsc0: Bsc,
+    /// The GPIO block (`0x7E20_0000`): pin functions, levels and pulls, and
+    /// the mux word [`Self::route_sd_slot`] follows.
+    pub gpio: Gpio,
     /// SPI0 master (`0x7E20_4000`) — minimal model for the EEPROM bootloader.
     pub spi0: Spi0,
     /// BSC / I²C master at `0x7E20_5E00` + the board PMIC — start4 reads the
@@ -208,8 +211,8 @@ const PHASE_TAG_SIG: u32 = 0x02C0_2000;
 
 /// The SD-slot mux word in the GPIO block, and the bit that routes the card to
 /// the legacy EMMC (see [`Machine::route_sd_slot`]).
-const SD_SLOT_MUX: u32 = map::GPIO_BASE + 0xD0;
-const SD_SLOT_MUX_LEGACY: u32 = 1 << 1;
+const SD_SLOT_MUX: u32 = map::GPIO_BASE + crate::spec::gpio::PIN_MUX;
+const SD_SLOT_MUX_LEGACY: u32 = crate::spec::gpio::PIN_MUX_SD_LEGACY_MASK;
 
 /// The L2's maintenance port (`specs/bootbox.toml`): the bootcode's flush
 /// ends its cache-as-RAM window ([`crate::l2`], #70).
@@ -261,6 +264,7 @@ impl Machine {
             rng: Rng::new(),
             vce: Vce::new(),
             bsc0: Bsc::empty("bsc0"),
+            gpio: Gpio::new(),
             spi0: Spi0::new(),
             bsc_pmic: Bsc::new("bsc-pmic"),
             hdmi_ddc0: HdmiDdc::new("hdmi-ddc0"),
@@ -335,6 +339,7 @@ impl Machine {
         self.sdc = Sdc::with_dram(crate::periph::sdc::Dram::for_memory(board.memory_bytes()));
         self.bsc_pmic
             .fit_pmics(crate::periph::Pmic::for_board(board));
+        self.gpio.fit_board(board);
     }
 
     /// Send the machine's channels to `log` (#95): keep it for the machine's
@@ -345,6 +350,7 @@ impl Machine {
         self.corectl.log = log.clone();
         self.pcie.set_log(log.clone());
         self.spi0.log = log.clone();
+        self.gpio.log = log.clone();
         self.bsc_pmic.set_log(log.clone());
         self.config_otp.log = log.clone();
         self.emmc.log = log.clone();
@@ -727,6 +733,9 @@ impl Machine {
         if let Some(off) = hit(map::SPI0_BASE, map::SPI0_SIZE) {
             return Some((&mut self.spi0, off));
         }
+        if let Some(off) = hit(map::GPIO_BASE, map::GPIO_SIZE) {
+            return Some((&mut self.gpio, off));
+        }
         if let Some(off) = hit(map::BSC0_BASE, map::BSC0_SIZE) {
             return Some((&mut self.bsc0, off));
         }
@@ -1070,8 +1079,9 @@ impl Machine {
     /// `0x7E30_0000` and never touches EMMC2; the 2026 bootcode never writes it
     /// and boots from EMMC2; start4 writes 0 and then sets bit 0, and start4db's
     /// decompile clears bit 1 explicitly (`_DAT_7e2000d0 & 0xfffffffd`) before
-    /// it uses EMMC2. What bit 0 does is not known, and GPIO itself stays on the
-    /// catch-all stub: only the routing is modelled.
+    /// it uses EMMC2. What bit 0 does is not known; [`crate::periph::gpio`]
+    /// holds the word, and routing the card between two controllers is the
+    /// machine's, since a device never reaches another.
     fn route_sd_slot(&mut self, value: u32) {
         let legacy = value & SD_SLOT_MUX_LEGACY != 0;
         if legacy == self.sd_slot_legacy {

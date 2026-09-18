@@ -136,9 +136,10 @@ pub const PVT_SIZE: u32 = spec::pvt::SIZE;
 pub const CLKMON_BASE: u32 = spec::clkmon::BASE;
 pub const CLKMON_SIZE: u32 = spec::clkmon::SIZE;
 
-/// GPIO (`0x7E20_0000`). Not modelled, so it has no spec and stays on the
-/// catch-all stub.
-pub const GPIO_BASE: u32 = 0x7E20_0000;
+/// GPIO (`0x7E20_0000`): pin functions, levels and pulls, and the undocumented
+/// word at `+0xD0` that routes the SD card slot. See [`crate::periph::gpio`].
+pub const GPIO_BASE: u32 = spec::gpio::BASE;
+pub const GPIO_SIZE: u32 = spec::gpio::SIZE;
 
 /// PL011 UART0 (`0x7E20_1000`). Primary firmware debug console when
 /// `BOOT_UART=1` and the console is routed to the PL011.

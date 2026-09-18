@@ -178,9 +178,10 @@ OUTPUT:
               console: SD card and USB stick block runs with the files they
               belong to, OTP rows read and programmed, and what the network
               peer did (DHCP, DNS, TFTP, HTTP). The rest are one device or
-              core each: arm-exc cmp dwc2 emmc expander irqen mbox otp pcie
-              pmic spi xhci, and in a `diag` build derail dma ff irqtbl sleep
-              swirq tick vec. Repeatable; `jsonl:` for one JSON object a line.
+              core each: arm-exc cmp dwc2 emmc expander gpio irqen mbox otp
+              pcie pmic spi xhci, and in a `diag` build derail dma ff irqtbl
+              sleep swirq tick vec. Repeatable; `jsonl:` for one JSON object
+              a line.
               See docs/diagnostics.md.
     --log-file <path>
               Write the --log channels to <path> instead of stderr.

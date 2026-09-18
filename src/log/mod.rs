@@ -73,6 +73,9 @@ pub enum Channel {
     Emmc,
     /// The FXL6408 GPIO expander's register traffic.
     Expander,
+    /// The GPIO block: every pin whose function, level or termination the
+    /// firmware changes, named the way the board wires it.
+    Gpio,
     /// Interrupt enables, decoded back into the `enable_irq_source(src, prio)`
     /// calls that wrote them.
     IrqEn,
@@ -116,13 +119,14 @@ pub enum Channel {
 
 impl Channel {
     /// Every channel, in the order an unknown name lists them.
-    pub const ALL: [Channel; 21] = [
+    pub const ALL: [Channel; 22] = [
         Channel::Io,
         Channel::ArmExc,
         Channel::Cmp,
         Channel::Dwc2,
         Channel::Emmc,
         Channel::Expander,
+        Channel::Gpio,
         Channel::IrqEn,
         Channel::Mbox,
         Channel::Otp,
@@ -149,6 +153,7 @@ impl Channel {
             Channel::Dwc2 => "dwc2",
             Channel::Emmc => "emmc",
             Channel::Expander => "expander",
+            Channel::Gpio => "gpio",
             Channel::IrqEn => "irqen",
             Channel::Mbox => "mbox",
             Channel::Otp => "otp",
