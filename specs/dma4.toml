@@ -3,7 +3,7 @@ name    = "dma4"
 base    = 0x7E007B00
 size    = 0x100
 summary = "DMA4 (`dma40`) channel: the 40-bit DMA engine the bootloader and start4 use"
-notes   = "Sits in channel 11's slot of the legacy controller (`dma`) and is decoded ahead of it. Its control blocks carry address bits 39:32 in `SRCI` / `DESTI`, which is how a 32-bit VPU reaches the PCIe window at `0x6_0000_0000`."
+notes   = "Sits in channel 11's slot of the legacy controller (`dma`) and is decoded ahead of it. Its control blocks carry address bits 39:32 in `SRCI` / `DESTI`, which is how a 32-bit VPU reaches the PCIe window at `0x6_0000_0000`. Those addresses are CPU-physical, with no alias bits to say where an access lands, but the engine is behind the L2 like the legacy one."
 
 [[block.source]]
 kind       = "decompile"
@@ -23,6 +23,12 @@ notes = "Sits in channel 11's slot of the legacy controller and is decoded ahead
 kind       = "decompile"
 ref        = "start4 dmalib `dma_set_cs` `0x3EC98E7C` computes `0x7E007000 + ch * 0x100`; channel 11 is this 40-bit engine"
 confidence = "high"
+
+[[block.source]]
+kind       = "trace"
+ref        = "stock bootloader USB boot: the control block it starts the channel with lives at `0xBEF6D4A0` — the `0x8000_0000` (L2) alias — and is rewritten before every transfer with no flush in between"
+confidence = "high"
+note       = "The firmware's own USB boot depends on the engine reading what the VPU left in the L2, so `--check-coherency` treats this channel as coherent. The word it DMAs a register into is still read back through `0xC000_0000` by both stock and ours, which is what makes that safe either way."
 
 [[register]]
 name   = "CS"
