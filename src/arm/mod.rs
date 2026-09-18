@@ -1172,7 +1172,16 @@ impl ArmBus<'_> {
         let target = self.route(addr, size, false)?;
         self.io |= !matches!(target, Target::Ram(_));
         let r = match target {
-            Target::Ram(off) => self.m.ram.load_at(off, w),
+            Target::Ram(off) => {
+                if self.m.coherency.is_on() {
+                    self.m.coherency.read_by(
+                        off as u32,
+                        w.bytes() as u32,
+                        crate::coherency::Master::Arm,
+                    );
+                }
+                self.m.ram.load_at(off, w)
+            }
             Target::Periph(a) => self.m.load(a, w),
             Target::Local(o) => self.m.arm_local.read(o, w),
             Target::Gic(o) => {

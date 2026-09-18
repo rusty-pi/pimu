@@ -65,6 +65,9 @@ pub enum Channel {
     ArmExc,
     /// Every system-timer compare arm.
     Cmp,
+    /// Reads of memory the VPU has written through a cached alias and not
+    /// flushed — what would be stale bytes on silicon (`--check-coherency`).
+    Coherency,
     /// The DWC2 USB OTG controller: every write, and every read that differs
     /// from the previous read of the same register, so a poll shows once.
     Dwc2,
@@ -119,10 +122,11 @@ pub enum Channel {
 
 impl Channel {
     /// Every channel, in the order an unknown name lists them.
-    pub const ALL: [Channel; 22] = [
+    pub const ALL: [Channel; 23] = [
         Channel::Io,
         Channel::ArmExc,
         Channel::Cmp,
+        Channel::Coherency,
         Channel::Dwc2,
         Channel::Emmc,
         Channel::Expander,
@@ -150,6 +154,7 @@ impl Channel {
             Channel::Io => "io",
             Channel::ArmExc => "arm-exc",
             Channel::Cmp => "cmp",
+            Channel::Coherency => "coherency",
             Channel::Dwc2 => "dwc2",
             Channel::Emmc => "emmc",
             Channel::Expander => "expander",

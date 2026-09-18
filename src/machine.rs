@@ -107,6 +107,10 @@ pub struct Machine {
     pub sdc: Sdc,
     /// Boot-info handoff doorbell (`0x7EE0_2000`).
     pub bootbox: BootBox,
+    /// Which lines the VPU has written through a cached alias and not
+    /// flushed, so a read of one by anyone else can be reported
+    /// (`--check-coherency`).
+    pub coherency: crate::coherency::Coherency,
     /// Legacy DMA controller (`0x7E00_7000`) — start4's bulk memory copies.
     pub dma_legacy: crate::periph::dma_legacy::DmaLegacy,
     /// The `0x7EE0_4100` DMA controller (channel 15 at `0x7EE0_5000`).
@@ -294,6 +298,7 @@ impl Machine {
             sdramc: Sdramc::new(),
             sdc: Sdc::new(),
             bootbox: BootBox::new(),
+            coherency: crate::coherency::Coherency::off(),
             dma4: Dma4::new(),
             dma_legacy: crate::periph::dma_legacy::DmaLegacy::new(),
             dma_vpu: crate::periph::dma_legacy::DmaLegacy::new_vpu(),
@@ -1145,10 +1150,12 @@ impl Machine {
             self.route_sd_slot(value);
         }
         if addr == L2_CTRL && value & L2_FLUSH != 0 {
-            self.l2.flush(
+            let (first, last) = (
                 self.bootbox.word(crate::spec::bootbox::L2_FLUSH_START),
                 self.bootbox.word(crate::spec::bootbox::L2_FLUSH_END),
             );
+            self.l2.flush(first, last);
+            self.coherency.flushed(first, last);
         }
         let trace = self.mmio_traced(addr);
         if let Some((dev, off)) = self.device_for(addr) {
@@ -1361,6 +1368,13 @@ impl Bus for Machine {
             let phys = Machine::fold_ram_addr(addr);
             if self.ram.contains(phys) {
                 self.ram_reads = self.ram_reads.wrapping_add(1);
+                if self.coherency.is_on() && addr >> 30 == 3 {
+                    self.coherency.read_by(
+                        phys,
+                        width.bytes() as u32,
+                        crate::coherency::Master::VpuUncached,
+                    );
+                }
                 if self.l2.covers(phys) {
                     return self.l2.load(&self.ram, addr, phys, width);
                 }
@@ -1393,6 +1407,10 @@ impl Bus for Machine {
         if !Machine::in_mmio(addr) {
             let phys = Machine::fold_ram_addr(addr);
             if self.ram.contains(phys) {
+                // Bits 31:30 pick the alias; only `0b11` bypasses the caches.
+                if self.coherency.is_on() && addr >> 30 != 3 {
+                    self.coherency.wrote_cached(phys, width.bytes() as u32);
+                }
                 if crate::diag::ON
                     && addr & 0x03FF_FFFF == PHASE_TAG_SIG
                     && width == Width::Word

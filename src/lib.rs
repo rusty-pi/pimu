@@ -31,6 +31,7 @@ pub mod aarch64;
 pub mod arm;
 pub mod armstub;
 pub mod bus;
+pub mod coherency;
 pub mod diag;
 pub mod emulator;
 pub mod fdt;
