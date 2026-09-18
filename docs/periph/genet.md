@@ -371,7 +371,7 @@ Sources:
 
 - linux (high): `unimac.h`: `UMAC_CMD`
 - measured (high): `UMAC_CMD` `0x0000000b` with the link up
-- trace (high): `tftp-boot`: the bootloader writes `0x010000d8` before the PHY reset, `0x0000a000` (`SW_RESET` and `LCL_LOOP_EN`) while it sets the rings up, and `0x1000010b` (`PRBL_EN`, `RX_PAUSE_IGNORE`, 1000 Mbit/s, `RX_EN`, `TX_EN`) to start; start4 writes `0x1000010b` only
+- trace (high): `tftp-boot`: the bootloader writes `0x010000d8` before the PHY reset, `0x0000a000` (`SW_RESET` and `LCL_LOOP_EN`) while it sets the rings up, and `0x1000010b` (`TX_PAUSE_IGNORE`, `RX_PAUSE_IGNORE`, 1000 Mbit/s, `RX_EN`, `TX_EN`) to start; start4 writes `0x1000010b` only
 
 `TX_EN` sources:
 
