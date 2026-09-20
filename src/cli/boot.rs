@@ -103,6 +103,17 @@ MEDIA AND NETWORK:
               every cached read of memory an ARM-side master wrote behind
               those caches: on real silicon both see the wrong bytes. Goes to
               the `coherency` log channel.
+    --jitter <seed>
+              Stretch the intervals the model would otherwise take exactly —
+              a card block, a SuperSpeed link's training, an I2C or DDC
+              transfer — by a factor drawn from this seed, so the run is
+              reproducible but not even. Nothing is ever shortened. Compare
+              stock and ours on the same seed: what only ours fails is ours.
+              Goes to the `jitter` log channel.
+    --faults <one-in>
+              With --jitter, let about one chance in this many go wrong the
+              way a board does: a frame that never arrives, and nothing else
+              yet. Off without it, when jitter only costs time.
     --check-alignment
               Report every scalar VPU access that is not naturally aligned.
               The model reads memory by offset; the core cannot, so such an
@@ -310,6 +321,10 @@ struct BootOpts {
     /// `--check-alignment`: report scalar VPU accesses that are not
     /// naturally aligned.
     check_alignment: bool,
+    /// `--jitter <seed>`: stretch the modelled intervals from this seed.
+    jitter: Option<u64>,
+    /// `--faults <one-in>`: how often one of those goes wrong instead.
+    faults: Option<u64>,
     console_log: Option<PathBuf>,
     dump_fdt: Option<PathBuf>,
     print_fdt: bool,
@@ -485,6 +500,8 @@ impl BootOpts {
         let mut hat_eeprom: Option<PathBuf> = None;
         let mut check_coherency = false;
         let mut check_alignment = false;
+        let mut jitter = None;
+        let mut faults = None;
         let mut console_log: Option<PathBuf> = None;
         let mut dump_fdt: Option<PathBuf> = None;
         let mut print_fdt = false;
@@ -654,6 +671,20 @@ impl BootOpts {
                 "--skip-unimpl" => skip_unimpl = true,
                 "--check-coherency" => check_coherency = true,
                 "--check-alignment" => check_alignment = true,
+                "--faults" => {
+                    let rate = it.next().context("--faults needs a number")?;
+                    faults =
+                        Some(rate.parse::<u64>().with_context(|| {
+                            format!("--faults: expected a number, got '{rate}'")
+                        })?);
+                }
+                "--jitter" => {
+                    let seed = it.next().context("--jitter needs a seed")?;
+                    jitter =
+                        Some(seed.parse::<u64>().with_context(|| {
+                            format!("--jitter: expected a number, got '{seed}'")
+                        })?);
+                }
                 "--dump" => {
                     let spec = it.next().context("--dump needs <hexaddr>:<len>")?;
                     let (a, n) = spec.split_once(':').context("--dump: expected addr:len")?;
@@ -764,6 +795,8 @@ impl BootOpts {
             hat_eeprom,
             check_coherency,
             check_alignment,
+            jitter,
+            faults,
             console_log,
             dump_fdt,
             print_fdt,
@@ -908,6 +941,13 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
             emu.machine.ram.coherency.marks(),
             emu.machine.ram.coherency.dma_marks(),
             emu.machine.ram.coherency.reports()
+        );
+    }
+    if rpi_virt_fw::jitter::is_on() {
+        let (count, added, faults) = rpi_virt_fw::jitter::report();
+        println!(
+            "jitter: {count} intervals stretched, {} ms added in all, {faults} faults",
+            added / 1000
         );
     }
     if emu.machine.alignment.is_on() {
@@ -1294,6 +1334,8 @@ impl<'a> Rig<'a> {
             ref hat_eeprom,
             check_coherency,
             check_alignment,
+            jitter,
+            faults,
             ref netboot_root,
             ref host_net,
             trace_mmio,
@@ -1320,6 +1362,12 @@ impl<'a> Rig<'a> {
         }
         if check_alignment {
             machine.alignment = rpi_virt_fw::align::Alignment::on(self.log.clone());
+        }
+        if let Some(seed) = jitter {
+            rpi_virt_fw::jitter::arm(seed, self.log.clone());
+            if let Some(one_in) = faults {
+                rpi_virt_fw::jitter::set_faults(one_in);
+            }
         }
         if let Some(p) = &hat_eeprom {
             let bytes = std::fs::read(p).with_context(|| format!("reading {}", p.display()))?;

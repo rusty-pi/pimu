@@ -347,6 +347,12 @@ pub struct Genet {
     tx_ow_crc: bool,
     /// A received frame whose ring has no free buffer yet.
     rx_pending: Option<Vec<u8>>,
+    /// A frame the backend has handed over that is being held back until its
+    /// time, and the model's clock to measure that against. A reply does not
+    /// arrive the instant it was asked for; with `--jitter` the model says so
+    /// too. Unused while jitter is off, when every frame is taken as it comes.
+    rx_hold: Option<(u64, Vec<u8>)>,
+    now_us: u64,
     pub stats: Stats,
 }
 
@@ -399,6 +405,8 @@ impl Genet {
             tx_frame: Vec::new(),
             tx_ow_crc: false,
             rx_pending: None,
+            rx_hold: None,
+            now_us: 0,
             stats: Stats::default(),
         }
     }
@@ -477,11 +485,44 @@ impl Genet {
 
     /// Run the rings: send whatever the transmit rings hold, then fill free
     /// receive buffers from `net`.
-    pub fn service(&mut self, ram: &mut Ram, net: &mut Option<Box<dyn NetBackend>>) {
+    /// How long a reply takes to come back before jitter stretches it: one
+    /// LAN round trip, which no register gives and which only has to be more
+    /// than nothing.
+    const RX_LATENCY_US: u64 = 200;
+
+    pub fn service(&mut self, now_us: u64, ram: &mut Ram, net: &mut Option<Box<dyn NetBackend>>) {
+        self.now_us = now_us;
         for ring in 0..RINGS {
             self.run_tx(ring, ram, net);
         }
         self.run_rx(ram, net);
+    }
+
+    /// The next frame off the backend, held back for a round trip when
+    /// jitter is on and taken as it comes when it is not.
+    fn take_frame(&mut self, net: &mut Box<dyn NetBackend>) -> Option<Vec<u8>> {
+        if !crate::jitter::is_on() {
+            return net.recv();
+        }
+        if self.rx_hold.is_none() {
+            let frame = net.recv()?;
+            // A frame that never arrives. The sender is not told, so this is
+            // the firmware's to notice and ask again for.
+            if crate::jitter::fault("a lost frame") {
+                self.stats.rx_dropped += 1;
+                return None;
+            }
+            let due =
+                self.now_us + crate::jitter::stretch(Genet::RX_LATENCY_US, "a frame's return");
+            self.rx_hold = Some((due, frame));
+        }
+        match self.rx_hold.take() {
+            Some((due, frame)) if due <= self.now_us => Some(frame),
+            held => {
+                self.rx_hold = held;
+                None
+            }
+        }
     }
 
     fn ring_base(rx: bool, ring: usize) -> u32 {
@@ -627,7 +668,7 @@ impl Genet {
         }
         let rbuf = self.reg(RBUF_CTRL);
         let cmd = self.reg(UMAC_CMD);
-        while let Some(mut frame) = self.rx_pending.take().or_else(|| net.recv()) {
+        while let Some(mut frame) = self.rx_pending.take().or_else(|| self.take_frame(net)) {
             if frame.len() < 14 {
                 continue;
             }
@@ -1022,7 +1063,7 @@ mod tests {
         let base = TDMA_RINGS + 16 * 0x40;
         wr(&mut g, base + TDMA_PROD_INDEX, 2);
         assert!(g.take_kick());
-        g.service(&mut ram, &mut net);
+        g.service(0, &mut ram, &mut net);
         assert_eq!(*sent.borrow(), vec![payload]);
         assert_eq!(rd(&mut g, base + TDMA_CONS_INDEX), 2);
         assert_eq!(rd(&mut g, base + RING_PTR), 6);
@@ -1045,7 +1086,7 @@ mod tests {
         wr(&mut g, TDMA_DESC, 100 << 16 | DESC_SOP | DESC_EOP);
         let base = TDMA_RINGS + 16 * 0x40;
         wr(&mut g, base + TDMA_PROD_INDEX, 1);
-        g.service(&mut ram, &mut net);
+        g.service(0, &mut ram, &mut net);
         assert_eq!(rd(&mut g, base + TDMA_CONS_INDEX), 1);
         assert_eq!(g.stats.tx_dropped, 1);
     }
@@ -1067,7 +1108,7 @@ mod tests {
         wr(&mut g, TDMA_DESC, (buf.len() as u32) << 16 | 0x7fe0);
         wr(&mut g, TDMA_DESC + 4, 0x1000);
         wr(&mut g, TDMA_RINGS + 16 * 0x40 + TDMA_PROD_INDEX, 1);
-        g.service(&mut ram, &mut net);
+        g.service(0, &mut ram, &mut net);
         assert_eq!(*sent.borrow(), vec![payload]);
     }
 
@@ -1091,7 +1132,7 @@ mod tests {
             wr(&mut g, RDMA_DESC + i * 12 + 4, 0x4000 + i * 0x1000);
         }
         let base = RDMA_RINGS + 16 * 0x40;
-        g.service(&mut ram, &mut net);
+        g.service(0, &mut ram, &mut net);
         // Two buffers: the broadcast (padded to 60) and the frame for us; the
         // one for another MAC in between is filtered.
         assert_eq!(rd(&mut g, base + RDMA_PROD_INDEX), 2);
@@ -1110,7 +1151,7 @@ mod tests {
         assert_eq!(rd(&mut g, base + RING_PTR), 0, "wrapped");
         wr(&mut g, base + RDMA_CONS_INDEX, 1);
         assert!(g.take_kick());
-        g.service(&mut ram, &mut net);
+        g.service(0, &mut ram, &mut net);
         assert_eq!(rd(&mut g, base + RDMA_PROD_INDEX), 3);
         assert_eq!(rd(&mut g, RDMA_DESC) >> 16, 64 + 2 + 300);
         assert_eq!(g.stats.rx, 3);
@@ -1140,7 +1181,7 @@ mod tests {
         bring_up(&mut g, 2);
         linux_rx_ring_0(&mut g);
         wr(&mut g, RDMA_DESC + 4, 0x4000);
-        g.service(&mut ram, &mut net);
+        g.service(0, &mut ram, &mut net);
         assert_eq!(rd(&mut g, RDMA_RINGS + RDMA_PROD_INDEX), 1);
         assert_eq!(rd(&mut g, RDMA_DESC) >> 16, 64 + 2 + 100);
         assert_eq!(ram.read_slice(0x4000 + 66, 6).unwrap(), MAC);
@@ -1170,7 +1211,7 @@ mod tests {
         wr(&mut g, HFB_FLT_ENABLE + 4, 0b11);
         wr(&mut g, RDMA_REGS + DMA_INDEX2RING, 1 << 4);
         wr(&mut g, RDMA_DESC + 4, 0x4000);
-        g.service(&mut ram, &mut net);
+        g.service(0, &mut ram, &mut net);
         assert_eq!(g.stats.rx_dropped, 1, "the rule's ring is off");
         assert_eq!(g.stats.rx, 1);
         assert_eq!(rd(&mut g, RDMA_DESC) & DESC_RX_BRDCAST, DESC_RX_BRDCAST);
@@ -1188,7 +1229,7 @@ mod tests {
         wr(&mut g, RBUF_CTRL, 0);
         wr(&mut g, UMAC_CMD, CMD_TX_EN | CMD_RX_EN | CMD_CRC_FWD);
         wr(&mut g, RDMA_DESC + 4, 0x4000);
-        g.service(&mut ram, &mut net);
+        g.service(0, &mut ram, &mut net);
         assert_eq!(rd(&mut g, RDMA_DESC) >> 16, 68);
         let fcs = ram.read_slice(0x4000 + 64, 4).unwrap();
         assert_eq!(fcs, crc32(&f).to_le_bytes());

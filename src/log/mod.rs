@@ -68,6 +68,8 @@ pub enum Channel {
     Alignment,
     /// Every system-timer compare arm.
     Cmp,
+    /// Intervals `--jitter` has stretched, and by how much.
+    Jitter,
     /// Reads of memory the VPU has written through a cached alias and not
     /// flushed — what would be stale bytes on silicon (`--check-coherency`).
     Coherency,
@@ -125,11 +127,12 @@ pub enum Channel {
 
 impl Channel {
     /// Every channel, in the order an unknown name lists them.
-    pub const ALL: [Channel; 24] = [
+    pub const ALL: [Channel; 25] = [
         Channel::Io,
         Channel::ArmExc,
         Channel::Alignment,
         Channel::Cmp,
+        Channel::Jitter,
         Channel::Coherency,
         Channel::Dwc2,
         Channel::Emmc,
@@ -159,6 +162,7 @@ impl Channel {
             Channel::ArmExc => "arm-exc",
             Channel::Alignment => "alignment",
             Channel::Cmp => "cmp",
+            Channel::Jitter => "jitter",
             Channel::Coherency => "coherency",
             Channel::Dwc2 => "dwc2",
             Channel::Emmc => "emmc",

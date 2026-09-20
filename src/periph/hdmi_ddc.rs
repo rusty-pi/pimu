@@ -250,7 +250,8 @@ impl HdmiDdc {
 
         self.done = false;
         self.noack = false;
-        self.pending = Some((self.now_us + self.wire_us(count), acked));
+        let wire_us = crate::jitter::stretch(self.wire_us(count), "a DDC transfer");
+        self.pending = Some((self.now_us + wire_us, acked));
     }
 
     /// A write transfer to the EEPROM: its payload is the byte offset that the

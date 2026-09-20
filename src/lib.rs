@@ -39,6 +39,7 @@ pub mod fdt;
 pub mod firmware;
 pub mod harness;
 pub mod identity;
+pub mod jitter;
 pub mod l2;
 pub mod log;
 pub mod machine;

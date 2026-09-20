@@ -961,7 +961,8 @@ impl Emmc2 {
             if self.read_blocks_left > 0 || self.read_open_ended {
                 self.next_block = Some(NextBlock {
                     polls_left: BLOCK_POLLS,
-                    due_us: self.now_us + BLOCK_WIRE_US,
+                    due_us: self.now_us
+                        + crate::jitter::stretch_slow(BLOCK_WIRE_US, "a card block"),
                 });
             } else if !self.data.is_empty() {
                 let cur = self.get(INT_STATUS) & !INT_BUF_READ_RDY;

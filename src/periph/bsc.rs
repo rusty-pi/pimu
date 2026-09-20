@@ -336,6 +336,7 @@ impl Bsc {
     fn finish(&mut self, acked: bool, bytes: usize) {
         self.dlen = 0;
         let wire_us = self.byte_us() * (bytes as u64 + 1);
+        let wire_us = crate::jitter::stretch(wire_us, "an I2C transfer");
         self.pending = Some((self.now_us + wire_us, !acked));
     }
 

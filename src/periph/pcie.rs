@@ -645,7 +645,13 @@ impl Pcie {
     /// finished training comes up then, and its Port Status Change Event goes
     /// out through the inbound window like any other.
     pub fn advance_to(&mut self, now_us: u64, mem: &mut dyn HostMem) {
-        if !self.endpoint.xhci.link_due(now_us) {
+        let links = self.endpoint.xhci.link_due(now_us);
+        let events = self
+            .endpoint
+            .xhci
+            .deferred_due()
+            .is_some_and(|due| due <= now_us);
+        if !links && !events {
             return;
         }
         let mut up = Upstream {
@@ -653,7 +659,12 @@ impl Pcie {
             mem,
             log: &self.log,
         };
-        self.endpoint.xhci.train_links(&mut up);
+        if links {
+            self.endpoint.xhci.train_links(&mut up);
+        }
+        if events {
+            self.endpoint.xhci.drain_deferred(now_us, &mut up);
+        }
         self.update_irq();
     }
 

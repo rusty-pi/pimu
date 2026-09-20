@@ -532,7 +532,10 @@ impl Machine {
         // A backend with its own clock (a host network) can deliver a frame
         // at any time, not only in reply to a register write.
         if self.net.is_some() {
-            self.with_dma_master("the GENET", |m| m.genet.service(&mut m.ram, &mut m.net));
+            let now = self.systimer.now_us();
+            self.with_dma_master("the GENET", |m| {
+                m.genet.service(now, &mut m.ram, &mut m.net)
+            });
         }
         // The I²C masters time their transfers in microseconds off the system
         // timer, so they stay in step with it across the run loop's `sleep`
@@ -1246,7 +1249,10 @@ impl Machine {
                 self.with_dma_master("the OTG xHCI", |m| m.xhci_otg.run_pending(&mut m.ram));
             }
             if self.genet.take_kick() {
-                self.with_dma_master("the GENET", |m| m.genet.service(&mut m.ram, &mut m.net));
+                let now = self.systimer.now_us();
+                self.with_dma_master("the GENET", |m| {
+                    m.genet.service(now, &mut m.ram, &mut m.net)
+                });
             }
             if GPFSEL_WINDOW.contains(&addr) {
                 self.route_gpio_pins();

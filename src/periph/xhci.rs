@@ -383,7 +383,8 @@ impl Port {
             Some(Speed::Super) => {
                 // The link retrains without host intervention; until it has,
                 // the port reads like an empty one.
-                self.train_at = Some(now + LINK_TRAIN_US);
+                self.train_at =
+                    Some(now + crate::jitter::stretch(LINK_TRAIN_US, "a SuperSpeed link"));
                 base
             }
             Some(_) => {
@@ -445,6 +446,12 @@ pub struct Xhci {
     pub log: Log,
     /// Modelled time, as [`Xhci::link_due`] last saw it.
     now_us: u64,
+    /// Completion events waiting for their due time. On silicon a transfer's
+    /// event lands after the controller has done the work, not inside the
+    /// doorbell write that started it; with `--jitter` the model says so too,
+    /// which is what makes the firmware's event waits mean anything. Empty
+    /// while jitter is off, when every event goes out at once as before.
+    deferred: std::collections::VecDeque<(u64, [u32; 4])>,
     /// The earliest [`Port::train_at`], `u64::MAX` with none training — a
     /// field, because the machine asks every microsecond.
     link_deadline: u64,
@@ -484,6 +491,7 @@ impl Xhci {
             running: false,
             log: Log::default(),
             now_us: 0,
+            deferred: std::collections::VecDeque::new(),
             link_deadline: u64::MAX,
             commands: 0,
             transfers: 0,
@@ -765,6 +773,38 @@ impl Xhci {
     // -----------------------------------------------------------------------
     // Event ring
 
+    /// How long after the work a completion event lands, before jitter
+    /// stretches it: the controller's own turnaround, which no datasheet
+    /// gives and which only has to be more than nothing.
+    const COMPLETION_US: u64 = 10;
+
+    /// Post a completion, which the hardware does once the transfer is over
+    /// rather than inside the doorbell write.
+    fn post_completion(&mut self, trb: [u32; 4], mem: &mut dyn HostMem) {
+        if !crate::jitter::is_on() {
+            self.post_event(trb, mem);
+            return;
+        }
+        let due =
+            self.now_us + crate::jitter::stretch_slow(Xhci::COMPLETION_US, "an xHCI completion");
+        self.deferred.push_back((due, trb));
+    }
+
+    /// Post every completion whose time has come, and say whether anything
+    /// is still waiting.
+    pub fn drain_deferred(&mut self, now_us: u64, mem: &mut dyn HostMem) {
+        self.now_us = now_us;
+        while self.deferred.front().is_some_and(|(due, _)| *due <= now_us) {
+            let (_, trb) = self.deferred.pop_front().expect("front just checked");
+            self.post_event(trb, mem);
+        }
+    }
+
+    /// When the next deferred event is due, if one is.
+    pub fn deferred_due(&self) -> Option<u64> {
+        self.deferred.front().map(|(due, _)| *due)
+    }
+
     fn post_event(&mut self, mut trb: [u32; 4], mem: &mut dyn HostMem) {
         let erstba = self.reg64(ERSTBA_LO) & !0x3F;
         let erstsz = self.reg(ERSTSZ) & 0xFFFF;
@@ -876,7 +916,7 @@ impl Xhci {
                 code << 24,
                 (slot << 24) | (TRB_COMMAND_COMPLETION << 10),
             ];
-            self.post_event(event, mem);
+            self.post_completion(event, mem);
             self.cmd_ptr = this + 16;
         }
     }
@@ -1129,7 +1169,7 @@ impl Xhci {
                         | (TRB_TRANSFER_EVENT << 10)
                         | if ed { 1 << 2 } else { 0 },
                 ];
-                self.post_event(event, mem);
+                self.post_completion(event, mem);
             }
             ptr += 16;
             if code > CC_SHORT_PACKET {
