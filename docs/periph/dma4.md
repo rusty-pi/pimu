@@ -7,12 +7,13 @@
 - Size: `0x100`
 - Carried by: [`dma`](dma.md)
 
-Sits in channel 11's slot of the legacy controller (`dma`) and is decoded ahead of it. Its control blocks carry address bits 39:32 in `SRCI` / `DESTI`, which is how a 32-bit VPU reaches the PCIe window at `0x6_0000_0000`.
+Sits in channel 11's slot of the legacy controller (`dma`) and is decoded ahead of it. Its control blocks carry address bits 39:32 in `SRCI` / `DESTI`, which is how a 32-bit VPU reaches the PCIe window at `0x6_0000_0000`. Those addresses are CPU-physical, with no alias bits to say where an access lands, but the engine is behind the L2 like the legacy one.
 
 Sources:
 
 - decompile (high): bootloader submit `0x0008b0xx` and status check `0x0008b3f4`
 - decompile (high): start4 dmalib: `dma_set_cs` `0x3EC98E7C`, `dma_chain_start` `0x3EC97544`, channel 11 for the xHCI takeover
+- trace (high): stock bootloader USB boot: the control block it starts the channel with lives at `0xBEF6D4A0` — the `0x8000_0000` (L2) alias — and is rewritten before every transfer with no flush in between — _The firmware's own USB boot depends on the engine reading what the VPU left in the L2, so `--check-coherency` treats this channel as coherent. The word it DMAs a register into is still read back through `0xC000_0000` by both stock and ours, which is what makes that safe either way._
 
 Carried by [`dma`](dma.md):
 

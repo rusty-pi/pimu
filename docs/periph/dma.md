@@ -6,12 +6,13 @@
 - Base: `0x7E007000`
 - Size: `0x1000`
 
-start4 copies anything of 1 KiB or more through here (`dma_memcpy`). Channel 11's slot at `+0xB00` is the DMA4 channel (`dma4`), decoded ahead of this block. The `0x7EE04100` controller (`dma_vpu`) has the same channel layout.
+start4 copies anything of 1 KiB or more through here (`dma_memcpy`). Channel 11's slot at `+0xB00` is the DMA4 channel (`dma4`), decoded ahead of this block. The `0x7EE04100` controller (`dma_vpu`) has the same channel layout. A control block's addresses are VC4 bus addresses, alias bits and all, and the engine sits behind the L2: only `0xC000_0000` goes past the caches.
 
 Sources:
 
 - datasheet (high): BCM2711 ARM Peripherals, DMA Controller chapter: channel register blocks `0x100` apart, `INT_STATUS` / `ENABLE` at `0xFE0` / `0xFF0`
 - decompile (high): `dma_memcpy` `0x3EC981CC`; `dma_set_cs` `0x3EC98E7C`: `base = ch < 15 ? 0x7E007000 : 0x7EE04100`, `start = *(base + ch * 0x100) = flags | 1`
+- trace (high): stock bootloader and start4 `dma_memcpy` transfers with `--log dma`: every control block this boot uses has both ends in the `0x0` alias, and the destination is read straight back through a cached alias with no flush in between — _So a transfer at a cached alias is coherent with the VPU, and `--check-coherency` only counts one at `0xC000_0000` as going behind the caches. Marking every legacy-DMA write as uncached reports ~11k stale reads in a stock boot that works on silicon._
 
 ## Register map
 
