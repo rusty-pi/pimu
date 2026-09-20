@@ -1170,7 +1170,12 @@ pub enum VecExec {
         reg: Option<VecReg>,
         /// `++` on the vector slot.
         step: bool,
-        base: u8,
+        /// The scalar register the address starts from, or `None` for the
+        /// forms that name no address at all — a `vld` whose B slot holds a
+        /// vector. Those read from **zero**: measured with `probes/mld.s`,
+        /// four such forms all came back with the same sixteen words from
+        /// address 0, whatever their operands held.
+        base: Option<u8>,
         /// Byte displacement on the address, measured as such.
         offset: u32,
         /// `+rN` on the vector slot: a scalar added to its element index.
@@ -1386,6 +1391,11 @@ impl VecInsn {
     /// `SETF` on a transfer is accepted and ignored — measured: a load or a
     /// store with the bit set leaves all three lane flags exactly as they
     /// were.
+    /// Whether the B slot is a dash — the shape that spells an address.
+    fn b_is_dash(&self) -> bool {
+        matches!(self.b, VecOperandB::Slot(s) if s.is_dash())
+    }
+
     fn mem_transfer(&self) -> Option<VecExec> {
         let width = if self.wide { 80 } else { 48 };
         // `WW` 3 is not a width this decoder knows; 0/1/2 are 8/16/32.
@@ -1420,7 +1430,20 @@ impl VecInsn {
             return None; // what `++` on the inert slot steps was not measured
         }
 
-        let addr = self.addr?;
+        // A load whose B slot holds a vector names no address: those bits
+        // *are* the address composite in the forms that have one. It reads
+        // from zero — measured — so it is carried out as such. A store in that
+        // shape was not measured.
+        let addr = match self.addr {
+            Some(addr) => addr,
+            None if !store && !self.b_is_dash() => VecAddr {
+                base: 63,
+                offset: 0,
+                incr: None,
+            },
+            None => return None,
+        };
+        let no_base = addr.base == 63 && self.addr.is_none();
         // A dash in the vector position discards the transfer's data. That is
         // a load with nowhere to put it — `FUN_0edc9e20`'s read fence — and a
         // store with nothing to write, which is not modelled.
@@ -1435,7 +1458,7 @@ impl VecInsn {
                 Some(vec_slot.window()?)
             },
             step: vec_slot.inc,
-            base: addr.base,
+            base: (!no_base).then_some(addr.base),
             offset: addr.offset,
             addend: (vec_slot.addend != 15).then_some(vec_slot.addend),
             incr: addr.incr,

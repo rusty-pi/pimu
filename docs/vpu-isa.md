@@ -430,23 +430,19 @@ lane predicate applies to the aggregate as well.
 
 `VecInsn::executable` decides, by field rather than by whole-word template.
 A linear sweep of `start4.elf`'s `.text` with this decoder finds **14650**
-vector instructions, and **13046 of them execute**.
+vector instructions, and **13696 of them execute**.
 
-What is left is mostly not instructions. Splitting it by whether the
-instruction's 4 KiB page looks like code — 60% or more of its vector words
-executable — puts **93** in code pages and **1511** in pages that disassemble
-as vector instructions only because a linear sweep cannot tell a jump table
-from one. The count of vector words is itself a property of the sweep: a
-decoder that reads a length differently walks a different stream through the
-data, which is why this number and `binutils-vc4` objdump's are not the same.
+The 954 that do not split by what `binutils-vc4` objdump makes of the same
+address — a better measure than the page they sit in, since a linear sweep
+through a jump table produces valid-looking encodings by accident:
 
-| Left in code pages | Reason | Source |
+| Left over | What it is | Source |
 |---|---|---|
-| ~32 | `vld` with a vector slot or an immediate in the B position. Every form tried read address **0**, whatever the A addend or the B vector held — and these are the 48-bit encoding, whose address composite *is* the B slot, so there is no address field left to read | measured: `probes/mld.s` |
-| ~14 | memory sub-op 3 | decompile: `binutils-vc4` names it `mem03` and nothing more; a probe that ran it took the firmware down with it |
-| ~8 | ALU sub-op 0 at addresses `binutils-vc4` also prints as a raw `vec48` — a sweep inside a code page's data | decompile: objdump renders the same words as `vec48 0x401,0x73fff088` and the like |
-| ~6 | memory sub-op 1 (`lookupm`) in forms whose address the gather decode does not accept | decompile: `binutils-vc4` spells them `vunklookupm ...,(r63)+r3`; the fields are not established |
-| rest | one-offs, and words inside a code page that the sweep cannot tell from the data beside them — `binutils-vc4` prints most of them as `vunk...` or `vop63.1` too | measured: `probes/usub.s`, `probes/setfc.s` |
+| 389 | words objdump refuses too — it prints them `vec48`, `vunk...` or `vop63.1`. Data: jump tables and constants a sweep cannot tell from code | decompile: `binutils-vc4` objdump over the same addresses |
+| ~250 | the memory sub-ops that kill the firmware — 3, 10, 11-15, 16-23, 25-31. Each writes a zero into the destination element and leaves the board unable to answer the mailbox; none is carried out for that reason | measured: `probes/m11.s`-`probes/m23.s` on Raspberry Pi 4B d03115 boards, one sub-op per board |
+| ~90 | `lookupm`/`indexwritem` in shapes the gather decode does not take — `v8lookupm -,V(0,39),(r63)+r3` and the like | decompile: `binutils-vc4` spells them; which register `r63` stands for in that position is not established |
+| ~22 | `vst` with a vector slot in the B position. The *load* in that shape reads address 0, measured — the store was not | measured: `probes/mld.s` settled the load only |
+| 67 | addresses objdump does not decode at all: the two linear sweeps drifting apart inside data | decompile: `binutils-vc4` objdump over the same addresses |
 
 None of it is reached on a firmware boot: `boot` stops on an unimplemented
 instruction by default, and `boot-check testdata/boot/firmware-boot.toml`

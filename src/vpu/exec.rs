@@ -1141,11 +1141,9 @@ impl Vpu {
                         // firmware advances it separately after the loop
                         // (`memcpy` at `0x3EDA28FE` adds `r0 * 64` to `r1`),
                         // which would double-count if the instruction did too.
-                        let mut addr = self
-                            .regs
-                            .get(base as usize)
-                            .wrapping_add(offset)
-                            .wrapping_add(0);
+                        let mut addr = base
+                            .map_or(0, |b| self.regs.get(b as usize))
+                            .wrapping_add(offset);
                         let addend = addend.map_or(0, |r| self.regs.get(r as usize));
                         for rep in 0..reps {
                             let step = if step { rep } else { 0 };

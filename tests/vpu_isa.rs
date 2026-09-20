@@ -4302,3 +4302,67 @@ fn memory_sub_op_7_writes_zeros() {
         assert_eq!(&got, want, "row {row}");
     }
 }
+
+/// A `vld` whose B slot holds a vector reads from address zero.
+///
+/// `probes/mld.s` on a Raspberry Pi 4B d03115. Four such forms — with and
+/// without an addend on the dash A slot, with a B vector of zeros and one of
+/// fours, and with a vector in the A position too — all came back with the
+/// same sixteen words, and those words are what sits at address 0 on that
+/// board (its armstub). The 48-bit encoding has no address composite: the bits
+/// one would use *are* the B slot, so there is nothing else for it to read.
+///
+/// The model has no armstub, so the test puts the board's sixty-four bytes at
+/// address 0 itself and asks for them back.
+#[test]
+fn a_load_with_a_vector_b_reads_address_zero() {
+    const CODE_BYTES: &[u8] = &[
+        0x03, 0xb0, 0x40, 0x00, 0x14, 0x40, 0x44, 0xb0, 0x00, 0x10, 0x06, 0xfe, 0x38, 0xc0, 0x00,
+        0x04, 0xc0, 0xfb, 0x00, 0x00, 0x00, 0xf6, 0xb8, 0xc5, 0x04, 0x04, 0x11, 0xf0, 0x3c, 0xc0,
+        0x15, 0x03, 0x10, 0xf0, 0x78, 0xc0, 0x15, 0x03, 0x11, 0xf0, 0xbc, 0xc0, 0x16, 0x03, 0x10,
+        0xf0, 0xf1, 0xc0, 0x16, 0x53, 0x96, 0xf8, 0x30, 0xe0, 0x80, 0x03, 0xe0, 0x33, 0x00, 0x00,
+        0x5a, 0x00,
+    ];
+    const AT_ZERO: &[u8] = &[
+        0x40, 0x05, 0x00, 0x58, 0x1f, 0x00, 0x00, 0xb9, 0x01, 0x00, 0xb0, 0x52, 0x01, 0x08, 0x00,
+        0xb9, 0x40, 0xb0, 0x39, 0xd5, 0x41, 0x04, 0x80, 0xd2, 0x00, 0x00, 0x01, 0xaa, 0x40, 0xb0,
+        0x19, 0xd5, 0x80, 0x04, 0x00, 0x58, 0x00, 0xe0, 0x1b, 0xd5, 0x7f, 0xe0, 0x1c, 0xd5, 0xe0,
+        0x7f, 0x86, 0xd2, 0x40, 0x11, 0x1e, 0xd5, 0x20, 0xb6, 0x80, 0xd2, 0x00, 0x11, 0x1e, 0xd5,
+        0x60, 0x0e, 0x80, 0xd2,
+    ];
+
+    let mut m = machine();
+    let mut v = Vpu::new(CODE);
+    for (i, b) in CODE_BYTES.iter().enumerate() {
+        m.store8(CODE + i as u32, *b).unwrap();
+    }
+    for (i, b) in AT_ZERO.iter().enumerate() {
+        m.store8(i as u32, *b).unwrap();
+    }
+    for i in 0..4096u32 {
+        m.store8(0x4000 + i, (i + 1) as u8).unwrap();
+        m.store8(0x5000 + i, 0).unwrap();
+    }
+    v.regs.set(0, 0x8000);
+    v.regs.set(1, 0x4000);
+    v.regs.pc = CODE;
+    for _ in 0..64 {
+        if v.regs.pc == CODE + CODE_BYTES.len() as u32 - 2 {
+            break; // the trailing `rts`
+        }
+        assert_eq!(
+            v.step(&mut m),
+            Step::Ran,
+            "at {:#x}: {:?}",
+            v.regs.pc,
+            v.stopped
+        );
+    }
+    // Rows 0 to 3 are the four forms; each holds what address 0 holds.
+    for row in 0..4u32 {
+        let got: Vec<u8> = (0..64)
+            .map(|c| m.load8(0x8000 + row * 64 + c).unwrap())
+            .collect();
+        assert_eq!(got, AT_ZERO, "row {row}");
+    }
+}
