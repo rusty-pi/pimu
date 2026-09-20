@@ -115,18 +115,37 @@ only on a boot that goes on to Linux.
 ## The vector unit (confirmed against two references)
 
 The Vector Register File is a 64x64 array of bytes; a vector register is a
-16-element window into it, named by a 4-bit descriptor (element width,
-horizontal/vertical direction, column band) plus a 6-bit coordinate. Descriptors
-14 and 15 are the "dash" slot, which names no register at all — `-` in
-`videocoreiv.arch`, whose meaning depends on position: *discard the result* (D),
-*ignore* (A), *use the coordinate as a scalar register* (B).
+16-element window into it, named by a slot: a 4-bit type nibble, a coordinate,
+a `+rN` scalar addend, and the `*` and `++` modifiers. Types 14 and 15 are the
+"dash" slot, which names no register at all — `-` in `videocoreiv.arch`, whose
+meaning depends on position: *discard the result* (D), *ignore* (A), *use the
+coordinate as a scalar register* (B).
 
-Field layout is transcribed from `videocoreiv.arch` (which flags its own vector
-section as experimental) and then **checked byte for byte** against
-`binutils-vc4`'s gas test corpus — `gas/testsuite/gas/vc4/{dash,accmods,
-alu80-setf,wide,vldst}.d` — and against that assembler's objdump run over
-`start4.elf` itself. Hermitage's 80-bit *memory* patterns place the address
-fields correctly; his 48-bit and 80-bit *ALU* patterns match exactly.
+**The type nibble is not an element width.** It says how coarsely the slot can
+spell its column — `H` in steps of 16 bytes, `HX` in steps of 32, `HY` only 0,
+and the three `V` types the same for a column — while the width of an element
+comes from the operation (`v8` / `v16` / `v32`). Reading it as a width is what
+made 3659 of `start4.elf`'s vector instructions look like a width mismatch: a
+16-bit operation on an `H` slot, such as `v16mov H(0,32),0x4`, is ordinary.
+
+The fields are `binutils-vc4`'s — `print_vector_reg_1` in `opcodes/vc4-dis.c`,
+a fork whose vector decoding has been corrected against hardware probes. Its
+`f-op<hi>-<lo>` field names number the bits by 16-bit parcel in *memory* order,
+which `src/vpu/decode.rs` reads through one helper (`cg`). The whole of
+`start4.elf`'s `.text` was then compared against that disassembler instruction
+by instruction: **15054 of the 15180 vector words agree**, and the 126 that do
+not are ones objdump itself renders as a raw `vec48` / `vec80`, having no form
+for them.
+
+Two details are easy to get wrong, and both were:
+
+- a **vertical** slot's coordinate splits — `y` names the 16-aligned band of
+  rows the column covers, and the coordinate's low nibble belongs to `x`. Read
+  as a horizontal coordinate it prints rows that cannot exist.
+- the bit beside the B slot (`f-op38`) is that slot's `+rN` **only when B is a
+  vector register**. With a dash or an immediate there is no coordinate to step
+  and the same bit is `SETF` — and `vgetacc`, which never addresses memory,
+  always reads it as `SETF`.
 
 The file itself is modelled in `src/vpu/vrf.rs` — 64 rows of 64 bytes, plus one
 zero flag per lane. Only *horizontal* windows (16 consecutive elements of one
@@ -136,10 +155,10 @@ Which instructions execute is decided in `VecInsn::executable`, and every one of
 them is matched as a whole instruction word: a template with only the
 established fields left free, plus a value whitelist on each of those. A set bit
 in a field this model does not interpret falls through to a fault, which is the
-point — the encoding has corners this decoder renders only approximately
-(per-slot `+rN` addends, fine-x coordinate bits, the accumulator modifiers), and
-a loose field test would execute one of them wrongly and corrupt memory in
-silence.
+point — a loose field test would execute one of those forms wrongly and corrupt
+memory in silence. Decoding a field is not the same as executing it: a load's
+address displacement is read correctly now and still faults, because nothing
+says whether it counts bytes or elements.
 
 | form | example | what it does here |
 |---|---|---|

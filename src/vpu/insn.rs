@@ -440,54 +440,131 @@ pub enum Op {
     },
 }
 
-/// One VRF operand slot of a vector instruction.
+/// One operand slot of a vector instruction.
 ///
 /// The Vector Register File is a 64x64 array of bytes; a vector register is a
-/// 16-element window into it, named by a 4-bit "type" descriptor (element width
-/// plus horizontal/vertical direction plus the column band) and a 6-bit
-/// coordinate. Descriptors 14 and 15 are the "dash" slot, which names no VRF
-/// register at all: `videocoreiv.arch` spells its meaning per position as
-/// "Discard result (D), Ignore (A), Use coordinate as Scalar (B)".
+/// 16-element window into it. The slot names that window with a 4-bit type
+/// nibble — direction in bit 0, the granularity of the coordinate it carries in
+/// the rest — plus a coordinate, a `+rN` scalar addend, and the `*` and `++`
+/// modifiers. Types 14 and 15 are the "dash" slot, which names no register at
+/// all: `videocoreiv.arch` spells its meaning per position as "Discard result
+/// (D), Ignore (A), Use coordinate as Scalar (B)".
+///
+/// The fields are `binutils-vc4`'s (`print_vector_reg_1`, `opcodes/vc4-dis.c`),
+/// checked against that disassembler over `start4.elf`'s whole `.text`: every
+/// one of the 15180 vector instructions there spells its slots the same way.
+///
+/// The type nibble is not an element width. It says how coarse the `x` it
+/// encodes is — H in steps of 16 bytes, HX in steps of 32, HY only 0 — and the
+/// width of an element comes from the operation (`v8`/`v16`/`v32`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VecSlot {
-    /// 4-bit descriptor: `(type3 << 1) | vertical`. >= 14 is the dash slot.
-    pub desc: u8,
-    /// 6-bit coordinate. For a dash slot in the B position this is a *scalar*
-    /// register number instead (`r0..r63`, though only `r0..r31` exist).
-    pub coord: u8,
+    /// Type nibble. Bit 0 set = vertical (a column); >= 14 is the dash slot.
+    pub ty: u8,
+    /// Byte column of the window in a row.
+    pub x: u8,
+    /// Row of the window (horizontal), or the 16-row band it starts at
+    /// (vertical).
+    pub y: u8,
+    /// `+rN`: a scalar register added to the coordinate. 15 = none.
+    pub addend: u8,
+    /// `*` — the coordinate is a column offset.
+    pub star: bool,
+    /// `++` — post-increment the coordinate.
+    pub inc: bool,
+    /// The scalar register a dash in the B position names: the 80-bit slot
+    /// spells it in the same nibble as [`Self::addend`] (`r0..r15`), the 48-bit
+    /// one in the coordinate field (`r0..r63`).
+    pub scalar: u8,
+    /// A dash B slot's signed displacement beside that register. Zero in the
+    /// 48-bit forms, which have no room for it.
+    pub disp: i32,
 }
 
 impl VecSlot {
-    /// Names no vector register.
-    pub fn is_dash(self) -> bool {
-        self.desc >= 14
+    /// Decode a 16-bit (D/B) or 20-bit (A) slot composite, exactly as
+    /// `print_vector_reg_1` reads it. `areg` selects the A slot's four extra
+    /// low-order x bits.
+    pub fn from_composite(comp: u32, areg: bool) -> VecSlot {
+        let ty = ((comp >> 6) & 15) as u8;
+        let fine = if areg { ((comp >> 16) & 15) as u8 } else { 0 };
+        let star = (comp >> 10) & 1 != 0;
+        let inc = (comp >> 11) & 1 != 0;
+        let addend = ((comp >> 12) & 15) as u8;
+        let low = (comp & 15) as u8;
+        let band2 = (((comp >> 7) & 3) << 4) as u8;
+        let band1 = (((comp >> 7) & 1) << 5) as u8;
+        // A vertical slot's y is the 16-aligned base of the sixteen rows it
+        // covers, and the low nibble of the coordinate is part of its x
+        // instead — `binutils-vc4`'s V-direction fix, which `vc4.slaspec`
+        // agrees with (`row = VaHi << 4, column = VaLo + 16 * base`).
+        let (x, y) = match ty {
+            0 | 2 | 4 | 6 => (band2 | fine, (comp & 63) as u8),
+            8 | 10 => (band1 | fine, (comp & 63) as u8),
+            12 => (fine, (comp & 63) as u8),
+            1 | 3 | 5 | 7 => (
+                band2 | if areg { fine } else { low },
+                (comp & if areg { 0x3F } else { 0x30 }) as u8,
+            ),
+            9 | 11 => (
+                band1 | if areg { fine } else { low },
+                (comp & if areg { 0x3F } else { 0x30 }) as u8,
+            ),
+            13 => (
+                if areg { fine } else { low },
+                (comp & if areg { 0x3F } else { 0x30 }) as u8,
+            ),
+            // Dash. The B position reads the addend nibble as a scalar register
+            // and the rest as a signed 9-bit displacement.
+            _ => (0, 0),
+        };
+        let disp = if ty >= 14 {
+            let raw = (comp & 0x7F) | (((comp >> 10) & 3) << 7);
+            ((raw as i32) << 23) >> 23
+        } else {
+            0
+        };
+        VecSlot {
+            ty,
+            x,
+            y,
+            addend,
+            star,
+            inc,
+            scalar: addend,
+            disp,
+        }
     }
 
-    /// Resolve a *horizontal* slot — 16 consecutive elements of one VRF row —
-    /// whose element width matches `lane_bits`.
+    /// Names no vector register.
+    pub fn is_dash(self) -> bool {
+        self.ty >= 14
+    }
+
+    /// The dash the assembler round-trips (`binutils-vc4` #131): type 14 with
+    /// no addend and no modifiers. `scalar`/`disp` are not part of it — they
+    /// mean something only in the B position.
+    pub fn is_bare_dash(self) -> bool {
+        self.ty == 14 && self.addend == 15 && !self.star && !self.inc
+    }
+
+    /// A column of the file rather than a row.
+    pub fn is_vertical(self) -> bool {
+        self.ty & 1 != 0
+    }
+
+    /// Resolve a *horizontal* slot — 16 consecutive elements of one VRF row,
+    /// each `lane_bits` wide, starting at byte column `x`.
     ///
-    /// The descriptor's column band fixes both the element width and where in
-    /// the row the window starts, and the band always spans exactly 16 elements:
-    /// four 16-byte bands for 8-bit elements, two 32-byte bands for 16-bit, one
-    /// 64-byte band for 32-bit. A vertical slot (a *column* of the file), or a
-    /// band that disagrees with the operation width, returns `None` — the
-    /// executor faults on those rather than guessing.
+    /// A vertical slot (a *column* of the file) returns `None`; the executor
+    /// faults on those rather than guessing.
     pub fn horizontal(self, lane_bits: u8) -> Option<VecReg> {
-        if self.desc & 1 != 0 {
-            return None;
-        }
-        let (bits, x0) = match self.desc >> 1 {
-            band @ 0..=3 => (8, band * 16),
-            band @ (4 | 5) => (16, (band - 4) * 32),
-            6 => (32, 0),
-            _ => return None,
-        };
-        if bits != lane_bits {
+        if self.is_dash() || self.is_vertical() {
             return None;
         }
         Some(VecReg {
-            row: self.coord % 64,
-            x0,
+            row: self.y % 64,
+            x0: self.x,
             lane_bytes: lane_bits / 8,
         })
     }
@@ -605,9 +682,6 @@ pub struct VecInsn {
     /// Set for a memory-class op whose B slot is a dash, i.e. one that
     /// addresses memory rather than naming a third vector register.
     pub addr: Option<VecAddr>,
-    /// `*` / `++` coordinate modifiers on the D and A slots (80-bit forms).
-    pub d_mod: u8,
-    pub a_mod: u8,
     /// `SETF` — update the per-lane vector flags.
     pub setf: bool,
     /// `REP` field: 0 = execute once.
@@ -799,39 +873,34 @@ impl VecInsn {
             4 => true,
             _ => return None,
         };
-        // Addend/modifier pairs: g/G belong to D, h/H to A.
-        let (g, h) = if wide {
-            (
-                vfield(self.raw, 80, 48, 4) as u8,
-                vfield(self.raw, 80, 54, 4) as u8,
-            )
+        let (vec_slot, dash) = if store {
+            (self.a, self.d)
         } else {
-            (15, 15)
+            (self.d, self.a)
         };
-        let ((vec_slot, vec_mod, vec_addend), (dash, dash_mod, dash_addend)) = if store {
-            ((self.a, self.a_mod, h), (self.d, self.d_mod, g))
-        } else {
-            ((self.d, self.d_mod, g), (self.a, self.a_mod, h))
-        };
-        if dash.desc != 14 || dash.coord != 0 || dash_mod != 0 || vec_addend != 15 {
+        // The inert slot must be the canonical dash, apart from the addend
+        // nibble the address reads as its `+=` step; the vector slot carries no
+        // addend and no `*`, and its only modifier is `++`.
+        if dash.ty != 14 || dash.star || dash.inc {
             return None;
         }
-        let step_row = match vec_mod {
-            0 => false,
-            2 => true,
-            _ => return None,
-        };
+        if vec_slot.addend != 15 || vec_slot.star {
+            return None;
+        }
+        let step_row = vec_slot.inc;
         let addr = self.addr?;
+        // A displacement on the address is decoded but not executed: nothing
+        // says whether it counts in bytes or in elements, and no instruction
+        // this model runs carries one.
+        if addr.offset != 0 {
+            return None;
+        }
         Some(VecExec::Mem {
             store,
             reg: vec_slot.horizontal(self.lane_bits)?,
             step_row,
             base: addr.base,
-            incr: if dash_addend == 15 {
-                None
-            } else {
-                Some(dash_addend)
-            },
+            incr: addr.incr,
             reps: match self.rep {
                 7 => VecRep::FromR0,
                 n => VecRep::Fixed(1 << n),
@@ -913,13 +982,12 @@ impl VecInsn {
             return None; // `subop == 0` is `vmov`; only that broadcasts here.
         }
         let reg = self.d.horizontal(self.lane_bits)?;
-        let step_row = match self.d_mod {
-            0 => false,
-            2 => true,
-            _ => return None,
-        };
+        if self.d.addend != 15 || self.d.star {
+            return None;
+        }
+        let step_row = self.d.inc;
         // A must be a bare dash; no scalar writeback, flag update, or predication.
-        if !self.a.is_dash() || self.a.coord != 0 || self.a_mod != 0 {
+        if !self.a.is_bare_dash() {
             return None;
         }
         if self.setf || self.sru != VecSru::None || self.pred != 0 {
@@ -927,7 +995,11 @@ impl VecInsn {
         }
         let src = match self.b {
             VecOperandB::Imm(i) => RegOrImm::Imm(i as i32),
-            VecOperandB::Slot(s) if s.is_dash() && (s.coord as u32) < 32 => RegOrImm::Reg(s.coord),
+            // A dash in the B slot names a scalar register in its addend
+            // nibble; only r0..r15 can be spelled there.
+            VecOperandB::Slot(s) if s.is_dash() && s.disp == 0 && s.scalar < 32 => {
+                RegOrImm::Reg(s.scalar)
+            }
             _ => return None,
         };
         let reps = match self.rep {
@@ -959,32 +1031,40 @@ impl VecInsn {
     }
 }
 
+/// One slot in `binutils-vc4` objdump's spelling: `HX(3,32)++`, `V(16,12)+r4*`,
+/// `-`, or — for a dash in the B position — the scalar register it names.
 fn slot_str(s: VecSlot, scalar: bool) -> String {
     if s.is_dash() {
-        return if scalar {
-            format!("r{}", s.coord)
-        } else {
-            "-".to_string()
-        };
+        if !scalar {
+            return "-".to_string();
+        }
+        let mut out = format!("r{}", s.scalar);
+        if s.disp != 0 {
+            out += &format!("{:+}", s.disp);
+        }
+        return out;
     }
-    // desc = (type3 << 1) | vertical; type3 picks width and column band.
-    let vertical = s.desc & 1 != 0;
-    let (name, col) = match s.desc >> 1 {
-        0 => ("", 0),
-        1 => ("", 16),
-        2 => ("", 32),
-        3 => ("", 48),
-        4 => ("X", 0),
-        5 => ("X", 32),
-        _ => ("Y", 0),
+    let name = match s.ty >> 1 {
+        0..=3 => "",
+        4 | 5 => "X",
+        _ => "Y",
     };
-    format!(
-        "{}{}({},{})",
-        if vertical { "V" } else { "H" },
-        name,
-        s.coord,
-        col
-    )
+    let vertical = s.is_vertical();
+    let (y, x) = if s.inc && !vertical {
+        (format!("{}++", s.y), format!("{}", s.x))
+    } else if s.inc {
+        (format!("{}", s.y), format!("{}++", s.x))
+    } else {
+        (format!("{}", s.y), format!("{}", s.x))
+    };
+    let mut out = format!("{}{name}({y},{x})", if vertical { "V" } else { "H" });
+    if s.addend != 15 {
+        out += &format!("+r{}", s.addend);
+    }
+    if s.star {
+        out.push('*');
+    }
+    out
 }
 
 impl std::fmt::Debug for VecInsn {
@@ -994,17 +1074,15 @@ impl std::fmt::Debug for VecInsn {
         // destination sits in D. Print whichever is the real register first,
         // the way `binutils-vc4` objdump does.
         let first = if self.d.is_dash() && !self.a.is_dash() {
-            (self.a, self.a_mod)
+            self.a
         } else {
-            (self.d, self.d_mod)
+            self.d
         };
-        write!(
-            f,
-            "{}{}",
-            slot_str(first.0, false),
-            MOD_STR[first.1 as usize]
-        )?;
+        write!(f, "{}", slot_str(first, false))?;
         if self.mem {
+            if self.addr.is_none() && !self.a.is_dash() && !self.d.is_dash() {
+                write!(f, ",{}", slot_str(self.a, false))?;
+            }
             match self.addr {
                 Some(a) => {
                     write!(f, ",(r{}", a.base)?;
@@ -1023,20 +1101,17 @@ impl std::fmt::Debug for VecInsn {
             }
         } else {
             if !self.a.is_dash() && !self.d.is_dash() {
-                write!(
-                    f,
-                    ",{}{}",
-                    slot_str(self.a, false),
-                    MOD_STR[self.a_mod as usize]
-                )?;
+                write!(f, ",{}", slot_str(self.a, false))?;
             }
             match self.b {
                 VecOperandB::Slot(s) => write!(f, ",{}", slot_str(s, true))?,
                 VecOperandB::Imm(i) => write!(f, ",{i:#x}")?,
             }
         }
-        if self.rep != 0 {
-            write!(f, " REP{}", 1u32 << self.rep)?;
+        match self.rep {
+            0 => {}
+            7 => write!(f, " REP r0")?,
+            n => write!(f, " REP{}", 1u32 << n)?,
         }
         if self.setf {
             write!(f, " SETF")?;
@@ -1053,9 +1128,6 @@ impl std::fmt::Debug for VecInsn {
         Ok(())
     }
 }
-
-/// `define-table G`/`H`/`K` — the per-slot coordinate modifiers.
-const MOD_STR: [&str; 4] = ["", "*", "++", "*++"];
 
 /// `define-table M` in `videocoreiv.arch` — the memory-class sub-ops.
 pub const VEC_MEM_OPS: [&str; 32] = [

@@ -718,3 +718,126 @@ fn boot_rom_vector_memclear_is_an_executable_rep_broadcast() {
     assert_eq!(v.step(&mut m), Step::Ran, "stopped: {:?}", v.stopped);
     assert_eq!(v.regs.pc, CODE + 10, "advanced past the 80-bit insn");
 }
+
+// ---------------------------------------------------------------------------
+// Vector operand slots.
+//
+// Each fixture is an instruction lifted out of `start4.elf`, with
+// `binutils-vc4` objdump's spelling of those exact bytes in the comment. The
+// whole of that `.text` was compared against this decoder instruction by
+// instruction: 15054 of the 15180 vector words agree, and the 126 that do not
+// are ones objdump renders as a raw `vec48`/`vec80` because its own tables have
+// no form for them.
+
+fn vector(bytes: &[u8]) -> rpi_virt_fw::vpu::insn::VecInsn {
+    use rpi_virt_fw::vpu::decode::decode;
+    use rpi_virt_fw::vpu::insn::Op;
+    let Op::Vector(v) = decode(bytes, 0).op else {
+        panic!("not a vector instruction");
+    };
+    *v
+}
+
+/// The type nibble is not an element width: it says how coarsely the slot can
+/// spell its column. `H` steps in 16 bytes, `HX` in 32, `HY` can only say 0 —
+/// and the lanes are as wide as the *operation*, here 8 bits.
+#[test]
+fn a_horizontal_slot_takes_its_column_from_the_type_nibble() {
+    // `v8ld H(0++,32),(r2+=r3) REP16`
+    let v = vector(&[0x04, 0xf8, 0x38, 0x40, 0x80, 0x03, 0xc0, 0xf8, 0x08, 0x00]);
+    assert_eq!((v.lane_bits, v.subop), (8, 0), "v8ld");
+    assert!(!v.d.is_vertical() && v.d.ty >> 1 <= 3, "the H family");
+    assert_eq!((v.d.y, v.d.x), (0, 32), "row 0, column 32");
+    assert!(v.d.inc, "++");
+    assert!(!v.d.star && v.d.addend == 15, "no `*`, no `+rN`");
+    let addr = v.addr.expect("a dash B slot spells the address");
+    assert_eq!((addr.base, addr.incr, addr.offset), (2, Some(3), 0));
+    assert_eq!(v.rep, 4, "REP16");
+}
+
+/// A vertical slot is a *column*: its `y` names the 16-aligned band of rows it
+/// covers and the low nibble of the coordinate belongs to `x` instead. Reading
+/// it like a horizontal slot prints rows that cannot exist (`binutils-vc4`'s
+/// V-direction fix, which `vc4.slaspec` agrees with).
+#[test]
+fn a_vertical_slot_splits_its_coordinate() {
+    // `v8ld V(0,32++),(r3+=r5) REP4`
+    let v = vector(&[0x02, 0xf8, 0x38, 0x50, 0x80, 0x03, 0x40, 0xf9, 0x0c, 0x00]);
+    assert!(v.d.is_vertical(), "V");
+    assert_eq!((v.d.y, v.d.x), (0, 32), "band 0, column 32");
+    assert!(v.d.inc, "++ steps the column, not the row");
+    assert!(
+        v.d.horizontal(v.lane_bits).is_none(),
+        "no horizontal window"
+    );
+    assert_eq!(v.executable(), rpi_virt_fw::vpu::insn::VecExec::NeedsVrf);
+}
+
+/// A 48-bit instruction has one addend register for all three slots — the
+/// opcode's own `r0..r7` field — and one presence bit per slot.
+#[test]
+fn the_48_bit_addend_is_one_register_for_every_slot() {
+    // `v16or H(14,0),H(49,0)+r3,H(14,0)`
+    let v = vector(&[0x8b, 0xf4, 0x87, 0x03, 0x0e, 0x10]);
+    assert_eq!((v.a.y, v.a.addend), (49, 3), "+r3 on A");
+    assert_eq!(v.d.addend, 15, "none on D");
+    assert_eq!((v.d.y, v.d.x), (14, 0));
+}
+
+/// A dash in the B slot names a scalar register: the 48-bit form spells it in
+/// the coordinate field, and the bit that would be a B addend is `SETF`.
+#[test]
+fn a_48_bit_dash_b_names_a_scalar_register() {
+    // `v16bitplanes -,r3 SETF`
+    let v = vector(&[0x08, 0xf4, 0x38, 0xe0, 0xc3, 0x03]);
+    let rpi_virt_fw::vpu::insn::VecOperandB::Slot(b) = v.b else {
+        panic!("a slot, not an immediate");
+    };
+    assert!(b.is_dash());
+    assert_eq!(b.scalar, 3, "r3");
+    assert!(v.setf);
+    assert_eq!(
+        v.executable(),
+        rpi_virt_fw::vpu::insn::VecExec::Bitplanes { src: 3 }
+    );
+}
+
+/// The 80-bit form spells that register in the addend nibble instead, beside a
+/// signed 9-bit displacement.
+#[test]
+fn an_80_bit_dash_b_carries_a_signed_displacement() {
+    // `v8mem29 -,H(63,3)+r0,r3-219 REP2 SETF IFNC max2 r0`
+    let v = vector(&[0xa1, 0xfb, 0xc3, 0xe8, 0xa5, 0xfb, 0x03, 0x3c, 0x0e, 0xf4]);
+    let rpi_virt_fw::vpu::insn::VecOperandB::Slot(b) = v.b else {
+        panic!("a slot, not an immediate");
+    };
+    assert!(b.is_dash());
+    assert_eq!((b.scalar, b.disp), (3, -219));
+    assert!(v.addr.is_none(), "only `vld`/`vst` read the wide address");
+}
+
+/// A load's address carries a displacement, and this model does not execute
+/// one: nothing says whether it counts bytes or elements.
+#[test]
+fn an_address_displacement_decodes_but_does_not_execute() {
+    // `v16ld HX(3,32),(r0+32)`
+    let v = vector(&[0x08, 0xf8, 0xf8, 0xa0, 0xa0, 0x03, 0xc0, 0xf3, 0x00, 0x00]);
+    assert_eq!((v.d.y, v.d.x), (3, 32));
+    let addr = v.addr.expect("an address");
+    assert_eq!((addr.base, addr.offset, addr.incr), (0, 32, None));
+    assert_eq!(v.executable(), rpi_virt_fw::vpu::insn::VecExec::NeedsVrf);
+}
+
+/// In the memory class the same bit is a B addend, not `SETF` — the B slot here
+/// is a vector register with a coordinate to step.
+#[test]
+fn a_memory_class_b_register_takes_the_addend_not_setf() {
+    // `v16mem27 V(32,16),V(48,15),V(16,9)+r2`
+    let v = vector(&[0x6a, 0xf3, 0x03, 0x38, 0x59, 0xf0]);
+    let rpi_virt_fw::vpu::insn::VecOperandB::Slot(b) = v.b else {
+        panic!("a slot, not an immediate");
+    };
+    assert_eq!((b.y, b.x, b.addend), (16, 9, 2), "V(16,9)+r2");
+    assert!(!v.setf, "the bit is the addend here");
+    assert!(v.addr.is_none(), "a register B is not an address");
+}

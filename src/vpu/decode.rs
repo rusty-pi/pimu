@@ -81,13 +81,19 @@ fn ldst(store: bool, w: MemWidth, rd: u8, addr: AddrMode, cond: Cond) -> Op {
     }
 }
 
-/// Extract `n` bits of `raw` starting `pos` bits from the most significant end
-/// of a `width`-bit instruction word. The vector patterns in
-/// `videocoreiv.arch` are written MSB-first, so this keeps the transcription
-/// literal.
+/// One `binutils-vc4` instruction field, `cg(raw, len, hi, lo)`.
+///
+/// Its `f-op<hi>-<lo>` names number the bits of a vector instruction by 16-bit
+/// parcel in *memory* order — parcel `lo / 16`, bit `lo % 16` counted from that
+/// parcel's least significant end — while `raw` holds the parcels the other way
+/// up, the first one most significant. Every field of the vector encoding lives
+/// inside one parcel, so this needs no splicing.
 #[inline]
-fn vf(raw: u128, width: u32, pos: u32, n: u32) -> u32 {
-    ((raw >> (width - pos - n)) & ((1u128 << n) - 1)) as u32
+fn cg(raw: u128, len: u8, hi: u32, lo: u32) -> u32 {
+    debug_assert_eq!(hi / 16, lo / 16, "field {hi}..{lo} crosses a parcel");
+    let parcels = len as u32 / 2;
+    let shift = (parcels - 1 - lo / 16) * 16 + lo % 16;
+    ((raw >> shift) & ((1u128 << (hi - lo + 1)) - 1)) as u32
 }
 
 /// Element width in bits from the 2-bit `WW` field of a memory-class op.
@@ -102,132 +108,139 @@ fn vec_mem_width(ww: u32) -> u8 {
 
 /// Decode a 48- or 80-bit vector-unit instruction.
 ///
-/// Bit positions are counted from the most significant bit of the instruction
-/// word, matching the patterns in `videocoreiv.arch`:
+/// Field positions are `binutils-vc4`'s, read through [`cg`]. Both encodings
+/// name three operand slots; each is a composite assembled from several fields
+/// and then read by [`VecSlot::from_composite`]:
 ///
 /// ```text
-///   48-bit memory: 1111 00MM MMMW Weee VVV0 dddddd TTTx aaaaaa z UUU y bbbbbb
-///   48-bit ALU:    1111 01Lv vvvv veee VVV0 dddddd TTTx aaaaaa z UUU y bbbbbb
-///   80-bit memory: 1111 10MM MMMW WRRR DDDD dddddd AAAA aaaaaa F 0 BBBB bbbbbb ...
-///   80-bit ALU:    1111 11Lv vvvv vRRR DDDD dddddd AAAA aaaaaa F 0 BBBB bbbbbb ...
+///   48-bit  D = op31-29 : op27-22                      (9 bits)
+///           A = op21-19 : op17-16 : op47-44            (9 bits)
+///           B = op41-39 : op37-32                      (9 bits)
+///   80-bit  D = op63-58 : op31-22                     (16 bits)
+///           A = op51-48 : op57-52 : op21-16 : op47-44 (20 bits)
+///           B = op69-64 : op41-32                     (16 bits)
 /// ```
 ///
-/// In the 48-bit forms the three slot descriptors are 3 bits each and share one
-/// horizontal/vertical bit (at position 19); the 80-bit forms spell out the
-/// same 4-bit descriptor per slot. Setting bit 37 (48-bit) / 37 (80-bit)
-/// replaces the B slot with an immediate.
+/// The 48-bit composites carry no direction bit, no addend and no modifiers:
+/// direction is `op28` for all three slots at once, and a `+rN` addend is one
+/// presence bit per slot (`op43` / `op18` / `op38`) against the shared register
+/// number in `op2-0`. The 80-bit composites spell all of it per slot.
 fn decode_vector(raw: u128, len: u8) -> Op {
     let wide = len == 10;
-    let width = if wide { 80 } else { 48 };
-    let mem = vf(raw, width, 4, 2) & 1 == 0;
+    // `f-op15-10`: 60 and 62 are the memory class, 61 and 63 the ALU class.
+    let mem = cg(raw, len, 10, 10) == 0;
 
     let (subop, lane_bits) = if mem {
-        (
-            vf(raw, width, 6, 5) as u8,
-            vec_mem_width(vf(raw, width, 11, 2)),
-        )
+        (cg(raw, len, 9, 5) as u8, vec_mem_width(cg(raw, len, 4, 3)))
     } else {
         (
-            vf(raw, width, 7, 6) as u8,
-            if vf(raw, width, 6, 1) == 0 { 16 } else { 32 },
+            cg(raw, len, 8, 3) as u8,
+            if cg(raw, len, 9, 9) == 0 { 16 } else { 32 },
         )
     };
+    // The B slot is an immediate rather than a register in both widths.
+    let imm_b = cg(raw, len, 42, 42) != 0;
 
     let mut addr = None;
-    let mut d_mod = 0u8;
-    let mut a_mod = 0u8;
-
     let (d, a, b, setf, rep, pred, sru) = if wide {
-        let d = VecSlot {
-            desc: vf(raw, width, 16, 4) as u8,
-            coord: vf(raw, width, 20, 6) as u8,
-        };
-        let a = VecSlot {
-            desc: vf(raw, width, 26, 4) as u8,
-            coord: vf(raw, width, 30, 6) as u8,
-        };
-        d_mod = vf(raw, width, 52, 2) as u8;
-        a_mod = vf(raw, width, 58, 2) as u8;
-        let setf = vf(raw, width, 36, 1) != 0;
-        let rep = vf(raw, width, 13, 3) as u8;
-        let pred = vf(raw, width, 64, 3) as u8;
-        let b_desc = vf(raw, width, 38, 4) as u8;
-        if vf(raw, width, 37, 1) != 0 {
-            // `F1 llllllllll ... bbbbbb`: a 16-bit immediate split across the
-            // mnemonic word and the aux continuation.
-            let imm = (vf(raw, width, 38, 10) << 6) | vf(raw, width, 74, 6);
-            (d, a, VecOperandB::Imm(imm), setf, rep, pred, VecSru::None)
-        } else if b_desc >= 14 {
-            // Dash B slot. In the memory class that spells the address:
-            // `<offset>(r<s> += r<g|h>)`, with the offset split between bits
-            // 41..47 and 67..73 and the base register in bits 74..77. There is
-            // no accumulator/SRU field in this form.
-            //
-            //   g = 48..51, G = 52..53, h = 54..57, H = 58..59
-            // `g`/`h` index 15 means "no increment"; whichever is not 15 is the
-            // register the base is stepped by.
-            let g = vf(raw, width, 48, 4) as u8;
-            let h = vf(raw, width, 54, 4) as u8;
-            let b = VecOperandB::Slot(VecSlot {
-                desc: b_desc,
-                coord: vf(raw, width, 42, 6) as u8,
-            });
-            if mem {
-                addr = Some(VecAddr {
-                    base: vf(raw, width, 74, 4) as u8,
-                    offset: (vf(raw, width, 67, 7) << 7) | vf(raw, width, 41, 7),
-                    incr: if g != 15 {
-                        Some(g)
-                    } else if h != 15 {
-                        Some(h)
-                    } else {
-                        None
-                    },
-                });
-                (d, a, b, setf, rep, pred, VecSru::None)
-            } else {
-                let sru = VecSru::from_field(vf(raw, width, 67, 7) as u8);
-                (d, a, b, setf, rep, pred, sru)
-            }
+        let d = VecSlot::from_composite(cg(raw, len, 31, 22) | (cg(raw, len, 63, 58) << 10), false);
+        let a = VecSlot::from_composite(
+            cg(raw, len, 47, 44)
+                | (cg(raw, len, 21, 16) << 4)
+                | (cg(raw, len, 57, 52) << 10)
+                | (cg(raw, len, 51, 48) << 16),
+            true,
+        );
+        let setf = cg(raw, len, 43, 43) != 0;
+        let rep = cg(raw, len, 2, 0) as u8;
+        let pred = cg(raw, len, 79, 77) as u8;
+        let b_comp = cg(raw, len, 41, 32) | (cg(raw, len, 69, 64) << 10);
+        let b = if imm_b {
+            VecOperandB::Imm(b_comp)
         } else {
-            let b = VecOperandB::Slot(VecSlot {
-                desc: b_desc,
-                coord: vf(raw, width, 42, 6) as u8,
-            });
-            let sru = VecSru::from_field(vf(raw, width, 67, 7) as u8);
-            (d, a, b, setf, rep, pred, sru)
-        }
-    } else {
-        // One direction bit covers all three slots.
-        let vertical = vf(raw, width, 19, 1) as u8;
-        let slot = |type3: u32, coord: u32| VecSlot {
-            desc: ((type3 as u8) << 1) | vertical,
-            coord: coord as u8,
+            VecOperandB::Slot(VecSlot::from_composite(b_comp, false))
         };
-        let d = slot(vf(raw, width, 16, 3), vf(raw, width, 20, 6));
-        let a = slot(vf(raw, width, 26, 3), vf(raw, width, 30, 6));
-        let imm_b = vf(raw, width, 37, 1) != 0;
+        // Only a *dash* B slot spells an address; a third vector register makes
+        // this one of the memory-class ops that reads the file three ways.
+        let b_is_dash = matches!(b, VecOperandB::Slot(s) if s.is_dash());
+        // Only `vld` and `vst` read the address out of the wide composite;
+        // every other memory sub-op leaves those bits to the B slot, and
+        // `binutils-vc4` prints them as a scalar register and displacement.
+        if mem && b_is_dash && matches!(subop, 0 | 4) {
+            // `<offset>(r<base> += r<step>)`. The offset is a signed 16-bit
+            // displacement; the step register is the *inert* slot's addend
+            // nibble — the A slot's for a load, the D slot's for a store —
+            // with 15 meaning "no step" (`print_ld_st_addr`).
+            let inert = if subop_is_store(subop) { d } else { a };
+            let offset =
+                cg(raw, len, 38, 32) | (cg(raw, len, 65, 64) << 7) | (cg(raw, len, 76, 70) << 9);
+            addr = Some(VecAddr {
+                base: cg(raw, len, 69, 66) as u8,
+                offset: ((offset as i32) << 16 >> 16) as u32,
+                incr: (inert.addend != 15).then_some(inert.addend),
+            });
+        }
+        let sru = if mem {
+            VecSru::None
+        } else {
+            VecSru::from_field(cg(raw, len, 76, 70) as u8)
+        };
+        (d, a, b, setf, rep, pred, sru)
+    } else {
+        // One direction bit covers all three slots, and one register number
+        // serves every `+rN`.
+        let vertical = cg(raw, len, 28, 28);
+        let sreg = cg(raw, len, 2, 0) as u8;
+        let slot = |comp: u32, addend: bool| {
+            // No addend nibble in a 48-bit composite: `binutils-vc4` fabricates
+            // one reading "none" (`0xf000`) and prints `+rN` from the opcode's
+            // own bits instead. A dash in the B position names its scalar
+            // register in the coordinate field, not in that nibble.
+            let scalar = (comp & 0x3F) as u8;
+            let comp = (comp & !0x40) | (vertical << 6) | 0xF000;
+            let mut s = VecSlot::from_composite(comp, false);
+            s.scalar = scalar;
+            s.disp = 0;
+            if addend {
+                s.addend = sreg;
+            }
+            s
+        };
+        let d = slot(
+            (cg(raw, len, 31, 29) << 7) | cg(raw, len, 27, 22),
+            cg(raw, len, 43, 43) != 0,
+        );
+        let a = slot(
+            cg(raw, len, 47, 44) | (cg(raw, len, 17, 16) << 4) | (cg(raw, len, 21, 19) << 7),
+            cg(raw, len, 18, 18) != 0,
+        );
+        let b_comp = (cg(raw, len, 41, 39) << 7) | cg(raw, len, 37, 32);
         let (b, setf, pred) = if imm_b {
-            // `z1 PPP F iiiiii`
+            // With an immediate B the three bits that would spell its type are
+            // the lane predicate, and the one that would carry its `+rN` is
+            // `SETF`.
             (
-                VecOperandB::Imm(vf(raw, width, 42, 6)),
-                vf(raw, width, 41, 1) != 0,
-                vf(raw, width, 38, 3) as u8,
+                VecOperandB::Imm(cg(raw, len, 37, 32)),
+                cg(raw, len, 38, 38) != 0,
+                cg(raw, len, 41, 39) as u8,
             )
         } else {
-            let type3 = vf(raw, width, 38, 3);
-            // A dash B slot borrows the bit that would otherwise be its
-            // coordinate-increment flag to spell `SETF`.
-            let setf = type3 == 7 && vf(raw, width, 41, 1) != 0;
-            let coord = vf(raw, width, 42, 6);
-            if mem && type3 == 7 {
+            // Bit 38 is the B slot's `+rN` only where there is a coordinate to
+            // add it to. A dash B has none, and `vgetacc` never does
+            // (`binutils-vc4` #122) — there the same bit is `SETF`.
+            let bit38 = cg(raw, len, 38, 38) != 0;
+            let getacc = mem && subop == 24;
+            let b_dash = (b_comp >> 7) & 7 == 7;
+            let b = slot(b_comp, bit38 && !b_dash && !getacc);
+            let setf = bit38 && (b_dash || getacc);
+            if mem && b.is_dash() {
                 addr = Some(VecAddr {
-                    base: coord as u8,
+                    base: b.scalar,
                     offset: 0,
                     incr: None,
                 });
             }
-            (VecOperandB::Slot(slot(type3, coord)), setf, 0)
+            (VecOperandB::Slot(b), setf, 0)
         };
         (d, a, b, setf, 0, pred, VecSru::None)
     };
@@ -241,8 +254,6 @@ fn decode_vector(raw: u128, len: u8) -> Op {
         a,
         b,
         addr,
-        d_mod,
-        a_mod,
         setf,
         rep,
         pred,
@@ -250,6 +261,13 @@ fn decode_vector(raw: u128, len: u8) -> Op {
         raw,
         len,
     }))
+}
+
+/// Which memory sub-ops write memory, and so take their vector operand from the
+/// A slot rather than the D slot (`insn-vecmemops` in `binutils-vc4`).
+#[inline]
+fn subop_is_store(subop: u8) -> bool {
+    matches!(subop, 4..=6 | 9)
 }
 
 fn decode16(p0: u16, pc: u32) -> Op {
