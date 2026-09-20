@@ -470,7 +470,15 @@ impl Cpu {
     }
 
     /// Fetch the instruction at `va` (4-byte aligned, so within one page).
-    #[inline]
+    ///
+    /// `#[inline(always)]`, not `#[inline]`: this is a compare and a load on
+    /// every instruction the ARM executes, and whether LLVM inlines it or not
+    /// is worth 19% of the host instructions a guest instruction costs (#119).
+    /// A hint is not enough — it flips with unrelated changes, the way
+    /// [`super::super::arm::park`]'s did in #90 — so the two paths that make
+    /// the function look expensive are out of line instead: the page miss in
+    /// [`Self::fetch_page`], and the abort in [`Self::fetch_abort`].
+    #[inline(always)]
     pub(super) fn fetch<M: Memory + ?Sized>(
         &mut self,
         mem: &mut M,
@@ -480,13 +488,21 @@ impl Cpu {
             Some((v, el, pa)) if v == va & !0xFFF && el == self.el => pa | (va & 0xFFF),
             _ => self.fetch_page(mem, va)?,
         };
-        mem.fetch(pa).map_err(|_| {
-            self.abort_pa = pa;
-            Exception::InsnAbort {
-                addr: va,
-                fsc: FSC_EXTERNAL,
-            }
-        })
+        match mem.fetch(pa) {
+            Ok(insn) => Ok(insn),
+            Err(_) => Err(self.fetch_abort(pa, va)),
+        }
+    }
+
+    /// The instruction fetch aborted on the bus: record where and say so.
+    #[inline(never)]
+    #[cold]
+    fn fetch_abort(&mut self, pa: u64, va: u64) -> Exception {
+        self.abort_pa = pa;
+        Exception::InsnAbort {
+            addr: va,
+            fsc: FSC_EXTERNAL,
+        }
     }
 
     /// [`Self::fetch`] from another page than the last instruction's:
