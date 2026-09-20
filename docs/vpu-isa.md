@@ -152,7 +152,9 @@ A slot's first element is `band * 16 + fine`, counted in elements, which is why
 the byte coordinate objdump prints and the element index part company as soon
 as an element is wider than a byte. `+rN` adds to that element index, also in
 elements. An address displacement is a plain byte offset. `++` steps the row
-horizontally and the element vertically.
+horizontally and the element vertically. A B-position immediate is **signed**
+in both encodings — six bits wide in the 48-bit form, sixteen in the 80-bit
+one: `v32mov HY(0,0),#0x20` fills every lane with `0xffffffe0`.
 
 One asymmetry, and it matters: a **load** whose element straddles a 16-byte
 boundary wraps inside that block rather than crossing it — `v32ld
@@ -178,8 +180,23 @@ firmware does not pin down.
 | `v<w>{ld,st} <reg>[++][+rA],(rB+off[+=rI]) [REP n]` | `v32ld HY(0,0)++,(r1+=r4) REP r0` | 16 elements between the register file and memory, `n` times, stepping the address by `rI` and (with `++`) the register by one. `off` is a byte displacement, `+rA` an element offset into the register. `rB` is **not** written back |
 | `v<w>mov <reg>[++],rN` / `,#imm` `[REP n]` | `v32mov HY(0,0),r1` | broadcast a scalar or a 6-bit immediate over the 16 lanes; the 80-bit form repeats it down the rows, which is how the boot ROM clears memory |
 | `v<w>bitplanes -,rN SETF` | `08 f4 38 e0 c0 03` | one flag per lane, holding that lane's bit of `rN` |
+| `vgetacc[s16\|s32] <d>,<a>,<b>` | `00 f3 23 82 38 e2` | each lane's accumulator, shifted right by `b & 31`; `A` is read for nothing, and the suffix clamps the value into a signed 16- or 32-bit range |
 | `v8ld -,(rN)` | `00 f0 38 e0 80 03` | reads 16 bytes at `rN` and discards them; no register changes |
 | `v16mov -,rN SUM{U,S} rK` | `00 fc 38 e0 80 03 c0 f3 00 12` | `rK = 16 * rN`, sign- or zero-extended to the lane width, and the scalar N/Z flags follow |
+
+Each lane carries a zero, a negative and a carry flag, and an ALU op with
+`SETF` writes them: zero and negative from the result at the operation's width
+— before it is narrowed into the destination, and after a saturating op has
+clamped it — and the carry only from the ops that have one. An addition
+carries out of the operation's width, a subtraction borrows, a saturating op
+answers whether it clamped, `min`/`max` answer whether B was the operand
+chosen, and a shift answers the last bit to leave the element, its index taken
+modulo the width, so a count of zero reads the bit at the far end. Everything
+else — the logical ops, the shuffles, `dist`, `count`, `msb`, `brev`, `clip`,
+`sign`, `mov`, `mull` — leaves the carry exactly as it found it, and so does a
+**transfer**: a load or a store with `SETF` set writes no flag at all. The
+eight predicates `ALL`, `NONE`, `IFZ`, `IFNZ`, `IFN`, `IFNN`, `IFC`, `IFNC`
+read them back.
 
 Predicates 2 and 3 on a transfer select the lanes whose `bitplanes` bit was 0
 and 1 respectively. Both polarities are in the firmware and they disagree, so
@@ -229,23 +246,23 @@ What still faults, and why:
 
 | instructions | reason |
 |---|---|
-| 2335 | memory sub-ops beyond `vld`/`vst`, and transfers refused for another reason |
-| 903 | `SETF` — what it leaves in the lane flags is not established |
-| 704 | the scalar result unit past the one `SUMU`/`SUMS` form |
-| 526 | the `UACCH`/`SACCH` accumulator forms |
-| 326 | the five lane predicates the firmware does not pin down |
-| 258 | a multiply whose registers disagree in width — it carries no width of its own to convert to |
+| 2113 | memory sub-ops beyond `vld`/`vst`, and transfers refused for another reason |
+| 788 | the scalar result unit past the one `SUMU`/`SUMS` form |
+| 529 | the `UACCH`/`SACCH` accumulator forms |
+| 453 | ALU and multiply sub-ops still unmeasured |
+| 271 | a multiply whose registers disagree in width — it carries no width of its own to convert to |
 | 255 | a `*` on a slot |
-| 148 | ALU and multiply sub-ops still unmeasured |
-| 76 | a multiply with the `L` bit set, which selects another family |
-| 65 | a binary op whose A slot is a dash |
-| 53 | the rest: a modifier without `ENA`, a register wider than the operation, `v32count` |
+| 164 | `SETF` on an op whose carry was not measured |
+| 79 | a multiply with the `L` bit set, which selects another family |
+| 72 | a binary op whose A slot is a dash |
+| 41 | an accumulator modifier without `ENA` |
+| 24 | the rest: a register wider than the operation, `v32count`, three stray `mov`s |
 
 `v32count` is in that last row on purpose: on hardware it writes a zero into
 every lane whatever its operands, so whatever it counts, it is not the bits of
 a 32-bit element.
 
-Of the 15180 vector instructions in `start4.elf`'s `.text`, 9531 execute.
+Of the 15180 vector instructions in `start4.elf`'s `.text`, 10391 execute.
 
 Outside the ISA proper: no dual-issue pipeline, and the MMU and the caches are
 flat — the four VC4 aliases (`0x0`, `0x4000_0000`, `0x8000_0000`,

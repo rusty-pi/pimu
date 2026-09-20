@@ -10,8 +10,8 @@ const CF_TRACE_LEN: usize = 512;
 use super::decode::decode;
 use super::icache::DecodeCache;
 use super::insn::{
-    AddrMode, AluOp, Base, Insn, MemWidth, Op, RegOrImm, VecAluOp, VecExec, VecInsn, VecPred,
-    VecReg, VecRep, VecSource, Writeback,
+    AddrMode, AluOp, Base, Insn, MemWidth, Op, RegOrImm, VecAluOp, VecExec, VecInsn, VecReg,
+    VecRep, VecSource, Writeback,
 };
 use super::length::InsnClass;
 use super::reg::{Cond, Flags, Regs, GP, LR, SP};
@@ -1131,11 +1131,7 @@ impl Vpu {
                         // Lanes are transferred at their own address —
                         // predication masks lanes out, it does not compact them
                         // — so a masked-off lane touches no memory at all.
-                        let lanes = match pred {
-                            VecPred::All => u16::MAX,
-                            VecPred::IfZero => self.vrf.lane_z,
-                            VecPred::IfNonZero => !self.vrf.lane_z,
-                        };
+                        let lanes = self.vrf.lanes(pred);
                         let reps = match reps {
                             VecRep::Fixed(n) => n,
                             VecRep::FromR0 => self.regs.get(0),
@@ -1200,9 +1196,13 @@ impl Vpu {
                     }
                     VecExec::Bitplanes { src } => {
                         // One flag per lane, holding that lane's bit of the
-                        // scalar. Only the zero flag is modelled: the predicated
-                        // forms this model executes read nothing else.
-                        self.vrf.lane_z = !(self.regs.get(src as usize) as u16);
+                        // scalar: the lane's result *is* that bit, so its zero
+                        // flag is the bit inverted and its negative flag is
+                        // clear. The carry the op does not produce stays as it
+                        // was.
+                        let bits = self.regs.get(src as usize) as u16;
+                        self.vrf.lane_z = !bits;
+                        self.vrf.lane_n = 0;
                     }
                     VecExec::Alu {
                         op,
@@ -1215,12 +1215,9 @@ impl Vpu {
                         pred,
                         width,
                         acc,
+                        setf,
                     } => {
-                        let lanes = match pred {
-                            VecPred::All => u16::MAX,
-                            VecPred::IfZero => self.vrf.lane_z,
-                            VecPred::IfNonZero => !self.vrf.lane_z,
-                        };
+                        let lanes = self.vrf.lanes(pred);
                         let reps = match reps {
                             VecRep::Fixed(n) => n,
                             VecRep::FromR0 => self.regs.get(0),
@@ -1269,6 +1266,27 @@ impl Vpu {
                                 } else {
                                     vec_alu(op, av, bv, width, sat_bytes)
                                 };
+                                if setf {
+                                    // Zero and negative read the result at the
+                                    // operation's width, before it is narrowed
+                                    // into the destination; the carry is the
+                                    // op's own, and the ops that have none
+                                    // leave the lane's alone.
+                                    let bit = 1u16 << lane;
+                                    let sign = 1u32 << (width * 8 - 1);
+                                    let mask = if width >= 4 {
+                                        u32::MAX
+                                    } else {
+                                        (1 << (width * 8)) - 1
+                                    };
+                                    set_flag(&mut self.vrf.lane_z, bit, res & mask == 0);
+                                    set_flag(&mut self.vrf.lane_n, bit, res & sign != 0);
+                                    if let Some(c) =
+                                        vec_carry(op, av, bv, width, sat_bytes, op.takes_b(lane))
+                                    {
+                                        set_flag(&mut self.vrf.lane_c, bit, c);
+                                    }
+                                }
                                 if let Some(acc) = acc {
                                     let slot = &mut self.vrf.acc[lane as usize];
                                     if acc.clear {
@@ -1296,6 +1314,47 @@ impl Vpu {
                                         o.reg.lane(lane, if step_d { rep } else { 0 }, d_add);
                                     self.vrf.write(row, e, o.reg.elem_bytes as u32, res);
                                 }
+                            }
+                        }
+                    }
+                    VecExec::GetAcc {
+                        d,
+                        b,
+                        sat,
+                        reps,
+                        step_d,
+                        pred,
+                    } => {
+                        let lanes = self.vrf.lanes(pred);
+                        let reps = match reps {
+                            VecRep::Fixed(n) => n,
+                            VecRep::FromR0 => self.regs.get(0),
+                        };
+                        let d_add = d.addend.map_or(0, |r| self.regs.get(r as usize));
+                        for rep in 0..reps {
+                            for lane in 0..vrf::LANES {
+                                if lanes & (1 << lane) == 0 {
+                                    continue;
+                                }
+                                let shift = match b {
+                                    VecSource::Imm(i) => i as u32,
+                                    VecSource::Scalar(r) => self.regs.get(r as usize),
+                                    VecSource::Reg(o) => {
+                                        let add = o.addend.map_or(0, |r| self.regs.get(r as usize));
+                                        let (row, e) = o.reg.lane(lane, 0, add);
+                                        self.vrf.read(row, e, o.reg.elem_bytes as u32)
+                                    }
+                                } & 31;
+                                let v = self.vrf.acc[lane as usize] >> shift;
+                                let v = match sat {
+                                    Some(2) => {
+                                        (v as i32).clamp(i16::MIN as i32, i16::MAX as i32) as u32
+                                    }
+                                    _ => v,
+                                };
+                                let (row, e) =
+                                    d.reg.lane(lane, if step_d { rep } else { 0 }, d_add);
+                                self.vrf.write(row, e, d.reg.elem_bytes as u32, v);
                             }
                         }
                     }
@@ -1529,6 +1588,14 @@ struct VecTransfer {
 /// Raspberry Pi 4B d03115. Nothing to do when the register is as wide as the
 /// operation, which the narrowing in [`Vrf::read`](crate::vpu::vrf::Vrf::read)
 /// has already taken care of.
+fn set_flag(flags: &mut u16, bit: u16, on: bool) {
+    if on {
+        *flags |= bit;
+    } else {
+        *flags &= !bit;
+    }
+}
+
 fn widen(v: u32, from_bytes: u32) -> u32 {
     if from_bytes == 2 {
         v as u16 as i16 as u32
@@ -1544,6 +1611,76 @@ fn widen(v: u32, from_bytes: u32) -> u32 {
 /// saturating ops clamp to: a byte destination holds `0..=0xff`, a wider one
 /// saturates signed. Every case here was measured on a Raspberry Pi 4B
 /// d03115; see `examples-on-real-hardware/vpu-probe/`.
+/// The carry an op leaves in its lane's flags under `SETF`, or `None` when it
+/// leaves the flag alone.
+///
+/// Measured on a Raspberry Pi 4B d03115, by setting every lane's carry one way
+/// with an addition and then watching which lanes `IFC` let through after the
+/// op under test. The logical ops, the shuffles, `dist`, `count`, `msb`,
+/// `brev`, `clip`, `sign`, `mov` and `mull` all left it untouched; the ops
+/// below each answer something of their own:
+///
+/// - `add` carries out of the operation's width, `sub` and `rsub` borrow;
+/// - the saturating ops answer whether the result was clamped;
+/// - `min` and `max` answer whether B was the one chosen;
+/// - the shifts answer the last bit to leave the element, indexed modulo the
+///   width — so a count of zero reads the bit at the far end rather than
+///   nothing at all.
+fn vec_carry(
+    op: VecAluOp,
+    a: u32,
+    b: u32,
+    width: u32,
+    sat_bytes: u32,
+    lane_takes_b: bool,
+) -> Option<bool> {
+    use VecAluOp::*;
+    if lane_takes_b {
+        return None; // the lane copied B; no operation happened in it
+    }
+    let bits = width * 8;
+    let mask = if bits >= 32 {
+        u32::MAX
+    } else {
+        (1 << bits) - 1
+    };
+    let sext = |v: u32| -> i64 {
+        if bits >= 32 {
+            v as i32 as i64
+        } else {
+            ((v << (32 - bits)) as i32 >> (32 - bits)) as i64
+        }
+    };
+    // Did the saturating form have to clamp?
+    let clamped = |v: i64| -> bool {
+        let sbits = sat_bytes * 8;
+        v != if sbits == 8 {
+            v.clamp(0, 0xff)
+        } else {
+            v.clamp(-(1i64 << (sbits - 1)), (1i64 << (sbits - 1)) - 1)
+        }
+    };
+    let count = b & (bits - 1);
+    let bit_of_a = |i: u32| a & (1 << i) != 0;
+    Some(match op {
+        Add => (a & mask) as u64 + (b & mask) as u64 > mask as u64,
+        Sub => (a & mask) < (b & mask),
+        Rsub => (b & mask) < (a & mask),
+        Adds => clamped(sext(a) + sext(b)),
+        Subs => clamped(sext(a) - sext(b)),
+        Rsubs => clamped(sext(b) - sext(a)),
+        Dists => clamped((sext(a) - sext(b)).abs()),
+        Shls => clamped(sext(a) << count),
+        Min => sext(b) < sext(a),
+        Max => sext(b) > sext(a),
+        // The bit that left the element last: the top one for a left shift,
+        // the bottom one for a right shift or a rotate, and the index wraps.
+        Shl => bit_of_a((bits - count) & (bits - 1)),
+        Lsr | Asr | Ror => bit_of_a((count.wrapping_sub(1)) & (bits - 1)),
+        _ => return None,
+    })
+}
+
 fn vec_alu(op: VecAluOp, a: u32, b: u32, width: u32, sat_bytes: u32) -> u32 {
     use VecAluOp::*;
     let bits = width * 8;

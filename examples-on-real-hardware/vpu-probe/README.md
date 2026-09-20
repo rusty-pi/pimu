@@ -67,6 +67,8 @@ in a state a firmware thread might be mid-way through using.
 | `accmix.s` | a whole program — multiplies, accumulate, `REP` — replayed against the model in `tests/vpu_isa.rs` |
 | `wmix.s`, `wmix2.s`, `wmix3.s` | what an ALU op does when it is wider than the registers it names: the extension, the saturation, the shift count (`wmix-vectors.hex`, `wmix2-vectors.hex`) |
 | `wacc.s` | the accumulator across the same width change, replayed as a program in `tests/vpu_isa.rs` |
+| `setf.s`, `setf3.s`, `setf4.s`, `setf5.s` | what `SETF` leaves in the lane flags, which ops touch the carry, and what `vgetacc` reads |
+| `imm.s` | whether a vector immediate is signed |
 
 ## What they found (Raspberry Pi 4B d03115, firmware 1.20260824)
 
@@ -110,6 +112,24 @@ in a state a firmware thread might be mid-way through using.
   zero count reverses the whole operation width. `msb` answers the index of the
   highest bit set in **either** operand. Nothing about the accumulator changes.
   `v32count` writes a zero into every lane whatever its operands.
+
+- Each lane has a zero, a negative and a carry flag. `SETF` on an ALU op
+  writes zero and negative from the result at the operation's width — after a
+  saturating op has clamped it — and the carry only where the op has one: a
+  carry out of an addition, a borrow out of a subtraction, "it clamped" out of
+  a saturating op, "B won" out of `min`/`max`, and the last bit to leave the
+  element out of a shift, its index taken modulo the width. The logical ops,
+  the shuffles, `dist`, `count`, `msb`, `brev`, `clip`, `sign`, `mov` and
+  `mull` leave the carry alone, and a **load or store with `SETF` writes no
+  flag at all**. The eight predicates `ALL`/`NONE`/`IFZ`/`IFNZ`/`IFN`/`IFNN`/
+  `IFC`/`IFNC` read them back.
+- `vgetacc D,A,B` writes each lane's accumulator shifted right by `B & 31` —
+  five bits, the accumulator being wider than an element — reads A for
+  nothing, and clamps into a signed 16- or 32-bit range in its `s16`/`s32`
+  forms. The width field picks the saturation, not an element size.
+- A vector immediate is **signed** in both encodings: six bits in the 48-bit
+  form, sixteen in the 80-bit one, so `#0x20` on a 48-bit `v32mov` fills the
+  lanes with `0xffffffe0`.
 
 ## Still open
 

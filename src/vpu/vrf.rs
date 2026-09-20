@@ -18,9 +18,9 @@
 //! sixteen rows — run through the firmware's `EXECUTE_CODE` mailbox tag on a
 //! Raspberry Pi 4B d03115.
 //!
-//! Alongside the bytes the unit keeps per-lane flags. Only the zero flag is
-//! modelled, and only `v<w>bitplanes … SETF` writes it — the one producer the
-//! executed encodings have.
+//! Alongside the bytes the unit keeps per-lane flags — zero, negative and
+//! carry — which an ALU op with `SETF` writes and the eight lane predicates
+//! read. A transfer with `SETF` writes none of them, measured.
 
 /// Bytes per VRF row, and rows in the file.
 pub const DIM: usize = 64;
@@ -37,6 +37,13 @@ pub struct Vrf {
     bytes: Box<[u8; DIM * DIM]>,
     /// Per-lane zero flag, one bit per lane (bit 0 = lane 0).
     pub lane_z: u16,
+    /// Per-lane negative flag: the result's sign bit at the operation's width.
+    pub lane_n: u16,
+    /// Per-lane carry flag. Only the ops that produce one write it — an
+    /// addition's carry out, a subtraction's borrow, a saturating op's clamp,
+    /// the operand `min`/`max` chose, the last bit out of a shift — and the
+    /// rest leave it as they found it.
+    pub lane_c: u16,
     /// One accumulator per lane. Wider than an element — four accumulates of
     /// `0xffff` read back as `0x3fffc` — so it is kept as a `u32`; the `SIGN`
     /// bit of the modifier decides how a result is extended into it.
@@ -48,6 +55,8 @@ impl Default for Vrf {
         Vrf {
             bytes: Box::new([0; DIM * DIM]),
             lane_z: 0,
+            lane_n: 0,
+            lane_c: 0,
             acc: [0; LANES as usize],
         }
     }
@@ -62,6 +71,21 @@ fn offset(row: u8, e: u32, w: u32) -> usize {
 }
 
 impl Vrf {
+    /// Which lanes a predicate lets through.
+    pub fn lanes(&self, pred: crate::vpu::insn::VecPred) -> u16 {
+        use crate::vpu::insn::VecPred::*;
+        match pred {
+            All => u16::MAX,
+            NoLanes => 0,
+            IfZero => self.lane_z,
+            IfNonZero => !self.lane_z,
+            IfNeg => self.lane_n,
+            IfNotNeg => !self.lane_n,
+            IfCarry => self.lane_c,
+            IfNotCarry => !self.lane_c,
+        }
+    }
+
     /// Read one element, zero-extended to a `u32`. Elements are little-endian,
     /// the same way the memory they are loaded from is.
     pub fn read(&self, row: u8, e: u32, w: u32) -> u32 {

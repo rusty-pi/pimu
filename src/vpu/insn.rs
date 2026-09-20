@@ -640,18 +640,48 @@ pub enum VecRep {
 
 /// Lane predication: which lanes of a vector instruction actually execute.
 ///
-/// `v<w>bitplanes -,rN SETF` sets the per-lane flags from the bits of `rN`;
-/// these two predicates then select one polarity. Both are pinned by the
-/// firmware: `memcpy`'s tail (`0x3EDA292C`) builds `~0 << n` and transfers
-/// under predicate 2, so predicate 2 is "the lane's bit was 0"; `memset`'s
-/// (`0x3EDA2B5E`) builds a band of set bits and stores under predicate 3.
+/// Each lane carries a zero, a negative and a carry flag, and an ALU op with
+/// `SETF` writes them. The eight field values are `binutils-vc4`'s, and the
+/// three flags they name are the ones a probe can see: `ALL`, `NONE`, `IFZ`,
+/// `IFNZ`, `IFN`, `IFNN`, `IFC`, `IFNC` — measured on a Raspberry Pi 4B
+/// d03115 by setting the flags with a known operation and marking the lanes
+/// each predicate lets through.
+///
+/// `v<w>bitplanes -,rN SETF` is the firmware's own producer: its lane result
+/// is that lane's bit of `rN`, so `IFZ` selects the lanes whose bit was 0.
+/// Both polarities are pinned by code as well — `memcpy`'s tail
+/// (`0x3EDA292C`) builds `~0 << n` and transfers under `IFZ`; `memset`'s
+/// (`0x3EDA2B5E`) builds a band of set bits and stores under `IFNZ`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VecPred {
     All,
-    /// Lanes whose `bitplanes` bit was 0.
+    /// Field 1: no lane executes at all.
+    NoLanes,
+    /// Lanes whose zero flag is set — a `bitplanes` bit of 0.
     IfZero,
-    /// Lanes whose `bitplanes` bit was 1.
     IfNonZero,
+    /// Lanes whose negative flag is set.
+    IfNeg,
+    IfNotNeg,
+    /// Lanes whose carry flag is set.
+    IfCarry,
+    IfNotCarry,
+}
+
+impl VecPred {
+    pub fn from_field(p: u8) -> Option<VecPred> {
+        Some(match p {
+            0 => VecPred::All,
+            1 => VecPred::NoLanes,
+            2 => VecPred::IfZero,
+            3 => VecPred::IfNonZero,
+            4 => VecPred::IfNeg,
+            5 => VecPred::IfNotNeg,
+            6 => VecPred::IfCarry,
+            7 => VecPred::IfNotCarry,
+            _ => return None,
+        })
+    }
 }
 
 /// The memory operand of a vector load/store: `(rbase + offset [+= rincr])`.
@@ -1026,6 +1056,21 @@ pub enum VecExec {
         width: u32,
         /// The accumulator, when the op carries one.
         acc: Option<VecAcc>,
+        /// `SETF`: leave the lane flags holding this result.
+        setf: bool,
+    },
+    /// `vgetacc[s16|s32] <d>,<a>,<b>` — each lane's accumulator, shifted right
+    /// by `b & 31`. The A slot is read and discarded, `sat` says which signed
+    /// range the value is clamped into on the way out, and the destination's
+    /// own element width truncates what is left.
+    GetAcc {
+        d: VecOperand,
+        b: VecSource,
+        /// Bytes the result saturates into: `s16` and `s32`, or nothing at all.
+        sat: Option<u32>,
+        reps: VecRep,
+        step_d: bool,
+        pred: VecPred,
     },
     /// Needs a part of the vector unit this model does not implement.
     NeedsVrf,
@@ -1091,7 +1136,7 @@ impl VecInsn {
             }
         }
         if self.mem {
-            if let Some(e) = self.mem_transfer() {
+            if let Some(e) = self.mem_transfer().or_else(|| self.getacc()) {
                 return e;
             }
         } else if let Some(e) = self.alu48().or_else(|| self.alu80()).or_else(|| self.alu()) {
@@ -1107,9 +1152,10 @@ impl VecInsn {
     /// the other slot must be a dash, whose addend nibble — in the 80-bit form
     /// — is the register the address steps by between repetitions. Every field
     /// of this encoding has a meaning now, so this is a field test rather than
-    /// a whole-word template: what it refuses is `SETF` (the lane flags a
-    /// transfer would write are not modelled), a `*` on the vector slot, and a
-    /// lane predicate other than the two `bitplanes` feeds.
+    /// a whole-word template: all it refuses is a `*` on the vector slot.
+    /// `SETF` on a transfer is accepted and ignored — measured: a load or a
+    /// store with the bit set leaves all three lane flags exactly as they
+    /// were.
     fn mem_transfer(&self) -> Option<VecExec> {
         let width = if self.wide { 80 } else { 48 };
         // `WW` 3 is not a width this decoder knows; 0/1/2 are 8/16/32.
@@ -1136,7 +1182,7 @@ impl VecInsn {
             return None;
         }
         // What `*` means on a slot is not established.
-        if vec_slot.star || self.setf {
+        if vec_slot.star {
             return None;
         }
         let addr = self.addr?;
@@ -1153,12 +1199,64 @@ impl VecInsn {
                 7 => VecRep::FromR0,
                 n => VecRep::Fixed(1 << n),
             },
-            pred: match self.pred {
-                0 => VecPred::All,
-                2 => VecPred::IfZero,
-                3 => VecPred::IfNonZero,
-                _ => return None,
+            pred: VecPred::from_field(self.pred)?,
+        })
+    }
+
+    /// `vgetacc[s16|s32] <d>,<a>,<b>` — the memory-class sub-op that reads the
+    /// accumulator back out.
+    ///
+    /// Measured on a Raspberry Pi 4B d03115: the value is the lane's whole
+    /// accumulator shifted right by `b & 31` — five bits, because the
+    /// accumulator is wider than an element — and the A slot is read for
+    /// nothing, a register of zeros giving the same answer as one of data.
+    /// The width field picks the saturation rather than an element size:
+    /// `v8` is the plain form, `v16` clamps into a signed 32-bit range and
+    /// `v32` into a signed 16-bit one.
+    fn getacc(&self) -> Option<VecExec> {
+        if self.subop != 24 || !self.mem {
+            return None;
+        }
+        let sat = match self.lane_bits {
+            8 => None,
+            16 => Some(4),
+            32 => Some(2),
+            _ => return None,
+        };
+        if self.d.is_dash() || self.d.star || self.a.star {
+            return None;
+        }
+        let b = match self.b {
+            VecOperandB::Imm(i) => VecSource::Imm(self.imm_value(i)),
+            VecOperandB::Slot(sl) if sl.is_dash() => {
+                if sl.disp != 0 || sl.scalar >= 32 {
+                    return None;
+                }
+                VecSource::Scalar(sl.scalar)
+            }
+            VecOperandB::Slot(sl) => {
+                if sl.star {
+                    return None;
+                }
+                VecSource::Reg(VecOperand {
+                    reg: sl.window()?,
+                    addend: (sl.addend != 15).then_some(sl.addend),
+                })
+            }
+        };
+        Some(VecExec::GetAcc {
+            d: VecOperand {
+                reg: self.d.window()?,
+                addend: (self.d.addend != 15).then_some(self.d.addend),
             },
+            b,
+            sat,
+            reps: match self.rep {
+                7 => VecRep::FromR0,
+                n => VecRep::Fixed(1 << n),
+            },
+            step_d: self.d.inc,
+            pred: VecPred::from_field(self.pred)?,
         })
     }
 
@@ -1199,7 +1297,7 @@ impl VecInsn {
         }
         let src = match b_slot {
             None => match self.b {
-                VecOperandB::Imm(i) => RegOrImm::Imm(i as i32),
+                VecOperandB::Imm(i) => RegOrImm::Imm(self.imm_value(i)),
                 VecOperandB::Slot(_) => unreachable!(),
             },
             Some(b) if b.is_dash() && b.scalar < 32 => RegOrImm::Reg(b.scalar),
@@ -1242,7 +1340,7 @@ impl VecInsn {
             return None;
         }
         let src = match self.b {
-            VecOperandB::Imm(i) => RegOrImm::Imm(i as i32),
+            VecOperandB::Imm(i) => RegOrImm::Imm(self.imm_value(i)),
             // A dash in the B slot names a scalar register in its addend
             // nibble; only r0..r15 can be spelled there.
             VecOperandB::Slot(s) if s.is_dash() && s.disp == 0 && s.scalar < 32 => {
@@ -1311,8 +1409,48 @@ impl VecInsn {
             VecSru::Acc(f) => Some(VecAcc::from_field(f)?),
             VecSru::Scalar { .. } => return None,
         };
+        // `SETF` leaves the lane flags holding this result. Zero and negative
+        // come from every op, but the carry does not: only the ops below were
+        // measured, and the rest keep whatever carry was already there — which
+        // is not something to guess at from the others.
         if self.setf {
-            return None;
+            use VecAluOp::*;
+            if !matches!(
+                op,
+                Mov | And
+                    | Or
+                    | Eor
+                    | Bic
+                    | Dist
+                    | Count
+                    | Msb
+                    | Brev
+                    | Clip
+                    | Sign
+                    | Even
+                    | Interl
+                    | Mull
+                    | Add
+                    | Sub
+                    | Rsub
+                    | Adds
+                    | Subs
+                    | Rsubs
+                    | Dists
+                    | Shls
+                    | Min
+                    | Max
+                    | Shl
+                    | Lsr
+                    | Asr
+                    | Ror
+            ) {
+                return None;
+            }
+            // What a masked-off lane leaves in its flags was not measured.
+            if self.pred != 0 {
+                return None;
+            }
         }
         // A dash destination discards the result — which is the point when an
         // accumulator is carrying it.
@@ -1334,7 +1472,7 @@ impl VecInsn {
             Some(self.operand(self.a, width)?)
         };
         let b = match self.b {
-            VecOperandB::Imm(i) => VecSource::Imm(i as i32),
+            VecOperandB::Imm(i) => VecSource::Imm(self.imm_value(i)),
             VecOperandB::Slot(sl) if sl.is_dash() => {
                 if sl.disp != 0 || sl.scalar >= 32 {
                     return None;
@@ -1354,15 +1492,20 @@ impl VecInsn {
             },
             step_d: self.d.inc,
             step_a: self.a.inc,
-            pred: match self.pred {
-                0 => VecPred::All,
-                2 => VecPred::IfZero,
-                3 => VecPred::IfNonZero,
-                _ => return None,
-            },
+            pred: VecPred::from_field(self.pred)?,
             width,
             acc,
+            setf: self.setf,
         })
+    }
+
+    /// A B-position immediate, sign-extended out of its field: six bits in the
+    /// 48-bit encoding, sixteen in the 80-bit one. Both are signed, measured:
+    /// `v32mov HY(0,0),#0x20` leaves `0xffffffe0` in every lane, and the
+    /// 80-bit `#0xffff` leaves `0xffffffff`.
+    fn imm_value(&self, i: u32) -> i32 {
+        let bits = if self.wide { 16 } else { 6 };
+        ((i << (32 - bits)) as i32) >> (32 - bits)
     }
 
     /// One slot as an execution operand: its window — whose elements may be
