@@ -183,7 +183,11 @@ fn decode_vector(raw: u128, len: u8) -> Op {
                 incr: (inert.addend != 15).then_some(inert.addend),
             });
         }
-        let sru = if mem {
+        // Those bits are the address displacement in a transfer, and the
+        // scalar-result field everywhere else — `vgetacc` included, which is
+        // how `vgetacc -,-,15 SUMS r0` reaches the unit. Measured with
+        // `probes/gacc.s`.
+        let sru = if mem && subop != 24 {
             VecSru::None
         } else {
             VecSru::from_field(cg(raw, len, 76, 70) as u8)

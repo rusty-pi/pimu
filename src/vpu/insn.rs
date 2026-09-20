@@ -713,8 +713,9 @@ pub enum VecOperandB {
 pub enum VecLutIndex {
     /// Each lane takes its own element of a vector slot.
     Lanes(VecOperand),
-    /// Every lane takes the same index.
-    Scalar(RegOrImm),
+    /// Every lane takes the same index: a scalar register plus the
+    /// displacement beside it, or — with no register — a bare immediate.
+    Scalar { reg: Option<u8>, disp: i32 },
 }
 
 /// What the scalar result unit does with the sixteen lane results.
@@ -1136,7 +1137,14 @@ pub struct VecOperand {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VecSource {
     Reg(VecOperand),
-    Scalar(u8),
+    /// A dash in the B position names a scalar register, and may carry a
+    /// signed displacement beside it — `r2-1`, as `binutils-vc4` prints it.
+    /// The operand is `reg + disp`, measured with `probes/sdisp.s`: with
+    /// `r2` = 100, `r2-1` reaches the lanes as 99 and `r2+100` as 200.
+    Scalar {
+        reg: u8,
+        disp: i32,
+    },
     Imm(i32),
 }
 
@@ -1262,13 +1270,18 @@ pub enum VecExec {
     /// range the value is clamped into on the way out, and the destination's
     /// own element width truncates what is left.
     GetAcc {
-        d: VecOperand,
+        /// A dash destination discards the value and leaves only the scalar
+        /// result unit's aggregate — the form `start4.elf` uses.
+        d: Option<VecOperand>,
         b: VecSource,
         /// Bytes the result saturates into: `s16` and `s32`, or nothing at all.
         sat: Option<u32>,
         reps: VecRep,
         step_d: bool,
         pred: VecPred,
+        /// `SUMU`/`SUMS`/`MAX`/`IMIN`/`IMAX` over the sixteen lane values,
+        /// written to a scalar register.
+        sru: Option<(VecSruFunc, u8)>,
     },
     /// Needs a part of the vector unit this model does not implement.
     NeedsVrf,
@@ -1523,16 +1536,17 @@ impl VecInsn {
             Some(operand(self.a)?)
         };
         let index = match self.b {
-            VecOperandB::Imm(v) => VecLutIndex::Scalar(RegOrImm::Imm(v as i32)),
+            VecOperandB::Imm(v) => VecLutIndex::Scalar {
+                reg: None,
+                disp: v as i32,
+            },
             // A dash in the B position of the 80-bit form names a scalar
-            // register, which every lane then indexes its own table with. The
-            // displacement beside it means something this has not measured.
-            VecOperandB::Slot(s) if s.is_dash() => {
-                if s.disp != 0 {
-                    return None;
-                }
-                VecLutIndex::Scalar(RegOrImm::Reg(s.scalar))
-            }
+            // register — plus a displacement, which adds to it — and every
+            // lane then indexes its own table with that.
+            VecOperandB::Slot(s) if s.is_dash() => VecLutIndex::Scalar {
+                reg: Some(s.scalar),
+                disp: s.disp,
+            },
             VecOperandB::Slot(s) => VecLutIndex::Lanes(operand(s)?),
         };
         Some(VecExec::Lut {
@@ -1570,16 +1584,23 @@ impl VecInsn {
             32 => Some(2),
             _ => return None,
         };
-        if self.d.is_dash() {
-            return None;
-        }
+        // The accumulator's own update field means nothing here; only the
+        // scalar aggregate does.
+        let sru = match self.sru {
+            VecSru::None => None,
+            VecSru::Scalar { func, reg } => Some((VecSruFunc::from_func(func)?, reg)),
+            VecSru::Acc(_) => return None,
+        };
         let b = match self.b {
             VecOperandB::Imm(i) => VecSource::Imm(self.imm_value(i)),
             VecOperandB::Slot(sl) if sl.is_dash() => {
-                if sl.disp != 0 || sl.scalar >= 32 {
+                if sl.scalar >= 32 {
                     return None;
                 }
-                VecSource::Scalar(sl.scalar)
+                VecSource::Scalar {
+                    reg: sl.scalar,
+                    disp: sl.disp,
+                }
             }
             VecOperandB::Slot(sl) => VecSource::Reg(VecOperand {
                 reg: sl.window()?,
@@ -1587,9 +1608,13 @@ impl VecInsn {
             }),
         };
         Some(VecExec::GetAcc {
-            d: VecOperand {
-                reg: self.d.window()?,
-                addend: (self.d.addend != 15).then_some(self.d.addend),
+            d: if self.d.is_dash() {
+                None
+            } else {
+                Some(VecOperand {
+                    reg: self.d.window()?,
+                    addend: (self.d.addend != 15).then_some(self.d.addend),
+                })
             },
             b,
             sat,
@@ -1599,6 +1624,7 @@ impl VecInsn {
             },
             step_d: self.d.inc,
             pred: VecPred::from_field(self.pred)?,
+            sru,
         })
     }
 
@@ -1826,10 +1852,13 @@ impl VecInsn {
         let b = match self.b {
             VecOperandB::Imm(i) => VecSource::Imm(self.imm_value(i)),
             VecOperandB::Slot(sl) if sl.is_dash() => {
-                if sl.disp != 0 || sl.scalar >= 32 {
+                if sl.scalar >= 32 {
                     return None;
                 }
-                VecSource::Scalar(sl.scalar)
+                VecSource::Scalar {
+                    reg: sl.scalar,
+                    disp: sl.disp,
+                }
             }
             VecOperandB::Slot(sl) => VecSource::Reg(self.operand(sl, width)?),
         };

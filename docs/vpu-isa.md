@@ -144,7 +144,7 @@ window into the file.
 | `++` | post-increment: steps the row horizontally, the element vertically | measured: `probes/vinc.s` |
 | `+rN` | adds a scalar to the element index, in elements, wrapping within the row | measured: `probes/pa48.s` |
 | `*` | **no effect** on the register file or memory — on any slot, under `REP`, on a load or a store | measured: `probes/star.s` |
-| dash in B | names a scalar register instead, with a signed displacement in the 80-bit encodings | decompile: `binutils-vc4` opcode tables; measured: `probes/disp.s` |
+| dash in B | names a scalar register instead, with a signed displacement in the 80-bit encodings — the operand is `r<N> + disp`, plain addition | decompile: `binutils-vc4` opcode tables; measured: `probes/disp.s`, `probes/sdisp.s`: with `r2` = 100, `r2+0`, `r2-1`, `r2-2`, `r2+1` and `r2+100` reach the lanes as 100, 99, 98, 101 and 200. The assembler cannot spell the form, so the words are built by hand and checked against objdump |
 | dash in A | an operand of **zeros** for an ALU op; ignored altogether by a load | measured: `probes/alu6.s`, `probes/ldodd.s` |
 | dash in D | discards the result — the load still reads its bytes | measured: `probes/ldodd.s`; decompile: `FUN_0edc9e20`, the vector-unit read fence |
 
@@ -235,7 +235,7 @@ sixteen ways so that each lane indexes its own 64 bytes.
 | 21 | `mem21` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
 | 22 | `mem22` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
 | 23 | `mem23` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
-| 24 | `getacc` | each lane's accumulator, shifted right by `b & 31`; A is read for nothing. The width field picks the saturation, not an element size: `v8` plain, `v16` clamps into signed 32-bit, `v32` into signed 16-bit | measured: `probes/setf4.s`, `probes/setf5.s` |
+| 24 | `getacc` | each lane's accumulator, shifted right by `b & 31`; A is read for nothing. The width field picks the saturation, not an element size: `v8` plain, `v16` clamps into signed 32-bit, `v32` into signed 16-bit. A **dash destination** keeps only the scalar result unit's aggregate, which is the form `start4.elf` uses | measured: `probes/setf4.s`, `probes/gacc.s`: over sixteen known accumulators `SUMS` and `SUMU` both answer their plain sum, `MAX` the largest, `IMIN`/`IMAX` an index, and the `B` shift applies before the aggregate. The lane values go in whole, not re-read at the operation's element width, `probes/setf5.s` |
 | 25 | `mem25` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
 | 26 | `mem26` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
 | 27 | `mem27` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
@@ -417,11 +417,11 @@ lane predicate applies to the aggregate as well.
 
 `VecInsn::executable` decides, by field rather than by whole-word template.
 A linear sweep of `start4.elf`'s `.text` with this decoder finds **14650**
-vector instructions, and **13018 of them execute**.
+vector instructions, and **13046 of them execute**.
 
 What is left is mostly not instructions. Splitting it by whether the
 instruction's 4 KiB page looks like code — 60% or more of its vector words
-executable — puts **113** in code pages and **1519** in pages that disassemble
+executable — puts **93** in code pages and **1511** in pages that disassemble
 as vector instructions only because a linear sweep cannot tell a jump table
 from one. The count of vector words is itself a property of the sweep: a
 decoder that reads a length differently walks a different stream through the
@@ -429,10 +429,10 @@ data, which is why this number and `binutils-vc4` objdump's are not the same.
 
 | Left in code pages | Reason | Source |
 |---|---|---|
-| ~32 | `vld` forms whose remaining fields are unexplained — a vector slot in the B position, a dash destination carrying an addend | decompile: `binutils-vc4` spells them; the fields are not established |
+| ~32 | `vld` with a vector slot or an immediate in the B position. Every form tried read address **0** — the same words, whatever the A addend or the B vector held — so what addresses it is not established | measured: `probes/mld.s` |
 | ~14 | memory sub-op 3 | decompile: `binutils-vc4` names it `mem03` and nothing more; a probe that ran it took the firmware down with it |
-| ~10 | `vgetacc` with a dash destination, feeding the scalar result unit | inferred: what a discarded accumulator read is for was not established |
-| ~10 | `SETF` where the B slot is a scalar with a displacement | decompile: `binutils-vc4` prints `r2-1`; what the displacement does to a scalar operand is not established |
+| ~8 | ALU sub-op 0 at addresses `binutils-vc4` also prints as a raw `vec48` — a sweep inside a code page's data | decompile: objdump renders the same words as `vec48 0x401,0x73fff088` and the like |
+| ~6 | memory sub-op 1 (`lookupm`) in forms whose address the gather decode does not accept | decompile: `binutils-vc4` spells them `vunklookupm ...,(r63)+r3`; the fields are not established |
 | rest | one-offs, and words inside a code page that the sweep cannot tell from the data beside them — `binutils-vc4` prints most of them as `vunk...` or `vop63.1` too | measured: `probes/usub.s`, `probes/setfc.s` |
 
 None of it is reached on a firmware boot: `boot` stops on an unimplemented

@@ -100,6 +100,9 @@ Two things are known to wedge it, both found the hard way:
 | `ldodd.s` | what a load does with an A slot that names a register, and with a dash that carries an addend |
 | `mhdt.s` | ALU sub-ops 60-63, and an accumulator modifier that reads without writing back |
 | `lut.s`, `lut2.s` | `memread`/`memwrite`: the unit's own lookup table, how it is banked, and the three ways an index is spelled |
+| `sdisp.s` | what a displacement beside a scalar B operand does — hand-assembled, the one form `binutils-vc4` prints but cannot assemble |
+| `gacc.s` | `vgetacc` with a dash destination, feeding the scalar result unit |
+| `mld.s` | a `vld` with a vector slot in the B position: what it addresses (it did not settle) |
 
 ## What they found (Raspberry Pi 4B d03115, firmware 1.20260824)
 
@@ -198,6 +201,15 @@ Two things are known to wedge it, both found the hard way:
   scalar register or an immediate — a scalar reaching every lane alike — and
   scales by the element width whichever way it is spelled, so a `v16` write at
   3 leaves byte 3 alone.
+- A dash B operand's **displacement simply adds to the register**: with
+  `r2` = 100, `r2-1` reaches the lanes as 99 and `r2+100` as 200. The
+  assembler has no syntax for the form, so the words were built by hand and
+  checked against objdump's rendering of the same bytes.
+- `vgetacc` with a **dash destination** keeps only the scalar result unit's
+  aggregate — the form the firmware uses. The lane values go in whole rather
+  than re-read at the element width: sixteen accumulators holding `0x0000ffff`
+  and the like summed to their plain total under `SUMS`, and the `B` shift
+  applies before the sum.
 - The scalar result unit: `SUMU`/`SUMS` add the lanes up unsigned and signed,
   `MAX` answers the largest signed, `IMIN` the index of the first smallest and
   `IMAX` the index of the last largest; `max2`, `max4` and `max6` answered
@@ -206,10 +218,13 @@ Two things are known to wedge it, both found the hard way:
 
 ## Still open
 
+A `vld` whose B is a vector slot or an immediate — `v8ld H(51,0),-+r1,H(0,0)`,
+`v8ld -,-,H(16,16)` — reads address **0** in every form tried, the same words
+whatever the A addend or the B vector holds. Whatever selects the address is
+somewhere else in the encoding.
+
 Memory sub-op 3 and the rest above 9: sub-op 3 is the one that took the
 firmware down when a probe ran it, and 16 and 19 did the same, so whatever
-they do costs a reboot to find out. Then the `vld` forms that put a vector
-slot in the B position, `vgetacc` with a dash destination feeding the scalar
-result unit, what a displacement beside a scalar B operand does, and what an
-unsigned `SUB` in the high half answers — it matched neither the wrapped
-difference nor a clamped one, lane for lane.
+they do costs a reboot to find out. Then what an unsigned `SUB` in the high
+half answers — it matched neither the wrapped difference nor a clamped one,
+lane for lane.

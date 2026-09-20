@@ -1243,7 +1243,9 @@ impl Vpu {
                                 for (lane, slot) in v.iter_mut().enumerate() {
                                     *slot = match b {
                                         VecSource::Imm(i) => i as u32,
-                                        VecSource::Scalar(r) => self.regs.get(r as usize),
+                                        VecSource::Scalar { reg, disp } => {
+                                            self.regs.get(reg as usize).wrapping_add(disp as u32)
+                                        }
                                         VecSource::Reg(o) => {
                                             let add =
                                                 o.addend.map_or(0, |r| self.regs.get(r as usize));
@@ -1275,7 +1277,9 @@ impl Vpu {
                                 };
                                 let bv = match b {
                                     VecSource::Imm(i) => i as u32,
-                                    VecSource::Scalar(r) => self.regs.get(r as usize),
+                                    VecSource::Scalar { reg, disp } => {
+                                        self.regs.get(reg as usize).wrapping_add(disp as u32)
+                                    }
                                     VecSource::Reg(o) => {
                                         let add = o.addend.map_or(0, |r| self.regs.get(r as usize));
                                         let (row, e) =
@@ -1558,7 +1562,7 @@ impl Vpu {
                             VecLutIndex::Lanes(o) => {
                                 o.addend.map_or(0, |r| self.regs.get(r as usize))
                             }
-                            VecLutIndex::Scalar(_) => 0,
+                            VecLutIndex::Scalar { .. } => 0,
                         };
                         for rep in 0..reps {
                             for lane in 0..vrf::LANES {
@@ -1572,10 +1576,9 @@ impl Vpu {
                                         self.vrf.read(row, e, o.reg.elem_bytes as u32)
                                     }
                                     // A scalar index reaches every lane alike.
-                                    VecLutIndex::Scalar(RegOrImm::Reg(r)) => {
-                                        self.regs.get(r as usize)
-                                    }
-                                    VecLutIndex::Scalar(RegOrImm::Imm(v)) => v as u32,
+                                    VecLutIndex::Scalar { reg, disp } => reg
+                                        .map_or(0, |r| self.regs.get(r as usize))
+                                        .wrapping_add(disp as u32),
                                 };
                                 let base = lane as usize * vrf::LUT_LANE;
                                 let at = (at as usize).wrapping_mul(width as usize) % vrf::LUT_LANE;
@@ -1612,13 +1615,22 @@ impl Vpu {
                         reps,
                         step_d,
                         pred,
+                        sru,
                     } => {
                         let lanes = self.vrf.lanes(pred);
                         let reps = match reps {
                             VecRep::Fixed(n) => n,
                             VecRep::FromR0 => self.regs.get(0),
                         };
-                        let d_add = d.addend.map_or(0, |r| self.regs.get(r as usize));
+                        let d_add = d
+                            .and_then(|o| o.addend)
+                            .map_or(0, |r| self.regs.get(r as usize));
+                        // The aggregate reads each lane's value whole: the
+                        // accumulator is wider than an element, and `SUMS` of
+                        // sixteen lanes holding `0x0000ffff` came back as
+                        // their plain sum, not as sixteen `-1`s. Measured with
+                        // `probes/gacc.s`.
+                        let (mut sru_acc, mut sru_index, mut sru_seen) = (0i64, 0u32, 0u32);
                         for rep in 0..reps {
                             for lane in 0..vrf::LANES {
                                 if lanes & (1 << lane) == 0 {
@@ -1626,7 +1638,9 @@ impl Vpu {
                                 }
                                 let shift = match b {
                                     VecSource::Imm(i) => i as u32,
-                                    VecSource::Scalar(r) => self.regs.get(r as usize),
+                                    VecSource::Scalar { reg, disp } => {
+                                        self.regs.get(reg as usize).wrapping_add(disp as u32)
+                                    }
                                     VecSource::Reg(o) => {
                                         let add = o.addend.map_or(0, |r| self.regs.get(r as usize));
                                         let (row, e) = o.reg.lane(lane, 0, add);
@@ -1640,10 +1654,44 @@ impl Vpu {
                                     }
                                     _ => v,
                                 };
-                                let (row, e) =
-                                    d.reg.lane(lane, if step_d { rep } else { 0 }, d_add);
-                                self.vrf.write(row, e, d.reg.elem_bytes as u32, v);
+                                if let Some(o) = d {
+                                    let (row, e) =
+                                        o.reg.lane(lane, if step_d { rep } else { 0 }, d_add);
+                                    self.vrf.write(row, e, o.reg.elem_bytes as u32, v);
+                                }
+                                if let Some((func, _)) = sru {
+                                    let signed = v as i32 as i64;
+                                    match func {
+                                        VecSruFunc::SumUnsigned => sru_acc += v as i64,
+                                        VecSruFunc::SumSigned => sru_acc += signed,
+                                        VecSruFunc::Max => {
+                                            if sru_seen == 0 || signed > sru_acc {
+                                                sru_acc = signed;
+                                            }
+                                        }
+                                        VecSruFunc::IndexOfMin => {
+                                            if sru_seen == 0 || signed < sru_acc {
+                                                sru_acc = signed;
+                                                sru_index = lane;
+                                            }
+                                        }
+                                        VecSruFunc::IndexOfMax => {
+                                            if sru_seen == 0 || signed >= sru_acc {
+                                                sru_acc = signed;
+                                                sru_index = lane;
+                                            }
+                                        }
+                                    }
+                                    sru_seen += 1;
+                                }
                             }
+                        }
+                        if let Some((func, reg)) = sru {
+                            let v = match func {
+                                VecSruFunc::IndexOfMin | VecSruFunc::IndexOfMax => sru_index as i64,
+                                _ => sru_acc,
+                            };
+                            self.regs.set(reg as usize, v as u32);
                         }
                     }
                     VecExec::NeedsVrf => {
