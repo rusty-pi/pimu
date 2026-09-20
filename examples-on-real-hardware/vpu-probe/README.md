@@ -106,7 +106,9 @@ Two things are known to wedge it, both found the hard way:
 | `lut.s`, `lut2.s` | `memread`/`memwrite`: the unit's own lookup table, how it is banked, and the three ways an index is spelled |
 | `sdisp.s` | what a displacement beside a scalar B operand does — hand-assembled, the one form `binutils-vc4` prints but cannot assemble |
 | `gacc.s` | `vgetacc` with a dash destination, feeding the scalar result unit |
-| `mld.s` | a `vld` with a vector slot in the B position: what it addresses (it did not settle) |
+| `mld.s`, `where.s` | a `vld` with a vector slot in the B position: that it reads **address 0**, confirmed against the same RAM through `0x80000000` and `0xc0000000` |
+| `st63.s`, `st63b.s` | the store in that shape — it writes neither where its operands point nor to address 0 |
+| `r63.s`, `r63b.s`, `r63c.s` | `(r63)` in a gather's address, whether the A slot matters, and a gather with a dash destination |
 | `m07.s`, `addr07.s`, `addr07b.s` | memory sub-op 7: that it writes zeros, writes nothing at an address it is handed, and leaves the lookup table alone |
 | `m11.s`-`m23.s` | the rest of the unnamed memory sub-ops. **Each one kills the firmware** — run them only on a board you can power-cycle |
 
@@ -224,14 +226,11 @@ Two things are known to wedge it, both found the hard way:
 
 ## Still open
 
-A `vld` whose B is a vector slot or an immediate — `v8ld H(51,0),-+r1,H(0,0)`,
-`v8ld -,-,H(16,16)` — reads address **0** in every form tried, the same words
-whatever the A addend or the B vector holds. These are the 48-bit encoding,
-which has no address composite at all: the bits an address would use *are* the
-B slot. So either the address comes from somewhere not yet found, or the form
-is not a transfer. Trying to hand-build an 80-bit version of it wedged the
-firmware — the word came out malformed, the VPU never returned, and the board
-needed a reboot.
+The **store** whose B slot holds a vector. Its load counterpart reads address
+0 — `where.s` proves it by reading the same bytes back through `0`,
+`0x80000000` and `0xc0000000` — but the store in that shape wrote neither to
+the address its operands held nor to address 0. Where it goes, if anywhere, is
+still open.
 
 Memory sub-op 3 and the rest above 9: sub-op 3 is the one that took the
 firmware down when a probe ran it, and 16 and 19 did the same, so whatever

@@ -441,7 +441,7 @@ through a jump table produces valid-looking encodings by accident:
 | 389 | words objdump refuses too — it prints them `vec48`, `vunk...` or `vop63.1`. Data: jump tables and constants a sweep cannot tell from code | decompile: `binutils-vc4` objdump over the same addresses |
 | ~250 | the memory sub-ops that kill the firmware — 3, 10, 11-15, 16-23, 25-31. Each writes a zero into the destination element and leaves the board unable to answer the mailbox; none is carried out for that reason | measured: `probes/m11.s`-`probes/m23.s` on Raspberry Pi 4B d03115 boards, one sub-op per board |
 | ~60 | `indexwritem` with a dash source, and `lookupm` whose B slot holds a vector rather than an address | decompile: `binutils-vc4` spells them; a scatter with nothing to write, and a gather with no address, were not measured |
-| ~22 | `vst` with a vector slot in the B position. The *load* in that shape reads address 0, measured — the store was not | measured: `probes/mld.s` settled the load only |
+| ~22 | `vst` with a vector slot in the B position. The *load* in that shape reads address 0; the store writes nowhere a probe could find — not to the address its operands hold, and not to address 0 either | measured: `probes/st63.s`, `probes/st63b.s`: 32 bytes of our own scratch and the first bytes of address 0, read before and after, both unchanged |
 | 67 | addresses objdump does not decode at all: the two linear sweeps drifting apart inside data | decompile: `binutils-vc4` objdump over the same addresses |
 
 None of it is reached on a firmware boot: `boot` stops on an unimplemented

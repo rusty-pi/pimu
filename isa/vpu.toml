@@ -2270,11 +2270,11 @@ ref        = "`binutils-vc4` spells them; a scatter with nothing to write, and a
 confidence = "low"
 
 [[section.row]]
-cells = ["~22", "`vst` with a vector slot in the B position. The *load* in that shape reads address 0, measured — the store was not"]
+cells = ["~22", "`vst` with a vector slot in the B position. The *load* in that shape reads address 0; the store writes nowhere a probe could find — not to the address its operands hold, and not to address 0 either"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/mld.s` settled the load only"
+ref        = "`probes/st63.s`, `probes/st63b.s`: 32 bytes of our own scratch and the first bytes of address 0, read before and after, both unchanged"
 confidence = "medium"
 
 [[section.row]]
