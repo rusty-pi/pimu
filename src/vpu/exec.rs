@@ -1242,7 +1242,8 @@ impl Vpu {
                                     Some(o) => {
                                         let (row, e) =
                                             o.reg.lane(ai, if step_a { rep } else { 0 }, a_add);
-                                        self.vrf.read(row, e, o.reg.elem_bytes as u32)
+                                        let w = o.reg.elem_bytes as u32;
+                                        widen(self.vrf.read(row, e, w), w)
                                     }
                                 };
                                 let bv = match b {
@@ -1252,15 +1253,21 @@ impl Vpu {
                                         let add = o.addend.map_or(0, |r| self.regs.get(r as usize));
                                         let (row, e) =
                                             o.reg.lane(bi, if step_a { rep } else { 0 }, add);
-                                        self.vrf.read(row, e, o.reg.elem_bytes as u32)
+                                        let w = o.reg.elem_bytes as u32;
+                                        widen(self.vrf.read(row, e, w), w)
                                     }
                                 };
                                 // The two interleaves take odd lanes from B and
                                 // even ones from A; everything else computes.
+                                // The saturating ops clamp to what the
+                                // destination element can hold, not to what the
+                                // operation is wide: `v32adds` into a byte
+                                // register comes back 0xff.
+                                let sat_bytes = d.map_or(width, |o| o.reg.elem_bytes as u32);
                                 let mut res = if op.takes_b(lane) {
                                     bv
                                 } else {
-                                    vec_alu(op, av, bv, width)
+                                    vec_alu(op, av, bv, width, sat_bytes)
                                 };
                                 if let Some(acc) = acc {
                                     let slot = &mut self.vrf.acc[lane as usize];
@@ -1513,13 +1520,31 @@ struct VecTransfer {
     op_bytes: u32,
 }
 
-/// One lane of a vector ALU op, at `width` bytes per element.
+/// One source element, read at its register's own width, as the operation
+/// sees it.
 ///
-/// Every case here was measured on a Raspberry Pi 4B d03115; see
-/// `examples-on-real-hardware/vpu-probe/`. Values arrive zero-extended from
-/// the register file and go back truncated, so the arithmetic is done in the
-/// element's own width and sign-extended where the operation is signed.
-fn vec_alu(op: VecAluOp, a: u32, b: u32, width: u32) -> u32 {
+/// A byte element is unsigned and a halfword signed: `v32mov HY(0,0),H(60,0)`
+/// leaves `0x000000ff` where the byte was `0xff`, while `v32mov HY(0,0),HX(62,0)`
+/// leaves `0xffff8000` where the halfword was `0x8000` — measured on a
+/// Raspberry Pi 4B d03115. Nothing to do when the register is as wide as the
+/// operation, which the narrowing in [`Vrf::read`](crate::vpu::vrf::Vrf::read)
+/// has already taken care of.
+fn widen(v: u32, from_bytes: u32) -> u32 {
+    if from_bytes == 2 {
+        v as u16 as i16 as u32
+    } else {
+        v
+    }
+}
+
+/// One lane of a vector ALU op, at `width` bytes per element — the
+/// *operation's* width, which the sources have already been widened into.
+///
+/// `sat_bytes` is the destination element's width, which is what the
+/// saturating ops clamp to: a byte destination holds `0..=0xff`, a wider one
+/// saturates signed. Every case here was measured on a Raspberry Pi 4B
+/// d03115; see `examples-on-real-hardware/vpu-probe/`.
+fn vec_alu(op: VecAluOp, a: u32, b: u32, width: u32, sat_bytes: u32) -> u32 {
     use VecAluOp::*;
     let bits = width * 8;
     let mask = if bits >= 32 {
@@ -1536,8 +1561,21 @@ fn vec_alu(op: VecAluOp, a: u32, b: u32, width: u32) -> u32 {
     };
     let min = -(1i64 << (bits - 1));
     let max = (1i64 << (bits - 1)) - 1;
-    let sat = |v: i64| -> u32 { (v.clamp(min, max) as u32) & mask };
-    let shift = b & 15;
+    let satw = |v: i64| -> u32 { (v.clamp(min, max) as u32) & mask };
+    // A byte element is unsigned, so a byte destination saturates into
+    // `0..=0xff`; a wider one saturates signed.
+    let sat = |v: i64| -> u32 {
+        let sbits = sat_bytes * 8;
+        let clamped = if sbits == 8 {
+            v.clamp(0, 0xff)
+        } else {
+            v.clamp(-(1i64 << (sbits - 1)), (1i64 << (sbits - 1)) - 1)
+        };
+        (clamped as u32) & mask
+    };
+    // A shift, rotate or reversal counts in the operation's width: `v32` takes
+    // five bits of B where `v16` takes four.
+    let shift = b & (bits - 1);
     match op {
         Mov => b & mask,
         And => a & b & mask,
@@ -1552,12 +1590,12 @@ fn vec_alu(op: VecAluOp, a: u32, b: u32, width: u32) -> u32 {
         Rsubs => sat(sext(b) - sext(a)),
         Dist => (sext(a) - sext(b)).unsigned_abs() as u32 & mask,
         Dists => sat((sext(a) - sext(b)).abs()),
-        Min => sat(sext(a).min(sext(b))),
-        Max => sat(sext(a).max(sext(b))),
+        Min => satw(sext(a).min(sext(b))),
+        Max => satw(sext(a).max(sext(b))),
         // `a` clamped into `0 ..= b`, both read signed: a negative `a` or a
         // negative `b` comes out as zero.
-        Clip => sat(sext(a).clamp(0, sext(b).max(0))),
-        Sign => sat(sext(b) + sext(a).signum()),
+        Clip => satw(sext(a).clamp(0, sext(b).max(0))),
+        Sign => satw(sext(b) + sext(a).signum()),
         Shl => (a << shift) & mask,
         Shls => sat(sext(a) << shift),
         Lsr => (a & mask) >> shift,
@@ -1571,7 +1609,10 @@ fn vec_alu(op: VecAluOp, a: u32, b: u32, width: u32) -> u32 {
             }
         }
         Count => ((a & mask).count_ones() + (b & mask).count_ones()) & mask,
-        Msb => match (b & mask).checked_ilog2() {
+        // The index of the highest bit set in either operand: `v16msb` over
+        // `a = 0x01, b = 0xff` answers 7, and over `a = 0x7f, b = 0x01`
+        // answers 6.
+        Msb => match ((a | b) & mask).checked_ilog2() {
             Some(n) => n & mask,
             None => mask, // no bit set; the scalar `msb` answers all-ones
         },

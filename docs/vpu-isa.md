@@ -132,6 +132,22 @@ zero-extends, on loads and on stores alike. `v8ld HY(3,0),(r1)` reads sixteen
 bytes and leaves sixteen 32-bit elements; `v32st H(1,0),(r0)` writes each 8-bit
 element out as a word.
 
+An ALU op converts the same way, and that is its commonest shape rather than a
+corner: two thirds of the vector ALU instructions in `start4.elf` are an
+operation wider than the registers it names. A source is read at its own
+register's width and widened into the operation's — **a byte unsigned, a
+halfword signed**: `v32mov HY(0,0),H(60,0)` leaves `0x000000ff` where the byte
+was `0xff`, while `v32mov HY(0,0),HX(62,0)` leaves `0xffff8000` where the
+halfword was `0x8000`. The result goes back the other way, truncated into the
+destination element — except for the saturating ops, which clamp to what that
+element can hold, `0..=0xff` for a byte register and signed for a wider one. So
+`v32adds H(0,0),H(60,0),H(61,0)` over `0x80 + 0x80` answers `0xff`, while the
+same addition into an `HX` destination answers `0x0100`. A shift, rotate or
+reversal counts in the **operation's** width: `v32` takes five bits of B where
+`v16` takes four, and `brev` with a zero count reverses the whole operation
+width, not the register's. A register *wider* than the operation is refused —
+`binutils-vc4` has no spelling for one, and `start4.elf` has thirteen.
+
 A slot's first element is `band * 16 + fine`, counted in elements, which is why
 the byte coordinate objdump prints and the element index part company as soon
 as an element is wider than a byte. `+rN` adds to that element index, also in
@@ -195,8 +211,9 @@ shuffles `even`/`odd`/`interl`/`interh` — each measured lane by lane against
 two vectors of edge cases and pinned in `tests/vpu_isa.rs`. `even` and `odd`
 pack A's alternate elements into the low eight lanes and B's into the high
 eight; `clip` is `a` clamped into `0 ..= b`; `sign` is `b + signum(a)`;
-`count` is `popcount(a) + popcount(b)`; and `brev` reverses the low `n` bits of
-`a`, `n` being `b`'s low nibble, or the whole element when that nibble is zero.
+`count` is `popcount(a) + popcount(b)`; `msb` is the index of the highest bit
+set in either operand; and `brev` reverses the low `n` bits of `a`, `n` being
+`b`'s low bits, or the whole operation width when they are zero.
 
 The multiplies execute too — `mull` keeps the product's low half, `mulm` shifts
 it right by eight, `mulhd` keeps the high half and `mulhn` rounds while doing
@@ -212,13 +229,23 @@ What still faults, and why:
 
 | instructions | reason |
 |---|---|
-| 3088 | an ALU op whose width disagrees with a register it touches |
-| 1375 | memory sub-ops beyond `vld`/`vst` |
-| 625 | the scalar result unit past the one `SUMU`/`SUMS` form |
-| 726 | `SETF` — what it leaves in the lane flags is not established |
-| 391 | the `UACCH`/`SACCH` accumulator forms |
+| 2335 | memory sub-ops beyond `vld`/`vst`, and transfers refused for another reason |
+| 903 | `SETF` — what it leaves in the lane flags is not established |
+| 704 | the scalar result unit past the one `SUMU`/`SUMS` form |
+| 526 | the `UACCH`/`SACCH` accumulator forms |
+| 326 | the five lane predicates the firmware does not pin down |
+| 258 | a multiply whose registers disagree in width — it carries no width of its own to convert to |
+| 255 | a `*` on a slot |
+| 148 | ALU and multiply sub-ops still unmeasured |
+| 76 | a multiply with the `L` bit set, which selects another family |
+| 65 | a binary op whose A slot is a dash |
+| 53 | the rest: a modifier without `ENA`, a register wider than the operation, `v32count` |
 
-Of the 15180 vector instructions in `start4.elf`'s `.text`, 6616 execute.
+`v32count` is in that last row on purpose: on hardware it writes a zero into
+every lane whatever its operands, so whatever it counts, it is not the bits of
+a 32-bit element.
+
+Of the 15180 vector instructions in `start4.elf`'s `.text`, 9531 execute.
 
 Outside the ISA proper: no dual-issue pipeline, and the MMU and the caches are
 flat — the four VC4 aliases (`0x0`, `0x4000_0000`, `0x8000_0000`,

@@ -1265,10 +1265,13 @@ impl VecInsn {
 
     /// The ALU-class ops whose semantics are measured, in either encoding.
     ///
-    /// The operation's width has to match every register it touches: what the
-    /// unit does when they differ was not measured, and guessing it would
-    /// corrupt a register quietly. `SETF`, the accumulator, a scalar writeback,
-    /// a `*` and the five unpinned lane predicates all still fault.
+    /// A register may be *narrower* than the operation, and mostly is: the unit
+    /// reads the element at the register's own width and widens it — a byte
+    /// unsigned, a halfword signed — works at the operation's width, and
+    /// narrows the result back into the destination. A register wider than the
+    /// operation is refused: `binutils-vc4` cannot even spell one, and
+    /// `start4.elf` has thirteen. `SETF`, a scalar writeback, a `*` and the
+    /// five unpinned lane predicates all still fault.
     fn alu(&self) -> Option<VecExec> {
         // Sub-ops from 48 up are the multiply group, and there the `L` bit
         // selects the family rather than the element width — which then comes
@@ -1278,20 +1281,30 @@ impl VecInsn {
                 return None; // `L` set is the other family, not modelled
             }
             // The width comes from whichever slot names a real register; a
-            // dash has none of its own.
-            let slot = [self.d, self.a]
+            // dash has none of its own. The multiplies carry no width of their
+            // own to convert to, so every register they touch has to agree.
+            let mut slots = [self.d, self.a]
                 .into_iter()
                 .chain(match self.b {
                     VecOperandB::Slot(s) => Some(s),
                     VecOperandB::Imm(_) => None,
                 })
-                .find(|s| !s.is_dash())?;
-            (
-                VecAluOp::from_mul_subop(self.subop)?,
-                slot.elem_bytes() as u32,
-            )
+                .filter(|s| !s.is_dash());
+            let w = slots.next()?.elem_bytes() as u32;
+            if slots.any(|s| s.elem_bytes() as u32 != w) {
+                return None;
+            }
+            (VecAluOp::from_mul_subop(self.subop)?, w)
         } else {
-            (VecAluOp::from_subop(self.subop)?, self.lane_bits as u32 / 8)
+            let op = VecAluOp::from_subop(self.subop)?;
+            let width = self.lane_bits as u32 / 8;
+            // `v32count` writes a zero into every lane on hardware, whatever
+            // its operands — whatever it counts, it is not the bits of a
+            // 32-bit element, so it is left to fault.
+            if op == VecAluOp::Count && width == 4 {
+                return None;
+            }
+            (op, width)
         };
         let acc = match self.sru {
             VecSru::None => None,
@@ -1352,10 +1365,10 @@ impl VecInsn {
         })
     }
 
-    /// One slot as an execution operand: a window whose elements are as wide as
-    /// the operation, plus its `+rN`.
+    /// One slot as an execution operand: its window — whose elements may be
+    /// narrower than the operation — plus its `+rN`.
     fn operand(&self, slot: VecSlot, width: u32) -> Option<VecOperand> {
-        if slot.star || slot.elem_bytes() as u32 != width {
+        if slot.star || slot.elem_bytes() as u32 > width {
             return None;
         }
         Some(VecOperand {

@@ -65,6 +65,8 @@ in a state a firmware thread might be mid-way through using.
 | `mul.s` | the multiplies, signed and unsigned, low / middle / high |
 | `acc2.s`, `acc3.s` | the accumulator: one effect per row, then polarity and width (`acc3-vectors.hex`) |
 | `accmix.s` | a whole program — multiplies, accumulate, `REP` — replayed against the model in `tests/vpu_isa.rs` |
+| `wmix.s`, `wmix2.s`, `wmix3.s` | what an ALU op does when it is wider than the registers it names: the extension, the saturation, the shift count (`wmix-vectors.hex`, `wmix2-vectors.hex`) |
+| `wacc.s` | the accumulator across the same width change, replayed as a program in `tests/vpu_isa.rs` |
 
 ## What they found (Raspberry Pi 4B d03115, firmware 1.20260824)
 
@@ -84,12 +86,12 @@ in a state a firmware thread might be mid-way through using.
 - A **load** whose element straddles a 16-byte boundary wraps inside that
   block instead of crossing it: `v32ld HY(0,0),(r1+13)` over ascending bytes
   reads `0e 0f 10 01`. A **store** crosses normally.
-- The ALU: `s` suffixes saturate signed, `min`/`max`/`asr` are signed and
-  `lsr` is not, a shift count is B's low nibble. `even`/`odd` pack A's
+- The ALU: `s` suffixes saturate to the destination element, `min`/`max`/`asr`
+  are signed and `lsr` is not. `even`/`odd` pack A's
   alternate elements into lanes 0-7 and **B's** into 8-15; `clip` is
   `clamp(a, 0, b)`; `sign` is `b + signum(a)`; `count` is
   `popcount(a) + popcount(b)`; `brev` reverses a's low `n` bits, `n` being b's
-  low nibble, or the whole element when that nibble is zero.
+  low bits, or the whole operation width when they are zero.
 - The multiplies: `mull` keeps the product's low half, `mulm` shifts it right
   by 8, `mulhd` keeps the high half and `mulhn` rounds while doing so; the
   suffix says which operand is signed.
@@ -99,12 +101,24 @@ in a state a firmware thread might be mid-way through using.
   makes the destination take the accumulator instead of the raw result.
   `vgetacc D,A,B` reads it shifted right by `B & 15`, with `s16`/`s32`
   saturating variants.
+- An ALU op **wider than its registers** — which most of them are — reads each
+  source at the register's own width and widens it: a byte unsigned, a halfword
+  signed. The result is truncated into the destination element, except for the
+  saturating ops, which clamp to what that element holds: `0..=0xff` for a byte
+  register, signed for a wider one. A shift, rotate or `brev` counts in the
+  operation's width (`b & 31` for `v32`, `b & 15` for `v16`), and `brev` with a
+  zero count reverses the whole operation width. `msb` answers the index of the
+  highest bit set in **either** operand. Nothing about the accumulator changes.
+  `v32count` writes a zero into every lane whatever its operands.
 
 ## Still open
 
 The `...H` accumulator forms (`UACCH`, `SACCH`) did not fall out of these runs:
 each hypothesis that fits one lane breaks another, and they look like a second
-accumulator or a second half of one rather than a write-back mode. The other
-open questions are what an ALU op does when its width disagrees with a
-register's, what the scalar-result unit does beyond `SUMU`/`SUMS`, and what
-`SETF` leaves in the lane flags.
+accumulator or a second half of one rather than a write-back mode. `v16clips`
+and `v32count` each write a zero into every lane over the same vectors their
+unsuffixed forms answer sensibly on, so neither is the operation its name
+suggests. The other open questions are what a multiply does when its registers
+disagree in width — it carries no width of its own to convert to — what the
+scalar-result unit does beyond `SUMU`/`SUMS`, and what `SETF` leaves in the
+lane flags.
