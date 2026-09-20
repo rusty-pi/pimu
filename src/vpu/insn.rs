@@ -791,9 +791,8 @@ pub enum VecExec {
     NeedsVrf,
 }
 
-/// Mask of `n` bits at bit position `pos`, counted from the most significant
-
-/// Read such a field out of an instruction word.
+/// Read a field of `n` bits out of an instruction word, `pos` bits from its
+/// most significant end — how `videocoreiv.arch` writes its patterns.
 const fn vfield(raw: u128, width: u32, pos: u32, n: u32) -> u32 {
     ((raw >> (width - pos - n)) & ((1u128 << n) - 1)) as u32
 }

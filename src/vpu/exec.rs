@@ -1153,9 +1153,15 @@ impl Vpu {
                         let addend = addend.map_or(0, |r| self.regs.get(r as usize));
                         for rep in 0..reps {
                             let step = if step { rep } else { 0 };
-                            if let Err(err) =
-                                self.vec_transfer(bus, store, reg, step, addend, addr, lanes, width)
-                            {
+                            let t = VecTransfer {
+                                reg,
+                                step,
+                                addend,
+                                addr,
+                                lanes,
+                                op_bytes: width,
+                            };
+                            if let Err(err) = self.vec_transfer(bus, store, t) {
                                 return Some(self.stop(Stop::Fault(Fault::Bus { pc, err })));
                             }
                             addr = addr.wrapping_add(stride);
@@ -1292,13 +1298,16 @@ impl Vpu {
         &mut self,
         bus: &mut B,
         store: bool,
-        reg: VecReg,
-        step: u32,
-        addend: u32,
-        addr: u32,
-        lanes: u16,
-        op_bytes: u32,
+        t: VecTransfer,
     ) -> Result<(), BusError> {
+        let VecTransfer {
+            reg,
+            step,
+            addend,
+            addr,
+            lanes,
+            op_bytes,
+        } = t;
         let width = match op_bytes {
             1 => Width::Byte,
             2 => Width::Half,
@@ -1398,6 +1407,22 @@ impl Vpu {
         }
         Ok(())
     }
+}
+
+/// One repetition of a vector load or store: which sixteen elements, where in
+/// memory, and how wide each one is there.
+#[derive(Clone, Copy)]
+struct VecTransfer {
+    reg: VecReg,
+    /// Repetitions of `++` already applied.
+    step: u32,
+    /// Value of the slot's `+rN`.
+    addend: u32,
+    addr: u32,
+    /// One bit per lane; a masked-off lane touches no memory.
+    lanes: u16,
+    /// Element width in memory, in bytes.
+    op_bytes: u32,
 }
 
 /// Decode the 6-bit floating-point immediate of a `0xC800` triadic FP op.
