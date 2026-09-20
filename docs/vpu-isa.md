@@ -26,11 +26,18 @@ Parcel packing: 32-bit = `p0` then `p1`, each LE. 48-bit stream order is
 - `r25 = sp` — confirmed: the 16-bit `add sp,#imm` form encodes destination 25.
 - `r24 = gp` — inferred: dedicated base in 16-bit `ld/st (r24+imm)` forms.
 - `r26 = lr` — inferred (community ABI). `bl`/`jl` write the return address here.
-- `pc` and the status register are **not** in the GPR file; pc-relative and
-  flag-consuming forms use dedicated encodings.
-- Flags: N / Z / C / V with ARM semantics (`src/vpu/reg.rs`).
+- `r30 = sr` and `r31 = pc` *in the encodings*: the `lea rd,(rN+imm16)` form
+  reads `N == 31` as the program counter (`src/vpu/decode.rs`), and the
+  exception path saves and restores `r30` as the status word, interrupt-enable
+  bit 30 and all (`Vpu::sr`, `src/vpu/exec.rs`). The model still holds `pc` and
+  N/Z/C/V in their own fields and folds the flags into the low nibble of `r30`
+  only when an exception saves it.
+- Flags: N / Z / C / V, one of which is **not** ARM's. `c` is *borrow* on a
+  subtraction, so `cs` means unsigned-below (`lo`) and `cc` unsigned
+  higher-or-same (`hs`) — the opposite way round from ARM (`Flags::test`,
+  `src/vpu/reg.rs`).
 
-## Two encodings that are easy to get backwards (confirmed)
+## Three encodings that are easy to get backwards (confirmed)
 
 - **`switch` table entries are signed.** The table starts right after the
   2-byte instruction, and `entry[idx]` is a *signed* displacement in halfwords
@@ -45,28 +52,53 @@ Parcel packing: 32-bit = `p0` then `p1`, each LE. 48-bit stream order is
   undoes all three with `pop {r16-r23}; pop {r0-r15}; ld r26,(sp)++; rti` —
   which only composes if each block runs downwards in register number
   (fixed 2026-09-10).
+- **There is no signed store, so the `ww = 11` store slot is a signed-byte
+  *load*.** The `{ww, L}` bits spell word / half / byte / signed-half against
+  load / store, which leaves one encoding spare, and the core spends it on
+  `ldsb`. start4's bootloader stage is the proof: mbedtls' `ecp_mod_p256`
+  loads its `signed char` carry (a byte at `sp+7`) with `1010 1001 111d dddd`
+  and branches on the sign. Decoded as a store, the fast reduction came out
+  wrong and the `while (N >= P) N -= P` loop after it never finished
+  (fixed 2026-09-12, `src/vpu/decode.rs`).
 
 ## Flag-setting policy (assumption — `src/vpu/insn.rs`)
 
-`cmp` / `cmn` / `btest` set flags and discard their result. Explicit `adds` /
-`subs` / `shls` set flags and write. Everything else writes its result and
-leaves flags alone. This is a guess; VC4 may update flags more widely. The M1
-test payloads only rely on `cmp`.
+`cmp` / `cmn` / `btest` set flags and discard their result. The explicit
+flag-setting triadics `adds` / `subs` / `shls` (sub-op `0x28..=0x2a`) set flags
+and write, and `fcmp` sets them. Everything else writes its result and leaves
+flags alone. This is still a guess; VC4 may update flags more widely. What is
+behind it now is a whole firmware boot and a Linux boot running on it without
+a golden-log divergence — which is evidence, not proof: an instruction whose
+flags nothing consumes before the next `cmp` would look the same either way.
 
 ## Implemented (`src/vpu/decode.rs`, `src/vpu/exec.rs`)
 
-16-bit: `nop`/`bkpt`/`sleep`/`rti`, `swi`, `version rd`, `switch`, `b/bl <reg>`,
-`b<cond>` (7-bit), `ld/st (sp+imm)`, `ld/st{w} (rs)`, `ld/st (rs+imm4)`,
-`add sp,#imm`, `add rd,sp,#imm`, `ldm`/`stm` (`push`/`pop` multi),
-`p`-table ALU reg/reg, `q`-table ALU reg/imm5.
+The ALU tables are whole: all 32 `p` entries, all 16 `q` entries, the `f`
+float table, and every triadic sub-op through `0x38`. Triadic `0x39..=0x3F` is
+the only gap left as `AluOp::Unimpl`, and no firmware this model boots has
+executed one. An encoding outside the decoder is `Op::Unimpl`, which faults
+under the default policy and is collected as an `UnimplHit` under the
+lenient one, so a gap shows up as a report rather than as a wrong answer.
+
+16-bit: `nop`/`bkpt`/`sleep`/`rti`, `ei`/`di`, `swi <reg>` and `swi #imm6`,
+`version rd`, `switch` and `switch.b`, `b/bl <reg>`, `b<cond>` (7-bit),
+`ld/st (sp+imm)`, `ld/st{w} (rs)` (all eight sub-ops, `ldsb` included),
+`ld/st (rs+imm4)`, `add sp,#imm`, `lea rd,(sp+imm)`, `ldm`/`stm` (`push`/`pop`
+multi, `r31`/wrap forms included), `p`-table ALU reg/reg, `q`-table ALU
+reg/imm5.
 
 32-bit: `b<cond>`/`bl` (27-bit), `addcmpb`, ALU imm16 (`p` table),
-`add rd,rs,#imm16`, `add rd,pc,#imm16`, triadic ALU incl. `mul`/`div`/`mulhd`
-(predicated, reg or imm6), scalar float ALU (`fadd`/`fmul`/… incl. the 6-bit
-minifloat immediate), `mov p<n>,r<n>` / `mov r<n>,p<n>` (coprocessor-register
-moves), `ld/st` with `gp`/`sp`/`pc`/`r0` + imm16 base, `ld/st (rs+imm12)`.
+`lea rd,(rN+imm16)` and `lea rd,(pc+imm16)`, triadic ALU incl.
+`mul`/`div`/`mulhd`/`count`/`clamp16`/`add`- and `subscale` (predicated, reg or
+imm6), scalar float ALU (`fadd`/`fmul`/… incl. the 6-bit minifloat immediate)
+and the `0xCA00` convert block (`ftrunc`/`floor`/`flts`/`fltu`),
+`mov p<n>,r<n>` / `mov r<n>,p<n>` (coprocessor-register moves), and the
+load/store block: `(ra+rb)`, `(rs+imm12)`, `(--rs)` / `(rs++)` writeback, and
+`gp`/`sp`/`pc`/`r0` + imm16 — the register-indexed and writeback forms with
+their condition field.
 
-48-bit: `j`/`jl`/`b`/`bl <abs32>`, `ld/st` with 27-bit offset, ALU forms.
+48-bit: `j`/`jl`/`b`/`bl <abs32>`, `lea rd,(pc+off32)`, `ld/st` with a 27-bit
+offset, ALU with a 32-bit immediate.
 
 Vector (48/80-bit, `0xF000..`): decoded to operands — class, sub-op, element
 width, the three VRF slot descriptors and their coordinates, the memory
@@ -144,7 +176,17 @@ Everything the vector unit can do beyond the table above: the ALU ops
 (`vadd`/`vand`/`vshl`/...), vertical (column) register windows, the per-slot
 `+rN` coordinate addends, address offsets on a load or store, the accumulator
 modifiers, and any lane flag other than the zero flag `bitplanes` writes. All of
-them fault. MMU/cache is modelled as flat.
+them fault.
+
+Outside the ISA proper: no dual-issue pipeline, and the MMU and the caches are
+flat — the four VC4 aliases (`0x0`, `0x4000_0000`, `0x8000_0000`,
+`0xC000_0000`) fold onto one backing store, so a line the firmware writes
+cached and never flushes reads back as the new bytes here and the old ones on
+silicon. Two checks stand in for the behaviour rather than modelling it, both
+off by default: `--check-coherency` reports each read that would see stale
+bytes on hardware (`src/coherency.rs`), and `--check-alignment` reports every
+scalar access the core could not do in one, GCC's VC4 port being
+`STRICT_ALIGNMENT` (`src/align.rs`).
 
 ## Sources
 

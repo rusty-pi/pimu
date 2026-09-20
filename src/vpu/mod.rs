@@ -1,9 +1,11 @@
 //! VideoCore IV scalar VPU model.
 //!
-//! Scope today (milestone M1): a fetch/decode/execute interpreter for a subset
-//! of the 16- and 32-bit scalar instruction forms — enough to run small
-//! hand-written console payloads and simple control flow. The dual-issue
-//! pipeline, the vector unit, MMU/cache, and interrupts are all future work.
+//! Scope today: a fetch/decode/execute interpreter for the scalar instruction
+//! forms — 16-, 32- and 48-bit — plus exceptions and interrupt delivery, which
+//! together run the boot ROM, the EEPROM bootloader and `start4.elf` through to
+//! the ARM. The vector unit is decoded in full and executed for the forms that
+//! `insn::VecInsn::executable` matches; the dual-issue pipeline and the
+//! MMU/caches are not modelled. See `docs/vpu-isa.md`.
 //!
 //! Instruction encoding is transcribed from the community reverse engineering
 //! (Herman Hermitage's `videocoreiv.arch`, the vc4 binutils port). Anything not
