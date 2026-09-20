@@ -429,7 +429,7 @@ data, which is why this number and `binutils-vc4` objdump's are not the same.
 
 | Left in code pages | Reason | Source |
 |---|---|---|
-| ~32 | `vld` with a vector slot or an immediate in the B position. Every form tried read address **0** — the same words, whatever the A addend or the B vector held — so what addresses it is not established | measured: `probes/mld.s` |
+| ~32 | `vld` with a vector slot or an immediate in the B position. Every form tried read address **0**, whatever the A addend or the B vector held — and these are the 48-bit encoding, whose address composite *is* the B slot, so there is no address field left to read | measured: `probes/mld.s` |
 | ~14 | memory sub-op 3 | decompile: `binutils-vc4` names it `mem03` and nothing more; a probe that ran it took the firmware down with it |
 | ~8 | ALU sub-op 0 at addresses `binutils-vc4` also prints as a raw `vec48` — a sweep inside a code page's data | decompile: objdump renders the same words as `vec48 0x401,0x73fff088` and the like |
 | ~6 | memory sub-op 1 (`lookupm`) in forms whose address the gather decode does not accept | decompile: `binutils-vc4` spells them `vunklookupm ...,(r63)+r3`; the fields are not established |

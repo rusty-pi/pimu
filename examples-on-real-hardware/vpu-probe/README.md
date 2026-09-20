@@ -220,8 +220,12 @@ Two things are known to wedge it, both found the hard way:
 
 A `vld` whose B is a vector slot or an immediate — `v8ld H(51,0),-+r1,H(0,0)`,
 `v8ld -,-,H(16,16)` — reads address **0** in every form tried, the same words
-whatever the A addend or the B vector holds. Whatever selects the address is
-somewhere else in the encoding.
+whatever the A addend or the B vector holds. These are the 48-bit encoding,
+which has no address composite at all: the bits an address would use *are* the
+B slot. So either the address comes from somewhere not yet found, or the form
+is not a transfer. Trying to hand-build an 80-bit version of it wedged the
+firmware — the word came out malformed, the VPU never returned, and the board
+needed a reboot.
 
 Memory sub-op 3 and the rest above 9: sub-op 3 is the one that took the
 firmware down when a probe ran it, and 16 and 19 did the same, so whatever

@@ -2232,7 +2232,7 @@ passes.
 """
 
 [[section.row]]
-cells = ["~32", "`vld` with a vector slot or an immediate in the B position. Every form tried read address **0** — the same words, whatever the A addend or the B vector held — so what addresses it is not established"]
+cells = ["~32", "`vld` with a vector slot or an immediate in the B position. Every form tried read address **0**, whatever the A addend or the B vector held — and these are the 48-bit encoding, whose address composite *is* the B slot, so there is no address field left to read"]
 
 [[section.row.source]]
 kind       = "measured"
