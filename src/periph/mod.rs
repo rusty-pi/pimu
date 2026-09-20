@@ -10,6 +10,7 @@ pub mod asb;
 pub mod aux;
 pub mod avs;
 pub mod bcm54213pe;
+pub mod bluetooth;
 pub mod bootbox;
 pub mod bsc;
 pub mod clkmon;

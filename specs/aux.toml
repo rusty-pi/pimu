@@ -3,18 +3,27 @@ name    = "aux"
 base    = 0x7E215000
 size    = 0x100
 summary = "AUX: mini-UART (UART1) and the SPI1 / SPI2 masters"
-notes   = "Only the mini-UART is modelled, transmit-only with a line that is always ready. The SPI masters at `+0x80` / `+0xC0` read 0."
+notes   = "The mini-UART is modelled both ways: transmit completes instantly on a line that is always ready, and receive is paced at the rate `MU_BAUD` sets against the modelled clock, as `uart0` is. The SPI masters at `+0x80` / `+0xC0` read 0."
 
 [[block.source]]
 kind       = "datasheet"
 ref        = "BCM2711 ARM Peripherals, Auxiliaries chapter"
 confidence = "high"
 
+[block.irq]
+gic_spi = 93
+notes   = "Shared by the mini-UART and the two SPI masters. Linux takes it for `ttyS0`; the firmware polls `MU_LSR` instead."
+
+[[block.irq.source]]
+kind       = "linux"
+ref        = "the dtb start4 hands to Linux: `serial@7e215040`, `brcm,bcm2835-aux-uart`, `interrupts = <0x0 0x5d 0x4>`"
+confidence = "high"
+
 [[register]]
 name   = "IRQ"
 offset = 0x00
 access = "r"
-notes  = "Which auxiliary has an interrupt pending. Always 0 here."
+notes  = "Which auxiliary has an interrupt pending. Bit 0 follows the mini-UART; the SPI masters are not modelled, so bits 1 and 2 stay 0."
 
 [[register.source]]
 kind       = "datasheet"
@@ -66,7 +75,7 @@ confidence = "high"
 name   = "MU_IO"
 offset = 0x40
 access = "rw"
-notes  = "Data: write transmits a byte; nothing is ever received."
+notes  = "Data: write transmits a byte, read pops the receive FIFO. With `MU_LCR.DLAB` set it is the baud-rate counter's low byte instead."
 
 [[register.source]]
 kind       = "datasheet"
@@ -77,20 +86,70 @@ confidence = "high"
 name   = "MU_IER"
 offset = 0x44
 access = "rw"
-notes  = "Interrupt enables."
+notes  = "Interrupt enables. With `MU_LCR.DLAB` set it is the baud-rate counter's high byte instead."
 
 [[register.source]]
 kind       = "datasheet"
 ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_IER_REG`"
 confidence = "high"
 
+[[register.field]]
+name  = "RX_INT"
+bits  = "0"
+notes = "Interrupt while the receive FIFO holds a byte. The datasheet swaps this bit with bit 1; Linux's `8250` driver drives the register as a 16550's, and that is what the model follows."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "Linux `drivers/tty/serial/8250/8250_port.c` (`UART_IER_RDI`) against `bcm2835-aux-uart`"
+confidence = "high"
+
+[[register.field]]
+name  = "TX_INT"
+bits  = "1"
+notes = "Interrupt while the transmit holding register is empty."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "Linux `drivers/tty/serial/8250/8250_port.c` (`UART_IER_THRI`) against `bcm2835-aux-uart`"
+confidence = "high"
+
 [[register]]
 name   = "MU_IIR"
 offset = 0x48
 access = "rw"
-notes  = "Interrupt identity on read (FIFOs on, nothing pending), FIFO clear on write."
+notes  = "Interrupt identity on read, FIFO clear on write (bit 1 clears the receive FIFO, bit 2 the transmit one)."
 
 [[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_IIR_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "PENDING"
+bits  = "0"
+notes = "Clear while an interrupt is pending — the 16550's inverted sense."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_IIR_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "ID"
+bits  = "2:1"
+notes = "Which interrupt: `0b10` a byte in the receive FIFO, `0b01` room in the transmit holding register."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_IIR_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "FIFO_ENABLES"
+bits  = "7:6"
+notes = "Both set: the FIFOs are always enabled on the mini-UART."
+
+[[register.field.source]]
 kind       = "datasheet"
 ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_IIR_REG`"
 confidence = "high"
@@ -104,6 +163,26 @@ notes  = "Line control."
 [[register.source]]
 kind       = "datasheet"
 ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_LCR_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "DATA_SIZE"
+bits  = "0"
+notes = "Set for eight data bits, clear for seven. The model does not change how many bits a character takes."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_LCR_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "DLAB"
+bits  = "7"
+notes = "While set, `MU_IO` and `MU_IER` are the low and high bytes of the baud-rate counter, not the data and interrupt-enable registers. Linux's `8250` driver programs the rate through them."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_LCR_REG` (`DLAB access`, and `AUX_MU_IO_REG` / `AUX_MU_IER_REG`, whose descriptions give them the baud bytes)"
 confidence = "high"
 
 [[register]]
@@ -131,7 +210,17 @@ confidence = "high"
 [[register.field]]
 name  = "DATA_READY"
 bits  = "0"
-notes = "A received byte is waiting. Never set here."
+notes = "A received byte is waiting."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_LSR_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "RX_OVERRUN"
+bits  = "1"
+notes = "A byte arrived with the receive FIFO full. Never set here: input waits on the line instead of being dropped."
 
 [[register.field.source]]
 kind       = "datasheet"
@@ -191,13 +280,133 @@ kind       = "datasheet"
 ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_CNTL_REG`"
 confidence = "high"
 
+[[register.field]]
+name  = "RX_ENABLE"
+bits  = "0"
+notes = "Receiver on. Nothing leaves the line while it is clear."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_CNTL_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "TX_ENABLE"
+bits  = "1"
+notes = "Transmitter on."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_CNTL_REG`"
+confidence = "high"
+
 [[register]]
 name   = "MU_STAT"
 offset = 0x64
 access = "r"
-notes  = "Extra status. The model reports the same ready bits as `MU_LSR`."
+notes  = "Extra status: the FIFO fill levels and the ready bits, in the mini-UART's own bit order."
 
 [[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_STAT_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "SYMBOL_AVAILABLE"
+bits  = "0"
+notes = "A received byte is waiting, as `MU_LSR.DATA_READY` says."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_STAT_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "SPACE_AVAILABLE"
+bits  = "1"
+notes = "Room in the transmit FIFO. Always set here."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_STAT_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "RX_IDLE"
+bits  = "2"
+notes = "The receiver is not in the middle of a character."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_STAT_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "TX_IDLE"
+bits  = "3"
+notes = "The transmitter is not in the middle of a character. Always set here."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_STAT_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "RX_OVERRUN"
+bits  = "4"
+notes = "As `MU_LSR.RX_OVERRUN`. Never set here."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_STAT_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "TX_FIFO_FULL"
+bits  = "5"
+notes = "No room for another byte. Never set here."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_STAT_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "TX_FIFO_EMPTY"
+bits  = "8"
+notes = "Nothing waiting to go out. Always set here."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_STAT_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "TX_DONE"
+bits  = "9"
+notes = "`TX_FIFO_EMPTY` and `TX_IDLE` together. Always set here."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_STAT_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "RX_FIFO_LEVEL"
+bits  = "19:16"
+notes = "How many bytes the receive FIFO holds."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_STAT_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "TX_FIFO_LEVEL"
+bits  = "27:24"
+notes = "How many bytes the transmit FIFO holds. Always 0 here."
+
+[[register.field.source]]
 kind       = "datasheet"
 ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_STAT_REG`"
 confidence = "high"
@@ -206,7 +415,7 @@ confidence = "high"
 name   = "MU_BAUD"
 offset = 0x68
 access = "rw"
-notes  = "Baud-rate counter (16 bits)."
+notes  = "Baud-rate counter (16 bits): the line runs at `system_clock / (8 * (MU_BAUD + 1))`, and the model paces receive by it."
 
 [[register.source]]
 kind       = "datasheet"

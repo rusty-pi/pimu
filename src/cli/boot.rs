@@ -217,7 +217,7 @@ OUTPUT:
               belong to, OTP rows read and programmed, and what the network
               peer did (DHCP, DNS, TFTP, HTTP). The rest are one device or
               core each: arm-exc cmp dwc2 emmc expander gpio irqen mbox otp
-              pcie pmic spi xhci, and in a `diag` build derail dma ff irqtbl
+              pcie pmic spi uart xhci, and in a `diag` build derail dma ff irqtbl
               sleep swirq tick vec. Repeatable; `jsonl:` for one JSON object
               a line.
               See docs/diagnostics.md.

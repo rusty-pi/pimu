@@ -32,6 +32,21 @@
 //! The SDIO / MMC probes Linux sends first (CMD5, CMD52, CMD1) get no response,
 //! as from a real SD memory card.
 //!
+//! The same type also plays the **SDIO** side of the WiFi chip
+//! ([`CardKind::Sdio`], [`SdCard::sdio`]), which is what the legacy EMMC host
+//! at `0x7E30_0000` has on its bus when the SD slot is not muxed to it. It
+//! answers the SDIO identification sequence and nothing else — it has no
+//! memory, so every SD and MMC command times out on it:
+//!
+//! ```text
+//!   CMD5  IO_SEND_OP_COND        -> R4  (io OCR; ready bit set on the second
+//!                                        ask, function count, no memory)
+//!   CMD3  SEND_RELATIVE_ADDR     -> R6  (RCA)                    idle -> stby
+//!   CMD7  SELECT_CARD            -> R1b                     stby <-> tran
+//!   CMD52 IO_RW_DIRECT           -> R5  (one byte of the CCCR, an FBR or the
+//!                                        CIS)
+//! ```
+//!
 //! The same type also plays an **e-MMC** part ([`CardKind::Mmc`]), the flash
 //! soldered to a Compute Module, which answers a different identification
 //! sequence (JEDEC JESD84-B51):
@@ -59,15 +74,20 @@
 //! The card's blocks are a [`Disk`]: the image is read on demand and writes stay
 //! in memory, so the file the image was loaded from is never touched.
 
+use std::collections::BTreeMap;
+
 use crate::periph::disk::Disk;
 
-/// What is in the slot: a removable SD memory card, or an e-MMC part soldered
-/// to the board (a Compute Module's flash).
+/// What is on the bus: a removable SD memory card, an e-MMC part soldered to
+/// the board (a Compute Module's flash), or the WiFi chip's SDIO side.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CardKind {
     #[default]
     Sd,
     Mmc,
+    /// The CYW43455 on the legacy EMMC host, which every Pi 4B has
+    /// ([`SdCard::sdio`]).
+    Sdio,
 }
 
 /// SD card operating states (subset), per the physical-layer spec.
@@ -170,6 +190,53 @@ const EXT_CSD_BOOT_SIZE_MULT: usize = 226;
 const SWITCH_G1_UHS: u16 = 0x8017;
 const SWITCH_G1_3V3: u16 = 0x8003;
 
+// --- the WiFi chip's SDIO side (CardKind::Sdio) -----------------------------
+
+/// CMD5's R4: the card has finished its power-up ramp.
+const IO_OCR_READY: u32 = 1 << 31;
+/// R4 `[30:28]`: how many I/O functions besides function 0. A Raspberry Pi 4B
+/// d03115 enumerates three (`/sys/bus/sdio/devices/mmc1:0001:{1,2,3}`).
+const IO_FUNCTIONS: u32 = 3 << 28;
+/// R4 bit 27: the card has a memory part as well. The CYW43455 has none, and
+/// Linux prints "SDIO card" rather than "SD-combo card" for it.
+const IO_MEMORY_PRESENT: u32 = 1 << 27;
+
+/// Where the card's own CIS chain starts, and where each function's does.
+/// Any address in the function-0 space will do; these keep the tuples clear
+/// of the CCCR and the FBRs in a dump.
+const CIS_COMMON: u32 = 0x1000;
+const CIS_FUNC_STRIDE: u32 = 0x100;
+
+/// CCCR byte offsets (SDIO simplified specification 6.9).
+const CCCR_REV: u32 = 0x00;
+const CCCR_SD_SPEC: u32 = 0x01;
+const CCCR_IO_ENABLE: u32 = 0x02;
+const CCCR_IO_READY: u32 = 0x03;
+const CCCR_IO_ABORT: u32 = 0x06;
+const CCCR_CAPABILITY: u32 = 0x08;
+const CCCR_CIS_PTR: u32 = 0x09;
+const CCCR_SPEED: u32 = 0x13;
+
+/// `CCCR_IO_ABORT` bit 3: reset the I/O side, which is how the MMC core puts
+/// an SDIO card back to idle before it retries.
+const IO_ABORT_RES: u8 = 1 << 3;
+
+/// R5's `IO_CURRENT_STATE`, bits `[13:12]` of the response — *not* where R1
+/// keeps the card state.
+const R5_STATE_SHIFT: u32 = 12;
+const R5_STATE_CMD: u32 = 1;
+const R5_STATE_TRN: u32 = 2;
+
+/// CIS tuple codes (SDIO simplified specification 16.7).
+const TPL_MANFID: u8 = 0x20;
+const TPL_FUNCE: u8 = 0x22;
+const TPL_END: u8 = 0xFF;
+
+/// The identity Linux reads out of the CIS, measured on a Raspberry Pi 4B
+/// d03115: `/sys/bus/sdio/devices/mmc1:0001:1/vendor` and `device`.
+const SDIO_VENDOR: u16 = 0x02d0;
+const SDIO_DEVICE: u16 = 0xa9a6;
+
 /// The 64-byte tuning block a card sends for CMD19 on a 4-bit bus (SD
 /// physical layer spec 3.01, 4.2.4.5).
 const TUNING_BLOCK_4BIT: [u8; 64] = [
@@ -223,6 +290,11 @@ pub struct SdCard {
     cid: u128,
     /// 128-bit CSD, same alignment.
     csd: u128,
+    /// [`CardKind::Sdio`]: the function-0 address space CMD52 reads and
+    /// writes a byte at a time — the CCCR, one FBR per function, and the CIS
+    /// tuple chains those point at. Sparse: everything not in here reads 0,
+    /// as the unused space does. Empty for the other kinds.
+    io: BTreeMap<u32, u8>,
 }
 
 impl SdCard {
@@ -254,8 +326,8 @@ impl SdCard {
             disk,
             kind,
             ext_csd: match kind {
-                CardKind::Sd => Vec::new(),
                 CardKind::Mmc => ext_csd(blocks),
+                _ => Vec::new(),
             },
             byte_addressed: kind == CardKind::Mmc,
             state: CardState::Idle,
@@ -274,12 +346,24 @@ impl SdCard {
             cid: match kind {
                 CardKind::Sd => default_cid(),
                 CardKind::Mmc => mmc_cid(),
+                CardKind::Sdio => 0,
             },
             csd: match kind {
                 CardKind::Sd => csd_v2(blocks),
                 CardKind::Mmc => mmc_csd(),
+                CardKind::Sdio => 0,
+            },
+            io: match kind {
+                CardKind::Sdio => io_space(),
+                _ => BTreeMap::new(),
             },
         }
+    }
+
+    /// The WiFi chip's SDIO side: no memory, three I/O functions, the
+    /// identity a Raspberry Pi 4B d03115 reports.
+    pub fn sdio() -> SdCard {
+        SdCard::with_disk_kind(Disk::from_vec(vec![0; 512]), CardKind::Sdio)
     }
 
     pub fn block_count(&self) -> u64 {
@@ -396,6 +480,13 @@ impl SdCard {
             if let Some(response) = self.mmc_command(cmd, arg) {
                 return response;
             }
+        }
+
+        if self.kind == CardKind::Sdio {
+            // An I/O-only card answers its own four commands and nothing
+            // else: no CID, no CSD, no memory (SDIO simplified specification
+            // 5.1).
+            return self.sdio_command(cmd, arg);
         }
 
         match cmd {
@@ -563,6 +654,131 @@ impl SdCard {
         }
     }
 
+    /// Dispatch one command to the WiFi chip's SDIO side.
+    fn sdio_command(&mut self, cmd: u8, arg: u32) -> SdResponse {
+        match cmd {
+            0 => {
+                // GO_IDLE_STATE. An I/O-only card ignores it, but the host
+                // sends it before it knows what is there.
+                SdResponse::none()
+            }
+            3 => {
+                // SEND_RELATIVE_ADDR -> R6: the card picks the address.
+                self.rca = 1;
+                self.state = CardState::Stby;
+                SdResponse::r1(u32::from(self.rca) << 16)
+            }
+            5 => {
+                // IO_SEND_OP_COND -> R4. The first ask, with no voltage
+                // window, is the host finding out what is there; the card
+                // reports ready once its ramp is done, so the host's poll
+                // loop runs at least one iteration.
+                let ocr = if self.powered_up {
+                    self.state = CardState::Ready;
+                    IO_OCR_READY | IO_FUNCTIONS | OCR_VOLTAGE_WINDOW
+                } else {
+                    self.powered_up = true;
+                    IO_FUNCTIONS | OCR_VOLTAGE_WINDOW
+                };
+                debug_assert_eq!(ocr & IO_MEMORY_PRESENT, 0, "the CYW43455 has no memory");
+                SdResponse::r1(ocr)
+            }
+            7 => {
+                // SELECT/DESELECT_CARD -> R1b.
+                self.state = if arg >> 16 == u32::from(self.rca) && self.rca != 0 {
+                    CardState::Tran
+                } else {
+                    CardState::Stby
+                };
+                SdResponse::r1(self.status())
+            }
+            52 => {
+                // IO_RW_DIRECT -> R5: one byte at `[25:9]` of function
+                // `[30:28]`, written when `[31]` is set. R5 carries the byte
+                // in `[7:0]` and the card's state in `[12:9]`, the same place
+                // R1 has it.
+                let write = arg >> 31 != 0;
+                let func = (arg >> 28) & 7;
+                let addr = (arg >> 9) & 0x1_FFFF;
+                let value = (arg & 0xFF) as u8;
+                let byte = if write {
+                    self.io_write(func, addr, value);
+                    // The read-after-write flag ([27]) asks for what the
+                    // register holds now, and 0 otherwise.
+                    if arg >> 27 & 1 != 0 {
+                        self.io_read(func, addr)
+                    } else {
+                        0
+                    }
+                } else {
+                    self.io_read(func, addr)
+                };
+                let state = if self.state == CardState::Tran {
+                    R5_STATE_TRN
+                } else {
+                    R5_STATE_CMD
+                };
+                SdResponse::r1(state << R5_STATE_SHIFT | u32::from(byte))
+            }
+            // Everything else — the memory card's identification, its
+            // transfers, and IO_RW_EXTENDED, which nothing in the model's
+            // boots sends (brcmfmac is not built into the kernel the card
+            // carries).
+            _ => SdResponse::silent(),
+        }
+    }
+
+    /// Put the I/O side back the way it comes up: nothing enabled, no
+    /// address, and the card waiting for CMD5 again.
+    fn sdio_reset(&mut self) {
+        self.io = io_space();
+        self.state = CardState::Idle;
+        self.rca = 0;
+        self.powered_up = false;
+    }
+
+    /// The byte at `addr` in function `func`'s address space. Function 0 is
+    /// the CCCR, the FBRs and the CIS; a function's own space is the chip's,
+    /// and reads 0 here.
+    fn io_read(&self, func: u32, addr: u32) -> u8 {
+        if func != 0 {
+            return 0;
+        }
+        self.io.get(&addr).copied().unwrap_or(0)
+    }
+
+    /// Write one byte of function 0's space. The CCCR's read-only registers
+    /// keep their value, and enabling a function makes it ready.
+    fn io_write(&mut self, func: u32, addr: u32, value: u8) {
+        if func != 0 {
+            return;
+        }
+        match addr {
+            // The revision, the capabilities and the CIS pointers are the
+            // card's own, and so are the CIS tuples.
+            CCCR_REV | CCCR_SD_SPEC | CCCR_CAPABILITY => {}
+            CCCR_IO_ENABLE => {
+                self.io.insert(CCCR_IO_ENABLE, value);
+                // A real function takes a moment to come up; this one is
+                // ready as soon as it is asked for.
+                self.io.insert(CCCR_IO_READY, value);
+            }
+            CCCR_IO_READY => {}
+            CCCR_IO_ABORT => {
+                // Self-clearing: bit 3 puts the I/O side back to idle, which
+                // is how the MMC core starts a rescan.
+                if value & IO_ABORT_RES != 0 {
+                    self.sdio_reset();
+                }
+            }
+            _ if (CCCR_CIS_PTR..CCCR_CIS_PTR + 3).contains(&addr) => {}
+            _ if addr >= CIS_COMMON => {}
+            _ => {
+                self.io.insert(addr, value);
+            }
+        }
+    }
+
     /// The commands an e-MMC part answers differently from an SD card;
     /// `None` leaves the command to the shared arms.
     fn mmc_command(&mut self, cmd: u8, arg: u32) -> Option<SdResponse> {
@@ -723,6 +939,81 @@ impl SdCard {
     }
 }
 
+/// Function 0's address space for [`CardKind::Sdio`]: the CCCR, one FBR per
+/// I/O function, and the CIS chain each of those points at.
+///
+/// The identity in the common CIS is measured (`SDIO_VENDOR` / `SDIO_DEVICE`),
+/// and so is the function count. The rest is the smallest set of values that
+/// answers what `mmc_sdio_init_card` and `sdio_read_cis` ask for: a card
+/// claiming SDIO 3.00 must give each function a `FUNCE` tuple of at least 42
+/// bytes, or the core rejects it.
+fn io_space() -> BTreeMap<u32, u8> {
+    let mut io = BTreeMap::new();
+    let mut put = |addr: u32, bytes: &[u8]| {
+        for (i, b) in bytes.iter().enumerate() {
+            io.insert(addr + i as u32, *b);
+        }
+    };
+
+    // --- CCCR ---------------------------------------------------------
+    // [7:4] SDIO 3.00, [3:0] CCCR 3.00.
+    put(CCCR_REV, &[0x43]);
+    // SD physical layer 3.00.
+    put(CCCR_SD_SPEC, &[0x03]);
+    // Card capability: direct commands during a transfer, multi-block, read
+    // wait, and 4-bit multiple-block interrupts.
+    put(CCCR_CAPABILITY, &[0x17]);
+    // Where the card's own CIS chain is, little-endian over three bytes.
+    put(CCCR_CIS_PTR, &CIS_COMMON.to_le_bytes()[..3]);
+    // Bus speed select: high speed supported, not yet selected. The real
+    // card ends up in it — `mmc1: new high speed SDIO card at address 0001`
+    // on a Raspberry Pi 4B d03115.
+    put(CCCR_SPEED, &[0x01]);
+
+    // --- one FBR and one CIS chain per function -----------------------
+    // The common CIS names the card; each function's gives its block size.
+    put(
+        CIS_COMMON,
+        &[
+            TPL_MANFID,
+            4,
+            SDIO_VENDOR as u8,
+            (SDIO_VENDOR >> 8) as u8,
+            SDIO_DEVICE as u8,
+            (SDIO_DEVICE >> 8) as u8,
+            // Function 0 extended tuple: type 0, the block size it takes,
+            // and the top transfer rate (0x32 = 25 MHz, SDIO 16.7.3).
+            TPL_FUNCE,
+            4,
+            0x00,
+            0x00,
+            0x02,
+            0x32,
+            TPL_END,
+        ],
+    );
+    for func in 1..=(IO_FUNCTIONS >> 28) {
+        let fbr = func * 0x100;
+        let cis = CIS_COMMON + func * CIS_FUNC_STRIDE;
+        // Standard function interface code 0 (none of the standard ones) in
+        // [3:0], and the CIS pointer at +9.
+        put(fbr, &[0x00]);
+        put(fbr + 0x09, &cis.to_le_bytes()[..3]);
+        // A function's extended tuple, which a card claiming SDIO 3.00 must
+        // make at least 42 bytes (Linux `cistpl_funce_func`). Only the
+        // maximum block size, at offset 12, is read here.
+        let mut funce = vec![0u8; 42];
+        funce[0] = 0x01; // type 1: a function's own tuple
+        funce[12] = 0x00;
+        funce[13] = 0x02; // 512-byte blocks
+        let mut tuple = vec![TPL_FUNCE, funce.len() as u8];
+        tuple.extend_from_slice(&funce);
+        tuple.push(TPL_END);
+        put(cis, &tuple);
+    }
+    io
+}
+
 /// A plausible CID (Manufacturer "PI", product "VIRTF", serial, date), aligned
 /// so bits `[7:0]` (the CRC slot) are zero.
 fn default_cid() -> u128 {
@@ -832,6 +1123,115 @@ mod tests {
             ocr = c.command(41, arg).r1.unwrap();
         }
         ocr
+    }
+
+    // --- the WiFi chip's SDIO side -------------------------------------
+
+    /// CMD52's argument: read or write `value` at `addr` of function `func`.
+    fn io_arg(write: bool, func: u32, addr: u32, value: u8) -> u32 {
+        (u32::from(write) << 31) | (func << 28) | (addr << 9) | u32::from(value)
+    }
+
+    /// One CMD52 read, returning the byte the card answered with.
+    fn io_read_byte(c: &mut SdCard, func: u32, addr: u32) -> u8 {
+        let r5 = c.command(52, io_arg(false, func, addr, 0)).r1.unwrap();
+        // Nothing in the flags but the state: an error bit here is what made
+        // the MMC core give up with -EIO before R5's layout was right.
+        assert_eq!(r5 & 0xFF00 & !(3 << R5_STATE_SHIFT), 0, "R5 flags {r5:#x}");
+        r5 as u8
+    }
+
+    /// The identification the MMC core runs (`mmc_sdio_init_card`): CMD5
+    /// twice, CMD3, CMD7.
+    fn sdio_up() -> SdCard {
+        let mut c = SdCard::sdio();
+        let first = c.command(5, 0).r1.unwrap();
+        assert_eq!(first & IO_OCR_READY, 0, "the card is still ramping up");
+        let ocr = c.command(5, OCR_VOLTAGE_WINDOW).r1.unwrap();
+        assert_eq!(ocr & IO_OCR_READY, IO_OCR_READY);
+        assert_eq!(ocr >> 28 & 7, 3, "three I/O functions, as on a Pi 4B");
+        assert_eq!(ocr & IO_MEMORY_PRESENT, 0, "no memory part");
+        let rca = c.command(3, 0).r1.unwrap() >> 16;
+        assert_eq!(rca, 1);
+        c.command(7, rca << 16);
+        assert_eq!(c.state, CardState::Tran);
+        c
+    }
+
+    #[test]
+    fn the_sdio_card_answers_the_identification_sequence() {
+        sdio_up();
+    }
+
+    #[test]
+    fn it_has_no_memory_side() {
+        let mut c = sdio_up();
+        // What a memory card answers, and this one must not.
+        for cmd in [1, 2, 8, 9, 41, 55] {
+            assert!(c.command(cmd, 0).no_response, "CMD{cmd} was answered");
+        }
+    }
+
+    #[test]
+    fn the_cccr_reads_back() {
+        let mut c = sdio_up();
+        // CCCR 3.00, SDIO 3.00: the MMC core rejects anything above either.
+        let rev = io_read_byte(&mut c, 0, CCCR_REV);
+        assert_eq!(rev & 0x0f, 3);
+        assert_eq!(rev >> 4, 4);
+        // Enabling a function makes it ready, which is what the core polls.
+        c.command(52, io_arg(true, 0, CCCR_IO_ENABLE, 0x02));
+        assert_eq!(io_read_byte(&mut c, 0, CCCR_IO_ENABLE), 0x02);
+        assert_eq!(io_read_byte(&mut c, 0, CCCR_IO_READY), 0x02);
+        // Read-only: the revision stays what the card says it is.
+        c.command(52, io_arg(true, 0, CCCR_REV, 0xff));
+        assert_eq!(io_read_byte(&mut c, 0, CCCR_REV), rev);
+    }
+
+    #[test]
+    fn the_cis_names_the_chip() {
+        let mut c = sdio_up();
+        let mut ptr = 0u32;
+        for i in 0..3 {
+            ptr |= u32::from(io_read_byte(&mut c, 0, CCCR_CIS_PTR + i)) << (8 * i);
+        }
+        assert_eq!(ptr, CIS_COMMON);
+        // The first tuple is MANFID with the identity a Raspberry Pi 4B
+        // d03115 reports through sysfs.
+        assert_eq!(io_read_byte(&mut c, 0, ptr), TPL_MANFID);
+        assert_eq!(io_read_byte(&mut c, 0, ptr + 1), 4);
+        let vendor = u16::from(io_read_byte(&mut c, 0, ptr + 2))
+            | u16::from(io_read_byte(&mut c, 0, ptr + 3)) << 8;
+        let device = u16::from(io_read_byte(&mut c, 0, ptr + 4))
+            | u16::from(io_read_byte(&mut c, 0, ptr + 5)) << 8;
+        assert_eq!((vendor, device), (0x02d0, 0xa9a6));
+        // Each function's own tuple has to be long enough for a card
+        // claiming SDIO 3.00, and gives its block size.
+        for func in 1..=3 {
+            let mut fptr = 0u32;
+            for i in 0..3 {
+                fptr |=
+                    u32::from(io_read_byte(&mut c, 0, func * 0x100 + CCCR_CIS_PTR + i)) << (8 * i);
+            }
+            assert_eq!(io_read_byte(&mut c, 0, fptr), TPL_FUNCE);
+            let len = io_read_byte(&mut c, 0, fptr + 1);
+            assert!(len >= 42, "function {func} tuple is {len} bytes");
+            let blksize = u32::from(io_read_byte(&mut c, 0, fptr + 2 + 12))
+                | u32::from(io_read_byte(&mut c, 0, fptr + 2 + 13)) << 8;
+            assert_eq!(blksize, 512);
+        }
+    }
+
+    #[test]
+    fn the_abort_register_resets_the_io_side() {
+        let mut c = sdio_up();
+        c.command(52, io_arg(true, 0, CCCR_IO_ENABLE, 0x02));
+        c.command(52, io_arg(true, 0, CCCR_IO_ABORT, IO_ABORT_RES));
+        assert_eq!(c.state, CardState::Idle);
+        assert_eq!(c.rca, 0);
+        // Self-clearing, and everything enabled is off again.
+        assert_eq!(io_read_byte(&mut c, 0, CCCR_IO_ABORT), 0);
+        assert_eq!(io_read_byte(&mut c, 0, CCCR_IO_ENABLE), 0);
     }
 
     fn mmc(blocks: usize) -> SdCard {

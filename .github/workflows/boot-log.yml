@@ -88,6 +88,11 @@ jobs:
       - name: Build SD image with a halting kernel
         run: KERNEL=halt ./scripts/make-sd.sh firmware/sd-halt.img
 
+      # And the card an imager writes, with Bluetooth and WiFi left enabled:
+      # Linux's console is then the mini-UART (#124).
+      - name: Build SD image with Bluetooth and WiFi enabled
+        run: WIRELESS=1 ./scripts/make-sd.sh firmware/sd-wireless.img
+
       # And with the cut-down firmware (#105).
       - name: Build SD image with the cut-down firmware
         run: START4=start4cd KERNEL=halt ./scripts/make-sd.sh firmware/sd-halt-start4cd.img
@@ -131,6 +136,8 @@ jobs:
             scenario: testdata/boot/http-boot.toml
           - medium: linux
             scenario: testdata/boot/linux-boot.toml
+          - medium: bt
+            scenario: testdata/boot/bt-boot.toml
           - medium: b0
             scenario: testdata/boot/b0-boot.toml
           - medium: cd

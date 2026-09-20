@@ -672,13 +672,13 @@ impl Emulator {
                 st.host_poll = st.host_poll.wrapping_add(1);
                 if st.host_poll.is_multiple_of(1024) {
                     match host.poll() {
-                        Some(crate::stdio::HostEvent::Bytes(b)) => self.machine.uart0.feed(&b),
+                        Some(crate::stdio::HostEvent::Bytes(b)) => self.machine.console_feed(&b),
                         Some(crate::stdio::HostEvent::Quit) => return Some(RunEnd::Quit),
                         None => {}
                     }
                 }
             }
-            self.machine.uart0.pump(self.machine.systimer.now_us());
+            self.machine.console_pump(self.machine.systimer.now_us());
 
             if let Some(end) = self.step_arm() {
                 return Some(end);
@@ -725,7 +725,7 @@ impl Emulator {
                 if !printed_since(&st.console, st.prompt_seen, st.prompt_floor, prompt) {
                     break;
                 }
-                self.machine.uart0.feed(text);
+                self.machine.console_feed(text);
                 self.input.script.pop_front();
                 st.prompt_floor = st.console.len();
                 st.prompt_seen = st.prompt_floor;
@@ -1045,7 +1045,7 @@ impl Emulator {
         // `u32::MAX` that matches by accident only costs a slow step.
         let stop_pc = limits.stop_pc.unwrap_or(u32::MAX);
         // Only a slow step feeds the receive line.
-        let uart_busy = self.machine.uart0.rx_backlog() != 0;
+        let uart_busy = self.machine.console_rx_backlog() != 0;
         let host = self.input.host.is_some();
         let spin = limits.idle_spin_limit > 0;
         // Core 1 steps only while it runs. It can stop or sleep in here, but
@@ -1085,7 +1085,7 @@ impl Emulator {
                     st.host_poll = st.host_poll.wrapping_add(1);
                 }
                 if uart_busy {
-                    self.machine.uart0.pump(self.machine.systimer.now_us());
+                    self.machine.console_pump(self.machine.systimer.now_us());
                 }
                 if arm_on {
                     if let Some(end) = self.step_arm() {

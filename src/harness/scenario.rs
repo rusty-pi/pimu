@@ -73,12 +73,17 @@ fn default_ram_mb() -> u32 {
     64
 }
 
+/// Which UART a payload prints on. A payload writes a UART's registers
+/// without setting GPIO 14/15 up first, so it says which one rather than
+/// leaving it to the pins the way a firmware boot does ([`Console::Pins`]).
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ConsoleSpec {
     #[default]
     Pl011,
     MiniUart,
+    /// Follow GPIO 14/15, as a firmware boot does.
+    Pins,
 }
 
 impl From<ConsoleSpec> for Console {
@@ -86,6 +91,7 @@ impl From<ConsoleSpec> for Console {
         match c {
             ConsoleSpec::Pl011 => Console::Pl011,
             ConsoleSpec::MiniUart => Console::MiniUart,
+            ConsoleSpec::Pins => Console::Pins,
         }
     }
 }

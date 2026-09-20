@@ -53,7 +53,8 @@ Working:
   the board's pin map and the pads it hands the SPI and I²C masters, BSC/I²C
   with the DA9090 PMIC and FXL6408 GPIO expander, HDMI DDC, HVS, mailbox with
   the crypto service, RNG, AVS/PVT, PCIe + VL805 xHCI + a USB mass-storage
-  device, GENET with its BCM54213PE PHY, and on the ARM side the GIC-400, the
+  device, the CYW43455's SDIO side and its Bluetooth modem, GENET with its
+  BCM54213PE PHY, and on the ARM side the GIC-400, the
   ARM-local block and the generic timer. A logging catch-all takes the rest.
 - **Network peer** (`src/net/`) — `--netboot <dir>` plugs the Ethernet cable
   into a built-in DHCP, DNS, TFTP and plain HTTP server serving `<dir>`
@@ -141,7 +142,12 @@ line each) and `pubkey.bin` (#114). `rpi-virt-fw boot` on its own then boots
 from what is there, and names on stderr what it picked up.
 
 `make-sd.sh` needs `sfdisk`, `mtools` and `e2fsprogs`; no root or loop devices.
-`--usb <img>` boots the same image as a USB stick instead, `--otg <img>` as a
+`WIRELESS=1 scripts/make-sd.sh firmware/sd-wireless.img` writes the card an
+imager does, without the `dtoverlay=disable-bt` / `disable-wifi` lines: Linux's
+console is then the mini-UART (`ttyS0`), the PL011 is the Bluetooth modem's,
+and the WiFi chip answers on the legacy EMMC host
+([#124](https://github.com/valtzu/rpi-virt-fw/issues/124)). `--usb <img>` boots
+the same image as a USB stick instead, `--otg <img>` as a
 stick in the USB-C socket (`BOOT_ORDER` 0x5, and `OTG=1 scripts/make-sd.sh` for
 a card whose `config.txt` hands that controller to Linux), and
 `scripts/make-netboot.sh` builds the root `--netboot` serves — the boot
@@ -340,7 +346,7 @@ load_addr = 0x00010000
 
 [machine]
 ram_mb = 16
-console = "mini-uart"     # pl011 | mini-uart
+console = "mini-uart"     # pl011 | mini-uart | pins
 
 [run]
 max_steps = 10_000

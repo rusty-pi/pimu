@@ -87,16 +87,34 @@ copy() {
 # what produce the `dtparam: spi=on` / `Loaded overlay '...'` lines in
 # examples-on-real-hardware/vc4-boot.log — a bare three-line config skips that
 # whole phase, so the model has nothing to match against.
+#
+# `WIRELESS=1` drops the two `disable-` overlays, which is what a card
+# straight off the imager has (#124). The board then looks quite different:
+# the base device tree keeps `serial0 = &uart1`, so the console is the
+# mini-UART and not the PL011, and the WiFi SDIO host and the Bluetooth
+# modem's UART are both live.
+wireless="${WIRELESS:-0}"
+# Which tty the kernel's `console=serial0` ends up being, and so where the
+# shell goes: `serial0` is the PL011 with Bluetooth disabled and the
+# mini-UART with it enabled.
+if [[ "$wireless" == 1 ]]; then console_tty=ttyS0; else console_tty=ttyAMA0; fi
 tmpcfg="$(mktemp)"
-cat >"$tmpcfg" <<'EOF'
+{
+  cat <<'EOF'
 enable_uart=1
 uart_2ndstage=1
 
 dtparam=spi=on
 dtparam=audio=off
+EOF
+  if [[ "$wireless" != 1 ]]; then
+    cat <<'EOF'
 
 dtoverlay=disable-bt
 dtoverlay=disable-wifi
+EOF
+  fi
+  cat <<'EOF'
 
 camera_auto_detect=1
 display_auto_detect=1
@@ -110,6 +128,7 @@ arm_64bit=1
 disable_overscan=1
 arm_boost=1
 EOF
+} >"$tmpcfg"
 if [[ -n "$select" ]]; then echo "$select" >>"$tmpcfg"; fi
 if [[ "${OTG:-0}" == 1 ]]; then echo "otg_mode=1" >>"$tmpcfg"; fi
 mcopy -i "$out@@${part_offset}" -o "$tmpcfg" ::config.txt
@@ -216,9 +235,9 @@ else
 fi
 # The firmware's command line ends in `console=tty1`, which makes the
 # framebuffer /dev/console; name the serial port instead.
-cat >"$rootfs/etc/inittab" <<'EOF'
-ttyAMA0::sysinit:/etc/init.d/rcS
-ttyAMA0::respawn:-/bin/sh
+cat >"$rootfs/etc/inittab" <<EOF
+${console_tty}::sysinit:/etc/init.d/rcS
+${console_tty}::respawn:-/bin/sh
 ::ctrlaltdel:/sbin/reboot
 EOF
 cat >"$rootfs/etc/init.d/rcS" <<'EOF'

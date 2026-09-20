@@ -91,6 +91,7 @@ The `parent` of a block: the master of its bus, or the window it is carved out o
 | VPU source | 97 | [`hvs`](hvs.md) | — |
 | VPU source | 125 | [`rng`](rng.md) | — |
 | GIC id | 65 | [`mbox`](mbox.md) | `GIC_SPI 33` |
+| GIC id | 125 | [`aux`](aux.md) | `GIC_SPI 93` |
 | GIC id | 129 | [`hvs`](hvs.md) | `GIC_SPI 97` |
 | GIC id | 145 | [`gpio`](gpio.md) `BANK0` | `GIC_SPI 113` |
 | GIC id | 146 | [`gpio`](gpio.md) `BANK1` | `GIC_SPI 114` |

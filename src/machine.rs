@@ -13,9 +13,21 @@ use crate::periph::{
 use crate::soc::bcm2711 as map;
 
 /// Which UART the harness captures as "the console".
+///
+/// A board has one serial header, GPIO 14 and 15, and two blocks that can
+/// drive it: the PL011 on ALT0 and the mini-UART on ALT5. Which one it is
+/// changes inside a single boot — the firmware logs over the PL011 and then
+/// hands the pins to the mini-UART at the ARM handover on a card that leaves
+/// Bluetooth enabled, because the base device tree keeps `serial0 = &uart1`
+/// (#124). [`Console::Pins`] follows that, and is what a machine booting
+/// firmware wants; the other two are for a VPU payload that writes a UART's
+/// registers without setting a pin up first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Console {
+    /// Whichever block GPIO 14/15 carry, the PL011 until something says
+    /// otherwise.
     #[default]
+    Pins,
     Pl011,
     MiniUart,
 }
@@ -117,9 +129,14 @@ pub struct Machine {
     /// DMA4 channel (`0x7E00_7B00`) — the bootloader scrubs / moves DRAM through
     /// it; [`Machine::store`] runs the control-block chain after a `CS` write.
     pub dma4: Dma4,
-    /// The legacy EMMC controller (`0x7E30_0000`) — the SD host of 2020-era
-    /// bootcode. The card is on its bus only while [`Self::sd_slot_legacy`].
+    /// The legacy EMMC controller (`0x7E30_0000`) — the WiFi chip's SDIO
+    /// host, and the SD host of 2020-era bootcode. The SDIO side of the
+    /// CYW43455 is on its bus, except while [`Self::sd_slot_legacy`] has the
+    /// card there instead.
     pub emmc: Emmc2,
+    /// The WiFi chip, parked while the SD slot has its host
+    /// ([`Self::route_sd_slot`]).
+    wifi: Option<crate::periph::sdcard::SdCard>,
     /// Bit 1 of the SD-slot mux word at GPIO `+0xD0` (`0x7E20_00D0`): the card
     /// is routed to the legacy EMMC instead of EMMC2 (#66). See
     /// [`Self::route_sd_slot`].
@@ -138,7 +155,15 @@ pub struct Machine {
     pub xhci_otg: XhciOtg,
     /// Catch-all for the rest of the peripheral window.
     pub periph_stub: StubRegion,
+    /// The Bluetooth modem on the PL011. It hears the port only while the
+    /// serial header is on the mini-UART, which is where a board with
+    /// Bluetooth enabled puts it: the PL011's pins are then GPIO 30..33, the
+    /// modem's (#124).
+    pub bluetooth: crate::periph::bluetooth::BtModem,
     pub console: Console,
+    /// Which UART [`Self::take_console_output`] last drained, so a change of
+    /// pins is reported once.
+    console_routed: Console,
 
     /// Total peripheral accesses that missed a real device (fell through to the
     /// stub). A quick health signal for how much firmware behaviour is faked.
@@ -219,6 +244,12 @@ const GPFSEL_WINDOW: std::ops::Range<u32> = {
     let base = map::GPIO_BASE + crate::spec::gpio::GPFSEL;
     base..base + crate::spec::gpio::GPFSEL_COUNT * crate::spec::gpio::GPFSEL_STRIDE
 };
+
+/// The Bluetooth modem's address. A Pi's is its Ethernet MAC plus one — the
+/// reference board is `e4:5f:01:83:fb:74` on the network and `…:75` on the
+/// air — so this follows the MAC in OTP rows 64/65
+/// (`crate::periph::configotp`).
+const BT_ADDRESS: [u8; 6] = [0x02, 0x00, 0x5E, 0x00, 0x53, 0x02];
 
 /// The SD-slot mux word in the GPIO block, and the bit that routes the card to
 /// the legacy EMMC (see [`Machine::route_sd_slot`]).
@@ -301,7 +332,12 @@ impl Machine {
             dma4: Dma4::new(),
             dma_legacy: crate::periph::dma_legacy::DmaLegacy::new(),
             dma_vpu: crate::periph::dma_legacy::DmaLegacy::new_vpu(),
-            emmc: Emmc2::new_legacy(),
+            emmc: {
+                let mut emmc = Emmc2::new_legacy();
+                emmc.put_card(Some(crate::periph::sdcard::SdCard::sdio()));
+                emmc
+            },
+            wifi: None,
             sd_slot_legacy: false,
             emmc2: Emmc2::new(),
             hvs: Hvs::new(),
@@ -309,7 +345,9 @@ impl Machine {
             dwc2: Dwc2::new(),
             xhci_otg: XhciOtg::new(),
             periph_stub: StubRegion::new("periph-window"),
+            bluetooth: crate::periph::bluetooth::BtModem::new(BT_ADDRESS),
             console: Console::default(),
+            console_routed: Console::default(),
             stub_hits: 0,
             bus_errors: 0,
             ram_writes: 0,
@@ -373,6 +411,7 @@ impl Machine {
         self.pcie.set_log(log.clone());
         self.spi0.log = log.clone();
         self.gpio.log = log.clone();
+        self.aux.log = log.clone();
         self.bsc_pmic.set_log(log.clone());
         self.config_otp.log = log.clone();
         self.emmc.log = log.clone();
@@ -581,12 +620,78 @@ impl Machine {
         }
     }
 
-    /// Drain and return whatever the console UART has transmitted.
-    pub fn take_console_output(&mut self) -> Vec<u8> {
+    /// Which block the serial header is wired to, for [`Console::Pins`]:
+    /// GPIO 14 is `TXD0` on ALT0 and `TXD1` on ALT5, and 15 the two receives.
+    /// Anything else — the reset state is plain input — reads as the PL011,
+    /// which is what the bootloader sets the pins up for before its first
+    /// byte.
+    fn console_uart(&self) -> Console {
         match self.console {
-            Console::Pl011 => self.uart0.take_output(),
-            Console::MiniUart => self.aux.take_output(),
+            Console::Pins => match self.gpio.function(14) {
+                crate::periph::gpio::Function::Alt(5) => Console::MiniUart,
+                _ => Console::Pl011,
+            },
+            fixed => fixed,
         }
+    }
+
+    /// Drain and return whatever the console UART has transmitted. Bytes the
+    /// other block wrote went to pins the header does not carry, so they are
+    /// not spliced into the transcript: the mini-UART's are dropped, and the
+    /// PL011's go to the Bluetooth modem, which is what GPIO 30..33 reach.
+    pub fn take_console_output(&mut self) -> Vec<u8> {
+        let routed = self.console_uart();
+        if routed != self.console_routed {
+            self.console_routed = routed;
+            crate::log!(
+                self.log,
+                crate::log::Channel::Uart,
+                "the serial header is on the {}",
+                match routed {
+                    Console::MiniUart => "mini-UART (GPIO 14/15 ALT5)",
+                    _ => "PL011 (GPIO 14/15 ALT0)",
+                }
+            );
+        }
+        match routed {
+            Console::MiniUart => {
+                let to_modem = self.uart0.take_output();
+                if !to_modem.is_empty() {
+                    self.bluetooth.feed(&to_modem);
+                }
+                if self.bluetooth.has_output() {
+                    let reply = self.bluetooth.take_output();
+                    self.uart0.feed(&reply);
+                    // The receiver has to be pumped for it to arrive.
+                    self.recheck = true;
+                }
+                self.aux.take_output()
+            }
+            _ => {
+                self.aux.take_output();
+                self.uart0.take_output()
+            }
+        }
+    }
+
+    /// Put host bytes on the console's receive line.
+    pub fn console_feed(&mut self, bytes: &[u8]) {
+        match self.console_uart() {
+            Console::MiniUart => self.aux.feed(bytes),
+            _ => self.uart0.feed(bytes),
+        }
+    }
+
+    /// Bytes fed to either UART but not yet read by the guest.
+    pub fn console_rx_backlog(&self) -> usize {
+        self.uart0.rx_backlog() + self.aux.rx_backlog()
+    }
+
+    /// Advance both receivers to `now_us`. Input only ever goes on one line,
+    /// and the other one has nothing to move.
+    pub fn console_pump(&mut self, now_us: u64) {
+        self.uart0.pump(now_us);
+        self.aux.pump(now_us);
     }
 
     pub fn irq_pending(&self) -> bool {
@@ -1167,12 +1272,17 @@ impl Machine {
             return;
         }
         self.sd_slot_legacy = legacy;
-        let (from, to) = if legacy {
-            (&mut self.emmc2, &mut self.emmc)
+        if legacy {
+            // The WiFi chip steps aside: one host, one bus.
+            self.wifi = self.emmc.take_card();
+            let card = self.emmc2.take_card();
+            self.emmc.put_card(card);
         } else {
-            (&mut self.emmc, &mut self.emmc2)
-        };
-        to.put_card(from.take_card());
+            let card = self.emmc.take_card();
+            self.emmc2.put_card(card);
+            let wifi = self.wifi.take();
+            self.emmc.put_card(wifi);
+        }
     }
 
     /// Put each master's pads where the pin functions say they are. The pins
@@ -1509,18 +1619,26 @@ mod tests {
     use crate::bus::Bus;
 
     /// 2020-era bootcode writes `0x2` to the mux before its SD init on the
-    /// legacy EMMC; start4 writes 0 before it uses EMMC2 (#66).
+    /// legacy EMMC; start4 writes 0 before it uses EMMC2 (#66). The WiFi
+    /// chip has that host the rest of the time (#124).
     #[test]
     fn the_sd_slot_mux_moves_the_card_between_hosts() {
+        use crate::periph::sdcard::CardKind;
+        let legacy_kind = |m: &Machine| m.emmc.card().map(|c| c.kind());
         let mut m = Machine::new(1 << 20);
         m.emmc2.insert_card(vec![0; 512 * 16]);
+        assert_eq!(legacy_kind(&m), Some(CardKind::Sdio));
         m.store32(SD_SLOT_MUX, 0x2).unwrap();
-        assert!(m.emmc.has_card() && !m.emmc2.has_card());
-        // Bit 0 alone leaves the card on EMMC2's side.
+        assert_eq!(legacy_kind(&m), Some(CardKind::Sd));
+        assert!(!m.emmc2.has_card());
+        // Bit 0 alone leaves the card on EMMC2's side, and the WiFi chip
+        // back on the legacy host's.
         m.store32(SD_SLOT_MUX, 0x1).unwrap();
-        assert!(!m.emmc.has_card() && m.emmc2.has_card());
+        assert_eq!(legacy_kind(&m), Some(CardKind::Sdio));
+        assert!(m.emmc2.has_card());
         m.store32(SD_SLOT_MUX, 0x0).unwrap();
-        assert!(!m.emmc.has_card() && m.emmc2.has_card());
+        assert_eq!(legacy_kind(&m), Some(CardKind::Sdio));
+        assert!(m.emmc2.has_card());
     }
 
     /// 2022-04-26 bootcode keeps its config in the L2 at `0x8001_8020` and

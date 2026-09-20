@@ -252,6 +252,10 @@ pub const ID_NS_PHYS_TIMER: u32 = 30;
 /// model refers to them.
 pub const ID_MAILBOX: u32 = crate::spec::mbox::IRQ_GIC;
 pub const ID_PL011: u32 = crate::spec::uart0::IRQ_GIC;
+/// The AUX block's one line, shared by the mini-UART and the SPI masters:
+/// Linux's `ttyS0`, the console on a card that leaves Bluetooth enabled
+/// (#124).
+pub const ID_AUX: u32 = crate::spec::aux::IRQ_GIC;
 /// EMMC2, and the legacy EMMC with it.
 pub const ID_EMMC2: u32 = crate::spec::emmc2::IRQ_GIC;
 /// GENET's two lines: `INTRL2_0`, then `INTRL2_1`.

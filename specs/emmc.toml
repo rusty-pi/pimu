@@ -3,7 +3,7 @@ name    = "emmc"
 base    = 0x7E300000
 size    = 0x100
 summary = "The legacy EMMC controller (Arasan SDHCI): the Pi 4's WiFi SDIO host, and the host 2020-era bootcode reads the SD card through"
-notes   = "EMMC2's command engine (`src/periph/emmc2.rs`) with nothing on the bus: the software resets self-clear, the internal clock reports stable once enabled, CMD0 completes and every command that expects a response times out. 2020-era bootcode routes the SD slot here (GPIO block `+0xD0`, bit 1) and boots from SD through this host; the model does not follow that mux, so the card stays on EMMC2 and such bootcode reports `Failed to open device: 'sdcard'` and tries its next boot mode. The interrupt output is GIC SPI 126, the line EMMC2 drives too."
+notes   = "EMMC2's command engine (`src/periph/emmc2.rs`) over whichever device the SD-slot mux leaves on the bus. The WiFi chip's SDIO side (`CardKind::Sdio`) has it by default, which is how a Pi 4B is wired; 2020-era bootcode routes the SD card here instead (GPIO block `+0xD0`, bit 1, followed since #66) and boots from it, and the WiFi chip steps aside while it does. The interrupt output is GIC SPI 126, the line EMMC2 drives too."
 
 [[block.source]]
 kind       = "datasheet"
@@ -14,7 +14,7 @@ confidence = "high"
 kind       = "linux"
 ref        = "`bcm2711-rpi-4-b.dtb` (raspberrypi/firmware): `mmcnr@7e300000`, compatible `brcm,bcm2835-mmc` / `brcm,bcm2835-sdhci`, `reg <0x7e300000 0x100>`, `interrupts <GIC_SPI 0x7e>`, with `wifi@1` (`brcm,bcm4329-fmac`) on it"
 confidence = "high"
-note       = "The SD image's `disable-wifi` overlay turns the node off, so Linux never touches the block in the model's boots."
+note       = "`scripts/make-sd.sh`'s default card carries `dtoverlay=disable-wifi`, which turns the node off; the `WIRELESS=1` card does not, and Linux then brings the chip up — `mmc1: new high speed SDIO card at address 0001`, as on the reference board (#124)."
 
 [[block.source]]
 kind       = "trace"

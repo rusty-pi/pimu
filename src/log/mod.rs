@@ -89,6 +89,10 @@ pub enum Channel {
     IrqEn,
     /// Every word across the ARM-VideoCore property mailbox, both directions.
     Mbox,
+    /// The two console UARTs: every register write, and every move of the
+    /// interrupt line or of the pins that say which one the serial header
+    /// carries.
+    Uart,
     /// Every OTP row the firmware reads and what it got, every row it
     /// programs before and after, and the commands the model does not know.
     Otp,
@@ -127,7 +131,7 @@ pub enum Channel {
 
 impl Channel {
     /// Every channel, in the order an unknown name lists them.
-    pub const ALL: [Channel; 25] = [
+    pub const ALL: [Channel; 26] = [
         Channel::Io,
         Channel::ArmExc,
         Channel::Alignment,
@@ -140,6 +144,7 @@ impl Channel {
         Channel::Gpio,
         Channel::IrqEn,
         Channel::Mbox,
+        Channel::Uart,
         Channel::Otp,
         Channel::Pcie,
         Channel::Pmic,
@@ -170,6 +175,7 @@ impl Channel {
             Channel::Gpio => "gpio",
             Channel::IrqEn => "irqen",
             Channel::Mbox => "mbox",
+            Channel::Uart => "uart",
             Channel::Otp => "otp",
             Channel::Pcie => "pcie",
             Channel::Pmic => "pmic",
