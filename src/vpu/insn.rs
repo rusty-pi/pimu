@@ -1250,6 +1250,19 @@ pub enum VecExec {
         step_a: bool,
         pred: VecPred,
     },
+    /// `v<w>mem07 <d>,<a>,<b>` — writes a lane of zeros and does nothing else
+    /// a probe can see. Measured with `probes/m07.s` and `probes/addr07.s` on
+    /// a Raspberry Pi 4B d03115: an operand that is a valid bus address is not
+    /// written to, the lookup table does not change, and the board goes on
+    /// running — unlike its neighbours 11-15, 17, 18 and 20, which take the
+    /// firmware down with them.
+    Zeros {
+        d: VecOperand,
+        width: u32,
+        reps: VecRep,
+        step_d: bool,
+        pred: VecPred,
+    },
     /// `v<w>memread <d>,<a>,<b>` / `v<w>memwrite <d>,<a>,<b>` — the unit's own
     /// 1 KiB lookup table, which is what those two mnemonics really address.
     /// A read answers the lane's own `lut[b * width]` and ignores A; a write
@@ -1352,6 +1365,7 @@ impl VecInsn {
                 .or_else(|| self.getacc())
                 .or_else(|| self.gather())
                 .or_else(|| self.lut())
+                .or_else(|| self.zeros())
             {
                 return e;
             }
@@ -1574,6 +1588,32 @@ impl VecInsn {
     /// The width field picks the saturation rather than an element size:
     /// `v8` is the plain form, `v16` clamps into a signed 32-bit range and
     /// `v32` into a signed 16-bit one.
+    /// Memory sub-op 7, the one blank in the class that is safe to carry out.
+    fn zeros(&self) -> Option<VecExec> {
+        if self.subop != 7 || !self.mem || self.d.is_dash() {
+            return None;
+        }
+        let width = match self.lane_bits {
+            8 => 1,
+            16 => 2,
+            32 => 4,
+            _ => return None,
+        };
+        Some(VecExec::Zeros {
+            d: VecOperand {
+                reg: self.d.window()?,
+                addend: (self.d.addend != 15).then_some(self.d.addend),
+            },
+            width,
+            reps: match self.rep {
+                7 => VecRep::FromR0,
+                n => VecRep::Fixed(1 << n),
+            },
+            step_d: self.d.inc,
+            pred: VecPred::from_field(self.pred)?,
+        })
+    }
+
     fn getacc(&self) -> Option<VecExec> {
         if self.subop != 24 || !self.mem {
             return None;

@@ -3823,7 +3823,7 @@ fn the_reference_page_matches_the_model() {
     // The memory class has no one function to ask, so the set is spelled out;
     // `mem_transfer`, `gather`, `lut` and `getacc` between them cover exactly
     // these.
-    const MEM_EXECUTES: [u8; 9] = [0, 1, 2, 4, 5, 6, 8, 9, 24];
+    const MEM_EXECUTES: [u8; 10] = [0, 1, 2, 4, 5, 6, 7, 8, 9, 24];
     for (subop, (name, says_executes)) in VEC_MEM_OPS
         .iter()
         .zip(rpi_virt_fw::isa::VEC_MEM_OPS_EXECUTE)
@@ -4197,6 +4197,75 @@ fn the_accumulator_through_the_scalar_result_unit() {
         (7, "ffff00000080000000f00000f00f00000180000000c00000ff000000ff7f000034120000cced000001000000feff0000004000001000000000000000f0000000"),
         (8, "ed810600ed810600ed810600ed810600ed810600ed810600ed810600ed810600ed810600ed810600ed810600ed810600ed810600ed810600ed810600ed810600"),
         (62, "ffff00000080000000f00000f00f00000180000000c00000ff000000ff7f000034120000cced000001000000feff0000004000001000000000000000f0000000"),
+    ];
+
+    let mut m = machine();
+    let mut v = Vpu::new(CODE);
+    for (i, b) in CODE_BYTES.iter().enumerate() {
+        m.store8(CODE + i as u32, *b).unwrap();
+    }
+    for i in 0..4096u32 {
+        m.store8(0x4000 + i, (i + 1) as u8).unwrap();
+        m.store8(0x5000 + i, 0).unwrap();
+    }
+    for (i, b) in VECTORS.iter().enumerate() {
+        m.store8(0x5000 + i as u32, *b).unwrap();
+    }
+    v.regs.set(0, 0x8000);
+    v.regs.set(1, 0x4000);
+    v.regs.pc = CODE;
+    for _ in 0..64 {
+        if v.regs.pc == CODE + CODE_BYTES.len() as u32 - 2 {
+            break; // the trailing `rts`
+        }
+        assert_eq!(
+            v.step(&mut m),
+            Step::Ran,
+            "at {:#x}: {:?}",
+            v.regs.pc,
+            v.stopped
+        );
+    }
+    for (row, want) in ROWS {
+        let got: String = (0..64)
+            .map(|c| format!("{:02x}", m.load8(0x8000 + (*row as u32) * 64 + c).unwrap()))
+            .collect();
+        assert_eq!(&got, want, "row {row}");
+    }
+}
+
+/// Memory sub-op 7 writes a lane of zeros.
+///
+/// `probes/m07.s` on a Raspberry Pi 4B d03115, over a destination preset to
+/// all-ones. `probes/addr07.s` and `probes/addr07b.s` then ruled out the rest:
+/// handed a valid bus address as its operand it wrote nothing there, and three
+/// lookup-table indices read the same before and after. It is also the one
+/// blank in the memory class that leaves the board running — 11-15, 17, 18 and
+/// 20 each killed the firmware of a board that was healthy the instant before.
+#[test]
+fn memory_sub_op_7_writes_zeros() {
+    const CODE_BYTES: &[u8] = &[
+        0x03, 0xb0, 0x40, 0x00, 0x14, 0x40, 0x44, 0xb0, 0x00, 0x10, 0x06, 0xfe, 0x38, 0xc0, 0x00,
+        0x04, 0xc0, 0xfb, 0x00, 0x00, 0x00, 0xf8, 0x38, 0x05, 0xc0, 0x03, 0xc0, 0xf3, 0x10, 0x00,
+        0x00, 0xf8, 0x78, 0x05, 0xe0, 0x03, 0xc0, 0xf3, 0x10, 0x00, 0x00, 0xfe, 0x38, 0xc0, 0xff,
+        0x07, 0xc0, 0xf3, 0x3f, 0x00, 0xe0, 0xf0, 0x01, 0x00, 0x15, 0x40, 0x96, 0xf8, 0x30, 0xe0,
+        0x80, 0x03, 0xe0, 0x33, 0x00, 0x00, 0x5a, 0x00,
+    ];
+    const VECTORS: &[u8] = &[
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0x00, 0x80, 0x00, 0xf0, 0xf0, 0x0f, 0x01, 0x80, 0x00,
+        0xc0, 0xff, 0x00, 0xff, 0x7f, 0x34, 0x12, 0xcc, 0xed, 0x01, 0x00, 0xfe, 0xff, 0x00, 0x40,
+        0x10, 0x00, 0x00, 0x00, 0xf0, 0x00, 0xff, 0xff, 0xfe, 0xff, 0xfc, 0xff, 0xf1, 0xff, 0xf0,
+        0xff, 0xe0, 0xff, 0x01, 0x00, 0x02, 0x00, 0xff, 0xff, 0xfd, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xfc, 0xff, 0xff, 0xff, 0xf8, 0xff,
+    ];
+    const ROWS: &[(usize, &str)] = &[
+        (0, "00ffffff00ffffff00ffffff00ffffff00ffffff00ffffff00ffffff00ffffff00ffffff00ffffff00ffffff00ffffff00ffffff00ffffff00ffffff00ffffff"),
+        (20, "ff000000ff000000000000008000000000000000f0000000f00000000f000000010000008000000000000000c0000000ff00000000000000ff0000007f000000"),
+        (21, "ff000000ff000000fe000000ff000000fc000000ff000000f1000000ff000000f0000000ff000000e0000000ff00000001000000000000000200000000000000"),
     ];
 
     let mut m = machine();

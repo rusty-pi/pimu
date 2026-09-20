@@ -597,6 +597,19 @@ The gather and the scatter scale their index by the operation's element width
 and take the ordinary base-plus-displacement address. `memread` and `memwrite`
 address neither: they are the unit's own lookup table, 1 KiB of it, banked
 sixteen ways so that each lane indexes its own 64 bytes.
+
+The sub-ops with no name of their own each write a **zero** into the
+destination element and nothing else the register file shows — but most of
+them also leave the firmware wedged, and a wedged firmware needs a reboot.
+Sub-op 7 is the one exception measured so far: it answers zero at every width,
+writes nothing at an address handed to it, leaves the lookup table alone, and
+the board lives, run after run. Sub-ops 11-15, 17, 18 and 20-23 killed the
+firmware of a board that was healthy the moment before — sub-op 11 twice over,
+on two different boards — and 3, 10, 16 and 19 did not even return their page.
+A board whose firmware has been wedged this way does not always come back from
+a reboot, either: three of them needed a power cycle. None of those is carried out here: answering
+"zero" for them would walk the model straight past something the silicon does
+not survive.
 """
 ops     = "mem"
 columns = ["Sub-op", "Mnemonic", "What it does", "Source"]
@@ -706,13 +719,13 @@ confidence = "high"
 [[section.row]]
 subop    = 7
 mnemonic = "mem07"
-status   = "unknown"
-cells    = ["7", "`mem07`", "—"]
+status   = "executes"
+cells    = ["7", "`mem07`", "writes a lane of **zeros**, at every width — nothing at an address handed to it, nothing in the lookup table, and the board goes on running"]
 
 [[section.row.source]]
-kind       = "decompile"
-ref        = "`binutils-vc4` names the encoding; what it does is not established"
-confidence = "low"
+kind       = "measured"
+ref        = "`probes/m07.s`, `probes/addr07.s`: over a destination preset to all-ones, with operands that are a valid bus address, with zeros, and with junk — the 32 bytes at the address it was handed were unchanged afterwards, and three lookup-table indices read the same before and after"
+confidence = "high"
 
 [[section.row]]
 subop    = 8
@@ -756,56 +769,56 @@ confidence = "low"
 subop    = 11
 mnemonic = "mem11"
 status   = "unknown"
-cells    = ["11", "`mem11`", "—"]
+cells    = ["11", "`mem11`", "a **zero** into the destination element, and the firmware dead: a board healthy the moment before stopped answering the mailbox. Reproduced"]
 
 [[section.row.source]]
-kind       = "decompile"
-ref        = "`binutils-vc4` names the encoding; what it does is not established"
-confidence = "low"
+kind       = "measured"
+ref        = "`probes/m11.s` over a destination preset to all-ones, on a Raspberry Pi 4B d03115"
+confidence = "medium"
 
 [[section.row]]
 subop    = 12
 mnemonic = "mem12"
 status   = "unknown"
-cells    = ["12", "`mem12`", "—"]
+cells    = ["12", "`mem12`", "a **zero** into the destination element, and the firmware dead: a board healthy the moment before stopped answering the mailbox. Reproduced"]
 
 [[section.row.source]]
-kind       = "decompile"
-ref        = "`binutils-vc4` names the encoding; what it does is not established"
-confidence = "low"
+kind       = "measured"
+ref        = "`probes/m12.s` over a destination preset to all-ones, on a Raspberry Pi 4B d03115"
+confidence = "medium"
 
 [[section.row]]
 subop    = 13
 mnemonic = "mem13"
 status   = "unknown"
-cells    = ["13", "`mem13`", "—"]
+cells    = ["13", "`mem13`", "a **zero** into the destination element, and the firmware dead afterwards"]
 
 [[section.row.source]]
-kind       = "decompile"
-ref        = "`binutils-vc4` names the encoding; what it does is not established"
-confidence = "low"
+kind       = "measured"
+ref        = "`probes/m13.s` over a destination preset to all-ones, on a Raspberry Pi 4B d03115"
+confidence = "medium"
 
 [[section.row]]
 subop    = 14
 mnemonic = "mem14"
 status   = "unknown"
-cells    = ["14", "`mem14`", "—"]
+cells    = ["14", "`mem14`", "a **zero** into the destination element, and the firmware dead afterwards"]
 
 [[section.row.source]]
-kind       = "decompile"
-ref        = "`binutils-vc4` names the encoding; what it does is not established"
-confidence = "low"
+kind       = "measured"
+ref        = "`probes/m14.s` over a destination preset to all-ones, on a Raspberry Pi 4B d03115"
+confidence = "medium"
 
 [[section.row]]
 subop    = 15
 mnemonic = "mem15"
 status   = "unknown"
-cells    = ["15", "`mem15`", "—"]
+cells    = ["15", "`mem15`", "a **zero** into the destination element, and the firmware dead afterwards"]
 
 [[section.row.source]]
-kind       = "decompile"
-ref        = "`binutils-vc4` names the encoding; what it does is not established"
-confidence = "low"
+kind       = "measured"
+ref        = "`probes/m15.s` over a destination preset to all-ones, on a Raspberry Pi 4B d03115"
+confidence = "medium"
 
 [[section.row]]
 subop    = 16
@@ -822,23 +835,23 @@ confidence = "low"
 subop    = 17
 mnemonic = "mem17"
 status   = "unknown"
-cells    = ["17", "`mem17`", "—"]
+cells    = ["17", "`mem17`", "a **zero** into the destination element, and the firmware dead afterwards"]
 
 [[section.row.source]]
-kind       = "decompile"
-ref        = "`binutils-vc4` names the encoding; what it does is not established"
-confidence = "low"
+kind       = "measured"
+ref        = "`probes/m17.s` on a Raspberry Pi 4B d03115, each on a board that answered the mailbox the moment before"
+confidence = "medium"
 
 [[section.row]]
 subop    = 18
 mnemonic = "mem18"
 status   = "unknown"
-cells    = ["18", "`mem18`", "—"]
+cells    = ["18", "`mem18`", "a **zero** into the destination element, and the firmware dead afterwards"]
 
 [[section.row.source]]
-kind       = "decompile"
-ref        = "`binutils-vc4` names the encoding; what it does is not established"
-confidence = "low"
+kind       = "measured"
+ref        = "`probes/m18.s` on a Raspberry Pi 4B d03115, each on a board that answered the mailbox the moment before"
+confidence = "medium"
 
 [[section.row]]
 subop    = 19
@@ -855,45 +868,45 @@ confidence = "low"
 subop    = 20
 mnemonic = "mem20"
 status   = "unknown"
-cells    = ["20", "`mem20`", "—"]
+cells    = ["20", "`mem20`", "a **zero** into the destination element, and the firmware dead afterwards"]
 
 [[section.row.source]]
-kind       = "decompile"
-ref        = "`binutils-vc4` names the encoding; what it does is not established"
-confidence = "low"
+kind       = "measured"
+ref        = "`probes/m20.s` on a Raspberry Pi 4B d03115, each on a board that answered the mailbox the moment before"
+confidence = "medium"
 
 [[section.row]]
 subop    = 21
 mnemonic = "mem21"
 status   = "unknown"
-cells    = ["21", "`mem21`", "—"]
+cells    = ["21", "`mem21`", "a **zero** into the destination element, and the firmware dead afterwards"]
 
 [[section.row.source]]
-kind       = "decompile"
-ref        = "`binutils-vc4` names the encoding; what it does is not established"
-confidence = "low"
+kind       = "measured"
+ref        = "`probes/m21.s` on a Raspberry Pi 4B d03115, each on a board that answered the mailbox the moment before"
+confidence = "medium"
 
 [[section.row]]
 subop    = 22
 mnemonic = "mem22"
 status   = "unknown"
-cells    = ["22", "`mem22`", "—"]
+cells    = ["22", "`mem22`", "a **zero** into the destination element, and the firmware dead afterwards"]
 
 [[section.row.source]]
-kind       = "decompile"
-ref        = "`binutils-vc4` names the encoding; what it does is not established"
-confidence = "low"
+kind       = "measured"
+ref        = "`probes/m22.s` on a Raspberry Pi 4B d03115, each on a board that answered the mailbox the moment before"
+confidence = "medium"
 
 [[section.row]]
 subop    = 23
 mnemonic = "mem23"
 status   = "unknown"
-cells    = ["23", "`mem23`", "—"]
+cells    = ["23", "`mem23`", "a **zero** into the destination element, and the firmware dead afterwards"]
 
 [[section.row.source]]
-kind       = "decompile"
-ref        = "`binutils-vc4` names the encoding; what it does is not established"
-confidence = "low"
+kind       = "measured"
+ref        = "`probes/m23.s` on a Raspberry Pi 4B d03115, each on a board that answered the mailbox the moment before"
+confidence = "medium"
 
 [[section.row]]
 subop    = 24

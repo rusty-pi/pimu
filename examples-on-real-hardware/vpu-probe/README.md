@@ -56,11 +56,15 @@ in a state a firmware thread might be mid-way through using.
 
 Two things are known to wedge it, both found the hard way:
 
-- the **undocumented memory sub-ops** — a probe running `mem03`, `mem16` and
-  `mem19` never returned, and every mailbox call after it blocked. Linux stays
-  up and answers SSH; `vcgencmd` hangs, and the probe process sits in an
-  uninterruptible `ioctl`, so it cannot even be killed. Only a reboot brings
-  the firmware back.
+- the **undocumented memory sub-ops**. `mem03`, `mem10`, `mem16` and `mem19`
+  never return at all; `mem11`-`mem15`, `mem17`, `mem18` and `mem20`-`mem23`
+  hand back their page and leave the firmware dead behind them. Linux stays up
+  and answers SSH; `vcgencmd` hangs, and the probe process sits in an
+  uninterruptible `ioctl`, so it cannot even be killed. A reboot usually brings
+  the firmware back — but not always: a board wedged this way can fail to boot
+  Linux at all afterwards and need a power cycle, since the VPU is what boots
+  it. Sub-op 7 is the one exception in the group: it writes zeros and the
+  board goes on running.
 - **clobbering `r6` and above.** Probes that write `r6`–`r9` came back as
   `OSError: [Errno 22] Invalid argument` from the mailbox `ioctl` — the
   firmware's own path through `EXECUTE_CODE` wants them intact. Keep to
@@ -103,6 +107,8 @@ Two things are known to wedge it, both found the hard way:
 | `sdisp.s` | what a displacement beside a scalar B operand does — hand-assembled, the one form `binutils-vc4` prints but cannot assemble |
 | `gacc.s` | `vgetacc` with a dash destination, feeding the scalar result unit |
 | `mld.s` | a `vld` with a vector slot in the B position: what it addresses (it did not settle) |
+| `m07.s`, `addr07.s`, `addr07b.s` | memory sub-op 7: that it writes zeros, writes nothing at an address it is handed, and leaves the lookup table alone |
+| `m11.s`-`m23.s` | the rest of the unnamed memory sub-ops. **Each one kills the firmware** — run them only on a board you can power-cycle |
 
 ## What they found (Raspberry Pi 4B d03115, firmware 1.20260824)
 

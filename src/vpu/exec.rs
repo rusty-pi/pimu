@@ -1608,6 +1608,31 @@ impl Vpu {
                             }
                         }
                     }
+                    VecExec::Zeros {
+                        d,
+                        width,
+                        reps,
+                        step_d,
+                        pred,
+                    } => {
+                        let lanes = self.vrf.lanes(pred);
+                        let reps = match reps {
+                            VecRep::Fixed(n) => n,
+                            VecRep::FromR0 => self.regs.get(0),
+                        };
+                        let d_add = d.addend.map_or(0, |r| self.regs.get(r as usize));
+                        let _ = width;
+                        for rep in 0..reps {
+                            for lane in 0..vrf::LANES {
+                                if lanes & (1 << lane) == 0 {
+                                    continue;
+                                }
+                                let (row, e) =
+                                    d.reg.lane(lane, if step_d { rep } else { 0 }, d_add);
+                                self.vrf.write(row, e, d.reg.elem_bytes as u32, 0);
+                            }
+                        }
+                    }
                     VecExec::GetAcc {
                         d,
                         b,

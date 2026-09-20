@@ -209,6 +209,19 @@ and take the ordinary base-plus-displacement address. `memread` and `memwrite`
 address neither: they are the unit's own lookup table, 1 KiB of it, banked
 sixteen ways so that each lane indexes its own 64 bytes.
 
+The sub-ops with no name of their own each write a **zero** into the
+destination element and nothing else the register file shows — but most of
+them also leave the firmware wedged, and a wedged firmware needs a reboot.
+Sub-op 7 is the one exception measured so far: it answers zero at every width,
+writes nothing at an address handed to it, leaves the lookup table alone, and
+the board lives, run after run. Sub-ops 11-15, 17, 18 and 20-23 killed the
+firmware of a board that was healthy the moment before — sub-op 11 twice over,
+on two different boards — and 3, 10, 16 and 19 did not even return their page.
+A board whose firmware has been wedged this way does not always come back from
+a reboot, either: three of them needed a power cycle. None of those is carried out here: answering
+"zero" for them would walk the model straight past something the silicon does
+not survive.
+
 | Sub-op | Mnemonic | What it does | Source |
 |---|---|---|---|
 | 0 | `ld` | 16 elements between memory and the file, one per lane, at `base + disp` | measured: `probes/mix.s`, `probes/conv.s` |
@@ -218,23 +231,23 @@ sixteen ways so that each lane indexes its own 64 bytes.
 | 4 | `st` | the transfer the other way | measured: `probes/mix.s` |
 | 5 | `indexwritem` | scatter: each lane writes its element at index `acc >> 16` | measured: `probes/mem7.s`, `probes/mem9.s` |
 | 6 | `indexwriteml` | scatter indexed by `acc & 0xffff` | measured: `probes/mem7.s`, `probes/mem9.s` |
-| 7 | `mem07` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
+| 7 | `mem07` | writes a lane of **zeros**, at every width — nothing at an address handed to it, nothing in the lookup table, and the board goes on running | measured: `probes/m07.s`, `probes/addr07.s`: over a destination preset to all-ones, with operands that are a valid bus address, with zeros, and with junk — the 32 bytes at the address it was handed were unchanged afterwards, and three lookup-table indices read the same before and after |
 | 8 | `memread` | `readlut`: each lane reads its own 64-byte region of the unit's 1 KiB table at `b * width`, A unused. B is a vector slot, a scalar register or an immediate; a scalar reaches every lane alike | measured: `probes/lut.s`: a `v8memwrite` then a `v8memread` over the same indices hands every lane its own value back — seven lanes sharing index `0xff` and each keeping its own value is what says the table is banked — and the `v16` pair round-trips at twice the index; manual: the VideoCore IV Programmers Manual names sub-ops 8 and 9 `readlut`/`writelut` over a 1 KB table |
 | 9 | `memwrite` | `writelut`: puts A at that index, and hands the destination the same value | measured: `probes/lut.s`, `probes/lut2.s`: a scalar write at 3 and a vector index of threes reach the same byte, and a `v16` write at 3 leaves byte 3 alone — the index scales by the element width whichever way it is spelled |
 | 10 | `mem10` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
-| 11 | `mem11` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
-| 12 | `mem12` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
-| 13 | `mem13` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
-| 14 | `mem14` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
-| 15 | `mem15` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
+| 11 | `mem11` | a **zero** into the destination element, and the firmware dead: a board healthy the moment before stopped answering the mailbox. Reproduced | measured: `probes/m11.s` over a destination preset to all-ones, on a Raspberry Pi 4B d03115 |
+| 12 | `mem12` | a **zero** into the destination element, and the firmware dead: a board healthy the moment before stopped answering the mailbox. Reproduced | measured: `probes/m12.s` over a destination preset to all-ones, on a Raspberry Pi 4B d03115 |
+| 13 | `mem13` | a **zero** into the destination element, and the firmware dead afterwards | measured: `probes/m13.s` over a destination preset to all-ones, on a Raspberry Pi 4B d03115 |
+| 14 | `mem14` | a **zero** into the destination element, and the firmware dead afterwards | measured: `probes/m14.s` over a destination preset to all-ones, on a Raspberry Pi 4B d03115 |
+| 15 | `mem15` | a **zero** into the destination element, and the firmware dead afterwards | measured: `probes/m15.s` over a destination preset to all-ones, on a Raspberry Pi 4B d03115 |
 | 16 | `mem16` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
-| 17 | `mem17` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
-| 18 | `mem18` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
+| 17 | `mem17` | a **zero** into the destination element, and the firmware dead afterwards | measured: `probes/m17.s` on a Raspberry Pi 4B d03115, each on a board that answered the mailbox the moment before |
+| 18 | `mem18` | a **zero** into the destination element, and the firmware dead afterwards | measured: `probes/m18.s` on a Raspberry Pi 4B d03115, each on a board that answered the mailbox the moment before |
 | 19 | `mem19` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
-| 20 | `mem20` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
-| 21 | `mem21` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
-| 22 | `mem22` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
-| 23 | `mem23` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
+| 20 | `mem20` | a **zero** into the destination element, and the firmware dead afterwards | measured: `probes/m20.s` on a Raspberry Pi 4B d03115, each on a board that answered the mailbox the moment before |
+| 21 | `mem21` | a **zero** into the destination element, and the firmware dead afterwards | measured: `probes/m21.s` on a Raspberry Pi 4B d03115, each on a board that answered the mailbox the moment before |
+| 22 | `mem22` | a **zero** into the destination element, and the firmware dead afterwards | measured: `probes/m22.s` on a Raspberry Pi 4B d03115, each on a board that answered the mailbox the moment before |
+| 23 | `mem23` | a **zero** into the destination element, and the firmware dead afterwards | measured: `probes/m23.s` on a Raspberry Pi 4B d03115, each on a board that answered the mailbox the moment before |
 | 24 | `getacc` | each lane's accumulator, shifted right by `b & 31`; A is read for nothing. The width field picks the saturation, not an element size: `v8` plain, `v16` clamps into signed 32-bit, `v32` into signed 16-bit. A **dash destination** keeps only the scalar result unit's aggregate, which is the form `start4.elf` uses | measured: `probes/setf4.s`, `probes/gacc.s`: over sixteen known accumulators `SUMS` and `SUMU` both answer their plain sum, `MAX` the largest, `IMIN`/`IMAX` an index, and the `B` shift applies before the aggregate. The lane values go in whole, not re-read at the operation's element width, `probes/setf5.s` |
 | 25 | `mem25` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
 | 26 | `mem26` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
