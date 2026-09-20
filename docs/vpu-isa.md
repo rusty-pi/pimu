@@ -221,48 +221,62 @@ on their addresses in one particular `start4.elf`.
 
 ## Not yet implemented
 
-Twenty-nine ALU ops execute — `mov`, `add`/`adds`, `sub`/`subs`,
-`rsub`/`rsubs`, `and`/`or`/`eor`/`bic`, `min`/`max`, `shl`/`shls`/`lsr`/`asr`,
-`ror`, `brev`, `count`, `msb`, `dist`/`dists`, `clip`, `sign`, and the four
-shuffles `even`/`odd`/`interl`/`interh` — each measured lane by lane against
-two vectors of edge cases and pinned in `tests/vpu_isa.rs`. `even` and `odd`
-pack A's alternate elements into the low eight lanes and B's into the high
-eight; `clip` is `a` clamped into `0 ..= b`; `sign` is `b + signum(a)`;
-`count` is `popcount(a) + popcount(b)`; `msb` is the index of the highest bit
-set in either operand; and `brev` reverses the low `n` bits of `a`, `n` being
-`b`'s low bits, or the whole operation width when they are zero.
+Most of the ALU executes now, each op measured lane by lane against vectors of
+edge cases and pinned in `tests/vpu_isa.rs`: `mov`, `bitplanes`, the four
+shuffles `even`/`odd`/`interl`/`interh`, `brev`, `ror`, the shifts
+`shl`/`shls`/`lsr`/`asr` and the signed-count `signshl`/`signasl`/`signasls`,
+the logical ops, `count`, `msb`, `min`/`max`, `dist`/`dists`, `clip`, `sign`,
+`testmag`, the adds and subtracts with their saturating and carry-in forms,
+and the multiplies. `even` and `odd` pack A's alternate elements into the low
+eight lanes and B's into the high eight; `clip` is `a` clamped into `0 ..= b`;
+`sign` is `b + signum(a)` and the `v32` form of the sub-op beside it is
+`b * signum(a)`; `count` is `popcount(a) + popcount(b)`; `msb` is the index of
+the highest bit set in either operand; `testmag` answers whether `|a| >= b`;
+`brev` reverses the low `n` bits of `a`, `n` being `b`'s low bits, or the whole
+operation width when they are zero; and `bitplanes` **transposes** the lanes'
+bits — lane `i` of the result is the word whose bit `j` is bit `i` of lane `j`
+of B, which with a scalar B is the one-flag-per-bit form the firmware uses.
 
-The multiplies execute too — `mull` keeps the product's low half, `mulm` shifts
-it right by eight, `mulhd` keeps the high half and `mulhn` rounds while doing
-so, each reading its operands signed or unsigned as the suffix says — and so
-does the **accumulator** behind them. There is one per lane, wider than an
-element: `CLRA` clears it, the result is added or (with `SUB`) taken off, read
-signed or unsigned as `SIGN` says, and `WBA` makes the destination take the
-accumulator rather than the raw result. A dash destination discards the result
-and keeps only that effect, which is how the codec code's multiply-accumulate
-chains are written.
+Some sub-ops mean one thing at one width and write a lane of **zeros** at the
+other: `count`, `testmag` and `bitplanes` compute at `v16` and write zeros at
+`v32`, and sub-op 30 is the other way round. Sub-ops 13, 22, 23 and 44–47
+write zeros at both. That is a write, not a skip — measured over a destination
+preset to all-ones.
+
+The **accumulator** is one per lane and wider than an element. `CLRA` clears
+it, the result is added to it — shifted left by sixteen in the `...H` forms,
+which is what makes them the "high half" — read signed or unsigned as `SIGN`
+says, and `WBA` makes the destination take the accumulator rather than the raw
+result (shifted back down by sixteen, and clamped, for `...H`). `SUB` is not a
+subtracting accumulate at all: it leaves the accumulator alone and hands the
+destination `accumulator - result`. `vgetacc` reads the accumulator out,
+shifted right by `b & 31`. A dash destination discards the result and keeps
+only the accumulator's effect, which is how the codec code's
+multiply-accumulate chains are written.
+
+The **scalar result unit** writes an aggregate of the sixteen lane results to
+`r0`..`r7`: `SUMU` and `SUMS` add them up unsigned and signed, `MAX` answers
+the largest signed, and `IMIN`/`IMAX` answer the index of the smallest and of
+the largest. A lane predicate applies to the aggregate too — the lanes it
+masks off contribute nothing.
 
 What still faults, and why:
 
 | instructions | reason |
 |---|---|
-| 2113 | memory sub-ops beyond `vld`/`vst`, and transfers refused for another reason |
-| 788 | the scalar result unit past the one `SUMU`/`SUMS` form |
-| 529 | the `UACCH`/`SACCH` accumulator forms |
-| 453 | ALU and multiply sub-ops still unmeasured |
-| 271 | a multiply whose registers disagree in width — it carries no width of its own to convert to |
-| 255 | a `*` on a slot |
-| 164 | `SETF` on an op whose carry was not measured |
-| 79 | a multiply with the `L` bit set, which selects another family |
-| 72 | a binary op whose A slot is a dash |
+| 2113 | memory sub-ops beyond `vld`/`vst`/`vgetacc` |
+| 280 | `SETF` on an op whose carry was not measured |
+| 91 | a multiply with the `L` bit set, which selects another family |
 | 41 | an accumulator modifier without `ENA` |
-| 24 | the rest: a register wider than the operation, `v32count`, three stray `mov`s |
+| 32 | multiply sub-op 63 |
+| 24 | the rest: a register wider than the operation, an unsigned `SUB` in the high half |
 
-`v32count` is in that last row on purpose: on hardware it writes a zero into
-every lane whatever its operands, so whatever it counts, it is not the bits of
-a 32-bit element.
+Of the 15180 vector instructions in `start4.elf`'s `.text`, 12649 execute.
 
-Of the 15180 vector instructions in `start4.elf`'s `.text`, 10391 execute.
+Much of what is left is not code at all: the pages between `0x0ec24000` and
+`0x0ec2e000` disassemble as vector instructions but decode as data — a linear
+sweep of `.text` cannot tell a jump table from an instruction, and those pages
+are where most of the remaining encodings live.
 
 Outside the ISA proper: no dual-issue pipeline, and the MMU and the caches are
 flat — the four VC4 aliases (`0x0`, `0x4000_0000`, `0x8000_0000`,

@@ -703,6 +703,36 @@ pub enum VecOperandB {
     Imm(u32),
 }
 
+/// What the scalar result unit does with the sixteen lane results.
+///
+/// Measured on a Raspberry Pi 4B d03115 with `probes/sru.s` and `sru2.s`:
+/// `SUMU` adds the lanes up reading each unsigned at the operation's width and
+/// `SUMS` reading each signed; `MAX` answers the largest, signed; `IMIN` and
+/// `IMAX` answer an *index*, the first of the smallest and the last of the
+/// largest. `max2`, `max4` and `max6` answered exactly what `MAX` did in every
+/// vector tried, so they are carried as the same thing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VecSruFunc {
+    SumUnsigned,
+    SumSigned,
+    Max,
+    IndexOfMin,
+    IndexOfMax,
+}
+
+impl VecSruFunc {
+    pub fn from_func(f: u8) -> Option<VecSruFunc> {
+        Some(match f {
+            0 => VecSruFunc::SumUnsigned,
+            1 => VecSruFunc::SumSigned,
+            2 | 4 | 6 | 7 => VecSruFunc::Max,
+            3 => VecSruFunc::IndexOfMin,
+            5 => VecSruFunc::IndexOfMax,
+            _ => return None,
+        })
+    }
+}
+
 /// The scalar-result-unit / accumulator field of an 80-bit vector op.
 ///
 /// Bit 6 selects the SRU (scalar writeback) group; then bits 3..5 pick the
@@ -817,7 +847,37 @@ pub enum VecAluOp {
     Clip,
     /// `b + signum(a)`.
     Sign,
+    /// Transpose the lanes' bits: lane `i` of the result is the word whose bit
+    /// `j` is bit `i` of lane `j` of B. With a scalar or immediate B — which
+    /// every lane sees alike — that comes out as "all ones where B's bit `i`
+    /// is set", which is what the firmware uses it for, one lane flag per bit.
+    Bitplanes,
+    /// `b * signum(a)`, `signum(0)` counting as `+1` — the `v32` form of the
+    /// sub-op whose `v16` form writes zeros.
+    Clips,
+    /// `1` where `|a| >= b`, `0` otherwise — B read signed, A's magnitude
+    /// against it, so a negative B always answers 1.
+    Testmag,
+    /// Shift by a *signed*, unmasked count: left when B is positive, right
+    /// when it is negative, and a count past the element's width empties it.
+    /// `Signshl` shifts in zeros on the way right, `Signasl` copies the sign,
+    /// and `Signasls` is the saturating form of `Signasl`.
+    Signshl,
+    Signasl,
+    Signasls,
+    /// A sub-op whose result is a lane of zeros, at this width: the unit
+    /// writes the register, it just writes nothing in it. Measured over a
+    /// destination preset to all-ones, so this is a write and not a skip.
+    Zero,
     Add,
+    /// The `c` forms take the lane's carry flag in as well: `a + b + c` and
+    /// `a - b - c`, the carry being a borrow on the way out.
+    Addc,
+    Addsc,
+    Subc,
+    Subsc,
+    Rsubc,
+    Rsubsc,
     /// Saturating signed.
     Adds,
     Sub,
@@ -847,10 +907,15 @@ pub enum VecAluOp {
 
 impl VecAluOp {
     /// The `v` sub-op field, as `insn-vecops` numbers it.
-    pub fn from_subop(subop: u8) -> Option<VecAluOp> {
+    /// Some sub-ops mean one thing at one width and write zeros at the other,
+    /// so the width is part of the identity: `count` computes at `v16` and
+    /// writes zeros at `v32`, `testmag` likewise, and sub-op 30 is the other
+    /// way round — zeros at `v16`, `b * signum(a)` at `v32`.
+    pub fn from_subop(subop: u8, width: u32) -> Option<VecAluOp> {
         use VecAluOp::*;
         Some(match subop {
             0 => Mov,
+            1 if width == 2 => Bitplanes,
             2 => Even,
             3 => Odd,
             4 => Interl,
@@ -865,7 +930,7 @@ impl VecAluOp {
             17 => Or,
             18 => Eor,
             19 => Bic,
-            20 => Count,
+            20 if width == 2 => Count,
             21 => Msb,
             24 => Min,
             25 => Max,
@@ -873,12 +938,26 @@ impl VecAluOp {
             27 => Dists,
             28 => Clip,
             29 => Sign,
+            30 if width == 4 => Clips,
+            31 if width == 2 => Testmag,
             32 => Add,
             33 => Adds,
+            34 => Addc,
+            35 => Addsc,
             36 => Sub,
             37 => Subs,
+            38 => Subc,
+            39 => Subsc,
             40 => Rsub,
             41 => Rsubs,
+            42 => Rsubc,
+            43 => Rsubsc,
+            12 => Signshl,
+            14 => Signasl,
+            15 => Signasls,
+            // Measured on a Raspberry Pi 4B d03115: each of these leaves every
+            // lane zero, over a destination preset to all-ones.
+            1 | 13 | 20 | 22 | 23 | 30 | 31 | 44..=47 => Zero,
             _ => return None,
         })
     }
@@ -938,20 +1017,28 @@ impl VecAluOp {
 /// spells it.
 ///
 /// Each lane has an accumulator of its own. `CLRA` clears it before the
-/// operation, the result is added to it (or taken off it, with `SUB`), read
-/// signed or unsigned as `SIGN` says, and `WBA` makes the destination take the
-/// accumulator rather than the raw result. Measured on a Raspberry Pi 4B
+/// operation, the result is added to it, read signed or unsigned as `SIGN`
+/// says, and `WBA` makes the destination take the accumulator rather than the
+/// raw result. `SUB` is not a subtracting accumulate: it leaves the
+/// accumulator untouched and hands the destination `accumulator - result`. Measured on a Raspberry Pi 4B
 /// d03115: `v16add -,A,B CLRA UACC` followed by `v16add D,A,B UACC` leaves
 /// twice the sum in `D`, and the `0xffff` case proves the unsigned reading.
 ///
-/// The `HIGH` forms — `UACCH` and friends — are *not* here: what they do did
-/// not fall out of the same runs, and a wrong guess would corrupt a register.
+/// The `HIGH` forms — `UACCH` and friends — accumulate into the high half:
+/// the result is shifted left by sixteen on the way in, and a write-back
+/// shifts it back down on the way out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VecAcc {
     pub clear: bool,
     pub signed: bool,
     pub sub: bool,
     pub writeback: bool,
+    /// The `...H` forms: the result goes into the accumulator's **high** half
+    /// — shifted left by sixteen — and a write-back reads it back shifted
+    /// right by sixteen, saturated into the destination's signed range.
+    /// Measured with `probes/acch.s`, reading the accumulator itself with
+    /// `vgetacc`: `v16mov -,A CLRA UACCH` leaves `A << 16` in it.
+    pub high: bool,
 }
 
 impl VecAcc {
@@ -964,7 +1051,16 @@ impl VecAcc {
         const CLRA: u8 = 0x04;
         const WBA: u8 = 0x02;
         const SUB: u8 = 0x01;
-        if f & ENA == 0 || f & HIGH != 0 {
+        if f & ENA == 0 {
+            return None;
+        }
+        // `SUB` hands the destination `accumulator - result` whether or not
+        // `WBA` is set — `SDEC` in `probes/accmix.s` is that combination, and
+        // the board answers the same difference. With the high half it is the
+        // same difference taken sixteen bits up, `(acc - (result << 16)) >> 16`
+        // — for the signed form. The unsigned one answered neither that nor a
+        // clamped version of it, lane for lane, so it is left to fault.
+        if f & SUB != 0 && f & HIGH != 0 && f & SIGN == 0 {
             return None;
         }
         Some(VecAcc {
@@ -972,6 +1068,7 @@ impl VecAcc {
             signed: f & SIGN != 0,
             sub: f & SUB != 0,
             writeback: f & WBA != 0,
+            high: f & HIGH != 0,
         })
     }
 }
@@ -1058,6 +1155,9 @@ pub enum VecExec {
         acc: Option<VecAcc>,
         /// `SETF`: leave the lane flags holding this result.
         setf: bool,
+        /// The scalar result unit: which aggregate of the sixteen lane results
+        /// to write, and the scalar register to write it to.
+        sru: Option<(VecSruFunc, u8)>,
     },
     /// `vgetacc[s16|s32] <d>,<a>,<b>` — each lane's accumulator, shifted right
     /// by `b & 31`. The A slot is read and discarded, `sat` says which signed
@@ -1181,10 +1281,7 @@ impl VecInsn {
         if !self.wide && dash.addend != 15 {
             return None;
         }
-        // What `*` means on a slot is not established.
-        if vec_slot.star {
-            return None;
-        }
+
         let addr = self.addr?;
         Some(VecExec::Mem {
             store,
@@ -1223,7 +1320,7 @@ impl VecInsn {
             32 => Some(2),
             _ => return None,
         };
-        if self.d.is_dash() || self.d.star || self.a.star {
+        if self.d.is_dash() {
             return None;
         }
         let b = match self.b {
@@ -1234,15 +1331,10 @@ impl VecInsn {
                 }
                 VecSource::Scalar(sl.scalar)
             }
-            VecOperandB::Slot(sl) => {
-                if sl.star {
-                    return None;
-                }
-                VecSource::Reg(VecOperand {
-                    reg: sl.window()?,
-                    addend: (sl.addend != 15).then_some(sl.addend),
-                })
-            }
+            VecOperandB::Slot(sl) => VecSource::Reg(VecOperand {
+                reg: sl.window()?,
+                addend: (sl.addend != 15).then_some(sl.addend),
+            }),
         };
         Some(VecExec::GetAcc {
             d: VecOperand {
@@ -1378,36 +1470,32 @@ impl VecInsn {
             if self.lane_bits != 16 {
                 return None; // `L` set is the other family, not modelled
             }
-            // The width comes from whichever slot names a real register; a
-            // dash has none of its own. The multiplies carry no width of their
-            // own to convert to, so every register they touch has to agree.
-            let mut slots = [self.d, self.a]
+            // A multiply carries no width of its own, so it works at the
+            // widest register it names and converts the narrower ones into it
+            // — `vmull.ss HX(0,0),HX(62,0),H(57,0)` multiplies a halfword by
+            // an unsigned byte and keeps sixteen bits of the product.
+            let w = [self.d, self.a]
                 .into_iter()
                 .chain(match self.b {
                     VecOperandB::Slot(s) => Some(s),
                     VecOperandB::Imm(_) => None,
                 })
-                .filter(|s| !s.is_dash());
-            let w = slots.next()?.elem_bytes() as u32;
-            if slots.any(|s| s.elem_bytes() as u32 != w) {
-                return None;
-            }
+                .filter(|s| !s.is_dash())
+                .map(|s| s.elem_bytes() as u32)
+                .max()?;
             (VecAluOp::from_mul_subop(self.subop)?, w)
         } else {
-            let op = VecAluOp::from_subop(self.subop)?;
             let width = self.lane_bits as u32 / 8;
-            // `v32count` writes a zero into every lane on hardware, whatever
-            // its operands — whatever it counts, it is not the bits of a
-            // 32-bit element, so it is left to fault.
-            if op == VecAluOp::Count && width == 4 {
-                return None;
-            }
-            (op, width)
+            (VecAluOp::from_subop(self.subop, width)?, width)
         };
-        let acc = match self.sru {
-            VecSru::None => None,
-            VecSru::Acc(f) => Some(VecAcc::from_field(f)?),
-            VecSru::Scalar { .. } => return None,
+        let (acc, sru) = match self.sru {
+            VecSru::None => (None, None),
+            VecSru::Acc(f) => (Some(VecAcc::from_field(f)?), None),
+            // The scalar register field is three bits wide, so it names
+            // `r0`..`r7`. A predicate applies to the aggregate as well: the
+            // lanes it masks off contribute nothing, measured — `SUMU` under
+            // `IFZ` and under `IFNZ` add back up to `SUMU` under `ALL`.
+            VecSru::Scalar { func, reg } => (None, Some((VecSruFunc::from_func(func)?, reg))),
         };
         // `SETF` leaves the lane flags holding this result. Zero and negative
         // come from every op, but the carry does not: only the ops below were
@@ -1417,7 +1505,8 @@ impl VecInsn {
             use VecAluOp::*;
             if !matches!(
                 op,
-                Mov | And
+                Mov | Bitplanes
+                    | And
                     | Or
                     | Eor
                     | Bic
@@ -1462,11 +1551,10 @@ impl VecInsn {
         } else {
             Some(self.operand(self.d, width)?)
         };
-        // `mov` and the unary ops read only B; the rest need a real A.
+        // A dash in the A position is an operand of zeros, whatever the op:
+        // `v16sub HX(0,0),-,HX(63,0)` negates B, and `v16and` with one comes
+        // out empty. Measured.
         let a = if self.a.is_dash() {
-            if !matches!(op, VecAluOp::Mov | VecAluOp::Msb | VecAluOp::Count) {
-                return None;
-            }
             None
         } else {
             Some(self.operand(self.a, width)?)
@@ -1496,6 +1584,7 @@ impl VecInsn {
             width,
             acc,
             setf: self.setf,
+            sru,
         })
     }
 
@@ -1511,7 +1600,7 @@ impl VecInsn {
     /// One slot as an execution operand: its window — whose elements may be
     /// narrower than the operation — plus its `+rN`.
     fn operand(&self, slot: VecSlot, width: u32) -> Option<VecOperand> {
-        if slot.star || slot.elem_bytes() as u32 > width {
+        if slot.elem_bytes() as u32 > width {
             return None;
         }
         Some(VecOperand {

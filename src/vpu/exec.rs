@@ -11,7 +11,7 @@ use super::decode::decode;
 use super::icache::DecodeCache;
 use super::insn::{
     AddrMode, AluOp, Base, Insn, MemWidth, Op, RegOrImm, VecAluOp, VecExec, VecInsn, VecReg,
-    VecRep, VecSource, Writeback,
+    VecRep, VecSource, VecSruFunc, Writeback,
 };
 use super::length::InsnClass;
 use super::reg::{Cond, Flags, Regs, GP, LR, SP};
@@ -1200,9 +1200,13 @@ impl Vpu {
                         // flag is the bit inverted and its negative flag is
                         // clear. The carry the op does not produce stays as it
                         // was.
+                        // The lane's result is all ones where the bit is set,
+                        // so its zero flag is the bit inverted and its negative
+                        // flag is the bit itself. The carry the op does not
+                        // produce stays as it was.
                         let bits = self.regs.get(src as usize) as u16;
                         self.vrf.lane_z = !bits;
-                        self.vrf.lane_n = 0;
+                        self.vrf.lane_n = bits;
                     }
                     VecExec::Alu {
                         op,
@@ -1216,6 +1220,7 @@ impl Vpu {
                         width,
                         acc,
                         setf,
+                        sru,
                     } => {
                         let lanes = self.vrf.lanes(pred);
                         let reps = match reps {
@@ -1228,7 +1233,32 @@ impl Vpu {
                         let a_add = a
                             .and_then(|o| o.addend)
                             .map_or(0, |r| self.regs.get(r as usize));
+                        // The scalar result unit's running aggregate.
+                        let (mut sru_acc, mut sru_index, mut sru_seen) = (0i64, 0u32, 0u32);
                         for rep in 0..reps {
+                            // `bitplanes` needs every lane's B at once: it
+                            // transposes their bits.
+                            let planes = (op == VecAluOp::Bitplanes).then(|| {
+                                let mut v = [0u32; vrf::LANES as usize];
+                                for (lane, slot) in v.iter_mut().enumerate() {
+                                    *slot = match b {
+                                        VecSource::Imm(i) => i as u32,
+                                        VecSource::Scalar(r) => self.regs.get(r as usize),
+                                        VecSource::Reg(o) => {
+                                            let add =
+                                                o.addend.map_or(0, |r| self.regs.get(r as usize));
+                                            let (row, e) = o.reg.lane(
+                                                lane as u32,
+                                                if step_a { rep } else { 0 },
+                                                add,
+                                            );
+                                            let w = o.reg.elem_bytes as u32;
+                                            widen(self.vrf.read(row, e, w), w)
+                                        }
+                                    };
+                                }
+                                v
+                            });
                             for lane in 0..vrf::LANES {
                                 if lanes & (1 << lane) == 0 {
                                     continue;
@@ -1261,10 +1291,16 @@ impl Vpu {
                                 // operation is wide: `v32adds` into a byte
                                 // register comes back 0xff.
                                 let sat_bytes = d.map_or(width, |o| o.reg.elem_bytes as u32);
-                                let mut res = if op.takes_b(lane) {
+                                let mut res = if let Some(planes) = planes {
+                                    planes
+                                        .iter()
+                                        .enumerate()
+                                        .fold(0u32, |acc, (j, v)| acc | ((v >> lane) & 1) << j)
+                                } else if op.takes_b(lane) {
                                     bv
                                 } else {
-                                    vec_alu(op, av, bv, width, sat_bytes)
+                                    let cin = self.vrf.lane_c & (1 << lane) != 0;
+                                    vec_alu(op, av, bv, width, sat_bytes, cin)
                                 };
                                 if setf {
                                     // Zero and negative read the result at the
@@ -1300,13 +1336,42 @@ impl Vpu {
                                     } else {
                                         res
                                     };
-                                    *slot = if acc.sub {
-                                        slot.wrapping_sub(v)
+                                    // The `...H` forms accumulate into the
+                                    // high half.
+                                    let v = if acc.high { v << 16 } else { v };
+                                    // `SUB` does not accumulate at all: it
+                                    // hands the destination the difference
+                                    // between the accumulator and this result
+                                    // and leaves the accumulator alone.
+                                    // Measured: `CLRA UACC(A)` then `USUB(B)`
+                                    // leaves `A` in the accumulator and `A - B`
+                                    // in the destination.
+                                    if acc.sub {
+                                        res = if acc.high {
+                                            ((*slot as i32).wrapping_sub(v as i32) >> 16) as u32
+                                        } else {
+                                            slot.wrapping_sub(res)
+                                        };
                                     } else {
-                                        slot.wrapping_add(v)
-                                    };
-                                    if acc.writeback {
-                                        res = *slot;
+                                        *slot = slot.wrapping_add(v);
+                                    }
+                                    if acc.writeback && !acc.sub {
+                                        res = if acc.high {
+                                            // Read back from the high half,
+                                            // and clamped into what the
+                                            // destination element can hold.
+                                            let v = if acc.signed {
+                                                (*slot as i32 >> 16) as i64
+                                            } else {
+                                                (*slot >> 16) as i64
+                                            };
+                                            let sbits = sat_bytes * 8;
+                                            let lo = -(1i64 << (sbits - 1));
+                                            let hi = (1i64 << (sbits - 1)) - 1;
+                                            v.clamp(lo, hi) as u32
+                                        } else {
+                                            *slot
+                                        };
                                     }
                                 }
                                 if let Some(o) = d {
@@ -1314,7 +1379,51 @@ impl Vpu {
                                         o.reg.lane(lane, if step_d { rep } else { 0 }, d_add);
                                     self.vrf.write(row, e, o.reg.elem_bytes as u32, res);
                                 }
+                                if let Some((func, _)) = sru {
+                                    // The lane's contribution to the scalar
+                                    // aggregate, read at the operation's width.
+                                    let bits = width * 8;
+                                    let signed = if bits >= 32 {
+                                        res as i32 as i64
+                                    } else {
+                                        ((res << (32 - bits)) as i32 >> (32 - bits)) as i64
+                                    };
+                                    let unsigned = if bits >= 32 {
+                                        res as i64
+                                    } else {
+                                        (res & ((1 << bits) - 1)) as i64
+                                    };
+                                    match func {
+                                        VecSruFunc::SumUnsigned => sru_acc += unsigned,
+                                        VecSruFunc::SumSigned => sru_acc += signed,
+                                        VecSruFunc::Max => {
+                                            if sru_seen == 0 || signed > sru_acc {
+                                                sru_acc = signed;
+                                            }
+                                        }
+                                        VecSruFunc::IndexOfMin => {
+                                            if sru_seen == 0 || signed < sru_acc {
+                                                sru_acc = signed;
+                                                sru_index = lane;
+                                            }
+                                        }
+                                        VecSruFunc::IndexOfMax => {
+                                            if sru_seen == 0 || signed >= sru_acc {
+                                                sru_acc = signed;
+                                                sru_index = lane;
+                                            }
+                                        }
+                                    }
+                                    sru_seen += 1;
+                                }
                             }
+                        }
+                        if let Some((func, reg)) = sru {
+                            let v = match func {
+                                VecSruFunc::IndexOfMin | VecSruFunc::IndexOfMax => sru_index as i64,
+                                _ => sru_acc,
+                            };
+                            self.regs.set(reg as usize, v as u32);
                         }
                     }
                     VecExec::GetAcc {
@@ -1681,7 +1790,7 @@ fn vec_carry(
     })
 }
 
-fn vec_alu(op: VecAluOp, a: u32, b: u32, width: u32, sat_bytes: u32) -> u32 {
+fn vec_alu(op: VecAluOp, a: u32, b: u32, width: u32, sat_bytes: u32, carry_in: bool) -> u32 {
     use VecAluOp::*;
     let bits = width * 8;
     let mask = if bits >= 32 {
@@ -1733,6 +1842,55 @@ fn vec_alu(op: VecAluOp, a: u32, b: u32, width: u32, sat_bytes: u32) -> u32 {
         // negative `b` comes out as zero.
         Clip => satw(sext(a).clamp(0, sext(b).max(0))),
         Sign => satw(sext(b) + sext(a).signum()),
+        // `signum(0)` counts as `+1` here: a zero A leaves B as it is.
+        Clips => (sext(b) * if sext(a) < 0 { -1 } else { 1 }) as u32 & mask,
+        Testmag => (sext(a).abs() >= sext(b)) as u32,
+        // Handled before this point: it needs every lane's B at once.
+        Bitplanes | Zero => 0,
+        Addc => a.wrapping_add(b).wrapping_add(carry_in as u32) & mask,
+        Addsc => sat(sext(a) + sext(b) + carry_in as i64),
+        Subc => a.wrapping_sub(b).wrapping_sub(carry_in as u32) & mask,
+        Subsc => sat(sext(a) - sext(b) - carry_in as i64),
+        Rsubc => b.wrapping_sub(a).wrapping_sub(carry_in as u32) & mask,
+        Rsubsc => sat(sext(b) - sext(a) - carry_in as i64),
+        // A signed, unmasked shift count: left when positive, right when
+        // negative, and a count past the width empties the element (or fills
+        // it with the sign, for the arithmetic form).
+        Signshl | Signasl | Signasls => {
+            let n = sext(b);
+            if matches!(op, Signasls) {
+                // The saturating form keeps the whole shifted value and then
+                // clamps, so a count past the width comes out as the extreme
+                // of A's sign rather than as zero.
+                let v: i128 = (sext(a) as i128) << n.clamp(0, 96);
+                let v = if n < 0 {
+                    (sext(a) >> (-n).min(63)) as i128
+                } else {
+                    v
+                };
+                sat(v.clamp(i32::MIN as i128, i32::MAX as i128) as i64)
+            } else if n >= 0 {
+                if n >= bits as i64 {
+                    0
+                } else {
+                    (sext(a) << n) as u32 & mask
+                }
+            } else {
+                let k = (-n).min(64) as u32;
+                if matches!(op, Signshl) {
+                    // Zeros shift in, so a count past the width empties it.
+                    if k >= bits {
+                        0
+                    } else {
+                        (a & mask) >> k
+                    }
+                } else {
+                    // The sign shifts in, so a count past the width leaves the
+                    // sign in every bit.
+                    (sext(a) >> k.min(bits - 1)) as u32 & mask
+                }
+            }
+        }
         Shl => (a << shift) & mask,
         Shls => sat(sext(a) << shift),
         Lsr => (a & mask) >> shift,

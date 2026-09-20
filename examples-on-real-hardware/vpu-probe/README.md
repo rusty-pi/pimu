@@ -69,6 +69,11 @@ in a state a firmware thread might be mid-way through using.
 | `wacc.s` | the accumulator across the same width change, replayed as a program in `tests/vpu_isa.rs` |
 | `setf.s`, `setf3.s`, `setf4.s`, `setf5.s` | what `SETF` leaves in the lane flags, which ops touch the carry, and what `vgetacc` reads |
 | `imm.s` | whether a vector immediate is signed |
+| `alu3.s`, `alu4.s`, `alu5.s` | the sub-ops that were still blank: the carry-in forms, the signed shifts, and which sub-op means what at which width (`alu4-vectors.hex`) |
+| `alu6.s`, `star.s` | a dash A operand, multiplies whose registers differ in width, and what a `*` on a slot changes |
+| `sru.s`, `sru2.s` | the scalar result unit's eight functions, and how it breaks a tie (`sru2-vectors.hex`) |
+| `bp.s` | what `bitplanes` does with a vector B, and whether a predicate reaches the scalar result |
+| `acch.s`, `usub.s` | the `...H` accumulator forms and the `SUB` modifier, read back with `vgetacc` |
 
 ## What they found (Raspberry Pi 4B d03115, firmware 1.20260824)
 
@@ -131,14 +136,39 @@ in a state a firmware thread might be mid-way through using.
   form, sixteen in the 80-bit one, so `#0x20` on a 48-bit `v32mov` fills the
   lanes with `0xffffffe0`.
 
+- `bitplanes` **transposes** the lanes' bits: lane `i` of the result is the
+  word whose bit `j` is bit `i` of lane `j` of B. A scalar B — which every lane
+  sees alike — therefore comes out as all-ones wherever B's bit `i` is set,
+  which is the one-flag-per-bit form the firmware uses.
+- A dash in the A position is an operand of **zeros**, whatever the op. A `*`
+  on any slot changes nothing a register or memory can see — destination,
+  source, `+rN`, under `REP`, on a load or on a store alike.
+- A multiply works at the **widest** register it names and converts the
+  narrower ones into it.
+- `addc`/`subc`/`rsubc` take the lane's carry flag in; `signshl` and `signasl`
+  shift by a *signed, unmasked* count — left when B is positive, right when it
+  is negative, zeros or the sign shifting in — and a count past the width
+  empties the element.
+- Some sub-ops compute at one width and write a lane of **zeros** at the other:
+  `count`, `testmag` and `bitplanes` are live at `v16` and blank at `v32`,
+  sub-op 30 the other way round (`b * signum(a)`), and 13, 22, 23 and 44–47 are
+  blank at both. Measured over a destination preset to all-ones, so they write.
+- The `...H` accumulator forms accumulate into the **high half**: the result
+  goes in shifted left by sixteen, and a write-back reads it shifted back down,
+  clamped into the destination's signed range. `SUB` is not a subtracting
+  accumulate — it leaves the accumulator alone and hands the destination
+  `accumulator - result`.
+- The scalar result unit: `SUMU`/`SUMS` add the lanes up unsigned and signed,
+  `MAX` answers the largest signed, `IMIN` the index of the first smallest and
+  `IMAX` the index of the last largest; `max2`, `max4` and `max6` answered
+  exactly what `MAX` did over every vector tried. A lane predicate applies to
+  the aggregate as well.
+
 ## Still open
 
-The `...H` accumulator forms (`UACCH`, `SACCH`) did not fall out of these runs:
-each hypothesis that fits one lane breaks another, and they look like a second
-accumulator or a second half of one rather than a write-back mode. `v16clips`
-and `v32count` each write a zero into every lane over the same vectors their
-unsuffixed forms answer sensibly on, so neither is the operation its name
-suggests. The other open questions are what a multiply does when its registers
-disagree in width — it carries no width of its own to convert to — what the
-scalar-result unit does beyond `SUMU`/`SUMS`, and what `SETF` leaves in the
-lane flags.
+What the memory class does beyond `vld`, `vst` and `vgetacc` — `lookupm`,
+`memread`, `memwrite`, `indexwrite` and the rest — is the largest thing still
+unmeasured. So is the carry `SETF` leaves for the ops outside the list above,
+what the `L` bit selects in the multiply group, and what an unsigned `SUB` in
+the high half answers: it matched neither the wrapped difference nor a clamped
+one, lane for lane.
