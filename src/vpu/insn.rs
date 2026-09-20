@@ -1233,8 +1233,13 @@ pub enum VecExec {
     /// accumulator reads the byte at `base + 4`; `v16lookupml` reads the
     /// halfword at `base + 8`.
     Gather {
-        d: VecOperand,
-        base: u8,
+        /// A dash destination reads and discards — measured with
+        /// `probes/r63c.s`: a witness register came back untouched, and the
+        /// board went on running. The shape `start4.elf` uses.
+        d: Option<VecOperand>,
+        /// `None` where the address names `r63`, which is no register at all:
+        /// the gather then reads from zero, measured with `probes/r63.s`.
+        base: Option<u8>,
         offset: u32,
         /// Take the index from the accumulator's high half.
         high: bool,
@@ -1497,25 +1502,41 @@ impl VecInsn {
         } else {
             (self.d, self.a)
         };
-        if !dash.is_dash() || dash.inc {
+        // A gather reads its inert slot for nothing — measured with
+        // `probes/r63.s`: the same address answered the same bytes with a
+        // vector of junk in that slot as with one of zeros. A scatter's inert
+        // slot was not measured, so there it still has to be a bare dash.
+        if scatter && (!dash.is_dash() || dash.inc) {
+            return None;
+        }
+        if !scatter && dash.inc {
             return None;
         }
         let addr = self.addr?;
-        if addr.incr.is_some() {
-            return None; // what a `+=` steps on a gather was not measured
-        }
-        let operand = VecOperand {
-            reg: vec_slot.window()?,
-            addend: (vec_slot.addend != 15).then_some(vec_slot.addend),
-        };
         let reps = match self.rep {
             7 => VecRep::FromR0,
             n => VecRep::Fixed(1 << n),
         };
+        // A `+=` step only means something across repetitions; what it does
+        // between them was not measured.
+        if addr.incr.is_some() && reps != VecRep::Fixed(1) {
+            return None;
+        }
+        let operand = if vec_slot.is_dash() {
+            if scatter {
+                return None; // a store with nothing to write
+            }
+            None
+        } else {
+            Some(VecOperand {
+                reg: vec_slot.window()?,
+                addend: (vec_slot.addend != 15).then_some(vec_slot.addend),
+            })
+        };
         let pred = VecPred::from_field(self.pred)?;
         Some(if scatter {
             VecExec::Scatter {
-                src: operand,
+                src: operand?,
                 base: addr.base,
                 offset: addr.offset,
                 high,
@@ -1527,7 +1548,8 @@ impl VecInsn {
         } else {
             VecExec::Gather {
                 d: operand,
-                base: addr.base,
+                // `r63` is the encoding's way of naming no base at all.
+                base: (addr.base != 63).then_some(addr.base),
                 offset: addr.offset,
                 high,
                 width,

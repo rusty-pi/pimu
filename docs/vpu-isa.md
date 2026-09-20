@@ -225,7 +225,7 @@ not survive.
 | Sub-op | Mnemonic | What it does | Source |
 |---|---|---|---|
 | 0 | `ld` | 16 elements between memory and the file, one per lane, at `base + disp` | measured: `probes/mix.s`, `probes/conv.s` |
-| 1 | `lookupm` | gather: each lane reads element `acc >> 16` of the table at the address | measured: `probes/mem6.s`, `probes/mem9.s` |
+| 1 | `lookupm` | gather: each lane reads element `acc >> 16` of the table at the address. `(r63)` names no register — the address is then just the displacement — the A slot is read for nothing, and a dash destination reads and discards, which is how `start4.elf` spells every one of them | measured: `probes/mem6.s`, `probes/mem9.s`, `probes/r63.s`, `probes/r63b.s`, `probes/r63c.s`: with the accumulators cleared, a gather off `(r63)` hands every lane the byte at address 0; junk in the A slot changes nothing; a dash destination leaves a witness register untouched |
 | 2 | `lookupml` | gather indexed by `acc & 0xffff` | measured: `probes/mem5.s`, `probes/mem9.s` |
 | 3 | `mem03` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
 | 4 | `st` | the transfer the other way | measured: `probes/mix.s` |
@@ -430,9 +430,9 @@ lane predicate applies to the aggregate as well.
 
 `VecInsn::executable` decides, by field rather than by whole-word template.
 A linear sweep of `start4.elf`'s `.text` with this decoder finds **14650**
-vector instructions, and **13696 of them execute**.
+vector instructions, and **13723 of them execute**.
 
-The 954 that do not split by what `binutils-vc4` objdump makes of the same
+The 927 that do not split by what `binutils-vc4` objdump makes of the same
 address — a better measure than the page they sit in, since a linear sweep
 through a jump table produces valid-looking encodings by accident:
 
@@ -440,7 +440,7 @@ through a jump table produces valid-looking encodings by accident:
 |---|---|---|
 | 389 | words objdump refuses too — it prints them `vec48`, `vunk...` or `vop63.1`. Data: jump tables and constants a sweep cannot tell from code | decompile: `binutils-vc4` objdump over the same addresses |
 | ~250 | the memory sub-ops that kill the firmware — 3, 10, 11-15, 16-23, 25-31. Each writes a zero into the destination element and leaves the board unable to answer the mailbox; none is carried out for that reason | measured: `probes/m11.s`-`probes/m23.s` on Raspberry Pi 4B d03115 boards, one sub-op per board |
-| ~90 | `lookupm`/`indexwritem` in shapes the gather decode does not take — `v8lookupm -,V(0,39),(r63)+r3` and the like | decompile: `binutils-vc4` spells them; which register `r63` stands for in that position is not established |
+| ~60 | `indexwritem` with a dash source, and `lookupm` whose B slot holds a vector rather than an address | decompile: `binutils-vc4` spells them; a scatter with nothing to write, and a gather with no address, were not measured |
 | ~22 | `vst` with a vector slot in the B position. The *load* in that shape reads address 0, measured — the store was not | measured: `probes/mld.s` settled the load only |
 | 67 | addresses objdump does not decode at all: the two linear sweeps drifting apart inside data | decompile: `binutils-vc4` objdump over the same addresses |
 

@@ -634,7 +634,7 @@ confidence = "high"
 subop    = 1
 mnemonic = "lookupm"
 status   = "executes"
-cells    = ["1", "`lookupm`", "gather: each lane reads element `acc >> 16` of the table at the address"]
+cells    = ["1", "`lookupm`", "gather: each lane reads element `acc >> 16` of the table at the address. `(r63)` names no register — the address is then just the displacement — the A slot is read for nothing, and a dash destination reads and discards, which is how `start4.elf` spells every one of them"]
 
 [[section.row.source]]
 kind       = "measured"
@@ -644,6 +644,11 @@ confidence = "high"
 [[section.row.source]]
 kind       = "measured"
 ref        = "`probes/mem9.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/r63.s`, `probes/r63b.s`, `probes/r63c.s`: with the accumulators cleared, a gather off `(r63)` hands every lane the byte at address 0; junk in the A slot changes nothing; a dash destination leaves a witness register untouched"
 confidence = "high"
 
 [[section.row]]
@@ -2227,9 +2232,9 @@ title = "What the model executes"
 body = """
 `VecInsn::executable` decides, by field rather than by whole-word template.
 A linear sweep of `start4.elf`'s `.text` with this decoder finds **14650**
-vector instructions, and **13696 of them execute**.
+vector instructions, and **13723 of them execute**.
 
-The 954 that do not split by what `binutils-vc4` objdump makes of the same
+The 927 that do not split by what `binutils-vc4` objdump makes of the same
 address — a better measure than the page they sit in, since a linear sweep
 through a jump table produces valid-looking encodings by accident:
 """
@@ -2257,11 +2262,11 @@ ref        = "`probes/m11.s`-`probes/m23.s` on Raspberry Pi 4B d03115 boards, on
 confidence = "high"
 
 [[section.row]]
-cells = ["~90", "`lookupm`/`indexwritem` in shapes the gather decode does not take — `v8lookupm -,V(0,39),(r63)+r3` and the like"]
+cells = ["~60", "`indexwritem` with a dash source, and `lookupm` whose B slot holds a vector rather than an address"]
 
 [[section.row.source]]
 kind       = "decompile"
-ref        = "`binutils-vc4` spells them; which register `r63` stands for in that position is not established"
+ref        = "`binutils-vc4` spells them; a scatter with nothing to write, and a gather with no address, were not measured"
 confidence = "low"
 
 [[section.row]]

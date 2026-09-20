@@ -1470,8 +1470,12 @@ impl Vpu {
                             VecRep::Fixed(n) => n,
                             VecRep::FromR0 => self.regs.get(0),
                         };
-                        let d_add = d.addend.map_or(0, |r| self.regs.get(r as usize));
-                        let addr = self.regs.get(base as usize).wrapping_add(offset);
+                        let d_add = d
+                            .and_then(|o| o.addend)
+                            .map_or(0, |r| self.regs.get(r as usize));
+                        let addr = base
+                            .map_or(0, |b| self.regs.get(b as usize))
+                            .wrapping_add(offset);
                         for rep in 0..reps {
                             for lane in 0..vrf::LANES {
                                 if lanes & (1 << lane) == 0 {
@@ -1491,9 +1495,13 @@ impl Vpu {
                                     };
                                     value |= (byte as u32) << (8 * i);
                                 }
-                                let (row, e) =
-                                    d.reg.lane(lane, if step_d { rep } else { 0 }, d_add);
-                                self.vrf.write(row, e, d.reg.elem_bytes as u32, value);
+                                // A dash destination reads and throws the
+                                // bytes away, the way a discarded load does.
+                                if let Some(o) = d {
+                                    let (row, e) =
+                                        o.reg.lane(lane, if step_d { rep } else { 0 }, d_add);
+                                    self.vrf.write(row, e, o.reg.elem_bytes as u32, value);
+                                }
                             }
                         }
                     }
