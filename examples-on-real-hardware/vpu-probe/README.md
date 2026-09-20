@@ -48,6 +48,18 @@ bad blob can take the firmware down with it, and the board then needs a power
 cycle. Keep probes short, return with `rts`, and do not leave the register file
 in a state a firmware thread might be mid-way through using.
 
+Two things are known to wedge it, both found the hard way:
+
+- the **undocumented memory sub-ops** — a probe running `mem03`, `mem16` and
+  `mem19` never returned, and every mailbox call after it blocked. Linux stays
+  up and answers SSH; `vcgencmd` hangs, and the probe process sits in an
+  uninterruptible `ioctl`, so it cannot even be killed. Only a reboot brings
+  the firmware back.
+- **clobbering `r6` and above.** Probes that write `r6`–`r9` came back as
+  `OSError: [Errno 22] Invalid argument` from the mailbox `ioctl` — the
+  firmware's own path through `EXECUTE_CODE` wants them intact. Keep to
+  `r0`–`r5`.
+
 ## The probes
 
 | probe | question it answers |

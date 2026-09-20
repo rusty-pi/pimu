@@ -6,6 +6,12 @@ it by `cargo run -- spec-docs --update`, the same command that regenerates the
 peripheral pages under `docs/periph/`, and `tests/specs.rs` fails if the two
 have drifted apart. **Edit this file, never the Markdown.**
 
+`build.rs` also reads it: the sub-op mnemonic tables the disassembler prints
+(`VEC_ALU_OPS`, `VEC_MEM_OPS`) are generated from the op rows here, and
+`tests/vpu_isa.rs` checks each row's `status` against what
+`VecInsn::executable` really accepts. Writing a sub-op down and forgetting to
+wire it up — or the other way round — fails the build or the test.
+
 ## Format
 
 ```toml
@@ -33,6 +39,11 @@ kind       = "measured"
 ref        = "`probes/vinc.s`"
 confidence = "high"
 ```
+
+A section tagged `ops = "alu"` or `ops = "mem"` is a sub-op table, and its
+rows carry three more keys — `subop`, `mnemonic` and `status` (`executes` or
+`unknown`) — which is what the build reads. Every sub-op of the class has to
+appear exactly once.
 
 A table whose last column is named `Source` gets that column filled in from
 each row's sources, so a row carries one fewer cell than the table has

@@ -194,17 +194,38 @@ and take the ordinary base-plus-displacement address.
 
 | Sub-op | Mnemonic | What it does | Source |
 |---|---|---|---|
-| 0 | `vld` | 16 elements from `base + disp`, one per lane | measured: `probes/mix.s`, `probes/conv.s` |
+| 0 | `ld` | 16 elements between memory and the file, one per lane, at `base + disp` | measured: `probes/mix.s`, `probes/conv.s` |
 | 1 | `lookupm` | gather: each lane reads element `acc >> 16` of the table at the address | measured: `probes/mem6.s`, `probes/mem9.s` |
 | 2 | `lookupml` | gather indexed by `acc & 0xffff` | measured: `probes/mem5.s`, `probes/mem9.s` |
 | 3 | `mem03` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
-| 4 | `vst` | the transfer the other way | measured: `probes/mix.s` |
+| 4 | `st` | the transfer the other way | measured: `probes/mix.s` |
 | 5 | `indexwritem` | scatter: each lane writes its element at index `acc >> 16` | measured: `probes/mem7.s`, `probes/mem9.s` |
 | 6 | `indexwriteml` | scatter indexed by `acc & 0xffff` | measured: `probes/mem7.s`, `probes/mem9.s` |
-| 8 | `memread` | three vector slots and no address operand; what it reads did not fall out of the probes | measured: `probes/memr.s` — the answers fit no address the probe could set |
+| 7 | `mem07` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
+| 8 | `memread` | three vector slots and no address operand; neither the accumulator, a two-register address nor the operands themselves explain what it reads | measured: `probes/memr.s`, `probes/memr2.s` |
 | 9 | `memwrite` | ditto; its destination came back as A widened into the destination's elements | measured: `probes/memr.s` |
-| 24 | `vgetacc` | each lane's accumulator, shifted right by `b & 31`; A is read for nothing. The width field picks the saturation, not an element size: `v8` plain, `v16` clamps into signed 32-bit, `v32` into signed 16-bit | measured: `probes/setf4.s`, `probes/setf5.s` |
-| 7, 10–23, 25–31 | `mem07`, `mem10`… | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
+| 10 | `mem10` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
+| 11 | `mem11` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
+| 12 | `mem12` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
+| 13 | `mem13` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
+| 14 | `mem14` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
+| 15 | `mem15` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
+| 16 | `mem16` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
+| 17 | `mem17` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
+| 18 | `mem18` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
+| 19 | `mem19` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
+| 20 | `mem20` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
+| 21 | `mem21` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
+| 22 | `mem22` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
+| 23 | `mem23` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
+| 24 | `getacc` | each lane's accumulator, shifted right by `b & 31`; A is read for nothing. The width field picks the saturation, not an element size: `v8` plain, `v16` clamps into signed 32-bit, `v32` into signed 16-bit | measured: `probes/setf4.s`, `probes/setf5.s` |
+| 25 | `mem25` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
+| 26 | `mem26` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
+| 27 | `mem27` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
+| 28 | `mem28` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
+| 29 | `mem29` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
+| 30 | `mem30` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
+| 31 | `mem31` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
 
 ## ALU-class sub-ops
 
@@ -228,30 +249,57 @@ destination preset to all-ones, so they do write.
 | 10 | `lsr` | logical right shift | measured: `probes/alu2.s` |
 | 11 | `asr` | arithmetic right shift | measured: `probes/alu2.s` |
 | 12 | `signshl` | shift by a **signed, unmasked** count: left when `b` is positive, right when negative, zeros shifting in; a count past the width empties the element | measured: `probes/alu3.s`, `probes/alu4.s` |
-| 13 | `op13` | writes a lane of zeros | measured: `probes/alu4.s`, `probes/alu5.s` |
+| 13 | `op13` | writes a lane of zeros, at both widths | measured: `probes/alu4.s`, `probes/alu5.s` |
 | 14 | `signasl` | the same with the sign shifting in | measured: `probes/alu4.s` |
 | 15 | `signasls` | `signasl`, saturating | measured: `probes/alu4.s` |
-| 16–19 | `and` `or` `eor` `bic` | the obvious | measured: `probes/alu.s` |
+| 16 | `and` | `a & b` | measured: `probes/alu.s` |
+| 17 | `or` | `a \| b` | measured: `probes/alu.s` |
+| 18 | `eor` | `a ^ b` | measured: `probes/alu.s` |
+| 19 | `bic` | `a & !b` | measured: `probes/alu.s` |
 | 20 | `count` | `popcount(a) + popcount(b)`; zeros at `v32` | measured: `probes/alu.s`, `probes/alu5.s` |
 | 21 | `msb` | the index of the highest bit set in **either** operand; all-ones when neither has one | measured: `probes/wmix3.s` |
-| 22, 23 | `op22` `op23` | write a lane of zeros | measured: `probes/alu5.s` |
-| 24, 25 | `min` `max` | signed | measured: `probes/alu2.s` |
-| 26, 27 | `dist` `dists` | `abs(a - b)`, wrapping and saturating | measured: `probes/alu2.s` |
+| 22 | `op22` | writes a lane of zeros, at both widths | measured: `probes/alu5.s` |
+| 23 | `op23` | writes a lane of zeros, at both widths | measured: `probes/alu5.s` |
+| 24 | `min` | the smaller, signed | measured: `probes/alu2.s` |
+| 25 | `max` | the larger, signed | measured: `probes/alu2.s` |
+| 26 | `dist` | `abs(a - b)`, wrapping | measured: `probes/alu2.s` |
+| 27 | `dists` | `abs(a - b)`, saturating | measured: `probes/alu2.s` |
 | 28 | `clip` | `a` clamped into `0 ..= b`, signed | measured: `probes/alu2.s` |
 | 29 | `sign` | `b + signum(a)` | measured: `probes/alu2.s` |
 | 30 | `clips` | `b * signum(a)`, `signum(0)` counting as `+1`; zeros at `v16` | measured: `probes/alu4.s`, `probes/alu5.s` |
 | 31 | `testmag` | `1` where `abs(a) >= b`, else `0`; zeros at `v32` | measured: `probes/alu3.s`, `probes/alu4.s` |
-| 32, 33 | `add` `adds` | sum, plain and saturating | measured: `probes/alu2.s` |
-| 34, 35 | `addc` `addsc` | the same **plus the lane's carry flag** | measured: `probes/alu3.s` |
-| 36–39 | `sub` `subs` `subc` `subsc` | `a - b`, likewise | measured: `probes/alu2.s`, `probes/alu3.s` |
-| 40–43 | `rsub` `rsubs` `rsubc` `rsubsc` | `b - a`, likewise | measured: `probes/alu2.s`, `probes/alu3.s` |
-| 44–47 | `op44`…`op47` | write a lane of zeros | measured: `probes/alu3.s`, `probes/alu5.s` |
-| 48, 49 | `mull` `mulls` | the product's low half, plain and saturating | measured: `probes/mul.s` |
-| 50, 51 | `mulm` `mulms` | the product shifted right by eight — a fixed-point multiply | measured: `probes/mul.s` |
-| 52–55 | `mulhd.{ss,su,us,uu}` | the product's high half, each operand read as the suffix says | measured: `probes/mul.s` |
-| 56–59 | `mulhn.{ss,su,us,uu}` | the same, rounded | measured: `probes/mul.s` |
-| 60, 61 | `mulht.ss` `mulht.su` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
-| 62, 63 | `op62` `op63` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
+| 32 | `add` | `a + b` | measured: `probes/alu2.s` |
+| 33 | `adds` | `a + b`, saturating | measured: `probes/alu2.s` |
+| 34 | `addc` | `a + b` **plus the lane's carry flag** | measured: `probes/alu3.s` |
+| 35 | `addsc` | the same, saturating | measured: `probes/alu3.s` |
+| 36 | `sub` | `a - b` | measured: `probes/alu2.s` |
+| 37 | `subs` | `a - b`, saturating | measured: `probes/alu2.s` |
+| 38 | `subc` | `a - b` minus the lane's carry flag | measured: `probes/alu3.s` |
+| 39 | `subsc` | the same, saturating | measured: `probes/alu3.s` |
+| 40 | `rsub` | `b - a` | measured: `probes/alu2.s` |
+| 41 | `rsubs` | `b - a`, saturating | measured: `probes/alu2.s` |
+| 42 | `rsubc` | `b - a` minus the lane's carry flag | measured: `probes/alu3.s` |
+| 43 | `rsubsc` | the same, saturating | measured: `probes/alu3.s` |
+| 44 | `op44` | writes a lane of zeros, at both widths | measured: `probes/alu3.s`, `probes/alu5.s` |
+| 45 | `op45` | writes a lane of zeros, at both widths | measured: `probes/alu3.s`, `probes/alu5.s` |
+| 46 | `op46` | writes a lane of zeros, at both widths | measured: `probes/alu3.s`, `probes/alu5.s` |
+| 47 | `op47` | writes a lane of zeros, at both widths | measured: `probes/alu3.s`, `probes/alu5.s` |
+| 48 | `mull` | the product's low half | measured: `probes/mul.s` |
+| 49 | `mulls` | the product's low half, saturating | measured: `probes/mul.s` |
+| 50 | `mulm` | the product shifted right by eight — a fixed-point multiply | measured: `probes/mul.s` |
+| 51 | `mulms` | the same, saturating | measured: `probes/mul.s` |
+| 52 | `mulhd.ss` | the product's high half, both operands signed — or, with the `L` bit, `vmul32.ss` | measured: `probes/mul.s`, `probes/mul32.s` |
+| 53 | `mulhd.su` | the high half, A signed and B unsigned — with `L`, `vmul32.su` | measured: `probes/mul.s`, `probes/mul32.s` |
+| 54 | `mulhd.us` | the high half, A unsigned and B signed — with `L`, `vmul32.us` | measured: `probes/mul.s`, `probes/mul32.s` |
+| 55 | `mulhd.uu` | the high half, both unsigned — with `L`, `vmul32.uu` | measured: `probes/mul.s`, `probes/mul32.s` |
+| 56 | `mulhn.ss` | the high half, rounded, both signed | measured: `probes/mul.s` |
+| 57 | `mulhn.su` | the high half, rounded, A signed | measured: `probes/mul.s` |
+| 58 | `mulhn.us` | the high half, rounded, B signed | measured: `probes/mul.s` |
+| 59 | `mulhn.uu` | the high half, rounded, both unsigned | measured: `probes/mul.s` |
+| 60 | `mulht.ss` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
+| 61 | `mulht.su` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
+| 62 | `op62` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
+| 63 | `op63` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
 
 With the `L` bit set — a `v32` width on sub-ops 52–55 — the multiply group
 becomes `vmul32.{ss,su,us,uu}`: a **16 × 16 into 32** multiply, taking the low

@@ -15,8 +15,8 @@ pub struct Isa {
     pub sections: Vec<Section>,
 }
 
-/// A section of the reference. Its `body` is prose; a `table` or a `rows`
-/// list carries the facts, each row with the source it rests on.
+/// A section of the reference. Its `body` is prose; the `rows` carry the
+/// facts, each with the source it rests on.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Section {
@@ -29,6 +29,10 @@ pub struct Section {
     /// Markdown printed after the table.
     #[serde(default)]
     pub after: Option<String>,
+    /// `"alu"` or `"mem"`: the rows of this section are the sub-op table of
+    /// that class, and the build reads the mnemonics out of them.
+    #[serde(default)]
+    pub ops: Option<OpClass>,
     #[serde(default)]
     pub columns: Vec<String>,
     /// One row per fact. The last column is filled in from the row's sources
@@ -44,8 +48,38 @@ pub struct Section {
 #[serde(deny_unknown_fields)]
 pub struct Row {
     pub cells: Vec<String>,
+    /// In an op-table section: the sub-op number this row describes.
+    #[serde(default)]
+    pub subop: Option<u8>,
+    /// In an op-table section: the mnemonic, as `binutils-vc4` spells it
+    /// without its `v<w>` prefix. This is the name the model prints.
+    #[serde(default)]
+    pub mnemonic: Option<String>,
+    /// In an op-table section: whether the model can carry the op out. The
+    /// build turns this into a table `tests/vpu_isa.rs` checks against
+    /// `VecAluOp::from_subop`, so the page and the model cannot drift apart.
+    #[serde(default)]
+    pub status: Option<Status>,
     #[serde(default, rename = "source")]
     pub sources: Vec<Source>,
+}
+
+/// Which sub-op table a section carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OpClass {
+    Alu,
+    Mem,
+}
+
+/// What the model does with a sub-op.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Status {
+    /// Measured, and the model carries it out.
+    Executes,
+    /// The encoding has a name and nothing more; the model faults.
+    Unknown,
 }
 
 fn two() -> u8 {
@@ -76,7 +110,123 @@ pub fn load(path: &std::path::Path) -> Result<Isa, String> {
             return Err(format!("{}: a row has no source", section.title));
         }
     }
+    for class in [OpClass::Alu, OpClass::Mem] {
+        let rows: Vec<&Row> = isa
+            .sections
+            .iter()
+            .filter(|s| s.ops == Some(class))
+            .flat_map(|s| s.rows.iter())
+            .collect();
+        if rows.is_empty() {
+            return Err(format!("no {} sub-op table", class.as_str()));
+        }
+        let mut seen = vec![false; class.count()];
+        for row in rows {
+            let (Some(subop), Some(mnemonic), Some(_)) =
+                (row.subop, row.mnemonic.as_ref(), row.status)
+            else {
+                return Err(format!(
+                    "{} table: a row is missing `subop`, `mnemonic` or `status`: {:?}",
+                    class.as_str(),
+                    row.cells
+                ));
+            };
+            let slot = seen
+                .get_mut(subop as usize)
+                .ok_or_else(|| format!("{} sub-op {subop} is out of range", class.as_str()))?;
+            if std::mem::replace(slot, true) {
+                return Err(format!("{} sub-op {subop} listed twice", class.as_str()));
+            }
+            if mnemonic.is_empty() {
+                return Err(format!(
+                    "{} sub-op {subop} has an empty mnemonic",
+                    class.as_str()
+                ));
+            }
+        }
+        if let Some(missing) = seen.iter().position(|seen| !seen) {
+            return Err(format!(
+                "{} sub-op {missing} is not in the table",
+                class.as_str()
+            ));
+        }
+    }
     Ok(isa)
+}
+
+impl OpClass {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            OpClass::Alu => "ALU",
+            OpClass::Mem => "memory",
+        }
+    }
+
+    /// How many sub-ops the class has.
+    pub fn count(self) -> usize {
+        match self {
+            OpClass::Alu => 64,
+            OpClass::Mem => 32,
+        }
+    }
+}
+
+/// The mnemonics and statuses of one sub-op class, in sub-op order.
+pub fn op_table(isa: &Isa, class: OpClass) -> Vec<(String, Status)> {
+    let mut out = vec![(String::new(), Status::Unknown); class.count()];
+    for row in isa
+        .sections
+        .iter()
+        .filter(|s| s.ops == Some(class))
+        .flat_map(|s| s.rows.iter())
+    {
+        let (Some(subop), Some(mnemonic), Some(status)) =
+            (row.subop, row.mnemonic.as_ref(), row.status)
+        else {
+            continue;
+        };
+        out[subop as usize] = (mnemonic.clone(), status);
+    }
+    out
+}
+
+/// The Rust the build writes beside the model: the mnemonic tables the
+/// disassembler prints, and what the page claims the model can carry out.
+pub fn rust_module(isa: &Isa) -> String {
+    let mut s = String::new();
+    writeln!(
+        s,
+        "// Generated from isa/vpu.toml by build.rs – do not edit.\n"
+    )
+    .unwrap();
+    for (class, name, len) in [
+        (OpClass::Alu, "VEC_ALU_OPS", 64),
+        (OpClass::Mem, "VEC_MEM_OPS", 32),
+    ] {
+        let table = op_table(isa, class);
+        writeln!(
+            s,
+            "/// Sub-op mnemonics of the {} class, as `binutils-vc4` spells them.",
+            class.as_str()
+        )
+        .unwrap();
+        writeln!(s, "pub const {name}: [&str; {len}] = [").unwrap();
+        for (mnemonic, _) in &table {
+            writeln!(s, "    \"{mnemonic}\",").unwrap();
+        }
+        writeln!(s, "];\n").unwrap();
+        writeln!(
+            s,
+            "/// Which of them `isa/vpu.toml` says the model carries out."
+        )
+        .unwrap();
+        writeln!(s, "pub const {name}_EXECUTE: [bool; {len}] = [").unwrap();
+        for (_, status) in &table {
+            writeln!(s, "    {},", *status == Status::Executes).unwrap();
+        }
+        writeln!(s, "];\n").unwrap();
+    }
+    s
 }
 
 impl Section {

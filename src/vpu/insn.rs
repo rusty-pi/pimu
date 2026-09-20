@@ -1783,6 +1783,11 @@ impl VecInsn {
     }
 }
 
+/// The sub-op mnemonics, generated from `isa/vpu.toml` by `build.rs`: the
+/// reference page and the disassembler print the same names because they are
+/// the same table.
+pub use crate::isa::{VEC_ALU_OPS, VEC_MEM_OPS};
+
 /// One slot in `binutils-vc4` objdump's spelling: `HX(3,32)++`, `V(16,12)+r4*`,
 /// `-`, or — for a dash in the B position — the scalar register it names.
 fn slot_str(s: VecSlot, scalar: bool) -> String {
@@ -1880,110 +1885,6 @@ impl std::fmt::Debug for VecInsn {
         Ok(())
     }
 }
-
-/// `define-table M` in `videocoreiv.arch` — the memory-class sub-ops.
-pub const VEC_MEM_OPS: [&str; 32] = [
-    "ld",
-    "lookupm",
-    "lookupml",
-    "mem03",
-    "st",
-    "indexwritem",
-    "indexwriteml",
-    "mem07",
-    "memread",
-    "memwrite",
-    "mem10",
-    "mem11",
-    "mem12",
-    "mem13",
-    "mem14",
-    "mem15",
-    "mem16",
-    "mem17",
-    "mem18",
-    "mem19",
-    "mem20",
-    "mem21",
-    "mem22",
-    "mem23",
-    "getacc",
-    "mem25",
-    "mem26",
-    "mem27",
-    "mem28",
-    "mem29",
-    "mem30",
-    "mem31",
-];
-
-/// `define-table v` in `videocoreiv.arch` — the ALU-class sub-ops.
-pub const VEC_ALU_OPS: [&str; 64] = [
-    "mov",
-    "bitplanes",
-    "even",
-    "odd",
-    "interl",
-    "interh",
-    "brev",
-    "ror",
-    "shl",
-    "shls",
-    "lsr",
-    "asr",
-    "signshl",
-    "op13",
-    "signasl",
-    "signasls",
-    "and",
-    "or",
-    "eor",
-    "bic",
-    "count",
-    "msb",
-    "op22",
-    "op23",
-    "min",
-    "max",
-    "dist",
-    "dists",
-    "clip",
-    "sign",
-    "clips",
-    "testmag",
-    "add",
-    "adds",
-    "addc",
-    "addsc",
-    "sub",
-    "subs",
-    "subc",
-    "subsc",
-    "rsub",
-    "rsubs",
-    "rsubc",
-    "rsubsc",
-    "op44",
-    "op45",
-    "op46",
-    "op47",
-    "mull",
-    "mulls",
-    "mulm",
-    "mulms",
-    "mulhd.ss",
-    "mulhd.su",
-    "mulhd.us",
-    "mulhd.uu",
-    "mulhn.ss",
-    "mulhn.su",
-    "mulhn.us",
-    "mulhn.uu",
-    "mulht.ss",
-    "mulht.su",
-    "op62",
-    "op63",
-];
 
 impl AluOp {
     pub fn mnemonic(self) -> &'static str {

@@ -3786,3 +3786,50 @@ fn which_ops_write_a_carry() {
         assert_eq!(&got, want, "row {row}");
     }
 }
+
+/// The reference page and the model cannot drift apart.
+///
+/// `isa/vpu.toml` says, sub-op by sub-op, whether the model carries the
+/// operation out; `build.rs` turns that into a table, and this compares it
+/// with what `VecInsn::executable` actually accepts. A sub-op measured into
+/// the page but not wired up — or wired up and never written down — fails
+/// here.
+#[test]
+fn the_reference_page_matches_the_model() {
+    use rpi_virt_fw::vpu::insn::{VecAluOp, VEC_ALU_OPS, VEC_MEM_OPS};
+
+    for (subop, (name, says_executes)) in VEC_ALU_OPS
+        .iter()
+        .zip(rpi_virt_fw::isa::VEC_ALU_OPS_EXECUTE)
+        .enumerate()
+        .map(|(i, (n, e))| (i as u8, (n, e)))
+    {
+        // A sub-op counts as carried out when either width takes it: several
+        // mean one thing at `v16` and write zeros at `v32`.
+        let executes = [2, 4]
+            .into_iter()
+            .any(|w| VecAluOp::from_subop(subop, w).is_some())
+            || (48..=59).contains(&subop)
+            || VecAluOp::from_mul_subop(subop, 4).is_some();
+        assert_eq!(
+            executes, says_executes,
+            "ALU sub-op {subop} (`{name}`): the page says {says_executes}, the model says {executes}"
+        );
+    }
+
+    // The memory class has no one function to ask, so the set is spelled out;
+    // `mem_transfer`, `gather` and `getacc` between them cover exactly these.
+    const MEM_EXECUTES: [u8; 7] = [0, 1, 2, 4, 5, 6, 24];
+    for (subop, (name, says_executes)) in VEC_MEM_OPS
+        .iter()
+        .zip(rpi_virt_fw::isa::VEC_MEM_OPS_EXECUTE)
+        .enumerate()
+        .map(|(i, (n, e))| (i as u8, (n, e)))
+    {
+        assert_eq!(
+            MEM_EXECUTES.contains(&subop),
+            says_executes,
+            "memory sub-op {subop} (`{name}`)"
+        );
+    }
+}
