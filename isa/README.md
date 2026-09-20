@@ -57,5 +57,6 @@ columns; every row in such a table must name at least one source. `kind` and
 |---|---|
 | `measured` | something a probe in `examples-on-real-hardware/vpu-probe/` established on a real board; name the probe |
 | `decompile` | something read out of `start4.elf` (give the address) or out of the `binutils-vc4` opcode tables |
+| `manual` | something named in Herman Hermitage's VideoCore IV Programmers Manual. Never on its own — it says where to look, and a `measured` source beside it says what the board actually did |
 | `trace` | something the model's own boots pin: the firmware would come out differently if it were wrong |
 | `inferred` | a guess — say what it rests on, and keep the confidence honest |

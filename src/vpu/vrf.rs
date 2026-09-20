@@ -28,6 +28,14 @@ pub const DIM: usize = 64;
 /// Lanes in a vector register. Fixed by the architecture.
 pub const LANES: u32 = 16;
 
+/// Bytes in the unit's lookup table.
+pub const LUT: usize = 1024;
+
+/// Bytes of that table each lane addresses. Measured: sixteen lanes writing
+/// the same index do not overwrite one another, and each reads its own value
+/// back — so the 1 KiB is sixteen private 64-byte regions, one per lane.
+pub const LUT_LANE: usize = LUT / LANES as usize;
+
 pub struct Vrf {
     /// Boxed, not inline: [`Vpu`](crate::vpu::Vpu) is stepped a billion times a
     /// boot and the hot fields around this one have to stay in a few cache
@@ -44,6 +52,13 @@ pub struct Vrf {
     /// the operand `min`/`max` chose, the last bit out of a shift — and the
     /// rest leave it as they found it.
     pub lane_c: u16,
+    /// The vector unit's own 1 KiB lookup table, the one `readlut` and
+    /// `writelut` address. Measured with `probes/lut.s`: a `v8memwrite`
+    /// followed by a `v8memread` over the same indices hands back exactly what
+    /// was written, and a `v16` pair round-trips halfwords at twice the index.
+    /// Each lane addresses its own [`LUT_LANE`] bytes of it — lanes that share
+    /// an index keep their own value, so the table is banked, not shared.
+    pub lut: Box<[u8; LUT]>,
     /// One accumulator per lane. Wider than an element — four accumulates of
     /// `0xffff` read back as `0x3fffc` — so it is kept as a `u32`; the `SIGN`
     /// bit of the modifier decides how a result is extended into it.
@@ -54,6 +69,7 @@ impl Default for Vrf {
     fn default() -> Vrf {
         Vrf {
             bytes: Box::new([0; DIM * DIM]),
+            lut: Box::new([0; LUT]),
             lane_z: 0,
             lane_n: 0,
             lane_c: 0,

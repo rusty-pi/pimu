@@ -30,6 +30,12 @@ with `v32st HY(0++,0),(r0+=r3) REP64` — 64 rows of 64 bytes, exactly one page.
 per `mmap` faults), and `/dev/mem` will not map it at all on a stock 64-bit
 Raspberry Pi OS.
 
+`vpuprobe2.py` is the same thing with the mailbox call in a thread that times
+out after five seconds: when the blob wedges the VPU the page is read and
+printed anyway, so a probe of an encoding that hangs still says how far it
+got. Use it for anything undocumented — the firmware is gone either way, but
+at least the measurement survives.
+
 ## Running one
 
 Assemble with the `vc4` binutils port — `poizan42/binutils-vc4`, whose vector
@@ -89,9 +95,11 @@ Two things are known to wedge it, both found the hard way:
 | `setf.s`, `setf2.s`, `setf3.s`, `setfc.s` | what `SETF` leaves in the lane flags, and which ops touch the carry |
 | `setf4.s`, `setf5.s` | whether a transfer writes flags at all, and what `vgetacc` reads |
 | `noena.s` | an accumulator modifier without `ENA`, and `SETF` under a predicate |
-| `mem5.s`–`mem9.s`, `memr.s` | the gather and the scatter, indexed by the accumulator — and `memread`/`memwrite`, which they did not settle (`mem2-vectors.hex`, `mr-vectors.hex`) |
+| `mem5.s`–`mem9.s`, `memr.s` | the gather and the scatter, indexed by the accumulator (`mem2-vectors.hex`, `mr-vectors.hex`) |
 | `mul32.s` | the family the `L` bit selects (`mul32-vectors.hex`) |
 | `ldodd.s` | what a load does with an A slot that names a register, and with a dash that carries an addend |
+| `mhdt.s` | ALU sub-ops 60-63, and an accumulator modifier that reads without writing back |
+| `lut.s`, `lut2.s` | `memread`/`memwrite`: the unit's own lookup table, how it is banked, and the three ways an index is spelled |
 
 ## What they found (Raspberry Pi 4B d03115, firmware 1.20260824)
 
@@ -176,6 +184,20 @@ Two things are known to wedge it, both found the hard way:
   clamped into the destination's signed range. `SUB` is not a subtracting
   accumulate — it leaves the accumulator alone and hands the destination
   `accumulator - result`.
+- **Sub-ops 60 and 61 truncate where `mulhd` floors**: `0x0ff0 * 0xfff1` — a
+  product of −61200 — answers `0x0000` there and `0xffff` from `mulhd`. 62 and
+  63 write a lane of zeros, like the other blanks.
+- An accumulator modifier with `ENA` but **no `WBA`** does not accumulate: the
+  destination takes `result + accumulator`, or `accumulator - result` with
+  `SUB`, and the accumulator itself does not move. `CLRA UACC(A)` followed by
+  `UADD(B)` answers `A + B + A` with `A` still in the accumulator.
+- `memread` and `memwrite` are the **lookup table**: 1 KiB inside the unit,
+  banked sixteen ways so each lane indexes its own 64 bytes at `b * width`.
+  Seven lanes writing index `0xff` each read their own value back, which is
+  what says it is banked rather than shared. The index is a vector slot, a
+  scalar register or an immediate — a scalar reaching every lane alike — and
+  scales by the element width whichever way it is spelled, so a `v16` write at
+  3 leaves byte 3 alone.
 - The scalar result unit: `SUMU`/`SUMS` add the lanes up unsigned and signed,
   `MAX` answers the largest signed, `IMIN` the index of the first smallest and
   `IMAX` the index of the last largest; `max2`, `max4` and `max6` answered
@@ -184,9 +206,10 @@ Two things are known to wedge it, both found the hard way:
 
 ## Still open
 
-What the memory class does beyond `vld`, `vst` and `vgetacc` — `lookupm`,
-`memread`, `memwrite`, `indexwrite` and the rest — is the largest thing still
-unmeasured. So is the carry `SETF` leaves for the ops outside the list above,
-what the `L` bit selects in the multiply group, and what an unsigned `SUB` in
-the high half answers: it matched neither the wrapped difference nor a clamped
-one, lane for lane.
+Memory sub-op 3 and the rest above 9: sub-op 3 is the one that took the
+firmware down when a probe ran it, and 16 and 19 did the same, so whatever
+they do costs a reboot to find out. Then the `vld` forms that put a vector
+slot in the B position, `vgetacc` with a dash destination feeding the scalar
+result unit, what a displacement beside a scalar B operand does, and what an
+unsigned `SUB` in the high half answers — it matched neither the wrapped
+difference nor a clamped one, lane for lane.

@@ -2,6 +2,20 @@
 
 # VC4 VPU — instruction set reference
 
+> **Disclaimer**
+>
+> This is an independent documentation project, put together from static
+> analysis of published firmware images and from trial and error on real
+> hardware. It is not sanctioned by, connected with or endorsed by Broadcom or
+> Raspberry Pi Ltd., and no Broadcom document or material beyond the publicly
+> available ones was used in making it. No copyrighted material is reproduced
+> here.
+>
+> It is written for non-commercial use, in the expectation that it is useful to
+> anyone trying to understand the processor their Raspberry Pi actually boots
+> on. Everything in it is offered as a description of what one board did when
+> asked, not as a specification: where the two disagree, the silicon is right.
+
 The **VPU** is the processor that runs `bootcode` and `start4.elf` on a
 BCM2711 — a dual-core scalar-plus-vector machine, and the first thing the chip
 executes. It is a **VC4** core: the same instruction set as the BCM2835's,
@@ -18,6 +32,7 @@ and the reference.
 |---|---|
 | `measured` | run on a Raspberry Pi 4B d03115 through the firmware's `EXECUTE_CODE` mailbox tag; the probe that did it is named |
 | `decompile` | read out of `start4.elf` — an address, or the `binutils-vc4` opcode tables |
+| `manual` | named in Herman Hermitage's VideoCore IV Programmers Manual, and then measured here — never on its own |
 | `trace` | the model boots the real firmware, and this is what makes the boot come out right |
 | `inferred` | a guess, with the reasoning |
 
@@ -185,12 +200,14 @@ number in `op2-0`. Bit numbering is cgen's — 16-bit parcel in **memory** order
 Sources:
 
 - decompile (high): `binutils-vc4` opcode tables
-- decompile (high): 15054 of the 15180 vector words in `start4.elf`'s `.text` disassemble identically in this model and in `binutils-vc4`'s objdump — _the other 126 are ones objdump prints as a raw `vec48`/`vec80`, having no form for them_
+- decompile (high): the whole of `start4.elf`'s `.text`, compared word for word against `binutils-vc4`'s objdump: 14390 of the 14650 vector instructions this decoder finds sit where objdump decodes a vector instruction too, and the spellings agree but for the ones objdump prints as a raw `vec48`/`vec80`, having no form for them — _the remainder is the two linear sweeps drifting apart inside data, where a different length read leads into a different stream_
 
 ## Memory-class sub-ops
 
 The gather and the scatter scale their index by the operation's element width
-and take the ordinary base-plus-displacement address.
+and take the ordinary base-plus-displacement address. `memread` and `memwrite`
+address neither: they are the unit's own lookup table, 1 KiB of it, banked
+sixteen ways so that each lane indexes its own 64 bytes.
 
 | Sub-op | Mnemonic | What it does | Source |
 |---|---|---|---|
@@ -202,8 +219,8 @@ and take the ordinary base-plus-displacement address.
 | 5 | `indexwritem` | scatter: each lane writes its element at index `acc >> 16` | measured: `probes/mem7.s`, `probes/mem9.s` |
 | 6 | `indexwriteml` | scatter indexed by `acc & 0xffff` | measured: `probes/mem7.s`, `probes/mem9.s` |
 | 7 | `mem07` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
-| 8 | `memread` | three vector slots and no address operand; neither the accumulator, a two-register address nor the operands themselves explain what it reads | measured: `probes/memr.s`, `probes/memr2.s` |
-| 9 | `memwrite` | ditto; its destination came back as A widened into the destination's elements | measured: `probes/memr.s` |
+| 8 | `memread` | `readlut`: each lane reads its own 64-byte region of the unit's 1 KiB table at `b * width`, A unused. B is a vector slot, a scalar register or an immediate; a scalar reaches every lane alike | measured: `probes/lut.s`: a `v8memwrite` then a `v8memread` over the same indices hands every lane its own value back — seven lanes sharing index `0xff` and each keeping its own value is what says the table is banked — and the `v16` pair round-trips at twice the index; manual: the VideoCore IV Programmers Manual names sub-ops 8 and 9 `readlut`/`writelut` over a 1 KB table |
+| 9 | `memwrite` | `writelut`: puts A at that index, and hands the destination the same value | measured: `probes/lut.s`, `probes/lut2.s`: a scalar write at 3 and a vector index of threes reach the same byte, and a `v16` write at 3 leaves byte 3 alone — the index scales by the element width whichever way it is spelled |
 | 10 | `mem10` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
 | 11 | `mem11` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
 | 12 | `mem12` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
@@ -296,10 +313,10 @@ destination preset to all-ones, so they do write.
 | 57 | `mulhn.su` | the high half, rounded, A signed | measured: `probes/mul.s` |
 | 58 | `mulhn.us` | the high half, rounded, B signed | measured: `probes/mul.s` |
 | 59 | `mulhn.uu` | the high half, rounded, both unsigned | measured: `probes/mul.s` |
-| 60 | `mulht.ss` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
-| 61 | `mulht.su` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
-| 62 | `op62` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
-| 63 | `op63` | — | decompile: `binutils-vc4` names the encoding; what it does is not established |
+| 60 | `mulht.ss` | the product's high half **truncated** towards zero, not floored — both operands signed | measured: `probes/mhdt.s`: `0x0ff0 * 0xfff1` — product −61200 — answers `0x0000` here and `0xffff` from `mulhd`; manual: the VideoCore IV Programmers Manual calls sub-ops 60 and 61 the round-to-zero high multiply |
+| 61 | `mulht.su` | the product's high half **truncated** towards zero, not floored — A signed, B unsigned | measured: `probes/mhdt.s`: `0x0ff0 * 0xfff1` — product −61200 — answers `0x0000` here and `0xffff` from `mulhd`; manual: the VideoCore IV Programmers Manual calls sub-ops 60 and 61 the round-to-zero high multiply |
+| 62 | `op62` | writes a lane of zeros, at both widths | measured: `probes/mhdt.s`, over a destination preset to all-ones |
+| 63 | `op63` | writes a lane of zeros, at both widths | measured: `probes/mhdt.s`, over a destination preset to all-ones |
 
 With the `L` bit set — a `v32` width on sub-ops 52–55 — the multiply group
 becomes `vmul32.{ss,su,us,uu}`: a **16 × 16 into 32** multiply, taking the low
@@ -375,10 +392,11 @@ chains are written in.
 |---|---|---|
 | `CLRA` | clears the accumulator first — **even without `ENA`** | measured: `probes/noena.s` |
 | `ENA` | accumulate at all; without it the destination takes the raw result | measured: `probes/noena.s` |
+| `ENA` without `WBA` | the destination takes `result + accumulator` — `result` taken off it with `SUB` — and the accumulator itself does not move: `UADD`/`USUB`, not an accumulate | measured: `probes/mhdt.s`: `CLRA UACC(A)` then `UADD(B)` answers `A + B + A`, with `A` still in the accumulator afterwards; manual: the VideoCore IV Programmers Manual's names for the two forms |
 | `SIGN` | read the result signed (`SACC`) rather than unsigned (`UACC`) on the way in | measured: `probes/acc3.s`, `probes/acch.s` |
 | `HIGH` | accumulate the result **shifted left by sixteen**; a write-back reads it back shifted down by sixteen, clamped into the destination's signed range | measured: `probes/acch.s` |
 | `WBA` | the destination takes the accumulator rather than the raw result | measured: `probes/accmix.s`, `probes/wacc.s` |
-| `SUB` | **not** a subtracting accumulate: the accumulator is left alone and the destination takes `accumulator - result` — `(acc - (result << 16)) >> 16` with `HIGH` | measured: `probes/usub.s` |
+| `SUB` | with `ENA` and no `WBA` — the `USUB` form — **not** a subtracting accumulate: the accumulator is left alone and the destination takes `accumulator - result`, `(acc - (result << 16)) >> 16` with `HIGH`. Alongside `WBA` the model subtracts into the accumulator instead, which no probe has checked | measured: `probes/usub.s`, read back with `vgetacc` |
 | `SUB` with `HIGH`, unsigned | matched neither the wrapped difference nor a clamped one, lane for lane — it faults | measured: `probes/usub.s` |
 
 ## The scalar result unit
@@ -398,24 +416,24 @@ lane predicate applies to the aggregate as well.
 ## What the model executes
 
 `VecInsn::executable` decides, by field rather than by whole-word template.
-Against the 15180 vector instructions a linear sweep of `start4.elf`'s `.text`
-decodes, **13282 execute**.
+A linear sweep of `start4.elf`'s `.text` with this decoder finds **14650**
+vector instructions, and **13018 of them execute**.
 
 What is left is mostly not instructions. Splitting it by whether the
 instruction's 4 KiB page looks like code — 60% or more of its vector words
-executable — puts about 190 in code and about 1700 in pages that disassemble as
-vector instructions only because a linear sweep cannot tell a jump table from
-one.
+executable — puts **113** in code pages and **1519** in pages that disassemble
+as vector instructions only because a linear sweep cannot tell a jump table
+from one. The count of vector words is itself a property of the sweep: a
+decoder that reads a length differently walks a different stream through the
+data, which is why this number and `binutils-vc4` objdump's are not the same.
 
 | Left in code pages | Reason | Source |
 |---|---|---|
-| ~57 | `memread`, whose operands the probes could not pin | measured: `probes/memr.s` |
-| ~34 | `vld` forms whose remaining fields are unexplained | decompile: `binutils-vc4` spells them; the fields are not established |
-| ~12 | memory sub-op 3 | decompile: `binutils-vc4` names it `mem03` and nothing more |
-| ~11 | `vgetacc` with a dash destination | inferred: what a discarded accumulator read is for was not established |
+| ~32 | `vld` forms whose remaining fields are unexplained — a vector slot in the B position, a dash destination carrying an addend | decompile: `binutils-vc4` spells them; the fields are not established |
+| ~14 | memory sub-op 3 | decompile: `binutils-vc4` names it `mem03` and nothing more; a probe that ran it took the firmware down with it |
+| ~10 | `vgetacc` with a dash destination, feeding the scalar result unit | inferred: what a discarded accumulator read is for was not established |
 | ~10 | `SETF` where the B slot is a scalar with a displacement | decompile: `binutils-vc4` prints `r2-1`; what the displacement does to a scalar operand is not established |
-| ~9 | `memwrite` | measured: `probes/memr.s` |
-| rest | one-offs: a register wider than the operation, an unsigned `SUB` in the high half, `mulm` under `SETF` | measured: `probes/usub.s`, `probes/setfc.s` |
+| rest | one-offs, and words inside a code page that the sweep cannot tell from the data beside them — `binutils-vc4` prints most of them as `vunk...` or `vop63.1` too | measured: `probes/usub.s`, `probes/setfc.s` |
 
 None of it is reached on a firmware boot: `boot` stops on an unimplemented
 instruction by default, and `boot-check testdata/boot/firmware-boot.toml`

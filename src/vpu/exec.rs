@@ -10,8 +10,8 @@ const CF_TRACE_LEN: usize = 512;
 use super::decode::decode;
 use super::icache::DecodeCache;
 use super::insn::{
-    AddrMode, AluOp, Base, Insn, MemWidth, Op, RegOrImm, VecAluOp, VecExec, VecInsn, VecReg,
-    VecRep, VecSource, VecSruFunc, Writeback,
+    AddrMode, AluOp, Base, Insn, MemWidth, Op, RegOrImm, VecAluOp, VecExec, VecInsn, VecLutIndex,
+    VecReg, VecRep, VecSource, VecSruFunc, Writeback,
 };
 use super::length::InsnClass;
 use super::reg::{Cond, Flags, Regs, GP, LR, SP};
@@ -1334,53 +1334,71 @@ impl Vpu {
                                     if acc.clear {
                                         *slot = 0;
                                     }
-                                    // The result enters the accumulator at its
-                                    // own width, extended as `SIGN` says.
+                                    // The result enters at its own width,
+                                    // extended as `SIGN` says and sixteen bits
+                                    // up in the `...H` forms.
                                     let bits = width * 8;
                                     let v = if acc.signed && bits < 32 {
                                         ((res << (32 - bits)) as i32 >> (32 - bits)) as u32
                                     } else {
                                         res
                                     };
-                                    // The `...H` forms accumulate into the
-                                    // high half.
                                     let v = if acc.high { v << 16 } else { v };
-                                    if !acc.enable {
-                                        // `CLRA` alone clears and stops there.
-                                    } else
-                                    // `SUB` does not accumulate at all: it
-                                    // hands the destination the difference
-                                    // between the accumulator and this result
-                                    // and leaves the accumulator alone.
-                                    // Measured: `CLRA UACC(A)` then `USUB(B)`
-                                    // leaves `A` in the accumulator and `A - B`
-                                    // in the destination.
-                                    if acc.sub {
-                                        res = if acc.high {
-                                            ((*slot as i32).wrapping_sub(v as i32) >> 16) as u32
-                                        } else {
-                                            slot.wrapping_sub(res)
-                                        };
-                                    } else {
-                                        *slot = slot.wrapping_add(v);
-                                    }
-                                    if acc.enable && acc.writeback && !acc.sub {
-                                        res = if acc.high {
-                                            // Read back from the high half,
-                                            // and clamped into what the
-                                            // destination element can hold.
-                                            let v = if acc.signed {
-                                                (*slot as i32 >> 16) as i64
+                                    if acc.enable {
+                                        let read = if acc.high {
+                                            if acc.signed {
+                                                (*slot as i32 >> 16) as u32
                                             } else {
-                                                (*slot >> 16) as i64
-                                            };
-                                            let sbits = sat_bytes * 8;
-                                            let lo = -(1i64 << (sbits - 1));
-                                            let hi = (1i64 << (sbits - 1)) - 1;
-                                            v.clamp(lo, hi) as u32
+                                                *slot >> 16
+                                            }
                                         } else {
                                             *slot
                                         };
+                                        if acc.writeback {
+                                            // Accumulate, and hand the
+                                            // destination the accumulator.
+                                            *slot = if acc.sub {
+                                                slot.wrapping_sub(v)
+                                            } else {
+                                                slot.wrapping_add(v)
+                                            };
+                                            res = if acc.high {
+                                                let read = if acc.signed {
+                                                    (*slot as i32 >> 16) as i64
+                                                } else {
+                                                    (*slot >> 16) as i64
+                                                };
+                                                let sbits = sat_bytes * 8;
+                                                read.clamp(
+                                                    -(1i64 << (sbits - 1)),
+                                                    (1i64 << (sbits - 1)) - 1,
+                                                )
+                                                    as u32
+                                            } else {
+                                                *slot
+                                            };
+                                        } else {
+                                            // No `WBA`: the accumulator is read
+                                            // into the result and left as it
+                                            // was — `UADD` and `USUB` in the
+                                            // programmers manual's names, and
+                                            // measured: `CLRA UACC(A)` then
+                                            // `UADD(B)` answers `A + B + A` with
+                                            // `A` still in the accumulator.
+                                            res = if acc.sub {
+                                                read.wrapping_sub(res)
+                                            } else {
+                                                read.wrapping_add(res)
+                                            };
+                                            if acc.high {
+                                                let sbits = sat_bytes * 8;
+                                                res = (res as i32 as i64).clamp(
+                                                    -(1i64 << (sbits - 1)),
+                                                    (1i64 << (sbits - 1)) - 1,
+                                                )
+                                                    as u32;
+                                            }
+                                        }
                                     }
                                 }
                                 if let Some(o) = d {
@@ -1511,6 +1529,78 @@ impl Vpu {
                                             self.stop(Stop::Fault(Fault::Bus { pc, err })),
                                         );
                                     }
+                                }
+                            }
+                        }
+                    }
+                    VecExec::Lut {
+                        write,
+                        d,
+                        a,
+                        index,
+                        width,
+                        reps,
+                        step,
+                        pred,
+                    } => {
+                        let lanes = self.vrf.lanes(pred);
+                        let reps = match reps {
+                            VecRep::Fixed(n) => n,
+                            VecRep::FromR0 => self.regs.get(0),
+                        };
+                        let d_add = d
+                            .and_then(|o| o.addend)
+                            .map_or(0, |r| self.regs.get(r as usize));
+                        let a_add = a
+                            .and_then(|o| o.addend)
+                            .map_or(0, |r| self.regs.get(r as usize));
+                        let i_add = match index {
+                            VecLutIndex::Lanes(o) => {
+                                o.addend.map_or(0, |r| self.regs.get(r as usize))
+                            }
+                            VecLutIndex::Scalar(_) => 0,
+                        };
+                        for rep in 0..reps {
+                            for lane in 0..vrf::LANES {
+                                if lanes & (1 << lane) == 0 {
+                                    continue;
+                                }
+                                let at = match index {
+                                    VecLutIndex::Lanes(o) => {
+                                        let (row, e) =
+                                            o.reg.lane(lane, if step { rep } else { 0 }, i_add);
+                                        self.vrf.read(row, e, o.reg.elem_bytes as u32)
+                                    }
+                                    // A scalar index reaches every lane alike.
+                                    VecLutIndex::Scalar(RegOrImm::Reg(r)) => {
+                                        self.regs.get(r as usize)
+                                    }
+                                    VecLutIndex::Scalar(RegOrImm::Imm(v)) => v as u32,
+                                };
+                                let base = lane as usize * vrf::LUT_LANE;
+                                let at = (at as usize).wrapping_mul(width as usize) % vrf::LUT_LANE;
+                                let value = if write {
+                                    let o = a.expect("a write has data");
+                                    let (row, e) =
+                                        o.reg.lane(lane, if step { rep } else { 0 }, a_add);
+                                    let v = self.vrf.read(row, e, o.reg.elem_bytes as u32);
+                                    for i in 0..width as usize {
+                                        self.vrf.lut[base + (at + i) % vrf::LUT_LANE] =
+                                            (v >> (8 * i)) as u8;
+                                    }
+                                    v
+                                } else {
+                                    let mut v = 0u32;
+                                    for i in 0..width as usize {
+                                        v |= (self.vrf.lut[base + (at + i) % vrf::LUT_LANE] as u32)
+                                            << (8 * i);
+                                    }
+                                    v
+                                };
+                                if let Some(o) = d {
+                                    let (row, e) =
+                                        o.reg.lane(lane, if step { rep } else { 0 }, d_add);
+                                    self.vrf.write(row, e, o.reg.elem_bytes as u32, value);
                                 }
                             }
                         }
@@ -2091,6 +2181,11 @@ fn vec_alu(op: VecAluOp, a: u32, b: u32, width: u32, sat_bytes: u32, carry_in: b
         Mulhd { sa, sb } => {
             let (x, y) = (mul_operand(a, sa, bits), mul_operand(b, sb, bits));
             ((x * y) >> bits) as u32 & mask
+        }
+        // Truncating instead of flooring: the quotient rounds toward zero.
+        Mulhdt { sa, sb } => {
+            let (x, y) = (mul_operand(a, sa, bits), mul_operand(b, sb, bits));
+            ((x * y) / (1i64 << bits)) as u32 & mask
         }
         Mulhn { sa, sb } => {
             let (x, y) = (mul_operand(a, sa, bits), mul_operand(b, sb, bits));

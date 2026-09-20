@@ -297,6 +297,10 @@ pub enum SourceKind {
     Decompile,
     /// Read on the reference board, with how it was read.
     Measured,
+    /// A third-party reverse-engineering document — hermanhermitage's
+    /// VideoCore IV Programmers Manual — naming what a measurement then
+    /// confirmed. Never on its own: it says where to look, not what is true.
+    Manual,
     /// Observed in a `boot` run.
     Trace,
     /// A guess, with the reasoning.
@@ -311,6 +315,7 @@ impl SourceKind {
             SourceKind::Linux => "linux",
             SourceKind::Decompile => "decompile",
             SourceKind::Measured => "measured",
+            SourceKind::Manual => "manual",
             SourceKind::Trace => "trace",
             SourceKind::Inferred => "inferred",
         }

@@ -1,5 +1,19 @@
 title = "VC4 VPU — instruction set reference"
 intro = """
+> **Disclaimer**
+>
+> This is an independent documentation project, put together from static
+> analysis of published firmware images and from trial and error on real
+> hardware. It is not sanctioned by, connected with or endorsed by Broadcom or
+> Raspberry Pi Ltd., and no Broadcom document or material beyond the publicly
+> available ones was used in making it. No copyrighted material is reproduced
+> here.
+>
+> It is written for non-commercial use, in the expectation that it is useful to
+> anyone trying to understand the processor their Raspberry Pi actually boots
+> on. Everything in it is offered as a description of what one board did when
+> asked, not as a specification: where the two disagree, the silicon is right.
+
 The **VPU** is the processor that runs `bootcode` and `start4.elf` on a
 BCM2711 — a dual-core scalar-plus-vector machine, and the first thing the chip
 executes. It is a **VC4** core: the same instruction set as the BCM2835's,
@@ -16,6 +30,7 @@ and the reference.
 |---|---|
 | `measured` | run on a Raspberry Pi 4B d03115 through the firmware's `EXECUTE_CODE` mailbox tag; the probe that did it is named |
 | `decompile` | read out of `start4.elf` — an address, or the `binutils-vc4` opcode tables |
+| `manual` | named in Herman Hermitage's VideoCore IV Programmers Manual, and then measured here — never on its own |
 | `trace` | the model boots the real firmware, and this is what makes the boot come out right |
 | `inferred` | a guess, with the reasoning |
 
@@ -567,14 +582,16 @@ confidence = "high"
 
 [[section.source]]
 kind       = "decompile"
-ref        = "15054 of the 15180 vector words in `start4.elf`'s `.text` disassemble identically in this model and in `binutils-vc4`'s objdump"
+ref        = "the whole of `start4.elf`'s `.text`, compared word for word against `binutils-vc4`'s objdump: 14390 of the 14650 vector instructions this decoder finds sit where objdump decodes a vector instruction too, and the spellings agree but for the ones objdump prints as a raw `vec48`/`vec80`, having no form for them"
 confidence = "high"
-note       = "the other 126 are ones objdump prints as a raw `vec48`/`vec80`, having no form for them"
+note       = "the remainder is the two linear sweeps drifting apart inside data, where a different length read leads into a different stream"
 [[section]]
 title = "Memory-class sub-ops"
 body = """
 The gather and the scatter scale their index by the operation's element width
-and take the ordinary base-plus-displacement address.
+and take the ordinary base-plus-displacement address. `memread` and `memwrite`
+address neither: they are the unit's own lookup table, 1 KiB of it, banked
+sixteen ways so that each lane indexes its own 64 bytes.
 """
 ops     = "mem"
 columns = ["Sub-op", "Mnemonic", "What it does", "Source"]
@@ -695,24 +712,29 @@ confidence = "low"
 [[section.row]]
 subop    = 8
 mnemonic = "memread"
-status   = "unknown"
-cells    = ["8", "`memread`", "three vector slots and no address operand; neither the accumulator, a two-register address nor the operands themselves explain what it reads"]
+status   = "executes"
+cells    = ["8", "`memread`", "`readlut`: each lane reads its own 64-byte region of the unit's 1 KiB table at `b * width`, A unused. B is a vector slot, a scalar register or an immediate; a scalar reaches every lane alike"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/memr.s`, `probes/memr2.s`"
-confidence = "low"
+ref        = "`probes/lut.s`: a `v8memwrite` then a `v8memread` over the same indices hands every lane its own value back — seven lanes sharing index `0xff` and each keeping its own value is what says the table is banked — and the `v16` pair round-trips at twice the index"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "manual"
+ref        = "the VideoCore IV Programmers Manual names sub-ops 8 and 9 `readlut`/`writelut` over a 1 KB table"
+confidence = "medium"
 
 [[section.row]]
 subop    = 9
 mnemonic = "memwrite"
-status   = "unknown"
-cells    = ["9", "`memwrite`", "ditto; its destination came back as A widened into the destination's elements"]
+status   = "executes"
+cells    = ["9", "`memwrite`", "`writelut`: puts A at that index, and hands the destination the same value"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/memr.s`"
-confidence = "low"
+ref        = "`probes/lut.s`, `probes/lut2.s`: a scalar write at 3 and a vector index of threes reach the same byte, and a `v16` write at 3 leaves byte 3 alone — the index scales by the element width whichever way it is spelled"
+confidence = "high"
 
 [[section.row]]
 subop    = 10
@@ -1727,46 +1749,56 @@ confidence = "high"
 [[section.row]]
 subop    = 60
 mnemonic = "mulht.ss"
-status   = "unknown"
-cells    = ["60", "`mulht.ss`", "—"]
+status   = "executes"
+cells    = ["60", "`mulht.ss`", "the product's high half **truncated** towards zero, not floored — both operands signed"]
 
 [[section.row.source]]
-kind       = "decompile"
-ref        = "`binutils-vc4` names the encoding; what it does is not established"
-confidence = "low"
+kind       = "measured"
+ref        = "`probes/mhdt.s`: `0x0ff0 * 0xfff1` — product −61200 — answers `0x0000` here and `0xffff` from `mulhd`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "manual"
+ref        = "the VideoCore IV Programmers Manual calls sub-ops 60 and 61 the round-to-zero high multiply"
+confidence = "medium"
 
 [[section.row]]
 subop    = 61
 mnemonic = "mulht.su"
-status   = "unknown"
-cells    = ["61", "`mulht.su`", "—"]
+status   = "executes"
+cells    = ["61", "`mulht.su`", "the product's high half **truncated** towards zero, not floored — A signed, B unsigned"]
 
 [[section.row.source]]
-kind       = "decompile"
-ref        = "`binutils-vc4` names the encoding; what it does is not established"
-confidence = "low"
+kind       = "measured"
+ref        = "`probes/mhdt.s`: `0x0ff0 * 0xfff1` — product −61200 — answers `0x0000` here and `0xffff` from `mulhd`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "manual"
+ref        = "the VideoCore IV Programmers Manual calls sub-ops 60 and 61 the round-to-zero high multiply"
+confidence = "medium"
 
 [[section.row]]
 subop    = 62
 mnemonic = "op62"
-status   = "unknown"
-cells    = ["62", "`op62`", "—"]
+status   = "executes"
+cells    = ["62", "`op62`", "writes a lane of zeros, at both widths"]
 
 [[section.row.source]]
-kind       = "decompile"
-ref        = "`binutils-vc4` names the encoding; what it does is not established"
-confidence = "low"
+kind       = "measured"
+ref        = "`probes/mhdt.s`, over a destination preset to all-ones"
+confidence = "high"
 
 [[section.row]]
 subop    = 63
 mnemonic = "op63"
-status   = "unknown"
-cells    = ["63", "`op63`", "—"]
+status   = "executes"
+cells    = ["63", "`op63`", "writes a lane of zeros, at both widths"]
 
 [[section.row.source]]
-kind       = "decompile"
-ref        = "`binutils-vc4` names the encoding; what it does is not established"
-confidence = "low"
+kind       = "measured"
+ref        = "`probes/mhdt.s`, over a destination preset to all-ones"
+confidence = "high"
 
 [[section]]
 title = "Repetition and predication"
@@ -2042,6 +2074,19 @@ ref        = "`probes/noena.s`"
 confidence = "high"
 
 [[section.row]]
+cells = ["`ENA` without `WBA`", "the destination takes `result + accumulator` — `result` taken off it with `SUB` — and the accumulator itself does not move: `UADD`/`USUB`, not an accumulate"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/mhdt.s`: `CLRA UACC(A)` then `UADD(B)` answers `A + B + A`, with `A` still in the accumulator afterwards"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "manual"
+ref        = "the VideoCore IV Programmers Manual's names for the two forms"
+confidence = "medium"
+
+[[section.row]]
 cells = ["`SIGN`", "read the result signed (`SACC`) rather than unsigned (`UACC`) on the way in"]
 
 [[section.row.source]]
@@ -2076,11 +2121,11 @@ ref        = "`probes/wacc.s`"
 confidence = "high"
 
 [[section.row]]
-cells = ["`SUB`", "**not** a subtracting accumulate: the accumulator is left alone and the destination takes `accumulator - result` — `(acc - (result << 16)) >> 16` with `HIGH`"]
+cells = ["`SUB`", "with `ENA` and no `WBA` — the `USUB` form — **not** a subtracting accumulate: the accumulator is left alone and the destination takes `accumulator - result`, `(acc - (result << 16)) >> 16` with `HIGH`. Alongside `WBA` the model subtracts into the accumulator instead, which no probe has checked"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/usub.s`"
+ref        = "`probes/usub.s`, read back with `vgetacc`"
 confidence = "high"
 
 [[section.row]]
@@ -2158,14 +2203,16 @@ confidence = "medium"
 title = "What the model executes"
 body = """
 `VecInsn::executable` decides, by field rather than by whole-word template.
-Against the 15180 vector instructions a linear sweep of `start4.elf`'s `.text`
-decodes, **13282 execute**.
+A linear sweep of `start4.elf`'s `.text` with this decoder finds **14650**
+vector instructions, and **13018 of them execute**.
 
 What is left is mostly not instructions. Splitting it by whether the
 instruction's 4 KiB page looks like code — 60% or more of its vector words
-executable — puts about 190 in code and about 1700 in pages that disassemble as
-vector instructions only because a linear sweep cannot tell a jump table from
-one.
+executable — puts **113** in code pages and **1519** in pages that disassemble
+as vector instructions only because a linear sweep cannot tell a jump table
+from one. The count of vector words is itself a property of the sweep: a
+decoder that reads a length differently walks a different stream through the
+data, which is why this number and `binutils-vc4` objdump's are not the same.
 """
 columns = ["Left in code pages", "Reason", "Source"]
 after = """
@@ -2175,15 +2222,7 @@ passes.
 """
 
 [[section.row]]
-cells = ["~57", "`memread`, whose operands the probes could not pin"]
-
-[[section.row.source]]
-kind       = "measured"
-ref        = "`probes/memr.s`"
-confidence = "low"
-
-[[section.row]]
-cells = ["~34", "`vld` forms whose remaining fields are unexplained"]
+cells = ["~32", "`vld` forms whose remaining fields are unexplained — a vector slot in the B position, a dash destination carrying an addend"]
 
 [[section.row.source]]
 kind       = "decompile"
@@ -2191,15 +2230,15 @@ ref        = "`binutils-vc4` spells them; the fields are not established"
 confidence = "low"
 
 [[section.row]]
-cells = ["~12", "memory sub-op 3"]
+cells = ["~14", "memory sub-op 3"]
 
 [[section.row.source]]
 kind       = "decompile"
-ref        = "`binutils-vc4` names it `mem03` and nothing more"
+ref        = "`binutils-vc4` names it `mem03` and nothing more; a probe that ran it took the firmware down with it"
 confidence = "low"
 
 [[section.row]]
-cells = ["~11", "`vgetacc` with a dash destination"]
+cells = ["~10", "`vgetacc` with a dash destination, feeding the scalar result unit"]
 
 [[section.row.source]]
 kind       = "inferred"
@@ -2215,15 +2254,7 @@ ref        = "`binutils-vc4` prints `r2-1`; what the displacement does to a scal
 confidence = "low"
 
 [[section.row]]
-cells = ["~9", "`memwrite`"]
-
-[[section.row.source]]
-kind       = "measured"
-ref        = "`probes/memr.s`"
-confidence = "low"
-
-[[section.row]]
-cells = ["rest", "one-offs: a register wider than the operation, an unsigned `SUB` in the high half, `mulm` under `SETF`"]
+cells = ["rest", "one-offs, and words inside a code page that the sweep cannot tell from the data beside them — `binutils-vc4` prints most of them as `vunk...` or `vop63.1` too"]
 
 [[section.row.source]]
 kind       = "measured"

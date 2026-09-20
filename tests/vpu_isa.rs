@@ -769,9 +769,10 @@ fn boot_rom_vector_memclear_is_an_executable_rep_broadcast() {
 // Each fixture is an instruction lifted out of `start4.elf`, with
 // `binutils-vc4` objdump's spelling of those exact bytes in the comment. The
 // whole of that `.text` was compared against this decoder instruction by
-// instruction: 15054 of the 15180 vector words agree, and the 126 that do not
-// are ones objdump renders as a raw `vec48`/`vec80` because its own tables have
-// no form for them.
+// instruction: of the 14650 vector words this decoder finds, 14390 sit where
+// objdump decodes a vector instruction too and are spelled the same, bar the
+// ones objdump renders as a raw `vec48`/`vec80` because its own tables have no
+// form for them. The rest is the two sweeps drifting apart inside data.
 
 fn vector(bytes: &[u8]) -> rpi_virt_fw::vpu::insn::VecInsn {
     use rpi_virt_fw::vpu::decode::decode;
@@ -3810,7 +3811,9 @@ fn the_reference_page_matches_the_model() {
             .into_iter()
             .any(|w| VecAluOp::from_subop(subop, w).is_some())
             || (48..=59).contains(&subop)
-            || VecAluOp::from_mul_subop(subop, 4).is_some();
+            || [2, 4]
+                .into_iter()
+                .any(|w| VecAluOp::from_mul_subop(subop, w).is_some());
         assert_eq!(
             executes, says_executes,
             "ALU sub-op {subop} (`{name}`): the page says {says_executes}, the model says {executes}"
@@ -3818,8 +3821,9 @@ fn the_reference_page_matches_the_model() {
     }
 
     // The memory class has no one function to ask, so the set is spelled out;
-    // `mem_transfer`, `gather` and `getacc` between them cover exactly these.
-    const MEM_EXECUTES: [u8; 7] = [0, 1, 2, 4, 5, 6, 24];
+    // `mem_transfer`, `gather`, `lut` and `getacc` between them cover exactly
+    // these.
+    const MEM_EXECUTES: [u8; 9] = [0, 1, 2, 4, 5, 6, 8, 9, 24];
     for (subop, (name, says_executes)) in VEC_MEM_OPS
         .iter()
         .zip(rpi_virt_fw::isa::VEC_MEM_OPS_EXECUTE)
@@ -3831,5 +3835,245 @@ fn the_reference_page_matches_the_model() {
             says_executes,
             "memory sub-op {subop} (`{name}`)"
         );
+    }
+}
+
+/// Sub-ops 60 and 61, and an accumulator read without a write-back.
+///
+/// `probes/mhdt.s` on a Raspberry Pi 4B d03115. Sub-ops 60 and 61 are the
+/// **truncating** high multiply: `0x0ff0 * 0xfff1` answers `0x0000` where
+/// `mulhd` — which floors — answers `0xffff`. The same run measures `UADD`
+/// and `SADD`, the accumulator modifier without `WBA`: the destination takes
+/// `result + accumulator` and the accumulator itself does not move.
+#[test]
+fn the_truncating_multiply_and_an_accumulator_read() {
+    const CODE_BYTES: &[u8] = &[
+        0x03, 0xb0, 0x40, 0x00, 0x14, 0x40, 0x44, 0xb0, 0x00, 0x10, 0x06, 0xfe, 0x38, 0xc0, 0x00,
+        0x04, 0xc0, 0xfb, 0x00, 0x00, 0x08, 0xf8, 0xb8, 0x8f, 0xc0, 0x03, 0xc0, 0xf3, 0x10, 0x00,
+        0x08, 0xf8, 0xf8, 0x8f, 0xe0, 0x03, 0xc0, 0xf3, 0x10, 0x00, 0xe0, 0xf5, 0x23, 0x80, 0x3f,
+        0xe2, 0xe8, 0xf5, 0x63, 0x80, 0x3f, 0xe2, 0xa0, 0xf5, 0xa3, 0x80, 0x3f, 0xe2, 0xc0, 0xf5,
+        0xe3, 0x80, 0x3f, 0xe2, 0x00, 0xfc, 0x38, 0xe0, 0x3e, 0x02, 0xc0, 0xf3, 0xbc, 0x09, 0x00,
+        0xfd, 0x23, 0x81, 0x3f, 0xe2, 0xc0, 0xf3, 0x3c, 0x08, 0x00, 0xfc, 0x38, 0xe0, 0x3e, 0x02,
+        0xc0, 0xf3, 0xbc, 0x09, 0x00, 0xfd, 0x63, 0x81, 0x3f, 0xe2, 0xc0, 0xf3, 0x3c, 0x0a, 0x00,
+        0xfc, 0x38, 0xe0, 0x3e, 0x02, 0xc0, 0xf3, 0xbc, 0x09, 0x00, 0xf3, 0xa3, 0xc1, 0x3a, 0xa2,
+        0x96, 0xf8, 0x30, 0xe0, 0x80, 0x03, 0xe0, 0x33, 0x00, 0x00, 0x5a, 0x00,
+    ];
+    const VECTORS: &[u8] = &[
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0x00, 0x80, 0x00, 0xf0, 0xf0, 0x0f, 0x01, 0x80, 0x00,
+        0xc0, 0xff, 0x00, 0xff, 0x7f, 0x34, 0x12, 0xcc, 0xed, 0x01, 0x00, 0xfe, 0xff, 0x00, 0x40,
+        0x10, 0x00, 0x00, 0x00, 0xf0, 0x00, 0xff, 0xff, 0xfe, 0xff, 0xfc, 0xff, 0xf1, 0xff, 0xf0,
+        0xff, 0xe0, 0xff, 0x01, 0x00, 0x02, 0x00, 0xff, 0xff, 0xfd, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xfc, 0xff, 0xff, 0xff, 0xf8, 0xff,
+    ];
+    const ROWS: &[(usize, &str)] = &[
+        (0, "00000000010000000000000000000000070000000800000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
+        (1, "000000000180000001f00000ef0f00000980000008c00000000000000000000033120000cded000000000000ffff0000ff3f00000f00000000000000ef000000"),
+        (2, "000000000100000000000000ffff000007000000080000000000000000000000ffff000000000000ffff000000000000ffff0000ffff000000000000ffff0000"),
+        (3, "000000000100000000000000ffff0000080000000800000000000000010000000000000000000000000000000000000000000000000000000000000000000000"),
+        (4, "fdff0000feff0000fcdf0000d11f0000f2ff0000e07f0000ff010000000000006724000095db000001000000fbff0000ff7f00001c000000ffff0000d8010000"),
+        (5, "fdff0000feff0000fcdf0000d11f0000f2ff0000e07f0000ff010000000000006724000095db000001000000fbff0000ff7f00001c000000ffff0000d8010000"),
+        (6, "ffff00000080000000f00000f00f00000180000000c00000ff000000ff7f000034120000cced000001000000feff0000004000001000000000000000f0000000"),
+        (62, "ffff00000080000000f00000f00f00000180000000c00000ff000000ff7f000034120000cced000001000000feff0000004000001000000000000000f0000000"),
+        (63, "ffff0000feff0000fcff0000f1ff0000f0ff0000e0ff00000100000002000000ffff0000fdff0000ffff0000ffff0000ffff0000fcff0000ffff0000f8ff0000"),
+    ];
+
+    let mut m = machine();
+    let mut v = Vpu::new(CODE);
+    for (i, b) in CODE_BYTES.iter().enumerate() {
+        m.store8(CODE + i as u32, *b).unwrap();
+    }
+    for i in 0..4096u32 {
+        m.store8(0x4000 + i, (i + 1) as u8).unwrap();
+        m.store8(0x5000 + i, 0).unwrap();
+    }
+    for (i, b) in VECTORS.iter().enumerate() {
+        m.store8(0x5000 + i as u32, *b).unwrap();
+    }
+    v.regs.set(0, 0x8000);
+    v.regs.set(1, 0x4000);
+    v.regs.pc = CODE;
+    for _ in 0..64 {
+        if v.regs.pc == CODE + CODE_BYTES.len() as u32 - 2 {
+            break; // the trailing `rts`
+        }
+        assert_eq!(
+            v.step(&mut m),
+            Step::Ran,
+            "at {:#x}: {:?}",
+            v.regs.pc,
+            v.stopped
+        );
+    }
+    for (row, want) in ROWS {
+        let got: String = (0..64)
+            .map(|c| format!("{:02x}", m.load8(0x8000 + (*row as u32) * 64 + c).unwrap()))
+            .collect();
+        assert_eq!(&got, want, "row {row}");
+    }
+}
+
+/// The vector unit's lookup table.
+///
+/// `probes/lut.s` on a Raspberry Pi 4B d03115: `v8memwrite -,A,B` puts each
+/// lane's A at index B of the unit's own 1 KiB table, and the `v8memread`
+/// after it over the same indices hands all sixteen back. The `v16` pair does
+/// the same at twice the index, so the index scales by the operation's element
+/// width. Seven of the sixteen lanes write index `0xff` and each still reads
+/// its own value back, so the table is banked one 64-byte region per lane.
+///
+/// The probe's second read — row 1, over indices that were never written —
+/// is left out: it answers whatever the firmware had left in the table, which
+/// is board state, not behaviour.
+#[test]
+fn the_measured_lookup_table() {
+    const CODE_BYTES: &[u8] = &[
+        0x03, 0xb0, 0x40, 0x00, 0x14, 0x40, 0x44, 0xb0, 0x00, 0x10, 0x06, 0xfe, 0x38, 0xc0, 0x00,
+        0x04, 0xc0, 0xfb, 0x00, 0x00, 0x00, 0xf8, 0x38, 0x05, 0xc0, 0x03, 0xc0, 0xf3, 0x10, 0x00,
+        0x00, 0xf8, 0x78, 0x05, 0xe0, 0x03, 0xc0, 0xf3, 0x10, 0x00, 0x08, 0xf8, 0xb8, 0x85, 0xc0,
+        0x03, 0xc0, 0xf3, 0x10, 0x00, 0x08, 0xf8, 0xf8, 0x85, 0xe0, 0x03, 0xc0, 0xf3, 0x10, 0x00,
+        0x20, 0xf1, 0x01, 0xe0, 0x15, 0x40, 0x00, 0xf1, 0x01, 0x00, 0x15, 0x40, 0x00, 0xf1, 0x41,
+        0x00, 0x14, 0x50, 0x28, 0xf1, 0x21, 0xe0, 0x17, 0x62, 0x08, 0xf1, 0xa1, 0x80, 0x17, 0x62,
+        0x96, 0xf8, 0x30, 0xe0, 0x80, 0x03, 0xe0, 0x33, 0x00, 0x00, 0x5a, 0x00,
+    ];
+    const VECTORS: &[u8] = &[
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0x00, 0x80, 0x00, 0xf0, 0xf0, 0x0f, 0x01, 0x80, 0x00,
+        0xc0, 0xff, 0x00, 0xff, 0x7f, 0x34, 0x12, 0xcc, 0xed, 0x01, 0x00, 0xfe, 0xff, 0x00, 0x40,
+        0x10, 0x00, 0x00, 0x00, 0xf0, 0x00, 0xff, 0xff, 0xfe, 0xff, 0xfc, 0xff, 0xf1, 0xff, 0xf0,
+        0xff, 0xe0, 0xff, 0x01, 0x00, 0x02, 0x00, 0xff, 0xff, 0xfd, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xfc, 0xff, 0xff, 0xff, 0xf8, 0xff,
+    ];
+    const ROWS: &[(usize, &str)] = &[
+        (0, "ff000000ff000000000000008000000000000000f0000000f00000000f000000010000008000000000000000c0000000ff00000000000000ff0000007f000000"),
+        (2, "ffff00000080000000f00000f00f00000180000000c00000ff000000ff7f000034120000cced000001000000feff0000004000001000000000000000f0000000"),
+        (20, "ff000000ff000000000000008000000000000000f0000000f00000000f000000010000008000000000000000c0000000ff00000000000000ff0000007f000000"),
+        (21, "ff000000ff000000fe000000ff000000fc000000ff000000f1000000ff000000f0000000ff000000e0000000ff00000001000000000000000200000000000000"),
+        (22, "ffff00000080000000f00000f00f00000180000000c00000ff000000ff7f000034120000cced000001000000feff0000004000001000000000000000f0000000"),
+        (23, "ffff0000feff0000fcff0000f1ff0000f0ff0000e0ff00000100000002000000ffff0000fdff0000ffff0000ffff0000ffff0000fcff0000ffff0000f8ff0000"),
+    ];
+
+    let mut m = machine();
+    let mut v = Vpu::new(CODE);
+    for (i, b) in CODE_BYTES.iter().enumerate() {
+        m.store8(CODE + i as u32, *b).unwrap();
+    }
+    for i in 0..4096u32 {
+        m.store8(0x4000 + i, (i + 1) as u8).unwrap();
+        m.store8(0x5000 + i, 0).unwrap();
+    }
+    for (i, b) in VECTORS.iter().enumerate() {
+        m.store8(0x5000 + i as u32, *b).unwrap();
+    }
+    v.regs.set(0, 0x8000);
+    v.regs.set(1, 0x4000);
+    v.regs.pc = CODE;
+    for _ in 0..64 {
+        if v.regs.pc == CODE + CODE_BYTES.len() as u32 - 2 {
+            break; // the trailing `rts`
+        }
+        assert_eq!(
+            v.step(&mut m),
+            Step::Ran,
+            "at {:#x}: {:?}",
+            v.regs.pc,
+            v.stopped
+        );
+    }
+    for (row, want) in ROWS {
+        let got: String = (0..64)
+            .map(|c| format!("{:02x}", m.load8(0x8000 + (*row as u32) * 64 + c).unwrap()))
+            .collect();
+        assert_eq!(&got, want, "row {row}");
+    }
+}
+
+/// A lookup-table index that is a scalar.
+///
+/// `probes/lut2.s` on a Raspberry Pi 4B d03115. Every `readlut`/`writelut` in
+/// `start4.elf` puts a scalar register or an immediate in the B position, not
+/// a vector slot, and this measures that it means the same index in every
+/// lane: a scalar write at 3 and a vector index of threes read the same byte,
+/// and a `v16` write at 3 leaves byte 3 alone — so the scalar index scales by
+/// the element width too.
+///
+/// Row 2 — a read at an index nothing had written — is left out: it answers
+/// whatever the firmware left in the table.
+#[test]
+fn a_scalar_lookup_table_index() {
+    const CODE_BYTES: &[u8] = &[
+        0x03, 0xb0, 0x40, 0x00, 0x05, 0x60, 0x14, 0x40, 0x44, 0xb0, 0x00, 0x10, 0x06, 0xfe, 0x38,
+        0xc0, 0x00, 0x04, 0xc0, 0xfb, 0x00, 0x00, 0x00, 0xf8, 0x38, 0x05, 0xc0, 0x03, 0xc0, 0xf3,
+        0x10, 0x00, 0x00, 0xf8, 0x78, 0x05, 0xe0, 0x03, 0xc0, 0xf3, 0x10, 0x00, 0x00, 0xf4, 0xb8,
+        0x85, 0x03, 0x04, 0x02, 0x60, 0x20, 0xf1, 0x01, 0xe0, 0x82, 0x43, 0x00, 0xf1, 0x38, 0x00,
+        0x82, 0x03, 0x00, 0xf1, 0x41, 0x00, 0x17, 0x40, 0x32, 0x60, 0x00, 0xf1, 0xb8, 0x00, 0x82,
+        0x03, 0x20, 0xf1, 0x01, 0xe0, 0x82, 0x53, 0x00, 0xf1, 0xf8, 0x00, 0x82, 0x03, 0x00, 0xf1,
+        0x01, 0x01, 0x16, 0x40, 0x28, 0xf1, 0x21, 0xe0, 0x82, 0x43, 0x08, 0xf1, 0x78, 0x81, 0x82,
+        0x03, 0x00, 0xf1, 0xb8, 0x01, 0x82, 0x03, 0x20, 0xf1, 0x01, 0xe0, 0x05, 0x44, 0x00, 0xf1,
+        0xf8, 0x01, 0x05, 0x04, 0x96, 0xf8, 0x30, 0xe0, 0x80, 0x03, 0xe0, 0x33, 0x00, 0x00, 0x5a,
+        0x00,
+    ];
+    const VECTORS: &[u8] = &[
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0x00, 0x80, 0x00, 0xf0, 0xf0, 0x0f, 0x01, 0x80, 0x00,
+        0xc0, 0xff, 0x00, 0xff, 0x7f, 0x34, 0x12, 0xcc, 0xed, 0x01, 0x00, 0xfe, 0xff, 0x00, 0x40,
+        0x10, 0x00, 0x00, 0x00, 0xf0, 0x00, 0xff, 0xff, 0xfe, 0xff, 0xfc, 0xff, 0xf1, 0xff, 0xf0,
+        0xff, 0xe0, 0xff, 0x01, 0x00, 0x02, 0x00, 0xff, 0xff, 0xfd, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xfc, 0xff, 0xff, 0xff, 0xf8, 0xff,
+    ];
+    const ROWS: &[(usize, &str)] = &[
+        (0, "ff000000ff000000000000008000000000000000f0000000f00000000f000000010000008000000000000000c0000000ff00000000000000ff0000007f000000"),
+        (1, "ff000000ff000000000000008000000000000000f0000000f00000000f000000010000008000000000000000c0000000ff00000000000000ff0000007f000000"),
+        (3, "ff000000ff000000fe000000ff000000fc000000ff000000f1000000ff000000f0000000ff000000e0000000ff00000001000000000000000200000000000000"),
+        (4, "ff000000ff000000fe000000ff000000fc000000ff000000f1000000ff000000f0000000ff000000e0000000ff00000001000000000000000200000000000000"),
+        (5, "ff000000ff000000000000008000000000000000f0000000f00000000f000000010000008000000000000000c0000000ff00000000000000ff0000007f000000"),
+        (6, "ff000000ff000000fe000000ff000000fc000000ff000000f1000000ff000000f0000000ff000000e0000000ff00000001000000000000000200000000000000"),
+        (7, "ff000000ff000000000000008000000000000000f0000000f00000000f000000010000008000000000000000c0000000ff00000000000000ff0000007f000000"),
+        (20, "ff000000ff000000000000008000000000000000f0000000f00000000f000000010000008000000000000000c0000000ff00000000000000ff0000007f000000"),
+        (21, "ff000000ff000000fe000000ff000000fc000000ff000000f1000000ff000000f0000000ff000000e0000000ff00000001000000000000000200000000000000"),
+        (22, "03000000030000000300000003000000030000000300000003000000030000000300000003000000030000000300000003000000030000000300000003000000"),
+    ];
+
+    let mut m = machine();
+    let mut v = Vpu::new(CODE);
+    for (i, b) in CODE_BYTES.iter().enumerate() {
+        m.store8(CODE + i as u32, *b).unwrap();
+    }
+    for i in 0..4096u32 {
+        m.store8(0x4000 + i, (i + 1) as u8).unwrap();
+        m.store8(0x5000 + i, 0).unwrap();
+    }
+    for (i, b) in VECTORS.iter().enumerate() {
+        m.store8(0x5000 + i as u32, *b).unwrap();
+    }
+    v.regs.set(0, 0x8000);
+    v.regs.set(1, 0x4000);
+    v.regs.pc = CODE;
+    for _ in 0..64 {
+        if v.regs.pc == CODE + CODE_BYTES.len() as u32 - 2 {
+            break; // the trailing `rts`
+        }
+        assert_eq!(
+            v.step(&mut m),
+            Step::Ran,
+            "at {:#x}: {:?}",
+            v.regs.pc,
+            v.stopped
+        );
+    }
+    for (row, want) in ROWS {
+        let got: String = (0..64)
+            .map(|c| format!("{:02x}", m.load8(0x8000 + (*row as u32) * 64 + c).unwrap()))
+            .collect();
+        assert_eq!(&got, want, "row {row}");
     }
 }

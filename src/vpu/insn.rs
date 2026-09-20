@@ -452,7 +452,7 @@ pub enum Op {
 ///
 /// The fields are `binutils-vc4`'s (`print_vector_reg_1`, `opcodes/vc4-dis.c`),
 /// checked against that disassembler over `start4.elf`'s whole `.text`: every
-/// one of the 15180 vector instructions there spells its slots the same way.
+/// one of the 14650 vector instructions there spells its slots the same way.
 ///
 /// The type nibble is not an element width. It says how coarse the `x` it
 /// encodes is — H in steps of 16 bytes, HX in steps of 32, HY only 0 — and the
@@ -703,6 +703,20 @@ pub enum VecOperandB {
     Imm(u32),
 }
 
+/// Where a `readlut`/`writelut` takes its index from.
+///
+/// Measured with `probes/lut2.s` on a Raspberry Pi 4B d03115: a scalar
+/// register or an immediate in the B position indexes every lane's table
+/// alike — `v8memwrite -,A,(r2)` with `r2` = 3 and a vector index of threes
+/// read the same byte back — which is the form `start4.elf` uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VecLutIndex {
+    /// Each lane takes its own element of a vector slot.
+    Lanes(VecOperand),
+    /// Every lane takes the same index.
+    Scalar(RegOrImm),
+}
+
 /// What the scalar result unit does with the sixteen lane results.
 ///
 /// Measured on a Raspberry Pi 4B d03115 with `probes/sru.s` and `sru2.s`:
@@ -906,6 +920,14 @@ pub enum VecAluOp {
         sa: bool,
         sb: bool,
     },
+    /// The high half **truncated** instead of floored: the community
+    /// programmers manual calls sub-ops 60 and 61 `mulhdt`, "round to zero",
+    /// and the board agrees — `0x0ff0 * 0xfff1` answers `0x0000` where
+    /// `mulhd` answers `0xffff`. Only the `ss` and `su` sign pairs exist.
+    Mulhdt {
+        sa: bool,
+        sb: bool,
+    },
     /// The same, rounded: `(a * b + half) >> bits`.
     Mulhn {
         sa: bool,
@@ -994,6 +1016,13 @@ impl VecAluOp {
                 let (sa, sb) = signs(subop - 56);
                 Mulhn { sa, sb }
             }
+            // 60 and 61 truncate where `mulhd` floors; 62 and 63 are unused
+            // and write a lane of zeros, like the other blanks.
+            60 | 61 => {
+                let (sa, sb) = signs(subop - 60);
+                Mulhdt { sa, sb }
+            }
+            62 | 63 => Zero,
             _ => return None,
         })
     }
@@ -1213,6 +1242,21 @@ pub enum VecExec {
         step_a: bool,
         pred: VecPred,
     },
+    /// `v<w>memread <d>,<a>,<b>` / `v<w>memwrite <d>,<a>,<b>` — the unit's own
+    /// 1 KiB lookup table, which is what those two mnemonics really address.
+    /// A read answers the lane's own `lut[b * width]` and ignores A; a write
+    /// puts A's element there, and hands the destination the same value. The
+    /// table is banked per lane — see [`crate::vpu::vrf::LUT_LANE`].
+    Lut {
+        write: bool,
+        d: Option<VecOperand>,
+        a: Option<VecOperand>,
+        index: VecLutIndex,
+        width: u32,
+        reps: VecRep,
+        step: bool,
+        pred: VecPred,
+    },
     /// `vgetacc[s16|s32] <d>,<a>,<b>` — each lane's accumulator, shifted right
     /// by `b & 31`. The A slot is read and discarded, `sat` says which signed
     /// range the value is clamped into on the way out, and the destination's
@@ -1294,6 +1338,7 @@ impl VecInsn {
                 .mem_transfer()
                 .or_else(|| self.getacc())
                 .or_else(|| self.gather())
+                .or_else(|| self.lut())
             {
                 return e;
             }
@@ -1440,6 +1485,68 @@ impl VecInsn {
                 step_d: vec_slot.inc,
                 pred,
             }
+        })
+    }
+
+    /// `memread` and `memwrite`: the vector unit's 1 KiB lookup table.
+    ///
+    /// Measured with `probes/lut.s` on a Raspberry Pi 4B d03115 —
+    /// `v8memwrite -,A,B` then `v8memread D,A,B` over the same indices hands
+    /// back exactly what was written, and the `v16` pair round-trips halfwords
+    /// at twice the index. The index is the B slot, scaled by the operation's
+    /// element width; the A slot is the data a write stores and is read for
+    /// nothing by a read.
+    fn lut(&self) -> Option<VecExec> {
+        let write = match self.subop {
+            8 => false,
+            9 => true,
+            _ => return None,
+        };
+        let width = match self.lane_bits {
+            8 => 1,
+            16 => 2,
+            32 => 4,
+            _ => return None,
+        };
+        let operand = |slot: VecSlot| -> Option<VecOperand> {
+            Some(VecOperand {
+                reg: slot.window()?,
+                addend: (slot.addend != 15).then_some(slot.addend),
+            })
+        };
+        let a = if self.a.is_dash() {
+            if write {
+                return None; // nothing to write
+            }
+            None
+        } else {
+            Some(operand(self.a)?)
+        };
+        let index = match self.b {
+            VecOperandB::Imm(v) => VecLutIndex::Scalar(RegOrImm::Imm(v as i32)),
+            // A dash in the B position of the 80-bit form names a scalar
+            // register, which every lane then indexes its own table with. The
+            // displacement beside it means something this has not measured.
+            VecOperandB::Slot(s) if s.is_dash() => {
+                if s.disp != 0 {
+                    return None;
+                }
+                VecLutIndex::Scalar(RegOrImm::Reg(s.scalar))
+            }
+            VecOperandB::Slot(s) => VecLutIndex::Lanes(operand(s)?),
+        };
+        Some(VecExec::Lut {
+            write,
+            d: (!self.d.is_dash()).then(|| operand(self.d)).flatten(),
+            a,
+            index,
+            width,
+            reps: match self.rep {
+                7 => VecRep::FromR0,
+                n => VecRep::Fixed(1 << n),
+            },
+            step: self.d.inc || self.a.inc,
+            pred: VecPred::from_field(self.pred)?,
         })
     }
 
