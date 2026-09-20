@@ -461,8 +461,13 @@ pub enum Op {
 pub struct VecSlot {
     /// Type nibble. Bit 0 set = vertical (a column); >= 14 is the dash slot.
     pub ty: u8,
-    /// Byte column of the window in a row.
+    /// Byte column of the window, as `binutils-vc4` objdump spells it. What
+    /// the hardware addresses with is [`Self::e0`].
     pub x: u8,
+    /// Index of the slot's first element within its row, in elements of
+    /// [`Self::elem_bytes`] — the band the type nibble selects, times sixteen,
+    /// plus the fine coordinate. Measured on a Raspberry Pi 4B d03115.
+    pub e0: u8,
     /// Row of the window (horizontal), or the 16-row band it starts at
     /// (vertical).
     pub y: u8,
@@ -498,25 +503,31 @@ impl VecSlot {
         // covers, and the low nibble of the coordinate is part of its x
         // instead — `binutils-vc4`'s V-direction fix, which `vc4.slaspec`
         // agrees with (`row = VaHi << 4, column = VaLo + 16 * base`).
-        let (x, y) = match ty {
-            0 | 2 | 4 | 6 => (band2 | fine, (comp & 63) as u8),
-            8 | 10 => (band1 | fine, (comp & 63) as u8),
-            12 => (fine, (comp & 63) as u8),
+        // The band is the same field in every family — two bits for the 8-bit
+        // types, one for the 16-bit ones, none for the 32-bit — and it counts
+        // in *sixteens of elements*, which is why the printed `x` (bytes) and
+        // the element index part company as soon as an element is wider than a
+        // byte. The fine coordinate is the A slot's extra nibble, or, for a
+        // vertical operand, the low nibble of the coordinate itself.
+        let vfine = if areg { fine } else { low };
+        let (x, y, e0) = match ty {
+            0 | 2 | 4 | 6 => (band2 | fine, (comp & 63) as u8, band2 | fine),
+            8 | 10 => (band1 | fine, (comp & 63) as u8, (band1 >> 1) | fine),
+            12 => (fine, (comp & 63) as u8, fine),
             1 | 3 | 5 | 7 => (
-                band2 | if areg { fine } else { low },
+                band2 | vfine,
                 (comp & if areg { 0x3F } else { 0x30 }) as u8,
+                band2 | vfine,
             ),
             9 | 11 => (
-                band1 | if areg { fine } else { low },
+                band1 | vfine,
                 (comp & if areg { 0x3F } else { 0x30 }) as u8,
+                (band1 >> 1) | vfine,
             ),
-            13 => (
-                if areg { fine } else { low },
-                (comp & if areg { 0x3F } else { 0x30 }) as u8,
-            ),
+            13 => (vfine, (comp & if areg { 0x3F } else { 0x30 }) as u8, vfine),
             // Dash. The B position reads the addend nibble as a scalar register
             // and the rest as a signed 9-bit displacement.
-            _ => (0, 0),
+            _ => (0, 0, 0),
         };
         let disp = if ty >= 14 {
             let raw = (comp & 0x7F) | (((comp >> 10) & 3) << 7);
@@ -527,6 +538,7 @@ impl VecSlot {
         VecSlot {
             ty,
             x,
+            e0,
             y,
             addend,
             star,
@@ -554,32 +566,63 @@ impl VecSlot {
         self.ty & 1 != 0
     }
 
-    /// The 16-lane window this slot names, with lanes `lane_bits` wide.
+    /// Width of one element of this slot's register, in bytes. The type nibble
+    /// says it: `H`/`V` are 8-bit, `HX`/`VX` 16-bit, `HY`/`VY` 32-bit.
     ///
-    /// A dash names none. Everything else does: a row of 16 consecutive
-    /// elements from byte column `x`, or — vertically — the same 16 elements
-    /// read down column `x`, one per row, from the band `y` names.
-    pub fn window(self, lane_bits: u8) -> Option<VecReg> {
+    /// This is the width of the *register*, not of the operation. A `v8ld` into
+    /// an `HY` slot zero-extends each byte into a 32-bit element, and a `v32st`
+    /// out of an `H` slot writes each 8-bit element as a word — measured both
+    /// ways on a Raspberry Pi 4B d03115.
+    pub fn elem_bytes(self) -> u8 {
+        match self.ty >> 1 {
+            0..=3 => 1,
+            4 | 5 => 2,
+            _ => 4,
+        }
+    }
+
+    /// The 16-lane window this slot names.
+    ///
+    /// A dash names none. Everything else names sixteen elements of
+    /// [`Self::elem_bytes`], laid along row `y` from element `e0`, or — for a
+    /// vertical slot — down the sixteen rows from the band `y` names, all at
+    /// element `e0`.
+    pub fn window(self) -> Option<VecReg> {
         if self.is_dash() {
             return None;
         }
         Some(VecReg {
             y: self.y % 64,
-            x: self.x,
-            lane_bytes: lane_bits / 8,
+            e0: self.e0,
+            elem_bytes: self.elem_bytes(),
             vertical: self.is_vertical(),
         })
     }
 }
 
-/// A VRF register window: 16 lanes of `lane_bytes` bytes each, laid along row
-/// `y` from byte column `x`, or down column `x` from row `y`.
+/// A VRF register window: 16 elements of `elem_bytes` bytes each, laid along
+/// row `y` from element `e0`, or down sixteen rows from `y` at element `e0`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VecReg {
     pub y: u8,
-    pub x: u8,
-    pub lane_bytes: u8,
+    pub e0: u8,
+    pub elem_bytes: u8,
     pub vertical: bool,
+}
+
+impl VecReg {
+    /// Which row and which element of it lane `lane` lives in, after `step`
+    /// repetitions of a `++`: horizontally `++` walks the rows, vertically it
+    /// walks the elements (measured on a Raspberry Pi 4B d03115).
+    pub fn lane(self, lane: u32, step: u32, addend: u32) -> (u8, u32) {
+        let per_row = 64 / self.elem_bytes as u32;
+        let e0 = self.e0 as u32 + addend;
+        if self.vertical {
+            ((self.y as u32 + lane) as u8 % 64, (e0 + step) % per_row)
+        } else {
+            ((self.y as u32 + step) as u8 % 64, (e0 + lane) % per_row)
+        }
+    }
 }
 
 /// How many times a vector instruction repeats (the `REP` field).
@@ -708,18 +751,26 @@ pub enum VecExec {
     /// discard the vector result, write the sum of the lanes back to a scalar
     /// register.
     SumOfBroadcast { src: u8, dst: u8, signed: bool },
-    /// `v<w>{ld,st} <reg>[++],(r<base>[+=r<incr>]) [REP n]` — transfer 16 lanes
-    /// between a VRF row and memory, `reps` times. Each repetition steps the
-    /// address by `r<incr>` and, with `++`, the register down one row.
+    /// `v<w>{ld,st} <reg>[++][+rA],(r<base>+off[+=r<incr>]) [REP n]` — transfer
+    /// 16 elements between the register file and memory, `reps` times. Each
+    /// repetition steps the address by `r<incr>` and, with `++`, the register
+    /// by one (a row horizontally, an element vertically).
     Mem {
         store: bool,
         reg: VecReg,
-        /// `++` on the vector slot: advance to the next row each repetition.
-        step_row: bool,
+        /// `++` on the vector slot.
+        step: bool,
         base: u8,
+        /// Byte displacement on the address, measured as such.
+        offset: u32,
+        /// `+rN` on the vector slot: a scalar added to its element index.
+        addend: Option<u8>,
         incr: Option<u8>,
         reps: VecRep,
         pred: VecPred,
+        /// Element width of the *operation*, in bytes — what each lane moves to
+        /// or from memory, converted to the register's own element width.
+        width: u32,
     },
     /// `v<w>mov <reg>[++],r<n>` / `v<w>mov <reg>[++],#imm [REP n]` — broadcast a
     /// scalar or an immediate across the 16 lanes of a VRF register, for `reps`
@@ -730,7 +781,8 @@ pub enum VecExec {
         reg: VecReg,
         src: RegOrImm,
         reps: VecRep,
-        step_row: bool,
+        step: bool,
+        addend: Option<u8>,
     },
     /// `v<w>bitplanes -,r<n> SETF` — set the per-lane flags from the low 16 bits
     /// of a scalar; the vector result goes to a dash and is discarded.
@@ -740,15 +792,6 @@ pub enum VecExec {
 }
 
 /// Mask of `n` bits at bit position `pos`, counted from the most significant
-/// bit of a `width`-bit instruction word (how `videocoreiv.arch` writes them).
-const fn vmask(width: u32, pos: u32, n: u32) -> u128 {
-    ((1u128 << n) - 1) << (width - pos - n)
-}
-
-/// The same field, carrying `v`.
-const fn vbits(width: u32, pos: u32, n: u32, v: u128) -> u128 {
-    v << (width - pos - n)
-}
 
 /// Read such a field out of an instruction word.
 const fn vfield(raw: u128, width: u32, pos: u32, n: u32) -> u32 {
@@ -818,57 +861,18 @@ impl VecInsn {
         VecExec::NeedsVrf
     }
 
-    /// `v<w>ld`/`v<w>st` between one VRF row and memory, in both the 48-bit and
-    /// the 80-bit encoding.
-    ///
-    /// ```text
-    ///   48: 1111 00MM MMMW Weee VVV0 dddddd TTTx aaaaaa z 0 111 0 bbbbbb
-    ///   80: 1111 10MM MMMW WRRR DDDD dddddd AAAA aaaaaa 0 0 1110 000000
-    ///       gggg GG hhhh HH 0000 PPP 0000000 ssss 00
-    /// ```
+    /// `v<w>ld` / `v<w>st` between the register file and memory, in both the
+    /// 48-bit and the 80-bit encoding.
     ///
     /// The vector operand is the D slot for a load and the A slot for a store;
-    /// the other slot must be a bare dash. In the 80-bit form each slot also
-    /// carries a 4-bit register addend and a 2-bit coordinate modifier: on the
-    /// vector slot the addend must be "none" (15) and the modifier is `++` or
-    /// nothing, while the *dash* slot's addend is the register the address is
-    /// stepped by between repetitions. Any offset field must be zero: what a
-    /// displacement counts in is not established.
+    /// the other slot must be a dash, whose addend nibble — in the 80-bit form
+    /// — is the register the address steps by between repetitions. Every field
+    /// of this encoding has a meaning now, so this is a field test rather than
+    /// a whole-word template: what it refuses is `SETF` (the lane flags a
+    /// transfer would write are not modelled), a `*` on the vector slot, and a
+    /// lane predicate other than the two `bitplanes` feeds.
     fn mem_transfer(&self) -> Option<VecExec> {
-        // Bit 19 is the 48-bit direction bit (`f-op28`), free now that the
-        // window it selects is modelled both ways round.
-        const M48_FREE: u128 = vmask(48, 6, 5)
-            | vmask(48, 11, 2)
-            | vmask(48, 16, 3)
-            | vmask(48, 19, 1)
-            | vmask(48, 20, 6)
-            | vmask(48, 26, 3)
-            | vmask(48, 30, 6)
-            | vmask(48, 42, 6);
-        const M48: u128 = vbits(48, 0, 6, 0b111100) | vbits(48, 38, 3, 7);
-        const M80_FREE: u128 = vmask(80, 6, 5)
-            | vmask(80, 11, 2)
-            | vmask(80, 13, 3)
-            | vmask(80, 16, 10)
-            | vmask(80, 26, 10)
-            | vmask(80, 48, 12)
-            | vmask(80, 64, 3)
-            | vmask(80, 74, 4);
-        const M80: u128 = vbits(80, 0, 6, 0b111110) | vbits(80, 38, 4, 0b1110);
-
-        let wide = match self.len {
-            6 => false,
-            10 => true,
-            _ => return None,
-        };
-        let (free, template, width) = if wide {
-            (M80_FREE, M80, 80)
-        } else {
-            (M48_FREE, M48, 48)
-        };
-        if self.raw & !free != template {
-            return None;
-        }
+        let width = if self.wide { 80 } else { 48 };
         // `WW` 3 is not a width this decoder knows; 0/1/2 are 8/16/32.
         if vfield(self.raw, width, 11, 2) > 2 {
             return None;
@@ -883,35 +887,29 @@ impl VecInsn {
         } else {
             (self.d, self.a)
         };
-        // The inert slot must be the canonical dash, apart from the addend
-        // nibble the address reads as its `+=` step; the vector slot carries no
-        // addend and no `*`, and its only modifier is `++`.
+        // The inert slot must be a dash, and carries nothing of its own except
+        // — in the 80-bit encoding — the addend nibble the address reads as its
+        // `+=` step.
         if !dash.is_dash() || dash.star || dash.inc {
             return None;
         }
-        if vec_slot.addend != 15 || vec_slot.star {
+        if !self.wide && dash.addend != 15 {
             return None;
         }
-        // `++` on a vertical slot steps the *column*, by an amount no
-        // instruction this model runs pins down. Only the horizontal step is
-        // executed.
-        if vec_slot.is_vertical() && vec_slot.inc {
+        // What `*` means on a slot is not established.
+        if vec_slot.star || self.setf {
             return None;
         }
-        let step_row = vec_slot.inc;
         let addr = self.addr?;
-        // A displacement on the address is decoded but not executed: nothing
-        // says whether it counts in bytes or in elements, and no instruction
-        // this model runs carries one.
-        if addr.offset != 0 {
-            return None;
-        }
         Some(VecExec::Mem {
             store,
-            reg: vec_slot.window(self.lane_bits)?,
-            step_row,
+            reg: vec_slot.window()?,
+            step: vec_slot.inc,
             base: addr.base,
+            offset: addr.offset,
+            addend: (vec_slot.addend != 15).then_some(vec_slot.addend),
             incr: addr.incr,
+            width: self.lane_bits as u32 / 8,
             reps: match self.rep {
                 7 => VecRep::FromR0,
                 n => VecRep::Fixed(1 << n),
@@ -937,42 +935,43 @@ impl VecInsn {
     /// point of it here is `SETF`, which leaves one flag per lane holding the
     /// corresponding bit of the scalar operand.
     fn alu48(&self) -> Option<VecExec> {
-        const MOV_FREE: u128 =
-            vmask(48, 6, 1) | vmask(48, 16, 3) | vmask(48, 20, 6) | vmask(48, 42, 6);
-        const MOV_REG: u128 = vbits(48, 0, 6, 0b111101) | vbits(48, 26, 3, 7) | vbits(48, 38, 3, 7);
-        const MOV_IMM: u128 = vbits(48, 0, 6, 0b111101) | vbits(48, 26, 3, 7) | vbits(48, 37, 1, 1);
-        const BITPLANES_FREE: u128 = vmask(48, 6, 1) | vmask(48, 42, 6);
-        const BITPLANES: u128 = vbits(48, 0, 6, 0b111101)
-            | vbits(48, 7, 6, 1)
-            | vbits(48, 16, 3, 7)
-            | vbits(48, 26, 3, 7)
-            | vbits(48, 38, 3, 7)
-            | vbits(48, 41, 1, 1);
-
         if self.len != 6 {
             return None;
         }
-        let operand = vfield(self.raw, 48, 42, 6) as u8;
-        if self.raw & !BITPLANES_FREE == BITPLANES {
-            // Scalar registers are r0..r31; the field is six bits wide.
-            return (operand < 32).then_some(VecExec::Bitplanes { src: operand });
-        }
-        let masked = self.raw & !MOV_FREE;
-        let src = if masked == MOV_REG {
-            if operand >= 32 {
-                return None;
+        let b_slot = match self.b {
+            VecOperandB::Slot(s) => Some(s),
+            VecOperandB::Imm(_) => None,
+        };
+        // `bitplanes` writes no register: its point is `SETF`, which leaves one
+        // flag per lane holding the corresponding bit of the scalar.
+        if self.subop == 1 && self.setf && self.d.is_bare_dash() && self.a.is_bare_dash() {
+            if let Some(b) = b_slot {
+                if b.is_dash() && b.scalar < 32 && self.pred == 0 {
+                    return Some(VecExec::Bitplanes { src: b.scalar });
+                }
             }
-            RegOrImm::Reg(operand)
-        } else if masked == MOV_IMM {
-            RegOrImm::Imm(operand as i32)
-        } else {
             return None;
+        }
+        if self.subop != 0 || self.setf || self.pred != 0 {
+            return None; // only `vmov` broadcasts, and only unpredicated
+        }
+        if !self.a.is_bare_dash() || self.d.is_dash() || self.d.star {
+            return None;
+        }
+        let src = match b_slot {
+            None => match self.b {
+                VecOperandB::Imm(i) => RegOrImm::Imm(i as i32),
+                VecOperandB::Slot(_) => unreachable!(),
+            },
+            Some(b) if b.is_dash() && b.scalar < 32 => RegOrImm::Reg(b.scalar),
+            Some(_) => return None,
         };
         Some(VecExec::Broadcast {
-            reg: self.d.window(self.lane_bits)?,
+            reg: self.d.window()?,
             src,
             reps: VecRep::Fixed(1),
-            step_row: false,
+            step: false,
+            addend: (self.d.addend != 15).then_some(self.d.addend),
         })
     }
 
@@ -992,11 +991,10 @@ impl VecInsn {
         if self.len != 10 || self.mem || self.subop != 0 {
             return None; // `subop == 0` is `vmov`; only that broadcasts here.
         }
-        let reg = self.d.window(self.lane_bits)?;
-        if self.d.addend != 15 || self.d.star || (self.d.is_vertical() && self.d.inc) {
+        let reg = self.d.window()?;
+        if self.d.star {
             return None;
         }
-        let step_row = self.d.inc;
         // A must be a bare dash; no scalar writeback, flag update, or predication.
         if !self.a.is_bare_dash() {
             return None;
@@ -1021,7 +1019,8 @@ impl VecInsn {
             reg,
             src,
             reps,
-            step_row,
+            step: self.d.inc,
+            addend: (self.d.addend != 15).then_some(self.d.addend),
         })
     }
 

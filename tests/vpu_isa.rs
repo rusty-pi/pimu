@@ -392,14 +392,13 @@ fn vector_sum_of_broadcast_is_signed_at_the_lane_width() {
 
 /// Anything outside the implemented forms has to fault: quietly stepping over
 /// a vector instruction corrupts whatever it was moving. This is
-/// `v8ld V(0,32++),(r3+=r5) REP4` from `start4.elf` — a vertical window, which
-/// this model does handle, with a `++` that steps its *column* by an amount
-/// nothing here pins down.
+/// `v16ld HX(0++,0)*,(r2+=r5) REP4` from `start4.elf` at `0x0eca59b0` — an
+/// ordinary load but for the `*`, whose meaning nothing here establishes.
 #[test]
 fn vector_op_that_needs_the_register_file_faults() {
     let mut m = machine();
     let mut v = Vpu::new(CODE);
-    load_code(&mut m, CODE, &[0xF802, 0x5038, 0x0380, 0xF940, 0x000C, NOP]);
+    load_code(&mut m, CODE, &[0xF80A, 0x8038, 0x0380, 0xFD40, 0x0008, NOP]);
 
     assert_eq!(v.step(&mut m), Step::Stopped);
     assert!(
@@ -651,20 +650,28 @@ fn vector_broadcast_fills_every_lane() {
     }
 }
 
-/// The forms are matched as whole words, so a near miss must still fault rather
-/// than be executed with a field this model does not interpret. Here the 80-bit
-/// load carries a non-zero address offset — a field whose placement comes from
-/// Hermitage's notes and which no executed instruction exercises.
+/// A displacement on the address is executed now, as the byte offset it is.
 #[test]
-fn vector_load_with_an_unmodelled_offset_faults() {
+fn vector_load_with_an_offset_reads_that_many_bytes_further() {
+    // `v16ld HX(3,32),(r1+32)`, out of `start4.elf` at `0x0ec02822` — it was
+    // `(r0+32)` there, and the base register is the only change.
+    let bytes = [0x08, 0xf8, 0xf8, 0xa0, 0xa0, 0x03, 0xc0, 0xf3, 0x04, 0x00];
     let mut m = machine();
     let mut v = Vpu::new(CODE);
-    let mut ld = V32LD_R1_IFZ;
-    ld[2] |= 0x0010; // bit 47 of the word: the low bit of the offset field
-    load_code(&mut m, CODE, &concat(&[&ld, &[NOP]]));
+    for (i, b) in bytes.iter().enumerate() {
+        m.store8(CODE + i as u32, *b).unwrap();
+    }
+    m.store16(CODE + 10, NOP).unwrap();
+    for i in 0..128u32 {
+        m.store8(0x4000 + i, (i + 1) as u8).unwrap();
+    }
     v.regs.set(1, 0x4000);
+    v.regs.pc = CODE;
 
-    assert_eq!(v.step(&mut m), Step::Stopped, "must not be executed");
+    assert_eq!(v.step(&mut m), Step::Ran, "stopped: {:?}", v.stopped);
+    // 16-bit elements from byte 32 onwards, into the second band of row 3.
+    assert_eq!(v.vrf.read(3, 16, 2), 0x2221);
+    assert_eq!(v.vrf.read(3, 17, 2), 0x2423);
 }
 
 /// Likewise an unknown lane predicate: predicates 2 and 3 are pinned by the
@@ -701,7 +708,7 @@ fn boot_rom_vector_memclear_is_an_executable_rep_broadcast() {
         VecExec::Broadcast {
             src: RegOrImm::Imm(0),
             reps: VecRep::Fixed(8),
-            step_row: true,
+            step: true,
             ..
         } => {}
         _ => panic!("expected an 8-row zero broadcast"),
@@ -766,11 +773,8 @@ fn a_vertical_slot_splits_its_coordinate() {
     assert!(v.d.is_vertical(), "V");
     assert_eq!((v.d.y, v.d.x), (0, 32), "band 0, column 32");
     assert!(v.d.inc, "++ steps the column, not the row");
-    let w = v.d.window(v.lane_bits).expect("a window");
-    assert!(w.vertical && w.y == 0 && w.x == 32);
-    // The column step `++` asks for is pinned down by nothing, so this one
-    // still faults: the window is modelled, the stepping is not.
-    assert_eq!(v.executable(), rpi_virt_fw::vpu::insn::VecExec::NeedsVrf);
+    let w = v.d.window().expect("a window");
+    assert!(w.vertical && w.y == 0 && w.e0 == 32 && w.elem_bytes == 1);
 }
 
 /// A 48-bit instruction has one addend register for all three slots — the
@@ -816,16 +820,20 @@ fn an_80_bit_dash_b_carries_a_signed_displacement() {
     assert!(v.addr.is_none(), "only `vld`/`vst` read the wide address");
 }
 
-/// A load's address carries a displacement, and this model does not execute
-/// one: nothing says whether it counts bytes or elements.
+/// A load's address carries a displacement, and it counts in plain bytes —
+/// `v16ld HX(3,32),(r1+32)` over a page of ascending bytes reads the halfword
+/// at byte 32 for every element width (measured, Pi 4B d03115).
 #[test]
-fn an_address_displacement_decodes_but_does_not_execute() {
+fn an_address_displacement_is_a_byte_offset() {
     // `v16ld HX(3,32),(r0+32)`
     let v = vector(&[0x08, 0xf8, 0xf8, 0xa0, 0xa0, 0x03, 0xc0, 0xf3, 0x00, 0x00]);
     assert_eq!((v.d.y, v.d.x), (3, 32));
     let addr = v.addr.expect("an address");
     assert_eq!((addr.base, addr.offset, addr.incr), (0, 32, None));
-    assert_eq!(v.executable(), rpi_virt_fw::vpu::insn::VecExec::NeedsVrf);
+    match v.executable() {
+        rpi_virt_fw::vpu::insn::VecExec::Mem { offset: 32, .. } => {}
+        other => panic!("expected a transfer with a byte displacement: {other:?}"),
+    }
 }
 
 /// In the memory class the same bit is a B addend, not `SETF` — the B slot here
@@ -842,9 +850,12 @@ fn a_memory_class_b_register_takes_the_addend_not_setf() {
     assert!(v.addr.is_none(), "a register B is not an address");
 }
 
-/// A vertical transfer moves a *column* of the file. Sixteen 16-bit lanes,
-/// one per row from the band the slot names, at one byte column — so sixteen
-/// consecutive halfwords in memory land sixteen rows apart in the file.
+/// A vertical transfer moves a *column* of the file, and the file is not laid
+/// out the way it reads: element `e` of a register `w` bytes wide sits at byte
+/// `(e & 15) * 4 + (e >> 4) * w` of its row. `VX(32,46)` is 16-bit element 30
+/// — lane 14, second half — so sixteen consecutive halfwords in memory land at
+/// bytes 58..59 of rows 32..47. Measured with exactly these bytes on a
+/// Raspberry Pi 4B d03115.
 #[test]
 fn a_vertical_load_fills_a_column_of_the_file() {
     // `v16ld VX(32,46),(r0)` out of `start4.elf` at `0x0ec8bb66`.
@@ -867,9 +878,93 @@ fn a_vertical_load_fills_a_column_of_the_file() {
     for lane in 0..16u32 {
         let row = 32 + lane as usize;
         let want = 0x1000 + lane;
-        let got = vrf.byte(row, 46) as u32 | (vrf.byte(row, 47) as u32) << 8;
+        let got = vrf.byte(row, 58) as u32 | (vrf.byte(row, 59) as u32) << 8;
         assert_eq!(got, want, "row {row}");
     }
-    // Nothing landed beside it: the lanes went down, not across.
-    assert_eq!(vrf.byte(32, 48), 0, "the next column is untouched");
+    assert_eq!(vrf.byte(32, 56), 0, "the rest of the lane is untouched");
+    assert_eq!(vrf.byte(48, 58), 0, "sixteen rows, not seventeen");
+}
+
+/// The operation's width and the register's are separate, and the unit converts
+/// between them: a `v8ld` into a 32-bit slot zero-extends, a `v32st` out of an
+/// 8-bit slot writes each byte as a word. Both measured on a Pi 4B d03115.
+#[test]
+fn the_operation_width_converts_to_the_register_width() {
+    let mut m = machine();
+    let mut v = Vpu::new(CODE);
+    // `v8ld HY(0,0),(r1)` then `v32st HY(0,0),(r0)`: sixteen bytes in,
+    // sixteen words out.
+    let code: [u16; 6] = [0xF000, 0xC038, 0x0381, 0xF090, 0xE030, 0x0380];
+    load_code(&mut m, CODE, &concat(&[&code, &[NOP]]));
+    for i in 0..16u32 {
+        m.store8(0x4000 + i, (0x40 + i) as u8).unwrap();
+    }
+    v.regs.set(1, 0x4000);
+    v.regs.set(0, 0x5000);
+    step(&mut v, &mut m);
+    step(&mut v, &mut m);
+    for i in 0..16u32 {
+        assert_eq!(m.load32(0x5000 + i * 4).unwrap(), 0x40 + i, "word {i}");
+    }
+}
+
+/// The whole of the addressing, against the hardware it was measured on.
+///
+/// These six instructions ran on a Raspberry Pi 4B d03115 through the
+/// firmware's `EXECUTE_CODE` mailbox tag, over a page whose byte `n` holds
+/// `n + 1`, and the register file was read back out with
+/// `v32st HY(0++,0),(r0+=r3) REP64`. The rows below are what the silicon left
+/// behind; this model has to leave the same.
+///
+/// Between them they pin every part of the addressing: the `+rN` addend
+/// (`+r4` with `r4 = 3` starts the register at element 3 and wraps it into the
+/// second band), the byte displacement on the address (`(r1+7)`), all three
+/// element widths against all three operation widths, and `++` on a vertical
+/// slot, which walks the elements rather than the rows.
+#[test]
+fn the_measured_register_file_layout() {
+    const ROWS: &[(usize, &str)] = &[
+    (0, "000e0000000f0000001000000100000002000000030000000400000005000000060000000700000008000000090000000a0000000b0000000c0000000d000000"),
+    (1, "080900000a0b00000c0d00000e0f000010010000121300001415000016170000181900001a1b00001c1d00001e1f000020110000222300002425000026270000"),
+    (2, "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40"),
+    (3, "0100000002000000030000000400000005000000060000000700000008000000090000000a0000000b0000000c0000000d0000000e0000000f00000010000000"),
+    (4, "0100000005000000090000000d0000001100000015000000190000001d0000002100000025000000290000002d0000003100000035000000390000003d000000"),
+    (16, "01000000110000002100000031000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
+    (17, "02000000120000002200000032000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
+    (18, "03000000130000002300000033000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000")
+    ];
+    // `v8ld H(0,0)+r4,(r1)`, `v16ld HX(1,0),(r1+7)`, `v32ld HY(2,0),(r1)`,
+    // `v8ld HY(3,0),(r1)`, `v32ld H(4,0),(r1)`,
+    // `v8ld V(16,0++),(r1+=r2) REP4`.
+    const CODE_BYTES: &[u8] = &[
+        0x04, 0xf0, 0x38, 0x00, 0x81, 0x0b, //
+        0x08, 0xf8, 0x78, 0x80, 0x87, 0x03, 0xc0, 0xf3, 0x04, 0x00, //
+        0x10, 0xf0, 0xb8, 0xc0, 0x81, 0x03, //
+        0x00, 0xf0, 0xf8, 0xc0, 0x81, 0x03, //
+        0x10, 0xf0, 0x38, 0x01, 0x81, 0x03, //
+        0x02, 0xf8, 0x38, 0x14, 0x80, 0x03, 0x80, 0xf8, 0x04, 0x00,
+    ];
+
+    let mut m = machine();
+    let mut v = Vpu::new(CODE);
+    for (i, b) in CODE_BYTES.iter().enumerate() {
+        m.store8(CODE + i as u32, *b).unwrap();
+    }
+    for i in 0..256u32 {
+        m.store8(0x4000 + i, (i + 1) as u8).unwrap();
+    }
+    v.regs.set(1, 0x4000);
+    v.regs.set(2, 16);
+    v.regs.set(4, 3);
+    v.regs.pc = CODE;
+    for _ in 0..6 {
+        step(&mut v, &mut m);
+    }
+
+    for (row, want) in ROWS {
+        let got: String = (0..64)
+            .map(|c| format!("{:02x}", v.vrf.byte(*row, c)))
+            .collect();
+        assert_eq!(&got, want, "row {row}");
+    }
 }

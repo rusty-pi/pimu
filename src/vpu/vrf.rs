@@ -1,11 +1,22 @@
 //! The VideoCore IV Vector Register File.
 //!
-//! The VRF is a 64x64 array of bytes. A vector register is a 16-element window
-//! into it, named by a slot — see [`crate::vpu::insn::VecSlot`]. A *horizontal*
-//! window is 16 consecutive elements along one row, starting at byte column
-//! `x`; a *vertical* one is the same 16 elements read down a column, one per
-//! row, from the 16-aligned band `y` names. Element width comes from the
-//! operation, not from the slot.
+//! The file is 64 rows of 64 bytes, and a row is **sixteen lanes of four
+//! bytes** — not sixty-four bytes in a line. Element `e` of a register whose
+//! elements are `w` bytes wide lives at byte `(e & 15) * 4 + (e >> 4) * w` of
+//! its row: the lane is the element's low four bits, and the rest of the index
+//! picks the sub-field inside that lane. So a row holds 16 32-bit elements, or
+//! 32 16-bit ones, or 64 bytes — with consecutive elements four bytes apart,
+//! interleaved, rather than side by side.
+//!
+//! A *horizontal* register is sixteen elements of one row from element `e0`; a
+//! *vertical* one is the same element of sixteen consecutive rows, from the
+//! 16-aligned band its coordinate names — see [`crate::vpu::insn::VecSlot`].
+//!
+//! All of that is measured, not inferred: `v8ld H(0,0),(r1)` from a page of
+//! ascending bytes lands them four bytes apart, `v16ld HX(10,32)` two bytes
+//! into each lane, and `v8ld V(0,17)` puts one byte at column 5 of each of
+//! sixteen rows — run through the firmware's `EXECUTE_CODE` mailbox tag on a
+//! Raspberry Pi 4B d03115.
 //!
 //! Alongside the bytes the unit keeps per-lane flags. Only the zero flag is
 //! modelled, and only `v<w>bitplanes … SETF` writes it — the one producer the
@@ -37,36 +48,30 @@ impl Default for Vrf {
     }
 }
 
-/// Byte offset of lane `lane` of the window at `(y, x)`.
+/// Byte offset of element `e`, `w` bytes wide, in row `row`.
 #[inline]
-fn offset(y: u8, x: u8, vertical: bool, lane: u32, lane_bytes: u32) -> usize {
-    let (row, col) = if vertical {
-        ((y as u32 + lane) as usize % DIM, x as usize % DIM)
-    } else {
-        (
-            y as usize % DIM,
-            (x as u32 + lane * lane_bytes) as usize % DIM,
-        )
-    };
-    row * DIM + col
+fn offset(row: u8, e: u32, w: u32) -> usize {
+    let lane = (e & 15) as usize;
+    let sub = (e >> 4) as usize * w as usize;
+    (row as usize % DIM) * DIM + (lane * 4 + sub) % DIM
 }
 
 impl Vrf {
-    /// Read one lane, zero-extended to a `u32`. Elements are little-endian, the
-    /// same way the memory they are loaded from is.
-    pub fn read(&self, y: u8, x: u8, vertical: bool, lane: u32, lane_bytes: u32) -> u32 {
-        let off = offset(y, x, vertical, lane, lane_bytes);
+    /// Read one element, zero-extended to a `u32`. Elements are little-endian,
+    /// the same way the memory they are loaded from is.
+    pub fn read(&self, row: u8, e: u32, w: u32) -> u32 {
+        let off = offset(row, e, w);
         let mut v = 0u32;
-        for i in 0..lane_bytes as usize {
+        for i in 0..w as usize {
             v |= (self.bytes[(off + i) % (DIM * DIM)] as u32) << (8 * i);
         }
         v
     }
 
-    /// Write one lane, truncated to `lane_bytes`.
-    pub fn write(&mut self, y: u8, x: u8, vertical: bool, lane: u32, lane_bytes: u32, value: u32) {
-        let off = offset(y, x, vertical, lane, lane_bytes);
-        for i in 0..lane_bytes as usize {
+    /// Write one element, truncated to `w` bytes.
+    pub fn write(&mut self, row: u8, e: u32, w: u32, value: u32) {
+        let off = offset(row, e, w);
+        for i in 0..w as usize {
             self.bytes[(off + i) % (DIM * DIM)] = (value >> (8 * i)) as u8;
         }
     }
@@ -81,37 +86,49 @@ impl Vrf {
 mod tests {
     use super::*;
 
+    /// Consecutive elements are a lane apart, not an element apart: element `e`
+    /// sits at byte `(e & 15) * 4 + (e >> 4) * w`. Measured with
+    /// `v8ld H(0,0),(r1)` over a page of ascending bytes, which lands them at
+    /// columns 0, 4, 8 … of the row.
     #[test]
-    fn lanes_are_little_endian_and_contiguous() {
+    fn elements_are_interleaved_across_the_lanes() {
         let mut vrf = Vrf::default();
-        vrf.write(3, 0, false, 1, 4, 0x1122_3344);
-        assert_eq!(vrf.byte(3, 4), 0x44);
-        assert_eq!(vrf.byte(3, 7), 0x11);
-        assert_eq!(vrf.read(3, 0, false, 1, 4), 0x1122_3344);
-        // A 16-bit window over the same bytes sees the two halves.
-        assert_eq!(vrf.read(3, 0, false, 2, 2), 0x3344);
-        assert_eq!(vrf.read(3, 0, false, 3, 2), 0x1122);
+        for e in 0..16 {
+            vrf.write(3, e, 1, 0x40 + e);
+        }
+        for e in 0..16 {
+            assert_eq!(vrf.byte(3, e as usize * 4), 0x40 + e as u8, "element {e}");
+            assert_eq!(vrf.read(3, e, 1), 0x40 + e);
+        }
+        // The second band of 8-bit elements is one byte further into each lane.
+        vrf.write(3, 16, 1, 0xAB);
+        assert_eq!(vrf.byte(3, 1), 0xAB);
     }
 
     #[test]
-    fn a_vertical_window_walks_down_a_column() {
+    fn a_wider_element_fills_more_of_its_lane() {
         let mut vrf = Vrf::default();
-        // V(16,8) lane 3 is row 19, at column 8, two bytes wide.
-        vrf.write(16, 8, true, 3, 2, 0xBEEF);
-        assert_eq!(vrf.byte(19, 8), 0xEF);
-        assert_eq!(vrf.byte(19, 9), 0xBE);
-        assert_eq!(vrf.read(16, 8, true, 3, 2), 0xBEEF);
-        // Neighbouring lanes are neighbouring rows, not neighbouring columns.
-        assert_eq!(vrf.read(16, 8, true, 2, 2), 0);
-        assert_eq!(vrf.read(19, 8, false, 0, 2), 0xBEEF);
+        vrf.write(5, 1, 4, 0x1122_3344);
+        assert_eq!(vrf.byte(5, 4), 0x44);
+        assert_eq!(vrf.byte(5, 7), 0x11);
+        assert_eq!(vrf.read(5, 1, 4), 0x1122_3344);
+        // The same bytes seen as 16-bit elements: lane 1's two halves are
+        // elements 1 and 17.
+        assert_eq!(vrf.read(5, 1, 2), 0x3344);
+        assert_eq!(vrf.read(5, 17, 2), 0x1122);
+        // And as bytes, lane 1 holds elements 1, 17, 33 and 49.
+        assert_eq!(vrf.read(5, 1, 1), 0x44);
+        assert_eq!(vrf.read(5, 49, 1), 0x11);
     }
 
+    /// `v16ld HX(10,32)` on hardware writes two bytes into each lane at
+    /// offset 2 — the second band of 16-bit elements.
     #[test]
-    fn column_bands_do_not_overlap() {
+    fn the_second_16_bit_band_starts_two_bytes_into_the_lane() {
         let mut vrf = Vrf::default();
-        // H(5,16) lane 0 is column 16; H(5,0) lane 15 is column 15.
-        vrf.write(5, 16, false, 0, 1, 0xAB);
-        assert_eq!(vrf.read(5, 0, false, 15, 1), 0);
-        assert_eq!(vrf.byte(5, 16), 0xAB);
+        vrf.write(10, 16, 2, 0x0201);
+        assert_eq!(vrf.byte(10, 2), 0x01);
+        assert_eq!(vrf.byte(10, 3), 0x02);
+        assert_eq!(vrf.byte(10, 0), 0);
     }
 }

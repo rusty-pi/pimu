@@ -112,59 +112,54 @@ table, and two VPU cores. Core 1 starts where `start4` writes its entry to
 `IC1_WAKEUP` (`corectl` `+0x834`, `0x7E00_2834`), which on this bench happens
 only on a boot that goes on to Linux.
 
-## The vector unit (confirmed against two references)
+## The vector unit (measured on real hardware)
 
-The Vector Register File is a 64x64 array of bytes; a vector register is a
-16-element window into it, named by a slot: a 4-bit type nibble, a coordinate,
-a `+rN` scalar addend, and the `*` and `++` modifiers. Types 14 and 15 are the
-"dash" slot, which names no register at all — `-` in `videocoreiv.arch`, whose
-meaning depends on position: *discard the result* (D), *ignore* (A), *use the
-coordinate as a scalar register* (B).
+The Vector Register File is 64 rows of 64 bytes, and a row is **sixteen lanes
+of four bytes** — not sixty-four bytes in a line. Element `e` of a register
+whose elements are `w` bytes wide sits at byte `(e & 15) * 4 + (e >> 4) * w` of
+its row: the lane is the element's low four bits, and the rest of the index
+picks the sub-field inside that lane. Consecutive elements are four bytes
+apart, interleaved.
 
-**The type nibble is not an element width.** It says how coarsely the slot can
-spell its column — `H` in steps of 16 bytes, `HX` in steps of 32, `HY` only 0,
-and the three `V` types the same for a column — while the width of an element
-comes from the operation (`v8` / `v16` / `v32`). Reading it as a width is what
-made 3659 of `start4.elf`'s vector instructions look like a width mismatch: a
-16-bit operation on an `H` slot, such as `v16mov H(0,32),0x4`, is ordinary.
+A register is sixteen elements. A *horizontal* one takes them along one row
+from element `e0`; a *vertical* one takes the same element of sixteen
+consecutive rows, from the 16-aligned band its coordinate names.
 
-The fields are `binutils-vc4`'s — `print_vector_reg_1` in `opcodes/vc4-dis.c`,
-a fork whose vector decoding has been corrected against hardware probes. Its
-`f-op<hi>-<lo>` field names number the bits by 16-bit parcel in *memory* order,
-which `src/vpu/decode.rs` reads through one helper (`cg`). The whole of
-`start4.elf`'s `.text` was then compared against that disassembler instruction
-by instruction: **15054 of the 15180 vector words agree**, and the 126 that do
-not are ones objdump itself renders as a raw `vec48` / `vec80`, having no form
-for them.
+The slot's type nibble is the **register's** element width — `H`/`V` are
+8-bit, `HX`/`VX` 16-bit, `HY`/`VY` 32-bit — and the operation's width is a
+separate thing. The unit converts between them: narrowing truncates, widening
+zero-extends, on loads and on stores alike. `v8ld HY(3,0),(r1)` reads sixteen
+bytes and leaves sixteen 32-bit elements; `v32st H(1,0),(r0)` writes each 8-bit
+element out as a word.
 
-Two details are easy to get wrong, and both were:
+A slot's first element is `band * 16 + fine`, counted in elements, which is why
+the byte coordinate objdump prints and the element index part company as soon
+as an element is wider than a byte. `+rN` adds to that element index, also in
+elements. An address displacement is a plain byte offset. `++` steps the row
+horizontally and the element vertically.
 
-- a **vertical** slot's coordinate splits — `y` names the 16-aligned band of
-  rows the column covers, and the coordinate's low nibble belongs to `x`. Read
-  as a horizontal coordinate it prints rows that cannot exist.
-- the bit beside the B slot (`f-op38`) is that slot's `+rN` **only when B is a
-  vector register**. With a dash or an immediate there is no coordinate to step
-  and the same bit is `SETF` — and `vgetacc`, which never addresses memory,
-  always reads it as `SETF`.
+One asymmetry, and it matters: a **load** whose element straddles a 16-byte
+boundary wraps inside that block rather than crossing it — `v32ld
+HY(0,0),(r1+13)` over a page of ascending bytes reads `0e 0f 10 01`, taking its
+fourth byte from the start of the block. A **store** crosses normally.
 
-The file itself is modelled in `src/vpu/vrf.rs` — 64 rows of 64 bytes, plus one
-zero flag per lane. Both directions of window are implemented: 16 consecutive
-elements along a row, or the same 16 read down a column, one per row, from the
-16-aligned band the slot names. What a vertical slot's `++` steps its column by
-is not established, so that one still faults.
+None of that is inferred. All of it was measured by running VPU code on a
+Raspberry Pi 4B d03115 through the firmware's `EXECUTE_CODE` mailbox tag, and
+reading the register file back out with `v32st HY(0++,0),(r0+=r3) REP64`; the
+apparatus is in `examples-on-real-hardware/vpu-probe/`, and
+`tests/vpu_isa.rs` pins one whole run of it against the model. The encodings
+themselves come from `binutils-vc4` (see above); what the encodings *do* comes
+from the board.
 
-Which instructions execute is decided in `VecInsn::executable`, and every one of
-them is matched as a whole instruction word: a template with only the
-established fields left free, plus a value whitelist on each of those. A set bit
-in a field this model does not interpret falls through to a fault, which is the
-point — a loose field test would execute one of those forms wrongly and corrupt
-memory in silence. Decoding a field is not the same as executing it: a load's
-address displacement is read correctly now and still faults, because nothing
-says whether it counts bytes or elements.
+The file is modelled in `src/vpu/vrf.rs`. Which instructions execute is decided
+in `VecInsn::executable`, by field, not by whole-word template: every field of
+the memory encoding has an established meaning now. What it still refuses is
+`SETF` on a transfer, a `*` on a slot, and the five lane predicates the
+firmware does not pin down.
 
 | form | example | what it does here |
 |---|---|---|
-| `v<w>{ld,st} <reg>[++],(rB[+=rI]) [REP n]` | `v32ld HY(0,0)++,(r1+=r4) REP r0` | 16 lanes between one VRF row and memory, `n` times, stepping the address by `rI` and (with `++`) the row by one. `rB` is **not** written back |
+| `v<w>{ld,st} <reg>[++][+rA],(rB+off[+=rI]) [REP n]` | `v32ld HY(0,0)++,(r1+=r4) REP r0` | 16 elements between the register file and memory, `n` times, stepping the address by `rI` and (with `++`) the register by one. `off` is a byte displacement, `+rA` an element offset into the register. `rB` is **not** written back |
 | `v<w>mov <reg>[++],rN` / `,#imm` `[REP n]` | `v32mov HY(0,0),r1` | broadcast a scalar or a 6-bit immediate over the 16 lanes; the 80-bit form repeats it down the rows, which is how the boot ROM clears memory |
 | `v<w>bitplanes -,rN SETF` | `08 f4 38 e0 c0 03` | one flag per lane, holding that lane's bit of `rN` |
 | `v8ld -,(rN)` | `00 f0 38 e0 80 03` | reads 16 bytes at `rN` and discards them; no register changes |
@@ -194,16 +189,9 @@ on their addresses in one particular `start4.elf`.
 ## Not yet implemented
 
 Everything the vector unit can do beyond the table above: the ALU ops
-(`vadd`/`vand`/`vshl`/...), the per-slot `+rN` coordinate addends, the `*`
-column offset, `++` on a vertical slot, address displacements on a load or
-store, the accumulator modifiers, and any lane flag other than the zero flag
+(`vadd`/`vand`/`vshl`/...), the `*` column offset, the accumulator modifiers,
+the five unpinned lane predicates, and any lane flag other than the zero flag
 `bitplanes` writes. All of them fault.
-
-Of the 15180 vector instructions in `start4.elf`'s `.text`, 1567 are forms this
-model executes. That is fewer than the 1634 it used to run, in both directions:
-vertical windows and mixed-width operands are new, while 300 instructions whose
-slot carries a `+rN` addend now fault instead of running with the addend
-silently ignored — the old decoder had no field for it.
 
 Outside the ISA proper: no dual-issue pipeline, and the MMU and the caches are
 flat — the four VC4 aliases (`0x0`, `0x4000_0000`, `0x8000_0000`,

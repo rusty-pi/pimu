@@ -1,0 +1,82 @@
+# Probing the VPU's vector unit on a real Pi
+
+The vector unit is the part of the VC4 with no documentation worth the name,
+and several of its questions cannot be answered by reading firmware: where a
+`+rN` addend lands, what an address displacement counts in, how the register
+file is actually laid out. This directory answers them by running VPU code on
+a real board and reading back what it left behind.
+
+Nothing here runs in CI, and nothing in the model depends on it. The findings
+are baked into `src/vpu/` and into `tests/vpu_isa.rs`, with the board they came
+from named; this is the apparatus that produced them, kept so the next question
+does not have to rebuild it.
+
+## How it works
+
+The firmware's property mailbox has an `EXECUTE_CODE` tag (`0x00030010`) that
+calls a function on the VPU with `r0..r5` and hands back `r0`. `vpuprobe.py`
+allocates 64 KiB of VC memory through the same mailbox, drops a blob at offset
+0, enters it with
+
+- `r0` = bus address of a zeroed 4 KiB output page (offset `0x1000`),
+- `r1` = bus address of a marker page whose byte `n` holds `n + 1`,
+- `r2..r5` = whatever the caller passed,
+
+and prints the output page base64-encoded when it returns. Each probe clears
+the register file, runs the instruction under test, and dumps the file back out
+with `v32st HY(0++,0),(r0+=r3) REP64` — 64 rows of 64 bytes, exactly one page.
+
+`/dev/vc-mem` maps that memory one 4 KiB window at a time (more than one page
+per `mmap` faults), and `/dev/mem` will not map it at all on a stock 64-bit
+Raspberry Pi OS.
+
+## Running one
+
+Assemble with the `vc4` binutils port — `poizan42/binutils-vc4`, whose vector
+decoding has been corrected against hardware probes:
+
+```sh
+vc4-elf-as -o probes/layout.o probes/layout.s
+vc4-elf-objcopy -O binary probes/layout.o layout.bin
+base64 -w0 layout.bin > layout.b64
+scp layout.b64 vpuprobe.py <board>:/tmp/
+ssh <board> 'cd /tmp && sudo python3 vpuprobe.py layout.b64'
+```
+
+**This runs arbitrary code on the processor the firmware itself runs on.** A
+bad blob can take the firmware down with it, and the board then needs a power
+cycle. Keep probes short, return with `rts`, and do not leave the register file
+in a state a firmware thread might be mid-way through using.
+
+## The probes
+
+| probe | question it answers |
+|---|---|
+| `layout.s` | where each element of `H`/`HX`/`HY` lands in a row, at each operation width |
+| `vert.s`, `vert3.s` | the same for the `V` family, and how a vertical coordinate splits |
+| `vinc.s` | what `++` steps on a vertical slot |
+| `pa48.s` | what `+rN` adds to (run it with `r2` = 0, 1, 2, 3, 16) |
+| `disp.s` | what an address displacement counts in |
+| `conv.s` | narrowing and widening between the operation's width and the register's |
+| `wrap.s`, `wrap2.s` | what an unaligned element does at a 16-byte boundary |
+| `mix.s` | all of it at once — the run `tests/vpu_isa.rs` pins as a regression |
+| `vx46.s` | one prediction of the layout formula, checked against silicon |
+
+## What they found (Raspberry Pi 4B d03115, firmware 1.20260824)
+
+- A row is **sixteen lanes of four bytes**, not sixty-four bytes in a line.
+  Element `e` of a register `w` bytes wide sits at byte
+  `(e & 15) * 4 + (e >> 4) * w`.
+- The slot's type nibble is the **register's** element width (`H`/`V` 8-bit,
+  `HX`/`VX` 16-bit, `HY`/`VY` 32-bit). The operation's width is separate, and
+  the unit converts: narrowing truncates, widening zero-extends, both on loads
+  and on stores.
+- A slot's first element is `band * 16 + fine`, in elements — which is why the
+  byte coordinate objdump prints and the element index part company as soon as
+  an element is wider than a byte.
+- `+rN` adds to that element index, in elements, wrapping within the row.
+- An address displacement is a plain **byte** offset, at every width.
+- `++` steps the row horizontally and the element vertically.
+- A **load** whose element straddles a 16-byte boundary wraps inside that
+  block instead of crossing it: `v32ld HY(0,0),(r1+13)` over ascending bytes
+  reads `0e 0f 10 01`. A **store** crosses normally.

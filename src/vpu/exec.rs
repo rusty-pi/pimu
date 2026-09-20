@@ -1119,11 +1119,14 @@ impl Vpu {
                     VecExec::Mem {
                         store,
                         reg,
-                        step_row,
+                        step,
                         base,
+                        offset,
+                        addend,
                         incr,
                         reps,
                         pred,
+                        width,
                     } => {
                         // Lanes are transferred at their own address —
                         // predication masks lanes out, it does not compact them
@@ -1142,23 +1145,28 @@ impl Vpu {
                         // firmware advances it separately after the loop
                         // (`memcpy` at `0x3EDA28FE` adds `r0 * 64` to `r1`),
                         // which would double-count if the instruction did too.
-                        let mut addr = self.regs.get(base as usize);
-                        let mut y = reg.y;
-                        for _ in 0..reps {
-                            if let Err(err) = self.vec_transfer(bus, store, reg, y, addr, lanes) {
+                        let mut addr = self
+                            .regs
+                            .get(base as usize)
+                            .wrapping_add(offset)
+                            .wrapping_add(0);
+                        let addend = addend.map_or(0, |r| self.regs.get(r as usize));
+                        for rep in 0..reps {
+                            let step = if step { rep } else { 0 };
+                            if let Err(err) =
+                                self.vec_transfer(bus, store, reg, step, addend, addr, lanes, width)
+                            {
                                 return Some(self.stop(Stop::Fault(Fault::Bus { pc, err })));
                             }
                             addr = addr.wrapping_add(stride);
-                            if step_row {
-                                y = (y + 1) % vrf::DIM as u8;
-                            }
                         }
                     }
                     VecExec::Broadcast {
                         reg,
                         src,
                         reps,
-                        step_row,
+                        step,
+                        addend,
                     } => {
                         // Write the scalar/immediate into every lane of `reps`
                         // consecutive rows. The 48-bit form is a single row; the
@@ -1174,20 +1182,13 @@ impl Vpu {
                             VecRep::Fixed(n) => n,
                             VecRep::FromR0 => self.regs.get(0),
                         };
-                        let mut y = reg.y;
-                        for _ in 0..reps {
+                        let addend = addend.map_or(0, |r| self.regs.get(r as usize));
+                        let w = reg.elem_bytes as u32;
+                        for rep in 0..reps {
+                            let step = if step { rep } else { 0 };
                             for lane in 0..vrf::LANES {
-                                self.vrf.write(
-                                    y,
-                                    reg.x,
-                                    reg.vertical,
-                                    lane,
-                                    reg.lane_bytes as u32,
-                                    value,
-                                );
-                            }
-                            if step_row {
-                                y = (y + 1) % vrf::DIM as u8;
+                                let (row, e) = reg.lane(lane, step, addend);
+                                self.vrf.write(row, e, w, value);
                             }
                         }
                     }
@@ -1292,28 +1293,37 @@ impl Vpu {
         bus: &mut B,
         store: bool,
         reg: VecReg,
-        y: u8,
+        step: u32,
+        addend: u32,
         addr: u32,
         lanes: u16,
+        op_bytes: u32,
     ) -> Result<(), BusError> {
-        let lane_bytes = reg.lane_bytes as u32;
-        let width = match lane_bytes {
+        let width = match op_bytes {
             1 => Width::Byte,
             2 => Width::Half,
             _ => Width::Word,
         };
+        let w = reg.elem_bytes as u32;
         for lane in 0..vrf::LANES {
             if lanes & (1 << lane) == 0 {
                 continue;
             }
-            let ea = addr.wrapping_add(lane * lane_bytes);
-            let aligned = ea.is_multiple_of(lane_bytes);
+            // Memory is stepped by the *operation's* element size and the
+            // register by its own: a `v8ld` into an `HY` slot moves one byte
+            // per lane and zero-extends it into a 32-bit element.
+            let ea = addr.wrapping_add(lane * op_bytes);
+            let aligned = ea.is_multiple_of(op_bytes);
+            let (row, e) = reg.lane(lane, step, addend);
             if store {
-                let v = self.vrf.read(y, reg.x, reg.vertical, lane, lane_bytes);
+                let v = self.vrf.read(row, e, w);
                 if aligned {
                     bus.store(ea, width, v)?;
                 } else {
-                    for i in 0..lane_bytes {
+                    // A store that straddles a block writes straight through
+                    // it: `v16st HY(0,0),(r0+7)` lands its fifth halfword
+                    // across bytes 15 and 16, measured on a Pi 4B d03115.
+                    for i in 0..op_bytes {
                         bus.store8(ea.wrapping_add(i), (v >> (8 * i)) as u8)?;
                     }
                 }
@@ -1321,13 +1331,21 @@ impl Vpu {
                 let v = if aligned {
                     bus.load(ea, width)?
                 } else {
+                    // A load does not: each element comes out of the aligned
+                    // 16-byte block its first byte is in, wrapping round inside
+                    // it rather than running over the edge. `v32ld
+                    // HY(0,0),(r1+13)` over a page of ascending bytes reads
+                    // `0e 0f 10 01` — the fourth byte from the start of the
+                    // block, not from byte 16 (measured, Pi 4B d03115).
+                    let block = ea & !15;
                     let mut v = 0u32;
-                    for i in 0..lane_bytes {
-                        v |= (bus.load8(ea.wrapping_add(i))? as u32) << (8 * i);
+                    for i in 0..op_bytes {
+                        let a = block | (ea.wrapping_add(i) & 15);
+                        v |= (bus.load8(a)? as u32) << (8 * i);
                     }
                     v
                 };
-                self.vrf.write(y, reg.x, reg.vertical, lane, lane_bytes, v);
+                self.vrf.write(row, e, w, v);
             }
         }
         Ok(())
