@@ -1512,7 +1512,19 @@ impl VecInsn {
         if !scatter && dash.inc {
             return None;
         }
-        let addr = self.addr?;
+        // A gather whose B slot holds a vector names no address either — the
+        // bits are the slot — and reads from zero, the same as `(r63)`.
+        // Measured with `probes/lkc.s`: with 16 in the accumulator's high
+        // half, both forms answer the byte at address 16.
+        let addr = match self.addr {
+            Some(addr) => addr,
+            None if !scatter => VecAddr {
+                base: 63,
+                offset: 0,
+                incr: None,
+            },
+            None => return None,
+        };
         let reps = match self.rep {
             7 => VecRep::FromR0,
             n => VecRep::Fixed(1 << n),

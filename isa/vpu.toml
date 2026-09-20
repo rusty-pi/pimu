@@ -634,7 +634,7 @@ confidence = "high"
 subop    = 1
 mnemonic = "lookupm"
 status   = "executes"
-cells    = ["1", "`lookupm`", "gather: each lane reads element `acc >> 16` of the table at the address. `(r63)` names no register — the address is then just the displacement — the A slot is read for nothing, and a dash destination reads and discards, which is how `start4.elf` spells every one of them"]
+cells    = ["1", "`lookupm`", "gather: each lane reads element `acc >> 16` of the table at the address. An address-less form — `(r63)`, or a vector in the B slot — gathers from **zero** — the address is then just the displacement — the A slot is read for nothing, and a dash destination reads and discards, which is how `start4.elf` spells every one of them"]
 
 [[section.row.source]]
 kind       = "measured"
@@ -2232,9 +2232,9 @@ title = "What the model executes"
 body = """
 `VecInsn::executable` decides, by field rather than by whole-word template.
 A linear sweep of `start4.elf`'s `.text` with this decoder finds **14650**
-vector instructions, and **13723 of them execute**.
+vector instructions, and **13761 of them execute**.
 
-The 927 that do not split by what `binutils-vc4` objdump makes of the same
+The 889 that do not split by what `binutils-vc4` objdump makes of the same
 address — a better measure than the page they sit in, since a linear sweep
 through a jump table produces valid-looking encodings by accident:
 """
@@ -2246,7 +2246,7 @@ passes.
 """
 
 [[section.row]]
-cells = ["389", "words objdump refuses too — it prints them `vec48`, `vunk...` or `vop63.1`. Data: jump tables and constants a sweep cannot tell from code"]
+cells = ["385", "words objdump refuses too — it prints them `vec48`, `vunk...` or `vop63.1`. Data: jump tables and constants a sweep cannot tell from code"]
 
 [[section.row.source]]
 kind       = "decompile"
@@ -2262,11 +2262,11 @@ ref        = "`probes/m11.s`-`probes/m23.s` on Raspberry Pi 4B d03115 boards, on
 confidence = "high"
 
 [[section.row]]
-cells = ["~60", "`indexwritem` with a dash source, and `lookupm` whose B slot holds a vector rather than an address"]
+cells = ["~20", "`indexwritem` with a dash source — a scatter with nothing to write"]
 
 [[section.row.source]]
 kind       = "decompile"
-ref        = "`binutils-vc4` spells them; a scatter with nothing to write, and a gather with no address, were not measured"
+ref        = "`binutils-vc4` spells them; what a scatter with no source writes was not measured"
 confidence = "low"
 
 [[section.row]]
@@ -2278,7 +2278,7 @@ ref        = "`probes/st63.s`, `probes/st63b.s`: 32 bytes of our own scratch and
 confidence = "medium"
 
 [[section.row]]
-cells = ["67", "addresses objdump does not decode at all: the two linear sweeps drifting apart inside data"]
+cells = ["61", "addresses objdump does not decode at all: the two linear sweeps drifting apart inside data"]
 
 [[section.row.source]]
 kind       = "decompile"

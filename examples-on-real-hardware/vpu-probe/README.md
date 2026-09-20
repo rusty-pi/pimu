@@ -109,7 +109,7 @@ Two things are known to wedge it, both found the hard way:
 | `mld.s`, `where.s` | a `vld` with a vector slot in the B position: that it reads **address 0**, confirmed against the same RAM through `0x80000000` and `0xc0000000` |
 | `st63.s`, `st63b.s` | the store in that shape — it writes neither where its operands point nor to address 0 |
 | `r63.s`, `r63b.s`, `r63c.s` | `(r63)` in a gather's address, whether the A slot matters, and a gather with a dash destination |
-| `lkb.s`, `lkc.s` | a gather whose B slot holds a vector instead of an address — inconclusive, see below |
+| `lkb.s`, `lkc.s` | a gather whose B slot holds a vector instead of an address: it reads from zero, like `(r63)` |
 | `m07.s`, `addr07.s`, `addr07b.s` | memory sub-op 7: that it writes zeros, writes nothing at an address it is handed, and leaves the lookup table alone |
 | `m11.s`-`m23.s` | the rest of the unnamed memory sub-ops. **Each one kills the firmware** — run them only on a board you can power-cycle |
 
@@ -178,6 +178,9 @@ Two things are known to wedge it, both found the hard way:
   word whose bit `j` is bit `i` of lane `j` of B. A scalar B — which every lane
   sees alike — therefore comes out as all-ones wherever B's bit `i` is set,
   which is the one-flag-per-bit form the firmware uses.
+- A `lookupm` that names no address — `(r63)`, or a vector in the B slot —
+  gathers from **zero**: with 16 in the accumulator's high half both forms
+  answer the byte at address 16.
 - A dash in the A position is an operand of **zeros**, whatever the op. A `*`
   on any slot changes nothing a register or memory can see — destination,
   source, `+rN`, under `REP`, on a load or on a store alike.
@@ -226,15 +229,6 @@ Two things are known to wedge it, both found the hard way:
   the aggregate as well.
 
 ## Still open
-
-A **gather** whose B slot holds a vector instead of an address answers the
-same zeros as the address-less form, which is what address 0 holds at index 0
-— but that is also what an op writing zeros would answer, so the two cannot be
-told apart yet. Separating them needs an index that lands on non-zero data,
-and the `...H` accumulate that would put one in the high half did not take:
-`v16mov -,HX(24,0) CLRA SACCH` left 16 in the accumulator rather than
-`16 << 16`, read back with `vgetacc`. Worth another look — it may mean the
-`H` forms are not what this assumes.
 
 The **store** whose B slot holds a vector. Its load counterpart reads address
 0 — `where.s` proves it by reading the same bytes back through `0`,
