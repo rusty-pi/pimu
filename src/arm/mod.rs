@@ -71,6 +71,23 @@
 //! fast-forward still moves the counter first, so a request made during a
 //! jump is seen when it ends.
 //!
+//! ## Straight-line runs
+//!
+//! Inside a burst, the instructions from one control-flow transfer to the
+//! next are run off the page the first of them came from (#117), because the
+//! answers to most of the checks around a step cannot change over such a run:
+//! the interrupt lines only move in [`ArmSide::sync`], which a burst does not
+//! reach; the EL, `SCR_EL3` and `HCR_EL2` that `Cpu::step_system`'s stage-2
+//! guard reads cannot move without adding to [`Cpu::shared_effects`], which
+//! is compared every step anyway; the PC stays aligned and stays in a page
+//! whose translation a `TLBI` cannot drop without the same compare ending the
+//! run; and the park detector only has work to do at a backward jump, so it
+//! is called once, at the transfer that ends the run. What is left per
+//! instruction is the load, the execute, and the tests for a store, a device
+//! and an effect. `RVF_ARM_BLOCKS` measures the runs: the mean is 5.3
+//! instructions on `linux-boot` and 9.6 on the mkosi boot.
+//! `RVF_NO_STRAIGHT=1` turns this off, for comparison.
+//!
 //! ## Between cores
 //!
 //! - Exclusive monitor: a store by one core into the 64-byte granule another
@@ -344,6 +361,9 @@ pub struct ArmSide {
     /// `RVF_NO_SHA_SKIP=1` runs SHA-256 block loops block by block too
     /// (module docs, "SHA-256 loops").
     sha_on: bool,
+    /// `RVF_NO_STRAIGHT=1` steps a burst one instruction at a time instead of
+    /// running each straight-line stretch off one page ([`Self::burst`]).
+    straight_on: bool,
     /// `RVF_ARM_BLOCKS=1` counts the straight-line runs ([`blocks`]), which
     /// only [`Self::step_core`] sees, so it takes the cores off the burst
     /// path the way a profile does.
@@ -431,6 +451,7 @@ impl ArmSide {
             park_on: std::env::var_os("RVF_NO_PARK").is_none(),
             burst_on: std::env::var_os("RVF_NO_BURST").is_none(),
             sha_on: std::env::var_os("RVF_NO_SHA_SKIP").is_none(),
+            straight_on: std::env::var_os("RVF_NO_STRAIGHT").is_none(),
             blocks_on: crate::diag::ON && std::env::var_os("RVF_ARM_BLOCKS").is_some(),
             stop_on_store: false,
             stored: false,
@@ -866,7 +887,92 @@ impl ArmSide {
             released_at,
             periph_store: false,
         };
-        let last = loop {
+        let last = 'burst: loop {
+            // A straight-line run off one page (#117). While the PC goes to
+            // the next word inside the page the last instruction came from,
+            // the answers to most of the checks around a step cannot change:
+            //
+            // - the interrupt lines only move in [`Self::sync`], which does
+            //   not run inside a burst, and a step that touches a device sets
+            //   `bus.io` and ends the burst — so with both lines down at the
+            //   start, no step here can take an interrupt whatever the
+            //   guest's `msr daif` does;
+            // - `step_system`'s stage-2 guard reads the EL, `SCR_EL3` and
+            //   `HCR_EL2`, and nothing can change those without adding to
+            //   `Cpu::shared_effects`, which is compared every step anyway;
+            // - the PC stays 4-byte aligned, and stays in a page whose
+            //   translation a `TLBI` cannot drop without the same compare
+            //   ending the run;
+            // - [`park::Detector::retired`] only has work to do at a backward
+            //   jump, so on a straight step it would return without doing
+            //   any — it is called once, at the transfer that ends the run.
+            //
+            // So make them once instead of once per instruction. The mean run
+            // is 5.3 instructions on `linux-boot` and 9.6 on the mkosi boot.
+            if self.straight_on && !cpu.irq_line && !cpu.fiq_line && entered.is_some() {
+                if let Some((va_page, el, pa_page)) = cpu.tlb.fetch_hint() {
+                    // The alignment test `Cpu::step` makes is hoisted with
+                    // the rest: a PC that starts aligned and only advances
+                    // by 4 stays aligned, and a misaligned one is left to
+                    // the ordinary path to fault on.
+                    if el == cpu.el
+                        && va_page == cpu.pc & !0xFFF
+                        && cpu.pc & 3 == 0
+                        && !detect.watching()
+                    {
+                        loop {
+                            let pc = cpu.pc;
+                            if cycles >= limit || pc & !0xFFF != va_page {
+                                break;
+                            }
+                            let Ok(insn) = bus.fetch(pa_page | (pc & 0xFFF)) else {
+                                break;
+                            };
+                            bus.cycles = cycles;
+                            bus.written = None;
+                            // What `step_system` does with an exception the
+                            // instruction raised; the interrupt tests in
+                            // front of it are the ones hoisted out.
+                            let step = match cpu.step_fetched(insn, &mut bus) {
+                                Step::Exception(e) => {
+                                    cpu.take_sync(e);
+                                    Step::Took(e)
+                                }
+                                s => s,
+                            };
+                            let wrote = bus.written.is_some();
+                            if !matches!(step, Step::Retired)
+                                || bus.io
+                                || cpu.shared_effects != effects
+                                || (wrote && marked)
+                            {
+                                break 'burst Some(Stepped {
+                                    step,
+                                    pc,
+                                    written: bus.written,
+                                    io: bus.io,
+                                    periph_store: bus.periph_store,
+                                });
+                            }
+                            *insns += 1;
+                            cycles += 1;
+                            if cpu.pc != pc.wrapping_add(4) {
+                                // The transfer that ends the run, and the one
+                                // step of it the detector can have work for.
+                                if track {
+                                    let park = detect.retired(cpu, cycles - 1, pc, wrote);
+                                    debug_assert!(!park);
+                                }
+                                break;
+                            }
+                        }
+                        if cycles >= limit || detect.watching() {
+                            break None;
+                        }
+                        continue;
+                    }
+                }
+            }
             bus.cycles = cycles;
             bus.written = None;
             let pc = cpu.pc;

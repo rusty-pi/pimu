@@ -428,6 +428,15 @@ impl Cpu {
             Ok(i) => i,
             Err(e) => return Step::Exception(e),
         };
+        self.step_fetched(insn, mem)
+    }
+
+    /// [`Self::step`] with the instruction word already in hand, for a caller
+    /// that fetched it itself — a run of instructions off one page, or a
+    /// translated block (#117). `self.pc` must be where `insn` came from.
+    #[inline(always)]
+    pub fn step_fetched<M: Memory + ?Sized>(&mut self, insn: u32, mem: &mut M) -> Step {
+        let pc = self.pc;
         self.next_pc = pc.wrapping_add(4);
         match exec::execute(self, insn, mem) {
             Ok(()) => {
