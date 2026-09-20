@@ -741,6 +741,145 @@ pub struct VecInsn {
     pub len: u8,
 }
 
+/// A vector ALU operation whose semantics have been measured.
+///
+/// Every one of these was run on a Raspberry Pi 4B d03115 against two vectors
+/// of edge cases — `0x7fff`, `0x8000`, `0xffff`, shift counts of 0 and 15 —
+/// and the result read back out of the register file
+/// (`examples-on-real-hardware/vpu-probe/probes/alu.s`). The ops not listed
+/// here are the ones those runs did not pin down: the carry forms, `clips`,
+/// `testmag`, the `sign*` shifts, the multiplies and the unnamed sub-ops.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VecAluOp {
+    /// `d = b`.
+    Mov,
+    /// `d = a[2i]` / `d = a[2i+1]`: the even or odd elements of A, packed down.
+    Even,
+    Odd,
+    /// Alternate elements of A and B, from the low half or the high half.
+    Interl,
+    Interh,
+    /// Reverse the low `n` bits of A, `n` being B's low nibble — or all 16
+    /// (32, 8) of them when that nibble is zero.
+    Brev,
+    Ror,
+    Shl,
+    /// Shift left, saturating signed.
+    Shls,
+    Lsr,
+    Asr,
+    And,
+    Or,
+    Eor,
+    /// `a & !b`.
+    Bic,
+    /// `popcount(a) + popcount(b)`.
+    Count,
+    /// Index of B's highest set bit.
+    Msb,
+    /// Signed.
+    Min,
+    Max,
+    /// `|a - b|`, wrapping, and its saturating form.
+    Dist,
+    Dists,
+    /// `a` clamped to `0 ..= b`, signed.
+    Clip,
+    /// `b + signum(a)`.
+    Sign,
+    Add,
+    /// Saturating signed.
+    Adds,
+    Sub,
+    Subs,
+    /// `b - a`.
+    Rsub,
+    Rsubs,
+}
+
+impl VecAluOp {
+    /// The `v` sub-op field, as `insn-vecops` numbers it.
+    pub fn from_subop(subop: u8) -> Option<VecAluOp> {
+        use VecAluOp::*;
+        Some(match subop {
+            0 => Mov,
+            2 => Even,
+            3 => Odd,
+            4 => Interl,
+            5 => Interh,
+            6 => Brev,
+            7 => Ror,
+            8 => Shl,
+            9 => Shls,
+            10 => Lsr,
+            11 => Asr,
+            16 => And,
+            17 => Or,
+            18 => Eor,
+            19 => Bic,
+            20 => Count,
+            21 => Msb,
+            24 => Min,
+            25 => Max,
+            26 => Dist,
+            27 => Dists,
+            28 => Clip,
+            29 => Sign,
+            32 => Add,
+            33 => Adds,
+            36 => Sub,
+            37 => Subs,
+            40 => Rsub,
+            41 => Rsubs,
+            _ => return None,
+        })
+    }
+
+    /// Which element of A and of B lane `i` reads. All but the four shuffles
+    /// read their own lane.
+    ///
+    /// `even` and `odd` pack A's alternate elements into the low eight lanes
+    /// and B's into the high eight; the two interleaves alternate between the
+    /// two registers. Measured, like the rest of it, on a Pi 4B d03115.
+    pub fn sources(self, i: u32) -> (u32, u32) {
+        use VecAluOp::*;
+        let half = i % 8;
+        match self {
+            Even => (2 * half, 2 * half),
+            Odd => (2 * half + 1, 2 * half + 1),
+            Interl => (i / 2, i / 2),
+            Interh => (8 + i / 2, 8 + i / 2),
+            _ => (i, i),
+        }
+    }
+
+    /// Whether lane `i` of a shuffle takes its result from B rather than A.
+    pub fn takes_b(self, i: u32) -> bool {
+        use VecAluOp::*;
+        match self {
+            Even | Odd => i >= 8,
+            Interl | Interh => i % 2 == 1,
+            _ => false,
+        }
+    }
+}
+
+/// One operand slot resolved for execution: the window, and the scalar register
+/// whose value is added to its element index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VecOperand {
+    pub reg: VecReg,
+    pub addend: Option<u8>,
+}
+
+/// The third operand of an ALU op: another register, a scalar, or an immediate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VecSource {
+    Reg(VecOperand),
+    Scalar(u8),
+    Imm(i32),
+}
+
 /// How much of a vector instruction this model can actually carry out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VecExec {
@@ -787,6 +926,20 @@ pub enum VecExec {
     /// `v<w>bitplanes -,r<n> SETF` — set the per-lane flags from the low 16 bits
     /// of a scalar; the vector result goes to a dash and is discarded.
     Bitplanes { src: u8 },
+    /// `v<w><op> <d>,<a>,<b>` — the measured ALU ops, lane by lane.
+    Alu {
+        op: VecAluOp,
+        d: VecOperand,
+        a: VecOperand,
+        b: VecSource,
+        reps: VecRep,
+        /// `++` on the D slot, and on A when it has one.
+        step_d: bool,
+        step_a: bool,
+        pred: VecPred,
+        /// Element width the operation works at, in bytes.
+        width: u32,
+    },
     /// Needs a part of the vector unit this model does not implement.
     NeedsVrf,
 }
@@ -854,7 +1007,7 @@ impl VecInsn {
             if let Some(e) = self.mem_transfer() {
                 return e;
             }
-        } else if let Some(e) = self.alu48().or_else(|| self.alu80()) {
+        } else if let Some(e) = self.alu48().or_else(|| self.alu80()).or_else(|| self.alu()) {
             return e;
         }
         VecExec::NeedsVrf
@@ -1020,6 +1173,71 @@ impl VecInsn {
             reps,
             step: self.d.inc,
             addend: (self.d.addend != 15).then_some(self.d.addend),
+        })
+    }
+
+    /// The ALU-class ops whose semantics are measured, in either encoding.
+    ///
+    /// The operation's width has to match every register it touches: what the
+    /// unit does when they differ was not measured, and guessing it would
+    /// corrupt a register quietly. `SETF`, the accumulator, a scalar writeback,
+    /// a `*` and the five unpinned lane predicates all still fault.
+    fn alu(&self) -> Option<VecExec> {
+        let op = VecAluOp::from_subop(self.subop)?;
+        if self.setf || self.sru != VecSru::None {
+            return None;
+        }
+        let width = self.lane_bits as u32 / 8;
+        let d = self.operand(self.d, width)?;
+        // `mov` and the unary ops read only B; the rest need a real A.
+        let a = if self.a.is_dash() {
+            if !matches!(op, VecAluOp::Mov | VecAluOp::Msb | VecAluOp::Count) {
+                return None;
+            }
+            d // unused; `vec_alu` ignores `a` for these
+        } else {
+            self.operand(self.a, width)?
+        };
+        let b = match self.b {
+            VecOperandB::Imm(i) => VecSource::Imm(i as i32),
+            VecOperandB::Slot(sl) if sl.is_dash() => {
+                if sl.disp != 0 || sl.scalar >= 32 {
+                    return None;
+                }
+                VecSource::Scalar(sl.scalar)
+            }
+            VecOperandB::Slot(sl) => VecSource::Reg(self.operand(sl, width)?),
+        };
+        Some(VecExec::Alu {
+            op,
+            d,
+            a,
+            b,
+            reps: match self.rep {
+                7 => VecRep::FromR0,
+                n => VecRep::Fixed(1 << n),
+            },
+            step_d: self.d.inc,
+            step_a: self.a.inc,
+            pred: match self.pred {
+                0 => VecPred::All,
+                2 => VecPred::IfZero,
+                3 => VecPred::IfNonZero,
+                _ => return None,
+            },
+            width,
+        })
+    }
+
+    /// One slot as an execution operand: a window whose elements are as wide as
+    /// the operation, plus its `+rN`.
+    fn operand(&self, slot: VecSlot, width: u32) -> Option<VecOperand> {
+        if slot.star || slot.elem_bytes() as u32 != width {
+            return None;
+        }
+        Some(VecOperand {
+            reg: slot.window()?,
+            addend: (slot.addend != 15).then_some(slot.addend),
         })
     }
 

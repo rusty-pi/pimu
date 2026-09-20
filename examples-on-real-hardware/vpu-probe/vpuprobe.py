@@ -66,7 +66,12 @@ class VcMem:
 
 def main():
     blob = base64.b64decode(open(sys.argv[1], "rb").read())
-    args = [int(a, 0) for a in sys.argv[2:]]
+    data = b""
+    args = sys.argv[2:]
+    if args and args[0].startswith("@"):
+        data = bytes.fromhex(open(args[0][1:]).read().split())if False else bytes.fromhex("".join(open(args[0][1:]).read().split()))
+        args = args[1:]
+    args = [int(a, 0) for a in args]
     args += [0] * (5 - len(args))
 
     mb, vc = Mbox(), VcMem()
@@ -82,6 +87,8 @@ def main():
         for off in range(0x2000, SIZE, PAGE):
             page = bytes((i + 1) & 0xFF for i in range(PAGE))
             vc.write(phys + off, page)
+        if data:
+            vc.write(phys + 0x3000, data.ljust(PAGE, b"\0"))
         r0 = mb.call(EXECUTE_CODE, [bus, bus + 0x1000, bus + 0x2000, *args[:4]], 1)[0]
         out = vc.read(phys + 0x1000)
         print(f"r0 {r0:#010x}")

@@ -188,10 +188,24 @@ on their addresses in one particular `start4.elf`.
 
 ## Not yet implemented
 
-Everything the vector unit can do beyond the table above: the ALU ops
-(`vadd`/`vand`/`vshl`/...), the `*` column offset, the accumulator modifiers,
-the five unpinned lane predicates, and any lane flag other than the zero flag
-`bitplanes` writes. All of them fault.
+Twenty-nine ALU ops execute — `mov`, `add`/`adds`, `sub`/`subs`,
+`rsub`/`rsubs`, `and`/`or`/`eor`/`bic`, `min`/`max`, `shl`/`shls`/`lsr`/`asr`,
+`ror`, `brev`, `count`, `msb`, `dist`/`dists`, `clip`, `sign`, and the four
+shuffles `even`/`odd`/`interl`/`interh` — each measured lane by lane against
+two vectors of edge cases and pinned in `tests/vpu_isa.rs`. `even` and `odd`
+pack A's alternate elements into the low eight lanes and B's into the high
+eight; `clip` is `a` clamped into `0 ..= b`; `sign` is `b + signum(a)`;
+`count` is `popcount(a) + popcount(b)`; and `brev` reverses the low `n` bits of
+`a`, `n` being `b`'s low nibble, or the whole element when that nibble is zero.
+
+What still faults: the multiplies and the accumulator that goes with them, the
+carry forms (`addc`, `subc`, ...), `clips`, `testmag`, the `sign*` shifts, the
+unnamed sub-ops, the `*` column offset, `SETF` outside `bitplanes`, the five
+unpinned lane predicates, and any ALU op whose operation width disagrees with a
+register it touches — what the unit does then was not measured, and guessing it
+would corrupt a register quietly.
+
+Of the 15180 vector instructions in `start4.elf`'s `.text`, 5189 execute.
 
 Outside the ISA proper: no dual-issue pipeline, and the MMU and the caches are
 flat — the four VC4 aliases (`0x0`, `0x4000_0000`, `0x8000_0000`,

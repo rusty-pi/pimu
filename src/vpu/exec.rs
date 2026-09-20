@@ -10,8 +10,8 @@ const CF_TRACE_LEN: usize = 512;
 use super::decode::decode;
 use super::icache::DecodeCache;
 use super::insn::{
-    AddrMode, AluOp, Base, Insn, MemWidth, Op, RegOrImm, VecExec, VecInsn, VecPred, VecReg, VecRep,
-    Writeback,
+    AddrMode, AluOp, Base, Insn, MemWidth, Op, RegOrImm, VecAluOp, VecExec, VecInsn, VecPred,
+    VecReg, VecRep, VecSource, Writeback,
 };
 use super::length::InsnClass;
 use super::reg::{Cond, Flags, Regs, GP, LR, SP};
@@ -1204,6 +1204,62 @@ impl Vpu {
                         // forms this model executes read nothing else.
                         self.vrf.lane_z = !(self.regs.get(src as usize) as u16);
                     }
+                    VecExec::Alu {
+                        op,
+                        d,
+                        a,
+                        b,
+                        reps,
+                        step_d,
+                        step_a,
+                        pred,
+                        width,
+                    } => {
+                        let lanes = match pred {
+                            VecPred::All => u16::MAX,
+                            VecPred::IfZero => self.vrf.lane_z,
+                            VecPred::IfNonZero => !self.vrf.lane_z,
+                        };
+                        let reps = match reps {
+                            VecRep::Fixed(n) => n,
+                            VecRep::FromR0 => self.regs.get(0),
+                        };
+                        let d_add = d.addend.map_or(0, |r| self.regs.get(r as usize));
+                        let a_add = a.addend.map_or(0, |r| self.regs.get(r as usize));
+                        for rep in 0..reps {
+                            for lane in 0..vrf::LANES {
+                                if lanes & (1 << lane) == 0 {
+                                    continue;
+                                }
+                                let (ai, bi) = op.sources(lane);
+                                let av = {
+                                    let (row, e) =
+                                        a.reg.lane(ai, if step_a { rep } else { 0 }, a_add);
+                                    self.vrf.read(row, e, a.reg.elem_bytes as u32)
+                                };
+                                let bv = match b {
+                                    VecSource::Imm(i) => i as u32,
+                                    VecSource::Scalar(r) => self.regs.get(r as usize),
+                                    VecSource::Reg(o) => {
+                                        let add = o.addend.map_or(0, |r| self.regs.get(r as usize));
+                                        let (row, e) =
+                                            o.reg.lane(bi, if step_a { rep } else { 0 }, add);
+                                        self.vrf.read(row, e, o.reg.elem_bytes as u32)
+                                    }
+                                };
+                                // The two interleaves take odd lanes from B and
+                                // even ones from A; everything else computes.
+                                let res = if op.takes_b(lane) {
+                                    bv
+                                } else {
+                                    vec_alu(op, av, bv, width)
+                                };
+                                let (row, e) =
+                                    d.reg.lane(lane, if step_d { rep } else { 0 }, d_add);
+                                self.vrf.write(row, e, d.reg.elem_bytes as u32, res);
+                            }
+                        }
+                    }
                     VecExec::NeedsVrf => {
                         if let Some(step) = self.unimpl(pc, v.raw, v.len, InsnClass::Vector48, next)
                         {
@@ -1423,6 +1479,86 @@ struct VecTransfer {
     lanes: u16,
     /// Element width in memory, in bytes.
     op_bytes: u32,
+}
+
+/// One lane of a vector ALU op, at `width` bytes per element.
+///
+/// Every case here was measured on a Raspberry Pi 4B d03115; see
+/// `examples-on-real-hardware/vpu-probe/`. Values arrive zero-extended from
+/// the register file and go back truncated, so the arithmetic is done in the
+/// element's own width and sign-extended where the operation is signed.
+fn vec_alu(op: VecAluOp, a: u32, b: u32, width: u32) -> u32 {
+    use VecAluOp::*;
+    let bits = width * 8;
+    let mask = if bits >= 32 {
+        u32::MAX
+    } else {
+        (1 << bits) - 1
+    };
+    let sext = |v: u32| -> i64 {
+        if bits >= 32 {
+            v as i32 as i64
+        } else {
+            ((v << (32 - bits)) as i32 >> (32 - bits)) as i64
+        }
+    };
+    let min = -(1i64 << (bits - 1));
+    let max = (1i64 << (bits - 1)) - 1;
+    let sat = |v: i64| -> u32 { (v.clamp(min, max) as u32) & mask };
+    let shift = b & 15;
+    match op {
+        Mov => b & mask,
+        And => a & b & mask,
+        Or => (a | b) & mask,
+        Eor => (a ^ b) & mask,
+        Bic => a & !b & mask,
+        Add => a.wrapping_add(b) & mask,
+        Adds => sat(sext(a) + sext(b)),
+        Sub => a.wrapping_sub(b) & mask,
+        Subs => sat(sext(a) - sext(b)),
+        Rsub => b.wrapping_sub(a) & mask,
+        Rsubs => sat(sext(b) - sext(a)),
+        Dist => (sext(a) - sext(b)).unsigned_abs() as u32 & mask,
+        Dists => sat((sext(a) - sext(b)).abs()),
+        Min => sat(sext(a).min(sext(b))),
+        Max => sat(sext(a).max(sext(b))),
+        // `a` clamped into `0 ..= b`, both read signed: a negative `a` or a
+        // negative `b` comes out as zero.
+        Clip => sat(sext(a).clamp(0, sext(b).max(0))),
+        Sign => sat(sext(b) + sext(a).signum()),
+        Shl => (a << shift) & mask,
+        Shls => sat(sext(a) << shift),
+        Lsr => (a & mask) >> shift,
+        Asr => (sext(a) >> shift) as u32 & mask,
+        Ror => {
+            let v = a & mask;
+            if shift == 0 {
+                v
+            } else {
+                ((v >> shift) | (v << (bits - shift))) & mask
+            }
+        }
+        Count => ((a & mask).count_ones() + (b & mask).count_ones()) & mask,
+        Msb => match (b & mask).checked_ilog2() {
+            Some(n) => n & mask,
+            None => mask, // no bit set; the scalar `msb` answers all-ones
+        },
+        // Reverse the low `n` bits, `n` being B's low nibble — or the whole
+        // element when that nibble is zero.
+        Brev => {
+            let n = if shift == 0 { bits } else { shift };
+            let mut out = 0u32;
+            for i in 0..n {
+                if a & (1 << i) != 0 {
+                    out |= 1 << (n - 1 - i);
+                }
+            }
+            out & mask
+        }
+        // The shuffles take their value straight from the element the lane
+        // mapping picked.
+        Even | Odd | Interl | Interh => a & mask,
+    }
 }
 
 /// Decode the 6-bit floating-point immediate of a `0xC800` triadic FP op.
