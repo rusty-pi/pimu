@@ -428,11 +428,15 @@ fn a_star_on_a_slot_changes_nothing() {
 
 /// The "dash" test must not be a loose field check: a near neighbour that names
 /// a real vector register where this model expects a bare dash has to fault too.
-/// A load's A slot is ignored on hardware and is a dash in every load start4
-/// issues; one that names a register is an encoding whose meaning is not
-/// established here.
+/// A load's A slot is ignored on hardware, whatever it names.
+///
+/// Measured with `probes/ldodd.s` on a Raspberry Pi 4B d03115:
+/// `v16ld HX(1,0),-+r5,(r4)` and `v16ld HX(3,0),HX(20,0),(r4)` both move
+/// exactly what the plain `v16ld HX(0,0),(r4)` moves. A **store** is another
+/// matter: the same addend on one wrote nothing where the plain store wrote,
+/// so that form still faults.
 #[test]
-fn vector_near_miss_of_the_discarded_load_faults() {
+fn a_loads_a_slot_is_ignored() {
     let mut m = machine();
     let mut v = Vpu::new(CODE);
     // v8ld -,(r0) is 0xF000_E038_0380; clear the top bit of the A-slot
@@ -443,8 +447,12 @@ fn vector_near_miss_of_the_discarded_load_faults() {
         CODE,
         &[(raw >> 32) as u16, (raw >> 16) as u16, raw as u16, NOP],
     );
+    fill(&mut m, 0, 16);
 
-    assert_eq!(v.step(&mut m), Step::Stopped, "must not be executed");
+    assert_eq!(v.step(&mut m), Step::Ran, "{:?}", v.stopped);
+    for e in 0..16u32 {
+        assert_eq!(v.vrf.read(0, e, 1), 0, "a dash destination writes nothing");
+    }
 }
 
 /// An 80-bit vector word does not fit in 64 bits. It used to be truncated on
@@ -3328,6 +3336,180 @@ fn the_sub_modifier_leaves_the_accumulator_alone() {
         (5, "ffff00000080000000f00000f00f00000180000000c00000ff000000ff7f000034120000cced000001000000feff0000004000001000000000000000f0000000"),
         (62, "ffff00000080000000f00000f00f00000180000000c00000ff000000ff7f000034120000cced000001000000feff0000004000001000000000000000f0000000"),
         (63, "ffff0000feff0000fcff0000f1ff0000f0ff0000e0ff00000100000002000000ffff0000fdff0000ffff0000ffff0000ffff0000fcff0000ffff0000f8ff0000"),
+    ];
+
+    let mut m = machine();
+    let mut v = Vpu::new(CODE);
+    for (i, b) in CODE_BYTES.iter().enumerate() {
+        m.store8(CODE + i as u32, *b).unwrap();
+    }
+    for i in 0..4096u32 {
+        m.store8(0x4000 + i, (i + 1) as u8).unwrap();
+        m.store8(0x5000 + i, 0).unwrap();
+    }
+    for (i, b) in VECTORS.iter().enumerate() {
+        m.store8(0x5000 + i as u32, *b).unwrap();
+    }
+    v.regs.set(0, 0x8000);
+    v.regs.set(1, 0x4000);
+    v.regs.pc = CODE;
+    for _ in 0..64 {
+        if v.regs.pc == CODE + CODE_BYTES.len() as u32 - 2 {
+            break; // the trailing `rts`
+        }
+        assert_eq!(
+            v.step(&mut m),
+            Step::Ran,
+            "at {:#x}: {:?}",
+            v.regs.pc,
+            v.stopped
+        );
+    }
+    for (row, want) in ROWS {
+        let got: String = (0..64)
+            .map(|c| format!("{:02x}", m.load8(0x8000 + (*row as u32) * 64 + c).unwrap()))
+            .collect();
+        assert_eq!(&got, want, "row {row}");
+    }
+}
+
+/// The gather and the scatter, indexed by the accumulator.
+///
+/// `probes/mem9.s` on a Raspberry Pi 4B d03115, over a page whose byte `n`
+/// holds `n + 1`. `lookupml` reads element `acc & 0xffff` of the table at the
+/// address and `lookupm` element `acc >> 16`, each element as wide as the
+/// operation; `indexwritem[l]` writes one back at the same place. The rows
+/// below include the scattered bytes read back in.
+#[test]
+fn the_measured_gather_and_scatter() {
+    const CODE_BYTES: &[u8] = &[
+        0x03, 0xb0, 0x40, 0x00, 0x14, 0x40, 0x44, 0xb0, 0x00, 0x10, 0x06, 0xfe, 0x38, 0xc0, 0x00,
+        0x04, 0xc0, 0xfb, 0x00, 0x00, 0x08, 0xf8, 0x38, 0x85, 0xc0, 0x03, 0xc0, 0xf3, 0x10, 0x00,
+        0x00, 0xf8, 0x78, 0x05, 0xa0, 0x03, 0xc0, 0xf3, 0x04, 0x00, 0x00, 0xfc, 0x38, 0xe0, 0x14,
+        0x02, 0xc0, 0xf3, 0xbc, 0x09, 0x40, 0xf0, 0x38, 0x00, 0x81, 0x03, 0x48, 0xf0, 0x78, 0x80,
+        0x81, 0x03, 0x50, 0xf0, 0xb8, 0xc0, 0x81, 0x03, 0x40, 0xf8, 0xf8, 0x00, 0x87, 0x03, 0xc0,
+        0xf3, 0x04, 0x00, 0x00, 0xfc, 0x38, 0xe0, 0x14, 0x02, 0xc0, 0xf3, 0xbc, 0x0d, 0x20, 0xf0,
+        0x38, 0x01, 0x81, 0x03, 0x28, 0xf0, 0x78, 0x81, 0x81, 0x03, 0x30, 0xf0, 0xb8, 0xc1, 0x81,
+        0x03, 0x00, 0xfc, 0x38, 0xe0, 0x14, 0x02, 0xc0, 0xf3, 0xbc, 0x09, 0xc0, 0xf8, 0x01, 0xe0,
+        0x80, 0x53, 0xc0, 0xf3, 0x12, 0x00, 0x00, 0xf8, 0xf8, 0x01, 0x80, 0x03, 0xc0, 0xf3, 0x12,
+        0x00, 0xc8, 0xf8, 0x21, 0xe0, 0x80, 0x43, 0xc0, 0xf3, 0x50, 0x00, 0x08, 0xf8, 0x38, 0x82,
+        0x80, 0x03, 0xc0, 0xf3, 0x50, 0x00, 0x00, 0xfc, 0x38, 0xe0, 0x14, 0x02, 0xc0, 0xf3, 0xbc,
+        0x0d, 0xa0, 0xf8, 0x01, 0xe0, 0x80, 0x53, 0xc0, 0xf3, 0x52, 0x00, 0x00, 0xf8, 0x78, 0x02,
+        0x80, 0x03, 0xc0, 0xf3, 0x52, 0x00, 0x96, 0xf8, 0x30, 0xe0, 0x80, 0x03, 0xe0, 0x33, 0x00,
+        0x00, 0x5a, 0x00,
+    ];
+    const VECTORS: &[u8] = &[
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x08, 0x00, 0x0c, 0x00, 0x01, 0x00, 0x05,
+        0x00, 0x09, 0x00, 0x0d, 0x00, 0x02, 0x00, 0x06, 0x00, 0x0a, 0x00, 0x0e, 0x00, 0x03, 0x00,
+        0x07, 0x00, 0x0b, 0x00, 0x0f, 0x00, 0x0f, 0x00, 0x0e, 0x00, 0x0d, 0x00, 0x0c, 0x00, 0x0b,
+        0x00, 0x0a, 0x00, 0x09, 0x00, 0x08, 0x00, 0x07, 0x00, 0x06, 0x00, 0x05, 0x00, 0x04, 0x00,
+        0x03, 0x00, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00,
+    ];
+    const ROWS: &[(usize, &str)] = &[
+        (0, "0100000005000000090000000d00000002000000060000000a0000000e00000003000000070000000b0000000f00000004000000080000000c00000010000000"),
+        (1, "01020000090a000011120000191a0000030400000b0c0000131400001b1c0000050600000d0e0000151600001d1e0000070800000f100000171800001f200000"),
+        (2, "0102030411121314212223243132333405060708151617182526272835363738090a0b0c191a1b1c292a2b2c393a3b3c0d0e0f101d1e1f202d2e2f303d3e3f40"),
+        (3, "080000000c0000001000000014000000090000000d00000011000000150000000a0000000e00000012000000160000000b0000000f0000001300000017000000"),
+        (4, "0100000005000000090000000d00000002000000060000000a0000000e00000003000000070000000b0000000f00000004000000080000000c00000010000000"),
+        (5, "01020000090a000011120000191a0000030400000b0c0000131400001b1c0000050600000d0e0000151600001d1e0000070800000f100000171800001f200000"),
+        (6, "0102030411121314212223243132333405060708151617182526272835363738090a0b0c191a1b1c292a2b2c393a3b3c0d0e0f101d1e1f202d2e2f303d3e3f40"),
+        (7, "2100000025000000290000002d00000022000000260000002a0000002e00000023000000270000002b0000002f00000024000000280000002c00000030000000"),
+        (8, "000000000100000002000000030000000400000005000000060000000700000008000000090000000a0000000b0000000c0000000d0000000e0000000f000000"),
+        (9, "2100000025000000290000002d00000022000000260000002a0000002e00000023000000270000002b0000002f00000024000000280000002c00000030000000"),
+        (20, "0000000004000000080000000c0000000100000005000000090000000d00000002000000060000000a0000000e00000003000000070000000b0000000f000000"),
+        (21, "2100000022000000230000002400000025000000260000002700000028000000290000002a0000002b0000002c0000002d0000002e0000002f00000030000000"),
+    ];
+
+    let mut m = machine();
+    let mut v = Vpu::new(CODE);
+    for (i, b) in CODE_BYTES.iter().enumerate() {
+        m.store8(CODE + i as u32, *b).unwrap();
+    }
+    for i in 0..4096u32 {
+        m.store8(0x4000 + i, (i + 1) as u8).unwrap();
+        m.store8(0x5000 + i, 0).unwrap();
+    }
+    for (i, b) in VECTORS.iter().enumerate() {
+        m.store8(0x5000 + i as u32, *b).unwrap();
+    }
+    v.regs.set(0, 0x8000);
+    v.regs.set(1, 0x4000);
+    v.regs.pc = CODE;
+    for _ in 0..64 {
+        if v.regs.pc == CODE + CODE_BYTES.len() as u32 - 2 {
+            break; // the trailing `rts`
+        }
+        assert_eq!(
+            v.step(&mut m),
+            Step::Ran,
+            "at {:#x}: {:?}",
+            v.regs.pc,
+            v.stopped
+        );
+    }
+    for (row, want) in ROWS {
+        let got: String = (0..64)
+            .map(|c| format!("{:02x}", m.load8(0x8000 + (*row as u32) * 64 + c).unwrap()))
+            .collect();
+        assert_eq!(&got, want, "row {row}");
+    }
+}
+
+/// `vmul32` — the family the `L` bit selects.
+///
+/// `probes/mul32.s` on a Raspberry Pi 4B d03115: it is a 16 x 16 into 32
+/// multiply, taking the low halfword of each operand — signed or unsigned as
+/// the suffix says — and keeping the whole product.
+#[test]
+fn the_measured_16_by_16_multiply() {
+    const CODE_BYTES: &[u8] = &[
+        0x03, 0xb0, 0x40, 0x00, 0x14, 0x40, 0x44, 0xb0, 0x00, 0x10, 0x06, 0xfe, 0x38, 0xc0, 0x00,
+        0x04, 0xc0, 0xfb, 0x00, 0x00, 0x04, 0xfe, 0x38, 0xc0, 0xff, 0x07, 0xc0, 0xfb, 0x3f, 0x00,
+        0x10, 0xf8, 0xb8, 0xcf, 0xc0, 0x03, 0xc0, 0xf3, 0x10, 0x00, 0x10, 0xf8, 0xf8, 0xcf, 0x80,
+        0x03, 0xc0, 0xf3, 0x11, 0x00, 0xa0, 0xf7, 0x33, 0xc0, 0x3f, 0xe3, 0xa8, 0xf7, 0x73, 0xc0,
+        0x3f, 0xe3, 0xb0, 0xf7, 0xb3, 0xc0, 0x3f, 0xe3, 0xb8, 0xf7, 0xf3, 0xc0, 0x3f, 0xe3, 0xb8,
+        0xf7, 0x33, 0x81, 0x3f, 0xe3, 0xa0, 0xff, 0x73, 0xc1, 0x3f, 0xe3, 0xc0, 0xf3, 0xbc, 0x0b,
+        0x00, 0xf3, 0xb3, 0xc1, 0x38, 0x83, 0x96, 0xf8, 0x30, 0xe0, 0x80, 0x03, 0xe0, 0x33, 0x00,
+        0x00, 0x5a, 0x00,
+    ];
+    const VECTORS: &[u8] = &[
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0xff, 0xff, 0xff, 0x7f, 0xff, 0xff, 0xff,
+        0xff, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0xff, 0xff, 0x00, 0x00, 0x78, 0x56,
+        0x34, 0x12, 0xfe, 0xff, 0xff, 0xff, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00,
+        0x01, 0x00, 0x00, 0x01, 0xef, 0xcd, 0xab, 0x05, 0x00, 0x00, 0x00, 0xff, 0x7f, 0x00, 0x00,
+        0x01, 0x00, 0x00, 0x10, 0xef, 0xbe, 0xad, 0xde, 0x00, 0x00, 0x01, 0x00, 0x02, 0x00, 0x00,
+        0x00, 0x03, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0x7f, 0x02, 0x00, 0x00, 0x00, 0x01, 0x00,
+        0x01, 0x00, 0x10, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0x07, 0x00, 0x00, 0x00, 0x04,
+        0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x30, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x01, 0x00, 0x03, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+    ];
+    const ROWS: &[(usize, &str)] = &[
+        (0, "00000000fefffffffdfffffffeffffff00000000ffffffff806705000200000015000000000000000000010002defffff0000000ff7f000003000000de7dffff"),
+        (1, "00000000fefffffffdfffffffeff010000000000ffffffff806705000200feff15000000000000000000010002defffff0000000ff7f000003000000de7dffff"),
+        (2, "00000000feff0100fdff0200feffffff00000000ffff0000806705000200ffff15000000000000000000010002de0100f0000000ff7f000003000000de7d0100"),
+        (3, "00000000feff0100fdff0200feff010000000000ffff0000806705000200fdff15000000000000000000010002de0100f0000000ff7f000003000000de7d0100"),
+        (4, "0000fffffefffffffdfffffffeffffff0000ffffffffffff8067ffff0200ffff1500ffff0000ffff0000ffff02defffff000ffffff7fffff0300ffffde7dffff"),
+        (5, "00000000fefffffffdfffffffeffffff00000000ffffffff806705000200000015000000000000000000010002defffff0000000ff7f000003000000de7dffff"),
+        (6, "00000000fefffffffdfffffffeffffff00000000ffffffff806705000200000015000000000000000000010002defffff0000000ff7f000003000000de7dffff"),
+        (7, "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"),
+        (8, "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"),
+        (9, "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"),
+        (10, "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"),
+        (11, "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"),
+        (12, "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"),
+        (13, "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"),
+        (14, "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"),
+        (15, "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"),
+        (62, "00000100ffffff7fffffffff0200000000000080ffff000078563412feffffff03000000000000400001000001efcdab05000000ff7f000001000010efbeadde"),
+        (63, "000001000200000003000000ffffff7f020000000100010010000000ffffffff0700000004000000000100000200000030000000010001000300000002000000"),
     ];
 
     let mut m = machine();

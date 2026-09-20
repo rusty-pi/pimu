@@ -163,10 +163,12 @@ fn decode_vector(raw: u128, len: u8) -> Op {
         // Only a *dash* B slot spells an address; a third vector register makes
         // this one of the memory-class ops that reads the file three ways.
         let b_is_dash = matches!(b, VecOperandB::Slot(s) if s.is_dash());
-        // Only `vld` and `vst` read the address out of the wide composite;
-        // every other memory sub-op leaves those bits to the B slot, and
-        // `binutils-vc4` prints them as a scalar register and displacement.
-        if mem && b_is_dash && matches!(subop, 0 | 4) {
+        // The transfers and the gather/scatter forms read their address out of
+        // the wide composite — `vld`, `vst`, `lookupm`, `lookupml`,
+        // `indexwritem`, `indexwriteml`. Every other memory sub-op leaves those
+        // bits to the B slot, and `binutils-vc4` prints them as a scalar
+        // register and displacement.
+        if mem && b_is_dash && matches!(subop, 0..=2 | 4..=6) {
             // `<offset>(r<base> += r<step>)`. The offset is a signed 16-bit
             // displacement; the step register is the *inert* slot's addend
             // nibble — the A slot's for a load, the D slot's for a store —

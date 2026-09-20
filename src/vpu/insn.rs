@@ -898,6 +898,14 @@ pub enum VecAluOp {
         sa: bool,
         sb: bool,
     },
+    /// `vmul32.xx`: the `L`-bit family. A **16 x 16 into 32** multiply — the
+    /// low halfword of each operand, read signed or unsigned as the suffix
+    /// says, and the whole 32-bit product. Measured: `vmul32.ss` over
+    /// `0x12345678 * 0x10` answers `0x00056780`, the low halfword's product.
+    Mul32 {
+        sa: bool,
+        sb: bool,
+    },
     /// The same, rounded: `(a * b + half) >> bits`.
     Mulhn {
         sa: bool,
@@ -964,9 +972,15 @@ impl VecAluOp {
 
     /// The multiply group, `insn-vecmulops` (sub-ops 48 and up with the `L`
     /// bit clear). `L` set selects a different family, which is not modelled.
-    pub fn from_mul_subop(subop: u8) -> Option<VecAluOp> {
+    pub fn from_mul_subop(subop: u8, width: u32) -> Option<VecAluOp> {
         use VecAluOp::*;
         let signs = |n: u8| (n & 2 == 0, n & 1 == 0);
+        // The `L` bit — a `v32` width on a multiply — selects the 16x16 family
+        // instead, and only its four sign combinations are known.
+        if width == 4 {
+            let (sa, sb) = signs(subop);
+            return (52..=55).contains(&subop).then_some(Mul32 { sa, sb });
+        }
         Some(match subop {
             48 => Mull,
             49 => Mulls,
@@ -1105,7 +1119,10 @@ pub enum VecExec {
     /// by one (a row horizontally, an element vertically).
     Mem {
         store: bool,
-        reg: VecReg,
+        /// Absent when the vector slot is a dash: the load still reads its
+        /// bytes — the firmware uses that to fence outstanding reads — and
+        /// writes none of them anywhere.
+        reg: Option<VecReg>,
         /// `++` on the vector slot.
         step: bool,
         base: u8,
@@ -1158,6 +1175,35 @@ pub enum VecExec {
         /// The scalar result unit: which aggregate of the sixteen lane results
         /// to write, and the scalar register to write it to.
         sru: Option<(VecSruFunc, u8)>,
+    },
+    /// `v<w>lookupm[l] <d>,(r<base>+off)` — a **gather**: each lane reads the
+    /// element `index` of the table at that address, `index` being its own
+    /// accumulator's high half (`lookupm`) or low half (`lookupml`) and the
+    /// element as wide as the operation. `v8lookupml` with `4` in a lane's
+    /// accumulator reads the byte at `base + 4`; `v16lookupml` reads the
+    /// halfword at `base + 8`.
+    Gather {
+        d: VecOperand,
+        base: u8,
+        offset: u32,
+        /// Take the index from the accumulator's high half.
+        high: bool,
+        width: u32,
+        reps: VecRep,
+        step_d: bool,
+        pred: VecPred,
+    },
+    /// `v<w>indexwritem[l] <a>,(r<base>+off)` — the **scatter** that mirrors
+    /// it: each lane writes its element to `base + index * width`.
+    Scatter {
+        src: VecOperand,
+        base: u8,
+        offset: u32,
+        high: bool,
+        width: u32,
+        reps: VecRep,
+        step_a: bool,
+        pred: VecPred,
     },
     /// `vgetacc[s16|s32] <d>,<a>,<b>` — each lane's accumulator, shifted right
     /// by `b & 31`. The A slot is read and discarded, `sat` says which signed
@@ -1236,7 +1282,11 @@ impl VecInsn {
             }
         }
         if self.mem {
-            if let Some(e) = self.mem_transfer().or_else(|| self.getacc()) {
+            if let Some(e) = self
+                .mem_transfer()
+                .or_else(|| self.getacc())
+                .or_else(|| self.gather())
+            {
                 return e;
             }
         } else if let Some(e) = self.alu48().or_else(|| self.alu80()).or_else(|| self.alu()) {
@@ -1272,20 +1322,38 @@ impl VecInsn {
         } else {
             (self.d, self.a)
         };
-        // The inert slot must be a dash, and carries nothing of its own except
-        // — in the 80-bit encoding — the addend nibble the address reads as its
-        // `+=` step.
-        if !dash.is_dash() || dash.star || dash.inc {
+        // The inert slot carries nothing of its own except — in the 80-bit
+        // encoding — the addend nibble the address reads as its `+=` step.
+        // In the 48-bit encoding a **load** ignores that slot altogether:
+        // measured, `v16ld HX(1,0),-+r5,(r4)` and `v16ld HX(3,0),HX(20,0),(r4)`
+        // both move exactly what the plain load moves. A store is another
+        // matter — one with an addend wrote nothing where the plain one wrote
+        // — so there the slot still has to be a bare dash.
+        let inert_free = !self.wide && !store;
+        if !inert_free && (!dash.is_dash() || dash.star || dash.inc) {
             return None;
         }
-        if !self.wide && dash.addend != 15 {
+        if !inert_free && !self.wide && dash.addend != 15 {
             return None;
+        }
+        if inert_free && dash.inc {
+            return None; // what `++` on the inert slot steps was not measured
         }
 
         let addr = self.addr?;
+        // A dash in the vector position discards the transfer's data. That is
+        // a load with nowhere to put it — `FUN_0edc9e20`'s read fence — and a
+        // store with nothing to write, which is not modelled.
+        if vec_slot.is_dash() && store {
+            return None;
+        }
         Some(VecExec::Mem {
             store,
-            reg: vec_slot.window()?,
+            reg: if vec_slot.is_dash() {
+                None
+            } else {
+                Some(vec_slot.window()?)
+            },
             step: vec_slot.inc,
             base: addr.base,
             offset: addr.offset,
@@ -1297,6 +1365,73 @@ impl VecInsn {
                 n => VecRep::Fixed(1 << n),
             },
             pred: VecPred::from_field(self.pred)?,
+        })
+    }
+
+    /// The gather and scatter sub-ops, `lookupm`/`lookupml` and
+    /// `indexwritem`/`indexwriteml`.
+    ///
+    /// Measured on a Raspberry Pi 4B d03115 with `probes/mem5.s`..`mem7.s`:
+    /// the index is the lane's own accumulator — its low half for the `l`
+    /// forms, its high half for the others — scaled by the operation's element
+    /// width, and the address is the ordinary base plus displacement.
+    fn gather(&self) -> Option<VecExec> {
+        let (scatter, high) = match self.subop {
+            1 => (false, true),
+            2 => (false, false),
+            5 => (true, true),
+            6 => (true, false),
+            _ => return None,
+        };
+        let width = match self.lane_bits {
+            8 => 1,
+            16 => 2,
+            32 => 4,
+            _ => return None,
+        };
+        let (vec_slot, dash) = if scatter {
+            (self.a, self.d)
+        } else {
+            (self.d, self.a)
+        };
+        if !dash.is_dash() || dash.inc {
+            return None;
+        }
+        let addr = self.addr?;
+        if addr.incr.is_some() {
+            return None; // what a `+=` steps on a gather was not measured
+        }
+        let operand = VecOperand {
+            reg: vec_slot.window()?,
+            addend: (vec_slot.addend != 15).then_some(vec_slot.addend),
+        };
+        let reps = match self.rep {
+            7 => VecRep::FromR0,
+            n => VecRep::Fixed(1 << n),
+        };
+        let pred = VecPred::from_field(self.pred)?;
+        Some(if scatter {
+            VecExec::Scatter {
+                src: operand,
+                base: addr.base,
+                offset: addr.offset,
+                high,
+                width,
+                reps,
+                step_a: vec_slot.inc,
+                pred,
+            }
+        } else {
+            VecExec::Gather {
+                d: operand,
+                base: addr.base,
+                offset: addr.offset,
+                high,
+                width,
+                reps,
+                step_d: vec_slot.inc,
+                pred,
+            }
         })
     }
 
@@ -1467,9 +1602,6 @@ impl VecInsn {
         // selects the family rather than the element width — which then comes
         // from the registers themselves.
         let (op, width) = if self.subop >= 48 {
-            if self.lane_bits != 16 {
-                return None; // `L` set is the other family, not modelled
-            }
             // A multiply carries no width of its own, so it works at the
             // widest register it names and converts the narrower ones into it
             // — `vmull.ss HX(0,0),HX(62,0),H(57,0)` multiplies a halfword by
@@ -1483,7 +1615,11 @@ impl VecInsn {
                 .filter(|s| !s.is_dash())
                 .map(|s| s.elem_bytes() as u32)
                 .max()?;
-            (VecAluOp::from_mul_subop(self.subop)?, w)
+            let w = if self.lane_bits == 32 { 4 } else { w };
+            (
+                VecAluOp::from_mul_subop(self.subop, self.lane_bits as u32 / 8)?,
+                w,
+            )
         } else {
             let width = self.lane_bits as u32 / 8;
             (VecAluOp::from_subop(self.subop, width)?, width)

@@ -1426,6 +1426,86 @@ impl Vpu {
                             self.regs.set(reg as usize, v as u32);
                         }
                     }
+                    VecExec::Gather {
+                        d,
+                        base,
+                        offset,
+                        high,
+                        width,
+                        reps,
+                        step_d,
+                        pred,
+                    } => {
+                        let lanes = self.vrf.lanes(pred);
+                        let reps = match reps {
+                            VecRep::Fixed(n) => n,
+                            VecRep::FromR0 => self.regs.get(0),
+                        };
+                        let d_add = d.addend.map_or(0, |r| self.regs.get(r as usize));
+                        let addr = self.regs.get(base as usize).wrapping_add(offset);
+                        for rep in 0..reps {
+                            for lane in 0..vrf::LANES {
+                                if lanes & (1 << lane) == 0 {
+                                    continue;
+                                }
+                                let index = acc_index(self.vrf.acc[lane as usize], high);
+                                let at = addr.wrapping_add(index.wrapping_mul(width));
+                                let mut value = 0u32;
+                                for i in 0..width {
+                                    let byte = match bus.load8(at.wrapping_add(i)) {
+                                        Ok(b) => b,
+                                        Err(err) => {
+                                            return Some(
+                                                self.stop(Stop::Fault(Fault::Bus { pc, err })),
+                                            )
+                                        }
+                                    };
+                                    value |= (byte as u32) << (8 * i);
+                                }
+                                let (row, e) =
+                                    d.reg.lane(lane, if step_d { rep } else { 0 }, d_add);
+                                self.vrf.write(row, e, d.reg.elem_bytes as u32, value);
+                            }
+                        }
+                    }
+                    VecExec::Scatter {
+                        src,
+                        base,
+                        offset,
+                        high,
+                        width,
+                        reps,
+                        step_a,
+                        pred,
+                    } => {
+                        let lanes = self.vrf.lanes(pred);
+                        let reps = match reps {
+                            VecRep::Fixed(n) => n,
+                            VecRep::FromR0 => self.regs.get(0),
+                        };
+                        let a_add = src.addend.map_or(0, |r| self.regs.get(r as usize));
+                        let addr = self.regs.get(base as usize).wrapping_add(offset);
+                        for rep in 0..reps {
+                            for lane in 0..vrf::LANES {
+                                if lanes & (1 << lane) == 0 {
+                                    continue;
+                                }
+                                let index = acc_index(self.vrf.acc[lane as usize], high);
+                                let at = addr.wrapping_add(index.wrapping_mul(width));
+                                let (row, e) =
+                                    src.reg.lane(lane, if step_a { rep } else { 0 }, a_add);
+                                let value = self.vrf.read(row, e, src.reg.elem_bytes as u32);
+                                for i in 0..width {
+                                    let byte = (value >> (8 * i)) as u8;
+                                    if let Err(err) = bus.store8(at.wrapping_add(i), byte) {
+                                        return Some(
+                                            self.stop(Stop::Fault(Fault::Bus { pc, err })),
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
                     VecExec::GetAcc {
                         d,
                         b,
@@ -1576,7 +1656,7 @@ impl Vpu {
             2 => Width::Half,
             _ => Width::Word,
         };
-        let w = reg.elem_bytes as u32;
+        let w = reg.map_or(4, |r| r.elem_bytes as u32);
         for lane in 0..vrf::LANES {
             if lanes & (1 << lane) == 0 {
                 continue;
@@ -1586,7 +1666,7 @@ impl Vpu {
             // per lane and zero-extends it into a 32-bit element.
             let ea = addr.wrapping_add(lane * op_bytes);
             let aligned = ea.is_multiple_of(op_bytes);
-            let (row, e) = reg.lane(lane, step, addend);
+            let (row, e) = reg.map_or((0, 0), |r| r.lane(lane, step, addend));
             if store {
                 let v = self.vrf.read(row, e, w);
                 if aligned {
@@ -1617,7 +1697,11 @@ impl Vpu {
                     }
                     v
                 };
-                self.vrf.write(row, e, w, v);
+                // A dash destination throws the bytes away; the read itself
+                // is the point.
+                if reg.is_some() {
+                    self.vrf.write(row, e, w, v);
+                }
             }
         }
         Ok(())
@@ -1676,7 +1760,7 @@ impl Vpu {
 /// memory, and how wide each one is there.
 #[derive(Clone, Copy)]
 struct VecTransfer {
-    reg: VecReg,
+    reg: Option<VecReg>,
     /// Repetitions of `++` already applied.
     step: u32,
     /// Value of the slot's `+rN`.
@@ -1697,6 +1781,16 @@ struct VecTransfer {
 /// Raspberry Pi 4B d03115. Nothing to do when the register is as wide as the
 /// operation, which the narrowing in [`Vrf::read`](crate::vpu::vrf::Vrf::read)
 /// has already taken care of.
+/// The index a gather or a scatter takes out of a lane's accumulator: its
+/// high half for the `m` forms, its low half for the `ml` ones.
+fn acc_index(acc: u32, high: bool) -> u32 {
+    if high {
+        acc >> 16
+    } else {
+        acc & 0xffff
+    }
+}
+
 fn set_flag(flags: &mut u16, bit: u16, on: bool) {
     if on {
         *flags |= bit;
@@ -1933,6 +2027,18 @@ fn vec_alu(op: VecAluOp, a: u32, b: u32, width: u32, sat_bytes: u32, carry_in: b
         Mulls => sat(sext(a) * sext(b)),
         Mulm => ((sext(a) * sext(b)) >> 8) as u32 & mask,
         Mulms => sat((sext(a) * sext(b)) >> 8),
+        // The `L`-bit family: the low halfword of each operand, and the whole
+        // product.
+        Mul32 { sa, sb } => {
+            let half = |v: u32, signed: bool| -> i64 {
+                if signed {
+                    v as u16 as i16 as i64
+                } else {
+                    (v & 0xffff) as i64
+                }
+            };
+            (half(a, sa) * half(b, sb)) as u32 & mask
+        }
         Mulhd { sa, sb } => {
             let (x, y) = (mul_operand(a, sa, bits), mul_operand(b, sb, bits));
             ((x * y) >> bits) as u32 & mask
