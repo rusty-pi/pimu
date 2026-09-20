@@ -148,8 +148,10 @@ Two details are easy to get wrong, and both were:
   always reads it as `SETF`.
 
 The file itself is modelled in `src/vpu/vrf.rs` — 64 rows of 64 bytes, plus one
-zero flag per lane. Only *horizontal* windows (16 consecutive elements of one
-row) are implemented; a vertical slot, a column of the file, faults.
+zero flag per lane. Both directions of window are implemented: 16 consecutive
+elements along a row, or the same 16 read down a column, one per row, from the
+16-aligned band the slot names. What a vertical slot's `++` steps its column by
+is not established, so that one still faults.
 
 Which instructions execute is decided in `VecInsn::executable`, and every one of
 them is matched as a whole instruction word: a template with only the
@@ -192,10 +194,16 @@ on their addresses in one particular `start4.elf`.
 ## Not yet implemented
 
 Everything the vector unit can do beyond the table above: the ALU ops
-(`vadd`/`vand`/`vshl`/...), vertical (column) register windows, the per-slot
-`+rN` coordinate addends, address offsets on a load or store, the accumulator
-modifiers, and any lane flag other than the zero flag `bitplanes` writes. All of
-them fault.
+(`vadd`/`vand`/`vshl`/...), the per-slot `+rN` coordinate addends, the `*`
+column offset, `++` on a vertical slot, address displacements on a load or
+store, the accumulator modifiers, and any lane flag other than the zero flag
+`bitplanes` writes. All of them fault.
+
+Of the 15180 vector instructions in `start4.elf`'s `.text`, 1567 are forms this
+model executes. That is fewer than the 1634 it used to run, in both directions:
+vertical windows and mixed-width operands are new, while 300 instructions whose
+slot carries a `+rN` addend now fault instead of running with the addend
+silently ignored — the old decoder had no field for it.
 
 Outside the ISA proper: no dual-issue pipeline, and the MMU and the caches are
 flat — the four VC4 aliases (`0x0`, `0x4000_0000`, `0x8000_0000`,

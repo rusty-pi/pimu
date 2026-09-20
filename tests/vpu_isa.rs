@@ -391,15 +391,15 @@ fn vector_sum_of_broadcast_is_signed_at_the_lane_width() {
 }
 
 /// Anything outside the implemented forms has to fault: quietly stepping over
-/// a vector instruction corrupts whatever it was moving. `08 f0 b8 90 80 03` is
-/// `v16ld VX(2,0),(r0)` — the same load as the blit loop at `FUN_0edc9bbc` but
-/// naming a *vertical* window, a column of the file rather than a row, which
-/// this model does not implement.
+/// a vector instruction corrupts whatever it was moving. This is
+/// `v8ld V(0,32++),(r3+=r5) REP4` from `start4.elf` — a vertical window, which
+/// this model does handle, with a `++` that steps its *column* by an amount
+/// nothing here pins down.
 #[test]
 fn vector_op_that_needs_the_register_file_faults() {
     let mut m = machine();
     let mut v = Vpu::new(CODE);
-    load_code(&mut m, CODE, &[0xF008, 0x90B8, 0x0380, NOP]);
+    load_code(&mut m, CODE, &[0xF802, 0x5038, 0x0380, 0xF940, 0x000C, NOP]);
 
     assert_eq!(v.step(&mut m), Step::Stopped);
     assert!(
@@ -766,10 +766,10 @@ fn a_vertical_slot_splits_its_coordinate() {
     assert!(v.d.is_vertical(), "V");
     assert_eq!((v.d.y, v.d.x), (0, 32), "band 0, column 32");
     assert!(v.d.inc, "++ steps the column, not the row");
-    assert!(
-        v.d.horizontal(v.lane_bits).is_none(),
-        "no horizontal window"
-    );
+    let w = v.d.window(v.lane_bits).expect("a window");
+    assert!(w.vertical && w.y == 0 && w.x == 32);
+    // The column step `++` asks for is pinned down by nothing, so this one
+    // still faults: the window is modelled, the stepping is not.
     assert_eq!(v.executable(), rpi_virt_fw::vpu::insn::VecExec::NeedsVrf);
 }
 
@@ -840,4 +840,36 @@ fn a_memory_class_b_register_takes_the_addend_not_setf() {
     assert_eq!((b.y, b.x, b.addend), (16, 9, 2), "V(16,9)+r2");
     assert!(!v.setf, "the bit is the addend here");
     assert!(v.addr.is_none(), "a register B is not an address");
+}
+
+/// A vertical transfer moves a *column* of the file. Sixteen 16-bit lanes,
+/// one per row from the band the slot names, at one byte column — so sixteen
+/// consecutive halfwords in memory land sixteen rows apart in the file.
+#[test]
+fn a_vertical_load_fills_a_column_of_the_file() {
+    // `v16ld VX(32,46),(r0)` out of `start4.elf` at `0x0ec8bb66`.
+    let bytes = [0x08, 0xf0, 0xb8, 0xbb, 0x80, 0x03];
+    let mut m = machine();
+    let mut v = Vpu::new(CODE);
+    for (i, b) in bytes.iter().enumerate() {
+        m.store8(CODE + i as u32, *b).unwrap();
+    }
+    m.store16(CODE + 6, NOP).unwrap();
+    for lane in 0..16u32 {
+        m.store16(0x4000 + lane * 2, (0x1000 + lane) as u16)
+            .unwrap();
+    }
+    v.regs.set(0, 0x4000);
+    v.regs.pc = CODE;
+    assert_eq!(v.step(&mut m), Step::Ran, "stopped: {:?}", v.stopped);
+
+    let vrf = &v.vrf;
+    for lane in 0..16u32 {
+        let row = 32 + lane as usize;
+        let want = 0x1000 + lane;
+        let got = vrf.byte(row, 46) as u32 | (vrf.byte(row, 47) as u32) << 8;
+        assert_eq!(got, want, "row {row}");
+    }
+    // Nothing landed beside it: the lanes went down, not across.
+    assert_eq!(vrf.byte(32, 48), 0, "the next column is untouched");
 }

@@ -1143,14 +1143,14 @@ impl Vpu {
                         // (`memcpy` at `0x3EDA28FE` adds `r0 * 64` to `r1`),
                         // which would double-count if the instruction did too.
                         let mut addr = self.regs.get(base as usize);
-                        let mut row = reg.row;
+                        let mut y = reg.y;
                         for _ in 0..reps {
-                            if let Err(err) = self.vec_transfer(bus, store, reg, row, addr, lanes) {
+                            if let Err(err) = self.vec_transfer(bus, store, reg, y, addr, lanes) {
                                 return Some(self.stop(Stop::Fault(Fault::Bus { pc, err })));
                             }
                             addr = addr.wrapping_add(stride);
                             if step_row {
-                                row = (row + 1) % vrf::DIM as u8;
+                                y = (y + 1) % vrf::DIM as u8;
                             }
                         }
                     }
@@ -1174,14 +1174,20 @@ impl Vpu {
                             VecRep::Fixed(n) => n,
                             VecRep::FromR0 => self.regs.get(0),
                         };
-                        let mut row = reg.row;
+                        let mut y = reg.y;
                         for _ in 0..reps {
                             for lane in 0..vrf::LANES {
-                                self.vrf
-                                    .write(row, reg.x0, lane, reg.lane_bytes as u32, value);
+                                self.vrf.write(
+                                    y,
+                                    reg.x,
+                                    reg.vertical,
+                                    lane,
+                                    reg.lane_bytes as u32,
+                                    value,
+                                );
                             }
                             if step_row {
-                                row = (row + 1) % vrf::DIM as u8;
+                                y = (y + 1) % vrf::DIM as u8;
                             }
                         }
                     }
@@ -1286,7 +1292,7 @@ impl Vpu {
         bus: &mut B,
         store: bool,
         reg: VecReg,
-        row: u8,
+        y: u8,
         addr: u32,
         lanes: u16,
     ) -> Result<(), BusError> {
@@ -1303,7 +1309,7 @@ impl Vpu {
             let ea = addr.wrapping_add(lane * lane_bytes);
             let aligned = ea.is_multiple_of(lane_bytes);
             if store {
-                let v = self.vrf.read(row, reg.x0, lane, lane_bytes);
+                let v = self.vrf.read(y, reg.x, reg.vertical, lane, lane_bytes);
                 if aligned {
                     bus.store(ea, width, v)?;
                 } else {
@@ -1321,7 +1327,7 @@ impl Vpu {
                     }
                     v
                 };
-                self.vrf.write(row, reg.x0, lane, lane_bytes, v);
+                self.vrf.write(y, reg.x, reg.vertical, lane, lane_bytes, v);
             }
         }
         Ok(())

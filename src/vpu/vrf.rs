@@ -1,13 +1,11 @@
 //! The VideoCore IV Vector Register File.
 //!
 //! The VRF is a 64x64 array of bytes. A vector register is a 16-element window
-//! into it, named by a slot descriptor (element width + horizontal/vertical +
-//! column band) and a 6-bit coordinate — see [`crate::vpu::insn::VecSlot`].
-//!
-//! Only *horizontal* windows are modelled: a row of 16 consecutive elements
-//! starting at byte column `x0` of one row. That is everything the encodings
-//! this model executes name (`src/vpu/insn.rs`, `VecInsn::executable`); a
-//! vertical slot faults there rather than reaching this file.
+//! into it, named by a slot — see [`crate::vpu::insn::VecSlot`]. A *horizontal*
+//! window is 16 consecutive elements along one row, starting at byte column
+//! `x`; a *vertical* one is the same 16 elements read down a column, one per
+//! row, from the 16-aligned band `y` names. Element width comes from the
+//! operation, not from the slot.
 //!
 //! Alongside the bytes the unit keeps per-lane flags. Only the zero flag is
 //! modelled, and only `v<w>bitplanes … SETF` writes it — the one producer the
@@ -39,18 +37,25 @@ impl Default for Vrf {
     }
 }
 
-/// Byte offset of lane `lane` of a horizontal register at `(row, x0)`.
+/// Byte offset of lane `lane` of the window at `(y, x)`.
 #[inline]
-fn offset(row: u8, x0: u8, lane: u32, lane_bytes: u32) -> usize {
-    let col = (x0 as u32 + lane * lane_bytes) as usize % DIM;
-    (row as usize % DIM) * DIM + col
+fn offset(y: u8, x: u8, vertical: bool, lane: u32, lane_bytes: u32) -> usize {
+    let (row, col) = if vertical {
+        ((y as u32 + lane) as usize % DIM, x as usize % DIM)
+    } else {
+        (
+            y as usize % DIM,
+            (x as u32 + lane * lane_bytes) as usize % DIM,
+        )
+    };
+    row * DIM + col
 }
 
 impl Vrf {
     /// Read one lane, zero-extended to a `u32`. Elements are little-endian, the
     /// same way the memory they are loaded from is.
-    pub fn read(&self, row: u8, x0: u8, lane: u32, lane_bytes: u32) -> u32 {
-        let off = offset(row, x0, lane, lane_bytes);
+    pub fn read(&self, y: u8, x: u8, vertical: bool, lane: u32, lane_bytes: u32) -> u32 {
+        let off = offset(y, x, vertical, lane, lane_bytes);
         let mut v = 0u32;
         for i in 0..lane_bytes as usize {
             v |= (self.bytes[(off + i) % (DIM * DIM)] as u32) << (8 * i);
@@ -59,8 +64,8 @@ impl Vrf {
     }
 
     /// Write one lane, truncated to `lane_bytes`.
-    pub fn write(&mut self, row: u8, x0: u8, lane: u32, lane_bytes: u32, value: u32) {
-        let off = offset(row, x0, lane, lane_bytes);
+    pub fn write(&mut self, y: u8, x: u8, vertical: bool, lane: u32, lane_bytes: u32, value: u32) {
+        let off = offset(y, x, vertical, lane, lane_bytes);
         for i in 0..lane_bytes as usize {
             self.bytes[(off + i) % (DIM * DIM)] = (value >> (8 * i)) as u8;
         }
@@ -79,21 +84,34 @@ mod tests {
     #[test]
     fn lanes_are_little_endian_and_contiguous() {
         let mut vrf = Vrf::default();
-        vrf.write(3, 0, 1, 4, 0x1122_3344);
+        vrf.write(3, 0, false, 1, 4, 0x1122_3344);
         assert_eq!(vrf.byte(3, 4), 0x44);
         assert_eq!(vrf.byte(3, 7), 0x11);
-        assert_eq!(vrf.read(3, 0, 1, 4), 0x1122_3344);
+        assert_eq!(vrf.read(3, 0, false, 1, 4), 0x1122_3344);
         // A 16-bit window over the same bytes sees the two halves.
-        assert_eq!(vrf.read(3, 0, 2, 2), 0x3344);
-        assert_eq!(vrf.read(3, 0, 3, 2), 0x1122);
+        assert_eq!(vrf.read(3, 0, false, 2, 2), 0x3344);
+        assert_eq!(vrf.read(3, 0, false, 3, 2), 0x1122);
+    }
+
+    #[test]
+    fn a_vertical_window_walks_down_a_column() {
+        let mut vrf = Vrf::default();
+        // V(16,8) lane 3 is row 19, at column 8, two bytes wide.
+        vrf.write(16, 8, true, 3, 2, 0xBEEF);
+        assert_eq!(vrf.byte(19, 8), 0xEF);
+        assert_eq!(vrf.byte(19, 9), 0xBE);
+        assert_eq!(vrf.read(16, 8, true, 3, 2), 0xBEEF);
+        // Neighbouring lanes are neighbouring rows, not neighbouring columns.
+        assert_eq!(vrf.read(16, 8, true, 2, 2), 0);
+        assert_eq!(vrf.read(19, 8, false, 0, 2), 0xBEEF);
     }
 
     #[test]
     fn column_bands_do_not_overlap() {
         let mut vrf = Vrf::default();
         // H(5,16) lane 0 is column 16; H(5,0) lane 15 is column 15.
-        vrf.write(5, 16, 0, 1, 0xAB);
-        assert_eq!(vrf.read(5, 0, 15, 1), 0);
+        vrf.write(5, 16, false, 0, 1, 0xAB);
+        assert_eq!(vrf.read(5, 0, false, 15, 1), 0);
         assert_eq!(vrf.byte(5, 16), 0xAB);
     }
 }

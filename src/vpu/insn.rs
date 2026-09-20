@@ -541,11 +541,12 @@ impl VecSlot {
         self.ty >= 14
     }
 
-    /// The dash the assembler round-trips (`binutils-vc4` #131): type 14 with
-    /// no addend and no modifiers. `scalar`/`disp` are not part of it — they
-    /// mean something only in the B position.
+    /// A dash with no addend and no modifiers. Both types 14 and 15 spell one —
+    /// a dash beside a vertical operand comes out as 15, since the direction
+    /// bit is shared. `scalar`/`disp` are not part of it: they mean something
+    /// only in the B position.
     pub fn is_bare_dash(self) -> bool {
-        self.ty == 14 && self.addend == 15 && !self.star && !self.inc
+        self.is_dash() && self.addend == 15 && !self.star && !self.inc
     }
 
     /// A column of the file rather than a row.
@@ -553,30 +554,32 @@ impl VecSlot {
         self.ty & 1 != 0
     }
 
-    /// Resolve a *horizontal* slot — 16 consecutive elements of one VRF row,
-    /// each `lane_bits` wide, starting at byte column `x`.
+    /// The 16-lane window this slot names, with lanes `lane_bits` wide.
     ///
-    /// A vertical slot (a *column* of the file) returns `None`; the executor
-    /// faults on those rather than guessing.
-    pub fn horizontal(self, lane_bits: u8) -> Option<VecReg> {
-        if self.is_dash() || self.is_vertical() {
+    /// A dash names none. Everything else does: a row of 16 consecutive
+    /// elements from byte column `x`, or — vertically — the same 16 elements
+    /// read down column `x`, one per row, from the band `y` names.
+    pub fn window(self, lane_bits: u8) -> Option<VecReg> {
+        if self.is_dash() {
             return None;
         }
         Some(VecReg {
-            row: self.y % 64,
-            x0: self.x,
+            y: self.y % 64,
+            x: self.x,
             lane_bytes: lane_bits / 8,
+            vertical: self.is_vertical(),
         })
     }
 }
 
-/// A horizontal VRF register window: 16 lanes of `lane_bytes` bytes each,
-/// starting at byte column `x0` of row `row`.
+/// A VRF register window: 16 lanes of `lane_bytes` bytes each, laid along row
+/// `y` from byte column `x`, or down column `x` from row `y`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VecReg {
-    pub row: u8,
-    pub x0: u8,
+    pub y: u8,
+    pub x: u8,
     pub lane_bytes: u8,
+    pub vertical: bool,
 }
 
 /// How many times a vector instruction repeats (the `REP` field).
@@ -829,13 +832,15 @@ impl VecInsn {
     /// carries a 4-bit register addend and a 2-bit coordinate modifier: on the
     /// vector slot the addend must be "none" (15) and the modifier is `++` or
     /// nothing, while the *dash* slot's addend is the register the address is
-    /// stepped by between repetitions. Any offset field must be zero — the
-    /// address fields' placement is Hermitage's, and no executed instruction
-    /// exercises a non-zero one.
+    /// stepped by between repetitions. Any offset field must be zero: what a
+    /// displacement counts in is not established.
     fn mem_transfer(&self) -> Option<VecExec> {
+        // Bit 19 is the 48-bit direction bit (`f-op28`), free now that the
+        // window it selects is modelled both ways round.
         const M48_FREE: u128 = vmask(48, 6, 5)
             | vmask(48, 11, 2)
             | vmask(48, 16, 3)
+            | vmask(48, 19, 1)
             | vmask(48, 20, 6)
             | vmask(48, 26, 3)
             | vmask(48, 30, 6)
@@ -881,10 +886,16 @@ impl VecInsn {
         // The inert slot must be the canonical dash, apart from the addend
         // nibble the address reads as its `+=` step; the vector slot carries no
         // addend and no `*`, and its only modifier is `++`.
-        if dash.ty != 14 || dash.star || dash.inc {
+        if !dash.is_dash() || dash.star || dash.inc {
             return None;
         }
         if vec_slot.addend != 15 || vec_slot.star {
+            return None;
+        }
+        // `++` on a vertical slot steps the *column*, by an amount no
+        // instruction this model runs pins down. Only the horizontal step is
+        // executed.
+        if vec_slot.is_vertical() && vec_slot.inc {
             return None;
         }
         let step_row = vec_slot.inc;
@@ -897,7 +908,7 @@ impl VecInsn {
         }
         Some(VecExec::Mem {
             store,
-            reg: vec_slot.horizontal(self.lane_bits)?,
+            reg: vec_slot.window(self.lane_bits)?,
             step_row,
             base: addr.base,
             incr: addr.incr,
@@ -958,7 +969,7 @@ impl VecInsn {
             return None;
         };
         Some(VecExec::Broadcast {
-            reg: self.d.horizontal(self.lane_bits)?,
+            reg: self.d.window(self.lane_bits)?,
             src,
             reps: VecRep::Fixed(1),
             step_row: false,
@@ -981,8 +992,8 @@ impl VecInsn {
         if self.len != 10 || self.mem || self.subop != 0 {
             return None; // `subop == 0` is `vmov`; only that broadcasts here.
         }
-        let reg = self.d.horizontal(self.lane_bits)?;
-        if self.d.addend != 15 || self.d.star {
+        let reg = self.d.window(self.lane_bits)?;
+        if self.d.addend != 15 || self.d.star || (self.d.is_vertical() && self.d.inc) {
             return None;
         }
         let step_row = self.d.inc;
