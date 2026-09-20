@@ -112,9 +112,9 @@ fn run(args: &[String]) -> Result<ExitCode> {
 }
 
 /// `spec-docs [--update]`: the Markdown under `docs/periph/` is generated from
-/// `specs/*.toml`, and `docs/board-sheet-dark.svg` from the hand-drawn
-/// `docs/board-sheet.svg`; report (or with `--update`, rewrite) whatever is out
-/// of date.
+/// `specs/*.toml`, `docs/vpu-isa.md` from `isa/vpu.toml`, and
+/// `docs/board-sheet-dark.svg` from the hand-drawn `docs/board-sheet.svg`;
+/// report (or with `--update`, rewrite) whatever is out of date.
 fn cmd_spec_docs(args: &[String]) -> Result<ExitCode> {
     let mut update = false;
     for a in args {
@@ -131,6 +131,7 @@ fn cmd_spec_docs(args: &[String]) -> Result<ExitCode> {
             .iter()
             .map(|name| dir.join(name)),
     );
+    stale.extend(rpi_virt_fw::isa::sync_docs(update).map_err(anyhow::Error::msg)?);
     stale.extend(rpi_virt_fw::sheet::sync(update).map_err(anyhow::Error::msg)?);
     for path in &stale {
         let verb = if update { "updated" } else { "stale" };

@@ -6,7 +6,7 @@
 //!
 //! ```text
 //!   Emulator     the run loop                              emulator
-//!   ├── Vpu      VideoCore IV scalar core, cores 0 and 1   vpu/
+//!   ├── Vpu      VC4 VPU, cores 0 and 1                    vpu/
 //!   ├── ArmSide  the four Cortex-A72 cores                 arm/, aarch64/
 //!   └── Machine  RAM + peripherals + address decode        machine
 //!                ├── one model per peripheral block        periph/
@@ -39,6 +39,7 @@ pub mod fdt;
 pub mod firmware;
 pub mod harness;
 pub mod identity;
+pub mod isa;
 pub mod jitter;
 pub mod l2;
 pub mod log;

@@ -249,3 +249,14 @@ fn malformed_specs_are_refused() {
         assert!(err.contains(expect), "{what}: unexpected error {err}");
     }
 }
+
+/// `docs/vpu-isa.md` is generated from `isa/vpu.toml` the same way, and by the
+/// same command.
+#[test]
+fn isa_doc_is_current() {
+    let stale = rpi_virt_fw::isa::sync_docs(false).unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        stale.is_empty(),
+        "docs/vpu-isa.md is out of date; run `cargo run -- spec-docs --update`"
+    );
+}

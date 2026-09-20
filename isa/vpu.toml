@@ -1,0 +1,1650 @@
+title = "VC4 VPU — instruction set reference"
+intro = """
+The **VPU** is the processor that runs `bootcode` and `start4.elf` on a
+BCM2711 — a dual-core scalar-plus-vector machine, and the first thing the chip
+executes. It is a **VC4** core: the same instruction set as the BCM2835's,
+which is why a VideoCore IV-era binutils port disassembles a Pi 4 firmware
+image instruction for instruction. The chip's *3D* engine is a different and
+newer thing — V3D 4.2, "VideoCore VI" — and nothing here describes it.
+
+Broadcom publishes nothing about the VPU, so every statement here carries
+the evidence it rests on, in the same form as the peripheral specs under
+[`docs/periph/`](periph/README.md): the kind of source, how much it is worth,
+and the reference.
+
+| kind | what it means |
+|---|---|
+| `measured` | run on a Raspberry Pi 4B d03115 through the firmware's `EXECUTE_CODE` mailbox tag; the probe that did it is named |
+| `decompile` | read out of `start4.elf` — an address, or the `binutils-vc4` opcode tables |
+| `trace` | the model boots the real firmware, and this is what makes the boot come out right |
+| `inferred` | a guess, with the reasoning |
+
+The model this describes is in [`src/vpu/`](../src/vpu/); the measurements are
+replayed against it in [`tests/vpu_isa.rs`](../tests/vpu_isa.rs).
+"""
+
+[[section]]
+title = "Instruction length"
+body = """
+Length comes from the first 16-bit parcel alone, read little-endian. Parcels
+are little-endian individually; a 32-bit instruction is `p0, p1`, a 48-bit one
+is stored `p0, p2, p1` — the middle parcel in memory is the *last* operand
+parcel — and an 80-bit one is five parcels in order.
+"""
+columns = ["First parcel", "Bytes", "Class", "Source"]
+
+[[section.row]]
+cells = ["`0x0000..=0x7FFF`", "2", "scalar 16-bit"]
+
+[[section.row.source]]
+kind       = "trace"
+ref        = "`src/vpu/length.rs`; every firmware boot"
+confidence = "high"
+
+[[section.row]]
+cells = ["`0x8000..=0xDFFF`", "4", "scalar 32-bit"]
+
+[[section.row.source]]
+kind       = "trace"
+ref        = "`src/vpu/length.rs`; every firmware boot"
+confidence = "high"
+
+[[section.row]]
+cells = ["`0xE000..=0xEFFF`", "6", "scalar 48-bit"]
+
+[[section.row.source]]
+kind       = "trace"
+ref        = "`src/vpu/length.rs`; every firmware boot"
+confidence = "high"
+
+[[section.row]]
+cells = ["`0xF000..=0xF7FF`", "6", "vector 48-bit"]
+
+[[section.row.source]]
+kind       = "decompile"
+ref        = "`binutils-vc4` opcode tables"
+confidence = "high"
+
+[[section.row]]
+cells = ["`0xF800..=0xFFFF`", "10", "vector 80-bit"]
+
+[[section.row.source]]
+kind       = "decompile"
+ref        = "`binutils-vc4` opcode tables"
+confidence = "high"
+
+[[section]]
+title = "Registers and flags"
+columns = ["Register", "Role", "Source"]
+after = """
+Flags are N, Z, C, V — but **`C` is borrow on a subtraction**, so `cs` means
+unsigned-below (`lo`) and `cc` unsigned-higher-or-same (`hs`), the opposite way
+round from ARM (`Flags::test`, `src/vpu/reg.rs`). The model keeps `pc` and the
+flags in their own fields and folds the flags into the low nibble of `r30` only
+when an exception saves it.
+"""
+
+[[section.source]]
+kind       = "trace"
+ref        = "a firmware boot diverges from the golden log if the polarity is ARM's"
+confidence = "high"
+
+[[section.row]]
+cells = ["`r0`–`r31`", "general purpose"]
+
+[[section.row.source]]
+kind       = "decompile"
+ref        = "`binutils-vc4` opcode tables"
+confidence = "high"
+
+[[section.row]]
+cells = ["`r24`", "`gp`: the dedicated base of the 16-bit `ld`/`st (r24+imm)` forms"]
+
+[[section.row.source]]
+kind       = "inferred"
+ref        = "the community ABI, and start4 uses it as one"
+confidence = "medium"
+
+[[section.row]]
+cells = ["`r25`", "`sp`"]
+
+[[section.row.source]]
+kind       = "decompile"
+ref        = "the 16-bit `add sp,#imm` form encodes destination 25"
+confidence = "high"
+
+[[section.row]]
+cells = ["`r26`", "`lr`: `bl` and `jl` write the return address here"]
+
+[[section.row.source]]
+kind       = "decompile"
+ref        = "ThreadX's context save/restore, `0x3EC3FA34` and `0x3EC40040`"
+confidence = "high"
+
+[[section.row]]
+cells = ["`r30`", "`sr` *in the encodings*"]
+
+[[section.row.source]]
+kind       = "decompile"
+ref        = "the exception path saves and restores it, interrupt-enable bit 30 and all"
+confidence = "high"
+
+[[section.row]]
+cells = ["`r31`", "`pc` *in the encodings*"]
+
+[[section.row.source]]
+kind       = "decompile"
+ref        = "`lea rd,(rN+imm16)` reads `N == 31` as the program counter"
+confidence = "high"
+
+[[section]]
+title = "Flag-setting policy"
+body = """
+`cmp`, `cmn` and `btest` set flags and discard their result; the explicit
+flag-setting triadics `adds`, `subs` and `shls` (sub-ops `0x28..=0x2a`) set
+flags and write; `fcmp` sets them. Everything else writes its result and leaves
+the flags alone.
+
+This is the one load-bearing assumption in the scalar core.
+"""
+
+[[section.source]]
+kind       = "inferred"
+ref        = "a whole firmware boot and a Linux boot run on it without a golden-log divergence"
+confidence = "medium"
+note       = "evidence, not proof: an instruction whose flags nothing reads before the next `cmp` looks the same either way"
+
+[[section]]
+title = "Scalar instruction set"
+body = """
+The ALU tables are complete: all 32 `p` entries, all 16 `q` entries, the `f`
+float table, and every triadic sub-op through `0x38`. Triadic `0x39..=0x3F` is
+the only gap, and no firmware this model boots has executed one.
+"""
+columns = ["Width", "Forms", "Source"]
+
+[[section.row]]
+cells = ["16-bit", "`nop`, `bkpt`, `sleep`, `rti`, `ei`/`di`, `swi`, `version`, `switch`/`switch.b`, `b`/`bl <reg>`, `b<cond>` (7-bit), `ld`/`st (sp+imm)`, `ld`/`st{w} (rs)`, `ld`/`st (rs+imm4)`, `add sp,#imm`, `lea rd,(sp+imm)`, `ldm`/`stm`, `p`-table ALU reg/reg, `q`-table ALU reg/imm5"]
+
+[[section.row.source]]
+kind       = "decompile"
+ref        = "`binutils-vc4` opcode tables"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "trace"
+ref        = "`src/vpu/decode.rs`; a firmware boot exercises all of them"
+confidence = "high"
+
+[[section.row]]
+cells = ["32-bit", "`b<cond>`/`bl` (27-bit), `addcmpb`, ALU imm16, `lea rd,(rN+imm16)`, `lea rd,(pc+imm16)`, triadic ALU (`mul`, `div`, `mulhd`, `count`, `clamp16`, `addscale`, `subscale`), scalar float ALU and the `0xCA00` convert block, `mov p<n>,r<n>`, and the load/store block"]
+
+[[section.row.source]]
+kind       = "decompile"
+ref        = "`binutils-vc4` opcode tables"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "trace"
+ref        = "`src/vpu/decode.rs`; a firmware boot exercises all of them"
+confidence = "high"
+
+[[section.row]]
+cells = ["48-bit", "`j`/`jl`/`b`/`bl <abs32>`, `lea rd,(pc+off32)`, `ld`/`st` with a 27-bit offset, ALU with a 32-bit immediate"]
+
+[[section.row.source]]
+kind       = "decompile"
+ref        = "`binutils-vc4` opcode tables"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "trace"
+ref        = "`src/vpu/decode.rs`"
+confidence = "high"
+
+[[section]]
+title = "Three encodings that are easy to get backwards"
+columns = ["Encoding", "The trap", "Source"]
+
+[[section.row]]
+cells = ["`switch` table", "entries are **signed** halfword displacements from just past the 2-byte instruction"]
+
+[[section.row.source]]
+kind       = "decompile"
+ref        = "a handler defined before the `switch` is reached through a negative entry"
+confidence = "high"
+note       = "read unsigned, the firmware lands mid-instruction; fixed 2026-09-07"
+
+[[section.row]]
+cells = ["`ldm` / `stm`", "the **highest** register sits at the **lowest** address, `lr` in the top word"]
+
+[[section.row.source]]
+kind       = "decompile"
+ref        = "ThreadX's interrupt frame: `0x3EC3FA34` pushes `{r6-r15}` and `{r16-r23}` over the stub's `{r0-r5, lr}`, and `_tx_thread_schedule` (`0x3EC40040`) undoes all three in order"
+confidence = "high"
+note       = "fixed 2026-09-10"
+
+[[section.row]]
+cells = ["`ww = 11` with the store bit", "there is no signed store, so the slot is **`ldsb`**"]
+
+[[section.row.source]]
+kind       = "decompile"
+ref        = "mbedtls' `ecp_mod_p256` loads a `signed char` carry at `sp+7` and branches on its sign"
+confidence = "high"
+note       = "as a store, the reduction loop never terminates; fixed 2026-09-12"
+[[section]]
+title = "Vector register file"
+body = """
+The file is 64 rows of 64 bytes, and a row is **sixteen lanes of four bytes**,
+not sixty-four bytes in a line. Element `e` of a register whose elements are
+`w` bytes wide sits at byte `(e & 15) * 4 + (e >> 4) * w` of its row: the lane
+is the element's low four bits, and the rest of the index picks the sub-field
+inside that lane. Consecutive elements are four bytes apart, interleaved.
+
+A register is always sixteen elements. A **horizontal** one takes them along
+one row from element `e0`; a **vertical** one takes the same element of sixteen
+consecutive rows, from the 16-aligned band its coordinate names.
+"""
+columns = ["Register width", "Elements per row", "Within a lane", "Source"]
+
+[[section.source]]
+kind       = "measured"
+ref        = "`v8ld H(0,0),(r1)` over a page of ascending bytes lands them at columns 0, 4, 8 … of the row"
+confidence = "high"
+
+[[section.row]]
+cells = ["8-bit", "64", "four elements, at bytes 0, 1, 2, 3 of the lane"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/layout.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/mix.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["16-bit", "32", "two elements, at byte 0 and byte 2"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/layout.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["32-bit", "16", "one element, the whole lane"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/layout.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["vertical", "16 rows", "the same element of sixteen consecutive rows"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/vert.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/vert3.s`"
+confidence = "high"
+
+[[section]]
+title = "Slot descriptors"
+body = """
+Each instruction names three operand slots — D, A and B — and each spells a
+window into the file.
+"""
+columns = ["Field", "Meaning", "Source"]
+
+[[section.row]]
+cells = ["type nibble", "the **register's** element width and direction: `H`/`V` 8-bit, `HX`/`VX` 16-bit, `HY`/`VY` 32-bit; odd nibbles are vertical, 14 and 15 are the dash"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/layout.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/conv.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["`y`", "the row (horizontal), or the 16-row band (vertical)"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/vert3.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["`e0`", "the first element, `band * 16 + fine`, counted **in elements** — which is why the byte coordinate objdump prints and the element index part company above byte elements"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/vx46.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/layout.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["`++`", "post-increment: steps the row horizontally, the element vertically"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/vinc.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["`+rN`", "adds a scalar to the element index, in elements, wrapping within the row"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/pa48.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["`*`", "**no effect** on the register file or memory — on any slot, under `REP`, on a load or a store"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/star.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["dash in B", "names a scalar register instead, with a signed displacement in the 80-bit encodings"]
+
+[[section.row.source]]
+kind       = "decompile"
+ref        = "`binutils-vc4` opcode tables"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/disp.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["dash in A", "an operand of **zeros** for an ALU op; ignored altogether by a load"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu6.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/ldodd.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["dash in D", "discards the result — the load still reads its bytes"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/ldodd.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "decompile"
+ref        = "`FUN_0edc9e20`, the vector-unit read fence"
+confidence = "high"
+
+[[section]]
+title = "Operand width conversion"
+body = """
+The operation has a width of its own (`v8`, `v16`, `v32`) and the registers
+have theirs. Two thirds of the vector ALU instructions in `start4.elf` name
+registers **narrower** than the operation, and the unit converts.
+"""
+columns = ["Direction", "Rule", "Source"]
+
+[[section.row]]
+cells = ["source, byte register into a wider operation", "zero-extend"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/wmix.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/wmix2.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["source, halfword register into a 32-bit operation", "**sign**-extend"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/wmix2.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["result into a narrower destination", "truncate"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/wmix.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["result into a narrower destination, saturating op", "clamp into what that element holds: `0..=0xff` for a byte register, signed for a wider one"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/wmix.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/wmix2.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["memory transfer, either direction", "narrowing truncates, widening zero-extends"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/conv.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["register **wider** than the operation", "refused: `binutils-vc4` cannot spell one, and `start4.elf` has thirteen, all in data"]
+
+[[section.row.source]]
+kind       = "decompile"
+ref        = "`binutils-vc4` opcode tables"
+confidence = "high"
+
+[[section.row]]
+cells = ["shift, rotate or `brev` count", "taken in the **operation's** width: five bits of B for `v32`, four for `v16`"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/wmix3.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/setf5.s`"
+confidence = "high"
+
+[[section]]
+title = "Addressing"
+columns = ["Element", "Rule", "Source"]
+
+[[section.row]]
+cells = ["displacement", "a plain **byte** offset, at every width"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/disp.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["`+=rN` (80-bit forms)", "added to the address after each repetition"]
+
+[[section.row.source]]
+kind       = "decompile"
+ref        = "VC4 libc's `memcpy` (`0x3EDA28D6`) advances by `r0 * 64` afterwards"
+confidence = "high"
+
+[[section.row]]
+cells = ["base register", "never written back"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/mix.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["load straddling a 16-byte block", "**wraps inside the block**: `v32ld HY(0,0),(r1+13)` over ascending bytes reads `0e 0f 10 01`"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/wrap.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/wrap2.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["store straddling a 16-byte block", "crosses normally"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/wrap2.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["B-position immediate", "**signed**: six bits in the 48-bit encoding, sixteen in the 80-bit one — `v32mov HY(0,0),#0x20` fills every lane with `0xffffffe0`"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/imm.s`"
+confidence = "high"
+
+[[section]]
+title = "Field layout"
+body = """
+`f-op15-10` selects the class: 60 and 62 are the memory class, 61 and 63 the
+ALU class. The sub-op is `f-op9-5` (memory, 5 bits) or `f-op8-3` (ALU, 6 bits);
+the width is `f-op4-3` (memory: 0/1/2 = 8/16/32) or `f-op9` (ALU: the `L` bit,
+16 or 32). The three slots are composites:
+
+```text
+48-bit  D = op31-29 : op27-22                      (9 bits)
+        A = op21-19 : op17-16 : op47-44            (9 bits)
+        B = op41-39 : op37-32                      (9 bits)
+80-bit  D = op63-58 : op31-22                     (16 bits)
+        A = op51-48 : op57-52 : op21-16 : op47-44 (20 bits)
+        B = op69-64 : op41-32                     (16 bits)
+```
+
+The 48-bit composites carry no direction bit, no addend and no modifiers:
+direction is `op28` for all three slots at once, and a `+rN` addend is one
+presence bit per slot (`op43` / `op18` / `op38`) against the shared register
+number in `op2-0`. Bit numbering is cgen's — 16-bit parcel in **memory** order
+— bridged to the model's `raw` by `decode::cg`.
+"""
+
+[[section.source]]
+kind       = "decompile"
+ref        = "`binutils-vc4` opcode tables"
+confidence = "high"
+
+[[section.source]]
+kind       = "decompile"
+ref        = "15054 of the 15180 vector words in `start4.elf`'s `.text` disassemble identically in this model and in `binutils-vc4`'s objdump"
+confidence = "high"
+note       = "the other 126 are ones objdump prints as a raw `vec48`/`vec80`, having no form for them"
+[[section]]
+title = "Memory-class sub-ops"
+body = """
+The gather and the scatter scale their index by the operation's element width
+and take the ordinary base-plus-displacement address.
+"""
+columns = ["Sub-op", "Mnemonic", "What it does", "Source"]
+
+[[section.row]]
+cells = ["0", "`vld`", "16 elements from `base + disp`, one per lane"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/mix.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/conv.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["1", "`lookupm`", "gather: each lane reads element `acc >> 16` of the table at the address"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/mem6.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/mem9.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["2", "`lookupml`", "gather indexed by `acc & 0xffff`"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/mem5.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/mem9.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["3", "`mem03`", "—"]
+
+[[section.row.source]]
+kind       = "decompile"
+ref        = "`binutils-vc4` names the encoding; what it does is not established"
+confidence = "low"
+
+[[section.row]]
+cells = ["4", "`vst`", "the transfer the other way"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/mix.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["5", "`indexwritem`", "scatter: each lane writes its element at index `acc >> 16`"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/mem7.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/mem9.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["6", "`indexwriteml`", "scatter indexed by `acc & 0xffff`"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/mem7.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/mem9.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["8", "`memread`", "three vector slots and no address operand; what it reads did not fall out of the probes"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/memr.s` — the answers fit no address the probe could set"
+confidence = "low"
+
+[[section.row]]
+cells = ["9", "`memwrite`", "ditto; its destination came back as A widened into the destination's elements"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/memr.s`"
+confidence = "low"
+
+[[section.row]]
+cells = ["24", "`vgetacc`", "each lane's accumulator, shifted right by `b & 31`; A is read for nothing. The width field picks the saturation, not an element size: `v8` plain, `v16` clamps into signed 32-bit, `v32` into signed 16-bit"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/setf4.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/setf5.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["7, 10–23, 25–31", "`mem07`, `mem10`…", "—"]
+
+[[section.row.source]]
+kind       = "decompile"
+ref        = "`binutils-vc4` names the encoding; what it does is not established"
+confidence = "low"
+
+[[section]]
+title = "ALU-class sub-ops"
+body = """
+`a` and `b` are the operands after the width conversion above; `n` is `b`'s low
+bits, as many as the operation's width needs. Some sub-ops mean one thing at
+one width and write a lane of **zeros** at the other — measured over a
+destination preset to all-ones, so they do write.
+"""
+columns = ["Sub-op", "Mnemonic", "Result", "Source"]
+after = """
+With the `L` bit set — a `v32` width on sub-ops 52–55 — the multiply group
+becomes `vmul32.{ss,su,us,uu}`: a **16 × 16 into 32** multiply, taking the low
+halfword of each operand and keeping the whole product. A multiply carries no
+width of its own, so it works at the **widest** register it names and converts
+the narrower ones into it.
+"""
+
+[[section.source]]
+kind       = "measured"
+ref        = "`probes/mul32.s`"
+confidence = "high"
+
+[[section.source]]
+kind       = "measured"
+ref        = "`probes/alu6.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["0", "`mov`", "`b`"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["1", "`bitplanes`", "bit **transpose**: lane `i` gets the word whose bit `j` is bit `i` of lane `j` of B — with a scalar B, all-ones wherever B's bit `i` is set. Zeros at `v32`"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/bp.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["2", "`even`", "A's even elements into lanes 0–7, **B's** into lanes 8–15"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["3", "`odd`", "the odd elements, the same way"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["4", "`interl`", "A and B alternating, from the low half"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["5", "`interh`", "the same from the high half"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["6", "`brev`", "`a`'s low `n` bits reversed — the whole operation width when `n` is zero"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu2.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/wmix3.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["7", "`ror`", "rotate right by `n`"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu2.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["8", "`shl`", "left shift by `n`"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu2.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["9", "`shls`", "left shift, saturating into the destination"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu2.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/wmix3.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["10", "`lsr`", "logical right shift"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu2.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["11", "`asr`", "arithmetic right shift"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu2.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["12", "`signshl`", "shift by a **signed, unmasked** count: left when `b` is positive, right when negative, zeros shifting in; a count past the width empties the element"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu3.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu4.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["13", "`op13`", "writes a lane of zeros"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu4.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu5.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["14", "`signasl`", "the same with the sign shifting in"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu4.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["15", "`signasls`", "`signasl`, saturating"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu4.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["16–19", "`and` `or` `eor` `bic`", "the obvious"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["20", "`count`", "`popcount(a) + popcount(b)`; zeros at `v32`"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu5.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["21", "`msb`", "the index of the highest bit set in **either** operand; all-ones when neither has one"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/wmix3.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["22, 23", "`op22` `op23`", "write a lane of zeros"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu5.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["24, 25", "`min` `max`", "signed"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu2.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["26, 27", "`dist` `dists`", "`abs(a - b)`, wrapping and saturating"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu2.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["28", "`clip`", "`a` clamped into `0 ..= b`, signed"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu2.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["29", "`sign`", "`b + signum(a)`"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu2.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["30", "`clips`", "`b * signum(a)`, `signum(0)` counting as `+1`; zeros at `v16`"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu4.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu5.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["31", "`testmag`", "`1` where `abs(a) >= b`, else `0`; zeros at `v32`"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu3.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu4.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["32, 33", "`add` `adds`", "sum, plain and saturating"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu2.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["34, 35", "`addc` `addsc`", "the same **plus the lane's carry flag**"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu3.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["36–39", "`sub` `subs` `subc` `subsc`", "`a - b`, likewise"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu2.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu3.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["40–43", "`rsub` `rsubs` `rsubc` `rsubsc`", "`b - a`, likewise"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu2.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu3.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["44–47", "`op44`…`op47`", "write a lane of zeros"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu3.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/alu5.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["48, 49", "`mull` `mulls`", "the product's low half, plain and saturating"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/mul.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["50, 51", "`mulm` `mulms`", "the product shifted right by eight — a fixed-point multiply"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/mul.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["52–55", "`mulhd.{ss,su,us,uu}`", "the product's high half, each operand read as the suffix says"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/mul.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["56–59", "`mulhn.{ss,su,us,uu}`", "the same, rounded"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/mul.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["60, 61", "`mulht.ss` `mulht.su`", "—"]
+
+[[section.row.source]]
+kind       = "decompile"
+ref        = "`binutils-vc4` names the encoding; what it does is not established"
+confidence = "low"
+
+[[section.row]]
+cells = ["62, 63", "`op62` `op63`", "—"]
+
+[[section.row.source]]
+kind       = "decompile"
+ref        = "`binutils-vc4` names the encoding; what it does is not established"
+confidence = "low"
+
+[[section]]
+title = "Repetition and predication"
+body = """
+`REP` field 0–6 means `1 << n` repetitions and field 7 means "the count is in
+`r0`". Each repetition steps the address by `+=rN` and, with `++`, the register
+by one. Each lane carries a zero, a negative and a carry flag; the predicate
+field picks which lanes execute.
+"""
+columns = ["Field", "Mnemonic", "Lanes", "Source"]
+after = """
+A masked-off lane touches nothing — no register, no memory, not even its own
+flags — and contributes nothing to a scalar aggregate.
+"""
+
+[[section.source]]
+kind       = "measured"
+ref        = "`probes/noena.s`"
+confidence = "high"
+
+[[section.source]]
+kind       = "measured"
+ref        = "`probes/bp.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["0", "`ALL`", "every lane"]
+
+[[section.row.source]]
+kind       = "decompile"
+ref        = "`binutils-vc4` opcode tables"
+confidence = "high"
+
+[[section.row]]
+cells = ["1", "`NONE`", "none"]
+
+[[section.row.source]]
+kind       = "decompile"
+ref        = "`binutils-vc4` opcode tables"
+confidence = "high"
+
+[[section.row]]
+cells = ["2", "`IFZ`", "zero flag set"]
+
+[[section.row.source]]
+kind       = "decompile"
+ref        = "`memcpy`'s tail (`0x3EDA292C`) builds `~0 << n` and transfers under it"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/setf.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["3", "`IFNZ`", "zero flag clear"]
+
+[[section.row.source]]
+kind       = "decompile"
+ref        = "`memset`'s tail (`0x3EDA2B5E`) builds a band of set bits and stores under it"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/setf.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["4", "`IFN`", "negative flag set"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/setf.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["5", "`IFNN`", "negative flag clear"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/setf.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["6", "`IFC`", "carry flag set"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/setf.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["7", "`IFNC`", "carry flag clear"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/setf.s`"
+confidence = "high"
+
+[[section]]
+title = "`SETF` — the lane flags"
+body = """
+`SETF` on an ALU op leaves the flags holding that lane's result: **zero** and
+**negative** from the result at the *operation's* width, after a saturating op
+has clamped it. The **carry** comes only from the ops that make one. A
+**transfer** with `SETF` writes no flag at all.
+"""
+columns = ["Op", "Carry", "Source"]
+after = """
+`bitplanes` is the firmware's own producer: its lane result is that lane's bit
+of B, so `IFZ` selects the lanes whose bit was 0.
+"""
+
+[[section.row]]
+cells = ["`add`, `addc`", "carry out of the operation's width"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/setf.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/setfc.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["`sub`, `subc`", "borrow"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/setf.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/setfc.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["`rsub`, `rsubc`", "borrow of `b - a`"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/setf2.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/setfc.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["`adds`, `subs`, `rsubs`, `addsc`, `subsc`, `rsubsc`, `dists`, `shls`, `mulls`", "whether the result was clamped"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/setf2.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/setf3.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/setfc.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["`min`, `max`", "whether **B** was the operand chosen"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/setf2.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/setf3.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["`shl`", "the bit that fell off the top: bit `(width - n) & (width - 1)` of `a`"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/setf2.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/setf5.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["`lsr`, `asr`, `ror`", "the last bit to leave the bottom: bit `(n - 1) & (width - 1)` of `a`"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/setf3.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/setf5.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["`signshl`", "the same by the signed count; nothing when the count passes the width"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/setfc.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["`signasl`, `signasls`", "the same going right, the sign when the count passes the width, nothing going left"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/setfc.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["`mulm`, `mulms`", "a carry whose meaning did not fall out of the probe — `SETF` on them faults"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/setfc.s` — the marks fit neither a clamp nor the discarded bits"
+confidence = "low"
+
+[[section.row]]
+cells = ["everything else measured", "**left exactly as it was**"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/setf3.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/setfc.s`"
+confidence = "high"
+
+[[section]]
+title = "The accumulator"
+body = """
+One per lane, wider than an element. The modifier field is
+`SRU 0x40 | ENA 0x20 | HIGH 0x10 | SIGN 0x08 | CLRA 0x04 | WBA 0x02 | SUB 0x01`;
+the `UACC` and `SACC` mnemonics set `ENA|WBA` together, which is why an
+accumulate usually writes the accumulator out. A dash destination keeps only
+the accumulator's effect — the shape the codec code's multiply-accumulate
+chains are written in.
+"""
+columns = ["Bit", "Effect", "Source"]
+
+[[section.row]]
+cells = ["`CLRA`", "clears the accumulator first — **even without `ENA`**"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/noena.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["`ENA`", "accumulate at all; without it the destination takes the raw result"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/noena.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["`SIGN`", "read the result signed (`SACC`) rather than unsigned (`UACC`) on the way in"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/acc3.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/acch.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["`HIGH`", "accumulate the result **shifted left by sixteen**; a write-back reads it back shifted down by sixteen, clamped into the destination's signed range"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/acch.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["`WBA`", "the destination takes the accumulator rather than the raw result"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/accmix.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/wacc.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["`SUB`", "**not** a subtracting accumulate: the accumulator is left alone and the destination takes `accumulator - result` — `(acc - (result << 16)) >> 16` with `HIGH`"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/usub.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["`SUB` with `HIGH`, unsigned", "matched neither the wrapped difference nor a clamped one, lane for lane — it faults"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/usub.s`"
+confidence = "low"
+
+[[section]]
+title = "The scalar result unit"
+body = """
+Field bit `0x40` selects it; bits 3–5 pick the function and bits 0–2 the scalar
+register (`r0`–`r7`). It writes an aggregate of the sixteen lane results, and a
+lane predicate applies to the aggregate as well.
+"""
+columns = ["Function", "Result", "Source"]
+
+[[section.row]]
+cells = ["`SUMU`", "the lanes added up, each read unsigned at the operation's width"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/sru.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["`SUMS`", "the same, read signed"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/sru.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["`IMIN`", "the index of the smallest lane — the first, on a tie"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/sru.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/sru2.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["`IMAX`", "the index of the largest — the last, on a tie"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/sru.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/sru2.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["`MAX`, `max2`, `max4`, `max6`", "the largest lane, signed; the three `maxN` spellings answered exactly what `MAX` did over every vector tried"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/sru.s`"
+confidence = "high"
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/sru2.s`"
+confidence = "medium"
+[[section]]
+title = "What the model executes"
+body = """
+`VecInsn::executable` decides, by field rather than by whole-word template.
+Against the 15180 vector instructions a linear sweep of `start4.elf`'s `.text`
+decodes, **13282 execute**.
+
+What is left is mostly not instructions. Splitting it by whether the
+instruction's 4 KiB page looks like code — 60% or more of its vector words
+executable — puts about 190 in code and about 1700 in pages that disassemble as
+vector instructions only because a linear sweep cannot tell a jump table from
+one.
+"""
+columns = ["Left in code pages", "Reason", "Source"]
+after = """
+None of it is reached on a firmware boot: `boot` stops on an unimplemented
+instruction by default, and `boot-check testdata/boot/firmware-boot.toml`
+passes.
+"""
+
+[[section.row]]
+cells = ["~57", "`memread`, whose operands the probes could not pin"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/memr.s`"
+confidence = "low"
+
+[[section.row]]
+cells = ["~34", "`vld` forms whose remaining fields are unexplained"]
+
+[[section.row.source]]
+kind       = "decompile"
+ref        = "`binutils-vc4` spells them; the fields are not established"
+confidence = "low"
+
+[[section.row]]
+cells = ["~12", "memory sub-op 3"]
+
+[[section.row.source]]
+kind       = "decompile"
+ref        = "`binutils-vc4` names it `mem03` and nothing more"
+confidence = "low"
+
+[[section.row]]
+cells = ["~11", "`vgetacc` with a dash destination"]
+
+[[section.row.source]]
+kind       = "inferred"
+ref        = "what a discarded accumulator read is for was not established"
+confidence = "low"
+
+[[section.row]]
+cells = ["~10", "`SETF` where the B slot is a scalar with a displacement"]
+
+[[section.row.source]]
+kind       = "decompile"
+ref        = "`binutils-vc4` prints `r2-1`; what the displacement does to a scalar operand is not established"
+confidence = "low"
+
+[[section.row]]
+cells = ["~9", "`memwrite`"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/memr.s`"
+confidence = "low"
+
+[[section.row]]
+cells = ["rest", "one-offs: a register wider than the operation, an unsigned `SUB` in the high half, `mulm` under `SETF`"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/usub.s`, `probes/setfc.s`"
+confidence = "low"
+
+[[section]]
+title = "Outside the instruction set"
+body = """
+No dual-issue pipeline. The MMU and the caches are flat: the four VC4 aliases
+(`0x0`, `0x4000_0000`, `0x8000_0000`, `0xC000_0000`) fold onto one backing
+store, so a line the firmware writes cached and never flushes reads back as the
+new bytes here and the old ones on silicon. Two checks stand in for that rather
+than modelling it, both off by default.
+"""
+columns = ["Switch", "What it reports", "Source"]
+after = """
+Machine side: exception and timer-IRQ delivery through the firmware's vector
+table, and two VPU cores. Core 1 starts where `start4` writes its entry to
+`IC1_WAKEUP` (`corectl` `+0x834`, `0x7E00_2834`), which on this bench happens
+only on a boot that goes on to Linux.
+"""
+
+[[section.row]]
+cells = ["`--check-coherency`", "each read that would see stale bytes on hardware (`src/coherency.rs`)"]
+
+[[section.row.source]]
+kind       = "inferred"
+ref        = "the VC4 alias map; the check reports rather than models"
+confidence = "high"
+
+[[section.row]]
+cells = ["`--check-alignment`", "each scalar access the core could not do in one (`src/align.rs`)"]
+
+[[section.row.source]]
+kind       = "decompile"
+ref        = "GCC's VC4 port is `STRICT_ALIGNMENT`"
+confidence = "high"
+
+[[section]]
+title = "Where the model keeps each part"
+columns = ["Part", "File", "Source"]
+
+[[section.row]]
+cells = ["instruction length", "`src/vpu/length.rs`"]
+
+[[section.row.source]]
+kind       = "trace"
+ref        = "the model"
+confidence = "high"
+
+[[section.row]]
+cells = ["decode, both classes", "`src/vpu/decode.rs`"]
+
+[[section.row.source]]
+kind       = "trace"
+ref        = "the model"
+confidence = "high"
+
+[[section.row]]
+cells = ["instruction shapes, slot descriptors, `executable`", "`src/vpu/insn.rs`"]
+
+[[section.row.source]]
+kind       = "trace"
+ref        = "the model"
+confidence = "high"
+
+[[section.row]]
+cells = ["execution, lane loops, flags", "`src/vpu/exec.rs`"]
+
+[[section.row.source]]
+kind       = "trace"
+ref        = "the model"
+confidence = "high"
+
+[[section.row]]
+cells = ["the register file", "`src/vpu/vrf.rs`"]
+
+[[section.row.source]]
+kind       = "trace"
+ref        = "the model"
+confidence = "high"
+
+[[section.row]]
+cells = ["the measurements, replayed", "`tests/vpu_isa.rs`"]
+
+[[section.row.source]]
+kind       = "trace"
+ref        = "the model"
+confidence = "high"
+
+[[section.row]]
+cells = ["the probes themselves", "`examples-on-real-hardware/vpu-probe/`"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "one `.s` file per question, with the findings in its `README.md`"
+confidence = "high"
+
+[[section]]
+title = "How the measurements were taken"
+body = """
+Everything marked `measured` was taken on a **Raspberry Pi 4B d03115** through
+the firmware's property-mailbox `EXECUTE_CODE` tag (`0x00030010`), which calls
+a function on the VPU and hands back `r0`. Each probe clears the register file,
+runs the instructions under test, and dumps the file back out with
+`v32st HY(0++,0),(r0+=r3) REP64` — 64 rows of 64 bytes, exactly one page — read
+back through `/dev/vc-mem`.
+
+Nothing in that directory runs in CI and nothing in the model depends on it:
+the results are baked into `src/vpu/` and replayed in `tests/vpu_isa.rs`,
+several of them as whole programs compared against the board's dump byte for
+byte.
+
+### Other sources
+
+- Herman Hermitage, `videocoreiv.arch` and `videocore-disjs` —
+  <https://github.com/hermanhermitage/videocoreiv>
+- the vc4 binutils port — <https://github.com/poizan42/binutils-vc4>
+- Mathias Gottschlag, `vctools` (BCM2835, unlicensed — read only) —
+  <https://github.com/mgottschlag/vctools>
+- `librerpi/rpi-open-firmware`, an open bootloader for the VPU
+"""

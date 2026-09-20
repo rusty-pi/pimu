@@ -55,6 +55,6 @@ joined by name to an FXL6408 pin.
 |---|---|
 | [`boot-chain.md`](boot-chain.md) | The boot stages, from the VPU ROM to Linux, and what each one reads |
 | [`periph/`](periph/) | Generated from `specs/*.toml`: one page per register block, with provenance, plus the `parent` tree and the interrupt lines |
-| [`vpu-isa.md`](vpu-isa.md) | The VideoCore IV instruction encodings the interpreter implements |
+| [`vpu-isa.md`](vpu-isa.md) | The VideoCore IV instruction set, with the evidence for each statement — generated from [`isa/vpu.toml`](../isa/vpu.toml) |
 | [`diagnostics.md`](diagnostics.md) | The log channels and `RVF_*` switches that find a wall |
 | [`references.md`](references.md) | Outside sources: datasheets, kernel drivers, other people's reverse engineering |

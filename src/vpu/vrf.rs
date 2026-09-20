@@ -1,4 +1,4 @@
-//! The VideoCore IV Vector Register File.
+//! The VC4 Vector Register File.
 //!
 //! The file is 64 rows of 64 bytes, and a row is **sixteen lanes of four
 //! bytes** — not sixty-four bytes in a line. Element `e` of a register whose

@@ -74,6 +74,12 @@ in a state a firmware thread might be mid-way through using.
 | `sru.s`, `sru2.s` | the scalar result unit's eight functions, and how it breaks a tie (`sru2-vectors.hex`) |
 | `bp.s` | what `bitplanes` does with a vector B, and whether a predicate reaches the scalar result |
 | `acch.s`, `usub.s` | the `...H` accumulator forms and the `SUB` modifier, read back with `vgetacc` |
+| `setf.s`, `setf2.s`, `setf3.s`, `setfc.s` | what `SETF` leaves in the lane flags, and which ops touch the carry |
+| `setf4.s`, `setf5.s` | whether a transfer writes flags at all, and what `vgetacc` reads |
+| `noena.s` | an accumulator modifier without `ENA`, and `SETF` under a predicate |
+| `mem5.s`–`mem9.s`, `memr.s` | the gather and the scatter, indexed by the accumulator — and `memread`/`memwrite`, which they did not settle (`mem2-vectors.hex`, `mr-vectors.hex`) |
+| `mul32.s` | the family the `L` bit selects (`mul32-vectors.hex`) |
+| `ldodd.s` | what a load does with an A slot that names a register, and with a dash that carries an addend |
 
 ## What they found (Raspberry Pi 4B d03115, firmware 1.20260824)
 

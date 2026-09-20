@@ -1,4 +1,5 @@
-//! Instruction decoder for the VideoCore IV scalar VPU.
+//! Instruction decoder for the VC4 VPU — the scalar-plus-vector core the
+//! BCM2711's firmware runs on, whose instruction set is the BCM2835's.
 //!
 //! Bit patterns are transcribed from Herman Hermitage's `videocoreiv.arch` and
 //! the `vciv.py` IDA processor module (both in `hermanhermitage/videocoreiv`),

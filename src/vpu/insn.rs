@@ -1043,6 +1043,10 @@ impl VecAluOp {
 /// shifts it back down on the way out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VecAcc {
+    /// `ENA`. Without it nothing is accumulated and nothing is written back —
+    /// but `CLRA` still clears, measured — so the modifier is carried rather
+    /// than dropped.
+    pub enable: bool,
     pub clear: bool,
     pub signed: bool,
     pub sub: bool,
@@ -1065,9 +1069,12 @@ impl VecAcc {
         const CLRA: u8 = 0x04;
         const WBA: u8 = 0x02;
         const SUB: u8 = 0x01;
-        if f & ENA == 0 {
-            return None;
-        }
+        // `ENA` off is not an error: `CLRA` alone clears the accumulator and
+        // leaves the destination the raw result, and `WBA` alone does nothing
+        // at all. Measured with `probes/noena.s`.
+        // A masked-off lane keeps the flags it had: `SETF` under `IFZ` leaves
+        // the lanes the predicate dropped exactly as the last `SETF` left
+        // them, measured.
         // `SUB` hands the destination `accumulator - result` whether or not
         // `WBA` is set — `SDEC` in `probes/accmix.s` is that combination, and
         // the board answers the same difference. With the high half it is the
@@ -1078,6 +1085,7 @@ impl VecAcc {
             return None;
         }
         Some(VecAcc {
+            enable: f & ENA != 0,
             clear: f & CLRA != 0,
             signed: f & SIGN != 0,
             sub: f & SUB != 0,
@@ -1642,6 +1650,7 @@ impl VecInsn {
             if !matches!(
                 op,
                 Mov | Bitplanes
+                    | Zero
                     | And
                     | Or
                     | Eor
@@ -1669,11 +1678,23 @@ impl VecInsn {
                     | Lsr
                     | Asr
                     | Ror
+                    | Odd
+                    | Interh
+                    | Clips
+                    | Testmag
+                    | Signshl
+                    | Signasl
+                    | Signasls
+                    | Addc
+                    | Addsc
+                    | Subc
+                    | Subsc
+                    | Rsubc
+                    | Rsubsc
+                    | Mulls
+                    | Mulhd { .. }
+                    | Mulhn { .. }
             ) {
-                return None;
-            }
-            // What a masked-off lane leaves in its flags was not measured.
-            if self.pred != 0 {
                 return None;
             }
         }

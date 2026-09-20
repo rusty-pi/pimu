@@ -1,4 +1,4 @@
-//! VideoCore IV scalar VPU model.
+//! VC4 VPU model — the BCM2711's boot processor, scalar side and vector unit.
 //!
 //! Scope today: a fetch/decode/execute interpreter for the scalar instruction
 //! forms — 16-, 32- and 48-bit — plus exceptions and interrupt delivery, which

@@ -1291,6 +1291,7 @@ impl Vpu {
                                 // operation is wide: `v32adds` into a byte
                                 // register comes back 0xff.
                                 let sat_bytes = d.map_or(width, |o| o.reg.elem_bytes as u32);
+                                let cin = self.vrf.lane_c & (1 << lane) != 0;
                                 let mut res = if let Some(planes) = planes {
                                     planes
                                         .iter()
@@ -1299,7 +1300,6 @@ impl Vpu {
                                 } else if op.takes_b(lane) {
                                     bv
                                 } else {
-                                    let cin = self.vrf.lane_c & (1 << lane) != 0;
                                     vec_alu(op, av, bv, width, sat_bytes, cin)
                                 };
                                 if setf {
@@ -1317,9 +1317,15 @@ impl Vpu {
                                     };
                                     set_flag(&mut self.vrf.lane_z, bit, res & mask == 0);
                                     set_flag(&mut self.vrf.lane_n, bit, res & sign != 0);
-                                    if let Some(c) =
-                                        vec_carry(op, av, bv, width, sat_bytes, op.takes_b(lane))
-                                    {
+                                    if let Some(c) = vec_carry(
+                                        op,
+                                        av,
+                                        bv,
+                                        width,
+                                        sat_bytes,
+                                        op.takes_b(lane),
+                                        cin,
+                                    ) {
                                         set_flag(&mut self.vrf.lane_c, bit, c);
                                     }
                                 }
@@ -1339,6 +1345,9 @@ impl Vpu {
                                     // The `...H` forms accumulate into the
                                     // high half.
                                     let v = if acc.high { v << 16 } else { v };
+                                    if !acc.enable {
+                                        // `CLRA` alone clears and stops there.
+                                    } else
                                     // `SUB` does not accumulate at all: it
                                     // hands the destination the difference
                                     // between the accumulator and this result
@@ -1355,7 +1364,7 @@ impl Vpu {
                                     } else {
                                         *slot = slot.wrapping_add(v);
                                     }
-                                    if acc.writeback && !acc.sub {
+                                    if acc.enable && acc.writeback && !acc.sub {
                                         res = if acc.high {
                                             // Read back from the high half,
                                             // and clamped into what the
@@ -1836,6 +1845,7 @@ fn vec_carry(
     width: u32,
     sat_bytes: u32,
     lane_takes_b: bool,
+    carry_in: bool,
 ) -> Option<bool> {
     use VecAluOp::*;
     if lane_takes_b {
@@ -1867,6 +1877,45 @@ fn vec_carry(
     let bit_of_a = |i: u32| a & (1 << i) != 0;
     Some(match op {
         Add => (a & mask) as u64 + (b & mask) as u64 > mask as u64,
+        // The `c` forms carry the lane's own carry in as well.
+        Addc => (a & mask) as u64 + (b & mask) as u64 + carry_in as u64 > mask as u64,
+        Subc => ((a & mask) as u64) < (b & mask) as u64 + carry_in as u64,
+        Rsubc => ((b & mask) as u64) < (a & mask) as u64 + carry_in as u64,
+        Addsc => clamped(sext(a) + sext(b) + carry_in as i64),
+        Subsc => clamped(sext(a) - sext(b) - carry_in as i64),
+        Rsubsc => clamped(sext(b) - sext(a) - carry_in as i64),
+        Mulls => clamped(sext(a) * sext(b)),
+        // The signed-count shifts answer the last bit to leave the element:
+        // for a right shift the bit the count stopped on, for a left shift the
+        // one that fell off the top, and for a count past the width nothing at
+        // all — except the sign, which the arithmetic form keeps shifting in.
+        Signshl | Signasl | Signasls => {
+            let n = sext(b);
+            let bit = |i: u32| a & (1 << i) != 0;
+            if n == 0 {
+                false
+            } else if n < 0 {
+                let k = (-n) as u64;
+                if k > bits as u64 {
+                    !matches!(op, Signshl) && bit(bits - 1)
+                } else {
+                    bit(k as u32 - 1)
+                }
+            } else if matches!(op, Signshl) {
+                // A left shift answers the bit that fell off the top — but
+                // only the logical form does; the arithmetic ones answered
+                // nothing at all for the left shifts in the probe.
+                if n >= bits as i64 {
+                    false
+                } else {
+                    bit(bits - n as u32)
+                }
+            } else {
+                false
+            }
+        }
+        // The ops that produce no carry of their own leave the lane's alone.
+        Odd | Interh | Clips | Testmag | Zero | Mulhd { .. } | Mulhn { .. } => return None,
         Sub => (a & mask) < (b & mask),
         Rsub => (b & mask) < (a & mask),
         Adds => clamped(sext(a) + sext(b)),
