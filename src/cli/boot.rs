@@ -1721,6 +1721,7 @@ fn print_arm_cores(emu: &Emulator, eeprom: bool) {
         if let Some(prof) = &a.prof {
             print_arm_prof(prof);
         }
+        print_arm_blocks(&a.cores);
     } else if eeprom {
         println!("\n--- ARM cores (#40) ---\n  never released");
     }
@@ -2271,6 +2272,54 @@ fn print_arm_prof(prof: &std::collections::HashMap<(usize, u32, u64), u64>) {
         println!(
             "    core {core} EL{el} {pc:#014x}  {n:>13}  {:5.1}%",
             100.0 * n as f64 / total as f64
+        );
+    }
+}
+
+/// `RVF_ARM_BLOCKS`'s table: how long the straight-line runs the cores
+/// executed were, and how often each was re-entered (#117).
+fn print_arm_blocks(cores: &[rpi_virt_fw::arm::Core]) {
+    use rpi_virt_fw::arm::blocks::Blocks;
+    let mut all = Blocks::default();
+    for c in cores {
+        if let Some(b) = &c.blocks {
+            all.merge(b);
+        }
+    }
+    if all.insns == 0 {
+        return;
+    }
+    println!(
+        "  RVF_ARM_BLOCKS: {} instruction(s) in {} straight-line run(s), {} distinct, \
+         mean {:.1} instruction(s) per run, {} exception cut(s)",
+        all.insns,
+        all.runs,
+        all.distinct(),
+        all.insns as f64 / all.runs.max(1) as f64,
+        all.cuts,
+    );
+    print!("    instructions in runs of at least");
+    for len in [2, 4, 8, 16, 32, 64] {
+        print!("  {len}: {:.1}%", all.insns_in_runs_of(len));
+    }
+    println!();
+    print!("    instructions in runs entered at least");
+    for n in [2, 10, 100, 10_000] {
+        print!("  {n}x: {:.1}%", all.insns_in_runs_entered(n));
+    }
+    println!();
+    println!("    the runs covering the most instructions:");
+    for ((pa, el), entries, insns) in all.hottest().into_iter().take(10) {
+        println!(
+            "      EL{el} {pa:#014x}  {entries:>12} entries  {insns:>13} insns  {:5.1}%",
+            100.0 * insns as f64 / all.insns as f64
+        );
+    }
+    println!("    the commonest run lengths, by instructions covered:");
+    for (len, runs, insns) in all.by_length().into_iter().take(10) {
+        println!(
+            "      {len:>6} insn(s)  {runs:>12} run(s)  {insns:>13} insns  {:5.1}%",
+            100.0 * insns as f64 / all.insns as f64
         );
     }
 }

@@ -44,6 +44,7 @@ const GATED: &[&str] = &[
     "RVF_HEARTBEAT",
     "RVF_WATCH",
     "RVF_TCB",
+    "RVF_ARM_BLOCKS",
 ];
 
 /// One `RVF_*` switch that is either on or off.

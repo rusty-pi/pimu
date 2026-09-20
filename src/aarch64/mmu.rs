@@ -106,6 +106,12 @@ impl Default for Tlb {
 }
 
 impl Tlb {
+    /// The `(VA page, EL, PA page)` the last instruction was fetched from,
+    /// for a diagnostic that wants the physical PC without translating again.
+    pub fn fetch_hint(&self) -> Option<(u64, u32, u64)> {
+        self.fetch
+    }
+
     pub fn new() -> Tlb {
         Tlb {
             generation: 1,

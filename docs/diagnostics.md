@@ -97,6 +97,7 @@ it with `SIGPIPE`.
 | `RVF_PROF=1` | Bucket the core-0 PC into 256-byte slots and dump the hottest on exit. Finds the loop a stalled boot is spinning in. |
 | `RVF_PROF_THREAD=<hex>` | The same, attributed per ThreadX thread. Takes the address of the firmware's current-thread pointer (`_tx_thread_current_ptr`) — only the firmware knows where that lives, so it is a parameter rather than a constant baked into the model. |
 | `RVF_ARM_PROF=<us>` | From model time `<us>` on (`1` for the whole run), count every ARM step by core, EL and 256-byte PC bucket, and list the hottest in the run report — and at every reset, for the boot that ended. Asleep cores are not stepped, so they do not show; the passes a parked core skips count at the loop's PCs. |
+| `RVF_ARM_BLOCKS=1` | Count the straight-line runs the ARM cores execute — the instructions from one control-flow transfer's destination to the next — and how often each is re-entered, keyed by physical PC and EL. The report gives the mean run length, the share of executed instructions in runs of at least *n* instructions and in runs entered at least *n* times, and the hottest runs. This is what says whether translating a block at a time could pay (#117). Run it with `RVF_NO_PARK=1 RVF_NO_SHA_SKIP=1`: a parked core's skipped passes and a natively hashed SHA-256 block are never stepped, so otherwise the counts miss the hottest loops. Takes the cores off the burst path, so it is slower than a plain run. |
 | `RVF_HEARTBEAT=<n>` | Print progress every `n` instructions, for runs that look hung. |
 
 ## Log channels

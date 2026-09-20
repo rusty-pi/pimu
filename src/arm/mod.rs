@@ -175,6 +175,7 @@ use crate::machine::Machine;
 use crate::periph::gentimer::{self, GenericTimer, Reg, Which};
 use crate::periph::{armlocal, gic};
 
+pub mod blocks;
 mod park;
 mod sha;
 
@@ -256,6 +257,8 @@ pub struct Core {
     sha: Option<Box<sha::Loop>>,
     pub sha_loops: u64,
     pub sha_blocks: u64,
+    /// `RVF_ARM_BLOCKS=1`: the straight-line runs this core executed (#117).
+    pub blocks: Option<Box<blocks::Blocks>>,
 }
 
 impl Core {
@@ -274,6 +277,8 @@ impl Core {
             sha: None,
             sha_loops: 0,
             sha_blocks: 0,
+            blocks: (crate::diag::ON && std::env::var_os("RVF_ARM_BLOCKS").is_some())
+                .then(Box::<blocks::Blocks>::default),
         }
     }
 
@@ -339,6 +344,10 @@ pub struct ArmSide {
     /// `RVF_NO_SHA_SKIP=1` runs SHA-256 block loops block by block too
     /// (module docs, "SHA-256 loops").
     sha_on: bool,
+    /// `RVF_ARM_BLOCKS=1` counts the straight-line runs ([`blocks`]), which
+    /// only [`Self::step_core`] sees, so it takes the cores off the burst
+    /// path the way a profile does.
+    blocks_on: bool,
     /// [`Self::run_until_store`]: stop after the cycle in which a core first
     /// writes a VPU-side peripheral, and whether one has.
     stop_on_store: bool,
@@ -422,6 +431,7 @@ impl ArmSide {
             park_on: std::env::var_os("RVF_NO_PARK").is_none(),
             burst_on: std::env::var_os("RVF_NO_BURST").is_none(),
             sha_on: std::env::var_os("RVF_NO_SHA_SKIP").is_none(),
+            blocks_on: crate::diag::ON && std::env::var_os("RVF_ARM_BLOCKS").is_some(),
             stop_on_store: false,
             stored: false,
             log: Log::default(),
@@ -668,6 +678,7 @@ impl ArmSide {
                 && self.runnable.is_power_of_two()
                 && self.parked == 0
                 && self.prof.is_none()
+                && !self.blocks_on
             {
                 let id = self.runnable.trailing_zeros() as usize;
                 let limit = end.min(self.timer_due).min(self.park_due);
@@ -758,6 +769,20 @@ impl ArmSide {
             io: bus.io,
             periph_store: bus.periph_store,
         };
+        if crate::diag::ON {
+            if let Some(b) = &mut core.blocks {
+                // The fetch hint is the page this instruction came from, so
+                // the physical PC costs no second translation. A step that
+                // faulted before fetching leaves a stale hint; it does not
+                // retire, and a run that does not retire is only cut.
+                let retired = matches!(done.step, Step::Retired);
+                let (pa, el) = match core.cpu.tlb.fetch_hint() {
+                    Some((_, el, page)) => (page | (pc & 0xFFF), el),
+                    None => (pc, core.cpu.el),
+                };
+                b.step(pa, el, retired, core.cpu.pc == pc.wrapping_add(4));
+            }
+        }
         // Most steps are a plain instruction on registers and RAM: nothing
         // [`Self::after_step`] does for them but count it, as long as a store
         // clears no other core's exclusive mark and wakes no parked core
