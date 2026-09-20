@@ -731,6 +731,23 @@ impl UsbDevice for MassStorage {
         if ep != 2 {
             return Xfer::Stall;
         }
+        // A drive that stalls its data phase. The phase is over either way —
+        // the next IN gets the status, which is what BOT 6.7.2 has the host
+        // read once it has cleared the halt. Without that the drive would
+        // hand the data back on the next IN and every recovery would look
+        // broken, which is how this was first mismeasured.
+        if crate::jitter::fault("a stalled bulk IN") {
+            if let BotPhase::DataIn { data, tag } =
+                std::mem::replace(&mut self.phase, BotPhase::Command)
+            {
+                self.phase = BotPhase::Status {
+                    tag,
+                    residue: data.len() as u32,
+                    status: 1,
+                };
+            }
+            return Xfer::Stall;
+        }
         match std::mem::replace(&mut self.phase, BotPhase::Command) {
             BotPhase::DataIn { mut data, tag } => {
                 let take = len.min(data.len());
