@@ -1293,3 +1293,237 @@ fn the_measured_alu_shuffles_and_bitwise_ops() {
         assert_eq!(&got[..], *want, "{name}");
     }
 }
+
+/// The multiplies, against the same board.
+///
+/// `mull` keeps the low half of the product, `mulm` shifts it right by eight,
+/// `mulhd` keeps the high half and `mulhn` rounds while doing so — each with
+/// its operands read signed or unsigned as the suffix says. Measured over the
+/// edge-case vectors in `probes/alu2-vectors.hex`.
+#[test]
+fn the_measured_multiplies() {
+    const A: [u32; 16] = [
+        0x7fff, 0x8000, 0xffff, 0x0001, 0x4000, 0xc000, 0x0010, 0x8001, 0x0003, 0xfffe, 0x00ff,
+        0xff00, 0x1234, 0xedcc, 0x0000, 0x7f00,
+    ];
+    const B: [u32; 16] = [
+        0x0001, 0x0001, 0x0002, 0xffff, 0x4000, 0x4000, 0x0004, 0x7fff, 0x0002, 0x0003, 0x0100,
+        0x0080, 0x0001, 0x0002, 0x0001, 0x0100,
+    ];
+    #[allow(clippy::type_complexity)]
+    const CASES: &[(&str, usize, &[u8], &[u32])] = &[
+        (
+            "vmull.ss",
+            0,
+            &[0x80, 0xf5, 0x23, 0x80, 0x3d, 0xc2],
+            &[
+                0x7fff, 0x8000, 0xfffe, 0xffff, 0x0000, 0x0000, 0x0040, 0xffff, 0x0006, 0xfffa,
+                0xff00, 0x8000, 0x1234, 0xdb98, 0x0000, 0x0000,
+            ],
+        ),
+        (
+            "vmulls.ss",
+            1,
+            &[0x88, 0xf5, 0x63, 0x80, 0x3d, 0xc2],
+            &[
+                0x7fff, 0x8000, 0xfffe, 0xffff, 0x7fff, 0x8000, 0x0040, 0x8000, 0x0006, 0xfffa,
+                0x7fff, 0x8000, 0x1234, 0xdb98, 0x0000, 0x7fff,
+            ],
+        ),
+        (
+            "vmulm.ss",
+            2,
+            &[0x90, 0xf5, 0xa3, 0x80, 0x3d, 0xc2],
+            &[
+                0x007f, 0xff80, 0xffff, 0xffff, 0x0000, 0x0000, 0x0000, 0x00ff, 0x0000, 0xffff,
+                0x00ff, 0xff80, 0x0012, 0xffdb, 0x0000, 0x7f00,
+            ],
+        ),
+        (
+            "vmulms.ss",
+            3,
+            &[0x98, 0xf5, 0xe3, 0x80, 0x3d, 0xc2],
+            &[
+                0x007f, 0xff80, 0xffff, 0xffff, 0x7fff, 0x8000, 0x0000, 0x8000, 0x0000, 0xffff,
+                0x00ff, 0xff80, 0x0012, 0xffdb, 0x0000, 0x7f00,
+            ],
+        ),
+        (
+            "vmulhd.ss",
+            4,
+            &[0xa0, 0xf5, 0x23, 0x81, 0x3d, 0xc2],
+            &[
+                0x0000, 0xffff, 0xffff, 0xffff, 0x1000, 0xf000, 0x0000, 0xc000, 0x0000, 0xffff,
+                0x0000, 0xffff, 0x0000, 0xffff, 0x0000, 0x007f,
+            ],
+        ),
+        (
+            "vmulhd.su",
+            5,
+            &[0xa8, 0xf5, 0x63, 0x81, 0x3d, 0xc2],
+            &[
+                0x0000, 0xffff, 0xffff, 0x0000, 0x1000, 0xf000, 0x0000, 0xc000, 0x0000, 0xffff,
+                0x0000, 0xffff, 0x0000, 0xffff, 0x0000, 0x007f,
+            ],
+        ),
+        (
+            "vmulhd.us",
+            6,
+            &[0xb0, 0xf5, 0xa3, 0x81, 0x3d, 0xc2],
+            &[
+                0x0000, 0x0000, 0x0001, 0xffff, 0x1000, 0x3000, 0x0000, 0x3fff, 0x0000, 0x0002,
+                0x0000, 0x007f, 0x0000, 0x0001, 0x0000, 0x007f,
+            ],
+        ),
+        (
+            "vmulhd.uu",
+            7,
+            &[0xb8, 0xf5, 0xe3, 0x81, 0x3d, 0xc2],
+            &[
+                0x0000, 0x0000, 0x0001, 0x0000, 0x1000, 0x3000, 0x0000, 0x3fff, 0x0000, 0x0002,
+                0x0000, 0x007f, 0x0000, 0x0001, 0x0000, 0x007f,
+            ],
+        ),
+        (
+            "vmulhn.ss",
+            8,
+            &[0xc0, 0xf5, 0x23, 0x82, 0x3d, 0xc2],
+            &[
+                0x0000, 0x0000, 0x0000, 0x0000, 0x1000, 0xf000, 0x0000, 0xc001, 0x0000, 0x0000,
+                0x0001, 0x0000, 0x0000, 0x0000, 0x0000, 0x007f,
+            ],
+        ),
+        (
+            "vmulhn.su",
+            9,
+            &[0xc8, 0xf5, 0x63, 0x82, 0x3d, 0xc2],
+            &[
+                0x0000, 0x0000, 0x0000, 0x0001, 0x1000, 0xf000, 0x0000, 0xc001, 0x0000, 0x0000,
+                0x0001, 0x0000, 0x0000, 0x0000, 0x0000, 0x007f,
+            ],
+        ),
+        (
+            "vmulhn.us",
+            10,
+            &[0xd0, 0xf5, 0xa3, 0x82, 0x3d, 0xc2],
+            &[
+                0x0000, 0x0001, 0x0002, 0x0000, 0x1000, 0x3000, 0x0000, 0x4000, 0x0000, 0x0003,
+                0x0001, 0x0080, 0x0000, 0x0002, 0x0000, 0x007f,
+            ],
+        ),
+        (
+            "vmulhn.uu",
+            11,
+            &[0xd8, 0xf5, 0xe3, 0x82, 0x3d, 0xc2],
+            &[
+                0x0000, 0x0001, 0x0002, 0x0001, 0x1000, 0x3000, 0x0000, 0x4000, 0x0000, 0x0003,
+                0x0001, 0x0080, 0x0000, 0x0002, 0x0000, 0x007f,
+            ],
+        ),
+    ];
+
+    for (name, row, bytes, want) in CASES {
+        let mut m = machine();
+        let mut v = Vpu::new(CODE);
+        for (i, b) in bytes.iter().enumerate() {
+            m.store8(CODE + i as u32, *b).unwrap();
+        }
+        m.store16(CODE + bytes.len() as u32, NOP).unwrap();
+        for e in 0..16u32 {
+            v.vrf.write(60, e, 2, A[e as usize]);
+            v.vrf.write(61, e, 2, B[e as usize]);
+        }
+        v.regs.pc = CODE;
+        assert_eq!(v.step(&mut m), Step::Ran, "{name}: {:?}", v.stopped);
+        let got: Vec<u32> = (0..16).map(|e| v.vrf.read(*row as u8, e, 2)).collect();
+        assert_eq!(&got[..], *want, "{name}");
+    }
+}
+
+/// A whole probe program, run on the board and replayed here.
+///
+/// `examples-on-real-hardware/vpu-probe/probes/accmix.s` loads two vectors,
+/// runs three multiplies, accumulates a sum three times, takes it back off
+/// again, does the multiply-accumulate the codec code is built out of, and
+/// dumps the register file with `v32st HY(0++,0),(r0+=r3) REP64`. The rows
+/// below are the ones a Raspberry Pi 4B d03115 wrote; the model runs the same
+/// bytes over the same memory and has to write them too.
+#[test]
+fn a_whole_probe_program_replays() {
+    const CODE_BYTES: &[u8] = &[
+        0x03, 0xb0, 0x40, 0x00, 0x14, 0x40, 0x44, 0xb0, 0x00, 0x10, 0x06, 0xfe, 0x38, 0xc0, 0x00,
+        0x04, 0xc0, 0xfb, 0x00, 0x00, 0x08, 0xf0, 0x38, 0x8f, 0x84, 0x03, 0x08, 0xf8, 0x78, 0x8f,
+        0xa0, 0x03, 0xc0, 0xf3, 0x10, 0x00, 0x90, 0xf5, 0x23, 0x80, 0x3d, 0xc2, 0xc0, 0xf5, 0x63,
+        0x80, 0x3d, 0xc2, 0x80, 0xf5, 0xa3, 0x80, 0x3d, 0xc2, 0x00, 0xfd, 0xe3, 0x80, 0x3d, 0xc2,
+        0xc0, 0xf3, 0xbc, 0x09, 0x00, 0xfd, 0x23, 0x81, 0x3d, 0xc2, 0xc0, 0xf3, 0xbc, 0x08, 0x00,
+        0xfd, 0x63, 0x81, 0x3d, 0xc2, 0xc0, 0xf3, 0xbc, 0x08, 0x00, 0xfd, 0xa3, 0x81, 0x3d, 0xc2,
+        0xc0, 0xf3, 0xbc, 0x0b, 0x00, 0xfd, 0xe3, 0x81, 0x3d, 0xc2, 0xc0, 0xf3, 0xfc, 0x0a, 0x90,
+        0xfd, 0x23, 0xe0, 0x3d, 0xc2, 0xc0, 0xf3, 0xbc, 0x0b, 0x90, 0xfd, 0x23, 0x82, 0x3d, 0xc2,
+        0xc0, 0xf3, 0xbc, 0x0a, 0x02, 0xfc, 0x78, 0x82, 0x15, 0x04, 0xc0, 0xfb, 0x00, 0x00, 0x90,
+        0xf4, 0x63, 0x83, 0x3d, 0xc2, 0x96, 0xf8, 0x30, 0xe0, 0x80, 0x03, 0xe0, 0x33, 0x00, 0x00,
+        0x5a, 0x00,
+    ];
+    const VECTORS: &[u8] = &[
+        0xff, 0x7f, 0x00, 0x80, 0xff, 0xff, 0x01, 0x00, 0x00, 0x40, 0x00, 0xc0, 0x10, 0x00, 0x01,
+        0x80, 0x03, 0x00, 0xfe, 0xff, 0xff, 0x00, 0x00, 0xff, 0x34, 0x12, 0xcc, 0xed, 0x00, 0x00,
+        0x00, 0x7f, 0x01, 0x00, 0x01, 0x00, 0x02, 0x00, 0xff, 0xff, 0x00, 0x40, 0x00, 0x40, 0x04,
+        0x00, 0xff, 0x7f, 0x02, 0x00, 0x03, 0x00, 0x00, 0x01, 0x80, 0x00, 0x01, 0x00, 0x02, 0x00,
+        0x01, 0x00, 0x00, 0x01,
+    ];
+    const ROWS: &[(usize, &str)] = &[
+    (0, "7f00000080ff0000ffff0000ffff0000000000000000000000000000ff00000000000000ffff0000ff00000080ff000012000000dbff000000000000007f0000"),
+    (1, "000000000000000000000000000000000010000000f000000000000001c00000000000000000000001000000000000000000000000000000000000007f000000"),
+    (2, "ff7f000000800000feff0000ffff0000000000000000000040000000ffff000006000000faff000000ff0000008000003412000098db00000000000000000000"),
+    (3, "00800000018000000100000000000000008000000000000014000000000000000500000001000000ff01000080ff000035120000ceed00000100000000800000"),
+    (4, "00000000020000000200000000000000000000000000000028000000000000000a00000002000000fe03000000ff00006a2400009cdb00000200000000000000"),
+    (5, "0080000003800000030000000000000000800000000000003c000000000000000f00000003000000fd05000080fe00009f3600006ac900000300000000800000"),
+    (6, "00800000018000000100000000000000008000000000000014000000000000000500000001000000ff01000080ff000035120000ceed00000100000000800000"),
+    (7, "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
+    (8, "fe00000000ff0000feff0000feff0000000000000000000000000000fe01000000000000feff0000fe01000000ff000024000000b6ff00000000000000fe0000"),
+    (9, "15000000150000001500000015000000150000001500000015000000150000001500000015000000150000001500000015000000150000001500000015000000"),
+    (10, "15000000150000001500000015000000150000001500000015000000150000001500000015000000150000001500000015000000150000001500000015000000"),
+    (11, "15000000150000001500000015000000150000001500000015000000150000001500000015000000150000001500000015000000150000001500000015000000"),
+    (12, "15000000150000001500000015000000150000001500000015000000150000001500000015000000150000001500000015000000150000001500000015000000"),
+    (13, "fe7f000001800000fdff0000feff0000000000000080000014000000feff000001000000fdff0000ff01000080ff000035120000ceed000001000000007e0000"),
+    (60, "ff7f000000800000ffff0000010000000040000000c00000100000000180000003000000feff0000ff00000000ff000034120000cced000000000000007f0000"),
+    (61, "010000000100000002000000ffff0000004000000040000004000000ff7f00000200000003000000000100008000000001000000020000000100000000010000")
+    ];
+
+    let mut m = machine();
+    let mut v = Vpu::new(CODE);
+    for (i, b) in CODE_BYTES.iter().enumerate() {
+        m.store8(CODE + i as u32, *b).unwrap();
+    }
+    // The marker page the harness fills, and the test vectors a page later.
+    for i in 0..4096u32 {
+        m.store8(0x4000 + i, (i + 1) as u8).unwrap();
+    }
+    for i in 0..4096u32 {
+        m.store8(0x5000 + i, 0).unwrap();
+    }
+    for (i, b) in VECTORS.iter().enumerate() {
+        m.store8(0x5000 + i as u32, *b).unwrap();
+    }
+    v.regs.set(0, 0x8000); // where the dump lands
+    v.regs.set(1, 0x4000);
+    v.regs.pc = CODE;
+    for _ in 0..24 {
+        if v.regs.pc == CODE + CODE_BYTES.len() as u32 - 2 {
+            break; // the trailing `rts`
+        }
+        assert_eq!(
+            v.step(&mut m),
+            Step::Ran,
+            "at {:#x}: {:?}",
+            v.regs.pc,
+            v.stopped
+        );
+    }
+
+    for (row, want) in ROWS {
+        let got: String = (0..64)
+            .map(|c| format!("{:02x}", m.load8(0x8000 + (*row as u32) * 64 + c).unwrap()))
+            .collect();
+        assert_eq!(&got, want, "row {row}");
+    }
+}

@@ -1214,6 +1214,7 @@ impl Vpu {
                         step_a,
                         pred,
                         width,
+                        acc,
                     } => {
                         let lanes = match pred {
                             VecPred::All => u16::MAX,
@@ -1224,18 +1225,25 @@ impl Vpu {
                             VecRep::Fixed(n) => n,
                             VecRep::FromR0 => self.regs.get(0),
                         };
-                        let d_add = d.addend.map_or(0, |r| self.regs.get(r as usize));
-                        let a_add = a.addend.map_or(0, |r| self.regs.get(r as usize));
+                        let d_add = d
+                            .and_then(|o| o.addend)
+                            .map_or(0, |r| self.regs.get(r as usize));
+                        let a_add = a
+                            .and_then(|o| o.addend)
+                            .map_or(0, |r| self.regs.get(r as usize));
                         for rep in 0..reps {
                             for lane in 0..vrf::LANES {
                                 if lanes & (1 << lane) == 0 {
                                     continue;
                                 }
                                 let (ai, bi) = op.sources(lane);
-                                let av = {
-                                    let (row, e) =
-                                        a.reg.lane(ai, if step_a { rep } else { 0 }, a_add);
-                                    self.vrf.read(row, e, a.reg.elem_bytes as u32)
+                                let av = match a {
+                                    None => 0,
+                                    Some(o) => {
+                                        let (row, e) =
+                                            o.reg.lane(ai, if step_a { rep } else { 0 }, a_add);
+                                        self.vrf.read(row, e, o.reg.elem_bytes as u32)
+                                    }
                                 };
                                 let bv = match b {
                                     VecSource::Imm(i) => i as u32,
@@ -1249,14 +1257,38 @@ impl Vpu {
                                 };
                                 // The two interleaves take odd lanes from B and
                                 // even ones from A; everything else computes.
-                                let res = if op.takes_b(lane) {
+                                let mut res = if op.takes_b(lane) {
                                     bv
                                 } else {
                                     vec_alu(op, av, bv, width)
                                 };
-                                let (row, e) =
-                                    d.reg.lane(lane, if step_d { rep } else { 0 }, d_add);
-                                self.vrf.write(row, e, d.reg.elem_bytes as u32, res);
+                                if let Some(acc) = acc {
+                                    let slot = &mut self.vrf.acc[lane as usize];
+                                    if acc.clear {
+                                        *slot = 0;
+                                    }
+                                    // The result enters the accumulator at its
+                                    // own width, extended as `SIGN` says.
+                                    let bits = width * 8;
+                                    let v = if acc.signed && bits < 32 {
+                                        ((res << (32 - bits)) as i32 >> (32 - bits)) as u32
+                                    } else {
+                                        res
+                                    };
+                                    *slot = if acc.sub {
+                                        slot.wrapping_sub(v)
+                                    } else {
+                                        slot.wrapping_add(v)
+                                    };
+                                    if acc.writeback {
+                                        res = *slot;
+                                    }
+                                }
+                                if let Some(o) = d {
+                                    let (row, e) =
+                                        o.reg.lane(lane, if step_d { rep } else { 0 }, d_add);
+                                    self.vrf.write(row, e, o.reg.elem_bytes as u32, res);
+                                }
                             }
                         }
                     }
@@ -1558,6 +1590,31 @@ fn vec_alu(op: VecAluOp, a: u32, b: u32, width: u32) -> u32 {
         // The shuffles take their value straight from the element the lane
         // mapping picked.
         Even | Odd | Interl | Interh => a & mask,
+        // The multiplies. `mull` keeps the low half, `mulm` shifts the product
+        // right by eight — a fixed-point multiply — and the `mulh` pair keeps
+        // the high half, `mulhn` rounding rather than truncating.
+        Mull => (sext(a) * sext(b)) as u32 & mask,
+        Mulls => sat(sext(a) * sext(b)),
+        Mulm => ((sext(a) * sext(b)) >> 8) as u32 & mask,
+        Mulms => sat((sext(a) * sext(b)) >> 8),
+        Mulhd { sa, sb } => {
+            let (x, y) = (mul_operand(a, sa, bits), mul_operand(b, sb, bits));
+            ((x * y) >> bits) as u32 & mask
+        }
+        Mulhn { sa, sb } => {
+            let (x, y) = (mul_operand(a, sa, bits), mul_operand(b, sb, bits));
+            ((x * y + (1 << (bits - 1))) >> bits) as u32 & mask
+        }
+    }
+}
+
+/// One operand of a multiply, read signed or unsigned as its mnemonic says.
+fn mul_operand(v: u32, signed: bool, bits: u32) -> i64 {
+    let masked = if bits >= 32 { v } else { v & ((1 << bits) - 1) };
+    if signed {
+        ((masked << (32 - bits)) as i32 >> (32 - bits)) as i64
+    } else {
+        masked as i64
     }
 }
 

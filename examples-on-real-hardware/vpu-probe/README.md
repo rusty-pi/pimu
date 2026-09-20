@@ -61,6 +61,10 @@ in a state a firmware thread might be mid-way through using.
 | `wrap.s`, `wrap2.s` | what an unaligned element does at a 16-byte boundary |
 | `mix.s` | all of it at once — the run `tests/vpu_isa.rs` pins as a regression |
 | `vx46.s` | one prediction of the layout formula, checked against silicon |
+| `alu.s`, `alu2.s` | the ALU ops, over a plain pair of vectors and over edge cases (`alu2-vectors.hex`) |
+| `mul.s` | the multiplies, signed and unsigned, low / middle / high |
+| `acc2.s`, `acc3.s` | the accumulator: one effect per row, then polarity and width (`acc3-vectors.hex`) |
+| `accmix.s` | a whole program — multiplies, accumulate, `REP` — replayed against the model in `tests/vpu_isa.rs` |
 
 ## What they found (Raspberry Pi 4B d03115, firmware 1.20260824)
 
@@ -80,3 +84,27 @@ in a state a firmware thread might be mid-way through using.
 - A **load** whose element straddles a 16-byte boundary wraps inside that
   block instead of crossing it: `v32ld HY(0,0),(r1+13)` over ascending bytes
   reads `0e 0f 10 01`. A **store** crosses normally.
+- The ALU: `s` suffixes saturate signed, `min`/`max`/`asr` are signed and
+  `lsr` is not, a shift count is B's low nibble. `even`/`odd` pack A's
+  alternate elements into lanes 0-7 and **B's** into 8-15; `clip` is
+  `clamp(a, 0, b)`; `sign` is `b + signum(a)`; `count` is
+  `popcount(a) + popcount(b)`; `brev` reverses a's low `n` bits, `n` being b's
+  low nibble, or the whole element when that nibble is zero.
+- The multiplies: `mull` keeps the product's low half, `mulm` shifts it right
+  by 8, `mulhd` keeps the high half and `mulhn` rounds while doing so; the
+  suffix says which operand is signed.
+- The accumulator is one per lane and wider than an element (four accumulates
+  of `0xffff` read back as `0x3fffc`). `CLRA` clears it, the result is added or
+  — with `SUB` — taken off, read signed or unsigned as `SIGN` says, and `WBA`
+  makes the destination take the accumulator instead of the raw result.
+  `vgetacc D,A,B` reads it shifted right by `B & 15`, with `s16`/`s32`
+  saturating variants.
+
+## Still open
+
+The `...H` accumulator forms (`UACCH`, `SACCH`) did not fall out of these runs:
+each hypothesis that fits one lane breaks another, and they look like a second
+accumulator or a second half of one rather than a write-back mode. The other
+open questions are what an ALU op does when its width disagrees with a
+register's, what the scalar-result unit does beyond `SUMU`/`SUMS`, and what
+`SETF` leaves in the lane flags.

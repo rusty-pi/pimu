@@ -795,6 +795,24 @@ pub enum VecAluOp {
     /// `b - a`.
     Rsub,
     Rsubs,
+    /// The low half of the product, and its saturating form.
+    Mull,
+    Mulls,
+    /// The product shifted right by 8 — a fixed-point multiply — and its
+    /// saturating form.
+    Mulm,
+    Mulms,
+    /// The high half of the product: `(a * b) >> bits`, with each operand read
+    /// signed or unsigned as the mnemonic's suffix says.
+    Mulhd {
+        sa: bool,
+        sb: bool,
+    },
+    /// The same, rounded: `(a * b + half) >> bits`.
+    Mulhn {
+        sa: bool,
+        sb: bool,
+    },
 }
 
 impl VecAluOp {
@@ -835,6 +853,28 @@ impl VecAluOp {
         })
     }
 
+    /// The multiply group, `insn-vecmulops` (sub-ops 48 and up with the `L`
+    /// bit clear). `L` set selects a different family, which is not modelled.
+    pub fn from_mul_subop(subop: u8) -> Option<VecAluOp> {
+        use VecAluOp::*;
+        let signs = |n: u8| (n & 2 == 0, n & 1 == 0);
+        Some(match subop {
+            48 => Mull,
+            49 => Mulls,
+            50 => Mulm,
+            51 => Mulms,
+            52..=55 => {
+                let (sa, sb) = signs(subop - 52);
+                Mulhd { sa, sb }
+            }
+            56..=59 => {
+                let (sa, sb) = signs(subop - 56);
+                Mulhn { sa, sb }
+            }
+            _ => return None,
+        })
+    }
+
     /// Which element of A and of B lane `i` reads. All but the four shuffles
     /// read their own lane.
     ///
@@ -861,6 +901,48 @@ impl VecAluOp {
             Interl | Interh => i % 2 == 1,
             _ => false,
         }
+    }
+}
+
+/// The accumulator side of an ALU op, as the `ENA` group of the modifier field
+/// spells it.
+///
+/// Each lane has an accumulator of its own. `CLRA` clears it before the
+/// operation, the result is added to it (or taken off it, with `SUB`), read
+/// signed or unsigned as `SIGN` says, and `WBA` makes the destination take the
+/// accumulator rather than the raw result. Measured on a Raspberry Pi 4B
+/// d03115: `v16add -,A,B CLRA UACC` followed by `v16add D,A,B UACC` leaves
+/// twice the sum in `D`, and the `0xffff` case proves the unsigned reading.
+///
+/// The `HIGH` forms — `UACCH` and friends — are *not* here: what they do did
+/// not fall out of the same runs, and a wrong guess would corrupt a register.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VecAcc {
+    pub clear: bool,
+    pub signed: bool,
+    pub sub: bool,
+    pub writeback: bool,
+}
+
+impl VecAcc {
+    /// From the 7-bit modifier field, or `None` when it is not a plain
+    /// accumulate this model knows.
+    pub fn from_field(f: u8) -> Option<VecAcc> {
+        const ENA: u8 = 0x20;
+        const HIGH: u8 = 0x10;
+        const SIGN: u8 = 0x08;
+        const CLRA: u8 = 0x04;
+        const WBA: u8 = 0x02;
+        const SUB: u8 = 0x01;
+        if f & ENA == 0 || f & HIGH != 0 {
+            return None;
+        }
+        Some(VecAcc {
+            clear: f & CLRA != 0,
+            signed: f & SIGN != 0,
+            sub: f & SUB != 0,
+            writeback: f & WBA != 0,
+        })
     }
 }
 
@@ -929,8 +1011,11 @@ pub enum VecExec {
     /// `v<w><op> <d>,<a>,<b>` — the measured ALU ops, lane by lane.
     Alu {
         op: VecAluOp,
-        d: VecOperand,
-        a: VecOperand,
+        /// Absent when the destination is a dash: the lanes are computed for
+        /// the accumulator's sake and the result itself is dropped.
+        d: Option<VecOperand>,
+        /// Absent for the ops that read only B.
+        a: Option<VecOperand>,
         b: VecSource,
         reps: VecRep,
         /// `++` on the D slot, and on A when it has one.
@@ -939,6 +1024,8 @@ pub enum VecExec {
         pred: VecPred,
         /// Element width the operation works at, in bytes.
         width: u32,
+        /// The accumulator, when the op carries one.
+        acc: Option<VecAcc>,
     },
     /// Needs a part of the vector unit this model does not implement.
     NeedsVrf,
@@ -1183,20 +1270,55 @@ impl VecInsn {
     /// corrupt a register quietly. `SETF`, the accumulator, a scalar writeback,
     /// a `*` and the five unpinned lane predicates all still fault.
     fn alu(&self) -> Option<VecExec> {
-        let op = VecAluOp::from_subop(self.subop)?;
-        if self.setf || self.sru != VecSru::None {
+        // Sub-ops from 48 up are the multiply group, and there the `L` bit
+        // selects the family rather than the element width — which then comes
+        // from the registers themselves.
+        let (op, width) = if self.subop >= 48 {
+            if self.lane_bits != 16 {
+                return None; // `L` set is the other family, not modelled
+            }
+            // The width comes from whichever slot names a real register; a
+            // dash has none of its own.
+            let slot = [self.d, self.a]
+                .into_iter()
+                .chain(match self.b {
+                    VecOperandB::Slot(s) => Some(s),
+                    VecOperandB::Imm(_) => None,
+                })
+                .find(|s| !s.is_dash())?;
+            (
+                VecAluOp::from_mul_subop(self.subop)?,
+                slot.elem_bytes() as u32,
+            )
+        } else {
+            (VecAluOp::from_subop(self.subop)?, self.lane_bits as u32 / 8)
+        };
+        let acc = match self.sru {
+            VecSru::None => None,
+            VecSru::Acc(f) => Some(VecAcc::from_field(f)?),
+            VecSru::Scalar { .. } => return None,
+        };
+        if self.setf {
             return None;
         }
-        let width = self.lane_bits as u32 / 8;
-        let d = self.operand(self.d, width)?;
+        // A dash destination discards the result — which is the point when an
+        // accumulator is carrying it.
+        let d = if self.d.is_dash() {
+            if !self.d.is_bare_dash() {
+                return None;
+            }
+            None
+        } else {
+            Some(self.operand(self.d, width)?)
+        };
         // `mov` and the unary ops read only B; the rest need a real A.
         let a = if self.a.is_dash() {
             if !matches!(op, VecAluOp::Mov | VecAluOp::Msb | VecAluOp::Count) {
                 return None;
             }
-            d // unused; `vec_alu` ignores `a` for these
+            None
         } else {
-            self.operand(self.a, width)?
+            Some(self.operand(self.a, width)?)
         };
         let b = match self.b {
             VecOperandB::Imm(i) => VecSource::Imm(i as i32),
@@ -1226,6 +1348,7 @@ impl VecInsn {
                 _ => return None,
             },
             width,
+            acc,
         })
     }
 

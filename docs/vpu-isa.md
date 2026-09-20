@@ -198,14 +198,27 @@ eight; `clip` is `a` clamped into `0 ..= b`; `sign` is `b + signum(a)`;
 `count` is `popcount(a) + popcount(b)`; and `brev` reverses the low `n` bits of
 `a`, `n` being `b`'s low nibble, or the whole element when that nibble is zero.
 
-What still faults: the multiplies and the accumulator that goes with them, the
-carry forms (`addc`, `subc`, ...), `clips`, `testmag`, the `sign*` shifts, the
-unnamed sub-ops, the `*` column offset, `SETF` outside `bitplanes`, the five
-unpinned lane predicates, and any ALU op whose operation width disagrees with a
-register it touches — what the unit does then was not measured, and guessing it
-would corrupt a register quietly.
+The multiplies execute too — `mull` keeps the product's low half, `mulm` shifts
+it right by eight, `mulhd` keeps the high half and `mulhn` rounds while doing
+so, each reading its operands signed or unsigned as the suffix says — and so
+does the **accumulator** behind them. There is one per lane, wider than an
+element: `CLRA` clears it, the result is added or (with `SUB`) taken off, read
+signed or unsigned as `SIGN` says, and `WBA` makes the destination take the
+accumulator rather than the raw result. A dash destination discards the result
+and keeps only that effect, which is how the codec code's multiply-accumulate
+chains are written.
 
-Of the 15180 vector instructions in `start4.elf`'s `.text`, 5189 execute.
+What still faults, and why:
+
+| instructions | reason |
+|---|---|
+| 3088 | an ALU op whose width disagrees with a register it touches |
+| 1375 | memory sub-ops beyond `vld`/`vst` |
+| 625 | the scalar result unit past the one `SUMU`/`SUMS` form |
+| 726 | `SETF` — what it leaves in the lane flags is not established |
+| 391 | the `UACCH`/`SACCH` accumulator forms |
+
+Of the 15180 vector instructions in `start4.elf`'s `.text`, 6616 execute.
 
 Outside the ISA proper: no dual-issue pipeline, and the MMU and the caches are
 flat — the four VC4 aliases (`0x0`, `0x4000_0000`, `0x8000_0000`,

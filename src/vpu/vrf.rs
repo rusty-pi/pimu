@@ -37,6 +37,10 @@ pub struct Vrf {
     bytes: Box<[u8; DIM * DIM]>,
     /// Per-lane zero flag, one bit per lane (bit 0 = lane 0).
     pub lane_z: u16,
+    /// One accumulator per lane. Wider than an element — four accumulates of
+    /// `0xffff` read back as `0x3fffc` — so it is kept as a `u32`; the `SIGN`
+    /// bit of the modifier decides how a result is extended into it.
+    pub acc: [u32; LANES as usize],
 }
 
 impl Default for Vrf {
@@ -44,6 +48,7 @@ impl Default for Vrf {
         Vrf {
             bytes: Box::new([0; DIM * DIM]),
             lane_z: 0,
+            acc: [0; LANES as usize],
         }
     }
 }
