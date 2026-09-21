@@ -12,6 +12,17 @@ entirely. Accuracy over speed, every core lock-stepped in one host thread, so a
 run is deterministic. No off-the-shelf tool does this;
 [`docs/references.md`](docs/references.md) surveys the prior art.
 
+> **It is slow, and it stays slow.** Every core is interpreted and
+> lock-stepped in one host thread, because a run has to be deterministic to be
+> diffable. That buys tens of millions of guest instructions a second: the
+> firmware's own boot is under a minute, a Linux boot to a shell is a few
+> minutes, and a full distribution image with a real userspace is over an hour.
+> Nothing on the roadmap changes the order of magnitude — the host is not an
+> ARM, so there is no KVM to fall back on, the VPU has no host equivalent at
+> all, and a profile-guided build (`scripts/pgo-build.sh`) is worth about
+> 1.45x, not 100x. Use it to see what firmware *does*, not to get work done on
+> a fast Pi.
+
 ## Run a boot
 
 ```bash
@@ -158,10 +169,10 @@ I²C masters are modelled and nothing answers the EDID EEPROM's address.
   network boot goes over the same GENET and MDIO the kernel probes — but the
   boots stop at the `bcmgenet` probe and a registered `eth0`, with no link
   brought up and no KMS driver loaded.
-- **WiFi stops before a scan finds anything.** `brcmfmac` downloads the
-  CYW43455's firmware and registers an interface (`linux-wifi.toml` pins how
-  far it gets); the chip's event channel, and a scan that finds a network, are
-  still to come.
+- **WiFi has no radio.** `brcmfmac` downloads the CYW43455's firmware, takes
+  the chip's events, and `wlan0` comes up — `NO-CARRIER`, since only an
+  association turns the carrier on, and a scan that finds a network is still to
+  come (`linux-wifi.toml` pins how far it gets).
 
 ## Tests
 
