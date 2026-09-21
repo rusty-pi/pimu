@@ -1839,7 +1839,43 @@ fn print_device_state(machine: &Machine, fdt: Option<&[u8]>) {
                 MacSource::Host => "written by the host",
             },
         );
+        print_wifi_events(chip.sdpcm());
     }
+}
+
+/// Which firmware events the host asked the WiFi chip for, and what the chip
+/// did about them.
+///
+/// The mask reaches the console nowhere: the driver writes it with an iovar
+/// and prints it only with its own event tracing turned on. It is the whole
+/// of what the chip is allowed to say unasked, so a bring-up that stopped
+/// asking — or a chip that stopped remembering — is invisible without this.
+fn print_wifi_events(chip: &rpi_virt_fw::periph::sdpcm::Sdpcm) {
+    use rpi_virt_fw::periph::sdpcm::EventMaskSource;
+
+    let wanted = chip.events_wanted();
+    println!(
+        "           events {} of {} wanted, {}",
+        wanted.len(),
+        chip.event_mask().len() * 8,
+        match chip.event_mask_source() {
+            EventMaskSource::Firmware => "and nothing has set the mask",
+            EventMaskSource::EventMsgs => "last set with `event_msgs`",
+            EventMaskSource::EventMsgsExt => "last set with `event_msgs_ext`",
+        },
+    );
+    // The codes themselves, wrapped: which of them the host wants is what
+    // moves when the driver registers a handler more or less.
+    for line in wanted.chunks(16) {
+        let codes: Vec<String> = line.iter().map(|c| c.to_string()).collect();
+        println!("                  {}", codes.join(" "));
+    }
+    println!(
+        "           events {} sent, {} dropped as unwanted; {} frames in on the data channel",
+        chip.events_sent(),
+        chip.events_dropped(),
+        chip.data_frames_in(),
+    );
 }
 
 /// `on` / `off`, for [`print_device_state`]: a flag reads better than a bit.

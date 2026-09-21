@@ -60,14 +60,43 @@
 //! (`fwil.h:80`) are "get" and "set a named variable", whose buffer starts
 //! with the name as a NUL-terminated string.
 //!
+//! ### What the event channel carries
+//!
+//! Everything the firmware says without being asked, on channel 1. A frame
+//! there is a BCDC *data* header — four bytes (`bcdc.c:73`), not the sixteen
+//! a command uses — and then an Ethernet frame the chip addresses to itself:
+//! `struct brcmf_event` (`fweh.h:251`), an ether header of protocol
+//! `ETH_P_LINK_CTL`, Broadcom's own header with its OUI in it, and the event
+//! message. `brcmf_fweh_process_skb` (`fweh.h:394`) checks the OUI and the
+//! subtype and hands what is left to `brcmf_fweh_process_event`, which
+//! queues it for a worker.
+//!
+//! Which events reach the host at all is the host's choice, and it says so
+//! twice: `event_msgs` is a bit per firmware event code
+//! (`brcmf_c_preinit_dcmds`, `common.c:419`), and on this chip
+//! `brcmf_cyw_activate_events` (`cyw/core.c:82`) then sets the same mask
+//! again through `event_msgs_ext`, which wraps it in a version, a command and
+//! a length. Both are answered from the one mask the chip keeps, and a get
+//! reports it.
+//! <https://github.com/raspberrypi/linux/blob/16f1da3c4e94437449d6aa151589ca0ad4b388bb/drivers/net/wireless/broadcom/brcm80211/brcmfmac/cyw/core.c>
+//!
 //! ### What this is not
 //!
 //! A radio. The responder below answers what `brcmf_bus_started`
 //! (`core.c`) asks on the way to registering a network interface, and its
 //! answers are the model's own — a firmware version that says so, one band,
 //! and a chip address that is invented rather than fused into a part.
-//! Nothing here scans, associates or carries a packet; a frame on the data or
-//! event channels is dropped.
+//! Nothing here scans, associates or carries a packet, so there is nothing
+//! for the data channel to carry either: a frame the host sends on it is
+//! taken and goes nowhere.
+//!
+//! Nothing raises an event during a bring-up, and that is not a gap: the
+//! whole of `brcmf_cfg80211_up` (`cfg80211.c:7878`) is a run of BCDC
+//! commands — `BRCMF_C_UP`, `BRCMF_C_SET_PM`, the roaming settings,
+//! `BRCMF_C_SET_INFRA`, `BRCMF_C_SET_FAKEFRAG` — each answered on the
+//! control channel, and it waits for nothing else. The one event the model
+//! does raise is the interface it comes up with, and the host is not
+//! listening that early; see `Firmware::start` below.
 
 use std::collections::VecDeque;
 
@@ -95,9 +124,18 @@ const DOFFSET_SHIFT: u32 = 24;
 /// sequence number the host may send.
 const WINDOW_SHIFT: u32 = 8;
 
-/// `SDPCM_CONTROL_CHANNEL` (`sdio.c:1354`). The event and data channels
-/// (1 and 2) exist, and nothing here sends or accepts one.
+/// `SDPCM_CONTROL_CHANNEL` (`sdio.c:1354`): a command and its answer.
 const CHANNEL_CONTROL: u8 = 0;
+/// `SDPCM_EVENT_CHANNEL` (`sdio.c:1355`): everything the chip says without
+/// being asked. Only the chip sends on it — `brcmf_sdio_hdparse`
+/// (`sdio.c:1448`) will take a frame there and `brcmf_sdio_readframes`
+/// (`sdio.c:2065`) hands it to `brcmf_rx_event`, while the host's own frames
+/// go out on the control and data channels.
+const CHANNEL_EVENT: u8 = 1;
+/// `SDPCM_DATA_CHANNEL` (`sdio.c:1356`): what `brcmf_sdio_txpkt`
+/// (`sdio.c:2382`) sends a network packet on. There is no radio behind this,
+/// so a frame arriving here is taken and dropped.
+const CHANNEL_DATA: u8 = 2;
 
 /// How far ahead of what it has already sent the chip lets the host run.
 /// `brcmf_sdio_hdparse` (`sdio.c:1488`) rejects a window more than 0x40
@@ -117,6 +155,66 @@ const BCDC_HDRLEN: usize = 16;
 const BCDC_ERROR: u32 = 0x01;
 /// `BCDC_DCMD_SET` (`bcdc.c:35`): the request writes rather than reads.
 const BCDC_SET: u32 = 0x02;
+
+/// `BCDC_HEADER_LEN` (`bcdc.c:46`): the *other* BCDC header, the one on a
+/// frame that is not a command. `struct brcmf_proto_bcdc_header`
+/// (`bcdc.c:73`) is four bytes — flags, priority, more flags, and how much
+/// firmware signalling sits between it and the packet.
+const BCDC_DATA_HDRLEN: usize = 4;
+/// `BCDC_PROTO_VER` (`bcdc.c:47`) in `[7:4]` of the flags
+/// (`BCDC_FLAG_VER_SHIFT`, `bcdc.c:49`). `brcmf_proto_bcdc_hdrpull`
+/// (`bcdc.c:290`) refuses a frame carrying anything else as "non-BCDC".
+const BCDC_DATA_FLAGS: u8 = 2 << 4;
+
+/// `ETH_P_LINK_CTL` (`if_ether.h`): the ether type an event frame carries,
+/// and the first thing `brcmf_fweh_process_skb` (`fweh.h:394`) checks.
+const ETH_P_LINK_CTL: u16 = 0x886C;
+/// `BRCM_OUI` (`fweh.h:209`), in `struct brcm_ethhdr`. A frame whose OUI is
+/// not this one is not an event and `brcmf_fweh_process_skb` drops it.
+const BRCM_OUI: [u8; 3] = [0x00, 0x10, 0x18];
+/// `BCMILCP_BCM_SUBTYPE_EVENT` (`fweh.h:210`), the header's `usr_subtype`:
+/// the last of the three things that make a frame an event.
+const BCM_SUBTYPE_EVENT: u16 = 1;
+/// `BCMILCP_SUBTYPE_VENDOR_LONG` (`fweh.h:211`), the header's `subtype`.
+/// `brcmf_rx_event` (`core.c:528`) asks for no particular subtype, so this
+/// one is checked only on the data path (`brcmf_rx_frame`, `core.c:500`) —
+/// but a firmware writes it either way.
+const SUBTYPE_VENDOR_LONG: u16 = 32769;
+/// `struct brcmf_event_msg_be.version` (`fweh.h:231`). The driver prints it
+/// and acts on nothing in it.
+const EVENT_MSG_VERSION: u16 = 2;
+/// `sizeof(struct brcmf_event)` (`fweh.h:251`): the ether header, Broadcom's
+/// header and the message, which is the least
+/// `brcmf_fweh_process_skb` will look at.
+const EVENT_HDRLEN: usize = 14 + 10 + 48;
+/// `IFNAMSIZ`, the fixed-width name in the message.
+const EVENT_IFNAME_LEN: usize = 16;
+
+/// `BRCMF_E_IF` (`fweh.h:77`): a bsscfg came or went. It is the one event
+/// `brcmf_fweh_process_event` (`fweh.c:498`) lets through with no handler
+/// registered for it, and the one both `brcmf_c_preinit_dcmds`
+/// (`common.c:425`) and `brcmf_fweh_activate_events` (`fweh.c:456`) force
+/// into the mask whatever else the host wants — "old cruft that all vendors
+/// have", as the driver puts it.
+const E_IF: u32 = 54;
+/// `BRCMF_E_IF_ADD` (`fweh.h:192`), the `action` of a `struct
+/// brcmf_if_event` (`fweh.h:286`).
+const E_IF_ADD: u8 = 1;
+/// `BRCMF_E_IF_ROLE_STA` (`fweh.h:200`).
+const E_IF_ROLE_STA: u8 = 0;
+
+/// `struct eventmsgs_ext` (`cyw/fwil_types.h:31`): version, command, mask
+/// length, the most a get may answer with, and then the mask.
+const EVENTMSGS_EXT_HDRLEN: usize = 4;
+/// `EVENTMSGS_VER` (`cyw/fwil_types.h:18`).
+const EVENTMSGS_VER: u8 = 1;
+/// `enum brcmf_event_msgs_ext_command` (`cyw/fwil_types.h:11`). Only
+/// `SET_MASK` is ever sent — `brcmf_cyw_activate_events` (`cyw/core.c:94`)
+/// hands the whole mask over at once — but the other two are the iovar's
+/// own, and a firmware answers them.
+const EVENTMSGS_SET_BIT: u8 = 1;
+const EVENTMSGS_RESET_BIT: u8 = 2;
+const EVENTMSGS_SET_MASK: u8 = 3;
 
 /// The commands this answers with something other than zeros (`fwil.h`).
 const C_GET_VERSION: u32 = 1;
@@ -247,12 +345,54 @@ impl Sdpcm {
 
     /// The firmware starting: read the nvram the host left in the chip's
     /// memory and take the address out of it, which is the one thing in the
-    /// file the model has anything to do with.
+    /// file the model has anything to do with, and then announce the
+    /// interface it came up with.
     pub fn start(&mut self, nvram: &[u8]) {
         if let Some(mac) = nvram_macaddr(nvram) {
             self.fw.mac = mac;
             self.fw.mac_source = MacSource::Nvram;
         }
+        self.fw.start();
+        self.flush_events();
+    }
+
+    /// The event mask the host last set, one bit per firmware event code.
+    pub fn event_mask(&self) -> &[u8] {
+        &self.fw.event_mask
+    }
+
+    /// Which iovar the host last set that mask with.
+    pub fn event_mask_source(&self) -> EventMaskSource {
+        self.fw.event_mask_source
+    }
+
+    /// The firmware event codes the host has asked to hear about.
+    pub fn events_wanted(&self) -> Vec<u32> {
+        let mut out = Vec::new();
+        for (i, byte) in self.fw.event_mask.iter().enumerate() {
+            for bit in 0..8 {
+                if byte & (1 << bit) != 0 {
+                    out.push((i * 8 + bit) as u32);
+                }
+            }
+        }
+        out
+    }
+
+    /// How many events the chip has sent, and how many it raised and threw
+    /// away because the host had not asked for them.
+    pub fn events_sent(&self) -> u32 {
+        self.fw.events_sent
+    }
+
+    pub fn events_dropped(&self) -> u32 {
+        self.fw.events_dropped
+    }
+
+    /// Frames the host sent on the data channel, which is every packet it
+    /// tried to transmit through the interface.
+    pub fn data_frames_in(&self) -> u32 {
+        self.fw.data_frames_in
     }
 
     /// The address the chip answers `cur_etheraddr` with, for the run report.
@@ -331,15 +471,40 @@ impl Sdpcm {
     /// firmware answers.
     fn frame_in(&mut self, sw: &Header, frame: &[u8]) {
         self.host_seq = sw.seq;
-        if sw.channel != CHANNEL_CONTROL {
-            return;
+        match sw.channel {
+            CHANNEL_CONTROL => {
+                let reply = self.fw.control(&frame[sw.doffset..sw.len]);
+                // Turning receive glomming on is the one thing an answer
+                // changes about the protocol itself: from the next frame the
+                // host sends, the hardware header has the glom extension on
+                // it.
+                self.glom = self.fw.rxglom;
+                self.push(CHANNEL_CONTROL, &reply);
+                // A command may leave the firmware with something to say.
+                // It goes out behind the answer, never in front of it: the
+                // driver is waiting on the control channel and matches the
+                // request id, and an event that overtook the answer would be
+                // one more frame to read before it got there.
+                self.flush_events();
+            }
+            // A packet the host wants transmitted. There is no radio, so it
+            // is taken — a frame the chip left unread would stall the
+            // protocol — and goes nowhere. A real firmware would answer with
+            // a `BRCMF_E_TXSTATUS` once flow control is on; nothing here
+            // turns that on, and `brcmf_proto_bcdc_txcomplete` (`bcdc.c`)
+            // frees the packet on its own.
+            CHANNEL_DATA => self.fw.data_frames_in += 1,
+            // Nothing else is a channel the host sends on.
+            _ => {}
         }
-        let reply = self.fw.control(&frame[sw.doffset..sw.len]);
-        // Turning receive glomming on is the one thing an answer changes
-        // about the protocol itself: from the next frame the host sends, the
-        // hardware header has the glom extension on it.
-        self.glom = self.fw.rxglom;
-        self.push(CHANNEL_CONTROL, &reply);
+    }
+
+    /// Hand whatever the firmware has raised to the frame queue.
+    fn flush_events(&mut self) {
+        for event in std::mem::take(&mut self.fw.pending) {
+            let frame = event.encode(self.fw.mac);
+            self.push(CHANNEL_EVENT, &frame);
+        }
     }
 
     /// Queue one frame for the host.
@@ -424,6 +589,20 @@ fn parse_header(frame: &[u8], glom: bool) -> Option<Header> {
     })
 }
 
+/// Which iovar last wrote the event mask, for the run report. The two say
+/// the same thing in different shapes and the chip keeps one mask, so which
+/// of them the host used is visible nowhere else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventMaskSource {
+    /// Nothing has set it: the chip's own, which is empty.
+    Firmware,
+    /// `event_msgs`, the plain mask (`common.c:433`).
+    EventMsgs,
+    /// `event_msgs_ext`, which is what this chip's vendor half of the driver
+    /// uses (`brcmf_cyw_activate_events`, `cyw/core.c:82`).
+    EventMsgsExt,
+}
+
 /// The firmware behind the control channel: what the model answers the
 /// driver's commands with.
 struct Firmware {
@@ -432,6 +611,26 @@ struct Firmware {
     /// The host asked for receive glomming and was told yes, which changes
     /// the shape of everything it sends from then on.
     rxglom: bool,
+    /// One bit per firmware event code: what the host has asked to be told
+    /// about. It starts empty, which is the conservative reading of a
+    /// register the driver bothers to read before it writes
+    /// (`brcmf_c_preinit_dcmds`, `common.c:420`): a firmware that came up
+    /// announcing everything would have the host's first `event_msgs` get
+    /// turn it all back on again, and nothing in the driver says what the
+    /// default is.
+    ///
+    /// Its length is the host's to choose — `fweh->event_mask_len` is
+    /// `DIV_ROUND_UP(fweh->num_event_codes, 8)`, and `num_event_codes` comes
+    /// from the vendor half (`BRCMF_CYW_E_LAST` = 197, so 25 bytes, for this
+    /// chip) — so the chip keeps whatever it was handed.
+    event_mask: Vec<u8>,
+    event_mask_source: EventMaskSource,
+    /// Events raised and not yet framed. [`Sdpcm::flush_events`] drains them
+    /// once whatever the firmware was doing is answered.
+    pending: Vec<Event>,
+    events_sent: u32,
+    events_dropped: u32,
+    data_frames_in: u32,
 }
 
 impl Firmware {
@@ -440,7 +639,55 @@ impl Firmware {
             mac: CHIP_MAC,
             mac_source: MacSource::Otp,
             rxglom: false,
+            event_mask: Vec::new(),
+            event_mask_source: EventMaskSource::Firmware,
+            pending: Vec::new(),
+            events_sent: 0,
+            events_dropped: 0,
+            data_frames_in: 0,
         }
+    }
+
+    /// The firmware has its interface, and says so.
+    ///
+    /// A bsscfg coming into existence is what `BRCMF_E_IF` with
+    /// `BRCMF_E_IF_ADD` reports, and bsscfg 0 comes into existence when the
+    /// firmware starts. The host is not listening yet — it turns events on
+    /// with `event_msgs` much later, in `brcmf_c_preinit_dcmds`
+    /// (`common.c:419`) — so the mask throws this one away, which is why
+    /// `brcmfmac` never sees an `IF` event for `wlan0` and creates the
+    /// interface itself (`brcmf_bus_started`, `core.c:1237`). Should one
+    /// arrive anyway, the driver is ready for it: `brcmf_add_if`
+    /// (`core.c:244`) logs "ignore IF event" and leaves the interface alone.
+    fn start(&mut self) {
+        let mut event = Event::new(E_IF);
+        event.addr = self.mac;
+        // `struct brcmf_if_event` (`fweh.h:286`): the interface index, what
+        // happened to it, flags, the bsscfg index and the role it has. Index
+        // and bsscfg are both 0 — this is the primary — and the role is a
+        // station, which is what `brcmf_cfg80211_attach` then puts it in.
+        event.data = vec![0, E_IF_ADD, 0, 0, E_IF_ROLE_STA];
+        self.raise(event);
+    }
+
+    /// Raise an event, if the host asked for this one.
+    fn raise(&mut self, event: Event) {
+        if self.wants(event.code) {
+            self.events_sent += 1;
+            self.pending.push(event);
+        } else {
+            self.events_dropped += 1;
+        }
+    }
+
+    /// Is `code`'s bit set in the mask? `setbit` (`brcmu_utils.h`) and
+    /// `brcmf_fweh_activate_events` (`fweh.c:450`) number the bits the way
+    /// they are laid out: byte `code / 8`, bit `code % 8`.
+    fn wants(&self, code: u32) -> bool {
+        let (byte, bit) = (code as usize / 8, code % 8);
+        self.event_mask
+            .get(byte)
+            .is_some_and(|b| b & (1 << bit) != 0)
     }
 
     /// One BCDC request in, one BCDC answer out.
@@ -504,8 +751,66 @@ impl Firmware {
             // `brcmf_sdio_bus_preinit` (`sdio.c:3724`) takes a yes here as
             // permission to use the glom header on everything it sends.
             b"bus:rxglom" => self.rxglom = word() != 0,
+            // The plain mask, byte for byte
+            // (`brcmf_fweh_activate_events`, `fweh.c:462`).
+            b"event_msgs" => {
+                self.event_mask = value.to_vec();
+                self.event_mask_source = EventMaskSource::EventMsgs;
+            }
+            // The same mask inside `struct eventmsgs_ext`, which is how the
+            // `cyw` half of the driver sets it on this chip.
+            b"event_msgs_ext" => self.event_msgs_ext_set(value),
             _ => {}
         }
+    }
+
+    /// One `event_msgs_ext` write. `len` says how much of `mask` is meant,
+    /// and `command` what to do with it: replace the mask, or turn the bits
+    /// it names on or off. `brcmf_cyw_activate_events` (`cyw/core.c:94`)
+    /// only ever replaces.
+    fn event_msgs_ext_set(&mut self, value: &[u8]) {
+        if value.len() < EVENTMSGS_EXT_HDRLEN {
+            return;
+        }
+        let (command, len) = (value[1], usize::from(value[2]));
+        let mask = &value[EVENTMSGS_EXT_HDRLEN..];
+        let Some(mask) = mask.get(..len.min(mask.len())) else {
+            return;
+        };
+        match command {
+            EVENTMSGS_SET_MASK => self.event_mask = mask.to_vec(),
+            EVENTMSGS_SET_BIT | EVENTMSGS_RESET_BIT => {
+                if self.event_mask.len() < mask.len() {
+                    self.event_mask.resize(mask.len(), 0);
+                }
+                for (have, want) in self.event_mask.iter_mut().zip(mask) {
+                    if command == EVENTMSGS_SET_BIT {
+                        *have |= want;
+                    } else {
+                        *have &= !want;
+                    }
+                }
+            }
+            // `EVENTMSGS_NONE`, and anything else: nothing to do.
+            _ => return,
+        }
+        self.event_mask_source = EventMaskSource::EventMsgsExt;
+    }
+
+    /// What an `event_msgs_ext` get answers with: the header the host sent
+    /// back, with the mask the chip holds under it and the length of it in
+    /// both `len` and `maxgetsize`.
+    fn event_msgs_ext_get(&self, req: &[u8], room: usize) -> Vec<u8> {
+        let mask_room = room.saturating_sub(EVENTMSGS_EXT_HDRLEN);
+        let len = self.event_mask.len().min(mask_room).min(0xFF);
+        let mut out = vec![
+            EVENTMSGS_VER,
+            req.get(1).copied().unwrap_or(0),
+            len as u8,
+            len as u8,
+        ];
+        out.extend_from_slice(&self.event_mask[..len]);
+        out
     }
 
     /// A command that reads, answering in the `len` bytes the driver offered.
@@ -545,11 +850,118 @@ impl Firmware {
                         put(&mut out, 0, &chanspecs(filter));
                     }
                     b"chanspec" => put(&mut out, 0, &CHANSPEC_HOME.to_le_bytes()),
+                    // What the host has asked for so far, which is what
+                    // `brcmf_c_preinit_dcmds` (`common.c:420`) reads before
+                    // it sets `BRCMF_E_IF` and writes the mask back. An
+                    // answer of zeros would be a lie only once the host has
+                    // set something; from here the chip reports what it
+                    // holds.
+                    b"event_msgs" => put(&mut out, 0, &self.event_mask),
+                    b"event_msgs_ext" => {
+                        let answer = self.event_msgs_ext_get(value, out.len());
+                        put(&mut out, 0, &answer);
+                    }
                     _ => {}
                 }
             }
             _ => {}
         }
+        out
+    }
+}
+
+/// One firmware event, as `struct brcmf_event_msg_be` (`fweh.h:230`) carries
+/// it, plus the event-specific bytes that follow.
+///
+/// Everything in the message is big-endian, which is the one place in this
+/// protocol that is: the control channel, the SDPCM headers and the nvram are
+/// all little-endian, and `brcmf_fweh_event_worker` (`fweh.c:288`) byte-swaps
+/// every field of this one on the way in.
+struct Event {
+    /// The firmware event code, which is the index the driver looks its
+    /// handler up by (`brcmf_fweh_process_event`, `fweh.c:495`).
+    code: u32,
+    /// `BRCMF_EVENT_MSG_*` (`fweh.h:120`). `BRCMF_EVENT_MSG_LINK` is the one
+    /// that means anything on its own: `brcmf_is_linkdown` (`cfg80211.c:6143`)
+    /// reads a `BRCMF_E_LINK` without it as the link having gone down.
+    flags: u16,
+    /// `BRCMF_E_STATUS_*` (`fweh.h:125`) and `BRCMF_E_REASON_*`
+    /// (`fweh.h:153`): what happened and why.
+    status: u32,
+    reason: u32,
+    /// Whose address the event is about — a peer's, or the interface's own.
+    addr: [u8; 6],
+    /// The interface and bsscfg it belongs to. `brcmf_fweh_event_worker`
+    /// (`fweh.c:280`) throws away anything whose bsscfg is past
+    /// `BRCMF_MAX_IFS`.
+    ifidx: u8,
+    bsscfgidx: u8,
+    /// The event-specific bytes, `datalen` of them.
+    data: Vec<u8>,
+}
+
+impl Event {
+    fn new(code: u32) -> Event {
+        Event {
+            code,
+            flags: 0,
+            status: 0,
+            reason: 0,
+            addr: [0; 6],
+            ifidx: 0,
+            bsscfgidx: 0,
+            data: Vec::new(),
+        }
+    }
+
+    /// The payload of an event frame: the four-byte BCDC data header, then
+    /// the Ethernet frame `brcmf_fweh_process_skb` (`fweh.h:394`) picks
+    /// apart. `mac` is the interface's address, which the frame is both from
+    /// and to — the chip is talking to its own host, and `eth_type_trans`
+    /// has to see a packet addressed to the interface for
+    /// `brcmf_rx_hdrpull` (`core.c:483`) to keep it.
+    fn encode(&self, mac: [u8; 6]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(BCDC_DATA_HDRLEN + EVENT_HDRLEN + self.data.len());
+        // flags, priority, the interface index, and no firmware signalling
+        // between this header and the packet — which is what lets
+        // `brcmf_fws_hdrpull` (`fwsignal.c`) return without looking.
+        out.extend_from_slice(&[BCDC_DATA_FLAGS, 0, self.ifidx, 0]);
+
+        // `struct ethhdr`.
+        out.extend_from_slice(&mac);
+        out.extend_from_slice(&mac);
+        out.extend_from_slice(&ETH_P_LINK_CTL.to_be_bytes());
+
+        // `struct brcm_ethhdr` (`fweh.h:222`). Its `length` is the driver's
+        // own "TODO", read nowhere; a firmware puts the rest of the frame in
+        // it.
+        let rest = (48 + self.data.len()) as u16;
+        out.extend_from_slice(&SUBTYPE_VENDOR_LONG.to_be_bytes());
+        out.extend_from_slice(&rest.to_be_bytes());
+        out.push(0);
+        out.extend_from_slice(&BRCM_OUI);
+        out.extend_from_slice(&BCM_SUBTYPE_EVENT.to_be_bytes());
+
+        // `struct brcmf_event_msg_be`.
+        out.extend_from_slice(&EVENT_MSG_VERSION.to_be_bytes());
+        out.extend_from_slice(&self.flags.to_be_bytes());
+        out.extend_from_slice(&self.code.to_be_bytes());
+        out.extend_from_slice(&self.status.to_be_bytes());
+        out.extend_from_slice(&self.reason.to_be_bytes());
+        // `auth_type`, which only the authentication events use.
+        out.extend_from_slice(&0u32.to_be_bytes());
+        out.extend_from_slice(&(self.data.len() as u32).to_be_bytes());
+        out.extend_from_slice(&self.addr);
+        // The interface's name, fixed width and NUL-padded. The model's
+        // firmware has no name of its own for it, and the driver reads it
+        // only when it is the one creating the interface
+        // (`brcmf_fweh_handle_if_event`, `fweh.c:167`) — which is never for
+        // an interface that already exists.
+        out.extend_from_slice(&[0u8; EVENT_IFNAME_LEN]);
+        out.push(self.ifidx);
+        out.push(self.bsscfgidx);
+
+        out.extend_from_slice(&self.data);
         out
     }
 }
@@ -936,6 +1348,15 @@ mod tests {
         chip.write(&frame);
         chip.write_end();
         assert!(!chip.frame_waiting());
+        // Taken and counted, not left half-read: the bytes are gone and the
+        // next frame starts where it should.
+        assert_eq!(chip.data_frames_in(), 1);
+        chip.write(&request(1, 1, C_GET_VERSION, false, &[0; 4]));
+        chip.write_end();
+        assert_eq!(
+            read_frame(&mut chip).expect("a frame").0.channel,
+            CHANNEL_CONTROL
+        );
     }
 
     #[test]
@@ -1140,5 +1561,269 @@ mod tests {
         assert_eq!(status, 0);
         assert_eq!(len as usize, iovar.len());
         assert!(payload[BCDC_HDRLEN..].iter().all(|b| *b == 0));
+    }
+
+    // --- the event channel ---------------------------------------------
+
+    /// How long the mask the driver hands this chip is:
+    /// `DIV_ROUND_UP(fweh->num_event_codes, 8)` (`brcmf_fweh_attach`,
+    /// `fweh.c:356`) with `num_event_codes` = `BRCMF_CYW_E_LAST` = 197
+    /// (`brcmf_cyw_alloc_fweh_info`, `cyw/core.c:77`).
+    const CYW_MASK_LEN: usize = 25;
+
+    /// A mask with those firmware event codes turned on, the way `setbit`
+    /// lays them out.
+    fn mask_of(codes: &[u32]) -> Vec<u8> {
+        let mut mask = vec![0u8; CYW_MASK_LEN];
+        for code in codes {
+            mask[*code as usize / 8] |= 1 << (code % 8);
+        }
+        mask
+    }
+
+    /// Set `event_msgs` the way `brcmf_fweh_activate_events` (`fweh.c:462`)
+    /// does, and take the acknowledgement.
+    fn set_event_msgs(chip: &mut Sdpcm, seq: u8, mask: &[u8]) {
+        chip.write(&request(
+            seq,
+            1,
+            C_SET_VAR,
+            true,
+            &named("event_msgs", mask),
+        ));
+        chip.write_end();
+        read_frame(chip).expect("the acknowledgement");
+    }
+
+    /// Set `event_msgs_ext` the way `brcmf_cyw_activate_events`
+    /// (`cyw/core.c:82`) does: the four-byte header and then the mask.
+    fn set_event_msgs_ext(chip: &mut Sdpcm, seq: u8, command: u8, mask: &[u8]) {
+        let mut value = vec![EVENTMSGS_VER, command, mask.len() as u8, 0];
+        value.extend_from_slice(mask);
+        chip.write(&request(
+            seq,
+            1,
+            C_SET_VAR,
+            true,
+            &named("event_msgs_ext", &value),
+        ));
+        chip.write_end();
+        read_frame(chip).expect("the acknowledgement");
+    }
+
+    /// Read an iovar back, as `brcmf_fil_iovar_data_get` (`fwil.c`) does:
+    /// the name and a buffer of the size wanted, and the answer's first
+    /// `room` bytes are what it keeps.
+    fn get_iovar(chip: &mut Sdpcm, seq: u8, name: &str, room: usize) -> Vec<u8> {
+        let mut iovar = named(name, &[]);
+        iovar.resize(iovar.len() + room, 0);
+        chip.write(&request(seq, 1, C_GET_VAR, false, &iovar));
+        chip.write_end();
+        let (_, payload) = read_frame(chip).expect("a frame");
+        payload[BCDC_HDRLEN..BCDC_HDRLEN + room].to_vec()
+    }
+
+    /// An event frame taken apart the way the driver takes one apart:
+    /// `brcmf_proto_bcdc_hdrpull` (`bcdc.c:290`) pops the BCDC header,
+    /// `eth_type_trans` the ether header, `brcmf_fweh_process_skb`
+    /// (`fweh.h:394`) checks Broadcom's, and `brcmf_fweh_event_worker`
+    /// (`fweh.c:288`) byte-swaps the message. Panics wherever the driver
+    /// would have dropped the frame.
+    fn parse_event(payload: &[u8]) -> Event {
+        // The BCDC data header.
+        assert!(payload.len() > BCDC_DATA_HDRLEN, "rx data too short");
+        assert_eq!(
+            payload[0] & 0xF0,
+            BCDC_DATA_FLAGS,
+            "non-BCDC packet received"
+        );
+        assert_eq!(payload[3], 0, "firmware signalling nothing can parse");
+        let packet = &payload[BCDC_DATA_HDRLEN..];
+
+        // The ether header: addressed to the interface, and the protocol
+        // `brcmf_fweh_process_skb` insists on.
+        assert!(packet.len() >= EVENT_HDRLEN, "shorter than a brcmf_event");
+        assert_eq!(
+            u16::from_be_bytes(packet[12..14].try_into().unwrap()),
+            ETH_P_LINK_CTL
+        );
+
+        // Broadcom's header: the OUI and the subtype are both checked.
+        assert_eq!(packet[19..22], BRCM_OUI);
+        assert_eq!(
+            u16::from_be_bytes(packet[22..24].try_into().unwrap()),
+            BCM_SUBTYPE_EVENT
+        );
+
+        let msg = &packet[24..];
+        let be16 = |i: usize| u16::from_be_bytes(msg[i..i + 2].try_into().unwrap());
+        let be32 = |i: usize| u32::from_be_bytes(msg[i..i + 4].try_into().unwrap());
+        let datalen = be32(20) as usize;
+        assert!(
+            datalen <= msg.len() - 48,
+            "datalen runs past the end of the frame"
+        );
+        Event {
+            code: be32(4),
+            flags: be16(2),
+            status: be32(8),
+            reason: be32(12),
+            addr: msg[24..30].try_into().unwrap(),
+            ifidx: msg[46],
+            bsscfgidx: msg[47],
+            data: msg[48..48 + datalen].to_vec(),
+        }
+    }
+
+    #[test]
+    fn the_chip_answers_with_the_event_mask_the_host_set() {
+        let mut chip = Sdpcm::new();
+        // Nothing yet: the chip came up quiet, which is what
+        // `brcmf_c_preinit_dcmds` (`common.c:420`) reads first.
+        assert_eq!(chip.event_mask_source(), EventMaskSource::Firmware);
+        assert!(get_iovar(&mut chip, 0, "event_msgs", CYW_MASK_LEN)
+            .iter()
+            .all(|b| *b == 0));
+
+        // ...then it sets the one bit it always sets.
+        let wanted = mask_of(&[E_IF]);
+        set_event_msgs(&mut chip, 1, &wanted);
+        assert_eq!(chip.event_mask_source(), EventMaskSource::EventMsgs);
+        assert_eq!(get_iovar(&mut chip, 2, "event_msgs", CYW_MASK_LEN), wanted);
+        assert_eq!(chip.events_wanted(), vec![E_IF]);
+
+        // On this chip the live mask comes through `event_msgs_ext`
+        // instead, and it replaces what was there.
+        let wanted = mask_of(&[0, 16, 54, 69, 189]);
+        set_event_msgs_ext(&mut chip, 3, EVENTMSGS_SET_MASK, &wanted);
+        assert_eq!(chip.event_mask_source(), EventMaskSource::EventMsgsExt);
+        assert_eq!(chip.events_wanted(), vec![0, 16, 54, 69, 189]);
+        // ...and either iovar reads it back.
+        assert_eq!(get_iovar(&mut chip, 4, "event_msgs", CYW_MASK_LEN), wanted);
+        let ext = get_iovar(
+            &mut chip,
+            5,
+            "event_msgs_ext",
+            EVENTMSGS_EXT_HDRLEN + CYW_MASK_LEN,
+        );
+        assert_eq!(ext[0], EVENTMSGS_VER);
+        assert_eq!(usize::from(ext[2]), CYW_MASK_LEN, "the mask it holds");
+        assert_eq!(ext[3], ext[2], "and as much of it as a get may have");
+        assert_eq!(ext[EVENTMSGS_EXT_HDRLEN..], wanted);
+    }
+
+    #[test]
+    fn event_msgs_ext_can_turn_single_bits_on_and_off() {
+        let mut chip = Sdpcm::new();
+        set_event_msgs_ext(&mut chip, 0, EVENTMSGS_SET_MASK, &mask_of(&[16, 54]));
+        set_event_msgs_ext(&mut chip, 1, EVENTMSGS_SET_BIT, &mask_of(&[69]));
+        assert_eq!(chip.events_wanted(), vec![16, 54, 69]);
+        set_event_msgs_ext(&mut chip, 2, EVENTMSGS_RESET_BIT, &mask_of(&[16, 69]));
+        assert_eq!(chip.events_wanted(), vec![54]);
+        // A command the iovar does not have leaves the mask alone.
+        set_event_msgs_ext(&mut chip, 3, 0, &mask_of(&[1, 2, 3]));
+        assert_eq!(chip.events_wanted(), vec![54]);
+    }
+
+    #[test]
+    fn the_interface_the_firmware_comes_up_with_is_announced_to_nobody() {
+        // `Sdpcm::start` is the firmware starting, and a bsscfg coming into
+        // existence is a `BRCMF_E_IF`. The host has set no mask at that
+        // point — it is still downloading — so the event is raised and
+        // thrown away, which is why `brcmfmac` never sees one for `wlan0`.
+        let mut chip = Sdpcm::new();
+        chip.start(&[]);
+        assert!(!chip.frame_waiting());
+        assert_eq!(chip.events_sent(), 0);
+        assert_eq!(chip.events_dropped(), 1);
+    }
+
+    #[test]
+    fn an_event_is_the_ethernet_frame_the_driver_takes_apart() {
+        let mut chip = Sdpcm::new();
+        chip.fw.event_mask = mask_of(&[E_IF]);
+        chip.fw.start();
+        chip.flush_events();
+        assert!(chip.frame_waiting());
+        assert_eq!(chip.events_sent(), 1);
+        assert_eq!(chip.events_dropped(), 0);
+
+        let (hd, payload) = read_frame(&mut chip).expect("a frame");
+        assert_eq!(hd.channel, CHANNEL_EVENT);
+        assert_eq!(hd.doffset, HDRLEN, "no padding in front of the payload");
+        // Longer than the driver's first read, so the frame comes back over
+        // two of them — which is the path `brcmf_sdio_readframes`
+        // (`sdio.c:1872`) takes for anything but a control frame.
+        assert!(hd.len > 64);
+
+        let event = parse_event(&payload);
+        assert_eq!(event.code, E_IF);
+        assert_eq!(event.addr, CHIP_MAC, "the interface's own address");
+        assert_eq!(event.ifidx, 0);
+        assert_eq!(event.bsscfgidx, 0);
+        // `struct brcmf_if_event` (`fweh.h:286`).
+        assert_eq!(event.data, vec![0, E_IF_ADD, 0, 0, E_IF_ROLE_STA]);
+        // `brcmf_fweh_handle_if_event` (`fweh.c:148`) ignores an event whose
+        // `flags` carry `BRCMF_E_IF_FLAG_NOIF`; this one is a real
+        // interface.
+        assert_eq!(event.data[2] & 1, 0);
+        assert!(!chip.frame_waiting());
+    }
+
+    #[test]
+    fn an_event_waits_behind_whatever_the_chip_was_already_saying() {
+        // The driver is blocked in `brcmf_sdio_bus_rxctl` (`sdio.c`) waiting
+        // for an answer it matches by request id. An event that overtook the
+        // answer would be one more frame to get through first, and on a
+        // chip that raised one per command it would never catch up — so a
+        // frame the firmware raises goes behind what it is already sending.
+        let mut chip = Sdpcm::new();
+        chip.fw.event_mask = mask_of(&[E_IF]);
+        chip.write(&request(0, 9, C_GET_VERSION, false, &[0; 4]));
+        chip.write_end();
+        chip.fw.start();
+        chip.flush_events();
+
+        let (hd, payload) = read_frame(&mut chip).expect("the answer");
+        assert_eq!(hd.channel, CHANNEL_CONTROL);
+        assert_eq!(bcdc_parts(&payload).2 >> 16, 9);
+        let (hd, payload) = read_frame(&mut chip).expect("the event");
+        assert_eq!(hd.channel, CHANNEL_EVENT);
+        assert_eq!(parse_event(&payload).code, E_IF);
+        // One sequence of frames, whatever channel they are on: the driver
+        // counts every frame the chip sends with the same counter
+        // (`brcmf_sdio_hdparse`, `sdio.c:1462`).
+        assert_eq!(hd.seq, 1);
+    }
+
+    #[test]
+    fn the_window_an_event_carries_is_the_one_the_host_is_sending_in() {
+        // An event is not an answer, so it arrives without the host having
+        // sent anything — and it still has to open the window, because
+        // `data_ok` / `txctl_ok` (`sdio.c:690`) stop the driver the moment
+        // the last frame it saw closed it.
+        let mut chip = Sdpcm::new();
+        chip.fw.event_mask = mask_of(&[E_IF]);
+        let mut tx_seq: u8 = 255;
+        for i in 0..4u8 {
+            chip.write(&request(
+                tx_seq,
+                u16::from(i) + 1,
+                C_SET_VAR,
+                true,
+                &named("mpc", &[1]),
+            ));
+            chip.write_end();
+            tx_seq = tx_seq.wrapping_add(1);
+            read_frame(&mut chip).expect("the acknowledgement");
+
+            chip.fw.start();
+            chip.flush_events();
+            let (hd, _) = read_frame(&mut chip).expect("the event");
+            assert_eq!(hd.channel, CHANNEL_EVENT);
+            let room = chip.host_seq.wrapping_add(TX_WINDOW).wrapping_sub(tx_seq);
+            assert_ne!(room, 0, "the window closed at event {i}");
+            assert_eq!(room & 0x80, 0);
+        }
     }
 }

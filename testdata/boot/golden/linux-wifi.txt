@@ -801,4 +801,9 @@ p 9; ip link; dmesg | tail -40
 [t] hub 1-1:1.0: 4 ports detected
 [t] brcmfmac: brcmf_c_process_txcap_blob: no txcap_blob available (err=-2)
 [t] brcmfmac: brcmf_c_preinit_dcmds: Firmware: BCM4345/6 rpi-virt-fw model firmware (no radio) version 0
+/ # \x1b[6nip link set wlan0 up; sleep 2; ip link show wlan0
+[t] brcmfmac: brcmf_cfg80211_set_power_mgmt: power save enabled
+[t] brcmfmac: brcmf_cfg80211_set_power_mgmt: power save enabled
+3: wlan0: <NO-CARRIER,BROADCAST,MULTICAST,UP> mtu 1500 qdisc pfifo_fast qlen 1000
+    link/ether 02:00:5e:00:57:01 brd ff:ff:ff:ff:ff:ff
 / # \x1b[6n

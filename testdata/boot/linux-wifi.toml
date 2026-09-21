@@ -15,13 +15,14 @@
 #
 # WHAT IT GETS TO
 #
-# A registered network interface. `brcmfmac` walks the chip, downloads its
-# firmware, and then talks to it — and what answers is the model, not the
-# image it just wrote:
+# A network interface that is registered and then brought up. `brcmfmac`
+# walks the chip, downloads its firmware, and then talks to it — and what
+# answers is the model, not the image it just wrote:
 #
 #   brcmfmac: brcmf_c_preinit_dcmds: Firmware: BCM4345/6 rpi-virt-fw model firmware (no radio) version 0
 #   3: wlan0: <BROADCAST,MULTICAST> mtu 1500 qdisc noop qlen 1000
 #       link/ether 02:00:5e:00:57:01 brd ff:ff:ff:ff:ff:ff
+#   3: wlan0: <NO-CARRIER,BROADCAST,MULTICAST,UP> mtu 1500 qdisc pfifo_fast qlen 1000
 #
 # The chip's side of that conversation is `src/periph/sdpcm.rs`: the frame
 # protocol over SDIO function 2, and the control protocol inside it. The ARM
@@ -30,11 +31,23 @@
 # asks on the way to registering an interface, and answers them as itself —
 # hence the firmware version, which says where it came from.
 #
-# What is *not* there, and what the interface being down says:
+# `UP` and `NO-CARRIER` together is exactly as far as an interface with no
+# radio behind it goes. Bringing one up is `brcmf_netdev_open` (`core.c:601`)
+# and then `brcmf_cfg80211_up` (`cfg80211.c:7878`), and that is a straight
+# run of commands on the control channel — `BRCMF_C_UP`, the power-save
+# mode, the roaming settings, `BRCMF_C_SET_INFRA`, `BRCMF_C_SET_FAKEFRAG`,
+# each answered — with no firmware event waited for anywhere in it. Then
+# `netif_carrier_off`, because nothing has associated the interface with
+# anything, and only an association turns the carrier on.
 #
-#   1. No radio. Nothing scans, nothing associates, and a frame on the data
-#      or event channels is dropped. The interface is `BROADCAST,MULTICAST`
-#      and never `UP`.
+# What is *not* there:
+#
+#   1. No radio. Nothing scans and nothing associates, so nothing raises an
+#      event after the interface the firmware comes up with — and the host
+#      is not listening that early, so no event reaches the driver at all in
+#      this run. The `events` lines in `--- device state ---` are the count.
+#      A packet the host tries to transmit is taken off the data channel and
+#      goes nowhere.
 #   2. One band, thirteen 20 MHz channels, and no HT or VHT. A real 43455 is
 #      dual-band 802.11ac.
 #   3. The chip's own address is invented. A real 43455 has a unique one
@@ -98,6 +111,15 @@ text = "insmod $M/drivers/net/wireless/broadcom/brcm80211/brcmutil/brcmutil.ko\n
 after = "/ # \u001b[6n"
 text = "insmod $M/drivers/net/wireless/broadcom/brcm80211/brcmfmac/brcmfmac.ko; sleep 9; ip link; dmesg | tail -40\n"
 
+# And then the first thing anyone does with an interface. This one is
+# synchronous all the way down — `brcmf_netdev_open` runs the whole of
+# `brcmf_cfg80211_up` before it returns — so the `sleep` is only there to let
+# the one line the driver prints land before `ip link` writes over it. No
+# `dmesg` here: that line is a `pr_info` and reaches the console by itself.
+[[boot.input]]
+after = "/ # \u001b[6n"
+text = "ip link set wlan0 up; sleep 2; ip link show wlan0\n"
+
 [golden]
 path = "golden/linux-wifi.txt"
 
@@ -152,7 +174,7 @@ name; no firmware ran to produce it."""
 line = "Firmware: BCM4345/6 rpi-virt-fw model firmware (no radio) version 0"
 
 [[milestone]]
-why = "Only the GENET is up: neither interface is brought `UP` here, and `wlan0` could not be — nothing behind it is a radio."
+why = "The first `ip link`, before anything has been brought up: nothing here configures the network, so the GENET is down too and stays down."
 line = "2: eth0: <BROADCAST,MULTICAST> mtu 1500 qdisc noop qlen 1000"
 
 [[milestone]]
@@ -184,6 +206,61 @@ hands down, and nothing here does)."""
 line = "cyw43455 MAC 02:00:5e:00:57:01, from the card's nvram"
 
 [[milestone]]
+why = """
+The interface came up, and `UP` with `NO-CARRIER` is as far as one with no
+radio behind it goes. `brcmf_netdev_open` (`core.c:601`) ran the whole of
+`brcmf_cfg80211_up` (`cfg80211.c:7878`) against the model — `BRCMF_C_UP`,
+the power-save mode, `bcn_timeout` and `roam_off`, the roaming thresholds,
+`BRCMF_C_SET_INFRA` for the station role, the ARP and ND offloads,
+`BRCMF_C_SET_FAKEFRAG` — and every one of them was answered on the control
+channel. It waits for no firmware event anywhere in that run, which is why
+this works with an event channel that has nothing to say. The carrier stays
+off because only an association turns it on (`brcmf_net_setcarrier`,
+`core.c`), and nothing here associates."""
+line = "3: wlan0: <NO-CARRIER,BROADCAST,MULTICAST,UP> mtu 1500 qdisc pfifo_fast qlen 1000"
+
+[[milestone]]
+why = """
+The one line the bring-up prints, and it says the interface really is up:
+cfg80211 applies its power-save default the moment an interface comes up,
+and `brcmf_cfg80211_set_power_mgmt` (`cfg80211.c:3308`) only gets as far as
+printing this when `check_vif_up` is true — which is the
+`BRCMF_VIF_STATUS_READY` bit `__brcmf_cfg80211_up` (`cfg80211.c:7847`) sets.
+Before that it stores the preference and says nothing. The `BRCMF_C_SET_PM`
+and `pm2_sleep_ret` behind it are two more commands the model answered."""
+line = "brcmf_cfg80211_set_power_mgmt: power save enabled"
+
+[[milestone]]
+why = """
+The event mask the chip holds, which reaches the console nowhere: the driver
+writes it with an iovar and prints it only with its own event tracing turned
+on. Twenty-five codes is every event the driver registered a handler for —
+cfg80211's, and `BRCMF_E_PSM_WATCHDOG` (41) from `brcmf_attach`
+(`core.c:1397`) — plus `BRCMF_E_IF` (54), which `brcmf_fweh_activate_events`
+(`fweh.c:456`) sets whatever else the host wants; 187 to 190 are the four
+this chip's vendor half of the driver renumbers (`brcmf_cyw_event_map`,
+`cyw/core.c:55`). Two hundred bits because the mask is 25 bytes, which is
+`DIV_ROUND_UP(BRCMF_CYW_E_LAST, 8)`. `event_msgs_ext` rather than
+`event_msgs` because
+`brcmf_cyw_activate_events` (`cyw/core.c:82`) overrides the generic path and
+sets the same mask through the extended iovar — so a chip that answered only
+the plain one would be listening to nothing."""
+line = "events 25 of 200 wanted, last set with `event_msgs_ext`"
+
+[[milestone]]
+why = """
+And what the chip did with it. One event raised — the interface the firmware
+comes up with, which is a `BRCMF_E_IF` — and dropped, because the host turns
+events on long afterwards in `brcmf_c_preinit_dcmds` (`common.c:419`) and was
+not listening when the bsscfg appeared. That is why `brcmfmac` creates
+`wlan0` itself (`brcmf_bus_started`, `core.c:1237`) rather than waiting for
+the firmware to announce it. Nothing sent, because nothing else in this run
+has anything to say without being asked: a scan or an association would, and
+neither exists yet. No frames on the data channel either — the interface is
+up but has no carrier, so nothing transmits through it."""
+line = "events 0 sent, 1 dropped as unwanted; 0 frames in on the data channel"
+
+[[milestone]]
 why = "No control frame went unanswered: a single one that did would stop the bring-up dead 2.7 s later."
 line = "brcmf_sdio_bus_rxctl: resumed on timeout"
 absent = true
@@ -201,6 +278,11 @@ absent = true
 [[milestone]]
 why = "Nothing the model answers makes the driver or cfg80211 complain: an answer they cannot place — a channel list for a bandwidth the chip does not have, or a channel spec of zero — is a backtrace apiece."
 line = "WARNING:"
+absent = true
+
+[[milestone]]
+why = "And the bring-up itself did not fail: `brcmf_netdev_open` says this and gives back `-EIO` if any command in `brcmf_cfg80211_up` came back with an error."
+line = "failed to bring up cfg80211"
 absent = true
 
 [[milestone]]
