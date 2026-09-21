@@ -4,6 +4,14 @@
 //! which the ARM cores see at `0xFE00_0000` in low-peripheral mode. All the
 //! constants here are VPU-side (`0x7Exx_xxxx`).
 //!
+//! Those are the addresses the datasheet itself uses, and what it calls legacy
+//! master addresses: the chip carries a 35-bit bus behind them, where a
+//! peripheral at `0x7Enn_nnnn` really sits at `0x4_7Enn_nnnn` and RAM the DMA
+//! engines reach through `0xC000_0000`..`0xFFFF_FFFF` is a movable 1 GB window
+//! (`PAGE` / `PAGELITE`) onto 16 GB of SDRAM. The 40-bit DMA4 engines skip the
+//! window and drive the wide bus themselves, which is how a 32-bit VPU reaches
+//! the PCIe region (BCM2711 ARM Peripherals, §1.2).
+//!
 //! Every modelled block takes its window from its register spec in
 //! `specs/*.toml` (#39), where the base and size carry their provenance; the
 //! names here only keep [`crate::machine::Machine`]'s decoder readable.
