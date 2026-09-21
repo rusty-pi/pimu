@@ -30,6 +30,12 @@ with `v32st HY(0++,0),(r0+=r3) REP64` — 64 rows of 64 bytes, exactly one page.
 per `mmap` faults), and `/dev/mem` will not map it at all on a stock 64-bit
 Raspberry Pi OS.
 
+`vpudiag.py` is the same idea aimed at the firmware rather than the probe: it
+snapshots ~96 MB of VC memory, runs the blob, snapshots again and prints which
+of the firmware's own pages changed. `vcscan.py` reads VC memory without the
+mailbox at all, which is the only thing left once a probe has wedged the
+firmware.
+
 `vpuprobe3.py` goes further: it reads every page of the allocation before and
 after the call and prints what changed, so a write that lands somewhere other
 than its stated destination is caught wherever it is inside the buffer. That
@@ -61,7 +67,19 @@ in a state a firmware thread might be mid-way through using.
 
 Two things are known to wedge it, both found the hard way:
 
-- the **undocumented memory sub-ops**. `mem03`, `mem10`, `mem16` and `mem19`
+- the **undocumented memory sub-ops**, which **block until an interrupt
+  releases them**. With interrupts enabled one of them completes, everything
+  after it in the blob runs, and the register-file dump lands — but
+  `EXECUTE_CODE` never returns and the driver gives up with `ETIMEDOUT`. Run
+  one behind a `di` and there is no dump at all: the core is still inside the
+  instruction, because nothing can interrupt it. Two in a row both complete.
+  The status register is unchanged either side (`0x40000008`, IE still set),
+  no firmware memory is corrupted — 96 MB diffed across a run, only counters
+  and timestamps moved — and a deliberate `bkpt` in the same position behaves
+  completely differently: it completes, the mailbox answers, the board lives.
+  So this is not the ordinary trap path and not memory damage; it is a wait
+  for something that never arrives. Powering up the QPU first
+  (`vcmailbox 0x00030012 4 4 1`) changes nothing. `mem03`, `mem10`, `mem16` and `mem19`
   never return at all; `mem11`-`mem15`, `mem17`, `mem18` and `mem20`-`mem23`
   hand back their page and leave the firmware dead behind them. Linux stays up
   and answers SSH; `vcgencmd` hangs, and the probe process sits in an
@@ -117,6 +135,8 @@ Two things are known to wedge it, both found the hard way:
 | `lkb.s`, `lkc.s` | a gather whose B slot holds a vector instead of an address: it reads from zero, like `(r63)` |
 | `m07.s`, `addr07.s`, `addr07b.s` | memory sub-op 7: that it writes zeros, writes nothing at an address it is handed, and leaves the lookup table alone |
 | `m11.s`-`m23.s` | the rest of the unnamed memory sub-ops. **Each one kills the firmware** — run them only on a board you can power-cycle |
+| `di11.s`, `two11.s`, `sr11.s` | what one of them does to interrupts, to a second one after it, and to the status register |
+| `after_ld.s`, `after_st.s`, `trap.s` | what still runs after one, and how a deliberate `bkpt` compares |
 
 ## What they found (Raspberry Pi 4B d03115, firmware 1.20260824)
 

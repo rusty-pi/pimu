@@ -216,8 +216,14 @@ address neither: they are the unit's own lookup table, 1 KiB of it, banked
 sixteen ways so that each lane indexes its own 64 bytes.
 
 The sub-ops with no name of their own each write a **zero** into the
-destination element and nothing else the register file shows — but most of
-them also leave the firmware wedged, and a wedged firmware needs a reboot.
+destination element and nothing else the register file shows — and most of
+them **block until an interrupt releases them**. With interrupts enabled the
+instruction completes and everything after it runs, but `EXECUTE_CODE` never
+returns; behind a `di` there is no dump at all, the core still being inside
+the instruction. Nothing is corrupted — 96 MB of firmware memory diffed across
+a run moved only counters and timestamps — the status register is unchanged,
+and a deliberate `bkpt` in the same place behaves nothing like it. So they are
+waits on something that never answers, not traps and not damage.
 Sub-op 7 is the one exception measured so far: it answers zero at every width,
 writes nothing at an address handed to it, leaves the lookup table alone, and
 the board lives, run after run. Sub-ops 11-15, 17, 18 and 20-23 killed the
@@ -445,7 +451,7 @@ through a jump table produces valid-looking encodings by accident:
 | Left over | What it is | Source |
 |---|---|---|
 | 379 | words objdump refuses too — it prints them `vec48`, `vunk...` or `vop63.1`. Data: jump tables and constants a sweep cannot tell from code | decompile: `binutils-vc4` objdump over the same addresses |
-| 383 | the memory sub-ops that kill the firmware — 3, 10, 11-15, 16-23, 25-31. Each writes a zero into the destination element and leaves the board unable to answer the mailbox; none is carried out for that reason | measured: `probes/m11.s`-`probes/m23.s` on Raspberry Pi 4B d03115 boards, one sub-op per board |
+| 383 | the memory sub-ops that kill the firmware — 3, 10, 11-15, 16-23, 25-31. Each writes a zero into the destination element and leaves the board unable to answer the mailbox; none is carried out for that reason | measured: `probes/m11.s`-`probes/m23.s` on Raspberry Pi 4B d03115 boards, one sub-op per board; `probes/di11.s`, `two11.s`, `sr11.s`, `after_ld.s` and `trap.s` for what the block actually is |
 | 55 | addresses objdump does not decode at all: the two linear sweeps drifting apart inside data | decompile: `binutils-vc4` objdump over the same addresses |
 
 None of it is reached on a firmware boot: `boot` stops on an unimplemented

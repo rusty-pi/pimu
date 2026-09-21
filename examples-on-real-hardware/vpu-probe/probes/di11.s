@@ -1,0 +1,17 @@
+	.text
+	.global _start
+_start:
+	mov r3,#64
+	mov r4,r1
+	add r4,#4096
+	v32mov HY(0++,0),0 REP64
+	v8ld H(20,0),(r4+64)
+	di				; no interrupt can be taken across it
+	v8mem11 H(0,0),H(23,0),H(24,0)
+	mov r2,sr
+	v32mov HY(10,0),r2		; the status register while masked
+	ei
+	mov r2,sr
+	v32mov HY(11,0),r2		; and once interrupts are back
+	v32st HY(0++,0),(r0+=r3) REP64
+	rts
