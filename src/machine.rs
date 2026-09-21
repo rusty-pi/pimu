@@ -7,8 +7,8 @@ use crate::periph::gpio;
 use crate::periph::hdmi_ddc::AUTO_WINDOW;
 use crate::periph::{
     ArmCtrl, ArmLocal, Asb, Aux, Avs, BootBox, Bsc, ClkMon, ClockManager, ConfigOtp, CoreCtl, Dma4,
-    Dwc2, Emmc2, Gic, Gpio, Hd, Hdmi, HdmiDdc, Hvs, Mbox, McSync, Pl011, Pm, Rng, Sdc, Sdramc,
-    Spi0, StubRegion, SysTimer, Vce, XhciOtg,
+    Dwc2, Emmc2, Gic, Gpio, Hd, Hdmi, HdmiDdc, Hvs, Mbox, McSync, Pactl, Pcm, Pl011, Pm, Pwm, Rng,
+    Sdc, Sdramc, Spi0, StubRegion, SysTimer, Vce, XhciOtg,
 };
 use crate::soc::bcm2711 as map;
 
@@ -96,6 +96,15 @@ pub struct Machine {
     pub gpio: Gpio,
     /// SPI0 master (`0x7E20_4000`) — minimal model for the EEPROM bootloader.
     pub spi0: Spi0,
+    /// `PACTL_CS` (`0x7E20_4E00`): which peripheral behind an ORed interrupt
+    /// line is the one asking. Nothing here raises one, so it reads 0.
+    pub pactl: Pactl,
+    /// The two PWM blocks (`0x7E20_C000`, `0x7E20_C800`) and the PCM / I²S
+    /// interface (`0x7E20_3000`): the register maps, with no output and empty
+    /// FIFOs. No boot programs any of them.
+    pub pwm0: Pwm,
+    pub pwm1: Pwm,
+    pub pcm: Pcm,
     /// BSC / I²C master at `0x7E20_5E00` + the board PMIC — start4 reads the
     /// PMIC over this on its way to bringing up the "external" GPIO pins.
     pub bsc_pmic: Bsc,
@@ -332,6 +341,10 @@ impl Machine {
                 spi0.set_pins(false);
                 spi0
             },
+            pactl: Pactl::new(),
+            pwm0: Pwm::new("pwm0"),
+            pwm1: Pwm::new("pwm1"),
+            pcm: Pcm::new(),
             bsc_pmic: Bsc::new("bsc-pmic"),
             hdmi_ddc0: HdmiDdc::new("hdmi-ddc0"),
             hdmi_ddc1: HdmiDdc::new("hdmi-ddc1"),
@@ -921,6 +934,18 @@ impl Machine {
         }
         if let Some(off) = hit(map::SPI0_BASE, map::SPI0_SIZE) {
             return Some((&mut self.spi0, off));
+        }
+        if let Some(off) = hit(map::PACTL_BASE, map::PACTL_SIZE) {
+            return Some((&mut self.pactl, off));
+        }
+        if let Some(off) = hit(map::PWM0_BASE, map::PWM_SIZE) {
+            return Some((&mut self.pwm0, off));
+        }
+        if let Some(off) = hit(map::PWM1_BASE, map::PWM_SIZE) {
+            return Some((&mut self.pwm1, off));
+        }
+        if let Some(off) = hit(map::PCM_BASE, map::PCM_SIZE) {
+            return Some((&mut self.pcm, off));
         }
         if let Some(off) = hit(map::GPIO_BASE, map::GPIO_SIZE) {
             return Some((&mut self.gpio, off));

@@ -1,0 +1,401 @@
+[block]
+name    = "pwm"
+base    = 0x7E20C000
+size    = 0x28
+summary = "PWM0: two pulse-width / serialiser channels and the FIFO they share"
+notes   = "Two of these blocks, `0x800` apart. A 4B routes PWM0's two channels to GPIO 40 and 41 (`PWM0_0` / `PWM0_1` on ALT0), where the board's analogue audio sits, and the firmware has to leave those pins alone for the SPI flash on ALT4 (`specs/spi0.toml`). Nothing in a boot programs either block: the firmware plays no sound, and Linux drives its analogue audio through the mailbox rather than here. The model is the register map and the FIFO flags a driver would poll — a write to `FIF1` goes nowhere, no channel ever runs, and no output is generated."
+
+[[block.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6: \"The PWM0 register base address is `0x7e20c000` and the PWM1 register base address is `0x7e20c800`\""
+confidence = "high"
+
+[[block.source]]
+kind       = "linux"
+ref        = "`bcm2711.dtsi`: `pwm@7e20c000` and `pwm@7e20c800`, both `brcm,bcm2835-pwm`, with the PWM clock from CPRMAN"
+confidence = "high"
+
+[[block.copy]]
+name  = "PWM1"
+base  = 0x7E20C800
+notes = "The second block. Its channels reach GPIO 12/13 on ALT0 and 18/19 on ALT5; the DREQs it paces are `PWM1` (1) rather than `PWM0` (5)."
+
+[[block.copy.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6 for the base, §4.2.1.3 for the two DREQ numbers"
+confidence = "high"
+
+[[register]]
+name   = "CTL"
+offset = 0x00
+access = "rw"
+reset  = 0
+notes  = "Which channel runs and in what mode. Stored; no channel runs."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6 Table 153 (`CTL`)"
+confidence = "high"
+
+[[register.field]]
+name  = "PWEN1"
+bits  = "0"
+notes = "Channel 1 enabled."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6 Table 153 (`CTL`)"
+confidence = "high"
+
+[[register.field]]
+name  = "MODE1"
+bits  = "1"
+notes = "Channel 1 is a serialiser rather than a PWM."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6 Table 153 (`CTL`)"
+confidence = "high"
+
+[[register.field]]
+name  = "RPTL1"
+bits  = "2"
+notes = "Repeat the last word when channel 1's FIFO runs dry."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6 Table 153 (`CTL`)"
+confidence = "high"
+
+[[register.field]]
+name  = "SBIT1"
+bits  = "3"
+notes = "What channel 1 outputs between words."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6 Table 153 (`CTL`)"
+confidence = "high"
+
+[[register.field]]
+name  = "POLA1"
+bits  = "4"
+notes = "Invert channel 1's output."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6 Table 153 (`CTL`)"
+confidence = "high"
+
+[[register.field]]
+name   = "USEF1"
+bits   = "5"
+notes  = "Channel 1 takes its data from the FIFO rather than from `DAT1`."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6 Table 153 (`CTL`)"
+confidence = "high"
+
+[[register.field]]
+name   = "CLRF"
+bits   = "6"
+access = "w"
+notes  = "Write 1 to empty the FIFO. Self-clearing, and the model's FIFO is empty anyway."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6 Table 153 (`CTL`)"
+confidence = "high"
+
+[[register.field]]
+name  = "MSEN1"
+bits  = "7"
+notes = "Channel 1 uses mark/space rather than the evenly-spread PWM algorithm."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6 Table 153 (`CTL`)"
+confidence = "high"
+
+[[register.field]]
+name  = "PWEN2"
+bits  = "8"
+notes = "Channel 2 enabled. Bits 8 to 15 repeat bits 0 to 7 for channel 2, without a second `CLRF`."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6 Table 153 (`CTL`)"
+confidence = "high"
+
+[[register.field]]
+name  = "MODE2"
+bits  = "9"
+notes = "Channel 2 is a serialiser."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6 Table 153 (`CTL`)"
+confidence = "high"
+
+[[register.field]]
+name  = "RPTL2"
+bits  = "10"
+notes = "Repeat the last word on channel 2."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6 Table 153 (`CTL`)"
+confidence = "high"
+
+[[register.field]]
+name  = "SBIT2"
+bits  = "11"
+notes = "Channel 2's between-words level."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6 Table 153 (`CTL`)"
+confidence = "high"
+
+[[register.field]]
+name  = "POLA2"
+bits  = "12"
+notes = "Invert channel 2's output."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6 Table 153 (`CTL`)"
+confidence = "high"
+
+[[register.field]]
+name  = "USEF2"
+bits  = "13"
+notes = "Channel 2 takes its data from the FIFO."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6 Table 153 (`CTL`)"
+confidence = "high"
+
+[[register.field]]
+name  = "MSEN2"
+bits  = "15"
+notes = "Channel 2 uses mark/space."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6 Table 153 (`CTL`)"
+confidence = "high"
+
+[[register]]
+name   = "STA"
+offset = 0x04
+access = "rw"
+reset  = 0x2
+notes  = "FIFO and channel state. The error flags are write-1-to-clear; `EMPT1` and `FULL1` are the FIFO's, and here the FIFO is always empty, so a read answers `EMPT1` and whatever error bits are still latched — which is none, since nothing sets them."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6 Table 154 (`STA`)"
+confidence = "high"
+
+[[register.field]]
+name   = "FULL1"
+bits   = "0"
+access = "r"
+notes  = "The FIFO is full."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6 Table 154 (`STA`)"
+confidence = "high"
+
+[[register.field]]
+name   = "EMPT1"
+bits   = "1"
+access = "r"
+notes  = "The FIFO is empty. Set out of reset, and always set here."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6 Table 154 (`STA`)"
+confidence = "high"
+
+[[register.field]]
+name   = "WERR1"
+bits   = "2"
+access = "w1c"
+notes  = "A write to a full FIFO."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6 Table 154 (`STA`)"
+confidence = "high"
+
+[[register.field]]
+name   = "RERR1"
+bits   = "3"
+access = "w1c"
+notes  = "A read from an empty FIFO."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6 Table 154 (`STA`)"
+confidence = "high"
+
+[[register.field]]
+name   = "GAPO1"
+bits   = "4"
+access = "w1c"
+notes  = "Channel 1 ran out of data mid-word."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6 Table 154 (`STA`)"
+confidence = "high"
+
+[[register.field]]
+name   = "GAPO2"
+bits   = "5"
+access = "w1c"
+notes  = "The same for channel 2."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6 Table 154 (`STA`)"
+confidence = "high"
+
+[[register.field]]
+name   = "BERR"
+bits   = "8"
+access = "w1c"
+notes  = "A bus error: a write the block could not take."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6 Table 154 (`STA`)"
+confidence = "high"
+
+[[register.field]]
+name   = "STA1"
+bits   = "9"
+access = "r"
+notes  = "Channel 1 is transmitting."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6 Table 154 (`STA`)"
+confidence = "high"
+
+[[register.field]]
+name   = "STA2"
+bits   = "10"
+access = "r"
+notes  = "Channel 2 is transmitting."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6 Table 154 (`STA`)"
+confidence = "high"
+
+[[register]]
+name   = "DMAC"
+offset = 0x08
+access = "rw"
+reset  = 0x707
+notes  = "DREQ and panic thresholds, and the enable that lets the block pace a DMA channel. Stored; the model raises no DREQ."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6 Table 155 (`DMAC`)"
+confidence = "high"
+
+[[register.field]]
+name  = "DREQ"
+bits  = "7:0"
+notes = "How empty the FIFO has to be before the DREQ goes up."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6 Table 155 (`DMAC`)"
+confidence = "high"
+
+[[register.field]]
+name  = "PANIC"
+bits  = "15:8"
+notes = "The same for the panic signal."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6 Table 155 (`DMAC`)"
+confidence = "high"
+
+[[register.field]]
+name  = "ENAB"
+bits  = "31"
+notes = "Raise DREQ and panic at all."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6 Table 155 (`DMAC`)"
+confidence = "high"
+
+[[register]]
+name   = "RNG1"
+offset = 0x10
+access = "rw"
+reset  = 0x20
+notes  = "Channel 1's period, in clock cycles: how many the channel spreads `DAT1` over."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6 Table 156 (`RNG1` / `RNG2`)"
+confidence = "high"
+
+[[register]]
+name   = "DAT1"
+offset = 0x14
+access = "rw"
+reset  = 0
+notes  = "Channel 1's data word, used while `CTL.USEF1` is clear."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6 Table 157 (`DAT1` / `DAT2`)"
+confidence = "high"
+
+[[register]]
+name   = "FIF1"
+offset = 0x18
+access = "w"
+notes  = "The FIFO both channels share. A write here goes nowhere in the model, and a read answers 0."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6 Table 158 (`FIF1`)"
+confidence = "high"
+
+[[register]]
+name   = "RNG2"
+offset = 0x20
+access = "rw"
+reset  = 0x20
+notes  = "Channel 2's period."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6 Table 156 (`RNG1` / `RNG2`)"
+confidence = "high"
+
+[[register]]
+name   = "DAT2"
+offset = 0x24
+access = "rw"
+reset  = 0
+notes  = "Channel 2's data word."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §8.6 Table 157 (`DAT1` / `DAT2`)"
+confidence = "high"

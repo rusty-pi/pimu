@@ -35,10 +35,13 @@ pub mod hdmi_ddc;
 pub mod hvs;
 pub mod mbox;
 pub mod mcsync;
+pub mod pactl;
 pub mod pcie;
+pub mod pcm;
 pub mod pm;
 pub mod pmic;
 pub mod pvt;
+pub mod pwm;
 pub mod readystub;
 pub mod rng;
 pub mod sdc;
@@ -78,9 +81,12 @@ pub use hdmi_ddc::HdmiDdc;
 pub use hvs::Hvs;
 pub use mbox::Mbox;
 pub use mcsync::McSync;
+pub use pactl::Pactl;
+pub use pcm::Pcm;
 pub use pm::Pm;
 pub use pmic::Pmic;
 pub use pvt::Pvt;
+pub use pwm::Pwm;
 pub use readystub::ReadyStub;
 pub use rng::Rng;
 pub use sdc::Sdc;
@@ -130,12 +136,15 @@ pub const SPEC_COVERAGE: &[crate::spec::Coverage] = &[
     hvs::COVERAGE,
     mbox::COVERAGE,
     mcsync::COVERAGE,
+    pactl::COVERAGE,
     pcie::COVERAGE,
+    pcm::COVERAGE,
     pm::COVERAGE,
     pmic::COVERAGE_CORE,
     pmic::COVERAGE_RAILS,
     pmic::COVERAGE_1D,
     pvt::COVERAGE,
+    pwm::COVERAGE,
     rng::COVERAGE,
     sdc::COVERAGE,
     sdramc::COVERAGE,

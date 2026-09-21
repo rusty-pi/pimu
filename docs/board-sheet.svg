@@ -183,6 +183,17 @@
     <text class="m" x="742" y="602" text-anchor="middle">0x7E200000</text>
   </g>
 
+  <g data-block="pactl" data-base="0x7E204E00">
+    <rect class="tagd" x="450" y="624" width="105" height="44" rx="2"/>
+    <text class="ts" x="502" y="642" text-anchor="middle">PACTL_CS</text>
+    <text class="md" x="502" y="656" text-anchor="middle">0x7E204E00</text>
+  </g>
+  <g data-block="pwm pcm">
+    <rect class="tagd" x="690" y="624" width="105" height="44" rx="2"/>
+    <text class="ts" x="742" y="642" text-anchor="middle">PWM ×2 · PCM</text>
+    <text class="md" x="742" y="656" text-anchor="middle">0x7E20C000 · 0x7E203000</text>
+  </g>
+
   <!-- left ports -->
   <g data-block="spi0" data-base="0x7E204000">
     <rect class="port" x="330" y="190" width="96" height="34"/>

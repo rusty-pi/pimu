@@ -1,0 +1,348 @@
+[block]
+name    = "pcm"
+base    = 0x7E203000
+size    = 0x24
+summary = "PCM / I²S audio: the one serial-audio interface on the chip"
+notes   = "One module, on GPIO 18 to 21 (`PCM_CLK`, `PCM_FS`, `PCM_DIN`, `PCM_DOUT` on ALT0) or GPIO 28 to 31 on ALT2. Nothing on a 4B is wired to it unless a HAT brings its own codec, and no firmware in a boot touches the block. The model is the register map with both FIFOs empty: a transmit write is dropped, a receive read answers 0, and neither the interrupt nor the DREQs ever go up."
+
+[[block.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §7.9: \"There is only one PCM module in the BCM2711. The PCM base address for the registers is `0x7e203000`\""
+confidence = "high"
+
+[[block.source]]
+kind       = "linux"
+ref        = "`bcm2711.dtsi`: `pcm@7e203000`, `brcm,bcm2835-i2s`, with DMA channels named `tx` and `rx`"
+confidence = "high"
+
+[block.irq]
+vpu = 119
+
+[[block.irq.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §6.2.4 Table 102: VC peripheral IRQ 55 is `PCM/I2S`, VPU source 119"
+confidence = "high"
+
+[[block.irq.source]]
+kind       = "trace"
+ref        = "`linux-boot`, `RVF_TRACE_MMIO=0x7e002000-0x7e002060`: the secure service enables source 119 among the eight `IRQ_PRIO` words it writes"
+confidence = "medium"
+note       = "Which is the firmware enabling the source, not this block raising it: nothing in a boot programs the PCM."
+
+[[register]]
+name   = "CS_A"
+offset = 0x00
+access = "rw"
+reset  = 0x0028_0000
+notes  = "Control and status. The bottom three bits can be written while the interface runs; the rest cannot. A read here answers the stored control bits with the FIFO flags of an idle, empty interface on top of them — `TXE`, `TXD` and `TXW` set, `RXF`, `RXD` and `RXR` clear — which is what the `reset` records."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §7.9 Table 143 (`CS_A`)"
+confidence = "high"
+
+[[register.field]]
+name  = "EN"
+bits  = "0"
+notes = "Enable the interface."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §7.9 Table 143 (`CS_A`)"
+confidence = "high"
+
+[[register.field]]
+name  = "RXON"
+bits  = "1"
+notes = "Receive."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §7.9 Table 143 (`CS_A`)"
+confidence = "high"
+
+[[register.field]]
+name  = "TXON"
+bits  = "2"
+notes = "Transmit."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §7.9 Table 143 (`CS_A`)"
+confidence = "high"
+
+[[register.field]]
+name   = "TXCLR"
+bits   = "3"
+access = "w"
+notes  = "Write 1 to empty the transmit FIFO. Self-clearing."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §7.9 Table 143 (`CS_A`)"
+confidence = "high"
+
+[[register.field]]
+name   = "RXCLR"
+bits   = "4"
+access = "w"
+notes  = "The same for the receive FIFO."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §7.9 Table 143 (`CS_A`)"
+confidence = "high"
+
+[[register.field]]
+name  = "TXTHR"
+bits  = "6:5"
+notes = "How empty the transmit FIFO has to be for `TXW`."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §7.9 Table 143 (`CS_A`)"
+confidence = "high"
+
+[[register.field]]
+name  = "RXTHR"
+bits  = "8:7"
+notes = "How full the receive FIFO has to be for `RXR`."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §7.9 Table 143 (`CS_A`)"
+confidence = "high"
+
+[[register.field]]
+name  = "DMAEN"
+bits  = "9"
+notes = "Raise the DREQs `TI.PERMAP` 2 and 3 select."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §7.9 Table 143 (`CS_A`) for the bit, §4.2.1.3 for `PCM TX` and `PCM RX`"
+confidence = "high"
+
+[[register.field]]
+name   = "TXSYNC"
+bits   = "13"
+access = "r"
+notes  = "The transmit FIFO is in sync with the frame."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §7.9 Table 143 (`CS_A`)"
+confidence = "high"
+
+[[register.field]]
+name   = "RXSYNC"
+bits   = "14"
+access = "r"
+notes  = "The same for the receive FIFO."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §7.9 Table 143 (`CS_A`)"
+confidence = "high"
+
+[[register.field]]
+name   = "TXERR"
+bits   = "15"
+access = "w1c"
+notes  = "The transmit FIFO underran."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §7.9 Table 143 (`CS_A`)"
+confidence = "high"
+
+[[register.field]]
+name   = "RXERR"
+bits   = "16"
+access = "w1c"
+notes  = "The receive FIFO overran."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §7.9 Table 143 (`CS_A`)"
+confidence = "high"
+
+[[register.field]]
+name   = "TXW"
+bits   = "17"
+access = "r"
+notes  = "The transmit FIFO wants writing. Always set here."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §7.9 Table 143 (`CS_A`)"
+confidence = "high"
+
+[[register.field]]
+name   = "RXR"
+bits   = "18"
+access = "r"
+notes  = "The receive FIFO wants reading."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §7.9 Table 143 (`CS_A`)"
+confidence = "high"
+
+[[register.field]]
+name   = "TXD"
+bits   = "19"
+access = "r"
+notes  = "The transmit FIFO can take a word. Set out of reset, and always set here."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §7.9 Table 143 (`CS_A`)"
+confidence = "high"
+
+[[register.field]]
+name   = "RXD"
+bits   = "20"
+access = "r"
+notes  = "The receive FIFO holds a word. Never set here."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §7.9 Table 143 (`CS_A`)"
+confidence = "high"
+
+[[register.field]]
+name   = "TXE"
+bits   = "21"
+access = "r"
+notes  = "The transmit FIFO is empty. Set out of reset, and always set here."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §7.9 Table 143 (`CS_A`)"
+confidence = "high"
+
+[[register.field]]
+name   = "RXF"
+bits   = "22"
+access = "r"
+notes  = "The receive FIFO is full."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §7.9 Table 143 (`CS_A`)"
+confidence = "high"
+
+[[register.field]]
+name  = "RXSEX"
+bits  = "23"
+notes = "Sign-extend what comes out of the receive FIFO."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §7.9 Table 143 (`CS_A`)"
+confidence = "high"
+
+[[register.field]]
+name  = "SYNC"
+bits  = "24"
+notes = "Write it, read it back two PCM clocks later: how a driver measures that the interface's clock is running."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §7.9 Table 143 (`CS_A`)"
+confidence = "high"
+
+[[register]]
+name   = "FIFO_A"
+offset = 0x04
+access = "rw"
+notes  = "Both FIFOs: a write goes to the transmit one, a read takes from the receive one. Dropped and 0 respectively here."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §7.9 Table 144 (`FIFO_A`)"
+confidence = "high"
+
+[[register]]
+name   = "MODE_A"
+offset = 0x08
+access = "rw"
+reset  = 0
+notes  = "Frame length and format, and whether the block is the clock master. Stored."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §7.9 Table 145 (`MODE_A`)"
+confidence = "high"
+
+[[register]]
+name   = "RXC_A"
+offset = 0x0C
+access = "rw"
+reset  = 0
+notes  = "Where the two receive channels sit in the frame, and how wide they are. Stored."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §7.9 Table 146 (`RXC_A`)"
+confidence = "high"
+
+[[register]]
+name   = "TXC_A"
+offset = 0x10
+access = "rw"
+reset  = 0
+notes  = "The same for the two transmit channels. Stored."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §7.9 Table 147 (`TXC_A`)"
+confidence = "high"
+
+[[register]]
+name   = "DREQ_A"
+offset = 0x14
+access = "rw"
+notes  = "The four FIFO levels at which the DREQ and panic signals go up. Stored; none goes up."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §7.9 Table 148 (`DREQ_A`)"
+confidence = "high"
+
+[[register]]
+name   = "INTEN_A"
+offset = 0x18
+access = "rw"
+reset  = 0
+notes  = "Which of the four conditions may raise the interrupt. Stored."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §7.9 Table 149 (`INTEN_A`)"
+confidence = "high"
+
+[[register]]
+name   = "INTSTC_A"
+offset = 0x1C
+access = "w1c"
+reset  = 0
+notes  = "Which of them have happened; write the bit back to clear it. Nothing sets one here."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §7.9 Table 150 (`INTSTC_A`)"
+confidence = "high"
+
+[[register]]
+name   = "GRAY"
+offset = 0x20
+access = "rw"
+reset  = 0
+notes  = "The GRAY-code receive mode, for a one-line input that carries its own clock. Stored."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §7.9 Table 151 (`GRAY`)"
+confidence = "high"

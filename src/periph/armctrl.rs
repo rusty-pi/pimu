@@ -23,7 +23,9 @@ use std::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
-use crate::spec::armctrl::{CONTROL, CONTROL_RELEASE_MASK as CONTROL_RELEASE, REG_008, TIMER_PREDIV};
+use crate::spec::armctrl::{
+    CONTROL, CONTROL_RELEASE_MASK as CONTROL_RELEASE, REG_008, TIMER_PREDIV,
+};
 use crate::spec::Coverage;
 
 /// Everything is storage apart from the release bit.

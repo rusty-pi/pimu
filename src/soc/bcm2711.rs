@@ -75,6 +75,21 @@ pub const SPI0_SIZE: u32 = spec::spi0::SIZE;
 pub const BSC_PMIC_BASE: u32 = spec::bsc::PMIC_BASE;
 pub const BSC_PMIC_SIZE: u32 = spec::bsc::SIZE;
 
+/// PWM0 (`0x7E20_C000`) and PWM1 (`0x7E20_C800`): the pulse-width /
+/// serialiser blocks. Nothing in a boot programs either.
+pub const PWM0_BASE: u32 = spec::pwm::BASE;
+pub const PWM1_BASE: u32 = spec::pwm::PWM1_BASE;
+pub const PWM_SIZE: u32 = spec::pwm::SIZE;
+
+/// PCM / I²S (`0x7E20_3000`): the one serial-audio interface.
+pub const PCM_BASE: u32 = spec::pcm::BASE;
+pub const PCM_SIZE: u32 = spec::pcm::SIZE;
+
+/// `PACTL_CS` (`0x7E20_4E00`): which SPI, I²C or UART behind an ORed
+/// interrupt line is the one asking.
+pub const PACTL_BASE: u32 = spec::pactl::BASE;
+pub const PACTL_SIZE: u32 = spec::pactl::SIZE;
+
 /// BSC instance 0 (`0x7E20_5000`). start4's I²C driver picks its base from the
 /// bus id — 8 is the PMIC bus above, 0 is this one, anything else is
 /// `0x7E80_3000 + id * 0x1000` (`FUN_0ecf0ed0`). Late in the boot it probes

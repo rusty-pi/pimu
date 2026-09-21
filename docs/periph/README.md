@@ -38,12 +38,15 @@ Generated from the TOML specs in [`specs/`](../../specs/); see [`specs/README.md
 | [`mbox`](mbox.md) | vpu | `0x7E00B880` | `0x140` | 12 | ARM <-> VideoCore mailboxes: two views of the same pair of FIFOs, and the interrupt block between them |
 | [`mcsync`](mcsync.md) | vpu | `0x7E000000` | `0x1000` | 7 | Doorbells / semaphores between the two VPU cores |
 | [`otp`](otp.md) | vpu | `0x7E20F000` | `0x1000` | 7 | Always-on config / OTP engine: the fuse array, one row at a time – reads and programming |
+| [`pactl`](pactl.md) | vpu | `0x7E204E00` | `0x4` | 1 | Peripheral activity status: which SPI, I²C or PL011 behind an ORed interrupt is the one asking |
 | [`pcie`](pcie.md) | vpu | `0x7D500000` | `0x9310` | 43 | PCIe root complex (`pcie-brcmstb`), with the VL805 xHCI controller behind it |
+| [`pcm`](pcm.md) | vpu | `0x7E203000` | `0x24` | 9 | PCM / I²S audio: the one serial-audio interface on the chip |
 | [`pm`](pm.md) | vpu | `0x7E100000` | `0x1000` | 19 | Power management: reset control, reset status, watchdog, power-domain registers |
 | [`pmic_1d`](pmic_1d.md) | i2c | `0x1D` | `0x100` | 8 | Board PMIC at `0x1D` on every Pi 4-family board but the 4B rev 1.5 (start4 descriptor type `0x81`) |
 | [`pmic_core`](pmic_core.md) | i2c | `0x1E` | `0x100` | 4 | Board PMIC owning the SoC core rail (start4 descriptor type `0x82`) |
 | [`pmic_rails`](pmic_rails.md) | i2c | `0x1B` | `0x100` | 6 | Board PMIC owning the SDRAM and I/O rails (start4 descriptor type `0x83`) |
 | [`pvt`](pvt.md) | vpu | `0x7D5D8000` | `0x480` | 5 | Per-channel PVT (process / voltage / temperature) monitors |
+| [`pwm`](pwm.md) | vpu | `0x7E20C000` | `0x28` | 8 | PWM0: two pulse-width / serialiser channels and the FIFO they share |
 | [`rng`](rng.md) | vpu | `0x7E104000` | `0x28` | 10 | Hardware RNG (RNG200): generator control, warm-up counter, interrupt and FIFO |
 | [`sdc`](sdc.md) | vpu | `0x7E001000` | `0x1000` | 4 | Legacy SDRAM-controller interface: DRAM timing table, sub-controller ready bits, LPDDR4 mode-register port |
 | [`sdramc`](sdramc.md) | vpu | `0x7DC00000` | `0x40000` | 13 | LPDDR4 controller and PHY, below the `0x7E` window |
@@ -108,6 +111,7 @@ The `parent` of a block: the master of its bus, or the window it is carved out o
 | VPU source | 116 | [`gpio`](gpio.md) `ANY` | — |
 | VPU source | 117 | [`bsc`](bsc.md) | — |
 | VPU source | 118 | [`spi0`](spi0.md) | — |
+| VPU source | 119 | [`pcm`](pcm.md) | — |
 | VPU source | 121 | [`uart0`](uart0.md) | — |
 | VPU source | 125 | [`rng`](rng.md) | — |
 | VPU source | 126 | [`emmc2`](emmc2.md) | — |
