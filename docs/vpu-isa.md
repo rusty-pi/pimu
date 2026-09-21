@@ -159,6 +159,7 @@ converts the other way too, and the element is always addressed at the
 
 | Direction | Rule | Source |
 |---|---|---|
+| multiply, which carries no width of its own | the widest **source** it names, not the widest register: `vmulhdt.ss HY(4,0),HX(62,0),HX(63,0)` is a 16-bit multiply whose product is written into a 32-bit register. With the `L` bit — a `v32` spelling — the width is 32 whatever the registers say, and a multiply naming no source register at all has a zero product at any width | measured: `probes/setfmul.s` |
 | ALU source, a register **wider** than the operation | read at the operation's width — the element's low half. `v16or HX(0,0),HY(20,0),0`, the same with the wide register in B, `v16mov` and `v16add` all answer what the `HX(20,0)` control answers, and `v16adds`, `v16shl` and `v16subs` match theirs lane for lane | measured: `probes/wide1.s`, `probes/wide2.s` |
 | ALU result, into a destination **wider** than the operation | sign-extended, not zero-extended: `v16or HY(2,0),HX(20,0),0` answers `0xffffffff` where the halfword is `0xffff`. The truncation on the source side is at the **read**, so `v16or HY(0,0),HY(20,0),0` — wide on both sides — answers the low halfword sign-extended, not the 32-bit source untouched | measured: `probes/wide1.s`, `probes/wide2.s` |
 | source, byte register into a wider operation | zero-extend | measured: `probes/wmix.s`, `probes/wmix2.s` |
@@ -491,8 +492,8 @@ chains are written in.
 | `SIGN` | read the result signed (`SACC`) rather than unsigned (`UACC`) on the way in | measured: `probes/acc3.s`, `probes/acch.s` |
 | `HIGH` | accumulate the result **shifted left by sixteen**; a write-back reads it back shifted down by sixteen, clamped into the destination's signed range | measured: `probes/acch.s` |
 | `WBA` | the destination takes the accumulator rather than the raw result | measured: `probes/accmix.s`, `probes/wacc.s` |
-| `SUB` | with `ENA` and no `WBA` — the `USUB` form — **not** a subtracting accumulate: the accumulator is left alone and the destination takes `accumulator - result`, `(acc - (result << 16)) >> 16` with `HIGH`. Alongside `WBA` the model subtracts into the accumulator instead, which no probe has checked | measured: `probes/usub.s`, read back with `vgetacc` |
-| `SUB` with `HIGH`, unsigned | matched neither the wrapped difference nor a clamped one, lane for lane — it faults | measured: `probes/usub.s` |
+| `SUB` | with `ENA` and no `WBA` — the `USUB` form — **not** a subtracting accumulate: the accumulator is left alone and the destination takes `accumulator - result`. Alongside `WBA` the accumulator takes `acc - (result << 16)` as well | measured: `probes/usub.s`, read back with `vgetacc`, `probes/acchu.s`: `vgetacc` after a `UACC HIGH SUB` reads `acc - (result << 16)`, lane for lane |
+| `SUB` or no `SUB`, with `HIGH` | the destination is the accumulator's **own** high half against the result — `(acc >> 16) - result`, saturated into the operation's width — taken *before* the update, not read back out of the accumulator afterwards. The two agree until the low half borrows: with the high half zero and a result of `0xffff`, the unsigned form answers `-32768`, the clamp, where the accumulator afterwards reads `1`. Both polarities follow it, and the saturation is at the **operation's** width even when the destination is wider | measured: `probes/acchu.s` |
 
 ## The scalar result unit
 
@@ -512,11 +513,11 @@ lane predicate applies to the aggregate as well.
 
 `VecInsn::executable` decides, by field rather than by whole-word template.
 A linear sweep of `start4.elf`'s `.text` with this decoder finds **14650**
-vector instructions, and **14364 of them execute**. That denominator is a
+vector instructions, and **14369 of them execute**. That denominator is a
 sweep, not a count of real instructions: it steps two bytes at a time and
 cannot tell a jump table from code, which is most of what is left over.
 
-The 286 that do not split by what `binutils-vc4` objdump makes of the same
+The 281 that do not split by what `binutils-vc4` objdump makes of the same
 address — a better measure than the page they sit in, since a linear sweep
 through a jump table produces valid-looking encodings by accident:
 
@@ -526,7 +527,7 @@ through a jump table produces valid-looking encodings by accident:
 | 72 | words objdump prints raw, as `vec48` or `vec80`: it recognises the class and nothing inside it | decompile: `binutils-vc4` objdump over the same addresses |
 | 44 | memory-class words objdump spells `vunkld`, `vunkst` or `vunklookupml` — its own name for a transfer whose operands fit no form it knows | decompile: `binutils-vc4` objdump over the same addresses |
 | 11 | addresses objdump does not decode at all: the two linear sweeps drifting apart inside data | decompile: `binutils-vc4` objdump over the same addresses |
-| 10 | ordinary instructions objdump names and this decoder refuses, each one of a kind. Three of them objdump cannot spell either — it prints the B operand `r56?bit4??bit5?`, a 48-bit scalar field naming a register past `r31` — and the rest are lone combinations: a `*` on a slot, `CLRA HIGH SUB` with no `ENA`, a multiply naming no register at all | decompile: `binutils-vc4` objdump over the same addresses |
+| 5 | ordinary instructions objdump names and this decoder refuses, each one of a kind. Three of them objdump cannot spell either — it prints the B operand `r56?bit4??bit5?`, a 48-bit scalar field naming a register past `r31`. The other two carry something on a slot that has no business being there: a `*` on the inert dash of a store that names an address, and a `++` on a gather's inert slot, which is measurably **not** inert — `v8lookupm H(1,0),H(20++,0),H(21,0)` answers `0x04` in every lane where the plain form answers `0x40`, and what it steps is not established | decompile: `binutils-vc4` objdump over the same addresses |
 
 None of it is reached on a firmware boot: `boot` stops on an unimplemented
 instruction by default, and `boot-check testdata/boot/firmware-boot.toml`

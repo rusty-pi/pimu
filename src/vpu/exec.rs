@@ -1342,7 +1342,9 @@ impl Vpu {
                                     } else {
                                         res
                                     };
-                                    let v = if acc.high { v << 16 } else { v };
+                                    // The `...H` forms take the result sixteen
+                                    // bits up.
+                                    let shifted = if acc.high { v << 16 } else { v };
                                     if acc.enable {
                                         let read = if acc.high {
                                             if acc.signed {
@@ -1354,28 +1356,50 @@ impl Vpu {
                                             *slot
                                         };
                                         if acc.writeback {
+                                            *slot = if acc.sub {
+                                                slot.wrapping_sub(shifted)
+                                            } else {
+                                                slot.wrapping_add(shifted)
+                                            };
+                                        }
+                                        res = if acc.high {
+                                            // The destination is the difference
+                                            // (or sum) of the accumulator's
+                                            // *own* high half and the result,
+                                            // taken before the update and
+                                            // saturated into the operation's
+                                            // width. Reading it back out of the
+                                            // accumulator afterwards is not the
+                                            // same thing — the low half borrows
+                                            // — and that is what made the
+                                            // unsigned `HIGH SUB` look
+                                            // inexplicable. Measured with
+                                            // `probes/acchu.s` on a Raspberry
+                                            // Pi 4B d03115: with the high half
+                                            // zero and a result of `0xffff`,
+                                            // `UACC HIGH SUB` answers
+                                            // `-32768`, the clamp, where the
+                                            // accumulator afterwards reads 1.
+                                            let read = if acc.signed {
+                                                read as i32 as i64
+                                            } else {
+                                                read as i64
+                                            };
+                                            let r = if acc.signed {
+                                                v as i32 as i64
+                                            } else {
+                                                v as i64
+                                            };
+                                            let x = if acc.sub { read - r } else { read + r };
+                                            let sbits = width * 8;
+                                            x.clamp(
+                                                -(1i64 << (sbits - 1)),
+                                                (1i64 << (sbits - 1)) - 1,
+                                            ) as u32
+                                        } else if acc.writeback {
                                             // Accumulate, and hand the
                                             // destination the accumulator.
-                                            *slot = if acc.sub {
-                                                slot.wrapping_sub(v)
-                                            } else {
-                                                slot.wrapping_add(v)
-                                            };
-                                            res = if acc.high {
-                                                let read = if acc.signed {
-                                                    (*slot as i32 >> 16) as i64
-                                                } else {
-                                                    (*slot >> 16) as i64
-                                                };
-                                                let sbits = sat_bytes * 8;
-                                                read.clamp(
-                                                    -(1i64 << (sbits - 1)),
-                                                    (1i64 << (sbits - 1)) - 1,
-                                                )
-                                                    as u32
-                                            } else {
-                                                *slot
-                                            };
+                                            *slot
                                         } else {
                                             // No `WBA`: the accumulator is read
                                             // into the result and left as it
@@ -1384,20 +1408,12 @@ impl Vpu {
                                             // measured: `CLRA UACC(A)` then
                                             // `UADD(B)` answers `A + B + A` with
                                             // `A` still in the accumulator.
-                                            res = if acc.sub {
+                                            if acc.sub {
                                                 read.wrapping_sub(res)
                                             } else {
                                                 read.wrapping_add(res)
-                                            };
-                                            if acc.high {
-                                                let sbits = sat_bytes * 8;
-                                                res = (res as i32 as i64).clamp(
-                                                    -(1i64 << (sbits - 1)),
-                                                    (1i64 << (sbits - 1)) - 1,
-                                                )
-                                                    as u32;
                                             }
-                                        }
+                                        };
                                     }
                                 }
                                 if let Some(o) = d {

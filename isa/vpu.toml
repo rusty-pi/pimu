@@ -439,6 +439,14 @@ converts the other way too, and the element is always addressed at the
 columns = ["Direction", "Rule", "Source"]
 
 [[section.row]]
+cells = ["multiply, which carries no width of its own", "the widest **source** it names, not the widest register: `vmulhdt.ss HY(4,0),HX(62,0),HX(63,0)` is a 16-bit multiply whose product is written into a 32-bit register. With the `L` bit — a `v32` spelling — the width is 32 whatever the registers say, and a multiply naming no source register at all has a zero product at any width"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/setfmul.s`"
+confidence = "high"
+
+[[section.row]]
 cells = ["ALU source, a register **wider** than the operation", "read at the operation's width — the element's low half. `v16or HX(0,0),HY(20,0),0`, the same with the wide register in B, `v16mov` and `v16add` all answer what the `HX(20,0)` control answers, and `v16adds`, `v16shl` and `v16subs` match theirs lane for lane"]
 
 [[section.row.source]]
@@ -2362,20 +2370,25 @@ ref        = "`probes/wacc.s`"
 confidence = "high"
 
 [[section.row]]
-cells = ["`SUB`", "with `ENA` and no `WBA` — the `USUB` form — **not** a subtracting accumulate: the accumulator is left alone and the destination takes `accumulator - result`, `(acc - (result << 16)) >> 16` with `HIGH`. Alongside `WBA` the model subtracts into the accumulator instead, which no probe has checked"]
+cells = ["`SUB`", "with `ENA` and no `WBA` — the `USUB` form — **not** a subtracting accumulate: the accumulator is left alone and the destination takes `accumulator - result`. Alongside `WBA` the accumulator takes `acc - (result << 16)` as well"]
 
 [[section.row.source]]
 kind       = "measured"
 ref        = "`probes/usub.s`, read back with `vgetacc`"
 confidence = "high"
 
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/acchu.s`: `vgetacc` after a `UACC HIGH SUB` reads `acc - (result << 16)`, lane for lane"
+confidence = "high"
+
 [[section.row]]
-cells = ["`SUB` with `HIGH`, unsigned", "matched neither the wrapped difference nor a clamped one, lane for lane — it faults"]
+cells = ["`SUB` or no `SUB`, with `HIGH`", "the destination is the accumulator's **own** high half against the result — `(acc >> 16) - result`, saturated into the operation's width — taken *before* the update, not read back out of the accumulator afterwards. The two agree until the low half borrows: with the high half zero and a result of `0xffff`, the unsigned form answers `-32768`, the clamp, where the accumulator afterwards reads `1`. Both polarities follow it, and the saturation is at the **operation's** width even when the destination is wider"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/usub.s`"
-confidence = "low"
+ref        = "`probes/acchu.s`"
+confidence = "high"
 
 [[section]]
 title = "The scalar result unit"
@@ -2445,11 +2458,11 @@ title = "What the model executes"
 body = """
 `VecInsn::executable` decides, by field rather than by whole-word template.
 A linear sweep of `start4.elf`'s `.text` with this decoder finds **14650**
-vector instructions, and **14364 of them execute**. That denominator is a
+vector instructions, and **14369 of them execute**. That denominator is a
 sweep, not a count of real instructions: it steps two bytes at a time and
 cannot tell a jump table from code, which is most of what is left over.
 
-The 286 that do not split by what `binutils-vc4` objdump makes of the same
+The 281 that do not split by what `binutils-vc4` objdump makes of the same
 address — a better measure than the page they sit in, since a linear sweep
 through a jump table produces valid-looking encodings by accident:
 """
@@ -2493,7 +2506,7 @@ ref        = "`binutils-vc4` objdump over the same addresses"
 confidence = "high"
 
 [[section.row]]
-cells = ["10", "ordinary instructions objdump names and this decoder refuses, each one of a kind. Three of them objdump cannot spell either — it prints the B operand `r56?bit4??bit5?`, a 48-bit scalar field naming a register past `r31` — and the rest are lone combinations: a `*` on a slot, `CLRA HIGH SUB` with no `ENA`, a multiply naming no register at all"]
+cells = ["5", "ordinary instructions objdump names and this decoder refuses, each one of a kind. Three of them objdump cannot spell either — it prints the B operand `r56?bit4??bit5?`, a 48-bit scalar field naming a register past `r31`. The other two carry something on a slot that has no business being there: a `*` on the inert dash of a store that names an address, and a `++` on a gather's inert slot, which is measurably **not** inert — `v8lookupm H(1,0),H(20++,0),H(21,0)` answers `0x04` in every lane where the plain form answers `0x40`, and what it steps is not established"]
 
 [[section.row.source]]
 kind       = "decompile"

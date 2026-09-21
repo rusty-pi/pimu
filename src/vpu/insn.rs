@@ -1108,12 +1108,9 @@ impl VecAcc {
         // `SUB` hands the destination `accumulator - result` whether or not
         // `WBA` is set — `SDEC` in `probes/accmix.s` is that combination, and
         // the board answers the same difference. With the high half it is the
-        // same difference taken sixteen bits up, `(acc - (result << 16)) >> 16`
-        // — for the signed form. The unsigned one answered neither that nor a
-        // clamped version of it, lane for lane, so it is left to fault.
-        if f & SUB != 0 && f & HIGH != 0 && f & SIGN == 0 {
-            return None;
-        }
+        // accumulator's *own* high half minus the result, saturated into the
+        // operation's width, in both polarities. Measured with
+        // `probes/acchu.s` on a Raspberry Pi 4B d03115.
         Some(VecAcc {
             enable: f & ENA != 0,
             clear: f & CLRA != 0,
@@ -1923,16 +1920,32 @@ impl VecInsn {
             // widest register it names and converts the narrower ones into it
             // — `vmull.ss HX(0,0),HX(62,0),H(57,0)` multiplies a halfword by
             // an unsigned byte and keeps sixteen bits of the product.
-            let w = [self.d, self.a]
-                .into_iter()
-                .chain(match self.b {
-                    VecOperandB::Slot(s) => Some(s),
-                    VecOperandB::Imm(_) => None,
-                })
-                .filter(|s| !s.is_dash())
-                .map(|s| s.elem_bytes() as u32)
-                .max()?;
-            let w = if self.lane_bits == 32 { 4 } else { w };
+            // The `L` bit settles the width on its own, registers or no
+            // registers, so the widest-slot rule is only wanted without it —
+            // and it is the widest **source**. A destination wider than the
+            // operation does not make the operation wider, any more than it
+            // does anywhere else: `vmulhdt.ss HY(4,0),HX(62,0),HX(63,0)` is a
+            // 16-bit multiply whose product is written into a 32-bit
+            // register, measured with `probes/setfmul.s`.
+            let w = if self.lane_bits == 32 {
+                4
+            } else {
+                //
+                // A multiply that names no source register at all multiplies
+                // a dash — zero — by its operand, so its product is zero at
+                // any width and the fallbacks below cost nothing.
+                [self.a]
+                    .into_iter()
+                    .chain(match self.b {
+                        VecOperandB::Slot(s) => Some(s),
+                        VecOperandB::Imm(_) => None,
+                    })
+                    .filter(|s| !s.is_dash())
+                    .map(|s| s.elem_bytes() as u32)
+                    .max()
+                    .or_else(|| (!self.d.is_dash()).then(|| self.d.elem_bytes() as u32))
+                    .unwrap_or(self.lane_bits as u32 / 8)
+            };
             (
                 VecAluOp::from_mul_subop(self.subop, self.lane_bits as u32 / 8)?,
                 w,
@@ -2003,6 +2016,12 @@ impl VecInsn {
                     | Mulls
                     | Mulhd { .. }
                     | Mulhn { .. }
+                    // The multiplies leave the carry alone — measured with
+                    // `probes/setfmul.s`, where the flag comes out of one
+                    // exactly as it went in, both ways round — and set zero
+                    // and negative from the result like everything else.
+                    | Mulhdt { .. }
+                    | Mul32 { .. }
             ) {
                 return None;
             }
