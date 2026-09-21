@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1320 910" width="1320" height="910" data-board="d03115" role="img" aria-labelledby="sheet-title sheet-desc">
   <title id="sheet-title">Raspberry Pi 4 Model B, as rpi-virt-fw models it</title>
-  <desc id="sheet-desc">Board block diagram. The BCM2711 in the centre with its controller ports on the edges. Left: the SPI NOR flash on SPI0; the PMICs at 0x1E and 0x1B and the FXL6408 expander on I2C bus 8; LPDDR4 on the SDRAM controller. Right: the BCM54213PE PHY on GENET's MDIO bus; the VL805 xHCI controller and the VIA hub behind the PCIe root complex; the two HDMI outputs. Bottom: the microSD slot on EMMC2, the WiFi and Bluetooth module on the legacy EMMC, the USB-C port, which either the DWC2 core or the BCM2711's own xHCI drives, the 40-pin header on UART0 and BSC0, the camera and display connectors on BSC0. Every part carries the name of its spec in specs/, and every wire the parent link it draws.</desc>
+  <desc id="sheet-desc">Board block diagram. The BCM2711 in the centre with its controller ports on the edges. Left: the SPI NOR flash on SPI0; the PMICs at 0x1E and 0x1B and the FXL6408 expander on I2C bus 8; LPDDR4 on the SDRAM controller. Right: the BCM54213PE PHY on GENET's MDIO bus; the VL805 xHCI controller and the VIA hub behind the PCIe root complex; the two HDMI outputs. Bottom: the microSD slot on EMMC2, the CYW43455 WiFi and Bluetooth module, whose SDIO side is on the legacy EMMC and whose HCI side is on UART0, the USB-C port, which either the DWC2 core or the BCM2711's own xHCI drives, the 40-pin header on UART0 and BSC0, the camera and display connectors on BSC0. Every part carries the name of its spec in specs/, and every wire the parent link it draws.</desc>
   <style>
     /* palette: light. The dark twin is generated from this block —
        `cargo run -- spec-docs --update` after changing a colour here. */
@@ -372,8 +372,8 @@
   <!-- bottom wires -->
   <line class="w" x1="390" y1="710" x2="390" y2="780"/>
   <text class="mw" x="396" y="748">SD bus</text>
-  <line class="wd" x1="510" y1="710" x2="510" y2="780"/>
-  <text class="md" x="516" y="748">SDIO</text>
+  <line class="w" x1="510" y1="710" x2="510" y2="780"/>
+  <text class="mw" x="516" y="748">SDIO</text>
   <line class="w" x1="630" y1="710" x2="630" y2="780"/>
   <text class="mw" x="636" y="740">USB 2.0</text>
   <line class="w" x1="720" y1="710" x2="720" y2="780"/>
@@ -392,10 +392,10 @@
     <text class="m" x="390" y="827" text-anchor="middle">boot medium</text>
   </g>
   <g>
-    <rect class="partd" x="455" y="780" width="110" height="60" rx="2"/>
-    <text class="t" x="510" y="800" text-anchor="middle">WiFi · BT</text>
-    <text class="md" x="510" y="814" text-anchor="middle">not modelled</text>
-    <text class="md" x="510" y="827" text-anchor="middle">empty SDIO bus</text>
+    <rect class="part" x="455" y="780" width="110" height="60" rx="2"/>
+    <text class="t" x="510" y="800" text-anchor="middle">CYW43455</text>
+    <text class="m" x="510" y="814" text-anchor="middle">wlan0 · no radio</text>
+    <text class="m" x="510" y="827" text-anchor="middle">BT · HCI on UART0</text>
   </g>
   <g>
     <rect class="part" x="575" y="780" width="110" height="60" rx="2"/>
@@ -406,7 +406,7 @@
   <g>
     <rect class="part" x="695" y="780" width="110" height="60" rx="2"/>
     <text class="t" x="750" y="800" text-anchor="middle">40-pin header</text>
-    <text class="m" x="750" y="814" text-anchor="middle">ttyAMA0 console</text>
+    <text class="m" x="750" y="814" text-anchor="middle">console on GPIO 14/15</text>
     <text class="m" x="750" y="827" text-anchor="middle">HAT EEPROM · GPIO 0/1 ALT0</text>
   </g>
   <g>
