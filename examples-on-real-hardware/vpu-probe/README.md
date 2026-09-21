@@ -171,6 +171,9 @@ Two things are known to wedge it, both found the hard way:
 | `hgat00.s` | the control beside them — a plain `v8ld` over the same pointer table, which answers the pointer bytes where they answer zero |
 | `hbare03.s`, `hbare10.s`, `hbare11.s` | one of them as the blob's **first** instruction, no vector op before it: all three retire, which is what disproved the fence |
 | `hcmpA.s`-`hcmpC.s` | the same five sub-ops in three different orders, each naming the step it reached, so a stall says which instruction it stalled on |
+| `wide1.s`, `wide2.s` | a register **wider** than the operation: it is read at the operation's width, and the truncation is at the read, not the write |
+| `ldinert.s` | whether an 80-bit load reads its inert slot — it does not, same as the 48-bit one |
+| `lutdash.s` | what a `writelut` with a dash source puts in the table: zero |
 | `di11.s`, `two11.s`, `sr11.s` | what one of them does to interrupts, to a second one after it, and to the status register |
 | `after_ld.s`, `after_st.s`, `trap.s` | what still runs after one, and how a deliberate `bkpt` compares |
 | `ldop.s`, `stop.s`, `scop.s` | what gets a vector-B one past: a vector load does, a vector store and a scalar load do not |

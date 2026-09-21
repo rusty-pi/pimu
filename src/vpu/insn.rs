@@ -1439,14 +1439,18 @@ impl VecInsn {
         } else {
             (self.d, self.a)
         };
-        // The inert slot carries nothing of its own except — in the 80-bit
-        // encoding — the addend nibble the address reads as its `+=` step.
-        // In the 48-bit encoding a **load** ignores that slot altogether:
-        // measured, `v16ld HX(1,0),-+r5,(r4)` and `v16ld HX(3,0),HX(20,0),(r4)`
-        // both move exactly what the plain load moves. A store is another
-        // matter — one with an addend wrote nothing where the plain one wrote
-        // — so there the slot still has to be a bare dash.
-        let inert_free = !self.wide && !store;
+        // A **load** reads the inert slot for nothing, in either encoding:
+        // `v16ld HX(1,0),-+r5,(r4)` and `v16ld HX(3,0),HX(20,0),(r4)` move
+        // exactly what the plain load moves, and so — measured with
+        // `probes/ldinert.s` on a Raspberry Pi 4B d03115 — does the 80-bit
+        // `v8ld H(2,0),H(20,0),H(21,0) REP2` beside `v8ld H(0,0),-,H(21,0)
+        // REP2`: the two dumps are identical row for row.
+        //
+        // The one thing the slot still carries is the addend nibble an 80-bit
+        // address reads as its `+=` step, so a transfer that has one keeps the
+        // slot as it is. A store is another matter throughout — one with an
+        // addend wrote nothing where the plain one wrote.
+        let inert_free = !store && self.addr.is_none_or(|a| a.incr.is_none());
         if !inert_free && (!dash.is_dash() || dash.star || dash.inc) {
             // A store that names no address at all writes nothing, whatever
             // its slots hold — measured with `probes/st64.s`, which watched
@@ -1457,6 +1461,11 @@ impl VecInsn {
             return None;
         }
         if !inert_free && !self.wide && dash.addend != 15 {
+            // A store that names no address writes nothing whatever its slots
+            // hold, addend included — the same measurement as above.
+            if store && self.addr.is_none() && !self.b_is_dash() {
+                return Some(VecExec::NoEffect);
+            }
             return None;
         }
         if inert_free && dash.inc {
@@ -1645,10 +1654,12 @@ impl VecInsn {
                 addend: (slot.addend != 15).then_some(slot.addend),
             })
         };
+        // A dash A writes **zero** — into the table and into the destination
+        // alike. Measured with `probes/lutdash.s` on a Raspberry Pi 4B
+        // d03115: `v8memwrite H(2,0),-,H(21,0)` left every lane's destination
+        // zero, and the `v8memread` after it read zero back out of the table
+        // where the plain write had just put data.
         let a = if self.a.is_dash() {
-            if write {
-                return None; // nothing to write
-            }
             None
         } else {
             Some(operand(self.a)?)
@@ -1881,13 +1892,28 @@ impl VecInsn {
 
     /// The ALU-class ops whose semantics are measured, in either encoding.
     ///
-    /// A register may be *narrower* than the operation, and mostly is: the unit
-    /// reads the element at the register's own width and widens it — a byte
-    /// unsigned, a halfword signed — works at the operation's width, and
-    /// narrows the result back into the destination. A register wider than the
-    /// operation is refused: `binutils-vc4` cannot even spell one, and
-    /// `start4.elf` has thirteen. `SETF`, a scalar writeback, a `*` and the
-    /// five unpinned lane predicates all still fault.
+    /// A register may be either side of the operation's width, and the unit
+    /// converts at the **element**, in both directions:
+    ///
+    /// - *narrower*, which is the common case: the element is read at the
+    ///   register's own width and widened — a byte unsigned, a halfword
+    ///   signed — and the result is narrowed back into the destination.
+    /// - *wider*: the element is read at the **operation's** width, which is
+    ///   its low half, and then treated like any other source. Measured with
+    ///   `probes/wide1.s` and `probes/wide2.s` on a Raspberry Pi 4B d03115:
+    ///   `v16or HX(0,0),HY(20,0),0`, the same with the wide register in the B
+    ///   slot, `v16mov` and `v16add` all answer exactly what the `HX(20,0)`
+    ///   control answers, and `v16adds`, `v16shl` and `v16subs` over a wide A
+    ///   match their narrow controls lane for lane. The truncation is at the
+    ///   **read**, not at the write: `v16or HY(0,0),HY(20,0),0` — wide on both
+    ///   sides — answers the low halfword sign-extended into the 32-bit
+    ///   destination, not the 32-bit source untouched.
+    ///
+    /// The ALU class has only two widths, 16 and 32, so a 32-bit register in a
+    /// 16-bit operation is the whole of the wider case.
+    ///
+    /// `SETF`, a scalar writeback, a `*` and the five unpinned lane predicates
+    /// all still fault.
     fn alu(&self) -> Option<VecExec> {
         // Sub-ops from 48 up are the multiply group, and there the `L` bit
         // selects the family rather than the element width — which then comes
@@ -2041,10 +2067,7 @@ impl VecInsn {
 
     /// One slot as an execution operand: its window — whose elements may be
     /// narrower than the operation — plus its `+rN`.
-    fn operand(&self, slot: VecSlot, width: u32) -> Option<VecOperand> {
-        if slot.elem_bytes() as u32 > width {
-            return None;
-        }
+    fn operand(&self, slot: VecSlot, _width: u32) -> Option<VecOperand> {
         Some(VecOperand {
             reg: slot.window()?,
             addend: (slot.addend != 15).then_some(slot.addend),

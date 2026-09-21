@@ -432,9 +432,27 @@ title = "Operand width conversion"
 body = """
 The operation has a width of its own (`v8`, `v16`, `v32`) and the registers
 have theirs. Two thirds of the vector ALU instructions in `start4.elf` name
-registers **narrower** than the operation, and the unit converts.
+registers **narrower** than the operation, and the unit converts — but it
+converts the other way too, and the element is always addressed at the
+**register's** own width, which is where it lives.
 """
 columns = ["Direction", "Rule", "Source"]
+
+[[section.row]]
+cells = ["ALU source, a register **wider** than the operation", "read at the operation's width — the element's low half. `v16or HX(0,0),HY(20,0),0`, the same with the wide register in B, `v16mov` and `v16add` all answer what the `HX(20,0)` control answers, and `v16adds`, `v16shl` and `v16subs` match theirs lane for lane"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/wide1.s`, `probes/wide2.s`"
+confidence = "high"
+
+[[section.row]]
+cells = ["ALU result, into a destination **wider** than the operation", "sign-extended, not zero-extended: `v16or HY(2,0),HX(20,0),0` answers `0xffffffff` where the halfword is `0xffff`. The truncation on the source side is at the **read**, so `v16or HY(0,0),HY(20,0),0` — wide on both sides — answers the low halfword sign-extended, not the 32-bit source untouched"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/wide1.s`, `probes/wide2.s`"
+confidence = "high"
 
 [[section.row]]
 cells = ["source, byte register into a wider operation", "zero-extend"]
@@ -612,9 +630,28 @@ and take the ordinary base-plus-displacement address. `memread` and `memwrite`
 address neither: they are the unit's own lookup table, 1 KiB of it, banked
 sixteen ways so that each lane indexes its own 64 bytes.
 
-The sub-ops with no name of their own — 3, 7, 10-23 and 25-31 — all do the
-same small thing: each **writes a lane of zeros** at the operation's width and
-waits for nothing. It reads nothing at the address it is handed, leaves the
+The sub-ops with no name of their own — 3, 7, 10-23 and 25-31 — are
+**unallocated**, and there is no use for them. Their names are not the
+silicon's: `binutils-vc4` builds its mnemonic table from a CGEN enum over the
+5-bit sub-op field, so the list has to be 32 entries long, and the twenty-two
+Broadcom never documented were filled in from their own numbers —
+
+```scheme
+(define-normal-insn-enum
+  insn-vecmemops "Vector memory ops" () VMEMOP_ f-op9-5
+  (LD LOOKUPM LOOKUPML MEM03 ST INDEXWRITEM INDEXWRITEML MEM07
+   MEMREAD MEMWRITE MEM10 MEM11 MEM12 MEM13 MEM14 MEM15
+   MEM16 MEM17 MEM18 MEM19 MEM20 MEM21 MEM22 MEM23
+   GETACC MEM25 MEM26 MEM27 MEM28 MEM29 MEM30 MEM31)
+)
+```
+
+— which is where `mem31` comes from. The ALU class does the same, and that is
+what `vop62.1` is. This page keeps those names so that it, the model's
+disassembler and objdump all print the same thing.
+
+What the silicon does with one is uniform: it **answers a lane of zeros** at
+the operation's width and waits for nothing. It reads nothing at the address it is handed, leaves the
 lookup table alone, and retires in microseconds. A blob whose *first*
 instruction is one of them, with nothing vector before it at all, retires just
 the same.
@@ -633,6 +670,13 @@ wrong: a `v8ld` from an address holding zeros leaves a destination preset to
 all-ones reading `00ffffff` in every lane, and so does one of these. Handed a
 page of 16 known-good pointers, a plain `v8ld` answers the pointer bytes and
 `v8mem10` still answers zero — measured side by side, which is what settles it.
+
+That zero is a default, not an instruction — the result path with no sub-unit
+claiming it — and two things say so. Executing one leaves the vector memory
+unit in a state the firmware's own next memory operation cannot get past, and
+nothing anyone shipped behaves that way. And nothing executes one: every hit
+in `start4.elf` is a linear sweep landing in a jump table or a constant pool,
+which is the same reason 72 of the words below are ones objdump refuses too.
 
 Two things they do not share:
 
@@ -730,7 +774,7 @@ confidence = "high"
 subop    = 3
 mnemonic = "mem03"
 status   = "executes"
-cells    = ["3", "`mem03`", "writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The board goes on running"]
+cells    = ["3", "`mem03`", "**unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The board goes on running"]
 
 [[section.row.source]]
 kind       = "measured"
@@ -789,7 +833,7 @@ confidence = "high"
 subop    = 7
 mnemonic = "mem07"
 status   = "executes"
-cells    = ["7", "`mem07`", "writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The board goes on running"]
+cells    = ["7", "`mem07`", "**unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The board goes on running"]
 
 [[section.row.source]]
 kind       = "measured"
@@ -827,7 +871,7 @@ confidence = "high"
 subop    = 10
 mnemonic = "mem10"
 status   = "executes"
-cells    = ["10", "`mem10`", "writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction, *provided* its B slot is a scalar address: spelled with a **vector register** there it stalls the unit outright. The firmware is dead afterwards either way: the board answers no further mailbox call"]
+cells    = ["10", "`mem10`", "**unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction, *provided* its B slot is a scalar address: spelled with a **vector register** there it stalls the unit outright. The firmware is dead afterwards either way: the board answers no further mailbox call"]
 
 [[section.row.source]]
 kind       = "measured"
@@ -843,7 +887,7 @@ confidence = "high"
 subop    = 11
 mnemonic = "mem11"
 status   = "executes"
-cells    = ["11", "`mem11`", "writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call"]
+cells    = ["11", "`mem11`", "**unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call"]
 
 [[section.row.source]]
 kind       = "measured"
@@ -859,7 +903,7 @@ confidence = "high"
 subop    = 12
 mnemonic = "mem12"
 status   = "executes"
-cells    = ["12", "`mem12`", "writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call"]
+cells    = ["12", "`mem12`", "**unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call"]
 
 [[section.row.source]]
 kind       = "measured"
@@ -875,7 +919,7 @@ confidence = "high"
 subop    = 13
 mnemonic = "mem13"
 status   = "executes"
-cells    = ["13", "`mem13`", "writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call"]
+cells    = ["13", "`mem13`", "**unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call"]
 
 [[section.row.source]]
 kind       = "measured"
@@ -891,7 +935,7 @@ confidence = "high"
 subop    = 14
 mnemonic = "mem14"
 status   = "executes"
-cells    = ["14", "`mem14`", "writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call"]
+cells    = ["14", "`mem14`", "**unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call"]
 
 [[section.row.source]]
 kind       = "measured"
@@ -907,7 +951,7 @@ confidence = "high"
 subop    = 15
 mnemonic = "mem15"
 status   = "executes"
-cells    = ["15", "`mem15`", "writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call"]
+cells    = ["15", "`mem15`", "**unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call"]
 
 [[section.row.source]]
 kind       = "measured"
@@ -923,7 +967,7 @@ confidence = "high"
 subop    = 16
 mnemonic = "mem16"
 status   = "executes"
-cells    = ["16", "`mem16`", "writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction, *provided* its B slot is a scalar address: spelled with a **vector register** there it stalls the unit outright. The firmware is dead afterwards either way: the board answers no further mailbox call"]
+cells    = ["16", "`mem16`", "**unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction, *provided* its B slot is a scalar address: spelled with a **vector register** there it stalls the unit outright. The firmware is dead afterwards either way: the board answers no further mailbox call"]
 
 [[section.row.source]]
 kind       = "measured"
@@ -939,7 +983,7 @@ confidence = "high"
 subop    = 17
 mnemonic = "mem17"
 status   = "executes"
-cells    = ["17", "`mem17`", "writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call"]
+cells    = ["17", "`mem17`", "**unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call"]
 
 [[section.row.source]]
 kind       = "measured"
@@ -955,7 +999,7 @@ confidence = "high"
 subop    = 18
 mnemonic = "mem18"
 status   = "executes"
-cells    = ["18", "`mem18`", "writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call"]
+cells    = ["18", "`mem18`", "**unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call"]
 
 [[section.row.source]]
 kind       = "measured"
@@ -971,7 +1015,7 @@ confidence = "high"
 subop    = 19
 mnemonic = "mem19"
 status   = "executes"
-cells    = ["19", "`mem19`", "writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction, *provided* its B slot is a scalar address: spelled with a **vector register** there it stalls the unit outright. The firmware is dead afterwards either way: the board answers no further mailbox call"]
+cells    = ["19", "`mem19`", "**unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction, *provided* its B slot is a scalar address: spelled with a **vector register** there it stalls the unit outright. The firmware is dead afterwards either way: the board answers no further mailbox call"]
 
 [[section.row.source]]
 kind       = "measured"
@@ -987,7 +1031,7 @@ confidence = "high"
 subop    = 20
 mnemonic = "mem20"
 status   = "executes"
-cells    = ["20", "`mem20`", "writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call"]
+cells    = ["20", "`mem20`", "**unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call"]
 
 [[section.row.source]]
 kind       = "measured"
@@ -1003,7 +1047,7 @@ confidence = "high"
 subop    = 21
 mnemonic = "mem21"
 status   = "executes"
-cells    = ["21", "`mem21`", "writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call"]
+cells    = ["21", "`mem21`", "**unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call"]
 
 [[section.row.source]]
 kind       = "measured"
@@ -1019,7 +1063,7 @@ confidence = "high"
 subop    = 22
 mnemonic = "mem22"
 status   = "executes"
-cells    = ["22", "`mem22`", "writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call"]
+cells    = ["22", "`mem22`", "**unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call"]
 
 [[section.row.source]]
 kind       = "measured"
@@ -1035,7 +1079,7 @@ confidence = "high"
 subop    = 23
 mnemonic = "mem23"
 status   = "executes"
-cells    = ["23", "`mem23`", "writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call"]
+cells    = ["23", "`mem23`", "**unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call"]
 
 [[section.row.source]]
 kind       = "measured"
@@ -1072,7 +1116,7 @@ confidence = "high"
 subop    = 25
 mnemonic = "mem25"
 status   = "executes"
-cells    = ["25", "`mem25`", "writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call"]
+cells    = ["25", "`mem25`", "**unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call"]
 
 [[section.row.source]]
 kind       = "measured"
@@ -1088,7 +1132,7 @@ confidence = "high"
 subop    = 26
 mnemonic = "mem26"
 status   = "executes"
-cells    = ["26", "`mem26`", "writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call"]
+cells    = ["26", "`mem26`", "**unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call"]
 
 [[section.row.source]]
 kind       = "measured"
@@ -1104,7 +1148,7 @@ confidence = "high"
 subop    = 27
 mnemonic = "mem27"
 status   = "executes"
-cells    = ["27", "`mem27`", "writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call"]
+cells    = ["27", "`mem27`", "**unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call"]
 
 [[section.row.source]]
 kind       = "measured"
@@ -1120,7 +1164,7 @@ confidence = "high"
 subop    = 28
 mnemonic = "mem28"
 status   = "executes"
-cells    = ["28", "`mem28`", "writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction, *provided* its B slot is a scalar address: spelled with a **vector register** there it stalls the unit outright. The firmware is dead afterwards either way: the board answers no further mailbox call"]
+cells    = ["28", "`mem28`", "**unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction, *provided* its B slot is a scalar address: spelled with a **vector register** there it stalls the unit outright. The firmware is dead afterwards either way: the board answers no further mailbox call"]
 
 [[section.row.source]]
 kind       = "measured"
@@ -1136,7 +1180,7 @@ confidence = "high"
 subop    = 29
 mnemonic = "mem29"
 status   = "executes"
-cells    = ["29", "`mem29`", "writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction, *provided* its B slot is a scalar address: spelled with a **vector register** there it stalls the unit outright. The firmware is dead afterwards either way: the board answers no further mailbox call"]
+cells    = ["29", "`mem29`", "**unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction, *provided* its B slot is a scalar address: spelled with a **vector register** there it stalls the unit outright. The firmware is dead afterwards either way: the board answers no further mailbox call"]
 
 [[section.row.source]]
 kind       = "measured"
@@ -1152,7 +1196,7 @@ confidence = "high"
 subop    = 30
 mnemonic = "mem30"
 status   = "executes"
-cells    = ["30", "`mem30`", "writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction, *provided* its B slot is a scalar address: spelled with a **vector register** there it stalls the unit outright. The firmware is dead afterwards either way: the board answers no further mailbox call"]
+cells    = ["30", "`mem30`", "**unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction, *provided* its B slot is a scalar address: spelled with a **vector register** there it stalls the unit outright. The firmware is dead afterwards either way: the board answers no further mailbox call"]
 
 [[section.row.source]]
 kind       = "measured"
@@ -1168,7 +1212,7 @@ confidence = "high"
 subop    = 31
 mnemonic = "mem31"
 status   = "executes"
-cells    = ["31", "`mem31`", "writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction, *provided* its B slot is a scalar address: spelled with a **vector register** there it stalls the unit outright. The firmware is dead afterwards either way: the board answers no further mailbox call"]
+cells    = ["31", "`mem31`", "**unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction, *provided* its B slot is a scalar address: spelled with a **vector register** there it stalls the unit outright. The firmware is dead afterwards either way: the board answers no further mailbox call"]
 
 [[section.row.source]]
 kind       = "measured"
@@ -2401,9 +2445,11 @@ title = "What the model executes"
 body = """
 `VecInsn::executable` decides, by field rather than by whole-word template.
 A linear sweep of `start4.elf`'s `.text` with this decoder finds **14650**
-vector instructions, and **14328 of them execute**.
+vector instructions, and **14364 of them execute**. That denominator is a
+sweep, not a count of real instructions: it steps two bytes at a time and
+cannot tell a jump table from code, which is most of what is left over.
 
-The 322 that do not split by what `binutils-vc4` objdump makes of the same
+The 286 that do not split by what `binutils-vc4` objdump makes of the same
 address — a better measure than the page they sit in, since a linear sweep
 through a jump table produces valid-looking encodings by accident:
 """
@@ -2415,7 +2461,7 @@ passes.
 """
 
 [[section.row]]
-cells = ["149", "ALU sub-ops objdump itself only numbers — `vop48.1`, `vop49.1` and so on up to `vop63.1`, with 63 alone accounting for 75. Neither decoder has a form for them"]
+cells = ["149", "ALU sub-ops objdump itself only numbers — `vop48.1`, `vop49.1` and so on up to `vop63.1`, with 63 alone accounting for 75. The name is a CGEN enum slot, the same way `mem31` is; neither decoder has a form for them"]
 
 [[section.row.source]]
 kind       = "decompile"
@@ -2423,7 +2469,7 @@ ref        = "`binutils-vc4` objdump over the same addresses"
 confidence = "high"
 
 [[section.row]]
-cells = ["78", "words objdump prints raw, as `vec48` or `vec80`: it recognises the class and nothing inside it"]
+cells = ["72", "words objdump prints raw, as `vec48` or `vec80`: it recognises the class and nothing inside it"]
 
 [[section.row.source]]
 kind       = "decompile"
@@ -2431,7 +2477,7 @@ ref        = "`binutils-vc4` objdump over the same addresses"
 confidence = "high"
 
 [[section.row]]
-cells = ["44", "memory-class words objdump spells `vunkld`, `vunkst` or `vunklookupml` — its own name for a transfer whose operands do not fit any form it knows"]
+cells = ["44", "memory-class words objdump spells `vunkld`, `vunkst` or `vunklookupml` — its own name for a transfer whose operands fit no form it knows"]
 
 [[section.row.source]]
 kind       = "decompile"
@@ -2439,7 +2485,7 @@ ref        = "`binutils-vc4` objdump over the same addresses"
 confidence = "high"
 
 [[section.row]]
-cells = ["28", "ordinary instructions objdump names and this decoder refuses, one or two of a kind. The largest group names a register **wider** than the operation — `v16odd H(33,16),HY(58,0),…` — and the rest are singletons"]
+cells = ["11", "addresses objdump does not decode at all: the two linear sweeps drifting apart inside data"]
 
 [[section.row.source]]
 kind       = "decompile"
@@ -2447,15 +2493,7 @@ ref        = "`binutils-vc4` objdump over the same addresses"
 confidence = "high"
 
 [[section.row]]
-cells = ["17", "addresses objdump does not decode at all: the two linear sweeps drifting apart inside data"]
-
-[[section.row.source]]
-kind       = "decompile"
-ref        = "`binutils-vc4` objdump over the same addresses"
-confidence = "high"
-
-[[section.row]]
-cells = ["6", "`v16bitplanes`, which objdump names and this model does not carry out"]
+cells = ["10", "ordinary instructions objdump names and this decoder refuses, each one of a kind. Three of them objdump cannot spell either — it prints the B operand `r56?bit4??bit5?`, a 48-bit scalar field naming a register past `r31` — and the rest are lone combinations: a `*` on a slot, `CLRA HIGH SUB` with no `ENA`, a multiply naming no register at all"]
 
 [[section.row.source]]
 kind       = "decompile"

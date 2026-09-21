@@ -1252,8 +1252,7 @@ impl Vpu {
                                                 if step_a { rep } else { 0 },
                                                 add,
                                             );
-                                            let w = o.reg.elem_bytes as u32;
-                                            widen(self.vrf.read(row, e, w), w)
+                                            source(&self.vrf, o.reg, row, e, width)
                                         }
                                     };
                                 }
@@ -1269,8 +1268,7 @@ impl Vpu {
                                     Some(o) => {
                                         let (row, e) =
                                             o.reg.lane(ai, if step_a { rep } else { 0 }, a_add);
-                                        let w = o.reg.elem_bytes as u32;
-                                        widen(self.vrf.read(row, e, w), w)
+                                        source(&self.vrf, o.reg, row, e, width)
                                     }
                                 };
                                 let bv = match b {
@@ -1282,8 +1280,7 @@ impl Vpu {
                                         let add = o.addend.map_or(0, |r| self.regs.get(r as usize));
                                         let (row, e) =
                                             o.reg.lane(bi, if step_a { rep } else { 0 }, add);
-                                        let w = o.reg.elem_bytes as u32;
-                                        widen(self.vrf.read(row, e, w), w)
+                                        source(&self.vrf, o.reg, row, e, width)
                                     }
                                 };
                                 // The two interleaves take odd lanes from B and
@@ -1406,7 +1403,19 @@ impl Vpu {
                                 if let Some(o) = d {
                                     let (row, e) =
                                         o.reg.lane(lane, if step_d { rep } else { 0 }, d_add);
-                                    self.vrf.write(row, e, o.reg.elem_bytes as u32, res);
+                                    // The result leaves the operation at the
+                                    // operation's width and is widened into a
+                                    // destination register that is wider —
+                                    // signed, like a halfword source.
+                                    // `v16or HY(2,0),HX(20,0),0` answers
+                                    // `0xffffffff` where the halfword is
+                                    // `0xffff`, measured with `probes/wide1.s`.
+                                    self.vrf.write(
+                                        row,
+                                        e,
+                                        o.reg.elem_bytes as u32,
+                                        widen(res, width),
+                                    );
                                 }
                                 if let Some((func, _)) = sru {
                                     // The lane's contribution to the scalar
@@ -1589,10 +1598,12 @@ impl Vpu {
                                 let base = lane as usize * vrf::LUT_LANE;
                                 let at = (at as usize).wrapping_mul(width as usize) % vrf::LUT_LANE;
                                 let value = if write {
-                                    let o = a.expect("a write has data");
-                                    let (row, e) =
-                                        o.reg.lane(lane, if step { rep } else { 0 }, a_add);
-                                    let v = self.vrf.read(row, e, o.reg.elem_bytes as u32);
+                                    // A dash source writes zero. Measured.
+                                    let v = a.map_or(0, |o| {
+                                        let (row, e) =
+                                            o.reg.lane(lane, if step { rep } else { 0 }, a_add);
+                                        self.vrf.read(row, e, o.reg.elem_bytes as u32)
+                                    });
                                     for i in 0..width as usize {
                                         self.vrf.lut[base + (at + i) % vrf::LUT_LANE] =
                                             (v >> (8 * i)) as u8;
@@ -1982,6 +1993,21 @@ fn set_flag(flags: &mut u16, bit: u16, on: bool) {
     } else {
         *flags &= !bit;
     }
+}
+
+/// One ALU source element, converted into the operation's width.
+///
+/// The element is addressed at the register's own width — that is where it
+/// lives — and the two widths then meet: a register narrower than the
+/// operation is widened (a byte unsigned, a halfword signed), and one *wider*
+/// is truncated to the operation's width, which is its low half. Measured
+/// with `probes/wide1.s` and `probes/wide2.s` on a Raspberry Pi 4B d03115.
+fn source(vrf: &Vrf, reg: VecReg, row: u8, e: u32, width: u32) -> u32 {
+    let w = reg.elem_bytes as u32;
+    let v = vrf.read(row, e, w);
+    let w = w.min(width);
+    let v = if w >= 4 { v } else { v & ((1 << (w * 8)) - 1) };
+    widen(v, w)
 }
 
 fn widen(v: u32, from_bytes: u32) -> u32 {
