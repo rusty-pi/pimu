@@ -81,8 +81,9 @@ counts still needs the re-record, and the diff then documents that it did.
 
 `scenarios/*.toml` run a hand-assembled VPU payload (`src/harness/payloads.rs`)
 against a small machine and diff the console with `golden/`. `cargo test` runs
-them through `tests/scenarios.rs`; `rpi-virt-fw run-all -v` runs them with their
-transcripts.
+them through `tests/scenarios.rs`; `rpi-virt-fw run-all -v` runs them all with
+their transcripts, and `rpi-virt-fw run testdata/scenarios/hello-vpu.toml -v`
+runs one.
 
 ```toml
 name = "hello-vpu"

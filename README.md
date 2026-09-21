@@ -39,34 +39,31 @@ whether the boot got where it was meant to (`result: ok — the firmware started
 the ARM`), with exit status 1 when it did not. `-v` adds the full run report.
 In a directory that holds the files themselves every option naming one can be
 left out — `pieeprom.bin` is `--eeprom`, and so are `sd.img`, `usb.img`,
-`otg.img`, `netboot/`, `otp.json` or `otp.bin`, `bootconf.txt` and `pubkey.bin`
-— so `rpi-virt-fw boot` boots from what is there and names on stderr what it
-picked up.
+`otg.img`, `netboot/`, `otp.json` or `otp.bin`, `bootconf.txt` (a `--bootconf`
+line each) and `pubkey.bin`
+([#114](https://github.com/valtzu/rpi-virt-fw/issues/114)) — so
+`rpi-virt-fw boot` boots from what is there and names on stderr what it picked
+up. [`docs/running.md`](docs/running.md) has the boot media, the cards and the
+rest of the options; `rpi-virt-fw boot --help` lists them all.
 
-## Status
+## Commands
 
-The full EEPROM → BOOTLOADER → `start4.elf` → `arm_loader` chain runs from every
-boot medium CI checks: SD card, USB mass storage on the VL805 and on the USB-C
-port's own xHCI, TFTP and HTTP network boot. `arm_loader` then releases the four
-A72 cores, the firmware's own armstub drops them to EL2 and enters the kernel,
-and Linux boots off the SD card's ext4 root to a busybox shell on the serial
-console (about three minutes on a dev box).
+| Command | What it does |
+|---|---|
+| `boot` | Boot the machine from an EEPROM image, as a Pi 4 does, or run a VPU ELF. |
+| `boot-check <scenario.toml>` | Run the boot a scenario describes and check its transcript, milestones and retired counts. `--plan` prints the `boot` invocation instead. |
+| `run <scenario.toml>`, `run-all [<dir>]` | The in-process scenarios, against their golden transcripts. |
+| `disasm <file>` | Disassemble a flat binary or ELF with the VPU decoder: `disasm firmware/start4.elf --base 0xcec00200 --count 40`. |
+| `spec-docs [--update]` | Check (or regenerate) `docs/periph/` against `specs/*.toml`, and the dark board sheet against the hand-drawn one. |
 
-No firmware behaviour is short-circuited and the boot needs no opt-in shims or
-environment variables. The one thing that fails on purpose is the HDMI EDID
-read: the DDC I²C masters are modelled and nothing acknowledges the EDID
-EEPROM's address, because the reference board has no monitor plugged in
-([#15](https://github.com/valtzu/rpi-virt-fw/issues/15)).
+## Features
 
-Not done: most of the VPU vector unit (a short list of exactly matched forms
-runs, the rest stop as `Unimpl`), HTTPS network boot
-([#44](https://github.com/valtzu/rpi-virt-fw/issues/44)), and under Linux a
-display and networking past the `bcmgenet` probe. Linux does reach `start4`'s
-crypto service through `/dev/vcio_crypto` (`linux.toml` checks the HMAC
-[rpi-mkosi#37](https://github.com/valtzu/rpi-mkosi/issues/37) needs), and USB
-mass storage far enough to boot the rpi-mkosi image with `--usb`.
-
-## What is modelled
+The whole chain: EEPROM → BOOTLOADER → `start4.elf` → `arm_loader` from SD card,
+USB mass storage on the VL805 and on the USB-C port's own xHCI, TFTP and HTTP
+network boot; then the four A72 cores `arm_loader` releases, through the
+firmware's own armstub into the kernel, and Linux off the card's ext4 root to a
+busybox shell on the serial console. No firmware behaviour is short-circuited,
+and no boot needs an opt-in shim or environment variable.
 
 - **VideoCore IV scalar interpreter** (`src/vpu/`) — the 16-, 32- and 48-bit
   scalar forms `start4` executes, both VPU cores, exception and interrupt
@@ -116,6 +113,21 @@ mass storage far enough to boot the rpi-mkosi image with `--usb`.
 - **Regression harness** (`src/harness/`) — scenarios in, console transcript
   out, diffed against a golden file. See
   [`testdata/README.md`](testdata/README.md).
+
+### Limits
+
+The HDMI EDID read fails on purpose: the DDC I²C masters are modelled and
+nothing acknowledges the EDID EEPROM's address, because the reference board has
+no monitor plugged in
+([#15](https://github.com/valtzu/rpi-virt-fw/issues/15)).
+
+Not there yet: most of the VPU vector unit (a short list of exactly matched
+forms runs, the rest stop as `Unimpl`), HTTPS network boot
+([#44](https://github.com/valtzu/rpi-virt-fw/issues/44)), and under Linux a
+display and networking past the `bcmgenet` probe. Linux does reach `start4`'s
+crypto service through `/dev/vcio_crypto` (`linux.toml` checks the HMAC
+[rpi-mkosi#37](https://github.com/valtzu/rpi-mkosi/issues/37) needs), and USB
+mass storage far enough to boot the rpi-mkosi image with `--usb`.
 
 ## Tests
 
