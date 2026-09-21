@@ -18,6 +18,7 @@ Each line is acked through the word named after it. Neither core enables them on
 
 - decompile (high): ISR `0x3ED3A098` (handler table `gp+58004`) does `[ACK76] &= ~[PENDING]`, and `ACK77` for 77
 - trace (high): `--log irqen`: neither core calls `enable_irq_source` for 76 or 77
+- datasheet (high): BCM2711 ARM Peripherals, §6.2.4 Table 102: VC peripheral IRQs 12 and 13 are `Multicore Sync 0` and `Multicore Sync 1`, sources 76 and 77 — _IRQs 14 and 15 are `Multicore Sync 2` and `Multicore Sync 3`, the sources 78 and 79 start4 posts in software as its reschedule IPI; they are not acked through this block_
 
 ## Register map
 

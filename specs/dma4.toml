@@ -30,6 +30,31 @@ ref        = "stock bootloader USB boot: the control block it starts the channel
 confidence = "high"
 note       = "The firmware's own USB boot depends on the engine reading what the VPU left in the L2, so `--check-coherency` treats this channel as coherent. The word it DMAs a register into is still read back through `0xC000_0000` by both stock and ours, which is what makes that safe either way."
 
+[[block.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §4.6: the DMA4 engines have an uncoupled read/write design, reach the full 35-bit address bus and so bypass the `PAGE` / `PAGELITE` windows the other engines page through, and \"DMA channel 11 is additionally able to access the PCIe interface\""
+confidence = "high"
+
+[[block.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §4.2.1.2 Table 37: channel 11's registers are `CS` `0xB00`, `CB` `0xB04`, `DEBUG` `0xB0C`, then CB words `TI` `0xB10`, `SRC` `0xB14`, `SRCI` `0xB18`, `DEST` `0xB1C`, `DESTI` `0xB20`, `LEN` `0xB24`, `NEXT_CB` `0xB28` and `DEBUG2` `0xB2C`"
+confidence = "high"
+
+[block.irq]
+vpu     = 89
+gic_spi = 89
+notes   = "Channel 11's completion. The four DMA4 channels 11 to 14 take their lines in order, 89 to 92, and the same number on both controllers."
+
+[[block.irq.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §6.2.4 Table 102: VC peripheral IRQs 25 to 28 are `DMA 11` to `DMA 14`, VPU sources 89 to 92 and, 64 above the IRQ number again, `GIC_SPI 89` to `GIC_SPI 92`"
+confidence = "high"
+
+[[block.irq.source]]
+kind       = "linux"
+ref        = "`firmware/bcm2711-rpi-4-b.dtb` `/scb/dma@7e007b00`: `interrupts = <0x0 0x59 0x4>, <0x0 0x5a 0x4>, <0x0 0x5b 0x4>, <0x0 0x5c 0x4>`"
+confidence = "high"
+
 [[register]]
 name   = "CS"
 offset = 0x00
@@ -114,12 +139,18 @@ ref        = "bootloader submit path writes `DEBUG = 0x400` first"
 confidence = "high"
 
 [[register]]
-name   = "REG_28"
+name   = "NEXT_CB"
 offset = 0x28
 access = "rw"
-notes  = "Past the channel's control-block registers. The bootloader writes 0 here once, as it puts the channel away after its last transfer, and never reads it. Meaning unknown."
+notes  = "Word 6 of the control block the channel loaded: the address of the next one, or 0 to end the chain. The bootloader writes 0 here once, as it puts the channel away after its last transfer, and never reads it."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §4.2.1.2 Table 37: `11_NEXT_CB` at `0x7E007B28`, \"DMA4 Channel 11 CB Word 6\""
+confidence = "high"
 
 [[register.source]]
 kind       = "trace"
 ref        = "bootmain `0x0008B668`: `0x00000000` to `0x7E007B28`, the only access to the word in a boot"
 confidence = "high"
+note       = "recorded as `REG_28`, meaning unknown, until the datasheet named it"

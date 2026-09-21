@@ -21,6 +21,7 @@ Interrupts (GIC id 208 (`GIC_SPI 176`)):
 Level-triggered, so the line follows interrupter 0's `IMAN.IP` (GIC id 208 — Linux reports 32 higher than the device tree's number). The VPU has no source of its own for this block: the bootloader polls `USBSTS` and the event ring, as it does behind the VL805.
 
 - linux (high): `bcm2711-rpi-4-b.dtb` `/scb/xhci@7e9c0000`: `interrupts <0x0 0xb0 0x4>`
+- datasheet (high): BCM2711 ARM Peripherals, §6.2.5 Table 103: the ETH_PCIe level-2 controller's IRQ 48 is `USB0_XHCI_0`, which the device tree numbers `128 + 48` — 176 — _Confirms the note above that the VPU has no source of its own for this block: Table 102 gives the 57 ETH_PCIe lines one ORed source, 122._
 
 ## Register map
 

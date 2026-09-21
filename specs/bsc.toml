@@ -36,6 +36,21 @@ kind       = "decompile"
 ref        = "`FUN_0ecf0ed0`: bus id 8; `pmic_init` `0x3ED4DAA8` uses it"
 confidence = "high"
 
+[block.irq]
+vpu     = 117
+gic_spi = 117
+notes   = "One line for every I²C master on the chip; `PACTL_CS` bits 8 to 15 say which of them is pending. start4 polls `S.DONE` rather than taking it."
+
+[[block.irq.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §6.2.4 Table 102: VC peripheral IRQ 53 is the OR of all I²C masters, VPU source 117; §6.2.4 Figure 6 puts I2C0 on `PACTL_CS` bit 8"
+confidence = "high"
+
+[[block.irq.source]]
+kind       = "linux"
+ref        = "`firmware/bcm2711-rpi-4-b.dtb`: `/soc/i2c@7e205000`, the masters at `0x7e205600`..`0x7e205c00` and `/soc/i2c@7e804000` all carry `interrupts = <0x0 0x75 0x4>`"
+confidence = "high"
+
 [[register]]
 name   = "C"
 offset = 0x00

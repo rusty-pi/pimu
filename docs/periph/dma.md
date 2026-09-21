@@ -5,7 +5,7 @@
 - Bus: `vpu` (VPU bus address)
 - Base: `0x7E007000`
 - Size: `0x1000`
-- Interrupts: `CH0` GIC id 112 (`GIC_SPI 80`) · `CH1` GIC id 113 (`GIC_SPI 81`) · `CH2` GIC id 114 (`GIC_SPI 82`) · `CH3` GIC id 115 (`GIC_SPI 83`) · `CH4` GIC id 116 (`GIC_SPI 84`) · `CH5` GIC id 117 (`GIC_SPI 85`) · `CH6` GIC id 118 (`GIC_SPI 86`) · `CH7_8` GIC id 119 (`GIC_SPI 87`) · `CH9_10` GIC id 120 (`GIC_SPI 88`)
+- Interrupts: `CH0` VPU source 80 · `CH1` VPU source 81 · `CH15` VPU source 95 · `CH2` VPU source 82 · `CH3` VPU source 83 · `CH4` VPU source 84 · `CH5` VPU source 85 · `CH6` VPU source 86 · `CH7_8` VPU source 87 · `CH9_10` VPU source 88 · `CH0` GIC id 112 (`GIC_SPI 80`) · `CH1` GIC id 113 (`GIC_SPI 81`) · `CH2` GIC id 114 (`GIC_SPI 82`) · `CH3` GIC id 115 (`GIC_SPI 83`) · `CH4` GIC id 116 (`GIC_SPI 84`) · `CH5` GIC id 117 (`GIC_SPI 85`) · `CH6` GIC id 118 (`GIC_SPI 86`) · `CH7_8` GIC id 119 (`GIC_SPI 87`) · `CH9_10` GIC id 120 (`GIC_SPI 88`)
 
 start4 copies anything of 1 KiB or more through here (`dma_memcpy`). Channel 11's slot at `+0xB00` is the DMA4 channel (`dma4`), decoded ahead of this block. The `0x7EE04100` controller (`dma_vpu`) has the same channel layout. A control block's addresses are VC4 bus addresses, alias bits and all, and the engine sits behind the L2: only `0xC000_0000` goes past the caches.
 
@@ -14,13 +14,15 @@ Sources:
 - datasheet (high): BCM2711 ARM Peripherals, DMA Controller chapter: channel register blocks `0x100` apart, `INT_STATUS` / `ENABLE` at `0xFE0` / `0xFF0`
 - decompile (high): `dma_memcpy` `0x3EC981CC`; `dma_set_cs` `0x3EC98E7C`: `base = ch < 15 ? 0x7E007000 : 0x7EE04100`, `start = *(base + ch * 0x100) = flags | 1`
 - trace (high): stock bootloader and start4 `dma_memcpy` transfers with `--log dma`: every control block this boot uses has both ends in the `0x0` alias, and the destination is read straight back through a cached alias with no flush in between — _So a transfer at a cached alias is coherent with the VPU, and `--check-coherency` only counts one at `0xC000_0000` as going behind the caches. Marking every legacy-DMA write as uncached reports ~11k stale reads in a stock boot that works on silicon._
+- datasheet (high): BCM2711 ARM Peripherals, §4.2: 16 channels, channel 0 at `0x7E007000` and each next one `0x100` above it, four of them DMA Lite (7 to 10) and four DMA4 (11 to 14); channel 15 sits apart at `0x7EE05000` and is the VPU's alone
 
-Interrupts (`CH0` GIC id 112 (`GIC_SPI 80`) · `CH1` GIC id 113 (`GIC_SPI 81`) · `CH2` GIC id 114 (`GIC_SPI 82`) · `CH3` GIC id 115 (`GIC_SPI 83`) · `CH4` GIC id 116 (`GIC_SPI 84`) · `CH5` GIC id 117 (`GIC_SPI 85`) · `CH6` GIC id 118 (`GIC_SPI 86`) · `CH7_8` GIC id 119 (`GIC_SPI 87`) · `CH9_10` GIC id 120 (`GIC_SPI 88`)):
+Interrupts (`CH0` VPU source 80 · `CH1` VPU source 81 · `CH15` VPU source 95 · `CH2` VPU source 82 · `CH3` VPU source 83 · `CH4` VPU source 84 · `CH5` VPU source 85 · `CH6` VPU source 86 · `CH7_8` VPU source 87 · `CH9_10` VPU source 88 · `CH0` GIC id 112 (`GIC_SPI 80`) · `CH1` GIC id 113 (`GIC_SPI 81`) · `CH2` GIC id 114 (`GIC_SPI 82`) · `CH3` GIC id 115 (`GIC_SPI 83`) · `CH4` GIC id 116 (`GIC_SPI 84`) · `CH5` GIC id 117 (`GIC_SPI 85`) · `CH6` GIC id 118 (`GIC_SPI 86`) · `CH7_8` GIC id 119 (`GIC_SPI 87`) · `CH9_10` GIC id 120 (`GIC_SPI 88`)):
 
-A channel's line is up while its `CS.INT` is, and the driver acknowledges by writing that bit back. Channels 0 to 6 have a line each; the four 'DMA lite' channels 7 to 10 share two. Channels 11 and up have no line here. The VPU's own controller takes the same completions as sources 80 to 95 (`src/machine.rs`, `dma_irq_source`).
+A channel's line is up while its `CS.INT` is, and the driver acknowledges by writing that bit back. Channels 0 to 6 have a line each; the four 'DMA lite' channels 7 to 10 share two. The VPU's own controller takes all sixteen, as sources 80 to 95 (`src/machine.rs`, `dma_irq_source`) — channel 15 out of order at 95, with `AUX` and `ARM` on 93 and 94 in between. Channels 11 to 14 are the DMA4 engines and their lines, 89 to 92, belong to that spec (`specs/dma4.toml`); channel 15 reaches the ARM on neither controller.
 
 - linux (high): `bcm2711.dtsi`: `dma-controller@7e007000` `interrupts = <GIC_SPI 80 ...>` through `<GIC_SPI 86 ...>`, then `87`, `87`, `88`, `88` for the `/* DMA lite 7 - 10 */` channels, named `dma0`..`dma10`
 - linux (high): `bcm2835_dma_callback` (`drivers/dma/bcm2835-dma.c`) acknowledges with `writel(BCM2835_DMA_INT, c->chan_base + BCM2835_DMA_CS)`
+- datasheet (high): BCM2711 ARM Peripherals, §6.2.4 Table 102: VC peripheral IRQs 16 to 22 are `DMA 0` to `DMA 6`, 23 `DMA 7 & 8`, 24 `DMA 9 & 10` and 31 `DMA 15` — VPU sources 80 to 88 and 95. IRQs 25 to 28 (sources 89 to 92) are the DMA4 channels 11 to 14
 
 ## Register map
 
@@ -81,7 +83,7 @@ Sources:
 
 Offset `0x008`, 15 elements 0x100 apart · access `r` · 32 bits
 
-Transfer information, loaded from the control block. Control blocks use the same bit layout.
+Transfer information, loaded from the control block. Control blocks use the same bit layout. The model acts on the four fields below it needs for a memory-to-memory copy; the pacing, burst and width fields are recorded but ignored, which is safe only while nothing in a boot paces a transfer off a peripheral.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -89,26 +91,81 @@ Transfer information, loaded from the control block. Control blocks use the same
 | 1 | `TDMODE` | r | 2D mode: `TXFR_LEN` is `YLENGTH:XLENGTH` and `STRIDE` applies. |
 | 4 | `DEST_INC` | r | Increment the destination address. |
 | 8 | `SRC_INC` | r | Increment the source address. |
+| 3 | `WAIT_RESP` | r | Wait for each write's AXI response before going on, so writes cannot stack up in the bus pipeline. |
+| 5 | `DEST_WIDTH` | r | Destination write width: 0 is 32-bit, 1 is 128-bit. |
+| 6 | `DEST_DREQ` | r | Gate the destination writes on the DREQ `PERMAP` selects. |
+| 7 | `DEST_IGNORE` | r | Do not write to the destination at all. |
+| 9 | `SRC_WIDTH` | r | Source read width: 0 is 32-bit, 1 is 128-bit. |
+| 10 | `SRC_DREQ` | r | Gate the source reads on the DREQ `PERMAP` selects. |
+| 11 | `SRC_IGNORE` | r | Do not read the source at all. |
+| 15:12 | `BURST_LENGTH` | r | How many words the channel tries to transfer per burst; 0 is a single transfer. |
+| 20:16 | `PERMAP` | r | Which peripheral's DREQ paces the transfer, 1 to 31; 0 is a continuous unpaced transfer. The peripherals are 1 `DSI0` / `PWM1`, 2 `PCM TX`, 3 `PCM RX`, 4 `SMI`, 5 `PWM0`, 6 `SPI0 TX`, 7 `SPI0 RX`, 8 `BSC/SPI Slave TX`, 9 `BSC/SPI Slave RX`, 10 `HDMI0`, 11 `e.MMC`, 12 `UART0 TX`, 13 `SD HOST`, 14 `UART0 RX`, 15 `DSI1`, 16 `SPI1 TX`, 17 `HDMI1`, 18 `SPI1 RX`, 19 `UART3 TX` / `SPI4 TX`, 20 `UART3 RX` / `SPI4 RX`, 21 `UART5 TX` / `SPI5 TX`, 22 `UART5 RX` / `SPI5 RX`, 23 `SPI6 TX`, 24 `Scaler FIFO 0 & SMI`, 25 `Scaler FIFO 1 & SMI`. The model ignores the field: every transfer in a boot is memory to memory with `PERMAP` 0. |
+| 25:21 | `WAITS` | r | Dummy cycles to burn after each read or write, to slow the channel down. |
+| 26 | `NO_WIDE_BURST` | r | Do not turn a wide write into a 2-beat burst. |
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, DMA: `TI`
+- datasheet (high): BCM2711 ARM Peripherals, §4.2.1.2 Table 40 (`0_TI` to `6_TI`); Table 47 is the DMA Lite channels’ cut-down version of the same word
 
 `INTEN` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, DMA: `TI`
+- datasheet (high): BCM2711 ARM Peripherals, §4.2.1.2 Table 40 (`0_TI` to `6_TI`); Table 47 is the DMA Lite channels’ cut-down version of the same word
 
 `TDMODE` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, DMA: `TI`
+- datasheet (high): BCM2711 ARM Peripherals, §4.2.1.2 Table 40 (`0_TI` to `6_TI`); Table 47 is the DMA Lite channels’ cut-down version of the same word
 
 `DEST_INC` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, DMA: `TI`
+- datasheet (high): BCM2711 ARM Peripherals, §4.2.1.2 Table 40 (`0_TI` to `6_TI`); Table 47 is the DMA Lite channels’ cut-down version of the same word
 
 `SRC_INC` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, DMA: `TI`
+- datasheet (high): BCM2711 ARM Peripherals, §4.2.1.2 Table 40 (`0_TI` to `6_TI`); Table 47 is the DMA Lite channels’ cut-down version of the same word
+
+`WAIT_RESP` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §4.2.1.2 Table 40
+
+`DEST_WIDTH` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §4.2.1.2 Table 40
+
+`DEST_DREQ` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §4.2.1.2 Table 40
+
+`DEST_IGNORE` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §4.2.1.2 Table 40
+
+`SRC_WIDTH` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §4.2.1.2 Table 40
+
+`SRC_DREQ` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §4.2.1.2 Table 40
+
+`SRC_IGNORE` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §4.2.1.2 Table 40
+
+`BURST_LENGTH` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §4.2.1.2 Table 40
+
+`PERMAP` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §4.2.1.2 Table 40 for the field, §4.2.1.3 for the DREQ each number selects
+
+`WAITS` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §4.2.1.2 Table 40
+
+`NO_WIDE_BURST` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §4.2.1.2 Table 40
 
 ## `SOURCE_AD`
 

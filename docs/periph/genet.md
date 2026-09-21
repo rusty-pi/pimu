@@ -20,6 +20,7 @@ Interrupts (`INTRL2_0` GIC id 189 (`GIC_SPI 157`) · `INTRL2_1` GIC id 190 (`GIC
 Each level-2 controller drives its own line while an unmasked status bit is set.
 
 - linux (high): `ethernet@7d580000`, `interrupts = <GIC_SPI 157 IRQ_TYPE_LEVEL_HIGH>, <GIC_SPI 158 IRQ_TYPE_LEVEL_HIGH>`; `bcmgenet.c` takes them as `INTRL2_0`, `INTRL2_1`
+- datasheet (high): BCM2711 ARM Peripherals, §6.2.5 Table 103: the ETH_PCIe level-2 controller's IRQs 29 and 30 are `GENET_0_A` and `GENET_0_B`, which the device tree numbers `128 + n` — 157 and 158
 
 ## Register map
 

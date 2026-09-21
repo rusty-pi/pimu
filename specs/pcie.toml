@@ -39,6 +39,12 @@ kind       = "measured"
 ref        = "Raspberry Pi 4B d03115: `/proc/interrupts` shows id 175 as `GICv2 175 Level PCIe PME, aerdrv`"
 confidence = "high"
 
+[[block.irq.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §6.2.5 Table 103: the ETH_PCIe level-2 controller's IRQ 15 is `PCIE_0_INTA` and its IRQ 20 is `PCIE_0_MSI`. §6.3 Figure 7 lands those 57 lines on GIC SPI ids 160 to 216, so the device tree numbers them `128 + n` — 143 and 148"
+confidence = "high"
+note       = "The VPU sees none of them individually: Table 102’s IRQ 58 is all 57 ORed together, VPU source 122."
+
 [[register]]
 name   = "RC_DEVCTL"
 offset = 0x0B4

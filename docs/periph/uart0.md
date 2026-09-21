@@ -5,7 +5,7 @@
 - Bus: `vpu` (VPU bus address)
 - Base: `0x7E201000`
 - Size: `0x1000`
-- Interrupts: GIC id 153 (`GIC_SPI 121`)
+- Interrupts: VPU source 121 · GIC id 153 (`GIC_SPI 121`)
 
 Transmit completes instantly in the model; receive is paced at the programmed baud rate against the modelled clock.
 
@@ -15,11 +15,12 @@ Sources:
 - linux (high): dtb start4 hands to Linux: `serial@7e201000`, `arm,pl011`, GIC SPI 121
 - inferred (medium): size: one 4 KiB page, the granularity of this window
 
-Interrupts (GIC id 153 (`GIC_SPI 121`)):
+Interrupts (VPU source 121 · GIC id 153 (`GIC_SPI 121`)):
 
-Linux's `ttyAMA0`. The firmware polls the FIFO instead of taking the line.
+Linux's `ttyAMA0`. The firmware polls the FIFO instead of taking the line. The line is shared: it is the OR of all five PL011 UARTs, and `PACTL_CS` bits 16 to 20 say which of them is pending.
 
 - linux (high): the dtb start4 hands to Linux: `serial@7e201000`, `arm,pl011`, GIC SPI 121
+- datasheet (high): BCM2711 ARM Peripherals, §6.2.4 Table 102: VC peripheral IRQ 57 is the OR of all PL011 UARTs, VPU source 121; Figure 6 puts UART0 on `PACTL_CS` bit 20
 
 ## Register map
 

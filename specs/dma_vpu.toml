@@ -10,6 +10,11 @@ kind       = "decompile"
 ref        = "`dma_set_cs` `0x3EC98E7C` / `dma_chain_start` `0x3EC97544`: `base = ch < 15 ? 0x7E007000 : 0x7EE04100`, registers at `base + ch * 0x100`; the transfer queue runs on channel 15"
 confidence = "high"
 
+[[block.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §4.2: \"DMA Channel 15 however, is physically removed from the other DMA Channels and so has a different address base of `0x7ee05000`\", and is the VPU's exclusively"
+confidence = "high"
+
 [[register]]
 name   = "CS"
 offset = 0x00

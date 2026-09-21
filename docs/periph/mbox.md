@@ -20,6 +20,7 @@ The VPU takes the line the ARM's requests arrive on; the ARM takes the one the r
 
 - decompile (high): start4's handler table: `src 94 handler=0x3ec58302`
 - measured (medium): Raspberry Pi 4B d03115: Linux binds id 65 for the firmware mailbox (`/proc/interrupts`, and the dtb node's `interrupts`) — _Recorded as `ID_MAILBOX` in `src/periph/gic.rs` before this key existed._
+- datasheet (high): BCM2711 ARM Peripherals, §6.2.4 Table 102: VC peripheral IRQ 30 is `ARM`, the VPU's source 94. §6.3 Figure 7 puts the ARMC peripheral IRQs on GIC SPI ids 64 to 79, so the ARM side's `GIC_SPI 33` is id 65
 
 ## Register map
 

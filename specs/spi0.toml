@@ -35,6 +35,21 @@ kind       = "trace"
 ref        = "bootcode and bootloader: `GPFSEL4` `0x40`, `0x640`, `0x643`, `0x65B`, `0x6DB` into a session; `0xDB`, `0xD8`, `0xC0`, `0` after it, then `GPSET1` (or `GPCLR1`) <- `0x400` and `GPFSEL4` <- `0x40`"
 confidence = "high"
 
+[block.irq]
+vpu     = 118
+gic_spi = 118
+notes   = "One line for every SPI master on the chip: SPI0 here and SPI3 to SPI6 in the `0x7E204600`..`0x7E204C00` block all raise it, and `PACTL_CS` bits 0 to 6 say which. The EEPROM bootloader polls `CS.DONE` instead of taking it."
+
+[[block.irq.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §6.2.4 Table 102: VC peripheral IRQ 54 is the OR of all SPI masters, VPU source 118; §6.2.4 Figure 6 puts SPI0 on `PACTL_CS` bit 0"
+confidence = "high"
+
+[[block.irq.source]]
+kind       = "linux"
+ref        = "`firmware/bcm2711-rpi-4-b.dtb`: `/soc/spi@7e204000` and the four masters at `0x7e204600`..`0x7e204c00` all carry `interrupts = <0x0 0x76 0x4>`"
+confidence = "high"
+
 [[register]]
 name   = "CS"
 offset = 0x00

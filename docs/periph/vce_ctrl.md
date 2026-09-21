@@ -19,6 +19,7 @@ Interrupts (VPU source 68):
 A completed launch drives the line while `STATUS.INT` is set; the handler clears it through `INTCLR`.
 
 - decompile (high): `vce_obtain_semaphore` enables source 68 (`0x44`); start4's handler for it is `0x3ED9D1EA`
+- datasheet (high): BCM2711 ARM Peripherals, §6.2.4 Table 102: VC peripheral IRQ 4 is `H264 0`, source 68 — the codec block this controls
 
 ## Register map
 

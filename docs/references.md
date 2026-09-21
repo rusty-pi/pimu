@@ -30,11 +30,39 @@ DTB boot path never touches the QPU.
 
 ## ISA / hardware
 
-- BCM2711 ARM Peripherals datasheet (Raspberry Pi)
-- BCM2835 ARM Peripherals datasheet (still the best register-level doc for
-  blocks unchanged since Pi 1: UART, AUX, system timer, mailbox, GPIO)
+- [BCM2711 ARM Peripherals](https://datasheets.raspberrypi.com/bcm2711/bcm2711-peripherals.pdf),
+  Raspberry Pi, release 4 (18 Jan 2022, `githash: cfcff44-clean`). The same
+  document also sits on the Pi 4 product page as
+  [`RP-008248-DS-1`](https://pip-assets.raspberrypi.com/categories/545-raspberry-pi-4-model-b/documents/RP-008248-DS-1-bcm2711-peripherals.pdf).
+  Authoritative here for: the 35-bit address map and the legacy master window,
+  AUX, BSC, DMA and DMA4, GPIO, the interrupt source tables, PCM/I2S, PWM,
+  SPI, the system timer, the PL011 UART, the SP804 ARM-side timer, and the ARM
+  mailboxes. Its two interrupt tables are the naming for every VPU source
+  (Table 102, VC peripheral IRQ `n` is what the model calls source `64 + n`)
+  and for the ETH_PCIe L2 lines (Table 103).
+- [BCM2835 ARM Peripherals](https://datasheets.raspberrypi.com/bcm2835/bcm2835-peripherals.pdf),
+  Broadcom, 2012. The BCM2711 document is derived from it, and it stays the
+  better register-level text for blocks BCM2711 kept unchanged and did not
+  re-document — the EMMC (Arasan) chapter above all, which the newer document
+  drops entirely. Read it with the community errata beside it: the original
+  has known wrong bit offsets. Where the two disagree about a BCM2711 block,
+  the BCM2711 document wins — the GPIO pull control (`GPPUD` / `GPPUDCLK`
+  replaced by `GPIO_PUP_PDN_CNTRL_REG`) and the interrupt controller are the
+  two that bite.
 - Herman Hermitage, "VideoCore IV Programmers Manual" (community wiki)
 - `raspberrypi/firmware` `boot/` and `hardware/` headers
+
+### What neither datasheet documents
+
+Everything on the VideoCore side of the chip, and everything Raspberry Pi added
+for the Pi 4, is reverse-engineered here — from the decompiled firmware, from
+Linux drivers and device trees, and from measurements on a reference board. In
+spec terms, that is every block whose sources are `decompile`, `linux`,
+`measured` or `trace` rather than `datasheet`: the clock manager and the A2W
+PLLs, the PCIe root complex, GENET, the HVS / HDMI / pixel-valve display path,
+AVS and PVT, the SDRAM controller, the OTP engine, the VPU's own core-control
+and multicore-sync blocks, and the mailbox property interface carried over the
+ARM mailboxes.
 
 ## Boot / firmware
 

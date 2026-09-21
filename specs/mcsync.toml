@@ -28,6 +28,12 @@ kind       = "trace"
 ref        = "`--log irqen`: neither core calls `enable_irq_source` for 76 or 77"
 confidence = "high"
 
+[[block.irq.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §6.2.4 Table 102: VC peripheral IRQs 12 and 13 are `Multicore Sync 0` and `Multicore Sync 1`, sources 76 and 77"
+confidence = "high"
+note       = "IRQs 14 and 15 are `Multicore Sync 2` and `Multicore Sync 3`, the sources 78 and 79 start4 posts in software as its reschedule IPI; they are not acked through this block"
+
 [[register]]
 name   = "DOORBELL"
 offset = 0x00

@@ -11,6 +11,7 @@ Same channel layout as the legacy controller (`dma`), but all 16 slots are chann
 Sources:
 
 - decompile (high): `dma_set_cs` `0x3EC98E7C` / `dma_chain_start` `0x3EC97544`: `base = ch < 15 ? 0x7E007000 : 0x7EE04100`, registers at `base + ch * 0x100`; the transfer queue runs on channel 15
+- datasheet (high): BCM2711 ARM Peripherals, §4.2: "DMA Channel 15 however, is physically removed from the other DMA Channels and so has a different address base of `0x7ee05000`", and is the VPU's exclusively
 
 ## Register map
 

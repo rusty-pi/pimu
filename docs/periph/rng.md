@@ -19,6 +19,7 @@ Interrupts (VPU source 125):
 `INT_STATUS` drives the line while an enabled condition is latched.
 
 - decompile (high): start4's RNG interrupt handler `0x3ED64BE8` reads `INT_STATUS`; its table entry is source 125
+- datasheet (high): BCM2711 ARM Peripherals, §6.2.4 Table 102: VC peripheral IRQ 61 is `RNG`, source 125
 
 ## Register map
 

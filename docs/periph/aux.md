@@ -5,7 +5,7 @@
 - Bus: `vpu` (VPU bus address)
 - Base: `0x7E215000`
 - Size: `0x100`
-- Interrupts: GIC id 125 (`GIC_SPI 93`)
+- Interrupts: VPU source 93 · GIC id 125 (`GIC_SPI 93`)
 
 The mini-UART is modelled both ways: transmit completes instantly on a line that is always ready, and receive is paced at the rate `MU_BAUD` sets against the modelled clock, as `uart0` is. The SPI masters at `+0x80` / `+0xC0` read 0.
 
@@ -13,11 +13,12 @@ Sources:
 
 - datasheet (high): BCM2711 ARM Peripherals, Auxiliaries chapter
 
-Interrupts (GIC id 125 (`GIC_SPI 93`)):
+Interrupts (VPU source 93 · GIC id 125 (`GIC_SPI 93`)):
 
-Shared by the mini-UART and the two SPI masters. Linux takes it for `ttyS0`; the firmware polls `MU_LSR` instead.
+One line for the whole block, ORed from the mini-UART and the two SPI masters; `AUX_IRQ` says which of the three is pending. Linux takes it for `ttyS0`; the firmware polls `MU_LSR` instead. The VPU numbers it the same as the device tree does, as it does for every VC peripheral IRQ.
 
 - linux (high): the dtb start4 hands to Linux: `serial@7e215040`, `brcm,bcm2835-aux-uart`, `interrupts = <0x0 0x5d 0x4>`
+- datasheet (high): BCM2711 ARM Peripherals, §6.2.4 Table 102: VC peripheral IRQ 29 is `AUX`, so VPU source 93; §6.2.4 Figure 6 has `AUX_IRQ` bits 0 to 2 (mini-UART, SPI1, SPI2) ORed into it
 
 ## Register map
 

@@ -6,6 +6,7 @@
 - Base: `0x7E205000`
 - `PMIC` copy: `0x7E205E00`
 - Size: `0x20`
+- Interrupts: VPU source 117 · GIC id 149 (`GIC_SPI 117`)
 
 A transfer takes its time on the wire at `core_clock / DIV`, 500 MHz core clock: `TA` stays set until the bytes have gone, then `DONE` (and `ERR` on an unacknowledged address) latch. Instance 0 is on GPIO 0/1, 28/29 or 44/45 (`specs/gpio.toml`), and only the first pair is the 40-pin header: a HAT's ID EEPROM answers while the pins are there and not otherwise. The `0x7E205E00` instance has pins of its own and is not muxed.
 
@@ -21,6 +22,13 @@ Sources:
 Bus 8: the PMICs at `0x1B` / `0x1E` and the FXL6408 at `0x43`.
 
 - decompile (high): `FUN_0ecf0ed0`: bus id 8; `pmic_init` `0x3ED4DAA8` uses it
+
+Interrupts (VPU source 117 · GIC id 149 (`GIC_SPI 117`)):
+
+One line for every I²C master on the chip; `PACTL_CS` bits 8 to 15 say which of them is pending. start4 polls `S.DONE` rather than taking it.
+
+- datasheet (high): BCM2711 ARM Peripherals, §6.2.4 Table 102: VC peripheral IRQ 53 is the OR of all I²C masters, VPU source 117; §6.2.4 Figure 6 puts I2C0 on `PACTL_CS` bit 8
+- linux (high): `firmware/bcm2711-rpi-4-b.dtb`: `/soc/i2c@7e205000`, the masters at `0x7e205600`..`0x7e205c00` and `/soc/i2c@7e804000` all carry `interrupts = <0x0 0x75 0x4>`
 
 ## Register map
 

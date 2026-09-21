@@ -29,6 +29,11 @@ kind       = "linux"
 ref        = "`ethernet@7d580000`, `interrupts = <GIC_SPI 157 IRQ_TYPE_LEVEL_HIGH>, <GIC_SPI 158 IRQ_TYPE_LEVEL_HIGH>`; `bcmgenet.c` takes them as `INTRL2_0`, `INTRL2_1`"
 confidence = "high"
 
+[[block.irq.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §6.2.5 Table 103: the ETH_PCIe level-2 controller's IRQs 29 and 30 are `GENET_0_A` and `GENET_0_B`, which the device tree numbers `128 + n` — 157 and 158"
+confidence = "high"
+
 [[register]]
 name   = "SYS_REV_CTRL"
 offset = 0x0000

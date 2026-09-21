@@ -24,6 +24,11 @@ kind       = "decompile"
 ref        = "start4's RNG interrupt handler `0x3ED64BE8` reads `INT_STATUS`; its table entry is source 125"
 confidence = "high"
 
+[[block.irq.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §6.2.4 Table 102: VC peripheral IRQ 61 is `RNG`, source 125"
+confidence = "high"
+
 [[register]]
 name   = "CTRL"
 offset = 0x00

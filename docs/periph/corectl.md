@@ -20,7 +20,7 @@ Sources:
 | Offset | Name | Access | Width | Sources |
 |---|---|---|---|---|
 | `0x004` | [`IRQ_PENDING`](#irq_pending) | r | 32 | 1, best medium |
-| `0x010`–`0x02C` (8 × 0x4) | [`IRQ_PRIO`](#irq_prio) | rw | 32 | 5, best high |
+| `0x010`–`0x02C` (8 × 0x4) | [`IRQ_PRIO`](#irq_prio) | rw | 32 | 6, best high |
 | `0x030` | [`VBASE`](#vbase) | rw | 32 | 3, best high |
 | `0x034` | [`WAKEUP`](#wakeup) | rw | 32 | 5, best high |
 | `0x040`–`0x044` (2 × 0x4) | [`IRQ_PENDING_BITS`](#irq_pending_bits) | rw | 32 | 2, best high |
@@ -52,7 +52,7 @@ Sources:
 
 Offset `0x010`, 8 elements 0x4 apart · access `rw` · 32 bits
 
-One 4-bit enable/priority field per interrupt source, eight per word: source `src` (64 to 127) lives in word `(src >> 3) & 7` at bit `(src & 7) * 4`. Zero disables the source; a non-zero value enables it at that priority. The vector is the interrupt number, 64 + source, not this field.
+One 4-bit enable/priority field per interrupt source, eight per word: source `src` (64 to 127) lives in word `(src >> 3) & 7` at bit `(src & 7) * 4`. Zero disables the source; a non-zero value enables it at that priority. The vector is the interrupt number, 64 + source, not this field. The 64 sources are the SoC's VC peripheral IRQs, offset by 64: source `64 + n` is VC peripheral IRQ `n`, which is also the number the ARM's device tree writes as `GIC_SPI n` (the GIC id is 32 above that again). So the names are: 64-67 `Timer 0`-`Timer 3` (the system timer's compare channels), 68-70 `H264 0`-`H264 2`, 71 `JPEG`, 72 `ISP`, 73 `USB`, 74 `V3D`, 75 `Transposer`, 76-79 `Multicore Sync 0`-`Multicore Sync 3`, 80-86 `DMA 0`-`DMA 6`, 87 `DMA 7 & 8`, 88 `DMA 9 & 10`, 89-92 `DMA 11`-`DMA 14`, 93 `AUX`, 94 `ARM`, 95 `DMA 15`, 96 `HDMI CEC`, 97 `HVS`, 98 `RPIVID`, 99 `SDC`, 100 `DSI 0`, 101 `Pixel Valve 2`, 102-103 `Camera 0`/`Camera 1`, 104-105 `HDMI 0`/`HDMI 1`, 106 `Pixel Valve 3`, 107 `SPI/BSC Slave`, 108 `DSI 1`, 109 `Pixel Valve 0`, 110 `Pixel Valve 1 & 4`, 111 `CPR`, 112 `SMI`, 113-116 `GPIO 0`-`GPIO 3`, 117 all I²C ORed, 118 all SPI ORed, 119 `PCM/I2S`, 120 `SDHOST`, 121 all PL011 UARTs ORed, 122 all ETH_PCIe L2 lines ORed, 123 `VEC`, 124 `CPG`, 125 `RNG`, 126 `EMMC & EMMC2`, 127 `ETH_PCIe secure`. An ORed source says only that one of the devices behind it has something pending; which one is read from `AUX_IRQ` for 93, from `PACTL_CS` (`0x7E204E00`, not modelled) for 117, 118 and 121, and from each device's own status register otherwise.
 
 Sources:
 
@@ -61,6 +61,7 @@ Sources:
 - trace (high): start4 calls `enable_irq_source(64, 1)` for its ThreadX tick
 - inferred (medium): hermanhermitage/videocoreiv, VideoCore IV Programmers Manual: 128 vector-table entries indexed by interrupt number, 0-31 exceptions, 32-63 swi, 64-127 external interrupts — _a reverse-engineered manual, not a datasheet_
 - trace (high): vectoring at the field's value reached start4's exception stubs (dbe4e25, b9d53b8); vectoring at 64 + source reaches the per-source handlers (2bdbcbf)
+- datasheet (high): BCM2711 ARM Peripherals, §6.2.4 Table 102 (VC peripheral IRQs) for the 64 names, and §6.3 Figure 7 for where they land on the GIC (SPI ids 96 to 159) — _the datasheet numbers them 0 to 63; every source this model identified from the firmware sits 64 above its number there — 64 the ThreadX tick on `Timer 0`, 66 the clock service on `Timer 2`, 76 / 77 the mcsync doorbell acks on `Multicore Sync 0` / `1`, 78 / 79 the reschedule IPI on `Multicore Sync 2` / `3`, 89 and 95 DMA channels 11 and 15, 94 the ARM mailbox, 97 the HVS, 119 the `PCM/I2S` line Linux enables, 125 the RNG_
 
 ## `VBASE`
 

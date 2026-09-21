@@ -22,6 +22,7 @@ Interrupts (`INTA` GIC id 175 (`GIC_SPI 143`) · `MSI` GIC id 180 (`GIC_SPI 148`
 
 - linux (high): `pcie@7d500000`: the `interrupt-map` routes INTA to `GIC_SPI 143`, and `interrupt-names = "pcie", "msi"` puts the MSI controller on `GIC_SPI 148`
 - measured (high): Raspberry Pi 4B d03115: `/proc/interrupts` shows id 175 as `GICv2 175 Level PCIe PME, aerdrv`
+- datasheet (high): BCM2711 ARM Peripherals, §6.2.5 Table 103: the ETH_PCIe level-2 controller's IRQ 15 is `PCIE_0_INTA` and its IRQ 20 is `PCIE_0_MSI`. §6.3 Figure 7 lands those 57 lines on GIC SPI ids 160 to 216, so the device tree numbers them `128 + n` — 143 and 148 — _The VPU sees none of them individually: Table 102’s IRQ 58 is all 57 ORed together, VPU source 122._
 
 ## Register map
 

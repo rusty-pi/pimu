@@ -16,10 +16,11 @@ Sources:
 
 Interrupts (VPU source 97 · GIC id 129 (`GIC_SPI 97`)):
 
-A channel with `DISPEIRQx` and the flag enabled drives the line once per frame; the same number on both controllers is a coincidence.
+A channel with `DISPEIRQx` and the flag enabled drives the line once per frame. The two controllers carry the same number because both are `64 + VC peripheral IRQ`: for every VC peripheral IRQ `n` the VPU source and the device tree's `GIC_SPI` number are both `64 + n` (the GIC id is 32 above that again), and the HVS is IRQ 33.
 
 - linux (high): `arch/arm/boot/dts/broadcom/bcm2711.dtsi`: `hvs@7e400000`, `interrupts = <GIC_SPI 97 IRQ_TYPE_LEVEL_HIGH>`
 - trace (high): start4 registers its HVS handler `0x3ECEED5C` on VPU source 97 (`--log irqtbl`)
+- datasheet (high): BCM2711 ARM Peripherals, §6.2.4 Table 102: VC peripheral IRQ 33 is `HVS`, source 97; §6.3 Figure 7 lands the same 64 IRQs on GIC SPI ids 96 to 159
 
 ## Register map
 

@@ -21,12 +21,18 @@ ref        = "size: one 4 KiB page, the granularity of this window"
 confidence = "medium"
 
 [block.irq]
+vpu     = 121
 gic_spi = 121
-notes   = "Linux's `ttyAMA0`. The firmware polls the FIFO instead of taking the line."
+notes   = "Linux's `ttyAMA0`. The firmware polls the FIFO instead of taking the line. The line is shared: it is the OR of all five PL011 UARTs, and `PACTL_CS` bits 16 to 20 say which of them is pending."
 
 [[block.irq.source]]
 kind       = "linux"
 ref        = "the dtb start4 hands to Linux: `serial@7e201000`, `arm,pl011`, GIC SPI 121"
+confidence = "high"
+
+[[block.irq.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §6.2.4 Table 102: VC peripheral IRQ 57 is the OR of all PL011 UARTs, VPU source 121; Figure 6 puts UART0 on `PACTL_CS` bit 20"
 confidence = "high"
 
 [[register]]

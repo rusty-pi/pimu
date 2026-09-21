@@ -34,6 +34,12 @@ kind       = "linux"
 ref        = "`bcm2711-rpi-4-b.dtb` `/scb/xhci@7e9c0000`: `interrupts <0x0 0xb0 0x4>`"
 confidence = "high"
 
+[[block.irq.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §6.2.5 Table 103: the ETH_PCIe level-2 controller's IRQ 48 is `USB0_XHCI_0`, which the device tree numbers `128 + 48` — 176"
+confidence = "high"
+note       = "Confirms the note above that the VPU has no source of its own for this block: Table 102 gives the 57 ETH_PCIe lines one ORed source, 122."
+
 [[register]]
 name   = "CAPLENGTH"
 offset = 0x00

@@ -11,12 +11,18 @@ ref        = "BCM2711 ARM Peripherals, Auxiliaries chapter"
 confidence = "high"
 
 [block.irq]
+vpu     = 93
 gic_spi = 93
-notes   = "Shared by the mini-UART and the two SPI masters. Linux takes it for `ttyS0`; the firmware polls `MU_LSR` instead."
+notes   = "One line for the whole block, ORed from the mini-UART and the two SPI masters; `AUX_IRQ` says which of the three is pending. Linux takes it for `ttyS0`; the firmware polls `MU_LSR` instead. The VPU numbers it the same as the device tree does, as it does for every VC peripheral IRQ."
 
 [[block.irq.source]]
 kind       = "linux"
 ref        = "the dtb start4 hands to Linux: `serial@7e215040`, `brcm,bcm2835-aux-uart`, `interrupts = <0x0 0x5d 0x4>`"
+confidence = "high"
+
+[[block.irq.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §6.2.4 Table 102: VC peripheral IRQ 29 is `AUX`, so VPU source 93; §6.2.4 Figure 6 has `AUX_IRQ` bits 0 to 2 (mini-UART, SPI1, SPI2) ORed into it"
 confidence = "high"
 
 [[register]]

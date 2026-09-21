@@ -5,6 +5,7 @@
 - Bus: `vpu` (VPU bus address)
 - Base: `0x7E980000`
 - Size: `0x10000`
+- Interrupts: VPU source 73 · GIC id 105 (`GIC_SPI 73`)
 
 `GRSTCTL`'s reset and flush bits complete as soon as they are written and `AHBIDLE` always reads 1. The id and hardware-configuration words answer the measured values. The core is a host unless `GUSBCFG` forces device mode, a host channel asked to halt halts at once, and the root port reports nothing attached. Everything else is plain storage, and a core soft reset does not return it to its reset values.
 
@@ -13,6 +14,13 @@ Sources:
 - linux (high): `bcm283x.dtsi` `usb@7e980000` (`brcm,bcm2835-usb`, the dwc2 driver), reg size `0x10000`; `bcm2711.dtsi` keeps the node
 - decompile (high): `SET_POWER_STATE` USB handler `0x3ED89520..0x3ED89802`, BCM2711 branch: core soft reset and FIFO flushes, then `GUSBCFG` with `HCFG` / `HFIR`, or `DCFG` / `DCTL`
 - standard (high): edk2-platforms `Platform/RaspberryPi/Drivers/DwUsbHostDxe` (in the rpi-mkosi image's `RPI_EFI.fd`): `DwCoreInit` / `DwHcInit` / `DwHcGetRootHubPortStatus`
+
+Interrupts (VPU source 73 · GIC id 105 (`GIC_SPI 73`)):
+
+The controller's own line, up while an unmasked bit of `GINTSTS` is. Nothing in the model takes it: the firmware polls `GINTSTS`, and Linux only reaches this controller when `otg_mode=0`.
+
+- datasheet (high): BCM2711 ARM Peripherals, §6.2.4 Table 102: VC peripheral IRQ 9 is `USB`, VPU source 73
+- linux (high): `firmware/bcm2711-rpi-4-b.dtb` `/soc/usb@7e980000`: `interrupts = <0x0 0x49 0x4>, <0x0 0x28 0x4>` — _the second line, `GIC_SPI 40`, is in the ARMC range (GIC ids 64 to 79) and is not this block's own_
 
 ## Register map
 

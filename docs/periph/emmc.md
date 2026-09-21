@@ -5,7 +5,7 @@
 - Bus: `vpu` (VPU bus address)
 - Base: `0x7E300000`
 - Size: `0x100`
-- Interrupts: GIC id 158 (`GIC_SPI 126`)
+- Interrupts: VPU source 126 · GIC id 158 (`GIC_SPI 126`)
 
 EMMC2's command engine (`src/periph/emmc2.rs`) over whichever device the SD-slot mux leaves on the bus. The WiFi chip's SDIO side (`CardKind::Sdio`) has it by default, which is how a Pi 4B is wired; 2020-era bootcode routes the SD card here instead (GPIO block `+0xD0`, bit 1, followed since #66) and boots from it, and the WiFi chip steps aside while it does. The interrupt output is GIC SPI 126, the line EMMC2 drives too.
 
@@ -17,11 +17,12 @@ Sources:
 - trace (high): pinned start4 keeps the SD slot on EMMC2: it clears bit 1 of `0x7E2000D0` when it opens EMMC2 (`0x3EC51DFC`), when it closes it (`0x3EC51A4E`) and just before it releases the ARM (`0x3EC5A7E2`), and sets bit 0 in its board clock set-up (`0x3ED4A1CE`) — _what bit 0 does is not known_
 - measured (high): UART logs of the 2020 bootloaders, which print this host's `HOST_CONTROL` and `PRESENT_STATE` on every clock change: raspberrypi/rpi-eeprom#139, #227, #242 (no card in the slot), #282 (booting from the SD card) — _Other people's boards, not the reference board._
 
-Interrupts (GIC id 158 (`GIC_SPI 126`)):
+Interrupts (VPU source 126 · GIC id 158 (`GIC_SPI 126`)):
 
-The line EMMC2 drives too.
+The line EMMC2 drives too — one ORed line for both controllers, on the VPU as on the ARM.
 
 - linux (high): `mmcnr@7e300000` and `mmc@7e340000` name the same `GIC_SPI 0x7e`
+- datasheet (high): BCM2711 ARM Peripherals, §6.2.4 Table 102: VC peripheral IRQ 62 is `EMMC & EMMC2`, VPU source 126
 
 ## Register map
 

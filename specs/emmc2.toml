@@ -21,12 +21,18 @@ ref        = "`mmc@7e340000` driven by `sdhci-iproc`; `mmc0: SDHCI controller on
 confidence = "high"
 
 [block.irq]
+vpu     = 126
 gic_spi = 126
-notes   = "Shared with the legacy `emmc` controller."
+notes   = "Shared with the legacy `emmc` controller, on both controllers."
 
 [[block.irq.source]]
 kind       = "linux"
 ref        = "`mmc@7e340000`, `interrupts = <GIC_SPI 0x7e IRQ_TYPE_LEVEL_HIGH>`"
+confidence = "high"
+
+[[block.irq.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §6.2.4 Table 102: VC peripheral IRQ 62 is `EMMC & EMMC2`, VPU source 126"
 confidence = "high"
 
 [[register]]

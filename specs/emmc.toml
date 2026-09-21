@@ -34,12 +34,18 @@ confidence = "high"
 note       = "Other people's boards, not the reference board."
 
 [block.irq]
+vpu     = 126
 gic_spi = 126
-notes   = "The line EMMC2 drives too."
+notes   = "The line EMMC2 drives too — one ORed line for both controllers, on the VPU as on the ARM."
 
 [[block.irq.source]]
 kind       = "linux"
 ref        = "`mmcnr@7e300000` and `mmc@7e340000` name the same `GIC_SPI 0x7e`"
+confidence = "high"
+
+[[block.irq.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §6.2.4 Table 102: VC peripheral IRQ 62 is `EMMC & EMMC2`, VPU source 126"
 confidence = "high"
 
 [[register]]

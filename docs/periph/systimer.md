@@ -20,6 +20,7 @@ Interrupts (`C0` VPU source 64 · `C1` VPU source 65 · `C2` VPU source 66 · `C
 Compare channel `n` raises `64 + n`. start4 arms `C0` as its ThreadX tick and `C2` as the clock service's timeout.
 
 - decompile (high): start4 `enable_irq_source(64, 1)` before it arms `C0`; the clock service waits on `C2` with source 66
+- datasheet (high): BCM2711 ARM Peripherals, §6.2.4 Table 102: VC peripheral IRQs 0 to 3 are `Timer 0` to `Timer 3`, which the VPU takes as sources 64 to 67
 
 ## Register map
 
