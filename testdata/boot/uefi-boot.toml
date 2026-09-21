@@ -1,0 +1,65 @@
+# The firmware boot with the RPi4 UEFI firmware as the armstub: pftf/RPi4's
+# `RPI_EFI.fd` instead of a Linux kernel, run until its boot menu prints.
+#
+# What it pins beyond `firmware-boot.toml`: a second, independent client of the
+# firmware's property interface. Linux asks for a handful of things and takes
+# most of what it needs from the device tree; UEFI asks for the board model,
+# the revision, the memory split, the clock rates and the MAC address, checks
+# every answer's status word, and gives up on a device whose request came back
+# rejected — silently, with nothing on the console to say so.
+#
+# The MAC address is the case this scenario exists for. UEFI reads it over the
+# mailbox and programs it into the GENET's `UMAC_MAC0` / `UMAC_MAC1`, which is
+# where Linux, Windows and UEFI's own network stack all read it back from. A
+# build whose request the firmware rejects programs zeroes there and boots to
+# the same menu, printing exactly the same console bytes — so the golden
+# transcript cannot see it and the `--- device state ---` line in the run
+# report is what catches it.
+#
+# The run ends at the boot menu, which is well past the point where UEFI's
+# drivers have asked the firmware for everything they want: the whole thing
+# takes about ten seconds on a dev box.
+#
+# The card is `scripts/make-uefi-sd.sh`. Re-record the golden and the retired
+# counts with:
+#   rpi-virt-fw boot-check testdata/boot/uefi-boot.toml --update
+
+name = "uefi-boot"
+description = "pieeprom.bin + start4.elf handing the ARM to the RPi4 UEFI firmware, through to its boot menu."
+
+[boot]
+eeprom = "../../firmware/pieeprom.bin"
+sd = "../../firmware/sd-uefi.img"
+# UEFI prints its menu and then counts down for five seconds before booting
+# something. Nothing past the menu is part of what this pins, so the run ends
+# on the menu's own line.
+until = "ENTER (boot)"
+wall_secs = 300
+max_skipped = 0
+
+[golden]
+path = "golden/uefi-boot.txt"
+
+[[milestone]]
+why = "The bootloader loads RPI_EFI.fd as the armstub."
+line = "Loaded 'RPI_EFI.fd'"
+
+[[milestone]]
+why = "...and finds no kernel beside it, which is how a UEFI card is meant to look."
+line = "No compatible kernel found"
+
+[[milestone]]
+why = "TF-A's BL31 runs from the armstub and drops to EL2, so the UEFI payload behind it starts at all."
+line = "BL31:"
+
+[[milestone]]
+why = "UEFI itself got far enough to print its banner: DXE ran, and with it every driver that talks to the firmware."
+line = "UEFI firmware (version UEFI Firmware v1.53"
+
+[[milestone]]
+why = "UEFI asked the firmware for the board's MAC address and the request was answered."
+line = "tag 0x00010003  marked 1"
+
+[[milestone]]
+why = "...and UEFI wrote that address into the GENET, rather than the zeroes a driver is left with when its mailbox request comes back rejected. This is the whole point of the scenario: the console bytes are identical either way."
+line = "genet   MAC 02:00:5e:00:53:01"

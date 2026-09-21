@@ -17,6 +17,12 @@ EEPROM_REF="${EEPROM_REF:-master}"
 EEPROM_CHANNEL="${EEPROM_CHANNEL:-latest}"
 EEPROM_DATE="${EEPROM_DATE:-2026-08-04}"
 EEPROM_VL805="${EEPROM_VL805:-000138c0}"
+# pftf/RPi4: the RPi4 UEFI firmware, as a release zip holding RPI_EFI.fd.
+# scripts/make-uefi-sd.sh puts it on a card as the armstub, which is what the
+# uefi-boot scenario boots: a second, independent client of the firmware's
+# property interface, and the one that reads the board's MAC out of it.
+UEFI_REF="${UEFI_REF:-v1.53}"
+UEFI_SHA256="${UEFI_SHA256:-ca9973e2a7a546b3df871cfb7382e656829114b6dfa424f40dc67cc90a217d88}"
 # Debian's static aarch64 busybox: the userland on the SD card's root
 # filesystem (scripts/make-sd.sh, #40 milestone 5). Checked against the hash.
 BUSYBOX_DEB="${BUSYBOX_DEB:-busybox-static_1.35.0-4+deb12u1+b1_arm64.deb}"
@@ -94,6 +100,9 @@ queue "$raw/raspberrypi/rpi-eeprom/$EEPROM_REF/firmware-2711/$EEPROM_CHANNEL/pie
 queue "$raw/raspberrypi/rpi-eeprom/$EEPROM_REF/firmware-2711/$EEPROM_CHANNEL/recovery.bin" "recovery.bin"
 queue "$raw/raspberrypi/rpi-eeprom/$EEPROM_REF/firmware-2711/$EEPROM_CHANNEL/vl805-$EEPROM_VL805.bin" "vl805-$EEPROM_VL805.bin"
 
+echo "pftf/RPi4 @ $UEFI_REF"
+queue "https://github.com/pftf/RPi4/releases/download/$UEFI_REF/RPi4_UEFI_Firmware_$UEFI_REF.zip" "RPi4_UEFI_Firmware.zip"
+
 echo "debian busybox-static ($BUSYBOX_DEB)"
 queue "https://deb.debian.org/debian/pool/main/b/busybox/$BUSYBOX_DEB" "busybox-static_arm64.deb"
 
@@ -108,6 +117,12 @@ echo
 curl -fSL --retry 3 --parallel --parallel-max 8 "${jobs[@]}"
 
 "$here/scripts/make-dt-blob.py" "$dest/dt-blob.dts" "$dest/dt-blob.bin"
+
+echo "$UEFI_SHA256  $dest/RPi4_UEFI_Firmware.zip" | sha256sum --quiet -c -
+# One file out of the zip, without needing unzip on the runner.
+python3 -c 'import sys, zipfile
+with zipfile.ZipFile(sys.argv[1]) as z, open(sys.argv[2], "wb") as out:
+    out.write(z.read("RPI_EFI.fd"))' "$dest/RPi4_UEFI_Firmware.zip" "$dest/RPI_EFI.fd"
 
 echo "$BUSYBOX_SHA256  $dest/busybox-static_arm64.deb" | sha256sum --quiet -c -
 dpkg-deb --fsys-tarfile "$dest/busybox-static_arm64.deb" | tar -xO ./bin/busybox >"$dest/busybox-aarch64"
@@ -126,7 +141,7 @@ done
 
 echo
 echo "sha256:"
-( cd "$dest" && sha256sum ./*.elf ./*.dat ./*.bin | tee firmware.sha256 )
+( cd "$dest" && sha256sum ./*.elf ./*.dat ./*.bin ./RPI_EFI.fd | tee firmware.sha256 )
 
 echo
 echo "done -> $dest"

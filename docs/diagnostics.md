@@ -182,6 +182,29 @@ that is still set and names the channel that replaced it.
 
 ---
 
+## What the devices hold when the run ends
+
+The golden transcript says what the firmware printed and the retired counts say
+how much it ran. Neither sees a value a driver wrote into a register and never
+mentioned, and some of those are the whole point of the boot. `-v` prints them
+under `--- device state ---`:
+
+```
+--- device state ---
+  genet   MAC 02:00:5e:00:53:01  tx on  rx on  promisc on
+```
+
+A client that asks the firmware for the board's MAC address and does not check
+the answer — or checks it, fails, and carries on — programs `00:00:00:00:00:00`
+into the GENET and boots to exactly the same console bytes. `uefi-boot.toml`
+pins that line for the RPi4 UEFI firmware, which is a second, independent
+client of the property interface.
+
+A device belongs in this section once it holds a value worth diffing between
+two firmware versions.
+
+---
+
 ## Asking the firmware a question after it has booted
 
 `start4.elf` does not stop at `arm_loader` — it leaves a `mbox_read` task
@@ -239,7 +262,36 @@ boot firmware/pieeprom.bin --eeprom --sd firmware/sd-halt.img \
 
 When the buffer-level code is not `0x80000000`, the reply is also dumped as raw
 words. That matters because the tag-by-tag decode walks by the sizes it staged,
-so it is exactly what cannot be trusted when the sizes are in question.
+so it is exactly what cannot be trusted when the sizes are in question. Every
+rejected reply is logged the same way on the `mbox` channel, whoever asked:
+
+```
+boot firmware/pieeprom.bin --eeprom --sd firmware/sd-uefi.img --log mbox
+  mbox: property reply error at 0xf8a76000: 00000022 80000001 00010003 0000000a ...
+```
+
+which is the declared total, the response code, the tag, its value-buffer size
+and what the firmware's walk ran into — enough to see a client's layout is
+wrong without a second run. The report's per-tag lines carry an `errors` count
+for the same reason: a tag that is always in a rejected buffer is where to look.
+
+### Replaying somebody else's request
+
+`--mbox-property` lays a request out the way a well-behaved client does: every
+value buffer word-aligned, an end marker, slack past it. A client whose
+`sizeof` is wrong does not, and the difference decides whether the firmware
+takes the request at all — an unaligned declared total, an end tag at an odd
+offset, or stale bytes past the total the client only zeroed up to. `--mbox-raw`
+posts an exact byte image instead, so such a buffer can be replayed:
+
+```bash
+boot firmware/pieeprom.bin --eeprom --sd firmware/sd-halt.img \
+  --mbox-raw 2200000000000000030001000a000000000000000000000000000000000000000000
+```
+
+A `GET_BOARD_MAC_ADDRESS` request of a real UEFI build, declaring 34 bytes with
+a 10-byte value buffer: the firmware fills the MAC, then walks on to offset 32,
+past the end tag at 30, and answers `0x80000001` if anything there is not zero.
 
 What the firmware answers today:
 

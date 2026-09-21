@@ -97,6 +97,11 @@ jobs:
       - name: Build SD image with the cut-down firmware
         run: START4=start4cd KERNEL=halt ./scripts/make-sd.sh firmware/sd-halt-start4cd.img
 
+      # And the card that hands the ARM to the RPi4 UEFI firmware instead of a
+      # kernel, for the scenario that pins what UEFI reads out of the mailbox.
+      - name: Build SD image with the UEFI armstub
+        run: ./scripts/make-uefi-sd.sh
+
       - name: Build network-boot root
         run: ./scripts/make-netboot.sh firmware/sd-halt.img
 
@@ -142,6 +147,8 @@ jobs:
             scenario: testdata/boot/b0-boot.toml
           - medium: cd
             scenario: testdata/boot/cd-boot.toml
+          - medium: uefi
+            scenario: testdata/boot/uefi-boot.toml
 
     steps:
       - uses: actions/checkout@v7
