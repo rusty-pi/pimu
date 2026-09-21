@@ -149,9 +149,10 @@ and the WiFi chip answers on the legacy EMMC host
 ([#124](https://github.com/valtzu/rpi-virt-fw/issues/124)).
 `BRCMFMAC=1 scripts/make-sd.sh firmware/sd-brcmfmac.img` writes that card with
 the WiFi driver on it as well — `brcmfmac` and the modules it needs under
-`/lib/modules`, the CYW43455's own firmware under `/lib/firmware/brcm`, and
-`insmod`/`ip` — which is what `testdata/boot/wifi-boot.toml` loads by hand to
-pin how far the chip's bring-up gets. `--usb <img>` boots
+`/lib/modules`, a `modprobe` for the one the kernel fetches by itself, the
+CYW43455's own firmware under `/lib/firmware/brcm`, and `insmod`/`ip` — which
+is what `testdata/boot/wifi-boot.toml` loads by hand to pin how far the chip's
+bring-up gets. `--usb <img>` boots
 the same image as a USB stick instead, `--otg <img>` as a
 stick in the USB-C socket (`BOOT_ORDER` 0x5, and `OTG=1 scripts/make-sd.sh` for
 a card whose `config.txt` hands that controller to Linux), and

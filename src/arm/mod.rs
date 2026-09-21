@@ -379,9 +379,10 @@ pub struct ArmSide {
 /// The device interrupt lines wired to the GIC: the mailbox, eMMC2 (which the
 /// legacy EMMC shares), the two GENET lines, the PL011, the AUX block's
 /// mini-UART, the PCIe endpoint's INTA and MSI, the USB-C port's own xHCI
-/// (#113), and the GPIO block's four (a bank each, the third-bank output that
-/// mirrors bank 1's, and the one either bank raises).
-const SPIS: [u32; 13] = [
+/// (#113), the GPIO block's four (a bank each, the third-bank output that
+/// mirrors bank 1's, and the one either bank raises), and the legacy DMA
+/// controller's nine.
+const SPIS: [u32; 22] = [
     gic::ID_MAILBOX,
     gic::ID_EMMC2,
     gic::ID_GENET_A,
@@ -395,11 +396,21 @@ const SPIS: [u32; 13] = [
     gic::ID_GPIO_BANK1,
     gic::ID_GPIO_BANK1_MIRROR,
     gic::ID_GPIO_ANY,
+    gic::ID_DMA[0],
+    gic::ID_DMA[1],
+    gic::ID_DMA[2],
+    gic::ID_DMA[3],
+    gic::ID_DMA[4],
+    gic::ID_DMA[5],
+    gic::ID_DMA[6],
+    gic::ID_DMA[7],
+    gic::ID_DMA[8],
 ];
 
 fn spi_levels(m: &Machine) -> [bool; SPIS.len()] {
     let [genet_a, genet_b] = m.genet.irq_lines();
     let [gpio0, gpio1] = m.gpio.irq_lines();
+    let dma = m.dma_legacy.irq_lines();
     [
         m.mbox.arm_irq_asserted(),
         m.emmc2.irq_asserted() || m.emmc.irq_asserted(),
@@ -414,6 +425,15 @@ fn spi_levels(m: &Machine) -> [bool; SPIS.len()] {
         gpio1,
         gpio1,
         gpio0 || gpio1,
+        dma[0],
+        dma[1],
+        dma[2],
+        dma[3],
+        dma[4],
+        dma[5],
+        dma[6],
+        dma[7],
+        dma[8],
     ]
 }
 

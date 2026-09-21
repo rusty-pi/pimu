@@ -97,7 +97,8 @@ wireless="${WIRELESS:-0}"
 # `BRCMFMAC=1` is the card that can bring the WiFi chip up: the kernel modules
 # `brcmfmac` needs and the CYW43455's own firmware on the root filesystem
 # (scripts/fetch-firmware.sh puts them under firmware/wifi/), plus the busybox
-# applets that load them. It implies `WIRELESS=1`: with `dtoverlay=disable-wifi`
+# applets that load them and the `modules.dep` the kernel's own
+# `request_module` needs. It implies `WIRELESS=1`: with `dtoverlay=disable-wifi`
 # on the card the `mmcnr@7e300000` node is off and there is no SDIO card for
 # the driver to find at all.
 brcmfmac="${BRCMFMAC:-0}"
@@ -260,6 +261,30 @@ if [[ "$brcmfmac" == 1 ]]; then
     # busybox's insmod need not have seamless xz built in, and a plain
     # `insmod foo.ko` is one less thing between the scenario and the driver.
     find "$rootfs/lib/modules" -name '*.ko.xz' -exec xz -d {} +
+    # `brcmfmac` asks the kernel for its vendor half by name —
+    # `brcmf_fwvid_attach` does `request_module("brcmfmac-cyw")` and fails the
+    # whole attach when that does not come back — so the card needs a
+    # `/sbin/modprobe` for the kernel to run and a `modules.dep` for it to
+    # read. Each line is a module and what it depends on, paths relative to
+    # /lib/modules/<release>; the dependencies come out of the modules' own
+    # `depends=` fields rather than a list kept by hand here.
+    ln -s ../bin/busybox "$rootfs/sbin/modprobe"
+    for moddir in "$rootfs/lib/modules"/*/; do
+      declare -A modpath=()
+      while IFS= read -r ko; do
+        modpath["$(basename "$ko" .ko)"]="${ko#"$moddir"}"
+      done < <(find "$moddir" -name '*.ko' | sort)
+      : >"$moddir/modules.dep"
+      for name in "${!modpath[@]}"; do
+        deps=""
+        for dep in $(tr '\0' '\n' <"$moddir${modpath[$name]}" | sed -n 's/^depends=//p' |
+                     head -1 | tr ',' ' '); do
+          if [[ -n "${modpath[$dep]:-}" ]]; then deps+=" ${modpath[$dep]}"; fi
+        done
+        echo "${modpath[$name]}:$deps" >>"$moddir/modules.dep"
+      done
+      LC_ALL=C sort -o "$moddir/modules.dep" "$moddir/modules.dep"
+    done
     echo "  + p2: $(find "$rootfs/lib/modules" -name '*.ko' | wc -l) kernel modules and the CYW43455's firmware"
   else
     echo "  ! missing $fw/wifi (no WiFi driver on the card; run fetch-firmware.sh)" >&2

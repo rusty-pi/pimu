@@ -35,8 +35,8 @@
 //! The same type also plays the **SDIO** side of the WiFi chip
 //! ([`CardKind::Sdio`], [`SdCard::sdio`]), which is what the legacy EMMC host
 //! at `0x7E30_0000` has on its bus when the SD slot is not muxed to it. It
-//! answers the SDIO identification sequence and nothing else — it has no
-//! memory, so every SD and MMC command times out on it:
+//! answers the SDIO command set and nothing else — it has no memory, so every
+//! SD and MMC command times out on it:
 //!
 //! ```text
 //!   CMD5  IO_SEND_OP_COND        -> R4  (io OCR; ready bit set on the second
@@ -45,7 +45,15 @@
 //!   CMD7  SELECT_CARD            -> R1b                     stby <-> tran
 //!   CMD52 IO_RW_DIRECT           -> R5  (one byte of the CCCR, an FBR or the
 //!                                        CIS)
+//!   CMD53 IO_RW_EXTENDED         -> R5 + a data transfer, bytes or blocks,
+//!                                        at a fixed or an incrementing
+//!                                        address
 //! ```
+//!
+//! Function 0 is the card's: the CCCR, the FBRs and the CIS chains, all of
+//! them here. Functions 1 and 2 are the chip's, and both CMD52 and CMD53
+//! hand those to [`Cyw43455`] — function 1 is the window onto its backplane,
+//! function 2 its frame FIFO.
 //!
 //! The same type also plays an **e-MMC** part ([`CardKind::Mmc`]), the flash
 //! soldered to a Compute Module, which answers a different identification
@@ -76,6 +84,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::periph::cyw43455::Cyw43455;
 use crate::periph::disk::Disk;
 
 /// What is on the bus: a removable SD memory card, an e-MMC part soldered to
@@ -207,6 +216,13 @@ const IO_MEMORY_PRESENT: u32 = 1 << 27;
 const CIS_COMMON: u32 = 0x1000;
 const CIS_FUNC_STRIDE: u32 = 0x100;
 
+/// A function's block size, at `func * 0x100 + 0x10` in its FBR (SDIO
+/// simplified specification 6.11), little-endian over two bytes. The host
+/// writes it before it enables the function, and every CMD53 block transfer
+/// is made of blocks that size — 64 bytes on function 1, 512 on function 2
+/// for this card.
+const FBR_BLKSIZE: u32 = 0x10;
+
 /// CCCR byte offsets (SDIO simplified specification 6.9).
 const CCCR_REV: u32 = 0x00;
 const CCCR_SD_SPEC: u32 = 0x01;
@@ -236,6 +252,22 @@ const TPL_END: u8 = 0xFF;
 /// d03115: `/sys/bus/sdio/devices/mmc1:0001:1/vendor` and `device`.
 const SDIO_VENDOR: u16 = 0x02d0;
 const SDIO_DEVICE: u16 = 0xa9a6;
+
+/// The CMD53 transfer the last command set up, which the host then moves a
+/// block at a time through the data path.
+#[derive(Debug, Clone, Copy)]
+struct IoXfer {
+    /// I/O function the transfer is against.
+    func: u32,
+    /// Where in that function's address space it starts.
+    addr: u32,
+    /// The address walks with the data (op code 1), rather than staying put
+    /// on a FIFO register.
+    incr: bool,
+    /// Bytes per block: the function's block size in block mode, and the
+    /// whole byte count in byte mode, which is one block of it.
+    unit: u32,
+}
 
 /// The 64-byte tuning block a card sends for CMD19 on a 4-bit bus (SD
 /// physical layer spec 3.01, 4.2.4.5).
@@ -295,6 +327,10 @@ pub struct SdCard {
     /// tuple chains those point at. Sparse: everything not in here reads 0,
     /// as the unused space does. Empty for the other kinds.
     io: BTreeMap<u32, u8>,
+    /// [`CardKind::Sdio`]: the chip on the other side of functions 1 and 2.
+    chip: Option<Cyw43455>,
+    /// [`CardKind::Sdio`]: the CMD53 transfer in flight, if any.
+    io_xfer: Option<IoXfer>,
 }
 
 impl SdCard {
@@ -357,6 +393,11 @@ impl SdCard {
                 CardKind::Sdio => io_space(),
                 _ => BTreeMap::new(),
             },
+            chip: match kind {
+                CardKind::Sdio => Some(Cyw43455::new()),
+                _ => None,
+            },
+            io_xfer: None,
         }
     }
 
@@ -373,6 +414,11 @@ impl SdCard {
     /// SD card or e-MMC part.
     pub fn kind(&self) -> CardKind {
         self.kind
+    }
+
+    /// The chip behind functions 1 and 2, for a [`CardKind::Sdio`] card.
+    pub fn chip(&self) -> Option<&Cyw43455> {
+        self.chip.as_ref()
     }
 
     pub fn state(&self) -> CardState {
@@ -408,6 +454,50 @@ impl SdCard {
         self.written_blocks += 1;
     }
 
+    /// One block of the transfer the last command set up, `index` blocks in.
+    /// For a memory card that is block `index` of the image, the address the
+    /// command named having been added in by the host; for the SDIO card it
+    /// is one block of a CMD53, which the chip answers.
+    pub fn transfer_read(&mut self, index: u32, out: &mut [u8; 512]) {
+        let Some(x) = self.io_xfer.filter(|_| self.kind == CardKind::Sdio) else {
+            self.read_block(index, out);
+            return;
+        };
+        let at = self.io_transfer_addr(&x, index);
+        let n = (x.unit as usize).min(out.len());
+        out.fill(0);
+        if x.func == 0 {
+            // Function 0 has no chip behind it: an extended transfer there
+            // walks the card's own space, a byte at a time.
+            for (i, b) in out[..n].iter_mut().enumerate() {
+                *b = self
+                    .io
+                    .get(&at.wrapping_add(i as u32))
+                    .copied()
+                    .unwrap_or(0);
+            }
+        } else if let Some(chip) = self.chip.as_ref() {
+            chip.read_io(x.func, at, &mut out[..n]);
+        }
+    }
+
+    /// The counterpart of [`Self::transfer_read`]: one block the host sent.
+    pub fn transfer_write(&mut self, index: u32, data: &[u8]) {
+        let Some(x) = self.io_xfer.filter(|_| self.kind == CardKind::Sdio) else {
+            self.write_block(index, data);
+            return;
+        };
+        let at = self.io_transfer_addr(&x, index);
+        let n = (x.unit as usize).min(data.len());
+        if x.func == 0 {
+            for (i, b) in data[..n].iter().enumerate() {
+                self.io_write(0, at.wrapping_add(i as u32), *b);
+            }
+        } else if let Some(chip) = self.chip.as_mut() {
+            chip.write_io(x.func, at, &data[..n]);
+        }
+    }
+
     /// One data block of the current transfer went over the bus. A counted
     /// transfer returns the card to `tran` once its last block is through.
     pub fn block_done(&mut self) {
@@ -437,6 +527,9 @@ impl SdCard {
         self.blocks_left = None;
         if self.kind == CardKind::Mmc {
             self.ext_csd = ext_csd(self.disk.blocks());
+        }
+        if self.kind == CardKind::Sdio {
+            self.sdio_reset();
         }
     }
 
@@ -713,44 +806,125 @@ impl SdCard {
                 } else {
                     self.io_read(func, addr)
                 };
-                let state = if self.state == CardState::Tran {
-                    R5_STATE_TRN
-                } else {
-                    R5_STATE_CMD
-                };
-                SdResponse::r1(state << R5_STATE_SHIFT | u32::from(byte))
+                SdResponse::r1(self.r5(byte))
             }
-            // Everything else — the memory card's identification, its
-            // transfers, and IO_RW_EXTENDED, which nothing in the model's
-            // boots sends (brcmfmac is not built into the kernel the card
-            // carries).
+            53 => {
+                // IO_RW_EXTENDED -> R5, then a data transfer. `[31]` write,
+                // `[30:28]` function, `[27]` block mode, `[26]` the op code
+                // (1 = the address walks with the data), `[25:9]` the
+                // address, `[8:0]` a block count or a byte count, 0 meaning
+                // 512 of either.
+                let write = arg >> 31 != 0;
+                let func = (arg >> 28) & 7;
+                let block_mode = (arg >> 27) & 1 != 0;
+                let incr = (arg >> 26) & 1 != 0;
+                let addr = (arg >> 9) & 0x1_FFFF;
+                let count = arg & 0x1FF;
+                let count = if count == 0 { 512 } else { count };
+                let (blocks, unit) = if block_mode {
+                    (count, self.io_block_size(func))
+                } else {
+                    (1, count)
+                };
+                self.io_xfer = Some(IoXfer {
+                    func,
+                    addr,
+                    incr,
+                    unit,
+                });
+                // R5 carries no data byte for an extended transfer; the
+                // bytes go over the data lines.
+                let r1 = Some(self.r5(0));
+                if write {
+                    SdResponse {
+                        r1,
+                        write_blocks: blocks,
+                        write_lba: 0,
+                        ..Default::default()
+                    }
+                } else {
+                    SdResponse {
+                        r1,
+                        read_blocks: blocks,
+                        read_lba: 0,
+                        ..Default::default()
+                    }
+                }
+            }
+            // Everything else: the memory card's identification and its
+            // transfers, which an I/O-only card does not have.
             _ => SdResponse::silent(),
         }
     }
 
+    /// R5's fixed part: the card state in `[13:12]` — *not* where R1 keeps
+    /// it — and the byte the command read in `[7:0]`.
+    fn r5(&self, byte: u8) -> u32 {
+        let state = if self.state == CardState::Tran {
+            R5_STATE_TRN
+        } else {
+            R5_STATE_CMD
+        };
+        state << R5_STATE_SHIFT | u32::from(byte)
+    }
+
+    /// The I/O block size the host set for `func` in its FBR, which is what
+    /// a CMD53 block transfer is made of.
+    fn io_block_size(&self, func: u32) -> u32 {
+        let fbr = func * 0x100 + FBR_BLKSIZE;
+        let size = u32::from(self.io_read(0, fbr)) | u32::from(self.io_read(0, fbr + 1)) << 8;
+        // A function whose block size the host never set transfers in
+        // 512-byte blocks, the maximum this card's CIS offers.
+        if size == 0 {
+            512
+        } else {
+            size
+        }
+    }
+
+    /// One block of a CMD53 transfer, `index` blocks in.
+    fn io_transfer_addr(&self, x: &IoXfer, index: u32) -> u32 {
+        if x.incr {
+            x.addr.wrapping_add(index * x.unit)
+        } else {
+            x.addr
+        }
+    }
+
     /// Put the I/O side back the way it comes up: nothing enabled, no
-    /// address, and the card waiting for CMD5 again.
+    /// address, and the card waiting for CMD5 again. The chip goes with it —
+    /// `brcmf_sdio_probe_attach` sets `SDIO_CCCR_BRCM_CARDCTRL_WLANRESET`
+    /// precisely so that an I/O reset resets the WLAN backplane as well.
     fn sdio_reset(&mut self) {
         self.io = io_space();
+        self.chip = Some(Cyw43455::new());
+        self.io_xfer = None;
         self.state = CardState::Idle;
         self.rca = 0;
         self.powered_up = false;
     }
 
     /// The byte at `addr` in function `func`'s address space. Function 0 is
-    /// the CCCR, the FBRs and the CIS; a function's own space is the chip's,
-    /// and reads 0 here.
+    /// the CCCR, the FBRs and the CIS, all of them the card's; functions 1
+    /// and 2 are the chip's.
     fn io_read(&self, func: u32, addr: u32) -> u8 {
         if func != 0 {
-            return 0;
+            return match self.chip.as_ref() {
+                Some(chip) => chip.read_byte(func, addr),
+                None => 0,
+            };
         }
         self.io.get(&addr).copied().unwrap_or(0)
     }
 
-    /// Write one byte of function 0's space. The CCCR's read-only registers
-    /// keep their value, and enabling a function makes it ready.
+    /// Write one byte of function `func`'s space. In function 0 the CCCR's
+    /// read-only registers keep their value, and enabling a function makes
+    /// it ready.
     fn io_write(&mut self, func: u32, addr: u32, value: u8) {
         if func != 0 {
+            if let Some(chip) = self.chip.as_mut() {
+                chip.write_byte(func, addr, value);
+            }
             return;
         }
         match addr {
@@ -1220,6 +1394,137 @@ mod tests {
                 | u32::from(io_read_byte(&mut c, 0, fptr + 2 + 13)) << 8;
             assert_eq!(blksize, 512);
         }
+    }
+
+    /// CMD53's argument: read or write `blocks`/bytes at `addr` of function
+    /// `func`, in block mode or byte mode, with the address walking or not.
+    #[allow(clippy::too_many_arguments)]
+    fn io_ext_arg(write: bool, func: u32, block_mode: bool, incr: bool, addr: u32, n: u32) -> u32 {
+        (u32::from(write) << 31)
+            | (func << 28)
+            | (u32::from(block_mode) << 27)
+            | (u32::from(incr) << 26)
+            | (addr << 9)
+            | (n & 0x1FF)
+    }
+
+    /// The card once the host has agreed function 1's 64-byte block size and
+    /// aimed the backplane window at `window`, which is what `brcmfmac` does
+    /// before every access.
+    fn sdio_with_window(window: u32) -> SdCard {
+        let mut c = sdio_up();
+        for (i, b) in 64u16.to_le_bytes().iter().enumerate() {
+            c.command(52, io_arg(true, 0, 0x110 + i as u32, *b));
+        }
+        let v = (window & 0xFFFF_8000) >> 8;
+        for i in 0..3 {
+            c.command(52, io_arg(true, 1, 0x1000A + i, (v >> (8 * i)) as u8));
+        }
+        c
+    }
+
+    #[test]
+    fn cmd53_reads_the_chip_id_through_the_window() {
+        // The read `brcmf_sdio_probe_attach` opens with: four bytes at
+        // function 1 offset 0x8000 — window offset 0 with the
+        // 4-byte-access flag — once the window is at the enumeration base.
+        let mut c = sdio_with_window(0x1800_0000);
+        let r = c.command(53, io_ext_arg(false, 1, false, true, 0x8000, 4));
+        assert!(!r.no_response, "CMD53 was not answered");
+        assert_eq!((r.read_blocks, r.read_lba), (1, 0), "one block of bytes");
+        let mut block = [0u8; 512];
+        c.transfer_read(0, &mut block);
+        let id = u32::from_le_bytes(block[..4].try_into().unwrap());
+        assert_eq!(id & 0xFFFF, 0x4345, "chip id");
+        assert_ne!(id, 0xFFFF_FFFF, "which the driver reads as a dead bus");
+    }
+
+    #[test]
+    fn cmd53_block_mode_walks_the_window_and_byte_mode_counts_bytes() {
+        let mut c = sdio_with_window(crate::periph::cyw43455::RAM_BASE);
+        // Block mode, four 64-byte blocks, address incrementing: the
+        // firmware download's shape. Each block lands 64 bytes on.
+        let r = c.command(53, io_ext_arg(true, 1, true, true, 0x8000, 4));
+        assert_eq!(r.write_blocks, 4);
+        for b in 0..4u32 {
+            c.transfer_write(b, &[b as u8 + 1; 64]);
+        }
+        let r = c.command(53, io_ext_arg(false, 1, true, true, 0x8000, 4));
+        assert_eq!(r.read_blocks, 4);
+        for b in 0..4u32 {
+            let mut block = [0u8; 512];
+            c.transfer_read(b, &mut block);
+            assert_eq!(block[..64], [b as u8 + 1; 64], "block {b}");
+            assert_eq!(block[64], 0, "only the block's own bytes");
+        }
+        // Byte mode: one block of exactly the byte count, and 0 means 512.
+        let r = c.command(53, io_ext_arg(false, 1, false, true, 0x8000, 7));
+        assert_eq!((r.read_blocks, r.read_lba), (1, 0));
+        let mut block = [0u8; 512];
+        c.transfer_read(0, &mut block);
+        assert_eq!(block[..7], [1, 1, 1, 1, 1, 1, 1]);
+        assert_eq!(block[7], 0, "the eighth byte was not asked for");
+        c.command(53, io_ext_arg(false, 1, false, true, 0x8000, 0));
+        c.transfer_read(0, &mut block);
+        assert_eq!(block[..4], [1; 4]);
+        assert_eq!(block[192], 4, "512 bytes: past the fourth block's start");
+        assert_eq!(block[256], 0, "...and past everything that was written");
+    }
+
+    #[test]
+    fn a_fixed_address_transfer_stays_on_one_register() {
+        // Op code 0: every block goes to the same address, which is how a
+        // FIFO is read. Four blocks written to it leave the last one.
+        let mut c = sdio_with_window(crate::periph::cyw43455::RAM_BASE);
+        c.command(53, io_ext_arg(true, 1, true, false, 0x8000, 4));
+        for b in 0..4u32 {
+            c.transfer_write(b, &[b as u8 + 1; 64]);
+        }
+        c.command(53, io_ext_arg(false, 1, true, true, 0x8000, 2));
+        let mut block = [0u8; 512];
+        c.transfer_read(0, &mut block);
+        assert_eq!(block[..64], [4; 64], "the last write is what is there");
+        c.transfer_read(1, &mut block);
+        assert_eq!(block[..64], [0; 64], "and nothing walked past it");
+    }
+
+    #[test]
+    fn the_window_is_the_three_sbaddr_bytes() {
+        // Two windows 32 KiB apart hold different bytes at the same offset.
+        let mut c = sdio_with_window(crate::periph::cyw43455::RAM_BASE);
+        c.command(53, io_ext_arg(true, 1, false, true, 0x8000, 4));
+        c.transfer_write(0, &[0xAA; 4]);
+        let mut c = sdio_with_window(crate::periph::cyw43455::RAM_BASE + 0x8000);
+        c.command(53, io_ext_arg(false, 1, false, true, 0x8000, 4));
+        let mut block = [0u8; 512];
+        c.transfer_read(0, &mut block);
+        assert_eq!(block[..4], [0; 4], "a different 32 KiB window");
+        // The offset inside the window is what is left of the address once
+        // the 4-byte-access flag is off: 0x8004 is window offset 4.
+        let mut c = sdio_with_window(crate::periph::cyw43455::RAM_BASE);
+        c.command(53, io_ext_arg(true, 1, false, true, 0x8004, 4));
+        c.transfer_write(0, &[0xBB; 4]);
+        c.command(53, io_ext_arg(false, 1, false, true, 0x8000, 8));
+        c.transfer_read(0, &mut block);
+        assert_eq!(block[..8], [0, 0, 0, 0, 0xBB, 0xBB, 0xBB, 0xBB]);
+    }
+
+    #[test]
+    fn function_2_is_not_the_backplane() {
+        // The frame FIFO is not modelled: function 2 answers zeros wherever
+        // the window points, and what it takes goes nowhere.
+        let mut c = sdio_with_window(crate::periph::cyw43455::RAM_BASE);
+        c.command(53, io_ext_arg(true, 1, false, true, 0x8000, 4));
+        c.transfer_write(0, &[0xCD; 4]);
+        c.command(53, io_ext_arg(false, 2, false, true, 0x8000, 4));
+        let mut block = [0xFFu8; 512];
+        c.transfer_read(0, &mut block);
+        assert_eq!(block[..4], [0; 4]);
+        c.command(53, io_ext_arg(true, 2, false, true, 0x8000, 4));
+        c.transfer_write(0, &[0x11; 4]);
+        c.command(53, io_ext_arg(false, 1, false, true, 0x8000, 4));
+        c.transfer_read(0, &mut block);
+        assert_eq!(block[..4], [0xCD; 4], "function 1 still has its bytes");
     }
 
     #[test]

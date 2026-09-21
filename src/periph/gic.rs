@@ -268,6 +268,21 @@ pub const ID_PCIE_INTA: u32 = crate::spec::pcie::IRQ_GIC_INTA;
 pub const ID_PCIE_MSI: u32 = crate::spec::pcie::IRQ_GIC_MSI;
 /// The BCM2711's own xHCI, the USB-C port's host controller (`otg_mode=1`).
 pub const ID_XHCI_OTG: u32 = crate::spec::xhci_otg::IRQ_GIC;
+/// The legacy DMA controller's lines, in the order
+/// [`DmaLegacy::irq_lines`](crate::periph::dma_legacy::DmaLegacy::irq_lines)
+/// reports them: channels 0 to 6, then the pairs 7/8 and 9/10. Linux's
+/// `mmc-bcm2835` drives the WiFi host's transfers through one of them.
+pub const ID_DMA: [u32; crate::periph::dma_legacy::NUM_GIC_LINES] = [
+    crate::spec::dma::IRQ_GIC_CH0,
+    crate::spec::dma::IRQ_GIC_CH1,
+    crate::spec::dma::IRQ_GIC_CH2,
+    crate::spec::dma::IRQ_GIC_CH3,
+    crate::spec::dma::IRQ_GIC_CH4,
+    crate::spec::dma::IRQ_GIC_CH5,
+    crate::spec::dma::IRQ_GIC_CH6,
+    crate::spec::dma::IRQ_GIC_CH7_8,
+    crate::spec::dma::IRQ_GIC_CH9_10,
+];
 /// The GPIO block's four lines: one a bank of pins, the third-bank output
 /// that mirrors bank 1's, and the one either bank raises.
 pub const ID_GPIO_BANK0: u32 = crate::spec::gpio::IRQ_GIC_BANK0;

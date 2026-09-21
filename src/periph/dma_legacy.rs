@@ -39,6 +39,10 @@ use crate::spec::{dma_vpu, Coverage};
 
 /// Channel slots in the larger of the two controllers.
 pub const NUM_CHAN: usize = dma_vpu::CS_COUNT as usize;
+/// Interrupt lines the GIC has for the `0x7E00_7000` controller: one per
+/// channel for 0..=6, then one for 7/8 and one for 9/10
+/// ([`DmaLegacy::irq_lines`]).
+pub const NUM_GIC_LINES: usize = 9;
 /// Registers modelled per channel (CS .. DEBUG).
 const NUM_REGS: usize = ((DEBUG - CS) / 4 + 1) as usize;
 
@@ -123,6 +127,26 @@ impl DmaLegacy {
         self.regs[ch][0] = (self.regs[ch][0] & !CS_ACTIVE) | CS_END | CS_INT;
         self.regs[ch][1] = 0;
         self.int_status |= 1 << ch;
+    }
+
+    /// The controller's interrupt outputs, one per line the GIC has for it:
+    /// a channel's line is up while its `CS.INT` is, and channels 7/8 and
+    /// 9/10 share a line each. A driver acknowledges by writing `CS.INT`
+    /// back, which is how `bcm2835_dma_callback` (Linux
+    /// `drivers/dma/bcm2835-dma.c`) ends its handler.
+    pub fn irq_lines(&self) -> [bool; NUM_GIC_LINES] {
+        let int = |ch: usize| self.regs[ch][0] & CS_INT != 0;
+        [
+            int(0),
+            int(1),
+            int(2),
+            int(3),
+            int(4),
+            int(5),
+            int(6),
+            int(7) || int(8),
+            int(9) || int(10),
+        ]
     }
 
     /// Decode one control block. Returns `(ti, src, dest, len, stride, next)`.
@@ -211,7 +235,16 @@ impl MmioDevice for DmaLegacy {
         if ch >= NUM_CHAN || reg >= NUM_REGS {
             return Ok(());
         }
-        self.regs[ch][reg] = value;
+        if reg == 0 {
+            // `CS.END` and `CS.INT` are write-1-to-clear, and a driver
+            // acknowledging its completion interrupt writes nothing else:
+            // `bcm2835_dma_callback` writes just `CS.INT`, and storing that
+            // as the whole register would leave the interrupt up for ever.
+            let keep = self.regs[ch][0] & (CS_END | CS_INT) & !value;
+            self.regs[ch][0] = (value & !(CS_END | CS_INT)) | keep;
+        } else {
+            self.regs[ch][reg] = value;
+        }
         // Two ways a transfer starts, and the firmware uses the second one:
         //
         //  * `CS.ACTIVE` set while `CONBLK_AD` already holds a chain, or

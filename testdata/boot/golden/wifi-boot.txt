@@ -732,18 +732,15 @@ Enter 'help' for a list of built-in commands.
 [t] cfg80211: failed to load regulatory.db
 [t] cfg80211: failed to load regulatory.db
 / # \x1b[6ninsmod $M/drivers/net/wireless/broadcom/brcm80211/brcmutil/brcmutil.ko
-/ # \x1b[6ninsmod $M/drivers/net/wireless/broadcom/brcm80211/brcmfmac/brcmfmac.ko
-[t] brcmfmac: brcmf_sdio_probe_attach: ChipClkCSR access: err 0 wrote 0x28 read 0x00
-[t] brcmfmac: brcmf_sdio_probe_attach: ChipClkCSR access: err 0 wrote 0x28 read 0x00
-[t] brcmfmac: brcmf_sdio_probe: brcmf_sdio_probe_attach failed
-[t] brcmfmac: brcmf_sdio_probe: brcmf_sdio_probe_attach failed
-[t] brcmfmac: brcmf_ops_sdio_probe: F2 error, probe failed -52...
-[t] brcmfmac: brcmf_ops_sdio_probe: F2 error, probe failed -52...
-[t] brcmfmac mmc1:0001:2: probe with driver brcmfmac failed with error -52
-[t] brcmfmac mmc1:0001:2: probe with driver brcmfmac failed with error -52
+/ # \x1b[6ninsmod $M/drivers/net/wireless/broadcom/brcm80211/brcmfmac/brcmfmac.ko; slee
+
+p 9; ip link; dmesg | tail -24
+[t] brcmfmac: brcmf_fw_alloc_request: using brcm/brcmfmac43455-sdio for chip BCM4345/6
+[t] brcmfmac: brcmf_fw_alloc_request: using brcm/brcmfmac43455-sdio for chip BCM4345/6
 [t] usbcore: registered new interface driver brcmfmac
 [t] usbcore: registered new interface driver brcmfmac
-/ # \x1b[6nip link
+[t] brcmfmac mmc1:0001:1: Direct firmware load for brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.bin failed with error -2
+[t] brcmfmac mmc1:0001:1: Direct firmware load for brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.bin failed with error -2
 [t] usb 1-1: New USB device found, idVendor=2109, idProduct=3431, bcdDevice= 4.21
 [t] usb 1-1: New USB device found, idVendor=2109, idProduct=3431, bcdDevice= 4.21
 [t] usb 1-1: New USB device strings: Mfr=0, Product=1, SerialNumber=0
@@ -754,13 +751,26 @@ Enter 'help' for a list of built-in commands.
 [t] hub 1-1:1.0: USB hub found
 [t] hub 1-1:1.0: 4 ports detected
 [t] hub 1-1:1.0: 4 ports detected
+[t] brcmfmac: brcmf_sdio_bus_rxctl: resumed on timeout
+[t] brcmfmac: brcmf_sdio_bus_rxctl: resumed on timeout
+[t] brcmfmac: brcmf_sdio_readshared: invalid sdpcm_shared address 0xFE4B01B4
+[t] brcmfmac: brcmf_sdio_readshared: invalid sdpcm_shared address 0xFE4B01B4
+[t] brcmfmac: brcmf_sdio_readshared: unable to obtain sdpcm_shared info: rv=-22 (addr=0xfe4b01b4)
+[t] brcmfmac: brcmf_sdio_readshared: unable to obtain sdpcm_shared info: rv=-22 (addr=0xfe4b01b4)
+[t] ieee80211 phy0: brcmf_bus_started: failed: -110
+[t] ieee80211 phy0: brcmf_bus_started: failed: -110
+[t] ieee80211 phy0: brcmf_attach: dongle is not responding: err=-110
+[t] ieee80211 phy0: brcmf_attach: dongle is not responding: err=-110
+[t] brcmfmac: brcmf_sdio_firmware_callback: brcmf_attach failed
+[t] brcmfmac: brcmf_sdio_firmware_callback: brcmf_attach failed
+[t] brcmfmac: brcmf_sdio_readshared: invalid sdpcm_shared address 0xFE4B01B4
+[t] brcmfmac: brcmf_sdio_readshared: invalid sdpcm_shared address 0xFE4B01B4
+[t] brcmfmac: brcmf_sdio_readshared: unable to obtain sdpcm_shared info: rv=-22 (addr=0xfe4b01b4)
+[t] brcmfmac: brcmf_sdio_readshared: unable to obtain sdpcm_shared info: rv=-22 (addr=0xfe4b01b4)
 1: lo: <LOOPBACK> mtu 65536 qdisc noop qlen 1000
     link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
 2: eth0: <BROADCAST,MULTICAST> mtu 1500 qdisc noop qlen 1000
     link/ether 02:00:5e:00:53:01 brd ff:ff:ff:ff:ff:ff
-/ # \x1b[6ndmesg | tail -20
-[t]     TERM=linux
-[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
 [t] cfg80211: Loading compiled-in X.509 certificates for regulatory database
 [t] Loaded X.509 cert 'benh@debian.org: 577e021cb980e0e820821ba7b54b4961b8b4fadf'
 [t] Loaded X.509 cert 'romain.perier@gmail.com: 3abbc6ec146e09d1b6016ab9d6cf71dd233f0328'
@@ -768,15 +778,21 @@ Enter 'help' for a list of built-in commands.
 [t] Loaded X.509 cert 'wens: 61c038651aabdcf94bd0ac7ff06c7248db18c600'
 [t] faux_driver regulatory: Direct firmware load for regulatory.db failed with error -2
 [t] cfg80211: failed to load regulatory.db
-[t] brcmfmac: F1 signature read @0x18000000=0xffffffff
-[t] brcmfmac: brcmf_sdio_probe_attach: ChipClkCSR access: err 0 wrote 0x28 read 0x00
-[t] brcmfmac: brcmf_sdio_probe: brcmf_sdio_probe_attach failed
-[t] brcmfmac: brcmf_ops_sdio_probe: F2 error, probe failed -52...
-[t] brcmfmac mmc1:0001:2: probe with driver brcmfmac failed with error -52
+[t] brcmfmac: F1 signature read @0x18000000=0x10064345
+[t] brcmfmac: brcmf_fw_alloc_request: using brcm/brcmfmac43455-sdio for chip BCM4345/6
 [t] usbcore: registered new interface driver brcmfmac
+[t] brcmfmac mmc1:0001:1: Direct firmware load for brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.bin failed with error -2
 [t] usb 1-1: New USB device found, idVendor=2109, idProduct=3431, bcdDevice= 4.21
 [t] usb 1-1: New USB device strings: Mfr=0, Product=1, SerialNumber=0
 [t] usb 1-1: Product: USB2.0 Hub
 [t] hub 1-1:1.0: USB hub found
 [t] hub 1-1:1.0: 4 ports detected
+[t] brcmfmac: brcmf_sdio_bus_rxctl: resumed on timeout
+[t] brcmfmac: brcmf_sdio_readshared: invalid sdpcm_shared address 0xFE4B01B4
+[t] brcmfmac: brcmf_sdio_readshared: unable to obtain sdpcm_shared info: rv=-22 (addr=0xfe4b01b4)
+[t] ieee80211 phy0: brcmf_bus_started: failed: -110
+[t] ieee80211 phy0: brcmf_attach: dongle is not responding: err=-110
+[t] brcmfmac: brcmf_sdio_firmware_callback: brcmf_attach failed
+[t] brcmfmac: brcmf_sdio_readshared: invalid sdpcm_shared address 0xFE4B01B4
+[t] brcmfmac: brcmf_sdio_readshared: unable to obtain sdpcm_shared info: rv=-22 (addr=0xfe4b01b4)
 / # \x1b[6n

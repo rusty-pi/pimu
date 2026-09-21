@@ -1064,6 +1064,11 @@ impl Machine {
                 Machine::dma_master(d.src, who),
                 Machine::dma_master(d.dest, who),
             );
+            if Machine::in_mmio(d.src) || Machine::in_mmio(d.dest) {
+                self.run_dma_periph(&d);
+                cb = d.next & 0x3FFF_FFFF;
+                continue;
+            }
             let (rows, xlen) = d.rows();
             let (src_stride, dest_stride) = d.strides();
             let mut src = d.src & 0x3FFF_FFFF;
@@ -1100,6 +1105,61 @@ impl Machine {
         // signals its waiter and starts the next one in the queue.
         let src = dma_irq_source(ch);
         self.push_pending_irq(src);
+    }
+
+    /// The two SD hosts' Buffer Data Ports, the only FIFOs anything aims a
+    /// legacy-DMA transfer at on this bench.
+    const EMMC_FIFO: u32 = map::EMMC_BASE + crate::spec::emmc::BUFFER_DATA;
+    const EMMC2_FIFO: u32 = map::EMMC2_BASE + crate::spec::emmc2::BUFFER_DATA;
+
+    /// One control block with a peripheral at one end. Linux drives the
+    /// legacy engine this way and start4 never does: `mmc-bcm2835` hands
+    /// every transfer of more than a couple of blocks to a DMA channel whose
+    /// slave configuration puts the SD host's Buffer Data Port at one end
+    /// (`bcm2835-mmc.c`, `dma_cfg_tx.dst_addr = bus_addr + SDHCI_BUFFER`) and
+    /// the request's scatter list at the other.
+    ///
+    /// Two things separate it from a memory-to-memory copy: the width — a
+    /// slave transfer moves whole words, as the configuration's
+    /// `{src,dst}_addr_width` says — and the DREQ, which paces the engine
+    /// against the FIFO. Neither end is 2D.
+    fn run_dma_periph(&mut self, d: &crate::periph::dma_legacy::Cb) {
+        let mut off = 0u32;
+        while off + 4 <= d.len {
+            let sa = if d.src_inc() { d.src + off } else { d.src };
+            let da = if d.dest_inc() { d.dest + off } else { d.dest };
+            let w = self.dma_periph_load(sa);
+            self.dma_periph_store(da, w);
+            off += 4;
+        }
+    }
+
+    /// One word from a legacy-DMA address: a peripheral register, a FIFO the
+    /// DREQ paces, or DRAM.
+    fn dma_periph_load(&mut self, addr: u32) -> u32 {
+        if !Machine::in_mmio(addr) {
+            return self.ram.load(addr & 0x3FFF_FFFF, Width::Word).unwrap_or(0);
+        }
+        match addr {
+            a if a == Self::EMMC_FIFO => self.emmc.dma_fifo_read(),
+            a if a == Self::EMMC2_FIFO => self.emmc2.dma_fifo_read(),
+            _ => self.load_device(addr, Width::Word).unwrap_or(0),
+        }
+    }
+
+    /// The same in the write direction.
+    fn dma_periph_store(&mut self, addr: u32, value: u32) {
+        if !Machine::in_mmio(addr) {
+            let _ = self.ram.store(addr & 0x3FFF_FFFF, Width::Word, value);
+            return;
+        }
+        match addr {
+            a if a == Self::EMMC_FIFO => self.emmc.dma_fifo_write(value),
+            a if a == Self::EMMC2_FIFO => self.emmc2.dma_fifo_write(value),
+            _ => {
+                let _ = self.store_device(addr, Width::Word, value);
+            }
+        }
     }
 
     /// One word from a 40-bit DMA4 address: endpoint MMIO if the PCIe root

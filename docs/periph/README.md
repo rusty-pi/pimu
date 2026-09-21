@@ -91,6 +91,15 @@ The `parent` of a block: the master of its bus, or the window it is carved out o
 | VPU source | 97 | [`hvs`](hvs.md) | — |
 | VPU source | 125 | [`rng`](rng.md) | — |
 | GIC id | 65 | [`mbox`](mbox.md) | `GIC_SPI 33` |
+| GIC id | 112 | [`dma`](dma.md) `CH0` | `GIC_SPI 80` |
+| GIC id | 113 | [`dma`](dma.md) `CH1` | `GIC_SPI 81` |
+| GIC id | 114 | [`dma`](dma.md) `CH2` | `GIC_SPI 82` |
+| GIC id | 115 | [`dma`](dma.md) `CH3` | `GIC_SPI 83` |
+| GIC id | 116 | [`dma`](dma.md) `CH4` | `GIC_SPI 84` |
+| GIC id | 117 | [`dma`](dma.md) `CH5` | `GIC_SPI 85` |
+| GIC id | 118 | [`dma`](dma.md) `CH6` | `GIC_SPI 86` |
+| GIC id | 119 | [`dma`](dma.md) `CH7_8` | `GIC_SPI 87` |
+| GIC id | 120 | [`dma`](dma.md) `CH9_10` | `GIC_SPI 88` |
 | GIC id | 125 | [`aux`](aux.md) | `GIC_SPI 93` |
 | GIC id | 129 | [`hvs`](hvs.md) | `GIC_SPI 97` |
 | GIC id | 145 | [`gpio`](gpio.md) `BANK0` | `GIC_SPI 113` |

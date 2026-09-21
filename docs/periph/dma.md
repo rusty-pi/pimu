@@ -5,6 +5,7 @@
 - Bus: `vpu` (VPU bus address)
 - Base: `0x7E007000`
 - Size: `0x1000`
+- Interrupts: `CH0` GIC id 112 (`GIC_SPI 80`) · `CH1` GIC id 113 (`GIC_SPI 81`) · `CH2` GIC id 114 (`GIC_SPI 82`) · `CH3` GIC id 115 (`GIC_SPI 83`) · `CH4` GIC id 116 (`GIC_SPI 84`) · `CH5` GIC id 117 (`GIC_SPI 85`) · `CH6` GIC id 118 (`GIC_SPI 86`) · `CH7_8` GIC id 119 (`GIC_SPI 87`) · `CH9_10` GIC id 120 (`GIC_SPI 88`)
 
 start4 copies anything of 1 KiB or more through here (`dma_memcpy`). Channel 11's slot at `+0xB00` is the DMA4 channel (`dma4`), decoded ahead of this block. The `0x7EE04100` controller (`dma_vpu`) has the same channel layout. A control block's addresses are VC4 bus addresses, alias bits and all, and the engine sits behind the L2: only `0xC000_0000` goes past the caches.
 
@@ -13,6 +14,13 @@ Sources:
 - datasheet (high): BCM2711 ARM Peripherals, DMA Controller chapter: channel register blocks `0x100` apart, `INT_STATUS` / `ENABLE` at `0xFE0` / `0xFF0`
 - decompile (high): `dma_memcpy` `0x3EC981CC`; `dma_set_cs` `0x3EC98E7C`: `base = ch < 15 ? 0x7E007000 : 0x7EE04100`, `start = *(base + ch * 0x100) = flags | 1`
 - trace (high): stock bootloader and start4 `dma_memcpy` transfers with `--log dma`: every control block this boot uses has both ends in the `0x0` alias, and the destination is read straight back through a cached alias with no flush in between — _So a transfer at a cached alias is coherent with the VPU, and `--check-coherency` only counts one at `0xC000_0000` as going behind the caches. Marking every legacy-DMA write as uncached reports ~11k stale reads in a stock boot that works on silicon._
+
+Interrupts (`CH0` GIC id 112 (`GIC_SPI 80`) · `CH1` GIC id 113 (`GIC_SPI 81`) · `CH2` GIC id 114 (`GIC_SPI 82`) · `CH3` GIC id 115 (`GIC_SPI 83`) · `CH4` GIC id 116 (`GIC_SPI 84`) · `CH5` GIC id 117 (`GIC_SPI 85`) · `CH6` GIC id 118 (`GIC_SPI 86`) · `CH7_8` GIC id 119 (`GIC_SPI 87`) · `CH9_10` GIC id 120 (`GIC_SPI 88`)):
+
+A channel's line is up while its `CS.INT` is, and the driver acknowledges by writing that bit back. Channels 0 to 6 have a line each; the four 'DMA lite' channels 7 to 10 share two. Channels 11 and up have no line here. The VPU's own controller takes the same completions as sources 80 to 95 (`src/machine.rs`, `dma_irq_source`).
+
+- linux (high): `bcm2711.dtsi`: `dma-controller@7e007000` `interrupts = <GIC_SPI 80 ...>` through `<GIC_SPI 86 ...>`, then `87`, `87`, `88`, `88` for the `/* DMA lite 7 - 10 */` channels, named `dma0`..`dma10`
+- linux (high): `bcm2835_dma_callback` (`drivers/dma/bcm2835-dma.c`) acknowledges with `writel(BCM2835_DMA_INT, c->chan_base + BCM2835_DMA_CS)`
 
 ## Register map
 

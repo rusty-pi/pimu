@@ -718,7 +718,7 @@ impl Emmc2 {
                 if let Some(card) = self.card.as_mut() {
                     let mut b = [0u8; 512];
                     for (i, chunk) in buf.chunks_mut(bs).enumerate() {
-                        card.read_block(response.read_lba.wrapping_add(i as u32), &mut b);
+                        card.transfer_read(response.read_lba.wrapping_add(i as u32), &mut b);
                         let n = chunk.len().min(512);
                         chunk[..n].copy_from_slice(&b[..n]);
                         card.block_done();
@@ -758,7 +758,7 @@ impl Emmc2 {
                 if d.write {
                     if let Some(card) = self.card.as_mut() {
                         for (i, block) in d.buf.chunks(d.block_size).enumerate() {
-                            card.write_block(d.lba.wrapping_add(i as u32), block);
+                            card.transfer_write(d.lba.wrapping_add(i as u32), block);
                             card.block_done();
                         }
                     }
@@ -892,7 +892,7 @@ impl Emmc2 {
         } else {
             let lba = self.read_lba;
             if let Some(card) = self.card.as_mut() {
-                card.read_block(lba, &mut block);
+                card.transfer_read(lba, &mut block);
                 card.block_done();
             }
             self.read_lba = lba.wrapping_add(1);
@@ -916,6 +916,29 @@ impl Emmc2 {
                 self.read_open_ended
             );
         }
+    }
+
+    /// The Buffer Data Port as the *external* DMA engine sees it, one word at
+    /// a time.
+    ///
+    /// The legacy host has no SDHCI DMA of its own: `mmc-bcm2835` moves every
+    /// transfer of more than a couple of blocks with the legacy DMA
+    /// controller, reading and writing this port over the bus with the card's
+    /// DREQ pacing it (`dma_cfg_rx.src_addr = bus_addr + SDHCI_BUFFER` in
+    /// `drivers/mmc/host/bcm2835-mmc.c`). That pacing is the difference from
+    /// the PIO path: the engine only asks for a word once the FIFO has one,
+    /// so the next block of a read is always there by the time it does,
+    /// rather than arriving after a status poll or two.
+    pub fn dma_fifo_read(&mut self) -> u32 {
+        if !self.buf_read_en() && (self.read_blocks_left > 0 || self.read_open_ended) {
+            self.block_arrives();
+        }
+        self.read_buffer_word()
+    }
+
+    /// The same port in the write direction.
+    pub fn dma_fifo_write(&mut self, value: u32) {
+        self.write_buffer(&value.to_le_bytes());
     }
 
     /// `PRESENT_STATE.BUF_READ_EN`: the buffer holds a block not yet read out.
@@ -998,7 +1021,7 @@ impl Emmc2 {
         };
         let auto = pw.auto_cmd12;
         if let Some(card) = self.card.as_mut() {
-            card.write_block(lba, &self.wbuf[..bs]);
+            card.transfer_write(lba, &self.wbuf[..bs]);
             card.block_done();
         }
         self.wbuf.clear();
@@ -1514,6 +1537,93 @@ mod tests {
             rd(&mut e, INT_STATUS) & INT_XFER_COMPLETE,
             INT_XFER_COMPLETE
         );
+    }
+
+    /// The WiFi chip on the legacy host, brought up and with function 1's
+    /// 64-byte block size agreed and the backplane window aimed at `window`
+    /// — where `brcmfmac` is before it downloads anything.
+    fn wifi_host(window: u32) -> Emmc2 {
+        let mut e = Emmc2::new_legacy();
+        e.put_card(Some(crate::periph::sdcard::SdCard::sdio()));
+        wr(&mut e, INT_STATUS_EN, 0xFFFF_FFFF);
+        cmd(&mut e, 5, 0, 0x02, 0);
+        cmd(&mut e, 5, 0x00FF_8000, 0x02, 0);
+        cmd(&mut e, 3, 0, R1, 0);
+        cmd(&mut e, 7, 0x0001_0000, 0x1B, 0);
+        let mut wb = |func: u32, addr: u32, v: u8| {
+            let arg = (1 << 31) | (func << 28) | (addr << 9) | u32::from(v);
+            cmd(&mut e, 52, arg, R1, 0);
+        };
+        for (i, b) in 64u16.to_le_bytes().iter().enumerate() {
+            wb(0, 0x110 + i as u32, *b);
+        }
+        let v = (window & 0xFFFF_8000) >> 8;
+        for i in 0..3 {
+            wb(1, 0x1000A + i, (v >> (8 * i)) as u8);
+        }
+        wr(&mut e, INT_STATUS, 0xFFFF_FFFF);
+        e
+    }
+
+    /// The shape of the firmware download: CMD53 to function 1, block mode,
+    /// as many 64-byte blocks as one command can carry, through the
+    /// backplane window into the chip's memory — and back out again.
+    #[test]
+    fn a_block_write_through_the_window_reaches_the_chips_memory() {
+        let base = crate::periph::cyw43455::RAM_BASE;
+        let mut e = wifi_host(base);
+        let blocks = 511u32; // the count field is nine bits
+        let bs = 64u32;
+        let data: Vec<u8> = (0..blocks * bs).map(|i| (i / 7) as u8).collect();
+
+        wr(&mut e, BLOCK_SIZE_COUNT, (blocks << 16) | bs);
+        // Write, function 1, block mode, incrementing, window offset 0 with
+        // the 4-byte-access flag.
+        let arg = (1 << 31) | (1 << 28) | (1 << 27) | (1 << 26) | (0x8000 << 9) | blocks;
+        cmd(&mut e, 53, arg, R1_DATA, TM_BLOCK_COUNT_EN | TM_MULTI);
+        for (i, word) in data.chunks(4).enumerate() {
+            assert_ne!(
+                rd(&mut e, PRESENT_STATE) & PS_BUF_WRITE_EN,
+                0,
+                "the buffer stopped taking bytes at word {i}"
+            );
+            wr(
+                &mut e,
+                BUFFER_DATA,
+                u32::from_le_bytes(word.try_into().unwrap()),
+            );
+        }
+        assert_eq!(
+            rd(&mut e, INT_STATUS) & INT_XFER_COMPLETE,
+            INT_XFER_COMPLETE,
+            "the transfer never finished"
+        );
+        assert_eq!(rd(&mut e, PRESENT_STATE) & PS_BUF_WRITE_EN, 0);
+        assert_eq!(
+            &e.card().unwrap().chip().unwrap().ram()[..data.len()],
+            &data[..]
+        );
+
+        // And read it back the way the driver verifies it.
+        wr(&mut e, INT_STATUS, 0xFFFF_FFFF);
+        let arg = (1 << 28) | (1 << 27) | (1 << 26) | (0x8000 << 9) | blocks;
+        cmd(
+            &mut e,
+            53,
+            arg,
+            R1_DATA,
+            TM_READ | TM_BLOCK_COUNT_EN | TM_MULTI,
+        );
+        let mut back = Vec::new();
+        while back.len() < data.len() {
+            let mut polls = 0;
+            while rd(&mut e, PRESENT_STATE) & PS_BUF_READ_EN == 0 {
+                polls += 1;
+                assert!(polls < 100, "block {} never arrived", back.len() / 64);
+            }
+            back.extend_from_slice(&rd(&mut e, BUFFER_DATA).to_le_bytes());
+        }
+        assert_eq!(back, data);
     }
 
     /// One 512-byte block through the Buffer Data Port the way both stock

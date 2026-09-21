@@ -21,6 +21,20 @@ ref        = "stock bootloader and start4 `dma_memcpy` transfers with `--log dma
 confidence = "high"
 note       = "So a transfer at a cached alias is coherent with the VPU, and `--check-coherency` only counts one at `0xC000_0000` as going behind the caches. Marking every legacy-DMA write as uncached reports ~11k stale reads in a stock boot that works on silicon."
 
+[block.irq]
+gic_spi = { CH0 = 80, CH1 = 81, CH2 = 82, CH3 = 83, CH4 = 84, CH5 = 85, CH6 = 86, CH7_8 = 87, CH9_10 = 88 }
+notes   = "A channel's line is up while its `CS.INT` is, and the driver acknowledges by writing that bit back. Channels 0 to 6 have a line each; the four 'DMA lite' channels 7 to 10 share two. Channels 11 and up have no line here. The VPU's own controller takes the same completions as sources 80 to 95 (`src/machine.rs`, `dma_irq_source`)."
+
+[[block.irq.source]]
+kind       = "linux"
+ref        = "`bcm2711.dtsi`: `dma-controller@7e007000` `interrupts = <GIC_SPI 80 ...>` through `<GIC_SPI 86 ...>`, then `87`, `87`, `88`, `88` for the `/* DMA lite 7 - 10 */` channels, named `dma0`..`dma10`"
+confidence = "high"
+
+[[block.irq.source]]
+kind       = "linux"
+ref        = "`bcm2835_dma_callback` (`drivers/dma/bcm2835-dma.c`) acknowledges with `writel(BCM2835_DMA_INT, c->chan_base + BCM2835_DMA_CS)`"
+confidence = "high"
+
 [[register]]
 name   = "CS"
 offset = 0x00
