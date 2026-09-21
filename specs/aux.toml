@@ -427,3 +427,663 @@ notes  = "Baud-rate counter (16 bits): the line runs at `system_clock / (8 * (MU
 kind       = "datasheet"
 ref        = "BCM2711 ARM Peripherals, §2.2.2 (Auxiliaries): `AUX_MU_BAUD_REG`"
 confidence = "high"
+
+[[register]]
+name   = "SPI1_CNTL0"
+offset = 0x80
+access = "rw"
+notes  = "SPI1 control word 0: clock, chip selects and shift set-up. Nothing on this SoC drives the pins the master would use in a boot — GPIO 16..21 carry it on ALT4 — so the model keeps the word and runs no transfer."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL0_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "SHIFT_LENGTH"
+bits  = "5:0"
+notes = "How many bits a transfer shifts."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL0_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "SHIFT_OUT_MS_BIT"
+bits  = "6"
+notes = "Shift out most-significant bit first."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL0_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "INVERT_CLK"
+bits  = "7"
+notes = "The clock line idles high."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL0_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "OUT_RISING"
+bits  = "8"
+notes = "Clock data out on the rising edge."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL0_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "CLEAR_FIFOS"
+bits  = "9"
+notes = "Hold both FIFOs in reset."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL0_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "IN_RISING"
+bits  = "10"
+notes = "Clock data in on the rising edge."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL0_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "ENABLE"
+bits  = "11"
+notes = "Enable the interface. The FIFOs can still be written while it is off."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL0_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "DOUT_HOLD"
+bits  = "13:12"
+notes = "Extra hold time on the data-out line, in system clock cycles."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL0_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "VARIABLE_WIDTH"
+bits  = "14"
+notes = "Take the shift length from the data word rather than from `SHIFT_LENGTH`."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL0_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "VARIABLE_CS"
+bits  = "15"
+notes = "Take the chip-select pattern from the data word."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL0_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "POST_INPUT"
+bits  = "16"
+notes = "Input is sampled one clock later."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL0_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "CHIP_SELECTS"
+bits  = "19:17"
+notes = "What the three CS pins carry while the transfer is on."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL0_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "SPEED"
+bits  = "31:20"
+notes = "Clock divisor: the bus runs at `system_clock / (2 * (SPEED + 1))`."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL0_REG`"
+confidence = "high"
+
+[[register]]
+name   = "SPI1_CNTL1"
+offset = 0x84
+access = "rw"
+notes  = "SPI1 control word 1: the interrupt conditions and the shift direction."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL1_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "KEEP_INPUT"
+bits  = "0"
+notes = "Do not clear the receive shift register between transfers."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL1_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "SHIFT_IN_MS_BIT"
+bits  = "1"
+notes = "Shift in most-significant bit first."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL1_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "DONE_IRQ"
+bits  = "6"
+notes = "Raise the interrupt while the interface is idle."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL1_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "TX_EMPTY_IRQ"
+bits  = "7"
+notes = "Raise the interrupt while the transmit FIFO is empty."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL1_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "CS_HIGH_TIME"
+bits  = "10:8"
+notes = "Extra clock cycles to hold CS high between transfers."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL1_REG`"
+confidence = "high"
+
+[[register]]
+name   = "SPI1_STAT"
+offset = 0x88
+access = "r"
+notes  = "SPI1 FIFO levels and the busy flag. The model reads 0: both FIFOs stay empty and the interface is never busy."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_STAT_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "BIT_COUNT"
+bits  = "5:0"
+notes = "Bits still to go in the transfer."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_STAT_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "BUSY"
+bits  = "6"
+notes = "A transfer is running."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_STAT_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "RX_EMPTY"
+bits  = "7"
+notes = "The receive FIFO is empty."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_STAT_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "RX_FULL"
+bits  = "8"
+notes = "The receive FIFO is full."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_STAT_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "TX_EMPTY"
+bits  = "9"
+notes = "The transmit FIFO is empty."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_STAT_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "TX_FULL"
+bits  = "10"
+notes = "The transmit FIFO is full."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_STAT_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "RX_FIFO_LEVEL"
+bits  = "19:16"
+notes = "How many words the receive FIFO holds."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_STAT_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "TX_FIFO_LEVEL"
+bits  = "27:24"
+notes = "How many words the transmit FIFO holds."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_STAT_REG`"
+confidence = "high"
+
+[[register]]
+name   = "SPI1_PEEK"
+offset = 0x8c
+access = "r"
+notes  = "The top of SPI1’s receive FIFO, without taking it off."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_PEEK_REG`"
+confidence = "high"
+
+[[register]]
+name   = "SPI1_IO"
+offset = 0xa0
+count  = 4
+stride = 4
+access = "rw"
+notes  = "SPI1 data: a write starts a transfer of `CNTL0.SHIFT_LENGTH` bits and a read takes the receive FIFO’s top word. Four addresses for one register, so a driver can pick the shift length from the address it writes."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_IO_REGa_REG`"
+confidence = "high"
+
+[[register]]
+name   = "SPI1_TXHOLD"
+offset = 0xb0
+count  = 4
+stride = 4
+access = "rw"
+notes  = "Like `SPI1_IO`, but CS stays asserted after the transfer, which is how a driver sends more than one word in a frame."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_TXHOLD_REGa_REG`"
+confidence = "high"
+
+[[register]]
+name   = "SPI2_CNTL0"
+offset = 0xc0
+access = "rw"
+notes  = "SPI2 control word 0: clock, chip selects and shift set-up. Nothing on this SoC drives the pins the master would use in a boot — GPIO 16..21 carry it on ALT4 — so the model keeps the word and runs no transfer."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL0_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "SHIFT_LENGTH"
+bits  = "5:0"
+notes = "How many bits a transfer shifts."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL0_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "SHIFT_OUT_MS_BIT"
+bits  = "6"
+notes = "Shift out most-significant bit first."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL0_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "INVERT_CLK"
+bits  = "7"
+notes = "The clock line idles high."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL0_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "OUT_RISING"
+bits  = "8"
+notes = "Clock data out on the rising edge."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL0_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "CLEAR_FIFOS"
+bits  = "9"
+notes = "Hold both FIFOs in reset."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL0_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "IN_RISING"
+bits  = "10"
+notes = "Clock data in on the rising edge."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL0_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "ENABLE"
+bits  = "11"
+notes = "Enable the interface. The FIFOs can still be written while it is off."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL0_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "DOUT_HOLD"
+bits  = "13:12"
+notes = "Extra hold time on the data-out line, in system clock cycles."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL0_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "VARIABLE_WIDTH"
+bits  = "14"
+notes = "Take the shift length from the data word rather than from `SHIFT_LENGTH`."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL0_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "VARIABLE_CS"
+bits  = "15"
+notes = "Take the chip-select pattern from the data word."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL0_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "POST_INPUT"
+bits  = "16"
+notes = "Input is sampled one clock later."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL0_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "CHIP_SELECTS"
+bits  = "19:17"
+notes = "What the three CS pins carry while the transfer is on."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL0_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "SPEED"
+bits  = "31:20"
+notes = "Clock divisor: the bus runs at `system_clock / (2 * (SPEED + 1))`."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL0_REG`"
+confidence = "high"
+
+[[register]]
+name   = "SPI2_CNTL1"
+offset = 0xc4
+access = "rw"
+notes  = "SPI2 control word 1: the interrupt conditions and the shift direction."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL1_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "KEEP_INPUT"
+bits  = "0"
+notes = "Do not clear the receive shift register between transfers."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL1_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "SHIFT_IN_MS_BIT"
+bits  = "1"
+notes = "Shift in most-significant bit first."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL1_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "DONE_IRQ"
+bits  = "6"
+notes = "Raise the interrupt while the interface is idle."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL1_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "TX_EMPTY_IRQ"
+bits  = "7"
+notes = "Raise the interrupt while the transmit FIFO is empty."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL1_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "CS_HIGH_TIME"
+bits  = "10:8"
+notes = "Extra clock cycles to hold CS high between transfers."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL1_REG`"
+confidence = "high"
+
+[[register]]
+name   = "SPI2_STAT"
+offset = 0xc8
+access = "r"
+notes  = "SPI2 FIFO levels and the busy flag. The model reads 0: both FIFOs stay empty and the interface is never busy."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_STAT_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "BIT_COUNT"
+bits  = "5:0"
+notes = "Bits still to go in the transfer."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_STAT_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "BUSY"
+bits  = "6"
+notes = "A transfer is running."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_STAT_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "RX_EMPTY"
+bits  = "7"
+notes = "The receive FIFO is empty."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_STAT_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "RX_FULL"
+bits  = "8"
+notes = "The receive FIFO is full."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_STAT_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "TX_EMPTY"
+bits  = "9"
+notes = "The transmit FIFO is empty."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_STAT_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "TX_FULL"
+bits  = "10"
+notes = "The transmit FIFO is full."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_STAT_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "RX_FIFO_LEVEL"
+bits  = "19:16"
+notes = "How many words the receive FIFO holds."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_STAT_REG`"
+confidence = "high"
+
+[[register.field]]
+name  = "TX_FIFO_LEVEL"
+bits  = "27:24"
+notes = "How many words the transmit FIFO holds."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_STAT_REG`"
+confidence = "high"
+
+[[register]]
+name   = "SPI2_PEEK"
+offset = 0xcc
+access = "r"
+notes  = "The top of SPI2’s receive FIFO, without taking it off."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_PEEK_REG`"
+confidence = "high"
+
+[[register]]
+name   = "SPI2_IO"
+offset = 0xe0
+count  = 4
+stride = 4
+access = "rw"
+notes  = "SPI2 data: a write starts a transfer of `CNTL0.SHIFT_LENGTH` bits and a read takes the receive FIFO’s top word. Four addresses for one register, so a driver can pick the shift length from the address it writes."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_IO_REGa_REG`"
+confidence = "high"
+
+[[register]]
+name   = "SPI2_TXHOLD"
+offset = 0xf0
+count  = 4
+stride = 4
+access = "rw"
+notes  = "Like `SPI2_IO`, but CS stays asserted after the transfer, which is how a driver sends more than one word in a frame."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_TXHOLD_REGa_REG`"
+confidence = "high"

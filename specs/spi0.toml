@@ -163,6 +163,166 @@ kind       = "datasheet"
 ref        = "BCM2711 ARM Peripherals, §9.5 (SPI): `CS.RXF`"
 confidence = "high"
 
+[[register.field]]
+name   = "CPHA"
+bits   = "2"
+notes  = "Clock phase: sample on the second edge."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §9.5 Table 160 (`CS`)"
+confidence = "high"
+
+[[register.field]]
+name   = "CPOL"
+bits   = "3"
+notes  = "Clock polarity: the clock idles high."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §9.5 Table 160 (`CS`)"
+confidence = "high"
+
+[[register.field]]
+name   = "CSPOL"
+bits   = "6"
+notes  = "Chip select is active high."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §9.5 Table 160 (`CS`)"
+confidence = "high"
+
+[[register.field]]
+name   = "DMAEN"
+bits   = "8"
+notes  = "Pace the FIFOs with DREQs, so a DMA channel can drive the transfer. Writing `FIFO` then means writing the DMA header, not a byte."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §9.5 Table 160 (`CS`)"
+confidence = "high"
+
+[[register.field]]
+name   = "INTD"
+bits   = "9"
+notes  = "Raise the interrupt when `DONE` goes up."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §9.5 Table 160 (`CS`)"
+confidence = "high"
+
+[[register.field]]
+name   = "INTR"
+bits   = "10"
+notes  = "Raise the interrupt when `RXR` goes up."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §9.5 Table 160 (`CS`)"
+confidence = "high"
+
+[[register.field]]
+name   = "ADCS"
+bits   = "11"
+notes  = "De-assert chip select automatically at the end of a DMA transfer."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §9.5 Table 160 (`CS`)"
+confidence = "high"
+
+[[register.field]]
+name   = "REN"
+bits   = "12"
+notes  = "Read enable: in bidirectional mode the pin is an input."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §9.5 Table 160 (`CS`)"
+confidence = "high"
+
+[[register.field]]
+name   = "LEN"
+bits   = "13"
+notes  = "LoSSI mode — the master drives a display’s 9-bit command / parameter protocol rather than plain SPI."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §9.5 Table 160 (`CS`)"
+confidence = "high"
+
+[[register.field]]
+name   = "LMONO"
+bits   = "14"
+notes  = "Unused on this chip; the datasheet keeps the bit."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §9.5 Table 160 (`CS`)"
+confidence = "high"
+
+[[register.field]]
+name   = "TE_EN"
+bits   = "15"
+notes  = "Unused on this chip; the datasheet keeps the bit."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §9.5 Table 160 (`CS`)"
+confidence = "high"
+
+[[register.field]]
+name   = "CSPOL0"
+bits   = "21"
+notes  = "Chip select 0 is active high."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §9.5 Table 160 (`CS`)"
+confidence = "high"
+
+[[register.field]]
+name   = "CSPOL1"
+bits   = "22"
+notes  = "Chip select 1 is active high."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §9.5 Table 160 (`CS`)"
+confidence = "high"
+
+[[register.field]]
+name   = "CSPOL2"
+bits   = "23"
+notes  = "Chip select 2 is active high."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §9.5 Table 160 (`CS`)"
+confidence = "high"
+
+[[register.field]]
+name   = "DMA_LEN"
+bits   = "24"
+notes  = "DMA in LoSSI mode."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §9.5 Table 160 (`CS`)"
+confidence = "high"
+
+[[register.field]]
+name   = "LEN_LONG"
+bits   = "25"
+notes  = "32-bit LoSSI words while `DMA_LEN` is set."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §9.5 Table 160 (`CS`)"
+confidence = "high"
+
 [[register]]
 name   = "FIFO"
 offset = 0x04
@@ -210,7 +370,7 @@ confidence = "high"
 name   = "LTOH"
 offset = 0x10
 access = "rw"
-notes  = "LoSSI output hold delay."
+notes  = "LoSSI output hold delay, in APB clocks (`TOH`, bits 3:0, reset 1). Only `CS.LEN` mode uses it, and nothing in a boot enters that mode: the EEPROM bootloader talks plain SPI to the NOR flash."
 
 [[register.source]]
 kind       = "datasheet"
@@ -221,7 +381,7 @@ confidence = "high"
 name   = "DC"
 offset = 0x14
 access = "rw"
-notes  = "DMA DREQ controls."
+notes  = "The four DMA thresholds: `TDREQ` (7:0) and `TPANIC` (15:8) for writes, `RDREQ` (23:16) and `RPANIC` (31:24) for reads, resetting to `0x20`, `0x10`, `0x20` and `0x30`. They say how full a FIFO has to be before the master raises its DREQ, and then its panic, to the DMA channel `TI.PERMAP` 6 and 7 select. The model transfers a byte at a time inside the `FIFO` write and never raises a DREQ, so the word is storage."
 
 [[register.source]]
 kind       = "datasheet"

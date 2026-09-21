@@ -9,7 +9,7 @@ Generated from the TOML specs in [`specs/`](../../specs/); see [`specs/README.md
 | [`armctrl`](armctrl.md) | vpu | `0x7E00B000` | `0x880` | 4 | ARM control block as the VPU sees it, below the mailboxes: where `arm_loader` releases the ARM |
 | [`armlocal`](armlocal.md) | arm | `0xFF800000` | `0x100` | 2 | ARM local block: only the two registers the armstub writes |
 | [`asb`](asb.md) | vpu | `0x7E00A000` | `0x1000` | 4 | AXI async slave bridges: the stop / acknowledge handshake before gating the V3D, ISP and H264 power domains |
-| [`aux`](aux.md) | vpu | `0x7E215000` | `0x100` | 13 | AUX: mini-UART (UART1) and the SPI1 / SPI2 masters |
+| [`aux`](aux.md) | vpu | `0x7E215000` | `0x100` | 25 | AUX: mini-UART (UART1) and the SPI1 / SPI2 masters |
 | [`avs`](avs.md) | vpu | `0x7D5D2000` | `0xF00` | 10 | AVS monitor: on-die temperature sensor and the ring-oscillator / rail voltage monitors |
 | [`bcm54213pe`](bcm54213pe.md) | mdio | `0x01` | `0x20` | 23 | BCM54213PE gigabit Ethernet PHY on GENET's MDIO bus |
 | [`bootbox`](bootbox.md) | vpu | `0x7EE00000` | `0x4000` | 20 | Boot-info handoff doorbells, and the VPU interrupt window start4's exception-12 handler reads |

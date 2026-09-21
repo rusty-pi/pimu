@@ -37,6 +37,18 @@ One line for the whole block, ORed from the mini-UART and the two SPI masters; `
 | `0x060` | [`MU_CNTL`](#mu_cntl) | rw | 32 | 1, best high |
 | `0x064` | [`MU_STAT`](#mu_stat) | r | 32 | 1, best high |
 | `0x068` | [`MU_BAUD`](#mu_baud) | rw | 32 | 1, best high |
+| `0x080` | [`SPI1_CNTL0`](#spi1_cntl0) | rw | 32 | 1, best high |
+| `0x084` | [`SPI1_CNTL1`](#spi1_cntl1) | rw | 32 | 1, best high |
+| `0x088` | [`SPI1_STAT`](#spi1_stat) | r | 32 | 1, best high |
+| `0x08C` | [`SPI1_PEEK`](#spi1_peek) | r | 32 | 1, best high |
+| `0x0A0`–`0x0AC` (4 × 0x4) | [`SPI1_IO`](#spi1_io) | rw | 32 | 1, best high |
+| `0x0B0`–`0x0BC` (4 × 0x4) | [`SPI1_TXHOLD`](#spi1_txhold) | rw | 32 | 1, best high |
+| `0x0C0` | [`SPI2_CNTL0`](#spi2_cntl0) | rw | 32 | 1, best high |
+| `0x0C4` | [`SPI2_CNTL1`](#spi2_cntl1) | rw | 32 | 1, best high |
+| `0x0C8` | [`SPI2_STAT`](#spi2_stat) | r | 32 | 1, best high |
+| `0x0CC` | [`SPI2_PEEK`](#spi2_peek) | r | 32 | 1, best high |
+| `0x0E0`–`0x0EC` (4 × 0x4) | [`SPI2_IO`](#spi2_io) | rw | 32 | 1, best high |
+| `0x0F0`–`0x0FC` (4 × 0x4) | [`SPI2_TXHOLD`](#spi2_txhold) | rw | 32 | 1, best high |
 
 ## `IRQ`
 
@@ -318,3 +330,401 @@ Baud-rate counter (16 bits): the line runs at `system_clock / (8 * (MU_BAUD + 1)
 Sources:
 
 - datasheet (high): BCM2711 ARM Peripherals, §2.2.2 (Auxiliaries): `AUX_MU_BAUD_REG`
+
+## `SPI1_CNTL0`
+
+Offset `0x080` · access `rw` · 32 bits
+
+SPI1 control word 0: clock, chip selects and shift set-up. Nothing on this SoC drives the pins the master would use in a boot — GPIO 16..21 carry it on ALT4 — so the model keeps the word and runs no transfer.
+
+| Bits | Field | Access | Notes |
+|---|---|---|---|
+| 5:0 | `SHIFT_LENGTH` | rw | How many bits a transfer shifts. |
+| 6 | `SHIFT_OUT_MS_BIT` | rw | Shift out most-significant bit first. |
+| 7 | `INVERT_CLK` | rw | The clock line idles high. |
+| 8 | `OUT_RISING` | rw | Clock data out on the rising edge. |
+| 9 | `CLEAR_FIFOS` | rw | Hold both FIFOs in reset. |
+| 10 | `IN_RISING` | rw | Clock data in on the rising edge. |
+| 11 | `ENABLE` | rw | Enable the interface. The FIFOs can still be written while it is off. |
+| 13:12 | `DOUT_HOLD` | rw | Extra hold time on the data-out line, in system clock cycles. |
+| 14 | `VARIABLE_WIDTH` | rw | Take the shift length from the data word rather than from `SHIFT_LENGTH`. |
+| 15 | `VARIABLE_CS` | rw | Take the chip-select pattern from the data word. |
+| 16 | `POST_INPUT` | rw | Input is sampled one clock later. |
+| 19:17 | `CHIP_SELECTS` | rw | What the three CS pins carry while the transfer is on. |
+| 31:20 | `SPEED` | rw | Clock divisor: the bus runs at `system_clock / (2 * (SPEED + 1))`. |
+
+Sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL0_REG`
+
+`SHIFT_LENGTH` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL0_REG`
+
+`SHIFT_OUT_MS_BIT` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL0_REG`
+
+`INVERT_CLK` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL0_REG`
+
+`OUT_RISING` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL0_REG`
+
+`CLEAR_FIFOS` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL0_REG`
+
+`IN_RISING` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL0_REG`
+
+`ENABLE` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL0_REG`
+
+`DOUT_HOLD` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL0_REG`
+
+`VARIABLE_WIDTH` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL0_REG`
+
+`VARIABLE_CS` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL0_REG`
+
+`POST_INPUT` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL0_REG`
+
+`CHIP_SELECTS` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL0_REG`
+
+`SPEED` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL0_REG`
+
+## `SPI1_CNTL1`
+
+Offset `0x084` · access `rw` · 32 bits
+
+SPI1 control word 1: the interrupt conditions and the shift direction.
+
+| Bits | Field | Access | Notes |
+|---|---|---|---|
+| 0 | `KEEP_INPUT` | rw | Do not clear the receive shift register between transfers. |
+| 1 | `SHIFT_IN_MS_BIT` | rw | Shift in most-significant bit first. |
+| 6 | `DONE_IRQ` | rw | Raise the interrupt while the interface is idle. |
+| 7 | `TX_EMPTY_IRQ` | rw | Raise the interrupt while the transmit FIFO is empty. |
+| 10:8 | `CS_HIGH_TIME` | rw | Extra clock cycles to hold CS high between transfers. |
+
+Sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL1_REG`
+
+`KEEP_INPUT` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL1_REG`
+
+`SHIFT_IN_MS_BIT` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL1_REG`
+
+`DONE_IRQ` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL1_REG`
+
+`TX_EMPTY_IRQ` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL1_REG`
+
+`CS_HIGH_TIME` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_CNTL1_REG`
+
+## `SPI1_STAT`
+
+Offset `0x088` · access `r` · 32 bits
+
+SPI1 FIFO levels and the busy flag. The model reads 0: both FIFOs stay empty and the interface is never busy.
+
+| Bits | Field | Access | Notes |
+|---|---|---|---|
+| 5:0 | `BIT_COUNT` | r | Bits still to go in the transfer. |
+| 6 | `BUSY` | r | A transfer is running. |
+| 7 | `RX_EMPTY` | r | The receive FIFO is empty. |
+| 8 | `RX_FULL` | r | The receive FIFO is full. |
+| 9 | `TX_EMPTY` | r | The transmit FIFO is empty. |
+| 10 | `TX_FULL` | r | The transmit FIFO is full. |
+| 19:16 | `RX_FIFO_LEVEL` | r | How many words the receive FIFO holds. |
+| 27:24 | `TX_FIFO_LEVEL` | r | How many words the transmit FIFO holds. |
+
+Sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_STAT_REG`
+
+`BIT_COUNT` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_STAT_REG`
+
+`BUSY` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_STAT_REG`
+
+`RX_EMPTY` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_STAT_REG`
+
+`RX_FULL` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_STAT_REG`
+
+`TX_EMPTY` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_STAT_REG`
+
+`TX_FULL` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_STAT_REG`
+
+`RX_FIFO_LEVEL` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_STAT_REG`
+
+`TX_FIFO_LEVEL` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_STAT_REG`
+
+## `SPI1_PEEK`
+
+Offset `0x08C` · access `r` · 32 bits
+
+The top of SPI1’s receive FIFO, without taking it off.
+
+Sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_PEEK_REG`
+
+## `SPI1_IO`
+
+Offset `0x0A0`, 4 elements 0x4 apart · access `rw` · 32 bits
+
+SPI1 data: a write starts a transfer of `CNTL0.SHIFT_LENGTH` bits and a read takes the receive FIFO’s top word. Four addresses for one register, so a driver can pick the shift length from the address it writes.
+
+Sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_IO_REGa_REG`
+
+## `SPI1_TXHOLD`
+
+Offset `0x0B0`, 4 elements 0x4 apart · access `rw` · 32 bits
+
+Like `SPI1_IO`, but CS stays asserted after the transfer, which is how a driver sends more than one word in a frame.
+
+Sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI1_TXHOLD_REGa_REG`
+
+## `SPI2_CNTL0`
+
+Offset `0x0C0` · access `rw` · 32 bits
+
+SPI2 control word 0: clock, chip selects and shift set-up. Nothing on this SoC drives the pins the master would use in a boot — GPIO 16..21 carry it on ALT4 — so the model keeps the word and runs no transfer.
+
+| Bits | Field | Access | Notes |
+|---|---|---|---|
+| 5:0 | `SHIFT_LENGTH` | rw | How many bits a transfer shifts. |
+| 6 | `SHIFT_OUT_MS_BIT` | rw | Shift out most-significant bit first. |
+| 7 | `INVERT_CLK` | rw | The clock line idles high. |
+| 8 | `OUT_RISING` | rw | Clock data out on the rising edge. |
+| 9 | `CLEAR_FIFOS` | rw | Hold both FIFOs in reset. |
+| 10 | `IN_RISING` | rw | Clock data in on the rising edge. |
+| 11 | `ENABLE` | rw | Enable the interface. The FIFOs can still be written while it is off. |
+| 13:12 | `DOUT_HOLD` | rw | Extra hold time on the data-out line, in system clock cycles. |
+| 14 | `VARIABLE_WIDTH` | rw | Take the shift length from the data word rather than from `SHIFT_LENGTH`. |
+| 15 | `VARIABLE_CS` | rw | Take the chip-select pattern from the data word. |
+| 16 | `POST_INPUT` | rw | Input is sampled one clock later. |
+| 19:17 | `CHIP_SELECTS` | rw | What the three CS pins carry while the transfer is on. |
+| 31:20 | `SPEED` | rw | Clock divisor: the bus runs at `system_clock / (2 * (SPEED + 1))`. |
+
+Sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL0_REG`
+
+`SHIFT_LENGTH` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL0_REG`
+
+`SHIFT_OUT_MS_BIT` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL0_REG`
+
+`INVERT_CLK` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL0_REG`
+
+`OUT_RISING` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL0_REG`
+
+`CLEAR_FIFOS` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL0_REG`
+
+`IN_RISING` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL0_REG`
+
+`ENABLE` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL0_REG`
+
+`DOUT_HOLD` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL0_REG`
+
+`VARIABLE_WIDTH` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL0_REG`
+
+`VARIABLE_CS` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL0_REG`
+
+`POST_INPUT` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL0_REG`
+
+`CHIP_SELECTS` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL0_REG`
+
+`SPEED` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL0_REG`
+
+## `SPI2_CNTL1`
+
+Offset `0x0C4` · access `rw` · 32 bits
+
+SPI2 control word 1: the interrupt conditions and the shift direction.
+
+| Bits | Field | Access | Notes |
+|---|---|---|---|
+| 0 | `KEEP_INPUT` | rw | Do not clear the receive shift register between transfers. |
+| 1 | `SHIFT_IN_MS_BIT` | rw | Shift in most-significant bit first. |
+| 6 | `DONE_IRQ` | rw | Raise the interrupt while the interface is idle. |
+| 7 | `TX_EMPTY_IRQ` | rw | Raise the interrupt while the transmit FIFO is empty. |
+| 10:8 | `CS_HIGH_TIME` | rw | Extra clock cycles to hold CS high between transfers. |
+
+Sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL1_REG`
+
+`KEEP_INPUT` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL1_REG`
+
+`SHIFT_IN_MS_BIT` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL1_REG`
+
+`DONE_IRQ` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL1_REG`
+
+`TX_EMPTY_IRQ` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL1_REG`
+
+`CS_HIGH_TIME` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_CNTL1_REG`
+
+## `SPI2_STAT`
+
+Offset `0x0C8` · access `r` · 32 bits
+
+SPI2 FIFO levels and the busy flag. The model reads 0: both FIFOs stay empty and the interface is never busy.
+
+| Bits | Field | Access | Notes |
+|---|---|---|---|
+| 5:0 | `BIT_COUNT` | r | Bits still to go in the transfer. |
+| 6 | `BUSY` | r | A transfer is running. |
+| 7 | `RX_EMPTY` | r | The receive FIFO is empty. |
+| 8 | `RX_FULL` | r | The receive FIFO is full. |
+| 9 | `TX_EMPTY` | r | The transmit FIFO is empty. |
+| 10 | `TX_FULL` | r | The transmit FIFO is full. |
+| 19:16 | `RX_FIFO_LEVEL` | r | How many words the receive FIFO holds. |
+| 27:24 | `TX_FIFO_LEVEL` | r | How many words the transmit FIFO holds. |
+
+Sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_STAT_REG`
+
+`BIT_COUNT` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_STAT_REG`
+
+`BUSY` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_STAT_REG`
+
+`RX_EMPTY` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_STAT_REG`
+
+`RX_FULL` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_STAT_REG`
+
+`TX_EMPTY` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_STAT_REG`
+
+`TX_FULL` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_STAT_REG`
+
+`RX_FIFO_LEVEL` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_STAT_REG`
+
+`TX_FIFO_LEVEL` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_STAT_REG`
+
+## `SPI2_PEEK`
+
+Offset `0x0CC` · access `r` · 32 bits
+
+The top of SPI2’s receive FIFO, without taking it off.
+
+Sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_PEEK_REG`
+
+## `SPI2_IO`
+
+Offset `0x0E0`, 4 elements 0x4 apart · access `rw` · 32 bits
+
+SPI2 data: a write starts a transfer of `CNTL0.SHIFT_LENGTH` bits and a read takes the receive FIFO’s top word. Four addresses for one register, so a driver can pick the shift length from the address it writes.
+
+Sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_IO_REGa_REG`
+
+## `SPI2_TXHOLD`
+
+Offset `0x0F0`, 4 elements 0x4 apart · access `rw` · 32 bits
+
+Like `SPI2_IO`, but CS stays asserted after the transfer, which is how a driver sends more than one word in a frame.
+
+Sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §2.3.4 (Auxiliaries): `AUX_SPI2_TXHOLD_REGa_REG`

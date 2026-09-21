@@ -53,6 +53,22 @@ Control and status.
 | 18 | `TXD` | r | TX FIFO has room. |
 | 19 | `RXR` | r | RX FIFO needs reading. |
 | 20 | `RXF` | r | RX FIFO full. |
+| 2 | `CPHA` | rw | Clock phase: sample on the second edge. |
+| 3 | `CPOL` | rw | Clock polarity: the clock idles high. |
+| 6 | `CSPOL` | rw | Chip select is active high. |
+| 8 | `DMAEN` | rw | Pace the FIFOs with DREQs, so a DMA channel can drive the transfer. Writing `FIFO` then means writing the DMA header, not a byte. |
+| 9 | `INTD` | rw | Raise the interrupt when `DONE` goes up. |
+| 10 | `INTR` | rw | Raise the interrupt when `RXR` goes up. |
+| 11 | `ADCS` | rw | De-assert chip select automatically at the end of a DMA transfer. |
+| 12 | `REN` | rw | Read enable: in bidirectional mode the pin is an input. |
+| 13 | `LEN` | rw | LoSSI mode — the master drives a display’s 9-bit command / parameter protocol rather than plain SPI. |
+| 14 | `LMONO` | rw | Unused on this chip; the datasheet keeps the bit. |
+| 15 | `TE_EN` | rw | Unused on this chip; the datasheet keeps the bit. |
+| 21 | `CSPOL0` | rw | Chip select 0 is active high. |
+| 22 | `CSPOL1` | rw | Chip select 1 is active high. |
+| 23 | `CSPOL2` | rw | Chip select 2 is active high. |
+| 24 | `DMA_LEN` | rw | DMA in LoSSI mode. |
+| 25 | `LEN_LONG` | rw | 32-bit LoSSI words while `DMA_LEN` is set. |
 
 Sources:
 
@@ -95,6 +111,70 @@ Sources:
 
 - datasheet (high): BCM2711 ARM Peripherals, §9.5 (SPI): `CS.RXF`
 
+`CPHA` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §9.5 Table 160 (`CS`)
+
+`CPOL` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §9.5 Table 160 (`CS`)
+
+`CSPOL` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §9.5 Table 160 (`CS`)
+
+`DMAEN` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §9.5 Table 160 (`CS`)
+
+`INTD` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §9.5 Table 160 (`CS`)
+
+`INTR` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §9.5 Table 160 (`CS`)
+
+`ADCS` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §9.5 Table 160 (`CS`)
+
+`REN` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §9.5 Table 160 (`CS`)
+
+`LEN` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §9.5 Table 160 (`CS`)
+
+`LMONO` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §9.5 Table 160 (`CS`)
+
+`TE_EN` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §9.5 Table 160 (`CS`)
+
+`CSPOL0` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §9.5 Table 160 (`CS`)
+
+`CSPOL1` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §9.5 Table 160 (`CS`)
+
+`CSPOL2` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §9.5 Table 160 (`CS`)
+
+`DMA_LEN` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §9.5 Table 160 (`CS`)
+
+`LEN_LONG` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §9.5 Table 160 (`CS`)
+
 ## `FIFO`
 
 Offset `0x004` · access `rw` · 32 bits
@@ -131,7 +211,7 @@ Sources:
 
 Offset `0x010` · access `rw` · 32 bits
 
-LoSSI output hold delay.
+LoSSI output hold delay, in APB clocks (`TOH`, bits 3:0, reset 1). Only `CS.LEN` mode uses it, and nothing in a boot enters that mode: the EEPROM bootloader talks plain SPI to the NOR flash.
 
 Sources:
 
@@ -141,7 +221,7 @@ Sources:
 
 Offset `0x014` · access `rw` · 32 bits
 
-DMA DREQ controls.
+The four DMA thresholds: `TDREQ` (7:0) and `TPANIC` (15:8) for writes, `RDREQ` (23:16) and `RPANIC` (31:24) for reads, resetting to `0x20`, `0x10`, `0x20` and `0x30`. They say how full a FIFO has to be before the master raises its DREQ, and then its panic, to the DMA channel `TI.PERMAP` 6 and 7 select. The model transfers a byte at a time inside the `FIFO` write and never raises a DREQ, so the word is storage.
 
 Sources:
 

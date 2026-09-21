@@ -3,7 +3,12 @@ name    = "dma"
 base    = 0x7E007000
 size    = 0x1000
 summary = "Legacy DMA controller: 15 channels `0x100` apart plus the controller-wide interrupt status and enable words"
-notes   = "start4 copies anything of 1 KiB or more through here (`dma_memcpy`). Channel 11's slot at `+0xB00` is the DMA4 channel (`dma4`), decoded ahead of this block. The `0x7EE04100` controller (`dma_vpu`) has the same channel layout. A control block's addresses are VC4 bus addresses, alias bits and all, and the engine sits behind the L2: only `0xC000_0000` goes past the caches."
+notes   = "start4 copies anything of 1 KiB or more through here (`dma_memcpy`). The sixteen channels are three kinds of engine: 0 to 6 the full ones, 7 to 10 DMA Lite (a 16-bit `TXFR_LEN`, no 2D mode, no `SRC_IGNORE` / `DEST_IGNORE`, half the bandwidth), and 11 to 14 DMA4, which are 40-bit and have a register map of their own. Channel 11's slot at `+0xB00` is the DMA4 channel (`dma4`), decoded ahead of this block. The `0x7EE04100` controller (`dma_vpu`) has the same channel layout. A control block's addresses are VC4 bus addresses, alias bits and all, and the engine sits behind the L2: only `0xC000_0000` goes past the caches."
+
+[[block.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §4.5 (DMA LITE Engines) and §4.6 (DMA4 Engines): what each kind of engine can and cannot do"
+confidence = "high"
 
 [[block.source]]
 kind       = "datasheet"
@@ -52,7 +57,7 @@ offset = 0x00
 count  = 15
 stride = 0x100
 access = "rw"
-notes  = "Channel control and status."
+notes  = "Channel control and status. The model runs a transfer to completion on the `ACTIVE` write, so the fields that describe a channel mid-transfer — `PAUSED`, `DREQ`, `WAITING_FOR_OUTSTANDING_WRITES` — are never set, and `RESET` / `ABORT` have nothing to act on."
 
 [[register.source]]
 kind       = "datasheet"
@@ -87,6 +92,116 @@ notes = "Interrupt pending."
 [[register.field.source]]
 kind       = "decompile"
 ref        = "`dma_interrupt` `0x3EC980E8` only enters `dma_chan_interrupt` for a channel with `CS & 4`"
+confidence = "high"
+
+[[register.field]]
+name  = "DREQ"
+bits  = "3"
+notes = "The DREQ `TI.PERMAP` selects, as the channel sees it right now."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §4.2.1.2 Table 38 (`0_CS` to `6_CS`); Table 48 is the DMA Lite version"
+confidence = "high"
+
+[[register.field]]
+name  = "PAUSED"
+bits  = "4"
+notes = "The channel is paused — `ACTIVE` is clear, or it is between control blocks."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §4.2.1.2 Table 38 (`0_CS` to `6_CS`); Table 48 is the DMA Lite version"
+confidence = "high"
+
+[[register.field]]
+name  = "DREQ_STOPS_DMA"
+bits  = "5"
+notes = "The channel is paused because the DREQ is low."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §4.2.1.2 Table 38 (`0_CS` to `6_CS`); Table 48 is the DMA Lite version"
+confidence = "high"
+
+[[register.field]]
+name  = "WAITING_FOR_OUTSTANDING_WRITES"
+bits  = "6"
+notes = "The channel is waiting for its last write to be acknowledged."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §4.2.1.2 Table 38 (`0_CS` to `6_CS`); Table 48 is the DMA Lite version"
+confidence = "high"
+
+[[register.field]]
+name  = "ERROR"
+bits  = "8"
+notes = "One of the `DEBUG` error bits is set."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §4.2.1.2 Table 38 (`0_CS` to `6_CS`); Table 48 is the DMA Lite version"
+confidence = "high"
+
+[[register.field]]
+name  = "PRIORITY"
+bits  = "19:16"
+notes = "AXI priority of this channel's bus requests."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §4.2.1.2 Table 38 (`0_CS` to `6_CS`); Table 48 is the DMA Lite version"
+confidence = "high"
+
+[[register.field]]
+name  = "PANIC_PRIORITY"
+bits  = "23:20"
+notes = "AXI priority to switch to while the peripheral is panicking."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §4.2.1.2 Table 38 (`0_CS` to `6_CS`); Table 48 is the DMA Lite version"
+confidence = "high"
+
+[[register.field]]
+name  = "WAIT_FOR_OUTSTANDING_WRITES"
+bits  = "28"
+notes = "Wait for every write to be acknowledged before the channel says it has finished."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §4.2.1.2 Table 38 (`0_CS` to `6_CS`); Table 48 is the DMA Lite version"
+confidence = "high"
+
+[[register.field]]
+name  = "DISDEBUG"
+bits  = "29"
+notes = "Ignore the debug pause signal."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §4.2.1.2 Table 38 (`0_CS` to `6_CS`); Table 48 is the DMA Lite version"
+confidence = "high"
+
+[[register.field]]
+name  = "ABORT"
+bits  = "30"
+notes = "Abort the control block the channel is on and move to the next."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §4.2.1.2 Table 38 (`0_CS` to `6_CS`); Table 48 is the DMA Lite version"
+confidence = "high"
+
+[[register.field]]
+name  = "RESET"
+bits  = "31"
+notes = "Reset the channel. Self-clearing."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §4.2.1.2 Table 38 (`0_CS` to `6_CS`); Table 48 is the DMA Lite version"
 confidence = "high"
 
 [[register]]
@@ -341,7 +456,92 @@ offset = 0x20
 count  = 15
 stride = 0x100
 access = "rw"
-notes  = "Error flags."
+notes  = "Error flags, the engine’s identity, and its state machine. The model reads back what was written and latches no error."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §4.2.1.2 Table 46 (`0_DEBUG` to `6_DEBUG`); Table 49 is the DMA Lite version"
+confidence = "high"
+[[register.field]]
+name  = "READ_LAST_NOT_SET_ERROR"
+bits  = "0"
+notes = "The AXI read data came without its last-beat marker. Write 1 to clear."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §4.2.1.2 Table 46 (`0_DEBUG` to `6_DEBUG`); Table 49 is the DMA Lite version"
+confidence = "high"
+
+[[register.field]]
+name  = "FIFO_ERROR"
+bits  = "1"
+notes = "The channel’s FIFO over- or underran. Write 1 to clear."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §4.2.1.2 Table 46 (`0_DEBUG` to `6_DEBUG`); Table 49 is the DMA Lite version"
+confidence = "high"
+
+[[register.field]]
+name  = "READ_ERROR"
+bits  = "2"
+notes = "A read came back with a slave error. Write 1 to clear."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §4.2.1.2 Table 46 (`0_DEBUG` to `6_DEBUG`); Table 49 is the DMA Lite version"
+confidence = "high"
+
+[[register.field]]
+name  = "OUTSTANDING_WRITES"
+bits  = "7:4"
+notes = "How many writes the channel is still waiting to be acknowledged."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §4.2.1.2 Table 46 (`0_DEBUG` to `6_DEBUG`); Table 49 is the DMA Lite version"
+confidence = "high"
+
+[[register.field]]
+name  = "DMA_ID"
+bits  = "15:8"
+notes = "The engine’s AXI id."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §4.2.1.2 Table 46 (`0_DEBUG` to `6_DEBUG`); Table 49 is the DMA Lite version"
+confidence = "high"
+
+[[register.field]]
+name  = "DMA_STATE"
+bits  = "24:16"
+notes = "Where the channel’s state machine is."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §4.2.1.2 Table 46 (`0_DEBUG` to `6_DEBUG`); Table 49 is the DMA Lite version"
+confidence = "high"
+
+[[register.field]]
+name  = "VERSION"
+bits  = "27:25"
+notes = "Engine version, 2 on this chip."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §4.2.1.2 Table 46 (`0_DEBUG` to `6_DEBUG`); Table 49 is the DMA Lite version"
+confidence = "high"
+
+[[register.field]]
+name  = "LITE"
+bits  = "28"
+notes = "Set on a DMA Lite engine — channels 7 to 10, which have a 16-bit length, no 2D mode and no ignore modes."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §4.2.1.2 Table 46 (`0_DEBUG` to `6_DEBUG`); Table 49 is the DMA Lite version"
+confidence = "high"
+
 
 [[register.source]]
 kind       = "datasheet"
@@ -363,9 +563,39 @@ confidence = "high"
 name   = "ENABLE"
 offset = 0xFF0
 access = "rw"
-notes  = "One enable bit per channel."
+notes  = "One enable bit per channel, and the two nibbles that say where in SDRAM the uncached `0xC000_0000` window lands. Every channel is enabled out of reset; clearing a bit gates that engine’s clock."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, §4.2.1.2 (DMA): `ENABLE`"
+ref        = "BCM2711 ARM Peripherals, §4.2.1.2 Table 62 (`ENABLE`)"
 confidence = "high"
+[[register.field]]
+name  = "EN"
+bits  = "14:0"
+notes = "Bit `n` enables channel `n`. All fifteen are set out of reset; channel 15 is not here."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §4.2.1.2 Table 62 (`ENABLE`)"
+confidence = "high"
+
+[[register.field]]
+name  = "PAGE"
+bits  = "27:24"
+notes = "Which 1 GB page of the 16 GB SDRAM space the 30-bit engines (channels 0 to 6) reach through `0xC000_0000`..`0xFFFF_FFFF`: the final address is `PAGE << 30 | addr[29:0]`. The model leaves the window where it starts and ignores this — no boot moves it, and the DMA4 engines bypass it entirely."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §4.2.1.2 Table 62 (`ENABLE`)"
+confidence = "high"
+
+[[register.field]]
+name  = "PAGELITE"
+bits  = "31:28"
+notes = "The same page select for the DMA Lite engines, channels 7 to 10."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §4.2.1.2 Table 62 (`ENABLE`)"
+confidence = "high"
+
