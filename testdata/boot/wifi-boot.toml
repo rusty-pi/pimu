@@ -21,7 +21,7 @@
 #
 #   brcmfmac: brcmf_c_preinit_dcmds: Firmware: BCM4345/6 rpi-virt-fw model firmware (no radio) version 0
 #   3: wlan0: <BROADCAST,MULTICAST> mtu 1500 qdisc noop qlen 1000
-#       link/ether 02:00:00:00:00:01 brd ff:ff:ff:ff:ff:ff
+#       link/ether 02:00:5e:00:57:01 brd ff:ff:ff:ff:ff:ff
 #
 # The chip's side of that conversation is `src/periph/sdpcm.rs`: the frame
 # protocol over SDIO function 2, and the control protocol inside it. The ARM
@@ -37,9 +37,13 @@
 #      and never `UP`.
 #   2. One band, thirteen 20 MHz channels, and no HT or VHT. A real 43455 is
 #      dual-band 802.11ac.
-#   3. The MAC address is a placeholder the model answers `cur_etheraddr`
-#      with. The real one comes out of the chip's OTP with the card's nvram
-#      `macaddr=` line over the top of it, and neither is modelled.
+#   3. The chip's own address is invented. A real 43455 has a unique one
+#      fused into the part; the model comes up with a locally-administered
+#      address from the documentation range, the same range the OTP Ethernet
+#      MAC and the Bluetooth chip's address come from. The address `wlan0`
+#      ends up with is not that one anyway: the card's nvram carries a
+#      `macaddr=` line and the chip's firmware takes it, which is what the
+#      `cyw43455` line in `--- device state ---` says.
 #
 # `cfg80211: failed to load regulatory.db` is expected: the card carries the
 # chip's firmware, not linux-firmware's regulatory database, and nothing here
@@ -159,8 +163,25 @@ modes, the event masks — and registered a network interface."""
 line = "3: wlan0: <BROADCAST,MULTICAST> mtu 1500 qdisc noop qlen 1000"
 
 [[milestone]]
-why = "And the address it registered with is the placeholder the model answers `cur_etheraddr` with: locally administered, and nothing to do with the chip's OTP or the card's nvram, neither of which is modelled."
-line = "link/ether 02:00:00:00:00:01 brd ff:ff:ff:ff:ff:ff"
+why = """
+And the address it registered with came off the card. `brcmf_c_preinit_dcmds`
+asks the chip for `cur_etheraddr` and takes what it gets, and what the chip
+answers is the `macaddr=` line out of the nvram the driver downloaded into it
+— `brcmfmac43455-sdio.txt` from RPi-Distro/firmware-nonfree, at the commit
+`scripts/fetch-firmware.sh` pins. So this line says the nvram arrived intact
+and the chip's firmware read it: the chip's own address, which it would
+answer with instead, is `02:00:5e:00:53:03`."""
+line = "link/ether 02:00:5e:00:57:01 brd ff:ff:ff:ff:ff:ff"
+
+[[milestone]]
+why = """
+The same address in the run report, and beside it where it came from — which
+`ip link` cannot say, because it prints one address whichever of the three
+sources won. `from the card's nvram` is the middle one: the chip came up with
+`02:00:5e:00:53:03`, the nvram's line replaced it, and no host wrote one over
+that (`brcmf_c_set_cur_etheraddr` is only called with an address the platform
+hands down, and nothing here does)."""
+line = "cyw43455 MAC 02:00:5e:00:57:01, from the card's nvram"
 
 [[milestone]]
 why = "No control frame went unanswered: a single one that did would stop the bring-up dead 2.7 s later."

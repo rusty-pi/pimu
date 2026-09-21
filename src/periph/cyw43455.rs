@@ -357,6 +357,13 @@ impl Cyw43455 {
         &self.ram
     }
 
+    /// The firmware behind function 2, for the run report: the address it
+    /// answers `cur_etheraddr` with reaches the console only through `ip
+    /// link`, and where that address came from reaches it nowhere at all.
+    pub fn sdpcm(&self) -> &Sdpcm {
+        &self.sdpcm
+    }
+
     // --- function-1 register space -------------------------------------
 
     /// One byte of function `func`'s address space, as CMD52 reads it.
@@ -453,6 +460,12 @@ impl Cyw43455 {
     pub fn enable_f2(&mut self) {
         if !self.arm_running() {
             return;
+        }
+        // The first thing a starting firmware does with its memory is read
+        // the nvram the host wrote at the top of it, and that has to happen
+        // before the shared block below goes over the tail of it.
+        if let Some(nvram) = nvram(&self.ram) {
+            self.sdpcm.start(nvram);
         }
         self.publish_shared();
         self.mailbox = HMB_DATA_FWREADY | SDPCM_PROT_VERSION << HMB_DATA_VERSION_SHIFT;
@@ -658,6 +671,28 @@ fn ram_range(addr: u32, len: usize) -> Option<std::ops::Range<usize>> {
         return None;
     }
     Some(off..end)
+}
+
+/// The nvram in the chip's memory, where `brcmf_sdio_download_nvram`
+/// (`sdio.c:3562`) put it: at `rambase + ramsize - varsz`, which is the top,
+/// and ending in the token `brcmf_fw_nvram_strip` appended to it
+/// (`firmware.c:444`) — the length in words in `[15:0]` and its complement in
+/// `[31:16]`. So the very last word says how much of the memory under it is
+/// nvram, and the complement is what tells a token from whatever else could
+/// be in that word; a chip whose host has downloaded nothing reads zeros
+/// there.
+///
+/// The bytes themselves are what [`Sdpcm::start`] makes sense of: NUL-
+/// separated `key=value` entries, NUL-padded to the word.
+fn nvram(ram: &[u8]) -> Option<&[u8]> {
+    let end = ram.len().checked_sub(4)?;
+    let token = u32::from_le_bytes(ram[end..].try_into().ok()?);
+    let words = token & 0xFFFF;
+    if words == 0 || (!token) >> 16 != words {
+        return None;
+    }
+    let at = end.checked_sub(words as usize * 4)?;
+    Some(&ram[at..end])
 }
 
 /// The enumeration table `brcmf_chip_dmp_erom_scan` walks: two component
@@ -892,6 +927,66 @@ mod tests {
         // Which is also what `brcmf_chip_ai_iscoreup` asks.
         let ioctl = readl(&mut chip, wrap + BCMA_IOCTL);
         assert_eq!(ioctl & (BCMA_IOCTL_FGC | BCMA_IOCTL_CLK), BCMA_IOCTL_CLK);
+    }
+
+    /// Release the ARM the way `brcmf_chip_cr4_set_active` (`chip.c:1355`)
+    /// does once the firmware and the nvram are in memory.
+    fn release_arm(chip: &mut Cyw43455) {
+        let wrap = CORES[ARM_CORE].wrap;
+        writel(chip, wrap + BCMA_RESET_CTL, 0);
+        writel(chip, wrap + BCMA_IOCTL, BCMA_IOCTL_CLK);
+    }
+
+    /// Write `entries` at the top of memory the way
+    /// `brcmf_sdio_download_nvram` (`sdio.c:3562`) does, token and all.
+    fn download_nvram(chip: &mut Cyw43455, entries: &[&str]) {
+        let mut vars = Vec::new();
+        for e in entries {
+            vars.extend_from_slice(e.as_bytes());
+            vars.push(0);
+        }
+        vars.resize(vars.len().next_multiple_of(4), 0);
+        let words = (vars.len() / 4) as u32;
+        let at = RAM_BASE + RAM_SIZE - 4 - vars.len() as u32;
+        let off = aim(chip, at);
+        chip.write_io(1, off, &vars);
+        writel(chip, RAM_BASE + RAM_SIZE - 4, (!words) << 16 | words);
+    }
+
+    #[test]
+    fn the_firmware_starts_on_the_nvram_the_host_left_at_the_top_of_memory() {
+        let mut chip = Cyw43455::new();
+        download_nvram(
+            &mut chip,
+            &["sromrev=11", "macaddr=02:00:5e:00:57:01", "boardtype=0x6e4"],
+        );
+        release_arm(&mut chip);
+        chip.enable_f2();
+        assert_eq!(chip.sdpcm().mac(), [0x02, 0x00, 0x5E, 0x00, 0x57, 0x01]);
+
+        // The shared block goes over the tail of the nvram, so the token is
+        // gone by the time anything could read it a second time — which is
+        // why the firmware reads it on the way up and not later.
+        let top = readl(&mut chip, RAM_BASE + RAM_SIZE - 4);
+        assert_eq!(top, RAM_BASE + RAM_SIZE - 4 - SHARED_LEN);
+    }
+
+    #[test]
+    fn a_top_word_that_is_not_a_token_is_not_nvram() {
+        // An ARM released over memory the host wrote nothing into.
+        let mut chip = Cyw43455::new();
+        release_arm(&mut chip);
+        chip.enable_f2();
+        assert_eq!(
+            chip.sdpcm().mac_source(),
+            crate::periph::sdpcm::MacSource::Otp
+        );
+
+        // ...and a word whose halves do not complement, which is what the
+        // driver leaves there when it reads the top of memory back.
+        let mut chip = Cyw43455::new();
+        writel(&mut chip, RAM_BASE + RAM_SIZE - 4, 0xDEAD_BEEF);
+        assert!(nvram(chip.ram()).is_none());
     }
 
     #[test]

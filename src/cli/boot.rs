@@ -1780,6 +1780,7 @@ fn print_property_replies(machine: &Machine) {
 /// once it holds a value worth a diff.
 fn print_device_state(machine: &Machine, fdt: Option<&[u8]>) {
     use rpi_virt_fw::periph::bluetooth::{format_bd_address, published_bd_address};
+    use rpi_virt_fw::periph::sdpcm::MacSource;
 
     let mac = machine.genet.mac_state();
     println!("\n--- device state ---");
@@ -1821,6 +1822,23 @@ fn print_device_state(machine: &Machine, fdt: Option<&[u8]>) {
             ),
         },
         None => println!("          device tree: none handed over"),
+    }
+
+    // The WiFi chip's address, which is a third one again and comes from a
+    // third place: its own, until the card's nvram `macaddr=` line overrides
+    // it and until a host writes one over that. Only `ip link` ever prints
+    // it, only on a boot that loaded `brcmfmac`, and it prints one address
+    // whichever of the three it is.
+    if let Some(chip) = machine.emmc.card().and_then(|card| card.chip()) {
+        let [a, b, c, d, e, f] = chip.sdpcm().mac();
+        println!(
+            "  cyw43455 MAC {a:02x}:{b:02x}:{c:02x}:{d:02x}:{e:02x}:{f:02x}, {}",
+            match chip.sdpcm().mac_source() {
+                MacSource::Otp => "as it came up",
+                MacSource::Nvram => "from the card's nvram",
+                MacSource::Host => "written by the host",
+            },
+        );
     }
 }
 

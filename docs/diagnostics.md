@@ -194,6 +194,7 @@ under `--- device state ---`:
   genet   MAC 02:00:5e:00:53:01  tx on  rx on  promisc on
   bt      chip 02:00:5e:00:53:02, as it came up
           device tree 02:00:5e:aa:f9:ab on /soc/serial@7e201000/bluetooth
+  cyw43455 MAC 02:00:5e:00:57:01, from the card's nvram
 ```
 
 A client that asks the firmware for the board's MAC address and does not check
@@ -221,6 +222,21 @@ leave the modem on, so the node is picked by its `status`: with
 reporting the all-zero address the node under the mini-UART carries.
 
 `bt-boot.toml` pins both, because neither ever reaches the console.
+
+The WiFi chip's address is a third one again, from a third place, and the line
+says which of three it is:
+
+* `as it came up` — `02:00:5e:00:53:03`, the address the model's chip has of
+  its own, standing in for the unique one a real 43455 has fused into it;
+* `from the card's nvram` — the `macaddr=` line of the nvram the driver
+  downloaded into the chip, which is what a card carrying
+  `brcmfmac43455-sdio.txt` gets;
+* `written by the host` — an address the driver set with `cur_etheraddr`,
+  which it does only for one the platform handed it.
+
+`ip link` prints the address but not the source, and on a boot that never
+loads `brcmfmac` it prints nothing at all — the chip still answers, and this
+line still says what it would have answered. `wifi-boot.toml` pins it.
 
 A device belongs in this section once it holds a value worth diffing between
 two firmware versions.

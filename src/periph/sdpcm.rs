@@ -65,8 +65,9 @@
 //! A radio. The responder below answers what `brcmf_bus_started`
 //! (`core.c`) asks on the way to registering a network interface, and its
 //! answers are the model's own — a firmware version that says so, one band,
-//! and a MAC address that is a placeholder. Nothing here scans, associates or
-//! carries a packet; a frame on the data or event channels is dropped.
+//! and a chip address that is invented rather than fused into a part.
+//! Nothing here scans, associates or carries a packet; a frame on the data or
+//! event channels is dropped.
 
 use std::collections::VecDeque;
 
@@ -153,19 +154,48 @@ const CHANNELS_2G: std::ops::RangeInclusive<u32> = 1..=13;
 /// is one.
 const CHANSPEC_HOME: u32 = CHSPEC_BW_20 | 1;
 
-/// The MAC address the model answers `cur_etheraddr` with.
+/// The address the chip came out of its own OTP with, which is what it
+/// answers `cur_etheraddr` with until something overrides it.
 ///
-/// A **placeholder**: locally administered, unicast, and not
-/// `brcmf_default_mac_address` (`common.c`), which the driver replaces with a
-/// random one. The real address comes out of the chip's OTP, with the card's
-/// nvram `macaddr=` line overriding it, and neither is modelled yet.
-const PLACEHOLDER_MAC: [u8; 6] = [0x02, 0x00, 0x00, 0x00, 0x00, 0x01];
+/// A real 43455 has a unique one fused into the part — the comment above
+/// `brcmf_default_mac_address` (`common.c:236`) is about exactly that, and
+/// about the boards where the nvram's address gets used instead and collides.
+/// So this is **invented**: locally administered (bit 1 of the first octet),
+/// unicast (bit 0 clear), from the documentation range in RFC 7042 section
+/// 2.1.2, and the next one along from the two the model already has — the OTP
+/// Ethernet MAC `02:00:5e:00:53:01` (`crate::periph::configotp`) and the
+/// Bluetooth modem's `02:00:5e:00:53:02` (`crate::machine`). Nothing derives
+/// it and it is not any board's.
+///
+/// Deliberately not the GENET's, either: on real hardware the WLAN address
+/// comes from a different part than the Ethernet one, and the run report
+/// prints both so that they are seen rather than assumed equal.
+///
+/// It must also not be `brcmf_default_mac_address` itself (`common.c:247`,
+/// `00:90:4c:c5:12:38`), which `brcmf_c_preinit_dcmds` (`common.c:296`)
+/// throws away for a random address — which would be a different address
+/// every run.
+const CHIP_MAC: [u8; 6] = [0x02, 0x00, 0x5E, 0x00, 0x53, 0x03];
 
 /// What the model answers the `ver` iovar with. `brcmf_c_preinit_dcmds`
 /// (`common.c:268`) prints it as the firmware version and keeps whatever
 /// follows the last space as the number ethtool reports, so it has to have
 /// one. It says what it is: no firmware ran to produce it.
 const VERSION: &str = "rpi-virt-fw model firmware (no radio) version 0";
+
+/// Where the address the chip answers `cur_etheraddr` with came from, for the
+/// run report. Which of the three won is not visible anywhere else: the
+/// address reaches the console only through `ip link`, and that prints one
+/// address whichever it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MacSource {
+    /// [`CHIP_MAC`]: the chip's own, and nothing overrode it.
+    Otp,
+    /// The card's nvram carried a `macaddr=` line and the firmware took it.
+    Nvram,
+    /// The host wrote one with `cur_etheraddr`.
+    Host,
+}
 
 /// One end of the frame protocol: the FIFO behind function 2 in both
 /// directions, and the firmware that answers on it.
@@ -213,6 +243,26 @@ impl Sdpcm {
     /// `I_HMB_FRAME_IND` (`sdio.c:272`) to say.
     pub fn frame_waiting(&self) -> bool {
         !self.rx.is_empty()
+    }
+
+    /// The firmware starting: read the nvram the host left in the chip's
+    /// memory and take the address out of it, which is the one thing in the
+    /// file the model has anything to do with.
+    pub fn start(&mut self, nvram: &[u8]) {
+        if let Some(mac) = nvram_macaddr(nvram) {
+            self.fw.mac = mac;
+            self.fw.mac_source = MacSource::Nvram;
+        }
+    }
+
+    /// The address the chip answers `cur_etheraddr` with, for the run report.
+    pub fn mac(&self) -> [u8; 6] {
+        self.fw.mac
+    }
+
+    /// Where that address came from.
+    pub fn mac_source(&self) -> MacSource {
+        self.fw.mac_source
     }
 
     /// The data phase of a CMD53 read on function 2. Function 2 is a FIFO, so
@@ -378,6 +428,7 @@ fn parse_header(frame: &[u8], glom: bool) -> Option<Header> {
 /// driver's commands with.
 struct Firmware {
     mac: [u8; 6],
+    mac_source: MacSource,
     /// The host asked for receive glomming and was told yes, which changes
     /// the shape of everything it sends from then on.
     rxglom: bool,
@@ -386,7 +437,8 @@ struct Firmware {
 impl Firmware {
     fn new() -> Firmware {
         Firmware {
-            mac: PLACEHOLDER_MAC,
+            mac: CHIP_MAC,
+            mac_source: MacSource::Otp,
             rxglom: false,
         }
     }
@@ -445,7 +497,10 @@ impl Firmware {
                 .unwrap_or(0)
         };
         match name {
-            b"cur_etheraddr" if value.len() >= 6 => self.mac.copy_from_slice(&value[..6]),
+            b"cur_etheraddr" if value.len() >= 6 => {
+                self.mac.copy_from_slice(&value[..6]);
+                self.mac_source = MacSource::Host;
+            }
             // `brcmf_sdio_bus_preinit` (`sdio.c:3724`) takes a yes here as
             // permission to use the glom header on everything it sends.
             b"bus:rxglom" => self.rxglom = word() != 0,
@@ -505,6 +560,42 @@ impl Firmware {
 fn iovar(data: &[u8]) -> Option<(&[u8], &[u8])> {
     let end = data.iter().position(|b| *b == 0)?;
     Some((&data[..end], &data[end + 1..]))
+}
+
+/// The `macaddr=` line of the nvram the host downloaded into the chip, if it
+/// has one.
+///
+/// The file on the card is `key=value` lines, but what reaches the chip is
+/// what `brcmf_fw_nvram_strip` (`firmware.c:398`) made of it: comments and
+/// blank lines gone, every newline a NUL, and the whole padded out with more
+/// NULs (`firmware.c:438`) — so an entry is the text between two of them.
+/// <https://github.com/raspberrypi/linux/blob/16f1da3c4e94437449d6aa151589ca0ad4b388bb/drivers/net/wireless/broadcom/brcm80211/brcmfmac/firmware.c>
+///
+/// The driver drops the file's `macaddr` only when the platform itself hands
+/// one down (`nvp->strip_mac`, `firmware.c:131`, from
+/// `eth_platform_get_mac_address`), and then writes its own in its place
+/// (`brcmf_fw_add_macaddr`, `firmware.c:383`). Nothing in the model supplies
+/// one, so the line the card carries is the line the chip gets.
+fn nvram_macaddr(nvram: &[u8]) -> Option<[u8; 6]> {
+    nvram
+        .split(|b| *b == 0)
+        .filter_map(|entry| entry.strip_prefix(b"macaddr=".as_slice()))
+        .find_map(parse_mac)
+}
+
+/// `02:00:5e:00:57:01` as six bytes, which is how an nvram file writes one.
+fn parse_mac(text: &[u8]) -> Option<[u8; 6]> {
+    let text = std::str::from_utf8(text).ok()?;
+    let mut parts = text.split(':');
+    let mut out = [0u8; 6];
+    for slot in &mut out {
+        let part = parts.next()?;
+        if part.len() != 2 {
+            return None;
+        }
+        *slot = u8::from_str_radix(part, 16).ok()?;
+    }
+    parts.next().is_none().then_some(out)
 }
 
 /// Copy `src` into `out` at `at`, dropping whatever does not fit: the driver
@@ -574,6 +665,31 @@ mod tests {
         // The host pads to the block size; the padding is not the frame.
         frame.resize(frame.len().next_multiple_of(64), 0);
         frame
+    }
+
+    /// The nvram as it reaches the chip: one NUL-terminated `key=value`
+    /// entry per line of the file, padded out to a word with more NULs
+    /// (`brcmf_fw_nvram_strip`, `firmware.c:438`). The token past the end of
+    /// it is the bus's business, not this module's.
+    fn nvram(lines: &[&str]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for line in lines {
+            out.extend_from_slice(line.as_bytes());
+            out.push(0);
+        }
+        out.resize(out.len().next_multiple_of(4), 0);
+        out
+    }
+
+    /// Read `cur_etheraddr` back the way `brcmf_c_preinit_dcmds`
+    /// (`common.c:289`) does.
+    fn read_mac(chip: &mut Sdpcm, seq: u8) -> [u8; 6] {
+        let mut iovar = named("cur_etheraddr", &[]);
+        iovar.resize(iovar.len() + 6, 0);
+        chip.write(&request(seq, 1, C_GET_VAR, false, &iovar));
+        chip.write_end();
+        let (_, payload) = read_frame(chip).expect("a frame");
+        payload[BCDC_HDRLEN..BCDC_HDRLEN + 6].try_into().unwrap()
     }
 
     /// An iovar request's payload: the name, a NUL, then the value.
@@ -652,12 +768,7 @@ mod tests {
         let (_, payload) = read_frame(&mut chip).expect("a frame");
         let (_, len, _, _) = bcdc_parts(&payload);
         assert_eq!(len as usize, iovar.len());
-        let mac = &payload[BCDC_HDRLEN..BCDC_HDRLEN + 6];
-        assert_eq!(mac, PLACEHOLDER_MAC);
-        // Valid as `is_valid_ether_addr` has it: a unicast address that is
-        // not all zero.
-        assert_eq!(mac[0] & 1, 0);
-        assert!(mac.iter().any(|b| *b != 0));
+        assert_eq!(&payload[BCDC_HDRLEN..BCDC_HDRLEN + 6], CHIP_MAC);
     }
 
     #[test]
@@ -789,7 +900,7 @@ mod tests {
         chip.write_end();
         let (_, payload) = read_frame(&mut chip).expect("a frame");
         assert_eq!(bcdc_parts(&payload).2 >> 16, 3);
-        assert_eq!(&payload[BCDC_HDRLEN..BCDC_HDRLEN + 6], PLACEHOLDER_MAC);
+        assert_eq!(&payload[BCDC_HDRLEN..BCDC_HDRLEN + 6], CHIP_MAC);
         // ...and the answer still comes back in the plain shape, because
         // nothing changed about the direction the chip sends in.
         let mut plain = [0u8; 64];
@@ -932,12 +1043,88 @@ mod tests {
         chip.write_end();
         read_frame(&mut chip).expect("the acknowledgement");
 
-        let mut iovar = named("cur_etheraddr", &[]);
-        iovar.resize(iovar.len() + 6, 0);
-        chip.write(&request(1, 2, C_GET_VAR, false, &iovar));
+        assert_eq!(read_mac(&mut chip, 1), wanted);
+        assert_eq!(chip.mac(), wanted);
+        assert_eq!(chip.mac_source(), MacSource::Host);
+    }
+
+    #[test]
+    fn the_chip_answers_its_own_address_until_something_overrides_it() {
+        let mut chip = Sdpcm::new();
+        assert_eq!(chip.mac(), CHIP_MAC);
+        assert_eq!(chip.mac_source(), MacSource::Otp);
+        assert_eq!(read_mac(&mut chip, 0), CHIP_MAC);
+
+        // Valid as `is_valid_ether_addr` has it — unicast and not all zero —
+        // and not the address `brcmf_c_preinit_dcmds` (`common.c:296`)
+        // throws away for a random one, which would be a different address
+        // every run.
+        assert_eq!(CHIP_MAC[0] & 1, 0);
+        assert!(CHIP_MAC.iter().any(|b| *b != 0));
+        assert_ne!(CHIP_MAC, [0x00, 0x90, 0x4C, 0xC5, 0x12, 0x38]);
+    }
+
+    #[test]
+    fn the_cards_nvram_overrides_the_address_the_chip_came_up_with() {
+        let mut chip = Sdpcm::new();
+        // The Pi 4B nvram the card carries has this line
+        // (`brcmfmac43455-sdio.txt`, RPi-Distro/firmware-nonfree), a couple
+        // of hundred entries in.
+        chip.start(&nvram(&[
+            "sromrev=11",
+            "macaddr=02:00:5e:00:57:01",
+            "boardtype=0x6e4",
+        ]));
+        let wanted = [0x02, 0x00, 0x5E, 0x00, 0x57, 0x01];
+        assert_eq!(chip.mac(), wanted);
+        assert_eq!(chip.mac_source(), MacSource::Nvram);
+        assert_eq!(read_mac(&mut chip, 0), wanted);
+
+        // ...and the host may still write over it, which is what
+        // `brcmf_c_set_cur_etheraddr` (`common.c:230`) does with an address
+        // the platform handed down.
+        let host = [0x02, 0x00, 0x5E, 0xAA, 0xF9, 0xAB];
+        chip.write(&request(
+            1,
+            1,
+            C_SET_VAR,
+            true,
+            &named("cur_etheraddr", &host),
+        ));
         chip.write_end();
-        let (_, payload) = read_frame(&mut chip).expect("a frame");
-        assert_eq!(&payload[BCDC_HDRLEN..BCDC_HDRLEN + 6], wanted);
+        read_frame(&mut chip).expect("the acknowledgement");
+        assert_eq!(chip.mac_source(), MacSource::Host);
+        assert_eq!(read_mac(&mut chip, 2), host);
+    }
+
+    #[test]
+    fn nvram_with_no_address_in_it_leaves_the_chips_own() {
+        // No `macaddr` line at all: the chip keeps what it came up with.
+        let mut chip = Sdpcm::new();
+        chip.start(&nvram(&["sromrev=11", "boardtype=0x6e4", "nocrc=1"]));
+        assert_eq!(chip.mac(), CHIP_MAC);
+        assert_eq!(chip.mac_source(), MacSource::Otp);
+        assert_eq!(read_mac(&mut chip, 0), CHIP_MAC);
+
+        // Nor is a key that merely starts the same way one, and nor is a
+        // value that is not six octets.
+        for line in [
+            "macaddress=02:00:5e:00:57:01",
+            "macaddr=b8:27:eb:74:f2",
+            "macaddr=02:00:5e:00:57:01:00",
+            "macaddr=",
+            "macaddr=not an address",
+        ] {
+            let mut chip = Sdpcm::new();
+            chip.start(&nvram(&[line]));
+            assert_eq!(chip.mac(), CHIP_MAC, "took {line:?}");
+            assert_eq!(chip.mac_source(), MacSource::Otp);
+        }
+
+        // And nothing downloaded at all is nothing to read.
+        let mut chip = Sdpcm::new();
+        chip.start(&[]);
+        assert_eq!(chip.mac_source(), MacSource::Otp);
     }
 
     #[test]
