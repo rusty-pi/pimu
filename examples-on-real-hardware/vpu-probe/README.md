@@ -73,8 +73,11 @@ Two things are known to wedge it, both found the hard way:
 
 - the **undocumented memory sub-ops**, which **wait for an outstanding vector
   load**. Put a `v8ld` in front of one and it retires in 2 ms; with nothing in
-  front of it, it never returns. A vector *store* does not satisfy it, and
-  neither does a *scalar* load — only a vector load does. What licenses the next one is
+  front of it, it never returns. What satisfies it is a **write to the register
+  file**: a vector load does, and so does a vector ALU op — `v16add`, which
+  touches no memory, works as well as `v32mov`. A vector *store* does not, nor
+  does any scalar instruction; a store reads the file and writes memory, and a
+  scalar op never touches it. What licenses the next one is
   narrower than a count of loads: a load then two fences back to back hangs,
   but a load, two `v32mov`s and then two fences retires both in 1 ms. Writing
   the fences to different rows does not help, nor does a second load before
@@ -160,6 +163,7 @@ Two things are known to wedge it, both found the hard way:
 | `ldop.s`, `stop.s`, `scop.s` | **what satisfies the fence**: a vector load does, a vector store and a scalar load do not |
 | `unroll1.s`, `unroll8.s`, `loop8ld.s`, `rep64.s` | how many of them one load covers, and that `REP` repeats without waiting again |
 | `two11.s`, `dd2.s`, `ld2x2.s`, `ld3.s`, `alt2.s` | which arrangements of load, fence and `v32mov` retire and which hang |
+| `addbetween.s`, `stbetween.s`, `scal2.s` | that a vector ALU op licenses a fence, and that a store and a scalar op do not |
 
 ## What they found (Raspberry Pi 4B d03115, firmware 1.20260824)
 

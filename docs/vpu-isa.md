@@ -221,8 +221,15 @@ outstanding **vector load**: put a `v8ld` in front of one and it retires in
 2 ms, with nothing in front of it it never returns. A vector *store* does not
 satisfy it and neither does a *scalar* load.
 
-At most **two** of them ever retire, and the second only when a non-fence
-vector op sits between them. Measured, each on a board that answered the
+What they wait on is a **write to the register file**. A vector load licenses
+one, and so does a vector ALU op — `v16add`, which touches no memory at all,
+works exactly as well as `v32mov`. A vector *store* does not, and neither does
+a scalar instruction: a store reads the file and writes memory, and a scalar
+op leaves the file alone. So the fence is waiting for VRF write traffic, and
+a load is simply the first writer in any probe that has one.
+
+At most **two** of them ever retire, and the second only when such a write
+sits between them. Measured, each on a board that answered the
 mailbox the moment before:
 
 | what runs | what retires |
@@ -235,6 +242,9 @@ mailbox the moment before:
 | load, `v32mov`, fence x4 | none |
 | load, load, fence, fence | none |
 | load, fence, load, fence | none |
+| load, `v16add`, fence, fence | both, in 2 ms |
+| load, `v8st`, fence, fence | none |
+| load, scalar `mov`, fence, scalar `mov`, fence | none |
 
 Extra `v32mov`s do not raise the cap and a second load does not either, which
 is odd enough to leave as a measured pattern rather than a rule. What the unit
