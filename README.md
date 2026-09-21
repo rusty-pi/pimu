@@ -62,14 +62,20 @@ The whole chain: EEPROM → BOOTLOADER → `start4.elf` → `arm_loader` from SD
 USB mass storage on the VL805 and on the USB-C port's own xHCI, TFTP and HTTP
 network boot; then the four A72 cores `arm_loader` releases, through the
 firmware's own armstub into the kernel, and Linux off the card's ext4 root to a
-busybox shell on the serial console. No firmware behaviour is short-circuited,
-and no boot needs an opt-in shim or environment variable.
+busybox shell on the serial console. No firmware behaviour is short-circuited
+([#15](https://github.com/valtzu/rpi-virt-fw/issues/15) took out the last one)
+and no boot needs an opt-in shim or environment variable — the HDMI EDID read
+fails the way it does on a board with no monitor plugged in, because the DDC
+I²C masters are modelled and nothing answers the EDID EEPROM's address.
 
-- **VideoCore IV scalar interpreter** (`src/vpu/`) — the 16-, 32- and 48-bit
-  scalar forms `start4` executes, both VPU cores, exception and interrupt
-  delivery through the ThreadX vector table. Instruction *lengths* always decode
-  correctly, so unknown opcodes (the vector unit) degrade to `Unimpl` rather
-  than derailing the PC.
+- **VideoCore IV interpreter** (`src/vpu/`) — the 16-, 32- and 48-bit scalar
+  forms `start4` executes, both VPU cores, exception and interrupt delivery
+  through the ThreadX vector table, and the vector unit: decoded in full and
+  executed for the forms `insn::VecInsn::executable` accepts, against a modelled
+  vector register file ([#118](https://github.com/valtzu/rpi-virt-fw/issues/118)).
+  Instruction *lengths* always decode correctly, so an encoding the executor
+  does not accept stops as `Unimpl` rather than derailing the PC.
+  [`docs/vpu-isa.md`](docs/vpu-isa.md) carries the evidence for each form.
 - **AArch64 interpreter** (`src/aarch64/`) — integer A64, SIMD and floating
   point with ARM-exact soft-float, stage 1 MMU, exception levels EL3..EL0 and
   the system registers Linux touches. `tests/a64_diff.rs` checks it
@@ -110,24 +116,42 @@ and no boot needs an opt-in shim or environment variable.
   `tests/board_sheet.rs` checks the drawing against.
 - **Firmware pipeline** — `pieeprom.bin` self-update trailer, EEPROM config
   parse, GPT/MBR + FAT32 walk, `fixup4.dat`, RSA signature check.
+- **What a booted Linux gets** — the property mailbox, and `start4`'s crypto
+  service through `/dev/vcio_crypto`: `linux.toml` pins the HMAC
+  [rpi-mkosi#37](https://github.com/valtzu/rpi-mkosi/issues/37) needs, computed
+  by `start4.elf`'s own mbedTLS from the OTP key. USB mass storage carries far
+  enough to boot the rpi-mkosi image with `--usb`.
 - **Regression harness** (`src/harness/`) — scenarios in, console transcript
   out, diffed against a golden file. See
   [`testdata/README.md`](testdata/README.md).
 
 ### Limits
 
-The HDMI EDID read fails on purpose: the DDC I²C masters are modelled and
-nothing acknowledges the EDID EEPROM's address, because the reference board has
-no monitor plugged in
-([#15](https://github.com/valtzu/rpi-virt-fw/issues/15)).
-
-Not there yet: most of the VPU vector unit (a short list of exactly matched
-forms runs, the rest stop as `Unimpl`), HTTPS network boot
-([#44](https://github.com/valtzu/rpi-virt-fw/issues/44)), and under Linux a
-display and networking past the `bcmgenet` probe. Linux does reach `start4`'s
-crypto service through `/dev/vcio_crypto` (`linux.toml` checks the HMAC
-[rpi-mkosi#37](https://github.com/valtzu/rpi-mkosi/issues/37) needs), and USB
-mass storage far enough to boot the rpi-mkosi image with `--usb`.
+- **HTTPS network boot** is not supported: the built-in peer serves plain HTTP,
+  and the bootloader only goes HTTPS when `HTTP_HOST` is left at Raspberry Pi's
+  own server. Closed as out of scope
+  ([#44](https://github.com/valtzu/rpi-virt-fw/issues/44)) — it is the second
+  stage's own TLS stack and its EEPROM `cacert.der`, not the machine's.
+- **The vector unit's last sub-ops.** 13282 of the 15180 vector instructions in
+  `start4.elf`'s `.text` execute
+  ([#118](https://github.com/valtzu/rpi-virt-fw/issues/118)); of the rest, some
+  1700 are jump tables and constants a linear sweep only *disassembles* as
+  vector code, and about 190 are memory sub-ops (`memread`, `memwrite`,
+  `mem03`) and one-offs no probe settled. None of them is reached on a boot.
+- **Linux's own display and Ethernet drivers are not driven by any scenario.**
+  The blocks behind them are modelled — the firmware brings HDMI up
+  ([#61](https://github.com/valtzu/rpi-virt-fw/issues/61),
+  [#63](https://github.com/valtzu/rpi-virt-fw/issues/63)) and network boot goes
+  over the same GENET and MDIO the kernel probes
+  ([#38](https://github.com/valtzu/rpi-virt-fw/issues/38)) — but the boots stop
+  at the `bcmgenet` probe and a registered `eth0`, with no link brought up and
+  no KMS driver loaded.
+- **WiFi stops before a scan finds anything.** `brcmfmac` downloads the
+  CYW43455's firmware and registers an interface
+  ([#128](https://github.com/valtzu/rpi-virt-fw/issues/128),
+  `linux-wifi.toml`); the event channel and an `escan` that answers are open
+  ([#133](https://github.com/valtzu/rpi-virt-fw/issues/133),
+  [#134](https://github.com/valtzu/rpi-virt-fw/issues/134)).
 
 ## Tests
 

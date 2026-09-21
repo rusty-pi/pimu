@@ -4,8 +4,9 @@
 //! Bit patterns are transcribed from Herman Hermitage's `videocoreiv.arch` and
 //! the `vciv.py` IDA processor module (both in `hermanhermitage/videocoreiv`),
 //! cross-checked against a sweep of real `start4.elf`. Coverage is the scalar
-//! integer ISA plus the vector unit (0xF000+), which is decoded to operands but
-//! only executed for the forms that touch no vector register (see `docs/vpu-isa.md`).
+//! integer ISA plus the vector unit (0xF000+), which is decoded to operands in
+//! full and executed for the forms `insn::VecInsn::executable` accepts (see
+//! `docs/vpu-isa.md`).
 
 use super::insn::{
     AddrMode, AluOp, Base, FpOp, Insn, MemWidth, Op, RegOrImm, VecAddr, VecInsn, VecOperandB,
