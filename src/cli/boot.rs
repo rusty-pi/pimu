@@ -1876,6 +1876,15 @@ fn print_wifi_events(chip: &rpi_virt_fw::periph::sdpcm::Sdpcm) {
         chip.events_dropped(),
         chip.data_frames_in(),
     );
+    // A scan is an iovar in and events out, so the console says nothing
+    // about it either — and a scan the chip answered with nothing looks
+    // exactly like one it never saw.
+    let found = chip.escan_results();
+    println!(
+        "           scans {} answered, {found} network{} reported",
+        chip.escans(),
+        if found == 1 { "" } else { "s" },
+    );
 }
 
 /// `on` / `off`, for [`print_device_state`]: a flag reads better than a bit.

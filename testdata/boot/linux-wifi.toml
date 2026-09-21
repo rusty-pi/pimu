@@ -15,14 +15,17 @@
 #
 # WHAT IT GETS TO
 #
-# A network interface that is registered and then brought up. `brcmfmac`
-# walks the chip, downloads its firmware, and then talks to it — and what
-# answers is the model, not the image it just wrote:
+# A network interface that is registered, brought up, and scanned with.
+# `brcmfmac` walks the chip, downloads its firmware, and then talks to it —
+# and what answers is the model, not the image it just wrote:
 #
 #   brcmfmac: brcmf_c_preinit_dcmds: Firmware: BCM4345/6 rpi-virt-fw model firmware (no radio) version 0
 #   3: wlan0: <BROADCAST,MULTICAST> mtu 1500 qdisc noop qlen 1000
 #       link/ether 02:00:5e:00:57:01 brd ff:ff:ff:ff:ff:ff
 #   3: wlan0: <NO-CARRIER,BROADCAST,MULTICAST,UP> mtu 1500 qdisc pfifo_fast qlen 1000
+#   BSS 02:00:5e:00:53:04(on wlan0)
+#           SSID: rpi-virt-fw-model-ap
+#           DS Parameter set: channel 1
 #
 # The chip's side of that conversation is `src/periph/sdpcm.rs`: the frame
 # protocol over SDIO function 2, and the control protocol inside it. The ARM
@@ -40,17 +43,29 @@
 # `netif_carrier_off`, because nothing has associated the interface with
 # anything, and only an association turns the carrier on.
 #
+# THE NETWORK IS INVENTED
+#
+# `rpi-virt-fw-model-ap` at `02:00:5e:00:53:04` is not a place and was never
+# on the air. It is named after the model so that a scan result can never be
+# mistaken for one taken off a real band, and the address is the next one
+# along from the three the model already has — all of them locally
+# administered and out of the documentation range in RFC 7042 section 2.1.2.
+# `src/periph/sdpcm.rs` is where it is defined and where that is written
+# down. The chip reports it after a dwell on each channel, because a scan
+# that answered instantly would beat `iw` to the socket it waits for the
+# completion on.
+#
 # What is *not* there:
 #
-#   1. No radio. Nothing scans and nothing associates, so nothing raises an
-#      event after the interface the firmware comes up with — and the host
-#      is not listening that early, so no event reaches the driver at all in
-#      this run. The `events` lines in `--- device state ---` are the count.
-#      A packet the host tries to transmit is taken off the data channel and
-#      goes nowhere.
+#   1. No radio. The scan finds what the model made up, and nothing
+#      associates, so the carrier never comes on and nothing is ever
+#      carried. A packet the host tries to transmit is taken off the data
+#      channel and goes nowhere. The `events` and `scans` lines in
+#      `--- device state ---` are the count of what the chip said unasked.
 #   2. One band, thirteen 20 MHz channels, and no HT or VHT. A real 43455 is
-#      dual-band 802.11ac.
-#   3. The chip's own address is invented. A real 43455 has a unique one
+#      dual-band 802.11ac, and a real scan of a real band finds more than
+#      one network and finds a different set every time.
+#   3. The chip's own address is invented too. A real 43455 has a unique one
 #      fused into the part; the model comes up with a locally-administered
 #      address from the documentation range, the same range the OTP Ethernet
 #      MAC and the Bluetooth chip's address come from. The address `wlan0`
@@ -119,6 +134,15 @@ text = "insmod $M/drivers/net/wireless/broadcom/brcm80211/brcmfmac/brcmfmac.ko; 
 [[boot.input]]
 after = "/ # \u001b[6n"
 text = "ip link set wlan0 up; sleep 2; ip link show wlan0\n"
+
+# And then the first thing anyone does with a radio. `iw` waits for the scan
+# to finish before it dumps what cfg80211 collected, so this needs no `sleep`
+# of its own: the chip's results are queued behind the acknowledgement of the
+# `escan` request itself, and `iw` is still in the kernel waiting for the
+# completion when they arrive.
+[[boot.input]]
+after = "/ # \u001b[6n"
+text = "iw dev wlan0 scan\n"
 
 [golden]
 path = "golden/linux-wifi.txt"
@@ -249,16 +273,74 @@ line = "events 25 of 200 wanted, last set with `event_msgs_ext`"
 
 [[milestone]]
 why = """
-And what the chip did with it. One event raised — the interface the firmware
-comes up with, which is a `BRCMF_E_IF` — and dropped, because the host turns
+And what the chip did with it. One event raised and dropped — the interface
+the firmware comes up with, which is a `BRCMF_E_IF` — because the host turns
 events on long afterwards in `brcmf_c_preinit_dcmds` (`common.c:419`) and was
 not listening when the bsscfg appeared. That is why `brcmfmac` creates
 `wlan0` itself (`brcmf_bus_started`, `core.c:1237`) rather than waiting for
-the firmware to announce it. Nothing sent, because nothing else in this run
-has anything to say without being asked: a scan or an association would, and
-neither exists yet. No frames on the data channel either — the interface is
+the firmware to announce it. The two that went are the scan's: one network
+and the completion behind it, which are the only things in this run the chip
+says without being asked. No frames on the data channel — the interface is
 up but has no carrier, so nothing transmits through it."""
-line = "events 0 sent, 1 dropped as unwanted; 0 frames in on the data channel"
+line = "events 2 sent, 1 dropped as unwanted; 0 frames in on the data channel"
+
+[[milestone]]
+why = """
+The scan from the chip's end, which reaches the console nowhere: the request
+is an `escan` iovar on the control channel and the answers are events, so a
+scan the chip never saw and one it answered with nothing look the same from
+outside."""
+line = "scans 1 answered, 1 network reported"
+
+[[milestone]]
+why = """
+`iw dev wlan0 scan` found something, and the something is the model's own.
+Getting here is the event channel carrying a frame for the first time in any
+run: `brcmf_cfg80211_scan` (`cfg80211.c:1530`) sent the `escan` request, the
+chip took a dwell on each of the thirteen channels it offers, and then a
+`BRCMF_E_ESCAN_RESULT` went up the event channel carrying a
+`brcmf_escan_result_le` around one `brcmf_bss_info_le` — with
+`brcmf_cfg80211_escan_handler` (`cfg80211.c:3642`) agreeing with the model
+about every length in it — and a second one to say the scan was over. The
+address is invented and documented as invented; nothing here listened to
+anything."""
+line = "BSS 02:00:5e:00:53:04(on wlan0)"
+
+[[milestone]]
+why = """
+And the name came out of the information elements rather than out of
+`brcmf_bss_info_le.SSID`, which is where cfg80211 looks for it:
+`brcmf_inform_single_bss` (`cfg80211.c:3399`) points `notify_ie` at
+`ie_offset` bytes into the record and takes `ie_length` bytes from there. An
+`ie_offset` off by one is a network with an empty name, not an error."""
+line = "SSID: rpi-virt-fw-model-ap"
+
+[[milestone]]
+why = """
+The channel, which agrees three ways: the `chanspec` and `ctl_ch` in the
+record, the DS Parameter Set element beside the SSID, and the frequency
+cfg80211 filed the network under. It is one of the thirteen the chip told
+`brcmf_construct_chaninfo` (`cfg80211.c:7008`) about, which is the only kind
+cfg80211 can place — a result on any other channel is one it drops."""
+line = "DS Parameter set: channel 1"
+
+[[milestone]]
+why = "The frequency cfg80211 worked out from that channel, so the band the chip claims and the band the result landed in are the same one."
+line = "freq: 2412.0"
+
+[[milestone]]
+why = "And the signal: the model's invented `RSSI`, read back as a signed 16-bit number and multiplied by a hundred (`cfg80211.c:3401`). A sign error here would print `+60.00 dBm`."
+line = "signal: -60.00 dBm"
+
+[[milestone]]
+why = """
+The scan did not end in the driver's own timeout. `brcmf_escan_timeout`
+(`cfg80211.c:3590`) fires ten seconds after the request and aborts the scan,
+which reports whatever came in and then tells cfg80211 the scan failed — so
+a chip that answered the `escan` and never sent the completion would still
+print a network here. This is what says the completion arrived."""
+line = "brcmf_cfg80211_escan_timeout_worker"
+absent = true
 
 [[milestone]]
 why = "No control frame went unanswered: a single one that did would stop the bring-up dead 2.7 s later."

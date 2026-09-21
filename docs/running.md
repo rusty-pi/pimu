@@ -24,7 +24,9 @@ is the Bluetooth modem's, and the WiFi chip answers on the legacy EMMC host.
 what `testdata/boot/linux-wifi.toml` loads by hand to pin how far the chip's
 bring-up gets: `brcmfmac` and the modules it needs under `/lib/modules`, a
 `modprobe` for the one the kernel fetches by itself, the CYW43455's own firmware
-under `/lib/firmware/brcm`, and `insmod`/`ip`.
+under `/lib/firmware/brcm`, and `insmod`/`ip`/`iw`. The network `iw dev wlan0
+scan` finds there is invented — `src/periph/sdpcm.rs` says so beside it, and
+the scenario's own header says so again.
 
 Each boot scenario in `testdata/boot/` carries the exact flags and EEPROM
 settings for its medium, and `rpi-virt-fw boot-check <scenario> --plan` prints

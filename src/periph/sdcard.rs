@@ -445,6 +445,15 @@ impl SdCard {
         self.chip.as_ref()
     }
 
+    /// Bring what the card does on its own clock — which is the WiFi chip's
+    /// firmware and nothing else — to model time `now_us`.
+    #[inline]
+    pub fn advance_to(&mut self, now_us: u64) {
+        if let Some(chip) = self.chip.as_mut() {
+            chip.advance_to(now_us);
+        }
+    }
+
     pub fn state(&self) -> CardState {
         self.state
     }

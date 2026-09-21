@@ -735,12 +735,6 @@ Enter 'help' for a list of built-in commands.
 / # \x1b[6ninsmod $M/drivers/net/wireless/broadcom/brcm80211/brcmfmac/brcmfmac.ko; slee
 
 p 9; ip link; dmesg | tail -40
-[t] brcmfmac: brcmf_fw_alloc_request: using brcm/brcmfmac43455-sdio for chip BCM4345/6
-[t] brcmfmac: brcmf_fw_alloc_request: using brcm/brcmfmac43455-sdio for chip BCM4345/6
-[t] usbcore: registered new interface driver brcmfmac
-[t] usbcore: registered new interface driver brcmfmac
-[t] brcmfmac mmc1:0001:1: Direct firmware load for brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.bin failed with error -2
-[t] brcmfmac mmc1:0001:1: Direct firmware load for brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.bin failed with error -2
 [t] usb 1-1: New USB device found, idVendor=2109, idProduct=3431, bcdDevice= 4.21
 [t] usb 1-1: New USB device found, idVendor=2109, idProduct=3431, bcdDevice= 4.21
 [t] usb 1-1: New USB device strings: Mfr=0, Product=1, SerialNumber=0
@@ -751,6 +745,12 @@ p 9; ip link; dmesg | tail -40
 [t] hub 1-1:1.0: USB hub found
 [t] hub 1-1:1.0: 4 ports detected
 [t] hub 1-1:1.0: 4 ports detected
+[t] brcmfmac: brcmf_fw_alloc_request: using brcm/brcmfmac43455-sdio for chip BCM4345/6
+[t] brcmfmac: brcmf_fw_alloc_request: using brcm/brcmfmac43455-sdio for chip BCM4345/6
+[t] usbcore: registered new interface driver brcmfmac
+[t] usbcore: registered new interface driver brcmfmac
+[t] brcmfmac mmc1:0001:1: Direct firmware load for brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.bin failed with error -2
+[t] brcmfmac mmc1:0001:1: Direct firmware load for brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.bin failed with error -2
 [t] brcmfmac: brcmf_c_process_txcap_blob: no txcap_blob available (err=-2)
 [t] brcmfmac: brcmf_c_process_txcap_blob: no txcap_blob available (err=-2)
 [t] brcmfmac: brcmf_c_preinit_dcmds: Firmware: BCM4345/6 rpi-virt-fw model firmware (no radio) version 0
@@ -790,15 +790,15 @@ p 9; ip link; dmesg | tail -40
 [t] Loaded X.509 cert 'wens: 61c038651aabdcf94bd0ac7ff06c7248db18c600'
 [t] faux_driver regulatory: Direct firmware load for regulatory.db failed with error -2
 [t] cfg80211: failed to load regulatory.db
-[t] brcmfmac: F1 signature read @0x18000000=0x10064345
-[t] brcmfmac: brcmf_fw_alloc_request: using brcm/brcmfmac43455-sdio for chip BCM4345/6
-[t] usbcore: registered new interface driver brcmfmac
-[t] brcmfmac mmc1:0001:1: Direct firmware load for brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.bin failed with error -2
 [t] usb 1-1: New USB device found, idVendor=2109, idProduct=3431, bcdDevice= 4.21
 [t] usb 1-1: New USB device strings: Mfr=0, Product=1, SerialNumber=0
 [t] usb 1-1: Product: USB2.0 Hub
+[t] brcmfmac: F1 signature read @0x18000000=0x10064345
 [t] hub 1-1:1.0: USB hub found
 [t] hub 1-1:1.0: 4 ports detected
+[t] brcmfmac: brcmf_fw_alloc_request: using brcm/brcmfmac43455-sdio for chip BCM4345/6
+[t] usbcore: registered new interface driver brcmfmac
+[t] brcmfmac mmc1:0001:1: Direct firmware load for brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.bin failed with error -2
 [t] brcmfmac: brcmf_c_process_txcap_blob: no txcap_blob available (err=-2)
 [t] brcmfmac: brcmf_c_preinit_dcmds: Firmware: BCM4345/6 rpi-virt-fw model firmware (no radio) version 0
 / # \x1b[6nip link set wlan0 up; sleep 2; ip link show wlan0
@@ -806,4 +806,17 @@ p 9; ip link; dmesg | tail -40
 [t] brcmfmac: brcmf_cfg80211_set_power_mgmt: power save enabled
 3: wlan0: <NO-CARRIER,BROADCAST,MULTICAST,UP> mtu 1500 qdisc pfifo_fast qlen 1000
     link/ether 02:00:5e:00:57:01 brd ff:ff:ff:ff:ff:ff
-/ # \x1b[6n
+/ # \x1b[6niw dev wlan0 scan
+BSS 02:00:5e:00:53:04(on wlan0)
+	last seen: 13.253s [boottime]
+	TSF: 0 usec (0d, 00:00:00)
+	freq: 2412.0
+	beacon interval: 100 TUs
+	capability: ESS (0x0001)
+	signal: -60.00 dBm
+	last seen: 0 ms ago
+	SSID: rpi-virt-fw-model-ap
+	Supported rates: 1.0* 2.0* 5.5* 11.0* 6.0 9.0 12.0 18.0 
+	DS Parameter set: channel 1
+	Extended supported rates: 24.0 36.0 48.0 54.0 
+/ # 

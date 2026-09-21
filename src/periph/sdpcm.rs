@@ -80,22 +80,41 @@
 //! reports it.
 //! <https://github.com/raspberrypi/linux/blob/16f1da3c4e94437449d6aa151589ca0ad4b388bb/drivers/net/wireless/broadcom/brcm80211/brcmfmac/cyw/core.c>
 //!
+//! ### What a scan gets back
+//!
+//! The one thing here that is not an answer to a question. `escan`
+//! (`brcmf_run_escan`, `cfg80211.c:1443`) is a set, acknowledged like any
+//! other, and what the host is really waiting for arrives afterwards on the
+//! event channel: a `BRCMF_E_ESCAN_RESULT` per network with
+//! `BRCMF_E_STATUS_PARTIAL`, each carrying a `struct brcmf_escan_result_le`
+//! around one `struct brcmf_bss_info_le` and its information elements, and
+//! then one more with `BRCMF_E_STATUS_SUCCESS` to say the scan is over.
+//! `brcmf_cfg80211_escan_handler` (`cfg80211.c:3642`) collects the first
+//! kind and `brcmf_inform_bss` (`cfg80211.c:3432`) hands them to cfg80211.
+//!
+//! It takes its time over it, a dwell per channel, which is the one place
+//! in this module where being slower is being righter: see
+//! [`SCAN_DWELL_US`].
+//!
+//! The networks it reports are **invented** — see [`NETWORKS`]. Nothing here
+//! listens to anything.
+//!
 //! ### What this is not
 //!
 //! A radio. The responder below answers what `brcmf_bus_started`
 //! (`core.c`) asks on the way to registering a network interface, and its
 //! answers are the model's own — a firmware version that says so, one band,
 //! and a chip address that is invented rather than fused into a part.
-//! Nothing here scans, associates or carries a packet, so there is nothing
-//! for the data channel to carry either: a frame the host sends on it is
-//! taken and goes nowhere.
+//! Nothing here associates or carries a packet, so there is nothing for the
+//! data channel to carry either: a frame the host sends on it is taken and
+//! goes nowhere.
 //!
 //! Nothing raises an event during a bring-up, and that is not a gap: the
 //! whole of `brcmf_cfg80211_up` (`cfg80211.c:7878`) is a run of BCDC
 //! commands — `BRCMF_C_UP`, `BRCMF_C_SET_PM`, the roaming settings,
 //! `BRCMF_C_SET_INFRA`, `BRCMF_C_SET_FAKEFRAG` — each answered on the
 //! control channel, and it waits for nothing else. The one event the model
-//! does raise is the interface it comes up with, and the host is not
+//! does raise there is the interface it comes up with, and the host is not
 //! listening that early; see `Firmware::start` below.
 
 use std::collections::VecDeque;
@@ -203,6 +222,19 @@ const E_IF_ADD: u8 = 1;
 /// `BRCMF_E_IF_ROLE_STA` (`fweh.h:200`).
 const E_IF_ROLE_STA: u8 = 0;
 
+/// `BRCMF_E_ESCAN_RESULT` (`fweh.h:89`): one network a scan found, or — with
+/// a status that is not `PARTIAL` — the scan finishing.
+/// `brcmf_init_escan` (`cfg80211.c:3754`) registers the handler for it, which
+/// is what puts the code in the mask the host sets.
+/// <https://github.com/raspberrypi/linux/blob/16f1da3c4e94437449d6aa151589ca0ad4b388bb/drivers/net/wireless/broadcom/brcm80211/brcmfmac/fweh.h>
+const E_ESCAN_RESULT: u32 = 69;
+/// `BRCMF_E_STATUS_SUCCESS` (`fweh.h:125`) and `BRCMF_E_STATUS_PARTIAL`
+/// (`fweh.h:133`). The handler reads the event's data only on a `PARTIAL`;
+/// anything else is the scan ending, and `aborted` is "not `SUCCESS`"
+/// (`cfg80211.c:3744`).
+const E_STATUS_SUCCESS: u32 = 0;
+const E_STATUS_PARTIAL: u32 = 8;
+
 /// `struct eventmsgs_ext` (`cyw/fwil_types.h:31`): version, command, mask
 /// length, the most a get may answer with, and then the mask.
 const EVENTMSGS_EXT_HDRLEN: usize = 4;
@@ -251,6 +283,146 @@ const CHANNELS_2G: std::ops::RangeInclusive<u32> = 1..=13;
 /// cfg80211, which warns loudly about a channel it cannot place — and a zero
 /// is one.
 const CHANSPEC_HOME: u32 = CHSPEC_BW_20 | 1;
+/// `BRCMU_CHSPEC_CH_MASK` (`include/brcmu_d11.h:73`): the channel number in a
+/// channel spec, which is all this reads out of the ones a scan request
+/// names.
+const CHSPEC_CH_MASK: u16 = 0x00FF;
+
+/// `WL_ESCAN_ACTION_START` (`cfg80211.h:51`). The other two — `CONTINUE` and
+/// `ABORT` — are a scan the model never has running to continue or abort:
+/// the results are all there by the time the `escan` set is acknowledged.
+const ESCAN_ACTION_START: u16 = 1;
+/// `BRCMF_ESCAN_REQ_VERSION_V2` (`fwil_types.h:74`), the version
+/// `brcmf_run_escan` (`cfg80211.c:1470`) stamps unless `BRCMF_FEAT_SCAN_V2`
+/// is off, in which case it converts the parameters down and stamps
+/// `BRCMF_ESCAN_REQ_VERSION` (1). The two shapes put `channel_num` in
+/// different places, so the version is what says where to look.
+const ESCAN_REQ_VERSION_V2: u32 = 2;
+/// `offsetof(struct brcmf_escan_params_le, params_le)` (`fwil_types.h:460`):
+/// the version, the action and the sync id in front of the scan parameters.
+const ESCAN_PARAMS_HDRLEN: usize = 8;
+/// `BRCMF_SCAN_PARAMS_FIXED_SIZE` and `BRCMF_SCAN_PARAMS_V2_FIXED_SIZE`
+/// (`fwil_types.h:50`): where `channel_list` starts in each shape.
+const SCAN_PARAMS_FIXED: usize = 64;
+const SCAN_PARAMS_V2_FIXED: usize = 72;
+/// Where `channel_num` sits in each — the word before `channel_list`.
+const SCAN_PARAMS_CHANNEL_NUM: usize = SCAN_PARAMS_FIXED - 4;
+const SCAN_PARAMS_V2_CHANNEL_NUM: usize = SCAN_PARAMS_V2_FIXED - 4;
+/// `BRCMF_SCAN_PARAMS_COUNT_MASK` (`fwil_types.h:57`): the low half of
+/// `channel_num` is how many channel specs follow, and zero means all of
+/// them.
+const SCAN_PARAMS_COUNT_MASK: u32 = 0x0000_FFFF;
+
+/// `BRCMF_BSS_INFO_VERSION` (`fwil_types.h:21`). `brcmf_inform_bss`
+/// (`cfg80211.c:3442`) refuses a whole scan whose results carry any other
+/// number.
+const BSS_INFO_VERSION: u32 = 109;
+/// `sizeof(struct brcmf_bss_info_le)` (`fwil_types.h:314`) as a C compiler
+/// lays it out: the struct is not `__packed`, so it is 128 bytes with
+/// alignment padding inside it, not the 121 its fields add up to. It is also
+/// the offset the information elements start at, which is what `ie_offset`
+/// carries.
+const BSS_INFO_LEN: usize = 128;
+/// `WL_ESCAN_RESULTS_FIXED_SIZE` (`fwil_types.h:478`): `buflen`, `version`,
+/// `sync_id` and `bss_count` in front of the one BSS.
+/// `brcmf_cfg80211_escan_handler` (`cfg80211.c:3702`) checks the BSS's own
+/// length against `buflen` less exactly this.
+const ESCAN_RESULTS_FIXED: usize = 12;
+
+/// `WLAN_CAPABILITY_ESS` (`include/linux/ieee80211.h`): an infrastructure
+/// network. `brcmf_cfg80211_escan_handler` (`cfg80211.c:3712`) throws away a
+/// result with `WLAN_CAPABILITY_IBSS` set unless the wiphy has ad-hoc among
+/// its interface modes, and the bit next to it is `PRIVACY` — off, so what
+/// the model reports is an open network. Nothing can associate with it
+/// either way.
+const BSS_CAPABILITY: u16 = 0x0001;
+/// The beacon interval, in TU, which is what every access point uses and
+/// what `iw` prints as `beacon interval: 100 TUs`.
+const BSS_BEACON_PERIOD: u16 = 100;
+/// One beacon per DTIM, the simplest thing an access point can say.
+const BSS_DTIM_PERIOD: u8 = 1;
+/// The noise floor the model reports beside the signal. Read nowhere in the
+/// driver; a firmware measures it, and this one has nothing to measure, so
+/// it is a plausible number and no more.
+const BSS_PHY_NOISE: i8 = -92;
+
+/// Supported rates, in 500 kbit/s units with the high bit on the ones that
+/// are basic — the encoding `struct brcmf_bss_info_le.rateset`
+/// (`fwil_types.h:324`) and the Supported Rates element share. These are
+/// 802.11b's four as basic and 802.11g's eight on top, which is what a
+/// 2.4 GHz access point with no HT offers.
+const BSS_RATES: [u8; 12] = [
+    0x82, 0x84, 0x8B, 0x96, 0x0C, 0x12, 0x18, 0x24, 0x30, 0x48, 0x60, 0x6C,
+];
+/// How many rates fit in a Supported Rates element before the rest have to
+/// go in an Extended Supported Rates one (802.11, 9.4.2.3).
+const SUPP_RATES_MAX: usize = 8;
+
+/// Information-element ids (`enum ieee80211_eid`,
+/// `include/linux/ieee80211.h`). The SSID is the one that matters: cfg80211
+/// takes the network's name out of the elements and not out of
+/// `brcmf_bss_info_le.SSID`, so a result whose elements have no SSID in them
+/// is a network `iw` prints with an empty name.
+const EID_SSID: u8 = 0;
+const EID_SUPP_RATES: u8 = 1;
+const EID_DS_PARAMS: u8 = 3;
+const EID_EXT_SUPP_RATES: u8 = 50;
+
+/// How long the chip spends on a channel before it moves to the next one.
+///
+/// `brcmf_escan_prep` (`cfg80211.c:1119`) asks for the firmware's own
+/// defaults — `active_time` and `passive_time` are both `-1` — and
+/// Broadcom's active dwell is about this. Thirteen channels of it is the
+/// second or so a scan on a real board takes, which is also why the driver
+/// gives one ten seconds before it calls it lost
+/// (`BRCMF_ESCAN_TIMER_INTERVAL_MS`, `cfg80211.h:49`).
+///
+/// **A scan has to take time.** Answering one the instant it is asked looks
+/// like a faster model and is a wrong one: `iw dev wlan0 scan` sends the
+/// trigger, waits for it to be acknowledged, and only then opens the socket
+/// it listens for the completion on (`__listen_events`, `iw/event.c`) — so a
+/// completion that beat it to that socket is an event nothing was subscribed
+/// to, and `iw` waits in `recvmsg` for one that has already been and gone.
+/// A real scan loses that race by a thousandfold; this one has to lose it
+/// too.
+const SCAN_DWELL_US: u64 = 40_000;
+
+/// One network the model's firmware reports when the host scans.
+struct Bss {
+    ssid: &'static str,
+    bssid: [u8; 6],
+    /// A 2.4 GHz channel, which has to be one [`CHANNELS_2G`] offers:
+    /// cfg80211 knows only the channels `brcmf_construct_chaninfo`
+    /// (`cfg80211.c:7008`) enabled, and a result on any other one is a BSS
+    /// with no channel to put it on.
+    channel: u32,
+    /// The signal, in dBm. `brcmf_inform_single_bss` (`cfg80211.c:3396`)
+    /// reads the field as a signed 16-bit number and hands cfg80211 a
+    /// hundred times it, which is what `iw` prints as `signal: -60.00 dBm`.
+    rssi: i16,
+}
+
+/// What a scan finds, which is **invented**: there is no radio behind this
+/// module and nothing was measured to produce it.
+///
+/// The SSID names the model rather than a place, so that a scan result can
+/// never be mistaken for one taken off the air. The BSSID is the next
+/// address along from the three the model already has — the OTP Ethernet
+/// MAC `02:00:5e:00:53:01`, the Bluetooth modem's `02:00:5e:00:53:02` and
+/// the WiFi chip's own [`CHIP_MAC`] — so it is locally administered, unicast
+/// and from the documentation range in RFC 7042 section 2.1.2. Nothing
+/// derives it and it is not any network's.
+///
+/// One entry because one is what the goal needs; the code below sends a
+/// `PARTIAL` per entry and the completion after them, so a second is data
+/// and nothing else. Two entries on the same channel would also exercise
+/// `brcmf_compare_update_same_bss` (`cfg80211.c:3311`).
+const NETWORKS: [Bss; 1] = [Bss {
+    ssid: "rpi-virt-fw-model-ap",
+    bssid: [0x02, 0x00, 0x5E, 0x00, 0x53, 0x04],
+    channel: 1,
+    rssi: -60,
+}];
 
 /// The address the chip came out of its own OTP with, which is what it
 /// answers `cur_etheraddr` with until something overrides it.
@@ -343,6 +515,21 @@ impl Sdpcm {
         !self.rx.is_empty()
     }
 
+    /// Bring the firmware to model time `now_us`, and say whether that put a
+    /// frame in front of the host.
+    ///
+    /// Everything else the chip sends is an answer, so the host is already
+    /// writing when it is queued and the frame indication goes out with the
+    /// end of that write. A scan's results are the one thing the firmware
+    /// has without being asked *again*: it was asked once, and then it goes
+    /// and listens. So they need a clock, and the caller has to raise the
+    /// indication for them.
+    #[inline]
+    pub fn advance_to(&mut self, now_us: u64) -> bool {
+        self.fw.now_us = now_us;
+        !self.fw.pending.is_empty() && self.flush_events()
+    }
+
     /// The firmware starting: read the nvram the host left in the chip's
     /// memory and take the address out of it, which is the one thing in the
     /// file the model has anything to do with, and then announce the
@@ -393,6 +580,17 @@ impl Sdpcm {
     /// tried to transmit through the interface.
     pub fn data_frames_in(&self) -> u32 {
         self.fw.data_frames_in
+    }
+
+    /// Scans the host asked for, and how many networks the chip reported
+    /// across them. Nothing about a scan reaches the console: the request is
+    /// an iovar and the results are events.
+    pub fn escans(&self) -> u32 {
+        self.fw.escans
+    }
+
+    pub fn escan_results(&self) -> u32 {
+        self.fw.escan_results
     }
 
     /// The address the chip answers `cur_etheraddr` with, for the run report.
@@ -499,12 +697,22 @@ impl Sdpcm {
         }
     }
 
-    /// Hand whatever the firmware has raised to the frame queue.
-    fn flush_events(&mut self) {
-        for event in std::mem::take(&mut self.fw.pending) {
+    /// Hand whatever the firmware has ready to the frame queue, and say
+    /// whether anything went.
+    fn flush_events(&mut self) -> bool {
+        let mut sent = false;
+        while self
+            .fw
+            .pending
+            .front()
+            .is_some_and(|(due, _)| *due <= self.fw.now_us)
+        {
+            let (_, event) = self.fw.pending.pop_front().expect("the front frame");
             let frame = event.encode(self.fw.mac);
             self.push(CHANNEL_EVENT, &frame);
+            sent = true;
         }
+        sent
     }
 
     /// Queue one frame for the host.
@@ -625,12 +833,22 @@ struct Firmware {
     /// chip) — so the chip keeps whatever it was handed.
     event_mask: Vec<u8>,
     event_mask_source: EventMaskSource,
-    /// Events raised and not yet framed. [`Sdpcm::flush_events`] drains them
-    /// once whatever the firmware was doing is answered.
-    pending: Vec<Event>,
+    /// Model time, as [`Sdpcm::advance_to`] last brought the chip to. What
+    /// the firmware does on its own rather than in answer to a command is
+    /// timed against it.
+    now_us: u64,
+    /// Events raised and not yet framed, each with the model time the chip
+    /// has it ready at, earliest first. [`Sdpcm::flush_events`] takes the
+    /// ones whose time has come — immediately for an event a command raised,
+    /// and a scan's channel dwells later for a scan's.
+    pending: VecDeque<(u64, Event)>,
     events_sent: u32,
     events_dropped: u32,
     data_frames_in: u32,
+    /// Scans the host asked for, and networks reported across them. The
+    /// whole exchange is events, so none of it reaches the console.
+    escans: u32,
+    escan_results: u32,
 }
 
 impl Firmware {
@@ -641,10 +859,13 @@ impl Firmware {
             rxglom: false,
             event_mask: Vec::new(),
             event_mask_source: EventMaskSource::Firmware,
-            pending: Vec::new(),
+            now_us: 0,
+            pending: VecDeque::new(),
             events_sent: 0,
             events_dropped: 0,
             data_frames_in: 0,
+            escans: 0,
+            escan_results: 0,
         }
     }
 
@@ -670,11 +891,19 @@ impl Firmware {
         self.raise(event);
     }
 
-    /// Raise an event, if the host asked for this one.
+    /// Raise an event now, if the host asked for this one.
     fn raise(&mut self, event: Event) {
+        self.raise_at(event, self.now_us);
+    }
+
+    /// Raise one the chip will only have at model time `due_us` — what a
+    /// scan's results are, because a scan takes as long as it takes to
+    /// listen. Raised in order, so the queue stays sorted by the time each
+    /// event comes due.
+    fn raise_at(&mut self, event: Event, due_us: u64) {
         if self.wants(event.code) {
             self.events_sent += 1;
-            self.pending.push(event);
+            self.pending.push_back((due_us, event));
         } else {
             self.events_dropped += 1;
         }
@@ -760,8 +989,72 @@ impl Firmware {
             // The same mask inside `struct eventmsgs_ext`, which is how the
             // `cyw` half of the driver sets it on this chip.
             b"event_msgs_ext" => self.event_msgs_ext_set(value),
+            // The one set whose answer is not the whole of what the host is
+            // waiting for.
+            b"escan" => self.escan(value),
             _ => {}
         }
+    }
+
+    /// A scan, answered with what the model's firmware has to report.
+    ///
+    /// `struct brcmf_escan_params_le` (`fwil_types.h:460`): the version, what
+    /// to do, an id to tell concurrent scans apart, and then the scan
+    /// parameters. The model has its results already, but it does not hand
+    /// them over yet: each comes due a channel dwell at a time, because a
+    /// scan that answered inside its own acknowledgement is one `iw` never
+    /// hears the end of — see [`SCAN_DWELL_US`].
+    ///
+    /// Waiting is safe: `brcmf_cfg80211_scan` (`cfg80211.c:1568`) sets
+    /// `BRCMF_SCAN_STATUS_BUSY` *before* it sends the request, so a result
+    /// arriving any time after this is one the handler will take, and the
+    /// driver's own timeout is ten seconds away.
+    fn escan(&mut self, value: &[u8]) {
+        let Some(head) = value.get(..ESCAN_PARAMS_HDRLEN) else {
+            return;
+        };
+        let version = u32::from_le_bytes(head[..4].try_into().unwrap());
+        let action = u16::from_le_bytes(head[4..6].try_into().unwrap());
+        let sync_id = u16::from_le_bytes(head[6..8].try_into().unwrap());
+        // `CONTINUE` and `ABORT` are for a scan that is still running, and
+        // one never is: by the time the host could send either, the results
+        // and the completion are already queued.
+        if action != ESCAN_ACTION_START {
+            return;
+        }
+        self.escans += 1;
+
+        // One channel at a time, in the order the request named them, and a
+        // network is heard while the chip is on its channel — so a result
+        // comes due at the end of that channel's dwell and the completion at
+        // the end of the last.
+        let channels = escan_channels(version, &value[ESCAN_PARAMS_HDRLEN..])
+            .unwrap_or_else(|| CHANNELS_2G.collect());
+        let mut due = self.now_us;
+        for channel in &channels {
+            due += SCAN_DWELL_US;
+            for bss in NETWORKS.iter().filter(|bss| bss.channel == *channel) {
+                let mut event = Event::new(E_ESCAN_RESULT);
+                event.status = E_STATUS_PARTIAL;
+                event.addr = self.mac;
+                event.data = escan_result(bss, sync_id);
+                self.raise_at(event, due);
+                self.escan_results += 1;
+            }
+        }
+
+        // And then the scan ending, which is the event `iw` is really
+        // waiting on: `brcmf_notify_escan_complete` (`cfg80211.c:1184`) is
+        // what tells cfg80211 the results are all in, and nothing else in
+        // the driver calls it — bar the ten-second timeout
+        // (`BRCMF_ESCAN_TIMER_INTERVAL_MS`, `cfg80211.h:49`), which would
+        // report the same networks ten seconds later and an aborted scan
+        // with them. The completion carries no data: the handler reads the
+        // event's payload only on a `PARTIAL`.
+        let mut done = Event::new(E_ESCAN_RESULT);
+        done.status = E_STATUS_SUCCESS;
+        done.addr = self.mac;
+        self.raise_at(done, due);
     }
 
     /// One `event_msgs_ext` write. `len` says how much of `mask` is meant,
@@ -1019,6 +1312,151 @@ fn put(out: &mut [u8], at: usize, src: &[u8]) {
     };
     let n = room.min(src.len());
     out[at..at + n].copy_from_slice(&src[..n]);
+}
+
+/// The information elements the model's firmware reports for a network, as
+/// they would have come out of its beacon: an id, a length and the body,
+/// one after another (802.11, 9.4.2).
+///
+/// cfg80211 is handed these and nothing else about the network's name —
+/// `brcmf_inform_single_bss` (`cfg80211.c:3399`) points `notify_ie` at
+/// `ie_offset` and leaves `brcmf_bss_info_le.SSID` alone — so the SSID
+/// element is what `iw` prints. The rest are what an access point that
+/// offers nothing but 802.11g would carry, and what `iw` prints under it.
+fn beacon_ies(bss: &Bss) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut element = |id: u8, body: &[u8]| {
+        out.push(id);
+        out.push(body.len() as u8);
+        out.extend_from_slice(body);
+    };
+    element(EID_SSID, bss.ssid.as_bytes());
+    element(EID_SUPP_RATES, &BSS_RATES[..SUPP_RATES_MAX]);
+    element(EID_DS_PARAMS, &[bss.channel as u8]);
+    element(EID_EXT_SUPP_RATES, &BSS_RATES[SUPP_RATES_MAX..]);
+    out
+}
+
+/// One `struct brcmf_bss_info_le` (`fwil_types.h:314`) with its information
+/// elements behind it.
+///
+/// The fields are written in the order the struct declares them and the
+/// padding a C compiler puts between them is written out with them: the
+/// struct is not `__packed`, so `RSSI` lands at 78 rather than 77 and
+/// `nbss_cap` at 84 rather than 82, and the whole comes to 128 bytes rather
+/// than 121. Getting that wrong shifts `ie_offset` and `ie_length`, and the
+/// driver reads the elements from wherever they say.
+fn bss_info(bss: &Bss) -> Vec<u8> {
+    let ies = beacon_ies(bss);
+    let mut out = Vec::with_capacity(BSS_INFO_LEN + ies.len());
+    let mut ssid = [0u8; 32];
+    ssid[..bss.ssid.len()].copy_from_slice(bss.ssid.as_bytes());
+    let mut rates = [0u8; 16];
+    rates[..BSS_RATES.len()].copy_from_slice(&BSS_RATES);
+
+    out.extend_from_slice(&BSS_INFO_VERSION.to_le_bytes());
+    // `length` is the whole record, elements included — which is what the
+    // handler checks against the event's own `buflen` and what
+    // `next_bss_le` (`cfg80211.c:3423`) walks the collected results by.
+    out.extend_from_slice(&((BSS_INFO_LEN + ies.len()) as u32).to_le_bytes());
+    out.extend_from_slice(&bss.bssid);
+    out.extend_from_slice(&BSS_BEACON_PERIOD.to_le_bytes());
+    out.extend_from_slice(&BSS_CAPABILITY.to_le_bytes());
+    out.push(bss.ssid.len() as u8);
+    out.extend_from_slice(&ssid);
+    // `rateset`, whose `count` is four-byte aligned and so starts a byte
+    // past the SSID rather than on it.
+    out.push(0);
+    out.extend_from_slice(&(BSS_RATES.len() as u32).to_le_bytes());
+    out.extend_from_slice(&rates);
+    out.extend_from_slice(&((CHSPEC_BW_20 | bss.channel) as u16).to_le_bytes());
+    // `atim_window`, which is an ad-hoc network's.
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out.push(BSS_DTIM_PERIOD);
+    // `RSSI` is two-byte aligned, so a pad byte comes before it.
+    out.push(0);
+    out.extend_from_slice(&bss.rssi.to_le_bytes());
+    out.push(BSS_PHY_NOISE as u8);
+    // `n_cap`: not 802.11n, so the MCS set and the HT capabilities below
+    // stay zero and cfg80211 sees a plain 802.11g network.
+    out.push(0);
+    out.extend_from_slice(&[0, 0]);
+    out.extend_from_slice(&0u32.to_le_bytes()); // nbss_cap
+                                                // `ctl_ch`, which is the channel `brcmf_inform_single_bss`
+                                                // (`cfg80211.c:3381`) uses; it decodes `chanspec` for it only when this
+                                                // is zero.
+    out.push(bss.channel as u8);
+    out.extend_from_slice(&[0, 0, 0]);
+    out.extend_from_slice(&0u32.to_le_bytes()); // reserved32
+    out.push(0); // flags
+    out.extend_from_slice(&[0, 0, 0]); // reserved
+    out.extend_from_slice(&[0u8; 16]); // basic_mcs
+    out.extend_from_slice(&(BSS_INFO_LEN as u16).to_le_bytes());
+    out.extend_from_slice(&[0, 0]);
+    out.extend_from_slice(&(ies.len() as u32).to_le_bytes());
+    // `SNR`, the signal over the noise floor the model reports beside it.
+    let snr = bss.rssi - i16::from(BSS_PHY_NOISE);
+    out.extend_from_slice(&snr.to_le_bytes());
+    out.extend_from_slice(&[0, 0]);
+
+    debug_assert_eq!(out.len(), BSS_INFO_LEN, "not the struct's own length");
+    out.extend_from_slice(&ies);
+    out
+}
+
+/// One scan result as the event carries it: `struct brcmf_escan_result_le`
+/// (`fwil_types.h:470`) wrapped around a single BSS.
+///
+/// `brcmf_cfg80211_escan_handler` (`cfg80211.c:3679`) insists on all three
+/// of these agreeing — `buflen` no larger than the event's own `datalen`,
+/// exactly one BSS, and that BSS's `length` exactly `buflen` less
+/// [`ESCAN_RESULTS_FIXED`] — and throws the result away with a message if
+/// they do not.
+fn escan_result(bss: &Bss, sync_id: u16) -> Vec<u8> {
+    let info = bss_info(bss);
+    let mut out = Vec::with_capacity(ESCAN_RESULTS_FIXED + info.len());
+    out.extend_from_slice(&((ESCAN_RESULTS_FIXED + info.len()) as u32).to_le_bytes());
+    out.extend_from_slice(&BSS_INFO_VERSION.to_le_bytes());
+    // The id the request came with, handed back. The driver matches nothing
+    // against it — a firmware that runs several scans at once would.
+    out.extend_from_slice(&sync_id.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&info);
+    out
+}
+
+/// The channels a scan request asks for, or `None` for all of them.
+///
+/// `brcmf_escan_prep` (`cfg80211.c:1176`) puts the count in the low half of
+/// `channel_num` and the specs themselves in `channel_list` behind the fixed
+/// part of the parameters — which is 64 bytes in the first shape and 72 in
+/// the second, so `version` is what says where to look. A count of zero is
+/// "use all available channels", which is the comment on the field.
+///
+/// The SSID list beyond the channels is not read: it is what a real firmware
+/// would put in its probe requests, and a network answers a directed probe
+/// or not, but its beacons arrive either way. So a scan for one name still
+/// finds what is there.
+fn escan_channels(version: u32, params: &[u8]) -> Option<Vec<u32>> {
+    let (at, list) = if version == ESCAN_REQ_VERSION_V2 {
+        (SCAN_PARAMS_V2_CHANNEL_NUM, SCAN_PARAMS_V2_FIXED)
+    } else {
+        (SCAN_PARAMS_CHANNEL_NUM, SCAN_PARAMS_FIXED)
+    };
+    let word = params.get(at..at + 4)?;
+    let count = (u32::from_le_bytes(word.try_into().ok()?) & SCAN_PARAMS_COUNT_MASK) as usize;
+    if count == 0 {
+        return None;
+    }
+    let specs = params.get(list..list + count * 2)?;
+    Some(
+        specs
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u32::from(u16::from_le_bytes(*c) & CHSPEC_CH_MASK))
+            .collect(),
+    )
 }
 
 /// The channel list `brcmf_construct_chaninfo` (`cfg80211.c:7008`) walks: a
@@ -1794,6 +2232,384 @@ mod tests {
         // counts every frame the chip sends with the same counter
         // (`brcmf_sdio_hdparse`, `sdio.c:1462`).
         assert_eq!(hd.seq, 1);
+    }
+
+    // --- the scan -------------------------------------------------------
+
+    /// An `escan` request the way `brcmf_run_escan` (`cfg80211.c:1443`)
+    /// builds one: `struct brcmf_escan_params_le` with the version, the
+    /// action and the sync id, then the scan parameters `brcmf_escan_prep`
+    /// (`cfg80211.c:1096`) filled in. `channels` empty is the abort shape's
+    /// count of zero, which means every channel.
+    fn escan_request(version: u32, action: u16, sync_id: u16, channels: &[u32]) -> Vec<u8> {
+        let fixed = if version == ESCAN_REQ_VERSION_V2 {
+            SCAN_PARAMS_V2_FIXED
+        } else {
+            SCAN_PARAMS_FIXED
+        };
+        let mut value = Vec::new();
+        value.extend_from_slice(&version.to_le_bytes());
+        value.extend_from_slice(&action.to_le_bytes());
+        value.extend_from_slice(&sync_id.to_le_bytes());
+        value.resize(ESCAN_PARAMS_HDRLEN + fixed, 0);
+        // `channel_num`: the count in the low half, the SSID count in the
+        // high one. `iw` scans with one wildcard SSID.
+        let at = ESCAN_PARAMS_HDRLEN + fixed - 4;
+        let channel_num = (1u32 << 16) | channels.len() as u32;
+        value[at..at + 4].copy_from_slice(&channel_num.to_le_bytes());
+        for ch in channels {
+            value.extend_from_slice(&((CHSPEC_BW_20 | ch) as u16).to_le_bytes());
+        }
+        // The wildcard `struct brcmf_ssid_le`, four-byte aligned behind the
+        // channel list.
+        value.resize(value.len().next_multiple_of(4) + 36, 0);
+        value
+    }
+
+    /// Ask for a scan and take the acknowledgement. Nothing else is in the
+    /// FIFO afterwards: a scan takes as long as it takes to listen.
+    fn scan(chip: &mut Sdpcm, seq: u8, channels: &[u32]) {
+        let value = escan_request(ESCAN_REQ_VERSION_V2, ESCAN_ACTION_START, 0x1234, channels);
+        chip.write(&request(seq, 1, C_SET_VAR, true, &named("escan", &value)));
+        chip.write_end();
+        let (hd, payload) = read_frame(chip).expect("the acknowledgement");
+        assert_eq!(hd.channel, CHANNEL_CONTROL);
+        assert_eq!(bcdc_parts(&payload).3, 0, "the set failed");
+        assert!(!chip.frame_waiting(), "a scan that answered instantly");
+    }
+
+    /// Let the whole of a scan of every channel go by.
+    fn scan_finishes(chip: &mut Sdpcm) {
+        let at = chip.fw.now_us + CHANNELS_2G.count() as u64 * SCAN_DWELL_US;
+        chip.advance_to(at);
+    }
+
+    /// The information elements of a result, as `(id, body)` pairs — the way
+    /// cfg80211 walks them, and the only place the network's name is.
+    fn elements(ies: &[u8]) -> Vec<(u8, Vec<u8>)> {
+        let mut out = Vec::new();
+        let mut at = 0;
+        while at + 2 <= ies.len() {
+            let (id, len) = (ies[at], usize::from(ies[at + 1]));
+            assert!(at + 2 + len <= ies.len(), "element runs past the end");
+            out.push((id, ies[at + 2..at + 2 + len].to_vec()));
+            at += 2 + len;
+        }
+        assert_eq!(at, ies.len(), "a trailing byte that is not an element");
+        out
+    }
+
+    /// One `struct brcmf_escan_result_le`, checked the way
+    /// `brcmf_cfg80211_escan_handler` (`cfg80211.c:3668`) checks one and
+    /// then taken apart the way `brcmf_inform_single_bss` (`cfg80211.c:3360`)
+    /// takes it apart. Panics wherever the driver would have dropped it.
+    struct Result {
+        bssid: [u8; 6],
+        capability: u16,
+        beacon_period: u16,
+        channel: u8,
+        rssi: i16,
+        ies: Vec<(u8, Vec<u8>)>,
+    }
+
+    fn parse_result(data: &[u8]) -> Result {
+        let le16 = |i: usize| u16::from_le_bytes(data[i..i + 2].try_into().unwrap());
+        let le32 = |i: usize| u32::from_le_bytes(data[i..i + 4].try_into().unwrap());
+
+        // `e->datalen < sizeof(*escan_result_le)` is the first thing the
+        // handler refuses.
+        assert!(
+            data.len() >= ESCAN_RESULTS_FIXED + BSS_INFO_LEN,
+            "invalid event data length"
+        );
+        let buflen = le32(0) as usize;
+        assert!(buflen <= 65000, "invalid escan buffer length");
+        assert!(buflen <= data.len(), "buflen past the end of the event");
+        assert!(buflen >= ESCAN_RESULTS_FIXED + BSS_INFO_LEN);
+        assert_eq!(le16(10), 1, "invalid bss_count");
+
+        let bi = &data[ESCAN_RESULTS_FIXED..];
+        let w16 = |i: usize| u16::from_le_bytes(bi[i..i + 2].try_into().unwrap());
+        let w32 = |i: usize| u32::from_le_bytes(bi[i..i + 4].try_into().unwrap());
+        // `brcmf_inform_bss` (`cfg80211.c:3442`) refuses the whole scan over
+        // this one.
+        assert_eq!(w32(0), BSS_INFO_VERSION, "!= WL_BSS_INFO_VERSION");
+        let bi_length = w32(4) as usize;
+        assert_eq!(
+            bi_length,
+            buflen - ESCAN_RESULTS_FIXED,
+            "ignoring invalid bss_info length"
+        );
+        assert!(bi_length <= 2048, "bss info is larger than buffer");
+        let capability = w16(16);
+        assert_eq!(capability & 0x0002, 0, "ignoring IBSS result");
+
+        let ie_offset = usize::from(w16(116));
+        let ie_length = w32(120) as usize;
+        assert!(ie_offset + ie_length <= bi_length, "IEs past the record");
+
+        Result {
+            bssid: bi[8..14].try_into().unwrap(),
+            capability,
+            beacon_period: w16(14),
+            channel: bi[88],
+            rssi: w16(78) as i16,
+            ies: elements(&bi[ie_offset..ie_offset + ie_length]),
+        }
+    }
+
+    /// The events a scan left in the FIFO, as `(status, data)`.
+    fn scan_events(chip: &mut Sdpcm) -> Vec<(u32, Vec<u8>)> {
+        let mut out = Vec::new();
+        while chip.frame_waiting() {
+            let (hd, payload) = read_frame(chip).expect("a frame");
+            assert_eq!(hd.channel, CHANNEL_EVENT);
+            let event = parse_event(&payload);
+            assert_eq!(event.code, E_ESCAN_RESULT);
+            assert_eq!(event.bsscfgidx, 0, "not the primary interface");
+            out.push((event.status, event.data));
+        }
+        out
+    }
+
+    /// A chip with the mask the driver really sets on this part, so that the
+    /// scan's events are wanted.
+    fn scanning_chip() -> Sdpcm {
+        let mut chip = Sdpcm::new();
+        chip.fw.event_mask = mask_of(&[E_IF, E_ESCAN_RESULT]);
+        chip
+    }
+
+    #[test]
+    fn a_scan_is_answered_with_a_result_for_each_network_and_then_a_completion() {
+        let mut chip = scanning_chip();
+        assert_eq!(chip.escans(), 0);
+        scan(&mut chip, 0, &[]);
+        assert_eq!(chip.escans(), 1);
+        assert_eq!(chip.escan_results(), NETWORKS.len() as u32);
+        scan_finishes(&mut chip);
+
+        let events = scan_events(&mut chip);
+        assert_eq!(events.len(), NETWORKS.len() + 1, "a result each and an end");
+        // Every network first, as a partial result...
+        for (event, bss) in events.iter().zip(NETWORKS.iter()) {
+            assert_eq!(event.0, E_STATUS_PARTIAL);
+            assert_eq!(parse_result(&event.1).bssid, bss.bssid);
+        }
+        // ...and then the scan ending, which is what
+        // `brcmf_notify_escan_complete` is reached through. Anything but
+        // `SUCCESS` would be an aborted scan (`cfg80211.c:3744`), and the
+        // handler reads no data off it.
+        let (status, data) = events.last().unwrap();
+        assert_eq!(*status, E_STATUS_SUCCESS);
+        assert!(data.is_empty());
+        assert_eq!(chip.events_sent(), NETWORKS.len() as u32 + 1);
+    }
+
+    #[test]
+    fn a_result_carries_the_network_the_model_invented() {
+        let mut chip = scanning_chip();
+        scan(&mut chip, 0, &[]);
+        scan_finishes(&mut chip);
+        let events = scan_events(&mut chip);
+        let bss = &NETWORKS[0];
+        let result = parse_result(&events[0].1);
+
+        assert_eq!(result.bssid, bss.bssid);
+        assert_eq!(result.channel, bss.channel as u8);
+        assert_eq!(result.rssi, bss.rssi);
+        assert_eq!(result.beacon_period, BSS_BEACON_PERIOD);
+        // An infrastructure network, and an open one: the `PRIVACY` bit next
+        // to `ESS` is clear.
+        assert_eq!(result.capability, BSS_CAPABILITY);
+        assert_eq!(result.capability & 0x0010, 0, "not an open network");
+
+        // The address is invented the way the chip's own is: locally
+        // administered, unicast, and not any network's.
+        assert_eq!(bss.bssid[0] & 0x03, 0x02);
+        assert_ne!(bss.bssid, CHIP_MAC);
+        // And on a channel the chip told cfg80211 about, which is the only
+        // kind it can place.
+        assert!(CHANNELS_2G.contains(&bss.channel));
+    }
+
+    #[test]
+    fn the_name_is_in_the_elements_where_cfg80211_looks_for_it() {
+        let mut chip = scanning_chip();
+        scan(&mut chip, 0, &[]);
+        scan_finishes(&mut chip);
+        let events = scan_events(&mut chip);
+        let result = parse_result(&events[0].1);
+        let bss = &NETWORKS[0];
+
+        let ids: Vec<u8> = result.ies.iter().map(|(id, _)| *id).collect();
+        assert_eq!(
+            ids,
+            vec![EID_SSID, EID_SUPP_RATES, EID_DS_PARAMS, EID_EXT_SUPP_RATES]
+        );
+        let ssid = &result.ies[0].1;
+        assert_eq!(
+            std::str::from_utf8(ssid).unwrap(),
+            bss.ssid,
+            "the name `iw` prints"
+        );
+        assert!(
+            !ssid.is_empty(),
+            "an empty SSID is what a wrong offset gives"
+        );
+        assert!(ssid.len() <= 32, "longer than IEEE80211_MAX_SSID_LEN");
+        // The DS Parameter Set has to agree with `ctl_ch`, or `iw` prints
+        // one channel and cfg80211 files the network under another.
+        assert_eq!(result.ies[2].1, vec![bss.channel as u8]);
+        // Every rate, split the way 802.11 splits them.
+        let mut rates = result.ies[1].1.clone();
+        rates.extend_from_slice(&result.ies[3].1);
+        assert_eq!(rates, BSS_RATES);
+        assert!(result.ies[1].1.len() <= SUPP_RATES_MAX);
+    }
+
+    #[test]
+    fn a_scan_of_channels_the_network_is_not_on_finds_nothing() {
+        // `iw dev wlan0 scan freq ...` names channels, and
+        // `brcmf_escan_prep` (`cfg80211.c:1136`) puts them in the request.
+        let mut chip = scanning_chip();
+        let elsewhere: Vec<u32> = CHANNELS_2G
+            .filter(|ch| !NETWORKS.iter().any(|bss| bss.channel == *ch))
+            .collect();
+        scan(&mut chip, 0, &elsewhere);
+        assert_eq!(chip.escans(), 1, "the request was still a scan");
+        assert_eq!(chip.escan_results(), 0);
+
+        // ...but the completion still comes, or the host waits out the
+        // ten-second timeout for nothing — and it comes when the chip has
+        // been round every channel it was given, not before.
+        let end = chip.fw.now_us + elsewhere.len() as u64 * SCAN_DWELL_US;
+        chip.advance_to(end - 1);
+        assert!(!chip.frame_waiting(), "the scan is not over yet");
+        chip.advance_to(end);
+        let events = scan_events(&mut chip);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].0, E_STATUS_SUCCESS);
+
+        // And the channel the network is on finds it again.
+        scan(&mut chip, 1, &[NETWORKS[0].channel]);
+        assert_eq!(chip.escan_results(), 1);
+        chip.advance_to(chip.fw.now_us + SCAN_DWELL_US);
+        assert_eq!(scan_events(&mut chip).len(), 2);
+    }
+
+    #[test]
+    fn the_channel_list_is_read_out_of_whichever_shape_the_request_has() {
+        // `brcmf_run_escan` (`cfg80211.c:1472`) converts the parameters down
+        // to the first shape when `BRCMF_FEAT_SCAN_V2` is off, and the two
+        // put `channel_num` eight bytes apart.
+        for version in [1, ESCAN_REQ_VERSION_V2] {
+            let wanted = vec![NETWORKS[0].channel];
+            let params = escan_request(version, ESCAN_ACTION_START, 0, &wanted);
+            assert_eq!(
+                escan_channels(version, &params[ESCAN_PARAMS_HDRLEN..]),
+                Some(wanted),
+                "version {version}"
+            );
+            // A count of zero is every channel, which is the shape an abort
+            // and a whole-band scan both have.
+            let all = escan_request(version, ESCAN_ACTION_START, 0, &[]);
+            assert_eq!(escan_channels(version, &all[ESCAN_PARAMS_HDRLEN..]), None);
+        }
+        // Nothing to read is not a channel list either.
+        assert_eq!(escan_channels(ESCAN_REQ_VERSION_V2, &[]), None);
+    }
+
+    #[test]
+    fn a_scan_the_host_is_not_listening_for_is_raised_and_dropped() {
+        // The event channel is still the mask's to allow: a host that never
+        // registered the handler never set the bit, and a firmware that sent
+        // the results anyway would be sending frames nothing reads.
+        let mut chip = Sdpcm::new();
+        chip.fw.event_mask = mask_of(&[E_IF]);
+        scan(&mut chip, 0, &[]);
+        scan_finishes(&mut chip);
+        assert!(!chip.frame_waiting());
+        assert_eq!(chip.escans(), 1);
+        assert_eq!(chip.events_sent(), 0);
+        assert_eq!(chip.events_dropped(), NETWORKS.len() as u32 + 1);
+    }
+
+    #[test]
+    fn only_a_start_is_a_scan() {
+        // `WL_ESCAN_ACTION_ABORT` is what `brcmf_notify_escan_complete`
+        // (`cfg80211.c:1208`) sends to call a running scan off, and nothing
+        // is ever running.
+        let mut chip = scanning_chip();
+        for action in [2u16, 3] {
+            let value = escan_request(ESCAN_REQ_VERSION_V2, action, 0x1234, &[]);
+            chip.write(&request(0, 1, C_SET_VAR, true, &named("escan", &value)));
+            chip.write_end();
+            read_frame(&mut chip).expect("the acknowledgement");
+            assert!(!chip.frame_waiting(), "action {action} answered");
+        }
+        assert_eq!(chip.escans(), 0);
+        // And a request too short to have a header in it is not one either.
+        chip.write(&request(0, 1, C_SET_VAR, true, &named("escan", &[0, 0])));
+        chip.write_end();
+        read_frame(&mut chip).expect("the acknowledgement");
+        assert_eq!(chip.escans(), 0);
+    }
+
+    #[test]
+    fn a_scan_takes_a_dwell_on_every_channel_it_was_given() {
+        // Answering the instant the request lands is what makes `iw dev
+        // wlan0 scan` hang: it opens the socket it waits for the completion
+        // on only after the trigger is acknowledged, so the completion has
+        // to come later than that. It also has to come at all, or the ten
+        // second timeout in the driver is what ends the scan.
+        let mut chip = scanning_chip();
+        chip.advance_to(5_000_000);
+        scan(&mut chip, 0, &[]);
+        let start = 5_000_000;
+
+        // The network is on the first channel, so its result comes after one
+        // dwell and the completion only after the last.
+        let bss = &NETWORKS[0];
+        let at = CHANNELS_2G
+            .clone()
+            .position(|ch| ch == bss.channel)
+            .expect("a channel the chip offers");
+        chip.advance_to(start + (at as u64 + 1) * SCAN_DWELL_US - 1);
+        assert!(!chip.frame_waiting(), "the channel's dwell is not over");
+        chip.advance_to(start + (at as u64 + 1) * SCAN_DWELL_US);
+        let (hd, payload) = read_frame(&mut chip).expect("the result");
+        assert_eq!(hd.channel, CHANNEL_EVENT);
+        assert_eq!(parse_event(&payload).status, E_STATUS_PARTIAL);
+
+        let end = start + CHANNELS_2G.count() as u64 * SCAN_DWELL_US;
+        chip.advance_to(end - 1);
+        assert!(!chip.frame_waiting(), "the scan is not over");
+        assert!(chip.advance_to(end), "and then it is");
+        let (_, payload) = read_frame(&mut chip).expect("the completion");
+        assert_eq!(parse_event(&payload).status, E_STATUS_SUCCESS);
+        // Nothing left to deliver, however far time runs on.
+        assert!(!chip.advance_to(end + 60_000_000));
+    }
+
+    #[test]
+    fn a_result_fits_in_one_frame_the_driver_will_read() {
+        // `brcmf_sdio_hdparse` (`sdio.c:1435`) drops a frame longer than
+        // `MAX_RX_DATASZ` on any channel but the control one, and an event
+        // frame is what a scan result travels in.
+        let mut chip = scanning_chip();
+        scan(&mut chip, 0, &[]);
+        scan_finishes(&mut chip);
+        while chip.frame_waiting() {
+            let mut first = [0u8; 64];
+            chip.read(&mut first);
+            let hd = parse_header(&first, false).expect("an event frame");
+            assert!(hd.len <= 2048, "longer than MAX_RX_DATASZ");
+            // ...and long enough to need the second read, which is the path
+            // every frame but a control one takes.
+            let mut rest = vec![0u8; (hd.len - first.len()).next_multiple_of(4)];
+            chip.read(&mut rest);
+        }
     }
 
     #[test]

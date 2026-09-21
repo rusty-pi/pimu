@@ -441,6 +441,20 @@ impl Cyw43455 {
         }
     }
 
+    /// Bring the chip's firmware to model time `now_us`.
+    ///
+    /// Everything else it sends is an answer, queued while the host is still
+    /// writing the question, so [`Self::end_io`] raises the frame indication
+    /// for it. A scan's results are the exception: the chip was asked once
+    /// and then goes off to listen, so the frames appear on their own clock
+    /// and the indication has to go up with them.
+    #[inline]
+    pub fn advance_to(&mut self, now_us: u64) {
+        if self.sdpcm.advance_to(now_us) {
+            self.intstatus |= I_HMB_FRAME_IND;
+        }
+    }
+
     // --- the host interrupt ---------------------------------------------
 
     /// The chip is pulling the SDIO interrupt line, which it does while any
@@ -987,6 +1001,83 @@ mod tests {
         let mut chip = Cyw43455::new();
         writel(&mut chip, RAM_BASE + RAM_SIZE - 4, 0xDEAD_BEEF);
         assert!(nvram(chip.ram()).is_none());
+    }
+
+    /// One BCDC "set a named variable" inside the SDPCM frame the host sends
+    /// it in (`brcmf_proto_bcdc_msg`, `bcdc.c:109`, and
+    /// `brcmf_sdio_tx_ctrlframe`, `sdio.c:2412`), written on function 2 and
+    /// its acknowledgement read back.
+    fn set_iovar(chip: &mut Cyw43455, seq: u8, name: &str, value: &[u8]) {
+        let mut payload = name.as_bytes().to_vec();
+        payload.push(0);
+        payload.extend_from_slice(value);
+
+        let mut bcdc = Vec::new();
+        bcdc.extend_from_slice(&263u32.to_le_bytes());
+        bcdc.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        bcdc.extend_from_slice(&(1u32 << 16 | 2).to_le_bytes());
+        bcdc.extend_from_slice(&0u32.to_le_bytes());
+        bcdc.extend_from_slice(&payload);
+
+        let len = (12 + bcdc.len()) as u16;
+        let mut frame = Vec::new();
+        frame.extend_from_slice(&len.to_le_bytes());
+        frame.extend_from_slice(&(!len).to_le_bytes());
+        frame.extend_from_slice(&(u32::from(seq) | 12 << 24).to_le_bytes());
+        frame.extend_from_slice(&0u32.to_le_bytes());
+        frame.extend_from_slice(&bcdc);
+        chip.write_io(2, 0, &frame);
+        chip.end_io(2);
+        // Take the answer off the FIFO and clear the indication it came
+        // with, the way `brcmf_sdio_intr_rstatus` (`sdio.c:2573`) does, so
+        // that what is left is what the chip says of its own accord.
+        let mut ack = [0u8; 64];
+        chip.read_io(2, 0, &mut ack);
+        writel(chip, CORES[SDIO_CORE].base + SD_INTSTATUS, I_HMB_FRAME_IND);
+    }
+
+    #[test]
+    fn a_scan_raises_the_frame_indication_on_its_own_clock() {
+        // The one thing the chip sends without the host writing at the same
+        // moment. Every other frame is queued behind a command, and
+        // `end_io` raises the indication with the end of that write; a
+        // scan's results come due while nothing is touching the bus, so the
+        // model has to raise it from the clock instead. It also has to reach
+        // the host controller, which asks the card, which asks the chip.
+        let mut chip = Cyw43455::new();
+        release_arm(&mut chip);
+        chip.enable_f2();
+        // The host asks to be interrupted, and asks to hear about events.
+        writel(
+            &mut chip,
+            CORES[SDIO_CORE].base + SD_HOSTINTMASK,
+            I_HMB_FRAME_IND,
+        );
+        let mut mask = vec![0u8; 25];
+        mask[69 / 8] |= 1 << (69 % 8);
+        let mut ext = vec![1, 3, mask.len() as u8, 0];
+        ext.extend_from_slice(&mask);
+        set_iovar(&mut chip, 0, "event_msgs_ext", &ext);
+
+        // A scan of every channel: the version, `WL_ESCAN_ACTION_START`, a
+        // sync id, and scan parameters asking for no channel in particular.
+        let mut params = vec![0u8; 8 + 72];
+        params[0] = 2;
+        params[4] = 1;
+        set_iovar(&mut chip, 1, "escan", &params);
+        assert!(!chip.irq_asserted(), "a scan that answered instantly");
+
+        // Nothing a millisecond in, which is not a channel's dwell...
+        chip.advance_to(1_000);
+        assert!(!chip.irq_asserted());
+        // ...and then a frame, announced without the host having written
+        // anything at all.
+        chip.advance_to(10_000_000);
+        assert!(chip.irq_asserted(), "no frame indication for the results");
+        assert_ne!(chip.intstatus & I_HMB_FRAME_IND, 0);
+        assert!(chip.sdpcm().frame_waiting());
+        assert_eq!(chip.sdpcm().escans(), 1);
+        assert_eq!(chip.sdpcm().escan_results(), 1);
     }
 
     #[test]

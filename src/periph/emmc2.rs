@@ -520,6 +520,11 @@ impl Emmc2 {
         if self.next_block.as_ref().is_some_and(|n| n.due_us <= now_us) {
             self.block_arrives();
         }
+        // ...and a card with something of its own going on — a WiFi chip
+        // part-way through a scan — gets the same chance to finish it.
+        if let Some(card) = self.card.as_mut() {
+            card.advance_to(now_us);
+        }
     }
 
     /// A status register was read: count it toward the next block's arrival.
