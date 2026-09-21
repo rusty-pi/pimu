@@ -26,7 +26,7 @@ hand-off runs on the **VideoCore VPU**, not the ARM cores.
 │    - reads config.txt, sets clocks/PLLs, loads the DTB and ARM kernel        │
 │    - starts the ARM stub, releases the ARM cores from reset                  │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│ 3. ARM kernel                                      (ARM)   -- out of scope   │
+│ 3. ARM kernel                          (four Cortex-A72 cores, modelled too) │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -52,19 +52,19 @@ The model is a C0 BCM2711 on a Pi 4B rev 1.5 (`d03115`) unless `boot
 `version` value (`0x0400_0161` on B0, `0x0400_0162` on C0) and where the ROM
 stage puts its stand-ins for the ROM's OTP routines, which bootcode up to
 2020-06-15 calls at per-stepping addresses (`src/soc/`,
-`src/firmware/bootrom.rs`, #77), and whether DMA channel 15 takes 40-bit
+`src/firmware/bootrom.rs`), and whether DMA channel 15 takes 40-bit
 control blocks. The board revision also picks the PMICs on the I²C bus: a 4B
 rev 1.5 has parts at `0x1B` and `0x1E`, a rev 1.4, the Pi 400 and the CM4 at
-`0x1D` and `0x1E`, a rev 1.1 or 1.2 one part at `0x1D` (`src/periph/pmic.rs`,
-#78). A B0 part was never run against the model;
+`0x1D` and `0x1E`, a rev 1.1 or 1.2 one part at `0x1D` (`src/periph/pmic.rs`). A B0 part was never
+run against the model;
 the B0 facts come from the bootcode's own tables and the public B0 UART logs in
 the rpi-eeprom issues.
 
 ## Where `rpi-machine-id` comes from
 
-The string a `rpi-mkosi` image turns into its root-LUKS passphrase
-(rpi-mkosi#37) is derived in **stage 1**, not stage 2 — which is why bumping the
-EEPROM can move the passphrase just as bumping `start4.elf` can.
+The string a [`rpi-mkosi`](https://github.com/valtzu/rpi-mkosi) image turns into
+its root-LUKS passphrase is derived in **stage 1**, not stage 2 — which is why
+bumping the EEPROM can move the passphrase just as bumping `start4.elf` can.
 
 The first stage builds a tagged handoff structure at `0xC004_0000` (`BSTE`,
 then `BVER`, `BSTS`, `BSTN`, `BSTM`, `BUSB` sub-blocks) and, inside the `BVER`
@@ -104,11 +104,11 @@ What isn't a spec'd register block:
 
 - **Storage** — the SD card and the USB stick are disk images read on demand.
   Writes stay in memory and the image file is never modified, so every run is
-  a first boot (#54, #62); `--usb-mb` makes the stick bigger than its image.
+  a first boot; `--usb-mb` makes the stick bigger than its image.
   `--usb <img>` puts the stick in blue socket A, on the VL805; `--otg <img>`
   puts it in the USB-C socket, on the BCM2711's own xHCI, which is what
   `BOOT_ORDER` digit `0x5` (`BCM-USB-MSD`) boots from and what `otg_mode=1` in
-  `config.txt` hands to Linux (#113).
+  `config.txt` hands to Linux.
 - **The catch-all stub** — any peripheral offset nothing models reads back
   what was last written there (0 otherwise), and every access is logged, so an
   unimplemented poke becomes a triage note instead of a crash.
@@ -124,24 +124,7 @@ What isn't a spec'd register block:
     `HTTP_PORT=80`; the image must be RSA-signed and the key must be in the
     EEPROM's `pubkey.bin` (`--eeprom-pubkey`, test key in `testdata/netboot/`)
 
-Still out: HTTPS network boot (#44); a display, camera and the 3D/QPU unit;
-and most of the VPU vector ALU (`memcpy`-style bulk ops and a short list of
-other exactly matched forms run, the rest fall through to `Unimpl`).
-
-## Milestones
-
-- **M1 (done):** VPU scalar interpreter (subset) + UART/timer + regression
-  harness. Proven on hand-assembled payloads.
-- **M2 (done):** run `pieeprom.bin` through its banner and boot-media
-  selection — boot-ROM approximation, SPI/OTP + mailbox stubs, SDRAM fast-path,
-  GPT/FAT walk off an SD image.
-- **M3 (in progress):** `start4.elf` to ARM hand-off. Done: SDRAM alias,
-  `fixup4.dat` apply, RSA verify, the driver sequencer up to `clkm`. Remaining:
-  the clock/PLL model ([issue #1]), gpioman pin providers ([issue #2]), the
-  async-mailbox completer ([issue #3]), a real DA9090/BSC model ([issue #4]),
-  then the kernel/DTB load and ARM release.
-
-[issue #1]: https://github.com/valtzu/rpi-virt-fw/issues/1
-[issue #2]: https://github.com/valtzu/rpi-virt-fw/issues/2
-[issue #3]: https://github.com/valtzu/rpi-virt-fw/issues/3
-[issue #4]: https://github.com/valtzu/rpi-virt-fw/issues/4
+Still out: HTTPS network boot, which is the bootloader's own TLS stack; a
+camera and the 3D/QPU unit; and, on the display side, everything past the
+bring-up the firmware itself does — no scenario loads Linux's KMS driver. The
+[README](../README.md) keeps the current list.

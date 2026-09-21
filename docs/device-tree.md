@@ -2,9 +2,9 @@
 
 `arm_loader` patches `/chosen` — `rpi-machine-id`, `rpi-serial64`,
 `rpi-boardrev-ext`, `rpi-sdram-size-gbit` — into the device tree just before it
-releases the ARM. Those are the values `rpi-mkosi`
-[#37](https://github.com/valtzu/rpi-mkosi/issues/37) needs to compare across a
-firmware bump, because `rpi-machine-id` feeds the root LUKS passphrase.
+releases the ARM. Those are the values [`rpi-mkosi`](https://github.com/valtzu/rpi-mkosi) has
+to compare across a firmware bump, because `rpi-machine-id` feeds the root LUKS
+passphrase.
 
 `boot -v` prints them on every run that gets that far:
 

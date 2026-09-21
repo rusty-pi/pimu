@@ -28,9 +28,8 @@ rpi-virt-fw boot --eeprom firmware/pieeprom.bin --sd firmware/sd-halt.img
 rpi-virt-fw boot --eeprom firmware/pieeprom.bin --sd firmware/sd.img --stdin
 ```
 
-The ARM is always modelled
-([#52](https://github.com/valtzu/rpi-virt-fw/issues/52)): the boot goes wherever
-the card's `kernel8.img` takes it.
+The model does not stop at the firmware's hand-off to the ARM: the A72 cores
+run too, so a boot goes wherever the card's `kernel8.img` takes it.
 
 `make-sd.sh` needs `sfdisk`, `mtools` and `e2fsprogs`; no root, no loop devices.
 The cards it can write — a stock `config.txt` with Bluetooth and WiFi on, the
@@ -61,8 +60,7 @@ above in a USB enclosure.
 Every option that names a file can be left out when the working directory holds
 that file: `pieeprom.bin` is `--eeprom`, and so are `sd.img`, `usb.img`,
 `otg.img`, `netboot/`, `otp.json` or `otp.bin`, `bootconf.txt` (a `--bootconf`
-line each) and `pubkey.bin`
-([#114](https://github.com/valtzu/rpi-virt-fw/issues/114)).
+line each) and `pubkey.bin`.
 
 ```bash
 cd firmware && rpi-virt-fw boot       # boots from whatever is there, and says what it picked up
@@ -84,8 +82,7 @@ The whole chain: EEPROM → BOOTLOADER → `start4.elf` → `arm_loader` from SD
 USB mass storage on the VL805 and on the USB-C port's own xHCI, TFTP and HTTP
 network boot; then the four A72 cores `arm_loader` releases, through the
 firmware's own armstub into the kernel, and Linux off the card's ext4 root to a
-busybox shell on the serial console. No firmware behaviour is short-circuited
-([#15](https://github.com/valtzu/rpi-virt-fw/issues/15) took out the last one)
+busybox shell on the serial console. No firmware behaviour is short-circuited,
 and no boot needs an opt-in shim or environment variable — the HDMI EDID read
 fails the way it does on a board with no monitor plugged in, because the DDC
 I²C masters are modelled and nothing answers the EDID EEPROM's address.
@@ -94,13 +91,11 @@ I²C masters are modelled and nothing answers the EDID EEPROM's address.
   forms `start4` executes, both VPU cores, exception and interrupt delivery
   through the ThreadX vector table, and the vector unit: decoded in full and
   executed for the forms `insn::VecInsn::executable` accepts, against a modelled
-  vector register file ([#118](https://github.com/valtzu/rpi-virt-fw/issues/118)).
-  Instruction *lengths* always decode correctly, so an encoding the executor
+  vector register file. Instruction *lengths* always decode correctly, so an encoding the executor
   does not accept stops as `Unimpl` rather than derailing the PC.
   [`docs/vpu-isa.md`](docs/vpu-isa.md) carries the evidence for each form.
-- **AArch64 interpreter** (`src/aarch64/`,
-  [#40](https://github.com/valtzu/rpi-virt-fw/issues/40)) — integer A64, SIMD
-  and floating point with ARM-exact soft-float, stage 1 MMU, EL3..EL0 and
+- **AArch64 interpreter** (`src/aarch64/`) — integer A64, SIMD and floating
+  point with ARM-exact soft-float, stage 1 MMU, EL3..EL0 and
   the system registers Linux touches. `tests/a64_diff.rs` checks it
   differentially against `qemu-aarch64` user-mode on random instruction streams.
   Four cores run in lock-step with the VPU, paced by the system timer
@@ -117,16 +112,15 @@ I²C masters are modelled and nothing answers the EDID EEPROM's address.
   and on the ARM side the GIC-400, the ARM-local block and the generic timer.
   A logging catch-all takes the rest.
 - **Network peer** (`src/net/`) — `--netboot <dir>` plugs the Ethernet cable
-  into a built-in DHCP, DNS, TFTP and plain HTTP server serving `<dir>`
-  ([#38](https://github.com/valtzu/rpi-virt-fw/issues/38)). `--net passt` plugs
+  into a built-in DHCP, DNS, TFTP and plain HTTP server serving `<dir>`.
+  `--net passt` plugs
   it into the host's network through [passt](https://passt.top/) instead,
   started on a socket pair (`--net passt:<socket>` connects to one already
   listening), for reaching a server on the host such as `mkosi serve`; that runs
   on the host's clock, so it is not deterministic and CI stays on the built-in
-  peer ([#45](https://github.com/valtzu/rpi-virt-fw/issues/45)). HTTP boot works
-  through it as is; TFTP boot needs static addresses, since passt's DHCP has no
-  PXE option 43, and a TFTP server on the host's port 69
-  ([recipe](https://github.com/valtzu/rpi-virt-fw/issues/45#issuecomment-5676281814)).
+  peer. HTTP boot works through it as is; TFTP boot needs static addresses,
+  since passt's DHCP has no PXE option 43, and a TFTP server on the host's
+  port 69.
 - **Serial console input** — `--send-after <prompt> <text>` types into the PL011
   deterministically, keyed to the transcript; `--stdin` makes the host terminal
   the console for an interactive session.
@@ -140,41 +134,34 @@ I²C masters are modelled and nothing answers the EDID EEPROM's address.
 - **Firmware pipeline** — `pieeprom.bin` self-update trailer, EEPROM config
   parse, GPT/MBR + FAT32 walk, `fixup4.dat`, RSA signature check.
 - **What a booted Linux gets** — the property mailbox, and `start4`'s crypto
-  service through `/dev/vcio_crypto`: `linux.toml` pins the HMAC
-  [rpi-mkosi#37](https://github.com/valtzu/rpi-mkosi/issues/37) needs, computed
-  by `start4.elf`'s own mbedTLS from the OTP key. USB mass storage carries far
-  enough to boot the rpi-mkosi image with `--usb`.
+  service through `/dev/vcio_crypto`: `linux.toml` pins the HMAC that
+  [rpi-mkosi](https://github.com/valtzu/rpi-mkosi)'s root LUKS passphrase is
+  derived from, computed by `start4.elf`'s own mbedTLS from the OTP key. USB
+  mass storage carries far enough to boot that project's image with `--usb`.
 - **Regression harness** (`src/harness/`) — scenarios in, console transcript
   out, diffed against a golden file. See
   [`testdata/README.md`](testdata/README.md).
 
 ### Limits
 
-- **HTTPS network boot** is not supported: the built-in peer serves plain HTTP,
-  and the bootloader only goes HTTPS when `HTTP_HOST` is left at Raspberry Pi's
-  own server. Closed as out of scope
-  ([#44](https://github.com/valtzu/rpi-virt-fw/issues/44)) — it is the second
-  stage's own TLS stack and its EEPROM `cacert.der`, not the machine's.
+- **HTTPS network boot** is not supported: the built-in peer serves plain
+  HTTP, and the bootloader only goes HTTPS when `HTTP_HOST` is left at
+  Raspberry Pi's own server. Out of scope, since the TLS stack and the CA
+  certificate are the bootloader's own, inside `pieeprom.bin`.
 - **The vector unit's last sub-ops.** 13282 of the 15180 vector instructions in
-  `start4.elf`'s `.text` execute
-  ([#118](https://github.com/valtzu/rpi-virt-fw/issues/118)); of the rest, some
+  `start4.elf`'s `.text` execute; of the rest, some
   1700 are jump tables and constants a linear sweep only *disassembles* as
   vector code, and about 190 are memory sub-ops (`memread`, `memwrite`,
   `mem03`) and one-offs no probe settled. None of them is reached on a boot.
 - **Linux's own display and Ethernet drivers are not driven by any scenario.**
-  The blocks behind them are modelled — the firmware brings HDMI up
-  ([#61](https://github.com/valtzu/rpi-virt-fw/issues/61),
-  [#63](https://github.com/valtzu/rpi-virt-fw/issues/63)) and network boot goes
-  over the same GENET and MDIO the kernel probes
-  ([#38](https://github.com/valtzu/rpi-virt-fw/issues/38)) — but the boots stop
-  at the `bcmgenet` probe and a registered `eth0`, with no link brought up and
-  no KMS driver loaded.
+  The blocks behind them are modelled — the firmware brings HDMI up, and
+  network boot goes over the same GENET and MDIO the kernel probes — but the
+  boots stop at the `bcmgenet` probe and a registered `eth0`, with no link
+  brought up and no KMS driver loaded.
 - **WiFi stops before a scan finds anything.** `brcmfmac` downloads the
-  CYW43455's firmware and registers an interface
-  ([#128](https://github.com/valtzu/rpi-virt-fw/issues/128),
-  `linux-wifi.toml`); the event channel and an `escan` that answers are open
-  ([#133](https://github.com/valtzu/rpi-virt-fw/issues/133),
-  [#134](https://github.com/valtzu/rpi-virt-fw/issues/134)).
+  CYW43455's firmware and registers an interface (`linux-wifi.toml` pins how
+  far it gets); the chip's event channel, and a scan that finds a network, are
+  still to come.
 
 ## Tests
 

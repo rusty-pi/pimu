@@ -24,8 +24,8 @@ it.
 | `otg-boot.toml` | USB mass storage on the USB-C port (`BOOT_ORDER` 0x5), no SD card | `sd-halt.img` |
 | `tftp-boot.toml` | Network boot over TFTP | `firmware/netboot/` |
 | `http-boot.toml` | HTTP boot of a signed `boot.img` ramdisk | `firmware/netboot/` |
-| `b0-stepping.toml` | SD card on a B0 Pi 4B rev 1.2 ([#77](https://github.com/valtzu/rpi-virt-fw/issues/77)) | `sd-halt.img` |
-| `firmware-cd.toml` | SD card with the cut-down `start4cd.elf` ([#105](https://github.com/valtzu/rpi-virt-fw/issues/105)) | `sd-halt-start4cd.img` |
+| `b0-stepping.toml` | SD card on a B0 Pi 4B rev 1.2, the first BCM2711 stepping | `sd-halt.img` |
+| `firmware-cd.toml` | SD card with the cut-down `start4cd.elf` | `sd-halt-start4cd.img` |
 | `uefi.toml` | SD card, on into the RPi4 UEFI firmware and its boot menu | `sd-uefi.img` |
 | `linux.toml` | SD card, on into Linux: a busybox shell, then a few commands typed into it | `sd.img` |
 | `linux-bt.toml` | The stock-config boot, Bluetooth and WiFi enabled, so Linux's console is the mini-UART | `sd-wireless.img` |
@@ -47,8 +47,7 @@ card; `boot-check <scenario> --plan` prints the flags a scenario boots with.
   the commit or issue that made it pass. This is what a raw diff cannot say —
   which invariant broke.
 - the **retired counts** beside the golden (`boot/golden/<name>.retired.toml`):
-  how many instructions each VPU and ARM core ran
-  ([#85](https://github.com/valtzu/rpi-virt-fw/issues/85)). They reproduce
+  how many instructions each VPU and ARM core ran. They reproduce
   exactly from one machine to the next, so a change that makes a boot run
   differently without printing anything different fails here instead of going
   unnoticed. A run the wall clock cut off (`end TimeLimit`) fails outright: its

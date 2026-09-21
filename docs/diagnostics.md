@@ -77,7 +77,7 @@ it with `SIGPIPE`.
 | `RVF_TRACE_CAP=<n>` | Stop tracing after `n` instructions (default 300000). |
 | `RVF_TRACE_CF=1` | Trace only control flow — branches and calls, not every instruction. |
 | `RVF_TRACE_MMIO=1` | Log every MMIO access with the PC that made it. |
-| `RVF_TRACE_MMIO=<lo>-<hi>` | The same, restricted to an address range. This is what made enumerating `0x7D5D_0000` practical (#1). |
+| `RVF_TRACE_MMIO=<lo>-<hi>` | The same, restricted to an address range. This is what made enumerating `0x7D5D_0000` practical. |
 | `RVF_MMIO_FROM=<hex>` | Start the MMIO trace when core 0 reaches this address. |
 
 ## Traps and watchpoints
@@ -97,13 +97,13 @@ it with `SIGPIPE`.
 | `RVF_PROF=1` | Bucket the core-0 PC into 256-byte slots and dump the hottest on exit. Finds the loop a stalled boot is spinning in. |
 | `RVF_PROF_THREAD=<hex>` | The same, attributed per ThreadX thread. Takes the address of the firmware's current-thread pointer (`_tx_thread_current_ptr`) — only the firmware knows where that lives, so it is a parameter rather than a constant baked into the model. |
 | `RVF_ARM_PROF=<us>` | From model time `<us>` on (`1` for the whole run), count every ARM step by core, EL and 256-byte PC bucket, and list the hottest in the run report — and at every reset, for the boot that ended. Asleep cores are not stepped, so they do not show; the passes a parked core skips count at the loop's PCs. |
-| `RVF_ARM_BLOCKS=1` | Count the straight-line runs the ARM cores execute — the instructions from one control-flow transfer's destination to the next — and how often each is re-entered, keyed by physical PC and EL. The report gives the mean run length, the share of executed instructions in runs of at least *n* instructions and in runs entered at least *n* times, and the hottest runs. This is what says whether translating a block at a time could pay (#117). Run it with `RVF_NO_PARK=1 RVF_NO_SHA_SKIP=1`: a parked core's skipped passes and a natively hashed SHA-256 block are never stepped, so otherwise the counts miss the hottest loops. Takes the cores off the burst path, so it is slower than a plain run. |
+| `RVF_ARM_BLOCKS=1` | Count the straight-line runs the ARM cores execute — the instructions from one control-flow transfer's destination to the next — and how often each is re-entered, keyed by physical PC and EL. The report gives the mean run length, the share of executed instructions in runs of at least *n* instructions and in runs entered at least *n* times, and the hottest runs. This is what says whether translating a block at a time could pay. Run it with `RVF_NO_PARK=1 RVF_NO_SHA_SKIP=1`: a parked core's skipped passes and a natively hashed SHA-256 block are never stepped, so otherwise the counts miss the hottest loops. Takes the cores off the burst path, so it is slower than a plain run. |
 | `RVF_HEARTBEAT=<n>` | Print progress every `n` instructions, for runs that look hung. |
 
 ## Log channels
 
-`boot --log [text:|jsonl:]<channel>[,<channel>...]` turns channels on
-([#95](https://github.com/valtzu/rpi-virt-fw/issues/95)). It can be repeated,
+`boot --log [text:|jsonl:]<channel>[,<channel>...]` turns channels on. It can
+be repeated,
 and the lines go to stderr unless `--log-file <path>` says otherwise. The
 channels share one output, so the lines come out in the order things happened,
 each stamped with the model time — the system timer's, in seconds, the way the
@@ -126,7 +126,7 @@ boot … --log jsonl:io --log-file io.jsonl
 boot … --quiet --log jsonl:io 2>&1 >/dev/null | jq .
 ```
 
-`--quiet` ([#100](https://github.com/valtzu/rpi-virt-fw/issues/100)) keeps the
+`--quiet` keeps the
 serial console off stdout, for a run whose log is the point; `--console-log`
 still records it.
 
@@ -161,7 +161,7 @@ These need a `diag` build:
 | `tick` | ThreadX tick delivery and skips, device interrupts vectored, and an `rti` that returns outside start4's code. |
 | `vec` | Interrupt vectoring: slot, vector base, handler. |
 
-Before #95 each channel was an `RVF_DBG_<NAME>=1` variable (the eMMC one
+Each channel used to be an `RVF_DBG_<NAME>=1` variable (the eMMC one
 `EMMC_DBG`), and the I/O log was `--io-log`. `boot` warns about a variable
 that is still set and names the channel that replaced it.
 
@@ -172,8 +172,7 @@ that is still set and names the channel that replaced it.
 `--log io` writes what crossed the peripherals to stderr (or to `--log-file
 <path>`), apart from the console: block runs on the SD card and the USB stick
 with the files they belong to, the OTP rows the firmware read and programmed,
-and what the network peer did
-([#35](https://github.com/valtzu/rpi-virt-fw/issues/35)). The file names come
+and what the network peer did. The file names come
 from the bench reading the image's partition table and FAT itself, so the
 firmware stays a black box:
 
@@ -187,15 +186,13 @@ firmware stays a black box:
 ```
 
 An OTP line ends with what the row is for, after Raspberry Pi's
-[OTP register list](https://github.com/raspberrypi/documentation/blob/ecd7a8129d4f2cb908d6cbd6ea5a994e0091285d/documentation/asciidoc/computers/raspberry-pi/otp-bits.adoc)
-([#101](https://github.com/valtzu/rpi-virt-fw/issues/101)), and with `(blank)`
-when none of its fuses are programmed. A row the firmware programs shows as
+[OTP register list](https://github.com/raspberrypi/documentation/blob/ecd7a8129d4f2cb908d6cbd6ea5a994e0091285d/documentation/asciidoc/computers/raspberry-pi/otp-bits.adoc),
+and with `(blank)` when none of its fuses are programmed. A row the firmware programs shows as
 `io: otp  write row <n> = <new>  <meaning> (was <old>)`, and what the network
 peer did as `io: net  dhcp: ...`.
 
 Programming works the way start4 drives the OTP block, key sequence first, and a
-fuse only ever goes from 0 to 1
-([#92](https://github.com/valtzu/rpi-virt-fw/issues/92)). To watch it, program
+fuse only ever goes from 0 to 1. To watch it, program
 two words of customer OTP (rows 36 and 37) the way
 `vcmailbox 0x00038021 16 16 0 2 ...` does on a Pi, and read them back, on the
 halt-kernel card (`KERNEL=halt scripts/make-sd.sh firmware/sd-halt.img`):
