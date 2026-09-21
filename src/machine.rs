@@ -1332,10 +1332,26 @@ impl Machine {
             }
             if let Some(buf) = self.mbox.take_property_reply() {
                 let ram = &self.ram;
-                self.mbox.property.record(|o| {
+                let word = |o: u32| {
                     ram.load(Machine::fold_ram_addr(buf.wrapping_add(o)), Width::Word)
                         .unwrap_or(0)
+                };
+                // A buffer the firmware rejected, as it left it. The tally in
+                // the run report says one reply carried an error code; this
+                // says which request, and the words are the whole evidence —
+                // the declared total, the tag, its value-buffer size and what
+                // the walk ran into.
+                let rejected = (word(4) != crate::periph::mbox::RESPONSE).then(|| {
+                    let mut line = format!("property reply error at {buf:#010x}:");
+                    for i in 0..16 {
+                        line.push_str(&format!(" {:08x}", word(i * 4)));
+                    }
+                    line
                 });
+                self.mbox.property.record(word);
+                if let Some(line) = rejected {
+                    crate::log!(self.mbox.log, Channel::Mbox, "{line}");
+                }
             }
             if self.dma4.take_start() {
                 // The 40-bit engine takes CPU-physical addresses, with no

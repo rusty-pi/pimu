@@ -154,7 +154,7 @@ pub const CHANNEL_PROPERTY: u32 = 8;
 
 /// Bit 31 of a property buffer's code word marks a response, and of a tag's
 /// third word the firmware's "handled" mark (with the response length below).
-const RESPONSE: u32 = 0x8000_0000;
+pub const RESPONSE: u32 = 0x8000_0000;
 /// Largest buffer [`PropertyLog::record`] walks, so a bad size word cannot send
 /// it far.
 const MAX_BUFFER: u32 = 0x1_0000;
@@ -188,6 +188,11 @@ pub struct TagLog {
     /// The first word of the tag's value buffer as the latest reply left it,
     /// if the buffer has one.
     pub last: Option<u32>,
+    /// Replies carrying the tag whose buffer-level code was not success. The
+    /// count is per buffer, not per tag: the firmware answers one code for the
+    /// whole request, so every tag in a rejected buffer is counted. A tag that
+    /// is always in a failing buffer is where to look first.
+    pub errors: u64,
 }
 
 impl PropertyLog {
@@ -196,7 +201,8 @@ impl PropertyLog {
     /// and the firmware leaves alone.
     pub fn record(&mut self, word: impl Fn(u32) -> u32) {
         self.replies += 1;
-        if word(4) != RESPONSE {
+        let ok = word(4) == RESPONSE;
+        if !ok {
             self.failed += 1;
         }
         let size = word(0).min(MAX_BUFFER);
@@ -215,6 +221,9 @@ impl PropertyLog {
                 t.unmarked += 1;
             }
             t.last = (slot >= 4).then(|| word(off + 12));
+            if !ok {
+                t.errors += 1;
+            }
             off += 12 + ((slot + 3) & !3);
         }
     }
@@ -611,6 +620,7 @@ mod tests {
                         marked: 1,
                         unmarked: 0,
                         last: Some(0),
+                        errors: 0,
                     }
                 ),
                 (
@@ -619,15 +629,21 @@ mod tests {
                         marked: 0,
                         unmarked: 1,
                         last: Some(0x1234),
+                        errors: 0,
                     }
                 ),
             ]
         );
 
-        // A parse error: the firmware stamps the buffer and stops.
-        let bad = [16, RESPONSE | 1, 0, 0];
+        // A parse error: the firmware stamps the buffer and stops. The tag it
+        // was carrying is charged with it, so the report says which request
+        // failed and not only that one did.
+        let bad = [24, RESPONSE | 1, 0x0003_0058, 4, RESPONSE | 4, 0, 0, 0];
         log.record(|o| bad.get(o as usize / 4).copied().unwrap_or(0));
         assert_eq!((log.replies, log.failed), (2, 1));
+        let after: Vec<_> = log.tags().collect();
+        assert_eq!(after[0].1.errors, 1);
+        assert_eq!(after[1].1.errors, 0);
     }
 
     #[test]

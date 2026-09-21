@@ -145,6 +145,30 @@ fn cmd_spec_docs(args: &[String]) -> Result<ExitCode> {
     }
 }
 
+/// A byte image written as hex: `--mbox-raw 22000000...`, optionally with a
+/// `0x` prefix and any spacing, underscores or colons to group it.
+fn parse_hex_image(s: &str) -> Result<Vec<u8>> {
+    let hex: String = s
+        .trim()
+        .trim_start_matches("0x")
+        .trim_start_matches("0X")
+        .chars()
+        .filter(|c| !matches!(c, ' ' | '_' | ':' | ',' | '\n' | '\t'))
+        .collect();
+    if !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        bail!("not hex: {s}");
+    }
+    if !hex.len().is_multiple_of(2) {
+        bail!(
+            "a byte image needs an even number of hex digits, got {}",
+            hex.len()
+        );
+    }
+    (0..hex.len() / 2)
+        .map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).map_err(Into::into))
+        .collect()
+}
+
 /// A number: hex with a `0x` prefix, decimal otherwise.
 fn parse_u32(s: &str) -> Result<u32> {
     let s = s.trim();

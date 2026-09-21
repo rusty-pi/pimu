@@ -20,9 +20,9 @@ use rpi_virt_fw::vpu::decode::decode;
 use rpi_virt_fw::vpu::length::insn_len_bytes;
 use rpi_virt_fw::vpu::UnimplPolicy;
 
-use crate::mbox::{mbox_property_exchange, MboxTag};
+use crate::mbox::{mbox_property_exchange, MboxRequest, MboxTag};
 use crate::otp::{Format, OtpFile};
-use crate::parse_u32;
+use crate::{parse_hex_image, parse_u32};
 
 /// Blue socket A. Root port 1 is the USB2 port feeding the on-board VIA
 /// hub, so a SuperSpeed fixture goes on port 2 — measured on a Raspberry Pi 4B
@@ -244,6 +244,14 @@ OUTPUT:
               `0x00000001` (GET_FIRMWARE_REVISION) or `0x00030092`
               (GET_CRYPTO_HMAC_SHA256). Repeatable, one request each. See
               docs/diagnostics.md.
+    --mbox-raw <hex>
+              Post an exact byte image of a property request instead of one
+              built from tags: `--mbox-raw 2200000000000000030001000a...`. A
+              client whose `sizeof` is wrong lays its buffer out in ways
+              --mbox-property never would — an unaligned declared total, an end
+              tag at an odd offset, stale bytes past the total — and that is
+              what decides whether the firmware takes it. Repeatable, one
+              request each.
     --dram-map
               Report which DRAM pages are non-zero when the run ends, as
               address runs: the RAM a snapshot of the machine would have to
@@ -328,11 +336,12 @@ struct BootOpts {
     console_log: Option<PathBuf>,
     dump_fdt: Option<PathBuf>,
     print_fdt: bool,
-    /// One entry per `--mbox-property`, so several exchanges can be made
+    /// One entry per `--mbox-property` or `--mbox-raw`, so several exchanges
+    /// can be made
     /// against the same booted firmware. A crypto tag that fails leaves an
     /// error code behind that only the *next* request can ask for
     /// (`0x0003008e`).
-    mbox_tags: Vec<Vec<MboxTag>>,
+    mbox_tags: Vec<MboxRequest>,
     usb_image: Option<PathBuf>,
     /// `--otg <img>`: the same, in the USB-C socket (#113).
     otg_image: Option<PathBuf>,
@@ -505,7 +514,7 @@ impl BootOpts {
         let mut console_log: Option<PathBuf> = None;
         let mut dump_fdt: Option<PathBuf> = None;
         let mut print_fdt = false;
-        let mut mbox_tags: Vec<Vec<MboxTag>> = Vec::new();
+        let mut mbox_tags: Vec<MboxRequest> = Vec::new();
         let mut usb_image: Option<PathBuf> = None;
         let mut otg_image: Option<PathBuf> = None;
         let mut netboot_root: Option<PathBuf> = None;
@@ -722,7 +731,11 @@ impl BootOpts {
                         };
                         group.push((tag, size, req));
                     }
-                    mbox_tags.push(group);
+                    mbox_tags.push(MboxRequest::Tags(group));
+                }
+                "--mbox-raw" => {
+                    let hex = it.next().context("--mbox-raw needs a hex image")?;
+                    mbox_tags.push(MboxRequest::Raw(parse_hex_image(hex)?));
                 }
                 "--dram-map" => dram_map = true,
                 "--dump-fdt" => {
@@ -1581,6 +1594,7 @@ fn print_report(opts: &BootOpts, booted: Booted) -> Result<ExitCode> {
         print_summary(&report, &emu, start);
         print_arm_cores(&emu, opts.eeprom);
         print_property_replies(&emu.machine);
+        print_device_state(&emu.machine);
         print_regs(&report);
     }
     if let Some(p) = &opts.console_log {
@@ -1739,11 +1753,45 @@ fn print_property_replies(machine: &Machine) {
         );
         for (tag, t) in prop.tags() {
             let last = t.last.map_or("-".to_string(), |v| format!("{v:#010x}"));
+            let errors = if t.errors > 0 {
+                format!("  errors {}", t.errors)
+            } else {
+                String::new()
+            };
             println!(
-                "  tag {tag:#010x}  marked {:<4} unmarked {:<4} last value {last}",
+                "  tag {tag:#010x}  marked {:<4} unmarked {:<4} last value {last}{errors}",
                 t.marked, t.unmarked
             );
         }
+    }
+}
+
+/// What the devices hold where the run ended, decoded.
+///
+/// The golden transcript catches a change in what the firmware *printed*, and
+/// the retired counts catch a change in how much it ran. Neither sees a value
+/// a driver wrote into a register and never mentioned: a UEFI whose mailbox
+/// read of the board's MAC failed left the GENET MAC at `00:00:00:00:00:00`
+/// through a whole boot that printed nothing about it. A device belongs here
+/// once it holds a value worth a diff.
+fn print_device_state(machine: &Machine) {
+    let mac = machine.genet.mac_state();
+    println!("\n--- device state ---");
+    let [a, b, c, d, e, f] = mac.addr;
+    println!(
+        "  genet   MAC {a:02x}:{b:02x}:{c:02x}:{d:02x}:{e:02x}:{f:02x}  tx {}  rx {}  promisc {}",
+        on_off(mac.tx_en),
+        on_off(mac.rx_en),
+        on_off(mac.promisc),
+    );
+}
+
+/// `on` / `off`, for [`print_device_state`]: a flag reads better than a bit.
+fn on_off(v: bool) -> &'static str {
+    if v {
+        "on"
+    } else {
+        "off"
     }
 }
 

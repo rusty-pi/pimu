@@ -356,6 +356,16 @@ pub struct Genet {
     pub stats: Stats,
 }
 
+/// The MAC as a run ends: the address it filters on and whether it is
+/// running. [`Genet::mac_state`] reads it out for the run report.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MacState {
+    pub addr: [u8; 6],
+    pub tx_en: bool,
+    pub rx_en: bool,
+    pub promisc: bool,
+}
+
 /// Frame counters, for the run report.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Stats {
@@ -618,6 +628,19 @@ impl Genet {
                 net.send(&frame);
             }
             _ => self.stats.tx_dropped += 1,
+        }
+    }
+
+    /// What the driver left the MAC set to, for the run report: a client that
+    /// fails to read the board's address out of the firmware programs zeroes
+    /// here, and nothing else in the run says so.
+    pub fn mac_state(&self) -> MacState {
+        let cmd = self.reg(UMAC_CMD);
+        MacState {
+            addr: self.mac_addr(),
+            tx_en: cmd & CMD_TX_EN != 0,
+            rx_en: cmd & CMD_RX_EN != 0,
+            promisc: cmd & CMD_PROMISC != 0,
         }
     }
 

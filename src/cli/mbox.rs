@@ -15,6 +15,19 @@ const MBOX_BUFFER: u32 = 0x1000_0000;
 /// value-buffer size, and optional request words (a `key_id`, most often).
 pub type MboxTag = (u32, Option<u32>, Vec<u32>);
 
+/// What one exchange posts.
+pub enum MboxRequest {
+    /// `--mbox-property`: tags, each staged in a word-aligned slot with an end
+    /// marker and slack, the way a well-behaved client lays a request out.
+    Tags(Vec<MboxTag>),
+    /// `--mbox-raw`: an exact byte image of somebody else's request. A client
+    /// whose `sizeof` is wrong lays the buffer out in ways this one never
+    /// would — an unaligned declared total, an end tag at an odd offset, stale
+    /// bytes past the total — and that is what decides whether the firmware
+    /// accepts it. Staging it word by word cannot reproduce any of those.
+    Raw(Vec<u8>),
+}
+
 /// Post a property-interface request to the still-running firmware, the way a
 /// booted Linux does through `/dev/vcio`, and report what comes back.
 ///
@@ -26,11 +39,15 @@ pub type MboxTag = (u32, Option<u32>, Vec<u32>);
 pub fn mbox_property_exchange(
     emu: &mut Emulator,
     limits: &RunLimits,
-    tags: &[MboxTag],
+    request: &MboxRequest,
 ) -> Result<()> {
     use rpi_virt_fw::bus::{Bus, Width};
 
     println!("\n--- ARM property mailbox (0x7e00_b880) ---");
+    let tags: &[MboxTag] = match request {
+        MboxRequest::Tags(t) => t,
+        MboxRequest::Raw(_) => &[],
+    };
 
     // Each tag names its own value-buffer size, and the firmware walks the
     // request by those sizes — so one wrong size desynchronises every tag after
@@ -83,7 +100,10 @@ pub fn mbox_property_exchange(
         words.push(tag);
         words.push(size);
         words.push(0);
-        let slot = (size / 4) as usize;
+        // Rounded up: the firmware writes a 6-byte answer into a 6-byte slot,
+        // and a slot of one word would put the end marker under the last two
+        // bytes of it.
+        let slot = size.div_ceil(4) as usize;
         for i in 0..slot {
             words.push(payload.get(i).copied().unwrap_or(0));
         }
@@ -98,19 +118,46 @@ pub fn mbox_property_exchange(
     words.extend_from_slice(&[0; 4]);
     words[0] = (words.len() as u32) * 4;
 
-    for (i, w) in words.iter().enumerate() {
-        emu.machine
-            .store(MBOX_BUFFER + (i as u32) * 4, Width::Word, *w)
-            .map_err(|e| anyhow::anyhow!("staging the request buffer: {e}"))?;
-    }
+    let staged = match request {
+        MboxRequest::Tags(_) => {
+            for (i, w) in words.iter().enumerate() {
+                emu.machine
+                    .store(MBOX_BUFFER + (i as u32) * 4, Width::Word, *w)
+                    .map_err(|e| anyhow::anyhow!("staging the request buffer: {e}"))?;
+            }
+            words.len() * 4
+        }
+        MboxRequest::Raw(bytes) => {
+            // Byte by byte, and nothing else touched: what lies past the image
+            // is part of the test, so the caller's bytes are the whole buffer.
+            for (i, b) in bytes.iter().enumerate() {
+                emu.machine
+                    .store(MBOX_BUFFER + i as u32, Width::Byte, *b as u32)
+                    .map_err(|e| anyhow::anyhow!("staging the raw request buffer: {e}"))?;
+            }
+            bytes.len()
+        }
+    };
 
     let bus_addr = 0xC000_0000 | MBOX_BUFFER;
     let message = (bus_addr & !0xF) | rpi_virt_fw::periph::mbox::CHANNEL_PROPERTY;
-    println!(
-        "  posting {message:#010x}  ({} tags, {} byte buffer at {MBOX_BUFFER:#010x})",
-        tags.len(),
-        words.len() * 4
-    );
+    match request {
+        MboxRequest::Tags(_) => println!(
+            "  posting {message:#010x}  ({} tags, {staged} byte buffer at {MBOX_BUFFER:#010x})",
+            tags.len()
+        ),
+        MboxRequest::Raw(bytes) => {
+            // The image's own header, which is the point: a client that
+            // declares a total its layout does not match is exactly the case
+            // worth replaying.
+            let declared =
+                u32::from_le_bytes(std::array::from_fn(|i| bytes.get(i).copied().unwrap_or(0)));
+            println!(
+                "  posting {message:#010x}  (raw {staged} byte image at \
+                 {MBOX_BUFFER:#010x}, declared total {declared})"
+            );
+        }
+    }
     if !emu.machine.mbox.post_from_arm(message) {
         bail!("the mailbox is full — the firmware has not drained earlier requests");
     }
@@ -232,7 +279,7 @@ pub fn mbox_property_exchange(
         let mut vals = Vec::new();
         // Enough for the longest answer worth reading inline: a
         // 32-byte HMAC plus its status and length words.
-        for i in 0..(len / 4).min(16) {
+        for i in 0..len.div_ceil(4).min(16) {
             vals.push(format!(
                 "{:#010x}",
                 emu.machine
