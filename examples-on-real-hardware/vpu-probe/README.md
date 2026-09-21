@@ -30,6 +30,10 @@ with `v32st HY(0++,0),(r0+=r3) REP64` — 64 rows of 64 bytes, exactly one page.
 per `mmap` faults), and `/dev/mem` will not map it at all on a stock 64-bit
 Raspberry Pi OS.
 
+`vpuprobe4.py` times a blob instead of waiting a fixed five seconds for it: it
+polls the output page while the code runs and says when the dump started. That
+is what turned "it hangs" into "it retires in 2 ms when a load precedes it".
+
 `vpudiag.py` is the same idea aimed at the firmware rather than the probe: it
 snapshots ~96 MB of VC memory, runs the blob, snapshots again and prints which
 of the firmware's own pages changed. `vcscan.py` reads VC memory without the
@@ -67,8 +71,24 @@ in a state a firmware thread might be mid-way through using.
 
 Two things are known to wedge it, both found the hard way:
 
-- the **undocumented memory sub-ops**, which **block until an interrupt
-  releases them**. With interrupts enabled one of them completes, everything
+- the **undocumented memory sub-ops**, which **wait for an outstanding vector
+  load**. Put a `v8ld` in front of one and it retires in 2 ms; with nothing in
+  front of it, it never returns. A vector *store* does not satisfy it, and
+  neither does a *scalar* load — only a vector load does. What licenses the next one is
+  narrower than a count of loads: a load then two fences back to back hangs,
+  but a load, two `v32mov`s and then two fences retires both in 1 ms. Writing
+  the fences to different rows does not help, nor does a second load before
+  the second fence. So it wants other vector work in between, and what
+  exactly is being drained is still open. That single fact
+  explains everything else below — every probe of these sub-ops loaded its
+  vectors first, which is why the first one always seemed to work.
+
+  What that makes them is a **fence** on the vector memory unit, not an
+  illegal encoding: an instruction a compiler emits rarely and a jump table
+  contains by accident, which is exactly where they are found.
+
+  The rest of this entry is how it looked before that was understood — the
+  same instruction, seen from the outside: With interrupts enabled one of them completes, everything
   after it in the blob runs, and the register-file dump lands — but
   `EXECUTE_CODE` never returns and the driver gives up with `ETIMEDOUT`. Run
   one behind a `di` and there is no dump at all: the core is still inside the
@@ -137,6 +157,9 @@ Two things are known to wedge it, both found the hard way:
 | `m11.s`-`m23.s` | the rest of the unnamed memory sub-ops. **Each one kills the firmware** — run them only on a board you can power-cycle |
 | `di11.s`, `two11.s`, `sr11.s` | what one of them does to interrupts, to a second one after it, and to the status register |
 | `after_ld.s`, `after_st.s`, `trap.s` | what still runs after one, and how a deliberate `bkpt` compares |
+| `ldop.s`, `stop.s`, `scop.s` | **what satisfies the fence**: a vector load does, a vector store and a scalar load do not |
+| `unroll1.s`, `unroll8.s`, `loop8ld.s`, `rep64.s` | how many of them one load covers, and that `REP` repeats without waiting again |
+| `two11.s`, `dd2.s`, `ld2x2.s`, `ld3.s`, `alt2.s` | which arrangements of load, fence and `v32mov` retire and which hang |
 
 ## What they found (Raspberry Pi 4B d03115, firmware 1.20260824)
 
