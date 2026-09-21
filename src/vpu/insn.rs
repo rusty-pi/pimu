@@ -1518,6 +1518,13 @@ impl VecInsn {
         } else {
             (self.d, self.a)
         };
+        // A scatter that names no address — its B slot holds a vector rather
+        // than an address — writes nothing, whatever its three slots hold.
+        // Measured with `probes/sc3.s` through `vpuprobe3.py`, which compares
+        // the whole allocation either side of one.
+        if scatter && self.addr.is_none() {
+            return Some(VecExec::NoEffect);
+        }
         // A scatter with a dash *source* has nothing to write, and writes
         // nothing — measured with `probes/st64.s`, which watched the whole
         // allocation and address 0 either side of two of them. What its other
@@ -1546,7 +1553,10 @@ impl VecInsn {
                 offset: 0,
                 incr: None,
             },
-            None => return None,
+            // A scatter that names no address writes nothing, whatever its
+            // three slots hold — measured with `probes/sc3.s` through
+            // `vpuprobe3.py`.
+            None => return Some(VecExec::NoEffect),
         };
         let reps = match self.rep {
             7 => VecRep::FromR0,

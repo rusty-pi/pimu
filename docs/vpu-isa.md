@@ -205,7 +205,8 @@ Sources:
 ## Memory-class sub-ops
 
 A transfer that names **no address** — a `vst` or an `indexwritem` whose B
-slot holds a vector, or a scatter with a dash source — writes nothing at all:
+slot holds a vector, or a scatter with a dash source — writes nothing at all,
+whatever its three slots hold:
 not where its operands point, not at address 0 where the matching load reads,
 and nowhere in the 64 KiB a probe compares byte for byte either side of it.
 
@@ -435,18 +436,17 @@ lane predicate applies to the aggregate as well.
 
 `VecInsn::executable` decides, by field rather than by whole-word template.
 A linear sweep of `start4.elf`'s `.text` with this decoder finds **14650**
-vector instructions, and **13805 of them execute**.
+vector instructions, and **13833 of them execute**.
 
-The 845 that do not split by what `binutils-vc4` objdump makes of the same
+The 817 that do not split by what `binutils-vc4` objdump makes of the same
 address — a better measure than the page they sit in, since a linear sweep
 through a jump table produces valid-looking encodings by accident:
 
 | Left over | What it is | Source |
 |---|---|---|
-| 385 | words objdump refuses too — it prints them `vec48`, `vunk...` or `vop63.1`. Data: jump tables and constants a sweep cannot tell from code | decompile: `binutils-vc4` objdump over the same addresses |
-| ~250 | the memory sub-ops that kill the firmware — 3, 10, 11-15, 16-23, 25-31. Each writes a zero into the destination element and leaves the board unable to answer the mailbox; none is carried out for that reason | measured: `probes/m11.s`-`probes/m23.s` on Raspberry Pi 4B d03115 boards, one sub-op per board |
-| ~20 | `indexwritem` whose *index* comes from a slot the scatter decode does not take | decompile: `binutils-vc4` spells them; the shapes with an ordinary index are carried out |
-| 61 | addresses objdump does not decode at all: the two linear sweeps drifting apart inside data | decompile: `binutils-vc4` objdump over the same addresses |
+| 379 | words objdump refuses too — it prints them `vec48`, `vunk...` or `vop63.1`. Data: jump tables and constants a sweep cannot tell from code | decompile: `binutils-vc4` objdump over the same addresses |
+| 383 | the memory sub-ops that kill the firmware — 3, 10, 11-15, 16-23, 25-31. Each writes a zero into the destination element and leaves the board unable to answer the mailbox; none is carried out for that reason | measured: `probes/m11.s`-`probes/m23.s` on Raspberry Pi 4B d03115 boards, one sub-op per board |
+| 55 | addresses objdump does not decode at all: the two linear sweeps drifting apart inside data | decompile: `binutils-vc4` objdump over the same addresses |
 
 None of it is reached on a firmware boot: `boot` stops on an unimplemented
 instruction by default, and `boot-check testdata/boot/firmware-boot.toml`
