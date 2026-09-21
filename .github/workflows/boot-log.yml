@@ -134,28 +134,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - medium: sd
-            scenario: testdata/boot/firmware-boot.toml
-          - medium: usb
-            scenario: testdata/boot/usb-boot.toml
-          - medium: otg
-            scenario: testdata/boot/otg-boot.toml
-          - medium: tftp
-            scenario: testdata/boot/tftp-boot.toml
-          - medium: http
-            scenario: testdata/boot/http-boot.toml
-          - medium: linux
-            scenario: testdata/boot/linux-boot.toml
-          - medium: bt
-            scenario: testdata/boot/bt-boot.toml
-          - medium: wifi
-            scenario: testdata/boot/wifi-boot.toml
-          - medium: b0
-            scenario: testdata/boot/b0-boot.toml
-          - medium: cd
-            scenario: testdata/boot/cd-boot.toml
-          - medium: uefi
-            scenario: testdata/boot/uefi-boot.toml
+          - scenario: firmware
+          - scenario: usb-boot
+          - scenario: otg-boot
+          - scenario: tftp-boot
+          - scenario: http-boot
+          - scenario: linux
+          - scenario: linux-bt
+          - scenario: linux-wifi
+          - scenario: b0-stepping
+          - scenario: firmware-cd
+          - scenario: uefi
 
     steps:
       - uses: actions/checkout@v7
@@ -168,15 +157,15 @@ jobs:
             target/release/rpi-virt-fw
             firmware/
 
-      - name: Simulated boot (${{ matrix.medium }})
-        run: target/release/rpi-virt-fw boot-check ${{ matrix.scenario }} --output boot-${{ matrix.medium }}.log
+      - name: Simulated boot (${{ matrix.scenario }})
+        run: target/release/rpi-virt-fw boot-check testdata/boot/${{ matrix.scenario }}.toml --output boot-${{ matrix.scenario }}.log
 
       # Nothing is uploaded: a failed boot's combined output goes to the job
       # log instead. Reproduce it locally for the console file that
-      # `boot-check <scenario> --from boot-<medium>.log --update` wants.
+      # `boot-check <scenario> --from boot-<scenario>.log --update` wants.
       - name: Boot output
         if: failure()
-        run: cat boot-${{ matrix.medium }}.log
+        run: cat boot-${{ matrix.scenario }}.log
 
   # Nothing a run stores is needed once it has finished: the boot inputs'
   # cache entry goes at the end, whatever the boots did, and so does any

@@ -1,8 +1,8 @@
-# The Linux boot (#40, milestone 5): the firmware boot of firmware-boot.toml,
+# The Linux boot (#40, milestone 5): the firmware boot of firmware.toml,
 # with the four ARM cores modelled, carried on through the armstub into the
 # kernel, off the SD card's ext4 root partition, and into a busybox shell on
 # the serial console, which then gets a few commands typed into it.
-# `rpi-virt-fw boot-check testdata/boot/linux-boot.toml` runs it, and so does
+# `rpi-virt-fw boot-check testdata/boot/linux.toml` runs it, and so does
 # CI.
 #
 # The card is the one scripts/make-sd.sh builds; its root filesystem holds
@@ -16,7 +16,7 @@
 # the kernel replays its log to ttyAMA0 when that registers. The printk
 # timestamps are stripped like the firmware's clocks are.
 
-name = "linux-boot"
+name = "linux"
 description = "The firmware boot, then Linux on all four A72 cores to a busybox shell on the serial console."
 
 [boot]
@@ -47,7 +47,7 @@ text = "echo cpus=$(grep -c ^processor /proc/cpuinfo)\n"
 after = "/ # \u001b[6n"
 text = "ecj\u007fho rvf-$((6*7))\n"
 
-# The HMAC firmware-boot.toml asks the crypto service for, with the same key
+# The HMAC firmware.toml asks the crypto service for, with the same key
 # and the same 16 bytes, this time from Linux userspace: Raspberry Pi's own
 # `rpi-fw-crypto` (scripts/fetch-firmware.sh) through /dev/vcio_crypto, the
 # path rpi-mkosi's machine-id derivation takes (#40 milestone 4). It prints
@@ -67,7 +67,7 @@ after = "/ # \u001b[6n"
 text = "sleep 1; echo usb1-1=$(cat /sys/bus/usb/devices/1-1/product)/$(cat /sys/bus/usb/devices/1-1/maxchild)\n"
 
 [golden]
-path = "golden/linux-boot.txt"
+path = "golden/linux.txt"
 
 [[milestone]]
 why = "The kernel is entered by the firmware's own armstub, at EL2, on the core the SoC starts, and reads the MIDR measured on the reference board (src/aarch64/sysreg.rs)."
@@ -146,7 +146,7 @@ line = "rvf-42"
 [[milestone]]
 why = """
 Linux userspace gets the same HMAC-SHA256 out of start4's crypto service that
-firmware-boot.toml's mailbox request does, byte for byte (its milestone prints
+firmware.toml's mailbox request does, byte for byte (its milestone prints
 the digest as little-endian words): Raspberry Pi's rpi-fw-crypto, through
 /dev/vcio_crypto, the kernel's firmware driver and the ARM mailbox, into the
 VPU's own mbedTLS with the OTP key (#40 milestone 4, rpi-mkosi#37)."""

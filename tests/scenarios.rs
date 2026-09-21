@@ -10,7 +10,7 @@
 //!
 //! The firmware boot is a scenario too, but a different kind: it needs blobs
 //! that are never committed and minutes of CPU, so it lives in
-//! `testdata/boot/firmware-boot.toml`, `rpi-virt-fw boot-check` runs it, and
+//! `testdata/boot/firmware.toml`, `rpi-virt-fw boot-check` runs it, and
 //! `tests/boot_scenario.rs` tests everything about it that does not need the
 //! boot. These two stay because they are the only end-to-end exercise of
 //! payload loading, the run loop and console capture that `cargo test` can

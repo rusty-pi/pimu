@@ -199,7 +199,7 @@ under `--- device state ---`:
 
 A client that asks the firmware for the board's MAC address and does not check
 the answer — or checks it, fails, and carries on — programs `00:00:00:00:00:00`
-into the GENET and boots to exactly the same console bytes. `uefi-boot.toml`
+into the GENET and boots to exactly the same console bytes. `uefi.toml`
 pins that line for the RPi4 UEFI firmware, which is a second, independent
 client of the property interface.
 
@@ -221,7 +221,7 @@ leave the modem on, so the node is picked by its `status`: with
 `dtoverlay=disable-bt` both are disabled and the line says so, rather than
 reporting the all-zero address the node under the mini-UART carries.
 
-`bt-boot.toml` pins both, because neither ever reaches the console.
+`linux-bt.toml` pins both, because neither ever reaches the console.
 
 The WiFi chip's address is a third one again, from a third place, and the line
 says which of three it is:
@@ -236,7 +236,7 @@ says which of three it is:
 
 `ip link` prints the address but not the source, and on a boot that never
 loads `brcmfmac` it prints nothing at all — the chip still answers, and this
-line still says what it would have answered. `wifi-boot.toml` pins it.
+line still says what it would have answered. `linux-wifi.toml` pins it.
 
 A device belongs in this section once it holds a value worth diffing between
 two firmware versions.
@@ -266,7 +266,7 @@ Unmarked does not always mean ignored: `SET_GPIO_STATE` and `SET_GPIO_CONFIG`
 come back without the mark but with their status, `0`, in the value, which is
 what Linux's `gpio-raspberrypi-exp` checks. In a Linux boot the section covers
 every request Linux makes, so a value Linux never checks can still be pinned:
-`linux-boot.toml` does this for `NOTIFY_XHCI_RESET`. The report prints before
+`linux.toml` does this for `NOTIFY_XHCI_RESET`. The report prints before
 an `--mbox-property` exchange runs, so for those requests read the exchange's
 own decode.
 

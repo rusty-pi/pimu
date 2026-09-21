@@ -9,19 +9,19 @@
 #     by line, which catches output that moved or a value that shifted;
 #   * the milestones — each one naming the invariant it guards and citing the
 #     commit or issue that made it pass, which is what a raw diff cannot say;
-#   * the retired counts beside the golden (`golden/firmware-boot.retired.toml`)
+#   * the retired counts beside the golden (`golden/firmware.retired.toml`)
 #     — how many instructions each core ran, which catches a change that makes
 #     the boot run differently without printing anything different (#85).
 #
 # After an intentional change, re-record the golden and the counts with:
-#   rpi-virt-fw boot-check testdata/boot/firmware-boot.toml --update
+#   rpi-virt-fw boot-check testdata/boot/firmware.toml --update
 # and read the diff in the commit before you believe it.
 #
 # This file is deliberately not under `testdata/scenarios/`: those are the
 # in-process scenarios `cargo test` runs in a millisecond each, and this one
 # takes minutes and needs firmware blobs that are never committed.
 
-name = "firmware-boot"
+name = "firmware"
 description = "pieeprom.bin + start4.elf boot from the SD image, through to the ARM hand-off."
 
 [boot]
@@ -70,7 +70,7 @@ wall_secs = 330
 max_skipped = 0
 
 [golden]
-path = "golden/firmware-boot.txt"
+path = "golden/firmware.txt"
 
 [[milestone]]
 why = "The reset cause the bootloader reports; the real board latches HADWRF (1bc5fa1), matching sd-card-boot.log line 4."

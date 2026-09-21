@@ -51,7 +51,7 @@
 //! Nothing regresses against this reimplementation, and nothing should. The
 //! guard that matters is the **pinned output**: given the fixed OTP rows in
 //! `src/periph/configotp.rs`, `/chosen/rpi-machine-id` must be exactly
-//! `ed96a9bc626d9d0869ce37ee4aea025d`, which `testdata/boot/firmware-boot.toml`
+//! `ed96a9bc626d9d0869ce37ee4aea025d`, which `testdata/boot/firmware.toml`
 //! asserts directly against the transcript.
 //!
 //! Checking "our recomputation agrees with the firmware" instead would be

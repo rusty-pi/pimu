@@ -1,13 +1,13 @@
-# The bt-boot card with the WiFi driver on it: `brcmfmac` and what it needs
+# The linux-bt card with the WiFi driver on it: `brcmfmac` and what it needs
 # (`cfg80211`, `brcmutil`, `rfkill`, and the `cyw` vendor half the kernel
 # fetches by itself) as modules under /lib/modules, and the CYW43455's own
 # firmware, CLM blob and Pi 4B nvram under /lib/firmware/brcm.
 # `scripts/fetch-firmware.sh` fetches both, and
 # `BRCMFMAC=1 scripts/make-sd.sh firmware/sd-brcmfmac.img` writes the card.
-# `rpi-virt-fw boot-check testdata/boot/wifi-boot.toml` runs it, and so does
+# `rpi-virt-fw boot-check testdata/boot/linux-wifi.toml` runs it, and so does
 # CI.
 #
-# Config and console are bt-boot's: no `dtoverlay=disable-wifi`, so the
+# Config and console are linux-bt's: no `dtoverlay=disable-wifi`, so the
 # `mmcnr@7e300000` node is live and the chip's SDIO side answers on the legacy
 # EMMC host, and no `dtoverlay=disable-bt`, so Linux talks on the mini-UART.
 # The modules are typed in at the busybox prompt rather than loaded by an
@@ -49,7 +49,7 @@
 # chip's firmware, not linux-firmware's regulatory database, and nothing here
 # needs a regulatory domain.
 
-name = "wifi-boot"
+name = "linux-wifi"
 description = "The stock-config boot with brcmfmac loaded by hand, up to the network interface it registers against the modelled CYW43455."
 
 [boot]
@@ -99,10 +99,10 @@ after = "/ # \u001b[6n"
 text = "insmod $M/drivers/net/wireless/broadcom/brcm80211/brcmfmac/brcmfmac.ko; sleep 9; ip link; dmesg | tail -40\n"
 
 [golden]
-path = "golden/wifi-boot.txt"
+path = "golden/linux-wifi.txt"
 
 [[milestone]]
-why = "The card is bt-boot's, so the console is the mini-UART and the WiFi SDIO host is live."
+why = "The card is linux-bt's, so the console is the mini-UART and the WiFi SDIO host is live."
 line = "mmc1: new high speed SDIO card at address 0001"
 
 [[milestone]]

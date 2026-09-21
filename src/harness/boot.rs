@@ -383,7 +383,7 @@ impl BootScenario {
     }
 
     /// The pinned [`RetiredCounts`], beside the golden transcript:
-    /// `golden/firmware-boot.txt` has `golden/firmware-boot.retired.toml`.
+    /// `golden/firmware.txt` has `golden/firmware.retired.toml`.
     pub fn retired_path(&self) -> PathBuf {
         self.golden_path().with_extension("retired.toml")
     }
@@ -1112,7 +1112,7 @@ mod tests {
         assert_eq!(skipped_count("no report here\n"), None);
     }
 
-    /// Cut from a CI run of `linux-boot.toml`, with the `RVF_ARM_PROF` lines a
+    /// Cut from a CI run of `linux.toml`, with the `RVF_ARM_PROF` lines a
     /// diag build adds.
     const LINUX_REPORT: &str = "\
 end        Until

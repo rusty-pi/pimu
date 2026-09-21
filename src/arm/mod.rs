@@ -85,7 +85,7 @@
 //! is called once, at the transfer that ends the run. What is left per
 //! instruction is the load, the execute, and the tests for a store, a device
 //! and an effect. `RVF_ARM_BLOCKS` measures the runs: the mean is 5.3
-//! instructions on `linux-boot` and 9.6 on the mkosi boot.
+//! instructions on `linux` and 9.6 on the mkosi boot.
 //! `RVF_NO_STRAIGHT=1` turns this off, for comparison.
 //!
 //! ## Between cores
@@ -930,7 +930,7 @@ impl ArmSide {
             //   any — it is called once, at the transfer that ends the run.
             //
             // So make them once instead of once per instruction. The mean run
-            // is 5.3 instructions on `linux-boot` and 9.6 on the mkosi boot.
+            // is 5.3 instructions on `linux` and 9.6 on the mkosi boot.
             if self.straight_on && !cpu.irq_line && !cpu.fiq_line && entered.is_some() {
                 if let Some((va_page, el, pa_page)) = cpu.tlb.fetch_hint() {
                     // The alignment test `Cpu::step` makes is hoisted with

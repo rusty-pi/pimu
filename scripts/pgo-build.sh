@@ -59,8 +59,8 @@ train() {
   echo "training on $scenario" >&2
   RVF_LIVE_CONSOLE=0 "$instr" "${args[@]}" "$@" > "$work/$(basename "$scenario" .toml).log" 2>&1 || true
 }
-train testdata/boot/firmware-boot.toml
-train testdata/boot/linux-boot.toml --until "$linux_until"
+train testdata/boot/firmware.toml
+train testdata/boot/linux.toml --until "$linux_until"
 
 "$profdata" merge -o "$work/merged.profdata" "$work/raw"
 RUSTFLAGS="-Cprofile-use=$work/merged.profdata" cargo build --release

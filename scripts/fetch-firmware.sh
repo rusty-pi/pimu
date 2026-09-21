@@ -19,7 +19,7 @@ EEPROM_DATE="${EEPROM_DATE:-2026-08-04}"
 EEPROM_VL805="${EEPROM_VL805:-000138c0}"
 # pftf/RPi4: the RPi4 UEFI firmware, as a release zip holding RPI_EFI.fd.
 # scripts/make-uefi-sd.sh puts it on a card as the armstub, which is what the
-# uefi-boot scenario boots: a second, independent client of the firmware's
+# uefi scenario boots: a second, independent client of the firmware's
 # property interface, and the one that reads the board's MAC out of it.
 UEFI_REF="${UEFI_REF:-v1.53}"
 UEFI_SHA256="${UEFI_SHA256:-ca9973e2a7a546b3df871cfb7382e656829114b6dfa424f40dc67cc90a217d88}"
@@ -107,7 +107,7 @@ queue "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/fixup4.dat" "fixup4.dat"
 queue "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/start4db.elf" "start4db.elf"
 queue "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/fixup4db.dat" "fixup4db.dat"
 # Cut-down build (`gpu_mem=16`): no camera or codecs, and silent on the UART
-# once started. `START4=start4cd make-sd.sh` makes the card for cd-boot.toml.
+# once started. `START4=start4cd make-sd.sh` makes the card for firmware-cd.toml.
 queue "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/start4cd.elf" "start4cd.elf"
 queue "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/fixup4cd.dat" "fixup4cd.dat"
 

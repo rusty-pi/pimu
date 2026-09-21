@@ -15,7 +15,7 @@ Sources:
 - linux (high): `gpio@7e200000`, `brcm,bcm2711-gpio`, `reg = <0x7e200000 0xb4>`, 58 `gpio-line-names` (`firmware/bcm2711-rpi-4-b.dtb`); driven by `pinctrl-bcm2835`
 - measured (high): the whole window read through `/dev/gpiomem` on a Raspberry Pi 4B d03115 running Linux: `GPFSEL2` `0x12000000` (GPIO 28/29 on ALT5, the RGMII MDIO bus), `GPFSEL3` `0x3fffffff` (30..39 on ALT3, Bluetooth and the WiFi SDIO), `GPFSEL4` `0x64` (40/41 on ALT0, 42 an output), `GPLEV0` `0x1000c1ff`, `GPLEV1` `0x38fb`, every edge-detect register 0
 - decompile (high): start4's GPIO driver: function select `FUN_0ecc94f8` (`&DAT_7e200000 + reg * 4`, three bits a pin), level `FUN_0ecc7fca` / `FUN_0ecc9478` (`GPSET`/`GPCLR`, pins up to `0x39`), pull `FUN_0ecc95ec` (the 2835 `GPPUD` path, `vcfw/drivers/chip/vciv/2708/gpio.c`) or `FUN_0ecc9762` -> `FUN_0ecc83e4(&DAT_7e2000e4, pin, pull)` (the BCM2711 one, which is what a Pi 4 takes)
-- trace (high): a `firmware-boot` run touches `GPFSEL0`..`GPFSEL4`, `GPSET1`, `GPCLR1`, `PIN_MUX`, `PAD_CFG` and all four `PUP_PDN` registers, and nothing else in the window: no `GPLEV`, no edge detect and no legacy pull register
+- trace (high): a `firmware` run touches `GPFSEL0`..`GPFSEL4`, `GPSET1`, `GPCLR1`, `PIN_MUX`, `PAD_CFG` and all four `PUP_PDN` registers, and nothing else in the window: no `GPLEV`, no edge detect and no legacy pull register
 
 Interrupts (`ANY` VPU source 116 · `BANK0` VPU source 113 · `BANK1` VPU source 114 · `BANK1_MIRROR` VPU source 115 · `ANY` GIC id 148 (`GIC_SPI 116`) · `BANK0` GIC id 145 (`GIC_SPI 113`) · `BANK1` GIC id 146 (`GIC_SPI 114`) · `BANK1_MIRROR` GIC id 147 (`GIC_SPI 115`)):
 

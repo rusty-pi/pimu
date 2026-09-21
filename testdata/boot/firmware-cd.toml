@@ -3,7 +3,7 @@
 # picks them. It is the variant a headless board runs, with no camera or codec
 # support and 16 MB for the VideoCore.
 #
-# What it pins beyond `firmware-boot.toml`: the identity this bench guards
+# What it pins beyond `firmware.toml`: the identity this bench guards
 # (rpi-mkosi#37) is the same whichever variant a card boots. The cut-down
 # firmware prints nothing on the UART after the bootloader starts it, so
 # everything past `Starting start4cd.elf` comes from the run report: the device
@@ -20,15 +20,15 @@
 # The card is `START4=start4cd KERNEL=halt scripts/make-sd.sh
 # firmware/sd-halt-start4cd.img`. Re-record the golden and the retired counts
 # with:
-#   rpi-virt-fw boot-check testdata/boot/cd-boot.toml --update
+#   rpi-virt-fw boot-check testdata/boot/firmware-cd.toml --update
 
-name = "cd-boot"
+name = "firmware-cd"
 description = "pieeprom.bin + start4cd.elf boot from the SD image, through to the ARM hand-off."
 
 [boot]
 eeprom = "../../firmware/pieeprom.bin"
 sd = "../../firmware/sd-halt-start4cd.img"
-# The same requests as `firmware-boot.toml`, which explains each one.
+# The same requests as `firmware.toml`, which explains each one.
 mbox_property = [
   "0x00000001",
   "0x00028001:8=3.3",
@@ -43,7 +43,7 @@ wall_secs = 120
 max_skipped = 0
 
 [golden]
-path = "golden/cd-boot.txt"
+path = "golden/firmware-cd.txt"
 
 [[milestone]]
 why = "`gpu_mem=16` made the bootloader pick the cut-down pair."
@@ -82,7 +82,7 @@ it needed the console line above and skipped this section without a word."""
 line = "device tree handed to the ARM"
 
 [[milestone]]
-why = "The same serial as with `start4.elf` (`firmware-boot.toml`)."
+why = "The same serial as with `start4.elf` (`firmware.toml`)."
 line = ["/chosen/rpi-serial64 ", "\"fa1e00231aa2bb31\""]
 
 [[milestone]]

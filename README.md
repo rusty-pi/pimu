@@ -97,7 +97,7 @@ Working:
 Not done: most of the VPU vector unit (a short list of exactly matched forms
 runs, the rest stop as `Unimpl`), HTTPS network boot (#44), and under Linux a
 display and networking past the `bcmgenet` probe. Linux does reach `start4`'s
-crypto service through `/dev/vcio_crypto` (`linux-boot.toml` checks the HMAC
+crypto service through `/dev/vcio_crypto` (`linux.toml` checks the HMAC
 rpi-mkosi#37 needs), and USB mass storage far enough to boot the rpi-mkosi
 image with `--usb`.
 See [`docs/`](docs/) for the board sheet and the rest:
@@ -151,7 +151,7 @@ and the WiFi chip answers on the legacy EMMC host
 the WiFi driver on it as well — `brcmfmac` and the modules it needs under
 `/lib/modules`, a `modprobe` for the one the kernel fetches by itself, the
 CYW43455's own firmware under `/lib/firmware/brcm`, and `insmod`/`ip` — which
-is what `testdata/boot/wifi-boot.toml` loads by hand to pin how far the chip's
+is what `testdata/boot/linux-wifi.toml` loads by hand to pin how far the chip's
 bring-up gets. `--usb <img>` boots
 the same image as a USB stick instead, `--otg <img>` as a
 stick in the USB-C socket (`BOOT_ORDER` 0x5, and `OTG=1 scripts/make-sd.sh` for
@@ -294,12 +294,12 @@ asserted about it:
 
 | Scenario | Boot |
 |---|---|
-| `firmware-boot.toml` | SD card, through to `arm_loader` |
+| `firmware.toml` | SD card, through to `arm_loader` |
 | `usb-boot.toml` | USB mass storage (`BOOT_ORDER` 0x4), no SD card |
 | `otg-boot.toml` | USB mass storage on the USB-C port (`BOOT_ORDER` 0x5), no SD card |
 | `tftp-boot.toml` | network boot over TFTP |
 | `http-boot.toml` | HTTP boot of a signed `boot.img` ramdisk |
-| `linux-boot.toml` | SD card, on into Linux: a busybox shell, then a few commands typed into it |
+| `linux.toml` | SD card, on into Linux: a busybox shell, then a few commands typed into it |
 
 Each one has:
 
@@ -323,10 +323,10 @@ All three are checked against a single boot; the wall clock has little
 headroom, so nothing here runs the firmware twice.
 
 ```
-cargo run --release -- boot-check testdata/boot/firmware-boot.toml   # the SD boot
-cargo run --release -- boot-check testdata/boot/linux-boot.toml
-cargo run --release -- boot-check testdata/boot/firmware-boot.toml --update       # re-record the golden and counts
-cargo run --release -- boot-check testdata/boot/firmware-boot.toml --max-wall 600 # slower, busier machine
+cargo run --release -- boot-check testdata/boot/firmware.toml   # the SD boot
+cargo run --release -- boot-check testdata/boot/linux.toml
+cargo run --release -- boot-check testdata/boot/firmware.toml --update       # re-record the golden and counts
+cargo run --release -- boot-check testdata/boot/firmware.toml --max-wall 600 # slower, busier machine
 cargo run --release -- boot-check testdata/boot/usb-boot.toml --from boot-usb.log # an earlier run's pair
 ```
 

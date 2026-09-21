@@ -1,6 +1,6 @@
 # The firmware boot from USB mass storage (BOOT_ORDER 0x4).
 #
-# The SD image (`firmware-boot.toml`) as a stick in blue USB socket A (xHCI
+# The SD image (`firmware.toml`) as a stick in blue USB socket A (xHCI
 # root port 2, SuperSpeed), with no SD card: the bootloader enumerates it and
 # reads config.txt, start4.elf and fixup4.dat over SCSI READ(10) through the
 # VL805, then start4 takes the xHCI over ("USB boot mode 2") and reads the rest

@@ -1,6 +1,6 @@
-//! The firmware-boot regression, minus the boot.
+//! The firmware regression, minus the boot.
 //!
-//! `testdata/boot/firmware-boot.toml` describes a run that takes minutes and
+//! `testdata/boot/firmware.toml` describes a run that takes minutes and
 //! needs firmware blobs that are never committed, so `cargo test` cannot boot
 //! it — `rpi-virt-fw boot-check` does that, and CI runs it in its own job. What
 //! is testable here is everything around the run, and it is the part that has
@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use rpi_virt_fw::harness::boot::{self, BootScenario, GoldenCheck, RetiredCounts};
 
 fn scenario_path() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/boot/firmware-boot.toml")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/boot/firmware.toml")
 }
 
 fn scenario() -> BootScenario {
@@ -330,7 +330,7 @@ fn a_changed_retired_count_fails_the_check() {
     let dir = std::env::temp_dir().join(format!("rvf-retired-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let mut unpinned = scenario();
-    let copy = dir.join("firmware-boot.txt");
+    let copy = dir.join("firmware.txt");
     std::fs::copy(scn.golden_path(), &copy).unwrap();
     unpinned.golden.path = copy.display().to_string();
     let f = boot::check_run(&unpinned, &log, &golden).expect("check");
@@ -403,9 +403,9 @@ fn every_boot_scenario_loads_and_plans_its_media() {
     }
     seen.sort();
     for name in [
-        "b0-boot",
-        "cd-boot",
-        "firmware-boot",
+        "b0-stepping",
+        "firmware-cd",
+        "firmware",
         "tftp-boot",
         "usb-boot",
     ] {

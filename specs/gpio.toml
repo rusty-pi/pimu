@@ -27,7 +27,7 @@ confidence = "high"
 
 [[block.source]]
 kind       = "trace"
-ref        = "a `firmware-boot` run touches `GPFSEL0`..`GPFSEL4`, `GPSET1`, `GPCLR1`, `PIN_MUX`, `PAD_CFG` and all four `PUP_PDN` registers, and nothing else in the window: no `GPLEV`, no edge detect and no legacy pull register"
+ref        = "a `firmware` run touches `GPFSEL0`..`GPFSEL4`, `GPSET1`, `GPCLR1`, `PIN_MUX`, `PAD_CFG` and all four `PUP_PDN` registers, and nothing else in the window: no `GPLEV`, no edge detect and no legacy pull register"
 confidence = "high"
 
 [block.irq]

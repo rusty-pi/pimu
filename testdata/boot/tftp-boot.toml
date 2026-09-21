@@ -1,6 +1,6 @@
 # The firmware boot over the network: TFTP (BOOT_ORDER 0x2).
 #
-# The same files as the SD boot (`firmware-boot.toml`), served by the built-in
+# The same files as the SD boot (`firmware.toml`), served by the built-in
 # network peer (src/net/peer.rs) from the root `scripts/make-netboot.sh` builds.
 # No SD card: the bootloader TFTPs start4.elf / fixup4.dat, and start4's own
 # GENET driver fetches config.txt, the overlays, the dtb and the kernel.

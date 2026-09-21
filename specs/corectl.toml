@@ -71,7 +71,7 @@ note       = "the non-secure `enable_irq_source(src, prio)` at `0x3ED72374` mask
 
 [[register.source]]
 kind       = "trace"
-ref        = "`linux-boot`, `RVF_TRACE_MMIO=0x7e002000-0x7e002060`: the secure service at `0xFEC006CA` writes all eight words, `+0x20 <- 0x10` (source 97, the HVS), `+0x28 <- 0x10000000` (119) and `+0x2c <- 0x100000` (125, the RNG) among them"
+ref        = "`linux`, `RVF_TRACE_MMIO=0x7e002000-0x7e002060`: the secure service at `0xFEC006CA` writes all eight words, `+0x20 <- 0x10` (source 97, the HVS), `+0x28 <- 0x10000000` (119) and `+0x2c <- 0x100000` (125, the RNG) among them"
 confidence = "high"
 
 [[register.source]]
@@ -131,7 +131,7 @@ note       = "`entry` comes from a pc-relative lea, so it follows start4 whereve
 
 [[register.source]]
 kind       = "trace"
-ref        = "`linux-boot`: `vcos_threadx.c`'s sysman user asks for bit 5 after `Booting Linux`, which powers domain `0x20000` and writes the wake once; nothing writes it before `arm_loader`"
+ref        = "`linux`: `vcos_threadx.c`'s sysman user asks for bit 5 after `Booting Linux`, which powers domain `0x20000` and writes the wake once; nothing writes it before `arm_loader`"
 confidence = "high"
 
 [[register.source]]

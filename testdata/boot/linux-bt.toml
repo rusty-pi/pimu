@@ -1,6 +1,6 @@
-# The Linux boot of linux-boot.toml on a card whose config.txt leaves
+# The Linux boot of linux.toml on a card whose config.txt leaves
 # Bluetooth and WiFi enabled — what an imager writes, and what #124 is about.
-# `rpi-virt-fw boot-check testdata/boot/bt-boot.toml` runs it, and so does CI.
+# `rpi-virt-fw boot-check testdata/boot/linux-bt.toml` runs it, and so does CI.
 #
 # Dropping `dtoverlay=disable-bt` changes where the console is. The base
 # device tree gives the PL011 to the Bluetooth modem and keeps
@@ -15,10 +15,10 @@
 # drives it further here: `brcmfmac` is not built into the kernel on the card.
 #
 # The card is `WIRELESS=1 scripts/make-sd.sh firmware/sd-wireless.img`: the
-# same image as linux-boot's, with those two overlay lines left out and the
+# same image as linux's, with those two overlay lines left out and the
 # shell on `ttyS0` instead of `ttyAMA0`.
 
-name = "bt-boot"
+name = "linux-bt"
 description = "The stock-config boot: Bluetooth and WiFi enabled, so Linux's console is the mini-UART."
 
 [boot]
@@ -40,7 +40,7 @@ after = "/ # \u001b[6n"
 text = "echo cpus=$(grep -c ^processor /proc/cpuinfo)\n"
 
 [golden]
-path = "golden/bt-boot.txt"
+path = "golden/linux-bt.txt"
 
 [[milestone]]
 why = "The firmware's own log still comes out of the PL011: GPIO 14/15 are on ALT0 while it runs."
@@ -102,7 +102,7 @@ line = "Failed to initialize a non-removable card"
 absent = true
 
 [[milestone]]
-why = "The root filesystem mounts as it does in linux-boot.toml: the console moving does not change the rest of the board."
+why = "The root filesystem mounts as it does in linux.toml: the console moving does not change the rest of the board."
 line = "VFS: Mounted root (ext4 filesystem) readonly on device 179:2."
 
 [[milestone]]

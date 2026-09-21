@@ -2,7 +2,7 @@
 //!
 //! ## What the firmware does with it
 //!
-//! A `firmware-boot` run touches `GPFSEL0`..`GPFSEL4`, `GPSET1`, `GPCLR1`, the
+//! A `firmware` run touches `GPFSEL0`..`GPFSEL4`, `GPSET1`, `GPCLR1`, the
 //! two undocumented words at `+0xD0` / `+0xD4` and all four `PUP_PDN`
 //! registers — and nothing else in the window. There is no `GPLEV` read, no
 //! edge detect, and no write to the BCM2835 pull registers: start4 has both

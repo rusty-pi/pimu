@@ -107,7 +107,7 @@ fn run_one(scn: &harness::Scenario, update: bool, verbose: bool) -> Result<bool>
     Ok(ok)
 }
 
-/// `boot-check <scenario.toml>`: the firmware-boot regression (#97).
+/// `boot-check <scenario.toml>`: the firmware regression (#97).
 ///
 /// Runs the boot the scenario describes, once — it takes minutes, and the wall
 /// clock has little headroom — and checks what it left behind three ways: the
