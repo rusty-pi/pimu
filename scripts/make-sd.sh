@@ -94,6 +94,14 @@ copy() {
 # mini-UART and not the PL011, and the WiFi SDIO host and the Bluetooth
 # modem's UART are both live.
 wireless="${WIRELESS:-0}"
+# `BRCMFMAC=1` is the card that can bring the WiFi chip up: the kernel modules
+# `brcmfmac` needs and the CYW43455's own firmware on the root filesystem
+# (scripts/fetch-firmware.sh puts them under firmware/wifi/), plus the busybox
+# applets that load them. It implies `WIRELESS=1`: with `dtoverlay=disable-wifi`
+# on the card the `mmcnr@7e300000` node is off and there is no SDIO card for
+# the driver to find at all.
+brcmfmac="${BRCMFMAC:-0}"
+if [[ "$brcmfmac" == 1 ]]; then wireless=1; fi
 # Which tty the kernel's `console=serial0` ends up being, and so where the
 # shell goes: `serial0` is the PL011 with Bluetooth disabled and the
 # mini-UART with it enabled.
@@ -209,6 +217,13 @@ if [[ -f "$fw/busybox-aarch64" ]]; then
                 sync tail test top touch tr true umount uname uptime vi wc; do
     ln -s busybox "$rootfs/bin/$applet"
   done
+  # Loading the WiFi modules and looking at what they register needs four more
+  # applets; they are left off the other cards so those stay byte-identical.
+  if [[ "$brcmfmac" == 1 ]]; then
+    for applet in insmod lsmod rmmod ip; do
+      ln -s busybox "$rootfs/bin/$applet"
+    done
+  fi
   ln -s ../bin/busybox "$rootfs/sbin/init"
   for applet in halt poweroff reboot; do
     ln -s ../bin/busybox "$rootfs/sbin/$applet"
@@ -232,6 +247,23 @@ if [[ -f "$userland/usr/bin/rpi-fw-crypto" ]]; then
   echo "  + p2: rpi-fw-crypto and its libraries"
 else
   echo "  ! missing $userland (no rpi-fw-crypto on the card; run fetch-firmware.sh)" >&2
+fi
+# The WiFi driver and the chip's own firmware, laid out as /lib/modules and
+# /lib/firmware. `brcmfmac` downloads brcmfmac43455-sdio.bin into the chip over
+# SDIO at probe time and the kernel's filesystem firmware loader finds it
+# under /lib/firmware, so both have to be on the root filesystem.
+if [[ "$brcmfmac" == 1 ]]; then
+  if [[ -d "$fw/wifi/lib" ]]; then
+    mkdir -p "$rootfs/lib"
+    cp -a "$fw/wifi/lib/." "$rootfs/lib/"
+    # The modules ship as .ko.xz. Unpack them here rather than on the card:
+    # busybox's insmod need not have seamless xz built in, and a plain
+    # `insmod foo.ko` is one less thing between the scenario and the driver.
+    find "$rootfs/lib/modules" -name '*.ko.xz' -exec xz -d {} +
+    echo "  + p2: $(find "$rootfs/lib/modules" -name '*.ko' | wc -l) kernel modules and the CYW43455's firmware"
+  else
+    echo "  ! missing $fw/wifi (no WiFi driver on the card; run fetch-firmware.sh)" >&2
+  fi
 fi
 # The firmware's command line ends in `console=tty1`, which makes the
 # framebuffer /dev/console; name the serial port instead.

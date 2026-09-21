@@ -1,0 +1,162 @@
+# The bt-boot card with the WiFi driver on it: `brcmfmac` and what it needs
+# (`cfg80211`, `brcmutil`, `rfkill`) as modules under /lib/modules, and the
+# CYW43455's own firmware, CLM blob and Pi 4B nvram under /lib/firmware/brcm.
+# `scripts/fetch-firmware.sh` fetches both, and
+# `BRCMFMAC=1 scripts/make-sd.sh firmware/sd-brcmfmac.img` writes the card.
+# `rpi-virt-fw boot-check testdata/boot/wifi-boot.toml` runs it, and so does
+# CI.
+#
+# Config and console are bt-boot's: no `dtoverlay=disable-wifi`, so the
+# `mmcnr@7e300000` node is live and the chip's SDIO side answers on the legacy
+# EMMC host, and no `dtoverlay=disable-bt`, so Linux talks on the mini-UART.
+# The modules are typed in at the busybox prompt rather than loaded by an
+# init script, so the transcript shows what each one printed.
+#
+# WHERE THE DRIVER STOPS
+#
+# `brcmfmac` binds — the CIS identity matches its SDIO table — claims
+# function 1, and then tries to reach the chip's backplane through it. Both
+# accesses come back empty and it gives up:
+#
+#   brcmfmac: F1 signature read @0x18000000=0xffffffff
+#   brcmfmac: brcmf_sdio_probe_attach: ChipClkCSR access: err 0 wrote 0x28 read 0x00
+#   brcmfmac: brcmf_sdio_probe: brcmf_sdio_probe_attach failed
+#   brcmfmac: brcmf_ops_sdio_probe: F2 error, probe failed -52...
+#   brcmfmac mmc1:0001:2: probe with driver brcmfmac failed with error -52
+#
+# The last thing it did was that `CHIPCLKCSR` read-back. `--log emmc` shows
+# the whole attempt as five commands, all of them on function 1:
+#
+#   CMD52 arg=0x92001400   write f1 [0x1000a] = 0x00   SBSDIO_FUNC1_SBADDRLOW
+#   CMD52 arg=0x92001600   write f1 [0x1000b] = 0x00   SBSDIO_FUNC1_SBADDRMID
+#   CMD52 arg=0x92001818   write f1 [0x1000c] = 0x18   SBSDIO_FUNC1_SBADDRHIGH
+#   CMD53 arg=0x15000004   read  f1 [0x8000], 4 bytes  -> silent=true
+#   CMD52 arg=0x92001c28   write f1 [0x1000e] = 0x28   SBSDIO_FUNC1_CHIPCLKCSR
+#   CMD52 arg=0x12001c00   read  f1 [0x1000e]          -> 0x00
+#
+# which is two shapes of the same hole:
+#
+#   1. The three `SBADDR` bytes point the backplane window at `0x18000000`,
+#      the chipcommon core, and the `CMD53` (IO_RW_EXTENDED) reads the chip-id
+#      word through it — function 1 offset `0x8000` is offset 0 of the window
+#      with the 4-byte-access flag. `SdCard::sdio_command` answers nothing to
+#      `CMD53`, so the host takes a command timeout and the driver reads back
+#      the all-ones its buffer still holds.
+#   2. `CHIPCLKCSR` is a `CMD52` byte write and then a read of function 1
+#      address `0x1000e`. Function 1's space is the chip's own, and
+#      `SdCard::io_read` answers 0 for every function but 0 — so the write is
+#      dropped and the read-back is `0x00`, while `err` stays 0 because
+#      `CMD52` itself is answered. The driver never gets as far as asking for
+#      `brcmfmac43455-sdio.bin`.
+#
+# So the next step is function 1's own address space: the window registers at
+# `0x1000a`..`0x1000c`, the chipcommon core behind it, `CHIPCLKCSR` at
+# `0x1000e`, and `CMD53` answering at all.
+#
+# Before that the MMC core and the driver agree on the rest: function 1 gets a
+# 64-byte block size and function 2 512 (`CMD52` to the FBRs at `0x110`/`0x111`
+# and `0x210`/`0x211`), and function 1 is enabled and reports ready through
+# `CCCR_IO_ENABLE`/`CCCR_IO_READY`. Only the chip's own side is missing.
+#
+# `cfg80211: failed to load regulatory.db` is expected: the card carries the
+# chip's firmware, not linux-firmware's regulatory database, and nothing here
+# needs a regulatory domain.
+
+name = "wifi-boot"
+description = "The stock-config boot with brcmfmac loaded by hand, pinning where the driver stops against the modelled CYW43455."
+
+[boot]
+eeprom = "../../firmware/pieeprom.bin"
+sd = "../../firmware/sd-brcmfmac.img"
+until = "/ # "
+wall_secs = 600
+max_skipped = 0
+
+# Where the modules are, once, so the prompt stays `/ # ` for every send that
+# follows: a `cd` would change it and the next `after` would never match.
+[[boot.input]]
+after = "/ # \u001b[6n"
+text = "M=/lib/modules/$(uname -r)/kernel\n"
+
+# `cfg80211` needs `rfkill`, which is a module in this kernel too.
+[[boot.input]]
+after = "/ # \u001b[6n"
+text = "insmod $M/net/rfkill/rfkill.ko\n"
+
+[[boot.input]]
+after = "/ # \u001b[6n"
+text = "insmod $M/net/wireless/cfg80211.ko\n"
+
+[[boot.input]]
+after = "/ # \u001b[6n"
+text = "insmod $M/drivers/net/wireless/broadcom/brcm80211/brcmutil/brcmutil.ko\n"
+
+# The one that matters: its probe runs inside this `insmod`, because the SDIO
+# device is already on the bus.
+[[boot.input]]
+after = "/ # \u001b[6n"
+text = "insmod $M/drivers/net/wireless/broadcom/brcm80211/brcmfmac/brcmfmac.ko\n"
+
+[[boot.input]]
+after = "/ # \u001b[6n"
+text = "ip link\n"
+
+[[boot.input]]
+after = "/ # \u001b[6n"
+text = "dmesg | tail -20\n"
+
+[golden]
+path = "golden/wifi-boot.txt"
+
+[[milestone]]
+why = "The card is bt-boot's, so the console is the mini-UART and the WiFi SDIO host is live."
+line = "mmc1: new high speed SDIO card at address 0001"
+
+[[milestone]]
+why = "The root filesystem carries /lib/modules: `insmod` found cfg80211 and the kernel took it, vermagic and all, which is what says the modules match the kernel8.img at the pinned firmware ref."
+line = "cfg80211: Loading compiled-in X.509 certificates for regulatory database"
+
+[[milestone]]
+why = "`brcmfmac` matched the card: the CIS gives vendor `0x02d0` device `0xa9a6` (`SDIO_DEVICE_ID_BROADCOM_CYPRESS_43455`), which is in the driver's SDIO table, and the MMC core offered it function 2."
+line = "brcmfmac mmc1:0001:2: probe with driver brcmfmac failed with error -52"
+
+[[milestone]]
+why = """
+Where the bring-up stops, first half: the chip-id word of the chipcommon core
+at backplane `0x18000000`, read through function 1 with `CMD53`. The modelled
+card answers nothing to `CMD53`, so the host times out and the driver reads
+the all-ones left in its buffer."""
+line = "brcmfmac: F1 signature read @0x18000000=0xffffffff"
+
+[[milestone]]
+why = """
+Where the bring-up stops, second half, and the last thing the driver did:
+`SBSDIO_FUNC1_CHIPCLKCSR` (function 1 address `0x1000e`) written `0x28`
+(`FORCE_HW_CLKREQ_OFF | ALP_AVAIL_REQ`) with `CMD52` and read straight back.
+`err` is 0 because `CMD52` is answered; the byte is `0x00` because function
+1's address space is the chip's and the model has none of it."""
+line = "brcmfmac: brcmf_sdio_probe_attach: ChipClkCSR access: err 0 wrote 0x28 read 0x00"
+
+[[milestone]]
+why = "The driver stopped before the firmware download, so it never asked for the blob the card carries. A failed *request* would say so here instead."
+line = "Direct firmware load for brcm/brcmfmac43455-sdio"
+absent = true
+
+[[milestone]]
+why = "Only the GENET is up: no `wlan0` until the chip answers its side of the bring-up."
+line = "2: eth0: <BROADCAST,MULTICAST> mtu 1500 qdisc noop qlen 1000"
+
+[[milestone]]
+why = "What a finished bring-up would add to `ip link`, and what this scenario is here to see appear."
+line = "wlan0"
+absent = true
+
+[[milestone]]
+why = "No panic on the way: a failed probe is a failed probe, not a dead kernel."
+line = "Kernel panic"
+absent = true
+
+[[milestone]]
+why = "No oops: a kernel fault would point at the interpreter or a device model."
+line = "Unable to handle kernel"
+absent = true

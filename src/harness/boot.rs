@@ -412,8 +412,18 @@ impl BootScenario {
             } else {
                 ""
             };
+            // `-wireless` is the card an imager writes, with the Bluetooth
+            // and WiFi overlays left out, and `-brcmfmac` that card with the
+            // WiFi driver and the chip's firmware on its root filesystem.
+            let wifi = if img.contains("-brcmfmac") {
+                "BRCMFMAC=1 "
+            } else if img.contains("-wireless") {
+                "WIRELESS=1 "
+            } else {
+                ""
+            };
             let make = format!(
-                "{start4}{kernel}scripts/make-sd.sh {}",
+                "{wifi}{start4}{kernel}scripts/make-sd.sh {}",
                 tidy_path(&path).display()
             );
             v.push(BootInput { path, make });

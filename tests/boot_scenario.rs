@@ -448,3 +448,28 @@ fn missing_boot_media_are_named_with_the_command_that_makes_them() {
     assert!(scn.missing_inputs().is_empty());
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+/// A card's name says how it is built, and a card built the wrong way boots
+/// something else entirely: the Bluetooth/WiFi one has different overlays and
+/// a different console, and the `brcmfmac` one carries the driver as well.
+#[test]
+fn a_cards_name_decides_the_environment_that_builds_it() {
+    for (img, prefix) in [
+        ("../../firmware/sd.img", ""),
+        ("../../firmware/sd-halt.img", "KERNEL=halt "),
+        ("../../firmware/sd-wireless.img", "WIRELESS=1 "),
+        ("../../firmware/sd-brcmfmac.img", "BRCMFMAC=1 "),
+        (
+            "../../firmware/sd-halt-start4cd.img",
+            "START4=start4cd KERNEL=halt ",
+        ),
+    ] {
+        let mut scn = scenario();
+        scn.boot.sd = Some(img.into());
+        let make = &scn.inputs()[1].make;
+        assert!(
+            make.starts_with(&format!("{prefix}scripts/make-sd.sh")),
+            "{img}: {make}"
+        );
+    }
+}

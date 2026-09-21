@@ -23,6 +23,24 @@ EEPROM_VL805="${EEPROM_VL805:-000138c0}"
 # property interface, and the one that reads the board's MAC out of it.
 UEFI_REF="${UEFI_REF:-v1.53}"
 UEFI_SHA256="${UEFI_SHA256:-ca9973e2a7a546b3df871cfb7382e656829114b6dfa424f40dc67cc90a217d88}"
+# RPi-Distro/firmware-nonfree: the CYW43455's *own* firmware, its regulatory
+# (CLM) blob and the Pi 4B nvram. The chip runs that firmware out of its own
+# SRAM; `brcmfmac` downloads it over SDIO at probe time, so the card has to
+# carry it for the WiFi chip to get past enumeration.
+#
+# The paths have moved between layouts. On the `trixie` branch the blobs live
+# under `debian/added-firmware/`, and the names `brcmfmac` asks for are
+# symlinks there:
+#
+#   brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.bin -> ../cypress/cyfmac43455-sdio.bin
+#   brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.txt -> brcmfmac43455-sdio.txt
+#
+# `cyfmac43455-sdio.bin` is not a file in the tree at all: the package's
+# update-alternatives picks between `-standard` (priority 50) and `-minimal`
+# (10), so a Raspberry Pi OS install runs the standard build. A raw fetch gets
+# a symlink's *text*, not its target, so the targets are named here and
+# installed under the names the driver asks for.
+NONFREE_REF="${NONFREE_REF:-3bab0f823f5b53150b76aab77093adef6655b920}"
 # Debian's static aarch64 busybox: the userland on the SD card's root
 # filesystem (scripts/make-sd.sh, #40 milestone 5). Checked against the hash.
 BUSYBOX_DEB="${BUSYBOX_DEB:-busybox-static_1.35.0-4+deb12u1+b1_arm64.deb}"
@@ -48,6 +66,21 @@ USERLAND_DEBS=(
 	"$deb/n/nettle/libhogweed6t64_3.10.1-1_arm64.deb cb92d5a51c4fd6c7b7cbb62aaa60c7af830d0bea5b410fb1f47ee685e26944d1"
 	"$deb/libi/libidn2/libidn2-0_2.3.8-2_arm64.deb d2e5cef812f15db1eeb35f0a193158ee102a9e94284036c0e293521f2761d2d7"
 	"$deb/g/gmp/libgmp10_6.3.0+dfsg-3_arm64.deb a27bbc27f119161ea9702c8dd66f54131cdf0d2ca73000f50ea91ef2fdfef0fb"
+)
+# Everything the WiFi bring-up needs, as `<path under firmware/wifi/> <sha256>`
+# with `KVER` standing in for the kernel version read out of kernel8.img. The
+# modules come from FIRMWARE_REF and the chip firmware from NONFREE_REF, so
+# overriding either ref means re-taking these — the check prints the hash it
+# got for exactly that.
+WIFI_SHA256=(
+	"lib/modules/KVER/kernel/net/rfkill/rfkill.ko.xz c8d38d608ac4bdd620e416188e4bf0aead164272ba4fe76f2ebb122069f38f76"
+	"lib/modules/KVER/kernel/net/wireless/cfg80211.ko.xz b659e3080a706631312b06cf6b0cf583f8c034c92374ffdd28264b02272e5b7c"
+	"lib/modules/KVER/kernel/drivers/net/wireless/broadcom/brcm80211/brcmutil/brcmutil.ko.xz 8609f1fe7a5e8c1765d67739eaacf8ae7365a8418522dcf81881a10425fd0fcc"
+	"lib/modules/KVER/kernel/drivers/net/wireless/broadcom/brcm80211/brcmfmac/brcmfmac.ko.xz 102d77619c7f1bd5392afe9e49568211612534b7baac552ebf8423e71b32ad17"
+	"lib/modules/KVER/kernel/drivers/net/wireless/broadcom/brcm80211/brcmfmac/cyw/brcmfmac-cyw.ko.xz ed6e36bd7b962c0f78abb8bcdee5d3f41010b64f846a48d84399d15d6e321c0a"
+	"lib/firmware/brcm/brcmfmac43455-sdio.bin d608f866582519c0a28d86db43040f4f1b98dd1d153e72e9752586546b4a36c3"
+	"lib/firmware/brcm/brcmfmac43455-sdio.clm_blob 9823842cae9fb9a5dd1e5fb31f595516ec7deee341354bef30bb3026eee29cc1"
+	"lib/firmware/brcm/brcmfmac43455-sdio.txt ca709be81a78bdb6932936374f39943acbd7af07fae6151011127599a3ce9e3d"
 )
 # ---------------------------------------------------------------------------
 
@@ -117,6 +150,64 @@ echo
 curl -fSL --retry 3 --parallel --parallel-max 8 "${jobs[@]}"
 
 "$here/scripts/make-dt-blob.py" "$dest/dt-blob.dts" "$dest/dt-blob.bin"
+
+# --- the WiFi driver, and the WiFi chip's own firmware -----------------------
+# `brcmfmac` ships as a module, not built into the stock kernel, so a card that
+# is to bring the CYW43455 up has to carry it — together with cfg80211,
+# brcmutil and rfkill, which it needs. Which kernel's modules those are is not
+# a guess: the version comes out of the kernel8.img just fetched (the `-v8+`
+# build), so it always matches whatever FIRMWARE_REF is pinned above.
+kver="${MODULES_KVER:-$(gzip -dc "$dest/kernel8.img" 2>/dev/null |
+	LC_ALL=C grep -ao 'Linux version [0-9][^ ]*' | sed -n '1s/Linux version //p' || true)}"
+[[ -n "$kver" ]] || {
+	echo "no kernel version string in $dest/kernel8.img (set MODULES_KVER)" >&2
+	exit 1
+}
+
+wifi="$dest/wifi"
+rm -rf "$wifi"
+mods="lib/modules/$kver/kernel"
+brcm80211="$mods/drivers/net/wireless/broadcom/brcm80211"
+jobs=()
+
+echo
+echo "raspberrypi/firmware @ $FIRMWARE_REF: $kver modules for the WiFi chip"
+fwmod="$raw/raspberrypi/firmware/$FIRMWARE_REF/modules/$kver/kernel"
+queue "$fwmod/net/rfkill/rfkill.ko.xz" "wifi/$mods/net/rfkill/rfkill.ko.xz"
+queue "$fwmod/net/wireless/cfg80211.ko.xz" "wifi/$mods/net/wireless/cfg80211.ko.xz"
+queue "$fwmod/drivers/net/wireless/broadcom/brcm80211/brcmutil/brcmutil.ko.xz" \
+	"wifi/$brcm80211/brcmutil/brcmutil.ko.xz"
+queue "$fwmod/drivers/net/wireless/broadcom/brcm80211/brcmfmac/brcmfmac.ko.xz" \
+	"wifi/$brcm80211/brcmfmac/brcmfmac.ko.xz"
+# The per-vendor half of the split driver. `brcmfmac` asks for it by
+# `request_module("brcmfmac-cyw")` once it knows what chip it is talking to,
+# so it is on the card before it is reachable.
+queue "$fwmod/drivers/net/wireless/broadcom/brcm80211/brcmfmac/cyw/brcmfmac-cyw.ko.xz" \
+	"wifi/$brcm80211/brcmfmac/cyw/brcmfmac-cyw.ko.xz"
+
+echo "RPi-Distro/firmware-nonfree @ $NONFREE_REF"
+nonfree="$raw/RPi-Distro/firmware-nonfree/$NONFREE_REF/debian/added-firmware"
+queue "$nonfree/cypress/cyfmac43455-sdio-standard.bin" "wifi/lib/firmware/brcm/brcmfmac43455-sdio.bin"
+queue "$nonfree/cypress/cyfmac43455-sdio.clm_blob" "wifi/lib/firmware/brcm/brcmfmac43455-sdio.clm_blob"
+queue "$nonfree/brcm/brcmfmac43455-sdio.txt" "wifi/lib/firmware/brcm/brcmfmac43455-sdio.txt"
+
+echo
+curl -fSL --retry 3 --parallel --parallel-max 8 --create-dirs "${jobs[@]}"
+
+# `brcmfmac` asks for `<name>.<board compatible>.txt` before the plain name,
+# and upstream makes the per-board one a symlink to it. Both here.
+cp "$wifi/lib/firmware/brcm/brcmfmac43455-sdio.txt" \
+	"$wifi/lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.txt"
+
+for entry in "${WIFI_SHA256[@]}"; do
+	path="${entry% *}" sum="${entry##* }"
+	file="$wifi/${path//KVER/$kver}"
+	echo "$sum  $file" | sha256sum --quiet -c - || {
+		echo "  got $(sha256sum "$file" | cut -d' ' -f1)" >&2
+		echo "  (a FIRMWARE_REF or NONFREE_REF override means re-taking WIFI_SHA256)" >&2
+		exit 1
+	}
+done
 
 echo "$UEFI_SHA256  $dest/RPi4_UEFI_Firmware.zip" | sha256sum --quiet -c -
 # One file out of the zip, without needing unzip on the runner.
