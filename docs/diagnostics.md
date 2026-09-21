@@ -132,7 +132,7 @@ still records it.
 
 | Channel | What it prints |
 |---|---|
-| `io` | What crossed the peripherals apart from the console: SD card and USB stick block runs with the files they belong to, OTP rows read and programmed, and what the network peer did (the README's "What the machine read and wrote"). |
+| `io` | What crossed the peripherals apart from the console: SD card and USB stick block runs with the files they belong to, OTP rows read and programmed, and what the network peer did — see [what the machine read and wrote](#what-the-machine-read-and-wrote). |
 | `arm-exc` | Every synchronous exception an ARM core takes (not `svc`), with the `ESR`/`FAR` its handler sees, and for an external abort the physical address nothing answered at. |
 | `cmp` | Every system-timer compare arm. |
 | `dwc2` | The DWC2 USB OTG controller (`0x7E98_0000`): every write, and every read that differs from the previous read of the same register, so a poll shows once. |
@@ -164,6 +164,50 @@ These need a `diag` build:
 Before #95 each channel was an `RVF_DBG_<NAME>=1` variable (the eMMC one
 `EMMC_DBG`), and the I/O log was `--io-log`. `boot` warns about a variable
 that is still set and names the channel that replaced it.
+
+---
+
+## What the machine read and wrote
+
+`--log io` writes what crossed the peripherals to stderr (or to `--log-file
+<path>`), apart from the console: block runs on the SD card and the USB stick
+with the files they belong to, the OTP rows the firmware read and programmed,
+and what the network peer did
+([#35](https://github.com/valtzu/rpi-virt-fw/issues/35)). The file names come
+from the bench reading the image's partition table and FAT itself, so the
+firmware stays a black box:
+
+```text
+   0.000944 io: otp  read  row 28  = 0x1aa2bb31  serial number
+   6.270753 io: sd   read  lba 0x0+2  (partition table)
+   6.271470 io: sd   read  lba 0x800+2  p1:(boot sector)
+   6.278862 io: sd   read  lba 0x1014+5  p1:/config.txt, p1:/start4.elf
+   6.291327 io: sd   read  lba 0x101c+4489  p1:/start4.elf, p1:/fixup4.dat
+   6.393364 io: sd   read  lba 0x21a8+9  p1:/fixup4.dat, p1:/bcm2711-rpi-4-b.dtb
+```
+
+An OTP line ends with what the row is for, after Raspberry Pi's
+[OTP register list](https://github.com/raspberrypi/documentation/blob/ecd7a8129d4f2cb908d6cbd6ea5a994e0091285d/documentation/asciidoc/computers/raspberry-pi/otp-bits.adoc)
+([#101](https://github.com/valtzu/rpi-virt-fw/issues/101)), and with `(blank)`
+when none of its fuses are programmed. A row the firmware programs shows as
+`io: otp  write row <n> = <new>  <meaning> (was <old>)`, and what the network
+peer did as `io: net  dhcp: ...`.
+
+Programming works the way start4 drives the OTP block, key sequence first, and a
+fuse only ever goes from 0 to 1
+([#92](https://github.com/valtzu/rpi-virt-fw/issues/92)). To watch it, program
+two words of customer OTP (rows 36 and 37) the way
+`vcmailbox 0x00038021 16 16 0 2 ...` does on a Pi, and read them back, on the
+halt-kernel card (`KERNEL=halt scripts/make-sd.sh firmware/sd-halt.img`):
+
+```bash
+boot --eeprom firmware/pieeprom.bin --sd firmware/sd-halt.img --log io \
+  --mbox-property 0x00038021:16=0.2.0x11111111.0x22222222 \
+  --mbox-property 0x00030021:16=0.2
+```
+
+The fuses a run programmed are kept across runs with `--otp` — see
+[`running.md`](running.md).
 
 ## Output and fixtures
 

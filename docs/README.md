@@ -54,6 +54,9 @@ joined by name to an FXL6408 pin.
 | Document | What is in it |
 |---|---|
 | [`boot-chain.md`](boot-chain.md) | The boot stages, from the VPU ROM to Linux, and what each one reads |
+| [`running.md`](running.md) | Boot media, the SD-card variants, the OTP fuse files, wall budgets |
+| [`building.md`](building.md) | Build profiles, the `diag` feature, PGO, the build's share of the machine |
+| [`device-tree.md`](device-tree.md) | Getting the patched device tree out, and where `rpi-machine-id` comes from |
 | [`periph/`](periph/) | Generated from `specs/*.toml`: one page per register block, with provenance, plus the `parent` tree and the interrupt lines |
 | [`vpu-isa.md`](vpu-isa.md) | The VideoCore IV instruction set, with the evidence for each statement — generated from [`isa/vpu.toml`](../isa/vpu.toml) |
 | [`diagnostics.md`](diagnostics.md) | The log channels and `RVF_*` switches that find a wall |
