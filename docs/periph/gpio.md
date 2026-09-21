@@ -55,7 +55,7 @@ Function select, three bits a pin, ten pins a register: 0 input, 1 output, 4 ALT
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, GPIO: `GPFSEL0`..`GPFSEL5`
+- datasheet (high): BCM2711 ARM Peripherals, §5.2 (GPIO): `GPFSEL0`..`GPFSEL5`
 - trace (high): start4 puts GPIO 0/1 on ALT0 for the HAT EEPROM (`GPFSEL0` <- `0x4`, then `0x24`, at `0x3ECC9562`) and 14/15 on ALT0 for the console (`GPFSEL1` `0x24000`)
 
 ## `GPSET`
@@ -66,7 +66,7 @@ Write 1 to drive a pin high; a 0 bit does nothing. A read answers `0x6770696f` �
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, GPIO: `GPSET0` / `GPSET1`
+- datasheet (high): BCM2711 ARM Peripherals, §5.2 (GPIO): `GPSET0` / `GPSET1`
 - measured (high): `/dev/gpiomem` on a Raspberry Pi 4B d03115: `0x1c` and `0x20` both read `0x6770696f`, as do `GPCLR0/1` and the reserved words between them
 
 ## `GPCLR`
@@ -77,7 +77,7 @@ Write 1 to drive a pin low. Reads answer the block tag, as `GPSET` does.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, GPIO: `GPCLR0` / `GPCLR1`
+- datasheet (high): BCM2711 ARM Peripherals, §5.2 (GPIO): `GPCLR0` / `GPCLR1`
 - measured (high): `/dev/gpiomem` on a Raspberry Pi 4B d03115: `0x28` and `0x2c` read `0x6770696f`
 
 ## `GPLEV`
@@ -88,7 +88,7 @@ The level of each pin. An output reads its own latch; anything else reads its te
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, GPIO: `GPLEV0` / `GPLEV1`
+- datasheet (high): BCM2711 ARM Peripherals, §5.2 (GPIO): `GPLEV0` / `GPLEV1`
 - measured (high): `/dev/gpiomem` on a Raspberry Pi 4B d03115: `GPLEV0` `0x1000c1ff`, `GPLEV1` `0x38fb`
 
 ## `GPEDS`
@@ -99,7 +99,7 @@ Edge / level detect status, one bit a pin, cleared by writing 1, and the two int
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, GPIO: `GPEDS0` / `GPEDS1`
+- datasheet (high): BCM2711 ARM Peripherals, §5.2 (GPIO): `GPEDS0` / `GPEDS1`
 
 ## `GPREN`
 
@@ -109,7 +109,7 @@ Rising-edge detect enable.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, GPIO: `GPREN0` / `GPREN1`
+- datasheet (high): BCM2711 ARM Peripherals, §5.2 (GPIO): `GPREN0` / `GPREN1`
 
 ## `GPFEN`
 
@@ -119,7 +119,7 @@ Falling-edge detect enable.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, GPIO: `GPFEN0` / `GPFEN1`
+- datasheet (high): BCM2711 ARM Peripherals, §5.2 (GPIO): `GPFEN0` / `GPFEN1`
 
 ## `GPHEN`
 
@@ -129,7 +129,7 @@ High-level detect enable.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, GPIO: `GPHEN0` / `GPHEN1`
+- datasheet (high): BCM2711 ARM Peripherals, §5.2 (GPIO): `GPHEN0` / `GPHEN1`
 
 ## `GPLEN`
 
@@ -139,7 +139,7 @@ Low-level detect enable.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, GPIO: `GPLEN0` / `GPLEN1`
+- datasheet (high): BCM2711 ARM Peripherals, §5.2 (GPIO): `GPLEN0` / `GPLEN1`
 
 ## `GPAREN`
 
@@ -149,7 +149,7 @@ Asynchronous rising-edge detect enable.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, GPIO: `GPAREN0` / `GPAREN1`
+- datasheet (high): BCM2711 ARM Peripherals, §5.2 (GPIO): `GPAREN0` / `GPAREN1`
 
 ## `GPAFEN`
 
@@ -159,7 +159,7 @@ Asynchronous falling-edge detect enable.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, GPIO: `GPAFEN0` / `GPAFEN1`
+- datasheet (high): BCM2711 ARM Peripherals, §5.2 (GPIO): `GPAFEN0` / `GPAFEN1`
 
 ## `GPPUD`
 
@@ -169,7 +169,7 @@ The BCM2835 pull control: a direction here, then the pins in `GPPUDCLK`. The BCM
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, GPIO: `GPPUD`, marked as having no effect on this chip
+- datasheet (high): BCM2711 ARM Peripherals, §5.2 (GPIO): `GPPUD`, marked as having no effect on this chip
 - decompile (high): start4 `FUN_0ecc95ec` writes `GPPUD` then `GPPUDCLK`, with two short delay loops around it, but only when the flag at `gp+0x1564` is clear; `FUN_0ecc9762` takes the `GPIO_PUP_PDN_CNTRL_REG0` path instead
 
 ## `GPPUDCLK`
@@ -180,7 +180,7 @@ Which pins the `GPPUD` direction applies to on a BCM2835. No effect here either.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, GPIO: `GPPUDCLK0` / `GPPUDCLK1`
+- datasheet (high): BCM2711 ARM Peripherals, §5.2 (GPIO): `GPPUDCLK0` / `GPPUDCLK1`
 
 ## `PIN_MUX`
 
@@ -215,12 +215,12 @@ Sources:
 
 ## `PUP_PDN`
 
-Offset `0x0E4`, 4 elements 0x4 apart · access `rw` · 32 bits · reset `0x0`
+Offset `0x0E4`, 4 elements 0x4 apart · access `rw` · 32 bits
 
-The BCM2711 pull control: two bits a pin, sixteen pins a register — 0 no pulling, 1 pull-up, 2 pull-down, 3 reserved. `PUP_PDN3` holds pins 48..57. This is the register the firmware actually uses, and the one a `GPLEV` bit falls back on for a pin that is not an output.
+The BCM2711 pull control: two bits a pin, sixteen pins a register — 0 no pulling, 1 pull-up, 2 pull-down, 3 reserved. `PUP_PDN3` holds pins 48..57. This is the register the firmware actually uses, and the one a `GPLEV` bit falls back on for a pin that is not an output. The four words come out of reset with a pull on nearly every pin rather than at 0, which is why there is no `reset` here: they are `0xAAA95555`, `0xA0AAAAAA`, `0x50AAA95A` and `0x00055555` in `PUP_PDN_RESET` (`src/periph/gpio.rs`).
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, GPIO: `GPIO_PUP_PDN_CNTRL_REG0`..`REG3`
+- datasheet (high): BCM2711 ARM Peripherals, §5.2 Tables 90 to 93 (`GPIO_PUP_PDN_CNTRL_REG0`..`REG3`), each pin’s field with its own reset value; §5.3 Table 94 gives the same as a `Pull` column — pins 0 to 8 up, 9 to 27 down, 28 and 29 none, 30 to 33 down, 34 to 36 up, 37 to 43 down, 44 and 45 none, 46 to 57 up — _release 4 of the datasheet corrected these reset values; earlier releases are not to be trusted for them. They are the power-on state, not what a running board holds — the measured words below were read after the firmware and Linux had set their pulls._
 - measured (high): `/dev/gpiomem` on a Raspberry Pi 4B d03115: `REG0` `0x4aa95555` — GPIO 0..7 at `0b01`, the pull-ups the ID EEPROM and I²C 1 lines need — `REG1` `0x19aaaaaa`, `REG2` `0x55505544`, `REG3` `0xaaaaa`
 - trace (high): start4 ends a boot with `REG0` `0x40000005`: GPIO 0 and 15 pulled up, 14 not pulled, which is `pin@p14` / `pin@p15` of `pins_4b` in `firmware/dt-blob.dts`

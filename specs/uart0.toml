@@ -43,7 +43,7 @@ notes  = "Write sends a byte; read pops the receive FIFO."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, UART: `DR`"
+ref        = "BCM2711 ARM Peripherals, §11.5 (UART): `DR`"
 confidence = "high"
 
 [[register.source]]
@@ -59,7 +59,7 @@ notes  = "FIFO and line flags."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, UART: `FR`"
+ref        = "BCM2711 ARM Peripherals, §11.5 (UART): `FR`"
 confidence = "high"
 
 [[register.source]]
@@ -74,7 +74,7 @@ notes = "Transmitting. The model never is."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, UART: `FR`"
+ref        = "BCM2711 ARM Peripherals, §11.5 (UART): `FR`"
 confidence = "high"
 
 [[register.field]]
@@ -84,7 +84,7 @@ notes = "Receive FIFO empty."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, UART: `FR`"
+ref        = "BCM2711 ARM Peripherals, §11.5 (UART): `FR`"
 confidence = "high"
 
 [[register.field]]
@@ -94,7 +94,7 @@ notes = "Transmit FIFO full. The model never is."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, UART: `FR`"
+ref        = "BCM2711 ARM Peripherals, §11.5 (UART): `FR`"
 confidence = "high"
 
 [[register.field]]
@@ -104,7 +104,7 @@ notes = "Receive FIFO full."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, UART: `FR`"
+ref        = "BCM2711 ARM Peripherals, §11.5 (UART): `FR`"
 confidence = "high"
 
 [[register.field]]
@@ -114,7 +114,7 @@ notes = "Transmit FIFO empty."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, UART: `FR`"
+ref        = "BCM2711 ARM Peripherals, §11.5 (UART): `FR`"
 confidence = "high"
 
 [[register]]
@@ -125,7 +125,7 @@ notes  = "Integer part of the baud divisor (16 bits)."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, UART: `IBRD`"
+ref        = "BCM2711 ARM Peripherals, §11.5 (UART): `IBRD`"
 confidence = "high"
 
 [[register]]
@@ -136,7 +136,7 @@ notes  = "Fractional part of the baud divisor, in 64ths (6 bits)."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, UART: `FBRD`"
+ref        = "BCM2711 ARM Peripherals, §11.5 (UART): `FBRD`"
 confidence = "high"
 
 [[register]]
@@ -147,7 +147,7 @@ notes  = "Line control. Toggling `FEN` flushes the receive FIFO."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, UART: `LCRH`"
+ref        = "BCM2711 ARM Peripherals, §11.5 (UART): `LCRH`"
 confidence = "high"
 
 [[register.field]]
@@ -157,7 +157,7 @@ notes = "FIFOs on; off makes the receiver a one-character holding register."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, UART: `LCRH`"
+ref        = "BCM2711 ARM Peripherals, §11.5 (UART): `LCRH`"
 confidence = "high"
 
 [[register]]
@@ -168,7 +168,7 @@ notes  = "Control."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, UART: `CR`"
+ref        = "BCM2711 ARM Peripherals, §11.5 (UART): `CR`"
 confidence = "high"
 
 [[register.field]]
@@ -178,7 +178,7 @@ notes = "UART on."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, UART: `CR`"
+ref        = "BCM2711 ARM Peripherals, §11.5 (UART): `CR`"
 confidence = "high"
 
 [[register.field]]
@@ -188,7 +188,7 @@ notes = "Transmitter on."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, UART: `CR`"
+ref        = "BCM2711 ARM Peripherals, §11.5 (UART): `CR`"
 confidence = "high"
 
 [[register.field]]
@@ -198,7 +198,7 @@ notes = "Receiver on."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, UART: `CR`"
+ref        = "BCM2711 ARM Peripherals, §11.5 (UART): `CR`"
 confidence = "high"
 
 [[register]]
@@ -210,7 +210,7 @@ notes  = "FIFO interrupt trigger levels; reset is half full both ways."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, UART: `IFLS`"
+ref        = "BCM2711 ARM Peripherals, §11.5 (UART): `IFLS`"
 confidence = "high"
 
 [[register.field]]
@@ -220,7 +220,7 @@ notes = "Transmit trigger level."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, UART: `IFLS`"
+ref        = "BCM2711 ARM Peripherals, §11.5 (UART): `IFLS`"
 confidence = "high"
 
 [[register.field]]
@@ -230,7 +230,7 @@ notes = "Receive trigger level: 1/8, 1/4, 1/2, 3/4, 7/8 full."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, UART: `IFLS`"
+ref        = "BCM2711 ARM Peripherals, §11.5 (UART): `IFLS`"
 confidence = "high"
 
 [[register]]
@@ -241,7 +241,7 @@ notes  = "Interrupt mask, same bit layout as `RIS`."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, UART: `IMSC`"
+ref        = "BCM2711 ARM Peripherals, §11.5 (UART): `IMSC`"
 confidence = "high"
 
 [[register.source]]
@@ -257,7 +257,7 @@ notes  = "Raw interrupt status. `IMSC`, `MIS` and `ICR` use the same bit positio
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, UART: `RIS`"
+ref        = "BCM2711 ARM Peripherals, §11.5 (UART): `RIS`"
 confidence = "high"
 
 [[register.field]]
@@ -267,7 +267,7 @@ notes = "Receive FIFO at or past its trigger level."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, UART: `RIS`"
+ref        = "BCM2711 ARM Peripherals, §11.5 (UART): `RIS`"
 confidence = "high"
 
 [[register.field]]
@@ -277,7 +277,7 @@ notes = "Receive timeout: characters waiting and none new for 32 bit periods."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, UART: `RIS`"
+ref        = "BCM2711 ARM Peripherals, §11.5 (UART): `RIS`"
 confidence = "high"
 
 [[register]]
@@ -288,7 +288,7 @@ notes  = "`RIS & IMSC`."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, UART: `MIS`"
+ref        = "BCM2711 ARM Peripherals, §11.5 (UART): `MIS`"
 confidence = "high"
 
 [[register]]
@@ -299,5 +299,5 @@ notes  = "Write 1 to clear a raw interrupt."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, UART: `ICR`"
+ref        = "BCM2711 ARM Peripherals, §11.5 (UART): `ICR`"
 confidence = "high"

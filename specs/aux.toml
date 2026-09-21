@@ -33,7 +33,7 @@ notes  = "Which auxiliary has an interrupt pending. Bit 0 follows the mini-UART;
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_IRQ`"
+ref        = "BCM2711 ARM Peripherals, §2.1.1 (Auxiliaries): `AUX_IRQ`"
 confidence = "high"
 
 [[register]]
@@ -44,7 +44,7 @@ notes  = "Per-auxiliary enables."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_ENABLES`"
+ref        = "BCM2711 ARM Peripherals, §2.1.1 (Auxiliaries): `AUX_ENABLES`"
 confidence = "high"
 
 [[register.field]]
@@ -54,7 +54,7 @@ notes = "Mini-UART on."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_ENABLES`"
+ref        = "BCM2711 ARM Peripherals, §2.1.1 (Auxiliaries): `AUX_ENABLES`"
 confidence = "high"
 
 [[register.field]]
@@ -64,7 +64,7 @@ notes = "SPI1 on."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_ENABLES`"
+ref        = "BCM2711 ARM Peripherals, §2.1.1 (Auxiliaries): `AUX_ENABLES`"
 confidence = "high"
 
 [[register.field]]
@@ -74,7 +74,7 @@ notes = "SPI2 on."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_ENABLES`"
+ref        = "BCM2711 ARM Peripherals, §2.1.1 (Auxiliaries): `AUX_ENABLES`"
 confidence = "high"
 
 [[register]]
@@ -85,7 +85,7 @@ notes  = "Data: write transmits a byte, read pops the receive FIFO. With `MU_LCR
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_IO_REG`"
+ref        = "BCM2711 ARM Peripherals, §2.2.2 (Auxiliaries): `AUX_MU_IO_REG`"
 confidence = "high"
 
 [[register]]
@@ -96,7 +96,7 @@ notes  = "Interrupt enables. With `MU_LCR.DLAB` set it is the baud-rate counter'
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_IER_REG`"
+ref        = "BCM2711 ARM Peripherals, §2.2.2 (Auxiliaries): `AUX_MU_IER_REG`"
 confidence = "high"
 
 [[register.field]]
@@ -127,7 +127,7 @@ notes  = "Interrupt identity on read, FIFO clear on write (bit 1 clears the rece
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_IIR_REG`"
+ref        = "BCM2711 ARM Peripherals, §2.2.2 (Auxiliaries): `AUX_MU_IIR_REG`"
 confidence = "high"
 
 [[register.field]]
@@ -137,7 +137,7 @@ notes = "Clear while an interrupt is pending — the 16550's inverted sense."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_IIR_REG`"
+ref        = "BCM2711 ARM Peripherals, §2.2.2 (Auxiliaries): `AUX_MU_IIR_REG`"
 confidence = "high"
 
 [[register.field]]
@@ -147,7 +147,7 @@ notes = "Which interrupt: `0b10` a byte in the receive FIFO, `0b01` room in the 
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_IIR_REG`"
+ref        = "BCM2711 ARM Peripherals, §2.2.2 (Auxiliaries): `AUX_MU_IIR_REG`"
 confidence = "high"
 
 [[register.field]]
@@ -157,7 +157,7 @@ notes = "Both set: the FIFOs are always enabled on the mini-UART."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_IIR_REG`"
+ref        = "BCM2711 ARM Peripherals, §2.2.2 (Auxiliaries): `AUX_MU_IIR_REG`"
 confidence = "high"
 
 [[register]]
@@ -168,7 +168,7 @@ notes  = "Line control."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_LCR_REG`"
+ref        = "BCM2711 ARM Peripherals, §2.2.2 (Auxiliaries): `AUX_MU_LCR_REG`"
 confidence = "high"
 
 [[register.field]]
@@ -178,7 +178,7 @@ notes = "Set for eight data bits, clear for seven. The model does not change how
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_LCR_REG`"
+ref        = "BCM2711 ARM Peripherals, §2.2.2 (Auxiliaries): `AUX_MU_LCR_REG`"
 confidence = "high"
 
 [[register.field]]
@@ -188,7 +188,7 @@ notes = "While set, `MU_IO` and `MU_IER` are the low and high bytes of the baud-
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_LCR_REG` (`DLAB access`, and `AUX_MU_IO_REG` / `AUX_MU_IER_REG`, whose descriptions give them the baud bytes)"
+ref        = "BCM2711 ARM Peripherals, §2.2.2 (Auxiliaries): `AUX_MU_LCR_REG` (`DLAB access`, and `AUX_MU_IO_REG` / `AUX_MU_IER_REG`, whose descriptions give them the baud bytes)"
 confidence = "high"
 
 [[register]]
@@ -199,7 +199,7 @@ notes  = "Modem control."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_MCR_REG`"
+ref        = "BCM2711 ARM Peripherals, §2.2.2 (Auxiliaries): `AUX_MU_MCR_REG`"
 confidence = "high"
 
 [[register]]
@@ -210,7 +210,7 @@ notes  = "Line status."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_LSR_REG`"
+ref        = "BCM2711 ARM Peripherals, §2.2.2 (Auxiliaries): `AUX_MU_LSR_REG`"
 confidence = "high"
 
 [[register.field]]
@@ -220,7 +220,7 @@ notes = "A received byte is waiting."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_LSR_REG`"
+ref        = "BCM2711 ARM Peripherals, §2.2.2 (Auxiliaries): `AUX_MU_LSR_REG`"
 confidence = "high"
 
 [[register.field]]
@@ -230,7 +230,7 @@ notes = "A byte arrived with the receive FIFO full. Never set here: input waits 
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_LSR_REG`"
+ref        = "BCM2711 ARM Peripherals, §2.2.2 (Auxiliaries): `AUX_MU_LSR_REG`"
 confidence = "high"
 
 [[register.field]]
@@ -240,7 +240,7 @@ notes = "Room for another byte."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_LSR_REG`"
+ref        = "BCM2711 ARM Peripherals, §2.2.2 (Auxiliaries): `AUX_MU_LSR_REG`"
 confidence = "high"
 
 [[register.field]]
@@ -250,7 +250,7 @@ notes = "Transmitter idle."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_LSR_REG`"
+ref        = "BCM2711 ARM Peripherals, §2.2.2 (Auxiliaries): `AUX_MU_LSR_REG`"
 confidence = "high"
 
 [[register]]
@@ -261,7 +261,7 @@ notes  = "Modem status."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_MSR_REG`"
+ref        = "BCM2711 ARM Peripherals, §2.2.2 (Auxiliaries): `AUX_MU_MSR_REG`"
 confidence = "high"
 
 [[register]]
@@ -272,7 +272,7 @@ notes  = "One byte of scratch storage."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_SCRATCH`"
+ref        = "BCM2711 ARM Peripherals, §2.2.2 (Auxiliaries): `AUX_MU_SCRATCH`"
 confidence = "high"
 
 [[register]]
@@ -283,7 +283,7 @@ notes  = "Extra control: receiver / transmitter enables, flow control."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_CNTL_REG`"
+ref        = "BCM2711 ARM Peripherals, §2.2.2 (Auxiliaries): `AUX_MU_CNTL_REG`"
 confidence = "high"
 
 [[register.field]]
@@ -293,7 +293,7 @@ notes = "Receiver on. Nothing leaves the line while it is clear."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_CNTL_REG`"
+ref        = "BCM2711 ARM Peripherals, §2.2.2 (Auxiliaries): `AUX_MU_CNTL_REG`"
 confidence = "high"
 
 [[register.field]]
@@ -303,7 +303,7 @@ notes = "Transmitter on."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_CNTL_REG`"
+ref        = "BCM2711 ARM Peripherals, §2.2.2 (Auxiliaries): `AUX_MU_CNTL_REG`"
 confidence = "high"
 
 [[register]]
@@ -314,7 +314,7 @@ notes  = "Extra status: the FIFO fill levels and the ready bits, in the mini-UAR
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_STAT_REG`"
+ref        = "BCM2711 ARM Peripherals, §2.2.2 (Auxiliaries): `AUX_MU_STAT_REG`"
 confidence = "high"
 
 [[register.field]]
@@ -324,7 +324,7 @@ notes = "A received byte is waiting, as `MU_LSR.DATA_READY` says."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_STAT_REG`"
+ref        = "BCM2711 ARM Peripherals, §2.2.2 (Auxiliaries): `AUX_MU_STAT_REG`"
 confidence = "high"
 
 [[register.field]]
@@ -334,7 +334,7 @@ notes = "Room in the transmit FIFO. Always set here."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_STAT_REG`"
+ref        = "BCM2711 ARM Peripherals, §2.2.2 (Auxiliaries): `AUX_MU_STAT_REG`"
 confidence = "high"
 
 [[register.field]]
@@ -344,7 +344,7 @@ notes = "The receiver is not in the middle of a character."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_STAT_REG`"
+ref        = "BCM2711 ARM Peripherals, §2.2.2 (Auxiliaries): `AUX_MU_STAT_REG`"
 confidence = "high"
 
 [[register.field]]
@@ -354,7 +354,7 @@ notes = "The transmitter is not in the middle of a character. Always set here."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_STAT_REG`"
+ref        = "BCM2711 ARM Peripherals, §2.2.2 (Auxiliaries): `AUX_MU_STAT_REG`"
 confidence = "high"
 
 [[register.field]]
@@ -364,7 +364,7 @@ notes = "As `MU_LSR.RX_OVERRUN`. Never set here."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_STAT_REG`"
+ref        = "BCM2711 ARM Peripherals, §2.2.2 (Auxiliaries): `AUX_MU_STAT_REG`"
 confidence = "high"
 
 [[register.field]]
@@ -374,7 +374,7 @@ notes = "No room for another byte. Never set here."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_STAT_REG`"
+ref        = "BCM2711 ARM Peripherals, §2.2.2 (Auxiliaries): `AUX_MU_STAT_REG`"
 confidence = "high"
 
 [[register.field]]
@@ -384,7 +384,7 @@ notes = "Nothing waiting to go out. Always set here."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_STAT_REG`"
+ref        = "BCM2711 ARM Peripherals, §2.2.2 (Auxiliaries): `AUX_MU_STAT_REG`"
 confidence = "high"
 
 [[register.field]]
@@ -394,7 +394,7 @@ notes = "`TX_FIFO_EMPTY` and `TX_IDLE` together. Always set here."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_STAT_REG`"
+ref        = "BCM2711 ARM Peripherals, §2.2.2 (Auxiliaries): `AUX_MU_STAT_REG`"
 confidence = "high"
 
 [[register.field]]
@@ -404,7 +404,7 @@ notes = "How many bytes the receive FIFO holds."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_STAT_REG`"
+ref        = "BCM2711 ARM Peripherals, §2.2.2 (Auxiliaries): `AUX_MU_STAT_REG`"
 confidence = "high"
 
 [[register.field]]
@@ -414,7 +414,7 @@ notes = "How many bytes the transmit FIFO holds. Always 0 here."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_STAT_REG`"
+ref        = "BCM2711 ARM Peripherals, §2.2.2 (Auxiliaries): `AUX_MU_STAT_REG`"
 confidence = "high"
 
 [[register]]
@@ -425,5 +425,5 @@ notes  = "Baud-rate counter (16 bits): the line runs at `system_clock / (8 * (MU
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, Auxiliaries: `AUX_MU_BAUD_REG`"
+ref        = "BCM2711 ARM Peripherals, §2.2.2 (Auxiliaries): `AUX_MU_BAUD_REG`"
 confidence = "high"

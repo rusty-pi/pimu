@@ -58,24 +58,24 @@ Control. start4 reads a register in one of two ways. Either it sets `ST` for the
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: `C`
+- datasheet (high): BCM2711 ARM Peripherals, §3.2 (BSC): `C`
 - trace (high): pinned start4: queued read at `0x3ECF0FD8` / `0x3ECF1150` with the FIFO writes at `0x3ECF115A` after it; write-then-read at `0x3ECF0FD8`, FIFO at `0x3ECF1046`, then `0x3ECF1100`; the common end at `0x3ECF2F92`, `0x3ECF2FFC`, `0x3ECF1826` / `0x3ECF185A`, `0x3ECF3028`
 
 `READ` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: `C.READ`
+- datasheet (high): BCM2711 ARM Peripherals, §3.2 (BSC): `C.READ`
 
 `CLEAR` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: `C.CLEAR`
+- datasheet (high): BCM2711 ARM Peripherals, §3.2 (BSC): `C.CLEAR`
 
 `ST` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: `C.ST`
+- datasheet (high): BCM2711 ARM Peripherals, §3.2 (BSC): `C.ST`
 
 `I2CEN` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: `C.I2CEN`
+- datasheet (high): BCM2711 ARM Peripherals, §3.2 (BSC): `C.I2CEN`
 
 ## `S`
 
@@ -98,47 +98,47 @@ Status; `DONE`, `ERR` and `CLKT` are write-1-to-clear.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: `S`
+- datasheet (high): BCM2711 ARM Peripherals, §3.2 (BSC): `S`
 
 `TA` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: `S.TA`
+- datasheet (high): BCM2711 ARM Peripherals, §3.2 (BSC): `S.TA`
 
 `DONE` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: `S.DONE`
+- datasheet (high): BCM2711 ARM Peripherals, §3.2 (BSC): `S.DONE`
 
 `TXW` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: `S.TXW`
+- datasheet (high): BCM2711 ARM Peripherals, §3.2 (BSC): `S.TXW`
 
 `RXR` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: `S.RXR`
+- datasheet (high): BCM2711 ARM Peripherals, §3.2 (BSC): `S.RXR`
 
 `TXD` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: `S.TXD`
+- datasheet (high): BCM2711 ARM Peripherals, §3.2 (BSC): `S.TXD`
 
 `RXD` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: `S.RXD`
+- datasheet (high): BCM2711 ARM Peripherals, §3.2 (BSC): `S.RXD`
 
 `TXE` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: `S.TXE`
+- datasheet (high): BCM2711 ARM Peripherals, §3.2 (BSC): `S.TXE`
 
 `RXF` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: `S.RXF`
+- datasheet (high): BCM2711 ARM Peripherals, §3.2 (BSC): `S.RXF`
 
 `ERR` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: `S.ERR`
+- datasheet (high): BCM2711 ARM Peripherals, §3.2 (BSC): `S.ERR`
 
 `CLKT` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: `S.CLKT`
+- datasheet (high): BCM2711 ARM Peripherals, §3.2 (BSC): `S.CLKT`
 
 ## `DLEN`
 
@@ -148,7 +148,7 @@ Transfer length; reads back 0 once every byte has moved.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: `DLEN`
+- datasheet (high): BCM2711 ARM Peripherals, §3.2 (BSC): `DLEN`
 
 ## `A`
 
@@ -158,7 +158,7 @@ Offset `0x00C` · access `rw` · 32 bits
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: `A`
+- datasheet (high): BCM2711 ARM Peripherals, §3.2 (BSC): `A`
 
 ## `FIFO`
 
@@ -168,7 +168,7 @@ Data FIFO, 16 bytes each way.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: `FIFO`
+- datasheet (high): BCM2711 ARM Peripherals, §3.2 (BSC): `FIFO`
 
 ## `DIV`
 
@@ -178,7 +178,7 @@ Clock divisor. start4 programs 5000 (100 kHz) for its PMIC sessions and 2500 for
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: `DIV`
+- datasheet (high): BCM2711 ARM Peripherals, §3.2 (BSC): `DIV`
 - measured (high): `vcgencmd measure_clock core` on a Raspberry Pi 4B d03115: 500000992 Hz
 - decompile (high): bootsys `0x8000346E`: `DIV = rate_mhz * 1e6 / 100000` from the frequency query `0x800026F6`, `DEL = max(DIV >> 3, 1) << 16 | max(DIV >> 1, 1)`; the pinned bootloader in the model, as a Raspberry Pi 4B d03115, makes 32 transfers at 540, then 27 in bootsys and all of bootmain's at 5000
 - trace (high): pinned start4 on `0x7E205E00`: `0x9C4` at `0x3ECF2E56` before its FXL6408 transfers, `0x1388` before the ones to `0x1B` / `0x1E`
@@ -191,7 +191,7 @@ Data delay. Stored, otherwise ignored. start4 pairs it with `DIV`: `0x9C0271` wi
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: `DEL`
+- datasheet (high): BCM2711 ARM Peripherals, §3.2 (BSC): `DEL`
 
 ## `CLKT`
 
@@ -201,5 +201,5 @@ Clock-stretch timeout. Stored, otherwise ignored. start4 writes the session's ti
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, BSC: `CLKT`
+- datasheet (high): BCM2711 ARM Peripherals, §3.2 (BSC): `CLKT`
 - trace (high): pinned start4: `0x100` at `0x3ECF2DD6` (session open, transfer start) and `0x3ECF2DFE` (after the close at `0x3ECF2ECC`)

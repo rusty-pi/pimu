@@ -7,7 +7,7 @@ notes   = "The analogue PLLs are not modelled: every PLL reads locked, every `*_
 
 [[block.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, General Purpose GPIO Clocks: the `CM_*CTL` / `CM_*DIV` layout and the `0x5A` password"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 (General Purpose GPIO Clocks): the `CM_*CTL` / `CM_*DIV` layout and the `0x5A` password"
 confidence = "high"
 
 [[block.source]]

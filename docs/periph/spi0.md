@@ -56,44 +56,44 @@ Control and status.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, SPI: `CS`
+- datasheet (high): BCM2711 ARM Peripherals, §9.5 (SPI): `CS`
 
 `CS` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, SPI: `CS`
+- datasheet (high): BCM2711 ARM Peripherals, §9.5 (SPI): `CS`
 
 `CLEAR_TX` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, SPI: `CS.CLEAR`
+- datasheet (high): BCM2711 ARM Peripherals, §9.5 (SPI): `CS.CLEAR`
 
 `CLEAR_RX` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, SPI: `CS.CLEAR`
+- datasheet (high): BCM2711 ARM Peripherals, §9.5 (SPI): `CS.CLEAR`
 
 `TA` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, SPI: `CS.TA`
+- datasheet (high): BCM2711 ARM Peripherals, §9.5 (SPI): `CS.TA`
 
 `DONE` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, SPI: `CS.DONE`
+- datasheet (high): BCM2711 ARM Peripherals, §9.5 (SPI): `CS.DONE`
 - decompile (high): `0x3ED77E00`: `do {} while ((CS & 0x10000) == 0)` after its byte loop, read at `0x3ED77EE8`
 
 `RXD` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, SPI: `CS.RXD`
+- datasheet (high): BCM2711 ARM Peripherals, §9.5 (SPI): `CS.RXD`
 
 `TXD` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, SPI: `CS.TXD`
+- datasheet (high): BCM2711 ARM Peripherals, §9.5 (SPI): `CS.TXD`
 
 `RXR` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, SPI: `CS.RXR`
+- datasheet (high): BCM2711 ARM Peripherals, §9.5 (SPI): `CS.RXR`
 
 `RXF` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, SPI: `CS.RXF`
+- datasheet (high): BCM2711 ARM Peripherals, §9.5 (SPI): `CS.RXF`
 
 ## `FIFO`
 
@@ -103,7 +103,7 @@ Write shifts a byte out, read takes the byte shifted in.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, SPI: `FIFO`
+- datasheet (high): BCM2711 ARM Peripherals, §9.5 (SPI): `FIFO`
 
 ## `CLK`
 
@@ -113,7 +113,7 @@ Clock divider. start4 writes 63 before every transfer: `max(ceil(source / 8 MHz)
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, SPI: `CLK`
+- datasheet (high): BCM2711 ARM Peripherals, §9.5 (SPI): `CLK`
 - decompile (high): `0x3ED77E00`: 64-bit `ceil(rate / speed)` then `max(.., 2)`; speed 8000000 from the configuration at `DAT_0edfe1c8`
 - trace (high): start4 `0x3ED77E74` writes `0x3F`
 
@@ -125,7 +125,7 @@ DMA data length.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, SPI: `DLEN`
+- datasheet (high): BCM2711 ARM Peripherals, §9.5 (SPI): `DLEN`
 
 ## `LTOH`
 
@@ -135,7 +135,7 @@ LoSSI output hold delay.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, SPI: `LTOH`
+- datasheet (high): BCM2711 ARM Peripherals, §9.5 (SPI): `LTOH`
 
 ## `DC`
 
@@ -145,4 +145,4 @@ DMA DREQ controls.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, SPI: `DC`
+- datasheet (high): BCM2711 ARM Peripherals, §9.5 (SPI): `DC`

@@ -280,6 +280,14 @@ const CM4_LINES: &[(usize, &str)] = &[
 /// as the SPI flash clock either way.
 const PI400_LINES: &[(usize, &str)] = &[(42, "PWR_LED_CLK")];
 
+/// What `GPIO_PUP_PDN_CNTRL_REG0`..`REG3` hold out of reset: pins 0 to 8 pulled
+/// up, 9 to 27 down, 28 and 29 with no pull, 30 to 33 down, 34 to 36 up, 37 to
+/// 43 down, 44 and 45 with no pull, and 46 to 57 up. A pin nothing drives reads
+/// its termination, so a firmware that looks at a pin before it sets a pull
+/// sees these.
+const PUP_PDN_RESET: [u32; PUP_PDN_COUNT as usize] =
+    [0xAAA9_5555, 0xA0AA_AAAA, 0x50AA_A95A, 0x0005_5555];
+
 pub struct Gpio {
     /// `GPFSEL0`..`GPFSEL5`, as written.
     fsel: [u32; GPFSEL_COUNT as usize],
@@ -313,7 +321,7 @@ impl Default for Gpio {
             detect: [[0; BANKS]; DETECTS.len()],
             pud: 0,
             pudclk: [0; BANKS],
-            pup_pdn: [0; PUP_PDN_COUNT as usize],
+            pup_pdn: PUP_PDN_RESET,
             pin_mux: 0,
             pad_cfg: 0,
             lines: PI4B_LINES,
@@ -702,6 +710,10 @@ mod tests {
     #[test]
     fn a_set_of_pins_that_are_not_outputs_changes_no_level() {
         let mut g = gpio();
+        // Bank 1 without the pulls it powers up with, so the latch is all
+        // `GPLEV` has to report.
+        wr(&mut g, PUP_PDN + 8, 0);
+        wr(&mut g, PUP_PDN + 12, 0);
         wr(&mut g, GPFSEL + 16, 0x40); // GPIO 42 an output
         wr(&mut g, GPSET + 4, 0x6770_6D6F);
         assert!(g.level(42));
@@ -733,6 +745,7 @@ mod tests {
     #[test]
     fn the_legacy_pull_registers_move_no_termination() {
         let mut g = gpio();
+        wr(&mut g, PUP_PDN, 0); // GPIO 4 off its reset pull-up
         wr(&mut g, GPPUD, 2); // "pull up" in the old encoding
         wr(&mut g, GPPUDCLK, 1 << 4);
         wr(&mut g, GPPUDCLK, 0);
@@ -803,7 +816,8 @@ mod tests {
         wr(&mut g, GPEDS + 4, 0x400);
         assert_eq!(rd(&mut g, GPEDS + 4), 0);
 
-        // And a low-level detector on an input that a pull holds down.
+        // And a low-level detector on an input nothing holds up.
+        wr(&mut g, PUP_PDN, 0); // GPIO 4 off its reset pull-up
         wr(&mut g, GPLEN, 1 << 4);
         assert_eq!(rd(&mut g, GPEDS) & (1 << 4), 1 << 4);
         assert_eq!(g.irq_lines(), [true, false]);
@@ -817,6 +831,8 @@ mod tests {
     #[test]
     fn the_bits_above_pin_57_latch_nothing() {
         let mut g = gpio();
+        wr(&mut g, PUP_PDN + 8, 0); // bank 1 off its reset pulls, so every
+        wr(&mut g, PUP_PDN + 12, 0); // pin in it reads low
         wr(&mut g, GPLEN + 4, 0xFFFF_FFFF);
         assert_eq!(rd(&mut g, GPEDS + 4), 0x03FF_FFFF);
         assert_eq!(g.irq_lines(), [false, true]);

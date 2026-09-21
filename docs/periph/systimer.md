@@ -46,24 +46,24 @@ Match flags, one per compare channel. Write 1 to clear.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, System Timer: `CS`
+- datasheet (high): BCM2711 ARM Peripherals, §10.2 (System Timer): `CS`
 - linux (high): `drivers/clocksource/bcm2835_timer.c` acks its channel by writing its bit to `+0x00`
 
 `M0` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, System Timer: `CS`
+- datasheet (high): BCM2711 ARM Peripherals, §10.2 (System Timer): `CS`
 
 `M1` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, System Timer: `CS`
+- datasheet (high): BCM2711 ARM Peripherals, §10.2 (System Timer): `CS`
 
 `M2` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, System Timer: `CS`
+- datasheet (high): BCM2711 ARM Peripherals, §10.2 (System Timer): `CS`
 
 `M3` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, System Timer: `CS`
+- datasheet (high): BCM2711 ARM Peripherals, §10.2 (System Timer): `CS`
 
 ## `CLO`
 
@@ -73,7 +73,7 @@ Counter, low 32 bits.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, System Timer: `CLO`
+- datasheet (high): BCM2711 ARM Peripherals, §10.2 (System Timer): `CLO`
 - linux (high): `drivers/clocksource/bcm2835_timer.c` reads the counter at `+0x04`
 
 ## `CHI`
@@ -84,7 +84,7 @@ Counter, high 32 bits.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, System Timer: `CHI`
+- datasheet (high): BCM2711 ARM Peripherals, §10.2 (System Timer): `CHI`
 
 ## `C`
 
@@ -94,6 +94,6 @@ Compare values. Channel n matches once when `CLO` reaches `C[n]`; it does not re
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, System Timer: `C0..C3`
+- datasheet (high): BCM2711 ARM Peripherals, §10.2 (System Timer): `C0..C3`
 - linux (high): `drivers/clocksource/bcm2835_timer.c` programs channel n at `+0x0C + 4 * n`
 - trace (high): start4 re-arms `C0` from its tick ISR `0x3EC40B7C` on every tick

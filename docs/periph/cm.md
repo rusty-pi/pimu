@@ -10,7 +10,7 @@ The analogue PLLs are not modelled: every PLL reads locked, every `*_CTL` regist
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, General Purpose GPIO Clocks: the `CM_*CTL` / `CM_*DIV` layout and the `0x5A` password
+- datasheet (high): BCM2711 ARM Peripherals, §5.4.2 (General Purpose GPIO Clocks): the `CM_*CTL` / `CM_*DIV` layout and the `0x5A` password
 - decompile (high): EEPROM bootloader programs a PLL and polls for lock before trusting the SPI clock
 - linux (high): `drivers/clk/bcm/clk-bcm2835.c`: the `CM_*` and `A2W_*` offsets, the generator control bits, the PLL hold and reset bits, the lock bits and the A2W control fields — _written for the BCM2835; every offset below that the BCM2711 firmware was seen to use lines up with it_
 - trace (high): `--trace-mmio` of the pinned firmware (`pieeprom.bin` and `start4.elf` as `firmware.sha256` lists them) booted through the ARM release; every PC cited below is in those images

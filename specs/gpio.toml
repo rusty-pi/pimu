@@ -69,7 +69,7 @@ notes  = "Function select, three bits a pin, ten pins a register: 0 input, 1 out
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, GPIO: `GPFSEL0`..`GPFSEL5`"
+ref        = "BCM2711 ARM Peripherals, §5.2 (GPIO): `GPFSEL0`..`GPFSEL5`"
 confidence = "high"
 
 [[register.source]]
@@ -88,7 +88,7 @@ notes   = "Write 1 to drive a pin high; a 0 bit does nothing. A read answers `0x
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, GPIO: `GPSET0` / `GPSET1`"
+ref        = "BCM2711 ARM Peripherals, §5.2 (GPIO): `GPSET0` / `GPSET1`"
 confidence = "high"
 
 [[register.source]]
@@ -107,7 +107,7 @@ notes  = "Write 1 to drive a pin low. Reads answer the block tag, as `GPSET` doe
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, GPIO: `GPCLR0` / `GPCLR1`"
+ref        = "BCM2711 ARM Peripherals, §5.2 (GPIO): `GPCLR0` / `GPCLR1`"
 confidence = "high"
 
 [[register.source]]
@@ -126,7 +126,7 @@ notes  = "The level of each pin. An output reads its own latch; anything else re
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, GPIO: `GPLEV0` / `GPLEV1`"
+ref        = "BCM2711 ARM Peripherals, §5.2 (GPIO): `GPLEV0` / `GPLEV1`"
 confidence = "high"
 
 [[register.source]]
@@ -145,7 +145,7 @@ notes  = "Edge / level detect status, one bit a pin, cleared by writing 1, and t
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, GPIO: `GPEDS0` / `GPEDS1`"
+ref        = "BCM2711 ARM Peripherals, §5.2 (GPIO): `GPEDS0` / `GPEDS1`"
 confidence = "high"
 
 [[register]]
@@ -159,7 +159,7 @@ notes  = "Rising-edge detect enable."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, GPIO: `GPREN0` / `GPREN1`"
+ref        = "BCM2711 ARM Peripherals, §5.2 (GPIO): `GPREN0` / `GPREN1`"
 confidence = "high"
 
 [[register]]
@@ -173,7 +173,7 @@ notes  = "Falling-edge detect enable."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, GPIO: `GPFEN0` / `GPFEN1`"
+ref        = "BCM2711 ARM Peripherals, §5.2 (GPIO): `GPFEN0` / `GPFEN1`"
 confidence = "high"
 
 [[register]]
@@ -187,7 +187,7 @@ notes  = "High-level detect enable."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, GPIO: `GPHEN0` / `GPHEN1`"
+ref        = "BCM2711 ARM Peripherals, §5.2 (GPIO): `GPHEN0` / `GPHEN1`"
 confidence = "high"
 
 [[register]]
@@ -201,7 +201,7 @@ notes  = "Low-level detect enable."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, GPIO: `GPLEN0` / `GPLEN1`"
+ref        = "BCM2711 ARM Peripherals, §5.2 (GPIO): `GPLEN0` / `GPLEN1`"
 confidence = "high"
 
 [[register]]
@@ -215,7 +215,7 @@ notes  = "Asynchronous rising-edge detect enable."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, GPIO: `GPAREN0` / `GPAREN1`"
+ref        = "BCM2711 ARM Peripherals, §5.2 (GPIO): `GPAREN0` / `GPAREN1`"
 confidence = "high"
 
 [[register]]
@@ -229,7 +229,7 @@ notes  = "Asynchronous falling-edge detect enable."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, GPIO: `GPAFEN0` / `GPAFEN1`"
+ref        = "BCM2711 ARM Peripherals, §5.2 (GPIO): `GPAFEN0` / `GPAFEN1`"
 confidence = "high"
 
 [[register]]
@@ -241,7 +241,7 @@ notes  = "The BCM2835 pull control: a direction here, then the pins in `GPPUDCLK
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, GPIO: `GPPUD`, marked as having no effect on this chip"
+ref        = "BCM2711 ARM Peripherals, §5.2 (GPIO): `GPPUD`, marked as having no effect on this chip"
 confidence = "high"
 
 [[register.source]]
@@ -260,7 +260,7 @@ notes  = "Which pins the `GPPUD` direction applies to on a BCM2835. No effect he
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, GPIO: `GPPUDCLK0` / `GPPUDCLK1`"
+ref        = "BCM2711 ARM Peripherals, §5.2 (GPIO): `GPPUDCLK0` / `GPPUDCLK1`"
 confidence = "high"
 
 [[register]]
@@ -318,13 +318,13 @@ offset = 0xE4
 count  = 4
 stride = 4
 access = "rw"
-reset  = 0
-notes  = "The BCM2711 pull control: two bits a pin, sixteen pins a register — 0 no pulling, 1 pull-up, 2 pull-down, 3 reserved. `PUP_PDN3` holds pins 48..57. This is the register the firmware actually uses, and the one a `GPLEV` bit falls back on for a pin that is not an output."
+notes  = "The BCM2711 pull control: two bits a pin, sixteen pins a register — 0 no pulling, 1 pull-up, 2 pull-down, 3 reserved. `PUP_PDN3` holds pins 48..57. This is the register the firmware actually uses, and the one a `GPLEV` bit falls back on for a pin that is not an output. The four words come out of reset with a pull on nearly every pin rather than at 0, which is why there is no `reset` here: they are `0xAAA95555`, `0xA0AAAAAA`, `0x50AAA95A` and `0x00055555` in `PUP_PDN_RESET` (`src/periph/gpio.rs`)."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, GPIO: `GPIO_PUP_PDN_CNTRL_REG0`..`REG3`"
+ref        = "BCM2711 ARM Peripherals, §5.2 Tables 90 to 93 (`GPIO_PUP_PDN_CNTRL_REG0`..`REG3`), each pin’s field with its own reset value; §5.3 Table 94 gives the same as a `Pull` column — pins 0 to 8 up, 9 to 27 down, 28 and 29 none, 30 to 33 down, 34 to 36 up, 37 to 43 down, 44 and 45 none, 46 to 57 up"
 confidence = "high"
+note       = "release 4 of the datasheet corrected these reset values; earlier releases are not to be trusted for them. They are the power-on state, not what a running board holds — the measured words below were read after the firmware and Linux had set their pulls."
 
 [[register.source]]
 kind       = "measured"

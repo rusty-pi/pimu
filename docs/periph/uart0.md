@@ -46,7 +46,7 @@ Write sends a byte; read pops the receive FIFO.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, UART: `DR`
+- datasheet (high): BCM2711 ARM Peripherals, §11.5 (UART): `DR`
 - decompile (high): start4 console writer `0x3ED85E9C` stores each byte here
 
 ## `FR`
@@ -65,28 +65,28 @@ FIFO and line flags.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, UART: `FR`
+- datasheet (high): BCM2711 ARM Peripherals, §11.5 (UART): `FR`
 - decompile (high): `0x3ED85E9C` polls `TXFF` before each byte; the clock-change callback `0x3EC799BC` drains `BUSY`
 
 `BUSY` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, UART: `FR`
+- datasheet (high): BCM2711 ARM Peripherals, §11.5 (UART): `FR`
 
 `RXFE` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, UART: `FR`
+- datasheet (high): BCM2711 ARM Peripherals, §11.5 (UART): `FR`
 
 `TXFF` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, UART: `FR`
+- datasheet (high): BCM2711 ARM Peripherals, §11.5 (UART): `FR`
 
 `RXFF` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, UART: `FR`
+- datasheet (high): BCM2711 ARM Peripherals, §11.5 (UART): `FR`
 
 `TXFE` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, UART: `FR`
+- datasheet (high): BCM2711 ARM Peripherals, §11.5 (UART): `FR`
 
 ## `IBRD`
 
@@ -96,7 +96,7 @@ Integer part of the baud divisor (16 bits).
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, UART: `IBRD`
+- datasheet (high): BCM2711 ARM Peripherals, §11.5 (UART): `IBRD`
 
 ## `FBRD`
 
@@ -106,7 +106,7 @@ Fractional part of the baud divisor, in 64ths (6 bits).
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, UART: `FBRD`
+- datasheet (high): BCM2711 ARM Peripherals, §11.5 (UART): `FBRD`
 
 ## `LCRH`
 
@@ -120,11 +120,11 @@ Line control. Toggling `FEN` flushes the receive FIFO.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, UART: `LCRH`
+- datasheet (high): BCM2711 ARM Peripherals, §11.5 (UART): `LCRH`
 
 `FEN` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, UART: `LCRH`
+- datasheet (high): BCM2711 ARM Peripherals, §11.5 (UART): `LCRH`
 
 ## `CR`
 
@@ -140,19 +140,19 @@ Control.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, UART: `CR`
+- datasheet (high): BCM2711 ARM Peripherals, §11.5 (UART): `CR`
 
 `UARTEN` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, UART: `CR`
+- datasheet (high): BCM2711 ARM Peripherals, §11.5 (UART): `CR`
 
 `TXE` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, UART: `CR`
+- datasheet (high): BCM2711 ARM Peripherals, §11.5 (UART): `CR`
 
 `RXE` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, UART: `CR`
+- datasheet (high): BCM2711 ARM Peripherals, §11.5 (UART): `CR`
 
 ## `IFLS`
 
@@ -167,15 +167,15 @@ FIFO interrupt trigger levels; reset is half full both ways.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, UART: `IFLS`
+- datasheet (high): BCM2711 ARM Peripherals, §11.5 (UART): `IFLS`
 
 `TXIFLSEL` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, UART: `IFLS`
+- datasheet (high): BCM2711 ARM Peripherals, §11.5 (UART): `IFLS`
 
 `RXIFLSEL` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, UART: `IFLS`
+- datasheet (high): BCM2711 ARM Peripherals, §11.5 (UART): `IFLS`
 
 ## `IMSC`
 
@@ -185,7 +185,7 @@ Interrupt mask, same bit layout as `RIS`.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, UART: `IMSC`
+- datasheet (high): BCM2711 ARM Peripherals, §11.5 (UART): `IMSC`
 - linux (high): `amba-pl011` enables `RX` and `RT` here
 
 ## `RIS`
@@ -201,15 +201,15 @@ Raw interrupt status. `IMSC`, `MIS` and `ICR` use the same bit positions.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, UART: `RIS`
+- datasheet (high): BCM2711 ARM Peripherals, §11.5 (UART): `RIS`
 
 `RX` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, UART: `RIS`
+- datasheet (high): BCM2711 ARM Peripherals, §11.5 (UART): `RIS`
 
 `RT` sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, UART: `RIS`
+- datasheet (high): BCM2711 ARM Peripherals, §11.5 (UART): `RIS`
 
 ## `MIS`
 
@@ -219,7 +219,7 @@ Offset `0x040` · access `r` · 32 bits
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, UART: `MIS`
+- datasheet (high): BCM2711 ARM Peripherals, §11.5 (UART): `MIS`
 
 ## `ICR`
 
@@ -229,4 +229,4 @@ Write 1 to clear a raw interrupt.
 
 Sources:
 
-- datasheet (high): BCM2711 ARM Peripherals, UART: `ICR`
+- datasheet (high): BCM2711 ARM Peripherals, §11.5 (UART): `ICR`

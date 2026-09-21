@@ -42,7 +42,7 @@ notes  = "Match flags, one per compare channel. Write 1 to clear."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, System Timer: `CS`"
+ref        = "BCM2711 ARM Peripherals, §10.2 (System Timer): `CS`"
 confidence = "high"
 
 [[register.source]]
@@ -57,7 +57,7 @@ notes = "Channel 0 matched."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, System Timer: `CS`"
+ref        = "BCM2711 ARM Peripherals, §10.2 (System Timer): `CS`"
 confidence = "high"
 
 [[register.field]]
@@ -67,7 +67,7 @@ notes = "Channel 1 matched."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, System Timer: `CS`"
+ref        = "BCM2711 ARM Peripherals, §10.2 (System Timer): `CS`"
 confidence = "high"
 
 [[register.field]]
@@ -77,7 +77,7 @@ notes = "Channel 2 matched."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, System Timer: `CS`"
+ref        = "BCM2711 ARM Peripherals, §10.2 (System Timer): `CS`"
 confidence = "high"
 
 [[register.field]]
@@ -87,7 +87,7 @@ notes = "Channel 3 matched."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, System Timer: `CS`"
+ref        = "BCM2711 ARM Peripherals, §10.2 (System Timer): `CS`"
 confidence = "high"
 
 [[register]]
@@ -98,7 +98,7 @@ notes  = "Counter, low 32 bits."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, System Timer: `CLO`"
+ref        = "BCM2711 ARM Peripherals, §10.2 (System Timer): `CLO`"
 confidence = "high"
 
 [[register.source]]
@@ -114,7 +114,7 @@ notes  = "Counter, high 32 bits."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, System Timer: `CHI`"
+ref        = "BCM2711 ARM Peripherals, §10.2 (System Timer): `CHI`"
 confidence = "high"
 
 [[register]]
@@ -127,7 +127,7 @@ notes  = "Compare values. Channel n matches once when `CLO` reaches `C[n]`; it d
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, System Timer: `C0..C3`"
+ref        = "BCM2711 ARM Peripherals, §10.2 (System Timer): `C0..C3`"
 confidence = "high"
 
 [[register.source]]

@@ -58,7 +58,7 @@ notes  = "Control and status."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, SPI: `CS`"
+ref        = "BCM2711 ARM Peripherals, §9.5 (SPI): `CS`"
 confidence = "high"
 
 [[register.field]]
@@ -68,7 +68,7 @@ notes = "Chip select."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, SPI: `CS`"
+ref        = "BCM2711 ARM Peripherals, §9.5 (SPI): `CS`"
 confidence = "high"
 
 [[register.field]]
@@ -79,7 +79,7 @@ notes  = "Clear the TX FIFO."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, SPI: `CS.CLEAR`"
+ref        = "BCM2711 ARM Peripherals, §9.5 (SPI): `CS.CLEAR`"
 confidence = "high"
 
 [[register.field]]
@@ -90,7 +90,7 @@ notes  = "Clear the RX FIFO."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, SPI: `CS.CLEAR`"
+ref        = "BCM2711 ARM Peripherals, §9.5 (SPI): `CS.CLEAR`"
 confidence = "high"
 
 [[register.field]]
@@ -100,7 +100,7 @@ notes = "Transfer active; the whole command runs with it set. start4 writes `CS 
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, SPI: `CS.TA`"
+ref        = "BCM2711 ARM Peripherals, §9.5 (SPI): `CS.TA`"
 confidence = "high"
 
 [[register.field]]
@@ -111,7 +111,7 @@ notes  = "Nothing left to shift. start4's transfer waits for it, with no timeout
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, SPI: `CS.DONE`"
+ref        = "BCM2711 ARM Peripherals, §9.5 (SPI): `CS.DONE`"
 confidence = "high"
 
 [[register.field.source]]
@@ -127,7 +127,7 @@ notes  = "RX FIFO holds data."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, SPI: `CS.RXD`"
+ref        = "BCM2711 ARM Peripherals, §9.5 (SPI): `CS.RXD`"
 confidence = "high"
 
 [[register.field]]
@@ -138,7 +138,7 @@ notes  = "TX FIFO has room."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, SPI: `CS.TXD`"
+ref        = "BCM2711 ARM Peripherals, §9.5 (SPI): `CS.TXD`"
 confidence = "high"
 
 [[register.field]]
@@ -149,7 +149,7 @@ notes  = "RX FIFO needs reading."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, SPI: `CS.RXR`"
+ref        = "BCM2711 ARM Peripherals, §9.5 (SPI): `CS.RXR`"
 confidence = "high"
 
 [[register.field]]
@@ -160,7 +160,7 @@ notes  = "RX FIFO full."
 
 [[register.field.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, SPI: `CS.RXF`"
+ref        = "BCM2711 ARM Peripherals, §9.5 (SPI): `CS.RXF`"
 confidence = "high"
 
 [[register]]
@@ -171,7 +171,7 @@ notes  = "Write shifts a byte out, read takes the byte shifted in."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, SPI: `FIFO`"
+ref        = "BCM2711 ARM Peripherals, §9.5 (SPI): `FIFO`"
 confidence = "high"
 
 [[register]]
@@ -182,7 +182,7 @@ notes  = "Clock divider. start4 writes 63 before every transfer: `max(ceil(sourc
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, SPI: `CLK`"
+ref        = "BCM2711 ARM Peripherals, §9.5 (SPI): `CLK`"
 confidence = "high"
 
 [[register.source]]
@@ -203,7 +203,7 @@ notes  = "DMA data length."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, SPI: `DLEN`"
+ref        = "BCM2711 ARM Peripherals, §9.5 (SPI): `DLEN`"
 confidence = "high"
 
 [[register]]
@@ -214,7 +214,7 @@ notes  = "LoSSI output hold delay."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, SPI: `LTOH`"
+ref        = "BCM2711 ARM Peripherals, §9.5 (SPI): `LTOH`"
 confidence = "high"
 
 [[register]]
@@ -225,5 +225,5 @@ notes  = "DMA DREQ controls."
 
 [[register.source]]
 kind       = "datasheet"
-ref        = "BCM2711 ARM Peripherals, SPI: `DC`"
+ref        = "BCM2711 ARM Peripherals, §9.5 (SPI): `DC`"
 confidence = "high"
