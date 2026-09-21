@@ -612,8 +612,10 @@ and take the ordinary base-plus-displacement address. `memread` and `memwrite`
 address neither: they are the unit's own lookup table, 1 KiB of it, banked
 sixteen ways so that each lane indexes its own 64 bytes.
 
-The sub-ops with no name of their own are **fences on the vector memory
-unit**. Each writes a zero into the destination element, and then waits for an
+Most of the sub-ops with no name of their own are **fences on the vector
+memory unit** — 3, 11-15, 17, 18, 20-23 and 25-27. Seven of them are not:
+10, 16, 19 and 28-31 hang even with a vector load in front of them, where a
+fence retires in a millisecond, and those stay unimplemented. Each writes a zero into the destination element, and then waits for an
 outstanding **vector load**: put a `v8ld` in front of one and it retires in
 2 ms, with nothing in front of it it never returns. A vector *store* does not
 satisfy it and neither does a *scalar* load.
@@ -731,7 +733,12 @@ confidence = "high"
 subop    = 3
 mnemonic = "mem03"
 status   = "executes"
-cells    = ["3", "`mem03`", "—"]
+cells    = ["3", "`mem03`", "a **fence**: a zero into the destination element, and then a wait for a write to the register file. A vector load or a vector ALU op licenses one, a store and a scalar op do not, and with nothing written it never returns"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/f10.s` — the load-first shape a fence retires under, which this one hangs anyway"
+confidence = "high"
 
 [[section.row.source]]
 kind       = "decompile"
@@ -822,8 +829,13 @@ confidence = "high"
 [[section.row]]
 subop    = 10
 mnemonic = "mem10"
-status   = "executes"
-cells    = ["10", "`mem10`", "—"]
+status   = "unknown"
+cells    = ["10", "`mem10`", "**not** a fence, whatever its neighbours do: with a vector load in front of it — where a fence retires in a millisecond — it still never returns, and the board has to be rebooted"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/f10.s` — the load-first shape a fence retires under, which this one hangs anyway"
+confidence = "high"
 
 [[section.row.source]]
 kind       = "decompile"
@@ -834,7 +846,12 @@ confidence = "low"
 subop    = 11
 mnemonic = "mem11"
 status   = "executes"
-cells    = ["11", "`mem11`", "a **zero** into the destination element, and the firmware dead: a board healthy the moment before stopped answering the mailbox. Reproduced"]
+cells    = ["11", "`mem11`", "a **fence**: a zero into the destination element, and then a wait for a write to the register file. A vector load or a vector ALU op licenses one, a store and a scalar op do not, and with nothing written it never returns"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/m11.s`: with a vector load in front of it, it retires in a millisecond and leaves a zero in the destination element. `probes/ldop.s`, `addbetween.s`, `stbetween.s` and `scal2.s` are what the wait itself was measured with"
+confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
@@ -845,7 +862,12 @@ confidence = "medium"
 subop    = 12
 mnemonic = "mem12"
 status   = "executes"
-cells    = ["12", "`mem12`", "a **zero** into the destination element, and the firmware dead: a board healthy the moment before stopped answering the mailbox. Reproduced"]
+cells    = ["12", "`mem12`", "a **fence**: a zero into the destination element, and then a wait for a write to the register file. A vector load or a vector ALU op licenses one, a store and a scalar op do not, and with nothing written it never returns"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/m12.s`: with a vector load in front of it, it retires in a millisecond and leaves a zero in the destination element. `probes/ldop.s`, `addbetween.s`, `stbetween.s` and `scal2.s` are what the wait itself was measured with"
+confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
@@ -856,7 +878,12 @@ confidence = "medium"
 subop    = 13
 mnemonic = "mem13"
 status   = "executes"
-cells    = ["13", "`mem13`", "a **zero** into the destination element, and the firmware dead afterwards"]
+cells    = ["13", "`mem13`", "a **fence**: a zero into the destination element, and then a wait for a write to the register file. A vector load or a vector ALU op licenses one, a store and a scalar op do not, and with nothing written it never returns"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/m13.s`: with a vector load in front of it, it retires in a millisecond and leaves a zero in the destination element. `probes/ldop.s`, `addbetween.s`, `stbetween.s` and `scal2.s` are what the wait itself was measured with"
+confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
@@ -867,7 +894,12 @@ confidence = "medium"
 subop    = 14
 mnemonic = "mem14"
 status   = "executes"
-cells    = ["14", "`mem14`", "a **zero** into the destination element, and the firmware dead afterwards"]
+cells    = ["14", "`mem14`", "a **fence**: a zero into the destination element, and then a wait for a write to the register file. A vector load or a vector ALU op licenses one, a store and a scalar op do not, and with nothing written it never returns"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/m14.s`: with a vector load in front of it, it retires in a millisecond and leaves a zero in the destination element. `probes/ldop.s`, `addbetween.s`, `stbetween.s` and `scal2.s` are what the wait itself was measured with"
+confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
@@ -878,7 +910,12 @@ confidence = "medium"
 subop    = 15
 mnemonic = "mem15"
 status   = "executes"
-cells    = ["15", "`mem15`", "a **zero** into the destination element, and the firmware dead afterwards"]
+cells    = ["15", "`mem15`", "a **fence**: a zero into the destination element, and then a wait for a write to the register file. A vector load or a vector ALU op licenses one, a store and a scalar op do not, and with nothing written it never returns"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/m15.s`: with a vector load in front of it, it retires in a millisecond and leaves a zero in the destination element. `probes/ldop.s`, `addbetween.s`, `stbetween.s` and `scal2.s` are what the wait itself was measured with"
+confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
@@ -888,8 +925,13 @@ confidence = "medium"
 [[section.row]]
 subop    = 16
 mnemonic = "mem16"
-status   = "executes"
-cells    = ["16", "`mem16`", "—"]
+status   = "unknown"
+cells    = ["16", "`mem16`", "**not** a fence, whatever its neighbours do: with a vector load in front of it — where a fence retires in a millisecond — it still never returns, and the board has to be rebooted"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/f10.s` — the load-first shape a fence retires under, which this one hangs anyway"
+confidence = "high"
 
 [[section.row.source]]
 kind       = "decompile"
@@ -900,7 +942,12 @@ confidence = "low"
 subop    = 17
 mnemonic = "mem17"
 status   = "executes"
-cells    = ["17", "`mem17`", "a **zero** into the destination element, and the firmware dead afterwards"]
+cells    = ["17", "`mem17`", "a **fence**: a zero into the destination element, and then a wait for a write to the register file. A vector load or a vector ALU op licenses one, a store and a scalar op do not, and with nothing written it never returns"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/m17.s`: with a vector load in front of it, it retires in a millisecond and leaves a zero in the destination element. `probes/ldop.s`, `addbetween.s`, `stbetween.s` and `scal2.s` are what the wait itself was measured with"
+confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
@@ -911,7 +958,12 @@ confidence = "medium"
 subop    = 18
 mnemonic = "mem18"
 status   = "executes"
-cells    = ["18", "`mem18`", "a **zero** into the destination element, and the firmware dead afterwards"]
+cells    = ["18", "`mem18`", "a **fence**: a zero into the destination element, and then a wait for a write to the register file. A vector load or a vector ALU op licenses one, a store and a scalar op do not, and with nothing written it never returns"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/m18.s`: with a vector load in front of it, it retires in a millisecond and leaves a zero in the destination element. `probes/ldop.s`, `addbetween.s`, `stbetween.s` and `scal2.s` are what the wait itself was measured with"
+confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
@@ -921,8 +973,13 @@ confidence = "medium"
 [[section.row]]
 subop    = 19
 mnemonic = "mem19"
-status   = "executes"
-cells    = ["19", "`mem19`", "—"]
+status   = "unknown"
+cells    = ["19", "`mem19`", "**not** a fence, whatever its neighbours do: with a vector load in front of it — where a fence retires in a millisecond — it still never returns, and the board has to be rebooted"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/f10.s` — the load-first shape a fence retires under, which this one hangs anyway"
+confidence = "high"
 
 [[section.row.source]]
 kind       = "decompile"
@@ -933,7 +990,12 @@ confidence = "low"
 subop    = 20
 mnemonic = "mem20"
 status   = "executes"
-cells    = ["20", "`mem20`", "a **zero** into the destination element, and the firmware dead afterwards"]
+cells    = ["20", "`mem20`", "a **fence**: a zero into the destination element, and then a wait for a write to the register file. A vector load or a vector ALU op licenses one, a store and a scalar op do not, and with nothing written it never returns"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/m20.s`: with a vector load in front of it, it retires in a millisecond and leaves a zero in the destination element. `probes/ldop.s`, `addbetween.s`, `stbetween.s` and `scal2.s` are what the wait itself was measured with"
+confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
@@ -944,7 +1006,12 @@ confidence = "medium"
 subop    = 21
 mnemonic = "mem21"
 status   = "executes"
-cells    = ["21", "`mem21`", "a **zero** into the destination element, and the firmware dead afterwards"]
+cells    = ["21", "`mem21`", "a **fence**: a zero into the destination element, and then a wait for a write to the register file. A vector load or a vector ALU op licenses one, a store and a scalar op do not, and with nothing written it never returns"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/m21.s`: with a vector load in front of it, it retires in a millisecond and leaves a zero in the destination element. `probes/ldop.s`, `addbetween.s`, `stbetween.s` and `scal2.s` are what the wait itself was measured with"
+confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
@@ -955,7 +1022,12 @@ confidence = "medium"
 subop    = 22
 mnemonic = "mem22"
 status   = "executes"
-cells    = ["22", "`mem22`", "a **zero** into the destination element, and the firmware dead afterwards"]
+cells    = ["22", "`mem22`", "a **fence**: a zero into the destination element, and then a wait for a write to the register file. A vector load or a vector ALU op licenses one, a store and a scalar op do not, and with nothing written it never returns"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/m22.s`: with a vector load in front of it, it retires in a millisecond and leaves a zero in the destination element. `probes/ldop.s`, `addbetween.s`, `stbetween.s` and `scal2.s` are what the wait itself was measured with"
+confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
@@ -966,7 +1038,12 @@ confidence = "medium"
 subop    = 23
 mnemonic = "mem23"
 status   = "executes"
-cells    = ["23", "`mem23`", "a **zero** into the destination element, and the firmware dead afterwards"]
+cells    = ["23", "`mem23`", "a **fence**: a zero into the destination element, and then a wait for a write to the register file. A vector load or a vector ALU op licenses one, a store and a scalar op do not, and with nothing written it never returns"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/m23.s`: with a vector load in front of it, it retires in a millisecond and leaves a zero in the destination element. `probes/ldop.s`, `addbetween.s`, `stbetween.s` and `scal2.s` are what the wait itself was measured with"
+confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
@@ -998,7 +1075,12 @@ confidence = "high"
 subop    = 25
 mnemonic = "mem25"
 status   = "executes"
-cells    = ["25", "`mem25`", "—"]
+cells    = ["25", "`mem25`", "a **fence**: a zero into the destination element, and then a wait for a write to the register file. A vector load or a vector ALU op licenses one, a store and a scalar op do not, and with nothing written it never returns"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/f10.s` — the load-first shape a fence retires under, which this one hangs anyway"
+confidence = "high"
 
 [[section.row.source]]
 kind       = "decompile"
@@ -1009,7 +1091,12 @@ confidence = "low"
 subop    = 26
 mnemonic = "mem26"
 status   = "executes"
-cells    = ["26", "`mem26`", "—"]
+cells    = ["26", "`mem26`", "a **fence**: a zero into the destination element, and then a wait for a write to the register file. A vector load or a vector ALU op licenses one, a store and a scalar op do not, and with nothing written it never returns"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/f10.s` — the load-first shape a fence retires under, which this one hangs anyway"
+confidence = "high"
 
 [[section.row.source]]
 kind       = "decompile"
@@ -1020,7 +1107,12 @@ confidence = "low"
 subop    = 27
 mnemonic = "mem27"
 status   = "executes"
-cells    = ["27", "`mem27`", "—"]
+cells    = ["27", "`mem27`", "a **fence**: a zero into the destination element, and then a wait for a write to the register file. A vector load or a vector ALU op licenses one, a store and a scalar op do not, and with nothing written it never returns"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/f10.s` — the load-first shape a fence retires under, which this one hangs anyway"
+confidence = "high"
 
 [[section.row.source]]
 kind       = "decompile"
@@ -1030,8 +1122,13 @@ confidence = "low"
 [[section.row]]
 subop    = 28
 mnemonic = "mem28"
-status   = "executes"
-cells    = ["28", "`mem28`", "—"]
+status   = "unknown"
+cells    = ["28", "`mem28`", "**not** a fence, whatever its neighbours do: with a vector load in front of it — where a fence retires in a millisecond — it still never returns, and the board has to be rebooted"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/f10.s` — the load-first shape a fence retires under, which this one hangs anyway"
+confidence = "high"
 
 [[section.row.source]]
 kind       = "decompile"
@@ -1041,8 +1138,13 @@ confidence = "low"
 [[section.row]]
 subop    = 29
 mnemonic = "mem29"
-status   = "executes"
-cells    = ["29", "`mem29`", "—"]
+status   = "unknown"
+cells    = ["29", "`mem29`", "**not** a fence, whatever its neighbours do: with a vector load in front of it — where a fence retires in a millisecond — it still never returns, and the board has to be rebooted"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/f10.s` — the load-first shape a fence retires under, which this one hangs anyway"
+confidence = "high"
 
 [[section.row.source]]
 kind       = "decompile"
@@ -1052,8 +1154,13 @@ confidence = "low"
 [[section.row]]
 subop    = 30
 mnemonic = "mem30"
-status   = "executes"
-cells    = ["30", "`mem30`", "—"]
+status   = "unknown"
+cells    = ["30", "`mem30`", "**not** a fence, whatever its neighbours do: with a vector load in front of it — where a fence retires in a millisecond — it still never returns, and the board has to be rebooted"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/f10.s` — the load-first shape a fence retires under, which this one hangs anyway"
+confidence = "high"
 
 [[section.row.source]]
 kind       = "decompile"
@@ -1063,8 +1170,13 @@ confidence = "low"
 [[section.row]]
 subop    = 31
 mnemonic = "mem31"
-status   = "executes"
-cells    = ["31", "`mem31`", "—"]
+status   = "unknown"
+cells    = ["31", "`mem31`", "**not** a fence, whatever its neighbours do: with a vector load in front of it — where a fence retires in a millisecond — it still never returns, and the board has to be rebooted"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/f10.s` — the load-first shape a fence retires under, which this one hangs anyway"
+confidence = "high"
 
 [[section.row.source]]
 kind       = "decompile"
@@ -2292,9 +2404,9 @@ title = "What the model executes"
 body = """
 `VecInsn::executable` decides, by field rather than by whole-word template.
 A linear sweep of `start4.elf`'s `.text` with this decoder finds **14650**
-vector instructions, and **14323 of them execute**.
+vector instructions, and **14157 of them execute**.
 
-The 327 that do not split by what `binutils-vc4` objdump makes of the same
+The 493 that do not split by what `binutils-vc4` objdump makes of the same
 address — a better measure than the page they sit in, since a linear sweep
 through a jump table produces valid-looking encodings by accident:
 """

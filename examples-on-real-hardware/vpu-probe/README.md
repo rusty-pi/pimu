@@ -157,7 +157,8 @@ Two things are known to wedge it, both found the hard way:
 | `r63.s`, `r63b.s`, `r63c.s` | `(r63)` in a gather's address, whether the A slot matters, and a gather with a dash destination |
 | `lkb.s`, `lkc.s` | a gather whose B slot holds a vector instead of an address: it reads from zero, like `(r63)` |
 | `m07.s`, `addr07.s`, `addr07b.s` | memory sub-op 7: that it writes zeros, writes nothing at an address it is handed, and leaves the lookup table alone |
-| `m11.s`-`m23.s` | the rest of the unnamed memory sub-ops. **Each one kills the firmware** — run them only on a board you can power-cycle |
+| `m11.s`-`m23.s` | the rest of the unnamed memory sub-ops, probed before the fence was understood — each looked fatal |
+| `f03.s`-`f31.s` | the same sub-ops with a vector load in front: 3, 11-15, 17, 18, 20-23 and 25-27 retire in a millisecond, while 10, 16, 19 and 28-31 hang anyway |
 | `di11.s`, `two11.s`, `sr11.s` | what one of them does to interrupts, to a second one after it, and to the status register |
 | `after_ld.s`, `after_st.s`, `trap.s` | what still runs after one, and how a deliberate `bkpt` compares |
 | `ldop.s`, `stop.s`, `scop.s` | **what satisfies the fence**: a vector load does, a vector store and a scalar load do not |

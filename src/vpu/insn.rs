@@ -1696,7 +1696,16 @@ impl VecInsn {
     /// The fences: every memory sub-op with no name of its own except 7,
     /// which writes its zero and waits for nothing.
     fn fence(&self) -> Option<VecExec> {
-        if !self.mem || !matches!(self.subop, 3 | 10..=23 | 25..=31) {
+        // Only the ones measured to retire. Sub-ops 10, 16, 19 and 28-31 sit
+        // in the same range and are *not* fences: with a vector load in front
+        // of them, where a fence retires in a millisecond, they still never
+        // return — `probes/f10.s` and its neighbours.
+        if !self.mem
+            || !matches!(
+                self.subop,
+                3 | 11..=15 | 17 | 18 | 20..=23 | 25..=27
+            )
+        {
             return None;
         }
         let width = match self.lane_bits {

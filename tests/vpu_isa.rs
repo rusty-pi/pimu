@@ -3823,12 +3823,11 @@ fn the_reference_page_matches_the_model() {
     // The memory class has no one function to ask, so the set is spelled out;
     // `mem_transfer`, `gather`, `lut` and `getacc` between them cover exactly
     // these.
-    // The fences — everything unnamed except 7, which waits for nothing —
-    // are carried out too, so the whole class is covered bar the three the
-    // gather and scatter decode still refuses.
-    const MEM_EXECUTES: [u8; 32] = [
-        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-        25, 26, 27, 28, 29, 30, 31,
+    // The fences are carried out, and so is 7, which waits for nothing. The
+    // seven that are not — 10, 16, 19 and 28-31 — hang even with a vector
+    // load in front of them, where a fence retires in a millisecond.
+    const MEM_EXECUTES: [u8; 25] = [
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 17, 18, 20, 21, 22, 23, 24, 25, 26, 27,
     ];
     for (subop, (name, says_executes)) in VEC_MEM_OPS
         .iter()
