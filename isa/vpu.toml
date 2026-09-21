@@ -593,6 +593,11 @@ note       = "the remainder is the two linear sweeps drifting apart inside data,
 [[section]]
 title = "Memory-class sub-ops"
 body = """
+A transfer that names **no address** — a `vst` or an `indexwritem` whose B
+slot holds a vector, or a scatter with a dash source — writes nothing at all:
+not where its operands point, not at address 0 where the matching load reads,
+and nowhere in the 64 KiB a probe compares byte for byte either side of it.
+
 The gather and the scatter scale their index by the operation's element width
 and take the ordinary base-plus-displacement address. `memread` and `memwrite`
 address neither: they are the unit's own lookup table, 1 KiB of it, banked
@@ -2232,9 +2237,9 @@ title = "What the model executes"
 body = """
 `VecInsn::executable` decides, by field rather than by whole-word template.
 A linear sweep of `start4.elf`'s `.text` with this decoder finds **14650**
-vector instructions, and **13761 of them execute**.
+vector instructions, and **13805 of them execute**.
 
-The 889 that do not split by what `binutils-vc4` objdump makes of the same
+The 845 that do not split by what `binutils-vc4` objdump makes of the same
 address — a better measure than the page they sit in, since a linear sweep
 through a jump table produces valid-looking encodings by accident:
 """
@@ -2262,20 +2267,12 @@ ref        = "`probes/m11.s`-`probes/m23.s` on Raspberry Pi 4B d03115 boards, on
 confidence = "high"
 
 [[section.row]]
-cells = ["~20", "`indexwritem` with a dash source — a scatter with nothing to write"]
+cells = ["~20", "`indexwritem` whose *index* comes from a slot the scatter decode does not take"]
 
 [[section.row.source]]
 kind       = "decompile"
-ref        = "`binutils-vc4` spells them; what a scatter with no source writes was not measured"
+ref        = "`binutils-vc4` spells them; the shapes with an ordinary index are carried out"
 confidence = "low"
-
-[[section.row]]
-cells = ["~22", "`vst` with a vector slot in the B position. The *load* in that shape reads address 0; the store writes nowhere a probe could find — not to the address its operands hold, and not to address 0 either"]
-
-[[section.row.source]]
-kind       = "measured"
-ref        = "`probes/st63.s`, `probes/st63b.s`: 32 bytes of our own scratch and the first bytes of address 0, read before and after, both unchanged"
-confidence = "medium"
 
 [[section.row]]
 cells = ["61", "addresses objdump does not decode at all: the two linear sweeps drifting apart inside data"]

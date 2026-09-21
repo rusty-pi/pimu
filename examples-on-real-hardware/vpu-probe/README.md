@@ -30,6 +30,11 @@ with `v32st HY(0++,0),(r0+=r3) REP64` — 64 rows of 64 bytes, exactly one page.
 per `mmap` faults), and `/dev/mem` will not map it at all on a stock 64-bit
 Raspberry Pi OS.
 
+`vpuprobe3.py` goes further: it reads every page of the allocation before and
+after the call and prints what changed, so a write that lands somewhere other
+than its stated destination is caught wherever it is inside the buffer. That
+is what settled the stores below.
+
 `vpuprobe2.py` is the same thing with the mailbox call in a thread that times
 out after five seconds: when the blob wedges the VPU the page is read and
 printed anyway, so a probe of an encoding that hangs still says how far it
@@ -107,7 +112,7 @@ Two things are known to wedge it, both found the hard way:
 | `sdisp.s` | what a displacement beside a scalar B operand does — hand-assembled, the one form `binutils-vc4` prints but cannot assemble |
 | `gacc.s` | `vgetacc` with a dash destination, feeding the scalar result unit |
 | `mld.s`, `where.s` | a `vld` with a vector slot in the B position: that it reads **address 0**, confirmed against the same RAM through `0x80000000` and `0xc0000000` |
-| `st63.s`, `st63b.s` | the store in that shape — it writes neither where its operands point nor to address 0 |
+| `st63.s`, `st63b.s`, `st63c.s`, `st64.s` | the stores and scatters that name no address — they write nothing at all |
 | `r63.s`, `r63b.s`, `r63c.s` | `(r63)` in a gather's address, whether the A slot matters, and a gather with a dash destination |
 | `lkb.s`, `lkc.s` | a gather whose B slot holds a vector instead of an address: it reads from zero, like `(r63)` |
 | `m07.s`, `addr07.s`, `addr07b.s` | memory sub-op 7: that it writes zeros, writes nothing at an address it is handed, and leaves the lookup table alone |
@@ -178,6 +183,10 @@ Two things are known to wedge it, both found the hard way:
   word whose bit `j` is bit `i` of lane `j` of B. A scalar B — which every lane
   sees alike — therefore comes out as all-ones wherever B's bit `i` is set,
   which is the one-flag-per-bit form the firmware uses.
+- A transfer that names **no address** — a `vst` or an `indexwritem` whose B
+  slot holds a vector, or a scatter with a dash source — writes nothing
+  anywhere: not at the operand address, not at address 0 where the matching
+  load reads, and not one byte of the 64 KiB `vpuprobe3.py` watches.
 - A `lookupm` that names no address — `(r63)`, or a vector in the B slot —
   gathers from **zero**: with 16 in the accumulator's high half both forms
   answer the byte at address 16.
@@ -230,11 +239,8 @@ Two things are known to wedge it, both found the hard way:
 
 ## Still open
 
-The **store** whose B slot holds a vector. Its load counterpart reads address
-0 — `where.s` proves it by reading the same bytes back through `0`,
-`0x80000000` and `0xc0000000` — but the store in that shape wrote neither to
-the address its operands held nor to address 0. Where it goes, if anywhere, is
-still open.
+The **`indexwritem` whose index comes from a slot** the scatter decode does
+not take — around twenty of them, all in pages that look like data.
 
 Memory sub-op 3 and the rest above 9: sub-op 3 is the one that took the
 firmware down when a probe ran it, and 16 and 19 did the same, so whatever

@@ -1725,6 +1725,9 @@ impl Vpu {
                             self.regs.set(reg as usize, v as u32);
                         }
                     }
+                    // Measured to leave nothing behind, so the model does
+                    // nothing either.
+                    VecExec::NoEffect => {}
                     VecExec::NeedsVrf => {
                         if let Some(step) = self.unimpl(pc, v.raw, v.len, InsnClass::Vector48, next)
                         {

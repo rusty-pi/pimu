@@ -1306,6 +1306,15 @@ pub enum VecExec {
         /// written to a scalar register.
         sru: Option<(VecSruFunc, u8)>,
     },
+    /// Runs and leaves nothing behind that a probe could find: the stores and
+    /// scatters that name no address. A `v<w>st` whose B slot holds a vector
+    /// writes neither where its operands point, nor to address 0 — where its
+    /// *load* counterpart reads — nor anywhere in the 64 KiB a probe watches
+    /// byte for byte; a `v<w>indexwritem` with a dash source is the same.
+    /// Measured with `probes/st63.s`, `st63b.s`, `st63c.s` and `st64.s` on a
+    /// Raspberry Pi 4B d03115, the last of them through `vpuprobe3.py`, which
+    /// compares the whole allocation before and after.
+    NoEffect,
     /// Needs a part of the vector unit this model does not implement.
     NeedsVrf,
 }
@@ -1426,6 +1435,12 @@ impl VecInsn {
         // — so there the slot still has to be a bare dash.
         let inert_free = !self.wide && !store;
         if !inert_free && (!dash.is_dash() || dash.star || dash.inc) {
+            // A store that names no address at all writes nothing, whatever
+            // its slots hold — measured with `probes/st64.s`, which watched
+            // the whole allocation and address 0 either side of one.
+            if store && self.addr.is_none() && !self.b_is_dash() {
+                return Some(VecExec::NoEffect);
+            }
             return None;
         }
         if !inert_free && !self.wide && dash.addend != 15 {
@@ -1435,18 +1450,19 @@ impl VecInsn {
             return None; // what `++` on the inert slot steps was not measured
         }
 
-        // A load whose B slot holds a vector names no address: those bits
-        // *are* the address composite in the forms that have one. It reads
-        // from zero — measured — so it is carried out as such. A store in that
-        // shape was not measured.
+        // A transfer whose B slot holds a vector names no address: those bits
+        // *are* the address composite in the forms that have one. The load
+        // reads from zero and the store writes nowhere a probe can find —
+        // both measured.
         let addr = match self.addr {
             Some(addr) => addr,
-            None if !store && !self.b_is_dash() => VecAddr {
+            None if self.b_is_dash() => return None,
+            None if store => return Some(VecExec::NoEffect),
+            None => VecAddr {
                 base: 63,
                 offset: 0,
                 incr: None,
             },
-            None => return None,
         };
         let no_base = addr.base == 63 && self.addr.is_none();
         // A dash in the vector position discards the transfer's data. That is
@@ -1502,6 +1518,13 @@ impl VecInsn {
         } else {
             (self.d, self.a)
         };
+        // A scatter with a dash *source* has nothing to write, and writes
+        // nothing — measured with `probes/st64.s`, which watched the whole
+        // allocation and address 0 either side of two of them. What its other
+        // slots hold makes no difference.
+        if scatter && vec_slot.is_dash() {
+            return Some(VecExec::NoEffect);
+        }
         // A gather reads its inert slot for nothing — measured with
         // `probes/r63.s`: the same address answered the same bytes with a
         // vector of junk in that slot as with one of zeros. A scatter's inert
@@ -1536,7 +1559,8 @@ impl VecInsn {
         }
         let operand = if vec_slot.is_dash() {
             if scatter {
-                return None; // a store with nothing to write
+                // Nothing to write, and measured to write nothing.
+                return Some(VecExec::NoEffect);
             }
             None
         } else {

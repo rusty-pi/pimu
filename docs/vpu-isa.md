@@ -204,6 +204,11 @@ Sources:
 
 ## Memory-class sub-ops
 
+A transfer that names **no address** — a `vst` or an `indexwritem` whose B
+slot holds a vector, or a scatter with a dash source — writes nothing at all:
+not where its operands point, not at address 0 where the matching load reads,
+and nowhere in the 64 KiB a probe compares byte for byte either side of it.
+
 The gather and the scatter scale their index by the operation's element width
 and take the ordinary base-plus-displacement address. `memread` and `memwrite`
 address neither: they are the unit's own lookup table, 1 KiB of it, banked
@@ -430,9 +435,9 @@ lane predicate applies to the aggregate as well.
 
 `VecInsn::executable` decides, by field rather than by whole-word template.
 A linear sweep of `start4.elf`'s `.text` with this decoder finds **14650**
-vector instructions, and **13761 of them execute**.
+vector instructions, and **13805 of them execute**.
 
-The 889 that do not split by what `binutils-vc4` objdump makes of the same
+The 845 that do not split by what `binutils-vc4` objdump makes of the same
 address — a better measure than the page they sit in, since a linear sweep
 through a jump table produces valid-looking encodings by accident:
 
@@ -440,8 +445,7 @@ through a jump table produces valid-looking encodings by accident:
 |---|---|---|
 | 385 | words objdump refuses too — it prints them `vec48`, `vunk...` or `vop63.1`. Data: jump tables and constants a sweep cannot tell from code | decompile: `binutils-vc4` objdump over the same addresses |
 | ~250 | the memory sub-ops that kill the firmware — 3, 10, 11-15, 16-23, 25-31. Each writes a zero into the destination element and leaves the board unable to answer the mailbox; none is carried out for that reason | measured: `probes/m11.s`-`probes/m23.s` on Raspberry Pi 4B d03115 boards, one sub-op per board |
-| ~20 | `indexwritem` with a dash source — a scatter with nothing to write | decompile: `binutils-vc4` spells them; what a scatter with no source writes was not measured |
-| ~22 | `vst` with a vector slot in the B position. The *load* in that shape reads address 0; the store writes nowhere a probe could find — not to the address its operands hold, and not to address 0 either | measured: `probes/st63.s`, `probes/st63b.s`: 32 bytes of our own scratch and the first bytes of address 0, read before and after, both unchanged |
+| ~20 | `indexwritem` whose *index* comes from a slot the scatter decode does not take | decompile: `binutils-vc4` spells them; the shapes with an ordinary index are carried out |
 | 61 | addresses objdump does not decode at all: the two linear sweeps drifting apart inside data | decompile: `binutils-vc4` objdump over the same addresses |
 
 None of it is reached on a firmware boot: `boot` stops on an unimplemented
