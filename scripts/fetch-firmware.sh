@@ -66,6 +66,12 @@ USERLAND_DEBS=(
 	"$deb/n/nettle/libhogweed6t64_3.10.1-1_arm64.deb cb92d5a51c4fd6c7b7cbb62aaa60c7af830d0bea5b410fb1f47ee685e26944d1"
 	"$deb/libi/libidn2/libidn2-0_2.3.8-2_arm64.deb d2e5cef812f15db1eeb35f0a193158ee102a9e94284036c0e293521f2761d2d7"
 	"$deb/g/gmp/libgmp10_6.3.0+dfsg-3_arm64.deb a27bbc27f119161ea9702c8dd66f54131cdf0d2ca73000f50ea91ef2fdfef0fb"
+	# `iw`, to ask the WiFi driver what it found, and the two libnl libraries
+	# it links. Everything else it needs — libc and the loader — is already
+	# here for rpi-fw-crypto. `BRCMFMAC=1 make-sd.sh` puts it on the card.
+	"$deb/i/iw/iw_6.9-1+b1_arm64.deb dcacc4fb0a002b313effb1f5bb81adf14aca83eed9043bc97acf9e8b437c3d93"
+	"$deb/libn/libnl3/libnl-3-200_3.7.0-2_arm64.deb 0489548a052d64b1acf7f61b0f08fd2da954b6fd6b9c729a4e740d7d39652d00"
+	"$deb/libn/libnl3/libnl-genl-3-200_3.7.0-2_arm64.deb 5455099e4ae9a013a44bce245678b50c84b93f9983cd3005f49e6a94d14e30ee"
 )
 # Everything the WiFi bring-up needs, as `<path under firmware/wifi/> <sha256>`
 # with `KVER` standing in for the kernel version read out of kernel8.img. The

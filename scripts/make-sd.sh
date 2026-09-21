@@ -289,6 +289,20 @@ if [[ "$brcmfmac" == 1 ]]; then
   else
     echo "  ! missing $fw/wifi (no WiFi driver on the card; run fetch-firmware.sh)" >&2
   fi
+  # `iw`, the only way to ask the driver what it found: busybox has no applet
+  # for nl80211, so without this the card can bring `wlan0` up and learn
+  # nothing more about it. libc and the loader are already here for
+  # rpi-fw-crypto; these two are what `iw` adds.
+  if [[ -x "$userland/usr/sbin/iw" ]]; then
+    mkdir -p "$rootfs"/{usr/sbin,usr/lib/aarch64-linux-gnu}
+    cp "$userland/usr/sbin/iw" "$rootfs/usr/sbin/"
+    for so in libnl-3.so.200 libnl-genl-3.so.200; do
+      cp -L "$userland/usr/lib/aarch64-linux-gnu/$so" "$rootfs/usr/lib/aarch64-linux-gnu/$so"
+    done
+    echo "  + p2: iw ($(stat -Lc %s "$userland/usr/sbin/iw") bytes) and libnl"
+  else
+    echo "  ! missing $userland/usr/sbin/iw (nothing on the card can read nl80211; run fetch-firmware.sh)" >&2
+  fi
 fi
 # The firmware's command line ends in `console=tty1`, which makes the
 # framebuffer /dev/console; name the serial port instead.
