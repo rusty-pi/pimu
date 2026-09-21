@@ -2008,11 +2008,10 @@ impl VecInsn {
             }
         }
         // A dash destination discards the result — which is the point when an
-        // accumulator is carrying it.
+        // accumulator is carrying it. The addend nibble, the `*` and the `++`
+        // a dash can carry have nothing to act on once the write is gone, so
+        // they are accepted and ignored.
         let d = if self.d.is_dash() {
-            if !self.d.is_bare_dash() {
-                return None;
-            }
             None
         } else {
             Some(self.operand(self.d, width)?)

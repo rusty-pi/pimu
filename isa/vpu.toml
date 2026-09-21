@@ -394,6 +394,14 @@ ref        = "`probes/sdisp.s`: with `r2` = 100, `r2+0`, `r2-1`, `r2-2`, `r2+1` 
 confidence = "high"
 
 [[section.row]]
+cells = ["dash in D", "the result is discarded. Any addend nibble, `*` or `++` it carries has nothing left to act on: the flags come out the same with none, with `+r0` and with `+r3`, measured with `probes/dashd.s`"]
+
+[[section.row.source]]
+kind       = "measured"
+ref        = "`probes/dashd.s`, three hand-built words the assembler cannot spell"
+confidence = "high"
+
+[[section.row]]
 cells = ["dash in A", "an operand of **zeros** for an ALU op; ignored altogether by a load"]
 
 [[section.row.source]]
@@ -2284,9 +2292,9 @@ title = "What the model executes"
 body = """
 `VecInsn::executable` decides, by field rather than by whole-word template.
 A linear sweep of `start4.elf`'s `.text` with this decoder finds **14650**
-vector instructions, and **14284 of them execute**.
+vector instructions, and **14323 of them execute**.
 
-The 366 that do not split by what `binutils-vc4` objdump makes of the same
+The 327 that do not split by what `binutils-vc4` objdump makes of the same
 address — a better measure than the page they sit in, since a linear sweep
 through a jump table produces valid-looking encodings by accident:
 """
@@ -2298,7 +2306,7 @@ passes.
 """
 
 [[section.row]]
-cells = ["287", "words objdump refuses too — it prints them `vec48`, `vunk...` or `vop63.1`. Data: jump tables and constants a sweep cannot tell from code"]
+cells = ["272", "words objdump refuses too — it prints them `vec48`, `vunk...` or `vop63.1`. Data: jump tables and constants a sweep cannot tell from code"]
 
 [[section.row.source]]
 kind       = "decompile"
@@ -2306,7 +2314,7 @@ ref        = "`binutils-vc4` objdump over the same addresses"
 confidence = "high"
 
 [[section.row]]
-cells = ["20", "addresses objdump does not decode at all: the two linear sweeps drifting apart inside data"]
+cells = ["19", "addresses objdump does not decode at all: the two linear sweeps drifting apart inside data"]
 
 [[section.row.source]]
 kind       = "decompile"

@@ -145,6 +145,7 @@ window into the file.
 | `+rN` | adds a scalar to the element index, in elements, wrapping within the row | measured: `probes/pa48.s` |
 | `*` | **no effect** on the register file or memory — on any slot, under `REP`, on a load or a store | measured: `probes/star.s` |
 | dash in B | names a scalar register instead, with a signed displacement in the 80-bit encodings — the operand is `r<N> + disp`, plain addition | decompile: `binutils-vc4` opcode tables; measured: `probes/disp.s`, `probes/sdisp.s`: with `r2` = 100, `r2+0`, `r2-1`, `r2-2`, `r2+1` and `r2+100` reach the lanes as 100, 99, 98, 101 and 200. The assembler cannot spell the form, so the words are built by hand and checked against objdump |
+| dash in D | the result is discarded. Any addend nibble, `*` or `++` it carries has nothing left to act on: the flags come out the same with none, with `+r0` and with `+r3`, measured with `probes/dashd.s` | measured: `probes/dashd.s`, three hand-built words the assembler cannot spell |
 | dash in A | an operand of **zeros** for an ALU op; ignored altogether by a load | measured: `probes/alu6.s`, `probes/ldodd.s` |
 | dash in D | discards the result — the load still reads its bytes | measured: `probes/ldodd.s`; decompile: `FUN_0edc9e20`, the vector-unit read fence |
 
@@ -482,16 +483,16 @@ lane predicate applies to the aggregate as well.
 
 `VecInsn::executable` decides, by field rather than by whole-word template.
 A linear sweep of `start4.elf`'s `.text` with this decoder finds **14650**
-vector instructions, and **14284 of them execute**.
+vector instructions, and **14323 of them execute**.
 
-The 366 that do not split by what `binutils-vc4` objdump makes of the same
+The 327 that do not split by what `binutils-vc4` objdump makes of the same
 address — a better measure than the page they sit in, since a linear sweep
 through a jump table produces valid-looking encodings by accident:
 
 | Left over | What it is | Source |
 |---|---|---|
-| 287 | words objdump refuses too — it prints them `vec48`, `vunk...` or `vop63.1`. Data: jump tables and constants a sweep cannot tell from code | decompile: `binutils-vc4` objdump over the same addresses |
-| 20 | addresses objdump does not decode at all: the two linear sweeps drifting apart inside data | decompile: `binutils-vc4` objdump over the same addresses |
+| 272 | words objdump refuses too — it prints them `vec48`, `vunk...` or `vop63.1`. Data: jump tables and constants a sweep cannot tell from code | decompile: `binutils-vc4` objdump over the same addresses |
+| 19 | addresses objdump does not decode at all: the two linear sweeps drifting apart inside data | decompile: `binutils-vc4` objdump over the same addresses |
 
 None of it is reached on a firmware boot: `boot` stops on an unimplemented
 instruction by default, and `boot-check testdata/boot/firmware-boot.toml`
