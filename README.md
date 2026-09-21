@@ -4,47 +4,69 @@ A whole-machine Raspberry Pi 4 (BCM2711) emulator that boots the **real
 firmware** — `pieeprom.bin`, `start4.elf`, `fixup4.dat` on the VideoCore VPU —
 and then Linux on the four Cortex-A72 cores it releases.
 
-The point is to *execute the real blobs* in a modelled SoC and regression-test
-what they do — primarily their serial output — against a known-good baseline,
-so a firmware bump, or a change to a custom-built firmware, shows up as a
-transcript diff.
+It runs the blobs as they are, so a firmware bump — or a change to a
+custom-built one — shows up as a diff in the serial transcript. The boot
+firmware runs on the VideoCore VPU, not the ARM cores, which is why an ARM
+emulator like QEMU's `raspi4b` cannot test it: it stubs the GPU firmware out
+entirely. Accuracy over speed, every core lock-stepped in one host thread, so a
+run is deterministic. No off-the-shelf tool does this;
+[`docs/references.md`](docs/references.md) surveys the prior art.
 
-The boot firmware runs on the **VideoCore VPU**, not the ARM cores, which is why
-an ARM emulator like QEMU's `raspi4b` cannot test it: it stubs the GPU firmware
-out entirely. Since [#40](https://github.com/valtzu/rpi-virt-fw/issues/40) the
-ARM side is ours too, Bochs-style — an interpreter, accuracy over speed, every
-core lock-stepped in one host thread, so a run is deterministic.
-[`docs/references.md`](docs/references.md) surveys the prior art; there is no
-off-the-shelf tool for this.
-
-## Quick start
+## Run a boot
 
 ```bash
-./scripts/fetch-firmware.sh          # real blobs, kernel and busybox into firmware/ (gitignored)
+cargo install --path .                # or: cargo build --release, then target/release/rpi-virt-fw
+
+./scripts/fetch-firmware.sh           # the real blobs, a kernel and busybox into firmware/ (gitignored)
 KERNEL=halt ./scripts/make-sd.sh firmware/sd-halt.img
 
-# The real boot chain: EEPROM bootloader + start4.elf off an SD image,
-# up to a kernel that parks the ARM.
-cargo run --release -- boot --eeprom firmware/pieeprom.bin --sd firmware/sd-halt.img
+# EEPROM bootloader + start4.elf off an SD image, up to a kernel that parks the ARM.
+rpi-virt-fw boot --eeprom firmware/pieeprom.bin --sd firmware/sd-halt.img
 
-# ...or on into Linux, with the terminal as the serial console (Ctrl-A x quits).
-./scripts/make-sd.sh                 # firmware/sd.img
-cargo run --release -- boot --eeprom firmware/pieeprom.bin --sd firmware/sd.img --stdin
+# ...or on into Linux, with your terminal as the serial console (Ctrl-A x quits).
+./scripts/make-sd.sh                  # firmware/sd.img
+rpi-virt-fw boot --eeprom firmware/pieeprom.bin --sd firmware/sd.img --stdin
 ```
 
+The ARM is always modelled
+([#52](https://github.com/valtzu/rpi-virt-fw/issues/52)): the boot goes wherever
+the card's `kernel8.img` takes it.
+
 `make-sd.sh` needs `sfdisk`, `mtools` and `e2fsprogs`; no root, no loop devices.
+The cards it can write — a stock `config.txt` with Bluetooth and WiFi on, the
+cut-down firmware, a UEFI armstub — are in
+[`docs/running.md`](docs/running.md).
 
 `boot` prints the serial console as it goes and ends with one line saying
 whether the boot got where it was meant to (`result: ok — the firmware started
-the ARM`), with exit status 1 when it did not. `-v` adds the full run report.
-In a directory that holds the files themselves every option naming one can be
-left out — `pieeprom.bin` is `--eeprom`, and so are `sd.img`, `usb.img`,
+the ARM`), with exit status 1 when it did not. `-v` adds the full run report,
+`--log <channel>` says what a device did
+([`docs/diagnostics.md`](docs/diagnostics.md)), and `--help` lists every option.
+
+### Boot it from something else
+
+| Option | Medium |
+|---|---|
+| `--sd <img>` | The SD card. |
+| `--usb <img>` | A USB mass-storage device on the VL805 (`BOOT_ORDER` 0x4). |
+| `--otg <img>` | A stick in the USB-C socket, on the BCM2711's own xHCI (`BOOT_ORDER` 0x5). |
+| `--netboot <dir>` | The Ethernet cable, into a built-in DHCP, DNS, TFTP and HTTP peer serving `<dir>` (`scripts/make-netboot.sh` builds one). |
+| `--net passt` | The host's network, through [passt](https://passt.top/). |
+
+The same image boots from any of them: `--usb firmware/sd-halt.img` is the card
+above in a USB enclosure.
+
+### Or just point it at a directory
+
+Every option that names a file can be left out when the working directory holds
+that file: `pieeprom.bin` is `--eeprom`, and so are `sd.img`, `usb.img`,
 `otg.img`, `netboot/`, `otp.json` or `otp.bin`, `bootconf.txt` (a `--bootconf`
 line each) and `pubkey.bin`
-([#114](https://github.com/valtzu/rpi-virt-fw/issues/114)) — so
-`rpi-virt-fw boot` boots from what is there and names on stderr what it picked
-up. [`docs/running.md`](docs/running.md) has the boot media, the cards and the
-rest of the options; `rpi-virt-fw boot --help` lists them all.
+([#114](https://github.com/valtzu/rpi-virt-fw/issues/114)).
+
+```bash
+cd firmware && rpi-virt-fw boot       # boots from whatever is there, and says what it picked up
+```
 
 ## Commands
 
@@ -76,8 +98,9 @@ I²C masters are modelled and nothing answers the EDID EEPROM's address.
   Instruction *lengths* always decode correctly, so an encoding the executor
   does not accept stops as `Unimpl` rather than derailing the PC.
   [`docs/vpu-isa.md`](docs/vpu-isa.md) carries the evidence for each form.
-- **AArch64 interpreter** (`src/aarch64/`) — integer A64, SIMD and floating
-  point with ARM-exact soft-float, stage 1 MMU, exception levels EL3..EL0 and
+- **AArch64 interpreter** (`src/aarch64/`,
+  [#40](https://github.com/valtzu/rpi-virt-fw/issues/40)) — integer A64, SIMD
+  and floating point with ARM-exact soft-float, stage 1 MMU, EL3..EL0 and
   the system registers Linux touches. `tests/a64_diff.rs` checks it
   differentially against `qemu-aarch64` user-mode on random instruction streams.
   Four cores run in lock-step with the VPU, paced by the system timer

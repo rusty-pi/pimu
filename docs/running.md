@@ -1,27 +1,7 @@
 # Running a boot
 
-`boot` needs an EEPROM image and something to boot from. Everything else has a
-default.
-
-```bash
-rpi-virt-fw boot --eeprom firmware/pieeprom.bin --sd firmware/sd-halt.img
-```
-
-The ARM is always modelled ([#52](https://github.com/valtzu/rpi-virt-fw/issues/52)):
-the boot goes wherever the card's `kernel8.img` takes it.
-
-## The media
-
-| Option | Medium |
-|---|---|
-| `--sd <img>` | The SD card. |
-| `--usb <img>` | A USB mass-storage device on the VL805 (`BOOT_ORDER` 0x4). |
-| `--otg <img>` | A stick in the USB-C socket, on the BCM2711's own xHCI (`BOOT_ORDER` 0x5). |
-| `--netboot <dir>` | The Ethernet cable, into the built-in DHCP/DNS/TFTP/HTTP peer serving `<dir>`. |
-
-`scripts/make-netboot.sh` builds the root `--netboot` serves. The boot
-scenarios in `testdata/boot/` carry the exact flags and EEPROM settings for each
-medium, and `rpi-virt-fw boot-check <scenario> --plan` prints them.
+The basics — installing, the first boot, the media, booting a directory — are in
+the [README](../README.md). This page is the rest of it.
 
 ## The cards
 
@@ -45,6 +25,10 @@ what `testdata/boot/linux-wifi.toml` loads by hand to pin how far the chip's
 bring-up gets: `brcmfmac` and the modules it needs under `/lib/modules`, a
 `modprobe` for the one the kernel fetches by itself, the CYW43455's own firmware
 under `/lib/firmware/brcm`, and `insmod`/`ip`.
+
+Each boot scenario in `testdata/boot/` carries the exact flags and EEPROM
+settings for its medium, and `rpi-virt-fw boot-check <scenario> --plan` prints
+them — the shortest way to see how a given boot is set up.
 
 ## Wall budgets
 
