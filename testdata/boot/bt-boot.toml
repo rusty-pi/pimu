@@ -67,6 +67,32 @@ why = "The PL011 is the Bluetooth modem's UART now, so it registers as `ttyAMA1`
 line = "serial serial0: tty port ttyAMA1 registered"
 
 [[milestone]]
+why = """
+The address the modem answers `Read_BD_ADDR` with, and that it is still the one
+the chip came up with: this kernel has no `hci_uart` built in, so nothing ever
+writes the board's address into it with `BCM_WRITE_BD_ADDR`. It is the chip's
+own, not the board's — `src/machine.rs` says where the value comes from — and
+HCI carries it least significant octet first, so the wire order is the reverse
+of what is printed here."""
+line = "bt      chip 02:00:5e:00:53:02, as it came up"
+
+[[milestone]]
+why = """
+The board's address: what the firmware derived and published as
+`local-bd-address`, on the node it left enabled. That is the PL011's here,
+because this card's `config.txt` carries no `dtoverlay=disable-bt`; the node
+under the mini-UART is disabled and holds all zeroes, so the report picks by
+`status` rather than taking the first match. The property is least significant
+octet first (`abf9aa5e0002`), the way the kernel reads it into a `bdaddr_t`
+before `btbcm_set_bdaddr` writes it into the chip.
+
+Neither this line nor the one above reaches the console, and the two addresses
+differ, so a firmware bump that moved the derivation would pass every other
+assertion in this file unnoticed — which is what the device-state section
+exists for."""
+line = "device tree 02:00:5e:aa:f9:ab on /soc/serial@7e201000/bluetooth"
+
+[[milestone]]
 why = "Without `dtoverlay=disable-wifi` the `mmcnr@7e300000` node is live, and the CYW43455's SDIO side answers on the legacy EMMC host. The reference board prints the same line."
 line = "mmc1: new high speed SDIO card at address 0001"
 

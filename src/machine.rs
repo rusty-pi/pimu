@@ -245,10 +245,24 @@ const GPFSEL_WINDOW: std::ops::Range<u32> = {
     base..base + crate::spec::gpio::GPFSEL_COUNT * crate::spec::gpio::GPFSEL_STRIDE
 };
 
-/// The Bluetooth modem's address. A Pi's is its Ethernet MAC plus one — the
-/// reference board is `e4:5f:01:83:fb:74` on the network and `…:75` on the
-/// air — so this follows the MAC in OTP rows 64/65
-/// (`crate::periph::configotp`).
+/// The address the Bluetooth modem comes up holding, most significant octet
+/// first.
+///
+/// This is the chip's own, not the board's. A Pi's Bluetooth address is its
+/// Ethernet MAC plus one — the reference board is `e4:5f:01:83:fb:74` on the
+/// network and `…:75` on the air — but that is a value the *firmware* derives
+/// and publishes as `local-bd-address` in the device tree it hands the ARM,
+/// and the host programs it into the chip with `BCM_WRITE_BD_ADDR` at attach
+/// (`btbcm_set_bdaddr`). Until then the chip answers what it was built with,
+/// which on an unprogrammed part has nothing to do with the Pi's fuses.
+///
+/// So nothing derives this: it is an invented locally-administered address
+/// from the documentation range in RFC 7042 section 2.1.2, the same range the
+/// modelled OTP MAC comes from, one past it so that a report showing it is
+/// recognisable as the chip's own. The run report prints it beside the address
+/// the firmware published, which is a different value again
+/// (`crate::periph::bluetooth::published_bd_address`), so the two are visible
+/// rather than assumed equal.
 const BT_ADDRESS: [u8; 6] = [0x02, 0x00, 0x5E, 0x00, 0x53, 0x02];
 
 /// The SD-slot mux word in the GPIO block, and the bit that routes the card to

@@ -192,6 +192,8 @@ under `--- device state ---`:
 ```
 --- device state ---
   genet   MAC 02:00:5e:00:53:01  tx on  rx on  promisc on
+  bt      chip 02:00:5e:00:53:02, as it came up
+          device tree 02:00:5e:aa:f9:ab on /soc/serial@7e201000/bluetooth
 ```
 
 A client that asks the firmware for the board's MAC address and does not check
@@ -199,6 +201,26 @@ the answer — or checks it, fails, and carries on — programs `00:00:00:00:00:
 into the GENET and boots to exactly the same console bytes. `uefi-boot.toml`
 pins that line for the RPi4 UEFI firmware, which is a second, independent
 client of the property interface.
+
+The Bluetooth address is two values, and they are not the same one:
+
+* what the modem answers `Read_BD_ADDR` with, which is the address the chip
+  came up with until a host writes another one into it with
+  `BCM_WRITE_BD_ADDR` (`btbcm_set_bdaddr`), when the line says `written by the
+  host` instead;
+* what the firmware derived and published as `local-bd-address` on the
+  `brcm,bcm43438-bt` node it left enabled, and which node that was.
+
+The property holds the address least significant octet first — the kernel reads
+it straight into a `bdaddr_t` (`hci_dev_get_bd_addr_from_property()`) — so the
+six bytes `ab f9 aa 5e 00 02` are `02:00:5e:aa:f9:ab`, and the report decodes
+them rather than printing the raw property. A Pi 4B's tree carries one such
+node under each UART and the firmware enables the one the `config.txt` overlays
+leave the modem on, so the node is picked by its `status`: with
+`dtoverlay=disable-bt` both are disabled and the line says so, rather than
+reporting the all-zero address the node under the mini-UART carries.
+
+`bt-boot.toml` pins both, because neither ever reaches the console.
 
 A device belongs in this section once it holds a value worth diffing between
 two firmware versions.

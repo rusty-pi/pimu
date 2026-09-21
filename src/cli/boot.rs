@@ -1590,11 +1590,16 @@ fn print_report(opts: &BootOpts, booted: Booted) -> Result<ExitCode> {
     if let Some(a) = &mut emu.arm {
         a.settle(&emu.machine);
     }
+    // The tree the firmware handed over, located once: the device-state
+    // section reads the Bluetooth address out of it, and `report_fdt` below
+    // reports `/chosen` and the machine-id derivation from the same bytes.
+    let handoff = emu.arm.as_ref().and_then(|a| a.handoff);
+    let fdt_blob = locate_fdt(&mut emu.machine, handoff, &report.console);
     if verbose {
         print_summary(&report, &emu, start);
         print_arm_cores(&emu, opts.eeprom);
         print_property_replies(&emu.machine);
-        print_device_state(&emu.machine);
+        print_device_state(&emu.machine, fdt_blob.as_ref().map(|(_, b)| b.as_slice()));
         print_regs(&report);
     }
     if let Some(p) = &opts.console_log {
@@ -1633,8 +1638,7 @@ fn print_report(opts: &BootOpts, booted: Booted) -> Result<ExitCode> {
     if let Some(file) = &opts.otp {
         save_otp(file, &fuses_at_start, emu.machine.config_otp.fuses())?;
     }
-    let handoff = emu.arm.as_ref().and_then(|a| a.handoff);
-    report_fdt(opts, &mut emu.machine, handoff, &report.console)?;
+    report_fdt(opts, &emu.machine, fdt_blob)?;
     if verbose {
         print_unimpl(&report, &opts.path);
     }
@@ -1774,7 +1778,9 @@ fn print_property_replies(machine: &Machine) {
 /// read of the board's MAC failed left the GENET MAC at `00:00:00:00:00:00`
 /// through a whole boot that printed nothing about it. A device belongs here
 /// once it holds a value worth a diff.
-fn print_device_state(machine: &Machine) {
+fn print_device_state(machine: &Machine, fdt: Option<&[u8]>) {
+    use rpi_virt_fw::periph::bluetooth::{format_bd_address, published_bd_address};
+
     let mac = machine.genet.mac_state();
     println!("\n--- device state ---");
     let [a, b, c, d, e, f] = mac.addr;
@@ -1784,6 +1790,38 @@ fn print_device_state(machine: &Machine) {
         on_off(mac.rx_en),
         on_off(mac.promisc),
     );
+
+    // Two addresses, and they are not the same value: the chip answers its
+    // own until a host writes the board's into it, and the board's is what the
+    // firmware derived and published in the device tree. Neither reaches the
+    // console, so a firmware bump that moves the derivation is invisible
+    // without this line.
+    let bt = machine.bluetooth.bd_addr();
+    println!(
+        "  bt      chip {}, {}",
+        format_bd_address(bt),
+        if machine.bluetooth.bd_addr_written() {
+            "written by the host"
+        } else {
+            "as it came up"
+        },
+    );
+    let published = fdt
+        .and_then(|blob| rpi_virt_fw::fdt::Fdt::parse(blob).ok())
+        .map(|fdt| published_bd_address(&fdt));
+    match published {
+        Some(p) => match p.enabled {
+            Some((path, addr)) => println!(
+                "          device tree {} on {path}",
+                format_bd_address(addr)
+            ),
+            None => println!(
+                "          device tree: no bluetooth node enabled ({} disabled)",
+                p.nodes
+            ),
+        },
+        None => println!("          device tree: none handed over"),
+    }
 }
 
 /// `on` / `off`, for [`print_device_state`]: a flag reads better than a bit.
@@ -2066,19 +2104,14 @@ fn print_sdram_refresh(machine: &Machine) {
 /// run whose ARM was never released, the one the firmware's `Device tree
 /// loaded to 0x%x (size 0x%x)` line names ([`locate_fdt`]). The header is
 /// validated before anything is believed or written out.
-fn report_fdt(
-    opts: &BootOpts,
-    machine: &mut Machine,
-    handoff: Option<Handoff>,
-    console: &[u8],
-) -> Result<()> {
+fn report_fdt(opts: &BootOpts, machine: &Machine, located: Option<(u32, Vec<u8>)>) -> Result<()> {
     let BootOpts {
         verbose,
         print_fdt,
         ref dump_fdt,
         ..
     } = *opts;
-    match locate_fdt(machine, handoff, console) {
+    match located {
         Some((addr, blob)) => {
             match rpi_virt_fw::fdt::Fdt::parse(&blob) {
                 Ok(fdt) => {
