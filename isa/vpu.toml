@@ -610,16 +610,24 @@ outstanding **vector load**: put a `v8ld` in front of one and it retires in
 2 ms, with nothing in front of it it never returns. A vector *store* does not
 satisfy it and neither does a *scalar* load.
 
-What licenses the *next* one is narrower than a count of loads. Measured, each
-on a board that answered the mailbox the moment before:
+At most **two** of them ever retire, and the second only when a non-fence
+vector op sits between them. Measured, each on a board that answered the
+mailbox the moment before:
 
-- load then one fence: 2 ms. Two loads then one fence: the same.
-- load, two `v32mov`s, then two fences: 1 ms, both of them retiring.
-- load then two fences back to back: hangs. Writing them to different rows
-  does not help, and neither does a second load before the second fence.
+| what runs | what retires |
+|---|---|
+| load, fence | the fence, in 2 ms |
+| load, fence, fence | the first only |
+| load, `v32mov`, fence, fence | both, in 1 ms |
+| load, `v32mov`, `v32mov`, fence, fence | both |
+| load, `v32mov`, `v32mov`, fence x3 | none of them |
+| load, `v32mov`, fence x4 | none |
+| load, load, fence, fence | none |
+| load, fence, load, fence | none |
 
-So it is not one credit per load — it is closer to needing other vector work
-in between — and exactly what the unit is draining is not established.
+Extra `v32mov`s do not raise the cap and a second load does not either, which
+is odd enough to leave as a measured pattern rather than a rule. What the unit
+is draining is not established.
 
 Everything that made them look fatal follows from that. Every probe of them
 loaded its vectors first, so the first one always retired; the second or third
