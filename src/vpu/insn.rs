@@ -1315,6 +1315,19 @@ pub enum VecExec {
     /// Raspberry Pi 4B d03115, the last of them through `vpuprobe3.py`, which
     /// compares the whole allocation before and after.
     NoEffect,
+    /// The unnamed memory sub-ops, which are a **fence**: each writes a zero
+    /// into its destination element and waits for a write to the register
+    /// file. Measured on a Raspberry Pi 4B d03115 — `probes/ldop.s` and its
+    /// neighbours — a vector load or a vector ALU op licenses one, a vector
+    /// store and any scalar instruction do not, and with nothing written the
+    /// instruction never returns. Sub-ops 11, 16 and 27 all behave alike.
+    Fence {
+        d: Option<VecOperand>,
+        width: u32,
+        reps: VecRep,
+        step_d: bool,
+        pred: VecPred,
+    },
     /// Needs a part of the vector unit this model does not implement.
     NeedsVrf,
 }
@@ -1385,6 +1398,7 @@ impl VecInsn {
                 .or_else(|| self.gather())
                 .or_else(|| self.lut())
                 .or_else(|| self.zeros())
+                .or_else(|| self.fence())
             {
                 return e;
             }
@@ -1679,6 +1693,37 @@ impl VecInsn {
     /// The width field picks the saturation rather than an element size:
     /// `v8` is the plain form, `v16` clamps into a signed 32-bit range and
     /// `v32` into a signed 16-bit one.
+    /// The fences: every memory sub-op with no name of its own except 7,
+    /// which writes its zero and waits for nothing.
+    fn fence(&self) -> Option<VecExec> {
+        if !self.mem || !matches!(self.subop, 3 | 10..=23 | 25..=31) {
+            return None;
+        }
+        let width = match self.lane_bits {
+            8 => 1,
+            16 => 2,
+            32 => 4,
+            _ => return None,
+        };
+        Some(VecExec::Fence {
+            d: (!self.d.is_dash())
+                .then(|| {
+                    Some(VecOperand {
+                        reg: self.d.window()?,
+                        addend: (self.d.addend != 15).then_some(self.d.addend),
+                    })
+                })
+                .flatten(),
+            width,
+            reps: match self.rep {
+                7 => VecRep::FromR0,
+                n => VecRep::Fixed(1 << n),
+            },
+            step_d: self.d.inc,
+            pred: VecPred::from_field(self.pred)?,
+        })
+    }
+
     /// Memory sub-op 7, the one blank in the class that is safe to carry out.
     fn zeros(&self) -> Option<VecExec> {
         if self.subop != 7 || !self.mem || self.d.is_dash() {

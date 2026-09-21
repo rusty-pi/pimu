@@ -59,6 +59,15 @@ pub struct Vrf {
     /// Each lane addresses its own [`LUT_LANE`] bytes of it — lanes that share
     /// an index keep their own value, so the table is banked, not shared.
     pub lut: Box<[u8; LUT]>,
+    /// Whether anything has written the file since the last fence retired.
+    ///
+    /// The unnamed memory sub-ops wait for a write to the register file: a
+    /// vector load or a vector ALU op licenses one, a store or a scalar
+    /// instruction does not, and with nothing written the instruction never
+    /// returns. Measured with `probes/ldop.s`, `addbetween.s`, `stbetween.s`
+    /// and `scal2.s` on a Raspberry Pi 4B d03115 — and on the board at most
+    /// two retire whatever else runs, which this does not reproduce.
+    pub written: bool,
     /// One accumulator per lane. Wider than an element — four accumulates of
     /// `0xffff` read back as `0x3fffc` — so it is kept as a `u32`; the `SIGN`
     /// bit of the modifier decides how a result is extended into it.
@@ -70,6 +79,7 @@ impl Default for Vrf {
         Vrf {
             bytes: Box::new([0; DIM * DIM]),
             lut: Box::new([0; LUT]),
+            written: false,
             lane_z: 0,
             lane_n: 0,
             lane_c: 0,
@@ -115,6 +125,9 @@ impl Vrf {
 
     /// Write one element, truncated to `w` bytes.
     pub fn write(&mut self, row: u8, e: u32, w: u32, value: u32) {
+        // The fences in the memory class wait for one of these — see
+        // [`Self::written`] and `probes/ldop.s`.
+        self.written = true;
         let off = offset(row, e, w);
         for i in 0..w as usize {
             self.bytes[(off + i) % (DIM * DIM)] = (value >> (8 * i)) as u8;

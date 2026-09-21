@@ -1614,6 +1614,51 @@ impl Vpu {
                             }
                         }
                     }
+                    // A fence: it retires when the register file has been
+                    // written since the last one, and on the board it waits
+                    // for ever when it has not. There is nothing to wait for
+                    // here, so an unlicensed one is reported the way any
+                    // instruction the model cannot carry out is.
+                    VecExec::Fence {
+                        d,
+                        width,
+                        reps,
+                        step_d,
+                        pred,
+                    } => {
+                        if !self.vrf.written {
+                            if let Some(step) =
+                                self.unimpl(pc, v.raw, v.len, InsnClass::Vector48, next)
+                            {
+                                return Some(step);
+                            }
+                            return Some(Step::Ran);
+                        }
+                        self.vrf.written = false;
+                        let lanes = self.vrf.lanes(pred);
+                        let reps = match reps {
+                            VecRep::Fixed(n) => n,
+                            VecRep::FromR0 => self.regs.get(0),
+                        };
+                        let d_add = d
+                            .and_then(|o| o.addend)
+                            .map_or(0, |r| self.regs.get(r as usize));
+                        let _ = width;
+                        if let Some(o) = d {
+                            for rep in 0..reps {
+                                for lane in 0..vrf::LANES {
+                                    if lanes & (1 << lane) == 0 {
+                                        continue;
+                                    }
+                                    let (row, e) =
+                                        o.reg.lane(lane, if step_d { rep } else { 0 }, d_add);
+                                    self.vrf.write(row, e, o.reg.elem_bytes as u32, 0);
+                                }
+                            }
+                        }
+                        // Its own zeros do not license the next one.
+                        self.vrf.written = false;
+                    }
                     VecExec::Zeros {
                         d,
                         width,

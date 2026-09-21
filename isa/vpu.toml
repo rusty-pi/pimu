@@ -648,9 +648,11 @@ corrupted — 96 MB of firmware memory diffed across a run moved only counters
 and timestamps — the status register is unchanged, and a deliberate `bkpt` in
 the same place behaves nothing like it.
 
-They are not carried out here: a fence whose condition this model cannot
-reproduce — the model has no outstanding loads to wait on — has no honest
-shorthand.
+They are carried out here as fences: one retires when the register file has
+been written since the last one, and otherwise the model stops where the board
+would wait for ever. The board's cap of two is *not* reproduced — the model
+retires as many as the code licenses — and nothing on a boot path exercises
+either behaviour.
 Sub-op 7 is the one exception measured so far: it answers zero at every width,
 writes nothing at an address handed to it, leaves the lookup table alone, and
 the board lives, run after run. Sub-ops 11-15, 17, 18 and 20-23 killed the
@@ -720,7 +722,7 @@ confidence = "high"
 [[section.row]]
 subop    = 3
 mnemonic = "mem03"
-status   = "unknown"
+status   = "executes"
 cells    = ["3", "`mem03`", "—"]
 
 [[section.row.source]]
@@ -812,7 +814,7 @@ confidence = "high"
 [[section.row]]
 subop    = 10
 mnemonic = "mem10"
-status   = "unknown"
+status   = "executes"
 cells    = ["10", "`mem10`", "—"]
 
 [[section.row.source]]
@@ -823,7 +825,7 @@ confidence = "low"
 [[section.row]]
 subop    = 11
 mnemonic = "mem11"
-status   = "unknown"
+status   = "executes"
 cells    = ["11", "`mem11`", "a **zero** into the destination element, and the firmware dead: a board healthy the moment before stopped answering the mailbox. Reproduced"]
 
 [[section.row.source]]
@@ -834,7 +836,7 @@ confidence = "medium"
 [[section.row]]
 subop    = 12
 mnemonic = "mem12"
-status   = "unknown"
+status   = "executes"
 cells    = ["12", "`mem12`", "a **zero** into the destination element, and the firmware dead: a board healthy the moment before stopped answering the mailbox. Reproduced"]
 
 [[section.row.source]]
@@ -845,7 +847,7 @@ confidence = "medium"
 [[section.row]]
 subop    = 13
 mnemonic = "mem13"
-status   = "unknown"
+status   = "executes"
 cells    = ["13", "`mem13`", "a **zero** into the destination element, and the firmware dead afterwards"]
 
 [[section.row.source]]
@@ -856,7 +858,7 @@ confidence = "medium"
 [[section.row]]
 subop    = 14
 mnemonic = "mem14"
-status   = "unknown"
+status   = "executes"
 cells    = ["14", "`mem14`", "a **zero** into the destination element, and the firmware dead afterwards"]
 
 [[section.row.source]]
@@ -867,7 +869,7 @@ confidence = "medium"
 [[section.row]]
 subop    = 15
 mnemonic = "mem15"
-status   = "unknown"
+status   = "executes"
 cells    = ["15", "`mem15`", "a **zero** into the destination element, and the firmware dead afterwards"]
 
 [[section.row.source]]
@@ -878,7 +880,7 @@ confidence = "medium"
 [[section.row]]
 subop    = 16
 mnemonic = "mem16"
-status   = "unknown"
+status   = "executes"
 cells    = ["16", "`mem16`", "—"]
 
 [[section.row.source]]
@@ -889,7 +891,7 @@ confidence = "low"
 [[section.row]]
 subop    = 17
 mnemonic = "mem17"
-status   = "unknown"
+status   = "executes"
 cells    = ["17", "`mem17`", "a **zero** into the destination element, and the firmware dead afterwards"]
 
 [[section.row.source]]
@@ -900,7 +902,7 @@ confidence = "medium"
 [[section.row]]
 subop    = 18
 mnemonic = "mem18"
-status   = "unknown"
+status   = "executes"
 cells    = ["18", "`mem18`", "a **zero** into the destination element, and the firmware dead afterwards"]
 
 [[section.row.source]]
@@ -911,7 +913,7 @@ confidence = "medium"
 [[section.row]]
 subop    = 19
 mnemonic = "mem19"
-status   = "unknown"
+status   = "executes"
 cells    = ["19", "`mem19`", "—"]
 
 [[section.row.source]]
@@ -922,7 +924,7 @@ confidence = "low"
 [[section.row]]
 subop    = 20
 mnemonic = "mem20"
-status   = "unknown"
+status   = "executes"
 cells    = ["20", "`mem20`", "a **zero** into the destination element, and the firmware dead afterwards"]
 
 [[section.row.source]]
@@ -933,7 +935,7 @@ confidence = "medium"
 [[section.row]]
 subop    = 21
 mnemonic = "mem21"
-status   = "unknown"
+status   = "executes"
 cells    = ["21", "`mem21`", "a **zero** into the destination element, and the firmware dead afterwards"]
 
 [[section.row.source]]
@@ -944,7 +946,7 @@ confidence = "medium"
 [[section.row]]
 subop    = 22
 mnemonic = "mem22"
-status   = "unknown"
+status   = "executes"
 cells    = ["22", "`mem22`", "a **zero** into the destination element, and the firmware dead afterwards"]
 
 [[section.row.source]]
@@ -955,7 +957,7 @@ confidence = "medium"
 [[section.row]]
 subop    = 23
 mnemonic = "mem23"
-status   = "unknown"
+status   = "executes"
 cells    = ["23", "`mem23`", "a **zero** into the destination element, and the firmware dead afterwards"]
 
 [[section.row.source]]
@@ -987,7 +989,7 @@ confidence = "high"
 [[section.row]]
 subop    = 25
 mnemonic = "mem25"
-status   = "unknown"
+status   = "executes"
 cells    = ["25", "`mem25`", "—"]
 
 [[section.row.source]]
@@ -998,7 +1000,7 @@ confidence = "low"
 [[section.row]]
 subop    = 26
 mnemonic = "mem26"
-status   = "unknown"
+status   = "executes"
 cells    = ["26", "`mem26`", "—"]
 
 [[section.row.source]]
@@ -1009,7 +1011,7 @@ confidence = "low"
 [[section.row]]
 subop    = 27
 mnemonic = "mem27"
-status   = "unknown"
+status   = "executes"
 cells    = ["27", "`mem27`", "—"]
 
 [[section.row.source]]
@@ -1020,7 +1022,7 @@ confidence = "low"
 [[section.row]]
 subop    = 28
 mnemonic = "mem28"
-status   = "unknown"
+status   = "executes"
 cells    = ["28", "`mem28`", "—"]
 
 [[section.row.source]]
@@ -1031,7 +1033,7 @@ confidence = "low"
 [[section.row]]
 subop    = 29
 mnemonic = "mem29"
-status   = "unknown"
+status   = "executes"
 cells    = ["29", "`mem29`", "—"]
 
 [[section.row.source]]
@@ -1042,7 +1044,7 @@ confidence = "low"
 [[section.row]]
 subop    = 30
 mnemonic = "mem30"
-status   = "unknown"
+status   = "executes"
 cells    = ["30", "`mem30`", "—"]
 
 [[section.row.source]]
@@ -1053,7 +1055,7 @@ confidence = "low"
 [[section.row]]
 subop    = 31
 mnemonic = "mem31"
-status   = "unknown"
+status   = "executes"
 cells    = ["31", "`mem31`", "—"]
 
 [[section.row.source]]
@@ -2282,9 +2284,9 @@ title = "What the model executes"
 body = """
 `VecInsn::executable` decides, by field rather than by whole-word template.
 A linear sweep of `start4.elf`'s `.text` with this decoder finds **14650**
-vector instructions, and **13833 of them execute**.
+vector instructions, and **14284 of them execute**.
 
-The 817 that do not split by what `binutils-vc4` objdump makes of the same
+The 366 that do not split by what `binutils-vc4` objdump makes of the same
 address — a better measure than the page they sit in, since a linear sweep
 through a jump table produces valid-looking encodings by accident:
 """
@@ -2296,7 +2298,7 @@ passes.
 """
 
 [[section.row]]
-cells = ["379", "words objdump refuses too — it prints them `vec48`, `vunk...` or `vop63.1`. Data: jump tables and constants a sweep cannot tell from code"]
+cells = ["287", "words objdump refuses too — it prints them `vec48`, `vunk...` or `vop63.1`. Data: jump tables and constants a sweep cannot tell from code"]
 
 [[section.row.source]]
 kind       = "decompile"
@@ -2304,15 +2306,7 @@ ref        = "`binutils-vc4` objdump over the same addresses"
 confidence = "high"
 
 [[section.row]]
-cells = ["383", "the memory sub-ops that kill the firmware — 3, 10, 11-15, 16-23, 25-31. Each writes a zero into the destination element and leaves the board unable to answer the mailbox; none is carried out for that reason"]
-
-[[section.row.source]]
-kind       = "measured"
-ref        = "`probes/m11.s`-`probes/m23.s` on Raspberry Pi 4B d03115 boards, one sub-op per board; `probes/ldop.s`, `stop.s`, `scop.s`, `unroll1.s` and `loop8ld.s` for what the wait is — a vector load satisfies it in 2 ms, a store and a scalar load do not"
-confidence = "high"
-
-[[section.row]]
-cells = ["55", "addresses objdump does not decode at all: the two linear sweeps drifting apart inside data"]
+cells = ["20", "addresses objdump does not decode at all: the two linear sweeps drifting apart inside data"]
 
 [[section.row.source]]
 kind       = "decompile"

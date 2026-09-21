@@ -3823,7 +3823,13 @@ fn the_reference_page_matches_the_model() {
     // The memory class has no one function to ask, so the set is spelled out;
     // `mem_transfer`, `gather`, `lut` and `getacc` between them cover exactly
     // these.
-    const MEM_EXECUTES: [u8; 10] = [0, 1, 2, 4, 5, 6, 7, 8, 9, 24];
+    // The fences — everything unnamed except 7, which waits for nothing —
+    // are carried out too, so the whole class is covered bar the three the
+    // gather and scatter decode still refuses.
+    const MEM_EXECUTES: [u8; 32] = [
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+        25, 26, 27, 28, 29, 30, 31,
+    ];
     for (subop, (name, says_executes)) in VEC_MEM_OPS
         .iter()
         .zip(rpi_virt_fw::isa::VEC_MEM_OPS_EXECUTE)

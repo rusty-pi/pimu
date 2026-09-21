@@ -259,9 +259,11 @@ corrupted — 96 MB of firmware memory diffed across a run moved only counters
 and timestamps — the status register is unchanged, and a deliberate `bkpt` in
 the same place behaves nothing like it.
 
-They are not carried out here: a fence whose condition this model cannot
-reproduce — the model has no outstanding loads to wait on — has no honest
-shorthand.
+They are carried out here as fences: one retires when the register file has
+been written since the last one, and otherwise the model stops where the board
+would wait for ever. The board's cap of two is *not* reproduced — the model
+retires as many as the code licenses — and nothing on a boot path exercises
+either behaviour.
 Sub-op 7 is the one exception measured so far: it answers zero at every width,
 writes nothing at an address handed to it, leaves the lookup table alone, and
 the board lives, run after run. Sub-ops 11-15, 17, 18 and 20-23 killed the
@@ -480,17 +482,16 @@ lane predicate applies to the aggregate as well.
 
 `VecInsn::executable` decides, by field rather than by whole-word template.
 A linear sweep of `start4.elf`'s `.text` with this decoder finds **14650**
-vector instructions, and **13833 of them execute**.
+vector instructions, and **14284 of them execute**.
 
-The 817 that do not split by what `binutils-vc4` objdump makes of the same
+The 366 that do not split by what `binutils-vc4` objdump makes of the same
 address — a better measure than the page they sit in, since a linear sweep
 through a jump table produces valid-looking encodings by accident:
 
 | Left over | What it is | Source |
 |---|---|---|
-| 379 | words objdump refuses too — it prints them `vec48`, `vunk...` or `vop63.1`. Data: jump tables and constants a sweep cannot tell from code | decompile: `binutils-vc4` objdump over the same addresses |
-| 383 | the memory sub-ops that kill the firmware — 3, 10, 11-15, 16-23, 25-31. Each writes a zero into the destination element and leaves the board unable to answer the mailbox; none is carried out for that reason | measured: `probes/m11.s`-`probes/m23.s` on Raspberry Pi 4B d03115 boards, one sub-op per board; `probes/ldop.s`, `stop.s`, `scop.s`, `unroll1.s` and `loop8ld.s` for what the wait is — a vector load satisfies it in 2 ms, a store and a scalar load do not |
-| 55 | addresses objdump does not decode at all: the two linear sweeps drifting apart inside data | decompile: `binutils-vc4` objdump over the same addresses |
+| 287 | words objdump refuses too — it prints them `vec48`, `vunk...` or `vop63.1`. Data: jump tables and constants a sweep cannot tell from code | decompile: `binutils-vc4` objdump over the same addresses |
+| 20 | addresses objdump does not decode at all: the two linear sweeps drifting apart inside data | decompile: `binutils-vc4` objdump over the same addresses |
 
 None of it is reached on a firmware boot: `boot` stops on an unimplemented
 instruction by default, and `boot-check testdata/boot/firmware-boot.toml`
