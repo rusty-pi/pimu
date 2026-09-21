@@ -23,13 +23,13 @@ use std::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
-use crate::spec::armctrl::{CONTROL, CONTROL_RELEASE_MASK as CONTROL_RELEASE, REG_008, REG_41C};
+use crate::spec::armctrl::{CONTROL, CONTROL_RELEASE_MASK as CONTROL_RELEASE, REG_008, TIMER_PREDIV};
 use crate::spec::Coverage;
 
 /// Everything is storage apart from the release bit.
 pub const COVERAGE: Coverage = Coverage {
     block: "armctrl",
-    decoded: &[CONTROL, REG_008, REG_41C],
+    decoded: &[CONTROL, REG_008, TIMER_PREDIV],
 };
 
 #[derive(Default)]
@@ -85,7 +85,7 @@ mod tests {
         let mut c = ArmCtrl::new();
         c.write(0, Width::Word, 0x200).unwrap();
         assert!(!c.take_release());
-        c.write(REG_41C, Width::Word, 0xA).unwrap();
+        c.write(TIMER_PREDIV, Width::Word, 0xA).unwrap();
         c.write(REG_008, Width::Word, 0x3030).unwrap();
         c.write(CONTROL, Width::Word, 0x1000).unwrap();
         assert!(c.take_release());

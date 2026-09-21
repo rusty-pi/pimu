@@ -69,6 +69,393 @@ ref        = "start4: `0x5A001000` at `0x3EC7C448`"
 confidence = "high"
 
 [[register]]
+name   = "GP0CTL"
+offset = 0x70
+access = "rw"
+notes  = "General-purpose clock 0: what a board routes to a `GPCLK0` pin (GPIO 4, 5 and 6 on ALT0). Nothing in a boot programs it, and the model runs no generator — `BUSY` reads back whatever was written, as for every other `*CTL` here."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 Table 98 (General Purpose Clocks Registers)"
+confidence = "high"
+
+[[register.source]]
+kind       = "linux"
+ref        = "`clk-bcm2835.c`: `CM_GP0CTL`"
+confidence = "high"
+
+[[register.field]]
+name   = "SRC"
+bits   = "3:0"
+notes  = "Which source feeds the generator: 1 the oscillator, 4 to 6 the PLLs’ per-peripheral channels."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 Table 99 (`CM_GP0CTL` / `CM_GP1CTL` / `CM_GP2CTL`)"
+confidence = "high"
+
+[[register.field]]
+name   = "ENAB"
+bits   = "4"
+notes  = "Start the generator. It only stops on a clean cycle boundary, so `BUSY` lags this."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 Table 99 (`CM_GP0CTL` / `CM_GP1CTL` / `CM_GP2CTL`)"
+confidence = "high"
+
+[[register.field]]
+name   = "KILL"
+bits   = "5"
+notes  = "Stop the generator at once, mid-cycle. For debug."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 Table 99 (`CM_GP0CTL` / `CM_GP1CTL` / `CM_GP2CTL`)"
+confidence = "high"
+
+[[register.field]]
+name   = "BUSY"
+bits   = "7"
+notes  = "The generator is running."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 Table 99 (`CM_GP0CTL` / `CM_GP1CTL` / `CM_GP2CTL`)"
+confidence = "high"
+
+[[register.field]]
+name   = "FLIP"
+bits   = "8"
+notes  = "Invert the output."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 Table 99 (`CM_GP0CTL` / `CM_GP1CTL` / `CM_GP2CTL`)"
+confidence = "high"
+
+[[register.field]]
+name   = "MASH"
+bits   = "10:9"
+notes  = "How many MASH stages the fractional divider uses; 0 is integer division only."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 Table 99 (`CM_GP0CTL` / `CM_GP1CTL` / `CM_GP2CTL`)"
+confidence = "high"
+
+[[register.field]]
+name   = "PASSWD"
+bits   = "31:24"
+access = "w"
+notes  = "`0x5A`, or the write is ignored."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 Table 99 (`CM_GP0CTL` / `CM_GP1CTL` / `CM_GP2CTL`)"
+confidence = "high"
+
+[[register]]
+name   = "GP0DIV"
+offset = 0x74
+access = "rw"
+notes  = "Divisor for general-purpose clock 0: integer part in `DIVI`, twelve fractional bits in `DIVF`."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 Table 100 (`CM_GP0DIV` / `CM_GP1DIV` / `CM_GP2DIV`)"
+confidence = "high"
+
+[[register.field]]
+name   = "DIVF"
+bits   = "11:0"
+notes  = "Fractional part of the divisor, in 1/4096ths."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 Table 100 (`CM_GP0DIV` / `CM_GP1DIV` / `CM_GP2DIV`)"
+confidence = "high"
+
+[[register.field]]
+name   = "DIVI"
+bits   = "23:12"
+notes  = "Integer part of the divisor."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 Table 100 (`CM_GP0DIV` / `CM_GP1DIV` / `CM_GP2DIV`)"
+confidence = "high"
+
+[[register.field]]
+name   = "PASSWD"
+bits   = "31:24"
+access = "w"
+notes  = "`0x5A`, or the write is ignored."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 Table 100 (`CM_GP0DIV` / `CM_GP1DIV` / `CM_GP2DIV`)"
+confidence = "high"
+
+[[register]]
+name   = "GP1CTL"
+offset = 0x78
+access = "rw"
+notes  = "General-purpose clock 1: what a board routes to a `GPCLK1` pin (GPIO 4, 5 and 6 on ALT0). Nothing in a boot programs it, and the model runs no generator — `BUSY` reads back whatever was written, as for every other `*CTL` here."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 Table 98 (General Purpose Clocks Registers)"
+confidence = "high"
+
+[[register.source]]
+kind       = "linux"
+ref        = "`clk-bcm2835.c`: `CM_GP1CTL`"
+confidence = "high"
+
+[[register.field]]
+name   = "SRC"
+bits   = "3:0"
+notes  = "Which source feeds the generator: 1 the oscillator, 4 to 6 the PLLs’ per-peripheral channels."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 Table 99 (`CM_GP0CTL` / `CM_GP1CTL` / `CM_GP2CTL`)"
+confidence = "high"
+
+[[register.field]]
+name   = "ENAB"
+bits   = "4"
+notes  = "Start the generator. It only stops on a clean cycle boundary, so `BUSY` lags this."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 Table 99 (`CM_GP0CTL` / `CM_GP1CTL` / `CM_GP2CTL`)"
+confidence = "high"
+
+[[register.field]]
+name   = "KILL"
+bits   = "5"
+notes  = "Stop the generator at once, mid-cycle. For debug."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 Table 99 (`CM_GP0CTL` / `CM_GP1CTL` / `CM_GP2CTL`)"
+confidence = "high"
+
+[[register.field]]
+name   = "BUSY"
+bits   = "7"
+notes  = "The generator is running."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 Table 99 (`CM_GP0CTL` / `CM_GP1CTL` / `CM_GP2CTL`)"
+confidence = "high"
+
+[[register.field]]
+name   = "FLIP"
+bits   = "8"
+notes  = "Invert the output."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 Table 99 (`CM_GP0CTL` / `CM_GP1CTL` / `CM_GP2CTL`)"
+confidence = "high"
+
+[[register.field]]
+name   = "MASH"
+bits   = "10:9"
+notes  = "How many MASH stages the fractional divider uses; 0 is integer division only."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 Table 99 (`CM_GP0CTL` / `CM_GP1CTL` / `CM_GP2CTL`)"
+confidence = "high"
+
+[[register.field]]
+name   = "PASSWD"
+bits   = "31:24"
+access = "w"
+notes  = "`0x5A`, or the write is ignored."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 Table 99 (`CM_GP0CTL` / `CM_GP1CTL` / `CM_GP2CTL`)"
+confidence = "high"
+
+[[register]]
+name   = "GP1DIV"
+offset = 0x7c
+access = "rw"
+notes  = "Divisor for general-purpose clock 1: integer part in `DIVI`, twelve fractional bits in `DIVF`."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 Table 100 (`CM_GP0DIV` / `CM_GP1DIV` / `CM_GP2DIV`)"
+confidence = "high"
+
+[[register.field]]
+name   = "DIVF"
+bits   = "11:0"
+notes  = "Fractional part of the divisor, in 1/4096ths."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 Table 100 (`CM_GP0DIV` / `CM_GP1DIV` / `CM_GP2DIV`)"
+confidence = "high"
+
+[[register.field]]
+name   = "DIVI"
+bits   = "23:12"
+notes  = "Integer part of the divisor."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 Table 100 (`CM_GP0DIV` / `CM_GP1DIV` / `CM_GP2DIV`)"
+confidence = "high"
+
+[[register.field]]
+name   = "PASSWD"
+bits   = "31:24"
+access = "w"
+notes  = "`0x5A`, or the write is ignored."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 Table 100 (`CM_GP0DIV` / `CM_GP1DIV` / `CM_GP2DIV`)"
+confidence = "high"
+
+[[register]]
+name   = "GP2CTL"
+offset = 0x80
+access = "rw"
+notes  = "General-purpose clock 2: what a board routes to a `GPCLK2` pin (GPIO 4, 5 and 6 on ALT0). Nothing in a boot programs it, and the model runs no generator — `BUSY` reads back whatever was written, as for every other `*CTL` here."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 Table 98 (General Purpose Clocks Registers)"
+confidence = "high"
+
+[[register.source]]
+kind       = "linux"
+ref        = "`clk-bcm2835.c`: `CM_GP2CTL`"
+confidence = "high"
+
+[[register.field]]
+name   = "SRC"
+bits   = "3:0"
+notes  = "Which source feeds the generator: 1 the oscillator, 4 to 6 the PLLs’ per-peripheral channels."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 Table 99 (`CM_GP0CTL` / `CM_GP1CTL` / `CM_GP2CTL`)"
+confidence = "high"
+
+[[register.field]]
+name   = "ENAB"
+bits   = "4"
+notes  = "Start the generator. It only stops on a clean cycle boundary, so `BUSY` lags this."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 Table 99 (`CM_GP0CTL` / `CM_GP1CTL` / `CM_GP2CTL`)"
+confidence = "high"
+
+[[register.field]]
+name   = "KILL"
+bits   = "5"
+notes  = "Stop the generator at once, mid-cycle. For debug."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 Table 99 (`CM_GP0CTL` / `CM_GP1CTL` / `CM_GP2CTL`)"
+confidence = "high"
+
+[[register.field]]
+name   = "BUSY"
+bits   = "7"
+notes  = "The generator is running."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 Table 99 (`CM_GP0CTL` / `CM_GP1CTL` / `CM_GP2CTL`)"
+confidence = "high"
+
+[[register.field]]
+name   = "FLIP"
+bits   = "8"
+notes  = "Invert the output."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 Table 99 (`CM_GP0CTL` / `CM_GP1CTL` / `CM_GP2CTL`)"
+confidence = "high"
+
+[[register.field]]
+name   = "MASH"
+bits   = "10:9"
+notes  = "How many MASH stages the fractional divider uses; 0 is integer division only."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 Table 99 (`CM_GP0CTL` / `CM_GP1CTL` / `CM_GP2CTL`)"
+confidence = "high"
+
+[[register.field]]
+name   = "PASSWD"
+bits   = "31:24"
+access = "w"
+notes  = "`0x5A`, or the write is ignored."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 Table 99 (`CM_GP0CTL` / `CM_GP1CTL` / `CM_GP2CTL`)"
+confidence = "high"
+
+[[register]]
+name   = "GP2DIV"
+offset = 0x84
+access = "rw"
+notes  = "Divisor for general-purpose clock 2: integer part in `DIVI`, twelve fractional bits in `DIVF`."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 Table 100 (`CM_GP0DIV` / `CM_GP1DIV` / `CM_GP2DIV`)"
+confidence = "high"
+
+[[register.field]]
+name   = "DIVF"
+bits   = "11:0"
+notes  = "Fractional part of the divisor, in 1/4096ths."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 Table 100 (`CM_GP0DIV` / `CM_GP1DIV` / `CM_GP2DIV`)"
+confidence = "high"
+
+[[register.field]]
+name   = "DIVI"
+bits   = "23:12"
+notes  = "Integer part of the divisor."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 Table 100 (`CM_GP0DIV` / `CM_GP1DIV` / `CM_GP2DIV`)"
+confidence = "high"
+
+[[register.field]]
+name   = "PASSWD"
+bits   = "31:24"
+access = "w"
+notes  = "`0x5A`, or the write is ignored."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §5.4.2 Table 100 (`CM_GP0DIV` / `CM_GP1DIV` / `CM_GP2DIV`)"
+confidence = "high"
+
+[[register]]
 name   = "PERIICTL"
 offset = 0x020
 access = "rw"

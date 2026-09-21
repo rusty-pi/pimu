@@ -54,10 +54,152 @@ ref        = "`0x7E00B008` <- `0x00003030` after `arm_loader`"
 confidence = "high"
 
 [[register]]
-name   = "REG_41C"
+name   = "TIMER_LOAD"
+offset = 0x400
+access = "rw"
+notes  = "What the countdown reloads with, and what a write here puts straight into `TIMER_VALUE`."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §12.2 Table 192 (Timer Registers): the ARM-side SP804-like timer, based at `0x7E00B000` with its registers from `+0x400`"
+confidence = "high"
+
+[[register]]
+name   = "TIMER_VALUE"
+offset = 0x404
+access = "r"
+notes  = "The countdown as it stands. Reads 0 here: the model does not run this timer."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §12.2 Table 192 (Timer Registers): the ARM-side SP804-like timer, based at `0x7E00B000` with its registers from `+0x400`"
+confidence = "high"
+
+[[register]]
+name   = "TIMER_CONTROL"
+offset = 0x408
+access = "rw"
+notes  = "Which parts of the timer run, and how the two clocks are divided. Wider than a real SP804’s, which stops at bit 7."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §12.2 Table 192 (Timer Registers): the ARM-side SP804-like timer, based at `0x7E00B000` with its registers from `+0x400`"
+confidence = "high"
+
+[[register.field]]
+name  = "DIV"
+bits  = "3:2"
+notes = "The SP804 pre-scale: 0 divides the pre-divided clock by 1, 1 by 16, 2 by 256."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §12.2 Table 192 (Timer Registers): the ARM-side SP804-like timer, based at `0x7E00B000` with its registers from `+0x400`"
+confidence = "high"
+
+[[register.field]]
+name  = "IE"
+bits  = "5"
+notes = "Timer interrupt enabled. Set out of reset."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §12.2 Table 192 (Timer Registers): the ARM-side SP804-like timer, based at `0x7E00B000` with its registers from `+0x400`"
+confidence = "high"
+
+[[register.field]]
+name  = "ENABLE"
+bits  = "7"
+notes = "Run the countdown."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §12.2 Table 192 (Timer Registers): the ARM-side SP804-like timer, based at `0x7E00B000` with its registers from `+0x400`"
+confidence = "high"
+
+[[register.field]]
+name  = "DBGHALT"
+bits  = "8"
+notes = "Stop the timers while the ARM is halted in debug."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §12.2 Table 192 (Timer Registers): the ARM-side SP804-like timer, based at `0x7E00B000` with its registers from `+0x400`"
+confidence = "high"
+
+[[register.field]]
+name  = "ENAFREE"
+bits  = "9"
+notes = "Run the free-running counter."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §12.2 Table 192 (Timer Registers): the ARM-side SP804-like timer, based at `0x7E00B000` with its registers from `+0x400`"
+confidence = "high"
+
+[[register.field]]
+name  = "FREEDIV"
+bits  = "23:16"
+notes = "Free-running counter pre-scaler: it counts at `sys_clock / (FREEDIV + 1)`. Reset `0x3E`."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §12.2 Table 192 (Timer Registers): the ARM-side SP804-like timer, based at `0x7E00B000` with its registers from `+0x400`"
+confidence = "high"
+
+[[register]]
+name   = "TIMER_IRQCNTL"
+offset = 0x40C
+access = "w"
+notes  = "Write 1 to bit 0 to acknowledge the timer interrupt."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §12.2 Table 192 (Timer Registers): the ARM-side SP804-like timer, based at `0x7E00B000` with its registers from `+0x400`"
+confidence = "high"
+
+[[register]]
+name   = "TIMER_RAWIRQ"
+offset = 0x410
+access = "r"
+notes  = "Bit 0: the countdown has expired, whether or not the interrupt is enabled."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §12.2 Table 192 (Timer Registers): the ARM-side SP804-like timer, based at `0x7E00B000` with its registers from `+0x400`"
+confidence = "high"
+
+[[register]]
+name   = "TIMER_MSKIRQ"
+offset = 0x414
+access = "r"
+notes  = "Bit 0: the interrupt line is up — `TIMER_RAWIRQ` and `TIMER_CONTROL.IE` together."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §12.2 Table 192 (Timer Registers): the ARM-side SP804-like timer, based at `0x7E00B000` with its registers from `+0x400`"
+confidence = "high"
+
+[[register]]
+name   = "TIMER_RELOAD"
+offset = 0x418
+access = "rw"
+notes  = "Like `TIMER_LOAD`, but it does not restart the countdown."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §12.2 Table 192 (Timer Registers): the ARM-side SP804-like timer, based at `0x7E00B000` with its registers from `+0x400`"
+confidence = "high"
+
+[[register]]
+name   = "TIMER_PREDIV"
 offset = 0x41C
 access = "rw"
-notes  = "Written `0x1F3` shortly before the release and `0xA` at it. Meaning unknown."
+notes  = "The ARM timer’s pre-divider, 10 bits, reset `0x7D`: the timer counts at `apb_clock / (TIMER_PREDIV + 1)`. Not a register a real SP804 has. start4 writes `0x1F3` (a divisor of 500) before the release and `0xA` (11) at it, which is it setting the ARM timer’s rate for whatever runs next. The model does not run the timer, so the word is storage."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §12.2 Table 192 (Timer Registers): the ARM-side SP804-like timer, based at `0x7E00B000` with its registers from `+0x400`, and §12.2 Table 200 (`PREDIV`, bits 9:0, reset `0x7D`)"
+confidence = "high"
 
 [[register.source]]
 kind       = "trace"
@@ -67,6 +209,17 @@ confidence = "high"
 [[register.source]]
 kind       = "trace"
 ref        = "`0x7E00B41C` <- `0x000001F3` at `0x3EC53594`, before the release"
+confidence = "high"
+
+[[register]]
+name   = "TIMER_FREECNT"
+offset = 0x420
+access = "r"
+notes  = "The free-running counter `TIMER_CONTROL.ENAFREE` starts. Reads 0 here."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "BCM2711 ARM Peripherals, §12.2 Table 192 (Timer Registers): the ARM-side SP804-like timer, based at `0x7E00B000` with its registers from `+0x400`"
 confidence = "high"
 
 [[register]]
