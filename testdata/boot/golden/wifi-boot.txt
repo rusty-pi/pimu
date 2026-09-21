@@ -714,6 +714,8 @@ Enter 'help' for a list of built-in commands.
 
 / # \x1b[6nM=/lib/modules/$(uname -r)/kernel
 / # \x1b[6ninsmod $M/net/rfkill/rfkill.ko
+[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
+[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
 / # \x1b[6ninsmod $M/net/wireless/cfg80211.ko
 [t] cfg80211: Loading compiled-in X.509 certificates for regulatory database
 [t] cfg80211: Loading compiled-in X.509 certificates for regulatory database
@@ -742,18 +744,23 @@ Enter 'help' for a list of built-in commands.
 [t] usbcore: registered new interface driver brcmfmac
 [t] usbcore: registered new interface driver brcmfmac
 / # \x1b[6nip link
+[t] usb 1-1: New USB device found, idVendor=2109, idProduct=3431, bcdDevice= 4.21
+[t] usb 1-1: New USB device found, idVendor=2109, idProduct=3431, bcdDevice= 4.21
+[t] usb 1-1: New USB device strings: Mfr=0, Product=1, SerialNumber=0
+[t] usb 1-1: New USB device strings: Mfr=0, Product=1, SerialNumber=0
+[t] usb 1-1: Product: USB2.0 Hub
+[t] usb 1-1: Product: USB2.0 Hub
+[t] hub 1-1:1.0: USB hub found
+[t] hub 1-1:1.0: USB hub found
+[t] hub 1-1:1.0: 4 ports detected
+[t] hub 1-1:1.0: 4 ports detected
 1: lo: <LOOPBACK> mtu 65536 qdisc noop qlen 1000
     link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
 2: eth0: <BROADCAST,MULTICAST> mtu 1500 qdisc noop qlen 1000
     link/ether 02:00:5e:00:53:01 brd ff:ff:ff:ff:ff:ff
 / # \x1b[6ndmesg | tail -20
-[t] Freeing unused kernel memory: 5632K
-[t] Run /sbin/init as init process
-[t]   with arguments:
-[t]     /sbin/init
-[t]   with environment:
-[t]     HOME=/
 [t]     TERM=linux
+[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
 [t] cfg80211: Loading compiled-in X.509 certificates for regulatory database
 [t] Loaded X.509 cert 'benh@debian.org: 577e021cb980e0e820821ba7b54b4961b8b4fadf'
 [t] Loaded X.509 cert 'romain.perier@gmail.com: 3abbc6ec146e09d1b6016ab9d6cf71dd233f0328'
@@ -767,4 +774,9 @@ Enter 'help' for a list of built-in commands.
 [t] brcmfmac: brcmf_ops_sdio_probe: F2 error, probe failed -52...
 [t] brcmfmac mmc1:0001:2: probe with driver brcmfmac failed with error -52
 [t] usbcore: registered new interface driver brcmfmac
+[t] usb 1-1: New USB device found, idVendor=2109, idProduct=3431, bcdDevice= 4.21
+[t] usb 1-1: New USB device strings: Mfr=0, Product=1, SerialNumber=0
+[t] usb 1-1: Product: USB2.0 Hub
+[t] hub 1-1:1.0: USB hub found
+[t] hub 1-1:1.0: 4 ports detected
 / # \x1b[6n
