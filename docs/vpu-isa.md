@@ -216,101 +216,98 @@ and take the ordinary base-plus-displacement address. `memread` and `memwrite`
 address neither: they are the unit's own lookup table, 1 KiB of it, banked
 sixteen ways so that each lane indexes its own 64 bytes.
 
-Most of the sub-ops with no name of their own are **fences on the vector
-memory unit** — 3, 11-15, 17, 18, 20-23 and 25-27. Seven of them are not:
-10, 16, 19 and 28-31 hang even with a vector load in front of them, where a
-fence retires in a millisecond, and those stay unimplemented. Each writes a zero into the destination element, and then waits for an
-outstanding **vector load**: put a `v8ld` in front of one and it retires in
-2 ms, with nothing in front of it it never returns. A vector *store* does not
-satisfy it and neither does a *scalar* load.
+The sub-ops with no name of their own — 3, 7, 10-23 and 25-31 — all do the
+same small thing: each **writes a lane of zeros** at the operation's width and
+waits for nothing. It reads nothing at the address it is handed, leaves the
+lookup table alone, and retires in microseconds. A blob whose *first*
+instruction is one of them, with nothing vector before it at all, retires just
+the same.
 
-What they wait on is a **write to the register file**. A vector load licenses
-one, and so does a vector ALU op — `v16add`, which touches no memory at all,
-works exactly as well as `v32mov`. A vector *store* does not, and neither does
-a scalar instruction: a store reads the file and writes memory, and a scalar
-op leaves the file alone. So the fence is waiting for VRF write traffic, and
-a load is simply the first writer in any probe that has one.
+That last measurement is what corrected the earlier reading of these as
+**fences** waiting on a write to the register file. Every probe behind that
+reading spelled the B slot as a vector register, and in that shape seven of
+them — 10, 16, 19 and 28-31 — stall the vector unit outright. Spelled instead
+with a scalar address, `v8mem10 H(0,0),H(20,0),(r4)`, all seven retire and
+write their zero like the rest. The "fence" was the malformed operand, not the
+sub-op, and "it retires in 2 ms when a load precedes it" was a property of the
+probes rather than of the silicon.
 
-At most **two** of them ever retire, and the second only when such a write
-sits between them. Measured, each on a board that answered the
-mailbox the moment before:
+The zero is easy to mistake for a load, which is the other thing that went
+wrong: a `v8ld` from an address holding zeros leaves a destination preset to
+all-ones reading `00ffffff` in every lane, and so does one of these. Handed a
+page of 16 known-good pointers, a plain `v8ld` answers the pointer bytes and
+`v8mem10` still answers zero — measured side by side, which is what settles it.
 
-| what runs | what retires |
+Two things they do not share:
+
+- **3** and **7** leave the firmware running. Every other one kills it: the
+  board answers no further mailbox call and has to be rebooted, whether or not
+  the instruction itself retired. A board wedged this way does not always come
+  back from a reboot — three of them needed a power cycle.
+- with a **vector register** in the B slot, an encoding `binutils-vc4` will
+  print, sub-ops 10, 16, 19 and 28-31 stall the unit instead of retiring. The
+  rest write their zero whatever B holds.
+
+In that vector-B shape the stall also has a pattern, measured before the shape
+itself was understood and left here as data rather than as a rule. Each row is
+a board that answered the mailbox the moment before:
+
+| what runs | what gets past it |
 |---|---|
-| load, fence | the fence, in 2 ms |
-| load, fence, fence | the first only |
-| load, `v32mov`, fence, fence | both, in 1 ms |
-| load, `v32mov`, `v32mov`, fence, fence | both |
-| load, `v32mov`, `v32mov`, fence x3 | none of them |
-| load, `v32mov`, fence x4 | none |
-| load, load, fence, fence | none |
-| load, fence, load, fence | none |
-| load, `v16add`, fence, fence | both, in 2 ms |
-| load, `v8st`, fence, fence | none |
-| load, scalar `mov`, fence, scalar `mov`, fence | none |
+| load, sub-op | the sub-op, in 2 ms |
+| load, sub-op, sub-op | the first only |
+| load, `v32mov`, sub-op, sub-op | both, in 1 ms |
+| load, `v32mov`, `v32mov`, sub-op, sub-op | both |
+| load, `v32mov`, `v32mov`, sub-op x3 | none of them |
+| load, `v32mov`, sub-op x4 | none |
+| load, load, sub-op, sub-op | none |
+| load, sub-op, load, sub-op | none |
+| load, `v16add`, sub-op, sub-op | both, in 2 ms |
+| load, `v8st`, sub-op, sub-op | none |
+| load, scalar `mov`, sub-op, scalar `mov`, sub-op | none |
 
-Extra `v32mov`s do not raise the cap and a second load does not either, which
-is odd enough to leave as a measured pattern rather than a rule. What the unit
-is draining is not established.
+Nothing is corrupted by any of it — 96 MB of firmware memory diffed across a
+run moved only counters and timestamps — the status register is unchanged, and
+a deliberate `bkpt` in the same place behaves nothing like it.
 
-Everything that made them look fatal follows from that. Every probe of them
-loaded its vectors first, so the first one always retired; the second or third
-found nothing outstanding and waited. Behind a `di` even the first one hangs,
-there being no interrupt to break the wait. The firmware dies afterwards
-because its own next memory operation meets a unit still waiting. Nothing is
-corrupted — 96 MB of firmware memory diffed across a run moved only counters
-and timestamps — the status register is unchanged, and a deliberate `bkpt` in
-the same place behaves nothing like it.
-
-They are carried out here as fences: one retires when the register file has
-been written since the last one, and otherwise the model stops where the board
-would wait for ever. The board's cap of two is *not* reproduced — the model
-retires as many as the code licenses — and nothing on a boot path exercises
-either behaviour.
-Sub-op 7 is the one exception measured so far: it answers zero at every width,
-writes nothing at an address handed to it, leaves the lookup table alone, and
-the board lives, run after run. Sub-ops 11-15, 17, 18 and 20-23 killed the
-firmware of a board that was healthy the moment before — sub-op 11 twice over,
-on two different boards — and 3, 10, 16 and 19 did not even return their page.
-A board whose firmware has been wedged this way does not always come back from
-a reboot, either: three of them needed a power cycle. None of those is carried out here: answering
-"zero" for them would walk the model straight past something the silicon does
-not survive.
+All of them are carried out here as the zero write, at every B shape: the
+model has no vector unit to stall, and the stall is a property of an operand
+the firmware would have to be executing as data to reach.
 
 | Sub-op | Mnemonic | What it does | Source |
 |---|---|---|---|
 | 0 | `ld` | 16 elements between memory and the file, one per lane, at `base + disp` | measured: `probes/mix.s`, `probes/conv.s` |
 | 1 | `lookupm` | gather: each lane reads element `acc >> 16` of the table at the address. An address-less form — `(r63)`, or a vector in the B slot — gathers from **zero** — the address is then just the displacement — the A slot is read for nothing, and a dash destination reads and discards, which is how `start4.elf` spells every one of them | measured: `probes/mem6.s`, `probes/mem9.s`, `probes/r63.s`, `probes/r63b.s`, `probes/r63c.s`: with the accumulators cleared, a gather off `(r63)` hands every lane the byte at address 0; junk in the A slot changes nothing; a dash destination leaves a witness register untouched |
 | 2 | `lookupml` | gather indexed by `acc & 0xffff` | measured: `probes/mem5.s`, `probes/mem9.s` |
-| 3 | `mem03` | a **fence**: a zero into the destination element, and then a wait for a write to the register file. A vector load or a vector ALU op licenses one, a store and a scalar op do not, and with nothing written it never returns | measured: `probes/f10.s` — the load-first shape a fence retires under, which this one hangs anyway; decompile: `binutils-vc4` names the encoding; what it does is not established |
+| 3 | `mem03` | writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The board goes on running | measured: `probes/hbare03.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
 | 4 | `st` | the transfer the other way | measured: `probes/mix.s` |
 | 5 | `indexwritem` | scatter: each lane writes its element at index `acc >> 16` | measured: `probes/mem7.s`, `probes/mem9.s` |
 | 6 | `indexwriteml` | scatter indexed by `acc & 0xffff` | measured: `probes/mem7.s`, `probes/mem9.s` |
-| 7 | `mem07` | writes a lane of **zeros**, at every width — nothing at an address handed to it, nothing in the lookup table, and the board goes on running | measured: `probes/m07.s`, `probes/addr07.s`: over a destination preset to all-ones, with operands that are a valid bus address, with zeros, and with junk — the 32 bytes at the address it was handed were unchanged afterwards, and three lookup-table indices read the same before and after |
+| 7 | `mem07` | writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The board goes on running | measured: `probes/m07.s`, `probes/addr07.s`: over a destination preset to all-ones, with operands that are a valid bus address, with zeros, and with junk — the 32 bytes at the address it was handed were unchanged afterwards, and three lookup-table indices read the same before and after |
 | 8 | `memread` | `readlut`: each lane reads its own 64-byte region of the unit's 1 KiB table at `b * width`, A unused. B is a vector slot, a scalar register or an immediate; a scalar reaches every lane alike | measured: `probes/lut.s`: a `v8memwrite` then a `v8memread` over the same indices hands every lane its own value back — seven lanes sharing index `0xff` and each keeping its own value is what says the table is banked — and the `v16` pair round-trips at twice the index; manual: the VideoCore IV Programmers Manual names sub-ops 8 and 9 `readlut`/`writelut` over a 1 KB table |
 | 9 | `memwrite` | `writelut`: puts A at that index, and hands the destination the same value | measured: `probes/lut.s`, `probes/lut2.s`: a scalar write at 3 and a vector index of threes reach the same byte, and a `v16` write at 3 leaves byte 3 alone — the index scales by the element width whichever way it is spelled |
-| 10 | `mem10` | **not** a fence, whatever its neighbours do: with a vector load in front of it — where a fence retires in a millisecond — it still never returns, and the board has to be rebooted | measured: `probes/f10.s` — the load-first shape a fence retires under, which this one hangs anyway; decompile: `binutils-vc4` names the encoding; what it does is not established |
-| 11 | `mem11` | a **fence**: a zero into the destination element, and then a wait for a write to the register file. A vector load or a vector ALU op licenses one, a store and a scalar op do not, and with nothing written it never returns | measured: `probes/m11.s`: with a vector load in front of it, it retires in a millisecond and leaves a zero in the destination element. `probes/ldop.s`, `addbetween.s`, `stbetween.s` and `scal2.s` are what the wait itself was measured with, `probes/m11.s` over a destination preset to all-ones, on a Raspberry Pi 4B d03115 |
-| 12 | `mem12` | a **fence**: a zero into the destination element, and then a wait for a write to the register file. A vector load or a vector ALU op licenses one, a store and a scalar op do not, and with nothing written it never returns | measured: `probes/m12.s`: with a vector load in front of it, it retires in a millisecond and leaves a zero in the destination element. `probes/ldop.s`, `addbetween.s`, `stbetween.s` and `scal2.s` are what the wait itself was measured with, `probes/m12.s` over a destination preset to all-ones, on a Raspberry Pi 4B d03115 |
-| 13 | `mem13` | a **fence**: a zero into the destination element, and then a wait for a write to the register file. A vector load or a vector ALU op licenses one, a store and a scalar op do not, and with nothing written it never returns | measured: `probes/m13.s`: with a vector load in front of it, it retires in a millisecond and leaves a zero in the destination element. `probes/ldop.s`, `addbetween.s`, `stbetween.s` and `scal2.s` are what the wait itself was measured with, `probes/m13.s` over a destination preset to all-ones, on a Raspberry Pi 4B d03115 |
-| 14 | `mem14` | a **fence**: a zero into the destination element, and then a wait for a write to the register file. A vector load or a vector ALU op licenses one, a store and a scalar op do not, and with nothing written it never returns | measured: `probes/m14.s`: with a vector load in front of it, it retires in a millisecond and leaves a zero in the destination element. `probes/ldop.s`, `addbetween.s`, `stbetween.s` and `scal2.s` are what the wait itself was measured with, `probes/m14.s` over a destination preset to all-ones, on a Raspberry Pi 4B d03115 |
-| 15 | `mem15` | a **fence**: a zero into the destination element, and then a wait for a write to the register file. A vector load or a vector ALU op licenses one, a store and a scalar op do not, and with nothing written it never returns | measured: `probes/m15.s`: with a vector load in front of it, it retires in a millisecond and leaves a zero in the destination element. `probes/ldop.s`, `addbetween.s`, `stbetween.s` and `scal2.s` are what the wait itself was measured with, `probes/m15.s` over a destination preset to all-ones, on a Raspberry Pi 4B d03115 |
-| 16 | `mem16` | **not** a fence, whatever its neighbours do: with a vector load in front of it — where a fence retires in a millisecond — it still never returns, and the board has to be rebooted | measured: `probes/f10.s` — the load-first shape a fence retires under, which this one hangs anyway; decompile: `binutils-vc4` names the encoding; what it does is not established |
-| 17 | `mem17` | a **fence**: a zero into the destination element, and then a wait for a write to the register file. A vector load or a vector ALU op licenses one, a store and a scalar op do not, and with nothing written it never returns | measured: `probes/m17.s`: with a vector load in front of it, it retires in a millisecond and leaves a zero in the destination element. `probes/ldop.s`, `addbetween.s`, `stbetween.s` and `scal2.s` are what the wait itself was measured with, `probes/m17.s` on a Raspberry Pi 4B d03115, each on a board that answered the mailbox the moment before |
-| 18 | `mem18` | a **fence**: a zero into the destination element, and then a wait for a write to the register file. A vector load or a vector ALU op licenses one, a store and a scalar op do not, and with nothing written it never returns | measured: `probes/m18.s`: with a vector load in front of it, it retires in a millisecond and leaves a zero in the destination element. `probes/ldop.s`, `addbetween.s`, `stbetween.s` and `scal2.s` are what the wait itself was measured with, `probes/m18.s` on a Raspberry Pi 4B d03115, each on a board that answered the mailbox the moment before |
-| 19 | `mem19` | **not** a fence, whatever its neighbours do: with a vector load in front of it — where a fence retires in a millisecond — it still never returns, and the board has to be rebooted | measured: `probes/f10.s` — the load-first shape a fence retires under, which this one hangs anyway; decompile: `binutils-vc4` names the encoding; what it does is not established |
-| 20 | `mem20` | a **fence**: a zero into the destination element, and then a wait for a write to the register file. A vector load or a vector ALU op licenses one, a store and a scalar op do not, and with nothing written it never returns | measured: `probes/m20.s`: with a vector load in front of it, it retires in a millisecond and leaves a zero in the destination element. `probes/ldop.s`, `addbetween.s`, `stbetween.s` and `scal2.s` are what the wait itself was measured with, `probes/m20.s` on a Raspberry Pi 4B d03115, each on a board that answered the mailbox the moment before |
-| 21 | `mem21` | a **fence**: a zero into the destination element, and then a wait for a write to the register file. A vector load or a vector ALU op licenses one, a store and a scalar op do not, and with nothing written it never returns | measured: `probes/m21.s`: with a vector load in front of it, it retires in a millisecond and leaves a zero in the destination element. `probes/ldop.s`, `addbetween.s`, `stbetween.s` and `scal2.s` are what the wait itself was measured with, `probes/m21.s` on a Raspberry Pi 4B d03115, each on a board that answered the mailbox the moment before |
-| 22 | `mem22` | a **fence**: a zero into the destination element, and then a wait for a write to the register file. A vector load or a vector ALU op licenses one, a store and a scalar op do not, and with nothing written it never returns | measured: `probes/m22.s`: with a vector load in front of it, it retires in a millisecond and leaves a zero in the destination element. `probes/ldop.s`, `addbetween.s`, `stbetween.s` and `scal2.s` are what the wait itself was measured with, `probes/m22.s` on a Raspberry Pi 4B d03115, each on a board that answered the mailbox the moment before |
-| 23 | `mem23` | a **fence**: a zero into the destination element, and then a wait for a write to the register file. A vector load or a vector ALU op licenses one, a store and a scalar op do not, and with nothing written it never returns | measured: `probes/m23.s`: with a vector load in front of it, it retires in a millisecond and leaves a zero in the destination element. `probes/ldop.s`, `addbetween.s`, `stbetween.s` and `scal2.s` are what the wait itself was measured with, `probes/m23.s` on a Raspberry Pi 4B d03115, each on a board that answered the mailbox the moment before |
+| 10 | `mem10` | writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction, *provided* its B slot is a scalar address: spelled with a **vector register** there it stalls the unit outright. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/hgat10.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; `probes/f10.s`, which spells B as a vector register, never returns; decompile: `binutils-vc4` names the encoding |
+| 11 | `mem11` | writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/f11.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
+| 12 | `mem12` | writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/f12.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
+| 13 | `mem13` | writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/f13.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
+| 14 | `mem14` | writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/f14.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
+| 15 | `mem15` | writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/f15.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
+| 16 | `mem16` | writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction, *provided* its B slot is a scalar address: spelled with a **vector register** there it stalls the unit outright. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/hgat16.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; `probes/f16.s`, which spells B as a vector register, never returns; decompile: `binutils-vc4` names the encoding |
+| 17 | `mem17` | writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/f17.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
+| 18 | `mem18` | writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/f18.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
+| 19 | `mem19` | writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction, *provided* its B slot is a scalar address: spelled with a **vector register** there it stalls the unit outright. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/hgat19.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; `probes/f19.s`, which spells B as a vector register, never returns; decompile: `binutils-vc4` names the encoding |
+| 20 | `mem20` | writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/f20.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
+| 21 | `mem21` | writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/f21.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
+| 22 | `mem22` | writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/f22.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
+| 23 | `mem23` | writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/f23.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
 | 24 | `getacc` | each lane's accumulator, shifted right by `b & 31`; A is read for nothing. The width field picks the saturation, not an element size: `v8` plain, `v16` clamps into signed 32-bit, `v32` into signed 16-bit. A **dash destination** keeps only the scalar result unit's aggregate, which is the form `start4.elf` uses | measured: `probes/setf4.s`, `probes/gacc.s`: over sixteen known accumulators `SUMS` and `SUMU` both answer their plain sum, `MAX` the largest, `IMIN`/`IMAX` an index, and the `B` shift applies before the aggregate. The lane values go in whole, not re-read at the operation's element width, `probes/setf5.s` |
-| 25 | `mem25` | a **fence**: a zero into the destination element, and then a wait for a write to the register file. A vector load or a vector ALU op licenses one, a store and a scalar op do not, and with nothing written it never returns | measured: `probes/f10.s` — the load-first shape a fence retires under, which this one hangs anyway; decompile: `binutils-vc4` names the encoding; what it does is not established |
-| 26 | `mem26` | a **fence**: a zero into the destination element, and then a wait for a write to the register file. A vector load or a vector ALU op licenses one, a store and a scalar op do not, and with nothing written it never returns | measured: `probes/f10.s` — the load-first shape a fence retires under, which this one hangs anyway; decompile: `binutils-vc4` names the encoding; what it does is not established |
-| 27 | `mem27` | a **fence**: a zero into the destination element, and then a wait for a write to the register file. A vector load or a vector ALU op licenses one, a store and a scalar op do not, and with nothing written it never returns | measured: `probes/f10.s` — the load-first shape a fence retires under, which this one hangs anyway; decompile: `binutils-vc4` names the encoding; what it does is not established |
-| 28 | `mem28` | **not** a fence, whatever its neighbours do: with a vector load in front of it — where a fence retires in a millisecond — it still never returns, and the board has to be rebooted | measured: `probes/f10.s` — the load-first shape a fence retires under, which this one hangs anyway; decompile: `binutils-vc4` names the encoding; what it does is not established |
-| 29 | `mem29` | **not** a fence, whatever its neighbours do: with a vector load in front of it — where a fence retires in a millisecond — it still never returns, and the board has to be rebooted | measured: `probes/f10.s` — the load-first shape a fence retires under, which this one hangs anyway; decompile: `binutils-vc4` names the encoding; what it does is not established |
-| 30 | `mem30` | **not** a fence, whatever its neighbours do: with a vector load in front of it — where a fence retires in a millisecond — it still never returns, and the board has to be rebooted | measured: `probes/f10.s` — the load-first shape a fence retires under, which this one hangs anyway; decompile: `binutils-vc4` names the encoding; what it does is not established |
-| 31 | `mem31` | **not** a fence, whatever its neighbours do: with a vector load in front of it — where a fence retires in a millisecond — it still never returns, and the board has to be rebooted | measured: `probes/f10.s` — the load-first shape a fence retires under, which this one hangs anyway; decompile: `binutils-vc4` names the encoding; what it does is not established |
+| 25 | `mem25` | writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/f25.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
+| 26 | `mem26` | writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/f26.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
+| 27 | `mem27` | writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/f27.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
+| 28 | `mem28` | writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction, *provided* its B slot is a scalar address: spelled with a **vector register** there it stalls the unit outright. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/hgat28.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; `probes/f28.s`, which spells B as a vector register, never returns; decompile: `binutils-vc4` names the encoding |
+| 29 | `mem29` | writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction, *provided* its B slot is a scalar address: spelled with a **vector register** there it stalls the unit outright. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/hgat29.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; `probes/f29.s`, which spells B as a vector register, never returns; decompile: `binutils-vc4` names the encoding |
+| 30 | `mem30` | writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction, *provided* its B slot is a scalar address: spelled with a **vector register** there it stalls the unit outright. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/hgat30.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; `probes/f30.s`, which spells B as a vector register, never returns; decompile: `binutils-vc4` names the encoding |
+| 31 | `mem31` | writes a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction, *provided* its B slot is a scalar address: spelled with a **vector register** there it stalls the unit outright. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/hgat31.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; `probes/f31.s`, which spells B as a vector register, never returns; decompile: `binutils-vc4` names the encoding |
 
 ## ALU-class sub-ops
 
@@ -485,16 +482,20 @@ lane predicate applies to the aggregate as well.
 
 `VecInsn::executable` decides, by field rather than by whole-word template.
 A linear sweep of `start4.elf`'s `.text` with this decoder finds **14650**
-vector instructions, and **14157 of them execute**.
+vector instructions, and **14328 of them execute**.
 
-The 493 that do not split by what `binutils-vc4` objdump makes of the same
+The 322 that do not split by what `binutils-vc4` objdump makes of the same
 address — a better measure than the page they sit in, since a linear sweep
 through a jump table produces valid-looking encodings by accident:
 
 | Left over | What it is | Source |
 |---|---|---|
-| 272 | words objdump refuses too — it prints them `vec48`, `vunk...` or `vop63.1`. Data: jump tables and constants a sweep cannot tell from code | decompile: `binutils-vc4` objdump over the same addresses |
-| 19 | addresses objdump does not decode at all: the two linear sweeps drifting apart inside data | decompile: `binutils-vc4` objdump over the same addresses |
+| 149 | ALU sub-ops objdump itself only numbers — `vop48.1`, `vop49.1` and so on up to `vop63.1`, with 63 alone accounting for 75. Neither decoder has a form for them | decompile: `binutils-vc4` objdump over the same addresses |
+| 78 | words objdump prints raw, as `vec48` or `vec80`: it recognises the class and nothing inside it | decompile: `binutils-vc4` objdump over the same addresses |
+| 44 | memory-class words objdump spells `vunkld`, `vunkst` or `vunklookupml` — its own name for a transfer whose operands do not fit any form it knows | decompile: `binutils-vc4` objdump over the same addresses |
+| 28 | ordinary instructions objdump names and this decoder refuses, one or two of a kind. The largest group names a register **wider** than the operation — `v16odd H(33,16),HY(58,0),…` — and the rest are singletons | decompile: `binutils-vc4` objdump over the same addresses |
+| 17 | addresses objdump does not decode at all: the two linear sweeps drifting apart inside data | decompile: `binutils-vc4` objdump over the same addresses |
+| 6 | `v16bitplanes`, which objdump names and this model does not carry out | decompile: `binutils-vc4` objdump over the same addresses |
 
 None of it is reached on a firmware boot: `boot` stops on an unimplemented
 instruction by default, and `boot-check testdata/boot/firmware-boot.toml`

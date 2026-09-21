@@ -1260,14 +1260,27 @@ pub enum VecExec {
         step_a: bool,
         pred: VecPred,
     },
-    /// `v<w>mem07 <d>,<a>,<b>` — writes a lane of zeros and does nothing else
-    /// a probe can see. Measured with `probes/m07.s` and `probes/addr07.s` on
-    /// a Raspberry Pi 4B d03115: an operand that is a valid bus address is not
-    /// written to, the lookup table does not change, and the board goes on
-    /// running — unlike its neighbours 11-15, 17, 18 and 20, which take the
-    /// firmware down with them.
+    /// Every memory sub-op with no name of its own — 3, 7, 10-23 and 25-31.
+    /// Each writes a lane of zeros at the operation's width and does nothing
+    /// else a probe can see: it reads nothing at the address it is handed,
+    /// leaves the lookup table alone, and waits for nothing.
+    ///
+    /// Measured on a Raspberry Pi 4B d03115 with `probes/m07.s`,
+    /// `probes/addr07.s`, `probes/hgat10.s` and its per-sub-op neighbours, and
+    /// `probes/hbare03.s`: over a destination preset to all-ones, each one
+    /// leaves that element zero and the rest of the register untouched. A
+    /// blob that runs one as its *first* instruction — nothing vector before
+    /// it at all — retires just the same, which is what disproved the earlier
+    /// reading of these as fences waiting on a write to the register file.
+    ///
+    /// Two things they do not share. Sub-ops 3 and 7 leave the firmware
+    /// running; every other one kills it, so a board that executes one
+    /// answers no further mailbox call and has to be rebooted. And with a
+    /// **vector register** as B — an encoding `binutils-vc4` will print —
+    /// sub-ops 10, 16, 19 and 28-31 stall the vector unit outright instead of
+    /// retiring; the rest write their zero whatever B is.
     Zeros {
-        d: VecOperand,
+        d: Option<VecOperand>,
         width: u32,
         reps: VecRep,
         step_d: bool,
@@ -1315,19 +1328,6 @@ pub enum VecExec {
     /// Raspberry Pi 4B d03115, the last of them through `vpuprobe3.py`, which
     /// compares the whole allocation before and after.
     NoEffect,
-    /// The unnamed memory sub-ops, which are a **fence**: each writes a zero
-    /// into its destination element and waits for a write to the register
-    /// file. Measured on a Raspberry Pi 4B d03115 — `probes/ldop.s` and its
-    /// neighbours — a vector load or a vector ALU op licenses one, a vector
-    /// store and any scalar instruction do not, and with nothing written the
-    /// instruction never returns. Sub-ops 11, 16 and 27 all behave alike.
-    Fence {
-        d: Option<VecOperand>,
-        width: u32,
-        reps: VecRep,
-        step_d: bool,
-        pred: VecPred,
-    },
     /// Needs a part of the vector unit this model does not implement.
     NeedsVrf,
 }
@@ -1398,7 +1398,6 @@ impl VecInsn {
                 .or_else(|| self.gather())
                 .or_else(|| self.lut())
                 .or_else(|| self.zeros())
-                .or_else(|| self.fence())
             {
                 return e;
             }
@@ -1693,49 +1692,10 @@ impl VecInsn {
     /// The width field picks the saturation rather than an element size:
     /// `v8` is the plain form, `v16` clamps into a signed 32-bit range and
     /// `v32` into a signed 16-bit one.
-    /// The fences: every memory sub-op with no name of its own except 7,
-    /// which writes its zero and waits for nothing.
-    fn fence(&self) -> Option<VecExec> {
-        // Only the ones measured to retire. Sub-ops 10, 16, 19 and 28-31 sit
-        // in the same range and are *not* fences: with a vector load in front
-        // of them, where a fence retires in a millisecond, they still never
-        // return — `probes/f10.s` and its neighbours.
-        if !self.mem
-            || !matches!(
-                self.subop,
-                3 | 11..=15 | 17 | 18 | 20..=23 | 25..=27
-            )
-        {
-            return None;
-        }
-        let width = match self.lane_bits {
-            8 => 1,
-            16 => 2,
-            32 => 4,
-            _ => return None,
-        };
-        Some(VecExec::Fence {
-            d: (!self.d.is_dash())
-                .then(|| {
-                    Some(VecOperand {
-                        reg: self.d.window()?,
-                        addend: (self.d.addend != 15).then_some(self.d.addend),
-                    })
-                })
-                .flatten(),
-            width,
-            reps: match self.rep {
-                7 => VecRep::FromR0,
-                n => VecRep::Fixed(1 << n),
-            },
-            step_d: self.d.inc,
-            pred: VecPred::from_field(self.pred)?,
-        })
-    }
-
-    /// Memory sub-op 7, the one blank in the class that is safe to carry out.
+    /// Every memory sub-op with no name of its own. They all do the same
+    /// thing — see [`VecExec::Zeros`].
     fn zeros(&self) -> Option<VecExec> {
-        if self.subop != 7 || !self.mem || self.d.is_dash() {
+        if !self.mem || !matches!(self.subop, 3 | 7 | 10..=23 | 25..=31) {
             return None;
         }
         let width = match self.lane_bits {
@@ -1745,10 +1705,15 @@ impl VecInsn {
             _ => return None,
         };
         Some(VecExec::Zeros {
-            d: VecOperand {
-                reg: self.d.window()?,
-                addend: (self.d.addend != 15).then_some(self.d.addend),
-            },
+            // A dash destination leaves the zero nowhere to go.
+            d: (!self.d.is_dash())
+                .then(|| {
+                    Some(VecOperand {
+                        reg: self.d.window()?,
+                        addend: (self.d.addend != 15).then_some(self.d.addend),
+                    })
+                })
+                .flatten(),
             width,
             reps: match self.rep {
                 7 => VecRep::FromR0,

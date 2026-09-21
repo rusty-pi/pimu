@@ -45,6 +45,17 @@ after the call and prints what changed, so a write that lands somewhere other
 than its stated destination is caught wherever it is inside the buffer. That
 is what settled the stores below.
 
+`vpuprobe5.py` is what `vpuprobe4.py` should have been, and the difference
+cost three boards' worth of measurements. Its poll watched `any(page)`, which
+is true of a page the firmware has touched for its own reasons, so probes that
+never reached their dump still reported reaching it; and it read the page a
+second time *after* declaring the stall, which on a wedged VPU takes the whole
+board down, output and all. `vpuprobe5.py` watches a **sentinel word** the
+probe writes last and prints the page before anything else can go wrong.
+Probes for it store a progress tag to the page at `r0+4088` before each step
+(`mkwalk.py` writes those blobs), so one that stalls still names the
+instruction it stalled on.
+
 `vpuprobe2.py` is the same thing with the mailbox call in a thread that times
 out after five seconds: when the blob wedges the VPU the page is read and
 printed anyway, so a probe of an encoding that hangs still says how far it
@@ -71,46 +82,43 @@ in a state a firmware thread might be mid-way through using.
 
 Two things are known to wedge it, both found the hard way:
 
-- the **undocumented memory sub-ops**, which **wait for an outstanding vector
-  load**. Put a `v8ld` in front of one and it retires in 2 ms; with nothing in
-  front of it, it never returns. What satisfies it is a **write to the register
-  file**: a vector load does, and so does a vector ALU op — `v16add`, which
-  touches no memory, works as well as `v32mov`. A vector *store* does not, nor
-  does any scalar instruction; a store reads the file and writes memory, and a
-  scalar op never touches it. What licenses the next one is
-  narrower than a count of loads: a load then two fences back to back hangs,
-  but a load, two `v32mov`s and then two fences retires both in 1 ms. Writing
-  the fences to different rows does not help, nor does a second load before
-  the second fence. So it wants other vector work in between, and what
-  exactly is being drained is still open. That single fact
-  explains everything else below — every probe of these sub-ops loaded its
-  vectors first, which is why the first one always seemed to work.
+- the **undocumented memory sub-ops** — 3, 7, 10-23 and 25-31. Each one
+  **writes a lane of zeros** at the operation's width and waits for nothing:
+  nothing is read at the address it is handed, the lookup table does not
+  change, and a blob whose *first* instruction is one of them retires just the
+  same. Sub-ops 3 and 7 leave the firmware running; every other one kills it,
+  and the board then answers no further mailbox call. Linux stays up and
+  answers SSH; `vcgencmd` hangs, and the probe process sits in an
+  uninterruptible `ioctl`, so it cannot even be killed. A reboot usually
+  brings the firmware back — but not always: a board wedged this way can fail
+  to boot Linux at all afterwards and need a power cycle, since the VPU is
+  what boots it.
 
-  What that makes them is a **fence** on the vector memory unit, not an
-  illegal encoding: an instruction a compiler emits rarely and a jump table
-  contains by accident, which is exactly where they are found.
+  For a long time these looked like **fences** on the vector memory unit,
+  waiting for a write to the register file: put a `v8ld` in front of one and
+  it retired in 2 ms, with nothing in front of it it never returned, a vector
+  ALU op licensed one and a store or a scalar op did not, and at most two ever
+  retired. All of that is real, and all of it is a property of **how the
+  probes spelled the B slot**. They wrote a vector register there —
+  `v8mem11 H(0,0),H(23,0),H(24,0)` — and in that shape sub-ops 10, 16, 19 and
+  28-31 stall the unit outright while the others retire. Spell B as a scalar
+  address instead, `v8mem10 H(0,0),H(20,0),(r4)`, and every one of them
+  retires with nothing in front of it at all. `hbare03.s`, `hbare10.s` and
+  `hbare11.s` are that experiment: a sub-op as the blob's first instruction,
+  no vector op before it, all three retiring.
 
-  The rest of this entry is how it looked before that was understood — the
-  same instruction, seen from the outside: With interrupts enabled one of them completes, everything
-  after it in the blob runs, and the register-file dump lands — but
-  `EXECUTE_CODE` never returns and the driver gives up with `ETIMEDOUT`. Run
-  one behind a `di` and there is no dump at all: the core is still inside the
-  instruction, because nothing can interrupt it. Two in a row both complete.
-  The status register is unchanged either side (`0x40000008`, IE still set),
-  no firmware memory is corrupted — 96 MB diffed across a run, only counters
-  and timestamps moved — and a deliberate `bkpt` in the same position behaves
-  completely differently: it completes, the mailbox answers, the board lives.
-  So this is not the ordinary trap path and not memory damage; it is a wait
-  for something that never arrives. Powering up the QPU first
-  (`vcmailbox 0x00030012 4 4 1`) changes nothing. `mem03`, `mem10`, `mem16` and `mem19`
-  never return at all; `mem11`-`mem15`, `mem17`, `mem18` and `mem20`-`mem23`
-  hand back their page and leave the firmware dead behind them. Linux stays up
-  and answers SSH; `vcgencmd` hangs, and the probe process sits in an
-  uninterruptible `ioctl`, so it cannot even be killed. A reboot usually brings
-  the firmware back — but not always: a board wedged this way can fail to boot
-  Linux at all afterwards and need a power cycle, since the VPU is what boots
-  it. Sub-op 7 is the one exception in the group: it writes zeros and the
-  board goes on running.
+  The zero is easy to mistake for a load, and that mistake hid inside the
+  earlier work too: a `v8ld` from an address holding zeros leaves a
+  destination preset to all-ones reading `00ffffff` in every lane, which is
+  exactly what these write. `hgat00.s` and `hgat10.s` separate them — a page
+  of sixteen known-good pointers at the address, `v8ld` answering the pointer
+  bytes (`00 c0 be fe` = `0xfebec000`) and `v8mem10` still answering zero.
+
+  What did *not* turn out to matter: the status register is unchanged either
+  side (`0x40000008`, IE still set), no firmware memory is corrupted — 96 MB
+  diffed across a run, only counters and timestamps moved — a deliberate
+  `bkpt` in the same position completes and the board lives, and powering up
+  the QPU first (`vcmailbox 0x00030012 4 4 1`) changes nothing.
 - **clobbering `r6` and above.** Probes that write `r6`–`r9` came back as
   `OSError: [Errno 22] Invalid argument` from the mailbox `ioctl` — the
   firmware's own path through `EXECUTE_CODE` wants them intact. Keep to
@@ -157,14 +165,18 @@ Two things are known to wedge it, both found the hard way:
 | `r63.s`, `r63b.s`, `r63c.s` | `(r63)` in a gather's address, whether the A slot matters, and a gather with a dash destination |
 | `lkb.s`, `lkc.s` | a gather whose B slot holds a vector instead of an address: it reads from zero, like `(r63)` |
 | `m07.s`, `addr07.s`, `addr07b.s` | memory sub-op 7: that it writes zeros, writes nothing at an address it is handed, and leaves the lookup table alone |
-| `m11.s`-`m23.s` | the rest of the unnamed memory sub-ops, probed before the fence was understood — each looked fatal |
-| `f03.s`-`f31.s` | the same sub-ops with a vector load in front: 3, 11-15, 17, 18, 20-23 and 25-27 retire in a millisecond, while 10, 16, 19 and 28-31 hang anyway |
+| `m11.s`-`m23.s` | the rest of the unnamed memory sub-ops, with a vector register in the B slot — each looked fatal |
+| `f03.s`-`f31.s` | the same sub-ops with a vector load in front, still a vector B: 3, 11-15, 17, 18, 20-23 and 25-27 retire in a millisecond, 10, 16, 19 and 28-31 stall |
+| `hgat10.s`-`hgat31.s` | the seven that stall, spelled with a **scalar address** as B instead: every one retires and writes its zero |
+| `hgat00.s` | the control beside them — a plain `v8ld` over the same pointer table, which answers the pointer bytes where they answer zero |
+| `hbare03.s`, `hbare10.s`, `hbare11.s` | one of them as the blob's **first** instruction, no vector op before it: all three retire, which is what disproved the fence |
+| `hcmpA.s`-`hcmpC.s` | the same five sub-ops in three different orders, each naming the step it reached, so a stall says which instruction it stalled on |
 | `di11.s`, `two11.s`, `sr11.s` | what one of them does to interrupts, to a second one after it, and to the status register |
 | `after_ld.s`, `after_st.s`, `trap.s` | what still runs after one, and how a deliberate `bkpt` compares |
-| `ldop.s`, `stop.s`, `scop.s` | **what satisfies the fence**: a vector load does, a vector store and a scalar load do not |
+| `ldop.s`, `stop.s`, `scop.s` | what gets a vector-B one past: a vector load does, a vector store and a scalar load do not |
 | `unroll1.s`, `unroll8.s`, `loop8ld.s`, `rep64.s` | how many of them one load covers, and that `REP` repeats without waiting again |
-| `two11.s`, `dd2.s`, `ld2x2.s`, `ld3.s`, `alt2.s` | which arrangements of load, fence and `v32mov` retire and which hang |
-| `addbetween.s`, `stbetween.s`, `scal2.s` | that a vector ALU op licenses a fence, and that a store and a scalar op do not |
+| `two11.s`, `dd2.s`, `ld2x2.s`, `ld3.s`, `alt2.s` | which arrangements of load, vector-B sub-op and `v32mov` retire and which hang |
+| `addbetween.s`, `stbetween.s`, `scal2.s` | that a vector ALU op gets a vector-B one past, and that a store and a scalar op do not |
 
 ## What they found (Raspberry Pi 4B d03115, firmware 1.20260824)
 

@@ -3823,11 +3823,12 @@ fn the_reference_page_matches_the_model() {
     // The memory class has no one function to ask, so the set is spelled out;
     // `mem_transfer`, `gather`, `lut` and `getacc` between them cover exactly
     // these.
-    // The fences are carried out, and so is 7, which waits for nothing. The
-    // seven that are not — 10, 16, 19 and 28-31 — hang even with a vector
-    // load in front of them, where a fence retires in a millisecond.
-    const MEM_EXECUTES: [u8; 25] = [
-        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 17, 18, 20, 21, 22, 23, 24, 25, 26, 27,
+    // Every one of them is carried out: the sub-ops with no name of their own
+    // all write a lane of zeros and wait for nothing, measured one per run
+    // with a scalar address in the B slot.
+    const MEM_EXECUTES: [u8; 32] = [
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+        25, 26, 27, 28, 29, 30, 31,
     ];
     for (subop, (name, says_executes)) in VEC_MEM_OPS
         .iter()
@@ -4289,6 +4290,76 @@ fn memory_sub_op_7_writes_zeros() {
     v.regs.set(1, 0x4000);
     v.regs.pc = CODE;
     for _ in 0..64 {
+        if v.regs.pc == CODE + CODE_BYTES.len() as u32 - 2 {
+            break; // the trailing `rts`
+        }
+        assert_eq!(
+            v.step(&mut m),
+            Step::Ran,
+            "at {:#x}: {:?}",
+            v.regs.pc,
+            v.stopped
+        );
+    }
+    for (row, want) in ROWS {
+        let got: String = (0..64)
+            .map(|c| format!("{:02x}", m.load8(0x8000 + (*row as u32) * 64 + c).unwrap()))
+            .collect();
+        assert_eq!(&got, want, "row {row}");
+    }
+}
+
+/// Memory sub-op 10 writes zeros too, and does not read the address it is
+/// handed.
+///
+/// `probes/hgat10.s` on a Raspberry Pi 4B d03115, with `probes/hgat00.s` as
+/// its control. Both build a page of sixteen pointers — `0xfebec000` and the
+/// fifteen addresses after it — and both are handed that page in the B slot.
+/// The control, a plain three-operand `v8ld`, answers the pointer bytes:
+/// `00ffffff c0ffffff beffffff feffffff 01ffffff …` over a destination preset
+/// to all-ones. `v8mem10` over the identical operands answers `00ffffff`
+/// sixteen times: a zero, not a load.
+///
+/// The blob runs the sub-op with a **scalar address** in B. In the shape every
+/// earlier probe used — a vector register there — this one stalls the vector
+/// unit instead, which is what made 10, 16, 19 and 28-31 look like a group
+/// apart from the other unnamed sub-ops. Spelled this way all seven retire.
+/// The firmware is dead afterwards either way, so each was measured one to a
+/// board.
+#[test]
+fn memory_sub_op_10_writes_zeros_and_reads_nothing() {
+    const CODE_BYTES: &[u8] = &[
+        0x14, 0x40, 0x44, 0xb0, 0x00, 0x10, 0x15, 0x40, 0x02, 0x61, 0x45, 0x09, 0x44, 0x62, 0x15,
+        0x62, 0x12, 0x66, 0x02, 0x6a, 0xfb, 0x18, 0x14, 0x40, 0x44, 0xb0, 0x00, 0x10, 0x03, 0xb0,
+        0x40, 0x00, 0x06, 0xfe, 0x38, 0xc0, 0x00, 0x04, 0xc0, 0xfb, 0x00, 0x00, 0x00, 0xfe, 0x38,
+        0xc0, 0xff, 0x07, 0xc0, 0xf3, 0x3f, 0x00, 0x00, 0xf0, 0x38, 0x05, 0x84, 0x03, 0x72, 0x60,
+        0x22, 0xab, 0xf8, 0x0f, 0x40, 0xf1, 0x01, 0x00, 0x84, 0x43, 0x02, 0xb0, 0x63, 0x00, 0x22,
+        0xab, 0xf8, 0x0f, 0x96, 0xf8, 0x30, 0xe0, 0x80, 0x03, 0xe0, 0x33, 0x00, 0x00, 0x02, 0xe8,
+        0xa5, 0xa5, 0x5a, 0x5a, 0x22, 0xab, 0xfc, 0x0f, 0x5a, 0x00,
+    ];
+    // The destination, and the same page read by the `v8ld` beside it. The
+    // pointers are this model's own — `r1` is `0x4000` here, not the board's
+    // `0xfebec000` — so it is the *shape* that is pinned: a plain load answers
+    // the table, the sub-op answers zero.
+    const ROWS: &[(usize, &str)] = &[
+        (0, "00ffffff00ffffff00ffffff00ffffff00ffffff00ffffff00ffffff00ffffff00ffffff00ffffff00ffffff00ffffff00ffffff00ffffff00ffffff00ffffff"),
+        (20, "00000000400000000000000000000000010000004000000000000000000000000200000040000000000000000000000003000000400000000000000000000000"),
+    ];
+
+    let mut m = machine();
+    let mut v = Vpu::new(CODE);
+    for (i, b) in CODE_BYTES.iter().enumerate() {
+        m.store8(CODE + i as u32, *b).unwrap();
+    }
+    for i in 0..4096u32 {
+        m.store8(0x4000 + i, (i + 1) as u8).unwrap();
+        m.store8(0x5000 + i, 0).unwrap();
+        m.store8(0x8000 + i, 0).unwrap();
+    }
+    v.regs.set(0, 0x8000);
+    v.regs.set(1, 0x4000);
+    v.regs.pc = CODE;
+    for _ in 0..400 {
         if v.regs.pc == CODE + CODE_BYTES.len() as u32 - 2 {
             break; // the trailing `rts`
         }
