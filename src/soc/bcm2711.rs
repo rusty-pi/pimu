@@ -12,6 +12,14 @@
 //! window and drive the wide bus themselves, which is how a 32-bit VPU reaches
 //! the PCIe region (BCM2711 ARM Peripherals, §1.2).
 //!
+//! One thing the model does not reproduce, and does not need to: the real AXI
+//! system can return reads from *different* peripherals out of order, which is
+//! why the datasheet tells ARM code to put a memory barrier at the entry and
+//! exit of any peripheral service routine (§1.3). Accesses to one peripheral
+//! always stay in order. Here every access is in program order, so firmware
+//! that forgets a barrier still works — a bug this bench cannot find, the same
+//! way it cannot find a missing cache flush the L2 happens to forgive.
+//!
 //! Every modelled block takes its window from its register spec in
 //! `specs/*.toml` (#39), where the base and size carry their provenance; the
 //! names here only keep [`crate::machine::Machine`]'s decoder readable.

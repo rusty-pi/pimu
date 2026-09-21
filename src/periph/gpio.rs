@@ -192,6 +192,209 @@ impl std::fmt::Display for Pull {
     }
 }
 
+/// What each pin's six alternate functions are, `ALT0` first. An empty string
+/// is a cell the datasheet leaves reserved, and pins 46 to 57 are internal —
+/// the table gives them no functions at all. This is what a `GPFSEL` write
+/// reports alongside the pin's board line, so a log says which peripheral the
+/// firmware just took the pad for rather than only `ALT4`.
+///
+/// From BCM2711 ARM Peripherals §5.3 Table 94. Which of them a Pi 4 actually
+/// wires is a board question, and lives in [`PI4B_LINES`] and
+/// `firmware/dt-blob.dts` instead.
+const ALT_FUNCTIONS: [[&str; 6]; PINS] = [
+    ["SDA0", "SA5", "PCLK", "SPI3_CE0_N", "TXD2", "SDA6"], // GPIO0
+    ["SCL0", "SA4", "DE", "SPI3_MISO", "RXD2", "SCL6"],    // GPIO1
+    ["SDA1", "SA3", "LCD_VSYNC", "SPI3_MOSI", "CTS2", "SDA3"], // GPIO2
+    ["SCL1", "SA2", "LCD_HSYNC", "SPI3_SCLK", "RTS2", "SCL3"], // GPIO3
+    ["GPCLK0", "SA1", "DPI_D0", "SPI4_CE0_N", "TXD3", "SDA3"], // GPIO4
+    ["GPCLK1", "SA0", "DPI_D1", "SPI4_MISO", "RXD3", "SCL3"], // GPIO5
+    [
+        "GPCLK2",
+        "SOE_N / SE",
+        "DPI_D2",
+        "SPI4_MOSI",
+        "CTS3",
+        "SDA4",
+    ], // GPIO6
+    [
+        "SPI0_CE1_N",
+        "SWE_N / SRW_N",
+        "DPI_D3",
+        "SPI4_SCLK",
+        "RTS3",
+        "SCL4",
+    ], // GPIO7
+    [
+        "SPI0_CE0_N",
+        "SD0",
+        "DPI_D4",
+        "BSCSL / CE_N",
+        "TXD4",
+        "SDA4",
+    ], // GPIO8
+    ["SPI0_MISO", "SD1", "DPI_D5", "BSCSL / MISO", "RXD4", "SCL4"], // GPIO9
+    [
+        "SPI0_MOSI",
+        "SD2",
+        "DPI_D6",
+        "BSCSL SDA / MOSI",
+        "CTS4",
+        "SDA5",
+    ], // GPIO10
+    [
+        "SPI0_SCLK",
+        "SD3",
+        "DPI_D7",
+        "BSCSL SCL / SCLK",
+        "RTS4",
+        "SCL5",
+    ], // GPIO11
+    ["PWM0_0", "SD4", "DPI_D8", "SPI5_CE0_N", "TXD5", "SDA5"], // GPIO12
+    ["PWM0_1", "SD5", "DPI_D9", "SPI5_MISO", "RXD5", "SCL5"], // GPIO13
+    ["TXD0", "SD6", "DPI_D10", "SPI5_MOSI", "CTS5", "TXD1"], // GPIO14
+    ["RXD0", "SD7", "DPI_D11", "SPI5_SCLK", "RTS5", "RXD1"], // GPIO15
+    ["", "SD8", "DPI_D12", "CTS0", "SPI1_CE2_N", "CTS1"],  // GPIO16
+    ["", "SD9", "DPI_D13", "RTS0", "SPI1_CE1_N", "RTS1"],  // GPIO17
+    [
+        "PCM_CLK",
+        "SD10",
+        "DPI_D14",
+        "SPI6_CE0_N",
+        "SPI1_CE0_N",
+        "PWM0_0",
+    ], // GPIO18
+    [
+        "PCM_FS",
+        "SD11",
+        "DPI_D15",
+        "SPI6_MISO",
+        "SPI1_MISO",
+        "PWM0_1",
+    ], // GPIO19
+    [
+        "PCM_DIN",
+        "SD12",
+        "DPI_D16",
+        "SPI6_MOSI",
+        "SPI1_MOSI",
+        "GPCLK0",
+    ], // GPIO20
+    [
+        "PCM_DOUT",
+        "SD13",
+        "DPI_D17",
+        "SPI6_SCLK",
+        "SPI1_SCLK",
+        "GPCLK1",
+    ], // GPIO21
+    ["SD0_CLK", "SD14", "DPI_D18", "SD1_CLK", "ARM_TRST", "SDA6"], // GPIO22
+    ["SD0_CMD", "SD15", "DPI_D19", "SD1_CMD", "ARM_RTCK", "SCL6"], // GPIO23
+    [
+        "SD0_DAT0",
+        "SD16",
+        "DPI_D20",
+        "SD1_DAT0",
+        "ARM_TDO",
+        "SPI3_CE1_N",
+    ], // GPIO24
+    [
+        "SD0_DAT1",
+        "SD17",
+        "DPI_D21",
+        "SD1_DAT1",
+        "ARM_TCK",
+        "SPI4_CE1_N",
+    ], // GPIO25
+    [
+        "SD0_DAT2",
+        "",
+        "DPI_D22",
+        "SD1_DAT2",
+        "ARM_TDI",
+        "SPI5_CE1_N",
+    ], // GPIO26
+    [
+        "SD0_DAT3",
+        "",
+        "DPI_D23",
+        "SD1_DAT3",
+        "ARM_TMS",
+        "SPI6_CE1_N",
+    ], // GPIO27
+    ["SDA0", "SA5", "PCM_CLK", "", "MII_A_RX_ERR", "RGMII_MDIO"], // GPIO28
+    ["SCL0", "SA4", "PCM_FS", "", "MII_A_TX_ERR", "RGMII_MDC"], // GPIO29
+    ["", "SA3", "PCM_DIN", "CTS0", "MII_A_CRS", "CTS1"],   // GPIO30
+    ["", "SA2", "PCM_DOUT", "RTS0", "MII_A_COL", "RTS1"],  // GPIO31
+    ["GPCLK0", "SA1", "", "TXD0", "SD_CARD_PRESENT", "TXD1"], // GPIO32
+    ["", "SA0", "", "RXD0", "SD_CARD_WRPROT", "RXD1"],     // GPIO33
+    [
+        "GPCLK0",
+        "SOE_N / SE",
+        "",
+        "SD1_CLK",
+        "SD_CARD_LED",
+        "RGMII_IRQ",
+    ], // GPIO34
+    [
+        "SPI0_CE1_N",
+        "SWE_N / SRW_N",
+        "",
+        "SD1_CMD",
+        "RGMII_START_STOP",
+        "",
+    ], // GPIO35
+    [
+        "SPI0_CE0_N",
+        "SD0",
+        "TXD0",
+        "SD1_DAT0",
+        "RGMII_RX_OK",
+        "MII_A_RX_ERR",
+    ], // GPIO36
+    [
+        "SPI0_MISO",
+        "SD1",
+        "RXD0",
+        "SD1_DAT1",
+        "RGMII_MDIO",
+        "MII_A_TX_ERR",
+    ], // GPIO37
+    [
+        "SPI0_MOSI",
+        "SD2",
+        "RTS0",
+        "SD1_DAT2",
+        "RGMII_MDC",
+        "MII_A_CRS",
+    ], // GPIO38
+    [
+        "SPI0_SCLK",
+        "SD3",
+        "CTS0",
+        "SD1_DAT3",
+        "RGMII_IRQ",
+        "MII_A_COL",
+    ], // GPIO39
+    ["PWM1_0", "SD4", "", "SD1_DAT4", "SPI0_MISO", "TXD1"], // GPIO40
+    ["PWM1_1", "SD5", "", "SD1_DAT5", "SPI0_MOSI", "RXD1"], // GPIO41
+    ["GPCLK1", "SD6", "", "SD1_DAT6", "SPI0_SCLK", "RTS1"], // GPIO42
+    ["GPCLK2", "SD7", "", "SD1_DAT7", "SPI0_CE0_N", "CTS1"], // GPIO43
+    ["GPCLK1", "SDA0", "SDA1", "", "SPI0_CE1_N", "SD_CARD_VOLT"], // GPIO44
+    ["PWM0_1", "SCL0", "SCL1", "", "SPI0_CE2_N", "SD_CARD_PWR0"], // GPIO45
+    ["", "", "", "", "", ""],                              // GPIO46
+    ["", "", "", "", "", ""],                              // GPIO47
+    ["", "", "", "", "", ""],                              // GPIO48
+    ["", "", "", "", "", ""],                              // GPIO49
+    ["", "", "", "", "", ""],                              // GPIO50
+    ["", "", "", "", "", ""],                              // GPIO51
+    ["", "", "", "", "", ""],                              // GPIO52
+    ["", "", "", "", "", ""],                              // GPIO53
+    ["", "", "", "", "", ""],                              // GPIO54
+    ["", "", "", "", "", ""],                              // GPIO55
+    ["", "", "", "", "", ""],                              // GPIO56
+    ["", "", "", "", "", ""],                              // GPIO57
+];
+
 /// What each pin is wired to on a Pi 4B, as the board's device tree names them
 /// (`gpio-line-names` of `gpio@7e200000` in `bcm2711-rpi-4-b.dtb`). 2..27 are
 /// the header pins a user owns, so they carry no name beyond their number.
@@ -348,6 +551,20 @@ impl Gpio {
         }
     }
 
+    /// What `ALT0`..`ALT5` means on this pin, or `""` for a pin the SoC keeps
+    /// to itself, a cell the datasheet reserves, or a function that is not an
+    /// alternate one.
+    pub fn alt_function(pin: usize, func: Function) -> &'static str {
+        let Function::Alt(n) = func else {
+            return "";
+        };
+        ALT_FUNCTIONS
+            .get(pin)
+            .and_then(|alts| alts.get(n as usize))
+            .copied()
+            .unwrap_or("")
+    }
+
     /// What the board calls this pin.
     pub fn line(&self, pin: usize) -> &'static str {
         self.lines.get(pin).copied().unwrap_or("?")
@@ -474,9 +691,13 @@ impl Gpio {
             crate::log!(
                 self.log,
                 Channel::Gpio,
-                "{pin} ({}) {} -> {func}{level}",
+                "{pin} ({}) {} -> {func}{}{level}",
                 self.line(pin),
                 Function::from_bits(a),
+                match Gpio::alt_function(pin, func) {
+                    "" => String::new(),
+                    name => format!(" ({name})"),
+                },
             );
         }
     }
@@ -738,6 +959,26 @@ mod tests {
         assert_eq!(g.pull(0), Pull::Down);
         assert_eq!(g.pull(15), Pull::Down);
         assert_eq!(rd(&mut g, GPLEV) & 0x8001, 0);
+    }
+
+    /// The alternate-function table is what makes a pin-mux log readable: the
+    /// four pins of a flash session say `SPI0`, and the console pins say which
+    /// UART has them.
+    #[test]
+    fn a_pin_says_which_peripheral_an_alt_gives_it_to() {
+        assert_eq!(Gpio::alt_function(40, Function::Alt(4)), "SPI0_MISO");
+        assert_eq!(Gpio::alt_function(43, Function::Alt(4)), "SPI0_CE0_N");
+        assert_eq!(Gpio::alt_function(14, Function::Alt(0)), "TXD0");
+        assert_eq!(Gpio::alt_function(14, Function::Alt(5)), "TXD1");
+        assert_eq!(Gpio::alt_function(28, Function::Alt(5)), "RGMII_MDIO");
+        assert_eq!(Gpio::alt_function(40, Function::Alt(0)), "PWM1_0");
+        assert_eq!(Gpio::alt_function(18, Function::Alt(0)), "PCM_CLK");
+        // A cell the datasheet reserves, an internal pin, a pin that does not
+        // exist, and a function that is not an alternate one.
+        assert_eq!(Gpio::alt_function(16, Function::Alt(0)), "");
+        assert_eq!(Gpio::alt_function(48, Function::Alt(0)), "");
+        assert_eq!(Gpio::alt_function(58, Function::Alt(0)), "");
+        assert_eq!(Gpio::alt_function(14, Function::Output), "");
     }
 
     /// The BCM2835 pull registers are kept and do nothing: the BCM2711 pads
