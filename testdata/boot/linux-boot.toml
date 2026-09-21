@@ -56,6 +56,16 @@ text = "ecj\u007fho rvf-$((6*7))\n"
 after = "/ # \u001b[6n"
 text = "echo -ne 'Hello, world!\\0\\0\\0' | rpi-fw-crypto hmac --in /proc/self/fd/0 --key-id 1 --outform hex; echo\n"
 
+# The four-port USB2 hub soldered to the VL805's one USB2 root port, read back
+# through sysfs: `USB2.0 Hub` and `4`. Nothing typed earlier depends on USB, so
+# without this the run ended before Linux had finished enumerating it and the
+# host controller could die unnoticed (#125). The `sleep` is for the 100 ms
+# `hub_port_init` spends between the port reset and the first descriptor, which
+# is longer than everything typed above takes; the cores are idle through it.
+[[boot.input]]
+after = "/ # \u001b[6n"
+text = "sleep 1; echo usb1-1=$(cat /sys/bus/usb/devices/1-1/product)/$(cat /sys/bus/usb/devices/1-1/maxchild)\n"
+
 [golden]
 path = "golden/linux-boot.txt"
 
@@ -141,6 +151,27 @@ the digest as little-endian words): Raspberry Pi's rpi-fw-crypto, through
 /dev/vcio_crypto, the kernel's firmware driver and the ARM mailbox, into the
 VPU's own mbedTLS with the OTP key (#40 milestone 4, rpi-mkosi#37)."""
 line = "0eb6f96f3a97b37bb065eb014f76fd488df48682ed6ab4f14cdae0e8a26e1e9d"
+
+[[milestone]]
+why = """
+Linux enumerates the VIA Labs hub every Pi 4B has soldered to the VL805's one
+USB2 root port: Enable Slot and Address Device complete on the command ring and
+the descriptors read back. The hub's own four ports are what all four type-A
+sockets are at USB 2.0 speed, so nothing plugged into one works without it
+(#125)."""
+line = "hub 1-1:1.0: 4 ports detected"
+
+[[milestone]]
+why = "The hub is on the bus from userspace's side too, with the product string and port count sysfs reports on the real board."
+line = "usb1-1=USB2.0 Hub/4"
+
+[[milestone]]
+why = """
+The command ring keeps answering. Reading the Event Ring Segment Table through
+a truncated 64-bit address sent the hub's first Enable Slot completion into the
+void, and Linux's abort then timed out and gave the whole USB2 bus up (#125)."""
+line = "HC died"
+absent = true
 
 [[milestone]]
 why = "No panic on the way (the last one was the missing root filesystem, before the card had one)."

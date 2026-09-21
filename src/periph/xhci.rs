@@ -153,19 +153,20 @@ pub trait HostMem {
 
 /// DRAM by CPU-physical address, which on this SoC is the offset into it.
 /// Past its end nothing answers: reads return zero, writes are dropped.
+///
+/// The offset is 64 bits wide and stays that way. Linux hands the controller
+/// whatever `dma_alloc_coherent()` gave it, and on a board with more than 4 GB
+/// of DRAM that is routinely above the 4 GB line; going through the 32-bit
+/// [`Ram::load`](crate::mem::Ram::load) truncated it, so an event ring up
+/// there aliased onto the low copy of DRAM and the model read the kernel's
+/// page tables where the Event Ring Segment Table should have been (#125).
 impl HostMem for crate::mem::Ram {
     fn read8(&self, addr: u64) -> u8 {
-        if addr >= self.len() as u64 {
-            return 0;
-        }
-        self.load(self.base() + addr as u32, Width::Byte)
-            .unwrap_or(0) as u8
+        self.load_at(addr, Width::Byte).unwrap_or(0) as u8
     }
 
     fn write8(&mut self, addr: u64, value: u8) {
-        if addr < self.len() as u64 {
-            let _ = self.store(self.base() + addr as u32, Width::Byte, value as u32);
-        }
+        let _ = self.store_at(addr, Width::Byte, value as u32);
     }
 }
 
@@ -455,6 +456,10 @@ pub struct Xhci {
     /// The earliest [`Port::train_at`], `u64::MAX` with none training — a
     /// field, because the machine asks every microsecond.
     link_deadline: u64,
+    /// Endpoints whose head TRB the device NAKed: the transfer is still
+    /// outstanding, so nothing was posted and the dequeue pointer did not
+    /// move. Each is `(slot, dci)`, retried by [`Xhci::run_parked`].
+    parked: Vec<(usize, u32)>,
     /// Observables for tests: how many commands and transfers the engine has
     /// completed.
     pub commands: u64,
@@ -493,6 +498,7 @@ impl Xhci {
             now_us: 0,
             deferred: std::collections::VecDeque::new(),
             link_deadline: u64::MAX,
+            parked: Vec::new(),
             commands: 0,
             transfers: 0,
         };
@@ -705,6 +711,7 @@ impl Xhci {
         self.cmd_ptr = 0;
         self.cmd_ccs = true;
         self.running = false;
+        self.parked.clear();
         self.settle_ports();
     }
 
@@ -866,6 +873,18 @@ impl Xhci {
         } else {
             let dci = value & 0xFF;
             self.run_transfer_ring(target as usize, dci, mem);
+        }
+        self.run_parked(mem);
+    }
+
+    /// Give every NAKed endpoint another go. Whatever the host just did — a
+    /// command, or a control transfer telling a hub to reset a downstream port
+    /// — may be exactly what the device was waiting for; on the wire the
+    /// controller would have been retrying the token all along. An endpoint
+    /// that NAKs again simply parks itself once more.
+    fn run_parked(&mut self, mem: &mut dyn HostMem) {
+        for (slot, dci) in std::mem::take(&mut self.parked) {
+            self.run_transfer_ring(slot, dci, mem);
         }
     }
 
@@ -1146,8 +1165,16 @@ impl Xhci {
                 trb[2],
                 trb[3]
             );
-            let (code, residue) =
-                self.run_transfer_trb(slot as u32, dci, kind, &trb, &mut ctrl, mem);
+            let Some((code, residue)) =
+                self.run_transfer_trb(slot as u32, dci, kind, &trb, &mut ctrl, mem)
+            else {
+                // The device NAKed: the transfer is still outstanding, so this
+                // TRB stays at the head of the ring and no event goes out.
+                if !self.parked.contains(&(slot, dci)) {
+                    self.parked.push((slot, dci));
+                }
+                break;
+            };
             self.transfers += 1;
             // Interrupt On Completion, or Interrupt On Short Packet when the
             // transfer came up short.
@@ -1182,7 +1209,8 @@ impl Xhci {
     }
 
     /// Run one transfer TRB. Returns its completion code and the untransferred
-    /// residue.
+    /// residue, or `None` when the device NAKed and the transfer has not
+    /// happened at all.
     fn run_transfer_trb(
         &mut self,
         slot: u32,
@@ -1191,7 +1219,7 @@ impl Xhci {
         trb: &[u32; 4],
         ctrl: &mut ControlState,
         mem: &mut dyn HostMem,
-    ) -> (u32, u32) {
+    ) -> Option<(u32, u32)> {
         let buf = trb[0] as u64 | ((trb[1] as u64) << 32);
         let len = (trb[2] & 0x1_FFFF) as usize;
         let idt = trb[3] & (1 << 6) != 0;
@@ -1204,37 +1232,38 @@ impl Xhci {
                     setup: Some(Setup::from_bytes(b)),
                     out: Vec::new(),
                 };
-                (CC_SUCCESS, 0)
+                Some((CC_SUCCESS, 0))
             }
             TRB_DATA | TRB_STATUS | TRB_NORMAL if dci == 1 => {
                 let Some(setup) = ctrl.setup else {
-                    return (CC_TRB_ERROR, len as u32);
+                    return Some((CC_TRB_ERROR, len as u32));
                 };
                 let dir_in = if kind == TRB_STATUS {
                     // The Status Stage runs opposite the data direction; it
                     // moves no bytes either way.
-                    return self.control_status(slot, &setup, ctrl, mem);
+                    return Some(self.control_status(slot, &setup, ctrl, mem));
                 } else {
                     trb[3] & (1 << 16) != 0
                 };
                 if dir_in {
                     let Some(dev) = self.slot_device(slot, mem) else {
-                        return (CC_TRB_ERROR, len as u32);
+                        return Some((CC_TRB_ERROR, len as u32));
                     };
                     match dev.control(&setup, &[]) {
-                        Xfer::Stall => (CC_STALL, len as u32),
+                        Xfer::Nak => None,
+                        Xfer::Stall => Some((CC_STALL, len as u32)),
                         Xfer::Ok(mut data) => {
                             data.truncate(len.min(setup.length as usize));
                             mem.write_bytes(buf, &data);
                             let residue = (len - data.len()) as u32;
-                            (
+                            Some((
                                 if residue > 0 {
                                     CC_SHORT_PACKET
                                 } else {
                                     CC_SUCCESS
                                 },
                                 residue,
-                            )
+                            ))
                         }
                     }
                 } else {
@@ -1247,41 +1276,43 @@ impl Xhci {
                         mem.read_bytes(buf, len)
                     };
                     ctrl.out.extend_from_slice(&data);
-                    (CC_SUCCESS, 0)
+                    Some((CC_SUCCESS, 0))
                 }
             }
             TRB_NORMAL => {
                 let ep = dci / 2;
                 let dir_in = dci % 2 == 1;
                 let Some(dev) = self.slot_device(slot, mem) else {
-                    return (CC_TRB_ERROR, len as u32);
+                    return Some((CC_TRB_ERROR, len as u32));
                 };
                 if dir_in {
                     match dev.data_in(ep as u8, len) {
-                        Xfer::Stall => (CC_STALL, len as u32),
+                        Xfer::Nak => None,
+                        Xfer::Stall => Some((CC_STALL, len as u32)),
                         Xfer::Ok(data) => {
                             mem.write_bytes(buf, &data);
                             let residue = (len - data.len().min(len)) as u32;
-                            (
+                            Some((
                                 if residue > 0 {
                                     CC_SHORT_PACKET
                                 } else {
                                     CC_SUCCESS
                                 },
                                 residue,
-                            )
+                            ))
                         }
                     }
                 } else {
                     let data = mem.read_bytes(buf, len);
                     match dev.data_out(ep as u8, &data) {
-                        Xfer::Stall => (CC_STALL, len as u32),
-                        Xfer::Ok(_) => (CC_SUCCESS, 0),
+                        Xfer::Nak => None,
+                        Xfer::Stall => Some((CC_STALL, len as u32)),
+                        Xfer::Ok(_) => Some((CC_SUCCESS, 0)),
                     }
                 }
             }
-            TRB_EVENT_DATA | TRB_NO_OP => (CC_SUCCESS, 0),
-            _ => (CC_TRB_ERROR, len as u32),
+            TRB_EVENT_DATA | TRB_NO_OP => Some((CC_SUCCESS, 0)),
+            _ => Some((CC_TRB_ERROR, len as u32)),
         }
     }
 
@@ -1303,8 +1334,9 @@ impl Xhci {
             return (CC_TRB_ERROR, 0);
         };
         match dev.control(setup, &out) {
+            // No modelled device NAKs a Status Stage; treat it as done.
+            Xfer::Nak | Xfer::Ok(_) => (CC_SUCCESS, 0),
             Xfer::Stall => (CC_STALL, 0),
-            Xfer::Ok(_) => (CC_SUCCESS, 0),
         }
     }
 
@@ -1342,7 +1374,22 @@ impl Xhci {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mem::Ram;
     use crate::periph::usb::Hub;
+
+    /// A ring address is a CPU physical address, and Linux's are above 4 GB on
+    /// a board with that much DRAM: nothing may truncate them (#125).
+    #[test]
+    fn dma_addresses_are_not_truncated() {
+        let mut ram = Ram::new(0, 5 * 1024 * 1024 * 1024);
+        let mem: &mut dyn HostMem = &mut ram;
+        mem.write32(0x1_0173_8500, 0x1234_5678);
+        assert_eq!(mem.read32(0x1_0173_8500), 0x1234_5678, "read back");
+        assert_eq!(mem.read32(0x0173_8500), 0, "not the low alias");
+        // Past the end of DRAM nothing answers.
+        mem.write32(0x2_0000_0000, 0xDEAD_BEEF);
+        assert_eq!(mem.read32(0x2_0000_0000), 0);
+    }
 
     #[test]
     fn empty_ports_read_the_measured_resting_value() {
@@ -1424,6 +1471,7 @@ mod tests {
     const INPUT_CTX: u64 = 0x7000;
     const EP0_RING: u64 = 0x8000;
     const BUFFER: u64 = 0x9000;
+    const EP1_RING: u64 = 0xA000;
 
     fn put_trb(mem: &mut VecMem, at: u64, trb: [u32; 4]) {
         for (i, w) in trb.iter().enumerate() {
@@ -1557,6 +1605,86 @@ mod tests {
         assert_eq!(ev[2] >> 24, CC_SUCCESS);
         // The endpoint's dequeue pointer moved past all three stages.
         assert_eq!(mem.read32(DEV_CTX + 0x28) & !0xF, EP0_RING as u32 + 48);
+    }
+
+    /// Address slot 1 on root port 1 and give it a transfer ring for `dci`,
+    /// writing the endpoint context by hand rather than through Configure
+    /// Endpoint, which is all the ring engine reads.
+    fn addressed(hc: &mut Xhci, mem: &mut VecMem, dci: u32, ring: u64) {
+        hc.write(PORTSC, Width::Word, PORTSC_PR, mem);
+        command(hc, mem, 0, 1, [0, 0, 0, (TRB_ENABLE_SLOT << 10) | 1]);
+        mem.write32(DCBAA + 8, DEV_CTX as u32);
+        mem.write32(INPUT_CTX + 4, 0x3);
+        mem.write32(INPUT_CTX + 0x24, 1 << 16);
+        mem.write32(INPUT_CTX + 0x48, EP0_RING as u32 | 1);
+        command(
+            hc,
+            mem,
+            1,
+            2,
+            [
+                INPUT_CTX as u32,
+                0,
+                0,
+                (1 << 24) | (TRB_ADDRESS_DEVICE << 10) | 1,
+            ],
+        );
+        mem.write32(DEV_CTX + 0x20 * dci as u64 + 8, ring as u32 | 1);
+    }
+
+    /// A two-stage control transfer — Setup then Status, no data — written to
+    /// the endpoint-0 ring at `at`.
+    fn control_no_data(mem: &mut VecMem, at: u64, setup: [u8; 8]) {
+        put_trb(
+            mem,
+            at,
+            [
+                u32::from_le_bytes([setup[0], setup[1], setup[2], setup[3]]),
+                u32::from_le_bytes([setup[4], setup[5], setup[6], setup[7]]),
+                8,
+                (TRB_SETUP << 10) | (1 << 6) | 1,
+            ],
+        );
+        put_trb(mem, at + 16, [0, 0, 0, (TRB_STATUS << 10) | (1 << 5) | 1]);
+    }
+
+    /// An idle hub NAKs its status-change endpoint: the transfer stays
+    /// outstanding, so no event is posted and the endpoint's dequeue pointer
+    /// does not move. Completing it with zero bytes instead had Linux resubmit
+    /// the URB about two thousand times a second (#125).
+    #[test]
+    fn an_idle_status_endpoint_naks_instead_of_completing_empty() {
+        let (mut hc, mut mem) = started();
+        addressed(&mut hc, &mut mem, 3, EP1_RING);
+
+        // Endpoint 0x81, one byte, interrupt on completion.
+        put_trb(
+            &mut mem,
+            EP1_RING,
+            [BUFFER as u32, 0, 1, (TRB_NORMAL << 10) | (1 << 5) | 1],
+        );
+        let before = hc.transfers;
+        hc.write(DBOFF + 4, Width::Word, 3, &mut mem);
+        assert_eq!(hc.transfers, before, "nothing was transferred");
+        assert_eq!(
+            mem.read32(DEV_CTX + 0x68) & !0xF,
+            EP1_RING as u32,
+            "the TRB is still at the head of the ring"
+        );
+        // Event-ring slot 3 is the next one free; it is still blank.
+        assert_eq!(mem.read32(EVENT_RING + 48 + 12), 0, "no event posted");
+
+        // Reset downstream port 2 over endpoint 0. That sets C_PORT_RESET, so
+        // the parked poll has something to say and the doorbell that carried
+        // the control transfer delivers it.
+        control_no_data(&mut mem, EP0_RING, [0x23, 3, 4, 0, 2, 0, 0, 0]);
+        hc.write(DBOFF + 4, Width::Word, 1, &mut mem);
+        assert_eq!(mem.read_bytes(BUFFER, 1), vec![0b100], "port 2 changed");
+        assert_eq!(
+            mem.read32(DEV_CTX + 0x68) & !0xF,
+            EP1_RING as u32 + 16,
+            "the poll was consumed"
+        );
     }
 
     /// A short IN transfer reports `Short Packet` with the residue, which is

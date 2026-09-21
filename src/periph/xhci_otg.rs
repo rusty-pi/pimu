@@ -41,8 +41,9 @@
 //! * **Memory.** The endpoint behind PCIe reaches DRAM through the root
 //!   complex's inbound window; this controller is on the SoC's own bus, where
 //!   `/scb dma-ranges` is the identity over 16 GB. So a ring address is a CPU
-//!   physical address, 64 bits wide: the firmware's rings sit in the low
-//!   gigabyte, Linux's above 4 GB on a board with that much DRAM ([`Dma`]).
+//!   physical address handed straight to [`Ram`]'s own host-memory view: the
+//!   firmware's rings sit in the low gigabyte, Linux's above 4 GB on a board
+//!   that big.
 //! * **Interrupt.** No MSI and no INTA: one level line, `GIC_SPI 176`
 //!   (id [`crate::spec::xhci_otg::IRQ_GIC`]), driven by interrupter 0's
 //!   `IMAN.IP`. The bootloader polls instead; Linux uses the line.
@@ -59,7 +60,7 @@ use crate::bus::{BusResult, MmioDevice, Width};
 use crate::log::Log;
 use crate::mem::Ram;
 use crate::periph::usb::UsbDevice;
-use crate::periph::xhci::{Caps, HostMem, Xhci};
+use crate::periph::xhci::{Caps, Xhci};
 use crate::spec::xhci_otg as regs;
 use crate::spec::Coverage;
 
@@ -144,28 +145,6 @@ const _: () = assert!(
 /// The one root port: the USB-C socket.
 pub const PORT: usize = 1;
 
-/// DRAM as this controller's DMA sees it.
-///
-/// `/scb dma-ranges` maps the bus onto CPU physical addresses one to one over
-/// 16 GB, so an address is used as it is — the firmware's rings are down in the
-/// low gigabyte and Linux's are wherever it allocated them, above 4 GB on a
-/// board that big. That is why this is not [`Ram`]'s own [`HostMem`], which
-/// takes a 32-bit bus address: nothing here truncates. Past the end of DRAM
-/// reads answer zero and writes are dropped, as an access to nothing does.
-struct Dma<'a> {
-    ram: &'a mut Ram,
-}
-
-impl HostMem for Dma<'_> {
-    fn read8(&self, addr: u64) -> u8 {
-        self.ram.load_at(addr, Width::Byte).unwrap_or(0) as u8
-    }
-
-    fn write8(&mut self, addr: u64, value: u8) {
-        let _ = self.ram.store_at(addr, Width::Byte, value as u32);
-    }
-}
-
 /// The controller, and the one register write waiting for host memory.
 pub struct XhciOtg {
     hc: Xhci,
@@ -210,7 +189,7 @@ impl XhciOtg {
     /// Apply the parked write, which may run a ring in `ram`.
     pub fn run_pending(&mut self, ram: &mut Ram) {
         if let Some((off, width, value)) = self.pending.take() {
-            self.hc.write(off, width, value, &mut Dma { ram });
+            self.hc.write(off, width, value, ram);
         }
     }
 
@@ -298,19 +277,5 @@ mod tests {
         d.run_pending(&mut ram);
         assert!(!d.write_pending());
         assert_eq!(d.read(regs::USBSTS, Width::Word).unwrap() & 1, 0, "running");
-    }
-
-    /// A ring address is a CPU physical address, and Linux's are above 4 GB on
-    /// a board with that much DRAM: nothing may truncate them.
-    #[test]
-    fn dma_addresses_are_not_truncated() {
-        let mut ram = Ram::new(0, 5 * 1024 * 1024 * 1024);
-        let mut dma = Dma { ram: &mut ram };
-        dma.write32(0x1_0173_8500, 0x1234_5678);
-        assert_eq!(dma.read32(0x1_0173_8500), 0x1234_5678, "read back");
-        assert_eq!(dma.read32(0x0173_8500), 0, "not the low alias");
-        // Past the end of DRAM nothing answers.
-        dma.write32(0x2_0000_0000, 0xDEAD_BEEF);
-        assert_eq!(dma.read32(0x2_0000_0000), 0);
     }
 }

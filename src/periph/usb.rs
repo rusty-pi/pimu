@@ -91,8 +91,18 @@ const DESC_BOS: u8 = 15;
 /// What a control or data transfer did. `Stall` is a protocol error the host
 /// reports as a Stall Error completion code; it is a legitimate answer to an
 /// unsupported request and several enumeration paths depend on getting it.
+///
+/// `Nak` is the device saying "nothing yet": on the wire it NAKs the token and
+/// the host controller retries, so the transfer stays outstanding and the host
+/// sees no completion at all. That is not the same as `Ok(Vec::new())`, which
+/// completes the transfer with zero bytes — a real device only answers that
+/// way when it means it. The hub's status-change endpoint is the one that
+/// matters: an idle hub NAKs it forever, and answering a zero-length
+/// completion instead had Linux resubmit the URB about two thousand times a
+/// second (#125).
 pub enum Xfer {
     Ok(Vec<u8>),
+    Nak,
     Stall,
 }
 
@@ -416,8 +426,8 @@ impl UsbDevice for Hub {
     }
 
     /// Endpoint `0x81`, the status-change endpoint. One byte, one bit per port
-    /// plus bit 0 for the hub itself; nothing to report is a NAK, which the
-    /// host sees as a zero-length transfer.
+    /// plus bit 0 for the hub itself; nothing to report is a NAK, so the
+    /// host's poll stays outstanding until a port actually changes.
     fn data_in(&mut self, ep: u8, _len: usize) -> Xfer {
         if ep != 1 {
             return Xfer::Stall;
@@ -429,7 +439,7 @@ impl UsbDevice for Hub {
             }
         }
         if bits == 0 {
-            Xfer::Ok(Vec::new())
+            Xfer::Nak
         } else {
             Xfer::Ok(vec![bits])
         }
@@ -837,6 +847,7 @@ mod tests {
         };
         match dev.control(&setup, &[]) {
             Xfer::Ok(v) => v,
+            Xfer::Nak => panic!("naked"),
             Xfer::Stall => panic!("stalled"),
         }
     }
@@ -877,6 +888,7 @@ mod tests {
         // The status-change endpoint flags the port that changed.
         match hub.data_in(1, 1) {
             Xfer::Ok(v) => assert_eq!(v, vec![0b1000]),
+            Xfer::Nak => panic!("naked"),
             Xfer::Stall => panic!("stalled"),
         }
         ctrl(
