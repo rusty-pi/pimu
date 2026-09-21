@@ -330,9 +330,10 @@ cargo run --release -- boot-check testdata/boot/firmware-boot.toml --max-wall 60
 cargo run --release -- boot-check testdata/boot/usb-boot.toml --from boot-usb.log # an earlier run's pair
 ```
 
-The combined output goes to `boot.log` (`--output` names another file) and the
-console to `boot.log.console` beside it: the pair `--from` checks again
-without booting. CI keeps neither; a failed boot prints `boot.log` into the
+The combined output goes to `boot-<scenario>.log` (`--output` names another
+file) and the console to `<log>.console` beside it: the pair `--from` checks
+again without booting. The name carries the scenario so two checks running at
+once do not overwrite each other's evidence. CI keeps neither; a failed boot prints `boot.log` into the
 job log.
 
 After an intentional change, `--update` and then read the golden and counts

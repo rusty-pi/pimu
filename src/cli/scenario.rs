@@ -115,8 +115,9 @@ fn run_one(scn: &harness::Scenario, update: bool, verbose: bool) -> Result<bool>
 /// milestones and the pinned retired counts (#85). `--update` rewrites the
 /// golden and the counts instead of failing on them.
 ///
-/// * `--output <log>`: where the combined stdout and stderr go (`boot.log`),
-///   with the console next to it as `<log>.console`.
+/// * `--output <log>`: where the combined stdout and stderr go
+///   (`boot-<scenario>.log` when not given), with the console next to it as
+///   `<log>.console`.
 /// * `--from <log>`: check the pair an earlier run left instead of booting.
 /// * `--max-wall <secs>`: the wall budget, instead of the scenario's.
 /// * `--plan`: print the `boot` invocation instead of running it — a
@@ -159,11 +160,17 @@ pub fn cmd_boot_check(args: &[String]) -> Result<ExitCode> {
     if let Some(secs) = max_wall {
         scn.boot.wall_secs = secs;
     }
+    // Named after the scenario when the caller does not say. A fixed
+    // `boot.log` is shared state: two checks running at once in one checkout
+    // overwrite each other's log and console half-way through, and each then
+    // judges a mix of both runs — milestones "missing" from lines that are
+    // plainly on the terminal, and a transcript that belongs to the other
+    // scenario. Boots take minutes, so running two is the normal thing to do.
     let log = from
         .as_ref()
         .or(output.as_ref())
         .cloned()
-        .unwrap_or_else(|| PathBuf::from("boot.log"));
+        .unwrap_or_else(|| PathBuf::from(format!("boot-{}.log", scn.name)));
     let mut console = log.clone().into_os_string();
     console.push(".console");
     let console = PathBuf::from(console);
