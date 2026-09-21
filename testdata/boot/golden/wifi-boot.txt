@@ -734,7 +734,7 @@ Enter 'help' for a list of built-in commands.
 / # \x1b[6ninsmod $M/drivers/net/wireless/broadcom/brcm80211/brcmutil/brcmutil.ko
 / # \x1b[6ninsmod $M/drivers/net/wireless/broadcom/brcm80211/brcmfmac/brcmfmac.ko; slee
 
-p 9; ip link; dmesg | tail -24
+p 9; ip link; dmesg | tail -40
 [t] brcmfmac: brcmf_fw_alloc_request: using brcm/brcmfmac43455-sdio for chip BCM4345/6
 [t] brcmfmac: brcmf_fw_alloc_request: using brcm/brcmfmac43455-sdio for chip BCM4345/6
 [t] usbcore: registered new interface driver brcmfmac
@@ -751,26 +751,38 @@ p 9; ip link; dmesg | tail -24
 [t] hub 1-1:1.0: USB hub found
 [t] hub 1-1:1.0: 4 ports detected
 [t] hub 1-1:1.0: 4 ports detected
-[t] brcmfmac: brcmf_sdio_bus_rxctl: resumed on timeout
-[t] brcmfmac: brcmf_sdio_bus_rxctl: resumed on timeout
-[t] brcmfmac: brcmf_sdio_readshared: invalid sdpcm_shared address 0xFE4B01B4
-[t] brcmfmac: brcmf_sdio_readshared: invalid sdpcm_shared address 0xFE4B01B4
-[t] brcmfmac: brcmf_sdio_readshared: unable to obtain sdpcm_shared info: rv=-22 (addr=0xfe4b01b4)
-[t] brcmfmac: brcmf_sdio_readshared: unable to obtain sdpcm_shared info: rv=-22 (addr=0xfe4b01b4)
-[t] ieee80211 phy0: brcmf_bus_started: failed: -110
-[t] ieee80211 phy0: brcmf_bus_started: failed: -110
-[t] ieee80211 phy0: brcmf_attach: dongle is not responding: err=-110
-[t] ieee80211 phy0: brcmf_attach: dongle is not responding: err=-110
-[t] brcmfmac: brcmf_sdio_firmware_callback: brcmf_attach failed
-[t] brcmfmac: brcmf_sdio_firmware_callback: brcmf_attach failed
-[t] brcmfmac: brcmf_sdio_readshared: invalid sdpcm_shared address 0xFE4B01B4
-[t] brcmfmac: brcmf_sdio_readshared: invalid sdpcm_shared address 0xFE4B01B4
-[t] brcmfmac: brcmf_sdio_readshared: unable to obtain sdpcm_shared info: rv=-22 (addr=0xfe4b01b4)
-[t] brcmfmac: brcmf_sdio_readshared: unable to obtain sdpcm_shared info: rv=-22 (addr=0xfe4b01b4)
+[t] brcmfmac: brcmf_c_process_txcap_blob: no txcap_blob available (err=-2)
+[t] brcmfmac: brcmf_c_process_txcap_blob: no txcap_blob available (err=-2)
+[t] brcmfmac: brcmf_c_preinit_dcmds: Firmware: BCM4345/6 rpi-virt-fw model firmware (no radio) version 0
+[t] brcmfmac: brcmf_c_preinit_dcmds: Firmware: BCM4345/6 rpi-virt-fw model firmware (no radio) version 0
 1: lo: <LOOPBACK> mtu 65536 qdisc noop qlen 1000
     link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
 2: eth0: <BROADCAST,MULTICAST> mtu 1500 qdisc noop qlen 1000
     link/ether 02:00:5e:00:53:01 brd ff:ff:ff:ff:ff:ff
+3: wlan0: <BROADCAST,MULTICAST> mtu 1500 qdisc noop qlen 1000
+    link/ether 02:00:00:00:00:01 brd ff:ff:ff:ff:ff:ff
+[t] of_cfs_init: OK
+[t] clk: Disabling unused clocks
+[t] PM: genpd: Disabling unused power domains
+[t] check access for rdinit=/init failed: -2, ignoring
+[t] mmc1: new high speed SDIO card at address 0001
+[t] mmc0: SDHCI controller on fe340000.mmc [fe340000.mmc] using ADMA
+[t] Waiting for root device /dev/mmcblk0p2...
+[t] mmc0: new UHS-I speed DDR50 SDHC card at address 0001
+[t] mmcblk0: mmc0:0001 VIRTF 288 MiB
+[t]  mmcblk0: p1 p2
+[t] mmcblk0: mmc0:0001 VIRTF 288 MiB
+[t] EXT4-fs (mmcblk0p2): mounted filesystem 7b3f1c8e-0d2a-4c5e-9f61-2a4b6c8d0e1f ro with ordered data mode. Quota mode: none.
+[t] VFS: Mounted root (ext4 filesystem) readonly on device 179:2.
+[t] devtmpfs: mounted
+[t] Freeing unused kernel memory: 5632K
+[t] Run /sbin/init as init process
+[t]   with arguments:
+[t]     /sbin/init
+[t]   with environment:
+[t]     HOME=/
+[t]     TERM=linux
+[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
 [t] cfg80211: Loading compiled-in X.509 certificates for regulatory database
 [t] Loaded X.509 cert 'benh@debian.org: 577e021cb980e0e820821ba7b54b4961b8b4fadf'
 [t] Loaded X.509 cert 'romain.perier@gmail.com: 3abbc6ec146e09d1b6016ab9d6cf71dd233f0328'
@@ -787,12 +799,6 @@ p 9; ip link; dmesg | tail -24
 [t] usb 1-1: Product: USB2.0 Hub
 [t] hub 1-1:1.0: USB hub found
 [t] hub 1-1:1.0: 4 ports detected
-[t] brcmfmac: brcmf_sdio_bus_rxctl: resumed on timeout
-[t] brcmfmac: brcmf_sdio_readshared: invalid sdpcm_shared address 0xFE4B01B4
-[t] brcmfmac: brcmf_sdio_readshared: unable to obtain sdpcm_shared info: rv=-22 (addr=0xfe4b01b4)
-[t] ieee80211 phy0: brcmf_bus_started: failed: -110
-[t] ieee80211 phy0: brcmf_attach: dongle is not responding: err=-110
-[t] brcmfmac: brcmf_sdio_firmware_callback: brcmf_attach failed
-[t] brcmfmac: brcmf_sdio_readshared: invalid sdpcm_shared address 0xFE4B01B4
-[t] brcmfmac: brcmf_sdio_readshared: unable to obtain sdpcm_shared info: rv=-22 (addr=0xfe4b01b4)
-/ # \x1b[6n
+[t] brcmfmac: brcmf_c_process_txcap_blob: no txcap_blob available (err=-2)
+[t] brcmfmac: brcmf_c_preinit_dcmds: Firmware: BCM4345/6 rpi-virt-fw model firmware (no radio) version 0
+/ # \x1b[

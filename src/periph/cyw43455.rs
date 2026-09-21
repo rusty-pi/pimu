@@ -47,14 +47,18 @@
 //! its own tables — the chip id, the revision, the core ids, the RAM base —
 //! are forced, and each is cited where it is defined.
 //!
-//! ### What it deliberately leaves out
+//! ### The other side of it
 //!
-//! Function 2 is the chip's frame FIFO, and nothing on the other side of it
-//! is modelled yet: reads there are zeros and writes go nowhere. The ARM
-//! comes out of reset and runs nothing, so the firmware's side of the SDPCM
-//! handshake never happens.
+//! Function 2 is the chip's frame FIFO, and what talks over it is
+//! [`Sdpcm`](super::sdpcm::Sdpcm) — the frame protocol and the control
+//! channel a running firmware would answer on. The SDIO device core's
+//! mailbox registers, below, are how the chip says a frame is waiting and how
+//! the driver acknowledges it; the ARM still comes out of reset and executes
+//! nothing.
 
 use std::collections::BTreeMap;
+
+use crate::periph::sdpcm::Sdpcm;
 
 /// Function 1's misc registers, `SBSDIO_FUNC1_MISC_REG_START`..`_LIMIT`
 /// (`sdio.h:116`).
@@ -127,6 +131,50 @@ const EROM_BASE: u32 = 0x1801_0000;
 /// chipcommon register offsets (`chipcommon.h`, `struct chipcregs`).
 const CC_CHIPID: u32 = 0x00;
 const CC_EROMPTR: u32 = 0xFC;
+
+/// SDIO device core register offsets, `struct sdpcmd_regs` (`sdio.h:230`),
+/// as `SD_REG(field)` (`sdio.c:175`) takes them. These are the chip's side of
+/// the host interrupt: the driver reads `intstatus`, writes back what it saw
+/// to clear it, and takes the mailbox word out of `tohostmailboxdata`.
+/// `tosbmailboxdata` at `0x48` is written too — the protocol version the
+/// driver speaks, before it enables function 2 — and is stored like any other
+/// register, since nothing negotiates.
+const SD_INTSTATUS: u32 = 0x20;
+const SD_HOSTINTMASK: u32 = 0x24;
+const SD_TOSBMAILBOX: u32 = 0x40;
+const SD_TOHOSTMAILBOXDATA: u32 = 0x4C;
+
+/// `intstatus` bits (`sdio.c:204`). `I_HMB_FRAME_IND` says a frame is waiting
+/// on function 2 and `I_HMB_HOST_INT` that the mailbox holds a word; both are
+/// in `HOSTINTMASK` (`sdio.c:794`), which is what the driver writes to
+/// `hostintmask` and the only thing it acts on.
+const I_HMB_FRAME_IND: u32 = 1 << 6;
+const I_HMB_HOST_INT: u32 = 1 << 7;
+
+/// `SMB_INT_ACK` (`sdio.c:258`): written to `tosbmailbox` by
+/// `brcmf_sdio_hostmail` (`sdio.c:1121`) once it has read the mailbox word.
+const SMB_INT_ACK: u32 = 1 << 1;
+
+/// What the firmware puts in `tohostmailboxdata` when it is up:
+/// `HMB_DATA_FWREADY` (`sdio.c:279`) with the protocol version it speaks in
+/// `[23:16]` (`SDPCM_PROT_VERSION`, `sdio.c:293`). The driver compares that
+/// version against its own and says so if they differ.
+const HMB_DATA_FWREADY: u32 = 0x0008;
+const SDPCM_PROT_VERSION: u32 = 4;
+const HMB_DATA_VERSION_SHIFT: u32 = 16;
+
+/// `struct sdpcm_shared_le` (`sdio.c:389`): seven words, a 32-byte tag and a
+/// breakpoint address — the block a running firmware leaves in its memory and
+/// puts the address of in the very top word, over the nvram length the host
+/// wrote there. `brcmf_sdio_readshared` (`sdio.c:1039`) reads it whenever the
+/// driver wants to know whether the chip is still alive, which on a debug
+/// build is as soon as the chip says it is ready.
+const SHARED_LEN: u32 = 7 * 4 + 32 + 4;
+/// `SDPCM_SHARED_VERSION` (`sdio.c:299`), in the low byte of `flags`. The
+/// driver refuses anything newer than its own. The bits above it say the
+/// firmware was built with assertions, that one fired, and that it trapped;
+/// none of them is true of a firmware that is not there.
+const SDPCM_SHARED_VERSION: u32 = 0x0003;
 
 /// ARM CR4 core register offsets (`chip.c:205`) and the bank-size arithmetic
 /// `brcmf_chip_tcm_ramsize` (`chip.c:680`) does with them.
@@ -214,6 +262,9 @@ const CORES: [Core; 4] = [
 
 /// The ARM CR4 core, by the index it has in [`CORES`].
 const ARM_CORE: usize = 2;
+/// The SDIO device core, likewise: `brcmf_sdio_probe_attach` looks it up by
+/// id and everything about the host interrupt is at its base.
+const SDIO_CORE: usize = 1;
 
 /// EROM descriptor types and fields (`chip.c:24`). A descriptor's low nibble
 /// says what it is; `brcmf_chip_dmp_get_desc` (`chip.c:813`) reads them one
@@ -244,6 +295,15 @@ pub struct Cyw43455 {
     ram: Vec<u8>,
     /// The enumeration table, as words at [`EROM_BASE`].
     erom: Vec<u32>,
+    /// The frame protocol behind function 2.
+    sdpcm: Sdpcm,
+    /// `intstatus`: bits the chip raises and the driver writes back to
+    /// clear. Every one of them is a latch, the frame indication included —
+    /// the chip raises that once per frame it queues, not for as long as the
+    /// frame is there.
+    intstatus: u32,
+    /// `tohostmailboxdata`, until the driver acknowledges it.
+    mailbox: u32,
 }
 
 impl Default for Cyw43455 {
@@ -260,6 +320,9 @@ impl Cyw43455 {
             regs: BTreeMap::new(),
             ram: vec![0; RAM_SIZE as usize],
             erom: erom(),
+            sdpcm: Sdpcm::new(),
+            intstatus: 0,
+            mailbox: 0,
         }
     }
 
@@ -323,13 +386,20 @@ impl Cyw43455 {
 
     /// Fill `out` from function `func` at `addr` (the data phase of a CMD53
     /// read).
-    pub fn read_io(&self, func: u32, addr: u32, out: &mut [u8]) {
+    pub fn read_io(&mut self, func: u32, addr: u32, out: &mut [u8]) {
         if func == 1 && addr < F1_MISC_START {
             self.read(self.backplane_addr(addr), out);
             return;
         }
-        // Function 2 is the frame FIFO, which nothing answers yet; a misc
-        // register is a byte and is not read this way.
+        if func == 2 {
+            // The frame FIFO. `brcmf_sdiod_skbuff_read` (`bcmsdh.c:284`)
+            // reads it with `sdio_readsb`, a fixed address, because the
+            // address is not one: the bytes come in the order the chip
+            // queued them.
+            self.sdpcm.read(out);
+            return;
+        }
+        // A misc register is a byte and is not read this way.
         out.fill(0);
     }
 
@@ -340,6 +410,71 @@ impl Cyw43455 {
             let a = self.backplane_addr(addr);
             self.write(a, data);
         }
+        if func == 2 {
+            self.sdpcm.write(data);
+        }
+    }
+
+    /// The CMD53 whose data [`Self::write_io`] took has ended. On function 2
+    /// that is what terminates a frame — the host sends one per command and
+    /// pads it out, so the chip has to be told where the padding starts.
+    pub fn end_io(&mut self, func: u32) {
+        if func == 2 {
+            self.sdpcm.write_end();
+            if self.sdpcm.frame_waiting() {
+                // The frame indication is a latch, not a level: the chip
+                // raises it once per frame it queues and the driver clears it
+                // at the top of its work function, before it goes and reads
+                // the frame (`brcmf_sdio_intr_rstatus`, `sdio.c:2573`, then
+                // `brcmf_sdio_readframes`). A bit that stayed up until the
+                // frame was gone would interrupt the host again for every
+                // frame it was already on its way to fetch.
+                self.intstatus |= I_HMB_FRAME_IND;
+            }
+        }
+    }
+
+    // --- the host interrupt ---------------------------------------------
+
+    /// The chip is pulling the SDIO interrupt line, which it does while any
+    /// status bit the driver asked for in `hostintmask` is set.
+    pub fn irq_asserted(&self) -> bool {
+        self.intstatus & self.reg_raw(CORES[SDIO_CORE].base + SD_HOSTINTMASK) != 0
+    }
+
+    /// Function 2 was enabled, which is the last thing
+    /// `brcmf_sdio_firmware_callback` (`sdio.c:4408`) does before it turns
+    /// interrupts on: the firmware answers by posting that it is ready.
+    ///
+    /// A real chip posts this when its own firmware has finished starting.
+    /// The model has no firmware to start, so it uses the moment the two
+    /// sides agree to talk — and only if the ARM was actually released,
+    /// since a chip still in reset has nothing to say.
+    pub fn enable_f2(&mut self) {
+        if !self.arm_running() {
+            return;
+        }
+        self.publish_shared();
+        self.mailbox = HMB_DATA_FWREADY | SDPCM_PROT_VERSION << HMB_DATA_VERSION_SHIFT;
+        self.intstatus |= I_HMB_HOST_INT;
+    }
+
+    /// Leave an `sdpcm_shared` block where a running firmware leaves one, and
+    /// the address of it in the top word of memory.
+    ///
+    /// The block goes in the top of memory itself, over the tail of the nvram
+    /// the host wrote there — which by this point the firmware would have
+    /// parsed, and which the driver has already read back and checked. What
+    /// it says is that the firmware is alive, speaks the protocol version the
+    /// driver does, was not built with assertions and has not trapped, and
+    /// has no console for the driver to read: all of which is true of a chip
+    /// whose firmware is this model.
+    fn publish_shared(&mut self) {
+        let at = RAM_BASE + RAM_SIZE - 4 - SHARED_LEN;
+        let mut block = vec![0u8; SHARED_LEN as usize];
+        block[..4].copy_from_slice(&SDPCM_SHARED_VERSION.to_le_bytes());
+        self.write(at, &block);
+        self.write(RAM_BASE + RAM_SIZE - 4, &at.to_le_bytes());
     }
 
     fn misc_read(&self, addr: u32) -> u8 {
@@ -405,19 +540,32 @@ impl Cyw43455 {
             self.ram[r].copy_from_slice(data);
             return;
         }
-        // Everything else is a register. The driver only ever writes whole
-        // 32-bit words to one (`brcmf_sdiod_writel`), so a partial write
-        // reads the word, replaces the bytes and puts it back.
-        for (i, byte) in data.iter().enumerate() {
-            let a = addr.wrapping_add(i as u32);
+        // Everything else is a register, and a whole aligned word of one goes
+        // in as a word — `brcmf_sdiod_writel` (`bcmsdh.c:264`) is how the
+        // driver writes every register, and a write-one-to-clear register
+        // read back and rewritten a byte at a time would clear bits the
+        // driver never named.
+        let mut off = 0;
+        while off < data.len() {
+            let a = addr.wrapping_add(off as u32);
             if let Some(r) = ram_range(a, 1) {
-                self.ram[r.start] = *byte;
+                self.ram[r.start] = data[off];
+                off += 1;
                 continue;
             }
+            if a.is_multiple_of(4) && data.len() - off >= 4 {
+                let word = u32::from_le_bytes(data[off..off + 4].try_into().unwrap());
+                self.write_reg(a, word);
+                off += 4;
+                continue;
+            }
+            // A partial write reads the word, replaces the byte and puts it
+            // back, which is what the bus does for a narrow access.
             let word = a & !3;
             let mut bytes = self.reg(word).to_le_bytes();
-            bytes[(a & 3) as usize] = *byte;
+            bytes[(a & 3) as usize] = data[off];
             self.write_reg(word, u32::from_le_bytes(bytes));
+            off += 1;
         }
     }
 
@@ -428,10 +576,14 @@ impl Cyw43455 {
         }
         let cc = CORES[0].base;
         let arm = CORES[ARM_CORE].base;
+        let sd = CORES[SDIO_CORE].base;
         match addr {
             // The word that starts the whole bring-up.
             a if a == cc + CC_CHIPID => CHIP_ID | CHIP_REV << 16 | SOCI_AI << 28,
             a if a == cc + CC_EROMPTR => EROM_BASE,
+            // The host interrupt.
+            a if a == sd + SD_INTSTATUS => self.intstatus,
+            a if a == sd + SD_TOHOSTMAILBOXDATA => self.mailbox,
             // The CR4's capability register says how many banks of memory
             // there are, and each bank's size comes from the info register
             // for whichever bank index was last written.
@@ -455,14 +607,33 @@ impl Cyw43455 {
     fn write_reg(&mut self, addr: u32, value: u32) {
         let cc = CORES[0].base;
         let arm = CORES[ARM_CORE].base;
-        // Read-only: the identity, the EROM and its pointer, and the CR4's
-        // capabilities. A write to one changes nothing, as on silicon.
+        let sd = CORES[SDIO_CORE].base;
+        // Read-only: the identity, the EROM and its pointer, the CR4's
+        // capabilities, and the mailbox word the chip put there. A write to
+        // one changes nothing, as on silicon.
         if addr == cc + CC_CHIPID
             || addr == cc + CC_EROMPTR
             || addr == arm + ARMCR4_CAP
             || addr == arm + ARMCR4_BANKINFO
+            || addr == sd + SD_TOHOSTMAILBOXDATA
             || self.erom_word(addr).is_some()
         {
+            return;
+        }
+        // `intstatus` is write-one-to-clear: `brcmf_sdio_intr_rstatus`
+        // (`sdio.c:2573`) writes back what it read, and only what it read.
+        if addr == sd + SD_INTSTATUS {
+            self.intstatus &= !value;
+            return;
+        }
+        // The host's half of the mailbox. The acknowledgement is the only bit
+        // of it the chip acts on: it takes back the word it posted, and with
+        // it the interrupt that announced it.
+        if addr == sd + SD_TOSBMAILBOX {
+            if value & SMB_INT_ACK != 0 {
+                self.mailbox = 0;
+                self.intstatus &= !I_HMB_HOST_INT;
+            }
             return;
         }
         self.regs.insert(addr, value);

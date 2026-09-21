@@ -53,7 +53,10 @@
 //! Function 0 is the card's: the CCCR, the FBRs and the CIS chains, all of
 //! them here. Functions 1 and 2 are the chip's, and both CMD52 and CMD53
 //! hand those to [`Cyw43455`] — function 1 is the window onto its backplane,
-//! function 2 its frame FIFO.
+//! function 2 its frame FIFO. The chip also pulls the card's interrupt line
+//! ([`SdCard::io_irq`], the host controller's card interrupt) when it has
+//! something to say, and names itself in `CCCR_INT_PENDING` when the host
+//! asks which function it was.
 //!
 //! The same type also plays an **e-MMC** part ([`CardKind::Mmc`]), the flash
 //! soldered to a Compute Module, which answers a different identification
@@ -228,6 +231,8 @@ const CCCR_REV: u32 = 0x00;
 const CCCR_SD_SPEC: u32 = 0x01;
 const CCCR_IO_ENABLE: u32 = 0x02;
 const CCCR_IO_READY: u32 = 0x03;
+const CCCR_INT_ENABLE: u32 = 0x04;
+const CCCR_INT_PENDING: u32 = 0x05;
 const CCCR_IO_ABORT: u32 = 0x06;
 const CCCR_CAPABILITY: u32 = 0x08;
 const CCCR_CIS_PTR: u32 = 0x09;
@@ -236,6 +241,22 @@ const CCCR_SPEED: u32 = 0x13;
 /// `CCCR_IO_ABORT` bit 3: reset the I/O side, which is how the MMC core puts
 /// an SDIO card back to idle before it retries.
 const IO_ABORT_RES: u8 = 1 << 3;
+
+/// `CCCR_IO_ENABLE` bit 2: function 2, the frame FIFO.
+const IO_ENABLE_FUNC2: u8 = 1 << 2;
+
+/// `CCCR_INT_ENABLE` (SDIO simplified specification 6.9.4): bit 0 is the
+/// master enable and bit *n* the enable for function *n*. A card holds the
+/// interrupt line off until both are set — `sdio_claim_irq`
+/// (`drivers/mmc/core/sdio_irq.c`) sets them together.
+const INT_ENABLE_MASTER: u8 = 1 << 0;
+const INT_ENABLE_FUNC1: u8 = 1 << 1;
+
+/// `CCCR_INT_PENDING` bit 1: function 1 has an interrupt pending. The MMC
+/// core reads this register to find out which function to call
+/// (`process_sdio_pending_irqs`), and `brcmfmac` puts its handler on function
+/// 1 — `INTR_STATUS_FUNC1` (`sdio.h:24`) is the same bit from its side.
+const INT_PENDING_FUNC1: u8 = 1 << 1;
 
 /// R5's `IO_CURRENT_STATE`, bits `[13:12]` of the response — *not* where R1
 /// keeps the card state.
@@ -267,6 +288,9 @@ struct IoXfer {
     /// Bytes per block: the function's block size in block mode, and the
     /// whole byte count in byte mode, which is one block of it.
     unit: u32,
+    /// How many blocks the command asked for, so that the card knows which
+    /// one ends the transfer. On function 2 that is where a frame ends.
+    blocks: u32,
 }
 
 /// The 64-byte tuning block a card sends for CMD19 on a 4-bit bus (SD
@@ -476,7 +500,7 @@ impl SdCard {
                     .copied()
                     .unwrap_or(0);
             }
-        } else if let Some(chip) = self.chip.as_ref() {
+        } else if let Some(chip) = self.chip.as_mut() {
             chip.read_io(x.func, at, &mut out[..n]);
         }
     }
@@ -495,6 +519,11 @@ impl SdCard {
             }
         } else if let Some(chip) = self.chip.as_mut() {
             chip.write_io(x.func, at, &data[..n]);
+            // The command's last block ends the transfer, and on the frame
+            // FIFO that is what ends a frame.
+            if index + 1 >= x.blocks {
+                chip.end_io(x.func);
+            }
         }
     }
 
@@ -831,6 +860,7 @@ impl SdCard {
                     addr,
                     incr,
                     unit,
+                    blocks,
                 });
                 // R5 carries no data byte for an extended transfer; the
                 // bytes go over the data lines.
@@ -914,7 +944,32 @@ impl SdCard {
                 None => 0,
             };
         }
+        if addr == CCCR_INT_PENDING {
+            // Not stored: which functions have something to say is the
+            // chip's to answer, and it answers it now.
+            return if self.io_irq_raw() {
+                INT_PENDING_FUNC1
+            } else {
+                0
+            };
+        }
         self.io.get(&addr).copied().unwrap_or(0)
+    }
+
+    /// The card is pulling the SDIO interrupt line — DAT[1] on a 4-bit bus,
+    /// which the host controller reports as its card interrupt.
+    ///
+    /// Gated by `CCCR_INT_ENABLE` the way a card gates it: the chip may have
+    /// something to say long before the host has asked to be told.
+    pub fn io_irq(&self) -> bool {
+        let en = self.io.get(&CCCR_INT_ENABLE).copied().unwrap_or(0);
+        en & (INT_ENABLE_MASTER | INT_ENABLE_FUNC1) == (INT_ENABLE_MASTER | INT_ENABLE_FUNC1)
+            && self.io_irq_raw()
+    }
+
+    /// The same before the CCCR gate: whether the chip has anything pending.
+    fn io_irq_raw(&self) -> bool {
+        self.chip.as_ref().is_some_and(|c| c.irq_asserted())
     }
 
     /// Write one byte of function `func`'s space. In function 0 the CCCR's
@@ -932,12 +987,20 @@ impl SdCard {
             // card's own, and so are the CIS tuples.
             CCCR_REV | CCCR_SD_SPEC | CCCR_CAPABILITY => {}
             CCCR_IO_ENABLE => {
+                let was = self.io_read(0, CCCR_IO_ENABLE);
                 self.io.insert(CCCR_IO_ENABLE, value);
                 // A real function takes a moment to come up; this one is
                 // ready as soon as it is asked for.
                 self.io.insert(CCCR_IO_READY, value);
+                // Function 2 coming up is what the chip's firmware waits for
+                // before it says it is ready.
+                if value & !was & IO_ENABLE_FUNC2 != 0 {
+                    if let Some(chip) = self.chip.as_mut() {
+                        chip.enable_f2();
+                    }
+                }
             }
-            CCCR_IO_READY => {}
+            CCCR_IO_READY | CCCR_INT_PENDING => {}
             CCCR_IO_ABORT => {
                 // Self-clearing: bit 3 puts the I/O side back to idle, which
                 // is how the MMC core starts a rescan.

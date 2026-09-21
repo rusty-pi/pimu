@@ -72,7 +72,7 @@ use crate::spec::emmc2::{
     HOST_CONTROL_DMA_SELECT_SHIFT as HC_DMA_SHIFT, HOST_CONTROL_FIXED_MASK as HOST_CONTROL_FIXED,
     INT_SIGNAL_EN, INT_STATUS, INT_STATUS_BLOCK_GAP_MASK as INT_BLOCK_GAP,
     INT_STATUS_BUF_READ_RDY_MASK as INT_BUF_READ_RDY,
-    INT_STATUS_BUF_WRITE_RDY_MASK as INT_BUF_WRITE_RDY,
+    INT_STATUS_BUF_WRITE_RDY_MASK as INT_BUF_WRITE_RDY, INT_STATUS_CARD_MASK as INT_CARD,
     INT_STATUS_CMD_COMPLETE_MASK as INT_CMD_COMPLETE, INT_STATUS_DMA_MASK as INT_DMA,
     INT_STATUS_EN, INT_STATUS_ERROR_MASK as INT_ERROR, INT_STATUS_ERR_ADMA_MASK as INT_ERR_ADMA,
     INT_STATUS_ERR_CMD_TIMEOUT_MASK as INT_ERR_CMD_TIMEOUT,
@@ -446,9 +446,18 @@ impl Emmc2 {
         self.reg.insert(INT_STATUS, cur | (bits & en));
     }
 
-    /// INT_STATUS as read: the latched bits plus the error summary.
+    /// INT_STATUS as read: the latched bits, the card interrupt while the
+    /// card is asserting it, and the error summary.
+    ///
+    /// The card interrupt is a level and not a latch (SDHCI 3.00, 1.8):
+    /// writing a one to it clears nothing, and it goes away only when the
+    /// card lets go. All a driver can do about it meanwhile is mask it, which
+    /// INT_STATUS_EN does here as it does for every other bit.
     fn int_status(&self) -> u32 {
-        let st = self.get(INT_STATUS) & !INT_ERROR;
+        let mut st = self.get(INT_STATUS) & !INT_ERROR;
+        if self.card.as_ref().is_some_and(|c| c.io_irq()) {
+            st |= INT_CARD & self.get(INT_STATUS_EN);
+        }
         if st & 0xFFFF_0000 != 0 {
             st | INT_ERROR
         } else {
@@ -1624,6 +1633,180 @@ mod tests {
             back.extend_from_slice(&rd(&mut e, BUFFER_DATA).to_le_bytes());
         }
         assert_eq!(back, data);
+    }
+
+    /// One CMD53 in byte mode against function `func`, through the Buffer
+    /// Data Port: the shape every control frame goes over.
+    fn io_bytes(e: &mut Emmc2, func: u32, off: u32, write: bool, incr: bool, data: &mut Vec<u8>) {
+        let n = data.len() as u32;
+        assert!(n.is_multiple_of(4) && n <= 512);
+        wr(e, BLOCK_SIZE_COUNT, (1 << 16) | n);
+        let arg = (u32::from(write) << 31)
+            | (func << 28)
+            | (u32::from(incr) << 26)
+            | (off << 9)
+            | (n & 0x1FF);
+        let mode = if write { 0 } else { TM_READ };
+        cmd(e, 53, arg, R1_DATA, mode);
+        if write {
+            for word in data.chunks(4) {
+                wr(e, BUFFER_DATA, u32::from_le_bytes(word.try_into().unwrap()));
+            }
+        } else {
+            data.clear();
+            for _ in 0..n / 4 {
+                let mut polls = 0;
+                while rd(e, PRESENT_STATE) & PS_BUF_READ_EN == 0 {
+                    polls += 1;
+                    assert!(polls < 100, "the block never arrived");
+                }
+                data.extend_from_slice(&rd(e, BUFFER_DATA).to_le_bytes());
+            }
+        }
+        wr(
+            e,
+            INT_STATUS,
+            INT_CMD_COMPLETE | INT_XFER_COMPLETE | INT_DATA_BITS,
+        );
+    }
+
+    /// The WiFi chip with its frame FIFO open: function 2 enabled, the card's
+    /// interrupt lines armed, and the SDIO core told which status bits to
+    /// raise the interrupt for — which is where
+    /// `brcmf_sdio_firmware_callback` leaves it.
+    /// One CMD52 to function `func`.
+    fn io_byte(e: &mut Emmc2, func: u32, addr: u32, v: u8) {
+        let arg = (1 << 31) | (func << 28) | (addr << 9) | u32::from(v);
+        cmd(e, 52, arg, R1, 0);
+    }
+
+    /// One 32-bit backplane register, the way `brcmf_sdiod_writel`
+    /// (`bcmsdh.c:264`) writes one: aim function 1's window at it, then a
+    /// four-byte transfer at the offset it selects, with the 4-byte-access
+    /// flag on top.
+    fn backplane_wr(e: &mut Emmc2, addr: u32, value: u32) {
+        let v = (addr & 0xFFFF_8000) >> 8;
+        for i in 0..3 {
+            io_byte(e, 1, 0x1000A + i, (v >> (8 * i)) as u8);
+        }
+        let off = (addr & 0x7FFF) | 0x8000;
+        let mut word = value.to_le_bytes().to_vec();
+        io_bytes(e, 1, off, true, true, &mut word);
+    }
+
+    /// The SDIO device core's registers, which is where the host interrupt
+    /// comes from. Its base is the model's to pick; the offsets are
+    /// `struct sdpcmd_regs`.
+    const SD_CORE: u32 = 0x1800_1000;
+    const SD_INTSTATUS: u32 = 0x20;
+    const SD_HOSTINTMASK: u32 = 0x24;
+    /// `HOSTINTMASK` (`sdio.c:794`): the four host mailbox bits and "chip
+    /// active".
+    const HOSTINTMASK: u32 = 0x0000_00F0 | 1 << 29;
+    /// `I_HMB_FRAME_IND` (`sdio.c:272`).
+    const I_HMB_FRAME_IND: u32 = 1 << 6;
+
+    fn wifi_host_up() -> Emmc2 {
+        let mut e = wifi_host(0x1800_0000);
+        // Function 2's block size, then the function itself.
+        for (i, b) in 512u16.to_le_bytes().iter().enumerate() {
+            io_byte(&mut e, 0, 0x210 + i as u32, *b);
+        }
+        io_byte(&mut e, 0, 0x02, 0x06);
+        backplane_wr(&mut e, SD_CORE + SD_HOSTINTMASK, HOSTINTMASK);
+        // Master interrupt enable plus function 1's, which is what
+        // `sdio_claim_irq` writes.
+        io_byte(&mut e, 0, 0x04, 0x03);
+        // ...and the host's own half of it: `bcm2835_mmc_enable_sdio_irq`
+        // puts the card-interrupt bit in both enables.
+        wr(&mut e, INT_SIGNAL_EN, INT_CARD);
+        wr(&mut e, INT_STATUS, 0xFFFF_FFFF);
+        e
+    }
+
+    /// A control frame as `brcmf_sdio_tx_ctrlframe` builds one: the SDPCM
+    /// header, then a BCDC request.
+    fn ctrl_frame(seq: u8, id: u16, cmd: u32, payload: &[u8]) -> Vec<u8> {
+        let mut bcdc = Vec::new();
+        bcdc.extend_from_slice(&cmd.to_le_bytes());
+        bcdc.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        // `BCDC_DCMD_SET` with the request id above it.
+        bcdc.extend_from_slice(&(u32::from(id) << 16 | 0x02).to_le_bytes());
+        bcdc.extend_from_slice(&0u32.to_le_bytes());
+        bcdc.extend_from_slice(payload);
+
+        let len = (12 + bcdc.len()) as u16;
+        let mut frame = Vec::new();
+        frame.extend_from_slice(&len.to_le_bytes());
+        frame.extend_from_slice(&(!len).to_le_bytes());
+        frame.extend_from_slice(&(u32::from(seq) | 12 << 24).to_le_bytes());
+        frame.extend_from_slice(&0u32.to_le_bytes());
+        frame.extend_from_slice(&bcdc);
+        frame.resize(frame.len().next_multiple_of(4), 0);
+        frame
+    }
+
+    /// The whole control path in one go: a frame out on function 2, the
+    /// card's interrupt, and the answer back.
+    ///
+    /// This is what `brcmf_sdio_bus_preinit` does with `bus:txglomalign` and
+    /// what `brcmf_sdio_bus_rxctl` waits 2.7 s for.
+    #[test]
+    fn a_control_frame_is_answered_and_the_card_says_so() {
+        let mut e = wifi_host_up();
+        assert_eq!(rd(&mut e, INT_STATUS) & INT_CARD, 0, "nothing pending yet");
+
+        let mut iovar = b"bus:txglomalign\0".to_vec();
+        iovar.extend_from_slice(&4u32.to_le_bytes());
+        let mut frame = ctrl_frame(255, 1, 263, &iovar);
+        // Function 2's offset is the chipcommon base masked down to the
+        // window, which is 0, with the 4-byte-access flag on top.
+        io_bytes(&mut e, 2, 0x8000, true, true, &mut frame);
+
+        // The chip has an answer, and the card pulls DAT[1] for it.
+        assert_eq!(
+            rd(&mut e, INT_STATUS) & INT_CARD,
+            INT_CARD,
+            "the card interrupt never reached the host"
+        );
+        assert!(e.irq_asserted());
+        // Write-one-to-clear does nothing to it at the host's end: it is a
+        // level, and only the chip can drop it.
+        wr(&mut e, INT_STATUS, 0xFFFF_FFFF);
+        assert_eq!(rd(&mut e, INT_STATUS) & INT_CARD, INT_CARD);
+        // ...and function 1 is the one the card names as pending.
+        cmd(&mut e, 52, 0x05 << 9, R1, 0);
+        assert_eq!(rd(&mut e, RESPONSE0) & 0xFF, 0x02);
+
+        // What the driver does first: write back the status bits it saw,
+        // which is what drops the line.
+        backplane_wr(&mut e, SD_CORE + SD_INTSTATUS, I_HMB_FRAME_IND);
+        assert_eq!(rd(&mut e, INT_STATUS) & INT_CARD, 0);
+        assert!(!e.irq_asserted());
+
+        // `BRCMF_FIRSTREAD` bytes, fixed address, which is how the driver
+        // takes a frame's header.
+        let mut head = vec![0u8; 64];
+        io_bytes(&mut e, 2, 0x8000, false, false, &mut head);
+        let len = u16::from_le_bytes([head[0], head[1]]);
+        assert_eq!(len ^ u16::from_le_bytes([head[2], head[3]]), u16::MAX);
+        assert!(len as usize <= head.len(), "the answer fits in one read");
+        let sw = u32::from_le_bytes(head[4..8].try_into().unwrap());
+        assert_eq!(sw & 0x0F00, 0, "the control channel");
+        assert_eq!(sw >> 24, 12, "the payload starts after the header");
+        // The window the chip opened, which is what lets the next frame out.
+        let window = (u32::from_le_bytes(head[8..12].try_into().unwrap()) >> 8) as u8;
+        assert_ne!(window.wrapping_sub(0), 0);
+        // The BCDC answer carries the request id back with no error flag.
+        let flags = u32::from_le_bytes(head[20..24].try_into().unwrap());
+        assert_eq!(flags >> 16, 1);
+        assert_eq!(flags & 0x01, 0);
+
+        // And with the frame taken, nothing comes back: the chip raises the
+        // indication once per frame, so a driver that has read what it was
+        // told about is not interrupted again.
+        assert_eq!(rd(&mut e, INT_STATUS) & INT_CARD, 0);
+        assert!(!e.irq_asserted());
     }
 
     /// One 512-byte block through the Buffer Data Port the way both stock

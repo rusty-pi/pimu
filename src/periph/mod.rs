@@ -43,6 +43,7 @@ pub mod readystub;
 pub mod rng;
 pub mod sdc;
 pub mod sdcard;
+pub mod sdpcm;
 pub mod sdramc;
 pub mod spi0;
 pub mod stub;

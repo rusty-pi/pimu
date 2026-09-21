@@ -13,47 +13,40 @@
 # The modules are typed in at the busybox prompt rather than loaded by an
 # init script, so the transcript shows what each one printed.
 #
-# WHERE THE DRIVER STOPS
+# WHAT IT GETS TO
 #
-# `brcmfmac` now walks the whole chip and downloads its firmware, and stops
-# where the chip would have to start answering for itself:
+# A registered network interface. `brcmfmac` walks the chip, downloads its
+# firmware, and then talks to it — and what answers is the model, not the
+# image it just wrote:
 #
-#   brcmfmac: F1 signature read @0x18000000=0x10064345
-#   brcmfmac: brcmf_fw_alloc_request: using brcm/brcmfmac43455-sdio for chip BCM4345/6
-#   brcmfmac: brcmf_sdio_bus_rxctl: resumed on timeout
-#   brcmfmac: brcmf_sdio_readshared: invalid sdpcm_shared address 0xFE4B01B4
-#   ieee80211 phy0: brcmf_attach: dongle is not responding: err=-110
+#   brcmfmac: brcmf_c_preinit_dcmds: Firmware: BCM4345/6 rpi-virt-fw model firmware (no radio) version 0
+#   3: wlan0: <BROADCAST,MULTICAST> mtu 1500 qdisc noop qlen 1000
+#       link/ether 02:00:00:00:00:01 brd ff:ff:ff:ff:ff:ff
 #
-# What ran before that stop:
+# The chip's side of that conversation is `src/periph/sdpcm.rs`: the frame
+# protocol over SDIO function 2, and the control protocol inside it. The ARM
+# the driver takes out of reset still executes nothing; what the driver is
+# talking to is a stand-in that answers the questions `brcmf_bus_started`
+# asks on the way to registering an interface, and answers them as itself —
+# hence the firmware version, which says where it came from.
 #
-#   1. The chip-id word at backplane `0x18000000` reads `0x10064345`: a
-#      BCM4345 revision 6 on an AXI backplane, which is the pair the driver's
-#      own firmware table maps to `brcmfmac43455-sdio`.
-#   2. The driver walks the enumeration table the chipcommon core points at
-#      and finds the chipcommon, SDIO, ARM CR4 and 802.11 cores, then sizes
-#      the ARM's memory out of the CR4 core: 768 KiB at `0x198000`.
-#   3. It writes the 609309-byte firmware image there and the nvram at the top
-#      of it, and takes the ARM out of reset through the core's wrapper.
-#   4. Then it asks the firmware for `bus:txglomalign` and waits. Nothing
-#      answers, because nothing in the model runs that firmware: the ARM comes
-#      out of reset and executes nothing, and function 2 — the frame FIFO the
-#      SDPCM handshake goes over — is not modelled.
+# What is *not* there, and what the interface being down says:
 #
-# `invalid sdpcm_shared address 0xFE4B01B4` is the same thing said from the
-# other end, and it is worth reading twice: having given up, the driver reads
-# the word at the very top of the chip's memory, where the running firmware
-# would have left a pointer to its shared block. What it gets back is the last
-# word of the nvram *it* wrote there — `brcmf_fw_nvram_strip` ends the image
-# with the length in the low half and its complement in the high half, and
-# `0x01B4` = 436 words = the 1744 bytes of nvram this card carries. So the
-# download went in and reads back, and only the chip's own side is missing.
+#   1. No radio. Nothing scans, nothing associates, and a frame on the data
+#      or event channels is dropped. The interface is `BROADCAST,MULTICAST`
+#      and never `UP`.
+#   2. One band, thirteen 20 MHz channels, and no HT or VHT. A real 43455 is
+#      dual-band 802.11ac.
+#   3. The MAC address is a placeholder the model answers `cur_etheraddr`
+#      with. The real one comes out of the chip's OTP with the card's nvram
+#      `macaddr=` line over the top of it, and neither is modelled.
 #
 # `cfg80211: failed to load regulatory.db` is expected: the card carries the
 # chip's firmware, not linux-firmware's regulatory database, and nothing here
 # needs a regulatory domain.
 
 name = "wifi-boot"
-description = "The stock-config boot with brcmfmac loaded by hand, pinning where the driver stops against the modelled CYW43455."
+description = "The stock-config boot with brcmfmac loaded by hand, up to the network interface it registers against the modelled CYW43455."
 
 [boot]
 eeprom = "../../firmware/pieeprom.bin"
@@ -83,19 +76,23 @@ text = "insmod $M/drivers/net/wireless/broadcom/brcm80211/brcmutil/brcmutil.ko\n
 
 # The one that matters, and everything after it on one line. Its probe runs
 # inside this `insmod`, because the SDIO device is already on the bus, but the
-# firmware download and the handshake that follows are a worker's, so the
+# firmware download and the conversation that follows are a worker's, so the
 # prompt comes back long before the driver is finished: hence the `sleep`,
-# which is over three times what the run needs (the driver gives up 2.7 s
-# after the `insmod`).
+# which is several times what the run needs (the interface is registered
+# about 40 ms of model time after the `insmod`).
 #
 # One line rather than four because the prompt is what every send waits for,
 # and a `printk` from another core lands in the middle of it often enough to
 # matter: the kernel and the shell write the same UART a byte at a time, and
 # an interleaved prompt matches nothing. After this line the kernel has said
 # everything it is going to.
+#
+# `dmesg` rather than the console alone because the driver's first line about
+# the chip is a `pr_debug`, which the ring buffer keeps and the console
+# loglevel drops. The count has to be long enough to reach back to it.
 [[boot.input]]
 after = "/ # \u001b[6n"
-text = "insmod $M/drivers/net/wireless/broadcom/brcm80211/brcmfmac/brcmfmac.ko; sleep 9; ip link; dmesg | tail -24\n"
+text = "insmod $M/drivers/net/wireless/broadcom/brcm80211/brcmfmac/brcmfmac.ko; sleep 9; ip link; dmesg | tail -40\n"
 
 [golden]
 path = "golden/wifi-boot.txt"
@@ -114,7 +111,9 @@ why = """
 (`SDIO_DEVICE_ID_BROADCOM_CYPRESS_43455`), which is in the driver's SDIO
 table — and the first thing it does with it lands: `CMD53` reads the
 chipcommon chip-id word through the backplane window at function 1 offset
-`0x8000`. `0x10064345` is chip `0x4345` revision 6 on an AXI backplane."""
+`0x8000`. `0x10064345` is chip `0x4345` revision 6 on an AXI backplane. The
+line is a `pr_debug`, so it is in the `dmesg` tail above and not on the
+console."""
 line = "brcmfmac: F1 signature read @0x18000000=0x10064345"
 
 [[milestone]]
@@ -138,33 +137,49 @@ line = "Direct firmware load for brcm/brcmfmac43455-sdio"
 
 [[milestone]]
 why = """
-Where the bring-up stops now: the firmware and the nvram are in the chip's
-memory and the ARM is out of reset, so the driver sends its first control
-frame — the `bus:txglomalign` iovar — and waits for the chip's firmware to
-answer. Nothing in the model runs that firmware, so it does not."""
-line = "brcmfmac: brcmf_sdio_bus_rxctl: resumed on timeout"
+The control path works end to end, and it is the model on the other end of
+it. `brcmf_c_preinit_dcmds` asks the running firmware for its version and
+prints it, so everything up to here landed: the frame protocol over function
+2, the SDIO core's interrupt, the sequence numbers, the window the chip has
+to open for every frame, and a BCDC request and answer for every command the
+driver has sent up to here — the bus settings, the address, the revision, the
+CLM blob in its chunks. The version string is the model saying so in its own
+name; no firmware ran to produce it."""
+line = "Firmware: BCM4345/6 rpi-virt-fw model firmware (no radio) version 0"
 
 [[milestone]]
-why = """
-The same stop from the other side, and the proof the download landed: the
-driver reads the top word of the chip's memory, where a running firmware
-would have left the address of its shared block, and gets back the last word
-of the nvram it wrote there itself — 436 words in the low half and their
-complement in the high half, which is the 1744 bytes of nvram this card
-carries."""
-line = "brcmfmac: brcmf_sdio_readshared: invalid sdpcm_shared address 0xFE4B01B4"
-
-[[milestone]]
-why = "And the driver's own summary of it: the chip took everything it was given and never said anything back."
-line = "brcmf_attach: dongle is not responding: err=-110"
-
-[[milestone]]
-why = "Only the GENET is up: no `wlan0` until the chip answers its side of the bring-up."
+why = "Only the GENET is up: neither interface is brought `UP` here, and `wlan0` could not be — nothing behind it is a radio."
 line = "2: eth0: <BROADCAST,MULTICAST> mtu 1500 qdisc noop qlen 1000"
 
 [[milestone]]
-why = "What a finished bring-up would add to `ip link`, and what this scenario is here to see appear."
-line = "wlan0"
+why = """
+What this scenario is here to see: `brcmf_attach` got all the way through
+`brcmf_cfg80211_attach` — the band list, the channel list, the interface
+modes, the event masks — and registered a network interface."""
+line = "3: wlan0: <BROADCAST,MULTICAST> mtu 1500 qdisc noop qlen 1000"
+
+[[milestone]]
+why = "And the address it registered with is the placeholder the model answers `cur_etheraddr` with: locally administered, and nothing to do with the chip's OTP or the card's nvram, neither of which is modelled."
+line = "link/ether 02:00:00:00:00:01 brd ff:ff:ff:ff:ff:ff"
+
+[[milestone]]
+why = "No control frame went unanswered: a single one that did would stop the bring-up dead 2.7 s later."
+line = "brcmf_sdio_bus_rxctl: resumed on timeout"
+absent = true
+
+[[milestone]]
+why = "And the driver never had cause to ask whether the chip had died, which is the only thing that reads the shared block the model publishes at the top of the chip's memory."
+line = "unable to obtain sdpcm_shared info"
+absent = true
+
+[[milestone]]
+why = "Where this scenario used to stop, and what a regression in the frame protocol would bring straight back."
+line = "brcmf_attach: dongle is not responding"
+absent = true
+
+[[milestone]]
+why = "Nothing the model answers makes the driver or cfg80211 complain: an answer they cannot place — a channel list for a bandwidth the chip does not have, or a channel spec of zero — is a backtrace apiece."
+line = "WARNING:"
 absent = true
 
 [[milestone]]

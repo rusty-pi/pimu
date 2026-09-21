@@ -344,6 +344,7 @@ Normal (15:0) and error (31:16) interrupt status, gated by `INT_STATUS_EN`. The 
 | 3 | `DMA` | w1c | SDMA reached a buffer boundary, or an ADMA2 descriptor asked for an interrupt. |
 | 4 | `BUF_WRITE_RDY` | w1c | Buffer write ready. |
 | 5 | `BUF_READ_RDY` | w1c | Buffer read ready. Latches when a PIO read block arrives in the buffer, every block of a multi-block read included, and stays set until cleared. edk2's `ArasanMmcHostDxe` clears it before it reads each block and then waits for it again, polling this register only; the model counts those polls toward the next block's arrival as it does `PRESENT_STATE` reads. |
+| 8 | `CARD` | r | Card interrupt: an SDIO card is pulling `DAT[1]` low. A level, not a latch — writing a one does not clear it, and it goes away only when the card stops asserting, so a driver masks it in `INT_STATUS_EN` and `INT_SIGNAL_EN` for as long as it takes to service the card. `mmc-bcm2835` does exactly that: `bcm2835_mmc_irq` clears the bit out of both enables and calls `sdio_signal_irq`, and `bcm2835_mmc_ack_sdio_irq` puts it back. The CYW43455 on the WiFi host is the only thing on this board that asserts it. |
 | 15 | `ERROR` | r | Set while any error bit is. |
 | 16 | `ERR_CMD_TIMEOUT` | w1c | Command timeout. |
 | 25 | `ERR_ADMA` | w1c | ADMA error. |
@@ -377,6 +378,11 @@ Sources:
 
 - standard (high): SDHCI 3.00, 2.2.17
 - standard (high): edk2-platforms `Platform/RaspberryPi/Drivers/ArasanMmcHostDxe/ArasanMmcHostDxe.c` `MMCReadBlockData`: `MMCHS_INT_STAT` polled for `BRR`, cleared, then 512 bytes from `MMCHS_DATA`, per block
+
+`CARD` sources:
+
+- standard (high): SDHCI 3.00, 2.2.17 and 1.8: the Card Interrupt status bit is not cleared by writing to it
+- standard (high): raspberrypi/linux `drivers/mmc/host/bcm2835-mmc.c` `bcm2835_mmc_enable_sdio_irq_nolock` and `bcm2835_mmc_irq`, which is the driver that binds `mmcnr@7e300000`
 
 `ERROR` sources:
 

@@ -581,6 +581,22 @@ ref        = "edk2-platforms `Platform/RaspberryPi/Drivers/ArasanMmcHostDxe/Aras
 confidence = "high"
 
 [[register.field]]
+name   = "CARD"
+bits   = "8"
+access = "r"
+notes  = "Card interrupt: an SDIO card is pulling `DAT[1]` low. A level, not a latch — writing a one does not clear it, and it goes away only when the card stops asserting, so a driver masks it in `INT_STATUS_EN` and `INT_SIGNAL_EN` for as long as it takes to service the card. `mmc-bcm2835` does exactly that: `bcm2835_mmc_irq` clears the bit out of both enables and calls `sdio_signal_irq`, and `bcm2835_mmc_ack_sdio_irq` puts it back. The CYW43455 on the WiFi host is the only thing on this board that asserts it."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.17 and 1.8: the Card Interrupt status bit is not cleared by writing to it"
+confidence = "high"
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "raspberrypi/linux `drivers/mmc/host/bcm2835-mmc.c` `bcm2835_mmc_enable_sdio_irq_nolock` and `bcm2835_mmc_irq`, which is the driver that binds `mmcnr@7e300000`"
+confidence = "high"
+
+[[register.field]]
 name   = "ERROR"
 bits   = "15"
 access = "r"
