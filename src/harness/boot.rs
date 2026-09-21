@@ -219,6 +219,47 @@ impl Pattern {
         }
         true
     }
+
+    /// Shorter versions of this pattern, longest first: what to look for when
+    /// the whole thing matched nothing.
+    ///
+    /// A milestone over the console can lean on the golden diff to show what
+    /// came out instead. One over the run report cannot — there is no diff of
+    /// the report — so a bare "not found" hides the thing worth reading, which
+    /// is usually a line that is there with the wrong value in it.
+    ///
+    /// Dropping whole parts first and then trailing words keeps the strongest
+    /// surviving prefix: `"genet   MAC 02:00:5e:00:53:01"` weakens to
+    /// `"genet   MAC"`, which finds the line carrying the zeroes.
+    fn weaker(&self) -> Vec<Pattern> {
+        let parts = self.parts();
+        let mut out: Vec<Pattern> = (1..parts.len())
+            .rev()
+            .map(|k| Pattern::Parts(parts[..k].to_vec()))
+            .collect();
+        out.extend(word_prefixes(&parts[0]).into_iter().map(Pattern::One));
+        out
+    }
+}
+
+/// `s` cut back word by word, longest first and never the whole string: the
+/// prefixes [`Pattern::weaker`] falls back to. Runs of spaces are kept as they
+/// are, since the report aligns its columns with them. Anything under three
+/// characters is left out — it would match half the log.
+fn word_prefixes(s: &str) -> Vec<String> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::new();
+    for (i, c) in s.char_indices() {
+        let ends_word = !c.is_whitespace()
+            && bytes
+                .get(i + c.len_utf8())
+                .is_some_and(|b| b.is_ascii_whitespace());
+        if ends_word && i + c.len_utf8() >= 3 {
+            out.push(s[..i + c.len_utf8()].to_string());
+        }
+    }
+    out.reverse();
+    out
 }
 
 impl std::fmt::Display for Pattern {
@@ -267,6 +308,25 @@ impl Milestone {
         }
         if n > 4 {
             out.push_str(&format!("         ... and {} more\n", n - 4));
+        }
+        // Nothing matched: show what the nearest weaker pattern finds, which
+        // is how a line that is there with the wrong value in it tells itself
+        // apart from one that never printed.
+        if n == 0 && !self.absent {
+            for w in self.line.weaker() {
+                let near: Vec<&str> = log.lines().filter(|l| w.matches(l)).collect();
+                if near.is_empty() {
+                    continue;
+                }
+                out.push_str(&format!("         instead, lines matching {w}:\n"));
+                for l in near.iter().take(4) {
+                    out.push_str(&format!("         near: {}\n", l.trim()));
+                }
+                if near.len() > 4 {
+                    out.push_str(&format!("         ... and {} more\n", near.len() - 4));
+                }
+                break;
+            }
         }
         Some(out)
     }
@@ -889,6 +949,39 @@ mod tests {
             normalise_console(raw),
             "[t] EEPROM ID 0xef4018\n[t] Watchdog stopped\n"
         );
+    }
+
+    /// A milestone whose value changed has to show the value it found. Over
+    /// the run report there is no golden diff to fall back on, so a bare "not
+    /// found" would hide the line that actually explains the failure.
+    #[test]
+    fn a_missing_milestone_shows_the_line_that_should_have_matched() {
+        let m = Milestone {
+            why: "UEFI programmed the MAC it read out of the firmware.".into(),
+            line: Pattern::One("genet   MAC 02:00:5e:00:53:01".into()),
+            absent: false,
+            count: None,
+            max_count: None,
+        };
+        let log = "--- device state ---\n  genet   MAC 00:00:00:00:00:00  tx off  rx off\n";
+        let f = m.check(log).expect("the milestone must fail");
+        assert!(f.contains("MISSING"), "{f}");
+        assert!(
+            f.contains("near:   genet   MAC 00:00:00:00:00:00")
+                || f.contains("near: genet   MAC 00:00:00:00:00:00"),
+            "the failure does not show what was there instead:\n{f}"
+        );
+        // And a line that never printed at all says so, rather than dragging
+        // in whatever shares a word with it.
+        let m2 = Milestone {
+            why: "The bootloader hands over.".into(),
+            line: Pattern::One("arm_loader: Starting ARM".into()),
+            absent: false,
+            count: None,
+            max_count: None,
+        };
+        let f2 = m2.check(log).expect("the milestone must fail");
+        assert!(!f2.contains("near:"), "{f2}");
     }
 
     #[test]
