@@ -45,7 +45,21 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      # A self-hosted runner keeps its home directory between runs, so cargo's
+      # output is already there — but actions/checkout wipes the workspace
+      # (`git clean -ffdx` takes target/ with it), which is what the cache
+      # action is working around. Putting the target directory on the volume
+      # instead keeps it across runs for free, and the registry under
+      # ~/.cargo was never wiped to begin with. That is 100 s of cloud cache a
+      # job, and the last of this workflow's traffic to the cache service
+      # (#130). It grows without bound; `compose down -v` on the runner is the
+      # reset.
+      - name: Keep cargo's output on the runner, not in the cloud
+        if: runner.environment == 'self-hosted'
+        run: echo "CARGO_TARGET_DIR=$HOME/cargo-target" >> "$GITHUB_ENV"
+
       - uses: Swatinem/rust-cache@v2
+        if: runner.environment == 'github-hosted'
 
       # tests/a64_diff.rs checks the A64 interpreter against qemu-aarch64
       # user-mode emulation.
@@ -81,7 +95,21 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # A self-hosted runner keeps its home directory between runs, so cargo's
+      # output is already there — but actions/checkout wipes the workspace
+      # (`git clean -ffdx` takes target/ with it), which is what the cache
+      # action is working around. Putting the target directory on the volume
+      # instead keeps it across runs for free, and the registry under
+      # ~/.cargo was never wiped to begin with. That is 100 s of cloud cache a
+      # job, and the last of this workflow's traffic to the cache service
+      # (#130). It grows without bound; `compose down -v` on the runner is the
+      # reset.
+      - name: Keep cargo's output on the runner, not in the cloud
+        if: runner.environment == 'self-hosted'
+        run: echo "CARGO_TARGET_DIR=$HOME/cargo-target" >> "$GITHUB_ENV"
+
       - uses: Swatinem/rust-cache@v2
+        if: runner.environment == 'github-hosted'
 
       - name: Fetch firmware blobs
         run: ./scripts/fetch-firmware.sh
@@ -118,6 +146,14 @@ jobs:
 
       - name: Build rpi-virt-fw
         run: cargo build --release
+
+      # Everything downstream — the tar below, the boots, `boot-check` — reads
+      # the binary at target/release, wherever cargo was told to build it.
+      - name: Put the binary where the boots look for it
+        if: env.CARGO_TARGET_DIR != ''
+        run: |
+          mkdir -p target/release
+          cp -f "$CARGO_TARGET_DIR/release/rpi-virt-fw" target/release/
 
       # The boots get all of this through the Actions cache rather than as an
       # artifact: artifacts count against the account's storage quota, and a
