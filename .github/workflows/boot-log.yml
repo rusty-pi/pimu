@@ -132,22 +132,30 @@ jobs:
             firmware/
 
       # On the self-hosted runners the cache service is the wrong way round:
-      # the cards and the binary are a quarter of a gigabyte, the NAS is behind
-      # a domestic uplink, and every boot job pulls the whole entry back from
-      # the cloud — which is what made a run's restores fail with "The
-      # operation cannot be completed in timeout." Those runners share one
-      # directory instead, so the tar never leaves the host (#130).
+      # the NAS is behind a domestic uplink, and every boot job pulls the whole
+      # entry back from the cloud — which is what made a run's restores fail
+      # with "The operation cannot be completed in timeout." Those runners
+      # share one directory instead, and the inputs never leave the host
+      # (#130).
+      #
+      # Hard links, not a copy: /cache and the runners' home volumes are one
+      # filesystem, so this is metadata only. The cards are sparse — 208 MB of
+      # blocks in 1.8 GB of file — and writing them out for real cost the boot
+      # jobs 40-50 s each when they all unpacked at once.
       - name: Save the boot inputs to the shared cache
         if: vars.RUNNER_CACHE != ''
         env:
           CACHE: ${{ vars.RUNNER_CACHE }}
         run: |
-          mkdir -p "$CACHE"
-          tar -cf "$CACHE/boot-inputs-$GITHUB_RUN_ID.tar" \
-            target/release/rpi-virt-fw firmware/
-          # A cancelled run never reaches its cleanup job, so its tar is still
-          # there. Nothing else prunes the directory.
-          find "$CACHE" -maxdepth 1 -name 'boot-inputs-*.tar' -mtime +1 -delete
+          dest="$CACHE/boot-inputs-$GITHUB_RUN_ID"
+          rm -rf "$dest"
+          mkdir -p "$dest/target/release"
+          cp -al target/release/rpi-virt-fw "$dest/target/release/"
+          cp -al firmware "$dest/"
+          # A cancelled run never reaches its cleanup job, so its directory is
+          # still there. Nothing else prunes this one.
+          find "$CACHE" -maxdepth 1 -name 'boot-inputs-*' -mtime +1 \
+            -exec rm -rf {} +
 
   # Then every boot at once, each against its own scenario: the firmware boot
   # from each medium, and the Linux boot to a shell (#40).
@@ -197,11 +205,19 @@ jobs:
             target/release/rpi-virt-fw
             firmware/
 
+      # Hard links again: nothing is read or written but directory entries.
+      # The boots never write to what they are given — the model keeps every
+      # write to a card or a stick in memory — so one set of blocks serves
+      # every job.
       - name: Restore the boot inputs from the shared cache
         if: vars.RUNNER_CACHE != ''
         env:
           CACHE: ${{ vars.RUNNER_CACHE }}
-        run: tar -xf "$CACHE/boot-inputs-$GITHUB_RUN_ID.tar"
+        run: |
+          src="$CACHE/boot-inputs-$GITHUB_RUN_ID"
+          mkdir -p target/release
+          cp -alf "$src/target/release/rpi-virt-fw" target/release/
+          cp -alf "$src/firmware/." firmware/
 
       - name: Simulated boot (${{ matrix.name }})
         run: |
@@ -233,11 +249,11 @@ jobs:
       actions: write
 
     steps:
-      - name: Delete this run's tar from the shared cache
+      - name: Delete this run's directory from the shared cache
         if: vars.RUNNER_CACHE != ''
         env:
           CACHE: ${{ vars.RUNNER_CACHE }}
-        run: rm -f "$CACHE/boot-inputs-$GITHUB_RUN_ID.tar"
+        run: rm -rf "$CACHE/boot-inputs-$GITHUB_RUN_ID"
 
       - name: Delete this run's cache entry and artifacts
         uses: actions/github-script@v9
