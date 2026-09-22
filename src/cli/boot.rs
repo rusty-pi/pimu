@@ -87,7 +87,7 @@ MACHINE:
               does not exist. json: row -> value, one a line; binary: row n
               at byte 4n, little-endian. A file with a real board's fuses
               holds its secrets: keep it out of the repository.
-    --boot-rom <rom.bin>
+    --maskrom <rom.bin>
               Execute a real VPU maskROM dump from its reset vector,
               0x60000000, instead of the modelled boot ROM stage.
               Experimental. The dump stays a local file: never commit it.
@@ -365,7 +365,7 @@ struct BootOpts {
     boot_order: Option<String>,
     bootconf: Vec<String>,
     eeprom_pubkey: Option<PathBuf>,
-    boot_rom_path: Option<PathBuf>,
+    maskrom_path: Option<PathBuf>,
     stepping: Option<Stepping>,
     board_rev: Option<u32>,
     dram_map: bool,
@@ -547,7 +547,7 @@ impl BootOpts {
         let mut boot_order: Option<String> = None;
         let mut bootconf: Vec<String> = Vec::new();
         let mut eeprom_pubkey: Option<PathBuf> = None;
-        let mut boot_rom_path: Option<PathBuf> = None;
+        let mut maskrom_path: Option<PathBuf> = None;
         let mut stepping: Option<Stepping> = None;
         let mut board_rev: Option<u32> = None;
         let mut dram_map = false;
@@ -684,9 +684,8 @@ impl BootOpts {
                         it.next().context("--eeprom-pubkey needs a file")?,
                     ))
                 }
-                "--boot-rom" => {
-                    boot_rom_path =
-                        Some(PathBuf::from(it.next().context("--boot-rom needs a file")?))
+                "--maskrom" => {
+                    maskrom_path = Some(PathBuf::from(it.next().context("--maskrom needs a file")?))
                 }
                 "--stepping" => {
                     stepping = Some(Stepping::parse(
@@ -854,7 +853,7 @@ impl BootOpts {
             boot_order,
             bootconf,
             eeprom_pubkey,
-            boot_rom_path,
+            maskrom_path,
             stepping,
             board_rev,
             dram_map,
@@ -1319,7 +1318,7 @@ struct Rig<'a> {
     /// `--otg <img>`: the stick in the USB-C socket (#113).
     otg_disk: Option<SharedUsbDisk>,
     bootrom: rpi_virt_fw::firmware::bootrom::BootRom,
-    boot_rom_image: Option<Vec<u8>>,
+    maskrom_image: Option<Vec<u8>>,
     board: Board,
 }
 
@@ -1332,7 +1331,7 @@ impl<'a> Rig<'a> {
         otg_disk: Option<SharedUsbDisk>,
     ) -> Result<Self> {
         let BootOpts {
-            ref boot_rom_path,
+            ref maskrom_path,
             stepping,
             board_rev,
             verbose,
@@ -1344,17 +1343,17 @@ impl<'a> Rig<'a> {
         // operator supplies one, comes from the environment and never the repo.
         let bootrom = rpi_virt_fw::firmware::bootrom::BootRom::from_env()?;
 
-        // `--boot-rom <file>`: experimental. Map a real maskROM dump at 0x6000_0000
+        // `--maskrom <file>`: experimental. Map a real maskROM dump at 0x6000_0000
         // and execute it from the reset vector instead of running the behavioural
         // stage. Most people do not have a dump, so this is optional; the dump stays
         // a local file and is never committed.
-        let boot_rom_image = match &boot_rom_path {
+        let maskrom_image = match &maskrom_path {
             Some(p) => {
-                let b = std::fs::read(p)
-                    .with_context(|| format!("reading boot ROM {}", p.display()))?;
+                let b =
+                    std::fs::read(p).with_context(|| format!("reading maskROM {}", p.display()))?;
                 if verbose {
                     println!(
-                        "boot-rom   {} ({} bytes, experimental)",
+                        "maskrom    {} ({} bytes, experimental)",
                         p.display(),
                         b.len()
                     );
@@ -1392,7 +1391,7 @@ impl<'a> Rig<'a> {
             usb_disk,
             otg_disk,
             bootrom,
-            boot_rom_image,
+            maskrom_image,
             board,
         })
     }
@@ -1525,15 +1524,13 @@ impl<'a> Rig<'a> {
         // the peripherals the real ROM does instead of reaching around them. For
         // a raw ELF it is the loader placing its segments.
         let start = if eeprom {
-            if let Some(rom) = &self.boot_rom_image {
+            if let Some(rom) = &self.maskrom_image {
                 // Execute the real maskROM from its reset vector. It reads the
                 // pieeprom off SPI0, the key rows out of OTP, and stages the
                 // bootcode itself — the peripherals do the rest.
-                machine.attach_boot_rom(rom.clone());
+                machine.attach_maskrom(rom.clone());
                 if reboots == 0 && verbose {
-                    println!(
-                        "boot ROM: executing real maskROM from reset vector 0x60000000 (experimental)"
-                    );
+                    println!("maskROM: executing from reset vector 0x60000000 (experimental)");
                 }
                 entry.unwrap_or(0x6000_0000)
             } else {

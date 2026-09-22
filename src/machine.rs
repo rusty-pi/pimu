@@ -34,14 +34,14 @@ pub enum Console {
 
 pub struct Machine {
     pub ram: Ram,
-    /// Experimental: a real BCM2711 boot-ROM image mapped read-only at
-    /// `0x6000_0000` (`--boot-rom`). When set, reads and instruction fetches in
+    /// Experimental: a real BCM2711 maskROM image mapped read-only at
+    /// `0x6000_0000` (`--maskrom`). When set, reads and instruction fetches in
     /// `[base, base+len)` are served from these bytes instead of the DRAM alias,
     /// so the VPU can execute the maskROM from its reset vector. Writes and every
     /// address outside the range fall through to normal decoding, so the ROM's
     /// scratch (above the code region) and its staging at `0x8000_0000` still
     /// land in RAM. `None` on every normal boot — see `firmware::bootrom`.
-    boot_rom: Option<(u32, u32, Vec<u8>)>,
+    maskrom: Option<(u32, u32, Vec<u8>)>,
     /// The L2 the bootcode runs out of, until its flush ([`crate::l2`], #70).
     pub l2: crate::l2::CacheAsRam,
     pub systimer: SysTimer,
@@ -306,7 +306,7 @@ impl Machine {
     pub fn new(ram_bytes: usize) -> Machine {
         Machine {
             ram: Ram::new(map::SDRAM_CACHED_BASE, ram_bytes),
-            boot_rom: None,
+            maskrom: None,
             l2: Default::default(),
             systimer: SysTimer::new(),
             uart0: Pl011::new(),
@@ -741,33 +741,33 @@ impl Machine {
                 || (map::GENET_BASE..map::GENET_BASE + map::GENET_SIZE).contains(&addr))
     }
 
-    /// Map a real boot-ROM image at `0x6000_0000` so the VPU can execute the
-    /// maskROM from its reset vector (experimental `--boot-rom`). Only the
+    /// Map a real maskROM image at `0x6000_0000` so the VPU can execute the
+    /// maskROM from its reset vector (experimental `--maskrom`). Only the
     /// code+rodata region is overlaid — the salt and SHA constants live there,
     /// while the ROM's BSS/scratch above it and its bootcode staging at
-    /// `0x8000_0000` must stay writable DRAM. See the [`boot_rom`](Self::boot_rom)
+    /// `0x8000_0000` must stay writable DRAM. See the [`maskrom`](Self::maskrom)
     /// field.
-    pub fn attach_boot_rom(&mut self, bytes: Vec<u8>) {
+    pub fn attach_maskrom(&mut self, bytes: Vec<u8>) {
         const BASE: u32 = 0x6000_0000;
         const CODE_LEN: u32 = 0x8000;
         let len = (bytes.len() as u32).min(CODE_LEN);
-        self.boot_rom = Some((BASE, BASE + len, bytes));
+        self.maskrom = Some((BASE, BASE + len, bytes));
         // The ROM stages the bootcode into the L2 with ordinary stores.
         self.l2.hold(0, 0);
     }
 
-    /// If a boot-ROM overlay covers `addr`, the byte offset into its image.
+    /// If a maskROM overlay covers `addr`, the byte offset into its image.
     #[inline]
-    fn boot_rom_at(&self, addr: u32) -> Option<usize> {
-        let (base, end, _) = self.boot_rom.as_ref()?;
+    fn maskrom_at(&self, addr: u32) -> Option<usize> {
+        let (base, end, _) = self.maskrom.as_ref()?;
         (*base..*end)
             .contains(&addr)
             .then(|| (addr - *base) as usize)
     }
 
-    /// Read `width` bytes little-endian out of the boot-ROM overlay.
-    fn boot_rom_load(&self, off: usize, width: Width) -> u32 {
-        let bytes = &self.boot_rom.as_ref().expect("overlay present").2;
+    /// Read `width` bytes little-endian out of the maskROM overlay.
+    fn maskrom_load(&self, off: usize, width: Width) -> u32 {
+        let bytes = &self.maskrom.as_ref().expect("overlay present").2;
         let mut v = 0u32;
         for i in 0..width.bytes() as usize {
             v |= u32::from(bytes.get(off + i).copied().unwrap_or(0)) << (8 * i);
@@ -1557,8 +1557,8 @@ impl Bus for Machine {
     /// halfword — two to five per instruction, across nearly two billion
     /// instructions a boot. Execution is essentially always out of RAM.
     fn read_insn(&mut self, pc: u32, out: &mut [u8; 10]) -> BusResult<u8> {
-        if let Some(off) = self.boot_rom_at(pc) {
-            let bytes = &self.boot_rom.as_ref().expect("overlay present").2;
+        if let Some(off) = self.maskrom_at(pc) {
+            let bytes = &self.maskrom.as_ref().expect("overlay present").2;
             let p0 = u16::from_le_bytes([
                 bytes.get(off).copied().unwrap_or(0),
                 bytes.get(off + 1).copied().unwrap_or(0),
@@ -1600,7 +1600,7 @@ impl Bus for Machine {
     /// progress heuristics, and a decode cache must not change what they see.
     #[inline]
     fn code_gen(&mut self, pc: u32, cached: Option<u64>) -> Option<u64> {
-        if self.boot_rom_at(pc).is_some() {
+        if self.maskrom_at(pc).is_some() {
             // The ROM overlay is immutable, so a fixed generation lets the decode
             // cache keep its instructions.
             const ROM_GEN: u64 = u64::MAX;
@@ -1651,9 +1651,9 @@ impl Bus for Machine {
         if self.alignment.is_on() {
             self.alignment.note(addr, width, self.watch_pc, false);
         }
-        if let Some(off) = self.boot_rom_at(addr) {
+        if let Some(off) = self.maskrom_at(addr) {
             self.ram_reads = self.ram_reads.wrapping_add(1);
-            return Ok(self.boot_rom_load(off, width));
+            return Ok(self.maskrom_load(off, width));
         }
         if !Machine::in_mmio(addr) {
             let phys = Machine::fold_ram_addr(addr);

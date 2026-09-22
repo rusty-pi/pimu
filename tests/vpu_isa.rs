@@ -728,9 +728,9 @@ fn vector_store_under_ifn_moves_the_lanes_the_flags_call_negative() {
 /// `v32mov HY(0,0)++,#0 REP8` — the vector memory-clear at `0x60000446` in the
 /// BCM2711 boot ROM. This 80-bit `REP` broadcast used to fall through to
 /// `VecExec::NeedsVrf` and fault; the model now clears `reps` consecutive VRF
-/// rows so `--boot-rom` can execute the maskROM's RAM zeroing.
+/// rows so `--maskrom` can execute the maskROM's RAM zeroing.
 #[test]
-fn boot_rom_vector_memclear_is_an_executable_rep_broadcast() {
+fn maskrom_vector_memclear_is_an_executable_rep_broadcast() {
     use rpi_virt_fw::vpu::decode::decode;
     use rpi_virt_fw::vpu::insn::{Op, RegOrImm, VecExec, VecRep};
 
