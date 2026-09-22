@@ -46,6 +46,10 @@ trace just before it, then watch the state it depends on.
 # 1. Where did it stop?  The run report's `end` and `final pc` say.
 boot firmware/pieeprom.bin --eeprom --sd firmware/sd.img
 
+# 1b. What did it branch through on the way, and what did it poke that
+#     nothing models?  Neither is in the report by default.
+boot … --control-transfers --stub-log
+
 # 2. Arm the instruction trace when the boot first reaches that pc.
 RVF_TRACE_ON_PC=0x3ec568f8 RVF_TRACE_CAP=4000 boot … 2> trace.log
 

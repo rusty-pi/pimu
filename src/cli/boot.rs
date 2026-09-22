@@ -198,9 +198,9 @@ RUNNING:
 
 OUTPUT:
     -v, --verbose
-              Print the full run report as well — the EEPROM layout,
-              registers, the ARM cores, the property replies, the peripherals
-              that fell through to the stub, the device tree's `/chosen`.
+              Print the full run report as well — registers, the ARM cores,
+              the property replies, the EEPROM's boot configuration, the
+              device tree's `/chosen`.
     -q, --quiet
               Leave the serial console out: not streamed, not printed after the
               run, not in the -v report. --console-log still gets it, and
@@ -256,6 +256,16 @@ OUTPUT:
               Report which DRAM pages are non-zero when the run ends, as
               address runs: the RAM a snapshot of the machine would have to
               carry (#50).
+    --eeprom-map
+              Print the EEPROM section table `bootloader_eeprom_find_files`
+              walks, on top of the boot configuration -v decodes.
+    --stub-log
+              Print the peripheral-window offsets nothing models, which fell
+              through to the catch-all stub: one line an offset, with the read
+              and write counts and the last value.
+    --control-transfers
+              Print the VPU's last control transfers, newest first, repeats
+              collapsed: where a derailed boot came from.
     -h, --help
               Print this help.
 
@@ -354,6 +364,14 @@ struct BootOpts {
     stepping: Option<Stepping>,
     board_rev: Option<u32>,
     dram_map: bool,
+    /// `--eeprom-map`: the EEPROM section table as well as the boot
+    /// configuration `-v` decodes.
+    eeprom_map: bool,
+    /// `--stub-log`: the peripheral-window offsets that fell through to the
+    /// catch-all stub.
+    stub_log: bool,
+    /// `--control-transfers`: the VPU's last control transfers.
+    control_transfers: bool,
     skip_signed_boot: bool,
     skip_unimpl: bool,
     until: Option<String>,
@@ -526,6 +544,9 @@ impl BootOpts {
         let mut stepping: Option<Stepping> = None;
         let mut board_rev: Option<u32> = None;
         let mut dram_map = false;
+        let mut eeprom_map = false;
+        let mut stub_log = false;
+        let mut control_transfers = false;
         let mut skip_signed_boot = false;
         let mut skip_unimpl = false;
         let mut until: Option<String> = None;
@@ -738,6 +759,9 @@ impl BootOpts {
                     mbox_tags.push(MboxRequest::Raw(parse_hex_image(hex)?));
                 }
                 "--dram-map" => dram_map = true,
+                "--eeprom-map" => eeprom_map = true,
+                "--stub-log" => stub_log = true,
+                "--control-transfers" => control_transfers = true,
                 "--dump-fdt" => {
                     dump_fdt = Some(PathBuf::from(it.next().context("--dump-fdt needs a path")?))
                 }
@@ -825,6 +849,9 @@ impl BootOpts {
             stepping,
             board_rev,
             dram_map,
+            eeprom_map,
+            stub_log,
+            control_transfers,
             skip_signed_boot,
             skip_unimpl,
             until,
@@ -886,8 +913,8 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
     // reset we rebuild from the updated image and run again.
     let mut flash = image.clone();
     edits.apply(&mut flash, opts.verbose);
-    if opts.eeprom && opts.verbose {
-        print_eeprom(&flash);
+    if opts.eeprom && (opts.verbose || opts.eeprom_map) {
+        print_eeprom(&flash, opts.eeprom_map);
     }
 
     let limits = run_limits(opts);
@@ -1206,22 +1233,39 @@ impl FlashEdits {
     }
 }
 
-/// Show the EEPROM section table `bootloader_eeprom_find_files` walks, plus
-/// the decoded `bootconf.txt`, so a boot that consults EEPROM config (boot
-/// order etc.) can be followed.
-fn print_eeprom(flash: &[u8]) {
-    if let Ok(img) = rpi_virt_fw::firmware::eeprom::EepromImage::parse(flash) {
+/// Show the decoded `bootconf.txt`, so a boot that consults EEPROM config
+/// (boot order etc.) can be followed, and with `--eeprom-map` the section
+/// table `bootloader_eeprom_find_files` walks as well.
+///
+/// The table is one line a section and says nothing about the boot itself, so
+/// it is off by default: it was worth reading while the section walk was
+/// being modelled (#10), and is noise in a CI log now (#132).
+fn print_eeprom(flash: &[u8], map: bool) {
+    let Ok(img) = rpi_virt_fw::firmware::eeprom::EepromImage::parse(flash) else {
+        return;
+    };
+    if map {
         println!("eeprom     {} sections", img.sections.len());
         print!("{}", img.summary());
-        if let Some(conf) = img.bootconf() {
-            for (g, k, v) in &conf.entries {
-                let g = if g.is_empty() { "all" } else { g.as_str() };
-                println!("           [{g}] {k}={v}");
-            }
-            if let Some(order) = conf.boot_order_names() {
-                println!("           BOOT_ORDER: {order}");
-            }
-        }
+    }
+    let Some(conf) = img.bootconf() else { return };
+    // The label goes on the first line printed, whether or not the table above
+    // already carried it.
+    let mut label = !map;
+    let mut line = |text: String| {
+        let tag = if std::mem::take(&mut label) {
+            "eeprom    "
+        } else {
+            "          "
+        };
+        println!("{tag} {text}");
+    };
+    for (g, k, v) in &conf.entries {
+        let g = if g.is_empty() { "all" } else { g.as_str() };
+        line(format!("[{g}] {k}={v}"));
+    }
+    if let Some(order) = conf.boot_order_names() {
+        line(format!("BOOT_ORDER: {order}"));
     }
 }
 
@@ -1621,8 +1665,10 @@ fn print_report(opts: &BootOpts, booted: Booted) -> Result<ExitCode> {
         print_phase_tags(&report);
     }
     print_traces(&emu, opts.trace);
-    if verbose {
+    if opts.control_transfers {
         print_control_transfers(&emu);
+    }
+    if opts.stub_log {
         print_stub_log(&emu.machine);
     }
     if opts.dram_map {
@@ -2040,7 +2086,10 @@ fn print_traces(emu: &Emulator, trace: bool) {
     }
 }
 
-/// The VPU's last control transfers, newest first.
+/// `--control-transfers`: the VPU's last control transfers, newest first.
+///
+/// Off by default, `-v` included: it is what a derailed boot is read with, and
+/// a boot that reaches its end has no use for it (#132).
 fn print_control_transfers(emu: &Emulator) {
     // Collapse consecutive-identical transfers so a spin doesn't hide the
     // history that led into it.
@@ -2066,7 +2115,12 @@ fn print_control_transfers(emu: &Emulator) {
     }
 }
 
-/// The peripheral-window offsets nothing models, which fell through to the stub.
+/// `--stub-log`: the peripheral-window offsets nothing models, which fell
+/// through to the stub.
+///
+/// Off by default, `-v` included: it named the blocks still to be modelled
+/// while the peripherals were being brought up, and the run report's `stub=`
+/// count is what a passing boot needs of it now (#132).
 fn print_stub_log(machine: &Machine) {
     let log = &machine.periph_stub.log;
     if !log.is_empty() {

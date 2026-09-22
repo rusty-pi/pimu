@@ -111,7 +111,8 @@ What isn't a spec'd register block:
   `config.txt` hands to Linux.
 - **The catch-all stub** — any peripheral offset nothing models reads back
   what was last written there (0 otherwise), and every access is logged, so an
-  unimplemented poke becomes a triage note instead of a crash.
+  unimplemented poke becomes a triage note instead of a crash. The run report
+  counts the accesses as `stub=`; `boot --stub-log` lists the offsets.
 - **A network peer** on the other end of the GENET cable (`src/net/peer.rs`:
   DHCP, DNS, TFTP, plain HTTP over a minimal TCP). `--netboot <dir>` serves
   `<dir>`:
