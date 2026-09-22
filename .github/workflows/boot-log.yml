@@ -52,11 +52,31 @@ jobs:
       # instead keeps it across runs for free, and the registry under
       # ~/.cargo was never wiped to begin with. That is 100 s of cloud cache a
       # job, and the last of this workflow's traffic to the cache service
-      # (#130). It grows without bound; `compose down -v` on the runner is the
-      # reset.
+      # (#130).
+      #
+      # Nothing prunes it, and an incremental build only ever adds, so it is
+      # swept once a week, or sooner if the volume is down to its last 20 GB.
+      # A sweep costs one cold build (~140 s); a full volume costs the runner.
+      # The first run only plants the stamp, so a warm directory is not thrown
+      # away for the clock's sake.
       - name: Keep cargo's output on the runner, not in the cloud
         if: runner.environment == 'self-hosted'
-        run: echo "CARGO_TARGET_DIR=$HOME/cargo-target" >> "$GITHUB_ENV"
+        run: |
+          dir="$HOME/cargo-target"
+          stamp="$dir/.swept"
+          echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
+          mkdir -p "$dir"
+          if [ ! -e "$stamp" ]; then
+            touch "$stamp"
+            exit 0
+          fi
+          free=$(df -k --output=avail "$dir" | tail -1)
+          if [ -n "$(find "$stamp" -mtime +6)" ] || [ "$free" -lt 20971520 ]; then
+            echo "sweeping $dir ($(du -sh "$dir" | cut -f1), ${free}K free)"
+            rm -rf "$dir"
+            mkdir -p "$dir"
+            touch "$stamp"
+          fi
 
       - uses: Swatinem/rust-cache@v2
         if: runner.environment == 'github-hosted'
@@ -102,11 +122,31 @@ jobs:
       # instead keeps it across runs for free, and the registry under
       # ~/.cargo was never wiped to begin with. That is 100 s of cloud cache a
       # job, and the last of this workflow's traffic to the cache service
-      # (#130). It grows without bound; `compose down -v` on the runner is the
-      # reset.
+      # (#130).
+      #
+      # Nothing prunes it, and an incremental build only ever adds, so it is
+      # swept once a week, or sooner if the volume is down to its last 20 GB.
+      # A sweep costs one cold build (~140 s); a full volume costs the runner.
+      # The first run only plants the stamp, so a warm directory is not thrown
+      # away for the clock's sake.
       - name: Keep cargo's output on the runner, not in the cloud
         if: runner.environment == 'self-hosted'
-        run: echo "CARGO_TARGET_DIR=$HOME/cargo-target" >> "$GITHUB_ENV"
+        run: |
+          dir="$HOME/cargo-target"
+          stamp="$dir/.swept"
+          echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
+          mkdir -p "$dir"
+          if [ ! -e "$stamp" ]; then
+            touch "$stamp"
+            exit 0
+          fi
+          free=$(df -k --output=avail "$dir" | tail -1)
+          if [ -n "$(find "$stamp" -mtime +6)" ] || [ "$free" -lt 20971520 ]; then
+            echo "sweeping $dir ($(du -sh "$dir" | cut -f1), ${free}K free)"
+            rm -rf "$dir"
+            mkdir -p "$dir"
+            touch "$stamp"
+          fi
 
       - uses: Swatinem/rust-cache@v2
         if: runner.environment == 'github-hosted'
