@@ -25,6 +25,12 @@ on:
 # valtzu/gh-action-nas-runner. Deleting the variables brings CI back here.
 # Those runners have no sudo and already carry the packages, so the apt steps
 # only run on the hosted ones.
+#
+# RUNNER_CACHE is the third: a directory every one of those runners can see,
+# `/cache`. The build's output crosses to the boots through it instead of
+# through the Actions cache service, which is in the cloud — see the build
+# job. Unset, everything goes through the cache service as before; set it only
+# while both pools run on the one host.
 jobs:
   # Fast lane: the decoder, peripheral and address-decode tests. No firmware
   # blobs, no boot — if one of these fails the boot check below is noise.
@@ -118,38 +124,72 @@ jobs:
       # few dozen runs a day of these images used it up (every upload then
       # failed). The cleanup job deletes the entry once the run is over.
       - uses: actions/cache/save@v6
+        if: vars.RUNNER_CACHE == ''
         with:
           key: boot-inputs-${{ github.run_id }}
           path: |
             target/release/rpi-virt-fw
             firmware/
 
+      # On the self-hosted runners the cache service is the wrong way round:
+      # the cards and the binary are a quarter of a gigabyte, the NAS is behind
+      # a domestic uplink, and every boot job pulls the whole entry back from
+      # the cloud — which is what made a run's restores fail with "The
+      # operation cannot be completed in timeout." Those runners share one
+      # directory instead, so the tar never leaves the host (#130).
+      - name: Save the boot inputs to the shared cache
+        if: vars.RUNNER_CACHE != ''
+        env:
+          CACHE: ${{ vars.RUNNER_CACHE }}
+        run: |
+          mkdir -p "$CACHE"
+          tar -cf "$CACHE/boot-inputs-$GITHUB_RUN_ID.tar" \
+            target/release/rpi-virt-fw firmware/
+          # A cancelled run never reaches its cleanup job, so its tar is still
+          # there. Nothing else prunes the directory.
+          find "$CACHE" -maxdepth 1 -name 'boot-inputs-*.tar' -mtime +1 -delete
+
   # Then every boot at once, each against its own scenario: the firmware boot
   # from each medium, and the Linux boot to a shell (#40).
   boot:
     needs: build
+    name: boot (${{ matrix.name }})
     runs-on: ${{ vars.RUNNER_BOOT || 'ubuntu-26.04' }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
+        # One job a scenario, except the two wireless boots: they are the same
+        # card with and without the WiFi driver on it, and a job of their own
+        # each costs another checkout and another unpack of the boot inputs for
+        # less than three minutes of booting.
         include:
-          - scenario: firmware
-          - scenario: usb-boot
-          - scenario: otg-boot
-          - scenario: tftp-boot
-          - scenario: http-boot
-          - scenario: linux
-          - scenario: linux-bt
-          - scenario: linux-wifi
-          - scenario: b0-stepping
-          - scenario: firmware-cd
-          - scenario: uefi
+          - name: firmware
+            scenarios: firmware
+          - name: usb-boot
+            scenarios: usb-boot
+          - name: otg-boot
+            scenarios: otg-boot
+          - name: tftp-boot
+            scenarios: tftp-boot
+          - name: http-boot
+            scenarios: http-boot
+          - name: linux
+            scenarios: linux
+          - name: linux-wireless
+            scenarios: linux-bt linux-wifi
+          - name: b0-stepping
+            scenarios: b0-stepping
+          - name: firmware-cd
+            scenarios: firmware-cd
+          - name: uefi
+            scenarios: uefi
 
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/cache/restore@v6
+        if: vars.RUNNER_CACHE == ''
         with:
           key: boot-inputs-${{ github.run_id }}
           fail-on-cache-miss: true
@@ -157,15 +197,28 @@ jobs:
             target/release/rpi-virt-fw
             firmware/
 
-      - name: Simulated boot (${{ matrix.scenario }})
-        run: target/release/rpi-virt-fw boot-check testdata/boot/${{ matrix.scenario }}.toml --output boot-${{ matrix.scenario }}.log
+      - name: Restore the boot inputs from the shared cache
+        if: vars.RUNNER_CACHE != ''
+        env:
+          CACHE: ${{ vars.RUNNER_CACHE }}
+        run: tar -xf "$CACHE/boot-inputs-$GITHUB_RUN_ID.tar"
+
+      - name: Simulated boot (${{ matrix.name }})
+        run: |
+          for s in ${{ matrix.scenarios }}; do
+            target/release/rpi-virt-fw boot-check "testdata/boot/$s.toml" --output "boot-$s.log"
+          done
 
       # Nothing is uploaded: a failed boot's combined output goes to the job
       # log instead. Reproduce it locally for the console file that
       # `boot-check <scenario> --from boot-<scenario>.log --update` wants.
       - name: Boot output
         if: failure()
-        run: cat boot-${{ matrix.scenario }}.log
+        run: |
+          for f in boot-*.log; do
+            echo "=== $f"
+            cat "$f"
+          done
 
   # Nothing a run stores is needed once it has finished: the boot inputs'
   # cache entry goes at the end, whatever the boots did, and so does any
@@ -180,6 +233,12 @@ jobs:
       actions: write
 
     steps:
+      - name: Delete this run's tar from the shared cache
+        if: vars.RUNNER_CACHE != ''
+        env:
+          CACHE: ${{ vars.RUNNER_CACHE }}
+        run: rm -f "$CACHE/boot-inputs-$GITHUB_RUN_ID.tar"
+
       - name: Delete this run's cache entry and artifacts
         uses: actions/github-script@v9
         with:
