@@ -162,6 +162,11 @@ self-update, which brings back the image's own):
               Add any other line to bootconf.txt, e.g. HTTP_HOST=<host> for
               HTTP boot. Repeatable; a later line wins over an earlier one with
               the same key.
+    --tryboot
+              Ask for a tryboot before the first boot, as `reboot '0 tryboot'`
+              does from Linux: the bootloader reads tryboot.txt in place of
+              config.txt, and a start_file= in it names the firmware. The
+              request is one-shot, so a reset inside the run boots normally.
     --skip-signed-boot
               Set SIGNED_BOOT=0 in bootconf.txt: skip the bootloader's
               SHA-256 + RSA-2048 verify of boot.img, about half a billion
@@ -373,6 +378,8 @@ struct BootOpts {
     /// `--control-transfers`: the VPU's last control transfers.
     control_transfers: bool,
     skip_signed_boot: bool,
+    /// `--tryboot`: seed the tryboot request in `PM_RSTS` for the first boot.
+    tryboot: bool,
     skip_unimpl: bool,
     until: Option<String>,
     sends: Vec<(String, Vec<u8>)>,
@@ -548,6 +555,7 @@ impl BootOpts {
         let mut stub_log = false;
         let mut control_transfers = false;
         let mut skip_signed_boot = false;
+        let mut tryboot = false;
         let mut skip_unimpl = false;
         let mut until: Option<String> = None;
         let mut sends: Vec<(String, Vec<u8>)> = Vec::new();
@@ -698,6 +706,7 @@ impl BootOpts {
                     bootconf.push(kv.to_string())
                 }
                 "--skip-signed-boot" => skip_signed_boot = true,
+                "--tryboot" => tryboot = true,
                 "--skip-unimpl" => skip_unimpl = true,
                 "--check-coherency" => check_coherency = true,
                 "--check-alignment" => check_alignment = true,
@@ -853,6 +862,7 @@ impl BootOpts {
             stub_log,
             control_transfers,
             skip_signed_boot,
+            tryboot,
             skip_unimpl,
             until,
             sends,
@@ -935,6 +945,11 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
             machine.config_otp.set_fuses(fuses);
         }
         machine.pm.keep_partition_bits(partition);
+        // One-shot, and the bootcode clears it as it reads it, so it goes in
+        // on the first boot only: a reset inside the run boots normally.
+        if reboots == 0 && opts.tryboot {
+            machine.pm.request_tryboot();
+        }
         fuses_at_start.get_or_insert_with(|| machine.config_otp.fuses().clone());
         let start = rig.stage(&mut machine, reboots)?;
         let mut emu = rig.emulator(machine, start);

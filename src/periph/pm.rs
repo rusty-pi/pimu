@@ -132,6 +132,17 @@ impl Pm {
         self.storage
             .insert(RSTS, RSTS_RESET | (bits & RSTS_PARTITION));
     }
+
+    /// Ask for a tryboot before the machine has booted at all, which is
+    /// otherwise only reachable through a boot of its own: `reboot '0 tryboot'`
+    /// has start4 set this bit through `SET_REBOOT_FLAGS`, and it survives
+    /// Linux's watchdog reset in the partition field. The bootcode takes the
+    /// request off as it reads it, so it lasts exactly one boot either way
+    /// (`specs/pm.toml`, `TRYBOOT`).
+    pub fn request_tryboot(&mut self) {
+        let rsts = self.storage.get(&RSTS).copied().unwrap_or(RSTS_RESET);
+        self.storage.insert(RSTS, rsts | RSTS_TRYBOOT_MASK);
+    }
 }
 
 /// `RSTS` bits 0, 2, .. 10: the partition field, and bit 1, the tryboot
@@ -227,6 +238,17 @@ mod tests {
         let mut after = Pm::new();
         after.keep_partition_bits(kept);
         assert_eq!(after.read(RSTS, Width::Word).unwrap(), RSTS_RESET | 0x2);
+    }
+
+    /// `--tryboot`: the same request, seeded before the first boot instead of
+    /// left behind by one. It reads as the power-on value plus the bit, and
+    /// the partition field is untouched.
+    #[test]
+    fn a_tryboot_can_be_asked_for_at_power_on() {
+        let mut pm = Pm::new();
+        pm.request_tryboot();
+        assert_eq!(pm.read(RSTS, Width::Word).unwrap(), RSTS_RESET | 0x2);
+        assert_eq!(pm.partition_bits(), RSTS_TRYBOOT_MASK);
     }
 
     #[test]
