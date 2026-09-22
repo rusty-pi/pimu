@@ -3,7 +3,17 @@ name    = "pm"
 base    = 0x7E100000
 size    = 0x1000
 summary = "Power management: reset control, reset status, watchdog, power-domain registers"
-notes   = "Writes carry the `0x5A` password in the top byte, which reads back masked. The watchdog counts down at 65536 Hz from the last `WDOG` value once `RSTC` arms a full reset."
+notes   = """
+Writes carry the `0x5A` password in the top byte, which reads back masked. The watchdog counts down at 65536 Hz from the last `WDOG` value once `RSTC` arms a full reset, and a later `WDOG` write reloads the countdown without touching `RSTC` — `WDOG` is the counter, not a shadow of it.
+
+That reload is the whole of the firmware's **boot watchdog**, which `bootconf.txt`'s `BOOT_WATCHDOG_TIMEOUT` (seconds) turns on and `BOOT_WATCHDOG_PARTITION` aims: a countdown that covers the entire boot, so a board that hangs anywhere between the bootcode and the kernel resets instead of sitting there. The budget lives in software, as a deadline on the 1 MHz system timer that the bootcode writes into the `BPWR` block of the bootloader state (`+124` the boot's start and `+132` the deadline, 64-bit microseconds each; `+140` the timeout in seconds, `+144` the partition). The hardware is only ever told how much of it is left:
+
+1. the bootcode arms it once — `WDOG = PASSWORD | min((end_at - now) >> 4, 0xFFFFF)` then `RSTC = PASSWORD | 0x20` (`0x80007980` / `0x800079EC`), and prints `Boot watchdog init. max duration %us part %u started_at %u end_at %u`;
+2. `bootmain` and `start4.elf` feed it with bare `WDOG` writes and never touch `RSTC` (`0x000A75E4`, `0x3ED47B98`);
+3. whoever finishes with it puts `RSTS`'s partition field back to the one the board actually booted, reports `boot watchdog stop: remaining %u` (microseconds, `(WDOG & 0xFFFFF) << 4`) and clears `WRCFG`.
+
+Because of (2), a model that only reloaded the countdown on an `RSTC` write reset every such boot 16 s in, whatever the budget was.
+"""
 
 [[block.source]]
 kind       = "linux"
@@ -24,7 +34,7 @@ confidence = "high"
 name   = "RSTC"
 offset = 0x1C
 access = "rw"
-notes  = "Reset control. Arming a full reset starts the watchdog; clearing `WRCFG` stops it. As it starts, start4 ORs `0x3000` into it (bits 13:12, meaning unknown) just before the PLL power words, then does the same watchdog set-up as the bootcode: `WRCFG` cleared, bits 9:8 set to 2, bits 1:0 set to 2 (`0x3202` in the trace), and `RSTS` cleared if `HADWRF` is set. It skips the set-up when the bootloader's `PWRB` tag says so."
+notes  = "Reset control. Arming a full reset starts the watchdog; clearing `WRCFG` stops it. As it starts, start4 ORs `0x3000` into it (bits 13:12, meaning unknown) just before the PLL power words, then does the same watchdog set-up as the bootcode: `WRCFG` cleared, bits 9:8 set to 2, bits 1:0 set to 2 (`0x3202` in the trace), and `RSTS` cleared if `HADWRF` is set. It skips the set-up when the bootloader's `BPWR` tag says a boot watchdog is running (its word at `+140`, `BOOT_WATCHDOG_TIMEOUT`), because clearing `WRCFG` would take that dog off. See the block note."
 
 [[register.source]]
 kind       = "linux"
@@ -122,11 +132,21 @@ confidence = "high"
 name   = "WDOG"
 offset = 0x24
 access = "rw"
-notes  = "Watchdog timeout on write, ticks left on read (1 tick = 1/65536 s)."
+notes  = "Watchdog timeout on write, ticks left on read (1 tick = 1/65536 s). The register is the counter itself, so writing it reloads a countdown already running — the firmware's boot watchdog is fed by bare `WDOG` writes and never re-arms `RSTC`."
 
 [[register.source]]
 kind       = "linux"
 ref        = "`bcm2835_wdt.c`: `PM_WDOG_TIME_SET = 0x000fffff`, `get_timeleft` reads it back"
+confidence = "high"
+
+[[register.source]]
+kind       = "trace"
+ref        = "`--bootconf BOOT_WATCHDOG_TIMEOUT=600` on the pinned firmware: one `RSTC` arm in the bootcode (`0x800079EC`) and then nothing but `WDOG` writes — `0x000A75E4` in `bootmain` (86254 of them in one boot) and `0x3ED47B98` in start4 — all the way to `arm_loader: Starting ARM`"
+confidence = "high"
+
+[[register.source]]
+kind       = "decompile"
+ref        = "the same feed routine in all three stages — bootcode `0x8000791E`, `bootmain` `0x000A7582`, start4 `0x0ED47B32`: `(end_at - now) >> 4` clamped to `0xFFFFF`, stored to `WDOG` alone"
 confidence = "high"
 
 [[register.field]]

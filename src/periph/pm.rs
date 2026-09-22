@@ -19,6 +19,15 @@
 //! [`Pm::take_reset`] reports the moment it expires. Treating the arm itself as
 //! the reset made every `watchdog=on` boot reboot at the hand-off.
 //!
+//! `WDOG` is the counter, not a shadow of it: Linux's `get_timeleft` reads the
+//! ticks left straight out of it, so writing it reloads a countdown that is
+//! already running. That is how the firmware's own boot watchdog
+//! (`BOOT_WATCHDOG_TIMEOUT`) is fed — the bootcode arms it once with
+//! `RSTC = PASSWORD | WRCFG_FULL_RESET` (`0x800079EC`) and every heartbeat
+//! after that is a bare `WDOG` write, in `bootmain` (`0x000A75E4`) and in
+//! start4 (`0x3ED47B98`), with no second `RSTC` write anywhere. Reloading only
+//! on `RSTC` had such a boot reset 16 s in however large its budget was.
+//!
 //! Everything else is sticky storage with the password byte masked on read-back.
 
 use std::collections::BTreeMap;
@@ -95,6 +104,11 @@ impl Pm {
     /// True while the countdown is armed and running.
     pub fn watchdog_running(&self) -> bool {
         self.deadline_us.is_some()
+    }
+
+    /// How long `ticks` of the 65536 Hz watchdog clock last, in microseconds.
+    fn us_for(ticks: u32) -> u64 {
+        (u64::from(ticks) * 1_000_000).div_ceil(WDOG_HZ)
     }
 
     /// `WDOG` ticks remaining, which is what the register reads back as.
@@ -186,11 +200,15 @@ impl MmioDevice for Pm {
             // that must not count as anything.
             if value & RSTC_WRCFG_FULL_RESET != 0 {
                 let ticks = self.storage.get(&WDOG).copied().unwrap_or(0) & WDOG_TIME_MASK;
-                let us = (u64::from(ticks) * 1_000_000).div_ceil(WDOG_HZ);
-                self.deadline_us = Some(self.now_us + us);
+                self.deadline_us = Some(self.now_us + Self::us_for(ticks));
             } else {
                 self.deadline_us = None;
             }
+        }
+        // The register is the counter: writing it while the dog runs reloads
+        // it, which is the firmware's whole heartbeat (module docs).
+        if off == WDOG && passworded && self.deadline_us.is_some() {
+            self.deadline_us = Some(self.now_us + Self::us_for(value & WDOG_TIME_MASK));
         }
         self.storage.insert(off, value);
         Ok(())
@@ -298,5 +316,64 @@ mod tests {
         assert!(!pm.watchdog_running());
         pm.advance(60_000_000);
         assert!(!pm.take_reset());
+    }
+
+    /// The firmware's boot watchdog: armed once, then fed with `WDOG` writes
+    /// alone. Each one has to reload the countdown, or the boot resets 16 s
+    /// in however large its budget was.
+    #[test]
+    fn a_wdog_write_reloads_a_running_countdown() {
+        let mut pm = Pm::new();
+        pm.write(WDOG, Width::Word, PASSWD | WDOG_TIME_MASK)
+            .unwrap();
+        pm.write(RSTC, Width::Word, PASSWD | RSTC_WRCFG_FULL_RESET)
+            .unwrap();
+        // Fed every 10 s of a 60 s budget, the way `bootmain` and start4 feed
+        // it: no reset, and always about 16 s left.
+        for beat in 1..=6 {
+            pm.advance(beat * 10_000_000);
+            assert!(!pm.take_reset(), "reset at beat {beat}");
+            pm.write(WDOG, Width::Word, PASSWD | WDOG_TIME_MASK)
+                .unwrap();
+            assert_eq!(pm.read(WDOG, Width::Word).unwrap(), WDOG_TIME_MASK);
+        }
+        // Stop feeding it and it expires a full window after the last beat.
+        let window = Pm::us_for(WDOG_TIME_MASK);
+        pm.advance(60_000_000 + window - 1);
+        assert!(!pm.take_reset());
+        pm.advance(60_000_000 + window);
+        assert!(pm.take_reset());
+    }
+
+    /// A `WDOG` write with the dog not armed only loads the counter: nothing
+    /// starts counting until `RSTC` says so. The bootcode writes `WDOG`
+    /// before it arms.
+    #[test]
+    fn a_wdog_write_alone_starts_nothing() {
+        let mut pm = Pm::new();
+        pm.write(WDOG, Width::Word, PASSWD | 10).unwrap();
+        assert!(!pm.watchdog_running());
+        pm.advance(10_000_000);
+        assert!(!pm.take_reset());
+        // ...and the arm that follows counts from the value it left.
+        pm.write(RSTC, Width::Word, PASSWD | RSTC_WRCFG_FULL_RESET)
+            .unwrap();
+        assert!(pm.watchdog_running());
+        pm.advance(10_000_153);
+        assert!(pm.take_reset());
+    }
+
+    /// A password-less `WDOG` write is ignored by the hardware, so it must not
+    /// reload the countdown either.
+    #[test]
+    fn an_unpassworded_wdog_write_does_not_reload() {
+        let mut pm = Pm::new();
+        pm.write(WDOG, Width::Word, PASSWD | 65_536).unwrap();
+        pm.write(RSTC, Width::Word, PASSWD | RSTC_WRCFG_FULL_RESET)
+            .unwrap();
+        pm.advance(500_000);
+        pm.write(WDOG, Width::Word, 65_536).unwrap();
+        pm.advance(1_000_000);
+        assert!(pm.take_reset());
     }
 }
