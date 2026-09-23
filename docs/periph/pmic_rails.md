@@ -24,7 +24,7 @@ start4's I²C driver picks its base from the bus id, and this part sits on bus 8
 | Offset | Name | Access | Width | Sources |
 |---|---|---|---|---|
 | `0x000` | [`STATUS`](#status) | r | 8 | 2, best high |
-| `0x005` | [`REG_05`](#reg_05) | rw | 8 | 2, best high |
+| `0x005` | [`REG_05`](#reg_05) | rw | 8 | 3, best high |
 | `0x009` | [`SETPOINT_SDRAM`](#setpoint_sdram) | rw | 8 | 2, best high |
 | `0x00A` | [`SETPOINT_CORE`](#setpoint_core) | rw | 8 | 1, best high |
 | `0x012` | [`SETPOINT_RAIL6`](#setpoint_rail6) | rw | 8 | 1, best high |
@@ -53,11 +53,12 @@ Sources:
 
 Offset `0x005` · access `rw` · 8 bits
 
-start4 reads it once more after its init sweep, then writes 1 here and 1 to register 4. The bootloader's power-off (`POWER_OFF_ON_HALT=1` with `WAKE_ON_GPIO=0`, after Linux powers the board off) writes `0x3F` here, after its ten LED blinks, and then sleeps for good: this is what switches a 0x1B board off. What the bits mean is not known.
+start4 reads it once more after its init sweep and sets bit 0 of what it read, and writes 1 to register 4. The read is not spare: a running d03115 holds `0x1E` here, and writing a bare `1` clears the four set bits and stops the board dead. The bootloader's power-off (`POWER_OFF_ON_HALT=1` with `WAKE_ON_GPIO=0`, after Linux powers the board off) writes `0x3F` here, after its ten LED blinks, and then sleeps for good: this is what switches a 0x1B board off. So the register gates the rails, one bit each; which bit is which is not known.
 
 Sources:
 
 - decompile (high): bootloader power-off op `0x80009ED2`: with board feature bit 2 (`[gp+776]`), `session(0x1B)` then write `0x05 = 0x3F`, then `sleep` in a loop
+- measured (high): 4B rev 1.5 over I2C with the register-read path fixed: reg 0x05 reads 0x1E on a running board. `rpi-unboxed` wrote a bare 1 here and the machine stopped with no watchdog rescue; read-modify-write of `0x1E | 1` boots and runs (6/6 tryboots) — _the decompile reads as a store of 1; on silicon it has to be the read OR 1, or the other rails go off_
 - trace (high): `boot --bootconf POWER_OFF_ON_HALT=1 --bootconf WAKE_ON_GPIO=0 --send-after '/ # ' 'poweroff -f\n' --log pmic` on `d03115`: after `Halt: wake: 0 power_off: 1`, `1b W 05 = 3f` at 4.08 s and nothing after
 
 ## `SETPOINT_SDRAM`
