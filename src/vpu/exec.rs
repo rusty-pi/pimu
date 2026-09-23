@@ -833,9 +833,12 @@ impl Vpu {
                                 crate::log!(
                                     self.log,
                                     Channel::Sleep,
-                                    "#{} pc={:#x} slot={slot:?} took={took} retired={}",
+                                    "#{} pc={:#x} slot={slot:?} took={took} sr={:#x} ei={} exc={} retired={}",
                                     self.sleep_dbg,
                                     self.regs.pc,
+                                    self.regs.get(30),
+                                    self.irq_enabled(),
+                                    self.in_exception,
                                     self.retired
                                 );
                             }
