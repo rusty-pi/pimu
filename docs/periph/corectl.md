@@ -67,13 +67,22 @@ Sources:
 
 Offset `0x030` · access `rw` · 32 bits
 
-Exception-vector base for this core. The core takes its vector from the base as it stands when the exception comes, so every write moves the table: the bootloader's halt points it at its own table and clears it again once woken, and start4, which runs after a wake without a reset in between, writes its own.
+Exception-vector base for this core. The core takes its vector from the base as it stands when the exception comes, so every write moves the table: the bootloader's halt points it at its own table and clears it again once woken, and start4, which runs after a wake without a reset in between, writes its own. Only bits 31:9 are kept, so the table has to be 512-byte aligned -- 128 entries of four bytes, the whole table -- and a misaligned one is fetched from the address below it with no indication that anything is wrong.
+
+| Bits | Field | Access | Notes |
+|---|---|---|---|
+| 31:9 | `ADDR` | rw | The table's address. The low nine bits read back as zero however they are written. |
 
 Sources:
 
 - decompile (high): start4 entry trampoline: `mov r1, #0x7E002030`, then stores the vector base through it
 - trace (high): core-control write trace: `+0x30` and `+0x830` both take `0xFEC01E00`, nothing writes `+0x38` — _replaced an earlier `+0x38` guess for core 1 (commit 06a8447)_
 - decompile (high): bootsys halt `0x800005AC`: zeroes both cores' priority words and `+0x30`, sets vector 116 of a table at `0x80000000`, writes `0x80000000` here (`0x8000063A`) around its `sleep`, then 0 (`0x80000654`); after a wake the boot goes on to start4, which writes `0xFEC01E00`
+
+`ADDR` sources:
+
+- datasheet (high): Broadcom `bcm2708_chip/intctrl0.h`: `IC0_VADDR` with `IC0_VADDR_MASK 0xfffffe00`
+- measured (high): 4B rev 1.5: `rpi-unboxed` with its table at 0xFEC2B7C0 took no interrupt at all -- the compare fired, the source asserted, the routing word matched stock's and SR bit 30 was set -- and took them normally once the table was moved to 0xFEC2A000
 
 ## `WAKEUP`
 

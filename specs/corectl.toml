@@ -99,7 +99,7 @@ note       = "the datasheet numbers them 0 to 63; every source this model identi
 name   = "VBASE"
 offset = 0x30
 access = "rw"
-notes  = "Exception-vector base for this core. The core takes its vector from the base as it stands when the exception comes, so every write moves the table: the bootloader's halt points it at its own table and clears it again once woken, and start4, which runs after a wake without a reset in between, writes its own."
+notes  = "Exception-vector base for this core. The core takes its vector from the base as it stands when the exception comes, so every write moves the table: the bootloader's halt points it at its own table and clears it again once woken, and start4, which runs after a wake without a reset in between, writes its own. Only bits 31:9 are kept, so the table has to be 512-byte aligned -- 128 entries of four bytes, the whole table -- and a misaligned one is fetched from the address below it with no indication that anything is wrong."
 
 [[register.source]]
 kind       = "decompile"
@@ -111,6 +111,21 @@ kind       = "trace"
 ref        = "core-control write trace: `+0x30` and `+0x830` both take `0xFEC01E00`, nothing writes `+0x38`"
 confidence = "high"
 note       = "replaced an earlier `+0x38` guess for core 1 (commit 06a8447)"
+
+[[register.field]]
+name  = "ADDR"
+bits  = "31:9"
+notes = "The table's address. The low nine bits read back as zero however they are written."
+
+[[register.field.source]]
+kind       = "datasheet"
+ref        = "Broadcom `bcm2708_chip/intctrl0.h`: `IC0_VADDR` with `IC0_VADDR_MASK 0xfffffe00`"
+confidence = "high"
+
+[[register.field.source]]
+kind       = "measured"
+ref        = "4B rev 1.5: `rpi-unboxed` with its table at 0xFEC2B7C0 took no interrupt at all -- the compare fired, the source asserted, the routing word matched stock's and SR bit 30 was set -- and took them normally once the table was moved to 0xFEC2A000"
+confidence = "high"
 
 [[register.source]]
 kind       = "decompile"

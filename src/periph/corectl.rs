@@ -26,8 +26,8 @@ use crate::log::{Channel, Log};
 use crate::spec::corectl::{
     INSTANCE_STRIDE as CORE_STRIDE, IRQ_PENDING, IRQ_PENDING_BITS, IRQ_PENDING_BITS_COUNT,
     IRQ_PENDING_BITS_STRIDE, IRQ_PENDING_SOURCE_MASK, IRQ_PENDING_SOURCE_SHIFT,
-    IRQ_PENDING_VALID_MASK, IRQ_PRIO, IRQ_PRIO_COUNT, IRQ_PRIO_STRIDE, VBASE, WAKEUP,
-    WAKEUP_ADDR_MASK, WAKEUP_ADDR_SHIFT,
+    IRQ_PENDING_VALID_MASK, IRQ_PRIO, IRQ_PRIO_COUNT, IRQ_PRIO_STRIDE, VBASE, VBASE_ADDR_MASK,
+    WAKEUP, WAKEUP_ADDR_MASK, WAKEUP_ADDR_SHIFT,
 };
 use crate::spec::Coverage;
 
@@ -209,10 +209,14 @@ impl MmioDevice for CoreCtl {
                 }
             }
         }
-        let value = if off == WAKEUP {
-            value & (WAKEUP_ADDR_MASK << WAKEUP_ADDR_SHIFT)
-        } else {
-            value
+        let value = match off {
+            WAKEUP => value & (WAKEUP_ADDR_MASK << WAKEUP_ADDR_SHIFT),
+            // The low nine bits are not stored: a vector table that is not
+            // 512-byte aligned is fetched from the address below it, and a
+            // firmware that gets this wrong takes no interrupt at all while
+            // every register it can read says it should.
+            VBASE => value & VBASE_ADDR_MASK,
+            _ => value,
         };
         self.storage.insert(offset, value);
         match (core, off) {
@@ -256,6 +260,21 @@ mod tests {
         assert_eq!(c.take_vbase(0), Some(0xFEC0_1E00));
         assert_eq!(c.take_vbase(0), None);
         assert_eq!(c.take_vbase(1), None);
+    }
+
+    #[test]
+    fn vbase_keeps_only_the_aligned_address() {
+        // `IC0_VADDR_MASK` is 0xFFFFFE00, so a table that is not 512-byte
+        // aligned is fetched from the address below it. A firmware that gets
+        // this wrong takes no interrupt at all, with every register it can
+        // read saying it should: `rpi-unboxed` sat at 0xFEC2B7C0 and was dead
+        // until it moved to 0xFEC2A000.
+        let mut c = CoreCtl::new();
+        c.write(VBASE, Width::Word, 0xFEC2_B7C0).unwrap();
+        assert_eq!(c.read(VBASE, Width::Word).unwrap(), 0xFEC2_B600);
+        assert_eq!(c.take_vbase(0), Some(0xFEC2_B600));
+        c.write(VBASE, Width::Word, 0xFEC2_A000).unwrap();
+        assert_eq!(c.take_vbase(0), Some(0xFEC2_A000));
     }
 
     #[test]
