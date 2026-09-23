@@ -89,7 +89,7 @@ Transaction status.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
-| 1 | `DONE` | w1c | The command finished; after a read the row is in `DATA`. |
+| 1 | `DONE` | r | The block is idle: set with no command running, clear while one runs, set again when it finishes and, for a read, the row is in `DATA`. A write of 1 does not clear it. So a poll that only watches for it set returns on the previous command's flag and reads `DATA` before the row arrives. |
 | 2 | `PROG_ENABLED` | r | Programming is enabled: the four key words went in, in order. Command 3 clears it. |
 
 Sources:
@@ -100,6 +100,7 @@ Sources:
 
 - decompile (high): `0x8000760e`
 - decompile (high): start4 `0x3ED3F24C` polls bit 1 after every command
+- measured (high): 4B rev 1.5: the flag read back set straight after a write of 1 (`before 0x200a`, `cleared 0x200a`), and a poll that only watched for it set read row 30 as 0 (`board: boardrev 0 otp 0`, then a Pi 3 device tree); watching it fall and rise read `0xd03115`
 
 `PROG_ENABLED` sources:
 

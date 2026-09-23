@@ -211,7 +211,11 @@ pub struct ConfigOtp {
     /// `+0x18`: what the last read found, or what the firmware wrote for the
     /// next enable or program command.
     data: u32,
+    /// `STATUS.DONE`: the block is idle. It comes up set and a command clears
+    /// it for as long as the command runs; [`ConfigOtp::busy`] is the one
+    /// `STATUS` read that sees it clear.
     done: bool,
+    busy: bool,
     /// How many words of [`PROG_ENABLE_KEY`] came in, in order.
     unlock: usize,
     /// `STATUS.PROG_ENABLED`: the key went in, and program commands fuse.
@@ -358,7 +362,8 @@ impl ConfigOtp {
             storage: BTreeMap::new(),
             key: 0,
             data: 0,
-            done: false,
+            done: true,
+            busy: false,
             unlock: 0,
             prog_enabled: false,
             table,
@@ -423,6 +428,7 @@ impl ConfigOtp {
             ),
         }
         self.done = true;
+        self.busy = true;
     }
 
     /// `CMD_PROGRAM`: fuse the bits of `DATA` into row `KEY`. A fuse only
@@ -475,7 +481,13 @@ impl MmioDevice for ConfigOtp {
     fn read(&mut self, offset: u32, _width: Width) -> BusResult<u32> {
         Ok(match offset & !3 {
             REG_STATUS => {
-                (if self.done { DONE } else { 0 })
+                // A command clears `DONE` while it runs, and the model runs
+                // one in no time at all, so the first read after a command
+                // stands for that: a poll that only watches for the flag set
+                // then has to see it fall first, the way the hardware makes it
+                // (`docs/periph/otp.md`).
+                let done = self.done && !core::mem::take(&mut self.busy);
+                (if done { DONE } else { 0 })
                     | if self.prog_enabled { PROG_ENABLED } else { 0 }
             }
             REG_BOOTMODE => self.row(BOOTMODE_ROW),
@@ -487,10 +499,7 @@ impl MmioDevice for ConfigOtp {
 
     fn write(&mut self, offset: u32, _width: Width, value: u32) -> BusResult<()> {
         match offset & !3 {
-            REG_KEY => {
-                self.key = value;
-                self.done = false;
-            }
+            REG_KEY => self.key = value,
             REG_PARAM_A => {
                 self.storage.insert(REG_PARAM_A, value);
                 if value & GO != 0 {
@@ -498,12 +507,10 @@ impl MmioDevice for ConfigOtp {
                 }
             }
             REG_DATA => self.data = value,
-            REG_STATUS => {
-                // write-1-to-clear the done latch
-                if value & DONE != 0 {
-                    self.done = false;
-                }
-            }
+            // A write of 1 to `DONE` does nothing: on a 4B rev 1.5 the flag
+            // read back set straight after one (`before 0x200a`, `cleared
+            // 0x200a`), so it is the command that clears it, not the driver.
+            REG_STATUS => {}
             REG_CLKMUX => {
                 self.storage.insert(REG_CLKMUX, value);
             }
@@ -557,6 +564,25 @@ mod tests {
         assert_eq!(otp.read(REG_BOOTMODE, Width::Word).unwrap(), 0x1234);
     }
 
+    /// `STATUS.DONE` is the block being idle: set before a command, clear
+    /// while it runs, set again after. A poll that only watches for it set
+    /// reads `DATA` before the row arrives — measured on a 4B rev 1.5, where
+    /// it made start4 read row 30 as 0.
+    #[test]
+    fn done_falls_for_the_command_and_a_write_of_one_does_nothing() {
+        let mut otp = ConfigOtp::new();
+        otp.set(30, 0x00d0_3115);
+        assert_ne!(otp.read(REG_STATUS, Width::Word).unwrap() & DONE, 0);
+        otp.write(REG_STATUS, Width::Word, DONE).unwrap();
+        assert_ne!(otp.read(REG_STATUS, Width::Word).unwrap() & DONE, 0);
+        otp.write(REG_KEY, Width::Word, 30).unwrap();
+        otp.write(REG_PARAM_A, Width::Word, CMD_READ << CMD_SHIFT | GO)
+            .unwrap();
+        assert_eq!(otp.read(REG_STATUS, Width::Word).unwrap() & DONE, 0);
+        assert_ne!(otp.read(REG_STATUS, Width::Word).unwrap() & DONE, 0);
+        assert_eq!(otp.read(REG_DATA, Width::Word).unwrap(), 0x00d0_3115);
+    }
+
     /// One command, the way start4's `0x3ED3F24C` issues it.
     fn command(otp: &mut ConfigOtp, cmd: u32) {
         otp.write(REG_PARAM_A, Width::Word, cmd << CMD_SHIFT)
@@ -564,6 +590,7 @@ mod tests {
         otp.write(PARAM_B, Width::Word, 0).unwrap();
         otp.write(REG_PARAM_A, Width::Word, cmd << CMD_SHIFT | GO)
             .unwrap();
+        assert_eq!(otp.read(REG_STATUS, Width::Word).unwrap() & DONE, 0);
         assert_ne!(otp.read(REG_STATUS, Width::Word).unwrap() & DONE, 0);
     }
 

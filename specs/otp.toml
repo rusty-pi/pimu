@@ -108,8 +108,8 @@ confidence = "high"
 [[register.field]]
 name   = "DONE"
 bits   = "1"
-access = "w1c"
-notes  = "The command finished; after a read the row is in `DATA`."
+access = "r"
+notes  = "The block is idle: set with no command running, clear while one runs, set again when it finishes and, for a read, the row is in `DATA`. A write of 1 does not clear it. So a poll that only watches for it set returns on the previous command's flag and reads `DATA` before the row arrives."
 
 [[register.field.source]]
 kind       = "decompile"
@@ -119,6 +119,11 @@ confidence = "high"
 [[register.field.source]]
 kind       = "decompile"
 ref        = "start4 `0x3ED3F24C` polls bit 1 after every command"
+confidence = "high"
+
+[[register.field.source]]
+kind       = "measured"
+ref        = "4B rev 1.5: the flag read back set straight after a write of 1 (`before 0x200a`, `cleared 0x200a`), and a poll that only watched for it set read row 30 as 0 (`board: boardrev 0 otp 0`, then a Pi 3 device tree); watching it fall and rise read `0xd03115`"
 confidence = "high"
 
 [[register.field]]
