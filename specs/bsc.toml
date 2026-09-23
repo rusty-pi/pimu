@@ -256,12 +256,18 @@ confidence = "high"
 name   = "FIFO"
 offset = 0x10
 access = "rw"
-notes  = "Data FIFO, 16 bytes each way."
+notes  = "Data FIFO, 16 bytes each way. Which way it faces follows `C.READ` at the moment of the write: a register byte pushed after `ST | READ` has been set is not a register select, it lands in the receive FIFO and the driver reads its own byte straight back. Writing the register out and waiting for `DONE` before arming the read is what selects a register."
 
 [[register.source]]
 kind       = "datasheet"
 ref        = "BCM2711 ARM Peripherals, §3.2 (BSC): `FIFO`"
 confidence = "high"
+
+[[register.source]]
+kind       = "measured"
+ref        = "4B rev 1.5: every PMIC register answered with its own number (0x1B reg 0x09 -> 9, core rail 0x25 -> 37 read as 0.37 V) until `rpi-unboxed` 65a4b8c/f20137b wrote the register out first; 0x1B reg 0x09 then read 40, matching `vcgencmd measure_volts sdram_c` = 1.1 V on stock firmware"
+confidence = "high"
+note       = "supersedes the earlier assumption that both orders select the same register; the queued-read order at `0x3ECF115A` cannot be a plain register read on silicon"
 
 [[register]]
 name   = "DIV"

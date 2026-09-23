@@ -323,10 +323,10 @@ fn pmic_read(m: &mut Machine, addr: u8, reg: u8) -> u8 {
     v
 }
 
-/// The same read, in the order the transport uses when `cfg[8] & 2` is clear
-/// (the `0x1E` path): it programs the read phase *before* pushing the register
-/// byte, relying on the write phase stalling with `S.TA` asserted until the
-/// FIFO has data. Both orders have to select the same register.
+/// The same read with the read phase programmed *before* the register byte is
+/// pushed. Arming the read switches the FIFO to the receive path, so the byte
+/// pushed afterwards is never a register select — it comes back as the read's
+/// data.
 fn pmic_read_late_fifo(m: &mut Machine, addr: u8, reg: u8) -> u8 {
     let base = map::BSC_PMIC_BASE;
     m.store32(base + BSC_A, addr as u32).unwrap();
@@ -352,19 +352,24 @@ fn pmic_write(m: &mut Machine, addr: u8, reg: u8, value: u8) {
     m.store32(base + BSC_S, S_DONE | S_ERR).unwrap();
 }
 
-/// The register the firmware asks for is the register it gets. start4's
-/// transport (`0x3ECF0ED0`) writes `C.ST` before it feeds the FIFO, so a model
-/// that runs the transfer at `ST` and takes the FIFO byte afterwards selects
-/// nothing, and the auto-incrementing pointer walks the whole 0..0xFF space
-/// instead of answering the register that was asked for.
+/// A register byte pushed after the read is armed is read straight back, and a
+/// register byte written out first selects the register. start4's transport
+/// (`0x3ECF0ED0`) writes `C.ST` before it feeds the FIFO, which is fine on its
+/// own — the write stalls with `S.TA` until the byte lands — but arming the
+/// read on top of that stalled write turns the FIFO into the receive path.
+///
+/// Measured on a 4B rev 1.5: every PMIC register answered with its own number
+/// until `rpi-unboxed` 65a4b8c/f20137b wrote the register out and waited for
+/// `DONE` before arming the read. 0x1B reg 0x09 then read 40, which
+/// `vcgencmd measure_volts sdram_c` confirms as 1.1 V.
 #[test]
-fn pmic_register_pointer_follows_the_late_fifo_byte() {
+fn an_armed_read_returns_the_register_byte_not_the_register() {
     let mut m = machine();
     // 0x1B reg 0x09 is the SDRAM rail setpoint, shared by rails 2, 3 and 4.
     assert_eq!(pmic_read(&mut m, 0x1B, 0x09), 40);
-    assert_eq!(pmic_read_late_fifo(&mut m, 0x1B, 0x09), 40);
+    assert_eq!(pmic_read_late_fifo(&mut m, 0x1B, 0x09), 0x09);
     // 0x1E reg 0x25 is the SoC core rail setpoint.
-    assert_eq!(pmic_read_late_fifo(&mut m, 0x1E, 0x25), 85);
+    assert_eq!(pmic_read_late_fifo(&mut m, 0x1E, 0x25), 0x25);
     assert_eq!(pmic_read(&mut m, 0x1E, 0x25), 85);
 }
 
