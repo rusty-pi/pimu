@@ -205,9 +205,9 @@ pub const HVS_BASE: u32 = spec::hvs::BASE;
 pub const HVS_SIZE: u32 = spec::hvs::SIZE;
 
 /// The control block at `0x7E80_8000` whose power acknowledge start4's USB
-/// power-on waits for, with no timeout (`src/periph/hd.rs`, #49).
-pub const HD_BASE: u32 = spec::hd::BASE;
-pub const HD_SIZE: u32 = spec::hd::SIZE;
+/// power-on waits for, with no timeout (`src/periph/usbr.rs`, #49).
+pub const USBR_BASE: u32 = spec::usbr::BASE;
+pub const USBR_SIZE: u32 = spec::usbr::SIZE;
 
 /// DesignWare USB 2.0 OTG controller (`usb@7e980000`), the USB-C port. start4
 /// resets it when USB power comes on (`src/periph/dwc2.rs`, #49).

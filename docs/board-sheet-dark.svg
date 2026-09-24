@@ -172,7 +172,7 @@
     <text class="ts" x="502" y="588" text-anchor="middle">AUX mini-UART</text>
     <text class="m" x="502" y="602" text-anchor="middle">0x7E215000</text>
   </g>
-  <g data-block="hd" data-base="0x7E808000">
+  <g data-block="usbr" data-base="0x7E808000">
     <rect class="tag" x="570" y="570" width="105" height="44" rx="2"/>
     <text class="ts" x="622" y="588" text-anchor="middle">USB power</text>
     <text class="m" x="622" y="602" text-anchor="middle">0x7E808000</text>

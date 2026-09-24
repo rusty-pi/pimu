@@ -1,5 +1,13 @@
-//! The control block at `0x7E80_8000`, as far as USB power goes through it
+//! The USB reset block at `0x7E80_8000`, as far as USB power goes through it
 //! (#49).
+//!
+//! The block names itself: every reserved word of its window answers
+//! `0x55534252`, `"USBR"` big-endian, measured on a Raspberry Pi 4B d03115, the
+//! way `corectl` answers `INTE` and `mcsync` answers `MULT`. This module used
+//! to be called `hd`, on the strength of the BCM2835 having its HDMI `HD` block
+//! at this address. The BCM2711 does not: its HDMI `hd` range is `0x7EF20000`,
+//! which the board's own device tree gives and which answers a different tag
+//! (#139). Registers run `+0x00` to `+0x20`; `+0x24` upwards is tag.
 //!
 //! ## What start4 does with it
 //!
@@ -48,34 +56,34 @@ use std::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
-use crate::spec::hd::{CTRL, CTRL_POWER_MASK, CTRL_RESET, STATUS, STATUS_ACK_MASK};
+use crate::spec::usbr::{CTRL, CTRL_POWER_MASK, CTRL_RESET, STATUS, STATUS_ACK_MASK};
 use crate::spec::Coverage;
 
 /// The power request and its acknowledge; the rest of the window is storage.
 pub const COVERAGE: Coverage = Coverage {
-    block: "hd",
+    block: "usbr",
     decoded: &[CTRL, STATUS],
 };
 
-pub struct Hd {
+pub struct Usbr {
     storage: BTreeMap<u32, u32>,
 }
 
-impl Default for Hd {
-    fn default() -> Hd {
-        Hd {
+impl Default for Usbr {
+    fn default() -> Usbr {
+        Usbr {
             storage: BTreeMap::from([(CTRL, CTRL_RESET)]),
         }
     }
 }
 
-impl Hd {
-    pub fn new() -> Hd {
-        Hd::default()
+impl Usbr {
+    pub fn new() -> Usbr {
+        Usbr::default()
     }
 }
 
-impl MmioDevice for Hd {
+impl MmioDevice for Usbr {
     fn name(&self) -> &'static str {
         "hd"
     }

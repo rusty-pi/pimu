@@ -61,7 +61,7 @@ fn hvs_frame_swap_completes_immediately() {
 #[test]
 fn usb_power_on_handshake_completes() {
     let mut m = machine();
-    let (ctrl, status) = (map::HD_BASE + 0x08, map::HD_BASE + 0x20);
+    let (ctrl, status) = (map::USBR_BASE + 0x08, map::USBR_BASE + 0x20);
     assert_eq!(m.load32(ctrl).unwrap(), 0x3);
     assert_eq!(m.load32(status).unwrap(), 0x0);
 

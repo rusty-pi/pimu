@@ -31,7 +31,6 @@ Generated from the TOML specs in [`specs/`](../../specs/); see [`specs/README.md
 | [`gich`](gich.md) | arm | `0xFF844000` | `0x2000` | 10 | GIC-400 virtual interface control, banked per CPU |
 | [`gicv`](gicv.md) | arm | `0xFF846000` | `0x2000` | 0 | GIC-400 virtual CPU interface |
 | [`gpio`](gpio.md) | vpu | `0x7E200000` | `0x1000` | 16 | The 58 GPIO pins: function select, output latch, pin levels, edge detect and the BCM2711 pull control |
-| [`hd`](hd.md) | vpu | `0x7E808000` | `0x100` | 2 | Control block at `0x7E80_8000`: the power request and acknowledge start4 waits on before it resets the DWC2 USB controller |
 | [`hdmi`](hdmi.md) | vpu | `0x7EF00700` | `0x300` | 4 | HDMI controller core registers (the `hdmi` window of each connector), with no monitor attached: the packet-RAM handshake, the FIFO recenter and the hotplug state |
 | [`hdmi_auto_i2c`](hdmi_auto_i2c.md) | vpu | `0x7EF00B00` | `0x300` | 5 | HDMI auto-i2c sequencers (the second reg window of each DDC master's node): channels that write a list of values into their connector's DDC I²C master and report when the transfer it starts has finished |
 | [`hdmi_ddc`](hdmi_ddc.md) | vpu | `0x7EF04500` | `0x100` | 8 | HDMI DDC I²C masters (`brcm,bcm2711-hdmi-i2c`), one per connector: the bus a monitor's EDID EEPROM sits on |
@@ -54,6 +53,7 @@ Generated from the TOML specs in [`specs/`](../../specs/); see [`specs/README.md
 | [`spi0`](spi0.md) | vpu | `0x7E204000` | `0x18` | 6 | SPI0 master, with the serial-NOR flash the EEPROM bootloader was loaded from |
 | [`systimer`](systimer.md) | vpu | `0x7E003000` | `0x1000` | 4 | System timer: 64-bit free-running 1 MHz counter with four compare channels |
 | [`uart0`](uart0.md) | vpu | `0x7E201000` | `0x1000` | 11 | PL011 UART0: the firmware's debug console and Linux's `ttyAMA0` |
+| [`usbr`](usbr.md) | vpu | `0x7E808000` | `0x100` | 2 | USB reset block at `0x7E80_8000`: the power request and acknowledge start4 waits on before it resets the DWC2 USB controller |
 | [`vce`](vce.md) | vpu | `0x7F100000` | `0x21000` | 3 | VCE vector/codec engine: data memory, program memory and register file |
 | [`vce_ctrl`](vce_ctrl.md) | vpu | `0x7F140000` | `0x1000` | 6 | VCE control block: status, launch, interrupt clear and endcode enables |
 | [`vl805`](vl805.md) | pci | `0x00000000` | `0x1000` | 27 | VIA VL805 xHCI controller (`1106:3483`): its PCI configuration space |

@@ -30,7 +30,6 @@ pub mod gentimer;
 pub mod gic;
 pub mod gpio;
 pub mod hat;
-pub mod hd;
 pub mod hdmi;
 pub mod hdmi_ddc;
 pub mod hvs;
@@ -54,6 +53,7 @@ pub mod stub;
 pub mod systimer;
 pub mod uart_pl011;
 pub mod usb;
+pub mod usbr;
 pub mod vce;
 pub mod vl805;
 pub mod xhci;
@@ -77,7 +77,6 @@ pub use emmc2::Emmc2;
 pub use genet::Genet;
 pub use gic::Gic;
 pub use gpio::Gpio;
-pub use hd::Hd;
 pub use hdmi::Hdmi;
 pub use hdmi_ddc::HdmiDdc;
 pub use hvs::Hvs;
@@ -97,6 +96,7 @@ pub use spi0::Spi0;
 pub use stub::StubRegion;
 pub use systimer::SysTimer;
 pub use uart_pl011::Pl011;
+pub use usbr::Usbr;
 pub use vce::Vce;
 pub use vl805::Vl805;
 pub use xhci::Xhci;
@@ -132,7 +132,7 @@ pub const SPEC_COVERAGE: &[crate::spec::Coverage] = &[
     gic::COVERAGE_VCPU,
     gic::COVERAGE_VIRT,
     gpio::COVERAGE,
-    hd::COVERAGE,
+    usbr::COVERAGE,
     hdmi::COVERAGE,
     hdmi_ddc::COVERAGE,
     hdmi_ddc::COVERAGE_AUTO,

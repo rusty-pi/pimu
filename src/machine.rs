@@ -7,8 +7,8 @@ use crate::periph::gpio;
 use crate::periph::hdmi_ddc::AUTO_WINDOW;
 use crate::periph::{
     ArmCtrl, ArmLocal, Asb, Aux, Avs, Bell, BootBox, Bsc, ClkMon, ClockManager, ConfigOtp, CoreCtl,
-    Dma4, Dwc2, Emmc2, Gic, Gpio, Hd, Hdmi, HdmiDdc, Hvs, Mbox, McSync, Pactl, Pcm, Pl011, Pm, Pwm,
-    Rng, Sdc, Sdramc, Spi0, StubRegion, SysTimer, Vce, XhciOtg,
+    Dma4, Dwc2, Emmc2, Gic, Gpio, Hdmi, HdmiDdc, Hvs, Mbox, McSync, Pactl, Pcm, Pl011, Pm, Pwm,
+    Rng, Sdc, Sdramc, Spi0, StubRegion, SysTimer, Usbr, Vce, XhciOtg,
 };
 use crate::soc::bcm2711 as map;
 
@@ -160,7 +160,7 @@ pub struct Machine {
     pub hvs: Hvs,
     /// The control block at `0x7E80_8000` — the power acknowledge start4's USB
     /// power-on waits for.
-    pub hd: Hd,
+    pub usbr: Usbr,
     /// DWC2 USB OTG controller (`0x7E98_0000`) — reset when USB power comes on.
     pub dwc2: Dwc2,
     /// The BCM2711's own xHCI (`0x7E9C_0000`) — the USB-C port as a USB 2.0
@@ -373,7 +373,7 @@ impl Machine {
             sd_slot_legacy: false,
             emmc2: Emmc2::new(),
             hvs: Hvs::new(),
-            hd: Hd::new(),
+            usbr: Usbr::new(),
             dwc2: Dwc2::new(),
             xhci_otg: XhciOtg::new(),
             periph_stub: StubRegion::new("periph-window"),
@@ -914,8 +914,8 @@ impl Machine {
         if let Some(off) = hit(map::HVS_BASE, map::HVS_SIZE) {
             return Some((&mut self.hvs, off));
         }
-        if let Some(off) = hit(map::HD_BASE, map::HD_SIZE) {
-            return Some((&mut self.hd, off));
+        if let Some(off) = hit(map::USBR_BASE, map::USBR_SIZE) {
+            return Some((&mut self.usbr, off));
         }
         if let Some(off) = hit(map::DWC2_BASE, map::DWC2_SIZE) {
             return Some((&mut self.dwc2, off));

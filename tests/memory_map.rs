@@ -41,7 +41,7 @@ const MODELLED: &[(&str, u32)] = &[
     ("emmc CLOCK_CONTROL", map::EMMC_BASE + 0x2C),
     ("emmc2", map::EMMC2_BASE),
     ("hvs", map::HVS_BASE),
-    ("usb power acknowledge", map::HD_BASE + 0x20),
+    ("usb power acknowledge", map::USBR_BASE + 0x20),
     ("dwc2 GRSTCTL", map::DWC2_BASE + 0x10),
     ("xhci_otg HCSPARAMS1", map::XHCI_OTG_BASE + 0x04),
     ("xhci_otg PORTSC", map::XHCI_OTG_BASE + 0x420),
