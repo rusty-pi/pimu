@@ -26,6 +26,7 @@ Sources:
 | `0x010`–`0x02C` (8 × 0x4) | [`IRQ_PRIO`](#irq_prio) | rw | 32 | 7, best high |
 | `0x030` | [`VBASE`](#vbase) | w | 32 | 4, best high |
 | `0x034` | [`WAKEUP`](#wakeup) | rw | 32 | 5, best high |
+| `0x038` | [`IRQ_PROFILE`](#irq_profile) | rw | 32 | 4, best high |
 | `0x040`–`0x044` (2 × 0x4) | [`IRQ_PENDING_BITS`](#irq_pending_bits) | rw | 32 | 2, best high |
 | `0x048`–`0x04C` (2 × 0x4) | [`IRQ_PENDING_BITS_SET`](#irq_pending_bits_set) | w | 32 | 3, best high |
 | `0x050`–`0x054` (2 × 0x4) | [`IRQ_PENDING_BITS_CLR`](#irq_pending_bits_clr) | w | 32 | 2, best high |
@@ -138,6 +139,19 @@ Sources:
 `ADDR` sources:
 
 - datasheet (medium): Broadcom `bcm2708_chip/intctrl1.h`: `IC1_WAKEUP_MASK` `0xfffffffe`
+
+## `IRQ_PROFILE`
+
+Offset `0x038` · access `rw` · 32 bits
+
+Not a plain register, and not modelled: a read answers 0. The two sides of the SoC disagree about its value, a write does not read back from either side, and nothing that can be driven from outside moves it -- forcing interrupts, mailbox traffic and ARM writes all leave it alone. Whatever it profiles, no firmware in this tree touches it, and the model answers the 0 a VPU read gives after any write and at handler entry. Do not read anything into the value.
+
+Sources:
+
+- measured (high): Raspberry Pi 4B d03115, `/dev/mem` from the ARM: `0xFE002038` reads `0xffffffff` and `0xFE002838` reads `0xffff0000` under a firmware that never wrote them, stable over 2.4 s, and writes of `0x5a5a`, `0`, `0xffffffff` and `0x1234` all leave the read unchanged.
+- measured (high): Raspberry Pi 4B d03115, read from the VPU by a `rpi-unboxed` build that probes it at `idle::init`: the VPU reads `0x0000000e` on its own bank and `0x00000000` on core 1's, where the ARM reads `0xffffffff` and `0xffff0000` -- so the two views differ. After a VPU write of `0x00005a5a`, `0x0000ffff`, `0`, `0xffffffff`, or of the `0x0e` it started with, a VPU read answers 0 every time. Inside a handler it reads 0.
+- measured (medium): Raspberry Pi 4B d03115, after that firmware's write: the ARM then reads `0x00000005` and it stays there through eight forced interrupts on sources 70, 71 and 96, two `vcgencmd` round trips, ARM writes of `0x1234` and `0`, and 2 s of sampling. One read of `0x000001d8` right after a forced interrupt did not reproduce when the same sequence was repeated three ways, so it is recorded as unexplained rather than as behaviour.
+- datasheet (medium): Broadcom `bcm2708_chip/intctrl0.h`: `IC0_PROFILE`, RW, 16 bits, mask `0x0000ffff`, no reset value and no fields
 
 ## `IRQ_PENDING_BITS`
 

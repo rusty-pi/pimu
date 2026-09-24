@@ -28,7 +28,7 @@ use crate::spec::corectl::{
     IRQ_PENDING_BITS_COUNT, IRQ_PENDING_BITS_SET, IRQ_PENDING_BITS_SET_RESET as TAG,
     IRQ_PENDING_BITS_STRIDE, IRQ_PENDING_PRIO_MASK, IRQ_PENDING_PRIO_SHIFT,
     IRQ_PENDING_SOURCE_MASK, IRQ_PENDING_SOURCE_SHIFT, IRQ_PRIO, IRQ_PRIO_COUNT, IRQ_PRIO_STRIDE,
-    VBASE, VBASE_ADDR_MASK, WAKEUP, WAKEUP_ADDR_MASK, WAKEUP_ADDR_SHIFT,
+    IRQ_PROFILE, VBASE, VBASE_ADDR_MASK, WAKEUP, WAKEUP_ADDR_MASK, WAKEUP_ADDR_SHIFT,
 };
 use crate::spec::Coverage;
 
@@ -44,6 +44,7 @@ pub const COVERAGE: Coverage = Coverage {
         IRQ_PENDING_BITS,
         IRQ_PENDING_BITS_SET,
         IRQ_PENDING_BITS_CLR,
+        IRQ_PROFILE,
     ],
 };
 
@@ -217,6 +218,12 @@ impl MmioDevice for CoreCtl {
                 return Ok(half | (half << 16));
             }
         }
+        if off == IRQ_PROFILE {
+            // Whatever it profiles, a board's VPU reads 0 from it after any
+            // write and at handler entry; the value it holds before that is
+            // not reproducible and nothing here uses it.
+            return Ok(0);
+        }
         if off == VBASE || tag_read(off) {
             // `VBASE` does not read back at all, and the words past the last
             // register answer the block's own tag, the way `GPSET` answers
@@ -374,6 +381,15 @@ mod tests {
         c.raise_source(0, 71);
         c.write(IRQ_PRIO, Width::Word, 0).unwrap();
         assert_eq!(c.read(IRQ_PENDING, Width::Word).unwrap(), 0x0547_0547);
+    }
+
+    #[test]
+    fn irq_profile_reads_zero_whatever_is_written() {
+        let mut c = CoreCtl::new();
+        assert_eq!(c.read(IRQ_PROFILE, Width::Word).unwrap(), 0);
+        c.write(IRQ_PROFILE, Width::Word, 0x5A5A).unwrap();
+        assert_eq!(c.read(IRQ_PROFILE, Width::Word).unwrap(), 0);
+        assert_eq!(c.read(CORE_STRIDE + IRQ_PROFILE, Width::Word).unwrap(), 0);
     }
 
     #[test]
