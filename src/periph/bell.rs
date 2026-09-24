@@ -110,7 +110,9 @@ impl MmioDevice for Bell {
     }
 
     fn read(&mut self, offset: u32, _width: Width) -> BusResult<u32> {
-        let Some(bell) = Bell::index(offset) else { return Ok(0) };
+        let Some(bell) = Bell::index(offset) else {
+            return Ok(0);
+        };
         let rung = self.take(bell);
         if rung {
             crate::log!(self.log, Channel::Mbox, "doorbell {bell} read and cleared");

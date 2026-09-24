@@ -6,10 +6,9 @@ use crate::mem::Ram;
 use crate::periph::gpio;
 use crate::periph::hdmi_ddc::AUTO_WINDOW;
 use crate::periph::{
-    ArmCtrl, ArmLocal, Asb, Aux, Avs, BootBox, Bsc, ClkMon, ClockManager, ConfigOtp, CoreCtl, Dma4,
-    Bell, Dwc2, Emmc2, Gic, Gpio, Hd, Hdmi, HdmiDdc, Hvs, Mbox, McSync, Pactl, Pcm, Pl011, Pm, Pwm,
-    Rng,
-    Sdc, Sdramc, Spi0, StubRegion, SysTimer, Vce, XhciOtg,
+    ArmCtrl, ArmLocal, Asb, Aux, Avs, Bell, BootBox, Bsc, ClkMon, ClockManager, ConfigOtp, CoreCtl,
+    Dma4, Dwc2, Emmc2, Gic, Gpio, Hd, Hdmi, HdmiDdc, Hvs, Mbox, McSync, Pactl, Pcm, Pl011, Pm, Pwm,
+    Rng, Sdc, Sdramc, Spi0, StubRegion, SysTimer, Vce, XhciOtg,
 };
 use crate::soc::bcm2711 as map;
 

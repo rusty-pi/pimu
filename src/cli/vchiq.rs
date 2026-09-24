@@ -264,7 +264,11 @@ impl Slave {
             let size = self.read(emu, header + SIZE);
             let mut payload = Vec::new();
             for i in 0..size.min(SLOT_SIZE) {
-                payload.push(emu.machine.load(header + DATA + i, Width::Byte).unwrap_or(0) as u8);
+                payload.push(
+                    emu.machine
+                        .load(header + DATA + i, Width::Byte)
+                        .unwrap_or(0) as u8,
+                );
             }
             self.rx_pos += stride(size);
             if self.rx_pos & (SLOT_SIZE - 1) == 0 {
@@ -353,14 +357,25 @@ pub fn gencmd_exchange(emu: &mut Emulator, limits: &RunLimits, commands: &[Strin
     // firmware take it before anything is queued.
     let tag = (0x0004_8010, Some(4), vec![base]);
     mbox_property_exchange(emu, limits, &MboxRequest::Tags(vec![tag]))?;
-    if emu.machine.load(base + MASTER + INITIALISED, Width::Word).unwrap_or(0) == 0 {
+    if emu
+        .machine
+        .load(base + MASTER + INITIALISED, Width::Word)
+        .unwrap_or(0)
+        == 0
+    {
         bail!("the firmware did not bring its side up: master.initialised is still 0");
     }
     println!(
         "  master up: slots {}..{}, tx_pos {}",
-        emu.machine.load(base + MASTER + SLOT_FIRST, Width::Word).unwrap_or(0),
-        emu.machine.load(base + MASTER + SLOT_LAST, Width::Word).unwrap_or(0),
-        emu.machine.load(base + MASTER + TX_POS, Width::Word).unwrap_or(0),
+        emu.machine
+            .load(base + MASTER + SLOT_FIRST, Width::Word)
+            .unwrap_or(0),
+        emu.machine
+            .load(base + MASTER + SLOT_LAST, Width::Word)
+            .unwrap_or(0),
+        emu.machine
+            .load(base + MASTER + TX_POS, Width::Word)
+            .unwrap_or(0),
     );
 
     slave.send(emu, make_msgid(MSG_CONNECT, 0, 0), &[])?;
@@ -399,6 +414,9 @@ pub fn gencmd_exchange(emu: &mut Emulator, limits: &RunLimits, commands: &[Strin
 
     slave.send(emu, make_msgid(MSG_CLOSE, LOCAL_PORT, remote), &[])?;
     slave.wait(emu, limits, MSG_CLOSE, "CLOSE")?;
-    println!("  GCMD closed; doorbell 0 rung {} times", emu.machine.bell.rings[0]);
+    println!(
+        "  GCMD closed; doorbell 0 rung {} times",
+        emu.machine.bell.rings[0]
+    );
     Ok(())
 }

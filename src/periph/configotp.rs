@@ -487,8 +487,7 @@ impl MmioDevice for ConfigOtp {
                 // then has to see it fall first, the way the hardware makes it
                 // (`docs/periph/otp.md`).
                 let done = self.done && !core::mem::take(&mut self.busy);
-                (if done { DONE } else { 0 })
-                    | if self.prog_enabled { PROG_ENABLED } else { 0 }
+                (if done { DONE } else { 0 }) | if self.prog_enabled { PROG_ENABLED } else { 0 }
             }
             REG_BOOTMODE => self.row(BOOTMODE_ROW),
             REG_DATA => self.data,
