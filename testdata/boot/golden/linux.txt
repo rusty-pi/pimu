@@ -733,4 +733,4 @@ usb/devices/1-1/maxchild)
 [t] hub 1-1:1.0: 4 ports detected
 [t] hub 1-1:1.0: 4 ports detected
 usb1-1=USB2.0 Hub/4
-/ # 
+/ # \x1b[6n
