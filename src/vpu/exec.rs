@@ -292,11 +292,11 @@ impl Vpu {
         self.vector_irq_forced(bus, slot);
     }
 
-    /// [`Self::vector_irq`] without the interrupt-enable check, for the `sleep`
-    /// wake: `sleep` takes the interrupt it waits for even with interrupts
-    /// disabled. Firmware parks as `sleep; di; b` (start4's idle loop, which runs
-    /// inside its tick handler with the enable bit clear), and that `di` only
-    /// makes sense if `sleep` enables interrupts while it waits.
+    /// [`Self::vector_irq`] without the interrupt-enable check, for the paths
+    /// that have already decided the core takes the interrupt: core 1's wake,
+    /// and core 0's `sleep` once the bit is known to be set. The `sleep`
+    /// instruction tests the bit itself — measured on a 4B rev 1.5, a masked
+    /// `sleep` never takes the compare it waits for.
     pub fn vector_irq_forced<B: Bus + ?Sized>(&mut self, bus: &mut B, slot: u32) {
         self.recheck = true;
         // An interrupt is what `sleep` was waiting for.
@@ -794,6 +794,33 @@ impl Vpu {
                         // Halt until an interrupt is vectored here. The run
                         // loop skips a halted core; `vector_irq` clears it.
                         self.halted = true;
+                        return Some(Step::Ran);
+                    }
+                    if self.exc_vbase != 0 && self.core_id == 0 && !self.irq_enabled() {
+                        // Measured on a 4B rev 1.5: a `sleep` with the enable
+                        // bit clear never takes the compare it is waiting for
+                        // and the core stays asleep for ever, which is why
+                        // rpi-unboxed brackets its own `sleep` with `ei`/`di`.
+                        // So the wake waits for the run loop's delivery, which
+                        // tests the bit; the clock still goes to the next
+                        // compare so the other core and the devices run on.
+                        self.halted = true;
+                        if crate::diag::ON && self.log.on(Channel::Sleep) {
+                            self.sleep_dbg += 1;
+                            if self.sleep_dbg <= 20 || self.sleep_dbg.is_multiple_of(20000) {
+                                crate::log!(
+                                    self.log,
+                                    Channel::Sleep,
+                                    "#{} masked pc={:#x} sr={:#x} exc={} retired={}",
+                                    self.sleep_dbg,
+                                    self.regs.pc,
+                                    self.regs.get(30),
+                                    self.in_exception,
+                                    self.retired
+                                );
+                            }
+                        }
+                        bus.sleep_advance();
                         return Some(Step::Ran);
                     }
                     if self.exc_vbase != 0 && self.core_id == 0 {
