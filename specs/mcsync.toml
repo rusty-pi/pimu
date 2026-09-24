@@ -2,7 +2,12 @@
 name    = "mcsync"
 base    = 0x7E000000
 size    = 0x1000
-summary = "Doorbells / semaphores between the two VPU cores"
+summary = "Thirty-two hardware semaphores, plus the mailbox words and ack registers around them"
+
+[[block.source]]
+kind       = "measured"
+ref        = "Raspberry Pi 4B d03115, `/dev/mem`: the block answers its own tag `0x4D554C54` -- `\"MULT\"` big-endian -- at `0xFE00008C` and at every word from `0xFE0000CC` to `0xFE000FFC`, so the registers end at `+0xC8` and the tag names the block the way `corectl` answers `INTE` and the GPIO block `gpio`. Every register from `+0x80` to `+0xC8` is decoded, checked by reading each after three different preceding values."
+confidence = "high"
 
 [[block.source]]
 kind       = "decompile"
@@ -35,16 +40,26 @@ confidence = "high"
 note       = "IRQs 14 and 15 are `Multicore Sync 2` and `Multicore Sync 3`, the sources 78 and 79 start4 posts in software as its reschedule IPI; they are not acked through this block"
 
 [[register]]
-name   = "DOORBELL"
+name   = "SEMA"
 offset = 0x00
 count  = 32
 stride = 4
 access = "rw"
-notes  = "Poster writes 1; the receiving core clears it once the work is done."
+notes  = "Thirty-two hardware test-and-set semaphores, one per word. A read answers 0 if the semaphore was free **and takes it**, or 1 if it was already held; any write releases it, whatever value is written. So a read is not a load: `0x3ED3A00C`'s spin **while** the word is non-zero is an acquire loop that ends the moment the semaphore is free, and `0x3ED3A114`'s write of 1 is a release, not a post. Which ones are held reads out of `STATUS`."
+
+[[register.source]]
+kind       = "measured"
+ref        = "Raspberry Pi 4B d03115 running a firmware that never touches this block, `/dev/mem` at `0xFE000000`: with every slot released, six reads of slot 5 answer `0 1 1 1 1 1` and `STATUS` then reads `0x00000020`. Reading slots 0, 7 and 31 makes `STATUS` exactly `0x80000081`; writing slot 7 leaves `0x80000001`. A write of 0 and a write of 1 both release, and `0xffffffff` written reads back 0, so the slot is one bit. All 32 slots behave alike."
+confidence = "high"
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "Broadcom `bcm2708_chip/multicore_sync.h`: `MS_SEMA_0`..`MS_SEMA_31` at `0x7E000000`..`0x7E00007C`, RW, one bit each"
+confidence = "medium"
 
 [[register.source]]
 kind       = "decompile"
-ref        = "`0x3ED3A114` (post), `0x3ED3A00C` (wait while non-zero)"
+ref        = "`0x3ED3A114` (write, i.e. release), `0x3ED3A00C` (spin while non-zero, i.e. acquire)"
 confidence = "high"
 
 [[register.source]]
@@ -53,10 +68,20 @@ ref        = "`recon` run: clock-service manager posts slot 6, then suspends"
 confidence = "high"
 
 [[register]]
-name   = "PENDING"
+name   = "STATUS"
 offset = 0x80
 access = "r"
-notes  = "Doorbells pending for this core's interrupt; the ISR clears exactly these bits from its ack word."
+notes  = "Which of the 32 `SEMA` semaphores are currently held, one bit each. The firmware treats a held semaphore as a message waiting, so its ISR clears exactly these bits from its ack word -- but the register is the hardware's held-bitmap, not a separate pending set."
+
+[[register.source]]
+kind       = "measured"
+ref        = "Raspberry Pi 4B d03115: 0 with every semaphore released; exactly `0x80000081` with slots 0, 7 and 31 taken, and `0x80000001` after slot 7 is released. Under stock start4 `f5e89631` with Linux idle it reads 0."
+confidence = "high"
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "Broadcom `bcm2708_chip/multicore_sync.h`: `MS_STATUS` at `0x7E000080`, RO"
+confidence = "medium"
 
 [[register.source]]
 kind       = "decompile"
@@ -98,10 +123,10 @@ confidence = "medium"
 note       = "so the interrupt path itself is not exercised by the boot so far"
 
 [[register]]
-name   = "SECURE_MARK"
+name   = "MBOX5"
 offset = 0xB4
 access = "rw"
-notes  = "Both bootloader stages write 0 here as they start, OR bit 31 of it into their secure-boot flags each time they work them out, and set bit 31 once any flag is set (`SIGNED_BOOT`, or the OTP secure-boot rows), so a later look within the stage sees secure boot even if the settings no longer say so. Reads 0 in the model, so there every look starts afresh."
+notes  = "Mailbox word 5, which the model used to call `SECURE_MARK`. Both bootloader stages write 0 here as they start, OR bit 31 of it into their secure-boot flags each time they work them out, and set bit 31 once any flag is set (`SIGNED_BOOT`, or the OTP secure-boot rows), so a later look within the stage sees secure boot even if the settings no longer say so. Reads 0 in the model, so there every look starts afresh."
 
 [[register.source]]
 kind       = "decompile"
@@ -114,10 +139,10 @@ ref        = "`--trace-mmio`, `--bootconf SIGNED_BOOT=1`: bootsys writes 0 at `0
 confidence = "high"
 
 [[register]]
-name   = "REG_0BC"
+name   = "MBOX7"
 offset = 0xBC
 access = "r"
-notes  = "Both bootloader stages read this as they start, just before clearing `SECURE_MARK`, and keep bits 16-23. Meaning unknown; it reads 0 in the model."
+notes  = "Mailbox word 7, which the model used to call `REG_0BC`. Both bootloader stages read this as they start, just before clearing `SECURE_MARK`, and keep bits 16-23. Meaning unknown; it reads 0 in the model."
 
 [[register.source]]
 kind       = "trace"
@@ -125,10 +150,10 @@ ref        = "`--trace-mmio`: bootsys `0x80007EBE`, bootmain `0xA7B70`, each fol
 confidence = "high"
 
 [[register]]
-name   = "LOCK"
+name   = "VPUSEMA0"
 offset = 0xC0
 access = "rw"
-notes  = "start4 reads this word and writes its own address back into it from dozens of places, tens of thousands of times a boot; it reads 0 in the model. By the look of it a lock word the two cores claim."
+notes  = "The first of the two semaphores that sit apart from the 32, which the model used to call `LOCK`. start4 reads this word and writes its own address back into it from dozens of places, tens of thousands of times a boot -- read to claim, write to let go, which is what the name says it is. Measured, though, it does not behave as the 32 do: every read answers the same value rather than 0 once and 1 after. It reads 0 in the model."
 
 [[register.source]]
 kind       = "trace"
@@ -136,6 +161,108 @@ ref        = "pinned start4: reads at `0x3EC3C6F6`, `0x3EC3E1CC` and others, eac
 confidence = "high"
 
 [[register.source]]
+kind       = "measured"
+ref        = "Raspberry Pi 4B d03115: reads 0 on three consecutive reads under stock start4 `f5e89631` and under a from-scratch firmware, so unlike `SEMA` a read neither takes it nor changes it"
+confidence = "high"
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "Broadcom `bcm2708_chip/multicore_sync.h`: `MS_VPUSEMA_0`, 1 bit"
+confidence = "medium"
+
+[[register.source]]
 kind       = "inferred"
-ref        = "read, then write your own address, is a claim protocol; nothing in the boot reads it back as anything but 0"
-confidence = "low"
+ref        = "read, then write your own address, is a claim protocol -- and the block's own name for the register agrees"
+confidence = "medium"
+
+[[register]]
+name   = "ICSET"
+offset = 0x90
+count  = 2
+stride = 4
+access = "rw"
+notes  = "One bit each. Not modelled; reads 0 on both boards measured."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "Broadcom `bcm2708_chip/multicore_sync.h`: `MS_ICSET_0` and `MS_ICSET_1`, 1 bit"
+confidence = "medium"
+
+[[register.source]]
+kind       = "measured"
+ref        = "Raspberry Pi 4B d03115: 0 under stock start4 `f5e89631` and under a firmware that never touches the block"
+confidence = "high"
+
+[[register]]
+name   = "ICCLR"
+offset = 0x98
+count  = 2
+stride = 4
+access = "rw"
+notes  = "One bit each, the counterpart of `ICSET`. Not modelled; reads 0."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "Broadcom `bcm2708_chip/multicore_sync.h`: `MS_ICCLR_0` and `MS_ICCLR_1`, 1 bit"
+confidence = "medium"
+
+[[register]]
+name   = "MBOX"
+offset = 0xA0
+count  = 5
+stride = 4
+access = "rw"
+notes  = "Mailbox words 0 to 4. Words 5 and 7 have their own entries below, for what the firmware does with them, and word 6 is `MBOX6`. Not modelled; reads 0."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "Broadcom `bcm2708_chip/multicore_sync.h`: `MS_MBOX_0`..`MS_MBOX_7` at `0x7E0000A0`..`0x7E0000BC`"
+confidence = "medium"
+
+[[register.source]]
+kind       = "measured"
+ref        = "Raspberry Pi 4B d03115, Linux idle: words 0 to 6 read 0 and word 7 reads `0x0A060000` under stock start4 `f5e89631`, `0x03060000` under a from-scratch firmware -- so word 7 carries something each firmware sets differently, and word 5 is 0 on both"
+confidence = "high"
+
+[[register]]
+name   = "MBOX6"
+offset = 0xB8
+access = "rw"
+notes  = "Mailbox word 6. Not modelled; reads 0."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "Broadcom `bcm2708_chip/multicore_sync.h`: `MS_MBOX_6`"
+confidence = "medium"
+
+[[register]]
+name   = "VPUSEMA1"
+offset = 0xC4
+access = "rw"
+notes  = "The second of the two semaphores that sit apart from the 32. Unlike those, it does not behave as test-and-set: it answers the same value to every read. Not modelled; reads 0."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "Broadcom `bcm2708_chip/multicore_sync.h`: `MS_VPUSEMA_1`, 1 bit"
+confidence = "medium"
+
+[[register.source]]
+kind       = "measured"
+ref        = "Raspberry Pi 4B d03115: reads 1 on three consecutive reads under stock start4 `f5e89631` and again under a from-scratch firmware that never touches the block, so something holds it on every boot and a read does not take or clear it"
+confidence = "high"
+
+[[register]]
+name   = "VPU_STAT"
+offset = 0xC8
+access = "r"
+notes  = "Not modelled; reads 0."
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "Broadcom `bcm2708_chip/multicore_sync.h`: `MS_VPU_STAT` at `0x7E0000C8`, RO, mask `0x00FF00FF`"
+confidence = "medium"
+
+[[register.source]]
+kind       = "measured"
+ref        = "Raspberry Pi 4B d03115: `0x00000004` under stock start4 `f5e89631`, `0x00000001` under a from-scratch firmware"
+confidence = "high"

@@ -147,7 +147,7 @@ fn generated_constants_match_the_toml() {
         spec::corectl::INSTANCE_STRIDE,
         corectl.block.instance_stride
     );
-    assert_eq!(spec::mcsync::DOORBELL_COUNT, 32);
+    assert_eq!(spec::mcsync::SEMA_COUNT, 32);
     assert_eq!(spec::systimer::C, 0x0C);
     assert_eq!(spec::systimer::CS_M3_MASK, 1 << 3);
     assert_eq!(spec::corectl::IRQ_PENDING_SOURCE_MASK, 0x7F);
