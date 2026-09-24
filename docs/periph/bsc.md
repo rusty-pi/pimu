@@ -34,11 +34,11 @@ One line for every I²C master on the chip; `PACTL_CS` bits 8 to 15 say which of
 
 | Offset | Name | Access | Width | Sources |
 |---|---|---|---|---|
-| `0x000` | [`C`](#c) | rw | 32 | 2, best high |
+| `0x000` | [`C`](#c) | rw | 32 | 3, best high |
 | `0x004` | [`S`](#s) | rw | 32 | 1, best high |
 | `0x008` | [`DLEN`](#dlen) | rw | 32 | 1, best high |
 | `0x00C` | [`A`](#a) | rw | 32 | 1, best high |
-| `0x010` | [`FIFO`](#fifo) | rw | 32 | 2, best high |
+| `0x010` | [`FIFO`](#fifo) | rw | 32 | 1, best high |
 | `0x014` | [`DIV`](#div) | rw | 32 | 4, best high |
 | `0x018` | [`DEL`](#del) | rw | 32 | 1, best high |
 | `0x01C` | [`CLKT`](#clkt) | rw | 32 | 2, best high |
@@ -59,6 +59,7 @@ Control. start4 reads a register in one of two ways. Either it sets `ST` for the
 Sources:
 
 - datasheet (high): BCM2711 ARM Peripherals, §3.2 (BSC): `C`
+- measured (medium): 4B rev 1.5: with rpi-unboxed's own queued-read order every PMIC register answered with its own number, and only writing the register out and waiting for `DONE` before arming the read read it (0x1B reg 0x09 -> 40, which `vcgencmd measure_volts sdram_c` confirms as 1.1 V). Stock uses the queued order on the same silicon and gets the register, so some detail of the two sequences differs and is not identified yet: the model keeps the queued read selecting the register, which is what lets stock's own boot through (`testdata/boot/firmware.toml`).
 - trace (high): pinned start4: queued read at `0x3ECF0FD8` / `0x3ECF1150` with the FIFO writes at `0x3ECF115A` after it; write-then-read at `0x3ECF0FD8`, FIFO at `0x3ECF1046`, then `0x3ECF1100`; the common end at `0x3ECF2F92`, `0x3ECF2FFC`, `0x3ECF1826` / `0x3ECF185A`, `0x3ECF3028`
 
 `READ` sources:
@@ -164,12 +165,11 @@ Sources:
 
 Offset `0x010` · access `rw` · 32 bits
 
-Data FIFO, 16 bytes each way. Which way it faces follows `C.READ` at the moment of the write: a register byte pushed after `ST | READ` has been set is not a register select, it lands in the receive FIFO and the driver reads its own byte straight back. Writing the register out and waiting for `DONE` before arming the read is what selects a register.
+Data FIFO, 16 bytes each way.
 
 Sources:
 
 - datasheet (high): BCM2711 ARM Peripherals, §3.2 (BSC): `FIFO`
-- measured (high): 4B rev 1.5: every PMIC register answered with its own number (0x1B reg 0x09 -> 9, core rail 0x25 -> 37 read as 0.37 V) until `rpi-unboxed` 65a4b8c/f20137b wrote the register out first; 0x1B reg 0x09 then read 40, matching `vcgencmd measure_volts sdram_c` = 1.1 V on stock firmware — _supersedes the earlier assumption that both orders select the same register; the queued-read order at `0x3ECF115A` cannot be a plain register read on silicon_
 
 ## `DIV`
 

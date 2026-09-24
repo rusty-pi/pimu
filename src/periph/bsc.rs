@@ -93,12 +93,8 @@ pub struct Bsc {
     /// A read `ST` that arrived while a write was still stalled for data. The
     /// same transport, when `cfg[8] & 2` is clear, programs the read phase
     /// immediately after the write phase and only then pushes the register
-    /// byte. Arming the read switches the FIFO to the receive path, so that
-    /// register byte is not a register select at all: it lands in the receive
-    /// FIFO and the driver reads its own byte straight back. Measured on a
-    /// 4B rev 1.5, where every PMIC register answered with its own number
-    /// until `rpi-unboxed` 65a4b8c/f20137b wrote the register out first.
-    /// Holds the read length.
+    /// byte. The read has to wait for the write to actually happen or it would
+    /// sample the wrong register. Holds the read length.
     deferred_read: Option<usize>,
     /// The PMICs on the bus. `None` (with `expander` also `None`) for an
     /// instance with nothing attached — every address then goes unACKed,
@@ -421,16 +417,7 @@ impl MmioDevice for Bsc {
             DLEN => self.dlen = value,
             A => self.addr = value,
             FIFO => {
-                if let Some(len) = self.deferred_read.take() {
-                    // The read is already armed, so the FIFO is the receive
-                    // path: this byte never reaches the slave as a register
-                    // select, it comes back as the read's data.
-                    self.writing = None;
-                    self.rx.clear();
-                    self.rx.push_back(value as u8);
-                    let acked = self.addressed();
-                    self.finish(acked, len);
-                } else if self.writing.is_some() {
+                if self.writing.is_some() {
                     // A write transfer is already running: the byte goes
                     // straight out on the wire.
                     self.push_to_slave(value as u8);
