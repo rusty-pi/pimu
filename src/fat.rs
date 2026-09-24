@@ -15,7 +15,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 
 use crate::periph::disk::BLOCK_SIZE;
 
@@ -209,7 +209,20 @@ impl Builder {
                 let What::File { path, len } = &item.what else {
                     continue;
                 };
-                let clusters = (len.div_ceil(Self::cluster_bytes() as u64) as u32).max(1);
+                // A FAT32 entry carries the size in 32 bits, so nothing that
+                // big can go on a card at all.
+                if *len > u32::MAX as u64 {
+                    bail!(
+                        "{}: {len} bytes is more than a FAT32 volume can hold",
+                        path.display()
+                    );
+                }
+                // An empty file has no clusters, and its entry says cluster 0.
+                if *len == 0 {
+                    files.push((d, i, 0));
+                    continue;
+                }
+                let clusters = len.div_ceil(Self::cluster_bytes() as u64) as u32;
                 let first = chain(&mut fat, clusters);
                 files.push((d, i, first));
                 extents.push(Extent {
@@ -308,11 +321,7 @@ impl Builder {
             }
             let (cluster, size, attr) = match &item.what {
                 What::Dir(child) => (clusters_of[*child], 0, 0x10),
-                What::File { len, .. } => (
-                    file_cluster(d, i),
-                    u32::try_from(*len).unwrap_or(u32::MAX),
-                    0x20,
-                ),
+                What::File { len, .. } => (file_cluster(d, i), *len as u32, 0x20),
             };
             out.extend_from_slice(&short_entry(&item.short, cluster, size, attr));
         }

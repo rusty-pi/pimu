@@ -24,6 +24,7 @@ fn mtools_reads_back_what_the_card_was_built_from() {
     write(&dir.join("start4.elf"), &vec![0xa5; 40 * 1024]);
     write(&dir.join("bcm2711-rpi-4-b.dtb"), b"dtb");
     write(&dir.join("config.txt"), b"arm_64bit=1\n");
+    write(&dir.join("empty.txt"), b"");
     std::fs::create_dir(dir.join("overlays")).unwrap();
     write(&dir.join("overlays/vc4-kms-v3d.dtbo"), b"one");
     write(&dir.join("overlays/vc4-kms-v3d-pi4.dtbo"), b"two");
@@ -37,6 +38,7 @@ fn mtools_reads_back_what_the_card_was_built_from() {
         "::/bcm2711-rpi-4-b.dtb",
         "::/config.txt",
         "::/overlays",
+        "::/empty.txt",
     ] {
         assert!(root.contains(name), "{name} missing from\n{root}");
     }
