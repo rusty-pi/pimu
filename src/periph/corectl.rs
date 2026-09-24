@@ -24,7 +24,8 @@ use std::collections::BTreeMap;
 use crate::bus::{BusResult, MmioDevice, Width};
 use crate::log::{Channel, Log};
 use crate::spec::corectl::{
-    INSTANCE_STRIDE as CORE_STRIDE, IRQ_PENDING, IRQ_PENDING_BITS, IRQ_PENDING_BITS_COUNT,
+    INSTANCE_STRIDE as CORE_STRIDE, IRQ_GATE, IRQ_PENDING, IRQ_PENDING_BITS, IRQ_PENDING_BITS_CLR,
+    IRQ_PENDING_BITS_COUNT, IRQ_PENDING_BITS_SET, IRQ_PENDING_BITS_SET_RESET as TAG,
     IRQ_PENDING_BITS_STRIDE, IRQ_PENDING_SOURCE_MASK, IRQ_PENDING_SOURCE_SHIFT,
     IRQ_PENDING_VALID_MASK, IRQ_PRIO, IRQ_PRIO_COUNT, IRQ_PRIO_STRIDE, VBASE, VBASE_ADDR_MASK,
     WAKEUP, WAKEUP_ADDR_MASK, WAKEUP_ADDR_SHIFT,
@@ -34,7 +35,16 @@ use crate::spec::Coverage;
 /// Everything else in the bank is plain read-back storage.
 pub const COVERAGE: Coverage = Coverage {
     block: "corectl",
-    decoded: &[IRQ_PENDING, IRQ_PRIO, VBASE, WAKEUP, IRQ_PENDING_BITS],
+    decoded: &[
+        IRQ_GATE,
+        IRQ_PENDING,
+        IRQ_PRIO,
+        VBASE,
+        WAKEUP,
+        IRQ_PENDING_BITS,
+        IRQ_PENDING_BITS_SET,
+        IRQ_PENDING_BITS_CLR,
+    ],
 };
 
 // Register notes beyond what `specs/corectl.toml` records:
@@ -123,7 +133,19 @@ impl CoreCtl {
     pub fn irq_priority(&self, core: u32, src: u32) -> u8 {
         let word = core * CORE_STRIDE + IRQ_PRIO + ((src >> 3) % IRQ_PRIO_COUNT) * IRQ_PRIO_STRIDE;
         let field = (src & 7) * 4;
-        ((self.storage.get(&word).copied().unwrap_or(0) >> field) & 0xF) as u8
+        let prio = ((self.storage.get(&word).copied().unwrap_or(0) >> field) & 0xF) as u8;
+        if prio <= self.irq_gate(core) {
+            return 0;
+        }
+        prio
+    }
+
+    /// `core`'s delivery gate: a source enabled at this priority or below waits
+    /// until the gate drops. Zero out of reset, and no firmware the model boots
+    /// writes it.
+    fn irq_gate(&self, core: u32) -> u8 {
+        let off = core * CORE_STRIDE + IRQ_GATE;
+        (self.storage.get(&off).copied().unwrap_or(0) & 0xF) as u8
     }
 }
 
@@ -137,6 +159,22 @@ fn bank(offset: u32) -> (u32, u32) {
 fn element(off: u32, base: u32, count: u32, stride: u32) -> Option<u32> {
     let rel = off.checked_sub(base)?;
     (rel % stride == 0 && rel / stride < count).then_some(rel / stride)
+}
+
+/// Whether a read of `off` (within one bank) answers the block tag: the hole
+/// before [`IRQ_PENDING_BITS`] and everything past the last register.
+fn tag_read(off: u32) -> bool {
+    off == 0x3C || (IRQ_PENDING_BITS_SET..=0xFF).contains(&off)
+}
+
+/// Decode a write-only alias offset into `(which alias, word)`.
+fn alias_word(off: u32) -> Option<(u32, u32)> {
+    for base in [IRQ_PENDING_BITS_SET, IRQ_PENDING_BITS_CLR] {
+        if let Some(word) = element(off, base, IRQ_PENDING_BITS_COUNT, IRQ_PENDING_BITS_STRIDE) {
+            return Some((base, word));
+        }
+    }
+    None
 }
 
 /// Decode a pending-bitmask offset into `(core, word)`; `word` 0 covers sources
@@ -172,6 +210,12 @@ impl MmioDevice for CoreCtl {
                     | ((src << IRQ_PENDING_SOURCE_SHIFT) & IRQ_PENDING_SOURCE_MASK));
             }
         }
+        if off == VBASE || tag_read(off) {
+            // `VBASE` does not read back at all, and the words past the last
+            // register answer the block's own tag, the way `GPSET` answers
+            // `"gpio"`.
+            return Ok(if off == VBASE { 0 } else { TAG });
+        }
         Ok(self.storage.get(&offset).copied().unwrap_or(0))
     }
 
@@ -196,6 +240,23 @@ impl MmioDevice for CoreCtl {
                 }
             }
         }
+        // The write-only aliases set or clear bits of the pending word rather
+        // than replacing it; fold them in and let the plain path below see the
+        // result.
+        let (offset, value) = match alias_word(off) {
+            Some((base, word)) => {
+                let target = core * CORE_STRIDE + IRQ_PENDING_BITS + word * IRQ_PENDING_BITS_STRIDE;
+                let prev = self.storage.get(&target).copied().unwrap_or(0);
+                let folded = if base == IRQ_PENDING_BITS_SET {
+                    prev | value
+                } else {
+                    prev & !value
+                };
+                (target, folded)
+            }
+            None => (offset, value),
+        };
+        let (core, off) = bank(offset);
         // A 0 -> 1 transition in a pending word is the firmware raising that
         // source on that core; queue it for delivery. Clearing bits is the
         // ISR's acknowledge and needs no action.
@@ -271,9 +332,82 @@ mod tests {
         // until it moved to 0xFEC2A000.
         let mut c = CoreCtl::new();
         c.write(VBASE, Width::Word, 0xFEC2_B7C0).unwrap();
-        assert_eq!(c.read(VBASE, Width::Word).unwrap(), 0xFEC2_B600);
         assert_eq!(c.take_vbase(0), Some(0xFEC2_B600));
         c.write(VBASE, Width::Word, 0xFEC2_A000).unwrap();
+        assert_eq!(c.take_vbase(0), Some(0xFEC2_A000));
+    }
+
+    #[test]
+    fn the_write_only_aliases_set_and_clear_the_pending_word() {
+        // Raspberry Pi 4B d03115: `+0x48 <- 0x80` makes `+0x40` read `0x80`,
+        // and `+0x50 <- 0x80` puts it back to 0, with the raw source lines
+        // untouched either way.
+        let mut c = CoreCtl::new();
+        c.write(IRQ_PENDING_BITS_SET, Width::Word, 0x80).unwrap();
+        assert_eq!(c.read(IRQ_PENDING_BITS, Width::Word).unwrap(), 0x80);
+        assert_eq!(c.take_sw_raised(), Some((0, SYS_IRQ_SRC + 7)));
+        c.write(IRQ_PENDING_BITS_CLR, Width::Word, 0x80).unwrap();
+        assert_eq!(c.read(IRQ_PENDING_BITS, Width::Word).unwrap(), 0);
+        assert_eq!(c.take_sw_raised(), None);
+    }
+
+    #[test]
+    fn an_alias_write_reaches_its_own_cores_bank_and_word() {
+        let mut c = CoreCtl::new();
+        c.write(
+            CORE_STRIDE + IRQ_PENDING_BITS_SET + IRQ_PENDING_BITS_STRIDE,
+            Width::Word,
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            c.read(
+                CORE_STRIDE + IRQ_PENDING_BITS + IRQ_PENDING_BITS_STRIDE,
+                Width::Word
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(c.take_sw_raised(), Some((1, SYS_IRQ_SRC + 32)));
+    }
+
+    #[test]
+    fn the_write_only_offsets_read_back_the_block_tag() {
+        // Raspberry Pi 4B d03115: `+0x3C` and every word from `+0x48` to
+        // `+0xFF` answer `"INTE"`, in both banks.
+        let mut c = CoreCtl::new();
+        for off in [0x3C, IRQ_PENDING_BITS_SET, IRQ_PENDING_BITS_CLR, 0x60, 0xFC] {
+            assert_eq!(c.read(off, Width::Word).unwrap(), TAG, "{off:#x}");
+            assert_eq!(
+                c.read(CORE_STRIDE + off, Width::Word).unwrap(),
+                TAG,
+                "{off:#x}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_gate_holds_a_source_until_it_drops() {
+        // Raspberry Pi 4B d03115: with `IRQ_GATE` at 0xf a source enabled at
+        // priority 1 and forced stayed undelivered, and went in as soon as the
+        // gate went back to 0.
+        let mut c = CoreCtl::new();
+        c.write(IRQ_PRIO, Width::Word, 1).unwrap();
+        assert_eq!(c.irq_priority(0, SYS_IRQ_SRC), 1);
+        c.write(IRQ_GATE, Width::Word, 0xF).unwrap();
+        assert_eq!(c.irq_priority(0, SYS_IRQ_SRC), 0);
+        assert_eq!(c.irq_priority(1, SYS_IRQ_SRC), 0);
+        c.write(IRQ_GATE, Width::Word, 0).unwrap();
+        assert_eq!(c.irq_priority(0, SYS_IRQ_SRC), 1);
+    }
+
+    #[test]
+    fn vbase_does_not_read_back() {
+        // Raspberry Pi 4B d03115: the register reads 0 while the core is
+        // demonstrably vectoring through the table last written to it.
+        let mut c = CoreCtl::new();
+        c.write(VBASE, Width::Word, 0xFEC2_A000).unwrap();
+        assert_eq!(c.read(VBASE, Width::Word).unwrap(), 0);
         assert_eq!(c.take_vbase(0), Some(0xFEC2_A000));
     }
 

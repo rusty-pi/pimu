@@ -5,7 +5,7 @@ size            = 0x1000
 summary         = "VPU core control: per-core boot handshake and interrupt controller"
 instances       = 2
 instance_stride = 0x800
-notes           = "One register bank per VPU core: core 0 at `+0x000`, core 1 at `+0x800`. start4 reaches its bank through a per-core pointer, so both cores run the same code."
+notes           = "One register bank per VPU core: core 0 at `+0x000`, core 1 at `+0x800`. start4 reaches its bank through a per-core pointer, so both cores run the same code. Each bank holds registers up to `+0x44`; `+0x3C` and everything from `+0x48` to the end of the measured window answers the block's own tag, `0x494E5445` — `\"INTE\"` big-endian — the way the GPIO block answers `0x6770696F` (`specs/gpio.toml`)."
 
 [[block.source]]
 kind       = "decompile"
@@ -19,9 +19,36 @@ confidence = "high"
 note       = "the window was mapped `0x100` wide until commit 7bd21a3, which hid core 1's bank"
 
 [[block.source]]
+kind       = "measured"
+ref        = "Raspberry Pi 4B d03115 (`rpi-unboxed` start4 `2431cea8`, Linux idle), `/dev/mem`: `0xFE00203C` and every word from `0xFE002048` to `0xFE0020FF` read `0x494E5445`, and so do the same offsets in core 1's bank from `0xFE002800`. Reads one word at a time — back-to-back 32-bit reads of this window through one `mmap` alias, and the second read answers the first offset's value."
+confidence = "high"
+
+[[block.source]]
 kind       = "inferred"
 ref        = "size: the system timer starts at `0x7E003000`"
 confidence = "medium"
+
+[[register]]
+name   = "IRQ_GATE"
+offset = 0x00
+access = "rw"
+notes  = "Core-wide delivery gate, four bits wide. Zero delivers; a value at or above a source's priority holds it pending until the gate drops again. Zero on a running board, so nothing the model boots ever raises it."
+
+[[register.source]]
+kind       = "measured"
+ref        = "Raspberry Pi 4B d03115 (`rpi-unboxed` start4 `2431cea8`, Linux idle), `/dev/mem` at `0xFE002000`: reads `0x0`, takes `0xf`, reads it back. With `0xf` written, a source forced through `IRQ_PENDING_BITS_SET` and enabled at priority 1 in `IRQ_PRIO` stayed undelivered for as long as the gate was up — the firmware's own handler for it did not run — and was delivered the moment the gate went back to `0x0`. Priority 7 was held the same way."
+confidence = "high"
+
+[[register.source]]
+kind       = "measured"
+ref        = "Raspberry Pi 4B d03115, `/dev/mem`: core 1's copy at `0xFE002800` takes `0xf` and reads it back while `0xFE002000` stays `0x0`, so the gate is per core."
+confidence = "high"
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "Broadcom `bcm2708_chip/intctrl0.h`: `IC0_C`, RW, mask `0x0000000f`"
+confidence = "medium"
+note       = "the header gives no fields, so whether the four bits are a priority threshold or a plain block is ours, from the two priorities measured"
 
 [[register]]
 name   = "IRQ_PENDING"
@@ -56,12 +83,35 @@ confidence = "medium"
 note       = "the dispatcher keeps 7 bits after the OR, so bit 6 may belong to the field too"
 
 [[register]]
+name   = "IRQ_RAW"
+offset = 0x08
+count  = 2
+stride = 4
+access = "r"
+notes  = "The raw source lines, one bit per source, word 0 for sources 64..95 and word 1 for 96..127. A bit is up while the device holds its line up, whether or not `IRQ_PRIO` enables the source. Disjoint from `IRQ_PENDING_BITS`: a source posted in software shows up there and never here. Not modelled — a read answers 0 where a real board answers whichever devices are asserting."
+
+[[register.source]]
+kind       = "measured"
+ref        = "Raspberry Pi 4B d03115 (`rpi-unboxed` start4 `2431cea8`, Linux idle), `/dev/mem`: `0xFE002008` reads `0xa` steadily over 8 samples 3 ms apart — sources 65 and 67, two system-timer compares — while `IRQ_PRIO` enables neither and `IRQ_PENDING` reads 0. `0xFE00200C` reads 0. Both banks read the same value, so the lines are the SoC's and only the enables are per core. Setting `IRQ_PENDING_BITS` bit 7 left it at `0xa`."
+confidence = "high"
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "Broadcom `bcm2708_chip/intctrl0.h`: `IC0_SRC0` and `IC0_SRC1`, both RO"
+confidence = "medium"
+
+[[register]]
 name   = "IRQ_PRIO"
 offset = 0x10
 count  = 8
 stride = 4
 access = "rw"
 notes  = "One 4-bit enable/priority field per interrupt source, eight per word: source `src` (64 to 127) lives in word `(src >> 3) & 7` at bit `(src & 7) * 4`. Zero disables the source; a non-zero value enables it at that priority. The vector is the interrupt number, 64 + source, not this field. The 64 sources are the SoC's VC peripheral IRQs, offset by 64: source `64 + n` is VC peripheral IRQ `n`, which is also the number the ARM's device tree writes as `GIC_SPI n` (the GIC id is 32 above that again). So the names are: 64-67 `Timer 0`-`Timer 3` (the system timer's compare channels), 68-70 `H264 0`-`H264 2`, 71 `JPEG`, 72 `ISP`, 73 `USB`, 74 `V3D`, 75 `Transposer`, 76-79 `Multicore Sync 0`-`Multicore Sync 3`, 80-86 `DMA 0`-`DMA 6`, 87 `DMA 7 & 8`, 88 `DMA 9 & 10`, 89-92 `DMA 11`-`DMA 14`, 93 `AUX`, 94 `ARM`, 95 `DMA 15`, 96 `HDMI CEC`, 97 `HVS`, 98 `RPIVID`, 99 `SDC`, 100 `DSI 0`, 101 `Pixel Valve 2`, 102-103 `Camera 0`/`Camera 1`, 104-105 `HDMI 0`/`HDMI 1`, 106 `Pixel Valve 3`, 107 `SPI/BSC Slave`, 108 `DSI 1`, 109 `Pixel Valve 0`, 110 `Pixel Valve 1 & 4`, 111 `CPR`, 112 `SMI`, 113-116 `GPIO 0`-`GPIO 3`, 117 all I²C ORed, 118 all SPI ORed, 119 `PCM/I2S`, 120 `SDHOST`, 121 all PL011 UARTs ORed, 122 all ETH_PCIe L2 lines ORed, 123 `VEC`, 124 `CPG`, 125 `RNG`, 126 `EMMC & EMMC2`, 127 `ETH_PCIe secure`. An ORed source says only that one of the devices behind it has something pending; which one is read from `AUX_IRQ` for 93, from `PACTL_CS` (`0x7E204E00`, not modelled) for 117, 118 and 121, and from each device's own status register otherwise."
+
+[[register.source]]
+kind       = "measured"
+ref        = "Raspberry Pi 4B d03115 (`rpi-unboxed` start4 `2431cea8`, Linux idle), `/dev/mem`: word 0 at `0xFE002010` reads `0x00000101` and word 3 at `0xFE00201C` reads `0x01000000` — what that firmware programs for the system timer's first compare (source 64, word 0 field 0) and the ARM's mailbox (source 94, word 3 field 6); words 1, 2 and 4 to 7 read 0. Core 1's eight words from `0xFE002810` all read 0, so the second bank is a bank and not an alias. Writing field 7 of word 0 and forcing source 71 vectored it, which pins the addressing."
+confidence = "high"
 
 [[register.source]]
 kind       = "decompile"
@@ -98,8 +148,13 @@ note       = "the datasheet numbers them 0 to 63; every source this model identi
 [[register]]
 name   = "VBASE"
 offset = 0x30
-access = "rw"
-notes  = "Exception-vector base for this core. The core takes its vector from the base as it stands when the exception comes, so every write moves the table: the bootloader's halt points it at its own table and clears it again once woken, and start4, which runs after a wake without a reset in between, writes its own. Only bits 31:9 are kept, so the table has to be 512-byte aligned -- 128 entries of four bytes, the whole table -- and a misaligned one is fetched from the address below it with no indication that anything is wrong."
+access = "w"
+notes  = "Exception-vector base for this core. The core takes its vector from the base as it stands when the exception comes, so every write moves the table: the bootloader's halt points it at its own table and clears it again once woken, and start4, which runs after a wake without a reset in between, writes its own. Only bits 31:9 are kept, so the table has to be 512-byte aligned -- 128 entries of four bytes, the whole table -- and a misaligned one is fetched from the address below it with no indication that anything is wrong. Write-only: a real board reads 0 here whatever the live vector base is."
+
+[[register.source]]
+kind       = "measured"
+ref        = "Raspberry Pi 4B d03115 (`rpi-unboxed` start4 `2431cea8`, Linux idle), `/dev/mem`: `0xFE002030` reads `0x0` on both banks, yet a source forced through `IRQ_PENDING_BITS_SET` and enabled in `IRQ_PRIO` vectored into the live firmware's handler, which rewrote `IRQ_PRIO` word 0 back to its own enables. So the zero is the register not reading back, not a cleared vector base. Core 1's copy at `0xFE002830` behaves the same: written `0x3EC2A000`, reads `0x0`."
+confidence = "high"
 
 [[register.source]]
 kind       = "decompile"
@@ -194,3 +249,46 @@ confidence = "high"
 kind       = "trace"
 ref        = "the clock service re-posts its own source 66 this way; sources 78 / 79 are the inter-core reschedule IPI"
 confidence = "high"
+
+[[register]]
+name   = "IRQ_PENDING_BITS_SET"
+offset = 0x48
+count  = 2
+stride = 4
+access = "w"
+reset  = 0x494E5445
+notes  = "Write-only alias of `IRQ_PENDING_BITS`: the bits written are raised, the zeroes left alone. A read answers the block tag."
+
+[[register.source]]
+kind       = "measured"
+ref        = "Raspberry Pi 4B d03115 (`rpi-unboxed` start4 `2431cea8`), `/dev/mem`: `0xFE002040` read `0x0`, `0x80` written to `0xFE002048`, `0xFE002040` then read `0x80`"
+confidence = "high"
+
+[[register.source]]
+kind       = "measured"
+ref        = "Raspberry Pi 4B d03115, `/dev/mem`: core 1's alias at `0xFE002848` raises a bit in `0xFE002840` and leaves core 0's `0xFE002040` at `0x0`, and `0xFE002844` takes a write of its own."
+confidence = "high"
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "Broadcom `bcm2708_chip/intctrl0.h`: `IC0_FORCE0_SET` and `IC0_FORCE1_SET`"
+confidence = "medium"
+
+[[register]]
+name   = "IRQ_PENDING_BITS_CLR"
+offset = 0x50
+count  = 2
+stride = 4
+access = "w"
+reset  = 0x494E5445
+notes  = "Write-only alias of `IRQ_PENDING_BITS`: the bits written are cleared. A read answers the block tag."
+
+[[register.source]]
+kind       = "measured"
+ref        = "Raspberry Pi 4B d03115 (`rpi-unboxed` start4 `2431cea8`), `/dev/mem`: with `0xFE002040` reading `0x80`, `0x80` written to `0xFE002050` left it reading `0x0`"
+confidence = "high"
+
+[[register.source]]
+kind       = "datasheet"
+ref        = "Broadcom `bcm2708_chip/intctrl0.h`: `IC0_FORCE0_CLR` and `IC0_FORCE1_CLR`"
+confidence = "medium"

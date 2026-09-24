@@ -7,23 +7,40 @@
 - Size: `0x1000`
 - Banks: 2 × `0x800`; offsets below are for bank 0
 
-One register bank per VPU core: core 0 at `+0x000`, core 1 at `+0x800`. start4 reaches its bank through a per-core pointer, so both cores run the same code.
+One register bank per VPU core: core 0 at `+0x000`, core 1 at `+0x800`. start4 reaches its bank through a per-core pointer, so both cores run the same code. Each bank holds registers up to `+0x44`; `+0x3C` and everything from `+0x48` to the end of the measured window answers the block's own tag, `0x494E5445` — `"INTE"` big-endian — the way the GPIO block answers `0x6770696F` (`specs/gpio.toml`).
 
 Sources:
 
 - decompile (high): per-core init `0x3EC3E938` sets `[blk+12] = 0x7E002000 + core * 0x800`
 - trace (high): `--log irqen` and the peripheral stub show core 1 writing `0x7E002810..0x7E002844` — _the window was mapped `0x100` wide until commit 7bd21a3, which hid core 1's bank_
+- measured (high): Raspberry Pi 4B d03115 (`rpi-unboxed` start4 `2431cea8`, Linux idle), `/dev/mem`: `0xFE00203C` and every word from `0xFE002048` to `0xFE0020FF` read `0x494E5445`, and so do the same offsets in core 1's bank from `0xFE002800`. Reads one word at a time — back-to-back 32-bit reads of this window through one `mmap` alias, and the second read answers the first offset's value.
 - inferred (medium): size: the system timer starts at `0x7E003000`
 
 ## Register map
 
 | Offset | Name | Access | Width | Sources |
 |---|---|---|---|---|
+| `0x000` | [`IRQ_GATE`](#irq_gate) | rw | 32 | 3, best high |
 | `0x004` | [`IRQ_PENDING`](#irq_pending) | r | 32 | 1, best medium |
-| `0x010`–`0x02C` (8 × 0x4) | [`IRQ_PRIO`](#irq_prio) | rw | 32 | 6, best high |
-| `0x030` | [`VBASE`](#vbase) | rw | 32 | 3, best high |
+| `0x008`–`0x00C` (2 × 0x4) | [`IRQ_RAW`](#irq_raw) | r | 32 | 2, best high |
+| `0x010`–`0x02C` (8 × 0x4) | [`IRQ_PRIO`](#irq_prio) | rw | 32 | 7, best high |
+| `0x030` | [`VBASE`](#vbase) | w | 32 | 4, best high |
 | `0x034` | [`WAKEUP`](#wakeup) | rw | 32 | 5, best high |
 | `0x040`–`0x044` (2 × 0x4) | [`IRQ_PENDING_BITS`](#irq_pending_bits) | rw | 32 | 2, best high |
+| `0x048`–`0x04C` (2 × 0x4) | [`IRQ_PENDING_BITS_SET`](#irq_pending_bits_set) | w | 32 | 3, best high |
+| `0x050`–`0x054` (2 × 0x4) | [`IRQ_PENDING_BITS_CLR`](#irq_pending_bits_clr) | w | 32 | 2, best high |
+
+## `IRQ_GATE`
+
+Offset `0x000` · access `rw` · 32 bits
+
+Core-wide delivery gate, four bits wide. Zero delivers; a value at or above a source's priority holds it pending until the gate drops again. Zero on a running board, so nothing the model boots ever raises it.
+
+Sources:
+
+- measured (high): Raspberry Pi 4B d03115 (`rpi-unboxed` start4 `2431cea8`, Linux idle), `/dev/mem` at `0xFE002000`: reads `0x0`, takes `0xf`, reads it back. With `0xf` written, a source forced through `IRQ_PENDING_BITS_SET` and enabled at priority 1 in `IRQ_PRIO` stayed undelivered for as long as the gate was up — the firmware's own handler for it did not run — and was delivered the moment the gate went back to `0x0`. Priority 7 was held the same way.
+- measured (high): Raspberry Pi 4B d03115, `/dev/mem`: core 1's copy at `0xFE002800` takes `0xf` and reads it back while `0xFE002000` stays `0x0`, so the gate is per core.
+- datasheet (medium): Broadcom `bcm2708_chip/intctrl0.h`: `IC0_C`, RW, mask `0x0000000f` — _the header gives no fields, so whether the four bits are a priority threshold or a plain block is ours, from the two priorities measured_
 
 ## `IRQ_PENDING`
 
@@ -48,6 +65,17 @@ Sources:
 
 - decompile (medium): dispatcher `0x3EC3E9BC`: `or r0, 64`, then a 7-bit mask — _the dispatcher keeps 7 bits after the OR, so bit 6 may belong to the field too_
 
+## `IRQ_RAW`
+
+Offset `0x008`, 2 elements 0x4 apart · access `r` · 32 bits
+
+The raw source lines, one bit per source, word 0 for sources 64..95 and word 1 for 96..127. A bit is up while the device holds its line up, whether or not `IRQ_PRIO` enables the source. Disjoint from `IRQ_PENDING_BITS`: a source posted in software shows up there and never here. Not modelled — a read answers 0 where a real board answers whichever devices are asserting.
+
+Sources:
+
+- measured (high): Raspberry Pi 4B d03115 (`rpi-unboxed` start4 `2431cea8`, Linux idle), `/dev/mem`: `0xFE002008` reads `0xa` steadily over 8 samples 3 ms apart — sources 65 and 67, two system-timer compares — while `IRQ_PRIO` enables neither and `IRQ_PENDING` reads 0. `0xFE00200C` reads 0. Both banks read the same value, so the lines are the SoC's and only the enables are per core. Setting `IRQ_PENDING_BITS` bit 7 left it at `0xa`.
+- datasheet (medium): Broadcom `bcm2708_chip/intctrl0.h`: `IC0_SRC0` and `IC0_SRC1`, both RO
+
 ## `IRQ_PRIO`
 
 Offset `0x010`, 8 elements 0x4 apart · access `rw` · 32 bits
@@ -56,6 +84,7 @@ One 4-bit enable/priority field per interrupt source, eight per word: source `sr
 
 Sources:
 
+- measured (high): Raspberry Pi 4B d03115 (`rpi-unboxed` start4 `2431cea8`, Linux idle), `/dev/mem`: word 0 at `0xFE002010` reads `0x00000101` and word 3 at `0xFE00201C` reads `0x01000000` — what that firmware programs for the system timer's first compare (source 64, word 0 field 0) and the ARM's mailbox (source 94, word 3 field 6); words 1, 2 and 4 to 7 read 0. Core 1's eight words from `0xFE002810` all read 0, so the second bank is a bank and not an alias. Writing field 7 of word 0 and forcing source 71 vectored it, which pins the addressing.
 - decompile (high): secure service `0xCEC006A6` (`r1` core, `r2` source, `r3` priority): `lsr r4, r2, 3; bmask r4, 3` picks the word from `0x7E002010 + core * 0x800`, then `bmask r2, 3` the field — _the non-secure `enable_irq_source(src, prio)` at `0x3ED72374` masks the word with `bmask r3, 2` instead; start4 only calls it for sources 64 and 78, which land in the same words either way_
 - trace (high): `linux`, `RVF_TRACE_MMIO=0x7e002000-0x7e002060`: the secure service at `0xFEC006CA` writes all eight words, `+0x20 <- 0x10` (source 97, the HVS), `+0x28 <- 0x10000000` (119) and `+0x2c <- 0x100000` (125, the RNG) among them
 - trace (high): start4 calls `enable_irq_source(64, 1)` for its ThreadX tick
@@ -65,16 +94,17 @@ Sources:
 
 ## `VBASE`
 
-Offset `0x030` · access `rw` · 32 bits
+Offset `0x030` · access `w` · 32 bits
 
-Exception-vector base for this core. The core takes its vector from the base as it stands when the exception comes, so every write moves the table: the bootloader's halt points it at its own table and clears it again once woken, and start4, which runs after a wake without a reset in between, writes its own. Only bits 31:9 are kept, so the table has to be 512-byte aligned -- 128 entries of four bytes, the whole table -- and a misaligned one is fetched from the address below it with no indication that anything is wrong.
+Exception-vector base for this core. The core takes its vector from the base as it stands when the exception comes, so every write moves the table: the bootloader's halt points it at its own table and clears it again once woken, and start4, which runs after a wake without a reset in between, writes its own. Only bits 31:9 are kept, so the table has to be 512-byte aligned -- 128 entries of four bytes, the whole table -- and a misaligned one is fetched from the address below it with no indication that anything is wrong. Write-only: a real board reads 0 here whatever the live vector base is.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
-| 31:9 | `ADDR` | rw | The table's address. The low nine bits read back as zero however they are written. |
+| 31:9 | `ADDR` | w | The table's address. The low nine bits read back as zero however they are written. |
 
 Sources:
 
+- measured (high): Raspberry Pi 4B d03115 (`rpi-unboxed` start4 `2431cea8`, Linux idle), `/dev/mem`: `0xFE002030` reads `0x0` on both banks, yet a source forced through `IRQ_PENDING_BITS_SET` and enabled in `IRQ_PRIO` vectored into the live firmware's handler, which rewrote `IRQ_PRIO` word 0 back to its own enables. So the zero is the register not reading back, not a cleared vector base. Core 1's copy at `0xFE002830` behaves the same: written `0x3EC2A000`, reads `0x0`.
 - decompile (high): start4 entry trampoline: `mov r1, #0x7E002030`, then stores the vector base through it
 - trace (high): core-control write trace: `+0x30` and `+0x830` both take `0xFEC01E00`, nothing writes `+0x38` — _replaced an earlier `+0x38` guess for core 1 (commit 06a8447)_
 - decompile (high): bootsys halt `0x800005AC`: zeroes both cores' priority words and `+0x30`, sets vector 116 of a table at `0x80000000`, writes `0x80000000` here (`0x8000063A`) around its `sleep`, then 0 (`0x80000654`); after a wake the boot goes on to start4, which writes `0xFEC01E00`
@@ -116,3 +146,26 @@ Sources:
 
 - decompile (high): `0x3ED01896` raises (`|= 1 << bit`), `0x3ED01792` acknowledges (`&= ~(1 << bit)`), `0x3ED01980` reads one bit
 - trace (high): the clock service re-posts its own source 66 this way; sources 78 / 79 are the inter-core reschedule IPI
+
+## `IRQ_PENDING_BITS_SET`
+
+Offset `0x048`, 2 elements 0x4 apart · access `w` · 32 bits · reset `0x494E5445`
+
+Write-only alias of `IRQ_PENDING_BITS`: the bits written are raised, the zeroes left alone. A read answers the block tag.
+
+Sources:
+
+- measured (high): Raspberry Pi 4B d03115 (`rpi-unboxed` start4 `2431cea8`), `/dev/mem`: `0xFE002040` read `0x0`, `0x80` written to `0xFE002048`, `0xFE002040` then read `0x80`
+- measured (high): Raspberry Pi 4B d03115, `/dev/mem`: core 1's alias at `0xFE002848` raises a bit in `0xFE002840` and leaves core 0's `0xFE002040` at `0x0`, and `0xFE002844` takes a write of its own.
+- datasheet (medium): Broadcom `bcm2708_chip/intctrl0.h`: `IC0_FORCE0_SET` and `IC0_FORCE1_SET`
+
+## `IRQ_PENDING_BITS_CLR`
+
+Offset `0x050`, 2 elements 0x4 apart · access `w` · 32 bits · reset `0x494E5445`
+
+Write-only alias of `IRQ_PENDING_BITS`: the bits written are cleared. A read answers the block tag.
+
+Sources:
+
+- measured (high): Raspberry Pi 4B d03115 (`rpi-unboxed` start4 `2431cea8`), `/dev/mem`: with `0xFE002040` reading `0x80`, `0x80` written to `0xFE002050` left it reading `0x0`
+- datasheet (medium): Broadcom `bcm2708_chip/intctrl0.h`: `IC0_FORCE0_CLR` and `IC0_FORCE1_CLR`

@@ -17,7 +17,7 @@ Generated from the TOML specs in [`specs/`](../../specs/); see [`specs/README.md
 | [`bsc`](bsc.md) | vpu | `0x7E205000` | `0x20` | 8 | BSC (I²C master): instance 0 with nothing attached, and the instance the board PMICs and GPIO expander sit on |
 | [`clkmon`](clkmon.md) | vpu | `0x7D5D0000` | `0x10000` | 6 | VPU clock block (PLLs and frequency monitors) below the `0x7E` window |
 | [`cm`](cm.md) | vpu | `0x7E101000` | `0x2000` | 93 | Clock manager, with the A2W PLL control in the same window |
-| [`corectl`](corectl.md) | vpu | `0x7E002000` | `0x1000` | 5 | VPU core control: per-core boot handshake and interrupt controller |
+| [`corectl`](corectl.md) | vpu | `0x7E002000` | `0x1000` | 9 | VPU core control: per-core boot handshake and interrupt controller |
 | [`dma`](dma.md) | vpu | `0x7E007000` | `0x1000` | 11 | Legacy DMA controller: 15 channels `0x100` apart plus the controller-wide interrupt status and enable words |
 | [`dma4`](dma4.md) | vpu | `0x7E007B00` | `0x100` | 4 | DMA4 (`dma40`) channel: the 40-bit DMA engine the bootloader and start4 use |
 | [`dma_vpu`](dma_vpu.md) | vpu | `0x7EE04100` | `0x1000` | 9 | The DMA controller start4's dmalib drives: 16 channel slots, channel 15 at `0x7EE05000` |
