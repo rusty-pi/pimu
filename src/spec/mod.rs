@@ -4,7 +4,7 @@
 //! `spec::mcsync::DOORBELL`, `spec::systimer::CS_M0_MASK` and so on — so a
 //! register offset is written down in exactly one place, next to where it came
 //! from. The format is described in `specs/README.md`; the same files also
-//! produce the Markdown under `docs/periph/` (`rpi-virt-fw spec-docs`).
+//! produce the Markdown under `docs/periph/` (`pimu spec-docs`).
 
 use std::path::{Path, PathBuf};
 

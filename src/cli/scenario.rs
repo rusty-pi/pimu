@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 
-use rpi_virt_fw::harness::boot::{GoldenCheck, RetiredCounts};
-use rpi_virt_fw::harness::{self, GoldenOutcome};
+use pimu::harness::boot::{GoldenCheck, RetiredCounts};
+use pimu::harness::{self, GoldenOutcome};
 
 /// `run <scenario.toml>`: one in-process scenario against its golden
 /// transcript.
@@ -152,8 +152,8 @@ pub fn cmd_boot_check(args: &[String]) -> Result<ExitCode> {
     if from.is_some() && (plan || output.is_some() || max_wall.is_some()) {
         bail!("--from checks an earlier run: it takes no --plan, --output or --max-wall");
     }
-    if std::env::var_os("RVF_BOOT_WALL").is_some() {
-        eprintln!("warning: RVF_BOOT_WALL is gone, use boot-check --max-wall <secs>");
+    if std::env::var_os("PIMU_BOOT_WALL").is_some() {
+        eprintln!("warning: PIMU_BOOT_WALL is gone, use boot-check --max-wall <secs>");
     }
     let path = path.context("boot-check: missing <scenario.toml>")?;
     let mut scn = harness::BootScenario::load(&path)?;

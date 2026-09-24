@@ -1112,7 +1112,7 @@ mod tests {
         assert_eq!(skipped_count("no report here\n"), None);
     }
 
-    /// Cut from a CI run of `linux.toml`, with the `RVF_ARM_PROF` lines a
+    /// Cut from a CI run of `linux.toml`, with the `PIMU_ARM_PROF` lines a
     /// diag build adds.
     const LINUX_REPORT: &str = "\
 end        Until
@@ -1129,7 +1129,7 @@ core1      pc 0x3ec40014  retired 125  end None
             1376195290 instructions, 823 exceptions, 747 interrupts; now pc 0xffffffe5d3f39f18  EL1  sp 0xffffffc080a7bb90
   core 2    still in the armstub
             180077 instructions, 0 exceptions, 0 interrupts; now pc 0x80  EL2  sp 0x0  (wfi)
-  RVF_ARM_PROF: steps by core, EL and 256-byte PC bucket (total 5)
+  PIMU_ARM_PROF: steps by core, EL and 256-byte PC bucket (total 5)
     core 3 EL1 0x00000000000080              5  100.0%
 
 --- property replies (0x7e00_b880) ---

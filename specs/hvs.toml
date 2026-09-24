@@ -116,7 +116,7 @@ confidence = "high"
 
 [[register.field.source]]
 kind       = "measured"
-ref        = "start4 leaves `DISPCTRL = 0x9a0ddfff` with channel 1 running: every enable of all three channels set (`RVF_TRACE_MMIO`)"
+ref        = "start4 leaves `DISPCTRL = 0x9a0ddfff` with channel 1 running: every enable of all three channels set (`PIMU_TRACE_MMIO`)"
 confidence = "high"
 
 [[register.field]]

@@ -18,7 +18,7 @@ note       = "`scripts/make-sd.sh`'s default card carries `dtoverlay=disable-wif
 
 [[block.source]]
 kind       = "trace"
-ref        = "pieeprom-2020-09-03 bootcode, `RVF_TRACE_MMIO=7e300000-7e341000`: its whole SD init runs on this block and EMMC2 is never touched; it writes `0x2` to `0x7E2000D0` first (`0x8000f60a`). The 2026 bootcode and start4 never touch this block."
+ref        = "pieeprom-2020-09-03 bootcode, `PIMU_TRACE_MMIO=7e300000-7e341000`: its whole SD init runs on this block and EMMC2 is never touched; it writes `0x2` to `0x7E2000D0` first (`0x8000f60a`). The 2026 bootcode and start4 never touch this block."
 confidence = "high"
 
 [[block.source]]

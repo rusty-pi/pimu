@@ -39,7 +39,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "trace"
-ref        = "`boot` of the pinned EEPROM, `RVF_TRAP=0x3ED6BC14`: previous code 3 on the first pass, then 2; `RVF_TRACE_MMIO`: one pass reads `MR4` with `+0x9C <- 0x4` and `0x2000004`, then `+0x04 <- 0x0C3406F4` from `0x061A06F4`; 589 calls and 59 reads between the ARM start and the end of the run"
+ref        = "`boot` of the pinned EEPROM, `PIMU_TRAP=0x3ED6BC14`: previous code 3 on the first pass, then 2; `PIMU_TRACE_MMIO`: one pass reads `MR4` with `+0x9C <- 0x4` and `0x2000004`, then `+0x04 <- 0x0C3406F4` from `0x061A06F4`; 589 calls and 59 reads between the ARM start and the end of the run"
 confidence = "high"
 
 [[register.source]]

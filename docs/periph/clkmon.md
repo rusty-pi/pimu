@@ -11,7 +11,7 @@ The AVS monitor (`avs`, `+0x2000`) and the PVT monitors (`pvt`, `+0x8000`) sit i
 Sources:
 
 - decompile (high): start4's clock manager uses this block when the SoC-type switch at `0x3EC635F0` sets `[gp+5476] = 1` (BCM2711)
-- trace (high): `RVF_TRACE_MMIO=0x7d5d0000-0x7d5e0000` over a boot to `arm_loader`
+- trace (high): `PIMU_TRACE_MMIO=0x7d5d0000-0x7d5e0000` over a boot to `arm_loader`
 
 ## Register map
 

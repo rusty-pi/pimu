@@ -3,8 +3,8 @@
 //! Every command-line option can come from a file instead:
 //!
 //! ```text
-//! rpi-virt-fw boot --eeprom firmware/pieeprom.bin --max-wall=600 --stdin
-//! rpi-virt-fw boot --config=<(echo '{"eeprom": "firmware/pieeprom.bin", "max-wall": 600, "stdin": true}')
+//! pimu boot --eeprom firmware/pieeprom.bin --max-wall=600 --stdin
+//! pimu boot --config=<(echo '{"eeprom": "firmware/pieeprom.bin", "max-wall": 600, "stdin": true}')
 //! ```
 //!
 //! The file is a JSON object, or a TOML table. Each key is an option's long

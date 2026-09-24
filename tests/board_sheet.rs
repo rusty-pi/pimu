@@ -25,10 +25,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
-use rpi_virt_fw::periph::pmic::{Pmic, ADDR_1D, ADDR_CORE, ADDR_RAILS};
-use rpi_virt_fw::sheet;
-use rpi_virt_fw::soc::Board;
-use rpi_virt_fw::spec::{self, schema::Bus, schema::Spec};
+use pimu::periph::pmic::{Pmic, ADDR_1D, ADDR_CORE, ADDR_RAILS};
+use pimu::sheet;
+use pimu::soc::Board;
+use pimu::spec::{self, schema::Bus, schema::Spec};
 
 /// One hand-drawn sheet.
 struct Sheet {

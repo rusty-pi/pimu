@@ -187,7 +187,7 @@ impl SysTimer {
     /// the firmware acks it via `CS` and writes a fresh `Cn`. There is no
     /// auto-reload, and the model does not invent one.
     ///
-    /// It used to, behind `RVF_ONESHOT_CMP`, because the tick routing of the
+    /// It used to, behind `PIMU_ONESHOT_CMP`, because the tick routing of the
     /// time never reached `0x3EC40B7C` — the only code that re-arms `C0` — so
     /// without a reload the tick stopped after its first match. That has not
     /// been true since the tick started vectoring through its priority stub

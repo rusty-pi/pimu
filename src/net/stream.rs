@@ -7,7 +7,7 @@
 //! `mkosi serve`, say – or the outside world:
 //!
 //! ```text
-//! rpi-virt-fw boot --eeprom pieeprom.bin --net passt --bootconf BOOT_ORDER=0xf2
+//! pimu boot --eeprom pieeprom.bin --net passt --bootconf BOOT_ORDER=0xf2
 //! ```
 //!
 //! `--net passt` starts passt itself, with one end of a socket pair as its

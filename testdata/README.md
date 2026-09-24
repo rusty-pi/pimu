@@ -4,9 +4,9 @@ Two kinds of scenario live here, plus everything they are checked against.
 
 | Directory | What is in it |
 |---|---|
-| `scenarios/` | In-process scenarios: a hand-assembled VPU payload each, a millisecond each, run by `cargo test` and `rpi-virt-fw run`. |
+| `scenarios/` | In-process scenarios: a hand-assembled VPU payload each, a millisecond each, run by `cargo test` and `pimu run`. |
 | `golden/` | Their golden transcripts. |
-| `boot/` | The real boots: one file per medium and per firmware variant, run by `rpi-virt-fw boot-check` and by CI. Minutes each, and they need firmware blobs that are never committed. |
+| `boot/` | The real boots: one file per medium and per firmware variant, run by `pimu boot-check` and by CI. Minutes each, and they need firmware blobs that are never committed. |
 | `boot/golden/` | Their golden transcripts and retired instruction counts. |
 | `netboot/` | The test-only signing key HTTP boot verifies against ([README](netboot/README.md)). |
 | `arm/` | Fixtures for the ARM tests. |
@@ -80,8 +80,8 @@ counts still needs the re-record, and the diff then documents that it did.
 
 `scenarios/*.toml` run a hand-assembled VPU payload (`src/harness/payloads.rs`)
 against a small machine and diff the console with `golden/`. `cargo test` runs
-them through `tests/scenarios.rs`; `rpi-virt-fw run-all -v` runs them all with
-their transcripts, and `rpi-virt-fw run testdata/scenarios/hello-vpu.toml -v`
+them through `tests/scenarios.rs`; `pimu run-all -v` runs them all with
+their transcripts, and `pimu run testdata/scenarios/hello-vpu.toml -v`
 runs one.
 
 ```toml

@@ -518,18 +518,26 @@ impl Drop for Sink {
     }
 }
 
-/// Warn about every environment variable `--log` replaced that is still set:
-/// an old recipe would otherwise do nothing, silently. `RVF_DBG_<NAME>` is
-/// `--log <name>` now.
+/// Warn about every environment variable a newer spelling replaced that is
+/// still set: an old recipe would otherwise do nothing, silently. `PIMU_DBG_
+/// <NAME>` is `--log <name>` now, and the `RVF_*` switches are `PIMU_*` since
+/// the project was renamed.
 pub fn warn_replaced_env() {
     for (key, _) in std::env::vars_os() {
         let Some(key) = key.to_str() else { continue };
         let now = match key {
             "EMMC_DBG" => "--log emmc".to_string(),
-            "RVF_DBG_TCB" => "RVF_TCB".to_string(),
-            _ => match key.strip_prefix("RVF_DBG_") {
+            "PIMU_DBG_TCB" | "RVF_DBG_TCB" => "PIMU_TCB".to_string(),
+            _ => match key
+                .strip_prefix("PIMU_DBG_")
+                .or_else(|| key.strip_prefix("RVF_DBG_"))
+            {
                 Some(name) => format!("--log {}", name.to_lowercase().replace('_', "-")),
-                None => continue,
+                // Every other `RVF_*` switch kept its name and changed prefix.
+                None => match key.strip_prefix("RVF_") {
+                    Some(rest) => format!("PIMU_{rest}"),
+                    None => continue,
+                },
             },
         };
         eprintln!("warning: {key} is gone, use {now}");

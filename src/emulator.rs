@@ -25,7 +25,7 @@ pub struct Emulator {
     pub arm: Option<crate::arm::ArmSide>,
     pub input: ConsoleInput,
     /// Stream the console to stdout as the run goes, unless
-    /// `RVF_LIVE_CONSOLE=0`. `boot --quiet` turns it off and prints no console
+    /// `PIMU_LIVE_CONSOLE=0`. `boot --quiet` turns it off and prints no console
     /// at all (#100).
     pub stream_console: bool,
     /// Take the steps no per-step check can act on through
@@ -186,9 +186,9 @@ impl Emulator {
             arm: None,
             input: ConsoleInput::default(),
             stream_console: true,
-            // `RVF_SLOW_LOOP=1`: every step through every check, to hold the
+            // `PIMU_SLOW_LOOP=1`: every step through every check, to hold the
             // fast loop to the same run.
-            fast_loop: !crate::diag::ON && std::env::var_os("RVF_SLOW_LOOP").is_none(),
+            fast_loop: !crate::diag::ON && std::env::var_os("PIMU_SLOW_LOOP").is_none(),
             fast_stepped: 0,
         }
     }
@@ -227,12 +227,12 @@ impl Emulator {
         let start = Instant::now();
         // UART output goes to stdout as it happens, so a run can be
         // watched instead of waiting for the summary at the end. Set
-        // `RVF_LIVE_CONSOLE=0` to get the buffered-only behaviour back (the
+        // `PIMU_LIVE_CONSOLE=0` to get the buffered-only behaviour back (the
         // summary still prints the whole console either way, but it is not
         // repeated once it has been streamed), or turn `stream_console` off.
         let mut diag = crate::diag::DiagConfig::from_env();
         diag.live_console &= self.stream_console;
-        // `RVF_MMIO_FROM=<hex>` arms `--trace-mmio`-style logging only once the
+        // `PIMU_MMIO_FROM=<hex>` arms `--trace-mmio`-style logging only once the
         // PC first reaches that address — lets you capture a late boot stage
         // (e.g. start4.elf) without drowning in the bootloader's MMIO.
         if diag.mmio_from.is_some() {
@@ -262,7 +262,7 @@ impl Emulator {
         } = st;
         console.extend_from_slice(&self.machine.take_console_output());
 
-        // Only the first 12 hits of each `RVF_TRAP` address are printed, so
+        // Only the first 12 hits of each `PIMU_TRAP` address are printed, so
         // report the totals as well - the print cap otherwise makes every
         // busy address look like it ran exactly 12 times.
         if crate::diag::ON && !trap_hits.is_empty() {
@@ -273,7 +273,7 @@ impl Emulator {
             }
         }
 
-        // `RVF_TCB=<hex>[,<hex>...]`: at exit, decode each ThreadX thread's
+        // `PIMU_TCB=<hex>[,<hex>...]`: at exit, decode each ThreadX thread's
         // saved context and report the pc it is parked at. `[tcb+8]` is the
         // saved stack pointer and the word at it is the frame discriminator
         // (`_tx_thread_schedule`, `0x3EC4002C`): 1 = an interrupt frame
@@ -368,7 +368,7 @@ impl Emulator {
             let mut v: Vec<_> = prof_hist.iter().map(|(&k, &n)| (k, n)).collect();
             v.sort_by_key(|a| std::cmp::Reverse(a.1));
             let total: u64 = v.iter().map(|(_, n)| n).sum();
-            eprintln!("--- RVF_PROF: core-0 PC buckets (total {total}) ---");
+            eprintln!("--- PIMU_PROF: core-0 PC buckets (total {total}) ---");
             for (pc, n) in v.iter().take(25) {
                 eprintln!(
                     "  {pc:#010x}  {n:>14}  {:5.1}%",
@@ -385,7 +385,7 @@ impl Emulator {
             }
             let mut threads: Vec<_> = by_thread.into_iter().collect();
             threads.sort_by_key(|a| std::cmp::Reverse(a.1));
-            eprintln!("--- RVF_PROF_THREAD: core-0 time by ThreadX thread (total {total}) ---");
+            eprintln!("--- PIMU_PROF_THREAD: core-0 time by ThreadX thread (total {total}) ---");
             for (t, n) in threads.iter().take(8) {
                 eprintln!(
                     "  thread {t:#010x}  {n:>14}  {:5.1}%",
@@ -481,7 +481,7 @@ impl Emulator {
                 self.machine.mmio_trace = true;
             }
         }
-        // `RVF_TRACE_ON_PC=<hex>`: arm the instruction trace the first time
+        // `PIMU_TRACE_ON_PC=<hex>`: arm the instruction trace the first time
         // core 0 reaches this address. The console-substring trigger cannot
         // reach a code path that runs after the firmware has stopped
         // printing — which is exactly where a wedged boot has to be read.
@@ -737,7 +737,7 @@ impl Emulator {
             }
             st.prompt_seen = st.console.len();
         }
-        // `RVF_TRACE_ON_CONSOLE=<substr>` arms the instruction trace the moment
+        // `PIMU_TRACE_ON_CONSOLE=<substr>` arms the instruction trace the moment
         // that substring appears in the console — for pinning down a code path
         // by the log line that precedes it.
         if let Some(needle) = st
@@ -754,7 +754,7 @@ impl Emulator {
                     self.cpu.trace_cf_only = st.diag.trace_cf;
                     self.cpu.trace_cap = st.diag.trace_cap;
                     // Also stream peripheral accesses while the trace is
-                    // armed (RVF_TRACE_MMIO=1) — handy for pinning down an
+                    // armed (PIMU_TRACE_MMIO=1) — handy for pinning down an
                     // unmodelled block like the I2C BSC.
                     if st.diag.trace_mmio {
                         self.machine.mmio_trace = true;
@@ -1186,7 +1186,7 @@ struct RunState {
     diag: crate::diag::DiagConfig,
     console: Vec<u8>,
     wall_check: u64,
-    /// How much of the console `RVF_TRACE_ON_CONSOLE` has searched.
+    /// How much of the console `PIMU_TRACE_ON_CONSOLE` has searched.
     console_seen: usize,
     /// Prompt / `until` search: how much of the console has been searched,
     /// and where the output after the last scripted send begins.
@@ -1239,24 +1239,24 @@ struct RunState {
 
     tick_deliveries: u64,
     tick_skips: u64,
-    /// RVF_PROF=1: cheap PC profiler. Bucket the core-0 PC into 256-byte
+    /// PIMU_PROF=1: cheap PC profiler. Bucket the core-0 PC into 256-byte
     /// slots on every step and dump the hottest on exit — finds the loop
     /// that is eating the step budget when a boot phase runs slow.
     prof_hist: HashMap<u32, u64>,
-    /// RVF_PROF_THREAD=1: same buckets, but keyed by the running ThreadX
+    /// PIMU_PROF_THREAD=1: same buckets, but keyed by the running ThreadX
     /// thread (`_tx_thread_current_ptr`, `0x3EE35900`) as well, so "which
     /// thread is spinning, and where" can be read off directly.
     prof_thist: HashMap<(u32, u32), u64>,
-    /// `RVF_HEARTBEAT=<n>`: every `<n>` retired instructions, print model
+    /// `PIMU_HEARTBEAT=<n>`: every `<n>` retired instructions, print model
     /// time, the running ThreadX thread and the PC. The one diagnostic that
     /// says whether a stalled boot is wedged or merely slow.
     next_beat: u64,
-    /// `RVF_TRAP=<hex>[,<hex>...]`: print pc / lr / r0-r5 every time core 0
+    /// `PIMU_TRAP=<hex>[,<hex>...]`: print pc / lr / r0-r5 every time core 0
     /// reaches one of these addresses. Generic "who calls this, with what"
     /// probe - the linear disassembler can't xref (it desyncs on inline
-    /// data), so callers have to be found at runtime. `RVF_TRAP_MAX=<n>`:
+    /// data), so callers have to be found at runtime. `PIMU_TRAP_MAX=<n>`:
     /// how many hits of each trap address to print (default 12); the totals
-    /// are always reported at exit. `RVF_TRAP_FROM=<n>`: ignore trap hits
+    /// are always reported at exit. `PIMU_TRAP_FROM=<n>`: ignore trap hits
     /// before `<n>` million retired instructions, so the steady state can be
     /// sampled instead of only early boot.
     trap_hits: HashMap<u32, u64>,

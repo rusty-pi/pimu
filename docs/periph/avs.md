@@ -84,7 +84,7 @@ Written, never read back. start4 pulses it, all-ones then 0, each time it arms t
 
 Sources:
 
-- trace (high): `RVF_TRACE_MMIO=0x7d5d0000-0x7d5e0000` over a boot to `arm_loader`
+- trace (high): `PIMU_TRACE_MMIO=0x7d5d0000-0x7d5e0000` over a boot to `arm_loader`
 - trace (high): start4: `0xFFFFFFFF` at `0x3EC30224`, 0 at `0x3EC30226`
 - measured (high): reads 0 on a Raspberry Pi 4B d03115
 
@@ -96,7 +96,7 @@ start4 sets its low seven bits (read, OR `0x7F`, write) each time it arms the mo
 
 Sources:
 
-- trace (high): `RVF_TRACE_MMIO=0x7d5d0000-0x7d5e0000` over a boot to `arm_loader`
+- trace (high): `PIMU_TRACE_MMIO=0x7d5d0000-0x7d5e0000` over a boot to `arm_loader`
 - decompile (high): `FUN_0ec3020e`: `_DAT_7d5d2074 |= 0x7f`
 - measured (high): `0x0000007f` on a Raspberry Pi 4B d03115
 
@@ -108,7 +108,7 @@ Written 1 each time start4 arms the monitors, never read back.
 
 Sources:
 
-- trace (high): `RVF_TRACE_MMIO=0x7d5d0000-0x7d5e0000` over a boot to `arm_loader`
+- trace (high): `PIMU_TRACE_MMIO=0x7d5d0000-0x7d5e0000` over a boot to `arm_loader`
 - decompile (high): `FUN_0ec3020e`
 - measured (high): `0x00000001` on a Raspberry Pi 4B d03115
 

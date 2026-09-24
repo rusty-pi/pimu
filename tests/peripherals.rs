@@ -7,11 +7,11 @@
 //! instructions later as a `bl <null>`. These tests pin the register values
 //! that the boot is known to gate on.
 
-use rpi_virt_fw::bus::{Bus, MmioDevice, Width};
-use rpi_virt_fw::periph::Spi0;
-use rpi_virt_fw::soc::bcm2711 as map;
-use rpi_virt_fw::soc::{Board, Stepping};
-use rpi_virt_fw::Machine;
+use pimu::bus::{Bus, MmioDevice, Width};
+use pimu::periph::Spi0;
+use pimu::soc::bcm2711 as map;
+use pimu::soc::{Board, Stepping};
+use pimu::Machine;
 
 fn machine() -> Machine {
     Machine::new(1024 * 1024)
@@ -535,7 +535,7 @@ fn bsc_transfer_active_spans_the_whole_transfer() {
 /// one step short of `arm_loader`, printing "VCE taking >1s to run".
 #[test]
 fn vce_launch_completes_and_raises_its_interrupt() {
-    use rpi_virt_fw::periph::vce;
+    use pimu::periph::vce;
 
     let mut m = machine();
     let ctrl = map::VCE_CTRL_BASE;
@@ -1069,7 +1069,7 @@ fn hdmi_ddc_completion_waits_for_the_wire() {
 /// HDMI mode-set work that would.
 #[test]
 fn hdmi_ddc_reads_an_attached_edid() {
-    use rpi_virt_fw::periph::HdmiDdc;
+    use pimu::periph::HdmiDdc;
 
     let edid: Vec<u8> = (0..128u32).map(|i| (i * 7 + 1) as u8).collect();
     let base = map::HDMI_DDC0_BASE;
@@ -1141,10 +1141,9 @@ fn i2c_read(m: &mut Machine, base: u32, addr: u8, len: u32) -> Option<Vec<u8>> {
 #[test]
 fn the_hat_eeprom_answers_only_on_the_header_pins() {
     let mut m = machine();
-    m.bsc0
-        .attach_eeprom(rpi_virt_fw::periph::hat::HatEeprom::new(
-            b"R-Pi\x01\x00\x02\x00".to_vec(),
-        ));
+    m.bsc0.attach_eeprom(pimu::periph::hat::HatEeprom::new(
+        b"R-Pi\x01\x00\x02\x00".to_vec(),
+    ));
 
     // Out of reset every pin is an input: the master's pads are elsewhere.
     assert_eq!(i2c_read(&mut m, map::BSC0_BASE, 0x50, 4), None);

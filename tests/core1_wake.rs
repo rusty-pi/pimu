@@ -5,10 +5,10 @@
 //! `WAKEUP` register (`0x7E00_2834`), with its own entry point. Nothing else in
 //! the block starts it, core 0's copy included.
 
-use rpi_virt_fw::bus::Bus;
-use rpi_virt_fw::emulator::{Emulator, RunEnd, RunLimits};
-use rpi_virt_fw::soc::bcm2711::{CORECTL_BASE, UART0_BASE};
-use rpi_virt_fw::Machine;
+use pimu::bus::Bus;
+use pimu::emulator::{Emulator, RunEnd, RunLimits};
+use pimu::soc::bcm2711::{CORECTL_BASE, UART0_BASE};
+use pimu::Machine;
 
 const CODE: u32 = 0x1000;
 const CORE1: u32 = 0x4000;

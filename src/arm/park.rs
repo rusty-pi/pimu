@@ -122,7 +122,7 @@ pub(super) struct Detector {
     pub(super) sha: super::sha::Finder,
     pub(super) sha_head: Option<u64>,
     pub(super) sha_stop: bool,
-    /// Which of the two to look for (`RVF_NO_PARK`, `RVF_NO_SHA_SKIP`).
+    /// Which of the two to look for (`PIMU_NO_PARK`, `PIMU_NO_SHA_SKIP`).
     pub(super) park_on: bool,
     pub(super) sha_on: bool,
 }

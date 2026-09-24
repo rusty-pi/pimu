@@ -203,11 +203,11 @@ pub struct Machine {
     /// peripheral access across a whole boot buries the one block under
     /// investigation in millions of unrelated lines (and costs more time than
     /// the wall-clock budget has); with this set only accesses inside the
-    /// range are recorded. `RVF_TRACE_MMIO=<lo>-<hi>` sets it.
+    /// range are recorded. `PIMU_TRACE_MMIO=<lo>-<hi>` sets it.
     pub mmio_trace_range: Option<(u32, u32)>,
     pub mmio_events: Vec<(u32, u8, u32, bool)>,
 
-    /// Reconnaissance aid: when `RVF_WATCH=<hex>[,<hex>...]` is set, every store
+    /// Reconnaissance aid: when `PIMU_WATCH=<hex>[,<hex>...]` is set, every store
     /// whose word-aligned address matches one of them is logged to stderr tagged
     /// with the current PC (`watch_pc`, refreshed by the run loop each step).
     /// Complements `mmio_trace` for pinning down who writes a given RAM word.
@@ -389,7 +389,7 @@ impl Machine {
             mmio_trace: false,
             mmio_trace_range: None,
             mmio_events: Vec::new(),
-            watch: std::env::var("RVF_WATCH")
+            watch: std::env::var("PIMU_WATCH")
                 .ok()
                 .filter(|_| crate::diag::ON)
                 .map(|v| {

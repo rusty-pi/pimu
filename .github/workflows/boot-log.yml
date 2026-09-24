@@ -184,7 +184,7 @@ jobs:
       - name: Build network-boot root
         run: ./scripts/make-netboot.sh firmware/sd-halt.img
 
-      - name: Build rpi-virt-fw
+      - name: Build pimu
         run: cargo build --release
 
       # Everything downstream — the tar below, the boots, `boot-check` — reads
@@ -193,7 +193,7 @@ jobs:
         if: env.CARGO_TARGET_DIR != ''
         run: |
           mkdir -p target/release
-          cp -f "$CARGO_TARGET_DIR/release/rpi-virt-fw" target/release/
+          cp -f "$CARGO_TARGET_DIR/release/pimu" target/release/
 
       # The boots get all of this through the Actions cache rather than as an
       # artifact: artifacts count against the account's storage quota, and a
@@ -204,7 +204,7 @@ jobs:
         with:
           key: boot-inputs-${{ github.run_id }}
           path: |
-            target/release/rpi-virt-fw
+            target/release/pimu
             firmware/
 
       # On the self-hosted runners the cache service is the wrong way round:
@@ -227,7 +227,7 @@ jobs:
         run: |
           mkdir -p "$CACHE"
           tar -cSf "$CACHE/boot-inputs-$GITHUB_RUN_ID.tar" \
-            target/release/rpi-virt-fw firmware/
+            target/release/pimu firmware/
           # A cancelled run never reaches its cleanup job, so its tar is still
           # there. Nothing else prunes the directory.
           find "$CACHE" -maxdepth 1 -name 'boot-inputs-*.tar' -mtime +1 -delete
@@ -277,7 +277,7 @@ jobs:
           key: boot-inputs-${{ github.run_id }}
           fail-on-cache-miss: true
           path: |
-            target/release/rpi-virt-fw
+            target/release/pimu
             firmware/
 
       - name: Restore the boot inputs from the shared cache
@@ -289,7 +289,7 @@ jobs:
       - name: Simulated boot (${{ matrix.name }})
         run: |
           for s in ${{ matrix.scenarios }}; do
-            target/release/rpi-virt-fw boot-check "testdata/boot/$s.toml" --output "boot-$s.log"
+            target/release/pimu boot-check "testdata/boot/$s.toml" --output "boot-$s.log"
           done
 
       # Nothing is uploaded: a failed boot's combined output goes to the job

@@ -1,4 +1,4 @@
-//! `RVF_ARM_BLOCKS`: the shape of the straight-line runs the ARM cores
+//! `PIMU_ARM_BLOCKS`: the shape of the straight-line runs the ARM cores
 //! execute, and how often each one is re-entered (#117).
 //!
 //! A *run* here is what a block translator would translate as one unit: the
@@ -24,7 +24,7 @@
 //! context switch and is not confused by two address spaces sharing a virtual
 //! address, and per EL because the EL picks the translation regime.
 //!
-//! Measure with `RVF_NO_PARK=1 RVF_NO_SHA_SKIP=1`. A parked core's skipped
+//! Measure with `PIMU_NO_PARK=1 PIMU_NO_SHA_SKIP=1`. A parked core's skipped
 //! passes and a natively hashed SHA-256 block are never stepped, so without
 //! those the counts miss exactly the hottest loops.
 

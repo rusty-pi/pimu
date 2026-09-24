@@ -12,7 +12,7 @@
 # than 948.
 #
 # Re-record the golden and the retired counts with:
-#   rpi-virt-fw boot-check testdata/boot/usb-boot.toml --update
+#   pimu boot-check testdata/boot/usb-boot.toml --update
 
 name = "usb-boot"
 description = "pieeprom.bin boot from a USB mass-storage device, through to the ARM hand-off."

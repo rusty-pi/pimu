@@ -1,4 +1,4 @@
-# rpi-virt-fw
+# pimu
 
 A whole-machine Raspberry Pi 4 (BCM2711) emulator that boots the **real
 firmware** — `pieeprom.bin`, `start4.elf`, `fixup4.dat` on the VideoCore VPU —
@@ -26,17 +26,17 @@ run is deterministic. No off-the-shelf tool does this;
 ## Run a boot
 
 ```bash
-cargo install --path .                # or: cargo build --release, then target/release/rpi-virt-fw
+cargo install --path .                # or: cargo build --release, then target/release/pimu
 
 ./scripts/fetch-firmware.sh           # the real blobs, a kernel and busybox into firmware/ (gitignored)
 KERNEL=halt ./scripts/make-sd.sh firmware/sd-halt.img
 
 # EEPROM bootloader + start4.elf off an SD image, up to a kernel that parks the ARM.
-rpi-virt-fw boot --eeprom firmware/pieeprom.bin --sd firmware/sd-halt.img
+pimu boot --eeprom firmware/pieeprom.bin --sd firmware/sd-halt.img
 
 # ...or on into Linux, with your terminal as the serial console (Ctrl-A x quits).
 ./scripts/make-sd.sh                  # firmware/sd.img
-rpi-virt-fw boot --eeprom firmware/pieeprom.bin --sd firmware/sd.img --stdin
+pimu boot --eeprom firmware/pieeprom.bin --sd firmware/sd.img --stdin
 ```
 
 The model does not stop at the firmware's hand-off to the ARM: the A72 cores
@@ -74,7 +74,7 @@ that file: `pieeprom.bin` is `--eeprom`, and so are `sd.img`, `usb.img`,
 line each) and `pubkey.bin`.
 
 ```bash
-cd firmware && rpi-virt-fw boot       # boots from whatever is there, and says what it picked up
+cd firmware && pimu boot       # boots from whatever is there, and says what it picked up
 ```
 
 ## Commands
@@ -212,7 +212,7 @@ src/
   identity.rs   the rpi-machine-id derivation
   log/          --log channels; fatmap.rs = which file a disk block belongs to
   stdio.rs      host terminal as the serial console (--stdin)
-  diag.rs       RVF_* diagnostics
+  diag.rs       PIMU_* diagnostics
   emulator.rs   Emulator = VPU cores + ARM side + Machine, run loop
   harness/      scenario parsing, transcript capture, golden diff,
                 boot.rs = the boot scenarios and their milestones,
@@ -232,7 +232,7 @@ testdata/       in-process scenarios and the boot scenarios, with their goldens
 | [`docs/boot-chain.md`](docs/boot-chain.md) | The boot stages, from the VPU ROM to Linux, and what each one reads |
 | [`docs/running.md`](docs/running.md) | Boot media, SD-card variants, OTP files, wall budgets |
 | [`docs/device-tree.md`](docs/device-tree.md) | Getting the patched device tree out, and where `rpi-machine-id` comes from |
-| [`docs/diagnostics.md`](docs/diagnostics.md) | The `--log` channels and `RVF_*` switches that find a wall |
+| [`docs/diagnostics.md`](docs/diagnostics.md) | The `--log` channels and `PIMU_*` switches that find a wall |
 | [`docs/building.md`](docs/building.md) | Build profiles, the `diag` feature, PGO, the build's CPU share |
 | [`docs/periph/`](docs/periph/) | One page per register block, generated from `specs/*.toml` |
 | [`docs/vpu-isa.md`](docs/vpu-isa.md) | The VideoCore IV instruction set, with the evidence for each statement |

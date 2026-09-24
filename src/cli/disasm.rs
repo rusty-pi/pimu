@@ -6,8 +6,8 @@ use std::process::ExitCode;
 
 use anyhow::{bail, Context, Result};
 
-use rpi_virt_fw::vpu::decode::decode;
-use rpi_virt_fw::vpu::length::insn_len_bytes;
+use pimu::vpu::decode::decode;
+use pimu::vpu::length::insn_len_bytes;
 
 use crate::parse_u32;
 
@@ -37,9 +37,7 @@ pub fn cmd_disasm(args: &[String]) -> Result<ExitCode> {
     // from there. Flat binary: file offset 0 sits at `--base`, and `--vaddr`
     // starts that far into it.
     let (bytes, mut pc): (Vec<u8>, u32) = if eeprom {
-        use rpi_virt_fw::firmware::eeprom::{
-            EepromImage, BOOTCODE_ENTRY_OFFSET, BOOTCODE_LOAD_ADDR,
-        };
+        use pimu::firmware::eeprom::{EepromImage, BOOTCODE_ENTRY_OFFSET, BOOTCODE_LOAD_ADDR};
         let img = EepromImage::parse(&raw)?;
         let bc = img
             .bootcode()
@@ -48,7 +46,7 @@ pub fn cmd_disasm(args: &[String]) -> Result<ExitCode> {
         let skip = (target - BOOTCODE_LOAD_ADDR) as usize;
         (bc.body[skip..].to_vec(), target)
     } else if raw.starts_with(b"\x7fELF") {
-        let elf = rpi_virt_fw::firmware::elf32::Elf32::parse(&raw)?;
+        let elf = pimu::firmware::elf32::Elf32::parse(&raw)?;
         let target = vaddr.unwrap_or(elf.entry);
         let seg = elf
             .segments

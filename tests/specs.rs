@@ -9,10 +9,10 @@
 
 use std::collections::BTreeSet;
 
-use rpi_virt_fw::bus::Bus;
-use rpi_virt_fw::periph::SPEC_COVERAGE;
-use rpi_virt_fw::spec::{self, schema::Bus as SpecBus, schema::Spec};
-use rpi_virt_fw::Machine;
+use pimu::bus::Bus;
+use pimu::periph::SPEC_COVERAGE;
+use pimu::spec::{self, schema::Bus as SpecBus, schema::Spec};
+use pimu::Machine;
 
 fn specs() -> Vec<Spec> {
     spec::load().unwrap_or_else(|e| panic!("{e}"))
@@ -254,7 +254,7 @@ fn malformed_specs_are_refused() {
 /// same command.
 #[test]
 fn isa_doc_is_current() {
-    let stale = rpi_virt_fw::isa::sync_docs(false).unwrap_or_else(|e| panic!("{e}"));
+    let stale = pimu::isa::sync_docs(false).unwrap_or_else(|e| panic!("{e}"));
     assert!(
         stale.is_empty(),
         "docs/vpu-isa.md is out of date; run `cargo run -- spec-docs --update`"

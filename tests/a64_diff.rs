@@ -19,8 +19,8 @@
 //! the stream until the outputs agree — and reported with its encoding.
 //!
 //! `qemu-aarch64` is `apt install qemu-user`. Without it the test is skipped,
-//! except under CI (`CI` set), where that is a failure. `RVF_A64_CASES`
-//! overrides the number of random cases, `RVF_A64_SEED` the first seed.
+//! except under CI (`CI` set), where that is a failure. `PIMU_A64_CASES`
+//! overrides the number of random cases, `PIMU_A64_SEED` the first seed.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -32,7 +32,7 @@ use std::sync::Mutex;
 static SIMD_RETIRED: AtomicU64 = AtomicU64::new(0);
 static SIMD_UNDEF: AtomicU64 = AtomicU64::new(0);
 
-use rpi_virt_fw::aarch64::{Abort, Cpu, Exception, Memory, Step};
+use pimu::aarch64::{Abort, Cpu, Exception, Memory, Step};
 
 // --- Layout of the test executable ------------------------------------------
 
@@ -994,9 +994,9 @@ fn run_ours(image: &[u8]) -> Outcome {
     cpu.pc = CODE;
     let body_start = CODE + 4 * prologue().len() as u64;
     let mut out = Vec::new();
-    // RVF_A64_TRACE=1: print every body instruction and the registers it
+    // PIMU_A64_TRACE=1: print every body instruction and the registers it
     // changed.
-    let trace = std::env::var_os("RVF_A64_TRACE").is_some();
+    let trace = std::env::var_os("PIMU_A64_TRACE").is_some();
     for _ in 0..1_000_000 {
         let before = trace.then(|| (cpu.pc, cpu.x, cpu.sp(), cpu.nzcv));
         let simd = mem.read(cpu.pc, 4).is_ok_and(|w| (w >> 25) & 7 == 7);
@@ -1219,11 +1219,11 @@ fn random_streams_match_qemu() {
         eprintln!("skipping: qemu-aarch64 not found (apt install qemu-user)");
         return;
     };
-    let cases: u64 = std::env::var("RVF_A64_CASES")
+    let cases: u64 = std::env::var("PIMU_A64_CASES")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(2000);
-    let first: u64 = std::env::var("RVF_A64_SEED")
+    let first: u64 = std::env::var("PIMU_A64_SEED")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(1);

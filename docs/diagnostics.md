@@ -1,20 +1,20 @@
 # Diagnostics
 
 Every wall in this repo was found with one of these: the `--log` channels, which
-say what a subsystem did, and the `RVF_*` environment variables, which trace,
+say what a subsystem did, and the `PIMU_*` environment variables, which trace,
 trap and profile. They are reconnaissance tools, not configuration: none of
 them changes what the firmware sees.
 
 That is the rule they are held to. **A knob that changes what the firmware
 observes is a shim**, needs an issue and a deletion plan, and several were
-deleted for exactly that reason (`RVF_PMIC_EVENT`, `RVF_TICK_CALL`,
-`RVF_DEFER_SLOT3`, `RVF_TICK_SLOT`, `RVF_TICK_CORE1`, `RVF_PMIC_HACK`,
-`RVF_PROBE`, and before them `RVF_MBOX_KICK`, `RVF_GPIOMAN_SHIM`,
-`RVF_SCHED_TICK`, `RVF_MCSYNC_RPC`). A knob that only changes what *we* print is
+deleted for exactly that reason (`PIMU_PMIC_EVENT`, `PIMU_TICK_CALL`,
+`PIMU_DEFER_SLOT3`, `PIMU_TICK_SLOT`, `PIMU_TICK_CORE1`, `PIMU_PMIC_HACK`,
+`PIMU_PROBE`, and before them `PIMU_MBOX_KICK`, `PIMU_GPIOMAN_SHIM`,
+`PIMU_SCHED_TICK`, `PIMU_MCSYNC_RPC`). A knob that only changes what *we* print is
 a diagnostic and belongs here.
 
 The one exception, which describes the *board* rather than the firmware, is
-`RVF_PCIE_DEVICE`.
+`PIMU_PCIE_DEVICE`.
 
 **Build with the `diag` feature to use most of them:**
 
@@ -22,8 +22,8 @@ The one exception, which describes the *board* rather than the firmware, is
 cargo build --release --features diag
 ```
 
-The run-loop switches — tracing (`RVF_TRACE_*`, `RVF_MMIO_FROM`, `--trace*`),
-`RVF_TRAP*`, `RVF_PROF*`, `RVF_HEARTBEAT`, `RVF_WATCH`, `RVF_TCB`, and the log
+The run-loop switches — tracing (`PIMU_TRACE_*`, `PIMU_MMIO_FROM`, `--trace*`),
+`PIMU_TRAP*`, `PIMU_PROF*`, `PIMU_HEARTBEAT`, `PIMU_WATCH`, `PIMU_TCB`, and the log
 channels of the run loop, the VPU core and the DMA window — are checked on
 every instruction, so a normal build (CI's included) compiles them out. Set on
 such a build the variables are reported and ignored, and `--trace*` and those
@@ -32,7 +32,7 @@ of the run loop, instead of skipping the ones that cannot act
 (`Emulator::fast_steps`), so the switches see each instruction. It also records
 start4's boot-progress tags (stores to `0x?EC0_2000`), which `boot` prints
 after the run.
-`RVF_LIVE_CONSOLE` is not a diagnostic and works everywhere, as do the device
+`PIMU_LIVE_CONSOLE` is not a diagnostic and works everywhere, as do the device
 log channels, which only fire on rare device events.
 
 ---
@@ -51,19 +51,19 @@ boot firmware/pieeprom.bin --eeprom --sd firmware/sd.img
 boot … --control-transfers --stub-log
 
 # 2. Arm the instruction trace when the boot first reaches that pc.
-RVF_TRACE_ON_PC=0x3ec568f8 RVF_TRACE_CAP=4000 boot … 2> trace.log
+PIMU_TRACE_ON_PC=0x3ec568f8 PIMU_TRACE_CAP=4000 boot … 2> trace.log
 
 # 3. Trap the call sites you suspect, with registers.
-RVF_TRAP=0x3ecc5190,0x3ec568f8 boot … 2> traps.log
+PIMU_TRAP=0x3ecc5190,0x3ec568f8 boot … 2> traps.log
 
 # 4. Watch the memory the firmware is branching on.
-RVF_WATCH=0x3ef6b04c boot … 2> writes.log
+PIMU_WATCH=0x3ef6b04c boot … 2> writes.log
 
 # 5. Ask the devices it talks to what they saw.
 boot … --log pcie,xhci 2> devices.log
 ```
 
-`RVF_TRACE_ON_PC` exists because the console-substring trigger cannot reach code
+`PIMU_TRACE_ON_PC` exists because the console-substring trigger cannot reach code
 that runs *after* the firmware stops printing — which is where a wedged boot
 usually is. It is what cracked the `arm_loader` OTP gate.
 
@@ -76,33 +76,33 @@ it with `SIGPIPE`.
 
 | Variable | Effect |
 |---|---|
-| `RVF_TRACE_ON_PC=<hex>` | Arm the instruction trace when core 0 first reaches this address. |
-| `RVF_TRACE_ON_CONSOLE=<text>` | Arm it when this substring appears on the console. Useless after the firmware goes quiet — use `RVF_TRACE_ON_PC`. |
-| `RVF_TRACE_CAP=<n>` | Stop tracing after `n` instructions (default 300000). |
-| `RVF_TRACE_CF=1` | Trace only control flow — branches and calls, not every instruction. |
-| `RVF_TRACE_MMIO=1` | Log every MMIO access with the PC that made it. |
-| `RVF_TRACE_MMIO=<lo>-<hi>` | The same, restricted to an address range. This is what made enumerating `0x7D5D_0000` practical. |
-| `RVF_MMIO_FROM=<hex>` | Start the MMIO trace when core 0 reaches this address. |
+| `PIMU_TRACE_ON_PC=<hex>` | Arm the instruction trace when core 0 first reaches this address. |
+| `PIMU_TRACE_ON_CONSOLE=<text>` | Arm it when this substring appears on the console. Useless after the firmware goes quiet — use `PIMU_TRACE_ON_PC`. |
+| `PIMU_TRACE_CAP=<n>` | Stop tracing after `n` instructions (default 300000). |
+| `PIMU_TRACE_CF=1` | Trace only control flow — branches and calls, not every instruction. |
+| `PIMU_TRACE_MMIO=1` | Log every MMIO access with the PC that made it. |
+| `PIMU_TRACE_MMIO=<lo>-<hi>` | The same, restricted to an address range. This is what made enumerating `0x7D5D_0000` practical. |
+| `PIMU_MMIO_FROM=<hex>` | Start the MMIO trace when core 0 reaches this address. |
 
 ## Traps and watchpoints
 
 | Variable | Effect |
 |---|---|
-| `RVF_TRAP=<hex>[,<hex>…]` | Print registers every time core 0 reaches one of these addresses. |
-| `RVF_TRAP_FROM=<n>` | Ignore traps until `n` instructions have retired. |
-| `RVF_TRAP_MAX=<n>` | Stop printing after `n` hits. |
-| `RVF_WATCH=<hex>[,<hex>…]` | Log every store to these word-aligned addresses, tagged with the PC. The way to find who fills a structure. |
-| `RVF_TCB=<hex>[,<hex>…]` | At exit, decode these ThreadX thread control blocks: where each thread is parked and what it is waiting on, with a rough backtrace. |
+| `PIMU_TRAP=<hex>[,<hex>…]` | Print registers every time core 0 reaches one of these addresses. |
+| `PIMU_TRAP_FROM=<n>` | Ignore traps until `n` instructions have retired. |
+| `PIMU_TRAP_MAX=<n>` | Stop printing after `n` hits. |
+| `PIMU_WATCH=<hex>[,<hex>…]` | Log every store to these word-aligned addresses, tagged with the PC. The way to find who fills a structure. |
+| `PIMU_TCB=<hex>[,<hex>…]` | At exit, decode these ThreadX thread control blocks: where each thread is parked and what it is waiting on, with a rough backtrace. |
 
 ## Profiling
 
 | Variable | Effect |
 |---|---|
-| `RVF_PROF=1` | Bucket the core-0 PC into 256-byte slots and dump the hottest on exit. Finds the loop a stalled boot is spinning in. |
-| `RVF_PROF_THREAD=<hex>` | The same, attributed per ThreadX thread. Takes the address of the firmware's current-thread pointer (`_tx_thread_current_ptr`) — only the firmware knows where that lives, so it is a parameter rather than a constant baked into the model. |
-| `RVF_ARM_PROF=<us>` | From model time `<us>` on (`1` for the whole run), count every ARM step by core, EL and 256-byte PC bucket, and list the hottest in the run report — and at every reset, for the boot that ended. Asleep cores are not stepped, so they do not show; the passes a parked core skips count at the loop's PCs. |
-| `RVF_ARM_BLOCKS=1` | Count the straight-line runs the ARM cores execute — the instructions from one control-flow transfer's destination to the next — and how often each is re-entered, keyed by physical PC and EL. The report gives the mean run length, the share of executed instructions in runs of at least *n* instructions and in runs entered at least *n* times, and the hottest runs. This is what says whether translating a block at a time could pay. Run it with `RVF_NO_PARK=1 RVF_NO_SHA_SKIP=1`: a parked core's skipped passes and a natively hashed SHA-256 block are never stepped, so otherwise the counts miss the hottest loops. Takes the cores off the burst path, so it is slower than a plain run. |
-| `RVF_HEARTBEAT=<n>` | Print progress every `n` instructions, for runs that look hung. |
+| `PIMU_PROF=1` | Bucket the core-0 PC into 256-byte slots and dump the hottest on exit. Finds the loop a stalled boot is spinning in. |
+| `PIMU_PROF_THREAD=<hex>` | The same, attributed per ThreadX thread. Takes the address of the firmware's current-thread pointer (`_tx_thread_current_ptr`) — only the firmware knows where that lives, so it is a parameter rather than a constant baked into the model. |
+| `PIMU_ARM_PROF=<us>` | From model time `<us>` on (`1` for the whole run), count every ARM step by core, EL and 256-byte PC bucket, and list the hottest in the run report — and at every reset, for the boot that ended. Asleep cores are not stepped, so they do not show; the passes a parked core skips count at the loop's PCs. |
+| `PIMU_ARM_BLOCKS=1` | Count the straight-line runs the ARM cores execute — the instructions from one control-flow transfer's destination to the next — and how often each is re-entered, keyed by physical PC and EL. The report gives the mean run length, the share of executed instructions in runs of at least *n* instructions and in runs entered at least *n* times, and the hottest runs. This is what says whether translating a block at a time could pay. Run it with `PIMU_NO_PARK=1 PIMU_NO_SHA_SKIP=1`: a parked core's skipped passes and a natively hashed SHA-256 block are never stepped, so otherwise the counts miss the hottest loops. Takes the cores off the burst path, so it is slower than a plain run. |
+| `PIMU_HEARTBEAT=<n>` | Print progress every `n` instructions, for runs that look hung. |
 
 ## Log channels
 
@@ -165,7 +165,7 @@ These need a `diag` build:
 | `tick` | ThreadX tick delivery and skips, device interrupts vectored, and an `rti` that returns outside start4's code. |
 | `vec` | Interrupt vectoring: slot, vector base, handler. |
 
-Each channel used to be an `RVF_DBG_<NAME>=1` variable (the eMMC one
+Each channel used to be an `PIMU_DBG_<NAME>=1` variable (the eMMC one
 `EMMC_DBG`), and the I/O log was `--io-log`. `boot` warns about a variable
 that is still set and names the channel that replaced it.
 
@@ -214,16 +214,16 @@ The fuses a run programmed are kept across runs with `--otp` — see
 
 | Variable | Effect |
 |---|---|
-| `RVF_LIVE_CONSOLE=0` | Buffer the UART console and print it with the run report, instead of streaming it as it is produced (the default). |
-| `RVF_BOOTARGS="<args>"` | More kernel arguments after the harness's own (`initcall_debug` to time every initcall, `nokaslr` for addresses that match `System.map`). |
-| `RVF_SLOW_LOOP=1` | Take every step through every check of the run loop, as a `diag` build does, instead of skipping the checks that cannot act (`Emulator::fast_steps`). A run must come out the same either way; this is how to check that it does. |
-| `RVF_NO_PARK=1` | Execute every pass of a busy-wait loop instead of parking the core in it (`arm/mod.rs`, "Busy-wait loops"). The same check for the ARM side: a run must come out the same either way. Works in every build. |
-| `RVF_NO_BURST=1` | Take a core that is the only one running through the whole cycle loop, one instruction at a time, instead of stepping it in bursts (`arm/mod.rs`, "Time and scheduling"). Another same-either-way check. Works in every build. |
-| `RVF_NO_STRAIGHT=1` | Step a burst one instruction at a time instead of running each straight-line stretch of it off one page (`arm/mod.rs`, "Straight-line runs"). Another same-either-way check. Works in every build. |
-| `RVF_NO_SHA_SKIP=1` | Run a SHA-256 block loop block by block instead of hashing the blocks in the middle of a slice natively (`arm/mod.rs`, "SHA-256 loops"). Same either way, cycle count included. Works in every build. |
-| `RVF_DUMP_FLASH=<path>` | Write the EEPROM flash image out after the run, including any self-update the firmware applied. |
-| `RVF_DUMP_RAM=<path>` | Write SDRAM out after every boot, as `<path>.<n>` for boot `n`, before a reset replaces it. A kernel that dies before its console comes up still has its log buffer in there. Works in every build. |
-| `RVF_PCIE_DEVICE=0` | Unsolder the VL805 from the modelled board. Describes the hardware, not the firmware: a real Pi 4B always has one, so it is attached by default. |
+| `PIMU_LIVE_CONSOLE=0` | Buffer the UART console and print it with the run report, instead of streaming it as it is produced (the default). |
+| `PIMU_BOOTARGS="<args>"` | More kernel arguments after the harness's own (`initcall_debug` to time every initcall, `nokaslr` for addresses that match `System.map`). |
+| `PIMU_SLOW_LOOP=1` | Take every step through every check of the run loop, as a `diag` build does, instead of skipping the checks that cannot act (`Emulator::fast_steps`). A run must come out the same either way; this is how to check that it does. |
+| `PIMU_NO_PARK=1` | Execute every pass of a busy-wait loop instead of parking the core in it (`arm/mod.rs`, "Busy-wait loops"). The same check for the ARM side: a run must come out the same either way. Works in every build. |
+| `PIMU_NO_BURST=1` | Take a core that is the only one running through the whole cycle loop, one instruction at a time, instead of stepping it in bursts (`arm/mod.rs`, "Time and scheduling"). Another same-either-way check. Works in every build. |
+| `PIMU_NO_STRAIGHT=1` | Step a burst one instruction at a time instead of running each straight-line stretch of it off one page (`arm/mod.rs`, "Straight-line runs"). Another same-either-way check. Works in every build. |
+| `PIMU_NO_SHA_SKIP=1` | Run a SHA-256 block loop block by block instead of hashing the blocks in the middle of a slice natively (`arm/mod.rs`, "SHA-256 loops"). Same either way, cycle count included. Works in every build. |
+| `PIMU_DUMP_FLASH=<path>` | Write the EEPROM flash image out after the run, including any self-update the firmware applied. |
+| `PIMU_DUMP_RAM=<path>` | Write SDRAM out after every boot, as `<path>.<n>` for boot `n`, before a reset replaces it. A kernel that dies before its console comes up still has its log buffer in there. Works in every build. |
+| `PIMU_PCIE_DEVICE=0` | Unsolder the VL805 from the modelled board. Describes the hardware, not the firmware: a real Pi 4B always has one, so it is attached by default. |
 
 ---
 
@@ -327,7 +327,7 @@ in series and any of them failing looks the same from outside:
 
 Step 4 is the one that is easy to get wrong: model the config word as only the
 enables the firmware wrote and the ISR runs on every step, finds nothing to do,
-and the task never wakes. `RVF_TRACE_MMIO=0x7e00b880-0x7e00b9c0` shows that
+and the task never wakes. `PIMU_TRACE_MMIO=0x7e00b880-0x7e00b9c0` shows that
 failure directly — the ISR reading `0x7e00b9bc <- 0x00000001` and writing the
 same value straight back, forever.
 

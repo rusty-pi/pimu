@@ -14,7 +14,7 @@ instruction, so a normal build compiles them out:
 cargo build --release --features diag
 ```
 
-Set on a build without it, the `RVF_*` variables are reported and ignored, and
+Set on a build without it, the `PIMU_*` variables are reported and ignored, and
 `--trace*` and those channels are refused. [`diagnostics.md`](diagnostics.md)
 says which switch needs which build.
 
@@ -33,5 +33,5 @@ would save.
 
 Cargo runs rustc through `scripts/rustc-wrapper.sh` (`.cargo/config.toml`),
 which outside CI keeps the compiler on 80% of the CPUs so a build does not make
-the desktop lag. `RVF_BUILD_CPU_PERCENT` changes the share (`100` lifts the
+the desktop lag. `PIMU_BUILD_CPU_PERCENT` changes the share (`100` lifts the
 limit); with `CI` set the build gets every CPU.

@@ -1,6 +1,6 @@
 # The Linux boot of linux.toml on a card whose config.txt leaves
 # Bluetooth and WiFi enabled — what an imager writes, and what #124 is about.
-# `rpi-virt-fw boot-check testdata/boot/linux-bt.toml` runs it, and so does CI.
+# `pimu boot-check testdata/boot/linux-bt.toml` runs it, and so does CI.
 #
 # Dropping `dtoverlay=disable-bt` changes where the console is. The base
 # device tree gives the PL011 to the Bluetooth modem and keeps
@@ -107,7 +107,7 @@ line = "VFS: Mounted root (ext4 filesystem) readonly on device 179:2."
 
 [[milestone]]
 why = "Userspace runs, with init's shell on `ttyS0`."
-line = ["rpi-virt-fw: userland up, Linux ", ", 4 CPUs"]
+line = ["pimu: userland up, Linux ", ", 4 CPUs"]
 
 [[milestone]]
 why = "What is typed reaches the shell: the mini-UART's receive FIFO and its 16550 interrupt, through the GIC."

@@ -7,7 +7,7 @@ notes   = "The whole pinned boot touches this block a handful of times. Only the
 
 [[block.source]]
 kind       = "trace"
-ref        = "`RVF_TRACE_MMIO=7e00b000-7e101000 recon`: the writes right after `arm_loader: Starting ARM`, all from start4's MMIO write helper `0xFEC0043A`"
+ref        = "`PIMU_TRACE_MMIO=7e00b000-7e101000 recon`: the writes right after `arm_loader: Starting ARM`, all from start4's MMIO write helper `0xFEC0043A`"
 confidence = "high"
 
 [[block.source]]

@@ -9,16 +9,16 @@ use std::rc::Rc;
 
 use anyhow::{bail, Context, Result};
 
-use rpi_virt_fw::armstub::Handoff;
-use rpi_virt_fw::emulator::{Emulator, RunLimits, RunReport};
-use rpi_virt_fw::firmware::Payload;
-use rpi_virt_fw::harness;
-use rpi_virt_fw::log::{Log, Spec};
-use rpi_virt_fw::machine::Machine;
-use rpi_virt_fw::soc::{Board, Stepping};
-use rpi_virt_fw::vpu::decode::decode;
-use rpi_virt_fw::vpu::length::insn_len_bytes;
-use rpi_virt_fw::vpu::UnimplPolicy;
+use pimu::armstub::Handoff;
+use pimu::emulator::{Emulator, RunLimits, RunReport};
+use pimu::firmware::Payload;
+use pimu::harness;
+use pimu::log::{Log, Spec};
+use pimu::machine::Machine;
+use pimu::soc::{Board, Stepping};
+use pimu::vpu::decode::decode;
+use pimu::vpu::length::insn_len_bytes;
+use pimu::vpu::UnimplPolicy;
 
 use crate::mbox::{mbox_property_exchange, MboxRequest, MboxTag};
 use crate::otp::{Format, OtpFile};
@@ -32,17 +32,17 @@ const USB_ROOT_PORT: usize = 2;
 /// `boot --help` (#99). Every option `BootOpts::parse` takes is here, one to a
 /// line, bar the no-op `--arm`; a test holds the two to that.
 const HELP: &str = "\
-rpi-virt-fw boot — boot the machine from an EEPROM image, as a Pi 4 does, or
+pimu boot — boot the machine from an EEPROM image, as a Pi 4 does, or
 run a VPU ELF
 
 USAGE:
-    rpi-virt-fw boot --eeprom <pieeprom.bin> [<options>]
-    rpi-virt-fw boot <file.elf> [<options>]
+    pimu boot --eeprom <pieeprom.bin> [<options>]
+    pimu boot <file.elf> [<options>]
 
     `boot <file> --eeprom` is the same as `boot --eeprom <file>`, and with no
-    command the options are `boot`'s: `rpi-virt-fw --eeprom <file> ...`.
+    command the options are `boot`'s: `pimu --eeprom <file> ...`.
     `--config <file>` and `--option=value` work as for every command (see
-    `rpi-virt-fw --help`).
+    `pimu --help`).
 
     The run prints the serial console (not with -q), what was asked for by
     name (`--dump`, `--print-fdt`, `--mbox-property`, …) and one
@@ -54,7 +54,7 @@ USAGE:
 ZERO CONFIG:
     An option left out takes the file of that name in the working directory,
     when there is one, so a directory holding these boots with a bare
-    `rpi-virt-fw boot`:
+    `pimu boot`:
 
         pieeprom.bin  --eeprom            otp.json      --otp json:<file>
         sd.img        --sd                otp.bin       --otp binary:<file>
@@ -307,7 +307,7 @@ VPU:
               Run the payload as core 1: bit 16 of `version` reads 1.
 
 DIAGNOSTICS (a `diag` build only: cargo build --release --features diag; the
-RVF_* environment variables are in docs/diagnostics.md):
+PIMU_* environment variables are in docs/diagnostics.md):
     --trace   Record core 0's control transfers (branches and calls), up to
               4000000, and print them after the run.
     --trace-full
@@ -317,7 +317,7 @@ RVF_* environment variables are in docs/diagnostics.md):
               200000.
     --trace-mmio
               Log every peripheral access with the PC that made it
-              (RVF_TRACE_MMIO=<lo>-<hi> for one address range).
+              (PIMU_TRACE_MMIO=<lo>-<hi> for one address range).
 ";
 
 /// `--net`: what on the host the Ethernet cable plugs into (#45).
@@ -420,7 +420,7 @@ struct BootOpts {
 
 /// Zero-config (#114): an option left out takes the file of that name in the
 /// working directory, when there is one, so a directory holding `pieeprom.bin`
-/// and `sd.img` boots with a bare `rpi-virt-fw boot`. The names are the ones
+/// and `sd.img` boots with a bare `pimu boot`. The names are the ones
 /// the Pi's own tooling gives: `rpi-eeprom-config` writes `bootconf.txt` and
 /// `pubkey.bin`, and the rest name the medium they are.
 ///
@@ -609,9 +609,7 @@ impl BootOpts {
                 "--max-wall" => {
                     max_wall_secs = it.next().context("--max-wall needs seconds")?.parse()?
                 }
-                "--trace" | "--trace-full" | "--trace-from" | "--trace-mmio"
-                    if !rpi_virt_fw::diag::ON =>
-                {
+                "--trace" | "--trace-full" | "--trace-from" | "--trace-mmio" if !pimu::diag::ON => {
                     anyhow::bail!(
                         "{a} needs a build with the `diag` feature: cargo build --release --features diag"
                     )
@@ -931,7 +929,7 @@ pub fn cmd_boot(args: &[String]) -> Result<ExitCode> {
         print!("{HELP}");
         return Ok(ExitCode::SUCCESS);
     };
-    rpi_virt_fw::log::warn_replaced_env();
+    pimu::log::warn_replaced_env();
     let booted = run_boot(&opts)?;
     print_report(&opts, booted)
 }
@@ -965,7 +963,7 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
     let limits = run_limits(opts);
     // Made once, outside the reboot loop: it owns the stdin reader and the
     // terminal's raw mode.
-    let mut host_input = opts.stdin.then(rpi_virt_fw::stdio::HostInput::stdin);
+    let mut host_input = opts.stdin.then(pimu::stdio::HostInput::stdin);
     let rig = Rig::new(opts, image, log, usb_disk, otg_disk)?;
 
     let mut reboots = 0u32;
@@ -994,7 +992,7 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
         host_input = emu.input.host.take();
         rig.dump_segment(&emu, &flash, reboots);
 
-        if report.end == rpi_virt_fw::emulator::RunEnd::Reset {
+        if report.end == pimu::emulator::RunEnd::Reset {
             reboots += 1;
             // Already on the terminal if it was streamed; the run report keeps
             // its copy. `--quiet` wants neither.
@@ -1006,7 +1004,7 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
             fuses = Some(emu.machine.config_otp.fuses().clone());
             partition = emu.machine.pm.partition_bits();
             if reboots <= 4 {
-                // `RVF_ARM_PROF`: the next boot's ARM side starts a profile
+                // `PIMU_ARM_PROF`: the next boot's ARM side starts a profile
                 // of its own, so this one's goes out now.
                 if let Some(a) = &mut emu.arm {
                     a.settle(&emu.machine);
@@ -1033,8 +1031,8 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
             emu.machine.ram.coherency.reports()
         );
     }
-    if rpi_virt_fw::jitter::is_on() {
-        let (count, added, faults) = rpi_virt_fw::jitter::report();
+    if pimu::jitter::is_on() {
+        let (count, added, faults) = pimu::jitter::report();
         println!(
             "jitter: {count} intervals stretched, {} ms added in all, {faults} faults",
             added / 1000
@@ -1120,7 +1118,7 @@ fn open_log(opts: &BootOpts) -> Result<Log> {
 }
 
 /// The USB stick, shared: what the guest writes to it outlives the resets.
-type SharedUsbDisk = Rc<RefCell<rpi_virt_fw::periph::usb::Disk>>;
+type SharedUsbDisk = Rc<RefCell<pimu::periph::usb::Disk>>;
 
 /// `--usb <img>`: a Bulk-Only Transport mass-storage device in blue socket
 /// A, which is xHCI root port 2 — a SuperSpeed lane straight onto the root
@@ -1139,7 +1137,7 @@ fn open_usb_disk(
 ) -> Result<Option<SharedUsbDisk>> {
     Ok(match image {
         Some(p) => {
-            let disk = rpi_virt_fw::periph::usb::Disk::open(p, opts.usb_mb.unwrap_or(0) << 20)
+            let disk = pimu::periph::usb::Disk::open(p, opts.usb_mb.unwrap_or(0) << 20)
                 .with_context(|| format!("opening USB image {}", p.display()))?
                 .with_log(log.clone(), what);
             if opts.verbose {
@@ -1153,8 +1151,8 @@ fn open_usb_disk(
 
 /// `--sd <img>`: the card reads the image file on demand (#54), and each boot
 /// after a reset starts from the file again, writes forgotten.
-fn open_sd(p: &Path, log: &Log) -> Result<rpi_virt_fw::periph::disk::Disk> {
-    rpi_virt_fw::periph::disk::Disk::open(p, 0)
+fn open_sd(p: &Path, log: &Log) -> Result<pimu::periph::disk::Disk> {
+    pimu::periph::disk::Disk::open(p, 0)
         .map(|d| d.with_log(log.clone(), "sd"))
         .with_context(|| format!("opening SD image {}", p.display()))
 }
@@ -1275,7 +1273,7 @@ impl FlashEdits {
     /// is all zeros, which verifies nothing.
     fn set_pubkey(&self, flash: &mut [u8], announce: bool) {
         let Some(k) = &self.pubkey else { return };
-        match rpi_virt_fw::firmware::eeprom::replace_file(flash, "pubkey.bin", k) {
+        match pimu::firmware::eeprom::replace_file(flash, "pubkey.bin", k) {
             Ok(()) if announce => println!("eeprom-pubkey: pubkey.bin replaced"),
             Ok(()) => {}
             Err(e) => eprintln!("eeprom-pubkey: {e:#}"),
@@ -1291,7 +1289,7 @@ impl FlashEdits {
 /// it is off by default: it was worth reading while the section walk was
 /// being modelled (#10), and is noise in a CI log now (#132).
 fn print_eeprom(flash: &[u8], map: bool) {
-    let Ok(img) = rpi_virt_fw::firmware::eeprom::EepromImage::parse(flash) else {
+    let Ok(img) = pimu::firmware::eeprom::EepromImage::parse(flash) else {
         return;
     };
     if map {
@@ -1353,7 +1351,7 @@ struct Rig<'a> {
     usb_disk: Option<SharedUsbDisk>,
     /// `--otg <img>`: the stick in the USB-C socket (#113).
     otg_disk: Option<SharedUsbDisk>,
-    bootrom: rpi_virt_fw::firmware::bootrom::BootRom,
+    bootrom: pimu::firmware::bootrom::BootRom,
     maskrom_image: Option<Vec<u8>>,
     board: Board,
 }
@@ -1377,7 +1375,7 @@ impl<'a> Rig<'a> {
         // The boot ROM is the model's first stage for an EEPROM boot: it verifies
         // and stages the bootcode (see `firmware::bootrom`). Its HMAC key, when the
         // operator supplies one, comes from the environment and never the repo.
-        let bootrom = rpi_virt_fw::firmware::bootrom::BootRom::from_env()?;
+        let bootrom = pimu::firmware::bootrom::BootRom::from_env()?;
 
         // `--maskrom <file>`: experimental. Map a real maskROM dump at 0x6000_0000
         // and execute it from the reset vector instead of running the behavioural
@@ -1481,35 +1479,33 @@ impl<'a> Rig<'a> {
                     }
                     blob
                 }
-                None => rpi_virt_fw::periph::hdmi_ddc::DEFAULT_EDID.to_vec(),
+                None => pimu::periph::hdmi_ddc::DEFAULT_EDID.to_vec(),
             };
-            machine.hdmi0 = rpi_virt_fw::periph::Hdmi::new("hdmi0").with_display();
-            machine.hdmi_ddc0 = rpi_virt_fw::periph::HdmiDdc::new("hdmi-ddc0").with_edid(edid);
+            machine.hdmi0 = pimu::periph::Hdmi::new("hdmi0").with_display();
+            machine.hdmi_ddc0 = pimu::periph::HdmiDdc::new("hdmi-ddc0").with_edid(edid);
         }
         if check_coherency {
-            machine.ram.coherency = rpi_virt_fw::coherency::Coherency::on(self.log.clone());
+            machine.ram.coherency = pimu::coherency::Coherency::on(self.log.clone());
         }
         if check_alignment {
-            machine.alignment = rpi_virt_fw::align::Alignment::on(self.log.clone());
+            machine.alignment = pimu::align::Alignment::on(self.log.clone());
         }
         if let Some(seed) = jitter {
-            rpi_virt_fw::jitter::arm(seed, self.log.clone());
+            pimu::jitter::arm(seed, self.log.clone());
             if let Some(one_in) = faults {
-                rpi_virt_fw::jitter::set_faults(one_in);
+                pimu::jitter::set_faults(one_in);
             }
         }
         if let Some(p) = &hat_eeprom {
             let bytes = std::fs::read(p).with_context(|| format!("reading {}", p.display()))?;
             machine
                 .bsc0
-                .attach_eeprom(rpi_virt_fw::periph::hat::HatEeprom::new(bytes));
+                .attach_eeprom(pimu::periph::hat::HatEeprom::new(bytes));
         }
         if let Some(disk) = &self.usb_disk {
             machine.pcie.endpoint.attach(
                 USB_ROOT_PORT,
-                Box::new(rpi_virt_fw::periph::usb::MassStorage::with_disk(
-                    disk.clone(),
-                )),
+                Box::new(pimu::periph::usb::MassStorage::with_disk(disk.clone())),
             );
         }
         // `--otg <img>`: the same device in the USB-C socket, on the BCM2711's
@@ -1517,15 +1513,16 @@ impl<'a> Rig<'a> {
         // and what `otg_mode=1` gives Linux (#113).
         if let Some(disk) = &self.otg_disk {
             // A USB 2.0 socket, so the stick enumerates at high speed.
-            machine.xhci_otg.attach(Box::new(
-                rpi_virt_fw::periph::usb::MassStorage::with_disk_hs(disk.clone()),
-            ));
+            machine
+                .xhci_otg
+                .attach(Box::new(pimu::periph::usb::MassStorage::with_disk_hs(
+                    disk.clone(),
+                )));
         }
         // `--netboot <dir>`: plug the Ethernet cable into the built-in network
         // peer (`src/net/peer.rs`): DHCP, DNS, and `<dir>` over TFTP and HTTP.
         if let Some(dir) = &netboot_root {
-            let peer =
-                rpi_virt_fw::net::BuiltinPeer::with_root(dir.clone()).with_log(self.log.clone());
+            let peer = pimu::net::BuiltinPeer::with_root(dir.clone()).with_log(self.log.clone());
             machine.attach_net(Box::new(peer));
         }
         // `--net passt[:<socket>]`: the host's network (#45). A new connection
@@ -1533,7 +1530,7 @@ impl<'a> Rig<'a> {
         // after a reset.
         if let Some(host_net) = &host_net {
             let net = match host_net {
-                HostNet::Passt => rpi_virt_fw::net::StreamBackend::spawn_passt().map_err(|e| {
+                HostNet::Passt => pimu::net::StreamBackend::spawn_passt().map_err(|e| {
                     if e.kind() == std::io::ErrorKind::NotFound {
                         anyhow::anyhow!(
                             "--net passt starts passt, and there is no `passt` in PATH. \
@@ -1546,17 +1543,17 @@ impl<'a> Rig<'a> {
                         anyhow::Error::new(e).context("starting passt")
                     }
                 })?,
-                HostNet::Socket(sock) => rpi_virt_fw::net::StreamBackend::connect(sock)
+                HostNet::Socket(sock) => pimu::net::StreamBackend::connect(sock)
                     .with_context(|| format!("connecting to {}", sock.display()))?,
             };
             machine.attach_net(Box::new(net));
         }
         machine.mmio_trace = trace_mmio;
-        // `RVF_TRACE_MMIO=<lo>-<hi>` (hex): trace peripheral accesses from the
+        // `PIMU_TRACE_MMIO=<lo>-<hi>` (hex): trace peripheral accesses from the
         // first instruction, but only inside that address range. Tracing the
         // whole bus across a boot is unusable — both in volume and in the time
         // the formatting costs — when the question is about one block.
-        if let Some((lo, hi)) = std::env::var("RVF_TRACE_MMIO")
+        if let Some((lo, hi)) = std::env::var("PIMU_TRACE_MMIO")
             .ok()
             .and_then(|v| parse_addr_range(&v))
         {
@@ -1606,7 +1603,7 @@ impl<'a> Rig<'a> {
             entry.unwrap_or(payload.entry())
         };
         for &(a, v) in patches {
-            use rpi_virt_fw::bus::Bus;
+            use pimu::bus::Bus;
             machine.store32(a, v).ok();
             if verbose {
                 println!("patch [{a:#010x}] = {v:#010x}");
@@ -1658,15 +1655,15 @@ impl<'a> Rig<'a> {
         emu
     }
 
-    /// `RVF_DUMP_FLASH` and `RVF_DUMP_RAM`, after every run segment.
+    /// `PIMU_DUMP_FLASH` and `PIMU_DUMP_RAM`, after every run segment.
     fn dump_segment(&self, emu: &Emulator, flash: &[u8], reboots: u32) {
-        // `RVF_DUMP_FLASH=<path>` writes the (self-update-modified) EEPROM image
+        // `PIMU_DUMP_FLASH=<path>` writes the (self-update-modified) EEPROM image
         // after every run segment — `<path>.<n>` — so a run that reaches
         // "BOOT-EEPROM: UPDATED" but stops before RESET still yields the burned
         // image. Feed it back as `boot <path>.<n> --eeprom` for a fast, already
         // provisioned boot (no self-update, no reboot).
         if self.opts.eeprom {
-            if let Ok(p) = std::env::var("RVF_DUMP_FLASH") {
+            if let Ok(p) = std::env::var("PIMU_DUMP_FLASH") {
                 let cur = emu.machine.spi0.flash_bytes();
                 if cur != flash {
                     let _ = std::fs::write(format!("{p}.{}", reboots + 1), cur);
@@ -1674,10 +1671,10 @@ impl<'a> Rig<'a> {
                 }
             }
         }
-        // `RVF_DUMP_RAM=<path>` writes SDRAM out the same way, before a reset
+        // `PIMU_DUMP_RAM=<path>` writes SDRAM out the same way, before a reset
         // replaces it: a kernel that dies before its console comes up still
         // has its log buffer in there.
-        if let Ok(p) = std::env::var("RVF_DUMP_RAM") {
+        if let Ok(p) = std::env::var("PIMU_DUMP_RAM") {
             let ram = emu.machine.ram.as_slice();
             let _ = std::fs::write(format!("{p}.{}", reboots + 1), ram);
             eprintln!("wrote {p}.{} ({} bytes)", reboots + 1, ram.len());
@@ -1841,7 +1838,7 @@ fn print_arm_cores(emu: &Emulator, eeprom: bool) {
         );
             if c.sha_blocks > 0 {
                 println!(
-                "            {} SHA-256 block loop(s), {} blocks hashed natively (RVF_NO_SHA_SKIP=1 to compare)",
+                "            {} SHA-256 block loop(s), {} blocks hashed natively (PIMU_NO_SHA_SKIP=1 to compare)",
                 c.sha_loops, c.sha_blocks
             );
             }
@@ -1898,8 +1895,8 @@ fn print_property_replies(machine: &Machine) {
 /// through a whole boot that printed nothing about it. A device belongs here
 /// once it holds a value worth a diff.
 fn print_device_state(machine: &Machine, fdt: Option<&[u8]>) {
-    use rpi_virt_fw::periph::bluetooth::{format_bd_address, published_bd_address};
-    use rpi_virt_fw::periph::sdpcm::MacSource;
+    use pimu::periph::bluetooth::{format_bd_address, published_bd_address};
+    use pimu::periph::sdpcm::MacSource;
 
     let mac = machine.genet.mac_state();
     println!("\n--- device state ---");
@@ -1927,7 +1924,7 @@ fn print_device_state(machine: &Machine, fdt: Option<&[u8]>) {
         },
     );
     let published = fdt
-        .and_then(|blob| rpi_virt_fw::fdt::Fdt::parse(blob).ok())
+        .and_then(|blob| pimu::fdt::Fdt::parse(blob).ok())
         .map(|fdt| published_bd_address(&fdt));
     match published {
         Some(p) => match p.enabled {
@@ -1969,8 +1966,8 @@ fn print_device_state(machine: &Machine, fdt: Option<&[u8]>) {
 /// and prints it only with its own event tracing turned on. It is the whole
 /// of what the chip is allowed to say unasked, so a bring-up that stopped
 /// asking — or a chip that stopped remembering — is invisible without this.
-fn print_wifi_events(chip: &rpi_virt_fw::periph::sdpcm::Sdpcm) {
-    use rpi_virt_fw::periph::sdpcm::EventMaskSource;
+fn print_wifi_events(chip: &pimu::periph::sdpcm::Sdpcm) {
+    use pimu::periph::sdpcm::EventMaskSource;
 
     let wanted = chip.events_wanted();
     println!(
@@ -2063,7 +2060,7 @@ fn print_console(report: &RunReport, verbose: bool) {
         println!("\n--- console ({} bytes) ---", report.console.len());
         if report.console_streamed {
             // Already written out line by line while the run was going.
-            println!("(streamed above; RVF_LIVE_CONSOLE=0 to buffer it here instead)");
+            println!("(streamed above; PIMU_LIVE_CONSOLE=0 to buffer it here instead)");
         } else {
             println!("{}", String::from_utf8_lossy(&report.console));
         }
@@ -2074,7 +2071,7 @@ fn print_console(report: &RunReport, verbose: bool) {
 
 /// `--dump <addr>:<len>`: memory as the VPU sees it, in hex.
 fn print_dump(machine: &mut Machine, a: u32, n: u32) {
-    use rpi_virt_fw::bus::Bus;
+    use pimu::bus::Bus;
     print!("dump {a:#010x}:");
     for i in 0..n {
         if i % 32 == 0 {
@@ -2082,9 +2079,7 @@ fn print_dump(machine: &mut Machine, a: u32, n: u32) {
         }
         print!(
             "{:02x}",
-            machine
-                .load(a + i, rpi_virt_fw::bus::Width::Byte)
-                .unwrap_or(0) as u8
+            machine.load(a + i, pimu::bus::Width::Byte).unwrap_or(0) as u8
         );
     }
     println!();
@@ -2092,14 +2087,14 @@ fn print_dump(machine: &mut Machine, a: u32, n: u32) {
 
 /// `--disasm <addr>:<count>`: VPU instructions from memory.
 fn print_disasm(machine: &mut Machine, a: u32, count: u32) {
-    use rpi_virt_fw::bus::Bus;
+    use pimu::bus::Bus;
     println!("disasm {a:#010x}:");
     let mut pc = a;
     let mut buf = [0u8; 10];
     for _ in 0..count {
         for (i, b) in buf.iter_mut().enumerate() {
             *b = machine
-                .load(pc + i as u32, rpi_virt_fw::bus::Width::Byte)
+                .load(pc + i as u32, pimu::bus::Width::Byte)
                 .unwrap_or(0) as u8;
         }
         let len = insn_len_bytes(u16::from_le_bytes([buf[0], buf[1]])) as usize;
@@ -2134,7 +2129,7 @@ fn print_phase_tags(report: &RunReport) {
     }
 }
 
-/// The VPU instruction traces (`--trace*`, `RVF_TRACE_ON_*`).
+/// The VPU instruction traces (`--trace*`, `PIMU_TRACE_ON_*`).
 fn print_traces(emu: &Emulator, trace: bool) {
     if trace || !emu.cpu.trace_log.is_empty() {
         println!(
@@ -2303,7 +2298,7 @@ fn report_fdt(opts: &BootOpts, machine: &Machine, located: Option<(u32, Vec<u8>)
     } = *opts;
     match located {
         Some((addr, blob)) => {
-            match rpi_virt_fw::fdt::Fdt::parse(&blob) {
+            match pimu::fdt::Fdt::parse(&blob) {
                 Ok(fdt) => {
                     if verbose {
                         let h = fdt.header();
@@ -2385,7 +2380,7 @@ fn print_unimpl(report: &RunReport, path: &Path) {
             );
         }
         println!(
-            "\n(disassemble any of these with:  rpi-virt-fw disasm {} --vaddr <pc> --count 1)",
+            "\n(disassemble any of these with:  pimu disasm {} --vaddr <pc> --count 1)",
             path.display()
         );
     }
@@ -2400,14 +2395,14 @@ fn print_unimpl(report: &RunReport, path: &Path) {
 /// Anything the model could not do — an unknown instruction, a bus fault, an
 /// ARM core stopping — fails the run whenever it happens.
 fn boot_outcome(
-    report: &rpi_virt_fw::emulator::RunReport,
+    report: &pimu::emulator::RunReport,
     emu: &Emulator,
     eeprom: bool,
     until: Option<&str>,
     reboots: u32,
 ) -> (bool, String) {
-    use rpi_virt_fw::emulator::RunEnd;
-    use rpi_virt_fw::vpu::exec::Stop;
+    use pimu::emulator::RunEnd;
+    use pimu::vpu::exec::Stop;
 
     let end = match &report.end {
         RunEnd::Until => {
@@ -2465,7 +2460,7 @@ fn boot_outcome(
 /// image, found through the section walk rather than by searching for the name
 /// — the bootcode carries a string table with the same names in it.
 fn find_bootconf_header(flash: &[u8]) -> Option<usize> {
-    let img = rpi_virt_fw::firmware::eeprom::EepromImage::parse(flash).ok()?;
+    let img = pimu::firmware::eeprom::EepromImage::parse(flash).ok()?;
     img.sections
         .iter()
         .find(|s| s.filename.as_deref() == Some("bootconf.txt"))
@@ -2485,14 +2480,14 @@ fn find_bootconf_header(flash: &[u8]) -> Option<usize> {
 ///
 /// The header's `totalsize` is trusted over the logged length, so a firmware
 /// that logs a rounded figure still yields an exact blob, and so does the tree
-/// [`rpi_virt_fw::armstub::add_bootargs`] grew in place. Returns the address and
+/// [`pimu::armstub::add_bootargs`] grew in place. Returns the address and
 /// the bytes.
 fn locate_fdt(
     machine: &mut Machine,
     handoff: Option<Handoff>,
     console: &[u8],
 ) -> Option<(u32, Vec<u8>)> {
-    use rpi_virt_fw::bus::{Bus, Width};
+    use pimu::bus::{Bus, Width};
 
     let text = String::from_utf8_lossy(console);
     // Last one wins: a `tryboot` retry would load the tree more than once.
@@ -2521,8 +2516,7 @@ fn locate_fdt(
     let totalsize = u32::from_be_bytes([head[4], head[5], head[6], head[7]]);
     // Believe the header only if it is plausible; otherwise fall back to the
     // logged length so `Fdt::parse` can report what is actually there.
-    let len = if u32::from_be_bytes([head[0], head[1], head[2], head[3]])
-        == rpi_virt_fw::fdt::FDT_MAGIC
+    let len = if u32::from_be_bytes([head[0], head[1], head[2], head[3]]) == pimu::fdt::FDT_MAGIC
         && (40..=8 << 20).contains(&totalsize)
     {
         totalsize
@@ -2532,13 +2526,13 @@ fn locate_fdt(
     Some((addr, read(machine, addr, len)))
 }
 
-/// `RVF_ARM_PROF`'s table: the hottest ARM steps by core, EL and 256-byte PC
+/// `PIMU_ARM_PROF`'s table: the hottest ARM steps by core, EL and 256-byte PC
 /// bucket.
 fn print_arm_prof(prof: &std::collections::HashMap<(usize, u32, u64), u64>) {
     let total: u64 = prof.values().sum();
     let mut v: Vec<_> = prof.iter().collect();
     v.sort_by_key(|(_, &n)| std::cmp::Reverse(n));
-    println!("  RVF_ARM_PROF: steps by core, EL and 256-byte PC bucket (total {total})");
+    println!("  PIMU_ARM_PROF: steps by core, EL and 256-byte PC bucket (total {total})");
     for ((core, el, pc), &n) in v.into_iter().take(30) {
         println!(
             "    core {core} EL{el} {pc:#014x}  {n:>13}  {:5.1}%",
@@ -2547,10 +2541,10 @@ fn print_arm_prof(prof: &std::collections::HashMap<(usize, u32, u64), u64>) {
     }
 }
 
-/// `RVF_ARM_BLOCKS`'s table: how long the straight-line runs the cores
+/// `PIMU_ARM_BLOCKS`'s table: how long the straight-line runs the cores
 /// executed were, and how often each was re-entered (#117).
-fn print_arm_blocks(cores: &[rpi_virt_fw::arm::Core]) {
-    use rpi_virt_fw::arm::blocks::Blocks;
+fn print_arm_blocks(cores: &[pimu::arm::Core]) {
+    use pimu::arm::blocks::Blocks;
     let mut all = Blocks::default();
     for c in cores {
         if let Some(b) = &c.blocks {
@@ -2561,7 +2555,7 @@ fn print_arm_blocks(cores: &[rpi_virt_fw::arm::Core]) {
         return;
     }
     println!(
-        "  RVF_ARM_BLOCKS: {} instruction(s) in {} straight-line run(s), {} distinct, \
+        "  PIMU_ARM_BLOCKS: {} instruction(s) in {} straight-line run(s), {} distinct, \
          mean {:.1} instruction(s) per run, {} exception cut(s)",
         all.insns,
         all.runs,
@@ -2608,8 +2602,8 @@ fn print_arm_blocks(cores: &[rpi_virt_fw::arm::Core]) {
 /// A mismatch is not by itself a bug in the model: it means the EEPROM
 /// bootloader no longer derives the identity the way `src/identity.rs` says, and
 /// that is exactly the event worth failing on.
-fn report_machine_id_derivation(machine: &Machine, fdt: &rpi_virt_fw::fdt::Fdt) {
-    use rpi_virt_fw::identity::{expected_machine_id_hex, MACHINE_ID_ROWS};
+fn report_machine_id_derivation(machine: &Machine, fdt: &pimu::fdt::Fdt) {
+    use pimu::identity::{expected_machine_id_hex, MACHINE_ID_ROWS};
 
     let published = fdt
         .properties_of("/chosen")
@@ -2647,7 +2641,7 @@ fn report_machine_id_derivation(machine: &Machine, fdt: &rpi_virt_fw::fdt::Fdt) 
 
 /// Parse `<lo>-<hi>` (hex, `0x` optional) into a half-open address range.
 /// Anything else — including the bare `1` that arms the trace from a
-/// `RVF_TRACE_ON_*` trigger — yields `None`.
+/// `PIMU_TRACE_ON_*` trigger — yields `None`.
 fn parse_addr_range(s: &str) -> Option<(u32, u32)> {
     let (lo, hi) = s.trim().split_once('-')?;
     let p = |t: &str| u32::from_str_radix(t.trim().trim_start_matches("0x"), 16).ok();

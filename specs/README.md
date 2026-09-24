@@ -1,7 +1,7 @@
 # Peripheral register specs
 
 One TOML file per modelled block, with provenance on every register and field
-([#39](https://github.com/valtzu/rpi-virt-fw/issues/39)). Most of these blocks —
+([#39](https://github.com/rusty-pi/pimu/issues/39)). Most of these blocks —
 the VideoCore-side ones especially — have no public register documentation, so
 where each fact came from matters as much as the fact itself.
 

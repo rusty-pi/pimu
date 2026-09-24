@@ -12,7 +12,7 @@ confidence = "high"
 
 [[block.source]]
 kind       = "trace"
-ref        = "start4 1.20190925 on a B0 (`RVF_TRACE_MMIO=0x7ef00b00-0x7ef00e00`): zeroes `0x130..0x1A0`, writes 4 to `0x264`, a `(0x100 | n, value)` list from `0x134` and `0x180C0005` to `0x130`, then 4 to `0x260`, then polls `0x268` for bit 2"
+ref        = "start4 1.20190925 on a B0 (`PIMU_TRACE_MMIO=0x7ef00b00-0x7ef00e00`): zeroes `0x130..0x1A0`, writes 4 to `0x264`, a `(0x100 | n, value)` list from `0x134` and `0x180C0005` to `0x130`, then 4 to `0x260`, then polls `0x268` for bit 2"
 confidence = "high"
 
 [[block.copy]]

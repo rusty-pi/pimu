@@ -100,7 +100,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "trace"
-ref        = "`boot --send-after '/ # ' 'poweroff -f\\n'` on the Linux card: after the reset the bootloader prints `partition 63`, `PM_RSTS 00000575` and `Halt: wake: 1 power_off: 0`; `RVF_MMIO_FROM=0x800005AC` shows `RSTS <- 0x5A000000`, ten `GPSET1`/`GPCLR1` bit 10 pairs, zeros to `0x7E002010..2C` and `0x7E002810..2C`, `VBASE <- 0x80000000`, `GPFEN0 <- 8`, `+0x28 <- 0x10000`, `sleep`, and all three undone"
+ref        = "`boot --send-after '/ # ' 'poweroff -f\\n'` on the Linux card: after the reset the bootloader prints `partition 63`, `PM_RSTS 00000575` and `Halt: wake: 1 power_off: 0`; `PIMU_MMIO_FROM=0x800005AC` shows `RSTS <- 0x5A000000`, ten `GPSET1`/`GPCLR1` bit 10 pairs, zeros to `0x7E002010..2C` and `0x7E002810..2C`, `VBASE <- 0x80000000`, `GPFEN0 <- 8`, `+0x28 <- 0x10000`, `sleep`, and all three undone"
 confidence = "high"
 
 [[register.source]]

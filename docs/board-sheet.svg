@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1320 910" width="1320" height="910" data-board="d03115" role="img" aria-labelledby="sheet-title sheet-desc">
-  <title id="sheet-title">Raspberry Pi 4 Model B, as rpi-virt-fw models it</title>
+  <title id="sheet-title">Raspberry Pi 4 Model B, as pimu models it</title>
   <desc id="sheet-desc">Board block diagram. The BCM2711 in the centre with its controller ports on the edges. Left: the SPI NOR flash on SPI0; the PMICs at 0x1E and 0x1B and the FXL6408 expander on I2C bus 8; LPDDR4 on the SDRAM controller. Right: the BCM54213PE PHY on GENET's MDIO bus; the VL805 xHCI controller and the VIA hub behind the PCIe root complex; the two HDMI outputs. Bottom: the microSD slot on EMMC2, the CYW43455 WiFi and Bluetooth module, whose SDIO side is on the legacy EMMC and whose HCI side is on UART0, the USB-C port, which either the DWC2 core or the BCM2711's own xHCI drives, the 40-pin header on UART0 and BSC0, the camera and display connectors on BSC0. Every part carries the name of its spec in specs/, and every wire the parent link it draws.</desc>
   <style>
     /* palette: light. The dark twin is generated from this block —

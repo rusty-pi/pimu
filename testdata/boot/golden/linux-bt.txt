@@ -706,7 +706,7 @@ MESS:[t]:0: uart: Baud rate change done...
 [t] Freeing unused kernel memory: 5632K
 [t] Run /sbin/init as init process
 [t] Run /sbin/init as init process
-rpi-virt-fw: userland up, Linux 6.18.46-v8+, 4 CPUs
+pimu: userland up, Linux 6.18.46-v8+, 4 CPUs
 
 
 BusyBox v1.35.0 (Debian 1:1.35.0-4+deb12u1+b1) built-in shell (ash)

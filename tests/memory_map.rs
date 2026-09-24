@@ -8,9 +8,9 @@
 //! same shape of overlap. These tests assert the decode directly, using
 //! `Machine::stub_hits` as the "did this reach a real device" signal.
 
-use rpi_virt_fw::bus::Bus;
-use rpi_virt_fw::soc::bcm2711 as map;
-use rpi_virt_fw::Machine;
+use pimu::bus::Bus;
+use pimu::soc::bcm2711 as map;
+use pimu::Machine;
 
 fn machine() -> Machine {
     Machine::new(1024 * 1024)

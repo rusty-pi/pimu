@@ -1,6 +1,6 @@
 //! Run-loop diagnostics configuration.
 //!
-//! Every `RVF_*` switch the run loop reads, resolved once. Two reasons this is
+//! Every `PIMU_*` switch the run loop reads, resolved once. Two reasons this is
 //! a struct rather than forty locals at the top of
 //! [`Emulator::run`](crate::emulator::Emulator::run):
 //!
@@ -30,36 +30,36 @@ pub const ON: bool = cfg!(feature = "diag");
 
 /// The switches that only do anything in a `diag` build.
 const GATED: &[&str] = &[
-    "RVF_TRACE_ON_PC",
-    "RVF_TRACE_ON_CONSOLE",
-    "RVF_TRACE_CAP",
-    "RVF_TRACE_CF",
-    "RVF_TRACE_MMIO",
-    "RVF_MMIO_FROM",
-    "RVF_TRAP",
-    "RVF_TRAP_FROM",
-    "RVF_TRAP_MAX",
-    "RVF_PROF",
-    "RVF_PROF_THREAD",
-    "RVF_HEARTBEAT",
-    "RVF_WATCH",
-    "RVF_TCB",
-    "RVF_ARM_BLOCKS",
+    "PIMU_TRACE_ON_PC",
+    "PIMU_TRACE_ON_CONSOLE",
+    "PIMU_TRACE_CAP",
+    "PIMU_TRACE_CF",
+    "PIMU_TRACE_MMIO",
+    "PIMU_MMIO_FROM",
+    "PIMU_TRAP",
+    "PIMU_TRAP_FROM",
+    "PIMU_TRAP_MAX",
+    "PIMU_PROF",
+    "PIMU_PROF_THREAD",
+    "PIMU_HEARTBEAT",
+    "PIMU_WATCH",
+    "PIMU_TCB",
+    "PIMU_ARM_BLOCKS",
 ];
 
-/// One `RVF_*` switch that is either on or off.
+/// One `PIMU_*` switch that is either on or off.
 fn flag(name: &str) -> bool {
     std::env::var_os(name).is_some()
 }
 
-/// A `RVF_*` switch carrying a hex address, with or without a `0x` prefix.
+/// A `PIMU_*` switch carrying a hex address, with or without a `0x` prefix.
 fn hex(name: &str) -> Option<u32> {
     std::env::var(name)
         .ok()
         .and_then(|v| u32::from_str_radix(v.trim().trim_start_matches("0x"), 16).ok())
 }
 
-/// A `RVF_*` switch carrying hex addresses, comma-separated.
+/// A `PIMU_*` switch carrying hex addresses, comma-separated.
 fn hex_list(name: &str) -> Vec<u32> {
     std::env::var(name)
         .map(|v| {
@@ -70,7 +70,7 @@ fn hex_list(name: &str) -> Vec<u32> {
         .unwrap_or_default()
 }
 
-/// A `RVF_*` switch carrying a decimal number.
+/// A `PIMU_*` switch carrying a decimal number.
 fn num<T: std::str::FromStr>(name: &str) -> Option<T> {
     std::env::var(name).ok().and_then(|v| v.trim().parse().ok())
 }
@@ -111,7 +111,7 @@ pub struct DiagConfig {
     /// The same, attributed per ThreadX thread — set to the address of the
     /// firmware's current-thread pointer (`_tx_thread_current_ptr`), since
     /// only the firmware knows where that lives. `--log irqtbl` prints `gp`,
-    /// and the pointer is findable from a `RVF_TRACE_ON_PC` trace of a context
+    /// and the pointer is findable from a `PIMU_TRACE_ON_PC` trace of a context
     /// switch.
     pub prof_thread: Option<u32>,
     /// Print progress every N instructions.
@@ -139,29 +139,29 @@ impl DiagConfig {
             }
             // The live console is not a diagnostic: boot-check reads it.
             return DiagConfig {
-                live_console: std::env::var("RVF_LIVE_CONSOLE").as_deref() != Ok("0"),
+                live_console: std::env::var("PIMU_LIVE_CONSOLE").as_deref() != Ok("0"),
                 ..DiagConfig::default()
             };
         }
         DiagConfig {
-            live_console: std::env::var("RVF_LIVE_CONSOLE").as_deref() != Ok("0"),
+            live_console: std::env::var("PIMU_LIVE_CONSOLE").as_deref() != Ok("0"),
 
-            trace_on_pc: hex("RVF_TRACE_ON_PC"),
-            trace_on_console: std::env::var("RVF_TRACE_ON_CONSOLE").ok(),
-            trace_cap: num("RVF_TRACE_CAP").unwrap_or(300_000),
-            trace_cf: flag("RVF_TRACE_CF"),
-            trace_mmio: flag("RVF_TRACE_MMIO"),
-            mmio_from: hex("RVF_MMIO_FROM"),
+            trace_on_pc: hex("PIMU_TRACE_ON_PC"),
+            trace_on_console: std::env::var("PIMU_TRACE_ON_CONSOLE").ok(),
+            trace_cap: num("PIMU_TRACE_CAP").unwrap_or(300_000),
+            trace_cf: flag("PIMU_TRACE_CF"),
+            trace_mmio: flag("PIMU_TRACE_MMIO"),
+            mmio_from: hex("PIMU_MMIO_FROM"),
 
-            traps: hex_list("RVF_TRAP"),
-            trap_from: num("RVF_TRAP_FROM").unwrap_or(0),
-            trap_max: num("RVF_TRAP_MAX").unwrap_or(40),
+            traps: hex_list("PIMU_TRAP"),
+            trap_from: num("PIMU_TRAP_FROM").unwrap_or(0),
+            trap_max: num("PIMU_TRAP_MAX").unwrap_or(40),
 
-            prof: flag("RVF_PROF"),
-            prof_thread: hex("RVF_PROF_THREAD"),
-            heartbeat: num("RVF_HEARTBEAT").unwrap_or(0),
+            prof: flag("PIMU_PROF"),
+            prof_thread: hex("PIMU_PROF_THREAD"),
+            heartbeat: num("PIMU_HEARTBEAT").unwrap_or(0),
 
-            tcbs: hex_list("RVF_TCB"),
+            tcbs: hex_list("PIMU_TCB"),
         }
     }
 }
@@ -187,12 +187,12 @@ mod tests {
     fn hex_switches_take_a_prefix_or_not() {
         // SAFETY: single-threaded test, and the variable is removed after.
         unsafe {
-            std::env::set_var("RVF_TEST_HEX", "0x3ec5ac0c");
-            assert_eq!(hex("RVF_TEST_HEX"), Some(0x3EC5_AC0C));
-            std::env::set_var("RVF_TEST_HEX", " 3ec5ac0c ");
-            assert_eq!(hex("RVF_TEST_HEX"), Some(0x3EC5_AC0C));
-            std::env::remove_var("RVF_TEST_HEX");
+            std::env::set_var("PIMU_TEST_HEX", "0x3ec5ac0c");
+            assert_eq!(hex("PIMU_TEST_HEX"), Some(0x3EC5_AC0C));
+            std::env::set_var("PIMU_TEST_HEX", " 3ec5ac0c ");
+            assert_eq!(hex("PIMU_TEST_HEX"), Some(0x3EC5_AC0C));
+            std::env::remove_var("PIMU_TEST_HEX");
         }
-        assert_eq!(hex("RVF_TEST_HEX"), None);
+        assert_eq!(hex("PIMU_TEST_HEX"), None);
     }
 }

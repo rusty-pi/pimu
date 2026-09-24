@@ -310,17 +310,17 @@ impl BootRom {
     /// Build from the environment. The secret is a run-time value and never lives
     /// in the repository:
     ///
-    /// * `RVF_BOOT_KEY=<40 hex>` — the 20-byte HMAC key directly.
-    /// * `RVF_BOOT_SALT=<40 hex>` — the 20-byte maskROM salt; XORed with the OTP
+    /// * `PIMU_BOOT_KEY=<40 hex>` — the 20-byte HMAC key directly.
+    /// * `PIMU_BOOT_SALT=<40 hex>` — the 20-byte maskROM salt; XORed with the OTP
     ///   rows the model serves to form the key.
     ///
-    /// Neither set means an unkeyed ROM (signature check skipped). `RVF_BOOT_KEY`
+    /// Neither set means an unkeyed ROM (signature check skipped). `PIMU_BOOT_KEY`
     /// wins if both are set.
     pub fn from_env() -> Result<BootRom> {
-        if let Some(key) = env_hex20("RVF_BOOT_KEY")? {
+        if let Some(key) = env_hex20("PIMU_BOOT_KEY")? {
             return Ok(BootRom::with_key(key));
         }
-        if let Some(salt) = env_hex20("RVF_BOOT_SALT")? {
+        if let Some(salt) = env_hex20("PIMU_BOOT_SALT")? {
             return Ok(BootRom::with_salt(salt));
         }
         Ok(BootRom::unkeyed())
@@ -379,7 +379,7 @@ impl BootRom {
         match check {
             SigCheck::Ok => log.push("boot ROM: bootcode HMAC-SHA1 signature verified".into()),
             SigCheck::Skipped => log.push(
-                "boot ROM: signature check skipped (set RVF_BOOT_KEY or RVF_BOOT_SALT to enable)"
+                "boot ROM: signature check skipped (set PIMU_BOOT_KEY or PIMU_BOOT_SALT to enable)"
                     .into(),
             ),
             SigCheck::Failed => bail!(

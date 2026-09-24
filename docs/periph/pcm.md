@@ -17,7 +17,7 @@ Sources:
 Interrupts (VPU source 119):
 
 - datasheet (high): BCM2711 ARM Peripherals, §6.2.4 Table 102: VC peripheral IRQ 55 is `PCM/I2S`, VPU source 119
-- trace (medium): `linux-boot`, `RVF_TRACE_MMIO=0x7e002000-0x7e002060`: the secure service enables source 119 among the eight `IRQ_PRIO` words it writes — _Which is the firmware enabling the source, not this block raising it: nothing in a boot programs the PCM._
+- trace (medium): `linux-boot`, `PIMU_TRACE_MMIO=0x7e002000-0x7e002060`: the secure service enables source 119 among the eight `IRQ_PRIO` words it writes — _Which is the firmware enabling the source, not this block raising it: nothing in a boot programs the PCM._
 
 ## Register map
 

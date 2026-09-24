@@ -3,7 +3,7 @@
 
 use anyhow::{bail, Result};
 
-use rpi_virt_fw::emulator::{Emulator, RunLimits};
+use pimu::emulator::{Emulator, RunLimits};
 
 /// Where the request buffer is built. Well clear of everything `--dram-map`
 /// reports dirty at `arm_loader` — the kernel ends below `0x0280_0000`, the
@@ -41,7 +41,7 @@ pub fn mbox_property_exchange(
     limits: &RunLimits,
     request: &MboxRequest,
 ) -> Result<()> {
-    use rpi_virt_fw::bus::{Bus, Width};
+    use pimu::bus::{Bus, Width};
 
     println!("\n--- ARM property mailbox (0x7e00_b880) ---");
     let tags: &[MboxTag] = match request {
@@ -140,7 +140,7 @@ pub fn mbox_property_exchange(
     };
 
     let bus_addr = 0xC000_0000 | MBOX_BUFFER;
-    let message = (bus_addr & !0xF) | rpi_virt_fw::periph::mbox::CHANNEL_PROPERTY;
+    let message = (bus_addr & !0xF) | pimu::periph::mbox::CHANNEL_PROPERTY;
     match request {
         MboxRequest::Tags(_) => println!(
             "  posting {message:#010x}  ({} tags, {staged} byte buffer at {MBOX_BUFFER:#010x})",
@@ -302,7 +302,7 @@ pub fn mbox_property_exchange(
             .unwrap_or(0);
         off += 12 + ((slot.max(len) + 3) & !3);
     }
-    // A trace armed by `RVF_TRACE_ON_PC` inside the exchange is collected here,
+    // A trace armed by `PIMU_TRACE_ON_PC` inside the exchange is collected here,
     // after the run report that normally prints one has already run — so
     // print it, or investigating a tag handler silently produces nothing.
     if !emu.cpu.trace_log.is_empty() {

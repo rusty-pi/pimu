@@ -1,4 +1,4 @@
-//! `rpi-virt-fw` — a virtual bench for Raspberry Pi VideoCore boot firmware.
+//! `pimu` — a virtual bench for Raspberry Pi VideoCore boot firmware.
 //!
 //! It executes the real `pieeprom.bin` / `start4.elf` / `fixup4.dat` blobs in
 //! a modelled BCM2711, on into Linux, and regression-tests their behaviour
@@ -21,7 +21,7 @@
 //! - [`armstub`], [`fdt`] and [`identity`]: what `arm_loader` hands the ARM,
 //!   and the board identity (`rpi-machine-id`) in it.
 //! - [`harness`]: scenario files in, pass/fail and a transcript out.
-//! - [`log`], [`diag`] and [`stdio`]: the log channels (`--log`), the `RVF_*`
+//! - [`log`], [`diag`] and [`stdio`]: the log channels (`--log`), the `PIMU_*`
 //!   diagnostics, and the host terminal as the serial console.
 //! - [`spec`]: register maps generated from `specs/*.toml`.
 //!

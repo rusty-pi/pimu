@@ -58,7 +58,7 @@
 //! its own business, so a kernel's `dc civac`, `paciasp` and `msr daif` no
 //! longer end one.
 //! UEFI runs on one core, most of its time hashing the UKI (#53).
-//! `RVF_NO_BURST=1` turns this off, for comparison.
+//! `PIMU_NO_BURST=1` turns this off, for comparison.
 //!
 //! A fast-forward slice runs with the VPU frozen. For `sleep` — the VPU
 //! waiting for an interrupt — the ARM runs the slice *before* the counter
@@ -84,9 +84,9 @@
 //! run; and the park detector only has work to do at a backward jump, so it
 //! is called once, at the transfer that ends the run. What is left per
 //! instruction is the load, the execute, and the tests for a store, a device
-//! and an effect. `RVF_ARM_BLOCKS` measures the runs: the mean is 5.3
+//! and an effect. `PIMU_ARM_BLOCKS` measures the runs: the mean is 5.3
 //! instructions on `linux` and 9.6 on the mkosi boot.
-//! `RVF_NO_STRAIGHT=1` turns this off, for comparison.
+//! `PIMU_NO_STRAIGHT=1` turns this off, for comparison.
 //!
 //! ## Between cores
 //!
@@ -113,7 +113,7 @@
 //! of the host time of a UEFI boot (#53). A core in such a loop is *parked*
 //! instead: it sits out its turns like a `wfi` sleeper, and its state is
 //! rebuilt exactly when the loop would have ended or something it reads
-//! changes. `RVF_NO_PARK=1` turns this off, for comparison.
+//! changes. `PIMU_NO_PARK=1` turns this off, for comparison.
 //!
 //! - Detection (`arm/park.rs`): a backward-jump target hit often enough gets
 //!   its loop watched for a few passes. They have to repeat the same PCs and
@@ -148,7 +148,7 @@
 //! instruction per cycle (#79). A core in such a loop has the blocks in the
 //! middle of a slice hashed natively instead (`arm/sha.rs`), and comes out
 //! with the registers, memory and cycle count it would have had running
-//! them. `RVF_NO_SHA_SKIP=1` turns this off, for comparison.
+//! them. `PIMU_NO_SHA_SKIP=1` turns this off, for comparison.
 //!
 //! - Recognition: by what the loop does, not by its code. A backward-jump
 //!   target reached after three passes in a row of one length, long enough
@@ -274,7 +274,7 @@ pub struct Core {
     sha: Option<Box<sha::Loop>>,
     pub sha_loops: u64,
     pub sha_blocks: u64,
-    /// `RVF_ARM_BLOCKS=1`: the straight-line runs this core executed (#117).
+    /// `PIMU_ARM_BLOCKS=1`: the straight-line runs this core executed (#117).
     pub blocks: Option<Box<blocks::Blocks>>,
 }
 
@@ -294,7 +294,7 @@ impl Core {
             sha: None,
             sha_loops: 0,
             sha_blocks: 0,
-            blocks: (crate::diag::ON && std::env::var_os("RVF_ARM_BLOCKS").is_some())
+            blocks: (crate::diag::ON && std::env::var_os("PIMU_ARM_BLOCKS").is_some())
                 .then(Box::<blocks::Blocks>::default),
         }
     }
@@ -340,9 +340,9 @@ pub struct ArmSide {
     /// the bits there is exact, and the cycle loop visits just these cores —
     /// in the same order — instead of re-testing all four every cycle (#43).
     runnable: u32,
-    /// `RVF_ARM_PROF`: steps per `(core, EL, 256-byte PC bucket)`.
+    /// `PIMU_ARM_PROF`: steps per `(core, EL, 256-byte PC bucket)`.
     pub prof: Option<std::collections::HashMap<(usize, u32, u64), u64>>,
-    /// `RVF_ARM_PROF=<us>`: the model time the profile starts at, until it
+    /// `PIMU_ARM_PROF=<us>`: the model time the profile starts at, until it
     /// has.
     prof_from: Option<u64>,
     /// Bit `id` set while core `id` is parked in a busy-wait loop (module
@@ -353,18 +353,18 @@ pub struct ArmSide {
     /// Parked cores an input change woke in the middle of a cycle, still to
     /// take their turn in it.
     woke: u32,
-    /// `RVF_NO_PARK=1` turns parking off.
+    /// `PIMU_NO_PARK=1` turns parking off.
     park_on: bool,
-    /// `RVF_NO_BURST=1` takes a lone core through the cycle loop too
+    /// `PIMU_NO_BURST=1` takes a lone core through the cycle loop too
     /// ([`Self::burst`]).
     burst_on: bool,
-    /// `RVF_NO_SHA_SKIP=1` runs SHA-256 block loops block by block too
+    /// `PIMU_NO_SHA_SKIP=1` runs SHA-256 block loops block by block too
     /// (module docs, "SHA-256 loops").
     sha_on: bool,
-    /// `RVF_NO_STRAIGHT=1` steps a burst one instruction at a time instead of
+    /// `PIMU_NO_STRAIGHT=1` steps a burst one instruction at a time instead of
     /// running each straight-line stretch off one page ([`Self::burst`]).
     straight_on: bool,
-    /// `RVF_ARM_BLOCKS=1` counts the straight-line runs ([`blocks`]), which
+    /// `PIMU_ARM_BLOCKS=1` counts the straight-line runs ([`blocks`]), which
     /// only [`Self::step_core`] sees, so it takes the cores off the burst
     /// path the way a profile does.
     blocks_on: bool,
@@ -467,17 +467,17 @@ impl ArmSide {
             spis: [false; SPIS.len()],
             runnable: (1 << n) - 1,
             prof: None,
-            prof_from: std::env::var("RVF_ARM_PROF")
+            prof_from: std::env::var("PIMU_ARM_PROF")
                 .ok()
                 .map(|v| v.parse().unwrap_or(0)),
             parked: 0,
             park_due: u64::MAX,
             woke: 0,
-            park_on: std::env::var_os("RVF_NO_PARK").is_none(),
-            burst_on: std::env::var_os("RVF_NO_BURST").is_none(),
-            sha_on: std::env::var_os("RVF_NO_SHA_SKIP").is_none(),
-            straight_on: std::env::var_os("RVF_NO_STRAIGHT").is_none(),
-            blocks_on: crate::diag::ON && std::env::var_os("RVF_ARM_BLOCKS").is_some(),
+            park_on: std::env::var_os("PIMU_NO_PARK").is_none(),
+            burst_on: std::env::var_os("PIMU_NO_BURST").is_none(),
+            sha_on: std::env::var_os("PIMU_NO_SHA_SKIP").is_none(),
+            straight_on: std::env::var_os("PIMU_NO_STRAIGHT").is_none(),
+            blocks_on: crate::diag::ON && std::env::var_os("PIMU_ARM_BLOCKS").is_some(),
             stop_on_store: false,
             stored: false,
             log: Log::default(),
@@ -502,9 +502,9 @@ impl ArmSide {
         arm.log = m.log.clone();
         if let Ok(h) = armstub::read_handoff(m) {
             arm.handoff = Some(h);
-            // `RVF_BOOTARGS="initcall_debug nokaslr"`: more kernel arguments,
+            // `PIMU_BOOTARGS="initcall_debug nokaslr"`: more kernel arguments,
             // for a run that has to be read from the kernel's side.
-            let extra = std::env::var("RVF_BOOTARGS").unwrap_or_default();
+            let extra = std::env::var("PIMU_BOOTARGS").unwrap_or_default();
             let args: Vec<&str> = armstub::BOOTARGS
                 .iter()
                 .copied()

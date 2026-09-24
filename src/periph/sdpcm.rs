@@ -418,7 +418,7 @@ struct Bss {
 /// and nothing else. Two entries on the same channel would also exercise
 /// `brcmf_compare_update_same_bss` (`cfg80211.c:3311`).
 const NETWORKS: [Bss; 1] = [Bss {
-    ssid: "rpi-virt-fw-model-ap",
+    ssid: "pimu-model-ap",
     bssid: [0x02, 0x00, 0x5E, 0x00, 0x53, 0x04],
     channel: 1,
     rssi: -60,
@@ -451,7 +451,7 @@ const CHIP_MAC: [u8; 6] = [0x02, 0x00, 0x5E, 0x00, 0x53, 0x03];
 /// (`common.c:268`) prints it as the firmware version and keeps whatever
 /// follows the last space as the number ethtool reports, so it has to have
 /// one. It says what it is: no firmware ran to produce it.
-const VERSION: &str = "rpi-virt-fw model firmware (no radio) version 0";
+const VERSION: &str = "pimu model firmware (no radio) version 0";
 
 /// Where the address the chip answers `cur_etheraddr` with came from, for the
 /// run report. Which of the three won is not visible anywhere else: the

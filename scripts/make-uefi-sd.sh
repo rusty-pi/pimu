@@ -3,7 +3,7 @@
 # RPI_EFI.fd, fetched by scripts/fetch-firmware.sh) as the armstub: MBR, one
 # FAT32 partition with the Raspberry Pi firmware, the device tree and the
 # overlays, and a config.txt that hands the ARM to UEFI instead of a kernel.
-# Consumed by `rpi-virt-fw boot --sd <img>`, and by testdata/boot/uefi.toml.
+# Consumed by `pimu boot --sd <img>`, and by testdata/boot/uefi.toml.
 #
 # There is no root filesystem and no kernel: the run this card is for ends at
 # the UEFI boot menu, which is already past the point where UEFI's drivers have

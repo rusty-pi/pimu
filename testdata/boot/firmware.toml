@@ -1,7 +1,7 @@
 # The firmware boot: the regression this project actually exists for.
 #
 # One EEPROM image, one SD card, one wall budget, and every assertion made
-# about the run. `rpi-virt-fw boot-check` runs it, and so does CI.
+# about the run. `pimu boot-check` runs it, and so does CI.
 #
 # Three kinds of assertion, checked against a single boot:
 #
@@ -14,7 +14,7 @@
 #     the boot run differently without printing anything different (#85).
 #
 # After an intentional change, re-record the golden and the counts with:
-#   rpi-virt-fw boot-check testdata/boot/firmware.toml --update
+#   pimu boot-check testdata/boot/firmware.toml --update
 # and read the diff in the commit before you believe it.
 #
 # This file is deliberately not under `testdata/scenarios/`: those are the

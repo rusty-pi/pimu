@@ -2,7 +2,7 @@
 # with the four ARM cores modelled, carried on through the armstub into the
 # kernel, off the SD card's ext4 root partition, and into a busybox shell on
 # the serial console, which then gets a few commands typed into it.
-# `rpi-virt-fw boot-check testdata/boot/linux.toml` runs it, and so does
+# `pimu boot-check testdata/boot/linux.toml` runs it, and so does
 # CI.
 #
 # The card is the one scripts/make-sd.sh builds; its root filesystem holds
@@ -125,7 +125,7 @@ line = "VFS: Mounted root (ext4 filesystem) readonly on device 179:2."
 
 [[milestone]]
 why = "Userspace runs: busybox init, then rcS, which reads /proc to count the CPUs."
-line = ["rpi-virt-fw: userland up, Linux ", ", 4 CPUs"]
+line = ["pimu: userland up, Linux ", ", 4 CPUs"]
 
 [[milestone]]
 why = "A shell on the serial console (milestone 5)."

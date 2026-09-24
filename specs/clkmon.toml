@@ -12,7 +12,7 @@ confidence = "high"
 
 [[block.source]]
 kind       = "trace"
-ref        = "`RVF_TRACE_MMIO=0x7d5d0000-0x7d5e0000` over a boot to `arm_loader`"
+ref        = "`PIMU_TRACE_MMIO=0x7d5d0000-0x7d5e0000` over a boot to `arm_loader`"
 confidence = "high"
 
 [[register]]

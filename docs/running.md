@@ -29,7 +29,7 @@ scan` finds there is invented — `src/periph/sdpcm.rs` says so beside it, and
 the scenario's own header says so again.
 
 Each boot scenario in `testdata/boot/` carries the exact flags and EEPROM
-settings for its medium, and `rpi-virt-fw boot-check <scenario> --plan` prints
+settings for its medium, and `pimu boot-check <scenario> --plan` prints
 them — the shortest way to see how a given boot is set up.
 
 ## Wall budgets

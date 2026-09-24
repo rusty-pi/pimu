@@ -88,7 +88,7 @@ Sources:
 `DSPEIVST1` sources:
 
 - linux (high): `drivers/gpu/drm/vc4/vc4_regs.h`: `SCALER5_DISPCTRL_DSPEIVST(x)` `BIT(6 + 4x)`
-- measured (high): start4 leaves `DISPCTRL = 0x9a0ddfff` with channel 1 running: every enable of all three channels set (`RVF_TRACE_MMIO`)
+- measured (high): start4 leaves `DISPCTRL = 0x9a0ddfff` with channel 1 running: every enable of all three channels set (`PIMU_TRACE_MMIO`)
 
 `DSPEIEOLN0` sources:
 

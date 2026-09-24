@@ -18,11 +18,11 @@
 
 use std::time::Duration;
 
-use rpi_virt_fw::bus::Bus;
-use rpi_virt_fw::emulator::{Emulator, RunEnd, RunLimits, RunReport};
-use rpi_virt_fw::soc::bcm2711::{CORECTL_BASE, SYSTIMER_BASE, UART0_BASE};
-use rpi_virt_fw::vpu::UnimplPolicy;
-use rpi_virt_fw::Machine;
+use pimu::bus::Bus;
+use pimu::emulator::{Emulator, RunEnd, RunLimits, RunReport};
+use pimu::soc::bcm2711::{CORECTL_BASE, SYSTIMER_BASE, UART0_BASE};
+use pimu::vpu::UnimplPolicy;
+use pimu::Machine;
 
 const CODE: u32 = 0x1000;
 const VBASE: u32 = 0x2000;

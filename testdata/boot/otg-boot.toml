@@ -13,7 +13,7 @@
 # (`MassStorage::with_disk_hs`).
 #
 # Re-record the golden and the retired counts with:
-#   rpi-virt-fw boot-check testdata/boot/otg-boot.toml --update
+#   pimu boot-check testdata/boot/otg-boot.toml --update
 
 name = "otg-boot"
 description = "pieeprom.bin boot from a USB mass-storage device on the USB-C port, through to the ARM hand-off."

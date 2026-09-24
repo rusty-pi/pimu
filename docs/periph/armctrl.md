@@ -10,7 +10,7 @@ The whole pinned boot touches this block a handful of times. Only the release bi
 
 Sources:
 
-- trace (high): `RVF_TRACE_MMIO=7e00b000-7e101000 recon`: the writes right after `arm_loader: Starting ARM`, all from start4's MMIO write helper `0xFEC0043A`
+- trace (high): `PIMU_TRACE_MMIO=7e00b000-7e101000 recon`: the writes right after `arm_loader: Starting ARM`, all from start4's MMIO write helper `0xFEC0043A`
 - inferred (high): size: up to the mailboxes at `0x7E00B880`
 
 ## Register map

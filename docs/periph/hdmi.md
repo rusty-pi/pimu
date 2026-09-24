@@ -43,7 +43,7 @@ Control of the FIFO between the pixel valve and the encoder. After a mode set, s
 Sources:
 
 - linux (high): `drivers/gpu/drm/vc4/vc4_hdmi_regs.h`: `VC4_HDMI_REG(HDMI_FIFO_CTL, 0x074)` in `vc5_hdmi_hdmi0_fields`
-- trace (high): pieeprom-2020-09-03 bootcode, `RVF_TRACE_MMIO`: `0x80007894` writes `0x5`, `0x8000775e` `0x45`, `0x80007776` `0x5`, then `0x8000777e` reads it forever
+- trace (high): pieeprom-2020-09-03 bootcode, `PIMU_TRACE_MMIO`: `0x80007894` writes `0x5`, `0x8000775e` `0x45`, `0x80007776` `0x5`, then `0x8000777e` reads it forever
 
 `RECENTER` sources:
 

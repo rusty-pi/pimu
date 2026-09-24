@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build target/release/rpi-virt-fw with profile-guided optimisation (#48).
+# Build target/release/pimu with profile-guided optimisation (#48).
 #
 #   scripts/pgo-build.sh
 #
@@ -23,8 +23,8 @@ work="$here/target/pgo"
 # progress rather than on wall time gives every machine the same profile (a
 # 120 s budget never got a slower instrumented build past the firmware).
 # Training all the way to the shell took 40% longer on a Pi 4 and gained
-# nothing. RVF_PGO_LINUX_UNTIL overrides it.
-linux_until="${RVF_PGO_LINUX_UNTIL:-Switched to clocksource arch_sys_counter}"
+# nothing. PIMU_PGO_LINUX_UNTIL overrides it.
+linux_until="${PIMU_PGO_LINUX_UNTIL:-Switched to clocksource arch_sys_counter}"
 
 rustup component add llvm-tools >/dev/null 2>&1 || true
 profdata="$(find "$(rustc --print sysroot)" -name llvm-profdata -type f | head -n1)"
@@ -36,7 +36,7 @@ fi
 rm -rf "$work"
 mkdir -p "$work/raw"
 RUSTFLAGS="-Cprofile-generate=$work/raw" cargo build --release --target-dir "$work/build"
-instr="$work/build/release/rpi-virt-fw"
+instr="$work/build/release/pimu"
 
 # A boot scenario's workload as boot-check runs it, minus what it types into
 # the console, plus any extra arguments (a later `--until` wins). The typed
@@ -57,7 +57,7 @@ train() {
     args+=("${plan[i]}")
   done
   echo "training on $scenario" >&2
-  RVF_LIVE_CONSOLE=0 "$instr" "${args[@]}" "$@" > "$work/$(basename "$scenario" .toml).log" 2>&1 || true
+  PIMU_LIVE_CONSOLE=0 "$instr" "${args[@]}" "$@" > "$work/$(basename "$scenario" .toml).log" 2>&1 || true
 }
 train testdata/boot/firmware.toml
 train testdata/boot/linux.toml --until "$linux_until"

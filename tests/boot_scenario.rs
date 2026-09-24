@@ -2,7 +2,7 @@
 //!
 //! `testdata/boot/firmware.toml` describes a run that takes minutes and
 //! needs firmware blobs that are never committed, so `cargo test` cannot boot
-//! it — `rpi-virt-fw boot-check` does that, and CI runs it in its own job. What
+//! it — `pimu boot-check` does that, and CI runs it in its own job. What
 //! is testable here is everything around the run, and it is the part that has
 //! silently rotted before: that the scenario still parses, that every milestone
 //! carries the reason it exists, and — the point of the whole exercise — that a
@@ -11,7 +11,7 @@
 
 use std::path::{Path, PathBuf};
 
-use rpi_virt_fw::harness::boot::{self, BootScenario, GoldenCheck, RetiredCounts};
+use pimu::harness::boot::{self, BootScenario, GoldenCheck, RetiredCounts};
 
 fn scenario_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/boot/firmware.toml")

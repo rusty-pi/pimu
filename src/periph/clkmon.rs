@@ -54,7 +54,7 @@
 //! Point 4 of issue #1 asks for the PLLs themselves, on the grounds that
 //! leaving them unmodelled makes every frequency measurement return one fixed
 //! value. A full boot to `arm_loader` was traced with every access to this
-//! window logged (`RVF_TRACE_MMIO=0x7d5d0000-0x7d5e0000`), and the complete
+//! window logged (`PIMU_TRACE_MMIO=0x7d5d0000-0x7d5e0000`), and the complete
 //! list of offsets the firmware touches outside the two sub-blocks is:
 //!
 //! ```text

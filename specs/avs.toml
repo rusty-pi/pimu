@@ -90,7 +90,7 @@ notes  = "Written, never read back. start4 pulses it, all-ones then 0, each time
 
 [[register.source]]
 kind       = "trace"
-ref        = "`RVF_TRACE_MMIO=0x7d5d0000-0x7d5e0000` over a boot to `arm_loader`"
+ref        = "`PIMU_TRACE_MMIO=0x7d5d0000-0x7d5e0000` over a boot to `arm_loader`"
 confidence = "high"
 
 [[register.source]]
@@ -111,7 +111,7 @@ notes  = "start4 sets its low seven bits (read, OR `0x7F`, write) each time it a
 
 [[register.source]]
 kind       = "trace"
-ref        = "`RVF_TRACE_MMIO=0x7d5d0000-0x7d5e0000` over a boot to `arm_loader`"
+ref        = "`PIMU_TRACE_MMIO=0x7d5d0000-0x7d5e0000` over a boot to `arm_loader`"
 confidence = "high"
 
 [[register.source]]
@@ -132,7 +132,7 @@ notes  = "Written 1 each time start4 arms the monitors, never read back."
 
 [[register.source]]
 kind       = "trace"
-ref        = "`RVF_TRACE_MMIO=0x7d5d0000-0x7d5e0000` over a boot to `arm_loader`"
+ref        = "`PIMU_TRACE_MMIO=0x7d5d0000-0x7d5e0000` over a boot to `arm_loader`"
 confidence = "high"
 
 [[register.source]]

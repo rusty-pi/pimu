@@ -1,4 +1,4 @@
-//! `rpi-virt-fw` command-line entry point: the usage text and the command
+//! `pimu` command-line entry point: the usage text and the command
 //! dispatch. Each command lives in a module of its own.
 
 use std::path::PathBuf;
@@ -15,17 +15,17 @@ mod scenario;
 mod vchiq;
 
 const USAGE: &str = "\
-rpi-virt-fw — virtual bench for Raspberry Pi VideoCore boot firmware
+pimu — virtual bench for Raspberry Pi VideoCore boot firmware
 
 USAGE:
-    rpi-virt-fw run <scenario.toml> [--update] [-v]
-    rpi-virt-fw run-all [<dir>] [--update] [-v]
-    rpi-virt-fw boot --eeprom <pieeprom.bin> | <file.elf> [<options>]
-    rpi-virt-fw boot-check <scenario.toml> [--update] [--output <log>] [--max-wall <secs>]
-    rpi-virt-fw boot-check <scenario.toml> --from <log> [--update]
-    rpi-virt-fw boot-check <scenario.toml> --plan [--output <log>] [--max-wall <secs>]
-    rpi-virt-fw disasm <file> [--base <hex>] [--count <n>] [--vaddr <hex>]
-    rpi-virt-fw spec-docs [--update]
+    pimu run <scenario.toml> [--update] [-v]
+    pimu run-all [<dir>] [--update] [-v]
+    pimu boot --eeprom <pieeprom.bin> | <file.elf> [<options>]
+    pimu boot-check <scenario.toml> [--update] [--output <log>] [--max-wall <secs>]
+    pimu boot-check <scenario.toml> --from <log> [--update]
+    pimu boot-check <scenario.toml> --plan [--output <log>] [--max-wall <secs>]
+    pimu disasm <file> [--base <hex>] [--count <n>] [--vaddr <hex>]
+    pimu spec-docs [--update]
 
 COMMANDS:
     run       Run one scenario and check it against its golden transcript.
@@ -35,8 +35,8 @@ COMMANDS:
               in the working directory when there is one — `pieeprom.bin`,
               `sd.img`, `usb.img`, `otg.img`, `netboot/`, `otp.json`/`otp.bin`,
               `bootconf.txt`, `pubkey.bin` — so a directory holding those boots
-              with a bare `rpi-virt-fw boot`.
-              `rpi-virt-fw boot --help` lists its options.
+              with a bare `pimu boot`.
+              `pimu boot --help` lists its options.
     boot-check
               Run the firmware boot a boot scenario describes and check it:
               the golden console transcript plus every named milestone. The
@@ -52,7 +52,7 @@ COMMANDS:
               specs in specs/*.toml, and docs/board-sheet-dark.svg against the
               hand-drawn docs/board-sheet.svg; --update regenerates them.
 
-    With no command, the options are `boot`'s: `rpi-virt-fw --eeprom <file> ...`.
+    With no command, the options are `boot`'s: `pimu --eeprom <file> ...`.
 
 FLAGS:
     --config <file>
@@ -125,15 +125,15 @@ fn cmd_spec_docs(args: &[String]) -> Result<ExitCode> {
         }
     }
     let mut stale: Vec<PathBuf> = Vec::new();
-    let dir = rpi_virt_fw::spec::doc_dir();
+    let dir = pimu::spec::doc_dir();
     stale.extend(
-        rpi_virt_fw::spec::sync_docs(update)
+        pimu::spec::sync_docs(update)
             .map_err(anyhow::Error::msg)?
             .iter()
             .map(|name| dir.join(name)),
     );
-    stale.extend(rpi_virt_fw::isa::sync_docs(update).map_err(anyhow::Error::msg)?);
-    stale.extend(rpi_virt_fw::sheet::sync(update).map_err(anyhow::Error::msg)?);
+    stale.extend(pimu::isa::sync_docs(update).map_err(anyhow::Error::msg)?);
+    stale.extend(pimu::sheet::sync(update).map_err(anyhow::Error::msg)?);
     for path in &stale {
         let verb = if update { "updated" } else { "stale" };
         println!("{verb}: {}", path.display());

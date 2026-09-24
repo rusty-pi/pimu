@@ -161,7 +161,7 @@ mod tests {
     use super::*;
 
     fn model_fuses() -> BTreeMap<u32, u32> {
-        rpi_virt_fw::periph::ConfigOtp::new().fuses().clone()
+        pimu::periph::ConfigOtp::new().fuses().clone()
     }
 
     #[test]

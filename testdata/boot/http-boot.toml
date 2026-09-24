@@ -14,7 +14,7 @@
 # would put it there).
 #
 # Re-record the golden and the retired counts with:
-#   rpi-virt-fw boot-check testdata/boot/http-boot.toml --update
+#   pimu boot-check testdata/boot/http-boot.toml --update
 
 name = "http-boot"
 description = "pieeprom.bin network boot over plain HTTP from the built-in peer, through to the ARM hand-off."

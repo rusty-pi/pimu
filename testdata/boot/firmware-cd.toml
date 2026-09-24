@@ -20,7 +20,7 @@
 # The card is `START4=start4cd KERNEL=halt scripts/make-sd.sh
 # firmware/sd-halt-start4cd.img`. Re-record the golden and the retired counts
 # with:
-#   rpi-virt-fw boot-check testdata/boot/firmware-cd.toml --update
+#   pimu boot-check testdata/boot/firmware-cd.toml --update
 
 name = "firmware-cd"
 description = "pieeprom.bin + start4cd.elf boot from the SD image, through to the ARM hand-off."

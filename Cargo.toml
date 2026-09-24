@@ -1,5 +1,5 @@
 [package]
-name = "rpi-virt-fw"
+name = "pimu"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.98"
@@ -8,7 +8,7 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [[bin]]
-name = "rpi-virt-fw"
+name = "pimu"
 path = "src/cli/main.rs"
 
 [dependencies]
@@ -19,7 +19,7 @@ sha1 = "0.10"
 toml = "0.8"
 
 [features]
-# The run-loop diagnostics: the per-step `RVF_*` switches and `--trace*`
+# The run-loop diagnostics: the per-step `PIMU_*` switches and `--trace*`
 # (docs/diagnostics.md). Off by default, so every normal build — CI's included —
 # has those checks compiled out instead of paying a branch per instruction.
 # `cargo build --release --features diag` for an investigation.

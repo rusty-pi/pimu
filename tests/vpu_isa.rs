@@ -4,10 +4,10 @@
 //! wrong once and cost a debugging session. They run a handful of instructions
 //! against a bare [`Machine`] — no firmware blob, no boot, microseconds each.
 
-use rpi_virt_fw::bus::Bus;
-use rpi_virt_fw::soc::bcm2711::{CORECTL_BASE, SYSTIMER_BASE};
-use rpi_virt_fw::vpu::{Step, UnimplPolicy, Vpu};
-use rpi_virt_fw::Machine;
+use pimu::bus::Bus;
+use pimu::soc::bcm2711::{CORECTL_BASE, SYSTIMER_BASE};
+use pimu::vpu::{Step, UnimplPolicy, Vpu};
+use pimu::Machine;
 
 const CODE: u32 = 0x0000_1000;
 const STACK_TOP: u32 = 0x0000_8000;
@@ -488,8 +488,8 @@ fn a_loads_a_slot_is_ignored() {
 /// identical; the decoder must keep all five parcels.
 #[test]
 fn vector80_keeps_its_top_parcel() {
-    use rpi_virt_fw::vpu::decode::decode;
-    use rpi_virt_fw::vpu::insn::Op;
+    use pimu::vpu::decode::decode;
+    use pimu::vpu::insn::Op;
 
     let bytes = [0x00, 0xFC, 0x38, 0xE0, 0x80, 0x03, 0xC0, 0xF3, 0x00, 0x12];
     let insn = decode(&bytes, CODE);
@@ -759,8 +759,8 @@ fn vector_store_under_ifn_moves_the_lanes_the_flags_call_negative() {
 /// rows so `--maskrom` can execute the maskROM's RAM zeroing.
 #[test]
 fn maskrom_vector_memclear_is_an_executable_rep_broadcast() {
-    use rpi_virt_fw::vpu::decode::decode;
-    use rpi_virt_fw::vpu::insn::{Op, RegOrImm, VecExec, VecRep};
+    use pimu::vpu::decode::decode;
+    use pimu::vpu::insn::{Op, RegOrImm, VecExec, VecRep};
 
     let bytes = [0x03, 0xfe, 0x38, 0xc0, 0x00, 0x04, 0xc0, 0xfb, 0x00, 0x00];
     let insn = decode(&bytes, 0x6000_0446);
@@ -802,9 +802,9 @@ fn maskrom_vector_memclear_is_an_executable_rep_broadcast() {
 // ones objdump renders as a raw `vec48`/`vec80` because its own tables have no
 // form for them. The rest is the two sweeps drifting apart inside data.
 
-fn vector(bytes: &[u8]) -> rpi_virt_fw::vpu::insn::VecInsn {
-    use rpi_virt_fw::vpu::decode::decode;
-    use rpi_virt_fw::vpu::insn::Op;
+fn vector(bytes: &[u8]) -> pimu::vpu::insn::VecInsn {
+    use pimu::vpu::decode::decode;
+    use pimu::vpu::insn::Op;
     let Op::Vector(v) = decode(bytes, 0).op else {
         panic!("not a vector instruction");
     };
@@ -860,7 +860,7 @@ fn the_48_bit_addend_is_one_register_for_every_slot() {
 fn a_48_bit_dash_b_names_a_scalar_register() {
     // `v16bitplanes -,r3 SETF`
     let v = vector(&[0x08, 0xf4, 0x38, 0xe0, 0xc3, 0x03]);
-    let rpi_virt_fw::vpu::insn::VecOperandB::Slot(b) = v.b else {
+    let pimu::vpu::insn::VecOperandB::Slot(b) = v.b else {
         panic!("a slot, not an immediate");
     };
     assert!(b.is_dash());
@@ -868,7 +868,7 @@ fn a_48_bit_dash_b_names_a_scalar_register() {
     assert!(v.setf);
     assert_eq!(
         v.executable(),
-        rpi_virt_fw::vpu::insn::VecExec::Bitplanes { src: 3 }
+        pimu::vpu::insn::VecExec::Bitplanes { src: 3 }
     );
 }
 
@@ -878,7 +878,7 @@ fn a_48_bit_dash_b_names_a_scalar_register() {
 fn an_80_bit_dash_b_carries_a_signed_displacement() {
     // `v8mem29 -,H(63,3)+r0,r3-219 REP2 SETF IFNC max2 r0`
     let v = vector(&[0xa1, 0xfb, 0xc3, 0xe8, 0xa5, 0xfb, 0x03, 0x3c, 0x0e, 0xf4]);
-    let rpi_virt_fw::vpu::insn::VecOperandB::Slot(b) = v.b else {
+    let pimu::vpu::insn::VecOperandB::Slot(b) = v.b else {
         panic!("a slot, not an immediate");
     };
     assert!(b.is_dash());
@@ -897,7 +897,7 @@ fn an_address_displacement_is_a_byte_offset() {
     let addr = v.addr.expect("an address");
     assert_eq!((addr.base, addr.offset, addr.incr), (0, 32, None));
     match v.executable() {
-        rpi_virt_fw::vpu::insn::VecExec::Mem { offset: 32, .. } => {}
+        pimu::vpu::insn::VecExec::Mem { offset: 32, .. } => {}
         other => panic!("expected a transfer with a byte displacement: {other:?}"),
     }
 }
@@ -908,7 +908,7 @@ fn an_address_displacement_is_a_byte_offset() {
 fn a_memory_class_b_register_takes_the_addend_not_setf() {
     // `v16mem27 V(32,16),V(48,15),V(16,9)+r2`
     let v = vector(&[0x6a, 0xf3, 0x03, 0x38, 0x59, 0xf0]);
-    let rpi_virt_fw::vpu::insn::VecOperandB::Slot(b) = v.b else {
+    let pimu::vpu::insn::VecOperandB::Slot(b) = v.b else {
         panic!("a slot, not an immediate");
     };
     assert_eq!((b.y, b.x, b.addend), (16, 9, 2), "V(16,9)+r2");
@@ -3825,11 +3825,11 @@ fn which_ops_write_a_carry() {
 /// here.
 #[test]
 fn the_reference_page_matches_the_model() {
-    use rpi_virt_fw::vpu::insn::{VecAluOp, VEC_ALU_OPS, VEC_MEM_OPS};
+    use pimu::vpu::insn::{VecAluOp, VEC_ALU_OPS, VEC_MEM_OPS};
 
     for (subop, (name, says_executes)) in VEC_ALU_OPS
         .iter()
-        .zip(rpi_virt_fw::isa::VEC_ALU_OPS_EXECUTE)
+        .zip(pimu::isa::VEC_ALU_OPS_EXECUTE)
         .enumerate()
         .map(|(i, (n, e))| (i as u8, (n, e)))
     {
@@ -3860,7 +3860,7 @@ fn the_reference_page_matches_the_model() {
     ];
     for (subop, (name, says_executes)) in VEC_MEM_OPS
         .iter()
-        .zip(rpi_virt_fw::isa::VEC_MEM_OPS_EXECUTE)
+        .zip(pimu::isa::VEC_MEM_OPS_EXECUTE)
         .enumerate()
         .map(|(i, (n, e))| (i as u8, (n, e)))
     {

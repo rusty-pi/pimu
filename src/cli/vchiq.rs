@@ -37,8 +37,8 @@
 
 use anyhow::{bail, Context, Result};
 
-use rpi_virt_fw::bus::{Bus, Width};
-use rpi_virt_fw::emulator::{Emulator, RunLimits};
+use pimu::bus::{Bus, Width};
+use pimu::emulator::{Emulator, RunLimits};
 
 use crate::mbox::{mbox_property_exchange, MboxRequest};
 

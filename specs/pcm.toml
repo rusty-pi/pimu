@@ -25,7 +25,7 @@ confidence = "high"
 
 [[block.irq.source]]
 kind       = "trace"
-ref        = "`linux-boot`, `RVF_TRACE_MMIO=0x7e002000-0x7e002060`: the secure service enables source 119 among the eight `IRQ_PRIO` words it writes"
+ref        = "`linux-boot`, `PIMU_TRACE_MMIO=0x7e002000-0x7e002060`: the secure service enables source 119 among the eight `IRQ_PRIO` words it writes"
 confidence = "medium"
 note       = "Which is the firmware enabling the source, not this block raising it: nothing in a boot programs the PCM."
 

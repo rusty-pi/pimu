@@ -84,7 +84,7 @@
 //! and the bootloader falls through to the SD entry of `BOOT_ORDER` without the
 //! `USB2[1] … connected` / `HUB init` lines the real board prints.
 //!
-//! `RVF_PCIE_DEVICE=0` unsolders the endpoint again — the link never trains,
+//! `PIMU_PCIE_DEVICE=0` unsolders the endpoint again — the link never trains,
 //! `MISC_PCIE_STATUS` reads only its port-mode strap and the bootloader prints
 //! `PCIe timeout: 0x00000080` / `USB xHC init failed`, the pre-stage-1
 //! transcript. It is for reproducing that, nothing else.
@@ -430,9 +430,9 @@ impl Default for Pcie {
 impl Pcie {
     pub fn new() -> Pcie {
         // A Pi 4B has the VL805 soldered on, so attached is what the reference
-        // board looks like. `RVF_PCIE_DEVICE=0` unsolders it — for reproducing
+        // board looks like. `PIMU_PCIE_DEVICE=0` unsolders it — for reproducing
         // the pre-stage-1 transcript, nothing else.
-        Pcie::with_device(std::env::var("RVF_PCIE_DEVICE").as_deref() != Ok("0"))
+        Pcie::with_device(std::env::var("PIMU_PCIE_DEVICE").as_deref() != Ok("0"))
     }
 
     pub fn with_device(device_present: bool) -> Pcie {

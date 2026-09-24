@@ -2,7 +2,7 @@
 # Build a bootable SD-card image for the model: MBR, a FAT32 boot partition
 # holding the real Raspberry Pi 4 firmware (start4.elf + fixup4.dat), a config
 # and the device tree, and an ext4 root filesystem with busybox for Linux.
-# Consumed by `rpi-virt-fw boot --sd <img>`.
+# Consumed by `pimu boot --sd <img>`.
 #
 # No root / loop devices — sfdisk writes the partition table, mtools and
 # `mke2fs -d` write the filesystems at byte offsets.
@@ -315,7 +315,7 @@ cat >"$rootfs/etc/init.d/rcS" <<'EOF'
 #!/bin/sh
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
-echo "rpi-virt-fw: userland up, $(uname -sr), $(grep -c ^processor /proc/cpuinfo) CPUs"
+echo "pimu: userland up, $(uname -sr), $(grep -c ^processor /proc/cpuinfo) CPUs"
 EOF
 chmod -R u=rwX,go=rX "$rootfs"
 chmod 755 "$rootfs/etc/init.d/rcS"

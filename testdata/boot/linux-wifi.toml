@@ -4,7 +4,7 @@
 # firmware, CLM blob and Pi 4B nvram under /lib/firmware/brcm.
 # `scripts/fetch-firmware.sh` fetches both, and
 # `BRCMFMAC=1 scripts/make-sd.sh firmware/sd-brcmfmac.img` writes the card.
-# `rpi-virt-fw boot-check testdata/boot/linux-wifi.toml` runs it, and so does
+# `pimu boot-check testdata/boot/linux-wifi.toml` runs it, and so does
 # CI.
 #
 # Config and console are linux-bt's: no `dtoverlay=disable-wifi`, so the
@@ -19,12 +19,12 @@
 # `brcmfmac` walks the chip, downloads its firmware, and then talks to it —
 # and what answers is the model, not the image it just wrote:
 #
-#   brcmfmac: brcmf_c_preinit_dcmds: Firmware: BCM4345/6 rpi-virt-fw model firmware (no radio) version 0
+#   brcmfmac: brcmf_c_preinit_dcmds: Firmware: BCM4345/6 pimu model firmware (no radio) version 0
 #   3: wlan0: <BROADCAST,MULTICAST> mtu 1500 qdisc noop qlen 1000
 #       link/ether 02:00:5e:00:57:01 brd ff:ff:ff:ff:ff:ff
 #   3: wlan0: <NO-CARRIER,BROADCAST,MULTICAST,UP> mtu 1500 qdisc pfifo_fast qlen 1000
 #   BSS 02:00:5e:00:53:04(on wlan0)
-#           SSID: rpi-virt-fw-model-ap
+#           SSID: pimu-model-ap
 #           DS Parameter set: channel 1
 #
 # The chip's side of that conversation is `src/periph/sdpcm.rs`: the frame
@@ -45,7 +45,7 @@
 #
 # THE NETWORK IS INVENTED
 #
-# `rpi-virt-fw-model-ap` at `02:00:5e:00:53:04` is not a place and was never
+# `pimu-model-ap` at `02:00:5e:00:53:04` is not a place and was never
 # on the air. It is named after the model so that a scan result can never be
 # mistaken for one taken off a real band, and the address is the next one
 # along from the three the model already has — all of them locally
@@ -195,7 +195,7 @@ to open for every frame, and a BCDC request and answer for every command the
 driver has sent up to here — the bus settings, the address, the revision, the
 CLM blob in its chunks. The version string is the model saying so in its own
 name; no firmware ran to produce it."""
-line = "Firmware: BCM4345/6 rpi-virt-fw model firmware (no radio) version 0"
+line = "Firmware: BCM4345/6 pimu model firmware (no radio) version 0"
 
 [[milestone]]
 why = "The first `ip link`, before anything has been brought up: nothing here configures the network, so the GENET is down too and stays down."
@@ -313,7 +313,7 @@ And the name came out of the information elements rather than out of
 `brcmf_inform_single_bss` (`cfg80211.c:3399`) points `notify_ie` at
 `ie_offset` bytes into the record and takes `ie_length` bytes from there. An
 `ie_offset` off by one is a network with an empty name, not an error."""
-line = "SSID: rpi-virt-fw-model-ap"
+line = "SSID: pimu-model-ap"
 
 [[milestone]]
 why = """
