@@ -577,14 +577,14 @@ fn fallback_eeprom() -> Result<PathBuf> {
         .context("no XDG_CACHE_HOME and no HOME to cache the EEPROM image under")?
         .join("pimu");
     let path = cache.join("pieeprom-latest.bin");
+    // Nothing on the command line says what booted the medium, so the run
+    // does, the way the rest of zero-config does.
+    eprintln!("zero-config: {REPO}'s EEPROM image, {}", path.display());
     if path.is_file() {
         return Ok(path);
     }
     std::fs::create_dir_all(&cache).with_context(|| format!("creating {}", cache.display()))?;
-    eprintln!(
-        "zero-config: fetching {REPO}'s EEPROM image into {}",
-        path.display()
-    );
+    eprintln!("zero-config: fetching it from the `latest` release");
     let out = std::process::Command::new("gh")
         .args([
             "release",
