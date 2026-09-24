@@ -261,13 +261,11 @@ fn interrupts_gate_on_the_enable_bit_not_on_nesting() {
     );
 }
 
-/// [`Vpu::vector_irq_forced`] is delivery without the enable check, for the
-/// paths that have already decided the core takes the interrupt — core 1's
-/// wake and core 0's `sleep` with interrupts enabled. The `sleep` instruction
-/// itself does check the bit, see
-/// `a_masked_sleep_takes_nothing_and_leaves_the_core_halted`.
+/// The `sleep` wake is the one path that ignores the enable bit: ThreadX's idle
+/// loop parks as `sleep; di; b` and nothing in it ever runs `ei`, so the wake
+/// itself has to service the pending tick.
 #[test]
-fn vector_irq_forced_delivers_with_interrupts_disabled() {
+fn the_sleep_wake_vectors_with_interrupts_disabled() {
     let mut m = machine();
     let mut v = Vpu::new(CODE);
     arm_vector(&mut m, &mut v, 0x2000, 1, 0x3000);
@@ -278,13 +276,15 @@ fn vector_irq_forced_delivers_with_interrupts_disabled() {
     assert_eq!(v.regs.pc, 0x3000);
 }
 
-/// A `sleep` with the enable bit clear takes nothing. Measured on a 4B rev
-/// 1.5: the core never takes the compare it is waiting for and stays asleep
-/// for ever, which is why rpi-unboxed brackets its own `sleep` with `ei`/`di`.
-/// The model used to service the compare here whatever the bit said, which is
-/// what let a masked `sleep` look like a working idle loop.
+/// And the `sleep` instruction itself takes the compare it waits for whatever
+/// the enable bit says. Measured on a 4B rev 1.5: rpi-unboxed's idle loop
+/// parked as `sleep; di` with the bit clear answers the kernel's mailbox
+/// requests, and its first compare's handler runs 1979 times in two seconds —
+/// so the core wakes *and* vectors while masked. Stock's own idle loop
+/// (`0x3EC40010`) has the same shape, and a model that held a masked `sleep`
+/// asleep stopped stock's boot right there.
 #[test]
-fn a_masked_sleep_takes_nothing_and_leaves_the_core_halted() {
+fn a_masked_sleep_still_takes_the_compare() {
     let mut m = machine();
     let mut v = Vpu::new(CODE);
     v.on_unimpl = UnimplPolicy::Skip;
@@ -299,15 +299,7 @@ fn a_masked_sleep_takes_nothing_and_leaves_the_core_halted() {
     v.regs.set(30, 0);
     v.regs.pc = CODE;
     step(&mut v, &mut m);
-    assert_eq!(v.regs.pc, CODE + 2, "a masked sleep must not vector");
-    assert!(v.halted, "and must leave the core asleep");
-
-    // The same sleep with the bit set does take it.
-    v.halted = false;
-    v.regs.set(30, 1 << 30);
-    v.regs.pc = CODE;
-    step(&mut v, &mut m);
-    assert_eq!(v.regs.pc, 0x3000, "an enabled sleep takes the compare");
+    assert_eq!(v.regs.pc, 0x3000, "a masked sleep must still vector");
 }
 
 /// The exception frame a vectored interrupt leaves behind must be exactly what
