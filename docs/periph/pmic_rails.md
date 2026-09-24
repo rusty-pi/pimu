@@ -58,7 +58,7 @@ start4 reads it once more after its init sweep and sets bit 0 of what it read, a
 Sources:
 
 - decompile (high): bootloader power-off op `0x80009ED2`: with board feature bit 2 (`[gp+776]`), `session(0x1B)` then write `0x05 = 0x3F`, then `sleep` in a loop
-- measured (high): 4B rev 1.5 over I2C with the register-read path fixed: reg 0x05 reads 0x1E on a running board. `rpi-unboxed` wrote a bare 1 here and the machine stopped with no watchdog rescue; read-modify-write of `0x1E | 1` boots and runs (6/6 tryboots) — _the decompile reads as a store of 1; on silicon it has to be the read OR 1, or the other rails go off_
+- measured (high): 4B rev 1.5 over I2C with the register-read path fixed: reg 0x05 reads 0x1E on a running board. `rusty-pi-firmware` wrote a bare 1 here and the machine stopped with no watchdog rescue; read-modify-write of `0x1E | 1` boots and runs (6/6 tryboots) — _the decompile reads as a store of 1; on silicon it has to be the read OR 1, or the other rails go off_
 - trace (high): `boot --bootconf POWER_OFF_ON_HALT=1 --bootconf WAKE_ON_GPIO=0 --send-after '/ # ' 'poweroff -f\n' --log pmic` on `d03115`: after `Halt: wake: 0 power_off: 1`, `1b W 05 = 3f` at 4.08 s and nothing after
 
 ## `SETPOINT_SDRAM`

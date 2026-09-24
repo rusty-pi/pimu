@@ -59,7 +59,7 @@ Control. start4 reads a register in one of two ways. Either it sets `ST` for the
 Sources:
 
 - datasheet (high): BCM2711 ARM Peripherals, §3.2 (BSC): `C`
-- measured (medium): 4B rev 1.5: with rpi-unboxed's own queued-read order every PMIC register answered with its own number, and only writing the register out and waiting for `DONE` before arming the read read it (0x1B reg 0x09 -> 40, which `vcgencmd measure_volts sdram_c` confirms as 1.1 V). Stock uses the queued order on the same silicon and gets the register, so some detail of the two sequences differs and is not identified yet: the model keeps the queued read selecting the register, which is what lets stock's own boot through (`testdata/boot/firmware.toml`).
+- measured (medium): 4B rev 1.5: with rusty-pi-firmware's own queued-read order every PMIC register answered with its own number, and only writing the register out and waiting for `DONE` before arming the read read it (0x1B reg 0x09 -> 40, which `vcgencmd measure_volts sdram_c` confirms as 1.1 V). Stock uses the queued order on the same silicon and gets the register, so some detail of the two sequences differs and is not identified yet: the model keeps the queued read selecting the register, which is what lets stock's own boot through (`testdata/boot/firmware.toml`).
 - trace (high): pinned start4: queued read at `0x3ECF0FD8` / `0x3ECF1150` with the FIFO writes at `0x3ECF115A` after it; write-then-read at `0x3ECF0FD8`, FIFO at `0x3ECF1046`, then `0x3ECF1100`; the common end at `0x3ECF2F92`, `0x3ECF2FFC`, `0x3ECF1826` / `0x3ECF185A`, `0x3ECF3028`
 
 `READ` sources:

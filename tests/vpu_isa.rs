@@ -277,7 +277,7 @@ fn the_sleep_wake_vectors_with_interrupts_disabled() {
 }
 
 /// And the `sleep` instruction itself takes the compare it waits for whatever
-/// the enable bit says. Measured on a 4B rev 1.5: rpi-unboxed's idle loop
+/// the enable bit says. Measured on a 4B rev 1.5: rusty-pi-firmware's idle loop
 /// parked as `sleep; di` with the bit clear answers the kernel's mailbox
 /// requests, and its first compare's handler runs 1979 times in two seconds —
 /// so the core wakes *and* vectors while masked. Stock's own idle loop

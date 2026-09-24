@@ -61,7 +61,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "4B rev 1.5 over I2C with the register-read path fixed: reg 0x05 reads 0x1E on a running board. `rpi-unboxed` wrote a bare 1 here and the machine stopped with no watchdog rescue; read-modify-write of `0x1E | 1` boots and runs (6/6 tryboots)"
+ref        = "4B rev 1.5 over I2C with the register-read path fixed: reg 0x05 reads 0x1E on a running board. `rusty-pi-firmware` wrote a bare 1 here and the machine stopped with no watchdog rescue; read-modify-write of `0x1E | 1` boots and runs (6/6 tryboots)"
 confidence = "high"
 note       = "the decompile reads as a store of 1; on silicon it has to be the read OR 1, or the other rails go off"
 

@@ -64,7 +64,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "4B rev 1.5: with rpi-unboxed's own queued-read order every PMIC register answered with its own number, and only writing the register out and waiting for `DONE` before arming the read read it (0x1B reg 0x09 -> 40, which `vcgencmd measure_volts sdram_c` confirms as 1.1 V). Stock uses the queued order on the same silicon and gets the register, so some detail of the two sequences differs and is not identified yet: the model keeps the queued read selecting the register, which is what lets stock's own boot through (`testdata/boot/firmware.toml`)."
+ref        = "4B rev 1.5: with rusty-pi-firmware's own queued-read order every PMIC register answered with its own number, and only writing the register out and waiting for `DONE` before arming the read read it (0x1B reg 0x09 -> 40, which `vcgencmd measure_volts sdram_c` confirms as 1.1 V). Stock uses the queued order on the same silicon and gets the register, so some detail of the two sequences differs and is not identified yet: the model keeps the queued read selecting the register, which is what lets stock's own boot through (`testdata/boot/firmware.toml`)."
 confidence = "medium"
 
 [[register.source]]
