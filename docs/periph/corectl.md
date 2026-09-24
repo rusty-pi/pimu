@@ -13,7 +13,7 @@ Sources:
 
 - decompile (high): per-core init `0x3EC3E938` sets `[blk+12] = 0x7E002000 + core * 0x800`
 - trace (high): `--log irqen` and the peripheral stub show core 1 writing `0x7E002810..0x7E002844` — _the window was mapped `0x100` wide until commit 7bd21a3, which hid core 1's bank_
-- measured (high): Raspberry Pi 4B d03115 (`rpi-unboxed` start4 `2431cea8`, Linux idle), `/dev/mem`: `0xFE00203C` and every word from `0xFE002048` to `0xFE0020FF` read `0x494E5445`, and so do the same offsets in core 1's bank from `0xFE002800`. Reads one word at a time — back-to-back 32-bit reads of this window through one `mmap` alias, and the second read answers the first offset's value.
+- measured (high): Raspberry Pi 4B d03115, `/dev/mem`: `0xFE00203C` and every word from `0xFE002048` to `0xFE0020FF` read `0x494E5445`, and so do the same offsets in core 1's bank from `0xFE002800`. Controlled against the stale-read effect by reading each of them after three different preceding values (`0x101`, `0x05`, the tag): the tag offsets answer the tag whatever precedes them, so they are decoded, and only `+0x30` is not. Read one word at a time — back-to-back 32-bit reads of this window through one `mmap` alias — and never narrower: a 16-bit read of this block is junk, every offset answering `0x494e` in its upper half, `IRQ_PRIO` words included.
 - inferred (medium): size: the system timer starts at `0x7E003000`
 
 ## Register map
@@ -26,7 +26,7 @@ Sources:
 | `0x010`–`0x02C` (8 × 0x4) | [`IRQ_PRIO`](#irq_prio) | rw | 32 | 7, best high |
 | `0x030` | [`VBASE`](#vbase) | w | 32 | 4, best high |
 | `0x034` | [`WAKEUP`](#wakeup) | rw | 32 | 5, best high |
-| `0x038` | [`IRQ_PROFILE`](#irq_profile) | rw | 32 | 4, best high |
+| `0x038` | [`IRQ_PROFILE`](#irq_profile) | rw | 32 | 6, best high |
 | `0x040`–`0x044` (2 × 0x4) | [`IRQ_PENDING_BITS`](#irq_pending_bits) | rw | 32 | 2, best high |
 | `0x048`–`0x04C` (2 × 0x4) | [`IRQ_PENDING_BITS_SET`](#irq_pending_bits_set) | w | 32 | 3, best high |
 | `0x050`–`0x054` (2 × 0x4) | [`IRQ_PENDING_BITS_CLR`](#irq_pending_bits_clr) | w | 32 | 2, best high |
@@ -100,7 +100,7 @@ Sources:
 
 Offset `0x030` · access `w` · 32 bits
 
-Exception-vector base for this core. The core takes its vector from the base as it stands when the exception comes, so every write moves the table: the bootloader's halt points it at its own table and clears it again once woken, and start4, which runs after a wake without a reset in between, writes its own. Only bits 31:9 are kept, so the table has to be 512-byte aligned -- 128 entries of four bytes, the whole table -- and a misaligned one is fetched from the address below it with no indication that anything is wrong. Write-only: a real board reads 0 here whatever the live vector base is.
+Exception-vector base for this core. The core takes its vector from the base as it stands when the exception comes, so every write moves the table: the bootloader's halt points it at its own table and clears it again once woken, and start4, which runs after a wake without a reset in between, writes its own. Only bits 31:9 are kept, so the table has to be 512-byte aligned -- 128 entries of four bytes, the whole table -- and a misaligned one is fetched from the address below it with no indication that anything is wrong. Write-only, and a read is not decoded at all: `+0x30` is the one offset in the bank that answers with whatever the previous read left on the bus, so a read of it means nothing. The model answers 0 because it has to answer something.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -108,7 +108,7 @@ Exception-vector base for this core. The core takes its vector from the base as 
 
 Sources:
 
-- measured (high): Raspberry Pi 4B d03115 (`rpi-unboxed` start4 `2431cea8`, Linux idle), `/dev/mem`: `0xFE002030` reads `0x0` on both banks, yet a source forced through `IRQ_PENDING_BITS_SET` and enabled in `IRQ_PRIO` vectored into the live firmware's handler, which rewrote `IRQ_PRIO` word 0 back to its own enables. So the zero is the register not reading back, not a cleared vector base. Core 1's copy at `0xFE002830` behaves the same: written `0x3EC2A000`, reads `0x0`.
+- measured (high): Raspberry Pi 4B d03115, `/dev/mem`: a read of `0xFE002030` returns the value of the immediately preceding read -- `0x101` after `IRQ_PRIO` word 0, `0x05` after `IRQ_PROFILE`, `0x494E5445` after the tag at `+0x3C`, `0` after a zero word, and ten reads in a row all stuck on one stale value. Every other offset in the bank, the tag offsets included, answers the same value whatever precedes it. So the register is write-only and its read is undecoded; two earlier readings of `0` and `0x80` here were the preceding read showing through, not the register. That it is live all the same is shown by a forced source vectoring into the firmware's own handler.
 - decompile (high): start4 entry trampoline: `mov r1, #0x7E002030`, then stores the vector base through it
 - trace (high): core-control write trace: `+0x30` and `+0x830` both take `0xFEC01E00`, nothing writes `+0x38` — _replaced an earlier `+0x38` guess for core 1 (commit 06a8447)_
 - decompile (high): bootsys halt `0x800005AC`: zeroes both cores' priority words and `+0x30`, sets vector 116 of a table at `0x80000000`, writes `0x80000000` here (`0x8000063A`) around its `sleep`, then 0 (`0x80000654`); after a wake the boot goes on to start4, which writes `0xFEC01E00`
@@ -144,13 +144,15 @@ Sources:
 
 Offset `0x038` · access `rw` · 32 bits
 
-Not a plain register, and not modelled: a read answers 0. The two sides of the SoC disagree about its value, a write does not read back from either side, and nothing that can be driven from outside moves it -- forcing interrupts, mailbox traffic and ARM writes all leave it alone. Whatever it profiles, no firmware in this tree touches it, and the model answers the 0 a VPU read gives after any write and at handler entry. Do not read anything into the value.
+Sixteen bits, and only the low half is a register: the upper half of the 32-bit word reads `0x0000` or `0xffff` with nothing to choose between them, so mask a read with `0xffff` or it will look like a different value each time. The low half holds a small number at rest, reads 0 in interrupt context, and saturates to `0xffff`. Not modelled -- a read answers 0. What it profiles is not settled; seven instrumented firmware builds ruled out every reading that could be tested, and no firmware in this tree touches it. Do not read anything into the value.
 
 Sources:
 
 - measured (high): Raspberry Pi 4B d03115, `/dev/mem` from the ARM: `0xFE002038` reads `0xffffffff` and `0xFE002838` reads `0xffff0000` under a firmware that never wrote them, stable over 2.4 s, and writes of `0x5a5a`, `0`, `0xffffffff` and `0x1234` all leave the read unchanged.
 - measured (high): Raspberry Pi 4B d03115, read from the VPU by a `rpi-unboxed` build that probes it at `idle::init`: the VPU reads `0x0000000e` on its own bank and `0x00000000` on core 1's, where the ARM reads `0xffffffff` and `0xffff0000` -- so the two views differ. After a VPU write of `0x00005a5a`, `0x0000ffff`, `0`, `0xffffffff`, or of the `0x0e` it started with, a VPU read answers 0 every time. Inside a handler it reads 0.
-- measured (medium): Raspberry Pi 4B d03115, after that firmware's write: the ARM then reads `0x00000005` and it stays there through eight forced interrupts on sources 70, 71 and 96, two `vcgencmd` round trips, ARM writes of `0x1234` and `0`, and 2 s of sampling. One read of `0x000001d8` right after a forced interrupt did not reproduce when the same sequence was repeated three ways, so it is recorded as unexplained rather than as behaviour.
+- measured (high): Raspberry Pi 4B d03115, low half only. At rest it is constant: a VPU time series of 56 samples, 1 ms then 10 ms apart over 342 ms, held one value throughout. Across boots of builds that never wrote it the value differs -- 13, 19, 20, 86 and 103 were seen -- so it reflects something accumulated before it is first read. The ARM reads `0x05` on every one of those boots while the VPU reads its own value, and core 1's copy reads 0.
+- measured (high): Raspberry Pi 4B d03115: what the low half is NOT. Not time -- unchanged across 1 us, 1 ms, 100 ms and the 342 ms series. Not a count of interrupts taken, and not time with interrupts enabled: windows of 100, 200, 400 and 800 us bracketed by `ei`/`di` gave a jump to saturation and then no change at all, rather than anything proportional. Not a delivery latency: holding a forced source with `IRQ_GATE` for 0, 2, 5, 10, 20, 50, 100 and 200 us and then releasing it left the ARM reading `0x05` every time. Unmoved by ARM writes of any width. Once it reads `0xffff` it stays there, so `0xffff` is saturation and not a value -- which is what the ARM's first-ever reading of `0xffffffff` was.
+- measured (high): Raspberry Pi 4B d03115, read inside a handler by a build that stashes it at `vpu_stray_irq` entry and exit: 0 at both, twice at entry, while `IRQ_PENDING` in the same handler reads a correct `0x01470147`. `SR` bit 30 is already clear in thread context (`SR` = `0x20000000` at `idle::init`), and a read with interrupts masked matches one with them restored, so the interrupt-enable bit is not what makes the handler read 0.
 - datasheet (medium): Broadcom `bcm2708_chip/intctrl0.h`: `IC0_PROFILE`, RW, 16 bits, mask `0x0000ffff`, no reset value and no fields
 
 ## `IRQ_PENDING_BITS`
