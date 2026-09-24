@@ -45,7 +45,7 @@ text = "echo cpus=$(grep -c ^processor /proc/cpuinfo)\n"
 # A typo and a DEL: the line editor's backspace handling, not just echo.
 [[boot.input]]
 after = "/ # \u001b[6n"
-text = "ecj\u007fho rvf-$((6*7))\n"
+text = "ecj\u007fho pimu-$((6*7))\n"
 
 # The HMAC firmware.toml asks the crypto service for, with the same key
 # and the same 16 bytes, this time from Linux userspace: Raspberry Pi's own
@@ -141,7 +141,7 @@ line = "cpus=4"
 
 [[milestone]]
 why = "DEL edits the line: the shell got the keys in order, typo included."
-line = "rvf-42"
+line = "pimu-42"
 
 [[milestone]]
 why = """

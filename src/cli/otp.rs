@@ -218,7 +218,7 @@ mod tests {
 
     #[test]
     fn a_missing_file_loads_as_none_and_save_creates_it() {
-        let path = std::env::temp_dir().join(format!("rvf-otp-test-{}.json", std::process::id()));
+        let path = std::env::temp_dir().join(format!("pimu-otp-test-{}.json", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let otp = OtpFile {
             format: Format::Json,

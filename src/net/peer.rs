@@ -1244,7 +1244,7 @@ mod tests {
 
     #[test]
     fn tftp_reads_from_the_root_directory() {
-        let dir = std::env::temp_dir().join(format!("rvf-tftp-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("pimu-tftp-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("sub")).unwrap();
         std::fs::write(dir.join("sub/config.txt"), b"arm_64bit=1\n").unwrap();
         let mut p = BuiltinPeer::with_root(&dir);

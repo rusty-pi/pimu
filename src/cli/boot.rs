@@ -2680,7 +2680,7 @@ mod tests {
     /// A directory with the zero-config files in it, named after the test so
     /// two of them never share one.
     fn zero_dir(what: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("rvf-zero-{what}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("pimu-zero-{what}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir

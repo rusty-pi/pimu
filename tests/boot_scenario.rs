@@ -327,7 +327,7 @@ fn a_changed_retired_count_fails_the_check() {
     assert!(f[0].contains("arm0  76 -> none"), "{}", f[0]);
 
     // And a scenario with nothing pinned is not a pass.
-    let dir = std::env::temp_dir().join(format!("rvf-retired-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pimu-retired-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let mut unpinned = scenario();
     let copy = dir.join("firmware.txt");
@@ -419,7 +419,7 @@ fn every_boot_scenario_loads_and_plans_its_media() {
 /// whatever console an earlier run had left behind.
 #[test]
 fn missing_boot_media_are_named_with_the_command_that_makes_them() {
-    let root = std::env::temp_dir().join(format!("rvf-boot-inputs-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("pimu-boot-inputs-{}", std::process::id()));
     let mut scn = scenario();
     scn.base_dir = root.join("testdata/boot");
     std::fs::create_dir_all(&scn.base_dir).unwrap();

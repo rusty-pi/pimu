@@ -344,7 +344,7 @@ mod tests {
     }
 
     fn expand_with(config: &str, cmdline: &[&str]) -> Vec<String> {
-        let dir = std::env::temp_dir().join(format!("rvf-config-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("pimu-config-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(format!("c{}", config.len()));
         std::fs::write(&path, config).unwrap();

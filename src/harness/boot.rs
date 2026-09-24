@@ -594,7 +594,42 @@ fn normalise_line(line: &str) -> String {
             );
         }
     }
-    scrub_fat_oem(&scrub_stc(line))
+    scrub_fat_oem(&scrub_stc(&scrub_printk(line)))
+}
+
+/// Replace a printk timestamp wherever it appears in a line, not only at the
+/// start of one: the kernel writes to the same UART as whatever the console is
+/// doing, so a `[    1.479963] usb 1-1: ...` can land in the middle of a shell
+/// command's echo. Pinning that number in a golden pins the exact instruction
+/// cost of everything before it, which is the one thing these transcripts are
+/// meant not to assert.
+///
+/// Idempotent, like the rest of the normalising: `[t]` does not match again.
+fn scrub_printk(line: &str) -> String {
+    let bytes = line.as_bytes();
+    let mut out = String::with_capacity(line.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'[' {
+            if let Some(end) = line[i..].find(']').map(|e| i + e) {
+                let inner = &line[i + 1..end];
+                let stamp = matches!(inner.trim_start().split_once('.'), Some((s, f))
+                    if !s.is_empty()
+                        && s.bytes().all(|b| b.is_ascii_digit())
+                        && f.len() == 6
+                        && f.bytes().all(|b| b.is_ascii_digit()));
+                if stamp {
+                    out.push_str("[t]");
+                    i = end + 1;
+                    continue;
+                }
+            }
+        }
+        let ch = line[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
 }
 
 /// Replace the FAT OEM name the partition scan prints.
@@ -941,6 +976,26 @@ pub fn check_run(scn: &BootScenario, log: &str, console: &str) -> Result<Vec<Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A kernel line that lands inside another line's output still loses its
+    /// timestamp: a golden must not pin one. Measured on the `linux` scenario,
+    /// where `usb 1-1: new high-speed USB device` interleaves with the shell's
+    /// echo of an `rpi-fw-crypto` command.
+    #[test]
+    fn a_printk_timestamp_is_stripped_mid_line_too() {
+        let line = "ey-id 1 --outform [    1.479963] usb 1-1: new high-speed USB device";
+        let want = "ey-id 1 --outform [t] usb 1-1: new high-speed USB device";
+        assert_eq!(normalise_line(line), want);
+        // Idempotent: a golden is fed back through this when it is checked.
+        assert_eq!(normalise_line(want), want);
+        // A leading stamp still works, and bracketed text that is not a stamp
+        // is left alone.
+        assert_eq!(
+            normalise_line("[    1.479963] usb 1-1: x"),
+            "[t] usb 1-1: x"
+        );
+        assert_eq!(normalise_line("ls [a.b] [12.34]"), "ls [a.b] [12.34]");
+    }
 
     #[test]
     fn console_input_escapes_round_trip() {

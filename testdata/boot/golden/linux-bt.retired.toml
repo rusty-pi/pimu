@@ -3,7 +3,7 @@
 # is released. `boot-check <scenario> --update` rewrites this file.
 vpu0 = 897_094_694
 vpu1 = 125
-arm0 = 362_436_169
-arm1 = 1_314_404_873
+arm0 = 362_435_239
+arm1 = 1_314_403_114
 arm2 = 10_445_695
 arm3 = 192_853_247
