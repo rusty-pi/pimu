@@ -27,9 +27,12 @@ const SEEN: u32 = 0x6000;
 const STACK1: u32 = 0x8000;
 /// ThreadX's reschedule IPI for core 1, the source start4 raises for it.
 const SRC: u32 = 79;
-/// Core 1's `IRQ_PENDING` as its handler should find it: `VALID` (bit 8) with
-/// the source minus 64, then 0 on the second, read-to-clear read.
-const SEEN_OK: [u32; 2] = [0x100 | (SRC - 64), 0];
+/// Core 1's `IRQ_PENDING` as its handler should find it: the interrupt number
+/// and the priority it was enabled at, in both half-words, then 0 on the
+/// second, read-to-clear read. A Raspberry Pi 4B d03115 read from inside a
+/// handler answers this shape -- `0x01470147` for source 71 at priority 1.
+const SEEN_HALF: u32 = 0x100 | SRC;
+const SEEN_OK: [u32; 2] = [SEEN_HALF | (SEEN_HALF << 16), 0];
 
 const NE: u16 = 0x1;
 const AL: u16 = 0xE;

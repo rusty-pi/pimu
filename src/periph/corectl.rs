@@ -26,9 +26,9 @@ use crate::log::{Channel, Log};
 use crate::spec::corectl::{
     INSTANCE_STRIDE as CORE_STRIDE, IRQ_GATE, IRQ_PENDING, IRQ_PENDING_BITS, IRQ_PENDING_BITS_CLR,
     IRQ_PENDING_BITS_COUNT, IRQ_PENDING_BITS_SET, IRQ_PENDING_BITS_SET_RESET as TAG,
-    IRQ_PENDING_BITS_STRIDE, IRQ_PENDING_SOURCE_MASK, IRQ_PENDING_SOURCE_SHIFT,
-    IRQ_PENDING_VALID_MASK, IRQ_PRIO, IRQ_PRIO_COUNT, IRQ_PRIO_STRIDE, VBASE, VBASE_ADDR_MASK,
-    WAKEUP, WAKEUP_ADDR_MASK, WAKEUP_ADDR_SHIFT,
+    IRQ_PENDING_BITS_STRIDE, IRQ_PENDING_PRIO_MASK, IRQ_PENDING_PRIO_SHIFT,
+    IRQ_PENDING_SOURCE_MASK, IRQ_PENDING_SOURCE_SHIFT, IRQ_PRIO, IRQ_PRIO_COUNT, IRQ_PRIO_STRIDE,
+    VBASE, VBASE_ADDR_MASK, WAKEUP, WAKEUP_ADDR_MASK, WAKEUP_ADDR_SHIFT,
 };
 use crate::spec::Coverage;
 
@@ -76,9 +76,12 @@ pub const SYS_IRQ_SRC: u32 = crate::spec::systimer::IRQ_VPU_C0;
 
 #[derive(Default)]
 pub struct CoreCtl {
-    /// Per core: the source being vectored, not yet read by that core's
-    /// dispatcher through its bank's [`IRQ_PENDING`].
-    pending_src: [Option<u32>; 2],
+    /// Per core: the source being vectored and the priority it was enabled at,
+    /// not yet read by that core's dispatcher through its bank's
+    /// [`IRQ_PENDING`]. The priority is latched here because a handler may
+    /// rewrite [`IRQ_PRIO`] before it reads the register -- rpi-unboxed's stray
+    /// handler does exactly that.
+    pending_src: [Option<(u32, u32)>; 2],
     storage: BTreeMap<u32, u32>,
     /// Start address last written to core 1's [`WAKEUP`], not yet acted on.
     core1_wake: Option<u32>,
@@ -103,8 +106,9 @@ impl CoreCtl {
     /// queued: the register holds one value, and the dispatcher reads it only
     /// after its entry sequence.
     pub fn raise_source(&mut self, core: u32, src: u32) {
+        let prio = self.irq_priority(core, src) as u32;
         if let Some(slot) = self.pending_src.get_mut(core as usize) {
-            *slot = Some(src);
+            *slot = Some((src, prio));
         }
     }
 
@@ -201,13 +205,16 @@ impl MmioDevice for CoreCtl {
             // Read-to-clear: the dispatcher reads this once per entry, then the
             // handler acks the device itself. It runs on both cores and reaches
             // its own bank through a per-core pointer, so each bank has its own.
-            if let Some(src) = self
+            if let Some((src, prio)) = self
                 .pending_src
                 .get_mut(core as usize)
                 .and_then(Option::take)
             {
-                return Ok(IRQ_PENDING_VALID_MASK
-                    | ((src << IRQ_PENDING_SOURCE_SHIFT) & IRQ_PENDING_SOURCE_MASK));
+                // The interrupt number and the priority it was enabled at, in
+                // both half-words: a board answers the same value twice.
+                let half = ((prio << IRQ_PENDING_PRIO_SHIFT) & IRQ_PENDING_PRIO_MASK)
+                    | ((src << IRQ_PENDING_SOURCE_SHIFT) & IRQ_PENDING_SOURCE_MASK);
+                return Ok(half | (half << 16));
             }
         }
         if off == VBASE || tag_read(off) {
@@ -335,6 +342,38 @@ mod tests {
         assert_eq!(c.take_vbase(0), Some(0xFEC2_B600));
         c.write(VBASE, Width::Word, 0xFEC2_A000).unwrap();
         assert_eq!(c.take_vbase(0), Some(0xFEC2_A000));
+    }
+
+    #[test]
+    fn a_vectored_source_reads_back_with_its_priority_in_both_halves() {
+        // Raspberry Pi 4B d03115, read from inside a handler: source 71 at
+        // priority 1 gives 0x01470147, at priority 7 0x07470747, and source 96
+        // at priority 1 gives 0x01600160.
+        let mut c = CoreCtl::new();
+        c.write(IRQ_PRIO, Width::Word, 1 << 28).unwrap();
+        c.raise_source(0, 71);
+        assert_eq!(c.read(IRQ_PENDING, Width::Word).unwrap(), 0x0147_0147);
+        // Read to clear: the dispatcher sees it once.
+        assert_eq!(c.read(IRQ_PENDING, Width::Word).unwrap(), 0);
+
+        c.write(IRQ_PRIO, Width::Word, 7 << 28).unwrap();
+        c.raise_source(0, 71);
+        assert_eq!(c.read(IRQ_PENDING, Width::Word).unwrap(), 0x0747_0747);
+
+        c.write(IRQ_PRIO + 4 * 4, Width::Word, 1).unwrap();
+        c.raise_source(0, 96);
+        assert_eq!(c.read(IRQ_PENDING, Width::Word).unwrap(), 0x0160_0160);
+    }
+
+    #[test]
+    fn the_latched_priority_survives_a_handler_rewriting_irq_prio() {
+        // rpi-unboxed's stray handler rewrites the priority words before
+        // anything reads IRQ_PENDING; hardware latches at delivery.
+        let mut c = CoreCtl::new();
+        c.write(IRQ_PRIO, Width::Word, 5 << 28).unwrap();
+        c.raise_source(0, 71);
+        c.write(IRQ_PRIO, Width::Word, 0).unwrap();
+        assert_eq!(c.read(IRQ_PENDING, Width::Word).unwrap(), 0x0547_0547);
     }
 
     #[test]

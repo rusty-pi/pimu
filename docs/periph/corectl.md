@@ -21,7 +21,7 @@ Sources:
 | Offset | Name | Access | Width | Sources |
 |---|---|---|---|---|
 | `0x000` | [`IRQ_GATE`](#irq_gate) | rw | 32 | 3, best high |
-| `0x004` | [`IRQ_PENDING`](#irq_pending) | r | 32 | 1, best medium |
+| `0x004` | [`IRQ_PENDING`](#irq_pending) | r | 32 | 4, best high |
 | `0x008`–`0x00C` (2 × 0x4) | [`IRQ_RAW`](#irq_raw) | r | 32 | 2, best high |
 | `0x010`–`0x02C` (8 × 0x4) | [`IRQ_PRIO`](#irq_prio) | rw | 32 | 7, best high |
 | `0x030` | [`VBASE`](#vbase) | w | 32 | 4, best high |
@@ -46,24 +46,27 @@ Sources:
 
 Offset `0x004` · access `r` · 32 bits
 
-Which interrupt the dispatcher should service next.
+Which interrupt is being taken: its number and the priority it was enabled at. A delivery latch, not a pending register -- it holds what has actually been vectored, and reads 0 for a source that is merely queued or held by `IRQ_GATE`. The value appears twice, once in each half-word; both halves were identical in every measurement, including two sources enabled at once. There is no valid bit: a read outside a handler answers 0, and the dispatcher's own test of bit 8 is a test of the priority field's low bit, which works only because start4 enables everything at priority 1.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
-| 8 | `VALID` | r | Set while an interrupt is pending. |
-| 5:0 | `SOURCE` | r | Source number minus 64; the dispatcher ORs 64 back in. |
+| 6:0 | `SOURCE` | r | The interrupt number, 64 + source, as the vector table indexes it -- already ORed with 64, so the dispatcher's `or r0, 64` is a no-op on this silicon. Bit 6 cannot be told apart from a hardwired part of the field by measurement: the 64 sources are numbered 64 to 127, so bit 6 is set for all of them. |
+| 10:8 | `PRIO` | r | The priority the source's `IRQ_PRIO` field was enabled at, carried through to the handler. |
 
 Sources:
 
+- measured (high): Raspberry Pi 4B d03115, read from inside a handler: `rpi-unboxed` built with four instructions at `vpu_stray_irq` entry that stash `0x7E002004` in a static, then a source forced through `IRQ_PENDING_BITS_SET` from the ARM. Source 71 at priority 1 gave `0x01470147`, at priority 7 `0x07470747`, source 70 at priority 1 `0x01460146`, source 96 at priority 1 `0x01600160`. Priorities 2, 4 and 6 gave `0x0247`, `0x0447` and `0x0647`, so bit 8 is the priority's low bit and not a flag.
+- measured (high): Raspberry Pi 4B d03115, same build: with source 70 at priority 2 and source 71 at priority 5 enabled and both forced, the register read `0x0547` -- source 71. With the priorities swapped it read `0x0546` -- source 70. So the higher priority number wins, which is the same sense as `IRQ_GATE`, where a gate of `0xf` holds every priority.
 - decompile (medium): dispatcher `0x3EC3E9BC`: `r0 = [blk+4]`, `btest r0, 8`, or 64, mask to 7 bits, index the handler table at `gp+58004`
-
-`VALID` sources:
-
-- decompile (high): dispatcher `0x3EC3E9BC`: `btest r0, 8`
+- datasheet (medium): Broadcom `bcm2708_chip/intctrl0.h`: `IC0_S`, RO, mask `0x073f073f` -- the two half-words, and a 6-bit source field where the BCM2711 reads 7
 
 `SOURCE` sources:
 
-- decompile (medium): dispatcher `0x3EC3E9BC`: `or r0, 64`, then a 7-bit mask — _the dispatcher keeps 7 bits after the OR, so bit 6 may belong to the field too_
+- measured (high): internal source 32 (`IRQ_PENDING_BITS` word 1 bit 0) read back as `0x60` = 96 = 64 + 32, and internal sources 6 and 7 as `0x46` and `0x47`
+
+`PRIO` sources:
+
+- measured (high): priorities 1 through 7 on one source each read back as `0x01..` through `0x07..` in these bits
 
 ## `IRQ_RAW`
 

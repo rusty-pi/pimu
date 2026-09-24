@@ -54,33 +54,47 @@ note       = "the header gives no fields, so whether the four bits are a priorit
 name   = "IRQ_PENDING"
 offset = 0x04
 access = "r"
-notes  = "Which interrupt the dispatcher should service next."
+notes  = "Which interrupt is being taken: its number and the priority it was enabled at. A delivery latch, not a pending register -- it holds what has actually been vectored, and reads 0 for a source that is merely queued or held by `IRQ_GATE`. The value appears twice, once in each half-word; both halves were identical in every measurement, including two sources enabled at once. There is no valid bit: a read outside a handler answers 0, and the dispatcher's own test of bit 8 is a test of the priority field's low bit, which works only because start4 enables everything at priority 1."
+
+[[register.source]]
+kind       = "measured"
+ref        = "Raspberry Pi 4B d03115, read from inside a handler: `rpi-unboxed` built with four instructions at `vpu_stray_irq` entry that stash `0x7E002004` in a static, then a source forced through `IRQ_PENDING_BITS_SET` from the ARM. Source 71 at priority 1 gave `0x01470147`, at priority 7 `0x07470747`, source 70 at priority 1 `0x01460146`, source 96 at priority 1 `0x01600160`. Priorities 2, 4 and 6 gave `0x0247`, `0x0447` and `0x0647`, so bit 8 is the priority's low bit and not a flag."
+confidence = "high"
+
+[[register.source]]
+kind       = "measured"
+ref        = "Raspberry Pi 4B d03115, same build: with source 70 at priority 2 and source 71 at priority 5 enabled and both forced, the register read `0x0547` -- source 71. With the priorities swapped it read `0x0546` -- source 70. So the higher priority number wins, which is the same sense as `IRQ_GATE`, where a gate of `0xf` holds every priority."
+confidence = "high"
 
 [[register.source]]
 kind       = "decompile"
 ref        = "dispatcher `0x3EC3E9BC`: `r0 = [blk+4]`, `btest r0, 8`, or 64, mask to 7 bits, index the handler table at `gp+58004`"
 confidence = "medium"
 
-[[register.field]]
-name  = "VALID"
-bits  = "8"
-notes = "Set while an interrupt is pending."
-
-[[register.field.source]]
-kind       = "decompile"
-ref        = "dispatcher `0x3EC3E9BC`: `btest r0, 8`"
-confidence = "high"
+[[register.source]]
+kind       = "datasheet"
+ref        = "Broadcom `bcm2708_chip/intctrl0.h`: `IC0_S`, RO, mask `0x073f073f` -- the two half-words, and a 6-bit source field where the BCM2711 reads 7"
+confidence = "medium"
 
 [[register.field]]
 name  = "SOURCE"
-bits  = "5:0"
-notes = "Source number minus 64; the dispatcher ORs 64 back in."
+bits  = "6:0"
+notes = "The interrupt number, 64 + source, as the vector table indexes it -- already ORed with 64, so the dispatcher's `or r0, 64` is a no-op on this silicon. Bit 6 cannot be told apart from a hardwired part of the field by measurement: the 64 sources are numbered 64 to 127, so bit 6 is set for all of them."
 
 [[register.field.source]]
-kind       = "decompile"
-ref        = "dispatcher `0x3EC3E9BC`: `or r0, 64`, then a 7-bit mask"
-confidence = "medium"
-note       = "the dispatcher keeps 7 bits after the OR, so bit 6 may belong to the field too"
+kind       = "measured"
+ref        = "internal source 32 (`IRQ_PENDING_BITS` word 1 bit 0) read back as `0x60` = 96 = 64 + 32, and internal sources 6 and 7 as `0x46` and `0x47`"
+confidence = "high"
+
+[[register.field]]
+name  = "PRIO"
+bits  = "10:8"
+notes = "The priority the source's `IRQ_PRIO` field was enabled at, carried through to the handler."
+
+[[register.field.source]]
+kind       = "measured"
+ref        = "priorities 1 through 7 on one source each read back as `0x01..` through `0x07..` in these bits"
+confidence = "high"
 
 [[register]]
 name   = "IRQ_RAW"

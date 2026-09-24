@@ -237,13 +237,19 @@ fn software_posted_interrupts_are_queued_per_core() {
 fn irq_pending_is_per_core_and_read_to_clear() {
     let mut m = machine();
 
+    // A delivered source carries the priority its IRQ_PRIO field holds, in
+    // both half-words: source 79 sits in core 1's word 1 field 7, source 66 in
+    // core 0's word 0 field 2. Enable each at priority 1, as start4 does.
+    m.store32(map::CORECTL_BASE + 0x814, 1 << 28).unwrap();
+    m.store32(map::CORECTL_BASE + 0x010, 1 << 8).unwrap();
+
     m.corectl.raise_source(1, 79);
     assert_eq!(
         m.load32(map::CORECTL_BASE + 0x04).unwrap(),
         0,
         "core 0's copy"
     );
-    assert_eq!(m.load32(map::CORECTL_BASE + 0x804).unwrap(), 0x100 | 15);
+    assert_eq!(m.load32(map::CORECTL_BASE + 0x804).unwrap(), 0x014F_014F);
     assert_eq!(
         m.load32(map::CORECTL_BASE + 0x804).unwrap(),
         0,
@@ -256,7 +262,7 @@ fn irq_pending_is_per_core_and_read_to_clear() {
         0,
         "core 1's copy"
     );
-    assert_eq!(m.load32(map::CORECTL_BASE + 0x04).unwrap(), 0x100 | 2);
+    assert_eq!(m.load32(map::CORECTL_BASE + 0x04).unwrap(), 0x0142_0142);
 }
 
 /// `enable_irq_source(src, prio)` packs a 4-bit field per source into the words

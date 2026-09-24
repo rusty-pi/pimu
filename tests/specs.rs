@@ -150,8 +150,8 @@ fn generated_constants_match_the_toml() {
     assert_eq!(spec::mcsync::DOORBELL_COUNT, 32);
     assert_eq!(spec::systimer::C, 0x0C);
     assert_eq!(spec::systimer::CS_M3_MASK, 1 << 3);
-    assert_eq!(spec::corectl::IRQ_PENDING_SOURCE_MASK, 0x3F);
-    assert_eq!(spec::corectl::IRQ_PENDING_VALID_SHIFT, 8);
+    assert_eq!(spec::corectl::IRQ_PENDING_SOURCE_MASK, 0x7F);
+    assert_eq!(spec::corectl::IRQ_PENDING_PRIO_SHIFT, 8);
 
     // A copy gets its own base constant.
     let bsc = spec_for(&specs, "bsc");
