@@ -36,8 +36,6 @@ The VPU takes the line the ARM's requests arrive on; the ARM takes the one the r
 | `0x034`–`0x134` (2 × 0x100) | [`SENDER1`](#sender1) | rw | 32 | 1, best medium |
 | `0x038`–`0x138` (2 × 0x100) | [`STATUS1`](#status1) | r | 32 | 2, best high |
 | `0x03C`–`0x13C` (2 × 0x100) | [`CONFIG1`](#config1) | rw | 32 | 2, best high |
-| `0x0C8` | [`PEND0`](#pend0) | rw | 32 | 1, best high |
-| `0x0CC` | [`PEND1`](#pend1) | rw | 32 | 2, best high |
 
 ## `DATA0`
 
@@ -193,32 +191,3 @@ Sources:
 
 - decompile (high): receive op `0x3EC5AC0C` arms it on empty; ISR `0x3EC58302` reads and re-arms `0x7E00B9BC`
 - trace (high): pinned start4 writes the VPU's element (`0x7E00B9BC`) `0x8` at `0x3EC5AF6C` and `0x1` at `0x3EC5AF7C`, shortly before it releases the ARM
-
-## `PEND0`
-
-Offset `0x0C8` · access `rw` · 32 bits
-
-Mailbox 0 wants service. Computed; writes do not latch.
-
-| Bits | Field | Access | Notes |
-|---|---|---|---|
-| 2 | `SERVICE` | rw | Dispatch this mailbox's registered callback. |
-
-Sources:
-
-- decompile (high): ISR `0x3EC58302`: `Load r0, [0x7E00B940 + 8]; Btest r0, #2`
-
-`SERVICE` sources:
-
-- decompile (high): ISR `0x3EC58302` calls `[gp+243092]` on bit 2
-
-## `PEND1`
-
-Offset `0x0CC` · access `rw` · 32 bits
-
-Mailbox 1 (ARM -> VPU) wants service; set while `CONFIG1` has an enabled condition pending. Same layout as `PEND0`.
-
-Sources:
-
-- decompile (high): ISR `0x3EC58302`: `Load r5, [0x7E00B940 + 12]; Btest r5, #2`
-- trace (high): `--log irqtbl`: `src 94 handler=0x3ec58302`

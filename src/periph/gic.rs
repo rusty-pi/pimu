@@ -251,6 +251,8 @@ pub const ID_NS_PHYS_TIMER: u32 = 30;
 /// drives each one, with that spec's provenance; the names here are how the
 /// model refers to them.
 pub const ID_MAILBOX: u32 = crate::spec::mbox::IRQ_GIC;
+/// Doorbell 0, the line VCHIQ's ARM side binds (`vchiq_doorbell_irq`).
+pub const ID_DOORBELL0: u32 = crate::spec::bell::IRQ_GIC_DOORBELL0;
 pub const ID_PL011: u32 = crate::spec::uart0::IRQ_GIC;
 /// The AUX block's one line, shared by the mini-UART and the SPI masters:
 /// Linux's `ttyS0`, the console on a card that leaves Bluetooth enabled

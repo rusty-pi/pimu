@@ -107,14 +107,14 @@ use crate::log::{Channel, Log};
 // Every mailbox register is a two-element array: element 0 is the ARM's view
 // (what Linux's device tree calls `mailbox@7e00b880`), element 1 the
 // VideoCore's, which is what `start4.elf` actually drives. `CONFIG1` /
-// `STATUS1` have `CONFIG0` / `STATUS0`'s layout, and `PEND1` has `PEND0`'s.
+// `STATUS1` have `CONFIG0` / `STATUS0`'s layout.
 use crate::spec::mbox::{
     CONFIG0, CONFIG0_CLEAR_MASK as CFG_CLEAR, CONFIG0_EN_HAVE_DATA_MASK as CFG_EN_HAVE_DATA,
     CONFIG0_EN_HAVE_SPACE_MASK as CFG_EN_HAVE_SPACE, CONFIG0_EN_OPP_EMPTY_MASK as CFG_EN_OPP_EMPTY,
     CONFIG0_PEND_HAVE_DATA_MASK as CFG_PEND_HAVE_DATA,
     CONFIG0_PEND_HAVE_SPACE_MASK as CFG_PEND_HAVE_SPACE,
     CONFIG0_PEND_OPP_EMPTY_MASK as CFG_PEND_OPP_EMPTY, CONFIG1, DATA0, DATA0_STRIDE, DATA1, PEEK0,
-    PEEK1, PEND0, PEND0_SERVICE_MASK as PEND_BIT, PEND1, SENDER0, SENDER1, STATUS0,
+    PEEK1, SENDER0, SENDER1, STATUS0,
     STATUS0_EMPTY_MASK as STATUS_EMPTY, STATUS0_FULL_MASK as STATUS_FULL, STATUS1,
 };
 use crate::spec::Coverage;
@@ -123,8 +123,7 @@ use crate::spec::Coverage;
 pub const COVERAGE: Coverage = Coverage {
     block: "mbox",
     decoded: &[
-        DATA0, PEEK0, SENDER0, STATUS0, CONFIG0, DATA1, PEEK1, SENDER1, STATUS1, CONFIG1, PEND0,
-        PEND1,
+        DATA0, PEEK0, SENDER0, STATUS0, CONFIG0, DATA1, PEEK1, SENDER1, STATUS1, CONFIG1,
     ],
 };
 
@@ -132,9 +131,10 @@ pub const COVERAGE: Coverage = Coverage {
 const VPU: u32 = DATA0_STRIDE;
 /// One view's registers, `DATA0..=CONFIG1`; the rest of a view aliases them.
 const WINDOW: u32 = CONFIG1 + 4;
-/// The interrupt block between the two views (`0x7E00_B940`), which holds the
-/// pending words.
-const PEND_BLOCK: std::ops::Range<u32> = PEND0 - 8..VPU;
+/// The gap between the two views (`0x7E00_B8C0`..`0x7E00_B980`). Its first
+/// four words are the VPU's view of the doorbells, which
+/// [`crate::periph::bell`] decodes ahead of this block; the rest reads back 0.
+const PEND_BLOCK: std::ops::Range<u32> = 0x40..VPU;
 
 /// The interrupt source the mailbox arrives on, from `specs/mbox.toml`: the
 /// firmware's own handler table has `src 94 handler=0x3ec58302`.
@@ -371,17 +371,9 @@ impl Mbox {
     /// watches these while a core busy-waits on one (`arm/mod.rs`, "Busy-wait
     /// loops").
     pub fn peek(&self, offset: u32) -> Option<u32> {
-        // The interrupt block sits between the two windows.
+        // The gap between the two windows: nothing of the mailbox's is in it.
         if PEND_BLOCK.contains(&offset) {
-            return Some(match offset & !3 {
-                // Mailbox 1 is the ARM->VPU direction — the one the receive op
-                // reads. Mailbox 0 never asks for service here: the VPU is the
-                // writer on that side, so nothing notifies it about its own
-                // outbox.
-                PEND1 if self.irq_asserted() => PEND_BIT,
-                PEND0 | PEND1 => 0,
-                _ => 0,
-            });
+            return Some(0);
         }
         let vpu = offset >= VPU;
         Some(match (offset & !3) % WINDOW {
@@ -431,8 +423,6 @@ impl MmioDevice for Mbox {
 
     fn write(&mut self, offset: u32, _width: Width, value: u32) -> BusResult<()> {
         if PEND_BLOCK.contains(&offset) {
-            // Pending bits are computed from the FIFO, so an ack does not
-            // latch; the line drops when the firmware drains the request.
             return Ok(());
         }
         let vpu = offset >= VPU;
@@ -536,8 +526,6 @@ mod tests {
             CFG_EN_HAVE_DATA | CFG_PEND_HAVE_DATA
         );
         assert!(m.irq_asserted());
-        let pend1 = PEND1;
-        assert_eq!(m.read(pend1, Width::Word).unwrap(), PEND_BIT);
 
         // What `0x3EC58302` does with that: clear the enable it just served.
         m.write(vpu + CONFIG1, Width::Word, 0).unwrap();

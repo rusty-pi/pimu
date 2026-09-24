@@ -133,6 +133,14 @@ pub const ASB_SIZE: u32 = spec::asb::SIZE;
 pub const ARMCTRL_BASE: u32 = spec::armctrl::BASE;
 pub const ARMCTRL_SIZE: u32 = spec::armctrl::SIZE;
 
+/// The four ARM <-> VideoCore doorbells (`0x7E00_B840`) and the VPU's view of
+/// them (`0x7E00_B940`): VCHIQ's wake path. The first sits inside
+/// [`ARMCTRL_BASE`]'s window and the second inside [`MBOX_BASE`]'s, so both are
+/// decoded ahead of those.
+pub const BELL_BASE: u32 = spec::bell::BASE;
+pub const BELL_VPU_BASE: u32 = spec::bell::VPU_BASE;
+pub const BELL_SIZE: u32 = spec::bell::SIZE;
+
 /// The ARM <-> VideoCore mailboxes, `0x7E00_B880`: the ARM's view, the
 /// interrupt block and the VPU's view.
 pub const MBOX_BASE: u32 = spec::mbox::BASE;

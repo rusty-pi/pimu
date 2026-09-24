@@ -7,7 +7,8 @@ use crate::periph::gpio;
 use crate::periph::hdmi_ddc::AUTO_WINDOW;
 use crate::periph::{
     ArmCtrl, ArmLocal, Asb, Aux, Avs, BootBox, Bsc, ClkMon, ClockManager, ConfigOtp, CoreCtl, Dma4,
-    Dwc2, Emmc2, Gic, Gpio, Hd, Hdmi, HdmiDdc, Hvs, Mbox, McSync, Pactl, Pcm, Pl011, Pm, Pwm, Rng,
+    Bell, Dwc2, Emmc2, Gic, Gpio, Hd, Hdmi, HdmiDdc, Hvs, Mbox, McSync, Pactl, Pcm, Pl011, Pm, Pwm,
+    Rng,
     Sdc, Sdramc, Spi0, StubRegion, SysTimer, Vce, XhciOtg,
 };
 use crate::soc::bcm2711 as map;
@@ -50,6 +51,10 @@ pub struct Machine {
     /// The ARM property mailbox (`0x7E00_B880`). Idle during a normal boot —
     /// the firmware only services it once an ARM is running.
     pub mbox: Mbox,
+    /// The four ARM <-> VideoCore doorbells (`0x7E00_B840`, and the VPU's view
+    /// of them at `0x7E00_B940`): VCHIQ's wake path. Carved out of the ARM
+    /// control block's window and the mailbox's, so decoded ahead of both.
+    pub bell: Bell,
     /// The ARM control block below the mailboxes (`0x7E00_B000`): where
     /// `arm_loader` releases the ARM.
     pub armctrl: ArmCtrl,
@@ -312,6 +317,7 @@ impl Machine {
             uart0: Pl011::new(),
             aux: Aux::new(),
             mbox: Mbox::new(),
+            bell: Bell::new(),
             armctrl: ArmCtrl::new(),
             arm_local: ArmLocal::new(),
             gic: Gic::new(),
@@ -434,6 +440,7 @@ impl Machine {
     pub fn set_log(&mut self, log: Log) {
         self.systimer.set_log(log.clone());
         self.mbox.log = log.clone();
+        self.bell.log = log.clone();
         self.corectl.log = log.clone();
         self.pcie.set_log(log.clone());
         self.spi0.log = log.clone();
@@ -623,6 +630,14 @@ impl Machine {
         // the `mbox_read` task takes the message off the FIFO.
         let src = crate::periph::mbox::IRQ_SRC;
         if self.mbox.irq_asserted() && !self.pending_irqs.contains(&src) {
+            self.push_pending_irq(src);
+        }
+        // Doorbells 2 and 3 arrive on that same source 94, the whole ARM
+        // control block's line: the stock handler reads both bells before it
+        // looks at the mailbox, because a bell holds the line up until it is
+        // read.
+        let src = crate::periph::bell::IRQ_SRC;
+        if self.bell.vpu_irq_asserted() && !self.pending_irqs.contains(&src) {
             self.push_pending_irq(src);
         }
         // The VCE holds source 68 asserted from the moment a launch completes
@@ -858,6 +873,14 @@ impl Machine {
         }
         if let Some(off) = hit(map::AUX_BASE, map::AUX_SIZE) {
             return Some((&mut self.aux, off));
+        }
+        // Both doorbell apertures, before the two windows they sit inside:
+        // the ARM's view is in the ARM control block's, the VPU's in the
+        // mailbox's.
+        for base in [map::BELL_BASE, map::BELL_VPU_BASE] {
+            if let Some(off) = hit(base, map::BELL_SIZE) {
+                return Some((&mut self.bell, off));
+            }
         }
         if let Some(off) = hit(map::MBOX_BASE, map::MBOX_SIZE) {
             return Some((&mut self.mbox, off));

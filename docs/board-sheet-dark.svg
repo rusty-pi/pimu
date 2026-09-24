@@ -101,7 +101,7 @@
     <text class="m" x="740" y="291" text-anchor="middle">armstub · UEFI · Linux</text>
   </g>
 
-  <g data-block="mbox armctrl">
+  <g data-block="mbox armctrl bell">
     <line class="ln" x1="613" y1="268" x2="657" y2="268" marker-start="url(#ahi)" marker-end="url(#ahi)"/>
     <text class="m" x="635" y="262" text-anchor="middle">mbox</text>
     <line class="ln" x1="613" y1="300" x2="657" y2="300" marker-end="url(#ahi)"/>

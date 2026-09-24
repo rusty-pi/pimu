@@ -12,6 +12,7 @@ Generated from the TOML specs in [`specs/`](../../specs/); see [`specs/README.md
 | [`aux`](aux.md) | vpu | `0x7E215000` | `0x100` | 25 | AUX: mini-UART (UART1) and the SPI1 / SPI2 masters |
 | [`avs`](avs.md) | vpu | `0x7D5D2000` | `0xF00` | 10 | AVS monitor: on-die temperature sensor and the ring-oscillator / rail voltage monitors |
 | [`bcm54213pe`](bcm54213pe.md) | mdio | `0x01` | `0x20` | 23 | BCM54213PE gigabit Ethernet PHY on GENET's MDIO bus |
+| [`bell`](bell.md) | vpu | `0x7E00B840` | `0x10` | 1 | The four ARM <-> VideoCore doorbells, VCHIQ's wake path |
 | [`bootbox`](bootbox.md) | vpu | `0x7EE00000` | `0x4000` | 20 | Boot-info handoff doorbells, and the VPU interrupt window start4's exception-12 handler reads |
 | [`bsc`](bsc.md) | vpu | `0x7E205000` | `0x20` | 8 | BSC (I²C master): instance 0 with nothing attached, and the instance the board PMICs and GPIO expander sit on |
 | [`clkmon`](clkmon.md) | vpu | `0x7D5D0000` | `0x10000` | 6 | VPU clock block (PLLs and frequency monitors) below the `0x7E` window |
@@ -35,7 +36,7 @@ Generated from the TOML specs in [`specs/`](../../specs/); see [`specs/README.md
 | [`hdmi_auto_i2c`](hdmi_auto_i2c.md) | vpu | `0x7EF00B00` | `0x300` | 5 | HDMI auto-i2c sequencers (the second reg window of each DDC master's node): channels that write a list of values into their connector's DDC I²C master and report when the transfer it starts has finished |
 | [`hdmi_ddc`](hdmi_ddc.md) | vpu | `0x7EF04500` | `0x100` | 8 | HDMI DDC I²C masters (`brcm,bcm2711-hdmi-i2c`), one per connector: the bus a monitor's EDID EEPROM sits on |
 | [`hvs`](hvs.md) | vpu | `0x7E400000` | `0x1000` | 7 | HVS (Hardware Video Scaler): identification, the per-channel frame-swap words, and end of frame |
-| [`mbox`](mbox.md) | vpu | `0x7E00B880` | `0x140` | 12 | ARM <-> VideoCore mailboxes: two views of the same pair of FIFOs, and the interrupt block between them |
+| [`mbox`](mbox.md) | vpu | `0x7E00B880` | `0x140` | 10 | ARM <-> VideoCore mailboxes: two views of the same pair of FIFOs, and the interrupt block between them |
 | [`mcsync`](mcsync.md) | vpu | `0x7E000000` | `0x1000` | 7 | Doorbells / semaphores between the two VPU cores |
 | [`otp`](otp.md) | vpu | `0x7E20F000` | `0x1000` | 7 | Always-on config / OTP engine: the fuse array, one row at a time – reads and programming |
 | [`pactl`](pactl.md) | vpu | `0x7E204E00` | `0x4` | 1 | Peripheral activity status: which SPI, I²C or PL011 behind an ORed interrupt is the one asking |
@@ -102,6 +103,7 @@ The `parent` of a block: the master of its bus, or the window it is carved out o
 | VPU source | 88 | [`dma`](dma.md) `CH9_10` | — |
 | VPU source | 89 | [`dma4`](dma4.md) | — |
 | VPU source | 93 | [`aux`](aux.md) | — |
+| VPU source | 94 | [`bell`](bell.md) | — |
 | VPU source | 94 | [`mbox`](mbox.md) | — |
 | VPU source | 95 | [`dma`](dma.md) `CH15` | — |
 | VPU source | 97 | [`hvs`](hvs.md) | — |
@@ -117,6 +119,8 @@ The `parent` of a block: the master of its bus, or the window it is carved out o
 | VPU source | 126 | [`emmc2`](emmc2.md) | — |
 | VPU source | 126 | [`emmc`](emmc.md) | — |
 | GIC id | 65 | [`mbox`](mbox.md) | `GIC_SPI 33` |
+| GIC id | 66 | [`bell`](bell.md) `DOORBELL0` | `GIC_SPI 34` |
+| GIC id | 67 | [`bell`](bell.md) `DOORBELL1` | `GIC_SPI 35` |
 | GIC id | 105 | [`dwc2`](dwc2.md) | `GIC_SPI 73` |
 | GIC id | 112 | [`dma`](dma.md) `CH0` | `GIC_SPI 80` |
 | GIC id | 113 | [`dma`](dma.md) `CH1` | `GIC_SPI 81` |

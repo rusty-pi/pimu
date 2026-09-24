@@ -280,39 +280,8 @@ kind       = "trace"
 ref        = "pinned start4 writes the VPU's element (`0x7E00B9BC`) `0x8` at `0x3EC5AF6C` and `0x1` at `0x3EC5AF7C`, shortly before it releases the ARM"
 confidence = "high"
 
-[[register]]
-name   = "PEND0"
-offset = 0xC8
-access = "rw"
-notes  = "Mailbox 0 wants service. Computed; writes do not latch."
-
-[[register.source]]
-kind       = "decompile"
-ref        = "ISR `0x3EC58302`: `Load r0, [0x7E00B940 + 8]; Btest r0, #2`"
-confidence = "high"
-
-[[register.field]]
-name  = "SERVICE"
-bits  = "2"
-notes = "Dispatch this mailbox's registered callback."
-
-[[register.field.source]]
-kind       = "decompile"
-ref        = "ISR `0x3EC58302` calls `[gp+243092]` on bit 2"
-confidence = "high"
-
-[[register]]
-name   = "PEND1"
-offset = 0xCC
-access = "rw"
-notes  = "Mailbox 1 (ARM -> VPU) wants service; set while `CONFIG1` has an enabled condition pending. Same layout as `PEND0`."
-
-[[register.source]]
-kind       = "decompile"
-ref        = "ISR `0x3EC58302`: `Load r5, [0x7E00B940 + 12]; Btest r5, #2`"
-confidence = "high"
-
-[[register.source]]
-kind       = "trace"
-ref        = "`--log irqtbl`: `src 94 handler=0x3ec58302`"
-confidence = "high"
+# The four words from `+0xC0` are not the mailbox's: they are the VPU's view of
+# the doorbells, `specs/bell.toml`, decoded by that block ahead of this one.
+# `PEND0` and `PEND1` used to stand here for what `0x7E00B948` and `0x7E00B94C`
+# are, on the strength of the stock ISR testing bit 2 of each; that ISR reads
+# them because they are bells 2 and 3, and bit 2 is a bell that has been rung.

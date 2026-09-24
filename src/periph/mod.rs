@@ -10,6 +10,7 @@ pub mod asb;
 pub mod aux;
 pub mod avs;
 pub mod bcm54213pe;
+pub mod bell;
 pub mod bluetooth;
 pub mod bootbox;
 pub mod bsc;
@@ -63,6 +64,7 @@ pub use armlocal::ArmLocal;
 pub use asb::Asb;
 pub use aux::Aux;
 pub use avs::Avs;
+pub use bell::Bell;
 pub use bootbox::BootBox;
 pub use bsc::Bsc;
 pub use clkmon::ClkMon;
@@ -110,6 +112,7 @@ pub const SPEC_COVERAGE: &[crate::spec::Coverage] = &[
     aux::COVERAGE,
     avs::COVERAGE,
     bcm54213pe::COVERAGE,
+    bell::COVERAGE,
     bootbox::COVERAGE,
     bsc::COVERAGE,
     clkmon::COVERAGE,
