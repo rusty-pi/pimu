@@ -409,6 +409,47 @@ What the firmware answers today:
 | `0x00050001` `GET_COMMAND_LINE` | The last 256 bytes of `/chosen/bootargs`, without the terminator. |
 | `0x00060001` `GET_DMA_CHANNELS` | `0x37f5`. |
 
+### The display tags, and what `--display` changes
+
+Every display tag answers zero on a headless boot, which is the default and what
+the reference board does. `boot --display` (#143) puts a monitor on HDMI0, and
+then the firmware has a display to describe:
+
+| tag | headless | `--display` |
+|---|---|---|
+| `0x00040013` `GET_NUM_DISPLAYS` | `0` | `1` |
+| `0x00040003` `GET_PHYSICAL_WH` | `0`, `0` | `0x280`, `0x1e0` (640 x 480) |
+| `0x00040004` `GET_VIRTUAL_WH` | `0`, `0` | `0x280`, `0x1e0` |
+| `0x00040005` `GET_DEPTH` | `0` | `0x20` |
+| `0x00040008` `GET_PITCH` | `0` | `0xa00` (2560 = 640 x 4) |
+| `0x00030020` `GET_EDID_BLOCK` | fails | the attached blob, block 0 |
+
+The geometry comes from the EDID's detailed timing, so `--display-edid` with a
+blob of another mode moves all of it.
+
+`0x00040001` `ALLOCATE_BUFFER` needs the whole sequence in front of it and an
+8-byte tag buffer; asked on its own it answers a size of 0 and looks broken:
+
+```
+boot --display --mbox-property \
+  '0x00048003:8=640.480,0x00048004:8=640.480,0x00048005:4=32,0x00048006:4=1,\
+   0x00048007:4=1,0x00048009:8=0.0,0x00040001:8=4096,0x00040008:4=0'
+```
+
+answers `0xfeabc000 0x0012c000` — a framebuffer at that bus address, `640 x 480 x
+4` bytes of it. Without `--display` the same sequence answers a size of 0, and so
+does a real headless board: `vcmailbox 0x00040001 8 4 16` on a
+Raspberry Pi 4B d03115 fails with `ioctl_set_msg failed:-1`, so the refusal is
+the firmware's and not the model's.
+
+What this does **not** reach is the HDMI state-machine clock, so nothing writes
+`USBR +0x2C` (#142). The encoder is being programmed — 96 accesses to the
+`hdmi0` core window against 5 headless, the `phy` range at `0x7EF00F00` among
+them — so it is a near miss rather than an untouched path. Tried without effect:
+a card with no KMS overlay and no `disable_fw_kms_setup`, `hdmi_force_hotplug` /
+`hdmi_group` / `hdmi_mode` / `max_framebuffers`, and a 256-byte EDID whose CEA
+extension carries an HDMI VSDB so the sink is HDMI rather than DVI.
+
 A failing crypto handler is fatal for the whole request: the tag itself is
 marked answered, but the buffer-level code becomes `0x80000001` and the walk
 stops, so every tag *after* it goes unanswered for that reason alone. Put the
