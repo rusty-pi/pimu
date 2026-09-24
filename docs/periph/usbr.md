@@ -6,7 +6,7 @@
 - Base: `0x7E808000`
 - Size: `0x100`
 
-The block names itself `USBR` in every reserved word of its window, so the name is an identification and not a label any more -- and the label this model carried, `hd`, was wrong. BCM2835 has its HDMI `HD` block at this address, but the BCM2711 does not: its HDMI `hd` range is `0x7EF20000`, which this board's device tree confirms and which answers a different tag. Registers run `+0x00` to `+0x20`; `+0x24` upwards is the tag. Only the USB power handshake is modelled, and start4's HDMI code writing `+0x2C` (`FUN_0ece981c`) and bit 30 of `+0x38` (`0x3ECE36D8`, `0x3ECE7716`) lands in the tag region, so those writes go nowhere here -- what they were for is still open.
+The block names itself `USBR` in every reserved word of its window, so the name is an identification and not a label any more -- and the label this model carried, `hd`, was wrong. BCM2835 has its HDMI `HD` block at this address, but the BCM2711 does not: its HDMI `hd` range is `0x7EF20000`, which this board's device tree confirms and which answers a different tag. Registers run `+0x00` to `+0x20`; `+0x24` upwards is the tag. Only the USB power handshake is modelled. start4's HDMI code writes `+0x2C` (`FUN_0ece981c`, the state-machine clock divider), which is past the last readable register -- but a tag on read means the word is not readable, not that it is unimplemented: `GPSET` answers the GPIO block's tag and its writes drive pins all the same. So `+0x2C` may be a write-only register of this block. What it does is open (#142).
 
 Sources:
 

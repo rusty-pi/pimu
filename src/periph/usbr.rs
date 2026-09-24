@@ -7,7 +7,10 @@
 //! to be called `hd`, on the strength of the BCM2835 having its HDMI `HD` block
 //! at this address. The BCM2711 does not: its HDMI `hd` range is `0x7EF20000`,
 //! which the board's own device tree gives and which answers a different tag
-//! (#139). Registers run `+0x00` to `+0x20`; `+0x24` upwards is tag.
+//! (#139). Registers `+0x00` to `+0x20` read back; `+0x24` upwards answers the
+//! tag, which means not readable rather than not implemented -- `GPSET` answers
+//! the GPIO tag and still drives pins -- so a write-only register may live up
+//! there. start4's HDMI code writes `+0x2C` (#142).
 //!
 //! ## What start4 does with it
 //!
