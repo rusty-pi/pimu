@@ -141,6 +141,13 @@ MEDIA AND NETWORK:
     --usb-mb <n>
               A stick given by --usb or --otg is <n> MiB, with the image at its
               start, as on a Pi whose first boot uses the rest.
+    --display
+              Plug a monitor into HDMI0: its `HOTPLUG` reports connected and a
+              built-in EDID answers on the DDC bus. Off by default, as the
+              reference board has no monitor on either connector.
+    --display-edid <file>
+              Serve this EDID blob (128 or 256 bytes) instead of the built-in
+              one. Implies --display.
     --netboot <dir>
               Plug the Ethernet cable into the built-in network peer: DHCP,
               DNS, and <dir> over TFTP and HTTP.
@@ -326,6 +333,8 @@ struct BootOpts {
     path: PathBuf,
     entry: Option<u32>,
     usb_mb: Option<u64>,
+    display: bool,
+    display_edid: Option<PathBuf>,
     /// No instruction cap by default — a full boot retires well over a billion,
     /// and the wall clock is the useful bound. `--max-steps` is for pinning a
     /// run to an exact instruction count (bisecting, probes).
@@ -528,6 +537,8 @@ impl BootOpts {
         let mut path: Option<PathBuf> = None;
         let mut entry: Option<u32> = None;
         let mut usb_mb: Option<u64> = None;
+        let mut display = false;
+        let mut display_edid: Option<PathBuf> = None;
         let mut max_steps: Option<u64> = None;
         let mut max_wall_secs: u64 = 140;
         let mut eeprom = false;
@@ -670,6 +681,11 @@ impl BootOpts {
                     otg_image = Some(PathBuf::from(it.next().context("--otg needs a path")?))
                 }
                 "--usb-mb" => usb_mb = Some(it.next().context("--usb-mb needs a value")?.parse()?),
+                "--display" => display = true,
+                "--display-edid" => {
+                    display = true;
+                    display_edid = Some(it.next().context("--display-edid needs a <file>")?.into());
+                }
                 "--net" => {
                     let spec = it.next().context("--net needs passt or passt:<socket>")?;
                     host_net = Some(if spec == "passt" {
@@ -839,6 +855,8 @@ impl BootOpts {
             path,
             entry,
             usb_mb,
+            display,
+            display_edid,
             max_steps,
             max_wall_secs,
             eeprom,
@@ -1445,6 +1463,28 @@ impl<'a> Rig<'a> {
         }
         if let Some(p) = &emmc_image {
             machine.emmc2.insert_mmc_disk(open_sd(p, &self.log)?);
+        }
+        if self.opts.display {
+            // A monitor on HDMI0: the connector reports hotplug and its EDID
+            // answers on the DDC bus. Not the same lever as a board's
+            // `hdmi_force_hotplug=1` -- see `Hdmi::with_display`.
+            let edid = match &self.opts.display_edid {
+                Some(p) => {
+                    let blob = std::fs::read(p)
+                        .with_context(|| format!("--display-edid {}", p.display()))?;
+                    if blob.len() != 128 && blob.len() != 256 {
+                        anyhow::bail!(
+                            "--display-edid {}: {} bytes, expected 128 or 256",
+                            p.display(),
+                            blob.len()
+                        );
+                    }
+                    blob
+                }
+                None => rpi_virt_fw::periph::hdmi_ddc::DEFAULT_EDID.to_vec(),
+            };
+            machine.hdmi0 = rpi_virt_fw::periph::Hdmi::new("hdmi0").with_display();
+            machine.hdmi_ddc0 = rpi_virt_fw::periph::HdmiDdc::new("hdmi-ddc0").with_edid(edid);
         }
         if check_coherency {
             machine.ram.coherency = rpi_virt_fw::coherency::Coherency::on(self.log.clone());

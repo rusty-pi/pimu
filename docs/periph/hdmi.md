@@ -7,7 +7,7 @@
 - `HDMI1` copy: `0x7EF05700`
 - Size: `0x300`
 
-No encoder or PHY behind it, and no sink on either connector. What firmware waits on is modelled: a packet slot's status bit follows its enable in `RAM_PACKET_CONFIG` at once, a FIFO recenter completes as soon as it is asked for, and `HOTPLUG` reports nothing plugged in. Everything else is stored and read back.
+No encoder or PHY behind it, and by default no sink on either connector (`boot --display` puts one on HDMI0). What firmware waits on is modelled: a packet slot's status bit follows its enable in `RAM_PACKET_CONFIG` at once, a FIFO recenter completes as soon as it is asked for, and `HOTPLUG` reports nothing plugged in. Everything else is stored and read back.
 
 Sources:
 
@@ -27,7 +27,7 @@ HDMI1's core registers; HDMI0's are the block base.
 | `0x074` | [`FIFO_CTL`](#fifo_ctl) | rw | 32 | 2, best high |
 | `0x0BC` | [`RAM_PACKET_CONFIG`](#ram_packet_config) | rw | 32 | 2, best high |
 | `0x0C4` | [`RAM_PACKET_STATUS`](#ram_packet_status) | r | 32 | 2, best high |
-| `0x1A8` | [`HOTPLUG`](#hotplug) | r | 32 | 2, best high |
+| `0x1A8` | [`HOTPLUG`](#hotplug) | r | 32 | 3, best high |
 
 ## `FIFO_CTL`
 
@@ -96,7 +96,7 @@ Sources:
 
 Offset `0x1A8` · access `r` · 32 bits
 
-No monitor on either connector: `CONNECTED` reads 0 whatever was written, so Linux's `vc4` reports both connectors disconnected, as on the reference board.
+Whether a monitor is on this connector. Read-only: a write changes nothing either way. With none attached `CONNECTED` reads 0 and Linux's `vc4` reports the connector disconnected, which is the default and what the reference board does; `boot --display` attaches one and it reads set. Setting it is not the same lever as a board's `hdmi_force_hotplug=1`, which does not make the firmware behave as though the line were asserted -- see the measurement below.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -106,6 +106,7 @@ Sources:
 
 - linux (high): `drivers/gpu/drm/vc4/vc4_hdmi_regs.h`: `VC4_HDMI_REG(HDMI_HOTPLUG, 0x1a8)` in `vc5_hdmi_hdmi0_fields`; `vc4_hdmi.c`: `vc5_hdmi_hp_detect()`
 - measured (medium): Raspberry Pi 4B d03115, no monitor attached: `/sys/class/drm/card1-HDMI-A-1/status` and `card1-HDMI-A-2/status` read disconnected — _The connector state, not the register: `vc4` reports disconnected when `CONNECTED` is clear and the node has no `hpd-gpios`._
+- measured (high): Raspberry Pi 4B d03115, no monitor, stock start4 `f5e89631` booted with `hdmi_force_hotplug=1`, `hdmi_group=1`, `hdmi_drive=2` (confirmed applied by `vcgencmd get_config int`): the firmware still logs `HDMI0:EDID error reading EDID block 0 attempt 0` and gives up after that one attempt. With `CONNECTED` set in the model instead, it retries ten times. So the config option and this bit are different levers, and a `--display` boot is not a forced-hotplug board.
 
 `CONNECTED` sources:
 

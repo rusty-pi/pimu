@@ -42,8 +42,8 @@ use std::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 use crate::spec::hdmi::{
-    FIFO_CTL, FIFO_CTL_RECENTER_DONE_MASK, FIFO_CTL_RECENTER_MASK, HOTPLUG, RAM_PACKET_CONFIG,
-    RAM_PACKET_CONFIG_PACKETS_MASK, RAM_PACKET_STATUS,
+    FIFO_CTL, FIFO_CTL_RECENTER_DONE_MASK, FIFO_CTL_RECENTER_MASK, HOTPLUG, HOTPLUG_CONNECTED_MASK,
+    RAM_PACKET_CONFIG, RAM_PACKET_CONFIG_PACKETS_MASK, RAM_PACKET_STATUS,
 };
 use crate::spec::Coverage;
 
@@ -59,6 +59,9 @@ pub struct Hdmi {
     storage: BTreeMap<u32, u32>,
     /// `FIFO_CTL.RECENTER_DONE`.
     recenter_done: bool,
+    /// Whether a monitor is on this connector, which is what `HOTPLUG` answers.
+    /// False by default, as on the reference board; `boot --display` sets it.
+    connected: bool,
 }
 
 impl Hdmi {
@@ -67,7 +70,18 @@ impl Hdmi {
             name,
             storage: BTreeMap::new(),
             recenter_done: false,
+            connected: false,
         }
+    }
+
+    /// Put a monitor on this connector: `HOTPLUG` then answers `CONNECTED`.
+    /// Note this is the *register*, which is not the same lever as a board's
+    /// `hdmi_force_hotplug=1`: measured on a Raspberry Pi 4B d03115, stock
+    /// firmware with that set still gives up on EDID after one attempt, where a
+    /// set `CONNECTED` bit makes it retry ten times (#143).
+    pub fn with_display(mut self) -> Hdmi {
+        self.connected = true;
+        self
     }
 
     fn reg(&self, off: u32) -> u32 {
@@ -86,6 +100,7 @@ impl MmioDevice for Hdmi {
             FIFO_CTL if self.recenter_done => self.reg(off) | FIFO_CTL_RECENTER_DONE_MASK,
             // The encoder takes a slot on or off as soon as it is told to.
             RAM_PACKET_STATUS => self.reg(RAM_PACKET_CONFIG) & RAM_PACKET_CONFIG_PACKETS_MASK,
+            HOTPLUG if self.connected => HOTPLUG_CONNECTED_MASK,
             // Nothing plugged in.
             HOTPLUG => 0,
             _ => self.reg(off),
@@ -121,6 +136,28 @@ mod tests {
 
     fn fifo_ctl(h: &mut Hdmi) -> u32 {
         h.read(FIFO_CTL, Width::Word).unwrap()
+    }
+
+    /// `--display` puts a monitor on the connector: `HOTPLUG` answers
+    /// `CONNECTED`, and it stays read-only either way.
+    #[test]
+    fn hotplug_reports_a_monitor_only_when_one_is_attached() {
+        let mut bare = Hdmi::new("hdmi0");
+        assert_eq!(bare.read(HOTPLUG, Width::Word).unwrap(), 0);
+
+        let mut plugged = Hdmi::new("hdmi0").with_display();
+        assert_eq!(
+            plugged.read(HOTPLUG, Width::Word).unwrap(),
+            HOTPLUG_CONNECTED_MASK
+        );
+        // Read-only: a write changes neither.
+        plugged.write(HOTPLUG, Width::Word, 0).unwrap();
+        bare.write(HOTPLUG, Width::Word, 0xFFFF_FFFF).unwrap();
+        assert_eq!(
+            plugged.read(HOTPLUG, Width::Word).unwrap(),
+            HOTPLUG_CONNECTED_MASK
+        );
+        assert_eq!(bare.read(HOTPLUG, Width::Word).unwrap(), 0);
     }
 
     #[test]

@@ -125,6 +125,26 @@ pub const MAX_BYTES: usize = DATA_REGS * 4;
 /// `CTL.DTF` bit 0: a read.
 const CTL_DTF_READ: u32 = 1 << CTL_DTF_SHIFT;
 
+/// A monitor's EDID for [`HdmiDdc::with_edid`], for a harness that asks for a
+/// display with no blob of its own (`boot --display`).
+///
+/// **Synthesised, not dumped from a monitor** -- do not cite it as ground truth
+/// for what any real sink reports. It is a minimal valid EDID 1.3 block: the
+/// `00 FF FF FF FF FF FF 00` header, one detailed timing for 640x480 at 60 Hz
+/// (25.175 MHz pixel clock), established timings claiming the same mode, dummy
+/// descriptors for the rest, no extension blocks, and a checksum byte chosen so
+/// the 128 bytes sum to zero mod 256, which is what a parser parses first.
+pub const DEFAULT_EDID: [u8; 128] = [
+    0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x4A, 0x09, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00,
+    0x01, 0x24, 0x01, 0x03, 0x80, 0x30, 0x1B, 0x78, 0x0A, 0xEE, 0x91, 0xA3, 0x54, 0x4C, 0x99, 0x26,
+    0x0F, 0x50, 0x54, 0x20, 0x00, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+    0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0xD5, 0x09, 0x80, 0xA0, 0x20, 0xE0, 0x2D, 0x10, 0x10, 0x60,
+    0xA2, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x42,
+];
+
 /// 7-bit address of a monitor's EDID EEPROM on the DDC bus.
 pub const EDID_ADDR: u32 = 0x50;
 
@@ -421,6 +441,24 @@ mod tests {
     /// The one list start4 1.20190925 runs, on a connector with nothing on
     /// it: the master runs the transfer the list sets up, and channel 2's
     /// `DONE` bit comes up once that has finished (#76).
+    /// The built-in EDID has to parse: a parser checks the header and the
+    /// checksum before anything else, and start4 gives up on a block whose
+    /// checksum is wrong.
+    #[test]
+    fn the_built_in_edid_is_a_valid_block() {
+        assert_eq!(DEFAULT_EDID.len(), 128);
+        assert_eq!(
+            &DEFAULT_EDID[0..8],
+            &[0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00],
+            "EDID header"
+        );
+        let sum: u32 = DEFAULT_EDID.iter().map(|&b| b as u32).sum();
+        assert_eq!(sum % 256, 0, "checksum must make the block sum to 0");
+        assert_eq!(DEFAULT_EDID[18], 1, "EDID version 1");
+        assert_eq!(DEFAULT_EDID[19], 3, "revision 3");
+        assert_eq!(DEFAULT_EDID[126], 0, "no extension blocks");
+    }
+
     #[test]
     fn an_auto_i2c_list_runs_through_the_master() {
         let mut d = HdmiDdc::new("hdmi-ddc0");
