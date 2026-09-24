@@ -440,3 +440,48 @@ reason: firmware that reads 0 from a row concludes the fuse is unprogrammed.
 The `nvmem_cust_rw`, `nvmem_mac_rw` and `nvmem_priv_rw` `dtparam`s open those
 regions for *write* from Linux. OTP writes are one-way, so nothing here needs
 them — read access is enough to check what is fused.
+
+### `vcgencmd` over VCHIQ
+
+The property mailbox is not the only channel the firmware answers on. `vcgencmd`
+talks to the `GCMD` service over **VCHIQ**, a shared slot area in coherent DRAM
+with a doorbell either way, and none of it goes through `/dev/vcio`. `--gencmd`
+stands in for the client:
+
+```bash
+boot out/start4.elf --sd firmware/sd-halt.img \
+  --gencmd commands --gencmd measure_temp --gencmd get_throttled
+```
+
+Each flag is one command line, and all of them go over one connection:
+
+```
+--- VCHIQ gencmd (slot area at 0x10100000) ---
+  master up: slots 2..32, tx_pos 0
+  CONNECT acknowledged
+  GCMD open on firmware port 1, peer version 1
+  commands  ->  status 0, 114 bytes
+      commands="commands, version, measure_temp, ..."
+  measure_temp  ->  status 0, 16 bytes
+      temp=43.7'C
+  GCMD closed; doorbell 0 rung 6 times
+```
+
+The harness (`src/cli/vchiq.rs`) is a whole ARM side of VCHIQ, not a wrapper
+around the kernel's: it lays out a slot area of its own, hands it over with
+`VCHIQ_INIT` (`0x00048010`), and then sends `CONNECT`, `OPEN`, a `DATA` message
+per command and `CLOSE`. It has to be, because the kernel's `bcm2835_vchiq`
+never *connects* on its own — `vchiq_probe` hands over the slot area and stops,
+and the thread that would send `CONNECT` is only created once something has
+connected, which in a real system is a userspace client opening `/dev/vchiq`.
+
+Run it with the ARM parked, for the reason `--mbox-property` gives: the
+hand-over is a property request, and a live kernel's `bcm2835-mbox` takes the
+reply to *our* buffer as the reply to whatever it had outstanding.
+
+The doorbells are `specs/bell.toml`: four words at `0x7E00_B840` with the VPU's
+view `0x100` above, bells 0 and 1 raising the ARM (`GIC_SPI 34` is doorbell 0,
+which is VCHIQ's) and bells 2 and 3 the VPU. `doorbell 0 rung N times` in the
+report above is the firmware's side of the wake actually working: a peer that
+frames its answer but never rings is a `vcgencmd` that hangs with the answer
+sitting in the slot.

@@ -21,13 +21,14 @@
 //! "ring the bell only if the peer is waiting" branch is taken — but it finds
 //! the answer by polling the shared area, not off the interrupt.
 //!
-//! **Run it with the ARM parked**, which is what `--until "Kernel panic"`
-//! leaves behind on a card with no root filesystem. Handing the slot area over
-//! means posting a property request, and a live kernel's `bcm2835-mbox` takes
-//! the reply to *our* buffer as the reply to whatever it had outstanding: the
-//! second reply then reaches `response_callback` with no request waiting and
-//! the kernel oopses in `complete`. That is the same hazard
-//! `--mbox-property` has always had, and the same answer.
+//! **Run it with the ARM parked** — `--sd firmware/sd-halt.img`, the card
+//! `--mbox-property` is used with, or a boot stopped after a kernel panic.
+//! Handing the slot area over means posting a property request, and a live
+//! kernel's `bcm2835-mbox` takes the reply to *our* buffer as the reply to
+//! whatever it had outstanding: the next reply then reaches
+//! `response_callback` with no request waiting, and the kernel oopses in
+//! `complete`. That is the hazard `--mbox-property` has always had, and the
+//! same answer.
 //!
 //! Layout and protocol follow `drivers/staging/vc04_services/interface/
 //! vchiq_arm/vchiq_core.{c,h}` on `rpi-6.12.y`, and the message format of the

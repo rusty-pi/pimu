@@ -248,8 +248,8 @@ OUTPUT:
               Repeatable; every command goes over the one connection. The
               harness brings up a slot area of its own (`src/cli/vchiq.rs`),
               because the kernel only connects when userspace asks it to. Use
-              it with the ARM parked -- `--until` on a Kernel-panic line, on a
-              card with no root filesystem -- for `--mbox-property`'s reason.
+              it with the ARM parked -- `--sd firmware/sd-halt.img`, the card
+              `--mbox-property` is used with -- for that flag's own reason.
 
     --mbox-property <tag>[,<tag>...]
               After the boot, post a property-interface request to the firmware
