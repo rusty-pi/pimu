@@ -12,6 +12,7 @@ mod disasm;
 mod mbox;
 mod otp;
 mod scenario;
+mod vchiq;
 
 const USAGE: &str = "\
 rpi-virt-fw — virtual bench for Raspberry Pi VideoCore boot firmware

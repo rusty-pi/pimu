@@ -242,6 +242,15 @@ OUTPUT:
     --print-fdt
               Print that whole device tree as source, every node and property,
               not only the `/chosen` summary the `-v` run report gives.
+    --gencmd <command>
+              After the boot, open the firmware's `GCMD` service over VCHIQ and
+              send <command>, the way `vcgencmd` does, then print the answer.
+              Repeatable; every command goes over the one connection. The
+              harness brings up a slot area of its own (`src/cli/vchiq.rs`),
+              because the kernel only connects when userspace asks it to. Use
+              it with the ARM parked -- `--until` on a Kernel-panic line, on a
+              card with no root filesystem -- for `--mbox-property`'s reason.
+
     --mbox-property <tag>[,<tag>...]
               After the boot, post a property-interface request to the firmware
               the way a booted Linux would (`/dev/vcio`), and print what the
@@ -357,6 +366,9 @@ struct BootOpts {
     /// error code behind that only the *next* request can ask for
     /// (`0x0003008e`).
     mbox_tags: Vec<MboxRequest>,
+    /// One entry per `--gencmd`: a command line for the firmware's `GCMD`
+    /// service, all of them run over one VCHIQ connection.
+    gencmds: Vec<String>,
     usb_image: Option<PathBuf>,
     /// `--otg <img>`: the same, in the USB-C socket (#113).
     otg_image: Option<PathBuf>,
@@ -540,6 +552,7 @@ impl BootOpts {
         let mut dump_fdt: Option<PathBuf> = None;
         let mut print_fdt = false;
         let mut mbox_tags: Vec<MboxRequest> = Vec::new();
+        let mut gencmds: Vec<String> = Vec::new();
         let mut usb_image: Option<PathBuf> = None;
         let mut otg_image: Option<PathBuf> = None;
         let mut netboot_root: Option<PathBuf> = None;
@@ -736,6 +749,10 @@ impl BootOpts {
                     disasms.push((parse_u32(a)?, parse_u32(n)?));
                 }
                 "--print-fdt" => print_fdt = true,
+                "--gencmd" => {
+                    let command = it.next().context("--gencmd needs a command line")?;
+                    gencmds.push(command.clone());
+                }
                 "--mbox-property" => {
                     let list = it.next().context("--mbox-property needs a tag list")?;
                     let mut group: Vec<MboxTag> = Vec::new();
@@ -846,6 +863,7 @@ impl BootOpts {
             dump_fdt,
             print_fdt,
             mbox_tags,
+            gencmds,
             usb_image,
             otg_image,
             netboot_root,
@@ -1691,6 +1709,9 @@ fn print_report(opts: &BootOpts, booted: Booted) -> Result<ExitCode> {
     }
     for group in &opts.mbox_tags {
         mbox_property_exchange(&mut emu, &limits, group)?;
+    }
+    if !opts.gencmds.is_empty() {
+        crate::vchiq::gencmd_exchange(&mut emu, &limits, &opts.gencmds)?;
     }
     // After the exchanges: they are where a firmware-only boot programs.
     if let Some(file) = &opts.otp {
