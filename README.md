@@ -90,6 +90,10 @@ git clone https://github.com/raspberrypi/firmware raspi-firmware
 pimu boot raspi-firmware/boot
 ```
 
+That image is fetched once with `gh` and kept in `$XDG_CACHE_HOME/pimu`
+(`~/.cache/pimu`); delete it to take a newer one. Any boot with a medium and no
+EEPROM image of its own uses it, so `pimu boot --sd card.img` boots too.
+
 ## Commands
 
 | Command | What it does |

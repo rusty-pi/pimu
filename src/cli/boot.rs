@@ -597,8 +597,18 @@ fn fallback_eeprom() -> Result<PathBuf> {
             "-O",
         ])
         .arg(&path)
-        .output()
-        .with_context(|| format!("running gh to download {REPO}'s pieeprom.bin"))?;
+        .output();
+    let out = match out {
+        Ok(out) => out,
+        // The repository is private, so an authenticated `gh` is how it is
+        // read; say what to do when there is none rather than what failed.
+        Err(e) => bail!(
+            "no EEPROM image to boot with, and gh could not be run to fetch \
+             {REPO}'s ({e}). Give one with --eeprom, or put the `pieeprom.bin` \
+             of that repository's `latest` release at {}",
+            path.display()
+        ),
+    };
     if !out.status.success() {
         let _ = std::fs::remove_file(&path);
         bail!(
@@ -937,9 +947,17 @@ impl BootOpts {
         zero.file(&mut eeprom_pubkey, "pubkey.bin");
         zero.announce();
 
-        // A firmware checkout is the card and not the bootloader, so what
-        // boots it is the EEPROM image `rusty-pi/firmware` publishes (#144).
-        if path.is_none() && sd_dir.is_some() {
+        // A boot medium and nothing to boot it with: a firmware checkout is
+        // the card and not the bootloader, and neither is a disk image, so
+        // what boots either is the EEPROM image `rusty-pi/firmware`
+        // publishes (#144).
+        let medium = sd_dir.is_some()
+            || sd_image.is_some()
+            || emmc_image.is_some()
+            || usb_image.is_some()
+            || otg_image.is_some()
+            || netboot_root.is_some();
+        if path.is_none() && medium {
             path = Some(fallback_eeprom()?);
             eeprom = true;
         }
