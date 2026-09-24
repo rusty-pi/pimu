@@ -38,6 +38,7 @@ run a VPU ELF
 USAGE:
     pimu boot --eeprom <pieeprom.bin> [<options>]
     pimu boot <file.elf> [<options>]
+    pimu boot <dir> [<options>]
 
     `boot <file> --eeprom` is the same as `boot --eeprom <file>`, and with no
     command the options are `boot`'s: `pimu --eeprom <file> ...`.
@@ -54,7 +55,14 @@ USAGE:
 ZERO CONFIG:
     An option left out takes the file of that name in the working directory,
     when there is one, so a directory holding these boots with a bare
-    `pimu boot`:
+    `pimu boot` — and `pimu boot <dir>` reads them from <dir> instead,
+    as `pimu -C <dir> boot` does:
+
+    A directory that holds a boot partition's files instead — `start4.elf`,
+    `config.txt` — is the card itself: `boot` builds the FAT32 volume around
+    them (--sd-dir), and boots the EEPROM bootloader `rusty-pi/firmware`
+    publishes when there is no `pieeprom.bin` to boot, since a firmware
+    checkout carries none.
 
         pieeprom.bin  --eeprom            otp.json      --otp json:<file>
         sd.img        --sd                otp.bin       --otp binary:<file>
@@ -123,6 +131,12 @@ MEDIA AND NETWORK:
               A HAT on the 40-pin header, with this ID EEPROM image at 0x50 on
               I2C0 (`eepmake` output). The firmware reads it where it probes
               the header, and applies the device-tree overlay in it.
+    --sd-dir <dir>
+              An SD card whose boot partition holds the files in <dir>: the
+              MBR, the FAT32 volume and its directories are built here, and
+              the files are read from <dir> as the firmware asks for them.
+              What `git clone https://github.com/raspberrypi/firmware` leaves
+              in `boot/` is such a directory. Mutually exclusive with --sd.
     --emmc <img>
               An e-MMC part with this image soldered to the SD host, as a
               Compute Module has in place of a card slot. Answers CMD1 and the
@@ -352,6 +366,8 @@ struct BootOpts {
     dumps: Vec<(u32, u32)>,
     disasms: Vec<(u32, u32)>,
     sd_image: Option<PathBuf>,
+    /// `--sd-dir <dir>`: a card built out of a directory of firmware files.
+    sd_dir: Option<PathBuf>,
     /// `--emmc <img>`: the same slot, but an e-MMC part rather than a card.
     emmc_image: Option<PathBuf>,
     /// `--hat <eep>`: a HAT's ID EEPROM image on I2C0.
@@ -464,6 +480,22 @@ impl<'a> ZeroConfig<'a> {
         }
     }
 
+    /// The working directory itself, when it holds a boot partition's files
+    /// rather than an image of one: a `raspberrypi/firmware` checkout's
+    /// `boot/`, or any directory with a `start4.elf` or a `config.txt` in it.
+    /// `boot` builds the card around them (`pimu::fat`).
+    fn boot_partition(&mut self, slot: &mut Option<PathBuf>) {
+        let dir = if self.dir.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            self.dir
+        };
+        if pimu::fat::is_boot_partition(dir) {
+            self.found.push(format!("{} as the card", dir.display()));
+            *slot = Some(dir.to_path_buf());
+        }
+    }
+
     /// `otp.json` / `otp.bin`: the name carries the format, so the two together
     /// say nothing about which array to read — that asks for an explicit
     /// `--otp`.
@@ -529,6 +561,57 @@ impl<'a> ZeroConfig<'a> {
     }
 }
 
+/// The EEPROM image to boot a directory of firmware files with: a firmware
+/// checkout has none of its own, and the bootloader is what loads `start4.elf`
+/// off the card in the first place — `start4.elf` run from its ELF entry
+/// stalls with nothing on the console, since the bootloader does more than
+/// place its segments.
+///
+/// So it comes from `rusty-pi/firmware`, whose `bootmain` boots a stock
+/// `start4.elf` the way the stock stage does, and is cached: downloaded once
+/// with `gh`, then read from `$XDG_CACHE_HOME/pimu` (`~/.cache/pimu`).
+fn fallback_eeprom() -> Result<PathBuf> {
+    let cache = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+        .context("no XDG_CACHE_HOME and no HOME to cache the EEPROM image under")?
+        .join("pimu");
+    let path = cache.join("pieeprom-latest.bin");
+    if path.is_file() {
+        return Ok(path);
+    }
+    std::fs::create_dir_all(&cache).with_context(|| format!("creating {}", cache.display()))?;
+    eprintln!(
+        "zero-config: fetching {REPO}'s EEPROM image into {}",
+        path.display()
+    );
+    let out = std::process::Command::new("gh")
+        .args([
+            "release",
+            "download",
+            "latest",
+            "-R",
+            REPO,
+            "-p",
+            "pieeprom.bin",
+            "-O",
+        ])
+        .arg(&path)
+        .output()
+        .with_context(|| format!("running gh to download {REPO}'s pieeprom.bin"))?;
+    if !out.status.success() {
+        let _ = std::fs::remove_file(&path);
+        bail!(
+            "downloading {REPO}'s pieeprom.bin: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(path)
+}
+
+/// Where that image comes from.
+const REPO: &str = "rusty-pi/firmware";
+
 impl BootOpts {
     /// The options, or `None` for `-h` / `--help`. `dir` is where zero-config
     /// looks for the files an option leaves out (see [`ZeroConfig`]): empty for
@@ -553,6 +636,7 @@ impl BootOpts {
         let mut dumps: Vec<(u32, u32)> = Vec::new();
         let mut disasms: Vec<(u32, u32)> = Vec::new();
         let mut sd_image: Option<PathBuf> = None;
+        let mut sd_dir: Option<PathBuf> = None;
         let mut emmc_image: Option<PathBuf> = None;
         let mut hat_eeprom: Option<PathBuf> = None;
         let mut check_coherency = false;
@@ -661,6 +745,9 @@ impl BootOpts {
                     )
                 }
                 "--sd" => sd_image = Some(PathBuf::from(it.next().context("--sd needs a path")?)),
+                "--sd-dir" => {
+                    sd_dir = Some(PathBuf::from(it.next().context("--sd-dir needs a path")?))
+                }
                 "--emmc" => {
                     emmc_image = Some(PathBuf::from(it.next().context("--emmc needs a path")?))
                 }
@@ -814,9 +901,17 @@ impl BootOpts {
                 s => bail!("unexpected argument '{s}' (try boot --help)"),
             }
         }
+        // A directory rather than a file to boot: everything is read from
+        // there instead of from the working directory, as `-C` does it, and
+        // the directory itself is the card when it holds a boot partition's
+        // files (#144).
+        let from = match path.take_if(|p| p.is_dir()) {
+            Some(p) => p,
+            None => dir.to_path_buf(),
+        };
         // Zero-config (#114): whatever the command line left out, and the
-        // working directory has under the name that option's medium goes by.
-        let mut zero = ZeroConfig::new(dir);
+        // directory has under the name that option's medium goes by.
+        let mut zero = ZeroConfig::new(&from);
         if path.is_none() {
             zero.file(&mut path, "pieeprom.bin");
             // Found, it is an EEPROM image: nothing else is called that.
@@ -824,6 +919,9 @@ impl BootOpts {
         }
         if emmc_image.is_none() {
             zero.file(&mut sd_image, "sd.img");
+        }
+        if sd_image.is_none() && emmc_image.is_none() && sd_dir.is_none() {
+            zero.boot_partition(&mut sd_dir);
         }
         zero.file(&mut usb_image, "usb.img");
         zero.file(&mut otg_image, "otg.img");
@@ -839,6 +937,12 @@ impl BootOpts {
         zero.file(&mut eeprom_pubkey, "pubkey.bin");
         zero.announce();
 
+        // A firmware checkout is the card and not the bootloader, so what
+        // boots it is the EEPROM image `rusty-pi/firmware` publishes (#144).
+        if path.is_none() && sd_dir.is_some() {
+            path = Some(fallback_eeprom()?);
+            eeprom = true;
+        }
         let path = path.context("boot: missing <file> (try boot --help)")?;
         if netboot_root.is_some() && host_net.is_some() {
             bail!("--netboot and --net both plug in the Ethernet cable; give one");
@@ -848,6 +952,9 @@ impl BootOpts {
         }
         if sd_image.is_some() && emmc_image.is_some() {
             bail!("--sd and --emmc are the same host: give one");
+        }
+        if sd_dir.is_some() && (sd_image.is_some() || emmc_image.is_some()) {
+            bail!("--sd-dir is the card too: give one of --sd-dir, --sd and --emmc");
         }
         Ok(Some(Self {
             path,
@@ -869,6 +976,7 @@ impl BootOpts {
             dumps,
             disasms,
             sd_image,
+            sd_dir,
             emmc_image,
             hat_eeprom,
             check_coherency,
@@ -1458,6 +1566,14 @@ impl<'a> Rig<'a> {
         }
         if let Some(p) = &sd_image {
             machine.emmc2.insert_disk(open_sd(p, &self.log)?);
+        }
+        if let Some(dir) = &self.opts.sd_dir {
+            let card = pimu::fat::card_from_dir(dir)
+                .with_context(|| format!("building a card out of {}", dir.display()))?;
+            let disk = pimu::periph::disk::Disk::from_card(card)
+                .with_context(|| format!("opening the files in {}", dir.display()))?
+                .with_log(self.log.clone(), "sd");
+            machine.emmc2.insert_disk(disk);
         }
         if let Some(p) = &emmc_image {
             machine.emmc2.insert_mmc_disk(open_sd(p, &self.log)?);
@@ -2778,6 +2894,50 @@ mod tests {
             panic!("two OTP files are ambiguous")
         };
         assert!(e.to_string().contains("--otp"), "{e:#}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A directory of a boot partition's files is the card, and there is
+    /// nothing to give `--sd` (#144).
+    #[test]
+    fn a_boot_partitions_files_are_the_card() {
+        let dir = zero_dir("bootdir");
+        put(&dir, "pieeprom.bin", "");
+        put(&dir, "start4.elf", "");
+        put(&dir, "config.txt", "arm_64bit=1\n");
+        let o = BootOpts::parse(&args(&[]), &dir).unwrap().unwrap();
+        assert_eq!(o.sd_dir, Some(dir.clone()));
+        assert_eq!(o.sd_image, None);
+        assert!(o.eeprom);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// An image beside them is still the card: only a directory with nothing
+    /// to boot from is built into one.
+    #[test]
+    fn an_sd_image_wins_over_the_directory_it_is_in() {
+        let dir = zero_dir("bootdir-img");
+        put(&dir, "pieeprom.bin", "");
+        put(&dir, "start4.elf", "");
+        put(&dir, "sd.img", "");
+        let o = BootOpts::parse(&args(&[]), &dir).unwrap().unwrap();
+        assert_eq!(o.sd_dir, None);
+        assert_eq!(o.sd_image, Some(dir.join("sd.img")));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// `boot <dir>` reads everything from <dir>, as `-C <dir>` does.
+    #[test]
+    fn a_directory_argument_is_where_everything_is_read_from() {
+        let dir = zero_dir("arg-dir");
+        put(&dir, "pieeprom.bin", "");
+        put(&dir, "config.txt", "");
+        let o = BootOpts::parse(&args(&[dir.to_str().unwrap()]), Path::new(""))
+            .unwrap()
+            .unwrap();
+        assert_eq!(o.path, dir.join("pieeprom.bin"));
+        assert_eq!(o.sd_dir, Some(dir.clone()));
+        assert!(o.eeprom);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

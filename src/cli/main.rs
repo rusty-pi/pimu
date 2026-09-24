@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 
 mod boot;
 mod config;
@@ -20,7 +20,7 @@ pimu — virtual bench for Raspberry Pi VideoCore boot firmware
 USAGE:
     pimu run <scenario.toml> [--update] [-v]
     pimu run-all [<dir>] [--update] [-v]
-    pimu boot --eeprom <pieeprom.bin> | <file.elf> [<options>]
+    pimu boot --eeprom <pieeprom.bin> | <file.elf> | <dir> [<options>]
     pimu boot-check <scenario.toml> [--update] [--output <log>] [--max-wall <secs>]
     pimu boot-check <scenario.toml> --from <log> [--update]
     pimu boot-check <scenario.toml> --plan [--output <log>] [--max-wall <secs>]
@@ -35,7 +35,9 @@ COMMANDS:
               in the working directory when there is one — `pieeprom.bin`,
               `sd.img`, `usb.img`, `otg.img`, `netboot/`, `otp.json`/`otp.bin`,
               `bootconf.txt`, `pubkey.bin` — so a directory holding those boots
-              with a bare `pimu boot`.
+              with a bare `pimu boot`, and `pimu boot <dir>` reads them
+              from <dir>. A directory of a boot partition's own files
+              (`start4.elf`, `config.txt`) is the card itself.
               `pimu boot --help` lists its options.
     boot-check
               Run the firmware boot a boot scenario describes and check it:
@@ -55,6 +57,9 @@ COMMANDS:
     With no command, the options are `boot`'s: `pimu --eeprom <file> ...`.
 
 FLAGS:
+    -C <dir>  Work in <dir>: every relative path on the command line is read
+              from there, and it is where a bare `boot` looks for the files it
+              was not given.
     --config <file>
               Take options from <file> as well, at that point in the command
               line: a JSON object (or TOML table) keyed by long option name,
@@ -81,6 +86,11 @@ fn main() -> ExitCode {
 }
 
 fn run(args: &[String]) -> Result<ExitCode> {
+    // `-C <dir>`, as `git` and `make` take it: the rest of the run happens
+    // there, so `pimu -C <dir> boot` is the same as a `cd` and a bare `boot`.
+    // Before everything else, since it moves where a relative `--config` is.
+    let args = chdir(args)?;
+    let args = &args[..];
     // No command, only options: `boot` is the one they are for. Decided before
     // a config file expands, since its `"file"` would look like a command.
     let implicit_boot = args
@@ -110,6 +120,25 @@ fn run(args: &[String]) -> Result<ExitCode> {
         }
         other => bail!("unknown command '{other}' (try --help)"),
     }
+}
+
+/// Take `-C <dir>` (or `-C<dir>`, `-C=<dir>`) off the command line and change
+/// into it, leaving the rest of the arguments.
+fn chdir(args: &[String]) -> Result<Vec<String>> {
+    let mut rest = Vec::with_capacity(args.len());
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        let Some(tail) = arg.strip_prefix("-C") else {
+            rest.push(arg.clone());
+            continue;
+        };
+        let dir = match tail.strip_prefix('=').unwrap_or(tail) {
+            "" => args.next().ok_or_else(|| anyhow!("-C needs a directory"))?,
+            dir => dir,
+        };
+        std::env::set_current_dir(dir).with_context(|| format!("-C {dir}"))?;
+    }
+    Ok(rest)
 }
 
 /// `spec-docs [--update]`: the Markdown under `docs/periph/` is generated from

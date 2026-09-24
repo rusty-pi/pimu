@@ -33,7 +33,25 @@ pub struct Disk {
 
 enum Backing {
     Mem(Vec<u8>),
-    File { file: File, len: u64 },
+    File {
+        file: File,
+        len: u64,
+    },
+    /// A card built out of a directory (`crate::fat`): its metadata in memory,
+    /// and every file of it still on the host.
+    Dir {
+        meta: Vec<u8>,
+        files: Vec<Mapped>,
+    },
+}
+
+/// One file of a built card: where its clusters are, and the host file they
+/// read from.
+struct Mapped {
+    lba: u64,
+    blocks: u64,
+    file: File,
+    len: u64,
 }
 
 impl Disk {
@@ -63,6 +81,28 @@ impl Disk {
         if let Some((log, name)) = &self.io {
             log.blocks(name, op, lba, count);
         }
+    }
+
+    /// The card `crate::fat` built out of a directory of firmware files.
+    pub fn from_card(card: crate::fat::Card) -> std::io::Result<Disk> {
+        let mut files = Vec::with_capacity(card.extents.len());
+        for extent in card.extents {
+            files.push(Mapped {
+                lba: extent.lba,
+                blocks: extent.blocks,
+                file: File::open(&extent.path)?,
+                len: extent.len,
+            });
+        }
+        Ok(Disk {
+            backing: Backing::Dir {
+                meta: card.meta,
+                files,
+            },
+            blocks: card.blocks,
+            written: HashMap::new(),
+            io: None,
+        })
     }
 
     /// The image at `path`, on a disk of at least `min_bytes`.
@@ -128,6 +168,30 @@ impl Disk {
                 }
             }
             Backing::File { .. } => {}
+            Backing::Dir { meta, files } => {
+                if let Some(src) = meta.get(at as usize..at as usize + BLOCK_SIZE) {
+                    out.copy_from_slice(src);
+                } else if let Ok(i) = files.binary_search_by(|f| {
+                    if lba < f.lba {
+                        std::cmp::Ordering::Greater
+                    } else if lba >= f.lba + f.blocks {
+                        std::cmp::Ordering::Less
+                    } else {
+                        std::cmp::Ordering::Equal
+                    }
+                }) {
+                    // The file's last block is short; the rest of the cluster
+                    // it sits in is zeros.
+                    let file = &files[i];
+                    let at = (lba - file.lba) * BLOCK_SIZE as u64;
+                    if at < file.len {
+                        let n = BLOCK_SIZE.min((file.len - at) as usize);
+                        if let Err(e) = file.file.read_exact_at(&mut out[..n], at) {
+                            panic!("reading a card file at byte {at}: {e}");
+                        }
+                    }
+                }
+            }
         }
         true
     }

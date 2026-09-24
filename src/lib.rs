@@ -17,6 +17,7 @@
 //! Around those:
 //!
 //! - [`bus`], [`mem`] and [`l2`]: what the cores load and store through.
+//! - [`fat`]: a directory of firmware files as a card, built on the fly.
 //! - [`firmware`]: loading firmware images, and the boot ROM stage.
 //! - [`armstub`], [`fdt`] and [`identity`]: what `arm_loader` hands the ARM,
 //!   and the board identity (`rpi-machine-id`) in it.
@@ -35,6 +36,7 @@ pub mod bus;
 pub mod coherency;
 pub mod diag;
 pub mod emulator;
+pub mod fat;
 pub mod fdt;
 pub mod firmware;
 pub mod harness;
