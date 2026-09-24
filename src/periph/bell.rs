@@ -99,7 +99,8 @@ impl Bell {
     /// so an access through either lands on the same bell.
     fn index(offset: u32) -> Option<usize> {
         let offset = offset & !3;
-        (offset >= BELL && offset < BELL + BELL_COUNT * BELL_STRIDE)
+        (BELL..BELL + BELL_COUNT * BELL_STRIDE)
+            .contains(&offset)
             .then(|| ((offset - BELL) / BELL_STRIDE) as usize)
     }
 }

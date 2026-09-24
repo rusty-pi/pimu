@@ -95,7 +95,7 @@ const PORT_SHIFT: u32 = 12;
 const PORT_MASK: u32 = 0xfff;
 
 /// `VCHIQ_MAKE_FOURCC('G', 'C', 'M', 'D')` and `VC_GENCMD_VER`.
-const FOURCC_GCMD: u32 = u32::from_be_bytes([b'G', b'C', b'M', b'D']);
+const FOURCC_GCMD: u32 = u32::from_be_bytes(*b"GCMD");
 const GCMD_VERSION: u32 = 1;
 /// The port this harness opens the service from, and the client id it claims.
 /// Both are the client's to choose; `vchiq_open_service_internal` passes the
