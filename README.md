@@ -82,8 +82,8 @@ A directory of a boot partition's own files — a `start4.elf` or a `config.txt`
 in it — is the card itself: the MBR and the FAT32 volume around them are built
 on the fly, and the files are read from the directory as the firmware asks for
 them. So a firmware checkout boots as it is, with the EEPROM bootloader
-[`rusty-pi/firmware`](https://github.com/rusty-pi/firmware) publishes standing
-in for the one such a checkout has none of:
+[`rusty-pi/pi4-firmware`](https://github.com/rusty-pi/pi4-firmware) publishes
+standing in for the one such a checkout has none of:
 
 ```bash
 git clone https://github.com/raspberrypi/firmware raspi-firmware

@@ -60,7 +60,7 @@ ZERO CONFIG:
 
     A directory that holds a boot partition's files instead — `start4.elf`,
     `config.txt` — is the card itself: `boot` builds the FAT32 volume around
-    them (--sd-dir), and boots the EEPROM bootloader `rusty-pi/firmware`
+    them (--sd-dir), and boots the EEPROM bootloader `rusty-pi/pi4-firmware`
     publishes when there is no `pieeprom.bin` to boot, since a firmware
     checkout carries none.
 
@@ -567,7 +567,7 @@ impl<'a> ZeroConfig<'a> {
 /// stalls with nothing on the console, since the bootloader does more than
 /// place its segments.
 ///
-/// So it comes from `rusty-pi/firmware`, whose `bootmain` boots a stock
+/// So it comes from `rusty-pi/pi4-firmware`, whose `bootmain` boots a stock
 /// `start4.elf` the way the stock stage does, and is cached: downloaded once
 /// with `gh`, then read from `$XDG_CACHE_HOME/pimu` (`~/.cache/pimu`).
 fn fallback_eeprom() -> Result<PathBuf> {
@@ -620,7 +620,7 @@ fn fallback_eeprom() -> Result<PathBuf> {
 }
 
 /// Where that image comes from.
-const REPO: &str = "rusty-pi/firmware";
+const REPO: &str = "rusty-pi/pi4-firmware";
 
 impl BootOpts {
     /// The options, or `None` for `-h` / `--help`. `dir` is where zero-config
@@ -949,7 +949,7 @@ impl BootOpts {
 
         // A boot medium and nothing to boot it with: a firmware checkout is
         // the card and not the bootloader, and neither is a disk image, so
-        // what boots either is the EEPROM image `rusty-pi/firmware`
+        // what boots either is the EEPROM image `rusty-pi/pi4-firmware`
         // publishes (#144).
         let medium = sd_dir.is_some()
             || sd_image.is_some()
