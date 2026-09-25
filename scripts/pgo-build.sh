@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Build target/release/pimu with profile-guided optimisation.
 #
-#   scripts/pgo-build.sh
+#   scripts/pgo-build.sh [--profile-only]
+#
+# `--profile-only` stops once the profile is merged, leaving it at
+# target/pgo/merged.profdata for a caller that does its own final build — the
+# release workflow builds two targets from the one profile.
 #
 # An instrumented build runs the firmware boot and the first part of the Linux
 # boot, `llvm-profdata` merges what it counted, and the release build is done
@@ -14,6 +18,13 @@
 # same instructions either way, which boot-check's retired counts show. A plain
 # `cargo build --release` afterwards rebuilds without it.
 set -euo pipefail
+
+profile_only=
+case "${1:-}" in
+  --profile-only) profile_only=1 ;;
+  "") ;;
+  *) echo "usage: $0 [--profile-only]" >&2; exit 2 ;;
+esac
 
 here="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$here"
@@ -63,4 +74,8 @@ train testdata/boot/firmware.toml
 train testdata/boot/linux.toml --until "$linux_until"
 
 "$profdata" merge -o "$work/merged.profdata" "$work/raw"
+if [ -n "$profile_only" ]; then
+  echo "$work/merged.profdata"
+  exit 0
+fi
 RUSTFLAGS="-Cprofile-use=$work/merged.profdata" cargo build --release

@@ -1,14 +1,12 @@
 name: release
 
-# Every push to main replaces the binaries of the `latest` release and the
-# `latest` container image. There are no version tags yet.
+# Run by hand, and then the binaries of the `latest` release and the `latest`
+# container image are replaced with what the dispatched commit builds. There are
+# no version tags yet.
+#
+# Not on every push to main: this job is hosted rather than on the NAS pool, so
+# its minutes are billed, and the PGO training below roughly doubles it.
 on:
-  push:
-    branches: [main]
-    paths:
-      - '**'
-      - '!**.md'
-      - '!docs/**'
   workflow_dispatch:
 
 permissions:
@@ -33,7 +31,7 @@ jobs:
     # docker for the image, apt for the aarch64 cross linker, and an old glibc
     # to link against. The NAS runners have none of the three.
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -64,10 +62,29 @@ jobs:
           echo "PKG_VERSION=$crate+$(date -u +%Y%m%d).$(git rev-parse --short=7 HEAD)" \
             >> "$GITHUB_ENV"
 
+      # What the PGO training boots: the firmware blobs and the two cards
+      # `scripts/pgo-build.sh` runs `boot-check` against. Public downloads, so
+      # no token — unlike the EEPROM image above.
+      - name: Fetch the firmware blobs and build the training cards
+        run: |
+          sudo apt-get -qq update
+          sudo apt-get -qq install -y mtools e2fsprogs
+          ./scripts/fetch-firmware.sh
+          ./scripts/make-sd.sh
+          KERNEL=halt ./scripts/make-sd.sh firmware/sd-halt.img
+
       # `--no-default-features` drops the `repo` commands — `run`, `run-all`,
       # `boot-check`, `spec-docs` — which read golden transcripts out of
       # `testdata/` and write `docs/` through the build-time
       # `CARGO_MANIFEST_DIR`. None of that exists beside a released binary.
+      #
+      # The profile is trained once, on x86-64, and used for both targets:
+      # `-Cprofile-use` keys on function names and CFG hashes rather than on
+      # the target, and the alternative — an instrumented interpreter booting
+      # Linux under qemu-user — costs hours. The instrumented build keeps the
+      # default features, because the training script asks `boot-check --plan`
+      # for the workload; the profile then names functions the final builds do
+      # not have, which LLVM ignores.
       #
       # Both binaries come out of the builder image: the host's glibc is newer
       # than what a release should require, and the aarch64 one is cross-linked
@@ -86,6 +103,8 @@ jobs:
               export PATH="$CARGO_HOME/bin:$PATH"
               rustup target add aarch64-unknown-linux-gnu
               export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+              scripts/pgo-build.sh --profile-only
+              export RUSTFLAGS="-Cprofile-use=/work/target/pgo/merged.profdata"
               cargo build --release --no-default-features
               cargo build --release --no-default-features \
                 --target aarch64-unknown-linux-gnu

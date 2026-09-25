@@ -57,8 +57,12 @@ redone with what it counted. It needs what `boot-check` needs and takes about
 10 minutes on a Pi 4, where both boots then run 1.45x faster; the guest runs the
 same instructions either way.
 
-CI does not use it — the extra build and training cost more than the boot jobs
-would save.
+CI's boot jobs do not use it — the extra build and training cost more than they
+would save. The release builds do; see below.
+
+`--profile-only` stops after `llvm-profdata merge`, leaving the profile at
+`target/pgo/merged.profdata` for a caller that wants to do the final build
+itself.
 
 ## The build's share of the machine
 
@@ -84,8 +88,8 @@ carries no image and the fetch stays as it was.
 
 ## The release builds
 
-`.github/workflows/release.yml` replaces the `latest` release on every push to
-main: a tarball, a `.deb` and an `.rpm` for x86-64 and for aarch64, and the
+`.github/workflows/release.yml` replaces the `latest` release with what the
+commit it is dispatched on builds: a tarball, a `.deb` and an `.rpm` for x86-64 and for aarch64, and the
 `ghcr.io/rusty-pi/pimu:latest` image with a manifest for both. Both binaries are
 built in a `debian:12` container, because a release should not need a newer glibc
 than a Raspberry Pi OS install has, and the aarch64 one is cross-linked there —
@@ -95,3 +99,16 @@ EEPROM image above, which is why the release needs a `FIRMWARE_TOKEN` secret: a
 token that can read the private `rusty-pi/pi4-firmware`, since a workflow's own
 token reaches only its repository. Without the secret the job
 still publishes, with binaries that fetch the image themselves.
+
+It runs by hand rather than on every push to main, because a hosted runner's
+minutes are billed and the PGO below roughly doubles the job.
+
+The binaries are built with PGO, from one profile trained on x86-64 and used for
+both targets: `-Cprofile-use` keys on function names and CFG hashes rather than
+on the target, and training the aarch64 build honestly would mean an
+instrumented interpreter booting Linux under qemu-user. The job fetches the
+firmware blobs and builds the two training cards first, since that is what
+`boot-check` boots. The instrumented build keeps the default features — the
+training script asks `boot-check --plan` for the workload — so the profile names
+functions the final `--no-default-features` builds do not have, which LLVM
+ignores.

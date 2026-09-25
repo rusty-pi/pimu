@@ -30,11 +30,12 @@ run is deterministic. No off-the-shelf tool does this;
 
 ## Install
 
-Each push to main replaces the `latest` release, which carries a Linux binary for
-x86-64 and for aarch64, a `.deb` and an `.rpm` of each, and a container image for
-both architectures. They are built against Debian 12's glibc, so they run on that
-release and on anything newer, and they carry the EEPROM bootloader below built
-in — nothing is fetched on a first boot.
+The `latest` release carries a Linux binary for x86-64 and for aarch64, a `.deb`
+and an `.rpm` of each, and a container image for both architectures. They are
+built with PGO against Debian 12's glibc, so they run on that release and on
+anything newer, and they carry the EEPROM bootloader below built in — nothing is
+fetched on a first boot. A release is cut by hand, from whichever commit the
+workflow is dispatched on.
 
 ```bash
 gh release download latest -R rusty-pi/pimu -p 'pimu-x86_64-linux.tar.gz'
