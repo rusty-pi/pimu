@@ -1,4 +1,8 @@
-# pimu
+# `pimu` – Pi Emulator
+
+> [!NOTE]
+> For transparency: this is AI slop. The author cannot write Rust at all.
+> If you're a Rust expert, feel free to comment how bad it is.
 
 A whole-machine Raspberry Pi 4 (BCM2711) emulator that boots the **real
 firmware** — `pieeprom.bin`, `start4.elf`, `fixup4.dat` on the VideoCore VPU —
@@ -12,6 +16,7 @@ entirely. Accuracy over speed, every core lock-stepped in one host thread, so a
 run is deterministic. No off-the-shelf tool does this;
 [`docs/references.md`](docs/references.md) surveys the prior art.
 
+> [!WARNING]
 > **It is slow, and it stays slow.** Every core is interpreted and
 > lock-stepped in one host thread, because a run has to be deterministic to be
 > diffable. That buys tens of millions of guest instructions a second: the
