@@ -1,0 +1,4 @@
+# The image is only the binary: everything else — target/, the firmware blobs,
+# the sources — would just be a slower build context.
+*
+!dist

@@ -28,6 +28,20 @@ run is deterministic. No off-the-shelf tool does this;
 > 1.45x, not 100x. Use it to see what firmware *does*, not to get work done on
 > a fast Pi.
 
+## Install
+
+Each push to main replaces the `latest` release, which carries a Linux binary for
+x86-64 and for aarch64, a `.deb` and an `.rpm` of each, and a container image for
+both architectures. They are built against Debian 12's glibc, so they run on that
+release and on anything newer, and they carry the EEPROM bootloader below built
+in — nothing is fetched on a first boot.
+
+```bash
+gh release download latest -R rusty-pi/pimu -p 'pimu-x86_64-linux.tar.gz'
+sudo apt install ./pimu_*_amd64.deb              # or the .rpm
+docker run --rm -v "$PWD:/boot" ghcr.io/rusty-pi/pimu:latest boot
+```
+
 ## Run a boot
 
 ```bash
@@ -95,9 +109,10 @@ git clone https://github.com/raspberrypi/firmware raspi-firmware
 pimu boot raspi-firmware/boot
 ```
 
-That image is fetched once with `gh` and kept in `$XDG_CACHE_HOME/pimu`
-(`~/.cache/pimu`); delete it to take a newer one. Any boot with a medium and no
-EEPROM image of its own uses it, so `pimu boot --sd card.img` boots too.
+A released binary carries that image; a build from this tree fetches it once with
+`gh` and keeps it in `$XDG_CACHE_HOME/pimu` (`~/.cache/pimu`), so delete it to
+take a newer one. Any boot with a medium and no EEPROM image of its own uses it,
+so `pimu boot --sd card.img` boots too.
 
 ## Commands
 

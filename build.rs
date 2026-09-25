@@ -3,7 +3,7 @@
 //! set's sub-op tables in `isa/vpu.toml` (#118). A malformed spec fails the
 //! build.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[allow(dead_code)]
 #[path = "src/spec/schema.rs"]
@@ -40,4 +40,30 @@ fn main() {
         Err(e) => panic!("malformed instruction-set spec:\n{e}"),
     };
     std::fs::write(out_dir.join("isa.rs"), isa_schema::rust_module(&isa)).unwrap();
+
+    embed_eeprom(&out_dir);
+}
+
+/// The EEPROM image a binary carries, so that it boots a medium with nothing to
+/// download: `PIMU_EMBED_EEPROM=<pieeprom.bin>` names one, which is what the
+/// release build does with `rusty-pi/pi4-firmware`'s
+/// (`.github/workflows/release.yml`). Unset — every build from a checkout — the
+/// binary carries none and fetches the image with `gh` instead.
+fn embed_eeprom(out_dir: &Path) {
+    println!("cargo:rerun-if-env-changed=PIMU_EMBED_EEPROM");
+    let image = match std::env::var_os("PIMU_EMBED_EEPROM") {
+        Some(p) if !p.is_empty() => {
+            let path = PathBuf::from(&p);
+            let path = std::fs::canonicalize(&path)
+                .unwrap_or_else(|e| panic!("PIMU_EMBED_EEPROM={}: {e}", path.display()));
+            println!("cargo:rerun-if-changed={}", path.display());
+            format!("Some(include_bytes!({path:?}))")
+        }
+        _ => "None".to_string(),
+    };
+    std::fs::write(
+        out_dir.join("embedded_eeprom.rs"),
+        format!("pub const EMBEDDED_EEPROM: Option<&[u8]> = {image};\n"),
+    )
+    .unwrap();
 }

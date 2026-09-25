@@ -1,0 +1,22 @@
+# The .deb and .rpm of a release, built by .github/workflows/release.yml once
+# per architecture: PKG_ARCH is amd64 or arm64, and dist/pimu-$PKG_ARCH is the
+# binary that job built.
+name: pimu
+arch: ${PKG_ARCH}
+version: ${PKG_VERSION}
+maintainer: Valtteri R <valtzu@gmail.com>
+description: |
+  Whole-machine Raspberry Pi 4 (BCM2711) emulator that boots the real firmware.
+  pimu runs pieeprom.bin, start4.elf and fixup4.dat on a modelled VideoCore VPU
+  and then Linux on the four Cortex-A72 cores the firmware releases, so a
+  firmware change shows up as a diff in the serial transcript.
+license: MIT OR Apache-2.0
+homepage: https://github.com/rusty-pi/pimu
+section: misc
+priority: optional
+
+contents:
+  - src: dist/pimu
+    dst: /usr/bin/pimu
+  - src: README.md
+    dst: /usr/share/doc/pimu/README.md

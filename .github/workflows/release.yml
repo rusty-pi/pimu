@@ -1,0 +1,185 @@
+name: release
+
+# Every push to main replaces the binaries of the `latest` release and the
+# `latest` container image. There are no version tags yet.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**'
+      - '!**.md'
+      - '!docs/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+# A newer push supersedes whatever an older run would have uploaded.
+concurrency:
+  group: release
+  cancel-in-progress: true
+
+env:
+  # Debian 12 is the oldest release still on a Raspberry Pi OS install, so its
+  # glibc (2.36) is what the binaries are built against: they then run there and
+  # on anything newer. It is the container image's base too.
+  BUILDER: debian:12
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  release:
+    # Hosted, not the RUNNER_BUILD pool the rest of CI uses: this job needs
+    # docker for the image, apt for the aarch64 cross linker, and an old glibc
+    # to link against. The NAS runners have none of the three.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # The EEPROM bootloader the binaries carry (build.rs), so that `pimu boot`
+      # on a firmware directory needs neither `gh` nor an account with access to
+      # that repository. It is private and github.token only reaches this one,
+      # so the fetch uses FIRMWARE_TOKEN — a PAT with read access to it. Without
+      # the secret the binaries are built with no image and fall back to
+      # fetching one themselves, which is what a build from a checkout does.
+      - name: Fetch the EEPROM image to build in
+        env:
+          GH_TOKEN: ${{ secrets.FIRMWARE_TOKEN || github.token }}
+        run: |
+          if gh release download latest -R rusty-pi/pi4-firmware \
+               -p pieeprom.bin -O pieeprom.bin; then
+            echo "PIMU_EMBED_EEPROM=/work/pieeprom.bin" >> "$GITHUB_ENV"
+          else
+            echo "::warning::no pieeprom.bin built in; set the FIRMWARE_TOKEN secret"
+          fi
+
+      - name: Version the packages
+        run: |
+          crate=$(sed -n '0,/^version = "/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          echo "PKG_VERSION=$crate+$(date -u +%Y%m%d).$(git rev-parse --short=7 HEAD)" \
+            >> "$GITHUB_ENV"
+
+      # Both binaries come out of the builder image: the host's glibc is newer
+      # than what a release should require, and the aarch64 one is cross-linked
+      # rather than emulated — every dependency is pure Rust, so the cross
+      # toolchain is one gcc for the link.
+      - name: Build for x86-64 and aarch64
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work \
+            -e CI=1 -e PIMU_EMBED_EEPROM -e CARGO_HOME=/work/.cargo \
+            "$BUILDER" bash -euo pipefail -c '
+              apt-get -qq update
+              apt-get -qq install -y --no-install-recommends \
+                ca-certificates curl build-essential crossbuild-essential-arm64
+              curl -fsSL https://sh.rustup.rs |
+                sh -s -- -y --no-modify-path --profile minimal --default-toolchain stable
+              export PATH="$CARGO_HOME/bin:$PATH"
+              rustup target add aarch64-unknown-linux-gnu
+              export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+              cargo build --release
+              cargo build --release --target aarch64-unknown-linux-gnu
+            '
+          mkdir -p dist
+          cp target/release/pimu dist/pimu-amd64
+          cp target/aarch64-unknown-linux-gnu/release/pimu dist/pimu-arm64
+
+      # That the cross build produced an aarch64 binary, and that the native one
+      # runs at all — a mislinked binary would otherwise be published.
+      - name: Check the binaries
+        run: |
+          file dist/pimu-amd64 dist/pimu-arm64
+          file dist/pimu-arm64 | grep -q 'ARM aarch64'
+          dist/pimu-amd64 boot --help >/dev/null
+
+      - name: Build the tarballs
+        run: |
+          for pair in amd64:x86_64 arm64:aarch64; do
+            arch=${pair%:*} name=${pair#*:}
+            dir="pimu-$name-linux"
+            mkdir -p "$dir"
+            cp "dist/pimu-$arch" "$dir/pimu"
+            cp README.md "$dir/"
+            tar -czf "dist/$dir.tar.gz" "$dir"
+            rm -rf "$dir"
+          done
+
+      - name: Install nfpm
+        run: |
+          curl -fsSL -O \
+            "https://github.com/goreleaser/nfpm/releases/download/v$NFPM/nfpm_${NFPM}_amd64.deb"
+          echo "$NFPM_SHA256  nfpm_${NFPM}_amd64.deb" | sha256sum -c -
+          sudo apt-get install -y "./nfpm_${NFPM}_amd64.deb"
+        env:
+          NFPM: 2.47.0
+          NFPM_SHA256: 3f1cf344bd0b57373ca55636a78c08b0491f7293d609a456a9ac3b0b150fda97
+
+      # nfpm expands the environment in its own fields but not in a content's
+      # source path, so the architecture's binary is put where the config looks.
+      - name: Build the packages
+        run: |
+          for pair in amd64:x86_64 arm64:aarch64; do
+            arch=${pair%:*} rpm=${pair#*:}
+            cp "dist/pimu-$arch" dist/pimu
+            PKG_ARCH=$arch nfpm package -f packaging/nfpm.yaml -p deb \
+              -t "dist/pimu_${PKG_VERSION}_$arch.deb"
+            PKG_ARCH=$arch nfpm package -f packaging/nfpm.yaml -p rpm \
+              -t "dist/pimu-$PKG_VERSION.$rpm.rpm"
+          done
+          rm dist/pimu
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      # One buildx run for both architectures: the Dockerfile only copies the
+      # binary TARGETARCH names, so neither image needs to execute anything.
+      - name: Build and push the image
+        run: |
+          docker buildx build --platform linux/amd64,linux/arm64 \
+            --tag "$IMAGE:latest" --push .
+
+      - name: Publish the latest release
+        run: |
+          assets=$(printf '%s ' dist/*.tar.gz dist/*.deb dist/*.rpm)
+
+          # Point the tag at this commit, creating it the first time.
+          gh api -X PATCH "repos/$GH_REPO/git/refs/tags/latest" \
+            -f sha="$GITHUB_SHA" -F force=true >/dev/null ||
+            gh api "repos/$GH_REPO/git/refs" -f ref=refs/tags/latest \
+              -f sha="$GITHUB_SHA" >/dev/null
+
+          cat > notes.md <<EOF
+          Built from $GITHUB_SHA, version \`$PKG_VERSION\`.
+
+          - \`pimu-x86_64-linux.tar.gz\`, \`pimu-aarch64-linux.tar.gz\`: the binary and the README.
+          - \`.deb\` and \`.rpm\` of the same, installing \`/usr/bin/pimu\`.
+          - \`docker run --rm -v "\$PWD:/boot" $IMAGE:latest boot\` — amd64 and arm64.
+
+          Built against Debian 12's glibc 2.36, so they run on that and anything
+          newer. The EEPROM bootloader of
+          [\`rusty-pi/pi4-firmware\`](https://github.com/rusty-pi/pi4-firmware) is
+          built in, so \`pimu boot <a firmware directory>\` needs nothing fetched.
+          EOF
+
+          if gh release view latest >/dev/null 2>&1; then
+            gh release edit latest --title latest --notes-file notes.md
+          else
+            gh release create latest --verify-tag --title latest --notes-file notes.md
+          fi
+
+          gh release upload latest $assets --clobber
+          for name in $(gh release view latest --json assets -q '.assets[].name'); do
+            case " $assets " in
+              *" dist/$name "*) ;;
+              *) gh release delete-asset latest "$name" --yes ;;
+            esac
+          done

@@ -35,3 +35,31 @@ Cargo runs rustc through `scripts/rustc-wrapper.sh` (`.cargo/config.toml`),
 which outside CI keeps the compiler on 80% of the CPUs so a build does not make
 the desktop lag. `PIMU_BUILD_CPU_PERCENT` changes the share (`100` lifts the
 limit); with `CI` set the build gets every CPU.
+
+## The EEPROM image a binary carries
+
+A boot of a medium with no bootloader of its own — a firmware directory, a card
+image — needs the EEPROM image `rusty-pi/pi4-firmware` publishes, and a build
+from this tree fetches it with `gh` on the first such boot. A build can carry it
+instead:
+
+```bash
+PIMU_EMBED_EEPROM=firmware/pieeprom.bin cargo build --release
+```
+
+`build.rs` then includes those bytes in the binary, and the boot writes them to
+the same cache directory rather than downloading anything. Unset, the binary
+carries no image and the fetch stays as it was.
+
+## The release builds
+
+`.github/workflows/release.yml` replaces the `latest` release on every push to
+main: a tarball, a `.deb` and an `.rpm` for x86-64 and for aarch64, and the
+`ghcr.io/rusty-pi/pimu:latest` image with a manifest for both. Both binaries are
+built in a `debian:12` container, because a release should not need a newer glibc
+than a Raspberry Pi OS install has, and the aarch64 one is cross-linked there —
+every dependency is pure Rust, so that costs one `gcc` and no emulation. They are
+built with the image above, which is why the release needs a `FIRMWARE_TOKEN`
+secret: a token that can read the private `rusty-pi/pi4-firmware`, since a
+workflow's own token reaches only its repository. Without the secret the job
+still publishes, with binaries that fetch the image themselves.

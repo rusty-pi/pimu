@@ -7,6 +7,7 @@ use std::process::ExitCode;
 use std::rc::Rc;
 
 use anyhow::{bail, Context, Result};
+use sha1::{Digest, Sha1};
 
 use pimu::armstub::Handoff;
 use pimu::emulator::{Emulator, RunLimits, RunReport};
@@ -509,16 +510,22 @@ impl<'a> ZeroConfig<'a> {
     }
 }
 
+include!(concat!(env!("OUT_DIR"), "/embedded_eeprom.rs"));
+
 /// The EEPROM image to boot a directory of firmware files with. A firmware
 /// checkout has no bootloader of its own, and `start4.elf` run from its ELF entry
 /// stalls silently — the bootloader does more than place its segments. So it comes
-/// from `rusty-pi/pi4-firmware`, cached under `$XDG_CACHE_HOME/pimu`.
+/// from `rusty-pi/pi4-firmware`: built into a released binary, and otherwise
+/// fetched once and cached under `$XDG_CACHE_HOME/pimu`.
 fn fallback_eeprom() -> Result<PathBuf> {
     let cache = std::env::var_os("XDG_CACHE_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
         .context("no XDG_CACHE_HOME and no HOME to cache the EEPROM image under")?
         .join("pimu");
+    if let Some(image) = EMBEDDED_EEPROM {
+        return unpack_eeprom(&cache, image);
+    }
     let path = cache.join("pieeprom-latest.bin");
     // Nothing on the command line says what booted the medium, so the run does.
     eprintln!("zero-config: {REPO}'s EEPROM image, {}", path.display());
@@ -557,6 +564,24 @@ fn fallback_eeprom() -> Result<PathBuf> {
             String::from_utf8_lossy(&out.stderr).trim()
         );
     }
+    Ok(path)
+}
+
+/// The image the binary carries, written out where the boot can open it. Its name
+/// is its own digest, so a binary built with another image uses another file and
+/// neither goes stale.
+fn unpack_eeprom(cache: &Path, image: &[u8]) -> Result<PathBuf> {
+    let digest: String = Sha1::digest(image)[..5]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let path = cache.join(format!("pieeprom-{digest}.bin"));
+    eprintln!("zero-config: the built-in EEPROM image of {REPO}");
+    if path.metadata().is_ok_and(|m| m.len() == image.len() as u64) {
+        return Ok(path);
+    }
+    std::fs::create_dir_all(cache).with_context(|| format!("creating {}", cache.display()))?;
+    std::fs::write(&path, image).with_context(|| format!("writing {}", path.display()))?;
     Ok(path)
 }
 
