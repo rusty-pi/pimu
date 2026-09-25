@@ -18,6 +18,20 @@ Set on a build without it, the `PIMU_*` variables are reported and ignored, and
 `--trace*` and those channels are refused. [`diagnostics.md`](diagnostics.md)
 says which switch needs which build.
 
+## The `repo` feature
+
+`run`, `run-all`, `boot-check` and `spec-docs` only mean something inside a
+checkout: they check golden transcripts under `testdata/` and rewrite `docs/`
+through the `CARGO_MANIFEST_DIR` of the build. They are the `repo` feature, on
+by default, and the released binaries leave them out:
+
+```bash
+cargo build --release --no-default-features
+```
+
+Such a build answers `error: unknown command 'boot-check'` and does not list
+them in `--help`.
+
 ## Profile-guided optimisation
 
 `scripts/pgo-build.sh` does the release build with PGO: an instrumented build

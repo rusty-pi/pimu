@@ -64,6 +64,11 @@ jobs:
           echo "PKG_VERSION=$crate+$(date -u +%Y%m%d).$(git rev-parse --short=7 HEAD)" \
             >> "$GITHUB_ENV"
 
+      # `--no-default-features` drops the `repo` commands — `run`, `run-all`,
+      # `boot-check`, `spec-docs` — which read golden transcripts out of
+      # `testdata/` and write `docs/` through the build-time
+      # `CARGO_MANIFEST_DIR`. None of that exists beside a released binary.
+      #
       # Both binaries come out of the builder image: the host's glibc is newer
       # than what a release should require, and the aarch64 one is cross-linked
       # rather than emulated — every dependency is pure Rust, so the cross
@@ -81,8 +86,9 @@ jobs:
               export PATH="$CARGO_HOME/bin:$PATH"
               rustup target add aarch64-unknown-linux-gnu
               export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
-              cargo build --release
-              cargo build --release --target aarch64-unknown-linux-gnu
+              cargo build --release --no-default-features
+              cargo build --release --no-default-features \
+                --target aarch64-unknown-linux-gnu
             '
           mkdir -p dist
           cp target/release/pimu dist/pimu-amd64

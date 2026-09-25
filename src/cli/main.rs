@@ -1,5 +1,6 @@
 //! `pimu` command-line entry point. Each command lives in a module of its own.
 
+#[cfg(feature = "repo")]
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -10,34 +11,28 @@ mod config;
 mod disasm;
 mod mbox;
 mod otp;
+#[cfg(feature = "repo")]
 mod scenario;
 mod vchiq;
 
-const USAGE: &str = "\
-pimu — virtual bench for Raspberry Pi VideoCore boot firmware
-
-USAGE:
-    pimu run <scenario.toml> [--update] [-v]
+/// The repository-only commands (`repo`): golden transcripts under `testdata/`
+/// and docs written back through `CARGO_MANIFEST_DIR`, neither of which a
+/// published binary has.
+#[cfg(feature = "repo")]
+const REPO_USAGE: &str = "    pimu run <scenario.toml> [--update] [-v]
     pimu run-all [<dir>] [--update] [-v]
-    pimu boot --eeprom <pieeprom.bin> | <file.elf> | <dir> [<options>]
     pimu boot-check <scenario.toml> [--update] [--output <log>] [--max-wall <secs>]
     pimu boot-check <scenario.toml> --from <log> [--update]
     pimu boot-check <scenario.toml> --plan [--output <log>] [--max-wall <secs>]
-    pimu disasm <file> [--base <hex>] [--count <n>] [--vaddr <hex>]
-    pimu spec-docs [--update]
+";
 
-COMMANDS:
-    run       Run one scenario and check it against its golden transcript.
+#[cfg(not(feature = "repo"))]
+const REPO_USAGE: &str = "";
+
+#[cfg(feature = "repo")]
+const REPO_COMMANDS: &str =
+    "    run       Run one scenario and check it against its golden transcript.
     run-all   Run every *.toml scenario in <dir> (default: testdata/scenarios).
-    boot      Boot the machine from an EEPROM image (--eeprom), as a Pi 4 does,
-              or run a VPU ELF. An option left out takes the file of that name
-              in the working directory when there is one — `pieeprom.bin`,
-              `sd.img`, `usb.img`, `otg.img`, `netboot/`, `otp.json`/`otp.bin`,
-              `bootconf.txt`, `pubkey.bin` — so a directory holding those boots
-              with a bare `pimu boot`, and `pimu boot <dir>` reads them
-              from <dir>. A directory of a boot partition's own files
-              (`start4.elf`, `config.txt`) is the card itself.
-              `pimu boot --help` lists its options.
     boot-check
               Run the firmware boot a boot scenario describes and check it:
               the golden console transcript plus every named milestone. The
@@ -48,11 +43,73 @@ COMMANDS:
               `--plan` prints the `boot` invocation instead, one argument a
               line. Both refuse when a file the run reads is missing, naming
               the command that makes each.
-    disasm    Disassemble a flat binary / ELF with the (partial) VPU decoder.
-    spec-docs Check the generated docs — docs/periph/ against the register
+";
+
+#[cfg(not(feature = "repo"))]
+const REPO_COMMANDS: &str = "";
+
+#[cfg(feature = "repo")]
+const SPEC_DOCS_USAGE: &str = "    pimu spec-docs [--update]\n";
+
+#[cfg(not(feature = "repo"))]
+const SPEC_DOCS_USAGE: &str = "";
+
+#[cfg(feature = "repo")]
+const SPEC_DOCS_COMMAND: &str =
+    "    spec-docs Check the generated docs — docs/periph/ against the register
               specs in specs/*.toml, and docs/board-sheet-dark.svg against the
               hand-drawn docs/board-sheet.svg; --update regenerates them.
+";
 
+#[cfg(not(feature = "repo"))]
+const SPEC_DOCS_COMMAND: &str = "";
+
+#[cfg(feature = "repo")]
+const UPDATE_FLAG: &str = "    --update  Rewrite golden files instead of failing on mismatch.\n";
+
+#[cfg(not(feature = "repo"))]
+const UPDATE_FLAG: &str = "";
+
+#[cfg(feature = "repo")]
+const VERBOSE_FLAG: &str = "    -v, --verbose
+              `run`: print the full report and transcript. `boot`: print the
+              full run report as well (see `boot --help`).
+";
+
+#[cfg(not(feature = "repo"))]
+const VERBOSE_FLAG: &str = "    -v, --verbose
+              `boot`: print the full run report as well (see `boot --help`).
+";
+
+const USAGE_HEAD: &str = "\
+pimu — virtual bench for Raspberry Pi VideoCore boot firmware
+
+USAGE:
+";
+
+const BOOT_USAGE: &str = "    pimu boot --eeprom <pieeprom.bin> | <file.elf> | <dir> [<options>]
+";
+
+const DISASM_USAGE: &str = "    pimu disasm <file> [--base <hex>] [--count <n>] [--vaddr <hex>]\n";
+
+const BOOT_COMMAND: &str = "
+COMMANDS:
+    boot      Boot the machine from an EEPROM image (--eeprom), as a Pi 4 does,
+              or run a VPU ELF. An option left out takes the file of that name
+              in the working directory when there is one — `pieeprom.bin`,
+              `sd.img`, `usb.img`, `otg.img`, `netboot/`, `otp.json`/`otp.bin`,
+              `bootconf.txt`, `pubkey.bin` — so a directory holding those boots
+              with a bare `pimu boot`, and `pimu boot <dir>` reads them
+              from <dir>. A directory of a boot partition's own files
+              (`start4.elf`, `config.txt`) is the card itself.
+              `pimu boot --help` lists its options.
+";
+
+const DISASM_COMMAND: &str =
+    "    disasm    Disassemble a flat binary / ELF with the (partial) VPU decoder.
+";
+
+const FLAGS_HEAD: &str = "
     With no command, the options are `boot`'s: `pimu --eeprom <file> ...`.
 
 FLAGS:
@@ -67,11 +124,25 @@ FLAGS:
               an array repeats the option, `\"file\"` is the positional argument.
               Options after it on the command line win. Any option also takes
               the `--option=value` form.
-    --update  Rewrite golden files instead of failing on mismatch.
-    -v, --verbose
-              `run`: print the full report and transcript. `boot`: print the
-              full run report as well (see `boot --help`).
 ";
+
+fn usage() -> String {
+    [
+        USAGE_HEAD,
+        BOOT_USAGE,
+        REPO_USAGE,
+        DISASM_USAGE,
+        SPEC_DOCS_USAGE,
+        BOOT_COMMAND,
+        REPO_COMMANDS,
+        DISASM_COMMAND,
+        SPEC_DOCS_COMMAND,
+        FLAGS_HEAD,
+        UPDATE_FLAG,
+        VERBOSE_FLAG,
+    ]
+    .concat()
+}
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -97,20 +168,24 @@ fn run(args: &[String]) -> Result<ExitCode> {
         return boot::cmd_boot(&args);
     }
     let Some(cmd) = args.first() else {
-        print!("{USAGE}");
+        print!("{}", usage());
         return Ok(ExitCode::SUCCESS);
     };
 
     match cmd.as_str() {
+        #[cfg(feature = "repo")]
         "run" => scenario::cmd_run(&args[1..]),
+        #[cfg(feature = "repo")]
         "run-all" => scenario::cmd_run_all(&args[1..]),
         // `recon` is the old name of `boot`, kept for old command lines.
         "boot" | "recon" => boot::cmd_boot(&args[1..]),
+        #[cfg(feature = "repo")]
         "boot-check" => scenario::cmd_boot_check(&args[1..]),
         "disasm" => disasm::cmd_disasm(&args[1..]),
+        #[cfg(feature = "repo")]
         "spec-docs" => cmd_spec_docs(&args[1..]),
         "-h" | "--help" | "help" => {
-            print!("{USAGE}");
+            print!("{}", usage());
             Ok(ExitCode::SUCCESS)
         }
         other => bail!("unknown command '{other}' (try --help)"),
@@ -135,6 +210,7 @@ fn chdir(args: &[String]) -> Result<Vec<String>> {
 }
 
 /// `spec-docs [--update]`: report (or rewrite) the generated docs that are out of date.
+#[cfg(feature = "repo")]
 fn cmd_spec_docs(args: &[String]) -> Result<ExitCode> {
     let mut update = false;
     for a in args {
