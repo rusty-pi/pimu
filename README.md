@@ -1,9 +1,5 @@
 # `pimu` – Pi Emulator
 
-> [!NOTE]
-> For transparency: this is AI slop. The author cannot write Rust at all.
-> If you're a Rust expert, feel free to comment how bad it is.
-
 A whole-machine Raspberry Pi 4 (BCM2711) emulator that boots the **real
 firmware** — `pieeprom.bin`, `start4.elf`, `fixup4.dat` on the VideoCore VPU —
 and then Linux on the four Cortex-A72 cores it releases.
@@ -27,6 +23,10 @@ run is deterministic. No off-the-shelf tool does this;
 > all, and a profile-guided build (`scripts/pgo-build.sh`) is worth about
 > 1.45x, not 100x. Use it to see what firmware *does*, not to get work done on
 > a fast Pi.
+
+> [!NOTE]
+> For transparency: this is AI slop. The author cannot write Rust at all.
+> If you're a Rust expert, feel free to comment how bad it is.
 
 ## Install
 
