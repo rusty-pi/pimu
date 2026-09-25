@@ -272,12 +272,12 @@ cells = ["8-bit", "64", "four elements, at bytes 0, 1, 2, 3 of the lane"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/layout.s`"
+ref        = "`vpu-probe/probes/layout.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/mix.s`"
+ref        = "`vpu-probe/probes/mix.s`"
 confidence = "high"
 
 [[section.row]]
@@ -285,7 +285,7 @@ cells = ["16-bit", "32", "two elements, at byte 0 and byte 2"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/layout.s`"
+ref        = "`vpu-probe/probes/layout.s`"
 confidence = "high"
 
 [[section.row]]
@@ -293,7 +293,7 @@ cells = ["32-bit", "16", "one element, the whole lane"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/layout.s`"
+ref        = "`vpu-probe/probes/layout.s`"
 confidence = "high"
 
 [[section.row]]
@@ -301,12 +301,12 @@ cells = ["vertical", "16 rows", "the same element of sixteen consecutive rows"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/vert.s`"
+ref        = "`vpu-probe/probes/vert.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/vert3.s`"
+ref        = "`vpu-probe/probes/vert3.s`"
 confidence = "high"
 
 [[section]]
@@ -322,12 +322,12 @@ cells = ["type nibble", "the **register's** element width and direction: `H`/`V`
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/layout.s`"
+ref        = "`vpu-probe/probes/layout.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/conv.s`"
+ref        = "`vpu-probe/probes/conv.s`"
 confidence = "high"
 
 [[section.row]]
@@ -335,7 +335,7 @@ cells = ["`y`", "the row (horizontal), or the 16-row band (vertical)"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/vert3.s`"
+ref        = "`vpu-probe/probes/vert3.s`"
 confidence = "high"
 
 [[section.row]]
@@ -343,12 +343,12 @@ cells = ["`e0`", "the first element, `band * 16 + fine`, counted **in elements**
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/vx46.s`"
+ref        = "`vpu-probe/probes/vx46.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/layout.s`"
+ref        = "`vpu-probe/probes/layout.s`"
 confidence = "high"
 
 [[section.row]]
@@ -356,7 +356,7 @@ cells = ["`++`", "post-increment: steps the row horizontally, the element vertic
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/vinc.s`"
+ref        = "`vpu-probe/probes/vinc.s`"
 confidence = "high"
 
 [[section.row]]
@@ -364,7 +364,7 @@ cells = ["`+rN`", "adds a scalar to the element index, in elements, wrapping wit
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/pa48.s`"
+ref        = "`vpu-probe/probes/pa48.s`"
 confidence = "high"
 
 [[section.row]]
@@ -372,7 +372,7 @@ cells = ["`*`", "**no effect** on the register file or memory — on any slot, u
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/star.s`"
+ref        = "`vpu-probe/probes/star.s`"
 confidence = "high"
 
 [[section.row]]
@@ -385,20 +385,20 @@ confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/disp.s`"
+ref        = "`vpu-probe/probes/disp.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/sdisp.s`: with `r2` = 100, `r2+0`, `r2-1`, `r2-2`, `r2+1` and `r2+100` reach the lanes as 100, 99, 98, 101 and 200. The assembler cannot spell the form, so the words are built by hand and checked against objdump"
+ref        = "`vpu-probe/probes/sdisp.s`: with `r2` = 100, `r2+0`, `r2-1`, `r2-2`, `r2+1` and `r2+100` reach the lanes as 100, 99, 98, 101 and 200. The assembler cannot spell the form, so the words are built by hand and checked against objdump"
 confidence = "high"
 
 [[section.row]]
-cells = ["dash in D", "the result is discarded. Any addend nibble, `*` or `++` it carries has nothing left to act on: the flags come out the same with none, with `+r0` and with `+r3`, measured with `probes/dashd.s`"]
+cells = ["dash in D", "the result is discarded. Any addend nibble, `*` or `++` it carries has nothing left to act on: the flags come out the same with none, with `+r0` and with `+r3`, measured with `vpu-probe/probes/dashd.s`"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/dashd.s`, three hand-built words the assembler cannot spell"
+ref        = "`vpu-probe/probes/dashd.s`, three hand-built words the assembler cannot spell"
 confidence = "high"
 
 [[section.row]]
@@ -406,12 +406,12 @@ cells = ["dash in A", "an operand of **zeros** for an ALU op; ignored altogether
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu6.s`"
+ref        = "`vpu-probe/probes/alu6.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/ldodd.s`"
+ref        = "`vpu-probe/probes/ldodd.s`"
 confidence = "high"
 
 [[section.row]]
@@ -419,7 +419,7 @@ cells = ["dash in D", "discards the result — the load still reads its bytes"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/ldodd.s`"
+ref        = "`vpu-probe/probes/ldodd.s`"
 confidence = "high"
 
 [[section.row.source]]
@@ -443,7 +443,7 @@ cells = ["multiply, which carries no width of its own", "the widest **source** i
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/setfmul.s`"
+ref        = "`vpu-probe/probes/setfmul.s`"
 confidence = "high"
 
 [[section.row]]
@@ -451,7 +451,7 @@ cells = ["ALU source, a register **wider** than the operation", "read at the ope
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/wide1.s`, `probes/wide2.s`"
+ref        = "`vpu-probe/probes/wide1.s`, `vpu-probe/probes/wide2.s`"
 confidence = "high"
 
 [[section.row]]
@@ -459,7 +459,7 @@ cells = ["ALU result, into a destination **wider** than the operation", "sign-ex
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/wide1.s`, `probes/wide2.s`"
+ref        = "`vpu-probe/probes/wide1.s`, `vpu-probe/probes/wide2.s`"
 confidence = "high"
 
 [[section.row]]
@@ -467,12 +467,12 @@ cells = ["source, byte register into a wider operation", "zero-extend"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/wmix.s`"
+ref        = "`vpu-probe/probes/wmix.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/wmix2.s`"
+ref        = "`vpu-probe/probes/wmix2.s`"
 confidence = "high"
 
 [[section.row]]
@@ -480,7 +480,7 @@ cells = ["source, halfword register into a 32-bit operation", "**sign**-extend"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/wmix2.s`"
+ref        = "`vpu-probe/probes/wmix2.s`"
 confidence = "high"
 
 [[section.row]]
@@ -488,7 +488,7 @@ cells = ["result into a narrower destination", "truncate"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/wmix.s`"
+ref        = "`vpu-probe/probes/wmix.s`"
 confidence = "high"
 
 [[section.row]]
@@ -496,12 +496,12 @@ cells = ["result into a narrower destination, saturating op", "clamp into what t
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/wmix.s`"
+ref        = "`vpu-probe/probes/wmix.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/wmix2.s`"
+ref        = "`vpu-probe/probes/wmix2.s`"
 confidence = "high"
 
 [[section.row]]
@@ -509,7 +509,7 @@ cells = ["memory transfer, either direction", "narrowing truncates, widening zer
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/conv.s`"
+ref        = "`vpu-probe/probes/conv.s`"
 confidence = "high"
 
 [[section.row]]
@@ -525,12 +525,12 @@ cells = ["shift, rotate or `brev` count", "taken in the **operation's** width: f
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/wmix3.s`"
+ref        = "`vpu-probe/probes/wmix3.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/setf5.s`"
+ref        = "`vpu-probe/probes/setf5.s`"
 confidence = "high"
 
 [[section]]
@@ -542,7 +542,7 @@ cells = ["displacement", "a plain **byte** offset, at every width"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/disp.s`"
+ref        = "`vpu-probe/probes/disp.s`"
 confidence = "high"
 
 [[section.row]]
@@ -558,7 +558,7 @@ cells = ["base register", "never written back"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/mix.s`"
+ref        = "`vpu-probe/probes/mix.s`"
 confidence = "high"
 
 [[section.row]]
@@ -566,12 +566,12 @@ cells = ["load straddling a 16-byte block", "**wraps inside the block**: `v32ld 
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/wrap.s`"
+ref        = "`vpu-probe/probes/wrap.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/wrap2.s`"
+ref        = "`vpu-probe/probes/wrap2.s`"
 confidence = "high"
 
 [[section.row]]
@@ -579,7 +579,7 @@ cells = ["store straddling a 16-byte block", "crosses normally"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/wrap2.s`"
+ref        = "`vpu-probe/probes/wrap2.s`"
 confidence = "high"
 
 [[section.row]]
@@ -587,7 +587,7 @@ cells = ["B-position immediate", "**signed**: six bits in the 48-bit encoding, s
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/imm.s`"
+ref        = "`vpu-probe/probes/imm.s`"
 confidence = "high"
 
 [[section]]
@@ -733,12 +733,12 @@ cells    = ["0", "`ld`", "16 elements between memory and the file, one per lane,
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/mix.s`"
+ref        = "`vpu-probe/probes/mix.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/conv.s`"
+ref        = "`vpu-probe/probes/conv.s`"
 confidence = "high"
 
 [[section.row]]
@@ -749,17 +749,17 @@ cells    = ["1", "`lookupm`", "gather: each lane reads element `acc >> 16` of th
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/mem6.s`"
+ref        = "`vpu-probe/probes/mem6.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/mem9.s`"
+ref        = "`vpu-probe/probes/mem9.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/r63.s`, `probes/r63b.s`, `probes/r63c.s`: with the accumulators cleared, a gather off `(r63)` hands every lane the byte at address 0; junk in the A slot changes nothing; a dash destination leaves a witness register untouched"
+ref        = "`vpu-probe/probes/r63.s`, `vpu-probe/probes/r63b.s`, `vpu-probe/probes/r63c.s`: with the accumulators cleared, a gather off `(r63)` hands every lane the byte at address 0; junk in the A slot changes nothing; a dash destination leaves a witness register untouched"
 confidence = "high"
 
 [[section.row]]
@@ -770,12 +770,12 @@ cells    = ["2", "`lookupml`", "gather indexed by `acc & 0xffff`"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/mem5.s`"
+ref        = "`vpu-probe/probes/mem5.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/mem9.s`"
+ref        = "`vpu-probe/probes/mem9.s`"
 confidence = "high"
 
 [[section.row]]
@@ -786,7 +786,7 @@ cells    = ["3", "`mem03`", "**unallocated**; the unit answers a lane of **zeros
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/hbare03.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes"
+ref        = "`vpu-probe/probes/hbare03.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes"
 confidence = "high"
 
 [[section.row.source]]
@@ -802,7 +802,7 @@ cells    = ["4", "`st`", "the transfer the other way"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/mix.s`"
+ref        = "`vpu-probe/probes/mix.s`"
 confidence = "high"
 
 [[section.row]]
@@ -813,12 +813,12 @@ cells    = ["5", "`indexwritem`", "scatter: each lane writes its element at inde
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/mem7.s`"
+ref        = "`vpu-probe/probes/mem7.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/mem9.s`"
+ref        = "`vpu-probe/probes/mem9.s`"
 confidence = "high"
 
 [[section.row]]
@@ -829,12 +829,12 @@ cells    = ["6", "`indexwriteml`", "scatter indexed by `acc & 0xffff`"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/mem7.s`"
+ref        = "`vpu-probe/probes/mem7.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/mem9.s`"
+ref        = "`vpu-probe/probes/mem9.s`"
 confidence = "high"
 
 [[section.row]]
@@ -845,7 +845,7 @@ cells    = ["7", "`mem07`", "**unallocated**; the unit answers a lane of **zeros
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/m07.s`, `probes/addr07.s`: over a destination preset to all-ones, with operands that are a valid bus address, with zeros, and with junk — the 32 bytes at the address it was handed were unchanged afterwards, and three lookup-table indices read the same before and after"
+ref        = "`vpu-probe/probes/m07.s`, `vpu-probe/probes/addr07.s`: over a destination preset to all-ones, with operands that are a valid bus address, with zeros, and with junk — the 32 bytes at the address it was handed were unchanged afterwards, and three lookup-table indices read the same before and after"
 confidence = "high"
 
 [[section.row]]
@@ -856,7 +856,7 @@ cells    = ["8", "`memread`", "`readlut`: each lane reads its own 64-byte region
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/lut.s`: a `v8memwrite` then a `v8memread` over the same indices hands every lane its own value back — seven lanes sharing index `0xff` and each keeping its own value is what says the table is banked — and the `v16` pair round-trips at twice the index"
+ref        = "`vpu-probe/probes/lut.s`: a `v8memwrite` then a `v8memread` over the same indices hands every lane its own value back — seven lanes sharing index `0xff` and each keeping its own value is what says the table is banked — and the `v16` pair round-trips at twice the index"
 confidence = "high"
 
 [[section.row.source]]
@@ -872,7 +872,7 @@ cells    = ["9", "`memwrite`", "`writelut`: puts A at that index, and hands the 
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/lut.s`, `probes/lut2.s`: a scalar write at 3 and a vector index of threes reach the same byte, and a `v16` write at 3 leaves byte 3 alone — the index scales by the element width whichever way it is spelled"
+ref        = "`vpu-probe/probes/lut.s`, `vpu-probe/probes/lut2.s`: a scalar write at 3 and a vector index of threes reach the same byte, and a `v16` write at 3 leaves byte 3 alone — the index scales by the element width whichever way it is spelled"
 confidence = "high"
 
 [[section.row]]
@@ -883,7 +883,7 @@ cells    = ["10", "`mem10`", "**unallocated**; the unit answers a lane of **zero
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/hgat10.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; `probes/f10.s`, which spells B as a vector register, never returns"
+ref        = "`vpu-probe/probes/hgat10.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; `vpu-probe/probes/f10.s`, which spells B as a vector register, never returns"
 confidence = "high"
 
 [[section.row.source]]
@@ -899,7 +899,7 @@ cells    = ["11", "`mem11`", "**unallocated**; the unit answers a lane of **zero
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/f11.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes"
+ref        = "`vpu-probe/probes/f11.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes"
 confidence = "high"
 
 [[section.row.source]]
@@ -915,7 +915,7 @@ cells    = ["12", "`mem12`", "**unallocated**; the unit answers a lane of **zero
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/f12.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes"
+ref        = "`vpu-probe/probes/f12.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes"
 confidence = "high"
 
 [[section.row.source]]
@@ -931,7 +931,7 @@ cells    = ["13", "`mem13`", "**unallocated**; the unit answers a lane of **zero
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/f13.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes"
+ref        = "`vpu-probe/probes/f13.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes"
 confidence = "high"
 
 [[section.row.source]]
@@ -947,7 +947,7 @@ cells    = ["14", "`mem14`", "**unallocated**; the unit answers a lane of **zero
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/f14.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes"
+ref        = "`vpu-probe/probes/f14.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes"
 confidence = "high"
 
 [[section.row.source]]
@@ -963,7 +963,7 @@ cells    = ["15", "`mem15`", "**unallocated**; the unit answers a lane of **zero
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/f15.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes"
+ref        = "`vpu-probe/probes/f15.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes"
 confidence = "high"
 
 [[section.row.source]]
@@ -979,7 +979,7 @@ cells    = ["16", "`mem16`", "**unallocated**; the unit answers a lane of **zero
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/hgat16.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; `probes/f16.s`, which spells B as a vector register, never returns"
+ref        = "`vpu-probe/probes/hgat16.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; `vpu-probe/probes/f16.s`, which spells B as a vector register, never returns"
 confidence = "high"
 
 [[section.row.source]]
@@ -995,7 +995,7 @@ cells    = ["17", "`mem17`", "**unallocated**; the unit answers a lane of **zero
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/f17.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes"
+ref        = "`vpu-probe/probes/f17.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes"
 confidence = "high"
 
 [[section.row.source]]
@@ -1011,7 +1011,7 @@ cells    = ["18", "`mem18`", "**unallocated**; the unit answers a lane of **zero
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/f18.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes"
+ref        = "`vpu-probe/probes/f18.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes"
 confidence = "high"
 
 [[section.row.source]]
@@ -1027,7 +1027,7 @@ cells    = ["19", "`mem19`", "**unallocated**; the unit answers a lane of **zero
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/hgat19.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; `probes/f19.s`, which spells B as a vector register, never returns"
+ref        = "`vpu-probe/probes/hgat19.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; `vpu-probe/probes/f19.s`, which spells B as a vector register, never returns"
 confidence = "high"
 
 [[section.row.source]]
@@ -1043,7 +1043,7 @@ cells    = ["20", "`mem20`", "**unallocated**; the unit answers a lane of **zero
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/f20.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes"
+ref        = "`vpu-probe/probes/f20.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes"
 confidence = "high"
 
 [[section.row.source]]
@@ -1059,7 +1059,7 @@ cells    = ["21", "`mem21`", "**unallocated**; the unit answers a lane of **zero
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/f21.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes"
+ref        = "`vpu-probe/probes/f21.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes"
 confidence = "high"
 
 [[section.row.source]]
@@ -1075,7 +1075,7 @@ cells    = ["22", "`mem22`", "**unallocated**; the unit answers a lane of **zero
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/f22.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes"
+ref        = "`vpu-probe/probes/f22.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes"
 confidence = "high"
 
 [[section.row.source]]
@@ -1091,7 +1091,7 @@ cells    = ["23", "`mem23`", "**unallocated**; the unit answers a lane of **zero
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/f23.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes"
+ref        = "`vpu-probe/probes/f23.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes"
 confidence = "high"
 
 [[section.row.source]]
@@ -1107,17 +1107,17 @@ cells    = ["24", "`getacc`", "each lane's accumulator, shifted right by `b & 31
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/setf4.s`"
+ref        = "`vpu-probe/probes/setf4.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/gacc.s`: over sixteen known accumulators `SUMS` and `SUMU` both answer their plain sum, `MAX` the largest, `IMIN`/`IMAX` an index, and the `B` shift applies before the aggregate. The lane values go in whole, not re-read at the operation's element width"
+ref        = "`vpu-probe/probes/gacc.s`: over sixteen known accumulators `SUMS` and `SUMU` both answer their plain sum, `MAX` the largest, `IMIN`/`IMAX` an index, and the `B` shift applies before the aggregate. The lane values go in whole, not re-read at the operation's element width"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/setf5.s`"
+ref        = "`vpu-probe/probes/setf5.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1128,7 +1128,7 @@ cells    = ["25", "`mem25`", "**unallocated**; the unit answers a lane of **zero
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/f25.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes"
+ref        = "`vpu-probe/probes/f25.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes"
 confidence = "high"
 
 [[section.row.source]]
@@ -1144,7 +1144,7 @@ cells    = ["26", "`mem26`", "**unallocated**; the unit answers a lane of **zero
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/f26.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes"
+ref        = "`vpu-probe/probes/f26.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes"
 confidence = "high"
 
 [[section.row.source]]
@@ -1160,7 +1160,7 @@ cells    = ["27", "`mem27`", "**unallocated**; the unit answers a lane of **zero
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/f27.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes"
+ref        = "`vpu-probe/probes/f27.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes"
 confidence = "high"
 
 [[section.row.source]]
@@ -1176,7 +1176,7 @@ cells    = ["28", "`mem28`", "**unallocated**; the unit answers a lane of **zero
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/hgat28.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; `probes/f28.s`, which spells B as a vector register, never returns"
+ref        = "`vpu-probe/probes/hgat28.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; `vpu-probe/probes/f28.s`, which spells B as a vector register, never returns"
 confidence = "high"
 
 [[section.row.source]]
@@ -1192,7 +1192,7 @@ cells    = ["29", "`mem29`", "**unallocated**; the unit answers a lane of **zero
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/hgat29.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; `probes/f29.s`, which spells B as a vector register, never returns"
+ref        = "`vpu-probe/probes/hgat29.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; `vpu-probe/probes/f29.s`, which spells B as a vector register, never returns"
 confidence = "high"
 
 [[section.row.source]]
@@ -1208,7 +1208,7 @@ cells    = ["30", "`mem30`", "**unallocated**; the unit answers a lane of **zero
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/hgat30.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; `probes/f30.s`, which spells B as a vector register, never returns"
+ref        = "`vpu-probe/probes/hgat30.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; `vpu-probe/probes/f30.s`, which spells B as a vector register, never returns"
 confidence = "high"
 
 [[section.row.source]]
@@ -1224,7 +1224,7 @@ cells    = ["31", "`mem31`", "**unallocated**; the unit answers a lane of **zero
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/hgat31.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; `probes/f31.s`, which spells B as a vector register, never returns"
+ref        = "`vpu-probe/probes/hgat31.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; `vpu-probe/probes/f31.s`, which spells B as a vector register, never returns"
 confidence = "high"
 
 [[section.row.source]]
@@ -1252,12 +1252,12 @@ the narrower ones into it.
 
 [[section.source]]
 kind       = "measured"
-ref        = "`probes/mul32.s`"
+ref        = "`vpu-probe/probes/mul32.s`"
 confidence = "high"
 
 [[section.source]]
 kind       = "measured"
-ref        = "`probes/alu6.s`"
+ref        = "`vpu-probe/probes/alu6.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1268,7 +1268,7 @@ cells    = ["0", "`mov`", "`b`"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu.s`"
+ref        = "`vpu-probe/probes/alu.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1279,7 +1279,7 @@ cells    = ["1", "`bitplanes`", "bit **transpose**: lane `i` gets the word whose
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/bp.s`"
+ref        = "`vpu-probe/probes/bp.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1290,7 +1290,7 @@ cells    = ["2", "`even`", "A's even elements into lanes 0–7, **B's** into lan
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu.s`"
+ref        = "`vpu-probe/probes/alu.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1301,7 +1301,7 @@ cells    = ["3", "`odd`", "the odd elements, the same way"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu.s`"
+ref        = "`vpu-probe/probes/alu.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1312,7 +1312,7 @@ cells    = ["4", "`interl`", "A and B alternating, from the low half"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu.s`"
+ref        = "`vpu-probe/probes/alu.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1323,7 +1323,7 @@ cells    = ["5", "`interh`", "the same from the high half"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu.s`"
+ref        = "`vpu-probe/probes/alu.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1334,12 +1334,12 @@ cells    = ["6", "`brev`", "`a`'s low `n` bits reversed — the whole operation 
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu2.s`"
+ref        = "`vpu-probe/probes/alu2.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/wmix3.s`"
+ref        = "`vpu-probe/probes/wmix3.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1350,7 +1350,7 @@ cells    = ["7", "`ror`", "rotate right by `n`"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu2.s`"
+ref        = "`vpu-probe/probes/alu2.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1361,7 +1361,7 @@ cells    = ["8", "`shl`", "left shift by `n`"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu2.s`"
+ref        = "`vpu-probe/probes/alu2.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1372,12 +1372,12 @@ cells    = ["9", "`shls`", "left shift, saturating into the destination"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu2.s`"
+ref        = "`vpu-probe/probes/alu2.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/wmix3.s`"
+ref        = "`vpu-probe/probes/wmix3.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1388,7 +1388,7 @@ cells    = ["10", "`lsr`", "logical right shift"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu2.s`"
+ref        = "`vpu-probe/probes/alu2.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1399,7 +1399,7 @@ cells    = ["11", "`asr`", "arithmetic right shift"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu2.s`"
+ref        = "`vpu-probe/probes/alu2.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1410,12 +1410,12 @@ cells    = ["12", "`signshl`", "shift by a **signed, unmasked** count: left when
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu3.s`"
+ref        = "`vpu-probe/probes/alu3.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu4.s`"
+ref        = "`vpu-probe/probes/alu4.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1426,12 +1426,12 @@ cells    = ["13", "`op13`", "writes a lane of zeros, at both widths"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu4.s`"
+ref        = "`vpu-probe/probes/alu4.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu5.s`"
+ref        = "`vpu-probe/probes/alu5.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1442,7 +1442,7 @@ cells    = ["14", "`signasl`", "the same with the sign shifting in"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu4.s`"
+ref        = "`vpu-probe/probes/alu4.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1453,7 +1453,7 @@ cells    = ["15", "`signasls`", "`signasl`, saturating"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu4.s`"
+ref        = "`vpu-probe/probes/alu4.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1464,7 +1464,7 @@ cells    = ["16", "`and`", "`a & b`"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu.s`"
+ref        = "`vpu-probe/probes/alu.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1475,7 +1475,7 @@ cells    = ["17", "`or`", "`a | b`"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu.s`"
+ref        = "`vpu-probe/probes/alu.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1486,7 +1486,7 @@ cells    = ["18", "`eor`", "`a ^ b`"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu.s`"
+ref        = "`vpu-probe/probes/alu.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1497,7 +1497,7 @@ cells    = ["19", "`bic`", "`a & !b`"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu.s`"
+ref        = "`vpu-probe/probes/alu.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1508,12 +1508,12 @@ cells    = ["20", "`count`", "`popcount(a) + popcount(b)`; zeros at `v32`"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu.s`"
+ref        = "`vpu-probe/probes/alu.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu5.s`"
+ref        = "`vpu-probe/probes/alu5.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1524,7 +1524,7 @@ cells    = ["21", "`msb`", "the index of the highest bit set in **either** opera
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/wmix3.s`"
+ref        = "`vpu-probe/probes/wmix3.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1535,7 +1535,7 @@ cells    = ["22", "`op22`", "writes a lane of zeros, at both widths"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu5.s`"
+ref        = "`vpu-probe/probes/alu5.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1546,7 +1546,7 @@ cells    = ["23", "`op23`", "writes a lane of zeros, at both widths"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu5.s`"
+ref        = "`vpu-probe/probes/alu5.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1557,7 +1557,7 @@ cells    = ["24", "`min`", "the smaller, signed"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu2.s`"
+ref        = "`vpu-probe/probes/alu2.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1568,7 +1568,7 @@ cells    = ["25", "`max`", "the larger, signed"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu2.s`"
+ref        = "`vpu-probe/probes/alu2.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1579,7 +1579,7 @@ cells    = ["26", "`dist`", "`abs(a - b)`, wrapping"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu2.s`"
+ref        = "`vpu-probe/probes/alu2.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1590,7 +1590,7 @@ cells    = ["27", "`dists`", "`abs(a - b)`, saturating"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu2.s`"
+ref        = "`vpu-probe/probes/alu2.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1601,7 +1601,7 @@ cells    = ["28", "`clip`", "`a` clamped into `0 ..= b`, signed"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu2.s`"
+ref        = "`vpu-probe/probes/alu2.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1612,7 +1612,7 @@ cells    = ["29", "`sign`", "`b + signum(a)`"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu2.s`"
+ref        = "`vpu-probe/probes/alu2.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1623,12 +1623,12 @@ cells    = ["30", "`clips`", "`b * signum(a)`, `signum(0)` counting as `+1`; zer
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu4.s`"
+ref        = "`vpu-probe/probes/alu4.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu5.s`"
+ref        = "`vpu-probe/probes/alu5.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1639,12 +1639,12 @@ cells    = ["31", "`testmag`", "`1` where `abs(a) >= b`, else `0`; zeros at `v32
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu3.s`"
+ref        = "`vpu-probe/probes/alu3.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu4.s`"
+ref        = "`vpu-probe/probes/alu4.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1655,7 +1655,7 @@ cells    = ["32", "`add`", "`a + b`"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu2.s`"
+ref        = "`vpu-probe/probes/alu2.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1666,7 +1666,7 @@ cells    = ["33", "`adds`", "`a + b`, saturating"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu2.s`"
+ref        = "`vpu-probe/probes/alu2.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1677,7 +1677,7 @@ cells    = ["34", "`addc`", "`a + b` **plus the lane's carry flag**"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu3.s`"
+ref        = "`vpu-probe/probes/alu3.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1688,7 +1688,7 @@ cells    = ["35", "`addsc`", "the same, saturating"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu3.s`"
+ref        = "`vpu-probe/probes/alu3.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1699,7 +1699,7 @@ cells    = ["36", "`sub`", "`a - b`"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu2.s`"
+ref        = "`vpu-probe/probes/alu2.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1710,7 +1710,7 @@ cells    = ["37", "`subs`", "`a - b`, saturating"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu2.s`"
+ref        = "`vpu-probe/probes/alu2.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1721,7 +1721,7 @@ cells    = ["38", "`subc`", "`a - b` minus the lane's carry flag"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu3.s`"
+ref        = "`vpu-probe/probes/alu3.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1732,7 +1732,7 @@ cells    = ["39", "`subsc`", "the same, saturating"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu3.s`"
+ref        = "`vpu-probe/probes/alu3.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1743,7 +1743,7 @@ cells    = ["40", "`rsub`", "`b - a`"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu2.s`"
+ref        = "`vpu-probe/probes/alu2.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1754,7 +1754,7 @@ cells    = ["41", "`rsubs`", "`b - a`, saturating"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu2.s`"
+ref        = "`vpu-probe/probes/alu2.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1765,7 +1765,7 @@ cells    = ["42", "`rsubc`", "`b - a` minus the lane's carry flag"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu3.s`"
+ref        = "`vpu-probe/probes/alu3.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1776,7 +1776,7 @@ cells    = ["43", "`rsubsc`", "the same, saturating"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu3.s`"
+ref        = "`vpu-probe/probes/alu3.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1787,12 +1787,12 @@ cells    = ["44", "`op44`", "writes a lane of zeros, at both widths"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu3.s`"
+ref        = "`vpu-probe/probes/alu3.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu5.s`"
+ref        = "`vpu-probe/probes/alu5.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1803,12 +1803,12 @@ cells    = ["45", "`op45`", "writes a lane of zeros, at both widths"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu3.s`"
+ref        = "`vpu-probe/probes/alu3.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu5.s`"
+ref        = "`vpu-probe/probes/alu5.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1819,12 +1819,12 @@ cells    = ["46", "`op46`", "writes a lane of zeros, at both widths"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu3.s`"
+ref        = "`vpu-probe/probes/alu3.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu5.s`"
+ref        = "`vpu-probe/probes/alu5.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1835,12 +1835,12 @@ cells    = ["47", "`op47`", "writes a lane of zeros, at both widths"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu3.s`"
+ref        = "`vpu-probe/probes/alu3.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/alu5.s`"
+ref        = "`vpu-probe/probes/alu5.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1851,7 +1851,7 @@ cells    = ["48", "`mull`", "the product's low half"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/mul.s`"
+ref        = "`vpu-probe/probes/mul.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1862,7 +1862,7 @@ cells    = ["49", "`mulls`", "the product's low half, saturating"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/mul.s`"
+ref        = "`vpu-probe/probes/mul.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1873,7 +1873,7 @@ cells    = ["50", "`mulm`", "the product shifted right by eight — a fixed-poin
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/mul.s`"
+ref        = "`vpu-probe/probes/mul.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1884,7 +1884,7 @@ cells    = ["51", "`mulms`", "the same, saturating"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/mul.s`"
+ref        = "`vpu-probe/probes/mul.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1895,12 +1895,12 @@ cells    = ["52", "`mulhd.ss`", "the product's high half, both operands signed �
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/mul.s`"
+ref        = "`vpu-probe/probes/mul.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/mul32.s`"
+ref        = "`vpu-probe/probes/mul32.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1911,12 +1911,12 @@ cells    = ["53", "`mulhd.su`", "the high half, A signed and B unsigned — with
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/mul.s`"
+ref        = "`vpu-probe/probes/mul.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/mul32.s`"
+ref        = "`vpu-probe/probes/mul32.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1927,12 +1927,12 @@ cells    = ["54", "`mulhd.us`", "the high half, A unsigned and B signed — with
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/mul.s`"
+ref        = "`vpu-probe/probes/mul.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/mul32.s`"
+ref        = "`vpu-probe/probes/mul32.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1943,12 +1943,12 @@ cells    = ["55", "`mulhd.uu`", "the high half, both unsigned — with `L`, `vmu
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/mul.s`"
+ref        = "`vpu-probe/probes/mul.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/mul32.s`"
+ref        = "`vpu-probe/probes/mul32.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1959,7 +1959,7 @@ cells    = ["56", "`mulhn.ss`", "the high half, rounded, both signed"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/mul.s`"
+ref        = "`vpu-probe/probes/mul.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1970,7 +1970,7 @@ cells    = ["57", "`mulhn.su`", "the high half, rounded, A signed"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/mul.s`"
+ref        = "`vpu-probe/probes/mul.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1981,7 +1981,7 @@ cells    = ["58", "`mulhn.us`", "the high half, rounded, B signed"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/mul.s`"
+ref        = "`vpu-probe/probes/mul.s`"
 confidence = "high"
 
 [[section.row]]
@@ -1992,7 +1992,7 @@ cells    = ["59", "`mulhn.uu`", "the high half, rounded, both unsigned"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/mul.s`"
+ref        = "`vpu-probe/probes/mul.s`"
 confidence = "high"
 
 [[section.row]]
@@ -2003,7 +2003,7 @@ cells    = ["60", "`mulht.ss`", "the product's high half **truncated** towards z
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/mhdt.s`: `0x0ff0 * 0xfff1` — product −61200 — answers `0x0000` here and `0xffff` from `mulhd`"
+ref        = "`vpu-probe/probes/mhdt.s`: `0x0ff0 * 0xfff1` — product −61200 — answers `0x0000` here and `0xffff` from `mulhd`"
 confidence = "high"
 
 [[section.row.source]]
@@ -2019,7 +2019,7 @@ cells    = ["61", "`mulht.su`", "the product's high half **truncated** towards z
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/mhdt.s`: `0x0ff0 * 0xfff1` — product −61200 — answers `0x0000` here and `0xffff` from `mulhd`"
+ref        = "`vpu-probe/probes/mhdt.s`: `0x0ff0 * 0xfff1` — product −61200 — answers `0x0000` here and `0xffff` from `mulhd`"
 confidence = "high"
 
 [[section.row.source]]
@@ -2035,7 +2035,7 @@ cells    = ["62", "`op62`", "writes a lane of zeros, at both widths"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/mhdt.s`, over a destination preset to all-ones"
+ref        = "`vpu-probe/probes/mhdt.s`, over a destination preset to all-ones"
 confidence = "high"
 
 [[section.row]]
@@ -2046,7 +2046,7 @@ cells    = ["63", "`op63`", "writes a lane of zeros, at both widths"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/mhdt.s`, over a destination preset to all-ones"
+ref        = "`vpu-probe/probes/mhdt.s`, over a destination preset to all-ones"
 confidence = "high"
 
 [[section]]
@@ -2065,12 +2065,12 @@ flags — and contributes nothing to a scalar aggregate.
 
 [[section.source]]
 kind       = "measured"
-ref        = "`probes/noena.s`"
+ref        = "`vpu-probe/probes/noena.s`"
 confidence = "high"
 
 [[section.source]]
 kind       = "measured"
-ref        = "`probes/bp.s`"
+ref        = "`vpu-probe/probes/bp.s`"
 confidence = "high"
 
 [[section.row]]
@@ -2099,7 +2099,7 @@ confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/setf.s`"
+ref        = "`vpu-probe/probes/setf.s`"
 confidence = "high"
 
 [[section.row]]
@@ -2112,7 +2112,7 @@ confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/setf.s`"
+ref        = "`vpu-probe/probes/setf.s`"
 confidence = "high"
 
 [[section.row]]
@@ -2120,7 +2120,7 @@ cells = ["4", "`IFN`", "negative flag set"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/setf.s`"
+ref        = "`vpu-probe/probes/setf.s`"
 confidence = "high"
 
 [[section.row]]
@@ -2128,7 +2128,7 @@ cells = ["5", "`IFNN`", "negative flag clear"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/setf.s`"
+ref        = "`vpu-probe/probes/setf.s`"
 confidence = "high"
 
 [[section.row]]
@@ -2136,7 +2136,7 @@ cells = ["6", "`IFC`", "carry flag set"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/setf.s`"
+ref        = "`vpu-probe/probes/setf.s`"
 confidence = "high"
 
 [[section.row]]
@@ -2144,7 +2144,7 @@ cells = ["7", "`IFNC`", "carry flag clear"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/setf.s`"
+ref        = "`vpu-probe/probes/setf.s`"
 confidence = "high"
 
 [[section]]
@@ -2166,12 +2166,12 @@ cells = ["`add`, `addc`", "carry out of the operation's width"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/setf.s`"
+ref        = "`vpu-probe/probes/setf.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/setfc.s`"
+ref        = "`vpu-probe/probes/setfc.s`"
 confidence = "high"
 
 [[section.row]]
@@ -2179,12 +2179,12 @@ cells = ["`sub`, `subc`", "borrow"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/setf.s`"
+ref        = "`vpu-probe/probes/setf.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/setfc.s`"
+ref        = "`vpu-probe/probes/setfc.s`"
 confidence = "high"
 
 [[section.row]]
@@ -2192,12 +2192,12 @@ cells = ["`rsub`, `rsubc`", "borrow of `b - a`"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/setf2.s`"
+ref        = "`vpu-probe/probes/setf2.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/setfc.s`"
+ref        = "`vpu-probe/probes/setfc.s`"
 confidence = "high"
 
 [[section.row]]
@@ -2205,17 +2205,17 @@ cells = ["`adds`, `subs`, `rsubs`, `addsc`, `subsc`, `rsubsc`, `dists`, `shls`, 
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/setf2.s`"
+ref        = "`vpu-probe/probes/setf2.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/setf3.s`"
+ref        = "`vpu-probe/probes/setf3.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/setfc.s`"
+ref        = "`vpu-probe/probes/setfc.s`"
 confidence = "high"
 
 [[section.row]]
@@ -2223,12 +2223,12 @@ cells = ["`min`, `max`", "whether **B** was the operand chosen"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/setf2.s`"
+ref        = "`vpu-probe/probes/setf2.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/setf3.s`"
+ref        = "`vpu-probe/probes/setf3.s`"
 confidence = "high"
 
 [[section.row]]
@@ -2236,12 +2236,12 @@ cells = ["`shl`", "the bit that fell off the top: bit `(width - n) & (width - 1)
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/setf2.s`"
+ref        = "`vpu-probe/probes/setf2.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/setf5.s`"
+ref        = "`vpu-probe/probes/setf5.s`"
 confidence = "high"
 
 [[section.row]]
@@ -2249,12 +2249,12 @@ cells = ["`lsr`, `asr`, `ror`", "the last bit to leave the bottom: bit `(n - 1) 
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/setf3.s`"
+ref        = "`vpu-probe/probes/setf3.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/setf5.s`"
+ref        = "`vpu-probe/probes/setf5.s`"
 confidence = "high"
 
 [[section.row]]
@@ -2262,7 +2262,7 @@ cells = ["`signshl`", "the same by the signed count; nothing when the count pass
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/setfc.s`"
+ref        = "`vpu-probe/probes/setfc.s`"
 confidence = "high"
 
 [[section.row]]
@@ -2270,7 +2270,7 @@ cells = ["`signasl`, `signasls`", "the same going right, the sign when the count
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/setfc.s`"
+ref        = "`vpu-probe/probes/setfc.s`"
 confidence = "high"
 
 [[section.row]]
@@ -2278,7 +2278,7 @@ cells = ["`mulm`, `mulms`", "a carry whose meaning did not fall out of the probe
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/setfc.s` — the marks fit neither a clamp nor the discarded bits"
+ref        = "`vpu-probe/probes/setfc.s` — the marks fit neither a clamp nor the discarded bits"
 confidence = "low"
 
 [[section.row]]
@@ -2286,12 +2286,12 @@ cells = ["everything else measured", "**left exactly as it was**"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/setf3.s`"
+ref        = "`vpu-probe/probes/setf3.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/setfc.s`"
+ref        = "`vpu-probe/probes/setfc.s`"
 confidence = "high"
 
 [[section]]
@@ -2311,7 +2311,7 @@ cells = ["`CLRA`", "clears the accumulator first — **even without `ENA`**"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/noena.s`"
+ref        = "`vpu-probe/probes/noena.s`"
 confidence = "high"
 
 [[section.row]]
@@ -2319,7 +2319,7 @@ cells = ["`ENA`", "accumulate at all; without it the destination takes the raw r
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/noena.s`"
+ref        = "`vpu-probe/probes/noena.s`"
 confidence = "high"
 
 [[section.row]]
@@ -2327,7 +2327,7 @@ cells = ["`ENA` without `WBA`", "the destination takes `result + accumulator` �
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/mhdt.s`: `CLRA UACC(A)` then `UADD(B)` answers `A + B + A`, with `A` still in the accumulator afterwards"
+ref        = "`vpu-probe/probes/mhdt.s`: `CLRA UACC(A)` then `UADD(B)` answers `A + B + A`, with `A` still in the accumulator afterwards"
 confidence = "high"
 
 [[section.row.source]]
@@ -2340,12 +2340,12 @@ cells = ["`SIGN`", "read the result signed (`SACC`) rather than unsigned (`UACC`
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/acc3.s`"
+ref        = "`vpu-probe/probes/acc3.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/acch.s`"
+ref        = "`vpu-probe/probes/acch.s`"
 confidence = "high"
 
 [[section.row]]
@@ -2353,7 +2353,7 @@ cells = ["`HIGH`", "accumulate the result **shifted left by sixteen**; a write-b
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/acch.s`"
+ref        = "`vpu-probe/probes/acch.s`"
 confidence = "high"
 
 [[section.row]]
@@ -2361,12 +2361,12 @@ cells = ["`WBA`", "the destination takes the accumulator rather than the raw res
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/accmix.s`"
+ref        = "`vpu-probe/probes/accmix.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/wacc.s`"
+ref        = "`vpu-probe/probes/wacc.s`"
 confidence = "high"
 
 [[section.row]]
@@ -2374,12 +2374,12 @@ cells = ["`SUB`", "with `ENA` and no `WBA` — the `USUB` form — **not** a sub
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/usub.s`, read back with `vgetacc`"
+ref        = "`vpu-probe/probes/usub.s`, read back with `vgetacc`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/acchu.s`: `vgetacc` after a `UACC HIGH SUB` reads `acc - (result << 16)`, lane for lane"
+ref        = "`vpu-probe/probes/acchu.s`: `vgetacc` after a `UACC HIGH SUB` reads `acc - (result << 16)`, lane for lane"
 confidence = "high"
 
 [[section.row]]
@@ -2387,7 +2387,7 @@ cells = ["`SUB` or no `SUB`, with `HIGH`", "the destination is the accumulator's
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/acchu.s`"
+ref        = "`vpu-probe/probes/acchu.s`"
 confidence = "high"
 
 [[section]]
@@ -2404,7 +2404,7 @@ cells = ["`SUMU`", "the lanes added up, each read unsigned at the operation's wi
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/sru.s`"
+ref        = "`vpu-probe/probes/sru.s`"
 confidence = "high"
 
 [[section.row]]
@@ -2412,7 +2412,7 @@ cells = ["`SUMS`", "the same, read signed"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/sru.s`"
+ref        = "`vpu-probe/probes/sru.s`"
 confidence = "high"
 
 [[section.row]]
@@ -2420,12 +2420,12 @@ cells = ["`IMIN`", "the index of the smallest lane — the first, on a tie"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/sru.s`"
+ref        = "`vpu-probe/probes/sru.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/sru2.s`"
+ref        = "`vpu-probe/probes/sru2.s`"
 confidence = "high"
 
 [[section.row]]
@@ -2433,12 +2433,12 @@ cells = ["`IMAX`", "the index of the largest — the last, on a tie"]
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/sru.s`"
+ref        = "`vpu-probe/probes/sru.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/sru2.s`"
+ref        = "`vpu-probe/probes/sru2.s`"
 confidence = "high"
 
 [[section.row]]
@@ -2446,12 +2446,12 @@ cells = ["`MAX`, `max2`, `max4`, `max6`", "the largest lane, signed; the three `
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/sru.s`"
+ref        = "`vpu-probe/probes/sru.s`"
 confidence = "high"
 
 [[section.row.source]]
 kind       = "measured"
-ref        = "`probes/sru2.s`"
+ref        = "`vpu-probe/probes/sru2.s`"
 confidence = "medium"
 [[section]]
 title = "What the model executes"

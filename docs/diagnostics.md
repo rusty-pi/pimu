@@ -412,7 +412,7 @@ What the firmware answers today:
 ### The display tags, and what `--display` changes
 
 Every display tag answers zero on a headless boot, which is the default and what
-the reference board does. `boot --display` (#143) puts a monitor on HDMI0, and
+the reference board does. `boot --display` puts a monitor on HDMI0, and
 then the firmware has a display to describe:
 
 | tag | headless | `--display` |
@@ -443,7 +443,7 @@ Raspberry Pi 4B d03115 fails with `ioctl_set_msg failed:-1`, so the refusal is
 the firmware's and not the model's.
 
 What this does **not** reach is the HDMI state-machine clock, so nothing writes
-`USBR +0x2C` (#142). The encoder is being programmed — 96 accesses to the
+`USBR +0x2C`. The encoder is being programmed — 96 accesses to the
 `hdmi0` core window against 5 headless, the `phy` range at `0x7EF00F00` among
 them — so it is a near miss rather than an untouched path. Tried without effect:
 a card with no KMS overlay and no `disable_fw_kms_setup`, `hdmi_force_hotplug` /

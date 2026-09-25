@@ -164,9 +164,9 @@ Sources:
 
 Offset `0x38000`, 4096 elements 0x4 apart · access `rw` · 32 bits
 
-Larger PHY register array, as `PHY_A`. Byte-addressable: the 2022-04-26 bootcode decompresses `mcb.bin` straight into it (a 16 KB buffer at `+0x38000`) and hashes it a byte at a time, so narrow reads get their lane and narrow writes merge (#69).
+Larger PHY register array, as `PHY_A`. Byte-addressable: the 2022-04-26 bootcode decompresses `mcb.bin` straight into it (a 16 KB buffer at `+0x38000`) and hashes it a byte at a time, so narrow reads get their lane and narrow writes merge.
 
 Sources:
 
 - trace (medium): the bootcode copies a preset in and reads it back
-- trace (high): 2022-04-26 bootcode: `mcb.bin` decompressed to `0x7DC3_8000` (`0x1540` of the buffer's `0x4000` bytes), then SHA-256 over it; a wrong lane there is `mcb.bin mismatch` / `Missing SDRAM FW` (#69)
+- trace (high): 2022-04-26 bootcode: `mcb.bin` decompressed to `0x7DC3_8000` (`0x1540` of the buffer's `0x4000` bytes), then SHA-256 over it; a wrong lane there is `mcb.bin mismatch` / `Missing SDRAM FW`

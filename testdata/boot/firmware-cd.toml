@@ -1,10 +1,10 @@
-# The firmware boot with the cut-down firmware (#105): `start4cd.elf` and
+# The firmware boot with the cut-down firmware: `start4cd.elf` and
 # `fixup4cd.dat`, picked by `gpu_mem=16` in config.txt the way a real card
 # picks them. It is the variant a headless board runs, with no camera or codec
 # support and 16 MB for the VideoCore.
 #
 # What it pins beyond `firmware.toml`: the identity this bench guards
-# (rpi-mkosi#37) is the same whichever variant a card boots. The cut-down
+# (the root-LUKS passphrase derivation) is the same whichever variant a card boots. The cut-down
 # firmware prints nothing on the UART after the bootloader starts it, so
 # everything past `Starting start4cd.elf` comes from the run report: the device
 # tree is found through the armstub's `dtb_ptr32`, not a console line.
@@ -65,7 +65,7 @@ line = "Starting start4cd.elf @ 0xff000200"
 why = """
 The cut-down firmware logs nothing once started, so this boot never has the
 line `boot` used to find the device tree by. Its absence is what makes the
-milestones below a test of the armstub path (#105)."""
+milestones below a test of the armstub path."""
 line = "Device tree loaded to"
 absent = true
 
@@ -77,8 +77,8 @@ line = ["core 0    left the armstub", "for 0x200000 in EL2"]
 
 [[milestone]]
 why = """
-The report reads the tree the armstub hands the ARM (`dtb_ptr32`). Before #105
-it needed the console line above and skipped this section without a word."""
+The report reads the tree the armstub hands the ARM (`dtb_ptr32`), which the
+cut-down firmware needs: it says nothing on the console after it starts."""
 line = "device tree handed to the ARM"
 
 [[milestone]]
@@ -88,11 +88,11 @@ line = ["/chosen/rpi-serial64 ", "\"fa1e00231aa2bb31\""]
 [[milestone]]
 why = """
 The same machine id as with `start4.elf`: an image keyed to it unlocks
-whichever variant the card boots (rpi-mkosi#37)."""
+whichever variant the card boots (the root-LUKS passphrase derivation)."""
 line = ["/chosen/rpi-machine-id ", "\"ed96a9bc626d9d0869ce37ee4aea025d\""]
 
 [[milestone]]
-why = "The ARM property mailbox answers after the hand-off (#23)."
+why = "The ARM property mailbox answers after the hand-off."
 line = "1 requests taken, 1 replies written"
 
 [[milestone]]
@@ -103,7 +103,7 @@ cut-down firmware, not the full one, is answering."""
 line = ["tag 0x00000001", "answered", "0x6a7a16be"]
 
 [[milestone]]
-why = "`SET_POWER_STATE` for USB powers device 3, as with `start4.elf` (#49)."
+why = "`SET_POWER_STATE` for USB powers device 3, as with `start4.elf`."
 line = ["tag 0x00028001", "answered", "0x00000003 0x00000001"]
 
 [[milestone]]

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build target/release/pimu with profile-guided optimisation (#48).
+# Build target/release/pimu with profile-guided optimisation.
 #
 #   scripts/pgo-build.sh
 #

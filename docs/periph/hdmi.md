@@ -33,7 +33,7 @@ HDMI1's core registers; HDMI0's are the block base.
 
 Offset `0x074` · access `rw` · 32 bits
 
-Control of the FIFO between the pixel valve and the encoder. After a mode set, software pulses `RECENTER` and waits for `RECENTER_DONE`. The 2020-era bootcode does that on every boot, monitor or not, and spins with no timeout; on plain storage the bit never set and those EEPROM images went no further (#63). The model sets `RECENTER_DONE` on any write with `RECENTER` set. The other bits are stored: the bootcode writes `0x5`, `MASTER_SLAVE_N | CAPTURE_PTR` in Linux's names.
+Control of the FIFO between the pixel valve and the encoder. After a mode set, software pulses `RECENTER` and waits for `RECENTER_DONE`. The 2020-era bootcode does that on every boot, monitor or not, and spins with no timeout; on plain storage the bit never set and those EEPROM images went no further. The model sets `RECENTER_DONE` on any write with `RECENTER` set. The other bits are stored: the bootcode writes `0x5`, `MASTER_SLAVE_N | CAPTURE_PTR` in Linux's names.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|

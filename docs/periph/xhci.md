@@ -93,7 +93,7 @@ Offset `0x004` · access `r` · 32 bits · reset `0x5000420`
 
 Sources:
 
-- measured (high): Raspberry Pi 4B d03115 `/dev/mem`; `sd-card-boot.log` `xHC0 ports 5 slots 32 intrs 4`
+- measured (high): Raspberry Pi 4B d03115 `/dev/mem`; a Raspberry Pi 4B d03115's bootloader log `xHC0 ports 5 slots 32 intrs 4`
 
 ## `HCSPARAMS2`
 

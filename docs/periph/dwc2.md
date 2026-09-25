@@ -135,14 +135,14 @@ Sources:
 
 Offset `0x014` · access `w1c` · 32 bits
 
-Core interrupt status. The levels are derived. Of the latched bits only the suspend pair is modelled: in device mode, connected, with no host on the port the bus is idle, so the core reports a suspend (#68). Nothing else on the port raises anything.
+Core interrupt status. The levels are derived. Of the latched bits only the suspend pair is modelled: in device mode, connected, with no host on the port the bus is idle, so the core reports a suspend. Nothing else on the port raises anything.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
 | 0 | `CURMOD` | r | 1 in host mode. The ID pin reads as an A-device (`GOTGCTL.CONIDSTS` 0 on the reference board), so the core is a host unless `GUSBCFG.FORCEDEVMODE` is set. |
 | 5 | `NPTXFEMP` | r | Non-periodic TX FIFO empty. Always 1: nothing is ever queued. |
 | 10 | `ERLYSUSP` | w1c | Early suspend: 3 ms of idle bus in device mode. Set with `USBSUSP` when the core connects as a device with no host. |
-| 11 | `USBSUSP` | w1c | USB suspend. The boot ROM's device-mode poll (`0x60001bb0`) takes it as 'no host', resets its USB state and gives up on rpiboot (#68). |
+| 11 | `USBSUSP` | w1c | USB suspend. The boot ROM's device-mode poll (`0x60001bb0`) takes it as 'no host', resets its USB state and gives up on rpiboot. |
 | 26 | `PTXFEMP` | r | Periodic TX FIFO empty. Always 1. |
 
 Sources:
@@ -381,7 +381,7 @@ Device control. Storage, except that `SFTDISCON` decides whether a device-mode c
 | Bits | Field | Access | Notes |
 |---|---|---|---|
 | 2 | `GNPINNAKSTS` | r | Global non-periodic IN NAK in effect: set by `SGNPINNAK`, cleared by `CGNPINNAK`, at once. |
-| 3 | `GOUTNAKSTS` | r | Global OUT NAK in effect: set by `SGOUTNAK`, cleared by `CGOUTNAK`, at once. The boot ROM spins on it after a suspend (`0x60001bfc`, #68). |
+| 3 | `GOUTNAKSTS` | r | Global OUT NAK in effect: set by `SGOUTNAK`, cleared by `CGOUTNAK`, at once. The boot ROM spins on it after a suspend (`0x60001bfc`). |
 | 7 | `SGNPINNAK` | w | Set global non-periodic IN NAK. Write-only. |
 | 8 | `CGNPINNAK` | w | Clear global non-periodic IN NAK. Write-only. |
 | 9 | `SGOUTNAK` | w | Set global OUT NAK. Write-only. |

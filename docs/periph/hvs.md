@@ -194,7 +194,7 @@ Sources:
 
 Offset `0x008` · access `r` · 32 bits · reset `0x64647276`
 
-Identification. start4 gates its whole display bring-up, and with it the HDMI provider registration, on this value; 0 reads as 'no HVS' (issue #13).
+Identification. start4 gates its whole display bring-up, and with it the HDMI provider registration, on this value; 0 reads as 'no HVS'.
 
 Sources:
 

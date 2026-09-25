@@ -62,7 +62,7 @@ Sources:
 
 Offset `0x1000` · access `rw` · 32 bits
 
-The L2 cache's maintenance port, as far as the evidence goes. The stub the bootcode relocates to `0x60010000` writes a range to `L2_FLUSH_START` / `L2_FLUSH_END`, then `0x14` here, and polls until it reads back `0x10`, right before it jumps to the next stage. bootmain leaves through the same stub, so start4 reads `0x10` whatever bootmain left. bootmain sets bit 6 once, as it sets up its heap (`0x10` becomes `0x50`), and its cache-flush routine (`0x87DD4`, the start4 routine's twin) writes `(value & ~0x18) | 4` over each file it has read, `0x44`; a second routine (`0x87E84`) writes `(value & ~0x18) | 0x14` instead, `0x54`. The low bits read back clear. The model takes `FLUSH` as clean-and-invalidate over the range, which ends the bootcode's cache-as-RAM window (`src/l2.rs`, #70). start4 configures it as it starts, `(value & 0xFFF0FFE5) | 0x430000`, and uses `0x430014`, `0x430044`, `0x430050` and `0x430054` from then on; bit 1 it sets once, as it applies `config.txt` (`0x430042` in the trace).
+The L2 cache's maintenance port, as far as the evidence goes. The stub the bootcode relocates to `0x60010000` writes a range to `L2_FLUSH_START` / `L2_FLUSH_END`, then `0x14` here, and polls until it reads back `0x10`, right before it jumps to the next stage. bootmain leaves through the same stub, so start4 reads `0x10` whatever bootmain left. bootmain sets bit 6 once, as it sets up its heap (`0x10` becomes `0x50`), and its cache-flush routine (`0x87DD4`, the start4 routine's twin) writes `(value & ~0x18) | 4` over each file it has read, `0x44`; a second routine (`0x87E84`) writes `(value & ~0x18) | 0x14` instead, `0x54`. The low bits read back clear. The model takes `FLUSH` as clean-and-invalidate over the range, which ends the bootcode's cache-as-RAM window (`src/l2.rs`). start4 configures it as it starts, `(value & 0xFFF0FFE5) | 0x430000`, and uses `0x430014`, `0x430044`, `0x430050` and `0x430054` from then on; bit 1 it sets once, as it applies `config.txt` (`0x430042` in the trace).
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -71,7 +71,7 @@ The L2 cache's maintenance port, as far as the evidence goes. The stub the bootc
 Sources:
 
 - decompile (medium): stub at `0x60010000` writes a trigger to `0x7EE01000` and polls it
-- trace (medium): 2022-04-26 and pinned bootcode: `0x7EE01004 = 0`, `0x7EE01008 = 0x0FFFFFE0`, then `0x14` to `0x7EE01000`; pinned bootmain: `0x00A20000..0x00A20116`, then `0x44` (#70)
+- trace (medium): 2022-04-26 and pinned bootcode: `0x7EE01004 = 0`, `0x7EE01008 = 0x0FFFFFE0`, then `0x14` to `0x7EE01000`; pinned bootmain: `0x00A20000..0x00A20116`, then `0x44`
 - decompile (high): pinned bootmain: heap setup `0x8B35C` reads it at `0x8B3D2` and writes it back with bit 6 set at `0x8B3E0`; flush routines `0x87DD4` (`Bic 0x18`, `Or 4` at `0x87E6C..0x87E74`) and `0x87E84` (`Or 0x14` at `0x87F20`), both polling bit 2; the stub copied from `0x802CC` to `0x60010000` at `0xA9766` and entered at `0xA97D6`
 - trace (high): pinned bootmain: `0x10` read at `0x8B3D2`, `0x50` written at `0x8B3E0`, then `0x44` at `0x87E74` (reads back `0x40`) after each file; `0x54` at `0x87F24` (reads back `0x50`) around the display's redraws; the stub's `0x14` at `0x60010066` before start4 reads `0x10`
 - decompile (high): start4 entry `0x3EC7114E..0x3EC7119E`: reads it (bit 0 test), then `And 0xFFF0FFE5`, `Or 0x430000`, `St`; `0x3ED486CE..0x3ED486D2` sets bit 1 when the word at `gp+838588` is 0
@@ -89,7 +89,7 @@ First address of the range `L2_CTRL.FLUSH` acts on. bootmain flushes each file i
 
 Sources:
 
-- trace (medium): written right before `L2_FLUSH_END` and the `L2_CTRL` command (#70)
+- trace (medium): written right before `L2_FLUSH_END` and the `L2_CTRL` command
 - trace (medium): pinned start4 writes ranges here all through the boot (`0x3EC715EE`; e.g. `0xBEF27640` with `L2_FLUSH_END` `0xBEF4763F`), the same pair to `0x7EE02104` / `DOORBELL_C_SIZE` just before, and `L2_CTRL` commands `0x430000` / `0x430014` (`0x3EC7119E`, `0x3EC71668`)
 - trace (high): pinned bootmain: `0x00A20000` (`config.txt`, 279 bytes), `0x00FF0000` (`start4.elf`), `0x00CF0000` (`fixup4.dat`) at `0x87DFA`, each before its `Read` line; `0` with `L2_FLUSH_END` `0xFFFFFFFE` after `Starting`; `0x16000000` / `0x1612C000` with `L2_FLUSH_END` `0x1612BFFF` / `0x16257FFF` from `0x87EAA` and `0x87DFA` in a signed `boot.img` boot
 
@@ -97,12 +97,12 @@ Sources:
 
 Offset `0x1008` · access `rw` · 32 bits
 
-Last address of the range `L2_CTRL.FLUSH` acts on: `0x0FFFFFE0` from the bootcode's stub, so the lines are 32 bytes. It was taken for a size before #70.
+Last address of the range `L2_CTRL.FLUSH` acts on: `0x0FFFFFE0` from the bootcode's stub, so the lines are 32 bytes.
 
 Sources:
 
 - decompile (low): stub at `0x60010000` pokes `+0x08` before the trigger
-- trace (medium): bootmain writes `0x00A20000` to `+0x04` and `0x00A20116` to `+0x08` (#70)
+- trace (medium): bootmain writes `0x00A20000` to `+0x04` and `0x00A20116` to `+0x08`
 
 ## `IRQ_STATUS`
 

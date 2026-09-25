@@ -122,10 +122,10 @@ consecutive rows, from the 16-aligned band its coordinate names.
 
 | Register width | Elements per row | Within a lane | Source |
 |---|---|---|---|
-| 8-bit | 64 | four elements, at bytes 0, 1, 2, 3 of the lane | measured: `probes/layout.s`, `probes/mix.s` |
-| 16-bit | 32 | two elements, at byte 0 and byte 2 | measured: `probes/layout.s` |
-| 32-bit | 16 | one element, the whole lane | measured: `probes/layout.s` |
-| vertical | 16 rows | the same element of sixteen consecutive rows | measured: `probes/vert.s`, `probes/vert3.s` |
+| 8-bit | 64 | four elements, at bytes 0, 1, 2, 3 of the lane | measured: `vpu-probe/probes/layout.s`, `vpu-probe/probes/mix.s` |
+| 16-bit | 32 | two elements, at byte 0 and byte 2 | measured: `vpu-probe/probes/layout.s` |
+| 32-bit | 16 | one element, the whole lane | measured: `vpu-probe/probes/layout.s` |
+| vertical | 16 rows | the same element of sixteen consecutive rows | measured: `vpu-probe/probes/vert.s`, `vpu-probe/probes/vert3.s` |
 
 Sources:
 
@@ -138,16 +138,16 @@ window into the file.
 
 | Field | Meaning | Source |
 |---|---|---|
-| type nibble | the **register's** element width and direction: `H`/`V` 8-bit, `HX`/`VX` 16-bit, `HY`/`VY` 32-bit; odd nibbles are vertical, 14 and 15 are the dash | measured: `probes/layout.s`, `probes/conv.s` |
-| `y` | the row (horizontal), or the 16-row band (vertical) | measured: `probes/vert3.s` |
-| `e0` | the first element, `band * 16 + fine`, counted **in elements** — which is why the byte coordinate objdump prints and the element index part company above byte elements | measured: `probes/vx46.s`, `probes/layout.s` |
-| `++` | post-increment: steps the row horizontally, the element vertically | measured: `probes/vinc.s` |
-| `+rN` | adds a scalar to the element index, in elements, wrapping within the row | measured: `probes/pa48.s` |
-| `*` | **no effect** on the register file or memory — on any slot, under `REP`, on a load or a store | measured: `probes/star.s` |
-| dash in B | names a scalar register instead, with a signed displacement in the 80-bit encodings — the operand is `r<N> + disp`, plain addition | decompile: `binutils-vc4` opcode tables; measured: `probes/disp.s`, `probes/sdisp.s`: with `r2` = 100, `r2+0`, `r2-1`, `r2-2`, `r2+1` and `r2+100` reach the lanes as 100, 99, 98, 101 and 200. The assembler cannot spell the form, so the words are built by hand and checked against objdump |
-| dash in D | the result is discarded. Any addend nibble, `*` or `++` it carries has nothing left to act on: the flags come out the same with none, with `+r0` and with `+r3`, measured with `probes/dashd.s` | measured: `probes/dashd.s`, three hand-built words the assembler cannot spell |
-| dash in A | an operand of **zeros** for an ALU op; ignored altogether by a load | measured: `probes/alu6.s`, `probes/ldodd.s` |
-| dash in D | discards the result — the load still reads its bytes | measured: `probes/ldodd.s`; decompile: `FUN_0edc9e20`, the vector-unit read fence |
+| type nibble | the **register's** element width and direction: `H`/`V` 8-bit, `HX`/`VX` 16-bit, `HY`/`VY` 32-bit; odd nibbles are vertical, 14 and 15 are the dash | measured: `vpu-probe/probes/layout.s`, `vpu-probe/probes/conv.s` |
+| `y` | the row (horizontal), or the 16-row band (vertical) | measured: `vpu-probe/probes/vert3.s` |
+| `e0` | the first element, `band * 16 + fine`, counted **in elements** — which is why the byte coordinate objdump prints and the element index part company above byte elements | measured: `vpu-probe/probes/vx46.s`, `vpu-probe/probes/layout.s` |
+| `++` | post-increment: steps the row horizontally, the element vertically | measured: `vpu-probe/probes/vinc.s` |
+| `+rN` | adds a scalar to the element index, in elements, wrapping within the row | measured: `vpu-probe/probes/pa48.s` |
+| `*` | **no effect** on the register file or memory — on any slot, under `REP`, on a load or a store | measured: `vpu-probe/probes/star.s` |
+| dash in B | names a scalar register instead, with a signed displacement in the 80-bit encodings — the operand is `r<N> + disp`, plain addition | decompile: `binutils-vc4` opcode tables; measured: `vpu-probe/probes/disp.s`, `vpu-probe/probes/sdisp.s`: with `r2` = 100, `r2+0`, `r2-1`, `r2-2`, `r2+1` and `r2+100` reach the lanes as 100, 99, 98, 101 and 200. The assembler cannot spell the form, so the words are built by hand and checked against objdump |
+| dash in D | the result is discarded. Any addend nibble, `*` or `++` it carries has nothing left to act on: the flags come out the same with none, with `+r0` and with `+r3`, measured with `vpu-probe/probes/dashd.s` | measured: `vpu-probe/probes/dashd.s`, three hand-built words the assembler cannot spell |
+| dash in A | an operand of **zeros** for an ALU op; ignored altogether by a load | measured: `vpu-probe/probes/alu6.s`, `vpu-probe/probes/ldodd.s` |
+| dash in D | discards the result — the load still reads its bytes | measured: `vpu-probe/probes/ldodd.s`; decompile: `FUN_0edc9e20`, the vector-unit read fence |
 
 ## Operand width conversion
 
@@ -159,27 +159,27 @@ converts the other way too, and the element is always addressed at the
 
 | Direction | Rule | Source |
 |---|---|---|
-| multiply, which carries no width of its own | the widest **source** it names, not the widest register: `vmulhdt.ss HY(4,0),HX(62,0),HX(63,0)` is a 16-bit multiply whose product is written into a 32-bit register. With the `L` bit — a `v32` spelling — the width is 32 whatever the registers say, and a multiply naming no source register at all has a zero product at any width | measured: `probes/setfmul.s` |
-| ALU source, a register **wider** than the operation | read at the operation's width — the element's low half. `v16or HX(0,0),HY(20,0),0`, the same with the wide register in B, `v16mov` and `v16add` all answer what the `HX(20,0)` control answers, and `v16adds`, `v16shl` and `v16subs` match theirs lane for lane | measured: `probes/wide1.s`, `probes/wide2.s` |
-| ALU result, into a destination **wider** than the operation | sign-extended, not zero-extended: `v16or HY(2,0),HX(20,0),0` answers `0xffffffff` where the halfword is `0xffff`. The truncation on the source side is at the **read**, so `v16or HY(0,0),HY(20,0),0` — wide on both sides — answers the low halfword sign-extended, not the 32-bit source untouched | measured: `probes/wide1.s`, `probes/wide2.s` |
-| source, byte register into a wider operation | zero-extend | measured: `probes/wmix.s`, `probes/wmix2.s` |
-| source, halfword register into a 32-bit operation | **sign**-extend | measured: `probes/wmix2.s` |
-| result into a narrower destination | truncate | measured: `probes/wmix.s` |
-| result into a narrower destination, saturating op | clamp into what that element holds: `0..=0xff` for a byte register, signed for a wider one | measured: `probes/wmix.s`, `probes/wmix2.s` |
-| memory transfer, either direction | narrowing truncates, widening zero-extends | measured: `probes/conv.s` |
+| multiply, which carries no width of its own | the widest **source** it names, not the widest register: `vmulhdt.ss HY(4,0),HX(62,0),HX(63,0)` is a 16-bit multiply whose product is written into a 32-bit register. With the `L` bit — a `v32` spelling — the width is 32 whatever the registers say, and a multiply naming no source register at all has a zero product at any width | measured: `vpu-probe/probes/setfmul.s` |
+| ALU source, a register **wider** than the operation | read at the operation's width — the element's low half. `v16or HX(0,0),HY(20,0),0`, the same with the wide register in B, `v16mov` and `v16add` all answer what the `HX(20,0)` control answers, and `v16adds`, `v16shl` and `v16subs` match theirs lane for lane | measured: `vpu-probe/probes/wide1.s`, `vpu-probe/probes/wide2.s` |
+| ALU result, into a destination **wider** than the operation | sign-extended, not zero-extended: `v16or HY(2,0),HX(20,0),0` answers `0xffffffff` where the halfword is `0xffff`. The truncation on the source side is at the **read**, so `v16or HY(0,0),HY(20,0),0` — wide on both sides — answers the low halfword sign-extended, not the 32-bit source untouched | measured: `vpu-probe/probes/wide1.s`, `vpu-probe/probes/wide2.s` |
+| source, byte register into a wider operation | zero-extend | measured: `vpu-probe/probes/wmix.s`, `vpu-probe/probes/wmix2.s` |
+| source, halfword register into a 32-bit operation | **sign**-extend | measured: `vpu-probe/probes/wmix2.s` |
+| result into a narrower destination | truncate | measured: `vpu-probe/probes/wmix.s` |
+| result into a narrower destination, saturating op | clamp into what that element holds: `0..=0xff` for a byte register, signed for a wider one | measured: `vpu-probe/probes/wmix.s`, `vpu-probe/probes/wmix2.s` |
+| memory transfer, either direction | narrowing truncates, widening zero-extends | measured: `vpu-probe/probes/conv.s` |
 | register **wider** than the operation | refused: `binutils-vc4` cannot spell one, and `start4.elf` has thirteen, all in data | decompile: `binutils-vc4` opcode tables |
-| shift, rotate or `brev` count | taken in the **operation's** width: five bits of B for `v32`, four for `v16` | measured: `probes/wmix3.s`, `probes/setf5.s` |
+| shift, rotate or `brev` count | taken in the **operation's** width: five bits of B for `v32`, four for `v16` | measured: `vpu-probe/probes/wmix3.s`, `vpu-probe/probes/setf5.s` |
 
 ## Addressing
 
 | Element | Rule | Source |
 |---|---|---|
-| displacement | a plain **byte** offset, at every width | measured: `probes/disp.s` |
+| displacement | a plain **byte** offset, at every width | measured: `vpu-probe/probes/disp.s` |
 | `+=rN` (80-bit forms) | added to the address after each repetition | decompile: VC4 libc's `memcpy` (`0x3EDA28D6`) advances by `r0 * 64` afterwards |
-| base register | never written back | measured: `probes/mix.s` |
-| load straddling a 16-byte block | **wraps inside the block**: `v32ld HY(0,0),(r1+13)` over ascending bytes reads `0e 0f 10 01` | measured: `probes/wrap.s`, `probes/wrap2.s` |
-| store straddling a 16-byte block | crosses normally | measured: `probes/wrap2.s` |
-| B-position immediate | **signed**: six bits in the 48-bit encoding, sixteen in the 80-bit one — `v32mov HY(0,0),#0x20` fills every lane with `0xffffffe0` | measured: `probes/imm.s` |
+| base register | never written back | measured: `vpu-probe/probes/mix.s` |
+| load straddling a 16-byte block | **wraps inside the block**: `v32ld HY(0,0),(r1+13)` over ascending bytes reads `0e 0f 10 01` | measured: `vpu-probe/probes/wrap.s`, `vpu-probe/probes/wrap2.s` |
+| store straddling a 16-byte block | crosses normally | measured: `vpu-probe/probes/wrap2.s` |
+| B-position immediate | **signed**: six bits in the 48-bit encoding, sixteen in the 80-bit one — `v32mov HY(0,0),#0x20` fills every lane with `0xffffffe0` | measured: `vpu-probe/probes/imm.s` |
 
 ## Field layout
 
@@ -307,38 +307,38 @@ the firmware would have to be executing as data to reach.
 
 | Sub-op | Mnemonic | What it does | Source |
 |---|---|---|---|
-| 0 | `ld` | 16 elements between memory and the file, one per lane, at `base + disp` | measured: `probes/mix.s`, `probes/conv.s` |
-| 1 | `lookupm` | gather: each lane reads element `acc >> 16` of the table at the address. An address-less form — `(r63)`, or a vector in the B slot — gathers from **zero** — the address is then just the displacement — the A slot is read for nothing, and a dash destination reads and discards, which is how `start4.elf` spells every one of them | measured: `probes/mem6.s`, `probes/mem9.s`, `probes/r63.s`, `probes/r63b.s`, `probes/r63c.s`: with the accumulators cleared, a gather off `(r63)` hands every lane the byte at address 0; junk in the A slot changes nothing; a dash destination leaves a witness register untouched |
-| 2 | `lookupml` | gather indexed by `acc & 0xffff` | measured: `probes/mem5.s`, `probes/mem9.s` |
-| 3 | `mem03` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The board goes on running | measured: `probes/hbare03.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
-| 4 | `st` | the transfer the other way | measured: `probes/mix.s` |
-| 5 | `indexwritem` | scatter: each lane writes its element at index `acc >> 16` | measured: `probes/mem7.s`, `probes/mem9.s` |
-| 6 | `indexwriteml` | scatter indexed by `acc & 0xffff` | measured: `probes/mem7.s`, `probes/mem9.s` |
-| 7 | `mem07` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The board goes on running | measured: `probes/m07.s`, `probes/addr07.s`: over a destination preset to all-ones, with operands that are a valid bus address, with zeros, and with junk — the 32 bytes at the address it was handed were unchanged afterwards, and three lookup-table indices read the same before and after |
-| 8 | `memread` | `readlut`: each lane reads its own 64-byte region of the unit's 1 KiB table at `b * width`, A unused. B is a vector slot, a scalar register or an immediate; a scalar reaches every lane alike | measured: `probes/lut.s`: a `v8memwrite` then a `v8memread` over the same indices hands every lane its own value back — seven lanes sharing index `0xff` and each keeping its own value is what says the table is banked — and the `v16` pair round-trips at twice the index; manual: the VideoCore IV Programmers Manual names sub-ops 8 and 9 `readlut`/`writelut` over a 1 KB table |
-| 9 | `memwrite` | `writelut`: puts A at that index, and hands the destination the same value | measured: `probes/lut.s`, `probes/lut2.s`: a scalar write at 3 and a vector index of threes reach the same byte, and a `v16` write at 3 leaves byte 3 alone — the index scales by the element width whichever way it is spelled |
-| 10 | `mem10` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction, *provided* its B slot is a scalar address: spelled with a **vector register** there it stalls the unit outright. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/hgat10.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; `probes/f10.s`, which spells B as a vector register, never returns; decompile: `binutils-vc4` names the encoding |
-| 11 | `mem11` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/f11.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
-| 12 | `mem12` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/f12.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
-| 13 | `mem13` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/f13.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
-| 14 | `mem14` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/f14.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
-| 15 | `mem15` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/f15.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
-| 16 | `mem16` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction, *provided* its B slot is a scalar address: spelled with a **vector register** there it stalls the unit outright. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/hgat16.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; `probes/f16.s`, which spells B as a vector register, never returns; decompile: `binutils-vc4` names the encoding |
-| 17 | `mem17` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/f17.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
-| 18 | `mem18` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/f18.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
-| 19 | `mem19` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction, *provided* its B slot is a scalar address: spelled with a **vector register** there it stalls the unit outright. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/hgat19.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; `probes/f19.s`, which spells B as a vector register, never returns; decompile: `binutils-vc4` names the encoding |
-| 20 | `mem20` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/f20.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
-| 21 | `mem21` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/f21.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
-| 22 | `mem22` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/f22.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
-| 23 | `mem23` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/f23.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
-| 24 | `getacc` | each lane's accumulator, shifted right by `b & 31`; A is read for nothing. The width field picks the saturation, not an element size: `v8` plain, `v16` clamps into signed 32-bit, `v32` into signed 16-bit. A **dash destination** keeps only the scalar result unit's aggregate, which is the form `start4.elf` uses | measured: `probes/setf4.s`, `probes/gacc.s`: over sixteen known accumulators `SUMS` and `SUMU` both answer their plain sum, `MAX` the largest, `IMIN`/`IMAX` an index, and the `B` shift applies before the aggregate. The lane values go in whole, not re-read at the operation's element width, `probes/setf5.s` |
-| 25 | `mem25` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/f25.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
-| 26 | `mem26` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/f26.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
-| 27 | `mem27` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/f27.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
-| 28 | `mem28` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction, *provided* its B slot is a scalar address: spelled with a **vector register** there it stalls the unit outright. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/hgat28.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; `probes/f28.s`, which spells B as a vector register, never returns; decompile: `binutils-vc4` names the encoding |
-| 29 | `mem29` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction, *provided* its B slot is a scalar address: spelled with a **vector register** there it stalls the unit outright. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/hgat29.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; `probes/f29.s`, which spells B as a vector register, never returns; decompile: `binutils-vc4` names the encoding |
-| 30 | `mem30` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction, *provided* its B slot is a scalar address: spelled with a **vector register** there it stalls the unit outright. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/hgat30.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; `probes/f30.s`, which spells B as a vector register, never returns; decompile: `binutils-vc4` names the encoding |
-| 31 | `mem31` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction, *provided* its B slot is a scalar address: spelled with a **vector register** there it stalls the unit outright. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `probes/hgat31.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; `probes/f31.s`, which spells B as a vector register, never returns; decompile: `binutils-vc4` names the encoding |
+| 0 | `ld` | 16 elements between memory and the file, one per lane, at `base + disp` | measured: `vpu-probe/probes/mix.s`, `vpu-probe/probes/conv.s` |
+| 1 | `lookupm` | gather: each lane reads element `acc >> 16` of the table at the address. An address-less form — `(r63)`, or a vector in the B slot — gathers from **zero** — the address is then just the displacement — the A slot is read for nothing, and a dash destination reads and discards, which is how `start4.elf` spells every one of them | measured: `vpu-probe/probes/mem6.s`, `vpu-probe/probes/mem9.s`, `vpu-probe/probes/r63.s`, `vpu-probe/probes/r63b.s`, `vpu-probe/probes/r63c.s`: with the accumulators cleared, a gather off `(r63)` hands every lane the byte at address 0; junk in the A slot changes nothing; a dash destination leaves a witness register untouched |
+| 2 | `lookupml` | gather indexed by `acc & 0xffff` | measured: `vpu-probe/probes/mem5.s`, `vpu-probe/probes/mem9.s` |
+| 3 | `mem03` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The board goes on running | measured: `vpu-probe/probes/hbare03.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
+| 4 | `st` | the transfer the other way | measured: `vpu-probe/probes/mix.s` |
+| 5 | `indexwritem` | scatter: each lane writes its element at index `acc >> 16` | measured: `vpu-probe/probes/mem7.s`, `vpu-probe/probes/mem9.s` |
+| 6 | `indexwriteml` | scatter indexed by `acc & 0xffff` | measured: `vpu-probe/probes/mem7.s`, `vpu-probe/probes/mem9.s` |
+| 7 | `mem07` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The board goes on running | measured: `vpu-probe/probes/m07.s`, `vpu-probe/probes/addr07.s`: over a destination preset to all-ones, with operands that are a valid bus address, with zeros, and with junk — the 32 bytes at the address it was handed were unchanged afterwards, and three lookup-table indices read the same before and after |
+| 8 | `memread` | `readlut`: each lane reads its own 64-byte region of the unit's 1 KiB table at `b * width`, A unused. B is a vector slot, a scalar register or an immediate; a scalar reaches every lane alike | measured: `vpu-probe/probes/lut.s`: a `v8memwrite` then a `v8memread` over the same indices hands every lane its own value back — seven lanes sharing index `0xff` and each keeping its own value is what says the table is banked — and the `v16` pair round-trips at twice the index; manual: the VideoCore IV Programmers Manual names sub-ops 8 and 9 `readlut`/`writelut` over a 1 KB table |
+| 9 | `memwrite` | `writelut`: puts A at that index, and hands the destination the same value | measured: `vpu-probe/probes/lut.s`, `vpu-probe/probes/lut2.s`: a scalar write at 3 and a vector index of threes reach the same byte, and a `v16` write at 3 leaves byte 3 alone — the index scales by the element width whichever way it is spelled |
+| 10 | `mem10` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction, *provided* its B slot is a scalar address: spelled with a **vector register** there it stalls the unit outright. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `vpu-probe/probes/hgat10.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; `vpu-probe/probes/f10.s`, which spells B as a vector register, never returns; decompile: `binutils-vc4` names the encoding |
+| 11 | `mem11` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `vpu-probe/probes/f11.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
+| 12 | `mem12` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `vpu-probe/probes/f12.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
+| 13 | `mem13` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `vpu-probe/probes/f13.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
+| 14 | `mem14` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `vpu-probe/probes/f14.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
+| 15 | `mem15` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `vpu-probe/probes/f15.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
+| 16 | `mem16` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction, *provided* its B slot is a scalar address: spelled with a **vector register** there it stalls the unit outright. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `vpu-probe/probes/hgat16.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; `vpu-probe/probes/f16.s`, which spells B as a vector register, never returns; decompile: `binutils-vc4` names the encoding |
+| 17 | `mem17` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `vpu-probe/probes/f17.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
+| 18 | `mem18` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `vpu-probe/probes/f18.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
+| 19 | `mem19` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction, *provided* its B slot is a scalar address: spelled with a **vector register** there it stalls the unit outright. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `vpu-probe/probes/hgat19.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; `vpu-probe/probes/f19.s`, which spells B as a vector register, never returns; decompile: `binutils-vc4` names the encoding |
+| 20 | `mem20` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `vpu-probe/probes/f20.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
+| 21 | `mem21` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `vpu-probe/probes/f21.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
+| 22 | `mem22` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `vpu-probe/probes/f22.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
+| 23 | `mem23` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `vpu-probe/probes/f23.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
+| 24 | `getacc` | each lane's accumulator, shifted right by `b & 31`; A is read for nothing. The width field picks the saturation, not an element size: `v8` plain, `v16` clamps into signed 32-bit, `v32` into signed 16-bit. A **dash destination** keeps only the scalar result unit's aggregate, which is the form `start4.elf` uses | measured: `vpu-probe/probes/setf4.s`, `vpu-probe/probes/gacc.s`: over sixteen known accumulators `SUMS` and `SUMU` both answer their plain sum, `MAX` the largest, `IMIN`/`IMAX` an index, and the `B` shift applies before the aggregate. The lane values go in whole, not re-read at the operation's element width, `vpu-probe/probes/setf5.s` |
+| 25 | `mem25` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `vpu-probe/probes/f25.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
+| 26 | `mem26` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `vpu-probe/probes/f26.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
+| 27 | `mem27` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `vpu-probe/probes/f27.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; decompile: `binutils-vc4` names the encoding |
+| 28 | `mem28` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction, *provided* its B slot is a scalar address: spelled with a **vector register** there it stalls the unit outright. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `vpu-probe/probes/hgat28.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; `vpu-probe/probes/f28.s`, which spells B as a vector register, never returns; decompile: `binutils-vc4` names the encoding |
+| 29 | `mem29` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction, *provided* its B slot is a scalar address: spelled with a **vector register** there it stalls the unit outright. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `vpu-probe/probes/hgat29.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; `vpu-probe/probes/f29.s`, which spells B as a vector register, never returns; decompile: `binutils-vc4` names the encoding |
+| 30 | `mem30` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction, *provided* its B slot is a scalar address: spelled with a **vector register** there it stalls the unit outright. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `vpu-probe/probes/hgat30.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; `vpu-probe/probes/f30.s`, which spells B as a vector register, never returns; decompile: `binutils-vc4` names the encoding |
+| 31 | `mem31` | **unallocated**; the unit answers a lane of **zeros** at the operation's width and waits for nothing — nothing read at the address it is handed, nothing changed in the lookup table, and it retires even as a blob's first instruction, *provided* its B slot is a scalar address: spelled with a **vector register** there it stalls the unit outright. The firmware is dead afterwards either way: the board answers no further mailbox call | measured: `vpu-probe/probes/hgat31.s` on a Raspberry Pi 4B d03115: over a destination preset to all-ones, with a page of sixteen known-good pointers at the address in its B slot, the element came back zero where a `v8ld` of the same page answers the pointer bytes; `vpu-probe/probes/f31.s`, which spells B as a vector register, never returns; decompile: `binutils-vc4` names the encoding |
 
 ## ALU-class sub-ops
 
@@ -349,70 +349,70 @@ destination preset to all-ones, so they do write.
 
 | Sub-op | Mnemonic | Result | Source |
 |---|---|---|---|
-| 0 | `mov` | `b` | measured: `probes/alu.s` |
-| 1 | `bitplanes` | bit **transpose**: lane `i` gets the word whose bit `j` is bit `i` of lane `j` of B — with a scalar B, all-ones wherever B's bit `i` is set. Zeros at `v32` | measured: `probes/bp.s` |
-| 2 | `even` | A's even elements into lanes 0–7, **B's** into lanes 8–15 | measured: `probes/alu.s` |
-| 3 | `odd` | the odd elements, the same way | measured: `probes/alu.s` |
-| 4 | `interl` | A and B alternating, from the low half | measured: `probes/alu.s` |
-| 5 | `interh` | the same from the high half | measured: `probes/alu.s` |
-| 6 | `brev` | `a`'s low `n` bits reversed — the whole operation width when `n` is zero | measured: `probes/alu2.s`, `probes/wmix3.s` |
-| 7 | `ror` | rotate right by `n` | measured: `probes/alu2.s` |
-| 8 | `shl` | left shift by `n` | measured: `probes/alu2.s` |
-| 9 | `shls` | left shift, saturating into the destination | measured: `probes/alu2.s`, `probes/wmix3.s` |
-| 10 | `lsr` | logical right shift | measured: `probes/alu2.s` |
-| 11 | `asr` | arithmetic right shift | measured: `probes/alu2.s` |
-| 12 | `signshl` | shift by a **signed, unmasked** count: left when `b` is positive, right when negative, zeros shifting in; a count past the width empties the element | measured: `probes/alu3.s`, `probes/alu4.s` |
-| 13 | `op13` | writes a lane of zeros, at both widths | measured: `probes/alu4.s`, `probes/alu5.s` |
-| 14 | `signasl` | the same with the sign shifting in | measured: `probes/alu4.s` |
-| 15 | `signasls` | `signasl`, saturating | measured: `probes/alu4.s` |
-| 16 | `and` | `a & b` | measured: `probes/alu.s` |
-| 17 | `or` | `a \| b` | measured: `probes/alu.s` |
-| 18 | `eor` | `a ^ b` | measured: `probes/alu.s` |
-| 19 | `bic` | `a & !b` | measured: `probes/alu.s` |
-| 20 | `count` | `popcount(a) + popcount(b)`; zeros at `v32` | measured: `probes/alu.s`, `probes/alu5.s` |
-| 21 | `msb` | the index of the highest bit set in **either** operand; all-ones when neither has one | measured: `probes/wmix3.s` |
-| 22 | `op22` | writes a lane of zeros, at both widths | measured: `probes/alu5.s` |
-| 23 | `op23` | writes a lane of zeros, at both widths | measured: `probes/alu5.s` |
-| 24 | `min` | the smaller, signed | measured: `probes/alu2.s` |
-| 25 | `max` | the larger, signed | measured: `probes/alu2.s` |
-| 26 | `dist` | `abs(a - b)`, wrapping | measured: `probes/alu2.s` |
-| 27 | `dists` | `abs(a - b)`, saturating | measured: `probes/alu2.s` |
-| 28 | `clip` | `a` clamped into `0 ..= b`, signed | measured: `probes/alu2.s` |
-| 29 | `sign` | `b + signum(a)` | measured: `probes/alu2.s` |
-| 30 | `clips` | `b * signum(a)`, `signum(0)` counting as `+1`; zeros at `v16` | measured: `probes/alu4.s`, `probes/alu5.s` |
-| 31 | `testmag` | `1` where `abs(a) >= b`, else `0`; zeros at `v32` | measured: `probes/alu3.s`, `probes/alu4.s` |
-| 32 | `add` | `a + b` | measured: `probes/alu2.s` |
-| 33 | `adds` | `a + b`, saturating | measured: `probes/alu2.s` |
-| 34 | `addc` | `a + b` **plus the lane's carry flag** | measured: `probes/alu3.s` |
-| 35 | `addsc` | the same, saturating | measured: `probes/alu3.s` |
-| 36 | `sub` | `a - b` | measured: `probes/alu2.s` |
-| 37 | `subs` | `a - b`, saturating | measured: `probes/alu2.s` |
-| 38 | `subc` | `a - b` minus the lane's carry flag | measured: `probes/alu3.s` |
-| 39 | `subsc` | the same, saturating | measured: `probes/alu3.s` |
-| 40 | `rsub` | `b - a` | measured: `probes/alu2.s` |
-| 41 | `rsubs` | `b - a`, saturating | measured: `probes/alu2.s` |
-| 42 | `rsubc` | `b - a` minus the lane's carry flag | measured: `probes/alu3.s` |
-| 43 | `rsubsc` | the same, saturating | measured: `probes/alu3.s` |
-| 44 | `op44` | writes a lane of zeros, at both widths | measured: `probes/alu3.s`, `probes/alu5.s` |
-| 45 | `op45` | writes a lane of zeros, at both widths | measured: `probes/alu3.s`, `probes/alu5.s` |
-| 46 | `op46` | writes a lane of zeros, at both widths | measured: `probes/alu3.s`, `probes/alu5.s` |
-| 47 | `op47` | writes a lane of zeros, at both widths | measured: `probes/alu3.s`, `probes/alu5.s` |
-| 48 | `mull` | the product's low half | measured: `probes/mul.s` |
-| 49 | `mulls` | the product's low half, saturating | measured: `probes/mul.s` |
-| 50 | `mulm` | the product shifted right by eight — a fixed-point multiply | measured: `probes/mul.s` |
-| 51 | `mulms` | the same, saturating | measured: `probes/mul.s` |
-| 52 | `mulhd.ss` | the product's high half, both operands signed — or, with the `L` bit, `vmul32.ss` | measured: `probes/mul.s`, `probes/mul32.s` |
-| 53 | `mulhd.su` | the high half, A signed and B unsigned — with `L`, `vmul32.su` | measured: `probes/mul.s`, `probes/mul32.s` |
-| 54 | `mulhd.us` | the high half, A unsigned and B signed — with `L`, `vmul32.us` | measured: `probes/mul.s`, `probes/mul32.s` |
-| 55 | `mulhd.uu` | the high half, both unsigned — with `L`, `vmul32.uu` | measured: `probes/mul.s`, `probes/mul32.s` |
-| 56 | `mulhn.ss` | the high half, rounded, both signed | measured: `probes/mul.s` |
-| 57 | `mulhn.su` | the high half, rounded, A signed | measured: `probes/mul.s` |
-| 58 | `mulhn.us` | the high half, rounded, B signed | measured: `probes/mul.s` |
-| 59 | `mulhn.uu` | the high half, rounded, both unsigned | measured: `probes/mul.s` |
-| 60 | `mulht.ss` | the product's high half **truncated** towards zero, not floored — both operands signed | measured: `probes/mhdt.s`: `0x0ff0 * 0xfff1` — product −61200 — answers `0x0000` here and `0xffff` from `mulhd`; manual: the VideoCore IV Programmers Manual calls sub-ops 60 and 61 the round-to-zero high multiply |
-| 61 | `mulht.su` | the product's high half **truncated** towards zero, not floored — A signed, B unsigned | measured: `probes/mhdt.s`: `0x0ff0 * 0xfff1` — product −61200 — answers `0x0000` here and `0xffff` from `mulhd`; manual: the VideoCore IV Programmers Manual calls sub-ops 60 and 61 the round-to-zero high multiply |
-| 62 | `op62` | writes a lane of zeros, at both widths | measured: `probes/mhdt.s`, over a destination preset to all-ones |
-| 63 | `op63` | writes a lane of zeros, at both widths | measured: `probes/mhdt.s`, over a destination preset to all-ones |
+| 0 | `mov` | `b` | measured: `vpu-probe/probes/alu.s` |
+| 1 | `bitplanes` | bit **transpose**: lane `i` gets the word whose bit `j` is bit `i` of lane `j` of B — with a scalar B, all-ones wherever B's bit `i` is set. Zeros at `v32` | measured: `vpu-probe/probes/bp.s` |
+| 2 | `even` | A's even elements into lanes 0–7, **B's** into lanes 8–15 | measured: `vpu-probe/probes/alu.s` |
+| 3 | `odd` | the odd elements, the same way | measured: `vpu-probe/probes/alu.s` |
+| 4 | `interl` | A and B alternating, from the low half | measured: `vpu-probe/probes/alu.s` |
+| 5 | `interh` | the same from the high half | measured: `vpu-probe/probes/alu.s` |
+| 6 | `brev` | `a`'s low `n` bits reversed — the whole operation width when `n` is zero | measured: `vpu-probe/probes/alu2.s`, `vpu-probe/probes/wmix3.s` |
+| 7 | `ror` | rotate right by `n` | measured: `vpu-probe/probes/alu2.s` |
+| 8 | `shl` | left shift by `n` | measured: `vpu-probe/probes/alu2.s` |
+| 9 | `shls` | left shift, saturating into the destination | measured: `vpu-probe/probes/alu2.s`, `vpu-probe/probes/wmix3.s` |
+| 10 | `lsr` | logical right shift | measured: `vpu-probe/probes/alu2.s` |
+| 11 | `asr` | arithmetic right shift | measured: `vpu-probe/probes/alu2.s` |
+| 12 | `signshl` | shift by a **signed, unmasked** count: left when `b` is positive, right when negative, zeros shifting in; a count past the width empties the element | measured: `vpu-probe/probes/alu3.s`, `vpu-probe/probes/alu4.s` |
+| 13 | `op13` | writes a lane of zeros, at both widths | measured: `vpu-probe/probes/alu4.s`, `vpu-probe/probes/alu5.s` |
+| 14 | `signasl` | the same with the sign shifting in | measured: `vpu-probe/probes/alu4.s` |
+| 15 | `signasls` | `signasl`, saturating | measured: `vpu-probe/probes/alu4.s` |
+| 16 | `and` | `a & b` | measured: `vpu-probe/probes/alu.s` |
+| 17 | `or` | `a \| b` | measured: `vpu-probe/probes/alu.s` |
+| 18 | `eor` | `a ^ b` | measured: `vpu-probe/probes/alu.s` |
+| 19 | `bic` | `a & !b` | measured: `vpu-probe/probes/alu.s` |
+| 20 | `count` | `popcount(a) + popcount(b)`; zeros at `v32` | measured: `vpu-probe/probes/alu.s`, `vpu-probe/probes/alu5.s` |
+| 21 | `msb` | the index of the highest bit set in **either** operand; all-ones when neither has one | measured: `vpu-probe/probes/wmix3.s` |
+| 22 | `op22` | writes a lane of zeros, at both widths | measured: `vpu-probe/probes/alu5.s` |
+| 23 | `op23` | writes a lane of zeros, at both widths | measured: `vpu-probe/probes/alu5.s` |
+| 24 | `min` | the smaller, signed | measured: `vpu-probe/probes/alu2.s` |
+| 25 | `max` | the larger, signed | measured: `vpu-probe/probes/alu2.s` |
+| 26 | `dist` | `abs(a - b)`, wrapping | measured: `vpu-probe/probes/alu2.s` |
+| 27 | `dists` | `abs(a - b)`, saturating | measured: `vpu-probe/probes/alu2.s` |
+| 28 | `clip` | `a` clamped into `0 ..= b`, signed | measured: `vpu-probe/probes/alu2.s` |
+| 29 | `sign` | `b + signum(a)` | measured: `vpu-probe/probes/alu2.s` |
+| 30 | `clips` | `b * signum(a)`, `signum(0)` counting as `+1`; zeros at `v16` | measured: `vpu-probe/probes/alu4.s`, `vpu-probe/probes/alu5.s` |
+| 31 | `testmag` | `1` where `abs(a) >= b`, else `0`; zeros at `v32` | measured: `vpu-probe/probes/alu3.s`, `vpu-probe/probes/alu4.s` |
+| 32 | `add` | `a + b` | measured: `vpu-probe/probes/alu2.s` |
+| 33 | `adds` | `a + b`, saturating | measured: `vpu-probe/probes/alu2.s` |
+| 34 | `addc` | `a + b` **plus the lane's carry flag** | measured: `vpu-probe/probes/alu3.s` |
+| 35 | `addsc` | the same, saturating | measured: `vpu-probe/probes/alu3.s` |
+| 36 | `sub` | `a - b` | measured: `vpu-probe/probes/alu2.s` |
+| 37 | `subs` | `a - b`, saturating | measured: `vpu-probe/probes/alu2.s` |
+| 38 | `subc` | `a - b` minus the lane's carry flag | measured: `vpu-probe/probes/alu3.s` |
+| 39 | `subsc` | the same, saturating | measured: `vpu-probe/probes/alu3.s` |
+| 40 | `rsub` | `b - a` | measured: `vpu-probe/probes/alu2.s` |
+| 41 | `rsubs` | `b - a`, saturating | measured: `vpu-probe/probes/alu2.s` |
+| 42 | `rsubc` | `b - a` minus the lane's carry flag | measured: `vpu-probe/probes/alu3.s` |
+| 43 | `rsubsc` | the same, saturating | measured: `vpu-probe/probes/alu3.s` |
+| 44 | `op44` | writes a lane of zeros, at both widths | measured: `vpu-probe/probes/alu3.s`, `vpu-probe/probes/alu5.s` |
+| 45 | `op45` | writes a lane of zeros, at both widths | measured: `vpu-probe/probes/alu3.s`, `vpu-probe/probes/alu5.s` |
+| 46 | `op46` | writes a lane of zeros, at both widths | measured: `vpu-probe/probes/alu3.s`, `vpu-probe/probes/alu5.s` |
+| 47 | `op47` | writes a lane of zeros, at both widths | measured: `vpu-probe/probes/alu3.s`, `vpu-probe/probes/alu5.s` |
+| 48 | `mull` | the product's low half | measured: `vpu-probe/probes/mul.s` |
+| 49 | `mulls` | the product's low half, saturating | measured: `vpu-probe/probes/mul.s` |
+| 50 | `mulm` | the product shifted right by eight — a fixed-point multiply | measured: `vpu-probe/probes/mul.s` |
+| 51 | `mulms` | the same, saturating | measured: `vpu-probe/probes/mul.s` |
+| 52 | `mulhd.ss` | the product's high half, both operands signed — or, with the `L` bit, `vmul32.ss` | measured: `vpu-probe/probes/mul.s`, `vpu-probe/probes/mul32.s` |
+| 53 | `mulhd.su` | the high half, A signed and B unsigned — with `L`, `vmul32.su` | measured: `vpu-probe/probes/mul.s`, `vpu-probe/probes/mul32.s` |
+| 54 | `mulhd.us` | the high half, A unsigned and B signed — with `L`, `vmul32.us` | measured: `vpu-probe/probes/mul.s`, `vpu-probe/probes/mul32.s` |
+| 55 | `mulhd.uu` | the high half, both unsigned — with `L`, `vmul32.uu` | measured: `vpu-probe/probes/mul.s`, `vpu-probe/probes/mul32.s` |
+| 56 | `mulhn.ss` | the high half, rounded, both signed | measured: `vpu-probe/probes/mul.s` |
+| 57 | `mulhn.su` | the high half, rounded, A signed | measured: `vpu-probe/probes/mul.s` |
+| 58 | `mulhn.us` | the high half, rounded, B signed | measured: `vpu-probe/probes/mul.s` |
+| 59 | `mulhn.uu` | the high half, rounded, both unsigned | measured: `vpu-probe/probes/mul.s` |
+| 60 | `mulht.ss` | the product's high half **truncated** towards zero, not floored — both operands signed | measured: `vpu-probe/probes/mhdt.s`: `0x0ff0 * 0xfff1` — product −61200 — answers `0x0000` here and `0xffff` from `mulhd`; manual: the VideoCore IV Programmers Manual calls sub-ops 60 and 61 the round-to-zero high multiply |
+| 61 | `mulht.su` | the product's high half **truncated** towards zero, not floored — A signed, B unsigned | measured: `vpu-probe/probes/mhdt.s`: `0x0ff0 * 0xfff1` — product −61200 — answers `0x0000` here and `0xffff` from `mulhd`; manual: the VideoCore IV Programmers Manual calls sub-ops 60 and 61 the round-to-zero high multiply |
+| 62 | `op62` | writes a lane of zeros, at both widths | measured: `vpu-probe/probes/mhdt.s`, over a destination preset to all-ones |
+| 63 | `op63` | writes a lane of zeros, at both widths | measured: `vpu-probe/probes/mhdt.s`, over a destination preset to all-ones |
 
 With the `L` bit set — a `v32` width on sub-ops 52–55 — the multiply group
 becomes `vmul32.{ss,su,us,uu}`: a **16 × 16 into 32** multiply, taking the low
@@ -422,8 +422,8 @@ the narrower ones into it.
 
 Sources:
 
-- measured (high): `probes/mul32.s`
-- measured (high): `probes/alu6.s`
+- measured (high): `vpu-probe/probes/mul32.s`
+- measured (high): `vpu-probe/probes/alu6.s`
 
 ## Repetition and predication
 
@@ -436,20 +436,20 @@ field picks which lanes execute.
 |---|---|---|---|
 | 0 | `ALL` | every lane | decompile: `binutils-vc4` opcode tables |
 | 1 | `NONE` | none | decompile: `binutils-vc4` opcode tables |
-| 2 | `IFZ` | zero flag set | decompile: `memcpy`'s tail (`0x3EDA292C`) builds `~0 << n` and transfers under it; measured: `probes/setf.s` |
-| 3 | `IFNZ` | zero flag clear | decompile: `memset`'s tail (`0x3EDA2B5E`) builds a band of set bits and stores under it; measured: `probes/setf.s` |
-| 4 | `IFN` | negative flag set | measured: `probes/setf.s` |
-| 5 | `IFNN` | negative flag clear | measured: `probes/setf.s` |
-| 6 | `IFC` | carry flag set | measured: `probes/setf.s` |
-| 7 | `IFNC` | carry flag clear | measured: `probes/setf.s` |
+| 2 | `IFZ` | zero flag set | decompile: `memcpy`'s tail (`0x3EDA292C`) builds `~0 << n` and transfers under it; measured: `vpu-probe/probes/setf.s` |
+| 3 | `IFNZ` | zero flag clear | decompile: `memset`'s tail (`0x3EDA2B5E`) builds a band of set bits and stores under it; measured: `vpu-probe/probes/setf.s` |
+| 4 | `IFN` | negative flag set | measured: `vpu-probe/probes/setf.s` |
+| 5 | `IFNN` | negative flag clear | measured: `vpu-probe/probes/setf.s` |
+| 6 | `IFC` | carry flag set | measured: `vpu-probe/probes/setf.s` |
+| 7 | `IFNC` | carry flag clear | measured: `vpu-probe/probes/setf.s` |
 
 A masked-off lane touches nothing — no register, no memory, not even its own
 flags — and contributes nothing to a scalar aggregate.
 
 Sources:
 
-- measured (high): `probes/noena.s`
-- measured (high): `probes/bp.s`
+- measured (high): `vpu-probe/probes/noena.s`
+- measured (high): `vpu-probe/probes/bp.s`
 
 ## `SETF` — the lane flags
 
@@ -460,17 +460,17 @@ has clamped it. The **carry** comes only from the ops that make one. A
 
 | Op | Carry | Source |
 |---|---|---|
-| `add`, `addc` | carry out of the operation's width | measured: `probes/setf.s`, `probes/setfc.s` |
-| `sub`, `subc` | borrow | measured: `probes/setf.s`, `probes/setfc.s` |
-| `rsub`, `rsubc` | borrow of `b - a` | measured: `probes/setf2.s`, `probes/setfc.s` |
-| `adds`, `subs`, `rsubs`, `addsc`, `subsc`, `rsubsc`, `dists`, `shls`, `mulls` | whether the result was clamped | measured: `probes/setf2.s`, `probes/setf3.s`, `probes/setfc.s` |
-| `min`, `max` | whether **B** was the operand chosen | measured: `probes/setf2.s`, `probes/setf3.s` |
-| `shl` | the bit that fell off the top: bit `(width - n) & (width - 1)` of `a` | measured: `probes/setf2.s`, `probes/setf5.s` |
-| `lsr`, `asr`, `ror` | the last bit to leave the bottom: bit `(n - 1) & (width - 1)` of `a` | measured: `probes/setf3.s`, `probes/setf5.s` |
-| `signshl` | the same by the signed count; nothing when the count passes the width | measured: `probes/setfc.s` |
-| `signasl`, `signasls` | the same going right, the sign when the count passes the width, nothing going left | measured: `probes/setfc.s` |
-| `mulm`, `mulms` | a carry whose meaning did not fall out of the probe — `SETF` on them faults | measured: `probes/setfc.s` — the marks fit neither a clamp nor the discarded bits |
-| everything else measured | **left exactly as it was** | measured: `probes/setf3.s`, `probes/setfc.s` |
+| `add`, `addc` | carry out of the operation's width | measured: `vpu-probe/probes/setf.s`, `vpu-probe/probes/setfc.s` |
+| `sub`, `subc` | borrow | measured: `vpu-probe/probes/setf.s`, `vpu-probe/probes/setfc.s` |
+| `rsub`, `rsubc` | borrow of `b - a` | measured: `vpu-probe/probes/setf2.s`, `vpu-probe/probes/setfc.s` |
+| `adds`, `subs`, `rsubs`, `addsc`, `subsc`, `rsubsc`, `dists`, `shls`, `mulls` | whether the result was clamped | measured: `vpu-probe/probes/setf2.s`, `vpu-probe/probes/setf3.s`, `vpu-probe/probes/setfc.s` |
+| `min`, `max` | whether **B** was the operand chosen | measured: `vpu-probe/probes/setf2.s`, `vpu-probe/probes/setf3.s` |
+| `shl` | the bit that fell off the top: bit `(width - n) & (width - 1)` of `a` | measured: `vpu-probe/probes/setf2.s`, `vpu-probe/probes/setf5.s` |
+| `lsr`, `asr`, `ror` | the last bit to leave the bottom: bit `(n - 1) & (width - 1)` of `a` | measured: `vpu-probe/probes/setf3.s`, `vpu-probe/probes/setf5.s` |
+| `signshl` | the same by the signed count; nothing when the count passes the width | measured: `vpu-probe/probes/setfc.s` |
+| `signasl`, `signasls` | the same going right, the sign when the count passes the width, nothing going left | measured: `vpu-probe/probes/setfc.s` |
+| `mulm`, `mulms` | a carry whose meaning did not fall out of the probe — `SETF` on them faults | measured: `vpu-probe/probes/setfc.s` — the marks fit neither a clamp nor the discarded bits |
+| everything else measured | **left exactly as it was** | measured: `vpu-probe/probes/setf3.s`, `vpu-probe/probes/setfc.s` |
 
 `bitplanes` is the firmware's own producer: its lane result is that lane's bit
 of B, so `IFZ` selects the lanes whose bit was 0.
@@ -486,14 +486,14 @@ chains are written in.
 
 | Bit | Effect | Source |
 |---|---|---|
-| `CLRA` | clears the accumulator first — **even without `ENA`** | measured: `probes/noena.s` |
-| `ENA` | accumulate at all; without it the destination takes the raw result | measured: `probes/noena.s` |
-| `ENA` without `WBA` | the destination takes `result + accumulator` — `result` taken off it with `SUB` — and the accumulator itself does not move: `UADD`/`USUB`, not an accumulate | measured: `probes/mhdt.s`: `CLRA UACC(A)` then `UADD(B)` answers `A + B + A`, with `A` still in the accumulator afterwards; manual: the VideoCore IV Programmers Manual's names for the two forms |
-| `SIGN` | read the result signed (`SACC`) rather than unsigned (`UACC`) on the way in | measured: `probes/acc3.s`, `probes/acch.s` |
-| `HIGH` | accumulate the result **shifted left by sixteen**; a write-back reads it back shifted down by sixteen, clamped into the destination's signed range | measured: `probes/acch.s` |
-| `WBA` | the destination takes the accumulator rather than the raw result | measured: `probes/accmix.s`, `probes/wacc.s` |
-| `SUB` | with `ENA` and no `WBA` — the `USUB` form — **not** a subtracting accumulate: the accumulator is left alone and the destination takes `accumulator - result`. Alongside `WBA` the accumulator takes `acc - (result << 16)` as well | measured: `probes/usub.s`, read back with `vgetacc`, `probes/acchu.s`: `vgetacc` after a `UACC HIGH SUB` reads `acc - (result << 16)`, lane for lane |
-| `SUB` or no `SUB`, with `HIGH` | the destination is the accumulator's **own** high half against the result — `(acc >> 16) - result`, saturated into the operation's width — taken *before* the update, not read back out of the accumulator afterwards. The two agree until the low half borrows: with the high half zero and a result of `0xffff`, the unsigned form answers `-32768`, the clamp, where the accumulator afterwards reads `1`. Both polarities follow it, and the saturation is at the **operation's** width even when the destination is wider | measured: `probes/acchu.s` |
+| `CLRA` | clears the accumulator first — **even without `ENA`** | measured: `vpu-probe/probes/noena.s` |
+| `ENA` | accumulate at all; without it the destination takes the raw result | measured: `vpu-probe/probes/noena.s` |
+| `ENA` without `WBA` | the destination takes `result + accumulator` — `result` taken off it with `SUB` — and the accumulator itself does not move: `UADD`/`USUB`, not an accumulate | measured: `vpu-probe/probes/mhdt.s`: `CLRA UACC(A)` then `UADD(B)` answers `A + B + A`, with `A` still in the accumulator afterwards; manual: the VideoCore IV Programmers Manual's names for the two forms |
+| `SIGN` | read the result signed (`SACC`) rather than unsigned (`UACC`) on the way in | measured: `vpu-probe/probes/acc3.s`, `vpu-probe/probes/acch.s` |
+| `HIGH` | accumulate the result **shifted left by sixteen**; a write-back reads it back shifted down by sixteen, clamped into the destination's signed range | measured: `vpu-probe/probes/acch.s` |
+| `WBA` | the destination takes the accumulator rather than the raw result | measured: `vpu-probe/probes/accmix.s`, `vpu-probe/probes/wacc.s` |
+| `SUB` | with `ENA` and no `WBA` — the `USUB` form — **not** a subtracting accumulate: the accumulator is left alone and the destination takes `accumulator - result`. Alongside `WBA` the accumulator takes `acc - (result << 16)` as well | measured: `vpu-probe/probes/usub.s`, read back with `vgetacc`, `vpu-probe/probes/acchu.s`: `vgetacc` after a `UACC HIGH SUB` reads `acc - (result << 16)`, lane for lane |
+| `SUB` or no `SUB`, with `HIGH` | the destination is the accumulator's **own** high half against the result — `(acc >> 16) - result`, saturated into the operation's width — taken *before* the update, not read back out of the accumulator afterwards. The two agree until the low half borrows: with the high half zero and a result of `0xffff`, the unsigned form answers `-32768`, the clamp, where the accumulator afterwards reads `1`. Both polarities follow it, and the saturation is at the **operation's** width even when the destination is wider | measured: `vpu-probe/probes/acchu.s` |
 
 ## The scalar result unit
 
@@ -503,11 +503,11 @@ lane predicate applies to the aggregate as well.
 
 | Function | Result | Source |
 |---|---|---|
-| `SUMU` | the lanes added up, each read unsigned at the operation's width | measured: `probes/sru.s` |
-| `SUMS` | the same, read signed | measured: `probes/sru.s` |
-| `IMIN` | the index of the smallest lane — the first, on a tie | measured: `probes/sru.s`, `probes/sru2.s` |
-| `IMAX` | the index of the largest — the last, on a tie | measured: `probes/sru.s`, `probes/sru2.s` |
-| `MAX`, `max2`, `max4`, `max6` | the largest lane, signed; the three `maxN` spellings answered exactly what `MAX` did over every vector tried | measured: `probes/sru.s`, `probes/sru2.s` |
+| `SUMU` | the lanes added up, each read unsigned at the operation's width | measured: `vpu-probe/probes/sru.s` |
+| `SUMS` | the same, read signed | measured: `vpu-probe/probes/sru.s` |
+| `IMIN` | the index of the smallest lane — the first, on a tie | measured: `vpu-probe/probes/sru.s`, `vpu-probe/probes/sru2.s` |
+| `IMAX` | the index of the largest — the last, on a tie | measured: `vpu-probe/probes/sru.s`, `vpu-probe/probes/sru2.s` |
+| `MAX`, `max2`, `max4`, `max6` | the largest lane, signed; the three `maxN` spellings answered exactly what `MAX` did over every vector tried | measured: `vpu-probe/probes/sru.s`, `vpu-probe/probes/sru2.s` |
 
 ## What the model executes
 

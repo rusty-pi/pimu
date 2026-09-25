@@ -171,7 +171,7 @@ offset = 0x38000
 count  = 4096
 stride = 4
 access = "rw"
-notes  = "Larger PHY register array, as `PHY_A`. Byte-addressable: the 2022-04-26 bootcode decompresses `mcb.bin` straight into it (a 16 KB buffer at `+0x38000`) and hashes it a byte at a time, so narrow reads get their lane and narrow writes merge (#69)."
+notes  = "Larger PHY register array, as `PHY_A`. Byte-addressable: the 2022-04-26 bootcode decompresses `mcb.bin` straight into it (a 16 KB buffer at `+0x38000`) and hashes it a byte at a time, so narrow reads get their lane and narrow writes merge."
 
 [[register.source]]
 kind       = "trace"
@@ -180,5 +180,5 @@ confidence = "medium"
 
 [[register.source]]
 kind       = "trace"
-ref        = "2022-04-26 bootcode: `mcb.bin` decompressed to `0x7DC3_8000` (`0x1540` of the buffer's `0x4000` bytes), then SHA-256 over it; a wrong lane there is `mcb.bin mismatch` / `Missing SDRAM FW` (#69)"
+ref        = "2022-04-26 bootcode: `mcb.bin` decompressed to `0x7DC3_8000` (`0x1540` of the buffer's `0x4000` bytes), then SHA-256 over it; a wrong lane there is `mcb.bin mismatch` / `Missing SDRAM FW`"
 confidence = "high"

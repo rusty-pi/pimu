@@ -42,13 +42,13 @@ UEFI_SHA256="${UEFI_SHA256:-ca9973e2a7a546b3df871cfb7382e656829114b6dfa424f40dc6
 # installed under the names the driver asks for.
 NONFREE_REF="${NONFREE_REF:-3bab0f823f5b53150b76aab77093adef6655b920}"
 # Debian's static aarch64 busybox: the userland on the SD card's root
-# filesystem (scripts/make-sd.sh, #40 milestone 5). Checked against the hash.
+# filesystem (scripts/make-sd.sh). Checked against the hash.
 BUSYBOX_DEB="${BUSYBOX_DEB:-busybox-static_1.35.0-4+deb12u1+b1_arm64.deb}"
 BUSYBOX_SHA256="${BUSYBOX_SHA256:-732c9135564fc71337e0e05fb4da4d11e6c28c1834bce3e405e575afef2a52f5}"
 # rpi-fw-crypto, Raspberry Pi's own command-line client of start4's crypto
 # service (raspberrypi/utils rpifwcrypto, packaged in raspi-utils), and the
-# shared libraries it loads, from Debian trixie — the Linux side of #40
-# milestone 4. make-sd.sh puts them on the root filesystem. `<url> <sha256>`
+# shared libraries it loads, from Debian trixie. make-sd.sh puts them on the
+# root filesystem. `<url> <sha256>`
 # each; a Debian point release drops superseded versions from the pool, so a
 # 404 here means bumping these to the current ones.
 rpi="https://archive.raspberrypi.org/debian/pool/main"

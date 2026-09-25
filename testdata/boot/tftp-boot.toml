@@ -27,7 +27,7 @@ why = "BOOT_ORDER 0xf2 reached the bootloader: network first."
 line = "Boot mode: NETWORK (02)"
 
 [[milestone]]
-why = "With a cable the PHY reports the measured link partner, and the bootloader's wait-for-link (BMSR / LPA / STAT1000 polls) completes (#38)."
+why = "With a cable the PHY reports the measured link partner, and the bootloader's wait-for-link (BMSR / LPA / STAT1000 polls) completes."
 line = "LINK STATUS: speed: 1000 full duplex"
 
 [[milestone]]
@@ -35,7 +35,7 @@ why = "The OTP MAC rows are read the way the firmware reads them: row 65 then th
 line = "NETWORK: 02:00:5e:00:53:01"
 
 [[milestone]]
-why = "DHCP over the GENET rings: DISCOVER / OFFER / REQUEST / ACK with the peer's PXE boot menu (#38). The gateway is left out: TFTP mode prints 0.0.0.0 whatever option 3 says."
+why = "DHCP over the GENET rings: DISCOVER / OFFER / REQUEST / ACK with the peer's PXE boot menu. The gateway is left out: TFTP mode prints 0.0.0.0 whatever option 3 says."
 line = ["NET 192.0.2.100 255.255.255.0 gw ", " tftp 192.0.2.1"]
 
 [[milestone]]

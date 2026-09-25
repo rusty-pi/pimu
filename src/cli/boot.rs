@@ -168,7 +168,7 @@ MEDIA AND NETWORK:
               socket pair, `passt:<socket>` connects to one already listening
               (`passt -f -s <socket>`), or to anything else speaking QEMU's
               `-netdev stream` framing on that UNIX socket. Runs on the host's
-              clock, so not deterministic (#45).
+              clock, so not deterministic.
 
 EEPROM IMAGE (edits made before the first boot, and again after every
 self-update, which brings back the image's own):
@@ -256,7 +256,7 @@ OUTPUT:
               After the run, write the flattened device tree `arm_loader` handed
               to the ARM to <path>. Diff two firmware versions with
               `fdtdump`/`dtc` to catch a bump that changes what the firmware
-              publishes (rpi-mkosi#37).
+              publishes.
     --print-fdt
               Print that whole device tree as source, every node and property,
               not only the `/chosen` summary the `-v` run report gives.
@@ -287,7 +287,7 @@ OUTPUT:
     --dram-map
               Report which DRAM pages are non-zero when the run ends, as
               address runs: the RAM a snapshot of the machine would have to
-              carry (#50).
+              carry.
     --eeprom-map
               Print the EEPROM section table `bootloader_eeprom_find_files`
               walks, on top of the boot configuration -v decodes.
@@ -1770,7 +1770,7 @@ fn print_summary(report: &RunReport, emu: &Emulator, start: u32) {
 /// The ARM side: the hand-off, each core, and where it stopped.
 fn print_arm_cores(emu: &Emulator, eeprom: bool) {
     if let Some(a) = &emu.arm {
-        println!("\n--- ARM cores (#40) ---");
+        println!("\n--- ARM cores ---");
         if let Some(h) = a.handoff {
             println!(
                 "  armstub   kernel_entry32 {:#010x}  dtb_ptr32 {:#010x}",
@@ -1827,7 +1827,7 @@ fn print_arm_cores(emu: &Emulator, eeprom: bool) {
         }
         print_arm_blocks(&a.cores);
     } else if eeprom {
-        println!("\n--- ARM cores (#40) ---\n  never released");
+        println!("\n--- ARM cores ---\n  never released");
     }
 }
 
@@ -2520,7 +2520,7 @@ fn report_machine_id_derivation(machine: &Machine, fdt: &pimu::fdt::Fdt) {
         .map(|(k, v)| format!("otp[{k}]={v:#010x}"))
         .collect();
 
-    println!("\n--- rpi-machine-id derivation (#22) ---");
+    println!("\n--- rpi-machine-id derivation ---");
     println!("  SHA-256({})[..16]", inputs.join(" | "));
     if expected == published {
         println!("  {expected}  (same as published)");

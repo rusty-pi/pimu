@@ -283,7 +283,7 @@ Sources:
 
 `FIXED` sources:
 
-- measured (high): `0x00800000` with Linux running; the real bootloader prints `CTL0: 0x00800f00` right after writing `0x00000f00` (`sd-card-boot.log`)
+- measured (high): `0x00800000` with Linux running; the real bootloader prints `CTL0: 0x00800f00` right after writing `0x00000f00` (a Raspberry Pi 4B d03115's bootloader log)
 
 ## `CLOCK_CONTROL`
 
@@ -304,7 +304,7 @@ Sources:
 
 - standard (high): SDHCI 3.00, 2.2.14..2.2.16
 - trace (high): pinned start4, host write helper `0x3EC52C2E` and read helper `0x3EC51F5E`: `0x010E0207`, 0 after the console handover; then `INT_SIGNAL_EN`, `INT_STATUS_EN` <- 0, `INT_STATUS` <- `0xFFFFFFFF`, `0x01000000`, `0x06000000` once the SD power pin lookup has failed
-- measured (high): the real board prints `arasan_emmc_set_clock ... C1: 0x000e0047` (`sd-card-boot.log`)
+- measured (high): the real board prints `arasan_emmc_set_clock ... C1: 0x000e0047` (a Raspberry Pi 4B d03115's bootloader log)
 
 `INTERNAL_EN` sources:
 

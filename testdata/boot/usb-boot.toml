@@ -19,7 +19,7 @@ description = "pieeprom.bin boot from a USB mass-storage device, through to the 
 
 [boot]
 eeprom = "../../firmware/pieeprom.bin"
-# The firmware boot's card, whose kernel parks the ARM (#52).
+# The firmware boot's card, whose kernel parks the ARM.
 usb = "../../firmware/sd-halt.img"
 boot_order = "0xf4"
 wall_secs = 330

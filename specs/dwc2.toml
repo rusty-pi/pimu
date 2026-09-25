@@ -194,7 +194,7 @@ confidence = "high"
 name   = "GINTSTS"
 offset = 0x14
 access = "w1c"
-notes  = "Core interrupt status. The levels are derived. Of the latched bits only the suspend pair is modelled: in device mode, connected, with no host on the port the bus is idle, so the core reports a suspend (#68). Nothing else on the port raises anything."
+notes  = "Core interrupt status. The levels are derived. Of the latched bits only the suspend pair is modelled: in device mode, connected, with no host on the port the bus is idle, so the core reports a suspend. Nothing else on the port raises anything."
 
 [[register.source]]
 kind       = "standard"
@@ -248,7 +248,7 @@ confidence = "high"
 name   = "USBSUSP"
 bits   = "11"
 access = "w1c"
-notes  = "USB suspend. The boot ROM's device-mode poll (`0x60001bb0`) takes it as 'no host', resets its USB state and gives up on rpiboot (#68)."
+notes  = "USB suspend. The boot ROM's device-mode poll (`0x60001bb0`) takes it as 'no host', resets its USB state and gives up on rpiboot."
 
 [[register.field.source]]
 kind       = "standard"
@@ -620,7 +620,7 @@ confidence = "high"
 name   = "GOUTNAKSTS"
 bits   = "3"
 access = "r"
-notes  = "Global OUT NAK in effect: set by `SGOUTNAK`, cleared by `CGOUTNAK`, at once. The boot ROM spins on it after a suspend (`0x60001bfc`, #68)."
+notes  = "Global OUT NAK in effect: set by `SGOUTNAK`, cleared by `CGOUTNAK`, at once. The boot ROM spins on it after a suspend (`0x60001bfc`)."
 
 [[register.field.source]]
 kind       = "standard"

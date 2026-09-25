@@ -633,7 +633,7 @@ impl RetiredCounts {
             counts.push(("vpu1".into(), n));
         }
         // `  core 1  still in the armstub`, then its instruction count.
-        if let Some(at) = lines.iter().rposition(|l| *l == "--- ARM cores (#40) ---") {
+        if let Some(at) = lines.iter().rposition(|l| *l == "--- ARM cores ---") {
             let mut core: Option<usize> = None;
             let section = lines[at + 1..]
                 .iter()
@@ -665,7 +665,7 @@ impl RetiredCounts {
 
     pub fn render(&self) -> String {
         let mut out = String::from(
-            "# Instructions each core retired in this boot (#85): vpu0 and vpu1 on the\n\
+            "# Instructions each core retired in this boot: vpu0 and vpu1 on the\n\
              # VideoCore, vpu1 only once the firmware woke it, then arm0.. once the ARM\n\
              # is released. `boot-check <scenario> --update` rewrites this file.\n",
         );
@@ -842,7 +842,7 @@ pub fn check_run(scn: &BootScenario, log: &str, console: &str) -> Result<Vec<Str
                 }
                 f.push_str(
                     "         why: the counts reproduce exactly, so the boot ran differently, \
-                     even where the console does not show it (#85)\n         \
+                     even where the console does not show it\n         \
                      (--update rewrites the counts once the change is understood and wanted)\n",
                 );
                 failures.push(f);
@@ -1044,7 +1044,7 @@ final pc   0x3ec40014
 retired    930349796  (skipped 0, cycles 930349868)
 core1      pc 0x3ec40014  retired 125  end None
 
---- ARM cores (#40) ---
+--- ARM cores ---
   ran       2383170777 cycles, 802580388 of them with every core asleep
   core 0    left the armstub at cycle 72 for 0x200000 in EL2, x0 = 0x2eff1e00
             191482186 instructions, 833 exceptions, 689 interrupts; now pc 0xffffffe5d4c75e00  EL1  sp 0xffffffe5d5733d80  (wfi)
@@ -1075,7 +1075,7 @@ core1      pc 0x3ec40014  retired 125  end None
         assert_eq!(run_end(LINUX_REPORT), Some("Until"));
 
         let firmware_only = "retired    419898464  (skipped 0, cycles 419898467)\n\n\
-                             --- ARM cores (#40) ---\n  never released\nregs\n";
+                             --- ARM cores ---\n  never released\nregs\n";
         let counts = RetiredCounts::from_log(firmware_only).expect("counts");
         assert_eq!(counts.0, vec![("vpu0".to_string(), 419898464)]);
         assert_eq!(RetiredCounts::from_log("no report here\n"), None);

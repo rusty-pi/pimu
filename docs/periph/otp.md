@@ -6,12 +6,12 @@
 - Base: `0x7E20F000`
 - Size: `0x1000`
 
-The fuse contents live in `src/periph/configotp.rs` and must never be a real board's (`CLAUDE.md`). Offsets without a known register keep the old 'always ready' status bits (17, 18, 7) so unrelated pollers progress. Programming follows start4's OTP driver (#92).
+The fuse contents live in `src/periph/configotp.rs` and must never be a real board's (`CLAUDE.md`). Offsets without a known register keep the old 'always ready' status bits (17, 18, 7) so unrelated pollers progress. Programming follows start4's OTP driver.
 
 Sources:
 
 - decompile (high): EEPROM bootloader `getconfig(key)`: key -> `+0x1C`, 0 -> `+0x0C` / `+0x08`, `+0x08 |= 1`, poll `+0x10`, value <- `+0x18`
-- decompile (high): start4's OTP driver (table `0x3EDFB5F8`): command `0x3ED3F24C`, read `0x3ED3FAA2`, enable programming `0x3ED3F9BE`, program `0x3ED3FC52` (#92)
+- decompile (high): start4's OTP driver (table `0x3EDFB5F8`): command `0x3ED3F24C`, read `0x3ED3FAA2`, enable programming `0x3ED3F9BE`, program `0x3ED3FC52`
 
 ## Register map
 
@@ -29,7 +29,7 @@ Sources:
 
 Offset `0x000` · access `r` · 32 bits
 
-`OTP_BOOTMODE_REG`: the bootmode row (17) as the fuse block presents it at power-on. The boot ROM picks its boot source from it (bit 14, bits 5:4, and a `bits[30:28] == ~bits[10:8]` check) before it reads anything else; with the old 'always ready' placeholder here it skipped SPI and waited in USB device mode forever (#68). No later stage reads this register, but they all read row 17 through `DATA`: bit 14 with bits 18:15 non-zero is what makes the EEPROM stages take only signed files, along with rows 47 to 54 (the SHA-256 of the customer key, low word first) and the low byte of row 55 (that hash's count of 0 bits).
+`OTP_BOOTMODE_REG`: the bootmode row (17) as the fuse block presents it at power-on. The boot ROM picks its boot source from it (bit 14, bits 5:4, and a `bits[30:28] == ~bits[10:8]` check) before it reads anything else; with the old 'always ready' placeholder here it skipped SPI and waited in USB device mode forever. No later stage reads this register, but they all read row 17 through `DATA`: bit 14 with bits 18:15 non-zero is what makes the EEPROM stages take only signed files, along with rows 47 to 54 (the SHA-256 of the customer key, low word first) and the low byte of row 55 (that hash's count of 0 bits).
 
 Sources:
 

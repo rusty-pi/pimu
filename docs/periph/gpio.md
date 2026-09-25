@@ -195,12 +195,12 @@ Undocumented, and the firmware writes it on every boot. Bit 1 routes the SD card
 Sources:
 
 - decompile (medium): start4db `FUN_0ed0fd54`, whose neighbours assert out of `tools/bootrom/rpiboot/genet.c`: `_DAT_7e2000d0 | 1` first, then GPIO 28/29 to function 2 (ALT5), 28 pulled up and 29 down (the driver's pull enum is the BCM2835 one, 1 down / 2 up), then 46..57 pulled down. Elsewhere `_DAT_7e2000d0 & 0xfffffffd | 1`, and `& 0xfffffffd` before EMMC2 is used
-- trace (high): pieeprom-2020-09-03 writes `0x2` right before it drives the legacy EMMC and never touches EMMC2 (#66); the 2026 bootloader never writes the register; start4 sets bit 0 at `0x3ED4A1CE` and boots from EMMC2
+- trace (high): pieeprom-2020-09-03 writes `0x2` right before it drives the legacy EMMC and never touches EMMC2; the 2026 bootloader never writes the register; start4 sets bit 0 at `0x3ED4A1CE` and boots from EMMC2
 - measured (high): `/dev/gpiomem` on a Raspberry Pi 4B d03115 booted from an SD card: `0xd0` reads `0x00000001`
 
 `SD_LEGACY` sources:
 
-- trace (high): 2020-era bootcode sets it before its SD init on `0x7E300000`; start4db clears it (`& 0xfffffffd`) before it uses EMMC2 (#66)
+- trace (high): 2020-era bootcode sets it before its SD init on `0x7E300000`; start4db clears it (`& 0xfffffffd`) before it uses EMMC2
 
 ## `PAD_CFG`
 

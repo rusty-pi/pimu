@@ -135,7 +135,7 @@ Interrupt status (source 125). Each bit latches when its condition becomes true,
 Sources:
 
 - linux (high): `iproc-rng200.c`: `RNG_INT_STATUS`
-- decompile (medium): start4 1.20210303: open arms `INT_ENABLE = 0x80000026` with `FIFO_COUNT = 0x200`, and the handler `0x0ED565C6` only acks bit 2 (`|= 4`), leaving it enabled with the FIFO still full — _that build boots on hardware, so the bits are latched events, not levels (#73)_
+- decompile (medium): start4 1.20210303: open arms `INT_ENABLE = 0x80000026` with `FIFO_COUNT = 0x200`, and the handler `0x0ED565C6` only acks bit 2 (`|= 4`), leaving it enabled with the FIFO still full — _that build boots on hardware, so the bits are latched events, not levels_
 - decompile (high): irq `0x3ED64BE8` reads it, acks with `|= 4` or `|= 0x80000022`
 
 `TOTAL_BITS` sources:

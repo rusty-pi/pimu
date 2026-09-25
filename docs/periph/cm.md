@@ -141,7 +141,7 @@ Sources:
 
 Offset `0x070` · access `rw` · 32 bits
 
-General-purpose clock 0: what a board routes to a `GPCLK0` pin (GPIO 4, 5 and 6 on ALT0). Nothing in a boot programs it, and the model runs no generator — `BUSY` reads back whatever was written, as for every other `*CTL` here.
+General-purpose clock 0: what a board routes to a `GPCLK0` pin (GPIO 4, 5 and 6 on ALT0). Nothing in a boot programs it, and the model runs no generator — `BUSY` always reads clear, as for every other `*CTL` here.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -218,7 +218,7 @@ Sources:
 
 Offset `0x078` · access `rw` · 32 bits
 
-General-purpose clock 1: what a board routes to a `GPCLK1` pin (GPIO 4, 5 and 6 on ALT0). Nothing in a boot programs it, and the model runs no generator — `BUSY` reads back whatever was written, as for every other `*CTL` here.
+General-purpose clock 1: what a board routes to a `GPCLK1` pin (GPIO 4, 5 and 6 on ALT0). Nothing in a boot programs it, and the model runs no generator — `BUSY` always reads clear, as for every other `*CTL` here.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -295,7 +295,7 @@ Sources:
 
 Offset `0x080` · access `rw` · 32 bits
 
-General-purpose clock 2: what a board routes to a `GPCLK2` pin (GPIO 4, 5 and 6 on ALT0). Nothing in a boot programs it, and the model runs no generator — `BUSY` reads back whatever was written, as for every other `*CTL` here.
+General-purpose clock 2: what a board routes to a `GPCLK2` pin (GPIO 4, 5 and 6 on ALT0). Nothing in a boot programs it, and the model runs no generator — `BUSY` always reads clear, as for every other `*CTL` here.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|

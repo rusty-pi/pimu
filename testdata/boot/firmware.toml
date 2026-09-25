@@ -11,7 +11,7 @@
 #     commit or issue that made it pass, which is what a raw diff cannot say;
 #   * the retired counts beside the golden (`golden/firmware.retired.toml`)
 #     — how many instructions each core ran, which catches a change that makes
-#     the boot run differently without printing anything different (#85).
+#     the boot run differently without printing anything different.
 #
 # After an intentional change, re-record the golden and the counts with:
 #   pimu boot-check testdata/boot/firmware.toml --update
@@ -28,12 +28,12 @@ description = "pieeprom.bin + start4.elf boot from the SD image, through to the 
 eeprom = "../../firmware/pieeprom.bin"
 # The card from `KERNEL=halt scripts/make-sd.sh firmware/sd-halt.img`: the same
 # as the Linux boot's, but its kernel8.img parks the ARM, so the run ends where
-# the firmware goes quiet after the handover (#52).
+# the firmware goes quiet after the handover.
 sd = "../../firmware/sd-halt.img"
 # Ask the still-running firmware for a property after the hand-off, the way a
-# booted Linux would through `/dev/vcio` (#23): the firmware revision, which
+# booted Linux would through `/dev/vcio`: the firmware revision, which
 # pins that the mailbox round trip works at all, the number of OTP key slots,
-# and the crypto key status, which is the service rpi-mkosi#37 ultimately
+# and the crypto key status, which is the service the root-LUKS passphrase derivation ultimately
 # cares about.
 #
 # The `=1` is load-bearing: crypto key ids are 1-based, and `key_id` 0 answers
@@ -48,7 +48,7 @@ sd = "../../firmware/sd-halt.img"
 #
 # `SET_POWER_STATE` for USB (device 3, on and wait) goes before the crypto
 # tags: its handler waits on two blocks with no timeout, and a wrong answer from
-# either parks it with every later request unanswered (#49). Its value buffer
+# either parks it with every later request unanswered. Its value buffer
 # is two words, so it names its size.
 mbox_property = [
   "0x00000001",
@@ -73,11 +73,11 @@ max_skipped = 0
 path = "golden/firmware.txt"
 
 [[milestone]]
-why = "The reset cause the bootloader reports; the real board latches HADWRF (1bc5fa1), matching sd-card-boot.log line 4."
+why = "The reset cause the bootloader reports; the real board latches HADWRF (1bc5fa1), matching a Raspberry Pi 4B d03115's bootloader log."
 line = "PM_RSTS 00000020"
 
 [[milestone]]
-why = "The PCIe link trains and the bus scan finds the VL805 that is soldered to every Pi 4B (#18). Same identity the real board prints, sd-card-boot.log:27."
+why = "The PCIe link trains and the bus scan finds the VL805 that is soldered to every Pi 4B. Same identity the real board prints, a Raspberry Pi 4B d03115's bootloader log."
 line = "PCIe scan 00001106:00003483"
 
 [[milestone]]
@@ -85,7 +85,7 @@ why = """
 The bootloader reads the VL805's xHCI capability registers. It reaches them
 through 40-bit DMA4 transfers into the PCIe outbound window, not a load, so this
 line is the end-to-end proof of that path (src/periph/pcie.rs). The values are
-byte-identical to the real board, sd-card-boot.log:29-32."""
+byte-identical to the real board, a Raspberry Pi 4B d03115's bootloader log."""
 line = "xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb"
 
 [[milestone]]
@@ -93,12 +93,12 @@ why = "xHCI port and slot counts, same source as the capability registers above.
 line = "xHC0 ports 5 slots 32 intrs 4"
 
 [[milestone]]
-why = "The PCIe link never trained: the bootloader prints this instead of the scan result above, and everything USB downstream of it is then absent rather than wrong (#18)."
+why = "The PCIe link never trained: the bootloader prints this instead of the scan result above, and everything USB downstream of it is then absent rather than wrong."
 line = "PCIe timeout"
 absent = true
 
 [[milestone]]
-why = "xHC bring-up failed: the bootloader reached the controller but could not start it, which is a different fault from never finding it, and the enumeration lines below would simply not appear (#18)."
+why = "xHC bring-up failed: the bootloader reached the controller but could not start it, which is a different fault from never finding it, and the enumeration lines below would simply not appear."
 line = "USB xHC init failed"
 absent = true
 
@@ -107,27 +107,27 @@ why = """
 The xHCI ring engine enumerates the VIA Labs hub soldered to root port 1 of
 every Pi 4B: port connect, reset, Enable Slot / Address Device, and
 GET_DESCRIPTOR over the control ring. All four lines are byte-identical to the
-real board, sd-card-boot.log:36-39 (#18 stage 3). This one is the USB2 root port
+real board, a Raspberry Pi 4B d03115's bootloader log. This one is the USB2 root port
 reporting the hub."""
 line = "USB2[1] 400202e1 connected"
 
 [[milestone]]
-why = "Root hub port init (#18 stage 3, sd-card-boot.log:36-39)."
+why = "Root hub port init (a Raspberry Pi 4B d03115's bootloader log)."
 line = "USB2 root HUB port 1 init"
 
 [[milestone]]
-why = "The hub enumerated over the control ring (#18 stage 3, sd-card-boot.log:36-39)."
+why = "The hub enumerated over the control ring (a Raspberry Pi 4B d03115's bootloader log)."
 line = "DEV [01:00] 2.16 000000:01 class 9 VID 2109 PID 3431"
 
 [[milestone]]
-why = "The hub driver bound (#18 stage 3, sd-card-boot.log:36-39)."
+why = "The hub driver bound (a Raspberry Pi 4B d03115's bootloader log)."
 line = "HUB init [01:00] 2.16 000000:01"
 
 [[milestone]]
 why = """
 The pre-handover XHCI-STOP: EINT | PCD, an event posted and a port change seen.
 A board with nothing on the bus prints `USBSTS 0`; the reference board prints 18
-(sd-card-boot.log:73) because of the hub above."""
+(a Raspberry Pi 4B d03115's bootloader log) because of the hub above."""
 line = "USBSTS 18"
 
 [[milestone]]
@@ -135,21 +135,21 @@ why = "start4 got past the DMA transfer completion and emitted its first MESS lo
 line = ["MESS:", "arasan_emmc_open"]
 
 [[milestone]]
-why = "gpioman resolves its pin names from the real dt-blob, so the firmware itself emits the two \"not defined\" lines the reference has (vc4-boot.log 16-17)."
+why = "gpioman resolves its pin names from the real dt-blob, so the firmware itself emits the two \"not defined\" lines the reference has (a Raspberry Pi 4B d03115's start4 log)."
 line = "pin DISPLAY_DSI_PORT not defined"
 count = 2
 
 [[milestone]]
-why = "gpioman registration regressed (#2): gpioman configures its pin providers for real, which needs the confzilla schema pool to survive its DMA relocation."
+why = "gpioman registration regressed: gpioman configures its pin providers for real, which needs the confzilla schema pool to survive its DMA relocation."
 line = "gpioman: configuration attempt"
 absent = true
 
 [[milestone]]
-why = "The HDMI phase gives up on EDID once per controller, the way a board with no monitor does (vc4-boot.log 20-31). Needs SCALER_DISPID (#13)."
+why = "The HDMI phase gives up on EDID once per controller, the way a board with no monitor does (a Raspberry Pi 4B d03115's start4 log). Needs SCALER_DISPID."
 line = "HDMI0:EDID giving up on reading EDID block 0"
 
 [[milestone]]
-why = "Same for the second controller (vc4-boot.log 20-31, #13)."
+why = "Same for the second controller (a Raspberry Pi 4B d03115's start4 log)."
 line = "HDMI1:EDID giving up on reading EDID block 0"
 
 [[milestone]]
@@ -170,11 +170,11 @@ why = "HDMI1 pixel-clock limit."
 line = "HDMI1: hdmi_pixel_freq_limit"
 
 [[milestone]]
-why = "Past the second config.txt read into the restart-logging phase (vc4-boot.log line 19)."
+why = "Past the second config.txt read into the restart-logging phase (a Raspberry Pi 4B d03115's start4 log)."
 line = "*** Restart logging"
 
 [[milestone]]
-why = "The file-loading phase, which needed the hardware RNG modelled (e012fad): the ARM device tree (vc4-boot.log lines 32 onward)."
+why = "The file-loading phase, which needed the hardware RNG modelled (e012fad): the ARM device tree (a Raspberry Pi 4B d03115's start4 log onward)."
 line = "Loaded 'bcm2711-rpi-4-b.dtb'"
 
 [[milestone]]
@@ -200,29 +200,28 @@ line = "Device tree loaded to"
 [[milestone]]
 why = """
 The console baud rate is recomputed for the ARM once the VPU is done with it
-(vc4-boot.log 62-65). Getting here needs the ASB bridge handshake modelled:
+(a Raspberry Pi 4B d03115's start4 log). Getting here needs the ASB bridge handshake modelled:
 start4 gates the H264 power domain on the way, and with `0x7E00_A000` unmapped
 the bridge never acknowledged the stop request (`src/periph/asb.rs`)."""
 line = "Set PL011 baud rate to 103448"
 
 [[milestone]]
 why = """
-Exactly one "Set", two "done" — that asymmetry is real, not a modelling gap
-(#20). The clock notifier calls the PL011 callback `0x3EC799BC` twice in phase 0
+Exactly one "Set", two "done" — that asymmetry is real, not a modelling gap. The clock notifier calls the PL011 callback `0x3EC799BC` twice in phase 0
 and twice in phase 2. Phase 0 prints, then clears the "console usable" flag
 `[gp+5176]` and writes `UARTCR = 0`; the console writer `0x3ED85E9C` drops every
 byte while that flag is 0, so the second phase-0 line never reaches the wire.
 Phase 2 restores the flag before it prints, so both "done" lines do.
-`vc4-boot.log` shows two "Set" lines because it is a `vcdbg` dump of the
+a Raspberry Pi 4B d03115's start4 log shows two "Set" lines because it is a `vcdbg` dump of the
 firmware's message ring (it keeps logging past `arm_loader`, when the UART
 already belongs to Linux), not a serial capture. The genuine UART captures agree
-with the model: sd-card-boot-perfect.log lines 137-139 are one "Set" and two
+with the model: a Raspberry Pi 4B d03115's log shows one "Set" and two
 "done"."""
 line = "Set PL011 baud rate"
 count = 1
 
 [[milestone]]
-why = "The other half of the #20 asymmetry: two \"done\" lines reach the wire."
+why = "The other half of the baud-change asymmetry: two \"done\" lines reach the wire."
 line = "Baud rate change done"
 count = 2
 
@@ -247,12 +246,12 @@ why = "The watchdog is stopped on the way to the hand-off (`src/periph/configotp
 line = "Watchdog stopped"
 
 [[milestone]]
-why = "The goal: the VPU hands the board over to the ARM, with the same split of a 1 GB board's memory the reference reports (vc4-boot.log 68)."
+why = "The goal: the VPU hands the board over to the ARM, with the same split of a 1 GB board's memory the reference reports (a Raspberry Pi 4B d03115's start4 log)."
 line = "arm_loader: Starting ARM with 948MB"
 
 [[milestone]]
 why = """
-The point of the bench (#5, rpi-mkosi#37). Before releasing the ARM,
+The point of the bench (the root-LUKS passphrase derivation). Before releasing the ARM,
 `arm_loader` patches `/chosen` and publishes `rpi-machine-id` at `0x3EC568F8` —
 the string a `rpi-mkosi` image turns into its root-LUKS passphrase. `boot` reads
 the patched blob back out of DRAM at the address the armstub hands the ARM and
@@ -271,7 +270,7 @@ line = ["/chosen/rpi-serial64 ", "\"fa1e00231aa2bb31\""]
 
 [[milestone]]
 why = """
-The other half of the pair: the machine id itself (#5, rpi-mkosi#37).
+The other half of the pair: the machine id itself (the root-LUKS passphrase derivation).
 
 Fixed inputs, fixed expected output — the OTP rows in
 `src/periph/configotp.rs` are invented and pinned, so this string is what this
@@ -286,7 +285,7 @@ line = ["/chosen/rpi-machine-id ", "\"ed96a9bc626d9d0869ce37ee4aea025d\""]
 why = """
 With the ARM running the VPU keeps polling the LPDDR4 MR4 temperature code once
 a second and rescales the DRAM refresh interval by 1 << (3 - code); the
-reference board reports code 2 and the interval doubles (vc4-boot.log 69,
+reference board reports code 2 and the interval doubles (a Raspberry Pi 4B d03115's start4 log,
 `sdram: sdram refresh 1562->3124 (2)`). That line never reaches a UART — the
 console belongs to Linux by then and only the firmware's internal message ring
 has it — so the check is on the controller state instead (`src/periph/sdc.rs`
@@ -295,7 +294,7 @@ line = "refresh interval 658 -> 1562 -> 3124"
 
 [[milestone]]
 why = """
-The ARM property mailbox answers (#23). `start4` leaves a `mbox_read` task
+The ARM property mailbox answers. `start4` leaves a `mbox_read` task
 running after the hand-off; posting a request the way a booted Linux does
 through `/dev/vcio` reaches it, and this is the line that proves the whole
 round trip — doorbell, interrupt source 94, the ISR at `0x3EC58302` releasing
@@ -318,7 +317,7 @@ asks for power at `0x7E80_8008` and waits for the acknowledge at `+0x20`, then
 resets the DWC2 core at `0x7E98_0000` and flushes its FIFOs, with no timeout on
 any of those waits. With both blocks on the catch-all stub it spun forever and
 every request after it went unanswered, which is how the rpi-mkosi image's UEFI
-looked stuck after its banner (#49, `src/periph/hd.rs`, `src/periph/dwc2.rs`).
+looked stuck after its banner (`src/periph/usbr.rs`, `src/periph/dwc2.rs`).
 The reference board answers the same to `vcmailbox 0x00028001 8 8 3 3`."""
 line = ["tag 0x00028001", "answered", "0x00000003 0x00000001"]
 
@@ -357,7 +356,7 @@ status `0`, length `0x20`, and a real HMAC-SHA256 over the fixed 16-byte
 message, computed by `start4.elf`'s own mbedTLS with the OTP key. Nothing is
 short-circuited — the whole crypto service runs.
 
-This is the shape of the derivation rpi-mkosi#37 needs guarded: a firmware bump
+This is the shape of the derivation the root-LUKS passphrase derivation needs guarded: a firmware bump
 that changes how the OTP key reaches the HMAC changes this digest, and the diff
 lands here instead of on a thousand cards that will not unlock. The value is
 safe to publish precisely because the key it is derived from is invented."""

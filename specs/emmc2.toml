@@ -415,7 +415,7 @@ notes  = "Reads 1 whatever is written."
 
 [[register.field.source]]
 kind       = "measured"
-ref        = "`0x00800000` with Linux running; the real bootloader prints `CTL0: 0x00800f00` right after writing `0x00000f00` (`sd-card-boot.log`)"
+ref        = "`0x00800000` with Linux running; the real bootloader prints `CTL0: 0x00800f00` right after writing `0x00000f00` (a Raspberry Pi 4B d03115's bootloader log)"
 confidence = "high"
 
 [[register]]
@@ -436,7 +436,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "the real board prints `arasan_emmc_set_clock ... C1: 0x000e0047` (`sd-card-boot.log`)"
+ref        = "the real board prints `arasan_emmc_set_clock ... C1: 0x000e0047` (a Raspberry Pi 4B d03115's bootloader log)"
 confidence = "high"
 
 [[register.field]]

@@ -34,10 +34,10 @@ sector=512
 
 # `OTG=1` adds `otg_mode=1` to config.txt: the firmware then gives Linux the
 # BCM2711's own xHCI on the USB-C port (`xhci@7e9c0000`) instead of the DWC2
-# core, which is what `boot --otg <img>` plugs a stick into (#113). A card that
+# core, which is what `boot --otg <img>` plugs a stick into. A card that
 # the firmware *booted* from that port gets the node either way.
 #
-# `START4=start4cd` (the cut-down firmware, #105) or `START4=start4db` (the
+# `START4=start4cd` (the cut-down firmware) or `START4=start4db` (the
 # debug build) puts that variant on the card next to the full pair, with the
 # config.txt line that makes the bootloader pick it, as on a real card.
 start4="${START4:-start4}"
@@ -89,7 +89,7 @@ copy() {
 # whole phase, so the model has nothing to match against.
 #
 # `WIRELESS=1` drops the two `disable-` overlays, which is what a card
-# straight off the imager has (#124). The board then looks quite different:
+# straight off the imager has. The board then looks quite different:
 # the base device tree keeps `serial0 = &uart1`, so the console is the
 # mini-UART and not the PL011, and the WiFi SDIO host and the Bluetooth
 # modem's UART are both live.
@@ -170,7 +170,7 @@ copy "$fw/dt-blob.bin"                dt-blob.bin
 #
 # `KERNEL=halt` puts a kernel8.img there that parks the ARM instead: an arm64
 # Image header, then `msr daifset, #0xf; wfi; b .-4`. That is the card for the
-# boots that end at the handover (#52): the ARM is always modelled, and this
+# boots that end at the handover: the ARM is always modelled, and this
 # gives it nothing to do, so the run ends where the firmware goes quiet.
 if [[ "${KERNEL:-linux}" == halt ]]; then
   tmpk="$(mktemp)"
@@ -234,7 +234,7 @@ else
   echo "  ! missing $fw/busybox-aarch64 (root filesystem left without init; run fetch-firmware.sh)" >&2
 fi
 # rpi-fw-crypto, to ask start4's crypto service for an HMAC from Linux
-# userspace (#40 milestone 4), with exactly the shared libraries it loads.
+# userspace, with exactly the shared libraries it loads.
 userland="$fw/arm64-userland"
 if [[ -f "$userland/usr/bin/rpi-fw-crypto" ]]; then
   mkdir -p "$rootfs"/{lib,usr/bin,usr/lib/aarch64-linux-gnu}

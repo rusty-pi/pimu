@@ -44,7 +44,7 @@ notes  = "Vendor `0x1106` (VIA), device `0x3483`."
 
 [[register.source]]
 kind       = "measured"
-ref        = "config dump `0x00`; `sd-card-boot.log` `PCIe scan 00001106:00003483`"
+ref        = "config dump `0x00`; a Raspberry Pi 4B d03115's bootloader log `PCIe scan 00001106:00003483`"
 confidence = "high"
 
 [[register]]

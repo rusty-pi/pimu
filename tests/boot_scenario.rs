@@ -54,7 +54,7 @@ fn report(scn: &BootScenario) -> String {
             "core1      pc 0x3ec40014  retired {n}  end None\n"
         ));
     }
-    out.push_str("\n--- ARM cores (#40) ---\n");
+    out.push_str("\n--- ARM cores ---\n");
     for i in 0..4 {
         if let Some(n) = counts.get(&format!("arm{i}")) {
             out.push_str(&format!(
@@ -291,7 +291,7 @@ fn a_changed_retired_count_fails_the_check() {
     assert!(f[0].contains("vpu0 ") && f[0].contains("(+1)"), "{}", f[0]);
 
     let (head, _) = log
-        .split_once("\n--- ARM cores (#40) ---\n")
+        .split_once("\n--- ARM cores ---\n")
         .expect("the fixture releases the ARM");
     let f = boot::check_run(&scn, &format!("{head}\n"), &golden).expect("check");
     assert_eq!(f.len(), 1, "{f:?}");

@@ -312,7 +312,7 @@ name   = "DISPID"
 offset = 0x08
 access = "r"
 reset  = 0x64647276
-notes  = "Identification. start4 gates its whole display bring-up, and with it the HDMI provider registration, on this value; 0 reads as 'no HVS' (issue #13)."
+notes  = "Identification. start4 gates its whole display bring-up, and with it the HDMI provider registration, on this value; 0 reads as 'no HVS'."
 
 [[register.source]]
 kind       = "measured"

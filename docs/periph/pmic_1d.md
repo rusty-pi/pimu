@@ -7,7 +7,7 @@
 - Size: `0x100`
 - Carried by: [`bsc`](bsc.md), `PMIC` copy
 
-On the `bsc` PMIC copy (#78). Alone on a 4B rev 1.1 or 1.2, where it owns every rail; next to `pmic_core` on a 4B rev 1.4, a Pi 400 or a CM4, where `pmic_core` takes the core rail. start4's probe sweeps `0x00..0x1B` once, skipping `0x0C..0x0F`, to log it; it then writes a 4-byte config to `0x03..0x06` (`0x04`, `0x23`, `0x32`, `0x43` on a 4B rev 1.2), writes `0xA5` to `0x14` on boards with `pmic_core`, `0x1E` to `0x18` on a CM4, and on a 4B sets `0x16` bit 0 and writes 1 to `0x01`. Registers not listed read 0 until written.
+On the `bsc` PMIC copy. Alone on a 4B rev 1.1 or 1.2, where it owns every rail; next to `pmic_core` on a 4B rev 1.4, a Pi 400 or a CM4, where `pmic_core` takes the core rail. start4's probe sweeps `0x00..0x1B` once, skipping `0x0C..0x0F`, to log it; it then writes a 4-byte config to `0x03..0x06` (`0x04`, `0x23`, `0x32`, `0x43` on a 4B rev 1.2), writes `0xA5` to `0x14` on boards with `pmic_core`, `0x1E` to `0x18` on a CM4, and on a 4B sets `0x16` bit 0 and writes 1 to `0x01`. Registers not listed read 0 until written.
 
 Sources:
 

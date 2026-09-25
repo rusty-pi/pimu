@@ -65,7 +65,7 @@ notes  = "`MaxSlots` 32, `MaxIntrs` 4, `MaxPorts` 5."
 
 [[register.source]]
 kind       = "measured"
-ref        = "Raspberry Pi 4B d03115 `/dev/mem`; `sd-card-boot.log` `xHC0 ports 5 slots 32 intrs 4`"
+ref        = "Raspberry Pi 4B d03115 `/dev/mem`; a Raspberry Pi 4B d03115's bootloader log `xHC0 ports 5 slots 32 intrs 4`"
 confidence = "high"
 
 [[register]]
