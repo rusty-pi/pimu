@@ -1,77 +1,34 @@
 //! The board identity the EEPROM bootloader derives, and `start4` republishes.
 //!
-//! `/chosen/rpi-machine-id` is the string a `rpi-mkosi` image turns into its
-//! root-LUKS passphrase (rpi-mkosi#37), so what produces it is the whole point
-//! of this bench. It is *not* derived by `start4.elf`: `0x3ECC5190` looks up the
-//! EEPROM bootloader's `"BVER"` handoff block and, when it is present, simply
-//! does `memcpy(out, BVER + 0x8c, 16)` — everything after that is hex encoding.
-//! (`start4` does carry its own fallback for a board with no such block, and
-//! that one is a different function: `SHA-256(otp[28] ‖ otp[35] ‖ otp[30])`.
-//! On this bench it is never reached.)
+//! `/chosen/rpi-machine-id` is the string an image can turn into its root-LUKS
+//! passphrase, so a firmware bump that moves it locks the disk out.
 //!
-//! The real derivation runs in `pieeprom.bin`'s first stage, at `0x80008030`,
-//! and was traced rather than guessed (#22):
-//!
-//! ```text
-//!   0x80008030  r0 = 28 ; bl otp_read  -> [gp+156]
-//!   0x8000803c  r0 = 64 ; bl otp_read  -> [gp+864]
-//!   0x8000804a  r0 = 65 ; bl otp_read  -> [gp+868]
-//!   0x80008074  r0 = 35 ; bl otp_read  -> [sp+0]
-//!   ...          five memcpy(4) calls assemble a 20-byte buffer on the stack:
-//!                  row 28, row 35, row 30, row 64, row 65
-//!   0x800080bc  bl sha256(buf, 20, digest)
-//!   0x800080ca  memcpy(BVER + 0x8c, digest, 16)
-//! ```
-//!
-//! So the identity is
+//! `start4.elf` only copies it out of the EEPROM bootloader's `"BVER"` handoff
+//! block. The derivation runs in `pieeprom.bin`'s first stage, traced rather
+//! than guessed, and is
 //!
 //! ```text
 //!   SHA-256( le32(otp[28]) ‖ le32(otp[35]) ‖ le32(otp[30])
 //!            ‖ le32(otp[64]) ‖ le32(otp[65]) )[..16]
 //! ```
 //!
-//! Each row goes in as a native little-endian 32-bit word, in that order — the
-//! order the bootloader assembles them, not the numeric row order — and the
-//! 32-byte digest is truncated to its first 16 bytes. The rows are the
-//! documented public identity ones: 28 and 35 are the low and high halves of the
-//! 64-bit board serial, 30 is the revision code, and 64/65 hold the Ethernet
-//! MAC. **No secret row takes part**: neither the secure-boot key hash (47-54)
-//! nor the device private key (56-63) is read anywhere on this path, which is
-//! what makes the derivation safe to write down (see the OTP rule in
-//! `CLAUDE.md`).
+//! — the rows in the order the bootloader assembles them, not numeric order.
+//! They are the public identity ones (board serial, revision code, Ethernet
+//! MAC): **no secret row takes part**, neither the secure-boot key hash nor the
+//! device private key, which is what makes the derivation safe to write down.
 //!
-//! That last point is the useful one for rpi-mkosi#37. The passphrase depends on
-//! five public fuses and on this function staying put across firmware versions;
-//! [`expected_machine_id`] recomputes it independently of the firmware so a
-//! `boot` run can say whether the value the firmware published is still the one
-//! the algorithm predicts, instead of only noticing after the fact that it
-//! moved.
-//! # This is a diagnostic, not an assertion
-//!
-//! Nothing regresses against this reimplementation, and nothing should. The
-//! guard that matters is the **pinned output**: given the fixed OTP rows in
-//! `src/periph/configotp.rs`, `/chosen/rpi-machine-id` must be exactly
-//! `ed96a9bc626d9d0869ce37ee4aea025d`, which `testdata/boot/firmware.toml`
-//! asserts directly against the transcript.
-//!
-//! Checking "our recomputation agrees with the firmware" instead would be
-//! circular, and worse than useless: it recomputes from the *same* fuses, so a
-//! change to those fuses moves the published id and the check still passes —
-//! masking exactly the event the bench exists to catch (rpi-mkosi#37). A
-//! firmware that changed its algorithm would fail this file's tests rather than
-//! the boot, which is the wrong place to find out.
-//!
-//! What it is for: when the pinned value does fail, this says *why* — which
-//! inputs went in and what they hash to — so "the fuses changed" is
-//! distinguishable from "the algorithm changed" by reading the report.
+//! So the passphrase depends on five public fuses and on this function staying
+//! put across firmware versions, and [`expected_machine_id`] recomputes it
+//! independently. That recomputation is a diagnostic, not the assertion: the
+//! guard is the pinned output in `testdata/boot/firmware.toml`, since checking
+//! the model against the firmware would be circular — both read the same fuses.
+//! When the pinned value fails, the recomputation says whether the fuses or the
+//! algorithm moved.
 
-/// The OTP rows the derivation consumes, in the order the bootloader feeds them
-/// to SHA-256.
+/// The OTP rows the derivation consumes, in the order they are hashed.
 pub const MACHINE_ID_ROWS: [u32; 5] = [28, 35, 30, 64, 65];
 
-/// Recompute `/chosen/rpi-machine-id` from the board's OTP rows.
-///
-/// `rows` are the values of [`MACHINE_ID_ROWS`], in that order.
+/// Recompute `/chosen/rpi-machine-id` from [`MACHINE_ID_ROWS`], in that order.
 pub fn expected_machine_id(rows: &[u32; 5]) -> [u8; 16] {
     let mut buf = [0u8; 20];
     for (i, row) in rows.iter().enumerate() {
@@ -102,8 +59,7 @@ const K: [u32; 64] = [
     0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
 ];
 
-/// Plain SHA-256. Small enough to carry rather than take a dependency for, and
-/// this is the only thing in the bench that hashes anything.
+/// Plain SHA-256: the only thing in the bench that hashes anything.
 fn sha256(msg: &[u8]) -> [u8; 32] {
     let mut h: [u32; 8] = [
         0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
@@ -191,10 +147,8 @@ mod tests {
         );
     }
 
-    /// The identity this bench's invented OTP produces, and the one
-    /// `boot-check` pins on the firmware's own output. The two
-    /// agreeing is the whole claim of #22: the model can predict the value
-    /// rather than only observe it.
+    /// The identity the invented OTP produces is the one `boot-check` pins on
+    /// the firmware's output: the model predicts the value, not just observes.
     #[test]
     fn machine_id_matches_the_modelled_board() {
         let rows = [
@@ -210,8 +164,8 @@ mod tests {
         );
     }
 
-    /// The avalanche that showed the value is a derivation and not a constant:
-    /// one bit of the serial changes every byte of the identity.
+    /// The value is a derivation, not a constant: one flipped bit of the serial
+    /// changes every byte of the identity.
     #[test]
     fn one_serial_bit_changes_the_whole_identity() {
         let rows = [

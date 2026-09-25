@@ -1,6 +1,5 @@
-//! The card `pimu::fat` builds out of a directory, read back by something that
-//! is not this model: `mtools`, which is also what `scripts/make-sd.sh` writes
-//! the real card with. Skipped where `mtools` is not installed.
+//! The card `pimu::fat` builds out of a directory, read back with `mtools` —
+//! what `scripts/make-sd.sh` writes the real card with. Skipped without it.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -8,7 +7,6 @@ use std::process::Command;
 use pimu::fat::{card_from_dir, Card};
 use pimu::periph::disk::BLOCK_SIZE;
 
-/// The volume starts 1 MiB in, which is what `-i <image>@@<offset>` needs.
 const PART_OFFSET: u64 = 2048 * BLOCK_SIZE as u64;
 
 #[test]
@@ -18,9 +16,7 @@ fn mtools_reads_back_what_the_card_was_built_from() {
         return;
     };
     let dir = tempdir("fat-card");
-    // A plain 8.3 name, one too long for it, two that collide once shortened,
-    // a file longer than a cluster, and a subdirectory: what a firmware
-    // checkout has.
+    // 8.3, too long, two colliding once shortened, one over a cluster, a dir.
     write(&dir.join("start4.elf"), &vec![0xa5; 40 * 1024]);
     write(&dir.join("bcm2711-rpi-4-b.dtb"), b"dtb");
     write(&dir.join("config.txt"), b"arm_64bit=1\n");
@@ -47,8 +43,6 @@ fn mtools_reads_back_what_the_card_was_built_from() {
         assert!(overlays.contains(name), "{name} missing from\n{overlays}");
     }
 
-    // The contents, not just the entries: a file's clusters are the host
-    // file's bytes, and the last one is short.
     let mcopy = tool("mcopy").expect("mcopy beside mdir");
     let out = dir.join("out");
     std::fs::create_dir(&out).unwrap();
@@ -74,9 +68,7 @@ fn mtools_reads_back_what_the_card_was_built_from() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-/// The whole card as a file: the metadata, then every file where its clusters
-/// are. Sparse — the volume is padded out to the cluster count that makes it
-/// FAT32, which is most of its size.
+/// The whole card as a sparse file, padded to the cluster count FAT32 needs.
 fn write_image(card: &Card, path: &Path) {
     use std::io::{Seek, SeekFrom, Write};
     let mut f = std::fs::File::create(path).unwrap();
@@ -107,7 +99,6 @@ fn tool(name: &str) -> Option<PathBuf> {
 fn run(tool: &Path, args: &[&str]) -> String {
     let out = Command::new(tool)
         .args(args)
-        // mtools warns about a boot sector it did not write itself otherwise.
         .env("MTOOLS_SKIP_CHECK", "1")
         .output()
         .unwrap_or_else(|e| panic!("running {}: {e}", tool.display()));

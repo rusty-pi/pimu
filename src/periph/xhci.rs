@@ -1,44 +1,19 @@
-//! The xHCI register block and ring engine behind the VL805's BAR0 — issue #18
-//! stage 3 — and, told a different [`Caps`], the BCM2711's own controller on
-//! the USB-C port ([`super::xhci_otg`], #113).
+//! The xHCI register block and ring engine behind the VL805's BAR0 and, told a
+//! different [`Caps`], behind the BCM2711's own USB-C controller
+//! ([`super::xhci_otg`]). Registers and measured values: `specs/xhci.toml`.
 //!
-//! Stage 2a made the capability registers readable (the firmware reaches them
-//! by 40-bit DMA, not by a load — see [`super::pcie`]). This file is the half
-//! that makes them mean something: the operational registers, the command and
-//! event rings, slot and endpoint contexts, the doorbells, and the port state
-//! machine that tells the bootloader a device is attached.
+//! Operational registers, command and event rings, slot and endpoint contexts,
+//! doorbells, and the port state machine. Every capability value and the
+//! `PORTSC` resting values are measured on a Raspberry Pi 4B d03115.
 //!
-//! ## Where the numbers come from
-//!
-//! Every capability value is measured on a Raspberry Pi 4B d03115 through
-//! `/dev/mem`, at the BAR0 address `lspci -vvv` reports for `01:00.0`; `dmesg`'s
-//! `hcc params 0x002841eb hci version 0x100` cross-checks the pair that
-//! matters. The `PORTSC` values are measured too, by moving a stick between
-//! sockets and re-reading:
-//!
-//! ```text
-//! 0x400202e1  USB2 port, device just connected     (CCS=1 PLS=Polling CSC=1 DR=1)
-//! 0x40000e03  USB2 port, enumerated                (CCS=1 PED=1 PLS=U0 speed=High)
-//! 0x00021203  USB3 port, SuperSpeed device         (CCS=1 PED=1 PLS=U0 speed=SS)
-//! 0x000002a0  empty but powered                    (PLS=RxDetect PP=1)
-//! ```
-//!
-//! ## The topology this models
-//!
-//! A Pi 4B has a VIA Labs four-port hub soldered to xHCI root port 1 — that is
-//! the USB2 half of all four type-A sockets — and routes root ports 2 and 3 to
-//! the two blue sockets' SuperSpeed lanes. Ports 4 and 5 go nowhere. So the hub
-//! is present on every board, plugged in or not, and it is why the reference
-//! log's pre-handover `XHCI-STOP` prints `USBSTS 18` (`EINT | PCD`) rather than
-//! `USBSTS 0`.
-//!
-//! ## What the engine does and does not do
+//! A Pi 4B wires a VIA Labs four-port hub to root port 1 — the USB2 half of all
+//! four type-A sockets, present plugged in or not — and root ports 2 and 3 to
+//! the blue sockets' SuperSpeed lanes; 4 and 5 go nowhere.
 //!
 //! It is a synchronous model: a doorbell write runs the ring it points at to
-//! completion and posts the events before the write returns. There is no
-//! MSI/MSI-X delivery — the bootloader polls `USBSTS` and the event ring — no
-//! streams, no isochronous endpoints, and no scratchpad buffer use (the
-//! firmware still allocates them; the model simply never touches them).
+//! completion and posts the events before the write returns. No MSI/MSI-X
+//! delivery, no streams, no isochronous endpoints, and no scratchpad buffer use
+//! (the firmware allocates them; the model never touches them).
 
 use std::collections::BTreeMap;
 
@@ -62,8 +37,8 @@ use crate::spec::xhci::{
 };
 use crate::spec::Coverage;
 
-/// Every register in `specs/xhci.toml` is modelled: the capabilities read the
-/// measured values, the rest is register, ring or port state, or storage.
+/// The capabilities read the measured values; the rest is register, ring or
+/// port state.
 pub const COVERAGE: Coverage = Coverage {
     block: "xhci",
     decoded: &[
@@ -109,14 +84,8 @@ pub const COVERAGE: Coverage = Coverage {
     ],
 };
 
-// ---------------------------------------------------------------------------
-// Host memory, as the endpoint sees it.
-
-/// The memory the endpoint's DMA reaches. The controller calls it with the
-/// PCI bus addresses written into `DCBAAP`, `CRCR` and the TRBs; the root
-/// complex ([`crate::periph::pcie`]) translates those through its inbound
-/// window `RC_BAR2` and hands the result to system memory, itself a `HostMem`
-/// addressed CPU-physically.
+/// The memory the endpoint's DMA reaches, addressed in PCI bus addresses; the
+/// root complex translates them through its inbound window.
 pub trait HostMem {
     fn read8(&self, addr: u64) -> u8;
     fn write8(&mut self, addr: u64, value: u8);
@@ -156,10 +125,9 @@ pub trait HostMem {
 ///
 /// The offset is 64 bits wide and stays that way. Linux hands the controller
 /// whatever `dma_alloc_coherent()` gave it, and on a board with more than 4 GB
-/// of DRAM that is routinely above the 4 GB line; going through the 32-bit
-/// [`Ram::load`](crate::mem::Ram::load) truncated it, so an event ring up
-/// there aliased onto the low copy of DRAM and the model read the kernel's
-/// page tables where the Event Ring Segment Table should have been (#125).
+/// of DRAM that is routinely above the 4 GB line. Truncating it to 32 bits
+/// aliases an event ring up there onto the low copy of DRAM, where the kernel's
+/// page tables sit rather than the Event Ring Segment Table.
 impl HostMem for crate::mem::Ram {
     fn read8(&self, addr: u64) -> u8 {
         self.load_at(addr, Width::Byte).unwrap_or(0) as u8
@@ -170,8 +138,7 @@ impl HostMem for crate::mem::Ram {
     }
 }
 
-/// A plain byte map, for tests and for anything that needs a host memory that
-/// is not the machine's DRAM.
+/// A plain byte map, for tests.
 #[derive(Default)]
 pub struct VecMem {
     pub bytes: BTreeMap<u64, u8>,
@@ -186,52 +153,35 @@ impl HostMem for VecMem {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Register map
-
-/// `CAPLENGTH`'s value: where the operational registers start.
 pub const CAPLENGTH: u32 = regs::CAPLENGTH_RESET;
-/// `RTSOFF`'s value: where the runtime registers start.
 pub const RTSOFF: u32 = regs::RTSOFF_RESET;
-/// `DBOFF`'s value: where the doorbells start.
 const DBOFF: u32 = regs::DBOFF_RESET;
-// The spec's operational, runtime and doorbell offsets are absolute BAR0
-// offsets, so they have to agree with what the capability registers announce.
+// The spec's offsets are absolute, so they must agree with what the capability
+// registers announce.
 const _: () = assert!(USBCMD == CAPLENGTH && IMAN == RTSOFF + 0x20 && DOORBELL == DBOFF);
 
-/// The VL805 has five root ports: port 1 USB2, ports 2-5 USB3
-/// (`HCSPARAMS1.MaxPorts`).
 pub const PORTS: usize = (regs::HCSPARAMS1_RESET >> 24) as usize;
-/// `HCSPARAMS1.MaxSlots`.
 const MAX_SLOTS: usize = (regs::HCSPARAMS1_RESET & 0xFF) as usize;
 const _: () =
     assert!(PORTS == regs::PORTSC_COUNT as usize && MAX_SLOTS + 1 == DOORBELL_COUNT as usize);
 
-/// What one controller reports about itself: the read-only capability and
-/// extended-capability words, its root ports and how many slots it has. Two
-/// controllers on this SoC run the engine below — the one behind the VL805's
-/// BAR0 ([`VL805`]) and the BCM2711's own at `0x7E9C_0000`
-/// ([`super::xhci_otg`]) — and this is everything that differs between them.
-/// The operational, runtime and doorbell offsets do not: both announce the
-/// layout the engine is written for, which the assertion above pins.
+/// Everything that differs between the SoC's two controllers: the read-only
+/// capability words, the root ports and the slot count. Both announce the same
+/// operational, runtime and doorbell layout.
 pub struct Caps {
-    /// The read-only words by offset: the capability registers (the word at 0
-    /// being `CAPLENGTH` with `HCIVERSION` above it) and the whole
+    /// The read-only words by offset: capability registers and the whole
     /// extended-capability list.
     pub words: &'static [(u32, u32)],
-    /// One entry per root port, `true` for a USB2 port: those report a device
-    /// as connected and wait for the host to reset them, where a USB3 port
-    /// trains its link itself.
+    /// One entry per root port, `true` for USB2: those wait for a host reset,
+    /// where a USB3 port trains its link itself.
     pub usb2_ports: &'static [bool],
-    /// `HCSPARAMS1.MaxSlots`.
     pub max_slots: usize,
     /// Prefixes this controller's [`Channel::Xhci`] lines; empty for the
-    /// VL805's, whose lines predate there being a second controller.
+    /// VL805's.
     pub tag: &'static str,
 }
 
 impl Caps {
-    /// The value of the read-only word at `off`, if it is one.
     fn word(&self, off: u32) -> Option<u32> {
         self.words
             .iter()
@@ -239,8 +189,7 @@ impl Caps {
     }
 }
 
-/// The VL805's controller, as measured on a Raspberry Pi 4B d03115
-/// (`specs/xhci.toml`): five root ports, port 1 USB2 and ports 2-5 USB3.
+/// The VL805's controller: five root ports, port 1 USB2 and 2-5 USB3.
 pub const VL805: Caps = Caps {
     words: &[
         (
@@ -270,25 +219,19 @@ pub const VL805: Caps = Caps {
 };
 const _: () = assert!(VL805.usb2_ports.len() == PORTS);
 
-/// The write-1-to-clear half of `USBSTS`.
 const USBSTS_RW1C: u32 = USBSTS_HSE | USBSTS_EINT | USBSTS_PCD | USBSTS_SRE;
 
-/// Bits the firmware clears by writing one.
 const PORTSC_RW1C: u32 =
     PORTSC_CSC | PORTSC_PEC | PORTSC_WRC | PORTSC_OCC | PORTSC_PRC | PORTSC_PLC | PORTSC_CEC;
-/// Bits the firmware may set directly (`PP`, the wake enables, `PIC`, `LWS`).
 const PORTSC_RW: u32 = PORTSC_PP | (0x3 << 14) | (1 << 16) | (0x7 << 25);
 
-/// `PLS` values used here.
 const PLS_U0: u32 = 0;
 const PLS_RXDETECT: u32 = 5;
 const PLS_POLLING: u32 = 7;
 
-/// `CCS=0 PED=0 PLS=RxDetect PP=1` — powered, nothing attached, the value every
-/// unpopulated VL805 port reads on a Raspberry Pi 4B d03115.
+/// Powered with nothing attached, as measured on a Raspberry Pi 4B d03115.
 const PORTSC_EMPTY: u32 = PORTSC_PP | (PLS_RXDETECT << PORTSC_PLS_SHIFT);
 
-/// `ERDP.EHB`, the Event Handler Busy bit the driver clears when it is done.
 const ERDP_EHB: u64 = ERDP_LO_EHB_MASK as u64;
 
 // TRB types (xHCI 6.4.6).
@@ -321,13 +264,10 @@ const CC_SLOT_NOT_ENABLED: u32 = 11;
 const CC_SHORT_PACKET: u32 = 13;
 const CC_NO_SLOTS: u32 = 9;
 
-/// Control-transfer state carried between the Setup, Data and Status stages of
-/// one control TRB chain.
+/// State carried between the stages of one control TRB chain.
 #[derive(Default)]
 struct ControlState {
     setup: Option<Setup>,
-    /// Bytes collected from OUT Data Stage TRBs, handed to the device at the
-    /// Status Stage.
     out: Vec<u8>,
 }
 
@@ -336,19 +276,16 @@ struct ControlState {
 ///
 /// Real 2020-09-03 bootloader logs catch the VL805 in the middle of it: the
 /// scan right after `HCRST` reads `0x2a0` (nothing detected yet) or `0x2b1`
-/// (a reset in flight), and the port turns up enabled later, after the
-/// USB2 hub has been set up (raspberrypi/rpi-eeprom#227, #241). A warm reset
-/// alone is 80-120 ms of LFPS (USB 3.2, `tReset`).
+/// (a reset in flight), and the port turns up enabled later, once the USB2 hub
+/// has been set up. A warm reset alone is 80-120 ms of LFPS (USB 3.2,
+/// `tReset`).
 pub const LINK_TRAIN_US: u64 = 100_000;
 
-/// One root port.
 struct Port {
     device: Option<Box<dyn UsbDevice>>,
     portsc: u32,
-    /// USB2 ports need an explicit reset before they enable; USB3 ports train
-    /// their link themselves and come up enabled.
+    /// USB2 ports need an explicit reset; USB3 ports train their own link.
     usb2: bool,
-    /// When a SuperSpeed link that is still training comes up.
     train_at: Option<u64>,
 }
 
@@ -362,11 +299,8 @@ impl Port {
         }
     }
 
-    /// The speed this port reports the device on it at. A SuperSpeed device in
-    /// a USB 2.0 port has no SuperSpeed link to train and enumerates as a
-    /// high-speed one, which is what a socket wired for USB 2.0 alone — the
-    /// USB-C port on [`super::xhci_otg`] — does to a stick
-    /// ([`super::usb::MassStorage::with_disk_hs`] is that stick).
+    /// The speed this port reports. A SuperSpeed device in a USB 2.0 socket
+    /// has no link to train and enumerates as high-speed.
     fn speed(&self) -> Option<Speed> {
         match self.device.as_ref().map(|d| d.speed()) {
             Some(Speed::Super) if self.usb2 => Some(Speed::High),
@@ -374,30 +308,26 @@ impl Port {
         }
     }
 
-    /// The resting value with whatever is attached, as measured on a real
-    /// board. Called on power-on and on `HCRST`, at modelled time `now`.
+    /// The resting value with whatever is attached, as measured on a
+    /// Raspberry Pi 4B d03115. Called on power-on and on `HCRST`, at modelled
+    /// time `now`.
     fn settle(&mut self, now: u64) {
         let base = PORTSC_EMPTY | if self.usb2 { PORTSC_DR } else { 0 };
         self.train_at = None;
         self.portsc = match self.speed() {
             None => base,
             Some(Speed::Super) => {
-                // The link retrains without host intervention; until it has,
-                // the port reads like an empty one.
+                // Until the link retrains the port reads like an empty one.
                 self.train_at =
                     Some(now + crate::jitter::stretch(LINK_TRAIN_US, "a SuperSpeed link"));
                 base
             }
             Some(_) => {
-                // `0x400202e1` — connected, link polling, waiting for the host
-                // to drive a reset.
                 PORTSC_CCS | PORTSC_PP | PORTSC_DR | (PLS_POLLING << PORTSC_PLS_SHIFT) | PORTSC_CSC
             }
         };
     }
 
-    /// The link finished training: `0x00021203` plus the connect-change bit,
-    /// enabled in U0 with nothing asked of the host.
     fn link_up(&mut self) {
         self.train_at = None;
         self.portsc = PORTSC_CCS
@@ -409,59 +339,41 @@ impl Port {
     }
 }
 
-/// A slot the host has enabled. The device context itself lives in host memory
-/// — that is the point of the DCBAA — so all that is kept here is whether the
-/// slot is in use.
+/// A slot the host has enabled; its device context lives in host memory.
 #[derive(Clone, Copy, Default)]
 struct Slot {
     enabled: bool,
 }
 
-/// The event ring's producer side: the host owns the dequeue pointer, the
-/// controller owns this.
+/// The event ring's producer side; the host owns the dequeue pointer.
 #[derive(Default)]
 struct EventRing {
-    /// Where the next event TRB goes. Zero means "not started yet".
     enqueue: u64,
     segment: u32,
     offset: u32,
-    /// The Producer Cycle State.
     cycle: bool,
 }
 
 pub struct Xhci {
-    /// What this controller reports about itself; everything the two
-    /// controllers differ in ([`Caps`]).
     caps: &'static Caps,
-    /// Sticky operational and runtime registers, keyed by BAR0 offset.
     regs: BTreeMap<u32, u32>,
     ports: Vec<Port>,
-    /// Slot 0 is the reserved one, so there are `caps.max_slots + 1` entries.
     slots: Vec<Slot>,
     event: EventRing,
-    /// The command ring dequeue pointer and its Consumer Cycle State.
     cmd_ptr: u64,
     cmd_ccs: bool,
     running: bool,
-    /// Where [`Channel::Xhci`] goes.
     pub log: Log,
-    /// Modelled time, as [`Xhci::link_due`] last saw it.
     now_us: u64,
-    /// Completion events waiting for their due time. On silicon a transfer's
-    /// event lands after the controller has done the work, not inside the
-    /// doorbell write that started it; with `--jitter` the model says so too,
-    /// which is what makes the firmware's event waits mean anything. Empty
-    /// while jitter is off, when every event goes out at once as before.
+    /// Completion events waiting for their due time: on silicon an event lands
+    /// after the work, not inside the doorbell write. Empty unless `--jitter`.
     deferred: std::collections::VecDeque<(u64, [u32; 4])>,
-    /// The earliest [`Port::train_at`], `u64::MAX` with none training — a
-    /// field, because the machine asks every microsecond.
+    /// The earliest [`Port::train_at`]; a field, because the machine asks every
+    /// microsecond.
     link_deadline: u64,
-    /// Endpoints whose head TRB the device NAKed: the transfer is still
-    /// outstanding, so nothing was posted and the dequeue pointer did not
-    /// move. Each is `(slot, dci)`, retried by [`Xhci::run_parked`].
+    /// Endpoints whose head TRB the device NAKed, retried by
+    /// [`Xhci::run_parked`]: the transfer is still outstanding.
     parked: Vec<(usize, u32)>,
-    /// Observables for tests: how many commands and transfers the engine has
-    /// completed.
     pub commands: u64,
     pub transfers: u64,
 }
@@ -473,16 +385,12 @@ impl Default for Xhci {
 }
 
 impl Xhci {
-    /// The controller behind the VL805's BAR0. Port 1 is its USB2 root port
-    /// and ports 2-5 the four USB3 lanes — the split its own
-    /// supported-protocol extended capabilities report, read back from a
-    /// Raspberry Pi 4B d03115: `id=2 "USB " rev 2.0 portoff=1 count=1` and
-    /// `id=2 "USB " rev 3.0 portoff=2 count=4`.
+    /// The controller behind the VL805's BAR0, with the port split its own
+    /// supported-protocol capabilities report.
     pub fn new() -> Xhci {
         Xhci::with_caps(&VL805)
     }
 
-    /// A controller reporting `caps`, with its ports empty.
     pub fn with_caps(caps: &'static Caps) -> Xhci {
         let ports = caps.usb2_ports.iter().map(|&u| Port::new(u)).collect();
         let mut hc = Xhci {
@@ -506,14 +414,12 @@ impl Xhci {
         hc
     }
 
-    /// Plug `device` into root port `port` (1-based).
     pub fn attach(&mut self, port: usize, device: Box<dyn UsbDevice>) {
         self.ports[port - 1].device = Some(device);
         self.ports[port - 1].settle(self.now_us);
         self.update_link_deadline();
     }
 
-    /// The device on root port `port`, for attaching something below a hub.
     pub fn port_device(&mut self, port: usize) -> Option<&mut (dyn UsbDevice + 'static)> {
         self.ports[port - 1].device.as_deref_mut()
     }
@@ -534,16 +440,12 @@ impl Xhci {
             .unwrap_or(u64::MAX);
     }
 
-    /// Note the modelled time; true when a link has finished training and
-    /// [`Xhci::train_links`] has something to do.
     #[inline]
     pub fn link_due(&mut self, now_us: u64) -> bool {
         self.now_us = now_us;
         now_us >= self.link_deadline
     }
 
-    /// Bring up every port whose link has finished training, each with a
-    /// Port Status Change Event.
     pub fn train_links(&mut self, mem: &mut dyn HostMem) {
         for i in 0..self.ports.len() {
             if self.ports[i].train_at.is_some_and(|t| t <= self.now_us) {
@@ -572,9 +474,6 @@ impl Xhci {
             .then_some((rel / PORTSC_STRIDE) as usize)
     }
 
-    // -----------------------------------------------------------------------
-    // Register access
-
     pub fn read(&mut self, off: u32, width: Width) -> u32 {
         let word = self.read_word(off & !3);
         let shift = 8 * (off & 3);
@@ -587,9 +486,6 @@ impl Xhci {
     }
 
     fn read_word(&mut self, off: u32) -> u32 {
-        // The capability registers and the extended-capability list the
-        // controller announces, the word at 0 being `CAPLENGTH` with
-        // `HCIVERSION` in its top half.
         if let Some(v) = self.caps.word(off) {
             return v;
         }
@@ -605,8 +501,7 @@ impl Xhci {
             };
         }
         if off == CRCR_LO {
-            // The dequeue pointer reads as zero (xHCI 5.4.5); only the Command
-            // Ring Running bit is observable.
+            // The dequeue pointer reads as zero (xHCI 5.4.5).
             return if self.running && self.cmd_ptr != 0 {
                 1 << 3
             } else {
@@ -622,9 +517,6 @@ impl Xhci {
         self.reg(off)
     }
 
-    /// A write to the register block. `mem` is host memory: a doorbell write
-    /// runs the ring it points at, which reads TRBs out of DRAM and writes
-    /// events back.
     pub fn write(&mut self, off: u32, width: Width, value: u32, mem: &mut dyn HostMem) {
         let word_off = off & !3;
         if word_off < CAPLENGTH {
@@ -642,7 +534,6 @@ impl Xhci {
             self.write_portsc(i, value, mask, mem);
             return;
         }
-        // Doorbells: `DBOFF` + 4 * target.
         if (DOORBELL..DOORBELL + DOORBELL_COUNT * DOORBELL_STRIDE).contains(&word_off) {
             let target = (word_off - DOORBELL) / DOORBELL_STRIDE;
             self.set_reg(word_off, value);
@@ -654,8 +545,7 @@ impl Xhci {
         let new = (old & !mask) | value;
 
         if word_off == USBSTS {
-            // Write-1-to-clear. The bring-up's stop path writes all-ones here;
-            // without this the firmware reads its own `0xFFFF_FFFF` back.
+            // Write-1-to-clear: the stop path writes all-ones here.
             self.set_reg(word_off, old & !(value & USBSTS_RW1C));
             return;
         }
@@ -664,8 +554,7 @@ impl Xhci {
             return;
         }
         if word_off == IMAN {
-            // `IP` is write-1-to-clear: the driver acknowledges an interrupt
-            // by writing it back (xHCI 5.5.2.1). Only the controller sets it.
+            // `IP` is write-1-to-clear; only the controller sets it.
             let ip = old & IMAN_IP & !(value & IMAN_IP);
             self.set_reg(word_off, (new & !IMAN_IP) | ip);
             return;
@@ -681,8 +570,6 @@ impl Xhci {
         }
         self.set_reg(word_off, new);
         if word_off == ERDP_LO {
-            // Clearing `EHB` acknowledges the events consumed so far. Nothing
-            // in the model depends on it, but it must not be sticky.
             self.set_reg(word_off, new & !(ERDP_EHB as u32));
         }
     }
@@ -701,9 +588,7 @@ impl Xhci {
         }
     }
 
-    /// `HCRST`: everything back to power-on, including the ports, which
-    /// re-report whatever is plugged in. PERST# does the same to the whole
-    /// controller.
+    /// `HCRST`: everything back to power-on, the ports included.
     pub fn reset(&mut self) {
         self.regs.clear();
         self.slots = vec![Slot::default(); self.caps.max_slots + 1];
@@ -725,9 +610,7 @@ impl Xhci {
             self.ports[i].portsc
         );
         let port = &mut self.ports[i];
-        // Write-1-to-clear change bits.
         port.portsc &= !(value & PORTSC_RW1C & mask);
-        // Plain read/write bits.
         port.portsc = (port.portsc & !(PORTSC_RW & mask)) | (value & PORTSC_RW & mask);
         // Writing PED with a one *disables* the port; it is never set that way.
         if value & mask & PORTSC_PED != 0 {
@@ -738,14 +621,11 @@ impl Xhci {
         }
     }
 
-    /// A port reset. On real silicon this takes milliseconds and completes with
-    /// a Port Status Change Event; here it completes before the write returns,
-    /// which is the same thing as far as a polling driver is concerned.
+    /// A port reset; it completes before the write returns.
     fn reset_port(&mut self, i: usize, mem: &mut dyn HostMem) {
         let speed = {
             let port = &mut self.ports[i];
             if port.device.is_none() {
-                // Resetting an empty port just sets the change bit.
                 port.portsc &= !PORTSC_PR;
                 port.portsc |= PORTSC_PRC;
                 return;
@@ -777,16 +657,11 @@ impl Xhci {
         self.post_event(trb, mem);
     }
 
-    // -----------------------------------------------------------------------
-    // Event ring
-
-    /// How long after the work a completion event lands, before jitter
-    /// stretches it: the controller's own turnaround, which no datasheet
-    /// gives and which only has to be more than nothing.
+    /// The controller's own turnaround: no datasheet gives it, and it only has
+    /// to be more than nothing.
     const COMPLETION_US: u64 = 10;
 
-    /// Post a completion, which the hardware does once the transfer is over
-    /// rather than inside the doorbell write.
+    /// Post a completion, which hardware does once the transfer is over.
     fn post_completion(&mut self, trb: [u32; 4], mem: &mut dyn HostMem) {
         if !crate::jitter::is_on() {
             self.post_event(trb, mem);
@@ -797,8 +672,6 @@ impl Xhci {
         self.deferred.push_back((due, trb));
     }
 
-    /// Post every completion whose time has come, and say whether anything
-    /// is still waiting.
     pub fn drain_deferred(&mut self, now_us: u64, mem: &mut dyn HostMem) {
         self.now_us = now_us;
         while self.deferred.front().is_some_and(|(due, _)| *due <= now_us) {
@@ -807,7 +680,6 @@ impl Xhci {
         }
     }
 
-    /// When the next deferred event is due, if one is.
     pub fn deferred_due(&self) -> Option<u64> {
         self.deferred.front().map(|(due, _)| *due)
     }
@@ -841,8 +713,6 @@ impl Xhci {
             trb[3]
         );
 
-        // Advance within the segment, then to the next segment, toggling the
-        // cycle when the whole ring wraps.
         let seg_entry = erstba + 16 * self.event.segment as u64;
         let seg_size = mem.read32(seg_entry + 8) & 0xFFFF;
         self.event.offset += 1;
@@ -864,9 +734,6 @@ impl Xhci {
         self.set_reg(IMAN, iman);
     }
 
-    // -----------------------------------------------------------------------
-    // Rings
-
     fn ring_doorbell(&mut self, target: u32, value: u32, mem: &mut dyn HostMem) {
         if target == 0 {
             self.run_command_ring(mem);
@@ -877,11 +744,9 @@ impl Xhci {
         self.run_parked(mem);
     }
 
-    /// Give every NAKed endpoint another go. Whatever the host just did — a
-    /// command, or a control transfer telling a hub to reset a downstream port
-    /// — may be exactly what the device was waiting for; on the wire the
-    /// controller would have been retrying the token all along. An endpoint
-    /// that NAKs again simply parks itself once more.
+    /// Give every NAKed endpoint another go: whatever the host just did may be
+    /// what the device was waiting for, and on the wire the controller would
+    /// have been retrying the token all along.
     fn run_parked(&mut self, mem: &mut dyn HostMem) {
         for (slot, dci) in std::mem::take(&mut self.parked) {
             self.run_transfer_ring(slot, dci, mem);
@@ -940,8 +805,6 @@ impl Xhci {
         }
     }
 
-    /// Run one command TRB. Returns its completion code and the slot id the
-    /// completion event carries.
     fn run_command(&mut self, kind: u32, trb: &[u32; 4], mem: &mut dyn HostMem) -> (u32, u32) {
         let param = trb[0] as u64 | ((trb[1] as u64) << 32);
         let slot_id = (trb[3] >> 24) & 0xFF;
@@ -977,7 +840,6 @@ impl Xhci {
                 if let Some(ctx) = self.device_context(slot_id, mem) {
                     let dci = trb[3] >> 16 & 0x1F;
                     let ep = ctx + 0x20 * dci as u64;
-                    // Endpoint State back to Running.
                     let dw0 = mem.read32(ep) & !0x7;
                     mem.write32(ep, dw0 | 1);
                 }
@@ -988,8 +850,6 @@ impl Xhci {
         }
     }
 
-    /// The output device context for `slot`, from the Device Context Base
-    /// Address Array.
     fn device_context(&self, slot: u32, mem: &dyn HostMem) -> Option<u64> {
         if slot == 0 || slot as usize > self.caps.max_slots || !self.slots[slot as usize].enabled {
             return None;
@@ -1016,8 +876,7 @@ impl Xhci {
         let Some(ctx) = self.device_context(slot, mem) else {
             return CC_SLOT_NOT_ENABLED;
         };
-        // Input context: 32-byte Input Control Context, then the slot context,
-        // then the endpoint contexts (CSZ = 0, so 32 bytes each).
+        // Input Control Context, slot context, then endpoint contexts.
         let in_slot = input + 0x20;
         let slot_dw0 = mem.read32(in_slot);
         let slot_dw1 = mem.read32(in_slot + 4);
@@ -1027,13 +886,11 @@ impl Xhci {
             Some(d) => d.speed(),
             None => return CC_TRB_ERROR,
         };
-        // Copy slot and endpoint-0 contexts into the output device context.
         let slot_ctx = mem.read_bytes(in_slot, 0x20);
         mem.write_bytes(ctx, &slot_ctx);
         let ep0 = mem.read_bytes(input + 0x40, 0x20);
         mem.write_bytes(ctx + 0x20, &ep0);
-        // Slot Context: speed, then state Addressed (or Default for a Block Set
-        // Address Request) and the device address the controller assigned.
+        // Slot Context: speed, state, and the address the controller assigned.
         let dw0 = (mem.read32(ctx) & !(0xF << 20)) | ((speed as u32) << 20);
         mem.write32(ctx, dw0);
         let bsr = trb[3] & (1 << 9) != 0;
@@ -1062,14 +919,13 @@ impl Xhci {
         let add_flags = mem.read32(input + 4);
         if add_flags & 1 != 0 {
             let slot_ctx = mem.read_bytes(input + 0x20, 0x20);
-            // The device address and slot state belong to the controller, so
-            // only the first three dwords come from the input context.
+            // Address and slot state are the controller's: only the first
+            // three dwords come from the input context.
             mem.write_bytes(ctx, &slot_ctx[..12]);
         }
         for dci in 1..32u32 {
             let bit = 1u32 << dci;
             if drop_flags & bit != 0 && add_flags & bit == 0 {
-                // Dropped: Endpoint State back to Disabled.
                 let ep = ctx + 0x20 * dci as u64;
                 let dw0 = mem.read32(ep) & !0x7;
                 mem.write32(ep, dw0);
@@ -1078,8 +934,7 @@ impl Xhci {
             if add_flags & bit == 0 {
                 continue;
             }
-            // Input context: control context, slot context, then endpoint
-            // context DCI *n* at `0x20 * (n + 1)`.
+            // Endpoint context DCI *n* sits at `0x20 * (n + 1)`.
             let src = mem.read_bytes(input + 0x20 * (dci as u64 + 1), 0x20);
             let ep = ctx + 0x20 * dci as u64;
             mem.write_bytes(ep, &src);
@@ -1088,15 +943,12 @@ impl Xhci {
             mem.write32(ep, dw0 | 1);
         }
         if kind == TRB_CONFIGURE_ENDPOINT {
-            // Slot State = Configured.
             let dw3 = mem.read32(ctx + 12);
             mem.write32(ctx + 12, (dw3 & !(0x1F << 27)) | (3 << 27));
         }
         CC_SUCCESS
     }
 
-    /// The device a slot context addresses: root port, then one hub tier per
-    /// non-zero nibble of the route string.
     fn resolve(&mut self, root_port: usize, route: u32) -> Option<&mut (dyn UsbDevice + 'static)> {
         if root_port == 0 || root_port > self.ports.len() {
             return None;
@@ -1113,8 +965,6 @@ impl Xhci {
         Some(dev)
     }
 
-    /// The device a slot's *device context* addresses, read back out of host
-    /// memory.
     fn slot_device(
         &mut self,
         slot: u32,
@@ -1168,16 +1018,13 @@ impl Xhci {
             let Some((code, residue)) =
                 self.run_transfer_trb(slot as u32, dci, kind, &trb, &mut ctrl, mem)
             else {
-                // The device NAKed: the transfer is still outstanding, so this
-                // TRB stays at the head of the ring and no event goes out.
+                // NAKed: the TRB stays at the head and no event goes out.
                 if !self.parked.contains(&(slot, dci)) {
                     self.parked.push((slot, dci));
                 }
                 break;
             };
             self.transfers += 1;
-            // Interrupt On Completion, or Interrupt On Short Packet when the
-            // transfer came up short.
             let ioc = trb[3] & (1 << 5) != 0;
             let isp = trb[3] & (1 << 2) != 0 && code == CC_SHORT_PACKET;
             if ioc || isp || code > CC_SHORT_PACKET {
@@ -1203,14 +1050,10 @@ impl Xhci {
                 break; // an error halts the endpoint
             }
         }
-        // Hand the dequeue pointer back to the endpoint context.
         mem.write32(ep_ctx + 8, (ptr as u32 & !0xF) | u32::from(ccs));
         mem.write32(ep_ctx + 12, (ptr >> 32) as u32);
     }
 
-    /// Run one transfer TRB. Returns its completion code and the untransferred
-    /// residue, or `None` when the device NAKed and the transfer has not
-    /// happened at all.
     fn run_transfer_trb(
         &mut self,
         slot: u32,
@@ -1239,8 +1082,6 @@ impl Xhci {
                     return Some((CC_TRB_ERROR, len as u32));
                 };
                 let dir_in = if kind == TRB_STATUS {
-                    // The Status Stage runs opposite the data direction; it
-                    // moves no bytes either way.
                     return Some(self.control_status(slot, &setup, ctrl, mem));
                 } else {
                     trb[3] & (1 << 16) != 0
@@ -1316,8 +1157,8 @@ impl Xhci {
         }
     }
 
-    /// The Status Stage: this is where an OUT control transfer is finally
-    /// handed to the device, since only now are all its data bytes in hand.
+    /// The Status Stage, where an OUT control transfer is finally handed to the
+    /// device: only now are all its data bytes in hand.
     fn control_status(
         &mut self,
         slot: u32,
@@ -1326,7 +1167,6 @@ impl Xhci {
         mem: &mut dyn HostMem,
     ) -> (u32, u32) {
         if setup.dir_in() {
-            // The IN data already went to the device at the Data Stage.
             return (CC_SUCCESS, 0);
         }
         let out = std::mem::take(&mut ctrl.out);
@@ -1334,33 +1174,27 @@ impl Xhci {
             return (CC_TRB_ERROR, 0);
         };
         match dev.control(setup, &out) {
-            // No modelled device NAKs a Status Stage; treat it as done.
             Xfer::Nak | Xfer::Ok(_) => (CC_SUCCESS, 0),
             Xfer::Stall => (CC_STALL, 0),
         }
     }
 
-    /// Interrupter 0 wants the host's attention: an event is pending, the
-    /// interrupter is enabled, and so are interrupts as a whole. This is the
-    /// level the PCI function turns into an MSI or INTA (xHCI 4.17).
+    /// Interrupter 0 wants attention: the level the PCI function turns into an
+    /// MSI or INTA (xHCI 4.17).
     pub fn interrupt_pending(&self) -> bool {
         self.reg(IMAN) & (IMAN_IP | IMAN_IE) == IMAN_IP | IMAN_IE
             && self.reg(USBCMD) & USBCMD_INTE != 0
     }
 
-    /// The function has sent the MSI for this interrupt. With MSI on,
-    /// `IMAN.IP` clears itself once the message is out (xHCI 5.5.2.1).
     pub fn msi_sent(&mut self) {
         let iman = self.reg(IMAN) & !IMAN_IP;
         self.set_reg(IMAN, iman);
     }
 
-    /// The port status words, for tests and for [`Channel::Xhci`].
     pub fn portsc(&self, port: usize) -> u32 {
         self.ports[port - 1].portsc
     }
 
-    /// `USBSTS` as the firmware reads it.
     pub fn usbsts(&self) -> u32 {
         let sticky = self.reg(USBSTS) & !USBSTS_HCH;
         if self.running {
@@ -1377,8 +1211,7 @@ mod tests {
     use crate::mem::Ram;
     use crate::periph::usb::Hub;
 
-    /// A ring address is a CPU physical address, and Linux's are above 4 GB on
-    /// a board with that much DRAM: nothing may truncate them (#125).
+    /// Ring addresses may sit above 4 GB: nothing may truncate them.
     #[test]
     fn dma_addresses_are_not_truncated() {
         let mut ram = Ram::new(0, 5 * 1024 * 1024 * 1024);
@@ -1386,7 +1219,6 @@ mod tests {
         mem.write32(0x1_0173_8500, 0x1234_5678);
         assert_eq!(mem.read32(0x1_0173_8500), 0x1234_5678, "read back");
         assert_eq!(mem.read32(0x0173_8500), 0, "not the low alias");
-        // Past the end of DRAM nothing answers.
         mem.write32(0x2_0000_0000, 0xDEAD_BEEF);
         assert_eq!(mem.read32(0x2_0000_0000), 0);
     }
@@ -1394,7 +1226,6 @@ mod tests {
     #[test]
     fn empty_ports_read_the_measured_resting_value() {
         let hc = Xhci::new();
-        // Port 1 is the USB2 root port, so it also reports Device Removable.
         assert_eq!(hc.portsc(1), 0x0000_02A0 | PORTSC_DR);
         for p in 2..=PORTS {
             assert_eq!(hc.portsc(p), 0x0000_02A0, "port {p}");
@@ -1405,7 +1236,6 @@ mod tests {
     fn a_hub_on_port_1_reports_the_measured_connect_word() {
         let mut hc = Xhci::new();
         hc.attach(1, Box::new(Hub::new()));
-        // `USB2[1] 400202e1 connected` in the reference log.
         assert_eq!(hc.portsc(1), 0x4002_02E1);
     }
 
@@ -1415,12 +1245,10 @@ mod tests {
         hc.attach(1, Box::new(Hub::new()));
         let mut mem = VecMem::default();
         hc.reset_port(0, &mut mem);
-        // `0x40000e03` plus the reset-change bit the driver then clears.
         assert_eq!(hc.portsc(1) & !PORTSC_PRC & !PORTSC_CSC, 0x4000_0E03);
     }
 
-    /// A SuperSpeed port reads empty while its link trains, then comes up
-    /// enabled with a Port Status Change Event; `HCRST` starts it over (#74).
+    /// A SuperSpeed port reads empty while its link trains; `HCRST` restarts it.
     #[test]
     fn a_superspeed_link_trains_before_the_port_comes_up() {
         use crate::periph::usb::MassStorage;
@@ -1437,13 +1265,11 @@ mod tests {
         assert_eq!(ev[0] >> 24, 2);
         assert!(!hc.link_due(4 * LINK_TRAIN_US), "nothing left to train");
 
-        // `HCRST` drops the link, and it trains again from the reset.
         let t = 5 * LINK_TRAIN_US;
         hc.link_due(t);
         hc.write(USBCMD, Width::Word, USBCMD_HCRST, &mut mem);
         assert_eq!(hc.portsc(2), 0x0000_02A0, "retraining after HCRST");
-        // What 2020-09-03 does right after the reset: write each port back as
-        // read. The port it finds later is still intact.
+        // The 2020-era bootloader writes each port back as read.
         hc.write(PORTSC + PORTSC_STRIDE, Width::Word, 0x0000_02A0, &mut mem);
         assert!(hc.link_due(t + LINK_TRAIN_US));
         hc.train_links(&mut mem);
@@ -1458,10 +1284,6 @@ mod tests {
         hc.write(USBCMD, Width::Word, USBCMD_RS, &mut mem);
         assert_eq!(hc.usbsts() & USBSTS_HCH, 0);
     }
-
-    // -----------------------------------------------------------------------
-    // A whole enumeration, driven the way the firmware drives it: rings in
-    // host memory, doorbells, events read back out of memory.
 
     const ERST: u64 = 0x2000;
     const EVENT_RING: u64 = 0x3000;
@@ -1479,13 +1301,10 @@ mod tests {
         }
     }
 
-    /// Bring the controller up the way a driver does: event ring, command
-    /// ring, DCBAA, Run/Stop.
     fn started() -> (Xhci, VecMem) {
         let mut hc = Xhci::new();
         hc.attach(1, Box::new(Hub::new()));
         let mut mem = VecMem::default();
-        // One event ring segment, 16 TRBs.
         mem.write32(ERST, EVENT_RING as u32);
         mem.write32(ERST + 4, 0);
         mem.write32(ERST + 8, 16);
@@ -1501,31 +1320,25 @@ mod tests {
         (hc, mem)
     }
 
-    /// Place a command TRB at command-ring slot `cmd`, ring doorbell 0, and
-    /// return the completion event that landed at event-ring slot `ev`.
     fn command(hc: &mut Xhci, mem: &mut VecMem, cmd: u64, ev: u64, trb: [u32; 4]) -> [u32; 4] {
         put_trb(mem, CMD_RING + 16 * cmd, trb);
         hc.write(DBOFF, Width::Word, 0, mem);
         [0, 1, 2, 3].map(|i| mem.read32(EVENT_RING + 16 * ev + 4 * i))
     }
 
-    /// Enable Slot, Address Device, then `GET_DESCRIPTOR(DEVICE)` over the
-    /// control ring — the sequence that produces the bootloader's
-    /// `DEV [01:00] 2.16 000000:01 class 9 VID 2109 PID 3431`.
+    /// Enable Slot, Address Device, then `GET_DESCRIPTOR(DEVICE)`: the
+    /// bootloader's enumeration sequence.
     #[test]
     fn enumerating_the_hub_over_the_rings() {
         let (mut hc, mut mem) = started();
 
-        // The port has to be reset before the driver addresses anything.
         hc.write(PORTSC, Width::Word, PORTSC_PR | PORTSC_PP, &mut mem);
         assert_eq!(hc.portsc(1) & PORTSC_PED, PORTSC_PED, "port enabled");
-        // The reset posted a Port Status Change Event for port 1.
         let ev = [0, 1, 2, 3].map(|i| mem.read32(EVENT_RING + 4 * i));
         assert_eq!((ev[3] >> 10) & 0x3F, TRB_PORT_STATUS_CHANGE);
         assert_eq!(ev[0] >> 24, 1);
         assert_eq!(hc.usbsts() & USBSTS_PCD, USBSTS_PCD);
 
-        // Enable Slot.
         let ev = command(
             &mut hc,
             &mut mem,
@@ -1538,8 +1351,7 @@ mod tests {
         let slot = ev[3] >> 24;
         assert_eq!(slot, 1);
 
-        // Address Device: DCBAA entry, then an input context naming root port
-        // 1 and an endpoint-0 transfer ring.
+        // Address Device: DCBAA entry, then the input context.
         mem.write32(DCBAA + 8 * slot as u64, DEV_CTX as u32);
         mem.write32(INPUT_CTX + 4, 0x3); // add slot context + endpoint 0
         mem.write32(INPUT_CTX + 0x20, 1 << 27); // context entries 1, route 0
@@ -1558,12 +1370,10 @@ mod tests {
             ],
         );
         assert_eq!(ev[2] >> 24, CC_SUCCESS);
-        // Slot Context: speed High, state Addressed, address = slot id.
         assert_eq!((mem.read32(DEV_CTX) >> 20) & 0xF, Speed::High as u32);
         assert_eq!(mem.read32(DEV_CTX + 12) & 0xFF, slot);
         assert_eq!(mem.read32(DEV_CTX + 12) >> 27, 2);
 
-        // GET_DESCRIPTOR(DEVICE, 18) as a three-stage control transfer.
         let setup = [0x80u8, 6, 0, 1, 0, 0, 18, 0];
         put_trb(
             &mut mem,
@@ -1596,20 +1406,16 @@ mod tests {
             ],
             "the hub's device descriptor, byte for byte off a Raspberry Pi 4B d03115"
         );
-        // The Status Stage asked for an interrupt, so a Transfer Event landed
-        // on the event ring naming slot 1, endpoint 0.
         let ev = [0, 1, 2, 3].map(|i| mem.read32(EVENT_RING + 48 + 4 * i));
         assert_eq!((ev[3] >> 10) & 0x3F, TRB_TRANSFER_EVENT);
         assert_eq!(ev[3] >> 24, slot);
         assert_eq!((ev[3] >> 16) & 0x1F, 1, "endpoint 0");
         assert_eq!(ev[2] >> 24, CC_SUCCESS);
-        // The endpoint's dequeue pointer moved past all three stages.
         assert_eq!(mem.read32(DEV_CTX + 0x28) & !0xF, EP0_RING as u32 + 48);
     }
 
-    /// Address slot 1 on root port 1 and give it a transfer ring for `dci`,
-    /// writing the endpoint context by hand rather than through Configure
-    /// Endpoint, which is all the ring engine reads.
+    /// Address slot 1 on root port 1 with a transfer ring for `dci`, written by
+    /// hand: the endpoint context is all the ring engine reads.
     fn addressed(hc: &mut Xhci, mem: &mut VecMem, dci: u32, ring: u64) {
         hc.write(PORTSC, Width::Word, PORTSC_PR, mem);
         command(hc, mem, 0, 1, [0, 0, 0, (TRB_ENABLE_SLOT << 10) | 1]);
@@ -1632,8 +1438,6 @@ mod tests {
         mem.write32(DEV_CTX + 0x20 * dci as u64 + 8, ring as u32 | 1);
     }
 
-    /// A two-stage control transfer — Setup then Status, no data — written to
-    /// the endpoint-0 ring at `at`.
     fn control_no_data(mem: &mut VecMem, at: u64, setup: [u8; 8]) {
         put_trb(
             mem,
@@ -1648,16 +1452,14 @@ mod tests {
         put_trb(mem, at + 16, [0, 0, 0, (TRB_STATUS << 10) | (1 << 5) | 1]);
     }
 
-    /// An idle hub NAKs its status-change endpoint: the transfer stays
-    /// outstanding, so no event is posted and the endpoint's dequeue pointer
-    /// does not move. Completing it with zero bytes instead had Linux resubmit
-    /// the URB about two thousand times a second (#125).
+    /// An idle hub NAKs its status-change endpoint, leaving the transfer
+    /// outstanding: completing it empty has Linux resubmit thousands of times a
+    /// second.
     #[test]
     fn an_idle_status_endpoint_naks_instead_of_completing_empty() {
         let (mut hc, mut mem) = started();
         addressed(&mut hc, &mut mem, 3, EP1_RING);
 
-        // Endpoint 0x81, one byte, interrupt on completion.
         put_trb(
             &mut mem,
             EP1_RING,
@@ -1671,12 +1473,9 @@ mod tests {
             EP1_RING as u32,
             "the TRB is still at the head of the ring"
         );
-        // Event-ring slot 3 is the next one free; it is still blank.
         assert_eq!(mem.read32(EVENT_RING + 48 + 12), 0, "no event posted");
 
-        // Reset downstream port 2 over endpoint 0. That sets C_PORT_RESET, so
-        // the parked poll has something to say and the doorbell that carried
-        // the control transfer delivers it.
+        // Resetting a downstream port gives the parked poll something to say.
         control_no_data(&mut mem, EP0_RING, [0x23, 3, 4, 0, 2, 0, 0, 0]);
         hc.write(DBOFF + 4, Width::Word, 1, &mut mem);
         assert_eq!(mem.read_bytes(BUFFER, 1), vec![0b100], "port 2 changed");
@@ -1687,8 +1486,6 @@ mod tests {
         );
     }
 
-    /// A short IN transfer reports `Short Packet` with the residue, which is
-    /// how the driver learns a descriptor was smaller than its buffer.
     #[test]
     fn a_short_in_transfer_reports_its_residue() {
         let (mut hc, mut mem) = started();
@@ -1716,7 +1513,6 @@ mod tests {
                 (1 << 24) | (TRB_ADDRESS_DEVICE << 10) | 1,
             ],
         );
-        // Ask for 64 bytes of an 18-byte descriptor.
         let setup = [0x80u8, 6, 0, 1, 0, 0, 64, 0];
         put_trb(
             &mut mem,
@@ -1744,9 +1540,8 @@ mod tests {
         assert_eq!(ev[2] & 0x00FF_FFFF, 64 - 18, "residue");
     }
 
-    /// The capability block is what `xHC0 ver: … HCS: … HCC: …` prints, and it
-    /// has to stay byte-identical to the values read off a
-    /// Raspberry Pi 4B d03115.
+    /// The capability block must stay byte-identical to a Raspberry Pi 4B
+    /// d03115's.
     #[test]
     fn capability_registers_match_the_real_board() {
         let mut hc = Xhci::new();

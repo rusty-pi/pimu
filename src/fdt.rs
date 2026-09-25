@@ -1,25 +1,14 @@
 //! A read-only flattened-device-tree reader, just enough to look inside the
-//! blob `start4.elf` hands to the ARM.
+//! blob `start4.elf` hands to the ARM, plus one narrow writer
+//! ([`Fdt::with_property`], which replaces the value of a property that already
+//! exists) for `earlycon` onto `/chosen/bootargs`.
 //!
-//! The point of the whole bench is [rpi-mkosi#37]: a firmware bump must not
-//! silently change `/chosen/rpi-machine-id`, because that string feeds the root
-//! LUKS passphrase. To diff two firmware versions we have to get the *patched*
-//! device tree back out of the model, so this module parses the blob well
-//! enough to walk every node and print it, and to check the header before the
-//! bytes are written to a file. `/chosen` is the property set the regression
-//! pins today, but nothing here is specific to it: the tree start4 hands over
-//! is the whole subject, and a firmware bump is free to move identity into a
-//! node that does not exist yet.
+//! Getting the *patched* tree back out of the model is how two firmware
+//! versions are diffed — `/chosen/rpi-machine-id` is the property that must not
+//! move (see [`crate::identity`]), but nothing here is specific to it. Not a
+//! general DTB library: no phandle resolution, no memory-reservation walk.
 //!
-//! This is deliberately not a general DTB library: no phandle resolution, no
-//! memory-reservation walk, and one narrow writer — [`Fdt::with_property`],
-//! which replaces the value of a property that already exists. That is all the
-//! ARM side needs (`earlycon` onto `/chosen/bootargs`,
-//! [`crate::armstub::add_bootargs`]).
-//! Spec: Devicetree Specification v0.4, section 5 ("Flattened Devicetree
-//! Format").
-//!
-//! [rpi-mkosi#37]: https://github.com/valtzu/rpi-mkosi/issues/37
+//! Spec: Devicetree Specification v0.4, section 5.
 
 pub const FDT_MAGIC: u32 = 0xd00d_feed;
 
@@ -29,7 +18,6 @@ const FDT_PROP: u32 = 3;
 const FDT_NOP: u32 = 4;
 const FDT_END: u32 = 9;
 
-/// The fixed-size header at the start of every `.dtb`.
 #[derive(Debug, Clone, Copy)]
 pub struct Header {
     pub totalsize: u32,
@@ -40,7 +28,6 @@ pub struct Header {
     pub version: u32,
 }
 
-/// One property, as found by [`Fdt::properties_of`].
 #[derive(Debug, Clone)]
 pub struct Property {
     pub name: String,
@@ -48,9 +35,8 @@ pub struct Property {
 }
 
 impl Property {
-    /// The value rendered the way `fdtdump` would: a string if it looks like
-    /// one, a list of big-endian words if the length is a multiple of four,
-    /// raw hex otherwise.
+    /// The value rendered the way `fdtdump` would: string, big-endian cells or
+    /// raw hex, whichever it looks like.
     pub fn display(&self) -> String {
         if let Some(s) = self.as_str() {
             return format!("{s:?}");
@@ -68,9 +54,8 @@ impl Property {
         self.value.iter().map(|b| format!("{b:02x}")).collect()
     }
 
-    /// The value as text, if every byte is printable (a trailing NUL or LF,
-    /// which `start4` uses for both `rpi-serial64` and `rpi-machine-id`, is
-    /// accepted and trimmed).
+    /// The value as text, if every byte is printable; a trailing NUL or LF,
+    /// which `start4` appends, is trimmed.
     pub fn as_str(&self) -> Option<String> {
         let mut v = self.value.as_slice();
         while let Some((&last, rest)) = v.split_last() {
@@ -87,7 +72,6 @@ impl Property {
     }
 }
 
-/// A parsed (borrowed) device tree blob.
 pub struct Fdt<'a> {
     blob: &'a [u8],
     header: Header,
@@ -98,11 +82,9 @@ fn be32(b: &[u8]) -> u32 {
 }
 
 impl<'a> Fdt<'a> {
-    /// Validate the header and wrap the blob.
-    ///
-    /// Errors carry enough detail to tell "this is not a device tree at all"
-    /// apart from "the blob is truncated", because both are plausible when the
-    /// address came out of a firmware log line.
+    /// Validate the header and wrap the blob. Errors separate "not a device
+    /// tree" from "truncated": both are plausible when the address came out of
+    /// a firmware log line.
     pub fn parse(blob: &'a [u8]) -> Result<Fdt<'a>, String> {
         if blob.len() < 40 {
             return Err(format!(
@@ -143,8 +125,6 @@ impl<'a> Fdt<'a> {
         self.header
     }
 
-    /// The blob trimmed to the length its own header claims — what a `.dtb`
-    /// file should contain.
     pub fn bytes(&self) -> &'a [u8] {
         &self.blob[..self.header.totalsize as usize]
     }
@@ -156,14 +136,10 @@ impl<'a> Fdt<'a> {
         String::from_utf8_lossy(&rest[..end]).into_owned()
     }
 
-    /// Every property of one node, addressed by its full path (`/chosen`).
-    /// An absent node gives `None`, which is different from a node with no
-    /// properties.
+    /// Every property of one node by full path; an absent node gives `None`,
+    /// which differs from a node with no properties.
     pub fn properties_of(&self, path: &str) -> Option<Vec<Property>> {
         let want: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-        // The node names on the current branch. The root's own name is empty,
-        // so `stack[1..] == want` means the tokens we are reading belong to the
-        // node that was asked for.
         let mut stack: Vec<String> = Vec::new();
         let matches = |stack: &[String], want: &[&str]| -> bool {
             stack.len() == want.len() + 1 && stack[1..].iter().zip(want).all(|(a, b)| a == b)
@@ -220,16 +196,11 @@ impl<'a> Fdt<'a> {
             None
         }
     }
-    /// Every node in the tree, depth first, as `(depth, path, properties)`.
-    /// The root is depth 0 with the path `/`.
-    ///
-    /// This is the general form; [`Self::properties_of`] is the shortcut for
-    /// one known path. Keeping the walk general is deliberate — the bench
-    /// exists to diff one firmware version against another, and a bump may add
+    /// Every node in the tree, depth first, as `(depth, path, properties)`;
+    /// the root is depth 0 at `/`. General on purpose: a firmware bump may add
     /// nodes as readily as it changes a property inside one.
     pub fn nodes(&self) -> Vec<(usize, String, Vec<Property>)> {
         let mut out: Vec<(usize, String, Vec<Property>)> = Vec::new();
-        // Index into `out` of each open node, innermost last.
         let mut open: Vec<usize> = Vec::new();
         let mut names: Vec<String> = Vec::new();
 
@@ -281,10 +252,8 @@ impl<'a> Fdt<'a> {
         out
     }
 
-    /// The RAM the tree describes: `reg` of every `memory` node directly under
-    /// the root, as `(base, size)`, decoded with the root's `#address-cells` /
-    /// `#size-cells` (2 and 1 on a Pi 4, which are also the spec's defaults,
-    /// section 2.3.5).
+    /// The RAM the tree describes: `reg` of every `memory` node under the
+    /// root, decoded with the root's `#address-cells`/`#size-cells`.
     pub fn memory_ranges(&self) -> Result<Vec<(u64, u64)>, String> {
         let nodes = self.nodes();
         let root = nodes.first().ok_or("empty tree")?;
@@ -327,19 +296,12 @@ impl<'a> Fdt<'a> {
         Ok(out)
     }
 
-    /// A copy of the blob with one existing property's value replaced.
-    ///
-    /// The value may change length, so the structure block is re-emitted and
-    /// everything after it moves: the header's `totalsize`, `off_dt_strings`
-    /// and `size_dt_struct` are rewritten to match. The memory-reservation
-    /// block and the strings block are copied through byte for byte, and the
-    /// order the firmware laid them out in (header, reservations, structure,
-    /// strings — the order `dtc` uses too) is required rather than assumed.
-    /// Free space past the strings block is not carried over; the result is
-    /// exactly as long as its own `totalsize`.
-    ///
-    /// Only replaces: a node or property that does not exist is an error,
-    /// because adding one would also need a new entry in the strings block.
+    /// A copy of the blob with one existing property's value replaced. The
+    /// value may change length, so the structure block is re-emitted and the
+    /// header rewritten; the blob's layout (header, reservations, structure,
+    /// strings) is required rather than assumed, and the result is exactly as
+    /// long as its own `totalsize`. Only replaces: adding a property would also
+    /// need a new entry in the strings block.
     pub fn with_property(&self, path: &str, name: &str, value: &[u8]) -> Result<Vec<u8>, String> {
         let h = self.header;
         let (s_off, s_len) = (h.off_dt_struct as usize, h.size_dt_struct as usize);
@@ -415,16 +377,14 @@ impl<'a> Fdt<'a> {
         Ok(b)
     }
 
-    /// The whole tree rendered as source, near enough to `dtc -O dts` output to
-    /// diff two firmware versions by eye. Not a faithful `.dts`: values are
-    /// rendered by [`Property::display`], which guesses string vs cell vs
-    /// bytes, so feed `dtc` the blob from `--dump-fdt` when exactness matters.
+    /// The whole tree as source, near enough to `dtc -O dts` to diff two
+    /// firmware versions by eye. Not a faithful `.dts` — values are guessed by
+    /// [`Property::display`] — so use `--dump-fdt` when exactness matters.
     pub fn to_dts(&self) -> String {
         let mut s = String::from("/dts-v1/;\n\n");
         let nodes = self.nodes();
         let mut depth_of_last = 0usize;
         for (i, (depth, path, props)) in nodes.iter().enumerate() {
-            // Close any nodes this one is not inside of.
             while depth_of_last > *depth {
                 depth_of_last -= 1;
                 s.push_str(&format!("{}}};\n", "\t".repeat(depth_of_last)));
@@ -461,8 +421,7 @@ pub(crate) mod tests {
 
     #[test]
     fn memory_ranges_decode_reg_with_the_root_cells() {
-        // The shape of the tree start4 hands over on a 1 GB Pi 4:
-        // `#address-cells = <2>`, `#size-cells = <1>`, 948 MiB at 0.
+        // The shape start4 hands over on a 1 GB Pi 4: cells 2 and 1.
         let cells = |v: &[u32]| v.iter().flat_map(|w| w.to_be_bytes()).collect::<Vec<u8>>();
         let blob = build(
             &[
@@ -479,12 +438,10 @@ pub(crate) mod tests {
         );
         let fdt = Fdt::parse(&blob).unwrap();
         assert_eq!(fdt.memory_ranges().unwrap(), vec![(0, 0x3b40_0000)]);
-        // No memory node at all is an error, not an empty map.
         let none = build(&[], &[("chosen", vec![])]);
         assert!(Fdt::parse(&none).unwrap().memory_ranges().is_err());
     }
 
-    /// `/ { <root props> <child> { <props> } ... }` as a blob.
     #[allow(clippy::type_complexity)]
     fn build(root: &[(&str, Vec<u8>)], children: &[(&str, Vec<(&str, Vec<u8>)>)]) -> Vec<u8> {
         fn tok(s: &mut Vec<u8>, v: u32) {
@@ -551,12 +508,10 @@ pub(crate) mod tests {
         let blob = sample();
         let fdt = Fdt::parse(&blob).unwrap();
         let nodes = fdt.nodes();
-        // The root plus `/chosen`, with the root's path spelled `/`.
         let paths: Vec<&str> = nodes.iter().map(|(_, p, _)| p.as_str()).collect();
         assert_eq!(paths, vec!["/", "/chosen"]);
         assert_eq!(nodes[0].0, 0);
         assert_eq!(nodes[1].0, 1);
-        // Properties land on the node that is open, not on the root.
         assert!(nodes[0].2.is_empty());
         let names: Vec<&str> = nodes[1].2.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, vec!["bootargs", "rpi-machine-id"]);
@@ -569,11 +524,9 @@ pub(crate) mod tests {
         assert!(dts.starts_with("/dts-v1/;"), "{dts}");
         assert!(dts.contains("chosen {"), "{dts}");
         assert!(dts.contains("bootargs = \"hi\";"), "{dts}");
-        // Every node that was opened is closed again.
         assert_eq!(dts.matches('{').count(), dts.matches("};").count());
     }
 
-    /// Build a tiny blob: `/ { chosen { bootargs = "hi"; rpi-machine-id = "ab\n"; } }`.
     pub(crate) fn sample() -> Vec<u8> {
         let strings = b"bootargs\0rpi-machine-id\0".to_vec();
         let mut s: Vec<u8> = Vec::new();
@@ -629,7 +582,6 @@ pub(crate) mod tests {
         assert_eq!(props[0].name, "bootargs");
         assert_eq!(props[0].as_str().as_deref(), Some("hi"));
         assert_eq!(props[1].name, "rpi-machine-id");
-        // The trailing LF start4 appends is trimmed for display.
         assert_eq!(props[1].as_str().as_deref(), Some("ab"));
     }
 
@@ -644,7 +596,6 @@ pub(crate) mod tests {
         assert_eq!(back.header().totalsize as usize, patched.len());
         let props = back.properties_of("/chosen").unwrap();
         assert_eq!(props[0].as_str().as_deref(), Some("earlycon hi"));
-        // The property after it, and its name in the moved strings block.
         assert_eq!(props[1].name, "rpi-machine-id");
         assert_eq!(props[1].as_str().as_deref(), Some("ab"));
         assert!(fdt.with_property("/chosen", "nope", b"x").is_err());

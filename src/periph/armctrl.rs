@@ -1,23 +1,14 @@
 //! The ARM control block at `0x7E00_B000` as the VPU sees it — the part below
 //! the mailboxes (`0x7E00_B880`, [`crate::periph::mbox`]).
 //!
-//! What matters here is how the firmware lets the ARM cores out of reset.
-//! Traced on the pinned firmware (`PIMU_TRACE_MMIO=7e00b000-7e101000 boot
-//! …`, #40): the whole boot touches this block only a handful of times, and
-//! the writes right after `arm_loader: Starting ARM with 948MB` are
+//! Registers and fields: `specs/armctrl.toml` ([`crate::spec::armctrl`]).
 //!
-//! ```text
-//!   0x7E00_B41C <- 0x0000_000A
-//!   0x7E00_B008 <- 0x0000_3030
-//!   0x7E00_B000 <- 0x0000_1000        (earlier in the boot: 0x0000_0200)
-//! ```
-//!
-//! all from start4's MMIO write helper at `0xFEC0_043A`, with nothing but
-//! power-management housekeeping after them. The last one is the release:
-//! the model takes a write to `+0x000` with bit 12 set as "start the ARM",
-//! and the ARM's reset state (PC 0, EL3) is where the armstub
-//! [`crate::armstub`] describes begins. What the other bits of these
-//! registers do is not known; they are kept as plain storage.
+//! What matters here is how the firmware lets the ARM cores out of reset. A
+//! traced boot touches the block only a handful of times, and the release is a
+//! write to `+0x000` with bit 12 set, right after `arm_loader: Starting ARM`;
+//! the cores then start from their reset state (PC 0, EL3) in the armstub
+//! [`crate::armstub`] describes. What the other bits do is not known, so they
+//! are plain storage.
 
 use std::collections::BTreeMap;
 
@@ -28,7 +19,6 @@ use crate::spec::armctrl::{
 };
 use crate::spec::Coverage;
 
-/// Everything is storage apart from the release bit.
 pub const COVERAGE: Coverage = Coverage {
     block: "armctrl",
     decoded: &[CONTROL, REG_008, TIMER_PREDIV],
@@ -46,7 +36,6 @@ impl ArmCtrl {
         ArmCtrl::default()
     }
 
-    /// Has the firmware released the ARM since the last call?
     pub fn take_release(&mut self) -> bool {
         std::mem::take(&mut self.release)
     }

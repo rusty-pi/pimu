@@ -1,33 +1,28 @@
 //! AUX peripheral: mini-UART (`UART1`) + SPI master register stubs.
 //!
+//! Registers and fields: `specs/aux.toml`.
+//!
 //! The mini-UART at offset `0x40` is Linux's `ttyS0`, and on a card whose
 //! `config.txt` leaves Bluetooth enabled it is *the* console: the base device
 //! tree keeps `serial0 = &uart1`, the firmware hands GPIO 14/15 over to ALT5
 //! at the ARM handover, and every kernel line comes out here instead of the
-//! PL011 (#124).
+//! PL011.
 //!
-//! Transmit is instant, as in the PL011 model: bytes written to `MU_IO` are
-//! appended to an output buffer the harness drains, and the line status never
-//! reports the transmit FIFO full or busy.
+//! Transmit is instant and never reports full or busy. Receive mirrors
+//! [`super::uart_pl011::Pl011`]: input goes onto the *line* ([`Aux::feed`]) and
+//! [`Aux::pump`] clocks it into the FIFO at the rate `MU_BAUD` sets, against
+//! modelled time, so a scripted sequence lands at the same guest instant every
+//! run.
 //!
-//! Receive mirrors [`super::uart_pl011::Pl011`]: host input goes onto the
-//! *line* ([`Aux::feed`]) and [`Aux::pump`] moves it into the eight-entry
-//! receive FIFO at the rate `MU_BAUD` sets, against the modelled clock, so a
-//! scripted input sequence lands at the same guest instant on every run. Bytes
-//! wait on the line while the FIFO is full or the receiver is off rather than
-//! being dropped as an overrun.
+//! Two deliberate 16550-isms the datasheet does not describe, both needed by
+//! Linux's `8250` driver:
 //!
-//! `MU_LCR` bit 7 is the 16550's DLAB: while it is set, `MU_IO` and `MU_IER`
-//! are the low and high bytes of the baud-rate counter instead of the data
-//! and interrupt-enable registers, which is how Linux's `8250` driver
-//! programs the rate. Without that, its divisor write would push a byte into
-//! the console and leave a stray interrupt enabled.
-//!
-//! The interrupt is the 16550's, not the datasheet's: `MU_IER` bit 0 enables
-//! the receive interrupt and bit 1 the transmit one, which is the order
-//! Linux's `8250` driver — the one behind `brcm,bcm2835-aux-uart` — writes
-//! them in, and `MU_IIR` reports the highest-priority of the two with the
-//! inverted pending bit.
+//! - `MU_LCR` bit 7 is DLAB: while set, `MU_IO` and `MU_IER` are the baud
+//!   counter's two bytes. Without it the divisor write would push a byte into
+//!   the console and leave a stray interrupt enabled.
+//! - `MU_IER` bit 0 enables receive and bit 1 transmit — the 16550 order, not
+//!   the datasheet's — and `MU_IIR` reports the higher-priority of the two
+//!   with the pending bit inverted.
 
 use std::collections::VecDeque;
 
@@ -48,8 +43,6 @@ use crate::spec::aux::{
 };
 use crate::spec::Coverage;
 
-/// Every register in `specs/aux.toml` is modelled; the SPI masters are not in
-/// it.
 pub const COVERAGE: Coverage = Coverage {
     block: "aux",
     decoded: &[
@@ -69,23 +62,18 @@ pub const COVERAGE: Coverage = Coverage {
     ],
 };
 
-/// The mini-UART's receive FIFO is eight bytes deep (the transmit one too).
 const FIFO_DEPTH: usize = 8;
 
-/// The clock the baud-rate counter divides: the VPU core clock, 500 MHz. Linux
-/// reports the eighth of it the counter starts from —
-/// `ttyS0 at MMIO 0xfe215040 (irq = 37, base_baud = 62500000) is a 16550`.
+/// The clock the baud counter divides: the VPU core clock. Linux reports the
+/// eighth of it as `base_baud = 62500000`.
 const SYSTEM_CLOCK_HZ: u64 = 500_000_000;
 
-/// `MU_IIR.ID` for "a byte is waiting in the receive FIFO".
 const IIR_ID_RX: u32 = 0b10;
-/// `MU_IIR.ID` for "room in the transmit holding register".
 const IIR_ID_TX: u32 = 0b01;
 
 #[derive(Default)]
 pub struct Aux {
     pub out: Vec<u8>,
-    /// Where [`Channel::Uart`] goes.
     pub log: Log,
     enables: u32,
     ier: u32,
@@ -94,13 +82,11 @@ pub struct Aux {
     scratch: u32,
     cntl: u32,
     baud: u32,
-    /// Receive FIFO.
     rx: VecDeque<u8>,
     /// Host input not yet received: the serial line.
     line: VecDeque<u8>,
     /// Modelled time (µs) the next character on the line finishes arriving.
     next_rx_us: u64,
-    /// Nothing was on the line at the last [`Aux::pump`].
     line_idle: bool,
 }
 
@@ -124,12 +110,10 @@ impl Aux {
         self.line.extend(bytes);
     }
 
-    /// Bytes fed but not yet read by the guest.
     pub fn rx_backlog(&self) -> usize {
         self.line.len() + self.rx.len()
     }
 
-    /// The interrupt output, which `AUX_IRQ` bit 0 mirrors.
     pub fn irq_line(&self) -> bool {
         self.iir_id().is_some()
     }
@@ -167,9 +151,8 @@ impl Aux {
         }
     }
 
-    /// One 8N1 character (ten bit periods) at the programmed rate, in µs. The
-    /// line runs at `SYSTEM_CLOCK_HZ / (8 * (MU_BAUD + 1))`; before anything
-    /// has programmed the counter, 115200 baud.
+    /// One 8N1 character at `SYSTEM_CLOCK_HZ / (8 * (MU_BAUD + 1))`, in µs;
+    /// 115200 baud before the counter is programmed.
     fn char_us(&self) -> u64 {
         if self.baud == 0 {
             return 87;
@@ -177,23 +160,17 @@ impl Aux {
         (10 * 8 * (u64::from(self.baud) + 1) * 1_000_000 / SYSTEM_CLOCK_HZ).max(1)
     }
 
-    /// `MU_LCR.DLAB`: `MU_IO` and `MU_IER` are the baud-rate counter's two
-    /// bytes while it is set.
     fn dlab(&self) -> bool {
         self.lcr & LCR_DLAB != 0
     }
 
-    /// Which interrupt `MU_IIR` reports, receive first, or `None` when the
-    /// line is idle.
     fn iir_id(&self) -> Option<u32> {
         if self.enables & ENABLES_UART == 0 {
             return None;
         }
         if self.ier & IER_RX != 0 && !self.rx.is_empty() {
-            // A byte is waiting.
             Some(IIR_ID_RX)
         } else if self.ier & IER_TX != 0 {
-            // Transmit never stalls, so the holding register is always empty.
             Some(IIR_ID_TX)
         } else {
             None
@@ -225,7 +202,6 @@ impl MmioDevice for Aux {
             MU_LCR => self.lcr,
             MU_MCR => self.mcr,
             MU_LSR => {
-                // Always ready to send.
                 let mut lsr = LSR_TX_EMPTY | LSR_TX_IDLE;
                 if !self.rx.is_empty() {
                     lsr |= LSR_DATA_READY;
@@ -242,7 +218,6 @@ impl MmioDevice for Aux {
                     | STAT_TX_DONE
                     | (self.rx.len() as u32) << MU_STAT_RX_FIFO_LEVEL_SHIFT;
                 if self.rx.is_empty() {
-                    // Nothing waiting, and nothing part-way in either.
                     stat |= STAT_RX_IDLE;
                 } else {
                     stat |= STAT_SYMBOL_AVAILABLE;
@@ -318,7 +293,6 @@ mod tests {
         assert_eq!(a.read(MU_IO, Width::Word).unwrap(), 0x1d);
         assert_eq!(a.read(MU_IER, Width::Word).unwrap(), 0x02);
         a.write(MU_LCR, Width::Word, 0x13).unwrap();
-        // Nothing went out on the line, and no interrupt was left enabled.
         assert!(a.take_output().is_empty());
         assert_eq!(a.read(MU_BAUD, Width::Word).unwrap(), 0x021d);
         assert_eq!(a.read(MU_IER, Width::Word).unwrap(), IER_RX);
@@ -342,7 +316,6 @@ mod tests {
         a.pump(0);
         assert_eq!(a.read(MU_LSR, Width::Word).unwrap() & LSR_DATA_READY, 0);
         assert!(!a.irq_line());
-        // 10 bits at ~115200 baud is 86 µs.
         a.pump(86);
         assert_eq!(
             a.read(MU_LSR, Width::Word).unwrap() & LSR_DATA_READY,
@@ -369,7 +342,6 @@ mod tests {
         // pump that notices it delivers nothing yet.
         a.pump(0);
         a.pump(10_000);
-        // Eight in the FIFO, two still on the line.
         assert_eq!(a.rx.len(), FIFO_DEPTH);
         assert_eq!(a.line.len(), 2);
         assert_eq!(a.rx_backlog(), 10);
@@ -390,7 +362,6 @@ mod tests {
         a.pump(10_000);
         assert!(a.rx.is_empty());
         assert_eq!(a.rx_backlog(), 1);
-        // And it is still there once the receiver comes back.
         a.write(MU_CNTL, Width::Word, CNTL_RX_ENABLE).unwrap();
         a.pump(20_000);
         assert_eq!(a.read(MU_IO, Width::Word).unwrap(), u32::from(b'x'));

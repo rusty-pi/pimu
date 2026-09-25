@@ -1,5 +1,8 @@
 //! HDMI DDC I²C masters (`0x7EF0_4500`, `0x7EF0_9500`).
 //!
+//! Registers and fields: `specs/hdmi_ddc.toml` ([`crate::spec::hdmi_ddc`]) and,
+//! for the auto-i2c window, `specs/hdmi_auto_i2c.toml`.
+//!
 //! Each BCM2711 HDMI controller has its own I²C master for the DDC lines of
 //! its connector — the bus a monitor's EDID EEPROM (slave `0x50`) sits on.
 //! This is *not* the BSC of [`crate::periph::bsc`]: the Pi 4 device tree calls
@@ -7,67 +10,24 @@
 //! different block with a different register layout. Ground truth from
 //! a Raspberry Pi 4B d03115:
 //!
-//! ```text
-//! /proc/device-tree/soc/i2c@7ef04500/compatible      brcm,bcm2711-hdmi-i2c
-//! /proc/device-tree/soc/i2c@7ef04500/reg             0x7ef04500 0x100
-//!                                                    0x7ef00b00 0x300
-//! /proc/device-tree/soc/i2c@7ef04500/clock-frequency 97500
-//! ```
+//! The node's second `reg` window (`0x7EF0_0B00`) is the "auto-i2c" block:
+//! sequencers that write a list of values into this master and report when the
+//! transfer finishes. start4 1.20190925 to 1.20200601 run one such list at boot
+//! and wait for it with no timeout; the machine maps that window onto this
+//! device at [`AUTO_WINDOW`].
 //!
-//! The node's second `reg` window is the "auto-i2c" block: sequencers that
-//! write a list of values into this master and report when the transfer they
-//! start has finished. start4 1.20190925 to 1.20200601 run one such list at
-//! boot and wait for it with no timeout; later builds leave the block alone.
-//! What they use of it is modelled here (`specs/hdmi_auto_i2c.toml`), and the
-//! machine maps that window onto this device at [`AUTO_WINDOW`].
+//! **`INTRP` and `NOACK` in `IIC_ENABLE` must be computed, not RAM-backed.** A
+//! register that reads back what was written reports every transfer instantly
+//! complete and acknowledged, so an empty bus looks as if it answered with zero
+//! bytes: start4 then fails the EDID checksum, never bumps its attempt counter
+//! because no error was reported, and re-reads EDID forever. Completion is timed
+//! in simulated microseconds off the system timer, as in
+//! [`crate::periph::bsc`], so `INTRP` can never appear inside the write that
+//! started the transfer.
 //!
-//! Register map, offsets from the instance base — the `bsc_regs` struct of the
-//! Linux driver, and exactly what start4's own driver drives (`0x3ECE69E2`
-//! read, `0x3ECE6DEC` write, `0x3ECE6B00`/`0x3ECE6EC8` accessors):
-//!
-//! ```text
-//!   0x00        CHIP_ADDRESS  slave address, already shifted: addr<<1 | read
-//!   0x04..0x24  DATA_IN[8]    bytes to send, packed little-endian per word
-//!   0x24        CNT           byte count (CNT1 in bits 0..5)
-//!   0x28        CTL           DTF(0..1) SCL_SEL(4..5) INT_EN(6) DIV_CLK(7)
-//!   0x2C        IIC_ENABLE    ENABLE(0) INTRP(1) NOACK(2) NOSTOP(4)
-//!                             NOSTART(5) RESTART(6)
-//!   0x30..0x50  DATA_OUT[8]   bytes received, packed the same way
-//!   0x50        CTLHI         WAIT_DIS(0) IGNORE_ACK(1) DATAREG_SIZE(6)
-//!   0x54        SCL_PARAM     timing — stored, otherwise ignored
-//! ```
-//!
-//! A transfer starts when software writes `IIC_ENABLE` with `ENABLE` set, and
-//! the two status bits are what the firmware waits on (`0x3ECE6D5C`, verbatim):
-//!
-//! ```c
-//!   for (i = 20; i; i--) { if (read(0x2c) & 2) break; usleep(5000); }
-//!   if (!i)                 { log("%s HDMI%d timed out"); return -1; }
-//!   if (read(0x2c) & 4)     { log("%s HDMI%d no ACK");    return -2; }
-//!   return 0;
-//! ```
-//!
-//! So `INTRP` reads back as "the transfer has finished" (software writes it as
-//! an enable), and `NOACK` as "the slave never acknowledged its address". Both
-//! have to be *computed*, not RAM-backed: a register that reads back whatever
-//! was last written to it reports every transfer instantly complete and
-//! acknowledged, which is how the model used to conclude that a bus with
-//! nothing on it had answered with 128 zero bytes. start4 then failed the EDID
-//! checksum, and because no error was reported it never bumped its per-block
-//! attempt counter and re-read EDID forever.
-//!
-//! Like [`crate::periph::bsc`], completion is timed in simulated microseconds
-//! off the system timer rather than in retired instructions: `INTRP` lands
-//! once the bytes would have been clocked out at the bus rate, so it can never
-//! appear inside the register write that started the transfer.
-//!
-//! The reference board has no monitor on either connector — a
-//! Raspberry Pi 4B d03115 reports both `card1-HDMI-A-{1,2}/status` as
-//! `disconnected` — so by default no slave answers and every transfer completes
-//! `INTRP | NOACK`, which is what makes start4 log
-//! `HDMI%d:EDID error reading EDID block 0 attempt 0` and give up.
-//! [`HdmiDdc::with_edid`] attaches an EDID EEPROM instead, for the day the HDMI
-//! mode-set path is worth exercising.
+//! By default no slave answers — a Raspberry Pi 4B d03115 reports both
+//! `card1-HDMI-A-{1,2}/status` as `disconnected` — so every transfer completes
+//! `INTRP | NOACK`. [`HdmiDdc::with_edid`] attaches an EDID EEPROM instead.
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
@@ -84,7 +44,6 @@ use crate::spec::hdmi_ddc::{
 };
 use crate::spec::Coverage;
 
-/// Every register in `specs/hdmi_ddc.toml` is modelled, on both connectors.
 pub const COVERAGE: Coverage = Coverage {
     block: "hdmi_ddc",
     decoded: &[
@@ -109,20 +68,16 @@ pub const COVERAGE_AUTO: Coverage = Coverage {
 /// device answers both of its device-tree node's `reg` windows.
 pub const AUTO_WINDOW: u32 = 0x1000;
 const AUTO_WORDS: usize = (AUTO_SIZE / 4) as usize;
-/// The one channel whose list is known to sit at `LIST2`.
 const AUTO_CHANNEL: u32 = 2;
 /// A list command that writes its value to the master's register at
 /// `4 * (command & 0xFF)`.
 const AUTO_CMD_WRITE: u32 = 0x100;
 
-/// Eight data registers each way, four bytes apiece.
 const DATA_REGS: usize = DATA_IN_COUNT as usize;
 const DATA_IN_LAST: u32 = DATA_IN + (DATA_IN_COUNT - 1) * DATA_IN_STRIDE;
 const DATA_OUT_LAST: u32 = DATA_OUT + (DATA_OUT_COUNT - 1) * DATA_OUT_STRIDE;
-/// Longest transfer the block can do in one go.
 pub const MAX_BYTES: usize = DATA_REGS * 4;
 
-/// `CTL.DTF` bit 0: a read.
 const CTL_DTF_READ: u32 = 1 << CTL_DTF_SHIFT;
 
 /// A monitor's EDID for [`HdmiDdc::with_edid`], for a harness that asks for a
@@ -145,7 +100,6 @@ pub const DEFAULT_EDID: [u8; 128] = [
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x42,
 ];
 
-/// 7-bit address of a monitor's EDID EEPROM on the DDC bus.
 pub const EDID_ADDR: u32 = 0x50;
 
 pub struct HdmiDdc {
@@ -162,7 +116,6 @@ pub struct HdmiDdc {
     /// A transfer still on the wire: `(simulated µs at which it finishes,
     /// whether the slave acknowledged)`.
     pending: Option<(u64, bool)>,
-    /// Latched status of the last completed transfer.
     done: bool,
     noack: bool,
     now_us: u64,
@@ -170,16 +123,13 @@ pub struct HdmiDdc {
     /// offset its address pointer currently sits at.
     edid: Option<Vec<u8>>,
     edid_ptr: usize,
-    /// The auto-i2c window, as written.
     auto: [u32; AUTO_WORDS],
     /// Channels whose list has run and whose transfer is still on the wire.
     auto_busy: u32,
-    /// `DONE`.
     auto_done: u32,
 }
 
 impl HdmiDdc {
-    /// A connector with nothing plugged into it.
     pub fn new(name: &'static str) -> HdmiDdc {
         HdmiDdc {
             name,
@@ -204,42 +154,32 @@ impl HdmiDdc {
     }
 
     /// A connector with a monitor on it, answering at [`EDID_ADDR`] with
-    /// `edid`. Nothing on the boot path builds one of these yet; it is what
-    /// the HDMI mode-set path would need.
+    /// `edid` — what the HDMI mode-set path needs.
     pub fn with_edid(mut self, edid: Vec<u8>) -> HdmiDdc {
         self.edid = Some(edid);
         self
     }
 
     /// Bus rate, from the device tree's `clock-frequency`. The `CTL` clock
-    /// selectors (`SCL_SEL` / `DIV_CLK`) pick between a handful of rates on
-    /// real silicon; the only thing that rides on the exact figure here is how
-    /// long a transfer takes, and start4 programs the bus the device tree
-    /// describes, so take that rate and store the selectors.
+    /// selectors only affect how long a transfer takes here, so they are stored
+    /// and this rate used.
     const BUS_HZ: u64 = 97_500;
 
-    /// How long `bytes` data bytes plus the address byte take on the wire, in
-    /// microseconds — nine bits each, counting the ACK slot.
     fn wire_us(&self, bytes: usize) -> u64 {
         (9 * (bytes as u64 + 1) * 1_000_000 / Self::BUS_HZ).max(1)
     }
 
-    /// Advance simulated time; latch the status of a transfer that has
-    /// finished clocking out.
     pub fn advance_to(&mut self, now_us: u64) {
         self.now_us = now_us;
         if let Some((deadline, acked)) = self.pending {
             if deadline <= now_us {
                 self.pending = None;
                 self.done = true;
-                // `CTLHI.IGNORE_ACK` makes the master carry on regardless, so
-                // an unACKed address is not reported.
                 self.noack = !acked && self.ctlhi & CTLHI_IGNORE_ACK == 0;
             }
         }
     }
 
-    /// Live `IIC_ENABLE`: what software wrote, plus the two status bits.
     fn enable_status(&self) -> u32 {
         let mut v = self.iic_enable & !(EN_INTRP | EN_NOACK);
         if self.done {
@@ -251,7 +191,6 @@ impl HdmiDdc {
         v
     }
 
-    /// Run the transfer the `ENABLE` write just kicked off.
     fn start(&mut self) {
         let read = self.ctl & CTL_DTF_READ != 0;
         let addr = (self.chip_address >> 1) & 0x7F;
@@ -283,11 +222,9 @@ impl HdmiDdc {
         self.edid_ptr = (self.data_in[0] & 0xFF) as usize;
     }
 
-    /// Move `count` bytes out of the EEPROM into `DATA_OUT`, little-endian
-    /// within each word, and advance its address pointer — which is what makes
-    /// the driver's `NOSTART` continuation chunks pick up where the last one
-    /// stopped. The EEPROM wraps at the end of its address space, the way an
-    /// EDID ROM does.
+    /// Move `count` bytes out of the EEPROM into `DATA_OUT` and advance its
+    /// address pointer, which is what makes the driver's `NOSTART` continuation
+    /// chunks pick up where the last stopped. It wraps, like an EDID ROM.
     fn fill_data_out(&mut self, count: usize) {
         self.data_out = [0; DATA_REGS];
         let Some(edid) = self.edid.as_ref() else {
@@ -363,7 +300,6 @@ impl HdmiDdc {
         started
     }
 
-    /// Move the channels whose transfer has finished from busy to `DONE`.
     fn auto_settle(&mut self) {
         if self.auto_busy != 0 && self.pending.is_none() {
             self.auto_done |= self.auto_busy;
@@ -438,9 +374,6 @@ mod tests {
         d.write(AUTO_WINDOW + off, Width::Word, value).unwrap();
     }
 
-    /// The one list start4 1.20190925 runs, on a connector with nothing on
-    /// it: the master runs the transfer the list sets up, and channel 2's
-    /// `DONE` bit comes up once that has finished (#76).
     /// The built-in EDID has to parse: a parser checks the header and the
     /// checksum before anything else, and start4 gives up on a block whose
     /// checksum is wrong.
@@ -459,6 +392,9 @@ mod tests {
         assert_eq!(DEFAULT_EDID[126], 0, "no extension blocks");
     }
 
+    /// The one list start4 1.20190925 runs, on a connector with nothing on
+    /// it: the master runs the transfer the list sets up, and channel 2's
+    /// `DONE` bit comes up once that has finished.
     #[test]
     fn an_auto_i2c_list_runs_through_the_master() {
         let mut d = HdmiDdc::new("hdmi-ddc0");

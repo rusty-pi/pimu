@@ -1,5 +1,4 @@
-//! `run`, `run-all` and `boot-check`: the regression scenarios
-//! (`src/harness/`).
+//! `run`, `run-all` and `boot-check`: the regression scenarios (`src/harness/`).
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -12,8 +11,7 @@ use anyhow::{bail, Context, Result};
 use pimu::harness::boot::{GoldenCheck, RetiredCounts};
 use pimu::harness::{self, GoldenOutcome};
 
-/// `run <scenario.toml>`: one in-process scenario against its golden
-/// transcript.
+/// `run <scenario.toml>`: one in-process scenario against its golden transcript.
 pub fn cmd_run(args: &[String]) -> Result<ExitCode> {
     let mut path: Option<PathBuf> = None;
     let mut update = false;
@@ -107,23 +105,12 @@ fn run_one(scn: &harness::Scenario, update: bool, verbose: bool) -> Result<bool>
     Ok(ok)
 }
 
-/// `boot-check <scenario.toml>`: the firmware regression (#97).
-///
-/// Runs the boot the scenario describes, once — it takes minutes, and the wall
-/// clock has little headroom — and checks what it left behind three ways: the
-/// console against the golden transcript, the combined output against the
-/// milestones and the pinned retired counts (#85). `--update` rewrites the
-/// golden and the counts instead of failing on them.
-///
-/// * `--output <log>`: where the combined stdout and stderr go
-///   (`boot-<scenario>.log` when not given), with the console next to it as
-///   `<log>.console`.
-/// * `--from <log>`: check the pair an earlier run left instead of booting.
-/// * `--max-wall <secs>`: the wall budget, instead of the scenario's.
-/// * `--plan`: print the `boot` invocation instead of running it — a
-///   `wall=<secs>` line, then one argument a line — for running the workload
-///   by hand or under `perf`. The scenario file stays the only place the
-///   workload is written down.
+/// `boot-check <scenario.toml>`: the firmware regression. Boots once — it takes
+/// minutes — and checks the console against the golden transcript, the combined
+/// output against the milestones, and the pinned retired counts. `--update`
+/// rewrites the golden and the counts; `--from <log>` checks a pair an earlier
+/// run left; `--plan` prints the `boot` invocation instead of running it, so the
+/// scenario file stays the only place the workload is written down.
 pub fn cmd_boot_check(args: &[String]) -> Result<ExitCode> {
     let mut path: Option<PathBuf> = None;
     let mut output: Option<PathBuf> = None;
@@ -160,12 +147,8 @@ pub fn cmd_boot_check(args: &[String]) -> Result<ExitCode> {
     if let Some(secs) = max_wall {
         scn.boot.wall_secs = secs;
     }
-    // Named after the scenario when the caller does not say. A fixed
-    // `boot.log` is shared state: two checks running at once in one checkout
-    // overwrite each other's log and console half-way through, and each then
-    // judges a mix of both runs — milestones "missing" from lines that are
-    // plainly on the terminal, and a transcript that belongs to the other
-    // scenario. Boots take minutes, so running two is the normal thing to do.
+    // Named after the scenario: a fixed `boot.log` would be shared state, and two
+    // checks at once in one checkout would each judge a mix of both runs.
     let log = from
         .as_ref()
         .or(output.as_ref())
@@ -193,15 +176,13 @@ pub fn cmd_boot_check(args: &[String]) -> Result<ExitCode> {
     check_boot(&scn, &log, &console, update)
 }
 
-/// Name the files the run needs and does not have, each with the command that
-/// makes it, rather than boot without a card. False when one is missing.
+/// Name the files the run needs and does not have, with the command that makes each.
 fn inputs_present(scn: &harness::BootScenario) -> bool {
     let missing = scn.missing_inputs();
     if missing.is_empty() {
         return true;
     }
     eprintln!("{}: the run needs files that are not there:", scn.name);
-    // The network root and its key come out of one command.
     let mut make: Vec<&str> = Vec::new();
     for i in &missing {
         eprintln!("  {}", harness::boot::tidy_path(&i.path).display());
@@ -217,7 +198,6 @@ fn inputs_present(scn: &harness::BootScenario) -> bool {
     false
 }
 
-/// The terminal and the run log at once.
 struct Tee<A, B>(A, B);
 
 impl<A: Write, B: Write> Write for Tee<A, B> {
@@ -234,13 +214,10 @@ impl<A: Write, B: Write> Write for Tee<A, B> {
     }
 }
 
-/// Boot the scenario as a child of this binary. Its stdout and stderr share
-/// one pipe, so `log` gets them interleaved the way they came — which is what
-/// the milestones read — and the terminal sees them as they come. `Some` exit
-/// code when the boot failed in a way that leaves nothing to check.
+/// Boot the scenario as a child of this binary. Its stdout and stderr share one
+/// pipe, so `log` gets them interleaved the way the milestones read them.
 fn run_boot(scn: &harness::BootScenario, log: &Path, console: &Path) -> Result<Option<ExitCode>> {
-    // Never check a console an earlier run left behind: a boot that cannot
-    // start writes none, and the check would diff the stale one instead.
+    // A boot that cannot start writes no console; never diff a stale one.
     if let Err(e) = std::fs::remove_file(console) {
         if e.kind() != std::io::ErrorKind::NotFound {
             return Err(e).with_context(|| format!("removing {}", console.display()));
@@ -255,12 +232,10 @@ fn run_boot(scn: &harness::BootScenario, log: &Path, console: &Path) -> Result<O
             .stdout(input.try_clone().context("sharing the pipe")?)
             .stderr(input);
         cmd.spawn().context("starting the boot")?
-        // `cmd` goes here, and with it this side's write ends of the pipe:
-        // the copy below ends when the boot's do.
+        // `cmd` drops here with this side's write ends, so the copy below ends when the boot's do.
     };
 
-    // The boot stops itself at its wall budget. This is for one that does
-    // not, a hang on the host side: 40 s more, then a SIGINT.
+    // For a boot that does not stop itself at its wall budget: 40 s more, then a SIGINT.
     let (done, finished) = mpsc::channel::<()>();
     let (pid, budget) = (child.id(), Duration::from_secs(scn.wall_secs() + 40));
     let watchdog = std::thread::spawn(move || {
@@ -282,8 +257,7 @@ fn run_boot(scn: &harness::BootScenario, log: &Path, console: &Path) -> Result<O
         "boot {status}{}",
         if late { ", past its wall budget" } else { "" }
     );
-    // 0: the boot got where it was meant to. 1: it did not, and the
-    // milestones say which. Past the wall: the milestones judge that too.
+    // 0 and 1 are both for the milestones to judge; any other code is not.
     if !late && !matches!(status.code(), Some(0 | 1)) {
         let code = status
             .code()
@@ -291,8 +265,6 @@ fn run_boot(scn: &harness::BootScenario, log: &Path, console: &Path) -> Result<O
             .unwrap_or(1);
         return Ok(Some(ExitCode::from(code)));
     }
-    // ...or `boot` itself failed, before it ran or part-way through, and then
-    // it writes no console: its `error:` line above is the whole story.
     if !console.exists() {
         eprintln!(
             "the boot wrote no console ({}): see the error above; nothing to check",
@@ -303,9 +275,7 @@ fn run_boot(scn: &harness::BootScenario, log: &Path, console: &Path) -> Result<O
     Ok(None)
 }
 
-/// Check a finished run: the console against the golden transcript, `log`
-/// against the milestones and the retired counts. `update` rewrites the golden
-/// and the counts first, unless the run failed a milestone.
+/// Check a finished run against the golden transcript, the milestones and the retired counts.
 fn check_boot(
     scn: &harness::BootScenario,
     log_path: &Path,
@@ -323,9 +293,8 @@ fn check_boot(
     let transcript = harness::boot::normalise_console(&console_bytes);
 
     if update {
-        // Never record a bad run as the new truth. A boot that was starved of
-        // CPU stops at the wall clock part-way through, and its transcript
-        // looks like a perfectly good — and much shorter — boot.
+        // Never record a bad run as truth: a CPU-starved boot stops at the wall
+        // clock and its short transcript still looks like a good boot.
         let milestones = harness::boot::check_milestones(scn, &log_text);
         if !milestones.is_empty() {
             for f in &milestones {
@@ -344,7 +313,6 @@ fn check_boot(
             scn.golden_path().display(),
             transcript.lines().count()
         );
-        // The milestones passed, so the report is there.
         let counts = RetiredCounts::from_log(&log_text)
             .context("the run log has no retired counts to record")?;
         let changed = match harness::boot::check_retired(scn, &counts) {

@@ -1,20 +1,10 @@
-//! The run loop's fast path (`Emulator::fast_steps`) held to the slow one.
-//!
-//! A slow step makes every check the run loop has; a fast step skips the ones
-//! that cannot act. Skipping them must never change the run, so each test
-//! here runs one payload both ways and requires the same result: the same
-//! instructions retired, the same registers, the same console bytes in the
-//! same order, the same modelled time.
-//!
-//! The payload is built to cross every edge the fast path has to hand back
-//! at: a periodic system-timer interrupt acked and re-armed by its handler,
-//! `ei`/`di`, `sleep`, reads of the free-running counter, console writes from
-//! both cores, and core 1 running alongside core 0.
-//!
-//! The busy-wait fast-forward (#111) is held to the same rule, and to what it
-//! is for: a long `udelay` is jumped by about as long as it asks for, and a
-//! train of short ones, or a loop that only takes a timestamp, is not jumped
-//! at all.
+//! The run loop's fast path (`Emulator::fast_steps`) held to the slow one: each
+//! test runs one payload both ways and requires the same instructions retired,
+//! registers, console bytes and modelled time. The payloads cross every edge the
+//! fast path hands back at — timer interrupt, `ei`/`di`, `sleep`, counter reads,
+//! console writes from both cores. The busy-wait fast-forward is held to the same
+//! rule and to what it is for: a long `udelay` is jumped, a train of short ones
+//! or a bare timestamp loop is not.
 
 use std::time::Duration;
 
@@ -40,36 +30,28 @@ const EI: u16 = 0x0004;
 const DI: u16 = 0x0005;
 const RTI: u16 = 0x000A;
 
-/// `ld rd, (rs)`
 const fn ld(rd: u16, rs: u16) -> u16 {
     0x0800 | (rs << 4) | rd
 }
-/// `st rd, (rs)`
 const fn st(rd: u16, rs: u16) -> u16 {
     0x0900 | (rs << 4) | rd
 }
-/// `mov rd, #u5`
 const fn mov5(rd: u16, u: u16) -> u16 {
     0x6000 | (u << 4) | rd
 }
-/// `add rd, #u5`
 const fn add5(rd: u16, u: u16) -> u16 {
     0x6200 | (u << 4) | rd
 }
-/// `cmp rd, rs`
 const fn cmp(rd: u16, rs: u16) -> u16 {
     0x4A00 | (rs << 4) | rd
 }
-/// `add rd, rs`
 const fn add(rd: u16, rs: u16) -> u16 {
     0x4200 | (rs << 4) | rd
 }
-/// `sub rd, rs`
 const fn sub(rd: u16, rs: u16) -> u16 {
     0x4600 | (rs << 4) | rd
 }
 
-/// Halfwords at consecutive addresses, from `at`.
 struct Asm {
     at: u32,
     code: Vec<u16>,
@@ -91,12 +73,10 @@ impl Asm {
         self.code.push(h);
     }
 
-    /// `mov rd, #imm32`, the 48-bit form.
     fn mov32(&mut self, rd: u16, v: u32) {
         self.code.extend([0xE800 | rd, v as u16, (v >> 16) as u16]);
     }
 
-    /// `b<cond> to`, the 16-bit form.
     fn b(&mut self, cond: u16, to: u32) {
         let halfwords = (to.wrapping_sub(self.pc()) as i32) / 2;
         assert!((-64..64).contains(&halfwords), "branch out of range");
@@ -110,9 +90,8 @@ impl Asm {
     }
 }
 
-/// Core 0 counts to 40 in an outer loop around a 200-step inner one, and
-/// after each inner loop prints `.`, toggles interrupts, reads the counter
-/// and sleeps. Returns the pc where it is done.
+/// Core 0: 40 outer turns of a 200-step loop, each printing `.`, toggling
+/// interrupts, reading the counter and sleeping. Returns the done pc.
 fn core0(m: &mut Machine) -> u32 {
     let mut a = Asm::new(CODE);
     a.mov32(4, SYSTIMER_BASE + 0x04); // CLO
@@ -123,7 +102,6 @@ fn core0(m: &mut Machine) -> u32 {
     a.op(mov5(9, 1));
     a.mov32(10, 200);
     a.mov32(11, 40);
-    // C0 = CLO + 30, then interrupts on.
     a.op(ld(3, 4));
     a.op(add5(3, 30));
     a.op(st(3, 5));
@@ -148,7 +126,6 @@ fn core0(m: &mut Machine) -> u32 {
     done
 }
 
-/// The tick handler acks the match, re-arms C0 20 us out and prints `!`.
 fn handler(m: &mut Machine) {
     let mut h = Asm::new(HANDLER);
     h.op(st(9, 8));
@@ -160,9 +137,8 @@ fn handler(m: &mut Machine) {
     h.op(RTI);
     h.load(m);
     m.store32(VBASE + 4 * TICK_SLOT, HANDLER).unwrap();
-    // Source 64's field in core 0's CoreCtl `IRQ_PRIO` word 0, set the way
-    // firmware's `enable_irq_source(64, 1)` sets it: the controller takes no
-    // source whose field is 0.
+    // `enable_irq_source(64, 1)`: the controller takes no source whose field
+    // is 0.
     m.store32(CORECTL_BASE + 0x10, 1).unwrap();
 }
 
@@ -187,7 +163,6 @@ fn emulator(fast: bool) -> (Emulator, u32) {
     core1(&mut m);
     let mut emu = Emulator::new(m, CODE);
     emu.fast_loop = fast;
-    // `sleep` waits for an interrupt rather than halting the run.
     emu.set_unimpl_policy(UnimplPolicy::ReconFault);
     emu.cpu.exc_vbase = VBASE;
     emu.cpu.regs.set(25, STACK_TOP);
@@ -204,10 +179,8 @@ fn limits(done: u32, max_steps: u64) -> RunLimits {
         max_steps: Some(max_steps),
         max_wall: Some(Duration::from_secs(60)),
         stop_pc: Some(done),
-        // Small enough that the detectors' window closes every 2000 steps.
         idle_spin_limit: 2_000,
-        // Armed, so its budget is in play; it needs 20M silent instructions
-        // to fire, which this never gets near.
+        // Armed, so its budget is in play, but 20M silent instructions away.
         silent_us: 1,
         until: None,
     }
@@ -263,7 +236,6 @@ fn fast_and_slow_steps_make_the_same_run() {
         assert!(console.contains(c), "no {c:?} in {console:?}");
     }
     assert_eq!(console.matches('.').count(), 40);
-    // Most steps have nothing for the checks to do.
     assert!(
         emu.fast_stepped > report.retired / 2,
         "only {} of {} steps were fast",
@@ -273,8 +245,7 @@ fn fast_and_slow_steps_make_the_same_run() {
     assert_eq!(runs[1].1.fast_stepped, 0);
 }
 
-/// The step limit is counted, not flagged: the fast path has to stop on the
-/// very step the slow one would, however the limit falls.
+/// The step limit is counted, not flagged: both paths stop on the same step.
 #[test]
 fn the_step_limit_lands_on_the_same_step() {
     let (full, _) = &both(10_000_000)[1];
@@ -296,14 +267,12 @@ fn the_step_limit_lands_on_the_same_step() {
     }
 }
 
-/// The system timer's counter, `CLO`.
 const CLO: u32 = SYSTIMER_BASE + 0x04;
-/// VPU cycles per µs of the counter (`CYCLES_PER_US` in `periph/systimer.rs`).
 const CYCLES_PER_US: u64 = 54;
 const HI: u16 = 0x8;
 
-/// A firmware `udelay(r1)`, in the shape the bootloaders have it:
-/// `r3 = CLO; do r2 = CLO - r3; while (r1 > r2)`. `r4` holds `CLO`'s address.
+/// A firmware `udelay(r1)` as the bootloaders spell it:
+/// `r3 = CLO; do r2 = CLO - r3; while (r1 > r2)`, `r4` holding `CLO`.
 fn udelay(a: &mut Asm) {
     a.op(ld(3, 4));
     let spin = a.pc();
@@ -313,8 +282,7 @@ fn udelay(a: &mut Asm) {
     a.b(HI, spin);
 }
 
-/// Load `code` at [`CODE`] and run it to `done`, fast or slow, with the
-/// detectors on.
+/// Load `code` at [`CODE`] and run it to `done` with the detectors on.
 fn run_payload(code: impl Fn(&mut Machine) -> u32, fast: bool) -> (RunReport, Emulator) {
     let mut m = Machine::new(1 << 20);
     let done = code(&mut m);
@@ -338,7 +306,6 @@ fn run_payload(code: impl Fn(&mut Machine) -> u32, fast: bool) -> (RunReport, Em
     (report, emu)
 }
 
-/// Both ways, held to each other.
 fn both_payload(code: impl Fn(&mut Machine) -> u32 + Copy, what: &str) -> (RunReport, Emulator) {
     let runs = [true, false].map(|fast| run_payload(code, fast));
     assert_same(&runs, what);
@@ -346,8 +313,7 @@ fn both_payload(code: impl Fn(&mut Machine) -> u32 + Copy, what: &str) -> (RunRe
     fast
 }
 
-/// A 20 ms `udelay`, with interrupts on and a 1 ms tick whose handler counts
-/// itself at `TICKS` when `tick` is set.
+/// A 20 ms `udelay`, with a 1 ms tick counting itself at `TICKS` when asked.
 fn long_wait(m: &mut Machine, tick: bool) -> u32 {
     let mut a = Asm::new(CODE);
     a.mov32(4, CLO);
@@ -388,8 +354,7 @@ fn a_long_wait_is_jumped_by_about_its_length() {
     for tick in [false, true] {
         let (report, mut emu) = both_payload(|m| long_wait(m, tick), &format!("tick {tick}"));
         let now = emu.machine.systimer.now_us();
-        // Each jump is as long as the wait so far, so the last one ends
-        // before twice the wait.
+        // Each jump is as long as the wait so far, so it ends inside 2x.
         assert!(
             (20_000..41_000).contains(&now),
             "tick {tick}: a 20 ms wait took {now} us"
@@ -408,8 +373,7 @@ fn a_long_wait_is_jumped_by_about_its_length() {
     }
 }
 
-/// `udelay(4)` 2000 times, with a peripheral read after each when `poll` is
-/// set, as a sampling loop has it.
+/// `udelay(4)` 2000 times, a sampling loop's peripheral read after each if asked.
 fn short_waits(m: &mut Machine, poll: bool) -> u32 {
     let mut a = Asm::new(CODE);
     a.mov32(4, CLO);
@@ -432,8 +396,7 @@ fn short_waits(m: &mut Machine, poll: bool) -> u32 {
     done
 }
 
-/// 5000 turns of a loop that reads the counter once and a peripheral once:
-/// a timestamp, not a wait.
+/// 5000 turns reading the counter and a peripheral: a timestamp, not a wait.
 fn timestamps(m: &mut Machine) -> u32 {
     let mut a = Asm::new(CODE);
     a.mov32(4, CLO);
@@ -453,7 +416,6 @@ fn timestamps(m: &mut Machine) -> u32 {
     done
 }
 
-/// Loads a payload, returning the pc where it is done.
 type Payload = fn(&mut Machine) -> u32;
 
 #[test]

@@ -1,29 +1,14 @@
 //! A host network behind a stream socket: [passt](https://passt.top/), or
-//! anything else that speaks QEMU's `-netdev stream` framing (#45).
+//! anything else that speaks QEMU's `-netdev stream` framing — each frame as a
+//! 32-bit big-endian length and then the frame, over a UNIX stream socket.
 //!
-//! Each Ethernet frame travels as a 32-bit big-endian length and then the
-//! frame, over a UNIX stream socket. passt NATs that to the host's network and
-//! maps the host's loopback, so the guest can reach a server on the host –
-//! `mkosi serve`, say – or the outside world:
-//!
-//! ```text
-//! pimu boot --eeprom pieeprom.bin --net passt --bootconf BOOT_ORDER=0xf2
-//! ```
-//!
-//! `--net passt` starts passt itself, with one end of a socket pair as its
-//! stdin (`--fd 0`); passt quits when that socket closes. `--net
-//! passt:<socket>` connects to a passt already listening on `<socket>`
-//! (`passt -f -s <socket>`) instead, but on Ubuntu (passt 0.0~git20260120,
-//! kernel 7.0) passt's AppArmor profile fails that connection: `accept4()`
-//! returns EACCES, and passt goes on to log "Failed to add fd to epoll: Bad
-//! file descriptor" and never answers. QEMU's `-netdev stream` fails the same
-//! way. A socket passt inherits needs no `accept()`.
-//!
-//! Unlike [`super::BuiltinPeer`], the other end runs on the host's clock: a
-//! frame can arrive at any time, and the guest runs far slower than real time,
-//! so a host's TCP retransmit timers will fire where a real board's would not.
-//! That makes a run over a real network neither deterministic nor fit for a
-//! golden transcript – the boot scenarios stay on the built-in peer.
+//! `--net passt` starts passt with one end of a socket pair as its stdin, so it
+//! quits when that socket closes. `--net passt:<socket>` connects to a listening
+//! passt instead, but under AppArmor that fails: `accept4()` returns EACCES and
+//! passt never answers. Either way the other end runs on the host's clock, so a
+//! host's TCP retransmit timers fire where a real board's would not: such a run
+//! is not fit for a golden transcript, and the boot scenarios stay on
+//! [`super::BuiltinPeer`].
 
 use std::io::{ErrorKind, Read, Write};
 use std::net::Shutdown;
@@ -38,10 +23,9 @@ use super::NetBackend;
 /// Frames longer than this are not Ethernet: the stream has lost its framing.
 const MAX_FRAME: usize = 65_536;
 
-/// The length of `frame` without the padding that brings a short frame up to
-/// the Ethernet minimum on the wire. Nothing pads over a QEMU stream socket,
-/// and passt does not look past it: it drops a DHCP message whose UDP length
-/// falls short of the frame, and leaves a padded TCP SYN unanswered.
+/// The length of `frame` without the padding to the Ethernet minimum. Nothing
+/// pads over a QEMU stream socket, and passt does not look past it: it drops a
+/// DHCP message whose UDP length falls short, and ignores a padded TCP SYN.
 fn unpadded_len(frame: &[u8]) -> usize {
     let be16 = |at: usize| {
         frame
@@ -49,9 +33,7 @@ fn unpadded_len(frame: &[u8]) -> usize {
             .map(|b| u16::from_be_bytes([b[0], b[1]]))
     };
     let end = match be16(12) {
-        // IPv4 total length.
         Some(super::ETHERTYPE_IPV4) => be16(16).map(|len| 14 + usize::from(len)),
-        // IPv6 payload length, after the fixed 40-byte header.
         Some(0x86dd) => be16(18).map(|len| 14 + 40 + usize::from(len)),
         _ => None,
     };
@@ -60,13 +42,9 @@ fn unpadded_len(frame: &[u8]) -> usize {
 
 pub struct StreamBackend {
     sock: UnixStream,
-    /// The passt this backend started (`--net passt`), if it did.
     passt: Option<Child>,
-    /// Bytes read but not yet a whole frame.
     rx: Vec<u8>,
-    /// Framed bytes the socket has not taken yet.
     tx: Vec<u8>,
-    /// Set once the other end went away, or broke the framing.
     closed: bool,
     frames_in: u64,
     frames_out: u64,
@@ -74,16 +52,13 @@ pub struct StreamBackend {
 }
 
 impl StreamBackend {
-    /// Connect to the UNIX socket at `path` (passt's `-s`).
     pub fn connect(path: &Path) -> std::io::Result<StreamBackend> {
         StreamBackend::from_stream(UnixStream::connect(path)?)
     }
 
-    /// Start passt (from `PATH`) with the other end of a socket pair as its
-    /// stdin. `--fd` implies `--one-off`: passt quits once our end closes.
-    /// With its socket on stdin passt logs nothing at all, even with `--debug`
-    /// (as measured), so a passt that fails shows only as `passt exited` in
-    /// the run report.
+    /// Start passt with the other end of a socket pair as its stdin, so it
+    /// quits once our end closes. It then logs nothing at all, even with
+    /// `--debug`, so a failure shows only as `passt exited` in the report.
     pub fn spawn_passt() -> std::io::Result<StreamBackend> {
         let (ours, theirs) = UnixStream::pair()?;
         let passt = Command::new("passt")
@@ -96,7 +71,6 @@ impl StreamBackend {
         Ok(net)
     }
 
-    /// Talk over an already connected socket.
     pub fn from_stream(sock: UnixStream) -> std::io::Result<StreamBackend> {
         // Never block the run loop: the guest's clock only moves while it runs.
         sock.set_nonblocking(true)?;
@@ -134,7 +108,6 @@ impl StreamBackend {
         }
     }
 
-    /// Read whatever has arrived, without blocking.
     fn fill_rx(&mut self) {
         let mut buf = [0u8; 16 * 1024];
         while !self.closed {
@@ -203,8 +176,7 @@ impl NetBackend for StreamBackend {
 }
 
 impl Drop for StreamBackend {
-    /// Close our end of the socket and reap the passt we started, which quits
-    /// on its own once the socket closes.
+    /// Close our end and reap the passt we started.
     fn drop(&mut self) {
         let Some(mut passt) = self.passt.take() else {
             return;
@@ -235,7 +207,6 @@ mod tests {
         assert_eq!(got, [0, 0, 0, 3, 1, 2, 3]);
 
         assert_eq!(net.recv(), None);
-        // A frame that arrives in two pieces comes out whole.
         theirs.write_all(&[0, 0, 0, 4, 9, 8]).unwrap();
         assert_eq!(net.recv(), None);
         theirs.write_all(&[7, 6, 0, 0, 0, 1, 5]).unwrap();
@@ -253,7 +224,6 @@ mod tests {
         syn[12..14].copy_from_slice(&[0x08, 0x00]);
         syn[16..18].copy_from_slice(&44u16.to_be_bytes());
         net.send(&syn);
-        // An ARP stays as it is.
         let mut arp = vec![0u8; 60];
         arp[12..14].copy_from_slice(&[0x08, 0x06]);
         net.send(&arp);

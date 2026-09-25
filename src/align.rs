@@ -1,17 +1,9 @@
-//! A check, not a behaviour: the scalar accesses the VPU makes that are not
-//! naturally aligned.
-//!
-//! The model reads and writes memory by offset, so a word load two bytes into
-//! a word costs it nothing. The hardware is not so generous — GCC's VC4 port
-//! is `STRICT_ALIGNMENT`, and lays a packed 32-bit access out as four byte
-//! accesses, because the core cannot do it in one. A single `ld` at an odd
-//! address therefore reads *something else* on silicon and nothing at all in
-//! the model, which is the kind of difference no console diff can show.
-//!
-//! Off by default ([`Alignment::off`]); with `--check-alignment` every access
-//! goes to the `alignment` log channel and the run ends with a count. The
-//! vector forms (`v8ld`/`v8st`) are excluded: those do copy arbitrary byte
-//! alignments, and stock's libc uses them for exactly that.
+//! A check, not a behaviour: scalar VPU accesses that are not naturally
+//! aligned. The model serves them from any offset; the core cannot, so on
+//! silicon such an access reads something else entirely. Off by default;
+//! `--check-alignment` reports each one on the `alignment` log channel. The
+//! vector forms (`v8ld`/`v8st`) are excluded — they do copy arbitrary byte
+//! alignments.
 
 use std::cell::Cell;
 
@@ -51,7 +43,6 @@ impl Alignment {
         self.reports.get()
     }
 
-    /// One scalar access at `addr`, `width` wide, from `pc`.
     #[inline]
     pub fn note(&self, addr: u32, width: Width, pc: u32, write: bool) {
         if !self.on || addr & (width.bytes() - 1) == 0 {

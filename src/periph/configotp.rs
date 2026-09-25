@@ -1,75 +1,32 @@
 //! The always-on config / OTP engine at `0x7E20_F000`: the fuse array, one row
-//! at a time.
+//! at a time. Registers and fields: `specs/otp.toml`.
 //!
-//! Every stage drives it the same way. The command goes into `PARAM_A`
-//! (`+0x08`) as `cmd << 1`, `PARAM_B` (`+0x0C`) takes a second word (0 so
-//! far), and `PARAM_A |= 1` starts it; `STATUS` (`+0x10`) bit 1 says it is
-//! done. The row is in `KEY` (`+0x1C`), and `DATA` (`+0x18`) carries a word in
-//! either direction:
+//! The key written to `KEY` is the **OTP row number**, so `ConfigOtp::table` is
+//! the fuse array itself. It is not a real board's fuses and must never become
+//! one — OTP holds device-unique and secret material (`CLAUDE.md`). Only rows
+//! the boot depends on are modelled; the rest read 0, as unprogrammed fuses do.
 //!
-//! ```text
-//!   read     KEY = row, command 0             DATA <- the row
-//!   enable   DATA = key word, command 2       0xf, 0x4, 0x8, 0xd in turn;
-//!                                             then STATUS bit 2 is set
-//!   program  DATA = bits, KEY = row, cmd 10   the row |= DATA
-//!   disable  command 3                        STATUS bit 2 clears
-//! ```
+//! Which rows those are is not a matter of taste. start4's board check, which
+//! `arm_loader` gates the ARM launch on, reads **rows 19..26** as two four-word
+//! blocks and compares them against per-board-family constants in its own
+//! `.rdata` — each block alone, then the two OR-ed together. Read them back as
+//! 0 and start4 blinks LED error 4-4 ("unsupported board type") forever.
+//! `vcgencmd otp_dump` is no help: from Linux those rows read `0xFFFF_FFFF`,
+//! which is a redaction, not their contents. [`BOARD_IDENTITY`] is the value
+//! that satisfies the check, taken from start4's own board-type table.
 //!
-//! The EEPROM bootloader's `getconfig(key)` and start4's `0x3ED3FAA2` read.
-//! start4's `0x3ED3FC52` (slot 10 of its OTP driver's table at `0x3EDF_B5F8`)
-//! programs: it sends the key from `.rdata` `0x3EDD_E6E4`, reads each row,
-//! programs `old | new` and disables programming again (#92). A fuse only goes
-//! from 0 to 1, so programming ORs, and without the key it does nothing.
-//! start4 carries a second path for another controller too (done on bit 0,
-//! the key in `+0x14`, one bit at a time), for when its flag at `gp+0x1564` is
-//! clear; that flag is set on every boot the model runs (see `hvs.rs`).
-//!
-//! The same block also takes some clock-mux pokes at `+0x04` (values 3/0/2)
-//! which we just absorb. Anything we don't recognise keeps the old "always
-//! ready" status bits so unrelated pollers still make progress.
-//!
-//! The key written to `+0x1C` is the **OTP row number**, so [`ConfigOtp::table`]
-//! is the fuse array itself: row -> value. It is not a full dump of a real
-//! board's fuses and must never become one — OTP holds device-unique and secret
-//! material (see `CLAUDE.md`). Only rows whose contents the boot actually
-//! depends on are modelled; every other row reads back 0.
-//!
-//! Which rows those are is not a matter of taste. `arm_loader` will not start
-//! the ARM until `FUN_0EC78F70` says the board is genuine, and that check reads
-//! **rows 19..26** as two four-word blocks and compares them against obfuscated
-//! per-board-family constants in `.rdata` (see [`BOARD_IDENTITY`] for which) —
-//! for each constant, first one block on its own, then the other block, then
-//! the two OR-ed together. With those rows reading back 0 no comparison can
-//! match, the check fails, and start4 blinks LED error code 4-4 ("unsupported
-//! board type") in a loop for the rest of the boot instead of reaching
-//! `arm_loader`.
-//!
-//! `vcgencmd otp_dump` is no help in seeding them: from Linux those rows read
-//! back `0xFFFF_FFFF`, which cannot be their fused value because the firmware
-//! would reject it — the VPU locks the block before handing over, so what
-//! userspace sees is a redaction, not the contents. The value that does satisfy
-//! the check is [`BOARD_IDENTITY`], taken from start4's own board-type table.
-//!
-//! The board serial (row 28, and its complement in row 29) is deliberately
-//! **not** a real board's — it is an arbitrary fixed value, so nothing here
-//! carries the identity of a specific piece of hardware. It only has to stay
-//! stable across firmware versions for the `rpi-machine-id` regression to mean
-//! something.
-//!
-//! It does feed that derivation, which was worth checking rather than assuming:
-//! flipping row 28 by one bit changes every byte of the `rpi-machine-id`
-//! `arm_loader` publishes (`ed96a9bc626d9d0869ce37ee4aea025d` ->
-//! `4118472de608104951e495ece64b75f0`). So the regression `boot-check`
-//! pins is a real derivation being re-run, not a constant being copied — and
-//! changing the serial here invalidates that milestone, which is the point.
+//! The board serial (row 28, and its complement in row 29) is deliberately not
+//! a real board's, only stable: it feeds the `rpi-machine-id` derivation, and
+//! flipping one bit of it changes every byte of the id `arm_loader` publishes.
+//! So what `boot-check` pins is a derivation being re-run, not a constant being
+//! copied — and changing the serial invalidates that, which is the point.
 
 use std::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 use crate::log::{Channel, Log};
 
-// `PARAM_A` bit 0 kicks off a transaction; `STATUS` **bit 1** reports
-// completion (the poll at `0x8000760e` is `btest [+0x10], #1`).
+// `PARAM_A` bit 0 starts a transaction; `STATUS` bit 1 reports completion.
 use crate::spec::otp::{
     BOOTMODE as REG_BOOTMODE, CLKMUX as REG_CLKMUX, DATA as REG_DATA, KEY as REG_KEY,
     PARAM_A as REG_PARAM_A, PARAM_A_CMD_MASK as CMD, PARAM_A_CMD_SHIFT as CMD_SHIFT,
@@ -78,17 +35,14 @@ use crate::spec::otp::{
 };
 use crate::spec::Coverage;
 
-/// The commands in `PARAM_A.CMD` (start4's OTP driver, #92).
 const CMD_READ: u32 = 0;
 const CMD_PROG_ENABLE: u32 = 2;
 const CMD_PROG_DISABLE: u32 = 3;
 const CMD_PROGRAM: u32 = 10;
 
-/// What start4 puts in `DATA` for its four `CMD_PROG_ENABLE`s, one word each,
-/// before it waits for `STATUS.PROG_ENABLED` (`.rdata` `0x3EDD_E6E4`).
+/// The four words start4 sends through `CMD_PROG_ENABLE` to unlock programming.
 const PROG_ENABLE_KEY: [u32; 4] = [0xF, 0x4, 0x8, 0xD];
 
-/// `PARAM_B` and `CLKMUX` are storage; the rest is the command interface.
 pub const COVERAGE: Coverage = Coverage {
     block: "otp",
     decoded: &[
@@ -102,20 +56,16 @@ pub const COVERAGE: Coverage = Coverage {
     ],
 };
 
-/// Status bits unrelated firmware paths poll for on this block.
 const READY: u32 = (1 << 17) | (1 << 18) | (1 << 7);
 
-/// The bootmode row, which `OTP_BOOTMODE_REG` ([`REG_BOOTMODE`]) presents
-/// without a transaction. The boot ROM picks its boot source from it before
-/// anything else (#68); with the "always ready" placeholder there instead it
-/// skipped the SPI flash and waited for a USB host that never comes.
+/// The bootmode row, which `OTP_BOOTMODE_REG` presents without a transaction:
+/// the boot ROM picks its boot source from it before anything else.
 const BOOTMODE_ROW: u32 = 17;
 
-/// The Hamming check bits over the 128-bit identity block, as the boot ROM
-/// computes them before it derives the bootcode's HMAC key (`0x60000838`):
-/// the data bits, least significant first in each row, fill positions 1..=136
-/// that are not powers of two, and check bit `j` is the parity of the data
-/// bits whose position has bit `j` set.
+/// The Hamming check bits over the identity block, as the boot ROM computes
+/// them before deriving the bootcode's HMAC key: data bits fill the positions
+/// of 1..=136 that are not powers of two, check bit `j` the parity of those
+/// whose position has bit `j` set.
 const fn identity_check(words: [u32; 4]) -> u32 {
     let mut check = 0;
     let mut j = 0;
@@ -140,42 +90,17 @@ const fn identity_check(words: [u32; 4]) -> u32 {
 
 /// The board-identity block in OTP rows 19..22 (and again in 23..26).
 ///
-/// `FUN_0EC78F70`, the check `arm_loader` gates the ARM launch on, compares
-/// those rows against entries of a six-entry table in start4's `.rdata` at
-/// `0x3EDE_DAC8`, each obfuscated with `^ 0xB0BE_5AD5`. It picks two entries
-/// by board type, a primary and a secondary, and passes if either one matches.
-/// For type 17, Pi 4 Model B, which is what OTP row 30's revision code says
-/// this machine is:
-///
-/// - the primary is `0x3EDE_DAD8`, the default shared by every board on a
-///   BCM2837, BCM2711 or BCM2712 whose type does not override it;
-/// - the secondary is `0x3EDE_DB18`, the entry for the BCM2711 boards (4B, 400,
-///   CM4, CM4S). It is skipped only when `board_info_trait_bool(15)` is set and
-///   a firmware flag bit is clear; this model gets past the check, so it is not
-///   skipped here.
-///
-/// These four words are the secondary. Which of the two a genuine Pi 4 Model B
-/// has fused is not known, since Linux reads those rows back redacted. Either
-/// way they come out of the firmware image itself, not off any particular
-/// board, and identify the model rather than the unit.
-///
-/// The firmware accepts the value in either four-row block, or spread across
-/// both and OR-ed together (the redundancy real fuses need); storing it whole in
-/// both blocks satisfies every one of those comparisons.
-///
-/// The boot ROM also folds these rows into the bootcode HMAC key — see
-/// [`crate::firmware::bootrom`], whose `otp_key_words` cites them.
+/// These four words are start4's BCM2711 entry (4B, 400, CM4, CM4S), obfuscated
+/// with `^ 0xB0BE_5AD5` in its `.rdata`. They come out of the firmware image,
+/// not off any board, and identify the model rather than the unit. Stored whole
+/// in both four-row blocks, which satisfies all three comparisons. The boot ROM
+/// also folds them into the bootcode HMAC key ([`crate::firmware::bootrom`]).
 pub(crate) const BOARD_IDENTITY: [u32; 4] = [0x8AA9_6D38, 0x9111_243F, 0x38E4_E488, 0x8E02_2082];
 
-/// What an OTP row is for, in a few words, for the `io` and `otp` log lines
-/// (#101). The meanings are the ones Raspberry Pi documents for boards before
-/// the BCM2712, in
-/// <https://github.com/raspberrypi/documentation/blob/ecd7a8129d4f2cb908d6cbd6ea5a994e0091285d/documentation/asciidoc/computers/raspberry-pi/otp-bits.adoc>,
-/// apart from rows 19-27, which it does not make public; those are what this
-/// model found (the module docs, #68). Row 44 is not public either: start4
-/// reads it with the identity rows and adds 10 mV to the core rail for every
-/// bit set in it (`specs/pmic_core.toml`). A field over several rows says
-/// which word it is.
+/// What an OTP row is for, for the `io` and `otp` log lines. The meanings are
+/// Raspberry Pi's own documented ones for pre-BCM2712 boards, apart from rows
+/// 19-27 and 44, which are not public: 44 is a core-voltage trim start4 reads
+/// with the identity rows.
 pub fn row_meaning(row: u32) -> String {
     let word = |first: u32, words: u32| format!("word {} of {words}", row - first + 1);
     match row {
@@ -206,24 +131,15 @@ pub fn row_meaning(row: u32) -> String {
 
 pub struct ConfigOtp {
     storage: BTreeMap<u32, u32>,
-    /// Row latched via `+0x1C`, for the next read or program command.
     key: u32,
-    /// `+0x18`: what the last read found, or what the firmware wrote for the
-    /// next enable or program command.
     data: u32,
-    /// `STATUS.DONE`: the block is idle. It comes up set and a command clears
-    /// it for as long as the command runs; [`ConfigOtp::busy`] is the one
-    /// `STATUS` read that sees it clear.
+    /// `STATUS.DONE`: idle. A command clears it while it runs, and
+    /// `ConfigOtp::busy` is the one `STATUS` read that sees it clear.
     done: bool,
     busy: bool,
-    /// How many words of [`PROG_ENABLE_KEY`] came in, in order.
     unlock: usize,
-    /// `STATUS.PROG_ENABLED`: the key went in, and program commands fuse.
     prog_enabled: bool,
-    /// key -> config value.
     table: BTreeMap<u32, u32>,
-    /// Where [`Channel::Otp`] goes, and the rows read and programmed on
-    /// [`Channel::Io`] (#35).
     pub log: Log,
 }
 
@@ -236,111 +152,60 @@ impl Default for ConfigOtp {
 impl ConfigOtp {
     pub fn new() -> ConfigOtp {
         let mut table = BTreeMap::new();
-        // A complete but entirely fictitious board identity.
-        //
-        // Which rows are *programmed* mirrors a real Raspberry Pi 4 Model B —
-        // 0..5, 16..30, 35, 64 and 65 carry data, the rest are blank. That
-        // shape matters: firmware reading 0 from a row concludes the fuse is
-        // unprogrammed and takes a different path, so leaving a populated row
-        // at zero is the same class of bug as a stub ID register reading 0
-        // (#13). The *values* are invented and deliberately look it — see the
-        // OTP rule in CLAUDE.md for why a real board's must never be committed.
-        //
-        // Row meanings are from Raspberry Pi's own documentation,
-        // `documentation/asciidoc/computers/raspberry-pi/otp-bits.adoc`.
-        // Rows marked "not public" there get `0xFA1E_00rr` ("fake", row in the
-        // low byte); rows whose bits *mean* something get a value chosen so the
-        // modelled board behaves like the reference one. Filling the documented
-        // control rows with a pattern is not harmless: `0xFA1E_0010` in row 16
-        // sets bit 26 and the boot flips to "VC-JTAG locked".
+        // A complete but fictitious board identity. Which rows are *programmed*
+        // mirrors a Raspberry Pi 4 Model B, because firmware reading 0 from a
+        // row concludes the fuse is unprogrammed and takes another path; the
+        // values are invented and deliberately look it (`0xFA1E_00rr` where
+        // nothing reads them). Filling a control row with a pattern is not
+        // harmless: `0xFA1E_0010` in row 16 would lock VC-JTAG.
         for row in (0..=5).chain(std::iter::once(27)) {
             table.insert(row, 0xFA1E_0000 | row);
         }
-        // 19-26: the board-identity block `arm_loader` verifies (see the module
-        // docs). Unlike its neighbours this one cannot be invented — the value
-        // is the BCM2711 boards' constant start4 itself carries, so it
-        // identifies the model, not the unit. Stored in both four-row blocks so
-        // all three of the firmware's comparisons agree.
+        // 19-26: the identity block, which cannot be invented (module docs).
         for (i, word) in BOARD_IDENTITY.iter().enumerate() {
             table.insert(19 + i as u32, *word);
             table.insert(23 + i as u32, *word);
         }
-        // 27: the Hamming check bits over that block. The boot ROM corrects
-        // the block with them before it derives the bootcode's HMAC key;
-        // left blank, it "corrects" a bit that was right and the bootcode's
-        // signature no longer matches (#68). It ORs bits 15:8 into 7:0 the
-        // way it ORs the two copies, so my guess is one byte per copy; the
-        // same byte goes in both. Computed from `BOARD_IDENTITY`, so it is a
-        // model constant like the block itself.
+        // 27: its Hamming check bits. Left blank, the boot ROM "corrects" a bit
+        // that was right and the bootcode's signature stops matching. It ORs
+        // bits 15:8 into 7:0, so one byte per copy, the same in both.
         let check = identity_check(BOARD_IDENTITY);
         table.insert(27, check | check << 8);
-        // 16: OTP control. Bits 26 and 27 disable VC JTAG; both stay clear so
-        // the boot reports "VC-JTAG unlocked" as the reference log does.
+        // 16: OTP control; bits 26/27 would lock VC JTAG.
         table.insert(16, 0x0000_0001);
-        // 17: bootmode, 18: its copy. `0x8B0` is what every Pi 4 reports —
-        // it is in the reference logs already ("OTP boardrev d03115 bootrom
-        // 8b0 8b0") and is a model constant, not board-unique. None of the
-        // documented bits are set: not bit 15, which would disable ROM RSA
-        // key 0 and turn secure boot on, and none of 19-22/28/29, which would
-        // redirect the boot to GPIO, SD or USB. The bits it does set are in
-        // the "not public" range. On BCM2711 the bootmode comes from the
-        // EEPROM configuration anyway, not from OTP.
+        // 17/18: bootmode and its copy. `0x8B0` is what every Pi 4 reports —
+        // a model constant, with none of the documented secure-boot or
+        // boot-source bits set. On BCM2711 the bootmode comes from the EEPROM
+        // configuration anyway.
         table.insert(17, 0x0000_08B0);
         table.insert(18, 0x0000_08B0);
-        // 28: serial number, 29: its bitwise complement — the firmware can
-        // check one against the other, so they are generated as a pair.
+        // 28/29: serial number and its complement; the firmware checks one
+        // against the other.
         const SERIAL: u32 = 0x1AA2_BB31;
         table.insert(28, SERIAL);
         table.insert(29, !SERIAL);
-        // 30: revision code. The one value taken from real hardware, because
-        // the firmware decodes it into the board model it reports ("board:
-        // boardrev d03115 otp d03115"). It identifies a model, not a board:
-        // Raspberry Pi 4 Model B, 8 GB, rev 1.5 unless `Machine::set_board`
-        // names another (#77).
+        // 30: revision code, the one value taken from real hardware — the
+        // firmware decodes it into the board model it reports. It identifies a
+        // model, not a unit.
         table.insert(30, crate::soc::Board::default().revision);
         // 35: high 32 bits of the 64-bit serial.
         table.insert(35, 0xFA1E_0023);
-        // 64/65: Ethernet MAC `02:00:5E:00:53:01` — locally administered
-        // (bit 1 of the first octet set) and unicast (bit 0 clear), from the
-        // documentation range in RFC 7042 section 2.1.2. A tidier-looking
-        // `01:02:03:04:05:06` would be wrong: bit 0 of `01` marks it
-        // multicast, which is not a legal source address.
-        //
-        // The split: row 65 holds the first four octets, most significant
-        // first, and bits 31:16 of row 64 the last two; bits 15:0 of row 64
-        // are not used. start4's `FUN_0ed1330e` (start4db decompile) builds
-        // the MAC that way from `{row 64, row 65}`, and the bootloader's
-        // network boot prints the same octets (`NETWORK: 02:00:5e:00:53:01`).
-        // An earlier guess with the four low octets in row 64 made the
-        // bootloader print `00:00:02:00:5e:00`.
-        //
-        // Programming these rows is optional. With both blank, start4
-        // (`FUN_0ec63338`) keeps the MAC the bootloader hands over or, without
-        // one, falls back to `b8:27:eb` plus the low 24 bits of the serial.
-        // They are programmed here because they are on the Pi 4B this table
-        // mirrors, and they feed `rpi-machine-id` (see `crate::identity`).
+        // 64/65: Ethernet MAC `02:00:5E:00:53:01`, from RFC 7042's
+        // documentation range — locally administered and unicast, which a
+        // tidier `01:…` would not be. Row 65 holds the first four octets, most
+        // significant first, and bits 31:16 of row 64 the last two. Programming
+        // them is optional, but they are fused on the board this mirrors and
+        // they feed `rpi-machine-id`.
         table.insert(64, 0x5301_0000);
         table.insert(65, 0x0200_5E00);
-        // 56-63: the 256-bit customer-private key. The reference board has
-        // these *fused* — `vcgencmd otp_dump` prints them as `00000000`, but it
-        // hides this region the same way it hides rows 19-26, and Linux's
-        // `nvmem_priv0` reads back 32 non-zero bytes. Modelling them as blank
-        // would therefore be modelling the wrong board: firmware that reads 0
-        // from a row concludes the fuse is unprogrammed and can take a
-        // different path.
-        //
-        // The value is **invented for this model** and must stay that way. The
-        // real rows are the secret behind `rpi-machine-id` and the root LUKS
-        // passphrase, which is what `CLAUDE.md`'s "never commit an OTP dump"
-        // rule protects; a made-up key exercises the same firmware path. It is
-        // a valid NIST P-256 scalar — non-zero and far below the group order,
-        // whose top word is `0xFFFFFFFF` — and deliberately ASCII, so a
-        // hexdump of these rows reads as obviously fake.
-        //
-        // Fusing them does not by itself make the crypto property tags answer:
-        // `GET_CRYPTO_KEY_STATUS` still reports `KEY_NOT_FOUND`, on this model
-        // and on the reference board alike. The key also has to be *registered*
-        // in customer OTP (rows 36-43), which is blank on both.
+        // 56-63: the 256-bit customer-private key. A Raspberry Pi 4B d03115 has
+        // these fused (`otp_dump` hides the region, `nvmem_priv0` reads back 32
+        // non-zero bytes), so blank would model the wrong board. The value is
+        // **invented and must stay so** — the real rows are the secret behind
+        // `rpi-machine-id` and the root LUKS passphrase. It is a valid NIST
+        // P-256 scalar and deliberately ASCII, so a hexdump reads as fake.
+        // Fusing it does not make the crypto tags answer: the key also has to
+        // be registered in customer OTP (36-43), blank here and on the board.
         const DEVICE_PRIVATE_KEY: [u32; 8] = [
             0x5250_4956, // "RPIV"
             0x4952_5446, // "IRTF"
@@ -354,10 +219,9 @@ impl ConfigOtp {
         for (i, word) in DEVICE_PRIVATE_KEY.iter().enumerate() {
             table.insert(56 + i as u32, *word);
         }
-        // Deliberately left blank, exactly as the reference board has them:
-        // 36-43 customer OTP (`nvmem_cust0` reads back all zero), 45/46 the
-        // MPG2 and WVC1 decode keys, 47-54 the SHA256 of the secure-boot RSA
-        // public key, and 55 the secure-boot flags.
+        // Blank, as a Raspberry Pi 4B d03115 has them: 36-43 customer OTP,
+        // 45/46 the codec licence keys, 47-54 the secure-boot key hash, 55 its
+        // flags.
         ConfigOtp {
             storage: BTreeMap::new(),
             key: 0,
@@ -371,40 +235,32 @@ impl ConfigOtp {
         }
     }
 
-    /// Override / extend the config table (e.g. from a scenario spec).
     pub fn set(&mut self, key: u32, value: u32) {
         self.table.insert(key, value);
     }
 
-    /// The fused value of a row, as the firmware would read it. Unprogrammed
-    /// rows read back 0, which is what the hardware does too.
-    ///
-    /// Used by [`crate::identity`] to recompute `/chosen/rpi-machine-id`
-    /// independently of the firmware.
+    /// A row's fused value; unprogrammed rows read 0, as the hardware does.
+    /// [`crate::identity`] uses it to recompute `/chosen/rpi-machine-id`.
     pub fn row(&self, key: u32) -> u32 {
         self.table.get(&key).copied().unwrap_or(0)
     }
 
-    /// The fuse array as it stands, rows the firmware programmed included. A
-    /// reset does not blank a fuse, so `boot` hands this to the machine of
-    /// the next boot (#92).
+    /// The fuse array as it stands. A reset does not blank a fuse, so `boot`
+    /// hands this to the next boot's machine.
     pub fn fuses(&self) -> &BTreeMap<u32, u32> {
         &self.table
     }
 
-    /// Take over an earlier machine's [`ConfigOtp::fuses`].
     pub fn set_fuses(&mut self, fuses: BTreeMap<u32, u32>) {
         self.table = fuses;
     }
 
-    /// `PARAM_A.GO`: run `cmd`. The model answers at once, so the command is
-    /// done before the firmware first polls.
+    /// `PARAM_A.GO`: run `cmd`, which completes at once.
     fn command(&mut self, cmd: u32) {
         match cmd {
             CMD_READ => self.read_row(),
             CMD_PROG_ENABLE => {
-                // What the hardware does with a wrong word is not known;
-                // starting the sequence over is the guess.
+                // A wrong word starts the sequence over; a guess.
                 self.unlock = if self.data == PROG_ENABLE_KEY[self.unlock] {
                     self.unlock + 1
                 } else {
@@ -431,8 +287,7 @@ impl ConfigOtp {
         self.busy = true;
     }
 
-    /// `CMD_PROGRAM`: fuse the bits of `DATA` into row `KEY`. A fuse only
-    /// goes from 0 to 1, so this ORs; without the key nothing changes.
+    /// `CMD_PROGRAM`: OR the bits of `DATA` into row `KEY`, if unlocked.
     fn program_row(&mut self) {
         let (row, was) = (self.key, self.row(self.key));
         if !self.prog_enabled {
@@ -481,11 +336,8 @@ impl MmioDevice for ConfigOtp {
     fn read(&mut self, offset: u32, _width: Width) -> BusResult<u32> {
         Ok(match offset & !3 {
             REG_STATUS => {
-                // A command clears `DONE` while it runs, and the model runs
-                // one in no time at all, so the first read after a command
-                // stands for that: a poll that only watches for the flag set
-                // then has to see it fall first, the way the hardware makes it
-                // (`docs/periph/otp.md`).
+                // The model runs a command in no time, so the first `STATUS`
+                // read after one stands for the interval `DONE` is clear.
                 let done = self.done && !core::mem::take(&mut self.busy);
                 (if done { DONE } else { 0 }) | if self.prog_enabled { PROG_ENABLED } else { 0 }
             }
@@ -506,9 +358,8 @@ impl MmioDevice for ConfigOtp {
                 }
             }
             REG_DATA => self.data = value,
-            // A write of 1 to `DONE` does nothing: on a 4B rev 1.5 the flag
-            // read back set straight after one (`before 0x200a`, `cleared
-            // 0x200a`), so it is the command that clears it, not the driver.
+            // A write of 1 to `DONE` does nothing: on a Raspberry Pi 4B d03115
+            // the flag reads back set straight after one.
             REG_STATUS => {}
             REG_CLKMUX => {
                 self.storage.insert(REG_CLKMUX, value);
@@ -525,9 +376,8 @@ impl MmioDevice for ConfigOtp {
 mod tests {
     use super::*;
 
-    /// With row 27 in place the boot ROM's check over the identity block finds
-    /// nothing to correct (#68). The syndrome is worked out independently here,
-    /// the way the ROM does it: rows 19..22 OR 23..26, check byte from row 27.
+    /// With row 27 in place the boot ROM's check finds nothing to correct; the
+    /// syndrome is worked out independently here.
     #[test]
     fn identity_check_bits_leave_nothing_to_correct() {
         let otp = ConfigOtp::new();
@@ -553,8 +403,6 @@ mod tests {
         assert_eq!(syndrome, 0);
     }
 
-    /// The register the boot ROM reads its boot source from is the bootmode
-    /// row, not the placeholder the rest of the block reads back (#68).
     #[test]
     fn bootmode_reg_presents_the_bootmode_row() {
         let mut otp = ConfigOtp::new();
@@ -563,10 +411,9 @@ mod tests {
         assert_eq!(otp.read(REG_BOOTMODE, Width::Word).unwrap(), 0x1234);
     }
 
-    /// `STATUS.DONE` is the block being idle: set before a command, clear
-    /// while it runs, set again after. A poll that only watches for it set
-    /// reads `DATA` before the row arrives — measured on a 4B rev 1.5, where
-    /// it made start4 read row 30 as 0.
+    /// `STATUS.DONE` is the block being idle. A poll that only watches for it
+    /// set reads `DATA` before the row arrives — measured on a Raspberry Pi 4B
+    /// d03115, where it made start4 read row 30 as 0.
     #[test]
     fn done_falls_for_the_command_and_a_write_of_one_does_nothing() {
         let mut otp = ConfigOtp::new();
@@ -582,7 +429,6 @@ mod tests {
         assert_eq!(otp.read(REG_DATA, Width::Word).unwrap(), 0x00d0_3115);
     }
 
-    /// One command, the way start4's `0x3ED3F24C` issues it.
     fn command(otp: &mut ConfigOtp, cmd: u32) {
         otp.write(REG_PARAM_A, Width::Word, cmd << CMD_SHIFT)
             .unwrap();
@@ -600,8 +446,6 @@ mod tests {
         }
     }
 
-    /// A field over several rows counts its words from 1, first row to last
-    /// (#101).
     #[test]
     fn row_meanings_count_the_words_of_a_field_from_one() {
         assert_eq!(row_meaning(19), "board identity, word 1 of 4");
@@ -632,8 +476,6 @@ mod tests {
         otp.read(REG_STATUS, Width::Word).unwrap() & PROG_ENABLED != 0
     }
 
-    /// start4's program sequence (`0x3ED3FC52`): the key, a program command
-    /// per row, then disable. A fuse, once set, stays set (#92).
     #[test]
     fn programming_ors_bits_into_rows_until_disabled() {
         let mut otp = ConfigOtp::new();
@@ -650,8 +492,7 @@ mod tests {
         assert_eq!(otp.fuses().get(&36), Some(&0x0000_00FF));
     }
 
-    /// Without the whole key, in order, program commands leave the fuses
-    /// alone.
+    /// Without the whole key, in order, programming does nothing.
     #[test]
     fn programming_needs_the_key_in_order() {
         let mut otp = ConfigOtp::new();
@@ -660,7 +501,6 @@ mod tests {
         assert!(!prog_enabled(&mut otp));
         program(&mut otp, 36, 1);
         assert_eq!(otp.row(36), 0);
-        // A stray word, then the key: the sequence starts over and takes.
         send_key(&mut otp, [0x4, 0xF, 0x4, 0x8]);
         assert!(!prog_enabled(&mut otp));
         otp.write(REG_DATA, Width::Word, 0xD).unwrap();
@@ -668,8 +508,7 @@ mod tests {
         assert!(prog_enabled(&mut otp));
     }
 
-    /// Only a read loads `DATA`; the other commands leave what the firmware
-    /// wrote there.
+    /// Only a read loads `DATA`.
     #[test]
     fn only_a_read_loads_data() {
         let mut otp = ConfigOtp::new();

@@ -1,25 +1,24 @@
 //! PL011 UART (`UART0`): the firmware's debug console and Linux's `ttyAMA0`.
 //!
+//! Registers and fields: `specs/uart0.toml`.
+//!
 //! Transmit is instant: bytes written to `DR` are appended to an output buffer
 //! that the harness drains, and the flag register never reports the transmit
 //! FIFO full or busy, so polling code never stalls. The transmit interrupt is
 //! never raised either — Linux's PIO path writes until `TXFF`, finds room for
 //! everything, and never needs to wait for the FIFO to drain.
 //!
-//! Receive is modelled for the console (#40, milestone 6). Host input goes onto
-//! the *line* ([`Pl011::feed`]) and [`Pl011::pump`] moves it into the 32-entry
-//! receive FIFO at the baud rate the divisors set, against the modelled clock,
-//! so a scripted input sequence lands at the same guest instant on every run.
-//! Bytes wait on the line while the FIFO is full or the receiver is off rather
-//! than being dropped as an overrun: nothing here is worth losing input to.
-//! `RXIS` follows the `IFLS` trigger level and `RTIS` the receive timeout (32
-//! bit periods without a new character), which is what `amba-pl011` enables.
+//! Host input goes onto the *line* ([`Pl011::feed`]) and [`Pl011::pump`] clocks
+//! it into the 32-entry FIFO at the programmed baud rate, against modelled time,
+//! so a scripted sequence lands at the same guest instant every run. Bytes wait
+//! on the line while the FIFO is full rather than being dropped as an overrun.
+//! `RXIS` follows the `IFLS` trigger level and `RTIS` the receive timeout, which
+//! is what `amba-pl011` enables.
 
 use std::collections::VecDeque;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
-// The interrupt bits sit at the same positions in RIS, MIS, IMSC and ICR.
 use crate::spec::uart0::{
     CR, CR_RXE_MASK as CR_RXE, CR_UARTEN_MASK as CR_UARTEN, DR, FBRD, FR, FR_RXFE_MASK as FR_RXFE,
     FR_RXFF_MASK as FR_RXFF, FR_TXFE_MASK as FR_TXFE, IBRD, ICR, IFLS, IFLS_RESET,
@@ -28,7 +27,6 @@ use crate::spec::uart0::{
 };
 use crate::spec::Coverage;
 
-/// Every register in `specs/uart0.toml` is modelled.
 pub const COVERAGE: Coverage = Coverage {
     block: "uart0",
     decoded: &[DR, FR, IBRD, FBRD, LCRH, CR, IFLS, IMSC, RIS, MIS, ICR],
@@ -49,13 +47,9 @@ pub struct Pl011 {
     ifls: u32,
     imsc: u32,
     ris: u32,
-    /// Receive FIFO (or holding register, with `LCRH.FEN` clear).
     rx: VecDeque<u8>,
-    /// Host input not yet received: the serial line.
     line: VecDeque<u8>,
-    /// Modelled time (µs) the next character on the line finishes arriving.
     next_rx_us: u64,
-    /// Nothing was on the line at the last [`Pl011::pump`].
     line_idle: bool,
     /// Modelled time the last character entered the FIFO, for `RTIS`.
     last_rx_us: u64,
@@ -74,7 +68,7 @@ impl Pl011 {
             ibrd: 0,
             fbrd: 0,
             lcrh: 0,
-            cr: 0x0301,       // UARTEN|TXE|RXE at reset-ish
+            cr: 0x0301,       // UARTEN|TXE|RXE: the console starts usable
             ifls: IFLS_RESET, // both triggers at half full
             imsc: 0,
             ris: 0,
@@ -95,12 +89,10 @@ impl Pl011 {
         self.line.extend(bytes);
     }
 
-    /// Bytes fed but not yet read by the guest.
     pub fn rx_backlog(&self) -> usize {
         self.line.len() + self.rx.len()
     }
 
-    /// The interrupt output (`UARTINTR`): any unmasked raw interrupt.
     pub fn irq_line(&self) -> bool {
         self.ris & self.imsc != 0
     }
@@ -140,7 +132,6 @@ impl Pl011 {
         if self.line.is_empty() {
             self.line_idle = true;
         }
-        // 32 bit periods = 3.2 characters of 10 bits.
         if !self.rx.is_empty() && now_us >= self.last_rx_us + char_us * 16 / 5 {
             self.ris |= INT_RT;
         }
@@ -154,7 +145,6 @@ impl Pl011 {
         if div64 == 0 {
             return 87;
         }
-        // 10 bits * 16 * (div64/64) / UARTCLK, in µs.
         (10 * 16 * div64 * 1_000_000 / 64 / UARTCLK_HZ).max(1)
     }
 
@@ -166,7 +156,6 @@ impl Pl011 {
         }
     }
 
-    /// `IFLS.RXIFLSEL`: 1/8, 1/4, 1/2, 3/4 or 7/8 full.
     fn rx_trigger(&self) -> usize {
         if self.lcrh & LCRH_FEN == 0 {
             return 1;
@@ -249,7 +238,6 @@ mod tests {
 
     fn linux_setup() -> Pl011 {
         let mut u = Pl011::new();
-        // 115200 off 48 MHz, 8N1 with FIFOs, RX + RT interrupts.
         u.write(IBRD, Width::Word, 26).unwrap();
         u.write(FBRD, Width::Word, 3).unwrap();
         u.write(LCRH, Width::Word, 0x70).unwrap();
@@ -267,7 +255,6 @@ mod tests {
         assert_ne!(u.read(FR, Width::Word).unwrap() & FR_RXFE, 0);
         u.pump(1_086);
         assert_eq!(u.rx.len(), 1, "one character time has passed");
-        // A sparse pump catches up rather than losing time.
         u.pump(5_000);
         assert_eq!(u.rx.len(), 2);
         assert_eq!(u.read(DR, Width::Word).unwrap(), u32::from(b'a'));
@@ -282,7 +269,6 @@ mod tests {
         u.pump(10_000);
         u.pump(10_000 + 86 * 3);
         assert_eq!(u.rx.len(), 3);
-        // Below the half-full trigger, so only the timeout can report it.
         assert!(!u.irq_line());
         u.pump(10_000 + 86 * 7);
         assert!(u.irq_line());

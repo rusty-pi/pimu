@@ -1,5 +1,4 @@
-//! Top-level emulator: owns the [`Vpu`] and the [`Machine`] as siblings and
-//! drives the run loop.
+//! Top-level emulator: owns the [`Vpu`] and the [`Machine`], and drives the run loop.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -11,56 +10,39 @@ use crate::vpu::{Stop, UnimplPolicy, Vpu};
 
 pub struct Emulator {
     pub cpu: Vpu,
-    /// VPU core 1. `None` until the firmware wakes it by writing a start
-    /// address to its core-control `WAKEUP` register ([`crate::periph::corectl`]);
-    /// then the run loop interleaves it with core 0 over the shared bus.
+    /// VPU core 1, `None` until the firmware writes its core-control `WAKEUP`.
     pub cpu1: Option<Vpu>,
     pub machine: Machine,
-    /// Model the ARM: release core 0 when `arm_loader` writes the ARM control
-    /// block, then run it in lock-step with the VPU ([`crate::arm`]). Always
-    /// on for a boot since #52 – a boot that should end at the handover puts a
-    /// kernel on the medium that parks the ARM; tests can still turn it off.
+    /// Release ARM core 0 when `arm_loader` writes the ARM control block, then run it
+    /// in lock-step with the VPU ([`crate::arm`]). Always on for a boot.
     pub arm_enabled: bool,
-    /// ARM core 0, once released.
     pub arm: Option<crate::arm::ArmSide>,
     pub input: ConsoleInput,
-    /// Stream the console to stdout as the run goes, unless
-    /// `PIMU_LIVE_CONSOLE=0`. `boot --quiet` turns it off and prints no console
-    /// at all (#100).
+    /// Stream the console to stdout as the run goes (`PIMU_LIVE_CONSOLE=0` to stop).
     pub stream_console: bool,
-    /// Take the steps no per-step check can act on through
-    /// [`Self::fast_steps`], which skips those checks. On unless this is a
-    /// `diag` build, whose diagnostics watch every step; tests turn it off to
-    /// hold the two paths to the same run.
+    /// Use [`Self::fast_steps`]; off in a `diag` build, whose diagnostics watch
+    /// every step.
     pub fast_loop: bool,
-    /// Core-0 steps [`Self::fast_steps`] took, over every run.
     pub fast_stepped: u64,
 }
 
 /// Stopping conditions for [`Emulator::run`].
 #[derive(Debug, Clone)]
 pub struct RunLimits {
-    /// Optional cap on retired instructions. `None` = run until the wall clock
-    /// (or another stop condition) ends the run.
+    /// Cap on retired instructions; `None` runs until another condition ends the run.
     pub max_steps: Option<u64>,
-    /// Optional wall-clock cap.
     pub max_wall: Option<Duration>,
-    /// Stop cleanly when the PC reaches this address (e.g. an ARM-handoff stub).
     pub stop_pc: Option<u32>,
-    /// Stop if the PC revisits the same address this many steps in a row with no
-    /// console output (tight spin / wfi-style wait). 0 disables.
+    /// Stop on this many steps at one PC with no console output; 0 disables.
     pub idle_spin_limit: u64,
     /// Stop once the firmware has printed nothing for this many microseconds of
-    /// *modelled* time. A healthy boot logs continuously — the largest gap in
-    /// a start4 log from a Raspberry Pi 4B d03115 is about a second, and the
-    /// model's own worst gap (the kernel load) is thirteen. Once the firmware
-    /// wedges, output stops but modelled time keeps advancing, because `sleep`
-    /// fast-forwards the system timer. That makes console silence a far better
-    /// stuck-detector than any PC-window heuristic, which the ThreadX tick
-    /// defeats by bumping the progress counters forever. 0 disables.
+    /// *modelled* time. A wedged firmware stops printing while modelled time keeps
+    /// advancing, which makes silence a far better stuck-detector than a PC-window
+    /// heuristic that the ThreadX tick defeats. For scale, the largest gap in a
+    /// start4 log from a Raspberry Pi 4B d03115 is about a second and the model's own
+    /// worst (the kernel load) thirteen. 0 disables.
     pub silent_us: u64,
-    /// Stop cleanly once the console has printed this text — a shell prompt,
-    /// say, where a run that got there has nothing more to show.
+    /// Stop once the console has printed this text — a shell prompt, say.
     pub until: Option<String>,
 }
 
@@ -77,8 +59,7 @@ impl Default for RunLimits {
     }
 }
 
-/// A `u32` that debug-prints as hex. Addresses in a `RunEnd` are read by people
-/// comparing them against a disassembly, and decimal is useless for that.
+/// A `u32` that debug-prints as hex, to be read against a disassembly.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Hex(pub u32);
 
@@ -90,55 +71,36 @@ impl std::fmt::Debug for Hex {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunEnd {
-    /// The core halted (swi/sleep/breakpoint).
     Halted(Stop),
-    /// `stop_pc` reached.
     StopPc(u32),
-    /// `max_steps` hit.
     StepLimit,
-    /// `max_wall` elapsed.
     TimeLimit,
-    /// Detected a tight spin with no output.
     IdleSpin(u32),
-    /// The firmware stopped logging for [`RunLimits::silent_us`] of modelled
-    /// time while still executing — wedged rather than merely slow.
+    /// The firmware stopped logging for [`RunLimits::silent_us`] while still running.
     Stuck {
         pc: Hex,
-        /// Microseconds of modelled time since the last console output.
         silent_us: u64,
-        /// Instructions retired in that window.
         retired: u64,
     },
-    /// VPU core 1 halted (swi/sleep/breakpoint/fault). Core 0 may still have
-    /// been running; check the report's `pc` and `core1_pc`.
+    /// VPU core 1 halted; core 0 may still have been running.
     Core1Halted(Stop),
-    /// Firmware asked the SoC to reset (PM `RSTC`). The caller should re-run
-    /// from a fresh machine seeded with the (possibly updated) flash image.
+    /// Firmware asked the SoC to reset; the caller re-runs from a fresh machine.
     Reset,
-    /// The ARM core hit something the model does not do yet.
     ArmStopped(crate::arm::ArmStop),
-    /// The console printed [`RunLimits::until`] — after the last line of any
-    /// [`ConsoleInput::script`] went in.
     Until,
-    /// The user ended an interactive session (`Ctrl-A x`).
     Quit,
 }
 
-/// What the run types into the serial console (#40, milestone 6).
 #[derive(Default)]
 pub struct ConsoleInput {
-    /// Scripted input: each text is sent once the console has printed its
-    /// prompt, in order, each prompt looked for only in what came out after
-    /// the previous send. Keyed to the transcript, not to time, so a scripted
-    /// session is as deterministic as the boot it follows.
+    /// Scripted input, each text sent once its prompt appears in what came out after
+    /// the previous send — keyed to the transcript, so it is as deterministic as the
+    /// boot it follows.
     pub script: std::collections::VecDeque<(String, Vec<u8>)>,
-    /// Interactive input from the host (`boot --stdin`).
     pub host: Option<crate::stdio::HostInput>,
 }
 
-/// Does `hay[from..]` contain `needle`, where `from` backs up far enough from
-/// `seen` (what was already searched) to catch a match straddling the two, but
-/// never before `floor`?
+/// Does `hay` contain `needle` at or after `seen`, never looking before `floor`?
 fn printed_since(hay: &[u8], seen: usize, floor: usize, needle: &str) -> bool {
     let needle = needle.as_bytes();
     let from = seen.saturating_sub(needle.len()).max(floor);
@@ -155,21 +117,14 @@ pub struct RunReport {
     pub bus_errors: u64,
     pub wall: Duration,
     pub pc: u32,
-    /// Everything the console UART transmitted during the run.
     pub console: Vec<u8>,
-    /// True if [`Self::console`] was already streamed to stdout as it was
-    /// produced, so the summary does not need to repeat it.
     pub console_streamed: bool,
-    /// Distinct unimplemented instructions encountered (reconnaissance).
     pub unimpl: Vec<crate::vpu::exec::UnimplHit>,
-    /// Final register file (r0..r31) of core 0.
     pub regs: [u32; 32],
-    /// Core 1 state, once it was released.
     pub core1_pc: Option<u32>,
     pub core1_retired: Option<u64>,
     pub core1_end: Option<RunEnd>,
-    /// `start4.elf` boot-progress tags (`0xCEC0_2000`), in order. Empty
-    /// unless built with `--features diag`.
+    /// `start4.elf` boot-progress tags; empty unless built with `--features diag`.
     pub phase_tags: Vec<u32>,
 }
 
@@ -186,16 +141,12 @@ impl Emulator {
             arm: None,
             input: ConsoleInput::default(),
             stream_console: true,
-            // `PIMU_SLOW_LOOP=1`: every step through every check, to hold the
-            // fast loop to the same run.
+            // `PIMU_SLOW_LOOP=1` puts every step through every check.
             fast_loop: !crate::diag::ON && std::env::var_os("PIMU_SLOW_LOOP").is_none(),
             fast_stepped: 0,
         }
     }
 
-    /// Core 1, at `entry`: the same silicon as core 0, so the same `version`
-    /// apart from the core-id bit, and the same unimplemented-op and trace
-    /// settings. It sets its own exception-vector base, so `exc_vbase` stays 0.
     fn spawn_core1(&mut self, entry: u32) {
         if crate::diag::ON {
             eprintln!("[core1] released at {entry:#010x}");
@@ -212,9 +163,7 @@ impl Emulator {
         self.cpu1 = Some(c1);
     }
 
-    /// Bring up VPU core 1 at `entry` now, for payloads that run both cores
-    /// from the start (`--smp`, tests). A firmware boot needs none of this:
-    /// start4 wakes core 1 itself through its core-control `WAKEUP` register.
+    /// Bring up VPU core 1 now, for payloads that run both cores (`--smp`, tests).
     pub fn start_smp(&mut self, entry: u32) {
         self.spawn_core1(entry);
     }
@@ -225,16 +174,10 @@ impl Emulator {
 
     pub fn run(&mut self, limits: &RunLimits) -> RunReport {
         let start = Instant::now();
-        // UART output goes to stdout as it happens, so a run can be
-        // watched instead of waiting for the summary at the end. Set
-        // `PIMU_LIVE_CONSOLE=0` to get the buffered-only behaviour back (the
-        // summary still prints the whole console either way, but it is not
-        // repeated once it has been streamed), or turn `stream_console` off.
         let mut diag = crate::diag::DiagConfig::from_env();
         diag.live_console &= self.stream_console;
-        // `PIMU_MMIO_FROM=<hex>` arms `--trace-mmio`-style logging only once the
-        // PC first reaches that address — lets you capture a late boot stage
-        // (e.g. start4.elf) without drowning in the bootloader's MMIO.
+        // `PIMU_MMIO_FROM=<hex>` arms the trace only once the PC reaches that
+        // address, so a late boot stage can be captured on its own.
         if diag.mmio_from.is_some() {
             self.machine.mmio_trace = false;
         }
@@ -262,9 +205,8 @@ impl Emulator {
         } = st;
         console.extend_from_slice(&self.machine.take_console_output());
 
-        // Only the first 12 hits of each `PIMU_TRAP` address are printed, so
-        // report the totals as well - the print cap otherwise makes every
-        // busy address look like it ran exactly 12 times.
+        // The print cap would otherwise make every busy address look like it
+        // ran exactly 12 times.
         if crate::diag::ON && !trap_hits.is_empty() {
             let mut totals: Vec<(u32, u64)> = trap_hits.into_iter().collect();
             totals.sort_unstable();
@@ -273,17 +215,8 @@ impl Emulator {
             }
         }
 
-        // `PIMU_TCB=<hex>[,<hex>...]`: at exit, decode each ThreadX thread's
-        // saved context and report the pc it is parked at. `[tcb+8]` is the
-        // saved stack pointer and the word at it is the frame discriminator
-        // (`_tx_thread_schedule`, `0x3EC4002C`): 1 = an interrupt frame
-        // `[1][r16-r23][r0-r15][lr][SR][PC]`, 0 = a solicited frame
-        // `[0][r16-r23][r6-r15][lr]` whose `lr` is the resume address. That pc
-        // is the answer to "what is this thread blocked on".
-        // `--log irqtbl`: dump the per-source handler table at `gp+58004` at
-        // exit. The generic dispatcher (`0x3EC3E9BC`) indexes it with the
-        // source number to find the ISR, so a zero entry means "this source is
-        // never handled" even if `enable_irq_source` turned it on.
+        // `--log irqtbl`: the per-source handler table the generic dispatcher
+        // indexes, where a zero entry means the source is never handled.
         if crate::diag::ON && self.machine.log.on(Channel::IrqTbl) {
             let tbl = self.cpu.regs.get(24).wrapping_add(58004);
             let vb = self.cpu.exc_vbase;
@@ -293,12 +226,8 @@ impl Emulator {
                 "gp={:#x} table={tbl:#x} vbase={vb:#x}",
                 self.cpu.regs.get(24)
             );
-            // Two dispatch routes exist. The vector table's [64..127] entries are
-            // direct per-source handlers (source 64 = the ThreadX tick
-            // `0x3EC40B7C`); everything else points at the generic dispatcher
-            // `0x3EC3E9BC`, which indexes the handler table by source. A source
-            // whose *handler-table* slot is 0 is not broken — `0x3ED656A8`
-            // refuses to register on such a slot — it is dispatched directly.
+            // A vector-table entry is either a direct handler or the generic
+            // dispatcher, so a zero handler slot means direct, not broken.
             for src in 64u32..128 {
                 let h = self
                     .machine
@@ -338,11 +267,9 @@ impl Emulator {
                     ld(tcb),
                     ld(tcb.wrapping_add(4)),
                 );
-                // Everything above the saved frame is the suspended function's
-                // own stack; scan it for words that look like start4 text and
-                // print them as a rough backtrace. `resume` alone is always the
-                // return out of `_tx_thread_system_suspend`, which says nothing
-                // about *what* the thread is waiting for.
+                // `resume` is only the return out of
+                // `_tx_thread_system_suspend`, so scan the stack above the frame
+                // for text addresses as a rough backtrace of what it waits on.
                 let frame = 4
                     * (if disc == 1 {
                         1 + 8 + 16 + 1 + 1 + 1
@@ -429,12 +356,8 @@ impl Emulator {
         }
     }
 
-    /// One step with every check the run loop makes, in order: the stop
-    /// conditions and per-pc hooks before core 0's instruction, then
-    /// [`Self::post_step`].
+    /// One step with every check the run loop makes, in order.
     fn slow_step(&mut self, st: &mut RunState, limits: &RunLimits) -> Option<RunEnd> {
-        // Anything the checks act on from here on is seen by this step's
-        // checks or by the next slow step's (see `fast_steps`).
         self.machine.recheck = false;
         if limits.max_steps.is_some_and(|max| {
             self.cpu.retired + self.cpu1.as_ref().map_or(0, |c| c.retired) >= max
@@ -447,10 +370,8 @@ impl Emulator {
             }
         }
 
-        // The core takes its exception-vector base from CoreCtl
-        // (0x7E00_2030 / 0x830) for every exception, so each write moves it:
-        // the bootloader's halt points it at its own table and start4 later
-        // at its own. An explicit `--exc-vbase` stands until the first write.
+        // The core re-reads its vector base from CoreCtl on every exception, so
+        // each write moves it; `--exc-vbase` stands until the first.
         if let Some(vbase) = self.machine.corectl.take_vbase(0) {
             self.cpu.exc_vbase = vbase;
         }
@@ -481,10 +402,8 @@ impl Emulator {
                 self.machine.mmio_trace = true;
             }
         }
-        // `PIMU_TRACE_ON_PC=<hex>`: arm the instruction trace the first time
-        // core 0 reaches this address. The console-substring trigger cannot
-        // reach a code path that runs after the firmware has stopped
-        // printing — which is exactly where a wedged boot has to be read.
+        // `PIMU_TRACE_ON_PC=<hex>`: for the code paths a console trigger cannot
+        // reach, because the firmware has already stopped printing.
         if let Some(pc) = st.diag.trace_on_pc.filter(|_| crate::diag::ON) {
             if !self.cpu.trace && pc_before == pc {
                 self.cpu.trace = true;
@@ -529,10 +448,9 @@ impl Emulator {
         self.post_step(st, limits, pc_before, step, Resume::Core0)
     }
 
-    /// Everything a step does after core 0's instruction and the tick that
-    /// follows it: interrupt delivery, core 1, console input, the ARM, the
-    /// console, and the stuck and busy-wait detectors. `resume` says which of
-    /// the stages up to the ARM already ran (in [`Self::fast_steps`]).
+    /// Everything after core 0's instruction and its tick: interrupt delivery, core 1,
+    /// console input, the ARM, the console, and the detectors. `resume` says which of
+    /// the stages up to the ARM already ran.
     fn post_step(
         &mut self,
         st: &mut RunState,
@@ -542,12 +460,8 @@ impl Emulator {
         resume: Resume,
     ) -> Option<RunEnd> {
         if resume == Resume::Core0 {
-            // The firmware raises an interrupt on a core in software by
-            // setting its bit in that core's pending word (`0x7E002040` /
-            // `+0x844`, `0x3ED01896`). start4 uses it for the clock service's
-            // timer (source 66) and for ThreadX's inter-core reschedule IPI
-            // (source 78 on core 0, 79 on core 1). Nothing modelled these, so
-            // every software-posted interrupt was silently dropped.
+            // The firmware raises interrupts in software through a core's
+            // pending word: the clock service's timer, and ThreadX's IPI.
             while let Some((core, src)) = self.machine.corectl.take_sw_raised() {
                 if crate::diag::ON {
                     crate::log!(
@@ -559,20 +473,15 @@ impl Emulator {
                     );
                 }
                 if core == 0 {
-                    // The generic dispatcher re-reads the source from
-                    // CoreCtl `+0x04`; `take_pending_irq` presents it there
-                    // when it is vectored.
                     self.machine.push_pending_irq(src);
                 } else {
-                    // Queued, not vectored here: core 1 may have interrupts
-                    // off or not be running yet, and the pending bit stays up
-                    // until it can take the source (`Self::step_core1`).
+                    // Queued, not vectored: core 1 may have interrupts off or
+                    // not be running yet, and the source must not be lost.
                     self.machine.push_core1_irq(src);
                 }
             }
 
-            // A device-raised interrupt (DMA completion) takes the same
-            // vectoring path as the tick, but is not gated on a compare match.
+            // A device interrupt vectors like the tick, ungated by a compare.
             if self.cpu.irq_enabled() && self.cpu.exc_vbase != 0 {
                 if let Some(src) = self.machine.take_pending_irq() {
                     if crate::diag::ON {
@@ -610,7 +519,6 @@ impl Emulator {
             }
             if tick_due && self.cpu.irq_enabled() && self.cpu.exc_vbase != 0 {
                 if let Some(slot) = self.machine.timer_tick_slot() {
-                    // Deliver now — consume the latched flag.
                     self.machine.take_tick_pending();
                     if crate::diag::ON && self.machine.log.on(Channel::Tick) {
                         st.tick_deliveries += 1;
@@ -645,29 +553,25 @@ impl Emulator {
                 }
             }
 
-            // Firmware asked for a SoC reset (PM RSTC) — stop so the caller can
-            // re-run from a fresh machine seeded with the updated flash.
+            // Stop so the caller can re-run from a machine seeded with the
+            // updated flash.
             if self.machine.pm.take_reset() {
                 return Some(RunEnd::Reset);
             }
 
-            // The firmware wrote a start address to core 1's WAKEUP register.
-            // A store hands a fast loop back, so this runs right after the
-            // storing instruction. The model never powers core 1 down, so a
-            // second write finds it running and has nothing to wake.
+            // The model never powers core 1 down, so a second WAKEUP write
+            // finds it running and has nothing to do.
             if let Some(entry) = self.machine.corectl.take_core1_wake() {
                 if self.cpu1.is_none() {
                     self.spawn_core1(entry);
                 }
             }
-            // Interleave one core-1 step per core-0 step over the shared bus.
             self.step_core1(st);
         }
 
         if resume <= Resume::Core1 {
-            // Console input: keystrokes from the host, now and then (a channel
-            // poll per step would cost more than the step), then whatever is on
-            // the line into the receive FIFO at the modelled time.
+            // Host keystrokes, polled now and then: a channel poll per step
+            // would cost more than the step itself.
             if let Some(host) = self.input.host.as_mut() {
                 st.host_poll = st.host_poll.wrapping_add(1);
                 if st.host_poll.is_multiple_of(1024) {
@@ -691,12 +595,8 @@ impl Emulator {
             st.last_output_us = self.machine.systimer.now_us();
             st.last_output_retired = self.cpu.retired;
         } else if limits.silent_us > 0 {
-            // Wedged, not merely slow: the firmware has printed nothing for
-            // a long stretch of *modelled* time and is still burning
-            // instructions. Both halves matter — modelled time alone would
-            // trip on a legitimate long delay that `sleep` fast-forwards
-            // through in a handful of instructions, and instructions alone
-            // would trip on a busy stretch that simply has nothing to say.
+            // Both halves matter: modelled time alone trips on a long `sleep`,
+            // instructions alone on a busy stretch with nothing to say.
             let silent_us = self
                 .machine
                 .systimer
@@ -713,8 +613,7 @@ impl Emulator {
         }
         if st.diag.live_console && had_output {
             use std::io::Write;
-            // The serial console is what a run is for, so it is stdout (#55),
-            // flushed at once: a prompt does not end in a newline.
+            // Flushed at once: a prompt does not end in a newline.
             let mut out = std::io::stdout().lock();
             let _ = out.write_all(&fresh);
             let _ = out.flush();
@@ -737,9 +636,8 @@ impl Emulator {
             }
             st.prompt_seen = st.console.len();
         }
-        // `PIMU_TRACE_ON_CONSOLE=<substr>` arms the instruction trace the moment
-        // that substring appears in the console — for pinning down a code path
-        // by the log line that precedes it.
+        // `PIMU_TRACE_ON_CONSOLE=<substr>` arms the trace from the log line
+        // that precedes the code path being pinned down.
         if let Some(needle) = st
             .diag
             .trace_on_console
@@ -753,9 +651,7 @@ impl Emulator {
                     self.cpu.trace_armed = true;
                     self.cpu.trace_cf_only = st.diag.trace_cf;
                     self.cpu.trace_cap = st.diag.trace_cap;
-                    // Also stream peripheral accesses while the trace is
-                    // armed (PIMU_TRACE_MMIO=1) — handy for pinning down an
-                    // unmodelled block like the I2C BSC.
+                    // `PIMU_TRACE_MMIO=1` also streams peripheral accesses.
                     if st.diag.trace_mmio {
                         self.machine.mmio_trace = true;
                     }
@@ -771,19 +667,15 @@ impl Emulator {
             }
             crate::vpu::Step::Ran => {}
         }
-        // Core 1 halting does not stop core 0 — record it and carry on.
 
         if limits.idle_spin_limit > 0 {
-            // A loop that keeps reading the free-running system timer is a
-            // firmware `usleep` — time-bounded, so not a hung spin however
-            // many iterations it takes. `max_steps` / `max_wall` still cap
-            // a pathological one.
+            // A loop reading the free-running timer is a `usleep`: time-bounded,
+            // so not a hung spin however many iterations it takes.
             let timer_polling = self.machine.systimer.clo_reads != st.clo_reads_at_cf;
             self.busy_wait_ff(st, pc_before, had_output, timer_polling);
             if let Some(cf) = self.cpu.cf_last {
-                // A bare read-only poll counts as a spin, but firmware
-                // delay/lock loops legitimately iterate 10k+ times before
-                // giving up, so the threshold is generous.
+                // Firmware delay and lock loops legitimately iterate 10k+ times,
+                // so the threshold is generous.
                 let progress = progress_count(&self.machine);
                 let progressing = progress != st.progress_at_cf || timer_polling;
                 if cf == st.last_cf && !had_output && !progressing {
@@ -827,40 +719,20 @@ impl Emulator {
         None
     }
 
-    /// Fast-forward a firmware busy-wait on the free-running counter, a
-    /// `udelay` (`start = CLO; while (CLO - start) < n`): start4 and the
-    /// bootloaders make thousands of calls, each spinning a 3- or
-    /// 4-instruction loop for the whole delay. `timer_read` says whether this
-    /// step read the counter.
-    ///
-    /// The wait is recognised by its counter reads: the same instruction
-    /// reads it every time round, with the same control transfer before it,
-    /// and nothing else happens in between — no other peripheral read, only
-    /// a little RAM traffic, no output. The `start` read is a different
-    /// instruction (or the same `get_time` reached over a different call), so
-    /// every call starts a new run of spins, and only a wait that is still
-    /// going after 1000 of them is jumped.
-    ///
-    /// The jump is as long as the wait has taken so far, up to 50 ms: a long
-    /// delay clears in a few dozen detections, doubling each time and
-    /// overshooting by less than 2x, and a short one ends before it is ever
-    /// jumped. A fixed jump turns a train of µs waits — most of those calls
-    /// are `udelay(1)` — into seconds of modelled time (#111).
-    ///
-    /// The periodic ThreadX tick fires in the middle of a long delay (a jump
-    /// usually crosses its deadline). Its handler reads peripherals (start4's
-    /// reads the counter as well), does a *bounded* amount of RAM traffic,
-    /// and returns into the loop with its own last transfer in `cf_last`. So
-    /// once an exception was taken or returned from since the last read, a
-    /// few counter reads elsewhere are passed over, and the loop's next read
-    /// only has to come from the same instruction with a small `progress`
-    /// delta (a real memcpy/memtest in the loop would blow past it).
-    /// `in_exception` is not an "inside a handler" flag — a thread switch
-    /// never unwinds it — but it moves on every entry and `rti`.
+    /// Fast-forward a firmware busy-wait on the free-running counter, a `udelay`
+    /// (`start = CLO; while (CLO - start) < n`): the firmware makes thousands of
+    /// calls, each spinning a 3- or 4-instruction loop for the whole delay. The wait
+    /// is recognised by its counter reads — same instruction, same control transfer
+    /// before it, nothing else in between — and only one still going after 1000 of
+    /// them is jumped, by as long as it has taken so far, up to 50 ms. A long delay
+    /// clears in a few dozen doublings, overshooting by less than 2x, while a fixed
+    /// jump would turn a train of `udelay(1)` calls into seconds. The ThreadX tick
+    /// fires mid-delay and its handler reads peripherals itself, so once
+    /// `in_exception` has moved, a few reads are passed over and the loop's next read
+    /// need only match the instruction with a small `progress` delta.
     fn busy_wait_ff(&mut self, st: &mut RunState, pc: u32, had_output: bool, timer_read: bool) {
-        /// Counter reads passed over after an exception before the run
-        /// starts again from one of them: a thread switch out of the handler
-        /// never comes back to the loop.
+        /// Counter reads passed over after an exception: a thread switch out of the
+        /// handler never comes back to the loop.
         const HANDLER_READS: u32 = 16;
         if self.cpu.in_exception != st.delay_ff_exc {
             st.delay_ff_exc = self.cpu.in_exception;
@@ -887,9 +759,8 @@ impl Emulator {
         if spin {
             st.delay_ff += 1;
             if st.delay_ff >= 1_000 {
-                // Jump (not `skip_ahead`) so one long `udelay` is not chopped
-                // at every tick deadline; `service_matches` collapses any
-                // ticks the jump skips to a single delivery.
+                // Jump rather than step, so one long `udelay` is not chopped at
+                // every tick deadline.
                 let waited = now.saturating_sub(st.delay_ff_start).clamp(1, 50_000);
                 if crate::diag::ON {
                     crate::log!(m.log, Channel::Ff, "pc={pc:#x} jump={waited} us");
@@ -898,8 +769,7 @@ impl Emulator {
                 st.delay_ff = 0;
             }
         } else if st.delay_ff_irq && st.delay_ff_handler_reads < HANDLER_READS {
-            // Most likely the handler's own read: leave the run, and the
-            // snapshots it is compared against, as they are.
+            // Likely the handler's own read: leave the run and its snapshots.
             st.delay_ff_handler_reads += 1;
             return;
         } else {
@@ -922,13 +792,11 @@ impl Emulator {
             if let Some(vbase) = self.machine.corectl.take_vbase(1) {
                 c1.exc_vbase = vbase;
             }
-            // A source raised for core 1 is taken once core 1's bank enables it
-            // and core 1 can take it: with interrupts on, or asleep in `sleep`,
-            // which takes one even with them off, as on core 0.
+            // Taken once core 1's bank enables it and core 1 can take it: with
+            // interrupts on, or asleep in `sleep`, which takes one regardless.
             if c1.exc_vbase != 0 && !c1.is_stopped() && (c1.halted || c1.irq_enabled()) {
                 if let Some(src) = self.machine.take_core1_irq() {
-                    // Presented at core 1's `IRQ_PENDING` as it is vectored,
-                    // for start4's dispatcher, the same as core 0's.
+                    // Presented at `IRQ_PENDING` as it is vectored, as core 0's.
                     self.machine.corectl.raise_source(1, src);
                     if c1.halted {
                         c1.vector_irq_forced(&mut self.machine, src);
@@ -948,8 +816,7 @@ impl Emulator {
                         c1.stopped.clone().expect("stop reason"),
                     ));
                 }
-                // Core 1's accesses under its own pc, or the next core-0
-                // step prints them against core 0's.
+                // Drain here, or the next core-0 step prints these under its pc.
                 if crate::diag::ON && self.machine.mmio_trace {
                     for (addr, w, val, write) in self.machine.mmio_events.drain(..) {
                         eprintln!(
@@ -967,8 +834,7 @@ impl Emulator {
         }
     }
 
-    /// The ARM: out of reset when `arm_loader` writes the ARM control block,
-    /// then kept in step with the system timer.
+    /// The ARM: out of reset when `arm_loader` writes the ARM control block.
     #[inline]
     fn step_arm(&mut self) -> Option<RunEnd> {
         if self.arm_enabled && self.arm.is_none() && self.machine.armctrl.take_release() {
@@ -976,11 +842,9 @@ impl Emulator {
             self.machine.defer_sleep = true;
         }
         if let Some(arm) = self.arm.as_mut() {
-            // The VPU went to `sleep`: it wakes at its next compare, or when
-            // the ARM writes something that interrupts it — a mailbox
-            // request, most often — whichever comes first. So the ARM runs
-            // up to that compare first, and the counter only moves as far as
-            // it got (#53; `arm/mod.rs`, "Time and scheduling").
+            // A sleeping VPU wakes at its next compare or at an interrupting ARM
+            // write, so the ARM runs first and the counter moves only as far as
+            // it got (`arm/mod.rs`, "Time and scheduling").
             if let Some(to) = self.machine.sleep_to.take() {
                 let us = arm.run_until_store(&mut self.machine, to);
                 self.machine.wake_vpu_at(us);
@@ -993,43 +857,20 @@ impl Emulator {
         None
     }
 
-    /// Run steps for as long as none of the run loop's per-step checks can
-    /// act, doing only what every step has to do: core 0, the tick, core 1,
-    /// the UART receiver, the ARM, and the detectors' running state.
+    /// Run steps for as long as none of the run loop's per-step checks can act, doing
+    /// only what every step must: core 0, the tick, core 1, the UART receiver, the
+    /// ARM, and the detectors' running state.
     ///
-    /// The guest sees exactly the same run as through [`Self::slow_step`]
-    /// alone: the same instructions, retired at the same step, with every
-    /// interrupt and time jump at the same point. What is skipped is only
-    /// checks that are known to do nothing, and each is covered one of
-    /// three ways:
-    ///
-    /// 1. By a flag raised at the event it depends on. A peripheral write, a
-    ///    queued interrupt, a compare that fires or a reset coming due set
-    ///    [`Machine::recheck`]; core 0 entering or leaving an exception,
-    ///    switching interrupts, sleeping, stopping or missing the decode cache
-    ///    sets [`Vpu::recheck`]; a read of the system timer's counter shows in
-    ///    its `clo_reads`. The step that raises one is finished by
-    ///    [`Self::post_step`] from where it got to, and the step after it is
-    ///    a slow one, so a check that runs before core 0's instruction (the
-    ///    exception-vector pickup) sees it too.
-    /// 2. By a budget, for the checks that come due by counting: the step
-    ///    limit, the wall-clock check, host input, the detectors' window and
-    ///    the console-silence watchdog. The budget stops short of the step
-    ///    where any of them could fire.
-    /// 3. By the pc, for the checks tied to an address: `stop_pc` and the
-    ///    start4 entry. Such a pc ends the fast run before its instruction.
-    ///
-    /// A queued interrupt that only the interrupt-enable bit holds back is
-    /// the one thing no flag covers, since any instruction can write `r30`,
-    /// so it keeps the run on slow steps; so does core 1's release while it
-    /// waits on a word in RAM.
-    ///
-    /// The detectors keep their running state exactly. On a step with no
-    /// timer read and a decode-cache hit — which counts as a RAM read, so
-    /// `progress` moved — the spin detector's per-step update takes the
-    /// "reset" branch, which is all this does. The busy-wait detector acts
-    /// only on a timer read, console output or a change of `in_exception`,
-    /// and each of those ends the fast run.
+    /// The guest sees exactly the run it would through [`Self::slow_step`] alone:
+    /// same instructions, same step numbers, every interrupt and time jump at the
+    /// same point. Only checks known to do nothing are skipped, each covered by a
+    /// flag raised at the event it depends on ([`Machine::recheck`], [`Vpu::recheck`],
+    /// the timer's `clo_reads`), by a budget for those that come due by counting, or
+    /// by the pc for those tied to an address. A step raising a flag is finished by
+    /// [`Self::post_step`] and followed by a slow step, so a check that runs before
+    /// core 0's instruction sees it too. A queued interrupt held back only by the
+    /// interrupt-enable bit is the one thing no flag covers, since any instruction
+    /// can write `r30`, so it keeps the run on slow steps.
     fn fast_steps(&mut self, st: &mut RunState, limits: &RunLimits) -> Option<RunEnd> {
         if self.machine.recheck || self.cpu.is_stopped() {
             return None;
@@ -1041,21 +882,16 @@ impl Emulator {
         if budget == 0 {
             return None;
         }
-        // The pcs a slow step has to handle before their instruction. A
-        // `u32::MAX` that matches by accident only costs a slow step.
+        // A `u32::MAX` that matches by accident only costs a slow step.
         let stop_pc = limits.stop_pc.unwrap_or(u32::MAX);
-        // Only a slow step feeds the receive line.
         let uart_busy = self.machine.console_rx_backlog() != 0;
         let host = self.input.host.is_some();
         let spin = limits.idle_spin_limit > 0;
-        // Core 1 steps only while it runs. It can stop or sleep in here, but
-        // only a slow step wakes it, and its vector-base pickup is done: the
-        // register it reads only moves with a peripheral write.
+        // Core 1 can stop or sleep in here, but only a slow step wakes it.
         let mut core1_runs = self
             .cpu1
             .as_ref()
             .is_some_and(|c| !c.is_stopped() && !c.halted);
-        // Only a register write releases the ARM, and that ends the run.
         let arm_on = self.arm.is_some();
         self.cpu.recheck = false;
         let mut n = 0u64;
@@ -1116,8 +952,7 @@ impl Emulator {
         end
     }
 
-    /// How many steps [`Self::fast_steps`] may take before one of the
-    /// counted checks could fire.
+    /// How many steps [`Self::fast_steps`] may take before a counted check fires.
     fn fast_budget(&self, st: &RunState, limits: &RunLimits) -> u64 {
         let mut n = u64::MAX;
         if let Some(max) = limits.max_steps {
@@ -1139,9 +974,8 @@ impl Emulator {
             n = n.min(st.win - 1 - st.w_steps);
         }
         if limits.silent_us > 0 {
-            // The watchdog needs both halves. In the `k`-th step from here
-            // core 0 has retired at most `k` more instructions and the
-            // counter has had exactly `k` more cycles (a jump is an event).
+            // In the `k`-th step from here core 0 has retired at most `k` more
+            // instructions and the counter has had exactly `k` more cycles.
             let retired_left = SILENT_RETIRED
                 .saturating_sub(self.cpu.retired.saturating_sub(st.last_output_retired));
             let cycles_left = self
@@ -1154,29 +988,22 @@ impl Emulator {
     }
 }
 
-/// How many instructions the console-silence watchdog wants on top of its
-/// modelled time ([`RunLimits::silent_us`]).
+/// Instructions the console-silence watchdog wants on top of its modelled time.
 const SILENT_RETIRED: u64 = 20_000_000;
 
-/// "Progress" = RAM stores + peripheral stores + RAM loads. A memset or
-/// memcpy advances the stores; a DRAM memtest read-back advances the loads.
-/// A poll loop our stubs never satisfy touches none of them (MMIO loads are
-/// not counted), so it still trips.
+/// RAM stores + peripheral stores + RAM loads: a memset advances the stores and a
+/// memtest read-back the loads, while a poll our stubs never satisfy moves neither.
 fn progress_count(m: &Machine) -> u64 {
     m.ram_writes
         .wrapping_add(m.mmio_writes)
         .wrapping_add(m.ram_reads)
 }
 
-/// How far a step got before [`Emulator::fast_steps`] handed it to
-/// [`Emulator::post_step`].
+/// How far a step got before [`Emulator::fast_steps`] handed it to `post_step`.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Resume {
-    /// Core 0 stepped and the clock ticked.
     Core0,
-    /// Core 1 stepped as well.
     Core1,
-    /// Console input and the ARM ran too.
     Arm,
 }
 
@@ -1186,21 +1013,15 @@ struct RunState {
     diag: crate::diag::DiagConfig,
     console: Vec<u8>,
     wall_check: u64,
-    /// How much of the console `PIMU_TRACE_ON_CONSOLE` has searched.
     console_seen: usize,
-    /// Prompt / `until` search: how much of the console has been searched,
-    /// and where the output after the last scripted send begins.
+    /// How much of the console the prompt / `until` search has covered, and where the output after the last scripted send begins.
     prompt_seen: usize,
     prompt_floor: usize,
     host_poll: u32,
 
-    // Spin detection: over a sliding window of steps, track the min/max PC
-    // and whether any console output happened. If the PC stays within a
-    // small window for the whole window length with no output, call it a
-    // spin (a peripheral poll our stubs never satisfy).
+    // Spin detection: a PC inside a small range for a whole window, no output.
     win: u64,
-    // Console-silence watchdog: the modelled clock and the retired count at
-    // the last byte the firmware printed.
+    // The modelled clock and retired count at the last byte printed.
     last_output_us: u64,
     last_output_retired: u64,
     w_lo: u32,
@@ -1209,56 +1030,37 @@ struct RunState {
     w_output: bool,
     progress_at_window: u64,
     clo_reads_at_window: u64,
-    // Fast path: the exact same taken transfer repeating is a tight spin —
-    // *unless* memory traffic keeps advancing.
+    // The same taken transfer repeating is a tight spin, unless memory moves.
     last_cf: (u32, u32),
     cf_repeat: u64,
     progress_at_cf: u64,
     clo_reads_at_cf: u64,
-    // Busy-wait fast-forward (`Emulator::busy_wait_ff`): a firmware `udelay`
-    // (`while now - start < N`) reads the system-timer counter from one
-    // instruction, after one control transfer, over and over. Count those
-    // reads and jump the timer ahead so a multi-millisecond delay doesn't eat
-    // the step budget.
     delay_ff: u64,
-    /// The instruction that read the counter, and the control transfer before it.
     delay_ff_pc: u32,
     delay_ff_cf: (u32, u32),
     /// The counter when the run of reads started: how long the wait has taken.
     delay_ff_start: u64,
-    /// `in_exception` when last looked at, and whether it moved since the
-    /// last counted read: a handler ran in between.
+    /// `in_exception` when last looked at, and whether it has moved since.
     delay_ff_exc: u32,
     delay_ff_irq: bool,
-    /// Counter reads passed over since then, as the handler's.
     delay_ff_handler_reads: u32,
-    /// Where the machine's counters stood at the last counted read.
     progress_at_delay: u64,
     mmio_reads_at_delay: u64,
     clo_reads_at_delay: u64,
 
     tick_deliveries: u64,
     tick_skips: u64,
-    /// PIMU_PROF=1: cheap PC profiler. Bucket the core-0 PC into 256-byte
-    /// slots on every step and dump the hottest on exit — finds the loop
-    /// that is eating the step budget when a boot phase runs slow.
+    /// `PIMU_PROF=1`: 256-byte PC buckets, hottest dumped on exit.
     prof_hist: HashMap<u32, u64>,
-    /// PIMU_PROF_THREAD=1: same buckets, but keyed by the running ThreadX
-    /// thread (`_tx_thread_current_ptr`, `0x3EE35900`) as well, so "which
-    /// thread is spinning, and where" can be read off directly.
+    /// `PIMU_PROF_THREAD=1`: the same buckets keyed by ThreadX thread as well.
     prof_thist: HashMap<(u32, u32), u64>,
-    /// `PIMU_HEARTBEAT=<n>`: every `<n>` retired instructions, print model
-    /// time, the running ThreadX thread and the PC. The one diagnostic that
-    /// says whether a stalled boot is wedged or merely slow.
+    /// `PIMU_HEARTBEAT=<n>`: every `<n>` retired instructions print model time, the
+    /// running thread and the PC — what says whether a stall is wedged or merely slow.
     next_beat: u64,
-    /// `PIMU_TRAP=<hex>[,<hex>...]`: print pc / lr / r0-r5 every time core 0
-    /// reaches one of these addresses. Generic "who calls this, with what"
-    /// probe - the linear disassembler can't xref (it desyncs on inline
-    /// data), so callers have to be found at runtime. `PIMU_TRAP_MAX=<n>`:
-    /// how many hits of each trap address to print (default 12); the totals
-    /// are always reported at exit. `PIMU_TRAP_FROM=<n>`: ignore trap hits
-    /// before `<n>` million retired instructions, so the steady state can be
-    /// sampled instead of only early boot.
+    /// `PIMU_TRAP=<hex>[,<hex>...]`: print pc / lr / r0-r7 whenever core 0 reaches one
+    /// of these addresses, since the linear disassembler cannot xref. `PIMU_TRAP_MAX`
+    /// caps the prints per address (totals at exit); `PIMU_TRAP_FROM` arms it after
+    /// so many million retired instructions.
     trap_hits: HashMap<u32, u64>,
     core1_end: Option<RunEnd>,
 }

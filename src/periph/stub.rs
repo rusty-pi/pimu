@@ -1,11 +1,9 @@
 //! Catch-all device for the peripheral window.
 //!
-//! Real firmware touches dozens of blocks we do not model yet (clock manager,
-//! PM/watchdog, SDRAM PHY, mailbox internals, ...). Rather than fault, the stub
-//! records every access and reads 0 where nothing was written, so an
-//! unimplemented poke becomes a triage note instead of a crash. Per-offset
-//! "sticky" storage makes the common "write reg then read it back" pattern
-//! behave.
+//! Real firmware touches more blocks than are modelled. Rather than fault, the
+//! stub records every access and reads 0 where nothing was written, so an
+//! unmodelled poke becomes a triage note instead of a crash. Per-offset sticky
+//! storage makes the common write-then-read-back pattern behave.
 
 use std::collections::BTreeMap;
 

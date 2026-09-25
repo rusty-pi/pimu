@@ -37,7 +37,6 @@ pub(super) fn field(insn: u32, lo: u32, len: u32) -> u32 {
     (insn >> lo) & ((1 << len) - 1)
 }
 
-/// Sign-extend the low `bits` of `v`.
 #[inline]
 fn sext(v: u64, bits: u32) -> u64 {
     let s = 64 - bits;
@@ -116,7 +115,6 @@ pub(super) fn add_with_carry(x: u64, y: u64, carry: bool, sf: bool) -> (u64, u32
     (r, nzcv)
 }
 
-/// `NZ` from a logical result, `C` and `V` cleared.
 #[inline]
 fn logic_flags(r: u64, sf: bool) -> u32 {
     let mut nzcv = 0;
@@ -232,7 +230,6 @@ fn crc32(mut acc: u32, val: u64, bytes: u32, castagnoli: bool) -> u32 {
 }
 
 impl Cpu {
-    /// Read general register `r` with 31 = XZR, truncated to the operand size.
     #[inline]
     pub(super) fn xr(&self, r: u32, sf: bool) -> u64 {
         if r == 31 {
@@ -242,7 +239,6 @@ impl Cpu {
         }
     }
 
-    /// Read general register `r` with 31 = SP.
     #[inline]
     pub(super) fn xsp(&self, r: u32) -> u64 {
         if r == 31 {
@@ -252,8 +248,6 @@ impl Cpu {
         }
     }
 
-    /// Write general register `r` with 31 = XZR; a 32-bit write zeroes the
-    /// top half.
     #[inline]
     pub(super) fn set_xr(&mut self, r: u32, sf: bool, v: u64) {
         if r != 31 {
@@ -261,7 +255,6 @@ impl Cpu {
         }
     }
 
-    /// Write general register `r` with 31 = SP.
     #[inline]
     pub(super) fn set_xsp(&mut self, r: u32, sf: bool, v: u64) {
         if r == 31 {
@@ -271,7 +264,6 @@ impl Cpu {
         }
     }
 
-    /// `ConditionHolds`.
     #[inline]
     pub(super) fn cond_holds(&self, cond: u32) -> bool {
         let f = self.nzcv;
@@ -303,7 +295,6 @@ impl Cpu {
     }
 }
 
-/// Execute `insn`, which was fetched from `cpu.pc`.
 pub(super) fn execute<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M) -> Exec {
     match field(insn, 25, 4) {
         0b1000 | 0b1001 => dp_imm(cpu, insn),
@@ -542,8 +533,8 @@ fn branch_reg(cpu: &mut Cpu, insn: u32) -> Exec {
     Ok(())
 }
 
-// Out of line: rare, and big enough that inlined into the step it made every
-// instruction pay for its registers (#53).
+// Out of line: rare, and big enough that inlining it into the step would make
+// every instruction pay for its registers.
 #[inline(never)]
 fn system<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M) -> Exec {
     let l = bit(insn, 21);
@@ -553,14 +544,10 @@ fn system<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M) -> Exec {
     let crm = field(insn, 8, 4);
     let op2 = field(insn, 5, 3);
     let rt = field(insn, 0, 5);
-    // What changes state outside the general registers and memory
-    // (`Cpu::effects`) is everything but MRS, the barriers, the hints but
-    // WFE/WFI/SEV/SEVL (NOP and YIELD, and on this ARMv8.0 core the pointer
-    // authentication, BTI and CSDB hints too) and the cache maintenance the
-    // model has no caches for. DC ZVA only writes memory, which the bus
-    // reports like any store. A Linux kernel runs these by the million —
-    // `paciasp`/`autiasp` around every call, `dc civac`/`dc zva` over every
-    // buffer and page — and each one used to end an ARM burst.
+    // `Cpu::effects` counts everything here but MRS, the barriers, the
+    // NOP-like hints and the cache maintenance the model has no caches for: a
+    // kernel runs those by the million, and counting them would end an ARM
+    // burst constantly.
     let quiet = match (l, op0, crn) {
         (true, 2..=3, _) => true,
         (false, 0, 2) => rt == 31 && !(2..=5).contains(&((crm << 3) | op2)),
@@ -571,10 +558,9 @@ fn system<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M) -> Exec {
         ),
         _ => false,
     };
-    // Of the rest, a write to this core's own interrupt masks, flags, FP
-    // control, stack or thread pointers or banked exception registers reaches
-    // no further than its own next instructions, so it is left out of
-    // `Cpu::shared_effects`: an ARM burst runs on through the `msr daifset` /
+    // A write to this core's own masks, flags, FP control, stack or thread
+    // pointers reaches no further than its own next instructions, so it stays
+    // out of `Cpu::shared_effects` and a burst runs through the `msr daifset` /
     // `msr daif` pairs a kernel brackets every spinlock with.
     let local = match (l, op0) {
         // MSR (immediate): SPSel, DAIFSet, DAIFClr.
@@ -590,29 +576,24 @@ fn system<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M) -> Exec {
     }
     match (l, op0) {
         (false, 0) => match crn {
-            // Hints. Unallocated hints execute as NOP.
             2 if rt == 31 => match (crm << 3) | op2 {
-                // WFE: a pending event is consumed instead of waiting.
                 2 if cpu.event => {
                     cpu.event = false;
                     Ok(())
                 }
                 2 => Err(Stop::Wfe),
                 3 => Err(Stop::Wfi),
-                // SEV: every core's Event Register, this one's included.
                 4 => {
                     cpu.event = true;
                     cpu.sev = true;
                     Ok(())
                 }
-                // SEVL: this core's only.
                 5 => {
                     cpu.event = true;
                     Ok(())
                 }
                 _ => Ok(()),
             },
-            // Barriers.
             3 if rt == 31 && op1 == 3 => match op2 {
                 2 => {
                     cpu.exclusive = None;
@@ -621,7 +602,6 @@ fn system<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M) -> Exec {
                 4..=6 => Ok(()),
                 _ => undef(),
             },
-            // MSR (immediate).
             4 if rt == 31 => msr_imm(cpu, op1, op2, crm),
             _ => undef(),
         },
@@ -667,7 +647,6 @@ fn sys<M: Memory + ?Sized>(
         return undef();
     }
     match (op1, crn, crm, op2) {
-        // DC ZVA: DCZID_EL0.BS = 4, so a 64-byte block.
         (3, 7, 4, 1) => {
             let base = cpu.xr(rt, true) & !63;
             for i in 0..8 {
@@ -675,15 +654,9 @@ fn sys<M: Memory + ?Sized>(
             }
             Ok(())
         }
-        // DC CVAC/CVAU/CIVAC, IC IVAU: no caches modelled. The EL0 trap
-        // controls (SCTLR_EL1.UCI) are not modelled.
         (3, 7, 10 | 11 | 14, 1) | (3, 7, 5, 1) => Ok(()),
         _ if cpu.el == 0 => undef(),
-        // The rest of the cache maintenance (DC IVAC/ISW/CSW/CISW, IC IALLU/
-        // IALLUIS): no caches.
         (0, 7, 6 | 10 | 14, 1 | 2) | (0, 7, 5 | 1, 0) => Ok(()),
-        // TLB maintenance: every TLBI drops the whole TLB, which is always
-        // allowed.
         (0 | 4 | 6, 8, _, _) if op1 / 2 <= cpu.el => {
             cpu.tlb.flush();
             cpu.tlb.broadcast = true;
@@ -904,8 +877,8 @@ fn ld_st_reg<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M) -> Exec 
         0 => (base.wrapping_add(imm), None),
         1 => (base, Some(base.wrapping_add(imm))),
         2 => {
-            // LDTR/STTR: EL0 permissions from EL1 (see mmu.rs); no SIMD
-            // form exists.
+            // LDTR/STTR: EL0 permissions from EL1 (`src/aarch64/mmu.rs`);
+            // no SIMD form exists.
             if simd {
                 return undef();
             }
@@ -1285,7 +1258,6 @@ mod tests {
             decode_bit_masks(0, 0x3C, 1, true, 32).unwrap().0,
             0xAAAA_AAAA
         );
-        // All-ones is reserved for the immediate form.
         assert_eq!(decode_bit_masks(1, 0x3F, 0, true, 64), None);
     }
 

@@ -3,13 +3,11 @@
 //! The VPU core never holds a reference to memory or peripherals. `Vpu::step`
 //! takes a `Bus` — a type parameter, not a trait object, so the RAM path
 //! inlines into the executor — and [`Machine`](crate::machine::Machine) is the
-//! concrete implementation that owns RAM and every peripheral and decodes
-//! addresses to them. This keeps the borrow graph a tree: `Emulator` owns `Vpu` and `Machine`
-//! as siblings.
+//! implementation that owns RAM and every peripheral. This keeps the borrow
+//! graph a tree: `Emulator` owns `Vpu` and `Machine` as siblings.
 
 use std::fmt;
 
-/// Access width.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Width {
     Byte,
@@ -29,15 +27,15 @@ impl Width {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BusError {
-    /// Nothing is mapped at this address.
     Unmapped {
         addr: u32,
         width: Width,
         write: bool,
     },
-    /// Mapped, but the access is misaligned for the target.
-    Misaligned { addr: u32, width: Width },
-    /// Mapped region rejected the access (e.g. write to read-only).
+    Misaligned {
+        addr: u32,
+        width: Width,
+    },
     Faulted {
         addr: u32,
         width: Width,
@@ -78,8 +76,7 @@ impl fmt::Display for BusError {
 
 pub type BusResult<T> = Result<T, BusError>;
 
-/// Anything the VPU can read from and write to. Values are zero-extended to
-/// `u32` on load and truncated on store.
+/// Anything the VPU can read and write; values zero-extend on load.
 pub trait Bus {
     fn load(&mut self, addr: u32, width: Width) -> BusResult<u32>;
     fn store(&mut self, addr: u32, width: Width, value: u32) -> BusResult<()>;
@@ -103,11 +100,6 @@ pub trait Bus {
         self.store(addr, Width::Word, v)
     }
 
-    /// Fetch the instruction bytes at `pc` into `out`, returning its length.
-    ///
-    /// The default walks the instruction a halfword at a time through
-    /// [`Self::load16`]; `Machine` overrides it with a slice copy when the
-    /// instruction lies in RAM.
     fn read_insn(&mut self, pc: u32, out: &mut [u8; 10]) -> BusResult<u8> {
         let p0 = self.load16(pc)?;
         let len = crate::vpu::length::insn_len_bytes(p0);
@@ -121,33 +113,21 @@ pub trait Bus {
         Ok(len)
     }
 
-    /// The write generation of the RAM page `pc` is in ([`crate::mem::Ram::page_gen`]),
-    /// or `None` when an instruction there must not be served from a decode
-    /// cache (not RAM). `cached` is the generation the caller's cached copy
-    /// was decoded under: when it matches, the caller will use that copy
-    /// instead of calling [`Self::read_insn`], so this is where the fetch's
-    /// own bookkeeping has to happen.
+    /// The write generation of the RAM page `pc` is in, or `None` when an
+    /// instruction there must not be served from a decode cache. A match with
+    /// `cached` skips [`Self::read_insn`], so the fetch's bookkeeping is here.
     fn code_gen(&mut self, _pc: u32, _cached: Option<u64>) -> Option<u64> {
         None
     }
 
-    /// The interrupt vector-table slot for the periodic ThreadX tick source, if
-    /// the firmware has enabled it. This does not touch the timer — the run
-    /// loop calls it when a compare deadline has been crossed to deliver a
-    /// genuine periodic tick (real hardware's preemption point). `None` = the
-    /// tick source is not enabled yet.
+    /// The vector slot for the periodic tick source, or `None` until the
+    /// firmware enables it; called once a compare deadline has been crossed.
     fn timer_tick_slot(&mut self) -> Option<u32> {
         None
     }
 
-    /// Consume the "a system-timer compare has fired since last checked" flag
-    /// (see [`Self::timer_tick_slot`]). `Op::Sleep` uses this to service a
-    /// pending periodic tick that the run loop couldn't deliver because
-    /// interrupts were disabled.
-    /// Take the next device-raised interrupt source, if any. Distinct from
-    /// [`Self::timer_tick_slot`]: that one answers "which vector does the
-    /// system-timer compare use", this one is any peripheral asking to be
-    /// serviced (currently the DMA channels' completion interrupt).
+    /// Consume the "a compare has fired since last checked" flag, so `Sleep`
+    /// can service a tick the run loop could not deliver with interrupts off.
     fn take_pending_irq(&mut self) -> Option<u32> {
         None
     }
@@ -156,30 +136,23 @@ pub trait Bus {
         false
     }
 
-    /// `sleep` with nothing pending: real VC4 halts the core until an interrupt
-    /// arrives, so advance the system timer straight to its next armed compare
-    /// instead of letting the idle loop spin. Returns false if nothing is armed
-    /// (then there is nothing to wake up for).
+    /// `sleep` with nothing pending: the core halts until an interrupt, so
+    /// advance the timer to its next armed compare. False when none is.
     fn sleep_advance(&mut self) -> bool {
         false
     }
 }
 
-/// A memory-mapped peripheral. Offsets are relative to the device's base.
-///
-/// Devices see naturally-aligned 32-bit accesses in almost all cases; the
-/// `Machine` splits or rejects odd widths per-region as needed.
+/// A memory-mapped peripheral. Offsets are relative to the device's base, and
+/// accesses are naturally-aligned 32-bit ones unless the `Machine` splits them.
 pub trait MmioDevice {
-    /// Human-readable name, for tracing.
     fn name(&self) -> &'static str;
 
     fn read(&mut self, offset: u32, width: Width) -> BusResult<u32>;
     fn write(&mut self, offset: u32, width: Width, value: u32) -> BusResult<()>;
 
-    /// Advance any internal time-based state by `cycles` VPU cycles. Default: no-op.
     fn tick(&mut self, _cycles: u64) {}
 
-    /// True if the device is currently asserting its interrupt line.
     fn irq_pending(&self) -> bool {
         false
     }

@@ -1,49 +1,27 @@
-//! BCM2711 EMMC2 — the SD Host Controller (an Arasan SDHCI v3.00) the main
-//! bootloader drives once it picks "Boot mode: SD", and Linux's `sdhci-iproc`
-//! after it. Register block at `0x7E34_0000` (`0xFE34_0000` to the ARM).
+//! BCM2711 EMMC2 — the Arasan SDHCI v3.00 host at `0x7E34_0000` that the main
+//! bootloader and Linux's `sdhci-iproc` drive. Registers and measured reset
+//! values: `specs/emmc2.toml`.
 //!
-//! Models the clock / reset / present-state plumbing *and* a working command
-//! engine wired to an [`SdCard`], with three data paths:
+//! A working command engine wired to an [`SdCard`], with three data paths: PIO
+//! through the Buffer Data Port (what the firmware uses), SDMA, and 32-bit
+//! ADMA2 (what Linux uses). Also auto-CMD12 / auto-CMD23, CMD11 1.8 V
+//! switching, tuning, the interrupt output and status gating by
+//! `INT_STATUS_EN`.
 //!
-//! * **PIO** through the Buffer Data Port, both directions — what the
-//!   bootloader and start4 use (CMD17/CMD18 + CMD12) to pull `start4.elf` and
-//!   the kernel. Between read blocks `BUF_READ_EN` drops, as on silicon: the
-//!   next block arrives on the second status poll or 21 µs later, whichever
-//!   comes first, and latches Buffer Read Ready again (#109);
-//! * **SDMA** — a single system address, pausing with a DMA interrupt at each
-//!   buffer boundary until the host writes the next address;
-//! * **ADMA2**, 32-bit descriptors (CAPS0 bit 28 says no 64-bit system bus) —
-//!   what Linux uses (`mmc0: SDHCI controller on fe340000.mmc using ADMA` on
-//!   the real board).
+//! Three deliberate behaviours:
 //!
-//! DMA needs the RAM, so a command (or an SDMA address write) that starts one
-//! only marks it pending; [`crate::machine::Machine`] then calls
-//! [`Emmc2::run_dma`] straight after the register write, which completes the
-//! whole transfer at once. Also: auto-CMD12 / auto-CMD23, CMD11 1.8 V
-//! switching (the card holds CMD/DAT low until the host's clock comes back at
-//! 1.8 V), tuning (one CMD19 succeeds), the interrupt output
-//! ([`Emmc2::irq_asserted`], INTID 158 on the GIC) and status gating by
-//! INT_STATUS_EN, as the SDHCI spec has it.
-//!
-//! The same engine is the chip's other Arasan host too, the legacy EMMC at
-//! `0x7E30_0000` ([`Emmc2::new_legacy`], `specs/emmc.toml`): the WiFi chip's
-//! SDIO host on a Pi 4, and the host 2020-era bootcode reads the SD card
-//! through. Nothing is on its bus — the SD slot reaches it only through a mux
-//! the model does not follow — so every command that expects a response times
-//! out there (#64).
-//!
-//! SDHCI register map (word offsets):
-//! ```text
-//!   0x00 SDMA address / arg2      0x04 block size[11:0] | SDMA boundary[14:12] | count[31:16]
-//!   0x08 argument                 0x0C transfer mode[15:0] | command[31:16]
-//!   0x10..0x1C RESPONSE0..3       0x20 buffer data port
-//!   0x24 present state            0x28 host/power/gap/wakeup control
-//!   0x2C clock ctl[15:0] | timeout[23:16] | sw-reset[26:24]
-//!   0x30 int status               0x34 int status enable   0x38 int signal enable
-//!   0x3C auto-CMD error[15:0] | host control 2[31:16]
-//!   0x40/0x44 capabilities        0x48 max current
-//!   0x54 ADMA error status        0x58 ADMA system address  0xFC controller version
-//! ```
+//! * Between PIO read blocks `BUF_READ_EN` drops, as on silicon: the next block
+//!   arrives on the second status poll or 21 µs later, whichever comes first.
+//!   A driver pacing on a `BUF_READ_RDY` it never clears would otherwise read
+//!   the gap.
+//! * DMA needs the RAM, so a command that starts one only marks it pending;
+//!   [`crate::machine::Machine`] then calls [`Emmc2::run_dma`] right after the
+//!   register write, which completes the whole transfer at once.
+//! * The same engine is the chip's legacy EMMC at `0x7E30_0000`
+//!   ([`Emmc2::new_legacy`], `specs/emmc.toml`) — the WiFi chip's SDIO host and
+//!   the host 2020-era bootcode reads the card through. Nothing is on its bus
+//!   (the SD slot reaches it only through a mux the model does not follow), so
+//!   every command expecting a response times out there.
 
 use std::collections::BTreeMap;
 
@@ -52,9 +30,8 @@ use crate::log::{Channel, Log};
 use crate::mem::Ram;
 use crate::periph::sdcard::SdCard;
 
-// The read-only identity (`CAPABILITIES_*`, `MAX_CURRENT`,
-// `CONTROLLER_VERSION`), the idle `PRESENT_STATE` and `HOST_CONTROL.FIXED` are
-// measured on a Pi 4B rev 1.5 (`specs/emmc2.toml`).
+// The read-only identity, the idle `PRESENT_STATE` and `HOST_CONTROL.FIXED`
+// are measured on a Raspberry Pi 4B d03115.
 use crate::spec::emmc as legacy;
 use crate::spec::emmc2::{
     ADMA_ADDR, ADMA_ERROR, ADMA_ERROR_LEN_MISMATCH_MASK as ADMA_LEN_MISMATCH, ARGUMENT,
@@ -115,8 +92,7 @@ pub const COVERAGE: Coverage = Coverage {
     ],
 };
 
-/// The legacy EMMC: the command engine. Its identity registers are not
-/// measured, so they stay stubbed.
+/// The legacy EMMC: the command engine, with unmeasured identity registers.
 pub const COVERAGE_LEGACY: Coverage = Coverage {
     block: "emmc",
     decoded: &[
@@ -194,7 +170,7 @@ struct Identity {
     host_control_fixed: u32,
 }
 
-/// EMMC2's, measured on a Pi 4B rev 1.5 (`specs/emmc2.toml`).
+/// EMMC2's, measured on a Raspberry Pi 4B d03115 (`specs/emmc2.toml`).
 const EMMC2_ID: Identity = Identity {
     name: "emmc2",
     caps0: CAPS0,
@@ -204,9 +180,8 @@ const EMMC2_ID: Identity = Identity {
     host_control_fixed: HOST_CONTROL_FIXED,
 };
 
-/// The legacy EMMC's. Real boards' bootloader logs show its HOST_CONTROL
-/// reading back just what was written (`specs/emmc.toml`); the capability and
-/// version registers are unmeasured there, and read 0 rather than EMMC2's.
+/// The legacy EMMC's: `HOST_CONTROL` reads back what was written, and the
+/// capability and version registers are unmeasured, so they read 0.
 const LEGACY_ID: Identity = Identity {
     name: "emmc",
     caps0: 0,
@@ -216,43 +191,33 @@ const LEGACY_ID: Identity = Identity {
     host_control_fixed: 0,
 };
 
-/// DAT[3:0] and CMD line levels.
 const PS_LINES_CMD_DAT: u32 = PRESENT_STATE_DAT_LINES_MASK | PRESENT_STATE_CMD_LINE_MASK;
 
-/// `CMD_XFER.AUTO_CMD` values.
 const TM_AUTO_CMD12: u32 = 1;
 const TM_AUTO_CMD23: u32 = 2;
 
-/// `HOST_CONTROL.DMA_SELECT`: 32-bit ADMA2.
 const HC_DMA_ADMA2_32: u32 = 2;
 
-/// Software-reset bits — self-clearing in the model.
 const SRST_MASK: u32 = SRST_ALL | SRST_CMD | SRST_DATA;
 
-/// Data-circuit interrupt bits cleared by a DAT software reset (spec: buffer
-/// ready both ways, DMA, block-gap, transfer complete) — command complete is
-/// explicitly preserved.
+/// Interrupt bits a DAT software reset clears; command complete is preserved.
 const INT_DATA_BITS: u32 =
     INT_XFER_COMPLETE | INT_DMA | INT_BLOCK_GAP | INT_BUF_WRITE_RDY | INT_BUF_READ_RDY;
 
-/// ADMA2 descriptor attributes.
 const ADMA_VALID: u16 = 1 << 0;
 const ADMA_END: u16 = 1 << 1;
 const ADMA_INT: u16 = 1 << 2;
 const ADMA_ACT_SHIFT: u16 = 4;
 const ADMA_ACT_TRAN: u16 = 2;
 const ADMA_ACT_LINK: u16 = 3;
-/// `ADMA_ERROR.STATE` at the error: fetching a descriptor, transferring.
 const ADMA_ST_FDS: u32 = 1;
 const ADMA_ST_TFR: u32 = 3;
 /// Descriptors walked per transfer before the engine gives up (a link loop).
 const ADMA_MAX_DESCRIPTORS: usize = 1 << 16;
 
-/// A DMA address as the RAM sees it. The emmc2bus's `dma-ranges` is 1:1, so
-/// an address inside the board's RAM is physical: on a 2 GB board that
-/// includes `0x4000_0000..0x8000_0000`, where Linux's DMA32 zone puts block
-/// buffers. Only an address past the RAM is one of the VPU's cache aliases,
-/// and folds onto the first gigabyte.
+/// A DMA address as the RAM sees it: the emmc2bus's `dma-ranges` is 1:1, so an
+/// address inside RAM is physical (Linux's DMA32 buffers live above the first
+/// gigabyte). Only an address past the RAM is a VPU cache alias.
 fn dma_ram_addr(addr: u32, ram_len: usize) -> u32 {
     if (addr as usize) < ram_len {
         addr
@@ -261,38 +226,26 @@ fn dma_ram_addr(addr: u32, ram_len: usize) -> u32 {
     }
 }
 
-/// An SDMA or ADMA2 transfer in flight: the data (read from the card, or to be
-/// written to it) and how far the engine has got.
+/// An SDMA or ADMA2 transfer in flight.
 struct Dma {
     adma: bool,
     write: bool,
     buf: Vec<u8>,
     pos: usize,
-    /// SDMA: the next system address.
     sdma_addr: u32,
-    /// Where a write's blocks go, and in what size.
     lba: u32,
     block_size: usize,
-    /// Issue CMD12 once the data is through.
     auto_cmd12: bool,
 }
 
-/// Status polls (`PRESENT_STATE` or `INT_STATUS` reads) after a PIO block is
-/// drained until the next one arrives: the first poll sees `BUF_READ_EN`
-/// clear, the second sees it set again. The stock stages poll
-/// `PRESENT_STATE` before every word; edk2's `ArasanMmcHostDxe` polls only
-/// `INT_STATUS` for `BUF_READ_RDY`, so both count.
+/// Status polls after a PIO block is drained until the next arrives; both
+/// `PRESENT_STATE` and `INT_STATUS` reads count, since drivers use either.
 const BLOCK_POLLS: u8 = 2;
 
-/// Modelled time for the next PIO block to arrive when nothing polls for it,
-/// for a driver that waits for the interrupt: 512 bytes, CRC, start and end
-/// bits on a 4-bit bus are 1042 clocks, 21 µs at the 50 MHz both stock stages
-/// clock the card at on a Raspberry Pi 4B d03115
-/// (the bootloader's `BUS: 50000000 Hz`, start4's
-/// `C0: 0x00800f06 ... actual: 50000000`).
+/// When the next PIO block arrives with nothing polling for it: a block on a
+/// 4-bit bus is 1042 clocks, 21 µs at the 50 MHz both stock stages use.
 const BLOCK_WIRE_US: u64 = 21;
 
-/// The next PIO read block, on its way after the host drained the last one.
 struct NextBlock {
     polls_left: u8,
     due_us: u64,
@@ -301,57 +254,41 @@ struct NextBlock {
 /// A PIO write in flight: blocks the host pushes through the Buffer Data Port.
 struct PioWrite {
     lba: u32,
-    /// `None` = open-ended (until CMD12).
     blocks_left: Option<u32>,
     auto_cmd12: bool,
 }
 
 pub struct Emmc2 {
     id: Identity,
-    /// Sticky storage for offsets without special behaviour.
     reg: BTreeMap<u32, u32>,
-    /// The inserted card, if any. `None` is an empty slot: nothing drives
-    /// CMD, so every command that expects a response times out.
+    /// The inserted card. `None` is an empty slot: nothing drives CMD.
     card: Option<SdCard>,
-    /// Latched response words the RESPONSE0..3 registers expose.
     resp: [u32; 4],
-    /// PIO read buffer: bytes of the current block not yet read out via the
-    /// Buffer Data Port. Drained 32 bits at a time, LSB-first.
+    /// PIO read buffer, drained 32 bits at a time, LSB-first.
     data: Vec<u8>,
     data_pos: usize,
-    /// Next block address to pull from the card.
     read_lba: u32,
     /// Blocks still owed on a counted transfer (CMD17, or CMD18 with a non-zero
     /// block count).
     read_blocks_left: u32,
-    /// CMD18 with block count 0 / block-count-enable off: keep streaming blocks
-    /// until CMD12 stops it.
+    /// Open-ended CMD18: stream blocks until CMD12 stops it.
     read_open_ended: bool,
-    /// A register block (CMD6 status, SCR, ...) the card sends instead of
-    /// image data; one block.
+    /// A one-block register response (CMD6 status, SCR, ...).
     read_synthetic: Option<Vec<u8>>,
-    /// Issue CMD12 when the PIO read's last block has been drained.
     read_auto_cmd12: bool,
-    /// The buffer is drained and the read's next block is on its way;
-    /// `BUF_READ_EN` stays clear until it arrives.
+    /// The next block is on its way; `BUF_READ_EN` stays clear until it lands.
     next_block: Option<NextBlock>,
-    /// Model time as [`Self::advance_to`] last set it.
     now_us: u64,
-    /// PIO write state and the partly filled block.
     pio_write: Option<PioWrite>,
     wbuf: Vec<u8>,
-    /// DMA transfer in flight, and whether [`Self::run_dma`] has work.
     dma: Option<Dma>,
     dma_pending: bool,
-    /// RAM ranges `[start, end)` the last DMA run wrote, for an ARM core that
-    /// caches translated code to drop (bounded to one transfer).
+    /// RAM ranges the last DMA run wrote, for translated-code invalidation.
     dma_written: Vec<(u32, u32)>,
-    /// CMD11 accepted: the card holds CMD/DAT low until the host restarts the
-    /// SD clock with 1.8 V signalling on.
+    /// CMD11 accepted: the card holds CMD/DAT low until the clock comes back
+    /// at 1.8 V.
     switching_1v8: bool,
-    /// Debug: 32-bit words handed out through the Buffer Data Port this transfer.
     words_out: u64,
-    /// Where [`Channel::Emmc`] goes.
     pub log: Log,
 }
 
@@ -388,8 +325,8 @@ impl Emmc2 {
         Emmc2::default()
     }
 
-    /// The legacy EMMC at `0x7E30_0000`. Its bus is empty until the SD-slot
-    /// mux routes the card to it (`Machine::route_sd_slot`).
+    /// The legacy EMMC at `0x7E30_0000`; its bus is empty until the SD-slot
+    /// mux routes the card to it.
     pub fn new_legacy() -> Emmc2 {
         Emmc2 {
             id: LEGACY_ID,
@@ -397,31 +334,22 @@ impl Emmc2 {
         }
     }
 
-    /// Insert a card backed by `image` (a raw block device: MBR + FAT + files).
     pub fn insert_card(&mut self, image: Vec<u8>) {
         self.card = Some(SdCard::new(image));
     }
 
-    /// Insert a card on `disk` — an image file read on demand, so a big card
-    /// costs only the blocks the guest touches.
     pub fn insert_disk(&mut self, disk: crate::periph::disk::Disk) {
         self.card = Some(SdCard::with_disk(disk));
     }
 
-    /// Solder an e-MMC part on `disk` to this host, as a Compute Module has
-    /// in place of a card slot.
     pub fn insert_mmc_disk(&mut self, disk: crate::periph::disk::Disk) {
         self.card = Some(SdCard::mmc_with_disk(disk));
     }
 
-    /// Disconnect the card from this host, state and all, the way the SD-slot
-    /// mux takes its lines away: to this host the slot is then empty.
     pub fn take_card(&mut self) -> Option<SdCard> {
         self.card.take()
     }
 
-    /// Connect a card (or nothing) that another host had: the card keeps the
-    /// state it was in, since only the lines to it moved.
     pub fn put_card(&mut self, card: Option<SdCard>) {
         self.card = card;
     }
@@ -438,20 +366,14 @@ impl Emmc2 {
         self.reg.get(&off).copied().unwrap_or(0)
     }
 
-    /// Latch interrupt status bits — only those INT_STATUS_EN lets through.
     fn set_int(&mut self, bits: u32) {
         let cur = self.get(INT_STATUS);
         let en = self.get(INT_STATUS_EN);
         self.reg.insert(INT_STATUS, cur | (bits & en));
     }
 
-    /// INT_STATUS as read: the latched bits, the card interrupt while the
-    /// card is asserting it, and the error summary.
-    ///
-    /// The card interrupt is a level and not a latch (SDHCI 3.00, 1.8):
-    /// writing a one to it clears nothing, and it goes away only when the
-    /// card lets go. All a driver can do about it meanwhile is mask it, which
-    /// INT_STATUS_EN does here as it does for every other bit.
+    /// `INT_STATUS` as read. The card interrupt is a level, not a latch (SDHCI
+    /// 3.00, 1.8): writing a one clears nothing and only the card can drop it.
     fn int_status(&self) -> u32 {
         let mut st = self.get(INT_STATUS) & !INT_ERROR;
         if self.card.as_ref().is_some_and(|c| c.io_irq()) {
@@ -464,20 +386,16 @@ impl Emmc2 {
         }
     }
 
-    /// The controller's interrupt output: a level, high while any latched
-    /// status bit is enabled in INT_SIGNAL_EN (normal bits in the low half,
-    /// error bits in the high half, the summary bit 15 included).
+    /// The interrupt output: high while a latched status bit is enabled in
+    /// `INT_SIGNAL_EN`.
     pub fn irq_asserted(&self) -> bool {
         self.int_status() & self.get(INT_SIGNAL_EN) != 0
     }
 
-    /// A DMA transfer is waiting for [`Self::run_dma`].
     pub fn dma_pending(&self) -> bool {
         self.dma_pending
     }
 
-    /// RAM ranges `[start, end)` the DMA engine has written since the last
-    /// call.
     pub fn take_dma_written(&mut self) -> Vec<(u32, u32)> {
         std::mem::take(&mut self.dma_written)
     }
@@ -495,14 +413,10 @@ impl Emmc2 {
         (self.get(BLOCK_SIZE_COUNT) >> 16) & 0xFFFF
     }
 
-    /// SDMA buffer boundary: 4 KiB << BLOCK_SIZE[14:12].
     fn sdma_boundary(&self) -> u32 {
         4096 << ((self.get(BLOCK_SIZE_COUNT) >> 12) & 7)
     }
 
-    /// A data transfer has data left to move: PIO blocks still owed or in the
-    /// buffer (an open-ended read always has its next block), a PIO write, or
-    /// a DMA run.
     fn transfer_active(&self) -> bool {
         !self.data.is_empty()
             || self.read_blocks_left > 0
@@ -511,22 +425,18 @@ impl Emmc2 {
             || self.dma.is_some()
     }
 
-    /// Bring the host to model time `now_us`: a PIO block due by then
-    /// arrives, even if nothing polls for it.
+    /// Bring the host to `now_us`: a PIO block due by then arrives.
     #[inline]
     pub fn advance_to(&mut self, now_us: u64) {
         self.now_us = now_us;
         if self.next_block.as_ref().is_some_and(|n| n.due_us <= now_us) {
             self.block_arrives();
         }
-        // ...and a card with something of its own going on — a WiFi chip
-        // part-way through a scan — gets the same chance to finish it.
         if let Some(card) = self.card.as_mut() {
             card.advance_to(now_us);
         }
     }
 
-    /// A status register was read: count it toward the next block's arrival.
     fn poll(&mut self) {
         if let Some(n) = self.next_block.as_mut() {
             n.polls_left -= 1;
@@ -541,7 +451,6 @@ impl Emmc2 {
         self.fill_next_block();
     }
 
-    /// Stop whatever data transfer is in flight.
     fn reset_data(&mut self) {
         self.data.clear();
         self.data_pos = 0;
@@ -556,16 +465,13 @@ impl Emmc2 {
         self.dma_pending = false;
     }
 
-    /// The controller sends CMD12 itself after a multi-block transfer; the
-    /// card's R1b lands in RESPONSE3.
+    /// Auto-CMD12 after a multi-block transfer; its R1b lands in `RESPONSE3`.
     fn auto_cmd12(&mut self) {
         if let Some(card) = self.card.as_mut() {
             self.resp[3] = card.command(12, 0).r1.unwrap_or(0);
         }
     }
 
-    /// The data phase is over: transfer complete, and the auto-CMD12 if one
-    /// was asked for.
     fn finish_data(&mut self, auto_cmd12: bool) {
         if auto_cmd12 {
             self.auto_cmd12();
@@ -573,7 +479,6 @@ impl Emmc2 {
         self.set_int(INT_XFER_COMPLETE);
     }
 
-    /// Dispatch the command in the `0x0C` word to the card and latch its result.
     fn issue_command(&mut self, cmd_xfer: u32) {
         let arg = self.get(ARGUMENT);
         let mode = cmd_xfer & 0xFFFF;
@@ -591,8 +496,6 @@ impl Emmc2 {
         self.resp = [0; 4];
 
         if data_present && multi && auto_cmd == TM_AUTO_CMD23 {
-            // Auto-CMD23: the block count goes to the card first, from
-            // ARGUMENT2.
             let arg2 = self.get(SDMA_ADDR);
             if let Some(card) = self.card.as_mut() {
                 card.command(23, arg2);
@@ -621,14 +524,12 @@ impl Emmc2 {
         );
 
         if response.no_response && resp_type != 0 {
-            // Nothing answered: command timeout, no completion.
             self.set_int(INT_ERR_CMD_TIMEOUT);
             return;
         }
 
         match resp_type {
             1 => {
-                // R2: RESPONSE0..3 hold CID/CSD bits [127:8].
                 let v = response.r2.unwrap_or(0);
                 self.resp[0] = (v >> 8) as u32;
                 self.resp[1] = (v >> 40) as u32;
@@ -646,8 +547,6 @@ impl Emmc2 {
         }
 
         if index == 19 && self.get(HOST_CONTROL2) & HC2_EXEC_TUNING != 0 {
-            // Tuning: the controller swallows the tuning block and raises
-            // only Buffer Read Ready. One pass finds a sampling point.
             let hc2 = self.get(HOST_CONTROL2);
             self.reg
                 .insert(HOST_CONTROL2, (hc2 & !HC2_EXEC_TUNING) | HC2_TUNED_CLK);
@@ -657,8 +556,6 @@ impl Emmc2 {
 
         self.set_int(INT_CMD_COMPLETE);
         if resp_type == 3 {
-            // R1b: busy released immediately in the model. CMD12 (STOP) also
-            // lands here — ending the open-ended read above covers the rest.
             self.set_int(INT_XFER_COMPLETE);
         }
 
@@ -693,8 +590,6 @@ impl Emmc2 {
             self.read_auto_cmd12 = auto_cmd12;
             let count = self.block_count();
             if response.read_blocks == u32::MAX {
-                // CMD18: bounded by the block-count register if set, else runs
-                // until CMD12.
                 if count > 0 {
                     self.read_blocks_left = count;
                 } else {
@@ -707,8 +602,6 @@ impl Emmc2 {
         }
     }
 
-    /// Set up an SDMA / ADMA2 transfer for a data command; [`Self::run_dma`]
-    /// moves the bytes.
     fn start_dma(
         &mut self,
         response: &crate::periph::sdcard::SdResponse,
@@ -754,8 +647,6 @@ impl Emmc2 {
         self.dma_written.clear();
     }
 
-    /// Run the pending DMA transfer against `ram`: to completion, to the next
-    /// SDMA boundary, or to an ADMA error.
     pub fn run_dma(&mut self, ram: &mut Ram) {
         self.dma_pending = false;
         let Some(mut d) = self.dma.take() else {
@@ -783,7 +674,6 @@ impl Emmc2 {
         }
     }
 
-    /// Move `n` bytes between the transfer buffer and RAM at `addr`.
     fn dma_copy(&mut self, d: &mut Dma, ram: &mut Ram, addr: u32, n: usize) -> bool {
         let a = dma_ram_addr(addr, ram.len());
         let ok = if d.write {
@@ -811,17 +701,14 @@ impl Emmc2 {
         ok
     }
 
-    /// SDMA: one system address, stopping with a DMA interrupt when it
-    /// reaches a buffer boundary with data left. `Some(true)` = done,
-    /// `Some(false)` = paused.
+    /// SDMA: one system address, pausing with a DMA interrupt at a buffer
+    /// boundary. `Some(true)` = done, `Some(false)` = paused.
     fn run_sdma(&mut self, d: &mut Dma, ram: &mut Ram) -> Option<bool> {
         let boundary = self.sdma_boundary();
         while d.pos < d.buf.len() {
             let to_boundary = (boundary - d.sdma_addr % boundary) as usize;
             let n = to_boundary.min(d.buf.len() - d.pos);
             if !self.dma_copy(d, ram, d.sdma_addr, n) {
-                // No RAM there: the data goes nowhere (SDHCI 3.00 has no SDMA
-                // error status), but the transfer still ends.
                 d.pos += n;
             }
             d.sdma_addr = d.sdma_addr.wrapping_add(n as u32);
@@ -835,8 +722,7 @@ impl Emmc2 {
         Some(true)
     }
 
-    /// ADMA2 with 32-bit descriptors: `{attr: u16, len: u16, addr: u32}`,
-    /// walked from ADMA_ADDR. `Some(true)` = done, `None` = ADMA error.
+    /// ADMA2, 32-bit descriptors walked from `ADMA_ADDR`. `None` = error.
     fn run_adma2(&mut self, d: &mut Dma, ram: &mut Ram) -> Option<bool> {
         let mut desc = self.get(ADMA_ADDR);
         let mut result = None;
@@ -871,7 +757,6 @@ impl Emmc2 {
                 break;
             }
             if attr & ADMA_END != 0 {
-                // The descriptors ran out before the data did.
                 state = ADMA_ST_TFR;
                 mismatch = true;
                 break;
@@ -891,8 +776,6 @@ impl Emmc2 {
         result
     }
 
-    /// Pull one block from the card (or a synthetic register block) into the PIO
-    /// buffer and flag Buffer Read Ready.
     fn fill_next_block(&mut self) {
         if self.read_blocks_left == 0 && !self.read_open_ended {
             return;
@@ -931,17 +814,11 @@ impl Emmc2 {
         }
     }
 
-    /// The Buffer Data Port as the *external* DMA engine sees it, one word at
-    /// a time.
-    ///
-    /// The legacy host has no SDHCI DMA of its own: `mmc-bcm2835` moves every
-    /// transfer of more than a couple of blocks with the legacy DMA
-    /// controller, reading and writing this port over the bus with the card's
-    /// DREQ pacing it (`dma_cfg_rx.src_addr = bus_addr + SDHCI_BUFFER` in
-    /// `drivers/mmc/host/bcm2835-mmc.c`). That pacing is the difference from
-    /// the PIO path: the engine only asks for a word once the FIFO has one,
-    /// so the next block of a read is always there by the time it does,
-    /// rather than arriving after a status poll or two.
+    /// The Buffer Data Port as the *external* DMA engine sees it. The legacy
+    /// host has no SDHCI DMA, so `mmc-bcm2835` moves transfers with the legacy
+    /// DMA controller, paced by the card's DREQ — which is the difference from
+    /// the PIO path: the engine only asks for a word once the FIFO has one, so
+    /// the next block is always there rather than arriving after a poll.
     pub fn dma_fifo_read(&mut self) -> u32 {
         if !self.buf_read_en() && (self.read_blocks_left > 0 || self.read_open_ended) {
             self.block_arrives();
@@ -949,21 +826,16 @@ impl Emmc2 {
         self.read_buffer_word()
     }
 
-    /// The same port in the write direction.
     pub fn dma_fifo_write(&mut self, value: u32) {
         self.write_buffer(&value.to_le_bytes());
     }
 
-    /// `PRESENT_STATE.BUF_READ_EN`: the buffer holds a block not yet read out.
     fn buf_read_en(&self) -> bool {
         self.data_pos < self.data.len()
     }
 
-    /// Read the next little-endian word out of the PIO buffer.
     fn read_buffer_word(&mut self) -> u32 {
         if !self.buf_read_en() {
-            // Nothing to read: silicon hands out whatever its FIFO holds, and
-            // a driver that gets here did not wait for the next block.
             crate::log!(
                 self.log,
                 Channel::Emmc,
@@ -992,8 +864,6 @@ impl Emmc2 {
             );
         }
         if self.data_pos >= self.data.len() {
-            // Block drained: the next one is on its way, or the transfer is
-            // finished.
             if self.read_blocks_left > 0 || self.read_open_ended {
                 self.next_block = Some(NextBlock {
                     polls_left: BLOCK_POLLS,
@@ -1012,8 +882,6 @@ impl Emmc2 {
         word
     }
 
-    /// Push bytes the host wrote to the Buffer Data Port; each full block goes
-    /// to the card.
     fn write_buffer(&mut self, bytes: &[u8]) {
         let bs = self.block_size();
         let Some(pw) = self.pio_write.as_mut() else {
@@ -1046,7 +914,6 @@ impl Emmc2 {
         }
     }
 
-    /// The current value of the word at `off`, as a read returns it.
     fn read_word(&mut self, off: u32) -> u32 {
         match off {
             RESPONSE0 => self.resp[0],
@@ -1055,12 +922,7 @@ impl Emmc2 {
             RESPONSE3 => self.resp[3],
             BUFFER_DATA => self.read_buffer_word(),
             CLOCK_CONTROL => {
-                // Clock control and the timeout byte (bits 16..23) read
-                // back; the real board prints `arasan_emmc_set_clock ... C1:
-                // 0x000e0047` (sd-card-boot.log).
                 let clk = self.get(CLOCK_CONTROL) & 0x00FF_FFFF;
-                // Internal clock reports stable as soon as it is enabled; the
-                // software-reset bits (high byte) always read back done.
                 if clk & CLK_INTLEN != 0 {
                     clk | CLK_STABLE
                 } else {
@@ -1101,13 +963,10 @@ impl Emmc2 {
         match off {
             CLOCK_CONTROL => {
                 self.reg.insert(CLOCK_CONTROL, value & !SRST_MASK);
-                // Software resets self-clear immediately. A DAT reset tears down
-                // the data path (FIFO + data-circuit interrupts) but leaves
-                // command-complete alone; a CMD reset clears command-complete; an
-                // ALL reset returns every register to its reset value (SDHCI
-                // 3.00, 2.2.18) — HOST_CONTROL included, which is why the real
-                // board's start4 prints `arasan_emmc_set_clock C0: 0x00800000`
-                // right after its reset (sd-card-boot.log).
+                // Software resets self-clear. A DAT reset tears down the data
+                // path but leaves command-complete; a CMD reset clears it; an
+                // ALL reset returns every register, `HOST_CONTROL` included, to
+                // its reset value (SDHCI 3.00, 2.2.18).
                 if value & (SRST_ALL | SRST_DATA) != 0 {
                     self.reset_data();
                     let keep = if value & SRST_ALL != 0 {
@@ -1125,8 +984,6 @@ impl Emmc2 {
                     let cur = self.get(INT_STATUS);
                     self.reg.insert(INT_STATUS, cur & !INT_CMD_COMPLETE);
                 }
-                // The card lets go of CMD/DAT once the SD clock runs again at
-                // 1.8 V after CMD11.
                 if self.switching_1v8
                     && value & CLK_SD_EN != 0
                     && self.get(HOST_CONTROL2) & HC2_1V8 != 0
@@ -1140,14 +997,12 @@ impl Emmc2 {
             }
             CMD_XFER => {
                 self.reg.insert(CMD_XFER, value);
-                // The command register is the upper half: writing it issues.
                 if lanes & 0xFFFF_0000 != 0 {
                     self.issue_command(value);
                 }
             }
             SDMA_ADDR => {
                 self.reg.insert(SDMA_ADDR, value);
-                // A paused SDMA resumes from the address the host writes.
                 if let Some(d) = self.dma.as_mut() {
                     if !d.adma {
                         d.sdma_addr = value;
@@ -1159,7 +1014,6 @@ impl Emmc2 {
                 let was = self.get(HOST_CONTROL);
                 self.reg.insert(HOST_CONTROL, value);
                 if was & HC_BUS_POWER != 0 && value & HC_BUS_POWER == 0 {
-                    // SD bus power off: the card loses VDD.
                     if let Some(card) = self.card.as_mut() {
                         card.power_off();
                     }
@@ -1167,7 +1021,6 @@ impl Emmc2 {
                 }
             }
             HOST_CONTROL2 => {
-                // The low half is the read-only Auto CMD Error Status.
                 self.reg.insert(HOST_CONTROL2, value & 0xFFFF_0000);
             }
             RESPONSE0 | RESPONSE1 | RESPONSE2 | RESPONSE3 | BUFFER_DATA | PRESENT_STATE
@@ -1187,11 +1040,9 @@ impl MmioDevice for Emmc2 {
     fn read(&mut self, offset: u32, width: Width) -> BusResult<u32> {
         let off = offset & !3;
         let word = self.read_word(off);
-        // The buffer port logs its own reads, a sample of them.
         if off != BUFFER_DATA {
             crate::log!(self.log, Channel::Emmc, "R [{off:#04x}] -> {word:#010x}");
         }
-        // Narrow reads get their lane, right-aligned.
         Ok(match width {
             Width::Word => word,
             Width::Half => (word >> ((offset & 2) * 8)) & 0xFFFF,
@@ -1213,8 +1064,6 @@ impl MmioDevice for Emmc2 {
             self.write_buffer(&value.to_le_bytes()[..n]);
             return Ok(());
         }
-        // Narrow writes merge into the word; the lane mask says which bytes
-        // were actually written (for W1C and for issuing a command).
         let (value, lanes) = match width {
             Width::Word => (value, u32::MAX),
             _ => {
@@ -1257,8 +1106,6 @@ mod tests {
         e.read(off, Width::Word).unwrap()
     }
 
-    /// Issue `index` with `arg`, transfer mode `mode`, command flags `flags`
-    /// (response type, data-present...).
     fn cmd(e: &mut Emmc2, index: u32, arg: u32, flags: u32, mode: u32) {
         wr(e, ARGUMENT, arg);
         wr(e, CMD_XFER, ((index << 8 | flags) << 16) | mode);
@@ -1267,7 +1114,6 @@ mod tests {
     const R1: u32 = 0x1A;
     const R1_DATA: u32 = 0x3A;
 
-    /// CMD0, ACMD41 ×2 with `ocr`, CMD2, CMD3, CMD7: card in tran.
     fn enumerate(e: &mut Emmc2, ocr: u32) -> u32 {
         cmd(e, 0, 0, 0, 0);
         let mut r = 0;
@@ -1299,8 +1145,8 @@ mod tests {
     const TRAN_END: u16 = 0x23;
     const NOP_END: u16 = 0x03;
 
-    /// On a 2 GB board Linux's DMA32 buffers sit above the first gigabyte;
-    /// they must not fold onto it. Past the RAM, the VPU's aliases still do.
+    /// Linux's DMA32 buffers sit above the first gigabyte and must not fold
+    /// onto it; past the RAM, the VPU's aliases still do.
     #[test]
     fn dma_addresses_inside_the_ram_are_physical() {
         let two_gb = 2 << 30;
@@ -1322,9 +1168,8 @@ mod tests {
         assert_eq!(CAPS0 & (1 << 28), 0, "no 64-bit ADMA");
     }
 
-    /// With no card, CMD0 (no response) completes and CMD8 times out, which is
-    /// how edk2's `ArasanMmcHostDxe` decides the slot is empty. A phantom card
-    /// that answered zeros kept its `MmcDxe` retrying for the whole boot.
+    /// With no card CMD0 completes and CMD8 times out, which is how edk2's
+    /// `ArasanMmcHostDxe` decides the slot is empty.
     #[test]
     fn an_empty_slot_times_out_every_command_that_expects_a_response() {
         let mut e = Emmc2::new();
@@ -1347,7 +1192,6 @@ mod tests {
         wr(&mut e, INT_STATUS, INT_CMD_COMPLETE);
         assert!(!e.irq_asserted(), "W1C drops the level");
 
-        // Errors: the high half, plus the summary bit 15.
         cmd(&mut e, 5, 0, 0x02, 0);
         assert_eq!(rd(&mut e, INT_STATUS), INT_ERR_CMD_TIMEOUT | INT_ERROR);
         assert!(!e.irq_asserted());
@@ -1356,7 +1200,6 @@ mod tests {
         wr(&mut e, INT_STATUS, INT_ERR_CMD_TIMEOUT);
         assert_eq!(rd(&mut e, INT_STATUS), 0);
 
-        // INT_STATUS_EN gates what latches at all.
         wr(&mut e, INT_SIGNAL_EN, 0xFFFF_FFFF);
         wr(&mut e, INT_STATUS_EN, 0);
         cmd(&mut e, 13, 0, R1, 0);
@@ -1371,7 +1214,6 @@ mod tests {
         enumerate(&mut e, 0x40FF_8000);
         select(&mut e);
         wr(&mut e, HOST_CONTROL, HC_DMA_ADMA2_32 << HC_DMA_SHIFT);
-        // 3 blocks at LBA 5: 100 bytes, a link to a second table, 1436 bytes.
         adma_table(
             &mut ram,
             RAM,
@@ -1406,7 +1248,6 @@ mod tests {
                 (RAM + 0x2000, RAM + 0x2000 + 1436)
             ]
         );
-        // Auto-CMD12 put the card back in tran and its R1b in RESPONSE3.
         assert_eq!((rd(&mut e, RESPONSE3) >> 9) & 0xF, 4);
     }
 
@@ -1466,7 +1307,6 @@ mod tests {
         e.run_dma(&mut ram);
         assert_eq!(rd(&mut e, INT_STATUS), INT_CMD_COMPLETE | INT_XFER_COMPLETE);
         assert_eq!(e.card().unwrap().disk().read(40, 2).unwrap(), &data[..]);
-        // CMD23's count ended the transfer: the card is back in tran.
         assert_eq!(
             e.card().unwrap().state(),
             crate::periph::sdcard::CardState::Tran
@@ -1480,7 +1320,6 @@ mod tests {
         let mut ram = Ram::new(0, 4 << 20);
         enumerate(&mut e, 0x40FF_8000);
         select(&mut e);
-        // 4 KiB boundary, 16 blocks, starting 1 KiB below a boundary.
         wr(&mut e, BLOCK_SIZE_COUNT, (16 << 16) | 512);
         wr(&mut e, SDMA_ADDR, RAM + 0x0C00);
         cmd(
@@ -1552,9 +1391,8 @@ mod tests {
         );
     }
 
-    /// The WiFi chip on the legacy host, brought up and with function 1's
-    /// 64-byte block size agreed and the backplane window aimed at `window`
-    /// — where `brcmfmac` is before it downloads anything.
+    /// The WiFi chip on the legacy host, where `brcmfmac` is before it
+    /// downloads anything.
     fn wifi_host(window: u32) -> Emmc2 {
         let mut e = Emmc2::new_legacy();
         e.put_card(Some(crate::periph::sdcard::SdCard::sdio()));
@@ -1578,9 +1416,8 @@ mod tests {
         e
     }
 
-    /// The shape of the firmware download: CMD53 to function 1, block mode,
-    /// as many 64-byte blocks as one command can carry, through the
-    /// backplane window into the chip's memory — and back out again.
+    /// The firmware download: CMD53 to function 1, block mode, through the
+    /// backplane window and back out again.
     #[test]
     fn a_block_write_through_the_window_reaches_the_chips_memory() {
         let base = crate::periph::cyw43455::RAM_BASE;
@@ -1590,8 +1427,6 @@ mod tests {
         let data: Vec<u8> = (0..blocks * bs).map(|i| (i / 7) as u8).collect();
 
         wr(&mut e, BLOCK_SIZE_COUNT, (blocks << 16) | bs);
-        // Write, function 1, block mode, incrementing, window offset 0 with
-        // the 4-byte-access flag.
         let arg = (1 << 31) | (1 << 28) | (1 << 27) | (1 << 26) | (0x8000 << 9) | blocks;
         cmd(&mut e, 53, arg, R1_DATA, TM_BLOCK_COUNT_EN | TM_MULTI);
         for (i, word) in data.chunks(4).enumerate() {
@@ -1617,7 +1452,6 @@ mod tests {
             &data[..]
         );
 
-        // And read it back the way the driver verifies it.
         wr(&mut e, INT_STATUS, 0xFFFF_FFFF);
         let arg = (1 << 28) | (1 << 27) | (1 << 26) | (0x8000 << 9) | blocks;
         cmd(
@@ -1639,8 +1473,6 @@ mod tests {
         assert_eq!(back, data);
     }
 
-    /// One CMD53 in byte mode against function `func`, through the Buffer
-    /// Data Port: the shape every control frame goes over.
     fn io_bytes(e: &mut Emmc2, func: u32, off: u32, write: bool, incr: bool, data: &mut Vec<u8>) {
         let n = data.len() as u32;
         assert!(n.is_multiple_of(4) && n <= 512);
@@ -1674,20 +1506,13 @@ mod tests {
         );
     }
 
-    /// The WiFi chip with its frame FIFO open: function 2 enabled, the card's
-    /// interrupt lines armed, and the SDIO core told which status bits to
-    /// raise the interrupt for — which is where
+    /// The WiFi chip with its frame FIFO open, where
     /// `brcmf_sdio_firmware_callback` leaves it.
-    /// One CMD52 to function `func`.
     fn io_byte(e: &mut Emmc2, func: u32, addr: u32, v: u8) {
         let arg = (1 << 31) | (func << 28) | (addr << 9) | u32::from(v);
         cmd(e, 52, arg, R1, 0);
     }
 
-    /// One 32-bit backplane register, the way `brcmf_sdiod_writel`
-    /// (`bcmsdh.c:264`) writes one: aim function 1's window at it, then a
-    /// four-byte transfer at the offset it selects, with the 4-byte-access
-    /// flag on top.
     fn backplane_wr(e: &mut Emmc2, addr: u32, value: u32) {
         let v = (addr & 0xFFFF_8000) >> 8;
         for i in 0..3 {
@@ -1698,43 +1523,31 @@ mod tests {
         io_bytes(e, 1, off, true, true, &mut word);
     }
 
-    /// The SDIO device core's registers, which is where the host interrupt
-    /// comes from. Its base is the model's to pick; the offsets are
-    /// `struct sdpcmd_regs`.
+    /// The SDIO device core's registers (`struct sdpcmd_regs`), where the host
+    /// interrupt comes from.
     const SD_CORE: u32 = 0x1800_1000;
     const SD_INTSTATUS: u32 = 0x20;
     const SD_HOSTINTMASK: u32 = 0x24;
-    /// `HOSTINTMASK` (`sdio.c:794`): the four host mailbox bits and "chip
-    /// active".
     const HOSTINTMASK: u32 = 0x0000_00F0 | 1 << 29;
-    /// `I_HMB_FRAME_IND` (`sdio.c:272`).
     const I_HMB_FRAME_IND: u32 = 1 << 6;
 
     fn wifi_host_up() -> Emmc2 {
         let mut e = wifi_host(0x1800_0000);
-        // Function 2's block size, then the function itself.
         for (i, b) in 512u16.to_le_bytes().iter().enumerate() {
             io_byte(&mut e, 0, 0x210 + i as u32, *b);
         }
         io_byte(&mut e, 0, 0x02, 0x06);
         backplane_wr(&mut e, SD_CORE + SD_HOSTINTMASK, HOSTINTMASK);
-        // Master interrupt enable plus function 1's, which is what
-        // `sdio_claim_irq` writes.
         io_byte(&mut e, 0, 0x04, 0x03);
-        // ...and the host's own half of it: `bcm2835_mmc_enable_sdio_irq`
-        // puts the card-interrupt bit in both enables.
         wr(&mut e, INT_SIGNAL_EN, INT_CARD);
         wr(&mut e, INT_STATUS, 0xFFFF_FFFF);
         e
     }
 
-    /// A control frame as `brcmf_sdio_tx_ctrlframe` builds one: the SDPCM
-    /// header, then a BCDC request.
     fn ctrl_frame(seq: u8, id: u16, cmd: u32, payload: &[u8]) -> Vec<u8> {
         let mut bcdc = Vec::new();
         bcdc.extend_from_slice(&cmd.to_le_bytes());
         bcdc.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-        // `BCDC_DCMD_SET` with the request id above it.
         bcdc.extend_from_slice(&(u32::from(id) << 16 | 0x02).to_le_bytes());
         bcdc.extend_from_slice(&0u32.to_le_bytes());
         bcdc.extend_from_slice(payload);
@@ -1750,11 +1563,8 @@ mod tests {
         frame
     }
 
-    /// The whole control path in one go: a frame out on function 2, the
-    /// card's interrupt, and the answer back.
-    ///
-    /// This is what `brcmf_sdio_bus_preinit` does with `bus:txglomalign` and
-    /// what `brcmf_sdio_bus_rxctl` waits 2.7 s for.
+    /// The whole control path: a frame out on function 2, the card's
+    /// interrupt, and the answer back.
     #[test]
     fn a_control_frame_is_answered_and_the_card_says_so() {
         let mut e = wifi_host_up();
@@ -1763,33 +1573,24 @@ mod tests {
         let mut iovar = b"bus:txglomalign\0".to_vec();
         iovar.extend_from_slice(&4u32.to_le_bytes());
         let mut frame = ctrl_frame(255, 1, 263, &iovar);
-        // Function 2's offset is the chipcommon base masked down to the
-        // window, which is 0, with the 4-byte-access flag on top.
         io_bytes(&mut e, 2, 0x8000, true, true, &mut frame);
 
-        // The chip has an answer, and the card pulls DAT[1] for it.
         assert_eq!(
             rd(&mut e, INT_STATUS) & INT_CARD,
             INT_CARD,
             "the card interrupt never reached the host"
         );
         assert!(e.irq_asserted());
-        // Write-one-to-clear does nothing to it at the host's end: it is a
-        // level, and only the chip can drop it.
+        // A level: only the chip can drop it.
         wr(&mut e, INT_STATUS, 0xFFFF_FFFF);
         assert_eq!(rd(&mut e, INT_STATUS) & INT_CARD, INT_CARD);
-        // ...and function 1 is the one the card names as pending.
         cmd(&mut e, 52, 0x05 << 9, R1, 0);
         assert_eq!(rd(&mut e, RESPONSE0) & 0xFF, 0x02);
 
-        // What the driver does first: write back the status bits it saw,
-        // which is what drops the line.
         backplane_wr(&mut e, SD_CORE + SD_INTSTATUS, I_HMB_FRAME_IND);
         assert_eq!(rd(&mut e, INT_STATUS) & INT_CARD, 0);
         assert!(!e.irq_asserted());
 
-        // `BRCMF_FIRSTREAD` bytes, fixed address, which is how the driver
-        // takes a frame's header.
         let mut head = vec![0u8; 64];
         io_bytes(&mut e, 2, 0x8000, false, false, &mut head);
         let len = u16::from_le_bytes([head[0], head[1]]);
@@ -1798,24 +1599,19 @@ mod tests {
         let sw = u32::from_le_bytes(head[4..8].try_into().unwrap());
         assert_eq!(sw & 0x0F00, 0, "the control channel");
         assert_eq!(sw >> 24, 12, "the payload starts after the header");
-        // The window the chip opened, which is what lets the next frame out.
         let window = (u32::from_le_bytes(head[8..12].try_into().unwrap()) >> 8) as u8;
         assert_ne!(window.wrapping_sub(0), 0);
-        // The BCDC answer carries the request id back with no error flag.
         let flags = u32::from_le_bytes(head[20..24].try_into().unwrap());
         assert_eq!(flags >> 16, 1);
         assert_eq!(flags & 0x01, 0);
 
-        // And with the frame taken, nothing comes back: the chip raises the
-        // indication once per frame, so a driver that has read what it was
-        // told about is not interrupted again.
+        // The chip raises the indication once per frame.
         assert_eq!(rd(&mut e, INT_STATUS) & INT_CARD, 0);
         assert!(!e.irq_asserted());
     }
 
-    /// One 512-byte block through the Buffer Data Port the way both stock
-    /// stages read it: `PRESENT_STATE` before every word, and the word only
-    /// once `BUF_READ_EN` is set.
+    /// One block through the Buffer Data Port the way the stock stages read
+    /// it: `PRESENT_STATE` before every word.
     fn pio_block(e: &mut Emmc2) -> Vec<u8> {
         let mut out = Vec::new();
         while out.len() < 512 {
@@ -1835,10 +1631,8 @@ mod tests {
         b.to_vec()
     }
 
-    /// `BUF_READ_EN` is a level: it drops after a block's last word, and the
-    /// next block (and its `BUF_READ_RDY`) is there on the second status
-    /// poll. A driver pacing on a `BUF_READ_RDY` it never clears would read
-    /// the gap (#109).
+    /// `BUF_READ_EN` is a level: it drops after a block's last word and the
+    /// next block is there on the second status poll.
     #[test]
     fn pio_read_drops_buffer_read_enable_between_blocks() {
         let mut e = host();
@@ -1853,12 +1647,9 @@ mod tests {
             TM_BLOCK_COUNT_EN | TM_READ | TM_MULTI | (TM_AUTO_CMD12 << TM_AUTO_CMD_SHIFT),
         );
         assert_eq!(rd(&mut e, INT_STATUS), INT_CMD_COMPLETE | INT_BUF_READ_RDY);
-        // What the bootloader acks once a data command completes.
         wr(&mut e, INT_STATUS, INT_CMD_COMPLETE | INT_BUF_READ_RDY);
         assert_eq!(pio_block(&mut e), card_block(&e, 5));
 
-        // First poll after the drain: nothing latched. The second brings the
-        // block.
         assert_eq!(rd(&mut e, INT_STATUS), 0);
         assert_eq!(
             rd(&mut e, PRESENT_STATE) & (PS_BUF_READ_EN | PS_DAT_INHIBIT),
@@ -1867,14 +1658,12 @@ mod tests {
         assert_eq!(rd(&mut e, INT_STATUS), INT_BUF_READ_RDY);
         assert_eq!(pio_block(&mut e), card_block(&e, 6));
 
-        // Same gap before the third block, seen through PRESENT_STATE.
         assert_eq!(
             rd(&mut e, PRESENT_STATE) & (PS_BUF_READ_EN | PS_DAT_INHIBIT),
             PS_DAT_INHIBIT
         );
         assert_eq!(pio_block(&mut e), card_block(&e, 7));
 
-        // The last block ends the transfer straight away.
         assert_eq!(
             rd(&mut e, PRESENT_STATE) & (PS_BUF_READ_EN | PS_DAT_INHIBIT),
             0
@@ -1882,8 +1671,6 @@ mod tests {
         assert_ne!(rd(&mut e, INT_STATUS) & INT_XFER_COMPLETE, 0);
     }
 
-    /// A `BUFFER_DATA` read before the next block has arrived gets 0 and
-    /// loses nothing: the block still starts at its first word.
     #[test]
     fn a_buffer_read_in_the_gap_does_not_advance() {
         let mut e = host();
@@ -1896,13 +1683,10 @@ mod tests {
             assert_eq!(rd(&mut e, BUFFER_DATA), 0);
         }
         assert_eq!(pio_block(&mut e), card_block(&e, 10));
-        // Nothing in flight at all reads 0 too.
         cmd(&mut e, 12, 0, 0x1B, 0);
         assert_eq!(rd(&mut e, BUFFER_DATA), 0);
     }
 
-    /// With nobody polling, the block arrives on time and raises the
-    /// interrupt, for a driver that waits for it.
     #[test]
     fn the_next_block_arrives_on_time_without_polls() {
         let mut e = host();
@@ -1922,8 +1706,6 @@ mod tests {
         assert_eq!(rd(&mut e, BUFFER_DATA), u32::from_le_bytes([1, 0, 3, 2]));
     }
 
-    /// The data lines stay busy for as long as a transfer has data left; an
-    /// open-ended read keeps them busy until CMD12 ends it.
     #[test]
     fn data_inhibit_follows_the_transfer() {
         let mut e = host();
@@ -1957,7 +1739,7 @@ mod tests {
     }
 
     /// edk2's MmcDxe follows every write with CMD55 + ACMD22 on a 4-byte block
-    /// and fails the write unless Buffer Read Ready comes (#51).
+    /// and fails the write unless Buffer Read Ready comes.
     #[test]
     fn acmd22_reads_the_written_block_count_through_pio() {
         let mut e = host();
@@ -1974,7 +1756,6 @@ mod tests {
         wr(&mut e, BLOCK_SIZE_COUNT, 4);
         cmd(&mut e, 22, 0, R1_DATA, TM_READ);
         assert_ne!(rd(&mut e, INT_STATUS) & INT_BUF_READ_RDY, 0);
-        // One block, most significant byte first on the bus: 00 00 00 01.
         assert_eq!(rd(&mut e, BUFFER_DATA), 0x0100_0000);
         assert_ne!(rd(&mut e, INT_STATUS) & INT_XFER_COMPLETE, 0);
     }
@@ -1987,7 +1768,6 @@ mod tests {
         wr(&mut e, CLOCK_CONTROL, CLK_INTLEN | CLK_SD_EN);
         cmd(&mut e, 11, 0, R1, 0);
         assert_eq!(rd(&mut e, PRESENT_STATE) & PS_LINES_CMD_DAT, 0, "card busy");
-        // Clock gated, 1.8 V on, clock back: lines released.
         wr(&mut e, CLOCK_CONTROL, CLK_INTLEN);
         assert_eq!(rd(&mut e, PRESENT_STATE) & PS_LINES_CMD_DAT, 0);
         wr(&mut e, HOST_CONTROL2, HC2_1V8);
@@ -2036,7 +1816,6 @@ mod tests {
         assert!(e.irq_asserted());
         let hc2 = rd(&mut e, HOST_CONTROL2);
         assert_eq!(hc2 & (HC2_EXEC_TUNING | HC2_TUNED_CLK), HC2_TUNED_CLK);
-        // The driver checks the command register for CMD19 in its handler.
         assert_eq!(e.read(0x0E, Width::Half).unwrap() >> 8, 19);
     }
 
@@ -2066,16 +1845,13 @@ mod tests {
         e.write(CMD_XFER + 2, Width::Half, (13 << 8) | R1).unwrap();
         assert_eq!(rd(&mut e, INT_STATUS), INT_CMD_COMPLETE);
         assert_eq!(rd(&mut e, CMD_XFER), ((13 << 8 | R1) << 16) | TM_READ);
-        // A byte write-1-to-clear touches only its own lane.
         e.write(INT_STATUS + 1, Width::Byte, 0xFF).unwrap();
         assert_eq!(rd(&mut e, INT_STATUS), INT_CMD_COMPLETE);
         e.write(INT_STATUS, Width::Byte, 0x01).unwrap();
         assert_eq!(rd(&mut e, INT_STATUS), 0);
     }
 
-    /// The legacy EMMC's two waits in 2020-era bootcode (#64): its software
-    /// reset clears, and the internal clock comes up stable once enabled. On
-    /// the catch-all stub neither happened and that boot hung.
+    /// 2020-era bootcode's two waits on the legacy EMMC.
     #[test]
     fn legacy_host_finishes_the_reset_and_clock_waits_of_2020_bootcode() {
         let mut e = Emmc2::new_legacy();
@@ -2085,9 +1861,8 @@ mod tests {
         assert_eq!(rd(&mut e, CLOCK_CONTROL), 0x000E_E201 | CLK_STABLE);
     }
 
-    /// What real boards' logs show of this host with no card: HOST_CONTROL
-    /// reads back just what was written, PRESENT_STATE idles at 0x1fff0000,
-    /// and CMD55 goes unanswered. None of EMMC2's identity shows through.
+    /// What real boards' logs show of this host with no card; none of EMMC2's
+    /// identity shows through.
     #[test]
     fn legacy_host_is_an_empty_bus_with_its_own_identity() {
         let mut e = Emmc2::new_legacy();

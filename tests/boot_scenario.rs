@@ -1,13 +1,7 @@
-//! The firmware regression, minus the boot.
-//!
-//! `testdata/boot/firmware.toml` describes a run that takes minutes and
-//! needs firmware blobs that are never committed, so `cargo test` cannot boot
-//! it — `pimu boot-check` does that, and CI runs it in its own job. What
-//! is testable here is everything around the run, and it is the part that has
-//! silently rotted before: that the scenario still parses, that every milestone
-//! carries the reason it exists, and — the point of the whole exercise — that a
-//! transcript which has actually changed is *rejected*. A regression guard
-//! nobody has seen fail is not yet a guard.
+//! The firmware regression, minus the boot itself: `pimu boot-check` runs that,
+//! in its own CI job. What is testable here is everything around the run — that
+//! the scenario parses, that every milestone says why it exists, and that a
+//! changed transcript is actually *rejected*.
 
 use std::path::{Path, PathBuf};
 
@@ -21,10 +15,8 @@ fn scenario() -> BootScenario {
     BootScenario::load(&scenario_path()).expect("load the boot scenario")
 }
 
-/// A stand-in for the combined run log: the console the golden recorded, plus
-/// the parts of the evidence that never reach a UART and only exist in the
-/// `boot` report. Spelling them out here is the point — it documents which
-/// milestones are *not* provable from the transcript alone.
+/// A stand-in for the combined run log: the golden console plus the evidence
+/// that never reaches a UART and the transcript alone cannot prove.
 fn fake_log(console: &str) -> String {
     format!(
         "{console}\n\
@@ -48,7 +40,6 @@ fn fake_log(console: &str) -> String {
     )
 }
 
-/// The run report's counter lines, carrying the counts the scenario pins.
 fn report(scn: &BootScenario) -> String {
     let text =
         std::fs::read_to_string(scn.retired_path()).expect("the retired counts are committed");
@@ -75,8 +66,8 @@ fn report(scn: &BootScenario) -> String {
     out
 }
 
-/// The fixture has to be a passing run, or none of the failure tests below
-/// prove anything: they all work by breaking exactly one thing in it.
+/// The fixture must pass, or the tests below, each breaking one thing in it, do
+/// not prove anything.
 #[test]
 fn the_fixture_passes_every_assertion() {
     let scn = scenario();
@@ -105,8 +96,6 @@ fn the_boot_scenario_parses_and_every_milestone_says_why() {
             "milestone {} has an empty pattern",
             m.line
         );
-        // `absent` and a count are contradictory; catch the typo here rather
-        // than having it silently weaken the check.
         assert!(
             !(m.absent && (m.count.is_some() || m.max_count.is_some())),
             "milestone {} is both absent and counted",
@@ -135,9 +124,8 @@ fn the_run_plan_is_the_only_place_the_workload_is_written_down() {
     );
 }
 
-/// The golden is recorded through the normaliser, so feeding it back through
-/// must be a no-op. If it is not, the golden holds something that moves from
-/// run to run and the check could never be stable.
+/// Feeding the golden back through the normaliser must be a no-op, or it holds
+/// something that moves from run to run.
 #[test]
 fn the_recorded_golden_is_already_normalised() {
     let scn = scenario();
@@ -155,9 +143,7 @@ fn the_recorded_golden_is_already_normalised() {
     );
 }
 
-/// The golden must actually contain the boot it claims to, all the way to the
-/// hand-off. This is what stops `--update` from quietly recording a truncated
-/// run as the new truth.
+/// The golden reaches the hand-off, so `--update` cannot record a truncated run.
 #[test]
 fn the_recorded_golden_reaches_the_arm_handover() {
     let scn = scenario();
@@ -170,7 +156,6 @@ fn the_recorded_golden_reaches_the_arm_handover() {
     ] {
         assert!(golden.contains(needle), "golden is missing {needle:?}");
     }
-    // Nothing the milestones forbid may be sitting in the golden either.
     for m in scn.milestones.iter().filter(|m| m.absent) {
         assert!(
             m.check(&golden).is_none(),
@@ -180,15 +165,12 @@ fn the_recorded_golden_reaches_the_arm_handover() {
     }
 }
 
-/// The guard, demonstrated: a transcript that differs by one line is rejected,
-/// and the diff points at that line instead of at everything after it.
+/// A transcript differing by one line is rejected, and the diff points at it.
 #[test]
 fn a_changed_transcript_fails_the_golden_check() {
     let scn = scenario();
     let golden = std::fs::read_to_string(scn.golden_path()).expect("read golden");
 
-    // A value that shifted: the kind of change every grep in the old bash
-    // check would have missed, because the line still matches.
     let broken = golden.replacen("948MB", "947MB", 1);
     assert_ne!(broken, golden, "the golden should mention the memory split");
     match boot::check_golden(&scn, &broken).expect("golden check") {
@@ -201,7 +183,6 @@ fn a_changed_transcript_fails_the_golden_check() {
                 diff.contains("948MB"),
                 "diff does not show the change:\n{diff}"
             );
-            // Not a cascade: one line changed, one line reported either way.
             assert_eq!(
                 diff.lines().filter(|l| l.starts_with("  -")).count(),
                 1,
@@ -212,8 +193,6 @@ fn a_changed_transcript_fails_the_golden_check() {
         GoldenCheck::Missing => panic!("no golden to compare against"),
     }
 
-    // Output that merely *moved* must fail too — that is the whole reason the
-    // golden exists next to the milestones.
     let mut lines: Vec<&str> = golden.lines().collect();
     let i = lines
         .iter()
@@ -231,15 +210,12 @@ fn a_changed_transcript_fails_the_golden_check() {
     );
 }
 
-/// And the other half: the milestones still fail on the condition they were
-/// written for, not merely on a diff.
+/// Milestones still fail on their own condition, not merely on a diff.
 #[test]
 fn a_milestone_fails_when_its_invariant_breaks() {
     let scn = scenario();
     let golden = std::fs::read_to_string(scn.golden_path()).expect("read golden");
 
-    // A log with the hand-off line removed: the milestone that names it must
-    // fail, and it must be the one that names it.
     let broken: String = fake_log(&golden)
         .lines()
         .filter(|l| !l.contains("arm_loader: Starting ARM"))
@@ -263,8 +239,7 @@ fn a_milestone_fails_when_its_invariant_breaks() {
         failures[0]
     );
 
-    // A derail anywhere in the log is fatal even though the console still
-    // reaches the hand-off — the `[derail]` marker never appears on the UART.
+    // A derail is fatal even when the console reaches the hand-off.
     let derailed = format!("{}[derail] pc=0xfffffdda\n", fake_log(&golden));
     let hits: Vec<String> = scn
         .milestones
@@ -275,8 +250,7 @@ fn a_milestone_fails_when_its_invariant_breaks() {
     assert!(hits[0].contains("PRESENT"), "{}", hits[0]);
 }
 
-/// The run report is part of the evidence: a run that never printed its
-/// counters, or that skipped instructions, is not a pass.
+/// A run that never printed its counters, or skipped instructions, is no pass.
 #[test]
 fn the_skipped_instruction_guard_still_bites() {
     let scn = scenario();
@@ -287,7 +261,6 @@ fn the_skipped_instruction_guard_still_bites() {
     assert_eq!(f.len(), 1, "{f:?}");
     assert!(f[0].contains("skipped instructions is 7"), "{}", f[0]);
 
-    // A run that stopped before printing its counters proves nothing below it.
     let no_report: String = fake_log(&golden)
         .lines()
         .filter(|l| !l.starts_with("retired "))
@@ -298,8 +271,7 @@ fn the_skipped_instruction_guard_still_bites() {
     assert!(f[0].contains("could not read the skipped"), "{}", f[0]);
 }
 
-/// The counts guard, demonstrated: a run whose console and milestones all
-/// pass, but whose cores ran a different number of instructions, fails (#85).
+/// Passing console and milestones are not enough: the retired counts are pinned.
 #[test]
 fn a_changed_retired_count_fails_the_check() {
     let scn = scenario();
@@ -318,7 +290,6 @@ fn a_changed_retired_count_fails_the_check() {
     assert!(f[0].starts_with("RETIRED:"), "{}", f[0]);
     assert!(f[0].contains("vpu0 ") && f[0].contains("(+1)"), "{}", f[0]);
 
-    // A core that no longer runs at all is a change too.
     let (head, _) = log
         .split_once("\n--- ARM cores (#40) ---\n")
         .expect("the fixture releases the ARM");
@@ -326,7 +297,6 @@ fn a_changed_retired_count_fails_the_check() {
     assert_eq!(f.len(), 1, "{f:?}");
     assert!(f[0].contains("arm0  76 -> none"), "{}", f[0]);
 
-    // And a scenario with nothing pinned is not a pass.
     let dir = std::env::temp_dir().join(format!("pimu-retired-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let mut unpinned = scenario();
@@ -339,8 +309,8 @@ fn a_changed_retired_count_fails_the_check() {
     assert!(f[0].contains("MISSING: no retired counts"), "{}", f[0]);
 }
 
-/// Every boot medium has its own scenario (`testdata/boot/*.toml`), and each
-/// one's run plan attaches exactly the media it names.
+/// Each boot medium's scenario (`testdata/boot/*.toml`) attaches exactly the
+/// media it names, and pins what its cores retired.
 #[test]
 fn every_boot_scenario_loads_and_plans_its_media() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/boot");
@@ -380,7 +350,6 @@ fn every_boot_scenario_loads_and_plans_its_media() {
                 assert!(joined.contains(&format!("{flag} {v}")), "{joined}");
             }
         }
-        // Every medium the run attaches is looked for before it starts.
         let media = [
             &scn.boot.sd,
             &scn.boot.usb,
@@ -394,7 +363,6 @@ fn every_boot_scenario_loads_and_plans_its_media() {
             "{}",
             path.display()
         );
-        // ...and pins what its cores retired (#85).
         let text = std::fs::read_to_string(scn.retired_path())
             .unwrap_or_else(|e| panic!("{}: {e}", scn.retired_path().display()));
         let counts = RetiredCounts::parse(&text).expect("the retired counts parse");
@@ -413,10 +381,8 @@ fn every_boot_scenario_loads_and_plans_its_media() {
     }
 }
 
-/// A fresh checkout or worktree has none of the boot media. `boot-check
-/// --plan` refuses then, naming each missing file and the command that makes
-/// it; before, the boot check booted without a card and then diffed
-/// whatever console an earlier run had left behind.
+/// A fresh checkout has no boot media, so `boot-check --plan` refuses, naming each
+/// missing file and the command that makes it, rather than booting without a card.
 #[test]
 fn missing_boot_media_are_named_with_the_command_that_makes_them() {
     let root = std::env::temp_dir().join(format!("pimu-boot-inputs-{}", std::process::id()));
@@ -449,9 +415,7 @@ fn missing_boot_media_are_named_with_the_command_that_makes_them() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
-/// A card's name says how it is built, and a card built the wrong way boots
-/// something else entirely: the Bluetooth/WiFi one has different overlays and
-/// a different console, and the `brcmfmac` one carries the driver as well.
+/// A card's name says how it is built; built wrong, it boots something else.
 #[test]
 fn a_cards_name_decides_the_environment_that_builds_it() {
     for (img, prefix) in [

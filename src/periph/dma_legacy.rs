@@ -1,31 +1,20 @@
 //! Legacy BCM2711 DMA controller — 15 channels at `0x7E00_7000 + ch * 0x100`.
 //!
-//! start4 drives this for bulk memory-to-memory copies. `dma_memcpy`
-//! (`helpers/dmalib/dmalib.c`, `0x3EC981CC`) switches on length:
+//! Registers, fields and the control-block layout: `specs/dma.toml`, and
+//! `specs/dma_vpu.toml` for the second controller.
 //!
-//! ```text
-//! if (len < 0x400) memcpy(dst, src, len);   // scalar
-//! else             <queue a DMA transfer and block on its completion>
-//! ```
+//! start4 drives this for bulk memory-to-memory copies: `dma_memcpy` copies
+//! anything under 1 KiB with the scalar loop and queues everything larger
+//! here.
 //!
-//! so every copy of 1024 bytes or more goes through here. `dma_set_cs`
-//! (`0x3EC98E7C`) confirms the layout: `base = ch < 15 ? 0x7E007000 : 0x7EE04100`,
-//! `*(base + ch * 0x100) = flags | 1` to start.
-//!
-//! Channel registers (words): `+0x00 CS  +0x04 CONBLK_AD  +0x08 TI
-//! +0x0C SOURCE_AD  +0x10 DEST_AD  +0x14 TXFR_LEN  +0x18 STRIDE
-//! +0x1C NEXTCONBK  +0x20 DEBUG`.
-//!
-//! Control block (32 bytes): `+0x00 TI  +0x04 SOURCE_AD  +0x08 DEST_AD
-//! +0x0C TXFR_LEN  +0x10 STRIDE  +0x14 NEXTCONBK`. Note this is *not* the DMA4
-//! ("dma40") layout — channel 11 is modelled separately by [`Dma4`], which the
-//! address decoder keeps ahead of this device.
+//! Note the control-block layout is *not* the DMA4 ("dma40") one — channel 11
+//! is modelled separately by [`Dma4`], which the address decoder keeps ahead
+//! of this device.
 //!
 //! [`Dma4`]: super::dma4::Dma4
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
-// Control blocks use the `TI` register's bit layout.
 use crate::spec::dma::{
     CONBLK_AD, CS, DEBUG, DEST_AD, ENABLE, INT_STATUS, NEXTCONBK, SOURCE_AD, STRIDE, TI,
     TI_DEST_INC_MASK as TI_DEST_INC, TI_SRC_INC_MASK as TI_SRC_INC, TI_TDMODE_MASK as TI_TDMODE,
@@ -37,20 +26,16 @@ pub use crate::spec::dma::{
 };
 use crate::spec::{dma_vpu, Coverage};
 
-/// Channel slots in the larger of the two controllers.
 pub const NUM_CHAN: usize = dma_vpu::CS_COUNT as usize;
 /// Interrupt lines the GIC has for the `0x7E00_7000` controller: one per
 /// channel for 0..=6, then one for 7/8 and one for 9/10
 /// ([`DmaLegacy::irq_lines`]).
 pub const NUM_GIC_LINES: usize = 9;
-/// Registers modelled per channel (CS .. DEBUG).
 const NUM_REGS: usize = ((DEBUG - CS) / 4 + 1) as usize;
 
-// One model serves both controllers, so their channel layouts must agree.
 const _: () =
     assert!(dma_vpu::CS == CS && dma_vpu::DEBUG == DEBUG && dma_vpu::CS_STRIDE == CHAN_STRIDE);
 
-/// The `0x7E00_7000` controller: every register is modelled.
 pub const COVERAGE: Coverage = Coverage {
     block: "dma",
     decoded: &[
@@ -59,7 +44,6 @@ pub const COVERAGE: Coverage = Coverage {
     ],
 };
 
-/// The `0x7EE0_4100` controller: every register is modelled.
 pub const COVERAGE_VPU: Coverage = Coverage {
     block: "dma_vpu",
     decoded: &[
@@ -82,7 +66,6 @@ pub struct DmaLegacy {
     /// one, whose channel 15 occupies `0xF00..0xFFF`.
     global_regs: bool,
     regs: [[u32; NUM_REGS]; NUM_CHAN],
-    /// Global `ENABLE` (`+0xFF0`) and `INT_STATUS` (`+0xFE0`).
     enable: u32,
     int_status: u32,
     /// Channel whose `CS.ACTIVE` was just set; [`crate::machine::Machine`]
@@ -91,7 +74,6 @@ pub struct DmaLegacy {
 }
 
 impl DmaLegacy {
-    /// The `0x7E00_7000` controller: 15 channels plus the global words.
     pub fn new() -> DmaLegacy {
         DmaLegacy {
             global_regs: true,
@@ -99,11 +81,9 @@ impl DmaLegacy {
         }
     }
 
-    /// The `0x7EE0_4100` controller start4's dmalib actually drives. Channel 15
-    /// lives at `0x7EE0_5000` (`dma_set_cs` / `dma_chain_start`:
-    /// `base = ch < 15 ? 0x7E007000 : 0x7EE04100`, register block at
-    /// `base + ch * 0x100`), so all 16 channel slots are used and there is no
-    /// room for the global words.
+    /// The `0x7EE0_4100` controller start4's dmalib drives. Its channel 15 is
+    /// at `0x7EE0_5000`, so all 16 channel slots are used and there is no room
+    /// for the global words.
     pub fn new_vpu() -> DmaLegacy {
         DmaLegacy {
             global_regs: false,
@@ -111,12 +91,10 @@ impl DmaLegacy {
         }
     }
 
-    /// The control-block address channel `ch` is armed with.
     pub fn conblk_ad(&self, ch: usize) -> u32 {
         self.regs[ch][1]
     }
 
-    /// If a start was just requested, consume it.
     pub fn take_start(&mut self) -> Option<usize> {
         self.start_pending.take()
     }
@@ -129,11 +107,8 @@ impl DmaLegacy {
         self.int_status |= 1 << ch;
     }
 
-    /// The controller's interrupt outputs, one per line the GIC has for it:
-    /// a channel's line is up while its `CS.INT` is, and channels 7/8 and
-    /// 9/10 share a line each. A driver acknowledges by writing `CS.INT`
-    /// back, which is how `bcm2835_dma_callback` (Linux
-    /// `drivers/dma/bcm2835-dma.c`) ends its handler.
+    /// One output per GIC line: a channel's is up while its `CS.INT` is, and
+    /// channels 7/8 and 9/10 share a line each.
     pub fn irq_lines(&self) -> [bool; NUM_GIC_LINES] {
         let int = |ch: usize| self.regs[ch][0] & CS_INT != 0;
         [
@@ -149,7 +124,6 @@ impl DmaLegacy {
         ]
     }
 
-    /// Decode one control block. Returns `(ti, src, dest, len, stride, next)`.
     pub fn decode_cb(words: [u32; 6]) -> Cb {
         Cb {
             ti: words[0],
@@ -191,7 +165,6 @@ impl Cb {
             (1, self.len)
         }
     }
-    /// Per-row address advance after each row, as signed 16-bit values.
     pub fn strides(&self) -> (i32, i32) {
         (
             (self.stride & 0xFFFF) as u16 as i16 as i32,
@@ -236,28 +209,18 @@ impl MmioDevice for DmaLegacy {
             return Ok(());
         }
         if reg == 0 {
-            // `CS.END` and `CS.INT` are write-1-to-clear, and a driver
-            // acknowledging its completion interrupt writes nothing else:
-            // `bcm2835_dma_callback` writes just `CS.INT`, and storing that
-            // as the whole register would leave the interrupt up for ever.
+            // `CS.END` and `CS.INT` are write-1-to-clear: a driver acking its
+            // completion interrupt writes just `CS.INT`, and storing that as
+            // the whole register would leave the interrupt up for ever.
             let keep = self.regs[ch][0] & (CS_END | CS_INT) & !value;
             self.regs[ch][0] = (value & !(CS_END | CS_INT)) | keep;
         } else {
             self.regs[ch][reg] = value;
         }
-        // Two ways a transfer starts, and the firmware uses the second one:
-        //
-        //  * `CS.ACTIVE` set while `CONBLK_AD` already holds a chain, or
-        //  * `CONBLK_AD` written to a non-null chain while `CS.ACTIVE` is
-        //    already set. With ACTIVE set and a null `CONBLK_AD` the channel
-        //    simply idles; writing the CB address is what makes it fetch and
-        //    run.
-        //
-        // dmalib does exactly the latter: `dma_subchan_request_specificchannel`
-        // -> `dma_set_cs` (`0x3EC98E7C`) sets `CS = flags | 1` up front, and
-        // `dma_chain_start` (`0x3EC97544`) then only writes
-        // `*(base + ch*0x100 + 4) = cb`. Starting solely on the CS write meant
-        // the transfer never ran.
+        // Two ways a transfer starts, and the firmware uses the second:
+        // `CS.ACTIVE` set with a chain already in `CONBLK_AD`, or `CONBLK_AD`
+        // written while `ACTIVE` is set. `ACTIVE` with a null `CONBLK_AD`
+        // idles.
         let active = self.regs[ch][0] & CS_ACTIVE != 0;
         let armed = self.regs[ch][1] != 0;
         if (reg == 0 && active && armed) || (reg == 1 && active && value != 0) {

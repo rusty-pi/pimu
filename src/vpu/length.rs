@@ -1,20 +1,9 @@
 //! Instruction-length decoding for the VideoCore IV scalar VPU.
 //!
-//! VPU instructions are variable length: 16, 32, 48 or 80 bits. The length is
-//! fully determined by the top bits of the first 16-bit parcel (read
-//! little-endian). This is the one part of the ISA that is unambiguous across
-//! every reverse-engineering source.
+//! VPU instructions are 16, 32, 48 or 80 bits long, and the length is fully
+//! determined by the top bits of the first 16-bit parcel, read little-endian.
 //!
-//! Reference: Herman Hermitage's `videocoreiv.arch` fallback patterns and the
-//! `videocore-disjs` disassembler.
-//!
-//! ```text
-//!   0xxx_xxxx_xxxx_xxxx                -> 16 bit  (1 parcel)
-//!   100x .. 1101  (0x8000..=0xDFFF)    -> 32 bit  (2 parcels)
-//!   1110         (0xE000..=0xEFFF)     -> 48 bit  (3 parcels, scalar)
-//!   1111_0       (0xF000..=0xF7FF)     -> 48 bit  (3 parcels, vector)
-//!   1111_1       (0xF800..=0xFFFF)     -> 80 bit  (5 parcels, vector)
-//! ```
+//! Encoding: `isa/vpu.toml`, "Instruction length".
 
 /// Length of a VPU instruction, in bytes, given its first 16-bit parcel.
 #[inline]

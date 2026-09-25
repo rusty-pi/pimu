@@ -1,71 +1,29 @@
 //! Model of the BCM2711 on-chip boot ROM (the maskROM first stage).
 //!
-//! On real hardware the VPU comes out of reset executing the 32 KiB on-chip ROM
-//! at `0x6000_0000`. That ROM — not `start4.elf`, not the EEPROM bootloader — is
-//! what actually *starts* the machine: it splits the two VPU cores, brings up
-//! enough clocking to reach SPI, reads the `pieeprom.bin` bootloader image off
-//! the SPI flash, **verifies the second-stage bootcode's signature**, stages it
-//! into L2-as-SRAM, and only then hands control to it. Every later stage runs
-//! because the ROM decided it should.
+//! On real hardware the VPU comes out of reset in the 32 KiB ROM at
+//! `0x6000_0000`, and that ROM — not `start4.elf`, not the EEPROM bootloader —
+//! starts the machine: it splits the two VPU cores, brings up enough clocking to
+//! reach SPI, reads `pieeprom.bin` off the flash, verifies the second-stage
+//! bootcode's signature, stages it into L2-as-SRAM and hands control to it.
 //!
-//! The model cannot execute the ROM itself: the image is Broadcom's mask (not
-//! redistributable) and its signing salt is a per-silicon secret. So this models
-//! the ROM's *behaviour*, transcribed from a disassembly of the ROM on a
-//! BCM2711C0. Like every other stage, though, it is a participant on the modelled
-//! bus — it reads the image from the [`Spi0`](crate::periph::spi0) flash, reads
-//! the key OTP rows through the [`configotp`](crate::periph::configotp) MMIO
-//! transaction, and stages the bootcode into the machine's RAM. It does not reach
-//! around the peripherals for the data the real ROM fetches through them.
+//! The ROM image is Broadcom's mask and not redistributable, so this models its
+//! *behaviour*, transcribed from a disassembly of a BCM2711C0 ROM. Like every
+//! other stage it is a participant on the modelled bus: it reads the image
+//! through [`Spi0`](crate::periph::spi0) and the key rows through
+//! [`configotp`](crate::periph::configotp).
 //!
-//! # What the ROM does with the bootcode, from the disassembly
+//! The check at ROM `0x6000_0608` takes the last 20 bytes of the image as the
+//! signature and compares HMAC-SHA1 of the rest, under `key = salt ^ otp` from
+//! a 20-byte salt and OTP rows 19..=22, against it — the scheme
+//! `raspberrypi/rpi-tools`' `signing-tool/sign.js` documents, confirmed by
+//! reproducing the byte-exact HMAC in a stock signed footer.
 //!
-//! Reset vector `0x6000_0000` is `mov r0,256; version r0; btest r0,16; bne …` —
-//! the classic VC4 core split (bit 16 of `version` is the core id); core 0 then
-//! runs a fixed sequence of `bl`s and, if it ever returns, `Sleep`s at
-//! `0x6000_008e`.
+//! **The salt is a maskROM signing secret and is not in this repository.**
+//! Checking is off unless the operator supplies the key at run time
+//! ([`BootRom::from_env`]); without it the bootcode is staged unverified.
 //!
-//! The signature check is the routine at **`0x6000_0608`**. Reconstructed:
-//!
-//! 1. `r8 = image_base + length; r8 -= 20` (`0x6000_0648`, `0x6000_0650`) — the
-//!    stored signature is the **last 20 bytes** of the image.
-//! 2. `Lea r1,[pc+26550]` at `0x6000_0662` points at the 20-byte salt descriptor
-//!    at `0x6000_6e18`, and the loop at `0x6000_066e..0x6000_067a` computes
-//!    `key[i] = salt[i] ^ otp[i]` a word at a time (5 words = 20 bytes), the OTP
-//!    words having been staged into the boot-info buffer at `r24+0xDC`.
-//! 3. The call at `0x6000_0692` runs HMAC-SHA1 with that key over
-//!    `image[0 .. length-20]` (`r2 = length-20` at `0x6000_068c`), writing the
-//!    digest to the scratch buffer at `r24+0xC8`.
-//! 4. The loop at `0x6000_069c..0x6000_06b8` compares the 20 computed bytes with
-//!    the 20 stored bytes and returns 0 only when every byte matches.
-//!
-//! The SHA-1 core lives at `0x6000_675e` (the H0..H4 init constants) with the
-//! round constants K0..K3 at `0x6000_652e`; it is a stock SHA-1, so we compute
-//! the same digest with the `sha1`/`hmac` crates rather than re-deriving it. The
-//! derivation `key = salt ^ otp`, message `= image[..-20]`, signature
-//! `= image[-20..]` also reproduces the byte-exact HMAC in a stock signed
-//! `pieeprom.bin` footer, which is the independent check that this reading is
-//! right. It is the same scheme `raspberrypi/rpi-tools`' `signing-tool/sign.js`
-//! documents (old-style HMAC checksum, enforced whenever OTP secure-boot is off).
-//!
-//! The OTP half of the key is the `r24+0xDC` buffer, which the ROM fills from OTP
-//! rows 19..=22 (the board-identity fuses). We read those same rows through the
-//! config/OTP block at `0x7E20_F000`, so the key follows the modelled fuses.
-//!
-//! # The salt is never in this repository
-//!
-//! The 20-byte salt at `0x6000_6e18` is a maskROM signing secret. It is **not**
-//! embedded here and never should be. Signature checking is therefore off unless
-//! the operator supplies the key at run time (see [`BootRom::from_env`]); without
-//! it the model stages the bootcode unverified, exactly as before this stage
-//! existed. The public half of the derivation — the board-identity OTP words — is
-//! [`crate::periph::configotp::BOARD_IDENTITY`], which the model's OTP block
-//! already serves.
-//!
-//! # The ROM's OTP helpers
-//!
-//! Bootcode up to 2020-06-15 calls ROM routines directly (#71, #75), at
-//! addresses that depend on the stepping (#77); see [`RomHelper`] for the
-//! stand-ins this stage places.
+//! Bootcode up to 2020-06-15 calls ROM routines directly, at addresses that
+//! depend on the stepping; see [`RomHelper`].
 
 use anyhow::{bail, Context, Result};
 use hmac::{Hmac, Mac};
@@ -82,36 +40,28 @@ use crate::spec::otp::{
     STATUS as OTP_STATUS, STATUS_DONE_MASK as OTP_DONE,
 };
 
-/// Length of the HMAC-SHA1 signature the ROM appends and checks: the last
-/// field of the signed-image footer (`length:u32`, `keyindex:u32`,
-/// `rsa[256]`, `hmac_sha1[20]`). Only the HMAC matters to the old-style check
-/// the ROM enforces; the RSA block is verified only under secure boot.
+/// Length of the HMAC-SHA1 signature the ROM appends and checks.
 pub const HMAC_LEN: usize = 20;
 
-/// The config/OTP block base (`0x7E20_F000`, `specs/otp.toml`), where the ROM
-/// reads the board-identity fuses that form the OTP half of the HMAC key.
+/// The config/OTP block (`specs/otp.toml`), where the key rows are read.
 const OTP_BASE: u32 = 0x7E20_F000;
 
 /// OTP rows the HMAC key is built from: rows 19..=22, the board-identity block.
 const OTP_KEY_ROWS: std::ops::RangeInclusive<u32> = 19..=22;
 
 /// The mask ROM's OTP routines that bootcode up to 2020-06-15 calls directly,
-/// through a trampoline that keys the pointers by `version` (`version r2; eor
-/// r1, r2; bl r1`; 2020-04-16's is at `0x80001f68`). Later bootcode reads OTP
-/// itself. The model has no ROM at `0x6000_0000` — the address folds onto
-/// DRAM — so the stage puts routines of its own where the machine's stepping
-/// keeps the ROM's. They are not the ROM's code: opening and closing only set
-/// the block's clock mux, which the model absorbs, and the reads skip the
-/// `STATUS` poll because the model's transaction completes on `GO`.
+/// through a trampoline that keys the pointers by `version`. The model has no
+/// ROM at `0x6000_0000` — the address folds onto DRAM — so the stage puts
+/// routines of its own where the machine's stepping keeps the ROM's. They are
+/// not the ROM's code: open and close only set a clock mux the model absorbs,
+/// and the reads skip the `STATUS` poll, since the transaction completes on
+/// `GO`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RomHelper {
-    /// Opens the OTP block (#71).
     OtpOpen,
-    /// Closes it again (#71).
     OtpClose,
-    /// Reads row 28 into `*r0` (#71).
     ReadRow28,
-    /// Returns the row named in `r0` in `r0` (#75). Without it 2020-01-17 and
+    /// Returns the row named in `r0` in `r0`. Without it 2020-01-17 and
     /// 2020-06-15 print their board revision as junk.
     ReadRow,
 }
@@ -124,12 +74,10 @@ impl RomHelper {
         RomHelper::ReadRow,
     ];
 
-    /// Where `stepping`'s ROM keeps it (#77). The bootcode picks the address
-    /// table by `version`: C0's outright, and on a B0 by fingerprinting the
-    /// ROM, because a B0 whose halfwords at `0x6000_0798:0x6000_0796` read
-    /// `0x1F1A_3364` takes C0's addresses, and anything else B0's own. The
-    /// table and the fingerprint check are the same in 2019-07-15, 2019-10-16,
-    /// 2020-01-17 and 2020-06-15.
+    /// Where `stepping`'s ROM keeps it. The bootcode picks the table by
+    /// `version`, except that a B0 whose halfwords at
+    /// `0x6000_0798:0x6000_0796` read `0x1F1A_3364` takes C0's addresses. Same
+    /// table and fingerprint check in every build from 2019-07-15 to 2020-06-15.
     const fn addr(self, stepping: Stepping) -> u32 {
         match (stepping, self) {
             (Stepping::C0, RomHelper::OtpOpen) => 0x6000_647A,
@@ -143,7 +91,6 @@ impl RomHelper {
         }
     }
 
-    /// The stand-in, the same on either stepping.
     const fn code(self) -> &'static [u8] {
         match self {
             RomHelper::OtpOpen | RomHelper::OtpClose => RETURN,
@@ -185,7 +132,6 @@ const _: () = {
     assert!(at == 0x6000_0796 && (hi << 16 | lo) != 0x1F1A_3364);
 };
 
-// The row reads above encode these offsets.
 const _: () = assert!(
     OTP_BASE == 0x7E20_F000
         && OTP_KEY == 0x1C
@@ -194,11 +140,8 @@ const _: () = assert!(
         && OTP_GO == 1
 );
 
-/// The 20-byte OTP contribution to the HMAC key derived from a constant, for
-/// tests and documentation: OTP rows 19..=22 written little-endian into a 20-byte
-/// buffer, so the last four bytes stay zero. This is what the ROM builds in its
-/// `r24+0xDC` buffer, and what `read_otp_key_words` reads back from the modelled
-/// OTP block; the two must agree while the fuses hold [`BOARD_IDENTITY`].
+/// The OTP half of the HMAC key derived from a constant, for tests: rows
+/// 19..=22 little-endian, last four bytes zero.
 pub fn otp_key_words() -> [u8; HMAC_LEN] {
     let mut otp = [0u8; HMAC_LEN];
     for (i, word) in BOARD_IDENTITY.iter().enumerate() {
@@ -207,14 +150,13 @@ pub fn otp_key_words() -> [u8; HMAC_LEN] {
     otp
 }
 
-/// Read one OTP row through the config/OTP block, the way the EEPROM bootloader's
-/// `getconfig` does: write the row number to `KEY`, start the transaction with
-/// `PARAM_A.GO`, wait for `STATUS.DONE`, take the value from `DATA`.
+/// Read one OTP row: row number to `KEY`, start on `PARAM_A.GO`, wait for
+/// `STATUS.DONE`, value from `DATA`.
 fn read_otp_row(machine: &mut Machine, row: u32) -> u32 {
     let _ = machine.store32(OTP_BASE + OTP_KEY, row);
     let _ = machine.store32(OTP_BASE + OTP_PARAM_A, OTP_GO);
-    // The transaction resolves on the GO write in the model; poll anyway, the way
-    // the ROM does, so the read exercises the STATUS path.
+    // The transaction resolves on the `GO` write here; poll anyway, as the ROM
+    // does, so the read exercises the `STATUS` path.
     for _ in 0..8 {
         if machine.load32(OTP_BASE + OTP_STATUS).unwrap_or(0) & OTP_DONE != 0 {
             break;
@@ -223,8 +165,7 @@ fn read_otp_row(machine: &mut Machine, row: u32) -> u32 {
     machine.load32(OTP_BASE + OTP_DATA).unwrap_or(0)
 }
 
-/// The OTP half of the HMAC key, read from the modelled fuses over MMIO: rows
-/// 19..=22 written little-endian into a 20-byte buffer (last four bytes zero).
+/// The same, read from the modelled fuses over MMIO.
 pub fn read_otp_key_words(machine: &mut Machine) -> [u8; HMAC_LEN] {
     let mut otp = [0u8; HMAC_LEN];
     for (i, row) in OTP_KEY_ROWS.enumerate() {
@@ -233,7 +174,6 @@ pub fn read_otp_key_words(machine: &mut Machine) -> [u8; HMAC_LEN] {
     otp
 }
 
-/// `key[i] = salt[i] ^ otp[i]`, the ROM's `0x6000_066e` loop.
 fn xor20(salt: &[u8; HMAC_LEN], otp: &[u8; HMAC_LEN]) -> [u8; HMAC_LEN] {
     let mut key = [0u8; HMAC_LEN];
     for i in 0..HMAC_LEN {
@@ -242,7 +182,6 @@ fn xor20(salt: &[u8; HMAC_LEN], otp: &[u8; HMAC_LEN]) -> [u8; HMAC_LEN] {
     key
 }
 
-/// HMAC-SHA1 over `image[..-20]`, compared with the trailing 20 bytes.
 fn hmac_ok(key: &[u8; HMAC_LEN], image: &[u8]) -> bool {
     if image.len() <= HMAC_LEN {
         return false;
@@ -253,30 +192,23 @@ fn hmac_ok(key: &[u8; HMAC_LEN], image: &[u8]) -> bool {
     mac.verify_slice(signature).is_ok()
 }
 
-/// Outcome of the ROM's bootcode signature check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SigCheck {
-    /// No key was supplied, so the check is not modelled this run.
     Skipped,
-    /// HMAC-SHA1 matched the footer — the ROM would proceed.
     Ok,
     /// HMAC-SHA1 mismatch — the real ROM halts here and the board stays silent.
     Failed,
 }
 
-/// What the ROM produced for the next stage: the entry it hands control to, and
-/// a short human-readable log of the steps it took.
+/// What the ROM produced: the entry it hands control to, and a log of its steps.
 pub struct BootOutcome {
     pub entry: u32,
     pub log: Vec<String>,
 }
 
-/// The modelled boot ROM. Holds the (optional) signing secret; everything else
-/// about the first stage is behaviour driven through the bus.
-///
-/// The HMAC key is either supplied whole (`key`) or derived at boot time from a
-/// salt XORed with the OTP rows read out of the machine (`salt`). Both are
-/// run-time secrets and never live in the repository.
+/// The modelled boot ROM. Holds the optional signing secret — supplied whole
+/// (`key`) or as a `salt` XORed with the machine's OTP rows — which is a
+/// run-time value and never lives in the repository.
 #[derive(Debug, Clone, Default)]
 pub struct BootRom {
     key: Option<[u8; HMAC_LEN]>,
@@ -284,13 +216,11 @@ pub struct BootRom {
 }
 
 impl BootRom {
-    /// A ROM with no signing key: it stages bootcode but does not check it, the
-    /// same behaviour the model had before this stage existed.
+    /// A ROM with no signing key: it stages bootcode but does not check it.
     pub fn unkeyed() -> BootRom {
         BootRom::default()
     }
 
-    /// A ROM with an explicit HMAC key (already `salt ^ otp`).
     pub fn with_key(key: [u8; HMAC_LEN]) -> BootRom {
         BootRom {
             key: Some(key),
@@ -298,8 +228,7 @@ impl BootRom {
         }
     }
 
-    /// A ROM with the maskROM salt; the key is `salt ^ otp`, with the OTP words
-    /// read from the machine at boot time.
+    /// A ROM with the maskROM salt; the key is `salt ^ otp`.
     pub fn with_salt(salt: [u8; HMAC_LEN]) -> BootRom {
         BootRom {
             key: None,
@@ -307,15 +236,9 @@ impl BootRom {
         }
     }
 
-    /// Build from the environment. The secret is a run-time value and never lives
-    /// in the repository:
-    ///
-    /// * `PIMU_BOOT_KEY=<40 hex>` — the 20-byte HMAC key directly.
-    /// * `PIMU_BOOT_SALT=<40 hex>` — the 20-byte maskROM salt; XORed with the OTP
-    ///   rows the model serves to form the key.
-    ///
-    /// Neither set means an unkeyed ROM (signature check skipped). `PIMU_BOOT_KEY`
-    /// wins if both are set.
+    /// Build from the environment: `PIMU_BOOT_KEY=<40 hex>` is the key itself,
+    /// `PIMU_BOOT_SALT=<40 hex>` the maskROM salt to XOR with the OTP rows.
+    /// Neither set means an unkeyed ROM; `PIMU_BOOT_KEY` wins if both are.
     pub fn from_env() -> Result<BootRom> {
         if let Some(key) = env_hex20("PIMU_BOOT_KEY")? {
             return Ok(BootRom::with_key(key));
@@ -326,8 +249,6 @@ impl BootRom {
         Ok(BootRom::unkeyed())
     }
 
-    /// The effective HMAC key for this run, deriving it from the salt and the
-    /// machine's OTP rows when only a salt was supplied. `None` = unkeyed.
     fn effective_key(&self, machine: &mut Machine) -> Option<[u8; HMAC_LEN]> {
         match (&self.key, &self.salt) {
             (Some(key), _) => Some(*key),
@@ -336,17 +257,11 @@ impl BootRom {
         }
     }
 
-    /// Model the ROM's first stage: read the `pieeprom.bin` image out of the SPI
-    /// flash, locate the second-stage bootcode, verify its signature if a key is
-    /// available (reading the OTP key rows over MMIO), stage it into RAM at
-    /// [`BOOTCODE_LOAD_ADDR`], and return the entry hand-off (`+0x200`).
-    ///
-    /// Returns an error when the ROM would refuse to boot — no flash, a malformed
-    /// image, or a signature mismatch with a key present (on hardware the ROM
-    /// simply halts and the board is silent; the model says so instead of
-    /// hanging).
+    /// Model the ROM's first stage: read `pieeprom.bin` off the SPI flash,
+    /// locate the bootcode, verify its signature if a key is available, stage it
+    /// and return the entry hand-off. An error is where hardware would simply
+    /// halt with the board silent.
     pub fn boot(&self, machine: &mut Machine) -> Result<BootOutcome> {
-        // The image comes off the SPI-NOR flash the ROM reads, not a side channel.
         let image = machine.spi0.flash_bytes().to_vec();
         if image.is_empty() {
             bail!("boot ROM: no SPI flash attached to read the bootloader image from");
@@ -388,12 +303,11 @@ impl BootRom {
             ),
         }
 
-        // Stage the second stage into L2-as-SRAM, then hand off at its entry.
         write_folded(machine, BOOTCODE_LOAD_ADDR, &body).context("boot ROM: staging bootcode")?;
         machine
             .l2
             .hold(BOOTCODE_LOAD_ADDR & 0x3FFF_FFFF, body.len());
-        // Where 0x6000_0000 folds to (512 MiB in); a smaller RAM goes without.
+        // Where `0x6000_0000` folds to (512 MiB in); a smaller RAM goes without.
         let stepping = machine.board().stepping;
         for helper in RomHelper::ALL {
             let _ = write_folded(machine, helper.addr(stepping), helper.code());
@@ -405,8 +319,6 @@ impl BootRom {
     }
 }
 
-/// Parse a `NAME=<hex>` environment variable into 20 bytes, tolerating a `0x`
-/// prefix and surrounding whitespace. Absent variable → `Ok(None)`.
 fn env_hex20(name: &str) -> Result<Option<[u8; HMAC_LEN]>> {
     match std::env::var(name) {
         Ok(text) => {
@@ -436,8 +348,7 @@ mod tests {
     use super::*;
     use crate::firmware::eeprom::MAGIC_BOOTCODE;
 
-    /// RFC 2202 HMAC-SHA1 test case 1 — proves the crate wiring computes a
-    /// standard HMAC-SHA1, the same primitive the ROM's SHA-1 core implements.
+    /// RFC 2202 HMAC-SHA1 test case 1: the same primitive the ROM's core is.
     #[test]
     fn hmac_sha1_matches_the_rfc_2202_vector() {
         let mut mac = Hmac::<Sha1>::new_from_slice(&[0x0b; 20]).unwrap();
@@ -449,7 +360,6 @@ mod tests {
         );
     }
 
-    /// Build a fake signed image for an arbitrary (non-secret) test key.
     fn sign(payload: &[u8], key: &[u8; HMAC_LEN]) -> Vec<u8> {
         let mut mac = Hmac::<Sha1>::new_from_slice(key).unwrap();
         mac.update(payload);
@@ -473,17 +383,16 @@ mod tests {
         assert!(!hmac_ok(&key, &good[..10]), "too short to hold a signature");
     }
 
-    /// The OTP read over MMIO returns the same words as the constant derivation
-    /// while the fuses hold `BOARD_IDENTITY`.
+    /// The OTP read over MMIO matches the constant derivation while the fuses
+    /// hold `BOARD_IDENTITY`.
     #[test]
     fn otp_read_over_mmio_matches_the_constant_words() {
         let mut machine = Machine::new(1 << 20);
         assert_eq!(read_otp_key_words(&mut machine), otp_key_words());
-        // Last four bytes are zero (only rows 19..=22 populate 16 bytes).
         assert_eq!(&otp_key_words()[16..20], &[0, 0, 0, 0]);
     }
 
-    /// The row-28 helper 2020-04-16 calls at `0x6000_09d0` (#71) does the OTP
+    /// The row-28 helper 2020-04-16 calls at `0x6000_09d0` does the OTP
     /// transaction and stores the row where `r0` points.
     #[test]
     fn the_rom_s_row_28_helper_stores_the_row() {
@@ -508,8 +417,8 @@ mod tests {
         assert_eq!(machine.load32(BUF).unwrap(), want);
     }
 
-    /// The row reader 2020-01-17 and 2020-06-15 call at `0x6000_6278` (#75)
-    /// takes the row in `r0` and returns its value there.
+    /// The row reader 2020-01-17 and 2020-06-15 call at `0x6000_6278` takes the
+    /// row in `r0` and returns its value there.
     #[test]
     fn the_rom_s_row_reader_returns_the_row_named_in_r0() {
         use crate::vpu::{Step, Vpu};
@@ -533,8 +442,7 @@ mod tests {
         }
     }
 
-    /// Each stepping's stand-ins fit side by side where its ROM keeps the
-    /// routines, and the two steppings put them in different places.
+    /// Each stepping's stand-ins fit where that stepping's ROM keeps them.
     #[test]
     fn each_stepping_s_helpers_have_room_of_their_own() {
         for stepping in [Stepping::B0, Stepping::C0] {
@@ -552,7 +460,6 @@ mod tests {
         }
     }
 
-    /// The row reader answers from OTP row 30, which follows the machine's board.
     #[test]
     fn the_row_reader_reports_the_board_the_machine_is() {
         use crate::soc::Board;
@@ -562,7 +469,6 @@ mod tests {
         assert_eq!(read_otp_row(&mut machine, 30), 0x00C0_3112);
     }
 
-    /// Wrap a signed bootcode body in a minimal EEPROM image.
     fn eeprom_with_bootcode(body: &[u8]) -> Vec<u8> {
         let mut img = Vec::new();
         img.extend_from_slice(&MAGIC_BOOTCODE.to_be_bytes());
@@ -575,10 +481,8 @@ mod tests {
         img
     }
 
-    /// End to end through the bus: the ROM reads the image from the SPI flash,
-    /// reads the OTP key rows, derives `salt ^ otp`, verifies, and stages the
-    /// bootcode at the load address with entry `+0x200`. A tampered image is
-    /// refused; an unkeyed ROM stages without checking.
+    /// End to end through the bus: read the image, derive `salt ^ otp`, verify,
+    /// stage the bootcode. A tampered image is refused, an unkeyed ROM is not.
     #[test]
     fn boot_reads_flash_and_otp_then_stages_a_verified_image() {
         let salt = [0x5au8; HMAC_LEN];
@@ -591,22 +495,18 @@ mod tests {
         let rom = BootRom::with_salt(salt);
         let out = rom.boot(&mut machine).expect("verified image boots");
         assert_eq!(out.entry, BOOTCODE_LOAD_ADDR + BOOTCODE_ENTRY_OFFSET);
-        // The staged bytes landed in RAM (0x8000_0000 folds to phys 0).
         assert_eq!(machine.ram.read_slice(0, 4).unwrap(), &[0xAB; 4]);
 
-        // Tampered image: refuse to boot.
         let mut bad_body = body.clone();
         bad_body[0] ^= 1;
         let mut m2 = Machine::new(1 << 20);
         m2.spi0.attach_flash(eeprom_with_bootcode(&bad_body));
         assert!(rom.boot(&mut m2).is_err(), "bad signature must refuse");
 
-        // Unkeyed ROM stages the good image without checking.
         let mut m3 = Machine::new(1 << 20);
         m3.spi0.attach_flash(image);
         assert!(BootRom::unkeyed().boot(&mut m3).is_ok());
 
-        // No flash at all: refuse.
         let mut m4 = Machine::new(1 << 20);
         assert!(rom.boot(&mut m4).is_err(), "no flash must refuse");
     }

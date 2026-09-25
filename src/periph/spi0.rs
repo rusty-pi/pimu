@@ -1,5 +1,7 @@
 //! BCM2835/BCM2711 SPI0 master (`0x7E20_4000`) + attached serial-NOR flash.
 //!
+//! Registers and fields: `specs/spi0.toml`.
+//!
 //! The EEPROM bootloader drives this in polled single-byte-FIFO mode: for every
 //! byte it waits for `CS.TXD`, writes the byte to `FIFO`, waits for `CS.RXD`,
 //! then reads the miso byte back out of `FIFO`. `CS.TA` stays asserted for the
@@ -11,13 +13,11 @@
 //! with them elsewhere clocks its bytes into the air and reads MISO idle-high
 //! ([`crate::machine::Machine::route_gpio_pins`]).
 //!
-//! We model enough of a serial-NOR flash for the bootloader to scan the
-//! `pieeprom.bin` image it was itself loaded from and to apply an EEPROM
-//! self-update: `READ` (0x03) / `FAST_READ` (0x0B) stream image bytes, `RDID`
-//! (0x9F) returns a JEDEC id, `RDSR` (0x05) reports the WIP bit, `WREN` (0x06)
-//! sets the write-enable latch, `SE` (0x20) erases a 4 KiB sector to `0xFF`,
-//! `PP` (0x02) programs up to a page. Erase/program are instantaneous in the
-//! model (WIP always reads clear). Everything else returns `0xFF`.
+//! The attached serial-NOR flash is modelled far enough for the bootloader to
+//! scan the `pieeprom.bin` image it was loaded from and to apply an EEPROM
+//! self-update: `READ`, `FAST_READ`, `RDID`, `RDSR`, `WREN`, `SE` and `PP`.
+//! Erase and program are instantaneous, so WIP always reads clear; everything
+//! else returns `0xFF`.
 
 use std::collections::VecDeque;
 
@@ -31,13 +31,11 @@ use crate::spec::spi0::{
 };
 use crate::spec::Coverage;
 
-/// Every register in `specs/spi0.toml` is modelled.
 pub const COVERAGE: Coverage = Coverage {
     block: "spi0",
     decoded: &[CS, FIFO, CLK, DLEN, LTOH, DC],
 };
 
-/// Byte returned when nothing better applies (MISO idle-high).
 const MISO_IDLE: u8 = 0xFF;
 
 /// JEDEC id reported for `RDID` — Winbond W25Q128 (16 MiB), close enough to the
@@ -53,15 +51,10 @@ pub struct Spi0 {
     dc: u32,
     /// The attached flash image (the `pieeprom.bin` bytes). Empty ⇒ no flash.
     flash: Vec<u8>,
-    /// Bytes clocked since `CS.TA` was asserted.
     beat: u64,
-    /// Command byte (first beat of the transaction).
     cmd: u8,
-    /// Address accumulator for read/erase/program commands.
     addr: u32,
-    /// Write-enable latch (set by `WREN`, cleared after an erase / program).
     wel: bool,
-    /// Response bytes queued for the CPU to read back out of the FIFO.
     rx: VecDeque<u8>,
     /// `true` once anything wrote to `flash` — a signal to the run loop that an
     /// EEPROM self-update landed and a re-run from the new image is due.
@@ -70,14 +63,10 @@ pub struct Spi0 {
     /// on the flash ([`crate::periph::gpio`]). Clear: the bytes go to pins
     /// that are somebody else's, and MISO reads idle-high.
     pins: bool,
-    /// Where [`Channel::Spi`] goes.
     pub log: Log,
 }
 
 impl Spi0 {
-    /// A master whose pads are on the flash: a device on its own has nothing
-    /// to tell it otherwise. In a machine the GPIO block does
-    /// ([`Self::set_pins`]).
     pub fn new() -> Spi0 {
         Spi0 {
             pins: true,
@@ -85,7 +74,6 @@ impl Spi0 {
         }
     }
 
-    /// Attach the serial-NOR flash contents (the EEPROM image).
     pub fn attach_flash(&mut self, image: Vec<u8>) {
         self.flash = image;
     }
@@ -97,7 +85,6 @@ impl Spi0 {
         self.pins = on;
     }
 
-    /// The current flash contents — reflects any EEPROM self-update writes.
     pub fn flash_bytes(&self) -> &[u8] {
         &self.flash
     }
@@ -111,12 +98,12 @@ impl Spi0 {
         if self.rx.len() >= 16 {
             cs |= CS_RXR | CS_RXF;
         }
-        // CS.DONE reflects the TX side only: "transfer complete, nothing left
-        // to shift" (BCM2711 datasheet — cleared by writing more TX data or
-        // TA=0, unrelated to the RX FIFO). Every shift is instantaneous in this
-        // model, so with TA asserted there is never a byte mid-flight. Gating
-        // this on `rx.is_empty()` was wrong. start4's transfer (`0x3ED77E00`)
-        // spins on DONE, with no timeout, as soon as its byte loop ends.
+        // `CS.DONE` reflects the TX side only — "transfer complete, nothing
+        // left to shift", cleared by writing more TX data or by `TA = 0`, and
+        // unrelated to the RX FIFO. Every shift is instantaneous here, so with
+        // `TA` asserted there is never a byte mid-flight. start4 spins on
+        // `DONE` with no timeout as soon as its byte loop ends, so it must not
+        // depend on the RX FIFO being drained.
         if self.cs & CS_TA != 0 {
             cs |= CS_DONE;
         }
@@ -130,7 +117,6 @@ impl Spi0 {
         self.rx.clear();
     }
 
-    /// Clock one byte out (`mosi`) and one byte in (`miso`).
     fn shift(&mut self, mosi: u8) {
         // The pads are not on the flash: nothing hears the byte, and MISO is
         // whatever holds the pin.
@@ -144,7 +130,6 @@ impl Spi0 {
         let miso = match (n, self.cmd) {
             (0, _) => {
                 self.cmd = mosi;
-                // Single-byte commands act now — there is no later beat.
                 match mosi {
                     0x06 => self.wel = true,  // WREN
                     0x04 => self.wel = false, // WRDI
@@ -152,7 +137,6 @@ impl Spi0 {
                 }
                 MISO_IDLE
             }
-            // READ (0x03): 3 address bytes, then a stream of data.
             (1..=3, 0x03) => {
                 self.addr = (self.addr << 8) | mosi as u32;
                 MISO_IDLE
@@ -162,19 +146,14 @@ impl Spi0 {
                 self.read_flash_byte()
             }
             (_, 0x03) => self.read_flash_byte(),
-            // FAST_READ (0x0B): 3 address bytes + 1 dummy, then data.
             (1..=3, 0x0B) => {
                 self.addr = (self.addr << 8) | mosi as u32;
                 MISO_IDLE
             }
             (4, 0x0B) => MISO_IDLE,
             (_, 0x0B) => self.read_flash_byte(),
-            // RDID (0x9F): three id bytes then 0xFF.
             (1..=3, 0x9F) => JEDEC_ID[(n - 1) as usize],
-            // RDSR (0x05): status register. Bit 0 = WIP (always clear — erase /
-            // program complete instantly); bit 1 = WEL.
             (_, 0x05) => u8::from(self.wel) << 1,
-            // SE (0x20): 3 address bytes, then erase the enclosing 4 KiB sector.
             (1..=3, 0x20) => {
                 self.addr = (self.addr << 8) | mosi as u32;
                 if n == 3 {
@@ -182,7 +161,6 @@ impl Spi0 {
                 }
                 MISO_IDLE
             }
-            // PP (0x02): 3 address bytes, then a stream of data bytes to program.
             (1..=3, 0x02) => {
                 self.addr = (self.addr << 8) | mosi as u32;
                 MISO_IDLE
@@ -196,7 +174,6 @@ impl Spi0 {
         self.rx.push_back(miso);
     }
 
-    /// Erase the 4 KiB sector containing `self.addr` to all-`0xFF`.
     fn erase_sector(&mut self) {
         if !self.wel {
             return;

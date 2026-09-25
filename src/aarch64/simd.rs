@@ -2,9 +2,9 @@
 //! stores (ARM ARM C4.1.95 and C4.1.88).
 //!
 //! ARMv8.0 as on the A72, without the Cryptographic Extension: BCM2711 does
-//! not implement it (`/proc/cpuinfo` on a Pi 4: `fp asimd evtstrm crc32
-//! cpuid`), so AES, SHA and 64-bit PMULL are UNDEFINED here even though
-//! QEMU's `cortex-a72` model executes them.
+//! not implement it (`/proc/cpuinfo` on a Raspberry Pi 4B d03115 lists
+//! `fp asimd evtstrm crc32 cpuid`), so AES, SHA and 64-bit PMULL are UNDEFINED
+//! here even though QEMU's `cortex-a72` model executes them.
 //!
 //! The decode table mirrors QEMU's `data_proc_simd` table: order matters,
 //! because several classes are subsets of others (modified immediate is
@@ -1592,8 +1592,8 @@ mod tests {
         Cpu::new_el0().step(&mut One(insn))
     }
 
-    /// The Pi's A72 has no Cryptographic Extension, unlike QEMU's model, so
-    /// the differential test cannot check these.
+    /// The BCM2711's A72 has no Cryptographic Extension, unlike QEMU's model,
+    /// so the differential test cannot check these.
     #[test]
     fn crypto_is_undefined() {
         for insn in [

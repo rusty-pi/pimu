@@ -1,74 +1,38 @@
 //! The BCM2711 "ARM local" block at `0xFF80_0000` — as much of it as anything
 //! on the ARM side actually touches, which is very little.
 //!
-//! On BCM2836/7 this block *was* the interrupt controller: per-core timer and
-//! mailbox interrupts, routed through `irq-bcm2836`. BCM2711 put a GIC-400
-//! next to it ([`super::gic`]) and Linux on a Pi 4 uses that instead. The
-//! device tree this firmware hands to Linux (`boot … --dump-fdt`) still
-//! carries the node, but inertly:
+//! Registers: `specs/armlocal.toml`.
 //!
-//! ```text
-//!   interrupt-controller@40000000 {          // -> 0xFF80_0000 via soc ranges
-//!       compatible = "brcm,bcm2836-l1-intc";
-//!       reg = <0x40000000 0x100>;
-//!       phandle = <0xc6>;
-//!   };                                       // no `interrupt-controller;`
-//! ```
+//! On BCM2836/7 this block *was* the interrupt controller. BCM2711 put a
+//! GIC-400 next to it ([`super::gic`]) and Linux uses that instead: the device
+//! tree still carries the node but without an `interrupt-controller` property,
+//! so `irq-bcm2836` never probes. Secondary cores come up through the spin
+//! table in RAM, and the generic timer's interrupt is GIC PPI 30 — `GICv2 30
+//! Level arch_timer` in `/proc/interrupts` on a Raspberry Pi 4B d03115.
 //!
-//! `of_irq_init` only initialises nodes that have the `interrupt-controller`
-//! property, so `irq-bcm2836` never probes and nothing maps this region. The
-//! other things that used it on earlier Pis are elsewhere on this one:
+//! The only writer is the armstub start4 places at ARM address 0: `ARM_CONTROL`
+//! 0 and `CORE_TIMER_PRESCALER` `0x8000_0000`, next to `cntfrq_el0 = 54000000`.
+//! With exactly those values that board's counter runs at the crystal rate
+//! (`arch_timer: cp15 timer(s) running at 54.00MHz (phys)`), which is what
+//! [`ArmLocal::counter_hz`] reports; any other configuration is deliberately
+//! not modelled rather than guessed at.
 //!
-//! * secondary cores are released through the spin table in RAM — every
-//!   `cpu@n` has `enable-method = "spin-table"`, `cpu-release-addr = <0 0xd8>`
-//!   … `<0 0xf0>` — not through the local block's mailboxes (the `/cpus`
-//!   `enable-method = "brcm,bcm2836-smp"` is only read by 32-bit ARM Linux);
-//! * the generic timer interrupt is GIC PPI 30 (`/proc/interrupts` on the
-//!   reference board: `GICv2 30 Level arch_timer`), not the local block's
-//!   per-core timer IRQ.
-//!
-//! What does write here is the armstub start4 places at ARM address 0 (file
-//! offset `0x1E40EC` in `start4.elf`, the upstream `armstub8` shape), in EL3
-//! before it drops to Linux:
-//!
-//! ```text
-//!   ldr  x0, =0xff800000     // literal at 0x1E4194
-//!   str  wzr, [x0]           // ARM_CONTROL = 0
-//!   mov  w1, #0x80000000
-//!   str  w1, [x0, #8]        // core timer prescaler = 0x8000_0000
-//!   ldr  x0, =54000000       // literal at 0x1E419C
-//!   msr  cntfrq_el0, x0
-//! ```
-//!
-//! Those two registers are modelled as plain storage. With exactly those
-//! values the reference board's counter runs at the crystal rate — its `dmesg`
-//! says `arch_timer: cp15 timer(s) running at 54.00MHz (phys)`, matching the
-//! `CNTFRQ` the stub programs — which [`ArmLocal::counter_hz`] reports for the
-//! integration to clock the generic timer by. Any other configuration is not
-//! modelled rather than guessed at.
-//!
-//! Every other offset faults instead of reading zero: the claim here is that
-//! nothing else is touched, and if Linux or the stub disagrees, that should
-//! be loud. Reset values were not measured (nothing the model does may read
-//! the board); the stub writes both registers before anything could read them.
+//! **Every other offset faults rather than reading zero**, so if Linux or the
+//! stub touches something unexpected it is loud.
 
 use crate::bus::{BusError, BusResult, MmioDevice, Width};
 
 use crate::spec::armlocal::{ARM_CONTROL, CORE_TIMER_PRESCALER};
-/// The dtb's `reg = <0x40000000 0x100>`, through `soc`'s `ranges`.
 pub use crate::spec::armlocal::{BASE, SIZE};
 use crate::spec::Coverage;
 
-/// Both registers the spec lists; every other offset faults.
 pub const COVERAGE: Coverage = Coverage {
     block: "armlocal",
     decoded: &[ARM_CONTROL, CORE_TIMER_PRESCALER],
 };
 
-/// What the armstub writes, and with which the counter runs at the crystal.
 const STUB_CONTROL: u32 = 0;
 const STUB_PRESCALER: u32 = 0x8000_0000;
-/// The Pi 4's 54 MHz crystal — the armstub's `CNTFRQ` literal.
 pub const CRYSTAL_HZ: u64 = 54_000_000;
 
 #[derive(Debug, Default)]
@@ -142,7 +106,6 @@ mod tests {
     #[test]
     fn everything_else_faults() {
         let mut l = ArmLocal::new();
-        // LOCAL_TIMER_CONTROL and a core's IRQ source on BCM2836: unused here.
         assert!(l.read(0x34, Width::Word).is_err());
         assert!(l.write(0x60, Width::Word, 1).is_err());
         assert!(l.read(ARM_CONTROL, Width::Byte).is_err());

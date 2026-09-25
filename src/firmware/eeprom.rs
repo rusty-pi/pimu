@@ -1,30 +1,16 @@
-//! Parsing `pieeprom.bin` — the Raspberry Pi 4 bootloader SPI-flash image.
+//! Parsing `pieeprom.bin`, the Raspberry Pi 4 bootloader SPI-flash image.
 //!
 //! Layout (from `raspberrypi/rpi-eeprom`'s `rpi-eeprom-config` and what
-//! `start4.elf`'s `bootloader_eeprom_find_files` at `~0x3EC65490` walks): a
-//! chain of sections, each `>u32 magic, >u32 length` then `length` body bytes,
-//! the next header 8-byte aligned. `magic & 0xFFFF_F00F == 0x55AA_F00F`.
-//! Section kinds seen in the pinned images:
+//! `start4.elf`'s `bootloader_eeprom_find_files` walks): a chain of sections,
+//! each `>u32 magic, >u32 length` then `length` body bytes, the next header
+//! 8-byte aligned, with `magic & 0xFFFF_F00F == 0x55AA_F00F`. The magics name
+//! bootcode, a modifiable file (`bootconf.txt` and friends, whose name is in
+//! the first bytes of the body), a packed resource, or padding.
 //!
-//! | magic         | meaning                                             |
-//! |---------------|-----------------------------------------------------|
-//! | `0x55AA_F00F` | bootcode (the VPU second-stage bootloader)           |
-//! | `0x55AA_F11F` | modifiable file — filename in the first 12 B of body |
-//! | `0x55AA_F33F` | packed resource (e.g. SDRAM init firmware)           |
-//! | `0x55AA_F44F` | packed resource (per-part memsys / PHY tables)       |
-//! | `0x55AA_FEEF` | padding to the next `0x100` boundary (body all `FF`) |
-//!
-//! The real bootcode / packed-resource layout is not otherwise interpreted —
-//! the firmware reads those bytes itself over SPI0 (see `periph::spi0`). What
-//! the model uses this parser for is (a) staging the bootcode for the
-//! direct-execution / `disasm --eeprom` path and (b) model-side introspection
-//! of the modifiable files, in particular `bootconf.txt` (boot order, etc.)
-//! that later boot stages consult.
-//!
-//! The bootcode body begins with a 0x200-byte header/signature area; the VPU
-//! entry point is body-offset `0x200`. The BCM2711 boot ROM stages the bootcode
-//! in L2-as-SRAM at `0x8000_0000` (per `librerpi/lk-overlay`'s `bootcode.ld`,
-//! `ORIGIN = 0x8000_0000`).
+//! The firmware reads the bodies itself over SPI0, so nothing here interprets
+//! them; this parser stages the bootcode for the direct-execution and
+//! `disasm --eeprom` paths, and introspects the modifiable files. A bootcode
+//! body starts with a `0x200`-byte header, so its entry is body offset `0x200`.
 
 use anyhow::{bail, Context, Result};
 
@@ -36,37 +22,27 @@ pub const MAGIC_PACKED_A: u32 = 0x55AA_F33F;
 pub const MAGIC_PACKED_B: u32 = 0x55AA_F44F;
 pub const MAGIC_PAD: u32 = 0x55AA_FEEF;
 
-/// Where the boot ROM stages the bootcode, and the offset of its entry point.
 pub const BOOTCODE_LOAD_ADDR: u32 = 0x8000_0000;
 pub const BOOTCODE_ENTRY_OFFSET: u32 = 0x200;
 
-/// A `MAGIC_FILE` filename lives in the first bytes of the section body. The
-/// bootloader stores it in a fixed-size field; 12 covers every name in the
-/// pinned images (`bootconf.txt`, `pubkey.bin`, `cacert.der`, …), but read a
-/// little more and stop at the NUL so a longer name still round-trips.
+/// A `MAGIC_FILE` filename lives in the first bytes of the section body, in a
+/// fixed-size field; read past the longest known name and stop at the NUL.
 const FILENAME_FIELD: usize = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SectionKind {
     Bootcode,
-    /// Modifiable file (`bootconf.txt` etc.).
     File,
-    /// Packed resource blob — SDRAM init / memsys tables.
     PackedResource,
-    /// `0xFF` padding to the next `0x100` boundary.
     Pad,
-    /// Magic in the `0x55AA_F00F` family but not one we name.
     Unknown,
 }
 
 #[derive(Debug, Clone)]
 pub struct Section {
     pub magic: u32,
-    /// Offset of the section header within the image.
     pub header_offset: usize,
-    /// Body bytes (excludes the 8-byte header).
     pub body: Vec<u8>,
-    /// Filename for `MAGIC_FILE` sections.
     pub filename: Option<String>,
 }
 
@@ -144,7 +120,6 @@ impl EepromImage {
         self.sections.iter().find(|s| s.magic == MAGIC_BOOTCODE)
     }
 
-    /// Every modifiable file, in image order.
     pub fn files(&self) -> impl Iterator<Item = (&str, &[u8])> {
         self.sections.iter().filter_map(|s| {
             if s.magic != MAGIC_FILE {
@@ -163,7 +138,6 @@ impl EepromImage {
             .find(|s| s.magic == MAGIC_FILE && s.filename.as_deref() == Some(name))
     }
 
-    /// Raw `bootconf.txt` bytes (the modifiable file body, past the name field).
     pub fn config_text(&self) -> Option<String> {
         self.files()
             .find(|(n, _)| *n == "bootconf.txt")
@@ -179,7 +153,6 @@ impl EepromImage {
         self.config_text().map(|t| BootConf::parse(&t))
     }
 
-    /// A one-line-per-section summary for `boot --eeprom` startup output.
     pub fn summary(&self) -> String {
         let mut out = String::new();
         for s in &self.sections {
@@ -200,14 +173,10 @@ impl EepromImage {
     }
 }
 
-/// A `BOOT_ORDER` device code (one hex nibble). Names per the Raspberry Pi
-/// bootloader documentation.
-/// Replace the body of the modifiable file `name` in `flash` in place, the
-/// way `rpi-eeprom-config`'s `ImageSection.update` does: the length field
-/// becomes the data plus the 16-byte name field, the data follows the name,
-/// and the rest of the slot up to the next non-padding section becomes `0xFF`
-/// with a `MAGIC_PAD` section header, so the section walk still finds
-/// everything after it. The file keeps its place; nothing moves.
+/// Replace the body of the modifiable file `name` in place, as
+/// `rpi-eeprom-config`'s `ImageSection.update` does: the rest of the slot up to
+/// the next non-padding section becomes a `MAGIC_PAD` section, so the walk
+/// still finds everything after it and nothing moves.
 pub fn replace_file(flash: &mut [u8], name: &str, data: &[u8]) -> Result<()> {
     let img = EepromImage::parse(flash)?;
     let i = img
@@ -263,12 +232,10 @@ pub fn boot_device_name(code: u8) -> &'static str {
     }
 }
 
-/// Parsed `bootconf.txt`: an ordered list of `(group, key, value)` and the
-/// helpers later boot stages need.
+/// Parsed `bootconf.txt`.
 #[derive(Debug, Clone, Default)]
 pub struct BootConf {
-    /// `(group, KEY, VALUE)` in file order. `group` is `""` for the implicit
-    /// leading section and the `[all]` section.
+    /// `(group, KEY, VALUE)` in file order; `group` is `""` for `[all]`.
     pub entries: Vec<(String, String, String)>,
 }
 
@@ -296,9 +263,8 @@ impl BootConf {
         BootConf { entries }
     }
 
-    /// Resolve `key` against the `[all]` section plus any conditional group
-    /// whose name is in `active` (e.g. `["pi4", "0x1aa2bb31"]`). Later entries
-    /// win, matching `rpi-eeprom-config` precedence.
+    /// Resolve `key` against `[all]` plus any conditional group named in
+    /// `active`; later entries win, as `rpi-eeprom-config` has it.
     pub fn get_for(&self, key: &str, active: &[&str]) -> Option<&str> {
         self.entries
             .iter()
@@ -310,13 +276,11 @@ impl BootConf {
             .map(|(_, _, v)| v.as_str())
     }
 
-    /// `get_for` with no conditional groups — `[all]` only.
     pub fn get(&self, key: &str) -> Option<&str> {
         self.get_for(key, &[])
     }
 
-    /// `BOOT_ORDER` decoded into device codes, first-tried first. `0xf41` →
-    /// `[1, 4, 0xf]` (SD, USB-MSD, RESTART).
+    /// `BOOT_ORDER` decoded into device codes, first-tried first.
     pub fn boot_order(&self) -> Option<Vec<u8>> {
         let raw = self.get("BOOT_ORDER")?;
         let raw = raw.trim().trim_start_matches("0x").trim_start_matches("0X");
@@ -325,7 +289,6 @@ impl BootConf {
         Some((0..width).map(|i| ((val >> (i * 4)) & 0xf) as u8).collect())
     }
 
-    /// `BOOT_ORDER` as `"SD CARD -> USB-MSD -> RESTART"`.
     pub fn boot_order_names(&self) -> Option<String> {
         Some(
             self.boot_order()?
@@ -341,7 +304,6 @@ impl BootConf {
 mod tests {
     use super::*;
 
-    /// A file section: header, 16-byte name field, body, 8-byte aligned.
     fn file_section(img: &mut Vec<u8>, name: &str, body: &[u8]) {
         img.extend_from_slice(&MAGIC_FILE.to_be_bytes());
         img.extend_from_slice(&((FILENAME_FIELD + body.len()) as u32).to_be_bytes());
@@ -391,7 +353,6 @@ mod tests {
 
     #[test]
     fn parses_a_minimal_image() {
-        // one bootcode section, body = 4 bytes, then EOF.
         let mut img = Vec::new();
         img.extend_from_slice(&MAGIC_BOOTCODE.to_be_bytes());
         img.extend_from_slice(&4u32.to_be_bytes());
@@ -421,8 +382,7 @@ BOOT_UART=1
         );
     }
 
-    /// The pinned `firmware/pieeprom.bin`, when present, must walk end to end
-    /// and expose a sane `bootconf.txt`.
+    /// The pinned image walks end to end and exposes a sane `bootconf.txt`.
     #[test]
     fn parses_the_pinned_image() {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/firmware/pieeprom.bin");
@@ -430,8 +390,6 @@ BOOT_UART=1
             eprintln!("skipping: {path} not fetched");
             return;
         };
-        // `parse` returning Ok means the walk reached the EOF marker without
-        // bailing on a bad magic or an out-of-range length.
         let img = EepromImage::parse(&bytes).expect("parse pinned pieeprom.bin");
         assert!(img.bootcode().is_some(), "has a bootcode section");
         assert!(img.file("bootconf.txt").is_some(), "has bootconf.txt");

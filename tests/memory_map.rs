@@ -1,12 +1,6 @@
-//! Address-decode tests.
-//!
-//! A peripheral window that is mapped too small, or shadowed by a window
-//! decoded before it, does not fail loudly: the access falls through to the
-//! catch-all stub, reads back 0 and the firmware carries on with a wrong
-//! answer. `CoreCtl` was mapped 0x100 bytes when core 1's registers live at
-//! `+0x800` (commit `7bd21a3`); the DMA and SDRAM-controller windows have the
-//! same shape of overlap. These tests assert the decode directly, using
-//! `Machine::stub_hits` as the "did this reach a real device" signal.
+//! Address-decode tests. A window mapped too small, or shadowed by one decoded
+//! before it, does not fail loudly: the access lands on the catch-all stub, reads
+//! 0, and the firmware carries on wrongly. `Machine::stub_hits` is the signal.
 
 use pimu::bus::Bus;
 use pimu::soc::bcm2711 as map;
@@ -16,8 +10,7 @@ fn machine() -> Machine {
     Machine::new(1024 * 1024)
 }
 
-/// Addresses that must reach a modelled device, with a note on why each one
-/// matters. Offsets are chosen to be side-effect free on read.
+/// Addresses that must reach a modelled device, at side-effect-free offsets.
 const MODELLED: &[(&str, u32)] = &[
     ("mcsync", map::MCSYNC_BASE),
     ("sdc", map::SDC_BASE),
@@ -69,46 +62,36 @@ fn modelled_windows_do_not_fall_through_to_the_stub() {
     }
 }
 
-/// The stub is still reachable — it is how unmodelled blocks stay harmless, and
-/// `stub_hits` is only a useful health signal if it really counts them.
+/// The stub stays reachable: `stub_hits` is only a health signal if it counts.
 #[test]
 fn unmodelled_peripherals_still_reach_the_stub() {
     let mut m = machine();
     let before = m.stub_hits;
-    // SMI (`0x7E60_0000`): in the window, in the device tree, and nothing
-    // models it. PWM used to be the example here, until #131 modelled it.
     m.load32(0x7E60_0000).unwrap();
     assert_eq!(m.stub_hits, before + 1, "the SMI is not modelled");
 }
 
-/// The AVS monitor is carved out of the middle of the VPU clock-block window,
-/// so it only answers if it is decoded first. Same class of bug as a too-small
-/// window: the access lands somewhere plausible and reads back the wrong thing.
+/// The AVS monitor sits inside the VPU clock-block window: decoded second, it
+/// never answers.
 #[test]
 fn avs_is_carved_out_of_the_clkmon_window() {
-    // The AVS window has to sit inside the clkmon one for this test to mean
-    // anything.
     const _: () = assert!(
         map::AVS_BASE > map::CLKMON_BASE
             && map::AVS_BASE + map::AVS_SIZE <= map::CLKMON_BASE + map::CLKMON_SIZE
     );
 
     let mut m = machine();
-    // Channel 0 is the temperature sensor: bit 10 valid, bit 16 settled,
-    // bits [9:0] the count. start4 spins until both bits are set, so a window
-    // answered by the clock block (or the stub) parks the DVFS code forever.
+    // The firmware spins until bits 10 and 16 are set, so a wrong answer parks
+    // the DVFS code for ever; the count decodes as 410040 - 487 * count mdeg.
     let temp = m.load32(map::AVS_BASE + 0x200).unwrap();
     assert_ne!(temp & (1 << 10), 0, "temperature reading not valid");
     assert_ne!(temp & (1 << 16), 0, "temperature reading not settled");
-    // 410040 - 487 * count, in millidegrees — a plausible idle Pi 4.
     let milli_c = 410040 - 487 * (temp & 0x3FF) as i32;
     assert!(
         (20_000..70_000).contains(&milli_c),
         "implausible die temperature {milli_c} m°C"
     );
 
-    // The per-rail monitors: start4 skips every channel reading back 0 and
-    // gives up on the voltage calculation if they all do.
     for ch in 0..0x18u32 {
         let rail = m.load32(map::AVS_BASE + 0x220 + 4 * ch).unwrap();
         assert_ne!(rail & 0x7FFF, 0, "rail monitor {ch} reads as absent");
@@ -116,9 +99,8 @@ fn avs_is_carved_out_of_the_clkmon_window() {
     }
 }
 
-/// The LPDDR4 controller sits *below* the `0x7E00_0000` peripheral window, at an
-/// address that folds onto DRAM under the VC4 cache-alias mask. If it is not
-/// decoded before that fold, every training write vanishes into RAM.
+/// The LPDDR4 controller sits below the peripheral window, at an address folding
+/// onto DRAM under the cache-alias mask: decoded late, training writes go to RAM.
 #[test]
 fn the_sdram_controller_is_not_folded_onto_dram() {
     let mut m = machine();
@@ -139,9 +121,7 @@ fn the_sdram_controller_is_not_folded_onto_dram() {
     }
 }
 
-/// RAM is reachable through all four VC4 cache aliases and they must share one
-/// backing store — the firmware writes a structure through the uncached alias
-/// and reads it back through the cached one constantly.
+/// The four VC4 cache aliases share one backing store.
 #[test]
 fn ram_aliases_share_one_backing_store() {
     let mut m = machine();

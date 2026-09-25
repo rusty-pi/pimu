@@ -1,20 +1,9 @@
-//! `boot --otp json:<file>` / `--otp binary:<file>`: the fuse array in a file,
-//! so what the firmware programs outlives the run (#93).
-//!
-//! The file holds the whole array. `boot` reads it before the first boot when
-//! it exists, and writes it back after the run when the firmware programmed a
-//! row. A missing file starts from the model's own fuses
-//! (`src/periph/configotp.rs`) and is created, which is also the way to get
-//! that array out, edit it, and boot a board fused differently.
-//!
-//! * `json:` — an object of row number to value, fused rows only, one a line
-//!   (`"36": "0x11111111"`). A value is a hex string or a number.
-//! * `binary:` — row n at byte 4n, little-endian, 0 for a blank row. Rows
-//!   0-67, the ones start4 reads (`0x3ED3FA60` refuses any above); a longer
-//!   file is fine.
-//!
-//! A file made from a real board's fuses carries that board's secrets (the OTP
-//! rule in `CLAUDE.md`): keep it out of the repository.
+//! `boot --otp json:<file>` / `--otp binary:<file>`: the whole fuse array in a
+//! file, so what the firmware programs outlives the run. `json:` is an object of
+//! row number to value, fused rows only; `binary:` is row n at byte 4n,
+//! little-endian, rows 0-67 (start4 reads no higher). A missing file starts from
+//! the model's own fuses (`src/periph/configotp.rs`) and is created. A file made
+//! from a real board carries that board's secrets: keep it out of the repository.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -60,7 +49,6 @@ impl std::str::FromStr for OtpFile {
 }
 
 impl OtpFile {
-    /// The fuses in the file, or `None` when there is no file yet.
     pub fn load(&self) -> Result<Option<BTreeMap<u32, u32>>> {
         let bytes = match std::fs::read(&self.path) {
             Ok(bytes) => bytes,
@@ -80,8 +68,7 @@ impl OtpFile {
             .with_context(|| format!("--otp {}", self.path.display()))
     }
 
-    /// Write `fuses` out: to a file next to it first, then renamed over it, so
-    /// a run that dies half-way leaves the old one.
+    /// Written to a neighbouring file then renamed, so a run that dies half-way leaves the old one.
     pub fn save(&self, fuses: &BTreeMap<u32, u32>) -> Result<()> {
         let bytes = match self.format {
             Format::Json => to_json(fuses).into_bytes(),
@@ -113,7 +100,6 @@ fn from_json(text: &str) -> Result<BTreeMap<u32, u32>> {
             bail!("row {row} is there twice");
         }
     }
-    // A row of zeroes is a blank one, whichever way the file put it.
     fuses.retain(|_, word| *word != 0);
     Ok(fuses)
 }

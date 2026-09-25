@@ -4,32 +4,30 @@
 //! delivers that interrupt whenever a compare comes due — and on `sleep`, where
 //! the idle loop parks with interrupts masked — so the RTOS scheduler actually
 //! advances timed waits (see [`crate::bus::Bus::timer_tick_slot`]).
+//!
+//! Registers and fields: `specs/systimer.toml`.
 
 use crate::bus::{BusResult, MmioDevice, Width};
 use crate::log::{Channel, Log};
 use crate::spec::systimer::{C, CHI, CLO, CS, CS_M0_MASK, C_COUNT, C_STRIDE};
 use crate::spec::Coverage;
 
-/// Every register in `specs/systimer.toml` is modelled.
 pub const COVERAGE: Coverage = Coverage {
     block: "systimer",
     decoded: &[CS, CLO, CHI, C],
 };
 
-/// The compare channel `offset` addresses, if it is one of `C0..C3`.
 fn compare_channel(offset: u32) -> Option<usize> {
     let rel = offset.checked_sub(C)?;
     (rel % C_STRIDE == 0 && rel / C_STRIDE < C_COUNT).then_some((rel / C_STRIDE) as usize)
 }
 
-/// Nominal VPU clock in Hz. Used only to convert executed cycles into
-/// microseconds for the timer. The real early-boot VPU clock is the crystal
-/// (54 MHz on Pi 4) before PLLs come up; this is deliberately a round default
-/// and can be revisited once firmware clock programming is modelled.
+/// Nominal VPU clock in Hz, used only to convert executed cycles into
+/// microseconds. This is the crystal a Pi 4 runs the VPU from before the PLLs
+/// come up; the model keeps that rate for the whole run, since it does not
+/// follow the firmware's clock programming.
 pub const VPU_HZ_DEFAULT: u64 = 54_000_000;
 
-/// VPU cycles per microsecond of the counter. A constant, so that the per-step
-/// arithmetic on it is a multiply rather than a division.
 const CYCLES_PER_US: u64 = VPU_HZ_DEFAULT / 1_000_000;
 
 pub struct SysTimer {
@@ -37,34 +35,18 @@ pub struct SysTimer {
     frac_cycles: u64,
     cs: u32,
     cmp: [u32; 4],
-    /// Absolute µs deadline of each armed channel (`None` = not armed).
     deadline: [Option<u64>; 4],
-    /// Count of CLO/CHI reads. The run loop uses this to tell a firmware
-    /// `usleep` (polls the counter, is time-bounded) apart from a hung
-    /// peripheral poll (never terminates) — the former deserves patience.
+    /// Count of `CLO`/`CHI` reads, which tells a time-bounded firmware
+    /// `usleep` apart from a hung peripheral poll.
     pub clo_reads: u64,
-    /// Per-channel "this compare fired and its interrupt has not been taken
-    /// yet" flag, set by [`Self::service_matches`] and cleared by
-    /// [`Self::take_channel`].
-    ///
-    /// Each compare channel is its own VPU interrupt source (`64 + channel`)
-    /// with its own vector-table entry, and start4 uses more than one: channel 0
-    /// is the ThreadX periodic tick (source 64 -> `0x3EC40B7C`) and channel 2 is
-    /// the clock service's timeout timer (source 66 -> `0x3EC3E9BC`), which is
-    /// what releases a thread blocked in `msleep`. Collapsing them into one flag
-    /// delivered every match as source 64, so the clock-service timeouts never
-    /// fired and every blocking `msleep` hung forever.
-    ///
-    /// Independent of `cs` — the tick ISR acks `CS` itself.
+    /// Per-channel "fired, interrupt not yet taken" flag. Each channel is its
+    /// own VPU source (`64 + channel`) and start4 uses more than one — channel
+    /// 0 for the ThreadX tick, channel 2 for the timeout that releases a thread
+    /// blocked in `msleep` — so they must stay separate: one shared flag would
+    /// deliver every match as source 64. Independent of `cs`, which the ISR acks.
     pending: [bool; 4],
-    /// Whether any of [`Self::pending`] is set, kept in step with it so the
-    /// per-instruction poll is a bool read rather than a four-way scan.
     pending_any: bool,
-    /// A compare fired since [`Self::take_fired`] last looked: the run loop's
-    /// cue that an interrupt may be due.
     fired: bool,
-    /// Where [`Channel::Cmp`] goes: every compare-register arm. The log's
-    /// clock follows this counter ([`Self::set_log`]).
     log: Log,
     arms: u64,
 }
@@ -86,34 +68,28 @@ impl SysTimer {
         }
     }
 
-    /// Has channel `c`'s compare fired, with its interrupt not taken yet?
     pub fn channel_pending(&self, c: u8) -> bool {
         self.pending[c as usize]
     }
 
-    /// Consume channel `c`'s fired compare; false if it had none.
     pub fn take_channel(&mut self, c: u8) -> bool {
         let was = std::mem::take(&mut self.pending[c as usize]);
         self.pending_any = self.pending.iter().any(|&p| p);
         was
     }
 
-    /// Peek the lowest-numbered pending channel without consuming it. The run
-    /// loop uses this so a match that becomes due while interrupts are masked /
-    /// an ISR is running stays latched until it can actually be delivered (real
-    /// hardware holds the compare-match line asserted until it is acked),
-    /// instead of being silently dropped.
+    /// Peek the lowest-numbered pending channel without consuming it, so a
+    /// match due while interrupts are masked stays latched until it can be
+    /// delivered — as hardware holds the line until it is acked.
     pub fn pending_channel(&self) -> Option<u8> {
-        // `pending_any` short-circuits the scan. The run loop asks this once
-        // per retired instruction — nearly two billion times a boot — and the
-        // answer is almost always "nothing".
+        // Asked once per retired instruction, nearly two billion times a boot,
+        // and almost always "nothing".
         if !self.pending_any {
             return None;
         }
         (0..4).find(|&c| self.pending[c]).map(|c| c as u8)
     }
 
-    /// Peek the pending-tick flag without consuming it.
     pub fn tick_pending(&self) -> bool {
         self.pending_channel().is_some()
     }
@@ -129,7 +105,6 @@ impl SysTimer {
         self.log = log;
     }
 
-    /// Did a compare fire since the last call?
     pub fn take_fired(&mut self) -> bool {
         std::mem::take(&mut self.fired)
     }
@@ -145,22 +120,17 @@ impl SysTimer {
             .saturating_sub(self.frac_cycles)
     }
 
-    /// Modelled time so far in cycles of a clock at `hz` (a whole number of
-    /// MHz), counting the fraction of a microsecond the counter has not
-    /// shown yet. The ARM side is paced by this, so it keeps up with the
-    /// `sleep` and `usleep` fast-forwards as well as with retired cycles.
+    /// Modelled time in cycles of a clock at `hz`, including the fraction of a
+    /// microsecond not yet shown. The ARM side is paced by this, so it keeps up
+    /// with the fast-forwards as well as with retired cycles.
     pub fn cycles_at(&self, hz: u64) -> u64 {
         let per_us = hz / 1_000_000;
         self.micros * per_us + self.frac_cycles * per_us / CYCLES_PER_US
     }
 
-    /// Advance the counter by `cycles` VPU cycles, reporting whether the
-    /// microsecond count moved.
-    ///
-    /// At 54 cycles per microsecond, 53 of every 54 calls cannot change
-    /// anything a compare could match on, and the run loop makes one per
-    /// retired instruction. The caller uses the return value to skip its own
-    /// time-derived work on those calls.
+    /// Advance by `cycles` VPU cycles, reporting whether the microsecond count
+    /// moved — 53 of every 54 calls cannot, and the caller skips its own
+    /// time-derived work on those.
     #[inline]
     pub fn advance(&mut self, cycles: u64) -> bool {
         let total = self.frac_cycles + cycles;
@@ -172,8 +142,6 @@ impl SysTimer {
         true
     }
 
-    /// The rest of [`Self::advance`], once `total` cycles make at least one
-    /// microsecond.
     #[inline(never)]
     fn advance_us(&mut self, total: u64) {
         self.micros += total / CYCLES_PER_US;
@@ -181,23 +149,12 @@ impl SysTimer {
         self.service_matches();
     }
 
-    /// Set any compare channels whose deadline the counter has now reached.
+    /// Set any compare channels whose deadline the counter has reached.
     ///
-    /// BCM system-timer compares are **one-shot**: the channel matches once,
-    /// the firmware acks it via `CS` and writes a fresh `Cn`. There is no
-    /// auto-reload, and the model does not invent one.
-    ///
-    /// It used to, behind `PIMU_ONESHOT_CMP`, because the tick routing of the
-    /// time never reached `0x3EC40B7C` — the only code that re-arms `C0` — so
-    /// without a reload the tick stopped after its first match. That has not
-    /// been true since the tick started vectoring through its priority stub
-    /// (#7, `8d7c27a`): the firmware re-arms its own compares, and faking a
-    /// reload only made a channel armed once as a timeout fire forever,
-    /// flooding the CPU with spurious `64 + channel` interrupts.
+    /// BCM system-timer compares are **one-shot**: the firmware acks via `CS`
+    /// and writes a fresh `Cn`. Faking an auto-reload would make a channel
+    /// armed once as a timeout fire forever.
     fn service_matches(&mut self) {
-        // Every move of the counter ends here, so this is where the log's
-        // clock follows it: at most once per microsecond, off the per-cycle
-        // path.
         self.log.set_time(self.micros);
         for c in 0..4 {
             let Some(d) = self.deadline[c] else { continue };
@@ -226,7 +183,6 @@ impl SysTimer {
         Some(ch as u8)
     }
 
-    /// The earliest armed compare deadline, in µs: where a `sleep` wakes up.
     pub fn next_deadline(&self) -> Option<u64> {
         self.deadline.iter().flatten().copied().min()
     }
@@ -241,26 +197,20 @@ impl SysTimer {
         self.service_matches();
     }
 
-    /// True if any compare channel is armed (the firmware has a tick running).
     pub fn any_armed(&self) -> bool {
         self.deadline.iter().any(Option::is_some)
     }
 
-    /// Advance the counter by `us` microseconds unconditionally, then fire any
-    /// armed compare once (`service_matches` collapses a multi-interval jump to
-    /// a single match). Unlike [`Self::skip_ahead`] this does *not* stop at the
-    /// next deadline — the run loop's busy-wait fast-forward uses it to move a
-    /// firmware `udelay` on by as long as it has waited so far.
+    /// Advance by `us` unconditionally, then fire any armed compare once.
+    /// Unlike [`Self::skip_ahead`] this does *not* stop at the next deadline.
     pub fn jump(&mut self, us: u64) {
         self.micros = self.micros.saturating_add(us.max(1));
         self.service_matches();
     }
 
-    /// Jump the microsecond counter forward by `us`, servicing any compare
-    /// matches crossed. The run loop calls this when it catches the firmware
-    /// busy-waiting on the counter (`while now - start < N`) so a multi-ms
-    /// `usleep` doesn't spin through millions of no-op model instructions —
-    /// but never past the next armed compare, so a tick can't be skipped.
+    /// Jump forward by `us`, servicing the compares crossed but never going
+    /// past the next armed one, so a tick cannot be skipped. Used when the run
+    /// loop catches the firmware busy-waiting on the counter.
     pub fn skip_ahead(&mut self, us: u64) {
         let cap = self
             .deadline

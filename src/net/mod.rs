@@ -1,15 +1,10 @@
 //! What is on the other end of the Ethernet cable.
 //!
 //! The GENET model ([`crate::periph::genet`]) moves frames between its DMA
-//! rings and a [`NetBackend`]. A backend only ever sees whole Ethernet frames,
-//! from the destination MAC to the end of the payload, without the FCS: that
-//! is the unit every user-mode network stack exchanges (QEMU's `-netdev
-//! stream`, passt, libslirp), so a backend that talks to the host is a thin
-//! adapter over one of those.
-//!
-//! [`BuiltinPeer`] is the backend that needs nothing outside the emulator: a
-//! deterministic DHCP, DNS, TFTP and HTTP server, for tests and CI.
-//! [`StreamBackend`] is the host's network, through passt (#45).
+//! rings and a [`NetBackend`]. A backend sees whole Ethernet frames without the
+//! FCS — the unit every user-mode network stack exchanges — so a host-facing
+//! backend is a thin adapter over one of those. [`BuiltinPeer`] needs nothing
+//! outside the emulator; [`StreamBackend`] is the host's network, via passt.
 
 pub mod peer;
 pub mod stream;
@@ -17,21 +12,13 @@ pub mod stream;
 pub use peer::BuiltinPeer;
 pub use stream::StreamBackend;
 
-/// A link partner: the switch port, and everything behind it.
 pub trait NetBackend {
-    /// What is plugged in, for the run report.
     fn name(&self) -> &'static str;
 
-    /// A frame the guest transmitted.
     fn send(&mut self, frame: &[u8]);
 
-    /// The next frame for the guest, if one has arrived. Called only when the
-    /// guest has a receive buffer free, so a backend keeps whatever it cannot
-    /// hand over yet.
     fn recv(&mut self) -> Option<Vec<u8>>;
 
-    /// Drain the backend's record of what it did, one line per event, for the
-    /// run report.
     fn take_log(&mut self) -> Vec<String> {
         Vec::new()
     }
@@ -46,8 +33,7 @@ pub const IPPROTO_ICMP: u8 = 1;
 pub const IPPROTO_TCP: u8 = 6;
 pub const IPPROTO_UDP: u8 = 17;
 
-/// The one's-complement sum of `data` as 16-bit big-endian words (RFC 1071),
-/// not yet inverted.
+/// The one's-complement sum of `data` as big-endian words, not yet inverted.
 fn sum16(data: &[u8], mut acc: u32) -> u32 {
     let (words, rest) = data.as_chunks::<2>();
     for w in words {
@@ -66,14 +52,11 @@ fn fold(mut acc: u32) -> u16 {
     !(acc as u16)
 }
 
-/// The Internet checksum of `data`.
 pub fn checksum(data: &[u8]) -> u16 {
     fold(sum16(data, 0))
 }
 
-/// The TCP or UDP checksum of `segment` (header and payload, checksum field
-/// zero) sent from `src` to `dst`: the Internet checksum over the IPv4
-/// pseudo-header and the segment.
+/// The TCP or UDP checksum of `segment`, over the IPv4 pseudo-header too.
 pub fn transport_checksum(src: [u8; 4], dst: [u8; 4], proto: u8, segment: &[u8]) -> u16 {
     let mut pseudo = [0u8; 12];
     pseudo[..4].copy_from_slice(&src);
@@ -83,8 +66,6 @@ pub fn transport_checksum(src: [u8; 4], dst: [u8; 4], proto: u8, segment: &[u8])
     fold(sum16(segment, sum16(&pseudo, 0)))
 }
 
-/// The UDP checksum of `udp`. A computed 0 goes on the wire as `0xffff`, since
-/// 0 means "no checksum".
 pub fn udp_checksum(src: [u8; 4], dst: [u8; 4], udp: &[u8]) -> u16 {
     match transport_checksum(src, dst, IPPROTO_UDP, udp) {
         0 => 0xffff,
@@ -113,7 +94,6 @@ mod tests {
 
     #[test]
     fn checksum_matches_rfc1071_example() {
-        // RFC 1071 section 3: the sum of these words is 0xddf2.
         let data = [0x00, 0x01, 0xf2, 0x03, 0xf4, 0xf5, 0xf6, 0xf7];
         assert_eq!(checksum(&data), !0xddf2);
     }

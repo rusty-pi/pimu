@@ -5,9 +5,9 @@ pub const NUM_GPR: usize = 32;
 
 /// Global/GOT base register. 16-bit load/store forms can address `(gp + imm)`.
 ///
-/// _(Register roles below r24 are not officially documented; these follow the
-/// community reverse engineering — Hermitage's notes and the vc4 toolchain ABI —
-/// and should be re-checked against real firmware behaviour.)_
+/// _(No register role here is officially documented; they follow the community
+/// reverse engineering — Hermitage's notes and the vc4 toolchain ABI — and the
+/// way `start4.elf` uses them.)_
 pub const GP: usize = 24;
 /// Stack pointer. The 16-bit `add sp, #imm` form encodes destination field 25.
 pub const SP: usize = 25;
@@ -15,7 +15,7 @@ pub const SP: usize = 25;
 pub const LR: usize = 26;
 
 /// Condition codes, as encoded in the 4-bit `cccc` field of conditional
-/// instructions. Source: `videocoreiv.arch` condition table.
+/// instructions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Cond {
@@ -84,8 +84,8 @@ impl Cond {
     }
 }
 
-/// Status register flags. Bit positions in the real SR are not all confirmed;
-/// what matters for execution is the N/Z/C/V semantics, which match ARM.
+/// Status register flags. N/Z/C/V carry ARM's meanings, except that the VC4
+/// sets carry to *borrow* on a subtraction — see [`Flags::test`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Flags {
     pub n: bool,

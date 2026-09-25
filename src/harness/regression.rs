@@ -1,5 +1,5 @@
-//! Build an [`Emulator`] from a [`Scenario`], run it, and diff the console
-//! transcript against the golden file.
+//! Build an [`Emulator`] from a [`Scenario`], run it, and diff its console
+//! against the golden file.
 
 use anyhow::{bail, Context, Result};
 
@@ -10,18 +10,11 @@ use crate::harness::payloads;
 use crate::harness::scenario::{PayloadKind, Scenario};
 use crate::machine::Machine;
 
-/// Outcome of comparing a run against its golden.
 #[derive(Debug)]
 pub enum GoldenOutcome {
     Match,
-    Mismatch {
-        expected: String,
-        actual: String,
-    },
-    /// Golden file did not exist; `actual` is what a `--update` run would write.
-    Missing {
-        actual: String,
-    },
+    Mismatch { expected: String, actual: String },
+    Missing { actual: String },
 }
 
 pub struct ScenarioRun {
@@ -128,7 +121,6 @@ pub fn write_golden(scn: &Scenario, actual: &str) -> Result<()> {
     Ok(())
 }
 
-/// Run + compare in one call. `update` rewrites the golden instead of failing.
 pub fn verify(scn: &Scenario, update: bool) -> Result<ScenarioRun> {
     let run = run_scenario(scn)?;
     match check_golden(scn, &run.transcript)? {
@@ -153,23 +145,17 @@ pub fn verify(scn: &Scenario, update: bool) -> Result<ScenarioRun> {
     }
 }
 
-/// Number of unchanged lines printed either side of a change.
 const DIFF_CONTEXT: usize = 3;
 
-/// Line-oriented diff with context, aligned by longest common subsequence so a
-/// single inserted or deleted line does not make everything after it look
-/// changed. That alignment is what makes the boot transcript diffable at all —
-/// the firmware prints ~200 lines and a one-line insertion in the middle is the
-/// common case.
-///
-/// No dependency: the common prefix and suffix are trimmed first, which on a
-/// real regression leaves a handful of lines, and the O(n*m) table is only
-/// built for what is left (with a positional fallback if that is still huge).
+/// Line-oriented diff with context, aligned by longest common subsequence so
+/// one inserted line does not make everything after it look changed — which is
+/// what makes a 200-line boot transcript diffable. The common prefix and suffix
+/// are trimmed first, so the O(n*m) table is built only for what is left (with
+/// a positional fallback if that is still huge).
 pub fn unified_diff(expected: &str, actual: &str) -> String {
     let exp: Vec<&str> = expected.lines().collect();
     let act: Vec<&str> = actual.lines().collect();
 
-    // Trim the common head and tail; everything in between is the real work.
     let head = exp
         .iter()
         .zip(act.iter())
@@ -186,9 +172,8 @@ pub fn unified_diff(expected: &str, actual: &str) -> String {
     let e_mid = &exp[head..exp.len() - tail];
     let a_mid = &act[head..act.len() - tail];
 
-    // One entry per output line: (kind, line number to show, text), with kind
-    // in {' ', '-', '+'}. The trimmed head and tail go back in as context —
-    // they were only skipped to keep the alignment table small.
+    // One entry per output line: (kind, line number, text). The trimmed head
+    // and tail go back in as context.
     let mut ops: Vec<(char, usize, &str)> = (0..head).map(|i| (' ', i + 1, exp[i])).collect();
     if e_mid.len().saturating_mul(a_mid.len()) > 4_000_000 {
         // Too big to align; fall back to position-by-position.
@@ -216,8 +201,7 @@ pub fn unified_diff(expected: &str, actual: &str) -> String {
         };
     }
 
-    // Emit the changed runs with `DIFF_CONTEXT` lines either side, collapsing
-    // the untouched stretches between them.
+    // Changed runs with `DIFF_CONTEXT` lines either side.
     let changed: Vec<usize> = ops
         .iter()
         .enumerate()
@@ -251,11 +235,9 @@ pub fn unified_diff(expected: &str, actual: &str) -> String {
     out
 }
 
-/// Longest-common-subsequence alignment of two line slices. `offset` is how
-/// many lines were trimmed off the front, for the reported line numbers.
+/// LCS alignment of two line slices; `offset` is what was trimmed in front.
 fn lcs_ops<'a>(e: &[&'a str], a: &[&'a str], offset: usize) -> Vec<(char, usize, &'a str)> {
     let (n, m) = (e.len(), a.len());
-    // table[i][j] = LCS length of e[i..] and a[j..]
     let mut table = vec![0u32; (n + 1) * (m + 1)];
     let at = |i: usize, j: usize| i * (m + 1) + j;
     for i in (0..n).rev() {

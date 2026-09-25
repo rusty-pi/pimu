@@ -1,5 +1,4 @@
-//! `pimu` command-line entry point: the usage text and the command
-//! dispatch. Each command lives in a module of its own.
+//! `pimu` command-line entry point. Each command lives in a module of its own.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -86,13 +85,10 @@ fn main() -> ExitCode {
 }
 
 fn run(args: &[String]) -> Result<ExitCode> {
-    // `-C <dir>`, as `git` and `make` take it: the rest of the run happens
-    // there, so `pimu -C <dir> boot` is the same as a `cd` and a bare `boot`.
-    // Before everything else, since it moves where a relative `--config` is.
+    // Before everything else: `-C` moves where a relative `--config` is read from.
     let args = chdir(args)?;
     let args = &args[..];
-    // No command, only options: `boot` is the one they are for. Decided before
-    // a config file expands, since its `"file"` would look like a command.
+    // No command, only options: `boot`. Before config expansion, whose `"file"` would look like a command.
     let implicit_boot = args
         .first()
         .is_some_and(|a| a.starts_with('-') && !matches!(a.as_str(), "-h" | "--help"));
@@ -108,8 +104,7 @@ fn run(args: &[String]) -> Result<ExitCode> {
     match cmd.as_str() {
         "run" => scenario::cmd_run(&args[1..]),
         "run-all" => scenario::cmd_run_all(&args[1..]),
-        // `recon` is the old name, from when most of a boot was unknown
-        // instructions (#57).
+        // `recon` is the old name of `boot`, kept for old command lines.
         "boot" | "recon" => boot::cmd_boot(&args[1..]),
         "boot-check" => scenario::cmd_boot_check(&args[1..]),
         "disasm" => disasm::cmd_disasm(&args[1..]),
@@ -122,8 +117,6 @@ fn run(args: &[String]) -> Result<ExitCode> {
     }
 }
 
-/// Take `-C <dir>` (or `-C<dir>`, `-C=<dir>`) off the command line and change
-/// into it, leaving the rest of the arguments.
 fn chdir(args: &[String]) -> Result<Vec<String>> {
     let mut rest = Vec::with_capacity(args.len());
     let mut args = args.iter();
@@ -141,10 +134,7 @@ fn chdir(args: &[String]) -> Result<Vec<String>> {
     Ok(rest)
 }
 
-/// `spec-docs [--update]`: the Markdown under `docs/periph/` is generated from
-/// `specs/*.toml`, `docs/vpu-isa.md` from `isa/vpu.toml`, and
-/// `docs/board-sheet-dark.svg` from the hand-drawn `docs/board-sheet.svg`;
-/// report (or with `--update`, rewrite) whatever is out of date.
+/// `spec-docs [--update]`: report (or rewrite) the generated docs that are out of date.
 fn cmd_spec_docs(args: &[String]) -> Result<ExitCode> {
     let mut update = false;
     for a in args {
@@ -175,8 +165,7 @@ fn cmd_spec_docs(args: &[String]) -> Result<ExitCode> {
     }
 }
 
-/// A byte image written as hex: `--mbox-raw 22000000...`, optionally with a
-/// `0x` prefix and any spacing, underscores or colons to group it.
+/// A byte image written as hex, with an optional `0x` and any grouping punctuation.
 fn parse_hex_image(s: &str) -> Result<Vec<u8>> {
     let hex: String = s
         .trim()

@@ -1,37 +1,32 @@
 //! Boot-info handoff doorbells (`0x7EE0_0000` region).
 //!
-//! After DRAM is up and the OTP / key state has been read, the EEPROM
-//! bootloader stages a tagged boot-info block (`BSTE` / `BVER` / … carrying the
-//! firmware commit hash and build date) into DRAM at `0xC004_0000`, clears a
-//! response area at `0xC002_0000`, then rings a doorbell here: `0x80009594`
-//! sets bit 1 of `0x7EE0_2000` and spins until it reads back clear. A short
-//! stub the bootloader relocates to DRAM (`0x6001_0000`) does the same against
-//! `0x7EE0_2100` and `0x7EE0_1000` — poke a "size" word (`+0x08`), write a
-//! trigger (bits 1..2) to `+0x00`, poll for it to clear.
+//! Registers: `specs/bootbox.toml`.
 //!
-//! We do not model whatever consumes these (a VPU sub-core / secure
-//! processor). Every doorbell self-clears its low control bits so the
+//! The EEPROM bootloader stages a tagged boot-info block into DRAM and then
+//! rings a doorbell here: poke a size word at `+0x08`, write a trigger to
+//! `+0x00`, poll for it to clear.
+//!
+//! Whatever consumes these (a VPU sub-core or secure processor) is not
+//! modelled. Every doorbell self-clears its low control bits so the
 //! handshakes complete; parameter words the firmware writes read straight back.
 //!
 //! `0x7EE0_1000` looks like the L2 cache's maintenance port rather than a
 //! doorbell: a range at `+0x04` / `+0x08`, then a command. The machine acts on
-//! its flush (`Machine::store_device`, `crate::l2`, #70); here it is storage
-//! like the rest.
+//! its flush (`Machine::store_device`, [`crate::l2`]); here it is storage like
+//! the rest.
 
 use std::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
-// Every doorbell has its ready / busy / trigger bits in the same place.
 use crate::spec::bootbox::{
     DOORBELL_B, DOORBELL_B_CONTROL_MASK as CONTROL_BITS, DOORBELL_C, DOORBELL_C_SIZE, IRQ_PAYLOAD,
     IRQ_SOURCE, IRQ_STATUS, L2_CTRL, L2_FLUSH_END, L2_FLUSH_START,
 };
 use crate::spec::Coverage;
 
-/// Every doorbell reads its control bits back clear ("idle, request already
-/// serviced"); the interrupt window `start4.elf`'s exception-12 handler
-/// (`0x3ED1804E`) reads reports verbatim.
+/// Every doorbell reads its control bits back clear — idle, request already
+/// serviced — except the interrupt window, which reports verbatim.
 pub const COVERAGE: Coverage = Coverage {
     block: "bootbox",
     decoded: &[
@@ -57,7 +52,6 @@ impl BootBox {
         BootBox::default()
     }
 
-    /// The word the firmware last wrote at `off`.
     pub fn word(&self, off: u32) -> u32 {
         self.storage.get(&(off & !3)).copied().unwrap_or(0)
     }

@@ -1,34 +1,21 @@
-//! Run-loop diagnostics configuration.
+//! Run-loop diagnostics configuration: every `PIMU_*` switch the run loop
+//! reads, resolved once.
 //!
-//! Every `PIMU_*` switch the run loop reads, resolved once. Two reasons this is
-//! a struct rather than forty locals at the top of
-//! [`Emulator::run`](crate::emulator::Emulator::run):
+//! A struct rather than locals at the top of the run loop because
+//! `std::env::var_os` is a locking lookup over the whole environment; reading
+//! these per instruction dominates run time, so hoisting them is load-bearing.
+//! Only configuration lives here — the counters and seen-sets stay with the
+//! state they describe. What each switch prints is in `docs/diagnostics.md`.
 //!
-//! 1. `std::env::var_os` is a locking lookup over the whole environment. These
-//!    were once evaluated per instruction, which dominated run time — hoisting
-//!    them is load-bearing, not tidiness, and a struct makes that hard to undo
-//!    by accident.
-//! 2. The run loop is long enough (#25) that the reconnaissance switches were
-//!    drowning the parts that actually model hardware.
-//!
-//! Only *configuration* lives here. The counters and seen-sets the diagnostics
-//! accumulate stay in the run loop with the state they describe.
-//!
-//! What each switch prints is documented in `docs/diagnostics.md`, which is the
-//! reference for using them; this is just where they are read.
-//!
-//! The switches that cost something on every step are a build feature, `diag`
-//! (Cargo.toml). Without it [`ON`] is `false`, so each per-step check guarded
-//! by it folds away at compile time — hoisting the flags into a struct only
-//! removed the environment lookups, not the branches, and #29 measured that the
-//! branches are what cost. A gated switch set on such a build is reported, not
-//! silently ignored.
+//! The switches that cost something per step are behind the `diag` build
+//! feature: without it [`ON`] is `false` and each guarded check folds away at
+//! compile time. A gated switch set on a build without the feature is reported
+//! rather than silently ignored.
 
 /// Whether this build has the `diag` feature. Guard every per-step diagnostic
 /// with it (`if crate::diag::ON && …`), so a normal build compiles it out.
 pub const ON: bool = cfg!(feature = "diag");
 
-/// The switches that only do anything in a `diag` build.
 const GATED: &[&str] = &[
     "PIMU_TRACE_ON_PC",
     "PIMU_TRACE_ON_CONSOLE",
@@ -47,19 +34,16 @@ const GATED: &[&str] = &[
     "PIMU_ARM_BLOCKS",
 ];
 
-/// One `PIMU_*` switch that is either on or off.
 fn flag(name: &str) -> bool {
     std::env::var_os(name).is_some()
 }
 
-/// A `PIMU_*` switch carrying a hex address, with or without a `0x` prefix.
 fn hex(name: &str) -> Option<u32> {
     std::env::var(name)
         .ok()
         .and_then(|v| u32::from_str_radix(v.trim().trim_start_matches("0x"), 16).ok())
 }
 
-/// A `PIMU_*` switch carrying hex addresses, comma-separated.
 fn hex_list(name: &str) -> Vec<u32> {
     std::env::var(name)
         .map(|v| {
@@ -70,55 +54,36 @@ fn hex_list(name: &str) -> Vec<u32> {
         .unwrap_or_default()
 }
 
-/// A `PIMU_*` switch carrying a decimal number.
 fn num<T: std::str::FromStr>(name: &str) -> Option<T> {
     std::env::var(name).ok().and_then(|v| v.trim().parse().ok())
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct DiagConfig {
-    /// Stream the console as it is produced instead of buffering it.
-    /// On unless explicitly set to `0` — a boot that wedges should still show
-    /// what it printed before it did.
+    /// Stream the console as it is produced; on unless set to `0`, so a boot
+    /// that wedges still shows what it printed.
     pub live_console: bool,
 
-    // Tracing.
-    /// Arm the instruction trace when core 0 first reaches this address.
     pub trace_on_pc: Option<u32>,
-    /// Arm it when this substring appears on the console. Cannot reach code
-    /// that runs after the firmware goes quiet — `trace_on_pc` is for that.
+    /// Arm it when this substring appears on the console; cannot reach code
+    /// that runs after the firmware goes quiet.
     pub trace_on_console: Option<String>,
-    /// Stop tracing after this many instructions.
     pub trace_cap: usize,
-    /// Trace only control flow, not every instruction.
     pub trace_cf: bool,
-    /// Trace every MMIO access.
     pub trace_mmio: bool,
-    /// Start the MMIO trace when core 0 reaches this address.
     pub mmio_from: Option<u32>,
 
-    // Traps.
-    /// Print registers whenever core 0 reaches one of these addresses.
     pub traps: Vec<u32>,
-    /// Ignore traps until this many instructions have retired.
     pub trap_from: u64,
-    /// Stop printing a given trap after this many hits.
     pub trap_max: u64,
 
-    // Profiling.
-    /// Bucket the core-0 PC and dump the hottest slots on exit.
     pub prof: bool,
-    /// The same, attributed per ThreadX thread — set to the address of the
-    /// firmware's current-thread pointer (`_tx_thread_current_ptr`), since
-    /// only the firmware knows where that lives. `--log irqtbl` prints `gp`,
-    /// and the pointer is findable from a `PIMU_TRACE_ON_PC` trace of a context
-    /// switch.
+    /// The same, attributed per ThreadX thread; set to the address of the
+    /// firmware's current-thread pointer, which only the firmware knows.
     pub prof_thread: Option<u32>,
-    /// Print progress every N instructions.
     pub heartbeat: u64,
 
-    /// Decode these ThreadX thread control blocks at exit: where each thread
-    /// is parked, and a rough backtrace.
+    /// Decode these ThreadX thread control blocks at exit.
     pub tcbs: Vec<u32>,
 }
 
@@ -137,7 +102,6 @@ impl DiagConfig {
                     set.join(", ")
                 );
             }
-            // The live console is not a diagnostic: boot-check reads it.
             return DiagConfig {
                 live_console: std::env::var("PIMU_LIVE_CONSOLE").as_deref() != Ok("0"),
                 ..DiagConfig::default()
@@ -170,12 +134,11 @@ impl DiagConfig {
 mod tests {
     use super::*;
 
-    /// The defaults have to be the quiet ones: a diagnostic that is on unless
-    /// switched off would change what a normal run costs.
+    /// The defaults are the quiet ones: anything on by default would change
+    /// what a normal run costs.
     #[test]
     fn nothing_is_enabled_without_an_environment_variable() {
-        // `from_env` reads the real environment, so build the quiet case
-        // directly — this pins the defaults, not the parsing.
+        // Build the quiet case directly: this pins the defaults, not parsing.
         let d = DiagConfig::default();
         assert!(!d.trace_cf && !d.trace_mmio && !d.prof);
         assert!(d.traps.is_empty() && d.tcbs.is_empty());
@@ -185,7 +148,6 @@ mod tests {
 
     #[test]
     fn hex_switches_take_a_prefix_or_not() {
-        // SAFETY: single-threaded test, and the variable is removed after.
         unsafe {
             std::env::set_var("PIMU_TEST_HEX", "0x3ec5ac0c");
             assert_eq!(hex("PIMU_TEST_HEX"), Some(0x3EC5_AC0C));

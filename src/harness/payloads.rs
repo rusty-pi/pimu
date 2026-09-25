@@ -1,57 +1,48 @@
 //! Hand-assembled VPU test payloads.
 //!
-//! These are tiny programs written directly in machine code so milestone M1 has
-//! deterministic, self-contained inputs before any real firmware runs. Each one
-//! doubles as a worked example of the instruction encoding.
+//! Tiny programs written directly in machine code, so the bench has
+//! deterministic, self-contained inputs that need no firmware. Each one doubles
+//! as a worked example of the instruction encoding.
 
 use crate::soc::bcm2711 as map;
 
-/// Mini-UART data register, VPU address.
 const MU_IO: u32 = map::AUX_BASE + crate::spec::aux::MU_IO;
 
 fn emit16(out: &mut Vec<u8>, h: u16) {
     out.extend_from_slice(&h.to_le_bytes());
 }
 
-/// 32-bit instruction: parcel0 then parcel1, each little-endian.
 fn emit32(out: &mut Vec<u8>, w: u32) {
     emit16(out, (w >> 16) as u16);
     emit16(out, w as u16);
 }
 
-/// `mov rd, #imm16`  (AluImm, p = mov = 0)
 fn mov_imm(out: &mut Vec<u8>, rd: u32, imm: u16) {
     emit32(out, 0xB000_0000 | (rd << 16) | imm as u32);
 }
-/// `shl rd, #imm16`  (AluImm, p = shl = 28)
 fn shl_imm(out: &mut Vec<u8>, rd: u32, imm: u16) {
     emit32(out, 0xB000_0000 | (28 << 21) | (rd << 16) | imm as u32);
 }
-/// `or rd, #imm16`  (AluImm, p = or = 13)
 fn or_imm(out: &mut Vec<u8>, rd: u32, imm: u16) {
     emit32(out, 0xB000_0000 | (13 << 21) | (rd << 16) | imm as u32);
 }
 /// `stb rs_val, (rbase)` — 16-bit `0000 1ww1 ssss dddd`, ww = byte = 2.
-/// Encodes as store of register `val` through base register `base`.
 fn stb(out: &mut Vec<u8>, base: u16, val: u16) {
     emit16(
         out,
         0x0800 | (2 << 9) | 0x0100 | ((base & 0xF) << 4) | (val & 0xF),
     );
 }
-/// `swi #0` — 16-bit `0000 0001 1100 0000`; halts the model.
 fn swi0(out: &mut Vec<u8>) {
     emit16(out, 0x01C0);
 }
-/// Load a full 32-bit constant into `rd` via mov/shl/or.
 fn load_u32(out: &mut Vec<u8>, rd: u32, v: u32) {
     mov_imm(out, rd, (v >> 16) as u16);
     shl_imm(out, rd, 16);
     or_imm(out, rd, (v & 0xFFFF) as u16);
 }
 
-/// Emit `text` to the mini-UART, one byte at a time (no line-status polling —
-/// the model never stalls), then `swi`.
+/// Emit `text` to the mini-UART a byte at a time, then `swi`.
 pub fn print_and_halt(text: &str) -> Vec<u8> {
     let mut out = Vec::new();
     load_u32(&mut out, 0, MU_IO); // r0 = &MU_IO
@@ -63,12 +54,11 @@ pub fn print_and_halt(text: &str) -> Vec<u8> {
     out
 }
 
-/// The canonical M1 smoke payload.
+/// The canonical smoke payload.
 pub fn hello_world() -> Vec<u8> {
     print_and_halt("hello from the vpu\n")
 }
 
-/// A payload that exercises a `cmp`/`b<cond>` loop: prints `.` five times.
 pub fn count_dots() -> Vec<u8> {
     let mut out = Vec::new();
     load_u32(&mut out, 0, MU_IO); // r0 = &MU_IO
@@ -91,8 +81,7 @@ pub fn count_dots() -> Vec<u8> {
     out
 }
 
-/// Look up a builtin payload by the name a scenario file uses
-/// (`builtin:<name>`).
+/// A builtin payload by the name a scenario file uses (`builtin:<name>`).
 pub fn by_name(name: &str) -> Option<Vec<u8>> {
     match name {
         "hello" => Some(hello_world()),

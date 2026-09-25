@@ -1,51 +1,32 @@
 //! BCM2711 clock manager (`0x7E10_1000`), plus the A2W PLL control aliased into
 //! the same window.
 //!
+//! Registers and fields: `specs/cm.toml`.
+//!
 //! The EEPROM bootloader programs a PLL and then polls for it to lock before it
-//! trusts the SPI / peripheral clocks. We do not model the analogue PLL — we
-//! just make every "is it ready yet" bit read back as ready:
+//! trusts the SPI / peripheral clocks. The analogue PLLs are not modelled, so
+//! every "is it ready yet" bit reads back as ready: `CM_LOCK` answers every
+//! PLL locked, every `*_CTL` register reads `BUSY` clear, and the self-clearing
+//! `DELAY` register — where the bootloader's register-write helper parks for a
+//! number of clocks — reads 0 at once. Everything else is the last value
+//! written, with the `0x5A` password byte stripped so the firmware's
+//! read/modify/write sequences converge.
 //!
-//! - `*_CTL` registers: the `BUSY` bit (7) always reads 0.
-//! - `CM_LOCK` (`0x114`): every PLL-locked bit reads 1.
-//! - `+0x100`: a self-clearing "delay N clocks" register — the SDHCI driver's
-//!   register-write helper (`0x00081dc0`) writes `password | <cycle count>`
-//!   here and spins until it reads back 0 (`0x00081de2`).
-//! - `A2W_PLL*_ANA` / frac / ctrl: sticky (last written value, password masked).
-//!
-//! Writes carry the `0x5A` password in the top byte; we strip it on read-back so
-//! the firmware's `read / modify / write` sequences converge.
-//!
-//! ## `CM_UARTCTL` (`0x7E10_10F0`) — measured, and why nothing is forced here
-//!
-//! Two places in `start4.elf` gate on bit 4 (`ENAB`) of this register:
-//!
-//! - the console writer `0x3ED85E9C`, which polls `UART_FR.TXFF` before each
-//!   byte only while the UART clock is running, and
-//! - the PL011 clock-change callback `0x3EC799BC`, whose phase-0 leg drains
-//!   `UART_FR.BUSY` before it writes `UARTCR = 0`.
-//!
-//! Read off a Raspberry Pi 4B d03115 (Linux up, idle) at the `0xFE10_10F0`
-//! alias, one enumerated offset at a time through `/dev/mem`:
-//!
-//! ```text
-//! 0x7e1010f0  CM_UARTCTL  0x00000296     (MASH=1, BUSY=1, ENAB=1, SRC=6/PLLD)
-//! 0x7e1010f4  CM_UARTDIV  0x0000fa00     (DIVI=250)
-//! ```
+//! `BUSY` is the one forced difference from silicon, which holds it at 1 while
+//! a generator runs: the firmware's clock-shutdown path spins on `BUSY` (with
+//! a 1000-iteration escape) waiting for clocks the model stops instantly. Its
+//! two consumers of `CM_UARTCTL` — the console writer, which polls
+//! `UART_FR.TXFF` only while the UART clock runs, and the PL011 clock-change
+//! callback, which drains `UART_FR.BUSY` before clearing `UARTCR` — gate on
+//! `ENAB`, not on `BUSY`.
 //!
 //! `ENAB` and `SRC` are plain read/write state, so the stored-write read-back
-//! above reproduces whatever the firmware programs. In the modelled boot both
-//! gates read `0x11` — `SRC=1` (oscillator) because that is what start4 itself
-//! writes, and crucially the same `ENAB` bit set that hardware shows; the
-//! measured `SRC=6` / `MASH=1` is Linux's later reprogramming, not a
-//! divergence. Both gates therefore take the same branch here as on silicon.
-//!
-//! The single forced difference is `BUSY`, which real silicon holds at 1 while
-//! the generator runs and this device always reports as 0 — deliberately,
-//! because the shutdown path `0x3EC7F0BA` spins on `BUSY` (with a
-//! 1000-iteration escape) waiting for clocks the model stops instantly.
-//! Neither consumer above reads `BUSY` at all. Recorded so `0x7E10_10F0` is
-//! not re-investigated — it is not a `SCALER_DISPID`-style blanked status
-//! register.
+//! reproduces whatever the firmware programs. A Raspberry Pi 4B d03115 reads
+//! `CM_UARTCTL` as `0x296` (`MASH` 1, `BUSY` 1, `ENAB` 1, `SRC` 6 / PLLD) and
+//! `CM_UARTDIV` as `0xFA00` (`DIVI` 250) with Linux up; the modelled boot has
+//! `SRC` 1 (oscillator) because that is what start4 writes, with the same
+//! `ENAB` bit set. The measured `SRC` 6 is Linux's later reprogramming, not a
+//! divergence.
 
 use std::collections::BTreeMap;
 
@@ -91,8 +72,8 @@ impl MmioDevice for ClockManager {
             return Ok(0);
         }
         let mut v = self.storage.get(&off).copied().unwrap_or(0) & !PASSWD;
-        // Any register whose name ends in _CTL sits at a 0x00/0x08/0x10... slot;
-        // clearing BUSY unconditionally is harmless for the others.
+        // Every `*_CTL` register sits at a `0x00` / `0x08` / `0x10` … slot;
+        // clearing `BUSY` unconditionally is harmless for the others.
         v &= !CTL_BUSY;
         Ok(v)
     }

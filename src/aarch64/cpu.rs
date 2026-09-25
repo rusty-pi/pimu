@@ -1,53 +1,43 @@
 //! Architectural state of one Cortex-A72 core and the interface it executes
 //! against.
 //!
-//! The core never owns memory. [`Cpu::step`] takes a [`Memory`], the same
-//! shape as the VPU's [`Bus`](crate::bus::Bus), so the machine can hand both
-//! processors the same RAM and peripherals. It is a type parameter rather than
-//! a trait object, so the machine's RAM path inlines into the executor. Addresses here are 64-bit: the
-//! A72 sees the full 35-bit physical map of the BCM2711 and, with the MMU on,
-//! 48-bit virtual addresses; [`Memory`] only ever sees physical ones
-//! (translation is `src/aarch64/mmu.rs`).
+//! The core never owns memory: [`Cpu::step`] takes a [`Memory`], a type
+//! parameter rather than a trait object so the machine's RAM path inlines.
+//! [`Memory`] only ever sees physical addresses (translation is
+//! `src/aarch64/mmu.rs`).
 //!
-//! Two ways to run it: [`Cpu::step`] executes one instruction and reports a
-//! synchronous exception without taking it — what a user-mode harness wants,
-//! servicing `svc` itself — and [`Cpu::step_system`] is the whole core,
-//! taking exceptions and interrupts into the guest the way the hardware does.
+//! [`Cpu::step`] executes one instruction and *reports* a synchronous exception
+//! without taking it, for a user-mode harness; [`Cpu::step_system`] is the whole
+//! core, taking exceptions and interrupts into the guest.
 
 use super::exec;
 use super::mmu::Tlb;
 use super::sysreg::{SysRegs, HCR_TGE, HCR_TSC, HCR_VM, SCR_HCE, SCR_NS, SCR_SMD};
 use super::{irq_target, vector_group, VECTOR_FIQ, VECTOR_IRQ, VECTOR_SYNC};
 
-/// A memory access the bus refused. The address is the one the core asked
-/// for; the core turns it into a data or instruction abort.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Abort {
     pub addr: u64,
     pub write: bool,
 }
 
-/// What the core reads and writes. `size` is 1, 2, 4 or 8 bytes; values are
-/// zero-extended on read and truncated on write. 16-byte accesses are split
-/// into two 8-byte ones by the core.
+/// What the core reads and writes. `size` is 1, 2, 4 or 8 bytes, zero-extended
+/// on read and truncated on write; the core splits 16-byte accesses in two.
 pub trait Memory {
     fn read(&mut self, addr: u64, size: u32) -> Result<u64, Abort>;
     fn write(&mut self, addr: u64, size: u32, value: u64) -> Result<(), Abort>;
 
-    /// Fetch the instruction at `addr`. Separate so a machine can serve it
-    /// from a faster path than a data read.
+    /// Separate from [`Self::read`] so a machine can serve it faster.
     fn fetch(&mut self, addr: u64) -> Result<u32, Abort> {
         self.read(addr, 4).map(|v| v as u32)
     }
 
-    /// System registers the core does not keep itself — the generic timer,
-    /// which the machine owns. `key` is [`super::sysreg::key`]. `None` = not
-    /// a register this machine knows.
+    /// System registers the machine owns rather than the core (the generic
+    /// timer). `key` is [`super::sysreg::key`]; `None` if unknown here.
     fn sysreg_read(&mut self, _key: u32) -> Option<u64> {
         None
     }
 
-    /// See [`Self::sysreg_read`]; `false` = not handled.
     fn sysreg_write(&mut self, _key: u32, _value: u64) -> bool {
         false
     }
@@ -57,21 +47,17 @@ pub trait Memory {
 /// left pointing at it).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Exception {
-    /// UNDEFINED encoding, or one not available at the current EL.
     Undefined,
     Svc(u16),
     Hvc(u16),
     Smc(u16),
     Brk(u16),
-    /// A data access that faulted: translation, permission, the bus, or
-    /// alignment. `addr` is the virtual address; `fsc` the `DFSC`
-    /// ([`super::mmu`]'s `FSC_*`).
+    /// A faulted data access; `addr` is virtual, `fsc` the `DFSC`.
     DataAbort {
         addr: u64,
         write: bool,
         fsc: u8,
     },
-    /// The instruction fetch itself faulted; `fsc` is the `IFSC`.
     InsnAbort {
         addr: u64,
         fsc: u8,
@@ -80,9 +66,7 @@ pub enum Exception {
 }
 
 impl Exception {
-    /// `ESR_ELx` for this exception taken from `from_el` to `to_el`, and the
-    /// fault address for `FAR_ELx`, if any (ARM ARM D17.2.37). All
-    /// instructions here are 32-bit, so `IL` is always set.
+    /// `ESR_ELx` and any `FAR_ELx` for this exception (ARM ARM D17.2.37).
     fn syndrome(self, from_el: u32, to_el: u32, pc: u64) -> (u64, Option<u64>) {
         use super::{EC_BRK64, EC_HVC64, EC_SMC64, EC_SVC64, EC_UNKNOWN, ESR_IL};
         let lower = from_el < to_el;
@@ -109,31 +93,23 @@ impl Exception {
     }
 }
 
-/// Result of one [`Cpu::step`] or [`Cpu::step_system`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
-    /// Retired; `pc` is the next instruction.
     Retired,
-    /// `wfi` retired; the core may sleep until an interrupt is pending.
     Wfi,
-    /// `wfe` retired; the core may sleep until an event or interrupt.
     Wfe,
-    /// [`Cpu::step`] only: the instruction raised a synchronous exception.
-    /// `pc` is unchanged; the caller services it (the user-mode test
-    /// harness handles `svc` as a Linux syscall).
+    /// [`Cpu::step`] only: a synchronous exception the caller must service.
     Exception(Exception),
-    /// [`Cpu::step_system`] only: the instruction raised this exception and
-    /// the core took it; `pc` is at the vector.
+    /// [`Cpu::step_system`] only: taken; `pc` is at the vector.
     Took(Exception),
-    /// [`Cpu::step_system`] only: an interrupt was taken instead of
-    /// executing an instruction.
-    Interrupt { fiq: bool },
-    /// An encoding the architecture defines but this core does not implement
-    /// yet. `pc` is unchanged. Kept apart from [`Exception::Undefined`] so a
-    /// gap in the model never passes for guest behaviour.
+    /// [`Cpu::step_system`] only: an interrupt was taken instead.
+    Interrupt {
+        fiq: bool,
+    },
+    /// A defined encoding this core does not implement. Kept apart from
+    /// [`Exception::Undefined`] so a gap never passes for guest behaviour.
     Unimplemented(u32),
-    /// The guest turned on something the model does not do yet; `pc` is
-    /// unchanged.
+    /// The guest turned on something the model does not do.
     Unsupported(&'static str),
 }
 
@@ -148,60 +124,43 @@ pub const NZCV_V: u32 = 1 << 28;
 pub struct Cpu {
     /// X0..X30. Register number 31 is SP or XZR depending on the encoding.
     pub x: [u64; 31],
-    /// `SP_EL0`..`SP_EL3`.
     pub sp_el: [u64; 4],
     pub pc: u64,
-    /// `PSTATE.NZCV`, bits 31..28.
     pub nzcv: u32,
     /// `PSTATE.{D,A,I,F}`, bits 9..6 (the `DAIF` register layout).
     pub daif: u32,
-    /// `PSTATE.EL`.
     pub el: u32,
     /// `PSTATE.SP`: use `SP_ELx` rather than `SP_EL0`.
     pub spsel: bool,
-    /// V0..V31, the SIMD&FP registers.
     pub v: [u128; 32],
     pub fpcr: u32,
     pub fpsr: u32,
-    /// `TPIDR_EL0`, `TPIDRRO_EL0`.
     pub tpidr_el0: u64,
     pub tpidrro_el0: u64,
     /// Everything else from EL1 up (`src/aarch64/sysreg.rs`).
     pub sys: SysRegs,
-    /// The core's IRQ and FIQ inputs, as the interrupt controller drives
-    /// them. [`Cpu::step_system`] takes them when routing and masking allow.
+    /// The core's IRQ and FIQ inputs, as the interrupt controller drives them.
     pub irq_line: bool,
     pub fiq_line: bool,
     /// Stage 1 translations (`src/aarch64/mmu.rs`).
     pub tlb: Tlb,
-    /// Set by the executor while an `LDTR`/`STTR` accesses memory.
     pub(super) unprivileged: bool,
-    /// The exclusive monitor: the address `ldxr` marked, if any, as
-    /// `(virtual, physical)`.
+    /// The exclusive monitor's mark, as `(virtual, physical)`.
     pub(super) exclusive: Option<(u64, u64)>,
-    /// The physical address of the last data read, for `ldxr` to mark.
     pub(super) last_pa: u64,
-    /// The physical address of the last access that took an external abort:
-    /// nothing answered there. `FAR_ELx` only has the virtual one.
+    /// Where the last external abort happened; `FAR_ELx` has only the VA.
     pub abort_pa: u64,
-    /// Set by the executor for the instruction in flight: where to go next.
     pub(super) next_pc: u64,
-    /// The Event Register (ARM ARM D1.16.1): set by `sev` on any core,
-    /// `sevl`, an exception return, or the global monitor clearing this
-    /// core's mark; a `wfe` that finds it set clears it and does not wait.
+    /// The Event Register (ARM ARM D1.16.1); a `wfe` that finds it set clears
+    /// it and does not wait.
     pub event: bool,
-    /// Set by the executor when this step ran `sev`: the caller signals the
-    /// other cores and clears it.
+    /// This step ran `sev`; the caller signals the others and clears it.
     pub sev: bool,
-    /// Counts the instructions that change state outside the general
-    /// registers, the flags and memory: MSR, SYS, ERET, and every hint and
-    /// barrier but NOP, YIELD, DSB, DMB and ISB. A busy-wait loop the ARM run
-    /// loop may skip executes none (`arm/mod.rs`, "Busy-wait loops").
+    /// Counts instructions that change state outside the general registers,
+    /// the flags and memory. A parkable busy-wait loop executes none.
     pub effects: u64,
-    /// The part of [`Self::effects`] that other cores or the ARM run loop
-    /// have to hear about: everything but writes to this core's own flags,
-    /// interrupt masks, FP control, stack and thread pointers and banked
-    /// exception registers (`sysreg::is_local`). An ARM burst stops on these.
+    /// The part of [`Self::effects`] other cores or the run loop must hear
+    /// about — everything not `sysreg::is_local`. An ARM burst stops on these.
     pub shared_effects: u64,
 }
 
@@ -212,8 +171,7 @@ impl Default for Cpu {
 }
 
 impl Cpu {
-    /// Core 0 out of reset: EL3, `SP_EL3`, `DAIF` masked, PC 0 (the BCM2711's
-    /// `RVBAR`), general registers zeroed.
+    /// Core 0 out of reset: EL3, `SP_EL3`, `DAIF` masked, PC 0.
     pub fn new() -> Cpu {
         Cpu::with_id(0)
     }
@@ -249,7 +207,6 @@ impl Cpu {
         }
     }
 
-    /// A core at EL0 with `SP_EL0` selected, the way a Linux process sees it.
     pub fn new_el0() -> Cpu {
         Cpu {
             el: 0,
@@ -259,7 +216,6 @@ impl Cpu {
         }
     }
 
-    /// The stack pointer the current `PSTATE` selects.
     #[inline]
     pub fn sp(&self) -> u64 {
         self.sp_el[self.sp_index()]
@@ -292,17 +248,13 @@ impl Cpu {
         self.spsel = self.el != 0 && spsr & 1 != 0;
     }
 
-    /// Does the core hold an exclusive mark, which another core's store can
-    /// clear?
     pub fn marked(&self) -> bool {
         self.exclusive.is_some()
     }
 
-    /// Another core wrote physical `[lo, hi)`: the global monitor clears this
-    /// core's exclusive mark if the write touched its 64-byte granule (the
-    /// A72's reservation granule, `CTR_EL0.ERG`). Clearing the mark is a
-    /// wake-up event: it sets the Event Register, which is how a `ldxr; wfe`
-    /// wait learns the location changed. Returns whether it did.
+    /// Another core wrote physical `[lo, hi)`: clear this core's mark if it
+    /// touched the 64-byte reservation granule, and set the Event Register —
+    /// which is how a `ldxr; wfe` wait learns the location changed.
     pub fn snoop_write(&mut self, lo: u64, hi: u64) -> bool {
         if let Some((_, pa)) = self.exclusive {
             let granule = pa & !63;
@@ -315,9 +267,7 @@ impl Cpu {
         false
     }
 
-    /// Exception entry to AArch64 `target` (ARM ARM D1.10.2): save `PSTATE`
-    /// and the return address, switch to ELxh with `DAIF` masked, and branch
-    /// to the vector. `esr`/`far` only for synchronous exceptions.
+    /// Exception entry to AArch64 `target` (ARM ARM D1.10.2).
     fn enter(&mut self, target: u32, kind: u64, esr: Option<u64>, far: Option<u64>, ret: u64) {
         let t = target as usize;
         let group = vector_group(self.el, target, self.spsel);
@@ -335,13 +285,9 @@ impl Cpu {
         self.pc = self.sys.vbar[t].wrapping_add(group + kind);
     }
 
-    /// Take a synchronous exception raised by the instruction at `pc`:
-    /// route it (ARM ARM D1.10.3), turning `hvc`/`smc` into UNDEFINED where
-    /// `SCR_EL3` disables them, and enter the vector.
-    ///
-    /// Out of line, like [`Self::take_interrupt`]: [`Self::step_system`] runs
-    /// every instruction, and the rare paths' registers made each one pay
-    /// for a bigger frame (#53).
+    /// Route and take a synchronous exception (ARM ARM D1.10.3), turning
+    /// `hvc`/`smc` into UNDEFINED where `SCR_EL3` disables them. Out of line:
+    /// rare, and inlining it would grow every instruction's stack frame.
     #[inline(never)]
     pub fn take_sync(&mut self, e: Exception) {
         let el = self.el;
@@ -367,7 +313,6 @@ impl Cpu {
                 if self.sys.scr_el3 & SCR_SMD != 0 {
                     (Exception::Undefined, default, pc)
                 } else if el == 1 && !secure && self.sys.hcr_el2 & HCR_TSC != 0 {
-                    // Trapped to EL2: returns to the `smc` itself.
                     (e, 2, pc)
                 } else {
                     (e, 3, next)
@@ -379,8 +324,7 @@ impl Cpu {
         self.enter(target, VECTOR_SYNC, Some(esr), far, ret);
     }
 
-    /// Take an IRQ (or FIQ) if routing and `PSTATE` allow it now; the return
-    /// address is the instruction that would have executed next.
+    /// Take an IRQ or FIQ if routing and `PSTATE` allow it now.
     #[inline(never)]
     pub fn take_interrupt(&mut self, fiq: bool) -> bool {
         match irq_target(self.sys.scr_el3, self.sys.hcr_el2, self.pstate(), fiq) {
@@ -395,14 +339,11 @@ impl Cpu {
         }
     }
 
-    /// Would [`Self::take_interrupt`] take an IRQ (or FIQ) now?
     pub fn can_take_interrupt(&self, fiq: bool) -> bool {
         irq_target(self.sys.scr_el3, self.sys.hcr_el2, self.pstate(), fiq).is_some()
     }
 
-    /// `ERET`: back to what `SPSR_ELx` / `ELR_ELx` describe. `false` for an
-    /// AArch32 target or an illegal return (to a higher EL), which the model
-    /// does not do.
+    /// `ERET`; `false` for an AArch32 or illegal target, neither modelled.
     pub(super) fn eret(&mut self) -> bool {
         let el = self.el as usize;
         let spsr = self.sys.spsr[el];
@@ -417,7 +358,6 @@ impl Cpu {
         true
     }
 
-    /// Execute one instruction.
     #[inline(always)]
     pub fn step<M: Memory + ?Sized>(&mut self, mem: &mut M) -> Step {
         let pc = self.pc;
@@ -431,9 +371,8 @@ impl Cpu {
         self.step_fetched(insn, mem)
     }
 
-    /// [`Self::step`] with the instruction word already in hand, for a caller
-    /// that fetched it itself — a run of instructions off one page, or a
-    /// translated block (#117). `self.pc` must be where `insn` came from.
+    /// [`Self::step`] with the word already fetched; `self.pc` must be where
+    /// `insn` came from.
     #[inline(always)]
     pub fn step_fetched<M: Memory + ?Sized>(&mut self, insn: u32, mem: &mut M) -> Step {
         let pc = self.pc;
@@ -458,11 +397,8 @@ impl Cpu {
 
     /// One step of the whole core: take a pending interrupt if it can be
     /// taken, else execute an instruction and take any exception it raises.
-    ///
-    /// Inlined, with [`Self::step`], into the ARM run loop: with interrupt
-    /// and exception entry, system instructions and the fetch's slow paths
-    /// out of line, what is left is small enough that every instruction no
-    /// longer pays for a call and a prologue of its own (#53).
+    /// Inlined into the ARM run loop, with the rare paths out of line, so no
+    /// instruction pays for a call and a prologue of its own.
     #[inline(always)]
     pub fn step_system<M: Memory + ?Sized>(&mut self, mem: &mut M) -> Step {
         if self.fiq_line && self.take_interrupt(true) {
@@ -488,7 +424,6 @@ impl Cpu {
 mod tests {
     use super::*;
 
-    /// A few words of code at 0 and a vector table at 0x800 (`VBAR_EL3`).
     struct Mem(Vec<u8>);
     impl Memory for Mem {
         fn read(&mut self, addr: u64, size: u32) -> Result<u64, Abort> {
@@ -543,7 +478,6 @@ mod tests {
         c.sys.scr_el3 = SCR_NS;
         c.sys.vbar[2] = 0x800;
         assert_eq!(c.step_system(&mut m), Step::Took(Exception::Hvc(0)));
-        // Without HCE: UNDEFINED, at the current EL, returning to the hvc.
         assert_eq!(c.sys.esr[2] >> 26, 0x00);
         assert_eq!((c.pc, c.sys.elr[2]), (0x800 + 0x200, 0));
         let mut c = Cpu::new();
@@ -568,7 +502,6 @@ mod tests {
         assert_eq!(c.pc, 0x1000 + 0x200 + 0x80);
         assert_eq!(c.sys.elr[1], 0);
         assert_eq!(c.sys.spsr[1], 0b0101);
-        // Masked now: the next step executes the handler.
         assert_eq!(c.daif, 0xF << 6);
     }
 
@@ -598,7 +531,6 @@ mod tests {
             assert_eq!(c.step_system(&mut m), Step::Retired);
         }
         assert_eq!(c.effects, 0);
-        // DC ZVA zeroes the whole 64-byte block around the address.
         for i in 0..8 {
             assert_eq!(m.read(0x1000 + i * 8, 8).unwrap(), 0);
         }

@@ -1,40 +1,17 @@
 //! A deterministic network-boot server inside the emulator.
 //!
-//! [`BuiltinPeer`] plays everything the Raspberry Pi network boot needs on
-//! the other end of the cable, as one host on a `192.0.2.0/24` segment
-//! (TEST-NET-1, RFC 5737):
+//! [`BuiltinPeer`] plays everything the Raspberry Pi network boot needs on the
+//! other end of the cable, as one host on `192.0.2.0/24` (TEST-NET-1): ARP,
+//! ICMP echo, DHCP, DNS, TFTP with the `blksize`, `tsize` and `timeout`
+//! options, and HTTP/1.1 `GET`/`HEAD` with single `Range:` requests over a
+//! minimal TCP. Two details the bootloader forces: DHCP option 43 must carry
+//! the PXE boot menu entry `Raspberry Pi Boot` or it will not TFTP boot, and
+//! every name resolves to the peer, so the default `HTTP_HOST` lands here.
 //!
-//! * **ARP** for its own address;
-//! * **ICMP echo** replies;
-//! * **DHCP** (RFC 2131), handing the one client `192.0.2.100` and naming
-//!   itself as the TFTP server. For a client that identifies as a PXE client
-//!   (option 60 `PXEClient...`) it answers with option 43 carrying the PXE
-//!   boot menu entry `Raspberry Pi Boot`: the bootloader does not TFTP boot
-//!   without it. The bytes are what `dnsmasq` sends for
-//!   `pxe-service=0,"Raspberry Pi Boot"`, the configuration Raspberry Pi's
-//!   network boot documentation gives;
-//! * **DNS** (RFC 1035): every name resolves to the peer itself, so the
-//!   bootloader's default `HTTP_HOST` (`fw-download-alias1.raspberrypi.com`)
-//!   lands here without an EEPROM change;
-//! * **TFTP** (RFC 1350) read requests, with the `blksize` (RFC 2348),
-//!   `tsize` and `timeout` (RFC 2349) options;
-//! * **HTTP/1.1** `GET` and `HEAD` on port 80 (plain HTTP, no TLS), with
-//!   single `Range: bytes=` requests, over a minimal **TCP** (RFC 9293): one
-//!   request per connection, answered with `Connection: close`.
-//!
-//! TFTP and HTTP serve the same files: a directory and/or files registered in
-//! memory.
-//!
-//! Every reply is produced synchronously, while the request is handed over,
-//! and nothing depends on time: the same guest traffic always gets the same
-//! frames back. No loss is modelled, so there is no retransmission either: a
-//! duplicate TFTP ACK is ignored rather than answered, and TCP never times
-//! out. TCP sends as much as the client's window allows and no more, so a
-//! slow guest paces the transfer.
-//!
-//! Limits: no IP options or fragments, no TCP window scaling, SACK or urgent
-//! data; out-of-order TCP data is dropped and re-ACKed (it cannot happen on
-//! this lossless link).
+//! Every reply is produced synchronously and nothing depends on time, so the
+//! same guest traffic always gets the same frames back. No loss is modelled and
+//! so no retransmission: a duplicate TFTP ACK is ignored and TCP never times
+//! out. No IP options or fragments, no window scaling, SACK or urgent data.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Component, Path, PathBuf};
@@ -63,10 +40,7 @@ const DHCPREQUEST: u8 = 3;
 const DHCPACK: u8 = 5;
 const DHCP_BROADCAST_FLAG: u16 = 0x8000;
 
-/// Option 43 as `dnsmasq` builds it for `pxe-service=0,"Raspberry Pi Boot"`:
-/// discovery control 3 (sub-option 6), an empty menu prompt with timeout 0
-/// ("PXE", sub-option 10), and one boot menu item of type 0 named
-/// `Raspberry Pi Boot` (sub-option 9).
+/// Option 43 as `dnsmasq` builds it for `pxe-service=0,"Raspberry Pi Boot"`.
 const PXE_VENDOR_OPTIONS: &[u8] =
     b"\x06\x01\x03\x0a\x04\x00PXE\x09\x14\x00\x00\x11Raspberry Pi Boot\xff";
 
@@ -78,10 +52,8 @@ const TFTP_ACK: u16 = 4;
 const TFTP_ERROR: u16 = 5;
 const TFTP_OACK: u16 = 6;
 const TFTP_DEFAULT_BLKSIZE: usize = 512;
-/// The largest block that fits a 1500-byte MTU: 1500 - 20 (IPv4) - 8 (UDP)
-/// - 4 (TFTP header).
+/// The largest TFTP block that fits a 1500-byte MTU.
 const TFTP_MAX_BLKSIZE: usize = 1468;
-/// Server transfer ports (TIDs) are handed out from here up.
 const TFTP_FIRST_TID: u16 = 49152;
 
 const HTTP_PORT: u16 = 80;
@@ -90,19 +62,15 @@ const TCP_SYN: u8 = 0x02;
 const TCP_RST: u8 = 0x04;
 const TCP_PSH: u8 = 0x08;
 const TCP_ACK: u8 = 0x10;
-/// The segment size a 1500-byte MTU leaves room for, and what the SYN-ACK
-/// advertises.
+/// The segment size a 1500-byte MTU leaves room for.
 const TCP_MSS: usize = 1460;
-/// The receive window the server advertises. Requests are small; this only
-/// has to hold one.
+/// The receive window advertised; it only has to hold one request.
 const TCP_WINDOW: u16 = 65535;
-/// Initial sequence numbers: fixed, one 16 MiB stride per connection, so runs
-/// are reproducible and connections do not share sequence space.
+/// Initial sequence numbers: fixed, one stride per connection, so runs are
+/// reproducible and connections do not share sequence space.
 const TCP_ISS_BASE: u32 = 0x5250_0000;
-/// Largest request head accepted before the connection is reset.
 const HTTP_MAX_REQUEST: usize = 16 * 1024;
 
-/// The fields of a TCP header the peer sets.
 #[derive(Clone, Copy)]
 struct TcpHeader {
     sport: u16,
@@ -112,21 +80,18 @@ struct TcpHeader {
     flags: u8,
 }
 
-/// A connection, from the server's side.
 struct TcpConn {
     client_mac: Mac,
     client_ip: [u8; 4],
     client_port: u16,
     server_port: u16,
     mss: usize,
-    /// First sequence number of the response stream (ISS + 1).
     base: u32,
     snd_una: u32,
     snd_nxt: u32,
     snd_wnd: u32,
     rcv_nxt: u32,
     request: Vec<u8>,
-    /// The whole response, once the request is complete.
     response: Option<Vec<u8>>,
     fin_sent: bool,
     fin_received: bool,
@@ -137,7 +102,6 @@ fn seq_gt(a: u32, b: u32) -> bool {
     (a.wrapping_sub(b) as i32) > 0
 }
 
-/// One TFTP read in progress.
 struct Transfer {
     name: String,
     client_mac: Mac,
@@ -150,7 +114,6 @@ struct Transfer {
 }
 
 impl Transfer {
-    /// Blocks in the file, counting the short (possibly empty) last one.
     fn blocks(&self) -> usize {
         self.data.len() / self.blksize + 1
     }
@@ -170,10 +133,8 @@ pub struct BuiltinPeer {
     transfers: BTreeMap<u16, Transfer>,
     next_tid: u16,
     ip_id: u16,
-    /// TCP connections by (client IP, client port, server port).
     conns: BTreeMap<([u8; 4], u16, u16), TcpConn>,
     conn_count: u32,
-    /// Where each [`Self::note`] also goes: the `io` channel (#35).
     io: crate::log::Log,
 }
 
@@ -184,7 +145,6 @@ impl Default for BuiltinPeer {
 }
 
 impl BuiltinPeer {
-    /// A server with nothing to serve.
     pub fn new() -> BuiltinPeer {
         BuiltinPeer {
             root: None,
@@ -200,7 +160,6 @@ impl BuiltinPeer {
         }
     }
 
-    /// A server whose TFTP root is `dir`.
     pub fn with_root(dir: impl Into<PathBuf>) -> BuiltinPeer {
         BuiltinPeer {
             root: Some(dir.into()),
@@ -208,21 +167,18 @@ impl BuiltinPeer {
         }
     }
 
-    /// Also log what the peer does, on the `io` channel.
     pub fn with_log(mut self, log: crate::log::Log) -> BuiltinPeer {
         self.io = log;
         self
     }
 
-    /// Record one thing the peer did, for the run report and the `io` channel.
     fn note(&mut self, what: impl Into<String>) {
         let what = what.into();
         self.io.net(&what);
         self.log.push(what);
     }
 
-    /// Serve `data` as `name` (a path relative to the TFTP root, `/`
-    /// separated). Takes precedence over a file of that name under the root.
+    /// Serve `data` as `name`, ahead of any file of that name under the root.
     pub fn add_file(&mut self, name: &str, data: Vec<u8>) {
         self.files
             .insert(name.trim_start_matches('/').to_string(), data);
@@ -281,7 +237,6 @@ impl BuiltinPeer {
     }
 
     fn arp(&mut self, a: &[u8]) {
-        // Ethernet / IPv4 requests for our address only.
         if a.len() < 28 || be16(a, 0) != 1 || be16(a, 2) != ETHERTYPE_IPV4 || be16(a, 6) != 1 {
             return;
         }
@@ -335,7 +290,6 @@ impl BuiltinPeer {
     }
 
     fn icmp(&mut self, src_mac: Mac, src: [u8; 4], m: &[u8]) {
-        // Echo request -> echo reply, same identifier, sequence and data.
         if m.len() < 8 || m[0] != 8 {
             return;
         }
@@ -425,7 +379,6 @@ impl BuiltinPeer {
     }
 
     fn dns(&mut self, mac: Mac, ip: [u8; 4], port: u16, q: &[u8]) {
-        // A standard query (QR = 0, opcode 0) with one question.
         if q.len() < 12 || q[2] & 0xf8 != 0 || be16(q, 4) != 1 {
             return;
         }
@@ -494,7 +447,6 @@ impl BuiltinPeer {
         self.ipv4(mac, ip, IPPROTO_TCP, &t);
     }
 
-    /// Send a segment on `key`'s connection, from its current state.
     fn tcp_send(&mut self, key: ([u8; 4], u16, u16), flags: u8, data_from: Option<(usize, usize)>) {
         let c = &self.conns[&key];
         let (mac, ip, cport, sport, seq, ack) = (
@@ -524,8 +476,7 @@ impl BuiltinPeer {
         );
     }
 
-    /// Send as much of the response as the client's window takes, then FIN
-    /// once all of it is out.
+    /// As much of the response as the client's window takes, then FIN.
     fn tcp_pump(&mut self, key: ([u8; 4], u16, u16)) {
         loop {
             let c = &self.conns[&key];
@@ -659,7 +610,6 @@ impl BuiltinPeer {
 
         let c = self.conns.get_mut(&key).unwrap();
         if flags & TCP_ACK != 0 {
-            // Acknowledges something we sent (and not more than that).
             if seq_gt(ack, c.snd_una) && !seq_gt(ack, c.snd_nxt) {
                 c.snd_una = ack;
             }
@@ -701,14 +651,12 @@ impl BuiltinPeer {
             self.tcp_send(key, TCP_ACK, None);
         }
         let c = &self.conns[&key];
-        // Both FINs exchanged and ours acknowledged: done.
         if c.fin_sent && c.fin_received && c.snd_una == c.snd_nxt {
             self.conns.remove(&key);
         }
     }
 
-    /// The whole response to the request whose head (request line and
-    /// headers, without the blank line) is `head`.
+    /// The whole response to the request whose head is `head`.
     fn http_response(&mut self, head: &str) -> Vec<u8> {
         let mut lines = head.split("\r\n");
         let request_line = lines.next().unwrap_or("");
@@ -828,8 +776,8 @@ impl BuiltinPeer {
         self.log
             .push(format!("tftp: RRQ {name} -> {} bytes", data.len()));
 
-        // Options are name/value pairs after the mode. Unknown ones are left
-        // out of the OACK, which tells the client they were not taken.
+        // Unknown options are left out of the OACK, which is how the client
+        // learns they were not taken.
         let mut blksize = TFTP_DEFAULT_BLKSIZE;
         let mut oack: Vec<(String, String)> = Vec::new();
         for [k, v] in fields[2..].as_chunks::<2>().0 {
@@ -943,8 +891,7 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
 
-/// A single `bytes=` range against a `total`-byte body: the inclusive span to
-/// send, or `None` when it cannot be satisfied (RFC 9110 section 14.1.2).
+/// One `bytes=` range against a `total`-byte body (RFC 9110 §14.1.2).
 fn parse_range(spec: &str, total: usize) -> Option<(usize, usize)> {
     let (first, last) = spec.strip_prefix("bytes=")?.split_once('-')?;
     let (first, last) = (first.trim(), last.trim());
@@ -975,8 +922,7 @@ mod tests {
 
     const CLIENT_MAC: Mac = [0x02, 0x00, 0x5e, 0x00, 0x53, 0x01];
 
-    /// A client-side frame builder: what a guest's stack would put on the
-    /// wire.
+    /// A client-side frame builder: what a guest's stack would put on the wire.
     fn udp_frame(
         dst_mac: Mac,
         src: [u8; 4],
@@ -1007,8 +953,7 @@ mod tests {
         f
     }
 
-    /// Check a frame from the peer and return its UDP (source port,
-    /// destination port, payload), verifying both checksums.
+    /// A frame's UDP ports and payload, with both checksums verified.
     fn parse_udp(f: &[u8]) -> (Mac, [u8; 4], u16, u16, Vec<u8>) {
         assert_eq!(f[6..12], SERVER_MAC);
         assert_eq!(be16(f, 12), ETHERTYPE_IPV4);
@@ -1151,8 +1096,7 @@ mod tests {
         a
     }
 
-    /// Read `name` to the end in `blksize` blocks, ACKing every one; return
-    /// the data and the block sizes.
+    /// Read `name` to the end in `blksize` blocks, ACKing every one.
     fn fetch(
         p: &mut BuiltinPeer,
         name: &str,
@@ -1285,7 +1229,6 @@ mod tests {
         assert_eq!(r[3] & 0x0f, 0, "NOERROR");
         assert_eq!(be16(&r, 6), 1, "one answer");
         assert_eq!(r[r.len() - 4..], SERVER_IP);
-        // AAAA: no records, still NOERROR.
         let n = q.len();
         q[n - 3] = 28;
         p.send(&to_server(5353, 53, &q));

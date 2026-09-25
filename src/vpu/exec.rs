@@ -3,8 +3,7 @@
 use crate::bus::{Bus, BusError, Width};
 use crate::log::{Channel, Log};
 
-/// How many control transfers [`Vpu::cf_trace`] keeps. The run report prints
-/// the tail of it when a boot derails, which is the main thing it is for.
+/// How many control transfers [`Vpu::cf_trace`] keeps, for derail reports.
 const CF_TRACE_LEN: usize = 512;
 
 use super::decode::decode;
@@ -68,32 +67,24 @@ pub enum Fault {
     },
 }
 
-/// What to do when the core meets an instruction the decoder/executor does not
-/// implement.
-///
-/// The variants also select how strict the core is about the *other* ways a run
-/// can wander off the rails — `bkpt` padding, `sleep` with no wakeup source, and
-/// a `swi` with no handler installed. A scenario wants those to halt; a whole
-/// firmware boot has to step over them to get anywhere.
+/// What to do when the core meets an unimplemented instruction — and how
+/// strict it is about the other ways a run wanders off: `bkpt` padding,
+/// `sleep` with no wakeup, a `swi` with no handler.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum UnimplPolicy {
-    /// Stop with a [`Fault::Unimplemented`], and halt on `bkpt`/`sleep`/an
-    /// unhandled `swi`. The default — silence here means silently wrong
-    /// execution.
+    /// Stop with a [`Fault::Unimplemented`], and halt on `bkpt` / `sleep` / an
+    /// unhandled `swi`. The default: silence here is silently wrong execution.
     #[default]
     Fault,
-    /// Fault on an unknown instruction, but keep the reconnaissance leniencies
-    /// so a whole boot can run. What `boot` uses unless told otherwise.
+    /// Fault on an unknown instruction but keep the leniencies, so a whole
+    /// boot can run. What `boot` uses by default.
     ReconFault,
-    /// Advance past it (correct length) and keep going. For "how far does the
-    /// firmware get / what does it touch" reconnaissance runs on firmware the
-    /// decoder has not been taught yet.
+    /// Advance past it and keep going, for reconnaissance runs.
     Skip,
 }
 
 impl UnimplPolicy {
-    /// Step over `bkpt` padding, treat `sleep` as a nop, and ignore a `swi`
-    /// with no handler, rather than halting the core.
+    /// Step over `bkpt`, treat `sleep` as a nop, ignore an unhandled `swi`.
     #[inline]
     pub fn recon_lenient(self) -> bool {
         matches!(self, UnimplPolicy::Skip | UnimplPolicy::ReconFault)
@@ -106,8 +97,7 @@ pub enum Step {
     Stopped,
 }
 
-/// One distinct instruction the model does not implement, with a hit count.
-/// Collected for reconnaissance runs ([`UnimplPolicy::Skip`]).
+/// One unimplemented instruction and its hit count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UnimplHit {
     pub pc: u32,
@@ -117,13 +107,8 @@ pub struct UnimplHit {
     pub count: u64,
 }
 
-/// Default chip-version value returned by `version rd`: a C0's. An
-/// [`crate::Emulator`] gives its cores its machine's stepping's instead
-/// ([`crate::soc::Stepping::vpu_version`]).
-///
-/// The `start4.elf` entry trampoline (`.crypto`) compares `version` (after
-/// masking bits 3 and 16) against one of `{0x0400_0162, 0x0400_0161,
-/// 0x0400_0160, 0x0400_0140, 0x0400_0104}` and `bkpt`s otherwise.
+/// Default value of `version rd`: a C0's. start4's trampoline `bkpt`s unless
+/// it matches one of a handful of known steppings.
 pub const DEFAULT_VERSION: u32 = crate::soc::Stepping::C0.vpu_version();
 
 #[derive(Default)]
@@ -135,84 +120,61 @@ pub struct Vpu {
     pub on_unimpl: UnimplPolicy,
     /// Count of instructions skipped under [`UnimplPolicy::Skip`].
     pub skipped: u64,
-    /// Consecutive `bkpt` (`0x0000`) parcels stepped over, and whether the
-    /// resulting nop-slide has already been reported.
+    /// Consecutive `bkpt` parcels stepped over.
     bkpt_run: u32,
     derail_reported: bool,
-    /// Previous instruction's `pc`, and the `pc` that branched into the current
-    /// nop-slide (for [`Self::bkpt_run`] derail reporting).
+    /// Previous `pc`, and the one that branched into the current nop-slide.
     prev_pc: u32,
     slide_from: u32,
     /// Distinct unimplemented instructions seen (bounded).
     pub unimpl: Vec<UnimplHit>,
     /// Value returned by `version rd` (before the core-id bit is OR'd in).
     pub version_value: u32,
-    /// VPU core index (0 or 1). Reported in bit 16 of `version` — `start4.elf`
-    /// keys its per-core branches (which control register to poke, which stack
-    /// to use) off that bit.
+    /// VPU core index, reported in bit 16 of `version`; start4 keys its
+    /// per-core branches off it.
     pub core_id: u32,
-    /// Halted by `sleep`, waiting for an interrupt.
-    ///
-    /// Real VC4 `sleep` stops the core until one arrives. Core 0's idle path
-    /// models that by jumping the clock to the next armed compare; core 1 has
-    /// no business moving the clock — core 0 owns it — so it simply stops
-    /// being stepped until something vectors an interrupt at it. Before this,
-    /// core 1 spun the ThreadX idle loop in real time and accounted for 46% of
-    /// every instruction the emulator executed, for no modelled effect.
+    /// Halted by `sleep`, waiting for an interrupt. Core 0's idle path jumps
+    /// the clock to the next armed compare; core 1 must not move the clock, so
+    /// it simply stops being stepped (its idle spin would otherwise be 46% of
+    /// every instruction executed, for no modelled effect).
     pub halted: bool,
-    /// Set by every step that could change what the run loop's per-step
-    /// checks decide: one that enters or leaves an exception, toggles the
-    /// interrupt enable, sleeps, stops, or had to decode its instruction.
-    /// The run loop clears it; `Emulator::fast_steps` has the argument.
-    /// `Machine::recheck` is the same flag for everything outside the core.
+    /// Set by every step that could change what the run loop's per-step checks
+    /// decide. The loop clears it; `Machine::recheck` is its counterpart for
+    /// everything outside the core.
     pub recheck: bool,
-    /// Base of the exception vector table. `swi #u` raises exception `0x20 + u`
-    /// and jumps to the **4-byte** entry `*(exc_vbase + exc*4)`, after pushing SR
-    /// and the return address (so the handler's `rti` unwinds). start4.elf's
-    /// trampoline writes this base to CoreCtl `0x7E00_2030` (core 0); the table
-    /// lives at `0xCEC0_1E00` with the `swi` (0x20) slot at `+0x80`.
+    /// Base of the exception vector table. `swi #u` raises exception
+    /// `0x20 + u` and jumps to the 4-byte entry `*(exc_vbase + exc * 4)` after
+    /// pushing SR and the return address, so the handler's `rti` unwinds.
     pub exc_vbase: u32,
     /// True while executing inside an exception handler (before `rti`).
     pub in_exception: u32,
-    /// [`Channel::Sleep`] counter: how many times the idle loop's `sleep` has
-    /// been reached.
+    /// [`Channel::Sleep`] counter.
     pub sleep_dbg: u64,
-    /// System-coprocessor register file (`mov p<n>,r` / `mov r,p<n>`). Not real
-    /// hardware behaviour — reads return the last written value (0 at reset),
-    /// which is enough to clear the early-boot "wait for p16 == 0" loops.
+    /// System-coprocessor register file: reads answer the last written value,
+    /// which is enough to clear the early-boot `p16 == 0` waits. Not hardware.
     pub coproc: [u32; 32],
-    /// The vector unit's register file. See `src/vpu/vrf.rs`; only the parts of
-    /// the vector ISA `VecInsn::executable` accepts ever reach it.
+    /// The vector unit's register file (`src/vpu/vrf.rs`).
     pub vrf: Vrf,
     /// Decoded instructions, per core (`src/vpu/icache.rs`).
     pub icache: DecodeCache,
-    /// Ring of recent taken control transfers `(from_pc, to_pc)`.
-    ///
-    /// A `VecDeque`, not a `Vec`: this is a ring, and dropping the oldest entry
-    /// with `Vec::remove(0)` memmoved the whole buffer on every control
-    /// transfer once it filled. That single line was 6.8% of the emulator's
-    /// total run time, measured with `perf` — the largest cost in `Vpu::step`
-    /// after decode.
+    /// Ring of recent taken control transfers `(from_pc, to_pc)`. A `VecDeque`
+    /// deliberately: dropping the oldest from a `Vec` memmoves the buffer on
+    /// every transfer, worth 6.8% of total run time.
     pub cf_trace: std::collections::VecDeque<(u32, u32)>,
-    /// The newest entry of [`Self::cf_trace`], kept alongside it.
-    ///
-    /// The run loop's spin and `udelay` detectors read the last taken edge once
-    /// per retired instruction. Reaching into the ring for it costs the
-    /// `VecDeque` index arithmetic every time; a plain field is a load.
+    /// The newest entry of [`Self::cf_trace`], kept alongside it: the run
+    /// loop's detectors read it every retired instruction, and a plain field
+    /// beats the ring's index arithmetic.
     pub cf_last: Option<(u32, u32)>,
-    /// When set, `step` pushes a one-line disassembly + delta of every
-    /// instruction it retires (bounded by `trace_cap`) into `trace_log`.
+    /// Push a one-line disassembly of every retired instruction to `trace_log`.
     pub trace: bool,
     pub trace_cf_only: bool,
     pub trace_cap: usize,
     pub trace_log: Vec<String>,
-    /// If non-zero, tracing stays dormant until `pc` first reaches this address
-    /// (lets a run skip past millions of uninteresting early instructions).
+    /// Tracing stays dormant until `pc` first reaches this address.
     pub trace_from: u32,
     /// Flips true once `trace_from` has been reached (always true when it is 0).
     pub trace_armed: bool,
-    /// Where the core's channels go: [`Channel::Tick`], [`Channel::Vec`],
-    /// [`Channel::Sleep`] and [`Channel::Derail`], all of them `diag`-only.
+    /// Where the core's `diag`-only channels go.
     pub log: Log,
 }
 
@@ -224,8 +186,7 @@ impl Vpu {
         v.cf_trace = std::collections::VecDeque::with_capacity(CF_TRACE_LEN);
         v.cf_last = None;
         v.trace_cap = 20_000;
-        // VC4 comes out of reset with interrupts enabled; ThreadX runs threads
-        // that way too. `di`/`ei` toggle it from here.
+        // VC4 comes out of reset with interrupts enabled.
         v.regs.set(30, 1 << 30);
         v.regs.sr = 1 << 30;
         v
@@ -245,11 +206,8 @@ impl Vpu {
         }
     }
 
-    /// Record an instruction the model cannot carry out and apply
-    /// [`Self::on_unimpl`].
-    ///
-    /// Returns `Some(step)` when the run must stop; `None` when the policy is
-    /// to skip, in which case the pc has already been advanced past it.
+    /// Record an unimplemented instruction and apply [`Self::on_unimpl`].
+    /// `None` means the policy skipped it and the pc is already past it.
     fn unimpl(&mut self, pc: u32, raw: u128, len: u8, class: InsnClass, next: u32) -> Option<Step> {
         self.note_unimpl(pc, raw, len, class);
         match self.on_unimpl {
@@ -279,12 +237,9 @@ impl Vpu {
         Step::Stopped
     }
 
-    /// Vector into the firmware's interrupt handler for `slot` (== the source's
-    /// enabled priority): push SR + the current `pc` as the resume address (like
-    /// `swi`, so the handler's `rti` unwinds) and jump to
-    /// `*(exc_vbase + slot*4)`. No-op if already in an exception or the vector
-    /// entry is null. Used for both the `sleep`-instruction wake and the run
-    /// loop's periodic ThreadX tick.
+    /// Vector into the firmware's handler for `slot` (the source's enabled
+    /// priority): push SR and the resume `pc`, jump to `*(exc_vbase +
+    /// slot * 4)`. No-op inside an exception or on a null vector entry.
     pub fn vector_irq<B: Bus + ?Sized>(&mut self, bus: &mut B, slot: u32) {
         if !self.irq_enabled() {
             return;
@@ -292,11 +247,9 @@ impl Vpu {
         self.vector_irq_forced(bus, slot);
     }
 
-    /// [`Self::vector_irq`] without the interrupt-enable check, for the `sleep`
-    /// wake: `sleep` takes the interrupt it waits for even with interrupts
-    /// disabled. Firmware parks as `sleep; di; b` (start4's idle loop, which runs
-    /// inside its tick handler with the enable bit clear), and that `di` only
-    /// makes sense if `sleep` enables interrupts while it waits.
+    /// [`Self::vector_irq`] without the enable check: `sleep` takes its wake
+    /// interrupt even with interrupts disabled — start4 parks as `sleep; di; b`
+    /// inside its tick handler, which only makes sense that way.
     pub fn vector_irq_forced<B: Bus + ?Sized>(&mut self, bus: &mut B, slot: u32) {
         self.recheck = true;
         // An interrupt is what `sleep` was waiting for.
@@ -333,23 +286,18 @@ impl Vpu {
                 let masked = self.regs.get(30) & !(1 << 30);
                 self.regs.set(30, masked);
                 self.regs.sr = masked;
-                // Taking an exception clears the interrupt-enable bit. The SR
-                // pushed above keeps the old one, so `rti` restores it; a handler
-                // that allows nesting, or a scheduler that leaves without `rti`
-                // (ThreadX resumes a thread with `ei; b lr`), re-enables it with
-                // `ei`. This is what serialises delivery. `in_exception` is only
-                // a diagnostic: a thread switch out of a handler never unwinds it.
+                // Taking an exception clears the interrupt-enable bit, which is
+                // what serialises delivery; the pushed SR restores it on `rti`.
+                // `in_exception` is only a diagnostic — a thread switch out of a
+                // handler never unwinds it.
                 self.regs.pc = h;
             }
         }
     }
 
-    /// The VC4 status register value to save on an exception: `r30` (carrying
-    /// the interrupt-enable bit, [`Op::SetIrqEnable`]) with the live N/Z/C/V
-    /// condition flags folded into the low nibble (SR layout `… ZNCV`), so a
-    /// handler's `rti` restores the interrupted context's flags — ThreadX
-    /// preempts threads mid-`cmp`/`b<cond>` and the tick handler clobbers the
-    /// flags in between.
+    /// The SR to save on an exception: `r30` with the live N/Z/C/V folded into
+    /// the low nibble, so `rti` restores the interrupted context's flags —
+    /// ThreadX preempts threads mid-`cmp`/`b<cond>`.
     fn sr(&mut self) -> u32 {
         let v = (self.regs.get(30) & !0xF) | nzcv_to_sr(self.regs.flags);
         self.regs.set(30, v);
@@ -357,8 +305,7 @@ impl Vpu {
         v
     }
 
-    /// True when interrupts are enabled (SR / `r30` bit 30). Firmware `msleep`
-    /// and the run loop's periodic ThreadX tick gate on this.
+    /// True when interrupts are enabled (SR / `r30` bit 30).
     pub fn irq_enabled(&self) -> bool {
         self.regs.get(30) & (1 << 30) != 0
     }
@@ -381,8 +328,8 @@ impl Vpu {
         let gen = bus.code_gen(pc, cached);
         if gen.is_some() && gen == cached {
             self.icache.hits += 1;
-            // Run the instruction out of the cache entry, by reference (see
-            // `src/vpu/icache.rs` for why the entries are taken out meanwhile).
+            // By reference; `src/vpu/icache.rs` says why the entries are moved
+            // out meanwhile.
             let entries = self.icache.take_entries();
             let step = self.execute(bus, pc, entries.get(pc));
             self.icache.put_entries(entries);
@@ -392,13 +339,12 @@ impl Vpu {
         }
     }
 
-    /// [`Self::step`] for an instruction the decode cache does not hold: fetch
-    /// and decode it, and cache it if it can be. Out of line, so that the
-    /// cached path stays small enough to inline into the run loop.
+    /// [`Self::step`] for a decode-cache miss. Out of line so the cached path
+    /// stays small enough to inline into the run loop.
     #[inline(never)]
     fn step_uncached<B: Bus + ?Sized>(&mut self, bus: &mut B, pc: u32, gen: Option<u64>) -> Step {
-        // Not served from the cache, so not counted as the RAM read a
-        // hit is: the fast run loop's detectors rely on that count.
+        // Not a cache hit, so not counted as the RAM read one is: the fast
+        // loop's detectors rely on that count.
         self.recheck = true;
         let mut entries = self.icache.take_entries();
         let step = match self.fetch(bus, pc) {
@@ -424,8 +370,7 @@ impl Vpu {
 
         self.cycles += 1;
 
-        // The instruction trace is a `diag` build feature (Cargo.toml): in a
-        // normal build these checks are compiled out of the step entirely.
+        // A `diag`-only feature: compiled out of the step in a normal build.
         if crate::diag::ON && !self.trace_armed && (self.trace_from == 0 || pc == self.trace_from) {
             self.trace_armed = true;
         }
@@ -449,10 +394,8 @@ impl Vpu {
             Op::Nop => self.regs.pc = next,
             Op::SetIrqEnable(on) => {
                 self.recheck = true;
-                // Track only the interrupt-enable bit of the VC4 status
-                // register (`r30`, bit 30). NZCV stay in `regs.flags`; the
-                // exception save/restore path (`sr()` / `rti`) carries this bit
-                // across handlers. `regs.sr` is kept as a mirror.
+                // Only the interrupt-enable bit of `r30`; NZCV stay in
+                // `regs.flags`.
                 let m = 1u32 << 30;
                 let v = if on {
                     self.regs.get(30) | m
@@ -593,11 +536,9 @@ impl Vpu {
                 b,
                 target,
             } => {
-                // `rd += a; compare (rd) with b; branch if <cond>`. The compare
-                // is internal to the instruction — `addcmpb` writes `rd` and the
-                // PC but does *not* commit N/Z/C/V (per `vciv.py`: `CF_CHG1`
-                // only, no flag change). Firmware relies on this: a `btest` /
-                // `cmp` result survives across intervening `addcmpb` loops.
+                // The compare is internal: `addcmpb` writes `rd` and the PC but
+                // does *not* commit N/Z/C/V, and the firmware relies on a
+                // `btest`/`cmp` result surviving across `addcmpb` loops.
                 let av = self.reg_or_imm(a);
                 let sum = self.regs.get(rd as usize).wrapping_add(av);
                 self.regs.set(rd as usize, sum);
@@ -626,22 +567,13 @@ impl Vpu {
                         }
                     }
                 };
-                // The register list is stored **highest register at the lowest
-                // address**, with `lr` in the top word of the frame. (`count ==
-                // 0` is the `stm lr` / `ldm pc` form — see `decode.rs`.)
-                //
-                // This ordering is what makes ThreadX's interrupt frame
-                // compose: the ISR stub does `push {r0-r5, lr}` and
-                // `_tx_thread_context_save` (`0x3EC3FA34`) then does
-                // `push {r6-r15}; push {r16-r23}`, and `_tx_thread_schedule`
-                // (`0x3EC40040`) restores the lot with
-                // `pop {r16-r23}; pop {r0-r15}; ld r26,(sp)++; rti`. A single
-                // 16-register pop can only undo those two separate pushes if
-                // each block runs downwards in register number, so that the
-                // `{r6-r15}` block lands exactly where `pop {r0-r15}` looks for
-                // r15..r6 and the stub's `{r0-r5}` block where it looks for
-                // r5..r0. Ascending order rotates the register file by 6 on
-                // every preemptive context switch.
+                // The list is stored **highest register at the lowest address**,
+                // with `lr` in the top word. This is what makes ThreadX's
+                // interrupt frame compose — its separate `{r0-r5}`, `{r6-r15}`
+                // and `{r16-r23}` pushes are undone by one 16-register pop, and
+                // ascending order would rotate the register file by 6 on every
+                // preemptive switch. (`count == 0` is the `stm lr` / `ldm pc`
+                // form, see `decode.rs`.)
                 for w in 0..count as u32 {
                     let r = ((first as usize) + (count as usize - 1 - w as usize)) & 31;
                     if !put(self, bus, r, sp.wrapping_add(4 * w)) {
@@ -691,8 +623,8 @@ impl Vpu {
                 }
                 self.regs.pc = new_pc;
             }
-            // The rest are rare, and some need a large frame: kept out of line
-            // so that the instructions above do not pay for it on every call.
+            // The rest are rare and some need a large frame: out of line, so
+            // the common instructions do not pay for it.
             _ => {
                 if let Some(step) = self.execute_other(bus, pc, insn, next, prev_pc) {
                     return step;
@@ -730,9 +662,7 @@ impl Vpu {
         if !self.is_stopped() {
             self.retired += 1;
             if self.regs.pc != next {
-                // Reconnaissance: flag the exact instruction that first jumps
-                // out of start4's code range (a derail — bad computed branch,
-                // corrupt return address). `--log derail`.
+                // `--log derail`: flag the first jump out of the code range.
                 let in_code = |a: u32| (0x3E00_0000..0x3F00_0000).contains(&a);
                 if crate::diag::ON
                     && self.log.on(Channel::Derail)
@@ -749,10 +679,8 @@ impl Vpu {
                         (0..10).map(|i| self.regs.get(i)).collect::<Vec<_>>(),
                     );
                 }
-                // A taken control transfer. Keep a bounded ring for tracing;
-                // collapse an immediately-repeating transfer (tight loop /
-                // memset) into a single entry with a count so the ring keeps
-                // the history that led into it.
+                // Collapse an immediately-repeating transfer into one counted
+                // entry, so the ring keeps the history that led into the loop.
                 match self.cf_trace.back_mut() {
                     Some((f, t)) if *f == pc && *t == self.regs.pc => {}
                     _ => {
@@ -784,10 +712,8 @@ impl Vpu {
         match insn.op {
             Op::Sleep => {
                 self.recheck = true;
-                // `sleep` waits for an interrupt. We model no async wakeups, so
-                // in recon (skip) mode treat it as a nop — firmware idle/dispatch
-                // loops (`sleep; b loop`) then just spin and the run's step limit
-                // or spin detector ends things cleanly. Otherwise halt.
+                // With no async wakeups modelled, recon mode treats `sleep` as
+                // a nop and lets the spin detector end the run; otherwise halt.
                 if self.on_unimpl.recon_lenient() {
                     self.regs.pc = next;
                     if self.exc_vbase != 0 && self.core_id != 0 {
@@ -798,33 +724,22 @@ impl Vpu {
                     }
                     if self.exc_vbase != 0 && self.core_id == 0 {
                         // `sleep` takes a pending interrupt even with interrupts
-                        // disabled (see `vector_irq_forced`), while the run
-                        // loop's delivery waits for the enable bit, so service a
-                        // device interrupt here.
-                        //
-                        // Core 0 only: the pending queue and the system-timer
-                        // compare are the *shared* bus's, which in this model
-                        // stands for core 0's half of the interrupt controller
-                        // (CoreCtl keeps per-core enable and pending words a
-                        // `0x800` stride apart). Core 1 idles in the same
-                        // ThreadX `sleep; di; b` loop, so once it has a vector
-                        // base it would otherwise steal every interrupt core 0
-                        // is waiting for and wedge the boot right after
-                        // `Starting start4.elf`.
+                        // disabled, while the loop's delivery waits for the
+                        // enable bit, so service one here. Core 0 only: the
+                        // shared bus's queue stands for core 0's half of the
+                        // controller, and core 1 idles in the same loop — it
+                        // would otherwise steal every interrupt core 0 waits
+                        // for.
                         if let Some(src) = bus.take_pending_irq() {
                             // `pc` was already advanced past the `sleep` above,
                             // so `vector_irq` records the right resume point.
                             self.vector_irq_forced(bus, src);
                             return Some(Step::Ran);
                         }
-                        // Likewise a compare that has fired, since the run loop's
-                        // tick delivery waits for the enable bit too. Only when
-                        // one has fired (not on every `sleep`), so time isn't
-                        // raced forward.
-                        // Peek the slot *before* consuming the pending flag:
-                        // the slot encodes which compare channel matched
-                        // (source `64 + channel`), so consuming first would
-                        // mis-route the interrupt.
+                        // Likewise a fired compare, and only a fired one, so
+                        // time is not raced forward. Peek the slot *before*
+                        // consuming the pending flag: it names the channel that
+                        // matched, so consuming first mis-routes the interrupt.
                         let slot = bus.timer_tick_slot();
                         let took = slot.is_some() && bus.take_tick_pending();
                         if crate::diag::ON && self.log.on(Channel::Sleep) {
@@ -846,10 +761,8 @@ impl Vpu {
                         if let (Some(slot), true) = (slot, took) {
                             self.vector_irq_forced(bus, slot);
                         } else {
-                            // Nothing to service: `sleep` halts the core on real
-                            // hardware, so jump to the next armed compare rather
-                            // than spinning through ThreadX's `sleep; di; b`
-                            // idle loop in real time.
+                            // Nothing to service: jump to the next armed compare
+                            // rather than spinning the idle loop in real time.
                             bus.sleep_advance();
                         }
                     }
@@ -858,19 +771,14 @@ impl Vpu {
                 }
             }
             Op::Bkpt => {
-                // start4 emits the `0x0000` parcel as inline 2-byte padding /
-                // "unreachable" guards inside functions and at the head of its
-                // exception stubs — real VC4 slides through it. A test payload
-                // uses `bkpt` as a deliberate stop, so only step over it in
-                // reconnaissance mode, and only on core 0 (a mis-entered core 1
-                // hitting `0x0000` should still halt rather than nop-slide
-                // through DRAM).
+                // start4 emits `0x0000` as inline padding and real VC4 slides
+                // through it, but a test payload uses `bkpt` as a deliberate
+                // stop — so step over it only in recon mode, and only on core 0,
+                // where a mis-entered core cannot nop-slide through DRAM.
                 if self.on_unimpl.recon_lenient() && self.core_id == 0 {
                     self.skipped += 1;
-                    // A derail into zeroed RAM shows up as a long nop-slide of
-                    // `0x0000` parcels. Report the first one, once, so the run
-                    // that produced it can be traced back to its last real
-                    // instruction instead of only reporting a garbage final pc.
+                    // Report the first parcel of a nop-slide once, so a derail
+                    // into zeroed RAM can be traced back to its last real pc.
                     self.bkpt_run += 1;
                     if self.bkpt_run == 1 {
                         self.slide_from = prev_pc;
@@ -896,17 +804,14 @@ impl Vpu {
             }
             Op::Swi { vector } => {
                 self.recheck = true;
-                // `vector` is already `0x20 + u`. With a vector table configured,
-                // trap to `*(exc_vbase + vector*8)` after pushing SR + return
-                // address (so the handler's `rti` unwinds). Otherwise halt — the
-                // test payloads use `swi` as a clean "done".
+                // `vector` is already `0x20 + u`; with no table configured,
+                // halt — the test payloads use `swi` as a clean "done".
                 let handler = if self.exc_vbase != 0 {
                     bus.load32(self.exc_vbase.wrapping_add(vector.wrapping_mul(4)))
                         .ok()
                         .filter(|&h| h != 0)
-                        // Vector-table entries carry a flag in bit 0 (start4's
-                        // dynamically-installed `swi` dispatcher is stored as
-                        // `addr | 1`); the entry PC is the even address.
+                        // Entries carry a flag in bit 0; the PC is the even
+                        // address.
                         .map(|h| h & !1)
                 } else {
                     None
@@ -928,10 +833,7 @@ impl Vpu {
                         self.regs.pc = h;
                     }
                     None => {
-                        // No handler installed. In recon (skip) mode, treat the
-                        // trap as a no-op so exploration continues past syscall
-                        // stubs (start4's atomic/priv helpers) — it is counted
-                        // like a skipped instruction. Otherwise halt.
+                        // No handler: a no-op in recon mode, otherwise halt.
                         if self.on_unimpl.recon_lenient() {
                             self.skipped += 1;
                             self.regs.pc = next;
@@ -987,13 +889,10 @@ impl Vpu {
                 } else {
                     use super::insn::FpOp::*;
                     let a = f32::from_bits(self.regs.get(ra as usize));
-                    // The `0xCA00` convert ops (ftrunc/floor/flts/fltu) take an
-                    // integer shift as the operand; the `0xC800` triadic ops take
-                    // a float. Register operands are always f32 bit-patterns; an
-                    // immediate is a raw shift count for the converts, and a
-                    // 6-bit minifloat (`s eee mm`, bias 3, implicit `1.mm`) for
-                    // the triadic ops — e.g. `0b011001` is `1.25 × 2³ = 10.0`,
-                    // which the decimal formatter at `0x80009728` relies on.
+                    // The convert ops take an integer shift, the triadic ops a
+                    // float. An immediate is a raw shift count for the converts
+                    // and a 6-bit minifloat (`s eee mm`, bias 3, implicit
+                    // `1.mm`) for the triadic ones.
                     let is_convert = matches!(op, Ftrunc | FtruncFloor | Flts | Fltu);
                     let (bv, bf) = match b {
                         RegOrImm::Reg(r) => {
@@ -1064,11 +963,9 @@ impl Vpu {
             }
 
             Op::Switch { rd, byte } => {
-                // Table starts at `next` (right after the 2-byte instruction);
-                // entry[idx] is a *signed* displacement (in halfwords) from that
-                // base — handlers defined before the `switch` are reached with a
-                // negative entry, and the default/unknown case is a small
-                // negative offset back to the literal-`%` fallback.
+                // The table starts at `next`, and each entry is a **signed**
+                // halfword displacement from it — handlers defined before the
+                // `switch` are reached with a negative entry.
                 let idx = self.regs.get(rd as usize);
                 let entry_addr = next.wrapping_add(if byte { idx } else { idx * 2 });
                 let disp = if byte {
@@ -1092,20 +989,16 @@ impl Vpu {
                         offset,
                         bytes,
                     } => {
-                        // The destination is a dash, so nothing lands in a
-                        // register — but the read still happens on the bus, and
-                        // an MMIO read can have side effects. Errors go nowhere:
-                        // there is no destination to fault into.
+                        // Nothing lands in a register, but the read still
+                        // happens on the bus and MMIO reads have side effects.
                         let addr = self.regs.get(base as usize).wrapping_add(offset);
                         for i in 0..bytes {
                             let _ = bus.load8(addr.wrapping_add(i));
                         }
                     }
                     VecExec::SumOfBroadcast { src, dst, signed } => {
-                        // `v<w>mov -, rN SUM{S,U} rK`: rN is broadcast across
-                        // all 16 lanes at the operation width, the vector result
-                        // is discarded, and the scalar result unit writes the
-                        // sum of the lanes back to rK.
+                        // `rN` broadcast across 16 lanes, vector result
+                        // discarded, the lane sum written back to `rK`.
                         let lane = self.regs.get(src as usize);
                         let lane = if signed {
                             sext_to(lane, v.lane_bits)
@@ -1140,10 +1033,8 @@ impl Vpu {
                             VecRep::FromR0 => self.regs.get(0),
                         };
                         let stride = incr.map_or(0, |r| self.regs.get(r as usize));
-                        // The base register itself is *not* written back: the
-                        // firmware advances it separately after the loop
-                        // (`memcpy` at `0x3EDA28FE` adds `r0 * 64` to `r1`),
-                        // which would double-count if the instruction did too.
+                        // The base register is *not* written back: the firmware
+                        // advances it after the loop, and would double-count.
                         let mut addr = base
                             .map_or(0, |b| self.regs.get(b as usize))
                             .wrapping_add(offset);
@@ -1171,12 +1062,9 @@ impl Vpu {
                         step,
                         addend,
                     } => {
-                        // Write the scalar/immediate into every lane of `reps`
-                        // consecutive rows. The 48-bit form is a single row; the
-                        // boot ROM's `v32mov HY(0,0)++,#0 REP8` clears eight. The
-                        // immediate is taken unsigned — its one dead use in libc
-                        // (`memcpy`'s `v16mov HX(0,0),0x3f` at `0x3EDA2918`) makes
-                        // the choice unobservable there.
+                        // Into every lane of `reps` consecutive rows. The
+                        // immediate is taken unsigned; its only use in libc is
+                        // dead, so the choice is unobservable there.
                         let value = match src {
                             RegOrImm::Reg(r) => self.regs.get(r as usize),
                             RegOrImm::Imm(i) => i as u32,
@@ -1196,15 +1084,9 @@ impl Vpu {
                         }
                     }
                     VecExec::Bitplanes { src } => {
-                        // One flag per lane, holding that lane's bit of the
-                        // scalar: the lane's result *is* that bit, so its zero
-                        // flag is the bit inverted and its negative flag is
-                        // clear. The carry the op does not produce stays as it
-                        // was.
-                        // The lane's result is all ones where the bit is set,
-                        // so its zero flag is the bit inverted and its negative
-                        // flag is the bit itself. The carry the op does not
-                        // produce stays as it was.
+                        // One flag per lane: the result is all ones where the
+                        // scalar's bit is set, so zero is the bit inverted and
+                        // negative is the bit. The carry is left alone.
                         let bits = self.regs.get(src as usize) as u16;
                         self.vrf.lane_z = !bits;
                         self.vrf.lane_n = bits;
@@ -1286,12 +1168,8 @@ impl Vpu {
                                         source(&self.vrf, o.reg, row, e, width)
                                     }
                                 };
-                                // The two interleaves take odd lanes from B and
-                                // even ones from A; everything else computes.
-                                // The saturating ops clamp to what the
-                                // destination element can hold, not to what the
-                                // operation is wide: `v32adds` into a byte
-                                // register comes back 0xff.
+                                // Saturating ops clamp to what the *destination*
+                                // element holds, not to the operation's width.
                                 let sat_bytes = d.map_or(width, |o| o.reg.elem_bytes as u32);
                                 let cin = self.vrf.lane_c & (1 << lane) != 0;
                                 let mut res = if let Some(planes) = planes {
@@ -1306,10 +1184,7 @@ impl Vpu {
                                 };
                                 if setf {
                                     // Zero and negative read the result at the
-                                    // operation's width, before it is narrowed
-                                    // into the destination; the carry is the
-                                    // op's own, and the ops that have none
-                                    // leave the lane's alone.
+                                    // operation's width, before narrowing.
                                     let bit = 1u16 << lane;
                                     let sign = 1u32 << (width * 8 - 1);
                                     let mask = if width >= 4 {
@@ -1366,23 +1241,12 @@ impl Vpu {
                                             };
                                         }
                                         res = if acc.high {
-                                            // The destination is the difference
-                                            // (or sum) of the accumulator's
-                                            // *own* high half and the result,
-                                            // taken before the update and
-                                            // saturated into the operation's
-                                            // width. Reading it back out of the
-                                            // accumulator afterwards is not the
-                                            // same thing — the low half borrows
-                                            // — and that is what made the
-                                            // unsigned `HIGH SUB` look
-                                            // inexplicable. Measured with
-                                            // `probes/acchu.s` on a Raspberry
-                                            // Pi 4B d03115: with the high half
-                                            // zero and a result of `0xffff`,
-                                            // `UACC HIGH SUB` answers
-                                            // `-32768`, the clamp, where the
-                                            // accumulator afterwards reads 1.
+                                            // The accumulator's *own* high half
+                                            // against the result, taken before
+                                            // the update — reading it back
+                                            // afterwards differs, because the
+                                            // low half borrows
+                                            // (`vpu-probe/probes/acchu.s`).
                                             let read = if acc.signed {
                                                 read as i32 as i64
                                             } else {
@@ -1404,13 +1268,9 @@ impl Vpu {
                                             // destination the accumulator.
                                             *slot
                                         } else {
-                                            // No `WBA`: the accumulator is read
-                                            // into the result and left as it
-                                            // was — `UADD` and `USUB` in the
-                                            // programmers manual's names, and
-                                            // measured: `CLRA UACC(A)` then
-                                            // `UADD(B)` answers `A + B + A` with
-                                            // `A` still in the accumulator.
+                                            // No `WBA` (`UADD`/`USUB`): the
+                                            // accumulator is read into the
+                                            // result and left as it was.
                                             if acc.sub {
                                                 read.wrapping_sub(res)
                                             } else {
@@ -1422,13 +1282,8 @@ impl Vpu {
                                 if let Some(o) = d {
                                     let (row, e) =
                                         o.reg.lane(lane, if step_d { rep } else { 0 }, d_add);
-                                    // The result leaves the operation at the
-                                    // operation's width and is widened into a
-                                    // destination register that is wider —
-                                    // signed, like a halfword source.
-                                    // `v16or HY(2,0),HX(20,0),0` answers
-                                    // `0xffffffff` where the halfword is
-                                    // `0xffff`, measured with `probes/wide1.s`.
+                                    // Widened signed into a wider destination
+                                    // (`vpu-probe/probes/wide1.s`).
                                     self.vrf.write(
                                         row,
                                         e,
@@ -1617,7 +1472,7 @@ impl Vpu {
                                 let base = lane as usize * vrf::LUT_LANE;
                                 let at = (at as usize).wrapping_mul(width as usize) % vrf::LUT_LANE;
                                 let value = if write {
-                                    // A dash source writes zero. Measured.
+                                    // A dash source writes zero, measured.
                                     let v = a.map_or(0, |o| {
                                         let (row, e) =
                                             o.reg.lane(lane, if step { rep } else { 0 }, a_add);
@@ -1690,11 +1545,8 @@ impl Vpu {
                         let d_add = d
                             .and_then(|o| o.addend)
                             .map_or(0, |r| self.regs.get(r as usize));
-                        // The aggregate reads each lane's value whole: the
-                        // accumulator is wider than an element, and `SUMS` of
-                        // sixteen lanes holding `0x0000ffff` came back as
-                        // their plain sum, not as sixteen `-1`s. Measured with
-                        // `probes/gacc.s`.
+                        // The aggregate reads each lane whole, the accumulator
+                        // being wider than an element (`vpu-probe/probes/gacc.s`).
                         let (mut sru_acc, mut sru_index, mut sru_seen) = (0i64, 0u32, 0u32);
                         for rep in 0..reps {
                             for lane in 0..vrf::LANES {
@@ -1759,8 +1611,7 @@ impl Vpu {
                             self.regs.set(reg as usize, v as u32);
                         }
                     }
-                    // Measured to leave nothing behind, so the model does
-                    // nothing either.
+                    // Measured to leave nothing behind ([`VecExec::NoEffect`]).
                     VecExec::NoEffect => {}
                     VecExec::NeedsVrf => {
                         if let Some(step) = self.unimpl(pc, v.raw, v.len, InsnClass::Vector48, next)
@@ -1795,8 +1646,7 @@ impl Vpu {
         }
     }
 
-    /// Compute the effective address for a load/store and apply any base-register
-    /// writeback. `w` gives the access size, used by pre-dec / post-inc.
+    /// Effective address for a load/store, applying any base writeback.
     fn resolve_addr(&mut self, pc: u32, addr: AddrMode, w: MemWidth) -> u32 {
         let size = match w {
             MemWidth::Word => 4u32,
@@ -1816,9 +1666,7 @@ impl Vpu {
             Base::Gp => self.regs.get(GP),
             Base::R0 => self.regs.get(0),
             Base::Pc => pc,
-            // `ld{w} rd, (ra + rb)` — the index register is scaled by the
-            // access size (word → *4, half → *2, byte → *1), per the VC4 ISA
-            // note ("#todo rb<<size" in Hermitage's `videocoreiv.arch`).
+            // The index register is scaled by the access size.
             Base::RegReg(a, b) => {
                 let scale = size.trailing_zeros();
                 self.regs
@@ -1845,13 +1693,10 @@ impl Vpu {
         }
     }
 
-    /// One repetition of a vector load or store: 16 lanes of `reg` against
-    /// consecutive elements at `addr`, restricted to the lanes set in `lanes`.
-    ///
-    /// A lane is transferred with an access of its own width when it is
-    /// naturally aligned and byte by byte when it is not — VC4's `v8` forms copy
-    /// arbitrary byte alignments, and splitting an aligned word access would
-    /// misreport itself to any MMIO register underneath.
+    /// One repetition of a vector load or store, restricted to `lanes`. A lane
+    /// is transferred at its own width when naturally aligned and byte by byte
+    /// when not: splitting an aligned access would misreport itself to any MMIO
+    /// register underneath.
     fn vec_transfer<B: Bus + ?Sized>(
         &mut self,
         bus: &mut B,
@@ -1876,9 +1721,8 @@ impl Vpu {
             if lanes & (1 << lane) == 0 {
                 continue;
             }
-            // Memory is stepped by the *operation's* element size and the
-            // register by its own: a `v8ld` into an `HY` slot moves one byte
-            // per lane and zero-extends it into a 32-bit element.
+            // Memory steps by the *operation's* element size, the register by
+            // its own.
             let ea = addr.wrapping_add(lane * op_bytes);
             let aligned = ea.is_multiple_of(op_bytes);
             let (row, e) = reg.map_or((0, 0), |r| r.lane(lane, step, addend));
@@ -1887,9 +1731,8 @@ impl Vpu {
                 if aligned {
                     bus.store(ea, width, v)?;
                 } else {
-                    // A store that straddles a block writes straight through
-                    // it: `v16st HY(0,0),(r0+7)` lands its fifth halfword
-                    // across bytes 15 and 16, measured on a Pi 4B d03115.
+                    // A store straddling a block writes straight through it
+                    // (Raspberry Pi 4B d03115).
                     for i in 0..op_bytes {
                         bus.store8(ea.wrapping_add(i), (v >> (8 * i)) as u8)?;
                     }
@@ -1899,11 +1742,9 @@ impl Vpu {
                     bus.load(ea, width)?
                 } else {
                     // A load does not: each element comes out of the aligned
-                    // 16-byte block its first byte is in, wrapping round inside
-                    // it rather than running over the edge. `v32ld
-                    // HY(0,0),(r1+13)` over a page of ascending bytes reads
-                    // `0e 0f 10 01` — the fourth byte from the start of the
-                    // block, not from byte 16 (measured, Pi 4B d03115).
+                    // 16-byte block its first byte is in, **wrapping inside it**
+                    // rather than running over the edge (Raspberry Pi 4B
+                    // d03115).
                     let block = ea & !15;
                     let mut v = 0u32;
                     for i in 0..op_bytes {
@@ -1937,8 +1778,7 @@ impl Vpu {
         })
     }
 
-    /// Apply an ALU op, writing `dst` (unless it is a compare) and flags (if
-    /// `set_flags`). Returns `Err(Step)` if the op is not implemented.
+    /// Apply an ALU op, writing `dst` unless it is a compare.
     fn apply_alu(
         &mut self,
         pc: u32,
@@ -1971,8 +1811,7 @@ impl Vpu {
     }
 }
 
-/// One repetition of a vector load or store: which sixteen elements, where in
-/// memory, and how wide each one is there.
+/// One repetition of a vector load or store.
 #[derive(Clone, Copy)]
 struct VecTransfer {
     reg: Option<VecReg>,
@@ -1987,17 +1826,8 @@ struct VecTransfer {
     op_bytes: u32,
 }
 
-/// One source element, read at its register's own width, as the operation
-/// sees it.
-///
-/// A byte element is unsigned and a halfword signed: `v32mov HY(0,0),H(60,0)`
-/// leaves `0x000000ff` where the byte was `0xff`, while `v32mov HY(0,0),HX(62,0)`
-/// leaves `0xffff8000` where the halfword was `0x8000` — measured on a
-/// Raspberry Pi 4B d03115. Nothing to do when the register is as wide as the
-/// operation, which the narrowing in [`Vrf::read`](crate::vpu::vrf::Vrf::read)
-/// has already taken care of.
-/// The index a gather or a scatter takes out of a lane's accumulator: its
-/// high half for the `m` forms, its low half for the `ml` ones.
+/// The index a gather or scatter takes out of a lane's accumulator: its high
+/// half for the `m` forms, its low half for the `ml` ones.
 fn acc_index(acc: u32, high: bool) -> u32 {
     if high {
         acc >> 16
@@ -2014,13 +1844,10 @@ fn set_flag(flags: &mut u16, bit: u16, on: bool) {
     }
 }
 
-/// One ALU source element, converted into the operation's width.
-///
-/// The element is addressed at the register's own width — that is where it
-/// lives — and the two widths then meet: a register narrower than the
-/// operation is widened (a byte unsigned, a halfword signed), and one *wider*
-/// is truncated to the operation's width, which is its low half. Measured
-/// with `probes/wide1.s` and `probes/wide2.s` on a Raspberry Pi 4B d03115.
+/// One ALU source element, converted into the operation's width: a narrower
+/// register is widened (a byte unsigned, a halfword signed) and a wider one
+/// truncated to its low half (`vpu-probe/probes/wide1.s`,
+/// `vpu-probe/probes/wide2.s`).
 fn source(vrf: &Vrf, reg: VecReg, row: u8, e: u32, width: u32) -> u32 {
     let w = reg.elem_bytes as u32;
     let v = vrf.read(row, e, w);
@@ -2037,28 +1864,11 @@ fn widen(v: u32, from_bytes: u32) -> u32 {
     }
 }
 
-/// One lane of a vector ALU op, at `width` bytes per element — the
-/// *operation's* width, which the sources have already been widened into.
-///
-/// `sat_bytes` is the destination element's width, which is what the
-/// saturating ops clamp to: a byte destination holds `0..=0xff`, a wider one
-/// saturates signed. Every case here was measured on a Raspberry Pi 4B
-/// d03115; see `vpu-probe/`.
 /// The carry an op leaves in its lane's flags under `SETF`, or `None` when it
-/// leaves the flag alone.
-///
-/// Measured on a Raspberry Pi 4B d03115, by setting every lane's carry one way
-/// with an addition and then watching which lanes `IFC` let through after the
-/// op under test. The logical ops, the shuffles, `dist`, `count`, `msb`,
-/// `brev`, `clip`, `sign`, `mov` and `mull` all left it untouched; the ops
-/// below each answer something of their own:
-///
-/// - `add` carries out of the operation's width, `sub` and `rsub` borrow;
-/// - the saturating ops answer whether the result was clamped;
-/// - `min` and `max` answer whether B was the one chosen;
-/// - the shifts answer the last bit to leave the element, indexed modulo the
-///   width — so a count of zero reads the bit at the far end rather than
-///   nothing at all.
+/// leaves the flag alone. Measured on a Raspberry Pi 4B d03115; the ops not
+/// listed below leave it untouched. The shifts answer the last bit to leave
+/// the element, indexed **modulo the width**, so a count of zero reads the bit
+/// at the far end rather than nothing at all.
 fn vec_carry(
     op: VecAluOp,
     a: u32,
@@ -2106,10 +1916,8 @@ fn vec_carry(
         Subsc => clamped(sext(a) - sext(b) - carry_in as i64),
         Rsubsc => clamped(sext(b) - sext(a) - carry_in as i64),
         Mulls => clamped(sext(a) * sext(b)),
-        // The signed-count shifts answer the last bit to leave the element:
-        // for a right shift the bit the count stopped on, for a left shift the
-        // one that fell off the top, and for a count past the width nothing at
-        // all — except the sign, which the arithmetic form keeps shifting in.
+        // The last bit to leave the element; nothing at all past the width,
+        // except the sign the arithmetic form keeps shifting in.
         Signshl | Signasl | Signasls => {
             let n = sext(b);
             let bit = |i: u32| a & (1 << i) != 0;
@@ -2123,9 +1931,7 @@ fn vec_carry(
                     bit(k as u32 - 1)
                 }
             } else if matches!(op, Signshl) {
-                // A left shift answers the bit that fell off the top — but
-                // only the logical form does; the arithmetic ones answered
-                // nothing at all for the left shifts in the probe.
+                // Only the logical form answers the bit that fell off the top.
                 if n >= bits as i64 {
                     false
                 } else {
@@ -2217,15 +2023,13 @@ fn vec_alu(op: VecAluOp, a: u32, b: u32, width: u32, sat_bytes: u32, carry_in: b
         Subsc => sat(sext(a) - sext(b) - carry_in as i64),
         Rsubc => b.wrapping_sub(a).wrapping_sub(carry_in as u32) & mask,
         Rsubsc => sat(sext(b) - sext(a) - carry_in as i64),
-        // A signed, unmasked shift count: left when positive, right when
-        // negative, and a count past the width empties the element (or fills
-        // it with the sign, for the arithmetic form).
+        // A signed, unmasked count: past the width empties the element, or
+        // fills it with the sign for the arithmetic form.
         Signshl | Signasl | Signasls => {
             let n = sext(b);
             if matches!(op, Signasls) {
-                // The saturating form keeps the whole shifted value and then
-                // clamps, so a count past the width comes out as the extreme
-                // of A's sign rather than as zero.
+                // The saturating form clamps the whole shifted value, so a
+                // count past the width comes out as A's sign extreme, not 0.
                 let v: i128 = (sext(a) as i128) << n.clamp(0, 96);
                 let v = if n < 0 {
                     (sext(a) >> (-n).min(63)) as i128
@@ -2268,9 +2072,7 @@ fn vec_alu(op: VecAluOp, a: u32, b: u32, width: u32, sat_bytes: u32, carry_in: b
             }
         }
         Count => ((a & mask).count_ones() + (b & mask).count_ones()) & mask,
-        // The index of the highest bit set in either operand: `v16msb` over
-        // `a = 0x01, b = 0xff` answers 7, and over `a = 0x7f, b = 0x01`
-        // answers 6.
+        // The index of the highest bit set in **either** operand.
         Msb => match ((a | b) & mask).checked_ilog2() {
             Some(n) => n & mask,
             None => mask, // no bit set; the scalar `msb` answers all-ones
@@ -2290,9 +2092,8 @@ fn vec_alu(op: VecAluOp, a: u32, b: u32, width: u32, sat_bytes: u32, carry_in: b
         // The shuffles take their value straight from the element the lane
         // mapping picked.
         Even | Odd | Interl | Interh => a & mask,
-        // The multiplies. `mull` keeps the low half, `mulm` shifts the product
-        // right by eight — a fixed-point multiply — and the `mulh` pair keeps
-        // the high half, `mulhn` rounding rather than truncating.
+        // `mull` keeps the low half, `mulm` shifts right by eight, and the
+        // `mulh` pair keeps the high half, `mulhn` rounding.
         Mull => (sext(a) * sext(b)) as u32 & mask,
         Mulls => sat(sext(a) * sext(b)),
         Mulm => ((sext(a) * sext(b)) >> 8) as u32 & mask,
@@ -2335,11 +2136,9 @@ fn mul_operand(v: u32, signed: bool, bits: u32) -> i64 {
     }
 }
 
-/// Decode the 6-bit floating-point immediate of a `0xC800` triadic FP op.
-///
-/// Layout `s eee mm`: sign, 3-bit exponent (bias 3), 2-bit mantissa with an
-/// implicit leading 1. `eee == 0` is zero. So `0b011001` → `+1.25 × 2³ = 10.0`,
-/// `0b001100` → `1.0`, `0b010000` → `2.0`, `0b001000` → `0.5`.
+/// Decode the 6-bit FP immediate of a `0xC800` triadic op: `s eee mm`, a
+/// 3-bit exponent biased by 3 and a 2-bit mantissa with an implicit leading 1;
+/// `eee == 0` is zero.
 fn fp_minifloat(i: u32) -> f32 {
     let sign = if i & 0x20 != 0 { -1.0 } else { 1.0 };
     let exp = ((i >> 2) & 7) as i32;
@@ -2359,9 +2158,7 @@ fn nz(r: u32, carry: bool, overflow: bool) -> Flags {
     }
 }
 
-/// Pack N/Z/C/V into the VC4 status-register low nibble. SR bit layout (per the
-/// VideoCore IV programmer's manual): `bit 0 = V`, `bit 1 = C`, `bit 2 = N`,
-/// `bit 3 = Z`.
+/// Pack N/Z/C/V into the SR low nibble: `V`, `C`, `N`, `Z` from bit 0 up.
 fn nzcv_to_sr(f: Flags) -> u32 {
     (f.v as u32) | ((f.c as u32) << 1) | ((f.n as u32) << 2) | ((f.z as u32) << 3)
 }
@@ -2384,8 +2181,8 @@ fn add_with_carry(a: u32, b: u32, cin: u32) -> (u32, bool, bool) {
     (s2, carry, overflow)
 }
 
-/// Core ALU. Returns `(result, flags)`, or `None` for ops not implemented yet.
-/// `flags` is always computed; the caller decides whether to commit it.
+/// Core ALU: `(result, flags)`, or `None` for an unimplemented op. `flags` is
+/// always computed; the caller decides whether to commit it.
 pub fn alu(op: AluOp, a: u32, b: u32, cin: bool) -> Option<(u32, Flags)> {
     use AluOp::*;
     let sh = b & 31;
@@ -2398,8 +2195,7 @@ pub fn alu(op: AluOp, a: u32, b: u32, cin: bool) -> Option<(u32, Flags)> {
             let (r, c, v) = add_with_carry(a, b, 0);
             return Some((r, nz(r, c, v)));
         }
-        // VC4 sets the carry flag to *borrow* on subtraction (x86-style, and
-        // per the arch's `cs/lo` + `cc/hs` aliasing), so `carry` here is the
+        // VC4 sets the carry to *borrow* on subtraction, so this is the
         // negation of the ARM-style no-borrow result.
         Sub | Cmp => {
             let (r, c, v) = add_with_carry(a, !b, 1);
@@ -2455,10 +2251,7 @@ pub fn alu(op: AluOp, a: u32, b: u32, cin: bool) -> Option<(u32, Flags)> {
             let shift = 31 - sh;
             (((a << shift) as i32) >> shift) as u32
         }
-        // `msb Rd, Rs` / `msb Rd, Ra, Rb` — position of the most-significant set
-        // bit of the source. The source is the second ALU operand (`Rs` in the
-        // 16-bit form, `Rb` — set equal to `Ra` by the assembler — in the
-        // triadic form), i.e. `b`, not the destination.
+        // The source is the *second* ALU operand, `b`, not the destination.
         Msb => {
             if b == 0 {
                 u32::MAX
@@ -2466,10 +2259,8 @@ pub fn alu(op: AluOp, a: u32, b: u32, cin: bool) -> Option<(u32, Flags)> {
                 31 - b.leading_zeros()
             }
         }
-        // `brev Rd, Ra[, Rb]` — bit-reverse `Ra`, then shift right by `Rb`
-        // (0 in the 16-bit form and almost always in the triadic form). The
-        // reversible operand is `a`; the 16-bit form feeds `Rs` there (see the
-        // `Op::Alu2` handler) with `b == 0`.
+        // Bit-reverse `a`, then shift right by `b`; the 16-bit form feeds `Rs`
+        // into `a` with `b == 0`.
         Bitrev => a.reverse_bits().wrapping_shr(b & 31),
         Abs => (b as i32).unsigned_abs(),
         AddScale(s) => a.wrapping_add(b.wrapping_shl(s as u32)),
@@ -2500,9 +2291,7 @@ pub fn alu(op: AluOp, a: u32, b: u32, cin: bool) -> Option<(u32, Flags)> {
                 ((a as i64) / (b as i32 as i64)) as u32
             }
         }
-        // Not `checked_div`: this mirrors `DivUS` above, which cannot use it
-        // (the divisor goes through a signed cast), and the pair reads as one
-        // rule — the VPU yields 0 rather than trapping on a zero divisor.
+        // The VPU yields 0 rather than trapping on a zero divisor.
         #[allow(clippy::manual_checked_ops)]
         DivU => {
             if b == 0 {
@@ -2517,8 +2306,7 @@ pub fn alu(op: AluOp, a: u32, b: u32, cin: bool) -> Option<(u32, Flags)> {
     Some((r, nz(r, cin, false)))
 }
 
-/// Evaluate a condition against flags — thin re-export for callers holding a
-/// `Cond` without a `Flags`.
+/// Evaluate a condition against flags.
 pub fn cond_holds(flags: &Flags, cond: Cond) -> bool {
     flags.test(cond)
 }

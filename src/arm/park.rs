@@ -1,4 +1,4 @@
-//! Busy-wait parking (#53): see the module docs of `arm/mod.rs`, "Busy-wait
+//! Busy-wait parking: see the module docs of `arm/mod.rs`, "Busy-wait
 //! loops".
 
 use crate::aarch64::{Abort, Cpu, Memory, Step};
@@ -8,21 +8,15 @@ use crate::periph::gentimer::GenericTimer;
 
 use super::{timer_reg, PERIPH, PERIPH_TO_BUS};
 
-/// Backward jumps to one target that start a watch of the loop behind it.
 const HOT: i32 = 32;
-/// Where a target that failed a watch starts counting again.
 const COOLDOWN: i32 = -4096;
-/// The longest loop body parked, in instructions.
 const MAX_PASS: usize = 64;
-/// Complete passes watched before parking.
 const PASSES: usize = 6;
 /// A loop with fewer passes to go than this is left to run: the search for
 /// its end costs about as much.
 const MIN_SKIP: u64 = 32;
-/// The furthest one park looks ahead, in passes. A longer wait parks again.
 const MAX_SKIP: u64 = 1 << 36;
 
-/// One data read a pass makes: physical address, size, and the value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Read {
     pub addr: u64,
@@ -54,8 +48,6 @@ impl Regs {
         c.nzcv = self.nzcv;
     }
 
-    /// Every register moved on by `n` times its step in `delta`; the flags
-    /// as they are.
     fn advanced(&self, delta: &Regs, n: u64) -> Regs {
         let mut r = *self;
         let regs = r.x.iter_mut().chain(r.sp.iter_mut());
@@ -96,25 +88,18 @@ struct Watch {
     head: u64,
     effects: u64,
     fixed: Fixed,
-    /// The pass in progress.
     pcs: Vec<u64>,
     reads: Vec<Read>,
-    /// The first complete pass.
     pass: Option<(Vec<u64>, Vec<Read>)>,
-    /// The state at every arrival at the head, with the cycle the head
-    /// instruction runs in.
     heads: Vec<(u64, Regs)>,
 }
 
 /// Per core: finds loops worth parking.
 #[derive(Default)]
 pub(super) struct Detector {
-    /// Backward-jump targets and how often each was jumped to.
     hot: [(u64, i32); 16],
     watch: Option<Box<Watch>>,
-    /// The reads of the step in flight, while watching.
     pub(super) log: Vec<Read>,
-    /// Its stores, which only a SHA-256 recording wants.
     pub(super) stores: Vec<Read>,
     /// Looks for SHA-256 block loops (`sha.rs`), and the head of the one the
     /// core was last fitted to. `sha_stop` says the core has just jumped
@@ -122,7 +107,6 @@ pub(super) struct Detector {
     pub(super) sha: super::sha::Finder,
     pub(super) sha_head: Option<u64>,
     pub(super) sha_stop: bool,
-    /// Which of the two to look for (`PIMU_NO_PARK`, `PIMU_NO_SHA_SKIP`).
     pub(super) park_on: bool,
     pub(super) sha_on: bool,
 }
@@ -146,14 +130,12 @@ impl Detector {
         self.stores.clear();
     }
 
-    /// The core retired the instruction at `pc` in `cycle`, and stored
-    /// something if `wrote`. True when a watch has seen enough passes for
-    /// [`Self::park`].
+    /// The core retired the instruction at `pc` in `cycle`. True when a watch
+    /// has seen enough passes for [`Self::park`].
     ///
-    /// This runs after every instruction, so the common case (nothing
-    /// watched or recorded, no skip pending, no backward jump) is inline and
-    /// the rest is not: left to LLVM, the whole of it stopped being inlined
-    /// and the call cost the SHA-256 bench 15% of its cycles (#90).
+    /// Runs after every instruction, so the common case is inline and the rest
+    /// is not: left to LLVM the whole of it goes out of line, which costs the
+    /// SHA-256 bench 15% of its cycles.
     #[inline(always)]
     pub(super) fn retired(&mut self, cpu: &Cpu, cycle: u64, pc: u64, wrote: bool) -> bool {
         if !self.sha_stop && self.watch.is_none() && !self.sha.recording() && cpu.pc > pc {
@@ -164,7 +146,6 @@ impl Detector {
 
     #[inline(never)]
     fn retired_slow(&mut self, cpu: &Cpu, cycle: u64, pc: u64, wrote: bool) -> bool {
-        // A skip that did not happen: what the step logged goes nowhere.
         if self.sha_stop {
             self.sha_stop = false;
             self.log.clear();
@@ -281,8 +262,6 @@ pub(super) struct Park {
     base: Regs,
     at: u64,
     len: u64,
-    /// What a register adds every pass; 0 for one that does not change, or
-    /// that changes with the counter.
     delta: Regs,
     /// The cycle the pass that leaves the loop starts, or the end of what
     /// [`MAX_SKIP`] let the search look at.
@@ -292,8 +271,6 @@ pub(super) struct Park {
 impl Park {
     fn fit(w: Watch, cpu: &mut Cpu, m: &Machine, timer: &GenericTimer) -> Option<Box<Park>> {
         let (pcs, reads) = w.pass?;
-        // Every input has to be something the run loop can watch without
-        // reading it.
         if reads
             .iter()
             .any(|r| peek(m, r.addr, r.size) != Some(r.value))
@@ -323,11 +300,10 @@ impl Park {
         for i in 0..4 {
             delta.sp[i] = step(&|r| r.sp[i]);
         }
-        // A register that moves every pass has to be counting down to zero,
-        // the way a timeout does: an end the search below can find. One
-        // counting up is compared against a limit, often for equality, and a
-        // halving search steps over the one pass that ends the loop (#53:
-        // UEFI's bitmap scan at `0x383288a0`, `cmp w3, #8`).
+        // A register that moves every pass must count **down** to zero, the way
+        // a timeout does: one counting up is compared against a limit, often
+        // for equality, and the halving search below would step over the one
+        // pass that ends the loop.
         let newest = &heads.last()?.1;
         let counts_down = |(&d, &v): (&u64, &u64)| d == 0 || ((d as i64) < 0 && (v as i64) > 0);
         if !delta.x.iter().zip(&newest.x).all(counts_down) || delta.sp.iter().any(|&d| d != 0) {
@@ -343,8 +319,6 @@ impl Park {
             delta,
             until: 0,
         };
-        // The rebuild has to reproduce every head watched, from the first
-        // and from the second.
         for b in 0..2 {
             park.base = heads[b].1;
             park.at = heads[b].0;
@@ -359,17 +333,13 @@ impl Park {
         let (at, last) = *heads.last()?;
         park.base = last;
         park.at = at;
-        // The first passes one by one: a loop about to end is not worth
-        // parking, and this finds its end whatever decides it.
+        // The first passes one by one: a loop about to end is not worth parking.
         park.rebuild(cpu, m, timer, 0).ok()?;
         for j in 0..MIN_SKIP {
             park.pass(cpu, m, timer, j, park.pcs.len()).ok()?;
         }
-        // Then the first pass that leaves the loop: the rebuilt state at its
-        // head makes a pass that strays from the watched one, or moves a
-        // countdown other than the rebuild does. Leaving is for good (the
-        // countdown hits zero, the counter passes a deadline), so a search
-        // doubling up to it and halving back down finds it.
+        // Then the first pass that leaves the loop. Leaving is for good, so a
+        // doubling-and-halving search finds it.
         let hi = park.room().saturating_add(2).min(MAX_SKIP);
         let mut leaves = |n: u64| {
             let r = park
@@ -406,12 +376,10 @@ impl Park {
         Some(Box::new(park))
     }
 
-    /// The loop's instructions, one pass.
     pub(super) fn pcs(&self) -> &[u64] {
         &self.pcs
     }
 
-    /// Has an input changed since the core parked?
     pub(super) fn inputs_changed(&self, m: &Machine) -> bool {
         self.reads
             .iter()
@@ -437,17 +405,15 @@ impl Park {
         d
     }
 
-    /// Do the countdowns in `cpu` hold what moving them on to pass `n`
-    /// gives?
     fn on_course(&self, cpu: &Cpu, n: u64) -> bool {
         let want = self.base.advanced(&self.delta, n);
         let regs = cpu.x.iter().zip(&want.x).zip(&self.delta.x);
         regs.filter(|(_, &d)| d != 0).all(|((v, w), _)| v == w)
     }
 
-    /// The state at the head of pass `n`: every register moved on to pass
-    /// `n - 2`, and the last two passes run, which puts back what the loop
-    /// computes from the counter. An error if one of them strays.
+    /// The state at the head of pass `n`: registers moved on to pass `n - 2`
+    /// and the last two passes run, which puts back what the loop computes from
+    /// the counter.
     fn rebuild(
         &self,
         cpu: &mut Cpu,
@@ -464,11 +430,9 @@ impl Park {
         })
     }
 
-    /// Run the first `steps` instructions of pass `n` on `cpu`, off the
-    /// machine: the reads get the watched values, the counter reads the
-    /// cycle each instruction runs in. An error if the pass strays, and for
-    /// a whole pass if it does not end back at the head having made every
-    /// read.
+    /// Run the first `steps` instructions of pass `n` off the machine: reads
+    /// get the watched values and the counter the cycle each instruction runs
+    /// in. An error if the pass strays from the watched one.
     fn pass(
         &self,
         cpu: &mut Cpu,
@@ -542,10 +506,9 @@ impl Park {
         s
     }
 
-    /// How many passes the base state can be moved on before a register that
-    /// changes every pass reaches or crosses 0, 2^31, 2^32 or 2^63 — where a
-    /// countdown ends or a counter wraps, and moving it on stops being what
-    /// the loop does.
+    /// How many passes the base state can be moved on before a per-pass
+    /// register crosses 0, 2^31, 2^32 or 2^63, where moving it on arithmetically
+    /// stops being what the loop does.
     fn room(&self) -> u64 {
         let base = self.base.x.iter().chain(&self.base.sp);
         let delta = self.delta.x.iter().chain(&self.delta.sp);
@@ -578,13 +541,11 @@ impl Park {
     }
 }
 
-/// A RAM read of at most 8 bytes, the way `ArmBus` routes one.
 pub(super) fn ram(m: &Machine, addr: u64, size: u32) -> Option<u64> {
     let end = addr.checked_add(u64::from(size))?;
     if size > 8 || end > m.ram.len() as u64 {
         return None;
     }
-    // The peripherals shadow the DRAM under them, as they do for the bus.
     if end > super::RAM_LOW_END && addr < super::RAM_HIGH_BASE {
         return None;
     }
@@ -621,9 +582,7 @@ struct SpecBus<'a> {
     timer: &'a GenericTimer,
     cycle: u64,
     reads: &'a [Read],
-    /// The next read the pass makes.
     pos: usize,
-    /// The pass did something a parked loop may not.
     bad: bool,
 }
 
@@ -641,7 +600,6 @@ impl Memory for SpecBus<'_> {
                 return Ok(r.value);
             }
         }
-        // A table walk after a TLB flush reads RAM the pass itself does not.
         ram(self.m, addr, size).ok_or_else(|| {
             self.bad = true;
             Abort { addr, write: false }

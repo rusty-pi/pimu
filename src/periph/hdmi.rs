@@ -1,42 +1,26 @@
 //! BCM2711 HDMI controller core registers — the `hdmi` window of each
 //! connector (`0x7EF0_0700`, `0x7EF0_5700`) — with no monitor attached.
 //!
+//! Registers and fields: `specs/hdmi.toml` ([`crate::spec::hdmi`]).
+//!
 //! No encoder or PHY stands behind the window. What is modelled is what
 //! firmware waits on; the rest of the window is plain sticky storage.
 //!
-//! ## Packet RAM (#61)
+//! **Packet RAM.** Rewriting a packet means turning its slot off in
+//! `RAM_PACKET_CONFIG`, waiting for `RAM_PACKET_STATUS` to follow, writing it,
+//! turning it back on and waiting again — and start4 does that with no timeout
+//! when it stops its display, so a status that never moves parks the mailbox
+//! thread serving `NOTIFY_DISPLAY_DONE` for good. So `RAM_PACKET_STATUS`
+//! follows the enable bits at once.
 //!
-//! The controller sends the packets in its packet RAM (infoframes, the general
-//! control packet) with every frame, one enable bit per slot in
-//! `RAM_PACKET_CONFIG`, and `RAM_PACKET_STATUS` reports which slots it is
-//! sending. Rewriting a packet means turning its slot off, waiting for the
-//! status to follow, writing it, turning it back on and waiting again. start4
-//! does that with no timeout when it stops its display (`0x3ECDFD68`, the
-//! AV-mute general control packet). On the catch-all stub the status never
-//! moved, so the mailbox thread serving `NOTIFY_DISPLAY_DONE` spun there for
-//! good. Linux's vc4 does the same with a 100 ms timeout.
+//! **FIFO recenter.** Software pulses `FIFO_CTL.RECENTER` and waits for
+//! `RECENTER_DONE`; the 2020-era bootcode (`pieeprom-2020-09-03`) does it on
+//! every boot with no timeout, and reads neither `HOTPLUG` nor the DDC bus
+//! first, so the recenter cannot need a sink. Any write with `RECENTER` set
+//! finishes at once and leaves `RECENTER_DONE` set.
 //!
-//! Model: `RAM_PACKET_STATUS` follows the enable bits at once.
-//!
-//! ## FIFO recenter (#63)
-//!
-//! After a mode set, software recentres the FIFO between the pixel valve and
-//! the encoder: it pulses `FIFO_CTL.RECENTER` and waits for `RECENTER_DONE`.
-//! The 2020-era bootcode (`pieeprom-2020-09-03`) brings HDMI up on every boot
-//! and spins on that bit with no timeout (`0x8000777E`). It reads neither
-//! `HOTPLUG` nor the DDC bus first, so headless boards take the same path, and
-//! the recenter cannot need a sink. On plain storage the bit never set, and
-//! those EEPROM images never got past it. Linux's vc4 waits 1 ms and warns.
-//!
-//! Model: any write with `RECENTER` set finishes a recenter at once and sets
-//! `RECENTER_DONE`, which then stays set.
-//!
-//! ## Hotplug
-//!
-//! Neither connector has a monitor, as on the reference board: `HOTPLUG`
-//! reads 0, so `CONNECTED` (the HPD line) is clear. start4 reads it on both
-//! connectors during boot, and Linux's `vc5_hdmi_hp_detect` reports it. The
-//! DDC side of "no monitor" is [`super::hdmi_ddc`]: no EDID EEPROM answers.
+//! **Hotplug.** Neither connector has a monitor by default, so `HOTPLUG` reads
+//! 0 and `CONNECTED` is clear; the DDC side of that is [`super::hdmi_ddc`].
 
 use std::collections::BTreeMap;
 
@@ -47,8 +31,6 @@ use crate::spec::hdmi::{
 };
 use crate::spec::Coverage;
 
-/// The packet-RAM handshake, the FIFO recenter and the hotplug state are
-/// modelled, on both connectors; the rest of the window is storage.
 pub const COVERAGE: Coverage = Coverage {
     block: "hdmi",
     decoded: &[FIFO_CTL, RAM_PACKET_CONFIG, RAM_PACKET_STATUS, HOTPLUG],
@@ -57,10 +39,8 @@ pub const COVERAGE: Coverage = Coverage {
 pub struct Hdmi {
     name: &'static str,
     storage: BTreeMap<u32, u32>,
-    /// `FIFO_CTL.RECENTER_DONE`.
     recenter_done: bool,
-    /// Whether a monitor is on this connector, which is what `HOTPLUG` answers.
-    /// False by default, as on the reference board; `boot --display` sets it.
+    /// Whether a monitor is on this connector; `boot --display` sets it.
     connected: bool,
 }
 
@@ -78,7 +58,7 @@ impl Hdmi {
     /// Note this is the *register*, which is not the same lever as a board's
     /// `hdmi_force_hotplug=1`: measured on a Raspberry Pi 4B d03115, stock
     /// firmware with that set still gives up on EDID after one attempt, where a
-    /// set `CONNECTED` bit makes it retry ten times (#143).
+    /// set `CONNECTED` bit makes it retry ten times.
     pub fn with_display(mut self) -> Hdmi {
         self.connected = true;
         self
@@ -98,10 +78,8 @@ impl MmioDevice for Hdmi {
         let off = offset & !3;
         Ok(match off {
             FIFO_CTL if self.recenter_done => self.reg(off) | FIFO_CTL_RECENTER_DONE_MASK,
-            // The encoder takes a slot on or off as soon as it is told to.
             RAM_PACKET_STATUS => self.reg(RAM_PACKET_CONFIG) & RAM_PACKET_CONFIG_PACKETS_MASK,
             HOTPLUG if self.connected => HOTPLUG_CONNECTED_MASK,
-            // Nothing plugged in.
             HOTPLUG => 0,
             _ => self.reg(off),
         })
@@ -150,7 +128,6 @@ mod tests {
             plugged.read(HOTPLUG, Width::Word).unwrap(),
             HOTPLUG_CONNECTED_MASK
         );
-        // Read-only: a write changes neither.
         plugged.write(HOTPLUG, Width::Word, 0).unwrap();
         bare.write(HOTPLUG, Width::Word, 0xFFFF_FFFF).unwrap();
         assert_eq!(
@@ -162,8 +139,8 @@ mod tests {
 
     #[test]
     fn a_packets_status_follows_its_enable() {
-        // start4's AV-mute write (`0x3ECDFD68`): slot 0 off, wait, write the
-        // packet, slot 0 on, wait.
+        // start4's AV-mute write: slot 0 off, wait, write the packet, slot 0
+        // on, wait.
         let mut h = Hdmi::new("hdmi0");
         h.write(RAM_PACKET_CONFIG, Width::Word, 1).unwrap();
         assert_eq!(status(&mut h) & 1, 1);
@@ -198,7 +175,6 @@ mod tests {
 
     #[test]
     fn linux_recenter_finishes_with_recenter_still_set() {
-        // vc4_hdmi_recenter_fifo(): clear, set, then wait with RECENTER set.
         let mut h = Hdmi::new("hdmi1");
         let drift = 0x5;
         h.write(FIFO_CTL, Width::Word, drift).unwrap();

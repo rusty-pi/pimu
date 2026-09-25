@@ -1,34 +1,19 @@
 //! Differential test of the A64 interpreter against `qemu-aarch64 -cpu
-//! cortex-a72` (#40, milestone 1).
+//! cortex-a72`. Each case is a random instruction stream between a prologue that
+//! loads every register and an epilogue that dumps them all; the same static ELF
+//! runs under QEMU and under [`Cpu`] with a two-syscall shim, and the two outputs
+//! must match byte for byte. A `SIGILL` handler logs and skips faulting PCs, and
+//! its log is part of the comparison, so unallocated encodings test the decoder's
+//! edges too. A mismatch is bisected down to the offending instruction.
 //!
-//! Each case is a random instruction stream wrapped in a prologue that loads
-//! every register from a data block and an epilogue that stores them all,
-//! plus a scratch buffer the stream loads from and stores to, and `write(2)`s
-//! it all to stdout. The same static ELF runs under QEMU's user-mode emulator
-//! and under [`Cpu`] with a two-syscall shim; the two outputs must match byte
-//! for byte.
-//!
-//! An instruction one side treats as UNDEFINED must be UNDEFINED on the other
-//! too. The program installs a `SIGILL` handler that logs the faulting PC and
-//! skips the instruction; our harness does the same when the core raises
-//! [`Exception::Undefined`], and the log is part of the compared output. So a
-//! generator that emits some unallocated encodings on purpose tests the
-//! decoder's edges for free, at one QEMU run per case.
-//!
-//! On a mismatch the culprit is found by bisection — `nop` out the tail of
-//! the stream until the outputs agree — and reported with its encoding.
-//!
-//! `qemu-aarch64` is `apt install qemu-user`. Without it the test is skipped,
-//! except under CI (`CI` set), where that is a failure. `PIMU_A64_CASES`
-//! overrides the number of random cases, `PIMU_A64_SEED` the first seed.
+//! Needs `qemu-user`; without it the test is skipped, except under CI (`CI` set).
+//! `PIMU_A64_CASES` and `PIMU_A64_SEED` override the case count and first seed.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
-/// SIMD&FP instructions (`op0` = x111) our core retired / found UNDEFINED
-/// across all cases, to show the random words are not all reserved space.
 static SIMD_RETIRED: AtomicU64 = AtomicU64::new(0);
 static SIMD_UNDEF: AtomicU64 = AtomicU64::new(0);
 
@@ -40,32 +25,25 @@ const BASE: u64 = 0x40_0000;
 const CODE: u64 = BASE + 0x1000;
 const CODE_MAX: u64 = 0x1_F000;
 const DATA: u64 = BASE + 0x2_0000;
-/// Initial register values: x0..x30 at 0, SP / NZCV / TPIDR_EL0 after them,
-/// q0..q31 at [`INIT_Q`].
 const INIT_SP: u64 = 31 * 8;
 const INIT_NZCV: u64 = 32 * 8;
 const INIT_TPIDR: u64 = 33 * 8;
 const INIT_FPCR: u64 = 34 * 8;
 const INIT_FPSR: u64 = 35 * 8;
 const INIT_Q: u64 = 0x200;
-/// `struct sigaction` and `stack_t` for the SIGILL handler.
 const INIT_SIGACT: u64 = 0x400;
 const INIT_ALTSS: u64 = 0x440;
 const SCRATCH: u64 = DATA + 0x1000;
 const SCRATCH_LEN: u64 = 0x1_0000;
-/// `x27` holds this for the whole stream; `x28` is reset to it plus an
-/// offset before every memory access, so accesses stay inside the buffer.
+/// `x27` holds this; `x28` is reset to it plus an offset before every access.
 const SCRATCH_MID: u64 = SCRATCH + SCRATCH_LEN / 2;
 const DUMP: u64 = SCRATCH + SCRATCH_LEN;
-/// Registers, then the SIGILL log: a count and the PC of every instruction
-/// that raised it.
 const DUMP_LEN: u64 = 0x800;
 const DUMP_Q: u64 = 0x200;
 const LOG: u64 = DUMP + 0x400;
 const END: u64 = DUMP + 0x1000;
-/// The SIGILL handler's stack, in a segment of its own well away from the
-/// image: if the stream's SP ever pointed into it, the kernel would take
-/// that as "already on the alternate stack" and push the frame at SP.
+/// The SIGILL handler's stack, in its own segment well away from the image: an
+/// SP pointing into it reads as "already on the alternate stack" to the kernel.
 const ALTSTACK: u64 = 0x5555_0000_0000;
 const ALTSTACK_LEN: u64 = 0x2000;
 
@@ -108,7 +86,6 @@ fn ldr_x(rt: u32, rn: u32, off: u64) -> u32 {
 fn str_x(rt: u32, rn: u32, off: u64) -> u32 {
     0xF900_0000 | (((off / 8) as u32) << 10) | (rn << 5) | rt
 }
-/// `add xd|sp, xn|sp, #imm{, lsl #12}`
 fn add_imm(rd: u32, rn: u32, imm: u32, lsl12: bool) -> u32 {
     0x9100_0000 | ((lsl12 as u32) << 22) | (imm << 10) | (rn << 5) | rd
 }
@@ -126,8 +103,7 @@ fn msr(sysreg: u32, rt: u32) -> u32 {
 
 fn prologue() -> Vec<u32> {
     let mut p = Vec::new();
-    // sigaltstack(&ss, NULL), then rt_sigaction(SIGILL, &act, NULL, 8). The
-    // stream may leave SP anywhere, so the handler gets its own stack.
+    // The stream may leave SP anywhere, so the handler gets its own stack.
     p.extend(mov_imm32(0, DATA + INIT_ALTSS));
     p.push(movz(1, 0, 0));
     p.push(movz(8, SYS_SIGALTSTACK as u16, 0));
@@ -191,9 +167,8 @@ fn epilogue() -> Vec<u32> {
     p
 }
 
-/// The SIGILL handler: append the faulting PC to the log at [`LOG`] and
-/// resume after it. `x2` is the `ucontext_t`, with `uc_mcontext.pc` at 440.
-/// Registers need no saving; `rt_sigreturn` restores them all.
+/// The SIGILL handler: log the faulting PC and resume after it (`x2` is the
+/// `ucontext_t`, `uc_mcontext.pc` at 440).
 fn handler() -> Vec<u32> {
     const UC_PC: u64 = 440;
     let mut p = vec![ldr_x(9, 2, UC_PC)];
@@ -215,7 +190,6 @@ struct Rng(u64);
 
 impl Rng {
     fn next(&mut self) -> u64 {
-        // splitmix64
         self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.0;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -234,7 +208,6 @@ impl Rng {
     fn chance(&mut self, one_in: u64) -> bool {
         self.below(one_in) == 0
     }
-    /// A value biased towards the edges flag computations care about.
     fn interesting(&mut self) -> u64 {
         match self.below(8) {
             0 => 0,
@@ -248,9 +221,8 @@ impl Rng {
     }
 }
 
-/// A floating-point value of `bits` (32 or 64) biased towards the cases the
-/// ARM rules single out: zeros, infinities, both kinds of NaN, denormals,
-/// the extremes of the normal range, and small integers and halves.
+/// A float biased towards what the ARM rules single out: zeros, infinities,
+/// NaNs, denormals, the extremes of the normal range, small integers, halves.
 fn fp_value(r: &mut Rng, bits: u32) -> u64 {
     let (e, f) = if bits == 32 { (8, 23) } else { (11, 52) };
     let sign = r.bits(1) as u64;
@@ -272,9 +244,8 @@ fn fp_value(r: &mut Rng, bits: u32) -> u64 {
     (sign << (bits - 1)) | (exp << f) | frac
 }
 
-/// A destination register the stream may overwrite: anything but `x27`
-/// (scratch base) and `x28` (address register). 31 is XZR in the encodings
-/// this is used for.
+/// A destination the stream may overwrite: not `x27` (scratch base) or `x28`
+/// (address register); 31 is XZR here.
 fn dst(r: &mut Rng) -> u32 {
     loop {
         let v = r.bits(5);
@@ -284,8 +255,6 @@ fn dst(r: &mut Rng) -> u32 {
     }
 }
 
-/// A destination where 31 would mean SP: allowed, SP is dumped too, but only
-/// sometimes so it is not clobbered all the time.
 fn dst_sp(r: &mut Rng) -> u32 {
     if r.chance(16) {
         31
@@ -299,7 +268,6 @@ fn dst_sp(r: &mut Rng) -> u32 {
     }
 }
 
-/// A load destination: not 27/28 (and not the base, which is always 28).
 fn ld_dst(r: &mut Rng) -> u32 {
     dst(r)
 }
@@ -307,9 +275,7 @@ fn ld_dst(r: &mut Rng) -> u32 {
 struct Gen {
     r: Rng,
     body: Vec<u32>,
-    /// Branches to patch once the body length is known: (index, kind).
     branches: Vec<(usize, BranchKind)>,
-    /// Where each emitted group starts; the only valid branch targets.
     starts: Vec<usize>,
 }
 
@@ -325,7 +291,6 @@ impl Gen {
         CODE + 4 * (prologue().len() + index) as u64
     }
 
-    /// `add x28, x27, #off` (or `sub`), to point `x28` into the buffer.
     fn reset_base(&mut self, align: u64) {
         let off = self.r.below(0x800) & !(align - 1);
         let sub = self.r.chance(2);
@@ -333,8 +298,7 @@ impl Gen {
             .push(add_imm(28, 27, off as u32, false) | ((sub as u32) << 30));
     }
 
-    /// Fill bits [28:25]-selected group with random bits, keeping `x27`/`x28`
-    /// out of the destination field.
+    /// Random bits in the [28:25]-selected group, keeping `x27`/`x28` out of Rd.
     fn random_dp(&mut self, group: u32) -> u32 {
         let mut w = (self.r.u32() & !(0xF << 25)) | (group << 25);
         let rd = w & 0x1F;
@@ -344,15 +308,12 @@ impl Gen {
         w
     }
 
-    /// A random word in the SIMD&FP space. Mostly it picks one of the
-    /// encoding classes (fixed bits as `(value, mask)`, the same split
-    /// `src/aarch64/simd.rs` decodes by) and randomises only the rest, so
-    /// most words are allocated; one in four is anything with `op0` = x111.
-    /// Crypto encodings are left out: QEMU's cortex-a72 has the extension,
-    /// the Pi's does not (see `src/aarch64/simd.rs`).
+    /// A random word in the SIMD&FP space: mostly one of the encoding classes
+    /// below (the split `src/aarch64/simd.rs` decodes by) with the rest random,
+    /// one in four anything with `op0` = x111. Crypto is left out — QEMU's
+    /// cortex-a72 has the extension and the Pi's does not.
     fn random_simd(&mut self) -> u32 {
         const CLASSES: &[(u32, u32)] = &[
-            // Advanced SIMD, vector.
             (0x0e20_0400, 0x9f20_0400), // three same
             (0x0e20_0000, 0x9f20_0c00), // three different
             (0x0e20_0800, 0x9f3e_0c00), // two-register misc
@@ -364,7 +325,6 @@ impl Gen {
             (0x0e00_0000, 0xbf20_8c00), // table lookup
             (0x0e00_0800, 0xbf20_8c00), // permute
             (0x2e00_0000, 0xbf20_8400), // extract
-            // Advanced SIMD, scalar.
             (0x5e20_0400, 0xdf20_0400),
             (0x5e20_0000, 0xdf20_0c00),
             (0x5e20_0800, 0xdf3e_0c00),
@@ -372,7 +332,6 @@ impl Gen {
             (0x5e00_0400, 0xdfe0_8400), // copy
             (0x5f00_0000, 0xdf00_0400), // by element
             (0x5f00_0400, 0xdf80_0400), // shift by immediate
-            // Scalar floating point.
             (0x1e00_0000, 0x7f20_0000), // <-> fixed point
             (0x1e20_0000, 0x7f20_fc00), // <-> integer
             (0x1e20_2000, 0xff20_3c00), // compare
@@ -392,7 +351,6 @@ impl Gen {
                 let (value, mask) = CLASSES[r.below(CLASSES.len() as u64) as usize];
                 let w = (w & !mask) | value;
                 if value & 0x5e00_0000 == 0x1e00_0000 && !r.chance(8) {
-                    // Scalar FP: single or double, mostly.
                     (w & !(3 << 22)) | (r.bits(1) << 22)
                 } else {
                     w
@@ -405,8 +363,7 @@ impl Gen {
             if crypto {
                 continue;
             }
-            // General-register destinations (FMOV, UMOV, FCVTZS, ...) must not
-            // hit x27/x28.
+            // General-register destinations must not hit x27/x28.
             let rd = w & 0x1F;
             if rd == 27 || rd == 28 {
                 w = (w & !0x1F) | (rd - 16);
@@ -457,14 +414,12 @@ impl Gen {
                 self.body.push(w);
             }
             48..=50 => self.emit_simd_ldst(),
-            // Fully random data-processing words, reserved encodings included.
             0..=5 => {
                 let g = [0b1000, 0b1001, 0b0101, 0b1101][r.below(4) as usize];
                 let w = self.random_dp(g);
                 self.body.push(w);
             }
             6 | 7 => {
-                // ADD/SUB (immediate)
                 let s = r.bits(1);
                 let rd = if s == 1 { dst(r) } else { dst_sp(r) };
                 let w = (sf << 31)
@@ -495,13 +450,11 @@ impl Gen {
                 self.body.push(w);
             }
             10 | 11 => {
-                // Move wide
                 let w =
                     (sf << 31) | (r.bits(2) << 29) | (0b100101 << 23) | (r.bits(18) << 5) | dst(r);
                 self.body.push(w);
             }
             12..=14 => {
-                // Bitfield / extract, N = sf most of the time.
                 let n = if r.chance(8) { r.bits(1) } else { sf };
                 let hi = if sf == 1 || r.chance(8) { 6 } else { 5 };
                 let (op, opc) = if r.chance(4) {
@@ -527,7 +480,6 @@ impl Gen {
                 self.body.push(w);
             }
             15..=17 => {
-                // Logical / add-sub (shifted register)
                 let w = self.random_dp(0b0101) & !(1 << 28);
                 let w = if self.r.chance(2) {
                     (w & !(0x1F << 24)) | (0b01010 << 24)
@@ -537,7 +489,6 @@ impl Gen {
                 self.body.push(w);
             }
             18 => {
-                // Add-sub (extended register)
                 let s = r.bits(1);
                 let rd = if s == 1 { dst(r) } else { dst_sp(r) };
                 let w = (sf << 31)
@@ -552,7 +503,6 @@ impl Gen {
                 self.body.push(w);
             }
             19..=21 => {
-                // ADC/SBC, CCMP/CCMN, CSEL family, 1/2/3-source
                 let top = [
                     0x1A00_0000u32,
                     0x1A40_0000,
@@ -579,12 +529,10 @@ impl Gen {
             22..=27 => self.emit_ldst(),
             28 => self.emit_exclusive(),
             29 => {
-                // DC ZVA
                 self.reset_base(1);
                 self.body.push(0xD50B_7420 | 28);
             }
             30 => {
-                // LDR (literal) into the data block.
                 let target = DATA + (self.r.below(0x800) & !7);
                 let pc = self.pc_of(self.body.len());
                 let imm19 = (((target as i64 - pc as i64) >> 2) as u32) & 0x7_FFFF;
@@ -627,7 +575,6 @@ impl Gen {
                 self.branches.push((self.body.len() - 1, kind));
             }
             35 => {
-                // MRS/MSR of the EL0-visible registers.
                 let reg = [NZCV, TPIDR_EL0, FPCR, FPSR][self.r.below(4) as usize];
                 let rt = self.r.bits(5);
                 if self.r.chance(2) {
@@ -666,8 +613,7 @@ impl Gen {
                 );
             }
             1 => {
-                // Unscaled, post-index, unprivileged, pre-index. A store that
-                // writes back must not store its own base (UNPREDICTABLE).
+                // A store that writes back must not store its own base.
                 let mode = r.bits(2);
                 let rt = if mode & 1 == 1 && rt == 28 { 0 } else { rt };
                 let imm9 = r.bits(9);
@@ -684,7 +630,6 @@ impl Gen {
                 );
             }
             2 => {
-                // Register offset, index in x26.
                 let option = [2, 3, 6, 7, r.bits(3)][r.below(5) as usize];
                 let idx = if option & 4 != 0 && r.chance(2) {
                     0x9280_0000 | ((r.bits(8)) << 5) | 26 // movn x26, #k
@@ -794,7 +739,6 @@ impl Gen {
         let base = (size << 30) | (0b001000 << 24) | (o1 << 21) | (st2 << 10) | (28 << 5);
         self.body.push(base | (rs << 16) | (rel << 15) | st);
         if self.r.chance(3) {
-            // LDAR / STLR
             let size = self.r.bits(2);
             self.reset_base(8);
             let l = self.r.bits(1);
@@ -817,8 +761,7 @@ impl Gen {
         }
     }
 
-    /// Point every branch forward at the start of a later group (or the
-    /// epilogue), never between a base reset and the access that uses it.
+    /// Branch forward to a group start, never between a base reset and its use.
     fn patch_branches(&mut self) {
         let len = self.body.len();
         self.starts.push(len);
@@ -893,7 +836,6 @@ fn generate(seed: u64, len: usize) -> Case {
     }
 }
 
-/// The whole program as a static little-endian AArch64 ELF.
 fn elf(case: &Case) -> Vec<u8> {
     let mut code = prologue();
     code.extend(&case.body);
@@ -934,8 +876,7 @@ fn elf(case: &Case) -> Vec<u8> {
     let words: Vec<u8> = code.iter().flat_map(|w| w.to_le_bytes()).collect();
     put(&mut f, (CODE - BASE) as usize, &words);
     put(&mut f, (DATA - BASE) as usize, &case.init);
-    // struct sigaction { handler, flags, restorer, mask } and stack_t
-    // { ss_sp, ss_flags, ss_size }.
+    // struct sigaction { handler, flags, restorer, mask }, then stack_t.
     let act = (DATA + INIT_SIGACT - BASE) as usize;
     put(&mut f, act, &handler_at.to_le_bytes());
     put(&mut f, act + 8, &(SA_SIGINFO | SA_ONSTACK).to_le_bytes());
@@ -994,8 +935,7 @@ fn run_ours(image: &[u8]) -> Outcome {
     cpu.pc = CODE;
     let body_start = CODE + 4 * prologue().len() as u64;
     let mut out = Vec::new();
-    // PIMU_A64_TRACE=1: print every body instruction and the registers it
-    // changed.
+    // PIMU_A64_TRACE=1: print every body instruction and what it changed.
     let trace = std::env::var_os("PIMU_A64_TRACE").is_some();
     for _ in 0..1_000_000 {
         let before = trace.then(|| (cpu.pc, cpu.x, cpu.sp(), cpu.nzcv));
@@ -1040,7 +980,6 @@ fn run_ours(image: &[u8]) -> Outcome {
                 if simd {
                     SIMD_UNDEF.fetch_add(1, Ordering::Relaxed);
                 }
-                // What the guest's SIGILL handler does.
                 let n = mem.read(LOG, 8).unwrap();
                 mem.write(LOG + 8 + 8 * n, 8, cpu.pc).unwrap();
                 mem.write(LOG, 8, n + 1).unwrap();
@@ -1097,7 +1036,6 @@ fn same(a: &Outcome, b: &Outcome) -> bool {
     matches!((a, b), (Outcome::Output(x), Outcome::Output(y)) if x == y)
 }
 
-/// Describe how two register dumps differ.
 fn diff_dumps(ours: &[u8], theirs: &[u8]) -> String {
     let word = |d: &[u8], i: usize| u64::from_le_bytes(d[i * 8..i * 8 + 8].try_into().unwrap());
     let mut s = String::new();
@@ -1162,8 +1100,7 @@ fn disasm(words: &[u32], tag: u64) -> String {
         .unwrap_or_default()
 }
 
-/// Run one case. Returns how many SIGILLs both sides agreed on, or a report
-/// of the first instruction they disagree about.
+/// Run one case: the SIGILLs both sides agreed on, or the first disagreement.
 fn check(qemu: &Path, seed: u64, len: usize) -> Result<u64, String> {
     let case = generate(seed, len);
     let tag = format!("{seed}");
@@ -1173,7 +1110,6 @@ fn check(qemu: &Path, seed: u64, len: usize) -> Result<u64, String> {
         let log = (LOG - DUMP) as usize;
         return Ok(u64::from_le_bytes(a[log..log + 8].try_into().unwrap()));
     }
-    // Bisect for the first instruction whose inclusion breaks agreement.
     let (mut good, mut bad) = (0, case.body.len());
     while bad - good > 1 {
         let mid = (good + bad) / 2;
@@ -1227,8 +1163,7 @@ fn random_streams_match_qemu() {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(1);
-    // Cases are independent and QEMU start-up dominates, so spread them over
-    // the host's cores.
+    // QEMU start-up dominates, so spread the independent cases over the cores.
     let next = AtomicU64::new(first);
     let undefs = AtomicU64::new(0);
     let failures = Mutex::new(Vec::new());

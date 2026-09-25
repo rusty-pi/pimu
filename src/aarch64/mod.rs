@@ -1,33 +1,17 @@
-//! The AArch64 core (#40). This module holds the architecture facts the
-//! interpreter and the ARM side share: exception entry, interrupt routing, and
-//! the system-register move encoding.
+//! The AArch64 core: the architecture facts the interpreter and the ARM side
+//! share — exception entry, interrupt routing, and the system-register move
+//! encoding.
 //!
-//! They were lifted from the in-process Unicorn core on the `arm-unicorn` branch
-//! (PR #36). Unicorn takes no exception into the guest and has no interrupt
-//! input, so that core did exception and IRQ entry by hand, and these are the
-//! pieces of it that are pure architecture rather than Unicorn glue. With them
-//! it ran the firmware's armstub and the kernel through `hvc`s to its own EL2
-//! stub, the scheduler, and thousands of timer and mailbox interrupts.
+//! Exception entry follows ARM ARM D1.10.2. The preferred return address is
+//! the faulting instruction for UNDEFINED and BRK, the next one for
+//! SVC/HVC/SMC, and the next to execute for an interrupt.
 //!
-//! Exception entry (ARM ARM D1.10.2), for an interpreter to do the same way:
-//! save `PSTATE` to `SPSR_ELx` and the preferred return address to `ELR_ELx`,
-//! write `ESR_ELx` for a synchronous exception, bank the live stack pointer
-//! (`SP_EL0` if `PSTATE.SP` was 0, else the old EL's), switch to ELxh with
-//! `DAIF` masked, and branch to `VBAR_ELx` + [`vector_group`] + the kind
-//! ([`VECTOR_SYNC`] / [`VECTOR_IRQ`] / [`VECTOR_FIQ`]). The preferred return
-//! address is the faulting instruction for UNDEFINED and BRK, the next one for
-//! SVC/HVC/SMC, and the next instruction to execute for an interrupt (for a
-//! core in `wfi`, the one after it).
+//! **Invariant:** an interrupt pending while the target EL has it masked must
+//! be taken soon after the unmask, or Linux livelocks — its idle loop unmasks
+//! for only a few instructions after each `wfi`.
 //!
-//! An interrupt pending while the target EL has it masked must be taken soon
-//! after the unmask, or Linux livelocks: its idle loop runs `wfi` with IRQs
-//! masked and unmasks for only a few instructions after waking
-//! (`default_idle_call`: `cpu_do_idle()` then `raw_local_irq_enable()`).
-//!
-//! The interpreter itself is [`Cpu`] (state, [`Cpu::step`]) and `exec`
-//! (decode and execute). `tests/a64_diff.rs` runs random instruction streams
-//! through it and through `qemu-aarch64 -cpu cortex-a72` and compares the
-//! results.
+//! The interpreter itself is [`Cpu`] and `exec`; `tests/a64_diff.rs` diffs it
+//! against `qemu-aarch64 -cpu cortex-a72`.
 
 mod cpu;
 mod exec;
@@ -39,13 +23,13 @@ pub mod sysreg;
 
 pub use cpu::{Abort, Cpu, Exception, Memory, Step, NZCV_C, NZCV_N, NZCV_V, NZCV_Z};
 
-/// ESR_ELx exception classes (ARM ARM D17.2.37).
+/// `ESR_ELx` exception classes (ARM ARM D17.2.37).
 pub const EC_UNKNOWN: u64 = 0x00;
 pub const EC_SVC64: u64 = 0x15;
 pub const EC_HVC64: u64 = 0x16;
 pub const EC_SMC64: u64 = 0x17;
 pub const EC_BRK64: u64 = 0x3C;
-/// ESR_ELx.IL: the trapped instruction was 32 bits.
+/// `ESR_ELx.IL`: the trapped instruction was 32 bits.
 pub const ESR_IL: u64 = 1 << 25;
 
 /// Offsets of the exception kinds within each group of four vectors
@@ -74,9 +58,7 @@ pub const HCR_TGE: u64 = 1 << 27;
 /// `wfi`.
 pub const INSN_WFI: u32 = 0xd503_207f;
 
-/// The offset of the vector group an exception from `from_el` to `to_el`
-/// uses: `+0x000` current EL with `SP_EL0`, `+0x200` current EL with `SP_ELx`,
-/// `+0x400` lower EL using AArch64 (everything here is AArch64).
+/// The vector-group offset for an exception from `from_el` to `to_el`.
 pub fn vector_group(from_el: u32, to_el: u32, spsel: bool) -> u64 {
     match (from_el == to_el, spsel) {
         (true, false) => 0x000,
@@ -85,12 +67,10 @@ pub fn vector_group(from_el: u32, to_el: u32, spsel: bool) -> u64 {
     }
 }
 
-/// The EL an IRQ (or FIQ) is taken to from a core in `pstate`, or `None` if
-/// it stays pending there (ARM ARM D1.13.4). `SCR_EL3.IRQ` sends it to EL3;
-/// in non-secure state `HCR_EL2.IMO` or `TGE` send it to EL2; otherwise it
-/// goes to EL1. Only an interrupt to the current EL is masked by `PSTATE.I`;
-/// one to a higher EL is taken regardless, and one to a lower EL waits —
-/// so at EL2 or EL3 an interrupt nobody routed there is never taken.
+/// The EL an IRQ or FIQ is taken to, or `None` if it stays pending (ARM ARM
+/// D1.13.4). Only an interrupt to the *current* EL is masked by `PSTATE.I`; a
+/// higher EL takes it regardless and a lower one waits, so at EL2 or EL3 an
+/// interrupt nobody routed there is never taken.
 pub fn irq_target(scr: u64, hcr: u64, pstate: u64, fiq: bool) -> Option<u32> {
     let el = pstate_el(pstate);
     let (scr_bit, hcr_bit, mask) = if fiq {
@@ -125,8 +105,7 @@ pub struct SysregMove {
 }
 
 impl SysregMove {
-    /// `1101010100 L 1 o0 op1 CRn CRm op2 Rt` — the `op0` 2/3 system-register
-    /// moves (ARM ARM C5.2).
+    /// The `op0` 2/3 system-register moves (ARM ARM C5.2).
     pub fn decode(insn: u32) -> Option<SysregMove> {
         if insn & 0xFFD0_0000 != 0xD510_0000 {
             return None;
@@ -142,9 +121,8 @@ impl SysregMove {
         })
     }
 
-    /// The encoding space the architecture reserves for IMPLEMENTATION
-    /// DEFINED registers (ARM ARM D12.3.2: `op0 == 3`, `CRn` 11 or 15), where
-    /// the A72 keeps `L2CTLR_EL1`, `CPUECTLR_EL1` and friends.
+    /// The IMPLEMENTATION DEFINED encoding space (ARM ARM D12.3.2), where the
+    /// A72 keeps `L2CTLR_EL1`, `CPUECTLR_EL1` and friends.
     pub fn is_impdef(&self) -> bool {
         self.op0 == 3 && (self.crn == 11 || self.crn == 15)
     }

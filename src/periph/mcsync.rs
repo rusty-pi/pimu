@@ -1,28 +1,21 @@
 //! Multicore-sync block at `0x7E00_0000`: thirty-two hardware semaphores the
 //! two VPU cores claim, plus the mailbox words and ack registers around them.
 //!
-//! Register map: `specs/mcsync.toml` ([`crate::spec::mcsync`]). The block names
-//! itself `MULT` in every reserved word of its window, the way the GPIO block
-//! names itself `gpio`.
+//! Registers and fields: `specs/mcsync.toml` ([`crate::spec::mcsync`]). The
+//! block names itself `MULT` in every reserved word of its window, the way the
+//! GPIO block names itself `gpio`.
 //!
-//! [`SEMA`]`[slot]` is test-and-set, measured on a Raspberry Pi 4B d03115: a
-//! read answers 0 if the semaphore was free **and takes it**, or 1 if it was
-//! already held, and any write releases it whatever value is written. So
-//! start4's `0x3ED3A00C`, which spins **while** the word is non-zero, is an
-//! acquire loop, and its `0x3ED3A114`, which writes 1, is a release.
-//!
-//! That corrects what this file used to say. The old note claimed storing the
-//! slots "fails -- with nothing on the far side to clear a slot, `0x3ED3A00C`
-//! spins forever", and concluded that modelling the doorbell honestly needed
-//! core 1 to service it. What actually fails is storing the *written* value and
-//! handing it back: hardware never does that. Nothing on the far side is
-//! required, because the acquire loop ends as soon as the semaphore is free.
+//! [`SEMA`]`[slot]` is test-and-set: a read answers 0 if the semaphore was free
+//! **and takes it**, or 1 if it was already held, and any write releases it
+//! whatever value is written. A read is therefore not a load, and a spin while
+//! the word is non-zero is an acquire loop that ends as soon as the semaphore
+//! is free — nothing on the far side has to clear it.
 //!
 //! [`STATUS`] is the hardware's bitmap of which semaphores are held, not a
 //! separate pending set. The firmware treats a held semaphore as a message
-//! waiting, which is why its ISR at `0x3ED3A098` clears exactly these bits from
-//! its ack word; neither core enables source 76 or 77 on the pinned boot
-//! (`--log irqen`), so the doorbell interrupt is not how start4 is woken.
+//! waiting, and clears exactly these bits from its ack word; neither core
+//! enables source 76 or 77 on the pinned boot (`--log irqen`), so the doorbell
+//! interrupt is not how start4 is woken.
 //!
 //! Everything else in the window reads 0.
 
@@ -37,10 +30,8 @@ pub const COVERAGE: Coverage = Coverage {
 
 #[derive(Default)]
 pub struct McSync {
-    /// Which semaphores are held, one bit per slot: what [`STATUS`] answers.
     held: u32,
-    /// How many semaphores were taken over the run. Nothing reads it yet; it
-    /// is the one number worth having if the block ever needs a report.
+    /// How many semaphores were taken over the run.
     pub posts: u64,
 }
 
@@ -49,7 +40,6 @@ impl McSync {
         McSync::default()
     }
 
-    /// The slot `offset` addresses, if it is one of the semaphores.
     fn slot(offset: u32) -> Option<u32> {
         let rel = offset.checked_sub(SEMA)?;
         (rel % SEMA_STRIDE == 0 && rel / SEMA_STRIDE < SEMA_COUNT).then_some(rel / SEMA_STRIDE)

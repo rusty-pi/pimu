@@ -1,42 +1,29 @@
-//! USB devices behind the VL805's root hub — the half of issue #18 stage 3
-//! that is not xHCI.
+//! USB devices behind the VL805's root hub — the half that is not xHCI.
 //!
-//! [`super::xhci`] is the host controller: rings, contexts, doorbells. This
-//! file is what those rings eventually talk to. A device here answers control
-//! transfers with descriptors and class requests and moves bytes on its bulk
-//! and interrupt endpoints; it knows nothing about TRBs.
+//! [`super::xhci`] is the host controller: rings, contexts, doorbells. A device
+//! here answers control transfers with descriptors and class requests and moves
+//! bytes on its bulk and interrupt endpoints; it knows nothing about TRBs. A
+//! device may have downstream ports of its own, so attachment is a tree:
+//! [`UsbDevice::child`] is how the controller walks an xHCI route string.
 //!
-//! Two devices are modelled, both from bytes measured on a
-//! Raspberry Pi 4B d03115 with a Samsung "Flash Drive FIT" plugged in, from the
-//! `lsusb -v` capture that produced the tables below:
+//! Both devices are modelled from bytes measured on a Raspberry Pi 4B d03115
+//! with a Samsung "Flash Drive FIT" plugged in (`lsusb -v`, `/sys/bus/usb`):
 //!
-//! * [`Hub`] — the VIA Labs `2109:3431` four-port hub that a Pi 4B has soldered
-//!   to xHCI root port 1. It is the *only* thing a stock board has on the bus
-//!   with nothing plugged in, and it is why the reference log's second
-//!   `XHCI-STOP` prints `USBSTS 18` instead of `USBSTS 0`.
-//! * [`MassStorage`] — a Bulk-Only Transport / SCSI disk, modelled on the
-//!   Samsung "Flash Drive FIT" (`090c:1000`) the ground-truth capture used.
-//!   This is what `--usb <img>` attaches, and — as the high-speed device a USB
-//!   3 stick is in a USB 2.0 socket — what `--otg <img>` puts on the USB-C
-//!   port ([`MassStorage::with_disk_hs`]).
-//!
-//! ## Topology
-//!
-//! A device may itself have downstream ports, so the attachment is a tree, not
-//! a list: [`UsbDevice::child`] is how the controller walks an xHCI route
-//! string down to the device a slot addresses.
+//! * [`Hub`] — the VIA Labs `2109:3431` four-port hub soldered to xHCI root
+//!   port 1. It is the only thing a stock board has on the bus with nothing
+//!   plugged in.
+//! * [`MassStorage`] — a Bulk-Only Transport / SCSI disk (`090c:1000`), what
+//!   `--usb <img>` attaches and, as the high-speed device a USB 3 stick is in a
+//!   USB 2.0 socket, what `--otg <img>` puts on the USB-C port.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-/// The medium behind a [`MassStorage`], shared with the SD card model.
 pub use super::disk::Disk;
 use super::disk::BLOCK_SIZE;
 
-/// The `PORTSC` / slot-context speed encoding (xHCI 4.19.7 "Protocol Speed
-/// ID"), for the default speed IDs the VL805 reports in its supported-protocol
-/// extended capabilities.
+/// The `PORTSC` / slot-context speed encoding (xHCI 4.19.7).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Speed {
     Full = 1,
@@ -45,8 +32,7 @@ pub enum Speed {
     Super = 4,
 }
 
-/// A USB SETUP packet, as it arrives in the immediate data of a Setup Stage
-/// TRB.
+/// A USB SETUP packet, as it arrives in a Setup Stage TRB.
 #[derive(Clone, Copy, Debug)]
 pub struct Setup {
     pub request_type: u8,
@@ -72,7 +58,6 @@ impl Setup {
     }
 }
 
-// Standard request codes (USB 2.0 §9.4).
 const REQ_GET_STATUS: u8 = 0;
 const REQ_CLEAR_FEATURE: u8 = 1;
 const REQ_SET_FEATURE: u8 = 3;
@@ -88,67 +73,53 @@ const DESC_CONFIG: u8 = 2;
 const DESC_STRING: u8 = 3;
 const DESC_BOS: u8 = 15;
 
-/// What a control or data transfer did. `Stall` is a protocol error the host
-/// reports as a Stall Error completion code; it is a legitimate answer to an
-/// unsupported request and several enumeration paths depend on getting it.
+/// What a control or data transfer did. `Stall` is the legitimate answer to an
+/// unsupported request, and enumeration paths depend on getting it.
 ///
-/// `Nak` is the device saying "nothing yet": on the wire it NAKs the token and
-/// the host controller retries, so the transfer stays outstanding and the host
-/// sees no completion at all. That is not the same as `Ok(Vec::new())`, which
-/// completes the transfer with zero bytes — a real device only answers that
-/// way when it means it. The hub's status-change endpoint is the one that
-/// matters: an idle hub NAKs it forever, and answering a zero-length
-/// completion instead had Linux resubmit the URB about two thousand times a
-/// second (#125).
+/// `Nak` is "nothing yet": the transfer stays outstanding and the host sees no
+/// completion at all, which is **not** `Ok(Vec::new())`, a real completion with
+/// zero bytes. An idle hub NAKs its status-change endpoint forever; answering
+/// zero-length instead has Linux resubmit the URB thousands of times a second.
 pub enum Xfer {
     Ok(Vec<u8>),
     Nak,
     Stall,
 }
 
-/// One USB device on the bus.
 pub trait UsbDevice: 'static {
-    /// The speed the port reports when this device is attached.
     fn speed(&self) -> Speed;
 
     /// A port reset happened above this device: address back to 0, and for a
     /// hub, its downstream ports back to powered-but-idle.
     fn reset(&mut self);
 
-    /// A control transfer on endpoint 0. `data_out` is the OUT payload, empty
-    /// for an IN request; the returned bytes are the IN payload, truncated by
-    /// the caller to `setup.length`.
+    /// A control transfer on endpoint 0; the caller truncates the reply to
+    /// `setup.length`.
     fn control(&mut self, setup: &Setup, data_out: &[u8]) -> Xfer;
 
-    /// An IN transfer on a non-zero endpoint. `len` is how much the host asked
-    /// for; returning fewer bytes is a short packet, which the host reports as
-    /// a Short Packet completion with the residue.
+    /// An IN transfer on a non-zero endpoint; fewer bytes than `len` is a
+    /// short packet.
     fn data_in(&mut self, _ep: u8, _len: usize) -> Xfer {
         Xfer::Stall
     }
 
-    /// An OUT transfer on a non-zero endpoint.
     fn data_out(&mut self, _ep: u8, _data: &[u8]) -> Xfer {
         Xfer::Stall
     }
 
-    /// The device on downstream port `port` (1-based), for a hub. The
-    /// `'static` bound is what lets the controller hand the borrow back up
-    /// through several hub tiers without the lifetime collapsing.
+    /// The device on downstream port `port` (1-based), for a hub.
     fn child(&mut self, _port: u8) -> Option<&mut (dyn UsbDevice + 'static)> {
         None
     }
 
-    /// Whether this device has downstream ports at all — the slot context's
-    /// "Hub" bit, which the host sets when it configures a hub.
+    /// The slot context's "Hub" bit.
     fn is_hub(&self) -> bool {
         false
     }
 }
 
-/// Answer the descriptor and configuration requests every device answers the
-/// same way, given its descriptor bytes. Returns `None` for anything
-/// device-specific, which the caller then handles or stalls.
+/// The requests every device answers the same way; `None` for anything
+/// device-specific, which the caller handles or stalls.
 fn standard_control(dev: &mut CommonState, desc: &Descriptors, setup: &Setup) -> Option<Xfer> {
     // Only standard device-directed requests are handled here.
     if setup.request_type & 0x60 != 0 {
@@ -172,8 +143,7 @@ fn standard_control(dev: &mut CommonState, desc: &Descriptors, setup: &Setup) ->
                 _ => return None,
             }
         }
-        // SET_ADDRESS never reaches a device on xHCI — the controller does
-        // addressing itself — but answering it costs nothing.
+        // SET_ADDRESS never reaches a device on xHCI, but answering is free.
         REQ_SET_ADDRESS => {
             dev.address = setup.value as u8;
             Xfer::Ok(Vec::new())
@@ -191,27 +161,22 @@ fn standard_control(dev: &mut CommonState, desc: &Descriptors, setup: &Setup) ->
     })
 }
 
-/// The descriptor bytes a device answers `GET_DESCRIPTOR` with.
 pub struct Descriptors {
     pub device: Vec<u8>,
-    /// The configuration descriptor *and* everything that follows it —
-    /// interface, endpoints, companions — as one blob, which is what a
-    /// `wLength`-sized `GET_DESCRIPTOR(CONFIG)` returns.
+    /// The configuration descriptor and everything after it as one blob, which
+    /// is what `GET_DESCRIPTOR(CONFIG)` returns.
     pub config: Vec<u8>,
     pub bos: Option<Vec<u8>>,
     pub strings: HashMap<u8, Vec<u8>>,
-    /// The `GET_STATUS` low byte: bit 0 self-powered, bit 1 remote wakeup.
     pub status: u8,
 }
 
-/// State every device keeps regardless of class.
 #[derive(Default)]
 pub struct CommonState {
     pub address: u8,
     pub configuration: u8,
 }
 
-/// A UTF-16LE string descriptor.
 fn string_desc(s: &str) -> Vec<u8> {
     let utf16: Vec<u16> = s.encode_utf16().collect();
     let mut v = vec![(2 + utf16.len() * 2) as u8, DESC_STRING];
@@ -221,15 +186,10 @@ fn string_desc(s: &str) -> Vec<u8> {
     v
 }
 
-/// String descriptor 0: the supported language list, US English.
 fn lang_desc() -> Vec<u8> {
     vec![4, DESC_STRING, 0x09, 0x04]
 }
 
-// ---------------------------------------------------------------------------
-// The VIA Labs hub
-
-/// Hub class requests (USB 2.0 §11.24.2).
 const HUB_FEAT_PORT_CONNECTION: u16 = 0;
 const HUB_FEAT_PORT_ENABLE: u16 = 1;
 const HUB_FEAT_PORT_RESET: u16 = 4;
@@ -242,32 +202,16 @@ const HUB_FEAT_C_PORT_RESET: u16 = 20;
 
 const DESC_HUB: u8 = 0x29;
 
-/// One downstream port of [`Hub`], in `GET_PORT_STATUS` terms.
 #[derive(Default)]
 struct HubPort {
     device: Option<Box<dyn UsbDevice>>,
-    /// `wPortStatus`, low half of the `GET_PORT_STATUS` reply.
     status: u16,
-    /// `wPortChange`, high half — write-1-to-clear through
-    /// `CLEAR_FEATURE(C_PORT_*)`.
     change: u16,
 }
 
 /// The VIA Labs `2109:3431` four-port hub soldered to xHCI root port 1 of every
-/// Pi 4B. Descriptor bytes below are verbatim from a Raspberry Pi 4B d03115:
-///
-/// ```text
-/// $ od -An -tx1 -v /sys/bus/usb/devices/1-1/descriptors
-///  12 01 10 02 09 00 01 40 09 21 31 34 21 04 00 01
-///  00 01 09 02 19 00 01 01 00 e0 32 09 04 00 00 01
-///  09 00 00 00 07 05 81 03 01 00 0c
-/// ```
-///
-/// i.e. `bcdUSB 2.10`, class 9 / protocol 1 (single TT), `bMaxPacketSize0 64`,
-/// `bcdDevice 4.21`, `iProduct 1` = "USB2.0 Hub"; one configuration
-/// (`wTotalLength 0x19`, self-powered + remote wakeup, 100 mA), one interface,
-/// one interrupt-IN endpoint `0x81` with `wMaxPacketSize 1`, `bInterval 12`.
-/// The hub descriptor and BOS blob were read the same way.
+/// Pi 4B. Every descriptor byte below is verbatim from a Raspberry Pi 4B
+/// d03115 (`/sys/bus/usb/devices/1-1/descriptors`).
 pub struct Hub {
     common: CommonState,
     desc: Descriptors,
@@ -286,8 +230,6 @@ impl Hub {
         strings.insert(0, lang_desc());
         strings.insert(1, string_desc("USB2.0 Hub"));
         let mut ports: [HubPort; 4] = Default::default();
-        // Power is on from the start: `lsusb -v` reports every port
-        // `0000.0100 power` with nothing plugged in.
         for p in &mut ports {
             p.status = 1 << 8;
         }
@@ -310,19 +252,15 @@ impl Hub {
                     0x43, 0x4c, 0x30,
                 ]),
                 strings,
-                // Self-powered, remote wakeup off: `Device Status 0x0001`.
                 status: 0x01,
             },
             ports,
         }
     }
 
-    /// Plug `device` into downstream port `port` (1-based).
     pub fn attach(&mut self, port: u8, device: Box<dyn UsbDevice>) {
         let speed = device.speed();
         let p = &mut self.ports[(port - 1) as usize];
-        // Connected, powered, and at the speed the device negotiated. Bit 9 is
-        // low-speed, bit 10 high-speed (USB 2.0 table 11-21).
         p.status = 1
             | (1 << 8)
             | match speed {
@@ -334,10 +272,8 @@ impl Hub {
         p.device = Some(device);
     }
 
-    /// `09 29 04 e0 00 32 64 00 ff` — four ports, ganged power and
-    /// over-current, 32 FS-bit TT think time, port indicators, `bPwrOn2PwrGood`
-    /// 50 (× 2 ms), `bHubContrCurrent` 100 mA, no removable ports, all-ones
-    /// power-control mask. Measured; `lsusb -v` decodes it field for field.
+    /// The hub descriptor, measured: four ports, ganged power and over-current,
+    /// port indicators, no removable ports.
     fn hub_descriptor() -> Vec<u8> {
         vec![0x09, DESC_HUB, 0x04, 0xe0, 0x00, 0x32, 0x64, 0x00, 0xff]
     }
@@ -346,10 +282,7 @@ impl Hub {
         let recipient = setup.request_type & 0x1F;
         let port = setup.index as usize;
         match (recipient, setup.request) {
-            // GET_DESCRIPTOR(HUB) — class-specific, so it does not go through
-            // `standard_control`.
             (0, REQ_GET_DESCRIPTOR) => Xfer::Ok(Hub::hub_descriptor()),
-            // Hub status: no local power change, no over-current.
             (0, REQ_GET_STATUS) => Xfer::Ok(vec![0, 0, 0, 0]),
             (0, REQ_SET_FEATURE) | (0, REQ_CLEAR_FEATURE) => Xfer::Ok(Vec::new()),
             (3, REQ_GET_STATUS) => {
@@ -367,9 +300,9 @@ impl Hub {
                 match setup.value {
                     HUB_FEAT_PORT_POWER => p.status |= 1 << 8,
                     HUB_FEAT_PORT_RESET => {
-                        // A reset on an occupied port completes immediately and
-                        // leaves the port enabled, which is the only state the
-                        // firmware's poll loop can make progress from.
+                        // A reset on an occupied port completes at once and
+                        // leaves the port enabled, the only state the
+                        // firmware's poll loop progresses from.
                         if let Some(d) = p.device.as_mut() {
                             d.reset();
                             p.status |= 1 << 1; // PORT_ENABLE
@@ -425,9 +358,8 @@ impl UsbDevice for Hub {
         }
     }
 
-    /// Endpoint `0x81`, the status-change endpoint. One byte, one bit per port
-    /// plus bit 0 for the hub itself; nothing to report is a NAK, so the
-    /// host's poll stays outstanding until a port actually changes.
+    /// Endpoint `0x81`: one bit per port plus bit 0 for the hub. Nothing to
+    /// report is a NAK, so the host's poll stays outstanding.
     fn data_in(&mut self, ep: u8, _len: usize) -> Xfer {
         if ep != 1 {
             return Xfer::Stall;
@@ -453,25 +385,18 @@ impl UsbDevice for Hub {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Bulk-Only Transport mass storage
-
-/// `CBW` signature `USBC`, `CSW` signature `USBS` (Bulk-Only Transport §5.1).
 const CBW_SIGNATURE: u32 = 0x4342_5355;
 const CSW_SIGNATURE: u32 = 0x5342_5355;
 const CBW_LEN: usize = 31;
 const CSW_LEN: usize = 13;
 
-/// What the device is in the middle of, between the CBW and the CSW.
 enum BotPhase {
     /// Waiting for the next command block.
     Command,
-    /// Data to hand back on the bulk-IN endpoint, then a CSW.
+    /// Data to hand back on bulk-IN, then a CSW.
     DataIn { data: Vec<u8>, tag: u32 },
-    /// Bytes still expected on the bulk-OUT endpoint before the CSW. A SCSI
-    /// WRITE carries the block the data lands on and the part of a block
-    /// received so far; other OUT data is swallowed. `status` goes into the
-    /// CSW.
+    /// Bytes still expected on bulk-OUT before the CSW. A SCSI WRITE carries
+    /// where the data lands; other OUT data is swallowed.
     DataOut {
         remaining: usize,
         tag: u32,
@@ -482,8 +407,7 @@ enum BotPhase {
     Status { tag: u32, residue: u32, status: u8 },
 }
 
-/// A READ or WRITE command's LBA and block count, from its 10-, 12- or 16-byte
-/// form; `None` for anything else, or a command block too short for its form.
+/// A READ or WRITE command's LBA and block count, in any of its three forms.
 fn lba_count(cdb: &[u8]) -> Option<(u64, u64)> {
     let be = |r: std::ops::Range<usize>| {
         cdb.get(r)
@@ -497,21 +421,16 @@ fn lba_count(cdb: &[u8]) -> Option<(u64, u64)> {
     }
 }
 
-/// A USB mass-storage device: Bulk-Only Transport carrying SCSI, backed by a
-/// [`Disk`].
-///
-/// Identity is the Samsung "Flash Drive FIT" (`090c:1000`) the ground truth was
-/// captured from — descriptors verbatim from `lsusb -v` on a Raspberry Pi 4B
-/// d03115, `INQUIRY` fields from `/sys/block/sda/device/*`. The capacity is the
-/// [`Disk`]'s rather than the stick's, because that is the one field a fixture
-/// cannot borrow.
+/// A USB mass-storage device: Bulk-Only Transport carrying SCSI over a
+/// [`Disk`]. Identity is measured on a Raspberry Pi 4B d03115 — descriptors
+/// from `lsusb -v`, `INQUIRY` fields from `/sys/block/sda/device/*` — but the
+/// capacity is the [`Disk`]'s.
 pub struct MassStorage {
     common: CommonState,
     desc: Descriptors,
     disk: Rc<RefCell<Disk>>,
     phase: BotPhase,
-    /// What the port reports with this stick in it: SuperSpeed in a blue
-    /// socket, high speed in a USB 2.0 one ([`MassStorage::with_disk_hs`]).
+    /// SuperSpeed in a blue socket, high speed in a USB 2.0 one.
     speed: Speed,
 }
 
@@ -520,8 +439,7 @@ impl MassStorage {
         MassStorage::with_disk(Rc::new(RefCell::new(Disk::from_vec(image))))
     }
 
-    /// The stick on a [`Disk`] shared with whoever holds the other handle: in
-    /// `boot`, the next boot after a reset.
+    /// The stick on a [`Disk`] shared with the next boot after a reset.
     pub fn with_disk(disk: Rc<RefCell<Disk>>) -> MassStorage {
         let mut strings = HashMap::new();
         strings.insert(0, lang_desc());
@@ -545,7 +463,6 @@ impl MassStorage {
                 ],
                 bos: None,
                 strings,
-                // Bus powered, no remote wakeup.
                 status: 0x00,
             },
             disk,
@@ -554,19 +471,11 @@ impl MassStorage {
         }
     }
 
-    /// The same stick in a USB 2.0 socket — the USB-C port on the BCM2711's
-    /// own xHCI (`--otg`, [`crate::periph::xhci_otg`]), which has no
-    /// SuperSpeed half to fall back from.
-    ///
-    /// A USB 3 device in a USB 2.0 port enumerates as a high-speed device, and
-    /// what it reports then follows from the measured SuperSpeed descriptors by
-    /// the USB 2.0 rules rather than from a second capture: `bcdUSB` 2.00,
-    /// endpoint zero 64 bytes instead of the SuperSpeed `2^9`, bulk endpoints
-    /// 512 bytes and no SuperSpeed companion descriptors, and the configuration
-    /// draws the same current in the 2 mA units USB 2.0 counts it in
-    /// (`0x26` × 8 mA = `0x98` × 2 mA). Everything else — the identity strings,
-    /// the interface, the endpoint numbers, the SCSI answers — is the stick's
-    /// own.
+    /// The same stick in a USB 2.0 socket (`--otg`). Not a second capture: a
+    /// USB 3 device in a USB 2.0 port enumerates high-speed, so these follow
+    /// from the measured SuperSpeed descriptors by the USB 2.0 rules —
+    /// `bcdUSB` 2.00, 64-byte endpoint zero, 512-byte bulk endpoints, no
+    /// SuperSpeed companions, and the same current in 2 mA units.
     pub fn with_disk_hs(disk: Rc<RefCell<Disk>>) -> MassStorage {
         let mut dev = MassStorage::with_disk(disk);
         dev.speed = Speed::High;
@@ -587,22 +496,16 @@ impl MassStorage {
         self.disk.borrow().blocks()
     }
 
-    /// Run one SCSI command block, returning the IN payload (for a read) and
-    /// the CSW status byte.
     fn scsi(&mut self, cdb: &[u8], alloc: usize) -> (Vec<u8>, u8) {
         match cdb.first().copied().unwrap_or(0) {
-            // TEST UNIT READY
             0x00 => (Vec::new(), 0),
-            // REQUEST SENSE — always "no sense", fixed format.
             0x03 => {
                 let mut s = vec![0u8; 18];
                 s[0] = 0x70;
                 s[7] = 10;
                 (s, 0)
             }
-            // INQUIRY. Fields measured off the reference stick: peripheral type
-            // 0 (direct access), removable, SPC-5 (`scsi_level 7` means the
-            // version byte is 6), vendor/model/rev padded to 8/16/4.
+            // INQUIRY, fields measured: direct access, removable, SPC-5.
             0x12 => {
                 let mut d = vec![0u8; 36];
                 d[0] = 0x00;
@@ -615,7 +518,6 @@ impl MassStorage {
                 d[32..36].copy_from_slice(b"1100");
                 (d, 0)
             }
-            // READ CAPACITY(10): last LBA, then block length.
             0x25 => {
                 let last = self.blocks().saturating_sub(1) as u32;
                 let mut d = Vec::with_capacity(8);
@@ -623,19 +525,14 @@ impl MassStorage {
                 d.extend_from_slice(&(BLOCK_SIZE as u32).to_be_bytes());
                 (d, 0)
             }
-            // READ(10) / READ(12) / READ(16)
             0x28 | 0xA8 | 0x88 => {
                 match lba_count(cdb).and_then(|(lba, n)| self.disk.borrow().read(lba, n)) {
                     Some(data) => (data, 0),
                     None => (Vec::new(), 1),
                 }
             }
-            // MODE SENSE(6): one header, no pages, not write protected.
             0x1A => (vec![3, 0, 0, 0], 0),
-            // PREVENT/ALLOW MEDIUM REMOVAL, START STOP UNIT, SYNCHRONIZE CACHE
             0x1E | 0x1B | 0x35 => (Vec::new(), 0),
-            // Anything else fails the command; the firmware only issues the
-            // handful above.
             _ => {
                 let _ = alloc;
                 (Vec::new(), 1)
@@ -675,14 +572,12 @@ impl MassStorage {
                 };
             }
         } else {
-            // WRITE(10) / WRITE(12) / WRITE(16): the data goes onto the disk as
-            // it arrives. Other OUT data is swallowed and reported good.
+            // WRITE: the data goes onto the disk as it arrives.
             let (write, status) = match cdb.first().copied() {
                 Some(0x2A | 0xAA | 0x8A) => match lba_count(&cdb) {
                     Some((lba, n)) if lba.saturating_add(n) <= self.blocks() => {
                         (Some((lba, Vec::new())), 0)
                     }
-                    // Past the end, or malformed: swallowed, and the command fails.
                     _ => (None, 1),
                 },
                 _ => (None, 0),
@@ -718,12 +613,9 @@ impl UsbDevice for MassStorage {
     }
 
     fn control(&mut self, setup: &Setup, _data_out: &[u8]) -> Xfer {
-        // Bulk-Only Transport class requests (§3).
         if setup.request_type & 0x60 == 0x20 {
             return match setup.request {
-                // GET MAX LUN — one logical unit, so zero.
                 0xFE => Xfer::Ok(vec![0]),
-                // BULK-ONLY MASS STORAGE RESET
                 0xFF => {
                     self.phase = BotPhase::Command;
                     Xfer::Ok(Vec::new())
@@ -741,11 +633,8 @@ impl UsbDevice for MassStorage {
         if ep != 2 {
             return Xfer::Stall;
         }
-        // A drive that stalls its data phase. The phase is over either way —
-        // the next IN gets the status, which is what BOT 6.7.2 has the host
-        // read once it has cleared the halt. Without that the drive would
-        // hand the data back on the next IN and every recovery would look
-        // broken, which is how this was first mismeasured.
+        // A stalled data phase is over either way: the next IN gets the status,
+        // which is what BOT 6.7.2 has the host read once it clears the halt.
         if crate::jitter::fault("a stalled bulk IN") {
             if let BotPhase::DataIn { data, tag } =
                 std::mem::replace(&mut self.phase, BotPhase::Command)
@@ -800,7 +689,6 @@ impl UsbDevice for MassStorage {
                 let take = data.len().min(remaining);
                 if let Some((lba, pending)) = &mut write {
                     pending.extend_from_slice(&data[..take]);
-                    // Whole blocks go onto the disk as they complete.
                     let whole = pending.len() / BLOCK_SIZE * BLOCK_SIZE;
                     if whole > 0 {
                         self.disk.borrow_mut().write(*lba, &pending[..whole]);
@@ -863,7 +751,6 @@ mod tests {
                 0x00, 0x01, 0x00, 0x01
             ]
         );
-        // VID 2109 PID 3431, the pair the bootloader's `DEV` line prints.
         assert_eq!(u16::from_le_bytes([d[8], d[9]]), 0x2109);
         assert_eq!(u16::from_le_bytes([d[10], d[11]]), 0x3431);
     }
@@ -873,7 +760,6 @@ mod tests {
         let mut hub = Hub::new();
         for port in 1..=4 {
             let st = ctrl(&mut hub, 0xA3, REQ_GET_STATUS, 0, port, 4);
-            // `lsusb -v`: "Port n: 0000.0100 power".
             assert_eq!(st, vec![0x00, 0x01, 0x00, 0x00], "port {port}");
         }
     }
@@ -885,7 +771,6 @@ mod tests {
         let st = ctrl(&mut hub, 0xA3, REQ_GET_STATUS, 0, 3, 4);
         assert_eq!(u16::from_le_bytes([st[0], st[1]]) & 1, 1, "connected");
         assert_eq!(u16::from_le_bytes([st[2], st[3]]), 1, "C_PORT_CONNECTION");
-        // The status-change endpoint flags the port that changed.
         match hub.data_in(1, 1) {
             Xfer::Ok(v) => assert_eq!(v, vec![0b1000]),
             Xfer::Nak => panic!("naked"),
@@ -930,7 +815,6 @@ mod tests {
         );
         assert_eq!(csw[12], 0, "command succeeded");
 
-        // READ CAPACITY(10) reports the image's own geometry.
         let mut cbw = vec![0u8; CBW_LEN];
         cbw[..4].copy_from_slice(&CBW_SIGNATURE.to_le_bytes());
         cbw[8..12].copy_from_slice(&8u32.to_le_bytes());
@@ -968,7 +852,6 @@ mod tests {
         assert_eq!(data[511], 0x55);
     }
 
-    /// A CBW for a 10-byte READ or WRITE of `count` blocks at `lba`.
     fn rw10(op: u8, lba: u32, count: u16, dir_in: bool) -> Vec<u8> {
         let mut cbw = vec![0u8; CBW_LEN];
         cbw[..4].copy_from_slice(&CBW_SIGNATURE.to_le_bytes());
@@ -981,8 +864,8 @@ mod tests {
         cbw
     }
 
-    /// What the rpi-mkosi initrd does to the stick on its first boot: repart
-    /// writes past the end of the image, and reads it back after a reset.
+    /// What an initrd's repart does: write past the end of the image, then read
+    /// it back after a reset.
     #[test]
     fn writes_land_on_the_disk_and_outlive_the_device() {
         let disk = Rc::new(RefCell::new(Disk::from_vec(vec![0x11; 4 * BLOCK_SIZE])));
@@ -990,7 +873,6 @@ mod tests {
         let mut msd = MassStorage::with_disk(disk.clone());
         let mut data = vec![0xAB; BLOCK_SIZE];
         data.extend(vec![0xCD; BLOCK_SIZE]);
-        // Two blocks at LBA 9, in bulk-OUT chunks that split a block.
         assert!(matches!(
             msd.data_out(1, &rw10(0x2A, 9, 2, false)),
             Xfer::Ok(_)
@@ -1002,7 +884,6 @@ mod tests {
         };
         assert_eq!(csw[12], 0, "write succeeded");
         assert_eq!(disk.borrow().written_blocks(), 2);
-        // The next boot's device on the same disk reads them back.
         let mut next = MassStorage::with_disk(disk.clone());
         next.data_out(1, &rw10(0x28, 8, 3, true));
         let Xfer::Ok(back) = next.data_in(2, 3 * BLOCK_SIZE) else {
@@ -1010,7 +891,6 @@ mod tests {
         };
         assert_eq!(back[..BLOCK_SIZE], [0u8; BLOCK_SIZE][..], "past the image");
         assert_eq!(back[BLOCK_SIZE..], data[..]);
-        // The image's own blocks are still the image's.
         assert_eq!(disk.borrow().read(0, 1).unwrap(), vec![0x11; BLOCK_SIZE]);
     }
 

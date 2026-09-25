@@ -1,5 +1,4 @@
-//! `boot`: boot the machine from an EEPROM image, as a Pi 4 does, or run a
-//! VPU ELF; then report on the run.
+//! `boot`: boot the machine from an EEPROM image, as a Pi 4 does, or run a VPU ELF, then report on the run.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -24,13 +23,11 @@ use crate::mbox::{mbox_property_exchange, MboxRequest, MboxTag};
 use crate::otp::{Format, OtpFile};
 use crate::{parse_hex_image, parse_u32};
 
-/// Blue socket A. Root port 1 is the USB2 port feeding the on-board VIA
-/// hub, so a SuperSpeed fixture goes on port 2 — measured on a Raspberry Pi 4B
-/// d03115 by moving a stick between sockets and re-reading `PORTSC`.
+/// Blue socket A: root port 1 is the USB2 port feeding the on-board VIA hub, so a
+/// SuperSpeed fixture goes on port 2 (measured on a Raspberry Pi 4B d03115).
 const USB_ROOT_PORT: usize = 2;
 
-/// `boot --help` (#99). Every option `BootOpts::parse` takes is here, one to a
-/// line, bar the no-op `--arm`; a test holds the two to that.
+/// `boot --help`. A test holds this and `BootOpts::parse` to the same option list.
 const HELP: &str = "\
 pimu boot — boot the machine from an EEPROM image, as a Pi 4 does, or
 run a VPU ELF
@@ -334,24 +331,18 @@ PIMU_* environment variables are in docs/diagnostics.md):
               (PIMU_TRACE_MMIO=<lo>-<hi> for one address range).
 ";
 
-/// `--net`: what on the host the Ethernet cable plugs into (#45).
 enum HostNet {
-    /// `--net passt`: a passt of our own, on a socket pair.
     Passt,
-    /// `--net passt:<socket>`: whatever listens on that UNIX socket.
     Socket(PathBuf),
 }
 
-/// `boot`'s options, as the command line gave them.
 struct BootOpts {
     path: PathBuf,
     entry: Option<u32>,
     usb_mb: Option<u64>,
     display: bool,
     display_edid: Option<PathBuf>,
-    /// No instruction cap by default — a full boot retires well over a billion,
-    /// and the wall clock is the useful bound. `--max-steps` is for pinning a
-    /// run to an exact instruction count (bisecting, probes).
+    /// No cap by default: the wall clock is the useful bound.
     max_steps: Option<u64>,
     max_wall_secs: u64,
     eeprom: bool,
@@ -366,36 +357,22 @@ struct BootOpts {
     dumps: Vec<(u32, u32)>,
     disasms: Vec<(u32, u32)>,
     sd_image: Option<PathBuf>,
-    /// `--sd-dir <dir>`: a card built out of a directory of firmware files.
     sd_dir: Option<PathBuf>,
-    /// `--emmc <img>`: the same slot, but an e-MMC part rather than a card.
     emmc_image: Option<PathBuf>,
-    /// `--hat <eep>`: a HAT's ID EEPROM image on I2C0.
     hat_eeprom: Option<PathBuf>,
-    /// `--check-coherency`: report reads of memory the VPU wrote through a
-    /// cached alias and has not flushed.
     check_coherency: bool,
-    /// `--check-alignment`: report scalar VPU accesses that are not
-    /// naturally aligned.
     check_alignment: bool,
-    /// `--jitter <seed>`: stretch the modelled intervals from this seed.
     jitter: Option<u64>,
-    /// `--faults <one-in>`: how often one of those goes wrong instead.
     faults: Option<u64>,
     console_log: Option<PathBuf>,
     dump_fdt: Option<PathBuf>,
     print_fdt: bool,
-    /// One entry per `--mbox-property` or `--mbox-raw`, so several exchanges
-    /// can be made
-    /// against the same booted firmware. A crypto tag that fails leaves an
-    /// error code behind that only the *next* request can ask for
-    /// (`0x0003008e`).
+    /// Several exchanges against one booted firmware: a failed crypto tag leaves an
+    /// error code only the *next* request can ask for (`0x0003008e`).
     mbox_tags: Vec<MboxRequest>,
-    /// One entry per `--gencmd`: a command line for the firmware's `GCMD`
-    /// service, all of them run over one VCHIQ connection.
+    /// `--gencmd` command lines, all run over one VCHIQ connection.
     gencmds: Vec<String>,
     usb_image: Option<PathBuf>,
-    /// `--otg <img>`: the same, in the USB-C socket (#113).
     otg_image: Option<PathBuf>,
     netboot_root: Option<PathBuf>,
     host_net: Option<HostNet>,
@@ -406,48 +383,28 @@ struct BootOpts {
     stepping: Option<Stepping>,
     board_rev: Option<u32>,
     dram_map: bool,
-    /// `--eeprom-map`: the EEPROM section table as well as the boot
-    /// configuration `-v` decodes.
     eeprom_map: bool,
-    /// `--stub-log`: the peripheral-window offsets that fell through to the
-    /// catch-all stub.
     stub_log: bool,
-    /// `--control-transfers`: the VPU's last control transfers.
     control_transfers: bool,
     skip_signed_boot: bool,
-    /// `--tryboot`: seed the tryboot request in `PM_RSTS` for the first boot.
     tryboot: bool,
     skip_unimpl: bool,
     until: Option<String>,
     sends: Vec<(String, Vec<u8>)>,
     stdin: bool,
-    /// Without `-v` the run prints the serial console, the outcome and whatever
-    /// was asked for by name (#55); the full run report is for investigating.
     verbose: bool,
-    /// `-q`: no serial console on stdout (#100).
     quiet: bool,
-    /// `--log`: the channels to log, and how (#95).
     log: Spec,
-    /// `--log-file`: where they go, stderr without it.
     log_file: Option<String>,
-    /// `--otp <format>:<file>`: the fuse array across runs (#93).
     otp: Option<OtpFile>,
 }
 
-/// Zero-config (#114): an option left out takes the file of that name in the
-/// working directory, when there is one, so a directory holding `pieeprom.bin`
-/// and `sd.img` boots with a bare `pimu boot`. The names are the ones
-/// the Pi's own tooling gives: `rpi-eeprom-config` writes `bootconf.txt` and
-/// `pubkey.bin`, and the rest name the medium they are.
-///
-/// Only an option the command line is silent about is filled in, and only when
-/// no option that rules it out was given: `--emmc` is the same host as `--sd`,
-/// `--net` the same cable as `--netboot`.
+/// Zero-config: an option left out takes the file of that name in the working
+/// directory, under the names the Pi's own tooling gives. Only an option the
+/// command line is silent about is filled in, and only when nothing rules it out
+/// (`--emmc` is the same host as `--sd`, `--net` the same cable as `--netboot`).
 struct ZeroConfig<'a> {
-    /// Where to look; empty for the working directory, a temporary one under
-    /// test.
     dir: &'a Path,
-    /// What was picked up, in the order it was, for the line the run prints.
     found: Vec<String>,
 }
 
@@ -459,12 +416,10 @@ impl<'a> ZeroConfig<'a> {
         }
     }
 
-    /// `<dir>/<name>`, when `slot` is empty and the file is there.
     fn file(&mut self, slot: &mut Option<PathBuf>, name: &str) {
         self.pick(slot, name, |p| p.is_file())
     }
 
-    /// The same for a directory, which is what `--netboot` serves.
     fn dir(&mut self, slot: &mut Option<PathBuf>, name: &str) {
         self.pick(slot, name, |p| p.is_dir())
     }
@@ -480,10 +435,8 @@ impl<'a> ZeroConfig<'a> {
         }
     }
 
-    /// The working directory itself, when it holds a boot partition's files
-    /// rather than an image of one: a `raspberrypi/firmware` checkout's
-    /// `boot/`, or any directory with a `start4.elf` or a `config.txt` in it.
-    /// `boot` builds the card around them (`pimu::fat`).
+    /// A directory of boot-partition files rather than an image of one; `boot`
+    /// builds the card around them (`pimu::fat`).
     fn boot_partition(&mut self, slot: &mut Option<PathBuf>) {
         let dir = if self.dir.as_os_str().is_empty() {
             Path::new(".")
@@ -496,9 +449,7 @@ impl<'a> ZeroConfig<'a> {
         }
     }
 
-    /// `otp.json` / `otp.bin`: the name carries the format, so the two together
-    /// say nothing about which array to read — that asks for an explicit
-    /// `--otp`.
+    /// The name carries the format, so both present means an explicit `--otp` is needed.
     fn otp(&mut self) -> Result<Option<OtpFile>> {
         let mut file: Option<OtpFile> = None;
         for (name, format) in [("otp.json", Format::Json), ("otp.bin", Format::Binary)] {
@@ -518,9 +469,8 @@ impl<'a> ZeroConfig<'a> {
         Ok(file)
     }
 
-    /// `bootconf.txt`: every line of it, as `--bootconf` gives one. Blank lines
-    /// and `#` comments go; a `[section]` header stays, since the file the
-    /// lines are appended to has those too.
+    /// Every line of `bootconf.txt`, as `--bootconf` gives one. A `[section]`
+    /// header stays, since the file the lines are appended to has those too.
     fn bootconf(&mut self) -> Result<Vec<String>> {
         let name = "bootconf.txt";
         let path = self.dir.join(name);
@@ -551,9 +501,7 @@ impl<'a> ZeroConfig<'a> {
         Ok(lines)
     }
 
-    /// Name what was picked up: those options are not on the command line, so
-    /// nothing else says what the run booted from. On stderr, to leave the
-    /// serial console on stdout alone.
+    /// On stderr, to leave the serial console on stdout alone.
     fn announce(&self) {
         if !self.found.is_empty() {
             eprintln!("zero-config: {}", self.found.join(" "));
@@ -561,15 +509,10 @@ impl<'a> ZeroConfig<'a> {
     }
 }
 
-/// The EEPROM image to boot a directory of firmware files with: a firmware
-/// checkout has none of its own, and the bootloader is what loads `start4.elf`
-/// off the card in the first place — `start4.elf` run from its ELF entry
-/// stalls with nothing on the console, since the bootloader does more than
-/// place its segments.
-///
-/// So it comes from `rusty-pi/pi4-firmware`, whose `bootmain` boots a stock
-/// `start4.elf` the way the stock stage does, and is cached: downloaded once
-/// with `gh`, then read from `$XDG_CACHE_HOME/pimu` (`~/.cache/pimu`).
+/// The EEPROM image to boot a directory of firmware files with. A firmware
+/// checkout has no bootloader of its own, and `start4.elf` run from its ELF entry
+/// stalls silently — the bootloader does more than place its segments. So it comes
+/// from `rusty-pi/pi4-firmware`, cached under `$XDG_CACHE_HOME/pimu`.
 fn fallback_eeprom() -> Result<PathBuf> {
     let cache = std::env::var_os("XDG_CACHE_HOME")
         .map(PathBuf::from)
@@ -577,8 +520,7 @@ fn fallback_eeprom() -> Result<PathBuf> {
         .context("no XDG_CACHE_HOME and no HOME to cache the EEPROM image under")?
         .join("pimu");
     let path = cache.join("pieeprom-latest.bin");
-    // Nothing on the command line says what booted the medium, so the run
-    // does, the way the rest of zero-config does.
+    // Nothing on the command line says what booted the medium, so the run does.
     eprintln!("zero-config: {REPO}'s EEPROM image, {}", path.display());
     if path.is_file() {
         return Ok(path);
@@ -600,8 +542,7 @@ fn fallback_eeprom() -> Result<PathBuf> {
         .output();
     let out = match out {
         Ok(out) => out,
-        // The repository is private, so an authenticated `gh` is how it is
-        // read; say what to do when there is none rather than what failed.
+        // The repository is private: say what to do, not what failed.
         Err(e) => bail!(
             "no EEPROM image to boot with, and gh could not be run to fetch \
              {REPO}'s ({e}). Give one with --eeprom, or put the `pieeprom.bin` \
@@ -619,13 +560,10 @@ fn fallback_eeprom() -> Result<PathBuf> {
     Ok(path)
 }
 
-/// Where that image comes from.
 const REPO: &str = "rusty-pi/pi4-firmware";
 
 impl BootOpts {
-    /// The options, or `None` for `-h` / `--help`. `dir` is where zero-config
-    /// looks for the files an option leaves out (see [`ZeroConfig`]): empty for
-    /// the working directory.
+    /// The options, or `None` for `--help`. `dir` is where [`ZeroConfig`] looks.
     fn parse(args: &[String], dir: &Path) -> Result<Option<Self>> {
         let mut path: Option<PathBuf> = None;
         let mut entry: Option<u32> = None;
@@ -687,8 +625,6 @@ impl BootOpts {
         while let Some(a) = it.next() {
             match a.as_str() {
                 "--entry" => entry = Some(parse_u32(it.next().context("--entry needs a value")?)?),
-                // `--eeprom <image>`, or the older `<image> --eeprom` with the image
-                // given as the positional argument.
                 "--eeprom" => {
                     eeprom = true;
                     if path.is_none() {
@@ -723,8 +659,7 @@ impl BootOpts {
                     trace_from = parse_u32(it.next().context("--trace-from needs a value")?)?
                 }
                 "--trace-mmio" => trace_mmio = true,
-                // The ARM is always modelled since #52; old command lines keep
-                // working.
+                // The ARM is always modelled; kept for old command lines.
                 "--arm" => {}
                 "--until" => until = Some(it.next().context("--until needs a text")?.to_string()),
                 "--send-after" => {
@@ -868,13 +803,10 @@ impl BootOpts {
                     let list = it.next().context("--mbox-property needs a tag list")?;
                     let mut group: Vec<MboxTag> = Vec::new();
                     for t in list.split(',') {
-                        // `<tag>[:<value-buffer bytes>][=<word>.<word>...]`.
-                        // The size override exists because start4's idea of how
-                        // much room a tag needs is not always its Linux client's
-                        // `sizeof`; the request words exist because most crypto
-                        // tags take a `key_id`, and those are **1-based** — asking
-                        // for key 0 answers `KEY_NOT_FOUND` on a part whose only
-                        // key is key 1.
+                        // `<tag>[:<value-buffer bytes>][=<word>.<word>...]`. start4's
+                        // idea of a tag's size is not always its Linux client's
+                        // `sizeof`; crypto `key_id`s are **1-based**, and key 0
+                        // answers `KEY_NOT_FOUND`.
                         let (head, req) = match t.split_once('=') {
                             Some((a, b)) => (
                                 a,
@@ -911,20 +843,15 @@ impl BootOpts {
                 s => bail!("unexpected argument '{s}' (try boot --help)"),
             }
         }
-        // A directory rather than a file to boot: everything is read from
-        // there instead of from the working directory, as `-C` does it, and
-        // the directory itself is the card when it holds a boot partition's
-        // files (#144).
+        // A directory to boot: read from there, as `-C` does, and it is itself
+        // the card when it holds a boot partition's files.
         let from = match path.take_if(|p| p.is_dir()) {
             Some(p) => p,
             None => dir.to_path_buf(),
         };
-        // Zero-config (#114): whatever the command line left out, and the
-        // directory has under the name that option's medium goes by.
         let mut zero = ZeroConfig::new(&from);
         if path.is_none() {
             zero.file(&mut path, "pieeprom.bin");
-            // Found, it is an EEPROM image: nothing else is called that.
             eeprom |= path.is_some();
         }
         if emmc_image.is_none() {
@@ -947,10 +874,8 @@ impl BootOpts {
         zero.file(&mut eeprom_pubkey, "pubkey.bin");
         zero.announce();
 
-        // A boot medium and nothing to boot it with: a firmware checkout is
-        // the card and not the bootloader, and neither is a disk image, so
-        // what boots either is the EEPROM image `rusty-pi/pi4-firmware`
-        // publishes (#144).
+        // A medium and nothing to boot it with: neither a firmware checkout nor a
+        // disk image is a bootloader, so fall back to the published EEPROM image.
         let medium = sd_dir.is_some()
             || sd_image.is_some()
             || emmc_image.is_some()
@@ -1035,18 +960,14 @@ impl BootOpts {
     }
 }
 
-/// A finished boot: its last run (the one after the last reset) and the
-/// machine that run left behind.
+/// A finished boot: its last run and the machine that run left behind.
 struct Booted {
     report: RunReport,
     emu: Emulator,
-    /// Where the last run started.
     start: u32,
     limits: RunLimits,
-    /// How many times the firmware reset the machine.
     reboots: u32,
-    /// The OTP fuses the first boot started with, to tell what the firmware
-    /// programmed (#93).
+    /// The fuses the first boot started with, to tell what the firmware programmed.
     fuses_at_start: BTreeMap<u32, u32>,
 }
 
@@ -1060,9 +981,8 @@ pub fn cmd_boot(args: &[String]) -> Result<ExitCode> {
     print_report(&opts, booted)
 }
 
-/// Build the machine and run it. A reset the firmware asks for (after an
-/// EEPROM self-update) builds it again from the updated flash, up to four
-/// times.
+/// Build the machine and run it. A firmware-requested reset rebuilds it from the
+/// updated flash, up to four times.
 fn run_boot(opts: &BootOpts) -> Result<Booted> {
     let image =
         std::fs::read(&opts.path).with_context(|| format!("reading {}", opts.path.display()))?;
@@ -1078,8 +998,6 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
     }
     let edits = FlashEdits::new(opts)?;
 
-    // `flash` may be rewritten by an EEPROM self-update; on a firmware-requested
-    // reset we rebuild from the updated image and run again.
     let mut flash = image.clone();
     edits.apply(&mut flash, opts.verbose);
     if opts.eeprom && (opts.verbose || opts.eeprom_map) {
@@ -1087,14 +1005,12 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
     }
 
     let limits = run_limits(opts);
-    // Made once, outside the reboot loop: it owns the stdin reader and the
-    // terminal's raw mode.
+    // Made once: it owns the stdin reader and the terminal's raw mode.
     let mut host_input = opts.stdin.then(pimu::stdio::HostInput::stdin);
     let rig = Rig::new(opts, image, log, usb_disk, otg_disk)?;
 
     let mut reboots = 0u32;
-    // A reset does not blank OTP: each boot's machine starts with the rows
-    // the one before programmed (#92), the first one with `--otp`'s (#93).
+    // A reset does not blank OTP: each boot starts with the rows the one before programmed.
     let mut fuses = load_otp(opts, rig.board)?;
     let mut fuses_at_start = None;
     let mut partition = 0;
@@ -1104,8 +1020,7 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
             machine.config_otp.set_fuses(fuses);
         }
         machine.pm.keep_partition_bits(partition);
-        // One-shot, and the bootcode clears it as it reads it, so it goes in
-        // on the first boot only: a reset inside the run boots normally.
+        // One-shot: the bootcode clears it as it reads it.
         if reboots == 0 && opts.tryboot {
             machine.pm.request_tryboot();
         }
@@ -1120,8 +1035,6 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
 
         if report.end == pimu::emulator::RunEnd::Reset {
             reboots += 1;
-            // Already on the terminal if it was streamed; the run report keeps
-            // its copy. `--quiet` wants neither.
             if !opts.quiet && (opts.verbose || !report.console_streamed) {
                 print!("{}", String::from_utf8_lossy(&report.console));
             }
@@ -1130,8 +1043,7 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
             fuses = Some(emu.machine.config_otp.fuses().clone());
             partition = emu.machine.pm.partition_bits();
             if reboots <= 4 {
-                // `PIMU_ARM_PROF`: the next boot's ARM side starts a profile
-                // of its own, so this one's goes out now.
+                // The next boot's ARM side starts a profile of its own.
                 if let Some(a) = &mut emu.arm {
                     a.settle(&emu.machine);
                     if let Some(prof) = &a.prof {
@@ -1146,7 +1058,6 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
         }
         break 'boot (report, emu, start);
     };
-    // The terminal back to cooked mode before the report.
     drop(host_input);
     if emu.machine.ram.coherency.is_on() {
         println!(
@@ -1181,9 +1092,8 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
     })
 }
 
-/// `--otp <format>:<file>`: the fuses a run before left, when there is a file
-/// (#93). It replaces the whole array, and row 30 is the revision code, so it
-/// has to be this board's.
+/// The fuses a run before left. It replaces the whole array, and row 30 is the
+/// revision code, so it has to be this board's.
 fn load_otp(opts: &BootOpts, board: Board) -> Result<Option<BTreeMap<u32, u32>>> {
     let Some(file) = &opts.otp else {
         return Ok(None);
@@ -1204,8 +1114,7 @@ fn load_otp(opts: &BootOpts, board: Board) -> Result<Option<BTreeMap<u32, u32>>>
     Ok(Some(fuses))
 }
 
-/// `--otp`: write the fuses back when the firmware programmed a row, or when
-/// there is no file yet (#93).
+/// Write the fuses back when the firmware programmed a row, or there is no file yet.
 fn save_otp(file: &OtpFile, before: &BTreeMap<u32, u32>, now: &BTreeMap<u32, u32>) -> Result<()> {
     let programmed: Vec<String> = now
         .iter()
@@ -1230,8 +1139,7 @@ fn save_otp(file: &OtpFile, before: &BTreeMap<u32, u32>, now: &BTreeMap<u32, u32
     Ok(())
 }
 
-/// `--log` and `--log-file` (#95, `src/log/`): the channels, to stderr or a
-/// file. Made once, so it spans the resets of an EEPROM self-update.
+/// `--log` / `--log-file` (`src/log/`). Made once, so it spans the resets.
 fn open_log(opts: &BootOpts) -> Result<Log> {
     if opts.log.is_empty() {
         return Ok(Log::default());
@@ -1243,18 +1151,12 @@ fn open_log(opts: &BootOpts) -> Result<Log> {
     Ok(Log::new(opts.log, out))
 }
 
-/// The USB stick, shared: what the guest writes to it outlives the resets.
 type SharedUsbDisk = Rc<RefCell<pimu::periph::usb::Disk>>;
 
-/// `--usb <img>`: a Bulk-Only Transport mass-storage device in blue socket
-/// A, which is xHCI root port 2 — a SuperSpeed lane straight onto the root
-/// hub, so no hub traversal is involved. The socket map is in
-/// [`crate::periph::xhci`]. `--otg <img>` is the same device in the USB-C
-/// socket, on the BCM2711's own xHCI ([`crate::periph::xhci_otg`]).
-///
-/// `--usb-mb <n>`: the stick is that big, with the image at its start, as
-/// on a Pi whose first boot uses the rest. Read on demand; what the guest
-/// writes stays in memory and outlives the resets.
+/// `--usb <img>`: a Bulk-Only Transport mass-storage device on xHCI root port 2
+/// (the socket map is in [`crate::periph::xhci`]); `--otg <img>` is the same
+/// device on the BCM2711's own xHCI. `--usb-mb <n>` sizes the stick, image at its
+/// start. Read on demand; what the guest writes outlives the resets.
 fn open_usb_disk(
     image: &Option<PathBuf>,
     what: &'static str,
@@ -1275,23 +1177,20 @@ fn open_usb_disk(
     })
 }
 
-/// `--sd <img>`: the card reads the image file on demand (#54), and each boot
-/// after a reset starts from the file again, writes forgotten.
+/// The card reads the image on demand; each boot after a reset starts from the
+/// file again, writes forgotten.
 fn open_sd(p: &Path, log: &Log) -> Result<pimu::periph::disk::Disk> {
     pimu::periph::disk::Disk::open(p, 0)
         .map(|d| d.with_log(log.clone(), "sd"))
         .with_context(|| format!("opening SD image {}", p.display()))
 }
 
-/// The `bootconf.txt` edits the options ask for. Applied to the image before
-/// the first boot, and again after every self-update reset, since the update
-/// brings back the image's own settings.
+/// The `bootconf.txt` edits the options ask for. Re-applied after every
+/// self-update reset, which brings back the image's own settings.
 struct FlashEdits {
     eeprom: bool,
     skip_signed_boot: bool,
-    /// `--boot-order` as a `BOOT_ORDER=` line, then every `--bootconf`.
     conf_lines: Vec<String>,
-    /// `--eeprom-pubkey`: n then e, 264 bytes.
     pubkey: Option<Vec<u8>>,
 }
 
@@ -1325,20 +1224,15 @@ impl FlashEdits {
         })
     }
 
-    /// Every edit, in order; `announce` says what each one did.
     fn apply(&self, flash: &mut Vec<u8>, announce: bool) {
         self.unsign(flash, announce);
         self.append_conf(flash, announce);
         self.set_pubkey(flash, announce);
     }
 
-    /// `--skip-signed-boot`: flip `SIGNED_BOOT=1` -> `=0` in the EEPROM's
-    /// `bootconf.txt`. That flag gates the bootloader's signature enforcement, so
-    /// clearing it skips the (very slow, ~0.5 G interpreted instructions)
-    /// SHA-256 + RSA-2048 verify of `boot.img`. Same length, so the byte layout
-    /// is preserved; the now-stale `bootconf.sig` is not checked once the flag
-    /// is 0.
-    /// Re-applied after every EEPROM self-update (which restores `SIGNED_BOOT=1`).
+    /// `--skip-signed-boot`: flip `SIGNED_BOOT=1` to `=0`, skipping the very slow
+    /// SHA-256 + RSA-2048 verify of `boot.img`. Same length, so the byte layout is
+    /// preserved, and the stale `bootconf.sig` is not checked once the flag is 0.
     fn unsign(&self, flash: &mut [u8], announce: bool) {
         if !(self.skip_signed_boot && self.eeprom) {
             return;
@@ -1354,16 +1248,10 @@ impl FlashEdits {
         }
     }
 
-    /// `--boot-order <hex>`: append a `BOOT_ORDER=` line to the EEPROM's
-    /// `bootconf.txt`. The pinned image does not carry one, so the bootloader
-    /// falls back to its built-in `0xf4` — SD card, then restart — and never
-    /// tries the USB entry, which makes `--usb` unexercisable. The section is
-    /// the last one in the image and is followed by erased flash, so growing it
-    /// is a length-field bump and an append; nothing moves.
-    ///
-    /// `--bootconf KEY=VALUE` appends any other line the same way (e.g.
-    /// `HTTP_HOST` / `HTTP_PORT` / `HTTP_PATH` for HTTP boot). A later line
-    /// overrides an earlier one with the same key.
+    /// Append `BOOT_ORDER=` and every `--bootconf KEY=VALUE` line to the EEPROM's
+    /// `bootconf.txt`; a later line overrides an earlier one with the same key.
+    /// The section is last in the image and followed by erased flash, so growing
+    /// it is a length-field bump and an append — nothing moves.
     fn append_conf(&self, flash: &mut Vec<u8>, announce: bool) {
         if self.conf_lines.is_empty() || !self.eeprom {
             return;
@@ -1392,11 +1280,9 @@ impl FlashEdits {
         }
     }
 
-    /// `--eeprom-pubkey <pubkey.bin>`: put an RSA-2048 public key in the
-    /// EEPROM's `pubkey.bin` slot, as `rpi-eeprom-config --pubkey` does (n then
-    /// e, little-endian, 256 + 8 bytes). Signed images — an HTTP-booted
-    /// `boot.img` among them — are verified against it; the pinned image's slot
-    /// is all zeros, which verifies nothing.
+    /// An RSA-2048 public key in the EEPROM's `pubkey.bin` slot, as
+    /// `rpi-eeprom-config --pubkey` writes it (n then e, little-endian, 256 + 8
+    /// bytes). Signed images are verified against it; an all-zero slot verifies nothing.
     fn set_pubkey(&self, flash: &mut [u8], announce: bool) {
         let Some(k) = &self.pubkey else { return };
         match pimu::firmware::eeprom::replace_file(flash, "pubkey.bin", k) {
@@ -1407,13 +1293,8 @@ impl FlashEdits {
     }
 }
 
-/// Show the decoded `bootconf.txt`, so a boot that consults EEPROM config
-/// (boot order etc.) can be followed, and with `--eeprom-map` the section
-/// table `bootloader_eeprom_find_files` walks as well.
-///
-/// The table is one line a section and says nothing about the boot itself, so
-/// it is off by default: it was worth reading while the section walk was
-/// being modelled (#10), and is noise in a CI log now (#132).
+/// The decoded `bootconf.txt`, and with `--eeprom-map` the section table
+/// `bootloader_eeprom_find_files` walks.
 fn print_eeprom(flash: &[u8], map: bool) {
     let Ok(img) = pimu::firmware::eeprom::EepromImage::parse(flash) else {
         return;
@@ -1423,8 +1304,6 @@ fn print_eeprom(flash: &[u8], map: bool) {
         print!("{}", img.summary());
     }
     let Some(conf) = img.bootconf() else { return };
-    // The label goes on the first line printed, whether or not the table above
-    // already carried it.
     let mut label = !map;
     let mut line = |text: String| {
         let tag = if std::mem::take(&mut label) {
@@ -1453,29 +1332,22 @@ fn run_limits(opts: &BootOpts) -> RunLimits {
     } = *opts;
     RunLimits {
         max_steps,
-        // An interactive session lasts as long as its user wants it to.
         max_wall: (!stdin).then(|| std::time::Duration::from_secs(max_wall_secs)),
         stop_pc: None,
         idle_spin_limit: 200_000,
-        // Stop once the firmware has gone quiet for a minute of modelled time.
-        // The model's worst legitimate gap is the kernel load, about thirteen
-        // seconds, so this has plenty of headroom; when the boot wedges it
-        // reports in seconds instead of running out the wall clock. A shell
-        // waiting for its user is quiet too, though.
+        // A minute of modelled silence. The worst legitimate gap is the kernel
+        // load, about thirteen seconds, so a wedge reports long before the wall clock.
         silent_us: if stdin { 0 } else { 60_000_000 },
         until: until.clone(),
     }
 }
 
-/// What every boot of the run shares. Made once, so it outlives the resets of
-/// an EEPROM self-update.
+/// What every boot of the run shares. Made once, so it outlives the resets.
 struct Rig<'a> {
     opts: &'a BootOpts,
-    /// The file `boot` was given: an EEPROM image or a VPU ELF.
     image: Vec<u8>,
     log: Log,
     usb_disk: Option<SharedUsbDisk>,
-    /// `--otg <img>`: the stick in the USB-C socket (#113).
     otg_disk: Option<SharedUsbDisk>,
     bootrom: pimu::firmware::bootrom::BootRom,
     maskrom_image: Option<Vec<u8>>,
@@ -1498,15 +1370,12 @@ impl<'a> Rig<'a> {
             ..
         } = *opts;
 
-        // The boot ROM is the model's first stage for an EEPROM boot: it verifies
-        // and stages the bootcode (see `firmware::bootrom`). Its HMAC key, when the
-        // operator supplies one, comes from the environment and never the repo.
+        // The model's first stage for an EEPROM boot (`firmware::bootrom`). Its
+        // HMAC key, when supplied, comes from the environment and never the repo.
         let bootrom = pimu::firmware::bootrom::BootRom::from_env()?;
 
-        // `--maskrom <file>`: experimental. Map a real maskROM dump at 0x6000_0000
-        // and execute it from the reset vector instead of running the behavioural
-        // stage. Most people do not have a dump, so this is optional; the dump stays
-        // a local file and is never committed.
+        // A real maskROM dump at `0x6000_0000`, executed from the reset vector
+        // instead of the behavioural stage. The dump is never committed.
         let maskrom_image = match &maskrom_path {
             Some(p) => {
                 let b =
@@ -1523,8 +1392,7 @@ impl<'a> Rig<'a> {
             None => None,
         };
 
-        // `--stepping` / `--board-rev`: the silicon and the board around it (#77).
-        // Naming only one gets a board that fits it.
+        // Naming only one of `--stepping` / `--board-rev` gets a board that fits it.
         let board = {
             let mut board = Board::for_stepping(stepping.unwrap_or_default());
             if let Some(rev) = board_rev {
@@ -1556,7 +1424,6 @@ impl<'a> Rig<'a> {
         })
     }
 
-    /// One boot's machine, with the media, the network and the ROM plugged in.
     fn machine(&self, flash: &[u8]) -> Result<Machine> {
         let BootOpts {
             eeprom,
@@ -1572,10 +1439,8 @@ impl<'a> Rig<'a> {
             trace_mmio,
             ..
         } = *self.opts;
-        // The board's own memory, as its revision code gives it. The EEPROM
-        // bootloader also touches the `0x6000_0000` L2-SRAM window, which the
-        // model folds into DRAM past the 512 MiB mark, so every board that
-        // ships has room for it.
+        // The EEPROM bootloader also touches the `0x6000_0000` L2-SRAM window,
+        // which the model folds into DRAM past 512 MiB — room every board has.
         let mut machine = Machine::new(self.board.memory_bytes());
         machine.set_board(self.board);
         machine.set_log(self.log.clone());
@@ -1597,9 +1462,8 @@ impl<'a> Rig<'a> {
             machine.emmc2.insert_mmc_disk(open_sd(p, &self.log)?);
         }
         if self.opts.display {
-            // A monitor on HDMI0: the connector reports hotplug and its EDID
-            // answers on the DDC bus. Not the same lever as a board's
-            // `hdmi_force_hotplug=1` -- see `Hdmi::with_display`.
+            // A monitor on HDMI0. Not the same lever as `hdmi_force_hotplug=1`
+            // — see `Hdmi::with_display`.
             let edid = match &self.opts.display_edid {
                 Some(p) => {
                     let blob = std::fs::read(p)
@@ -1642,26 +1506,21 @@ impl<'a> Rig<'a> {
                 Box::new(pimu::periph::usb::MassStorage::with_disk(disk.clone())),
             );
         }
-        // `--otg <img>`: the same device in the USB-C socket, on the BCM2711's
-        // own xHCI — what `BOOT_ORDER` digit `0x5` (BCM-USB-MSD) boots from
-        // and what `otg_mode=1` gives Linux (#113).
+        // The BCM2711's own xHCI: what `BOOT_ORDER` digit `0x5` boots from and
+        // what `otg_mode=1` gives Linux.
         if let Some(disk) = &self.otg_disk {
-            // A USB 2.0 socket, so the stick enumerates at high speed.
             machine
                 .xhci_otg
                 .attach(Box::new(pimu::periph::usb::MassStorage::with_disk_hs(
                     disk.clone(),
                 )));
         }
-        // `--netboot <dir>`: plug the Ethernet cable into the built-in network
-        // peer (`src/net/peer.rs`): DHCP, DNS, and `<dir>` over TFTP and HTTP.
+        // The built-in peer (`src/net/peer.rs`): DHCP, DNS, TFTP and HTTP.
         if let Some(dir) = &netboot_root {
             let peer = pimu::net::BuiltinPeer::with_root(dir.clone()).with_log(self.log.clone());
             machine.attach_net(Box::new(peer));
         }
-        // `--net passt[:<socket>]`: the host's network (#45). A new connection
-        // (and a new passt) for every boot, like a cable plugged in again
-        // after a reset.
+        // A new connection (and a new passt) per boot, like a cable replugged.
         if let Some(host_net) = &host_net {
             let net = match host_net {
                 HostNet::Passt => pimu::net::StreamBackend::spawn_passt().map_err(|e| {
@@ -1683,10 +1542,8 @@ impl<'a> Rig<'a> {
             machine.attach_net(Box::new(net));
         }
         machine.mmio_trace = trace_mmio;
-        // `PIMU_TRACE_MMIO=<lo>-<hi>` (hex): trace peripheral accesses from the
-        // first instruction, but only inside that address range. Tracing the
-        // whole bus across a boot is unusable — both in volume and in the time
-        // the formatting costs — when the question is about one block.
+        // Only inside that address range: tracing the whole bus across a boot is
+        // unusable, in volume and in formatting cost alike.
         if let Some((lo, hi)) = std::env::var("PIMU_TRACE_MMIO")
             .ok()
             .and_then(|v| parse_addr_range(&v))
@@ -1697,8 +1554,7 @@ impl<'a> Rig<'a> {
         Ok(machine)
     }
 
-    /// Stage the first instruction stream, apply the `--patch`es, and return
-    /// where to start.
+    /// Stage the first instruction stream, apply the `--patch`es, and say where to start.
     fn stage(&self, machine: &mut Machine, reboots: u32) -> Result<u32> {
         let BootOpts {
             eeprom,
@@ -1707,16 +1563,11 @@ impl<'a> Rig<'a> {
             verbose,
             ..
         } = *self.opts;
-        // Stage the first instruction stream. For an EEPROM boot that is the
-        // modelled boot ROM: it reads the image off the SPI flash, checks the
-        // bootcode signature and stages it (see `firmware::bootrom`), talking to
-        // the peripherals the real ROM does instead of reaching around them. For
-        // a raw ELF it is the loader placing its segments.
+        // The modelled boot ROM talks to the peripherals the real one does rather
+        // than reaching around them; for a raw ELF this is just segment placement.
         let start = if eeprom {
             if let Some(rom) = &self.maskrom_image {
-                // Execute the real maskROM from its reset vector. It reads the
-                // pieeprom off SPI0, the key rows out of OTP, and stages the
-                // bootcode itself — the peripherals do the rest.
+                // The real maskROM stages the bootcode itself off SPI0 and OTP.
                 machine.attach_maskrom(rom.clone());
                 if reboots == 0 && verbose {
                     println!("maskROM: executing from reset vector 0x60000000 (experimental)");
@@ -1746,7 +1597,6 @@ impl<'a> Rig<'a> {
         Ok(start)
     }
 
-    /// The emulator around one boot's machine, set up the way the options say.
     fn emulator(&self, machine: Machine, start: u32) -> Emulator {
         let BootOpts {
             skip_unimpl,
@@ -1761,11 +1611,8 @@ impl<'a> Rig<'a> {
         } = *self.opts;
         let mut emu = Emulator::new(machine, start);
         emu.stream_console = !quiet;
-        // Faulting is the default: an instruction the decoder does not know
-        // would otherwise be silently stepped over, and the firmware would
-        // quietly not do whatever it was for. `--skip-unimpl` restores the old
-        // behaviour for reconnaissance on firmware the decoder has not been
-        // taught yet.
+        // Faulting is the default: silently stepping over an unknown instruction
+        // makes the firmware quietly not do whatever it was for.
         emu.set_unimpl_policy(if skip_unimpl {
             UnimplPolicy::Skip
         } else {
@@ -1789,13 +1636,10 @@ impl<'a> Rig<'a> {
         emu
     }
 
-    /// `PIMU_DUMP_FLASH` and `PIMU_DUMP_RAM`, after every run segment.
     fn dump_segment(&self, emu: &Emulator, flash: &[u8], reboots: u32) {
-        // `PIMU_DUMP_FLASH=<path>` writes the (self-update-modified) EEPROM image
-        // after every run segment — `<path>.<n>` — so a run that reaches
-        // "BOOT-EEPROM: UPDATED" but stops before RESET still yields the burned
-        // image. Feed it back as `boot <path>.<n> --eeprom` for a fast, already
-        // provisioned boot (no self-update, no reboot).
+        // The self-update-modified EEPROM image after every run segment, as
+        // `<path>.<n>`, so a run that stops before RESET still yields the burned
+        // image. Feed it back as `boot <path>.<n> --eeprom`.
         if self.opts.eeprom {
             if let Ok(p) = std::env::var("PIMU_DUMP_FLASH") {
                 let cur = emu.machine.spi0.flash_bytes();
@@ -1805,9 +1649,8 @@ impl<'a> Rig<'a> {
                 }
             }
         }
-        // `PIMU_DUMP_RAM=<path>` writes SDRAM out the same way, before a reset
-        // replaces it: a kernel that dies before its console comes up still
-        // has its log buffer in there.
+        // SDRAM the same way, before a reset replaces it: a kernel that dies
+        // before its console comes up still has its log buffer in there.
         if let Ok(p) = std::env::var("PIMU_DUMP_RAM") {
             let ram = emu.machine.ram.as_slice();
             let _ = std::fs::write(format!("{p}.{}", reboots + 1), ram);
@@ -1816,9 +1659,7 @@ impl<'a> Rig<'a> {
     }
 }
 
-/// What `boot` prints once the run is over: the console unless it was
-/// streamed, whatever was asked for by name, the full report with `-v`, and
-/// the `result:` line.
+/// What `boot` prints once the run is over.
 fn print_report(opts: &BootOpts, booted: Booted) -> Result<ExitCode> {
     let Booted {
         report,
@@ -1830,14 +1671,11 @@ fn print_report(opts: &BootOpts, booted: Booted) -> Result<ExitCode> {
     } = booted;
     let verbose = opts.verbose;
 
-    // A core parked in a busy-wait loop is behind on its registers and its
-    // instruction count until it is brought up to date.
+    // A core parked in a busy-wait loop is behind until it is brought up to date.
     if let Some(a) = &mut emu.arm {
         a.settle(&emu.machine);
     }
-    // The tree the firmware handed over, located once: the device-state
-    // section reads the Bluetooth address out of it, and `report_fdt` below
-    // reports `/chosen` and the machine-id derivation from the same bytes.
+    // Located once: the device-state section and `report_fdt` read the same bytes.
     let handoff = emu.arm.as_ref().and_then(|a| a.handoff);
     let fdt_blob = locate_fdt(&mut emu.machine, handoff, &report.console);
     if verbose {
@@ -1884,7 +1722,6 @@ fn print_report(opts: &BootOpts, booted: Booted) -> Result<ExitCode> {
     if !opts.gencmds.is_empty() {
         crate::vchiq::gencmd_exchange(&mut emu, &limits, &opts.gencmds)?;
     }
-    // After the exchanges: they are where a firmware-only boot programs.
     if let Some(file) = &opts.otp {
         save_otp(file, &fuses_at_start, emu.machine.config_otp.fuses())?;
     }
@@ -1902,7 +1739,6 @@ fn print_report(opts: &BootOpts, booted: Booted) -> Result<ExitCode> {
     })
 }
 
-/// The run in numbers: where it started and ended, and what it retired.
 fn print_summary(report: &RunReport, emu: &Emulator, start: u32) {
     println!("entry      {start:#010x}");
     println!("end        {:?}", report.end);
@@ -1931,7 +1767,7 @@ fn print_summary(report: &RunReport, emu: &Emulator, start: u32) {
     }
 }
 
-/// The ARM side (#40): the hand-off, each core, and where it stopped.
+/// The ARM side: the hand-off, each core, and where it stopped.
 fn print_arm_cores(emu: &Emulator, eeprom: bool) {
     if let Some(a) = &emu.arm {
         println!("\n--- ARM cores (#40) ---");
@@ -2020,14 +1856,9 @@ fn print_property_replies(machine: &Machine) {
     }
 }
 
-/// What the devices hold where the run ended, decoded.
-///
-/// The golden transcript catches a change in what the firmware *printed*, and
-/// the retired counts catch a change in how much it ran. Neither sees a value
-/// a driver wrote into a register and never mentioned: a UEFI whose mailbox
-/// read of the board's MAC failed left the GENET MAC at `00:00:00:00:00:00`
-/// through a whole boot that printed nothing about it. A device belongs here
-/// once it holds a value worth a diff.
+/// What the devices hold where the run ended, decoded. Neither the golden
+/// transcript nor the retired counts see a value a driver wrote into a register
+/// and never mentioned; a device belongs here once it holds a value worth a diff.
 fn print_device_state(machine: &Machine, fdt: Option<&[u8]>) {
     use pimu::periph::bluetooth::{format_bd_address, published_bd_address};
     use pimu::periph::sdpcm::MacSource;
@@ -2042,11 +1873,8 @@ fn print_device_state(machine: &Machine, fdt: Option<&[u8]>) {
         on_off(mac.promisc),
     );
 
-    // Two addresses, and they are not the same value: the chip answers its
-    // own until a host writes the board's into it, and the board's is what the
-    // firmware derived and published in the device tree. Neither reaches the
-    // console, so a firmware bump that moves the derivation is invisible
-    // without this line.
+    // Two addresses: the chip's own until a host writes the board's over it. Neither
+    // reaches the console, so a bump that moves the derivation is otherwise invisible.
     let bt = machine.bluetooth.bd_addr();
     println!(
         "  bt      chip {}, {}",
@@ -2074,11 +1902,8 @@ fn print_device_state(machine: &Machine, fdt: Option<&[u8]>) {
         None => println!("          device tree: none handed over"),
     }
 
-    // The WiFi chip's address, which is a third one again and comes from a
-    // third place: its own, until the card's nvram `macaddr=` line overrides
-    // it and until a host writes one over that. Only `ip link` ever prints
-    // it, only on a boot that loaded `brcmfmac`, and it prints one address
-    // whichever of the three it is.
+    // A third address from a third place: the chip's own, until the card's nvram
+    // `macaddr=` overrides it and until a host writes one over that.
     if let Some(chip) = machine.emmc.card().and_then(|card| card.chip()) {
         let [a, b, c, d, e, f] = chip.sdpcm().mac();
         println!(
@@ -2093,13 +1918,9 @@ fn print_device_state(machine: &Machine, fdt: Option<&[u8]>) {
     }
 }
 
-/// Which firmware events the host asked the WiFi chip for, and what the chip
-/// did about them.
-///
-/// The mask reaches the console nowhere: the driver writes it with an iovar
-/// and prints it only with its own event tracing turned on. It is the whole
-/// of what the chip is allowed to say unasked, so a bring-up that stopped
-/// asking — or a chip that stopped remembering — is invisible without this.
+/// Which firmware events the host asked the WiFi chip for, and what the chip did.
+/// The mask never reaches the console, and it is the whole of what the chip may
+/// say unasked — so a bring-up that stopped asking is invisible without this.
 fn print_wifi_events(chip: &pimu::periph::sdpcm::Sdpcm) {
     use pimu::periph::sdpcm::EventMaskSource;
 
@@ -2114,8 +1935,6 @@ fn print_wifi_events(chip: &pimu::periph::sdpcm::Sdpcm) {
             EventMaskSource::EventMsgsExt => "last set with `event_msgs_ext`",
         },
     );
-    // The codes themselves, wrapped: which of them the host wants is what
-    // moves when the driver registers a handler more or less.
     for line in wanted.chunks(16) {
         let codes: Vec<String> = line.iter().map(|c| c.to_string()).collect();
         println!("                  {}", codes.join(" "));
@@ -2126,9 +1945,8 @@ fn print_wifi_events(chip: &pimu::periph::sdpcm::Sdpcm) {
         chip.events_dropped(),
         chip.data_frames_in(),
     );
-    // A scan is an iovar in and events out, so the console says nothing
-    // about it either — and a scan the chip answered with nothing looks
-    // exactly like one it never saw.
+    // A scan is an iovar in and events out: one answered with nothing looks
+    // exactly like one the chip never saw.
     let found = chip.escan_results();
     println!(
         "           scans {} answered, {found} network{} reported",
@@ -2137,7 +1955,6 @@ fn print_wifi_events(chip: &pimu::periph::sdpcm::Sdpcm) {
     );
 }
 
-/// `on` / `off`, for [`print_device_state`]: a flag reads better than a bit.
 fn on_off(v: bool) -> &'static str {
     if v {
         "on"
@@ -2146,7 +1963,6 @@ fn on_off(v: bool) -> &'static str {
     }
 }
 
-/// The VPU's registers where the run ended.
 fn print_regs(report: &RunReport) {
     print!("regs      ");
     for (i, r) in report.regs.iter().enumerate() {
@@ -2158,13 +1974,9 @@ fn print_regs(report: &RunReport) {
     println!();
 }
 
-/// `--console-log <path>`: the UART bytes on their own, with none of the
-/// run report interleaved. `boot-check` normalises this into the golden
-/// transcript; picking the console out of the combined log afterwards would
-/// be guesswork, since both streams land in the same file.
-///
-/// On a run that rebooted (EEPROM self-update) this is the last segment
-/// only, which is the one the assertions are about.
+/// The UART bytes on their own, which `boot-check` normalises into the golden
+/// transcript — picking them out of the combined log afterwards would be
+/// guesswork. On a run that rebooted, the last segment only.
 fn write_console_log(p: &Path, console: &[u8], verbose: bool) -> Result<()> {
     std::fs::write(p, console).with_context(|| format!("writing console log {}", p.display()))?;
     if verbose {
@@ -2173,7 +1985,6 @@ fn write_console_log(p: &Path, console: &[u8], verbose: bool) -> Result<()> {
     Ok(())
 }
 
-/// What went over the Ethernet cable, and what the other end logged.
 fn print_network(machine: &mut Machine) {
     if let Some(net) = machine.net.as_mut() {
         let st = machine.genet.stats;
@@ -2188,12 +1999,10 @@ fn print_network(machine: &mut Machine) {
     }
 }
 
-/// The console: in full with `-v`, or whatever was not streamed already.
 fn print_console(report: &RunReport, verbose: bool) {
     if !report.console.is_empty() && verbose {
         println!("\n--- console ({} bytes) ---", report.console.len());
         if report.console_streamed {
-            // Already written out line by line while the run was going.
             println!("(streamed above; PIMU_LIVE_CONSOLE=0 to buffer it here instead)");
         } else {
             println!("{}", String::from_utf8_lossy(&report.console));
@@ -2203,7 +2012,6 @@ fn print_console(report: &RunReport, verbose: bool) {
     }
 }
 
-/// `--dump <addr>:<len>`: memory as the VPU sees it, in hex.
 fn print_dump(machine: &mut Machine, a: u32, n: u32) {
     use pimu::bus::Bus;
     print!("dump {a:#010x}:");
@@ -2219,7 +2027,6 @@ fn print_dump(machine: &mut Machine, a: u32, n: u32) {
     println!();
 }
 
-/// `--disasm <addr>:<count>`: VPU instructions from memory.
 fn print_disasm(machine: &mut Machine, a: u32, count: u32) {
     use pimu::bus::Bus;
     println!("disasm {a:#010x}:");
@@ -2239,7 +2046,7 @@ fn print_disasm(machine: &mut Machine, a: u32, count: u32) {
     }
 }
 
-/// The boot-progress tags start4 writes (0xcec02000), as text.
+/// The boot-progress tags start4 writes (`0xcec02000`), as text.
 fn print_phase_tags(report: &RunReport) {
     if !report.phase_tags.is_empty() {
         let tags: Vec<String> = report
@@ -2263,7 +2070,6 @@ fn print_phase_tags(report: &RunReport) {
     }
 }
 
-/// The VPU instruction traces (`--trace*`, `PIMU_TRACE_ON_*`).
 fn print_traces(emu: &Emulator, trace: bool) {
     if trace || !emu.cpu.trace_log.is_empty() {
         println!(
@@ -2288,13 +2094,10 @@ fn print_traces(emu: &Emulator, trace: bool) {
     }
 }
 
-/// `--control-transfers`: the VPU's last control transfers, newest first.
-///
-/// Off by default, `-v` included: it is what a derailed boot is read with, and
-/// a boot that reaches its end has no use for it (#132).
+/// The VPU's last control transfers, newest first. Off by default, `-v` included:
+/// only a derailed boot has a use for them.
 fn print_control_transfers(emu: &Emulator) {
-    // Collapse consecutive-identical transfers so a spin doesn't hide the
-    // history that led into it.
+    // Collapse repeats so a spin doesn't hide the history that led into it.
     let mut cf_tail: Vec<(u32, u32, u32)> = Vec::new();
     for &(f, t) in &emu.cpu.cf_trace {
         match cf_tail.last_mut() {
@@ -2317,12 +2120,8 @@ fn print_control_transfers(emu: &Emulator) {
     }
 }
 
-/// `--stub-log`: the peripheral-window offsets nothing models, which fell
-/// through to the stub.
-///
-/// Off by default, `-v` included: it named the blocks still to be modelled
-/// while the peripherals were being brought up, and the run report's `stub=`
-/// count is what a passing boot needs of it now (#132).
+/// The peripheral-window offsets nothing models. Off by default, `-v` included:
+/// the run report's `stub=` count is all a passing boot needs.
 fn print_stub_log(machine: &Machine) {
     let log = &machine.periph_stub.log;
     if !log.is_empty() {
@@ -2351,11 +2150,8 @@ fn print_stub_log(machine: &Machine) {
     }
 }
 
-/// `--dram-map`: which DRAM pages are non-zero when the run ends, and where –
-/// the RAM a snapshot of the machine would have to carry (#50).
-///
-/// "Dirty" is approximated as "not all zero", which is exact for that: the
-/// model starts RAM zeroed, so a zero page needs no saving.
+/// Which DRAM pages are non-zero when the run ends: the RAM a snapshot would have
+/// to carry. The model starts RAM zeroed, so "not all zero" is exact for that.
 fn print_dram_map(machine: &Machine) {
     const PAGE: usize = 4096;
     let ram = &machine.ram;
@@ -2374,8 +2170,7 @@ fn print_dram_map(machine: &Machine) {
         }
         nonzero_pages += 1;
         match runs.last_mut() {
-            // Bridge gaps of up to 64 KiB so the report is readable; the
-            // bytes in the gap are zero and are counted separately.
+            // Bridge gaps of up to 64 KiB; their zero bytes are counted separately.
             Some(last) if addr <= last.1 + 0x1_0000 => last.1 = addr + PAGE as u32,
             _ => runs.push((addr, addr + PAGE as u32)),
         }
@@ -2394,11 +2189,9 @@ fn print_dram_map(machine: &Machine) {
     }
 }
 
-/// The DRAM refresh interval start4 rescales from the LPDDR4 MR4 code
-/// once the ARM is running. The firmware logs the change as
-/// `sdram: sdram refresh 1562->3124 (2)`, but by then it has handed the
-/// UART to Linux and only its internal message ring sees that line, so
-/// the controller state is the console-independent way to check it.
+/// The DRAM refresh interval start4 rescales from the LPDDR4 MR4 code once the ARM
+/// is running. It logs the change after handing the UART to Linux, so only the
+/// controller state can be checked.
 fn print_sdram_refresh(machine: &Machine) {
     let sdc = &machine.sdc;
     let history = sdc.refresh_history();
@@ -2413,16 +2206,11 @@ fn print_sdram_refresh(machine: &Machine) {
     }
 }
 
-/// The device tree `arm_loader` leaves behind for the ARM, and the
-/// `/chosen` identity properties it patched into it. This is the point
-/// of the bench (rpi-mkosi#37): `rpi-machine-id` feeds the root LUKS
-/// passphrase, so a firmware bump that changes how it is derived has to
-/// be caught here rather than on a thousand deployed cards.
-///
-/// The blob is the one the armstub hands the ARM (`dtb_ptr32`), or, for a
-/// run whose ARM was never released, the one the firmware's `Device tree
-/// loaded to 0x%x (size 0x%x)` line names ([`locate_fdt`]). The header is
-/// validated before anything is believed or written out.
+/// The device tree `arm_loader` leaves for the ARM, and the `/chosen` identity
+/// properties it patched in. `rpi-machine-id` is what an encrypted image derives
+/// its root-LUKS passphrase from, so a firmware bump that moves the derivation has
+/// to be caught here rather than on a thousand deployed cards. The blob comes from
+/// [`locate_fdt`], and its header is validated before anything is believed.
 fn report_fdt(opts: &BootOpts, machine: &Machine, located: Option<(u32, Vec<u8>)>) -> Result<()> {
     let BootOpts {
         verbose,
@@ -2447,16 +2235,12 @@ fn report_fdt(opts: &BootOpts, machine: &Machine, located: Option<(u32, Vec<u8>)
                             nodes.len(),
                             nodes.iter().map(|n| n.2.len()).sum::<usize>()
                         );
-                        // `/chosen` is what the regression pins today, so it is
-                        // always in the report. It is not special otherwise — the
-                        // subject is the whole tree, and a firmware bump may move
-                        // what it publishes into a node that does not exist yet,
-                        // which is what `--print-fdt` and `--dump-fdt` are for.
+                        // `/chosen` is what the regression pins; the subject is the
+                        // whole tree, which `--print-fdt` / `--dump-fdt` give.
                         match fdt.properties_of("/chosen") {
                             Some(props) => {
                                 for p in &props {
-                                    // `bootargs` is the kernel command line and can
-                                    // be long; everything else in /chosen is short.
+                                    // The kernel command line can be long.
                                     println!("  /chosen/{:<22} {}", p.name, p.display());
                                 }
                             }
@@ -2496,7 +2280,6 @@ fn report_fdt(opts: &BootOpts, machine: &Machine, located: Option<(u32, Vec<u8>)
     Ok(())
 }
 
-/// The instructions the decoder did not know, by hit count.
 fn print_unimpl(report: &RunReport, path: &Path) {
     if !report.unimpl.is_empty() {
         println!(
@@ -2520,14 +2303,10 @@ fn print_unimpl(report: &RunReport, path: &Path) {
     }
 }
 
-/// Did the boot do what it was run for, and in a word, what happened (#55).
-///
-/// An EEPROM boot succeeds once the firmware has started the ARM, which is
-/// where a Pi's boot firmware is done; what the run does after that (the
-/// firmware idling until the silence limit, a Linux boot) does not undo it.
-/// With `--until` the text has to appear. A VPU ELF succeeds by halting.
-/// Anything the model could not do — an unknown instruction, a bus fault, an
-/// ARM core stopping — fails the run whenever it happens.
+/// Did the boot do what it was run for, and in a word, what happened. An EEPROM
+/// boot succeeds once the firmware has started the ARM — where a Pi's boot firmware
+/// is done — and nothing after that undoes it; a VPU ELF succeeds by halting.
+/// Anything the model could not do fails the run whenever it happens.
 fn boot_outcome(
     report: &pimu::emulator::RunReport,
     emu: &Emulator,
@@ -2590,9 +2369,8 @@ fn boot_outcome(
     }
 }
 
-/// The offset of the `bootconf.txt` `MAGIC_FILE` section header in an EEPROM
-/// image, found through the section walk rather than by searching for the name
-/// — the bootcode carries a string table with the same names in it.
+/// Found through the section walk, not by searching for the name: the bootcode
+/// carries a string table with the same names in it.
 fn find_bootconf_header(flash: &[u8]) -> Option<usize> {
     let img = pimu::firmware::eeprom::EepromImage::parse(flash).ok()?;
     img.sections
@@ -2601,21 +2379,11 @@ fn find_bootconf_header(flash: &[u8]) -> Option<usize> {
         .map(|s| s.header_offset)
 }
 
-/// Find the device tree blob `arm_loader` left for the ARM.
-///
-/// The pointer is the armstub's `dtb_ptr32`, the word the primary core puts in
-/// `x0` for the kernel, so the blob is by definition the one the ARM is handed.
-/// Only a run whose ARM was never released falls back to the firmware's own
-/// `Device tree loaded to 0x<addr> (size 0x<len>)` console line. The console
-/// cannot be the only source: the cut-down `start4cd.elf` prints nothing after
-/// the bootloader starts it (#105). Neither way hard-codes an address, which
-/// keeps this working across firmware versions — the entire point, since the
-/// bench exists to diff one version against another.
-///
-/// The header's `totalsize` is trusted over the logged length, so a firmware
-/// that logs a rounded figure still yields an exact blob, and so does the tree
-/// [`pimu::armstub::add_bootargs`] grew in place. Returns the address and
-/// the bytes.
+/// Find the device tree blob `arm_loader` left for the ARM: the armstub's
+/// `dtb_ptr32`, falling back to the firmware's own `Device tree loaded to` console
+/// line only when the ARM was never released (`start4cd.elf` prints nothing there).
+/// Neither way hard-codes an address, which is what keeps this working across
+/// firmware versions. The header's `totalsize` is trusted over the logged length.
 fn locate_fdt(
     machine: &mut Machine,
     handoff: Option<Handoff>,
@@ -2648,8 +2416,7 @@ fn locate_fdt(
     };
     let head = read(machine, addr, 8);
     let totalsize = u32::from_be_bytes([head[4], head[5], head[6], head[7]]);
-    // Believe the header only if it is plausible; otherwise fall back to the
-    // logged length so `Fdt::parse` can report what is actually there.
+    // Fall back to the logged length so `Fdt::parse` can report what is there.
     let len = if u32::from_be_bytes([head[0], head[1], head[2], head[3]]) == pimu::fdt::FDT_MAGIC
         && (40..=8 << 20).contains(&totalsize)
     {
@@ -2660,8 +2427,7 @@ fn locate_fdt(
     Some((addr, read(machine, addr, len)))
 }
 
-/// `PIMU_ARM_PROF`'s table: the hottest ARM steps by core, EL and 256-byte PC
-/// bucket.
+/// `PIMU_ARM_PROF`'s table: the hottest ARM steps by core, EL and PC bucket.
 fn print_arm_prof(prof: &std::collections::HashMap<(usize, u32, u64), u64>) {
     let total: u64 = prof.values().sum();
     let mut v: Vec<_> = prof.iter().collect();
@@ -2675,8 +2441,7 @@ fn print_arm_prof(prof: &std::collections::HashMap<(usize, u32, u64), u64>) {
     }
 }
 
-/// `PIMU_ARM_BLOCKS`'s table: how long the straight-line runs the cores
-/// executed were, and how often each was re-entered (#117).
+/// `PIMU_ARM_BLOCKS`'s table: straight-line run lengths and re-entry counts.
 fn print_arm_blocks(cores: &[pimu::arm::Core]) {
     use pimu::arm::blocks::Blocks;
     let mut all = Blocks::default();
@@ -2724,18 +2489,10 @@ fn print_arm_blocks(cores: &[pimu::arm::Core]) {
 }
 
 /// Recompute `/chosen/rpi-machine-id` from the modelled OTP and say whether the
-/// firmware's own value still matches.
-///
-/// This is the one thing in the report that is a *prediction* rather than an
-/// observation. `boot-check` pins the published string, which catches
-/// a firmware bump that moves the root-LUKS passphrase — but only after the fact
-/// and only for this board's fuses. The derivation is documented in
-/// `src/identity.rs`; recomputing it here turns "the value changed" into "the
-/// algorithm changed", which is the distinction rpi-mkosi#37 actually needs.
-///
-/// A mismatch is not by itself a bug in the model: it means the EEPROM
-/// bootloader no longer derives the identity the way `src/identity.rs` says, and
-/// that is exactly the event worth failing on.
+/// firmware's value still matches — a *prediction*, unlike the rest of the report.
+/// `boot-check` pins the published string, but only after the fact and only for
+/// this board's fuses; recomputing it turns "the value changed" into "the algorithm
+/// changed", which is the event worth failing on (derivation: `src/identity.rs`).
 fn report_machine_id_derivation(machine: &Machine, fdt: &pimu::fdt::Fdt) {
     use pimu::identity::{expected_machine_id_hex, MACHINE_ID_ROWS};
 
@@ -2773,9 +2530,8 @@ fn report_machine_id_derivation(machine: &Machine, fdt: &pimu::fdt::Fdt) {
     }
 }
 
-/// Parse `<lo>-<hi>` (hex, `0x` optional) into a half-open address range.
-/// Anything else — including the bare `1` that arms the trace from a
-/// `PIMU_TRACE_ON_*` trigger — yields `None`.
+/// `<lo>-<hi>` (hex) as a half-open range; anything else, the bare `1` that arms
+/// a `PIMU_TRACE_ON_*` trigger included, yields `None`.
 fn parse_addr_range(s: &str) -> Option<(u32, u32)> {
     let (lo, hi) = s.trim().split_once('-')?;
     let p = |t: &str| u32::from_str_radix(t.trim().trim_start_matches("0x"), 16).ok();
@@ -2803,7 +2559,6 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        // A value is not an option.
         assert!(
             BootOpts::parse(&args(&["x.elf", "--until", "--help"]), Path::new(""))
                 .unwrap()
@@ -2811,8 +2566,7 @@ mod tests {
         );
     }
 
-    /// A directory with the zero-config files in it, named after the test so
-    /// two of them never share one.
+    /// Named after the test, so two never share one.
     fn zero_dir(what: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("pimu-zero-{what}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -2887,8 +2641,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// The two mutually exclusive pairs: filling one in from the directory
-    /// would make a command line that `parse` then refuses.
+    /// Filling one in from the directory would make a command line `parse` refuses.
     #[test]
     fn an_option_keeps_the_one_it_rules_out_from_being_picked_up() {
         let dir = zero_dir("exclusive");
@@ -2915,8 +2668,6 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// A directory of a boot partition's files is the card, and there is
-    /// nothing to give `--sd` (#144).
     #[test]
     fn a_boot_partitions_files_are_the_card() {
         let dir = zero_dir("bootdir");
@@ -2930,8 +2681,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// An image beside them is still the card: only a directory with nothing
-    /// to boot from is built into one.
+    /// An image beside them is still the card.
     #[test]
     fn an_sd_image_wins_over_the_directory_it_is_in() {
         let dir = zero_dir("bootdir-img");
@@ -2944,7 +2694,6 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// `boot <dir>` reads everything from <dir>, as `-C <dir>` does.
     #[test]
     fn a_directory_argument_is_where_everything_is_read_from() {
         let dir = zero_dir("arg-dir");
@@ -2969,8 +2718,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// The options `boot --help` lists: the lines that start with one, such as
-    /// `    -v, --verbose` or `    --stdin   Interactive session: ...`.
+    /// The options `boot --help` lists: the lines that start with one.
     fn documented() -> BTreeSet<&'static str> {
         HELP.lines()
             .filter(|l| l.starts_with("    -"))
@@ -2979,9 +2727,8 @@ mod tests {
             .collect()
     }
 
-    /// The options `BootOpts::parse` matches on, read out of its source: the
-    /// string literals there that are an option name and nothing else. (A
-    /// double quote in a comment inside `parse` would throw this off.)
+    /// Read out of `parse`'s source: the string literals that are an option name
+    /// and nothing else. A double quote in a comment inside `parse` breaks this.
     fn parsed() -> BTreeSet<&'static str> {
         let src = include_str!("boot.rs");
         let start = src.find("fn parse(").unwrap();
@@ -3001,7 +2748,7 @@ mod tests {
 
     #[test]
     fn help_lists_every_option_the_parser_takes() {
-        // A no-op since #52, kept for old command lines.
+        // `--arm` is a no-op, kept for old command lines.
         let hidden = ["--arm"];
         let (documented, parsed) = (documented(), parsed());
         for o in &parsed {

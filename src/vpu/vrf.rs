@@ -1,26 +1,18 @@
 //! The VC4 Vector Register File.
 //!
-//! The file is 64 rows of 64 bytes, and a row is **sixteen lanes of four
-//! bytes** — not sixty-four bytes in a line. Element `e` of a register whose
-//! elements are `w` bytes wide lives at byte `(e & 15) * 4 + (e >> 4) * w` of
-//! its row: the lane is the element's low four bits, and the rest of the index
-//! picks the sub-field inside that lane. So a row holds 16 32-bit elements, or
-//! 32 16-bit ones, or 64 bytes — with consecutive elements four bytes apart,
-//! interleaved, rather than side by side.
+//! 64 rows of 64 bytes, and a row is **sixteen lanes of four bytes** — not
+//! sixty-four bytes in a line. Element `e` of a register with `w`-byte elements
+//! lives at byte `(e & 15) * 4 + (e >> 4) * w` of its row, so consecutive
+//! elements are four bytes apart, interleaved, rather than side by side. A
+//! *horizontal* register is sixteen elements of one row; a *vertical* one is
+//! the same element of sixteen consecutive rows.
 //!
-//! A *horizontal* register is sixteen elements of one row from element `e0`; a
-//! *vertical* one is the same element of sixteen consecutive rows, from the
-//! 16-aligned band its coordinate names — see [`crate::vpu::insn::VecSlot`].
+//! Measured, not inferred, on a Raspberry Pi 4B d03115
+//! (`vpu-probe/probes/layout.s`, `vpu-probe/probes/vert.s`).
 //!
-//! All of that is measured, not inferred: `v8ld H(0,0),(r1)` from a page of
-//! ascending bytes lands them four bytes apart, `v16ld HX(10,32)` two bytes
-//! into each lane, and `v8ld V(0,17)` puts one byte at column 5 of each of
-//! sixteen rows — run through the firmware's `EXECUTE_CODE` mailbox tag on a
-//! Raspberry Pi 4B d03115.
-//!
-//! Alongside the bytes the unit keeps per-lane flags — zero, negative and
-//! carry — which an ALU op with `SETF` writes and the eight lane predicates
-//! read. A transfer with `SETF` writes none of them, measured.
+//! The unit also keeps per-lane zero, negative and carry flags, written by an
+//! ALU op with `SETF` and read by the lane predicates; a *transfer* with `SETF`
+//! writes none of them, measured.
 
 /// Bytes per VRF row, and rows in the file.
 pub const DIM: usize = 64;
@@ -39,9 +31,9 @@ pub const LUT_LANE: usize = LUT / LANES as usize;
 pub struct Vrf {
     /// Boxed, not inline: [`Vpu`](crate::vpu::Vpu) is stepped a billion times a
     /// boot and the hot fields around this one have to stay in a few cache
-    /// lines. Putting the 4 KiB of file in the middle of the struct instead cost
-    /// 75% more wall clock on a whole firmware boot, measured, for a register
-    /// file that a handful of instructions touch.
+    /// lines. Inline, the 4 KiB of file costs 75% more wall clock on a whole
+    /// firmware boot, measured, for a register file a handful of instructions
+    /// touch.
     bytes: Box<[u8; DIM * DIM]>,
     /// Per-lane zero flag, one bit per lane (bit 0 = lane 0).
     pub lane_z: u16,
@@ -53,7 +45,7 @@ pub struct Vrf {
     /// rest leave it as they found it.
     pub lane_c: u16,
     /// The vector unit's own 1 KiB lookup table, the one `readlut` and
-    /// `writelut` address. Measured with `probes/lut.s`: a `v8memwrite`
+    /// `writelut` address. Measured with `vpu-probe/probes/lut.s`: a `v8memwrite`
     /// followed by a `v8memread` over the same indices hands back exactly what
     /// was written, and a `v16` pair round-trips halfwords at twice the index.
     /// Each lane addresses its own [`LUT_LANE`] bytes of it — lanes that share
@@ -131,10 +123,9 @@ impl Vrf {
 mod tests {
     use super::*;
 
-    /// Consecutive elements are a lane apart, not an element apart: element `e`
-    /// sits at byte `(e & 15) * 4 + (e >> 4) * w`. Measured with
-    /// `v8ld H(0,0),(r1)` over a page of ascending bytes, which lands them at
-    /// columns 0, 4, 8 … of the row.
+    /// Consecutive elements are a lane apart, not an element apart: measured
+    /// with `v8ld H(0,0),(r1)` over a page of ascending bytes, which lands them
+    /// at columns 0, 4, 8 … of the row.
     #[test]
     fn elements_are_interleaved_across_the_lanes() {
         let mut vrf = Vrf::default();

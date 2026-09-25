@@ -1,5 +1,5 @@
 //! The BCM2711's own xHCI controller at `0x7E9C_0000` — the USB-C port as a
-//! USB 2.0 host (#113).
+//! USB 2.0 host.
 //!
 //! The Pi 4's USB-C socket has two controllers behind it and they are
 //! alternatives: the DWC2 OTG core at `0x7E98_0000` ([`super::dwc2`]), which is
@@ -9,32 +9,16 @@
 //! turns it on — and the bootloader boots from a mass-storage device on it as
 //! `BCM-USB-MSD`, `BOOT_ORDER` digit `0x5`.
 //!
-//! ## Why this block and not the DWC2
+//! A `BCM-USB-MSD` boot reads only this block's capability registers at
+//! `+0x00`..`+0x1C`; answering them with zeroes makes the bootloader print
+//! `USB xHC init failed` and move on.
 //!
-//! `boot --eeprom firmware/pieeprom.bin --boot-order 0x5 -v` prints
-//! `Boot mode: BCM-USB-MSD (05) order 0` and then reads `0x7E9C_0000`
-//! `+0x00`..`+0x1C`, the xHCI capability registers, and nothing else. Before
-//! this file existed those reads fell through to the catch-all stub, so the
-//! bootloader saw
-//!
-//! ```text
-//!   xHC0 ver: 0 HCS: 00000000 00000000 00000000 HCC: 00000000
-//!   xHC0 ports 0 slots 0 intrs 0
-//!   USB xHC init failed
-//! ```
-//!
-//! and went on to its next boot mode. The `dwc2` log channel is empty for that
-//! whole run: the boot mode named after the Broadcom USB controller never
-//! touches the DWC2 core.
-//!
-//! ## What it is
-//!
-//! A plain xHCI, so the ring engine is [`super::xhci`]'s — the same one the
-//! VL805's controller runs on, told a different [`Caps`]: one USB2 root port,
-//! one interrupter, no streams and no scratchpad buffers. Those values are
-//! inferred rather than measured (`specs/xhci_otg.toml`); what a driver needs
-//! of them is that they are self-consistent and that the register block is
-//! where `CAPLENGTH`, `DBOFF` and `RTSOFF` say it is.
+//! A plain xHCI, so the ring engine is [`super::xhci`]'s, told a different
+//! [`Caps`]: one USB2 root port, one interrupter, no streams, no scratchpad.
+//! Those values are inferred rather than measured
+//! (`specs/xhci_otg.toml`) — what a driver needs is that they are
+//! self-consistent and that the block is where `CAPLENGTH`, `DBOFF` and
+//! `RTSOFF` say.
 //!
 //! Two things differ from the VL805's:
 //!
@@ -64,8 +48,6 @@ use crate::periph::xhci::{Caps, Xhci};
 use crate::spec::xhci_otg as regs;
 use crate::spec::Coverage;
 
-/// Every register in `specs/xhci_otg.toml` is the shared engine's, and it
-/// decodes all of them.
 pub const COVERAGE: Coverage = Coverage {
     block: "xhci_otg",
     decoded: &[
@@ -132,8 +114,6 @@ pub const CAPS: Caps = Caps {
     max_slots: (regs::HCSPARAMS1_RESET & 0xFF) as usize,
     tag: "otg ",
 };
-// The register block has to be where the capability values say, and the port
-// and doorbell counts what `HCSPARAMS1` announces.
 const _: () = assert!(
     regs::USBCMD == regs::CAPLENGTH_RESET
         && regs::IMAN == regs::RTSOFF_RESET + 0x20
@@ -142,13 +122,10 @@ const _: () = assert!(
         && CAPS.max_slots + 1 == regs::DOORBELL_COUNT as usize
 );
 
-/// The one root port: the USB-C socket.
 pub const PORT: usize = 1;
 
-/// The controller, and the one register write waiting for host memory.
 pub struct XhciOtg {
     hc: Xhci,
-    /// The write [`XhciOtg::run_pending`] still has to apply.
     pending: Option<(u32, Width, u32)>,
 }
 
@@ -166,34 +143,28 @@ impl XhciOtg {
         }
     }
 
-    /// Plug a device into the USB-C socket.
     pub fn attach(&mut self, device: Box<dyn UsbDevice>) {
         self.hc.attach(PORT, device);
     }
 
-    /// Whether anything is plugged in, i.e. whether the port is worth a look.
     pub fn populated(&mut self) -> bool {
         self.hc.port_device(PORT).is_some()
     }
 
-    /// Where [`crate::log::Channel::Xhci`] goes for this controller.
     pub fn set_log(&mut self, log: Log) {
         self.hc.log = log;
     }
 
-    /// A register write is waiting for [`Self::run_pending`].
     pub fn write_pending(&self) -> bool {
         self.pending.is_some()
     }
 
-    /// Apply the parked write, which may run a ring in `ram`.
     pub fn run_pending(&mut self, ram: &mut Ram) {
         if let Some((off, width, value)) = self.pending.take() {
             self.hc.write(off, width, value, ram);
         }
     }
 
-    /// The level on `GIC_SPI 176`.
     pub fn irq_asserted(&self) -> bool {
         self.hc.interrupt_pending()
     }
@@ -209,7 +180,6 @@ impl MmioDevice for XhciOtg {
     }
 
     fn write(&mut self, offset: u32, width: Width, value: u32) -> BusResult<()> {
-        // Parked, not applied: the engine needs DRAM, which the caller has.
         self.pending = Some((offset, width, value));
         Ok(())
     }
@@ -240,8 +210,6 @@ mod tests {
         assert_eq!(hcs1 >> 24, 1, "one root port");
         assert_eq!(hcs1 & 0xFF, 32, "32 slots");
         assert_eq!((hcs1 >> 8) & 0x7FF, 1, "one interrupter");
-        // The extended-capability list ends at the USB 2.0 entry: no
-        // SuperSpeed protocol, so the host never looks for a USB3 port.
         assert_eq!(
             d.read(regs::SUPPORTED_USB2, Width::Word).unwrap() >> 8 & 0xFF,
             0

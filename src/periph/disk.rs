@@ -2,9 +2,9 @@
 //!
 //! The image is read on demand and the blocks written since are kept in
 //! memory, so a run costs the blocks it touches rather than the image's size,
-//! and the image file is never modified: every run is a first boot. A
-//! multi-gigabyte disk image read whole into memory used to be most of a run's
-//! footprint (#54).
+//! and the image file is never modified: every run is a first boot. Reading a
+//! multi-gigabyte image whole into memory would otherwise be most of a run's
+//! footprint.
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -26,27 +26,17 @@ pub struct Disk {
     backing: Backing,
     blocks: u64,
     written: HashMap<u64, Box<[u8; BLOCK_SIZE]>>,
-    /// Where its transfers go (the `io` channel, #35), and the name this disk
-    /// goes by there.
+    /// Where its transfers go (the `io` channel), and the name this disk goes
+    /// by there.
     io: Option<(Log, &'static str)>,
 }
 
 enum Backing {
     Mem(Vec<u8>),
-    File {
-        file: File,
-        len: u64,
-    },
-    /// A card built out of a directory (`crate::fat`): its metadata in memory,
-    /// and every file of it still on the host.
-    Dir {
-        meta: Vec<u8>,
-        files: Vec<Mapped>,
-    },
+    File { file: File, len: u64 },
+    Dir { meta: Vec<u8>, files: Vec<Mapped> },
 }
 
-/// One file of a built card: where its clusters are, and the host file they
-/// read from.
 struct Mapped {
     lba: u64,
     blocks: u64,
@@ -55,7 +45,6 @@ struct Mapped {
 }
 
 impl Disk {
-    /// A disk exactly the size of `image`.
     pub fn from_vec(image: Vec<u8>) -> Disk {
         let blocks = (image.len() / BLOCK_SIZE) as u64;
         Disk {
@@ -66,8 +55,7 @@ impl Disk {
         }
     }
 
-    /// Log this disk's transfers on the `io` channel as `name`, and name its
-    /// files there.
+    /// Log this disk's transfers on the `io` channel as `name`.
     pub fn with_log(mut self, log: Log, name: &'static str) -> Disk {
         log.map_files(name, &|lba| {
             let mut b = [0u8; BLOCK_SIZE];
@@ -83,7 +71,6 @@ impl Disk {
         }
     }
 
-    /// The card `crate::fat` built out of a directory of firmware files.
     pub fn from_card(card: crate::fat::Card) -> std::io::Result<Disk> {
         let mut files = Vec::with_capacity(card.extents.len());
         for extent in card.extents {
@@ -105,7 +92,6 @@ impl Disk {
         })
     }
 
-    /// The image at `path`, on a disk of at least `min_bytes`.
     pub fn open(path: &Path, min_bytes: u64) -> std::io::Result<Disk> {
         let file = File::open(path)?;
         let len = file.metadata()?.len();
@@ -121,19 +107,16 @@ impl Disk {
         self.blocks
     }
 
-    /// Resize, for a test that wants a disk bigger than its image.
     #[cfg(test)]
     pub(crate) fn set_blocks(&mut self, blocks: u64) {
         self.blocks = blocks;
     }
 
-    /// How many blocks the host has written.
     pub fn written_blocks(&self) -> usize {
         self.written.len()
     }
 
-    /// Block `lba` into `out`, as the guest reads it; `false` (and zeros) past
-    /// the end of the disk.
+    /// Block `lba` into `out`; `false` and zeros past the end of the disk.
     pub fn read_block(&self, lba: u64, out: &mut [u8; BLOCK_SIZE]) -> bool {
         let ok = self.peek_block(lba, out);
         if ok {
@@ -142,8 +125,7 @@ impl Disk {
         ok
     }
 
-    /// [`Self::read_block`] without it counting as a guest read, for the
-    /// model's own look at the disk.
+    /// [`Self::read_block`] without counting as a guest read.
     pub fn peek_block(&self, lba: u64, out: &mut [u8; BLOCK_SIZE]) -> bool {
         out.fill(0);
         if lba >= self.blocks {
@@ -161,7 +143,6 @@ impl Disk {
                 }
             }
             Backing::File { file, len } if at < *len => {
-                // The image's last block may be short; the rest is zeros.
                 let n = BLOCK_SIZE.min((*len - at) as usize);
                 if let Err(e) = file.read_exact_at(&mut out[..n], at) {
                     panic!("reading the disk image at byte {at}: {e}");
@@ -180,8 +161,6 @@ impl Disk {
                         std::cmp::Ordering::Equal
                     }
                 }) {
-                    // The file's last block is short; the rest of the cluster
-                    // it sits in is zeros.
                     let file = &files[i];
                     let at = (lba - file.lba) * BLOCK_SIZE as u64;
                     if at < file.len {
@@ -196,7 +175,6 @@ impl Disk {
         true
     }
 
-    /// `count` blocks from `lba`, or `None` past the end of the disk.
     pub fn read(&self, lba: u64, count: u64) -> Option<Vec<u8>> {
         if lba.checked_add(count)? > self.blocks {
             return None;
@@ -209,7 +187,6 @@ impl Disk {
         Some(out)
     }
 
-    /// Whole blocks of `data` at `lba`; `false` past the end of the disk.
     pub fn write(&mut self, lba: u64, data: &[u8]) -> bool {
         let count = (data.len() / BLOCK_SIZE) as u64;
         if lba.saturating_add(count) > self.blocks {
@@ -222,7 +199,6 @@ impl Disk {
         true
     }
 
-    /// Zero blocks `first..=last`, clipped to the disk.
     pub fn zero(&mut self, first: u64, last: u64) {
         let last = last.min(self.blocks.saturating_sub(1));
         for lba in first..=last {

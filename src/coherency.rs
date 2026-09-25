@@ -1,67 +1,40 @@
-//! A check, not a cache: which lines of memory are in one master's hands and
-//! out of date in another's, so that a read of one can be reported.
+//! A check, not a cache: which lines of memory are in one master's hands and out
+//! of date in another's, so that a read of one can be reported.
 //!
-//! The model folds the four VC4 aliases onto one backing store, which is right
-//! for what the firmware computes but hides the one thing real silicon does
-//! not forgive. A line written through `0x0`, `0x4000_0000` or `0x8000_0000`
-//! sits in a cache until something writes it back, and a DMA engine, the ARM,
-//! or the VPU itself reading the same physical bytes through `0xC000_0000`
-//! sees the *old* memory. The other way round is as bad: a line a DMA engine
-//! writes lands in memory behind the caches, and the VPU reading it back
-//! through a cached alias sees what it held before. Firmware that runs cached
-//! has to flush and invalidate; firmware that runs uncached never has to.
-//! Nothing in a folded model can tell the two apart, so this tracks it
-//! alongside:
+//! The model folds the four VC4 aliases onto one backing store, which hides the
+//! one thing silicon does not forgive: a line written through a cached alias
+//! sits in a cache until something writes it back, so a master reading the same
+//! bytes uncached sees the *old* memory — and the other way round for a line a
+//! DMA engine writes behind the caches. Firmware that runs cached has to flush
+//! and invalidate, and a folded model cannot tell it from firmware that does
+//! not, so `dirty` and `stale` lines are tracked alongside.
 //!
-//! - `dirty` — the VPU wrote the line through a cached alias and has not
-//!   flushed it, so a master that does not read through those caches gets
-//!   stale memory.
-//! - `stale` — such a master wrote the line straight to memory, so the VPU
-//!   reading it through a cached alias gets what its cache still holds.
-//!
-//! Which masters those are is not a guess: stock's own boot says so. The
-//! VC4-side DMA engines read what the VPU has written and not flushed —
-//! stock's `dma_memcpy` copies megabytes it wrote through `0x0` a moment
-//! earlier, and the 40-bit channel's control block is written through
-//! `0x8000_0000` and never flushed — so they are behind the same caches. The
-//! ARM-side masters are not: the PCIe endpoint, EMMC2 and GENET reach DRAM
-//! on their own, and stock reads every buffer they fill back through
-//! `0xC000_0000`.
-//!
-//! Granularity is the 32-byte line the bootbox's flush works in, over the
-//! gigabyte the VPU can address. Off by default ([`Coherency::off`]); with
-//! `--check-coherency` every report goes to the `coherency` log channel and
-//! the run ends with a count.
+//! Which masters sit behind the VPU's caches is not a guess: the VC4-side DMA
+//! engines read what the VPU wrote and never flushed, while the ARM-side masters
+//! (PCIe endpoint, EMMC2, GENET) reach DRAM on their own and stock reads their
+//! buffers back uncached. Granularity is the bootbox flush's 32-byte line. Off
+//! by default; `--check-coherency` reports on the `coherency` log channel.
 
 use std::cell::RefCell;
 
 use crate::log::{Channel, Log};
 
-/// The cache line the L2's maintenance port works in (`specs/bootbox.toml`:
-/// the bootcode's flush ends on `0x0FFF_FFE0`).
+/// The cache line the L2's maintenance port works in (`specs/bootbox.toml`).
 const LINE: u32 = 32;
 const LINE_SHIFT: u32 = 5;
-/// What a 32-bit VPU can address.
 const SPACE: u32 = 1 << 30;
 const LINES: usize = (SPACE >> LINE_SHIFT) as usize;
 
-/// Who is reading or writing a line, and how far down it sees.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Master {
-    /// The VPU itself, writing or reading through a cached alias.
     Vpu,
-    /// The VPU itself, through the uncached alias.
     VpuUncached,
-    /// An ARM core.
     Arm,
-    /// An engine that reaches memory directly: the ARM-side masters, which
-    /// are not behind the VPU's L2 at all (the PCIe endpoint writing DRAM
-    /// through the inbound window, EMMC2, GENET), and a VC4-side engine
-    /// whose bus address is in the uncached alias.
+    /// An engine that reaches memory directly: the ARM-side masters, and a
+    /// VC4-side engine whose bus address is in the uncached alias.
     Dma(&'static str),
     /// A VC4-side engine going through the L2: the legacy DMA at a cached
-    /// alias, and the 40-bit channel, whose control block stock writes
-    /// through `0x8000_0000` and never flushes.
+    /// alias, and the 40-bit channel, whose control block is never flushed.
     Vc4Dma(&'static str),
 }
 
@@ -75,39 +48,29 @@ impl Master {
         }
     }
 
-    /// Whether it reads and writes through the VPU's caches, so that nothing
-    /// it touches can be out of date in either direction.
+    /// Whether it goes through the VPU's caches, so nothing it touches can be
+    /// out of date either way.
     pub fn is_coherent(self) -> bool {
         matches!(self, Master::Vpu | Master::Vc4Dma(_))
     }
 }
 
-/// The bitmaps and counts, behind a cell because a read has to record as much
-/// as a write does and the model's read paths take `&self`.
+/// Behind a cell because a read records as much as a write, on a `&self` path.
 struct State {
-    /// One bit per line: the VPU wrote it through a cached alias and nothing
-    /// has written it back since.
     dirty: Vec<u64>,
-    /// One bit per line: something other than the VPU wrote it, so whatever
-    /// the VPU still holds in cache for it is out of date until an
-    /// invalidate.
     stale: Vec<u64>,
-    /// Lines reported already, so a poll of the same address says it once.
     reported: Vec<u64>,
     reports: usize,
-    /// How many lines have been written through a cached alias, so a run that
-    /// reports nothing can be told from one that watched nothing.
+    /// Lines written through a cached alias, so a run that reports nothing is
+    /// distinguishable from one that watched nothing.
     marks: usize,
-    /// How many lines something other than the VPU has written.
     dma_marks: usize,
 }
 
 pub struct Coherency {
     state: RefCell<State>,
-    /// Who is reading and who is writing RAM at the moment. Two, because one
-    /// transfer can have each end on a different side of the caches: the
-    /// legacy DMA takes a bus address per end and its alias says whether that
-    /// end goes through the L2.
+    /// Who is reading and who is writing RAM. Two, because one transfer can
+    /// have each end on a different side of the caches.
     reader: Master,
     writer: Master,
     on: bool,
@@ -115,7 +78,6 @@ pub struct Coherency {
 }
 
 impl Coherency {
-    /// A tracker that costs one predictable branch per access.
     pub fn off() -> Coherency {
         Coherency {
             state: RefCell::new(State {
@@ -155,32 +117,26 @@ impl Coherency {
         self.on
     }
 
-    /// How many reads of a line held elsewhere have been reported.
     pub fn reports(&self) -> usize {
         self.state.borrow().reports
     }
 
-    /// How many lines the VPU has written through a cached alias.
     pub fn marks(&self) -> usize {
         self.state.borrow().marks
     }
 
-    /// How many lines something other than the VPU has written.
     pub fn dma_marks(&self) -> usize {
         self.state.borrow().dma_marks
     }
 
-    /// Who uses RAM until the next call. The machine sets this around the
-    /// peripherals it hands `&mut Ram` to, so their accesses can be told from
-    /// the VPU's own.
+    /// Who uses RAM until the next call; the machine sets it around the
+    /// peripherals it hands `&mut Ram` to.
     #[inline]
     pub fn set_master(&mut self, master: Master) {
         self.reader = master;
         self.writer = master;
     }
 
-    /// The same, for an engine whose two ends are on different sides of the
-    /// caches.
     #[inline]
     pub fn set_masters(&mut self, reader: Master, writer: Master) {
         self.reader = reader;
@@ -202,7 +158,6 @@ impl Coherency {
         (self.reader, self.writer)
     }
 
-    /// The VPU wrote `len` bytes at physical `phys` through a cached alias.
     #[inline]
     pub fn wrote_cached(&self, phys: u32, len: u32) {
         if !self.on {
@@ -219,9 +174,8 @@ impl Coherency {
         }
     }
 
-    /// A VC4-side engine wrote `len` bytes at `phys` through the caches,
-    /// which is where a cached VPU read lands too: nothing is out of date
-    /// afterwards.
+    /// A VC4-side engine wrote through the caches, where a cached VPU read
+    /// lands too: nothing is out of date afterwards.
     #[inline]
     pub fn wrote_through_l2(&self, phys: u32, len: u32) {
         if !self.on {
@@ -233,8 +187,8 @@ impl Coherency {
         }
     }
 
-    /// Something other than the VPU wrote `len` bytes at `phys`: what the VPU
-    /// holds in cache for those lines is now out of date.
+    /// Something other than the VPU wrote there: the VPU's cached copy of
+    /// those lines is now out of date.
     #[inline]
     pub fn wrote_by_other(&self, phys: u32, len: u32) {
         if !self.on {
@@ -251,10 +205,9 @@ impl Coherency {
         }
     }
 
-    /// The VPU read `len` bytes at `phys` through a cached alias. A line
-    /// something else has written since the last invalidate is reported: on
-    /// real silicon that read comes out of the cache and misses what landed
-    /// in memory.
+    /// The VPU read through a cached alias; a line something else has written
+    /// since the last invalidate is reported, since on silicon that read comes
+    /// out of the cache.
     #[inline]
     pub fn read_cached(&self, phys: u32, len: u32, pc: u32) {
         if !self.on {
@@ -285,8 +238,6 @@ impl Coherency {
         }
     }
 
-    /// A flush covering `first..=last` wrote those lines back and dropped
-    /// them, so neither side holds anything out of date for them.
     pub fn flushed(&self, first: u32, last: u32) {
         if !self.on {
             return;
@@ -301,8 +252,7 @@ impl Coherency {
         }
     }
 
-    /// `who` read `len` bytes at physical `phys`. A line the VPU has left in
-    /// its cache is reported once.
+    /// `who` read at `phys`; a line the VPU left in cache is reported once.
     #[inline]
     pub fn read_by(&self, phys: u32, len: u32, who: Master) {
         if !self.on {
@@ -333,8 +283,6 @@ impl Coherency {
         }
     }
 
-    /// The lines `len` bytes at `phys` touch, clipped to what the VPU can
-    /// address. Empty for an access outside it.
     #[inline]
     fn lines(phys: u32, len: u32) -> impl Iterator<Item = usize> {
         let empty = phys >= SPACE || len == 0;
@@ -358,7 +306,6 @@ mod tests {
         c.wrote_cached(0x1000, 4);
         c.read_by(0x1000, 4, Master::VpuUncached);
         assert_eq!(c.reports(), 1);
-        // The same line is not reported twice.
         c.read_by(0x1000, 4, Master::VpuUncached);
         assert_eq!(c.reports(), 1);
     }
@@ -391,7 +338,6 @@ mod tests {
         assert_eq!(c.dma_marks(), 1);
         c.read_cached(0x5000, 4, 0x8000_0000);
         assert_eq!(c.reports(), 1);
-        // Once said, not said again for the same line.
         c.read_cached(0x5000, 4, 0x8000_0000);
         assert_eq!(c.reports(), 1);
     }

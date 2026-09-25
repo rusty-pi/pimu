@@ -1,18 +1,14 @@
-//! `PACTL_CS` at `0x7E20_4E00` (#131).
+//! `PACTL_CS` at `0x7E20_4E00`: which SPI, I²C or PL011 behind an ORed
+//! interrupt line is the one asking.
 //!
-//! The BCM2711 has more peripherals than the VideoCore's interrupt controller
-//! has lines, so the seven SPI masters share one, the eight I²C masters
-//! another and the five PL011 UARTs a third (VC peripheral IRQs 54, 53 and 57
-//! — VPU sources 118, 117 and 121, see `specs/corectl.toml`). This register is
-//! how a driver finds out which member of a group raised the shared line.
+//! Registers and fields: `specs/pactl.toml` ([`crate::spec::pactl`]).
 //!
-//! Nothing in the model raises any of them: [`super::spi0`], [`super::bsc`]
-//! and [`super::uart_pl011`] are all polled by the firmware and none of them
-//! drives its interrupt. So the honest answer is 0 — no peripheral has
-//! anything pending — which is also what the catch-all stub answered. The
-//! block is modelled anyway so that the address is decoded rather than
-//! counted as a stub hit, and so the spec can say what the bits mean when one
-//! of those devices does grow an interrupt.
+//! Nothing in the model raises any of those lines — [`super::spi0`],
+//! [`super::bsc`] and [`super::uart_pl011`] are all polled by the firmware and
+//! none of them drives its interrupt — so the honest answer is 0. The block is
+//! modelled anyway so that the address is decoded rather than counted as a stub
+//! hit, and so the spec can say what the bits mean once one of those devices
+//! does grow an interrupt.
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
@@ -43,7 +39,6 @@ impl MmioDevice for Pactl {
     }
 
     fn write(&mut self, _offset: u32, _width: Width, _value: u32) -> BusResult<()> {
-        // Read-only: every bit follows a peripheral's own interrupt line.
         Ok(())
     }
 }

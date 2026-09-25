@@ -1,32 +1,20 @@
 //! BCM2711 power-management block (`0x7E10_0000`): reset control + watchdog.
 //!
-//! Two things drive the model here, and they are the same hardware feature:
+//! Registers and fields: `specs/pm.toml` ([`crate::spec::pm`]).
 //!
-//! * the SoC reset the EEPROM bootloader triggers after applying a self-update
-//!   ("EEPROMs updated. Rebooting / RESET"): `WDOG = PASSWORD | 10` then
-//!   `RSTC = PASSWORD | WRCFG_FULL_RESET`, after which it spins in a delay loop
-//!   expecting the chip to reboot;
-//! * the watchdog `start4` arms at the ARM hand-off when `config.txt` carries
-//!   `dtparam=watchdog=on`: `WDOG = PASSWORD | 0xFFFFF` (the 20-bit maximum,
-//!   16 s at the watchdog's 65536 Hz) then `RSTC = PASSWORD | 0x3222`, seen at
-//!   `0x3ED62334`/`0x3ED62342` right after `arm_loader: Starting ARM`. That is
-//!   byte for byte Linux's `bcm2835_wdt_start`, and Linux's probe then finds
-//!   the dog running (`bcm2835_wdt_is_running`) and keeps it fed.
+//! The SoC reset the bootloader triggers after a self-update and the watchdog
+//! start4 arms at the ARM hand-off for `dtparam=watchdog=on` are the same
+//! hardware feature: `WDOG` then `RSTC` with `WRCFG_FULL_RESET`, differing only
+//! in the timeout. So the model counts down — the `RSTC` write starts the timer
+//! from the last `WDOG` value and [`Pm::take_reset`] reports the moment it
+//! expires. **The arm itself is not a reset**; treating it as one reboots every
+//! `watchdog=on` boot at the hand-off.
 //!
-//! Both are "arm the countdown"; only the timeout differs. So the model counts
-//! down: a `RSTC` write with `WRCFG_FULL_RESET` set starts the timer from the
-//! last `WDOG` value, `WDOG` reads back the ticks left (`get_timeleft`), and
-//! [`Pm::take_reset`] reports the moment it expires. Treating the arm itself as
-//! the reset made every `watchdog=on` boot reboot at the hand-off.
-//!
-//! `WDOG` is the counter, not a shadow of it: Linux's `get_timeleft` reads the
-//! ticks left straight out of it, so writing it reloads a countdown that is
-//! already running. That is how the firmware's own boot watchdog
-//! (`BOOT_WATCHDOG_TIMEOUT`) is fed — the bootcode arms it once with
-//! `RSTC = PASSWORD | WRCFG_FULL_RESET` (`0x800079EC`) and every heartbeat
-//! after that is a bare `WDOG` write, in `bootmain` (`0x000A75E4`) and in
-//! start4 (`0x3ED47B98`), with no second `RSTC` write anywhere. Reloading only
-//! on `RSTC` had such a boot reset 16 s in however large its budget was.
+//! **`WDOG` is the counter, not a shadow of it**, so writing it reloads a
+//! running countdown. That is how the firmware's own boot watchdog is fed: it
+//! is armed once and every heartbeat after that is a bare `WDOG` write, with no
+//! second `RSTC` anywhere, so a write that does not reload resets the boot one
+//! window in however large its budget was.
 //!
 //! Everything else is sticky storage with the password byte masked on read-back.
 
@@ -34,12 +22,10 @@ use std::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
-// `RSTS` latches which reset source last fired — the debug (`HADDR*`, bits
-// 0..2), watchdog (`HADWR*`, bits 4..6) and software (`HADSR*`, bits 8..10)
-// groups plus `HADPOR` (bit 12). Its power-on value is exactly `HADWRF`, the
-// full watchdog reset the power sequencing performs, and not `HADPOR`
-// (matching the bootloader's own `power-on-reset 0`). Bit 5 is odd, so it adds
-// nothing to the partition the bootloader packs into the even bits 0..10.
+// `RSTS`' power-on value is exactly `HADWRF`, the full watchdog reset the
+// power sequencing performs, and not `HADPOR` — matching the bootloader's own
+// `power-on-reset 0`. That bit is odd, so it adds nothing to the partition the
+// bootloader packs into the even bits 0..10.
 use crate::spec::pm::{
     DOMAIN_STATUS, DOMAIN_STATUS_COUNT, DOMAIN_STATUS_RESET, DOMAIN_STATUS_STRIDE, GRAFX, IMAGE,
     RSTC, RSTC_PASSWD_MASK as PASSWD_MASK, RSTC_WRCFG_SHIFT, RSTS, RSTS_RESET, RSTS_TRYBOOT_MASK,
@@ -47,8 +33,6 @@ use crate::spec::pm::{
 };
 use crate::spec::Coverage;
 
-/// The power-domain words answer "powered"; `IMAGE` / `GRAFX` are storage,
-/// and `SPARER` reads back `SPAREW`.
 pub const COVERAGE: Coverage = Coverage {
     block: "pm",
     decoded: &[
@@ -63,10 +47,8 @@ pub const COVERAGE: Coverage = Coverage {
     ],
 };
 
-/// The password byte every write carries.
 const PASSWD: u32 = 0x5A00_0000;
 
-/// `RSTC.WRCFG` = 2: full reset when the countdown expires.
 const RSTC_WRCFG_FULL_RESET: u32 = 2 << RSTC_WRCFG_SHIFT;
 
 /// The watchdog counts at 65536 Hz: one `WDOG` tick is 1 s / 65536 ≈ 15.26 µs.
@@ -75,9 +57,7 @@ const WDOG_HZ: u64 = 65_536;
 #[derive(Default)]
 pub struct Pm {
     storage: BTreeMap<u32, u32>,
-    /// Model time, in microseconds, as of the last [`Pm::advance`].
     now_us: u64,
-    /// When the armed countdown expires, in model microseconds.
     deadline_us: Option<u64>,
     reset_pending: bool,
 }
@@ -85,14 +65,12 @@ pub struct Pm {
 impl Pm {
     pub fn new() -> Pm {
         let mut pm = Pm::default();
-        // Power-on state of `RSTS`, as measured on a real Pi 4. The firmware
-        // latches this value early and prints it as `PM_RSTS %08x`.
+        // Power-on state of `RSTS`, as measured on a Raspberry Pi 4B d03115.
+        // The firmware latches it early and prints it as `PM_RSTS %08x`.
         pm.storage.insert(RSTS, RSTS_RESET);
         pm
     }
 
-    /// Feed the watchdog the model clock. Called from `Machine::tick`; the
-    /// countdown fires when the deadline the last arm set has passed.
     pub fn advance(&mut self, now_us: u64) {
         self.now_us = now_us;
         if self.deadline_us.is_some_and(|d| now_us >= d) {
@@ -101,17 +79,14 @@ impl Pm {
         }
     }
 
-    /// True while the countdown is armed and running.
     pub fn watchdog_running(&self) -> bool {
         self.deadline_us.is_some()
     }
 
-    /// How long `ticks` of the 65536 Hz watchdog clock last, in microseconds.
     fn us_for(ticks: u32) -> u64 {
         (u64::from(ticks) * 1_000_000).div_ceil(WDOG_HZ)
     }
 
-    /// `WDOG` ticks remaining, which is what the register reads back as.
     fn ticks_left(&self) -> u32 {
         match self.deadline_us {
             Some(d) => {
@@ -122,12 +97,10 @@ impl Pm {
         }
     }
 
-    /// Has the firmware asked for a SoC reset that nobody took yet?
     pub fn reset_pending(&self) -> bool {
         self.reset_pending
     }
 
-    /// True once, after the firmware has asked for a SoC reset.
     pub fn take_reset(&mut self) -> bool {
         std::mem::take(&mut self.reset_pending)
     }
@@ -140,19 +113,14 @@ impl Pm {
         self.storage.get(&RSTS).copied().unwrap_or(0) & RSTS_PARTITION
     }
 
-    /// Carry `bits` from [`Self::partition_bits`] over a reset: `RSTS` comes up
-    /// with them as well as the reset flags.
     pub fn keep_partition_bits(&mut self, bits: u32) {
         self.storage
             .insert(RSTS, RSTS_RESET | (bits & RSTS_PARTITION));
     }
 
     /// Ask for a tryboot before the machine has booted at all, which is
-    /// otherwise only reachable through a boot of its own: `reboot '0 tryboot'`
-    /// has start4 set this bit through `SET_REBOOT_FLAGS`, and it survives
-    /// Linux's watchdog reset in the partition field. The bootcode takes the
-    /// request off as it reads it, so it lasts exactly one boot either way
-    /// (`specs/pm.toml`, `TRYBOOT`).
+    /// otherwise only reachable through a boot of its own. The bootcode takes
+    /// the request off as it reads it, so it lasts exactly one boot.
     pub fn request_tryboot(&mut self) {
         let rsts = self.storage.get(&RSTS).copied().unwrap_or(RSTS_RESET);
         self.storage.insert(RSTS, rsts | RSTS_TRYBOOT_MASK);
@@ -223,7 +191,7 @@ mod tests {
     fn rsts_powers_up_as_a_watchdog_reset() {
         let mut pm = Pm::new();
         let rsts = pm.read(RSTS, Width::Word).unwrap();
-        // What a real Pi 4 reports: `PM_RSTS 00000020`.
+        // What a Raspberry Pi 4B d03115 reports: `PM_RSTS 00000020`.
         assert_eq!(rsts, 0x0000_0020);
         // ...and it must not disturb the partition the bootloader decodes.
         assert_eq!(rsts & RSTS_PARTITION, 0);
@@ -287,7 +255,6 @@ mod tests {
             .unwrap();
         assert!(pm.watchdog_running());
         assert!(!pm.take_reset());
-        // 10 ticks at 65536 Hz is 153 µs.
         pm.advance(1_000 + 152);
         assert!(!pm.take_reset());
         pm.advance(1_000 + 153);
@@ -328,8 +295,6 @@ mod tests {
             .unwrap();
         pm.write(RSTC, Width::Word, PASSWD | RSTC_WRCFG_FULL_RESET)
             .unwrap();
-        // Fed every 10 s of a 60 s budget, the way `bootmain` and start4 feed
-        // it: no reset, and always about 16 s left.
         for beat in 1..=6 {
             pm.advance(beat * 10_000_000);
             assert!(!pm.take_reset(), "reset at beat {beat}");
@@ -337,7 +302,6 @@ mod tests {
                 .unwrap();
             assert_eq!(pm.read(WDOG, Width::Word).unwrap(), WDOG_TIME_MASK);
         }
-        // Stop feeding it and it expires a full window after the last beat.
         let window = Pm::us_for(WDOG_TIME_MASK);
         pm.advance(60_000_000 + window - 1);
         assert!(!pm.take_reset());
@@ -355,7 +319,6 @@ mod tests {
         assert!(!pm.watchdog_running());
         pm.advance(10_000_000);
         assert!(!pm.take_reset());
-        // ...and the arm that follows counts from the value it left.
         pm.write(RSTC, Width::Word, PASSWD | RSTC_WRCFG_FULL_RESET)
             .unwrap();
         assert!(pm.watchdog_running());

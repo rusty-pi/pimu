@@ -1,59 +1,25 @@
-//! The USB reset block at `0x7E80_8000`, as far as USB power goes through it
-//! (#49).
+//! The USB reset block at `0x7E80_8000`, as far as USB power goes through it.
+//!
+//! Registers and fields: `specs/usbr.toml` ([`crate::spec::usbr`]).
 //!
 //! The block names itself: every reserved word of its window answers
-//! `0x55534252`, `"USBR"` big-endian, measured on a Raspberry Pi 4B d03115, the
-//! way `corectl` answers `INTE` and `mcsync` answers `MULT`. This module used
-//! to be called `hd`, on the strength of the BCM2835 having its HDMI `HD` block
-//! at this address. The BCM2711 does not: its HDMI `hd` range is `0x7EF20000`,
-//! which the board's own device tree gives and which answers a different tag
-//! (#139). Registers `+0x00` to `+0x20` read back; `+0x24` upwards answers the
-//! tag, which means not readable rather than not implemented -- `GPSET` answers
-//! the GPIO tag and still drives pins -- so a write-only register may live up
-//! there. start4's HDMI code writes `+0x2C` (#142).
+//! `0x55534252`, `"USBR"` big-endian, on a Raspberry Pi 4B d03115 — the way
+//! [`super::corectl`] answers `INTE` and [`super::mcsync`] answers `MULT`. It
+//! is not the BCM2835's HDMI `HD` block, which sits at the same address on
+//! that chip: the BCM2711's HDMI `hd` range is `0x7EF2_0000`, per the board's
+//! own device tree, and answers a different tag.
 //!
-//! ## What start4 does with it
+//! start4's `SET_POWER_STATE` for USB asks this block for power and spins on
+//! `STATUS.ACK` — with no timeout — before it touches the DWC2 controller
+//! ([`super::dwc2`]). A `STATUS` that never acknowledges therefore parks the
+//! mailbox thread for good and leaves every property request behind it
+//! unanswered, which is what UEFI's `DwUsbHostDxe` runs into: it asks for USB
+//! power early.
 //!
-//! `SET_POWER_STATE` for USB (device 3) is handled at `0x3ED89520`. On BCM2711
-//! it asks this block for power and waits for the acknowledge before it touches
-//! the DWC2 controller ([`super::dwc2`]):
-//!
-//! ```c
-//! [0x7E808008] |= 4;                     // CTRL.POWER
-//! while (([0x7E808020] & 3) != 3) { }    // STATUS.ACK, no timeout
-//! [0x7E980088] |= 0x30000;
-//! // ...then the DWC2 core reset and FIFO flushes
-//! ```
-//!
-//! Left on the catch-all stub, `+0x20` read 0 because nothing writes it, and
-//! the handler spun there for good. Every property request after it went
-//! unanswered. In the rpi-mkosi image, UEFI's `DwUsbHostDxe` asks for USB
-//! power soon after the banner, so UEFI then spent a second on each later
-//! request and looked hung. `0x3EC607B0` and `0x3ECACB0C` make the same
-//! request on other paths.
-//!
-//! ## Ground truth
-//!
-//! Read on a Raspberry Pi 4B d03115 (our pinned start4, Linux idle) through
-//! `/dev/mem`, before and after asking the firmware with `vcmailbox`:
-//!
-//! ```text
-//!                                  +0x08 CTRL   +0x20 STATUS
-//!   no USB power request yet       0x3          0x0
-//!   SET_POWER_STATE(USB, on)       0x7          0x3    (reply: on)
-//!   SET_POWER_STATE(USB, off)      0x7          0x3    (reply: off)
-//! ```
-//!
-//! The acknowledge follows the request, and the off path never comes back here.
-//! The model derives `STATUS` from `CTRL.POWER` and seeds `CTRL` with the idle
-//! value. Bits 0 and 1 of `CTRL` stay plain storage: `0x3ECACB0C` clears them
-//! after setting `POWER` and still only waits for `ACK` bit 0.
-//!
-//! ## What the block is
-//!
-//! Not settled. BCM2835 has its HDMI "HD" block at this address, and start4's
-//! HDMI code writes `+0x2C` and `+0x38` here, but BCM2711's Linux binding puts
-//! its "hd" range at `0x7EF2_0000`. The rest of the window is plain storage.
+//! So the model derives `STATUS` from `CTRL.POWER` and seeds `CTRL` with the
+//! measured idle value. `CTRL` bits 0 and 1 stay plain storage: start4 clears
+//! them after setting `POWER` and still waits only for `ACK`. The rest of the
+//! window is plain storage.
 
 use std::collections::BTreeMap;
 
@@ -62,7 +28,6 @@ use crate::bus::{BusResult, MmioDevice, Width};
 use crate::spec::usbr::{CTRL, CTRL_POWER_MASK, CTRL_RESET, STATUS, STATUS_ACK_MASK};
 use crate::spec::Coverage;
 
-/// The power request and its acknowledge; the rest of the window is storage.
 pub const COVERAGE: Coverage = Coverage {
     block: "usbr",
     decoded: &[CTRL, STATUS],

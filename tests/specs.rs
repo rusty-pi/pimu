@@ -1,11 +1,6 @@
-//! The register specs in `specs/*.toml` against the model (#39).
-//!
-//! `build.rs` already refuses a malformed spec. These tests check the other
-//! direction: that every spec has a device model, that what a model claims to
-//! decode is in its spec, that every register the spec lists actually reaches
-//! the device, and that the generated `docs/periph/` is up to date. Registers a
-//! model leaves stubbed are reported, not failed — run with `--nocapture` to
-//! see them.
+//! The register specs in `specs/*.toml` against the model: every spec has a
+//! device, every register reaches it, `docs/periph/` is up to date. Stubbed
+//! registers are reported, not failed (`--nocapture`).
 
 use std::collections::BTreeSet;
 
@@ -25,8 +20,7 @@ fn spec_for<'a>(specs: &'a [Spec], block: &str) -> &'a Spec {
         .unwrap_or_else(|| panic!("no specs/{block}.toml for a device that claims it"))
 }
 
-/// Every block has a register spec now, so a spec with no device behind it is
-/// a typo or a stale file, and two devices claiming one spec is a mistake.
+/// A spec with no device is a stale file; two devices on one spec is a mistake.
 #[test]
 fn every_spec_has_exactly_one_device_model() {
     let specs = specs();
@@ -69,12 +63,9 @@ fn every_decoded_offset_is_in_the_spec() {
     }
 }
 
-/// Every element of every register, in every bank of every copy, has to reach
-/// the device rather than the catch-all stub or DRAM — a window mapped too
-/// small is exactly the bug `tests/memory_map.rs` was written for, and the
-/// spec knows the extent. Only the VPU's bus goes through [`Machine`]'s
-/// decoder; the ARM-only blocks and the ones behind PCIe, I²C and MDIO are
-/// reached through their own devices.
+/// Every element of every register, in every bank of every copy, reaches the
+/// device rather than the stub or DRAM. Only the VPU's bus goes through
+/// [`Machine`]'s decoder.
 #[test]
 fn every_spec_register_reaches_its_device() {
     let specs = specs();
@@ -106,7 +97,6 @@ fn every_spec_register_reaches_its_device() {
     }
 }
 
-/// Not a failure: the list of what each model leaves stubbed.
 #[test]
 fn report_stubbed_registers() {
     let specs = specs();
@@ -136,8 +126,7 @@ fn generated_docs_are_up_to_date() {
     );
 }
 
-/// The generated constants and the TOML agree, so a device matching on
-/// `spec::<block>::*` really is matching on the spec.
+/// A device matching on `spec::<block>::*` really is matching on the spec.
 #[test]
 fn generated_constants_match_the_toml() {
     let specs = specs();
@@ -153,20 +142,16 @@ fn generated_constants_match_the_toml() {
     assert_eq!(spec::corectl::IRQ_PENDING_SOURCE_MASK, 0x7F);
     assert_eq!(spec::corectl::IRQ_PENDING_PRIO_SHIFT, 8);
 
-    // A copy gets its own base constant.
     let bsc = spec_for(&specs, "bsc");
     assert_eq!(bsc.block.copies[0].name, "PMIC");
     assert_eq!(spec::bsc::PMIC_BASE, bsc.block.copies[0].base);
-    // On an indexed bus the base is the device address.
     assert_eq!(spec::fxl6408::BASE, 0x43);
     assert_eq!(spec::bcm54213pe::PHYSID2, 3);
-    // Widths below 32 bits keep their natural alignment.
     assert_eq!(spec::xhci::HCIVERSION, 0x02);
     assert_eq!(spec::xhci::HCIVERSION_RESET, 0x0100);
 }
 
-/// A spec with no provenance, or with overlapping registers, is refused. This
-/// is what `build.rs` runs, so it is also what fails the build.
+/// No provenance or overlapping registers is refused, by the code `build.rs` runs.
 #[test]
 fn malformed_specs_are_refused() {
     let head = r#"
@@ -250,8 +235,7 @@ fn malformed_specs_are_refused() {
     }
 }
 
-/// `docs/vpu-isa.md` is generated from `isa/vpu.toml` the same way, and by the
-/// same command.
+/// `docs/vpu-isa.md` comes from `isa/vpu.toml` the same way.
 #[test]
 fn isa_doc_is_current() {
     let stale = pimu::isa::sync_docs(false).unwrap_or_else(|e| panic!("{e}"));

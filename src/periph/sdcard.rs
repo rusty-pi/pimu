@@ -1,97 +1,34 @@
-//! A minimal SD card (SDHC / v3, high-capacity, UHS-I) state machine, backed by
-//! a block image. Enough of the physical-layer command set for the
-//! main bootloader to read `start4.elf` off a FAT partition, and for Linux's
-//! `mmc` core to bring the card up at 1.8 V DDR50 and mount a filesystem on it:
+//! A minimal SD card (SDHC / v3, high-capacity, UHS-I) state machine backed by
+//! a block image — enough of the physical-layer command set for the main
+//! bootloader to read `start4.elf` off a FAT partition and for Linux's `mmc`
+//! core to bring the card up at 1.8 V DDR50 and mount a filesystem. The
+//! commands answered are the `match` arms of [`SdCard::command`]; the SDIO and
+//! MMC probes Linux sends first get no response, as from a real SD card.
 //!
-//! ```text
-//!   CMD0  GO_IDLE_STATE          -> idle
-//!   CMD8  SEND_IF_COND           -> R7  (echo voltage + check pattern)
-//!   CMD55 APP_CMD                -> R1  (next command is an ACMD)
-//!   ACMD41 SD_SEND_OP_COND       -> R3  (OCR; busy bit set once "powered up",
-//!                                        S18A when the host asked for 1.8 V)
-//!   CMD11 VOLTAGE_SWITCH         -> R1                     (1.8 V signalling)
-//!   CMD2  ALL_SEND_CID           -> R2  (CID)                     idle -> ident
-//!   CMD3  SEND_RELATIVE_ADDR     -> R6  (RCA)                    ident -> stby
-//!   CMD9  SEND_CSD               -> R2  (CSD)
-//!   CMD7  SELECT_CARD            -> R1b                     stby <-> tran
-//!   ACMD6 SET_BUS_WIDTH          -> R1
-//!   ACMD13 SD_STATUS             -> R1 + 64-byte status block
-//!   ACMD22 SEND_NUM_WR_BLOCKS    -> R1 + 4-byte count of the last write's blocks
-//!   ACMD51 SEND_SCR              -> R1 + 8-byte SCR
-//!   CMD6  SWITCH_FUNC            -> R1 + 64-byte status block
-//!   CMD16 SET_BLOCKLEN           -> R1
-//!   CMD17/18 READ_SINGLE/MULTIPLE_BLOCK  -> R1 + data blocks
-//!   CMD19 SEND_TUNING_BLOCK      -> R1 + the 64-byte tuning pattern
-//!   CMD23 SET_BLOCK_COUNT        -> R1  (bounds the next CMD18/CMD25)
-//!   CMD24/25 WRITE_BLOCK/MULTIPLE_BLOCK  -> R1, host sends data blocks
-//!   CMD32/33/38 ERASE            -> R1/R1b (erased blocks read as zero)
-//!   CMD12 STOP_TRANSMISSION      -> R1b
-//!   CMD13 SEND_STATUS            -> R1
-//! ```
+//! The same type plays two other things on the same bus:
 //!
-//! The SDIO / MMC probes Linux sends first (CMD5, CMD52, CMD1) get no response,
-//! as from a real SD memory card.
+//! * the **SDIO** side of the WiFi chip ([`CardKind::Sdio`]), which the legacy
+//!   EMMC host has when the SD slot is not muxed to it. It answers CMD5, CMD3,
+//!   CMD7, CMD52 and CMD53 and nothing else — it has no memory, so every SD and
+//!   MMC command times out. Function 0 is the card's (CCCR, FBRs, CIS chains);
+//!   functions 1 and 2 are handed to [`Cyw43455`], which also pulls the card's
+//!   interrupt line and names itself in `CCCR_INT_PENDING`.
+//! * an **e-MMC** part ([`CardKind::Mmc`]), the flash soldered to a Compute
+//!   Module, which answers the JESD84-B51 identification sequence instead: CMD1
+//!   rather than ACMD41, a host-picked RCA, CMD8 as SEND_EXT_CSD, and no
+//!   application commands, SCR or SD status.
 //!
-//! The same type also plays the **SDIO** side of the WiFi chip
-//! ([`CardKind::Sdio`], [`SdCard::sdio`]), which is what the legacy EMMC host
-//! at `0x7E30_0000` has on its bus when the SD slot is not muxed to it. It
-//! answers the SDIO command set and nothing else — it has no memory, so every
-//! SD and MMC command times out on it:
-//!
-//! ```text
-//!   CMD5  IO_SEND_OP_COND        -> R4  (io OCR; ready bit set on the second
-//!                                        ask, function count, no memory)
-//!   CMD3  SEND_RELATIVE_ADDR     -> R6  (RCA)                    idle -> stby
-//!   CMD7  SELECT_CARD            -> R1b                     stby <-> tran
-//!   CMD52 IO_RW_DIRECT           -> R5  (one byte of the CCCR, an FBR or the
-//!                                        CIS)
-//!   CMD53 IO_RW_EXTENDED         -> R5 + a data transfer, bytes or blocks,
-//!                                        at a fixed or an incrementing
-//!                                        address
-//! ```
-//!
-//! Function 0 is the card's: the CCCR, the FBRs and the CIS chains, all of
-//! them here. Functions 1 and 2 are the chip's, and both CMD52 and CMD53
-//! hand those to [`Cyw43455`] — function 1 is the window onto its backplane,
-//! function 2 its frame FIFO. The chip also pulls the card's interrupt line
-//! ([`SdCard::io_irq`], the host controller's card interrupt) when it has
-//! something to say, and names itself in `CCCR_INT_PENDING` when the host
-//! asks which function it was.
-//!
-//! The same type also plays an **e-MMC** part ([`CardKind::Mmc`]), the flash
-//! soldered to a Compute Module, which answers a different identification
-//! sequence (JEDEC JESD84-B51):
-//!
-//! ```text
-//!   CMD0  GO_IDLE_STATE          -> idle
-//!   CMD1  SEND_OP_COND           -> R3  (OCR; busy bit set once "powered up",
-//!                                        sector mode when the host offers it)
-//!   CMD2  ALL_SEND_CID           -> R2  (CID)                    ready -> ident
-//!   CMD3  SET_RELATIVE_ADDR      -> R1  (the *host* picks the RCA) ident -> stby
-//!   CMD9  SEND_CSD               -> R2  (CSD; C_SIZE saturated, see EXT_CSD)
-//!   CMD7  SELECT_CARD            -> R1b                          stby <-> tran
-//!   CMD8  SEND_EXT_CSD           -> R1 + the 512-byte EXT_CSD
-//!   CMD6  SWITCH                 -> R1b (writes one EXT_CSD byte)
-//! ```
-//!
-//! An e-MMC has no application commands (CMD55 is illegal), does not answer
-//! CMD8 as SEND_IF_COND, and has no SCR or SD status; CMD12, CMD13, CMD16 and
-//! the block transfers are the same as for an SD card.
-//!
-//! Responses are returned as the 32-bit payload the SDHCI RESPONSE registers
-//! expose (bits `[39:8]` of the card response) — for R2 the caller passes the
-//! full 120-bit CID/CSD out through [`SdResponse::r2`].
-//!
-//! The card's blocks are a [`Disk`]: the image is read on demand and writes stay
-//! in memory, so the file the image was loaded from is never touched.
+//! Responses are the 32-bit payload the SDHCI RESPONSE registers expose (card
+//! response bits `[39:8]`); R2 passes the full 120-bit CID/CSD through
+//! [`SdResponse::r2`]. The card's blocks are a [`Disk`], read on demand with
+//! writes kept in memory, so the image file is never touched.
 
 use std::collections::BTreeMap;
 
 use crate::periph::cyw43455::Cyw43455;
 use crate::periph::disk::Disk;
 
-/// What is on the bus: a removable SD memory card, an e-MMC part soldered to
-/// the board (a Compute Module's flash), or the WiFi chip's SDIO side.
+/// What is on the bus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CardKind {
     #[default]
@@ -102,7 +39,6 @@ pub enum CardKind {
     Sdio,
 }
 
-/// SD card operating states (subset), per the physical-layer spec.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CardState {
     Idle,
@@ -114,31 +50,21 @@ pub enum CardState {
     Rcv,
 }
 
-/// What the host controller needs back after dispatching a command.
 #[derive(Debug, Clone, Default)]
 pub struct SdResponse {
-    /// 32-bit payload for a 48-bit response (R1/R1b/R3/R6/R7). `None` = the
-    /// command produces no response.
+    /// 48-bit response payload; `None` = no response at all.
     pub r1: Option<u32>,
-    /// Full 128-bit CID/CSD for an R2 response, already aligned so that
-    /// `bits[127:8]` are the card register and `bits[7:0]` are zero (the CRC
-    /// slot the SDHCI drops).
+    /// R2's CID/CSD, aligned with the dropped CRC slot in `[7:0]`.
     pub r2: Option<u128>,
-    /// The card did not answer at all (an SDIO/MMC probe, or a command that is
-    /// illegal in the current state) — the host sees a command timeout.
+    /// The card did not answer: the host sees a command timeout.
     pub no_response: bool,
-    /// Number of 512-byte blocks the card will now stream to the host
-    /// (`u32::MAX` = until CMD12 or a CMD23 count runs out).
+    /// Blocks the card will stream (`u32::MAX` = until CMD12).
     pub read_blocks: u32,
-    /// Block address (SDHC: block units) the read starts at.
     pub read_lba: u32,
-    /// Number of blocks the card will now accept from the host (`u32::MAX` =
-    /// open-ended, as for `read_blocks`).
+    /// Blocks the card will accept (`u32::MAX` = open-ended).
     pub write_blocks: u32,
-    /// Block address the write starts at.
     pub write_lba: u32,
-    /// A register-sized data block the card sends instead of image data
-    /// (CMD6 switch status, ACMD13 SD status, ACMD51 SCR, CMD19 tuning block).
+    /// A register block the card sends instead of image data.
     pub data: Option<Vec<u8>>,
 }
 
@@ -167,26 +93,19 @@ impl SdResponse {
     }
 }
 
-/// R1 card-status bits the hosts look at.
 const R1_APP_CMD: u32 = 1 << 5;
 const R1_ILLEGAL_COMMAND: u32 = 1 << 22;
 const R1_READY_FOR_DATA: u32 = 1 << 8;
 const R1_CURRENT_STATE_SHIFT: u32 = 9; // bits [12:9]
 
-/// OCR bits.
 const OCR_BUSY_DONE: u32 = 1 << 31;
 const OCR_CCS: u32 = 1 << 30;
-/// ACMD41 argument: the host can switch to 1.8 V (S18R); in the response, the
-/// card accepts (S18A).
 const OCR_S18: u32 = 1 << 24;
 const OCR_VOLTAGE_WINDOW: u32 = 0x00FF_8000;
-/// CMD1 access mode `10b` in OCR `[30:29]`: block (sector) addressing. A part
-/// of 2 GiB or less is byte-addressed and never sets it.
+/// OCR `[30:29]` sector addressing; a part of 2 GiB or less never sets it.
 const MMC_OCR_SECTOR: u32 = 0b10 << 29;
-/// 2 GiB in 512-byte blocks.
 const BYTE_ADDR_BLOCKS: u64 = 2 * 1024 * 1024 * 1024 / 512;
 
-/// EXT_CSD byte offsets this part implements (JESD84-B51 table 39).
 const EXT_CSD_PARTITION_CONFIG: usize = 179;
 const EXT_CSD_BUS_WIDTH: usize = 183;
 const EXT_CSD_HS_TIMING: usize = 185;
@@ -196,37 +115,25 @@ const EXT_CSD_SEC_COUNT: usize = 212;
 const EXT_CSD_HC_ERASE_GRP_SIZE: usize = 224;
 const EXT_CSD_BOOT_SIZE_MULT: usize = 226;
 
-/// CMD6 group-1 (bus speed) functions this card supports: SDR12, SDR25/high
-/// speed, SDR50 and DDR50. At 3.3 V signalling a UHS card offers only the
-/// first two; the UHS modes appear once CMD11 has moved it to 1.8 V.
+/// CMD6 group-1 bus speeds. At 3.3 V a UHS card offers only SDR12 and SDR25;
+/// the rest appear once CMD11 has moved it to 1.8 V.
 const SWITCH_G1_UHS: u16 = 0x8017;
 const SWITCH_G1_3V3: u16 = 0x8003;
 
-// --- the WiFi chip's SDIO side (CardKind::Sdio) -----------------------------
-
-/// CMD5's R4: the card has finished its power-up ramp.
 const IO_OCR_READY: u32 = 1 << 31;
-/// R4 `[30:28]`: how many I/O functions besides function 0. A Raspberry Pi 4B
-/// d03115 enumerates three (`/sys/bus/sdio/devices/mmc1:0001:{1,2,3}`).
+/// I/O functions besides function 0; a Raspberry Pi 4B d03115 enumerates three.
 const IO_FUNCTIONS: u32 = 3 << 28;
-/// R4 bit 27: the card has a memory part as well. The CYW43455 has none, and
-/// Linux prints "SDIO card" rather than "SD-combo card" for it.
+/// R4 bit 27, a memory part as well: the CYW43455 has none.
 const IO_MEMORY_PRESENT: u32 = 1 << 27;
 
-/// Where the card's own CIS chain starts, and where each function's does.
-/// Any address in the function-0 space will do; these keep the tuples clear
-/// of the CCCR and the FBRs in a dump.
+/// Where the CIS chains start; any function-0 address will do.
 const CIS_COMMON: u32 = 0x1000;
 const CIS_FUNC_STRIDE: u32 = 0x100;
 
-/// A function's block size, at `func * 0x100 + 0x10` in its FBR (SDIO
-/// simplified specification 6.11), little-endian over two bytes. The host
-/// writes it before it enables the function, and every CMD53 block transfer
-/// is made of blocks that size — 64 bytes on function 1, 512 on function 2
-/// for this card.
+/// A function's block size in its FBR (SDIO simplified specification 6.11),
+/// which every CMD53 block transfer is made of.
 const FBR_BLKSIZE: u32 = 0x10;
 
-/// CCCR byte offsets (SDIO simplified specification 6.9).
 const CCCR_REV: u32 = 0x00;
 const CCCR_SD_SPEC: u32 = 0x01;
 const CCCR_IO_ENABLE: u32 = 0x02;
@@ -238,63 +145,46 @@ const CCCR_CAPABILITY: u32 = 0x08;
 const CCCR_CIS_PTR: u32 = 0x09;
 const CCCR_SPEED: u32 = 0x13;
 
-/// `CCCR_IO_ABORT` bit 3: reset the I/O side, which is how the MMC core puts
-/// an SDIO card back to idle before it retries.
+/// `CCCR_IO_ABORT` bit 3: reset the I/O side.
 const IO_ABORT_RES: u8 = 1 << 3;
 
-/// `CCCR_IO_ENABLE` bit 2: function 2, the frame FIFO.
 const IO_ENABLE_FUNC2: u8 = 1 << 2;
 
-/// `CCCR_INT_ENABLE` (SDIO simplified specification 6.9.4): bit 0 is the
-/// master enable and bit *n* the enable for function *n*. A card holds the
-/// interrupt line off until both are set — `sdio_claim_irq`
-/// (`drivers/mmc/core/sdio_irq.c`) sets them together.
+/// `CCCR_INT_ENABLE`: bit 0 the master enable, bit *n* function *n*. A card
+/// holds the interrupt line off until both are set.
 const INT_ENABLE_MASTER: u8 = 1 << 0;
 const INT_ENABLE_FUNC1: u8 = 1 << 1;
 
-/// `CCCR_INT_PENDING` bit 1: function 1 has an interrupt pending. The MMC
-/// core reads this register to find out which function to call
-/// (`process_sdio_pending_irqs`), and `brcmfmac` puts its handler on function
-/// 1 — `INTR_STATUS_FUNC1` (`sdio.h:24`) is the same bit from its side.
+/// `CCCR_INT_PENDING` bit 1, function 1: which function the MMC core calls.
 const INT_PENDING_FUNC1: u8 = 1 << 1;
 
-/// R5's `IO_CURRENT_STATE`, bits `[13:12]` of the response — *not* where R1
-/// keeps the card state.
+/// R5's `IO_CURRENT_STATE` in `[13:12]` — *not* where R1 keeps it.
 const R5_STATE_SHIFT: u32 = 12;
 const R5_STATE_CMD: u32 = 1;
 const R5_STATE_TRN: u32 = 2;
 
-/// CIS tuple codes (SDIO simplified specification 16.7).
 const TPL_MANFID: u8 = 0x20;
 const TPL_FUNCE: u8 = 0x22;
 const TPL_END: u8 = 0xFF;
 
-/// The identity Linux reads out of the CIS, measured on a Raspberry Pi 4B
-/// d03115: `/sys/bus/sdio/devices/mmc1:0001:1/vendor` and `device`.
+/// The CIS identity, measured on a Raspberry Pi 4B d03115.
 const SDIO_VENDOR: u16 = 0x02d0;
 const SDIO_DEVICE: u16 = 0xa9a6;
 
-/// The CMD53 transfer the last command set up, which the host then moves a
-/// block at a time through the data path.
+/// The CMD53 transfer the last command set up.
 #[derive(Debug, Clone, Copy)]
 struct IoXfer {
-    /// I/O function the transfer is against.
     func: u32,
-    /// Where in that function's address space it starts.
     addr: u32,
-    /// The address walks with the data (op code 1), rather than staying put
-    /// on a FIFO register.
+    /// The address walks with the data (op code 1).
     incr: bool,
-    /// Bytes per block: the function's block size in block mode, and the
-    /// whole byte count in byte mode, which is one block of it.
+    /// Bytes per block; in byte mode the whole count, as one block.
     unit: u32,
-    /// How many blocks the command asked for, so that the card knows which
-    /// one ends the transfer. On function 2 that is where a frame ends.
+    /// Blocks asked for: on function 2, where a frame ends.
     blocks: u32,
 }
 
-/// The 64-byte tuning block a card sends for CMD19 on a 4-bit bus (SD
-/// physical layer spec 3.01, 4.2.4.5).
+/// CMD19's tuning block on a 4-bit bus (SD physical layer 3.01, 4.2.4.5).
 const TUNING_BLOCK_4BIT: [u8; 64] = [
     0xff, 0x0f, 0xff, 0x00, 0xff, 0xcc, 0xc3, 0xcc, 0xc3, 0x3c, 0xcc, 0xff, 0xfe, 0xff, 0xfe, 0xef,
     0xff, 0xdf, 0xff, 0xdd, 0xff, 0xfb, 0xff, 0xfb, 0xbf, 0xff, 0x7f, 0xff, 0x77, 0xf7, 0xbd, 0xef,
@@ -303,62 +193,40 @@ const TUNING_BLOCK_4BIT: [u8; 64] = [
 ];
 
 pub struct SdCard {
-    /// The card's contents, 512-byte blocks. The FAT image lives here.
     disk: Disk,
-    /// SD card or e-MMC part: which identification sequence it answers.
     kind: CardKind,
-    /// An e-MMC's EXT_CSD, the 512-byte register CMD8 reads and CMD6 writes
-    /// a byte of at a time. Empty for an SD card.
+    /// An e-MMC's EXT_CSD; empty for an SD card.
     ext_csd: Vec<u8>,
-    /// Transfer addresses are byte offsets, not block numbers: where an
-    /// e-MMC starts, and where one of 2 GiB or less stays. CMD1 moves a
-    /// larger part to sector addressing when the host offers it.
+    /// Transfer addresses are byte offsets: where an e-MMC starts, and where
+    /// one of 2 GiB or less stays.
     byte_addressed: bool,
     state: CardState,
-    /// Relative card address, assigned by CMD3.
     rca: u16,
-    /// Set by CMD55; cleared after the following (A)CMD is dispatched.
     app_cmd: bool,
-    /// OCR "powered up / busy" latch — ACMD41 reports not-ready once, then ready,
-    /// mimicking the card's power-up ramp so the host's poll loop runs at least
-    /// one iteration.
+    /// OCR busy latch: not-ready once, then ready, so the host's poll loop runs
+    /// at least one iteration.
     powered_up: bool,
-    /// The last ACMD41 offered 1.8 V (S18A) — CMD11 is legal only then.
     s18a_offered: bool,
-    /// 1.8 V signalling (after CMD11). Survives CMD0; only a power cycle
-    /// drops the card back to 3.3 V.
+    /// 1.8 V signalling: survives CMD0, and only a power cycle undoes it.
     signal_1v8: bool,
-    /// ACMD6 bus width: `false` = 1-bit, `true` = 4-bit.
     wide_bus: bool,
-    /// CMD6 functions currently selected, groups 1..=6.
     functions: [u8; 6],
-    /// CMD23 block count, consumed by the next CMD18/CMD25.
     preset_count: Option<u32>,
-    /// Blocks left before a counted transfer (CMD17/CMD24, or CMD18/CMD25 after
-    /// CMD23) ends by itself; `None` = open-ended, ended by CMD12.
+    /// Blocks left of a counted transfer; `None` = open-ended, ended by CMD12.
     blocks_left: Option<u32>,
-    /// Blocks the last CMD24/CMD25 wrote, which ACMD22 reports.
     written_blocks: u32,
-    /// CMD32/CMD33 erase range, inclusive block addresses.
     erase_start: u32,
     erase_end: u32,
-    /// 128-bit CID, aligned with the CRC slot ([7:0]) zeroed.
     cid: u128,
-    /// 128-bit CSD, same alignment.
     csd: u128,
-    /// [`CardKind::Sdio`]: the function-0 address space CMD52 reads and
-    /// writes a byte at a time — the CCCR, one FBR per function, and the CIS
-    /// tuple chains those point at. Sparse: everything not in here reads 0,
-    /// as the unused space does. Empty for the other kinds.
+    /// [`CardKind::Sdio`]: function 0's address space — CCCR, FBRs and CIS
+    /// chains. Sparse; what is not here reads 0, as the unused space does.
     io: BTreeMap<u32, u8>,
-    /// [`CardKind::Sdio`]: the chip on the other side of functions 1 and 2.
     chip: Option<Cyw43455>,
-    /// [`CardKind::Sdio`]: the CMD53 transfer in flight, if any.
     io_xfer: Option<IoXfer>,
 }
 
 impl SdCard {
-    /// Wrap a raw card image (must be a multiple of 512 bytes; padded if not).
     pub fn new(mut image: Vec<u8>) -> SdCard {
         if !image.len().is_multiple_of(512) {
             image.resize(image.len().next_multiple_of(512), 0);
@@ -369,17 +237,14 @@ impl SdCard {
         SdCard::with_disk(Disk::from_vec(image))
     }
 
-    /// A card on `disk`, typically a file opened with [`Disk::open`].
     pub fn with_disk(disk: Disk) -> SdCard {
         SdCard::with_disk_kind(disk, CardKind::Sd)
     }
 
-    /// An e-MMC part on `disk`: the flash soldered to a Compute Module.
     pub fn mmc_with_disk(disk: Disk) -> SdCard {
         SdCard::with_disk_kind(disk, CardKind::Mmc)
     }
 
-    /// A card or an e-MMC part on `disk`.
     pub fn with_disk_kind(disk: Disk, kind: CardKind) -> SdCard {
         let blocks = disk.blocks();
         SdCard {
@@ -425,8 +290,7 @@ impl SdCard {
         }
     }
 
-    /// The WiFi chip's SDIO side: no memory, three I/O functions, the
-    /// identity a Raspberry Pi 4B d03115 reports.
+    /// The WiFi chip's SDIO side: no memory, three I/O functions.
     pub fn sdio() -> SdCard {
         SdCard::with_disk_kind(Disk::from_vec(vec![0; 512]), CardKind::Sdio)
     }
@@ -435,18 +299,15 @@ impl SdCard {
         self.disk.blocks()
     }
 
-    /// SD card or e-MMC part.
     pub fn kind(&self) -> CardKind {
         self.kind
     }
 
-    /// The chip behind functions 1 and 2, for a [`CardKind::Sdio`] card.
     pub fn chip(&self) -> Option<&Cyw43455> {
         self.chip.as_ref()
     }
 
-    /// Bring what the card does on its own clock — which is the WiFi chip's
-    /// firmware and nothing else — to model time `now_us`.
+    /// Bring the WiFi chip's firmware to model time `now_us`.
     #[inline]
     pub fn advance_to(&mut self, now_us: u64) {
         if let Some(chip) = self.chip.as_mut() {
@@ -458,26 +319,22 @@ impl SdCard {
         self.state
     }
 
-    /// The card signals at 1.8 V (a completed CMD11).
     pub fn signal_1v8(&self) -> bool {
         self.signal_1v8
     }
 
-    /// The card's blocks, writes included.
     pub fn disk(&self) -> &Disk {
         &self.disk
     }
 
-    /// Copy one 512-byte block out of the card (zeros past the end).
     pub fn read_block(&self, lba: u32, out: &mut [u8; 512]) {
         self.disk.read_block(u64::from(lba), out);
     }
 
-    /// Store one block (up to 512 bytes) the host sent; ignored past the end.
-    /// A stored block counts towards what ACMD22 reports.
+    /// Store one block the host sent, ignored past the end; counts towards
+    /// ACMD22.
     pub fn write_block(&mut self, lba: u32, data: &[u8]) {
         let mut block = [0u8; 512];
-        // A short block only replaces the start of what is there.
         if !self.disk.peek_block(u64::from(lba), &mut block) {
             return;
         }
@@ -488,9 +345,6 @@ impl SdCard {
     }
 
     /// One block of the transfer the last command set up, `index` blocks in.
-    /// For a memory card that is block `index` of the image, the address the
-    /// command named having been added in by the host; for the SDIO card it
-    /// is one block of a CMD53, which the chip answers.
     pub fn transfer_read(&mut self, index: u32, out: &mut [u8; 512]) {
         let Some(x) = self.io_xfer.filter(|_| self.kind == CardKind::Sdio) else {
             self.read_block(index, out);
@@ -500,8 +354,7 @@ impl SdCard {
         let n = (x.unit as usize).min(out.len());
         out.fill(0);
         if x.func == 0 {
-            // Function 0 has no chip behind it: an extended transfer there
-            // walks the card's own space, a byte at a time.
+            // Function 0 has no chip behind it: walk the card's own space.
             for (i, b) in out[..n].iter_mut().enumerate() {
                 *b = self
                     .io
@@ -514,7 +367,6 @@ impl SdCard {
         }
     }
 
-    /// The counterpart of [`Self::transfer_read`]: one block the host sent.
     pub fn transfer_write(&mut self, index: u32, data: &[u8]) {
         let Some(x) = self.io_xfer.filter(|_| self.kind == CardKind::Sdio) else {
             self.write_block(index, data);
@@ -528,16 +380,14 @@ impl SdCard {
             }
         } else if let Some(chip) = self.chip.as_mut() {
             chip.write_io(x.func, at, &data[..n]);
-            // The command's last block ends the transfer, and on the frame
-            // FIFO that is what ends a frame.
+            // The last block ends the transfer, and a frame with it.
             if index + 1 >= x.blocks {
                 chip.end_io(x.func);
             }
         }
     }
 
-    /// One data block of the current transfer went over the bus. A counted
-    /// transfer returns the card to `tran` once its last block is through.
+    /// One data block went over the bus; a counted transfer ends at its last.
     pub fn block_done(&mut self) {
         if let Some(n) = self.blocks_left.as_mut() {
             *n = n.saturating_sub(1);
@@ -550,8 +400,7 @@ impl SdCard {
         }
     }
 
-    /// Card VDD removed: everything, the signalling voltage included, starts
-    /// over at the next power-up.
+    /// Card VDD removed: the signalling voltage included, everything restarts.
     pub fn power_off(&mut self) {
         self.state = CardState::Idle;
         self.rca = 0;
@@ -571,8 +420,7 @@ impl SdCard {
         }
     }
 
-    /// The block a transfer argument names: an e-MMC of 2 GiB or less is
-    /// addressed in bytes, everything else in 512-byte sectors.
+    /// The block a transfer argument names; a small e-MMC counts bytes.
     fn lba(&self, arg: u32) -> u32 {
         if self.byte_addressed {
             arg / 512
@@ -597,8 +445,7 @@ impl SdCard {
         }
     }
 
-    /// Dispatch one command. `acmd` is the CMD55-app flag latched by the host
-    /// (we also track it internally; either is accepted).
+    /// Dispatch one command; `acmd` is the host's own CMD55 latch.
     pub fn command(&mut self, cmd: u8, arg: u32) -> SdResponse {
         let is_app = self.app_cmd;
         self.app_cmd = false;
@@ -614,16 +461,13 @@ impl SdCard {
         }
 
         if self.kind == CardKind::Sdio {
-            // An I/O-only card answers its own four commands and nothing
-            // else: no CID, no CSD, no memory (SDIO simplified specification
-            // 5.1).
+            // An I/O-only card has no CID, CSD or memory.
             return self.sdio_command(cmd, arg);
         }
 
         match cmd {
             0 => {
-                // GO_IDLE_STATE. The signalling voltage is not reset (spec
-                // 4.2.4.3: only a power cycle returns the card to 3.3 V).
+                // GO_IDLE_STATE; the signalling voltage is not reset (4.2.4.3).
                 self.state = CardState::Idle;
                 self.powered_up = false;
                 self.s18a_offered = false;
@@ -633,8 +477,7 @@ impl SdCard {
                 self.wide_bus = false;
                 SdResponse::none()
             }
-            // SEND_OP_COND (MMC), IO_SEND_OP_COND and IO_RW_DIRECT/EXTENDED
-            // (SDIO): an SD memory card does not answer.
+            // The MMC and SDIO probes: an SD memory card does not answer.
             1 | 5 | 52 | 53 => SdResponse::silent(),
             2 => {
                 // ALL_SEND_CID -> R2, idle/ready -> ident
@@ -648,8 +491,7 @@ impl SdCard {
                 // SEND_RELATIVE_ADDR -> R6, ident -> stby
                 self.rca = 0x0001;
                 self.state = CardState::Stby;
-                // R6: [31:16] RCA, [15:0] status bits (mirrors card status
-                // 23,22,19,12:0). Report "ready, stby".
+                // R6: RCA above the mirrored status bits.
                 let r6 = ((self.rca as u32) << 16) | 0x0500;
                 SdResponse::r1(r6)
             }
@@ -686,9 +528,8 @@ impl SdCard {
                 }
             }
             11 => {
-                // VOLTAGE_SWITCH: legal only right after an ACMD41 that
-                // accepted S18R. The card then drives CMD/DAT low until the
-                // host has moved to 1.8 V (modelled by the host controller).
+                // VOLTAGE_SWITCH, legal only after an ACMD41 that accepted
+                // S18R. The card holds CMD/DAT low until the host is at 1.8 V.
                 if self.state == CardState::Ready && self.s18a_offered && !self.signal_1v8 {
                     self.signal_1v8 = true;
                     self.s18a_offered = false;
@@ -714,7 +555,7 @@ impl SdCard {
                 SdResponse::r1(self.status())
             }
             17 | 18 => {
-                // READ_SINGLE / READ_MULTIPLE_BLOCK -> R1 + data
+                // READ_SINGLE / READ_MULTIPLE_BLOCK
                 let status = self.status();
                 self.state = CardState::Data;
                 let count = if cmd == 17 {
@@ -731,8 +572,7 @@ impl SdCard {
                 }
             }
             19 => {
-                // SEND_TUNING_BLOCK -> R1 + tuning pattern; the card stays in
-                // tran.
+                // SEND_TUNING_BLOCK; the card stays in tran.
                 SdResponse::with_data(self.status(), TUNING_BLOCK_4BIT.to_vec())
             }
             23 => {
@@ -741,8 +581,7 @@ impl SdCard {
                 SdResponse::r1(self.status())
             }
             24 | 25 => {
-                // WRITE_BLOCK / WRITE_MULTIPLE_BLOCK -> R1, then the host
-                // sends data.
+                // WRITE_BLOCK / WRITE_MULTIPLE_BLOCK
                 let status = self.status();
                 self.state = CardState::Rcv;
                 self.written_blocks = 0;
@@ -768,8 +607,7 @@ impl SdCard {
                 SdResponse::r1(self.status())
             }
             38 => {
-                // ERASE -> R1b. Erased blocks read back as zeros
-                // (SCR.DATA_STAT_AFTER_ERASE = 0), discard likewise.
+                // ERASE; erased blocks read back as zeros.
                 let (lo, hi) = (self.erase_start, self.erase_end);
                 if lo <= hi {
                     self.disk.zero(u64::from(lo), u64::from(hi));
@@ -777,7 +615,7 @@ impl SdCard {
                 SdResponse::r1(self.status())
             }
             55 => {
-                // APP_CMD -> R1 with the APP_CMD bit set; next command is an ACMD
+                // APP_CMD; the next command is an ACMD.
                 self.app_cmd = true;
                 SdResponse::r1(self.status() | R1_APP_CMD)
             }
@@ -789,8 +627,7 @@ impl SdCard {
     fn sdio_command(&mut self, cmd: u8, arg: u32) -> SdResponse {
         match cmd {
             0 => {
-                // GO_IDLE_STATE. An I/O-only card ignores it, but the host
-                // sends it before it knows what is there.
+                // GO_IDLE_STATE, which an I/O-only card ignores.
                 SdResponse::none()
             }
             3 => {
@@ -800,10 +637,8 @@ impl SdCard {
                 SdResponse::r1(u32::from(self.rca) << 16)
             }
             5 => {
-                // IO_SEND_OP_COND -> R4. The first ask, with no voltage
-                // window, is the host finding out what is there; the card
-                // reports ready once its ramp is done, so the host's poll
-                // loop runs at least one iteration.
+                // IO_SEND_OP_COND; ready on the second ask, so the host's poll
+                // loop runs at least once.
                 let ocr = if self.powered_up {
                     self.state = CardState::Ready;
                     IO_OCR_READY | IO_FUNCTIONS | OCR_VOLTAGE_WINDOW
@@ -824,18 +659,15 @@ impl SdCard {
                 SdResponse::r1(self.status())
             }
             52 => {
-                // IO_RW_DIRECT -> R5: one byte at `[25:9]` of function
-                // `[30:28]`, written when `[31]` is set. R5 carries the byte
-                // in `[7:0]` and the card's state in `[12:9]`, the same place
-                // R1 has it.
+                // IO_RW_DIRECT: one byte at `[25:9]` of function `[30:28]`,
+                // written when `[31]` is set.
                 let write = arg >> 31 != 0;
                 let func = (arg >> 28) & 7;
                 let addr = (arg >> 9) & 0x1_FFFF;
                 let value = (arg & 0xFF) as u8;
                 let byte = if write {
                     self.io_write(func, addr, value);
-                    // The read-after-write flag ([27]) asks for what the
-                    // register holds now, and 0 otherwise.
+                    // The read-after-write flag asks for the new value.
                     if arg >> 27 & 1 != 0 {
                         self.io_read(func, addr)
                     } else {
@@ -847,11 +679,8 @@ impl SdCard {
                 SdResponse::r1(self.r5(byte))
             }
             53 => {
-                // IO_RW_EXTENDED -> R5, then a data transfer. `[31]` write,
-                // `[30:28]` function, `[27]` block mode, `[26]` the op code
-                // (1 = the address walks with the data), `[25:9]` the
-                // address, `[8:0]` a block count or a byte count, 0 meaning
-                // 512 of either.
+                // IO_RW_EXTENDED: write, function, block mode, op code,
+                // address, then a count where 0 means 512.
                 let write = arg >> 31 != 0;
                 let func = (arg >> 28) & 7;
                 let block_mode = (arg >> 27) & 1 != 0;
@@ -871,8 +700,7 @@ impl SdCard {
                     unit,
                     blocks,
                 });
-                // R5 carries no data byte for an extended transfer; the
-                // bytes go over the data lines.
+                // No data byte in R5: the bytes go over the data lines.
                 let r1 = Some(self.r5(0));
                 if write {
                     SdResponse {
@@ -890,14 +718,12 @@ impl SdCard {
                     }
                 }
             }
-            // Everything else: the memory card's identification and its
-            // transfers, which an I/O-only card does not have.
+            // The memory card's commands, which an I/O-only card lacks.
             _ => SdResponse::silent(),
         }
     }
 
-    /// R5's fixed part: the card state in `[13:12]` — *not* where R1 keeps
-    /// it — and the byte the command read in `[7:0]`.
+    /// R5: the card state in `[13:12]`, the byte read in `[7:0]`.
     fn r5(&self, byte: u8) -> u32 {
         let state = if self.state == CardState::Tran {
             R5_STATE_TRN
@@ -907,13 +733,11 @@ impl SdCard {
         state << R5_STATE_SHIFT | u32::from(byte)
     }
 
-    /// The I/O block size the host set for `func` in its FBR, which is what
-    /// a CMD53 block transfer is made of.
+    /// The I/O block size the host set for `func` in its FBR.
     fn io_block_size(&self, func: u32) -> u32 {
         let fbr = func * 0x100 + FBR_BLKSIZE;
         let size = u32::from(self.io_read(0, fbr)) | u32::from(self.io_read(0, fbr + 1)) << 8;
-        // A function whose block size the host never set transfers in
-        // 512-byte blocks, the maximum this card's CIS offers.
+        // Unset means 512, the maximum this card's CIS offers.
         if size == 0 {
             512
         } else {
@@ -921,7 +745,6 @@ impl SdCard {
         }
     }
 
-    /// One block of a CMD53 transfer, `index` blocks in.
     fn io_transfer_addr(&self, x: &IoXfer, index: u32) -> u32 {
         if x.incr {
             x.addr.wrapping_add(index * x.unit)
@@ -930,10 +753,9 @@ impl SdCard {
         }
     }
 
-    /// Put the I/O side back the way it comes up: nothing enabled, no
-    /// address, and the card waiting for CMD5 again. The chip goes with it —
-    /// `brcmf_sdio_probe_attach` sets `SDIO_CCCR_BRCM_CARDCTRL_WLANRESET`
-    /// precisely so that an I/O reset resets the WLAN backplane as well.
+    /// Put the I/O side back the way it comes up. The chip goes with it: the
+    /// driver sets `SDIO_CCCR_BRCM_CARDCTRL_WLANRESET` precisely so an I/O
+    /// reset resets the WLAN backplane too.
     fn sdio_reset(&mut self) {
         self.io = io_space();
         self.chip = Some(Cyw43455::new());
@@ -943,9 +765,7 @@ impl SdCard {
         self.powered_up = false;
     }
 
-    /// The byte at `addr` in function `func`'s address space. Function 0 is
-    /// the CCCR, the FBRs and the CIS, all of them the card's; functions 1
-    /// and 2 are the chip's.
+    /// The byte at `addr` in function `func`'s address space.
     fn io_read(&self, func: u32, addr: u32) -> u8 {
         if func != 0 {
             return match self.chip.as_ref() {
@@ -954,8 +774,7 @@ impl SdCard {
             };
         }
         if addr == CCCR_INT_PENDING {
-            // Not stored: which functions have something to say is the
-            // chip's to answer, and it answers it now.
+            // Not stored: the chip answers which functions are pending.
             return if self.io_irq_raw() {
                 INT_PENDING_FUNC1
             } else {
@@ -965,25 +784,20 @@ impl SdCard {
         self.io.get(&addr).copied().unwrap_or(0)
     }
 
-    /// The card is pulling the SDIO interrupt line — DAT[1] on a 4-bit bus,
-    /// which the host controller reports as its card interrupt.
-    ///
-    /// Gated by `CCCR_INT_ENABLE` the way a card gates it: the chip may have
-    /// something to say long before the host has asked to be told.
+    /// The card is pulling the SDIO interrupt line (DAT[1]), gated by
+    /// `CCCR_INT_ENABLE`: the chip may have something to say long before the
+    /// host has asked to be told.
     pub fn io_irq(&self) -> bool {
         let en = self.io.get(&CCCR_INT_ENABLE).copied().unwrap_or(0);
         en & (INT_ENABLE_MASTER | INT_ENABLE_FUNC1) == (INT_ENABLE_MASTER | INT_ENABLE_FUNC1)
             && self.io_irq_raw()
     }
 
-    /// The same before the CCCR gate: whether the chip has anything pending.
     fn io_irq_raw(&self) -> bool {
         self.chip.as_ref().is_some_and(|c| c.irq_asserted())
     }
 
-    /// Write one byte of function `func`'s space. In function 0 the CCCR's
-    /// read-only registers keep their value, and enabling a function makes
-    /// it ready.
+    /// Write one byte of function `func`'s space.
     fn io_write(&mut self, func: u32, addr: u32, value: u8) {
         if func != 0 {
             if let Some(chip) = self.chip.as_mut() {
@@ -992,17 +806,14 @@ impl SdCard {
             return;
         }
         match addr {
-            // The revision, the capabilities and the CIS pointers are the
-            // card's own, and so are the CIS tuples.
+            // Read-only: revision, capabilities, CIS pointers and tuples.
             CCCR_REV | CCCR_SD_SPEC | CCCR_CAPABILITY => {}
             CCCR_IO_ENABLE => {
                 let was = self.io_read(0, CCCR_IO_ENABLE);
                 self.io.insert(CCCR_IO_ENABLE, value);
-                // A real function takes a moment to come up; this one is
-                // ready as soon as it is asked for.
+                // Ready as soon as it is asked for.
                 self.io.insert(CCCR_IO_READY, value);
-                // Function 2 coming up is what the chip's firmware waits for
-                // before it says it is ready.
+                // Function 2 coming up is what the firmware waits for.
                 if value & !was & IO_ENABLE_FUNC2 != 0 {
                     if let Some(chip) = self.chip.as_mut() {
                         chip.enable_f2();
@@ -1011,8 +822,7 @@ impl SdCard {
             }
             CCCR_IO_READY | CCCR_INT_PENDING => {}
             CCCR_IO_ABORT => {
-                // Self-clearing: bit 3 puts the I/O side back to idle, which
-                // is how the MMC core starts a rescan.
+                // Self-clearing; bit 3 puts the I/O side back to idle.
                 if value & IO_ABORT_RES != 0 {
                     self.sdio_reset();
                 }
@@ -1025,17 +835,14 @@ impl SdCard {
         }
     }
 
-    /// The commands an e-MMC part answers differently from an SD card;
-    /// `None` leaves the command to the shared arms.
+    /// What an e-MMC answers differently; `None` falls through to the shared
+    /// arms.
     fn mmc_command(&mut self, cmd: u8, arg: u32) -> Option<SdResponse> {
         match cmd {
             1 => {
-                // SEND_OP_COND -> R3. Busy once, then ready. `[30:29]` is
-                // the access mode: the host offers what it supports and the
-                // part answers with what it will use, which for anything over
-                // 2 GiB is sectors rather than bytes whatever the host said
-                // (JESD84-B51 7.4.3) — the stock firmware's own driver offers
-                // byte addressing and is expected to follow.
+                // SEND_OP_COND: busy once, then ready. A part over 2 GiB
+                // answers sector mode whatever the host offered (JESD84-B51
+                // 7.4.3), and the stock firmware follows.
                 let ocr = if self.powered_up {
                     self.state = CardState::Ready;
                     let sector = self.disk.blocks() > BYTE_ADDR_BLOCKS;
@@ -1049,16 +856,14 @@ impl SdCard {
                 Some(SdResponse::r1(ocr))
             }
             3 => {
-                // SET_RELATIVE_ADDR -> R1: the host picks the address, and an
-                // e-MMC only acknowledges it. ident -> stby.
+                // SET_RELATIVE_ADDR: the host picks the address.
                 self.rca = (arg >> 16) as u16;
                 self.state = CardState::Stby;
                 Some(SdResponse::r1(self.status()))
             }
             6 => {
-                // SWITCH -> R1b: access [25:24], EXT_CSD index [23:16], value
-                // [15:8]. Access 0 selects a command set, which this part does
-                // not have.
+                // SWITCH: access, EXT_CSD index, value. Access 0 selects a
+                // command set, which this part does not have.
                 let access = (arg >> 24) & 3;
                 let index = ((arg >> 16) & 0xFF) as usize;
                 let value = ((arg >> 8) & 0xFF) as u8;
@@ -1074,8 +879,7 @@ impl SdCard {
                 Some(SdResponse::r1(self.status()))
             }
             8 => {
-                // SEND_EXT_CSD -> R1 + the 512-byte register. (CMD8 on an SD
-                // card is SEND_IF_COND, which an e-MMC does not have.)
+                // SEND_EXT_CSD (CMD8 is SEND_IF_COND on an SD card).
                 Some(SdResponse::with_data(self.status(), self.ext_csd.clone()))
             }
             // SEND_TUNING_BLOCK is CMD21 here, not CMD19.
@@ -1098,9 +902,8 @@ impl SdCard {
                 SdResponse::r1(self.status())
             }
             13 => {
-                // SD_STATUS -> R1 + 64-byte status block. Only DAT_BUS_WIDTH
-                // is filled in; a zero AU size tells the host nothing about
-                // erase geometry, which it then leaves alone.
+                // SD_STATUS: only DAT_BUS_WIDTH is filled in, and a zero AU
+                // size leaves the host's erase geometry alone.
                 let mut ssr = vec![0u8; 64];
                 if self.wide_bus {
                     ssr[0] = 0x80;
@@ -1108,16 +911,13 @@ impl SdCard {
                 SdResponse::with_data(self.status(), ssr)
             }
             22 => {
-                // SEND_NUM_WR_BLOCKS -> R1 + the number of blocks the last
-                // write stored, 32 bits, most significant byte first. edk2's
-                // MmcDxe asks after every write and fails the write without
-                // an answer (#51).
+                // SEND_NUM_WR_BLOCKS, most significant byte first. edk2's
+                // MmcDxe asks after every write and fails it without an answer.
                 SdResponse::with_data(self.status(), self.written_blocks.to_be_bytes().to_vec())
             }
             41 => {
-                // SD_SEND_OP_COND -> R3 (OCR). Report busy once, then ready with
-                // CCS=1 (high-capacity) — and S18A if the host asked for 1.8 V
-                // and the card is still at 3.3 V.
+                // SD_SEND_OP_COND: busy once, then ready with CCS, plus S18A if
+                // the host asked for 1.8 V and the card is still at 3.3 V.
                 let ocr = if self.powered_up {
                     self.state = CardState::Ready;
                     let s18a = arg & OCR_S18 != 0 && !self.signal_1v8;
@@ -1131,11 +931,8 @@ impl SdCard {
                 SdResponse::r1(ocr)
             }
             51 => {
-                // SEND_SCR -> R1 + 8-byte SCR: SCR_STRUCTURE 0, SD_SPEC 2 with
-                // SD_SPEC3 (a UHS-I card: Linux reads the CMD6 bus modes only
-                // then), 1- and 4-bit bus, CMD23 supported — the parts of the
-                // real board's card's `0x02858082` this card implements
-                // (erased data reads 0, no SD_SPECX).
+                // SEND_SCR: SD_SPEC 2 with SD_SPEC3, without which Linux does
+                // not read the CMD6 bus modes; 1- and 4-bit bus, CMD23.
                 let scr = vec![0x02, 0x05, 0x80, 0x02, 0, 0, 0, 0];
                 SdResponse::with_data(self.status(), scr)
             }
@@ -1143,8 +940,7 @@ impl SdCard {
         }
     }
 
-    /// CMD6: build the 512-bit switch-function status for `arg` and, in set
-    /// mode (bit 31), select every requested function the card supports.
+    /// CMD6: the switch-function status, selecting functions in set mode.
     fn switch_func(&mut self, arg: u32) -> Vec<u8> {
         let set = arg & (1 << 31) != 0;
         let g1 = if self.signal_1v8 {
@@ -1152,7 +948,6 @@ impl SdCard {
         } else {
             SWITCH_G1_3V3
         };
-        // Groups 2..6 support only their default function 0.
         let support: [u16; 6] = [g1, 0x8001, 0x8001, 0x8001, 0x8001, 0x8001];
         let mut result = [0u8; 6];
         for (g, r) in result.iter_mut().enumerate() {
@@ -1185,14 +980,11 @@ impl SdCard {
     }
 }
 
-/// Function 0's address space for [`CardKind::Sdio`]: the CCCR, one FBR per
-/// I/O function, and the CIS chain each of those points at.
-///
-/// The identity in the common CIS is measured (`SDIO_VENDOR` / `SDIO_DEVICE`),
-/// and so is the function count. The rest is the smallest set of values that
-/// answers what `mmc_sdio_init_card` and `sdio_read_cis` ask for: a card
-/// claiming SDIO 3.00 must give each function a `FUNCE` tuple of at least 42
-/// bytes, or the core rejects it.
+/// Function 0's address space: the CCCR, one FBR per function, and the CIS
+/// chain each points at. The identity and function count are measured; the rest
+/// is the smallest set of values `mmc_sdio_init_card` and `sdio_read_cis`
+/// accept — a card claiming SDIO 3.00 needs a `FUNCE` tuple of at least 42
+/// bytes per function or the core rejects it.
 fn io_space() -> BTreeMap<u32, u8> {
     let mut io = BTreeMap::new();
     let mut put = |addr: u32, bytes: &[u8]| {
@@ -1201,23 +993,15 @@ fn io_space() -> BTreeMap<u32, u8> {
         }
     };
 
-    // --- CCCR ---------------------------------------------------------
-    // [7:4] SDIO 3.00, [3:0] CCCR 3.00.
     put(CCCR_REV, &[0x43]);
-    // SD physical layer 3.00.
     put(CCCR_SD_SPEC, &[0x03]);
-    // Card capability: direct commands during a transfer, multi-block, read
-    // wait, and 4-bit multiple-block interrupts.
+    // Card capability: direct commands mid-transfer, multi-block, read wait,
+    // 4-bit multiple-block interrupts.
     put(CCCR_CAPABILITY, &[0x17]);
-    // Where the card's own CIS chain is, little-endian over three bytes.
     put(CCCR_CIS_PTR, &CIS_COMMON.to_le_bytes()[..3]);
-    // Bus speed select: high speed supported, not yet selected. The real
-    // card ends up in it — `mmc1: new high speed SDIO card at address 0001`
-    // on a Raspberry Pi 4B d03115.
+    // Bus speed: high speed supported, not yet selected, as measured.
     put(CCCR_SPEED, &[0x01]);
 
-    // --- one FBR and one CIS chain per function -----------------------
-    // The common CIS names the card; each function's gives its block size.
     put(
         CIS_COMMON,
         &[
@@ -1227,8 +1011,7 @@ fn io_space() -> BTreeMap<u32, u8> {
             (SDIO_VENDOR >> 8) as u8,
             SDIO_DEVICE as u8,
             (SDIO_DEVICE >> 8) as u8,
-            // Function 0 extended tuple: type 0, the block size it takes,
-            // and the top transfer rate (0x32 = 25 MHz, SDIO 16.7.3).
+            // Function 0's extended tuple: block size and top rate.
             TPL_FUNCE,
             4,
             0x00,
@@ -1241,13 +1024,10 @@ fn io_space() -> BTreeMap<u32, u8> {
     for func in 1..=(IO_FUNCTIONS >> 28) {
         let fbr = func * 0x100;
         let cis = CIS_COMMON + func * CIS_FUNC_STRIDE;
-        // Standard function interface code 0 (none of the standard ones) in
-        // [3:0], and the CIS pointer at +9.
+        // Interface code 0, and the CIS pointer at +9.
         put(fbr, &[0x00]);
         put(fbr + 0x09, &cis.to_le_bytes()[..3]);
-        // A function's extended tuple, which a card claiming SDIO 3.00 must
-        // make at least 42 bytes (Linux `cistpl_funce_func`). Only the
-        // maximum block size, at offset 12, is read here.
+        // A function's extended tuple, at least 42 bytes for SDIO 3.00.
         let mut funce = vec![0u8; 42];
         funce[0] = 0x01; // type 1: a function's own tuple
         funce[12] = 0x00;
@@ -1260,8 +1040,7 @@ fn io_space() -> BTreeMap<u32, u8> {
     io
 }
 
-/// A plausible CID (Manufacturer "PI", product "VIRTF", serial, date), aligned
-/// so bits `[7:0]` (the CRC slot) are zero.
+/// An invented CID, aligned with the CRC slot zeroed.
 fn default_cid() -> u128 {
     let mut cid: u128 = 0;
     cid |= 0x00 << 120; // MID = 0 (unknown mfr)
@@ -1276,10 +1055,9 @@ fn default_cid() -> u128 {
     cid
 }
 
-/// CSD version 2.0 (CSD_STRUCTURE = 1), high-capacity, describing `blocks`
-/// 512-byte sectors. Apart from C_SIZE, every field is the value the SD spec
-/// fixes for CSD 2.0 — which is also what the real board's card reports
-/// (`CSD: 400e00325b590000e9277f800a400000`, sd-card-boot.log).
+/// A high-capacity CSD v2.0 over `blocks` sectors. Apart from C_SIZE every
+/// field is what the SD spec fixes for CSD 2.0, which is also what a real
+/// board's card reports.
 fn csd_v2(blocks: u64) -> u128 {
     // CSD v2: C_SIZE counts (512 KiB) units, minus 1.
     let c_size = (blocks / 1024).saturating_sub(1) as u128;
@@ -1298,9 +1076,7 @@ fn csd_v2(blocks: u64) -> u128 {
     csd
 }
 
-/// An e-MMC CID: MID 0x15 with PNM "VIRTF" and the same alignment as the SD
-/// one. An e-MMC's PNM is 6 characters, not 5, and CBX ([113:112]) says the
-/// part is embedded.
+/// An e-MMC CID; its PNM is 6 characters, not 5, and CBX says it is embedded.
 fn mmc_cid() -> u128 {
     let mut cid: u128 = 0;
     cid |= 0x15 << 120; // MID
@@ -1315,9 +1091,8 @@ fn mmc_cid() -> u128 {
     cid
 }
 
-/// An e-MMC CSD (JESD84-B51 7.3): CSD_STRUCTURE 3 and SPEC_VERS 4 say the
-/// real capacity and features are in the EXT_CSD, so C_SIZE is left at its
-/// saturated 0xFFF and the host reads SEC_COUNT instead.
+/// An e-MMC CSD (JESD84-B51 7.3): the real capacity is in the EXT_CSD, so
+/// C_SIZE stays saturated and the host reads SEC_COUNT.
 fn mmc_csd() -> u128 {
     let mut csd: u128 = 0;
     csd |= 3 << 126; // [127:126] CSD_STRUCTURE = 3 (EXT_CSD)
@@ -1336,8 +1111,7 @@ fn mmc_csd() -> u128 {
     csd
 }
 
-/// An e-MMC's EXT_CSD for a part of `blocks` sectors: the handful of bytes a
-/// bootloader or Linux reads, and zero everywhere else.
+/// An e-MMC's EXT_CSD: the bytes a bootloader or Linux reads, zero elsewhere.
 fn ext_csd(blocks: u64) -> Vec<u8> {
     let mut e = vec![0u8; 512];
     e[EXT_CSD_PARTITION_CONFIG] = 0; // boot from the user area
@@ -1360,7 +1134,6 @@ mod tests {
         SdCard::new(vec![0u8; 1024 * 1024])
     }
 
-    /// CMD0 → ACMD41 (twice: busy, then ready) with `arg`, returning the OCR.
     fn init_ocr(c: &mut SdCard, arg: u32) -> u32 {
         c.command(0, 0);
         let mut ocr = 0;
@@ -1371,24 +1144,19 @@ mod tests {
         ocr
     }
 
-    // --- the WiFi chip's SDIO side -------------------------------------
-
-    /// CMD52's argument: read or write `value` at `addr` of function `func`.
     fn io_arg(write: bool, func: u32, addr: u32, value: u8) -> u32 {
         (u32::from(write) << 31) | (func << 28) | (addr << 9) | u32::from(value)
     }
 
-    /// One CMD52 read, returning the byte the card answered with.
     fn io_read_byte(c: &mut SdCard, func: u32, addr: u32) -> u8 {
         let r5 = c.command(52, io_arg(false, func, addr, 0)).r1.unwrap();
-        // Nothing in the flags but the state: an error bit here is what made
-        // the MMC core give up with -EIO before R5's layout was right.
+        // Nothing in the flags but the state: an error bit here has the MMC
+        // core give up with -EIO.
         assert_eq!(r5 & 0xFF00 & !(3 << R5_STATE_SHIFT), 0, "R5 flags {r5:#x}");
         r5 as u8
     }
 
-    /// The identification the MMC core runs (`mmc_sdio_init_card`): CMD5
-    /// twice, CMD3, CMD7.
+    /// `mmc_sdio_init_card`: CMD5 twice, CMD3, CMD7.
     fn sdio_up() -> SdCard {
         let mut c = SdCard::sdio();
         let first = c.command(5, 0).r1.unwrap();
@@ -1412,7 +1180,6 @@ mod tests {
     #[test]
     fn it_has_no_memory_side() {
         let mut c = sdio_up();
-        // What a memory card answers, and this one must not.
         for cmd in [1, 2, 8, 9, 41, 55] {
             assert!(c.command(cmd, 0).no_response, "CMD{cmd} was answered");
         }
@@ -1421,15 +1188,12 @@ mod tests {
     #[test]
     fn the_cccr_reads_back() {
         let mut c = sdio_up();
-        // CCCR 3.00, SDIO 3.00: the MMC core rejects anything above either.
         let rev = io_read_byte(&mut c, 0, CCCR_REV);
         assert_eq!(rev & 0x0f, 3);
         assert_eq!(rev >> 4, 4);
-        // Enabling a function makes it ready, which is what the core polls.
         c.command(52, io_arg(true, 0, CCCR_IO_ENABLE, 0x02));
         assert_eq!(io_read_byte(&mut c, 0, CCCR_IO_ENABLE), 0x02);
         assert_eq!(io_read_byte(&mut c, 0, CCCR_IO_READY), 0x02);
-        // Read-only: the revision stays what the card says it is.
         c.command(52, io_arg(true, 0, CCCR_REV, 0xff));
         assert_eq!(io_read_byte(&mut c, 0, CCCR_REV), rev);
     }
@@ -1442,8 +1206,6 @@ mod tests {
             ptr |= u32::from(io_read_byte(&mut c, 0, CCCR_CIS_PTR + i)) << (8 * i);
         }
         assert_eq!(ptr, CIS_COMMON);
-        // The first tuple is MANFID with the identity a Raspberry Pi 4B
-        // d03115 reports through sysfs.
         assert_eq!(io_read_byte(&mut c, 0, ptr), TPL_MANFID);
         assert_eq!(io_read_byte(&mut c, 0, ptr + 1), 4);
         let vendor = u16::from(io_read_byte(&mut c, 0, ptr + 2))
@@ -1451,8 +1213,6 @@ mod tests {
         let device = u16::from(io_read_byte(&mut c, 0, ptr + 4))
             | u16::from(io_read_byte(&mut c, 0, ptr + 5)) << 8;
         assert_eq!((vendor, device), (0x02d0, 0xa9a6));
-        // Each function's own tuple has to be long enough for a card
-        // claiming SDIO 3.00, and gives its block size.
         for func in 1..=3 {
             let mut fptr = 0u32;
             for i in 0..3 {
@@ -1468,8 +1228,6 @@ mod tests {
         }
     }
 
-    /// CMD53's argument: read or write `blocks`/bytes at `addr` of function
-    /// `func`, in block mode or byte mode, with the address walking or not.
     #[allow(clippy::too_many_arguments)]
     fn io_ext_arg(write: bool, func: u32, block_mode: bool, incr: bool, addr: u32, n: u32) -> u32 {
         (u32::from(write) << 31)
@@ -1480,9 +1238,7 @@ mod tests {
             | (n & 0x1FF)
     }
 
-    /// The card once the host has agreed function 1's 64-byte block size and
-    /// aimed the backplane window at `window`, which is what `brcmfmac` does
-    /// before every access.
+    /// The card with function 1's block size agreed and the window aimed.
     fn sdio_with_window(window: u32) -> SdCard {
         let mut c = sdio_up();
         for (i, b) in 64u16.to_le_bytes().iter().enumerate() {
@@ -1497,9 +1253,6 @@ mod tests {
 
     #[test]
     fn cmd53_reads_the_chip_id_through_the_window() {
-        // The read `brcmf_sdio_probe_attach` opens with: four bytes at
-        // function 1 offset 0x8000 — window offset 0 with the
-        // 4-byte-access flag — once the window is at the enumeration base.
         let mut c = sdio_with_window(0x1800_0000);
         let r = c.command(53, io_ext_arg(false, 1, false, true, 0x8000, 4));
         assert!(!r.no_response, "CMD53 was not answered");
@@ -1514,8 +1267,6 @@ mod tests {
     #[test]
     fn cmd53_block_mode_walks_the_window_and_byte_mode_counts_bytes() {
         let mut c = sdio_with_window(crate::periph::cyw43455::RAM_BASE);
-        // Block mode, four 64-byte blocks, address incrementing: the
-        // firmware download's shape. Each block lands 64 bytes on.
         let r = c.command(53, io_ext_arg(true, 1, true, true, 0x8000, 4));
         assert_eq!(r.write_blocks, 4);
         for b in 0..4u32 {
@@ -1529,7 +1280,6 @@ mod tests {
             assert_eq!(block[..64], [b as u8 + 1; 64], "block {b}");
             assert_eq!(block[64], 0, "only the block's own bytes");
         }
-        // Byte mode: one block of exactly the byte count, and 0 means 512.
         let r = c.command(53, io_ext_arg(false, 1, false, true, 0x8000, 7));
         assert_eq!((r.read_blocks, r.read_lba), (1, 0));
         let mut block = [0u8; 512];
@@ -1545,8 +1295,6 @@ mod tests {
 
     #[test]
     fn a_fixed_address_transfer_stays_on_one_register() {
-        // Op code 0: every block goes to the same address, which is how a
-        // FIFO is read. Four blocks written to it leave the last one.
         let mut c = sdio_with_window(crate::periph::cyw43455::RAM_BASE);
         c.command(53, io_ext_arg(true, 1, true, false, 0x8000, 4));
         for b in 0..4u32 {
@@ -1562,7 +1310,6 @@ mod tests {
 
     #[test]
     fn the_window_is_the_three_sbaddr_bytes() {
-        // Two windows 32 KiB apart hold different bytes at the same offset.
         let mut c = sdio_with_window(crate::periph::cyw43455::RAM_BASE);
         c.command(53, io_ext_arg(true, 1, false, true, 0x8000, 4));
         c.transfer_write(0, &[0xAA; 4]);
@@ -1571,8 +1318,6 @@ mod tests {
         let mut block = [0u8; 512];
         c.transfer_read(0, &mut block);
         assert_eq!(block[..4], [0; 4], "a different 32 KiB window");
-        // The offset inside the window is what is left of the address once
-        // the 4-byte-access flag is off: 0x8004 is window offset 4.
         let mut c = sdio_with_window(crate::periph::cyw43455::RAM_BASE);
         c.command(53, io_ext_arg(true, 1, false, true, 0x8004, 4));
         c.transfer_write(0, &[0xBB; 4]);
@@ -1583,8 +1328,6 @@ mod tests {
 
     #[test]
     fn function_2_is_not_the_backplane() {
-        // The frame FIFO is not modelled: function 2 answers zeros wherever
-        // the window points, and what it takes goes nowhere.
         let mut c = sdio_with_window(crate::periph::cyw43455::RAM_BASE);
         c.command(53, io_ext_arg(true, 1, false, true, 0x8000, 4));
         c.transfer_write(0, &[0xCD; 4]);
@@ -1606,7 +1349,6 @@ mod tests {
         c.command(52, io_arg(true, 0, CCCR_IO_ABORT, IO_ABORT_RES));
         assert_eq!(c.state, CardState::Idle);
         assert_eq!(c.rca, 0);
-        // Self-clearing, and everything enabled is off again.
         assert_eq!(io_read_byte(&mut c, 0, CCCR_IO_ABORT), 0);
         assert_eq!(io_read_byte(&mut c, 0, CCCR_IO_ENABLE), 0);
     }
@@ -1615,7 +1357,6 @@ mod tests {
         SdCard::mmc_with_disk(Disk::from_vec(vec![0u8; blocks * 512]))
     }
 
-    /// CMD0 then CMD1 until the part reports it is ready; returns the OCR.
     fn mmc_ocr(c: &mut SdCard, arg: u32) -> u32 {
         c.command(0, 0);
         let mut ocr = 0;
@@ -1630,16 +1371,12 @@ mod tests {
 
     #[test]
     fn mmc_answers_cmd1_and_sizes_itself_by_capacity() {
-        // A small part stays byte-addressed however the host asks, so the
-        // transfer argument is divided down to a block number.
         let mut c = mmc(2048);
         assert_eq!(mmc_ocr(&mut c, 0x4010_0000) & MMC_OCR_SECTOR, 0);
         c.command(3, 0x0001_0000);
         c.command(7, 0x0001_0000);
         assert_eq!(c.command(17, 4 * 512).read_lba, 4);
 
-        // Over 2 GiB it answers sector mode even though this host offered
-        // byte addressing, and the argument is already a block number.
         let mut big = mmc(5 * 1024 * 1024);
         assert_ne!(mmc_ocr(&mut big, 0x0020_0000) & MMC_OCR_SECTOR, 0);
         big.command(3, 0x0001_0000);
@@ -1652,7 +1389,6 @@ mod tests {
         let mut c = mmc(2048);
         mmc_ocr(&mut c, 0x4010_0000);
         assert_ne!(c.command(55, 0).r1.unwrap() & R1_ILLEGAL_COMMAND, 0);
-        // ...and the command after it is not taken as an ACMD.
         assert_eq!(c.command(13, 0).r1.unwrap() & R1_ILLEGAL_COMMAND, 0);
 
         let ext = c.command(8, 0).data.expect("EXT_CSD");
@@ -1665,7 +1401,6 @@ mod tests {
             ),
             2048
         );
-        // CMD6 writes one byte of it; the host's own width follows.
         c.command(6, 0x03b7_0100);
         let ext = c.command(8, 0).data.unwrap();
         assert_eq!(ext[EXT_CSD_BUS_WIDTH], 1);
@@ -1684,9 +1419,7 @@ mod tests {
         assert!(c.command(11, 0).r1.is_some());
         assert!(c.signal_1v8());
 
-        // CMD0 keeps 1.8 V, so S18A is not offered again...
         assert_eq!(init_ocr(&mut c, 0x41FF_8000) & OCR_S18, 0);
-        // ...until a power cycle.
         c.power_off();
         assert!(!c.signal_1v8());
         assert_ne!(init_ocr(&mut c, 0x41FF_8000) & OCR_S18, 0);
@@ -1705,7 +1438,6 @@ mod tests {
         assert_eq!(st[13], 0x17);
         let st = c.command(6, 0x80FF_FFF4).data.unwrap();
         assert_eq!(st[16] & 0xF, 4, "DDR50 selected");
-        // Group 1 left alone (0xF) reports the current function.
         assert_eq!(c.command(6, 0x00FF_FFFF).data.unwrap()[16] & 0xF, 4);
     }
 
@@ -1728,7 +1460,6 @@ mod tests {
         c.read_block(8, &mut b);
         assert_eq!(b, [0xBB; 512]);
 
-        // Open-ended: stays in rcv until CMD12.
         assert_eq!(c.command(25, 9).write_blocks, u32::MAX);
         c.block_done();
         assert_eq!(c.state(), CardState::Rcv);
@@ -1758,7 +1489,6 @@ mod tests {
         assert_ne!(csd & (1 << (84 + 2)), 0, "class 2: block read");
         assert_eq!((csd >> 80) & 0xF, 9, "READ_BL_LEN");
         assert_eq!((csd >> 48) & 0x3F_FFFF, 511, "C_SIZE: 256 MiB");
-        // Everything but C_SIZE as the real board's card reports it.
         let c_size = 0x3F_FFFFu128 << 48;
         let real = 0x400e_0032_5b59_0000_e927_7f80_0a40_0000u128;
         assert_eq!(csd & !c_size, real & !c_size);
@@ -1787,7 +1517,6 @@ mod tests {
         assert_eq!(r.data.unwrap(), vec![0, 0, 0, 3], "big-endian count");
         assert_eq!(r.r1.unwrap() >> R1_CURRENT_STATE_SHIFT & 0xF, 4, "tran");
 
-        // The next write starts the count again.
         c.command(24, 9);
         c.write_block(9, &[0x22; 512]);
         c.block_done();

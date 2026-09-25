@@ -4,29 +4,23 @@ use crate::spec::schema::Source;
 use serde::Deserialize;
 use std::fmt::Write;
 
-/// One instruction-set reference: a header, then sections in file order.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Isa {
     pub title: String,
-    /// Markdown printed under the title, before the first section.
     pub intro: String,
     #[serde(default, rename = "section")]
     pub sections: Vec<Section>,
 }
 
-/// A section of the reference. Its `body` is prose; the `rows` carry the
-/// facts, each with the source it rests on.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Section {
     pub title: String,
-    /// Heading depth: 2 for `##`, 3 for `###`.
     #[serde(default = "two")]
     pub level: u8,
     #[serde(default)]
     pub body: Option<String>,
-    /// Markdown printed after the table.
     #[serde(default)]
     pub after: Option<String>,
     /// `"alu"` or `"mem"`: the rows of this section are the sub-op table of
@@ -35,36 +29,31 @@ pub struct Section {
     pub ops: Option<OpClass>,
     #[serde(default)]
     pub columns: Vec<String>,
-    /// One row per fact. The last column is filled in from the row's sources
-    /// when `columns` names one more column than the row has cells.
     #[serde(default, rename = "row")]
     pub rows: Vec<Row>,
     #[serde(default, rename = "source")]
     pub sources: Vec<Source>,
 }
 
-/// A row of a section's table, with what it rests on.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Row {
     pub cells: Vec<String>,
-    /// In an op-table section: the sub-op number this row describes.
     #[serde(default)]
     pub subop: Option<u8>,
-    /// In an op-table section: the mnemonic, as `binutils-vc4` spells it
-    /// without its `v<w>` prefix. This is the name the model prints.
+    /// In an op-table section: the mnemonic as `binutils-vc4` spells it, less
+    /// the `v<w>` prefix; the name the model prints.
     #[serde(default)]
     pub mnemonic: Option<String>,
     /// In an op-table section: whether the model can carry the op out. The
-    /// build turns this into a table `tests/vpu_isa.rs` checks against
-    /// `VecAluOp::from_subop`, so the page and the model cannot drift apart.
+    /// build turns this into a table `tests/vpu_isa.rs` checks, so the page and
+    /// the model cannot drift apart.
     #[serde(default)]
     pub status: Option<Status>,
     #[serde(default, rename = "source")]
     pub sources: Vec<Source>,
 }
 
-/// Which sub-op table a section carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OpClass {
@@ -72,7 +61,6 @@ pub enum OpClass {
     Mem,
 }
 
-/// What the model does with a sub-op.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Status {
@@ -86,7 +74,6 @@ fn two() -> u8 {
     2
 }
 
-/// Load one spec file, checking that every table is rectangular.
 pub fn load(path: &std::path::Path) -> Result<Isa, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let isa: Isa = toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -162,7 +149,6 @@ impl OpClass {
         }
     }
 
-    /// How many sub-ops the class has.
     pub fn count(self) -> usize {
         match self {
             OpClass::Alu => 64,
@@ -171,7 +157,6 @@ impl OpClass {
     }
 }
 
-/// The mnemonics and statuses of one sub-op class, in sub-op order.
 pub fn op_table(isa: &Isa, class: OpClass) -> Vec<(String, Status)> {
     let mut out = vec![(String::new(), Status::Unknown); class.count()];
     for row in isa
@@ -230,13 +215,11 @@ pub fn rust_module(isa: &Isa) -> String {
 }
 
 impl Section {
-    /// Whether the table's last column is the generated source column.
     fn source_column(&self) -> bool {
         self.columns.last().map(String::as_str) == Some("Source")
     }
 }
 
-/// Render the whole reference.
 pub fn markdown(isa: &Isa) -> String {
     let mut s = String::new();
     writeln!(
@@ -320,7 +303,6 @@ fn row_source(sources: &[Source]) -> String {
         .join("; ")
 }
 
-/// Markdown table cell: one line, no bare pipes.
 fn cell(s: &str) -> String {
     s.split_whitespace()
         .collect::<Vec<_>>()

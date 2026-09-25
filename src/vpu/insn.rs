@@ -1,9 +1,9 @@
 //! Decoded-instruction representation for the implemented VPU subset.
 //!
-//! The decoder always determines the correct *length* of every instruction (see
-//! [`length`](super::length)); it only produces a rich [`Op`] for the subset the
-//! executor understands. Everything else becomes [`Op::Unimpl`], which the
-//! executor can either fault on or skip (trace mode).
+//! Every instruction's *length* is always decoded (see [`length`](super::length));
+//! only the executable subset gets a rich [`Op`], the rest [`Op::Unimpl`].
+//!
+//! Encoding and measured semantics: `isa/vpu.toml` (`docs/vpu-isa.md`).
 
 use super::length::InsnClass;
 use super::reg::Cond;
@@ -52,7 +52,7 @@ pub enum AluOp {
     DivUS,        // unsigned ra / signed b
     DivU,         // unsigned / unsigned
     Clamp16,      // clamp ra to the signed 16-bit range
-    /// Recognised mnemonic, semantics not implemented yet.
+    /// Recognised mnemonic, semantics not modelled.
     Unimpl(&'static str),
 }
 
@@ -164,9 +164,6 @@ impl AluOp {
     }
 
     /// The 6-bit sub-op field of the triadic conditional ALU (`1100 0ppp pppd
-    /// dddd`), covering `0xC000..=0xC7E0`. Extends `from_p` past index 31 with
-    /// the wide-ALU ops (mulhd / div / count / adds / subscale). Source:
-    /// `vciv.py` ISACC 0xC group.
     pub fn from_c_triadic(idx6: u32) -> AluOp {
         use AluOp::*;
         match idx6 & 0x3f {
@@ -215,9 +212,7 @@ impl AluOp {
             8 => Bitset,
             9 => Bitclear,
             10 => Bitflip,
-            // `rd += #imm << 3` (imm scaled by 8 = one 64-byte block / 16 words).
-            // The bootcode's SHA-256 schedule uses `r += 64` and this form
-            // interchangeably (e.g. `0x80004632`, `0x80006214`).
+            // `rd += #imm << 3`: the bootcode's SHA-256 schedule uses this
             11 => AddScale(3),
             12 => Signext,
             13 => Lsr,
@@ -308,44 +303,32 @@ pub enum Op {
     Nop,
     Bkpt,
     Sleep,
-    /// `ei` / `di` — enable / disable interrupts. The model tracks only the
-    /// interrupt-enable bit (SR / `r30` bit 30); firmware `msleep`
-    /// (`0x3ED6504C`) reads it (`mov rX, r30; btest rX, #30`) to choose the
-    /// yield-to-scheduler path over a CLO busy-wait.
     SetIrqEnable(bool),
-    /// Return from interrupt (pops SR and PC).
     Rti,
-    /// Software interrupt / syscall. `vector` is the trap number.
     Swi {
         vector: u32,
     },
-    /// `b`/`bl` to the address held in a register.
     BranchReg {
         link: bool,
         rd: u8,
     },
-    /// `b<cond>`/`bl` with a pc-relative displacement. `target` is absolute,
-    /// already resolved against the instruction address.
     BranchImm {
         cond: Cond,
         link: bool,
         target: u32,
     },
-    /// `rd = rd op rs` (16-bit `p` table).
     Alu2 {
         op: AluOp,
         rd: u8,
         rs: u8,
         set_flags: bool,
     },
-    /// `rd = rd op imm` (16-bit 5-bit-imm `q` table, and 32-bit imm16 form).
     AluImm {
         op: AluOp,
         rd: u8,
         imm: i32,
         set_flags: bool,
     },
-    /// `rd = ra op b` predicated on `cond` (32-bit triadic form).
     Alu3 {
         op: AluOp,
         cond: Cond,
@@ -354,9 +337,6 @@ pub enum Op {
         b: RegOrImm,
         set_flags: bool,
     },
-    /// Scalar floating-point triadic (`0xC800..=0xCA7F`): `rd = ra fop b`,
-    /// predicated on `cond`. `fcmp` sets flags. For the convert ops
-    /// (`ftrunc`/`ffloor`/`flts`/`fltu`) `b` is the shift amount.
     FpAlu3 {
         op: FpOp,
         cond: Cond,
@@ -364,8 +344,6 @@ pub enum Op {
         ra: u8,
         b: RegOrImm,
     },
-    /// `rd = <effective address of `addr`>` — `lea` / `add rd, base, #imm`.
-    /// With `rd == sp` and a `Sp` base this is the stack-adjust form.
     Lea {
         rd: u8,
         addr: AddrMode,
@@ -382,28 +360,21 @@ pub enum Op {
         addr: AddrMode,
         cond: Cond,
     },
-    /// `version rd` — read the chip/VPU version register.
     Version {
         rd: u8,
     },
-    /// `switch`/`switch.b rd` — indexed jump through a table that starts right
-    /// after the instruction. `byte` selects 8-bit vs 16-bit table entries;
-    /// each entry is a signed displacement (in halfwords) from the table base.
     Switch {
         rd: u8,
         byte: bool,
     },
-    /// `mov p<preg>, r<rs>` — write a system-coprocessor register.
     MovToCoproc {
         preg: u8,
         rs: u8,
     },
-    /// `mov r<rd>, p<preg>` — read a system-coprocessor register.
     MovFromCoproc {
         rd: u8,
         preg: u8,
     },
-    /// `addcmpb`: `rd = rd + a; compare rd with b; if <cond> branch to target`.
     AddCmpB {
         cond: Cond,
         rd: u8,
@@ -411,28 +382,17 @@ pub enum Op {
         b: RegOrImm,
         target: u32,
     },
-    /// `stm` — push `count` registers starting at `first` (wrapping r31->r0)
-    /// to `(--sp)` in ascending memory order, then `lr` (if `include_lr`) at
-    /// the top word of the frame.
     PushMulti {
         first: u8,
         count: u8,
         include_lr: bool,
     },
-    /// `ldm` — pop `count` registers starting at `first` (wrapping) from
-    /// `(sp++)`, then `pc` (if `include_pc`) from the top word of the frame.
     PopMulti {
         first: u8,
         count: u8,
         include_pc: bool,
     },
-    /// A vector-unit instruction (48- or 80-bit, `0xF000..`), decoded to
-    /// operands. Only the subset that touches no vector register is
-    /// *executable* — see [`VecInsn::executable`].
-    /// Boxed: `VecInsn` is 56 bytes and inflates `Op` — and so every decoded
-    /// `Insn` — for a class of instruction the boot barely executes.
     Vector(Box<VecInsn>),
-    /// Correctly sized but not decoded to semantics.
     Unimpl {
         raw: u64,
         len: u8,
@@ -440,29 +400,16 @@ pub enum Op {
     },
 }
 
-/// One operand slot of a vector instruction.
-///
-/// The Vector Register File is a 64x64 array of bytes; a vector register is a
-/// 16-element window into it. The slot names that window with a 4-bit type
-/// nibble — direction in bit 0, the granularity of the coordinate it carries in
-/// the rest — plus a coordinate, a `+rN` scalar addend, and the `*` and `++`
-/// modifiers. Types 14 and 15 are the "dash" slot, which names no register at
-/// all: `videocoreiv.arch` spells its meaning per position as "Discard result
-/// (D), Ignore (A), Use coordinate as Scalar (B)".
-///
-/// The fields are `binutils-vc4`'s (`print_vector_reg_1`, `opcodes/vc4-dis.c`),
-/// checked against that disassembler over `start4.elf`'s whole `.text`: every
-/// one of the 14650 vector instructions there spells its slots the same way.
-///
-/// The type nibble is not an element width. It says how coarse the `x` it
-/// encodes is — H in steps of 16 bytes, HX in steps of 32, HY only 0 — and the
-/// width of an element comes from the operation (`v8`/`v16`/`v32`).
+/// One operand slot of a vector instruction: a 16-element window into the
+/// 64x64-byte register file, named by a type nibble, a coordinate, a `+rN`
+/// addend and the `*` / `++` modifiers. The type nibble is **not** an element
+/// width — it says how coarse the coordinate is; the element width comes from
+/// the operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VecSlot {
     /// Type nibble. Bit 0 set = vertical (a column); >= 14 is the dash slot.
     pub ty: u8,
-    /// Byte column of the window, as `binutils-vc4` objdump spells it. What
-    /// the hardware addresses with is [`Self::e0`].
+    /// Byte column of the window, as `binutils-vc4` objdump spells it.
     pub x: u8,
     /// Index of the slot's first element within its row, in elements of
     /// [`Self::elem_bytes`] — the band the type nibble selects, times sixteen,
@@ -477,9 +424,7 @@ pub struct VecSlot {
     pub star: bool,
     /// `++` — post-increment the coordinate.
     pub inc: bool,
-    /// The scalar register a dash in the B position names: the 80-bit slot
-    /// spells it in the same nibble as [`Self::addend`] (`r0..r15`), the 48-bit
-    /// one in the coordinate field (`r0..r63`).
+    /// The scalar register a dash in the B position names.
     pub scalar: u8,
     /// A dash B slot's signed displacement beside that register. Zero in the
     /// 48-bit forms, which have no room for it.
@@ -487,9 +432,7 @@ pub struct VecSlot {
 }
 
 impl VecSlot {
-    /// Decode a 16-bit (D/B) or 20-bit (A) slot composite, exactly as
-    /// `print_vector_reg_1` reads it. `areg` selects the A slot's four extra
-    /// low-order x bits.
+    /// Decode a slot composite; `areg` selects the A slot's extra x bits.
     pub fn from_composite(comp: u32, areg: bool) -> VecSlot {
         let ty = ((comp >> 6) & 15) as u8;
         let fine = if areg { ((comp >> 16) & 15) as u8 } else { 0 };
@@ -499,16 +442,8 @@ impl VecSlot {
         let low = (comp & 15) as u8;
         let band2 = (((comp >> 7) & 3) << 4) as u8;
         let band1 = (((comp >> 7) & 1) << 5) as u8;
-        // A vertical slot's y is the 16-aligned base of the sixteen rows it
-        // covers, and the low nibble of the coordinate is part of its x
-        // instead — `binutils-vc4`'s V-direction fix, which `vc4.slaspec`
-        // agrees with (`row = VaHi << 4, column = VaLo + 16 * base`).
-        // The band is the same field in every family — two bits for the 8-bit
-        // types, one for the 16-bit ones, none for the 32-bit — and it counts
-        // in *sixteens of elements*, which is why the printed `x` (bytes) and
-        // the element index part company as soon as an element is wider than a
-        // byte. The fine coordinate is the A slot's extra nibble, or, for a
-        // vertical operand, the low nibble of the coordinate itself.
+        // A vertical slot's y is the 16-aligned base of its sixteen rows, and
+        // the low nibble of the coordinate is part of its x instead.
         let vfine = if areg { fine } else { low };
         let (x, y, e0) = match ty {
             0 | 2 | 4 | 6 => (band2 | fine, (comp & 63) as u8, band2 | fine),
@@ -526,7 +461,6 @@ impl VecSlot {
             ),
             13 => (vfine, (comp & if areg { 0x3F } else { 0x30 }) as u8, vfine),
             // Dash. The B position reads the addend nibble as a scalar register
-            // and the rest as a signed 9-bit displacement.
             _ => (0, 0, 0),
         };
         let disp = if ty >= 14 {
@@ -553,10 +487,6 @@ impl VecSlot {
         self.ty >= 14
     }
 
-    /// A dash with no addend and no modifiers. Both types 14 and 15 spell one —
-    /// a dash beside a vertical operand comes out as 15, since the direction
-    /// bit is shared. `scalar`/`disp` are not part of it: they mean something
-    /// only in the B position.
     pub fn is_bare_dash(self) -> bool {
         self.is_dash() && self.addend == 15 && !self.star && !self.inc
     }
@@ -569,10 +499,8 @@ impl VecSlot {
     /// Width of one element of this slot's register, in bytes. The type nibble
     /// says it: `H`/`V` are 8-bit, `HX`/`VX` 16-bit, `HY`/`VY` 32-bit.
     ///
-    /// This is the width of the *register*, not of the operation. A `v8ld` into
-    /// an `HY` slot zero-extends each byte into a 32-bit element, and a `v32st`
-    /// out of an `H` slot writes each 8-bit element as a word — measured both
-    /// ways on a Raspberry Pi 4B d03115.
+    /// The width of the *register*, not of the operation: a `v8ld` into an
+    /// `HY` slot zero-extends into 32-bit elements (Raspberry Pi 4B d03115).
     pub fn elem_bytes(self) -> u8 {
         match self.ty >> 1 {
             0..=3 => 1,
@@ -582,11 +510,6 @@ impl VecSlot {
     }
 
     /// The 16-lane window this slot names.
-    ///
-    /// A dash names none. Everything else names sixteen elements of
-    /// [`Self::elem_bytes`], laid along row `y` from element `e0`, or — for a
-    /// vertical slot — down the sixteen rows from the band `y` names, all at
-    /// element `e0`.
     pub fn window(self) -> Option<VecReg> {
         if self.is_dash() {
             return None;
@@ -600,8 +523,7 @@ impl VecSlot {
     }
 }
 
-/// A VRF register window: 16 elements of `elem_bytes` bytes each, laid along
-/// row `y` from element `e0`, or down sixteen rows from `y` at element `e0`.
+/// A VRF register window: 16 elements of `elem_bytes` bytes each.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VecReg {
     pub y: u8,
@@ -627,11 +549,8 @@ impl VecReg {
 
 /// How many times a vector instruction repeats (the `REP` field).
 ///
-/// The fixed counts are powers of two; the top encoding takes the count from
-/// `r0`. That reading is forced by `memcpy` itself: at `0x3EDA28EC` it computes
-/// `r0 = min(blocks, 64)`, runs the `REP` load/store pair, then advances the
-/// pointers by exactly `r0 * 64` bytes — which is only consistent if the pair
-/// transferred `r0` rows.
+/// Fixed counts are powers of two; the top encoding takes the count from `r0`,
+/// which `memcpy`'s pointer arithmetic around the pair confirms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VecRep {
     Fixed(u32),
@@ -640,18 +559,9 @@ pub enum VecRep {
 
 /// Lane predication: which lanes of a vector instruction actually execute.
 ///
-/// Each lane carries a zero, a negative and a carry flag, and an ALU op with
-/// `SETF` writes them. The eight field values are `binutils-vc4`'s, and the
-/// three flags they name are the ones a probe can see: `ALL`, `NONE`, `IFZ`,
-/// `IFNZ`, `IFN`, `IFNN`, `IFC`, `IFNC` — measured on a Raspberry Pi 4B
-/// d03115 by setting the flags with a known operation and marking the lanes
-/// each predicate lets through.
-///
-/// `v<w>bitplanes -,rN SETF` is the firmware's own producer: its lane result
-/// is that lane's bit of `rN`, so `IFZ` selects the lanes whose bit was 0.
-/// Both polarities are pinned by code as well — `memcpy`'s tail
-/// (`0x3EDA292C`) builds `~0 << n` and transfers under `IFZ`; `memset`'s
-/// (`0x3EDA2B5E`) builds a band of set bits and stores under `IFNZ`.
+/// Each lane carries zero, negative and carry flags that an op with `SETF`
+/// writes; the eight predicates measured on a Raspberry Pi 4B d03115
+/// (`vpu-probe/probes/setf.s`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VecPred {
     All,
@@ -696,36 +606,30 @@ pub struct VecAddr {
 /// Third operand of a vector instruction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VecOperandB {
-    /// A VRF register, or — when the slot is a dash — the scalar register named
-    /// by its coordinate (an ALU source, or the base register of a memory op).
+    /// A VRF register, or — for a dash — the scalar register it names.
     Slot(VecSlot),
     /// 6-bit immediate (48-bit encodings) or 16-bit immediate (80-bit).
     Imm(u32),
 }
 
-/// Where a `readlut`/`writelut` takes its index from.
+/// Where a `memread`/`memwrite` takes its index from.
 ///
-/// Measured with `probes/lut2.s` on a Raspberry Pi 4B d03115: a scalar
-/// register or an immediate in the B position indexes every lane's table
-/// alike — `v8memwrite -,A,(r2)` with `r2` = 3 and a vector index of threes
-/// read the same byte back — which is the form `start4.elf` uses.
+/// A scalar or immediate in the B position indexes every lane's table alike
+/// (Raspberry Pi 4B d03115, `vpu-probe/probes/lut2.s`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VecLutIndex {
     /// Each lane takes its own element of a vector slot.
     Lanes(VecOperand),
-    /// Every lane takes the same index: a scalar register plus the
-    /// displacement beside it, or — with no register — a bare immediate.
+    /// Every lane takes the same index: a scalar plus displacement, or an
+    /// immediate.
     Scalar { reg: Option<u8>, disp: i32 },
 }
 
 /// What the scalar result unit does with the sixteen lane results.
 ///
-/// Measured on a Raspberry Pi 4B d03115 with `probes/sru.s` and `sru2.s`:
-/// `SUMU` adds the lanes up reading each unsigned at the operation's width and
-/// `SUMS` reading each signed; `MAX` answers the largest, signed; `IMIN` and
-/// `IMAX` answer an *index*, the first of the smallest and the last of the
-/// largest. `max2`, `max4` and `max6` answered exactly what `MAX` did in every
-/// vector tried, so they are carried as the same thing.
+/// `SUMU`/`SUMS` add the lanes unsigned/signed, `MAX` answers the largest and
+/// `IMIN`/`IMAX` an index (Raspberry Pi 4B d03115, `vpu-probe/probes/sru.s`,
+/// `vpu-probe/probes/sru2.s`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VecSruFunc {
     SumUnsigned,
@@ -749,10 +653,6 @@ impl VecSruFunc {
 }
 
 /// The scalar-result-unit / accumulator field of an 80-bit vector op.
-///
-/// Bit 6 selects the SRU (scalar writeback) group; then bits 3..5 pick the
-/// function and bits 0..2 the scalar register. This split is confirmed by
-/// `binutils-vc4`'s `print_vec80mods` and by `videocoreiv.arch`'s `S` table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VecSru {
     /// No scalar writeback, and no accumulator update.
@@ -782,10 +682,6 @@ impl VecSru {
 }
 
 /// A decoded vector-unit instruction.
-///
-/// Field layout transcribed from Herman Hermitage's `videocoreiv.arch` and
-/// cross-checked, byte for byte, against `binutils-vc4`'s gas test corpus
-/// (`gas/testsuite/gas/vc4/{dash,accmods,alu80-setf,wide,vldst}.d`).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct VecInsn {
     /// 80-bit encoding (`0xF800..`) rather than 48-bit (`0xF000..`).
@@ -800,8 +696,7 @@ pub struct VecInsn {
     pub d: VecSlot,
     pub a: VecSlot,
     pub b: VecOperandB,
-    /// Set for a memory-class op whose B slot is a dash, i.e. one that
-    /// addresses memory rather than naming a third vector register.
+    /// Set for a memory-class op whose B slot is a dash: it addresses memory.
     pub addr: Option<VecAddr>,
     /// `SETF` — update the per-lane vector flags.
     pub setf: bool,
@@ -816,132 +711,66 @@ pub struct VecInsn {
     pub len: u8,
 }
 
-/// A vector ALU operation whose semantics have been measured.
-///
-/// Every one of these was run on a Raspberry Pi 4B d03115 against two vectors
-/// of edge cases — `0x7fff`, `0x8000`, `0xffff`, shift counts of 0 and 15 —
-/// and the result read back out of the register file
-/// (`vpu-probe/probes/alu.s`). The ops not listed
-/// here are the ones those runs did not pin down: the carry forms, `clips`,
-/// `testmag`, the `sign*` shifts, the multiplies and the unnamed sub-ops.
+/// A vector ALU operation whose semantics have been measured on a Raspberry
+/// Pi 4B d03115 over edge-case vectors (`vpu-probe/probes/alu.s`). What each
+/// one computes is tabulated in `isa/vpu.toml`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VecAluOp {
-    /// `d = b`.
     Mov,
-    /// `d = a[2i]` / `d = a[2i+1]`: the even or odd elements of A, packed down.
     Even,
     Odd,
-    /// Alternate elements of A and B, from the low half or the high half.
     Interl,
     Interh,
-    /// Reverse the low `n` bits of A, `n` being B's low nibble — or all 16
-    /// (32, 8) of them when that nibble is zero.
     Brev,
     Ror,
     Shl,
-    /// Shift left, saturating signed.
     Shls,
     Lsr,
     Asr,
     And,
     Or,
     Eor,
-    /// `a & !b`.
     Bic,
-    /// `popcount(a) + popcount(b)`.
     Count,
-    /// Index of B's highest set bit.
     Msb,
-    /// Signed.
     Min,
     Max,
-    /// `|a - b|`, wrapping, and its saturating form.
     Dist,
     Dists,
-    /// `a` clamped to `0 ..= b`, signed.
     Clip,
-    /// `b + signum(a)`.
     Sign,
-    /// Transpose the lanes' bits: lane `i` of the result is the word whose bit
-    /// `j` is bit `i` of lane `j` of B. With a scalar or immediate B — which
-    /// every lane sees alike — that comes out as "all ones where B's bit `i`
-    /// is set", which is what the firmware uses it for, one lane flag per bit.
     Bitplanes,
-    /// `b * signum(a)`, `signum(0)` counting as `+1` — the `v32` form of the
-    /// sub-op whose `v16` form writes zeros.
     Clips,
-    /// `1` where `|a| >= b`, `0` otherwise — B read signed, A's magnitude
-    /// against it, so a negative B always answers 1.
     Testmag,
-    /// Shift by a *signed*, unmasked count: left when B is positive, right
-    /// when it is negative, and a count past the element's width empties it.
-    /// `Signshl` shifts in zeros on the way right, `Signasl` copies the sign,
-    /// and `Signasls` is the saturating form of `Signasl`.
     Signshl,
     Signasl,
     Signasls,
-    /// A sub-op whose result is a lane of zeros, at this width: the unit
-    /// writes the register, it just writes nothing in it. Measured over a
-    /// destination preset to all-ones, so this is a write and not a skip.
     Zero,
     Add,
-    /// The `c` forms take the lane's carry flag in as well: `a + b + c` and
-    /// `a - b - c`, the carry being a borrow on the way out.
     Addc,
     Addsc,
     Subc,
     Subsc,
     Rsubc,
     Rsubsc,
-    /// Saturating signed.
     Adds,
     Sub,
     Subs,
-    /// `b - a`.
     Rsub,
     Rsubs,
-    /// The low half of the product, and its saturating form.
     Mull,
     Mulls,
-    /// The product shifted right by 8 — a fixed-point multiply — and its
-    /// saturating form.
     Mulm,
     Mulms,
-    /// The high half of the product: `(a * b) >> bits`, with each operand read
-    /// signed or unsigned as the mnemonic's suffix says.
-    Mulhd {
-        sa: bool,
-        sb: bool,
-    },
-    /// `vmul32.xx`: the `L`-bit family. A **16 x 16 into 32** multiply — the
-    /// low halfword of each operand, read signed or unsigned as the suffix
-    /// says, and the whole 32-bit product. Measured: `vmul32.ss` over
-    /// `0x12345678 * 0x10` answers `0x00056780`, the low halfword's product.
-    Mul32 {
-        sa: bool,
-        sb: bool,
-    },
-    /// The high half **truncated** instead of floored: the community
-    /// programmers manual calls sub-ops 60 and 61 `mulhdt`, "round to zero",
-    /// and the board agrees — `0x0ff0 * 0xfff1` answers `0x0000` where
-    /// `mulhd` answers `0xffff`. Only the `ss` and `su` sign pairs exist.
-    Mulhdt {
-        sa: bool,
-        sb: bool,
-    },
-    /// The same, rounded: `(a * b + half) >> bits`.
-    Mulhn {
-        sa: bool,
-        sb: bool,
-    },
+    Mulhd { sa: bool, sb: bool },
+    Mul32 { sa: bool, sb: bool },
+    Mulhdt { sa: bool, sb: bool },
+    Mulhn { sa: bool, sb: bool },
 }
 
 impl VecAluOp {
-    /// The `v` sub-op field, as `insn-vecops` numbers it.
-    /// Some sub-ops mean one thing at one width and write zeros at the other,
-    /// so the width is part of the identity: `count` computes at `v16` and
-    /// writes zeros at `v32`, `testmag` likewise, and sub-op 30 is the other
-    /// way round — zeros at `v16`, `b * signum(a)` at `v32`.
+    /// The `v` sub-op field. Some sub-ops mean one thing at one width and
+    /// write zeros at the other,
     pub fn from_subop(subop: u8, width: u32) -> Option<VecAluOp> {
         use VecAluOp::*;
         Some(match subop {
@@ -993,8 +822,8 @@ impl VecAluOp {
         })
     }
 
-    /// The multiply group, `insn-vecmulops` (sub-ops 48 and up with the `L`
-    /// bit clear). `L` set selects a different family, which is not modelled.
+    /// The multiply group (sub-ops 48 and up with `L` clear); `L` set selects
+    /// a family that is not modelled.
     pub fn from_mul_subop(subop: u8, width: u32) -> Option<VecAluOp> {
         use VecAluOp::*;
         let signs = |n: u8| (n & 2 == 0, n & 1 == 0);
@@ -1028,12 +857,6 @@ impl VecAluOp {
         })
     }
 
-    /// Which element of A and of B lane `i` reads. All but the four shuffles
-    /// read their own lane.
-    ///
-    /// `even` and `odd` pack A's alternate elements into the low eight lanes
-    /// and B's into the high eight; the two interleaves alternate between the
-    /// two registers. Measured, like the rest of it, on a Pi 4B d03115.
     pub fn sources(self, i: u32) -> (u32, u32) {
         use VecAluOp::*;
         let half = i % 8;
@@ -1058,24 +881,13 @@ impl VecAluOp {
 }
 
 /// The accumulator side of an ALU op, as the `ENA` group of the modifier field
-/// spells it.
-///
-/// Each lane has an accumulator of its own. `CLRA` clears it before the
-/// operation, the result is added to it, read signed or unsigned as `SIGN`
-/// says, and `WBA` makes the destination take the accumulator rather than the
-/// raw result. `SUB` is not a subtracting accumulate: it leaves the
-/// accumulator untouched and hands the destination `accumulator - result`. Measured on a Raspberry Pi 4B
-/// d03115: `v16add -,A,B CLRA UACC` followed by `v16add D,A,B UACC` leaves
-/// twice the sum in `D`, and the `0xffff` case proves the unsigned reading.
-///
-/// The `HIGH` forms — `UACCH` and friends — accumulate into the high half:
-/// the result is shifted left by sixteen on the way in, and a write-back
-/// shifts it back down on the way out.
+/// spells it. Each lane has its own accumulator; `SUB` is **not** a
+/// subtracting accumulate — it leaves the accumulator alone and hands the
+/// destination `accumulator - result`. Measured on a Raspberry Pi 4B d03115.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VecAcc {
-    /// `ENA`. Without it nothing is accumulated and nothing is written back —
-    /// but `CLRA` still clears, measured — so the modifier is carried rather
-    /// than dropped.
+    /// `ENA`. Without it nothing accumulates or writes back, but `CLRA` still
+    /// clears, so the modifier is carried rather than dropped.
     pub enable: bool,
     pub clear: bool,
     pub signed: bool,
@@ -1084,8 +896,7 @@ pub struct VecAcc {
     /// The `...H` forms: the result goes into the accumulator's **high** half
     /// — shifted left by sixteen — and a write-back reads it back shifted
     /// right by sixteen, saturated into the destination's signed range.
-    /// Measured with `probes/acch.s`, reading the accumulator itself with
-    /// `vgetacc`: `v16mov -,A CLRA UACCH` leaves `A << 16` in it.
+    /// Measured with `vpu-probe/probes/acch.s`.
     pub high: bool,
 }
 
@@ -1099,18 +910,9 @@ impl VecAcc {
         const CLRA: u8 = 0x04;
         const WBA: u8 = 0x02;
         const SUB: u8 = 0x01;
-        // `ENA` off is not an error: `CLRA` alone clears the accumulator and
-        // leaves the destination the raw result, and `WBA` alone does nothing
-        // at all. Measured with `probes/noena.s`.
-        // A masked-off lane keeps the flags it had: `SETF` under `IFZ` leaves
-        // the lanes the predicate dropped exactly as the last `SETF` left
-        // them, measured.
-        // `SUB` hands the destination `accumulator - result` whether or not
-        // `WBA` is set — `SDEC` in `probes/accmix.s` is that combination, and
-        // the board answers the same difference. With the high half it is the
-        // accumulator's *own* high half minus the result, saturated into the
-        // operation's width, in both polarities. Measured with
-        // `probes/acchu.s` on a Raspberry Pi 4B d03115.
+        // `ENA` off is not an error: `CLRA` alone still clears
+        // (`vpu-probe/probes/noena.s`), and `SUB` hands the destination
+        // `accumulator - result` either way (`vpu-probe/probes/acchu.s`).
         Some(VecAcc {
             enable: f & ENA != 0,
             clear: f & CLRA != 0,
@@ -1122,8 +924,7 @@ impl VecAcc {
     }
 }
 
-/// One operand slot resolved for execution: the window, and the scalar register
-/// whose value is added to its element index.
+/// One operand slot resolved for execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VecOperand {
     pub reg: VecReg,
@@ -1136,8 +937,7 @@ pub enum VecSource {
     Reg(VecOperand),
     /// A dash in the B position names a scalar register, and may carry a
     /// signed displacement beside it — `r2-1`, as `binutils-vc4` prints it.
-    /// The operand is `reg + disp`, measured with `probes/sdisp.s`: with
-    /// `r2` = 100, `r2-1` reaches the lanes as 99 and `r2+100` as 200.
+    /// The operand is `reg + disp` (`vpu-probe/probes/sdisp.s`).
     Scalar {
         reg: u8,
         disp: i32,
@@ -1156,22 +956,17 @@ pub enum VecExec {
     /// register.
     SumOfBroadcast { src: u8, dst: u8, signed: bool },
     /// `v<w>{ld,st} <reg>[++][+rA],(r<base>+off[+=r<incr>]) [REP n]` — transfer
-    /// 16 elements between the register file and memory, `reps` times. Each
-    /// repetition steps the address by `r<incr>` and, with `++`, the register
     /// by one (a row horizontally, an element vertically).
     Mem {
         store: bool,
-        /// Absent when the vector slot is a dash: the load still reads its
-        /// bytes — the firmware uses that to fence outstanding reads — and
-        /// writes none of them anywhere.
+        /// Absent for a dash slot: the load still reads its bytes — the
+        /// firmware fences outstanding reads that way — and writes none.
         reg: Option<VecReg>,
         /// `++` on the vector slot.
         step: bool,
         /// The scalar register the address starts from, or `None` for the
         /// forms that name no address at all — a `vld` whose B slot holds a
-        /// vector. Those read from **zero**: measured with `probes/mld.s`,
-        /// four such forms all came back with the same sixteen words from
-        /// address 0, whatever their operands held.
+        /// vector. Those read from **zero** (`vpu-probe/probes/mld.s`).
         base: Option<u8>,
         /// Byte displacement on the address, measured as such.
         offset: u32,
@@ -1180,15 +975,12 @@ pub enum VecExec {
         incr: Option<u8>,
         reps: VecRep,
         pred: VecPred,
-        /// Element width of the *operation*, in bytes — what each lane moves to
-        /// or from memory, converted to the register's own element width.
+        /// Element width of the *operation*, in bytes.
         width: u32,
     },
     /// `v<w>mov <reg>[++],r<n>` / `v<w>mov <reg>[++],#imm [REP n]` — broadcast a
     /// scalar or an immediate across the 16 lanes of a VRF register, for `reps`
     /// consecutive rows when `step_row` (the `++` modifier) is set. The 48-bit
-    /// form is a single row (`reps = Fixed(1)`, `step_row = false`); the 80-bit
-    /// `REP` form clears a band of rows, which is how the boot ROM zeroes memory.
     Broadcast {
         reg: VecReg,
         src: RegOrImm,
@@ -1226,16 +1018,12 @@ pub enum VecExec {
     /// `v<w>lookupm[l] <d>,(r<base>+off)` — a **gather**: each lane reads the
     /// element `index` of the table at that address, `index` being its own
     /// accumulator's high half (`lookupm`) or low half (`lookupml`) and the
-    /// element as wide as the operation. `v8lookupml` with `4` in a lane's
-    /// accumulator reads the byte at `base + 4`; `v16lookupml` reads the
-    /// halfword at `base + 8`.
     Gather {
-        /// A dash destination reads and discards — measured with
-        /// `probes/r63c.s`: a witness register came back untouched, and the
-        /// board went on running. The shape `start4.elf` uses.
+        /// A dash destination reads and discards, the shape `start4.elf`
+        /// uses (`vpu-probe/probes/r63c.s`).
         d: Option<VecOperand>,
-        /// `None` where the address names `r63`, which is no register at all:
-        /// the gather then reads from zero, measured with `probes/r63.s`.
+        /// `None` where the address names `r63`, which is no register: the
+        /// gather then reads from zero (`vpu-probe/probes/r63.s`).
         base: Option<u8>,
         offset: u32,
         /// Take the index from the accumulator's high half.
@@ -1257,25 +1045,11 @@ pub enum VecExec {
         step_a: bool,
         pred: VecPred,
     },
-    /// Every memory sub-op with no name of its own — 3, 7, 10-23 and 25-31.
-    /// Each writes a lane of zeros at the operation's width and does nothing
-    /// else a probe can see: it reads nothing at the address it is handed,
-    /// leaves the lookup table alone, and waits for nothing.
-    ///
-    /// Measured on a Raspberry Pi 4B d03115 with `probes/m07.s`,
-    /// `probes/addr07.s`, `probes/hgat10.s` and its per-sub-op neighbours, and
-    /// `probes/hbare03.s`: over a destination preset to all-ones, each one
-    /// leaves that element zero and the rest of the register untouched. A
-    /// blob that runs one as its *first* instruction — nothing vector before
-    /// it at all — retires just the same, which is what disproved the earlier
-    /// reading of these as fences waiting on a write to the register file.
-    ///
-    /// Two things they do not share. Sub-ops 3 and 7 leave the firmware
-    /// running; every other one kills it, so a board that executes one
-    /// answers no further mailbox call and has to be rebooted. And with a
-    /// **vector register** as B — an encoding `binutils-vc4` will print —
-    /// sub-ops 10, 16, 19 and 28-31 stall the vector unit outright instead of
-    /// retiring; the rest write their zero whatever B is.
+    /// Every memory sub-op with no name of its own — 3, 7, 10-23 and 25-31 —
+    /// writes a lane of zeros and does nothing else a probe can see
+    /// (Raspberry Pi 4B d03115, `vpu-probe/probes/m07.s` and neighbours).
+    /// Beware on real silicon: all but 3 and 7 kill the firmware, and some
+    /// stall the vector unit outright when B names a vector register.
     Zeros {
         d: Option<VecOperand>,
         width: u32,
@@ -1316,14 +1090,9 @@ pub enum VecExec {
         /// written to a scalar register.
         sru: Option<(VecSruFunc, u8)>,
     },
-    /// Runs and leaves nothing behind that a probe could find: the stores and
-    /// scatters that name no address. A `v<w>st` whose B slot holds a vector
-    /// writes neither where its operands point, nor to address 0 — where its
-    /// *load* counterpart reads — nor anywhere in the 64 KiB a probe watches
-    /// byte for byte; a `v<w>indexwritem` with a dash source is the same.
-    /// Measured with `probes/st63.s`, `st63b.s`, `st63c.s` and `st64.s` on a
-    /// Raspberry Pi 4B d03115, the last of them through `vpuprobe3.py`, which
-    /// compares the whole allocation before and after.
+    /// Runs and leaves nothing a probe can find: the stores and scatters that
+    /// name no address (Raspberry Pi 4B d03115, `vpu-probe/probes/st63.s`,
+    /// `vpu-probe/probes/st64.s`).
     NoEffect,
     /// Needs a part of the vector unit this model does not implement.
     NeedsVrf,
@@ -1341,21 +1110,10 @@ impl VecInsn {
 
     /// Classify this instruction for the executor.
     ///
-    /// Only a few forms are executable, and every one of them is matched
-    /// *exactly*: a whole-word template with only the fields whose meaning is
-    /// established left free, and a value whitelist on each of those. The
-    /// encoding has plenty of corners this decoder renders only approximately
-    /// (per-slot `+rN` addends, fine-x coordinate bits, vertical slots, the
-    /// accumulator modifiers), and anything outside the template — a set bit in
-    /// a field this model does not interpret, a vertical slot, an unknown
-    /// predicate — falls through to [`VecExec::NeedsVrf`] and faults.
-    ///
-    /// The two `-`-destination forms come from `FUN_0edc9e20` in `start4.elf`,
-    /// the routine that flushes the vector unit's outstanding reads before the
-    /// VRF semaphore is released. The load/store, broadcast and `bitplanes`
-    /// forms are the ones VC4 libc's `memcpy` (`0x3EDA28D6`), `memmove`
-    /// (`0x3EDA2A00`) and `memset` (`0x3EDA2AB4`) are built out of; all were
-    /// read back with `binutils-vc4` objdump to confirm the decoding.
+    /// By field, except the two `-`-destination forms, matched against a
+    /// whole-word template. Anything unaccounted for — a set bit in a field
+    /// this model does not interpret, an unknown predicate — falls through to
+    /// [`VecExec::NeedsVrf`] and faults rather than being approximated.
     pub fn executable(&self) -> VecExec {
         // `v<w>ld -,(rN)` — a load with a discarded destination. Free fields:
         // the 2-bit width (bits 11..12) and the base register (bits 42..47).
@@ -1404,22 +1162,18 @@ impl VecInsn {
         VecExec::NeedsVrf
     }
 
-    /// `v<w>ld` / `v<w>st` between the register file and memory, in both the
-    /// 48-bit and the 80-bit encoding.
-    ///
-    /// The vector operand is the D slot for a load and the A slot for a store;
-    /// the other slot must be a dash, whose addend nibble — in the 80-bit form
-    /// — is the register the address steps by between repetitions. Every field
-    /// of this encoding has a meaning now, so this is a field test rather than
-    /// a whole-word template: all it refuses is a `*` on the vector slot.
-    /// `SETF` on a transfer is accepted and ignored — measured: a load or a
-    /// store with the bit set leaves all three lane flags exactly as they
-    /// were.
     /// Whether the B slot is a dash — the shape that spells an address.
     fn b_is_dash(&self) -> bool {
         matches!(self.b, VecOperandB::Slot(s) if s.is_dash())
     }
 
+    /// `v<w>ld` / `v<w>st` between the register file and memory, in both the
+    /// 48-bit and the 80-bit encoding.
+    ///
+    /// The vector operand is the D slot for a load and the A slot for a store;
+    /// the other must be a dash, whose addend nibble is the 80-bit form's
+    /// per-repetition address step. `SETF` on a transfer is accepted and
+    /// ignored — measured to leave all three lane flags alone.
     fn mem_transfer(&self) -> Option<VecExec> {
         let width = if self.wide { 80 } else { 48 };
         // `WW` 3 is not a width this decoder knows; 0/1/2 are 8/16/32.
@@ -1436,30 +1190,21 @@ impl VecInsn {
         } else {
             (self.d, self.a)
         };
-        // A **load** reads the inert slot for nothing, in either encoding:
-        // `v16ld HX(1,0),-+r5,(r4)` and `v16ld HX(3,0),HX(20,0),(r4)` move
-        // exactly what the plain load moves, and so — measured with
-        // `probes/ldinert.s` on a Raspberry Pi 4B d03115 — does the 80-bit
-        // `v8ld H(2,0),H(20,0),H(21,0) REP2` beside `v8ld H(0,0),-,H(21,0)
-        // REP2`: the two dumps are identical row for row.
-        //
-        // The one thing the slot still carries is the addend nibble an 80-bit
-        // address reads as its `+=` step, so a transfer that has one keeps the
-        // slot as it is. A store is another matter throughout — one with an
-        // addend wrote nothing where the plain one wrote.
+        // A load reads the inert slot for nothing in either encoding
+        // (`vpu-probe/probes/ldinert.s`); the slot still carries the addend
+        // nibble an 80-bit address steps by. A store with an addend writes
+        // nothing where the plain one writes, so it is not free.
         let inert_free = !store && self.addr.is_none_or(|a| a.incr.is_none());
         if !inert_free && (!dash.is_dash() || dash.star || dash.inc) {
-            // A store that names no address at all writes nothing, whatever
-            // its slots hold — measured with `probes/st64.s`, which watched
-            // the whole allocation and address 0 either side of one.
+            // A store naming no address writes nothing, whatever its slots
+            // hold (`vpu-probe/probes/st64.s`).
             if store && self.addr.is_none() && !self.b_is_dash() {
                 return Some(VecExec::NoEffect);
             }
             return None;
         }
         if !inert_free && !self.wide && dash.addend != 15 {
-            // A store that names no address writes nothing whatever its slots
-            // hold, addend included — the same measurement as above.
+            // The same, addend included.
             if store && self.addr.is_none() && !self.b_is_dash() {
                 return Some(VecExec::NoEffect);
             }
@@ -1469,10 +1214,8 @@ impl VecInsn {
             return None; // what `++` on the inert slot steps was not measured
         }
 
-        // A transfer whose B slot holds a vector names no address: those bits
-        // *are* the address composite in the forms that have one. The load
-        // reads from zero and the store writes nowhere a probe can find —
-        // both measured.
+        // A B slot holding a vector names no address: the load reads from
+        // zero, the store writes nowhere a probe can find.
         let addr = match self.addr {
             Some(addr) => addr,
             None if self.b_is_dash() => return None,
@@ -1514,10 +1257,9 @@ impl VecInsn {
     /// The gather and scatter sub-ops, `lookupm`/`lookupml` and
     /// `indexwritem`/`indexwriteml`.
     ///
-    /// Measured on a Raspberry Pi 4B d03115 with `probes/mem5.s`..`mem7.s`:
-    /// the index is the lane's own accumulator — its low half for the `l`
-    /// forms, its high half for the others — scaled by the operation's element
-    /// width, and the address is the ordinary base plus displacement.
+    /// The index is the lane's own accumulator — low half for the `l` forms,
+    /// high half otherwise — scaled by the element width (Raspberry Pi 4B
+    /// d03115, `vpu-probe/probes/mem5.s`..`mem7.s`).
     fn gather(&self) -> Option<VecExec> {
         let (scatter, high) = match self.subop {
             1 => (false, true),
@@ -1537,34 +1279,24 @@ impl VecInsn {
         } else {
             (self.d, self.a)
         };
-        // A scatter that names no address — its B slot holds a vector rather
-        // than an address — writes nothing, whatever its three slots hold.
-        // Measured with `probes/sc3.s` through `vpuprobe3.py`, which compares
-        // the whole allocation either side of one.
+        // A scatter naming no address writes nothing (`vpu-probe/probes/sc3.s`).
         if scatter && self.addr.is_none() {
             return Some(VecExec::NoEffect);
         }
-        // A scatter with a dash *source* has nothing to write, and writes
-        // nothing — measured with `probes/st64.s`, which watched the whole
-        // allocation and address 0 either side of two of them. What its other
-        // slots hold makes no difference.
+        // A scatter with a dash source writes nothing (`vpu-probe/probes/st64.s`).
         if scatter && vec_slot.is_dash() {
             return Some(VecExec::NoEffect);
         }
-        // A gather reads its inert slot for nothing — measured with
-        // `probes/r63.s`: the same address answered the same bytes with a
-        // vector of junk in that slot as with one of zeros. A scatter's inert
-        // slot was not measured, so there it still has to be a bare dash.
+        // A gather reads its inert slot for nothing (`vpu-probe/probes/r63.s`);
+        // a scatter's was not measured, so it must still be a bare dash.
         if scatter && (!dash.is_dash() || dash.inc) {
             return None;
         }
         if !scatter && dash.inc {
             return None;
         }
-        // A gather whose B slot holds a vector names no address either — the
-        // bits are the slot — and reads from zero, the same as `(r63)`.
-        // Measured with `probes/lkc.s`: with 16 in the accumulator's high
-        // half, both forms answer the byte at address 16.
+        // A gather whose B slot holds a vector reads from zero, like `(r63)`
+        // (`vpu-probe/probes/lkc.s`).
         let addr = match self.addr {
             Some(addr) => addr,
             None if !scatter => VecAddr {
@@ -1572,9 +1304,6 @@ impl VecInsn {
                 offset: 0,
                 incr: None,
             },
-            // A scatter that names no address writes nothing, whatever its
-            // three slots hold — measured with `probes/sc3.s` through
-            // `vpuprobe3.py`.
             None => return Some(VecExec::NoEffect),
         };
         let reps = match self.rep {
@@ -1627,12 +1356,8 @@ impl VecInsn {
 
     /// `memread` and `memwrite`: the vector unit's 1 KiB lookup table.
     ///
-    /// Measured with `probes/lut.s` on a Raspberry Pi 4B d03115 —
-    /// `v8memwrite -,A,B` then `v8memread D,A,B` over the same indices hands
-    /// back exactly what was written, and the `v16` pair round-trips halfwords
-    /// at twice the index. The index is the B slot, scaled by the operation's
-    /// element width; the A slot is the data a write stores and is read for
-    /// nothing by a read.
+    /// The index is the B slot scaled by the element width; A is the data a
+    /// write stores (Raspberry Pi 4B d03115, `vpu-probe/probes/lut.s`).
     fn lut(&self) -> Option<VecExec> {
         let write = match self.subop {
             8 => false,
@@ -1651,11 +1376,8 @@ impl VecInsn {
                 addend: (slot.addend != 15).then_some(slot.addend),
             })
         };
-        // A dash A writes **zero** — into the table and into the destination
-        // alike. Measured with `probes/lutdash.s` on a Raspberry Pi 4B
-        // d03115: `v8memwrite H(2,0),-,H(21,0)` left every lane's destination
-        // zero, and the `v8memread` after it read zero back out of the table
-        // where the plain write had just put data.
+        // A dash A writes zero, to the table and the destination alike
+        // (`vpu-probe/probes/lutdash.s`).
         let a = if self.a.is_dash() {
             None
         } else {
@@ -1690,16 +1412,6 @@ impl VecInsn {
         })
     }
 
-    /// `vgetacc[s16|s32] <d>,<a>,<b>` — the memory-class sub-op that reads the
-    /// accumulator back out.
-    ///
-    /// Measured on a Raspberry Pi 4B d03115: the value is the lane's whole
-    /// accumulator shifted right by `b & 31` — five bits, because the
-    /// accumulator is wider than an element — and the A slot is read for
-    /// nothing, a register of zeros giving the same answer as one of data.
-    /// The width field picks the saturation rather than an element size:
-    /// `v8` is the plain form, `v16` clamps into a signed 32-bit range and
-    /// `v32` into a signed 16-bit one.
     /// Every memory sub-op with no name of its own. They all do the same
     /// thing — see [`VecExec::Zeros`].
     fn zeros(&self) -> Option<VecExec> {
@@ -1732,6 +1444,12 @@ impl VecInsn {
         })
     }
 
+    /// `vgetacc[s16|s32] <d>,<a>,<b>` — the memory-class sub-op that reads the
+    /// accumulator back out.
+    ///
+    /// The lane's whole accumulator shifted right by `b & 31`; the width
+    /// field picks the saturation, not an element size (Raspberry Pi 4B
+    /// d03115).
     fn getacc(&self) -> Option<VecExec> {
         if self.subop != 24 || !self.mem {
             return None;
@@ -1805,8 +1523,6 @@ impl VecInsn {
             VecOperandB::Slot(s) => Some(s),
             VecOperandB::Imm(_) => None,
         };
-        // `bitplanes` writes no register: its point is `SETF`, which leaves one
-        // flag per lane holding the corresponding bit of the scalar.
         if self.subop == 1 && self.setf && self.d.is_bare_dash() && self.a.is_bare_dash() {
             if let Some(b) = b_slot {
                 if b.is_dash() && b.scalar < 32 && self.pred == 0 {
@@ -1889,48 +1605,23 @@ impl VecInsn {
 
     /// The ALU-class ops whose semantics are measured, in either encoding.
     ///
-    /// A register may be either side of the operation's width, and the unit
-    /// converts at the **element**, in both directions:
-    ///
-    /// - *narrower*, which is the common case: the element is read at the
-    ///   register's own width and widened — a byte unsigned, a halfword
-    ///   signed — and the result is narrowed back into the destination.
-    /// - *wider*: the element is read at the **operation's** width, which is
-    ///   its low half, and then treated like any other source. Measured with
-    ///   `probes/wide1.s` and `probes/wide2.s` on a Raspberry Pi 4B d03115:
-    ///   `v16or HX(0,0),HY(20,0),0`, the same with the wide register in the B
-    ///   slot, `v16mov` and `v16add` all answer exactly what the `HX(20,0)`
-    ///   control answers, and `v16adds`, `v16shl` and `v16subs` over a wide A
-    ///   match their narrow controls lane for lane. The truncation is at the
-    ///   **read**, not at the write: `v16or HY(0,0),HY(20,0),0` — wide on both
-    ///   sides — answers the low halfword sign-extended into the 32-bit
-    ///   destination, not the 32-bit source untouched.
-    ///
-    /// The ALU class has only two widths, 16 and 32, so a 32-bit register in a
-    /// 16-bit operation is the whole of the wider case.
-    ///
-    /// `SETF`, a scalar writeback, a `*` and the five unpinned lane predicates
-    /// all still fault.
+    /// A register may be either side of the operation's width and the unit
+    /// converts at the element; crucially the truncation of a *wider* register
+    /// happens at the **read**, not at the write (Raspberry Pi 4B d03115,
+    /// `vpu-probe/probes/wide1.s`, `vpu-probe/probes/wide2.s`). The
+    /// per-direction rules are tabulated in `docs/vpu-isa.md`.
     fn alu(&self) -> Option<VecExec> {
         // Sub-ops from 48 up are the multiply group, and there the `L` bit
         // selects the family rather than the element width — which then comes
         // from the registers themselves.
         let (op, width) = if self.subop >= 48 {
-            // A multiply carries no width of its own, so it works at the
-            // widest register it names and converts the narrower ones into it
-            // — `vmull.ss HX(0,0),HX(62,0),H(57,0)` multiplies a halfword by
-            // an unsigned byte and keeps sixteen bits of the product.
-            // The `L` bit settles the width on its own, registers or no
-            // registers, so the widest-slot rule is only wanted without it —
-            // and it is the widest **source**. A destination wider than the
-            // operation does not make the operation wider, any more than it
-            // does anywhere else: `vmulhdt.ss HY(4,0),HX(62,0),HX(63,0)` is a
-            // 16-bit multiply whose product is written into a 32-bit
-            // register, measured with `probes/setfmul.s`.
+            // A multiply carries no width of its own: it works at the widest
+            // **source** it names, a wider destination notwithstanding
+            // (`vpu-probe/probes/setfmul.s`). The `L` bit settles the width on
+            // its own, so the widest-source rule is only wanted without it.
             let w = if self.lane_bits == 32 {
                 4
             } else {
-                //
                 // A multiply that names no source register at all multiplies
                 // a dash — zero — by its operand, so its product is zero at
                 // any width and the fallbacks below cost nothing.
@@ -1957,16 +1648,12 @@ impl VecInsn {
         let (acc, sru) = match self.sru {
             VecSru::None => (None, None),
             VecSru::Acc(f) => (Some(VecAcc::from_field(f)?), None),
-            // The scalar register field is three bits wide, so it names
-            // `r0`..`r7`. A predicate applies to the aggregate as well: the
-            // lanes it masks off contribute nothing, measured — `SUMU` under
-            // `IFZ` and under `IFNZ` add back up to `SUMU` under `ALL`.
+            // Three bits, so `r0`..`r7`; a predicate masks lanes out of the
+            // aggregate too.
             VecSru::Scalar { func, reg } => (None, Some((VecSruFunc::from_func(func)?, reg))),
         };
-        // `SETF` leaves the lane flags holding this result. Zero and negative
-        // come from every op, but the carry does not: only the ops below were
-        // measured, and the rest keep whatever carry was already there — which
-        // is not something to guess at from the others.
+        // Zero and negative come from every op; the carry only from the ops
+        // below, and the rest keep whatever carry was there. Do not guess.
         if self.setf {
             use VecAluOp::*;
             if !matches!(
@@ -2016,28 +1703,22 @@ impl VecInsn {
                     | Mulls
                     | Mulhd { .. }
                     | Mulhn { .. }
-                    // The multiplies leave the carry alone — measured with
-                    // `probes/setfmul.s`, where the flag comes out of one
-                    // exactly as it went in, both ways round — and set zero
-                    // and negative from the result like everything else.
+                    // The multiplies leave the carry alone
+                    // (`vpu-probe/probes/setfmul.s`).
                     | Mulhdt { .. }
                     | Mul32 { .. }
             ) {
                 return None;
             }
         }
-        // A dash destination discards the result — which is the point when an
-        // accumulator is carrying it. The addend nibble, the `*` and the `++`
-        // a dash can carry have nothing to act on once the write is gone, so
-        // they are accepted and ignored.
+        // A dash destination discards the result, which is the point when an
+        // accumulator is carrying it; its modifiers are accepted and ignored.
         let d = if self.d.is_dash() {
             None
         } else {
             Some(self.operand(self.d, width)?)
         };
-        // A dash in the A position is an operand of zeros, whatever the op:
-        // `v16sub HX(0,0),-,HX(63,0)` negates B, and `v16and` with one comes
-        // out empty. Measured.
+        // A dash in the A position is a measured operand of zeros.
         let a = if self.a.is_dash() {
             None
         } else {
@@ -2075,10 +1756,8 @@ impl VecInsn {
         })
     }
 
-    /// A B-position immediate, sign-extended out of its field: six bits in the
-    /// 48-bit encoding, sixteen in the 80-bit one. Both are signed, measured:
-    /// `v32mov HY(0,0),#0x20` leaves `0xffffffe0` in every lane, and the
-    /// 80-bit `#0xffff` leaves `0xffffffff`.
+    /// A B-position immediate, sign-extended: six bits in the 48-bit
+    /// encoding, sixteen in the 80-bit one. Both are signed, measured.
     fn imm_value(&self, i: u32) -> i32 {
         let bits = if self.wide { 16 } else { 6 };
         ((i << (32 - bits)) as i32) >> (32 - bits)

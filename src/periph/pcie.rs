@@ -1,136 +1,45 @@
-//! BCM2711 PCIe root complex at `0x7D50_0000` — the block Linux calls
-//! `pcie@7d500000` and drives with `pcie-brcmstb`.
+//! BCM2711 PCIe root complex at `0x7D50_0000` — Linux's `pcie@7d500000`,
+//! driven by `pcie-brcmstb`. Registers and fields: `specs/pcie.toml`.
 //!
-//! Behind it sits the Pi 4B's VIA VL805 xHCI controller (`1106:3483`), modelled
-//! in [`super::vl805`], with its register block in [`super::xhci`]. This file is
-//! the root complex itself: the config-space router, the windows and the
-//! interrupts.
+//! Behind it sits the Pi 4B's VL805 xHCI controller ([`super::vl805`], with its
+//! register block in [`super::xhci`]). This file is the root complex: the
+//! config-space router, the windows and the interrupts. The endpoint is
+//! attached by default because a Pi 4B has it soldered on; `PIMU_PCIE_DEVICE=0`
+//! unsolders it, for reproducing the `PCIe timeout` / `USB xHC init failed`
+//! transcript and nothing else.
 //!
-//! The window sits outside the `0x7E…` legacy peripheral aperture, so without
-//! it every PCIe access folds onto DRAM (`addr & 0x3FFF_FFFF` = `0x3D50_xxxx`)
-//! and the firmware silently scribbles ~37 KiB into the middle of modelled
-//! memory. Stage 0 fixed that with a sticky register file.
+//! The four things that are not obvious from the registers:
 //!
-//! ## What stage 1 adds
+//! * **The bridge soft reset in `RGR1_SW_INIT_1` also returns the MSI block to
+//!   its reset state** — nothing pending, every vector masked — and the block
+//!   takes no messages while held. Linux depends on it: `brcm_pcie_setup()`
+//!   never clears the block and `brcm_msi_set_regs()` unmasks before it clears,
+//!   so a vector the firmware's USB traffic left pending behind the mask would
+//!   become an unhandled interrupt storm on `GIC_SPI 148`.
+//! * **Bus 0 is not reachable through `EXT_CFG_INDEX`** ([`Pcie::ext_target`]):
+//!   the window turns its index into a configuration request on the link, and
+//!   the root port's own config space is only the direct view at `+0x0000`.
+//!   Both `pcie-brcmstb` and the bootloader special-case it.
+//! * **The VPU cannot reach BAR0 with a load.** `CPU_2_PCIE_MEM_WIN0` puts the
+//!   endpoint at CPU-physical `0x6_0000_0000..`, 35 bits, so the firmware goes
+//!   through the 40-bit DMA4 channel into a bounce buffer. This file translates
+//!   CPU-physical → PCI bus → BAR0 offset ([`Pcie::mmio_read`] /
+//!   [`Pcie::mmio_write`]) and [`Machine::run_dma4`](crate::machine::Machine)
+//!   calls it with the composed address. [`crate::arm`] routes the ARM's
+//!   accesses to the same window.
+//! * **Endpoint DMA comes back through inbound window 2**
+//!   (`RC_BAR2_CONFIG_LO`/`_HI`): a bus address inside it reaches CPU-physical
+//!   memory at the same offset from 0, one outside it reaches nothing
+//!   ([`Upstream`]). The bootloader programs it at bus 0, so its bus addresses
+//!   are physical; Linux moves it to PCI `0x4_0000_0000` per `dma-ranges`.
 //!
-//! * **`RGR1_SW_INIT_1` (`+0x9210`)** — bit 0 is PERST#, bit 1 the bridge soft
-//!   reset, the same bits `pcie-brcmstb` uses. The bootcode parks the block in
-//!   reset (`0x8000AB4A` writes `2` then `3`), the second-stage bootloader's
-//!   `pcie_reset` (`0x000A7034`) re-asserts both, then `pcie_init` releases the
-//!   bridge (`0x000A6CA2`) and finally PERST# (`0x000A6DCC`). The bridge reset
-//!   also returns the MSI block to its reset state, nothing pending and every
-//!   vector masked, and the block takes no messages while it is held. Linux
-//!   depends on that: `brcm_pcie_setup()` never clears the block, and
-//!   `brcm_msi_set_regs()` unmasks before it clears. A vector the firmware's
-//!   USB traffic left pending (the VL805 signals while every vector is still
-//!   masked) used to survive into Linux, and when the ARM took the interrupt
-//!   between those two writes there was no handler to clear it: an interrupt
-//!   storm on `GIC_SPI 148` that hung the kernel in its PCIe probe.
-//! * **`MISC_PCIE_STATUS` (`+0x4068`)** — the link-up poll. The bootloader's
-//!   predicate at `0x000A6F7E` is
-//!
-//!   ```text
-//!   r2 = [0x7D504068]
-//!   r3 = r2 & 0x20            ; DL_ACTIVE
-//!   if r3 != 0: r2 &= 0x10    ; PHYLINKUP
-//!   return (both set) ? 0 : 1 ; 0 = stop polling, link is up
-//!   ```
-//!
-//!   which is exactly Linux's `brcm_pcie_link_up()`. Bit 7 is the port-mode bit
-//!   `brcm_pcie_rc_mode()` reads; set, it means root complex. So a live link
-//!   reads `0xB0`.
-//! * **The config-space router.** `EXT_CFG_INDEX` (`+0x9000`) selects a
-//!   `(bus, slot, fn)` — `bus << 20 | slot << 15 | fn << 12`, per
-//!   `pcie-brcmstb` — and the 4 KiB window at `EXT_CFG_DATA` (`+0x8000`) is
-//!   that function's configuration space. Bus 1 device 0 is the VL805.
-//!   Everything else — bus 0 included, see [`Pcie::ext_target`] — reads back
-//!   all-ones, which is how PCI says "nothing there". The root port's own
-//!   config space is reachable only through the direct view at `+0x0000`.
-//!
-//! ## The outbound window, and how the VPU reaches BAR0
-//!
-//! It does not reach it with a load. `CPU_2_PCIE_MEM_WIN0` (`+0x400C`,
-//! `+0x4010`, `+0x4070`, `+0x4080`, `+0x4084`) puts the endpoint's registers at
-//! CPU-physical `0x6_0000_0000..0x6_3FFF_FFFF` — 35 bits, which a 32-bit VPU
-//! cannot form — so the firmware reads and writes them with the **40-bit DMA4
-//! channel** instead: `0x000A701E` builds a control block whose `SRC` is
-//! `0x6_0200_0004` (`src = 0x0200_0004`, `srci = 0x1006`, high byte 6), DMAs
-//! four bytes into a bounce buffer at `0xC031B000`, and reads the buffer.
-//! `boot --log io` over a USB boot shows the whole sequence.
-//!
-//! So this file translates CPU-physical → PCI bus → BAR0 offset
-//! ([`Pcie::mmio_read`] / [`Pcie::mmio_write`]), and
-//! [`Machine::run_dma4`](crate::machine::Machine) calls it with the composed
-//! 40-bit address. Until that landed the transfer read modelled DRAM, the
-//! capability registers came back zero, and the bring-up hung forever at
-//! `0x000AA3C0` — which is why the endpoint used to be detached by default.
-//!
-//! ## The endpoint is attached by default
-//!
-//! A Pi 4B has the VL805 soldered on, so attached is the honest model of the
-//! reference board, and with BAR0 answering, the bootloader's bring-up gets the
-//! same numbers a real board prints
-//! (the bootloader log on a Raspberry Pi 4B d03115):
-//!
-//! ```text
-//!   2.75 PCIe scan 00001106:00003483
-//!   3.31 xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb
-//!   3.31 USBSTS 1
-//!   3.31 xHC0 ports 5 slots 32 intrs 4
-//! ```
-//!
-//! What it does *not* find is a device: the model has no USB device behind the
-//! root hub and no VIA hub on port 1, so all five ports read "powered, empty"
-//! and the bootloader falls through to the SD entry of `BOOT_ORDER` without the
-//! `USB2[1] … connected` / `HUB init` lines the real board prints.
-//!
-//! `PIMU_PCIE_DEVICE=0` unsolders the endpoint again — the link never trains,
-//! `MISC_PCIE_STATUS` reads only its port-mode strap and the bootloader prints
-//! `PCIe timeout: 0x00000080` / `USB xHC init failed`, the pre-stage-1
-//! transcript. It is for reproducing that, nothing else.
-//!
-//! ## Linux
-//!
-//! `pcie-brcmstb` (`drivers/pci/controller/pcie-brcmstb.c`) drives the same
-//! block from the ARM, at `0xFD50_0000`. What it needs beyond the bootloader:
-//!
-//! * the port-mode bit of `MISC_PCIE_STATUS` read as the strap it is, set with
-//!   PERST# still asserted — `brcm_pcie_setup()` checks it before starting the
-//!   link, and fails the probe with `PCIe RC controller misconfigured as
-//!   Endpoint` when it reads clear;
-//! * the root port's config space as a real type-1 header with capabilities
-//!   (the Raspberry Pi 4B d03115 dump, [`RC_CFG_SEED`]): no BARs to size,
-//!   writable bus numbers and windows, the PCIe capability that makes it a root
-//!   port and reports the trained link;
-//! * the SerDes MDIO port, for `brcm_pcie_set_ssc()`;
-//! * the MSI block. The endpoint's MSI is a memory write to the address in
-//!   `MSI_BAR_CONFIG`; the root complex catches it and turns it into a bit in
-//!   `MSI_INTR2` and a level on `GIC_SPI 148` ([`Pcie::msi_line`]).
-//!
-//! Endpoint MMIO reaches the ARM through the outbound window: [`crate::arm`]
-//! routes CPU-physical `0x6_0000_0000..` here.
-//!
-//! ## The inbound window
-//!
-//! The endpoint's DMA — TRB fetches, event writes, data buffers — goes the
-//! other way, through inbound window 2 (`RC_BAR2_CONFIG_LO`/`_HI`): a PCI bus
-//! address inside it reaches CPU-physical memory at the same offset from 0,
-//! and one outside it reaches nothing ([`Upstream`]). The bootloader programs
-//! the window at bus 0, 8 GiB wide, so its bus addresses are physical; Linux
-//! moves it to where `dma-ranges` puts system memory, PCI `0x4_0000_0000`
-//! (`IB MEM 0x0000000000..0x003fffffff -> 0x0400000000`), and hands the
-//! endpoint addresses up there. The window's size field is decoded as Linux
-//! encodes it ([`ibar_size`]).
-//!
-//! ## Register offsets the firmware actually touches
-//!
-//! `0x0000..0x0FFF` root-port config space (`0x0B4`/`0x0B8`/`0x0C8`/`0x0D0`/
-//! `0x0DC`/`0x188`, class code at `0x043C`), `0x4008` `MISC_MISC_CTRL`, `0x402C`/`0x4034`/
-//! `0x4038`/`0x403C` the RC BAR windows, `0x4044`/`0x4048`/`0x404C` the MSI BAR
-//! and data, `0x4068` `MISC_PCIE_STATUS`, `0x4204`
-//! `MISC_HARD_PCIE_HARD_DEBUG`, `0x4308`/`0x4310`/`0x4314` interrupt masks,
-//! `0x8000` `EXT_CFG_DATA`, `0x9000` `EXT_CFG_INDEX`, `0x9210`
-//! `RGR1_SW_INIT_1`.
+//! What Linux needs beyond the bootloader: the port-mode bit of
+//! `MISC_PCIE_STATUS` read as the strap it is (it fails the probe with `PCIe RC
+//! controller misconfigured as Endpoint` otherwise), the root port's config
+//! space as a real type-1 header with capabilities ([`RC_CFG_SEED`], measured
+//! on a Raspberry Pi 4B d03115), the SerDes MDIO port for `brcm_pcie_set_ssc()`,
+//! and the MSI block, which catches the endpoint's memory write to
+//! `MSI_BAR_CONFIG` and turns it into `GIC_SPI 148` ([`Pcie::msi_line`]).
 
 use std::collections::BTreeMap;
 
@@ -139,7 +48,7 @@ use crate::log::{Channel, Log};
 use crate::periph::vl805::Vl805;
 use crate::periph::xhci::HostMem;
 /// `reg = <0x0 0x7d500000 0x0 0x9310>` in the Pi 4 device tree
-/// (`/proc/device-tree/scb/pcie@7d500000/reg` on a real board).
+/// (`/proc/device-tree/scb/pcie@7d500000/reg` on a Raspberry Pi 4B d03115).
 pub use crate::spec::pcie::{BASE, SIZE};
 // The SerDes MDIO write port has its DONE bit where the read port does.
 use crate::spec::pcie::{
@@ -161,8 +70,6 @@ use crate::spec::pcie::{
 };
 use crate::spec::Coverage;
 
-/// Every register in `specs/pcie.toml` is modelled; the ones with no
-/// behaviour of their own are storage.
 pub const COVERAGE: Coverage = Coverage {
     block: "pcie",
     decoded: &[
@@ -205,18 +112,13 @@ pub const COVERAGE: Coverage = Coverage {
     ],
 };
 
-/// The root port's own configuration space, directly mapped.
 const RC_CFG: u32 = 0x0000;
 const RC_CFG_SIZE: u32 = 0x1000;
-/// End of the `EXT_CFG_DATA` window: one function's 4 KiB configuration space.
 const EXT_CFG_END: u32 = EXT_CFG_DATA + EXT_CFG_DATA_COUNT * EXT_CFG_DATA_STRIDE;
-/// SerDes register `0x1F` selects the block the others address.
 const MDIO_BLOCK_SELECT: u32 = 0x1F;
-/// The spread-spectrum block and the two registers `brcm_pcie_set_ssc()` uses.
 const SSC_BLOCK: u16 = 0x1100;
 const SSC_STATUS: u32 = 0x1;
 const SSC_CNTL: u32 = 0x2;
-/// `SSC_CNTL_OVRD_EN | SSC_CNTL_OVRD_VAL`.
 const SSC_CNTL_OVRD: u16 = 0xC000;
 const SSC_STATUS_SSC: u16 = 0x400;
 const SSC_STATUS_PLL_LOCK: u16 = 0x800;
@@ -226,30 +128,14 @@ const SSC_STATUS_PLL_LOCK: u16 = 0x800;
 const LNKSTA_UP: u32 = 0x1012;
 const LNKSTA_SLOTCLK: u32 = 0x1000;
 
-/// The bus number the root port assigns to its single downstream link. Fixed on
-/// this topology: `lspci` on a Raspberry Pi 4B d03115 shows `00:00.0` bridge,
-/// `01:00.0` VL805.
 const ENDPOINT_BUS: u32 = 1;
 
-/// The root port's own configuration space, measured on a
-/// Raspberry Pi 4B d03115:
-///
-/// ```text
-/// $ sudo od -Ax -tx4 -v /sys/bus/pci/devices/0000:00:00.0/config
-/// 000000 271114e4 00100006 06040020 00010000
-/// ...
-/// ```
-///
-/// All 4 KiB of it is the direct `+0x0000` view (`brcm_pcie_map_bus()` hands
-/// the root bus `base + where`), so the dump also carries the Broadcom `PRIV1`
-/// registers from `0x400` up. It is of a running system: the fields Linux or
-/// the firmware had written are put back to their power-on values — command,
-/// bus numbers, the windows, interrupt line, link and root control, AER's root
-/// command — and everything else is verbatim. The chain is what `lspci -vvv`
-/// prints: PM at `0x48`, a PCIe v2 root port at `0xAC`, AER at `0x100`, a
-/// vendor capability at `0x180`, L1 PM substates at `0x240`. The header word
-/// at `0x08` is not stored; it is a view of [`PRIV1_ID_VAL3`], which the
-/// bootloader writes (`0x000A6E20`) and so does Linux.
+/// The root port's own configuration space, measured on a Raspberry Pi 4B
+/// d03115. All 4 KiB is the direct `+0x0000` view, so it carries the Broadcom
+/// `PRIV1` registers from `0x400` up too. The dump is of a running system, so
+/// the fields Linux or the firmware had written are back at their power-on
+/// values and the rest is verbatim. The header word at `0x08` is not stored: it
+/// is a view of [`PRIV1_ID_VAL3`], which both the bootloader and Linux write.
 const RC_CFG_SEED: &[(u32, u32)] = &[
     (0x000, 0x2711_14E4), // vendor 14e4, device 2711
     (0x004, 0x0010_0000), // status: capability list
@@ -299,12 +185,9 @@ const RC_CFG_SEED: &[(u32, u32)] = &[
     (0x560, 0x0000_000F),
 ];
 
-/// Which bits of each root-port header word software may change. The rest of
-/// the header reads back what it holds, which makes the bridge what `lspci`
-/// says it is: no BARs (`0x10`/`0x14`), no I/O window (`0x1C`), no expansion
-/// ROM. Past the header the block is plain storage: the bootloader and Linux
-/// both write its capabilities and Broadcom registers, and nothing reads a
-/// fixed field back.
+/// Which bits of each root-port header word software may change; the rest reads
+/// back what it holds, which is what makes the bridge have no BARs, no I/O
+/// window and no expansion ROM. Past the header the block is plain storage.
 fn rc_cfg_write_mask(off: u32) -> u32 {
     match off {
         0x04 => 0x0000_0547,        // command
@@ -318,12 +201,10 @@ fn rc_cfg_write_mask(off: u32) -> u32 {
     }
 }
 
-/// Status bits past the header that software clears by writing ones (RW1C):
-/// DevSta, LnkSta's bandwidth-management bits, SltSta, RootSta's PME status,
-/// and AER's uncorrectable, correctable and root error status. Linux clears
-/// the PME status with a read-modify-write (`pcie_clear_root_pme_status`), so
-/// as plain storage the clear would set it for good, and `pcie_pme_irq` would
-/// claim every interrupt on the line, which hung Linux silently (#18).
+/// Status bits past the header that software clears by writing ones (RW1C).
+/// Linux clears the PME status with a read-modify-write, so as plain storage
+/// the clear would set it for good and `pcie_pme_irq` would claim every
+/// interrupt on the line — a silent kernel hang.
 fn rc_cfg_w1c_mask(off: u32) -> u32 {
     match off {
         0x0B4 => 0x000F_0000,
@@ -337,9 +218,7 @@ fn rc_cfg_w1c_mask(off: u32) -> u32 {
 }
 
 /// The size an `RC_BARn_CONFIG_LO` size field encodes, the inverse of
-/// `brcm_pcie_encode_ibar_size()`: `1..=0x15` is 64 KiB to 64 GiB, `0x1C..=0x1F`
-/// is 4 KiB to 32 KiB, and anything else — `0` included — switches the window
-/// off.
+/// `brcm_pcie_encode_ibar_size()`; anything else switches the window off.
 fn ibar_size(code: u32) -> Option<u64> {
     match code {
         0x01..=0x15 => Some(1 << (code + 15)),
@@ -348,14 +227,10 @@ fn ibar_size(code: u32) -> Option<u64> {
     }
 }
 
-/// The endpoint's upstream memory traffic, as the root complex forwards it:
-/// a PCI bus address inside inbound window 2 becomes the CPU-physical
-/// address that far into the window, and `mem` is system memory addressed
-/// that way. Anything outside the window reaches no memory — on silicon the
-/// request completes as Unsupported; here a read returns all-ones and a write
-/// is dropped.
+/// The endpoint's upstream traffic, as the root complex forwards it through
+/// inbound window 2. Outside the window nothing answers: a read returns
+/// all-ones and a write is dropped, as an Unsupported Request does.
 struct Upstream<'a> {
-    /// `(bus base, size)` of inbound window 2, if it is on.
     window: Option<(u64, u64)>,
     mem: &'a mut dyn HostMem,
     log: &'a Log,
@@ -395,29 +270,21 @@ impl HostMem for Upstream<'_> {
 
 pub struct Pcie {
     storage: BTreeMap<u32, u32>,
-    /// Last value written to `RGR1_SW_INIT_1`.
     sw_init: u32,
-    /// The link has trained. Sticky until PERST# is asserted again.
     link_up: bool,
     ext_cfg_index: u32,
     device_present: bool,
     pub endpoint: Vl805,
-    /// The SerDes MDIO port: the last command packet, the block register
-    /// `0x1F` selected, the registers written, and `WR_DATA` as last left.
     mdio_pkt: u32,
     mdio_block: u16,
     mdio_regs: BTreeMap<(u16, u32), u16>,
     mdio_wr: u32,
-    /// The MSI block's pending vectors, and its mask (all masked at reset).
     msi_status: u32,
     msi_mask: u32,
-    /// An interrupt that stayed pending without a message (bus mastering was
-    /// off when it was asserted). An MSI is an edge, so that assertion sends
-    /// none.
+    /// An interrupt asserted while bus mastering was off: an MSI is an edge,
+    /// so no message went out.
     msi_sent: bool,
-    /// The endpoint's INTA, while it is not using MSI.
     intx: bool,
-    /// Where [`Channel::Pcie`] goes.
     log: Log,
 }
 
@@ -429,9 +296,6 @@ impl Default for Pcie {
 
 impl Pcie {
     pub fn new() -> Pcie {
-        // A Pi 4B has the VL805 soldered on, so attached is what the reference
-        // board looks like. `PIMU_PCIE_DEVICE=0` unsolders it — for reproducing
-        // the pre-stage-1 transcript, nothing else.
         Pcie::with_device(std::env::var("PIMU_PCIE_DEVICE").as_deref() != Ok("0"))
     }
 
@@ -459,7 +323,6 @@ impl Pcie {
         }
     }
 
-    /// Where [`Channel::Pcie`] goes, and the endpoint's [`Channel::Xhci`].
     pub fn set_log(&mut self, log: Log) {
         self.endpoint.xhci.log = log.clone();
         self.log = log;
@@ -482,21 +345,16 @@ impl Pcie {
         self.storage.get(&off).copied().unwrap_or(0)
     }
 
-    /// The MSI block's output, `GIC_SPI 148`: a vector is pending and not
-    /// masked.
     pub fn msi_line(&self) -> bool {
         self.msi_status & !self.msi_mask != 0
     }
 
-    /// The endpoint's INTA, `GIC_SPI 143` through the device tree's
-    /// `interrupt-map`.
     pub fn intx_line(&self) -> bool {
         self.intx
     }
 
     /// Turn the endpoint's interrupt into what it sends upstream: an MSI when
-    /// the host has enabled one, INTA otherwise. Called after anything that
-    /// can move it: a register write through the window, a config write.
+    /// the host enabled one, INTA otherwise.
     fn update_irq(&mut self) {
         let pending = self.link_up && self.endpoint.xhci.interrupt_pending();
         let before = (self.intx, self.msi_status);
@@ -521,9 +379,7 @@ impl Pcie {
                 if send {
                     self.receive_msi(addr, data);
                     // `IMAN.IP` clears itself once the message is out (xHCI
-                    // 5.5.2.1), so the next event is a new assertion. Linux
-                    // relies on it: with MSI it never clears IP itself
-                    // (`ip_autoclear`).
+                    // 5.5.2.1); Linux relies on it (`ip_autoclear`).
                     self.endpoint.xhci.msi_sent();
                 }
                 self.msi_sent = pending && !send;
@@ -535,8 +391,8 @@ impl Pcie {
         }
     }
 
-    /// An upstream memory write of `data` to PCI bus address `addr`, which the
-    /// root complex claims when it is its MSI target.
+    /// An upstream memory write, which the root complex claims when it is its
+    /// MSI target.
     fn receive_msi(&mut self, addr: u64, data: u32) {
         if self.sw_init & SW_INIT_BRIDGE != 0 {
             // A bridge held in reset takes no messages.
@@ -547,8 +403,6 @@ impl Pcie {
         let cfg = self.stored(MSI_DATA_CONFIG);
         let (mask, pattern) = (cfg >> 16, cfg & 0xFFFF);
         if lo & 1 == 0 || addr & !0x3 != target || data & mask != pattern & mask {
-            // Not a message the block recognises. It would be an ordinary
-            // write into memory, and nothing in the model sends one.
             return;
         }
         self.msi_status |= 1 << (data & !mask & 0x1F);
@@ -558,10 +412,9 @@ impl Pcie {
         self.mdio_pkt & MDIO_REGAD
     }
 
-    /// `RD_DATA`: the register the last packet addressed, and done. The PHY
-    /// answers at once; the only register with behaviour is SSC status, which
-    /// reports spread spectrum on once both override bits are set and the PLL
-    /// always locked — the `(SSC)` in Linux's `link up` line.
+    /// `RD_DATA`: the register the last packet addressed, and done. The only
+    /// register with behaviour is SSC status — spread spectrum on once both
+    /// override bits are set, and the PLL always locked.
     fn mdio_read(&self) -> u32 {
         let regad = self.mdio_regad();
         let reg = |r| self.mdio_regs.get(&(self.mdio_block, r)).copied();
@@ -576,8 +429,6 @@ impl Pcie {
         MDIO_DONE | v as u32
     }
 
-    /// `WR_DATA`: the host sets `DONE` to start a write, and it completes
-    /// before the next read.
     fn mdio_write(&mut self, value: u32) {
         self.mdio_wr = value & !MDIO_DONE;
         if value & MDIO_DONE == 0 || self.mdio_pkt & MDIO_CMD_READ != 0 {
@@ -591,10 +442,6 @@ impl Pcie {
         }
     }
 
-    /// The CPU-physical extent of outbound window 0, as the firmware programmed
-    /// it. Both ends are inclusive and 40 bits wide — well outside anything a
-    /// 32-bit VPU load can form, which is why the firmware reaches through it by
-    /// DMA (see [`crate::machine::Machine::run_dma4`]).
     fn outbound_window(&self) -> Option<(u64, u64, u64)> {
         let base_limit = self.storage.get(&MEM_WIN0_BASE_LIMIT).copied().unwrap_or(0);
         let base_hi = self.storage.get(&MEM_WIN0_BASE_HI).copied().unwrap_or(0) as u64;
@@ -609,8 +456,6 @@ impl Pcie {
         Some((base_mb << 20, (limit_mb << 20) | 0xF_FFFF, bus))
     }
 
-    /// Translate a CPU-physical address into a PCI bus address, if outbound
-    /// window 0 covers it.
     pub fn outbound_bus_addr(&self, cpu: u64) -> Option<u64> {
         let (base, limit, bus) = self.outbound_window()?;
         if cpu < base || cpu > limit {
@@ -619,8 +464,6 @@ impl Pcie {
         Some(bus + (cpu - base))
     }
 
-    /// Which endpoint register a CPU-physical address lands on, if any: through
-    /// the outbound window, then through the endpoint's BAR0.
     fn bar0_offset(&self, cpu: u64) -> Option<u32> {
         if !self.link_up {
             return None;
@@ -634,16 +477,14 @@ impl Pcie {
     }
 
     /// A read of endpoint MMIO, addressed CPU-physically. `None` means nothing
-    /// decodes there — the DMA engine then falls back to DRAM, the way an
-    /// unclaimed address does on real silicon.
+    /// decodes there, and the DMA engine falls back to DRAM as silicon does.
     pub fn mmio_read(&mut self, cpu: u64, width: Width) -> Option<u32> {
         let off = self.bar0_offset(cpu)?;
         Some(self.endpoint.bar0_read(off, width))
     }
 
-    /// Bring the endpoint's clock to `now_us`. A SuperSpeed link that has
-    /// finished training comes up then, and its Port Status Change Event goes
-    /// out through the inbound window like any other.
+    /// Bring the endpoint's clock to `now_us`, bringing up any SuperSpeed link
+    /// that has finished training.
     pub fn advance_to(&mut self, now_us: u64, mem: &mut dyn HostMem) {
         let links = self.endpoint.xhci.link_due(now_us);
         let events = self
@@ -668,8 +509,6 @@ impl Pcie {
         self.update_irq();
     }
 
-    /// Inbound window 2 as `(bus base, size)`, if its size field switches it
-    /// on.
     fn inbound_window(&self) -> Option<(u64, u64)> {
         let lo = self.stored(RC_BAR2_CONFIG_LO);
         let size = ibar_size(lo & RC_BAR_SIZE_MASK)?;
@@ -678,9 +517,7 @@ impl Pcie {
     }
 
     /// A write of endpoint MMIO, addressed CPU-physically. `mem` is system
-    /// memory by CPU-physical address: an xHCI doorbell write makes the
-    /// endpoint fetch TRBs from DRAM and post events back into it, through
-    /// the inbound window.
+    /// memory: a doorbell makes the endpoint fetch TRBs and post events.
     pub fn mmio_write(
         &mut self,
         cpu: u64,
@@ -703,33 +540,9 @@ impl Pcie {
         }
     }
 
-    /// Which function the `EXT_CFG_DATA` window currently points at, if any.
-    ///
-    /// Bus 0 is deliberately not one of them (#21). The window turns its index
-    /// into a configuration request on the link, and the link's far side is the
-    /// secondary bus — the root port's own config space is never reachable this
-    /// way, only through the direct `+0x0000` view. That is why `pcie-brcmstb`
-    /// special-cases it in `brcm_pcie_map_conf()`:
-    ///
-    /// ```c
-    /// /* Accesses to the RC go right to the RC registers if slot==0 */
-    /// if (pci_is_root_bus(bus))
-    ///     return PCI_SLOT(devfn) ? NULL : base + where;
-    /// ```
-    ///
-    /// and it is what the reference transcript shows. The bootloader's scan
-    /// (`0x000A712C`) starts at bus 0, slot 0 and prints `PCIe scan %08x:%08x`
-    /// for every function whose vendor id is not `0xFFFF`, *before* it looks at
-    /// the header type — the header-type byte at `0x0E` only decides whether the
-    /// function is recorded in the device list (`0x000A71CC`, non-zero = bridge
-    /// = skip), not whether it is printed. So if bus 0 answered here the real
-    /// board would print the root complex too, and the bootloader log on a
-    /// Raspberry Pi 4B d03115 shows it does not.
-    ///
-    /// The bootloader reaches the root port's own config space the same way
-    /// Linux does: its config-space selector (`0x000A6888`) writes
-    /// `EXT_CFG_INDEX` and points its window at `EXT_CFG_DATA` only for a real
-    /// device, and points it straight at `0x7D50_0000` for the root port.
+    /// Bus 0 is deliberately not one of them (module docs): the bootloader's
+    /// scan prints every function whose vendor id answers, and a real board's
+    /// log does not show the root complex among them.
     fn ext_target(&self) -> CfgTarget {
         let bus = (self.ext_cfg_index >> EXT_BUSNUM_SHIFT) & 0xFF;
         let slot = (self.ext_cfg_index >> EXT_SLOT_SHIFT) & 0x1F;
@@ -740,7 +553,6 @@ impl Pcie {
         }
     }
 
-    /// A word of the root port's own config space.
     fn rc_cfg_word(&self, off: u32) -> u32 {
         match off {
             0x08 => self.stored(PRIV1_ID_VAL3).rotate_left(8),
@@ -756,7 +568,6 @@ impl Pcie {
         }
     }
 
-    /// The value the root port's own config space holds at `off`.
     fn rc_cfg_read(&self, off: u32, width: Width) -> u32 {
         let word = self.rc_cfg_word(off & !3);
         let shift = 8 * (off & 3);
@@ -823,7 +634,6 @@ impl MmioDevice for Pcie {
 
     fn write(&mut self, offset: u32, width: Width, value: u32) -> BusResult<()> {
         if offset == MISC_PCIE_STATUS {
-            // Read-only status; the firmware never writes it.
             return Ok(());
         }
         if offset == EXT_CFG_INDEX {
@@ -853,8 +663,6 @@ impl MmioDevice for Pcie {
                 CfgTarget::Endpoint => self.endpoint.cfg_write(cfg_off, width, value),
                 CfgTarget::None => {}
             }
-            // The command register and the MSI capability decide how the
-            // endpoint's interrupt goes upstream.
             self.update_irq();
             return Ok(());
         }
@@ -875,11 +683,8 @@ impl MmioDevice for Pcie {
                     self.msi_sent = false;
                 }
             } else if was_perst && self.device_present {
-                // PERST# released with a device on the far side: the link
-                // trains. Real silicon takes a few milliseconds and the
-                // bootloader polls for it at 1 ms intervals with a 1 s budget
-                // (`0x000A9038`); the model brings it up on the spot, which
-                // costs the transcript a millisecond of modelled time.
+                // The link trains. Silicon takes a few milliseconds, which
+                // the model skips: a millisecond of transcript time.
                 self.link_up = true;
             }
             self.storage.insert(offset, value);
@@ -887,9 +692,8 @@ impl MmioDevice for Pcie {
             return Ok(());
         }
         if offset < RC_CFG + RC_CFG_SIZE {
-            // Root-port config space is byte-addressable: the bootloader writes
-            // single halfwords into the bridge header (`0x22` ← `0x8000`, and
-            // so on), so a word-granular store would clobber its neighbour.
+            // Byte-addressable: the bootloader writes single halfwords into
+            // the bridge header.
             let word_off = offset & !3;
             let shift = 8 * (offset & 3);
             let mask: u32 = match width {
@@ -925,22 +729,16 @@ mod tests {
         p.read(off, Width::Word).unwrap()
     }
 
-    /// The bootcode/bootloader reset dance, then the link-up poll.
     #[test]
     fn perst_release_brings_the_link_up() {
         let mut p = Pcie::with_device(true);
-        // Only the root-complex strap until the link trains.
         assert_eq!(rd(&mut p, MISC_PCIE_STATUS), 0x80);
-        // bootcode parks the block in reset
         p.write(RGR1_SW_INIT_1, Width::Word, 0x3).unwrap();
         assert_eq!(rd(&mut p, MISC_PCIE_STATUS), 0x80);
-        // pcie_init releases the bridge, then PERST#
         p.write(RGR1_SW_INIT_1, Width::Word, 0x1).unwrap();
         assert_eq!(rd(&mut p, MISC_PCIE_STATUS), 0x80);
         p.write(RGR1_SW_INIT_1, Width::Word, 0x0).unwrap();
-        // 0xB0: PHYLINKUP | DL_ACTIVE | root-complex mode.
         assert_eq!(rd(&mut p, MISC_PCIE_STATUS), 0xB0);
-        // Asserting PERST# again drops it.
         p.write(RGR1_SW_INIT_1, Width::Word, 0x1).unwrap();
         assert_eq!(rd(&mut p, MISC_PCIE_STATUS), 0x80);
     }
@@ -953,21 +751,18 @@ mod tests {
         assert_eq!(rd(&mut p, MISC_PCIE_STATUS), 0x80);
     }
 
-    /// `brcm_pcie_setup()` asks whether the block is a root complex with
-    /// PERST# held, before it ever starts the link.
+    /// `brcm_pcie_setup()` reads the port-mode strap with PERST# held.
     #[test]
     fn root_complex_mode_is_a_strap() {
         let mut p = Pcie::with_device(true);
         p.write(RGR1_SW_INIT_1, Width::Word, 0x3).unwrap();
         p.write(RGR1_SW_INIT_1, Width::Word, 0x1).unwrap();
         assert_eq!(rd(&mut p, MISC_PCIE_STATUS), STATUS_PORT_RC);
-        // Revision 3.3 or later: the 32-vector MSI block.
         assert!(rd(&mut p, MISC_REVISION) >= 0x0303);
     }
 
-    /// What Linux's bus scan needs from the root port: a bridge with no BARs
-    /// to size, writable bus numbers, and the PCIe capability that makes it a
-    /// root port and reports the trained link.
+    /// What Linux's bus scan needs: no BARs to size, writable bus numbers, and
+    /// a PCIe capability reporting a root port on a trained link.
     #[test]
     fn the_root_port_is_a_bridge_without_bars() {
         let mut p = link_up_pcie();
@@ -976,7 +771,6 @@ mod tests {
         assert_eq!(rd(&mut p, 0x10), 0);
         p.write(0x18, Width::Word, 0xFF01_0100).unwrap();
         assert_eq!(rd(&mut p, 0x18), 0x0001_0100);
-        // PM at 0x48, then PCIe at 0xAC, device/port type 4 = root port.
         assert_eq!(rd(&mut p, 0x34) & 0xFF, 0x48);
         assert_eq!((rd(&mut p, 0x48) >> 8) & 0xFF, 0xAC);
         assert_eq!((rd(&mut p, 0xAC) >> 20) & 0xF, 4);
@@ -985,8 +779,6 @@ mod tests {
         assert_eq!(p.read(0xBE, Width::Half).unwrap(), 0x1000);
     }
 
-    /// `brcm_pcie_set_ssc()`, register by register: select the SSC block, set
-    /// both override bits, then read SSC on and the PLL locked.
     #[test]
     fn spread_spectrum_clocking_comes_up_over_mdio() {
         let mut p = link_up_pcie();
@@ -1010,20 +802,16 @@ mod tests {
         assert_eq!(read(&mut p, SSC_STATUS) & 0xC00, 0xC00);
     }
 
-    /// `enumerated_pcie()` with MSI on at both ends, as Linux leaves it, and
-    /// interrupter 0 running with one event ring segment of 16 TRBs at
-    /// 0x2000. Returns BAR0 and interrupter 0's `IMAN`.
+    /// MSI on at both ends and interrupter 0 running, as Linux leaves it.
     fn msi_pcie(mem: &mut crate::periph::xhci::VecMem) -> (Pcie, u64, u64) {
         use crate::periph::xhci::{HostMem, RTSOFF};
         let mut p = enumerated_pcie();
-        // What `brcm_msi_set_regs()` programs...
         p.write(MSI_INTR2_MASK_CLR, Width::Word, 0xFFFF_FFFF)
             .unwrap();
         p.write(MSI_BAR_CONFIG_LO, Width::Word, 0xFFFF_FFFD)
             .unwrap();
         p.write(MSI_BAR_CONFIG_HI, Width::Word, 0).unwrap();
         p.write(MSI_DATA_CONFIG, Width::Word, 0xFFE0_6540).unwrap();
-        // ...and the function's MSI capability, as `lspci` shows it.
         for (off, v) in [
             (0x94, 0xFFFF_FFFC),
             (0x98, 0),
@@ -1043,11 +831,8 @@ mod tests {
         (p, bar, ir0)
     }
 
-    /// With MSI on, `IMAN.IP` clears itself as the message goes out (xHCI
-    /// 5.5.2.1), and Linux counts on it (`ip_autoclear`): it acknowledges only
-    /// the MSI block. The next event must still send a message of its own;
-    /// with `IP` left set, every completion after the first was silent and
-    /// the kernel's Address Device timed out.
+    /// Linux acknowledges only the MSI block (`ip_autoclear`), so the next
+    /// event must still send a message of its own.
     #[test]
     fn every_event_sends_its_own_msi() {
         let mut mem = crate::periph::xhci::VecMem::default();
@@ -1058,41 +843,34 @@ mod tests {
         assert_eq!(p.mmio_read(ir0, Width::Word).unwrap() & 1, 0, "IP");
         p.write(MSI_INTR2_CLR, Width::Word, 1).unwrap();
         assert!(!p.msi_line());
-        // Acknowledge the port's change bits, then reset it again.
         let changes = (1 << 17) | (1 << 21);
         p.mmio_write(port1, Width::Word, (1 << 9) | changes, &mut mem);
         p.mmio_write(port1, Width::Word, (1 << 9) | (1 << 4), &mut mem);
         assert!(p.msi_line(), "a second message");
     }
 
-    /// The endpoint's first event, all the way to the GIC line: xHCI sets
-    /// `IMAN.IP`, the function sends its MSI, the root complex catches the
-    /// write at its target and raises vector 0.
+    /// The endpoint's first event, all the way to the GIC line.
     #[test]
     fn an_xhci_event_arrives_as_an_msi() {
         let mut mem = crate::periph::xhci::VecMem::default();
         let (mut p, bar, ir0) = msi_pcie(&mut mem);
         assert!(!p.msi_line());
-        // Reset root port 1, the hub's: a Port Status Change Event.
         p.mmio_write(bar + 0x420, Width::Word, (1 << 9) | (1 << 4), &mut mem);
         assert!(p.msi_line());
         assert_eq!(rd(&mut p, MSI_INTR2_STATUS), 1);
         assert!(!p.intx_line());
-        // The driver acknowledges the interrupter, then the MSI block.
         p.mmio_write(ir0, Width::Word, 0x3, &mut mem);
         p.write(MSI_INTR2_CLR, Width::Word, 1).unwrap();
         assert!(!p.msi_line());
     }
 
-    /// A vector the firmware's USB traffic left pending behind the mask must
-    /// not survive Linux's bridge reset: `brcm_msi_set_regs()` unmasks before
-    /// it clears, and a stale vector has no handler to clear it.
+    /// A vector left pending behind the mask must not survive Linux's bridge
+    /// reset (module docs).
     #[test]
     fn the_bridge_reset_clears_a_stale_msi() {
         let mut p = enumerated_pcie();
         p.write(MSI_INTR2_SET, Width::Word, 1).unwrap();
         assert!(!p.msi_line(), "masked");
-        // `brcm_pcie_setup()`: bridge reset, PERST#, bridge out of reset.
         for v in [0x2, 0x3, 0x1] {
             p.write(RGR1_SW_INIT_1, Width::Word, v).unwrap();
         }
@@ -1102,9 +880,7 @@ mod tests {
         assert!(!p.msi_line());
     }
 
-    /// Without MSI the same event is INTA, and PERST# takes it away: the
-    /// firmware's last USB event must not still be asserted when Linux brings
-    /// the link back up.
+    /// Without MSI the same event is INTA, and PERST# must take it away.
     #[test]
     fn perst_resets_the_endpoint() {
         use crate::periph::xhci::{HostMem, VecMem, RTSOFF};
@@ -1127,11 +903,8 @@ mod tests {
         assert_eq!(p.endpoint.bar0_bus_addr(), None);
     }
 
-    /// Linux's inbound window: `dma-ranges` puts system memory at PCI
-    /// `0x4_0000_0000` (`IB MEM 0x0000000000..0x003fffffff -> 0x0400000000`),
-    /// and `set_inbound_win_registers()` writes the base with a 1 GiB size
-    /// code. The endpoint's DMA addresses are those bus addresses; the
-    /// memory behind the window is addressed physically.
+    /// Linux's inbound window at PCI `0x4_0000_0000`: the endpoint's DMA
+    /// addresses are bus addresses, the memory behind it is physical.
     #[test]
     fn endpoint_dma_goes_through_the_inbound_window() {
         use crate::periph::xhci::{VecMem, RTSOFF};
@@ -1140,7 +913,6 @@ mod tests {
         p.write(RC_BAR2_CONFIG_HI, Width::Word, 4).unwrap();
         assert_eq!(p.inbound_window(), Some((0x4_0000_0000, 1 << 30)));
         let mut mem = VecMem::default();
-        // The event ring segment table at bus 0x4_0000_1000 = physical 0x1000.
         mem.write32(0x1000, 0x2000);
         mem.write32(0x1004, 4);
         mem.write32(0x1008, 16);
@@ -1156,8 +928,6 @@ mod tests {
         assert_eq!(mem.read32(0x2000) >> 24, 1);
         assert!(mem.bytes.keys().all(|a| *a < 0x1_0000));
 
-        // Outside the window the endpoint reaches nothing: a segment table
-        // at bus 0x1000 reads all-ones, so no event lands anywhere new.
         let before = mem.bytes.clone();
         let mut p2 = enumerated_pcie();
         p2.write(RC_BAR2_CONFIG_LO, Width::Word, 0xF).unwrap();
@@ -1191,21 +961,14 @@ mod tests {
     #[test]
     fn ext_cfg_routes_to_the_endpoint() {
         let mut p = link_up_pcie();
-        // Index 0 is bus 0 — the root port's own bus, which no configuration
-        // request on the link can reach (#21). Its config space is the direct
-        // `+0x0000` view, and only that.
         assert_eq!(rd(&mut p, EXT_CFG_DATA), 0xFFFF_FFFF);
         assert_eq!(rd(&mut p, RC_CFG), 0x2711_14E4);
-        // Bus 1, slot 0, function 0 is the VL805.
         p.write(EXT_CFG_INDEX, Width::Word, 1 << EXT_BUSNUM_SHIFT)
             .unwrap();
         assert_eq!(rd(&mut p, EXT_CFG_DATA), 0x3483_1106);
-        // The halfword reads start4's `XHCI_RESET` does at 0x3EDC6204/0x3EDC620A.
         assert_eq!(p.read(EXT_CFG_DATA, Width::Half).unwrap(), 0x1106);
         assert_eq!(p.read(EXT_CFG_DATA + 2, Width::Half).unwrap(), 0x3483);
-        // Class code 0c0330 = xHCI.
         assert_eq!(rd(&mut p, EXT_CFG_DATA + 0x08) >> 8, 0x0C_0330);
-        // An empty slot answers all-ones.
         p.write(
             EXT_CFG_INDEX,
             Width::Word,
@@ -1228,12 +991,10 @@ mod tests {
         let mut p = link_up_pcie();
         p.write(EXT_CFG_INDEX, Width::Word, 1 << EXT_BUSNUM_SHIFT)
             .unwrap();
-        // Power-on: 64-bit memory BAR, unassigned.
         assert_eq!(rd(&mut p, EXT_CFG_DATA + 0x10), 0x0000_0004);
         p.write(EXT_CFG_DATA + 0x10, Width::Word, 0xFFFF_FFFF)
             .unwrap();
         assert_eq!(rd(&mut p, EXT_CFG_DATA + 0x10), 0xFFFF_F004);
-        // Assign it and enable memory decoding.
         p.write(EXT_CFG_DATA + 0x10, Width::Word, 0xC000_0000)
             .unwrap();
         assert_eq!(rd(&mut p, EXT_CFG_DATA + 0x10), 0xC000_0004);
@@ -1242,10 +1003,8 @@ mod tests {
         assert_eq!(p.endpoint.bar0_bus_addr(), Some(0xC000_0000));
     }
 
-    /// The bootloader's VL805 hub-firmware upload (`0x000B6CE0`) writes each
-    /// byte of the image to its own index and reads it straight back, giving up
-    /// with `HUB2.0 fail` on the first mismatch. A sticky index/data port is
-    /// the whole requirement.
+    /// The bootloader's hub-firmware upload reads every byte straight back, so
+    /// a sticky index/data port is the whole requirement.
     #[test]
     fn vendor_port_round_trips_the_firmware_upload() {
         let mut p = link_up_pcie();
@@ -1253,7 +1012,6 @@ mod tests {
             .unwrap();
         for (i, byte) in [0xDEu32, 0xAD, 0xBE, 0xEF].into_iter().enumerate() {
             let idx = 0x5_2000 + i as u32;
-            // The firmware replicates the byte into all four lanes.
             let word = byte * 0x0101_0101;
             p.write(EXT_CFG_DATA + 0x78, Width::Word, idx).unwrap();
             p.write(EXT_CFG_DATA + 0x7C, Width::Word, word).unwrap();
@@ -1266,13 +1024,9 @@ mod tests {
         assert_eq!(p.endpoint.vendor_writes, 4);
     }
 
-    /// The exact outbound-window programming the bootloader does at
-    /// `0x000A725C`–`0x000A72F0`, followed by the BAR assignment at
-    /// `0x000A6918`. The window is the only way a 32-bit VPU can name the
-    /// endpoint's registers, and it names them 40 bits wide.
+    /// The bootloader's outbound-window programming and BAR assignment.
     fn enumerated_pcie() -> Pcie {
         let mut p = link_up_pcie();
-        // Inbound window 2 at bus 0, 8 GiB: bus addresses are CPU-physical.
         p.write(RC_BAR2_CONFIG_LO, Width::Word, 0x12).unwrap();
         p.write(RC_BAR2_CONFIG_HI, Width::Word, 0).unwrap();
         p.write(MEM_WIN0_LO, Width::Word, 0x8000_0000).unwrap();
@@ -1293,32 +1047,26 @@ mod tests {
     #[test]
     fn outbound_window_spans_one_gib_at_six() {
         let p = enumerated_pcie();
-        // `dmesg` on a Raspberry Pi 4B d03115:
-        // `MEM 0x0600000000..0x063fffffff -> 0x00c0000000`. The firmware picks
-        // `0x8000_0000` for the bus side rather than Linux's `0xC000_0000`, so
-        // the model has to read the register, not the DT.
+        // The firmware picks `0x8000_0000` for the bus side where Linux picks
+        // `0xC000_0000`, so the model has to read the register, not the DT.
         assert_eq!(p.outbound_bus_addr(0x6_0000_0000), Some(0x8000_0000));
         assert_eq!(p.outbound_bus_addr(0x6_3FFF_FFFF), Some(0xBFFF_FFFF));
         assert_eq!(p.outbound_bus_addr(0x5_FFFF_FFFF), None);
         assert_eq!(p.outbound_bus_addr(0x6_4000_0000), None);
     }
 
-    /// The read the bootloader's `xHC0 ver:` line is built from. Its DMA4
-    /// control block carries `src = 0x0200_0004`, `srci = 0x1006` — a 40-bit
-    /// source of `0x6_0200_0004`, i.e. BAR0 + 4 = `HCSPARAMS1`.
+    /// The read the bootloader's `xHC0 ver:` line is built from: a 40-bit DMA4
+    /// source of `0x6_0200_0004`, BAR0 + 4.
     #[test]
     fn the_outbound_window_reaches_xhci_capability_registers() {
         let mut p = enumerated_pcie();
         assert_eq!(p.mmio_read(0x6_0200_0000, Width::Word), Some(0x0100_0020));
         assert_eq!(p.mmio_read(0x6_0200_0004, Width::Word), Some(0x0500_0420));
         assert_eq!(p.mmio_read(0x6_0200_0010, Width::Word), Some(0x0028_41EB));
-        // One page, and not a byte more.
         assert_eq!(p.mmio_read(0x6_0200_1000, Width::Word), None);
     }
 
-    /// With memory decoding still disabled, or the link down, the window
-    /// decodes nothing — the DMA engine then reads DRAM, the way an unclaimed
-    /// address behaves on real silicon.
+    /// With memory decoding off or the link down the window decodes nothing.
     #[test]
     fn endpoint_mmio_needs_the_command_register() {
         let mut p = link_up_pcie();
@@ -1334,9 +1082,8 @@ mod tests {
         assert_eq!(p.mmio_read(0x6_0200_0000, Width::Word), None);
     }
 
-    /// `USBCMD.HCRST` self-clears and returns the operational registers to
-    /// their power-on state; `USBSTS.HCH` follows `USBCMD.RS`. Those two are
-    /// the only live bits the bootloader's bring-up waits on.
+    /// `USBCMD.HCRST` self-clears and `USBSTS.HCH` follows `USBCMD.RS`: the
+    /// only live bits the bootloader's bring-up waits on.
     #[test]
     fn host_controller_reset_completes() {
         let mut p = enumerated_pcie();
@@ -1348,18 +1095,14 @@ mod tests {
         assert_eq!(p.mmio_read(usbcmd, Width::Word), Some(0));
         p.mmio_write(usbcmd, Width::Word, 1, &mut mem); // Run/Stop
         assert_eq!(p.mmio_read(usbsts, Width::Word), Some(0));
-        // `USBSTS` is write-1-to-clear. The bring-up's stop path writes
-        // all-ones; a plain register would read that straight back.
         p.mmio_write(usbsts, Width::Word, 0xFFFF_FFFF, &mut mem);
         assert_eq!(p.mmio_read(usbsts, Width::Word), Some(0));
-        // Root port 1 carries the on-board VIA hub, so it reports a connect;
-        // the four USB3 ports read "powered, empty".
         assert_eq!(p.mmio_read(0x6_0200_0420, Width::Word), Some(0x4002_02E1));
         assert_eq!(p.mmio_read(0x6_0200_0460, Width::Word), Some(0x2A0));
     }
 
-    /// The root-port bridge header the bootloader builds at `0x000A6E80`
-    /// onwards is written a halfword at a time; neighbours must survive.
+    /// The root-port bridge header the bootloader builds is written a
+    /// halfword at a time; neighbours must survive.
     #[test]
     fn root_port_config_is_byte_addressable() {
         let mut p = link_up_pcie();
@@ -1368,17 +1111,13 @@ mod tests {
         assert_eq!(rd(&mut p, 0x20), 0x8000_1230);
     }
 
-    /// `pcie_pme_probe` clears the root port's PME status with a
-    /// read-modify-write that sets the bit; on RW1C it must stay clear, or
-    /// `pcie_pme_irq` claims every interrupt on the line.
+    /// `pcie_pme_probe`'s read-modify-write must leave PME status clear.
     #[test]
     fn root_status_pme_is_write_one_to_clear() {
         let mut p = link_up_pcie();
         let rtsta = rd(&mut p, 0xCC);
         p.write(0xCC, Width::Word, rtsta | 1 << 16).unwrap();
         assert_eq!(rd(&mut p, 0xCC) & 1 << 16, 0);
-        // A set bit is cleared by a one and kept by a zero; the RW bits of
-        // the same word (DevCtl) still take what is written.
         p.storage.insert(0xB4, 0x0005_2C10);
         p.write(0xB4, Width::Half, 0x2C1F).unwrap();
         assert_eq!(rd(&mut p, 0xB4), 0x0005_2C1F);

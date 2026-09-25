@@ -1,5 +1,4 @@
-//! `disasm`: a flat binary, an ELF segment or an EEPROM image's bootcode
-//! through the VPU decoder.
+//! `disasm`: a flat binary, an ELF segment or an EEPROM image's bootcode through the VPU decoder.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -33,9 +32,7 @@ pub fn cmd_disasm(args: &[String]) -> Result<ExitCode> {
     let path = path.context("disasm: missing <file>")?;
     let raw = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
 
-    // ELF: locate the segment containing `vaddr` (or the entry) and disassemble
-    // from there. Flat binary: file offset 0 sits at `--base`, and `--vaddr`
-    // starts that far into it.
+    // ELF: the segment holding `vaddr` (or the entry). Flat: offset 0 is at `--base`.
     let (bytes, mut pc): (Vec<u8>, u32) = if eeprom {
         use pimu::firmware::eeprom::{EepromImage, BOOTCODE_ENTRY_OFFSET, BOOTCODE_LOAD_ADDR};
         let img = EepromImage::parse(&raw)?;

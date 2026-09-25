@@ -1,4 +1,6 @@
-//! The two PWM blocks, `0x7E20_C000` and `0x7E20_C800` (#131).
+//! The two PWM blocks, `0x7E20_C000` and `0x7E20_C800`.
+//!
+//! Registers and fields: `specs/pwm.toml` ([`crate::spec::pwm`]).
 //!
 //! Each has two channels that either pulse-width modulate a value or shift a
 //! word out bit by bit, fed from `DAT1` / `DAT2` or from the FIFO they share.
@@ -12,11 +14,9 @@
 //! the register map, the reset values the datasheet lists, and a FIFO that is
 //! always empty: a write to `FIF1` goes nowhere, `STA` answers `EMPT1`, and no
 //! channel ever runs — `STA.STA1` and `STA.STA2` stay clear, so a driver that
-//! waits for a transmission to finish is told it already has.
-//!
-//! The alternative was the catch-all stub, which answers 0 everywhere: that
-//! reads `EMPT1` clear, meaning a FIFO that is neither empty nor draining, and
-//! `RNG1` 0 rather than the 32 the block powers up with.
+//! waits for a transmission to finish is told it already has. Answering 0
+//! everywhere instead would read `EMPT1` clear — a FIFO that is neither empty
+//! nor draining — and `RNG1` 0 rather than the 32 the block powers up with.
 
 use std::collections::BTreeMap;
 
@@ -28,25 +28,20 @@ use crate::spec::pwm::{
 };
 use crate::spec::Coverage;
 
-/// Every register of the block.
 pub const COVERAGE: Coverage = Coverage {
     block: "pwm",
     decoded: &[CTL, STA, DMAC, RNG1, DAT1, FIF1, RNG2, DAT2],
 };
 
-/// The bits of `STA` a write clears rather than sets: the five error flags.
 const STA_W1C: u32 = 0x13C;
 
 pub struct Pwm {
-    /// Which of the two blocks this is, for the log.
     name: &'static str,
     storage: BTreeMap<u32, u32>,
-    /// The error flags, which are the only part of `STA` that is not derived.
     sta: u32,
 }
 
 impl Pwm {
-    /// `name` is what the machine calls this instance, `"pwm0"` or `"pwm1"`.
     pub fn new(name: &'static str) -> Pwm {
         Pwm {
             name,
@@ -70,10 +65,7 @@ impl MmioDevice for Pwm {
     fn read(&mut self, offset: u32, _width: Width) -> BusResult<u32> {
         let off = offset & !3;
         Ok(match off {
-            // An empty FIFO and two idle channels, plus whatever error flags
-            // are latched.
             STA => STA_RESET | self.sta,
-            // Write-only: a real block answers 0 here too.
             FIF1 => 0,
             _ => self.storage.get(&off).copied().unwrap_or(0),
         })
@@ -110,8 +102,6 @@ mod tests {
         p.write(off, Width::Word, value).unwrap();
     }
 
-    /// The reset values a driver reads before it writes anything: a period of
-    /// 32 on both channels, the DMA thresholds, and an empty FIFO.
     #[test]
     fn the_block_powers_up_the_way_the_datasheet_says() {
         let mut p = pwm();
@@ -122,8 +112,6 @@ mod tests {
         assert_eq!(rd(&mut p, STA), 0x2, "EMPT1, and no channel running");
     }
 
-    /// Filling the FIFO changes nothing: it stays empty, which is what lets a
-    /// driver's write loop finish rather than wait for room.
     #[test]
     fn the_fifo_takes_what_it_is_given_and_stays_empty() {
         let mut p = pwm();
@@ -136,8 +124,6 @@ mod tests {
         assert_eq!(rd(&mut p, CTL), 0x81, "the control word is kept");
     }
 
-    /// The error flags are write-1-to-clear and nothing sets them, so `STA`
-    /// never changes; a write of all ones does not set a flag either.
     #[test]
     fn a_status_write_clears_rather_than_sets() {
         let mut p = pwm();

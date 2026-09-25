@@ -1,23 +1,14 @@
 //! VPU core-control block at `0x7E00_2000`: one interrupt controller per VPU
-//! core, core 0's bank at `+0x000` and core 1's at `+0x800`. Register map:
-//! `specs/corectl.toml` ([`crate::spec::corectl`]).
+//! core, core 0's bank at `+0x000` and core 1's at `+0x800`.
 //!
-//! `start4.elf`'s entry trampoline runs on both VPU cores; they diverge on
-//! `version` bit 16. Each writes its vector base to its own bank's `VBASE`
-//! (`0x30` / `0x830`) early on.
+//! Registers and fields: `specs/corectl.toml` ([`crate::spec::corectl`]).
 //!
-//! Core 1 sleeps until a start address is written to its bank's [`WAKEUP`]
-//! (`0x834`). start4 does that itself, once, when its power manager first
-//! powers domain `0x20000` — in a Linux boot shortly after `Booting Linux`, in
-//! a firmware-only boot not at all (#72).
-//!
-//! Interrupt controller: start4's secure service `0xCEC006A6` stores a 4-bit
-//! priority/enable field per source into the words at `0x10..0x30` (core 0) /
-//! `0x810..0x830` (core 1): `word = (src >> 3) & 7`, `field = (src & 7) * 4`.
-//! A nonzero field enables the source at that priority; the vector is the
-//! interrupt number, `64 + source`, not the field.
-//! start4 enables source 64 (systimer, [`SYS_IRQ_SRC`]) at priority 1 and arms a
-//! system-timer compare as its ThreadX tick.
+//! start4's trampoline runs on both cores, which diverge on `version` bit 16;
+//! each writes its own bank's [`VBASE`]. Core 1 sleeps until start4 writes a
+//! start address to its [`WAKEUP`], which happens once a Linux boot powers
+//! domain `0x20000`. A source is enabled by storing a non-zero 4-bit priority
+//! into its [`IRQ_PRIO`] field and posted in software through
+//! [`IRQ_PENDING_BITS`]; sources 78 / 79 are the inter-core reschedule IPI.
 
 use std::collections::BTreeMap;
 
@@ -48,40 +39,15 @@ pub const COVERAGE: Coverage = Coverage {
     ],
 };
 
-// Register notes beyond what `specs/corectl.toml` records:
-//
-// * `IRQ_PRIO` — start4 numbers its sources from 64, folded back into these
-//   eight words by `(src >> 3) & 7`.
-// * `VBASE` — core 1's copy is one `CORE_STRIDE` higher like every other
-//   register in this block. `--log irqen` and the peripheral stub both show
-//   core 1 writing `0x7E002830`, not `+0x38`; with the old `0x38` guess
-//   `vbase[1]` was never populated, so core 1 could not be vectored at all.
-// * `WAKEUP` — only core 1's copy starts anything: core 0 is already running
-//   whenever firmware can write to this block.
-// * `IRQ_PENDING_BITS` — start4 drives the pending bitmask with three helpers,
-//   all of which pick the bank from a core-index argument:
-//   `0x3ED01896(src, core)` raises the source in software (`|= 1 << bit`),
-//   which is how the firmware posts an interrupt to a core, including the
-//   inter-core reschedule IPI (source 78 for core 0, 79 for core 1, both with a
-//   direct vector entry at `0x3EC3F8F4`); `0x3ED01792` is the acknowledge every
-//   ISR performs on entry; `0x3ED01980` reads one bit back.
-// * `IRQ_PENDING` — the generic per-source ISR dispatcher (`0x3EC3E9BC`) does
-//   `r2 = [r29+12]` (the bank), `r0 = [r2+4]`, `btest r0, 8`, then `or r0, 64`
-//   / 7-bit mask to get the source number, and indexes the handler table at
-//   `gp+58004` with it.
-
-/// The interrupt source start4 wires to the BCM system timer (compare channel
-/// `src - SYS_IRQ_SRC`), from `specs/systimer.toml`. Enabled via
-/// `enable_irq_source(64, 1)`.
+/// The source start4 wires to the system timer (compare channel
+/// `src - SYS_IRQ_SRC`).
 pub const SYS_IRQ_SRC: u32 = crate::spec::systimer::IRQ_VPU_C0;
 
 #[derive(Default)]
 pub struct CoreCtl {
-    /// Per core: the source being vectored and the priority it was enabled at,
-    /// not yet read by that core's dispatcher through its bank's
-    /// [`IRQ_PENDING`]. The priority is latched here because a handler may
-    /// rewrite [`IRQ_PRIO`] before it reads the register -- pi4-firmware's stray
-    /// handler does exactly that.
+    /// Per core: the source being vectored and the priority it was enabled at.
+    /// The priority is latched at delivery because a handler may rewrite
+    /// [`IRQ_PRIO`] before it reads [`IRQ_PENDING`].
     pending_src: [Option<(u32, u32)>; 2],
     storage: BTreeMap<u32, u32>,
     /// Start address last written to core 1's [`WAKEUP`], not yet acted on.
@@ -90,8 +56,6 @@ pub struct CoreCtl {
     pub vbase: [u32; 2],
     /// A write to core 0's / core 1's [`VBASE`] the core has not picked up yet.
     vbase_written: [Option<u32>; 2],
-    /// Sources newly raised in software through [`IRQ_PENDING_BITS`], as
-    /// `(core, source)`, waiting to be vectored on that core.
     sw_raised: std::collections::VecDeque<(u32, u32)>,
     /// Where [`Channel::IrqEn`] goes.
     pub log: Log,
@@ -102,10 +66,9 @@ impl CoreCtl {
         CoreCtl::default()
     }
 
-    /// Present `src` (64..127) at `core`'s [`IRQ_PENDING`] for its dispatcher to
-    /// pick up. Call it as the source is vectored, never when it is merely
-    /// queued: the register holds one value, and the dispatcher reads it only
-    /// after its entry sequence.
+    /// Present `src` (64..127) at `core`'s [`IRQ_PENDING`]. Call it as the
+    /// source is vectored, never when merely queued: the register holds one
+    /// value and is read once per entry.
     pub fn raise_source(&mut self, core: u32, src: u32) {
         let prio = self.irq_priority(core, src) as u32;
         if let Some(slot) = self.pending_src.get_mut(core as usize) {
@@ -113,28 +76,25 @@ impl CoreCtl {
         }
     }
 
-    /// Next `(core, source)` the firmware raised in software by setting a bit in
-    /// [`IRQ_PENDING_BITS`]. Real hardware asserts the line as soon as the bit
-    /// goes up; the model vectors it on the next step.
+    /// Next `(core, source)` raised in software through [`IRQ_PENDING_BITS`];
+    /// hardware asserts the line at once, the model on the next step.
     pub fn take_sw_raised(&mut self) -> Option<(u32, u32)> {
         self.sw_raised.pop_front()
     }
 
-    /// The vector base last written for `core` (0 or 1), once: the core reads
-    /// the register for every exception, so a later write moves its table.
+    /// The vector base last written for `core`, once; a later write moves the
+    /// table.
     pub fn take_vbase(&mut self, core: u32) -> Option<u32> {
         self.vbase_written.get_mut(core as usize)?.take()
     }
 
-    /// Where the firmware last told core 1 to start, once: the address written
-    /// to core 1's [`WAKEUP`] since the previous call.
+    /// Where the firmware last told core 1 to start, once.
     pub fn take_core1_wake(&mut self) -> Option<u32> {
         self.core1_wake.take()
     }
 
-    /// The 4-bit priority/enable field for interrupt source `src` (as numbered by
-    /// start4, i.e. 64.. for the first word) in `core`'s bank. 0 = disabled: a
-    /// source queued for that core waits until this is non-zero.
+    /// The 4-bit priority/enable field for source `src` (numbered from 64) in
+    /// `core`'s bank; 0 means disabled and a queued source waits.
     pub fn irq_priority(&self, core: u32, src: u32) -> u8 {
         let word = core * CORE_STRIDE + IRQ_PRIO + ((src >> 3) % IRQ_PRIO_COUNT) * IRQ_PRIO_STRIDE;
         let field = (src & 7) * 4;
@@ -145,34 +105,27 @@ impl CoreCtl {
         prio
     }
 
-    /// `core`'s delivery gate: a source enabled at this priority or below waits
-    /// until the gate drops. Zero out of reset, and no firmware the model boots
-    /// writes it.
+    /// `core`'s delivery gate: a source at this priority or below waits until
+    /// the gate drops. Zero out of reset; no modelled firmware writes it.
     fn irq_gate(&self, core: u32) -> u8 {
         let off = core * CORE_STRIDE + IRQ_GATE;
         (self.storage.get(&off).copied().unwrap_or(0) & 0xF) as u8
     }
 }
 
-/// Split a window offset into `(core, offset within that core's bank)`.
 fn bank(offset: u32) -> (u32, u32) {
     (offset / CORE_STRIDE, offset % CORE_STRIDE)
 }
 
-/// Index of the array element `off` addresses, for an array register at
-/// `base` with `count` elements `stride` apart.
 fn element(off: u32, base: u32, count: u32, stride: u32) -> Option<u32> {
     let rel = off.checked_sub(base)?;
     (rel % stride == 0 && rel / stride < count).then_some(rel / stride)
 }
 
-/// Whether a read of `off` (within one bank) answers the block tag: the hole
-/// before [`IRQ_PENDING_BITS`] and everything past the last register.
 fn tag_read(off: u32) -> bool {
     off == 0x3C || (IRQ_PENDING_BITS_SET..=0xFF).contains(&off)
 }
 
-/// Decode a write-only alias offset into `(which alias, word)`.
 fn alias_word(off: u32) -> Option<(u32, u32)> {
     for base in [IRQ_PENDING_BITS_SET, IRQ_PENDING_BITS_CLR] {
         if let Some(word) = element(off, base, IRQ_PENDING_BITS_COUNT, IRQ_PENDING_BITS_STRIDE) {
@@ -182,8 +135,6 @@ fn alias_word(off: u32) -> Option<(u32, u32)> {
     None
 }
 
-/// Decode a pending-bitmask offset into `(core, word)`; `word` 0 covers sources
-/// 64..95 and word 1 sources 96..127.
 fn pending_word(offset: u32) -> Option<(u32, u32)> {
     let (core, off) = bank(offset);
     let word = element(
@@ -203,41 +154,29 @@ impl MmioDevice for CoreCtl {
     fn read(&mut self, offset: u32, _width: Width) -> BusResult<u32> {
         let (core, off) = bank(offset);
         if off == IRQ_PENDING {
-            // Read-to-clear: the dispatcher reads this once per entry, then the
-            // handler acks the device itself. It runs on both cores and reaches
-            // its own bank through a per-core pointer, so each bank has its own.
+            // Read-to-clear, once per entry; each bank has its own.
             if let Some((src, prio)) = self
                 .pending_src
                 .get_mut(core as usize)
                 .and_then(Option::take)
             {
-                // The interrupt number and the priority it was enabled at, in
-                // both half-words: a board answers the same value twice.
                 let half = ((prio << IRQ_PENDING_PRIO_SHIFT) & IRQ_PENDING_PRIO_MASK)
                     | ((src << IRQ_PENDING_SOURCE_SHIFT) & IRQ_PENDING_SOURCE_MASK);
                 return Ok(half | (half << 16));
             }
         }
         if off == IRQ_PROFILE {
-            // Whatever it profiles, a board's VPU reads 0 from it after any
-            // write and at handler entry; the value it holds before that is
-            // not reproducible and nothing here uses it.
+            // A board's VPU reads 0 here after any write and at handler entry.
             return Ok(0);
         }
         if off == VBASE || tag_read(off) {
-            // `VBASE` does not read back at all, and the words past the last
-            // register answer the block's own tag, the way `GPSET` answers
-            // `"gpio"`.
+            // `VBASE` does not read back; the rest answers the block tag.
             return Ok(if off == VBASE { 0 } else { TAG });
         }
         Ok(self.storage.get(&offset).copied().unwrap_or(0))
     }
 
     fn write(&mut self, offset: u32, _width: Width, value: u32) -> BusResult<()> {
-        // `--log irqen`: decode writes to the interrupt-priority words back
-        // into the `enable_irq_source(src, prio)` calls that produced them, for
-        // core 0 (`0x10..0x30`) and core 1 (`0x810..0x830`). Which sources core 1
-        // enables is how we find the inter-core doorbell's interrupt number.
         let (core, off) = bank(offset);
         let prio_word = element(off, IRQ_PRIO, IRQ_PRIO_COUNT, IRQ_PRIO_STRIDE);
         if let (true, Some(word)) = (self.log.on(Channel::IrqEn), prio_word) {
@@ -254,9 +193,6 @@ impl MmioDevice for CoreCtl {
                 }
             }
         }
-        // The write-only aliases set or clear bits of the pending word rather
-        // than replacing it; fold them in and let the plain path below see the
-        // result.
         let (offset, value) = match alias_word(off) {
             Some((base, word)) => {
                 let target = core * CORE_STRIDE + IRQ_PENDING_BITS + word * IRQ_PENDING_BITS_STRIDE;
@@ -271,9 +207,6 @@ impl MmioDevice for CoreCtl {
             None => (offset, value),
         };
         let (core, off) = bank(offset);
-        // A 0 -> 1 transition in a pending word is the firmware raising that
-        // source on that core; queue it for delivery. Clearing bits is the
-        // ISR's acknowledge and needs no action.
         if let Some((core, word)) = pending_word(offset) {
             let prev = self.storage.get(&offset).copied().unwrap_or(0);
             for bit in 0..32 {
@@ -286,10 +219,8 @@ impl MmioDevice for CoreCtl {
         }
         let value = match off {
             WAKEUP => value & (WAKEUP_ADDR_MASK << WAKEUP_ADDR_SHIFT),
-            // The low nine bits are not stored: a vector table that is not
-            // 512-byte aligned is fetched from the address below it, and a
-            // firmware that gets this wrong takes no interrupt at all while
-            // every register it can read says it should.
+            // The low nine bits are dropped: an unaligned table is fetched
+            // from the address below it, and no interrupt is ever taken.
             VBASE => value & VBASE_ADDR_MASK,
             _ => value,
         };
@@ -339,11 +270,8 @@ mod tests {
 
     #[test]
     fn vbase_keeps_only_the_aligned_address() {
-        // `IC0_VADDR_MASK` is 0xFFFFFE00, so a table that is not 512-byte
-        // aligned is fetched from the address below it. A firmware that gets
-        // this wrong takes no interrupt at all, with every register it can
-        // read saying it should: `pi4-firmware` sat at 0xFEC2B7C0 and was dead
-        // until it moved to 0xFEC2A000.
+        // Only bits 31:9 are kept, so an unaligned table silently takes no
+        // interrupt at all while every readable register says it should.
         let mut c = CoreCtl::new();
         c.write(VBASE, Width::Word, 0xFEC2_B7C0).unwrap();
         assert_eq!(c.take_vbase(0), Some(0xFEC2_B600));
@@ -353,14 +281,12 @@ mod tests {
 
     #[test]
     fn a_vectored_source_reads_back_with_its_priority_in_both_halves() {
-        // Raspberry Pi 4B d03115, read from inside a handler: source 71 at
-        // priority 1 gives 0x01470147, at priority 7 0x07470747, and source 96
-        // at priority 1 gives 0x01600160.
+        // Raspberry Pi 4B d03115, from inside a handler: source 71 at priority
+        // 1 gives `0x01470147`, at priority 7 `0x07470747`.
         let mut c = CoreCtl::new();
         c.write(IRQ_PRIO, Width::Word, 1 << 28).unwrap();
         c.raise_source(0, 71);
         assert_eq!(c.read(IRQ_PENDING, Width::Word).unwrap(), 0x0147_0147);
-        // Read to clear: the dispatcher sees it once.
         assert_eq!(c.read(IRQ_PENDING, Width::Word).unwrap(), 0);
 
         c.write(IRQ_PRIO, Width::Word, 7 << 28).unwrap();
@@ -374,8 +300,6 @@ mod tests {
 
     #[test]
     fn the_latched_priority_survives_a_handler_rewriting_irq_prio() {
-        // pi4-firmware's stray handler rewrites the priority words before
-        // anything reads IRQ_PENDING; hardware latches at delivery.
         let mut c = CoreCtl::new();
         c.write(IRQ_PRIO, Width::Word, 5 << 28).unwrap();
         c.raise_source(0, 71);
@@ -395,8 +319,7 @@ mod tests {
     #[test]
     fn the_write_only_aliases_set_and_clear_the_pending_word() {
         // Raspberry Pi 4B d03115: `+0x48 <- 0x80` makes `+0x40` read `0x80`,
-        // and `+0x50 <- 0x80` puts it back to 0, with the raw source lines
-        // untouched either way.
+        // and `+0x50 <- 0x80` puts it back to 0.
         let mut c = CoreCtl::new();
         c.write(IRQ_PENDING_BITS_SET, Width::Word, 0x80).unwrap();
         assert_eq!(c.read(IRQ_PENDING_BITS, Width::Word).unwrap(), 0x80);
@@ -443,9 +366,8 @@ mod tests {
 
     #[test]
     fn the_gate_holds_a_source_until_it_drops() {
-        // Raspberry Pi 4B d03115: with `IRQ_GATE` at 0xf a source enabled at
-        // priority 1 and forced stayed undelivered, and went in as soon as the
-        // gate went back to 0.
+        // Raspberry Pi 4B d03115: a priority-1 source stays undelivered while
+        // `IRQ_GATE` is `0xf`, and goes in when the gate drops.
         let mut c = CoreCtl::new();
         c.write(IRQ_PRIO, Width::Word, 1).unwrap();
         assert_eq!(c.irq_priority(0, SYS_IRQ_SRC), 1);
@@ -458,8 +380,8 @@ mod tests {
 
     #[test]
     fn vbase_does_not_read_back() {
-        // Raspberry Pi 4B d03115: the register reads 0 while the core is
-        // demonstrably vectoring through the table last written to it.
+        // Raspberry Pi 4B d03115: reads 0 while the core vectors through the
+        // table last written.
         let mut c = CoreCtl::new();
         c.write(VBASE, Width::Word, 0xFEC2_A000).unwrap();
         assert_eq!(c.read(VBASE, Width::Word).unwrap(), 0);
@@ -469,8 +391,6 @@ mod tests {
     #[test]
     fn nothing_else_in_the_block_starts_core_1() {
         let mut c = CoreCtl::new();
-        // Core 0's own copy, and the priority words the model used to guess
-        // from: start4 writes 0x0100_1000 to IRQ_PRIO word 1 in every boot.
         c.write(WAKEUP, Width::Word, 0xFEC0_0200).unwrap();
         c.write(IRQ_PRIO + IRQ_PRIO_STRIDE, Width::Word, 0x0100_1000)
             .unwrap();

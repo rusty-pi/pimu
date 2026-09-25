@@ -1,39 +1,19 @@
 //! `boot --gencmd`: a `vcgencmd` round trip over VCHIQ, driven from here.
 //!
-//! VCHIQ's ARM side is normally the kernel's `bcm2835_vchiq`, but it only
-//! *connects* when a userspace client opens `/dev/vchiq` — `vchiq_probe` hands
-//! the firmware the slot area and stops there, and the keepalive thread that
-//! sends `CONNECT` is created from `vchiq_platform_conn_state_changed`, after
-//! something else has connected. There is no userspace in this bench, so
-//! nothing here would ever exercise the firmware's side of the protocol.
+//! The kernel's `bcm2835_vchiq` only *connects* once a userspace client opens
+//! `/dev/vchiq`, and there is no userspace in this bench — so this harness is
+//! that client: it lays out a slot area of its own as `vchiq_init_slots` does,
+//! hands it over through the `VCHIQ_INIT` property tag, and speaks the protocol
+//! (`CONNECT`, `OPEN` of `GCMD`, a `DATA` per command, `CLOSE`), polling the
+//! shared area for answers rather than taking them off the doorbell.
 //!
-//! This harness is that client. It lays out a slot area of its own the way
-//! `vchiq_init_slots` and `vchiq_init_state` lay out the kernel's, hands it to
-//! the firmware through the `VCHIQ_INIT` property tag, and then speaks the
-//! protocol: `CONNECT`, `OPEN` of the `GCMD` service, a `DATA` message per
-//! command, and `CLOSE`. Its own area is why it can run alongside a booted
-//! Linux: the kernel's slot zero is left exactly as its probe left it, and the
-//! firmware answers whichever area it was handed last.
+//! **Run it with the ARM parked** (`--sd firmware/sd-halt.img`, or a boot
+//! stopped after a kernel panic): handing the area over posts a property
+//! request, and a live kernel's `bcm2835-mbox` would take our reply as its own
+//! and oops in `complete`. `--mbox-property` has the same hazard.
 //!
-//! What it does *not* stand in for is the kernel's slot handler thread: it
-//! arms a `remote_event` before each wait and reads doorbell 0 afterwards, the
-//! way `remote_event_wait` and `vchiq_doorbell_irq` do, so the firmware's
-//! "ring the bell only if the peer is waiting" branch is taken — but it finds
-//! the answer by polling the shared area, not off the interrupt.
-//!
-//! **Run it with the ARM parked** — `--sd firmware/sd-halt.img`, the card
-//! `--mbox-property` is used with, or a boot stopped after a kernel panic.
-//! Handing the slot area over means posting a property request, and a live
-//! kernel's `bcm2835-mbox` takes the reply to *our* buffer as the reply to
-//! whatever it had outstanding: the next reply then reaches
-//! `response_callback` with no request waiting, and the kernel oopses in
-//! `complete`. That is the hazard `--mbox-property` has always had, and the
-//! same answer.
-//!
-//! Layout and protocol follow `drivers/staging/vc04_services/interface/
-//! vchiq_arm/vchiq_core.{c,h}` on `rpi-6.12.y`, and the message format of the
-//! `GCMD` service `interface/vmcs_host/vc_vchi_gencmd.c` in
-//! `raspberrypi/userland`.
+//! Layout follows `vchiq_arm/vchiq_core.{c,h}` on `rpi-6.12.y`, the `GCMD`
+//! message format `vmcs_host/vc_vchi_gencmd.c` in `raspberrypi/userland`.
 
 use anyhow::{bail, Context, Result};
 
@@ -42,18 +22,14 @@ use pimu::emulator::{Emulator, RunLimits};
 
 use crate::mbox::{mbox_property_exchange, MboxRequest};
 
-/// Where the harness builds its slot area: clear of the kernel, the device
-/// tree, start4's own image and the `--mbox-property` buffer at `0x1000_0000`.
+/// Clear of the kernel, the device tree, start4's image and the `--mbox-property` buffer.
 const SLOT_AREA: u32 = 0x1010_0000;
-/// The uncached alias `/soc`'s `dma-ranges` put the ARM's coherent allocations
-/// on, which is what `vchiq_platform_init` hands over as `channelbase`.
+/// The uncached alias `vchiq_platform_init` hands over as `channelbase`.
 const BUS_ALIAS: u32 = 0xC000_0000;
 
 const SLOT_SIZE: u32 = 4096;
 const MAX_SLOTS_PER_SIDE: u32 = 64;
-/// `VCHIQ_SLOT_ZERO_SLOTS`: `sizeof(struct vchiq_slot_zero)` rounded up.
 const ZERO_SLOTS: u32 = 1;
-/// `TOTAL_SLOTS` in `vchiq_arm.c`.
 const TOTAL_SLOTS: u32 = ZERO_SLOTS + 2 * 32;
 
 const MAGIC: u32 = 0x5643_4849;
@@ -97,13 +73,10 @@ const PORT_MASK: u32 = 0xfff;
 /// `VCHIQ_MAKE_FOURCC('G', 'C', 'M', 'D')` and `VC_GENCMD_VER`.
 const FOURCC_GCMD: u32 = u32::from_be_bytes(*b"GCMD");
 const GCMD_VERSION: u32 = 1;
-/// The port this harness opens the service from, and the client id it claims.
-/// Both are the client's to choose; `vchiq_open_service_internal` passes the
-/// instance pointer as the id.
+/// The client's to choose; `vchiq_open_service_internal` passes the instance pointer as the id.
 const LOCAL_PORT: u32 = 5;
 const CLIENT_ID: u32 = 0x1234;
 
-/// The doorbells, in the ARM's view.
 const BELL0: u32 = 0x7e00_b840;
 
 fn stride(size: u32) -> u32 {
@@ -114,10 +87,8 @@ fn make_msgid(ty: u32, src: u32, dst: u32) -> u32 {
     ty << TYPE_SHIFT | src << PORT_SHIFT | dst
 }
 
-/// The harness's side of one slot area.
 struct Slave {
-    /// Where slot zero is, in the VPU's uncached view -- the same addresses the
-    /// firmware uses, which is what the model maps DRAM at.
+    /// Slot zero in the VPU's uncached view — the addresses the firmware uses.
     base: u32,
     tx_pos: u32,
     tx_slot: u32,
@@ -127,7 +98,6 @@ struct Slave {
     rx_index: u32,
 }
 
-/// One message read out of the master's stream.
 struct Message {
     msgid: u32,
     size: u32,
@@ -145,9 +115,7 @@ impl Message {
 }
 
 impl Slave {
-    /// Lay out slot zero and bring the slave side up, as `vchiq_init_slots`
-    /// and `vchiq_init_state` do, and leave the master's side untouched for the
-    /// firmware to fill in.
+    /// Lay out slot zero as `vchiq_init_slots` does, leaving the master's side for the firmware.
     fn new(emu: &mut Emulator, base: u32) -> Result<Slave> {
         let mut w = |at: u32, v: u32| -> Result<()> {
             emu.machine
@@ -207,10 +175,7 @@ impl Slave {
         let _ = emu.machine.store(at, Width::Word, value);
     }
 
-    /// Queue one message into the slave's own slots and wake the firmware:
-    /// `queue_message` without the quotas. The firmware polls, so the doorbell
-    /// is not rung -- `master.trigger.armed` is left clear, which is what says
-    /// so.
+    /// `queue_message` without the quotas. The firmware polls, so no doorbell is rung.
     fn send(&mut self, emu: &mut Emulator, msgid: u32, payload: &[u8]) -> Result<()> {
         let space = stride(payload.len() as u32);
         let left = SLOT_SIZE - (self.tx_pos & (SLOT_SIZE - 1));
@@ -238,9 +203,7 @@ impl Slave {
         }
         self.tx_pos += space;
         self.write(emu, self.base + SLAVE + TX_POS, self.tx_pos);
-        // `remote_event_signal`: set the receiver's `fired`, ring its bell if
-        // it is waiting. The firmware never arms, so this only ever sets the
-        // flag -- and that is the point of checking rather than ringing blind.
+        // `remote_event_signal`. The firmware never arms, so check rather than ring blind.
         let event = self.base + MASTER + TRIGGER;
         self.write(emu, event + FIRED, 1);
         if self.read(emu, event + ARMED) != 0 {
@@ -249,7 +212,6 @@ impl Slave {
         Ok(())
     }
 
-    /// Take the next message out of the master's stream, if one is there.
     fn receive(&mut self, emu: &mut Emulator) -> Option<Message> {
         let tx_pos = self.read(emu, self.base + MASTER + TX_POS);
         while self.rx_pos != tx_pos {
@@ -285,7 +247,6 @@ impl Slave {
         None
     }
 
-    /// Hand one of the master's slots back, as `release_slot` does.
     fn release(&mut self, emu: &mut Emulator, index: u32) {
         let master = self.base + MASTER;
         let recycle = self.read(emu, master + SLOT_QUEUE_RECYCLE);
@@ -296,12 +257,8 @@ impl Slave {
         self.write(emu, event + FIRED, 1);
     }
 
-    /// Wait for a message of one type, running the machine in slices.
-    ///
-    /// `remote_event_wait`'s half of the handshake is here: `armed` is set
-    /// before the wait so the firmware's `signal` takes its "ring the bell"
-    /// branch, and doorbell 0 is read and cleared afterwards the way
-    /// `vchiq_doorbell_irq` acks it.
+    /// Wait for a message of one type, running the machine in slices. `armed` is
+    /// set first so the firmware's `signal` takes its "ring the bell" branch.
     fn wait(
         &mut self,
         emu: &mut Emulator,
@@ -340,8 +297,7 @@ impl Slave {
                 bail!("waiting for {what}: nothing came back in {budget:?}");
             }
             emu.run(&slice);
-            // What the ARM's doorbell handler does with a bell that was rung:
-            // read it, which clears it and drops the line.
+            // Reading the bell clears it and drops the line, as the ARM handler does.
             let _ = emu.machine.load(BELL0, Width::Word);
         }
     }
@@ -353,8 +309,7 @@ pub fn gencmd_exchange(emu: &mut Emulator, limits: &RunLimits, commands: &[Strin
     let base = BUS_ALIAS | SLOT_AREA;
     let mut slave = Slave::new(emu, base).context("laying out slot zero")?;
 
-    // Hand the area over the way `vchiq_platform_init` does, and let the
-    // firmware take it before anything is queued.
+    // Hand the area over before anything is queued.
     let tag = (0x0004_8010, Some(4), vec![base]);
     mbox_property_exchange(emu, limits, &MboxRequest::Tags(vec![tag]))?;
     if emu

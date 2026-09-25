@@ -1,33 +1,15 @@
-//! Options from a file, and `--option=value` (#47).
+//! Options from a file, and `--option=value`.
 //!
-//! Every command-line option can come from a file instead:
-//!
-//! ```text
-//! pimu boot --eeprom firmware/pieeprom.bin --max-wall=600 --stdin
-//! pimu boot --config=<(echo '{"eeprom": "firmware/pieeprom.bin", "max-wall": 600, "stdin": true}')
-//! ```
-//!
-//! The file is a JSON object, or a TOML table. Each key is an option's long
-//! name without the dashes (a one-letter key is the short form, `"v": true` is
-//! `-v`), and the value says how it is given:
-//!
-//! * `true` — a flag; `false` and `null` leave it out
-//! * a string or a number — the option's value
-//! * an array — the option once per element, for the repeatable ones
-//!   (`"bootconf": ["HTTP_HOST=x", "HTTP_PORT=80"]`); an element that is itself
-//!   an array is one option with several values (`"send-after": [["/ # ",
-//!   "uname\n"]]`)
-//! * `"file"` — the positional argument, e.g. a scenario for `run`
-//!
-//! The file expands in place, into exactly the tokens it stands for, so an
-//! option given after `--config` on the command line overrides the file's, and a
-//! repeatable one adds to it. There is no JSON library among the dependencies,
-//! and a config file needs little of JSON, so [`parse_json`] is a small one.
+//! `--config <file>` expands in place into the tokens the file stands for, so an
+//! option after it on the command line wins and a repeatable one adds to it. The
+//! file is a JSON object or a TOML table keyed by long option name without the
+//! dashes (a one-letter key is the short form): `true` is a flag, a string or
+//! number is the value, an array repeats the option, a nested array gives one
+//! option several values, and `"file"` is the positional argument.
 
 use anyhow::{bail, Context, Result};
 
-/// A parsed JSON or TOML value. Numbers keep their text: they only ever become
-/// command-line arguments again.
+/// A parsed JSON or TOML value. Numbers keep their text: they only ever become arguments again.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Null,
@@ -39,8 +21,7 @@ pub enum Value {
     Obj(Vec<(String, Value)>),
 }
 
-/// The command line with every `--option=value` split in two and every
-/// `--config <file>` replaced by the options in the file.
+/// The command line with `--option=value` split in two and `--config <file>` expanded.
 pub fn expand(args: &[String]) -> Result<Vec<String>> {
     let mut out = Vec::with_capacity(args.len());
     let mut it = split_equals(args).into_iter();
@@ -58,8 +39,7 @@ pub fn expand(args: &[String]) -> Result<Vec<String>> {
     Ok(out)
 }
 
-/// `--option=value` is `--option value`. Only long options, and only at the
-/// first `=`: `--bootconf=HTTP_HOST=x` is `--bootconf HTTP_HOST=x`.
+/// Long options only, split at the first `=`: `--bootconf=HTTP_HOST=x` keeps the second.
 fn split_equals(args: &[String]) -> Vec<String> {
     let mut out = Vec::with_capacity(args.len());
     for a in args {
@@ -74,7 +54,6 @@ fn split_equals(args: &[String]) -> Vec<String> {
     out
 }
 
-/// JSON if it parses as JSON, TOML otherwise.
 fn parse(text: &str) -> Result<Value> {
     match parse_json(text) {
         Ok(v) => Ok(v),
@@ -99,7 +78,6 @@ fn from_toml(v: toml::Value) -> Value {
     }
 }
 
-/// The command-line tokens a config object stands for.
 fn to_args(v: &Value) -> Result<Vec<String>> {
     let Value::Obj(entries) = v else {
         bail!("the file must hold one object of options");
@@ -156,7 +134,7 @@ fn scalar(key: &str, v: &Value) -> Result<String> {
     }
 }
 
-/// Parse a JSON document (RFC 8259) into a [`Value`].
+/// Parse a JSON document (RFC 8259) into a [`Value`]; there is no JSON library among the dependencies.
 pub fn parse_json(text: &str) -> Result<Value> {
     let mut p = Json {
         s: text.as_bytes(),
@@ -323,7 +301,6 @@ impl Json<'_> {
                     }
                 }
                 _ => {
-                    // Copy the rest of this UTF-8 character through unchanged.
                     let start = self.i - 1;
                     while self.s.get(self.i).is_some_and(|&b| b & 0xC0 == 0x80) {
                         self.i += 1;

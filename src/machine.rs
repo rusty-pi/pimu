@@ -14,18 +14,12 @@ use crate::soc::bcm2711 as map;
 
 /// Which UART the harness captures as "the console".
 ///
-/// A board has one serial header, GPIO 14 and 15, and two blocks that can
-/// drive it: the PL011 on ALT0 and the mini-UART on ALT5. Which one it is
-/// changes inside a single boot — the firmware logs over the PL011 and then
-/// hands the pins to the mini-UART at the ARM handover on a card that leaves
-/// Bluetooth enabled, because the base device tree keeps `serial0 = &uart1`
-/// (#124). [`Console::Pins`] follows that, and is what a machine booting
-/// firmware wants; the other two are for a VPU payload that writes a UART's
-/// registers without setting a pin up first.
+/// The serial header is GPIO 14/15, driven by the PL011 on ALT0 and the
+/// mini-UART on ALT5, and a single boot can move between them. [`Console::Pins`]
+/// follows the pins and is what a firmware boot wants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Console {
-    /// Whichever block GPIO 14/15 carry, the PL011 until something says
-    /// otherwise.
+    /// Whichever block GPIO 14/15 carry; the PL011 until something says otherwise.
     #[default]
     Pins,
     Pl011,
@@ -34,257 +28,175 @@ pub enum Console {
 
 pub struct Machine {
     pub ram: Ram,
-    /// Experimental: a real BCM2711 maskROM image mapped read-only at
-    /// `0x6000_0000` (`--maskrom`). When set, reads and instruction fetches in
-    /// `[base, base+len)` are served from these bytes instead of the DRAM alias,
-    /// so the VPU can execute the maskROM from its reset vector. Writes and every
-    /// address outside the range fall through to normal decoding, so the ROM's
-    /// scratch (above the code region) and its staging at `0x8000_0000` still
-    /// land in RAM. `None` on every normal boot — see `firmware::bootrom`.
+    /// A real BCM2711 maskROM image overlaid read-only at `0x6000_0000`
+    /// (`--maskrom`). Only the code+rodata region: the ROM's scratch above it and
+    /// its staging at `0x8000_0000` must stay writable DRAM.
     maskrom: Option<(u32, u32, Vec<u8>)>,
-    /// The L2 the bootcode runs out of, until its flush ([`crate::l2`], #70).
+    /// The L2 the bootcode runs out of, until its flush ([`crate::l2`]).
     pub l2: crate::l2::CacheAsRam,
     pub systimer: SysTimer,
     pub uart0: Pl011,
     pub aux: Aux,
-    /// The ARM property mailbox (`0x7E00_B880`). Idle during a normal boot —
-    /// the firmware only services it once an ARM is running.
+    /// The ARM property mailbox, idle until an ARM is running.
     pub mbox: Mbox,
-    /// The four ARM <-> VideoCore doorbells (`0x7E00_B840`, and the VPU's view
-    /// of them at `0x7E00_B940`): VCHIQ's wake path. Carved out of the ARM
-    /// control block's window and the mailbox's, so decoded ahead of both.
+    /// The four ARM <-> VideoCore doorbells, VCHIQ's wake path. Their apertures sit
+    /// inside the mailbox and ARM-control windows, so they are decoded ahead of both.
     pub bell: Bell,
-    /// The ARM control block below the mailboxes (`0x7E00_B000`): where
-    /// `arm_loader` releases the ARM.
     pub armctrl: ArmCtrl,
-    /// ARM-only blocks, reached from [`crate::arm`], never from the VPU: the
-    /// ARM-local block (`0xFF80_0000`) and the GIC-400 (`0xFF84_0000`).
+    /// Reached from [`crate::arm`], never from the VPU.
     pub arm_local: ArmLocal,
     pub gic: Gic,
-    /// Inter-core sync block (`0x7E00_0000`) — stubbed as auto-acknowledged.
     pub mcsync: McSync,
-    /// VPU core-control block (`0x7E00_2000`) — brings up VPU core 1.
     pub corectl: CoreCtl,
-    /// Power-management block (`0x7E10_0000`) — SoC reset / watchdog.
     pub pm: Pm,
-    /// Clock manager (`0x7E10_1000`) — PLL locks always report ready.
     pub clockman: ClockManager,
-    /// VPU clock block (`0x7D5D_0000`) — PLLs + frequency monitors.
     pub clkmon: ClkMon,
-    /// AVS monitor (`0x7D5D_2000`) — temperature and rail monitors.
     pub avs: Avs,
-    /// PVT monitors (`0x7D5D_8000`) — eighteen per-channel process / voltage /
-    /// temperature sensors, each gated on a magic at `+0x10`.
     pub pvt: crate::periph::Pvt,
-    /// AXI async slave bridges (`0x7E00_A000`) — the stop/acknowledge handshake
-    /// start4 runs before gating the V3D / ISP / H264 power domains.
+    /// The stop/acknowledge handshake start4 runs before gating the V3D / ISP /
+    /// H264 power domains.
     pub asb: Asb,
-    /// PCIe root complex (`0x7D50_0000`). The VL805 xHCI controller behind it
-    /// is [`crate::periph::Vl805`], reached through this block's
-    /// `EXT_CFG_DATA` and its outbound window.
+    /// PCIe root complex. The VL805 xHCI behind it is [`crate::periph::Vl805`],
+    /// reached through `EXT_CFG_DATA` and the outbound window.
     pub pcie: crate::periph::pcie::Pcie,
-    /// GENET v5 Ethernet MAC (`0x7D58_0000`) with the BCM54213PE PHY on its
-    /// MDIO bus; see [`crate::periph::genet`].
+    /// GENET v5 Ethernet MAC with a BCM54213PE PHY on its MDIO bus.
     pub genet: crate::periph::Genet,
     /// What GENET's cable is plugged into, if anything ([`Machine::attach_net`]).
     pub net: Option<Box<dyn crate::net::NetBackend>>,
-    /// Hardware RNG (`0x7E10_4000`), an RNG200 — start4 and Linux both read it.
     pub rng: Rng,
-    /// VCE vector/codec engine (`0x7F10_0000`) — the codec licence check
-    /// launches a program on it and waits for interrupt source 68.
+    /// The codec licence check launches a program on it and waits for source 68.
     pub vce: Vce,
-    /// BSC instance 0 (`0x7E20_5000`) — nothing attached; probes go unACKed.
     pub bsc0: Bsc,
-    /// The GPIO block (`0x7E20_0000`): pin functions, levels and pulls, and
-    /// the mux word [`Self::route_sd_slot`] follows.
     pub gpio: Gpio,
-    /// SPI0 master (`0x7E20_4000`) — minimal model for the EEPROM bootloader.
     pub spi0: Spi0,
-    /// `PACTL_CS` (`0x7E20_4E00`): which peripheral behind an ORed interrupt
-    /// line is the one asking. Nothing here raises one, so it reads 0.
     pub pactl: Pactl,
-    /// The two PWM blocks (`0x7E20_C000`, `0x7E20_C800`) and the PCM / I²S
-    /// interface (`0x7E20_3000`): the register maps, with no output and empty
-    /// FIFOs. No boot programs any of them.
+    /// Register maps only, with no output and empty FIFOs; no boot programs them.
     pub pwm0: Pwm,
     pub pwm1: Pwm,
     pub pcm: Pcm,
-    /// BSC / I²C master at `0x7E20_5E00` + the board PMIC — start4 reads the
-    /// PMIC over this on its way to bringing up the "external" GPIO pins.
+    /// The I²C master the board PMICs are on.
     pub bsc_pmic: Bsc,
-    /// The two HDMI connectors' DDC I²C masters, with no monitor on either.
+    /// The HDMI connectors' DDC masters, with no monitor on either.
     pub hdmi_ddc0: HdmiDdc,
     pub hdmi_ddc1: HdmiDdc,
-    /// The two HDMI controllers' core registers — the packet RAM start4
-    /// sends AV mute through when it stops its display (#61).
+    /// The packet RAM start4 sends AV mute through when it stops its display.
     pub hdmi0: Hdmi,
     pub hdmi1: Hdmi,
-    /// Which board this is and which BCM2711 stepping it carries. Changed only
-    /// through [`Machine::set_board`], which keeps OTP row 30 in step.
+    /// Which board and BCM2711 stepping this is. Changed only through
+    /// [`Machine::set_board`], which keeps OTP row 30 in step.
     board: crate::soc::Board,
-    /// Always-on config / OTP engine (`0x7E20_F000`) — board identity reads.
     pub config_otp: ConfigOtp,
-    /// LPDDR4 controller + PHY (`0x7DC0_0000`, below the peripheral window) —
-    /// the `init_sdram_*` training path drives this.
+    /// LPDDR4 controller + PHY, driven by the `init_sdram_*` path.
     pub sdramc: Sdramc,
-    /// Legacy SDRAM-controller register interface (`0x7E00_1000`) — DRAM timing
-    /// table plus lock/ready bits polled after PHY training.
+    /// Timing table plus the lock/ready bits polled after PHY training.
     pub sdc: Sdc,
-    /// Boot-info handoff doorbell (`0x7EE0_2000`).
     pub bootbox: BootBox,
-    /// Scalar VPU accesses that are not naturally aligned, which the model
-    /// performs and the core cannot (`--check-alignment`).
+    /// Unaligned scalar VPU accesses, which the model performs and the core
+    /// cannot (`--check-alignment`).
     pub alignment: crate::align::Alignment,
-    /// Legacy DMA controller (`0x7E00_7000`) — start4's bulk memory copies.
     pub dma_legacy: crate::periph::dma_legacy::DmaLegacy,
-    /// The `0x7EE0_4100` DMA controller (channel 15 at `0x7EE0_5000`).
+    /// The `0x7EE0_4100` controller; its channel 15 is at `0x7EE0_5000`.
     pub dma_vpu: crate::periph::dma_legacy::DmaLegacy,
-    /// DMA4 channel (`0x7E00_7B00`) — the bootloader scrubs / moves DRAM through
-    /// it; [`Machine::store`] runs the control-block chain after a `CS` write.
+    /// [`Machine::store`] runs its control-block chain after a `CS` write.
     pub dma4: Dma4,
-    /// The legacy EMMC controller (`0x7E30_0000`) — the WiFi chip's SDIO
-    /// host, and the SD host of 2020-era bootcode. The SDIO side of the
-    /// CYW43455 is on its bus, except while [`Self::sd_slot_legacy`] has the
-    /// card there instead.
+    /// The CYW43455's SDIO host, and the SD host of 2020-era bootcode while
+    /// [`Self::sd_slot_legacy`] routes the card there.
     pub emmc: Emmc2,
-    /// The WiFi chip, parked while the SD slot has its host
-    /// ([`Self::route_sd_slot`]).
+    /// The WiFi chip, parked while the SD slot has its host.
     wifi: Option<crate::periph::sdcard::SdCard>,
-    /// Bit 1 of the SD-slot mux word at GPIO `+0xD0` (`0x7E20_00D0`): the card
-    /// is routed to the legacy EMMC instead of EMMC2 (#66). See
-    /// [`Self::route_sd_slot`].
+    /// Bit 1 of the SD-slot mux word: the card is on the legacy EMMC rather than
+    /// EMMC2. See [`Self::route_sd_slot`].
     pub sd_slot_legacy: bool,
-    /// EMMC2 SD host controller (`0x7E34_0000`).
     pub emmc2: Emmc2,
-    /// HVS (`0x7E40_0000`) — display frame-swap registers auto-complete.
     pub hvs: Hvs,
-    /// The control block at `0x7E80_8000` — the power acknowledge start4's USB
-    /// power-on waits for.
+    /// Carries the power acknowledge start4's USB power-on waits for.
     pub usbr: Usbr,
-    /// DWC2 USB OTG controller (`0x7E98_0000`) — reset when USB power comes on.
     pub dwc2: Dwc2,
-    /// The BCM2711's own xHCI (`0x7E9C_0000`) — the USB-C port as a USB 2.0
-    /// host, which `--otg` plugs a stick into (#113).
+    /// The USB-C port as a USB 2.0 host, which `--otg` plugs a stick into.
     pub xhci_otg: XhciOtg,
-    /// Catch-all for the rest of the peripheral window.
     pub periph_stub: StubRegion,
-    /// The Bluetooth modem on the PL011. It hears the port only while the
-    /// serial header is on the mini-UART, which is where a board with
-    /// Bluetooth enabled puts it: the PL011's pins are then GPIO 30..33, the
-    /// modem's (#124).
+    /// The Bluetooth modem. It hears the port only while the serial header is on
+    /// the mini-UART, since the PL011's pins are then GPIO 30..33, the modem's.
     pub bluetooth: crate::periph::bluetooth::BtModem,
     pub console: Console,
-    /// Which UART [`Self::take_console_output`] last drained, so a change of
-    /// pins is reported once.
+    /// Which UART [`Self::take_console_output`] last drained, so a change of pins
+    /// is reported once.
     console_routed: Console,
 
-    /// Total peripheral accesses that missed a real device (fell through to the
-    /// stub). A quick health signal for how much firmware behaviour is faked.
+    /// Peripheral accesses that missed a real device: a health signal for how
+    /// much firmware behaviour is faked.
     pub stub_hits: u64,
     pub bus_errors: u64,
-    /// Total store operations (any address). A liveness signal for the run loop:
-    /// a loop that keeps writing memory is making progress, not spinning.
+    /// Total stores — a loop that keeps writing memory is making progress.
     pub ram_writes: u64,
     pub mmio_writes: u64,
-    /// Loads that resolved to RAM. Lets the run loop tell a bounded memory scan
-    /// (a DRAM memtest read-back walks fresh addresses, no writes) from a hung
-    /// poll (re-reads one MMIO register forever).
+    /// Loads that resolved to RAM, which tells a bounded memory scan from a hung
+    /// poll that re-reads one register forever.
     pub ram_reads: u64,
-    /// Loads off the RAM path, the system timer's included. The run
-    /// loop's busy-wait detector compares it with the timer's `clo_reads`: a
-    /// `udelay` reads nothing else.
+    /// Loads off the RAM path. The busy-wait detector compares it with the
+    /// timer's `clo_reads`: a `udelay` reads nothing else.
     pub mmio_reads: u64,
 
-    /// When set, every peripheral (non-RAM) access is appended to `mmio_events`
-    /// as `(addr, width_bytes, value, is_write)`. The run loop drains and prints
-    /// it tagged with the current PC. A reconnaissance aid for unmodelled blocks.
+    /// Record every peripheral access in `mmio_events` as
+    /// `(addr, width_bytes, value, is_write)` for the run loop to print.
     pub mmio_trace: bool,
-    /// Optional `[lo, hi)` address filter for `mmio_trace`. Tracing every
-    /// peripheral access across a whole boot buries the one block under
-    /// investigation in millions of unrelated lines (and costs more time than
-    /// the wall-clock budget has); with this set only accesses inside the
-    /// range are recorded. `PIMU_TRACE_MMIO=<lo>-<hi>` sets it.
+    /// Optional `[lo, hi)` filter for it (`PIMU_TRACE_MMIO=<lo>-<hi>`), without
+    /// which one block's accesses are buried in a boot's millions.
     pub mmio_trace_range: Option<(u32, u32)>,
     pub mmio_events: Vec<(u32, u8, u32, bool)>,
 
-    /// Reconnaissance aid: when `PIMU_WATCH=<hex>[,<hex>...]` is set, every store
-    /// whose word-aligned address matches one of them is logged to stderr tagged
-    /// with the current PC (`watch_pc`, refreshed by the run loop each step).
-    /// Complements `mmio_trace` for pinning down who writes a given RAM word.
+    /// `PIMU_WATCH=<hex>[,<hex>...]`: log every store to one of these
+    /// word-aligned addresses, tagged with `watch_pc`.
     pub watch: Vec<u32>,
-    /// Where the machine's channels go ([`Self::set_log`]): [`Channel::Dma`]
-    /// is the machine's own, the rest belong to the devices it hands a clone.
+    /// Where the machine's channels go; devices get a clone ([`Self::set_log`]).
     pub log: Log,
-    /// Interrupt sources raised by peripherals, waiting to be vectored. A
-    /// source stays here until core 0's CoreCtl bank enables it.
+    /// Sources raised by peripherals. One waits here until core 0's CoreCtl bank
+    /// enables it; `pending_irqs1` is the same for core 1.
     pending_irqs: std::collections::VecDeque<u32>,
-    /// The same for core 1: sources start4 raised for it in software.
     pending_irqs1: std::collections::VecDeque<u32>,
-    /// Something happened that the run loop's per-step checks may have to
-    /// act on: a peripheral register was written, an interrupt was queued, a
-    /// compare fired, or a reset came due. The run loop clears it; while it
-    /// stays clear, those checks have nothing to do (`Emulator::fast_steps`).
-    /// `Vpu::recheck` is the same flag for the core's own state.
+    /// Something happened the run loop's per-step checks may have to act on.
+    /// While it stays clear those checks have nothing to do
+    /// (`Emulator::fast_steps`); `Vpu::recheck` is the core's own such flag.
     pub recheck: bool,
-    /// The ARM runs alongside: a VPU `sleep` leaves its jump to the next
-    /// compare in [`Self::sleep_to`] for `Emulator::step_arm`, which moves
-    /// the counter only as far as the first ARM write the VPU would wake for
-    /// (#53).
+    /// With the ARM running, a VPU `sleep` leaves its jump in [`Self::sleep_to`]
+    /// for `Emulator::step_arm`, which moves the counter only as far as the first
+    /// ARM write the VPU would wake for.
     pub defer_sleep: bool,
     pub sleep_to: Option<u64>,
     pub watch_pc: u32,
     /// Which VPU core `watch_pc` belongs to.
     pub watch_core: u32,
 
-    /// `start4.elf` logs boot progress by writing 4-char ASCII tags (`_msh`,
-    /// `_osh`, `bfsp`, ...) to a register at `0xCEC0_2000`. We capture the
-    /// sequence — it is the closest thing to an early-boot log before any UART
-    /// is up. Only a `--features diag` build does: the address is start4's, and
-    /// outside diagnostics the model knows nothing about start4 (#25).
+    /// `start4.elf` boot-progress tags (4-char ASCII, `_msh`, `bfsp`, ...), the
+    /// closest thing to a log before any UART is up. Only a `--features diag` build
+    /// collects them: outside diagnostics the model knows nothing about start4.
     pub phase_tags: Vec<u32>,
 }
 
-/// `start4.elf` writes 4-char boot-progress tags to `0x?EC0_2000`. Direct-ELF
-/// load runs it at `0xCEC0_0000` (tags `0xCEC0_2000`); the real bootloader
-/// relocates it to `0xFEC0_0000` (tags `0xFEC0_2000`). Both share the low-26-bit
-/// signature `0x02C0_2000` (each `0x?C00_0000` alias is 64 MiB), so match on
-/// that regardless of which alias the write used.
+/// start4 runs at `0xCEC0_0000` from a direct-ELF load and `0xFEC0_0000` from the
+/// bootloader; both tag writes share this low-26-bit signature.
 const PHASE_TAG_SIG: u32 = 0x02C0_2000;
 
-/// The function-select registers of the GPIO block: a write to one of them can
-/// move a peripheral's pads (see [`Machine::route_gpio_pins`]).
+/// The GPIO function-select registers: a write can move a peripheral's pads
+/// ([`Machine::route_gpio_pins`]).
 const GPFSEL_WINDOW: std::ops::Range<u32> = {
     let base = map::GPIO_BASE + crate::spec::gpio::GPFSEL;
     base..base + crate::spec::gpio::GPFSEL_COUNT * crate::spec::gpio::GPFSEL_STRIDE
 };
 
-/// The address the Bluetooth modem comes up holding, most significant octet
-/// first.
-///
-/// This is the chip's own, not the board's. A Pi's Bluetooth address is its
-/// Ethernet MAC plus one — the reference board is `e4:5f:01:83:fb:74` on the
-/// network and `…:75` on the air — but that is a value the *firmware* derives
-/// and publishes as `local-bd-address` in the device tree it hands the ARM,
-/// and the host programs it into the chip with `BCM_WRITE_BD_ADDR` at attach
-/// (`btbcm_set_bdaddr`). Until then the chip answers what it was built with,
-/// which on an unprogrammed part has nothing to do with the Pi's fuses.
-///
-/// So nothing derives this: it is an invented locally-administered address
-/// from the documentation range in RFC 7042 section 2.1.2, the same range the
-/// modelled OTP MAC comes from, one past it so that a report showing it is
-/// recognisable as the chip's own. The run report prints it beside the address
-/// the firmware published, which is a different value again
-/// (`crate::periph::bluetooth::published_bd_address`), so the two are visible
-/// rather than assumed equal.
+/// The address the Bluetooth modem comes up holding. This is the chip's own, not
+/// the board's — the firmware derives that from the fuses and the host programs
+/// it in at attach — so nothing here derives it: it is an invented address from
+/// the RFC 7042 §2.1.2 documentation range, one past the modelled OTP MAC.
 const BT_ADDRESS: [u8; 6] = [0x02, 0x00, 0x5E, 0x00, 0x53, 0x02];
 
-/// The SD-slot mux word in the GPIO block, and the bit that routes the card to
-/// the legacy EMMC (see [`Machine::route_sd_slot`]).
+/// The SD-slot mux word, and the bit that routes the card to the legacy EMMC
+/// ([`Machine::route_sd_slot`]).
 const SD_SLOT_MUX: u32 = map::GPIO_BASE + crate::spec::gpio::PIN_MUX;
 const SD_SLOT_MUX_LEGACY: u32 = crate::spec::gpio::PIN_MUX_SD_LEGACY_MASK;
 
-/// The L2's maintenance port (`specs/bootbox.toml`): the bootcode's flush
-/// ends its cache-as-RAM window ([`crate::l2`], #70).
+/// The L2's maintenance port (`specs/bootbox.toml`): the bootcode's flush ends
+/// its cache-as-RAM window ([`crate::l2`]).
 const L2_CTRL: u32 = map::BOOTBOX_BASE + crate::spec::bootbox::L2_CTRL;
 const L2_FLUSH: u32 = crate::spec::bootbox::L2_CTRL_FLUSH_MASK;
 
@@ -334,8 +246,7 @@ impl Machine {
             rng: Rng::new(),
             vce: Vce::new(),
             bsc0: {
-                // Every pin is an input out of reset, so no master has its
-                // pads until the firmware says so (`route_gpio_pins`).
+                // Every pin is an input out of reset (`route_gpio_pins`).
                 let mut bsc0 = Bsc::empty("bsc0");
                 bsc0.set_pins(false);
                 bsc0
@@ -418,24 +329,19 @@ impl Machine {
         self.board
     }
 
-    /// Make this machine `board`: OTP row 30 takes its revision code, the
-    /// PMIC bus the PMICs it has fitted, and cores an
-    /// [`crate::emulator::Emulator`] builds afterwards its stepping's
-    /// `version`. Call it before anything runs; firmware reads the revision
-    /// once, early.
+    /// Make this machine `board`: OTP row 30 takes its revision code, the PMIC bus
+    /// its PMICs, later-built cores its stepping's `version`. Call it before anything
+    /// runs; firmware reads the revision once, early.
     pub fn set_board(&mut self, board: crate::soc::Board) {
         self.board = board;
         self.config_otp.set(30, board.revision);
-        // The DRAM parts are the ones a board of that size is fitted with, so
-        // the firmware trains and publishes the memory the revision claims.
         self.sdc = Sdc::with_dram(crate::periph::sdc::Dram::for_memory(board.memory_bytes()));
         self.bsc_pmic
             .fit_pmics(crate::periph::Pmic::for_board(board));
         self.gpio.fit_board(board);
     }
 
-    /// Send the machine's channels to `log` (#95): keep it for the machine's
-    /// own, and hand every device that logs a clone.
+    /// Send the machine's channels to `log`, handing every device that logs a clone.
     pub fn set_log(&mut self, log: Log) {
         self.systimer.set_log(log.clone());
         self.mbox.log = log.clone();
@@ -454,15 +360,13 @@ impl Machine {
         self.log = log;
     }
 
-    /// Plug GENET's cable into `backend`: the PHY sees a link partner, and
-    /// frames flow between the DMA rings and `backend`.
+    /// Plug GENET's cable into `backend`: the PHY sees a link partner.
     pub fn attach_net(&mut self, backend: Box<dyn crate::net::NetBackend>) {
         self.genet.phy.set_link(true);
         self.net = Some(backend);
     }
 
-    /// Queue an interrupt source for core 0. It is delivered on the next step
-    /// if core 0's CoreCtl bank enables it, and waits for that otherwise.
+    /// Queue an interrupt source for core 0; it waits for that core's CoreCtl enable.
     pub fn push_pending_irq(&mut self, src: u32) {
         self.pending_irqs.push_back(src);
         self.recheck = true;
@@ -475,9 +379,8 @@ impl Machine {
             .any(|&src| self.corectl.irq_priority(0, src) != 0)
     }
 
-    /// Queue an interrupt source start4 raised for core 1. Like core 0's, it
-    /// waits until core 1's CoreCtl bank enables it, and until core 1 can take
-    /// it (`Emulator::step_core1`), instead of being lost.
+    /// Queue a source start4 raised for core 1. It waits for core 1's CoreCtl enable
+    /// and for core 1 to be able to take it, instead of being lost.
     pub fn push_core1_irq(&mut self, src: u32) {
         self.pending_irqs1.push_back(src);
         self.recheck = true;
@@ -492,10 +395,9 @@ impl Machine {
         self.pending_irqs1.remove(i)
     }
 
-    /// The lowest system-timer channel whose compare has fired and whose
-    /// source, `SYS_IRQ_SRC + channel`, core 0's CoreCtl bank enables. A
-    /// channel that fired with its source disabled stays latched, and doesn't
-    /// hold up the channels above it.
+    /// The lowest system-timer channel whose compare has fired and whose source core
+    /// 0's CoreCtl bank enables. One that fired with its source disabled stays
+    /// latched without holding up the channels above it.
     fn timer_channel_due(&self) -> Option<u8> {
         if !self.systimer.tick_pending() {
             return None;
@@ -514,35 +416,26 @@ impl Machine {
         self.timer_channel_due().is_some()
     }
 
-    /// Settle any I²C transfer whose time on the wire has elapsed.
     fn advance_i2c(&mut self) {
         let now = self.systimer.now_us();
         self.bsc_pmic.advance_to(now);
         self.bsc0.advance_to(now);
     }
 
-    /// Let the SD hosts deliver a PIO block that has come due, for a driver
-    /// that waits for the interrupt rather than polling (#109).
     fn advance_sd(&mut self) {
         let now = self.systimer.now_us();
         self.emmc2.advance_to(now);
         self.emmc.advance_to(now);
     }
 
-    /// Let the PCIe endpoint's clock catch up, so a USB3 link it is training
-    /// comes up on time even while nothing polls it.
     fn advance_pcie(&mut self) {
         let now = self.systimer.now_us();
         self.with_dma_master("the xHCI / VL805", |m| m.pcie.advance_to(now, &mut m.ram));
     }
 
-    /// Settle the HDMI DDC masters, which time their transfers the same way.
-    ///
-    /// Unlike the BSCs these are advanced lazily, on the way into their own
-    /// registers, rather than out of [`Machine::tick`]: nothing but the
-    /// firmware's own status poll ever observes them, and two more calls on
-    /// every single retired instruction cost a measurable few percent of the
-    /// model's throughput.
+    /// Settle the HDMI DDC masters, lazily on the way into their own registers: only
+    /// the firmware's status poll observes them, and advancing them out of
+    /// [`Machine::tick`] costs a few percent of throughput.
     fn advance_hdmi_ddc(&mut self, addr: u32) {
         let in_window = |base: u32, size: u32| addr >= base && addr < base + size;
         if in_window(map::HDMI_DDC0_BASE, map::HDMI_DDC_SIZE)
@@ -556,19 +449,10 @@ impl Machine {
         }
     }
 
-    /// Mirror the core rail's PMIC setpoint into the AVS monitor before a read
-    /// of that block.
-    ///
-    /// Channel 3 of the AVS monitor is a voltage sensor sitting on the SoC core
-    /// rail, and the rail is driven over I²C by a board PMIC (the `0x1E` one,
-    /// or the `0x1D` one on a 4B rev 1.1/1.2 — see [`crate::periph::pmic`]).
-    /// start4's DVFS
-    /// calibration `FUN_0ec303e8` programs two voltages an appreciable step
-    /// apart and requires the sensor to report a difference of at least 10 mV
-    /// between them; a channel that answers with one fixed count reads as a
-    /// rail that does not respond, and the calibration gives up. The two
-    /// devices are in different windows, so the tie between them has to be made
-    /// here.
+    /// Mirror the core rail's PMIC setpoint into the AVS monitor. Channel 3 senses
+    /// that rail, a board PMIC drives it over I²C, and start4's DVFS calibration
+    /// requires at least 10 mV between two programmed voltages — a channel answering
+    /// one fixed count reads as a dead rail. The blocks are in different windows.
     fn sync_avs_core_rail(&mut self, addr: u32) {
         if !(map::AVS_BASE..map::AVS_BASE + map::AVS_SIZE).contains(&addr) {
             return;
@@ -578,20 +462,16 @@ impl Machine {
         }
     }
 
-    /// Advance time-based peripheral state by `cycles` VPU cycles.
-    ///
-    /// Inline, because the run loop calls it on every step and on 53 of every
-    /// 54 there is nothing to do past the first comparison.
+    /// Advance time-based peripheral state by `cycles` VPU cycles. Called every step,
+    /// and all of it derives from the microsecond counter, so a step that does not
+    /// move that counter has nothing to do.
     #[inline]
     pub fn tick(&mut self, cycles: u64) {
-        // Everything below is derived from the microsecond counter, so when it
-        // has not moved there is nothing for any of it to do.
         if self.systimer.advance(cycles) {
             self.tick_us();
         }
     }
 
-    /// The rest of [`Self::tick`], for a step that moved the microsecond count.
     #[inline(never)]
     fn tick_us(&mut self) {
         if self.systimer.take_fired() {
@@ -601,47 +481,29 @@ impl Machine {
         if self.pm.reset_pending() {
             self.recheck = true;
         }
-        // A backend with its own clock (a host network) can deliver a frame
-        // at any time, not only in reply to a register write.
         if self.net.is_some() {
             let now = self.systimer.now_us();
             self.with_dma_master("the GENET", |m| {
                 m.genet.service(now, &mut m.ram, &mut m.net)
             });
         }
-        // The I²C masters time their transfers in microseconds off the system
-        // timer, so they stay in step with it across the run loop's `sleep`
-        // fast-forward (which jumps the counter without retiring cycles).
         self.advance_i2c();
         self.advance_sd();
         self.advance_pcie();
-        // The RNG holds its line asserted while an enabled `INT_STATUS` bit is
-        // set; start4's handler for source 125 disables the FIFO interrupt
-        // again and releases the gate its read op waits on. Only ever keep one
-        // delivery outstanding.
+        // Each holds its line until acked: keep one delivery outstanding.
         let src = crate::periph::rng::IRQ_SRC;
         if self.rng.irq_asserted() && !self.pending_irqs.contains(&src) {
             self.push_pending_irq(src);
         }
-        // The mailbox holds source 94 asserted while a request is queued for
-        // the firmware and its driver has armed the interrupt. `0x3EC58302`
-        // reads the pending word, dispatches to the registered callback, and
-        // the `mbox_read` task takes the message off the FIFO.
         let src = crate::periph::mbox::IRQ_SRC;
         if self.mbox.irq_asserted() && !self.pending_irqs.contains(&src) {
             self.push_pending_irq(src);
         }
-        // Doorbells 2 and 3 arrive on that same source 94, the whole ARM
-        // control block's line: the stock handler reads both bells before it
-        // looks at the mailbox, because a bell holds the line up until it is
-        // read.
+        // Doorbells 2 and 3 share source 94, the ARM control block's line.
         let src = crate::periph::bell::IRQ_SRC;
         if self.bell.vpu_irq_asserted() && !self.pending_irqs.contains(&src) {
             self.push_pending_irq(src);
         }
-        // The VCE holds source 68 asserted from the moment a launch completes
-        // until start4's handler (`0x3ED9D1EA`) acks it through `INTCLR`; that
-        // handler is what sets the event flag `vce_run` is waiting on.
         let src = crate::periph::vce::IRQ_SRC;
         if self.vce.irq_asserted() && !self.pending_irqs.contains(&src) {
             self.push_pending_irq(src);
@@ -649,10 +511,8 @@ impl Machine {
         self.advance_hvs();
     }
 
-    /// Let the HVS finish the frames the counter has reached, and hold source
-    /// 97 asserted while an end-of-frame flag it interrupts for is set.
-    /// start4's handler (`0x3ECEED5C`) clears the flag, and it is also what
-    /// completes a display pause — `NOTIFY_DISPLAY_DONE` waits on one (#61).
+    /// Let the HVS finish the frames the counter has reached, and hold source 97
+    /// while an end-of-frame flag is set — the flag a display pause waits on.
     fn advance_hvs(&mut self) {
         self.hvs.advance_to(self.systimer.now_us());
         let src = crate::periph::hvs::IRQ_SRC;
@@ -661,11 +521,8 @@ impl Machine {
         }
     }
 
-    /// Which block the serial header is wired to, for [`Console::Pins`]:
-    /// GPIO 14 is `TXD0` on ALT0 and `TXD1` on ALT5, and 15 the two receives.
-    /// Anything else — the reset state is plain input — reads as the PL011,
-    /// which is what the bootloader sets the pins up for before its first
-    /// byte.
+    /// Which block the serial header is wired to, for [`Console::Pins`]: GPIO 14 is
+    /// `TXD0` on ALT0 and `TXD1` on ALT5, and anything else reads as the PL011.
     fn console_uart(&self) -> Console {
         match self.console {
             Console::Pins => match self.gpio.function(14) {
@@ -676,10 +533,9 @@ impl Machine {
         }
     }
 
-    /// Drain and return whatever the console UART has transmitted. Bytes the
-    /// other block wrote went to pins the header does not carry, so they are
-    /// not spliced into the transcript: the mini-UART's are dropped, and the
-    /// PL011's go to the Bluetooth modem, which is what GPIO 30..33 reach.
+    /// Drain what the console UART transmitted. The other block wrote to pins the
+    /// header does not carry, so the mini-UART's bytes are dropped and the PL011's
+    /// go to the Bluetooth modem.
     pub fn take_console_output(&mut self) -> Vec<u8> {
         let routed = self.console_uart();
         if routed != self.console_routed {
@@ -703,7 +559,6 @@ impl Machine {
                 if self.bluetooth.has_output() {
                     let reply = self.bluetooth.take_output();
                     self.uart0.feed(&reply);
-                    // The receiver has to be pumped for it to arrive.
                     self.recheck = true;
                 }
                 self.aux.take_output()
@@ -715,7 +570,6 @@ impl Machine {
         }
     }
 
-    /// Put host bytes on the console's receive line.
     pub fn console_feed(&mut self, bytes: &[u8]) {
         match self.console_uart() {
             Console::MiniUart => self.aux.feed(bytes),
@@ -723,13 +577,11 @@ impl Machine {
         }
     }
 
-    /// Bytes fed to either UART but not yet read by the guest.
     pub fn console_rx_backlog(&self) -> usize {
         self.uart0.rx_backlog() + self.aux.rx_backlog()
     }
 
-    /// Advance both receivers to `now_us`. Input only ever goes on one line,
-    /// and the other one has nothing to move.
+    /// Advance both receivers to `now_us`; input only ever goes on one line.
     pub fn console_pump(&mut self, now_us: u64) {
         self.uart0.pump(now_us);
         self.aux.pump(now_us);
@@ -739,14 +591,10 @@ impl Machine {
         self.uart0.irq_pending() || self.aux.irq_pending()
     }
 
-    /// The VPU addresses peripherals only through the `0x7E00_0000` window (no
-    /// cache aliasing, unlike RAM) — plus the LPDDR4 controller/PHY, which is
-    /// mapped just *below* that window at `0x7DC0_0000`. Both must be decoded
-    /// before the cache-alias fold, or their (aliased) addresses land in DRAM.
+    /// The peripheral windows, which must be decoded before the cache-alias fold or
+    /// their aliased addresses land in DRAM. The LPDDR4 controller counts too.
     #[inline]
     fn in_mmio(addr: u32) -> bool {
-        // Every window below is inside `MMIO_WINDOW`, and nearly every access
-        // (RAM) is outside it.
         addr >> 26 == MMIO_WINDOW.start >> 26
             && ((map::PERIPH_BASE..map::PERIPH_BASE + map::PERIPH_SIZE).contains(&addr)
                 || (map::SDRAMC_BASE..map::SDRAMC_BASE + map::SDRAMC_SIZE).contains(&addr)
@@ -755,22 +603,15 @@ impl Machine {
                 || (map::GENET_BASE..map::GENET_BASE + map::GENET_SIZE).contains(&addr))
     }
 
-    /// Map a real maskROM image at `0x6000_0000` so the VPU can execute the
-    /// maskROM from its reset vector (experimental `--maskrom`). Only the
-    /// code+rodata region is overlaid — the salt and SHA constants live there,
-    /// while the ROM's BSS/scratch above it and its bootcode staging at
-    /// `0x8000_0000` must stay writable DRAM. See the [`maskrom`](Self::maskrom)
-    /// field.
+    /// Overlay a maskROM image; see the [`maskrom`](Self::maskrom) field.
     pub fn attach_maskrom(&mut self, bytes: Vec<u8>) {
         const BASE: u32 = 0x6000_0000;
         const CODE_LEN: u32 = 0x8000;
         let len = (bytes.len() as u32).min(CODE_LEN);
         self.maskrom = Some((BASE, BASE + len, bytes));
-        // The ROM stages the bootcode into the L2 with ordinary stores.
         self.l2.hold(0, 0);
     }
 
-    /// If a maskROM overlay covers `addr`, the byte offset into its image.
     #[inline]
     fn maskrom_at(&self, addr: u32) -> Option<usize> {
         let (base, end, _) = self.maskrom.as_ref()?;
@@ -779,7 +620,6 @@ impl Machine {
             .then(|| (addr - *base) as usize)
     }
 
-    /// Read `width` bytes little-endian out of the maskROM overlay.
     fn maskrom_load(&self, off: usize, width: Width) -> u32 {
         let bytes = &self.maskrom.as_ref().expect("overlay present").2;
         let mut v = 0u32;
@@ -789,8 +629,6 @@ impl Machine {
         v
     }
 
-    /// Should an access to `addr` be recorded in `mmio_events`? True when the
-    /// trace is on and `addr` passes `mmio_trace_range`, if one is set.
     fn mmio_traced(&self, addr: u32) -> bool {
         crate::diag::ON
             && self.mmio_trace
@@ -799,9 +637,8 @@ impl Machine {
                 .is_none_or(|(lo, hi)| (lo..hi).contains(&addr))
     }
 
-    /// Run `f` with the tracker told that this peripheral, not the VPU, is
-    /// the one using memory: it reads and writes behind the caches. Nests —
-    /// a DMA engine's own doorbell can set another one going.
+    /// Run `f` with the tracker told this peripheral, not the VPU, is using memory:
+    /// it reads and writes behind the caches. Nests.
     #[inline]
     fn with_dma_master(&mut self, who: &'static str, f: impl FnOnce(&mut Machine)) {
         if !self.ram.coherency.is_on() {
@@ -811,7 +648,6 @@ impl Machine {
         self.with_master(crate::coherency::Master::Dma(who), f);
     }
 
-    /// The same for an engine on the VPU's side of the L2.
     #[inline]
     fn with_vc4_dma_master(&mut self, who: &'static str, f: impl FnOnce(&mut Machine)) {
         self.with_master(crate::coherency::Master::Vc4Dma(who), f);
@@ -829,12 +665,9 @@ impl Machine {
         self.ram.coherency.set_masters(was.0, was.1);
     }
 
-    /// What a legacy-DMA bus address means for the caches. That engine sits
-    /// behind the L2, which is where a cached VPU access lands as well, so a
-    /// transfer only goes past the caches when its address is in the alias
-    /// that bypasses them (`0xC000_0000`). Stock's `dma_memcpy` copies
-    /// megabytes through the `0x0` alias and reads them straight back cached,
-    /// which is only sound because of this.
+    /// Which side of the L2 a legacy-DMA bus address is on: only the `0xC000_0000`
+    /// alias bypasses the caches, which is the one reason stock's `dma_memcpy` may
+    /// copy through the `0x0` alias and read it straight back cached.
     #[inline]
     fn dma_master(addr: u32, who: &'static str) -> crate::coherency::Master {
         if addr >> 30 == 3 {
@@ -844,16 +677,12 @@ impl Machine {
         }
     }
 
-    /// Fold the four VC4 cache aliases (`0x0`, `0x4000_0000`, `0x8000_0000`,
-    /// `0xC000_0000`) of physical memory onto a single backing store. Before
-    /// SDRAM training this backing *is* the L2-as-SRAM the bootcode runs from;
-    /// afterwards it stands in for DRAM. Until the bootcode flushes the L2, an
-    /// uncached write does not reach the lines it holds ([`crate::l2`]).
+    /// Fold the four VC4 cache aliases onto one backing store. Before SDRAM training
+    /// that backing *is* the L2-as-SRAM the bootcode runs from ([`crate::l2`]).
     fn fold_ram_addr(addr: u32) -> u32 {
         addr & 0x3FFF_FFFF
     }
 
-    /// Resolve an address to `(device, offset)`, or `None` for RAM / unmapped.
     fn device_for(&mut self, addr: u32) -> Option<(&mut dyn MmioDevice, u32)> {
         let a = addr;
         let hit = |base: u32, size: u32| {
@@ -873,9 +702,6 @@ impl Machine {
         if let Some(off) = hit(map::AUX_BASE, map::AUX_SIZE) {
             return Some((&mut self.aux, off));
         }
-        // Both doorbell apertures, before the two windows they sit inside:
-        // the ARM's view is in the ARM control block's, the VPU's in the
-        // mailbox's.
         for base in [map::BELL_BASE, map::BELL_VPU_BASE] {
             if let Some(off) = hit(base, map::BELL_SIZE) {
                 return Some((&mut self.bell, off));
@@ -935,8 +761,6 @@ impl Machine {
         if let Some(off) = hit(map::RNG_BASE, map::RNG_SIZE) {
             return Some((&mut self.rng, off));
         }
-        // Both VCE windows address the one device; the control block keeps its
-        // aperture-relative offset (`0x4_0000`).
         if hit(map::VCE_BASE, map::VCE_MEM_SIZE).is_some()
             || hit(map::VCE_CTRL_BASE, map::VCE_CTRL_SIZE).is_some()
         {
@@ -1016,16 +840,8 @@ impl Machine {
         None
     }
 
-    /// Run the DMA4 control-block chain the channel was just armed with. A word
-    /// in RAM (`+0x08` `SRCI` bit 12 = "source increments"): clear ⇒ fill `DEST`
-    /// with the single word at `SRC` (`SRC == 0` ⇒ zero-fill scrub); set ⇒ copy
-    /// `SRC`→`DEST`. Both addresses are 40 bits wide — `SRCI`/`DESTI` bits
-    /// `[7:0]` carry bits `[39:32]` — and an address the PCIe outbound window
-    /// covers reaches the VL805's registers instead of DRAM.
-    /// [`Channel::Dma`]: every access to the legacy DMA controller window
-    /// (`0x7E00_7000..0x7E00_8000`, 15 channels x 0x100). Only channel 11
-    /// (DMA4, `0x7E00_7B00`) is modelled; start4's `dma_memcpy` uses one of the
-    /// others, so those accesses currently fall through to the catch-all stub.
+    /// Log the legacy DMA window on [`Channel::Dma`]. Only channel 11 is modelled;
+    /// start4's `dma_memcpy` uses another, which falls through to the stub.
     fn dma_win_log(&self, rw: &str, addr: u32, value: u32) {
         if crate::diag::ON && (0x7E00_7000..0x7E00_8000).contains(&addr) {
             let ch = (addr - 0x7E00_7000) / 0x100;
@@ -1039,11 +855,8 @@ impl Machine {
         }
     }
 
-    /// Execute the control-block chain armed on legacy DMA channel `ch`.
-    ///
-    /// CB layout (32 bytes): `+0x00 TI  +0x04 SOURCE_AD  +0x08 DEST_AD
-    /// +0x0C TXFR_LEN  +0x10 STRIDE  +0x14 NEXTCONBK`. Bus addresses are folded
-    /// onto flat DRAM the same way the CPU's are.
+    /// Execute the chain armed on legacy DMA channel `ch`. CB: `+0x00 TI  +0x04
+    /// SOURCE_AD  +0x08 DEST_AD  +0x0C TXFR_LEN  +0x10 STRIDE  +0x14 NEXTCONBK`.
     fn run_dma_legacy(&mut self, ch: usize, vpu: bool) {
         use crate::periph::dma_legacy::DmaLegacy;
 
@@ -1052,19 +865,10 @@ impl Machine {
         } else {
             self.dma_legacy.conblk_ad(ch)
         };
-        // `dma_chain_start` (`0x3EC97544`) writes `CONBLK_AD` two ways:
-        //
-        //   legacy channel: *(base + ch*0x100 + 4) = cb            (raw pointer)
-        //   40-bit channel: cb>>30 == 3 ? (cb & 0x3fffffff) >> 5
-        //                               : (cb >> 5) | 0x20000000
-        //
-        // Both shifted forms leave the top two bits clear, and a raw VC4
-        // pointer always has an alias in them, so that is the discriminator.
-        // Shifting back by 5 restores the alias bits for the `| 0x20000000`
-        // form (0x25F7B6A5 << 5 == 0xBEF6D4A0).
+        // `CONBLK_AD` is raw for a legacy channel and shifted right by 5 for a
+        // 40-bit one; only a raw VC4 pointer has its alias bits set.
         let cb_addr = if raw >> 30 != 0 { raw } else { raw << 5 };
         let who = if vpu { "the VPU DMA" } else { "the legacy DMA" };
-        // The control block comes through the same alias its address is in.
         let fetch = Machine::dma_master(cb_addr, who);
         let mut cb = cb_addr & 0x3FFF_FFFF;
         for _ in 0..4096 {
@@ -1076,14 +880,8 @@ impl Machine {
             for (i, slot) in w.iter_mut().enumerate() {
                 *slot = self.ram.load(cb + (i as u32) * 4, Width::Word).unwrap_or(0);
             }
-            // Channel 15 of the `0x7EE0_4100` controller is a 40-bit ("dma40")
-            // channel on C0 and a legacy one on B0 (#77). On C0 `dma_memcpy`
-            // builds its CB with `dma_transfer_setup_memcpy_vpu40`
-            // (`0x3EC99EE0`), in the DMA4 control-block layout:
-            //   +0x00 TI  +0x04 SRC  +0x08 SRCI  +0x0C DEST  +0x10 DESTI
-            //   +0x14 LEN +0x18 NEXT_CB(>>5)
-            // On B0 it uses `dma_transfer_setup_memcpy` (`0x3EC99A7C`) and the
-            // legacy layout, increments and all.
+            // Channel 15 is 40-bit on C0 and legacy on B0; start4 builds the
+            // matching CB (dma40: TI, SRC, SRCI, DEST, DESTI, LEN, NEXT_CB>>5).
             let dma40 = vpu && self.board.stepping.dma_channel_15_is_40_bit();
             let d = if dma40 {
                 crate::periph::dma_legacy::Cb {
@@ -1105,8 +903,6 @@ impl Machine {
                     d.ti, d.src, d.dest, d.len, d.stride, d.next
                 );
             }
-            // Each end of the copy is on whichever side of the L2 its own bus
-            // address says.
             self.ram.coherency.set_masters(
                 Machine::dma_master(d.src, who),
                 Machine::dma_master(d.dest, who),
@@ -1135,7 +931,6 @@ impl Machine {
                     let b = self.ram.load(sa & 0x3FFF_FFFF, Width::Byte).unwrap_or(0);
                     let _ = self.ram.store(da & 0x3FFF_FFFF, Width::Byte, b);
                 }
-                // 2D mode advances by the row length plus the signed stride.
                 src = src.wrapping_add(xlen).wrapping_add(src_stride as u32);
                 dest = dest.wrapping_add(xlen).wrapping_add(dest_stride as u32);
             }
@@ -1147,29 +942,17 @@ impl Machine {
         } else {
             self.dma_legacy.finish(ch);
         }
-        // Completion interrupt. `dma_interrupt` (`0x3EC980E8`) maps the source
-        // back to a channel and `dma_chan_interrupt` then retires the transfer,
-        // signals its waiter and starts the next one in the queue.
         let src = dma_irq_source(ch);
         self.push_pending_irq(src);
     }
 
-    /// The two SD hosts' Buffer Data Ports, the only FIFOs anything aims a
-    /// legacy-DMA transfer at on this bench.
+    /// The SD hosts' Buffer Data Ports, the only FIFOs a legacy-DMA transfer aims at.
     const EMMC_FIFO: u32 = map::EMMC_BASE + crate::spec::emmc::BUFFER_DATA;
     const EMMC2_FIFO: u32 = map::EMMC2_BASE + crate::spec::emmc2::BUFFER_DATA;
 
-    /// One control block with a peripheral at one end. Linux drives the
-    /// legacy engine this way and start4 never does: `mmc-bcm2835` hands
-    /// every transfer of more than a couple of blocks to a DMA channel whose
-    /// slave configuration puts the SD host's Buffer Data Port at one end
-    /// (`bcm2835-mmc.c`, `dma_cfg_tx.dst_addr = bus_addr + SDHCI_BUFFER`) and
-    /// the request's scatter list at the other.
-    ///
-    /// Two things separate it from a memory-to-memory copy: the width — a
-    /// slave transfer moves whole words, as the configuration's
-    /// `{src,dst}_addr_width` says — and the DREQ, which paces the engine
-    /// against the FIFO. Neither end is 2D.
+    /// One control block with a peripheral at one end — how Linux drives the legacy
+    /// engine for an SD transfer, and something start4 never does. It moves whole
+    /// words and is DREQ-paced, and neither end is 2D.
     fn run_dma_periph(&mut self, d: &crate::periph::dma_legacy::Cb) {
         let mut off = 0u32;
         while off + 4 <= d.len {
@@ -1181,8 +964,6 @@ impl Machine {
         }
     }
 
-    /// One word from a legacy-DMA address: a peripheral register, a FIFO the
-    /// DREQ paces, or DRAM.
     fn dma_periph_load(&mut self, addr: u32) -> u32 {
         if !Machine::in_mmio(addr) {
             return self.ram.load(addr & 0x3FFF_FFFF, Width::Word).unwrap_or(0);
@@ -1194,7 +975,6 @@ impl Machine {
         }
     }
 
-    /// The same in the write direction.
     fn dma_periph_store(&mut self, addr: u32, value: u32) {
         if !Machine::in_mmio(addr) {
             let _ = self.ram.store(addr & 0x3FFF_FFFF, Width::Word, value);
@@ -1209,12 +989,8 @@ impl Machine {
         }
     }
 
-    /// One word from a 40-bit DMA4 address: endpoint MMIO if the PCIe root
-    /// complex's outbound window covers it, DRAM otherwise.
     fn dma40_load(&mut self, addr: u64) -> u32 {
-        // The window the firmware programs starts at `0x6_0000_0000`, so a
-        // plain 32-bit address can only be DRAM. Checking that first keeps the
-        // multi-megabyte DRAM scrubs off the translation path.
+        // The window starts at `0x6_0000_0000`, so a 32-bit address is DRAM.
         if addr >> 32 != 0 {
             if let Some(v) = self.pcie.mmio_read(addr, Width::Word) {
                 return v;
@@ -1225,9 +1001,7 @@ impl Machine {
             .unwrap_or(0)
     }
 
-    /// One word to a 40-bit DMA4 address. Both what the engine itself writes
-    /// and what the controller behind the window writes (a doorbell here sets
-    /// an xHCI transfer going) come from behind the VPU's caches.
+    /// One word to a 40-bit DMA4 address, from behind the VPU's caches.
     fn dma40_store(&mut self, addr: u64, value: u32) {
         self.with_dma_master("the 40-bit DMA / xHCI", |m| {
             if addr >> 32 != 0 && m.pcie.mmio_write(addr, Width::Word, value, &mut m.ram) {
@@ -1237,11 +1011,14 @@ impl Machine {
         });
     }
 
+    /// Run the chain the DMA4 channel was just armed with. `SRCI` bit 12 clear ⇒ fill
+    /// `DEST` with the single word at `SRC` (`SRC == 0` ⇒ zero-fill scrub), set ⇒
+    /// copy. Addresses are 40 bits, and one in the PCIe outbound window reaches the
+    /// VL805's registers instead of DRAM.
     fn run_dma4(&mut self) {
         const S_INC: u32 = 1 << 12;
-        /// `SRC_INFO` / `DEST_INFO` bits `[7:0]` are address bits `[39:32]` —
-        /// the whole point of the 40-bit channel, and how the firmware reaches
-        /// the PCIe outbound window at `0x6_0000_0000` from a 32-bit core.
+        /// `SRC_INFO` / `DEST_INFO` bits `[7:0]` are address bits `[39:32]`: how the
+        /// firmware reaches the PCIe outbound window from a 32-bit core.
         const ADDR_HI: u32 = 0xFF;
         let rd = |ram: &Ram, addr: u32| ram.load(addr & 0x3FFF_FFFF, Width::Word).unwrap_or(0);
 
@@ -1288,25 +1065,16 @@ impl Machine {
             cb = (next << 5) & 0x3FFF_FFFF;
         }
         self.dma4.finish(interrupt);
-        // DMA4 is channel 11 of the `0x7E00_7000` controller. The bootloader
-        // polls (`TI` = 0, no INTEN); start4's dmalib asks for the interrupt
-        // and starts its next chain from it.
+        // The bootloader polls (no `TI.INTEN`); start4's dmalib chains on this.
         if interrupt {
             self.push_pending_irq(dma_irq_source(11));
         }
     }
 }
 
-/// The VPU interrupt source a DMA channel's completion raises.
-///
-/// start4's dmalib keeps its own source -> channel table (`gp+0x556b8`, read
-/// by `dma_interrupt`) and registers `dma_interrupt` on exactly the sources it
-/// uses: 81, 83, 86, 89, 92 and 95 for channels 1, 3, 6, 11, 14 and 15. That
-/// is 80 + channel for the low channels, 78 + channel for the DMA4 channels
-/// 11..14, and 95 for the VPU's channel 15 — the same wiring Linux's
-/// `bcm2711.dtsi` gives the controller as far as I know, where channels 7/8
-/// and 9/10 share a line each (not verified here: nothing on this bench uses
-/// them).
+/// The VPU source a DMA channel's completion raises: 80 + channel low down,
+/// 78 + channel for DMA4's 11..14, 95 for the VPU's 15, and one line shared by
+/// 7/8 and by 9/10 (unverified — nothing here uses them).
 fn dma_irq_source(ch: usize) -> u32 {
     match ch {
         0..=6 => 80 + ch as u32,
@@ -1318,8 +1086,6 @@ fn dma_irq_source(ch: usize) -> u32 {
 }
 
 impl Machine {
-    /// [`Bus::load`] off the RAM path: a peripheral, or nothing. Kept out of
-    /// line so that the RAM path inlines into the cores' executors.
     #[inline(never)]
     fn load_device(&mut self, addr: u32, width: Width) -> BusResult<u32> {
         self.mmio_reads = self.mmio_reads.wrapping_add(1);
@@ -1344,9 +1110,8 @@ impl Machine {
         })
     }
 
-    /// The end of a VPU `sleep` that [`Bus::sleep_advance`] left to the ARM:
-    /// the counter moves on to `us`, firing the compares it reaches, and what
-    /// is timed against it catches up.
+    /// Finish a VPU `sleep` [`Bus::sleep_advance`] left to the ARM: the counter moves
+    /// to `us` and what is timed against it catches up.
     pub fn wake_vpu_at(&mut self, us: u64) {
         self.systimer.advance_to(us);
         self.advance_i2c();
@@ -1355,8 +1120,6 @@ impl Machine {
         self.advance_hvs();
     }
 
-    /// Where a VPU `sleep` ends: at the next compare, or at the next end of
-    /// frame the HVS interrupts it for, whichever comes first.
     fn next_wake(&self) -> Option<u64> {
         match (self.systimer.next_deadline(), self.hvs.deadline()) {
             (Some(t), Some(frame)) => Some(t.min(frame)),
@@ -1364,10 +1127,8 @@ impl Machine {
         }
     }
 
-    /// The value a read of device register `addr` would return, for the
-    /// registers where a read has no side effect; `None` for the rest. So far
-    /// only the mailbox's, which is what UEFI busy-waits on (`arm/mod.rs`,
-    /// "Busy-wait loops").
+    /// The value a read of `addr` would return where a read has no side effect;
+    /// `None` otherwise. Only the mailbox's, which is what UEFI busy-waits on.
     pub fn peek(&self, addr: u32) -> Option<u32> {
         let off = addr.checked_sub(map::MBOX_BASE)?;
         if off >= map::MBOX_SIZE {
@@ -1376,17 +1137,10 @@ impl Machine {
         self.mbox.peek(off)
     }
 
-    /// A write to the SD-slot mux word (GPIO `+0xD0`): bit 1 set routes the
-    /// card to the legacy EMMC, clear to EMMC2.
-    ///
-    /// From the traces (#66): 2020-era bootcode (pieeprom-2020-09-03, pc
-    /// `0x8000f60a`) writes `0x2` there right before its SD init on
-    /// `0x7E30_0000` and never touches EMMC2; the 2026 bootcode never writes it
-    /// and boots from EMMC2; start4 writes 0 and then sets bit 0, and start4db's
-    /// decompile clears bit 1 explicitly (`_DAT_7e2000d0 & 0xfffffffd`) before
-    /// it uses EMMC2. What bit 0 does is not known; [`crate::periph::gpio`]
-    /// holds the word, and routing the card between two controllers is the
-    /// machine's, since a device never reaches another.
+    /// A write to the SD-slot mux word: bit 1 set routes the card to the legacy EMMC,
+    /// clear to EMMC2. 2020-era bootcode (`pieeprom-2020-09-03`) writes `0x2` right
+    /// before its SD init, the 2026 bootcode never writes it, start4 clears bit 1
+    /// explicitly, and what bit 0 does is not known.
     fn route_sd_slot(&mut self, value: u32) {
         let legacy = value & SD_SLOT_MUX_LEGACY != 0;
         if legacy == self.sd_slot_legacy {
@@ -1394,7 +1148,7 @@ impl Machine {
         }
         self.sd_slot_legacy = legacy;
         if legacy {
-            // The WiFi chip steps aside: one host, one bus.
+            // One host, one bus: the WiFi chip steps aside.
             self.wifi = self.emmc.take_card();
             let card = self.emmc2.take_card();
             self.emmc.put_card(card);
@@ -1406,18 +1160,10 @@ impl Machine {
         }
     }
 
-    /// Put each master's pads where the pin functions say they are. The pins
-    /// are the GPIO block's and the masters are their own devices, so the
-    /// machine is what joins them, as it does for the SD slot.
-    ///
-    /// SPI0 reaches the boot flash only while GPIO 40..43 are on ALT4: every
-    /// EEPROM-stage flash session moves them there and back
-    /// (`specs/spi0.toml`), and in between the pins are PWM audio and the
-    /// activity LED. I²C 0 reaches the 40-pin header — a HAT's ID EEPROM —
-    /// only while GPIO 0/1 are on ALT0; start4's own probe sets them
-    /// (`GPFSEL0` `0x4` then `0x24`) and puts them back afterwards, and its
-    /// camera and display probes run the same master on GPIO 44/45, where no
-    /// HAT is.
+    /// Put each master's pads where the pin functions say; the pins belong to the
+    /// GPIO block and the masters are their own devices. SPI0 reaches the boot flash
+    /// only on GPIO 40..43 ALT4 and I²C 0 the header's HAT EEPROM only on GPIO 0/1
+    /// ALT0, and the firmware moves each there and back around every use.
     fn route_gpio_pins(&mut self) {
         let alt = |gpio: &Gpio, pin, n| gpio.function(pin) == gpio::Function::Alt(n);
         let flash = (40..=43).all(|pin| alt(&self.gpio, pin, 4));
@@ -1426,7 +1172,6 @@ impl Machine {
         self.bsc0.set_pins(header);
     }
 
-    /// [`Bus::store`] off the RAM path; see [`Self::load_device`].
     #[inline(never)]
     fn store_device(&mut self, addr: u32, width: Width, value: u32) -> BusResult<()> {
         self.recheck = true;
@@ -1457,11 +1202,8 @@ impl Machine {
                     ram.load(Machine::fold_ram_addr(buf.wrapping_add(o)), Width::Word)
                         .unwrap_or(0)
                 };
-                // A buffer the firmware rejected, as it left it. The tally in
-                // the run report says one reply carried an error code; this
-                // says which request, and the words are the whole evidence —
-                // the declared total, the tag, its value-buffer size and what
-                // the walk ran into.
+                // A rejected buffer as the firmware left it: which request it
+                // was, and how far the tag walk got.
                 let rejected = (word(4) != crate::periph::mbox::RESPONSE).then(|| {
                     let mut line = format!("property reply error at {buf:#010x}:");
                     for i in 0..16 {
@@ -1475,10 +1217,8 @@ impl Machine {
                 }
             }
             if self.dma4.take_start() {
-                // The 40-bit engine takes CPU-physical addresses, with no
-                // alias bits to say where its accesses land. It is behind the
-                // L2: stock writes its control block through `0x8000_0000`
-                // and starts the channel without flushing.
+                // CPU-physical addresses and behind the L2: stock writes its
+                // CB through `0x8000_0000` without flushing.
                 self.with_vc4_dma_master("the 40-bit DMA", |m| m.run_dma4());
             }
             if let Some(ch) = self.dma_legacy.take_start() {
@@ -1490,8 +1230,7 @@ impl Machine {
             if self.emmc2.dma_pending() {
                 self.with_dma_master("the EMMC2 DMA", |m| m.emmc2.run_dma(&mut m.ram));
             }
-            // A register write on the USB-C port's xHCI can run a ring, which
-            // needs DRAM the device itself has no view of (`xhci_otg`).
+            // A register write can run a ring, which needs DRAM of its own.
             if self.xhci_otg.write_pending() {
                 self.with_dma_master("the OTG xHCI", |m| m.xhci_otg.run_pending(&mut m.ram));
             }
@@ -1518,22 +1257,10 @@ impl Machine {
 
 impl Bus for Machine {
     fn take_pending_irq(&mut self) -> Option<u32> {
-        // Present the source at CoreCtl `+0x04` now, as it is vectored, not
-        // when it was queued: the generic dispatcher (`0x3EC3E9BC`) reads it a
-        // dozen instructions into its entry, and a source queued in between
-        // used to overwrite the one being taken. That is how a system-timer
-        // C2 match (source 66, the clock service's timeouts) got dispatched
-        // as a mailbox interrupt during Linux's boot, leaving the clock
-        // service waiting on a timer that had already fired — every later
-        // `msleep` in the firmware then hung, starting with the SD card
-        // power-off Linux asks for on its way to reboot.
-        //
-        // The controller only takes a source whose enable field is non-zero;
-        // the others stay queued until the firmware enables them. In the HTTP
-        // boot the HVS interrupt (97) is already asserted when start4 starts,
-        // and start4 never enables that source there. It used to be taken off
-        // the queue anyway, before start4 had enabled any source; only its
-        // still-empty vector-table entry kept it from running.
+        // Present the source at CoreCtl `+0x04` as it is vectored, never when
+        // queued: the dispatcher re-reads it well into its entry, so a source
+        // queued in between must not overwrite the one being taken. Only a
+        // source whose enable field is non-zero may be taken at all.
         let i = self
             .pending_irqs
             .iter()
@@ -1551,9 +1278,8 @@ impl Bus for Machine {
     }
 
     fn sleep_advance(&mut self) -> bool {
-        // With the ARM running, the jump waits for it (`Emulator::step_arm`,
-        // `Self::wake_vpu_at`): an ARM write that interrupts the VPU has to
-        // land before the counter moves past it (#53).
+        // An ARM write that interrupts the VPU must land before the counter
+        // moves past it, so with the ARM running the jump waits for it.
         if self.defer_sleep {
             self.sleep_to = self.next_wake();
             return self.sleep_to.is_some();
@@ -1566,18 +1292,14 @@ impl Bus for Machine {
             }
             _ => self.systimer.wake_to_next_match().is_some(),
         };
-        // The counter just jumped; anything timed against it has to catch up.
         self.advance_i2c();
         self.advance_pcie();
         self.advance_hvs();
         woke
     }
 
-    /// Fetch an instruction straight out of RAM when it lives there.
-    ///
-    /// The generic path in [`Bus::read_insn`] costs a full address decode per
-    /// halfword — two to five per instruction, across nearly two billion
-    /// instructions a boot. Execution is essentially always out of RAM.
+    /// Fetch an instruction straight out of RAM when it lives there: the generic path
+    /// costs an address decode per halfword, and execution is nearly always RAM.
     fn read_insn(&mut self, pc: u32, out: &mut [u8; 10]) -> BusResult<u8> {
         if let Some(off) = self.maskrom_at(pc) {
             let bytes = &self.maskrom.as_ref().expect("overlay present").2;
@@ -1592,7 +1314,6 @@ impl Bus for Machine {
             self.ram_reads = self.ram_reads.wrapping_add(1);
             return Ok(len);
         }
-        // An uncached fetch from a line the L2 holds takes the slow path.
         if !Machine::in_mmio(pc) && !self.l2.diverts(pc, Machine::fold_ram_addr(pc)) {
             let phys = Machine::fold_ram_addr(pc);
             if let Ok(head) = self.ram.read_slice(phys, 2) {
@@ -1617,14 +1338,12 @@ impl Bus for Machine {
         Ok(len)
     }
 
-    /// Same condition as `read_insn`'s RAM fast path. A hit counts as the RAM
-    /// read that fetch would have made: `ram_reads` feeds the run loop's
-    /// progress heuristics, and a decode cache must not change what they see.
+    /// Same condition as `read_insn`'s RAM fast path. A hit must count as the RAM
+    /// read that fetch would have made: `ram_reads` feeds progress heuristics a
+    /// decode cache must not perturb.
     #[inline]
     fn code_gen(&mut self, pc: u32, cached: Option<u64>) -> Option<u64> {
         if self.maskrom_at(pc).is_some() {
-            // The ROM overlay is immutable, so a fixed generation lets the decode
-            // cache keep its instructions.
             const ROM_GEN: u64 = u64::MAX;
             if cached == Some(ROM_GEN) {
                 self.ram_reads = self.ram_reads.wrapping_add(1);
@@ -1642,26 +1361,14 @@ impl Bus for Machine {
     }
 
     fn timer_tick_slot(&mut self) -> Option<u32> {
-        // The VPU vectors an interrupt through the table entry of its interrupt
-        // number: 0-31 are exceptions, 32-63 `swi`, 64-127 the external sources
-        // (hermanhermitage's VideoCore IV programmers manual). Each system-timer
-        // compare channel is its own source, `SYS_IRQ_SRC + channel`, so that is
-        // the vector. The 4-bit field the firmware writes per source is its
-        // enable and priority, not a vector: a model that vectored through it
-        // landed in start4's exception stubs, and no timed wait ever expired.
-        //
-        // The channel is the lowest one that has matched and whose source core
-        // 0's CoreCtl bank enables, the one `take_tick_pending` then takes. It
-        // goes by the latched match, never by what is still armed: a one-shot
-        // compare disarms at the moment it fires, and testing `any_armed()`
-        // dropped every one-shot match.
+        // Each compare channel vectors through its own source; the 4-bit
+        // per-source field the firmware writes is an enable and priority, never
+        // a vector. Go by the latched match, never by what is armed: a one-shot
+        // compare disarms the moment it fires.
         let ch = self.timer_channel_due()? as u32;
         let src = crate::periph::corectl::SYS_IRQ_SRC + ch;
-        // The generic dispatcher `0x3EC3E9BC` does not take the source from the
-        // vector number — it re-reads it from CoreCtl `+0x04` and indexes the
-        // handler table at `gp+58004`. Entry 64 is a direct handler and never
-        // looks, so leaving a stale pending value there would only shadow a
-        // device interrupt's own source.
+        // Entry 64 is a direct handler that never re-reads the source, so
+        // leaving a stale value would only shadow a device interrupt's own.
         if src != crate::periph::corectl::SYS_IRQ_SRC {
             self.corectl.raise_source(0, src);
         }
@@ -1755,9 +1462,7 @@ mod tests {
     use super::{map, Machine, L2_CTRL, SD_SLOT_MUX};
     use crate::bus::Bus;
 
-    /// 2020-era bootcode writes `0x2` to the mux before its SD init on the
-    /// legacy EMMC; start4 writes 0 before it uses EMMC2 (#66). The WiFi
-    /// chip has that host the rest of the time (#124).
+    /// The mux moves the card between the hosts; the WiFi chip has the legacy one.
     #[test]
     fn the_sd_slot_mux_moves_the_card_between_hosts() {
         use crate::periph::sdcard::CardKind;
@@ -1768,8 +1473,7 @@ mod tests {
         m.store32(SD_SLOT_MUX, 0x2).unwrap();
         assert_eq!(legacy_kind(&m), Some(CardKind::Sd));
         assert!(!m.emmc2.has_card());
-        // Bit 0 alone leaves the card on EMMC2's side, and the WiFi chip
-        // back on the legacy host's.
+        // Bit 0 alone leaves the card on EMMC2 and the WiFi chip on the legacy host.
         m.store32(SD_SLOT_MUX, 0x1).unwrap();
         assert_eq!(legacy_kind(&m), Some(CardKind::Sdio));
         assert!(m.emmc2.has_card());
@@ -1778,9 +1482,8 @@ mod tests {
         assert!(m.emmc2.has_card());
     }
 
-    /// 2022-04-26 bootcode keeps its config in the L2 at `0x8001_8020` and
-    /// loads a file to `0xC001_8000` across it; the flush its stub does before
-    /// bootmain ends that (#70).
+    /// 2022-04-26 bootcode keeps its config in the L2 at `0x8001_8020` and loads
+    /// a file to `0xC001_8000` across it, until its pre-bootmain flush.
     #[test]
     fn the_l2_keeps_the_bootcode_s_lines_until_its_flush() {
         let mut m = Machine::new(1 << 20);
@@ -1796,8 +1499,7 @@ mod tests {
         assert_eq!(m.load32(0x8001_80C8), Ok(0));
     }
 
-    /// Channel 15 reads a DMA4-layout control block on C0 and a legacy one on
-    /// B0, the layouts start4 builds for each (#77).
+    /// Channel 15 reads a DMA4-layout CB on C0 and a legacy one on B0.
     #[test]
     fn channel_15_takes_the_control_blocks_of_its_stepping() {
         use crate::soc::{Board, Stepping};
@@ -1832,8 +1534,7 @@ mod tests {
         }
     }
 
-    /// The sources start4's dmalib registers `dma_interrupt` on, from its own
-    /// source -> channel table (`gp+0x556b8`).
+    /// The sources start4's dmalib registers `dma_interrupt` on.
     #[test]
     fn dma_completion_sources_match_dmalib() {
         for (ch, src) in [(1, 81), (3, 83), (6, 86), (11, 89), (14, 92), (15, 95)] {
@@ -1841,8 +1542,7 @@ mod tests {
         }
     }
 
-    /// A queued source goes out once core 0's CoreCtl bank enables it, and
-    /// until then it doesn't hold up the enabled sources behind it (#25).
+    /// A queued source waits for its enable without holding up the ones behind it.
     #[test]
     fn a_queued_source_waits_for_its_corectl_enable() {
         const IRQ_PRIO: u32 = 0x7E00_2010;
@@ -1864,8 +1564,7 @@ mod tests {
         assert!(!m.irq_queued());
     }
 
-    /// A compare whose source core 0 hasn't enabled stays latched, and the
-    /// enabled channel above it goes out first (#80).
+    /// An unenabled compare stays latched; the enabled channel above goes first.
     #[test]
     fn a_timer_match_waits_for_its_source_s_enable() {
         const IRQ_PRIO: u32 = 0x7E00_2010;

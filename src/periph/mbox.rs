@@ -1,113 +1,35 @@
-//! The ARM↔VideoCore mailboxes at `0x7E00_B880`.
+//! The ARM↔VideoCore mailboxes at `0x7E00_B880`. Registers and fields:
+//! `specs/mbox.toml`.
 //!
-//! This is the channel a booted Linux talks to the firmware over: the
-//! `bcm2835-mbox` driver and `raspberrypi-firmware` on top of it, `/dev/vcio`,
-//! and the `rpi-fw-crypto` service that [rpi-mkosi#37] turns on. We are the
-//! VideoCore side of it, so the polarity is the mirror of every Linux-side
+//! We are the VideoCore side, so the polarity is the mirror of every Linux-side
 //! description: **the ARM writes MAIL1 and reads MAIL0; we read MAIL1 and write
-//! MAIL0.**
+//! MAIL0.** A message is `(address & !0xF) | channel`, the rest being the bus
+//! address of the request buffer; channel 8 is the property interface.
 //!
-//! **There are two apertures onto the same pair of FIFOs, and the firmware does
-//! not use the one the device tree names.** Linux's `mailbox@7e00b880`
-//! (`reg = <0x7e00b880 0x40>`, confirmed on the reference board) is the ARM's
-//! view. `start4`'s own driver uses `0x7E00_B980` — read out of the receive op
-//! at `0x3EC5AC0C`, which loads `0x7E00_B980` as a literal. Modelling only the
-//! documented window is why a posted request went unseen: the firmware was
-//! reading an address the model did not map.
+//! Two things this block cannot be modelled without:
 //!
-//! Each window has the same shape, and the two are mirror images — the
-//! direction a given register moves data in depends on which side you are:
-//!
-//! ```text
-//!   +0x00  data      ARM view: read a reply     VPU view: write a reply
-//!   +0x10  peek
-//!   +0x14  sender
-//!   +0x18  status    of the VPU->ARM FIFO       bit 31 FULL, bit 30 EMPTY
-//!   +0x1C  config
-//!   +0x20  data      ARM view: post a request   VPU view: read a request
-//!   +0x30  peek
-//!   +0x34  sender
-//!   +0x38  status    of the ARM->VPU FIFO
-//!   +0x3C  config    interrupt enables
-//! ```
-//!
-//! The receive op reads `+0x20`, tests bit 30 of `+0x38`, and on "empty" sets a
-//! bit in `+0x3C` — it arms the interrupt and returns rather than spinning,
-//! which is why nothing shows up in an MMIO trace of a normal boot.
-//!
-//! ## The wake path
-//!
-//! A third block, at `0x7E00_B940`, carries the interrupt state, and
-//! `start4`'s ISR for it is `0x3EC58302`:
-//!
-//! ```text
-//!   Mov   r6, 0x7E00B940
-//!   Load  r0, [r6+8]     ; mailbox 0 pending
-//!   Btest r0, #2         ;   -> call [gp+243092] with [gp+243100]
-//!   Load  r5, [r6+12]    ; mailbox 1 pending
-//!   Btest r5, #2         ;   -> call [gp+243096] with [gp+243104]
-//!   Load  r8, [0x7E00B9BC]  ; config: clear bits 6 and 4
-//! ```
-//!
-//! Bit 2 of each pending word is "this mailbox wants service", and the ISR
-//! dispatches through per-mailbox callbacks the driver registered. It arrives
-//! as **interrupt source 94** — read out of the firmware's own handler table
-//! (`--log irqtbl`:`src 94 handler=0x3ec58302`), not guessed, and the boot
-//! does enable that source.
-//!
-//! The callbacks are not the wake, though. The tail of the ISR is:
-//!
-//! ```text
-//!   Load  r8, [0x7E00B9BC]   ; MAIL1 config
-//!   Btest r8, #6             ;   -> [gp+243088] = 0, release gp+243080
-//!   Btest r8, #4             ;   -> [gp+243084] = 0, release gp+243076
-//!   Store [0x7E00B9BC], [gp+243084] | [gp+243088]   ; re-arm what is left
-//! ```
-//!
-//! `gp+243076` is the object the receive op acquires, so **bit 4 of the config
-//! word is what releases the `mbox_read` task**, and bit 6 (the opposite
-//! mailbox going empty) is what releases a sender waiting for room. Those bits
-//! are read-only interrupt-pending flags, and modelling the config word as
-//! nothing but the enables the firmware wrote is exactly what left the ISR
-//! spinning with nothing to do: it ran on every step, found `0x1`, wrote `0x1`
-//! back, and never touched the lock.
-//!
-//! So a request only reaches the `mbox_read` task if all four parts line up:
-//! the word queued on the FIFO, bit 2 set in the pending word, source 94
-//! raised, and bit 4 set in the config word. Faking the wake instead would
-//! leave the firmware's own bookkeeping (`gp+243084` / `gp+243088`) out of step
-//! with the hardware.
-//!
-//! A message is `(address & !0xF) | channel`: the low nibble is the channel and
-//! the rest is the **bus address** of the request buffer. Channel 8 is the
-//! property interface. Linux `dma_alloc_coherent`s that buffer and `/soc`
-//! carries `dma-ranges = <0xc0000000 0x0 0x0 0x40000000>`, so the address on
-//! the wire is `0xC000_0000 | phys` — the uncached SDRAM alias this model
-//! already implements, which is why no translation happens here.
-//!
-//! Nothing in the boot touches this block: the firmware only services it once
-//! an ARM is running. Under Linux that is the kernel; when the kernel parks
-//! the ARM, `boot --mbox-property` posts a request *as if* from it. Either
-//! way the answer comes from the `mbox_read` task `start4.elf` leaves running
-//! after `arm_loader` (the blob says `Creating mailbox reading task ...`).
+//! * **There are two apertures onto the same pair of FIFOs, and the firmware
+//!   does not use the one the device tree names.** Linux's `mailbox@7e00b880`
+//!   is the ARM's view; start4's driver uses `0x7E00_B980`. Map only the
+//!   documented window and a posted request is never seen.
+//! * A request reaches start4's `mbox_read` task only if all four line up: the
+//!   word on the FIFO, bit 2 of the pending word at `0x7E00_B940`, interrupt
+//!   source 94, and `PEND_HAVE_DATA` in `CONFIG1`. Those pending bits are
+//!   read-only and are the condition AND its enable, not the raw condition —
+//!   a `CONFIG` answering with the enables alone leaves the ISR nothing to do
+//!   and the task parked forever, and raw conditions would release the send
+//!   lock on every unrelated interrupt.
 //!
 //! Every property reply is decoded into a [`PropertyLog`] as the firmware posts
-//! it, whoever asked, and the run report prints it. That is the only place
-//! some answers can be seen: Linux checks the buffer's status word but not
-//! always the values, and by then the firmware's own prints go to its message
-//! ring, not the UART.
-//!
-//! [rpi-mkosi#37]: https://github.com/valtzu/rpi-mkosi/issues/37
+//! it, whoever asked, and the run report prints it — Linux checks the buffer's
+//! status word but not always the values, and the firmware's own prints go to
+//! its message ring rather than the UART.
 
 use std::collections::{BTreeMap, VecDeque};
 
 use crate::bus::{BusResult, MmioDevice, Width};
 use crate::log::{Channel, Log};
 
-// Every mailbox register is a two-element array: element 0 is the ARM's view
-// (what Linux's device tree calls `mailbox@7e00b880`), element 1 the
-// VideoCore's, which is what `start4.elf` actually drives. `CONFIG1` /
-// `STATUS1` have `CONFIG0` / `STATUS0`'s layout.
 use crate::spec::mbox::{
     CONFIG0, CONFIG0_CLEAR_MASK as CFG_CLEAR, CONFIG0_EN_HAVE_DATA_MASK as CFG_EN_HAVE_DATA,
     CONFIG0_EN_HAVE_SPACE_MASK as CFG_EN_HAVE_SPACE, CONFIG0_EN_OPP_EMPTY_MASK as CFG_EN_OPP_EMPTY,
@@ -131,13 +53,11 @@ pub const COVERAGE: Coverage = Coverage {
 const VPU: u32 = DATA0_STRIDE;
 /// One view's registers, `DATA0..=CONFIG1`; the rest of a view aliases them.
 const WINDOW: u32 = CONFIG1 + 4;
-/// The gap between the two views (`0x7E00_B8C0`..`0x7E00_B980`). Its first
-/// four words are the VPU's view of the doorbells, which
-/// [`crate::periph::bell`] decodes ahead of this block; the rest reads back 0.
+/// The gap between the two views. Its first four words are the VPU's view of
+/// the doorbells, decoded by [`crate::periph::bell`] ahead of this block.
 const PEND_BLOCK: std::ops::Range<u32> = 0x40..VPU;
 
-/// The interrupt source the mailbox arrives on, from `specs/mbox.toml`: the
-/// firmware's own handler table has `src 94 handler=0x3ec58302`.
+/// The interrupt source the mailbox arrives on.
 pub const IRQ_SRC: u32 = crate::spec::mbox::IRQ_VPU;
 
 /// `CONFIG` bits 0..2, the part that latches.
@@ -145,29 +65,23 @@ const CFG_ENABLES: u32 = CFG_EN_HAVE_DATA | CFG_EN_HAVE_SPACE | CFG_EN_OPP_EMPTY
 /// `CONFIG` bits 4..6: the interrupt-pending flag for each enable.
 const CFG_PENDING: u32 = CFG_PEND_HAVE_DATA | CFG_PEND_HAVE_SPACE | CFG_PEND_OPP_EMPTY;
 
-/// Hardware FIFOs are 8 deep.
 const DEPTH: usize = 8;
 
-/// The property interface — the channel `/dev/vcio` and `raspberrypi-firmware`
-/// use, and the only one that carries a buffer address.
+/// The property interface, the only channel carrying a buffer address.
 pub const CHANNEL_PROPERTY: u32 = 8;
 
-/// Bit 31 of a property buffer's code word marks a response, and of a tag's
-/// third word the firmware's "handled" mark (with the response length below).
+/// Marks a response in a buffer's code word, and the "handled" mark in a
+/// tag's third word.
 pub const RESPONSE: u32 = 0x8000_0000;
-/// Largest buffer [`PropertyLog::record`] walks, so a bad size word cannot send
-/// it far.
+/// Largest buffer [`PropertyLog::record`] walks, so a bad size word is bounded.
 const MAX_BUFFER: u32 = 0x1_0000;
 
-/// What the firmware answered on the property channel, tag by tag.
-///
-/// A reply can carry a value nothing else checks. `NOTIFY_XHCI_RESET` is one:
-/// `reset-raspberrypi` only checks the buffer's status word, so a VL805
-/// firmware load that failed — the tag answered `0xffffffff` — would boot the
-/// same. Recording the answer is what lets a scenario pin it.
+/// What the firmware answered on the property channel, tag by tag. A reply can
+/// carry a value nothing else checks — `reset-raspberrypi` looks only at the
+/// buffer's status word, so a failed VL805 firmware load boots the same —
+/// which is what makes recording it worth the trouble.
 #[derive(Default)]
 pub struct PropertyLog {
-    /// Property replies the firmware posted.
     pub replies: u64,
     /// Replies whose buffer-level code is not `0x8000_0000`, success.
     pub failed: u64,
@@ -177,28 +91,21 @@ pub struct PropertyLog {
 /// One tag's history in a [`PropertyLog`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TagLog {
-    /// Replies that carried the tag with the firmware's handled mark.
     pub marked: u64,
-    /// Replies that carried it without. A tag the firmware does not know is
-    /// left exactly as it was staged, but not every handler sets the mark:
-    /// `SET_GPIO_STATE` and `SET_GPIO_CONFIG` come back unmarked with their
-    /// status, `0`, in the value, and Linux's `gpio-raspberrypi-exp` takes
-    /// that as success.
+    /// Replies that carried it without: an unknown tag, but also
+    /// `SET_GPIO_STATE` / `SET_GPIO_CONFIG`, which answer unmarked with their
+    /// status in the value.
     pub unmarked: u64,
     /// The first word of the tag's value buffer as the latest reply left it,
     /// if the buffer has one.
     pub last: Option<u32>,
-    /// Replies carrying the tag whose buffer-level code was not success. The
-    /// count is per buffer, not per tag: the firmware answers one code for the
-    /// whole request, so every tag in a rejected buffer is counted. A tag that
-    /// is always in a failing buffer is where to look first.
+    /// Replies carrying the tag whose buffer-level code was not success. Per
+    /// buffer, not per tag: one code covers every tag in a rejected buffer.
     pub errors: u64,
 }
 
 impl PropertyLog {
-    /// Decode one reply buffer. `word` reads the word at a byte offset into it.
-    /// The walk steps by each tag's value-buffer size, which the client sets
-    /// and the firmware leaves alone.
+    /// Decode one reply buffer; `word` reads a word at a byte offset into it.
     pub fn record(&mut self, word: impl Fn(u32) -> u32) {
         self.replies += 1;
         let ok = word(4) == RESPONSE;
@@ -228,7 +135,6 @@ impl PropertyLog {
         }
     }
 
-    /// Every tag seen, in tag order.
     pub fn tags(&self) -> impl Iterator<Item = (u32, TagLog)> + '_ {
         self.tags.iter().map(|(&tag, &log)| (tag, log))
     }
@@ -236,23 +142,17 @@ impl PropertyLog {
 
 #[derive(Default)]
 pub struct Mbox {
-    /// Replies we have written for the ARM to read (MAIL0).
     to_arm: VecDeque<u32>,
-    /// Requests the ARM has posted for us (MAIL1).
     to_vpu: VecDeque<u32>,
     config0: u32,
     config1: u32,
     sender0: u32,
     sender1: u32,
-    /// Requests the firmware has taken off MAIL1. A request the model posted
-    /// and the firmware never read is the signal that the `mbox_read` task is
-    /// not listening the way we assumed.
+    /// Requests the firmware has taken off MAIL1: a request it never read
+    /// means the `mbox_read` task is not listening.
     pub reads: u64,
-    /// Replies the firmware has written to MAIL0.
     pub writes: u64,
-    /// Where [`Channel::Mbox`] goes.
     pub log: Log,
-    /// The firmware's property replies, decoded.
     pub property: PropertyLog,
     /// A property reply posted and not yet decoded: its buffer's bus address.
     reply_to_decode: Option<u32>,
@@ -263,8 +163,7 @@ impl Mbox {
         Mbox::default()
     }
 
-    /// Post a request as the ARM would: `(bus_addr & !0xF) | channel`.
-    /// Returns false if MAIL1 is full, exactly as the hardware would.
+    /// Post a request as the ARM would; false if MAIL1 is full.
     pub fn post_from_arm(&mut self, message: u32) -> bool {
         if self.to_vpu.len() >= DEPTH {
             return false;
@@ -281,22 +180,19 @@ impl Mbox {
         true
     }
 
-    /// Take a reply the firmware left for the ARM, if any.
     pub fn take_reply(&mut self) -> Option<u32> {
         self.to_arm.pop_front()
     }
 
-    /// The bus address of a property reply the firmware just posted, for
-    /// [`crate::machine::Machine`] to decode into [`Mbox::property`]: the
-    /// buffer is in DRAM, which this device cannot see.
+    /// The bus address of a reply just posted, for
+    /// [`crate::machine::Machine`] to decode: the buffer is in DRAM, which
+    /// this device cannot see.
     pub fn take_property_reply(&mut self) -> Option<u32> {
         self.reply_to_decode.take()
     }
 
-    /// MAIL1's `CONFIG` word as the firmware reads it (`0x7E00_B9BC`) — the
-    /// enables it wrote plus the pending flags we compute. Reported by
-    /// `--mbox-property` because a zero here means the driver has not armed
-    /// the mailbox at all and nothing we queue can raise [`IRQ_SRC`].
+    /// MAIL1's `CONFIG` as the firmware reads it. Zero means the driver has
+    /// not armed the mailbox and nothing queued can raise [`IRQ_SRC`].
     pub fn interrupt_armed(&self) -> u32 {
         self.config1_word()
     }
@@ -306,33 +202,20 @@ impl Mbox {
         !self.to_vpu.is_empty()
     }
 
-    /// True while either mailbox has a condition pending that the driver
-    /// enabled. The run loop turns this into source [`IRQ_SRC`].
+    /// A pending, enabled condition on either mailbox: source [`IRQ_SRC`].
     pub fn irq_asserted(&self) -> bool {
         (self.config0_word() | self.config1_word()) & CFG_PENDING != 0
     }
 
-    /// The ARM's mailbox interrupt (GIC SPI 33 = INTID 65, `mailbox@7e00b880
-    /// { interrupts = <0x00 0x21 0x04>; }`): mailbox 0's pending bits, as the
-    /// ARM enabled them through its own `CONFIG` at `0x7E00_B89C`. Linux's
-    /// `bcm2835-mailbox` sets `ARM_MC_IHAVEDATAIRQEN` (bit 0) there, so this is
-    /// "a reply is waiting in MAIL0".
+    /// The ARM's mailbox interrupt (INTID 65): mailbox 0's pending bits, which
+    /// with Linux's enables mean "a reply is waiting in MAIL0".
     pub fn arm_irq_asserted(&self) -> bool {
         self.config0_word() & CFG_PENDING != 0
     }
 
-    /// The interrupt-pending bits of one mailbox's `CONFIG`, from `enables`,
-    /// the mailbox's own FIFO and the opposite one.
-    ///
-    /// They are the *interrupt* pending flags, not the raw conditions: each is
-    /// its condition AND its own enable. That distinction is the whole wake
-    /// path. `0x3EC58302` reads this word back and releases a waiter only for
-    /// the bits it finds set — bit 4 releases the receive lock `gp+243076`,
-    /// bit 6 the send lock `gp+243080` — so a `CONFIG` that answers with the
-    /// enables alone leaves the ISR with nothing to do and the `mbox_read`
-    /// task parked forever. Raw conditions would be just as wrong the other
-    /// way: "the opposite mailbox is empty" is true almost always, and the ISR
-    /// would release the send lock on every unrelated interrupt.
+    /// The interrupt-pending bits of one mailbox's `CONFIG`: each is its
+    /// condition AND its own enable, which is the whole wake path (module
+    /// docs).
     fn pending_bits(enables: u32, own: &VecDeque<u32>, opp: &VecDeque<u32>) -> u32 {
         let mut p = 0;
         if enables & CFG_EN_HAVE_DATA != 0 && !own.is_empty() {
@@ -366,10 +249,9 @@ impl Mbox {
         s
     }
 
-    /// What a read of `offset` returns, for every register a read leaves as
-    /// it is — all but the two FIFOs' data words, which pop. The ARM run loop
-    /// watches these while a core busy-waits on one (`arm/mod.rs`, "Busy-wait
-    /// loops").
+    /// What a read of `offset` returns, for every register a read leaves as it
+    /// is — all but the FIFO data words, which pop. The ARM run loop watches
+    /// these while a core busy-waits on one.
     pub fn peek(&self, offset: u32) -> Option<u32> {
         // The gap between the two windows: nothing of the mailbox's is in it.
         if PEND_BLOCK.contains(&offset) {
@@ -404,11 +286,8 @@ impl MmioDevice for Mbox {
         let vpu = offset >= VPU;
         let reg = (offset & !3) % WINDOW;
         Ok(match reg {
-            // `+0x00` / `+0x18`: the VPU->ARM FIFO. The VPU writes it, so from
-            // this side a read is only meaningful for the ARM.
             DATA0 if !vpu => self.to_arm.pop_front().unwrap_or(0),
-            // `+0x20` / `+0x38`: the ARM->VPU FIFO. The VPU drains it here —
-            // this is the read the `mbox_read` task's receive op makes.
+            // The ARM->VPU FIFO, drained by the `mbox_read` task's receive op.
             DATA1 if vpu => {
                 let v = self.to_vpu.pop_front().unwrap_or(0);
                 if v != 0 {
@@ -428,7 +307,6 @@ impl MmioDevice for Mbox {
         let vpu = offset >= VPU;
         let reg = (offset & !3) % WINDOW;
         match reg {
-            // The VPU posting a reply for the ARM to read.
             DATA0 if vpu => {
                 if self.to_arm.len() < DEPTH {
                     self.to_arm.push_back(value);
@@ -439,17 +317,13 @@ impl MmioDevice for Mbox {
                 }
                 crate::log!(self.log, Channel::Mbox, "VPU -> ARM {value:#010x}");
             }
-            // The ARM posting a request. Nothing in this bench does it through
-            // MMIO — `post_from_arm` is the entry point — but model it anyway
-            // so the window is honest.
+            // The ARM posting a request; `post_from_arm` is the usual entry.
             DATA1 if !vpu => {
                 self.post_from_arm(value);
             }
             SENDER0 => self.sender0 = value,
-            // Bit 3 flushes the FIFO and does not latch; bits 4..6 are the
-            // pending flags, which are ours to compute. Only the enables stay.
-            // The driver's init writes `8` and then `1` to `CONFIG1` — clear,
-            // then arm.
+            // Bit 3 flushes and does not latch, bits 4..6 are ours to
+            // compute: only the enables stay.
             CONFIG0 => {
                 if value & CFG_CLEAR != 0 {
                     self.to_arm.clear();
@@ -463,8 +337,7 @@ impl MmioDevice for Mbox {
                 }
                 self.config1 = value & CFG_ENABLES;
             }
-            // Status bits are computed from the queues, so a write to one is an
-            // acknowledge of something that does not latch.
+            // Status comes from the queues; a write acknowledges nothing.
             _ => {}
         }
         Ok(())
@@ -486,7 +359,6 @@ mod tests {
         assert_eq!(m.read(vpu + STATUS1, Width::Word).unwrap(), 0);
         assert_eq!(m.read(vpu + PEEK1, Width::Word).unwrap(), 0xC000_1008);
         assert_eq!(m.read(vpu + DATA1, Width::Word).unwrap(), 0xC000_1008);
-        // Drained: empty again, and the read counted.
         assert_eq!(m.read(vpu + STATUS1, Width::Word).unwrap(), STATUS_EMPTY);
         assert_eq!(m.reads, 1);
     }
@@ -496,8 +368,6 @@ mod tests {
         let vpu = VPU;
         let mut m = Mbox::default();
         assert_eq!(m.take_reply(), None);
-        // The VPU writes its reply through its own window; the ARM reads it
-        // through the documented one.
         m.write(vpu + DATA0, Width::Word, 0xC000_1008).unwrap();
         assert_eq!(m.read(STATUS0, Width::Word).unwrap(), 0);
         assert_eq!(m.take_reply(), Some(0xC000_1008));
@@ -509,11 +379,9 @@ mod tests {
     fn the_config_word_carries_the_pending_bit_the_isr_releases_on() {
         let vpu = VPU;
         let mut m = Mbox::default();
-        // The driver's init: flush, then arm "MAIL1 has data".
         m.write(vpu + CONFIG1, Width::Word, CFG_CLEAR).unwrap();
         m.write(vpu + CONFIG1, Width::Word, CFG_EN_HAVE_DATA)
             .unwrap();
-        // Armed but idle: no pending bit, no line.
         assert_eq!(
             m.read(vpu + CONFIG1, Width::Word).unwrap(),
             CFG_EN_HAVE_DATA
@@ -527,10 +395,8 @@ mod tests {
         );
         assert!(m.irq_asserted());
 
-        // What `0x3EC58302` does with that: clear the enable it just served.
         m.write(vpu + CONFIG1, Width::Word, 0).unwrap();
         assert!(!m.irq_asserted());
-        // The request is still there for the woken task to take.
         assert_eq!(m.read(vpu + DATA1, Width::Word).unwrap(), 0xC000_1008);
     }
 
@@ -538,14 +404,12 @@ mod tests {
     fn opp_empty_only_pends_once_the_sender_asks_for_it() {
         let vpu = VPU;
         let mut m = Mbox::default();
-        // MAIL0 is empty, but nobody is waiting on it: no pending bit.
         m.write(vpu + CONFIG1, Width::Word, CFG_EN_HAVE_DATA)
             .unwrap();
         assert_eq!(
             m.read(vpu + CONFIG1, Width::Word).unwrap() & CFG_PEND_OPP_EMPTY,
             0
         );
-        // The send op arms bit 2 when it finds MAIL0 full.
         m.write(vpu + CONFIG1, Width::Word, CFG_EN_OPP_EMPTY)
             .unwrap();
         assert_eq!(
@@ -571,16 +435,14 @@ mod tests {
             .unwrap();
         assert_eq!(m.take_property_reply(), Some(0xCEF0_0000));
         assert_eq!(m.take_property_reply(), None);
-        // Other channels carry no property buffer.
         m.write(VPU + DATA0, Width::Word, 0xCEF0_0000 | 9).unwrap();
         assert_eq!(m.take_property_reply(), None);
     }
 
     #[test]
     fn a_property_reply_is_decoded_tag_by_tag() {
-        // What start4 leaves after a Linux request: NOTIFY_XHCI_RESET answered
-        // with the handler's return value, then a tag it does not know, left
-        // as staged, then the end tag.
+        // What start4 leaves: an answered tag, an unknown one left as staged,
+        // then the end tag.
         let buf = [
             48,
             RESPONSE,
@@ -623,9 +485,8 @@ mod tests {
             ]
         );
 
-        // A parse error: the firmware stamps the buffer and stops. The tag it
-        // was carrying is charged with it, so the report says which request
-        // failed and not only that one did.
+        // A parse error is charged to the tag it was carrying, so the report
+        // says which request failed.
         let bad = [24, RESPONSE | 1, 0x0003_0058, 4, RESPONSE | 4, 0, 0, 0];
         log.record(|o| bad.get(o as usize / 4).copied().unwrap_or(0));
         assert_eq!((log.replies, log.failed), (2, 1));

@@ -1,43 +1,30 @@
-//! Stage 1 address translation (#40, milestone 3): the VMSAv8-64 table walk
-//! for the EL1&0, EL2 and EL3 regimes, a TLB, and the faults Linux's memory
-//! management depends on.
+//! Stage 1 address translation: the VMSAv8-64 table walk for the EL1&0, EL2
+//! and EL3 regimes, a TLB, and the faults Linux's memory management depends
+//! on.
 //!
-//! Every data access and instruction fetch of the interpreter goes through
-//! [`Cpu::read`] / [`Cpu::write`] / [`Cpu::fetch`], which translate when the
-//! current regime has `SCTLR_ELx.M` set and pass the address through
-//! unchanged otherwise. What is modelled, per ARMv8.0 (ARM ARM D5):
+//! [`Cpu::read`] / [`Cpu::write`] / [`Cpu::fetch`] translate when the current
+//! regime has `SCTLR_ELx.M` set and pass the address through otherwise.
+//! ARMv8.0 (ARM ARM D5): 4 KiB and 64 KiB granules (a 16 KiB setting is treated
+//! as 4 KiB, as `ID_AA64MMFR0_EL1.TGran16 = 0` says), block and page
+//! descriptors, both `EL1&0` ranges, top-byte ignore, the full permission model
+//! including `SCTLR_ELx.WXN` and EL0-writable-is-never-PX, fault status codes,
+//! and `AT` into `PAR_EL1`. The access flag is never set by hardware, so an
+//! `AF = 0` descriptor faults and Linux sets it itself.
 //!
-//! - 4 KiB and 64 KiB granules (the A72's; `ID_AA64MMFR0_EL1.TGran16 = 0`, so
-//!   a 16 KiB setting is treated as 4 KiB), `TxSZ` 16..=39, block and page
-//!   descriptors, the two `EL1&0` ranges (`TTBR0`/`TTBR1`, `EPDx`), top-byte
-//!   ignore, the output-size check against `IPS`/`PS` capped at the A72's
-//!   44 bits.
-//! - Permissions: `AP`, `UXN`/`PXN`/`XN`, the hierarchical table bits,
-//!   `SCTLR_ELx.WXN`, and the rule that EL0-writable memory is never
-//!   privileged-executable. `LDTR`/`STTR` check EL0 permissions from EL1.
-//! - The access flag is never set by hardware (no `HAFDBS` before v8.1): a
-//!   descriptor with `AF = 0` faults, and Linux sets it itself.
-//! - Fault status codes with the level, `WnR`, and the virtual address in
-//!   `FAR`.
-//! - `AT` into `PAR_EL1`.
+//! The TLB is direct-mapped, one entry per 4 KiB page, holds only successful
+//! walks, and is flushed wholesale by every `TLBI` and by any change to a
+//! register that shapes translation. Dropping entries early is always allowed,
+//! so this is exact for a guest that follows the maintenance rules.
 //!
-//! The TLB is direct-mapped, one entry per 4 KiB page, and holds only
-//! successful walks. It is flushed wholesale by every `TLBI` and whenever a
-//! register that shapes translation changes (`SCTLR`, `TCR`, `TTBRx`,
-//! `HCR_EL2`, `SCR_EL3`); dropping entries early is always allowed, so this
-//! is exact for any guest that follows the architecture's maintenance rules.
-//!
-//! Not modelled: stage 2 (`HCR_EL2.VM` stops the run in [`Cpu::step_system`]),
-//! memory types (so no alignment faults on Device memory, and `SCTLR.A` is
-//! ignored), big-endian translation tables, and the contiguous hint, which
-//! only affects TLB usage.
+//! Not modelled: stage 2 (`HCR_EL2.VM` stops the run), memory types (so no
+//! alignment faults on Device memory, and `SCTLR.A` is ignored), big-endian
+//! tables, and the contiguous hint.
 
 use super::cpu::{Cpu, Exception, Memory};
 use super::exec::Stop;
 use super::sysreg::{key, SysRegs, HCR_DC, HCR_TGE, SCR_NS, SCTLR_M};
 
-/// Fault status codes (`ESR_ELx.{I,D}FSC`, `PAR_EL1.FST`). The first four
-/// take the table level in the low two bits.
+/// Fault status codes; the first four take the table level in bits 0..2.
 pub const FSC_ADDR_SIZE: u8 = 0x00;
 pub const FSC_TRANSLATION: u8 = 0x04;
 pub const FSC_ACCESS_FLAG: u8 = 0x08;
@@ -46,15 +33,14 @@ pub const FSC_EXTERNAL: u8 = 0x10;
 pub const FSC_WALK_EXTERNAL: u8 = 0x14;
 pub const FSC_ALIGNMENT: u8 = 0x21;
 
-/// `SCTLR_ELx.WXN`.
 const SCTLR_WXN: u64 = 1 << 19;
 
 /// The A72's physical address size (`ID_AA64MMFR0_EL1.PARange = 44 bits`).
 const PA_BITS_MAX: u32 = 44;
 const PA_MASK: u64 = (1 << 48) - 1;
 
-/// What an access wants to do; the bit is its permission in [`Entry::perms`]
-/// for EL0, shifted by 3 for the regime's own (privileged) EL.
+/// What an access wants; the bit is its EL0 permission in [`Entry::perms`],
+/// shifted by 3 for the regime's own EL.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Kind {
     Read = 1,
@@ -66,20 +52,17 @@ const PRIV: u32 = 3;
 
 #[derive(Debug, Clone, Copy, Default)]
 struct Entry {
-    /// `(page << 2) | regime`; the regime is never 0, so a zeroed entry never
-    /// matches.
+    /// `(page << 2) | regime`; the regime is never 0, so a zeroed entry misses.
     tag: u64,
     generation: u32,
     /// [`Kind`] bits: EL0's in 0..3, the regime EL's in 3..6.
     perms: u8,
     level: u8,
-    /// The physical 4 KiB page.
     pa: u64,
 }
 
 const TLB_ENTRIES: usize = 1024;
 
-/// A direct-mapped TLB (module docs).
 #[derive(Clone)]
 pub struct Tlb {
     generation: u32,
@@ -88,14 +71,10 @@ pub struct Tlb {
     pub walks: u64,
     /// Set by a `TLBI`: the machine is to flush the other cores' TLBs too.
     pub broadcast: bool,
-    /// The page the last instruction came from, as `(VA page, EL, PA page)`.
-    ///
-    /// Consecutive fetches are nearly always from the same page, and this
-    /// lets [`Cpu::fetch`] skip the whole of `translate` for them (#43). It is
-    /// only as good as the translation it was made from, so [`Tlb::flush`]
-    /// drops it with everything else — which covers every register that
-    /// shapes translation — and the EL is part of the key because it picks
-    /// the regime and the permissions.
+    /// The page the last instruction came from, as `(VA page, EL, PA page)`,
+    /// which lets [`Cpu::fetch`] skip `translate` entirely. It is only as good
+    /// as the translation behind it, so [`Tlb::flush`] drops it too, and the EL
+    /// is part of the key because it picks the regime and the permissions.
     fetch: Option<(u64, u32, u64)>,
 }
 
@@ -106,8 +85,7 @@ impl Default for Tlb {
 }
 
 impl Tlb {
-    /// The `(VA page, EL, PA page)` the last instruction was fetched from,
-    /// for a diagnostic that wants the physical PC without translating again.
+    /// [`Self::fetch`]'s hint, for a diagnostic wanting the physical PC.
     pub fn fetch_hint(&self) -> Option<(u64, u32, u64)> {
         self.fetch
     }
@@ -123,7 +101,6 @@ impl Tlb {
         }
     }
 
-    /// Forget everything.
     pub fn flush(&mut self) {
         self.fetch = None;
         self.generation = self.generation.wrapping_add(1);
@@ -150,21 +127,18 @@ impl Tlb {
     }
 }
 
-/// A successful walk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Leaf {
-    /// The physical address `va` translates to.
     oa: u64,
     perms: u8,
     level: u8,
-    /// `AttrIndx`, `SH`, `NS` of the final descriptor.
     attr_index: u8,
     sh: u8,
     ns: bool,
 }
 
-/// Is stage 1 on for `regime` (1 = EL1&0, 2, 3)? With `HCR_EL2.{TGE,DC}` set
-/// the non-secure EL1&0 regime runs with it off (D5.2.9).
+/// Is stage 1 on for `regime`? `HCR_EL2.{TGE,DC}` turn it off for non-secure
+/// EL1&0 (ARM ARM D5.2.9).
 fn stage1_on(s: &SysRegs, regime: u8) -> bool {
     if regime == 1 && s.scr_el3 & SCR_NS != 0 && s.hcr_el2 & (HCR_TGE | HCR_DC) != 0 {
         return false;
@@ -172,9 +146,7 @@ fn stage1_on(s: &SysRegs, regime: u8) -> bool {
     s.sctlr[regime as usize] & SCTLR_M != 0
 }
 
-/// `va` as the walk sees it: with top-byte-ignore on, bits 63..56 are
-/// replaced by what the range needs (a copy of bit 55 for EL1&0, zeroes for
-/// the single-range regimes).
+/// `va` as the walk sees it, with top-byte-ignore applied.
 fn untag(s: &SysRegs, regime: u8, va: u64) -> u64 {
     let tcr = s.tcr[regime as usize];
     if regime == 1 {
@@ -193,15 +165,13 @@ fn pa_bits(ps: u64) -> u32 {
     [32, 36, 40, 42, 44, 48, 48, 48][(ps & 7) as usize].min(PA_BITS_MAX)
 }
 
-/// The translation table walk (ARM ARM `AArch64.TranslationTableWalk` and
-/// `AArch64.CheckPermission`, v8.0). `va` is already untagged. Errors are
-/// fault status codes.
+/// The table walk and permission check (ARM ARM v8.0); `va` is already
+/// untagged and errors are fault status codes.
 #[inline(never)]
 fn walk<M: Memory + ?Sized>(s: &SysRegs, mem: &mut M, regime: u8, va: u64) -> Result<Leaf, u8> {
     let r = regime as usize;
     let tcr = s.tcr[r];
     let upper = regime == 1 && va >> 55 & 1 != 0;
-    // (TTBR, TxSZ, granule bits, EPDx, output size)
     let (ttbr, tsz, granule, disabled, ps) = if regime != 1 {
         let g = if tcr >> 14 & 3 == 1 { 16 } else { 12 };
         (s.ttbr0[r], tcr & 63, g, false, tcr >> 16 & 7)
@@ -268,7 +238,6 @@ fn walk<M: Memory + ?Sized>(s: &SysRegs, mem: &mut M, regime: u8, va: u64) -> Re
             level += 1;
             continue;
         }
-        // A page at level 3, or a block where the granule allows one.
         let block_ok = match granule {
             12 => level == 1 || level == 2,
             _ => level == 2,
@@ -311,7 +280,6 @@ fn walk<M: Memory + ?Sized>(s: &SysRegs, mem: &mut M, regime: u8, va: u64) -> Re
     }
 }
 
-/// See [`Cpu::translate_access`].
 type Translated = (u64, Option<(u64, u64)>);
 
 fn perm_bits(r: bool, w: bool, x: bool) -> u8 {
@@ -320,8 +288,7 @@ fn perm_bits(r: bool, w: bool, x: bool) -> u8 {
 }
 
 impl Cpu {
-    /// The translation regime the core's accesses use now, if stage 1 is on
-    /// for it.
+    /// The regime the core's accesses use now, if stage 1 is on for it.
     pub(super) fn regime(&self) -> Option<u8> {
         let r = self.el.max(1) as u8;
         stage1_on(&self.sys, r).then_some(r)
@@ -367,10 +334,8 @@ impl Cpu {
         Ok(e.pa | (va & 0xFFF))
     }
 
-    /// Translate both pages of an access, before touching either: the first
-    /// physical address, and for an access that crosses into the next page,
-    /// how many bytes are in the first and where the rest go. Errors are
-    /// `(faulting VA, fault status code)`.
+    /// Translate both pages of an access **before touching either**, so a
+    /// fault on the second leaves the first untouched.
     #[inline(always)]
     fn translate_access<M: Memory + ?Sized>(
         &mut self,
@@ -389,7 +354,6 @@ impl Cpu {
         Ok((first, Some((in_page, second))))
     }
 
-    /// A data read of `size` bytes at virtual address `va`.
     #[inline(always)]
     pub(super) fn read<M: Memory + ?Sized>(
         &mut self,
@@ -430,7 +394,6 @@ impl Cpu {
         Ok(v)
     }
 
-    /// A data write of the low `size` bytes of `value` at `va`.
     #[inline(always)]
     pub(super) fn write<M: Memory + ?Sized>(
         &mut self,
@@ -469,15 +432,12 @@ impl Cpu {
         Ok(())
     }
 
-    /// Fetch the instruction at `va` (4-byte aligned, so within one page).
+    /// Fetch the instruction at `va`.
     ///
-    /// `#[inline(always)]`, not `#[inline]`: this is a compare and a load on
-    /// every instruction the ARM executes, and whether LLVM inlines it or not
-    /// is worth 19% of the host instructions a guest instruction costs (#119).
-    /// A hint is not enough — it flips with unrelated changes, the way
-    /// [`super::super::arm::park`]'s did in #90 — so the two paths that make
-    /// the function look expensive are out of line instead: the page miss in
-    /// [`Self::fetch_page`], and the abort in [`Self::fetch_abort`].
+    /// `#[inline(always)]`, not `#[inline]`: a compare and a load on every ARM
+    /// instruction, worth close to a fifth of the host cost of one. A hint is
+    /// not enough — it flips with unrelated changes — so the expensive paths
+    /// are out of line instead ([`Self::fetch_page`], [`Self::fetch_abort`]).
     #[inline(always)]
     pub(super) fn fetch<M: Memory + ?Sized>(
         &mut self,
@@ -505,9 +465,8 @@ impl Cpu {
         }
     }
 
-    /// [`Self::fetch`] from another page than the last instruction's:
-    /// translate, and remember the page. Out of line, so that the step
-    /// every instruction takes doesn't carry the translation's registers.
+    /// [`Self::fetch`] from a new page; out of line to keep the common step's
+    /// register pressure down.
     #[inline(never)]
     fn fetch_page<M: Memory + ?Sized>(&mut self, mem: &mut M, va: u64) -> Result<u64, Exception> {
         let pa = self
@@ -517,18 +476,14 @@ impl Cpu {
         Ok(pa)
     }
 
-    /// Where a data read of `va` would go, the way a load translates it,
-    /// or `None` if it would fault. Table walks go through
-    /// `mem`.
+    /// Where a data read of `va` would go, or `None` if it would fault.
     pub fn data_pa<M: Memory + ?Sized>(&mut self, mem: &mut M, va: u64) -> Option<u64> {
         self.translate(mem, va, Kind::Read).ok()
     }
 }
 
-/// `AT S1Ex{R,W}` / `AT S12Ex{R,W}` (stage 2 is not modelled, so the latter
-/// are stage 1 only): walk `va` in `regime` as EL0 (`user`) or the regime's
-/// own EL, and report in `PAR_EL1` (ARM ARM D17.2.113). Never uses or fills
-/// the TLB.
+/// `AT S1Ex{R,W}` / `AT S12Ex{R,W}`, stage 1 only: walk `va` and report in
+/// `PAR_EL1` (ARM ARM D17.2.113). Never uses or fills the TLB.
 pub(super) fn at<M: Memory + ?Sized>(
     cpu: &mut Cpu,
     mem: &mut M,
@@ -539,7 +494,6 @@ pub(super) fn at<M: Memory + ?Sized>(
 ) {
     let s = &cpu.sys;
     let ns = s.scr_el3 & SCR_NS != 0 && regime != 3;
-    // Bit 11 is RES1 in both formats.
     let par = if !stage1_on(s, regime) {
         (va & PA_MASK & !0xFFF) | (ns as u64) << 9 | 1 << 11
     } else {
@@ -571,7 +525,6 @@ mod tests {
     use crate::aarch64::cpu::Abort;
     use crate::aarch64::Step;
 
-    /// 1 MiB of flat physical memory.
     struct Phys(Vec<u8>);
     impl Memory for Phys {
         fn read(&mut self, addr: u64, size: u32) -> Result<u64, Abort> {
@@ -606,9 +559,8 @@ mod tests {
     const PXN: u64 = 1 << 53;
     const UXN: u64 = 1 << 54;
 
-    /// EL1 with a 39-bit, 4 KiB-granule EL1&0 regime (start at level 1):
-    /// VA 0..2 MiB through L2/L3 page tables, VA 2..4 MiB a block onto PA 0,
-    /// and the TTBR1 range's first GiB through the same L2 table.
+    /// EL1, a 39-bit 4 KiB-granule EL1&0 regime: VA 0..2 MiB through L2/L3
+    /// tables, 2..4 MiB a block onto PA 0, and TTBR1's first GiB likewise.
     fn setup() -> (Cpu, Phys) {
         let mut m = Phys(vec![0; 1 << 20]);
         let mut put = |a: u64, v: u64| m.write(a, 8, v).unwrap();
@@ -649,17 +601,14 @@ mod tests {
         m.write(0x8_0010, 8, 0x1122).unwrap();
         assert_eq!(c.read(&mut m, 0x1123, 4).ok(), Some(0xAABB_CCDD));
         assert_eq!(c.read(&mut m, 0x28_0010, 8).ok(), Some(0x1122));
-        // TTBR1: the top 25 bits all ones, then the same tables.
         assert_eq!(
             c.read(&mut m, 0xFFFF_FF80_0000_1123, 4).ok(),
             Some(0xAABB_CCDD)
         );
-        // Neither range: bits 63..39 mixed.
         assert_eq!(
             fault(c.read(&mut m, 0x0000_0080_0000_0000, 4)),
             Some((0x80_0000_0000, false, FSC_TRANSLATION))
         );
-        // Top-byte ignore, when on.
         assert!(fault(c.read(&mut m, 0x5600_0000_0000_1123, 4)).is_some());
         c.sys.tcr[1] |= 1 << 37;
         c.tlb.flush();
@@ -672,7 +621,6 @@ mod tests {
     #[test]
     fn faults_carry_level_and_kind() {
         let (mut c, mut m) = setup();
-        // Unmapped L3 entry, level 3; unmapped L2 entry, level 2.
         assert_eq!(
             fault(c.read(&mut m, 0x7000, 1)),
             Some((0x7000, false, FSC_TRANSLATION | 3))
@@ -685,7 +633,6 @@ mod tests {
             fault(c.read(&mut m, 0x4008, 1)),
             Some((0x4008, false, FSC_ACCESS_FLAG | 3))
         );
-        // Read-only: reads fine, writes fault with WnR.
         assert!(c.read(&mut m, 0x2000, 8).is_ok());
         assert_eq!(
             fault(c.write(&mut m, 0x2000, 8, 0).map(|_| 0)),
@@ -699,7 +646,6 @@ mod tests {
             Some((0x2000, true, FSC_PERMISSION | 3))
         );
         assert_eq!(m.read(0x5FFC, 4).ok(), Some(0));
-        // A read across two writable pages stitches them.
         m.write(0x9FFC, 4, 0x1234_5678).unwrap();
         m.write(0xA000, 4, 0x9ABC_DEF0).unwrap();
         assert_eq!(c.read(&mut m, 0x5FFC, 8).ok(), Some(0x9ABC_DEF0_1234_5678));
@@ -723,7 +669,6 @@ mod tests {
             fault(c.read(&mut m, 0x1000, 4)),
             Some((0x1000, false, FSC_PERMISSION | 3))
         );
-        // LDTR at EL1 = EL0's view.
         c.el = 1;
         assert!(c.read(&mut m, 0x1000, 4).is_ok());
         c.unprivileged = true;
@@ -759,9 +704,8 @@ mod tests {
         assert!(fault(c.read(&mut m, 0x1000, 4)).is_some());
     }
 
-    /// The fetch hint (#43) skips `translate` for the page the last
-    /// instruction came from, so it has to go wherever the translation goes:
-    /// with a flush, and when the EL (so the regime and permissions) changes.
+    /// The fetch hint must go wherever the translation goes: on a flush, and
+    /// when the EL changes.
     #[test]
     fn fetch_hint_follows_flushes_and_the_el() {
         let (mut c, mut m) = setup();

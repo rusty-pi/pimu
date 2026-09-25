@@ -5,37 +5,27 @@
 //! for one. Only while: the part answers when those two pins carry the master
 //! and goes unACKed otherwise, since the firmware runs the same master on GPIO
 //! 44/45 for the camera and display, where no HAT is
-//! ([`crate::machine::Machine::route_gpio_pins`]). Addresses 0x51..0x53 are what a stacked HAT would answer; only the
-//! first is modelled.
+//! ([`crate::machine::Machine::route_gpio_pins`]). Addresses `0x51`..`0x53`
+//! are what a stacked HAT would answer; only the first is modelled.
 //!
-//! The protocol is the usual two-byte-addressed serial EEPROM: a write
-//! transfer carries a big-endian byte address and leaves the pointer there, a
-//! read transfer streams from the pointer and auto-increments, wrapping at the
-//! end of the part. Nothing is written to: a HAT EEPROM is write-protected in
-//! normal operation, and the firmware only ever reads it.
-//!
-//! What the bytes mean is the HAT specification's "ID EEPROM format": a
-//! `R-Pi` header, then atoms — vendor info, a GPIO map, and (atom type 3) the
-//! device-tree overlay the firmware is meant to apply. This model does not
-//! parse any of it; it serves the image it was given.
+//! The usual two-byte-addressed serial EEPROM: a write transfer carries a
+//! big-endian address and leaves the pointer there, a read streams from the
+//! pointer and wraps at the end of the part. Nothing is written to — a HAT
+//! EEPROM is write-protected and the firmware only reads it — and the ID EEPROM
+//! format itself is not parsed, only served.
 
 use super::bsc::I2cSlave;
 
-/// The address a HAT's EEPROM answers.
 pub const HAT_ADDR: u8 = 0x50;
 
 pub struct HatEeprom {
     bytes: Vec<u8>,
-    /// Where the next read comes from.
     ptr: usize,
-    /// Address bytes taken so far in the current write transfer.
     taken: u8,
-    /// The address being assembled.
     next: usize,
 }
 
 impl HatEeprom {
-    /// A part holding `bytes`, at least one byte long.
     pub fn new(mut bytes: Vec<u8>) -> HatEeprom {
         if bytes.is_empty() {
             bytes.push(0xFF);
@@ -101,7 +91,6 @@ mod tests {
         e.begin(HAT_ADDR, true);
         assert_eq!([e.read_byte(), e.read_byte()], [0x10, 0x11]);
 
-        // A fresh read transfer carries on where the last one stopped.
         e.begin(HAT_ADDR, true);
         assert_eq!(e.read_byte(), 0x12);
     }

@@ -1,12 +1,8 @@
-//! Interrupts start4 raises in software for VPU core 1 (#80).
-//!
-//! Core 0 sets the source's bit in core 1's CoreCtl pending word. Core 1 takes
-//! it once its own bank enables the source and it can take an interrupt: with
-//! interrupts on, or asleep in `sleep`, which takes one even with them off.
-//! Until then the source stays pending. It used to be dropped when core 1 had
-//! interrupts off. As core 1 takes it, core 1's own `IRQ_PENDING` (`+0x804`)
-//! presents it for start4's dispatcher. Each case runs through the fast and the
-//! slow run loop, which must make the same run.
+//! Interrupts the firmware raises in software for VPU core 1. Core 0 sets the
+//! source's bit in core 1's CoreCtl pending word; core 1 takes it once its own
+//! bank enables the source and it can take one — interrupts on, or asleep in
+//! `sleep`, which takes one even with them off. Until then it stays pending and
+//! is never dropped. Each case runs both run loops, which must make one run.
 
 use pimu::bus::Bus;
 use pimu::emulator::{Emulator, RunEnd, RunLimits, RunReport};
@@ -21,16 +17,12 @@ const CODE: u32 = 0x1000;
 const VBASE1: u32 = 0x2000;
 const HANDLER: u32 = 0x3000;
 const CORE1: u32 = 0x4000;
-/// Where the handler stores the two values it reads from core 1's
-/// `IRQ_PENDING`.
 const SEEN: u32 = 0x6000;
 const STACK1: u32 = 0x8000;
-/// ThreadX's reschedule IPI for core 1, the source start4 raises for it.
 const SRC: u32 = 79;
-/// Core 1's `IRQ_PENDING` as its handler should find it: the interrupt number
-/// and the priority it was enabled at, in both half-words, then 0 on the
-/// second, read-to-clear read. A Raspberry Pi 4B d03115 read from inside a
-/// handler answers this shape -- `0x01470147` for source 71 at priority 1.
+/// Core 1's `IRQ_PENDING`: source and priority in both half-words, then 0 on the
+/// read-to-clear second read. A Raspberry Pi 4B d03115, read from inside a
+/// handler, answers `0x01470147` for source 71 at priority 1.
 const SEEN_HALF: u32 = 0x100 | SRC;
 const SEEN_OK: [u32; 2] = [SEEN_HALF | (SEEN_HALF << 16), 0];
 
@@ -41,28 +33,22 @@ const EI: u16 = 0x0004;
 const DI: u16 = 0x0005;
 const RTI: u16 = 0x000A;
 
-/// `ld rd, (rs)`
 const fn ld(rd: u16, rs: u16) -> u16 {
     0x0800 | (rs << 4) | rd
 }
-/// `st rd, (rs)`
 const fn st(rd: u16, rs: u16) -> u16 {
     0x0900 | (rs << 4) | rd
 }
-/// `mov rd, #u5`
 const fn mov5(rd: u16, u: u16) -> u16 {
     0x6000 | (u << 4) | rd
 }
-/// `add rd, #u5`
 const fn add5(rd: u16, u: u16) -> u16 {
     0x6200 | (u << 4) | rd
 }
-/// `cmp rd, rs`
 const fn cmp(rd: u16, rs: u16) -> u16 {
     0x4A00 | (rs << 4) | rd
 }
 
-/// Halfwords at consecutive addresses, from `at`.
 struct Asm {
     at: u32,
     code: Vec<u16>,
@@ -84,32 +70,28 @@ impl Asm {
         self.code.push(h);
     }
 
-    /// `mov rd, #imm32`, the 48-bit form.
     fn mov32(&mut self, rd: u16, v: u32) {
         self.code.extend([0xE800 | rd, v as u16, (v >> 16) as u16]);
     }
 
-    /// `b<cond> to`, the 16-bit form.
     fn b(&mut self, cond: u16, to: u32) {
         let halfwords = (to.wrapping_sub(self.pc()) as i32) / 2;
         assert!((-64..64).contains(&halfwords), "branch out of range");
         self.op(0x1800 | (cond << 7) | (halfwords as u16 & 0x7F));
     }
 
-    /// Store `v` at `addr`, through r2 and r3.
     fn poke(&mut self, addr: u32, v: u32) {
         self.mov32(2, addr);
         self.mov32(3, v);
         self.op(st(3, 2));
     }
 
-    /// Print `c`: r6 holds the UART, r7 is clobbered.
+    /// Print `c`; r7 is clobbered.
     fn putc(&mut self, c: u8) {
         self.mov32(7, u32::from(c));
         self.op(st(7, 6));
     }
 
-    /// Count r1 up to `n`, through r1 and r10.
     fn wait(&mut self, n: u32) {
         self.mov32(10, n);
         self.op(mov5(1, 0));
@@ -119,7 +101,6 @@ impl Asm {
         self.b(NE, top);
     }
 
-    /// `b .`
     fn spin(&mut self) {
         let here = self.pc();
         self.b(AL, here);
@@ -132,13 +113,11 @@ impl Asm {
     }
 }
 
-/// `enable_irq_source(SRC, 1)` in core 1's bank.
 fn enable(a: &mut Asm) {
     let word = CORECTL_BASE + INSTANCE_STRIDE + IRQ_PRIO + ((SRC >> 3) & 3) * IRQ_PRIO_STRIDE;
     a.poke(word, 1 << ((SRC & 7) * 4));
 }
 
-/// Raise `SRC` on core 1 the way start4 does: its bit in core 1's pending word.
 fn raise(a: &mut Asm) {
     a.poke(
         CORECTL_BASE + INSTANCE_STRIDE + IRQ_PENDING_BITS,
@@ -146,10 +125,8 @@ fn raise(a: &mut Asm) {
     );
 }
 
-/// Run both cores until the console shows `until`, through the fast or the
-/// slow loop. Core 1 starts with interrupts on, a stack and the UART in r6.
-/// Its vector for `SRC` reads core 1's `IRQ_PENDING` twice into `SEEN`, then
-/// prints `!`. Returns the report and the two values the handler read.
+/// Run both cores until the console shows `until`, fast or slow. Core 1's vector
+/// for `SRC` reads `IRQ_PENDING` twice into `SEEN`, then prints `!`.
 fn run(core0: &Asm, core1: &Asm, until: &str, fast: bool) -> (RunReport, [u32; 2]) {
     let mut m = Machine::new(1 << 20);
     core0.load(&mut m);
@@ -166,12 +143,10 @@ fn run(core0: &Asm, core1: &Asm, until: &str, fast: bool) -> (RunReport, [u32; 2
     h.op(RTI);
     h.load(&mut m);
     m.store32(VBASE1 + 4 * SRC, HANDLER).unwrap();
-    // Something the handler has to overwrite, so one that never ran shows.
     m.store32(SEEN, 0xDEAD_BEEF).unwrap();
     m.store32(SEEN + 4, 0xDEAD_BEEF).unwrap();
     let mut emu = Emulator::new(m, CODE);
     emu.fast_loop = fast;
-    // `sleep` waits for an interrupt rather than halting the run.
     emu.set_unimpl_policy(UnimplPolicy::ReconFault);
     emu.cpu.regs.set(6, UART0_BASE);
     emu.start_smp(CORE1);
@@ -188,8 +163,7 @@ fn run(core0: &Asm, core1: &Asm, until: &str, fast: bool) -> (RunReport, [u32; 2
     (report, seen)
 }
 
-/// Run both ways, require the same run, and return its console and what the
-/// handler read from `IRQ_PENDING`.
+/// Run both ways, require the same run, and return what the handler read.
 fn both(core0: &Asm, core1: &Asm, until: &str) -> (String, [u32; 2]) {
     let (fast, fast_seen) = run(core0, core1, until, true);
     let (slow, slow_seen) = run(core0, core1, until, false);
@@ -233,8 +207,7 @@ fn a_source_raised_with_interrupts_off_waits_for_ei() {
     assert_eq!(seen, SEEN_OK);
 }
 
-/// Raised while core 1 sleeps with interrupts off: `sleep` takes it, and core
-/// 1 carries on after the `sleep` once the handler returns.
+/// Raised while core 1 sleeps with interrupts off: `sleep` takes it anyway.
 #[test]
 fn a_source_raised_during_sleep_wakes_core_1() {
     let mut c0 = Asm::new(CODE);

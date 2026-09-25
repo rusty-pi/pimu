@@ -1,41 +1,13 @@
 //! BCM2711 per-channel PVT monitors at `0x7D5D_8000` — the process / voltage /
 //! temperature sensors start4's DVFS code samples alongside the AVS monitor.
 //!
-//! Eighteen channels, `0x40` bytes apart, at `0x7D5D_8000 + ch*0x40`. The block
-//! sits inside the `0x7D5D_0000` window, so without this device it falls
-//! through to [`ClkMon`](crate::periph::clkmon)'s plain storage and every
-//! register reads 0 — including the magic below.
-//!
-//! ## The conversation start4 has with it
-//!
-//! `FUN_0ec300fa(ch, _, &hi, &lo)` is the reader, and it is gated on a magic:
-//!
-//! ```c
-//! if (*(int *)(ch * 0x40 + 0x7d5d8010) == 0x7fff50cf) {
-//!     uVar1 = *(uint *)(ch * 0x40 + 0x7d5d801c);
-//!     *param_3 = (ushort)(uVar1 >> 0x10);
-//!     *param_4 = (ushort)uVar1;
-//!     if (*param_3 < 10) { *param_3 = 0; ... }
-//!     if (uVar2 < 10) { *param_4 = 0; }
-//! }
-//! else { *param_3 = 0; *param_4 = 0; }
-//! ```
-//!
-//! With `+0x10` reading 0 the magic never matches, the "absent" branch runs and
-//! both halves come back zero. The firmware handles that cleanly, so nothing
-//! was blocked — but it is the `SCALER_DISPID` trap from #13 exactly: a magic
-//! register reading 0 means *this chip is absent*, not *unimplemented*, and the
-//! model was quietly asserting that a Pi 4 has no PVT blocks. It has eighteen.
-//!
-//! The other registers the firmware touches, all per channel:
-//!
-//! * `+0x14` and `+0x18` are read/write threshold pairs, two 16-bit fields
-//!   each. `FUN_0ec30276` reads both and splits them; `FUN_0ec3030e` writes one
-//!   or the other as `(lo & 0xffff) | (hi << 16)`. Plain storage is right, but
-//!   the *initial* value matters because `FUN_0ec30276` can read them before
-//!   anything has written them — so they are seeded from hardware below.
-//! * `+0x1C` is the read-only measurement pair, the one `FUN_0ec300fa` takes.
-//! * `+0x00` reads back the channel's own index.
+//! Registers and fields: `specs/pvt.toml` ([`crate::spec::pvt`]). Eighteen
+//! channels, `0x40` bytes apart. The block sits inside the `0x7D5D_0000`
+//! window, so it has to be decoded ahead of [`ClkMon`](crate::periph::clkmon),
+//! whose plain storage would otherwise answer 0 everywhere — including for the
+//! magic at `MAGIC`. A magic register reading 0 does not mean *unimplemented*,
+//! it tells the firmware *this chip is absent*: start4 then skips the channel
+//! and reports no measurement at all.
 //!
 //! ## Ground truth
 //!
@@ -53,35 +25,25 @@
 //! ch 5..17   n  0x7fff50cf  0x035d0340  0x06480624  0x04xx07xx
 //! ```
 //!
-//! Two things worth recording about that dump:
+//! Channels 2 and 3 have the magic and a live `READING`, but zero thresholds:
+//! start4 leaves them out of its core-voltage characterisation. `THRESHOLD_A`
+//! differs between channels 0..1 and 4..17; both values are reproduced verbatim
+//! rather than averaged into one constant.
 //!
-//! * Channels 2 and 3 have the magic and a live `+0x1C`, but their `+0x14` and
-//!   `+0x18` thresholds are zero. That is not a truncated read — it is
-//!   consistent across the whole block and reproduced across two boots.
-//! * `+0x14` differs between channels 0..1 (`0x0364…`) and 4..17 (`0x035d…`).
-//!   Both are reproduced verbatim rather than averaged into one constant.
+//! These are post-start4 values off a Linux-booted board, not power-on-reset
+//! values. For the magic and the index that makes no difference; the thresholds
+//! may well be start4's own, but as seeds for registers the firmware overwrites
+//! anyway they are far better than zero.
 //!
-//! This is a Linux-booted board, so these are post-start4 values, not
-//! power-on-reset values. For `+0x10` and `+0x00` that distinction does not
-//! matter (a magic and an index are hardwired). For `+0x14` / `+0x18` it might:
-//! start4 may itself have programmed them during the boot we are modelling. As
-//! seeds for registers the firmware overwrites anyway, they are the best
-//! available answer, and far better than zero.
+//! ## Why the readings are constants
 //!
-//! ## What the `+0x1C` readings are used for, and why a constant is right
-//!
-//! `FUN_0ec303e8` walks the channels twice. The first pass stores each half as
-//! a baseline in `gp+0xd47dc` / `gp+0xd4824`; the second re-reads and feeds
-//! `FUN_0ec72aae(baseline, sample, temp, volt, coeff)`, the same adaptive
-//! corrector the AVS rail monitors go through. It returns the baseline
-//! unchanged whenever the two samples differ by at most 1, so a *stable*
-//! reading means "no adaptive correction" — the right answer for a model that
-//! does not simulate silicon speed. Both halves must also be non-zero, and at
-//! least 10, or the correction is skipped entirely; the real values (`0x0406`
-//! to `0x0437` high, `0x077c` to `0x07c4` low) clear that floor comfortably.
-//!
-//! So the per-channel `+0x1C` values are reproduced exactly as measured and
-//! held constant, deliberately. Nothing here models drift.
+//! start4 walks the channels twice, keeps the first pass as a baseline and
+//! feeds the second through the same adaptive corrector the AVS rail monitors
+//! go through. That corrector returns the baseline unchanged whenever the two
+//! samples differ by at most 1, so a *stable* reading means "no adaptive
+//! correction" — the right answer for a model that does not simulate silicon
+//! speed. Both halves must also be at least 10 or the correction is skipped;
+//! the measured values clear that floor comfortably. Nothing here models drift.
 
 use std::collections::BTreeMap;
 
@@ -94,9 +56,8 @@ use crate::spec::pvt::{
 };
 use crate::spec::Coverage;
 
-/// Eighteen channels, one register bank each. start4 initialises exactly this
-/// many (`k = 0..17`), and channel 17 is the last one carrying the magic on
-/// hardware.
+/// Eighteen channels, one register bank each — the number start4 initialises,
+/// and the number carrying the magic on hardware.
 pub const CHANNELS: u32 = INSTANCES;
 
 /// Every register in `specs/pvt.toml` is modelled.
@@ -111,8 +72,8 @@ pub const COVERAGE: Coverage = Coverage {
     ],
 };
 
-/// `+0x14` and `+0x18` as measured, per channel. Channels 2 and 3 really do
-/// read zero for both.
+/// `THRESHOLD_A` and `THRESHOLD_B` as measured, per channel. Channels 2 and 3
+/// really do read zero for both.
 const THRESHOLDS: [(u32, u32); CHANNELS as usize] = [
     (0x0364_0340, 0x0648_0624), // ch 0
     (0x0364_0340, 0x0648_0624), // ch 1
@@ -134,7 +95,7 @@ const THRESHOLDS: [(u32, u32); CHANNELS as usize] = [
     (0x035d_0340, 0x0648_0624), // ch 17
 ];
 
-/// `+0x1C` as measured, per channel.
+/// `READING` as measured, per channel.
 const READINGS: [u32; CHANNELS as usize] = [
     0x0427_0799, // ch 0
     0x0428_07b2, // ch 1

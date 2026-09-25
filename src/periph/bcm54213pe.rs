@@ -3,49 +3,34 @@
 //! (`/scb/ethernet@7d580000/mdio@e14/ethernet-phy@1`), wired to the MAC over
 //! RGMII (`phy-mode = "rgmii-rxid"`).
 //!
+//! Registers and their measured values: `specs/bcm54213pe.toml`. The values
+//! were read through the kernel (`SIOCGMIIREG` on `eth0`) on a Raspberry Pi 4B
+//! d03115 with Linux up and a 1 Gb/s link.
+//!
 //! Three clients drive it: the EEPROM bootloader's network boot (`GENET:
 //! RESET_PHY`, `CTL %04x PHY ID %04x %03x`, then a wait for link), start4's
-//! network path (`FUN_0ecc3198` / `FUN_0ecc3280` are its MDIO read / write,
-//! `FUN_0ecc3260` / `FUN_0ecc3220` the `0x1C` shadow write / read), and Linux
-//! (`drivers/net/phy/broadcom.c`, `bcm54xx_config_init`, and the generic
-//! clause-22 code in `phylib`).
-//!
-//! # Ground truth
-//!
-//! Read through the kernel (`SIOCGMIIREG` on `eth0`) on a Pi 4B rev 1.5
-//! (d03115) with Linux up and a 1 Gb/s link:
-//!
-//! ```text
-//!   0x00 BMCR     0x1140    0x01 BMSR     0x796d    0x02/03 ID  0x600d 0x84a2
-//!   0x04 ANAR     0x0de1    0x05 ANLPAR   0xc5e1    0x06 ANER   0x006d
-//!   0x07 NPTX     0x2001    0x09 CTRL1000 0x0300    0x0a STAT1000 0x0800
-//!   0x0f ESTATUS  0x3000    0x18 AUX_CTL  0x71e7    0x1b IMR    0xfff1
-//!   0x1c SHADOW   0x386a
-//! ```
-//!
-//! `ethtool --show-eee eth0` on the same board: EEE supported and advertised
-//! for 100baseT/Full and 1000baseT/Full.
+//! network path, and Linux (`drivers/net/phy/broadcom.c`,
+//! `bcm54xx_config_init`, and the generic clause-22 code in `phylib`).
 //!
 //! # Link
 //!
 //! Without a cable ([`Bcm54213pe::set_link`] false, the default) there is no
 //! link partner: auto-negotiation never completes and the link stays down.
-//! BMSR reads the measured value without its link-status (bit 2) and
+//! `BMSR` reads the measured value without its link-status (bit 2) and
 //! AN-complete (bit 5) bits, and the link partner registers read 0. Linux
 //! reports `eth0: Link is Down` and stops there; the bootloader's network
 //! boot waits for link and times out.
 //!
 //! With a cable the partner is the measured one: a 1 Gb/s full-duplex switch
-//! port with pause, and every link-partner register reads what the reference
-//! board read. Negotiation completes as soon as it is (re)started, so the
+//! port with pause, and every link-partner register reads the measured value.
+//! Negotiation completes as soon as it is (re)started, so the
 //! link is up at the first poll. The bootloader's wait-for-link loop polls
-//! only BMSR, LPA and STAT1000 (MDIO reads of registers 1, 5 and 10 from
-//! `0x0009196e`).
+//! only `BMSR`, `LPA` and `STAT1000`.
 //!
 //! # Register access paths
 //!
-//! Besides the clause-22 registers the part has three indirect spaces, all
-//! used by `broadcom.c` / `bcm-phy-lib.c`:
+//! Besides the clause-22 registers the part has three indirect spaces, none of
+//! them in the spec, all used by `broadcom.c` / `bcm-phy-lib.c`:
 //!
 //! * `0x18` auxiliary control: eight shadow registers, selected by bits 2:0
 //!   of a write. A write to shadow 7 (misc) with bit 15 clear instead selects
@@ -66,7 +51,7 @@ use std::collections::BTreeMap;
 
 use crate::spec::{bcm54213pe as regs, Coverage};
 
-/// MDIO address on the Pi 4B (`ethernet-phy@1`).
+/// MDIO address on the Raspberry Pi 4B (`ethernet-phy@1`).
 pub const ADDR: u8 = regs::BASE as u8;
 /// `PHY_ID_BCM54213PE` in `include/linux/brcmphy.h`: registers 2 / 3.
 pub const PHY_ID: u32 = regs::PHYSID1_RESET << 16 | regs::PHYSID2_RESET;
@@ -269,7 +254,7 @@ impl Bcm54213pe {
             NPTX => self.nptx,
             CTRL1000 => self.ctrl1000,
             // Nothing on the far end: no partner abilities, no 1000BASE-T
-            // status, no AUX status (0x19), no interrupt pending.
+            // status, no AUX status, no interrupt pending.
             LPA | LPNP | STAT1000 | COUNTER..=COUNTER_LAST | AUX_STATUS | ISR => 0,
             MMD_CTRL => self.mmd_ctrl,
             MMD_DATA => self.mmd_data_read(),
@@ -467,11 +452,12 @@ mod tests {
     #[test]
     fn aux_ctl_misc_shadow_reads_back_through_the_read_selector() {
         let mut p = Bcm54213pe::new();
-        // bcm54xx_auxctl_read(MISC): select, then read.
+        // `bcm54xx_auxctl_read(MISC)`: select, then read.
         p.write(AUX_CTL, 0x7 | 7 << 12);
         let v = p.read(AUX_CTL);
         assert_eq!(v & 7, 7);
-        // bcm54xx_config_clock_delay for rgmii-rxid: set RX skew, write back.
+        // `bcm54xx_config_clock_delay` for `rgmii-rxid`: set RX skew, write
+        // back.
         p.write(AUX_CTL, v | AUX_MISC_WREN | 0x0100);
         p.write(AUX_CTL, 0x7 | 7 << 12);
         // Same as the board after Linux configured it.
@@ -502,7 +488,7 @@ mod tests {
     #[test]
     fn mmd_window_reports_eee_for_100tx_and_1000t() {
         let mut p = Bcm54213pe::new();
-        // phy_read_mmd(3, 20) through the clause-22 indirection.
+        // `phy_read_mmd(3, 20)` through the clause-22 indirection.
         p.write(MMD_CTRL, MMD_PCS);
         p.write(MMD_DATA, MDIO_PCS_EEE_ABLE);
         p.write(MMD_CTRL, 0x4000 | MMD_PCS);

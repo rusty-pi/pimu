@@ -1,11 +1,7 @@
-//! Peripheral-model tests.
-//!
-//! The recurring failure mode in this project is not a peripheral that behaves
-//! subtly wrong — it is a register that reads back 0. Firmware reads 0 from an
-//! identification or status register as "this chip is absent" and silently
-//! skips a whole subsystem, and the symptom surfaces hundreds of millions of
-//! instructions later as a `bl <null>`. These tests pin the register values
-//! that the boot is known to gate on.
+//! Peripheral-model tests: the register values the boot gates on. A register
+//! that reads back 0 is "this chip is absent" to the firmware, which then skips
+//! a whole subsystem and fails hundreds of millions of instructions later. The
+//! registers themselves are described in `specs/*.toml` and `docs/periph/`.
 
 use pimu::bus::{Bus, MmioDevice, Width};
 use pimu::periph::Spi0;
@@ -17,16 +13,13 @@ fn machine() -> Machine {
     Machine::new(1024 * 1024)
 }
 
-/// `SCALER_DISPID` at `0x7E40_0008`. start4's display bring-up compares it
-/// against `0x64647276` and bails out immediately otherwise, which skips
-/// `hdmi_init` and leaves the HDMI provider array null (commit `b21bc55`, #13).
-/// The value is read off a running Pi 4's `hvs_regs`, not guessed.
+/// `SCALER_DISPID`: start4 skips `hdmi_init` entirely unless it reads
+/// `0x64647276`, the value a real Raspberry Pi 4B's `hvs_regs` gives.
 #[test]
 fn scaler_dispid_identifies_the_hvs() {
     let mut m = machine();
     assert_eq!(m.load32(map::HVS_BASE + 0x08).unwrap(), 0x6464_7276);
 
-    // Read-only: the firmware writes all over this block.
     m.store32(map::HVS_BASE + 0x08, 0).unwrap();
     assert_eq!(
         m.load32(map::HVS_BASE + 0x08).unwrap(),
@@ -35,9 +28,7 @@ fn scaler_dispid_identifies_the_hvs() {
     );
 }
 
-/// The HVS frame-swap wait polls `current` (`+0x30 + 4*chan`) until it matches
-/// `requested` (`+0x20 + 4*chan`). With no display behind it, `current` has to
-/// mirror `requested` or every swap burns its full 100 x 1 ms timeout.
+/// The HVS frame-swap wait polls `current` until it matches `requested`.
 #[test]
 fn hvs_frame_swap_completes_immediately() {
     let mut m = machine();
@@ -52,12 +43,8 @@ fn hvs_frame_swap_completes_immediately() {
     }
 }
 
-/// start4's USB power-on (#49): request power at `0x7E80_8008` bit 2, wait for
-/// both acknowledge bits at `+0x20`, then reset the DWC2 core and flush its
-/// FIFOs, spinning on each `GRSTCTL` bit. None of those waits has a timeout, so
-/// a wrong answer parks the `SET_POWER_STATE` handler for good and every later
-/// property request goes unanswered. The values are what a
-/// Raspberry Pi 4B d03115 reads before and after the same request.
+/// start4's USB power-on, none of whose spins has a timeout. The values are what
+/// a Raspberry Pi 4B d03115 reads before and after the same request.
 #[test]
 fn usb_power_on_handshake_completes() {
     let mut m = machine();
@@ -83,10 +70,7 @@ fn usb_power_on_handshake_completes() {
     assert_eq!(m.load32(grstctl).unwrap(), 0x8000_0000);
 }
 
-/// `GSNPSID` names the core: OTG 2.80a on the reference board. Linux's dwc2
-/// refuses a core whose id lacks the `0x4F54` prefix, and UEFI's
-/// `DwUsbHostDxe` sizes its channel loops from `GHWCFG2`, where 0 reads as one
-/// channel. The board has eight.
+/// `GSNPSID` names the core: OTG 2.80a on a Raspberry Pi 4B.
 #[test]
 fn dwc2_identifies_itself() {
     let mut m = machine();
@@ -95,10 +79,8 @@ fn dwc2_identifies_itself() {
     assert_eq!((hwcfg2 >> 14 & 0xF) + 1, 8);
 }
 
-/// What UEFI's `DwUsbHostDxe` does once USB has power (#49): halt every host
-/// channel and wait up to ten seconds, polled, for `CHENA` to clear; check
-/// `GINTSTS.CURMOD` before powering the root port; then read the port status.
-/// Storage that kept `CHENA` set cost ten guest seconds per channel.
+/// What UEFI's `DwUsbHostDxe` does once USB has power. A `CHENA` that never
+/// clears costs ten guest seconds per channel.
 #[test]
 fn dwc2_host_channels_halt_and_the_port_is_empty() {
     let mut m = machine();
@@ -120,8 +102,7 @@ fn dwc2_host_channels_halt_and_the_port_is_empty() {
         assert_eq!(m.load32(hcint).unwrap(), 0);
     }
 
-    // Port power sticks; nothing is connected, and writing the change bits or
-    // PRTENA does not make it look otherwise.
+    // Port power sticks, and the change bits do not make it look connected.
     m.store32(base + 0x440, 0x1000 | 0x2F).unwrap();
     assert_eq!(m.load32(base + 0x440).unwrap(), 0x1000);
 
@@ -137,10 +118,8 @@ const CS_CLEAR_TX: u32 = 1 << 4;
 const CS_DONE: u32 = 1 << 16;
 const CS_RXD: u32 = 1 << 17;
 
-/// SPI0 `CS.DONE` reflects the TX side only. Gating it on an empty RX FIFO
-/// broke start4's EEPROM section scanner, which clocks a block and then checks
-/// `DONE` while the received bytes are still queued — reading `DONE = 0` there
-/// is a transfer error to the firmware, and the whole scan failed.
+/// SPI0 `CS.DONE` reflects the TX side only: start4's EEPROM scanner checks it
+/// with received bytes still queued, and reads `DONE = 0` as a transfer error.
 #[test]
 fn spi0_done_is_tx_side_only() {
     let mut spi = Spi0::new();
@@ -160,20 +139,16 @@ fn spi0_done_is_tx_side_only() {
         "DONE must be set with the transfer active, RX FIFO or not"
     );
 
-    // And the read command actually returns flash contents.
     for _ in 0..4 {
         spi.read(FIFO, Width::Word).unwrap(); // command + address echoes
     }
     assert_eq!(spi.read(FIFO, Width::Word).unwrap(), 0xAA);
 }
 
-/// Core 1's copies of the core-control registers live at `+0x800`. The window
-/// was mapped 0x100 bytes wide, so every one of them fell through to the
-/// catch-all peripheral stub and core 1 looked like it enabled no interrupts at
-/// all (commit `7bd21a3`).
+/// Core 1's copies of the core-control registers live at `+0x800`, so too small
+/// a window drops them all on the stub and core 1 enables no interrupts.
 #[test]
 fn core1_registers_are_inside_the_corectl_window() {
-    // The window must cover core 1's block at +0x800.
     const _: () = assert!(map::CORECTL_SIZE > 0x844);
 
     let mut m = machine();
@@ -187,16 +162,11 @@ fn core1_registers_are_inside_the_corectl_window() {
         );
     }
 
-    // Core 0's vector base is the one register whose value the model keeps.
     m.store32(map::CORECTL_BASE + 0x30, 0x0002_8000).unwrap();
     assert_eq!(m.corectl.vbase[0], 0x0002_8000);
 }
 
-/// Core 1's vector base is one 0x800 stride above core 0's, like every other
-/// register in this block. A boot trace of the core-control writes shows the
-/// pair `+0x30` and `+0x830` taking the same base (`0xFEC01E00`) and nothing
-/// ever writing `+0x38`; the old `+0x38` guess left `vbase[1]` at 0, so core 1
-/// could never be vectored (commit `06a8447`).
+/// Core 1's vector base is one 0x800 stride above core 0's.
 #[test]
 fn core1_vector_base_is_recorded_from_the_strided_offset() {
     let mut m = machine();
@@ -204,16 +174,13 @@ fn core1_vector_base_is_recorded_from_the_strided_offset() {
     m.store32(map::CORECTL_BASE + 0x830, 0xFEC0_1E00).unwrap();
     assert_eq!(m.corectl.vbase[1], 0xFEC0_1E00);
 
-    // `+0x38` is not the vector base and must not be mistaken for it.
     let mut m = machine();
     m.store32(map::CORECTL_BASE + 0x38, 0xFEC0_1E00).unwrap();
     assert_eq!(m.corectl.vbase[1], 0);
 }
 
-/// start4 raises an interrupt on a core by setting its bit in that core's
-/// pending word (`+0x40` for sources 64..95, `+0x840` for core 1). Dropping
-/// those writes silently starves every software-posted interrupt — the clock
-/// service re-posts its own source 66 that way on every run.
+/// The firmware raises an interrupt by setting its bit in that core's pending
+/// word; dropping the write starves every software-posted interrupt.
 #[test]
 fn software_posted_interrupts_are_queued_per_core() {
     let mut m = machine();
@@ -225,21 +192,15 @@ fn software_posted_interrupts_are_queued_per_core() {
     assert_eq!(m.corectl.take_sw_raised(), Some((1, 79)));
     assert_eq!(m.corectl.take_sw_raised(), None);
 
-    // Clearing a bit is the ISR's acknowledge, not a new interrupt.
     m.store32(map::CORECTL_BASE + 0x40, 0).unwrap();
     assert_eq!(m.corectl.take_sw_raised(), None);
 }
 
-/// Each bank has its own `IRQ_PENDING` (`+0x04` / `+0x804`): start4's
-/// dispatcher runs on both cores and reads it through its own bank pointer.
-/// It reads `VALID` (bit 8) with the source minus 64, then 0 (#80).
+/// Each bank has its own read-to-clear `IRQ_PENDING` (`+0x04` / `+0x804`).
 #[test]
 fn irq_pending_is_per_core_and_read_to_clear() {
     let mut m = machine();
 
-    // A delivered source carries the priority its IRQ_PRIO field holds, in
-    // both half-words: source 79 sits in core 1's word 1 field 7, source 66 in
-    // core 0's word 0 field 2. Enable each at priority 1, as start4 does.
     m.store32(map::CORECTL_BASE + 0x814, 1 << 28).unwrap();
     m.store32(map::CORECTL_BASE + 0x010, 1 << 8).unwrap();
 
@@ -265,14 +226,11 @@ fn irq_pending_is_per_core_and_read_to_clear() {
     assert_eq!(m.load32(map::CORECTL_BASE + 0x04).unwrap(), 0x0142_0142);
 }
 
-/// `enable_irq_source(src, prio)` packs a 4-bit field per source into the words
-/// at `+0x10`: `word = (src >> 3) & 3`, `field = (src & 7) * 4`. The tick only
-/// gets delivered if that decode round-trips.
+/// `enable_irq_source(src, prio)`: `word = (src >> 3) & 3`, `field = (src & 7) * 4`.
 #[test]
 fn interrupt_priority_fields_round_trip() {
     let mut m = machine();
 
-    // enable_irq_source(64, 1) and enable_irq_source(66, 3).
     m.store32(map::CORECTL_BASE + 0x10, 1 | (3 << 8)).unwrap();
 
     assert_eq!(m.corectl.irq_priority(0, 64), 1);
@@ -280,15 +238,12 @@ fn interrupt_priority_fields_round_trip() {
     assert_eq!(m.corectl.irq_priority(0, 65), 0, "unenabled source");
     assert_eq!(m.corectl.irq_priority(0, 72), 0, "next word along");
 
-    // Core 1's bank is 0x800 up, and its own: enable_irq_source(79, 1) there.
     m.store32(map::CORECTL_BASE + 0x814, 1 << 28).unwrap();
     assert_eq!(m.corectl.irq_priority(1, 79), 1);
     assert_eq!(m.corectl.irq_priority(0, 79), 0, "core 0's copy");
 }
 
-// ---------------------------------------------------------------------------
-// Board PMICs on the BSC at 0x7E20_5E00 (#4).
-// ---------------------------------------------------------------------------
+// --- board PMICs on the BSC at 0x7E20_5E00 ---------------------------------
 
 const BSC_C: u32 = 0x00;
 const BSC_S: u32 = 0x04;
@@ -302,16 +257,12 @@ const C_I2CEN: u32 = 1 << 15;
 const S_DONE: u32 = 1 << 1;
 const S_ERR: u32 = 1 << 8;
 
-/// Let a transfer settle: `S.DONE` only lands once the bytes have had time to
-/// clock out at the bus speed `DIV` asks for. 10 ms of simulated time is more
-/// than any transfer here needs.
+/// Let a transfer settle: `S.DONE` lands only once the bytes have clocked out.
 fn settle(m: &mut Machine) {
     m.tick(10_000 * 54); // 54 VPU cycles per microsecond
 }
 
-/// `read(reg)` the way start4's BSC transport does it when `cfg[8] & 2` is set
-/// (the `0x1B` path): one-byte write phase, FIFO fed straight after `ST`, then
-/// a separate read phase.
+/// `read(reg)` the way the `0x1B` transport path does it: FIFO fed after `ST`.
 fn pmic_read(m: &mut Machine, addr: u8, reg: u8) -> u8 {
     let base = map::BSC_PMIC_BASE;
     m.store32(base + BSC_A, addr as u32).unwrap();
@@ -329,10 +280,8 @@ fn pmic_read(m: &mut Machine, addr: u8, reg: u8) -> u8 {
     v
 }
 
-/// The same read, in the order the transport uses when `cfg[8] & 2` is clear
-/// (the `0x1E` path): it programs the read phase *before* pushing the register
-/// byte, relying on the write phase stalling with `S.TA` asserted until the
-/// FIFO has data. Both orders have to select the same register.
+/// The same read on the `0x1E` path, which programs the read phase *before*
+/// pushing the register byte and relies on the write phase stalling.
 fn pmic_read_late_fifo(m: &mut Machine, addr: u8, reg: u8) -> u8 {
     let base = map::BSC_PMIC_BASE;
     m.store32(base + BSC_A, addr as u32).unwrap();
@@ -358,11 +307,8 @@ fn pmic_write(m: &mut Machine, addr: u8, reg: u8, value: u8) {
     m.store32(base + BSC_S, S_DONE | S_ERR).unwrap();
 }
 
-/// The register the firmware asks for is the register it gets. start4's
-/// transport (`0x3ECF0ED0`) writes `C.ST` before it feeds the FIFO, so a model
-/// that runs the transfer at `ST` and takes the FIFO byte afterwards selects
-/// nothing, and the auto-incrementing pointer walks the whole 0..0xFF space
-/// instead of answering the register that was asked for.
+/// The register asked for is the register got: the transport writes `C.ST` before
+/// it feeds the FIFO, so running the transfer at `ST` selects nothing.
 #[test]
 fn pmic_register_pointer_follows_the_late_fifo_byte() {
     let mut m = machine();
@@ -374,8 +320,7 @@ fn pmic_register_pointer_follows_the_late_fifo_byte() {
     assert_eq!(pmic_read(&mut m, 0x1E, 0x25), 85);
 }
 
-/// Seeded setpoints must decode, through the firmware's own conversion, to the
-/// voltages a real d03115 reports.
+/// Seeded setpoints decode to the voltages a Raspberry Pi 4B d03115 reports.
 #[test]
 fn pmic_setpoints_decode_to_the_real_boards_voltages() {
     let mut m = machine();
@@ -396,10 +341,8 @@ fn pmic_setpoints_decode_to_the_real_boards_voltages() {
     );
 }
 
-/// A setpoint write is read back, and latches the "voltage settled" bit each
-/// part's post-set callback polls: `0x1B` reg 0x00 bit 4 (`0x3EC8C746`) and
-/// `0x1E` reg 0x02 bit 3 (`0x3EC8C9FC`). Those loops have no timeout, so a bit
-/// that never sets hangs the boot outright.
+/// A setpoint write is read back and latches the "voltage settled" bit each
+/// part's post-set callback polls, which has no timeout.
 #[test]
 fn pmic_setpoint_write_latches_the_settled_bit() {
     let mut m = machine();
@@ -413,8 +356,7 @@ fn pmic_setpoint_write_latches_the_settled_bit() {
     assert_ne!(pmic_read(&mut m, 0x1B, 0x00) & 0x10, 0, "0x1B settled bit");
 }
 
-/// The two parts are separate register files even though they share a bus: a
-/// write to one must not show up in the other.
+/// The two parts are separate register files even though they share a bus.
 #[test]
 fn pmic_addresses_are_separate_register_files() {
     let mut m = machine();
@@ -423,11 +365,7 @@ fn pmic_addresses_are_separate_register_files() {
     assert_eq!(pmic_read(&mut m, 0x1B, 0x40), 0x00);
 }
 
-/// A 4B up to rev 1.4 has one PMIC, at `0x1D`, in place of rev 1.5's pair
-/// (#78). Its setpoints decode, through `0x3EDD259A`, to the same voltages;
-/// its settled bit is reg `0x1A` bit 4 (`0x3EDD25AE`); it passes the check
-/// `pmic_get_voltage` makes of it, `0x0F == 0x14 ^ 0xAD`; and its status poll
-/// (`0x3EDD23F4`) reads good input power, `0x1A & 0x60 == 0x20`.
+/// A 4B up to rev 1.4 has one PMIC, at `0x1D`, in place of rev 1.5's pair.
 #[test]
 fn a_rev_1_2_board_has_the_one_0x1d_pmic() {
     let mut m = machine();
@@ -454,18 +392,16 @@ fn a_rev_1_2_board_has_the_one_0x1d_pmic() {
     );
 }
 
-/// The FXL6408 GPIO expander shares the bus at `0x43`; start4 probes it by
-/// reading register `0x01` (any value will do for the firmware, but it is the
-/// Fairchild manufacturer id on the real part).
+/// The FXL6408 expander shares the bus at `0x43`; register `0x01` is its
+/// Fairchild manufacturer id on the real part.
 #[test]
 fn gpio_expander_answers_on_the_pmic_bus() {
     let mut m = machine();
     assert_eq!(pmic_read(&mut m, 0x43, 0x01) >> 5, 0b101);
 }
 
-/// Nothing else is on this bus. start4 probes a handful of other addresses on
-/// it — `0x10`, where its other expander driver (a GreenPAK) looks, among
-/// them; an unACKed transfer has to complete `DONE | ERR`, not spin.
+/// Nothing else is on this bus, and an unACKed transfer has to complete
+/// `DONE | ERR` rather than spin.
 #[test]
 fn pmic_bus_nacks_every_other_address() {
     let mut m = machine();
@@ -479,13 +415,8 @@ fn pmic_bus_nacks_every_other_address() {
     assert_ne!(s & S_ERR, 0, "unACKed address must raise ERR");
 }
 
-/// `S.TA` spans the transfer, `S.DONE` lands only at the end of it, and
-/// neither is a function of how many instructions the firmware happens to
-/// retire in between. start4's transport (`0x3ECF0ED0`) spins on
-/// `S & (TA | ERR)` with **no timeout** between writing `C.ST` and pushing the
-/// data byte (#17), so a `TA` that lasts a fixed number of ticks — 96, as it
-/// was — can lapse before the firmware ever reads `S` and hang the boot for
-/// good. Real hardware holds `TA` from `ST` until the last bit is clocked.
+/// `S.TA` spans the transfer and `S.DONE` lands only at its end, neither a
+/// function of instructions retired: the transport's spin on it has no timeout.
 #[test]
 fn bsc_transfer_active_spans_the_whole_transfer() {
     let mut m = machine();
@@ -505,7 +436,6 @@ fn bsc_transfer_active_spans_the_whole_transfer() {
         assert_eq!(s & S_DONE, 0, "nothing has been transferred yet");
     }
 
-    // Feed it: the byte is still on the wire, so the transfer is not over.
     m.store32(base + BSC_FIFO, 0x25).unwrap();
     let s = m.load32(base + BSC_S).unwrap();
     assert_ne!(s & S_TA, 0, "the last byte is still clocking out");
@@ -528,11 +458,7 @@ fn bsc_transfer_active_spans_the_whole_transfer() {
     assert_eq!(m.load32(base + BSC_DLEN).unwrap(), 0, "all bytes sent");
 }
 
-/// The VCE launch handshake, as `vce_run_start` / `vce_run_complete` /
-/// `vce_clear_interrupt` drive it (`vcfw/drivers/chip/vciv/2708/vce.c`).
-///
-/// With the block unmapped, `STATUS` read back 0 forever and the boot stalled
-/// one step short of `arm_loader`, printing "VCE taking >1s to run".
+/// The VCE launch handshake (`vcfw/drivers/chip/vciv/2708/vce.c`).
 #[test]
 fn vce_launch_completes_and_raises_its_interrupt() {
     use pimu::periph::vce;
@@ -540,14 +466,11 @@ fn vce_launch_completes_and_raises_its_interrupt() {
     let mut m = machine();
     let ctrl = map::VCE_CTRL_BASE;
 
-    // Idle: no interrupt pending, and the two bits `vce_obtain_semaphore` in
-    // start4db asserts are clear must read clear.
+    // Idle: the two bits `vce_obtain_semaphore` asserts are clear read clear.
     assert_eq!(m.load32(ctrl).unwrap(), 0);
     assert!(!m.vce.irq_asserted());
 
-    // A launch the way `vce_run_start` does it for the codec licence check:
-    // flags 0xC0000000, so the endcode field is 0 and ENDCODE_ENABLE is not
-    // written at all.
+    // A licence-check launch: flags 0xC0000000, so no ENDCODE_ENABLE is written.
     m.store32(ctrl + 0x08, 0x1234).unwrap(); // start pc
     m.store32(ctrl + 0x24, 0xFF).unwrap(); // INTCLR
     m.store32(ctrl + 0x20, 1).unwrap(); // RUN
@@ -571,19 +494,13 @@ fn vce_launch_completes_and_raises_its_interrupt() {
         vce::IRQ_SRC
     );
 
-    // `vce_clear_interrupt` writes bit 31 and then asserts it reads back clear.
     m.store32(ctrl + 0x24, 0x8000_0000).unwrap();
     assert_eq!(m.load32(ctrl).unwrap() & (1 << 31), 0);
     assert!(!m.vce.irq_asserted());
-    // The endcode survives the ack: `vce_run_complete` reads it afterwards.
     assert_eq!(m.load32(ctrl).unwrap() >> 16 & 0x1F, 0);
 }
 
-/// A launch that asks for a non-zero endcode has to get that endcode back, or
-/// `vce_run_complete` logs "unexpected endcode" and retries forever. The only
-/// record of what was asked for is `ENDCODE_ENABLE`, which `vce_run_start`
-/// writes as `(1 << endcode) | 0x20` — bit 5 being the clock-stall condition
-/// the interrupt handler services itself.
+/// A non-zero endcode has to come back, or `vce_run_complete` retries forever.
 #[test]
 fn vce_reports_the_endcode_the_launch_armed() {
     let mut m = machine();
@@ -594,19 +511,14 @@ fn vce_reports_the_endcode_the_launch_armed() {
     m.store32(ctrl + 0x20, 1).unwrap();
     assert_eq!(m.load32(ctrl).unwrap() >> 16 & 0x1F, 3);
 
-    // The next launch does not re-arm the mask, so it means endcode 0 again —
-    // a stale mask must not leak into it.
+    // The next launch does not re-arm the mask: it must not leak in.
     m.store32(ctrl + 0x24, 0xFF).unwrap();
     m.store32(ctrl + 0x20, 1).unwrap();
     assert_eq!(m.load32(ctrl).unwrap() >> 16 & 0x1F, 0);
 }
 
-/// The codec licence check reads its answer out of VCE register 2. The compute
-/// core is not emulated, so a completed run leaves the register file zeroed,
-/// which is "this key does not match": the reference Pi 4 has OTP rows 45 and 46
-/// blank and reports `MPG2=disabled` / `WVC1=disabled`. Before the run the
-/// register file is plain storage — `vce_launch_prerun` sets register 0 and
-/// asserts it reads back.
+/// The codec licence check reads VCE register 2; the compute core is not emulated,
+/// so a run leaves it zeroed — "no match", as a real Raspberry Pi 4B reports.
 #[test]
 fn vce_register_file_round_trips_but_a_run_consumes_it() {
     let mut m = machine();
@@ -624,9 +536,8 @@ fn vce_register_file_round_trips_but_a_run_consumes_it() {
     );
 }
 
-/// Program and data memory are real storage: `vce_loadprogram` memcpys into
-/// `0x7F11_0000` and `vce_launch_complete` copies results back out of
-/// `0x7F10_0000`, a byte at a time when the host buffer is unaligned.
+/// Program (`0x7F11_0000`) and data (`0x7F10_0000`) memory are real storage,
+/// written and read a byte at a time when the host buffer is unaligned.
 #[test]
 fn vce_program_and_data_memory_are_writable() {
     let mut m = machine();
@@ -639,29 +550,21 @@ fn vce_program_and_data_memory_are_writable() {
         0xA5,
         "data memory must take byte stores"
     );
-    // Separate windows, not aliases of each other.
     assert_eq!(m.load32(map::VCE_BASE).unwrap(), 0);
 }
 
-/// The ASB bridge handshake at `0x7E00_A000`. start4's power-domain switch
-/// (`FUN_0ED54E40`) sets `ASB_REQ_STOP` on both bridges of a pair and then
-/// spins until each answers with `ASB_ACK`; the release path clears `REQ_STOP`
-/// and spins until `ACK` goes away. With the block unmapped, `ACK` read back 0
-/// forever and the boot hung at `0x3ED550A8` on the H264 bridge, just after
-/// `uart: Baud rate change done`.
+/// The ASB bridge handshake at `0x7E00_A000`: the power-domain switch spins
+/// until `ASB_ACK` follows `ASB_REQ_STOP`, and until it drops again on release.
 #[test]
 fn asb_ack_follows_the_stop_request() {
     let mut m = machine();
 
-    // Every `*_CTRL` register: V3D S/M, ISP S/M, H264 S/M.
     for off in [0x08, 0x0C, 0x10, 0x14, 0x18, 0x1C] {
         let reg = map::ASB_BASE + off;
 
-        // Out of reset the bridge is running: no request, no acknowledge.
         let v = m.load32(reg).unwrap();
         assert_eq!(v & 0b11, 0, "{reg:#x} must come up running");
 
-        // Stop: request, then the acknowledge the firmware polls for.
         let v = m.load32(reg).unwrap() | 1;
         m.store32(reg, v).unwrap();
         assert_ne!(
@@ -670,7 +573,6 @@ fn asb_ack_follows_the_stop_request() {
             "{reg:#x} never acknowledged the stop request"
         );
 
-        // Release: clear the request, and the acknowledge has to drop.
         let v = m.load32(reg).unwrap() & !1;
         m.store32(reg, v).unwrap();
         assert_eq!(
@@ -681,8 +583,7 @@ fn asb_ack_follows_the_stop_request() {
     }
 }
 
-/// The bridges are independent: stopping the H264 pair must not report the ISP
-/// or V3D pair as stopped, or a later release would spin on the wrong bridge.
+/// The bridges are independent, or a release spins on the wrong one.
 #[test]
 fn asb_bridges_are_independent() {
     let mut m = machine();
@@ -698,23 +599,17 @@ fn asb_bridges_are_independent() {
     }
 }
 
-/// `ASB_AXI_BRDG_ID` (`+0x20`) reads `"brdg"`. Linux's `bcm2835_power_probe`
-/// refuses to bind when it does not, and this project's recurring failure mode
-/// is an identification register that reads back 0.
+/// `ASB_AXI_BRDG_ID` (`+0x20`) reads `"brdg"`.
 #[test]
 fn asb_identifies_itself_as_a_bridge() {
     let mut m = machine();
     assert_eq!(m.load32(map::ASB_BASE + 0x20).unwrap(), 0x6272_6467);
 }
 
-/// The PCIe root complex is decoded as MMIO, not folded onto DRAM at
-/// `0x3D50_xxxx` — stage 0 of #18. The rest of the PCIe behaviour is tested
-/// next to the model in `src/periph/pcie.rs`, where the reset sequence can be
-/// driven directly.
+/// The PCIe root complex is MMIO, not folded onto DRAM at `0x3D50_xxxx`.
 #[test]
 fn pcie_window_is_mmio_not_dram() {
-    // Big enough that the DRAM alias of the PCIe window, `addr & 0x3FFF_FFFF`,
-    // is backed memory — which is exactly what used to swallow these writes.
+    // Big enough that the DRAM alias `addr & 0x3FFF_FFFF` is backed memory.
     let mut m = Machine::new(0x3D51_0000);
     m.store32(0x3D50_9210, 0xDEAD_BEEF).unwrap();
     m.store32(map::PCIE_BASE + 0x9210, 0x3).unwrap();
@@ -722,15 +617,12 @@ fn pcie_window_is_mmio_not_dram() {
     assert_eq!(m.load32(map::PCIE_BASE + 0x9210).unwrap(), 0x3);
 }
 
-/// The VL805 is soldered to every Pi 4B, so the link trains as soon as the
-/// bootloader releases PERST# and the config router answers for bus 1.
-/// `MISC_PCIE_STATUS` then reads `0xB0` — `PHYLINKUP | DL_ACTIVE | port RC` —
-/// which is what stops `PCIe timeout: 0x00000000` being printed.
+/// The VL805 is soldered to every 4B, so the link trains as soon as the
+/// bootloader releases PERST#.
 #[test]
 fn pcie_link_trains_and_finds_the_vl805() {
     let mut m = machine();
-    // bootcode parks the block in reset; the bootloader releases bridge then
-    // PERST#.
+    // bootcode parks the block in reset; the bootloader releases bridge, PERST#.
     m.store32(map::PCIE_BASE + 0x9210, 0x3).unwrap();
     m.store32(map::PCIE_BASE + 0x9210, 0x1).unwrap();
     m.store32(map::PCIE_BASE + 0x9210, 0x0).unwrap();
@@ -739,26 +631,17 @@ fn pcie_link_trains_and_finds_the_vl805() {
     assert_eq!(m.load32(map::PCIE_BASE + 0x8000).unwrap(), 0x3483_1106);
 }
 
-/// The whole of the path the bootloader's `xHC0 ver:` line comes out of, driven
-/// through the bus the way the firmware drives it: enumerate the endpoint,
-/// program the outbound window, then read BAR0 with a 40-bit DMA4 transfer
-/// (`0x0008B42C` builds the control block, `0x000A701E` reads the bounce
-/// buffer). The source word is the one `--log dma` shows the real firmware
-/// using — `src = 0x0200_0004`, `srci = 0x1006`, i.e. `0x6_0200_0004`.
-///
-/// Before the 40-bit address was honoured this read landed in DRAM, every
-/// capability register came back 0, and the bring-up hung at `0x000AA3C0`.
+/// The whole path the bootloader's `xHC0 ver:` line comes out of: enumerate,
+/// program the outbound window, read BAR0 by 40-bit DMA4.
 #[test]
 fn xhci_capability_registers_arrive_by_forty_bit_dma() {
     let mut m = machine();
-    // Link up, then assign BAR0 and enable memory decoding (0x000A6918).
     m.store32(map::PCIE_BASE + 0x9210, 0x3).unwrap();
     m.store32(map::PCIE_BASE + 0x9210, 0x0).unwrap();
     m.store32(map::PCIE_BASE + 0x9000, 1 << 20).unwrap();
     m.store32(map::PCIE_BASE + 0x8010, 0x8200_0000).unwrap();
     m.store32(map::PCIE_BASE + 0x8014, 0).unwrap();
     m.store32(map::PCIE_BASE + 0x8004, 0x0146).unwrap();
-    // CPU_2_PCIE_MEM_WIN0 (0x000A725C..0x000A72F0).
     m.store32(map::PCIE_BASE + 0x400C, 0x8000_0000).unwrap();
     m.store32(map::PCIE_BASE + 0x4010, 0).unwrap();
     m.store32(map::PCIE_BASE + 0x4070, 0x3FF0_0000).unwrap();
@@ -786,16 +669,12 @@ fn xhci_capability_registers_arrive_by_forty_bit_dma() {
         0x0500_0420,
         "HCSPARAMS1 as measured on a Raspberry Pi 4B d03115: MaxSlots 32, MaxIntrs 4, MaxPorts 5"
     );
-    // END set, ACTIVE and ERROR clear — what 0x0008B3F4 polls for.
     let cs = m.load32(map::DMA4_BASE).unwrap();
     assert_eq!(cs & 0x403, 0x2);
 }
 
-/// The PVT magic at `0x7D5D_8010 + ch*0x40`. `FUN_0ec300fa` reads `+0x1C` only
-/// when this equals `0x7FFF50CF`, and returns zeros for both halves otherwise.
-/// Every one of the eighteen channels carries it on a real Pi 4, read through
-/// `/dev/mem` — the same class of trap as `SCALER_DISPID` above (#1 point 3),
-/// so it is pinned per channel rather than only for channel 0.
+/// The PVT magic at `0x7D5D_8010 + ch*0x40`, which `FUN_0ec300fa` demands before
+/// it reads anything. All eighteen channels carry it on a real Raspberry Pi 4B.
 #[test]
 fn pvt_channels_all_carry_the_magic() {
     let mut m = machine();
@@ -806,17 +685,14 @@ fn pvt_channels_all_carry_the_magic() {
             0x7FFF_50CF,
             "channel {ch} magic"
         );
-        // Read-only: a stray write must not make the block look absent.
         m.store32(base + 0x10, 0).unwrap();
         assert_eq!(m.load32(base + 0x10).unwrap(), 0x7FFF_50CF);
-        // And the channel reads back its own index at +0x00.
         assert_eq!(m.load32(base).unwrap(), ch, "channel {ch} index");
     }
 }
 
-/// `FUN_0ec300fa` splits `+0x1C` into two 16-bit halves and zeroes either half
-/// that reads below 10, which skips the adaptive correction in `FUN_0ec303e8`.
-/// The measured values clear that floor on every channel.
+/// `FUN_0ec300fa` zeroes either half of `+0x1C` that reads below 10, which skips
+/// the adaptive correction; the measured values clear that floor.
 #[test]
 fn pvt_readings_clear_the_firmwares_floor() {
     let mut m = machine();
@@ -827,8 +703,8 @@ fn pvt_readings_clear_the_firmwares_floor() {
     }
 }
 
-/// `+0x14` / `+0x18` are writable thresholds, but `FUN_0ec30276` can read them
-/// before anything has written them, so they are seeded from hardware.
+/// `+0x14` / `+0x18` are writable, but read before anything writes them, so they
+/// are seeded from hardware.
 #[test]
 fn pvt_thresholds_are_seeded_then_writable() {
     let mut m = machine();
@@ -837,22 +713,18 @@ fn pvt_thresholds_are_seeded_then_writable() {
 
     m.store32(map::PVT_BASE + 0x14, 0x1234_5678).unwrap();
     assert_eq!(m.load32(map::PVT_BASE + 0x14).unwrap(), 0x1234_5678);
-    // Channel 1 is unaffected by a write to channel 0.
     assert_eq!(m.load32(map::PVT_BASE + 0x40 + 0x14).unwrap(), 0x0364_0340);
 }
 
-/// The six AVS result channels each report their own count. Before this they
-/// all answered with one of two values, so a rail read was indistinguishable
-/// from a temperature read (#1 point 2).
+/// The six AVS channels each report their own count, or a rail read would be
+/// indistinguishable from a temperature read.
 #[test]
 fn avs_channels_report_distinct_counts() {
     let mut m = machine();
     let counts: Vec<u32> = (0..6)
         .map(|ch| m.load32(map::AVS_BASE + 0x200 + ch * 4).unwrap() & 0x3FF)
         .collect();
-    // Channel 3 is the core rail, and it reports whatever the PMIC is set to
-    // rather than a fixed count: 692 decodes back to the 0.85 V the `0x1E`
-    // setpoint is seeded with. The others are the measured constants.
+    // Channel 3 follows the PMIC (692 is the seeded 0.85 V); the rest measured.
     assert_eq!(counts, vec![752, 2, 669, 692, 2, 841]);
 
     // `FUN_0ed603e2` accepts a sample only with both bit 10 and bit 16 set.
@@ -862,11 +734,8 @@ fn avs_channels_report_distinct_counts() {
     }
 }
 
-/// The AVS block is 36 channels wide at `+0x220`, not 24: `FUN_0ec5f2c0`
-/// accepts a channel up to 0x23 and hands it straight to `FUN_0ec3007a`, which
-/// spins ten times on a channel that does not report "settled". Channels
-/// 0x20..0x23 settle with a count of 0 on hardware, which is not the same thing
-/// as never settling.
+/// The AVS block is 36 channels wide at `+0x220`, not 24. Channels 0x20..0x23
+/// settle with a count of 0 on hardware, which is not the same as never.
 #[test]
 fn avs_rail_monitors_cover_every_channel_the_sensor_api_accepts() {
     let mut m = machine();
@@ -881,10 +750,8 @@ fn avs_rail_monitors_cover_every_channel_the_sensor_api_accepts() {
     );
 }
 
-/// Channel 3 measures the SoC core rail, so it has to follow the rail. start4's
-/// DVFS calibration (`FUN_0ec303e8`) programs two voltages and gives up on the
-/// whole scan unless the sensor reports at least 10 mV between them; a fixed
-/// count reads as a rail that does not respond.
+/// Channel 3 has to follow the core rail: the DVFS calibration gives up on the
+/// whole scan unless the sensor reports at least 10 mV between two voltages.
 #[test]
 fn avs_core_channel_follows_the_pmic_setpoint() {
     let mut m = machine();
@@ -911,13 +778,11 @@ fn avs_core_channel_follows_the_pmic_setpoint() {
     assert!(tenths(high) - tenths(low) >= 100, "rail must move >= 10 mV");
 }
 
-/// `+0x03C` is an active-high disable mask: `FUN_0ed6040e` writes
-/// `~(1 << ch) & 0x7F` to leave only `ch` unmasked, and `0` to unmask
-/// everything. A masked channel must not report a valid, settled sample.
+/// `+0x03C` is an active-high disable mask; a masked channel must not report a
+/// valid, settled sample.
 #[test]
 fn avs_disable_mask_gates_the_other_channels() {
     let mut m = machine();
-    // Select channel 3 the way `FUN_0ed6040e` does.
     m.store32(map::AVS_BASE + 0x03C, !(1u32 << 3) & 0x7F)
         .unwrap();
     assert_eq!(
@@ -932,17 +797,14 @@ fn avs_disable_mask_gates_the_other_channels() {
         );
     }
 
-    // Restoring 0 unmasks everything, which is the state real hardware idles
-    // in — all six channels were read live with this register at 0.
+    // Real hardware idles at 0: all six channels were read live that way.
     m.store32(map::AVS_BASE + 0x03C, 0).unwrap();
     for ch in 0..6 {
         assert!(m.load32(map::AVS_BASE + 0x200 + ch * 4).unwrap() & (1 << 10) != 0);
     }
 }
 
-// ---------------------------------------------------------------------------
-// HDMI DDC I²C masters (`0x7EF0_4500` / `0x7EF0_9500`), issue #15.
-// ---------------------------------------------------------------------------
+// --- HDMI DDC I²C masters (`0x7EF0_4500` / `0x7EF0_9500`) ------------------
 
 const DDC_CHIP_ADDRESS: u32 = 0x00;
 const DDC_DATA_IN: u32 = 0x04;
@@ -959,9 +821,7 @@ const DDC_EN_NOSTOP: u32 = 1 << 4;
 const DDC_EN_NOSTART: u32 = 1 << 5;
 const DDC_EN_RESTART: u32 = 1 << 6;
 
-/// Start a transfer the way start4's driver does (`0x3ECE69E2` /
-/// `0x3ECE6DEC`): address, clear `CTLHI.IGNORE_ACK`, count, direction, then
-/// `IIC_ENABLE` with `ENABLE | INTRP` and the start/stop flags for this chunk.
+/// Start a transfer the way start4's DDC driver does.
 fn ddc_start(m: &mut Machine, base: u32, addr: u32, read: bool, count: u32, flags: u32) {
     m.store32(base + DDC_CHIP_ADDRESS, addr << 1 | u32::from(read))
         .unwrap();
@@ -975,8 +835,7 @@ fn ddc_start(m: &mut Machine, base: u32, addr: u32, read: bool, count: u32, flag
         .unwrap();
 }
 
-/// The driver's completion wait (`0x3ECE6D5C`): poll `INTRP`, then look at
-/// `NOACK`. Returns the final `IIC_ENABLE`, or `None` on the 100 ms timeout.
+/// The driver's completion wait: the final `IIC_ENABLE`, or `None` on timeout.
 fn ddc_wait(m: &mut Machine, base: u32) -> Option<u32> {
     for _ in 0..20 {
         let v = m.load32(base + DDC_IIC_ENABLE).unwrap();
@@ -988,33 +847,24 @@ fn ddc_wait(m: &mut Machine, base: u32) -> Option<u32> {
     None
 }
 
-/// Release the bus the way the driver does after every transfer.
 fn ddc_stop(m: &mut Machine, base: u32) {
     m.store32(base + DDC_CNT, 0).unwrap();
     m.store32(base + DDC_IIC_ENABLE, 0).unwrap();
 }
 
-/// Nothing is plugged into either HDMI connector on the reference board
-/// (a Raspberry Pi 4B d03115 reports both `card1-HDMI-A-*/status` as
-/// `disconnected`), so the EDID EEPROM's address goes unacknowledged and the
-/// transfer has to complete `INTRP | NOACK`. That is the whole point of the
-/// block: with `IIC_ENABLE` RAM-backing on the catch-all stub it read back the
-/// `ENABLE | INTRP` the driver had just written, so every read looked like an
-/// instant, successful transfer of 32 zero bytes — start4 failed the EDID
-/// checksum, never bumped its attempt counter, and re-read EDID forever (#15).
+/// Nothing is plugged into either HDMI connector (a Raspberry Pi 4B d03115 reports
+/// both `disconnected`), so the EDID address NACKs and the transfer completes.
 #[test]
 fn hdmi_ddc_nacks_when_no_monitor_answers() {
     for base in [map::HDMI_DDC0_BASE, map::HDMI_DDC1_BASE] {
         let mut m = machine();
 
-        // Write phase: the EDID byte offset to start reading from.
         m.store32(base + DDC_DATA_IN, 0).unwrap();
         ddc_start(&mut m, base, 0x50, false, 1, DDC_EN_NOSTOP | DDC_EN_RESTART);
         let v = ddc_wait(&mut m, base).expect("the transfer must complete");
         assert_ne!(v & DDC_EN_NOACK, 0, "an empty bus cannot acknowledge");
         ddc_stop(&mut m, base);
 
-        // Read phase.
         ddc_start(&mut m, base, 0x50, true, 32, DDC_EN_NOSTOP);
         let v = ddc_wait(&mut m, base).expect("the transfer must complete");
         assert_ne!(v & DDC_EN_NOACK, 0, "an empty bus cannot acknowledge");
@@ -1029,10 +879,8 @@ fn hdmi_ddc_nacks_when_no_monitor_answers() {
     }
 }
 
-/// `INTRP` means "the bytes have been clocked out", so it cannot be set
-/// already inside the register write that starts the transfer, however few
-/// instructions the firmware retires before it looks. 32 bytes at the 97.5 kHz
-/// the device tree gives for this bus take ~3 ms.
+/// `INTRP` means "the bytes have been clocked out", so it cannot be set inside
+/// the write that starts the transfer: 32 bytes at 97.5 kHz take ~3 ms.
 #[test]
 fn hdmi_ddc_completion_waits_for_the_wire() {
     let base = map::HDMI_DDC0_BASE;
@@ -1057,16 +905,12 @@ fn hdmi_ddc_completion_waits_for_the_wire() {
         "INTRP must latch once the transfer is over"
     );
 
-    // Disabling the master drops the status again.
     ddc_stop(&mut m, base);
     assert_eq!(m.load32(base + DDC_IIC_ENABLE).unwrap(), 0);
 }
 
-/// With a monitor on the bus the same sequence reads its EDID back: a one-byte
-/// write phase sets the EEPROM's address pointer and the read chunks that
-/// follow walk on from it, four bytes per `DATA_OUT` register, little-endian.
-/// Nothing on the boot path attaches one yet — this pins the transport for the
-/// HDMI mode-set work that would.
+/// With a monitor on the bus the same sequence reads its EDID back, four bytes
+/// per `DATA_OUT` register, little-endian. Nothing on the boot path attaches one.
 #[test]
 fn hdmi_ddc_reads_an_attached_edid() {
     use pimu::periph::HdmiDdc;
@@ -1099,16 +943,13 @@ fn hdmi_ddc_reads_an_attached_edid() {
     }
     assert_eq!(got, edid, "the whole block, in order");
 
-    // The other connector still has nothing on it.
     let base1 = map::HDMI_DDC1_BASE;
     ddc_start(&mut m, base1, 0x50, true, 32, DDC_EN_NOSTOP);
     let v = ddc_wait(&mut m, base1).expect("the transfer must complete");
     assert_ne!(v & DDC_EN_NOACK, 0, "HDMI1 has no monitor");
 }
 
-// ---------------------------------------------------------------------------
-// GPIO: the pins a master's pads are on decide what it reaches (#115).
-// ---------------------------------------------------------------------------
+// --- GPIO: a master reaches only what its pads are muxed to ----------------
 
 const GPFSEL0: u32 = map::GPIO_BASE;
 const GPFSEL4: u32 = map::GPIO_BASE + 0x10;
@@ -1118,8 +959,7 @@ const HEADER_I2C: u32 = 0b100 | 0b100 << 3;
 /// GPIO 40..43 on ALT4 — SPI0 on the boot flash.
 const FLASH_SPI: u32 = 0b011 | 0b011 << 3 | 0b011 << 6 | 0b011 << 9;
 
-/// Read `len` bytes from `addr` on the I²C master at `base`, and say whether
-/// the address was acknowledged.
+/// Read `len` bytes from `addr`, and say whether the address was acknowledged.
 fn i2c_read(m: &mut Machine, base: u32, addr: u8, len: u32) -> Option<Vec<u8>> {
     m.store32(base + BSC_A, addr as u32).unwrap();
     m.store32(base + BSC_DLEN, len).unwrap();
@@ -1135,9 +975,7 @@ fn i2c_read(m: &mut Machine, base: u32, addr: u8, len: u32) -> Option<Vec<u8>> {
 }
 
 /// A HAT's ID EEPROM is on the header pins, so it answers only while I²C 0 is
-/// muxed there. start4 probes it that way — `GPFSEL0` `0x4`, then `0x24`, then
-/// back to inputs — and runs the same master on GPIO 44/45 for the camera and
-/// display, where no HAT is: a probe made from there must find nothing.
+/// muxed there — the same master on GPIO 44/45 must find nothing.
 #[test]
 fn the_hat_eeprom_answers_only_on_the_header_pins() {
     let mut m = machine();
@@ -1145,7 +983,6 @@ fn the_hat_eeprom_answers_only_on_the_header_pins() {
         b"R-Pi\x01\x00\x02\x00".to_vec(),
     ));
 
-    // Out of reset every pin is an input: the master's pads are elsewhere.
     assert_eq!(i2c_read(&mut m, map::BSC0_BASE, 0x50, 4), None);
 
     m.store32(GPFSEL0, HEADER_I2C).unwrap();
@@ -1155,7 +992,6 @@ fn the_hat_eeprom_answers_only_on_the_header_pins() {
         "the header bus reaches the HAT"
     );
 
-    // And back to inputs, as start4 leaves them after the probe.
     m.store32(GPFSEL0, 0).unwrap();
     assert_eq!(i2c_read(&mut m, map::BSC0_BASE, 0x50, 4), None);
 }
@@ -1169,10 +1005,8 @@ fn the_pmic_bus_does_not_care_what_the_pins_do() {
     assert_eq!(pmic_read(&mut m, 0x43, 0x01) >> 5, 0b101);
 }
 
-/// GPIO 40..43 are the boot flash on ALT4 and PWM audio plus the activity LED
-/// otherwise, so a flash session only reads the image while the four pins are
-/// on ALT4. Both EEPROM stages and start4 move them there and back around
-/// every session (`specs/spi0.toml`).
+/// GPIO 40..43 are the boot flash only on ALT4, so a flash session reads the
+/// image only while the four pins are moved there (`specs/spi0.toml`).
 #[test]
 fn spi0_reads_the_flash_only_while_its_pins_are_on_alt4() {
     const CS_TA: u32 = 1 << 7;
@@ -1199,14 +1033,13 @@ fn spi0_reads_the_flash_only_while_its_pins_are_on_alt4() {
     m.store32(GPFSEL4, FLASH_SPI).unwrap();
     assert_eq!(read_byte(&mut m), 0xAA, "ALT4 puts the pads on the flash");
 
-    // GPIO 42 back to the activity LED (an output) ends the session's pads.
     m.store32(GPFSEL4, FLASH_SPI & !(0b111 << 6) | 0b001 << 6)
         .unwrap();
     assert_eq!(read_byte(&mut m), 0xFF);
 }
 
-/// The block's two interrupt lines follow `GPEDS`, and a detector watches the
-/// pad whatever drives it — here the activity LED the firmware drives itself.
+/// The interrupt lines follow `GPEDS`, and a detector watches the pad whatever
+/// drives it.
 #[test]
 fn a_gpio_edge_raises_the_banks_line() {
     const GPSET1: u32 = map::GPIO_BASE + 0x20;
@@ -1219,7 +1052,6 @@ fn a_gpio_edge_raises_the_banks_line() {
     m.store32(GPFSEL4, 0b001 << 6).unwrap(); // GPIO 42 an output
     assert_eq!(m.gpio.irq_lines(), [false, false]);
 
-    // No detector enabled: driving the pin latches nothing.
     m.store32(GPSET1, LED).unwrap();
     assert_eq!(m.load32(GPEDS1).unwrap(), 0);
     m.store32(GPCLR1, LED).unwrap();

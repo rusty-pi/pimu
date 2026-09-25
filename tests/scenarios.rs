@@ -1,23 +1,11 @@
-//! The scenario harness itself: every scenario in `testdata/scenarios/` must
-//! still reproduce its golden transcript.
+//! Every scenario in `testdata/scenarios/` must still reproduce its golden
+//! transcript. What this covers is the plumbing behind `pimu run-all` —
+//! discovery, TOML loading, payload building, console capture, golden diff —
+//! rather than the model itself. The firmware boot needs uncommitted blobs and
+//! minutes of CPU, so `pimu boot-check` runs it and `tests/boot_scenario.rs`
+//! covers the rest of it.
 //!
-//! This is not much of a test of the *model* — the scenarios are hand-assembled
-//! payloads that touch a dozen instructions and one UART, and none of the
-//! firmware bugs this project has hit would show up here. What it does cover is
-//! the plumbing behind `pimu run-all`: scenario discovery, TOML loading,
-//! payload building, console capture and the golden diff. That plumbing has no
-//! other test and this one costs a millisecond, so it stays.
-//!
-//! The firmware boot is a scenario too, but a different kind: it needs blobs
-//! that are never committed and minutes of CPU, so it lives in
-//! `testdata/boot/firmware.toml`, `pimu boot-check` runs it, and
-//! `tests/boot_scenario.rs` tests everything about it that does not need the
-//! boot. These two stay because they are the only end-to-end exercise of
-//! payload loading, the run loop and console capture that `cargo test` can
-//! afford.
-//!
-//! Regenerate goldens after an intentional behaviour change with:
-//!   cargo run -- run-all --update
+//! Regenerate goldens after an intentional change: `cargo run -- run-all --update`.
 
 use std::path::Path;
 

@@ -1,17 +1,10 @@
 //! Loading firmware images into the machine.
 //!
-//! - [`bootrom`] — the BCM2711 maskROM first stage: the explicit boot entry that
-//!   verifies and stages the bootcode.
-//! - [`elf32`] — `start4.elf` and the vc4boot test programs.
-//! - [`eeprom`] — `pieeprom.bin` section table + bootcode extraction.
-//!
-//! The model knows no `start4.elf` pcs, addresses or `gp` offsets. The bench
-//! runs different firmware builds through the same model (#5), and an address
-//! baked in goes quietly wrong on a build where it moved. The last pc hook went
-//! with #25 and the last `gp` offset, core 1's start gate, with #72. Model the
-//! hardware behaviour the firmware relies on instead. Addresses the diagnostics
-//! watch (`PIMU_TRAP`, the `diag`-only `--log` channels) are fine: on another
-//! build they just print nothing (`docs/diagnostics.md`).
+//! The model knows no `start4.elf` pcs, addresses or `gp` offsets, and must not
+//! learn any: the bench runs different firmware builds through the same model,
+//! and a baked-in address goes quietly wrong on a build where it moved. Model
+//! the hardware behaviour the firmware relies on instead. Addresses the
+//! diagnostics watch are fine — on another build they just print nothing.
 
 pub mod bootrom;
 pub mod eeprom;
@@ -21,16 +14,13 @@ use anyhow::{Context, Result};
 
 use crate::machine::Machine;
 
-/// Something loadable into the machine, with a known entry point.
 #[derive(Debug, Clone)]
 pub enum Payload {
-    /// A flat binary placed at `load_addr`; execution starts at `entry`.
     RawBinary {
         load_addr: u32,
         entry: u32,
         bytes: Vec<u8>,
     },
-    /// An ELF32 image; segments go to their `p_paddr`, entry from the header.
     Elf(elf32::Elf32),
 }
 
@@ -70,7 +60,6 @@ impl Payload {
         }
     }
 
-    /// Copy the payload into the machine's memory (address aliases folded).
     pub fn load_into(&self, machine: &mut Machine) -> Result<()> {
         match self {
             Payload::RawBinary {
@@ -96,8 +85,7 @@ impl Payload {
     }
 }
 
-/// Write `bytes` to memory at `addr`, folding VC4 cache aliases and going
-/// straight to the backing store (bypasses MMIO — loaders only ever target RAM).
+/// Write `bytes` at `addr`, folding VC4 cache aliases and bypassing MMIO.
 pub(crate) fn write_folded(machine: &mut Machine, addr: u32, bytes: &[u8]) -> Result<()> {
     let phys = addr & 0x3FFF_FFFF;
     machine.ram.write_slice(phys, bytes).map_err(|e| {

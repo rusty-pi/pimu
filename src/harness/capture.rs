@@ -1,11 +1,7 @@
 //! Turn captured UART bytes into a stable, diffable transcript.
 
-/// Normalise a raw console byte stream into text suitable for golden comparison:
-///
-/// - `\r\n` and lone `\r` become `\n`
-/// - printable ASCII and `\n`/`\t` pass through
-/// - any other byte becomes `\xNN`
-/// - a trailing newline is ensured (so goldens are POSIX text files)
+/// Normalise raw console bytes for golden comparison: line ends to `\n`,
+/// unprintable bytes to `\xNN`, and a trailing newline ensured.
 pub fn transcript(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() + 1);
     let mut i = 0;

@@ -1,35 +1,16 @@
-//! What the machine did, by channel (#95).
+//! What the machine did, by channel.
 //!
-//! `boot --log [text:|jsonl:]<channel>[,<channel>...]` turns channels on, and
-//! `--log-file <path>` sends them somewhere other than stderr. Every subsystem
-//! that can say what it did has a [`Channel`], off unless asked for.
+//! `boot --log [text:|jsonl:]<channel>[,<channel>...]` turns channels on and
+//! `--log-file <path>` sends them somewhere other than stderr. The machine is
+//! handed one [`Log`] and clones it into each device that logs; a clone carries
+//! the set of channels that are on, so asking is a bit test and [`crate::log!`]
+//! formats a line only when it is. The channels share one output, so lines come
+//! out in the order things happened, stamped with model time from the system
+//! timer ([`Log::set_time`]).
 //!
-//! The machine is handed one [`Log`] ([`crate::machine::Machine::set_log`])
-//! and clones it into each device that logs. A clone carries the set of
-//! channels that are on, so asking whether one is on is a bit test: a device
-//! on the step path pays what a `dbg: bool` field would. [`crate::log!`]
-//! formats a line only when its channel is on.
-//!
-//! The channels share one output, so lines come out in the order things
-//! happened, in one of two formats: `text` for reading, stamped with model
-//! time in seconds the way the firmware and Linux stamp their logs
-//! (`   9.002222 pcie: <message>`), and `jsonl` for tools, one JSON object a
-//! line with the time in `us`. Each line is written as it happens, so a log
-//! can be followed while the run goes on.
-//!
-//! The clock is the system timer's: it tells the log whenever its counter
-//! moves ([`Log::set_time`]), at most once per modelled microsecond. A reset
-//! builds a new machine, so the time starts from 0 again, as after a reboot.
-//!
-//! [`Channel::Io`] is what crossed the peripherals apart from the serial
-//! console (#35, `io.rs`): block runs on the SD card and the USB stick with
-//! the files they belong to, the OTP rows the firmware read and programmed,
-//! and what the network peer did. Values that would be secret on a real board
-//! are printed as they are: every one of them is invented for the model
-//! (`src/periph/configotp.rs`).
-//!
-//! The channels [`Channel::needs_diag`] names exist only in a `diag` build,
-//! like the rest of the per-step diagnostics ([`crate::diag`]).
+//! Values that would be secret on a real board are printed as they are: every
+//! one is invented for the model (`src/periph/configotp.rs`). The channels
+//! [`Channel::needs_diag`] names exist only in a `diag` build.
 
 use std::cell::{Cell, RefCell};
 use std::fmt;
@@ -39,8 +20,7 @@ use std::rc::Rc;
 pub mod fatmap;
 mod io;
 
-/// One line on a channel, formatted only when the channel is on:
-/// `crate::log!(self.log, Channel::Pcie, "inbound window {w:x?}")`.
+/// One line on a channel, formatted only when the channel is on.
 #[macro_export]
 macro_rules! log {
     ($log:expr, $channel:expr, $($arg:tt)+) => {{
@@ -52,53 +32,38 @@ macro_rules! log {
     }};
 }
 
-/// A subsystem that can say what it did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Channel {
-    /// What crossed the peripherals apart from the console: SD card and USB
-    /// stick block runs with the files they belong to, OTP rows read and
-    /// programmed, and what the network peer did.
+    /// Block runs with their files, OTP rows, and what the network peer did.
     Io,
-    /// Every synchronous exception an ARM core takes (not `svc`), with the
-    /// `ESR`/`FAR` its handler sees, and for an external abort the physical
-    /// address nothing answered at.
+    /// Synchronous ARM exceptions, with the `ESR`/`FAR` the handler sees.
     ArmExc,
-    /// Scalar accesses the VPU makes that are not naturally aligned, which
-    /// the core cannot do in one (`--check-alignment`).
+    /// Misaligned scalar VPU accesses (`--check-alignment`).
     Alignment,
     /// Every system-timer compare arm.
     Cmp,
     /// Intervals `--jitter` has stretched, and by how much.
     Jitter,
-    /// Reads of memory the VPU has written through a cached alias and not
-    /// flushed — what would be stale bytes on silicon (`--check-coherency`).
+    /// Reads that would be stale bytes on silicon (`--check-coherency`).
     Coherency,
-    /// The DWC2 USB OTG controller: every write, and every read that differs
-    /// from the previous read of the same register, so a poll shows once.
+    /// DWC2: every write, and every read that changed, so a poll shows once.
     Dwc2,
-    /// The SD host controllers, EMMC2 and the legacy EMMC: commands, blocks
-    /// and register accesses.
+    /// EMMC2 and the legacy EMMC: commands, blocks and register accesses.
     Emmc,
     /// The FXL6408 GPIO expander's register traffic.
     Expander,
-    /// The GPIO block: every pin whose function, level or termination the
-    /// firmware changes, named the way the board wires it.
+    /// Every pin the firmware changes, named the way the board wires it.
     Gpio,
-    /// Interrupt enables, decoded back into the `enable_irq_source(src, prio)`
-    /// calls that wrote them.
+    /// Interrupt enables, decoded back into the calls that wrote them.
     IrqEn,
     /// Every word across the ARM-VideoCore property mailbox, both directions.
     Mbox,
-    /// The two console UARTs: every register write, and every move of the
-    /// interrupt line or of the pins that say which one the serial header
-    /// carries.
+    /// The console UARTs: register writes, interrupt line, and the pins that
+    /// pick which one the header carries.
     Uart,
-    /// Every OTP row the firmware reads and what it got, every row it
-    /// programs before and after, and the commands the model does not know.
+    /// Every OTP row read and programmed, and the commands nothing models.
     Otp,
-    /// Every change of the VL805's interrupt as the root complex sees it
-    /// (INTA, or the MSI block's status and mask), every write to the inbound
-    /// window `RC_BAR2`, and every endpoint DMA access outside it.
+    /// The VL805's interrupt, `RC_BAR2` writes, and endpoint DMA outside it.
     Pcie,
     /// PMIC register traffic.
     Pmic,
@@ -106,31 +71,25 @@ pub enum Channel {
     Spi,
     /// xHCI rings, TRBs and port state.
     Xhci,
-    /// Execution leaving start4's code range: the instruction that did it,
-    /// and the registers.
+    /// Execution leaving start4's code range, with the registers.
     Derail,
-    /// Every DMA control block executed, and every access to the legacy DMA
-    /// controller window.
+    /// Every DMA control block executed, and the legacy controller window.
     Dma,
     /// Every jump of the system timer through a firmware busy-wait.
     Ff,
-    /// At exit, the firmware's per-source interrupt handler table next to its
-    /// vector table. Found from `gp`, so it survives a firmware whose layout
-    /// moved.
+    /// At exit, the firmware's handler table beside its vector table.
     IrqTbl,
     /// `sleep` instructions, and what woke the core.
     Sleep,
     /// Interrupts the firmware posts in software through CoreCtl.
     SwIrq,
-    /// ThreadX tick deliveries and skips, device interrupts vectored, and an
-    /// `rti` that returns outside start4's code.
+    /// Tick deliveries and skips, and an `rti` outside start4's code.
     Tick,
     /// Interrupt vectoring: slot, vector base, handler.
     Vec,
 }
 
 impl Channel {
-    /// Every channel, in the order an unknown name lists them.
     pub const ALL: [Channel; 26] = [
         Channel::Io,
         Channel::ArmExc,
@@ -160,7 +119,6 @@ impl Channel {
         Channel::Vec,
     ];
 
-    /// The name `--log` takes.
     pub fn name(self) -> &'static str {
         match self {
             Channel::Io => "io",
@@ -192,8 +150,7 @@ impl Channel {
         }
     }
 
-    /// Only a `diag` build has it: it is checked on every step, or it knows
-    /// start4's layout, which only diagnostics may (#25).
+    /// Only a `diag` build has it: a per-step check, or start4's layout.
     pub fn needs_diag(self) -> bool {
         matches!(
             self,
@@ -227,13 +184,10 @@ impl std::str::FromStr for Channel {
     }
 }
 
-/// How lines are written.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Format {
-    /// `[<channel>] <message>`, for reading.
     #[default]
     Text,
-    /// One JSON object a line, for tools.
     Jsonl,
 }
 
@@ -266,7 +220,6 @@ pub struct Spec {
 }
 
 impl Spec {
-    /// One `--log` value: `[text:|jsonl:]<channel>[,<channel>...]`.
     pub fn parse(s: &str) -> Result<Spec, String> {
         let (format, names) = match s.split_once(':') {
             Some((format, names)) => (Some(format.parse::<Format>()?), names),
@@ -306,26 +259,19 @@ impl Spec {
     }
 }
 
-/// Where a machine's channels go. Every device that logs holds a clone; the
-/// default one has every channel off.
+/// Where a machine's channels go; every device that logs holds a clone.
 #[derive(Clone, Default)]
 pub struct Log {
-    /// The channels that are on, a bit each. Every clone has its own copy, so
-    /// [`Self::on`] is one load and no pointer chase.
+    /// The channels that are on, a bit each, copied into every clone.
     mask: u32,
     shared: Option<Rc<Shared>>,
 }
 
-/// What every clone of a [`Log`] shares: the output, and the clock its lines
-/// are stamped with.
 struct Shared {
-    /// Model time in µs, as the system timer last set it ([`Log::set_time`]).
     now_us: Cell<u64>,
     sink: RefCell<Sink>,
 }
 
-/// A line before it is formatted: its message, and its fields for `jsonl`
-/// (`"key":value` pairs, without the braces).
 struct Event {
     text: String,
     json: String,
@@ -343,7 +289,6 @@ impl fmt::Debug for Log {
 }
 
 impl Log {
-    /// The channels `spec` names, written to `out`.
     pub fn new(spec: Spec, out: Box<dyn Write>) -> Log {
         if spec.is_empty() {
             return Log::default();
@@ -367,8 +312,7 @@ impl Log {
         self.mask & channel.bit() != 0
     }
 
-    /// Model time, in µs, for the lines from here on. The system timer calls
-    /// it whenever its counter moves; with no channel on, it is one test.
+    /// Model time for the lines from here on, as the system timer moves.
     #[inline]
     pub fn set_time(&self, us: u64) {
         if let Some(shared) = &self.shared {
@@ -376,8 +320,7 @@ impl Log {
         }
     }
 
-    /// One line on `channel`, if it is on. [`crate::log!`] is the way to call
-    /// it: that formats the line only when the channel is on.
+    /// One line on `channel`, if it is on; go through [`crate::log!`].
     pub fn write(&self, channel: Channel, args: fmt::Arguments<'_>) {
         if let Some(shared) = self.shared_for(channel) {
             let msg = args.to_string();
@@ -392,17 +335,14 @@ impl Log {
         }
     }
 
-    /// `io`: name the files on block device `dev`, once. The image is only
-    /// read when the channel is on.
     pub fn map_files(&self, dev: &'static str, read: &fatmap::ReadBlock) {
         if let Some(shared) = self.shared_for(Channel::Io) {
             shared.sink.borrow_mut().io.map_files(dev, read);
         }
     }
 
-    /// `io`: `count` blocks from `lba` read (or written, erased) on `dev`.
-    /// Contiguous runs make one line, stamped with the time of their first
-    /// block.
+    /// `io`: blocks on `dev`; contiguous runs become one line, stamped with
+    /// the time of their first block.
     pub fn blocks(&self, dev: &'static str, op: &'static str, lba: u64, count: u64) {
         if let Some(shared) = self.shared_for(Channel::Io) {
             shared
@@ -412,17 +352,14 @@ impl Log {
         }
     }
 
-    /// `io`: an OTP row the firmware read. `fused`: the row is programmed on
-    /// the modelled board; a blank one reads 0, as on the hardware. `meaning`
-    /// says what the row is for (#101).
+    /// `io`: an OTP row read; an unfused row reads 0, as on the hardware.
     pub fn otp_read(&self, row: u32, value: u32, fused: bool, meaning: &str) {
         if self.on(Channel::Io) {
             self.io_line(io::otp_read(row, value, fused, meaning));
         }
     }
 
-    /// `io`: an OTP row the firmware programmed: `value` is what the row holds
-    /// now, `was` what it held before. Fuses only go from 0 to 1 (#92).
+    /// `io`: a row programmed, before and after; fuses only go 0 to 1.
     pub fn otp_write(&self, row: u32, value: u32, was: u32, meaning: &str) {
         if self.on(Channel::Io) {
             self.io_line(io::otp_write(row, value, was, meaning));
@@ -436,8 +373,6 @@ impl Log {
         }
     }
 
-    /// Write out the block run `io` is merging, rather than when the next
-    /// line comes or the last clone goes.
     pub fn flush(&self) {
         if let Some(shared) = &self.shared {
             shared.sink.borrow_mut().flush_run();
@@ -458,7 +393,6 @@ impl Log {
     }
 }
 
-/// The output every clone of a [`Log`] writes to.
 struct Sink {
     out: Box<dyn Write>,
     format: Format,
@@ -472,8 +406,7 @@ impl Sink {
         }
     }
 
-    /// One line, after the block run being merged: every line goes out in the
-    /// order its event happened.
+    /// One line, after the block run being merged, so lines stay in order.
     fn line(&mut self, channel: Channel, us: u64, event: &Event) {
         self.flush_run();
         self.write(channel, us, event);
@@ -490,7 +423,6 @@ impl Sink {
         self.write(Channel::Io, run.us, &event);
     }
 
-    /// `   9.002222 pcie: <message>`, or `{"us":9002222,"channel":"pcie",...}`.
     fn write(&mut self, channel: Channel, us: u64, event: &Event) {
         let _ = match self.format {
             Format::Text => writeln!(
@@ -518,10 +450,8 @@ impl Drop for Sink {
     }
 }
 
-/// Warn about every environment variable a newer spelling replaced that is
-/// still set: an old recipe would otherwise do nothing, silently. `PIMU_DBG_
-/// <NAME>` is `--log <name>` now, and the `RVF_*` switches are `PIMU_*` since
-/// the project was renamed.
+/// Warn about a replaced environment variable that is still set: an old recipe
+/// would otherwise do nothing, silently.
 pub fn warn_replaced_env() {
     for (key, _) in std::env::vars_os() {
         let Some(key) = key.to_str() else { continue };

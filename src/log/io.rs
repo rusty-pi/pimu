@@ -1,21 +1,16 @@
-//! The `io` channel (#35): what crossed the peripherals, apart from the
+//! The `io` channel: what crossed the peripherals, apart from the
 //! serial console.
 //!
-//! * block reads and writes on the SD card and the USB stick, contiguous runs
-//!   merged, with the files they belong to ([`super::fatmap`])
-//! * OTP rows the firmware read or programmed, with their values
-//! * what the network peer did: DHCP, DNS, TFTP and HTTP
-//!
-//! Everything is captured where the data crosses a peripheral – the firmware
-//! is a black box here as everywhere else.
+//! Block runs on the SD card and USB stick with the files they belong to
+//! ([`super::fatmap`]), OTP rows read and programmed, and what the network peer
+//! did — all captured where the data crosses a peripheral, so the firmware
+//! stays a black box.
 
 use std::collections::HashMap;
 
 use super::fatmap::{self, FileMap};
 use super::{fields, quote, Event};
 
-/// One merged run of block transfers, and the model time its first block
-/// went at: the time its line carries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Run {
     pub(super) us: u64,
@@ -25,27 +20,21 @@ pub(super) struct Run {
     count: u64,
 }
 
-/// What the channel keeps between events.
 #[derive(Default)]
 pub(super) struct Io {
-    /// The file map of each block device, by name.
     files: HashMap<&'static str, FileMap>,
-    /// The run being merged. It goes out when anything else is logged.
     pending: Option<Run>,
 }
 
 impl Io {
-    /// Name the files on block device `dev`, once.
     pub(super) fn map_files(&mut self, dev: &'static str, read: &fatmap::ReadBlock) {
         self.files
             .entry(dev)
             .or_insert_with(|| FileMap::build(read));
     }
 
-    /// `count` blocks from `lba` read (or written, erased) on `dev` at model
-    /// time `us`. Joins the pending run when it carries on from it; otherwise
-    /// the new run takes its place, and the one it ended comes back to be
-    /// written out.
+    /// `count` blocks from `lba` on `dev`: joins the pending run when it
+    /// carries on from it, else replaces it and hands the old one back.
     pub(super) fn blocks(
         &mut self,
         us: u64,
@@ -69,12 +58,10 @@ impl Io {
         })
     }
 
-    /// End the run being merged.
     pub(super) fn take_run(&mut self) -> Option<Run> {
         self.pending.take()
     }
 
-    /// `run`, with the files its blocks belong to.
     pub(super) fn run_event(&self, run: &Run) -> Event {
         let names = self
             .files
@@ -106,9 +93,7 @@ impl Io {
     }
 }
 
-/// An OTP row the firmware read. `fused`: the row is programmed on the
-/// modelled board; a blank one reads 0, as on the hardware. `meaning`: what
-/// the row is for (#101).
+/// An OTP row the firmware read; an unfused row reads 0, as on the hardware.
 pub(super) fn otp_read(row: u32, value: u32, fused: bool, meaning: &str) -> Event {
     let value = format!("{value:#010x}");
     Event {
@@ -126,8 +111,7 @@ pub(super) fn otp_read(row: u32, value: u32, fused: bool, meaning: &str) -> Even
     }
 }
 
-/// An OTP row the firmware programmed: `value` is what the row holds now,
-/// `was` what it held before.
+/// An OTP row the firmware programmed, before and after.
 pub(super) fn otp_write(row: u32, value: u32, was: u32, meaning: &str) -> Event {
     let (value, was) = (format!("{value:#010x}"), format!("{was:#010x}"));
     Event {
@@ -143,7 +127,6 @@ pub(super) fn otp_write(row: u32, value: u32, was: u32, meaning: &str) -> Event 
     }
 }
 
-/// Something the network peer did, as the peer words it.
 pub(super) fn net(what: &str) -> Event {
     Event {
         text: format!("net  {what}"),

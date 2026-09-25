@@ -1,88 +1,24 @@
-//! Hardware RNG at `0x7E10_4000` (`rng@7e104000`, `brcm,bcm2711-rng200`,
-//! `reg = <0x7e104000 0x28>` on the Pi 4).
+//! Hardware RNG (RNG200) at `0x7E10_4000`.
 //!
-//! The block is an RNG200, and the model implements its register map. Every
-//! client on this silicon speaks it:
-//!
-//! | Offset | Register | Who touches it |
-//! | --- | --- | --- |
-//! | `+0x00` | `RNG_CTRL` — `[12:0]` RBGEN, `[14:13]` sample-rate divider | all three |
-//! | `+0x04` | `RNG_SOFT_RESET` — bit 0 holds the generator in reset | bootloader, start4 |
-//! | `+0x08` | `RBG_SOFT_RESET` — bit 0 holds the bit generator in reset | bootloader, start4 |
-//! | `+0x0C` | `RNG_TOTAL_BIT_COUNT` — bits generated since reset (RO) | Linux |
-//! | `+0x10` | `RNG_TOTAL_BIT_COUNT_THRESHOLD` — warm-up bits to discard | start4 |
-//! | `+0x14` | bit 18 set on this block (RO, see [`PROBE`]) | start4 |
-//! | `+0x18` | `RNG_INT_STATUS` — write-one-to-clear | start4 |
-//! | `+0x1C` | `RNG_INT_ENABLE` | start4 |
-//! | `+0x20` | `RNG_FIFO_DATA` — pops one word | start4, Linux |
-//! | `+0x24` | `RNG_FIFO_COUNT` — `[7:0]` words ready, `[15:8]` threshold | start4, Linux |
-//!
-//! **Linux** (`raspberrypi/linux` `drivers/char/hw_random/iproc-rng200.c`,
-//! rpi-6.12.y at `aa731bab`): `bcm2711_rng200_init` leaves the block alone if
-//! `RNG_CTRL & 0x1FFF` is already set, else writes threshold `0x40000`,
-//! `FIFO_COUNT = 2 << 8` and `RNG_CTRL = (3 << 13) | 0x1FFF` = `0x7FFF`.
-//! `bcm2711_rng200_read` spins until `TOTAL_BIT_COUNT > 16`, then until
-//! `FIFO_COUNT & 0xFF` is non-zero, then reads that many words from
-//! `FIFO_DATA`. With `0x0C` reading 0 it spun forever in `hwrng_fillfn`.
-//!
-//! **Bootloader** (`pieeprom.bin`, `0x8000378E`): pulses `RBG_SOFT_RESET` and
-//! `RNG_SOFT_RESET` (1 then 0) and writes `RNG_CTRL = 0x7FFF`. It never reads
-//! the FIFO.
-//!
-//! **start4** carries two RNG drivers, and all of its RNG accesses are in
-//! `0x3ED64A4E..0x3ED64E28`. The probe at `0x3ED64B0A` reads `+0x14` and
-//! returns the driver table at `0x3EDFC0BC` (rng200 map) if bit 18 is set, or
-//! the one at `0x3EDFC0D4` (the legacy BCM2835 map: `STATUS` at `+0x04`,
-//! `DATA` at `+0x08`, driver id "RNGM") if it is clear. start4db's decompile
-//! makes the same choice (`FUN_0ee13458`). The rng200 driver:
-//!
-//! ```text
-//! open  0x3ED64CDC  if (!(CTRL & 0x1FFF)) {       ; already running: skip
-//!                     restart();                 ; 0x3ED64E16: pulse both resets
-//!                     [+0x10] = 0x40000; [+0x24] = 0x1000;
-//!                     [+0x1C] = 0x80000022; [+0x00] = 0x7FFF; }
-//! read  0x3ED64DD0  if (!([+0x24] & 0xFF)) {      ; FIFO empty: block
-//!                     [+0x24] = 0x100;           ; interrupt at one word
-//!                     [+0x18] |= 4; [+0x1C] = 0x80000026;
-//!                     wait(gp+879560); }
-//!                   return [+0x20];
-//! irq   0x3ED64BE8  s = [+0x18]                   ; interrupt source 125
-//!                   if (s & 0x80000022) { restart(); [+0x18] |= 0x80000022; }
-//!                   else if (s & 4) { [+0x1C] = 0x80000022; [+0x24] = 0x1000;
-//!                                     [+0x18] |= 4; release(gp+879560); }
-//! ```
-//!
-//! So `INT_STATUS` bit 2 is "FIFO holds `FIFO_COUNT[15:8]` words", and
-//! `0x80000022` covers the failure bits (Linux names bit 31
-//! `MASTER_FAIL_LOCKOUT` and bit 5 `NIST_FAIL`), which the model never raises.
-//!
-//! Older start4 builds (1.20210303, #73) drive the same block differently:
-//! open leaves `INT_ENABLE = 0x80000026`, so the FIFO interrupt is armed with
-//! a threshold of two words, and the handler (`0x3ED565C6` in that build)
-//! only acks bit 2 — `[+0x18] |= 4` — without masking it or moving the
-//! threshold. The FIFO is still full after the ack, so if bit 2 tracked that
-//! as a level the source would fire again at once and nothing else would run.
-//! That build booted on hardware, so both status bits are events: each
-//! latches when its condition becomes true, and a write-one clear sticks until
-//! the condition has gone false and true again. `TOTAL_BITS` could not be a
-//! level anyway — the counter only grows.
-//!
-//! The model used to answer `+0x14` with 0, which steered start4 onto the
-//! legacy driver, and then implemented that map instead. The legacy
-//! driver's `STATUS`/`DATA` offsets are the rng200's soft-reset registers.
+//! Registers and fields: `specs/rng.toml`.
 //!
 //! A warmed-up generator always has words waiting, so while it runs (enabled,
 //! both resets released) the FIFO reports a steady [`FIFO_WORDS`] and the
-//! warm-up counter is already past its threshold. Neither driver ever blocks,
-//! but `INT_STATUS`/`INT_ENABLE` are modelled so the blocking path works too.
+//! warm-up counter is already past its threshold. No driver ever blocks, but
+//! `INT_STATUS` / `INT_ENABLE` are modelled so the blocking path works too.
+//!
+//! `INT_STATUS` bits are latched events, not levels: start4 1.20210303 acks
+//! the FIFO bit without masking it or moving the threshold, and the FIFO is
+//! still full afterwards — as a level the source would re-fire at once and
+//! nothing else would run. The warm-up counter only grows, so that bit could
+//! not be a level either.
+//!
 //! Output words come from a fixed-seed xorshift and the bit counter advances
 //! only with words read: boot transcripts are golden files, and the ARM
 //! console must be byte-identical across runs.
-
 use crate::bus::{BusResult, MmioDevice, Width};
 
-// `PROBE` is not in the kernel's register list: start4's probe (`0x3ED64B0A`)
-// picks its rng200 driver iff bit 18 reads set, so on this block it does.
+// Re-exported: start4 picks its RNG200 driver from `PROBE` bit 18.
 pub use crate::spec::rng::PROBE;
 use crate::spec::rng::{
     CTRL, CTRL_RBGEN_MASK as CTRL_RBGEN, FIFO_COUNT, FIFO_COUNT_THRESHOLD_MASK,
@@ -93,7 +29,6 @@ use crate::spec::rng::{
 };
 use crate::spec::Coverage;
 
-/// Every register in `specs/rng.toml` is modelled.
 pub const COVERAGE: Coverage = Coverage {
     block: "rng",
     decoded: &[
@@ -110,11 +45,9 @@ pub const COVERAGE: Coverage = Coverage {
     ],
 };
 
-/// The interrupt start4 registers for this block (handler `0x3ED64BE8`), from
-/// `specs/rng.toml`.
 pub const IRQ_SRC: u32 = crate::spec::rng::IRQ_VPU;
 /// Words the FIFO reports while the generator runs. Real hardware refills
-/// continuously; a warmed-up block is never empty for long.
+/// continuously, so a warmed-up block is never empty for long.
 const FIFO_WORDS: u32 = 16;
 
 pub struct Rng {
@@ -122,17 +55,13 @@ pub struct Rng {
     rng_reset: bool,
     rbg_reset: bool,
     bit_threshold: u32,
-    /// `FIFO_COUNT[15:8]`, the FIFO-full interrupt level. 0 (reset) = never.
     fifo_threshold: u32,
-    /// Latched `INT_STATUS` bits. [`Rng::update`] sets a bit when its
-    /// condition becomes true; a clear sticks until it does so again.
+    /// Latched `INT_STATUS` bits: a bit is set when its condition becomes
+    /// true, and a clear sticks until it does so again.
     int_status: u32,
     int_enable: u32,
-    /// The warm-up and FIFO-full conditions as [`Rng::update`] last saw them,
-    /// to latch each on its rising edge only.
     bits_met: bool,
     fifo_met: bool,
-    /// Words popped since the generator last left reset; drives the bit count.
     popped: u32,
     /// xorshift32 state. Fixed seed: boot transcripts are golden files.
     seed: u32,
@@ -165,12 +94,10 @@ impl Rng {
         Rng::default()
     }
 
-    /// Enabled and out of both soft resets.
     fn running(&self) -> bool {
         self.ctrl & CTRL_RBGEN != 0 && !self.rng_reset && !self.rbg_reset
     }
 
-    /// Words waiting, as `FIFO_COUNT[7:0]` reports them.
     fn available(&self) -> u32 {
         if self.running() {
             FIFO_WORDS
@@ -179,8 +106,6 @@ impl Rng {
         }
     }
 
-    /// `RNG_TOTAL_BIT_COUNT`: the warm-up bits it discarded, the bits sitting
-    /// in the FIFO, and the bits already read out.
     fn total_bits(&self) -> u32 {
         if !self.running() {
             return 0;
@@ -191,15 +116,12 @@ impl Rng {
     }
 
     fn next_word(&mut self) -> u32 {
-        // xorshift32.
         self.seed ^= self.seed << 13;
         self.seed ^= self.seed >> 17;
         self.seed ^= self.seed << 5;
         self.seed
     }
 
-    /// True while the block is asserting its interrupt line: an enabled
-    /// `INT_STATUS` bit is set.
     pub fn irq_asserted(&self) -> bool {
         self.asserted
     }
@@ -208,7 +130,6 @@ impl Rng {
         if !self.running() {
             self.popped = 0;
         }
-        // Events, not levels (see the module notes): latch on the way up only.
         let bits_met = self.bit_threshold != 0 && self.total_bits() >= self.bit_threshold;
         if bits_met && !self.bits_met {
             self.int_status |= INT_TOTAL_BITS;
@@ -284,7 +205,7 @@ mod tests {
         rng.write(off, Width::Word, value).unwrap();
     }
 
-    /// The bootloader's `0x8000378E`: pulse both resets, then enable.
+    /// The `pieeprom.bin` bootloader's init: pulse both resets, then enable.
     fn bootloader_init(rng: &mut Rng) {
         wr(rng, RBG_SOFT_RESET, 1);
         wr(rng, RNG_SOFT_RESET, 1);
@@ -296,7 +217,6 @@ mod tests {
     #[test]
     fn start4_probe_picks_the_rng200_driver() {
         let mut rng = Rng::new();
-        // `0x3ED64B14`: `btest r2, 18` on `[0x7E104014]`.
         assert_ne!(rd(&mut rng, PROBE) & (1 << 18), 0);
     }
 
@@ -321,15 +241,13 @@ mod tests {
         assert_eq!(rd(&mut rng, FIFO_COUNT) & 0xFF, FIFO_WORDS);
     }
 
-    /// start4's open (`0x3ED64CDC`) then read (`0x3ED64DD0`), after the
-    /// bootloader has already enabled the block.
+    /// start4's open then read, after the bootloader has already enabled the
+    /// block.
     #[test]
     fn start4_reads_without_blocking() {
         let mut rng = Rng::new();
         bootloader_init(&mut rng);
-        // Open: already running, so it leaves the block alone.
         assert_ne!(rd(&mut rng, CTRL) & 0x1FFF, 0);
-        // Read: words ready, so straight to FIFO_DATA.
         assert_ne!(rd(&mut rng, FIFO_COUNT) & 0xFF, 0);
         let a = rd(&mut rng, FIFO_DATA);
         let b = rd(&mut rng, FIFO_DATA);
@@ -344,9 +262,7 @@ mod tests {
         let mut rng = Rng::new();
         bootloader_init(&mut rng);
         wr(&mut rng, TOTAL_BIT_COUNT_THRESHOLD, 0x40000);
-        // init: RBGEN already set, returns without touching anything.
         assert_ne!(rd(&mut rng, CTRL) & 0x1FFF, 0);
-        // read: warm-up elapsed, FIFO not empty.
         assert!(rd(&mut rng, TOTAL_BIT_COUNT) > 16);
         let n = rd(&mut rng, FIFO_COUNT) & 0xFF;
         assert_eq!(n, FIFO_WORDS);
@@ -376,9 +292,9 @@ mod tests {
         assert_eq!(rd(&mut rng, FIFO_COUNT), (2 << 8) | FIFO_WORDS);
     }
 
-    /// start4's blocking path and its interrupt handler (`0x3ED64BE8`). The
-    /// driver only blocks on an empty FIFO, so hold the generator in reset
-    /// while it arms the interrupt.
+    /// start4's blocking path and its interrupt handler. The driver only
+    /// blocks on an empty FIFO, so hold the generator in reset while it arms
+    /// the interrupt.
     #[test]
     fn fifo_interrupt_follows_start4s_handler() {
         let mut rng = Rng::new();
@@ -386,7 +302,6 @@ mod tests {
         wr(&mut rng, INT_ENABLE, 0x8000_0022);
         wr(&mut rng, FIFO_COUNT, 0x1000);
         assert!(!rng.irq_asserted());
-        // Read, blocking path: interrupt at one word.
         wr(&mut rng, RNG_SOFT_RESET, 1);
         assert_eq!(rd(&mut rng, FIFO_COUNT) & 0xFF, 0);
         wr(&mut rng, FIFO_COUNT, 0x100);
@@ -394,10 +309,8 @@ mod tests {
         wr(&mut rng, INT_STATUS, s | INT_FIFO_FULL);
         wr(&mut rng, INT_ENABLE, 0x8000_0026);
         assert!(!rng.irq_asserted());
-        // A word arrives.
         wr(&mut rng, RNG_SOFT_RESET, 0);
         assert!(rng.irq_asserted());
-        // Handler: no failure bits, FIFO full.
         let s = rd(&mut rng, INT_STATUS);
         assert_eq!(s & 0x8000_0022, 0);
         assert_ne!(s & INT_FIFO_FULL, 0);
@@ -408,7 +321,7 @@ mod tests {
         assert!(!rng.irq_asserted());
     }
 
-    /// start4 1.20210303 (#73): open arms the FIFO interrupt at two words and
+    /// start4 1.20210303: open arms the FIFO interrupt at two words and
     /// the handler only acks it. The FIFO stays full, and the ack still sticks.
     #[test]
     fn an_acked_fifo_interrupt_stays_acked_while_the_fifo_stays_full() {
@@ -418,7 +331,6 @@ mod tests {
         wr(&mut rng, FIFO_COUNT, 0x200);
         wr(&mut rng, INT_ENABLE, 0x8000_0026);
         assert!(rng.irq_asserted());
-        // Handler `0x0ED565C6`: no failure bits, so `[+0x18] |= 4`.
         let s = rd(&mut rng, INT_STATUS);
         assert_eq!(s & 0x8000_0022, 0);
         assert_ne!(s & INT_FIFO_FULL, 0);

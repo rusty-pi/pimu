@@ -1,30 +1,23 @@
-//! System registers (#40, milestone 2): what the armstub and an early Linux
-//! boot read and write, from EL3 down to EL0.
+//! System registers: what the armstub and an early Linux boot read and write,
+//! from EL3 down to EL0.
 //!
-//! Registers fall into four kinds:
-//!
-//! 1. The ones the core itself acts on — `SCTLR`, `VBAR`, `ELR`, `SPSR`,
-//!    `ESR`, `FAR`, `SCR_EL3`, `HCR_EL2`, the stack pointers, `PSTATE` fields —
-//!    kept as fields of [`SysRegs`] or of the [`Cpu`].
-//! 2. Identification registers, constant. `MIDR_EL1` / `REVIDR_EL1` are read
-//!    off the reference board (`/sys/devices/system/cpu/cpu0/regs/
-//!    identification/` on a Raspberry Pi 4B d03115: `0x410fd083`, `0`). The
-//!    rest are the Cortex-A72 r0p3 TRM's reset values, with the Cryptographic
-//!    Extension fields cleared: BCM2711 does not implement it (`/proc/cpuinfo`
-//!    there lists `fp asimd evtstrm crc32 cpuid`).
-//! 3. Plain storage: registers that only matter to whoever reads them back
-//!    (cache configuration, `PAR_EL1`, debug and PMU registers, IMPLEMENTATION DEFINED ones like
-//!    `L2CTLR_EL1`), kept in a map but only for encodings on an allowlist.
-//! 4. The generic timer, which belongs to the machine rather than the core:
-//!    forwarded to [`Memory::sysreg_read`] / [`Memory::sysreg_write`].
+//! Four kinds: the ones the core acts on, kept as fields of [`SysRegs`] or the
+//! [`Cpu`]; constant identification registers; plain storage behind an
+//! allowlist; and the generic timer, forwarded to [`Memory::sysreg_read`] /
+//! [`Memory::sysreg_write`] because it belongs to the machine.
 //!
 //! Anything else is [`Stop::Unimplemented`] at EL1 and above (UNDEFINED at
-//! EL0), so a register the model does not know about stops the run instead
-//! of silently reading zero.
+//! EL0), deliberately: an unknown register stops the run instead of silently
+//! reading zero.
 //!
-//! Not modelled yet: the traps (`HCR_EL2.TVM` & co, `CPACR_EL1.FPEN`,
-//! `CPTR_ELx.TFP`, `MDCR_ELx`), which a kernel that sets them up the usual
-//! way never trips.
+//! The identification values are a Raspberry Pi 4B d03115's — `MIDR_EL1`
+//! `0x410fd083`, `REVIDR_EL1` 0 — and otherwise the Cortex-A72 r0p3 TRM's
+//! reset values with the Cryptographic Extension fields cleared, which BCM2711
+//! does not implement.
+//!
+//! Not modelled: the traps (`HCR_EL2.TVM` & co, `CPACR_EL1.FPEN`,
+//! `CPTR_ELx.TFP`, `MDCR_ELx`), which a kernel set up the usual way never
+//! trips.
 
 use std::collections::BTreeMap;
 
@@ -37,7 +30,8 @@ pub const fn key(op0: u32, op1: u32, crn: u32, crm: u32, op2: u32) -> u32 {
     (op0 << 14) | (op1 << 11) | (crn << 7) | (crm << 3) | op2
 }
 
-/// `MIDR_EL1`: ARM, variant 0, Cortex-A72 (`0xD08`), revision 3 — measured.
+/// `MIDR_EL1`: ARM, variant 0, Cortex-A72 (`0xD08`), revision 3, as read on a
+/// Raspberry Pi 4B d03115.
 pub const MIDR: u64 = 0x410F_D083;
 
 /// `SCR_EL3` bits the core consults.
@@ -52,8 +46,7 @@ pub const HCR_TGE: u64 = 1 << 27;
 /// `SCTLR_ELx.M`: stage 1 translation on.
 pub const SCTLR_M: u64 = 1 << 0;
 
-/// The registers the core acts on. Arrays are indexed by exception level;
-/// slot 0 is unused where the register has no EL0 instance.
+/// The registers the core acts on, arrays indexed by exception level.
 #[derive(Clone)]
 pub struct SysRegs {
     pub sctlr: [u64; 4],
@@ -112,26 +105,26 @@ impl SysRegs {
 fn id_reg(crm: u32, op2: u32) -> u64 {
     match (crm, op2) {
         // AArch32 feature registers (EL0 AArch32 is supported by the A72).
-        (1, 0) => 0x0000_0131, // ID_PFR0_EL1
-        (1, 1) => 0x0001_1011, // ID_PFR1_EL1
-        (1, 2) => 0x0301_0066, // ID_DFR0_EL1
-        (1, 4) => 0x1020_1105, // ID_MMFR0_EL1
-        (1, 5) => 0x4000_0000, // ID_MMFR1_EL1
-        (1, 6) => 0x0126_0000, // ID_MMFR2_EL1
-        (1, 7) => 0x0210_2211, // ID_MMFR3_EL1
-        (2, 0) => 0x0210_1110, // ID_ISAR0_EL1
-        (2, 1) => 0x1311_2111, // ID_ISAR1_EL1
-        (2, 2) => 0x2123_2042, // ID_ISAR2_EL1
-        (2, 3) => 0x0111_2131, // ID_ISAR3_EL1
-        (2, 4) => 0x0001_1142, // ID_ISAR4_EL1
-        (2, 5) => 0x0001_0001, // ID_ISAR5_EL1: SEVL, CRC32; no AES/SHA
-        (3, 0) => 0x1011_0222, // MVFR0_EL1
-        (3, 1) => 0x1211_1111, // MVFR1_EL1
-        (3, 2) => 0x0000_0043, // MVFR2_EL1
-        (4, 0) => 0x0000_2222, // ID_AA64PFR0_EL1: EL0-3 AArch64+32, FP, AdvSIMD
-        (5, 0) => 0x1030_5106, // ID_AA64DFR0_EL1
-        (6, 0) => 0x0001_0000, // ID_AA64ISAR0_EL1: CRC32 only
-        (7, 0) => 0x0000_1124, // ID_AA64MMFR0_EL1: 44-bit PA, 16-bit ASID, 4K/64K
+        (1, 0) => 0x0000_0131, // `ID_PFR0_EL1`
+        (1, 1) => 0x0001_1011, // `ID_PFR1_EL1`
+        (1, 2) => 0x0301_0066, // `ID_DFR0_EL1`
+        (1, 4) => 0x1020_1105, // `ID_MMFR0_EL1`
+        (1, 5) => 0x4000_0000, // `ID_MMFR1_EL1`
+        (1, 6) => 0x0126_0000, // `ID_MMFR2_EL1`
+        (1, 7) => 0x0210_2211, // `ID_MMFR3_EL1`
+        (2, 0) => 0x0210_1110, // `ID_ISAR0_EL1`
+        (2, 1) => 0x1311_2111, // `ID_ISAR1_EL1`
+        (2, 2) => 0x2123_2042, // `ID_ISAR2_EL1`
+        (2, 3) => 0x0111_2131, // `ID_ISAR3_EL1`
+        (2, 4) => 0x0001_1142, // `ID_ISAR4_EL1`
+        (2, 5) => 0x0001_0001, // `ID_ISAR5_EL1`: SEVL, CRC32; no AES/SHA
+        (3, 0) => 0x1011_0222, // `MVFR0_EL1`
+        (3, 1) => 0x1211_1111, // `MVFR1_EL1`
+        (3, 2) => 0x0000_0043, // `MVFR2_EL1`
+        (4, 0) => 0x0000_2222, // `ID_AA64PFR0_EL1`: EL0-3 AArch64+32, FP, AdvSIMD
+        (5, 0) => 0x1030_5106, // `ID_AA64DFR0_EL1`
+        (6, 0) => 0x0001_0000, // `ID_AA64ISAR0_EL1`: CRC32 only
+        (7, 0) => 0x0000_1124, // `ID_AA64MMFR0_EL1`: 44-bit PA, 16-bit ASID, 4K/64K
         _ => 0,
     }
 }
@@ -279,7 +272,7 @@ pub(super) fn read<M: Memory + ?Sized>(cpu: &mut Cpu, k: u32, mem: &mut M) -> Re
                 s.mpidr
             }
         }
-        k if k == key(3, 0, 0, 0, 6) => 0, // REVIDR_EL1, measured
+        k if k == key(3, 0, 0, 0, 6) => 0, // REVIDR_EL1, as read on a 4B d03115
         _ if op0 == 3 && op1 == 0 && crn == 0 && (1..=7).contains(&crm) => id_reg(crm, op2),
         k if k == key(3, 1, 0, 0, 0) => ccsidr(s.csselr),
         k if k == key(3, 1, 0, 0, 1) => 0x0A20_0023, // CLIDR_EL1: L1 I+D, L2
@@ -333,7 +326,7 @@ pub(super) fn write<M: Memory + ?Sized>(
     Ok(())
 }
 
-/// The registers that decide what the TLB holds (see mmu.rs).
+/// The registers that decide what the TLB holds (`src/aarch64/mmu.rs`).
 #[allow(clippy::type_complexity)]
 fn shaping(s: &SysRegs) -> ([u64; 4], [u64; 4], [u64; 4], u64, u64, u64) {
     (s.sctlr, s.tcr, s.ttbr0, s.ttbr1_el1, s.hcr_el2, s.scr_el3)
@@ -458,7 +451,7 @@ mod tests {
 
     #[test]
     fn no_crypto_in_the_id_registers() {
-        // ID_AA64ISAR0_EL1: AES [7:4], SHA1 [11:8], SHA2 [15:12] all zero.
+        // `ID_AA64ISAR0_EL1`: AES [7:4], SHA1 [11:8], SHA2 [15:12] all zero.
         assert_eq!(id_reg(6, 0) & 0xFFF0, 0);
         assert_eq!(id_reg(6, 0) >> 16 & 0xF, 1, "CRC32");
     }

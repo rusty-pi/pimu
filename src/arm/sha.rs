@@ -1,4 +1,4 @@
-//! SHA-256 block loops (#79): see the module docs of `arm/mod.rs`, "SHA-256
+//! SHA-256 block loops: see the module docs of `arm/mod.rs`, "SHA-256
 //! loops".
 
 use std::collections::{HashMap, HashSet};
@@ -12,14 +12,11 @@ use super::park::{ram, Fixed, Read, Regs};
 /// A pass shorter than this is a busy-wait candidate, not a block loop: one
 /// SHA-256 block takes thousands of instructions.
 const MIN_PASS: u64 = 256;
-/// The longest pass recorded, in instructions.
 const MAX_PASS: usize = 1 << 16;
 /// Jumps back to one target, the same distance apart, before its loop is
 /// recorded.
 const REPEATS: u8 = 2;
-/// A skip of fewer passes is not worth its probe.
 const MIN_SKIP: u64 = 4;
-/// What a probe XORs into the registers it takes to be dead.
 const SCRAMBLE: u64 = 0xA5A5_5A5A_A5A5_5A5A;
 
 /// SHA-256's round constants (FIPS 180-4 §4.2.2).
@@ -95,16 +92,12 @@ struct Recording {
     entry: u64,
     started: bool,
     rotated: bool,
-    /// Instructions seen before reaching the head.
     waited: usize,
     effects: u64,
     fixed: Fixed,
-    /// The pass in progress.
     pcs: Vec<u64>,
     acc: Vec<Access>,
-    /// The flags after each instruction.
     flags: Vec<u32>,
-    /// The passes done, and the state at every arrival at the head.
     passes: Vec<(Vec<u64>, Vec<Access>, Vec<u32>)>,
     heads: Vec<Regs>,
 }
@@ -115,10 +108,8 @@ pub(super) struct Finder {
     /// The last backward jump, as `(target, cycle)`: an inner loop going
     /// round jumps back to the same place again and again, quickly.
     last: (u64, u64),
-    /// The backward-jump targets seen lately: `(target, cycle of the last
-    /// jump there, the distance to the one before, how often in a row)`. A
-    /// count of `u8::MAX` is a loop already turned down. The least lately
-    /// jumped to makes room for a new one.
+    /// Backward-jump targets seen lately: `(target, last cycle, distance to the
+    /// jump before, times in a row)`; `u8::MAX` marks one already turned down.
     far: [(u64, u64, u64, u8); 8],
     rec: Option<Box<Recording>>,
 }
@@ -128,14 +119,12 @@ impl Finder {
         self.rec.is_some()
     }
 
-    /// The core took an exception or an interrupt, or waited.
     pub(super) fn abandon(&mut self) {
         self.rec = None;
     }
 
-    /// The core jumped back to `cpu.pc` in `cycle`. True when that starts a
-    /// recording: the third pass in a row of one length, long enough not to
-    /// be a busy-wait.
+    /// The core jumped back to `cpu.pc`. True when that starts a recording: the
+    /// third pass in a row of one length, long enough not to be a busy-wait.
     pub(super) fn backward(&mut self, cpu: &Cpu, cycle: u64) -> bool {
         let t = cpu.pc;
         let (last, at) = std::mem::replace(&mut self.last, (t, cycle));
@@ -184,7 +173,6 @@ impl Finder {
         true
     }
 
-    /// Turn the loop found at `entry` down for as long as it keeps its slot.
     fn reject(&mut self, entry: u64) {
         if let Some(e) = self.far.iter_mut().find(|e| e.0 == entry) {
             e.3 = u8::MAX;
@@ -255,14 +243,12 @@ impl Finder {
         r.heads.push(Regs::of(cpu));
     }
 
-    /// Two passes recorded: time for [`Self::fit`].
     pub(super) fn ready(&self) -> bool {
         self.rec.as_ref().is_some_and(|r| r.passes.len() == 2)
     }
 
-    /// The loop the recording shows, if it is a SHA-256 block loop; the core
-    /// is at the recording's head. A loop that has to be looked at from
-    /// another point of its pass is recorded again from there.
+    /// The loop the recording shows, if it is a SHA-256 block loop. One that has
+    /// to be looked at from another point of its pass is recorded again there.
     pub(super) fn fit(&mut self, cpu: &Cpu, m: &Machine) -> Option<Box<Loop>> {
         let r = self.rec.take()?;
         match Loop::fit(&r, cpu, m) {
@@ -292,26 +278,19 @@ impl Finder {
     }
 }
 
-/// What two recorded passes turned out to be.
 enum Fitted {
     Loop(Box<Loop>),
-    /// A block loop whose passes each store the hash of the block the pass
-    /// before read: the pass from here straddles two blocks. Seen from just
-    /// after it stores the state, it is a plain one.
+    /// A block loop whose pass straddles two blocks; seen from just after it
+    /// stores the state it is a plain one.
     Rotate(u64),
     No,
 }
 
-/// What a register does from one head to the next.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Role {
-    /// Holds its value.
     Fixed,
-    /// Adds the same amount.
     Step(u64),
-    /// Holds this word of the hash state.
     Word(usize),
-    /// Written before it is read: whatever it held does not matter.
     Dead,
 }
 
@@ -324,11 +303,9 @@ pub(super) struct Loop {
     prefix: Vec<u64>,
     head: u64,
     pcs: Vec<u64>,
-    /// The flags after each instruction of a pass, where they were the same
-    /// in both passes recorded. A loop ends on a comparison of something
-    /// that moves a pass at a time, often for equality; the flags that
-    /// comparison sets differ on the far side of the end, so a pass beyond
-    /// it does not pass for one of the loop's.
+    /// The flags after each instruction, where both recorded passes agreed.
+    /// The loop's exit comparison sets different flags past the end, so a pass
+    /// beyond it cannot pass for one of the loop's.
     flags: Vec<Option<u32>>,
     fixed: Fixed,
     /// The state at the head the loop was fitted at.
@@ -346,10 +323,10 @@ pub(super) struct Loop {
 }
 
 impl Loop {
-    /// Fit a loop to two passes of one: find the 32 bytes a pass stores
-    /// that are the compression of what the pass before stored with 64
-    /// bytes a pass reads, work out what every register does, and check it
-    /// all by running the next pass off the machine, twice.
+    /// Fit a loop to two recorded passes: find the 32 bytes a pass stores that
+    /// are the compression of the 32 the pass before stored with 64 it read,
+    /// work out what every register does, and verify by running the next pass
+    /// off the machine twice.
     fn fit(r: &Recording, cpu: &Cpu, m: &Machine) -> Fitted {
         Self::try_fit(r, cpu, m).unwrap_or(Fitted::No)
     }
@@ -375,10 +352,8 @@ impl Loop {
         }
         let (stored_a, ext_a) = bytes(a)?;
         let (stored_b, ext_b) = bytes(b)?;
-        // The state the second pass stored, and the block that took it
-        // there from what the first pass stored: read by the second pass
-        // itself (and the block before it by the first), or already by the
-        // first (and the next one by the second).
+        // The state the second pass stored, and the block that took it there
+        // from what the first stored.
         let mut found = None;
         'search: for s in windows(&stored_b, 32) {
             let (Some(old), Some(new)) = (words(&stored_a, s), words(&stored_b, s)) else {
@@ -411,8 +386,6 @@ impl Loop {
             return (pcs.iter().filter(|&&p| p == head).count() == 1)
                 .then_some(Fitted::Rotate(head));
         }
-        // Memory a pass reads before it writes it has to be the state:
-        // anything else carried from pass to pass in memory is not modelled.
         if ext_b
             .keys()
             .any(|&x| stored_b.contains_key(&x) && !in_state(x))
@@ -438,13 +411,10 @@ impl Loop {
                 Role::Dead
             };
         }
-        // Without the state in memory, it has to be in the registers.
         if !reads_state && (0..8).any(|j| !roles.contains(&Role::Word(j))) {
             return None;
         }
         let ptr = roles.iter().position(|&r| r == Role::Step(64))?;
-        // The block the second pass hashed, relative to the pointer at its
-        // head.
         let mut c = cpu.clone();
         let ptr_pa = data_pa(&mut c, m, h2.x[ptr])?;
         let block_off = block_pa.wrapping_sub(ptr_pa);
@@ -481,10 +451,9 @@ impl Loop {
             state_pa,
             reads_state,
         };
-        // The next pass, from where the core is, twice: the second time with
-        // every register taken to be dead scrambled. Both have to follow the
-        // recorded pass back to the head, end the same, and end where
-        // hashing the block says.
+        // The next pass twice, the second time with the registers taken to be
+        // dead scrambled: both must follow the recorded pass and agree with
+        // what hashing the block says.
         let block = l.block(&mut c, m, h3.x[ptr].wrapping_add(block_off))?;
         let mut next = new;
         compress(&mut next, &block);
@@ -498,12 +467,10 @@ impl Loop {
         Some(Fitted::Loop(Box::new(l)))
     }
 
-    /// Instructions a pass.
     pub(super) fn len(&self) -> u64 {
         self.pcs.len() as u64
     }
 
-    /// The 64-byte block at virtual `va`, as the core's MMU maps it.
     fn block(&self, c: &mut Cpu, m: &Machine, va: u64) -> Option<[u8; 64]> {
         let mut out = [0u8; 64];
         let mut i = 0;
@@ -519,9 +486,8 @@ impl Loop {
         Some(out)
     }
 
-    /// Run one pass off the machine from the head, in `from` with `state`
-    /// in memory (and in the registers that hold it), and dead registers
-    /// scrambled if asked: the registers and the stores it ends with.
+    /// Run one pass off the machine from the head, optionally with the dead
+    /// registers scrambled; returns the registers and stores it ends with.
     fn probe(
         &self,
         cpu: &Cpu,
@@ -591,13 +557,10 @@ impl Loop {
         regs_ok && got == want
     }
 
-    /// The core is at the loop's entry with `cycles` to go before anything
-    /// else can happen. Run it on to the head, hash all but the last of the
-    /// passes the rest has room for natively, and put the core where the
-    /// loop would be, leaving one pass to run: that pass makes every
-    /// register and every byte of the loop's scratch memory what the loop
-    /// itself would have left. `Ok((instructions, blocks))` gone by, or
-    /// `Err` if the core is not in the loop that was fitted any more.
+    /// The core is at the loop's entry with `cycles` to spare. Hash all but the
+    /// last of the passes that has room for natively and leave one pass to run,
+    /// which puts back every register and byte of scratch memory the loop only
+    /// uses inside its body. `Err` if the core is no longer in the fitted loop.
     pub(super) fn skip(
         &self,
         cpu: &mut Cpu,
@@ -611,8 +574,6 @@ impl Loop {
             if cpu.pc != self.entry || cycles < pre + (MIN_SKIP + 1) * len {
                 return Ok((0, 0));
             }
-            // Only RAM, so running it off the machine and keeping what it
-            // did is running it.
             let mut c = cpu.clone();
             let mut bus = ProbeBus::new(m);
             if !run(&mut c, &mut bus, &self.prefix, None) || c.pc != self.head {
@@ -666,14 +627,6 @@ impl Loop {
                 now.x[r] as u32
             };
         }
-        // Does the loop make pass `n` from here, the way the recorded ones
-        // went? `states` is the hash after each pass, hashed ahead as far as
-        // asked. Leaving the loop is for good (what moves a pass at a time
-        // reaches the end), so if it makes pass `n` it makes every one
-        // before it: a doubling search and a halving one find the last
-        // within reach, hashing no further than that. The pass left to run
-        // after a skip has to be a whole one of the loop's, or it would not
-        // put back the registers the loop only uses inside its body.
         let mut c = cpu.clone();
         let mut states = vec![state];
         let base = now.x[self.ptr].wrapping_add(self.block_off);
@@ -765,7 +718,6 @@ fn in_range(a: u64, lo: u64, len: u64) -> bool {
     a.wrapping_sub(lo) < len
 }
 
-/// Where a data read of `va` goes on this core, if it can go anywhere.
 fn data_pa(c: &mut Cpu, m: &Machine, va: u64) -> Option<u64> {
     c.data_pa(&mut ProbeBus::new(m), va)
 }
@@ -802,7 +754,6 @@ fn bytes(acc: &[Access]) -> Option<(HashMap<u64, u8>, HashMap<u64, u8>)> {
     Some((stored, ext))
 }
 
-/// Every 4-byte aligned address `len` bytes of `map` start at.
 fn windows(map: &HashMap<u64, u8>, len: u64) -> Vec<u64> {
     let mut starts: Vec<u64> = map
         .keys()
@@ -813,7 +764,6 @@ fn windows(map: &HashMap<u64, u8>, len: u64) -> Vec<u64> {
     starts
 }
 
-/// The eight little-endian words at `a`.
 fn words(map: &HashMap<u64, u8>, a: u64) -> Option<[u32; 8]> {
     let mut w = [0u32; 8];
     for (i, v) in w.iter_mut().enumerate() {
@@ -839,7 +789,6 @@ fn block_of(map: &HashMap<u64, u8>, a: u64) -> Option<[u8; 64]> {
 struct ProbeBus<'a> {
     m: &'a Machine,
     over: HashMap<u64, u8>,
-    /// The pass did something a block loop may not.
     bad: bool,
 }
 

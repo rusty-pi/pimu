@@ -1,4 +1,6 @@
-//! The PCM / I²S interface at `0x7E20_3000` (#131).
+//! The PCM / I²S interface at `0x7E20_3000`.
+//!
+//! Registers and fields: `specs/pcm.toml` ([`crate::spec::pcm`]).
 //!
 //! One serial-audio module, which a HAT reaches on GPIO 18 to 21. Nothing on
 //! a 4B is wired to it and no firmware in a boot touches it, so — as for
@@ -9,9 +11,9 @@
 //! What that gives a driver is the transmit path finishing rather than
 //! blocking. `CS_A` reads with `TXE`, `TXD` and `TXW` set and `RXD`, `RXR` and
 //! `RXF` clear, which is an interface that can always take another word and
-//! never has one to hand back. On the catch-all stub the same read answered 0:
-//! a transmit FIFO that is full and a receive FIFO that will never fill, which
-//! is a spin either way a driver looks at it.
+//! never has one to hand back. Answering 0 instead would describe a transmit
+//! FIFO that is full and a receive FIFO that will never fill — a spin either
+//! way a driver looks at it.
 
 use std::collections::BTreeMap;
 
@@ -22,7 +24,6 @@ use crate::spec::pcm::{
 };
 use crate::spec::Coverage;
 
-/// Every register of the block.
 pub const COVERAGE: Coverage = Coverage {
     block: "pcm",
     decoded: &[
@@ -34,13 +35,11 @@ pub const COVERAGE: Coverage = Coverage {
 /// two write-1-to-clear error bits, which `CS_A_RESET` supplies on read.
 const CS_A_WRITABLE: u32 = 0x0138_03FF;
 
-/// The two error flags, cleared by writing them back.
 const CS_A_W1C: u32 = 0x0001_8000;
 
 #[derive(Default)]
 pub struct Pcm {
     storage: BTreeMap<u32, u32>,
-    /// `CS_A`'s writable bits, and the error flags on top of them.
     cs: u32,
 }
 
@@ -61,7 +60,6 @@ impl MmioDevice for Pcm {
             // The control bits as written, with the flags of an idle interface
             // whose transmit FIFO is empty and whose receive FIFO never fills.
             CS_A => CS_A_RESET | self.cs,
-            // Nothing was ever received.
             FIFO_A => 0,
             _ => self.storage.get(&off).copied().unwrap_or(0),
         })
@@ -71,11 +69,8 @@ impl MmioDevice for Pcm {
         let off = offset & !3;
         match off {
             CS_A => {
-                // `TXCLR` and `RXCLR` are self-clearing, and there is nothing
-                // in either FIFO to clear.
                 self.cs = (self.cs & CS_A_W1C & !value) | (value & CS_A_WRITABLE & !0x18);
             }
-            // The transmitted word goes nowhere: no pin carries it.
             FIFO_A => {}
             INTSTC_A => {
                 let was = self.storage.get(&off).copied().unwrap_or(0);
@@ -101,8 +96,6 @@ mod tests {
         p.write(off, Width::Word, value).unwrap();
     }
 
-    /// An untouched interface reads as ready to transmit and with nothing to
-    /// receive — the flags, and nothing else.
     #[test]
     fn an_idle_interface_can_always_take_another_word() {
         let mut p = Pcm::new();
@@ -110,8 +103,6 @@ mod tests {
         assert_eq!(rd(&mut p, FIFO_A), 0);
     }
 
-    /// Enabling the interface keeps the control bits and leaves the flags
-    /// alone; the two self-clearing FIFO-clear bits do not stick.
     #[test]
     fn the_control_bits_are_kept_and_the_clears_are_not() {
         let mut p = Pcm::new();
@@ -119,7 +110,6 @@ mod tests {
         assert_eq!(rd(&mut p, CS_A), 0x0028_0005);
     }
 
-    /// A driver that fills the transmit FIFO is never told it is full.
     #[test]
     fn transmitting_never_blocks() {
         let mut p = Pcm::new();
@@ -130,8 +120,6 @@ mod tests {
         assert_eq!(rd(&mut p, CS_A) & 0x0028_0000, 0x0028_0000, "TXE and TXD");
     }
 
-    /// The configuration words are plain storage, and the interrupt status is
-    /// write-1-to-clear with nothing to clear.
     #[test]
     fn the_configuration_words_read_back() {
         let mut p = Pcm::new();

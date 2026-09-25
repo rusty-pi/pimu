@@ -1,15 +1,12 @@
-//! The ARM side of the machine (#40): the BCM2711's four Cortex-A72 cores on
-//! its ARM physical map, run in lock-step with the VPU.
+//! The ARM side of the machine: the BCM2711's four Cortex-A72 cores on its ARM
+//! physical map, run in lock-step with the VPU.
 //!
-//! ## Release
-//!
-//! The cores stay in reset until `arm_loader` lets them go, which it does by
-//! writing the ARM control block ([`crate::periph::armctrl`]). All four then
-//! start the way the SoC starts them: PC 0, EL3, `DAIF` masked — in the
-//! firmware's armstub ([`crate::armstub`]). Every core sets up its own banked
-//! GIC state and drops to non-secure EL2; core 0 jumps to the kernel with
-//! `x0` = the dtb, and cores 1..3 park in the stub, polling their spin-table
-//! word until Linux writes an entry point there.
+//! The cores stay in reset until `arm_loader` releases them through the ARM
+//! control block ([`crate::periph::armctrl`]). All four then start as the SoC
+//! starts them — PC 0, EL3, `DAIF` masked — in the firmware's armstub
+//! ([`crate::armstub`]): each sets up its own banked GIC state and drops to
+//! non-secure EL2, core 0 enters the kernel with `x0` = the dtb, and cores 1..3
+//! park on their spin-table word.
 //!
 //! ## Address map
 //!
@@ -19,169 +16,86 @@
 //!   0x0_0000_0000 ..             RAM: the VPU's SDRAM, no aliases
 //!   0x0_FC00_0000 .. 0xFF80_0000  peripherals; ARM 0xFC00_0000 + x is VPU
 //!                                 bus address 0x7C00_0000 + x
-//!   0x0_FF80_0000                 ARM local block (periph/armlocal.rs)
-//!   0x0_FF84_0000                 GIC-400 (periph/gic.rs)
-//!   0x6_0000_0000 .. 0x8_0000_0000  PCIe outbound window (periph/pcie.rs):
-//!                                 the VL805's BAR0 wherever the root
-//!                                 complex and the endpoint put it
+//!   0x0_FF80_0000                 ARM local block (`src/periph/armlocal.rs`)
+//!   0x0_FF84_0000                 GIC-400 (`src/periph/gic.rs`)
+//!   0x6_0000_0000 .. 0x8_0000_0000  PCIe outbound window (`src/periph/pcie.rs`)
 //! ```
 //!
-//! Anything else is a bus abort. RAM accesses go straight to the backing
-//! store rather than through [`Machine`]'s VPU address decode, so they do not
-//! count towards the VPU run loop's progress heuristics.
+//! Anything else is a bus abort. RAM accesses go straight to the backing store
+//! rather than through [`Machine`]'s VPU decode, so they do not count towards
+//! the VPU run loop's progress heuristics.
 //!
 //! ## Time and scheduling
 //!
-//! One ARM instruction is one cycle at the nominal [`gentimer::ARM_HZ`], on
-//! every core: the cores take turns, one instruction each per cycle in core
-//! order, so they share one cycle count and read the same counter. After
-//! every VPU step the run loop calls [`ArmSide::catch_up`], which runs the
-//! ARM until it has had as many cycles as the system timer says have passed
-//! since release: about 28 per VPU step, and a whole slice at once when the
-//! VPU's `sleep` or busy-wait fast-forward jumps the counter. Either way a run
-//! is a pure function of its inputs — the reproducibility the regression
+//! One ARM instruction is one cycle at the nominal [`gentimer::ARM_HZ`] on every
+//! core: the cores take turns in core order, share one cycle count and read the
+//! same counter. After every VPU step [`ArmSide::catch_up`] runs the ARM until
+//! it has had as many cycles as the system timer says have passed. A run is
+//! therefore a pure function of its inputs — the reproducibility the regression
 //! bench depends on — and the ARM's clock never falls behind the VPU's.
 //!
-//! A core in `wfi` sits out its turns until the GIC signals it (masked or
-//! not, as the architecture says); when all of them wait, time skips ahead
-//! to the next generic-timer event inside the slice.
+//! A core in `wfi` sits out its turns until the GIC signals it; when all of them
+//! wait, time skips to the next generic-timer event inside the slice.
 //!
-//! When one core is the only one taking turns — the others wait, none is
-//! parked — the cycles up to the next thing due (a timer event, the end of
-//! the slice) would visit only it, so [`ArmSide::burst`] steps it through
-//! them without the cycle loop's checks. A step that touches a device,
-//! stores where another core holds an exclusive mark, changes state another
-//! core or the run loop depends on ([`Cpu::shared_effects`]) or does not
-//! retire ends the burst, and is finished the ordinary way, so a run is the
-//! same either way. Cache maintenance and the NOP-like hints change nothing
-//! in the model, and a core's own interrupt masks and thread pointers are
-//! its own business, so a kernel's `dc civac`, `paciasp` and `msr daif` no
-//! longer end one.
-//! UEFI runs on one core, most of its time hashing the UKI (#53).
-//! `PIMU_NO_BURST=1` turns this off, for comparison.
+//! A fast-forward slice runs with the VPU frozen. For `sleep` the ARM runs the
+//! slice *before* the counter moves ([`ArmSide::run_until_store`]) and stops
+//! after the first cycle in which a core writes a VPU-side peripheral: that
+//! write — usually a mailbox request — is what would interrupt the VPU, so the
+//! counter moves only that far and the VPU wakes to it on time. Without it a
+//! request made while the VPU sleeps waits the whole slice, 1.9 ms on average,
+//! and UEFI's SD card reads crawl.
 //!
-//! A fast-forward slice runs with the VPU frozen. For `sleep` — the VPU
-//! waiting for an interrupt — the ARM runs the slice *before* the counter
-//! moves ([`ArmSide::run_until_store`]), and stops after the first cycle in
-//! which a core writes a VPU-side peripheral: that write, a mailbox request
-//! most often, is what would interrupt the VPU, so the counter only moves
-//! that far and the VPU wakes to it on time. Before this, every request
-//! UEFI made while the VPU slept waited for the slice to end — 1.9 ms on
-//! average, which made its SD card reads crawl (#53). The busy-wait
-//! fast-forward still moves the counter first, so a request made during a
-//! jump is seen when it ends.
+//! ## Going faster, and the invariants that keep it honest
 //!
-//! ## Straight-line runs
+//! Each of these is a shortcut whose observable result must match the plain
+//! path; each has a `PIMU_*` switch that turns it off for comparison.
 //!
-//! Inside a burst, the instructions from one control-flow transfer to the
-//! next are run off the page the first of them came from (#117), because the
-//! answers to most of the checks around a step cannot change over such a run:
-//! the interrupt lines only move in [`ArmSide::sync`], which a burst does not
-//! reach; the EL, `SCR_EL3` and `HCR_EL2` that `Cpu::step_system`'s stage-2
-//! guard reads cannot move without adding to [`Cpu::shared_effects`], which
-//! is compared every step anyway; the PC stays aligned and stays in a page
-//! whose translation a `TLBI` cannot drop without the same compare ending the
-//! run; and the park detector only has work to do at a backward jump, so it
-//! is called once, at the transfer that ends the run. What is left per
-//! instruction is the load, the execute, and the tests for a store, a device
-//! and an effect. `PIMU_ARM_BLOCKS` measures the runs: the mean is 5.3
-//! instructions on `linux` and 9.6 on the mkosi boot.
-//! `PIMU_NO_STRAIGHT=1` turns this off, for comparison.
+//! - **Bursts** (`PIMU_NO_BURST`): when one core is the only one taking turns,
+//!   [`ArmSide::burst`] steps it without the cycle loop's per-cycle checks. A
+//!   step that touches a device, stores where another core holds an exclusive
+//!   mark, changes state others depend on ([`Cpu::shared_effects`]) or does not
+//!   retire ends the burst and is finished the ordinary way.
+//! - **Straight-line runs** (`PIMU_NO_STRAIGHT`, measured by
+//!   `PIMU_ARM_BLOCKS`): inside a burst, the instructions between two control
+//!   transfers run off the page the first came from, because nothing they could
+//!   observe can change over such a run — interrupt lines only move in
+//!   [`ArmSide::sync`]; the EL and `SCR_EL3`/`HCR_EL2` a stage-2 guard reads
+//!   cannot move without adding to [`Cpu::shared_effects`], which is compared
+//!   every step; and a `TLBI` that would drop the page's translation ends the
+//!   run by the same compare.
+//! - **Parking** (`PIMU_NO_PARK`, `src/arm/park.rs`): a polling loop — UEFI's
+//!   mailbox driver and its `Stall` are most of a UEFI boot's host time — sits
+//!   out its turns like a `wfi` sleeper and is rebuilt exactly where it would
+//!   have ended. A watched loop must repeat the same PCs and reads, store
+//!   nothing, change nothing beyond the general registers and flags
+//!   ([`Cpu::effects`]), and read only RAM, the counter and registers
+//!   [`Machine::peek`] can read without side effects. The exit search doubles
+//!   and halves, which assumes an exit condition stays true once true — hence a
+//!   moved-on register must count *down* to zero, since one counting up is
+//!   often compared for equality and would be stepped over.
+//! - **SHA-256 skipping** (`PIMU_NO_SHA_SKIP`, `src/arm/sha.rs`): UEFI hashes
+//!   the whole image before starting a kernel — 89.7 MB for the mkosi UKI — so
+//!   a recognised compression loop has its middle blocks hashed natively and
+//!   comes out with the registers, memory and cycle count it would have had.
+//!   Recognition is by what the loop does, not by its code, and the skip is
+//!   bounded to a lone runnable core with no exclusive mark or takeable
+//!   interrupt, inside the slice and before the next timer event.
+//!
+//! Skipped instructions always count as executed.
 //!
 //! ## Between cores
 //!
-//! - Exclusive monitor: a store by one core into the 64-byte granule another
-//!   core has marked with `ldxr` clears that core's mark, so its `stxr`
-//!   fails — the global monitor's part in a spinlock.
-//! - TLB maintenance: every `TLBI` flushes all the cores' TLBs, which covers
-//!   the broadcast (inner-shareable) forms; invalidating more is allowed.
-//! - `wfe` waits for an event (ARM ARM D1.16): `sev` on any core, the
-//!   global monitor clearing the core's mark (the exclusive monitor above),
-//!   an interrupt line, or an exception return. It also gives up at the next
-//!   generic-timer event-stream event if the stream is enabled, and after
-//!   [`WFE_BACKSTOP`] if not. The architecture allows a `wfe` to complete
-//!   early, so the backstop is always safe; it only bounds how long a wait
-//!   nobody signals can take. Before this, `wfe` was a no-op, so cores parked
-//!   in a holding pen (TF-A's, UEFI's) spun for the whole boot and the cycle
-//!   loop never found every core asleep.
+//! - Exclusive monitor: a store into the 64-byte granule another core marked
+//!   with `ldxr` clears that core's mark, so its `stxr` fails.
+//! - TLB maintenance: every `TLBI` flushes all cores' TLBs, which covers the
+//!   broadcast forms; invalidating more is allowed.
+//! - `wfe` (ARM ARM D1.16) ends on `sev`, a cleared monitor mark, an interrupt
+//!   line or an exception return, at the next event-stream event, or after
+//!   [`WFE_BACKSTOP`]. The architecture allows an early completion, so the
+//!   backstop is always safe; treating `wfe` as a no-op instead would leave
+//!   TF-A's and UEFI's holding pens spinning for the whole boot.
 //!
-//! ## Busy-wait loops
-//!
-//! Firmware on the ARM spends much of its time polling: UEFI's mailbox
-//! driver spins on the status word while the VPU works on a request, and its
-//! `Stall` spins on the counter. At one instruction per cycle that is most
-//! of the host time of a UEFI boot (#53). A core in such a loop is *parked*
-//! instead: it sits out its turns like a `wfi` sleeper, and its state is
-//! rebuilt exactly when the loop would have ended or something it reads
-//! changes. `PIMU_NO_PARK=1` turns this off, for comparison.
-//!
-//! - Detection (`arm/park.rs`): a backward-jump target hit often enough gets
-//!   its loop watched for a few passes. They have to repeat the same PCs and
-//!   the same reads with the same values, store nothing, execute nothing
-//!   that changes state beyond the general registers and flags
-//!   ([`Cpu::effects`]), and read only RAM, the counter, and device
-//!   registers [`Machine::peek`] can read without side effects.
-//! - Model: a register that moves by the same step every pass is moved on
-//!   arithmetically; the state at pass `n` is that, taken to pass `n - 2`,
-//!   and the last two passes re-run off the machine, with the watched values
-//!   for reads and the right cycle for the counter — which puts back what
-//!   the loop computes from the counter. The model has to reproduce every
-//!   watched pass before the core parks.
-//! - End: the first pass that strays from the watched one. The first 32
-//!   passes are checked one by one — a loop about to end is left to run —
-//!   and the rest by doubling and halving, on the premise that a loop's exit
-//!   condition, once true, stays true (a countdown reaching zero, the counter
-//!   passing a deadline). That premise is why a register that moves every
-//!   pass has to be counting down to zero: one counting up is compared
-//!   against a limit, often for equality, which the halving would step over.
-//!   Moved-on registers also have to hold what the loop itself computes at
-//!   every pass the search looks at.
-//! - Wake: at that pass; when a store, a device access or the VPU changes an
-//!   input (a core after the storing one in core order still gets its turn
-//!   in the same cycle); or when an interrupt line comes up that the core
-//!   can take. The skipped instructions count as executed.
-//!
-//! ## SHA-256 loops
-//!
-//! Before it starts a kernel, UEFI's secure boot hashes the whole image with
-//! SHA-256 in C, block after block: 89.7 MB for the mkosi UKI, minutes at one
-//! instruction per cycle (#79). A core in such a loop has the blocks in the
-//! middle of a slice hashed natively instead (`arm/sha.rs`), and comes out
-//! with the registers, memory and cycle count it would have had running
-//! them. `PIMU_NO_SHA_SKIP=1` turns this off, for comparison.
-//!
-//! - Recognition: by what the loop does, not by its code. A backward-jump
-//!   target reached after three passes in a row of one length, long enough
-//!   not to be a busy-wait, gets two passes recorded: their PCs, the flags
-//!   after every instruction, every read and store. The passes have to run
-//!   the same PCs, touch only RAM and change nothing beyond the general
-//!   registers and flags ([`Cpu::effects`]); what each stores has to include
-//!   32 bytes that are SHA-256's compression of the 32 the pass before
-//!   stored and 64 bytes read — the state and the block. Memory one pass
-//!   leaves for the next has to be that state. When the state a pass stores
-//!   is that of the block the pass before read (the backward-jump target
-//!   is in the middle of a block's work, the way LLVM rotates a `while`
-//!   loop), the loop is recorded again from just after the store, and a
-//!   core arriving at the target runs the way to there off the machine.
-//! - Registers: each general register keeps its value, moves by one step
-//!   every pass (the block pointer), holds a state word, or is dead:
-//!   written in a pass before it is read. The recorded pass is re-run off
-//!   the machine with the dead ones scrambled, and has to come out the same.
-//! - Skip: at the loop's head, the blocks ahead are hashed natively, and
-//!   pass `n` is probed off the machine from the state that gives. It has to
-//!   run the recorded PCs, with the recorded flags wherever the two recorded
-//!   passes agree, and come back to the head with the next state, so the
-//!   loop's own end test (a pointer compared with the end, for equality)
-//!   fails it at the last block. Leaving the loop is for good, so a doubling
-//!   and a halving search find the last pass that comes back; the core
-//!   skips the ones before it and runs that one itself, which puts back
-//!   what the loop only uses inside a pass.
-//! - Bounds: a lone runnable core, none parked, no other core's exclusive
-//!   mark, no interrupt it could take; the skip stays inside the slice and
-//!   before the next timer event. The skipped instructions count as
-//!   executed.
-//!
-//! Not yet: stage 2 translation (a core that sets `HCR_EL2.VM` stops with
+//! Not modelled: stage 2 translation (a core that sets `HCR_EL2.VM` stops with
 //! [`ArmStop::Unsupported`]).
 
 use crate::aarch64::{sysreg, Abort, Cpu, Exception, Memory, Step};
@@ -202,15 +116,12 @@ pub const CORES: usize = 4;
 /// The peripheral window, and how far below it the VPU sees the same thing.
 const PERIPH: std::ops::Range<u64> = 0xFC00_0000..0xFF80_0000;
 /// Where the DRAM the peripherals shadow gives way to them, and where the rest
-/// of it comes back: a board with more than `0xFC00_0000` bytes has the 64 MB
-/// behind the window and everything above it at 4 GB, which is why the
-/// firmware's `/memory@0` stops the low bank there and carries on above.
+/// comes back at 4 GB — which is why the firmware's `/memory@0` splits there.
 const RAM_LOW_END: u64 = PERIPH.start;
 const RAM_HIGH_BASE: u64 = 0x1_0000_0000;
 const PERIPH_TO_BUS: u64 = 0x8000_0000;
 
-/// The PCIe outbound window. What decodes in it — the VL805's BAR0, through
-/// `CPU_2_PCIE_MEM_WIN0` — is up to the root complex (`periph/pcie.rs`).
+/// The PCIe outbound window; what decodes in it is up to the root complex.
 const PCIE: std::ops::Range<u64> = 0x6_0000_0000..0x8_0000_0000;
 
 /// The longest a `wfe` waits when nothing else ends it: 1 ms of modelled time.
@@ -230,14 +141,14 @@ const STUB_END: u64 = 0x1000;
 /// the model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArmStop {
-    /// An instruction the interpreter does not implement yet.
+    /// An instruction the interpreter does not implement.
     Unimplemented {
         core: usize,
         pc: u64,
         el: u32,
         insn: u32,
     },
-    /// The guest enabled something not modelled yet.
+    /// The guest enabled something not modelled.
     Unsupported {
         core: usize,
         pc: u64,
@@ -256,25 +167,20 @@ pub struct Core {
     /// In `wfi`, waiting for an interrupt, or in `wfe` (then
     /// [`Self::wfe_until`] is set).
     pub waiting: bool,
-    /// Waiting in `wfe`: the cycle it gives up and completes anyway — the
-    /// next event-stream event, or [`WFE_BACKSTOP`] (module docs, "Between
-    /// cores").
+    /// Waiting in `wfe`: the cycle it completes anyway.
     pub wfe_until: Option<u64>,
     /// The first time the core's PC left the armstub: `(cycle, EL, PC, x0)`.
     /// For core 0 that is the kernel entry.
     pub entered: Option<(u64, u32, u64, u64)>,
-    /// Looks for a busy-wait loop to park the core in (module docs,
-    /// "Busy-wait loops").
+    /// Looks for a busy-wait loop to park the core in.
     detect: park::Detector,
     /// The loop the core is parked in.
     park: Option<Box<park::Park>>,
-    /// The SHA-256 block loop the core was last fitted to (module docs,
-    /// "SHA-256 loops"), how many it was fitted to, and how many blocks it
-    /// had hashed natively.
+    /// The SHA-256 block loop the core was last fitted to.
     sha: Option<Box<sha::Loop>>,
     pub sha_loops: u64,
     pub sha_blocks: u64,
-    /// `PIMU_ARM_BLOCKS=1`: the straight-line runs this core executed (#117).
+    /// `PIMU_ARM_BLOCKS=1`: the straight-line runs this core executed.
     pub blocks: Option<Box<blocks::Blocks>>,
 }
 
@@ -299,8 +205,7 @@ impl Core {
         }
     }
 
-    /// Bring this core's interrupt inputs up to date: the counter's rate,
-    /// its timers' lines into its GIC PPIs, and the GIC's verdict onto it.
+    /// Bring this core's interrupt inputs up to date.
     fn sync(&mut self, m: &mut Machine, id: usize, cycles: u64, hz: u64) {
         self.timer.set_hz(cycles, hz);
         for w in Which::ALL {
@@ -323,8 +228,7 @@ pub struct ArmSide {
     pub stopped: Option<ArmStop>,
     /// What `arm_loader` left in the armstub, read at release.
     pub handoff: Option<Handoff>,
-    /// The kernel command line, before and after [`armstub::BOOTARGS`] were
-    /// added at release.
+    /// The kernel command line, before and after the extra arguments.
     pub bootargs: Option<Result<(String, String), String>>,
     /// The system timer, in ARM cycles, at the first [`Self::catch_up`].
     released_at: Option<u64>,
@@ -334,20 +238,16 @@ pub struct ArmSide {
     timer_due: u64,
     /// The [`SPIS`] lines into the GIC, as last seen.
     spis: [bool; SPIS.len()],
-    /// Bit `id` set when core `id` takes its turn this cycle: not in `wfi`,
-    /// or woken by a line that is up. A core's lines only move in
-    /// [`Self::sync`] and its `waiting` only in its own step, so recomputing
-    /// the bits there is exact, and the cycle loop visits just these cores —
-    /// in the same order — instead of re-testing all four every cycle (#43).
+    /// Bit `id` set when core `id` takes its turn this cycle. Lines only move
+    /// in [`Self::sync`] and `waiting` only in a core's own step, so keeping
+    /// this exact lets the cycle loop visit just these cores, in order.
     runnable: u32,
     /// `PIMU_ARM_PROF`: steps per `(core, EL, 256-byte PC bucket)`.
     pub prof: Option<std::collections::HashMap<(usize, u32, u64), u64>>,
     /// `PIMU_ARM_PROF=<us>`: the model time the profile starts at, until it
     /// has.
     prof_from: Option<u64>,
-    /// Bit `id` set while core `id` is parked in a busy-wait loop (module
-    /// docs, "Busy-wait loops"), and the earliest cycle one of them has to
-    /// be back.
+    /// Bit `id` set while core `id` is parked, and when one is next due back.
     parked: u32,
     park_due: u64,
     /// Parked cores an input change woke in the middle of a cycle, still to
@@ -358,18 +258,14 @@ pub struct ArmSide {
     /// `PIMU_NO_BURST=1` takes a lone core through the cycle loop too
     /// ([`Self::burst`]).
     burst_on: bool,
-    /// `PIMU_NO_SHA_SKIP=1` runs SHA-256 block loops block by block too
-    /// (module docs, "SHA-256 loops").
+    /// `PIMU_NO_SHA_SKIP=1` runs SHA-256 block loops block by block too.
     sha_on: bool,
-    /// `PIMU_NO_STRAIGHT=1` steps a burst one instruction at a time instead of
-    /// running each straight-line stretch off one page ([`Self::burst`]).
+    /// `PIMU_NO_STRAIGHT=1` steps a burst one instruction at a time.
     straight_on: bool,
-    /// `PIMU_ARM_BLOCKS=1` counts the straight-line runs ([`blocks`]), which
-    /// only [`Self::step_core`] sees, so it takes the cores off the burst
-    /// path the way a profile does.
+    /// `PIMU_ARM_BLOCKS=1` counts straight-line runs; only [`Self::step_core`]
+    /// sees them, so it takes the cores off the burst path.
     blocks_on: bool,
-    /// [`Self::run_until_store`]: stop after the cycle in which a core first
-    /// writes a VPU-side peripheral, and whether one has.
+    /// [`Self::run_until_store`]'s stop condition, and whether it has fired.
     stop_on_store: bool,
     stored: bool,
     /// Where [`Channel::ArmExc`] goes: the machine's, taken at release.
@@ -377,12 +273,11 @@ pub struct ArmSide {
 }
 
 /// The device interrupt lines wired to the GIC: the mailbox, VCHIQ's
-/// doorbell, eMMC2 (which the
-/// legacy EMMC shares), the two GENET lines, the PL011, the AUX block's
-/// mini-UART, the PCIe endpoint's INTA and MSI, the USB-C port's own xHCI
-/// (#113), the GPIO block's four (a bank each, the third-bank output that
-/// mirrors bank 1's, and the one either bank raises), and the legacy DMA
-/// controller's nine.
+/// doorbell, eMMC2 (which the legacy EMMC shares), the two GENET lines, the
+/// PL011, the AUX block's mini-UART, the PCIe endpoint's INTA and MSI, the
+/// USB-C port's own xHCI, the GPIO block's four (a bank each, the third-bank
+/// output that mirrors bank 1's, and the one either bank raises), and the
+/// legacy DMA controller's nine.
 const SPIS: [u32; 23] = [
     gic::ID_MAILBOX,
     gic::ID_DOORBELL0,
@@ -495,8 +390,7 @@ impl ArmSide {
     }
 
     /// The cores as `arm_loader` releases them: read the armstub's hand-off
-    /// words, and put the harness's kernel arguments into the device tree
-    /// before the first instruction runs.
+    /// words and put the harness's kernel arguments into the device tree.
     pub fn released(m: &mut Machine) -> ArmSide {
         let mut arm = Self::new();
         arm.log = m.log.clone();
@@ -515,8 +409,7 @@ impl ArmSide {
         arm
     }
 
-    /// Run until the ARM has had every cycle of modelled time since release
-    /// (module docs, "Time and scheduling").
+    /// Run until the ARM has had every cycle of modelled time since release.
     pub fn catch_up(&mut self, m: &mut Machine) {
         let now = m.systimer.cycles_at(gentimer::ARM_HZ);
         let since = now - *self.released_at.get_or_insert(now);
@@ -525,11 +418,9 @@ impl ArmSide {
         }
     }
 
-    /// The VPU sleeps until `until_us`, its next compare: run the ARM up to
-    /// then, but stop after the first cycle in which a core writes a VPU-side
-    /// peripheral — the write that would interrupt the VPU out of its
-    /// `sleep`. Returns the microsecond the VPU wakes in (module docs, "Time
-    /// and scheduling").
+    /// Run the ARM up to `until_us`, the VPU's next compare, stopping after
+    /// the first cycle in which a core writes a VPU-side peripheral. Returns
+    /// the microsecond the VPU wakes in.
     pub fn run_until_store(&mut self, m: &mut Machine, until_us: u64) -> u64 {
         const PER_US: u64 = gentimer::ARM_HZ / 1_000_000;
         let now = m.systimer.cycles_at(gentimer::ARM_HZ);
@@ -548,11 +439,11 @@ impl ArmSide {
         (released + self.cycles).div_ceil(PER_US).min(until_us)
     }
 
-    /// Bring every core's interrupt inputs up to date (module docs, "Time
-    /// and scheduling"), and note when a timer next needs looking at.
+    /// Bring every core's interrupt inputs up to date, and note when a timer
+    /// next needs looking at.
     fn sync(&mut self, m: &mut Machine) {
-        // Fresh, not the levels `run` saw: a core's own access (reading the
-        // mailbox, acking a device) may just have dropped one.
+        // Fresh, not the levels `run` saw: a core's own access may have just
+        // dropped one.
         self.spis = spi_levels(m);
         for (&id, &level) in SPIS.iter().zip(&self.spis) {
             m.gic.set_spi_level(id, level);
@@ -609,8 +500,7 @@ impl ArmSide {
         }
     }
 
-    /// Bring parked core `id` up to date as of cycle `t`, and let it take
-    /// its turns again (module docs, "Busy-wait loops").
+    /// Bring parked core `id` up to date as of cycle `t` and let it run.
     fn unpark(&mut self, m: &Machine, id: usize, t: u64) {
         let core = &mut self.cores[id];
         let Some(p) = core.park.take() else {
@@ -648,10 +538,9 @@ impl ArmSide {
         }
     }
 
-    /// After core `by` stepped in cycle `t`: unpark the cores whose inputs
-    /// the step changed. One after `by` in core order still has its turn in
-    /// this cycle, which the returned bits ask for; one before it has had
-    /// it, and resumes in the next.
+    /// After core `by` stepped in cycle `t`, unpark the cores whose inputs the
+    /// step changed. One later in core order still has its turn this cycle,
+    /// which the returned bits ask for.
     fn check_parked(&mut self, m: &Machine, by: usize, t: u64) -> u32 {
         let mut woke = 0;
         let mut ids = self.parked;
@@ -675,8 +564,7 @@ impl ArmSide {
         woke
     }
 
-    /// Bring every parked core up to date, for a report of where the cores
-    /// are.
+    /// Bring every parked core up to date, for a report.
     pub fn settle(&mut self, m: &Machine) {
         let t = self.cycles;
         self.unpark_if(m, |_, _| true, t);
@@ -708,9 +596,8 @@ impl ArmSide {
                 let t = self.cycles;
                 self.unpark_if(m, |p, _| p.until <= t, t);
             }
-            // A lone core just back at the head of the SHA-256 block loop it
-            // was fitted to: hash what the time up to the next thing due has
-            // room for (module docs, "SHA-256 loops").
+            // A lone core back at the head of its SHA-256 loop: hash what the
+            // time up to the next thing due has room for.
             if self.parked == 0 && self.runnable.is_power_of_two() {
                 let id = self.runnable.trailing_zeros() as usize;
                 if self.cores[id].detect.sha_stop {
@@ -781,8 +668,7 @@ impl ArmSide {
         }
     }
 
-    /// One instruction (or exception or interrupt entry) on core `id`, and
-    /// what it means for the others (module docs, "Between cores").
+    /// One instruction, exception or interrupt entry on core `id`.
     fn step_core(&mut self, m: &mut Machine, id: usize) -> Turn {
         let cycles = self.cycles;
         let track = self.park_on || self.sha_on;
@@ -817,10 +703,9 @@ impl ArmSide {
         };
         if crate::diag::ON {
             if let Some(b) = &mut core.blocks {
-                // The fetch hint is the page this instruction came from, so
-                // the physical PC costs no second translation. A step that
-                // faulted before fetching leaves a stale hint; it does not
-                // retire, and a run that does not retire is only cut.
+                // The fetch hint is the page this instruction came from, so the
+                // physical PC costs no second translation. A step that faulted
+                // before fetching leaves a stale hint, but does not retire.
                 let retired = matches!(done.step, Step::Retired);
                 let (pa, el) = match core.cpu.tlb.fetch_hint() {
                     Some((_, el, page)) => (page | (pc & 0xFFF), el),
@@ -829,10 +714,9 @@ impl ArmSide {
                 b.step(pa, el, retired, core.cpu.pc == pc.wrapping_add(4));
             }
         }
-        // Most steps are a plain instruction on registers and RAM: nothing
-        // [`Self::after_step`] does for them but count it, as long as a store
-        // clears no other core's exclusive mark and wakes no parked core
-        // (the same test [`Self::burst`] makes).
+        // A plain instruction on registers and RAM needs nothing of
+        // [`Self::after_step`] but the count — the same test [`Self::burst`]
+        // makes.
         let plain = matches!(done.step, Step::Retired)
             && !done.io
             && !watching
@@ -863,11 +747,10 @@ impl ArmSide {
         }
     }
 
-    /// Core `id` is the only one taking turns and nothing is due before
-    /// `limit`: step it cycle by cycle up to there without the cycle loop's
-    /// checks, for as long as each step leaves the others and the interrupt
-    /// state alone (module docs, "Time and scheduling"). The first step that
-    /// does not gets [`Self::after_step`] like any other and ends the burst.
+    /// Core `id` alone, nothing due before `limit`: step it without the cycle
+    /// loop's checks for as long as each step leaves the other cores and the
+    /// interrupt state alone. The first that does not ends the burst and is
+    /// finished the ordinary way.
     fn burst(&mut self, m: &mut Machine, id: usize, limit: u64) -> Option<ArmStop> {
         // Another core's exclusive mark is the one thing a plain store can
         // change; nobody else runs, so no mark can appear meanwhile.
@@ -892,12 +775,9 @@ impl ArmSide {
             entered,
             ..
         } = core;
-        // An instruction that changes state other cores or the run loop
-        // depend on (`Cpu::shared_effects`) may change what the next step is:
-        // the security state, a TLB flush the others need. A line this
-        // core's own `msr daif` unmasks needs no stop: the lines only move
-        // when a device is touched, and `step_system` takes one the step
-        // after the unmask, which ends the burst.
+        // State other cores or the run loop depend on (`Cpu::shared_effects`)
+        // may change what the next step is. A line this core's own `msr daif`
+        // unmasks needs no stop: lines only move when a device is touched.
         let effects = cpu.shared_effects;
         let mut bus = ArmBus {
             m: &mut *m,
@@ -913,33 +793,14 @@ impl ArmSide {
             periph_store: false,
         };
         let last = 'burst: loop {
-            // A straight-line run off one page (#117). While the PC goes to
-            // the next word inside the page the last instruction came from,
-            // the answers to most of the checks around a step cannot change:
-            //
-            // - the interrupt lines only move in [`Self::sync`], which does
-            //   not run inside a burst, and a step that touches a device sets
-            //   `bus.io` and ends the burst — so with both lines down at the
-            //   start, no step here can take an interrupt whatever the
-            //   guest's `msr daif` does;
-            // - `step_system`'s stage-2 guard reads the EL, `SCR_EL3` and
-            //   `HCR_EL2`, and nothing can change those without adding to
-            //   `Cpu::shared_effects`, which is compared every step anyway;
-            // - the PC stays 4-byte aligned, and stays in a page whose
-            //   translation a `TLBI` cannot drop without the same compare
-            //   ending the run;
-            // - [`park::Detector::retired`] only has work to do at a backward
-            //   jump, so on a straight step it would return without doing
-            //   any — it is called once, at the transfer that ends the run.
-            //
-            // So make them once instead of once per instruction. The mean run
-            // is 5.3 instructions on `linux` and 9.6 on the mkosi boot.
+            // A straight-line run off one page: the checks around a step are
+            // made once instead of once per instruction. The module docs give
+            // the invariants that make that sound. Mean run: 5.3 instructions
+            // on `linux`, 9.6 on the mkosi boot.
             if self.straight_on && !cpu.irq_line && !cpu.fiq_line && entered.is_some() {
                 if let Some((va_page, el, pa_page)) = cpu.tlb.fetch_hint() {
-                    // The alignment test `Cpu::step` makes is hoisted with
-                    // the rest: a PC that starts aligned and only advances
-                    // by 4 stays aligned, and a misaligned one is left to
-                    // the ordinary path to fault on.
+                    // The alignment test is hoisted too: a PC that starts
+                    // aligned and only advances by 4 stays aligned.
                     if el == cpu.el
                         && va_page == cpu.pc & !0xFFF
                         && cpu.pc & 3 == 0
@@ -1038,10 +899,8 @@ impl ArmSide {
         stop
     }
 
-    /// Core `id`, alone and just back at the head of the SHA-256 block loop
-    /// it was fitted to: skip the passes the cycles up to `limit` have room
-    /// for, or forget the loop if the core is not in it any more (module
-    /// docs, "SHA-256 loops").
+    /// Core `id` back at the head of its SHA-256 loop: skip the passes the
+    /// cycles up to `limit` have room for, or forget the loop.
     fn sha_skip(&mut self, m: &mut Machine, id: usize, limit: u64) {
         let marked = self
             .cores
@@ -1129,9 +988,7 @@ impl ArmSide {
             }
             Step::Took(e) => {
                 core.exceptions += 1;
-                // `--log arm-exc`: every synchronous exception a core takes
-                // except `svc` (Linux's syscalls), with what the guest's own
-                // handler will see in `ESR_ELx`/`FAR_ELx`.
+                // `--log arm-exc`: every synchronous exception but `svc`.
                 if self.log.on(Channel::ArmExc) && !matches!(e, Exception::Svc(_)) {
                     let t = el as usize;
                     // An external abort: nothing answered at this physical
@@ -1179,8 +1036,7 @@ impl ArmSide {
         let sev = std::mem::take(&mut core.cpu.sev);
         // Sleepers an event just reached: their runnable bits need a look.
         let mut signalled = 0u32;
-        // Most steps store to no one else's granule, signal nothing and
-        // flush no TLB, and then there is nothing to tell the other cores.
+        // Most steps have nothing to tell the other cores.
         let others = if written.is_some() || sev || broadcast {
             self.cores.len()
         } else {
@@ -1244,8 +1100,7 @@ struct Stepped {
 
 /// Where an ARM physical address lands.
 enum Target {
-    /// An offset into DRAM: the A72 sees it from 0, all 8 GB of it on the
-    /// board that carries that much, so this is not a 32-bit address.
+    /// An offset into DRAM — up to 8 GB, so not a 32-bit address.
     Ram(u64),
     /// A VPU bus address in the peripheral window.
     Periph(u32),
@@ -1270,13 +1125,11 @@ struct ArmBus<'a> {
     /// The step touched something besides RAM (a device, the GIC, a timer
     /// register), so interrupt state may have moved.
     io: bool,
-    /// Where the step's data reads go while the core's loop is watched
-    /// (module docs, "Busy-wait loops").
+    /// Where the step's data reads go while the core's loop is watched.
     log: Option<&'a mut Vec<park::Read>>,
-    /// Where its stores go then, for a SHA-256 recording ("SHA-256 loops").
+    /// Where its stores go then, for a SHA-256 recording.
     stores: Option<&'a mut Vec<park::Read>>,
-    /// The system timer, in ARM cycles, at release: `released_at + cycles`
-    /// is the ARM's own clock, for `--log mbox`.
+    /// The system timer at release; `released_at + cycles` is the ARM's clock.
     released_at: u64,
     /// The step wrote a VPU-side peripheral: something the VPU may wake for.
     periph_store: bool,
@@ -1373,9 +1226,8 @@ impl ArmBus<'_> {
                 {
                     let buf = self.m.ram.base() + (v & 0x3FFF_FFF0);
                     let word = |o: u32| self.m.ram.load(buf + o, Width::Word).unwrap_or(0);
-                    // Inside a fast-forward slice the system timer is
-                    // already at the slice's end (module docs, "Time and
-                    // scheduling"), so the ARM's own clock too.
+                    // Inside a fast-forward slice the timer is already at the
+                    // slice's end, and so is the ARM's own clock.
                     let arm_us = (self.released_at + self.cycles) / (gentimer::ARM_HZ / 1_000_000);
                     crate::log!(
                         self.m.log,
@@ -1406,10 +1258,8 @@ impl ArmBus<'_> {
     }
 }
 
-/// How many cycles a `wfe` about to wait on `core` may take before it
-/// completes on its own: until the next event-stream event if the stream
-/// that applies at its EL is on (`CNTHCTL_EL2` at EL2, `CNTKCTL_EL1` below;
-/// an event every `2^(EVNTI + 1)` counter ticks), else [`WFE_BACKSTOP`].
+/// When a `wfe` on `core` completes on its own: the next event-stream event if
+/// the stream for its EL is on, else [`WFE_BACKSTOP`].
 fn wfe_timeout(core: &Core) -> u64 {
     let ctl = match core.cpu.el {
         0 | 1 => CNTKCTL_EL1,
@@ -1436,9 +1286,8 @@ fn timer_reg(key: u32) -> Option<Reg> {
 }
 
 impl ArmBus<'_> {
-    /// An instruction fetch from outside RAM: the whole data path. Out of
-    /// line, so that the step every instruction takes doesn't carry its
-    /// registers (#53).
+    /// An instruction fetch from outside RAM; out of line to keep the common
+    /// step's register pressure down.
     #[inline(never)]
     fn fetch_device(&mut self, addr: u64) -> Result<u32, Abort> {
         self.read(addr, 4).map(|v| v as u32)
@@ -1446,10 +1295,8 @@ impl ArmBus<'_> {
 }
 
 impl Memory for ArmBus<'_> {
-    /// Straight out of RAM, where code runs, without `route`'s range checks:
-    /// they were a measurable share of the Linux boot's host time (#43). The
-    /// same access `read32` would make for a RAM target, which leaves `io`
-    /// clear.
+    /// Straight out of RAM without `route`'s range checks, which are a
+    /// measurable share of the Linux boot's host time.
     #[inline]
     fn fetch(&mut self, addr: u64) -> Result<u32, Abort> {
         let end = addr.saturating_add(4);
@@ -1571,8 +1418,6 @@ mod tests {
         assert!(arm.cores[0].cpu.x[5] < 10);
     }
 
-    /// Interpreter speed, without the VPU: `cargo test --release --lib
-    /// arm::tests::speed -- --ignored --nocapture`.
     #[test]
     #[ignore]
     fn speed() {
@@ -1678,9 +1523,6 @@ mod tests {
         assert_eq!(arm.cores[0].cpu.sys.esr[3] >> 26, 0x25);
     }
 
-    /// UEFI's xHCI driver reads the VL805's registers straight through the
-    /// PCIe outbound window; it used to take an external abort at
-    /// `0x6_0000_0000`. Outside BAR0 the window still aborts.
     #[test]
     fn the_arm_reaches_the_vl805_through_the_pcie_window() {
         use crate::periph::pcie;
@@ -1720,8 +1562,6 @@ mod tests {
     const NOP: u32 = 0xD503_201F;
     const B_SELF: u32 = 0x1400_0000;
 
-    /// Nothing signals a lone `wfe`: the core sleeps until the backstop, and
-    /// the cycle loop skips the time instead of spinning through it.
     #[test]
     fn an_unsignalled_wfe_sleeps_until_the_backstop() {
         let mut m = machine_with(&[WFE, B_SELF]);
@@ -1734,8 +1574,6 @@ mod tests {
         assert!(arm.cores[0].insns > 1, "the backstop ends the wait");
     }
 
-    /// `sevl; wfe` is the idiom that primes a wait loop: the local event is
-    /// consumed and the `wfe` does not wait.
     #[test]
     fn sevl_makes_the_next_wfe_complete_at_once() {
         let mut m = machine_with(&[SEVL, WFE, NOP, B_SELF]);
@@ -1746,8 +1584,6 @@ mod tests {
         assert!(!arm.cores[0].cpu.event);
     }
 
-    /// A holding pen like TF-A's (`wfe; ldr; cbz`): the parked core sleeps
-    /// until another core writes its release word and signals with `sev`.
     #[test]
     fn a_parked_core_wakes_on_sev() {
         let mut code = vec![NOP; 0x40 + 4];
@@ -1768,8 +1604,6 @@ mod tests {
         assert_eq!(arm.cores[1].insns, 4);
     }
 
-    /// Without the `sev` the same pen stays asleep: a plain store to a
-    /// location nobody holds exclusively is not an event.
     #[test]
     fn a_parked_core_ignores_a_store_without_sev() {
         let mut code = vec![NOP; 0x40 + 4];
@@ -1786,10 +1620,7 @@ mod tests {
         assert_eq!(arm.cores[1].cpu.pc, 0x104);
     }
 
-    /// The same run with busy-wait parking on and off (module docs,
-    /// "Busy-wait loops"): every core has to end up in the same state after
-    /// the same number of instructions.
-    /// Parked or not, in bursts or not: `drive` has to see the same run.
+    /// Parked or not, in bursts or not, `drive` must see the same run.
     fn parks_exactly(code: &[u32], cores: usize, drive: impl Fn(&mut ArmSide, &mut Machine)) {
         let run = |park: bool, burst: bool| {
             let mut m = machine_with(code);
@@ -1812,9 +1643,6 @@ mod tests {
         }
     }
 
-    /// A lone running core goes in bursts even while another waits holding
-    /// an exclusive mark: each of its plain stores ends a burst, and the one
-    /// into the marked granule wakes the other.
     #[test]
     fn a_lone_core_bursts_past_another_cores_mark() {
         // mrs x0, mpidr_el1; and x0, x0, #0xff; cbnz x0, 1f;
@@ -1852,7 +1680,6 @@ mod tests {
         });
     }
 
-    /// `Stall`: spin on the counter until a deadline.
     #[test]
     fn a_counter_delay_parks_and_ends_on_the_same_cycle() {
         // Start the counter (as above); mrs x1, cntpct_el0; add x2, x1,
@@ -1872,7 +1699,6 @@ mod tests {
         });
     }
 
-    /// UEFI's mailbox wait: poll the status word, counting down a timeout.
     #[test]
     fn a_mailbox_poll_parks_until_the_vpu_answers() {
         // x1 = the ARM's mailbox 0 status; movz x19, #0x10, lsl #16;
@@ -1891,9 +1717,6 @@ mod tests {
         });
     }
 
-    /// A loop counting up to a limit with `b.ne`: the search for its end
-    /// could step over the one pass that ends it (UEFI's bitmap scan at
-    /// `0x383288a0`, `cmp w3, #8`), so it runs.
     #[test]
     fn a_count_up_loop_runs_to_its_limit() {
         // 1: add w3, w3, #1; cmp w3, #200; b.ne 1b; add x5, x5, #1; b .
@@ -1904,8 +1727,6 @@ mod tests {
         });
     }
 
-    /// A VPU `sleep` ends at the ARM's first write to a VPU-side peripheral —
-    /// here a mailbox request — not at the compare it was waiting for (#53).
     #[test]
     fn a_sleeping_vpu_wakes_at_the_arms_mailbox_write() {
         // movz x2, #1500; 1: subs x2, x2, #1; b.ne 1b; x1 = the ARM's
@@ -1925,9 +1746,6 @@ mod tests {
         assert_eq!(arm.run_until_store(&mut m, until), until);
     }
 
-    /// One core polls a flag in RAM, another sets it after a countdown:
-    /// the poller resumes on the cycle it would have seen the store, before
-    /// or after the writer in core order.
     #[test]
     fn a_ram_poll_parks_until_another_core_stores() {
         let mut code = vec![NOP; 0x40 + 4];

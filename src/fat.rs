@@ -1,17 +1,12 @@
 //! A directory of files as an SD card: MBR, one FAT32 boot partition, and the
-//! files in it.
+//! files in it — so a checkout of `raspberrypi/firmware`, which is a boot
+//! partition's contents rather than an image, can be booted directly.
 //!
-//! A checkout of `raspberrypi/firmware` is a boot partition's contents and not
-//! an image, so `boot` builds the card the firmware expects around it rather
-//! than asking for one (#144). Only the metadata is built here — the boot
-//! sector, both FATs and the directory clusters — and every file's clusters
-//! are mapped onto the host file instead, so a 150 MB checkout costs the
-//! blocks the firmware reads rather than its size, the way an image file does
-//! (`periph::disk`, #54).
-//!
-//! The directories are allocated before the files for that reason: everything
-//! the model has to answer out of memory is then one run of blocks at the
-//! front of the card, and everything behind it is a file on the host.
+//! Only the metadata is built here (boot sector, both FATs, the directory
+//! clusters); every file's clusters are mapped onto the host file instead, so a
+//! 150 MB checkout costs the blocks the firmware reads. The directories are
+//! allocated before the files for that reason: everything answered out of
+//! memory is one run of blocks at the front of the card.
 
 use std::path::{Path, PathBuf};
 
@@ -19,60 +14,48 @@ use anyhow::{bail, Context, Result};
 
 use crate::periph::disk::BLOCK_SIZE;
 
-/// Where the partition starts, as every Pi card has it: 1 MiB in.
 const PART_START: u32 = 2048;
-/// FAT32 with 4 KiB clusters. Small enough that a volume of a few hundred
-/// megabytes still has the 65525 clusters that make it FAT32 and not FAT16 to
-/// a driver that tells the two apart by count, as the specification says to.
+/// FAT32 with 4 KiB clusters: small enough that a few hundred megabytes still
+/// has the 65525 clusters a driver counts to tell FAT32 from FAT16.
 const SECTORS_PER_CLUSTER: u32 = 8;
-/// The boot sector, its backup at 6, the two FSInfo sectors and room to align
-/// the first FAT: what `mformat` reserves.
+/// What `mformat` reserves: boot sector, backup, FSInfo, FAT alignment.
 const RESERVED_SECTORS: u32 = 32;
 const FATS: u32 = 2;
 /// Below this a driver reads the volume as FAT16 whatever the boot sector
 /// says, so the partition is padded out to it.
 const MIN_CLUSTERS: u32 = 65525 + 16;
-/// 1980-01-01, the FAT epoch: every entry is stamped with it, so the same
-/// directory always builds the same card.
+/// The FAT epoch: every entry is stamped with it, so the same directory always
+/// builds the same card.
 const EPOCH_DATE: u16 = (1 << 5) | 1;
 const VOLUME_LABEL: &[u8; 11] = b"PIMU       ";
 const DIR_ENTRY: usize = 32;
 
-/// One file's data, as blocks of the card and bytes of a host file.
 pub struct Extent {
-    /// The first block of the file's data, from the start of the card.
     pub lba: u64,
-    /// How many blocks its clusters cover, the tail of the last one included.
     pub blocks: u64,
     pub path: PathBuf,
     pub len: u64,
 }
 
-/// A card built out of a directory: the metadata blocks, in order from the
-/// MBR, and where each file's data sits behind them.
+/// A card built out of a directory: metadata blocks, then the files.
 pub struct Card {
-    /// Blocks `0..`: the MBR, the boot sector, both FATs and every directory.
     pub meta: Vec<u8>,
-    /// The files, by ascending `lba`, none of them overlapping.
     pub extents: Vec<Extent>,
-    /// The card's size.
     pub blocks: u64,
 }
 
-/// What a directory has to hold to be taken for a boot partition rather than a
-/// working directory that `boot` happens to have been run in.
+/// What a directory must hold to be taken for a boot partition rather than the
+/// working directory `boot` happens to have been run in.
 pub fn is_boot_partition(dir: &Path) -> bool {
     ["start4.elf", "start.elf", "config.txt"]
         .iter()
         .any(|name| dir.join(name).is_file())
 }
 
-/// Build the card whose boot partition holds `dir`.
 pub fn card_from_dir(dir: &Path) -> Result<Card> {
     Builder::default().build(read_dir(dir)?)
 }
 
-/// A directory of the volume, as it is read off the host.
 struct Entry {
     name: String,
     kind: Kind,
@@ -83,11 +66,9 @@ enum Kind {
     Dir(Vec<Entry>),
 }
 
-/// The host directory, by name: the order the entries are written in is the
-/// order the firmware finds them, so it may not depend on the host's readdir
-/// order or on its collation (`scripts/make-sd.sh` pins the same thing).
-/// Dot files are left out, so a `.git` in a firmware checkout is not a
-/// directory of the card.
+/// The host directory, by name: entry order is the order the firmware finds
+/// them, so it must not depend on the host's readdir order or collation. Dot
+/// files are left out, so a `.git` is not a directory of the card.
 fn read_dir(dir: &Path) -> Result<Vec<Entry>> {
     let mut entries = Vec::new();
     for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
@@ -115,14 +96,11 @@ fn read_dir(dir: &Path) -> Result<Vec<Entry>> {
     Ok(entries)
 }
 
-/// A directory of the volume once its entries are named: how much room they
-/// take, and which of them are directories themselves.
+/// A directory of the volume once its entries are named.
 struct Planned {
     items: Vec<Item>,
-    /// Where the directory's own bytes go, filled in by the allocation pass.
     first: u32,
     clusters: u32,
-    /// The directory this one is in, for its `..` entry; `None` for the root.
     parent: Option<usize>,
 }
 
@@ -133,17 +111,12 @@ struct Item {
 }
 
 enum What {
-    /// The index of the planned directory this entry names.
     Dir(usize),
-    File {
-        path: PathBuf,
-        len: u64,
-    },
+    File { path: PathBuf, len: u64 },
 }
 
 #[derive(Default)]
 struct Builder {
-    /// Every directory of the volume, the root first.
     dirs: Vec<Planned>,
 }
 
@@ -152,9 +125,8 @@ impl Builder {
         SECTORS_PER_CLUSTER * BLOCK_SIZE as u32
     }
 
-    /// Name every entry and work out how much room each directory needs. The
-    /// clusters are not known yet: they are handed out afterwards, directories
-    /// first.
+    /// Name every entry and size each directory; clusters are handed out
+    /// afterwards, directories first.
     fn plan(&mut self, entries: Vec<Entry>, parent: Option<usize>) -> usize {
         let me = self.dirs.len();
         self.dirs.push(Planned {
@@ -164,8 +136,6 @@ impl Builder {
             parent,
         });
 
-        // The root carries its volume label where a subdirectory carries `.`
-        // and `..`.
         let mut bytes = if parent.is_some() { 2 } else { 1 } * DIR_ENTRY;
         let mut taken: Vec<[u8; 11]> = Vec::new();
         let mut items = Vec::new();
@@ -217,7 +187,6 @@ impl Builder {
                         path.display()
                     );
                 }
-                // An empty file has no clusters, and its entry says cluster 0.
                 if *len == 0 {
                     files.push((d, i, 0));
                     continue;
@@ -243,8 +212,6 @@ impl Builder {
             extent.lba = lba_of(extent.lba as u32);
         }
 
-        // The metadata reaches to the end of the last directory, which the
-        // allocation above put in front of every file.
         let dirs_end = self
             .dirs
             .iter()
@@ -255,8 +222,6 @@ impl Builder {
         mbr(&mut meta[..BLOCK_SIZE], part_sectors);
         let part = &mut meta[PART_START as usize * BLOCK_SIZE..];
         boot_sector(part, part_sectors, fat_sectors);
-        // The backup the boot sector points at, and an FSInfo sector beside
-        // each, which a driver reads before it believes either.
         let (first, rest) = part.split_at_mut(6 * BLOCK_SIZE);
         rest[..BLOCK_SIZE].copy_from_slice(&first[..BLOCK_SIZE]);
         fs_info(&mut part[BLOCK_SIZE..2 * BLOCK_SIZE]);
@@ -291,13 +256,10 @@ impl Builder {
         Ok(Card {
             meta,
             extents,
-            // A card is a whole number of 512 KiB units to its CSD, and the
-            // firmware reads its size from there.
             blocks: blocks.next_multiple_of(1024),
         })
     }
 
-    /// One directory's entries, as they go on the volume.
     fn entries_of(
         &self,
         d: usize,
@@ -310,7 +272,6 @@ impl Builder {
             None => out.extend_from_slice(&volume_label()),
             Some(up) => {
                 out.extend_from_slice(&dot_entry(b".          ", dir.first));
-                // The root's `..` is 0, not 2, as the specification has it.
                 let up = if up == 0 { 0 } else { clusters_of[up] };
                 out.extend_from_slice(&dot_entry(b"..         ", up));
             }
@@ -329,14 +290,11 @@ impl Builder {
     }
 }
 
-/// One partition, FAT32 LBA (type `0x0c`) and bootable, as `sfdisk` writes it
-/// for a Pi card.
+/// One bootable FAT32 LBA partition, as `sfdisk` writes it for a Pi card.
 fn mbr(sector: &mut [u8], part_sectors: u32) {
     sector[0x1b8..0x1bc].copy_from_slice(&0x5250_494du32.to_le_bytes());
     let p = &mut sector[0x1be..0x1ce];
     p[0] = 0x80;
-    // The CHS fields say "past what CHS can address", which is what every tool
-    // writes for a partition this far into a card.
     p[1..4].copy_from_slice(&[0xfe, 0xff, 0xff]);
     p[4] = 0x0c;
     p[5..8].copy_from_slice(&[0xfe, 0xff, 0xff]);
@@ -370,8 +328,6 @@ fn boot_sector(part: &mut [u8], part_sectors: u32, fat_sectors: u32) {
     s[510..512].copy_from_slice(&[0x55, 0xaa]);
 }
 
-/// Neither the free count nor the next free cluster is known to be right here,
-/// so both say "unknown", which a driver has to accept.
 fn fs_info(sector: &mut [u8]) {
     sector[0..4].copy_from_slice(b"RRaA");
     sector[484..488].copy_from_slice(b"rrAa");
@@ -398,19 +354,16 @@ fn dot_entry(name: &[u8; 11], cluster: u32) -> [u8; DIR_ENTRY] {
     e
 }
 
-/// The FAT epoch in an entry's three time fields.
 fn stamp(entry: &mut [u8; DIR_ENTRY]) {
     entry[16..18].copy_from_slice(&EPOCH_DATE.to_le_bytes());
     entry[18..20].copy_from_slice(&EPOCH_DATE.to_le_bytes());
     entry[24..26].copy_from_slice(&EPOCH_DATE.to_le_bytes());
 }
 
-/// A name as the directory carries it: the 8.3 entry, whether the long name
-/// has to be spelled out beside it, and the case flags that spare a name like
-/// `start4.elf` the long entries.
+/// A name as the directory carries it: the 8.3 entry, whether a long name is
+/// needed beside it, and the case flags that spare `start4.elf` the long ones.
 struct ShortName {
     short: [u8; 11],
-    /// `0x08` for a lowercase base, `0x10` for a lowercase extension.
     case: u8,
     long: bool,
 }
@@ -427,21 +380,20 @@ fn short_entry(name: &ShortName, cluster: u32, size: u32, attr: u8) -> [u8; DIR_
     e
 }
 
-/// How many long entries a name takes: thirteen UTF-16 code units each, its
-/// terminator included.
+/// How many long entries a name takes: thirteen UTF-16 code units each.
 fn fragments(name: &str) -> usize {
     (name.encode_utf16().count() + 1).div_ceil(13)
 }
 
-/// The VFAT entries for a name that does not fit 8.3, as they go on the
-/// volume: ahead of the short entry, last fragment first.
+/// The VFAT entries for a name that does not fit 8.3: ahead of the short
+/// entry, last fragment first.
 fn long_entries(name: &str, short: &[u8; 11]) -> Vec<u8> {
     let checksum = short.iter().fold(0u8, |sum, &c| {
         (sum >> 1).wrapping_add(sum << 7).wrapping_add(c)
     });
     let mut units: Vec<u16> = name.encode_utf16().collect();
     units.push(0);
-    // The last fragment is padded out with 0xffff behind the terminator.
+    // The last fragment is padded out with `0xffff` behind the terminator.
     while !units.len().is_multiple_of(13) {
         units.push(0xffff);
     }
@@ -465,7 +417,6 @@ fn long_entries(name: &str, short: &[u8; 11]) -> Vec<u8> {
     out
 }
 
-/// The 8.3 name for `name`, unique among `taken`, which it is added to.
 fn short_name(name: &str, taken: &mut Vec<[u8; 11]>) -> ShortName {
     let (base, ext) = match name.rfind('.') {
         Some(at) if at > 0 => (&name[..at], &name[at + 1..]),
@@ -475,10 +426,8 @@ fn short_name(name: &str, taken: &mut Vec<[u8; 11]>) -> ShortName {
     let (ext_3, ext_lossy) = eight_three(ext, 3);
     let lower = |s: &str| s.chars().any(|c| c.is_ascii_lowercase());
     let upper = |s: &str| s.chars().any(|c| c.is_ascii_uppercase());
-    // A name fits 8.3 only if nothing was dropped or replaced and its case is
-    // all one way, since an entry has one flag for the whole base and one for
-    // the whole extension. Otherwise the long entries carry it, and the short
-    // name is there to be unique rather than to be read.
+    // A name fits 8.3 only if nothing was dropped and its case is all one way:
+    // an entry has one flag for the base and one for the extension.
     let fits =
         !base_lossy && !ext_lossy && !(lower(base) && upper(base)) && !(lower(ext) && upper(ext));
     let mut case = 0;
@@ -511,8 +460,7 @@ fn short_name(name: &str, taken: &mut Vec<[u8; 11]>) -> ShortName {
     }
 }
 
-/// `s` as up to `room` bytes a short name may hold, and whether anything was
-/// dropped or replaced on the way.
+/// `s` as up to `room` bytes of a short name, and whether anything was lost.
 fn eight_three(s: &str, room: usize) -> (Vec<u8>, bool) {
     let mut out = Vec::new();
     let mut lossy = false;
@@ -578,7 +526,6 @@ mod tests {
         let n = name("bcm2711-rpi-4-b.dtb");
         assert_eq!(&n.short, b"BCM271~1DTB");
         assert!(n.long);
-        // Thirteen code units a fragment, the terminator included.
         assert_eq!(fragments("bcm2711-rpi-4-b.dtb"), 2);
         assert_eq!(long_entries("bcm2711-rpi-4-b.dtb", &n.short).len(), 64);
     }
@@ -603,7 +550,6 @@ mod tests {
         let boot = &card.meta[PART_START as usize * BLOCK_SIZE..];
         assert_eq!(&boot[82..90], b"FAT32   ");
         assert_eq!(&boot[510..512], &[0x55, 0xaa]);
-        // Enough clusters that nothing reads the volume as FAT16.
         let fat_sectors = u32::from_le_bytes(boot[36..40].try_into().unwrap());
         let data = PART_START + RESERVED_SECTORS + FATS * fat_sectors;
         let total = u32::from_le_bytes(boot[32..36].try_into().unwrap());

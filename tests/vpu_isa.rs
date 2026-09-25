@@ -1,8 +1,7 @@
-//! Instruction-level regression tests for the VideoCore IV core.
-//!
-//! Every test here pins down a decode or execute detail that has already been
-//! wrong once and cost a debugging session. They run a handful of instructions
-//! against a bare [`Machine`] — no firmware blob, no boot, microseconds each.
+//! Instruction-level regression tests for the VideoCore IV core, run against a
+//! bare [`Machine`]. `isa/vpu.toml` is the reference page. Rows cited from a
+//! probe were measured on a Raspberry Pi 4B d03115 unless a test says
+//! otherwise; the probes and their harness live in `vpu-probe/`.
 
 use pimu::bus::Bus;
 use pimu::soc::bcm2711::{CORECTL_BASE, SYSTIMER_BASE};
@@ -12,9 +11,8 @@ use pimu::Machine;
 const CODE: u32 = 0x0000_1000;
 const STACK_TOP: u32 = 0x0000_8000;
 
-/// 16-bit `ldm`/`stm` encoding: `0000 001L Sbb nnnnn`, where `L` = include
-/// `lr`/`pc`, `S` = store, `bb` = register bank (r0 / r6 / r16 / r24) and
-/// `nnnnn` = count - 1. See `decode.rs`.
+/// `0000 001L Sbb nnnnn`: `L` = include `lr`/`pc`, `S` = store, `bb` = bank
+/// (r0 / r6 / r16 / r24), `nnnnn` = count - 1.
 const fn ldm_stm(store: bool, with_ret: bool, bank: u16, count: u16) -> u16 {
     0x0200 | ((with_ret as u16) << 8) | ((store as u16) << 7) | (bank << 5) | (count - 1)
 }
@@ -49,9 +47,8 @@ fn step(v: &mut Vpu, m: &mut Machine) {
     assert_eq!(v.step(m), Step::Ran, "stopped: {:?}", v.stopped);
 }
 
-/// The decode cache (#43) serves an instruction again only while nothing has
-/// been written into its page. Here the firmware-style case: code patched in
-/// place after it already ran once.
+/// The decode cache serves an instruction again only while nothing has been
+/// written into its page.
 #[test]
 fn decode_cache_redecodes_after_a_store_into_the_page() {
     let mut m = machine();
@@ -84,10 +81,7 @@ fn decode_cache_redecodes_after_a_store_into_the_page() {
 }
 
 /// `stm` writes the register list with the **highest-numbered register at the
-/// lowest address**. Getting this backwards was commit `8d7c27a`: it rotated
-/// the register file on every preemptive context switch, because ThreadX builds
-/// its interrupt frame from several separate pushes and tears it down with one
-/// wide pop.
+/// lowest address**.
 #[test]
 fn push_stores_the_highest_register_at_the_lowest_address() {
     let mut m = machine();
@@ -119,11 +113,8 @@ fn push_stores_the_highest_register_at_the_lowest_address() {
     );
 }
 
-/// The real reason the ordering matters: ThreadX's ISR stub pushes
-/// `{r0-r5, lr}`, `_tx_thread_context_save` then pushes `{r6-r15}` and
-/// `{r16-r23}`, and `_tx_thread_schedule` unwinds the lot with
-/// `pop {r16-r23}; pop {r0-r15}; ld r26,(sp)++`. That composes only if each
-/// block runs downwards in register number, so the three frames abut exactly.
+/// Why the ordering matters: ThreadX pushes `{r0-r5, lr}`, `{r6-r15}` and
+/// `{r16-r23}` separately and unwinds all three with two wide pops.
 #[test]
 fn threadx_interrupt_frame_round_trips() {
     let mut m = machine();
@@ -175,9 +166,8 @@ fn threadx_interrupt_frame_round_trips() {
     );
 }
 
-/// A `ldm` whose list covers r25 loads a new `sp` off the stack; that value has
-/// to win over the pop's own auto-increment, or every context restore lands on
-/// the outgoing thread's stack.
+/// A `ldm` covering r25 loads a new `sp`, which must win over the pop's own
+/// auto-increment or every context restore lands on the outgoing thread's stack.
 #[test]
 fn popping_sp_beats_the_auto_increment() {
     let mut m = machine();
@@ -201,9 +191,7 @@ fn popping_sp_beats_the_auto_increment() {
 }
 
 /// `switch` jump-table entries are **signed** halfword displacements from the
-/// end of the instruction. Handlers defined before the `switch` — and the
-/// default case, which is a short hop backwards — are only reachable if the
-/// sign is honoured.
+/// end of the instruction.
 #[test]
 fn switch_table_entries_are_signed() {
     let mut m = machine();
@@ -236,9 +224,7 @@ fn arm_vector(m: &mut Machine, v: &mut Vpu, vbase: u32, slot: u32, handler: u32)
 }
 
 /// Interrupt delivery gates on the SR interrupt-enable bit (`r30` bit 30) and
-/// nothing else. Commit `2bdbcbf`: gating on an exception-depth counter wedged
-/// every tick after the first, because ThreadX's `_tx_thread_schedule` enters
-/// its idle loop from inside the tick ISR and never returns from it.
+/// nothing else.
 #[test]
 fn interrupts_gate_on_the_enable_bit_not_on_nesting() {
     let mut m = machine();
@@ -262,8 +248,7 @@ fn interrupts_gate_on_the_enable_bit_not_on_nesting() {
 }
 
 /// The `sleep` wake is the one path that ignores the enable bit: ThreadX's idle
-/// loop parks as `sleep; di; b` and nothing in it ever runs `ei`, so the wake
-/// itself has to service the pending tick.
+/// loop parks as `sleep; di; b` and never runs `ei`.
 #[test]
 fn the_sleep_wake_vectors_with_interrupts_disabled() {
     let mut m = machine();
@@ -276,13 +261,9 @@ fn the_sleep_wake_vectors_with_interrupts_disabled() {
     assert_eq!(v.regs.pc, 0x3000);
 }
 
-/// And the `sleep` instruction itself takes the compare it waits for whatever
-/// the enable bit says. Measured on a 4B rev 1.5: pi4-firmware's idle loop
-/// parked as `sleep; di` with the bit clear answers the kernel's mailbox
-/// requests, and its first compare's handler runs 1979 times in two seconds —
-/// so the core wakes *and* vectors while masked. Stock's own idle loop
-/// (`0x3EC40010`) has the same shape, and a model that held a masked `sleep`
-/// asleep stopped stock's boot right there.
+/// `sleep` takes the compare it waits for whatever the enable bit says: on a
+/// Raspberry Pi 4B d03115 a loop parked as `sleep; di` still vectored its
+/// compare handler 1979 times in two seconds.
 #[test]
 fn a_masked_sleep_still_takes_the_compare() {
     let mut m = machine();
@@ -303,8 +284,7 @@ fn a_masked_sleep_still_takes_the_compare() {
 }
 
 /// The exception frame a vectored interrupt leaves behind must be exactly what
-/// `rti` expects: saved SR then resume address, `sp` down by 8. If the two ever
-/// disagree the firmware returns into garbage.
+/// `rti` expects: saved SR then resume address, `sp` down by 8.
 #[test]
 fn vectored_interrupt_frame_unwinds_through_rti() {
     let mut m = machine();
@@ -344,27 +324,11 @@ fn vectored_interrupt_frame_unwinds_through_rti() {
 
 // --- vector unit -----------------------------------------------------------
 //
-// Only the forms `VecInsn::executable` matches exactly are carried out; the
-// rest of the vector unit must fault rather than be guessed at. Two of them come
-// from `FUN_0edc9e20` in `start4.elf` — the routine that flushes the unit's
-// outstanding reads before the VRF semaphore is released:
-//
-//     v8ld  -,(r0)          x4
-//     ld    r0,(sp)
-//     v16mov -,r0 SUMS r0
-//     mov   r0,r0
-//     rts
-//
-// and the rest are what VC4 libc's `memcpy`/`memmove`/`memset` are built out
-// of: VRF<->memory transfers with `++`/`REP`, a scalar broadcast, and
-// `bitplanes` + per-lane predication for the ragged head and tail.
-//
-// All readings were confirmed against `binutils-vc4` objdump.
+// Only the forms `VecInsn::executable` matches exactly are carried out; the rest
+// must fault. Fixtures are from `start4.elf`, confirmed against `binutils-vc4`.
 
 /// `00 f0 38 e0 80 03` = `v8ld -,(r0)`: a 16-lane 8-bit load whose destination
-/// descriptor is the "dash" slot, so nothing lands in a vector register. The
-/// read still happens — it is the whole point of the instruction — but no
-/// scalar register may change.
+/// descriptor is the "dash" slot, so nothing lands in a vector register.
 #[test]
 fn vector_discarded_load_touches_no_register() {
     let mut m = machine();
@@ -387,9 +351,8 @@ fn vector_discarded_load_touches_no_register() {
     }
 }
 
-/// `00 fc 38 e0 80 03 c0 f3 00 12` = `v16mov -,r0 SUMS r0`: r0 is broadcast
-/// across the 16 lanes at 16-bit width, the vector result is discarded, and the
-/// scalar result unit writes the signed sum of the lanes back to r0.
+/// `00 fc 38 e0 80 03 c0 f3 00 12` = `v16mov -,r0 SUMS r0`: the vector result is
+/// discarded and the scalar result unit writes the signed lane sum back to r0.
 #[test]
 fn vector_sum_of_broadcast_writes_the_scalar() {
     let mut m = machine();
@@ -418,15 +381,9 @@ fn vector_sum_of_broadcast_is_signed_at_the_lane_width() {
     assert!(v.regs.flags.n, "the SRU writeback updates the scalar flags");
 }
 
-/// Anything outside the implemented forms has to fault: quietly stepping over
-/// a vector instruction corrupts whatever it was moving. This is
-/// `v16ld HX(0++,0)*,(r2+=r5) REP4` from `start4.elf` at `0x0eca59b0` — an
-/// ordinary load but for the `*`, which changes nothing the register file or
-/// memory can see.
-///
-/// Measured with `probes/star.s` on a Raspberry Pi 4B d03115: a `*` on the
-/// destination, on a source, on a `+rN` slot, under `REP`, on a load and on a
-/// store all leave exactly what the same instruction without it leaves.
+/// Anything outside the implemented forms has to fault: stepping over a vector
+/// instruction corrupts what it was moving. `probes/star.s`: a `*` anywhere
+/// leaves what the same instruction without it leaves.
 #[test]
 fn a_star_on_a_slot_changes_nothing() {
     // `v16ld HX(0++,0),(r2+=r5) REP4` and the same with a `*`, as
@@ -454,15 +411,9 @@ fn a_star_on_a_slot_changes_nothing() {
     assert!(rows[0].iter().any(|&w| w != 0), "nothing was transferred");
 }
 
-/// The "dash" test must not be a loose field check: a near neighbour that names
-/// a real vector register where this model expects a bare dash has to fault too.
-/// A load's A slot is ignored on hardware, whatever it names.
-///
-/// Measured with `probes/ldodd.s` on a Raspberry Pi 4B d03115:
-/// `v16ld HX(1,0),-+r5,(r4)` and `v16ld HX(3,0),HX(20,0),(r4)` both move
-/// exactly what the plain `v16ld HX(0,0),(r4)` moves. A **store** is another
-/// matter: the same addend on one wrote nothing where the plain store wrote,
-/// so that form still faults.
+/// The "dash" test is not a loose field check: a near neighbour naming a real
+/// vector register where a bare dash is expected has to fault too
+/// (`probes/ldodd.s`).
 #[test]
 fn a_loads_a_slot_is_ignored() {
     let mut m = machine();
@@ -483,9 +434,8 @@ fn a_loads_a_slot_is_ignored() {
     }
 }
 
-/// An 80-bit vector word does not fit in 64 bits. It used to be truncated on
-/// the way into the report, which made two different instructions look
-/// identical; the decoder must keep all five parcels.
+/// An 80-bit vector word does not fit in 64 bits: truncated into the report, two
+/// different instructions look identical, so all five parcels are kept.
 #[test]
 fn vector80_keeps_its_top_parcel() {
     use pimu::vpu::decode::decode;
@@ -502,9 +452,8 @@ fn vector80_keeps_its_top_parcel() {
 
 // --- the memcpy/memmove/memset vector loops ---------------------------------
 //
-// Instruction words as they sit in `start4.elf`, named by the address they are
-// at. Each is a 16-bit-parcel array in memory order, which is what `load_code`
-// takes; `disasm --vaddr <addr>` prints the same bytes.
+// Instruction words as they sit in `start4.elf`, named by their address, as
+// 16-bit parcels in memory order; `disasm --vaddr <addr>` prints the same.
 
 /// `0x3EDA29AE`: `v8ld H(0,0),(r1)` — 16 bytes into the first VRF row.
 const V8LD_R1: [u16; 3] = [0xF000, 0x0038, 0x0381];
@@ -566,9 +515,7 @@ fn vector_load_store_moves_one_register_through_the_vrf() {
 }
 
 /// `REP r0` with `++`: `r0` repetitions, each moving one 64-byte row and
-/// stepping the address by `r4`. `memcpy`'s bulk loop reads the count out of
-/// `r0` and then advances the pointers by `r0 * 64` itself, so the instruction
-/// must transfer exactly that much and leave the registers alone.
+/// stepping the address by `r4`.
 #[test]
 fn vector_rep_transfers_r0_rows() {
     let mut m = machine();
@@ -616,9 +563,7 @@ fn vector_rep_without_the_row_step_reuses_one_register() {
 }
 
 /// `bitplanes` + predicate 2 is `memcpy`'s tail: `r0 = ~0 << n` leaves the low
-/// `n` bits clear, and the pair transfers exactly those `n` lanes. One byte past
-/// them must be untouched — getting the polarity backwards would copy the wrong
-/// end of the register and silently corrupt the destination.
+/// `n` bits clear, and the pair transfers exactly those `n` lanes.
 #[test]
 fn vector_predicate_ifz_transfers_the_lanes_whose_bit_is_clear() {
     let mut m = machine();
@@ -651,8 +596,7 @@ fn vector_predicate_ifz_transfers_the_lanes_whose_bit_is_clear() {
 }
 
 /// The other polarity, from `memset`: a band of *set* bits selects the lanes,
-/// under predicate 3. Both polarities are in the firmware, so one implementation
-/// cannot satisfy both by accident.
+/// under predicate 3.
 #[test]
 fn vector_predicate_ifnz_transfers_the_lanes_whose_bit_is_set() {
     let mut m = machine();
@@ -754,9 +698,7 @@ fn vector_store_under_ifn_moves_the_lanes_the_flags_call_negative() {
 }
 
 /// `v32mov HY(0,0)++,#0 REP8` — the vector memory-clear at `0x60000446` in the
-/// BCM2711 boot ROM. This 80-bit `REP` broadcast used to fall through to
-/// `VecExec::NeedsVrf` and fault; the model now clears `reps` consecutive VRF
-/// rows so `--maskrom` can execute the maskROM's RAM zeroing.
+/// BCM2711 boot ROM.
 #[test]
 fn maskrom_vector_memclear_is_an_executable_rep_broadcast() {
     use pimu::vpu::decode::decode;
@@ -792,15 +734,9 @@ fn maskrom_vector_memclear_is_an_executable_rep_broadcast() {
 }
 
 // ---------------------------------------------------------------------------
-// Vector operand slots.
-//
-// Each fixture is an instruction lifted out of `start4.elf`, with
-// `binutils-vc4` objdump's spelling of those exact bytes in the comment. The
-// whole of that `.text` was compared against this decoder instruction by
-// instruction: of the 14650 vector words this decoder finds, 14390 sit where
-// objdump decodes a vector instruction too and are spelled the same, bar the
-// ones objdump renders as a raw `vec48`/`vec80` because its own tables have no
-// form for them. The rest is the two sweeps drifting apart inside data.
+// Vector operand slots. Each fixture is an instruction out of `start4.elf`, with
+// `binutils-vc4` objdump's spelling of those bytes beside it; of the 14650 vector
+// words this decoder finds in that `.text`, objdump spells 14390 the same.
 
 fn vector(bytes: &[u8]) -> pimu::vpu::insn::VecInsn {
     use pimu::vpu::decode::decode;
@@ -812,8 +748,7 @@ fn vector(bytes: &[u8]) -> pimu::vpu::insn::VecInsn {
 }
 
 /// The type nibble is not an element width: it says how coarsely the slot can
-/// spell its column. `H` steps in 16 bytes, `HX` in 32, `HY` can only say 0 —
-/// and the lanes are as wide as the *operation*, here 8 bits.
+/// spell its column.
 #[test]
 fn a_horizontal_slot_takes_its_column_from_the_type_nibble() {
     // `v8ld H(0++,32),(r2+=r3) REP16`
@@ -829,9 +764,7 @@ fn a_horizontal_slot_takes_its_column_from_the_type_nibble() {
 }
 
 /// A vertical slot is a *column*: its `y` names the 16-aligned band of rows it
-/// covers and the low nibble of the coordinate belongs to `x` instead. Reading
-/// it like a horizontal slot prints rows that cannot exist (`binutils-vc4`'s
-/// V-direction fix, which `vc4.slaspec` agrees with).
+/// covers and the low nibble of the coordinate belongs to `x` instead.
 #[test]
 fn a_vertical_slot_splits_its_coordinate() {
     // `v8ld V(0,32++),(r3+=r5) REP4`
@@ -886,9 +819,8 @@ fn an_80_bit_dash_b_carries_a_signed_displacement() {
     assert!(v.addr.is_none(), "only `vld`/`vst` read the wide address");
 }
 
-/// A load's address carries a displacement, and it counts in plain bytes —
-/// `v16ld HX(3,32),(r1+32)` over a page of ascending bytes reads the halfword
-/// at byte 32 for every element width (measured, Pi 4B d03115).
+/// A load's displacement counts in plain bytes: `v16ld HX(3,32),(r1+32)` reads
+/// the halfword at byte 32 for every element width.
 #[test]
 fn an_address_displacement_is_a_byte_offset() {
     // `v16ld HX(3,32),(r0+32)`
@@ -916,12 +848,8 @@ fn a_memory_class_b_register_takes_the_addend_not_setf() {
     assert!(v.addr.is_none(), "a register B is not an address");
 }
 
-/// A vertical transfer moves a *column* of the file, and the file is not laid
-/// out the way it reads: element `e` of a register `w` bytes wide sits at byte
-/// `(e & 15) * 4 + (e >> 4) * w` of its row. `VX(32,46)` is 16-bit element 30
-/// — lane 14, second half — so sixteen consecutive halfwords in memory land at
-/// bytes 58..59 of rows 32..47. Measured with exactly these bytes on a
-/// Raspberry Pi 4B d03115.
+/// A vertical transfer moves a *column*, and element `e` of a register `w`
+/// bytes wide sits at byte `(e & 15) * 4 + (e >> 4) * w` of its row.
 #[test]
 fn a_vertical_load_fills_a_column_of_the_file() {
     // `v16ld VX(32,46),(r0)` out of `start4.elf` at `0x0ec8bb66`.
@@ -951,9 +879,8 @@ fn a_vertical_load_fills_a_column_of_the_file() {
     assert_eq!(vrf.byte(48, 58), 0, "sixteen rows, not seventeen");
 }
 
-/// The operation's width and the register's are separate, and the unit converts
-/// between them: a `v8ld` into a 32-bit slot zero-extends, a `v32st` out of an
-/// 8-bit slot writes each byte as a word. Both measured on a Pi 4B d03115.
+/// The operation's width and the register's are separate: a `v8ld` into a 32-bit
+/// slot zero-extends, a `v32st` out of an 8-bit slot writes each byte as a word.
 #[test]
 fn the_operation_width_converts_to_the_register_width() {
     let mut m = machine();
@@ -974,19 +901,8 @@ fn the_operation_width_converts_to_the_register_width() {
     }
 }
 
-/// The whole of the addressing, against the hardware it was measured on.
-///
-/// These six instructions ran on a Raspberry Pi 4B d03115 through the
-/// firmware's `EXECUTE_CODE` mailbox tag, over a page whose byte `n` holds
-/// `n + 1`, and the register file was read back out with
-/// `v32st HY(0++,0),(r0+=r3) REP64`. The rows below are what the silicon left
-/// behind; this model has to leave the same.
-///
-/// Between them they pin every part of the addressing: the `+rN` addend
-/// (`+r4` with `r4 = 3` starts the register at element 3 and wraps it into the
-/// second band), the byte displacement on the address (`(r1+7)`), all three
-/// element widths against all three operation widths, and `++` on a vertical
-/// slot, which walks the elements rather than the rows.
+/// The whole of the addressing: six instructions run over a page whose byte `n`
+/// holds `n + 1`, the file read back with `v32st HY(0++,0),(r0+=r3) REP64`.
 #[test]
 fn the_measured_register_file_layout() {
     const ROWS: &[(usize, &str)] = &[
@@ -1035,12 +951,8 @@ fn the_measured_register_file_layout() {
     }
 }
 
-/// The vector ALU, against the hardware it was measured on.
-///
-/// Each row ran on a Raspberry Pi 4B d03115 over two vectors of edge cases —
-/// `vpu-probe/probes/alu.s` — with A in `HX(60,0)`,
-/// B in `HX(61,0)` and the result read back out of the register file. The
-/// model has to produce the same sixteen elements.
+/// The vector ALU: `probes/alu.s` over two vectors of edge cases, A in
+/// `HX(60,0)` and B in `HX(61,0)`.
 #[test]
 fn the_measured_alu_semantics() {
     const A: [u32; 16] = [
@@ -1235,9 +1147,8 @@ fn the_measured_alu_semantics() {
     }
 }
 
-/// The rest of the measured ALU ops, from the same apparatus over a plainer
-/// pair of vectors: the bitwise ops, the rotate, `msb`, and the four shuffles,
-/// which read elements other than their own lane's.
+/// The rest of the measured ALU ops, same apparatus, plainer vectors: bitwise,
+/// rotate, `msb`, and the four shuffles, which read other lanes' elements.
 #[test]
 fn the_measured_alu_shuffles_and_bitwise_ops() {
     const A: [u32; 16] = [
@@ -1361,11 +1272,6 @@ fn the_measured_alu_shuffles_and_bitwise_ops() {
 }
 
 /// The multiplies, against the same board.
-///
-/// `mull` keeps the low half of the product, `mulm` shifts it right by eight,
-/// `mulhd` keeps the high half and `mulhn` rounds while doing so — each with
-/// its operands read signed or unsigned as the suffix says. Measured over the
-/// edge-case vectors in `probes/alu2-vectors.hex`.
 #[test]
 fn the_measured_multiplies() {
     const A: [u32; 16] = [
@@ -1506,14 +1412,8 @@ fn the_measured_multiplies() {
     }
 }
 
-/// A whole probe program, run on the board and replayed here.
-///
-/// `vpu-probe/probes/accmix.s` loads two vectors,
-/// runs three multiplies, accumulates a sum three times, takes it back off
-/// again, does the multiply-accumulate the codec code is built out of, and
-/// dumps the register file with `v32st HY(0++,0),(r0+=r3) REP64`. The rows
-/// below are the ones a Raspberry Pi 4B d03115 wrote; the model runs the same
-/// bytes over the same memory and has to write them too.
+/// `probes/accmix.s`, replayed here: three multiplies, a sum accumulated and
+/// taken back off, and the multiply-accumulate the codec code is built out of.
 #[test]
 fn a_whole_probe_program_replays() {
     const CODE_BYTES: &[u8] = &[
@@ -1594,24 +1494,12 @@ fn a_whole_probe_program_replays() {
     }
 }
 
-/// What the unit does when the operation is wider than the registers it
-/// touches — the commonest shape in `start4.elf`, and the one that used to
-/// fault.
-///
-/// A source is read at its register's own width and widened into the
-/// operation's: a byte unsigned, a halfword signed. The result comes back the
-/// other way, truncated into the destination's element — except for the
-/// saturating ops, which clamp to what that element can hold: `0..=0xff` for a
-/// byte register, signed for a wider one. A shift, rotate or reversal counts in
-/// the operation's width, so `v32` takes five bits of B where `v16` takes four.
-///
-/// Measured on a Raspberry Pi 4B d03115 with `probes/wmix.s`, `wmix2.s` and
-/// `wmix3.s`; the registers are the ones those probes load.
+/// The operation wider than the registers it touches — the commonest shape in
+/// `start4.elf`. `probes/wmix.s`, `wmix2.s` and `wmix3.s`.
 #[test]
 fn the_measured_width_conversions() {
-    // Row 60 and 61 hold `A` and `B` as byte registers — two bands of sixteen
-    // elements each — and rows 62 and 63 the same pairs of bytes read as
-    // halfwords.
+    // Rows 60/61 hold `A` and `B` as byte registers, two bands of sixteen
+    // elements each; rows 62/63 the same bytes read as halfwords.
     const A_LO: [u32; 16] = [
         0x80, 0xff, 0x01, 0x7f, 0x10, 0x00, 0xab, 0x34, 0x55, 0xf0, 0x0f, 0xc3, 0x02, 0x7e, 0x81,
         0xfe,
@@ -2285,15 +2173,8 @@ fn the_measured_width_conversions() {
     }
 }
 
-/// The accumulator when the operation is wider than the registers it reads.
-///
-/// `vpu-probe/probes/wacc.s` accumulates over byte
-/// registers at 16 bits and over halfword registers at 32, clearing, writing
-/// back and subtracting along the way, then dumps the file. Nothing about the
-/// accumulator changes when the registers are narrower: it takes the result at
-/// the operation's width, and the destination takes the accumulator, which is
-/// what the `UACC` and `SACC` mnemonics ask for — both set `WBA` as well as
-/// `ENA`. Rows from a Raspberry Pi 4B d03115.
+/// The accumulator when the operation is wider than the registers it reads
+/// (`probes/wacc.s`: byte registers at 16 bits, halfword registers at 32).
 #[test]
 fn the_accumulator_across_a_width_change() {
     const CODE_BYTES: &[u8] = &[
@@ -2370,13 +2251,8 @@ fn the_accumulator_across_a_width_change() {
     }
 }
 
-/// The lane flags, the predicates that read them, and `vgetacc`.
-///
-/// Four whole probe programs — `probes/setf.s`, `setf3.s`, `setf4.s` and
-/// `setf5.s` — run on a Raspberry Pi 4B d03115 and replayed here. Each sets
-/// the flags with one operation and then marks, row by row, the lanes a given
-/// predicate lets through, so the rows below are the flags themselves as the
-/// board computed them.
+/// The lane flags, the predicates that read them, and `vgetacc`:
+/// `probes/setf.s`, `setf3.s`, `setf4.s` and `setf5.s`.
 #[test]
 fn the_measured_lane_flags() {
     #[allow(clippy::type_complexity)]
@@ -2650,12 +2526,8 @@ fn the_measured_lane_flags() {
     }
 }
 
-/// A vector immediate is signed, in both encodings.
-///
-/// `v32mov HY(0,0),#0x20` leaves `0xffffffe0` in every lane on a Raspberry Pi
-/// 4B d03115 — the 48-bit encoding's six-bit field is a signed one — and the
-/// 80-bit form's sixteen-bit `#0xffff` leaves `0xffffffff`. Read as unsigned
-/// they would be 32 and 65535. From `probes/imm.s`.
+/// A vector immediate is signed in both encodings: `v32mov HY(0,0),#0x20`
+/// leaves `0xffffffe0` and the 80-bit `#0xffff` leaves `0xffffffff`.
 #[test]
 fn a_vector_immediate_is_signed() {
     const A16: [u32; 16] = [
@@ -2768,13 +2640,8 @@ fn a_vector_immediate_is_signed() {
     }
 }
 
-/// The ALU sub-ops that were doubtful, as whole probe programs.
-///
-/// Each ran on a Raspberry Pi 4B d03115 and is replayed here against the same
-/// memory. Between them they pin the carry-in forms (`addc`, `subc` and the
-/// rest), the signed shifts, the sub-ops that write a lane of zeros at one
-/// width and compute at the other, a dash A operand, a `*` slot, the
-/// multiplies whose registers differ in width, and the scalar result unit.
+/// The ALU sub-ops that were doubtful, as whole probe programs. Each ran and is
+/// replayed here against the same memory.
 #[test]
 fn the_measured_alu_sub_ops() {
     #[allow(clippy::type_complexity)]
@@ -3238,12 +3105,7 @@ fn the_measured_alu_sub_ops() {
     }
 }
 
-/// The `...H` accumulator forms, read back with `vgetacc`.
-///
-/// `probes/acch.s` on a Raspberry Pi 4B d03115. `UACCH` and `SACCH`
-/// accumulate the result into the accumulator's **high** half — `v16mov -,A
-/// CLRA UACCH` leaves `A << 16` in it — and their write-back reads it shifted
-/// back down by sixteen, clamped into the destination's signed range.
+/// The `...H` accumulator forms, read back with `vgetacc` (`probes/acch.s`).
 #[test]
 fn the_high_half_accumulator() {
     const CODE_BYTES: &[u8] = &[
@@ -3324,11 +3186,9 @@ fn the_high_half_accumulator() {
     }
 }
 
-/// `SUB` is a difference read-out, not a subtracting accumulate.
-///
-/// `probes/usub.s` on a Raspberry Pi 4B d03115: after `CLRA UACC(A)`, a
-/// `USUB(B)` leaves `A` still in the accumulator — read back with `vgetacc` —
-/// and hands the destination `A - B`.
+/// `SUB` is a difference read-out, not a subtracting accumulate: in
+/// `probes/usub.s`, `USUB(B)` after `CLRA UACC(A)` leaves `A` in the
+/// accumulator and hands the destination `A - B`.
 #[test]
 fn the_sub_modifier_leaves_the_accumulator_alone() {
     const CODE_BYTES: &[u8] = &[
@@ -3402,13 +3262,8 @@ fn the_sub_modifier_leaves_the_accumulator_alone() {
     }
 }
 
-/// The gather and the scatter, indexed by the accumulator.
-///
-/// `probes/mem9.s` on a Raspberry Pi 4B d03115, over a page whose byte `n`
-/// holds `n + 1`. `lookupml` reads element `acc & 0xffff` of the table at the
-/// address and `lookupm` element `acc >> 16`, each element as wide as the
-/// operation; `indexwritem[l]` writes one back at the same place. The rows
-/// below include the scattered bytes read back in.
+/// The gather and the scatter, indexed by the accumulator. `probes/mem9.s`,
+/// over a page whose byte `n` holds `n + 1`.
 #[test]
 fn the_measured_gather_and_scatter() {
     const CODE_BYTES: &[u8] = &[
@@ -3488,11 +3343,8 @@ fn the_measured_gather_and_scatter() {
     }
 }
 
-/// `vmul32` — the family the `L` bit selects.
-///
-/// `probes/mul32.s` on a Raspberry Pi 4B d03115: it is a 16 x 16 into 32
-/// multiply, taking the low halfword of each operand — signed or unsigned as
-/// the suffix says — and keeping the whole product.
+/// `vmul32`, the family the `L` bit selects: `probes/mul32.s` makes it a 16 x 16
+/// into 32 multiply over the low halfword of each operand.
 #[test]
 fn the_measured_16_by_16_multiply() {
     const CODE_BYTES: &[u8] = &[
@@ -3576,12 +3428,8 @@ fn the_measured_16_by_16_multiply() {
     }
 }
 
-/// An accumulator modifier without `ENA`, and `SETF` under a predicate.
-///
-/// `probes/noena.s` on a Raspberry Pi 4B d03115. `CLRA` alone clears the
-/// accumulator and leaves the destination the raw result; `WBA` alone does
-/// nothing at all. `SETF` under a predicate writes the flags of the lanes the
-/// predicate selected and leaves every other lane's exactly as they were.
+/// An accumulator modifier without `ENA`, and `SETF` under a predicate
+/// (`probes/noena.s`).
 #[test]
 fn a_modifier_without_ena_and_a_predicated_setf() {
     const CODE_BYTES: &[u8] = &[
@@ -3656,14 +3504,8 @@ fn a_modifier_without_ena_and_a_predicated_setf() {
     }
 }
 
-/// Which ops write a carry under `SETF`, over a preset of ones and of zeros.
-///
-/// `probes/setfc.s` on a Raspberry Pi 4B d03115: each op runs after an
-/// addition that has set every lane's carry one way, and the row after it
-/// marks the lanes `IFC` then lets through. An op that leaves the flag alone
-/// shows all sixteen lanes after the preset of ones and none after the preset
-/// of zeros. `mulm` and `mulms` are left out: they write a carry whose meaning
-/// did not fall out of the run, so `SETF` on them still faults.
+/// Which ops write a carry under `SETF`: `probes/setfc.s` runs each after an
+/// addition that preset every lane's carry.
 #[test]
 fn which_ops_write_a_carry() {
     const CODE_BYTES: &[u8] = &[
@@ -3817,12 +3659,6 @@ fn which_ops_write_a_carry() {
 }
 
 /// The reference page and the model cannot drift apart.
-///
-/// `isa/vpu.toml` says, sub-op by sub-op, whether the model carries the
-/// operation out; `build.rs` turns that into a table, and this compares it
-/// with what `VecInsn::executable` actually accepts. A sub-op measured into
-/// the page but not wired up — or wired up and never written down — fails
-/// here.
 #[test]
 fn the_reference_page_matches_the_model() {
     use pimu::vpu::insn::{VecAluOp, VEC_ALU_OPS, VEC_MEM_OPS};
@@ -3848,12 +3684,8 @@ fn the_reference_page_matches_the_model() {
         );
     }
 
-    // The memory class has no one function to ask, so the set is spelled out;
-    // `mem_transfer`, `gather`, `lut` and `getacc` between them cover exactly
-    // these.
-    // Every one of them is carried out: the sub-ops with no name of their own
-    // all write a lane of zeros and wait for nothing, measured one per run
-    // with a scalar address in the B slot.
+    // `mem_transfer`, `gather`, `lut` and `getacc` cover exactly these, and
+    // every one is carried out: the unnamed sub-ops all write a lane of zeros.
     const MEM_EXECUTES: [u8; 32] = [
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
         25, 26, 27, 28, 29, 30, 31,
@@ -3872,13 +3704,7 @@ fn the_reference_page_matches_the_model() {
     }
 }
 
-/// Sub-ops 60 and 61, and an accumulator read without a write-back.
-///
-/// `probes/mhdt.s` on a Raspberry Pi 4B d03115. Sub-ops 60 and 61 are the
-/// **truncating** high multiply: `0x0ff0 * 0xfff1` answers `0x0000` where
-/// `mulhd` — which floors — answers `0xffff`. The same run measures `UADD`
-/// and `SADD`, the accumulator modifier without `WBA`: the destination takes
-/// `result + accumulator` and the accumulator itself does not move.
+/// Sub-ops 60 and 61, and an accumulator read without a write-back (`probes/mhdt.s`).
 #[test]
 fn the_truncating_multiply_and_an_accumulator_read() {
     const CODE_BYTES: &[u8] = &[
@@ -3950,18 +3776,7 @@ fn the_truncating_multiply_and_an_accumulator_read() {
     }
 }
 
-/// The vector unit's lookup table.
-///
-/// `probes/lut.s` on a Raspberry Pi 4B d03115: `v8memwrite -,A,B` puts each
-/// lane's A at index B of the unit's own 1 KiB table, and the `v8memread`
-/// after it over the same indices hands all sixteen back. The `v16` pair does
-/// the same at twice the index, so the index scales by the operation's element
-/// width. Seven of the sixteen lanes write index `0xff` and each still reads
-/// its own value back, so the table is banked one 64-byte region per lane.
-///
-/// The probe's second read — row 1, over indices that were never written —
-/// is left out: it answers whatever the firmware had left in the table, which
-/// is board state, not behaviour.
+/// The vector unit's lookup table. `probes/lut.s`.
 #[test]
 fn the_measured_lookup_table() {
     const CODE_BYTES: &[u8] = &[
@@ -4028,17 +3843,7 @@ fn the_measured_lookup_table() {
     }
 }
 
-/// A lookup-table index that is a scalar.
-///
-/// `probes/lut2.s` on a Raspberry Pi 4B d03115. Every `readlut`/`writelut` in
-/// `start4.elf` puts a scalar register or an immediate in the B position, not
-/// a vector slot, and this measures that it means the same index in every
-/// lane: a scalar write at 3 and a vector index of threes read the same byte,
-/// and a `v16` write at 3 leaves byte 3 alone — so the scalar index scales by
-/// the element width too.
-///
-/// Row 2 — a read at an index nothing had written — is left out: it answers
-/// whatever the firmware left in the table.
+/// A lookup-table index that is a scalar. `probes/lut2.s`.
 #[test]
 fn a_scalar_lookup_table_index() {
     const CODE_BYTES: &[u8] = &[
@@ -4112,13 +3917,7 @@ fn a_scalar_lookup_table_index() {
     }
 }
 
-/// A displacement beside a scalar B operand.
-///
-/// `probes/sdisp.s` on a Raspberry Pi 4B d03115. `binutils-vc4` prints a dash
-/// B slot as `r2-1`, and `start4.elf` uses the form, but the assembler cannot
-/// spell it — so the five words under test are assembled by hand and checked
-/// against objdump's rendering of the same bytes. With `r2` = 100 they answer
-/// 100, 99, 98, 101 and 200, so the displacement simply adds to the register.
+/// A displacement beside a scalar B operand. `probes/sdisp.s`.
 #[test]
 fn a_displacement_beside_a_scalar_operand() {
     const CODE_BYTES: &[u8] = &[
@@ -4186,14 +3985,7 @@ fn a_displacement_beside_a_scalar_operand() {
     }
 }
 
-/// `vgetacc` feeding the scalar result unit.
-///
-/// `probes/gacc.s` on a Raspberry Pi 4B d03115. Every `vgetacc` in
-/// `start4.elf` discards its vector destination and keeps only the aggregate —
-/// `vgetacc -,-,15 SUMS r0`. Measured here over sixteen known accumulators:
-/// `SUMS` and `SUMU` both answer their plain sum, `MAX` the largest, `IMIN`
-/// and `IMAX` an index, and the `B` shift applies before the sum. The lane
-/// values go in whole, not read back at the operation's element width.
+/// `vgetacc` feeding the scalar result unit. `probes/gacc.s`.
 #[test]
 fn the_accumulator_through_the_scalar_result_unit() {
     const CODE_BYTES: &[u8] = &[
@@ -4268,14 +4060,8 @@ fn the_accumulator_through_the_scalar_result_unit() {
     }
 }
 
-/// Memory sub-op 7 writes a lane of zeros.
-///
-/// `probes/m07.s` on a Raspberry Pi 4B d03115, over a destination preset to
-/// all-ones. `probes/addr07.s` and `probes/addr07b.s` then ruled out the rest:
-/// handed a valid bus address as its operand it wrote nothing there, and three
-/// lookup-table indices read the same before and after. It is also the one
-/// blank in the memory class that leaves the board running — 11-15, 17, 18 and
-/// 20 each killed the firmware of a board that was healthy the instant before.
+/// Memory sub-op 7 writes a lane of zeros. `probes/m07.s`, over a destination
+/// preset to all-ones.
 #[test]
 fn memory_sub_op_7_writes_zeros() {
     const CODE_BYTES: &[u8] = &[
@@ -4337,23 +4123,8 @@ fn memory_sub_op_7_writes_zeros() {
     }
 }
 
-/// Memory sub-op 10 writes zeros too, and does not read the address it is
-/// handed.
-///
-/// `probes/hgat10.s` on a Raspberry Pi 4B d03115, with `probes/hgat00.s` as
-/// its control. Both build a page of sixteen pointers — `0xfebec000` and the
-/// fifteen addresses after it — and both are handed that page in the B slot.
-/// The control, a plain three-operand `v8ld`, answers the pointer bytes:
-/// `00ffffff c0ffffff beffffff feffffff 01ffffff …` over a destination preset
-/// to all-ones. `v8mem10` over the identical operands answers `00ffffff`
-/// sixteen times: a zero, not a load.
-///
-/// The blob runs the sub-op with a **scalar address** in B. In the shape every
-/// earlier probe used — a vector register there — this one stalls the vector
-/// unit instead, which is what made 10, 16, 19 and 28-31 look like a group
-/// apart from the other unnamed sub-ops. Spelled this way all seven retire.
-/// The firmware is dead afterwards either way, so each was measured one to a
-/// board.
+/// Memory sub-op 10 writes zeros and does not read the address it is handed:
+/// `probes/hgat10.s`, control `probes/hgat00.s`.
 #[test]
 fn memory_sub_op_10_writes_zeros_and_reads_nothing() {
     const CODE_BYTES: &[u8] = &[
@@ -4365,10 +4136,8 @@ fn memory_sub_op_10_writes_zeros_and_reads_nothing() {
         0xab, 0xf8, 0x0f, 0x96, 0xf8, 0x30, 0xe0, 0x80, 0x03, 0xe0, 0x33, 0x00, 0x00, 0x02, 0xe8,
         0xa5, 0xa5, 0x5a, 0x5a, 0x22, 0xab, 0xfc, 0x0f, 0x5a, 0x00,
     ];
-    // The destination, and the same page read by the `v8ld` beside it. The
-    // pointers are this model's own — `r1` is `0x4000` here, not the board's
-    // `0xfebec000` — so it is the *shape* that is pinned: a plain load answers
-    // the table, the sub-op answers zero.
+    // The pointers are this model's own (`r1` is `0x4000`, not the board's
+    // `0xfebec000`), so it is the shape that is pinned.
     const ROWS: &[(usize, &str)] = &[
         (0, "00ffffff00ffffff00ffffff00ffffff00ffffff00ffffff00ffffff00ffffff00ffffff00ffffff00ffffff00ffffff00ffffff00ffffff00ffffff00ffffff"),
         (20, "00000000400000000000000000000000010000004000000000000000000000000200000040000000000000000000000003000000400000000000000000000000"),
@@ -4407,15 +4176,8 @@ fn memory_sub_op_10_writes_zeros_and_reads_nothing() {
     }
 }
 
-/// `SETF` on a multiply: zero and negative from the result, the carry left alone.
-///
-/// `probes/setfmul.s` on a Raspberry Pi 4B d03115. Four multiplies —
-/// `vmulhdt.ss`, `vmulhdt.su`, `vmul32.ss`, `vmul32.uu` — each run twice, once
-/// behind a `SETF` that sets every lane's carry and once behind one that
-/// clears it. The carry comes out exactly as it went in both times, so these
-/// have none of their own; zero and negative follow the result at the
-/// operation's width like every other op. `Mulhdt` and `Mul32` are on the
-/// `SETF` list for that reason.
+/// `SETF` on a multiply: zero and negative from the result, the carry left
+/// alone. `probes/setfmul.s`.
 #[test]
 fn setf_on_a_multiply_leaves_the_carry_alone() {
     const CODE_BYTES: &[u8] = &[
@@ -4518,18 +4280,7 @@ fn setf_on_a_multiply_leaves_the_carry_alone() {
     }
 }
 
-/// The accumulator's high half, with `SUB`, in both polarities.
-///
-/// `probes/acchu.s` on a Raspberry Pi 4B d03115. The destination is the
-/// accumulator's *own* high half minus the result — taken before the update
-/// and saturated into the operation's width — not the high half of the
-/// accumulator afterwards. The two agree until the low half borrows, which is
-/// what made the unsigned form look inexplicable: with the high half zero and
-/// a result of `0xffff`, `UACC HIGH SUB` answers `0xffff8000`, the clamp,
-/// where the accumulator afterwards reads `1`.
-///
-/// Rows 1, 3 and 5 are `vgetacc` after each, so the accumulator's own update —
-/// `acc -= result << 16` — is pinned beside the destination.
+/// The accumulator's high half, with `SUB`, in both polarities (`probes/acchu.s`).
 #[test]
 fn the_accumulators_high_half_with_sub() {
     const CODE_BYTES: &[u8] = &[
@@ -4603,18 +4354,8 @@ fn the_accumulators_high_half_with_sub() {
     }
 }
 
-/// A register wider than the operation is read at the operation's width.
-///
-/// `probes/wide1.s` on a Raspberry Pi 4B d03115. Rows 0, 1, 3 and 5 are
-/// `v16or HX(0,0),HY(20,0),0`, the same with the wide register in the B slot,
-/// `v16mov HX(3,0),HY(20,0)` and `v16add HX(5,0),HY(20,0),0`; row 7 is the
-/// control, the same `or` over `HX(20,0)`. All five come back the same: the
-/// low halfword of each 32-bit lane. Rows 2 and 4 are the other direction —
-/// a 16-bit operation into a 32-bit destination, and a 16-bit register in a
-/// 32-bit operation — and both sign-extend.
-///
-/// The ALU class has only 16- and 32-bit widths, so a 32-bit register in a
-/// 16-bit operation is the whole of the wider case.
+/// A register wider than the operation is read at the operation's width
+/// (`probes/wide1.s`).
 #[test]
 fn a_register_wider_than_the_operation_reads_its_low_element() {
     const CODE_BYTES: &[u8] = &[
@@ -4686,13 +4427,7 @@ fn a_register_wider_than_the_operation_reads_its_low_element() {
     }
 }
 
-/// `writelut` with a dash source writes zero.
-///
-/// `probes/lutdash.s` on a Raspberry Pi 4B d03115. Row 0 is a plain
-/// `v8memwrite H(0,0),H(20,0),H(21,0)` and row 1 reads the same index back,
-/// both answering the data. Row 2 is `v8memwrite H(2,0),-,H(21,0)` and row 3
-/// reads it back: zero in every lane, so the dash writes a zero into the
-/// table rather than leaving what was there.
+/// `writelut` with a dash source writes zero. `probes/lutdash.s`.
 #[test]
 fn a_lookup_table_write_with_a_dash_source_writes_zero() {
     const CODE_BYTES: &[u8] = &[
@@ -4762,16 +4497,8 @@ fn a_lookup_table_write_with_a_dash_source_writes_zero() {
     }
 }
 
-/// An 80-bit load reads its inert slot for nothing, like the 48-bit one.
-///
-/// `probes/ldinert.s` on a Raspberry Pi 4B d03115:
-/// `v8ld H(2,0),H(20,0),H(21,0) REP2`, whose inert A slot names a register
-/// holding data, moves exactly what `v8ld H(0,0),-,H(21,0) REP2` moves —
-/// rows 0 and 2 identical, rows 1 and 3 identical. Neither names an address,
-/// so both read from zero.
-///
-/// The slot is *not* free when an 80-bit address reads its addend nibble as
-/// the `+=` step; that case still wants a bare dash.
+/// An 80-bit load reads its inert slot for nothing, like the 48-bit one
+/// (`probes/ldinert.s`).
 #[test]
 fn an_eighty_bit_load_ignores_its_inert_slot() {
     const CODE_BYTES: &[u8] = &[
@@ -4847,17 +4574,7 @@ fn an_eighty_bit_load_ignores_its_inert_slot() {
     }
 }
 
-/// A `vld` whose B slot holds a vector reads from address zero.
-///
-/// `probes/mld.s` on a Raspberry Pi 4B d03115. Four such forms — with and
-/// without an addend on the dash A slot, with a B vector of zeros and one of
-/// fours, and with a vector in the A position too — all came back with the
-/// same sixteen words, and those words are what sits at address 0 on that
-/// board (its armstub). The 48-bit encoding has no address composite: the bits
-/// one would use *are* the B slot, so there is nothing else for it to read.
-///
-/// The model has no armstub, so the test puts the board's sixty-four bytes at
-/// address 0 itself and asks for them back.
+/// A `vld` whose B slot holds a vector reads from address zero (`probes/mld.s`).
 #[test]
 fn a_load_with_a_vector_b_reads_address_zero() {
     const CODE_BYTES: &[u8] = &[
@@ -4911,13 +4628,8 @@ fn a_load_with_a_vector_b_reads_address_zero() {
     }
 }
 
-/// `r63` in a gather's address is no register at all.
-///
-/// `probes/r63.s` and `probes/r63b.s` on a Raspberry Pi 4B d03115, with every
-/// accumulator cleared so each lane's index is zero: `v8lookupm D,A,(r63)`
-/// hands every lane the byte at address 0. The A slot is read for nothing —
-/// a vector of junk in it answers exactly what a vector of zeros does — which
-/// is why the decoder stopped insisting on a dash there.
+/// `r63` in a gather's address is no register at all: `probes/r63.s` and
+/// `r63b.s`, every accumulator cleared.
 #[test]
 fn a_gather_off_r63_reads_address_zero() {
     const CODE_BYTES: &[u8] = &[
@@ -4989,12 +4701,7 @@ fn a_gather_off_r63_reads_address_zero() {
     }
 }
 
-/// A gather with nowhere to put its data.
-///
-/// `probes/r63c.s` on a Raspberry Pi 4B d03115. Every `lookupm` in
-/// `start4.elf` is spelled this way. A register preset to all-ones came back
-/// untouched, so the read goes nowhere — the shape a discarded load already
-/// had — and the board went on running.
+/// A gather with nowhere to put its data. `probes/r63c.s`.
 #[test]
 fn a_gather_with_a_dash_destination_reads_and_discards() {
     const CODE_BYTES: &[u8] = &[
@@ -5063,13 +4770,8 @@ fn a_gather_with_a_dash_destination_reads_and_discards() {
     }
 }
 
-/// A gather that names no address reads from zero.
-///
-/// `probes/lkc.s` on a Raspberry Pi 4B d03115, with 16 in every lane's
-/// accumulator high half — the index `lookupm` uses. Both the `(r63)` form and
-/// the one whose B slot holds a vector answer `0x40`, the byte at address 16,
-/// and the probe reads the same sixty-four bytes back through an ordinary load
-/// to say so. The B vector's contents are not an address and not an index.
+/// A gather that names no address reads from zero: `probes/lkc.s`, 16 in every
+/// lane's accumulator high half.
 #[test]
 fn a_gather_with_no_address_reads_from_zero() {
     const CODE_BYTES: &[u8] = &[
@@ -5143,13 +4845,7 @@ fn a_gather_with_no_address_reads_from_zero() {
     }
 }
 
-/// The stores and scatters that name no address write nothing.
-///
-/// `probes/st64.s` on a Raspberry Pi 4B d03115: a `v8st` with a vector in
-/// every slot, and two `v8indexwritem`s with a dash source. Address 0 read
-/// back identical either side of them — rows 10 and 11 — and `vpuprobe3.py`,
-/// which compares the whole 64 KiB allocation before and after, found no byte
-/// changed anywhere else either. The scatter destinations stayed zero.
+/// The stores and scatters that name no address write nothing (`probes/st64.s`).
 #[test]
 fn a_store_with_no_address_writes_nothing() {
     const CODE_BYTES: &[u8] = &[
@@ -5226,13 +4922,8 @@ fn a_store_with_no_address_writes_nothing() {
     }
 }
 
-/// A scatter that names no address writes nothing either.
-///
-/// `probes/sc3.s` on a Raspberry Pi 4B d03115, with 16 in the accumulators'
-/// high half so the index is a real one: `v8indexwritem` and `v16indexwritem`
-/// with a vector in all three slots left address 0 as they found it, wrote
-/// nothing into their own destination rows, and `vpuprobe3.py` found no byte
-/// changed anywhere in the allocation.
+/// A scatter that names no address writes nothing either: `probes/sc3.s`, 16 in
+/// the accumulators' high half.
 #[test]
 fn a_scatter_with_no_address_writes_nothing() {
     const CODE_BYTES: &[u8] = &[
@@ -5308,14 +4999,7 @@ fn a_scatter_with_no_address_writes_nothing() {
     }
 }
 
-/// An addend nibble on a dash destination changes nothing.
-///
-/// `probes/dashd.s` on a Raspberry Pi 4B d03115. `start4.elf` spells dash
-/// destinations that carry one — `-+r4`, `-+r0` — and the assembler cannot,
-/// so the three words here are built by hand: the same `v16add -,A,B SETF`
-/// with the destination's addend nibble set to none, to `r0` and to `r3`. The
-/// flags each leaves, read back through `IFZ` and `IFN`, are identical. With
-/// the write discarded there is nothing for the addend to act on.
+/// An addend nibble on a dash destination changes nothing (`probes/dashd.s`).
 #[test]
 fn an_addend_on_a_dash_destination_changes_nothing() {
     const CODE_BYTES: &[u8] = &[

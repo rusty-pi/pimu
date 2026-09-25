@@ -1,15 +1,13 @@
 //! VC4 VPU model — the BCM2711's boot processor, scalar side and vector unit.
 //!
-//! Scope today: a fetch/decode/execute interpreter for the scalar instruction
-//! forms — 16-, 32- and 48-bit — plus exceptions and interrupt delivery, which
-//! together run the boot ROM, the EEPROM bootloader and `start4.elf` through to
-//! the ARM. The vector unit is decoded in full and executed for the forms that
-//! `insn::VecInsn::executable` matches; the dual-issue pipeline and the
-//! MMU/caches are not modelled. See `docs/vpu-isa.md`.
+//! A fetch/decode/execute interpreter for the scalar forms plus exceptions and
+//! interrupt delivery, which together run the boot ROM, the EEPROM bootloader
+//! and `start4.elf` through to the ARM. The vector unit is decoded in full and
+//! executed for the forms `insn::VecInsn::executable` matches; the dual-issue
+//! pipeline and the MMU/caches are not modelled.
 //!
-//! Instruction encoding is transcribed from the community reverse engineering
-//! (Herman Hermitage's `videocoreiv.arch`, the vc4 binutils port). Anything not
-//! confirmed against real firmware is flagged in-line.
+//! Encoding, semantics and the evidence behind each: `isa/vpu.toml`, rendered
+//! as `docs/vpu-isa.md`.
 
 pub mod decode;
 pub mod exec;

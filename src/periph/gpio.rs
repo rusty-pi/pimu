@@ -1,89 +1,25 @@
 //! The GPIO block (`0x7E20_0000`): 58 pins, their functions, levels and pulls.
+//! Registers and fields: `specs/gpio.toml`.
 //!
-//! ## What the firmware does with it
+//! * `GPSET` and `GPCLR` answer `0x6770696f` — `"gpio"`, the block's own tag —
+//!   on a read, not zero and not the last value written. The bootloader's
+//!   activity LED is a read-modify-write of `GPSET1`, so a real board is told
+//!   to set every pin in the tag as well; harmless, because `GPSET` only drives
+//!   pins whose function is `output`.
+//! * Nothing outside the model drives a pin, so a `GPLEV` bit is the output
+//!   latch for an output and the pin's termination otherwise: pull-up reads 1,
+//!   pull-down and no pull read 0. Pins still move (the firmware drives the
+//!   LED, a `PUP_PDN` write moves what holds an input), so the detect enables
+//!   work — no firmware in a boot enables one.
+//! * The BCM2711 pads ignore the BCM2835 pull registers; only `PUP_PDN` moves
+//!   a termination.
+//! * Two masters reach what they reach only while their pins are muxed to them,
+//!   which [`crate::machine::Machine`] follows: SPI0 the boot flash on GPIO
+//!   40..43 ALT4, and I²C 0 a HAT's ID EEPROM on GPIO 0/1 ALT0.
 //!
-//! A `firmware` run touches `GPFSEL0`..`GPFSEL4`, `GPSET1`, `GPCLR1`, the
-//! two undocumented words at `+0xD0` / `+0xD4` and all four `PUP_PDN`
-//! registers — and nothing else in the window. There is no `GPLEV` read, no
-//! edge detect, and no write to the BCM2835 pull registers: start4 has both
-//! pull paths and a Pi 4 takes the BCM2711 one (`FUN_0ecc9762` ->
-//! `FUN_0ecc83e4(&DAT_7e2000e4, pin, pull)`).
-//!
-//! `GPFSEL4` is written hundreds of times because GPIO 40..43 carry two things
-//! at once: the SPI NOR flash the EEPROM stages read on ALT4
-//! ([`super::spi0`]), and — on a 4B — PWM audio on 40/41 with the activity LED
-//! an output on 42. Every flash session moves the four pins to ALT4 and back,
-//! and drives the LED again afterwards.
-//!
-//! ## Reads of a write-only register
-//!
-//! `GPSET` and `GPCLR` answer `0x6770696f` — `"gpio"` big-endian, the block's
-//! own tag — not zero and not the last value written, which is what the
-//! catch-all stub used to answer. It matters because the bootloader's activity
-//! LED is a read-modify-write:
-//!
-//! ```text
-//!   0x8000A6FC  mov    r1, 0x7e200000
-//!   0x8000A706  ld     r3, [r1+32]      ; GPSET1
-//!   0x8000A708  bitset r3, #10          ; GPIO 42
-//!   0x8000A70A  st     r3, [r1+32]
-//! ```
-//!
-//! so a real board is told to set every pin in the tag as well. That is
-//! harmless there — `GPSET` only drives pins whose function is `output` — and
-//! it is harmless here for the same reason: the latch keeps the bits, and
-//! [`Gpio::level`] ignores them for a pin that is not an output.
-//!
-//! ## Pin levels, and what watches them
-//!
-//! Nothing outside the model drives a pin. A `GPLEV` bit is therefore the
-//! output latch for a pin whose function is `output`, and the pin's
-//! termination otherwise: pull-up reads 1, pull-down and no pulling read 0.
-//!
-//! Pins do still move — the firmware drives the activity LED, and a write to
-//! `PUP_PDN` moves what holds an input — so the six detect enables work:
-//! an edge or a level latches `GPEDS`, and a bank with a latched bit raises
-//! its interrupt lines ([`Gpio::irq_lines`]): `GIC_SPI` 113 for pins 0..31,
-//! 114 for 32..57, 115 the mirror of the second bank's line the block's
-//! third-bank output is, and 116 the 'any bank' line either raises. No
-//! firmware in a boot enables a detector, so this has yet to fire in a run.
-//!
-//! ## What the pins carry
-//!
-//! Two masters reach what they reach only while their pins are muxed to them,
-//! which [`crate::machine::Machine`] follows: SPI0 the boot flash while GPIO
-//! 40..43 are on ALT4 ([`super::spi0`]), and I²C 0 a HAT's ID EEPROM while
-//! GPIO 0/1 are on ALT0 ([`super::hat`]) — the same master runs on GPIO 44/45
-//! for the camera and display probes, where no HAT is.
-//!
-//! ## Ground truth
-//!
-//! The whole window read through `/dev/gpiomem` on a Raspberry Pi 4B d03115
-//! running Linux:
-//!
-//! ```text
-//!   000 00000000   01c 6770696f   034 1000c1ff   0d0 00000001   0e4 4aa95555
-//!   004 00000000   020 6770696f   038 000038fb   0d4 00000000   0e8 19aaaaaa
-//!   008 12000000   024 6770696f   040 00000000   0a4 ffffffff   0ec 55505544
-//!   00c 3fffffff   028 6770696f   044 00000000   0a8 03ffffff   0f0 000aaaaa
-//!   010 00000064   02c 6770696f
-//! ```
-//!
-//! `GPFSEL2` `0x12000000` is GPIO 28/29 on ALT5 (the RGMII MDIO bus), `GPFSEL3`
-//! `0x3fffffff` is 30..39 on ALT3 (Bluetooth and the WiFi SDIO), and `GPFSEL4`
-//! `0x64` is 40/41 on ALT0 with 42 an output — the same three words the model
-//! ends a boot with.
-//!
-//! ## Which board
-//!
-//! The block is the chip's, but what a pin is wired to is the board's. The
-//! names come from the 4B's own device tree (`gpio-line-names` of
-//! `gpio@7e200000`), and the boards that differ say so in the firmware's
-//! `dt-blob` (`pins_4b`, `pins_cm4`, `pins_400`): a Compute Module 4 puts its
-//! SD interface on 48..53 and the SMPS I²C on 46/47, where a 4B has RGMII, and
-//! a Pi 400 lights GPIO 42 as a power LED where a 4B blinks it for disk
-//! activity. [`Gpio::fit_board`] picks the map, and the `gpio` log channel
-//! names the pin it reports.
+//! The block is the chip's, but what a pin is wired to is the board's: the
+//! names come from the 4B's device tree and the boards that differ say so in
+//! the firmware's `dt-blob` ([`Gpio::fit_board`]).
 
 use crate::bus::{BusResult, MmioDevice, Width};
 use crate::log::{Channel, Log};
@@ -97,7 +33,6 @@ use crate::spec::gpio::{
 };
 use crate::spec::Coverage;
 
-/// Every register in `specs/gpio.toml` is modelled.
 pub const COVERAGE: Coverage = Coverage {
     block: "gpio",
     decoded: &[
@@ -106,14 +41,11 @@ pub const COVERAGE: Coverage = Coverage {
     ],
 };
 
-/// Pins the BCM2711 brings out: 0..57, in two banks of 32.
 pub const PINS: usize = 58;
 
-/// Registers with one bit a pin come in two banks.
 const BANKS: usize = 2;
 
-/// The six edge / level detect enables, in the order they sit in the window,
-/// and their places in it.
+/// The six edge / level detect enables, in window order.
 const DETECTS: [u32; 6] = [GPREN, GPFEN, GPHEN, GPLEN, GPAREN, GPAFEN];
 const REN: usize = 0;
 const FEN: usize = 1;
@@ -122,18 +54,15 @@ const LEN: usize = 3;
 const AREN: usize = 4;
 const AFEN: usize = 5;
 
-/// What a pin is doing, as its three `GPFSEL` bits say.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Function {
     Input,
     Output,
-    /// `ALT0`..`ALT5`.
     Alt(u8),
 }
 
 impl Function {
-    /// The function the `GPFSEL` encoding names: 0 input, 1 output, then
-    /// ALT5, ALT4, ALT0, ALT1, ALT2, ALT3.
+    /// The `GPFSEL` encoding: 0 input, 1 output, then ALT5, ALT4, ALT0..ALT3.
     fn from_bits(bits: u32) -> Function {
         match bits & 7 {
             0 => Function::Input,
@@ -155,7 +84,6 @@ impl std::fmt::Display for Function {
     }
 }
 
-/// What holds a pin when nothing drives it, as its two `PUP_PDN` bits say.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pull {
     None,
@@ -175,7 +103,6 @@ impl Pull {
         }
     }
 
-    /// What a pin nothing drives reads as.
     fn level(self) -> bool {
         self == Pull::Up
     }
@@ -192,15 +119,10 @@ impl std::fmt::Display for Pull {
     }
 }
 
-/// What each pin's six alternate functions are, `ALT0` first. An empty string
-/// is a cell the datasheet leaves reserved, and pins 46 to 57 are internal —
-/// the table gives them no functions at all. This is what a `GPFSEL` write
-/// reports alongside the pin's board line, so a log says which peripheral the
-/// firmware just took the pad for rather than only `ALT4`.
-///
-/// From BCM2711 ARM Peripherals §5.3 Table 94. Which of them a Pi 4 actually
-/// wires is a board question, and lives in [`PI4B_LINES`] and
-/// `firmware/dt-blob.dts` instead.
+/// Each pin's six alternate functions, `ALT0` first, from BCM2711 ARM
+/// Peripherals §5.3 Table 94; an empty string is a reserved cell, and pins
+/// 46..57 are internal. Reported alongside the board line on a `GPFSEL` write,
+/// so a log names the peripheral rather than only `ALT4`.
 const ALT_FUNCTIONS: [[&str; 6]; PINS] = [
     ["SDA0", "SA5", "PCLK", "SPI3_CE0_N", "TXD2", "SDA6"], // GPIO0
     ["SCL0", "SA4", "DE", "SPI3_MISO", "RXD2", "SCL6"],    // GPIO1
@@ -395,9 +317,8 @@ const ALT_FUNCTIONS: [[&str; 6]; PINS] = [
     ["", "", "", "", "", ""],                              // GPIO57
 ];
 
-/// What each pin is wired to on a Pi 4B, as the board's device tree names them
-/// (`gpio-line-names` of `gpio@7e200000` in `bcm2711-rpi-4-b.dtb`). 2..27 are
-/// the header pins a user owns, so they carry no name beyond their number.
+/// What each pin is wired to on a Pi 4B (`gpio-line-names` of
+/// `gpio@7e200000`); 2..27 are header pins a user owns.
 const PI4B_LINES: [&str; PINS] = [
     "ID_SDA",
     "ID_SCL",
@@ -459,11 +380,9 @@ const PI4B_LINES: [&str; PINS] = [
     "RGMII_TXD3",
 ];
 
-/// What a Compute Module 4 does differently: its own SD interface where a 4B
-/// has RGMII, and the SMPS I²C on the two pins below it (`pins_cm4` of the
-/// firmware's `dt-blob`, which gives 48..53 `function = "sdcard"` and calls
-/// 46/47 `SMPS_SCL` / `SMPS_SDA`). GPIO 42 is nobody's there: the module has no
-/// activity LED, and `LEDS_DISK_ACTIVITY` is `absent`.
+/// What a Compute Module 4 does differently (`pins_cm4` of the `dt-blob`): its
+/// own SD interface where a 4B has RGMII, the SMPS I²C below it, and no
+/// activity LED on GPIO 42.
 const CM4_LINES: &[(usize, &str)] = &[
     (42, "GPIO42"),
     (46, "SMPS_SCL"),
@@ -476,42 +395,29 @@ const CM4_LINES: &[(usize, &str)] = &[
     (53, "SD0_DATA3"),
 ];
 
-/// What a Pi 400 does differently: GPIO 42 drives the power LED, and the
-/// firmware starts it *on* (`pin@p42 { function = "output"; polarity =
-/// "active_high"; startup_state = "active"; }` in `pins_400`, against
-/// `startup_state = "inactive"` for the 4B's activity LED). It is the same pin
-/// as the SPI flash clock either way.
+/// What a Pi 400 does differently (`pins_400`): GPIO 42 drives the power LED
+/// and the firmware starts it *on*. Same pin as the SPI flash clock either
+/// way.
 const PI400_LINES: &[(usize, &str)] = &[(42, "PWR_LED_CLK")];
 
-/// What `GPIO_PUP_PDN_CNTRL_REG0`..`REG3` hold out of reset: pins 0 to 8 pulled
-/// up, 9 to 27 down, 28 and 29 with no pull, 30 to 33 down, 34 to 36 up, 37 to
-/// 43 down, 44 and 45 with no pull, and 46 to 57 up. A pin nothing drives reads
-/// its termination, so a firmware that looks at a pin before it sets a pull
-/// sees these.
+/// `PUP_PDN` out of reset. A pin nothing drives reads its termination, so a
+/// firmware that looks before it sets a pull sees these.
 const PUP_PDN_RESET: [u32; PUP_PDN_COUNT as usize] =
     [0xAAA9_5555, 0xA0AA_AAAA, 0x50AA_A95A, 0x0005_5555];
 
 pub struct Gpio {
-    /// `GPFSEL0`..`GPFSEL5`, as written.
     fsel: [u32; GPFSEL_COUNT as usize],
-    /// The output latch `GPSET` sets and `GPCLR` clears, whatever the pin's
-    /// function is.
+    /// The output latch, whatever the pin's function is.
     out: [u32; BANKS],
-    /// `GPEDS`: never set, since nothing drives a pin from outside.
     eds: [u32; BANKS],
-    /// The six detect enables, in [`DETECTS`] order.
     detect: [[u32; BANKS]; DETECTS.len()],
-    /// The BCM2835 pull registers. Kept, and no pull changes with them.
+    /// The BCM2835 pull registers: kept, and inert.
     pud: u32,
     pudclk: [u32; BANKS],
-    /// `GPIO_PUP_PDN_CNTRL_REG0`..`REG3`, two bits a pin.
     pup_pdn: [u32; PUP_PDN_COUNT as usize],
-    /// The undocumented words at `+0xD0` and `+0xD4`.
     pin_mux: u32,
     pad_cfg: u32,
-    /// What the board wires each pin to, for the log.
     lines: [&'static str; PINS],
-    /// Where [`Channel::Gpio`] goes.
     pub log: Log,
 }
 
@@ -538,7 +444,6 @@ impl Gpio {
         Gpio::default()
     }
 
-    /// Wire the pins the way `board` has them.
     pub fn fit_board(&mut self, board: Board) {
         self.lines = PI4B_LINES;
         let changes: &[(usize, &'static str)] = match board.board_type() {
@@ -551,9 +456,7 @@ impl Gpio {
         }
     }
 
-    /// What `ALT0`..`ALT5` means on this pin, or `""` for a pin the SoC keeps
-    /// to itself, a cell the datasheet reserves, or a function that is not an
-    /// alternate one.
+    /// What `ALT0`..`ALT5` means on this pin, or `""` where there is none.
     pub fn alt_function(pin: usize, func: Function) -> &'static str {
         let Function::Alt(n) = func else {
             return "";
@@ -565,13 +468,12 @@ impl Gpio {
             .unwrap_or("")
     }
 
-    /// What the board calls this pin.
     pub fn line(&self, pin: usize) -> &'static str {
         self.lines.get(pin).copied().unwrap_or("?")
     }
 
-    /// The function the three `GPFSEL` bits of `pin` name. A pin the chip
-    /// does not bring out is an input: nothing drives the bits above 57.
+    /// The function `pin`'s three `GPFSEL` bits name; pins the chip does not
+    /// bring out are inputs.
     pub fn function(&self, pin: usize) -> Function {
         if pin >= PINS {
             return Function::Input;
@@ -580,7 +482,6 @@ impl Gpio {
         Function::from_bits(self.fsel[reg] >> shift)
     }
 
-    /// What holds `pin` when nothing drives it.
     pub fn pull(&self, pin: usize) -> Pull {
         if pin >= PINS {
             return Pull::None;
@@ -589,8 +490,7 @@ impl Gpio {
         Pull::from_bits(self.pup_pdn[reg] >> shift)
     }
 
-    /// What a `GPLEV` bit reads: an output's own latch, and otherwise the
-    /// pin's termination, because nothing outside the model drives a pin.
+    /// A `GPLEV` bit: an output's latch, otherwise the pin's termination.
     pub fn level(&self, pin: usize) -> bool {
         if self.function(pin) == Function::Output {
             self.out[pin / 32] >> (pin % 32) & 1 != 0
@@ -599,14 +499,12 @@ impl Gpio {
         }
     }
 
-    /// Bit 1 of the undocumented word at `+0xD0`: the SD card slot is on the
-    /// legacy EMMC controller rather than EMMC2 (#66). The machine routes the
-    /// card; the block only holds the bit.
+    /// Bit 1 of `+0xD0`: the SD slot is on the legacy EMMC controller rather
+    /// than EMMC2. The machine routes the card; the block holds the bit.
     pub fn sd_legacy(&self) -> bool {
         self.pin_mux & PIN_MUX_SD_LEGACY_MASK != 0
     }
 
-    /// The pins of `bank` whose level is high.
     fn levels(&self, bank: usize) -> u32 {
         let mut v = 0;
         for pin in bank * 32..PINS.min((bank + 1) * 32) {
@@ -617,26 +515,19 @@ impl Gpio {
         v
     }
 
-    /// The level of every pin, a word a bank.
     fn levels_all(&self) -> [u32; BANKS] {
         [self.levels(0), self.levels(1)]
     }
 
-    /// The bits of `bank` that are a pin: 32 in bank 0, 26 in bank 1.
     fn pins_of(bank: usize) -> u32 {
         let n = PINS.min((bank + 1) * 32) - bank * 32;
         u32::MAX >> (32 - n)
     }
 
-    /// What the six detect enables make of the levels moving from `before` to
-    /// where they are now: an edge latches `GPEDS` for the pin whose rising /
-    /// falling enable is set, and a level detect latches it for as long as the
-    /// pin sits at that level — so a `GPEDS` write clears a level detect's bit
-    /// only until the next access.
-    ///
-    /// A detector watches the pad, so a pin the firmware drives itself is
-    /// detected the same as one something outside drives. Nothing in a boot
-    /// enables one, so the model has never seen it happen on hardware.
+    /// What the six detect enables make of the levels moving from `before`.
+    /// A level detect re-latches while the pin stays at that level, so a
+    /// `GPEDS` write clears its bit only until the next access; and a detector
+    /// watches the pad, so a pin the firmware drives itself counts too.
     fn detect_edges(&mut self, before: [u32; BANKS]) {
         let now = self.levels_all();
         for bank in 0..BANKS {
@@ -651,26 +542,21 @@ impl Gpio {
         }
     }
 
-    /// The block's two bank interrupt lines: up while any pin of that bank has
-    /// its `GPEDS` bit latched. The other two lines the block drives follow
-    /// from these — see [`crate::arm`].
+    /// The two bank interrupt lines: up while any pin of that bank has its
+    /// `GPEDS` bit latched. The other two follow from these ([`crate::arm`]).
     pub fn irq_lines(&self) -> [bool; BANKS] {
         [self.eds[0] != 0, self.eds[1] != 0]
     }
 
-    /// A word in the window as one of `count` elements `4` apart from `base`,
-    /// if it is one.
     fn element(off: u32, base: u32, count: u32) -> Option<usize> {
         let i = off.checked_sub(base)? / 4;
         (i < count).then_some(i as usize)
     }
 
-    /// One of a pair, one register a bank.
     fn bank(off: u32, base: u32) -> Option<usize> {
         Gpio::element(off, base, BANKS as u32)
     }
 
-    /// A `GPFSEL` write: say what changed, pin by pin.
     fn log_fsel(&self, reg: usize, was: u32, now: u32) {
         for pin in reg * 10..PINS.min(reg * 10 + 10) {
             let shift = (pin % 10) * 3;
@@ -679,9 +565,7 @@ impl Gpio {
                 continue;
             }
             // A pin that becomes an output starts driving the latch it
-            // already had, which is how the LED comes on: the bootloader
-            // writes `GPSET` while the pin is still on ALT4 for the flash,
-            // and only then gives it back to the LED.
+            // already had — which is how the LED comes on.
             let func = Function::from_bits(b);
             let level = match (func, self.level(pin)) {
                 (Function::Output, true) => ", high",
@@ -702,10 +586,8 @@ impl Gpio {
         }
     }
 
-    /// A `GPSET` / `GPCLR` write: report the pins it really drives, which are
-    /// the ones whose function is `output`. The firmware reads these
-    /// registers before it writes them and gets the block's tag back, so the
-    /// other bits are noise (module docs).
+    /// A `GPSET` / `GPCLR` write: report only the pins it really drives. The
+    /// rest is the tag the firmware read back (module docs).
     fn log_drive(&self, bank: usize, bits: u32, high: bool) {
         let mut bits = bits;
         while bits != 0 {
@@ -725,7 +607,6 @@ impl Gpio {
         }
     }
 
-    /// A `PUP_PDN` write: say which pin's termination moved.
     fn log_pull(&self, reg: usize, was: u32, now: u32) {
         for pin in reg * 16..PINS.min(reg * 16 + 16) {
             let shift = (pin % 16) * 2;
@@ -791,8 +672,7 @@ impl MmioDevice for Gpio {
     }
 
     fn write(&mut self, offset: u32, _width: Width, value: u32) -> BusResult<()> {
-        // Every register here can move a pin's level or what watches it, so
-        // the detectors run over the whole block after the write.
+        // Any of these can move a level or what watches it.
         let before = self.levels_all();
         self.store(offset & !3, value);
         self.detect_edges(before);
@@ -801,7 +681,6 @@ impl MmioDevice for Gpio {
 }
 
 impl Gpio {
-    /// One word into the block.
     fn store(&mut self, off: u32, value: u32) {
         if let Some(reg) = Gpio::element(off, GPFSEL, GPFSEL_COUNT) {
             let was = std::mem::replace(&mut self.fsel[reg], value);
@@ -830,8 +709,7 @@ impl Gpio {
                 return;
             }
         }
-        // The BCM2835 pull registers: the BCM2711 pads do not listen to them,
-        // so the words are kept and no termination moves.
+        // The BCM2711 pads ignore these; keep the words, move nothing.
         if off == GPPUD {
             self.pud = value;
             return;
@@ -854,7 +732,6 @@ impl Gpio {
                 self.log_pull(reg, was, value);
             }
         }
-        // GPLEV, and everything the block does not decode: dropped.
     }
 }
 
@@ -875,8 +752,7 @@ mod tests {
         g.read(off, Width::Word).unwrap()
     }
 
-    /// The encoding the three `GPFSEL` bits use is not in numeric order past
-    /// `output`, which is the thing to get wrong.
+    /// The `GPFSEL` encoding is not in numeric order past `output`.
     #[test]
     fn function_select_decodes_the_alternates() {
         let mut g = gpio();
@@ -888,7 +764,8 @@ mod tests {
         wr(&mut g, GPFSEL + 16, 0x64);
         assert_eq!(g.function(40), Function::Alt(0));
         assert_eq!(g.function(42), Function::Output);
-        // GPIO 28/29 on ALT5 (the RGMII MDIO bus), read back on a real board.
+        // GPIO 28/29 on ALT5 (the RGMII MDIO bus), read back on a
+        // Raspberry Pi 4B d03115.
         wr(&mut g, GPFSEL + 8, 0x1200_0000);
         assert_eq!(g.function(28), Function::Alt(5));
         assert_eq!(g.function(29), Function::Alt(5));
@@ -899,8 +776,7 @@ mod tests {
         }
     }
 
-    /// A read of `GPSET` / `GPCLR` answers the block's tag, which is what the
-    /// bootloader's read-modify-write of the activity LED reads (module docs).
+    /// A read of `GPSET` / `GPCLR` answers the block's tag (module docs).
     #[test]
     fn the_write_only_registers_read_back_the_block_tag() {
         let mut g = gpio();
@@ -910,7 +786,6 @@ mod tests {
         assert_eq!(&GPSET_RESET.to_be_bytes(), b"gpio");
     }
 
-    /// The activity LED: GPIO 42 an output, `GPSET1` / `GPCLR1` bit 10.
     #[test]
     fn an_output_pin_reads_its_own_latch() {
         let mut g = gpio();
@@ -925,14 +800,11 @@ mod tests {
         assert_eq!(rd(&mut g, GPLEV + 4) & 0x400, 0);
     }
 
-    /// The bootloader sets the bits of the tag it read along with the one it
-    /// means. They land in the latch, as they do on the real block, and change
+    /// The tag's bits land in the latch, as on the real block, and change
     /// nothing: those pins are not outputs.
     #[test]
     fn a_set_of_pins_that_are_not_outputs_changes_no_level() {
         let mut g = gpio();
-        // Bank 1 without the pulls it powers up with, so the latch is all
-        // `GPLEV` has to report.
         wr(&mut g, PUP_PDN + 8, 0);
         wr(&mut g, PUP_PDN + 12, 0);
         wr(&mut g, GPFSEL + 16, 0x40); // GPIO 42 an output
@@ -941,8 +813,8 @@ mod tests {
         assert_eq!(rd(&mut g, GPLEV + 4), 0x400);
     }
 
-    /// An input reads its termination: `01` is a pull-up, measured on a real
-    /// board on the pins whose lines need one.
+    /// An input reads its termination: `01` is a pull-up, as measured on a
+    /// Raspberry Pi 4B d03115 on the pins whose lines need one.
     #[test]
     fn an_input_pin_reads_its_termination() {
         let mut g = gpio();
@@ -954,16 +826,13 @@ mod tests {
         assert!(g.level(0));
         assert!(!g.level(14));
         assert_eq!(rd(&mut g, GPLEV) & 0xC001, 0x8001);
-        // A pull-down reads 0.
         wr(&mut g, PUP_PDN, 0x8000_000A);
         assert_eq!(g.pull(0), Pull::Down);
         assert_eq!(g.pull(15), Pull::Down);
         assert_eq!(rd(&mut g, GPLEV) & 0x8001, 0);
     }
 
-    /// The alternate-function table is what makes a pin-mux log readable: the
-    /// four pins of a flash session say `SPI0`, and the console pins say which
-    /// UART has them.
+    /// The alternate-function table is what makes a pin-mux log readable.
     #[test]
     fn a_pin_says_which_peripheral_an_alt_gives_it_to() {
         assert_eq!(Gpio::alt_function(40, Function::Alt(4)), "SPI0_MISO");
@@ -973,16 +842,13 @@ mod tests {
         assert_eq!(Gpio::alt_function(28, Function::Alt(5)), "RGMII_MDIO");
         assert_eq!(Gpio::alt_function(40, Function::Alt(0)), "PWM1_0");
         assert_eq!(Gpio::alt_function(18, Function::Alt(0)), "PCM_CLK");
-        // A cell the datasheet reserves, an internal pin, a pin that does not
-        // exist, and a function that is not an alternate one.
         assert_eq!(Gpio::alt_function(16, Function::Alt(0)), "");
         assert_eq!(Gpio::alt_function(48, Function::Alt(0)), "");
         assert_eq!(Gpio::alt_function(58, Function::Alt(0)), "");
         assert_eq!(Gpio::alt_function(14, Function::Output), "");
     }
 
-    /// The BCM2835 pull registers are kept and do nothing: the BCM2711 pads
-    /// only listen to `PUP_PDN`.
+    /// The BCM2835 pull registers are kept and do nothing.
     #[test]
     fn the_legacy_pull_registers_move_no_termination() {
         let mut g = gpio();
@@ -996,8 +862,7 @@ mod tests {
     }
 
     /// An edge detector latches `GPEDS` and raises its bank's line; `GPEDS`
-    /// is write-1-to-clear, not storage. The pin here is the activity LED,
-    /// which the firmware drives itself.
+    /// is write-1-to-clear, not storage.
     #[test]
     fn an_edge_latches_gpeds_and_raises_the_line() {
         let mut g = gpio();
@@ -1016,7 +881,6 @@ mod tests {
         assert_eq!(rd(&mut g, GPEDS + 4), 0);
         assert_eq!(g.irq_lines(), [false, false]);
 
-        // The falling edge needs its own enable.
         wr(&mut g, GPCLR + 4, 0x400);
         assert_eq!(rd(&mut g, GPEDS + 4), 0);
         wr(&mut g, GPFEN + 4, 0x400);
@@ -1026,8 +890,7 @@ mod tests {
         assert_eq!(rd(&mut g, GPEDS + 4), 0x400);
     }
 
-    /// The asynchronous enables detect the same edges here: the model has no
-    /// sampling clock to miss a pulse between.
+    /// The asynchronous enables detect the same edges: no sampling clock.
     #[test]
     fn the_asynchronous_enables_detect_the_same_edges() {
         let mut g = gpio();
@@ -1041,8 +904,7 @@ mod tests {
         assert_eq!(rd(&mut g, GPEDS + 4), 0x400);
     }
 
-    /// A level detector holds its bit: clearing it while the pin is still at
-    /// that level latches it again.
+    /// A level detector re-latches while the pin stays at that level.
     #[test]
     fn a_level_detector_latches_again_while_the_level_lasts() {
         let mut g = gpio();
@@ -1057,7 +919,6 @@ mod tests {
         wr(&mut g, GPEDS + 4, 0x400);
         assert_eq!(rd(&mut g, GPEDS + 4), 0);
 
-        // And a low-level detector on an input nothing holds up.
         wr(&mut g, PUP_PDN, 0); // GPIO 4 off its reset pull-up
         wr(&mut g, GPLEN, 1 << 4);
         assert_eq!(rd(&mut g, GPEDS) & (1 << 4), 1 << 4);
@@ -1067,8 +928,7 @@ mod tests {
         assert_eq!(rd(&mut g, GPEDS) & (1 << 4), 0);
     }
 
-    /// A pin that does not exist is in no `GPEDS` bit, whatever a detector
-    /// enable says about the bits above 57.
+    /// A pin that does not exist is in no `GPEDS` bit.
     #[test]
     fn the_bits_above_pin_57_latch_nothing() {
         let mut g = gpio();
@@ -1079,7 +939,7 @@ mod tests {
         assert_eq!(g.irq_lines(), [false, true]);
     }
 
-    /// Bit 1 of the undocumented word routes the card; the rest is storage.
+    /// Bit 1 of the undocumented word routes the card.
     #[test]
     fn the_mux_word_says_which_sd_host_has_the_card() {
         let mut g = gpio();
@@ -1091,7 +951,6 @@ mod tests {
         assert_eq!(rd(&mut g, PIN_MUX), 1);
     }
 
-    /// The pin map is the board's, not the chip's.
     #[test]
     fn each_board_wires_the_pins_its_own_way() {
         let mut g = gpio();
@@ -1112,14 +971,12 @@ mod tests {
         g.fit_board(board(0x00C0_3130));
         assert_eq!(g.line(42), "PWR_LED_CLK");
         assert_eq!(g.line(48), "RGMII_RXD0");
-        // And back to a 4B, with nothing left of the others.
         g.fit_board(board(PI4B_8GB_REV_1_5));
         assert_eq!(g.line(42), "STATUS_LED_G_CLK");
         assert_eq!(g.line(46), "RGMII_RXCLK");
     }
 
-    /// Pins 58..63 have no pad: `GPFSEL5` keeps what is written there, and
-    /// they are in no level.
+    /// Pins 58..63 have no pad.
     #[test]
     fn the_bits_above_pin_57_are_no_pin() {
         let mut g = gpio();

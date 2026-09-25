@@ -1,26 +1,19 @@
-//! Which file a disk block belongs to, for the I/O log (#35).
+//! Which file a disk block belongs to, for the I/O log.
 //!
-//! The model only ever sees blocks move; the I/O log names the files they are
-//! part of by reading the medium the way a host tool would: the partition
-//! table (MBR, or GPT behind a protective MBR), then each FAT partition's
-//! directory tree. None of this is the firmware's view of the disk – it is the
-//! bench's own reading of the image, so the firmware stays a black box.
-//!
-//! Partitions that are not FAT (the Linux root, say) are still named, just
-//! without files inside them.
+//! The model only sees blocks move; the names come from the bench's own
+//! reading of the medium — the partition table, then each FAT partition's
+//! directory tree — so the firmware stays a black box. Partitions that are not
+//! FAT are still named, just without files inside them.
 
-/// Read one 512-byte block of the medium; `None` past its end.
 pub type ReadBlock<'a> = dyn Fn(u64) -> Option<[u8; 512]> + 'a;
 
-/// Named block ranges `[first, last]` on a medium, sorted by `first`, not
-/// overlapping.
+/// Named block ranges `[first, last]`, sorted and not overlapping.
 #[derive(Debug, Default, Clone)]
 pub struct FileMap {
     extents: Vec<(u64, u64, String)>,
 }
 
 impl FileMap {
-    /// Walk the medium's partitions and FAT file systems.
     pub fn build(read: &ReadBlock) -> FileMap {
         let mut map = FileMap::default();
         let (parts, table_end) = partitions(read);
@@ -32,7 +25,6 @@ impl FileMap {
             let part = format!("p{n}");
             let before = map.extents.len();
             fat_files(read, first, &part, &mut map.extents);
-            // Whatever the file walk did not name is still the partition's.
             if map.extents.len() == before {
                 map.extents.push((first, last, part));
             }
@@ -41,8 +33,7 @@ impl FileMap {
         map
     }
 
-    /// The names of everything `[first, first + count)` touches, in block
-    /// order. Blocks outside every named range add nothing.
+    /// The names everything `[first, first + count)` touches, in block order.
     pub fn names(&self, first: u64, count: u64) -> Vec<&str> {
         let last = first + count.max(1) - 1;
         let start = self.extents.partition_point(|e| e.1 < first);
@@ -75,8 +66,6 @@ fn le64(b: &[u8], at: usize) -> u64 {
     u64::from_le_bytes(b[at..at + 8].try_into().unwrap())
 }
 
-/// `(number, first block, last block)` of every partition, numbered from 1,
-/// and the last block of the partition table itself.
 fn partitions(read: &ReadBlock) -> (Vec<(usize, u64, u64)>, u64) {
     let Some(mbr) = read(0) else {
         return (Vec::new(), 0);
@@ -92,8 +81,8 @@ fn partitions(read: &ReadBlock) -> (Vec<(usize, u64, u64)>, u64) {
         .filter_map(|i| {
             let e = entry(i);
             let (start, size) = (le32(e, 8), le32(e, 12));
-            // Not `then_some`: its argument is evaluated even for an empty
-            // slot, and `start + size - 1` underflows there.
+            // Not `then_some`: it would evaluate `start + size - 1` for an
+            // empty slot, where that underflows.
             if e[4] != 0 && size != 0 {
                 Some((i + 1, start, start + size - 1))
             } else {
@@ -131,18 +120,12 @@ fn gpt_partitions(read: &ReadBlock) -> (Vec<(usize, u64, u64)>, u64) {
     (out, table_end)
 }
 
-/// The FAT geometry of a partition, if it holds one.
 struct Fat {
     first: u64,
-    /// Blocks per cluster.
     spc: u64,
-    /// First block of the (first) FAT.
     fat: u64,
-    /// FAT16's fixed root directory: first block and length. `None` for FAT32.
     root: Option<(u64, u64)>,
-    /// FAT32's root directory cluster.
     root_cluster: u64,
-    /// First block of cluster 2.
     data: u64,
     clusters: u64,
     fat32: bool,
@@ -170,8 +153,7 @@ impl Fat {
         let root_len = (root_entries * 32).div_ceil(512);
         let data_rel = reserved + nfats * fat_len + root_len;
         let clusters = total.checked_sub(data_rel)? / spc;
-        // FAT12 volumes are too small to boot a Pi from; their packed
-        // entries are not worth reading.
+        // FAT12 volumes are too small to boot a Pi from.
         if clusters < 4085 {
             return None;
         }
@@ -200,7 +182,6 @@ impl Fat {
         (2..self.clusters + 2).contains(&next).then_some(next)
     }
 
-    /// A cluster chain as block extents, contiguous clusters merged.
     fn chain(&self, read: &ReadBlock, first: u64) -> Vec<(u64, u64)> {
         let mut out: Vec<(u64, u64)> = Vec::new();
         let mut c = first;
@@ -231,8 +212,8 @@ impl Fat {
     }
 }
 
-/// Add every file and directory of the FAT file system at `first`, plus its
-/// own metadata (boot sector, FATs, fixed root), as named extents.
+/// Every file and directory of the FAT file system at `first`, plus its own
+/// metadata, as named extents.
 fn fat_files(read: &ReadBlock, first: u64, part: &str, out: &mut Vec<(u64, u64, String)>) {
     let Some(fat) = Fat::probe(read, first) else {
         return;
@@ -324,8 +305,7 @@ fn short_name(e: &[u8]) -> String {
 mod tests {
     use super::*;
 
-    /// A FAT16 volume in an MBR partition at block 8: 4 blocks per cluster,
-    /// one FAT, and `/boot/start4.elf` (long name) spanning clusters 3 and 5.
+    /// A FAT16 volume with a long-named file spanning two clusters.
     fn image() -> Vec<[u8; 512]> {
         let part = 8u64;
         let (reserved, fat_len, root_entries, spc) = (1u64, 20u64, 32u64, 4u64);
@@ -348,7 +328,6 @@ mod tests {
         bs[22..24].copy_from_slice(&(fat_len as u16).to_le_bytes());
         bs[510] = 0x55;
         bs[511] = 0xAA;
-        // FAT: cluster 2 = the /boot directory, 3 -> 5 -> end = the file.
         let fat = (part + reserved) as usize;
         let mut set = |c: usize, v: u16| {
             img[fat + c * 2 / 512][c * 2 % 512..c * 2 % 512 + 2].copy_from_slice(&v.to_le_bytes())
@@ -367,7 +346,6 @@ mod tests {
             e
         };
         img[root][..32].copy_from_slice(&entry(b"BOOT       ", 0x10, 2, 0));
-        // /boot: an LFN entry for "start4.elf", then its short entry.
         let dir = data as usize; // cluster 2
         let mut lfn = [0xFFu8; 32];
         lfn[0] = 0x41;
@@ -392,7 +370,6 @@ mod tests {
         let read = |lba: u64| img.get(lba as usize).copied();
         let map = FileMap::build(&read);
         let data = 8 + 1 + 20 + 2;
-        // Cluster 3 and cluster 5 hold the file; cluster 4 is free.
         assert_eq!(map.names(data + 4, 4), ["p1:/boot/start4.elf"]);
         assert_eq!(map.names(data + 12, 1), ["p1:/boot/start4.elf"]);
         assert!(map.names(data + 8, 4).is_empty());

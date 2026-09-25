@@ -1,14 +1,8 @@
-//! The host's standard input as the serial console's receive line (#40,
-//! milestone 6): `boot --stdin`.
-//!
-//! A reader thread hands whatever arrives to the run loop, which feeds it to
-//! the PL011. On a terminal the input side is put into raw mode for the length
-//! of the session, so every key — Ctrl-C included — goes to the guest the way
-//! a USB serial adapter would pass it on, and the guest's own tty does the
-//! echoing and line editing. `Ctrl-A x` ends the session, as in QEMU and
-//! minicom; `Ctrl-A Ctrl-A` sends a literal Ctrl-A.
-//!
-//! Piped input is passed through as is, with no escape character.
+//! The host's standard input as the serial console's receive line
+//! (`boot --stdin`). On a terminal the input side goes into raw mode for the
+//! session, so every key — Ctrl-C included — reaches the guest and the guest's
+//! own tty does the echoing; `Ctrl-A x` ends the session and `Ctrl-A Ctrl-A`
+//! sends a literal Ctrl-A. Piped input passes through with no escape character.
 
 use std::io::{IsTerminal, Read};
 use std::process::{Command, Stdio};
@@ -18,7 +12,6 @@ const CTRL_A: u8 = 0x01;
 
 pub enum HostEvent {
     Bytes(Vec<u8>),
-    /// `Ctrl-A x`.
     Quit,
 }
 
@@ -92,9 +85,8 @@ impl Drop for HostInput {
     }
 }
 
-/// Raw input, no local echo; output post-processing stays on so the
-/// firmware's bare `\n` line ends still return the carriage. Returns the
-/// settings to restore.
+/// Raw input, no local echo; output post-processing stays on so the firmware's
+/// bare newlines still return the carriage.
 fn raw_mode() -> Option<String> {
     let saved = Command::new("stty")
         .arg("-g")

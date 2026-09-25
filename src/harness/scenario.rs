@@ -20,7 +20,6 @@ pub struct Scenario {
     pub run: RunSpec,
     pub golden: GoldenSpec,
 
-    /// Directory the scenario file lives in; relative paths resolve against it.
     #[serde(skip)]
     pub base_dir: PathBuf,
 }
@@ -28,11 +27,8 @@ pub struct Scenario {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PayloadKind {
-    /// A named payload from [`crate::harness::payloads`].
     Builtin,
-    /// An ELF32 file on disk.
     Elf,
-    /// A flat binary on disk.
     Raw,
     /// A `pieeprom.bin` image; the bootcode section is staged at `0x8000_0000`.
     Eeprom,
@@ -43,11 +39,8 @@ pub struct PayloadSpec {
     pub kind: PayloadKind,
     /// Builtin name, or path (relative to the scenario file) for elf/raw.
     pub source: String,
-    /// Load address — required for `builtin` and `raw`.
     #[serde(default)]
     pub load_addr: Option<u32>,
-    /// Entry-point override. Defaults to `load_addr` (raw/builtin) or the ELF
-    /// header entry.
     #[serde(default)]
     pub entry: Option<u32>,
 }
@@ -73,9 +66,8 @@ fn default_ram_mb() -> u32 {
     64
 }
 
-/// Which UART a payload prints on. A payload writes a UART's registers
-/// without setting GPIO 14/15 up first, so it says which one rather than
-/// leaving it to the pins the way a firmware boot does ([`Console::Pins`]).
+/// Which UART a payload prints on: a payload writes UART registers without
+/// setting GPIO 14/15 up first, so it cannot go by the pins.
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ConsoleSpec {
@@ -142,7 +134,6 @@ impl From<UnimplSpec> for UnimplPolicy {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct GoldenSpec {
-    /// Path to the golden transcript, relative to the scenario file.
     pub path: String,
 }
 

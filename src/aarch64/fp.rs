@@ -2,17 +2,14 @@
 //! `shared/functions/float`): `FPUnpack`, `FPRound`, `FPProcessNaNs` and the
 //! operations built on them, for half, single and double precision.
 //!
-//! Host floats are not enough: they cannot report the cumulative exception
-//! flags `FPSR` accumulates, honour `FPCR.RMode`, flush denormals with
-//! `FPCR.FZ`, substitute the default NaN with `FPCR.DN`, or pick which NaN
-//! propagates the way ARM does. So every operation here computes the exact
-//! result as an integer mantissa and exponent and rounds it once, in
-//! [`Fp::round`], which is a transcription of `FPRound`. Mantissas that do
-//! not fit keep a "jam" bit: any bits shifted out are ORed into bit 0, which
-//! preserves the round/sticky information with plenty of guard bits to spare.
+//! Host floats cannot report `FPSR`'s cumulative flags, honour `FPCR.RMode`,
+//! flush denormals, substitute the default NaN or pick which NaN propagates the
+//! way ARM does. So every operation computes the exact result as an integer
+//! mantissa and exponent and rounds it once in [`Fp::round`], a transcription
+//! of `FPRound`. Mantissas that do not fit keep a jam bit — bits shifted out
+//! are ORed into bit 0 — which preserves round/sticky information.
 //!
-//! Values are passed as raw bits in a `u64`, with the format given
-//! separately.
+//! Values are raw bits in a `u64`, with the format given separately.
 
 /// `FPSR` cumulative exception bits.
 pub const IOC: u32 = 1 << 0;

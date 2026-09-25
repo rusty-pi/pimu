@@ -1,32 +1,20 @@
 //! `PIMU_ARM_BLOCKS`: the shape of the straight-line runs the ARM cores
-//! execute, and how often each one is re-entered (#117).
+//! execute, and how often each one is re-entered.
 //!
-//! A *run* here is what a block translator would translate as one unit: the
-//! instructions from a control-flow transfer's destination up to and including
-//! the next transfer. Every instruction in such a run is fetched, decoded and
-//! dispatched separately today; translating the run once and executing the
-//! result would spend one lookup and one set of the run loop's per-instruction
-//! bookkeeping on the whole of it.
+//! A *run* is what a block translator would translate as one unit: from a
+//! control-flow transfer's destination up to and including the next transfer.
+//! Two numbers decide whether translating one could pay, and both are counted:
+//! how long the runs are, weighted by **instructions** rather than by runs, and
+//! how often a run is re-entered.
 //!
-//! Two numbers decide whether that can pay, and this counts both:
+//! A run is keyed by the physical address and EL of its first instruction, the
+//! way a cache would key it: physical, so a block survives a context switch and
+//! two address spaces sharing a virtual address are not confused; per EL,
+//! because the EL picks the translation regime.
 //!
-//! 1. **How long the runs are**, weighted by instructions rather than by runs.
-//!    The mean over runs is the wrong average — one 500-instruction run is
-//!    worth as much as a hundred five-instruction ones, and the question is
-//!    what fraction of *executed instructions* sit in runs long enough for the
-//!    translation to be worth its own cost.
-//! 2. **How often a run is re-entered.** A run translated once and executed
-//!    once has saved nothing and paid for a hash lookup; the instructions that
-//!    matter are the ones in runs entered many times.
-//!
-//! A run is keyed by the physical address and EL of its first instruction,
-//! which is what a cache would key on: physical, so that a block survives a
-//! context switch and is not confused by two address spaces sharing a virtual
-//! address, and per EL because the EL picks the translation regime.
-//!
-//! Measure with `PIMU_NO_PARK=1 PIMU_NO_SHA_SKIP=1`. A parked core's skipped
-//! passes and a natively hashed SHA-256 block are never stepped, so without
-//! those the counts miss exactly the hottest loops.
+//! Measure with `PIMU_NO_PARK=1 PIMU_NO_SHA_SKIP=1` — skipped park passes and
+//! natively hashed SHA-256 blocks are never stepped, so otherwise the counts
+//! miss exactly the hottest loops.
 
 use std::collections::HashMap;
 

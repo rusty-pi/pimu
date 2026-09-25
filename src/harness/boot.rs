@@ -1,27 +1,17 @@
-//! The firmware boot as a scenario: one TOML file describes the workload (which
-//! EEPROM image, which SD card, what wall budget) and every assertion made
-//! about the run.
+//! The firmware boot as a scenario: one TOML file describes the workload and
+//! every assertion made about the run, all checked against a single boot.
 //!
-//! There are three complementary kinds of assertion and they catch different
-//! things:
-//!
-//! * The **golden transcript** — the whole normalised UART console, diffed
-//!   line by line. It catches "something changed" with the change shown in
-//!   place, including output that *moved* or a value that shifted, neither of
-//!   which a set of greps can see.
+//! * The **golden transcript** — the whole normalised UART console, diffed line
+//!   by line, so output that merely *moved* is caught too.
 //! * The **milestones** — named substring assertions, each carrying the reason
-//!   it exists (the commit and issue that made it pass). They say *which
-//!   invariant* broke, which a raw diff cannot.
-//! * The **retired counts** — how many instructions each core ran (#85). The
-//!   transcript has its clocks stripped, so a change that makes the firmware
-//!   or Linux run differently without printing anything different gets past
-//!   it; the counts catch that.
+//!   it exists. They say *which* invariant broke, which a raw diff cannot.
+//! * The **retired counts** — how many instructions each core ran, which catch
+//!   a run that goes differently without printing anything different.
 //!
-//! All three are checked against a single boot run: the golden against the
-//! console bytes the run wrote out (`boot --console-log`), the milestones and
-//! the counts against the combined log, which also holds the parts of the
-//! evidence that never reach a UART (the device tree handed to the ARM, the
-//! SDRAM refresh history, the retired/skipped counters).
+//! The golden is checked against the console bytes (`boot --console-log`), the
+//! rest against the combined log, which also carries the evidence that never
+//! reaches a UART (the device tree handed to the ARM, the SDRAM refresh
+//! history, the retired/skipped counters).
 
 use std::path::{Component, Path, PathBuf};
 
@@ -38,79 +28,58 @@ pub struct BootScenario {
     pub description: String,
     pub boot: BootSpec,
     pub golden: GoldenSpec,
-    /// `[[milestone]]` entries, in the order they should be reported.
     #[serde(default, rename = "milestone")]
     pub milestones: Vec<Milestone>,
 
-    /// Directory the scenario file lives in; relative paths resolve against it.
     #[serde(skip)]
     pub base_dir: PathBuf,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct BootSpec {
-    /// `pieeprom.bin` image, relative to the scenario file.
     pub eeprom: String,
-    /// SD card image, relative to the scenario file.
     #[serde(default)]
     pub sd: Option<String>,
-    /// Mass-storage image in USB socket A, relative to the scenario file.
     #[serde(default)]
     pub usb: Option<String>,
-    /// Mass-storage image in the USB-C socket, on the BCM2711's own xHCI
-    /// (`boot --otg`, #113); relative to the scenario file.
+    /// Mass-storage image in the USB-C socket, on the BCM2711's own xHCI.
     #[serde(default)]
     pub otg: Option<String>,
-    /// Directory the built-in network peer serves over TFTP and HTTP (plugs
-    /// the Ethernet cable in), relative to the scenario file.
     #[serde(default)]
     pub netboot: Option<String>,
-    /// `BOOT_ORDER` to append to the EEPROM's `bootconf.txt`.
     #[serde(default)]
     pub boot_order: Option<String>,
-    /// Further `KEY=VALUE` lines to append to `bootconf.txt`.
     #[serde(default)]
     pub bootconf: Vec<String>,
-    /// RSA public key (`pubkey.bin` format) to put in the EEPROM, for boots
-    /// that verify a signed `boot.img`; relative to the scenario file.
+    /// RSA public key to put in the EEPROM, for a signed `boot.img`.
     #[serde(default)]
     pub eeprom_pubkey: Option<String>,
-    /// BCM2711 stepping, `b0` or `c0` (`boot --stepping`); C0 when left out.
     #[serde(default)]
     pub stepping: Option<String>,
-    /// OTP revision code, hex (`boot --board-rev`); a board the stepping
-    /// shipped on when left out.
     #[serde(default)]
     pub board_rev: Option<String>,
-    /// Wall-clock budget for the run, in seconds.
     pub wall_secs: u64,
     /// Largest acceptable skipped-instruction count in the run report. `boot`
     /// stops on an instruction the decoder does not implement rather than
-    /// stepping over it, so a skip can only come from the remaining recon
-    /// leniencies (`bkpt` padding, `sleep`, an unhandled `swi`) — nothing in a
-    /// clean boot should need even those.
+    /// stepping over it, so nothing in a clean boot should need any leniency.
     #[serde(default)]
     pub max_skipped: u64,
     /// Property-interface tags to ask the still-running firmware for once the
-    /// boot has handed over, as `boot --mbox-property` would (#23). Empty =
-    /// do not exchange anything.
+    /// boot has handed over, as `boot --mbox-property` would.
     #[serde(default)]
     pub mbox_property: Vec<String>,
-    /// Ignored: the ARM is always modelled since #52. Kept so a scenario file
-    /// that still says `arm = true` loads.
+    /// Ignored: the ARM is always modelled. Kept so a scenario file that still
+    /// says `arm = true` loads.
     #[serde(default)]
     pub arm: bool,
-    /// End the run once the console prints this (`boot --until`), after the
-    /// last [`Self::input`] line went in.
+    /// End the run once the console prints this, after the last input went in.
     #[serde(default)]
     pub until: Option<String>,
-    /// Lines typed into the serial console, each once its prompt has printed
-    /// (`boot --send-after`).
+    /// Lines typed into the serial console, each once its prompt has printed.
     #[serde(default)]
     pub input: Vec<ConsoleLine>,
 }
 
-/// `[[boot.input]]`: send `text` once the console prints `after`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ConsoleLine {
     pub after: String,
@@ -118,8 +87,7 @@ pub struct ConsoleLine {
 }
 
 /// Make console text one plain line — `boot-check --plan` prints one `boot`
-/// argument per line — with C-style escapes for backslashes and control bytes.
-/// [`unescape`] reverses it.
+/// argument per line — with C-style escapes. [`unescape`] reverses it.
 pub fn escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -135,7 +103,6 @@ pub fn escape(s: &str) -> String {
     out
 }
 
-/// `\n`, `\r`, `\t`, `\\` and `\xHH` into bytes; anything else stays as typed.
 pub fn unescape(s: &str) -> Vec<u8> {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
@@ -167,28 +134,21 @@ pub fn unescape(s: &str) -> Vec<u8> {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct GoldenSpec {
-    /// Path to the golden console transcript, relative to the scenario file.
     pub path: String,
 }
 
-/// One named assertion about the run, with the reason it exists.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Milestone {
-    /// What this proves — quoted verbatim when it fails. This is the half of
-    /// the regression a golden diff cannot carry, so it is mandatory.
+    /// What this proves — quoted verbatim when it fails, and mandatory: it is
+    /// the half of the regression a golden diff cannot carry.
     pub why: String,
-    /// A substring, or a list of substrings that must appear in that order on
-    /// one line. Plain text, never a regex: every pattern the bash check used
-    /// was either literal or a literal-with-`.*`, and the ordered-substrings
-    /// form covers both without a regex dependency.
+    /// A substring, or substrings that must appear in that order on one line.
+    /// Plain text, never a regex.
     pub line: Pattern,
-    /// The line must not appear at all.
     #[serde(default)]
     pub absent: bool,
-    /// Exactly this many matching lines.
     #[serde(default)]
     pub count: Option<usize>,
-    /// At most this many matching lines.
     #[serde(default)]
     pub max_count: Option<usize>,
 }
@@ -208,7 +168,6 @@ impl Pattern {
         }
     }
 
-    /// True when every part occurs in `line`, in order and without overlap.
     pub fn matches(&self, line: &str) -> bool {
         let mut rest = line;
         for p in self.parts() {
@@ -220,17 +179,10 @@ impl Pattern {
         true
     }
 
-    /// Shorter versions of this pattern, longest first: what to look for when
-    /// the whole thing matched nothing.
-    ///
-    /// A milestone over the console can lean on the golden diff to show what
-    /// came out instead. One over the run report cannot — there is no diff of
-    /// the report — so a bare "not found" hides the thing worth reading, which
-    /// is usually a line that is there with the wrong value in it.
-    ///
-    /// Dropping whole parts first and then trailing words keeps the strongest
-    /// surviving prefix: `"genet   MAC 02:00:5e:00:53:01"` weakens to
-    /// `"genet   MAC"`, which finds the line carrying the zeroes.
+    /// Shorter versions of this pattern, longest first, for when the whole
+    /// thing matched nothing: a milestone over the run report has no golden diff
+    /// behind it, so a bare "not found" would hide the line that is there with
+    /// the wrong value in it.
     fn weaker(&self) -> Vec<Pattern> {
         let parts = self.parts();
         let mut out: Vec<Pattern> = (1..parts.len())
@@ -242,10 +194,9 @@ impl Pattern {
     }
 }
 
-/// `s` cut back word by word, longest first and never the whole string: the
-/// prefixes [`Pattern::weaker`] falls back to. Runs of spaces are kept as they
-/// are, since the report aligns its columns with them. Anything under three
-/// characters is left out — it would match half the log.
+/// `s` cut back word by word, never to the whole string: the prefixes
+/// [`Pattern::weaker`] falls back to. Runs of spaces are kept, since the report
+/// aligns its columns with them.
 fn word_prefixes(s: &str) -> Vec<String> {
     let bytes = s.as_bytes();
     let mut out = Vec::new();
@@ -275,7 +226,6 @@ impl std::fmt::Display for Pattern {
 }
 
 impl Milestone {
-    /// Report this milestone against `log`, returning a failure description.
     pub fn check(&self, log: &str) -> Option<String> {
         let hits: Vec<&str> = log.lines().filter(|l| self.line.matches(l)).collect();
         let n = hits.len();
@@ -301,8 +251,6 @@ impl Milestone {
             format!("MISSING: {}", self.line)
         };
         let mut out = format!("{head}\n         why: {}\n", self.why.trim());
-        // Show what did match, so a count failure or an unexpected line is
-        // readable without going back to the log.
         for l in hits.iter().take(4) {
             out.push_str(&format!("         got: {}\n", l.trim()));
         }
@@ -310,8 +258,7 @@ impl Milestone {
             out.push_str(&format!("         ... and {} more\n", n - 4));
         }
         // Nothing matched: show what the nearest weaker pattern finds, which
-        // is how a line that is there with the wrong value in it tells itself
-        // apart from one that never printed.
+        // separates a line printed with the wrong value from one never printed.
         if n == 0 && !self.absent {
             for w in self.line.weaker() {
                 let near: Vec<&str> = log.lines().filter(|l| w.matches(l)).collect();
@@ -332,16 +279,13 @@ impl Milestone {
     }
 }
 
-/// A file or directory a boot scenario's run reads, and how to make it.
 #[derive(Debug, Clone)]
 pub struct BootInput {
     pub path: PathBuf,
-    /// The command that fetches or builds it, run from the repository root.
     pub make: String,
 }
 
-/// `path` for a message: `..` folded away without touching the filesystem (it
-/// may not exist yet), and relative to the working directory when under it.
+/// `path` for a message: `..` folded away without touching the filesystem.
 pub fn tidy_path(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for c in path.components() {
@@ -382,16 +326,14 @@ impl BootScenario {
         self.base_dir.join(&self.golden.path)
     }
 
-    /// The pinned [`RetiredCounts`], beside the golden transcript:
-    /// `golden/firmware.txt` has `golden/firmware.retired.toml`.
+    /// The pinned [`RetiredCounts`], beside the golden transcript.
     pub fn retired_path(&self) -> PathBuf {
         self.golden_path().with_extension("retired.toml")
     }
 
-    /// Every file the run reads, each with the command that makes it. None of
-    /// them is committed and a fresh checkout or worktree has none, so
-    /// `boot-check --plan` names the missing ones instead of planning a boot
-    /// that cannot open its card.
+    /// Every file the run reads, each with the command that makes it. None is
+    /// committed, so `boot-check --plan` names the missing ones instead of
+    /// planning a boot that cannot open its card.
     pub fn inputs(&self) -> Vec<BootInput> {
         let b = &self.boot;
         let mut v = vec![BootInput {
@@ -401,8 +343,7 @@ impl BootScenario {
         for img in [&b.sd, &b.usb, &b.otg].into_iter().flatten() {
             let path = self.base_dir.join(img);
             // `-halt` is how the repository names the card whose kernel parks
-            // the ARM (#52), and a firmware variant's name the card that boots
-            // it (#105).
+            // the ARM, and a firmware variant's name the card that boots it.
             let start4 = ["start4cd", "start4db"]
                 .into_iter()
                 .find(|v| img.contains(v))
@@ -412,9 +353,9 @@ impl BootScenario {
             } else {
                 ""
             };
-            // `-wireless` is the card an imager writes, with the Bluetooth
-            // and WiFi overlays left out, and `-brcmfmac` that card with the
-            // WiFi driver and the chip's firmware on its root filesystem.
+            // `-wireless` is the card an imager writes without the Bluetooth
+            // and WiFi overlays, `-brcmfmac` that card with the WiFi driver and
+            // the chip's firmware on its root filesystem.
             let wifi = if img.contains("-brcmfmac") {
                 "BRCMFMAC=1 "
             } else if img.contains("-wireless") {
@@ -439,7 +380,6 @@ impl BootScenario {
         v
     }
 
-    /// The [`Self::inputs`] that are not there.
     pub fn missing_inputs(&self) -> Vec<BootInput> {
         self.inputs()
             .into_iter()
@@ -447,15 +387,13 @@ impl BootScenario {
             .collect()
     }
 
-    /// The wall budget: the scenario's `wall_secs`, which `boot-check
-    /// --max-wall` overrides.
+    /// The wall budget: `wall_secs`, which `boot-check --max-wall` overrides.
     pub fn wall_secs(&self) -> u64 {
         self.boot.wall_secs
     }
 
-    /// The `boot` argument vector that runs this scenario. `boot-check` runs
-    /// exactly this and `--plan` prints it, so the scenario file stays the
-    /// only description of the workload.
+    /// The `boot` argument vector that runs this scenario: `boot-check` runs
+    /// exactly this and `--plan` prints it.
     pub fn boot_args(&self, console_log: &Path) -> Vec<String> {
         let mut args: Vec<String> = vec![
             "boot".into(),
@@ -517,30 +455,11 @@ impl BootScenario {
     }
 }
 
-/// Normalise raw console bytes into a stable, diffable transcript.
-///
-/// On top of the byte-level normalisation in [`transcript`], this strips the
-/// clock out of the transcript.
-///
-/// The model's clock is driven by retired cycles, so two runs on the same build
-/// do print the same timestamps (measured: two boots minutes apart, under
-/// different load, byte-identical consoles). Stripping them is not about run-to-
-/// run noise but about *what a diff is worth*: a change to what any instruction
-/// costs, or to when the tick lands, shifts every timestamp in the file at once
-/// and buries the one line that actually changed under 141 lines of drift. The
-/// timestamps are also the one thing here no assertion has ever been made
-/// about, so nothing is lost by dropping them.
-///
-/// Three forms carry a clock:
-///
-/// * the bootloader's `%6.2f ` line prefix (`  2.14 EEPROM ID 0xef4018`),
-/// * `start4`'s `MESS:hh:mm:ss.uuuuuu:<core>:` prefix,
-/// * the `stc <n>` field of the `BOOTMODE:` line, which is the raw system
-///   timer count.
-///
-/// Everything else is kept, including values that look incidental: a changed
-/// clock divisor or buffer size is exactly the kind of drift this golden is
-/// here to catch.
+/// Normalise raw console bytes into a diffable transcript, stripping the clock
+/// on top of the byte-level normalisation in [`transcript`]: timestamps
+/// reproduce between runs, but a change to what an instruction costs shifts all
+/// of them at once and buries the line that really changed. Everything else is
+/// kept, a clock divisor included — that is the drift this golden is for.
 pub fn normalise_console(raw: &[u8]) -> String {
     let text = transcript(raw);
     let mut out = String::with_capacity(text.len());
@@ -552,7 +471,6 @@ pub fn normalise_console(raw: &[u8]) -> String {
 }
 
 fn normalise_line(line: &str) -> String {
-    // Linux's printk prefix, `[    1.858355] ` — seconds, a dot, microseconds.
     if let Some((stamp, tail)) = line.strip_prefix('[').and_then(|r| r.split_once(']')) {
         let is_stamp = matches!(stamp.trim_start().split_once('.'), Some((s, f))
             if !s.is_empty()
@@ -564,22 +482,18 @@ fn normalise_line(line: &str) -> String {
         }
     }
     if let Some(rest) = line.strip_prefix("MESS:") {
-        // `00:00:12.882804:0: brfs: ...` — the timestamp and the core id are
-        // digits, colons and one dot; keep the core id, drop the clock.
         let end = rest
             .find(|c: char| !(c.is_ascii_digit() || c == ':' || c == '.'))
             .unwrap_or(rest.len());
         if end == 0 {
-            // Already normalised (`MESS:[t]:0:`), or not a timestamped line at
-            // all. Normalising has to be idempotent: a golden file is fed back
-            // through this when it is checked for drift.
+            // Already normalised, or not a timestamped line. Normalising has to
+            // be idempotent: a golden is fed back through it to check for drift.
             return line.to_string();
         }
         let (stamp, tail) = rest.split_at(end);
         let core = stamp.trim_end_matches(':').rsplit(':').next().unwrap_or("");
         return format!("MESS:[t]:{core}:{tail}");
     }
-    // `  2.14 EEPROM ID 0xef4018` — a right-aligned seconds count, then a space.
     let trimmed = line.trim_start_matches(' ');
     if let Some((stamp, tail)) = trimmed.split_once(' ') {
         let is_stamp = matches!(stamp.split_once('.'), Some((s, f))
@@ -598,13 +512,9 @@ fn normalise_line(line: &str) -> String {
 }
 
 /// Replace a printk timestamp wherever it appears in a line, not only at the
-/// start of one: the kernel writes to the same UART as whatever the console is
-/// doing, so a `[    1.479963] usb 1-1: ...` can land in the middle of a shell
-/// command's echo. Pinning that number in a golden pins the exact instruction
-/// cost of everything before it, which is the one thing these transcripts are
-/// meant not to assert.
-///
-/// Idempotent, like the rest of the normalising: `[t]` does not match again.
+/// start of one: the kernel writes to the same UART as the console, so a stamp
+/// can land in the middle of a shell command's echo. Idempotent, like the rest
+/// of the normalising.
 fn scrub_printk(line: &str) -> String {
     let bytes = line.as_bytes();
     let mut out = String::with_capacity(line.len());
@@ -632,15 +542,9 @@ fn scrub_printk(line: &str) -> String {
     out
 }
 
-/// Replace the FAT OEM name the partition scan prints.
-///
-/// `type: 32 lba: 2048 'MTOO4049' ' RPIBOOT    ' ...` — that quoted field is
-/// written into the filesystem by `mformat`, and mtools stamps its own version
-/// into it, so an SD image built on one machine differs from one built on
-/// another (`MTOO4049` here, `MTOO4043` on the CI runner). It describes the
-/// tool that made the fixture, not anything the firmware did, so it has no
-/// business in a transcript that is diffed for firmware changes. The volume
-/// label beside it is ours (`RPIBOOT`, set by `scripts/make-sd.sh`) and stays.
+/// Replace the FAT OEM name the partition scan prints: `mformat` stamps its own
+/// version into it, so the field describes the machine that built the fixture,
+/// not anything the firmware did. The volume label beside it is ours and stays.
 fn scrub_fat_oem(line: &str) -> String {
     let Some(i) = line.find("lba: ") else {
         return line.to_string();
@@ -655,13 +559,9 @@ fn scrub_fat_oem(line: &str) -> String {
 }
 
 /// Replace the digest and signature the bootloader prints for a downloaded
-/// `boot.img` (`hash: <sha256>`, `rsa2048: <hex>` from its `boot.sig`).
-///
-/// Both are functions of the image's bytes, and those depend on the tools that
-/// built the fixture (`scripts/make-netboot.sh` with the builder's mtools) as
-/// much as on anything the firmware did — the same reason the FAT OEM name is
-/// scrubbed. Whether the signature *verified* is what matters, and that stays
-/// in the transcript (`rsa-verify pass`).
+/// `boot.img`. Both depend on the tools that built the fixture rather than on
+/// anything the firmware did; whether the signature verified is what matters,
+/// and `rsa-verify pass` stays in the transcript.
 fn scrub_image_digest(line: &str) -> String {
     for (prefix, marker) in [("hash: ", "[sha256]"), ("rsa2048: ", "[signature]")] {
         if let Some(value) = line.strip_prefix(prefix) {
@@ -673,7 +573,6 @@ fn scrub_image_digest(line: &str) -> String {
     line.to_string()
 }
 
-/// Replace the `stc <n>` system-timer reading on the `BOOTMODE:` line.
 fn scrub_stc(line: &str) -> String {
     let Some(i) = line.find("stc ") else {
         return line.to_string();
@@ -688,14 +587,12 @@ fn scrub_stc(line: &str) -> String {
     format!("{}stc [n]{}", &line[..i], &rest[end..])
 }
 
-/// What a golden comparison found.
 pub enum GoldenCheck {
     Match,
     Mismatch(String),
     Missing,
 }
 
-/// Compare a normalised transcript against the scenario's golden file.
 pub fn check_golden(scn: &BootScenario, actual: &str) -> Result<GoldenCheck> {
     let path = scn.golden_path();
     match std::fs::read_to_string(&path) {
@@ -716,34 +613,26 @@ pub fn write_golden(scn: &BootScenario, actual: &str) -> Result<()> {
 
 /// How many instructions each core retired, as the `boot --verbose` report
 /// gives them: `vpu0`, `vpu1` once the firmware has woken VPU core 1, then
-/// `arm0`.. for each ARM core once released (#85).
-///
-/// The model's clock is driven by retired cycles, and so is everything that
-/// ends a scenario's run (console silence in modelled time, or a prompt), so
-/// the counts reproduce exactly from one machine to the next. Pinning them
-/// catches a change that makes a boot run differently without printing
-/// anything different.
+/// `arm0`.. for each ARM core once released. The model's clock is driven by
+/// retired cycles, so the counts reproduce exactly from one machine to the
+/// next and pin a boot that runs differently without printing differently.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RetiredCounts(pub Vec<(String, u64)>);
 
 impl RetiredCounts {
-    /// The counts in the report in `log`; `None` when it has no `retired`
-    /// line.
+    /// The counts in the report in `log`, if it has a `retired` line.
     pub fn from_log(log: &str) -> Option<RetiredCounts> {
         let lines: Vec<&str> = log.lines().collect();
         let last = |prefix: &str| lines.iter().rev().find(|l| l.starts_with(prefix));
-        // `retired    419898464  (skipped 0, cycles 419898467)`
         let vpu0 = last("retired ")?.split_whitespace().nth(1)?.parse().ok()?;
         let mut counts = vec![("vpu0".to_string(), vpu0)];
-        // `core1      pc 0x3ec40014  retired 125  end None`
         let vpu1 = last("core1 ")
             .and_then(|l| l.split_once(" retired "))
             .and_then(|(_, rest)| rest.split_whitespace().next()?.parse().ok());
         if let Some(n) = vpu1 {
             counts.push(("vpu1".into(), n));
         }
-        // `  core 1    still in the armstub`, then
-        // `            180077 instructions, 0 exceptions, ...`
+        // `  core 1  still in the armstub`, then its instruction count.
         if let Some(at) = lines.iter().rposition(|l| *l == "--- ARM cores (#40) ---") {
             let mut core: Option<usize> = None;
             let section = lines[at + 1..]
@@ -762,7 +651,6 @@ impl RetiredCounts {
         Some(RetiredCounts(counts))
     }
 
-    /// A counts file: TOML, one `name = count` line per core.
     pub fn parse(text: &str) -> Result<RetiredCounts> {
         let table: toml::Table = toml::from_str(text)?;
         let mut counts = Vec::with_capacity(table.len());
@@ -775,7 +663,6 @@ impl RetiredCounts {
         Ok(RetiredCounts(counts))
     }
 
-    /// The counts file for these counts.
     pub fn render(&self) -> String {
         let mut out = String::from(
             "# Instructions each core retired in this boot (#85): vpu0 and vpu1 on the\n\
@@ -792,8 +679,7 @@ impl RetiredCounts {
         self.0.iter().find(|(k, _)| k == name).map(|&(_, n)| n)
     }
 
-    /// One line for each count that differs from `expected`, empty when none
-    /// does.
+    /// One line for each count that differs from `expected`.
     pub fn diff(expected: &RetiredCounts, actual: &RetiredCounts) -> Vec<String> {
         let mut names: Vec<&str> = actual.0.iter().map(|(k, _)| k.as_str()).collect();
         for (k, _) in &expected.0 {
@@ -822,7 +708,6 @@ impl RetiredCounts {
     }
 }
 
-/// `419898464` as `419_898_464`, which TOML reads back as the same integer.
 fn grouped(n: u64) -> String {
     let digits = n.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
@@ -859,8 +744,6 @@ pub fn write_retired(scn: &BootScenario, counts: &RetiredCounts) -> Result<()> {
     std::fs::write(&path, counts.render()).with_context(|| format!("writing {}", path.display()))
 }
 
-/// How the run ended, from the report's `end` line: `Until`, `Stuck { .. }`,
-/// `TimeLimit`.
 pub fn run_end(log: &str) -> Option<&str> {
     log.lines()
         .rev()
@@ -868,7 +751,6 @@ pub fn run_end(log: &str) -> Option<&str> {
         .map(str::trim)
 }
 
-/// The skipped-instruction count from the last `retired ...` report line.
 pub fn skipped_count(log: &str) -> Option<u64> {
     log.lines()
         .rev()
@@ -881,8 +763,8 @@ pub fn skipped_count(log: &str) -> Option<u64> {
 }
 
 /// Every milestone, plus the skipped-instruction guard, against the combined
-/// run log. Kept separate from the golden because `--update` has to know
-/// whether the run it is about to record was a good one.
+/// run log. Separate from the golden because `--update` has to know whether the
+/// run it is about to record was a good one.
 pub fn check_milestones(scn: &BootScenario, log: &str) -> Vec<String> {
     let mut failures = Vec::new();
     for m in &scn.milestones {
@@ -918,8 +800,8 @@ pub fn check_milestones(scn: &BootScenario, log: &str) -> Vec<String> {
     failures
 }
 
-/// Run every assertion in the scenario against one boot, returning the
-/// failures. `log` is the combined run log, `console` the normalised transcript.
+/// Every assertion in the scenario against one boot: `log` is the combined run
+/// log, `console` the normalised transcript.
 pub fn check_run(scn: &BootScenario, log: &str, console: &str) -> Result<Vec<String>> {
     let mut failures = Vec::new();
 
@@ -940,8 +822,7 @@ pub fn check_run(scn: &BootScenario, log: &str, console: &str) -> Result<Vec<Str
         )),
     }
 
-    // Without a report line there is nothing to compare, and the milestones
-    // already fail on that.
+    // Without a report line there is nothing to compare.
     if let Some(counts) = RetiredCounts::from_log(log) {
         match check_retired(scn, &counts)? {
             GoldenCheck::Match => {}
@@ -977,19 +858,13 @@ pub fn check_run(scn: &BootScenario, log: &str, console: &str) -> Result<Vec<Str
 mod tests {
     use super::*;
 
-    /// A kernel line that lands inside another line's output still loses its
-    /// timestamp: a golden must not pin one. Measured on the `linux` scenario,
-    /// where `usb 1-1: new high-speed USB device` interleaves with the shell's
-    /// echo of an `rpi-fw-crypto` command.
+    /// A kernel line inside another line's output still loses its timestamp.
     #[test]
     fn a_printk_timestamp_is_stripped_mid_line_too() {
         let line = "ey-id 1 --outform [    1.479963] usb 1-1: new high-speed USB device";
         let want = "ey-id 1 --outform [t] usb 1-1: new high-speed USB device";
         assert_eq!(normalise_line(line), want);
-        // Idempotent: a golden is fed back through this when it is checked.
         assert_eq!(normalise_line(want), want);
-        // A leading stamp still works, and bracketed text that is not a stamp
-        // is left alone.
         assert_eq!(
             normalise_line("[    1.479963] usb 1-1: x"),
             "[t] usb 1-1: x"
@@ -1016,9 +891,8 @@ mod tests {
         );
     }
 
-    /// A milestone whose value changed has to show the value it found. Over
-    /// the run report there is no golden diff to fall back on, so a bare "not
-    /// found" would hide the line that actually explains the failure.
+    /// A milestone whose value changed has to show the value it found: over the
+    /// run report there is no golden diff to fall back on.
     #[test]
     fn a_missing_milestone_shows_the_line_that_should_have_matched() {
         let m = Milestone {
@@ -1036,8 +910,6 @@ mod tests {
                 || f.contains("near: genet   MAC 00:00:00:00:00:00"),
             "the failure does not show what was there instead:\n{f}"
         );
-        // And a line that never printed at all says so, rather than dragging
-        // in whatever shares a word with it.
         let m2 = Milestone {
             why: "The bootloader hands over.".into(),
             line: Pattern::One("arm_loader: Starting ARM".into()),
@@ -1080,7 +952,6 @@ mod tests {
             once,
             "[t] Run /sbin/init as init process\n[  OK  ] not a clock\n"
         );
-        // Idempotent: the golden is fed back through this.
         assert_eq!(normalise_console(once.as_bytes()), once);
     }
 
@@ -1095,7 +966,6 @@ mod tests {
 
     #[test]
     fn a_value_that_is_not_a_clock_survives_normalisation() {
-        // The whole point of the golden: a changed divisor must show up.
         let raw = b"  5.86 SD HOST: 200000000 div: 4 (2) delay: 2\n";
         assert_eq!(
             normalise_console(raw),
@@ -1167,8 +1037,7 @@ mod tests {
         assert_eq!(skipped_count("no report here\n"), None);
     }
 
-    /// Cut from a CI run of `linux.toml`, with the `PIMU_ARM_PROF` lines a
-    /// diag build adds.
+    /// Cut from a CI run of `linux.toml`, with a diag build's profile lines.
     const LINUX_REPORT: &str = "\
 end        Until
 final pc   0x3ec40014

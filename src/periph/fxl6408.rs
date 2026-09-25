@@ -1,71 +1,38 @@
 //! The Raspberry Pi 4B GPIO expander: an FXL6408 on the PMIC's I²C bus
 //! (`0x7E20_5E00`), 7-bit address `0x43`.
 //!
+//! Registers and fields: `specs/fxl6408.toml` ([`crate::spec::fxl6408`]).
+//!
 //! Its eight pins are the "external" GPIOs 128..135 of the board's dt-blob
-//! (`pins_4b`: BT_ON, WL_ON, PWR_LED, GLOBAL_RESET, SD VDDIO, camera shutdown,
-//! SD_PWR_ON) and Linux's `expgpio` lines, which it reaches only through the
-//! firmware (`GET_GPIO_CONFIG` / `GET_GPIO_STATE` / `SET_GPIO_STATE`). With no
-//! device at `0x43` every one of those answers `0xffffffff`, the 1.8 V SD I/O
-//! regulator (`regulator-sd-io-1v8`, expander pin 4) never probes, and Linux's
-//! SD controller defers forever. A Raspberry Pi 4B d03115 (rev 1.5) answers
-//! status 0 for all eight pins.
+//! (`pins_4b`: `BT_ON`, `WL_ON`, `PWR_LED`, `GLOBAL_RESET`, SD VDDIO, camera
+//! shutdown, `SD_PWR_ON`) and Linux's `expgpio` lines, which it reaches only
+//! through the firmware (`GET_GPIO_CONFIG` / `GET_GPIO_STATE` /
+//! `SET_GPIO_STATE`). Without a device at `0x43` every one of those answers
+//! `0xffffffff`, the 1.8 V SD I/O regulator (`regulator-sd-io-1v8`, expander
+//! pin 4) never probes, and Linux's SD controller defers forever.
 //!
 //! # Which part
 //!
 //! start4 carries two expander drivers and probes both on this bus, FXL6408
-//! first: `0x43` (`gpio_expander_FXL6408.c`) reads register `0x01` and accepts
-//! any value, then `0x10` (`gpio_expander_gpak.c`, a GreenPAK) insists on
-//! `0x12` in register `0xFD`. Neither answered in the model, so the firmware
-//! re-probed both on every expander access, including from inside the
-//! mailbox handler.
+//! first: `0x43` (`gpio_expander_FXL6408.c`) reads register `DEVICE_ID` and
+//! accepts any value, then `0x10` (`gpio_expander_gpak.c`, a GreenPAK) insists
+//! on `0x12` in register `0xFD`. A part that answers neither is re-probed on
+//! every expander access, including from inside the mailbox handler.
 //!
-//! The part is only visible from the VPU side, and the release firmware's log
-//! does not name it. The debug build does, indirectly: `start4db.elf` asserts
-//! (`FXL6408_readreg`, `0x0EC335A0`) when a register read at `0x43` fails, and
-//! a Pi 4B rev 1.5 (d03115) booted with `start_debug=1` logged no assert at
-//! all (`vclog -a` empty), so its `0x43` read succeeded — the FXL6408 is the
-//! part on that revision. Other revisions may carry the GreenPAK instead.
+//! Which part is fitted was settled on a Raspberry Pi 4B d03115: `start4db.elf`
+//! asserts in `FXL6408_readreg` when a read at `0x43` fails, and that board
+//! booted with `start_debug=1` logged no assert, so the FXL6408 is the part on
+//! that revision. Other revisions may carry the GreenPAK instead.
 //!
-//! # What start4 does with it
-//!
-//! From `start4db.elf`'s decompile (its asserts name the functions): probe
-//! (`0x0ED18984`) reads `0x01` and writes `0x01 = 1` (software reset); set
-//! level (`gpio_expander_FXL6408_set_level_internal`) writes the output
-//! register `0x05` from a shadow; get level
-//! (`gpio_expander_FXL6408_get_level_internal`) reads the input status `0x0F`
-//! for pins it does not drive itself. Pin configuration goes through the
-//! direction, high-Z and pull registers below.
-//!
-//! # Register map
-//!
-//! Names and the manufacturer id from mainline Linux
-//! `drivers/gpio/gpio-fxl6408.c`; reset values from the onsemi FXL6408
-//! datasheet:
-//!
-//! ```text
-//!   0x01  device id / control   MF = 0b101 in bits 7..5; bit 0 = software reset
-//!   0x03  I/O direction         1 = output                 reset 0x00
-//!   0x05  output state          1 = drive high             reset 0x00
-//!   0x07  output high-Z         1 = high-Z                 reset 0xFF
-//!   0x09  input default state                              reset 0x00
-//!   0x0B  pull enable           1 = pull resistor on       reset 0xFF
-//!   0x0D  pull-down / pull-up   1 = pull-up                reset 0x00
-//!   0x0F  input status          pin levels (read-only)
-//!   0x11  interrupt mask                                   reset 0x00
-//!   0x13  interrupt status      (read-only)
-//! ```
-//!
-//! Nothing outside the board drives these pins in the model, so a pin's level
-//! is whatever the part itself puts on it: the output state where it drives
-//! the pin, otherwise its pull resistor, otherwise 0.
+//! Nothing outside the board drives these pins, so a pin's level is whatever
+//! the part puts on it: the output state where it drives, else its pull, else
+//! 0. A Raspberry Pi 4B d03115 answers status 0 for all eight pins.
 
 use crate::log::{Channel, Log};
 use crate::spec::{fxl6408 as regs, Coverage};
 
-/// 7-bit I²C address.
 pub const ADDR: u8 = regs::BASE as u8;
 
-// Register numbers, as the byte the register pointer holds.
 const DEVICE_ID: u8 = regs::DEVICE_ID as u8;
 const IO_DIR: u8 = regs::IO_DIR as u8;
 const OUTPUT: u8 = regs::OUTPUT as u8;
@@ -77,12 +44,11 @@ const INPUT_STATUS: u8 = regs::INPUT_STATUS as u8;
 const INT_MASK: u8 = regs::INT_MASK as u8;
 const INT_STATUS: u8 = regs::INT_STATUS as u8;
 
-/// Register `0x01` as it reads: the Fairchild manufacturer field
-/// (`FXL6408_MF_FAIRCHILD`) in bits 7..5, the rest 0 — nothing checks it.
+/// `DEVICE_ID` as it reads: the Fairchild manufacturer field in bits 7..5, the
+/// rest 0 — nothing checks it.
 const ID_VALUE: u8 = regs::DEVICE_ID_RESET as u8;
 const SW_RESET: u8 = regs::DEVICE_ID_SW_RESET_MASK as u8;
 
-/// Every register in `specs/fxl6408.toml` is modelled.
 pub const COVERAGE: Coverage = Coverage {
     block: "fxl6408",
     decoded: &[
@@ -109,10 +75,7 @@ pub struct Fxl6408 {
     pull_up: u8,
     int_mask: u8,
     ptr: u8,
-    /// Set between the start of a write transfer and its first data byte: that
-    /// byte is the register offset.
     pending_ptr: bool,
-    /// Where [`Channel::Expander`] goes: every register access.
     pub log: Log,
 }
 
@@ -153,7 +116,6 @@ impl Fxl6408 {
         (driven & self.output) | (pulled & self.pull_up)
     }
 
-    /// Current value of a register, for tests and probes.
     pub fn reg(&self, r: u8) -> u8 {
         match r {
             DEVICE_ID => ID_VALUE,
@@ -165,7 +127,6 @@ impl Fxl6408 {
             PULL_UP => self.pull_up,
             INPUT_STATUS => self.levels(),
             INT_MASK => self.int_mask,
-            // No pin ever changes on its own, so no input leaves its default.
             INT_STATUS => 0,
             _ => 0,
         }
@@ -263,11 +224,9 @@ mod tests {
     #[test]
     fn undriven_pins_follow_their_pull() {
         let mut x = Fxl6408::new();
-        // Reset: all inputs, pulls on, pull-down.
         assert_eq!(read(&mut x, INPUT_STATUS), 0);
         write(&mut x, PULL_UP, 0b1000_0001);
         assert_eq!(read(&mut x, INPUT_STATUS), 0b1000_0001);
-        // A high-Z output is not driving: still the pull.
         write(&mut x, IO_DIR, 0xFF);
         write(&mut x, OUTPUT, 0x00);
         assert_eq!(read(&mut x, INPUT_STATUS), 0b1000_0001);

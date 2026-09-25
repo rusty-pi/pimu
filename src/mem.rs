@@ -2,24 +2,16 @@
 
 use crate::bus::{BusError, BusResult, Width};
 
-/// Pages are 4 KiB for the purpose of [`Ram::page_gen`].
 const PAGE_SHIFT: u32 = 12;
 
-/// A contiguous block of little-endian RAM mapped at `base`.
 pub struct Ram {
     base: u32,
     data: Vec<u8>,
-    /// A write generation per 4 KiB page, bumped by every store into it.
-    ///
-    /// This is what lets the VPU cache decoded instructions (#43): a cached
-    /// instruction is still good while its page's generation is the one it
-    /// was decoded under. `data` is private and every writer — CPU stores on
-    /// either side, DMA, the loaders — goes through [`Ram::store`] or
-    /// [`Ram::write_slice`], so no write can get past it. 64 bits, so a page
-    /// can never wrap back to a generation a stale entry still holds.
+    /// A write generation per 4 KiB page, bumped by every store into it: what
+    /// lets the VPU cache decoded instructions. Every writer goes through
+    /// [`Ram::store`] or [`Ram::write_slice`], so none can get past it.
     gens: Vec<u64>,
-    /// Which lines the VPU holds in cache, and which a DMA engine has written
-    /// behind its back (`--check-coherency`). Off unless asked for.
+    /// Cache-coherency tracking (`--check-coherency`); off unless asked for.
     pub coherency: crate::coherency::Coherency,
 }
 
@@ -40,7 +32,6 @@ impl Ram {
         self.gens.get(rel >> PAGE_SHIFT).copied()
     }
 
-    /// Bump the generation of every page `len > 0` bytes at `off` touch.
     #[inline]
     fn wrote(&mut self, off: usize, len: usize) {
         let first = off >> PAGE_SHIFT;
@@ -63,7 +54,6 @@ impl Ram {
         self.data.is_empty()
     }
 
-    /// Every byte, from `base` on — for dumping.
     pub fn as_slice(&self) -> &[u8] {
         &self.data
     }
@@ -74,7 +64,6 @@ impl Ram {
         (addr as u64) >= self.base as u64 && (addr as u64) < end
     }
 
-    /// Bulk-load bytes at an absolute address (used by firmware/ELF loaders).
     pub fn write_slice(&mut self, addr: u32, bytes: &[u8]) -> BusResult<()> {
         let off = self.offset(addr, bytes.len())?;
         self.data[off..off + bytes.len()].copy_from_slice(bytes);
@@ -110,8 +99,7 @@ impl Ram {
     }
 
     /// The `N` bytes `off` bytes into RAM, for a bus that addresses memory by
-    /// offset instead of through a 32-bit window — the A72, which sees all of
-    /// an 8 GB board's DRAM.
+    /// offset rather than through a 32-bit window (the A72).
     #[inline]
     fn bytes_at<const N: usize>(&self, off: u64) -> Option<[u8; N]> {
         let off = usize::try_from(off).ok()?;
@@ -129,8 +117,8 @@ impl Ram {
         Some((off, b))
     }
 
-    /// One value `off` bytes into RAM. The error carries the offset's low 32
-    /// bits, which is all [`BusError`] has room for.
+    /// One value `off` bytes into RAM; an error carries the offset's low 32
+    /// bits, all [`BusError`] has room for.
     #[inline]
     pub fn load_at(&self, off: u64, width: Width) -> BusResult<u32> {
         if let Ok(at) = usize::try_from(off) {
@@ -184,7 +172,6 @@ impl Ram {
         Ok(())
     }
 
-    /// The `N` bytes at `addr`, if they are all in RAM.
     #[inline]
     fn bytes<const N: usize>(&self, addr: u32) -> Option<[u8; N]> {
         let rel = addr.checked_sub(self.base)? as usize;
@@ -202,8 +189,7 @@ impl Ram {
         Some((rel, b))
     }
 
-    // One arm per width, so that each access is a plain load or store
-    // rather than a copy of a run-time length.
+    // One arm per width, so each access is a plain load or store.
     #[inline]
     pub fn load(&self, addr: u32, width: Width) -> BusResult<u32> {
         if let Some(off) = addr.checked_sub(self.base) {
@@ -231,19 +217,14 @@ impl Ram {
         }
         let at = self.base.wrapping_add(off as u32);
         match self.coherency.writer() {
-            // The VPU's own writes are the bus's to mark: it knows which
-            // alias they came through.
             crate::coherency::Master::Vpu => {}
-            // Through the caches, which is where a cached read lands too.
             crate::coherency::Master::Vc4Dma(_) => self.coherency.wrote_through_l2(at, len as u32),
             _ => self.coherency.wrote_by_other(at, len as u32),
         }
     }
 
-    /// A read that did not come from the VPU sees memory, not the cache: a
-    /// line the VPU wrote through a cached alias and has not flushed reads
-    /// back as whatever was there before. The VPU's own reads are left to the
-    /// bus, which knows which alias they came through.
+    /// A read that did not come from the VPU sees memory, not the cache. The
+    /// VPU's own reads are the bus's to mark: it knows which alias they used.
     #[inline]
     fn note_read(&self, off: usize, len: usize) {
         if !self.coherency.is_on() || self.coherency.reader().is_coherent() {
@@ -280,7 +261,6 @@ impl Ram {
                 (off, 4)
             }
         };
-        // At most two pages, and nearly always one.
         let first = off >> PAGE_SHIFT;
         let last = (off + n - 1) >> PAGE_SHIFT;
         self.gens[first] += 1;

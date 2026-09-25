@@ -1,52 +1,28 @@
 //! BCM2711 HVS (Hardware Video Scaler) register block at `0x7E40_0000`.
 //!
-//! The main bootloader brings up a diagnostic display and, after queuing a
-//! frame, calls a "channel swap" wait (`0x0008adc0`): it polls a pair of
-//! per-channel words and spins — 100 × `delay(1000µs)` — until
+//! Registers and fields: `specs/hvs.toml` ([`crate::spec::hvs`]).
 //!
-//! ```text
-//!   (*current & 0xFFFF) == (*requested & 0xFFF)
-//! ```
+//! **Channel swap.** The bootloader queues a frame and then polls `CURRENT`
+//! against `REQUESTED`, spinning 100 × `delay(1000µs)`. With no display to
+//! advance `CURRENT` every swap would run the full timeout — half a second of
+//! modelled time, hundreds of times — so a `CURRENT` slot reads whatever was
+//! last written to the matching `REQUESTED` slot.
 //!
-//! `requested` lives at `+0x20 + 4*chan`, `current` at `+0x30 + 4*chan`. Real
-//! hardware advances `current` to `requested` when the scanout hits the queued
-//! frame; we have no display, so without help every swap runs the full timeout
-//! (~0.5 s of modelled time each, hundreds of times) and the boot crawls.
+//! **Frame interrupts.** A running channel raises `EOLN`, `EOF` and `VSTART` in
+//! `DISPSTAT` every [`FRAME_US`], write-one-to-clear, and with `DISPEIRQx` and
+//! the flag's own `DISPCTRL` enable set a flag holds VPU source [`IRQ_SRC`].
+//! start4 posts a channel's display events on `VSTART`, and
+//! `NOTIFY_DISPLAY_DONE` waits on that work — so without these interrupts the
+//! mailbox service sleeps for good and every later property request from Linux
+//! times out. With no scanout the flags come at fixed points of the frame, and a
+//! `sleep` wakes for each on its own ([`Hvs::deadline`]) so the handler sees them
+//! apart, as on the board.
 //!
-//! Model: reads of the `current` slot return whatever was last written to the
-//! matching `requested` slot, so the swap always reports complete on the first
-//! poll.
+//! `DISPSTATX` reads a stopped channel as `MODE` disabled with its FIFO `EMPTY`,
+//! the state in which start4 pauses a channel without waiting for a frame.
 //!
-//! ## Frame interrupts
-//!
-//! A running channel — `DISPCTRL.ENABLE` and its own `DISPCTRLX.ENABLE` —
-//! raises three flags in `DISPSTAT` every [`FRAME_US`] (write one to clear):
-//! `EOLN` when compositing reaches line `DISPEOLN`, `EOF` after the last active
-//! line, and `VSTART` as the next frame starts. With `DISPEIRQx` and the flag's
-//! own enable in `DISPCTRL` (the HVS5 layout, `SCALER5_DISPCTRL_*` in Linux's
-//! `vc4_regs.h`) set, a flag holds VPU interrupt source [`IRQ_SRC`], and a
-//! read of `DISPSTAT` shows `IRQDISPx` for it.
-//!
-//! start4 turns them all on, and its source-97 handler (`0x3ECEED5C`) drives
-//! the display off them. On this HVS — start4's flag at `gp+0x1564` is set —
-//! it posts a channel's display events on `VSTART` (`0x3ECEEFCE`); the older
-//! path does the display-list work on an `EOLN` that comes without `EOF`
-//! (`0x3ECEF014`). `NOTIFY_DISPLAY_DONE` waits on that work, so without these
-//! interrupts it never came back: the mailbox service slept for good, and
-//! every later property request from Linux timed out (#61).
-//!
-//! With no scanout to place them in, the flags come at fixed points of the
-//! frame: `EOLN` half-way, `EOF` after 480 of the mode's 525 lines, `VSTART` at
-//! its end. A `sleep` wakes for each on its own ([`Hvs::deadline`]), so the
-//! handler sees them apart, as on the board.
-//!
-//! `DISPSTATX` reads a stopped channel as `MODE` disabled with its FIFO
-//! `EMPTY` — the state in which start4 pauses a channel at once, without
-//! waiting for a frame (`0x3ECEF33C`) — and a running one as `MODE` run.
-//!
-//! No pixel valve stands behind the channels, so the frame time is that of a
-//! single mode: 640x480 at 60 Hz, the framebuffer UEFI allocates on this
-//! board. Everything else in the block is plain sticky storage.
+//! No pixel valve stands behind the channels, so the frame time is that of one
+//! mode: 640x480 at 60 Hz, the framebuffer UEFI allocates. The rest is storage.
 
 use std::collections::BTreeMap;
 
@@ -67,9 +43,8 @@ use crate::spec::hvs::{
 use crate::spec::Coverage;
 
 /// `DISPID` answers the measured id — start4 gates its whole display bring-up
-/// on it, and 0 read as "no HVS" (issue #13) — the frame-swap words are
-/// modelled, and so are the frame interrupts; the rest of the block is
-/// storage.
+/// on it, and 0 reads as "no HVS" — the frame-swap words are modelled, and so
+/// are the frame interrupts; the rest of the block is storage.
 pub const COVERAGE: Coverage = Coverage {
     block: "hvs",
     decoded: &[
@@ -77,30 +52,22 @@ pub const COVERAGE: Coverage = Coverage {
     ],
 };
 
-/// The HVS's VPU interrupt source, from `specs/hvs.toml`: the source start4
-/// registers its HVS handler (`0x3ECEED5C`) on.
 pub const IRQ_SRC: u32 = crate::spec::hvs::IRQ_VPU;
 
 /// One frame of 640x480 at 60 Hz (CEA-861 VIC 1: 800 × 525 pixels at
 /// 25.175 MHz), in µs.
 pub const FRAME_US: u64 = 16_683;
 
-/// `DISPSTATX.MODE` of a channel that is scanning out.
 const MODE_RUN: u32 = 2;
 
 const CHANNELS: usize = DISPCTRLX_COUNT as usize;
 
-/// A flag every running channel raises once a frame.
 struct FrameEvent {
-    /// How far into the frame it comes, in µs.
     at: u64,
-    /// Its `DISPSTAT` bit, per channel.
     flag: [u32; CHANNELS],
-    /// Its interrupt enable in `DISPCTRL`, per channel.
     enable: [u32; CHANNELS],
 }
 
-/// In the order they come in a frame.
 const EVENTS: [FrameEvent; 3] = [
     FrameEvent {
         at: FRAME_US / 2,
@@ -150,7 +117,6 @@ const DISPEIRQ: [u32; CHANNELS] = [
     DISPCTRL_DISPEIRQ2_MASK,
 ];
 
-/// Which channel's copy of a per-channel register at `base` offset `off` is.
 fn channel_of(off: u32, base: u32, stride: u32) -> Option<usize> {
     let rel = off.checked_sub(base)?;
     (rel % stride == 0 && rel / stride < CHANNELS as u32).then_some((rel / stride) as usize)
@@ -159,11 +125,9 @@ fn channel_of(off: u32, base: u32, stride: u32) -> Option<usize> {
 #[derive(Default)]
 pub struct Hvs {
     storage: BTreeMap<u32, u32>,
-    /// `DISPSTAT`'s frame flags.
     flags: u32,
     /// When each running channel next raises each of [`EVENTS`], in model µs.
     next: [[Option<u64>; EVENTS.len()]; CHANNELS],
-    /// The model time [`Hvs::advance_to`] last brought the block to.
     now: u64,
 }
 
@@ -176,13 +140,11 @@ impl Hvs {
         self.storage.get(&off).copied().unwrap_or(0)
     }
 
-    /// Is channel `x` scanning out?
     fn running(&self, x: usize) -> bool {
         self.reg(DISPCTRL) & DISPCTRL_ENABLE_MASK != 0
             && self.reg(DISPCTRLX + x as u32 * DISPCTRLX_STRIDE) & DISPCTRLX_ENABLE_MASK != 0
     }
 
-    /// Does event `e` of channel `x` interrupt?
     fn irq_enabled(&self, x: usize, e: usize) -> bool {
         let ctrl = self.reg(DISPCTRL);
         ctrl & DISPCTRL_ENABLE_MASK != 0
@@ -204,9 +166,8 @@ impl Hvs {
         }
     }
 
-    /// Bring the block's clock to `now_us`, raising the flags it reaches. A
-    /// jump across several frames raises each once: they are flags, not
-    /// counts.
+    /// Bring the clock to `now_us`, raising the flags it reaches; a jump across
+    /// several frames raises each once, since they are flags, not counts.
     pub fn advance_to(&mut self, now_us: u64) {
         if now_us <= self.now {
             return;
@@ -224,19 +185,16 @@ impl Hvs {
         }
     }
 
-    /// Is one of channel `x`'s flags holding the interrupt?
     fn irq_from(&self, x: usize) -> bool {
         (0..EVENTS.len()).any(|e| self.flags & EVENTS[e].flag[x] != 0 && self.irq_enabled(x, e))
     }
 
-    /// True while a flag holds source [`IRQ_SRC`]. Level, not edge: it stays
-    /// asserted until the handler writes the flag back.
+    /// True while a flag holds source [`IRQ_SRC`]. Level, not edge.
     pub fn irq_asserted(&self) -> bool {
         (0..CHANNELS).any(|x| self.irq_from(x))
     }
 
-    /// The next flag that will raise the interrupt, in model µs: a VPU
-    /// `sleep` has to wake for it.
+    /// When the next flag raises the interrupt: a VPU `sleep` must wake for it.
     pub fn deadline(&self) -> Option<u64> {
         (0..CHANNELS)
             .flat_map(|x| (0..EVENTS.len()).map(move |e| (x, e)))
@@ -269,7 +227,6 @@ impl MmioDevice for Hvs {
             });
         }
         if (CURRENT..CURRENT + CURRENT_COUNT * CURRENT_STRIDE).contains(&off) {
-            // Scanout instantly caught up to the requested frame.
             let requested = REQUESTED + (off - CURRENT);
             return Ok(self.reg(requested));
         }
@@ -279,11 +236,9 @@ impl MmioDevice for Hvs {
     fn write(&mut self, offset: u32, _width: Width, value: u32) -> BusResult<()> {
         let off = offset & !3;
         if off == DISPID || channel_of(off, DISPSTATX, DISPSTATX_STRIDE).is_some() {
-            // Read-only.
             return Ok(());
         }
         if off == DISPSTAT {
-            // Write one to clear.
             self.flags &= !value;
             return Ok(());
         }
@@ -299,7 +254,6 @@ impl MmioDevice for Hvs {
 mod tests {
     use super::*;
 
-    /// HDMI0's channel, the one UEFI's framebuffer is on.
     const CHAN: usize = 1;
     const EOLN: usize = 0;
     const EOF: usize = 1;
@@ -334,8 +288,8 @@ mod tests {
         hvs.read(DISPSTAT, Width::Word).unwrap()
     }
 
-    /// What start4's handler (`0x3ECEED5C`) writes back: the status it read,
-    /// less the summary bits.
+    /// What start4's handler writes back: the status it read, less the
+    /// summary bits.
     fn ack(hvs: &mut Hvs) {
         let s = stat(hvs);
         let summary = IRQDISP.iter().fold(0, |v, m| v | m);
@@ -388,7 +342,6 @@ mod tests {
         hvs.advance_to(EVENTS[EOF].at);
         assert_eq!(stat(&mut hvs), flag(EOLN) | flag(EOF), "they still come");
         assert!(!hvs.irq_asserted());
-        // Without DISPEIRQx no flag interrupts.
         hvs.write(DISPCTRL, Width::Word, ctrl & !DISPEIRQ[CHAN])
             .unwrap();
         hvs.advance_to(FRAME_US);
@@ -399,7 +352,6 @@ mod tests {
     #[test]
     fn a_stopped_channel_reads_disabled_and_empty() {
         let mut hvs = Hvs::new();
-        // The state in which start4 pauses a channel at once (`0x3ECEF33C`).
         assert_eq!(
             hvs.read(statx(CHAN), Width::Word).unwrap() & 0xD000_0000,
             0x1000_0000
@@ -418,7 +370,7 @@ mod tests {
         hvs.advance_to(EVENTS[EOLN].at);
         assert!(hvs.irq_asserted());
         // The handler acks the flag and stops the channel, as a pause
-        // finishing on a frame does (`0x3ECEEF80`).
+        // finishing on a frame does.
         ack(&mut hvs);
         let c = hvs.read(ctrlx(CHAN), Width::Word).unwrap();
         hvs.write(ctrlx(CHAN), Width::Word, c & !DISPCTRLX_ENABLE_MASK)

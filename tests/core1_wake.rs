@@ -1,9 +1,5 @@
-//! VPU core 1 starts where the firmware writes its `IC1_WAKEUP` register, and
-//! nowhere else (#72).
-//!
-//! start4 wakes core 1 itself, once, through core 1's copy of the core-control
-//! `WAKEUP` register (`0x7E00_2834`), with its own entry point. Nothing else in
-//! the block starts it, core 0's copy included.
+//! VPU core 1 starts where the firmware writes core 1's copy of the core-control
+//! `WAKEUP` register (`0x7E00_2834`), and nowhere else — core 0's copy included.
 
 use pimu::bus::Bus;
 use pimu::emulator::{Emulator, RunEnd, RunLimits};
@@ -12,19 +8,15 @@ use pimu::Machine;
 
 const CODE: u32 = 0x1000;
 const CORE1: u32 = 0x4000;
-/// Core 1's bank is 0x800 above core 0's; `WAKEUP` is at 0x34 in each.
 const IC1_WAKEUP: u32 = CORECTL_BASE + 0x834;
 const IC0_WAKEUP: u32 = CORECTL_BASE + 0x034;
 
-/// `b .`
 const SPIN: u16 = 0x1F00;
 
-/// `st rd, (rs)`
 const fn st(rd: u16, rs: u16) -> u16 {
     0x0900 | (rs << 4) | rd
 }
 
-/// `mov rd, #imm32`, the 48-bit form.
 fn mov32(rd: u16, v: u32) -> [u16; 3] {
     [0xE800 | rd, v as u16, (v >> 16) as u16]
 }
@@ -35,8 +27,8 @@ fn load(m: &mut Machine, at: u32, code: &[u16]) {
     }
 }
 
-/// Core 0 writes `CORE1` (with bit 0 set, which the register drops) to
-/// `wakeup`, then spins. Core 1's code, at `CORE1`, prints `#` and spins.
+/// Core 0 writes `CORE1` to `wakeup` (bit 0 set, which the register drops) and
+/// spins; core 1 prints `#`.
 fn run(wakeup: u32) -> (Emulator, RunEnd) {
     let mut m = Machine::new(1 << 20);
     let core0: Vec<u16> = [mov32(0, CORE1 | 1), mov32(1, wakeup)]

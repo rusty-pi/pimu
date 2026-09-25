@@ -1,12 +1,11 @@
 //! Instruction decoder for the VC4 VPU — the scalar-plus-vector core the
 //! BCM2711's firmware runs on, whose instruction set is the BCM2835's.
 //!
-//! Bit patterns are transcribed from Herman Hermitage's `videocoreiv.arch` and
-//! the `vciv.py` IDA processor module (both in `hermanhermitage/videocoreiv`),
-//! cross-checked against a sweep of real `start4.elf`. Coverage is the scalar
-//! integer ISA plus the vector unit (0xF000+), which is decoded to operands in
-//! full and executed for the forms `insn::VecInsn::executable` accepts (see
-//! `docs/vpu-isa.md`).
+//! Coverage is the scalar integer ISA plus the vector unit (`0xF000`+), which
+//! is decoded to operands in full and executed for the forms
+//! `insn::VecInsn::executable` accepts.
+//!
+//! Encoding: `isa/vpu.toml`.
 
 use super::insn::{
     AddrMode, AluOp, Base, FpOp, Insn, MemWidth, Op, RegOrImm, VecAddr, VecInsn, VecOperandB,
@@ -26,8 +25,8 @@ fn parcel(bytes: &[u8], i: usize) -> u16 {
     u16::from_le_bytes([bytes[i * 2], bytes[i * 2 + 1]])
 }
 
-/// Decode one instruction. `bytes` must hold at least `insn_len_bytes(parcel0)`
-/// bytes; `pc` is the address of this instruction (needed for pc-relative forms).
+/// Decode one instruction at `pc`; `bytes` must hold at least
+/// `insn_len_bytes(parcel0)` of them.
 pub fn decode(bytes: &[u8], pc: u32) -> Insn {
     let p0 = parcel(bytes, 0);
     let len = insn_len_bytes(p0);
@@ -62,11 +61,9 @@ pub fn decode(bytes: &[u8], pc: u32) -> Insn {
 }
 
 /// A load or store from its `{ww, L}` bits. There is no signed store, so the
-/// `ww = 11` store slot is a *load*: of a signed byte. start4's bootloader
-/// stage proves it — mbedtls' `ecp_mod_p256` carry handling loads its
-/// `signed char c` (a byte at `sp+7`) with `1010 1001 111d dddd` and then
-/// branches on the sign; decoded as a store, the fast reduction came out
-/// wrong and the `while (N >= P) N -= P` loop after it never finished.
+/// `ww = 11` store slot is a *load* of a signed byte — mbedtls' `ecp_mod_p256`
+/// in the bootloader stage loads a `signed char` that way and branches on its
+/// sign.
 fn ldst(store: bool, w: MemWidth, rd: u8, addr: AddrMode, cond: Cond) -> Op {
     if store && w == MemWidth::SignedHalf {
         return Op::Load {
@@ -83,13 +80,9 @@ fn ldst(store: bool, w: MemWidth, rd: u8, addr: AddrMode, cond: Cond) -> Op {
     }
 }
 
-/// One `binutils-vc4` instruction field, `cg(raw, len, hi, lo)`.
-///
-/// Its `f-op<hi>-<lo>` names number the bits of a vector instruction by 16-bit
-/// parcel in *memory* order — parcel `lo / 16`, bit `lo % 16` counted from that
-/// parcel's least significant end — while `raw` holds the parcels the other way
-/// up, the first one most significant. Every field of the vector encoding lives
-/// inside one parcel, so this needs no splicing.
+/// One `binutils-vc4` instruction field. Its `f-op<hi>-<lo>` names number bits
+/// by 16-bit parcel in *memory* order while `raw` holds the parcels the other
+/// way up; every vector field lives inside one parcel, so no splicing.
 #[inline]
 fn cg(raw: u128, len: u8, hi: u32, lo: u32) -> u32 {
     debug_assert_eq!(hi / 16, lo / 16, "field {hi}..{lo} crosses a parcel");
@@ -108,25 +101,10 @@ fn vec_mem_width(ww: u32) -> u8 {
     }
 }
 
-/// Decode a 48- or 80-bit vector-unit instruction.
-///
-/// Field positions are `binutils-vc4`'s, read through [`cg`]. Both encodings
-/// name three operand slots; each is a composite assembled from several fields
-/// and then read by [`VecSlot::from_composite`]:
-///
-/// ```text
-///   48-bit  D = op31-29 : op27-22                      (9 bits)
-///           A = op21-19 : op17-16 : op47-44            (9 bits)
-///           B = op41-39 : op37-32                      (9 bits)
-///   80-bit  D = op63-58 : op31-22                     (16 bits)
-///           A = op51-48 : op57-52 : op21-16 : op47-44 (20 bits)
-///           B = op69-64 : op41-32                     (16 bits)
-/// ```
-///
-/// The 48-bit composites carry no direction bit, no addend and no modifiers:
-/// direction is `op28` for all three slots at once, and a `+rN` addend is one
-/// presence bit per slot (`op43` / `op18` / `op38`) against the shared register
-/// number in `op2-0`. The 80-bit composites spell all of it per slot.
+/// Decode a 48- or 80-bit vector-unit instruction. Field positions are in
+/// `isa/vpu.toml`, "Field layout". Both encodings name three operand slots,
+/// each a composite read by [`VecSlot::from_composite`]; the 48-bit composites
+/// carry no direction bit, addend or modifiers — those sit in the opcode.
 fn decode_vector(raw: u128, len: u8) -> Op {
     let wide = len == 10;
     // `f-op15-10`: 60 and 62 are the memory class, 61 and 63 the ALU class.
@@ -162,19 +140,14 @@ fn decode_vector(raw: u128, len: u8) -> Op {
         } else {
             VecOperandB::Slot(VecSlot::from_composite(b_comp, false))
         };
-        // Only a *dash* B slot spells an address; a third vector register makes
-        // this one of the memory-class ops that reads the file three ways.
+        // Only a *dash* B slot spells an address.
         let b_is_dash = matches!(b, VecOperandB::Slot(s) if s.is_dash());
-        // The transfers and the gather/scatter forms read their address out of
-        // the wide composite — `vld`, `vst`, `lookupm`, `lookupml`,
-        // `indexwritem`, `indexwriteml`. Every other memory sub-op leaves those
-        // bits to the B slot, and `binutils-vc4` prints them as a scalar
-        // register and displacement.
+        // Only the transfers and gather/scatter forms read their address out of
+        // the wide composite; every other memory sub-op leaves those bits to
+        // the B slot.
         if mem && b_is_dash && matches!(subop, 0..=2 | 4..=6) {
-            // `<offset>(r<base> += r<step>)`. The offset is a signed 16-bit
-            // displacement; the step register is the *inert* slot's addend
-            // nibble — the A slot's for a load, the D slot's for a store —
-            // with 15 meaning "no step" (`print_ld_st_addr`).
+            // `<offset>(r<base> += r<step>)`: the step register is the *inert*
+            // slot's addend nibble, 15 meaning no step.
             let inert = if subop_is_store(subop) { d } else { a };
             let offset =
                 cg(raw, len, 38, 32) | (cg(raw, len, 65, 64) << 7) | (cg(raw, len, 76, 70) << 9);
@@ -184,10 +157,8 @@ fn decode_vector(raw: u128, len: u8) -> Op {
                 incr: (inert.addend != 15).then_some(inert.addend),
             });
         }
-        // Those bits are the address displacement in a transfer, and the
-        // scalar-result field everywhere else — `vgetacc` included, which is
-        // how `vgetacc -,-,15 SUMS r0` reaches the unit. Measured with
-        // `probes/gacc.s`.
+        // The address displacement in a transfer, the scalar-result field
+        // everywhere else, `vgetacc` included (`vpu-probe/probes/gacc.s`).
         let sru = if mem && subop != 24 {
             VecSru::None
         } else {
@@ -200,10 +171,9 @@ fn decode_vector(raw: u128, len: u8) -> Op {
         let vertical = cg(raw, len, 28, 28);
         let sreg = cg(raw, len, 2, 0) as u8;
         let slot = |comp: u32, addend: bool| {
-            // No addend nibble in a 48-bit composite: `binutils-vc4` fabricates
-            // one reading "none" (`0xf000`) and prints `+rN` from the opcode's
-            // own bits instead. A dash in the B position names its scalar
-            // register in the coordinate field, not in that nibble.
+            // No addend nibble in a 48-bit composite: `+rN` comes from the
+            // opcode, and a dash B names its scalar register in the coordinate
+            // field instead.
             let scalar = (comp & 0x3F) as u8;
             let comp = (comp & !0x40) | (vertical << 6) | 0xF000;
             let mut s = VecSlot::from_composite(comp, false);
@@ -234,8 +204,7 @@ fn decode_vector(raw: u128, len: u8) -> Op {
             )
         } else {
             // Bit 38 is the B slot's `+rN` only where there is a coordinate to
-            // add it to. A dash B has none, and `vgetacc` never does
-            // (`binutils-vc4` #122) — there the same bit is `SETF`.
+            // add it to; otherwise the same bit is `SETF`.
             let bit38 = cg(raw, len, 38, 38) != 0;
             let getacc = mem && subop == 24;
             let b_dash = (b_comp >> 7) & 7 == 7;
@@ -271,8 +240,8 @@ fn decode_vector(raw: u128, len: u8) -> Op {
     }))
 }
 
-/// Which memory sub-ops write memory, and so take their vector operand from the
-/// A slot rather than the D slot (`insn-vecmemops` in `binutils-vc4`).
+/// Which memory sub-ops write memory, and so take their vector operand from A
+/// rather than D.
 #[inline]
 fn subop_is_store(subop: u8) -> bool {
     matches!(subop, 4..=6 | 9)
@@ -328,21 +297,16 @@ fn decode16(p0: u16, pc: u32) -> Op {
     // 0000 001X Ybb nnnnn : ldm/stm    (0x0200 ldm, 0x0280 stm, 0x0300 ldm+pc,
     //                                   0x0380 stm+lr; bb=bank, n=width-1)
     if (0x0200..0x0400).contains(&p) {
-        // Per Hermitage's `videocoreiv.arch`:
-        //   0000 001L Sbb nnnnn
-        // L (bit 8) = include lr/pc; S (bit 7) = store(1)/load(0); bb = bank;
-        // n = (register count - 1). The list is `r{bank*8} ..= r{(bank*8+n)&31}`
-        // (bank 1 is special-cased to start at r6, not r8). `lr`/`pc`, when
-        // present, occupies the top (highest-address) word of the frame.
+        // `0000 001L Sbb nnnnn`: the list is `r{bank*8} ..= r{(bank*8+n)&31}`,
+        // except that bank 1 starts at `r6`, not `r8`; `lr`/`pc` takes the top
+        // word of the frame.
         let with_ret = p & 0x0100 != 0;
         let is_store = p & 0x0080 != 0;
         let bank = (p >> 5) & 3;
         let first = [0u8, 6, 16, 24][bank as usize];
         let m = p & 0x1F;
-        // Per the VC4 Programmers Manual: "If mmmmm is 31 and pc/lr are
-        // stored/loaded, then no register but pc/lr is stored/loaded" — and the
-        // same holds once the `rb..rm` range wraps past r31 (e.g.
-        // `stm r24-r7, lr`). Those forms push/pop `lr`/`pc` alone.
+        // A count of 31 with `lr`/`pc`, or a range wrapping past `r31`, pushes
+        // or pops `lr`/`pc` alone.
         let ret_only = with_ret && (m == 31 || first as u32 + m >= 32);
         let count = if ret_only { 0 } else { (m as u8) + 1 };
         return if is_store {
@@ -418,9 +382,8 @@ fn decode16(p0: u16, pc: u32) -> Op {
             set_flags: op.is_compare(),
         };
     }
-    // 011q qqqu uuuu dddd : rd = rd <q> #u   (u is an unsigned 5-bit literal,
-    // 0..31 — per Hermitage's `vciv.py`, which types it `o_imm`; the small
-    // negative-constant forms use the 32-bit `add rd, #simm` encoding instead)
+    // 011q qqqu uuuu dddd : rd = rd <q> #u   (u is an *unsigned* 5-bit
+    // literal; small negative constants use the 32-bit `add rd, #simm` form)
     if p & 0xE000 == 0x6000 {
         let op = AluOp::from_q((p >> 9) & 0xF);
         let imm = ((p >> 4) & 0x1F) as i32;
@@ -441,7 +404,7 @@ fn decode16(p0: u16, pc: u32) -> Op {
 
 /// Map a 3-bit load/store sub-op (`0000 1sss ...` and `1010 xxxs ss...`) to
 /// `(is_store, width)`: 0 ld, 1 st, 2 ldh, 3 sth, 4 ldb, 5 stb, 6 ldsh, and
-/// 7, the store slot of the signed width, which [`ldst`] turns into ldsb.
+/// 7, the store slot of the signed width, which [`ldst`] turns into `ldsb`.
 fn ldst_suffix(sub: u32) -> (bool, MemWidth) {
     let store = sub & 1 != 0;
     let w = match sub >> 1 {
@@ -647,8 +610,7 @@ fn decode_ldst32(hw0: u32, hw1: u32) -> Op {
             )
         }
         // 1010 001o ww{0/1}d dddd | sssss ooo oooo oooo :
-        //   ld/st{w} rd, (rs + o)   — `o` is a signed 12-bit displacement, its
-        //   top bit is `o` in `1010 001o` and the low 11 bits are in hw1.
+        //   ld/st{w} rd, (rs + sext12(o))
         0xA2 | 0xA3 => {
             let rs = ((hw1 >> 11) & 0x1F) as u8;
             let off = sext((((hw0 >> 8) & 1) << 11) | (hw1 & 0x7FF), 12);
@@ -694,8 +656,7 @@ fn decode_ldst32(hw0: u32, hw1: u32) -> Op {
     }
 }
 
-/// Combine the three parcels of a 48-bit instruction: opcode halfword is
-/// `bytes[0..2]`, trailing 32-bit field is `LE(bytes[4..6]) << 16 | LE(bytes[2..4])`.
+/// Combine the three parcels of a 48-bit instruction into `(opcode, field32)`.
 fn imm32_of_48(bytes: &[u8]) -> u32 {
     ((parcel(bytes, 2) as u32) << 16) | parcel(bytes, 1) as u32
 }

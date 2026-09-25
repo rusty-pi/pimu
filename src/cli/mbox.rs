@@ -1,41 +1,31 @@
-//! `boot --mbox-property`: a property-interface request to the booted
-//! firmware, posted the way a Linux client does.
+//! `boot --mbox-property`: a property-interface request to the booted firmware, posted the way a Linux client does.
 
 use anyhow::{bail, Result};
 
 use pimu::emulator::{Emulator, RunLimits};
 
-/// Where the request buffer is built. Well clear of everything `--dram-map`
-/// reports dirty at `arm_loader` — the kernel ends below `0x0280_0000`, the
-/// device tree sits at `0x2eff_1e00`, and start4's own image is above
-/// `0x3ebe_4000`.
+/// Where the request buffer is built: clear of everything `--dram-map` reports
+/// dirty at `arm_loader` (kernel, device tree, and start4's own image).
 const MBOX_BUFFER: u32 = 0x1000_0000;
 
-/// One tag in a `--mbox-property` request: the tag, an optional override of the
-/// value-buffer size, and optional request words (a `key_id`, most often).
+/// A tag, an optional override of its value-buffer size, and optional request words.
 pub type MboxTag = (u32, Option<u32>, Vec<u32>);
 
 /// What one exchange posts.
 pub enum MboxRequest {
-    /// `--mbox-property`: tags, each staged in a word-aligned slot with an end
-    /// marker and slack, the way a well-behaved client lays a request out.
+    /// `--mbox-property`: tags staged the way a well-behaved client lays a request out.
     Tags(Vec<MboxTag>),
-    /// `--mbox-raw`: an exact byte image of somebody else's request. A client
-    /// whose `sizeof` is wrong lays the buffer out in ways this one never
-    /// would — an unaligned declared total, an end tag at an odd offset, stale
-    /// bytes past the total — and that is what decides whether the firmware
-    /// accepts it. Staging it word by word cannot reproduce any of those.
+    /// `--mbox-raw`: an exact byte image of somebody else's request. A buggy
+    /// client's layout — unaligned total, odd-offset end tag, stale trailing
+    /// bytes — is what decides acceptance, and staging word by word cannot
+    /// reproduce it.
     Raw(Vec<u8>),
 }
 
 /// Post a property-interface request to the still-running firmware, the way a
-/// booted Linux does through `/dev/vcio`, and report what comes back.
-///
-/// This stands in for that Linux client: build the buffer, ring the doorbell,
-/// keep the machine running, and read the reply. The address on the wire is
-/// `0xC000_0000 | phys` because Linux allocates the buffer coherently and
-/// `/soc` carries `dma-ranges = <0xc0000000 0x0 0x0 0x40000000>` — the uncached
-/// alias, which the model already maps to the same DRAM.
+/// booted Linux does through `/dev/vcio`, and report what comes back. The address
+/// on the wire is `0xC000_0000 | phys`: the uncached alias `/soc`'s `dma-ranges`
+/// put the ARM's coherent allocations on.
 pub fn mbox_property_exchange(
     emu: &mut Emulator,
     limits: &RunLimits,
@@ -49,40 +39,25 @@ pub fn mbox_property_exchange(
         MboxRequest::Raw(_) => &[],
     };
 
-    // Each tag names its own value-buffer size, and the firmware walks the
-    // request by those sizes — so one wrong size desynchronises every tag after
-    // it and the whole buffer comes back `0x80000001` (parse error). A fixed
-    // 64-byte slot for everything did exactly that.
-    //
-    // Sizes and request payloads follow raspberrypi/utils `rpifwcrypto.c`,
-    // which is the Linux-side client of the same interface. The service itself
-    // lives in `start4.elf` (`arm_crypto_*`, with its own mbedTLS) — this is
-    // only the caller, standing in for the Linux client.
+    // The firmware walks the request by the sizes the tags name, so one wrong
+    // size desynchronises every tag after it and the whole buffer comes back
+    // `0x80000001`. Sizes and payloads follow raspberrypi/utils `rpifwcrypto.c`.
     let spec = |tag: u32| -> (u32, Vec<u32>) {
         match tag {
-            // `flags, key_id` in; `status, length, key[]` back. The buffer has
-            // to hold the key, so it is sized by the client's maxima:
-            // 512 bytes of public key, 1024 of private key.
+            // `status, length, key[]` back, sized by the client's maxima.
             0x0003_0093 => (8 + 512, vec![0, 0]),
             0x0003_0094 => (8 + 1024, vec![0, 0]),
-            // `flags, key_id` in, nothing back.
             0x0003_0095 => (8, vec![0, 0]),
-            // `key_id, status` / `key_id, usage` in.
             0x0003_8090 | 0x0003_809c => (8, vec![0, 0]),
-            // `key_id` in, one word back.
             0x0003_0090 | 0x0003_009c => (4, vec![0]),
-            // `flags, key_id, length, hash[32]` in; `status, length, sig[]`
-            // back, so the buffer has to be the larger of the two.
+            // The buffer has to be the larger of the request and the signature.
             0x0003_0091 => (128, vec![0, 0, 32]),
-            // `flags, key_id, length, message[]` in; `status, length,
-            // hmac[32]` back. A fixed short message keeps the result stable
-            // across runs, which is what makes it a regression.
+            // A fixed short message keeps the HMAC stable across runs.
             0x0003_0092 => {
                 let mut v = vec![0, 0, 16];
                 v.extend_from_slice(&[0x6c6c6548, 0x77202c6f, 0x646c726f, 0x00000021]);
                 (128, v)
             }
-            // Everything else: one word in, one word back.
             _ => (4, vec![0]),
         }
     };
@@ -100,20 +75,14 @@ pub fn mbox_property_exchange(
         words.push(tag);
         words.push(size);
         words.push(0);
-        // Rounded up: the firmware writes a 6-byte answer into a 6-byte slot,
-        // and a slot of one word would put the end marker under the last two
-        // bytes of it.
+        // Rounded up: a one-word slot would put the end marker under a 6-byte answer.
         let slot = size.div_ceil(4) as usize;
         for i in 0..slot {
             words.push(payload.get(i).copied().unwrap_or(0));
         }
     }
-    // End marker, then slack. The firmware rejects a buffer whose declared
-    // total ends exactly at the marker: the last tag comes back unhandled and
-    // the whole buffer gets `0x80000001`, whichever tag is last. `rpifwcrypto.c`
-    // never hits this because it declares `sizeof(msg)` — its value arrays are
-    // bigger than the `tag_buf_size` it asks for, so its total always carries
-    // spare room past the marker.
+    // End marker, then slack: the firmware rejects a buffer whose declared total
+    // ends exactly at the marker, leaving the last tag unhandled.
     words.push(0);
     words.extend_from_slice(&[0; 4]);
     words[0] = (words.len() as u32) * 4;
@@ -128,8 +97,7 @@ pub fn mbox_property_exchange(
             words.len() * 4
         }
         MboxRequest::Raw(bytes) => {
-            // Byte by byte, and nothing else touched: what lies past the image
-            // is part of the test, so the caller's bytes are the whole buffer.
+            // Nothing else touched: what lies past the image is part of the test.
             for (i, b) in bytes.iter().enumerate() {
                 emu.machine
                     .store(MBOX_BUFFER + i as u32, Width::Byte, *b as u32)
@@ -147,9 +115,7 @@ pub fn mbox_property_exchange(
             tags.len()
         ),
         MboxRequest::Raw(bytes) => {
-            // The image's own header, which is the point: a client that
-            // declares a total its layout does not match is exactly the case
-            // worth replaying.
+            // The image's own header, mismatched layout and all: that is the point.
             let declared =
                 u32::from_le_bytes(std::array::from_fn(|i| bytes.get(i).copied().unwrap_or(0)));
             println!(
@@ -162,18 +128,10 @@ pub fn mbox_property_exchange(
         bail!("the mailbox is full — the firmware has not drained earlier requests");
     }
 
-    // The firmware is parked in the ThreadX idle loop by now, so the two stop
-    // conditions that end a *boot* would end this instantly and wrongly: the
-    // idle-spin detector fires on the idle loop itself, and the silence
-    // watchdog fires because a serviced mailbox request prints nothing.
-    //
-    // Nothing in `RunLimits` can say "stop when the reply lands", so run in
-    // short slices and check between them. The answer takes a few million
-    // instructions once the interrupt gets through; the budget is there for
-    // the case where it does not.
-    // Short slices, because the check between them is also what dates the
-    // reply: the firmware idles through `sleep`, so half a second of wall
-    // clock is ten of modelled time — ten times what a Linux client waits.
+    // The firmware is parked in the ThreadX idle loop, so a boot's stop
+    // conditions (idle-spin detector, silence watchdog) would both fire at once.
+    // `RunLimits` cannot say "stop when the reply lands", so run in short slices:
+    // the check between them is also what dates the reply.
     let slice = RunLimits {
         max_steps: None,
         max_wall: Some(std::time::Duration::from_millis(10)),
@@ -197,9 +155,7 @@ pub fn mbox_property_exchange(
         }
         report = emu.run(&slice);
     }
-    // Modelled time is what a real client's timeout counts (Linux's
-    // `raspberrypi-firmware` gives up after one second); the wall clock only
-    // says how long the interpreter took.
+    // A real client's timeout counts modelled time (Linux gives up after one second).
     println!(
         "  resumed: {} instructions, {} us modelled, over {:.1?}, ended {:?} at {:#010x}",
         report.retired.saturating_sub(retired_before),
@@ -238,9 +194,7 @@ pub fn mbox_property_exchange(
     );
     let total = emu.machine.load(MBOX_BUFFER, Width::Word).unwrap_or(0);
     if code != 0x8000_0000 {
-        // The tag walk below trusts the sizes it staged. When the firmware
-        // disagrees about them that walk is exactly what cannot be trusted, so
-        // print the buffer as the firmware left it and decode by hand.
+        // The tag walk trusts the sizes it staged; on disagreement, dump instead.
         println!("  raw reply buffer ({total} bytes by its own header):");
         let n = (total.min(1024) / 4).max(4);
         for row in 0..n.div_ceil(4) {
@@ -267,18 +221,15 @@ pub fn mbox_property_exchange(
         if tag == 0 {
             break;
         }
-        // Bit 31 of the third word is the firmware's "I handled this" mark. A
-        // tag it does not know is left exactly as it was staged, so the word
-        // reads back 0 — which is how an unknown tag is told apart from a
-        // handler that answered with nothing.
+        // Bit 31 is the "I handled this" mark: an unknown tag reads back 0,
+        // which is how it is told apart from a handler that answered nothing.
         let resp = emu
             .machine
             .load(MBOX_BUFFER + off + 8, Width::Word)
             .unwrap_or(0);
         let len = resp & 0x7FFF_FFFF;
         let mut vals = Vec::new();
-        // Enough for the longest answer worth reading inline: a
-        // 32-byte HMAC plus its status and length words.
+        // Enough for a 32-byte HMAC plus its status and length words.
         for i in 0..len.div_ceil(4).min(16) {
             vals.push(format!(
                 "{:#010x}",
@@ -302,9 +253,7 @@ pub fn mbox_property_exchange(
             .unwrap_or(0);
         off += 12 + ((slot.max(len) + 3) & !3);
     }
-    // A trace armed by `PIMU_TRACE_ON_PC` inside the exchange is collected here,
-    // after the run report that normally prints one has already run — so
-    // print it, or investigating a tag handler silently produces nothing.
+    // The run report that normally prints a trace has already run, so print it here.
     if !emu.cpu.trace_log.is_empty() {
         println!(
             "\n--- instruction trace while servicing the request ({} entries) ---",
@@ -315,7 +264,6 @@ pub fn mbox_property_exchange(
         }
     }
     if !console.is_empty() {
-        // Anything the firmware printed while servicing the request.
         let tail = String::from_utf8_lossy(&console);
         for line in tail.lines().filter(|l| !l.is_empty()) {
             println!("  console: {line}");

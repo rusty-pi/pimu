@@ -1,19 +1,16 @@
-//! A direct-mapped cache of decoded instructions (#43).
+//! A direct-mapped cache of decoded instructions.
 //!
-//! Fetch + decode was a quarter of the firmware boot's host time, nearly all
-//! of it decoding the same few loops again (inflating `kernel8.img` alone is
-//! 38% of the VPU's instructions). An entry is keyed by the full `pc` —
-//! `decode` resolves pc-relative targets into the `Op`, so an alias of the
-//! same physical page is a different entry — and remembers the write
-//! generation of its RAM page ([`crate::mem::Ram::page_gen`]) at the time it
-//! was decoded. Any store into that page since, by either side or by DMA,
-//! makes it stale.
+//! Without it, fetch and decode is a quarter of a firmware boot's host time.
+//! An entry is keyed by the full `pc` — `decode` resolves pc-relative targets
+//! into the `Op`, so an alias of the same physical page is a different entry —
+//! and remembers its RAM page's write generation
+//! ([`crate::mem::Ram::page_gen`]); any store into that page, by either side or
+//! by DMA, makes it stale.
 //!
-//! A hit runs the instruction from the entry itself, by reference: cloning
-//! the `Op` out instead cost 8.5% of the firmware boot. So that `Vpu::step`
-//! can hold that reference while it mutates the core, the entries are taken
-//! out of the cache ([`DecodeCache::take_entries`]) while the instruction
-//! runs — a pointer swap — and put back after.
+//! A hit runs the instruction from the entry by reference, cloning the `Op` out
+//! costing 8.5% of a boot. So `Vpu::step` can hold that reference while it
+//! mutates the core, the entries are swapped out of the cache
+//! ([`DecodeCache::take_entries`]) while the instruction runs.
 
 use super::insn::{Insn, Op};
 

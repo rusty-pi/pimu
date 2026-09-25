@@ -1,4 +1,4 @@
-//! Schema of the peripheral register specs in `specs/*.toml` (#39), and the two
+//! Schema of the peripheral register specs in `specs/*.toml`, and the two
 //! things generated from them: the Rust constants in [`crate::spec`] and the
 //! Markdown under `docs/periph/`.
 //!
@@ -11,15 +11,12 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-/// One `specs/<block>.toml`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Spec {
     pub block: Block,
     #[serde(default, rename = "register")]
     pub registers: Vec<Register>,
-    /// Where the spec was read from, relative to the crate root. Not part of
-    /// the file.
     #[serde(skip)]
     pub file: String,
 }
@@ -27,48 +24,34 @@ pub struct Spec {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Block {
-    /// Name of the generated module; also the file stem.
     pub name: String,
-    /// What `base`, `size` and the register offsets are addresses on.
     #[serde(default)]
     pub bus: Bus,
-    /// Where the block sits on its bus: see [`Bus`].
     pub base: u32,
-    /// Size of the decoded window, in bytes — or in register numbers on an
-    /// indexed bus.
     pub size: u32,
     pub summary: String,
     #[serde(default)]
     pub notes: Option<String>,
-    /// Number of identical register banks in the window (one per VPU core,
-    /// say). Register offsets are relative to bank 0.
+    /// Identical register banks in the window; offsets are relative to bank 0.
     #[serde(default = "one")]
     pub instances: u32,
-    /// Distance between banks; required when `instances > 1`.
     #[serde(default)]
     pub instance_stride: u32,
-    /// What carries this block: the master of its bus, or the window it is
-    /// carved out of. Required on a bus that is not memory-mapped.
+    /// Required on a bus that is not memory-mapped.
     #[serde(default)]
     pub parent: Option<Parent>,
-    /// The interrupt lines the block drives.
     #[serde(default)]
     pub irq: Option<Irq>,
     #[serde(default, rename = "source")]
     pub sources: Vec<Source>,
-    /// Further instances of the same block at other bases.
     #[serde(default, rename = "copy")]
     pub copies: Vec<BlockCopy>,
 }
 
-/// What a block hangs off: `name` is another spec's block name, optionally with
-/// the copy that carries it — `"bsc"` or `"bsc.PMIC"`.
-///
-/// Two relations share this key, because they are the same statement about who
-/// decodes an address: the master of an indexed or PCI bus (the `bsc` copy the
-/// PMICs answer on, the PCI function the xHCI registers live behind), and the
-/// window a block is carved out of and decoded ahead of (`avs` inside
-/// `clkmon`).
+/// What a block hangs off: another spec's block name, optionally with the copy
+/// that carries it (`"bsc"` or `"bsc.PMIC"`). One key for two relations,
+/// because both say who decodes an address: the master of an indexed or PCI
+/// bus, and the window a block is carved out of and decoded ahead of.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Parent {
@@ -80,7 +63,6 @@ pub struct Parent {
 }
 
 impl Parent {
-    /// `(block, copy)`.
     pub fn split(&self) -> (&str, Option<&str>) {
         match self.name.split_once('.') {
             Some((block, copy)) => (block, Some(copy)),
@@ -89,18 +71,14 @@ impl Parent {
     }
 }
 
-/// The interrupt lines a block drives: a VPU interrupt source, a GIC-400 SPI,
-/// or both. One line stays unnamed (`vpu = 97`); several are named
-/// (`gic_spi = { INTA = 143, MSI = 148 }`), and the name goes in the generated
-/// constant.
+/// The interrupt lines a block drives: a VPU source, a GIC-400 SPI, or both.
+/// A lone line stays unnamed; named ones put the name in the constant.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Irq {
-    /// Source number in a VPU core's interrupt controller (`corectl`).
     #[serde(default)]
     pub vpu: Option<Lines>,
-    /// Shared peripheral interrupt of the GIC-400, as the device tree writes
-    /// it. The interrupt id Linux reports is 32 higher.
+    /// GIC-400 SPI as the device tree writes it; Linux's id is 32 higher.
     #[serde(default)]
     pub gic_spi: Option<Lines>,
     #[serde(default)]
@@ -109,7 +87,6 @@ pub struct Irq {
     pub sources: Vec<Source>,
 }
 
-/// One interrupt line, or several named ones.
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum Lines {
@@ -118,7 +95,6 @@ pub enum Lines {
 }
 
 impl Lines {
-    /// Every line as `(name, number)`; the name is empty for a lone line.
     pub fn each(&self) -> Vec<(&str, u32)> {
         match self {
             Lines::One(n) => vec![("", *n)],
@@ -127,22 +103,19 @@ impl Lines {
     }
 }
 
-/// The address space a block lives in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Bus {
     /// VPU bus address (`0x7E…`, or the `0x7C…`/`0x7D…` blocks below it).
     #[default]
     Vpu,
-    /// ARM physical address in low-peripheral mode, for blocks the VPU has
-    /// no view of (`0xFF8…`).
+    /// ARM physical address, for blocks the VPU has no view of.
     Arm,
     /// Offset into one PCI function's configuration space or BAR; `base` is 0.
     Pci,
     /// I²C slave: `base` is the 7-bit address, offsets are register numbers.
     I2c,
-    /// MDIO (clause 22) PHY: `base` is the PHY address, offsets are register
-    /// numbers.
+    /// MDIO clause-22 PHY: `base` is the PHY address, offsets register numbers.
     Mdio,
 }
 
@@ -157,19 +130,17 @@ impl Bus {
         }
     }
 
-    /// Offsets on this bus are register numbers, one per register whatever
-    /// its width, rather than byte addresses.
+    /// Offsets are register numbers rather than byte addresses.
     pub fn indexed(self) -> bool {
         matches!(self, Bus::I2c | Bus::Mdio)
     }
 
-    /// The SoC decodes this bus itself. Everything else is reached through a
-    /// master on it, which is what [`Block::parent`] names.
+    /// The SoC decodes this bus itself; everything else goes through a master,
+    /// which is what [`Block::parent`] names.
     pub fn memory_mapped(self) -> bool {
         matches!(self, Bus::Vpu | Bus::Arm)
     }
 
-    /// What `base` means, for the generated Markdown.
     fn base_meaning(self) -> &'static str {
         match self {
             Bus::Vpu => "VPU bus address",
@@ -180,7 +151,7 @@ impl Bus {
         }
     }
 
-    /// On an indexed bus: one past the highest device address, and the most
+    /// On an indexed bus: past the highest device address, and the most
     /// register numbers one device can have.
     fn indexed_limits(self) -> Option<(u32, u32)> {
         match self {
@@ -191,11 +162,9 @@ impl Bus {
     }
 }
 
-/// Another instance of the whole block — same registers, different base.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BlockCopy {
-    /// Generates `<NAME>_BASE`.
     pub name: String,
     pub base: u32,
     #[serde(default)]
@@ -209,13 +178,10 @@ pub struct BlockCopy {
 pub struct Register {
     pub name: String,
     pub offset: u32,
-    /// Array length; 1 for a plain register.
     #[serde(default = "one")]
     pub count: u32,
-    /// Distance between array elements; only allowed with `count > 1`.
     #[serde(default)]
     pub stride: u32,
-    /// Access width in bits.
     #[serde(default = "thirty_two")]
     pub width: u32,
     pub access: Access,
@@ -233,9 +199,7 @@ pub struct Register {
 #[serde(deny_unknown_fields)]
 pub struct Field {
     pub name: String,
-    /// `"hi:lo"`, or `"n"` for a single bit.
     pub bits: String,
-    /// Defaults to the register's access.
     #[serde(default)]
     pub access: Option<Access>,
     #[serde(default)]
@@ -250,9 +214,7 @@ pub enum Access {
     R,
     W,
     Rw,
-    /// Write 1 to clear.
     W1c,
-    /// Read to clear.
     Rc,
 }
 
@@ -268,9 +230,8 @@ impl Access {
     }
 }
 
-/// Where a fact came from. Several sources for one fact is the point: a
-/// register decoded from the firmware *and* measured on the reference board is
-/// worth more than either alone.
+/// Where a fact came from. Several sources for one fact is the point: decoded
+/// from the firmware *and* measured on a board beats either alone.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Source {
@@ -287,23 +248,17 @@ pub struct Source {
 pub enum SourceKind {
     /// BCM2711 / BCM2835 ARM Peripherals, or a third-party part's datasheet.
     Datasheet,
-    /// A published industry or architecture specification the block
-    /// implements (ARM GICv2, PCI / PCIe, xHCI, SDHCI, IEEE 802.3 clause 22),
-    /// with the section.
+    /// A published industry or architecture specification, with the section.
     Standard,
-    /// Upstream driver or DT binding.
     Linux,
     /// `firmware/source/*.c` or disassembly, with the address.
     Decompile,
     /// Read on the reference board, with how it was read.
     Measured,
-    /// A third-party reverse-engineering document — hermanhermitage's
-    /// VideoCore IV Programmers Manual — naming what a measurement then
-    /// confirmed. Never on its own: it says where to look, not what is true.
+    /// A third-party reverse-engineering document, naming what a measurement
+    /// then confirmed. Never on its own: it says where to look, not what is so.
     Manual,
-    /// Observed in a `boot` run.
     Trace,
-    /// A guess, with the reasoning.
     Inferred,
 }
 
@@ -349,23 +304,19 @@ fn thirty_two() -> u32 {
 }
 
 impl Spec {
-    /// The register starting at `offset` (relative to bank 0), if any.
     pub fn register(&self, offset: u32) -> Option<&Register> {
         self.registers.iter().find(|r| r.offset == offset)
     }
 
-    /// Offset of every bank within the block window.
     pub fn bank_offsets(&self) -> impl Iterator<Item = u32> + '_ {
         (0..self.block.instances).map(|i| i * self.block.instance_stride)
     }
 
-    /// The block's base, then every copy's.
     pub fn bases(&self) -> impl Iterator<Item = u32> + '_ {
         std::iter::once(self.block.base).chain(self.block.copies.iter().map(|c| c.base))
     }
 
-    /// Address units one element of `r` takes up: its width in bytes on a
-    /// memory bus, one register number on an indexed bus.
+    /// Address units one element takes: bytes, or one register number.
     pub fn span(&self, r: &Register) -> u32 {
         if self.block.bus.indexed() {
             1
@@ -374,7 +325,6 @@ impl Spec {
         }
     }
 
-    /// The window one bank's registers have to fit in.
     fn bank_size(&self) -> u32 {
         if self.block.instances > 1 {
             self.block.instance_stride
@@ -389,14 +339,12 @@ impl Register {
         self.width / 8
     }
 
-    /// Offset of every element, relative to bank 0.
     pub fn element_offsets(&self) -> impl Iterator<Item = u32> + '_ {
         (0..self.count).map(|i| self.offset + i * self.stride)
     }
 }
 
 impl Field {
-    /// `(hi, lo)`.
     pub fn range(&self) -> Result<(u32, u32), String> {
         let bit = |s: &str| {
             s.trim()
@@ -410,12 +358,10 @@ impl Field {
     }
 }
 
-/// Mask of bits `hi..=lo`, in place. `hi` must be below 32.
 fn mask(hi: u32, lo: u32) -> u32 {
     (((1u64 << (hi - lo + 1)) - 1) << lo) as u32
 }
 
-/// Parse and validate one spec. `file` is only used in messages.
 pub fn parse(file: &str, text: &str) -> Result<Spec, String> {
     let mut spec: Spec = toml::from_str(text).map_err(|e| format!("{file}: {e}"))?;
     spec.file = file.to_string();
@@ -473,9 +419,8 @@ pub fn load_dir(root: &Path) -> Result<Vec<Spec>, String> {
     }
 }
 
-/// Everything wrong across the whole set: the `parent` links, which can only
-/// be resolved once every spec is loaded. One message per problem, each
-/// prefixed with the file it is in.
+/// Everything wrong across the whole set: the `parent` links, resolvable only
+/// once every spec is loaded. One message per problem.
 pub fn validate_all(specs: &[Spec]) -> Vec<String> {
     let mut errs = Vec::new();
     let by_name: BTreeMap<&str, &Spec> = specs.iter().map(|s| (s.block.name.as_str(), s)).collect();
@@ -551,7 +496,6 @@ fn is_const_name(s: &str) -> bool {
             .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
 }
 
-/// Everything wrong with `spec`, one message per problem.
 pub fn validate(spec: &Spec) -> Vec<String> {
     let mut errs = Vec::new();
     let b = &spec.block;
@@ -659,10 +603,9 @@ pub fn validate(spec: &Spec) -> Vec<String> {
             errs.push("irq has no [[block.irq.source]]".into());
         }
         check_sources(&mut errs, "irq", &irq.sources);
-        // A VPU core vectors its 64 sources as interrupt numbers 64..=127
-        // (`src/periph/corectl.rs`), which is the number every spec and every
-        // firmware log calls the source. The GIC-400 here has 256 ids, of
-        // which 0..=31 are SGIs and PPIs rather than peripheral lines.
+        // A VPU core vectors its 64 sources as interrupt numbers 64..=127,
+        // which is what every spec and firmware log calls them; the GIC-400's
+        // 0..=31 are SGIs and PPIs rather than peripheral lines.
         for (what, lines, range) in [
             ("vpu", irq.vpu.as_ref(), 64..128),
             ("gic_spi", irq.gic_spi.as_ref(), 0..224),
@@ -824,14 +767,12 @@ fn check_sources(errs: &mut Vec<String>, what: &str, sources: &[Source]) {
     }
 }
 
-/// One generated `pub const`.
 pub struct Const {
     pub name: String,
     pub value: u32,
     pub doc: String,
 }
 
-/// The constants generated for `spec`, in file order.
 pub fn constants(spec: &Spec) -> Vec<Const> {
     let b = &spec.block;
     let mut out = Vec::new();
@@ -941,7 +882,6 @@ pub fn constants(spec: &Spec) -> Vec<Const> {
     out
 }
 
-/// The generated Rust module for `spec`.
 pub fn rust_module(spec: &Spec) -> String {
     let mut s = String::new();
     writeln!(s, "// generated from {} – do not edit", spec.file).unwrap();
@@ -949,8 +889,6 @@ pub fn rust_module(spec: &Spec) -> String {
     writeln!(s, "pub mod {} {{", spec.block.name).unwrap();
     for c in constants(spec) {
         writeln!(s, "    #[doc = {:?}]", c.doc).unwrap();
-        // Counts and interrupt numbers read better in decimal; addresses,
-        // offsets and masks in hex.
         if c.name == "INSTANCES" || c.name.ends_with("_COUNT") || c.name.starts_with("IRQ_") {
             writeln!(s, "    pub const {}: u32 = {};", c.name, c.value).unwrap();
         } else {
@@ -961,7 +899,6 @@ pub fn rust_module(spec: &Spec) -> String {
     s
 }
 
-/// Markdown table cell: one line, no bare pipes.
 fn cell(s: &str) -> String {
     s.split_whitespace()
         .collect::<Vec<_>>()
@@ -1028,7 +965,6 @@ fn irq_summary(irq: &Irq) -> String {
     parts.join(" · ")
 }
 
-/// `docs/periph/<block>.md` for `spec`.
 pub fn markdown(spec: &Spec) -> String {
     let b = &spec.block;
     let mut s = String::new();
@@ -1149,7 +1085,6 @@ pub fn markdown(spec: &Spec) -> String {
     s
 }
 
-/// `docs/periph/README.md`: one line per block.
 pub fn index_markdown(specs: &[Spec]) -> String {
     let mut s = String::new();
     s.push_str("<!-- generated from specs/*.toml by `cargo run -- spec-docs --update` – do not edit -->\n\n");
@@ -1179,9 +1114,7 @@ pub fn index_markdown(specs: &[Spec]) -> String {
     s
 }
 
-/// The `parent` links as a nested list: only the blocks that carry something,
-/// so the section says what is attached to what rather than repeating the
-/// table above.
+/// The `parent` links as a nested list: only the blocks that carry something.
 fn write_tree(s: &mut String, specs: &[Spec]) {
     let children = |name: &str| -> Vec<&Spec> {
         specs
@@ -1227,7 +1160,6 @@ fn write_tree(s: &mut String, specs: &[Spec]) {
     }
 }
 
-/// Every interrupt line the specs name, lowest number first.
 fn write_irq_table(s: &mut String, specs: &[Spec]) {
     let mut rows: Vec<((u32, u32), String)> = Vec::new();
     for spec in specs {

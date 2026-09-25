@@ -1,51 +1,30 @@
 //! The Cortex-A72's generic timer — the system counter and the core's four
-//! timers — driven by *modelled* time, for the ARM core (#40).
+//! timers — driven by *modelled* time.
 //!
 //! It is not a memory-mapped device: all of it is system registers
 //! (`CNTPCT_EL0`, `CNTP_CTL_EL0`, …), which the core answers from here on
 //! `MRS`/`MSR` ([`Reg::decode`]). It lives with the peripherals because it is
 //! pure state that drives GIC lines, the same whichever core runs it.
 //!
-//! ## Why modelled time
+//! **Why modelled time:** a counter following the host clock makes every guest
+//! timestamp depend on how fast the host ran, and two runs of the same boot then
+//! agree only up to the first timestamp Linux prints. Deriving it from ARM
+//! cycles makes consoles byte-identical across runs, which is what the
+//! regression tests compare.
 //!
-//! A counter that follows the host clock makes every timestamp depend on how
-//! fast the host happened to run. That is what an in-process Unicorn core did
-//! on the `arm-unicorn` branch (PR #36): its QEMU derives the counter from
-//! `qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL)` (`target/arm/helper.c`,
-//! `gt_get_countervalue`), which in Unicorn is the host's clock, and two runs
-//! agreed byte for byte up to `arch_timer: cp15 timer running at 54.00MHz
-//! (phys)` and differed in every timestamp after it. With this model instead,
-//! five runs printed byte-identical consoles, timestamps included.
+//! So the counter is a function of ARM cycles and nothing else, running at the
+//! rate [`crate::periph::ArmLocal::counter_hz`] reports — 54 MHz once the
+//! armstub has programmed the prescaler, matching the `arch_timer: cp15
+//! timer(s) running at 54.00MHz (phys)` a Raspberry Pi 4B d03115 prints — and
+//! standing still before that.
 //!
-//! ## Time
+//! The timers follow ARM ARM D11.2. The PPIs come from the dtb's `timer` node:
+//! secure physical INTID 29, non-secure physical 30, virtual 27, hypervisor 26.
+//! Linux binds the non-secure physical one; the others are modelled because they
+//! cost nothing extra.
 //!
-//! The counter is a function of ARM cycles, and nothing else: one instruction
-//! is one cycle at a nominal [`ARM_HZ`], and a `wfi` adds the cycles it slept
-//! (the integration counts both). The counter runs at the rate
-//! [`crate::periph::ArmLocal::counter_hz`] reports — 54 MHz once the armstub has
-//! programmed the ARM-local prescaler, which is what the reference board's
-//! `dmesg` shows (`arch_timer: cp15 timer(s) running at 54.00MHz (phys)`) and
-//! what the stub writes to `CNTFRQ_EL0`. Before that the counter stands still.
-//!
-//! ## Timers (ARM ARM D11.2, "The AArch64 view of the Generic Timer")
-//!
-//! Each timer has `CVAL` (64-bit compare), `TVAL` (a signed 32-bit view of
-//! `CVAL - count`), and `CTL` — `ENABLE` bit 0, `IMASK` bit 1, `ISTATUS` bit 2
-//! (read-only, "the condition is met": `count - offset >= CVAL`, unsigned).
-//! The output is a level: `ENABLE && !IMASK && ISTATUS`. The virtual timer
-//! compares against `CNTVCT = CNTPCT - CNTVOFF_EL2`, the others against
-//! `CNTPCT`.
-//!
-//! Which interrupt each one drives comes from the dtb's `timer` node
-//! (`interrupts = <1 13 0xf08  1 14 0xf08  1 11 0xf08  1 10 0xf08>`, see
-//! [`crate::periph::gic`]): secure physical INTID 29, non-secure physical 30,
-//! virtual 27, hypervisor 26. Linux enters at EL2 without VHE and binds the
-//! non-secure physical one (`GICv2 30 Level arch_timer` on the reference
-//! board); the others are modelled because they cost nothing extra.
-//!
-//! Not modelled: the `CNTKCTL_EL1` / `CNTHCTL_EL2` access traps (every EL may
-//! read the counter), and the event stream. `CNTFRQ_EL0` is plain storage the
-//! core keeps with its other system registers.
+//! Not modelled: the `CNTKCTL_EL1` / `CNTHCTL_EL2` access traps (so every EL may
+//! read the counter), and the event stream.
 
 use crate::periph::gic;
 
@@ -58,16 +37,11 @@ const CTL_ENABLE: u64 = 1 << 0;
 const CTL_IMASK: u64 = 1 << 1;
 const CTL_ISTATUS: u64 = 1 << 2;
 
-/// One of the core's timers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Which {
-    /// EL1 physical, `CNTP_*_EL0`.
     Phys,
-    /// Virtual, `CNTV_*_EL0`.
     Virt,
-    /// EL2 physical, `CNTHP_*_EL2`.
     Hyp,
-    /// Secure EL1 physical, `CNTPS_*_EL1`.
     SecPhys,
 }
 
@@ -85,14 +59,10 @@ impl Which {
     }
 }
 
-/// A generic-timer system register.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reg {
-    /// `CNTPCT_EL0`.
     Pct,
-    /// `CNTVCT_EL0`.
     Vct,
-    /// `CNTVOFF_EL2`.
     Voff,
     Tval(Which),
     Ctl(Which),
@@ -100,10 +70,6 @@ pub enum Reg {
 }
 
 impl Reg {
-    /// The register an `MRS`/`MSR` encoding names, if it is one modelled
-    /// here (ARM ARM C5.3: all are `op0 = 3, CRn = 14`). `CNTFRQ_EL0`,
-    /// `CNTKCTL_EL1` and `CNTHCTL_EL2` are deliberately not: they are plain
-    /// storage the core keeps with its other system registers.
     pub fn decode(op0: u32, op1: u32, crn: u32, crm: u32, op2: u32) -> Option<Reg> {
         if op0 != 3 || crn != 14 {
             return None;
@@ -133,10 +99,8 @@ struct Timer {
     cval: u64,
 }
 
-/// The system counter and one core's timers.
 #[derive(Debug, Clone, Default)]
 pub struct GenericTimer {
-    /// Counter rate; 0 = not running.
     hz: u64,
     /// The counter read `base_count` at cycle `base_cycles`; it has advanced
     /// linearly at `hz` since. Rebased whenever the rate changes, so the
@@ -156,7 +120,6 @@ impl GenericTimer {
         self.hz
     }
 
-    /// Run the counter at `hz` from cycle `cycles` on (0 stops it).
     pub fn set_hz(&mut self, cycles: u64, hz: u64) {
         if hz != self.hz {
             self.base_count = self.count(cycles);
@@ -184,13 +147,11 @@ impl GenericTimer {
         self.timers[w as usize]
     }
 
-    /// `CTL.ISTATUS`: enabled and the compare reached.
     fn met(&self, w: Which, cycles: u64) -> bool {
         let t = self.timer(w);
         t.ctl & CTL_ENABLE != 0 && self.count(cycles).wrapping_sub(self.offset(w)) >= t.cval
     }
 
-    /// The level on the timer's interrupt output.
     pub fn line(&self, w: Which, cycles: u64) -> bool {
         self.met(w, cycles) && self.timer(w).ctl & CTL_IMASK == 0
     }
@@ -203,7 +164,6 @@ impl GenericTimer {
             Reg::Voff => self.voff,
             Reg::Ctl(w) => self.timer(w).ctl | if self.met(w, cycles) { CTL_ISTATUS } else { 0 },
             Reg::Cval(w) => self.timer(w).cval,
-            // TimerValue is bits [31:0]; [63:32] are RES0.
             Reg::Tval(w) => u64::from(
                 self.timer(w)
                     .cval
@@ -221,7 +181,6 @@ impl GenericTimer {
             Reg::Voff => self.voff = value,
             Reg::Ctl(w) => self.timers[w as usize].ctl = value & (CTL_ENABLE | CTL_IMASK),
             Reg::Cval(w) => self.timers[w as usize].cval = value,
-            // CVAL = count + SignExtend(TVAL[31:0]).
             Reg::Tval(w) => {
                 let base = now.wrapping_sub(self.offset(w));
                 self.timers[w as usize].cval = base.wrapping_add(value as u32 as i32 as i64 as u64);
@@ -243,9 +202,6 @@ impl GenericTimer {
                 t.ctl & (CTL_ENABLE | CTL_IMASK) == CTL_ENABLE && !self.met(w, cycles)
             })
             .filter_map(|&w| {
-                // The counter value that meets the compare, and the first
-                // cycle at which `count` reaches it:
-                // base_count + floor(dc * hz / ARM_HZ) >= target.
                 let target = self.timer(w).cval.checked_add(self.offset(w))?;
                 let ticks = u128::from(target.checked_sub(self.base_count)?);
                 let dc = (ticks * u128::from(ARM_HZ)).div_ceil(u128::from(self.hz));
@@ -295,7 +251,6 @@ mod tests {
         assert_eq!(Reg::decode(3, 3, 14, 3, 0), Some(Reg::Tval(Which::Virt)));
         assert_eq!(Reg::decode(3, 4, 14, 2, 2), Some(Reg::Cval(Which::Hyp)));
         assert_eq!(Reg::decode(3, 4, 14, 0, 3), Some(Reg::Voff));
-        // CNTFRQ_EL0, CNTKCTL_EL1, CNTHCTL_EL2: plain storage, not here.
         assert_eq!(Reg::decode(3, 3, 14, 0, 0), None);
         assert_eq!(Reg::decode(3, 0, 14, 1, 0), None);
         assert_eq!(Reg::decode(3, 4, 14, 1, 0), None);
@@ -316,7 +271,6 @@ mod tests {
         assert!(t.count(due) >= cval && t.count(due - 1) < cval);
         assert!(t.line(Which::Phys, due));
         assert_eq!(t.read(Reg::Ctl(Which::Phys), due), CTL_ENABLE | CTL_ISTATUS);
-        // Past the compare, TVAL reads negative.
         let later = due + 15_000;
         let over = (t.count(later) - cval) as i32;
         assert!(over > 0);
@@ -353,7 +307,6 @@ mod tests {
         t.write(Reg::Ctl(Which::Phys), 0, CTL_ENABLE);
         t.write(Reg::Cval(Which::Hyp), 0, 540);
         t.write(Reg::Ctl(Which::Hyp), 0, CTL_ENABLE);
-        // Masked or disabled timers never wake anything.
         t.write(Reg::Cval(Which::Virt), 0, 54);
         t.write(Reg::Ctl(Which::Virt), 0, CTL_ENABLE | CTL_IMASK);
         assert_eq!(t.count(t.next_event(0).unwrap()), 540);
