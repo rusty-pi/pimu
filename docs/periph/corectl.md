@@ -39,7 +39,7 @@ Core-wide delivery gate, four bits wide. Zero delivers; a value at or above a so
 
 Sources:
 
-- measured (high): Raspberry Pi 4B d03115 (`rusty-pi-firmware` start4 `2431cea8`, Linux idle), `/dev/mem` at `0xFE002000`: reads `0x0`, takes `0xf`, reads it back. With `0xf` written, a source forced through `IRQ_PENDING_BITS_SET` and enabled at priority 1 in `IRQ_PRIO` stayed undelivered for as long as the gate was up — the firmware's own handler for it did not run — and was delivered the moment the gate went back to `0x0`. Priority 7 was held the same way.
+- measured (high): Raspberry Pi 4B d03115 (`pi4-firmware` start4 `2431cea8`, Linux idle), `/dev/mem` at `0xFE002000`: reads `0x0`, takes `0xf`, reads it back. With `0xf` written, a source forced through `IRQ_PENDING_BITS_SET` and enabled at priority 1 in `IRQ_PRIO` stayed undelivered for as long as the gate was up — the firmware's own handler for it did not run — and was delivered the moment the gate went back to `0x0`. Priority 7 was held the same way.
 - measured (high): Raspberry Pi 4B d03115, `/dev/mem`: core 1's copy at `0xFE002800` takes `0xf` and reads it back while `0xFE002000` stays `0x0`, so the gate is per core.
 - datasheet (medium): Broadcom `bcm2708_chip/intctrl0.h`: `IC0_C`, RW, mask `0x0000000f` — _the header gives no fields, so whether the four bits are a priority threshold or a plain block is ours, from the two priorities measured_
 
@@ -56,7 +56,7 @@ Which interrupt is being taken: its number and the priority it was enabled at. A
 
 Sources:
 
-- measured (high): Raspberry Pi 4B d03115, read from inside a handler: `rusty-pi-firmware` built with four instructions at `vpu_stray_irq` entry that stash `0x7E002004` in a static, then a source forced through `IRQ_PENDING_BITS_SET` from the ARM. Source 71 at priority 1 gave `0x01470147`, at priority 7 `0x07470747`, source 70 at priority 1 `0x01460146`, source 96 at priority 1 `0x01600160`. Priorities 2, 4 and 6 gave `0x0247`, `0x0447` and `0x0647`, so bit 8 is the priority's low bit and not a flag.
+- measured (high): Raspberry Pi 4B d03115, read from inside a handler: `pi4-firmware` built with four instructions at `vpu_stray_irq` entry that stash `0x7E002004` in a static, then a source forced through `IRQ_PENDING_BITS_SET` from the ARM. Source 71 at priority 1 gave `0x01470147`, at priority 7 `0x07470747`, source 70 at priority 1 `0x01460146`, source 96 at priority 1 `0x01600160`. Priorities 2, 4 and 6 gave `0x0247`, `0x0447` and `0x0647`, so bit 8 is the priority's low bit and not a flag.
 - measured (high): Raspberry Pi 4B d03115, same build: with source 70 at priority 2 and source 71 at priority 5 enabled and both forced, the register read `0x0547` -- source 71. With the priorities swapped it read `0x0546` -- source 70. So the higher priority number wins, which is the same sense as `IRQ_GATE`, where a gate of `0xf` holds every priority.
 - decompile (medium): dispatcher `0x3EC3E9BC`: `r0 = [blk+4]`, `btest r0, 8`, or 64, mask to 7 bits, index the handler table at `gp+58004`
 - datasheet (medium): Broadcom `bcm2708_chip/intctrl0.h`: `IC0_S`, RO, mask `0x073f073f` -- the two half-words, and a 6-bit source field where the BCM2711 reads 7
@@ -77,7 +77,7 @@ The raw source lines, one bit per source, word 0 for sources 64..95 and word 1 f
 
 Sources:
 
-- measured (high): Raspberry Pi 4B d03115 (`rusty-pi-firmware` start4 `2431cea8`, Linux idle), `/dev/mem`: `0xFE002008` reads `0xa` steadily over 8 samples 3 ms apart — sources 65 and 67, two system-timer compares — while `IRQ_PRIO` enables neither and `IRQ_PENDING` reads 0. `0xFE00200C` reads 0. Both banks read the same value, so the lines are the SoC's and only the enables are per core. Setting `IRQ_PENDING_BITS` bit 7 left it at `0xa`.
+- measured (high): Raspberry Pi 4B d03115 (`pi4-firmware` start4 `2431cea8`, Linux idle), `/dev/mem`: `0xFE002008` reads `0xa` steadily over 8 samples 3 ms apart — sources 65 and 67, two system-timer compares — while `IRQ_PRIO` enables neither and `IRQ_PENDING` reads 0. `0xFE00200C` reads 0. Both banks read the same value, so the lines are the SoC's and only the enables are per core. Setting `IRQ_PENDING_BITS` bit 7 left it at `0xa`.
 - datasheet (medium): Broadcom `bcm2708_chip/intctrl0.h`: `IC0_SRC0` and `IC0_SRC1`, both RO
 
 ## `IRQ_PRIO`
@@ -88,7 +88,7 @@ One 4-bit enable/priority field per interrupt source, eight per word: source `sr
 
 Sources:
 
-- measured (high): Raspberry Pi 4B d03115 (`rusty-pi-firmware` start4 `2431cea8`, Linux idle), `/dev/mem`: word 0 at `0xFE002010` reads `0x00000101` and word 3 at `0xFE00201C` reads `0x01000000` — what that firmware programs for the system timer's first compare (source 64, word 0 field 0) and the ARM's mailbox (source 94, word 3 field 6); words 1, 2 and 4 to 7 read 0. Core 1's eight words from `0xFE002810` all read 0, so the second bank is a bank and not an alias. Writing field 7 of word 0 and forcing source 71 vectored it, which pins the addressing.
+- measured (high): Raspberry Pi 4B d03115 (`pi4-firmware` start4 `2431cea8`, Linux idle), `/dev/mem`: word 0 at `0xFE002010` reads `0x00000101` and word 3 at `0xFE00201C` reads `0x01000000` — what that firmware programs for the system timer's first compare (source 64, word 0 field 0) and the ARM's mailbox (source 94, word 3 field 6); words 1, 2 and 4 to 7 read 0. Core 1's eight words from `0xFE002810` all read 0, so the second bank is a bank and not an alias. Writing field 7 of word 0 and forcing source 71 vectored it, which pins the addressing.
 - decompile (high): secure service `0xCEC006A6` (`r1` core, `r2` source, `r3` priority): `lsr r4, r2, 3; bmask r4, 3` picks the word from `0x7E002010 + core * 0x800`, then `bmask r2, 3` the field — _the non-secure `enable_irq_source(src, prio)` at `0x3ED72374` masks the word with `bmask r3, 2` instead; start4 only calls it for sources 64 and 78, which land in the same words either way_
 - trace (high): `linux`, `PIMU_TRACE_MMIO=0x7e002000-0x7e002060`: the secure service at `0xFEC006CA` writes all eight words, `+0x20 <- 0x10` (source 97, the HVS), `+0x28 <- 0x10000000` (119) and `+0x2c <- 0x100000` (125, the RNG) among them
 - trace (high): start4 calls `enable_irq_source(64, 1)` for its ThreadX tick
@@ -116,7 +116,7 @@ Sources:
 `ADDR` sources:
 
 - datasheet (high): Broadcom `bcm2708_chip/intctrl0.h`: `IC0_VADDR` with `IC0_VADDR_MASK 0xfffffe00`
-- measured (high): 4B rev 1.5: `rusty-pi-firmware` with its table at 0xFEC2B7C0 took no interrupt at all -- the compare fired, the source asserted, the routing word matched stock's and SR bit 30 was set -- and took them normally once the table was moved to 0xFEC2A000
+- measured (high): 4B rev 1.5: `pi4-firmware` with its table at 0xFEC2B7C0 took no interrupt at all -- the compare fired, the source asserted, the routing word matched stock's and SR bit 30 was set -- and took them normally once the table was moved to 0xFEC2A000
 
 ## `WAKEUP`
 
@@ -149,7 +149,7 @@ Sixteen bits, and only the low half is a register: the upper half of the 32-bit 
 Sources:
 
 - measured (high): Raspberry Pi 4B d03115, `/dev/mem` from the ARM: `0xFE002038` reads `0xffffffff` and `0xFE002838` reads `0xffff0000` under a firmware that never wrote them, stable over 2.4 s, and writes of `0x5a5a`, `0`, `0xffffffff` and `0x1234` all leave the read unchanged.
-- measured (high): Raspberry Pi 4B d03115, read from the VPU by a `rusty-pi-firmware` build that probes it at `idle::init`: the VPU reads `0x0000000e` on its own bank and `0x00000000` on core 1's, where the ARM reads `0xffffffff` and `0xffff0000` -- so the two views differ. After a VPU write of `0x00005a5a`, `0x0000ffff`, `0`, `0xffffffff`, or of the `0x0e` it started with, a VPU read answers 0 every time. Inside a handler it reads 0.
+- measured (high): Raspberry Pi 4B d03115, read from the VPU by a `pi4-firmware` build that probes it at `idle::init`: the VPU reads `0x0000000e` on its own bank and `0x00000000` on core 1's, where the ARM reads `0xffffffff` and `0xffff0000` -- so the two views differ. After a VPU write of `0x00005a5a`, `0x0000ffff`, `0`, `0xffffffff`, or of the `0x0e` it started with, a VPU read answers 0 every time. Inside a handler it reads 0.
 - measured (high): Raspberry Pi 4B d03115, low half only. At rest it is constant: a VPU time series of 56 samples, 1 ms then 10 ms apart over 342 ms, held one value throughout. Across boots of builds that never wrote it the value differs -- 13, 19, 20, 86 and 103 were seen -- so it reflects something accumulated before it is first read. The ARM reads `0x05` on every one of those boots while the VPU reads its own value, and core 1's copy reads 0.
 - measured (high): Raspberry Pi 4B d03115: what the low half is NOT. Not time -- unchanged across 1 us, 1 ms, 100 ms and the 342 ms series. Not a count of interrupts taken, and not time with interrupts enabled: windows of 100, 200, 400 and 800 us bracketed by `ei`/`di` gave a jump to saturation and then no change at all, rather than anything proportional. Not a delivery latency: holding a forced source with `IRQ_GATE` for 0, 2, 5, 10, 20, 50, 100 and 200 us and then releasing it left the ARM reading `0x05` every time. Unmoved by ARM writes of any width. Once it reads `0xffff` it stays there, so `0xffff` is saturation and not a value -- which is what the ARM's first-ever reading of `0xffffffff` was.
 - measured (high): Raspberry Pi 4B d03115, read inside a handler by a build that stashes it at `vpu_stray_irq` entry and exit: 0 at both, twice at entry, while `IRQ_PENDING` in the same handler reads a correct `0x01470147`. `SR` bit 30 is already clear in thread context (`SR` = `0x20000000` at `idle::init`), and a read with interrupts masked matches one with them restored, so the interrupt-enable bit is not what makes the handler read 0.
@@ -174,7 +174,7 @@ Write-only alias of `IRQ_PENDING_BITS`: the bits written are raised, the zeroes 
 
 Sources:
 
-- measured (high): Raspberry Pi 4B d03115 (`rusty-pi-firmware` start4 `2431cea8`), `/dev/mem`: `0xFE002040` read `0x0`, `0x80` written to `0xFE002048`, `0xFE002040` then read `0x80`
+- measured (high): Raspberry Pi 4B d03115 (`pi4-firmware` start4 `2431cea8`), `/dev/mem`: `0xFE002040` read `0x0`, `0x80` written to `0xFE002048`, `0xFE002040` then read `0x80`
 - measured (high): Raspberry Pi 4B d03115, `/dev/mem`: core 1's alias at `0xFE002848` raises a bit in `0xFE002840` and leaves core 0's `0xFE002040` at `0x0`, and `0xFE002844` takes a write of its own.
 - datasheet (medium): Broadcom `bcm2708_chip/intctrl0.h`: `IC0_FORCE0_SET` and `IC0_FORCE1_SET`
 
@@ -186,5 +186,5 @@ Write-only alias of `IRQ_PENDING_BITS`: the bits written are cleared. A read ans
 
 Sources:
 
-- measured (high): Raspberry Pi 4B d03115 (`rusty-pi-firmware` start4 `2431cea8`), `/dev/mem`: with `0xFE002040` reading `0x80`, `0x80` written to `0xFE002050` left it reading `0x0`
+- measured (high): Raspberry Pi 4B d03115 (`pi4-firmware` start4 `2431cea8`), `/dev/mem`: with `0xFE002040` reading `0x80`, `0x80` written to `0xFE002050` left it reading `0x0`
 - datasheet (medium): Broadcom `bcm2708_chip/intctrl0.h`: `IC0_FORCE0_CLR` and `IC0_FORCE1_CLR`

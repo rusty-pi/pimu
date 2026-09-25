@@ -36,7 +36,7 @@ notes  = "Core-wide delivery gate, four bits wide. Zero delivers; a value at or 
 
 [[register.source]]
 kind       = "measured"
-ref        = "Raspberry Pi 4B d03115 (`rusty-pi-firmware` start4 `2431cea8`, Linux idle), `/dev/mem` at `0xFE002000`: reads `0x0`, takes `0xf`, reads it back. With `0xf` written, a source forced through `IRQ_PENDING_BITS_SET` and enabled at priority 1 in `IRQ_PRIO` stayed undelivered for as long as the gate was up — the firmware's own handler for it did not run — and was delivered the moment the gate went back to `0x0`. Priority 7 was held the same way."
+ref        = "Raspberry Pi 4B d03115 (`pi4-firmware` start4 `2431cea8`, Linux idle), `/dev/mem` at `0xFE002000`: reads `0x0`, takes `0xf`, reads it back. With `0xf` written, a source forced through `IRQ_PENDING_BITS_SET` and enabled at priority 1 in `IRQ_PRIO` stayed undelivered for as long as the gate was up — the firmware's own handler for it did not run — and was delivered the moment the gate went back to `0x0`. Priority 7 was held the same way."
 confidence = "high"
 
 [[register.source]]
@@ -58,7 +58,7 @@ notes  = "Which interrupt is being taken: its number and the priority it was ena
 
 [[register.source]]
 kind       = "measured"
-ref        = "Raspberry Pi 4B d03115, read from inside a handler: `rusty-pi-firmware` built with four instructions at `vpu_stray_irq` entry that stash `0x7E002004` in a static, then a source forced through `IRQ_PENDING_BITS_SET` from the ARM. Source 71 at priority 1 gave `0x01470147`, at priority 7 `0x07470747`, source 70 at priority 1 `0x01460146`, source 96 at priority 1 `0x01600160`. Priorities 2, 4 and 6 gave `0x0247`, `0x0447` and `0x0647`, so bit 8 is the priority's low bit and not a flag."
+ref        = "Raspberry Pi 4B d03115, read from inside a handler: `pi4-firmware` built with four instructions at `vpu_stray_irq` entry that stash `0x7E002004` in a static, then a source forced through `IRQ_PENDING_BITS_SET` from the ARM. Source 71 at priority 1 gave `0x01470147`, at priority 7 `0x07470747`, source 70 at priority 1 `0x01460146`, source 96 at priority 1 `0x01600160`. Priorities 2, 4 and 6 gave `0x0247`, `0x0447` and `0x0647`, so bit 8 is the priority's low bit and not a flag."
 confidence = "high"
 
 [[register.source]]
@@ -106,7 +106,7 @@ notes  = "The raw source lines, one bit per source, word 0 for sources 64..95 an
 
 [[register.source]]
 kind       = "measured"
-ref        = "Raspberry Pi 4B d03115 (`rusty-pi-firmware` start4 `2431cea8`, Linux idle), `/dev/mem`: `0xFE002008` reads `0xa` steadily over 8 samples 3 ms apart — sources 65 and 67, two system-timer compares — while `IRQ_PRIO` enables neither and `IRQ_PENDING` reads 0. `0xFE00200C` reads 0. Both banks read the same value, so the lines are the SoC's and only the enables are per core. Setting `IRQ_PENDING_BITS` bit 7 left it at `0xa`."
+ref        = "Raspberry Pi 4B d03115 (`pi4-firmware` start4 `2431cea8`, Linux idle), `/dev/mem`: `0xFE002008` reads `0xa` steadily over 8 samples 3 ms apart — sources 65 and 67, two system-timer compares — while `IRQ_PRIO` enables neither and `IRQ_PENDING` reads 0. `0xFE00200C` reads 0. Both banks read the same value, so the lines are the SoC's and only the enables are per core. Setting `IRQ_PENDING_BITS` bit 7 left it at `0xa`."
 confidence = "high"
 
 [[register.source]]
@@ -124,7 +124,7 @@ notes  = "One 4-bit enable/priority field per interrupt source, eight per word: 
 
 [[register.source]]
 kind       = "measured"
-ref        = "Raspberry Pi 4B d03115 (`rusty-pi-firmware` start4 `2431cea8`, Linux idle), `/dev/mem`: word 0 at `0xFE002010` reads `0x00000101` and word 3 at `0xFE00201C` reads `0x01000000` — what that firmware programs for the system timer's first compare (source 64, word 0 field 0) and the ARM's mailbox (source 94, word 3 field 6); words 1, 2 and 4 to 7 read 0. Core 1's eight words from `0xFE002810` all read 0, so the second bank is a bank and not an alias. Writing field 7 of word 0 and forcing source 71 vectored it, which pins the addressing."
+ref        = "Raspberry Pi 4B d03115 (`pi4-firmware` start4 `2431cea8`, Linux idle), `/dev/mem`: word 0 at `0xFE002010` reads `0x00000101` and word 3 at `0xFE00201C` reads `0x01000000` — what that firmware programs for the system timer's first compare (source 64, word 0 field 0) and the ARM's mailbox (source 94, word 3 field 6); words 1, 2 and 4 to 7 read 0. Core 1's eight words from `0xFE002810` all read 0, so the second bank is a bank and not an alias. Writing field 7 of word 0 and forcing source 71 vectored it, which pins the addressing."
 confidence = "high"
 
 [[register.source]]
@@ -193,7 +193,7 @@ confidence = "high"
 
 [[register.field.source]]
 kind       = "measured"
-ref        = "4B rev 1.5: `rusty-pi-firmware` with its table at 0xFEC2B7C0 took no interrupt at all -- the compare fired, the source asserted, the routing word matched stock's and SR bit 30 was set -- and took them normally once the table was moved to 0xFEC2A000"
+ref        = "4B rev 1.5: `pi4-firmware` with its table at 0xFEC2B7C0 took no interrupt at all -- the compare fired, the source asserted, the routing word matched stock's and SR bit 30 was set -- and took them normally once the table was moved to 0xFEC2A000"
 confidence = "high"
 
 [[register.source]]
@@ -259,7 +259,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "Raspberry Pi 4B d03115, read from the VPU by a `rusty-pi-firmware` build that probes it at `idle::init`: the VPU reads `0x0000000e` on its own bank and `0x00000000` on core 1's, where the ARM reads `0xffffffff` and `0xffff0000` -- so the two views differ. After a VPU write of `0x00005a5a`, `0x0000ffff`, `0`, `0xffffffff`, or of the `0x0e` it started with, a VPU read answers 0 every time. Inside a handler it reads 0."
+ref        = "Raspberry Pi 4B d03115, read from the VPU by a `pi4-firmware` build that probes it at `idle::init`: the VPU reads `0x0000000e` on its own bank and `0x00000000` on core 1's, where the ARM reads `0xffffffff` and `0xffff0000` -- so the two views differ. After a VPU write of `0x00005a5a`, `0x0000ffff`, `0`, `0xffffffff`, or of the `0x0e` it started with, a VPU read answers 0 every time. Inside a handler it reads 0."
 confidence = "high"
 
 [[register.source]]
@@ -311,7 +311,7 @@ notes  = "Write-only alias of `IRQ_PENDING_BITS`: the bits written are raised, t
 
 [[register.source]]
 kind       = "measured"
-ref        = "Raspberry Pi 4B d03115 (`rusty-pi-firmware` start4 `2431cea8`), `/dev/mem`: `0xFE002040` read `0x0`, `0x80` written to `0xFE002048`, `0xFE002040` then read `0x80`"
+ref        = "Raspberry Pi 4B d03115 (`pi4-firmware` start4 `2431cea8`), `/dev/mem`: `0xFE002040` read `0x0`, `0x80` written to `0xFE002048`, `0xFE002040` then read `0x80`"
 confidence = "high"
 
 [[register.source]]
@@ -335,7 +335,7 @@ notes  = "Write-only alias of `IRQ_PENDING_BITS`: the bits written are cleared. 
 
 [[register.source]]
 kind       = "measured"
-ref        = "Raspberry Pi 4B d03115 (`rusty-pi-firmware` start4 `2431cea8`), `/dev/mem`: with `0xFE002040` reading `0x80`, `0x80` written to `0xFE002050` left it reading `0x0`"
+ref        = "Raspberry Pi 4B d03115 (`pi4-firmware` start4 `2431cea8`), `/dev/mem`: with `0xFE002040` reading `0x80`, `0x80` written to `0xFE002050` left it reading `0x0`"
 confidence = "high"
 
 [[register.source]]

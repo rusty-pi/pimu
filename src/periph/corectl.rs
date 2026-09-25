@@ -80,7 +80,7 @@ pub struct CoreCtl {
     /// Per core: the source being vectored and the priority it was enabled at,
     /// not yet read by that core's dispatcher through its bank's
     /// [`IRQ_PENDING`]. The priority is latched here because a handler may
-    /// rewrite [`IRQ_PRIO`] before it reads the register -- rusty-pi-firmware's stray
+    /// rewrite [`IRQ_PRIO`] before it reads the register -- pi4-firmware's stray
     /// handler does exactly that.
     pending_src: [Option<(u32, u32)>; 2],
     storage: BTreeMap<u32, u32>,
@@ -342,7 +342,7 @@ mod tests {
         // `IC0_VADDR_MASK` is 0xFFFFFE00, so a table that is not 512-byte
         // aligned is fetched from the address below it. A firmware that gets
         // this wrong takes no interrupt at all, with every register it can
-        // read saying it should: `rusty-pi-firmware` sat at 0xFEC2B7C0 and was dead
+        // read saying it should: `pi4-firmware` sat at 0xFEC2B7C0 and was dead
         // until it moved to 0xFEC2A000.
         let mut c = CoreCtl::new();
         c.write(VBASE, Width::Word, 0xFEC2_B7C0).unwrap();
@@ -374,7 +374,7 @@ mod tests {
 
     #[test]
     fn the_latched_priority_survives_a_handler_rewriting_irq_prio() {
-        // rusty-pi-firmware's stray handler rewrites the priority words before
+        // pi4-firmware's stray handler rewrites the priority words before
         // anything reads IRQ_PENDING; hardware latches at delivery.
         let mut c = CoreCtl::new();
         c.write(IRQ_PRIO, Width::Word, 5 << 28).unwrap();
