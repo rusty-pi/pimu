@@ -253,7 +253,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "`/dev/mem` read of `0xfe340024` on a Pi 4B rev 1.5 with Linux idle; start4 prints `status: 0x1fff0000` in `examples-on-real-hardware/sd-card-boot.log`"
+ref        = "`/dev/mem` read of `0xfe340024` on a Pi 4B rev 1.5 with Linux idle; start4 prints `status: 0x1fff0000` on a Raspberry Pi 4B d03115"
 confidence = "high"
 
 [[register.field]]

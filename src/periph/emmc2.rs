@@ -288,9 +288,8 @@ const BLOCK_POLLS: u8 = 2;
 /// for a driver that waits for the interrupt: 512 bytes, CRC, start and end
 /// bits on a 4-bit bus are 1042 clocks, 21 µs at the 50 MHz both stock stages
 /// clock the card at on a Raspberry Pi 4B d03115
-/// (`examples-on-real-hardware/`: the bootloader's `BUS: 50000000 Hz` in
-/// `sd-card-boot.log`, start4's `C0: 0x00800f06 ... actual: 50000000` in
-/// `vc4-boot.log`).
+/// (the bootloader's `BUS: 50000000 Hz`, start4's
+/// `C0: 0x00800f06 ... actual: 50000000`).
 const BLOCK_WIRE_US: u64 = 21;
 
 /// The next PIO read block, on its way after the host drained the last one.

@@ -210,7 +210,7 @@ Idle value: card inserted and stable, card-detect and write-protect pins high (w
 Sources:
 
 - standard (high): SDHCI 3.00, 2.2.9
-- measured (high): `/dev/mem` read of `0xfe340024` on a Pi 4B rev 1.5 with Linux idle; start4 prints `status: 0x1fff0000` in `examples-on-real-hardware/sd-card-boot.log`
+- measured (high): `/dev/mem` read of `0xfe340024` on a Pi 4B rev 1.5 with Linux idle; start4 prints `status: 0x1fff0000` on a Raspberry Pi 4B d03115
 
 `CMD_INHIBIT` sources:
 

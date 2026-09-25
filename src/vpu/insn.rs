@@ -821,7 +821,7 @@ pub struct VecInsn {
 /// Every one of these was run on a Raspberry Pi 4B d03115 against two vectors
 /// of edge cases — `0x7fff`, `0x8000`, `0xffff`, shift counts of 0 and 15 —
 /// and the result read back out of the register file
-/// (`examples-on-real-hardware/vpu-probe/probes/alu.s`). The ops not listed
+/// (`vpu-probe/probes/alu.s`). The ops not listed
 /// here are the ones those runs did not pin down: the carry forms, `clips`,
 /// `testmag`, the `sign*` shifts, the multiplies and the unnamed sub-ops.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

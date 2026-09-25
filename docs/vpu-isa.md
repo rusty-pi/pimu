@@ -561,7 +561,7 @@ only on a boot that goes on to Linux.
 | execution, lane loops, flags | `src/vpu/exec.rs` | trace: the model |
 | the register file | `src/vpu/vrf.rs` | trace: the model |
 | the measurements, replayed | `tests/vpu_isa.rs` | trace: the model |
-| the probes themselves | `examples-on-real-hardware/vpu-probe/` | measured: one `.s` file per question, with the findings in its `README.md` |
+| the probes themselves | `vpu-probe/` | measured: one `.s` file per question, with the findings in its `README.md` |
 
 ## How the measurements were taken
 

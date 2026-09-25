@@ -693,7 +693,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "`examples-on-real-hardware/sd-card-boot.log`: the bus scan prints only `00001106:00003483`"
+ref        = "the bootloader log on a Raspberry Pi 4B d03115: the bus scan prints only `00001106:00003483`"
 confidence = "high"
 
 [[register]]

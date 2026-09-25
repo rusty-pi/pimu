@@ -1038,7 +1038,7 @@ fn the_measured_register_file_layout() {
 /// The vector ALU, against the hardware it was measured on.
 ///
 /// Each row ran on a Raspberry Pi 4B d03115 over two vectors of edge cases —
-/// `examples-on-real-hardware/vpu-probe/probes/alu.s` — with A in `HX(60,0)`,
+/// `vpu-probe/probes/alu.s` — with A in `HX(60,0)`,
 /// B in `HX(61,0)` and the result read back out of the register file. The
 /// model has to produce the same sixteen elements.
 #[test]
@@ -1508,7 +1508,7 @@ fn the_measured_multiplies() {
 
 /// A whole probe program, run on the board and replayed here.
 ///
-/// `examples-on-real-hardware/vpu-probe/probes/accmix.s` loads two vectors,
+/// `vpu-probe/probes/accmix.s` loads two vectors,
 /// runs three multiplies, accumulates a sum three times, takes it back off
 /// again, does the multiply-accumulate the codec code is built out of, and
 /// dumps the register file with `v32st HY(0++,0),(r0+=r3) REP64`. The rows
@@ -2287,7 +2287,7 @@ fn the_measured_width_conversions() {
 
 /// The accumulator when the operation is wider than the registers it reads.
 ///
-/// `examples-on-real-hardware/vpu-probe/probes/wacc.s` accumulates over byte
+/// `vpu-probe/probes/wacc.s` accumulates over byte
 /// registers at 16 bits and over halfword registers at 32, clearing, writing
 /// back and subtracting along the way, then dumps the file. Nothing about the
 /// accumulator changes when the registers are narrower: it takes the result at

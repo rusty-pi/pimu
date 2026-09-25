@@ -365,7 +365,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "`/dev/mem` on a Raspberry Pi 4B d03115 after a stock boot from the first partition: `SPAREW` and `SPARER` both `0x00400001`, `/chosen/bootloader/partition` 1, and the board's log prints `boot-part: 1` (`examples-on-real-hardware/sd-card-boot.log:80`)"
+ref        = "`/dev/mem` on a Raspberry Pi 4B d03115 after a stock boot from the first partition: `SPAREW` and `SPARER` both `0x00400001`, `/chosen/bootloader/partition` 1, and the board's log prints `boot-part: 1`"
 confidence = "high"
 
 [[register.source]]

@@ -558,7 +558,7 @@ Offset `0x8000`, 1024 elements 0x4 apart · access `rw` · 32 bits
 Sources:
 
 - linux (high): `pcie-brcmstb.c`: `PCIE_EXT_CFG_DATA`; `brcm_pcie_map_conf()` sends the root bus to `base + where` instead
-- measured (high): `examples-on-real-hardware/sd-card-boot.log`: the bus scan prints only `00001106:00003483`
+- measured (high): the bootloader log on a Raspberry Pi 4B d03115: the bus scan prints only `00001106:00003483`
 
 ## `EXT_CFG_INDEX`
 

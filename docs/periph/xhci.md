@@ -13,7 +13,7 @@ Sources:
 
 - standard (high): eXtensible Host Controller Interface 1.1, section 5
 - measured (high): capability registers and `PORTSC` read on a Raspberry Pi 4B d03115 through `/dev/mem`, `sudo od -Ax -tx4 -v /dev/mem` at the BAR0 address `lspci -vvv` reports for `01:00.0`; `dmesg` `hcc params 0x002841eb hci version 0x100`
-- measured (high): `examples-on-real-hardware/sd-card-boot.log`: `xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb`
+- measured (high): the bootloader log on a Raspberry Pi 4B d03115: `xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb`
 
 Carried by [`vl805`](vl805.md):
 

@@ -70,7 +70,7 @@
 //! A Pi 4B has the VL805 soldered on, so attached is the honest model of the
 //! reference board, and with BAR0 answering, the bootloader's bring-up gets the
 //! same numbers a real board prints
-//! (`examples-on-real-hardware/sd-card-boot.log` lines 27-32):
+//! (the bootloader log on a Raspberry Pi 4B d03115):
 //!
 //! ```text
 //!   2.75 PCIe scan 00001106:00003483
@@ -723,8 +723,8 @@ impl Pcie {
     /// the header type — the header-type byte at `0x0E` only decides whether the
     /// function is recorded in the device list (`0x000A71CC`, non-zero = bridge
     /// = skip), not whether it is printed. So if bus 0 answered here the real
-    /// board would print the root complex too, and
-    /// `examples-on-real-hardware/sd-card-boot.log:25-27` shows it does not.
+    /// board would print the root complex too, and the bootloader log on a
+    /// Raspberry Pi 4B d03115 shows it does not.
     ///
     /// The bootloader reaches the root port's own config space the same way
     /// Linux does: its config-space selector (`0x000A6888`) writes

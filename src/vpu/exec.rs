@@ -2043,7 +2043,7 @@ fn widen(v: u32, from_bytes: u32) -> u32 {
 /// `sat_bytes` is the destination element's width, which is what the
 /// saturating ops clamp to: a byte destination holds `0..=0xff`, a wider one
 /// saturates signed. Every case here was measured on a Raspberry Pi 4B
-/// d03115; see `examples-on-real-hardware/vpu-probe/`.
+/// d03115; see `vpu-probe/`.
 /// The carry an op leaves in its lane's flags under `SETF`, or `None` when it
 /// leaves the flag alone.
 ///

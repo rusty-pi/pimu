@@ -84,8 +84,8 @@ copy() {
 
 # The config the reference boot log was captured with (a stock Raspberry Pi OS
 # config.txt with the UART console enabled). The dtparam/dtoverlay lines are
-# what produce the `dtparam: spi=on` / `Loaded overlay '...'` lines in
-# examples-on-real-hardware/vc4-boot.log — a bare three-line config skips that
+# what produce the `dtparam: spi=on` / `Loaded overlay '...'` lines in a
+# start4 log from a Raspberry Pi 4B d03115 — a bare three-line config skips that
 # whole phase, so the model has nothing to match against.
 #
 # `WIRELESS=1` drops the two `disable-` overlays, which is what a card

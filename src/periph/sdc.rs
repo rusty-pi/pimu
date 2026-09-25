@@ -29,7 +29,7 @@
 //! `[0x7E00_1004] >> 16` by `1 << (3 - code)` — code 3 is the nominal 1x
 //! interval, a lower code means the die is cool enough to refresh less often.
 //! The reference board reports code 2 just after the handover and the firmware
-//! doubles the interval, which is what `examples-on-real-hardware/vc4-boot.log`
+//! doubles the interval, which is what a Raspberry Pi 4B d03115
 //! logs as `sdram: sdram refresh 1562->3124 (2)`. With the port returning 0 the
 //! firmware instead saw an out-of-range code and logged
 //! `Unexpected sdram refresh code (0)`, so the model seeds MR4 with the
@@ -49,8 +49,8 @@
 //! that is what the model is, which is also what `boot --eeprom` backs by
 //! default. The second chip select has nothing on it, so a transfer to device
 //! 1 reaches no die: every mode register reads 0 there and a write is lost.
-//! The reference board is an 8 GB Pi 4B (`total-size: 64Gbit` and `rank 2` in
-//! `examples-on-real-hardware/sd-card-boot-perfect.log`, 32 Gb per die).
+//! The reference board is an 8 GB Pi 4B (`total-size: 64Gbit` and `rank 2` on
+//! a Raspberry Pi 4B d03115, 32 Gb per die).
 //!
 //! MR5 (the manufacturer) stays at its reset 0, which the bootloader prints as
 //! `'Unknown'`: it is only printed, never part of the MCB key — Samsung (1),

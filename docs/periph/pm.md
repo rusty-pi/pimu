@@ -238,7 +238,7 @@ Reads what was last written to `SPAREW`, without the password byte. This is how 
 Sources:
 
 - linux (high): `bcm2835-power.c`: `PM_SPARER`
-- measured (high): `/dev/mem` on a Raspberry Pi 4B d03115 after a stock boot from the first partition: `SPAREW` and `SPARER` both `0x00400001`, `/chosen/bootloader/partition` 1, and the board's log prints `boot-part: 1` (`examples-on-real-hardware/sd-card-boot.log:80`)
+- measured (high): `/dev/mem` on a Raspberry Pi 4B d03115 after a stock boot from the first partition: `SPAREW` and `SPARER` both `0x00400001`, `/chosen/bootloader/partition` 1, and the board's log prints `boot-part: 1`
 - decompile (high): start4 `0x3ECC44E8`: PM op `+0x1C` (`0x3ED62214`, reads `+0x78`), bit 22 tested; else PM op `+0x18` (`0x3ED62204`, the saved `RSTS`) through the partition decoder `0x3EC723F2`
 
 ## `AVS_RSTDR`

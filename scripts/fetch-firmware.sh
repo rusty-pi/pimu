@@ -119,7 +119,7 @@ queue "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/fixup4cd.dat" "fixup4cd.dat"
 
 # Kernel, device tree and the overlays the reference boot log loads. Without
 # these the boot has nothing to hand off to and stops after the HDMI bring-up;
-# with them it can reproduce examples-on-real-hardware/vc4-boot.log from
+# with them it can reproduce a start4 log from a Raspberry Pi 4B d03115 from
 # 'dtparam:' onwards. (initramfs8 is generated per-install, not shipped here —
 # auto_initramfs simply finds nothing, which is fine.)
 queue "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/kernel8.img" "kernel8.img"

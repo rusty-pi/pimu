@@ -46,7 +46,7 @@ Sources:
 - decompile (high): `0x3ED6BBA0` rescales `[0x7E001004] >> 16` by `1 << (3 - MR4 code)`
 - decompile (high): `0x3ED6BBA0`: returns early unless 1 000 000 us have passed (the first call backdates its timestamp by that much), `bmask r0, 3` / `max` over `MR4` reads, compares with `[gp+4380]`, `shl` for codes below 3, `asr` above, `(v << 16) | (old & 0xffff)`; its caller `0x3ED7C75C` sleeps 100 ms per pass and passes the rank count (2 if the `BSDR` boot-info word at `+0x0C` is set, else 1) and the channel count (`BSDR` `+0x14`, at least 1)
 - trace (high): `boot` of the pinned EEPROM, `PIMU_TRAP=0x3ED6BC14`: previous code 3 on the first pass, then 2; `PIMU_TRACE_MMIO`: one pass reads `MR4` with `+0x9C <- 0x4` and `0x2000004`, then `+0x04 <- 0x0C3406F4` from `0x061A06F4`; 589 calls and 59 reads between the ARM start and the end of the run
-- measured (high): `examples-on-real-hardware/vc4-boot.log`: `sdram: sdram refresh 1562->3124 (2)`
+- measured (high): start4 on a Raspberry Pi 4B d03115: `sdram: sdram refresh 1562->3124 (2)`
 
 `INTERVAL` sources:
 

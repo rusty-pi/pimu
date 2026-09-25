@@ -44,7 +44,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "`examples-on-real-hardware/vc4-boot.log`: `sdram: sdram refresh 1562->3124 (2)`"
+ref        = "start4 on a Raspberry Pi 4B d03115: `sdram: sdram refresh 1562->3124 (2)`"
 confidence = "high"
 
 [[register.field]]

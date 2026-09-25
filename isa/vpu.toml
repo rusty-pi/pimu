@@ -2599,7 +2599,7 @@ ref        = "the model"
 confidence = "high"
 
 [[section.row]]
-cells = ["the probes themselves", "`examples-on-real-hardware/vpu-probe/`"]
+cells = ["the probes themselves", "`vpu-probe/`"]
 
 [[section.row.source]]
 kind       = "measured"

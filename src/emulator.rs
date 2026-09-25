@@ -52,7 +52,7 @@ pub struct RunLimits {
     pub idle_spin_limit: u64,
     /// Stop once the firmware has printed nothing for this many microseconds of
     /// *modelled* time. A healthy boot logs continuously — the largest gap in
-    /// `examples-on-real-hardware/vc4-boot.log` is about a second, and the
+    /// a start4 log from a Raspberry Pi 4B d03115 is about a second, and the
     /// model's own worst gap (the kernel load) is thirteen. Once the firmware
     /// wedges, output stops but modelled time keeps advancing, because `sleep`
     /// fast-forwards the system timer. That makes console silence a far better
