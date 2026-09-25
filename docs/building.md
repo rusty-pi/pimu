@@ -20,10 +20,27 @@ says which switch needs which build.
 
 ## The `repo` feature
 
-`run`, `run-all`, `boot-check` and `spec-docs` only mean something inside a
-checkout: they check golden transcripts under `testdata/` and rewrite `docs/`
-through the `CARGO_MANIFEST_DIR` of the build. They are the `repo` feature, on
-by default, and the released binaries leave them out:
+Four commands only mean something inside a checkout: they check golden files
+under `testdata/` and rewrite `docs/` through the `CARGO_MANIFEST_DIR` of the
+build.
+
+| Command | What it does |
+|---|---|
+| `run <scenario.toml>` | Run one in-process scenario and check it against its golden transcript. |
+| `run-all [<dir>]` | The same for every `*.toml` in `<dir>` (default `testdata/scenarios`). |
+| `boot-check <scenario.toml>` | Run the boot a scenario describes and check its transcript, milestones and retired counts. `--plan` prints the `boot` invocation instead, `--from <log>` checks an earlier run's output without booting. |
+| `spec-docs [--update]` | Check (or regenerate) `docs/periph/` against `specs/*.toml`, and the dark board sheet against the hand-drawn one. |
+
+`--update` rewrites the golden files instead of failing on a mismatch, and `-v`
+prints the whole transcript.
+
+```bash
+cargo run -- run-all -v                                       # every in-process scenario, with transcripts
+cargo run --release -- boot-check testdata/boot/firmware.toml # one real boot, checked three ways
+```
+
+They are the `repo` feature, on by default, and the released binaries leave them
+out:
 
 ```bash
 cargo build --release --no-default-features
@@ -72,8 +89,9 @@ main: a tarball, a `.deb` and an `.rpm` for x86-64 and for aarch64, and the
 `ghcr.io/rusty-pi/pimu:latest` image with a manifest for both. Both binaries are
 built in a `debian:12` container, because a release should not need a newer glibc
 than a Raspberry Pi OS install has, and the aarch64 one is cross-linked there —
-every dependency is pure Rust, so that costs one `gcc` and no emulation. They are
-built with the image above, which is why the release needs a `FIRMWARE_TOKEN`
-secret: a token that can read the private `rusty-pi/pi4-firmware`, since a
-workflow's own token reaches only its repository. Without the secret the job
+every dependency is pure Rust, so that costs one `gcc` and no emulation. They
+are built `--no-default-features`, without the `repo` commands, and with the
+EEPROM image above, which is why the release needs a `FIRMWARE_TOKEN` secret: a
+token that can read the private `rusty-pi/pi4-firmware`, since a workflow's own
+token reaches only its repository. Without the secret the job
 still publishes, with binaries that fetch the image themselves.

@@ -119,15 +119,12 @@ so `pimu boot --sd card.img` boots too.
 | Command | What it does |
 |---|---|
 | `boot` | Boot the machine from an EEPROM image, as a Pi 4 does, or run a VPU ELF. |
-| `boot-check <scenario.toml>` *(repo)* | Run the boot a scenario describes and check its transcript, milestones and retired counts. `--plan` prints the `boot` invocation instead. |
-| `run <scenario.toml>`, `run-all [<dir>]` *(repo)* | The in-process scenarios, against their golden transcripts. |
 | `disasm <file>` | Disassemble a flat binary or ELF with the VPU decoder: `disasm firmware/start4.elf --base 0xcec00200 --count 40`. |
-| `spec-docs [--update]` *(repo)* | Check (or regenerate) `docs/periph/` against `specs/*.toml`, and the dark board sheet against the hand-drawn one. |
 
-The commands marked *(repo)* check golden files under `testdata/` and rewrite
-`docs/` through a path baked in at build time, so they only work inside a
-checkout. They are the `repo` cargo feature, on by default and left out of the
-released binaries (`cargo build --release --no-default-features`).
+A build from this tree has four more — `run`, `run-all`, `boot-check` and
+`spec-docs`, the regression and documentation checks. They read golden files out
+of the checkout, so a released binary leaves them out;
+[`building.md`](docs/building.md) describes them.
 
 ## Features
 
@@ -219,10 +216,11 @@ I²C masters are modelled and nothing answers the EDID EEPROM's address.
 ## Tests
 
 ```bash
-cargo test                                                    # unit + ISA + peripheral + scenario tests
-cargo run -- run-all -v                                       # every in-process scenario, with transcripts
-cargo run --release -- boot-check testdata/boot/firmware.toml # one real boot, checked three ways
+cargo test
 ```
+
+The boots themselves are too slow for `cargo test` and run under their own
+commands, which [`building.md`](docs/building.md) lists.
 
 `.github/workflows/boot-log.yml` runs fmt, clippy and the tests, then every boot
 in parallel on each push and PR to `main`. The tests include `tests/specs.rs`,
