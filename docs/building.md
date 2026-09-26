@@ -60,6 +60,10 @@ same instructions either way.
 CI's boot jobs do not use it — the extra build and training cost more than they
 would save. The release builds do; see below.
 
+Each training run prints how long it took and the `result:` line it ended on,
+and a run that ends badly stops the build rather than leaving a profile that
+says nothing.
+
 `--profile-only` stops after `llvm-profdata merge`, leaving the profile at
 `target/pgo/merged.profdata` for a caller that wants to do the final build
 itself.

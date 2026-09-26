@@ -58,8 +58,11 @@ train() {
   shift
   local plan args=() i
   mapfile -t plan < <("$instr" boot-check "$scenario" --plan --output "$work/boot")
-  # `--plan` names any boot medium that is not built yet.
-  [ "${#plan[@]}" -ge 2 ] || exit 1
+  # `--plan` names any boot medium that is not built yet, on stderr.
+  if [ "${#plan[@]}" -lt 2 ]; then
+    echo "no plan for $scenario; build what it says is missing" >&2
+    exit 1
+  fi
   for ((i = 1; i < ${#plan[@]}; i++)); do
     if [ "${plan[i]}" = --send-after ]; then
       i=$((i + 2))
@@ -67,13 +70,29 @@ train() {
     fi
     args+=("${plan[i]}")
   done
+  # A boot that dies in its first instruction leaves a profile that says
+  # nothing and a release that is slower than it looks, so the run has to
+  # say how it ended and stop the build when it ended badly. Both runs are
+  # meant to succeed: an EEPROM boot is `ok` once the firmware starts the ARM,
+  # and an `--until` run once the console prints the line.
+  local log="$work/$(basename "$scenario" .toml).log" start=$SECONDS status=0
   echo "training on $scenario" >&2
-  PIMU_LIVE_CONSOLE=0 "$instr" "${args[@]}" "$@" > "$work/$(basename "$scenario" .toml).log" 2>&1 || true
+  PIMU_LIVE_CONSOLE=0 "$instr" "${args[@]}" "$@" > "$log" 2>&1 || status=$?
+  local secs=$((SECONDS - start)) result
+  result="$(grep '^result:' "$log" | tail -n1)"
+  echo "  ${secs}s — ${result:-no result line}" >&2
+  if [ "$status" -ne 0 ]; then
+    echo "training on $scenario failed (exit $status), last 20 lines of $log:" >&2
+    tail -n 20 "$log" >&2
+    exit 1
+  fi
 }
 train testdata/boot/firmware.toml
 train testdata/boot/linux.toml --until "$linux_until"
 
 "$profdata" merge -o "$work/merged.profdata" "$work/raw"
+echo "merged $(find "$work/raw" -name '*.profraw' | wc -l) profraw files into" \
+  "$(du -h "$work/merged.profdata" | cut -f1) of profile" >&2
 if [ -n "$profile_only" ]; then
   echo "$work/merged.profdata"
   exit 0
