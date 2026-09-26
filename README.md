@@ -13,7 +13,7 @@ run is deterministic. No off-the-shelf tool does this;
 [`docs/references.md`](docs/references.md) surveys the prior art.
 
 > [!WARNING]
-> **It is slow, and it stays slow.** Every core is interpreted and
+> **The arm/linux-side emulation is slow, and it stays slow.** Every core is interpreted and
 > lock-stepped in one host thread, because a run has to be deterministic to be
 > diffable. That buys tens of millions of guest instructions a second: the
 > firmware's own boot is under a minute, a Linux boot to a shell is a few
