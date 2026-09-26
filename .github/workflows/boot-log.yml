@@ -286,21 +286,36 @@ jobs:
           CACHE: ${{ vars.RUNNER_CACHE }}
         run: tar -xSf "$CACHE/boot-inputs-$GITHUB_RUN_ID.tar"
 
+      # Every scenario in the job runs even after one has failed: a job with two
+      # of them would otherwise never report the second, and a golden that has
+      # to be re-pinned from this log needs all of them in one round.
       - name: Simulated boot (${{ matrix.name }})
         run: |
+          rc=0
           for s in ${{ matrix.scenarios }}; do
-            target/release/pimu boot-check "testdata/boot/$s.toml" --output "boot-$s.log"
+            target/release/pimu boot-check "testdata/boot/$s.toml" --output "boot-$s.log" || rc=1
           done
+          exit $rc
 
-      # Nothing is uploaded: a failed boot's combined output goes to the job
-      # log instead. Reproduce it locally for the console file that
-      # `boot-check <scenario> --from boot-<scenario>.log --update` wants.
+      # Nothing is uploaded: a failed boot's output goes to the job log instead.
+      # That includes the console file `boot-check <scenario> --from
+      # boot-<scenario>.log --update` wants, base64 so the escape sequences in a
+      # Linux boot's console survive the round trip through this log:
+      #
+      #   sed -E 's/^.*Z //' <job log> | sed -n '/^=== base64 boot-linux.log.console/{n;p}' \
+      #     | base64 -d > boot-linux.log.console
       - name: Boot output
         if: failure()
         run: |
           for f in boot-*.log; do
             echo "=== $f"
             cat "$f"
+          done
+          for f in boot-*.log.console; do
+            [ -e "$f" ] || continue
+            echo "=== base64 $f"
+            base64 -w0 "$f"
+            echo
           done
 
   # Nothing a run stores is needed once it has finished: the boot inputs'
