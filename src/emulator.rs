@@ -814,6 +814,9 @@ impl Emulator {
                     crate::log!(m.log, Channel::Ff, "pc={pc:#x} jump={waited} us");
                 }
                 m.systimer.jump(waited);
+                // The counter moved without a tick behind it, so nothing timed
+                // against it has seen the jump yet.
+                m.settle_timed();
                 st.delay_ff = 0;
             }
         } else if st.delay_ff_irq && st.delay_ff_handler_reads < HANDLER_READS {

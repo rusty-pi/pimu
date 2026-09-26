@@ -1114,6 +1114,15 @@ impl Machine {
     /// to `us` and what is timed against it catches up.
     pub fn wake_vpu_at(&mut self, us: u64) {
         self.systimer.advance_to(us);
+        self.settle_timed();
+    }
+
+    /// Bring everything timed against the counter up to where the counter is.
+    ///
+    /// [`Self::tick`] does this a microsecond at a time, so it is only needed where
+    /// something moves the counter by itself: a `sleep` that jumps to the next
+    /// deadline, an ARM-side wake, or the run loop's busy-wait fast-forward.
+    pub fn settle_timed(&mut self) {
         self.advance_i2c();
         self.advance_sd();
         self.advance_pcie();
