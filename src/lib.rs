@@ -34,6 +34,7 @@ pub mod machine;
 pub mod mem;
 pub mod net;
 pub mod periph;
+pub mod sched;
 pub mod sheet;
 pub mod soc;
 pub mod spec;

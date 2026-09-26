@@ -1120,11 +1120,9 @@ impl Machine {
         self.advance_hvs();
     }
 
+    /// When some timed device next has work; see [`crate::sched`].
     fn next_wake(&self) -> Option<u64> {
-        match (self.systimer.next_deadline(), self.hvs.deadline()) {
-            (Some(t), Some(frame)) => Some(t.min(frame)),
-            (t, frame) => t.or(frame),
-        }
+        crate::sched::next_due(self).map(|(us, _)| us)
     }
 
     /// The value a read of `addr` would return where a read has no side effect;
@@ -1284,9 +1282,10 @@ impl Bus for Machine {
             self.sleep_to = self.next_wake();
             return self.sleep_to.is_some();
         }
-        // The HVS can end a frame it interrupts for before the next compare.
-        let woke = match (self.systimer.next_deadline(), self.hvs.deadline()) {
-            (next, Some(frame)) if next.is_none_or(|t| frame < t) => {
+        // The HVS can end a frame it interrupts for before the next compare, and
+        // then the counter stops there instead of at the compare.
+        let woke = match crate::sched::next_due(self) {
+            Some((frame, crate::sched::Timed::Hvs)) => {
                 self.systimer.advance_to(frame);
                 true
             }
