@@ -183,6 +183,7 @@ fn limits(done: u32, max_steps: u64) -> RunLimits {
         // Armed, so its budget is in play, but 20M silent instructions away.
         silent_us: 1,
         until: None,
+        speed: None,
     }
 }
 
@@ -297,6 +298,7 @@ fn run_payload(code: impl Fn(&mut Machine) -> u32, fast: bool) -> (RunReport, Em
         idle_spin_limit: 200_000,
         silent_us: 0,
         until: None,
+        speed: None,
     });
     assert!(
         matches!(report.end, RunEnd::StopPc(_)),
@@ -371,6 +373,49 @@ fn a_long_wait_is_jumped_by_about_its_length() {
             assert!(ticks > 0, "the tick never fired");
         }
     }
+}
+
+/// [`long_wait`] with real-time pacing set to `speed`.
+fn paced(speed: Option<f64>) -> RunReport {
+    let mut m = Machine::new(1 << 20);
+    let done = long_wait(&mut m, false);
+    let mut emu = Emulator::new(m, CODE);
+    emu.cpu.exc_vbase = VBASE;
+    emu.cpu.regs.set(25, STACK_TOP);
+    let report = emu.run(&RunLimits {
+        stop_pc: Some(done),
+        speed,
+        ..limits(done, 20_000_000)
+    });
+    assert!(
+        matches!(report.end, RunEnd::StopPc(_)),
+        "the payload runs to its end: {:?}",
+        report.end
+    );
+    report
+}
+
+/// The 20 ms wait is jumped in a few thousand instructions, so the modelled clock
+/// ends far ahead of the host's: paced, the run has to sleep that lead off, and what
+/// the guest sees is the same either way.
+#[test]
+fn a_paced_run_sleeps_off_its_lead() {
+    let free = paced(None);
+    assert_eq!(free.slept, Duration::ZERO, "--speed max never sleeps");
+    let paced = paced(Some(1.0));
+    assert!(
+        paced.slept >= Duration::from_millis(15),
+        "a 20 ms lead slept off in {:?}",
+        paced.slept
+    );
+    assert!(
+        paced.wall >= paced.slept,
+        "wall {:?} against {:?} asleep",
+        paced.wall,
+        paced.slept
+    );
+    assert_eq!(paced.retired, free.retired, "pacing changed the run");
+    assert_eq!(paced.pc, free.pc);
 }
 
 /// `udelay(4)` 2000 times, a sampling loop's peripheral read after each if asked.

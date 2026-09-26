@@ -433,6 +433,10 @@ impl BootScenario {
             }
         }
         args.extend([
+            // A scenario is a regression run: no real-time pacing, it is timed
+            // against its golden by instructions retired.
+            "--speed".into(),
+            "max".into(),
             "--max-wall".into(),
             self.wall_secs().to_string(),
             "--console-log".into(),

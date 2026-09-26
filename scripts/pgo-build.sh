@@ -77,7 +77,10 @@ train() {
   # and an `--until` run once the console prints the line.
   local log="$work/$(basename "$scenario" .toml).log" start=$SECONDS status=0
   echo "training on $scenario" >&2
-  PIMU_LIVE_CONSOLE=0 "$instr" "${args[@]}" "$@" > "$log" 2>&1 || status=$?
+  # `--speed max`: the profile must count the run loop's own work, not host sleep,
+  # and a paced training run would take the guest's real time to collect it. The
+  # plan says so too; this does not depend on that.
+  PIMU_LIVE_CONSOLE=0 "$instr" "${args[@]}" --speed max "$@" > "$log" 2>&1 || status=$?
   local secs=$((SECONDS - start)) result
   result="$(grep '^result:' "$log" | tail -n1)"
   echo "  ${secs}s — ${result:-no result line}" >&2

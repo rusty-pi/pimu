@@ -272,6 +272,9 @@ impl Slave {
             max_wall: Some(std::time::Duration::from_millis(10)),
             idle_spin_limit: 0,
             silent_us: u64::MAX,
+            // The exchange is a request and its reply, both bounded: real-time pacing
+            // would only make the caller's own budget expire waiting for it.
+            speed: None,
             ..limits.clone()
         };
         let budget = std::time::Duration::from_secs(30);

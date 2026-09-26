@@ -39,6 +39,20 @@ instruction cap unless you pass `--max-steps`. Reaching the last milestone takes
 longer than 140 s, so each boot scenario carries its own budget (`wall_secs`,
 overridable with `boot-check --max-wall`).
 
+## Speed
+
+The model holds the guest to real time by default: whenever its modelled clock
+runs ahead of the host's — where the run loop jumps the counter over an idle
+`sleep`, a `wfi` or a fast-forwarded delay — the loop sleeps the lead off. A
+booting guest is slower than the board it models and so runs unhindered; an idle
+one leaves the host idle too, instead of a core at 100%.
+
+`--speed <factor>` allows that multiple of real time, and `--speed max` runs as
+fast as the host manages, which is what a regression run wants: `boot-check`
+passes it, so CI is unpaced. Pacing changes nothing the guest sees — same
+instructions, same modelled time — and the time spent asleep does not count
+against `--max-wall`; `-v` reports it.
+
 ## The OTP fuses
 
 A reset keeps the fuses, but the next run starts from the model's own unless

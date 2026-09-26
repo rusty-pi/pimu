@@ -90,6 +90,7 @@ pub fn run_scenario(scn: &Scenario) -> Result<ScenarioRun> {
         idle_spin_limit: scn.run.idle_spin_limit,
         silent_us: 0,
         until: None,
+        speed: None,
     };
     let report = emu.run(&limits);
     let transcript = transcript(&report.console);

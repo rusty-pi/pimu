@@ -203,6 +203,13 @@ RUNNING:
     --max-steps <n>
               Stop after <n> instructions. No cap by default: this is for
               pinning a run to an exact count (bisecting, probes).
+    --speed <factor|max>
+              How fast the guest may run against real time: 1 by default, so
+              the model sleeps whenever its clock is ahead of the host's and
+              an idle guest leaves the host idle too. A factor above 1 allows
+              that multiple of real time, and `max` runs as fast as the host
+              manages, which is what CI wants. --max-wall does not count the
+              time a paced run spends asleep.
     --until <text>
               End the run once the console prints <text> (e.g. the shell
               prompt of a Linux boot), after the last --send-after went in.
@@ -346,6 +353,8 @@ struct BootOpts {
     /// No cap by default: the wall clock is the useful bound.
     max_steps: Option<u64>,
     max_wall_secs: u64,
+    /// Real-time cap, `None` for `--speed max`.
+    speed: Option<f64>,
     eeprom: bool,
     trace: bool,
     trace_full: bool,
@@ -597,6 +606,7 @@ impl BootOpts {
         let mut display_edid: Option<PathBuf> = None;
         let mut max_steps: Option<u64> = None;
         let mut max_wall_secs: u64 = 140;
+        let mut speed: Option<f64> = Some(1.0);
         let mut eeprom = false;
         let mut trace = false;
         let mut trace_full = false;
@@ -663,6 +673,21 @@ impl BootOpts {
                 }
                 "--max-wall" => {
                     max_wall_secs = it.next().context("--max-wall needs seconds")?.parse()?
+                }
+                "--speed" => {
+                    let v = it.next().context("--speed needs a factor or `max`")?;
+                    speed = if v == "max" {
+                        None
+                    } else {
+                        let f: f64 = v
+                            .parse()
+                            .ok()
+                            .filter(|f: &f64| *f > 0.0 && f.is_finite())
+                            .with_context(|| {
+                                format!("--speed {v}: not a factor above zero, nor `max`")
+                            })?;
+                        Some(f)
+                    };
                 }
                 "--trace" | "--trace-full" | "--trace-from" | "--trace-mmio" if !pimu::diag::ON => {
                     anyhow::bail!(
@@ -932,6 +957,7 @@ impl BootOpts {
             display_edid,
             max_steps,
             max_wall_secs,
+            speed,
             eeprom,
             trace,
             trace_full,
@@ -1351,6 +1377,7 @@ fn run_limits(opts: &BootOpts) -> RunLimits {
     let BootOpts {
         max_steps,
         max_wall_secs,
+        speed,
         stdin,
         ref until,
         ..
@@ -1364,6 +1391,7 @@ fn run_limits(opts: &BootOpts) -> RunLimits {
         // load, about thirteen seconds, so a wedge reports long before the wall clock.
         silent_us: if stdin { 0 } else { 60_000_000 },
         until: until.clone(),
+        speed,
     }
 }
 
@@ -1777,6 +1805,10 @@ fn print_summary(report: &RunReport, emu: &Emulator, start: u32) {
         report.stub_hits, report.bus_errors
     );
     println!("wall       {:?}", report.wall);
+    // Left out of an unpaced run, whose golden logs would otherwise all gain a line.
+    if !report.slept.is_zero() {
+        println!("paced      {:?} asleep (--speed)", report.slept);
+    }
     let ic = &emu.cpu.icache;
     println!(
         "decode     cache hits {}  fills {}  stale {}",
@@ -2589,6 +2621,20 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
+    }
+
+    #[test]
+    fn speed_is_real_time_unless_told_otherwise() {
+        let speed = |v: &[&str]| {
+            BootOpts::parse(&args(&[&["x.elf"], v].concat()), Path::new(""))
+                .map(|o| o.unwrap().speed)
+        };
+        assert_eq!(speed(&[]).unwrap(), Some(1.0));
+        assert_eq!(speed(&["--speed", "max"]).unwrap(), None);
+        assert_eq!(speed(&["--speed", "2.5"]).unwrap(), Some(2.5));
+        for bad in [&["--speed", "0"], &["--speed", "-1"], &["--speed", "fast"]] {
+            assert!(speed(bad).is_err(), "--speed {} took", bad[1]);
+        }
     }
 
     /// Named after the test, so two never share one.

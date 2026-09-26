@@ -44,6 +44,10 @@ pub struct RunLimits {
     pub silent_us: u64,
     /// Stop once the console has printed this text — a shell prompt, say.
     pub until: Option<String>,
+    /// Hold the run to this multiple of real time: whenever the modelled clock is
+    /// ahead of the host's, the loop sleeps the difference away. `None` runs as fast
+    /// as the host manages, which is what a regression run and CI want.
+    pub speed: Option<f64>,
 }
 
 impl Default for RunLimits {
@@ -55,6 +59,7 @@ impl Default for RunLimits {
             idle_spin_limit: 0,
             silent_us: 0,
             until: None,
+            speed: None,
         }
     }
 }
@@ -116,6 +121,8 @@ pub struct RunReport {
     pub stub_hits: u64,
     pub bus_errors: u64,
     pub wall: Duration,
+    /// How much of [`Self::wall`] went on real-time pacing ([`RunLimits::speed`]).
+    pub slept: Duration,
     pub pc: u32,
     pub console: Vec<u8>,
     pub console_streamed: bool,
@@ -201,6 +208,7 @@ impl Emulator {
             prof_hist,
             prof_thist,
             core1_end,
+            slept: st_slept,
             ..
         } = st;
         console.extend_from_slice(&self.machine.take_console_output());
@@ -344,6 +352,7 @@ impl Emulator {
             stub_hits: self.machine.stub_hits,
             bus_errors: self.machine.bus_errors,
             wall: start.elapsed(),
+            slept: st_slept,
             pc: self.cpu.pc(),
             console,
             console_streamed: diag.live_console,
@@ -710,13 +719,52 @@ impl Emulator {
             }
         }
 
+        if let Some(speed) = limits.speed {
+            self.pace(st, speed);
+        }
+
         st.wall_check += 1;
         if let Some(max) = limits.max_wall {
-            if st.wall_check.is_multiple_of(65_536) && st.start.elapsed() >= max {
+            // Pacing sleep does not count: the budget bounds the work, not the
+            // real time a paced run is meant to take.
+            if st.wall_check.is_multiple_of(65_536)
+                && st.start.elapsed().saturating_sub(st.slept) >= max
+            {
                 return Some(RunEnd::TimeLimit);
             }
         }
         None
+    }
+
+    /// Hold the modelled clock to `speed` times real time, sleeping off whatever
+    /// lead it has built up. Called on a slow step, and only once the counter has
+    /// passed [`PACE_QUANTUM_US`], so the ordinary step pays a single compare.
+    ///
+    /// Most of a boot is the other way round — the model is slower than the board it
+    /// models — and a lead is built only where the run loop jumps the counter (an
+    /// idle `sleep`, a `wfi`, a fast-forwarded delay), which is exactly where real
+    /// hardware waits too. Time the model has fallen behind is never banked as credit
+    /// to run free with later: the baseline moves up instead, so a slow stretch
+    /// cannot buy an unthrottled one.
+    fn pace(&mut self, st: &mut RunState, speed: f64) {
+        let now_us = self.machine.systimer.now_us();
+        if now_us < st.pace_next_us {
+            return;
+        }
+        st.pace_next_us = now_us.saturating_add(PACE_QUANTUM_US);
+        let modelled = (now_us.saturating_sub(st.pace_base_us) as f64 / speed) as u64;
+        match Duration::from_micros(modelled).checked_sub(st.pace_base.elapsed()) {
+            Some(lead) if !lead.is_zero() => {
+                // Capped, so host input and a Ctrl-A x are still answered promptly.
+                let nap = lead.min(PACE_MAX_SLEEP);
+                std::thread::sleep(nap);
+                st.slept += nap;
+            }
+            _ => {
+                st.pace_base_us = now_us;
+                st.pace_base = Instant::now();
+            }
+        }
     }
 
     /// Fast-forward a firmware busy-wait on the free-running counter, a `udelay`
@@ -973,6 +1021,14 @@ impl Emulator {
         if limits.idle_spin_limit > 0 {
             n = n.min(st.win - 1 - st.w_steps);
         }
+        if limits.speed.is_some() {
+            n = n.min(
+                self.machine
+                    .systimer
+                    .cycles_until(st.pace_next_us)
+                    .saturating_sub(1),
+            );
+        }
         if limits.silent_us > 0 {
             // In the `k`-th step from here core 0 has retired at most `k` more
             // instructions and the counter has had exactly `k` more cycles.
@@ -987,6 +1043,12 @@ impl Emulator {
         n
     }
 }
+
+/// How much modelled time passes between two real-time pacing checks.
+const PACE_QUANTUM_US: u64 = 1_000;
+
+/// The longest one pacing sleep lasts; a longer lead takes several.
+const PACE_MAX_SLEEP: Duration = Duration::from_millis(20);
 
 /// Instructions the console-silence watchdog wants on top of its modelled time.
 const SILENT_RETIRED: u64 = 20_000_000;
@@ -1018,6 +1080,12 @@ struct RunState {
     prompt_seen: usize,
     prompt_floor: usize,
     host_poll: u32,
+    /// Real-time pacing: the modelled clock and the host clock at the baseline, the
+    /// modelled time of the next check, and how long the run has slept so far.
+    pace_base_us: u64,
+    pace_base: Instant,
+    pace_next_us: u64,
+    slept: Duration,
 
     // Spin detection: a PC inside a small range for a whole window, no output.
     win: u64,
@@ -1083,6 +1151,10 @@ impl RunState {
             prompt_seen: 0,
             prompt_floor: 0,
             host_poll: 0,
+            pace_base_us: m.systimer.now_us(),
+            pace_base: start,
+            pace_next_us: m.systimer.now_us(),
+            slept: Duration::ZERO,
             win: limits.idle_spin_limit.max(1),
             last_output_us: 0,
             last_output_retired: 0,
