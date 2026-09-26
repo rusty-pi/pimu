@@ -300,10 +300,15 @@ jobs:
       # Nothing is uploaded: a failed boot's output goes to the job log instead.
       # That includes the console file `boot-check <scenario> --from
       # boot-<scenario>.log --update` wants, base64 so the escape sequences in a
-      # Linux boot's console survive the round trip through this log:
+      # Linux boot's console survive the round trip through this log. Wrapped
+      # narrow on purpose: a line of a few hundred characters is dropped from the
+      # log altogether, which silently lost the two longest consoles. To decode,
+      # take the base64 lines after the marker and stop at the first line that is
+      # not one:
       #
-      #   sed -E 's/^.*Z //' <job log> | sed -n '/^=== base64 boot-linux.log.console/{n;p}' \
-      #     | base64 -d > boot-linux.log.console
+      #   sed -E 's/^.*Z //' <job log> \
+      #     | sed -n '/^=== base64 boot-linux.log.console/,$p' | tail -n +2 \
+      #     | sed -n '/^[A-Za-z0-9+/=]\+$/p' | base64 -d > boot-linux.log.console
       - name: Boot output
         if: failure()
         run: |
@@ -314,8 +319,8 @@ jobs:
           for f in boot-*.log.console; do
             [ -e "$f" ] || continue
             echo "=== base64 $f"
-            base64 -w0 "$f"
-            echo
+            base64 -w 120 "$f"
+            echo "=== end $f"
           done
 
   # Nothing a run stores is needed once it has finished: the boot inputs'
