@@ -53,6 +53,11 @@ Set on a build without it, the `PIMU_*` variables are reported and ignored, and
 `--trace*` and those channels are refused. [`diagnostics.md`](diagnostics.md)
 says which switch needs which build.
 
+A `diag` build also takes every step through every check of the run loop instead
+of skipping the ones that cannot act (`Emulator::fast_steps`), so the switches
+see each instruction, and it records start4's boot-progress tags (stores to
+`0x?EC0_2000`), which `boot` prints after the run.
+
 ## The `repo` feature
 
 Four commands only mean something inside a checkout: they check golden files

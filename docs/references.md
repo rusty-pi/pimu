@@ -25,8 +25,8 @@ The **scalar VPU** that executes `start4.elf` / `bootcode` is unchanged from the
 VC4 lineage: `start4.elf` is built with the vc4 toolchain and disassembles
 cleanly against Hermitage's VC4 tables (our decoder cross-checks 0 length
 mismatches over the whole binary). So the QPU references only become relevant if
-this bench ever needs to emulate GPU compute shaders — the machine-id / crypto /
-DTB boot path never touches the QPU.
+this bench ever needs to emulate GPU compute shaders — the crypto and DTB boot
+path never touches the QPU.
 
 ## ISA / hardware
 

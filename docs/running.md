@@ -120,5 +120,5 @@ the repository, and see the OTP rule in [`../CLAUDE.md`](../CLAUDE.md) for why.
 ## Asking the firmware questions
 
 `--mbox-property` and `--mbox-raw` post property requests to the firmware after
-it has booted, the way a booted Linux would through `/dev/vcio`. See
-[`diagnostics.md`](diagnostics.md).
+it has booted, the way a booted Linux would through `/dev/vcio`, and `--gencmd`
+runs a `vcgencmd` command over VCHIQ. See [`mailbox.md`](mailbox.md).

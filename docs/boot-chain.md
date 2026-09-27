@@ -60,32 +60,6 @@ run against the model;
 the B0 facts come from the bootcode's own tables and the public B0 UART logs in
 the rpi-eeprom issues.
 
-## Where `rpi-machine-id` comes from
-
-The string a [`rpi-mkosi`](https://github.com/valtzu/rpi-mkosi) image turns into
-its root-LUKS passphrase is derived in **stage 1**, not stage 2 — which is why
-bumping the EEPROM can move the passphrase just as bumping `start4.elf` can.
-
-The first stage builds a tagged handoff structure at `0xC004_0000` (`BSTE`,
-then `BVER`, `BSTS`, `BSTN`, `BSTM`, `BUSB` sub-blocks) and deposits the 16
-bytes inside the `BVER` block at offset `+0x8c`. It hashes the public identity
-rows to get them — the board serial (rows 28 and 35), the revision code (row
-30) and the Ethernet MAC (rows 64 and 65). Nothing on that path touches the
-secure-boot key hash or the device private key.
-
-`start4.elf` then only *republishes* it: `0x3ECC_5190` finds the `BVER` block and
-does `memcpy(out, BVER + 0x8c, 16)`, and the caller hex-encodes the result into
-`/chosen/rpi-machine-id`. `start4` carries its own fallback for a board with no
-such block, over fewer of the same rows, but on a normal boot it is never
-reached.
-
-The bench does not recompute any of this: to the model the derivation is a
-black box inside the firmware. What CI checks is the output for fixed inputs —
-the OTP rows in `src/periph/configotp.rs` are invented and pinned, and
-`testdata/boot/firmware.toml` asserts the `/chosen/rpi-machine-id` the firmware
-publishes from them. That is what answers "does this firmware pair keep the
-passphrase stable".
-
 ## Peripheral scope
 
 Only what boot needs. Every modelled register block has a spec in `specs/`,

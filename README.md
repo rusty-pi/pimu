@@ -221,8 +221,9 @@ golden transcripts and the images each boot needs.
 | [`docs/README.md`](docs/README.md) | The board sheet: every part the model knows about and what reaches what |
 | [`docs/boot-chain.md`](docs/boot-chain.md) | The boot stages, from the VPU ROM to Linux, and what each one reads |
 | [`docs/running.md`](docs/running.md) | Boot media, SD-card variants, OTP files, wall budgets |
-| [`docs/device-tree.md`](docs/device-tree.md) | Getting the patched device tree out, and where `rpi-machine-id` comes from |
+| [`docs/device-tree.md`](docs/device-tree.md) | Getting the patched device tree out of a run |
 | [`docs/diagnostics.md`](docs/diagnostics.md) | The `--log` channels and `PIMU_*` switches that find a wall |
+| [`docs/mailbox.md`](docs/mailbox.md) | Asking the booted firmware a property or a `vcgencmd`, and what it answers |
 | [`docs/building.md`](docs/building.md) | The source layout, build profiles, the `diag` feature, PGO, the release builds |
 | [`docs/periph/`](docs/periph/) | One page per register block, generated from `specs/*.toml` |
 | [`docs/vpu-isa.md`](docs/vpu-isa.md) | The VideoCore IV instruction set, with the evidence for each statement |
