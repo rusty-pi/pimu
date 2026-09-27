@@ -15,6 +15,11 @@ homepage: https://github.com/rusty-pi/pimu
 section: misc
 priority: optional
 
+# `boot <url>` fetches the boot partition over HTTP through curl, or wget where
+# there is no curl; nothing else needs either.
+recommends:
+  - curl
+
 contents:
   - src: dist/pimu
     dst: /usr/bin/pimu

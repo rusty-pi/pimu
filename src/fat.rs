@@ -8,6 +8,7 @@
 //! allocated before the files for that reason: everything answered out of
 //! memory is one run of blocks at the front of the card.
 
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -30,10 +31,27 @@ const EPOCH_DATE: u16 = (1 << 5) | 1;
 const VOLUME_LABEL: &[u8; 11] = b"PIMU       ";
 const DIR_ENTRY: usize = 32;
 
+/// Where a card file's bytes are, once the firmware asks for a block of it: a
+/// host file, or a URL fetched on demand ([`crate::remote`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Source {
+    Path(PathBuf),
+    Url(String),
+}
+
+impl fmt::Display for Source {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Source::Path(p) => write!(f, "{}", p.display()),
+            Source::Url(u) => write!(f, "{u}"),
+        }
+    }
+}
+
 pub struct Extent {
     pub lba: u64,
     pub blocks: u64,
-    pub path: PathBuf,
+    pub source: Source,
     pub len: u64,
 }
 
@@ -53,22 +71,29 @@ pub fn is_boot_partition(dir: &Path) -> bool {
 }
 
 pub fn card_from_dir(dir: &Path) -> Result<Card> {
-    Builder::default().build(read_dir(dir)?)
+    card_from_entries(read_dir(dir)?)
 }
 
-struct Entry {
-    name: String,
-    kind: Kind,
+/// A card out of a tree described rather than walked, as a listing over HTTP
+/// gives one ([`crate::remote::listing`]).
+pub fn card_from_entries(entries: Vec<Entry>) -> Result<Card> {
+    Builder::default().build(entries)
 }
 
-enum Kind {
-    File { path: PathBuf, len: u64 },
+/// One entry of the card's tree. The order is the order the firmware finds them
+/// in, so it must not depend on the host's readdir order or collation.
+pub struct Entry {
+    pub name: String,
+    pub kind: Kind,
+}
+
+pub enum Kind {
+    File { source: Source, len: u64 },
     Dir(Vec<Entry>),
 }
 
-/// The host directory, by name: entry order is the order the firmware finds
-/// them, so it must not depend on the host's readdir order or collation. Dot
-/// files are left out, so a `.git` is not a directory of the card.
+/// The host directory, by name. Dot files are left out, so a `.git` is not a
+/// directory of the card.
 fn read_dir(dir: &Path) -> Result<Vec<Entry>> {
     let mut entries = Vec::new();
     for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
@@ -84,7 +109,7 @@ fn read_dir(dir: &Path) -> Result<Vec<Entry>> {
             Kind::Dir(read_dir(&path)?)
         } else if meta.is_file() {
             Kind::File {
-                path,
+                source: Source::Path(path),
                 len: meta.len(),
             }
         } else {
@@ -112,7 +137,7 @@ struct Item {
 
 enum What {
     Dir(usize),
-    File { path: PathBuf, len: u64 },
+    File { source: Source, len: u64 },
 }
 
 #[derive(Default)]
@@ -145,7 +170,7 @@ impl Builder {
             bytes += DIR_ENTRY + long.as_deref().map_or(0, |n| fragments(n) * DIR_ENTRY);
             let what = match entry.kind {
                 Kind::Dir(children) => What::Dir(self.plan(children, Some(me))),
-                Kind::File { path, len } => What::File { path, len },
+                Kind::File { source, len } => What::File { source, len },
             };
             items.push(Item { long, short, what });
         }
@@ -176,16 +201,13 @@ impl Builder {
         let mut files: Vec<(usize, usize, u32)> = Vec::new();
         for (d, dir) in self.dirs.iter().enumerate() {
             for (i, item) in dir.items.iter().enumerate() {
-                let What::File { path, len } = &item.what else {
+                let What::File { source, len } = &item.what else {
                     continue;
                 };
                 // A FAT32 entry carries the size in 32 bits, so nothing that
                 // big can go on a card at all.
                 if *len > u32::MAX as u64 {
-                    bail!(
-                        "{}: {len} bytes is more than a FAT32 volume can hold",
-                        path.display()
-                    );
+                    bail!("{source}: {len} bytes is more than a FAT32 volume can hold");
                 }
                 if *len == 0 {
                     files.push((d, i, 0));
@@ -197,7 +219,7 @@ impl Builder {
                 extents.push(Extent {
                     lba: first as u64,
                     blocks: (clusters * SECTORS_PER_CLUSTER) as u64,
-                    path: path.clone(),
+                    source: source.clone(),
                     len: *len,
                 });
             }

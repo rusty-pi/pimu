@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use pimu::fat::{card_from_dir, Card};
+use pimu::fat::{card_from_dir, Card, Source};
 use pimu::periph::disk::BLOCK_SIZE;
 
 const PART_OFFSET: u64 = 2048 * BLOCK_SIZE as u64;
@@ -76,7 +76,10 @@ fn write_image(card: &Card, path: &Path) {
     for extent in &card.extents {
         f.seek(SeekFrom::Start(extent.lba * BLOCK_SIZE as u64))
             .unwrap();
-        f.write_all(&std::fs::read(&extent.path).unwrap()).unwrap();
+        let Source::Path(path) = &extent.source else {
+            panic!("a card out of a directory maps host files")
+        };
+        f.write_all(&std::fs::read(path).unwrap()).unwrap();
     }
     f.set_len(card.blocks * BLOCK_SIZE as u64).unwrap();
 }

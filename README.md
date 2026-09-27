@@ -110,6 +110,21 @@ git clone https://github.com/raspberrypi/firmware raspi-firmware
 pimu boot raspi-firmware/boot
 ```
 
+An `http://` or `https://` argument is such a directory served over HTTP, so
+there is nothing to clone or mount first — a GitHub URL is listed through the
+API, any other server has to index the directory itself:
+
+```bash
+pimu boot https://raw.githubusercontent.com/raspberrypi/firmware/refs/heads/master/boot/
+docker run --rm ghcr.io/rusty-pi/pimu:latest boot \
+  https://raw.githubusercontent.com/raspberrypi/firmware/refs/heads/master/boot/
+```
+
+Only the listing is read up front, since that is what the FAT32 volume is built
+from; a file's bytes are fetched when the firmware first reads a block of it and
+kept in `$XDG_CACHE_HOME/pimu/remote`, so that boot costs 13 MB of the
+directory's 150 and a second run none of it.
+
 A released binary carries that image; a build from this tree fetches it once with
 `gh` and keeps it in `$XDG_CACHE_HOME/pimu` (`~/.cache/pimu`), so delete it to
 take a newer one. Any boot with a medium and no EEPROM image of its own uses it,

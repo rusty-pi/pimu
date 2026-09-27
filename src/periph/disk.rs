@@ -6,6 +6,7 @@
 //! multi-gigabyte image whole into memory would otherwise be most of a run's
 //! footprint.
 
+use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::fs::File;
 use std::os::unix::fs::FileExt;
@@ -40,8 +41,41 @@ enum Backing {
 struct Mapped {
     lba: u64,
     blocks: u64,
-    file: File,
+    body: Body,
     len: u64,
+}
+
+/// A card file's bytes. A remote one is fetched whole the first time a block of
+/// it is read — a range request per block would be hundreds of round trips for
+/// a `start4.elf` — and the cache makes the next run's fetch a read.
+enum Body {
+    File(File),
+    Remote {
+        url: String,
+        body: OnceCell<Vec<u8>>,
+    },
+}
+
+impl Mapped {
+    /// `out.len()` bytes of the file from `at`, fetching it whole the first time
+    /// a remote one is read.
+    fn read(&self, out: &mut [u8], at: u64) -> std::io::Result<()> {
+        let (url, body) = match &self.body {
+            Body::File(file) => return file.read_exact_at(out, at),
+            Body::Remote { url, body } => (url, body),
+        };
+        if body.get().is_none() {
+            let fetched = crate::remote::fetch(url, self.len).map_err(std::io::Error::other)?;
+            let _ = body.set(fetched);
+        }
+        let body = body.get().expect("just fetched");
+        let at = at as usize;
+        let src = body
+            .get(at..at + out.len())
+            .ok_or_else(|| std::io::Error::other(format!("{url}: short at byte {at}")))?;
+        out.copy_from_slice(src);
+        Ok(())
+    }
 }
 
 impl Disk {
@@ -74,10 +108,17 @@ impl Disk {
     pub fn from_card(card: crate::fat::Card) -> std::io::Result<Disk> {
         let mut files = Vec::with_capacity(card.extents.len());
         for extent in card.extents {
+            let body = match extent.source {
+                crate::fat::Source::Path(path) => Body::File(File::open(&path)?),
+                crate::fat::Source::Url(url) => Body::Remote {
+                    url,
+                    body: OnceCell::new(),
+                },
+            };
             files.push(Mapped {
                 lba: extent.lba,
                 blocks: extent.blocks,
-                file: File::open(&extent.path)?,
+                body,
                 len: extent.len,
             });
         }
@@ -165,7 +206,7 @@ impl Disk {
                     let at = (lba - file.lba) * BLOCK_SIZE as u64;
                     if at < file.len {
                         let n = BLOCK_SIZE.min((file.len - at) as usize);
-                        if let Err(e) = file.file.read_exact_at(&mut out[..n], at) {
+                        if let Err(e) = file.read(&mut out[..n], at) {
                             panic!("reading a card file at byte {at}: {e}");
                         }
                     }

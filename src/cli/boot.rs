@@ -37,6 +37,7 @@ USAGE:
     pimu boot --eeprom <pieeprom.bin> [<options>]
     pimu boot <file.elf> [<options>]
     pimu boot <dir> [<options>]
+    pimu boot <url> [<options>]
 
     `boot <file> --eeprom` is the same as `boot --eeprom <file>`, and with no
     command the options are `boot`'s: `pimu --eeprom <file> ...`.
@@ -61,6 +62,14 @@ ZERO CONFIG:
     them (--sd-dir), and boots the EEPROM bootloader `rusty-pi/pi4-firmware`
     publishes when there is no `pieeprom.bin` to boot, since a firmware
     checkout carries none.
+
+    An `http://` or `https://` argument is such a directory served over HTTP,
+    so nothing has to be cloned or mounted first: a GitHub URL is listed
+    through the API, any other server has to index the directory itself, and
+    each file is fetched when the firmware first reads it and kept in
+    `$XDG_CACHE_HOME/pimu/remote`.
+
+        pimu boot https://raw.githubusercontent.com/raspberrypi/firmware/refs/heads/master/boot/
 
         pieeprom.bin  --eeprom            otp.json      --otp json:<file>
         sd.img        --sd                otp.bin       --otp binary:<file>
@@ -137,12 +146,14 @@ MEDIA AND NETWORK:
               A HAT on the 40-pin header, with this ID EEPROM image at 0x50 on
               I2C0 (`eepmake` output). The firmware reads it where it probes
               the header, and applies the device-tree overlay in it.
-    --sd-dir <dir>
+    --sd-dir <dir>|<url>
               An SD card whose boot partition holds the files in <dir>: the
               MBR, the FAT32 volume and its directories are built here, and
               the files are read from <dir> as the firmware asks for them.
               What `git clone https://github.com/raspberrypi/firmware` leaves
-              in `boot/` is such a directory. Mutually exclusive with --sd.
+              in `boot/` is such a directory. An `http://` or `https://` URL
+              is one served over HTTP, as the positional argument above takes.
+              Mutually exclusive with --sd.
     --emmc <img>
               An e-MMC part with this image soldered to the SD host, as a
               Compute Module has in place of a card slot. Answers CMD1 and the
@@ -375,7 +386,7 @@ struct BootOpts {
     dumps: Vec<(u32, u32)>,
     disasms: Vec<(u32, u32)>,
     sd_image: Option<PathBuf>,
-    sd_dir: Option<PathBuf>,
+    sd_dir: Option<CardDir>,
     emmc_image: Option<PathBuf>,
     hat_eeprom: Option<PathBuf>,
     check_coherency: bool,
@@ -419,6 +430,42 @@ struct BootOpts {
     otp_rows: Vec<(u32, u32)>,
 }
 
+/// The boot partition the card is built around: a host directory, or a URL a
+/// server has the files at.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum CardDir {
+    Dir(PathBuf),
+    Url(String),
+}
+
+impl CardDir {
+    fn from_arg(s: &str) -> CardDir {
+        match pimu::remote::is_url(s) {
+            true => CardDir::Url(s.to_string()),
+            false => CardDir::Dir(PathBuf::from(s)),
+        }
+    }
+
+    fn card(&self) -> Result<pimu::fat::Card> {
+        match self {
+            CardDir::Dir(dir) => pimu::fat::card_from_dir(dir),
+            CardDir::Url(url) => {
+                eprintln!("remote: {url} is the card, its files read as the firmware asks");
+                pimu::fat::card_from_entries(pimu::remote::listing(url)?)
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for CardDir {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CardDir::Dir(dir) => write!(f, "{}", dir.display()),
+            CardDir::Url(url) => write!(f, "{url}"),
+        }
+    }
+}
+
 /// Zero-config: an option left out takes the file of that name in the working
 /// directory, under the names the Pi's own tooling gives. Only an option the
 /// command line is silent about is filled in, and only when nothing rules it out
@@ -457,7 +504,7 @@ impl<'a> ZeroConfig<'a> {
 
     /// A directory of boot-partition files rather than an image of one; `boot`
     /// builds the card around them (`pimu::fat`).
-    fn boot_partition(&mut self, slot: &mut Option<PathBuf>) {
+    fn boot_partition(&mut self, slot: &mut Option<CardDir>) {
         let dir = if self.dir.as_os_str().is_empty() {
             Path::new(".")
         } else {
@@ -465,7 +512,7 @@ impl<'a> ZeroConfig<'a> {
         };
         if pimu::fat::is_boot_partition(dir) {
             self.found.push(format!("{} as the card", dir.display()));
-            *slot = Some(dir.to_path_buf());
+            *slot = Some(CardDir::Dir(dir.to_path_buf()));
         }
     }
 
@@ -537,11 +584,7 @@ include!(concat!(env!("OUT_DIR"), "/embedded_eeprom.rs"));
 /// from `rusty-pi/pi4-firmware`: built into a released binary, and otherwise
 /// fetched once and cached under `$XDG_CACHE_HOME/pimu`.
 fn fallback_eeprom() -> Result<PathBuf> {
-    let cache = std::env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
-        .context("no XDG_CACHE_HOME and no HOME to cache the EEPROM image under")?
-        .join("pimu");
+    let cache = pimu::remote::cache_dir()?;
     if let Some(image) = EMBEDDED_EEPROM {
         return unpack_eeprom(&cache, image);
     }
@@ -610,6 +653,7 @@ impl BootOpts {
     /// The options, or `None` for `--help`. `dir` is where [`ZeroConfig`] looks.
     fn parse(args: &[String], dir: &Path) -> Result<Option<Self>> {
         let mut path: Option<PathBuf> = None;
+        let mut url: Option<String> = None;
         let mut entry: Option<u32> = None;
         let mut usb_mb: Option<u64> = None;
         let mut display = false;
@@ -629,7 +673,7 @@ impl BootOpts {
         let mut dumps: Vec<(u32, u32)> = Vec::new();
         let mut disasms: Vec<(u32, u32)> = Vec::new();
         let mut sd_image: Option<PathBuf> = None;
-        let mut sd_dir: Option<PathBuf> = None;
+        let mut sd_dir: Option<CardDir> = None;
         let mut emmc_image: Option<PathBuf> = None;
         let mut hat_eeprom: Option<PathBuf> = None;
         let mut check_coherency = false;
@@ -752,7 +796,9 @@ impl BootOpts {
                 }
                 "--sd" => sd_image = Some(PathBuf::from(it.next().context("--sd needs a path")?)),
                 "--sd-dir" => {
-                    sd_dir = Some(PathBuf::from(it.next().context("--sd-dir needs a path")?))
+                    sd_dir = Some(CardDir::from_arg(
+                        it.next().context("--sd-dir needs a path or a URL")?,
+                    ))
                 }
                 "--emmc" => {
                     emmc_image = Some(PathBuf::from(it.next().context("--emmc needs a path")?))
@@ -909,9 +955,20 @@ impl BootOpts {
                     patches.push((parse_u32(a)?, parse_u32(v)?));
                 }
                 "-h" | "--help" => return Ok(None),
+                s if pimu::remote::is_url(s) => url = Some(s.to_string()),
                 s if !s.starts_with('-') => path = Some(PathBuf::from(s)),
                 s => bail!("unexpected argument '{s}' (try boot --help)"),
             }
+        }
+        // A URL is a boot partition served over HTTP: the card, and nothing
+        // else, since only a directory can hold the rest of the zero-config
+        // files. The EEPROM bootloader to boot it with comes from the fallback
+        // below, as it does for a firmware checkout.
+        if let Some(url) = url.take() {
+            if sd_dir.is_some() {
+                bail!("{url} is the card too: give one of it, --sd-dir, --sd and --emmc");
+            }
+            sd_dir = Some(CardDir::Url(url));
         }
         // A directory to boot: read from there, as `-C` does, and it is itself
         // the card when it holds a boot partition's files.
@@ -1529,10 +1586,11 @@ impl<'a> Rig<'a> {
             machine.emmc2.insert_disk(open_sd(p, &self.log)?);
         }
         if let Some(dir) = &self.opts.sd_dir {
-            let card = pimu::fat::card_from_dir(dir)
-                .with_context(|| format!("building a card out of {}", dir.display()))?;
+            let card = dir
+                .card()
+                .with_context(|| format!("building a card out of {dir}"))?;
             let disk = pimu::periph::disk::Disk::from_card(card)
-                .with_context(|| format!("opening the files in {}", dir.display()))?
+                .with_context(|| format!("opening the files in {dir}"))?
                 .with_log(self.log.clone(), "sd");
             machine.emmc2.insert_disk(disk);
         }
@@ -2751,7 +2809,7 @@ mod tests {
         put(&dir, "start4.elf", "");
         put(&dir, "config.txt", "arm_64bit=1\n");
         let o = BootOpts::parse(&args(&[]), &dir).unwrap().unwrap();
-        assert_eq!(o.sd_dir, Some(dir.clone()));
+        assert_eq!(o.sd_dir, Some(CardDir::Dir(dir.clone())));
         assert_eq!(o.sd_image, None);
         assert!(o.eeprom);
         std::fs::remove_dir_all(&dir).unwrap();
@@ -2779,9 +2837,54 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(o.path, dir.join("pieeprom.bin"));
-        assert_eq!(o.sd_dir, Some(dir.clone()));
+        assert_eq!(o.sd_dir, Some(CardDir::Dir(dir.clone())));
         assert!(o.eeprom);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    const BOOT_URL: &str =
+        "https://raw.githubusercontent.com/raspberrypi/firmware/refs/heads/master/boot/";
+
+    #[test]
+    fn a_url_is_the_card_and_not_the_file_to_boot() {
+        let o = BootOpts::parse(
+            &args(&["--eeprom", "pieeprom.bin", BOOT_URL]),
+            Path::new(""),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(o.path, PathBuf::from("pieeprom.bin"));
+        assert!(o.eeprom);
+        assert_eq!(o.sd_dir, Some(CardDir::Url(BOOT_URL.to_string())));
+        assert_eq!(o.sd_image, None);
+    }
+
+    #[test]
+    fn a_url_and_an_explicit_card_are_both_the_card() {
+        for other in [
+            ["--sd-dir", "boot"],
+            ["--sd", "sd.img"],
+            ["--emmc", "e.img"],
+        ] {
+            let Err(e) = BootOpts::parse(
+                &args(&["--eeprom", "pieeprom.bin", BOOT_URL, other[0], other[1]]),
+                Path::new(""),
+            ) else {
+                panic!("{} is a second card", other[0])
+            };
+            assert!(e.to_string().contains("give one of"), "{e:#}");
+        }
+    }
+
+    #[test]
+    fn sd_dir_takes_a_url_too() {
+        let o = BootOpts::parse(
+            &args(&["--eeprom", "pieeprom.bin", "--sd-dir", BOOT_URL]),
+            Path::new(""),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(o.sd_dir, Some(CardDir::Url(BOOT_URL.to_string())));
     }
 
     #[test]
