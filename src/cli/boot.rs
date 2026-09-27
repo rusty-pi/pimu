@@ -160,7 +160,8 @@ MEDIA AND NETWORK:
               swallow it. Repeatable. A card without a `config.txt` — what
               `raspberrypi/firmware`'s `boot/` is — gets one holding these
               lines, so `--config-txt enable_uart=1` is what makes such a
-              card print anything at all. Only for a card built out of files
+              card print anything at all, and `uart_2ndstage=1` what adds
+              start4.elf's own log. Only for a card built out of files
               (<dir>, <url>, --sd-dir); a disk image is opaque.
     --cmdline <text>
               The card's `cmdline.txt` is <text>, whatever it held: the

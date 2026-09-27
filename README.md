@@ -36,8 +36,8 @@ repository straight off GitHub:
 ```bash
 docker run --rm ghcr.io/rusty-pi/pimu:latest boot \
   https://raw.githubusercontent.com/raspberrypi/firmware/refs/heads/master/boot/ \
-  --config-txt arm_64bit=1 --config-txt enable_uart=1 --config-txt dtoverlay=disable-bt \
-  --cmdline "console=ttyAMA0,115200 earlycon"
+  --config-txt arm_64bit=1 --config-txt enable_uart=1 --config-txt uart_2ndstage=1 \
+  --config-txt dtoverlay=disable-bt --cmdline "console=ttyAMA0,115200 earlycon"
 ```
 
 The URL is a boot partition's own files served over HTTP: the MBR and the FAT32
@@ -46,8 +46,10 @@ reads it. That directory carries no EEPROM bootloader, so the one
 [`rusty-pi/pi4-firmware`](https://github.com/rusty-pi/pi4-firmware) publishes
 stands in, and no `config.txt`, so `--config-txt` and `--cmdline` supply the
 lines a card would — the firmware's own defaults leave the serial console off,
-exactly as they do on a real board. A local directory, or a bare `pimu boot` in
-one, works the same way; [`docs/running.md`](docs/running.md) has the rest.
+exactly as they do on a real board, and `uart_2ndstage=1` is what adds
+`start4.elf`'s own log to the bootloader's. A local directory, or a bare
+`pimu boot` in one, works the same way; [`docs/running.md`](docs/running.md) has
+the rest.
 That directory is a boot partition and nothing else, so the boot ends where a
 real board's would: the kernel panics for want of a root filesystem.
 
