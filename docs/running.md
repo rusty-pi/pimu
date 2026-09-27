@@ -1,7 +1,7 @@
 # Running a boot
 
-The basics — installing, the first boot, the media, booting a directory — are in
-the [README](../README.md). This page is the rest of it.
+The basics — installing, the first boot, the media — are in the
+[README](../README.md). This page is the rest of it.
 
 ## The cards
 
@@ -31,6 +31,42 @@ the scenario's own header says so again.
 Each boot scenario in `testdata/boot/` carries the exact flags and EEPROM
 settings for its medium, and `pimu boot-check <scenario> --plan` prints
 them — the shortest way to see how a given boot is set up.
+
+## Booting a directory
+
+Every option that names a file can be left out when the working directory holds
+that file: `pieeprom.bin` is `--eeprom`, and so are `sd.img`, `usb.img`,
+`otg.img`, `netboot/`, `otp.json` or `otp.bin`, `bootconf.txt` (a `--bootconf`
+line each) and `pubkey.bin`.
+
+```bash
+cd firmware && pimu boot       # boots from whatever is there, and says what it picked up
+pimu boot firmware/            # the same, without the cd (`pimu -C <dir> boot` too)
+```
+
+A directory holding a boot partition's own files — a `start4.elf` or a
+`config.txt` in it — is the card itself: the MBR and the FAT32 volume around
+them are built on the fly, and the files are read from the directory as the
+firmware asks for them.
+
+An `http://` or `https://` argument is that directory served over HTTP. A GitHub
+URL is listed through the API; any other server has to index the directory
+itself. Only the listing is read up front, since that is what the FAT32 volume
+is built from; a file's bytes are fetched when the firmware first reads a block
+of it and kept in `$XDG_CACHE_HOME/pimu/remote`, so booting the Raspberry Pi
+firmware repository costs 13 MB of the directory's 150 and a second run none of
+it.
+
+`--config-txt <LINE>` (repeatable) appends to the card's `config.txt`, under an
+`[all]` header, and `--cmdline <text>` is its `cmdline.txt`; both are held in
+memory, so a read-only directory or a URL takes them too.
+
+A directory with no EEPROM image of its own boots with the bootloader
+[`rusty-pi/pi4-firmware`](https://github.com/rusty-pi/pi4-firmware) publishes. A
+released binary carries that image; a build from this tree fetches it once with
+`gh` and keeps it in `$XDG_CACHE_HOME/pimu` (`~/.cache/pimu`), so delete it to
+take a newer one. Any boot with a medium and no EEPROM image of its own uses it,
+so `pimu boot --sd card.img` boots too.
 
 ## Wall budgets
 

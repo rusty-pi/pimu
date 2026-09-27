@@ -88,60 +88,25 @@ above in a USB enclosure.
 
 ### Or just point it at a directory
 
-Every option that names a file can be left out when the working directory holds
-that file: `pieeprom.bin` is `--eeprom`, and so are `sd.img`, `usb.img`,
-`otg.img`, `netboot/`, `otp.json` or `otp.bin`, `bootconf.txt` (a `--bootconf`
-line each) and `pubkey.bin`.
+A directory of a boot partition's own files is the card itself: the MBR and the
+FAT32 volume around them are built on the fly. An `http://` or `https://`
+argument is such a directory served over HTTP, fetched a file at a time as the
+firmware reads it, so there is nothing to clone or mount first:
 
 ```bash
-cd firmware && pimu boot       # boots from whatever is there, and says what it picked up
-pimu boot firmware/            # the same, without the cd (`pimu -C <dir> boot` too)
-```
-
-A directory of a boot partition's own files — a `start4.elf` or a `config.txt`
-in it — is the card itself: the MBR and the FAT32 volume around them are built
-on the fly, and the files are read from the directory as the firmware asks for
-them. So a firmware checkout boots as it is, with the EEPROM bootloader
-[`rusty-pi/pi4-firmware`](https://github.com/rusty-pi/pi4-firmware) publishes
-standing in for the one such a checkout has none of:
-
-```bash
-git clone https://github.com/raspberrypi/firmware raspi-firmware
-pimu boot raspi-firmware/boot
-```
-
-An `http://` or `https://` argument is such a directory served over HTTP, so
-there is nothing to clone or mount first — a GitHub URL is listed through the
-API, any other server has to index the directory itself:
-
-```bash
-pimu boot https://raw.githubusercontent.com/raspberrypi/firmware/refs/heads/master/boot/
 docker run --rm ghcr.io/rusty-pi/pimu:latest boot \
-  https://raw.githubusercontent.com/raspberrypi/firmware/refs/heads/master/boot/
-```
-
-Only the listing is read up front, since that is what the FAT32 volume is built
-from; a file's bytes are fetched when the firmware first reads a block of it and
-kept in `$XDG_CACHE_HOME/pimu/remote`, so that boot costs 13 MB of the
-directory's 150 and a second run none of it.
-
-That directory holds no `config.txt` and no `cmdline.txt`, so the firmware boots
-with its own defaults — which on a Pi 4 leave the serial console off, exactly as
-they do on a real board. `--config-txt <LINE>` (repeatable) appends to the card's
-`config.txt`, under an `[all]` header, and `--cmdline <text>` is its
-`cmdline.txt`; both are held in memory, so a read-only directory or a URL takes
-them too:
-
-```bash
-pimu boot https://raw.githubusercontent.com/raspberrypi/firmware/refs/heads/master/boot/ \
+  https://raw.githubusercontent.com/raspberrypi/firmware/refs/heads/master/boot/ \
   --config-txt arm_64bit=1 --config-txt enable_uart=1 --config-txt dtoverlay=disable-bt \
   --cmdline "console=ttyAMA0,115200 earlycon"
 ```
 
-A released binary carries that image; a build from this tree fetches it once with
-`gh` and keeps it in `$XDG_CACHE_HOME/pimu` (`~/.cache/pimu`), so delete it to
-take a newer one. Any boot with a medium and no EEPROM image of its own uses it,
-so `pimu boot --sd card.img` boots too.
+That boots Raspberry Pi's own firmware repository as it stands. It carries no
+EEPROM bootloader, so the one
+[`rusty-pi/pi4-firmware`](https://github.com/rusty-pi/pi4-firmware) publishes
+stands in; it carries no `config.txt` either, and the firmware's own defaults
+leave the serial console off, so `--config-txt` and `--cmdline` supply the lines
+a card would. `pimu boot <dir>` and a bare `pimu boot` in a directory work the
+same way — [`docs/running.md`](docs/running.md) has the rest.
 
 ## Commands
 
