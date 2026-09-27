@@ -88,6 +88,14 @@ WIFI_SHA256=(
 	"lib/firmware/brcm/brcmfmac43455-sdio.clm_blob 9823842cae9fb9a5dd1e5fb31f595516ec7deee341354bef30bb3026eee29cc1"
 	"lib/firmware/brcm/brcmfmac43455-sdio.txt ca709be81a78bdb6932936374f39943acbd7af07fae6151011127599a3ce9e3d"
 )
+# The SPI pair: `spi-bcm2835`, the master's driver, and `spidev`, which is what
+# gives userspace /dev/spidev0.0. Both are modules in the stock kernel, from the
+# same FIRMWARE_REF as the modules above (`EEPROM_SPI=1 make-sd.sh` puts them on
+# the card, #161).
+SPI_SHA256=(
+	"lib/modules/KVER/kernel/drivers/spi/spi-bcm2835.ko.xz d975489c5625cef37cd36b1362ad163cb1e284a552c47756b5efe868347d0bd4"
+	"lib/modules/KVER/kernel/drivers/spi/spidev.ko.xz 0cbce719279e7f807fd3cf385343b78998fa18d6fac0d112f2ab1c07e01d8e4f"
+)
 # ---------------------------------------------------------------------------
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -125,8 +133,11 @@ queue "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/fixup4cd.dat" "fixup4cd.dat"
 queue "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/kernel8.img" "kernel8.img"
 queue "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/bcm2711-rpi-4-b.dtb" "bcm2711-rpi-4-b.dtb"
 mkdir -p "$dest/overlays"
+# `audremap.dtbo` and `spi-gpio40-45.dtbo` are the pair that moves SPI0 onto the
+# bootloader EEPROM's own pins, so that Linux can read and write it through
+# /dev/spidev0.0 (`EEPROM_SPI=1 scripts/make-sd.sh`, #161).
 for ovl in overlay_map.dtb disable-bt.dtbo disable-wifi.dtbo vc4-kms-v3d.dtbo \
-           vc4-kms-v3d-pi4.dtbo; do
+           vc4-kms-v3d-pi4.dtbo audremap.dtbo spi-gpio40-45.dtbo; do
 	queue "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/overlays/$ovl" "overlays/$ovl"
 done
 
@@ -191,6 +202,15 @@ queue "$fwmod/drivers/net/wireless/broadcom/brcm80211/brcmfmac/brcmfmac.ko.xz" \
 queue "$fwmod/drivers/net/wireless/broadcom/brcm80211/brcmfmac/cyw/brcmfmac-cyw.ko.xz" \
 	"wifi/$brcm80211/brcmfmac/cyw/brcmfmac-cyw.ko.xz"
 
+# The other two modules a card may need: the SPI master's own driver and
+# `spidev`. With `dtoverlay=spi-gpio40-45` the bus behind them is the bootloader
+# EEPROM's (#161). Same kernel version as the modules above.
+spi="$dest/spi"
+rm -rf "$spi"
+echo "raspberrypi/firmware @ $FIRMWARE_REF: $kver SPI modules"
+queue "$fwmod/drivers/spi/spi-bcm2835.ko.xz" "spi/$mods/drivers/spi/spi-bcm2835.ko.xz"
+queue "$fwmod/drivers/spi/spidev.ko.xz" "spi/$mods/drivers/spi/spidev.ko.xz"
+
 echo "RPi-Distro/firmware-nonfree @ $NONFREE_REF"
 nonfree="$raw/RPi-Distro/firmware-nonfree/$NONFREE_REF/debian/added-firmware"
 queue "$nonfree/cypress/cyfmac43455-sdio-standard.bin" "wifi/lib/firmware/brcm/brcmfmac43455-sdio.bin"
@@ -211,6 +231,16 @@ for entry in "${WIFI_SHA256[@]}"; do
 	echo "$sum  $file" | sha256sum --quiet -c - || {
 		echo "  got $(sha256sum "$file" | cut -d' ' -f1)" >&2
 		echo "  (a FIRMWARE_REF or NONFREE_REF override means re-taking WIFI_SHA256)" >&2
+		exit 1
+	}
+done
+
+for entry in "${SPI_SHA256[@]}"; do
+	path="${entry% *}" sum="${entry##* }"
+	file="$spi/${path//KVER/$kver}"
+	echo "$sum  $file" | sha256sum --quiet -c - || {
+		echo "  got $(sha256sum "$file" | cut -d' ' -f1)" >&2
+		echo "  (a FIRMWARE_REF override means re-taking SPI_SHA256)" >&2
 		exit 1
 	}
 done

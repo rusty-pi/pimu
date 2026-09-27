@@ -103,6 +103,14 @@ wireless="${WIRELESS:-0}"
 # the driver to find at all.
 brcmfmac="${BRCMFMAC:-0}"
 if [[ "$brcmfmac" == 1 ]]; then wireless=1; fi
+# `EEPROM_SPI=1` remaps SPI0 onto the bootloader EEPROM's own pins, which is how
+# `rpi-eeprom-update` reads and writes the flash from Linux with no recovery.bin
+# and no power cycle (#161). `spi-gpio40-45` puts the master on GPIO 40..42 and
+# its three chip selects on 43..45 as plain outputs, and `audremap` is what
+# moves PWM audio off 40/41 so the overlay can have them. /dev/spidev0.0 then
+# reaches the flash; without the pair it reaches the header pins, where
+# `flashrom --flash-name` answers `No EEPROM/flash device found`.
+eeprom_spi="${EEPROM_SPI:-0}"
 # Which tty the kernel's `console=serial0` ends up being, and so where the
 # shell goes: `serial0` is the PL011 with Bluetooth disabled and the
 # mini-UART with it enabled.
@@ -116,6 +124,13 @@ uart_2ndstage=1
 dtparam=spi=on
 dtparam=audio=off
 EOF
+  if [[ "$eeprom_spi" == 1 ]]; then
+    cat <<'EOF'
+
+dtoverlay=audremap
+dtoverlay=spi-gpio40-45
+EOF
+  fi
   if [[ "$wireless" != 1 ]]; then
     cat <<'EOF'
 
@@ -225,6 +240,15 @@ if [[ -f "$fw/busybox-aarch64" ]]; then
       ln -s busybox "$rootfs/bin/$applet"
     done
   fi
+  # And the EEPROM card needs `insmod` for spidev, plus `devmem` and `printf`
+  # to work the master's registers by hand: nothing in busybox speaks
+  # `SPI_IOC_MESSAGE`, so a full-duplex flash command is driven straight
+  # through the registers (#161).
+  if [[ "$eeprom_spi" == 1 ]]; then
+    for applet in insmod devmem printf; do
+      [[ -e "$rootfs/bin/$applet" ]] || ln -s busybox "$rootfs/bin/$applet"
+    done
+  fi
   ln -s ../bin/busybox "$rootfs/sbin/init"
   for applet in halt poweroff reboot; do
     ln -s ../bin/busybox "$rootfs/sbin/$applet"
@@ -302,6 +326,19 @@ if [[ "$brcmfmac" == 1 ]]; then
     echo "  + p2: iw ($(stat -Lc %s "$userland/usr/sbin/iw") bytes) and libnl"
   else
     echo "  ! missing $userland/usr/sbin/iw (nothing on the card can read nl80211; run fetch-firmware.sh)" >&2
+  fi
+fi
+# `spi-bcm2835` and `spidev`, so that /dev/spidev0.0 exists: both are modules in
+# the stock kernel, and with `dtoverlay=spi-gpio40-45` the bus behind them is the
+# bootloader EEPROM's (#161). Left where the scenario insmods them from.
+if [[ "$eeprom_spi" == 1 ]]; then
+  if [[ -d "$fw/spi/lib" ]]; then
+    mkdir -p "$rootfs/lib"
+    cp -a "$fw/spi/lib/." "$rootfs/lib/"
+    find "$rootfs/lib/modules" -name '*.ko.xz' -exec xz -d {} +
+    echo "  + p2: the SPI master's driver and spidev"
+  else
+    echo "  ! missing $fw/spi (no SPI modules on the card; run fetch-firmware.sh)" >&2
   fi
 fi
 # The firmware's command line ends in `console=tty1`, which makes the

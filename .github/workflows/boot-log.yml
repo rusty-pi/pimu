@@ -172,6 +172,11 @@ jobs:
       - name: Build SD image with the WiFi driver
         run: BRCMFMAC=1 ./scripts/make-sd.sh firmware/sd-brcmfmac.img
 
+      # And the card that remaps SPI0 onto the bootloader EEPROM's own pins, for
+      # the scenario that reads the flash from Linux userspace (#161).
+      - name: Build SD image with SPI0 on the EEPROM's pins
+        run: EEPROM_SPI=1 ./scripts/make-sd.sh firmware/sd-eeprom-spi.img
+
       # And with the cut-down firmware (#105).
       - name: Build SD image with the cut-down firmware
         run: START4=start4cd KERNEL=halt ./scripts/make-sd.sh firmware/sd-halt-start4cd.img
@@ -259,6 +264,8 @@ jobs:
             scenarios: http-boot
           - name: linux
             scenarios: linux
+          - name: eeprom-spi
+            scenarios: eeprom-spi
           - name: linux-wireless
             scenarios: linux-bt linux-wifi
           - name: b0-stepping

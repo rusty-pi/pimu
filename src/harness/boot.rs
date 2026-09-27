@@ -368,8 +368,15 @@ impl BootScenario {
             } else {
                 ""
             };
+            // And `-eeprom-spi` the card whose config.txt puts SPI0 on the
+            // bootloader EEPROM's own pins (#161).
+            let eeprom_spi = if img.contains("-eeprom-spi") {
+                "EEPROM_SPI=1 "
+            } else {
+                ""
+            };
             let make = format!(
-                "{wifi}{start4}{kernel}scripts/make-sd.sh {}",
+                "{eeprom_spi}{wifi}{start4}{kernel}scripts/make-sd.sh {}",
                 tidy_path(&path).display()
             );
             v.push(BootInput { path, make });

@@ -167,6 +167,9 @@ pub const ID_DMA: [u32; crate::periph::dma_legacy::NUM_GIC_LINES] = [
     crate::spec::dma::IRQ_GIC_CH7_8,
     crate::spec::dma::IRQ_GIC_CH9_10,
 ];
+/// Every SPI master on the chip shares this one; `PACTL_CS` says which of them
+/// is asking, and SPI0 is the only one the model drives.
+pub const ID_SPI: u32 = crate::spec::spi0::IRQ_GIC;
 pub const ID_GPIO_BANK0: u32 = crate::spec::gpio::IRQ_GIC_BANK0;
 pub const ID_GPIO_BANK1: u32 = crate::spec::gpio::IRQ_GIC_BANK1;
 pub const ID_GPIO_BANK1_MIRROR: u32 = crate::spec::gpio::IRQ_GIC_BANK1_MIRROR;

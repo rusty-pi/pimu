@@ -6,7 +6,7 @@
 - Base: `0x7E204E00`
 - Size: `0x4`
 
-The BCM2711 has more peripherals than VC peripheral IRQs, so all the SPI masters share one line, all the I²C masters another and all the PL011 UARTs a third. This one register says which member of each group has something pending: bits 0 to 6 the SPI masters, 8 to 15 the I²C masters, 16 to 20 the UARTs. Nothing in the model raises any of those lines, so it reads 0 — the honest answer for a machine where none of them has an interrupt pending.
+The BCM2711 has more peripherals than VC peripheral IRQs, so all the SPI masters share one line, all the I²C masters another and all the PL011 UARTs a third. This one register says which member of each group has something pending: bits 0 to 6 the SPI masters, 8 to 15 the I²C masters, 16 to 20 the UARTs. SPI0 is the one master the model drives an interrupt from (`specs/spi0.toml`), so bit 0 answers its line and every other bit reads 0 — the honest answer for a machine where none of the rest has an interrupt pending.
 
 Sources:
 

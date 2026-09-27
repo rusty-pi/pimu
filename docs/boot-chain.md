@@ -44,6 +44,37 @@ binary plus a text config block (`BOOT_UART`, `BOOT_ORDER`, `BOOT_WATCHDOG_*`,
 that line was the first M2 regression target; the model now runs well past it
 (see `board: boardrev d03115` in a `boot --eeprom` transcript).
 
+## The EEPROM from Linux
+
+The flash the bootloader came out of is reachable from the booted Linux too, and
+that is the only way to put a new image on a board whose own bootloader stage has
+no self-update: `rpi-eeprom-update` with `RPI_EEPROM_IMMEDIATE_UPDATE=1` writes
+it with `flashrom -p linux_spi:dev=/dev/spidev0.0,spispeed=16000`, no
+`recovery.bin` and no power cycle. It needs SPI0 moved off the header onto the
+flash's own pins:
+
+```
+dtparam=spi=on
+dtoverlay=audremap
+dtoverlay=spi-gpio40-45
+```
+
+`spi-gpio40-45` puts the master on GPIO 40..42 and its three chip selects on GPIO
+43..45 as plain outputs, and `audremap` is what takes PWM audio off 40/41 first.
+`EEPROM_SPI=1 scripts/make-sd.sh firmware/sd-eeprom-spi.img` builds that card,
+and `testdata/boot/eeprom-spi.toml` boots it and reads the flash's JEDEC id and
+its first bytes from userspace.
+
+Linux drives the master quite differently from the firmware, and
+`src/periph/spi0.rs` has all three shapes: `spi-bcm2835` never uses the native
+chip select, so the flash follows GPIO 43's level rather than `CS.TA`; a transfer
+of 96 bytes or more goes through the legacy DMA with `CS.DMAEN` set, which makes
+`FIFO` 32 bits wide and `DLEN` the end of the transfer; and anything between its
+polling limit and that runs off the master's interrupt. The image carries no
+flashrom — it links libpci, libusb and libftdi — so the scenario drives a flash
+command through the registers with `devmem`, and the driver's DMA and interrupt
+paths are covered by `tests/peripherals.rs` instead.
+
 ## B0 and C0
 
 The model is a C0 BCM2711 on a Pi 4B rev 1.5 (`d03115`) unless `boot

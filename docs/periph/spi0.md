@@ -7,7 +7,9 @@
 - Size: `0x18`
 - Interrupts: VPU source 118 · GIC id 150 (`GIC_SPI 118`)
 
-Driven in polled single-byte mode. The pads are GPIO 40..43 and only ALT4 puts them on the flash, so a transfer with the pins elsewhere reads MISO idle-high (`specs/gpio.toml`). Every shift is instantaneous; the flash answers `READ`, `FAST_READ`, `RDID`, `RDSR`, `WREN` / `WRDI`, `SE` and `PP`. start4 reads the flash once, before it touches the SD card: it saves the functions of GPIO 40..43, puts them on ALT4, reads every section header of the image (a 28-byte full-duplex `READ`: command, three address bytes, the 24-byte header; at most 33 sections, stopping at a bad magic or at 512 KiB), then the data of the first `pubkey.bin` and `bootconf.txt` (data length + 4 bytes in one transfer), and gives the pins their functions back. Each transfer's buffer is also what goes out after the address, so the header reads send the previous header, and the first one whatever was on the stack. The two EEPROM stages instead switch GPIO 43, 40, 41 and 42 to ALT4, in that order, for every flash session. Afterwards they clear `CS` and `CLK` and put the four pins back to inputs in the same order. GPIO 42 is also the activity LED, so they then drive it to the state they last set it to, which makes it an output again. After an error code has been flashed, that state is off.
+Two masters drive it. The firmware uses polled single-byte mode: the pads are GPIO 40..42 (miso, mosi, sclk) with the flash's chip select on GPIO 43, and only ALT4 puts them on the flash, so a transfer with the pins elsewhere reads MISO idle-high (`specs/gpio.toml`). Every shift is instantaneous; the flash answers `READ`, `FAST_READ`, `RDID`, `REMS`, `RES`, `RDSR`, `WRSR`, `WREN` / `WRDI`, `SE`, the two block erases, chip erase and `PP`, and reports the JEDEC id of the Winbond W25X40 a 4B carries. start4 reads the flash once, before it touches the SD card: it saves the functions of GPIO 40..43, puts them on ALT4, reads every section header of the image (a 28-byte full-duplex `READ`: command, three address bytes, the 24-byte header; at most 33 sections, stopping at a bad magic or at 512 KiB), then the data of the first `pubkey.bin` and `bootconf.txt` (data length + 4 bytes in one transfer), and gives the pins their functions back. Each transfer's buffer is also what goes out after the address, so the header reads send the previous header, and the first one whatever was on the stack. The two EEPROM stages instead switch GPIO 43, 40, 41 and 42 to ALT4, in that order, for every flash session. Afterwards they clear `CS` and `CLK` and put the four pins back to inputs in the same order. GPIO 42 is also the activity LED, so they then drive it to the state they last set it to, which makes it an output again. After an error code has been flashed, that state is off.
+
+Linux's `spi-bcm2835` is the other one, and reaches the flash with `dtoverlay=spi-gpio40-45`, which puts the master on GPIO 40..42 and its three chip selects on GPIO 43..45 as plain outputs. That driver never uses the native select — it parks `CS.CS` at the invalid `0b11` and works the select through gpiolib — so the flash follows GPIO 43's level and not `CS.TA`, which the driver raises and drops once per transfer while one `spi_message` holds the select down across several. A transfer of 96 bytes or more runs off the legacy DMA with `CS.DMAEN` set, and the rest off `CS.INTD` / `CS.INTR`.
 
 Sources:
 
@@ -17,10 +19,13 @@ Sources:
 - trace (high): start4: `GPFSEL4` `0x40` -> `0x6DB` at `0x3ECC9562` (pins 40..43 to ALT4), 27 header reads and reads of 512 and 79 bytes from the stock image, `GPFSEL4` back to `0x40`, then the first log line
 - decompile (high): bootloader: session end `0xAEDDC` (`CS`, `CLK` <- 0, pins 43 and 40..42 to function 0), then `0xA937A`, which drives the LED from the state `0xA9534` records; the error flash `0xA817A` ends with `0xA9534(0)`
 - trace (high): bootcode and bootloader: `GPFSEL4` `0x40`, `0x640`, `0x643`, `0x65B`, `0x6DB` into a session; `0xDB`, `0xD8`, `0xC0`, `0` after it, then `GPSET1` (or `GPCLR1`) <- `0x400` and `GPFSEL4` <- `0x40`
+- linux (high): `drivers/spi/spi-bcm2835.c`: `bcm2835_spi_setup` parks the native select at `CS_CS_10 | CS_CS_01` because "the driver always uses software-controlled GPIO chip select"; `bcm2835_spi_transfer_one` picks polling under `polling_limit_us`, then DMA from `BCM2835_SPI_DMA_MIN_LENGTH` (96 bytes), then interrupts; `bcm2835_wr_fifo_count` writes the FIFO as `u32` with `DMAEN` set
+- linux (high): `arch/arm/boot/dts/overlays/spi-gpio40-45-overlay.dts`: `spi0_pins` to `brcm,pins = <40 41 42>` function 3 (ALT4) and `spi0_cs_pins` to `brcm,pins = <45 44 43>` function 1 (output), with `cs-gpios = <&gpio 43 1>, <&gpio 44 1>, <&gpio 45 1>`
+- measured (high): Raspberry Pi 4B d03115 booted with `dtparam=spi=on`, `dtoverlay=audremap` and `dtoverlay=spi-gpio40-45`: `flashrom -p linux_spi:dev=/dev/spidev0.0,spispeed=16000 --flash-name` answers `vendor="Winbond" name="W25X40"`, and without the two overlays `No EEPROM/flash device found`
 
 Interrupts (VPU source 118 · GIC id 150 (`GIC_SPI 118`)):
 
-One line for every SPI master on the chip: SPI0 here and SPI3 to SPI6 in the `0x7E204600`..`0x7E204C00` block all raise it, and `PACTL_CS` bits 0 to 6 say which. The EEPROM bootloader polls `CS.DONE` instead of taking it.
+One line for every SPI master on the chip: SPI0 here and SPI3 to SPI6 in the `0x7E204600`..`0x7E204C00` block all raise it, and `PACTL_CS` bits 0 to 6 say which (`specs/pactl.toml`). The EEPROM bootloader polls `CS.DONE` instead of taking it; Linux's `spi-bcm2835` takes it for every transfer between its polling limit and its DMA one, so SPI0 drives the line and bit 0.
 
 - datasheet (high): BCM2711 ARM Peripherals, §6.2.4 Table 102: VC peripheral IRQ 54 is the OR of all SPI masters, VPU source 118; §6.2.4 Figure 6 puts SPI0 on `PACTL_CS` bit 0
 - linux (high): `firmware/bcm2711-rpi-4-b.dtb`: `/soc/spi@7e204000` and the four masters at `0x7e204600`..`0x7e204c00` all carry `interrupts = <0x0 0x76 0x4>`
@@ -44,10 +49,10 @@ Control and status.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
-| 1:0 | `CS` | rw | Chip select. |
+| 1:0 | `CS` | rw | Which of the three native chip selects a transfer asserts. `0b11` is not one of them, and Linux's `spi-bcm2835` writes exactly that so the native select cannot interfere with the GPIO one it drives instead. |
 | 4 | `CLEAR_TX` | w | Clear the TX FIFO. |
 | 5 | `CLEAR_RX` | w | Clear the RX FIFO. |
-| 7 | `TA` | rw | Transfer active; the whole command runs with it set. start4 writes `CS = 0` (its mode bits for the flash), sets `TA` with a read-modify-write, and clears it the same way once the transfer is done. |
+| 7 | `TA` | rw | Transfer active; the whole command runs with it set, and with a native select it is also what asserts it. start4 writes `CS = 0` (its mode bits for the flash), sets `TA` with a read-modify-write, and clears it the same way once the transfer is done. With a GPIO select it frames one transfer and not the command: `spi-bcm2835` drops it between the transfers of a message the select stays down across, so the flash must not read that as the command ending. |
 | 16 | `DONE` | r | Nothing left to shift. start4's transfer waits for it, with no timeout, once it has written and read back every byte, then clears `TA`. |
 | 17 | `RXD` | r | RX FIFO holds data. |
 | 18 | `TXD` | r | TX FIFO has room. |
@@ -56,9 +61,9 @@ Control and status.
 | 2 | `CPHA` | rw | Clock phase: sample on the second edge. |
 | 3 | `CPOL` | rw | Clock polarity: the clock idles high. |
 | 6 | `CSPOL` | rw | Chip select is active high. |
-| 8 | `DMAEN` | rw | Pace the FIFOs with DREQs, so a DMA channel can drive the transfer. Writing `FIFO` then means writing the DMA header, not a byte. |
-| 9 | `INTD` | rw | Raise the interrupt when `DONE` goes up. |
-| 10 | `INTR` | rw | Raise the interrupt when `RXR` goes up. |
+| 8 | `DMAEN` | rw | Pace the FIFOs with DREQs, so a DMA channel can drive the transfer. `FIFO` is then 32 bits wide rather than 8 — four bytes a word, low byte first — and `DLEN` is what ends the transfer, so the last word of an odd length is partial and every word past it shifts nothing. Toggling the bit garbles whatever is still in the FIFOs, which is why the driver only ever does it between transfers. |
+| 9 | `INTD` | rw | Raise the interrupt when `DONE` goes up. Linux uses it together with `INTR` for a transfer too long to poll and too short for the DMA, and reads `CS` in the handler to find out which of the two it was. |
+| 10 | `INTR` | rw | Raise the interrupt when `RXR` goes up, which is the receive FIFO three-quarters full: 48 of its 64 bytes. `spi-bcm2835` bails out of its handler unless this bit is set, so it gates the line for `INTD` too. |
 | 11 | `ADCS` | rw | De-assert chip select automatically at the end of a DMA transfer. |
 | 12 | `REN` | rw | Read enable: in bidirectional mode the pin is an input. |
 | 13 | `LEN` | rw | LoSSI mode — the master drives a display’s 9-bit command / parameter protocol rather than plain SPI. |
@@ -179,7 +184,7 @@ Sources:
 
 Offset `0x004` · access `rw` · 32 bits
 
-Write shifts a byte out, read takes the byte shifted in.
+Write shifts a byte out, read takes the byte shifted in — or four of each while `CS.DMAEN` is set.
 
 Sources:
 
@@ -201,7 +206,7 @@ Sources:
 
 Offset `0x00C` · access `rw` · 32 bits
 
-DMA data length.
+DMA data length, in bytes: how far a `CS.DMAEN` transfer shifts, whatever the DMA keeps writing. `spi-bcm2835` sets it, then `CS.TA` with `DMAEN`, and clears it again at the end of the transfer.
 
 Sources:
 

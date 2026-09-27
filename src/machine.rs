@@ -184,6 +184,14 @@ const GPFSEL_WINDOW: std::ops::Range<u32> = {
     base..base + crate::spec::gpio::GPFSEL_COUNT * crate::spec::gpio::GPFSEL_STRIDE
 };
 
+/// `GPSET1` and `GPCLR1`: they carry the level of GPIO 43, which is the boot
+/// flash's chip select while Linux drives it as an output
+/// ([`Machine::route_gpio_pins`]).
+const GPIO_DRIVE_BANK1: [u32; 2] = [
+    map::GPIO_BASE + crate::spec::gpio::GPSET + 4,
+    map::GPIO_BASE + crate::spec::gpio::GPCLR + 4,
+];
+
 /// The address the Bluetooth modem comes up holding. This is the chip's own, not
 /// the board's — the firmware derives that from the fuses and the host programs
 /// it in at attach — so nothing here derives it: it is an invented address from
@@ -254,7 +262,7 @@ impl Machine {
             gpio: Gpio::new(),
             spi0: {
                 let mut spi0 = Spi0::new();
-                spi0.set_pins(false);
+                spi0.set_bus(false, crate::periph::spi0::ChipSelect::Off);
                 spi0
             },
             pactl: Pactl::new(),
@@ -782,6 +790,11 @@ impl Machine {
             return Some((&mut self.spi0, off));
         }
         if let Some(off) = hit(map::PACTL_BASE, map::PACTL_SIZE) {
+            // Which of the masters behind the ORed line is asking: the block
+            // holds no state of its own, so the answer is taken from the one
+            // device that drives it.
+            let spi0 = self.spi0.irq_line();
+            self.pactl.set_spi0(spi0);
             return Some((&mut self.pactl, off));
         }
         if let Some(off) = hit(map::PWM0_BASE, map::PWM_SIZE) {
@@ -1169,12 +1182,23 @@ impl Machine {
 
     /// Put each master's pads where the pin functions say; the pins belong to the
     /// GPIO block and the masters are their own devices. SPI0 reaches the boot flash
-    /// only on GPIO 40..43 ALT4 and I²C 0 the header's HAT EEPROM only on GPIO 0/1
+    /// only on GPIO 40..42 ALT4 and I²C 0 the header's HAT EEPROM only on GPIO 0/1
     /// ALT0, and the firmware moves each there and back around every use.
+    ///
+    /// The flash's chip select is GPIO 43, which the firmware puts on ALT4 with
+    /// the other three and Linux's `spi-bcm2835` drives as a plain output
+    /// instead (`dtoverlay=spi-gpio40-45`, #161), so the select is either
+    /// `CS.TA` or that pin's level.
     fn route_gpio_pins(&mut self) {
+        use crate::periph::spi0::ChipSelect;
         let alt = |gpio: &Gpio, pin, n| gpio.function(pin) == gpio::Function::Alt(n);
-        let flash = (40..=43).all(|pin| alt(&self.gpio, pin, 4));
-        self.spi0.set_pins(flash);
+        let flash = (40..=42).all(|pin| alt(&self.gpio, pin, 4));
+        let select = match self.gpio.function(43) {
+            gpio::Function::Alt(4) => ChipSelect::Native,
+            gpio::Function::Output => ChipSelect::Gpio(self.gpio.level(43)),
+            _ => ChipSelect::Off,
+        };
+        self.spi0.set_bus(flash, select);
         let header = alt(&self.gpio, 0, 0) && alt(&self.gpio, 1, 0);
         self.bsc0.set_pins(header);
     }
@@ -1247,7 +1271,7 @@ impl Machine {
                     m.genet.service(now, &mut m.ram, &mut m.net)
                 });
             }
-            if GPFSEL_WINDOW.contains(&addr) {
+            if GPFSEL_WINDOW.contains(&addr) || GPIO_DRIVE_BANK1.contains(&addr) {
                 self.route_gpio_pins();
             }
             return r;

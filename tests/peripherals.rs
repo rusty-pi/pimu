@@ -117,6 +117,12 @@ const CS_CLEAR_RX: u32 = 1 << 5;
 const CS_CLEAR_TX: u32 = 1 << 4;
 const CS_DONE: u32 = 1 << 16;
 const CS_RXD: u32 = 1 << 17;
+const CS_DMAEN: u32 = 1 << 8;
+const CS_INTD: u32 = 1 << 9;
+const CS_INTR: u32 = 1 << 10;
+/// `CS.CS = 0b11` is the invalid native select Linux's `spi-bcm2835` parks the
+/// hardware one at, because it works the select as a GPIO instead.
+const CS_NO_NATIVE: u32 = 0x3;
 
 /// SPI0 `CS.DONE` reflects the TX side only: start4's EEPROM scanner checks it
 /// with received bytes still queued, and reads `DONE = 0` as a transfer error.
@@ -143,6 +149,237 @@ fn spi0_done_is_tx_side_only() {
         spi.read(FIFO, Width::Word).unwrap(); // command + address echoes
     }
     assert_eq!(spi.read(FIFO, Width::Word).unwrap(), 0xAA);
+}
+
+/// `RDID` names the part `flashrom` finds over `/dev/spidev0.0`: a Winbond
+/// W25X40, the 512 KiB boot flash of a Raspberry Pi 4B d03115.
+#[test]
+fn spi0_flash_reports_the_parts_jedec_id() {
+    let mut spi = Spi0::new();
+    spi.attach_flash(vec![0xFF; 0x8_0000]);
+
+    spi.write(CS, Width::Word, CS_TA | CS_CLEAR_RX | CS_CLEAR_TX)
+        .unwrap();
+    for byte in [0x9F, 0, 0, 0] {
+        spi.write(FIFO, Width::Word, byte).unwrap();
+    }
+    spi.read(FIFO, Width::Word).unwrap(); // the command's own beat
+    let id: Vec<u32> = (0..3)
+        .map(|_| spi.read(FIFO, Width::Word).unwrap())
+        .collect();
+    assert_eq!(id, vec![0xEF, 0x30, 0x13]);
+}
+
+/// SPI0's interrupt, which `spi-bcm2835` needs for every transfer between the
+/// polling limit and the DMA one: `DONE` under `CS.INTD`, the receive FIFO's
+/// three-quarter mark under `CS.INTR`, and `PACTL_CS` bit 0 naming the master.
+#[test]
+fn spi0_drives_its_interrupt_and_pactl_names_it() {
+    let mut m = machine();
+    let pactl = map::PACTL_BASE;
+    assert_eq!(m.load32(pactl).unwrap(), 0, "idle: nothing pending");
+
+    m.store32(map::SPI0_BASE + CS, CS_TA).unwrap();
+    assert_eq!(m.load32(pactl).unwrap(), 0, "no interrupt is enabled yet");
+
+    m.store32(map::SPI0_BASE + CS, CS_TA | CS_INTD).unwrap();
+    assert_eq!(m.load32(pactl).unwrap(), 1, "DONE under INTD");
+
+    // `INTR` alone needs the receive FIFO three-quarters full, which is 48 of
+    // its 64 bytes.
+    m.store32(map::SPI0_BASE + CS, CS_TA | CS_INTR | CS_CLEAR_RX)
+        .unwrap();
+    assert_eq!(m.load32(pactl).unwrap(), 0, "an empty RX FIFO is not RXR");
+    for _ in 0..FIFO_THREE_QUARTERS {
+        m.store32(map::SPI0_BASE + FIFO, 0).unwrap();
+    }
+    assert_eq!(m.load32(pactl).unwrap(), 1, "RXR under INTR");
+}
+
+const FIFO_THREE_QUARTERS: usize = 48;
+
+/// Put GPIO 40..42 on ALT4 and 43 on the output the `spi-gpio40-45` overlay
+/// asks for, which is what reaches the boot flash from Linux.
+fn route_flash_pins(m: &mut Machine) {
+    let gpfsel4 = map::GPIO_BASE + 0x10;
+    let alt4 = 0b011;
+    let output = 0b001;
+    m.store32(gpfsel4, alt4 | alt4 << 3 | alt4 << 6 | output << 9)
+        .unwrap();
+}
+
+const GPSET1: u32 = map::GPIO_BASE + 0x1C + 4;
+const GPCLR1: u32 = map::GPIO_BASE + 0x28 + 4;
+/// GPIO 43 in bank 1.
+const CS0_PIN: u32 = 1 << 11;
+
+/// The flash follows its chip-select pin, not `CS.TA`: `spi-bcm2835` holds the
+/// GPIO select down for a whole message and raises and drops `TA` once per
+/// transfer inside it, so a command whose address and data are separate
+/// transfers has to survive `TA` going away in between.
+#[test]
+fn spi0_gpio_chip_select_spans_several_transfers() {
+    let mut m = machine();
+    let mut image = vec![0xFF; 0x8_0000];
+    image[0x1234] = 0x5A;
+    m.spi0.attach_flash(image);
+    route_flash_pins(&mut m);
+
+    // Nothing is selected while the GPIO select is up, whatever `TA` says.
+    m.store32(GPSET1, CS0_PIN).unwrap();
+    m.store32(map::SPI0_BASE + CS, CS_TA | CS_NO_NATIVE)
+        .unwrap();
+    for byte in [0x03, 0x00, 0x12, 0x34] {
+        m.store32(map::SPI0_BASE + FIFO, byte).unwrap();
+    }
+    m.store32(map::SPI0_BASE + FIFO, 0).unwrap();
+    for _ in 0..4 {
+        m.load32(map::SPI0_BASE + FIFO).unwrap();
+    }
+    assert_eq!(
+        m.load32(map::SPI0_BASE + FIFO).unwrap(),
+        0xFF,
+        "a deselected flash drives nothing"
+    );
+
+    // Select, then the command and address as one transfer and the data as the
+    // next, `TA` dropped in between.
+    m.store32(GPCLR1, CS0_PIN).unwrap();
+    m.store32(map::SPI0_BASE + CS, CS_TA | CS_NO_NATIVE)
+        .unwrap();
+    for byte in [0x03, 0x00, 0x12, 0x34] {
+        m.store32(map::SPI0_BASE + FIFO, byte).unwrap();
+    }
+    for _ in 0..4 {
+        m.load32(map::SPI0_BASE + FIFO).unwrap();
+    }
+    m.store32(
+        map::SPI0_BASE + CS,
+        CS_NO_NATIVE | CS_CLEAR_RX | CS_CLEAR_TX,
+    )
+    .unwrap();
+
+    m.store32(map::SPI0_BASE + CS, CS_TA | CS_NO_NATIVE)
+        .unwrap();
+    m.store32(map::SPI0_BASE + FIFO, 0).unwrap();
+    assert_eq!(
+        m.load32(map::SPI0_BASE + FIFO).unwrap(),
+        0x5A,
+        "the command must survive TA dropping mid-message"
+    );
+    m.store32(GPSET1, CS0_PIN).unwrap();
+}
+
+/// `CS.DMAEN` makes `FIFO` 32 bits wide — four bytes a word, low byte first —
+/// and `DLEN` is what ends the transfer: the driver's filler descriptor keeps
+/// writing words long past it, and none of those may reach the flash.
+#[test]
+fn spi0_dma_fifo_is_four_bytes_wide_and_stops_at_dlen() {
+    let mut m = machine();
+    let mut image = vec![0xFF; 0x8_0000];
+    image[..8].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+    m.spi0.attach_flash(image);
+    route_flash_pins(&mut m);
+    m.store32(GPCLR1, CS0_PIN).unwrap();
+
+    // One four-byte word carries `READ 0x000000`, low byte first.
+    m.store32(map::SPI0_BASE + 0x0C, 4).unwrap(); // DLEN
+    m.store32(map::SPI0_BASE + CS, CS_TA | CS_NO_NATIVE | CS_DMAEN)
+        .unwrap();
+    m.store32(map::SPI0_BASE + FIFO, 0x0000_0003).unwrap();
+    // Everything past `DLEN` is the filler, and shifts nothing.
+    for _ in 0..4 {
+        m.store32(map::SPI0_BASE + FIFO, 0).unwrap();
+    }
+    assert_eq!(
+        m.load32(map::SPI0_BASE + FIFO).unwrap(),
+        0xFFFF_FFFF,
+        "four idle beats, one a word"
+    );
+    assert_eq!(
+        m.load32(map::SPI0_BASE + FIFO).unwrap(),
+        0xFFFF_FFFF,
+        "nothing was clocked after DLEN"
+    );
+
+    // The read's data then comes with `DLEN` set to its own length.
+    m.store32(
+        map::SPI0_BASE + CS,
+        CS_NO_NATIVE | CS_CLEAR_RX | CS_CLEAR_TX,
+    )
+    .unwrap();
+    m.store32(map::SPI0_BASE + 0x0C, 8).unwrap();
+    m.store32(map::SPI0_BASE + CS, CS_TA | CS_NO_NATIVE | CS_DMAEN)
+        .unwrap();
+    for _ in 0..4 {
+        m.store32(map::SPI0_BASE + FIFO, 0).unwrap();
+    }
+    assert_eq!(m.load32(map::SPI0_BASE + FIFO).unwrap(), 0x0403_0201);
+    assert_eq!(m.load32(map::SPI0_BASE + FIFO).unwrap(), 0x0807_0605);
+    m.store32(GPSET1, CS0_PIN).unwrap();
+}
+
+/// Send one command over the flash's GPIO chip select, as a `spi_message` of
+/// its own, and give back what came in.
+fn flash_command(m: &mut Machine, bytes: &[u8]) -> Vec<u8> {
+    m.store32(GPCLR1, CS0_PIN).unwrap();
+    m.store32(map::SPI0_BASE + CS, CS_TA | CS_NO_NATIVE)
+        .unwrap();
+    for &b in bytes {
+        m.store32(map::SPI0_BASE + FIFO, b as u32).unwrap();
+    }
+    let got = bytes
+        .iter()
+        .map(|_| m.load32(map::SPI0_BASE + FIFO).unwrap() as u8)
+        .collect();
+    m.store32(
+        map::SPI0_BASE + CS,
+        CS_NO_NATIVE | CS_CLEAR_RX | CS_CLEAR_TX,
+    )
+    .unwrap();
+    m.store32(GPSET1, CS0_PIN).unwrap();
+    got
+}
+
+/// The write `flashrom -w` makes: read the status register, unlock nothing,
+/// then per block `WREN` + erase and per page `WREN` + `PP`, polling `WIP`
+/// between. Each is a message of its own, so the write-enable latch has to
+/// survive one and be spent by the next.
+#[test]
+fn spi0_flash_erases_and_programs_the_way_flashrom_writes() {
+    let mut m = machine();
+    let mut image = vec![0x00; 0x8_0000];
+    image[0x2_0000] = 0x11;
+    m.spi0.attach_flash(image);
+    route_flash_pins(&mut m);
+
+    let status = flash_command(&mut m, &[0x05, 0]);
+    assert_eq!(status[1], 0, "no WIP and no block protection out of reset");
+
+    // A program with no `WREN` in front of it does nothing.
+    flash_command(&mut m, &[0x02, 0x00, 0x00, 0x00, 0xAB]);
+    assert_eq!(m.spi0.flash_bytes()[0], 0x00, "PP needs the latch");
+
+    // 64 KiB block erase, then the page program the erase makes possible.
+    flash_command(&mut m, &[0x06]);
+    assert_eq!(
+        flash_command(&mut m, &[0x05, 0])[1] & 2,
+        2,
+        "WEL is up between the two messages"
+    );
+    flash_command(&mut m, &[0xD8, 0x02, 0x00, 0x00]);
+    assert_eq!(m.spi0.flash_bytes()[0x2_0000], 0xFF, "the block is erased");
+    assert_eq!(m.spi0.flash_bytes()[0x1_FFFF], 0x00, "and only that block");
+    assert_eq!(
+        flash_command(&mut m, &[0x05, 0])[1] & 2,
+        0,
+        "the erase spent the latch"
+    );
+
+    flash_command(&mut m, &[0x06]);
+    flash_command(&mut m, &[0x02, 0x02, 0x00, 0x00, 0xA5, 0x5A]);
+    assert_eq!(&m.spi0.flash_bytes()[0x2_0000..0x2_0002], &[0xA5, 0x5A]);
+    assert!(m.spi0.dirty, "the run loop is told the image moved");
 }
 
 /// Core 1's copies of the core-control registers live at `+0x800`, so too small
