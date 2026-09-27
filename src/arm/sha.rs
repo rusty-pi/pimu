@@ -108,14 +108,9 @@ pub(super) struct Finder {
     /// The last backward jump, as `(target, cycle)`: an inner loop going
     /// round jumps back to the same place again and again, quickly.
     last: (u64, u64),
-    /// Backward-jump targets seen lately, split from [`Self::seen`] so the
-    /// search reads one cache line rather than walking eight 32-byte entries:
-    /// this is on every backward jump the guest takes, 184M of them over a Linux
-    /// boot.
-    far: [u64; 8],
-    /// Per [`Self::far`] target: `(last cycle, distance to the jump before,
-    /// times in a row)`; `u8::MAX` marks one already turned down.
-    seen: [(u64, u64, u8); 8],
+    /// Backward-jump targets seen lately: `(target, last cycle, distance to the
+    /// jump before, times in a row)`; `u8::MAX` marks one already turned down.
+    far: [(u64, u64, u64, u8); 8],
     rec: Option<Box<Recording>>,
 }
 
@@ -136,38 +131,31 @@ impl Finder {
         if t == last && cycle.wrapping_sub(at) < MIN_PASS {
             return false;
         }
-        let Some(i) = self.far.iter().position(|&k| k == t) else {
-            // The entry not looked at for longest makes way, as before.
-            let (i, _) = self
-                .seen
-                .iter()
-                .enumerate()
-                .min_by_key(|(_, e)| e.0)
-                .expect("a fixed-size array");
-            self.far[i] = t;
-            self.seen[i] = (cycle, 0, 0);
+        let Some(e) = self.far.iter_mut().find(|e| e.0 == t) else {
+            if let Some(e) = self.far.iter_mut().min_by_key(|e| e.1) {
+                *e = (t, cycle, 0, 0);
+            }
             return false;
         };
-        let e = &mut self.seen[i];
-        if e.2 == u8::MAX {
-            e.0 = cycle;
+        if e.3 == u8::MAX {
+            e.1 = cycle;
             return false;
         }
-        let d = cycle.wrapping_sub(e.0);
-        e.0 = cycle;
+        let d = cycle.wrapping_sub(e.1);
+        e.1 = cycle;
         if !(MIN_PASS..=MAX_PASS as u64).contains(&d) {
-            (e.1, e.2) = (0, 0);
+            (e.2, e.3) = (0, 0);
             return false;
         }
-        if d == e.1 {
-            e.2 += 1;
+        if d == e.2 {
+            e.3 += 1;
         } else {
-            (e.1, e.2) = (d, 0);
+            (e.2, e.3) = (d, 0);
         }
-        if e.2 < REPEATS {
+        if e.3 < REPEATS {
             return false;
         }
-        e.2 = 0;
+        e.3 = 0;
         self.rec = Some(Box::new(Recording {
             head: t,
             entry: t,
@@ -186,8 +174,8 @@ impl Finder {
     }
 
     fn reject(&mut self, entry: u64) {
-        if let Some(i) = self.far.iter().position(|&k| k == entry) {
-            self.seen[i].2 = u8::MAX;
+        if let Some(e) = self.far.iter_mut().find(|e| e.0 == entry) {
+            e.3 = u8::MAX;
         }
         self.rec = None;
     }
