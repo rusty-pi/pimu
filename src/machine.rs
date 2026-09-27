@@ -1300,9 +1300,7 @@ impl Bus for Machine {
             }
             _ => self.systimer.wake_to_next_match().is_some(),
         };
-        self.advance_i2c();
-        self.advance_pcie();
-        self.advance_hvs();
+        self.settle_timed();
         woke
     }
 
