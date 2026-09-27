@@ -63,6 +63,29 @@ jobs:
           fi
           echo "PKG_VERSION=$GITHUB_REF_NAME" >> "$GITHUB_ENV"
 
+      # The tag names a commit that is already on main, so `simulated-boot-log`
+      # has run on it there — on the same SHA, under a different ref. A run
+      # that failed is worth stopping for before an hour of PGO.
+      #
+      # Absent or still going is not: that workflow skips a commit touching
+      # only `**.md` or `docs/`, which would make such a commit unreleasable,
+      # and waiting for one costs this hosted runner's billed minutes. The
+      # release builds and boots the tagged commit itself either way.
+      - name: Refuse a commit boot-log has already failed on
+        run: |
+          verdicts=$(gh run list --commit "$GITHUB_SHA" --workflow boot-log.yml \
+            --json status,conclusion,url \
+            --jq '.[] | select(.status == "completed") | "\(.conclusion) \(.url)"')
+          if [ -z "$verdicts" ]; then
+            echo "::warning::no finished simulated-boot-log run on $GITHUB_SHA"
+            exit 0
+          fi
+          echo "$verdicts"
+          if echo "$verdicts" | grep -qv '^success '; then
+            echo "::error::simulated-boot-log did not pass on $GITHUB_SHA"
+            exit 1
+          fi
+
       # The EEPROM bootloader the binaries carry (build.rs), so that `pimu boot`
       # on a firmware directory needs neither `gh` nor an account with access to
       # that repository. It is private and github.token only reaches this one,
