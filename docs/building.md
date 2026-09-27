@@ -4,6 +4,41 @@
 cargo build --release
 ```
 
+## The layout
+
+```
+src/
+  lib.rs        the library; its crate docs map the modules
+  cli/          the command line: main.rs = usage + dispatch, one file per
+                command (boot, scenario, disasm), mbox.rs, config.rs
+  vpu/          VideoCore IV scalar core: length, decode, exec, registers
+  aarch64/      A64 core: integer, SIMD/FP, MMU, system registers
+  arm/          the four A72 cores, released at arm_loader, lock-stepped
+  armstub.rs    armstub hand-off words, image check, bootargs patch
+  bus.rs        Bus + MmioDevice traits
+  mem.rs        RAM region
+  l2.rs         the VPU's L2 while the bootcode runs out of it
+  machine.rs    Machine: owns RAM + peripherals, decodes addresses
+  periph/       one file per block, stub.rs = catch-all + log
+  net/          built-in DHCP/DNS/TFTP/HTTP peer for --netboot; passt for --net
+  soc/          BCM2711 memory map, stepping, board
+  spec/         register-spec schema (specs/*.toml, via build.rs)
+  firmware/     boot ROM stage; ELF32 loader; EEPROM image parse; dt-blob; Payload
+  fdt.rs        device tree reader/patcher
+  log/          --log channels; fatmap.rs = which file a disk block belongs to
+  stdio.rs      host terminal as the serial console (--stdin)
+  diag.rs       PIMU_* diagnostics
+  emulator.rs   Emulator = VPU cores + ARM side + Machine, run loop
+  harness/      scenario parsing, transcript capture, golden diff,
+                boot.rs = the boot scenarios and their milestones,
+                payloads.rs = hand-assembled VPU test programs
+specs/          register maps with provenance; docs/periph/ is generated
+docs/           board sheet, boot chain, diagnostics, VPU ISA, references
+scripts/        fetch-firmware.sh, make-sd.sh, make-netboot.sh, pgo-build.sh,
+                provision-eeprom.sh, make-dt-blob.py, vc4-xref.py
+testdata/       in-process scenarios and the boot scenarios, with their goldens
+```
+
 ## The `diag` feature
 
 The run-loop diagnostics — tracing, traps, watchpoints, profiling and the log

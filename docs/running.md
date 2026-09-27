@@ -57,6 +57,10 @@ of it and kept in `$XDG_CACHE_HOME/pimu/remote`, so booting the Raspberry Pi
 firmware repository costs 13 MB of the directory's 150 and a second run none of
 it.
 
+The container image's working directory is `/boot`, so
+`docker run --rm -v "$PWD:/boot" ghcr.io/rusty-pi/pimu:latest boot` boots the
+directory you run it in.
+
 `--config-txt <LINE>` (repeatable) appends to the card's `config.txt`, under an
 `[all]` header, and `--cmdline <text>` is its `cmdline.txt`; both are held in
 memory, so a read-only directory or a URL takes them too.
@@ -67,6 +71,17 @@ released binary carries that image; a build from this tree fetches it once with
 `gh` and keeps it in `$XDG_CACHE_HOME/pimu` (`~/.cache/pimu`), so delete it to
 take a newer one. Any boot with a medium and no EEPROM image of its own uses it,
 so `pimu boot --sd card.img` boots too.
+
+## The host's network with `--net passt`
+
+`--net passt` plugs the Ethernet cable into the host's network through
+[passt](https://passt.top/), started on a socket pair; `--net passt:<socket>`
+connects to one already listening. HTTP boot works through it as is. TFTP boot
+needs static addresses, since passt's DHCP has no PXE option 43, and a TFTP
+server on the host's port 69.
+
+A run over passt follows the host's clock, so it is not deterministic, and CI
+stays on the built-in `--netboot` peer.
 
 ## Wall budgets
 
