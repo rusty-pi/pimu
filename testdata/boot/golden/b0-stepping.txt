@@ -4,7 +4,7 @@
 [t] BOOTMODE: 0x00 partition 0 build-ts BUILD_TIMESTAMP=1785847093 serial 1aa2bb31 boardrev c03112 stc [n]
 [t] PM_RSTS 00000020
 [t] POWER_OFF_ON_HALT: 0 WAIT_FOR_POWER_BUTTON 0 power-on-reset 0
-[t] EEPROM ID 0xef4018
+[t] EEPROM ID 0xef3013
 [t] SFDP None
 [t] part 00000000 reset_info 00000000
 [t] uSD voltage 3.3V
@@ -21,7 +21,7 @@
 [t] RPi: BOOTLOADER release VERSION:0a7ef05f DATE: 2026/08/04 TIME: 12:38:13
 [t] MFG_VER: 1
 [t] BOOTMODE: 0x00 partition 0 build-ts BUILD_TIMESTAMP=1785847093 serial 1aa2bb31 boardrev c03112 stc [n]
-[t] EEPROM ID 0xef4018
+[t] EEPROM ID 0xef3013
 [t] SFDP None
 [t] PCI0 init
 [t] PCI0 reset

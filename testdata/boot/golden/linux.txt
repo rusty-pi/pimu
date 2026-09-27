@@ -4,7 +4,7 @@
 [t] BOOTMODE: 0x00 partition 0 build-ts BUILD_TIMESTAMP=1785847093 serial 1aa2bb31 boardrev d03115 stc [n]
 [t] PM_RSTS 00000020
 [t] POWER_OFF_ON_HALT: 0 WAIT_FOR_POWER_BUTTON 0 power-on-reset 0
-[t] EEPROM ID 0xef4018
+[t] EEPROM ID 0xef3013
 [t] SFDP None
 [t] part 00000000 reset_info 00000000
 [t] uSD voltage 3.3V
@@ -21,7 +21,7 @@
 [t] RPi: BOOTLOADER release VERSION:0a7ef05f DATE: 2026/08/04 TIME: 12:38:13
 [t] MFG_VER: 1
 [t] BOOTMODE: 0x00 partition 0 build-ts BUILD_TIMESTAMP=1785847093 serial 1aa2bb31 boardrev d03115 stc [n]
-[t] EEPROM ID 0xef4018
+[t] EEPROM ID 0xef3013
 [t] SFDP None
 [t] PCI0 init
 [t] PCI0 reset
@@ -712,10 +712,10 @@ Linux aarch64
 / # \x1b[6necho cpus=$(grep -c ^processor /proc/cpuinfo)
 cpus=4
 / # \x1b[6necj\x08\x1b[Jho pimu-$((6*7))
-pimu-42
-/ # \x1b[6n[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
 [t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
-echo -ne 'Hello, world!\0\0\0' | rpi-fw-crypto hmac --in /proc/self/fd/0 --k
+[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
+pimu-42
+/ # \x1b[6necho -ne 'Hello, world!\0\0\0' | rpi-fw-crypto hmac --in /proc/self/fd/0 --k
 
 ey-id 1 --outform hex; echo
 0eb6f96f3a97b37bb065eb014f76fd488df48682ed6ab4f14cdae0e8a26e1e9d
@@ -733,4 +733,4 @@ usb/devices/1-1/maxchild)
 [t] hub 1-1:1.0: 4 ports detected
 [t] hub 1-1:1.0: 4 ports detected
 usb1-1=USB2.0 Hub/4
-/ # 
+/ # \x1b
