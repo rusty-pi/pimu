@@ -714,9 +714,9 @@ Enter 'help' for a list of built-in commands.
 
 / # \x1b[6nM=/lib/modules/$(uname -r)/kernel
 / # \x1b[6ninsmod $M/net/rfkill/rfkill.ko
-/ # \x1b[6n[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
 [t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
-insmod $M/net/wireless/cfg80211.ko
+[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
+/ # \x1b[6ninsmod $M/net/wireless/cfg80211.ko
 [t] cfg80211: Loading compiled-in X.509 certificates for regulatory database
 [t] cfg80211: Loading compiled-in X.509 certificates for regulatory database
 [t] Loaded X.509 cert 'benh@debian.org: 577e021cb980e0e820821ba7b54b4961b8b4fadf'
@@ -808,7 +808,7 @@ p 9; ip link; dmesg | tail -40
     link/ether 02:00:5e:00:57:01 brd ff:ff:ff:ff:ff:ff
 / # \x1b[6niw dev wlan0 scan
 BSS 02:00:5e:00:53:04(on wlan0)
-	last seen: 13.216s [boottime]
+	last seen: 13.206s [boottime]
 	TSF: 0 usec (0d, 00:00:00)
 	freq: 2412.0
 	beacon interval: 100 TUs
@@ -819,4 +819,4 @@ BSS 02:00:5e:00:53:04(on wlan0)
 	Supported rates: 1.0* 2.0* 5.5* 11.0* 6.0 9.0 12.0 18.0 
 	DS Parameter set: channel 1
 	Extended supported rates: 24.0 36.0 48.0 54.0 
-/ # 
+/ # \x1b[6n
