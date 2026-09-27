@@ -25,7 +25,6 @@ pub mod fat;
 pub mod fdt;
 pub mod firmware;
 pub mod harness;
-pub mod identity;
 pub mod isa;
 pub mod jitter;
 pub mod l2;

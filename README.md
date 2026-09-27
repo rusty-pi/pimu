@@ -250,7 +250,6 @@ src/
   spec/         register-spec schema (specs/*.toml, via build.rs)
   firmware/     boot ROM stage; ELF32 loader; EEPROM image parse; dt-blob; Payload
   fdt.rs        device tree reader/patcher
-  identity.rs   the rpi-machine-id derivation
   log/          --log channels; fatmap.rs = which file a disk block belongs to
   stdio.rs      host terminal as the serial console (--stdin)
   diag.rs       PIMU_* diagnostics

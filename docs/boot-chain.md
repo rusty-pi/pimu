@@ -90,10 +90,12 @@ does `memcpy(out, BVER + 0x8c, 16)`, and the caller hex-encodes the result into
 such block — a different function, `SHA-256(otp[28] ‖ otp[35] ‖ otp[30])` — but
 on a normal boot it is never reached.
 
-`src/identity.rs` recomputes the derivation from the modelled fuses, and a
-`boot` run prints the prediction next to what the firmware actually published.
-That is what lets CI answer "does this firmware pair keep the passphrase stable"
-instead of only noticing afterwards that the value moved.
+The bench does not recompute any of this: to the model the derivation is a
+black box inside the firmware. What CI checks is the output for fixed inputs —
+the OTP rows in `src/periph/configotp.rs` are invented and pinned, and
+`testdata/boot/firmware.toml` asserts the `/chosen/rpi-machine-id` the firmware
+publishes from them. That is what answers "does this firmware pair keep the
+passphrase stable".
 
 ## Peripheral scope
 

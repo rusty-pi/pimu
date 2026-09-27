@@ -70,7 +70,7 @@ why = "The goal: the VPU hands the board over to the ARM with the boot medium on
 line = "arm_loader: Starting ARM with 947MB"
 
 [[milestone]]
-why = "The identity is the same however the board booted (src/identity.rs)."
+why = "The identity is the same however the board booted: same fuses, same pinned id."
 line = ["/chosen/rpi-machine-id ", "\"ed96a9bc626d9d0869ce37ee4aea025d\""]
 
 [[milestone]]

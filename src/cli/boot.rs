@@ -1778,7 +1778,7 @@ fn print_report(opts: &BootOpts, booted: Booted) -> Result<ExitCode> {
     if let Some(file) = &opts.otp {
         save_otp(file, &fuses_at_start, emu.machine.config_otp.fuses())?;
     }
-    report_fdt(opts, &emu.machine, fdt_blob)?;
+    report_fdt(opts, fdt_blob)?;
     if verbose {
         print_unimpl(&report, &opts.path);
     }
@@ -2268,7 +2268,7 @@ fn print_sdram_refresh(machine: &Machine) {
 /// its root-LUKS passphrase from, so a firmware bump that moves the derivation has
 /// to be caught here rather than on a thousand deployed cards. The blob comes from
 /// [`locate_fdt`], and its header is validated before anything is believed.
-fn report_fdt(opts: &BootOpts, machine: &Machine, located: Option<(u32, Vec<u8>)>) -> Result<()> {
+fn report_fdt(opts: &BootOpts, located: Option<(u32, Vec<u8>)>) -> Result<()> {
     let BootOpts {
         verbose,
         print_fdt,
@@ -2308,7 +2308,6 @@ fn report_fdt(opts: &BootOpts, machine: &Machine, located: Option<(u32, Vec<u8>)
                                 "  (--print-fdt for every node, --dump-fdt <path> for the blob)"
                             );
                         }
-                        report_machine_id_derivation(machine, &fdt);
                     }
                     if print_fdt {
                         println!("\n{}", fdt.to_dts());
@@ -2542,48 +2541,6 @@ fn print_arm_blocks(cores: &[pimu::arm::Core]) {
             "      {len:>6} insn(s)  {runs:>12} run(s)  {insns:>13} insns  {:5.1}%",
             100.0 * insns as f64 / all.insns as f64
         );
-    }
-}
-
-/// Recompute `/chosen/rpi-machine-id` from the modelled OTP and say whether the
-/// firmware's value still matches — a *prediction*, unlike the rest of the report.
-/// `boot-check` pins the published string, but only after the fact and only for
-/// this board's fuses; recomputing it turns "the value changed" into "the algorithm
-/// changed", which is the event worth failing on (derivation: `src/identity.rs`).
-fn report_machine_id_derivation(machine: &Machine, fdt: &pimu::fdt::Fdt) {
-    use pimu::identity::{expected_machine_id_hex, MACHINE_ID_ROWS};
-
-    let published = fdt
-        .properties_of("/chosen")
-        .and_then(|props| {
-            props
-                .iter()
-                .find(|p| p.name == "rpi-machine-id")
-                .and_then(|p| p.as_str())
-        })
-        .map(|s| s.trim().to_string());
-    let Some(published) = published else {
-        return;
-    };
-
-    let mut rows = [0u32; 5];
-    for (slot, key) in rows.iter_mut().zip(MACHINE_ID_ROWS) {
-        *slot = machine.config_otp.row(key);
-    }
-    let expected = expected_machine_id_hex(&rows);
-    let inputs: Vec<String> = MACHINE_ID_ROWS
-        .iter()
-        .zip(rows)
-        .map(|(k, v)| format!("otp[{k}]={v:#010x}"))
-        .collect();
-
-    println!("\n--- rpi-machine-id derivation ---");
-    println!("  SHA-256({})[..16]", inputs.join(" | "));
-    if expected == published {
-        println!("  {expected}  (same as published)");
-    } else {
-        println!("  predicted {expected}");
-        println!("  published {published}");
     }
 }
 

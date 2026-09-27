@@ -5,7 +5,7 @@
 //!
 //! Getting the *patched* tree back out of the model is how two firmware
 //! versions are diffed — `/chosen/rpi-machine-id` is the property that must not
-//! move (see [`crate::identity`]), but nothing here is specific to it. Not a
+//! move, but nothing here is specific to it. Not a
 //! general DTB library: no phandle resolution, no memory-reservation walk.
 //!
 //! Spec: Devicetree Specification v0.4, section 5.

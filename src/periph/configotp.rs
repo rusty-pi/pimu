@@ -240,7 +240,6 @@ impl ConfigOtp {
     }
 
     /// A row's fused value; unprogrammed rows read 0, as the hardware does.
-    /// [`crate::identity`] uses it to recompute `/chosen/rpi-machine-id`.
     pub fn row(&self, key: u32) -> u32 {
         self.table.get(&key).copied().unwrap_or(0)
     }

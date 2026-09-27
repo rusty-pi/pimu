@@ -277,8 +277,8 @@ Fixed inputs, fixed expected output — the OTP rows in
 firmware must publish, full stop. Deliberately *not* checked by recomputing
 the derivation the way the firmware does: that reads from the same fuses, so
 changing them would move the published id and still agree with itself, masking
-exactly the event this exists to catch. `src/identity.rs` reproduces the
-algorithm for diagnosis only, and nothing asserts against it."""
+exactly the event this exists to catch. The bench treats the derivation as
+a black box and never computes it itself."""
 line = ["/chosen/rpi-machine-id ", "\"ed96a9bc626d9d0869ce37ee4aea025d\""]
 
 [[milestone]]
