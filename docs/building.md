@@ -132,9 +132,13 @@ carries no image and the fetch stays as it was.
 
 ## The release builds
 
-`.github/workflows/release.yml` replaces the `latest` release with what the
-commit it is dispatched on builds: a tarball, a `.deb` and an `.rpm` for x86-64 and for aarch64, and the
-`ghcr.io/rusty-pi/pimu:latest` image with a manifest for both. Both binaries are
+Pushing an `X.Y.Z` tag on main runs `.github/workflows/release.yml`, which
+publishes what the tagged commit builds: a tarball, a `.deb` and an `.rpm` for
+x86-64 and for aarch64, and the `ghcr.io/rusty-pi/pimu` image with a manifest
+for both, tagged `:X.Y.Z` and `:latest`. The release body is the annotated tag's
+own message, so the notes are written when the tag is made — by the `release`
+skill in `.claude/skills/`, which also works out whether the change is a patch
+or a minor bump and edits `Cargo.toml` to match. Both binaries are
 built in a `debian:12` container, because a release should not need a newer glibc
 than a Raspberry Pi OS install has, and the aarch64 one is cross-linked there —
 every dependency is pure Rust, so that costs one `gcc` and no emulation. They
@@ -144,8 +148,10 @@ token that can read the private `rusty-pi/pi4-firmware`, since a workflow's own
 token reaches only its repository. Without the secret the job
 still publishes, with binaries that fetch the image themselves.
 
-It runs by hand rather than on every push to main, because a hosted runner's
-minutes are billed and the PGO below roughly doubles the job.
+A tag is made by hand rather than on every push to main, because a hosted
+runner's minutes are billed and the PGO below roughly doubles the job. To rerun
+a release that failed part way, dispatch the workflow on the tag's own ref: the
+version and the notes both come from the tag, not from the branch.
 
 The binaries are built with PGO, from one profile trained on x86-64 and used for
 both targets: `-Cprofile-use` keys on function names and CFG hashes rather than

@@ -59,13 +59,14 @@ the ARM`), with exit status 1 when it did not. `-v` adds the full run report,
 
 ### Install it
 
-The `latest` release carries a binary, a `.deb` and an `.rpm` for x86-64 and for
-aarch64, and a container image for both. They are built against Debian 12's
-glibc, so they run on that release and anything newer, and they carry the EEPROM
-bootloader built in ([`docs/building.md`](docs/building.md) has the details).
+Every release carries a binary, a `.deb` and an `.rpm` for x86-64 and for
+aarch64, and a container image for both, tagged with the version and as
+`:latest`. They are built against Debian 12's glibc, so they run on that release
+and anything newer, and they carry the EEPROM bootloader built in
+([`docs/building.md`](docs/building.md) has the details).
 
 ```bash
-gh release download latest -R rusty-pi/pimu -p 'pimu-x86_64-linux.tar.gz'
+gh release download -R rusty-pi/pimu -p 'pimu-x86_64-linux.tar.gz'
 sudo apt install ./pimu_*_amd64.deb    # or the .rpm
 cargo install --path .                 # or build it from a checkout
 ```

@@ -1,22 +1,29 @@
 name: release
 
-# Run by hand, and then the binaries of the `latest` release and the `latest`
-# container image are replaced with what the dispatched commit builds. There are
-# no version tags yet.
+# Publishes the release an `X.Y.Z` tag names: the binaries, the packages and the
+# container image built from the commit the tag points at. The tag is made by
+# `.claude/skills/release/SKILL.md`, which works out the version and writes the
+# notes this job publishes as the release body.
 #
 # Not on every push to main: this job is hosted rather than on the NAS pool, so
 # its minutes are billed, and the PGO training below roughly doubles it.
+#
+# `workflow_dispatch` is the re-run path — dispatch it on the tag's ref, not on
+# a branch, since the version and the notes both come from the tag.
 on:
+  push:
+    tags:
+      - '[0-9]*.[0-9]*.[0-9]*'
   workflow_dispatch:
 
 permissions:
   contents: write
   packages: write
 
-# A newer push supersedes whatever an older run would have uploaded.
+# One release at a time, and never cancel one: each builds a different tag.
 concurrency:
-  group: release
-  cancel-in-progress: true
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   # Debian 12 is the oldest release still on a Raspberry Pi OS install, so its
@@ -37,7 +44,24 @@ jobs:
       GH_REPO: ${{ github.repository }}
 
     steps:
+      # The whole history and the tags: the release body is the annotated tag's
+      # own message, which a shallow checkout does not fetch.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Take the version from the tag
+        run: |
+          if [ "$GITHUB_REF_TYPE" != tag ]; then
+            echo "::error::dispatch this on an X.Y.Z tag, not on $GITHUB_REF_NAME"
+            exit 1
+          fi
+          crate=$(sed -n '0,/^version = "/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          if [ "$GITHUB_REF_NAME" != "$crate" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml's $crate"
+            exit 1
+          fi
+          echo "PKG_VERSION=$GITHUB_REF_NAME" >> "$GITHUB_ENV"
 
       # The EEPROM bootloader the binaries carry (build.rs), so that `pimu boot`
       # on a firmware directory needs neither `gh` nor an account with access to
@@ -55,12 +79,6 @@ jobs:
           else
             echo "::warning::no pieeprom.bin built in; set the FIRMWARE_TOKEN secret"
           fi
-
-      - name: Version the packages
-        run: |
-          crate=$(sed -n '0,/^version = "/s/^version = "\(.*\)"/\1/p' Cargo.toml)
-          echo "PKG_VERSION=$crate+$(date -u +%Y%m%d).$(git rev-parse --short=7 HEAD)" \
-            >> "$GITHUB_ENV"
 
       # What the PGO training boots: the firmware blobs and the two cards
       # `scripts/pgo-build.sh` runs `boot-check` against. Public downloads, so
@@ -167,27 +185,33 @@ jobs:
 
       # One buildx run for both architectures: the Dockerfile only copies the
       # binary TARGETARCH names, so neither image needs to execute anything.
+      # `:latest` follows the newest release, so the README's `docker run` line
+      # needs no version in it.
       - name: Build and push the image
         run: |
           docker buildx build --platform linux/amd64,linux/arm64 \
-            --tag "$IMAGE:latest" --push .
+            --tag "$IMAGE:$PKG_VERSION" --tag "$IMAGE:latest" --push .
 
-      - name: Publish the latest release
+      # The release body is the annotated tag's own message — the notes written
+      # when the tag was made — with the install instructions appended here, so
+      # that they stay right without every tag repeating them. A lightweight tag
+      # has no message of its own, so such a release gets only the appended part.
+      - name: Publish the release
         run: |
-          assets=$(printf '%s ' dist/*.tar.gz dist/*.deb dist/*.rpm)
+          if [ "$(git cat-file -t "$PKG_VERSION")" = tag ]; then
+            git tag -l --format='%(contents)' "$PKG_VERSION" > notes.md
+          else
+            echo "::warning::$PKG_VERSION is lightweight, so it carries no notes"
+            : > notes.md
+          fi
 
-          # Point the tag at this commit, creating it the first time.
-          gh api -X PATCH "repos/$GH_REPO/git/refs/tags/latest" \
-            -f sha="$GITHUB_SHA" -F force=true >/dev/null ||
-            gh api "repos/$GH_REPO/git/refs" -f ref=refs/tags/latest \
-              -f sha="$GITHUB_SHA" >/dev/null
+          cat >> notes.md <<EOF
 
-          cat > notes.md <<EOF
-          Built from $GITHUB_SHA, version \`$PKG_VERSION\`.
+          ---
 
           - \`pimu-x86_64-linux.tar.gz\`, \`pimu-aarch64-linux.tar.gz\`: the binary and the README.
           - \`.deb\` and \`.rpm\` of the same, installing \`/usr/bin/pimu\`.
-          - \`docker run --rm -v "\$PWD:/boot" $IMAGE:latest boot\` — amd64 and arm64.
+          - \`docker run --rm -v "\$PWD:/boot" $IMAGE:$PKG_VERSION boot\` — amd64 and arm64, also tagged \`:latest\`.
 
           Built against Debian 12's glibc 2.36, so they run on that and anything
           newer. The EEPROM bootloader of
@@ -195,16 +219,14 @@ jobs:
           built in, so \`pimu boot <a firmware directory>\` needs nothing fetched.
           EOF
 
-          if gh release view latest >/dev/null 2>&1; then
-            gh release edit latest --title latest --notes-file notes.md
+          # A re-dispatch on a tag whose release already exists replaces it
+          # rather than failing, so a job that died after publishing can be run
+          # again.
+          if gh release view "$PKG_VERSION" >/dev/null 2>&1; then
+            gh release edit "$PKG_VERSION" --title "$PKG_VERSION" --notes-file notes.md
+            gh release upload "$PKG_VERSION" \
+              dist/*.tar.gz dist/*.deb dist/*.rpm --clobber
           else
-            gh release create latest --verify-tag --title latest --notes-file notes.md
+            gh release create "$PKG_VERSION" --verify-tag --title "$PKG_VERSION" \
+              --notes-file notes.md dist/*.tar.gz dist/*.deb dist/*.rpm
           fi
-
-          gh release upload latest $assets --clobber
-          for name in $(gh release view latest --json assets -q '.assets[].name'); do
-            case " $assets " in
-              *" dist/$name "*) ;;
-              *) gh release delete-asset latest "$name" --yes ;;
-            esac
-          done
