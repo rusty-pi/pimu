@@ -48,6 +48,8 @@ stands in, and no `config.txt`, so `--config-txt` and `--cmdline` supply the
 lines a card would — the firmware's own defaults leave the serial console off,
 exactly as they do on a real board. A local directory, or a bare `pimu boot` in
 one, works the same way; [`docs/running.md`](docs/running.md) has the rest.
+That directory is a boot partition and nothing else, so the boot ends where a
+real board's would: the kernel panics for want of a root filesystem.
 
 `boot` prints the serial console as it goes and ends with one line saying
 whether the boot got where it was meant to (`result: ok — the firmware started
