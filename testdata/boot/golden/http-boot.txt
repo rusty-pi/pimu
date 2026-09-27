@@ -104,22 +104,19 @@
 [t] rsa2048: [signature]
 [t] HTTP: GET request for http://netboot.test:80/net_install/boot.img
 [t] HTTP: got 0% at 1 kB/s
-[t] HTTP: got 19% at 1574 kB/s
-[t] HTTP: got 44% at 2457 kB/s
-[t] HTTP: got 70% at 2898 kB/s
-[t] HTTP: got 96% at 3160 kB/s
-[t] HTTP: got 100% at 3276 kB/s
+[t] HTTP: got 76% at 1570 kB/s
+[t] HTTP: got 100% at 2048 kB/s
 [t] Verifying
 [t] RSA verify
 [t] rsa-verify pass (0x0)
-[t] MBR: 0x00000000,   33264 type: 0x04
+[t] MBR: 0x00000000,    9072 type: 0x04
 [t] MBR: 0x00000000,       0 type: 0x00
 [t] MBR: 0x00000000,       0 type: 0x00
 [t] MBR: 0x00000000,       0 type: 0x00
 [t] Trying partition: 0
-[t] type: 16 lba: 0 '[oem]' '            ' clusters 32481 (1)
-[t] rsc 1 fat-sectors 127 root dir cluster 1 sectors 32 entries 512
-[t] FAT16 clusters 32481
+[t] type: 16 lba: 0 '[oem]' '            ' clusters 8095 (1)
+[t] rsc 1 fat-sectors 32 root dir cluster 1 sectors 32 entries 512
+[t] FAT16 clusters 8095
 [t] Read config.txt bytes      279 hnd 0x72
 [t] [ramdisk] pieeprom.upd not found
 [t] [ramdisk] recover4.elf not found

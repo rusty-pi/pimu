@@ -45,8 +45,14 @@ mcopy -s -n -i "$sd@@${part_offset}" '::*' "$out/"
 # A fixed volume serial (-N) so two builds of the same files give the same
 # image, and the same hash in boot.sig.
 img="$out/net_install/boot.img"
-truncate -s 16M "$img"
-mformat -i "$img" -N 52564642 -v RPIBOOT ::
+# As small as holds the files with room to spare: the bootloader downloads and
+# SHA-256es every byte of it in VPU software, and at 16 MiB that alone was
+# half the http-boot scenario's wall time. The files take 2.4 MiB. `-c 1`
+# below keeps 4 MiB FAT16 (8 k one-sector clusters), as the 16 MiB image was;
+# left to itself mformat makes FAT12 at this size. A file that outgrows the
+# image fails mcopy loudly.
+truncate -s 4M "$img"
+mformat -i "$img" -c 1 -N 52564642 -v RPIBOOT ::
 # mformat puts its own version in the boot sector's OEM name (`MTOO4049`); a
 # fixed one keeps the image independent of the mtools that built it.
 printf 'RPIVIRT ' | dd of="$img" bs=1 seek=3 conv=notrunc status=none

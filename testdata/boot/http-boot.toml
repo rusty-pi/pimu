@@ -25,7 +25,13 @@ netboot = "../../firmware/netboot"
 boot_order = "0xf7"
 bootconf = ["HTTP_HOST=netboot.test", "HTTP_PORT=80"]
 eeprom_pubkey = "../../firmware/netboot-pubkey.bin"
-wall_secs = 330
+# It stops at the ARM hand-off, as b0-stepping does: what comes after is the
+# same as on an SD boot, and `firmware.toml` covers it. Without this the run
+# idled on for a minute of modelled time until nothing had printed for long
+# enough. The whole line: the console streams, so a shorter match stops
+# mid-line.
+until = "arm_loader: Starting ARM with 948MB"
+wall_secs = 200
 max_skipped = 0
 
 [golden]
