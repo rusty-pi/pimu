@@ -4,10 +4,10 @@
 # assembled without emulation.
 FROM debian:12-slim
 
-# `boot <url>` fetches the boot partition's files over HTTP through curl, which
-# is how a container boots without a bind mount at all.
+# `boot <url>` fetches over HTTP through curl, which is how a container boots
+# without a bind mount at all, and reads an `.img.xz` in place through xz.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl \
+ && apt-get install -y --no-install-recommends ca-certificates curl xz-utils \
  && rm -rf /var/lib/apt/lists/*
 
 ARG TARGETARCH

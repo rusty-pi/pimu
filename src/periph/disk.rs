@@ -12,6 +12,8 @@ use std::fs::File;
 use std::os::unix::fs::FileExt;
 use std::path::Path;
 
+use anyhow::{bail, Context, Result};
+
 use crate::log::Log;
 
 pub const BLOCK_SIZE: usize = 512;
@@ -50,6 +52,44 @@ enum Backing {
         len: u64,
         chunks: RefCell<HashMap<u64, Vec<u8>>>,
     },
+    /// An `.img.xz`, read a block at a time through its own index: neither
+    /// unpacked on the host nor fetched whole from a server
+    /// ([`crate::xz`]).
+    Xz {
+        source: Compressed,
+        index: crate::xz::Index,
+        blocks: RefCell<HashMap<u64, Vec<u8>>>,
+    },
+}
+
+/// Where a compressed image's bytes come from, which is all the difference
+/// between a host file and a URL once the index has been read.
+enum Compressed {
+    File { file: File, path: String },
+    Url(String),
+}
+
+impl Compressed {
+    fn read(&self, at: u64, len: usize) -> Result<Vec<u8>> {
+        match self {
+            Compressed::File { file, path } => {
+                let mut buf = vec![0u8; len];
+                file.read_exact_at(&mut buf, at)
+                    .with_context(|| format!("reading {path} at byte {at}"))?;
+                Ok(buf)
+            }
+            Compressed::Url(url) => crate::remote::fetch_range(url, at, len),
+        }
+    }
+}
+
+impl std::fmt::Display for Compressed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Compressed::File { path, .. } => write!(f, "{path}"),
+            Compressed::Url(url) => write!(f, "{url}"),
+        }
+    }
 }
 
 /// What one `Range` request reads. Large enough that a boot costs tens of
@@ -159,8 +199,14 @@ impl Disk {
     }
 
     /// An image at `url`, `len` bytes of it, read as the guest asks for blocks.
-    pub fn remote(url: String, len: u64, min_bytes: u64) -> Disk {
-        Disk {
+    /// An `.xz` stream of more than one block is read through its index, so
+    /// what arrives is the decoded image.
+    pub fn remote(url: String, len: u64, min_bytes: u64) -> Result<Disk> {
+        let source = Compressed::Url(url.clone());
+        if let Some(disk) = Self::compressed(source, len, min_bytes)? {
+            return Ok(disk);
+        }
+        Ok(Disk {
             backing: Backing::Remote {
                 url,
                 len,
@@ -169,7 +215,36 @@ impl Disk {
             blocks: len.max(min_bytes) / BLOCK_SIZE as u64,
             written: HashMap::new(),
             io: None,
+        })
+    }
+
+    /// The disk an xz stream of more than one block makes, or `None` when
+    /// what is there is not one — the caller reads it as it is.
+    fn compressed(source: Compressed, len: u64, min_bytes: u64) -> Result<Option<Disk>> {
+        if len < crate::xz::MAGIC.len() as u64
+            || source.read(0, crate::xz::MAGIC.len())? != crate::xz::MAGIC
+        {
+            return Ok(None);
         }
+        let index = crate::xz::index(len, &|at, n| source.read(at, n))
+            .with_context(|| format!("reading the xz index of {source}"))?;
+        if !index.seekable() {
+            bail!(
+                "{source} is one xz block, so there is no reading a part of it: \
+                 `xz -d` it and give the image"
+            );
+        }
+        let out_len = index.out_len;
+        Ok(Some(Disk {
+            backing: Backing::Xz {
+                source,
+                index,
+                blocks: RefCell::new(HashMap::new()),
+            },
+            blocks: out_len.max(min_bytes) / BLOCK_SIZE as u64,
+            written: HashMap::new(),
+            io: None,
+        }))
     }
 
     /// At least `min_bytes` of capacity, reading as zeros past what backs it —
@@ -179,9 +254,18 @@ impl Disk {
         self
     }
 
-    pub fn open(path: &Path, min_bytes: u64) -> std::io::Result<Disk> {
-        let file = File::open(path)?;
+    /// A host image, `.xz` or not.
+    pub fn open(path: &Path, min_bytes: u64) -> Result<Disk> {
+        let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
         let len = file.metadata()?.len();
+        let source = Compressed::File {
+            file,
+            path: path.display().to_string(),
+        };
+        if let Some(disk) = Self::compressed(source, len, min_bytes)? {
+            return Ok(disk);
+        }
+        let file = File::open(path)?;
         Ok(Disk {
             backing: Backing::File { file, len },
             blocks: len.max(min_bytes) / BLOCK_SIZE as u64,
@@ -255,6 +339,34 @@ impl Disk {
                     let from = (at - first * CHUNK) as usize;
                     // A block never straddles two chunks: both are powers of two.
                     out[..n].copy_from_slice(&chunk[from..from + n]);
+                }
+            }
+            Backing::Xz {
+                source,
+                index,
+                blocks,
+            } => {
+                if let Some(block) = index.block_at(at) {
+                    let n = BLOCK_SIZE.min((index.out_len - at) as usize);
+                    let mut blocks = blocks.borrow_mut();
+                    let bytes = match blocks.get(&block.out_at) {
+                        Some(bytes) => bytes,
+                        None => {
+                            let decoded = source
+                                .read(block.at, block.len as usize)
+                                .and_then(|raw| {
+                                    crate::xz::decode(&index.header, &raw, block.out_len as usize)
+                                })
+                                .unwrap_or_else(|e| {
+                                    panic!("reading {source} at decoded byte {at}: {e:#}")
+                                });
+                            blocks.entry(block.out_at).or_insert(decoded)
+                        }
+                    };
+                    let from = (at - block.out_at) as usize;
+                    // Every block but the last decodes to a whole number of
+                    // disk blocks, so a read never straddles two of them.
+                    out[..n].copy_from_slice(&bytes[from..from + n]);
                 }
             }
             Backing::Dir { meta, files } => {
@@ -335,5 +447,51 @@ mod tests {
         assert!(d.read_block(1, &mut b) && b[0] == 0);
         assert!(!d.read_block(4, &mut b));
         assert_eq!(d.written_blocks(), 3);
+    }
+
+    /// A compressed image reads as the image it decodes to, block for block,
+    /// and what the guest writes to it still overlays it. Skipped without
+    /// `xz`, which not every builder has.
+    #[test]
+    fn an_xz_image_reads_as_the_image_inside_it() {
+        let mut raw = vec![0u8; 3 << 20];
+        for (i, b) in raw.iter_mut().enumerate() {
+            *b = (i / BLOCK_SIZE) as u8;
+        }
+        let dir = std::env::temp_dir().join(format!("pimu-disk-xz-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("image");
+        std::fs::write(&path, &raw).unwrap();
+        let made = std::process::Command::new("xz")
+            .args(["-0", "--block-size=1MiB", "-T2"])
+            .arg(&path)
+            .status();
+        match made {
+            Ok(s) if s.success() => {}
+            Ok(s) => panic!("xz failed: {s}"),
+            Err(_) => {
+                eprintln!("xz not installed; skipping");
+                std::fs::remove_dir_all(&dir).unwrap();
+                return;
+            }
+        }
+
+        let mut disk = Disk::open(&dir.join("image.xz"), 0).unwrap();
+        assert_eq!(disk.blocks(), (3 << 20) / BLOCK_SIZE as u64);
+        let mut b = [0u8; BLOCK_SIZE];
+        // The first block of each xz block, and one either side of a boundary.
+        for lba in [0, 1, 2047, 2048, 4095, 5000] {
+            assert!(disk.read_block(lba, &mut b), "block {lba}");
+            assert_eq!(
+                b[..],
+                raw[lba as usize * BLOCK_SIZE..][..BLOCK_SIZE],
+                "block {lba}"
+            );
+        }
+        assert!(!disk.read_block((3 << 20) / BLOCK_SIZE as u64, &mut b));
+        assert!(disk.write(7, &[0x55; BLOCK_SIZE]));
+        assert_eq!(disk.read(7, 1).unwrap()[0], 0x55);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

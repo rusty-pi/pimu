@@ -15,10 +15,11 @@ homepage: https://github.com/rusty-pi/pimu
 section: misc
 priority: optional
 
-# `boot <url>` fetches the boot partition over HTTP through curl, or wget where
-# there is no curl; nothing else needs either.
+# `boot <url>` fetches over HTTP through curl, or wget where there is no curl,
+# and an `.img.xz` medium is read in place through xz. Nothing else needs them.
 recommends:
   - curl
+  - xz-utils
 
 contents:
   - src: dist/pimu

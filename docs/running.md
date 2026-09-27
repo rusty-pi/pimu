@@ -73,6 +73,23 @@ answers no `Range` request has its image fetched once into the cache instead.
 name the first time the guest asks for it; no listing is needed, since a netboot
 client asks by name.
 
+An image compressed with `xz` is read in place, block by block: the stream's own
+index says where each block starts and how much it decodes to, so a
+distribution image boots as it is published — neither unpacked on the host nor
+downloaded whole from a server.
+
+```bash
+pimu boot --sd https://cdimage.ubuntu.com/releases/24.04.3/release/ubuntu-24.04.3-preinstalled-server-arm64+raspi.img.xz
+pimu boot --sd ~/Downloads/ubuntu-24.04.3-preinstalled-server-arm64+raspi.img.xz
+```
+
+That image is 3850 blocks of 1 MiB, 1.2 GB compressed and 3.76 GiB raw, and a
+boot reads the blocks it touches. It needs `xz` installed, and a stream written
+as one block (plain `xz -9`, no threads) carries no random access at all — such
+an image has to be `xz -d`'d first. Detection is the stream's magic, so the name
+does not matter, and `sd.img.xz` beside a `sd.img` is picked up by zero config
+the same way.
+
 Every option that names a file takes a URL too — `--eeprom`, `--hat`,
 `--display-edid`, `--eeprom-pubkey`, `--maskrom` — fetched into the same cache,
 so a whole machine can be described without a local file:

@@ -41,6 +41,7 @@ pub mod soc;
 pub mod spec;
 pub mod stdio;
 pub mod vpu;
+pub mod xz;
 
 pub use emulator::{Emulator, RunEnd, RunLimits, RunReport};
 pub use machine::{Console, Machine};

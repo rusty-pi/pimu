@@ -108,8 +108,15 @@ cut-down firmware, a UEFI armstub — are in
 
 The same image boots from any of them: `--usb firmware/sd-halt.img` is the card
 above in a USB enclosure. Every one of them also takes a **directory** of a boot
-partition's files in place of an image — the card or stick is built around them,
-and a **URL**, on which a trailing `/` is what tells a directory from an image;
+partition's files in place of an image — the card or stick is built around them
+— and a **URL**, on which a trailing `/` is what tells a directory from an
+image. An image is read as the guest asks for blocks either way, `xz`
+compression and all, so a distribution image boots where it is published:
+
+```bash
+pimu boot --sd https://cdimage.ubuntu.com/releases/24.04.3/release/ubuntu-24.04.3-preinstalled-server-arm64+raspi.img.xz
+```
+
 [`docs/running.md`](docs/running.md) has the details.
 
 ## Commands

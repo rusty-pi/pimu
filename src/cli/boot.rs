@@ -79,8 +79,16 @@ OVER HTTP:
     has to index the directory itself (one HEAD per file). Each file is then
     fetched when the guest first reads a block of it, and a disk image is
     read in 1 MiB `Range` requests — an image is never downloaded whole, and
-    a server that ignores `Range` is refused. What is fetched is kept in
-    `$XDG_CACHE_HOME/pimu/remote`.
+    a server that answers no `Range` request has its image fetched once
+    instead. What is fetched is kept in `$XDG_CACHE_HOME/pimu/remote`.
+
+    An image compressed with `xz` is read in place, block by block through
+    the stream's own index, on the host as much as over HTTP — so a
+    distribution image boots as it is published, neither unpacked nor
+    downloaded whole (`xz` has to be installed, and a stream of one block
+    has no random access in it):
+
+        pimu boot --sd https://cdimage.ubuntu.com/releases/24.04.3/release/ubuntu-24.04.3-preinstalled-server-arm64+raspi.img.xz
 
         pieeprom.bin  --eeprom            otp.json      --otp json:<file>
         sd.img        --sd                otp.bin       --otp binary:<file>
@@ -128,7 +136,7 @@ MACHINE:
 
 MEDIA AND NETWORK:
     --sd <img>|<dir>|<url>
-              An SD card: a disk image, or a directory whose files the boot
+              An SD card: a disk image (`.xz` and all), or a directory whose files the boot
               partition holds — the MBR, the FAT32 volume and its directories
               are built around them, and the files are read as the firmware
               asks for them. What `git clone
@@ -519,7 +527,7 @@ impl Medium {
                     "remote: {what} is {url}, {} read in pieces as the guest asks",
                     mib(probe.len)
                 );
-                pimu::periph::disk::Disk::remote(url.clone(), probe.len, min_bytes)
+                pimu::periph::disk::Disk::remote(url.clone(), probe.len, min_bytes)?
             }
             Medium::Files(_) | Medium::RemoteFiles(_) => {
                 let card = self
@@ -742,15 +750,19 @@ impl<'a> ZeroConfig<'a> {
         }
     }
 
-    /// An image of that name in the directory, as the medium it belongs to.
+    /// An image of that name in the directory, as the medium it belongs to —
+    /// or the `.xz` of it, which is read without being unpacked.
     fn image(&mut self, slot: &mut Option<Medium>, name: &str) {
         if slot.is_some() {
             return;
         }
-        let path = self.dir.join(name);
-        if path.is_file() {
-            self.found.push(name.to_string());
-            *slot = Some(Medium::Image(path));
+        for name in [name.to_string(), format!("{name}.xz")] {
+            let path = self.dir.join(&name);
+            if path.is_file() {
+                self.found.push(name);
+                *slot = Some(Medium::Image(path));
+                return;
+            }
         }
     }
 
