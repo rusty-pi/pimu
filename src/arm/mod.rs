@@ -238,6 +238,9 @@ pub struct ArmSide {
     timer_due: u64,
     /// The [`SPIS`] lines into the GIC, as last seen.
     spis: [bool; SPIS.len()],
+    /// [`spi_stamp`] when they were last read, so an ARM-idle stretch does not
+    /// read all 23 of them again per VPU step.
+    spis_at: (u64, u64, u64),
     /// Bit `id` set when core `id` takes its turn this cycle. Lines only move
     /// in [`Self::sync`] and `waiting` only in a core's own step, so keeping
     /// this exact lets the cycle loop visit just these cores, in order.
@@ -304,6 +307,16 @@ const SPIS: [u32; 23] = [
     gic::ID_DMA[8],
 ];
 
+/// Proof that no [`SPIS`] line can have moved since the same stamp was taken: a
+/// level moves only where the VPU touched a device — a write, or a read of a
+/// read-to-clear register — or where a microsecond passed, since
+/// [`Machine::tick`] is what pushes queued IRQ state, settles the SD and PCIe
+/// sides and runs GENET. Both are counters the bus already keeps, so unlike
+/// [`Machine::recheck`] there is nothing for a device to remember to raise.
+fn spi_stamp(m: &Machine) -> (u64, u64, u64) {
+    (m.mmio_reads, m.mmio_writes, m.systimer.now_us())
+}
+
 fn spi_levels(m: &Machine) -> [bool; SPIS.len()] {
     let [genet_a, genet_b] = m.genet.irq_lines();
     let [gpio0, gpio1] = m.gpio.irq_lines();
@@ -360,6 +373,8 @@ impl ArmSide {
             dirty: true,
             timer_due: 0,
             spis: [false; SPIS.len()],
+            // No stamp can match, so the first look always reads the lines.
+            spis_at: (u64::MAX, u64::MAX, u64::MAX),
             runnable: (1 << n) - 1,
             prof: None,
             prof_from: std::env::var("PIMU_ARM_PROF")
@@ -445,6 +460,7 @@ impl ArmSide {
         // Fresh, not the levels `run` saw: a core's own access may have just
         // dropped one.
         self.spis = spi_levels(m);
+        self.spis_at = spi_stamp(m);
         for (&id, &level) in SPIS.iter().zip(&self.spis) {
             m.gic.set_spi_level(id, level);
         }
@@ -578,8 +594,12 @@ impl ArmSide {
             self.prof_from = None;
         }
         // The VPU side moves these lines, and it is frozen while this runs.
-        if spi_levels(m) != self.spis {
-            self.dirty = true;
+        let stamp = spi_stamp(m);
+        if stamp != self.spis_at {
+            self.spis_at = stamp;
+            if spi_levels(m) != self.spis {
+                self.dirty = true;
+            }
         }
         // It may also have answered what a parked core waits for.
         if self.parked != 0 {
