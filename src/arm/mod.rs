@@ -240,7 +240,7 @@ pub struct ArmSide {
     spis: [bool; SPIS.len()],
     /// [`spi_stamp`] when they were last read, so an ARM-idle stretch does not
     /// read all 23 of them again per VPU step.
-    spis_at: (u64, u64, u64),
+    spis_at: (u64, u64, u64, bool, bool),
     /// Bit `id` set when core `id` takes its turn this cycle. Lines only move
     /// in [`Self::sync`] and `waiting` only in a core's own step, so keeping
     /// this exact lets the cycle loop visit just these cores, in order.
@@ -307,14 +307,25 @@ const SPIS: [u32; 23] = [
     gic::ID_DMA[8],
 ];
 
-/// Proof that no [`SPIS`] line can have moved since the same stamp was taken: a
-/// level moves only where the VPU touched a device — a write, or a read of a
+/// Proof that no [`SPIS`] line can have moved since the same stamp was taken.
+///
+/// A level moves where the VPU touched a device — a write, or a read of a
 /// read-to-clear register — or where a microsecond passed, since
 /// [`Machine::tick`] is what pushes queued IRQ state, settles the SD and PCIe
-/// sides and runs GENET. Both are counters the bus already keeps, so unlike
-/// [`Machine::recheck`] there is nothing for a device to remember to raise.
-fn spi_stamp(m: &Machine) -> (u64, u64, u64) {
-    (m.mmio_reads, m.mmio_writes, m.systimer.now_us())
+/// sides and runs GENET. The console receivers move on neither: host bytes reach
+/// a line outside any access, and [`Machine::console_pump`] carries one into the
+/// receive FIFO inside the microsecond it arrived, so their own line goes in the
+/// stamp — two `ris & imsc` reads, not the `BTreeMap` lookups this exists to
+/// avoid. Nothing here is a flag a device has to remember to raise, which is what
+/// separates it from [`Machine::recheck`].
+fn spi_stamp(m: &Machine) -> (u64, u64, u64, bool, bool) {
+    (
+        m.mmio_reads,
+        m.mmio_writes,
+        m.systimer.now_us(),
+        m.uart0.irq_line(),
+        m.aux.irq_line(),
+    )
 }
 
 fn spi_levels(m: &Machine) -> [bool; SPIS.len()] {
@@ -374,7 +385,7 @@ impl ArmSide {
             timer_due: 0,
             spis: [false; SPIS.len()],
             // No stamp can match, so the first look always reads the lines.
-            spis_at: (u64::MAX, u64::MAX, u64::MAX),
+            spis_at: (u64::MAX, u64::MAX, u64::MAX, false, false),
             runnable: (1 << n) - 1,
             prof: None,
             prof_from: std::env::var("PIMU_ARM_PROF")
