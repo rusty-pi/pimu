@@ -199,20 +199,28 @@ I²C masters are modelled and nothing answers the EDID EEPROM's address.
   HTTP, and the bootloader only goes HTTPS when `HTTP_HOST` is left at
   Raspberry Pi's own server. Out of scope, since the TLS stack and the CA
   certificate are the bootloader's own, inside `pieeprom.bin`.
-- **The vector unit's last sub-ops.** 13282 of the 15180 vector instructions in
-  `start4.elf`'s `.text` execute; of the rest, some
-  1700 are jump tables and constants a linear sweep only *disassembles* as
-  vector code, and about 190 are memory sub-ops (`memread`, `memwrite`,
-  `mem03`) and one-offs no probe settled. None of them is reached on a boot.
+- **The vector unit's last sub-ops.** A linear sweep of `start4.elf`'s `.text`
+  finds some 15100 vector instructions, and 291 of them do not execute — the
+  count moves with the blob, so
+  [`docs/vpu-isa.md`](docs/vpu-isa.md) splits the leftovers by what
+  `binutils-vc4` objdump makes of the same address: mostly jump tables and
+  constant pools a sweep only *disassembles* as vector code, plus ALU and
+  memory sub-ops neither decoder has a form for and a handful of one-offs no
+  probe settled. None of them is reached on a boot — `boot` stops on an
+  unimplemented instruction by default, and the firmware boots.
 - **Linux's own display and Ethernet drivers are not driven by any scenario.**
-  The blocks behind them are modelled — the firmware brings HDMI up, and
-  network boot goes over the same GENET and MDIO the kernel probes — but the
-  boots stop at the `bcmgenet` probe and a registered `eth0`, with no link
-  brought up and no KMS driver loaded.
-- **WiFi has no radio.** `brcmfmac` downloads the CYW43455's firmware, takes
-  the chip's events, and `wlan0` comes up — `NO-CARRIER`, since only an
-  association turns the carrier on, and a scan that finds a network is still to
-  come (`linux-wifi.toml` pins how far it gets).
+  Both blocks are modelled and both are exercised, but from the firmware's side:
+  network boot runs over the GENET, driven by `start4.elf`'s own driver, and the
+  firmware brings HDMI up (`--display` puts a monitor on HDMI0, so the display
+  mailbox tags answer a real geometry). What no scenario reaches is the kernel's
+  end of either one: the boots stop at the `bcmgenet` probe and a registered
+  `eth0`, with no link brought up and no KMS driver loaded.
+- **WiFi has no radio.** `brcmfmac` downloads the CYW43455's firmware, takes the
+  chip's events, brings `wlan0` up and scans — the scan finds the model's own
+  `pimu-model-ap` — but the interface stays `NO-CARRIER`, since associating and
+  carrying frames is still to come (`linux-wifi.toml` pins how far it gets).
+- **No camera and no 3D.** The V3D/QPU unit and the CSI-2 camera interface are
+  not modelled; nothing on a boot path touches either.
 
 ## Tests
 
