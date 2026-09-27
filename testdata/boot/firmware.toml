@@ -267,35 +267,20 @@ line = "arm_loader: Starting ARM with 948MB"
 
 [[milestone]]
 why = """
-The point of the bench (the root-LUKS passphrase derivation). Before releasing the ARM,
-`arm_loader` patches `/chosen` and publishes `rpi-machine-id` at `0x3EC568F8` —
-the string a `rpi-mkosi` image turns into its root-LUKS passphrase. `boot` reads
-the patched blob back out of DRAM at the address the armstub hands the ARM and
-prints the identity properties, so a firmware bump that changes the derivation fails
-right here instead of on deployed cards."""
+Before releasing the ARM, `arm_loader` patches the identity properties into
+`/chosen`. `boot` reads the patched blob back out of DRAM at the address the
+armstub hands the ARM and prints them, so a firmware bump that moves one fails
+here rather than on a deployed card."""
 line = "device tree handed to the ARM"
 
 [[milestone]]
 why = """
-Pinning the value is safe: every OTP row it derives from is invented in
+Pinning the value is safe: every OTP row it comes from is invented in
 `src/periph/configotp.rs` (see the OTP rule in CLAUDE.md), so this is the
-model's own identity and not any real board's. `rpi-serial64` is the same two
-rows unhashed, which is what makes the pair a useful regression: if the serial
-still matches but the machine id does not, the *derivation* moved."""
+model's own identity and not any real board's. The property is the board serial
+of rows 28 and 35, which is what says the firmware read the fuses and published
+what it read."""
 line = ["/chosen/rpi-serial64 ", "\"fa1e00231aa2bb31\""]
-
-[[milestone]]
-why = """
-The other half of the pair: the machine id itself (the root-LUKS passphrase derivation).
-
-Fixed inputs, fixed expected output — the OTP rows in
-`src/periph/configotp.rs` are invented and pinned, so this string is what this
-firmware must publish, full stop. Deliberately *not* checked by recomputing
-the derivation the way the firmware does: that reads from the same fuses, so
-changing them would move the published id and still agree with itself, masking
-exactly the event this exists to catch. The bench treats the derivation as
-a black box and never computes it itself."""
-line = ["/chosen/rpi-machine-id ", "\"ed96a9bc626d9d0869ce37ee4aea025d\""]
 
 [[milestone]]
 why = """

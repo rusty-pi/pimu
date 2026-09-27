@@ -16,10 +16,8 @@
 //! that satisfies the check, taken from start4's own board-type table.
 //!
 //! The board serial (row 28, and its complement in row 29) is deliberately not
-//! a real board's, only stable: it feeds the `rpi-machine-id` derivation, and
-//! flipping one bit of it changes every byte of the id `arm_loader` publishes.
-//! So what `boot-check` pins is a derivation being re-run, not a constant being
-//! copied — and changing the serial invalidates that, which is the point.
+//! a real board's, only stable: the firmware derives the identity it publishes
+//! from these rows, so `boot-check` pins values that a changed fuse moves.
 
 use std::collections::BTreeMap;
 
@@ -134,7 +132,7 @@ const DEFAULT_FUSES: &[(u32, u32)] = &[
     // locally administered and unicast, which a tidier `01:…` would not be.
     // Row 65 holds the first four octets, most significant first, and bits
     // 31:16 of row 64 the last two. Programming them is optional, but they are
-    // fused on the board this mirrors and they feed `rpi-machine-id`.
+    // fused on the board this mirrors.
     (64, 0x5301_0000),
     (65, 0x0200_5E00),
 ];

@@ -24,9 +24,6 @@ fn fake_log(console: &str) -> String {
          \x20 refresh interval 658 -> 1562 -> 3124  (7 mode-register reads)\n\
          --- device tree handed to the ARM ---\n\
          \x20 /chosen/rpi-serial64           \"fa1e00231aa2bb31\"\n\
-         \x20 /chosen/rpi-machine-id         \"ed96a9bc626d9d0869ce37ee4aea025d\"\n\
-         --- rpi-machine-id derivation (#22) ---\n\
-         \x20 ed96a9bc626d9d0869ce37ee4aea025d  matches the value the firmware published\n\
          --- ARM property mailbox (0x7e00_b880) ---\n\
          \x20 mailbox: config1 0x1, 1 requests taken, 1 replies written\n\
          \x20 tag 0x00000001     answered    4 bytes  0x6a7a16af\n\

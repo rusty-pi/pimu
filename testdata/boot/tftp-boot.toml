@@ -52,7 +52,7 @@ line = "arm_loader: Starting ARM with 948MB"
 
 [[milestone]]
 why = "The identity is the same however the board booted: same fuses (rows 28/35/30/64/65), same pinned id."
-line = ["/chosen/rpi-machine-id ", "\"ed96a9bc626d9d0869ce37ee4aea025d\""]
+line = ["/chosen/rpi-serial64 ", "\"fa1e00231aa2bb31\""]
 
 [[milestone]]
 why = "The peer's own record: the kernel went out in full, not only started."

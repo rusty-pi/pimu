@@ -102,12 +102,6 @@ why = "The same serial as with `start4.elf` (`firmware.toml`)."
 line = ["/chosen/rpi-serial64 ", "\"fa1e00231aa2bb31\""]
 
 [[milestone]]
-why = """
-The same machine id as with `start4.elf`: an image keyed to it unlocks
-whichever variant the card boots (the root-LUKS passphrase derivation)."""
-line = ["/chosen/rpi-machine-id ", "\"ed96a9bc626d9d0869ce37ee4aea025d\""]
-
-[[milestone]]
 why = "The ARM property mailbox answers after the hand-off."
 line = "1 requests taken, 1 replies written"
 

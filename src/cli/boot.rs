@@ -2466,10 +2466,9 @@ fn print_sdram_refresh(machine: &Machine) {
 }
 
 /// The device tree `arm_loader` leaves for the ARM, and the `/chosen` identity
-/// properties it patched in. `rpi-machine-id` is what an encrypted image derives
-/// its root-LUKS passphrase from, so a firmware bump that moves the derivation has
-/// to be caught here rather than on a thousand deployed cards. The blob comes from
-/// [`locate_fdt`], and its header is validated before anything is believed.
+/// properties it patched in: a firmware bump that moves one has to be caught
+/// here rather than on a deployed card. The blob comes from [`locate_fdt`], and
+/// its header is validated before anything is believed.
 fn report_fdt(opts: &BootOpts, located: Option<(u32, Vec<u8>)>) -> Result<()> {
     let BootOpts {
         verbose,

@@ -66,9 +66,8 @@ text = "ecj\u007fho pimu-$((6*7))\n"
 
 # The HMAC firmware.toml asks the crypto service for, with the same key
 # and the same 16 bytes, this time from Linux userspace: Raspberry Pi's own
-# `rpi-fw-crypto` (scripts/fetch-firmware.sh) through /dev/vcio_crypto, the
-# path rpi-mkosi's machine-id derivation takes. It prints
-# the digest without a newline, hence the `echo`.
+# `rpi-fw-crypto` (scripts/fetch-firmware.sh) through /dev/vcio_crypto. It
+# prints the digest without a newline, hence the `echo`.
 [[boot.input]]
 after = "/ # \u001b[6n"
 text = "echo -ne 'Hello, world!\\0\\0\\0' | rpi-fw-crypto hmac --in /proc/self/fd/0 --key-id 1 --outform hex; echo\n"

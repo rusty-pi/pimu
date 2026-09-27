@@ -4,9 +4,8 @@
 //! exists) for `earlycon` onto `/chosen/bootargs`.
 //!
 //! Getting the *patched* tree back out of the model is how two firmware
-//! versions are diffed — `/chosen/rpi-machine-id` is the property that must not
-//! move, but nothing here is specific to it. Not a
-//! general DTB library: no phandle resolution, no memory-reservation walk.
+//! versions are diffed. Not a general DTB library: no phandle resolution, no
+//! memory-reservation walk.
 //!
 //! Spec: Devicetree Specification v0.4, section 5.
 
@@ -514,7 +513,7 @@ pub(crate) mod tests {
         assert_eq!(nodes[1].0, 1);
         assert!(nodes[0].2.is_empty());
         let names: Vec<&str> = nodes[1].2.iter().map(|p| p.name.as_str()).collect();
-        assert_eq!(names, vec!["bootargs", "rpi-machine-id"]);
+        assert_eq!(names, vec!["bootargs", "rpi-serial64"]);
     }
 
     #[test]
@@ -528,7 +527,7 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn sample() -> Vec<u8> {
-        let strings = b"bootargs\0rpi-machine-id\0".to_vec();
+        let strings = b"bootargs\0rpi-serial64\0".to_vec();
         let mut s: Vec<u8> = Vec::new();
         fn tok(s: &mut Vec<u8>, v: u32) {
             s.extend_from_slice(&v.to_be_bytes());
@@ -581,7 +580,7 @@ pub(crate) mod tests {
         assert_eq!(props.len(), 2);
         assert_eq!(props[0].name, "bootargs");
         assert_eq!(props[0].as_str().as_deref(), Some("hi"));
-        assert_eq!(props[1].name, "rpi-machine-id");
+        assert_eq!(props[1].name, "rpi-serial64");
         assert_eq!(props[1].as_str().as_deref(), Some("ab"));
     }
 
@@ -596,7 +595,7 @@ pub(crate) mod tests {
         assert_eq!(back.header().totalsize as usize, patched.len());
         let props = back.properties_of("/chosen").unwrap();
         assert_eq!(props[0].as_str().as_deref(), Some("earlycon hi"));
-        assert_eq!(props[1].name, "rpi-machine-id");
+        assert_eq!(props[1].name, "rpi-serial64");
         assert_eq!(props[1].as_str().as_deref(), Some("ab"));
         assert!(fdt.with_property("/chosen", "nope", b"x").is_err());
         assert!(fdt.with_property("/nope", "bootargs", b"x").is_err());
