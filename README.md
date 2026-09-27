@@ -125,6 +125,19 @@ from; a file's bytes are fetched when the firmware first reads a block of it and
 kept in `$XDG_CACHE_HOME/pimu/remote`, so that boot costs 13 MB of the
 directory's 150 and a second run none of it.
 
+That directory holds no `config.txt` and no `cmdline.txt`, so the firmware boots
+with its own defaults — which on a Pi 4 leave the serial console off, exactly as
+they do on a real board. `--config-txt <LINE>` (repeatable) appends to the card's
+`config.txt`, under an `[all]` header, and `--cmdline <text>` is its
+`cmdline.txt`; both are held in memory, so a read-only directory or a URL takes
+them too:
+
+```bash
+pimu boot https://raw.githubusercontent.com/raspberrypi/firmware/refs/heads/master/boot/ \
+  --config-txt arm_64bit=1 --config-txt enable_uart=1 --config-txt dtoverlay=disable-bt \
+  --cmdline "console=ttyAMA0,115200 earlycon"
+```
+
 A released binary carries that image; a build from this tree fetches it once with
 `gh` and keeps it in `$XDG_CACHE_HOME/pimu` (`~/.cache/pimu`), so delete it to
 take a newer one. Any boot with a medium and no EEPROM image of its own uses it,

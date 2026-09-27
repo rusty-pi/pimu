@@ -37,6 +37,9 @@ const DIR_ENTRY: usize = 32;
 pub enum Source {
     Path(PathBuf),
     Url(String),
+    /// A file the command line made up rather than one the card holds: the
+    /// `config.txt` lines of `--config-txt`, `--cmdline`'s `cmdline.txt`.
+    Bytes(Vec<u8>),
 }
 
 impl fmt::Display for Source {
@@ -44,6 +47,7 @@ impl fmt::Display for Source {
         match self {
             Source::Path(p) => write!(f, "{}", p.display()),
             Source::Url(u) => write!(f, "{u}"),
+            Source::Bytes(_) => write!(f, "a file given on the command line"),
         }
     }
 }
@@ -71,7 +75,12 @@ pub fn is_boot_partition(dir: &Path) -> bool {
 }
 
 pub fn card_from_dir(dir: &Path) -> Result<Card> {
-    card_from_entries(read_dir(dir)?)
+    card_from_entries(entries_of_dir(dir)?)
+}
+
+/// The tree under `dir`, for a caller that edits it before building the card.
+pub fn entries_of_dir(dir: &Path) -> Result<Vec<Entry>> {
+    read_dir(dir)
 }
 
 /// A card out of a tree described rather than walked, as a listing over HTTP

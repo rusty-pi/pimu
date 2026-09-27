@@ -154,6 +154,18 @@ MEDIA AND NETWORK:
               in `boot/` is such a directory. An `http://` or `https://` URL
               is one served over HTTP, as the positional argument above takes.
               Mutually exclusive with --sd.
+    --config-txt <LINE>
+              Add this line to the card's `config.txt`, under an `[all]`
+              header so a conditional section the file ends in does not
+              swallow it. Repeatable. A card without a `config.txt` — what
+              `raspberrypi/firmware`'s `boot/` is — gets one holding these
+              lines, so `--config-txt enable_uart=1` is what makes such a
+              card print anything at all. Only for a card built out of files
+              (<dir>, <url>, --sd-dir); a disk image is opaque.
+    --cmdline <text>
+              The card's `cmdline.txt` is <text>, whatever it held: the
+              firmware reads the whole file as one kernel command line. Same
+              cards as --config-txt.
     --emmc <img>
               An e-MMC part with this image soldered to the SD host, as a
               Compute Module has in place of a card slot. Answers CMD1 and the
@@ -387,6 +399,7 @@ struct BootOpts {
     disasms: Vec<(u32, u32)>,
     sd_image: Option<PathBuf>,
     sd_dir: Option<CardDir>,
+    card_edits: CardEdits,
     emmc_image: Option<PathBuf>,
     hat_eeprom: Option<PathBuf>,
     check_coherency: bool,
@@ -446,13 +459,99 @@ impl CardDir {
         }
     }
 
-    fn card(&self) -> Result<pimu::fat::Card> {
-        match self {
-            CardDir::Dir(dir) => pimu::fat::card_from_dir(dir),
+    fn card(&self, edits: &CardEdits) -> Result<pimu::fat::Card> {
+        let mut entries = match self {
+            CardDir::Dir(dir) => pimu::fat::entries_of_dir(dir)?,
             CardDir::Url(url) => {
                 eprintln!("remote: {url} is the card, its files read as the firmware asks");
-                pimu::fat::card_from_entries(pimu::remote::listing(url)?)
+                pimu::remote::listing(url)?
             }
+        };
+        edits.apply(&mut entries)?;
+        pimu::fat::card_from_entries(entries)
+    }
+}
+
+/// What the command line adds to a card built out of files: `config.txt` lines
+/// and a `cmdline.txt`. The files themselves are left alone — the edited ones
+/// are held in memory, so a read-only directory or a URL takes them too.
+#[derive(Default, Clone, Debug, PartialEq, Eq)]
+struct CardEdits {
+    config: Vec<String>,
+    cmdline: Option<String>,
+}
+
+impl CardEdits {
+    fn is_empty(&self) -> bool {
+        self.config.is_empty() && self.cmdline.is_none()
+    }
+
+    fn apply(&self, entries: &mut Vec<pimu::fat::Entry>) -> Result<()> {
+        if !self.config.is_empty() {
+            let mut text = match read_card_file(entries, CONFIG_TXT)? {
+                Some(bytes) => String::from_utf8(bytes)
+                    .with_context(|| format!("{CONFIG_TXT} on the card is not text"))?,
+                None => String::new(),
+            };
+            if !text.is_empty() && !text.ends_with('\n') {
+                text.push('\n');
+            }
+            // Under `[all]`, so a conditional section the file ends in does not
+            // swallow the lines — which is what the firmware itself would do.
+            text.push_str("[all]\n");
+            for line in &self.config {
+                text.push_str(line);
+                text.push('\n');
+            }
+            put_card_file(entries, CONFIG_TXT, text.into_bytes());
+        }
+        if let Some(cmdline) = &self.cmdline {
+            // One line is the whole command line, so this replaces the card's.
+            put_card_file(entries, CMDLINE_TXT, format!("{cmdline}\n").into_bytes());
+        }
+        Ok(())
+    }
+}
+
+const CONFIG_TXT: &str = "config.txt";
+const CMDLINE_TXT: &str = "cmdline.txt";
+
+/// The bytes of a file in the card's root, wherever they come from.
+fn read_card_file(entries: &[pimu::fat::Entry], name: &str) -> Result<Option<Vec<u8>>> {
+    let Some(entry) = entries.iter().find(|e| e.name == name) else {
+        return Ok(None);
+    };
+    let pimu::fat::Kind::File { source, len } = &entry.kind else {
+        bail!("{name} on the card is a directory");
+    };
+    let bytes = match source {
+        pimu::fat::Source::Path(path) => {
+            std::fs::read(path).with_context(|| format!("reading {}", path.display()))?
+        }
+        pimu::fat::Source::Url(url) => pimu::remote::fetch(url, *len)?,
+        pimu::fat::Source::Bytes(bytes) => bytes.clone(),
+    };
+    Ok(Some(bytes))
+}
+
+/// `name` in the card's root holds `bytes`, in place of whatever it held.
+fn put_card_file(entries: &mut Vec<pimu::fat::Entry>, name: &str, bytes: Vec<u8>) {
+    let kind = pimu::fat::Kind::File {
+        len: bytes.len() as u64,
+        source: pimu::fat::Source::Bytes(bytes),
+    };
+    match entries.iter().position(|e| e.name == name) {
+        Some(i) => entries[i].kind = kind,
+        // The order is the order the firmware finds them in, so keep it by name.
+        None => {
+            let at = entries.partition_point(|e| e.name.as_str() < name);
+            entries.insert(
+                at,
+                pimu::fat::Entry {
+                    name: name.to_string(),
+                    kind,
+                },
+            );
         }
     }
 }
@@ -674,6 +773,7 @@ impl BootOpts {
         let mut disasms: Vec<(u32, u32)> = Vec::new();
         let mut sd_image: Option<PathBuf> = None;
         let mut sd_dir: Option<CardDir> = None;
+        let mut card_edits = CardEdits::default();
         let mut emmc_image: Option<PathBuf> = None;
         let mut hat_eeprom: Option<PathBuf> = None;
         let mut check_coherency = false;
@@ -799,6 +899,18 @@ impl BootOpts {
                     sd_dir = Some(CardDir::from_arg(
                         it.next().context("--sd-dir needs a path or a URL")?,
                     ))
+                }
+                "--config-txt" => card_edits.config.push(
+                    it.next()
+                        .context("--config-txt needs a config.txt line")?
+                        .to_string(),
+                ),
+                "--cmdline" => {
+                    card_edits.cmdline = Some(
+                        it.next()
+                            .context("--cmdline needs a command line")?
+                            .to_string(),
+                    )
                 }
                 "--emmc" => {
                     emmc_image = Some(PathBuf::from(it.next().context("--emmc needs a path")?))
@@ -1023,6 +1135,12 @@ impl BootOpts {
         if sd_image.is_some() && emmc_image.is_some() {
             bail!("--sd and --emmc are the same host: give one");
         }
+        if !card_edits.is_empty() && sd_dir.is_none() {
+            bail!(
+                "--config-txt and --cmdline edit a card built out of files: give \
+                 <dir>, <url> or --sd-dir, since a disk image is opaque"
+            );
+        }
         if sd_dir.is_some() && (sd_image.is_some() || emmc_image.is_some()) {
             bail!("--sd-dir is the card too: give one of --sd-dir, --sd and --emmc");
         }
@@ -1048,6 +1166,7 @@ impl BootOpts {
             disasms,
             sd_image,
             sd_dir,
+            card_edits,
             emmc_image,
             hat_eeprom,
             check_coherency,
@@ -1587,7 +1706,7 @@ impl<'a> Rig<'a> {
         }
         if let Some(dir) = &self.opts.sd_dir {
             let card = dir
-                .card()
+                .card(&self.opts.card_edits)
                 .with_context(|| format!("building a card out of {dir}"))?;
             let disk = pimu::periph::disk::Disk::from_card(card)
                 .with_context(|| format!("opening the files in {dir}"))?
@@ -2885,6 +3004,150 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(o.sd_dir, Some(CardDir::Url(BOOT_URL.to_string())));
+    }
+
+    /// The name and the bytes of every file in a card's root.
+    fn root_files(entries: &[pimu::fat::Entry]) -> Vec<(String, String)> {
+        entries
+            .iter()
+            .filter_map(|e| match &e.kind {
+                pimu::fat::Kind::File {
+                    source: pimu::fat::Source::Bytes(bytes),
+                    ..
+                } => Some((e.name.clone(), String::from_utf8(bytes.clone()).unwrap())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn config_txt_lines_are_appended_under_an_all_header() {
+        let dir = zero_dir("config-txt");
+        put(&dir, "start4.elf", "");
+        put(
+            &dir,
+            "config.txt",
+            "arm_64bit=1\n[pi400]\ndtparam=audio=on\n",
+        );
+        let mut entries = pimu::fat::entries_of_dir(&dir).unwrap();
+        let edits = CardEdits {
+            config: vec!["enable_uart=1".into(), "dtoverlay=disable-bt".into()],
+            cmdline: None,
+        };
+        edits.apply(&mut entries).unwrap();
+        assert_eq!(
+            root_files(&entries),
+            [(
+                "config.txt".to_string(),
+                "arm_64bit=1\n[pi400]\ndtparam=audio=on\n\
+                 [all]\nenable_uart=1\ndtoverlay=disable-bt\n"
+                    .to_string()
+            )]
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// `raspberrypi/firmware`'s `boot/` has neither file.
+    #[test]
+    fn a_card_without_them_gets_both_files_in_name_order() {
+        let dir = zero_dir("config-txt-new");
+        put(&dir, "start4.elf", "");
+        put(&dir, "bcm2711-rpi-4-b.dtb", "");
+        let mut entries = pimu::fat::entries_of_dir(&dir).unwrap();
+        let edits = CardEdits {
+            config: vec!["enable_uart=1".into()],
+            cmdline: Some("console=ttyAMA0,115200 earlycon".into()),
+        };
+        edits.apply(&mut entries).unwrap();
+        assert_eq!(
+            root_files(&entries),
+            [
+                (
+                    "cmdline.txt".to_string(),
+                    "console=ttyAMA0,115200 earlycon\n".to_string()
+                ),
+                (
+                    "config.txt".to_string(),
+                    "[all]\nenable_uart=1\n".to_string()
+                ),
+            ]
+        );
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "bcm2711-rpi-4-b.dtb",
+                "cmdline.txt",
+                "config.txt",
+                "start4.elf"
+            ]
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_cmdline_replaces_the_cards_own() {
+        let dir = zero_dir("cmdline");
+        put(&dir, "start4.elf", "");
+        put(&dir, "cmdline.txt", "root=/dev/mmcblk0p2 rootwait\n");
+        let mut entries = pimu::fat::entries_of_dir(&dir).unwrap();
+        CardEdits {
+            config: Vec::new(),
+            cmdline: Some("console=ttyAMA0,115200".into()),
+        }
+        .apply(&mut entries)
+        .unwrap();
+        assert_eq!(
+            root_files(&entries),
+            [(
+                "cmdline.txt".to_string(),
+                "console=ttyAMA0,115200\n".to_string()
+            )]
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn they_are_taken_from_the_command_line_and_need_a_card_of_files() {
+        let o = BootOpts::parse(
+            &args(&[
+                "--eeprom",
+                "pieeprom.bin",
+                "--sd-dir",
+                "boot",
+                "--config-txt",
+                "enable_uart=1",
+                "--config-txt",
+                "dtoverlay=disable-bt",
+                "--cmdline",
+                "console=ttyAMA0,115200",
+            ]),
+            Path::new(""),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            o.card_edits,
+            CardEdits {
+                config: vec!["enable_uart=1".into(), "dtoverlay=disable-bt".into()],
+                cmdline: Some("console=ttyAMA0,115200".into()),
+            }
+        );
+
+        let Err(e) = BootOpts::parse(
+            &args(&[
+                "--eeprom",
+                "pieeprom.bin",
+                "--sd",
+                "sd.img",
+                "--config-txt",
+                "enable_uart=1",
+            ]),
+            Path::new(""),
+        ) else {
+            panic!("a disk image cannot take a config.txt line")
+        };
+        assert!(e.to_string().contains("built out of files"), "{e:#}");
     }
 
     #[test]

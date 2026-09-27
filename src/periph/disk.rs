@@ -50,6 +50,8 @@ struct Mapped {
 /// a `start4.elf` — and the cache makes the next run's fetch a read.
 enum Body {
     File(File),
+    /// A card file the command line made up, so there is nothing to open.
+    Mem(Vec<u8>),
     Remote {
         url: String,
         body: OnceCell<Vec<u8>>,
@@ -62,20 +64,24 @@ impl Mapped {
     fn read(&self, out: &mut [u8], at: u64) -> std::io::Result<()> {
         let (url, body) = match &self.body {
             Body::File(file) => return file.read_exact_at(out, at),
+            Body::Mem(bytes) => return copy_from(out, bytes, at, "a card file"),
             Body::Remote { url, body } => (url, body),
         };
         if body.get().is_none() {
             let fetched = crate::remote::fetch(url, self.len).map_err(std::io::Error::other)?;
             let _ = body.set(fetched);
         }
-        let body = body.get().expect("just fetched");
-        let at = at as usize;
-        let src = body
-            .get(at..at + out.len())
-            .ok_or_else(|| std::io::Error::other(format!("{url}: short at byte {at}")))?;
-        out.copy_from_slice(src);
-        Ok(())
+        copy_from(out, body.get().expect("just fetched"), at, url)
     }
+}
+
+fn copy_from(out: &mut [u8], body: &[u8], at: u64, what: &str) -> std::io::Result<()> {
+    let at = at as usize;
+    let src = body
+        .get(at..at + out.len())
+        .ok_or_else(|| std::io::Error::other(format!("{what}: short at byte {at}")))?;
+    out.copy_from_slice(src);
+    Ok(())
 }
 
 impl Disk {
@@ -114,6 +120,7 @@ impl Disk {
                     url,
                     body: OnceCell::new(),
                 },
+                crate::fat::Source::Bytes(bytes) => Body::Mem(bytes),
             };
             files.push(Mapped {
                 lba: extent.lba,
