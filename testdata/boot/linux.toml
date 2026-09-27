@@ -29,6 +29,23 @@ until = "/ # "
 wall_secs = 600
 max_skipped = 0
 
+# The model is a board as it leaves the factory, so OTP rows 56-63 - the device
+# private key - are blank; only `rpi-otp-private-key`, run by an owner, ever
+# fuses them. The HMAC milestone below needs a provisioned part, so this
+# scenario fuses the same invented key `firmware.toml` does, which is what makes
+# the two digests comparable. The value is **invented and must stay so**: the
+# real rows are secret (`CLAUDE.md`).
+otp_row = [
+  "56=0x52504956", # "RPIV"
+  "57=0x49525446", # "IRTF"
+  "58=0x574d4f44", # "WMOD"
+  "59=0x454c4b45", # "ELKE"
+  "60=0x59303030", # "Y000"
+  "61=0x30303030", # "0000"
+  "62=0x30303030", # "0000"
+  "63=0x30303031", # "0001"
+]
+
 # Typed into the serial console (milestone 6), each once ash's line editor is
 # reading: it puts the tty in raw mode, prints the prompt, then asks the
 # terminal where the cursor is (`ESC [6n`, which nothing answers here).
