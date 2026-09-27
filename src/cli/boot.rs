@@ -63,13 +63,24 @@ ZERO CONFIG:
     publishes when there is no `pieeprom.bin` to boot, since a firmware
     checkout carries none.
 
-    An `http://` or `https://` argument is such a directory served over HTTP,
-    so nothing has to be cloned or mounted first: a GitHub URL is listed
-    through the API, any other server has to index the directory itself, and
-    each file is fetched when the firmware first reads it and kept in
-    `$XDG_CACHE_HOME/pimu/remote`.
+OVER HTTP:
+    Wherever a file or a directory is named — the argument above, every
+    medium, --eeprom and the other file options — an `http://` or `https://`
+    URL does as well, so nothing has to be cloned or mounted first. A URL
+    that ends in `/` is a directory, as it is in a browser, and anything
+    else is a file:
 
         pimu boot https://raw.githubusercontent.com/raspberrypi/firmware/refs/heads/master/boot/
+        pimu boot --eeprom https://example.org/pieeprom.bin --sd https://example.org/sd.img
+        pimu boot --netboot https://example.org/tftp/
+
+    A directory is listed first, since the FAT32 volume is built out of every
+    name and length in it: a GitHub URL through the API, any other server
+    has to index the directory itself (one HEAD per file). Each file is then
+    fetched when the guest first reads a block of it, and a disk image is
+    read in 1 MiB `Range` requests — an image is never downloaded whole, and
+    a server that ignores `Range` is refused. What is fetched is kept in
+    `$XDG_CACHE_HOME/pimu/remote`.
 
         pieeprom.bin  --eeprom            otp.json      --otp json:<file>
         sd.img        --sd                otp.bin       --otp binary:<file>
@@ -116,10 +127,15 @@ MACHINE:
               Experimental. The dump stays a local file: never commit it.
 
 MEDIA AND NETWORK:
-    --sd <img>
-              An SD card with this image. Read on demand; writes stay in
-              memory, and the boot after a firmware reset starts from the file
-              again.
+    --sd <img>|<dir>|<url>
+              An SD card: a disk image, or a directory whose files the boot
+              partition holds — the MBR, the FAT32 volume and its directories
+              are built around them, and the files are read as the firmware
+              asks for them. What `git clone
+              https://github.com/raspberrypi/firmware` leaves in `boot/` is
+              such a directory. Read on demand either way; writes stay in
+              memory, and the boot after a firmware reset starts from the
+              medium again. Mutually exclusive with --emmc, the same host.
     --check-coherency
               Report every read of memory the VPU wrote through a cached alias
               (`0x0`, `0x4000_0000`, `0x8000_0000`) and did not flush, and
@@ -146,14 +162,6 @@ MEDIA AND NETWORK:
               A HAT on the 40-pin header, with this ID EEPROM image at 0x50 on
               I2C0 (`eepmake` output). The firmware reads it where it probes
               the header, and applies the device-tree overlay in it.
-    --sd-dir <dir>|<url>
-              An SD card whose boot partition holds the files in <dir>: the
-              MBR, the FAT32 volume and its directories are built here, and
-              the files are read from <dir> as the firmware asks for them.
-              What `git clone https://github.com/raspberrypi/firmware` leaves
-              in `boot/` is such a directory. An `http://` or `https://` URL
-              is one served over HTTP, as the positional argument above takes.
-              Mutually exclusive with --sd.
     --config-txt <LINE>
               Add this line to the card's `config.txt`, under an `[all]`
               header so a conditional section the file ends in does not
@@ -161,23 +169,24 @@ MEDIA AND NETWORK:
               `raspberrypi/firmware`'s `boot/` is — gets one holding these
               lines, so `--config-txt enable_uart=1` is what makes such a
               card print anything at all, and `uart_2ndstage=1` what adds
-              start4.elf's own log. Only for a card built out of files
-              (<dir>, <url>, --sd-dir); a disk image is opaque.
+              start4.elf's own log. Only for a medium given as files; a disk
+              image is opaque.
     --cmdline <text>
               The card's `cmdline.txt` is <text>, whatever it held: the
               firmware reads the whole file as one kernel command line. Same
               cards as --config-txt.
-    --emmc <img>
-              An e-MMC part with this image soldered to the SD host, as a
-              Compute Module has in place of a card slot. Answers CMD1 and the
-              EXT_CSD instead of an SD card's ACMD41 and SCR. Mutually
-              exclusive with --sd.
-    --usb <img>
-              A USB mass-storage stick with this image, in blue socket A (xHCI
-              root port 2, SuperSpeed). Read on demand; writes stay in memory
-              and outlive a firmware reset.
-    --otg <img>
-              A USB mass-storage stick with this image in the USB-C socket
+    --emmc <img>|<dir>|<url>
+              An e-MMC part soldered to the SD host, as a Compute Module has
+              in place of a card slot: an image or a directory of files, as
+              --sd takes. Answers CMD1 and the EXT_CSD instead of an SD
+              card's ACMD41 and SCR. Mutually exclusive with --sd.
+    --usb <img>|<dir>|<url>
+              A USB mass-storage stick in blue socket A (xHCI root port 2,
+              SuperSpeed): an image or a directory of files, as --sd takes.
+              Read on demand; writes stay in memory and outlive a firmware
+              reset.
+    --otg <img>|<dir>|<url>
+              The same stick in the USB-C socket
               instead, on the BCM2711's own xHCI. --boot-order 0x5
               (BCM-USB-MSD) boots from it. Linux is given that controller when
               the firmware booted from it, and otherwise only when the card's
@@ -192,9 +201,11 @@ MEDIA AND NETWORK:
     --display-edid <file>
               Serve this EDID blob (128 or 256 bytes) instead of the built-in
               one. Implies --display.
-    --netboot <dir>
+    --netboot <dir>|<url>
               Plug the Ethernet cable into the built-in network peer: DHCP,
-              DNS, and <dir> over TFTP and HTTP.
+              DNS, and <dir> over TFTP and HTTP. A URL serves what is under
+              it instead, each name fetched the first time the guest asks
+              for it.
     --net passt[:<socket>]
               Plug the Ethernet cable into the host's network instead of the
               built-in peer, through passt: `passt` starts one (from PATH) on a
@@ -398,10 +409,9 @@ struct BootOpts {
     patches: Vec<(u32, u32)>,
     dumps: Vec<(u32, u32)>,
     disasms: Vec<(u32, u32)>,
-    sd_image: Option<PathBuf>,
-    sd_dir: Option<CardDir>,
+    sd: Option<Medium>,
     card_edits: CardEdits,
-    emmc_image: Option<PathBuf>,
+    emmc: Option<Medium>,
     hat_eeprom: Option<PathBuf>,
     check_coherency: bool,
     check_alignment: bool,
@@ -415,9 +425,9 @@ struct BootOpts {
     mbox_tags: Vec<MboxRequest>,
     /// `--gencmd` command lines, all run over one VCHIQ connection.
     gencmds: Vec<String>,
-    usb_image: Option<PathBuf>,
-    otg_image: Option<PathBuf>,
-    netboot_root: Option<PathBuf>,
+    usb: Option<Medium>,
+    otg: Option<Medium>,
+    netboot: Option<NetRoot>,
     host_net: Option<HostNet>,
     boot_order: Option<String>,
     bootconf: Vec<String>,
@@ -444,32 +454,171 @@ struct BootOpts {
     otp_rows: Vec<(u32, u32)>,
 }
 
-/// The boot partition the card is built around: a host directory, or a URL a
-/// server has the files at.
+/// What a medium option names: a disk image, or a directory of a boot
+/// partition's files that the card is built around — on the host, or on a
+/// server. A URL that ends in `/` is a directory, as it is in a browser.
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum CardDir {
-    Dir(PathBuf),
-    Url(String),
+enum Medium {
+    Image(PathBuf),
+    Files(PathBuf),
+    RemoteImage(String),
+    RemoteFiles(String),
 }
 
-impl CardDir {
-    fn from_arg(s: &str) -> CardDir {
+impl Medium {
+    fn from_arg(s: &str) -> Medium {
         match pimu::remote::is_url(s) {
-            true => CardDir::Url(s.to_string()),
-            false => CardDir::Dir(PathBuf::from(s)),
+            true if s.ends_with('/') => Medium::RemoteFiles(s.to_string()),
+            true => Medium::RemoteImage(s.to_string()),
+            false if Path::new(s).is_dir() => Medium::Files(PathBuf::from(s)),
+            false => Medium::Image(PathBuf::from(s)),
         }
+    }
+
+    /// `--sd-dir`, which took the files even where the name says nothing.
+    fn files_from_arg(s: &str) -> Medium {
+        match pimu::remote::is_url(s) {
+            true => Medium::RemoteFiles(s.to_string()),
+            false => Medium::Files(PathBuf::from(s)),
+        }
+    }
+
+    fn is_files(&self) -> bool {
+        matches!(self, Medium::Files(_) | Medium::RemoteFiles(_))
+    }
+
+    /// The medium as the machine takes it: `min_bytes` of capacity at the
+    /// least, reading as zeros past what backs it (`--usb-mb`).
+    fn disk(
+        &self,
+        edits: &CardEdits,
+        min_bytes: u64,
+        log: &Log,
+        what: &'static str,
+    ) -> Result<pimu::periph::disk::Disk> {
+        let disk = match self {
+            Medium::Image(path) => pimu::periph::disk::Disk::open(path, min_bytes)
+                .with_context(|| format!("opening {what} image {}", path.display()))?,
+            Medium::RemoteImage(url) => {
+                let probe = pimu::remote::probe(url)
+                    .with_context(|| format!("reading the headers of {what} image {url}"))?;
+                // Without `Range` there is no reading a part of it, so the
+                // whole image is fetched once and cached.
+                if !probe.ranges {
+                    eprintln!(
+                        "remote: {what} is {url}, {} fetched whole: \
+                         the server answers no Range request",
+                        mib(probe.len)
+                    );
+                    let path = pimu::remote::fetch_to_cache(url)?;
+                    return Ok(pimu::periph::disk::Disk::open(&path, min_bytes)
+                        .with_context(|| format!("opening {what} image {}", path.display()))?
+                        .with_log(log.clone(), what));
+                }
+                eprintln!(
+                    "remote: {what} is {url}, {} read in pieces as the guest asks",
+                    mib(probe.len)
+                );
+                pimu::periph::disk::Disk::remote(url.clone(), probe.len, min_bytes)
+            }
+            Medium::Files(_) | Medium::RemoteFiles(_) => {
+                let card = self
+                    .card(edits)
+                    .with_context(|| format!("building a card out of {self}"))?;
+                pimu::periph::disk::Disk::from_card(card)
+                    .with_context(|| format!("opening the files in {self}"))?
+                    .with_capacity(min_bytes)
+            }
+        };
+        Ok(disk.with_log(log.clone(), what))
     }
 
     fn card(&self, edits: &CardEdits) -> Result<pimu::fat::Card> {
         let mut entries = match self {
-            CardDir::Dir(dir) => pimu::fat::entries_of_dir(dir)?,
-            CardDir::Url(url) => {
-                eprintln!("remote: {url} is the card, its files read as the firmware asks");
+            Medium::Files(dir) => pimu::fat::entries_of_dir(dir)?,
+            Medium::RemoteFiles(url) => {
+                eprintln!("remote: {url} is a card, its files read as the guest asks");
                 pimu::remote::listing(url)?
             }
+            _ => bail!("{self} is a disk image, not a directory of files"),
         };
         edits.apply(&mut entries)?;
         pimu::fat::card_from_entries(entries)
+    }
+}
+
+impl std::fmt::Display for Medium {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Medium::Image(path) | Medium::Files(path) => write!(f, "{}", path.display()),
+            Medium::RemoteImage(url) | Medium::RemoteFiles(url) => write!(f, "{url}"),
+        }
+    }
+}
+
+/// `--netboot`: the directory the built-in peer serves over TFTP and HTTP.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum NetRoot {
+    Dir(PathBuf),
+    Url(String),
+}
+
+impl NetRoot {
+    fn from_arg(s: &str) -> Result<NetRoot> {
+        if pimu::remote::is_url(s) {
+            return Ok(NetRoot::Url(s.to_string()));
+        }
+        let dir = PathBuf::from(s);
+        if !dir.is_dir() {
+            bail!("--netboot {s}: not a directory (the peer serves what is in it)");
+        }
+        Ok(NetRoot::Dir(dir))
+    }
+
+    fn peer(&self) -> pimu::net::BuiltinPeer {
+        match self {
+            NetRoot::Dir(dir) => pimu::net::BuiltinPeer::with_root(dir.clone()),
+            NetRoot::Url(url) => {
+                eprintln!("remote: the network peer serves {url}, fetched as the guest asks");
+                pimu::net::BuiltinPeer::with_root_url(url.clone())
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for NetRoot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NetRoot::Dir(dir) => write!(f, "{}", dir.display()),
+            NetRoot::Url(url) => write!(f, "{url}"),
+        }
+    }
+}
+
+/// A size for a person, not a number of bytes.
+fn mib(bytes: u64) -> String {
+    match bytes >> 20 {
+        0 => format!("{} KiB", bytes.div_ceil(1 << 10)),
+        mib => format!("{mib} MiB"),
+    }
+}
+
+/// One medium, one argument: two of them naming the same host is a mistake,
+/// not a last-one-wins.
+fn take_medium(slot: &mut Option<Medium>, what: &str, medium: Medium) -> Result<()> {
+    if let Some(taken) = slot {
+        bail!("{what} {medium}: {taken} is already there, and a machine has one of each");
+    }
+    *slot = Some(medium);
+    Ok(())
+}
+
+/// A file option's argument: a URL is fetched into the cache, so every option
+/// that reads a file takes one.
+fn file_arg(what: &str, s: &str) -> Result<PathBuf> {
+    match pimu::remote::is_url(s) {
+        true => pimu::remote::fetch_to_cache(s).with_context(|| format!("{what} {s}")),
+        false => Ok(PathBuf::from(s)),
     }
 }
 
@@ -557,15 +706,6 @@ fn put_card_file(entries: &mut Vec<pimu::fat::Entry>, name: &str, bytes: Vec<u8>
     }
 }
 
-impl std::fmt::Display for CardDir {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            CardDir::Dir(dir) => write!(f, "{}", dir.display()),
-            CardDir::Url(url) => write!(f, "{url}"),
-        }
-    }
-}
-
 /// Zero-config: an option left out takes the file of that name in the working
 /// directory, under the names the Pi's own tooling gives. Only an option the
 /// command line is silent about is filled in, and only when nothing rules it out
@@ -602,9 +742,21 @@ impl<'a> ZeroConfig<'a> {
         }
     }
 
+    /// An image of that name in the directory, as the medium it belongs to.
+    fn image(&mut self, slot: &mut Option<Medium>, name: &str) {
+        if slot.is_some() {
+            return;
+        }
+        let path = self.dir.join(name);
+        if path.is_file() {
+            self.found.push(name.to_string());
+            *slot = Some(Medium::Image(path));
+        }
+    }
+
     /// A directory of boot-partition files rather than an image of one; `boot`
     /// builds the card around them (`pimu::fat`).
-    fn boot_partition(&mut self, slot: &mut Option<CardDir>) {
+    fn boot_partition(&mut self, slot: &mut Option<Medium>) {
         let dir = if self.dir.as_os_str().is_empty() {
             Path::new(".")
         } else {
@@ -612,7 +764,7 @@ impl<'a> ZeroConfig<'a> {
         };
         if pimu::fat::is_boot_partition(dir) {
             self.found.push(format!("{} as the card", dir.display()));
-            *slot = Some(CardDir::Dir(dir.to_path_buf()));
+            *slot = Some(Medium::Files(dir.to_path_buf()));
         }
     }
 
@@ -772,10 +924,9 @@ impl BootOpts {
         let mut patches: Vec<(u32, u32)> = Vec::new();
         let mut dumps: Vec<(u32, u32)> = Vec::new();
         let mut disasms: Vec<(u32, u32)> = Vec::new();
-        let mut sd_image: Option<PathBuf> = None;
-        let mut sd_dir: Option<CardDir> = None;
+        let mut sd: Option<Medium> = None;
         let mut card_edits = CardEdits::default();
-        let mut emmc_image: Option<PathBuf> = None;
+        let mut emmc: Option<Medium> = None;
         let mut hat_eeprom: Option<PathBuf> = None;
         let mut check_coherency = false;
         let mut check_alignment = false;
@@ -786,9 +937,9 @@ impl BootOpts {
         let mut print_fdt = false;
         let mut mbox_tags: Vec<MboxRequest> = Vec::new();
         let mut gencmds: Vec<String> = Vec::new();
-        let mut usb_image: Option<PathBuf> = None;
-        let mut otg_image: Option<PathBuf> = None;
-        let mut netboot_root: Option<PathBuf> = None;
+        let mut usb: Option<Medium> = None;
+        let mut otg: Option<Medium> = None;
+        let mut netboot: Option<NetRoot> = None;
         let mut host_net: Option<HostNet> = None;
         let mut boot_order: Option<String> = None;
         let mut bootconf: Vec<String> = Vec::new();
@@ -820,7 +971,7 @@ impl BootOpts {
                     eeprom = true;
                     if path.is_none() {
                         if let Some(p) = it.next_if(|p| !p.starts_with('-')) {
-                            path = Some(PathBuf::from(p));
+                            path = Some(file_arg("--eeprom", p)?);
                         }
                     }
                 }
@@ -895,12 +1046,20 @@ impl BootOpts {
                             .parse()?,
                     )
                 }
-                "--sd" => sd_image = Some(PathBuf::from(it.next().context("--sd needs a path")?)),
-                "--sd-dir" => {
-                    sd_dir = Some(CardDir::from_arg(
-                        it.next().context("--sd-dir needs a path or a URL")?,
-                    ))
-                }
+                "--sd" => take_medium(
+                    &mut sd,
+                    "--sd",
+                    Medium::from_arg(
+                        it.next()
+                            .context("--sd needs a path, a directory or a URL")?,
+                    ),
+                )?,
+                // What `--sd` does for a directory or a URL ending in `/`.
+                "--sd-dir" => take_medium(
+                    &mut sd,
+                    "--sd-dir",
+                    Medium::files_from_arg(it.next().context("--sd-dir needs a path or a URL")?),
+                )?,
                 "--config-txt" => card_edits.config.push(
                     it.next()
                         .context("--config-txt needs a config.txt line")?
@@ -913,28 +1072,46 @@ impl BootOpts {
                             .to_string(),
                     )
                 }
-                "--emmc" => {
-                    emmc_image = Some(PathBuf::from(it.next().context("--emmc needs a path")?))
-                }
+                "--emmc" => take_medium(
+                    &mut emmc,
+                    "--emmc",
+                    Medium::from_arg(
+                        it.next()
+                            .context("--emmc needs a path, a directory or a URL")?,
+                    ),
+                )?,
                 "--hat" => {
-                    hat_eeprom = Some(PathBuf::from(it.next().context("--hat needs a path")?))
+                    hat_eeprom = Some(file_arg("--hat", it.next().context("--hat needs a path")?)?)
                 }
                 "--console-log" => {
                     console_log = Some(PathBuf::from(
                         it.next().context("--console-log needs a path")?,
                     ))
                 }
-                "--usb" => {
-                    usb_image = Some(PathBuf::from(it.next().context("--usb needs a path")?))
-                }
-                "--otg" => {
-                    otg_image = Some(PathBuf::from(it.next().context("--otg needs a path")?))
-                }
+                "--usb" => take_medium(
+                    &mut usb,
+                    "--usb",
+                    Medium::from_arg(
+                        it.next()
+                            .context("--usb needs a path, a directory or a URL")?,
+                    ),
+                )?,
+                "--otg" => take_medium(
+                    &mut otg,
+                    "--otg",
+                    Medium::from_arg(
+                        it.next()
+                            .context("--otg needs a path, a directory or a URL")?,
+                    ),
+                )?,
                 "--usb-mb" => usb_mb = Some(it.next().context("--usb-mb needs a value")?.parse()?),
                 "--display" => display = true,
                 "--display-edid" => {
                     display = true;
-                    display_edid = Some(it.next().context("--display-edid needs a <file>")?.into());
+                    display_edid = Some(file_arg(
+                        "--display-edid",
+                        it.next().context("--display-edid needs a <file>")?,
+                    )?);
                 }
                 "--net" => {
                     let spec = it.next().context("--net needs passt or passt:<socket>")?;
@@ -951,20 +1128,24 @@ impl BootOpts {
                     });
                 }
                 "--netboot" => {
-                    netboot_root = Some(PathBuf::from(
-                        it.next().context("--netboot needs a directory")?,
-                    ))
+                    netboot = Some(NetRoot::from_arg(
+                        it.next().context("--netboot needs a directory or a URL")?,
+                    )?)
                 }
                 "--boot-order" => {
                     boot_order = Some(it.next().context("--boot-order needs a value")?.to_string())
                 }
                 "--eeprom-pubkey" => {
-                    eeprom_pubkey = Some(PathBuf::from(
+                    eeprom_pubkey = Some(file_arg(
+                        "--eeprom-pubkey",
                         it.next().context("--eeprom-pubkey needs a file")?,
-                    ))
+                    )?)
                 }
                 "--maskrom" => {
-                    maskrom_path = Some(PathBuf::from(it.next().context("--maskrom needs a file")?))
+                    maskrom_path = Some(file_arg(
+                        "--maskrom",
+                        it.next().context("--maskrom needs a file")?,
+                    )?)
                 }
                 "--stepping" => {
                     stepping = Some(Stepping::parse(
@@ -1073,15 +1254,22 @@ impl BootOpts {
                 s => bail!("unexpected argument '{s}' (try boot --help)"),
             }
         }
-        // A URL is a boot partition served over HTTP: the card, and nothing
-        // else, since only a directory can hold the rest of the zero-config
-        // files. The EEPROM bootloader to boot it with comes from the fallback
-        // below, as it does for a firmware checkout.
+        // A URL argument reads as the path one does: ending in `/` it is a
+        // directory, and so the card the machine boots from — the EEPROM
+        // bootloader for it comes from the fallback below, as it does for a
+        // firmware checkout. Anything else is the file to boot, fetched into
+        // the cache, and an image named like an EEPROM one is booted as one.
         if let Some(url) = url.take() {
-            if sd_dir.is_some() {
-                bail!("{url} is the card too: give one of it, --sd-dir, --sd and --emmc");
+            if url.ends_with('/') {
+                take_medium(&mut sd, "boot <url>", Medium::RemoteFiles(url.clone()))?;
+            } else {
+                let file = file_arg("boot", &url)?;
+                eeprom |= url
+                    .rsplit('/')
+                    .next()
+                    .is_some_and(|name| name.starts_with("pieeprom"));
+                path = Some(file);
             }
-            sd_dir = Some(CardDir::Url(url));
         }
         // A directory to boot: read from there, as `-C` does, and it is itself
         // the card when it holds a boot partition's files.
@@ -1094,16 +1282,18 @@ impl BootOpts {
             zero.file(&mut path, "pieeprom.bin");
             eeprom |= path.is_some();
         }
-        if emmc_image.is_none() {
-            zero.file(&mut sd_image, "sd.img");
+        if emmc.is_none() {
+            zero.image(&mut sd, "sd.img");
         }
-        if sd_image.is_none() && emmc_image.is_none() && sd_dir.is_none() {
-            zero.boot_partition(&mut sd_dir);
+        if sd.is_none() && emmc.is_none() {
+            zero.boot_partition(&mut sd);
         }
-        zero.file(&mut usb_image, "usb.img");
-        zero.file(&mut otg_image, "otg.img");
-        if host_net.is_none() {
-            zero.dir(&mut netboot_root, "netboot");
+        zero.image(&mut usb, "usb.img");
+        zero.image(&mut otg, "otg.img");
+        if host_net.is_none() && netboot.is_none() {
+            let mut found = None;
+            zero.dir(&mut found, "netboot");
+            netboot = found.map(NetRoot::Dir);
         }
         if otp.is_none() {
             otp = zero.otp()?;
@@ -1116,34 +1306,32 @@ impl BootOpts {
 
         // A medium and nothing to boot it with: neither a firmware checkout nor a
         // disk image is a bootloader, so fall back to the published EEPROM image.
-        let medium = sd_dir.is_some()
-            || sd_image.is_some()
-            || emmc_image.is_some()
-            || usb_image.is_some()
-            || otg_image.is_some()
-            || netboot_root.is_some();
+        let medium = sd.is_some() || emmc.is_some() || usb.is_some() || otg.is_some();
+        let medium = medium || netboot.is_some();
         if path.is_none() && medium {
             path = Some(fallback_eeprom()?);
             eeprom = true;
         }
         let path = path.context("boot: missing <file> (try boot --help)")?;
-        if netboot_root.is_some() && host_net.is_some() {
+        if netboot.is_some() && host_net.is_some() {
             bail!("--netboot and --net both plug in the Ethernet cable; give one");
         }
         if log.is_empty() && log_file.is_some() {
             bail!("--log-file needs --log <channel>[,<channel>...]");
         }
-        if sd_image.is_some() && emmc_image.is_some() {
+        if sd.is_some() && emmc.is_some() {
             bail!("--sd and --emmc are the same host: give one");
         }
-        if !card_edits.is_empty() && sd_dir.is_none() {
+        let files_somewhere = [&sd, &usb, &otg, &emmc]
+            .into_iter()
+            .flatten()
+            .any(Medium::is_files);
+        if !card_edits.is_empty() && !files_somewhere {
             bail!(
-                "--config-txt and --cmdline edit a card built out of files: give \
-                 <dir>, <url> or --sd-dir, since a disk image is opaque"
+                "--config-txt and --cmdline edit a card built out of files: give a \
+                 directory or a URL ending in `/` to --sd, --usb, --otg or --emmc, \
+                 since a disk image is opaque"
             );
-        }
-        if sd_dir.is_some() && (sd_image.is_some() || emmc_image.is_some()) {
-            bail!("--sd-dir is the card too: give one of --sd-dir, --sd and --emmc");
         }
         Ok(Some(Self {
             path,
@@ -1165,10 +1353,9 @@ impl BootOpts {
             patches,
             dumps,
             disasms,
-            sd_image,
-            sd_dir,
+            sd,
             card_edits,
-            emmc_image,
+            emmc,
             hat_eeprom,
             check_coherency,
             check_alignment,
@@ -1179,9 +1366,9 @@ impl BootOpts {
             print_fdt,
             mbox_tags,
             gencmds,
-            usb_image,
-            otg_image,
-            netboot_root,
+            usb,
+            otg,
+            netboot,
             host_net,
             boot_order,
             bootconf,
@@ -1236,15 +1423,8 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
     let image =
         std::fs::read(&opts.path).with_context(|| format!("reading {}", opts.path.display()))?;
     let log = open_log(opts)?;
-    let usb_disk = open_usb_disk(&opts.usb_image, "usb", opts, &log)?;
-    let otg_disk = open_usb_disk(&opts.otg_image, "otg", opts, &log)?;
-    if let Some(sd_path) = opts.sd_image.as_ref().filter(|_| opts.verbose) {
-        println!(
-            "sd image   {} ({} blocks)",
-            sd_path.display(),
-            open_sd(sd_path, &log)?.blocks()
-        );
-    }
+    let usb_disk = open_usb_disk(&opts.usb, "usb", opts, &log)?;
+    let otg_disk = open_usb_disk(&opts.otg, "otg", opts, &log)?;
     let edits = FlashEdits::new(opts)?;
 
     let mut flash = image.clone();
@@ -1411,31 +1591,21 @@ type SharedUsbDisk = Rc<RefCell<pimu::periph::usb::Disk>>;
 /// device on the BCM2711's own xHCI. `--usb-mb <n>` sizes the stick, image at its
 /// start. Read on demand; what the guest writes outlives the resets.
 fn open_usb_disk(
-    image: &Option<PathBuf>,
+    medium: &Option<Medium>,
     what: &'static str,
     opts: &BootOpts,
     log: &Log,
 ) -> Result<Option<SharedUsbDisk>> {
-    Ok(match image {
-        Some(p) => {
-            let disk = pimu::periph::usb::Disk::open(p, opts.usb_mb.unwrap_or(0) << 20)
-                .with_context(|| format!("opening USB image {}", p.display()))?
-                .with_log(log.clone(), what);
+    Ok(match medium {
+        Some(medium) => {
+            let disk = medium.disk(&opts.card_edits, opts.usb_mb.unwrap_or(0) << 20, log, what)?;
             if opts.verbose {
-                println!("{what} image  {} ({} blocks)", p.display(), disk.blocks());
+                println!("{what} medium  {medium} ({} blocks)", disk.blocks());
             }
             Some(std::rc::Rc::new(std::cell::RefCell::new(disk)))
         }
         None => None,
     })
-}
-
-/// The card reads the image on demand; each boot after a reset starts from the
-/// file again, writes forgotten.
-fn open_sd(p: &Path, log: &Log) -> Result<pimu::periph::disk::Disk> {
-    pimu::periph::disk::Disk::open(p, 0)
-        .map(|d| d.with_log(log.clone(), "sd"))
-        .with_context(|| format!("opening SD image {}", p.display()))
 }
 
 /// The `bootconf.txt` edits the options ask for. Re-applied after every
@@ -1682,14 +1852,14 @@ impl<'a> Rig<'a> {
     fn machine(&self, flash: &[u8]) -> Result<Machine> {
         let BootOpts {
             eeprom,
-            ref sd_image,
-            ref emmc_image,
+            ref sd,
+            ref emmc,
             ref hat_eeprom,
             check_coherency,
             check_alignment,
             jitter,
             faults,
-            ref netboot_root,
+            ref netboot,
             ref host_net,
             trace_mmio,
             ..
@@ -1702,20 +1872,15 @@ impl<'a> Rig<'a> {
         if eeprom {
             machine.spi0.attach_flash(flash.to_vec());
         }
-        if let Some(p) = &sd_image {
-            machine.emmc2.insert_disk(open_sd(p, &self.log)?);
-        }
-        if let Some(dir) = &self.opts.sd_dir {
-            let card = dir
-                .card(&self.opts.card_edits)
-                .with_context(|| format!("building a card out of {dir}"))?;
-            let disk = pimu::periph::disk::Disk::from_card(card)
-                .with_context(|| format!("opening the files in {dir}"))?
-                .with_log(self.log.clone(), "sd");
+        // The card reads its image or its files on demand; each boot after a
+        // reset starts from them again, writes forgotten.
+        if let Some(sd) = &sd {
+            let disk = sd.disk(&self.opts.card_edits, 0, &self.log, "sd")?;
             machine.emmc2.insert_disk(disk);
         }
-        if let Some(p) = &emmc_image {
-            machine.emmc2.insert_mmc_disk(open_sd(p, &self.log)?);
+        if let Some(emmc) = &emmc {
+            let disk = emmc.disk(&self.opts.card_edits, 0, &self.log, "emmc")?;
+            machine.emmc2.insert_mmc_disk(disk);
         }
         if self.opts.display {
             // A monitor on HDMI0. Not the same lever as `hdmi_force_hotplug=1`
@@ -1772,9 +1937,8 @@ impl<'a> Rig<'a> {
                 )));
         }
         // The built-in peer (`src/net/peer.rs`): DHCP, DNS, TFTP and HTTP.
-        if let Some(dir) = &netboot_root {
-            let peer = pimu::net::BuiltinPeer::with_root(dir.clone()).with_log(self.log.clone());
-            machine.attach_net(Box::new(peer));
+        if let Some(netboot) = &netboot {
+            machine.attach_net(Box::new(netboot.peer().with_log(self.log.clone())));
         }
         // A new connection (and a new passt) per boot, like a cable replugged.
         if let Some(host_net) = &host_net {
@@ -2825,10 +2989,10 @@ mod tests {
         let o = BootOpts::parse(&args(&[]), &dir).unwrap().unwrap();
         assert_eq!(o.path, dir.join("pieeprom.bin"));
         assert!(o.eeprom, "pieeprom.bin is an EEPROM image");
-        assert_eq!(o.sd_image, Some(dir.join("sd.img")));
-        assert_eq!(o.usb_image, Some(dir.join("usb.img")));
-        assert_eq!(o.otg_image, Some(dir.join("otg.img")));
-        assert_eq!(o.netboot_root, Some(dir.join("netboot")));
+        assert_eq!(o.sd, Some(Medium::Image(dir.join("sd.img"))));
+        assert_eq!(o.usb, Some(Medium::Image(dir.join("usb.img"))));
+        assert_eq!(o.otg, Some(Medium::Image(dir.join("otg.img"))));
+        assert_eq!(o.netboot, Some(NetRoot::Dir(dir.join("netboot"))));
         assert_eq!(o.eeprom_pubkey, Some(dir.join("pubkey.bin")));
         assert_eq!(
             o.otp,
@@ -2888,7 +3052,7 @@ mod tests {
         .unwrap();
         assert_eq!(o.path, PathBuf::from("given.elf"));
         assert!(!o.eeprom, "an ELF given by name is not an EEPROM boot");
-        assert_eq!(o.sd_image, Some(PathBuf::from("given.img")));
+        assert_eq!(o.sd, Some(Medium::Image(PathBuf::from("given.img"))));
         assert_eq!(o.otp.unwrap().path, PathBuf::from("given.json"));
         assert_eq!(o.bootconf, vec!["HTTP_HOST=given"]);
         std::fs::remove_dir_all(&dir).unwrap();
@@ -2904,8 +3068,8 @@ mod tests {
         let o = BootOpts::parse(&args(&["x.elf", "--emmc", "e.img", "--net", "passt"]), &dir)
             .unwrap()
             .unwrap();
-        assert_eq!(o.sd_image, None);
-        assert_eq!(o.netboot_root, None);
+        assert_eq!(o.sd, None);
+        assert_eq!(o.netboot, None);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -2928,8 +3092,7 @@ mod tests {
         put(&dir, "start4.elf", "");
         put(&dir, "config.txt", "arm_64bit=1\n");
         let o = BootOpts::parse(&args(&[]), &dir).unwrap().unwrap();
-        assert_eq!(o.sd_dir, Some(CardDir::Dir(dir.clone())));
-        assert_eq!(o.sd_image, None);
+        assert_eq!(o.sd, Some(Medium::Files(dir.clone())));
         assert!(o.eeprom);
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -2942,8 +3105,7 @@ mod tests {
         put(&dir, "start4.elf", "");
         put(&dir, "sd.img", "");
         let o = BootOpts::parse(&args(&[]), &dir).unwrap().unwrap();
-        assert_eq!(o.sd_dir, None);
-        assert_eq!(o.sd_image, Some(dir.join("sd.img")));
+        assert_eq!(o.sd, Some(Medium::Image(dir.join("sd.img"))));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -2956,7 +3118,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(o.path, dir.join("pieeprom.bin"));
-        assert_eq!(o.sd_dir, Some(CardDir::Dir(dir.clone())));
+        assert_eq!(o.sd, Some(Medium::Files(dir.clone())));
         assert!(o.eeprom);
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -2974,16 +3136,98 @@ mod tests {
         .unwrap();
         assert_eq!(o.path, PathBuf::from("pieeprom.bin"));
         assert!(o.eeprom);
-        assert_eq!(o.sd_dir, Some(CardDir::Url(BOOT_URL.to_string())));
-        assert_eq!(o.sd_image, None);
+        assert_eq!(o.sd, Some(Medium::RemoteFiles(BOOT_URL.to_string())));
     }
 
     #[test]
-    fn a_url_and_an_explicit_card_are_both_the_card() {
-        for other in [
-            ["--sd-dir", "boot"],
-            ["--sd", "sd.img"],
-            ["--emmc", "e.img"],
+    fn every_medium_takes_an_image_a_directory_or_a_url() {
+        let dir = zero_dir("media");
+        put(&dir, "start4.elf", "");
+        let files = dir.to_str().unwrap();
+        let o = BootOpts::parse(
+            &args(&[
+                "--eeprom",
+                "pieeprom.bin",
+                "--sd",
+                files,
+                "--usb",
+                "stick.img",
+                "--otg",
+                "https://example.org/otg.img",
+                "--netboot",
+                "https://example.org/tftp/",
+            ]),
+            Path::new(""),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(o.sd, Some(Medium::Files(dir.clone())));
+        assert_eq!(o.usb, Some(Medium::Image(PathBuf::from("stick.img"))));
+        assert_eq!(
+            o.otg,
+            Some(Medium::RemoteImage("https://example.org/otg.img".into()))
+        );
+        assert_eq!(
+            o.netboot,
+            Some(NetRoot::Url("https://example.org/tftp/".into()))
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A URL is read the way a path is: `/` at the end makes it a directory.
+    #[test]
+    fn a_trailing_slash_is_what_makes_a_url_a_directory() {
+        assert_eq!(
+            Medium::from_arg("https://example.org/boot/"),
+            Medium::RemoteFiles("https://example.org/boot/".into())
+        );
+        assert_eq!(
+            Medium::from_arg("https://example.org/sd.img"),
+            Medium::RemoteImage("https://example.org/sd.img".into())
+        );
+        // --sd-dir said which it meant, whatever the name looks like.
+        assert_eq!(
+            Medium::files_from_arg("https://example.org/boot"),
+            Medium::RemoteFiles("https://example.org/boot".into())
+        );
+    }
+
+    #[test]
+    fn a_url_that_is_not_a_directory_is_the_file_to_boot() {
+        let dir = zero_dir("url-file");
+        // Served from a file:// no one has: the fetch is what would fail, so
+        // only the split into <url> the file and <url>/ the card is checked.
+        assert_eq!(
+            Medium::from_arg("https://example.org/pieeprom.bin"),
+            Medium::RemoteImage("https://example.org/pieeprom.bin".into())
+        );
+        let Err(e) = BootOpts::parse(
+            &args(&["https://127.0.0.1:1/pieeprom.bin"]),
+            Path::new(dir.to_str().unwrap()),
+        ) else {
+            panic!("nothing is served there")
+        };
+        assert!(e.to_string().contains("pieeprom.bin"), "{e:#}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn netboot_wants_a_directory_that_is_there() {
+        let Err(e) = BootOpts::parse(
+            &args(&["--eeprom", "pieeprom.bin", "--netboot", "no-such-dir"]),
+            Path::new(""),
+        ) else {
+            panic!("the peer would serve nothing")
+        };
+        assert!(e.to_string().contains("not a directory"), "{e:#}");
+    }
+
+    #[test]
+    fn two_arguments_for_one_medium_are_an_error() {
+        for (other, says) in [
+            (["--sd", "boot"], "already there"),
+            (["--sd-dir", "boot"], "already there"),
+            (["--emmc", "e.img"], "same host"),
         ] {
             let Err(e) = BootOpts::parse(
                 &args(&["--eeprom", "pieeprom.bin", BOOT_URL, other[0], other[1]]),
@@ -2991,7 +3235,7 @@ mod tests {
             ) else {
                 panic!("{} is a second card", other[0])
             };
-            assert!(e.to_string().contains("give one of"), "{e:#}");
+            assert!(e.to_string().contains(says), "{e:#}");
         }
     }
 
@@ -3003,7 +3247,7 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        assert_eq!(o.sd_dir, Some(CardDir::Url(BOOT_URL.to_string())));
+        assert_eq!(o.sd, Some(Medium::RemoteFiles(BOOT_URL.to_string())));
     }
 
     /// The name and the bytes of every file in a card's root.
@@ -3190,8 +3434,9 @@ mod tests {
 
     #[test]
     fn help_lists_every_option_the_parser_takes() {
-        // `--arm` is a no-op, kept for old command lines.
-        let hidden = ["--arm"];
+        // `--arm` is a no-op and `--sd-dir` is what `--sd <dir>` does; both
+        // are kept for old command lines.
+        let hidden = ["--arm", "--sd-dir"];
         let (documented, parsed) = (documented(), parsed());
         for o in &parsed {
             assert!(

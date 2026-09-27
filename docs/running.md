@@ -61,6 +61,27 @@ The container image's working directory is `/boot`, so
 `docker run --rm -v "$PWD:/boot" ghcr.io/rusty-pi/pimu:latest boot` boots the
 directory you run it in.
 
+Every medium reads its argument the same way: `--sd`, `--emmc`, `--usb` and
+`--otg` each take a disk image, a directory of a boot partition's files, or
+either of those on a server, so the files can go on the stick as easily as on
+the card. (`--sd-dir` is what `--sd <dir>` does; it is kept for old command
+lines.) A remote *image* is read in 1 MiB `Range` requests as the guest asks
+for blocks, so a multi-gigabyte image is never downloaded whole — a server that
+answers no `Range` request has its image fetched once into the cache instead.
+
+`--netboot <url>` serves what is under the URL over TFTP and HTTP, fetching each
+name the first time the guest asks for it; no listing is needed, since a netboot
+client asks by name.
+
+Every option that names a file takes a URL too — `--eeprom`, `--hat`,
+`--display-edid`, `--eeprom-pubkey`, `--maskrom` — fetched into the same cache,
+so a whole machine can be described without a local file:
+
+```bash
+pimu boot --eeprom https://example.org/pieeprom.bin \
+  --sd https://example.org/boot/ --usb https://example.org/disk.img
+```
+
 `--config-txt <LINE>` (repeatable) appends to the card's `config.txt`, under an
 `[all]` header, and `--cmdline <text>` is its `cmdline.txt`; both are held in
 memory, so a read-only directory or a URL takes them too.

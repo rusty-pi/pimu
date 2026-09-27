@@ -6,7 +6,7 @@
 //! multi-gigabyte image whole into memory would otherwise be most of a run's
 //! footprint.
 
-use std::cell::OnceCell;
+use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
 use std::fs::File;
 use std::os::unix::fs::FileExt;
@@ -34,9 +34,27 @@ pub struct Disk {
 
 enum Backing {
     Mem(Vec<u8>),
-    File { file: File, len: u64 },
-    Dir { meta: Vec<u8>, files: Vec<Mapped> },
+    File {
+        file: File,
+        len: u64,
+    },
+    Dir {
+        meta: Vec<u8>,
+        files: Vec<Mapped>,
+    },
+    /// An image served over HTTP, read in [`CHUNK`] pieces through `Range`
+    /// requests and kept for the rest of the run: an image is gigabytes, and a
+    /// boot reads a fraction of one.
+    Remote {
+        url: String,
+        len: u64,
+        chunks: RefCell<HashMap<u64, Vec<u8>>>,
+    },
 }
+
+/// What one `Range` request reads. Large enough that a boot costs tens of
+/// requests rather than thousands, small enough not to pull a whole image in.
+const CHUNK: u64 = 1 << 20;
 
 struct Mapped {
     lba: u64,
@@ -140,6 +158,27 @@ impl Disk {
         })
     }
 
+    /// An image at `url`, `len` bytes of it, read as the guest asks for blocks.
+    pub fn remote(url: String, len: u64, min_bytes: u64) -> Disk {
+        Disk {
+            backing: Backing::Remote {
+                url,
+                len,
+                chunks: RefCell::new(HashMap::new()),
+            },
+            blocks: len.max(min_bytes) / BLOCK_SIZE as u64,
+            written: HashMap::new(),
+            io: None,
+        }
+    }
+
+    /// At least `min_bytes` of capacity, reading as zeros past what backs it —
+    /// a card or stick bigger than the image or the files written to it.
+    pub fn with_capacity(mut self, min_bytes: u64) -> Disk {
+        self.blocks = self.blocks.max(min_bytes / BLOCK_SIZE as u64);
+        self
+    }
+
     pub fn open(path: &Path, min_bytes: u64) -> std::io::Result<Disk> {
         let file = File::open(path)?;
         let len = file.metadata()?.len();
@@ -197,6 +236,27 @@ impl Disk {
                 }
             }
             Backing::File { .. } => {}
+            Backing::Remote { url, len, chunks } => {
+                if at < *len {
+                    let n = BLOCK_SIZE.min((*len - at) as usize);
+                    let first = at / CHUNK;
+                    let mut chunks = chunks.borrow_mut();
+                    let chunk = match chunks.get(&first) {
+                        Some(chunk) => chunk,
+                        None => {
+                            let start = first * CHUNK;
+                            let want = CHUNK.min(*len - start) as usize;
+                            match crate::remote::fetch_range(url, start, want) {
+                                Ok(bytes) => chunks.entry(first).or_insert(bytes),
+                                Err(e) => panic!("reading {url} at byte {start}: {e:#}"),
+                            }
+                        }
+                    };
+                    let from = (at - first * CHUNK) as usize;
+                    // A block never straddles two chunks: both are powers of two.
+                    out[..n].copy_from_slice(&chunk[from..from + n]);
+                }
+            }
             Backing::Dir { meta, files } => {
                 if let Some(src) = meta.get(at as usize..at as usize + BLOCK_SIZE) {
                     out.copy_from_slice(src);

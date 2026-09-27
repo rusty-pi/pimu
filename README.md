@@ -100,13 +100,17 @@ cut-down firmware, a UEFI armstub — are in
 | Option | Medium |
 |---|---|
 | `--sd <img>` | The SD card. |
+| `--emmc <img>` | An e-MMC part soldered to the same host, as a Compute Module has. |
 | `--usb <img>` | A USB mass-storage device on the VL805 (`BOOT_ORDER` 0x4). |
 | `--otg <img>` | A stick in the USB-C socket, on the BCM2711's own xHCI (`BOOT_ORDER` 0x5). |
 | `--netboot <dir>` | The Ethernet cable, into a built-in DHCP, DNS, TFTP and HTTP peer serving `<dir>` (`scripts/make-netboot.sh` builds one). |
 | `--net passt` | The host's network, through [passt](https://passt.top/). |
 
 The same image boots from any of them: `--usb firmware/sd-halt.img` is the card
-above in a USB enclosure.
+above in a USB enclosure. Every one of them also takes a **directory** of a boot
+partition's files in place of an image — the card or stick is built around them,
+and a **URL**, on which a trailing `/` is what tells a directory from an image;
+[`docs/running.md`](docs/running.md) has the details.
 
 ## Commands
 

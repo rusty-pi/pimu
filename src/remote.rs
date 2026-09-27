@@ -8,6 +8,10 @@
 //! start from the cache. `raspberrypi/firmware`'s `boot/` is 150 MB of which a
 //! boot reads a tenth.
 //!
+//! A whole disk image over HTTP (`boot --sd <url>`) is read the same way, but
+//! in 1 MiB chunks through `Range` requests, since an image is gigabytes and a
+//! boot reads a fraction of one.
+//!
 //! The transfer itself is `curl`, or `wget` where there is none: a TLS stack is
 //! a large dependency for one GET, and both are everywhere the binary runs. A
 //! server that indexes the directory itself costs a HEAD per file to size it,
@@ -63,6 +67,57 @@ pub fn fetch(url: &str, len: u64) -> Result<Vec<u8>> {
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     std::fs::write(&path, &body).with_context(|| format!("writing {}", path.display()))?;
     Ok(body)
+}
+
+/// What a HEAD says about a URL: how long the body is, and whether the server
+/// will serve a part of it.
+pub struct Probe {
+    pub len: u64,
+    pub ranges: bool,
+}
+
+/// A HEAD, for a caller that has to size the body before reading it.
+pub fn probe(url: &str) -> Result<Probe> {
+    let headers = headers(url)?;
+    Ok(Probe {
+        len: content_length_of(&headers).with_context(|| {
+            format!("{url}: no Content-Length, so its size is unknown before reading it")
+        })?,
+        ranges: header_of(&headers, "accept-ranges").is_some_and(|v| v.contains("bytes")),
+    })
+}
+
+/// `len` bytes of `url` from `at`, over a `Range` request: how a disk image is
+/// read, block by block, without ever holding the whole of it.
+pub fn fetch_range(url: &str, at: u64, len: usize) -> Result<Vec<u8>> {
+    let last = at + len as u64 - 1;
+    let out = run(Command::new("curl").args(["-fsSL", "-r", &format!("{at}-{last}"), url]))?
+        .with_context(|| format!("reading part of {url} needs curl, which is not installed"))?;
+    if out.stdout.len() != len {
+        bail!(
+            "{url}: asked for bytes {at}-{last} and got {} of {len}: \
+             the server ignores Range",
+            out.stdout.len()
+        );
+    }
+    Ok(out.stdout)
+}
+
+/// `url` in the cache as a local file, for an option that takes a path — the
+/// EEPROM image, a HAT EEPROM, an EDID blob.
+pub fn fetch_to_cache(url: &str) -> Result<PathBuf> {
+    let dir = cache_dir()?.join("remote");
+    let path = dir.join(cache_name(url));
+    let body = get(url)?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    std::fs::write(&path, &body).with_context(|| format!("writing {}", path.display()))?;
+    Ok(path)
+}
+
+/// `url`'s body, or why it could not be read — for a caller that answers a
+/// request of its own and has nowhere to return an error to.
+pub fn fetch_optional(url: &str) -> std::result::Result<Vec<u8>, String> {
+    get(url).map_err(|e| format!("{e:#}"))
 }
 
 /// `<digest>-<name>`: readable in the cache, and unique per URL.
@@ -257,6 +312,12 @@ fn get(url: &str) -> Result<Vec<u8>> {
 /// `url`'s length from its headers, which is all the card needs of a file until
 /// the firmware reads a block of it.
 fn content_length(url: &str) -> Result<u64> {
+    content_length_of(&headers(url)?)
+        .with_context(|| format!("{url}: no Content-Length, so the card cannot be built around it"))
+}
+
+/// The headers of a HEAD request, whichever tool made it.
+fn headers(url: &str) -> Result<String> {
     // `wget -S` writes the headers it read to stderr, `curl -I` to stdout.
     let out =
         match run(Command::new("curl").args(["-fsSLI", url]))? {
@@ -265,27 +326,29 @@ fn content_length(url: &str) -> Result<u64> {
                 || format!("neither curl nor wget is installed, so {url} cannot be sized"),
             )?,
         };
-    let headers = format!(
+    Ok(format!(
         "{}{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
-    );
-    // Every redirect on the way contributes a header block, so the last length
-    // is the one the body will have.
-    content_length_of(&headers)
-        .with_context(|| format!("{url}: no Content-Length, so the card cannot be built around it"))
+    ))
 }
 
-fn content_length_of(headers: &str) -> Option<u64> {
+/// The last value of `name`: every redirect on the way contributes a header
+/// block, and the last block describes the body that would arrive.
+fn header_of(headers: &str, name: &str) -> Option<String> {
     headers
         .lines()
         .filter_map(|l| {
-            let (name, value) = l.split_once(':')?;
-            name.trim()
-                .eq_ignore_ascii_case("content-length")
-                .then(|| value.trim().parse().ok())?
+            let (key, value) = l.split_once(':')?;
+            key.trim()
+                .eq_ignore_ascii_case(name)
+                .then(|| value.trim().to_string())
         })
         .next_back()
+}
+
+fn content_length_of(headers: &str) -> Option<u64> {
+    header_of(headers, "content-length")?.parse().ok()
 }
 
 /// `None` when the program is not installed; an error is the transfer's own.

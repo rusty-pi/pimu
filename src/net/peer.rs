@@ -13,6 +13,7 @@
 //! so no retransmission: a duplicate TFTP ACK is ignored and TCP never times
 //! out. No IP options or fragments, no window scaling, SACK or urgent data.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Component, Path, PathBuf};
 
@@ -125,8 +126,19 @@ impl Transfer {
     }
 }
 
+/// Where the peer serves files from: a host directory, or a URL it fetches
+/// them under, one name at a time — a netboot directory over HTTP, the same
+/// way a card's files come from one ([`crate::remote`]).
+enum Root {
+    Dir(PathBuf),
+    Url {
+        base: String,
+        got: RefCell<BTreeMap<String, Option<Vec<u8>>>>,
+    },
+}
+
 pub struct BuiltinPeer {
-    root: Option<PathBuf>,
+    root: Option<Root>,
     files: BTreeMap<String, Vec<u8>>,
     out: VecDeque<Vec<u8>>,
     log: Vec<String>,
@@ -162,7 +174,25 @@ impl BuiltinPeer {
 
     pub fn with_root(dir: impl Into<PathBuf>) -> BuiltinPeer {
         BuiltinPeer {
-            root: Some(dir.into()),
+            root: Some(Root::Dir(dir.into())),
+            ..BuiltinPeer::new()
+        }
+    }
+
+    /// The netboot directory served over HTTP: every name the guest asks for is
+    /// fetched under `base` the first time, and remembered — misses included,
+    /// since the firmware asks for files that are not there as a matter of
+    /// course.
+    pub fn with_root_url(base: impl Into<String>) -> BuiltinPeer {
+        let base = base.into();
+        BuiltinPeer {
+            root: Some(Root::Url {
+                base: match base.ends_with('/') {
+                    true => base,
+                    false => format!("{base}/"),
+                },
+                got: RefCell::new(BTreeMap::new()),
+            }),
             ..BuiltinPeer::new()
         }
     }
@@ -194,8 +224,20 @@ impl BuiltinPeer {
         if !rel.components().all(|c| matches!(c, Component::Normal(_))) {
             return None;
         }
-        let path = self.root.as_ref()?.join(rel);
-        path.is_file().then(|| std::fs::read(path).ok()).flatten()
+        match self.root.as_ref()? {
+            Root::Dir(dir) => {
+                let path = dir.join(rel);
+                path.is_file().then(|| std::fs::read(path).ok()).flatten()
+            }
+            Root::Url { base, got } => {
+                if let Some(body) = got.borrow().get(name) {
+                    return body.clone();
+                }
+                let body = crate::remote::fetch_optional(&format!("{base}{name}")).ok();
+                got.borrow_mut().insert(name.to_string(), body.clone());
+                body
+            }
+        }
     }
 
     fn eth(&mut self, dst: Mac, ethertype: u16, payload: &[u8]) {
