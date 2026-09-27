@@ -16,14 +16,27 @@ yourself.
 
 ## 1. Check the preconditions
 
-Stop and report if any of these fails rather than working around it:
+Stop and report if either of these fails rather than working around it:
 
 - The working tree is clean and the branch is `main`.
 - `git fetch origin` then `git status -sb` shows main level with
   `origin/main`. Release what is pushed, never a local-only commit.
-- CI is green on the commit being released:
-  `gh run list --branch main --limit 5`. A red or still-running `boot-log` run
-  means the goldens have not been checked against this commit yet.
+
+Then look at what CI has already said about the commit being released:
+
+```bash
+gh run list --commit "$(git rev-parse HEAD)" \
+  --json workflowName,status,conclusion --jq '.[] | "\(.workflowName) \(.status) \(.conclusion // "")"'
+```
+
+**Never wait for a run that is still going.** The release job boots the tagged
+commit itself while it trains the PGO profile, and section 5 runs `fmt`,
+`clippy` and the tests here before the tag is made, so an in-flight `boot-log`
+run is not a reason to hold the release.
+
+A run that has already **completed and failed** on that commit is worth
+pausing for: name the workflow that failed and ask whether to release anyway.
+Release on a yes — a red run is the user's call, not a veto.
 
 ## 2. Find what is being released
 
