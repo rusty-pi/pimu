@@ -847,12 +847,13 @@ fn fallback_eeprom() -> Result<PathBuf> {
         return Ok(path);
     }
     std::fs::create_dir_all(&cache).with_context(|| format!("creating {}", cache.display()))?;
-    eprintln!("zero-config: fetching it from the `latest` release");
+    eprintln!("zero-config: fetching it from the newest release");
+    // No tag, so this follows whatever that repository released last rather
+    // than pinning this build to one of its versions.
     let out = std::process::Command::new("gh")
         .args([
             "release",
             "download",
-            "latest",
             "-R",
             REPO,
             "-p",
@@ -867,7 +868,7 @@ fn fallback_eeprom() -> Result<PathBuf> {
         Err(e) => bail!(
             "no EEPROM image to boot with, and gh could not be run to fetch \
              {REPO}'s ({e}). Give one with --eeprom, or put the `pieeprom.bin` \
-             of that repository's `latest` release at {}",
+             of that repository's newest release at {}",
             path.display()
         ),
     };

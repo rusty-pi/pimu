@@ -73,7 +73,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.FIRMWARE_TOKEN || github.token }}
         run: |
-          if gh release download latest -R rusty-pi/pi4-firmware \
+          if gh release download -R rusty-pi/pi4-firmware \
                -p pieeprom.bin -O pieeprom.bin; then
             echo "PIMU_EMBED_EEPROM=/work/pieeprom.bin" >> "$GITHUB_ENV"
           else
