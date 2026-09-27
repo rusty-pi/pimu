@@ -97,6 +97,48 @@ const fn identity_check(words: [u32; 4]) -> u32 {
 /// also folds them into the bootcode HMAC key ([`crate::firmware::bootrom`]).
 pub(crate) const BOARD_IDENTITY: [u32; 4] = [0x8AA9_6D38, 0x9111_243F, 0x38E4_E488, 0x8E02_2082];
 
+/// The invented 64-bit board serial. The firmware checks row 28 against its
+/// complement in row 29, and the high half lives in row 35.
+const SERIAL: u64 = 0xFA1E_0023_1AA2_BB31;
+
+/// `0x8B0`: the bootmode row of a part with nothing fused into it. The bits set
+/// are 4, 5, 7 and 11, and Raspberry Pi's `otp-bits` documents none of those.
+///
+/// It says nothing about where the board boots from. Three Raspberry Pi 4B
+/// d03115 boards report `0x8B0` with `BOOT_ORDER=0xf14` and `BOOT_ORDER=0xf21`,
+/// the second booting from the network first: on BCM2711 the boot source comes
+/// from the EEPROM configuration.
+///
+/// It does carry secure boot, which none of those boards has. Fusing a
+/// customer key sets bit 14 and bits 18:15 here, along with the key's SHA-256
+/// in rows 47-54 and its count of 0 bits in the low byte of row 55, and the
+/// EEPROM stages then take only signed files (`specs/otp.toml`). All of that is
+/// blank in the model, so it is a part that has never been through
+/// `rpi-eeprom-digest`, the same way rows 56-63 make it one that has never been
+/// through `rpi-otp-private-key`.
+const BOOTMODE: u32 = 0x0000_08B0;
+
+/// The fuses that are neither derived nor part of a repeated block: row and
+/// value. Rows 19-27 and 30 are worked out in [`ConfigOtp::new`] instead.
+const DEFAULT_FUSES: &[(u32, u32)] = &[
+    // OTP control; bits 26/27 would lock VC JTAG.
+    (16, 0x0000_0001),
+    // Bootmode and its copy.
+    (17, BOOTMODE),
+    (18, BOOTMODE),
+    // Serial number, its complement, and its high 32 bits.
+    (28, SERIAL as u32),
+    (29, !(SERIAL as u32)),
+    (35, (SERIAL >> 32) as u32),
+    // Ethernet MAC `02:00:5E:00:53:01`, from RFC 7042's documentation range —
+    // locally administered and unicast, which a tidier `01:…` would not be.
+    // Row 65 holds the first four octets, most significant first, and bits
+    // 31:16 of row 64 the last two. Programming them is optional, but they are
+    // fused on the board this mirrors and they feed `rpi-machine-id`.
+    (64, 0x5301_0000),
+    (65, 0x0200_5E00),
+];
+
 /// What an OTP row is for, for the `io` and `otp` log lines. The meanings are
 /// Raspberry Pi's own documented ones for pre-BCM2712 boards, apart from rows
 /// 19-27 and 44, which are not public: 44 is a core-voltage trim start4 reads
@@ -153,13 +195,16 @@ impl ConfigOtp {
     pub fn new() -> ConfigOtp {
         let mut table = BTreeMap::new();
         // A complete but fictitious board identity. Which rows are *programmed*
-        // mirrors a Raspberry Pi 4 Model B, because firmware reading 0 from a
-        // row concludes the fuse is unprogrammed and takes another path; the
-        // values are invented and deliberately look it (`0xFA1E_00rr` where
-        // nothing reads them). Filling a control row with a pattern is not
-        // harmless: `0xFA1E_0010` in row 16 would lock VC-JTAG.
-        for row in (0..=5).chain(std::iter::once(27)) {
+        // mirrors a Raspberry Pi 4 Model B as it leaves the factory, because
+        // firmware reading 0 from a row concludes the fuse is unprogrammed and
+        // takes another path; the values are invented and deliberately look it
+        // (`0xFA1E_00rr` where nothing reads them). Filling a control row with
+        // a pattern is not harmless: `0xFA1E_0010` in row 16 would lock VC-JTAG.
+        for row in 0..=5 {
             table.insert(row, 0xFA1E_0000 | row);
+        }
+        for &(row, word) in DEFAULT_FUSES {
+            table.insert(row, word);
         }
         // 19-26: the identity block, which cannot be invented (module docs).
         for (i, word) in BOARD_IDENTITY.iter().enumerate() {
@@ -171,57 +216,14 @@ impl ConfigOtp {
         // bits 15:8 into 7:0, so one byte per copy, the same in both.
         let check = identity_check(BOARD_IDENTITY);
         table.insert(27, check | check << 8);
-        // 16: OTP control; bits 26/27 would lock VC JTAG.
-        table.insert(16, 0x0000_0001);
-        // 17/18: bootmode and its copy. `0x8B0` is what every Pi 4 reports —
-        // a model constant, with none of the documented secure-boot or
-        // boot-source bits set. On BCM2711 the bootmode comes from the EEPROM
-        // configuration anyway.
-        table.insert(17, 0x0000_08B0);
-        table.insert(18, 0x0000_08B0);
-        // 28/29: serial number and its complement; the firmware checks one
-        // against the other.
-        const SERIAL: u32 = 0x1AA2_BB31;
-        table.insert(28, SERIAL);
-        table.insert(29, !SERIAL);
         // 30: revision code, the one value taken from real hardware — the
         // firmware decodes it into the board model it reports. It identifies a
         // model, not a unit.
         table.insert(30, crate::soc::Board::default().revision);
-        // 35: high 32 bits of the 64-bit serial.
-        table.insert(35, 0xFA1E_0023);
-        // 64/65: Ethernet MAC `02:00:5E:00:53:01`, from RFC 7042's
-        // documentation range — locally administered and unicast, which a
-        // tidier `01:…` would not be. Row 65 holds the first four octets, most
-        // significant first, and bits 31:16 of row 64 the last two. Programming
-        // them is optional, but they are fused on the board this mirrors and
-        // they feed `rpi-machine-id`.
-        table.insert(64, 0x5301_0000);
-        table.insert(65, 0x0200_5E00);
-        // 56-63: the 256-bit customer-private key. A Raspberry Pi 4B d03115 has
-        // these fused (`otp_dump` hides the region, `nvmem_priv0` reads back 32
-        // non-zero bytes), so blank would model the wrong board. The value is
-        // **invented and must stay so** — the real rows are the secret behind
-        // `rpi-machine-id` and the root LUKS passphrase. It is a valid NIST
-        // P-256 scalar and deliberately ASCII, so a hexdump reads as fake.
-        // Fusing it does not make the crypto tags answer: the key also has to
-        // be registered in customer OTP (36-43), blank here and on the board.
-        const DEVICE_PRIVATE_KEY: [u32; 8] = [
-            0x5250_4956, // "RPIV"
-            0x4952_5446, // "IRTF"
-            0x574D_4F44, // "WMOD"
-            0x454C_4B45, // "ELKE"
-            0x5930_3030, // "Y000"
-            0x3030_3030, // "0000"
-            0x3030_3030, // "0000"
-            0x3030_3031, // "0001"
-        ];
-        for (i, word) in DEVICE_PRIVATE_KEY.iter().enumerate() {
-            table.insert(56 + i as u32, *word);
-        }
-        // Blank, as a Raspberry Pi 4B d03115 has them: 36-43 customer OTP,
-        // 45/46 the codec licence keys, 47-54 the secure-boot key hash, 55 its
-        // flags.
+        // Left unprogrammed, as a board out of the factory has them: 36-43
+        // customer OTP, 45/46 the codec licence keys, 47-54 the secure-boot key
+        // hash, 55 its flags, and 56-63 the device private key, which nothing
+        // but `rpi-otp-private-key` on a provisioned board ever writes.
         ConfigOtp {
             storage: BTreeMap::new(),
             key: 0,
@@ -250,8 +252,11 @@ impl ConfigOtp {
         &self.table
     }
 
-    pub fn set_fuses(&mut self, fuses: BTreeMap<u32, u32>) {
-        self.table = fuses;
+    /// Fuse every row of `fuses`, leaving the rows it says nothing about alone.
+    /// A file cannot spell a blank row — an unprogrammed fuse reads 0 and is
+    /// simply absent — so a row it does not carry keeps the value it had.
+    pub fn fuse_rows(&mut self, fuses: &BTreeMap<u32, u32>) {
+        self.table.extend(fuses);
     }
 
     /// `PARAM_A.GO`: run `cmd`, which completes at once.
@@ -400,6 +405,19 @@ mod tests {
             syndrome |= c << j;
         }
         assert_eq!(syndrome, 0);
+    }
+
+    /// A file holding one region says only that: the model is a board out of
+    /// the factory, and a provisioned device private key goes over its rows.
+    #[test]
+    fn fusing_rows_leaves_the_ones_the_file_does_not_carry() {
+        let mut otp = ConfigOtp::new();
+        assert_eq!(otp.row(56), 0, "a factory-fresh board has no private key");
+        otp.fuse_rows(&BTreeMap::from([(56, 0x5250_4956), (63, 1)]));
+        assert_eq!(otp.row(56), 0x5250_4956);
+        assert_eq!(otp.row(63), 1);
+        assert_eq!(otp.row(19), BOARD_IDENTITY[0], "the identity block stays");
+        assert_eq!(otp.row(17), 0x0000_08B0);
     }
 
     #[test]

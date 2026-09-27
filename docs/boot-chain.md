@@ -67,28 +67,17 @@ its root-LUKS passphrase is derived in **stage 1**, not stage 2 — which is why
 bumping the EEPROM can move the passphrase just as bumping `start4.elf` can.
 
 The first stage builds a tagged handoff structure at `0xC004_0000` (`BSTE`,
-then `BVER`, `BSTS`, `BSTN`, `BSTM`, `BUSB` sub-blocks) and, inside the `BVER`
-block at offset `+0x8c`, deposits 16 bytes:
-
-```
-SHA-256( le32(otp[28]) ‖ le32(otp[35]) ‖ le32(otp[30])
-         ‖ le32(otp[64]) ‖ le32(otp[65]) )  [..16]
-```
-
-- `otp[28]`, `otp[35]` — low and high halves of the 64-bit board serial
-- `otp[30]` — the revision code
-- `otp[64]`, `otp[65]` — the Ethernet MAC
-
-Rows go in as native little-endian words, in that order (the order the
-bootloader assembles them on its stack, not numeric row order), and the 32-byte
-digest is truncated to its first 16 bytes. Only public identity rows take part;
-nothing on this path touches the secure-boot key hash or the device private key.
+then `BVER`, `BSTS`, `BSTN`, `BSTM`, `BUSB` sub-blocks) and deposits the 16
+bytes inside the `BVER` block at offset `+0x8c`. It hashes the public identity
+rows to get them — the board serial (rows 28 and 35), the revision code (row
+30) and the Ethernet MAC (rows 64 and 65). Nothing on that path touches the
+secure-boot key hash or the device private key.
 
 `start4.elf` then only *republishes* it: `0x3ECC_5190` finds the `BVER` block and
 does `memcpy(out, BVER + 0x8c, 16)`, and the caller hex-encodes the result into
 `/chosen/rpi-machine-id`. `start4` carries its own fallback for a board with no
-such block — a different function, `SHA-256(otp[28] ‖ otp[35] ‖ otp[30])` — but
-on a normal boot it is never reached.
+such block, over fewer of the same rows, but on a normal boot it is never
+reached.
 
 The bench does not recompute any of this: to the model the derivation is a
 black box inside the firmware. What CI checks is the output for fixed inputs —

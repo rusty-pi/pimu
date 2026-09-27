@@ -475,8 +475,10 @@ it prints rows 56-63 as `00000000`, hiding them the way it hides rows 19-26,
 while Linux's `nvmem_priv0` reads back 32 non-zero bytes. Checking blankness
 through `nvmem_priv0`/`nvmem_cust0` is the reliable way, and reporting it as a
 boolean is the *only* way that respects the "never commit an OTP dump" rule in
-`CLAUDE.md`. `src/periph/configotp.rs` models rows 56-63 as fused for the same
-reason: firmware that reads 0 from a row concludes the fuse is unprogrammed.
+`CLAUDE.md`. `src/periph/configotp.rs` leaves those rows blank, because it models
+a board as it leaves the factory and only an owner running `rpi-otp-private-key`
+fuses them; the scenario provisions a key of its own with `otp_row`, because
+firmware that reads 0 from a row concludes the fuse is unprogrammed.
 
 The `nvmem_cust_rw`, `nvmem_mac_rw` and `nvmem_priv_rw` `dtparam`s open those
 regions for *write* from Linux. OTP writes are one-way, so nothing here needs

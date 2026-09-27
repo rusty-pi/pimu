@@ -1,9 +1,14 @@
-//! `boot --otp json:<file>` / `--otp binary:<file>`: the whole fuse array in a
-//! file, so what the firmware programs outlives the run. `json:` is an object of
-//! row number to value, fused rows only; `binary:` is row n at byte 4n,
+//! `boot --otp json:<file>` / `--otp binary:<file>`: the fuse array in a file, so
+//! what the firmware programs outlives the run. `json:` is an object of row
+//! number to value, fused rows only; `binary:` is row n at byte 4n,
 //! little-endian, rows 0-67 (start4 reads no higher). A missing file starts from
-//! the model's own fuses (`src/periph/configotp.rs`) and is created. A file made
-//! from a real board carries that board's secrets: keep it out of the repository.
+//! the model's own fuses (`src/periph/configotp.rs`) and is created.
+//!
+//! Loading fuses the rows the file carries and leaves the rest as the model has
+//! them. Neither format can spell a blank row — an unprogrammed fuse reads 0 and
+//! is simply absent — so a file holding one region, say a provisioned device
+//! private key, is a file that says only that. A file made from a real board
+//! carries that board's secrets: keep it out of the repository.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;

@@ -39,11 +39,9 @@ out at the end of the run is safe.
 `arm_loader` does not compute it itself. `0x3ECC5190` first looks for the `BVER`
 block in the handoff table the EEPROM bootloader left behind and, if it is
 there, hex-encodes the 16 bytes at `BVER+0x8c`; only with no such block does it
-fall back to hashing OTP itself — `SHA-256(otp[28] ‖ otp[35] ‖ otp[30])`
-truncated to 16 bytes, the three rows being the serial low word, the serial high
-word and the revision code. A real boot always has the block, and so does this
-bench (traced), so the value is `pieeprom.bin`'s and `start4.elf` only publishes
-it at `0x3EC568F8`.
+fall back to hashing the public identity rows itself. A real boot always has the
+block, and so does this bench (traced), so the value is `pieeprom.bin`'s and
+`start4.elf` only publishes it at `0x3EC568F8`.
 
 The identity behind it is this bench's own, not any real board's: every OTP row
 involved is invented in `src/periph/configotp.rs`. See the OTP rule in

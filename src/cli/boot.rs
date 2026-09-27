@@ -90,9 +90,17 @@ MACHINE:
               The OTP fuses, kept across runs: read before the boot when
               <file> exists, written back after the run when the firmware
               programmed a row, created from the model's own fuses when it
-              does not exist. json: row -> value, one a line; binary: row n
+              does not exist. Its rows go over the model's own, and a row it
+              says nothing about keeps the value the model gives it — an
+              unprogrammed fuse reads 0 and no format spells it out.
+              json: row -> value, one a line; binary: row n
               at byte 4n, little-endian. A file with a real board's fuses
               holds its secrets: keep it out of the repository.
+    --otp-row <ROW>=<VALUE>
+              Program one fuse before the boot, on top of the model's own
+              rows and anything --otp read. The model is a board out of the
+              factory, so a row an owner would have fused - the device
+              private key in 56-63, say - is blank until this sets it.
     --maskrom <rom.bin>
               Execute a real VPU maskROM dump from its reset vector,
               0x60000000, instead of the modelled boot ROM stage.
@@ -407,6 +415,8 @@ struct BootOpts {
     log: Spec,
     log_file: Option<String>,
     otp: Option<OtpFile>,
+    /// `--otp-row`: rows to fuse before the boot, over the model's own.
+    otp_rows: Vec<(u32, u32)>,
 }
 
 /// Zero-config: an option left out takes the file of that name in the working
@@ -637,6 +647,7 @@ impl BootOpts {
         let mut host_net: Option<HostNet> = None;
         let mut boot_order: Option<String> = None;
         let mut bootconf: Vec<String> = Vec::new();
+        let mut otp_rows: Vec<(u32, u32)> = Vec::new();
         let mut eeprom_pubkey: Option<PathBuf> = None;
         let mut maskrom_path: Option<PathBuf> = None;
         let mut stepping: Option<Stepping> = None;
@@ -813,6 +824,15 @@ impl BootOpts {
                     }
                     bootconf.push(kv.to_string())
                 }
+                "--otp-row" => {
+                    let kv = it.next().context("--otp-row needs ROW=VALUE")?;
+                    let (row, value) = kv
+                        .split_once('=')
+                        .with_context(|| format!("--otp-row: expected ROW=VALUE, got '{kv}'"))?;
+                    let row = parse_u32(row).with_context(|| format!("--otp-row '{kv}'"))?;
+                    let value = parse_u32(value).with_context(|| format!("--otp-row '{kv}'"))?;
+                    otp_rows.push((row, value))
+                }
                 "--skip-signed-boot" => skip_signed_boot = true,
                 "--tryboot" => tryboot = true,
                 "--skip-unimpl" => skip_unimpl = true,
@@ -988,6 +1008,7 @@ impl BootOpts {
             host_net,
             boot_order,
             bootconf,
+            otp_rows,
             eeprom_pubkey,
             maskrom_path,
             stepping,
@@ -1067,8 +1088,12 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
     let mut partition = 0;
     let (report, emu, start) = 'boot: loop {
         let mut machine = rig.machine(&flash)?;
-        if let Some(fuses) = fuses.take() {
-            machine.config_otp.set_fuses(fuses);
+        if let Some(fuses) = &fuses {
+            machine.config_otp.fuse_rows(fuses);
+        }
+        // After the file, so `--otp-row` fuses a row whatever the run started from.
+        for &(row, value) in &opts.otp_rows {
+            machine.config_otp.set(row, value);
         }
         machine.pm.keep_partition_bits(partition);
         // One-shot: the bootcode clears it as it reads it.
@@ -1143,8 +1168,8 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
     })
 }
 
-/// The fuses a run before left. It replaces the whole array, and row 30 is the
-/// revision code, so it has to be this board's.
+/// The fuses a run before left. They go over the model's own rows rather than
+/// replacing them, and row 30 is the revision code, so it has to be this board's.
 fn load_otp(opts: &BootOpts, board: Board) -> Result<Option<BTreeMap<u32, u32>>> {
     let Some(file) = &opts.otp else {
         return Ok(None);
@@ -2636,6 +2661,29 @@ mod tests {
             })
         );
         assert_eq!(o.bootconf, vec!["[all]", "BOOT_ORDER=0xf41"]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// `--otp-row` fuses a row the model leaves blank: it is a board out of the
+    /// factory, so the device private key in 56-63 is not there until a run asks.
+    #[test]
+    fn otp_row_takes_a_row_and_a_value() {
+        let dir = zero_dir("rows");
+        put(&dir, "pieeprom.bin", "");
+        let o = BootOpts::parse(
+            &args(&["--otp-row", "56=0x52504956", "--otp-row", "63=1"]),
+            &dir,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(o.otp_rows, vec![(56, 0x5250_4956), (63, 1)]);
+
+        for (bad, says) in [("56", "ROW=VALUE"), ("56=nope", "--otp-row")] {
+            let Err(e) = BootOpts::parse(&args(&["--otp-row", bad]), &dir) else {
+                panic!("--otp-row {bad} is not a row and a value")
+            };
+            assert!(e.to_string().contains(says), "{e:#}");
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -29,6 +29,22 @@ description = "pieeprom.bin + start4cd.elf boot from the SD image, through to th
 eeprom = "../../firmware/pieeprom.bin"
 sd = "../../firmware/sd-halt-start4cd.img"
 # The same requests as `firmware.toml`, which explains each one.
+# The model is a board as it leaves the factory, so OTP rows 56-63 - the device
+# private key - are blank; only `rpi-otp-private-key`, run by an owner, ever
+# fuses them. The crypto milestones below need a provisioned part, so this
+# scenario fuses a key of its own. The value is **invented and must stay so**:
+# the real rows are secret (`CLAUDE.md`). It is a valid NIST P-256 scalar and
+# deliberately ASCII, so a hexdump of it reads as fake.
+otp_row = [
+  "56=0x52504956", # "RPIV"
+  "57=0x49525446", # "IRTF"
+  "58=0x574d4f44", # "WMOD"
+  "59=0x454c4b45", # "ELKE"
+  "60=0x59303030", # "Y000"
+  "61=0x30303030", # "0000"
+  "62=0x30303030", # "0000"
+  "63=0x30303031", # "0001"
+]
 mbox_property = [
   "0x00000001",
   "0x00028001:8=3.3",
@@ -111,7 +127,7 @@ why = "One OTP key slot."
 line = ["tag 0x0003008f", "answered", "0x00000001"]
 
 [[milestone]]
-why = "Key 1 is a device private key."
+why = "Key 1 is a device private key, from the `otp_row` lines above."
 line = ["tag 0x00030090", "answered", "0x00000001"]
 
 [[milestone]]

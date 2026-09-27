@@ -50,6 +50,22 @@ sd = "../../firmware/sd-halt.img"
 # tags: its handler waits on two blocks with no timeout, and a wrong answer from
 # either parks it with every later request unanswered. Its value buffer
 # is two words, so it names its size.
+# The model is a board as it leaves the factory, so OTP rows 56-63 - the device
+# private key - are blank; only `rpi-otp-private-key`, run by an owner, ever
+# fuses them. The crypto milestones below need a provisioned part, so this
+# scenario fuses a key of its own. The value is **invented and must stay so**:
+# the real rows are secret (`CLAUDE.md`). It is a valid NIST P-256 scalar and
+# deliberately ASCII, so a hexdump of it reads as fake.
+otp_row = [
+  "56=0x52504956", # "RPIV"
+  "57=0x49525446", # "IRTF"
+  "58=0x574d4f44", # "WMOD"
+  "59=0x454c4b45", # "ELKE"
+  "60=0x59303030", # "Y000"
+  "61=0x30303030", # "0000"
+  "62=0x30303030", # "0000"
+  "63=0x30303031", # "0001"
+]
 mbox_property = [
   "0x00000001",
   "0x00028001:8=3.3",
@@ -336,10 +352,10 @@ why = """
 reference board answers the same for key 1 when asked over `/dev/vcio`, and
 `KEY_NOT_FOUND` for 0, 2 and 3.
 
-This depends on OTP rows 56-63 being modelled as fused, which they are on real
-hardware: `vcgencmd otp_dump` prints that region as zeroes but hides it the way
-it hides rows 19-26, while Linux's `nvmem_priv0` reads back 32 non-zero bytes.
-The key in `src/periph/configotp.rs` is invented — never a real row."""
+This depends on rows 56-63 carrying a key, which the model does not fuse on its
+own: it is a board out of the factory, and only an owner running
+`rpi-otp-private-key` programs that region. The `otp_row` lines above provision
+it for this run, with an invented key — never a real row."""
 line = ["tag 0x00030090", "answered", "0x00000001"]
 
 [[milestone]]

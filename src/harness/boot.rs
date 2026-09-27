@@ -51,6 +51,11 @@ pub struct BootSpec {
     pub boot_order: Option<String>,
     #[serde(default)]
     pub bootconf: Vec<String>,
+    /// Fuses to program before the boot, `ROW=VALUE` each, over the model's
+    /// own rows. The model is a board out of the factory, so a scenario that
+    /// needs a row an owner would have fused says so here.
+    #[serde(default)]
+    pub otp_row: Vec<String>,
     /// RSA public key to put in the EEPROM, for a signed `boot.img`.
     #[serde(default)]
     pub eeprom_pubkey: Option<String>,
@@ -420,6 +425,10 @@ impl BootScenario {
         }
         for kv in &b.bootconf {
             args.push("--bootconf".into());
+            args.push(kv.clone());
+        }
+        for kv in &b.otp_row {
+            args.push("--otp-row".into());
             args.push(kv.clone());
         }
         if let Some(k) = &b.eeprom_pubkey {
