@@ -10,7 +10,7 @@ description: |
   pimu runs pieeprom.bin, start4.elf and fixup4.dat on a modelled VideoCore VPU
   and then Linux on the four Cortex-A72 cores the firmware releases, so a
   firmware change shows up as a diff in the serial transcript.
-license: MIT OR Apache-2.0
+license: MIT
 homepage: https://github.com/rusty-pi/pimu
 section: misc
 priority: optional

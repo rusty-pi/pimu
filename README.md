@@ -286,3 +286,21 @@ testdata/       in-process scenarios and the boot scenarios, with their goldens
 | [`docs/vpu-isa.md`](docs/vpu-isa.md) | The VideoCore IV instruction set, with the evidence for each statement |
 | [`docs/references.md`](docs/references.md) | Outside sources: datasheets, kernel drivers, other reverse engineering |
 | [`testdata/README.md`](testdata/README.md) | The scenario files, the goldens and the images each boot needs |
+
+## Licence
+
+MIT — see [`LICENSE`](LICENSE).
+
+That covers this repository's own code, specs and documentation. It does not
+cover the boot blobs a run needs: `scripts/fetch-firmware.sh` downloads those
+from Raspberry Pi and Debian at your request, under their own licences, and
+none of them is committed here.
+
+This is an independent project. It is not affiliated with, sanctioned by or
+endorsed by Raspberry Pi Ltd. or Broadcom. Everything it says about the
+hardware comes from public documentation, from Linux drivers and device trees,
+from static analysis of published firmware images and from measurements on a
+Raspberry Pi 4B — each statement carries its source, in `specs/*.toml` and
+`isa/vpu.toml`. No Broadcom or Raspberry Pi material is reproduced.
+"Raspberry Pi" is a trademark of Raspberry Pi Ltd., used here only to say which
+hardware this models.

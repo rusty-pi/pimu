@@ -50,6 +50,14 @@ DTB boot path never touches the QPU.
   replaced by `GPIO_PUP_PDN_CNTRL_REG`) and the interrupt controller are the
   two that bite.
 - Herman Hermitage, "VideoCore IV Programmers Manual" (community wiki)
+- The `bcm2708_chip` register headers Broadcom published with the
+  `brcm_usrlib` sources, mirrored as
+  [`rpi-registers.html`](https://www.felloff.net/text/rpi-registers.html). A
+  BCM2835 header set, so it is right only where BCM2711 kept the block: the
+  `mcsync` and `corectl` specs cite it for register names, offsets and access
+  types, and every one of those rows has a `measured` or `trace` source beside
+  it taken on a BCM2711. Names, offsets and bit positions are facts and are
+  recorded as such; no description is copied.
 - `raspberrypi/firmware` `boot/` and `hardware/` headers
 
 ### What neither datasheet documents

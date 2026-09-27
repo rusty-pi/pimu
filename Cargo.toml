@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.98"
 description = "A virtual bench for Raspberry Pi VideoCore boot firmware (start4.elf, fixup4.dat, pieeprom.bin)"
-license = "MIT OR Apache-2.0"
+license = "MIT"
 publish = false
 
 [[bin]]
