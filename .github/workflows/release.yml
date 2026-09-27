@@ -9,7 +9,9 @@ name: release
 # its minutes are billed, and the PGO training below roughly doubles it.
 #
 # `workflow_dispatch` is the re-run path — dispatch it on the tag's ref, not on
-# a branch, since the version and the notes both come from the tag.
+# a branch, since the version and the notes both come from the tag. A dispatch
+# runs the workflow as of that ref, so an old tag reruns the definition it was
+# cut with: a fix here reaches it only through a new tag.
 on:
   push:
     tags:
