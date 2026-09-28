@@ -684,7 +684,14 @@ offset = 0x8000
 count  = 1024
 stride = 4
 access = "rw"
-notes  = "4 KiB view of the configuration space of the function `EXT_CFG_INDEX` selects. Bus 1 device 0 is the VL805; everything else, bus 0 included, reads all-ones."
+notes  = """4 KiB view of the configuration space of the function `EXT_CFG_INDEX` \
+selects. Modelled as bus 1 device 0 being the VL805, with everything else -- bus 0 \
+included -- reading all-ones. A 4B rev 1.5 board does not agree: there the VL805 \
+answers at index 0 and bus 1 does not answer at all, so a bus scan finds the \
+endpoint on bus 0. Firmware must therefore not take bus 0 to mean the root port, \
+whose own configuration space is at `base + where` and not through this window; \
+doing so sent every access meant for the endpoint to the root port, which answers \
+and has no BAR0."""
 
 [[register.source]]
 kind       = "linux"
@@ -700,11 +707,19 @@ confidence = "high"
 name   = "EXT_CFG_INDEX"
 offset = 0x9000
 access = "rw"
-notes  = "Selects the function `EXT_CFG_DATA` shows."
+notes  = """Selects the function `EXT_CFG_DATA` shows. Modelled as reading back \
+what was written; on a 4B rev 1.5 board it reads `0` whatever is written to it, so \
+firmware cannot check it and must write it again before every access through the \
+window."""
 
 [[register.source]]
 kind       = "linux"
 ref        = "`pcie-brcmstb.c`: `PCIE_EXT_CFG_INDEX`, `bus << 20 | slot << 15 | fn << 12`"
+confidence = "high"
+
+[[register.source]]
+kind       = "measured"
+ref        = "rpi-dev 4B rev 1.5: after writing `0x00100000` the register reads `0x00000000`, and the VL805 answers through the window at index 0"
 confidence = "high"
 
 [[register.field]]

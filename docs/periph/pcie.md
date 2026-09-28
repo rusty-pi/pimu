@@ -69,7 +69,7 @@ Interrupts (`INTA` GIC id 175 (`GIC_SPI 143`) · `MSI` GIC id 180 (`GIC_SPI 148`
 | `0x4510` | [`MSI_INTR2_MASK_SET`](#msi_intr2_mask_set) | w | 32 | 1, best high |
 | `0x4514` | [`MSI_INTR2_MASK_CLR`](#msi_intr2_mask_clr) | w | 32 | 1, best high |
 | `0x8000`–`0x8FFC` (1024 × 0x4) | [`EXT_CFG_DATA`](#ext_cfg_data) | rw | 32 | 2, best high |
-| `0x9000` | [`EXT_CFG_INDEX`](#ext_cfg_index) | rw | 32 | 1, best high |
+| `0x9000` | [`EXT_CFG_INDEX`](#ext_cfg_index) | rw | 32 | 2, best high |
 | `0x9210` | [`RGR1_SW_INIT_1`](#rgr1_sw_init_1) | rw | 32 | 2, best high |
 
 ## `RC_DEVCTL`
@@ -553,7 +553,7 @@ Sources:
 
 Offset `0x8000`, 1024 elements 0x4 apart · access `rw` · 32 bits
 
-4 KiB view of the configuration space of the function `EXT_CFG_INDEX` selects. Bus 1 device 0 is the VL805; everything else, bus 0 included, reads all-ones.
+4 KiB view of the configuration space of the function `EXT_CFG_INDEX` selects. Modelled as bus 1 device 0 being the VL805, with everything else -- bus 0 included -- reading all-ones. A 4B rev 1.5 board does not agree: there the VL805 answers at index 0 and bus 1 does not answer at all, so a bus scan finds the endpoint on bus 0. Firmware must therefore not take bus 0 to mean the root port, whose own configuration space is at `base + where` and not through this window; doing so sent every access meant for the endpoint to the root port, which answers and has no BAR0.
 
 Sources:
 
@@ -564,7 +564,7 @@ Sources:
 
 Offset `0x9000` · access `rw` · 32 bits
 
-Selects the function `EXT_CFG_DATA` shows.
+Selects the function `EXT_CFG_DATA` shows. Modelled as reading back what was written; on a 4B rev 1.5 board it reads `0` whatever is written to it, so firmware cannot check it and must write it again before every access through the window.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -575,6 +575,7 @@ Selects the function `EXT_CFG_DATA` shows.
 Sources:
 
 - linux (high): `pcie-brcmstb.c`: `PCIE_EXT_CFG_INDEX`, `bus << 20 | slot << 15 | fn << 12`
+- measured (high): rpi-dev 4B rev 1.5: after writing `0x00100000` the register reads `0x00000000`, and the VL805 answers through the window at index 0
 
 `FUNC` sources:
 

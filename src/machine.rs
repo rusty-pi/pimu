@@ -1015,9 +1015,24 @@ impl Machine {
                 return v;
             }
         }
-        self.ram
-            .load((addr as u32) & 0x3FFF_FFFF, Width::Word)
-            .unwrap_or(0)
+        match self.dma40_dram(addr) {
+            Some(at) => self.ram.load(at, Width::Word).unwrap_or(0),
+            None => 0,
+        }
+    }
+
+    /// Where a 40-bit DMA address lands in DRAM, if it lands there at all.
+    ///
+    /// The channel is given system addresses, so the VPU's cache-alias bits are
+    /// part of the address rather than an alias to strip: a buffer handed over
+    /// with `0xC000_0000` still on it addresses three gigabytes up, which a
+    /// board does not answer. It reports the transfer finished and moves
+    /// nothing, and that is how our own `xhci::read32` came to return whatever
+    /// its bounce buffer already held on a 4B rev 1.5 while reading correctly
+    /// here. Masking the alias off made every such transfer work.
+    fn dma40_dram(&self, addr: u64) -> Option<u32> {
+        let at = addr as u32;
+        (addr >> 32 == 0 && (at as usize) < self.ram.len()).then_some(at)
     }
 
     /// One word to a 40-bit DMA4 address, from behind the VPU's caches.
@@ -1034,7 +1049,9 @@ impl Machine {
             if addr >> 32 != 0 && m.pcie.mmio_write(addr, Width::Word, value, &mut m.ram) {
                 return;
             }
-            let _ = m.ram.store((addr as u32) & 0x3FFF_FFFF, Width::Word, value);
+            if let Some(at) = m.dma40_dram(addr) {
+                let _ = m.ram.store(at, Width::Word, value);
+            }
         });
     }
 
