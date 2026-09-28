@@ -1,6 +1,9 @@
 [package]
 name = "pimu"
-version = "0.2.0"
+# Not the released version: that is the git tag the release workflow runs on,
+# and it is what the packages and the container image are named after. Nothing
+# reads `CARGO_PKG_VERSION`, so this stays put and a release needs no commit.
+version = "0.0.0"
 edition = "2021"
 rust-version = "1.98"
 description = "A virtual bench for Raspberry Pi VideoCore boot firmware (start4.elf, fixup4.dat, pieeprom.bin)"

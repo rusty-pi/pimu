@@ -1,6 +1,6 @@
 ---
 name: release
-description: Cut a pimu release - work out the version bump from what changed since the last tag, write the release notes, bump Cargo.toml, tag main and push so the release workflow builds it. Use when asked to "make a release", "cut a release", "release pimu" or "tag a version".
+description: Cut a pimu release - work out the version bump from what changed since the last tag, write the release notes, then tag and push so the release workflow builds it (no version commit). Use when asked to "make a release", "cut a release", "release pimu" or "tag a version".
 ---
 
 # Cutting a release
@@ -144,15 +144,14 @@ Wait for approval before touching anything.
 
 On approval:
 
-Edit the `version` field in `Cargo.toml` to the new version — an exact edit of
-that one line, not a blind `sed` over the file, which would also hit a
-dependency's version. Then:
+**A release makes no commit.** The version lives in the tag alone —
+`Cargo.toml` says `0.0.0` on purpose and nothing reads `CARGO_PKG_VERSION`, so
+there is nothing to bump and no `Release X.Y.Z` commit to write. Tag the commit
+that is already there:
 
 ```bash
 version=X.Y.Z
-cargo update --workspace --offline
 cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
-git commit -am "Release $version"
 git tag -a --cleanup=verbatim -F notes.md "$version"
 ```
 
@@ -160,12 +159,9 @@ git tag -a --cleanup=verbatim -F notes.md "$version"
 starting with `#` from a tag message, which would silently eat the notes'
 Markdown headings.
 
-`cargo update --workspace` rewrites `Cargo.lock`, which is tracked, so both
-files belong in the release commit.
-
 The tag must be **annotated**, with the notes as its message: the workflow
 publishes the tag's message as the release body. A lightweight tag makes the
-workflow fall back to generated notes.
+workflow publish only the appended install instructions.
 
 ## 6. Push
 
@@ -174,14 +170,13 @@ ask before pushing, even when the user has already approved the version and
 the notes**. Show exactly what will be pushed:
 
 ```bash
-git push origin main "$version"
+git push origin "$version"
 ```
 
-Main goes first in that command so the tag never arrives pointing at a commit
-the remote does not have.
+Only the tag: main is already pushed, which section 1 checked.
 
-If the user declines, leave the commit and the tag in place and say how to
-undo them (`git tag -d $version`, `git reset --hard HEAD~1`).
+If the user declines, leave the tag in place and say how to undo it
+(`git tag -d $version`).
 
 ## 7. Watch the build
 

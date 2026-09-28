@@ -58,9 +58,8 @@ jobs:
             echo "::error::dispatch this on an X.Y.Z tag, not on $GITHUB_REF_NAME"
             exit 1
           fi
-          crate=$(sed -n '0,/^version = "/s/^version = "\(.*\)"/\1/p' Cargo.toml)
-          if [ "$GITHUB_REF_NAME" != "$crate" ]; then
-            echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml's $crate"
+          if ! printf '%s' "$GITHUB_REF_NAME" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::$GITHUB_REF_NAME is not an X.Y.Z tag"
             exit 1
           fi
           echo "PKG_VERSION=$GITHUB_REF_NAME" >> "$GITHUB_ENV"
