@@ -295,6 +295,17 @@ impl SdCard {
         SdCard::with_disk_kind(Disk::from_vec(vec![0; 512]), CardKind::Sdio)
     }
 
+    /// Whether `ACMD6` has put the card on the four-bit bus.
+    pub fn on_wide_bus(&self) -> bool {
+        self.wide_bus
+    }
+
+    /// Whether `CMD6` has put the card in high speed (group 1 function 1).
+    /// A card in default speed is specified only to 25 MHz.
+    pub fn high_speed(&self) -> bool {
+        self.functions[0] == 1
+    }
+
     pub fn block_count(&self) -> u64 {
         self.disk.blocks()
     }

@@ -624,6 +624,26 @@ ref        = "SDHCI 3.00, 2.2.18"
 confidence = "high"
 
 [[register.field]]
+name  = "ERR_DATA_TIMEOUT"
+bits  = "20"
+notes = "The data line did not deliver within the timeout `CLOCK_CONTROL.TIMEOUT` sets."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.18"
+confidence = "high"
+
+[[register.field]]
+name  = "ERR_DATA_CRC"
+bits  = "21"
+notes = "A data block's CRC did not check out. What a card that is out of its depth answers with -- a bus width the two ends disagree on, or a clock the card was never switched up to."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "SDHCI 3.00, 2.2.18"
+confidence = "high"
+
+[[register.field]]
 name  = "ERR_ADMA"
 bits  = "25"
 notes = "ADMA error."

@@ -348,6 +348,8 @@ Normal (15:0) and error (31:16) interrupt status, gated by `INT_STATUS_EN`. The 
 | 8 | `CARD` | r | Card interrupt: an SDIO card is pulling `DAT[1]` low. A level, not a latch — writing a one does not clear it, and it goes away only when the card stops asserting, so a driver masks it in `INT_STATUS_EN` and `INT_SIGNAL_EN` for as long as it takes to service the card. `mmc-bcm2835` does exactly that: `bcm2835_mmc_irq` clears the bit out of both enables and calls `sdio_signal_irq`, and `bcm2835_mmc_ack_sdio_irq` puts it back. The CYW43455 on the WiFi host is the only thing on this board that asserts it. |
 | 15 | `ERROR` | r | Set while any error bit is. |
 | 16 | `ERR_CMD_TIMEOUT` | w1c | Command timeout. |
+| 20 | `ERR_DATA_TIMEOUT` | w1c | The data line did not deliver within the timeout `CLOCK_CONTROL.TIMEOUT` sets. |
+| 21 | `ERR_DATA_CRC` | w1c | A data block's CRC did not check out. What a card that is out of its depth answers with -- a bus width the two ends disagree on, or a clock the card was never switched up to. |
 | 25 | `ERR_ADMA` | w1c | ADMA error. |
 
 Sources:
@@ -390,6 +392,14 @@ Sources:
 - standard (high): SDHCI 3.00, 2.2.17
 
 `ERR_CMD_TIMEOUT` sources:
+
+- standard (high): SDHCI 3.00, 2.2.18
+
+`ERR_DATA_TIMEOUT` sources:
+
+- standard (high): SDHCI 3.00, 2.2.18
+
+`ERR_DATA_CRC` sources:
 
 - standard (high): SDHCI 3.00, 2.2.18
 

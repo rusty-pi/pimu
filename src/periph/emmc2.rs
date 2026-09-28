@@ -46,13 +46,13 @@ use crate::spec::emmc2::{
     CONTROLLER_VERSION_RESET as VERSION, HOST_CONTROL, HOST_CONTROL2,
     HOST_CONTROL2_EXEC_TUNING_MASK as HC2_EXEC_TUNING, HOST_CONTROL2_SIGNAL_1V8_MASK as HC2_1V8,
     HOST_CONTROL2_TUNED_CLK_MASK as HC2_TUNED_CLK, HOST_CONTROL_BUS_POWER_MASK as HC_BUS_POWER,
-    HOST_CONTROL_DMA_SELECT_SHIFT as HC_DMA_SHIFT, HOST_CONTROL_FIXED_MASK as HOST_CONTROL_FIXED,
-    INT_SIGNAL_EN, INT_STATUS, INT_STATUS_BLOCK_GAP_MASK as INT_BLOCK_GAP,
-    INT_STATUS_BUF_READ_RDY_MASK as INT_BUF_READ_RDY,
+    HOST_CONTROL_DATA_WIDTH_MASK as HC_DATA_WIDTH, HOST_CONTROL_DMA_SELECT_SHIFT as HC_DMA_SHIFT,
+    HOST_CONTROL_FIXED_MASK as HOST_CONTROL_FIXED, INT_SIGNAL_EN, INT_STATUS,
+    INT_STATUS_BLOCK_GAP_MASK as INT_BLOCK_GAP, INT_STATUS_BUF_READ_RDY_MASK as INT_BUF_READ_RDY,
     INT_STATUS_BUF_WRITE_RDY_MASK as INT_BUF_WRITE_RDY, INT_STATUS_CARD_MASK as INT_CARD,
     INT_STATUS_CMD_COMPLETE_MASK as INT_CMD_COMPLETE, INT_STATUS_DMA_MASK as INT_DMA,
     INT_STATUS_EN, INT_STATUS_ERROR_MASK as INT_ERROR, INT_STATUS_ERR_ADMA_MASK as INT_ERR_ADMA,
-    INT_STATUS_ERR_CMD_TIMEOUT_MASK as INT_ERR_CMD_TIMEOUT,
+    INT_STATUS_ERR_CMD_TIMEOUT_MASK as INT_ERR_CMD_TIMEOUT, INT_STATUS_ERR_DATA_CRC_MASK,
     INT_STATUS_XFER_COMPLETE_MASK as INT_XFER_COMPLETE, MAX_CURRENT,
     MAX_CURRENT_RESET as MAX_CURRENT_VALUE, PRESENT_STATE,
     PRESENT_STATE_BUF_READ_EN_MASK as PS_BUF_READ_EN,
@@ -258,6 +258,26 @@ struct PioWrite {
     auto_cmd12: bool,
 }
 
+/// `PIMU_SD_STRICT_SPEED=1`: hold the card to what it was switched to, so a
+/// data transfer above 25 MHz fails unless `CMD6` put it in high speed, and one
+/// at a width the two ends disagree on fails as well.
+///
+/// Off by default, because it is not how every card behaves: the stock
+/// bootloader reads a SanDisk 32 GB card at 50 MHz on a Raspberry Pi 4B rev 1.5
+/// having only *asked* whether it could do high speed, and a board boots. It is
+/// here to reproduce the cards that do not, which is a failure a firmware
+/// cannot see coming -- transfers fail with nothing else to show for it, and a
+/// stage that reads no partition table just loses the boot medium.
+fn strict_speed() -> bool {
+    std::env::var("PIMU_SD_STRICT_SPEED").is_ok_and(|v| v != "0")
+}
+
+/// What a card in default speed is specified up to.
+const DEFAULT_SPEED_HZ: u64 = 25_000_000;
+/// Both hosts' base clock, the rate the firmware's own divider maths uses
+/// (`CAPABILITIES_0` reports it as 200 MHz).
+const BASE_CLOCK_HZ: u64 = 200_000_000;
+
 pub struct Emmc2 {
     id: Identity,
     reg: BTreeMap<u32, u32>,
@@ -360,6 +380,53 @@ impl Emmc2 {
 
     pub fn card(&self) -> Option<&SdCard> {
         self.card.as_ref()
+    }
+
+    /// The clock the card is being given, from `CLOCK_CONTROL`'s ten-bit
+    /// divider against this host's base clock: `base / (2 * div)`, and the base
+    /// itself for a divider of 0.
+    fn card_clock_hz(&self) -> u64 {
+        let clk = self.get(CLOCK_CONTROL);
+        let div = ((clk >> 8) & 0xFF) | ((clk >> 6) & 0x3) << 8;
+        let base = BASE_CLOCK_HZ;
+        if div == 0 {
+            base
+        } else {
+            base / (2 * u64::from(div))
+        }
+    }
+
+    /// Whether this transfer asks more of the card than it was switched to,
+    /// under [`strict_speed`]: a clock beyond default speed with no `CMD6`
+    /// high-speed switch behind it, or a bus width the two ends disagree on.
+    /// `CMD6` itself is let through -- it is how the card is switched.
+    fn beyond_the_card(&self, index: u8) -> bool {
+        if index == 6 || !strict_speed() {
+            return false;
+        }
+        let Some(card) = self.card.as_ref() else {
+            return false;
+        };
+        let hz = self.card_clock_hz();
+        let too_fast = hz > DEFAULT_SPEED_HZ && !card.high_speed();
+        let host_wide = self.get(HOST_CONTROL) & HC_DATA_WIDTH != 0;
+        let mismatch = host_wide != card.on_wide_bus();
+        if too_fast || mismatch {
+            crate::log!(
+                self.log,
+                Channel::Emmc,
+                "transfer refused: {} MHz, card {}, host {} bit, card {} bit",
+                hz / 1_000_000,
+                if card.high_speed() {
+                    "high speed"
+                } else {
+                    "default speed"
+                },
+                if host_wide { 4 } else { 1 },
+                if card.on_wide_bus() { 4 } else { 1 },
+            );
+        }
+        too_fast || mismatch
     }
 
     fn get(&self, off: u32) -> u32 {
@@ -525,6 +592,11 @@ impl Emmc2 {
 
         if response.no_response && resp_type != 0 {
             self.set_int(INT_ERR_CMD_TIMEOUT);
+            return;
+        }
+
+        if data_present && self.beyond_the_card(index) {
+            self.set_int(INT_STATUS_ERR_DATA_CRC_MASK);
             return;
         }
 
