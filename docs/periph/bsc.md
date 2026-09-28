@@ -59,7 +59,7 @@ Control. start4 reads a register in one of two ways. Either it sets `ST` for the
 Sources:
 
 - datasheet (high): BCM2711 ARM Peripherals, §3.2 (BSC): `C`
-- measured (medium): 4B rev 1.5: with pi4-firmware's own queued-read order every PMIC register answered with its own number, and only writing the register out and waiting for `DONE` before arming the read read it (0x1B reg 0x09 -> 40, which `vcgencmd measure_volts sdram_c` confirms as 1.1 V). Stock uses the queued order on the same silicon and gets the register, so some detail of the two sequences differs and is not identified yet: the model keeps the queued read selecting the register, which is what lets stock's own boot through (`testdata/boot/firmware.toml`).
+- measured (high): 4B rev 1.5: with pi4-firmware's own queued-read order every PMIC register answered with its own number, and only writing the register out and waiting for `DONE` before arming the read read it (0x1B reg 0x09 -> 40, which `vcgencmd measure_volts sdram_c` confirms as 1.1 V). What stock does and pi4-firmware did not is poll `S.STATE` between the two — see that field.
 - trace (high): pinned start4: queued read at `0x3ECF0FD8` / `0x3ECF1150` with the FIFO writes at `0x3ECF115A` after it; write-then-read at `0x3ECF0FD8`, FIFO at `0x3ECF1046`, then `0x3ECF1100`; the common end at `0x3ECF2F92`, `0x3ECF2FFC`, `0x3ECF1826` / `0x3ECF185A`, `0x3ECF3028`
 
 `READ` sources:
@@ -96,6 +96,7 @@ Status; `DONE`, `ERR` and `CLKT` are write-1-to-clear.
 | 7 | `RXF` | r | FIFO full. |
 | 8 | `ERR` | w1c | Address not acknowledged. |
 | 9 | `CLKT` | w1c | Clock-stretch timeout. |
+| 31:28 | `STATE` | r | Undocumented: the master's own state. It reads 0, 4 or 5 when the master will take a fresh `ST`, and something else — 0xF on a 4B rev 1.5 — while the transfer before it is still clocking out. The bootloader polls it between the register write and the repeated-start read, and a stage that does not poll it wedges the master: the `ST \| READ` is taken by neither transfer, `DONE` never lands, and the byte still in the shifter reads back out of the FIFO, so every register answers with its own number. |
 
 Sources:
 
@@ -140,6 +141,11 @@ Sources:
 `CLKT` sources:
 
 - datasheet (high): BCM2711 ARM Peripherals, §3.2 (BSC): `S.CLKT`
+
+`STATE` sources:
+
+- trace (high): stock bootcode `0x800035CC`..`0x800035F8`, between the FIFO write at `0x800035C8` and the `ST | READ` at `0x80003614`: `r2 = S >> 28`, then `r1 = 1` if `r2` is 0, 4 or 5, `r2 = 1` if `S & 0x300`, looping on the 50000-iteration countdown until one of them is set
+- measured (high): 4B rev 1.5 running our own EEPROM: `I2C 43.03: read 03 but S f0000051`, `I2C 43.05: read 05 but S f00000a9` — the register read back as its own number with `STATE` 0xF and `DONE` never set, from a `read_reg` that armed the read without the poll
 
 ## `DLEN`
 

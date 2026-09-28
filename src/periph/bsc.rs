@@ -28,7 +28,8 @@ use crate::spec::bsc::{
     A, C, CLKT, C_CLEAR_MASK as C_CLEAR, C_I2CEN_MASK as C_I2CEN, C_READ_MASK as C_READ,
     C_ST_MASK as C_ST, DEL, DIV, DLEN, FIFO, S, S_CLKT_MASK as S_CLKT, S_DONE_MASK as S_DONE,
     S_ERR_MASK as S_ERR, S_RXD_MASK as S_RXD, S_RXF_MASK as S_RXF, S_RXR_MASK as S_RXR,
-    S_TA_MASK as S_TA, S_TXD_MASK as S_TXD, S_TXE_MASK as S_TXE, S_TXW_MASK as S_TXW,
+    S_STATE_MASK as S_STATE, S_TA_MASK as S_TA, S_TXD_MASK as S_TXD,
+    S_TXE_MASK as S_TXE, S_TXW_MASK as S_TXW,
 };
 use crate::spec::Coverage;
 
@@ -71,6 +72,14 @@ pub struct Bsc {
     /// A read `ST` that arrived while a write was still stalled: it must wait
     /// for the write to happen or it would sample the wrong register.
     deferred_read: Option<usize>,
+    /// The byte the shifter is still clocking out, kept so that a read armed
+    /// on top of it can hand it back the way the part does.
+    on_the_wire: Option<u8>,
+    /// A read `ST` written while the transfer before it was still on the wire.
+    /// The master takes neither: `TA` and `S.STATE` stay as they are, `DONE`
+    /// never lands, and the byte in the shifter reads back out of the FIFO.
+    /// Only a `C.CLEAR` or `C <- 0` gets the master out of it.
+    wedged: bool,
     /// The PMICs on the bus. `None` (with `expander` also `None`) for an
     /// instance with nothing attached — every address then goes unACKed,
     /// which is what real hardware does with an empty bus.
@@ -106,6 +115,8 @@ impl Bsc {
             rx: VecDeque::new(),
             writing: None,
             deferred_read: None,
+            on_the_wire: None,
+            wedged: false,
             slave: Some(Pmic::default()),
             expander: Some(Fxl6408::new()),
             eeprom: None,
@@ -183,8 +194,12 @@ impl Bsc {
     fn status(&self) -> u32 {
         let mut s = self.latched & (S_DONE | S_ERR | S_CLKT);
         s |= S_TXD | S_TXE; // the modelled FIFO drains instantly
-        if self.pending.is_some() || self.writing.is_some() {
+        if self.busy() {
             s |= S_TA; // transfer still "in flight"
+            // `STATE` reads 0, 4 or 5 when the master will take a fresh `ST`
+            // and something else while a transfer is still clocking out. The
+            // bootloader polls it between the register write and the read.
+            s |= S_STATE;
         }
         if !self.tx.is_empty() {
             s &= !S_TXE;
@@ -223,12 +238,21 @@ impl Bsc {
         if let Some((deadline, err)) = self.pending {
             if deadline <= now_us {
                 self.pending = None;
+                self.on_the_wire = None;
+                if self.wedged {
+                    return;
+                }
                 self.latched |= S_DONE;
                 if err {
                     self.latched |= S_ERR;
                 }
             }
         }
+    }
+
+    /// Whether a transfer still holds the bus.
+    fn busy(&self) -> bool {
+        self.pending.is_some() || self.writing.is_some() || self.wedged
     }
 
     fn addressed(&self) -> bool {
@@ -252,6 +276,7 @@ impl Bsc {
                 slave.write_byte(b);
             }
         }
+        self.on_the_wire = Some(b);
         let left = left.saturating_sub(1);
         if left > 0 {
             self.writing = Some((acked, left));
@@ -305,6 +330,12 @@ impl Bsc {
                 self.deferred_read = Some(len);
                 return;
             }
+            if self.pending.is_some() {
+                self.wedged = true;
+                self.rx.clear();
+                self.rx.extend(self.on_the_wire);
+                return;
+            }
             self.run_read(len);
             return;
         }
@@ -346,11 +377,14 @@ impl MmioDevice for Bsc {
     fn write(&mut self, offset: u32, _width: Width, value: u32) -> BusResult<()> {
         match offset & !3 {
             C => {
-                if value & C_CLEAR != 0 {
+                if value & C_CLEAR != 0 || value == 0 {
                     self.tx.clear();
                     self.rx.clear();
                     self.writing = None;
                     self.deferred_read = None;
+                    self.on_the_wire = None;
+                    self.pending = None;
+                    self.wedged = false;
                 }
                 self.c = (value & !C_CLEAR) | (value & C_I2CEN);
                 if value & (C_I2CEN | C_ST) == (C_I2CEN | C_ST) {

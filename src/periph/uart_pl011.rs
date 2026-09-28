@@ -242,6 +242,7 @@ mod tests {
         u.write(FBRD, Width::Word, 3).unwrap();
         u.write(LCRH, Width::Word, 0x70).unwrap();
         u.write(IMSC, Width::Word, INT_RX | INT_RT).unwrap();
+        u.write(CR, Width::Word, CR_RESET | CR_UARTEN).unwrap();
         u
     }
 

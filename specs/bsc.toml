@@ -64,8 +64,8 @@ confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "4B rev 1.5: with pi4-firmware's own queued-read order every PMIC register answered with its own number, and only writing the register out and waiting for `DONE` before arming the read read it (0x1B reg 0x09 -> 40, which `vcgencmd measure_volts sdram_c` confirms as 1.1 V). Stock uses the queued order on the same silicon and gets the register, so some detail of the two sequences differs and is not identified yet: the model keeps the queued read selecting the register, which is what lets stock's own boot through (`testdata/boot/firmware.toml`)."
-confidence = "medium"
+ref        = "4B rev 1.5: with pi4-firmware's own queued-read order every PMIC register answered with its own number, and only writing the register out and waiting for `DONE` before arming the read read it (0x1B reg 0x09 -> 40, which `vcgencmd measure_volts sdram_c` confirms as 1.1 V). What stock does and pi4-firmware did not is poll `S.STATE` between the two — see that field."
+confidence = "high"
 
 [[register.source]]
 kind       = "trace"
@@ -233,6 +233,22 @@ notes  = "Clock-stretch timeout."
 [[register.field.source]]
 kind       = "datasheet"
 ref        = "BCM2711 ARM Peripherals, §3.2 (BSC): `S.CLKT`"
+confidence = "high"
+
+[[register.field]]
+name   = "STATE"
+bits   = "31:28"
+access = "r"
+notes  = "Undocumented: the master's own state. It reads 0, 4 or 5 when the master will take a fresh `ST`, and something else — 0xF on a 4B rev 1.5 — while the transfer before it is still clocking out. The bootloader polls it between the register write and the repeated-start read, and a stage that does not poll it wedges the master: the `ST | READ` is taken by neither transfer, `DONE` never lands, and the byte still in the shifter reads back out of the FIFO, so every register answers with its own number."
+
+[[register.field.source]]
+kind       = "trace"
+ref        = "stock bootcode `0x800035CC`..`0x800035F8`, between the FIFO write at `0x800035C8` and the `ST | READ` at `0x80003614`: `r2 = S >> 28`, then `r1 = 1` if `r2` is 0, 4 or 5, `r2 = 1` if `S & 0x300`, looping on the 50000-iteration countdown until one of them is set"
+confidence = "high"
+
+[[register.field.source]]
+kind       = "measured"
+ref        = "4B rev 1.5 running our own EEPROM: `I2C 43.03: read 03 but S f0000051`, `I2C 43.05: read 05 but S f00000a9` — the register read back as its own number with `STATE` 0xF and `DONE` never set, from a `read_reg` that armed the read without the poll"
 confidence = "high"
 
 [[register]]
