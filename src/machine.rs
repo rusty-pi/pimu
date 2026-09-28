@@ -1018,6 +1018,14 @@ impl Machine {
     }
 
     /// One word to a 40-bit DMA4 address, from behind the VPU's caches.
+    ///
+    /// Behind them whichever alias the bus address names, unlike the legacy
+    /// channel ([`Self::dma_master`]): stock's own xHCI driver DMAs a BAR0
+    /// register into a buffer at the `0x0` alias and reads it straight back
+    /// through `0xC000_0000`, thousands of times in a boot, and a board boots
+    /// through that. Treating the `0x0` alias here as a write into the L2 --
+    /// so that read comes out stale -- reports 1264 such reads across stock's
+    /// own boot, which is how that was settled.
     fn dma40_store(&mut self, addr: u64, value: u32) {
         self.with_dma_master("the 40-bit DMA / xHCI", |m| {
             if addr >> 32 != 0 && m.pcie.mmio_write(addr, Width::Word, value, &mut m.ram) {
