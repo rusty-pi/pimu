@@ -28,8 +28,8 @@ use crate::spec::bsc::{
     A, C, CLKT, C_CLEAR_MASK as C_CLEAR, C_I2CEN_MASK as C_I2CEN, C_READ_MASK as C_READ,
     C_ST_MASK as C_ST, DEL, DIV, DLEN, FIFO, S, S_CLKT_MASK as S_CLKT, S_DONE_MASK as S_DONE,
     S_ERR_MASK as S_ERR, S_RXD_MASK as S_RXD, S_RXF_MASK as S_RXF, S_RXR_MASK as S_RXR,
-    S_STATE_MASK as S_STATE, S_TA_MASK as S_TA, S_TXD_MASK as S_TXD,
-    S_TXE_MASK as S_TXE, S_TXW_MASK as S_TXW,
+    S_STATE_MASK as S_STATE, S_TA_MASK as S_TA, S_TXD_MASK as S_TXD, S_TXE_MASK as S_TXE,
+    S_TXW_MASK as S_TXW,
 };
 use crate::spec::Coverage;
 
@@ -196,9 +196,9 @@ impl Bsc {
         s |= S_TXD | S_TXE; // the modelled FIFO drains instantly
         if self.busy() {
             s |= S_TA; // transfer still "in flight"
-            // `STATE` reads 0, 4 or 5 when the master will take a fresh `ST`
-            // and something else while a transfer is still clocking out. The
-            // bootloader polls it between the register write and the read.
+                       // `STATE` reads 0, 4 or 5 when the master will take a fresh `ST`
+                       // and something else while a transfer is still clocking out. The
+                       // bootloader polls it between the register write and the read.
             s |= S_STATE;
         }
         if !self.tx.is_empty() {
