@@ -25,10 +25,12 @@ Bus 8: the PMICs at `0x1B` / `0x1E` and the FXL6408 at `0x43`.
 
 Interrupts (VPU source 117 · GIC id 149 (`GIC_SPI 117`)):
 
-One line for every I²C master on the chip; `PACTL_CS` bits 8 to 15 say which of them is pending. start4 polls `S.DONE` rather than taking it.
+One line for every I²C master on the chip; `PACTL_CS` bits 8 to 15 say which of them is pending. A master holds its share of it up while `DONE` is set under `C.INTD`, `TXW` under `C.INTT` or `RXR` under `C.INTR`, so a handler lowers it by clearing the status or the enable; masking source 117 in the VPU's `IRQ_PRIO` stops the delivery and leaves the line up (`specs/corectl.toml` `IRQ_RAW`). The pinned start4 never sets an enable and polls `S.DONE`; Linux's `i2c-bcm2835` takes the line on the ARM side, so a VPU that enables the source also sees the ARM's masters' transfers.
 
 - datasheet (high): BCM2711 ARM Peripherals, §6.2.4 Table 102: VC peripheral IRQ 53 is the OR of all I²C masters, VPU source 117; §6.2.4 Figure 6 puts I2C0 on `PACTL_CS` bit 8
 - linux (high): `firmware/bcm2711-rpi-4-b.dtb`: `/soc/i2c@7e205000`, the masters at `0x7e205600`..`0x7e205c00` and `/soc/i2c@7e804000` all carry `interrupts = <0x0 0x75 0x4>`
+- linux (high): `drivers/i2c/busses/i2c-bcm2835.c` (`e308a27c`): `bcm2835_i2c_start_transfer` sets `C_INTR` for a read, `C_INTT` for a write and `C_INTD` on the last message; `bcm2835_i2c_isr` completes on `S_ERR` / `S_CLKT` or `S_DONE`, fills the FIFO on `S_TXW` and drains it on `S_RXR`, and ends a transfer by writing `C <- C_CLEAR` and clearing `S`
+- inferred (medium): VPU source `64 + n` for VC peripheral IRQ `n` holds for the system timer's compares (64, 66) and the ARM's mailbox (94) on a Raspberry Pi 4B d03115 (`specs/corectl.toml` `IRQ_PRIO`, `IRQ_RAW`); nothing has yet read `IRQ_RAW` bit 21 of word 1 with a BSC's `DONE` set under `INTD` — _the `0x7E205E00` master is in no device tree, so that it shares line 53 with the others rests on the datasheet's "all I²C masters" alone_
 
 ## Register map
 
@@ -54,6 +56,9 @@ Control. start4 reads a register in one of two ways. Either it sets `ST` for the
 | 0 | `READ` | rw | Read transfer. |
 | 5:4 | `CLEAR` | w | Clear the FIFO. |
 | 7 | `ST` | w | Start a transfer. |
+| 8 | `INTD` | rw | Interrupt while `S.DONE` is set. |
+| 9 | `INTT` | rw | Interrupt while `S.TXW` is set. The model keeps `TXW` clear, so this raises nothing. |
+| 10 | `INTR` | rw | Interrupt while `S.RXR` is set. The model keeps `RXR` clear, so this raises nothing. |
 | 15 | `I2CEN` | rw | Controller on. |
 
 Sources:
@@ -73,6 +78,21 @@ Sources:
 `ST` sources:
 
 - datasheet (high): BCM2711 ARM Peripherals, §3.2 (BSC): `C.ST`
+
+`INTD` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §3.2 (BSC): `C.INTD`
+- linux (high): `drivers/i2c/busses/i2c-bcm2835.c`: `BCM2835_I2C_C_INTD` `BIT(8)`
+
+`INTT` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §3.2 (BSC): `C.INTT`
+- linux (high): `drivers/i2c/busses/i2c-bcm2835.c`: `BCM2835_I2C_C_INTT` `BIT(9)`
+
+`INTR` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, §3.2 (BSC): `C.INTR`
+- linux (high): `drivers/i2c/busses/i2c-bcm2835.c`: `BCM2835_I2C_C_INTR` `BIT(10)`
 
 `I2CEN` sources:
 

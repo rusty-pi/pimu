@@ -695,6 +695,52 @@ fn bsc_transfer_active_spans_the_whole_transfer() {
     assert_eq!(m.load32(base + BSC_DLEN).unwrap(), 0, "all bytes sent");
 }
 
+/// `DONE` under `C.INTD` holds source 117 up until `S` is cleared, and a
+/// `sleep` stops the counter where the transfer lands; without `INTD` the
+/// same transfer raises nothing.
+#[test]
+fn bsc_done_under_intd_raises_source_117() {
+    const C_INTD: u32 = 1 << 8;
+    let mut m = machine();
+    let base = map::BSC_PMIC_BASE;
+    m.store32(map::CORECTL_BASE + 0x10 + 4 * 6, 1 << 20)
+        .unwrap();
+
+    m.store32(base + BSC_A, 0x1E).unwrap();
+    m.store32(base + BSC_DLEN, 1).unwrap();
+    m.store32(base + BSC_C, C_I2CEN | C_ST).unwrap();
+    m.store32(base + BSC_FIFO, 0x25).unwrap();
+    assert_eq!(
+        m.bsc_pmic.irq_deadline(),
+        None,
+        "no INTD, nothing to wake for"
+    );
+    settle(&mut m);
+    assert!(!m.bsc_pmic.irq_line() && !m.irq_queued());
+    m.store32(base + BSC_S, S_DONE | S_ERR).unwrap();
+
+    m.store32(base + BSC_C, C_I2CEN | C_ST | C_INTD).unwrap();
+    m.store32(base + BSC_FIFO, 0x25).unwrap();
+    let due = m.bsc_pmic.irq_deadline().expect("a transfer on the wire");
+    assert_eq!(
+        pimu::sched::next_due(&m).map(|(_, which)| which),
+        Some(pimu::sched::Timed::I2c)
+    );
+    assert!(!m.bsc_pmic.irq_line(), "not before the byte is out");
+    settle(&mut m);
+    assert!(m.systimer.now_us() >= due);
+    assert!(m.bsc_pmic.irq_line() && m.irq_queued());
+    assert_eq!(m.load32(map::PACTL_BASE).unwrap() & 1 << 8, 0, "not I2C0");
+
+    m.store32(base + BSC_S, S_DONE | S_ERR).unwrap();
+    m.tick(54);
+    assert!(!m.bsc_pmic.irq_line());
+    assert!(
+        !m.irq_queued(),
+        "a line that dropped is not delivered later"
+    );
+}
+
 /// The VCE launch handshake (`vcfw/drivers/chip/vciv/2708/vce.c`).
 #[test]
 fn vce_launch_completes_and_raises_its_interrupt() {

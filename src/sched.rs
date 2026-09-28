@@ -21,6 +21,9 @@ pub enum Timed {
     /// An HVS end-of-frame flag that holds source
     /// [`hvs::IRQ_SRC`](crate::periph::hvs::IRQ_SRC).
     Hvs,
+    /// An I²C transfer whose `DONE` raises source
+    /// [`bsc::IRQ_SRC`](crate::periph::bsc::IRQ_SRC).
+    I2c,
 }
 
 /// When a source next has work, or `None` while it has nothing armed.
@@ -31,6 +34,13 @@ type Deadline = fn(&Machine) -> Option<u64>;
 const SOURCES: &[(Timed, Deadline)] = &[
     (Timed::SysTimer, |m| m.systimer.next_deadline()),
     (Timed::Hvs, |m| m.hvs.deadline()),
+    (Timed::I2c, |m| {
+        m.bsc0
+            .irq_deadline()
+            .into_iter()
+            .chain(m.bsc_pmic.irq_deadline())
+            .min()
+    }),
 ];
 
 /// The earliest modelled time at which some device has work, and which device.

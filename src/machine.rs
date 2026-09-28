@@ -431,6 +431,7 @@ impl Machine {
         let now = self.systimer.now_us();
         self.bsc_pmic.advance_to(now);
         self.bsc0.advance_to(now);
+        self.settle_i2c_irq();
     }
 
     fn advance_sd(&mut self) {
@@ -520,6 +521,21 @@ impl Machine {
             self.push_pending_irq(src);
         }
         self.advance_hvs();
+    }
+
+    /// Hold source 117 while any modelled I²C master holds its share of the
+    /// line, and take it back once none does: a driver that masks the source,
+    /// clears `S` and unmasks it again must not be handed the transfer it has
+    /// already dealt with.
+    fn settle_i2c_irq(&mut self) {
+        let src = crate::periph::bsc::IRQ_SRC;
+        if self.bsc0.irq_line() || self.bsc_pmic.irq_line() {
+            if !self.pending_irqs.contains(&src) {
+                self.push_pending_irq(src);
+            }
+        } else if self.pending_irqs.contains(&src) {
+            self.pending_irqs.retain(|&queued| queued != src);
+        }
     }
 
     /// Let the HVS finish the frames the counter has reached, and hold source 97
@@ -796,11 +812,13 @@ impl Machine {
             return Some((&mut self.spi0, off));
         }
         if let Some(off) = hit(map::PACTL_BASE, map::PACTL_SIZE) {
-            // Which of the masters behind the ORed line is asking: the block
-            // holds no state of its own, so the answer is taken from the one
-            // device that drives it.
+            // Which of the masters behind the ORed lines is asking: the block
+            // holds no state of its own, so the answer is taken from the
+            // devices that drive them.
             let spi0 = self.spi0.irq_line();
             self.pactl.set_spi0(spi0);
+            let i2c0 = self.bsc0.irq_line();
+            self.pactl.set_i2c0(i2c0);
             return Some((&mut self.pactl, off));
         }
         if let Some(off) = hit(map::PWM0_BASE, map::PWM_SIZE) {
@@ -1382,11 +1400,12 @@ impl Bus for Machine {
             self.sleep_to = self.next_wake();
             return self.sleep_to.is_some();
         }
-        // The HVS can end a frame it interrupts for before the next compare, and
-        // then the counter stops there instead of at the compare.
+        // The HVS can end a frame, or an I²C master a transfer, it interrupts
+        // for before the next compare, and then the counter stops there instead
+        // of at the compare.
         let woke = match crate::sched::next_due(self) {
-            Some((frame, crate::sched::Timed::Hvs)) => {
-                self.systimer.advance_to(frame);
+            Some((due, crate::sched::Timed::Hvs | crate::sched::Timed::I2c)) => {
+                self.systimer.advance_to(due);
                 true
             }
             _ => self.systimer.wake_to_next_match().is_some(),

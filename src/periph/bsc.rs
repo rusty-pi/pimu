@@ -17,6 +17,11 @@
 //! `S.DONE` (plus `S.ERR` on an unACKed address). The firmware polls both
 //! without a timeout in places, so neither may depend on how many instructions
 //! it happens to retire in between.
+//!
+//! **Every master drives one shared interrupt line**, VPU source 117 and GIC
+//! SPI 117, while `DONE` is set under `C.INTD` (or `TXW` / `RXR` under
+//! `INTT` / `INTR`, which stay clear here). The stock firmware never sets an
+//! enable; a driver that does is woken from `sleep` when its transfer lands.
 
 use std::collections::VecDeque;
 
@@ -25,11 +30,11 @@ use crate::log::Log;
 use crate::periph::fxl6408::Fxl6408;
 use crate::periph::pmic::Pmic;
 use crate::spec::bsc::{
-    A, C, CLKT, C_CLEAR_MASK as C_CLEAR, C_I2CEN_MASK as C_I2CEN, C_READ_MASK as C_READ,
-    C_ST_MASK as C_ST, DEL, DIV, DLEN, FIFO, S, S_CLKT_MASK as S_CLKT, S_DONE_MASK as S_DONE,
-    S_ERR_MASK as S_ERR, S_RXD_MASK as S_RXD, S_RXF_MASK as S_RXF, S_RXR_MASK as S_RXR,
-    S_STATE_MASK as S_STATE, S_TA_MASK as S_TA, S_TXD_MASK as S_TXD, S_TXE_MASK as S_TXE,
-    S_TXW_MASK as S_TXW,
+    A, C, CLKT, C_CLEAR_MASK as C_CLEAR, C_I2CEN_MASK as C_I2CEN, C_INTD_MASK as C_INTD,
+    C_INTR_MASK as C_INTR, C_INTT_MASK as C_INTT, C_READ_MASK as C_READ, C_ST_MASK as C_ST, DEL,
+    DIV, DLEN, FIFO, S, S_CLKT_MASK as S_CLKT, S_DONE_MASK as S_DONE, S_ERR_MASK as S_ERR,
+    S_RXD_MASK as S_RXD, S_RXF_MASK as S_RXF, S_RXR_MASK as S_RXR, S_STATE_MASK as S_STATE,
+    S_TA_MASK as S_TA, S_TXD_MASK as S_TXD, S_TXE_MASK as S_TXE, S_TXW_MASK as S_TXW,
 };
 use crate::spec::Coverage;
 
@@ -37,6 +42,9 @@ pub const COVERAGE: Coverage = Coverage {
     block: "bsc",
     decoded: &[C, S, DLEN, A, FIFO, DIV, DEL, CLKT],
 };
+
+/// The VPU source every master's interrupt is ORed into.
+pub const IRQ_SRC: u32 = crate::spec::bsc::IRQ_VPU;
 
 pub trait I2cSlave {
     fn responds_to(&self, addr: u8) -> bool;
@@ -191,6 +199,25 @@ impl Bsc {
             .map(|x| x as &mut dyn I2cSlave)
     }
 
+    /// This master's share of the line every master drives, VPU source 117
+    /// and GIC SPI 117: `DONE` under `INTD`, `TXW` under `INTT`, `RXR` under
+    /// `INTR`.
+    pub fn irq_line(&self) -> bool {
+        let s = self.status();
+        (self.c & C_INTD != 0 && s & S_DONE != 0)
+            || (self.c & C_INTT != 0 && s & S_TXW != 0)
+            || (self.c & C_INTR != 0 && s & S_RXR != 0)
+    }
+
+    /// When the transfer on the wire lands `DONE` under `INTD`: a VPU `sleep`
+    /// must wake for it.
+    pub fn irq_deadline(&self) -> Option<u64> {
+        if self.c & C_INTD == 0 || self.wedged {
+            return None;
+        }
+        self.pending.map(|(deadline, _)| deadline)
+    }
+
     fn status(&self) -> u32 {
         let mut s = self.latched & (S_DONE | S_ERR | S_CLKT);
         s |= S_TXD | S_TXE; // the modelled FIFO drains instantly
@@ -212,7 +239,6 @@ impl Bsc {
         }
         // `TXW` / `RXR` ("needs servicing") stay clear: the driver copes
         // without them because `DONE` lands as soon as the transfer settles.
-        let _ = (S_TXW, S_RXR);
         s
     }
 
