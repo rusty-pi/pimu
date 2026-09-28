@@ -492,7 +492,7 @@ impl Machine {
         if self.pm.reset_pending() {
             self.recheck = true;
         }
-        if self.net.is_some() {
+        if self.net.is_some() && self.gpio.ethernet_connected() {
             let now = self.systimer.now_us();
             self.with_dma_master("the GENET", |m| {
                 m.genet.service(now, &mut m.ram, &mut m.net)
@@ -1308,7 +1308,11 @@ impl Machine {
             if self.xhci_otg.write_pending() {
                 self.with_dma_master("the OTG xHCI", |m| m.xhci_otg.run_pending(&mut m.ram));
             }
-            if self.genet.take_kick() {
+            // Nothing crosses the RGMII bus while `GPIO +0xD0` bit 0 is clear:
+            // the PHY still answers MDIO and still negotiates a link, so a
+            // stage that leaves the bit alone sees a healthy link carry no
+            // frame at all (`specs/gpio.toml`, `PIN_MUX.ETHERNET`).
+            if self.genet.take_kick() && self.gpio.ethernet_connected() {
                 let now = self.systimer.now_us();
                 self.with_dma_master("the GENET", |m| {
                     m.genet.service(now, &mut m.ram, &mut m.net)

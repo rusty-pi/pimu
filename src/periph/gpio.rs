@@ -28,7 +28,8 @@ use crate::soc::Board;
 
 use crate::spec::gpio::{
     GPAFEN, GPAREN, GPCLR, GPCLR_RESET, GPEDS, GPFEN, GPFSEL, GPFSEL_COUNT, GPHEN, GPLEN, GPLEV,
-    GPPUD, GPPUDCLK, GPREN, GPSET, GPSET_RESET, PAD_CFG, PIN_MUX, PIN_MUX_SD_LEGACY_MASK, PUP_PDN,
+    GPPUD, GPPUDCLK, GPREN, GPSET, GPSET_RESET, PAD_CFG, PIN_MUX, PIN_MUX_ETHERNET_MASK,
+    PIN_MUX_SD_LEGACY_MASK, PUP_PDN,
     PUP_PDN_COUNT,
 };
 use crate::spec::Coverage;
@@ -503,6 +504,14 @@ impl Gpio {
     /// than EMMC2. The machine routes the card; the block holds the bit.
     pub fn sd_legacy(&self) -> bool {
         self.pin_mux & PIN_MUX_SD_LEGACY_MASK != 0
+    }
+
+    /// Bit 0 of `+0xD0`: the Ethernet data path is connected. A board carries
+    /// no frame in either direction while it is clear, though the PHY still
+    /// answers MDIO and still negotiates a link (`specs/gpio.toml`,
+    /// `PIN_MUX.ETHERNET`).
+    pub fn ethernet_connected(&self) -> bool {
+        self.pin_mux & PIN_MUX_ETHERNET_MASK != 0
     }
 
     fn levels(&self, bank: usize) -> u32 {

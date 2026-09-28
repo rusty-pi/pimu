@@ -186,10 +186,11 @@ Sources:
 
 Offset `0x0D0` · access `rw` · 32 bits · reset `0x0`
 
-Undocumented, and the firmware writes it on every boot. Bit 1 routes the SD card slot: set for the legacy EMMC controller at `0x7E300000`, clear for EMMC2 — which is what the model acts on. Bit 0 is the first thing start4's Ethernet pin setup does, before it puts GPIO 28/29 on ALT5 (the RGMII MDIO bus) and terminates 46..57, and a running board reads `1`: it looks like the RGMII pad bank, but nothing proves that, and the model only stores the bit.
+Undocumented, and the firmware writes it on every boot. Bit 1 routes the SD card slot: set for the legacy EMMC controller at `0x7E300000`, clear for EMMC2. Bit 0 gates the Ethernet data path — proved on a board, see `ETHERNET`. The model acts on both.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
+| 0 | `ETHERNET` | rw | The Ethernet carries no frame in either direction while this is clear, though the PHY still answers MDIO and still negotiates a gigabit link. The stock stage sets it immediately before it muxes GPIO 28/29 to the MDIO bus, in `bootmain` as well as in start4. |
 | 1 | `SD_LEGACY` | rw | Set: the card is on the legacy EMMC controller. Clear: on EMMC2. |
 
 Sources:
@@ -197,6 +198,11 @@ Sources:
 - decompile (medium): start4db `FUN_0ed0fd54`, whose neighbours assert out of `tools/bootrom/rpiboot/genet.c`: `_DAT_7e2000d0 | 1` first, then GPIO 28/29 to function 2 (ALT5), 28 pulled up and 29 down (the driver's pull enum is the BCM2835 one, 1 down / 2 up), then 46..57 pulled down. Elsewhere `_DAT_7e2000d0 & 0xfffffffd | 1`, and `& 0xfffffffd` before EMMC2 is used
 - trace (high): pieeprom-2020-09-03 writes `0x2` right before it drives the legacy EMMC and never touches EMMC2; the 2026 bootloader never writes the register; start4 sets bit 0 at `0x3ED4A1CE` and boots from EMMC2
 - measured (high): `/dev/gpiomem` on a Raspberry Pi 4B d03115 booted from an SD card: `0xd0` reads `0x00000001`
+
+`ETHERNET` sources:
+
+- measured (high): 4B rev 1.5, our own start4 under a tryboot: with the bit set the probe receives 10 frames and the MIB RX counters (`GENET +0x0C28` packets, `+0x0C2C` octets) count them; clearing it again right after `genet::clocks()` sets it, with every other register identical, gives `RX: 0`, every MIB RX counter zero, and the five transmitted DHCP discovers counted at the MAC (`+0x0C8C`, `+0x0CE8` = `0x730`) but never seen by the DHCP server. `LINK STATUS: speed: 1000 full duplex` in both
+- trace (high): stock bootmain `0x00091F20` writes it four accesses before the `GPFSEL2` writes that put GPIO 28/29 on ALT5, and 20 before the first GENET register
 
 `SD_LEGACY` sources:
 

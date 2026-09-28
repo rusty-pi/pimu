@@ -268,7 +268,7 @@ name   = "PIN_MUX"
 offset = 0xD0
 access = "rw"
 reset  = 0
-notes  = "Undocumented, and the firmware writes it on every boot. Bit 1 routes the SD card slot: set for the legacy EMMC controller at `0x7E300000`, clear for EMMC2 — which is what the model acts on. Bit 0 is the first thing start4's Ethernet pin setup does, before it puts GPIO 28/29 on ALT5 (the RGMII MDIO bus) and terminates 46..57, and a running board reads `1`: it looks like the RGMII pad bank, but nothing proves that, and the model only stores the bit."
+notes  = "Undocumented, and the firmware writes it on every boot. Bit 1 routes the SD card slot: set for the legacy EMMC controller at `0x7E300000`, clear for EMMC2. Bit 0 gates the Ethernet data path — proved on a board, see `ETHERNET`. The model acts on both."
 
 [[register.source]]
 kind       = "decompile"
@@ -283,6 +283,21 @@ confidence = "high"
 [[register.source]]
 kind       = "measured"
 ref        = "`/dev/gpiomem` on a Raspberry Pi 4B d03115 booted from an SD card: `0xd0` reads `0x00000001`"
+confidence = "high"
+
+[[register.field]]
+name   = "ETHERNET"
+bits   = "0"
+notes  = "The Ethernet carries no frame in either direction while this is clear, though the PHY still answers MDIO and still negotiates a gigabit link. The stock stage sets it immediately before it muxes GPIO 28/29 to the MDIO bus, in `bootmain` as well as in start4."
+
+[[register.field.source]]
+kind       = "measured"
+ref        = "4B rev 1.5, our own start4 under a tryboot: with the bit set the probe receives 10 frames and the MIB RX counters (`GENET +0x0C28` packets, `+0x0C2C` octets) count them; clearing it again right after `genet::clocks()` sets it, with every other register identical, gives `RX: 0`, every MIB RX counter zero, and the five transmitted DHCP discovers counted at the MAC (`+0x0C8C`, `+0x0CE8` = `0x730`) but never seen by the DHCP server. `LINK STATUS: speed: 1000 full duplex` in both"
+confidence = "high"
+
+[[register.field.source]]
+kind       = "trace"
+ref        = "stock bootmain `0x00091F20` writes it four accesses before the `GPFSEL2` writes that put GPIO 28/29 on ALT5, and 20 before the first GENET register"
 confidence = "high"
 
 [[register.field]]
