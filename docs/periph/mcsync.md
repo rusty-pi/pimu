@@ -30,7 +30,7 @@ Each line is acked through the word named after it. Neither core enables them on
 | `0x084` | [`ACK76`](#ack76) | rw | 32 | 2, best medium |
 | `0x088` | [`ACK77`](#ack77) | rw | 32 | 2, best medium |
 | `0x0B4` | [`MBOX5`](#mbox5) | rw | 32 | 2, best high |
-| `0x0BC` | [`MBOX7`](#mbox7) | r | 32 | 1, best high |
+| `0x0BC` | [`MBOX7`](#mbox7) | rw | 32 | 2, best high |
 | `0x0C0` | [`VPUSEMA0`](#vpusema0) | rw | 32 | 4, best high |
 | `0x090`–`0x094` (2 × 0x4) | [`ICSET`](#icset) | rw | 32 | 2, best high |
 | `0x098`–`0x09C` (2 × 0x4) | [`ICCLR`](#icclr) | rw | 32 | 1, best medium |
@@ -99,13 +99,14 @@ Sources:
 
 ## `MBOX7`
 
-Offset `0x0BC` · access `r` · 32 bits
+Offset `0x0BC` · access `rw` · 32 bits
 
-Mailbox word 7, which the model used to call `REG_0BC`. Both bootloader stages read this as they start, just before clearing `SECURE_MARK`, and keep bits 16-23. Meaning unknown; it reads 0 in the model.
+Mailbox word 7, which the model used to call `REG_0BC`. **The boot ROM records here how it booted**, and the bits 16-23 both bootloader stages keep are that mode: `0x0A060000` for the SPI EEPROM, which is the `BOOTMODE: 0x06` of their banners. The model kept nothing in this word until it was given storage, so every stage read mode 0 where a board reads 6. The ROM clears `MBOX6` (`0xB8`) immediately afterwards.
 
 Sources:
 
 - trace (high): `--trace-mmio`: bootsys `0x80007EBE`, bootmain `0xA7B70`, each followed by a read of the system timer and the write to `SECURE_MARK`
+- trace (high): boot ROM (BCM2711C0 dump, `--maskrom`): `0x0A060000` at `0x60000DA4`, then `MBOX6` `0x00000000` at `0x60000DAC`; nothing else in the run writes either word
 
 ## `VPUSEMA0`
 
@@ -156,7 +157,7 @@ Sources:
 
 Offset `0x0B8` · access `rw` · 32 bits
 
-Mailbox word 6. Not modelled; reads 0.
+Mailbox word 6. The boot ROM clears it right after it writes the boot mode into `MBOX7`; no bootloader stage touches it. Purpose otherwise unknown.
 
 Sources:
 

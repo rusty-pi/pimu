@@ -20,10 +20,10 @@ use std::collections::VecDeque;
 use crate::bus::{BusResult, MmioDevice, Width};
 
 use crate::spec::uart0::{
-    CR, CR_RXE_MASK as CR_RXE, CR_UARTEN_MASK as CR_UARTEN, DR, FBRD, FR, FR_RXFE_MASK as FR_RXFE,
-    FR_RXFF_MASK as FR_RXFF, FR_TXFE_MASK as FR_TXFE, IBRD, ICR, IFLS, IFLS_RESET,
-    IFLS_RXIFLSEL_MASK, IFLS_RXIFLSEL_SHIFT, IMSC, LCRH, LCRH_FEN_MASK as LCRH_FEN, MIS, RIS,
-    RIS_RT_MASK as INT_RT, RIS_RX_MASK as INT_RX,
+    CR, CR_RESET, CR_RXE_MASK as CR_RXE, CR_UARTEN_MASK as CR_UARTEN, DR, FBRD, FR,
+    FR_RXFE_MASK as FR_RXFE, FR_RXFF_MASK as FR_RXFF, FR_TXFE_MASK as FR_TXFE, IBRD, ICR, IFLS,
+    IFLS_RESET, IFLS_RXIFLSEL_MASK, IFLS_RXIFLSEL_SHIFT, IMSC, LCRH, LCRH_FEN_MASK as LCRH_FEN,
+    MIS, RIS, RIS_RT_MASK as INT_RT, RIS_RX_MASK as INT_RX,
 };
 use crate::spec::Coverage;
 
@@ -68,7 +68,7 @@ impl Pl011 {
             ibrd: 0,
             fbrd: 0,
             lcrh: 0,
-            cr: 0x0301,       // UARTEN|TXE|RXE: the console starts usable
+            cr: CR_RESET,     // TXE|RXE, UARTEN clear: a PL011 comes up off
             ifls: IFLS_RESET, // both triggers at half full
             imsc: 0,
             ris: 0,

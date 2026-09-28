@@ -164,11 +164,22 @@ confidence = "high"
 name   = "CR"
 offset = 0x30
 access = "rw"
-notes  = "Control."
+reset  = 0x300
+notes  = "Control. Out of reset `TXE` and `RXE` are set and `UARTEN` is clear, so the UART is off until firmware enables it: a stage that writes `DR` without ever writing `CR` puts out nothing at all, and its console is silent from power-on with no other symptom. Measured on a Raspberry Pi 4B rev 1.5 (`d03115`), where firmware that only ever read `CR` stayed mute over the serial line across three boots, and spoke as soon as it wrote `IBRD`/`FBRD`/`LCRH` and `CR`."
 
 [[register.source]]
 kind       = "datasheet"
 ref        = "BCM2711 ARM Peripherals, §11.5 (UART): `CR`"
+confidence = "high"
+
+[[register.source]]
+kind       = "standard"
+ref        = "ARM PrimeCell UART (PL011) TRM, §3.3.8 `UARTCR`: reset `0x0300`"
+confidence = "high"
+
+[[register.source]]
+kind       = "measured"
+ref        = "Raspberry Pi 4B rev 1.5 (`d03115`), serial console: no bytes from a stage that never writes `CR`"
 confidence = "high"
 
 [[register.field]]

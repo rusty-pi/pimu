@@ -17,20 +17,33 @@
 //! enables source 76 or 77 on the pinned boot (`--log irqen`), so the doorbell
 //! interrupt is not how start4 is woken.
 //!
-//! Everything else in the window reads 0.
+//! [`MBOX7`] and [`MBOX6`] are plain storage: the ROM leaves how it booted in
+//! `MBOX7` and the bootcode reads it there, so dropping that write made every
+//! stage report boot mode 0 where a board reports 6. Everything else in the
+//! window reads 0.
 
 use crate::bus::{BusResult, MmioDevice, Width};
-use crate::spec::mcsync::{SEMA, SEMA_COUNT, SEMA_STRIDE, STATUS};
+use crate::spec::mcsync::{MBOX6, MBOX7, SEMA, SEMA_COUNT, SEMA_STRIDE, STATUS};
 use crate::spec::Coverage;
 
 pub const COVERAGE: Coverage = Coverage {
     block: "mcsync",
-    decoded: &[SEMA, STATUS],
+    decoded: &[SEMA, STATUS, MBOX6, MBOX7],
 };
+
+/// The three boot words the ROM and the bootcode pass through this block.
+/// The boot mode the ROM records, and the word it clears beside it. They are
+/// plain storage: the ROM writes the mode and the bootcode reads it back, so a
+/// window that answers 0 makes every stage report boot mode 0 where a board
+/// reports 6. `MBOX5` (the secure-boot mark) still reads 0 -- giving it
+/// storage would change what the signed-boot scenarios exercise.
+const BOOT_WORDS: [u32; 2] = [MBOX6, MBOX7];
 
 #[derive(Default)]
 pub struct McSync {
     held: u32,
+    /// [`BOOT_WORDS`], in that order.
+    boot: [u32; 2],
     /// How many semaphores were taken over the run.
     pub posts: u64,
 }
@@ -43,6 +56,10 @@ impl McSync {
     fn slot(offset: u32) -> Option<u32> {
         let rel = offset.checked_sub(SEMA)?;
         (rel % SEMA_STRIDE == 0 && rel / SEMA_STRIDE < SEMA_COUNT).then_some(rel / SEMA_STRIDE)
+    }
+
+    fn boot_word(offset: u32) -> Option<usize> {
+        BOOT_WORDS.iter().position(|&o| o == offset)
     }
 }
 
@@ -64,13 +81,18 @@ impl MmioDevice for McSync {
         if offset == STATUS {
             return Ok(self.held);
         }
+        if let Some(i) = McSync::boot_word(offset) {
+            return Ok(self.boot[i]);
+        }
         Ok(0)
     }
 
     fn write(&mut self, offset: u32, _width: Width, value: u32) -> BusResult<()> {
-        let _ = value;
         if let Some(slot) = McSync::slot(offset) {
             self.held &= !(1 << slot);
+        }
+        if let Some(i) = McSync::boot_word(offset) {
+            self.boot[i] = value;
         }
         Ok(())
     }

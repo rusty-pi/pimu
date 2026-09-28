@@ -35,6 +35,8 @@ use crate::firmware::write_folded;
 use crate::machine::Machine;
 use crate::periph::configotp::BOARD_IDENTITY;
 use crate::soc::Stepping;
+use crate::spec::cm::{BASE as CM_BASE, EMMCCTL, EMMCDIV, TIMERCTL, TIMERDIV};
+use crate::spec::mcsync::{BASE as MCSYNC_BASE, MBOX6, MBOX7};
 use crate::spec::otp::{
     DATA as OTP_DATA, KEY as OTP_KEY, PARAM_A as OTP_PARAM_A, PARAM_A_GO_MASK as OTP_GO,
     STATUS as OTP_STATUS, STATUS_DONE_MASK as OTP_DONE,
@@ -45,6 +47,12 @@ pub const HMAC_LEN: usize = 20;
 
 /// The config/OTP block (`specs/otp.toml`), where the key rows are read.
 const OTP_BASE: u32 = 0x7E20_F000;
+
+/// What the ROM records as the mode it booted from: the SPI EEPROM, mode 6 in
+/// bits 23:16 of `MBOX7`.
+const BOOT_MODE_EEPROM: u32 = 0x0A06_0000;
+/// The clock manager's password byte, in every generator write the ROM makes.
+const PASSWD: u32 = 0x5A00_0000;
 
 /// OTP rows the HMAC key is built from: rows 19..=22, the board-identity block.
 const OTP_KEY_ROWS: std::ops::RangeInclusive<u32> = 19..=22;
@@ -261,6 +269,31 @@ impl BootRom {
     /// locate the bootcode, verify its signature if a key is available, stage it
     /// and return the entry hand-off. An error is where hardware would simply
     /// halt with the board silent.
+    /// The register state the real ROM leaves for the stage it starts, taken
+    /// from a trace of a BCM2711C0 dump (`--maskrom`, ROM PCs `0x6000xxxx`):
+    /// the boot mode in `MBOX7` with `MBOX6` cleared beside it, the system
+    /// timer's generator at 1 MHz off the crystal, and the legacy EMMC's
+    /// generator, which it needs to look for `recovery.bin` on the card.
+    ///
+    /// The boot mode is the one with a visible consequence: the bootcode reads
+    /// it and prints `BOOTMODE: 0x06`, where a stage that leaves the word zero
+    /// makes every later stage report mode 0 -- which is what this model did,
+    /// and a board does not.
+    fn leave_rom_state(&self, machine: &mut Machine) {
+        for (reg, value) in [
+            (MCSYNC_BASE + MBOX7, BOOT_MODE_EEPROM),
+            (MCSYNC_BASE + MBOX6, 0),
+            (CM_BASE + TIMERDIV, PASSWD | 0x0003_6000),
+            (CM_BASE + TIMERCTL, PASSWD | 0x0000_0001),
+            (CM_BASE + TIMERCTL, PASSWD | 0x0000_0011),
+            (CM_BASE + EMMCDIV, PASSWD | 0x0000_1000),
+            (CM_BASE + EMMCCTL, PASSWD | 0x0000_0001),
+            (CM_BASE + EMMCCTL, PASSWD | 0x0000_0011),
+        ] {
+            let _ = machine.store32(reg, value);
+        }
+    }
+
     pub fn boot(&self, machine: &mut Machine) -> Result<BootOutcome> {
         let image = machine.spi0.flash_bytes().to_vec();
         if image.is_empty() {
@@ -303,6 +336,7 @@ impl BootRom {
             ),
         }
 
+        self.leave_rom_state(machine);
         write_folded(machine, BOOTCODE_LOAD_ADDR, &body).context("boot ROM: staging bootcode")?;
         machine
             .l2

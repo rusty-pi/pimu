@@ -31,7 +31,7 @@ Linux's `ttyAMA0`. The firmware polls the FIFO instead of taking the line. The l
 | `0x024` | [`IBRD`](#ibrd) | rw | 32 | 1, best high |
 | `0x028` | [`FBRD`](#fbrd) | rw | 32 | 1, best high |
 | `0x02C` | [`LCRH`](#lcrh) | rw | 32 | 1, best high |
-| `0x030` | [`CR`](#cr) | rw | 32 | 1, best high |
+| `0x030` | [`CR`](#cr) | rw | 32 | 3, best high |
 | `0x034` | [`IFLS`](#ifls) | rw | 32 | 1, best high |
 | `0x038` | [`IMSC`](#imsc) | rw | 32 | 2, best high |
 | `0x03C` | [`RIS`](#ris) | r | 32 | 1, best high |
@@ -128,9 +128,9 @@ Sources:
 
 ## `CR`
 
-Offset `0x030` · access `rw` · 32 bits
+Offset `0x030` · access `rw` · 32 bits · reset `0x300`
 
-Control.
+Control. Out of reset `TXE` and `RXE` are set and `UARTEN` is clear, so the UART is off until firmware enables it: a stage that writes `DR` without ever writing `CR` puts out nothing at all, and its console is silent from power-on with no other symptom. Measured on a Raspberry Pi 4B rev 1.5 (`d03115`), where firmware that only ever read `CR` stayed mute over the serial line across three boots, and spoke as soon as it wrote `IBRD`/`FBRD`/`LCRH` and `CR`.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
@@ -141,6 +141,8 @@ Control.
 Sources:
 
 - datasheet (high): BCM2711 ARM Peripherals, §11.5 (UART): `CR`
+- standard (high): ARM PrimeCell UART (PL011) TRM, §3.3.8 `UARTCR`: reset `0x0300`
+- measured (high): Raspberry Pi 4B rev 1.5 (`d03115`), serial console: no bytes from a stage that never writes `CR`
 
 `UARTEN` sources:
 

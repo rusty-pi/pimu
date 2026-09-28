@@ -37,7 +37,7 @@ Sources:
 | `0x03C` | [`V3DDIV`](#v3ddiv) | rw | 32 | 2, best high |
 | `0x0E0` | [`TSENSCTL`](#tsensctl) | rw | 32 | 3, best high |
 | `0x0E4` | [`TSENSDIV`](#tsensdiv) | rw | 32 | 3, best high |
-| `0x0E8` | [`TIMERCTL`](#timerctl) | rw | 32 | 2, best high |
+| `0x0E8` | [`TIMERCTL`](#timerctl) | rw | 32 | 3, best high |
 | `0x0EC` | [`TIMERDIV`](#timerdiv) | rw | 32 | 2, best high |
 | `0x0F0` | [`UARTCTL`](#uartctl) | rw | 32 | 3, best high |
 | `0x0F4` | [`UARTDIV`](#uartdiv) | rw | 32 | 3, best high |
@@ -483,12 +483,26 @@ Sources:
 
 Offset `0x0E8` · access `rw` · 32 bits
 
-The timer's clock generator, off the oscillator. The bootcode enables it on `SRC` 1; start4 writes it again with `GATE` set.
+The timer's clock generator, off the oscillator. The boot ROM enables it on `SRC` 1 with `TIMERDIV` `0x36000` (1 MHz from the 54 MHz crystal) before it stages the bootcode; the bootcode stops and restarts it later, and start4 writes it again with `GATE` set. It does **not** feed the system timer at `0x7E003000`: stock start4 stops this generator (`0x5A000000`) and restarts it mid-boot while it is timing its own waits off `CLO`, and a board boots through that, so the microsecond counter runs whatever this register says. Gating the modelled counter on it makes stock start4 hang, which is how that was settled.
+
+| Bits | Field | Access | Notes |
+|---|---|---|---|
+| 3:0 | `SRC` | rw | Clock source; 0 is no clock at all, 1 the oscillator. |
+| 4 | `ENAB` | rw | Generator on. |
 
 Sources:
 
 - linux (high): `clk-bcm2835.c`: `CM_TIMERCTL`
-- trace (high): bootcode: `0x5A000000` at `0x8000A7B2`, `0x5A000011` at `0x8000A7CC`; start4: `0x5A000051` at `0x3EC7DE96`
+- trace (high): boot ROM: `TIMERDIV` `0x5A036000` at `0x600004EC`, `0x5A000001` at `0x60000504`, `0x5A000011` at `0x60000506`; bootcode: `0x5A000000` at `0x8000A7B2`, `0x5A000011` at `0x8000A7CC`, and a read of `TIMERDIV` at `0x8000228C`; start4: `0x5A000051` at `0x3EC7DE96`
+- inferred (medium): `clk-bcm2835.c` names it `CM_TIMERCTL`, but what it clocks is not established: the system timer keeps counting across a stop, so its consumer is something else
+
+`SRC` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, `CM_GPxCTL`: `SRC`
+
+`ENAB` sources:
+
+- datasheet (high): BCM2711 ARM Peripherals, `CM_GPxCTL`: `ENAB`
 
 ## `TIMERDIV`
 
