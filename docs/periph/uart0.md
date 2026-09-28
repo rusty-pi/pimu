@@ -57,7 +57,7 @@ FIFO and line flags.
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
-| 3 | `BUSY` | r | Transmitting. The model never is. |
+| 3 | `BUSY` | r | Transmitting. Set for one read after a write to `DR`, so code that drains `BUSY` before it clears `UARTCR` sees it go by. On a 4B rev 1.5, taking `UARTEN` away with a character still on the wire wedges the transmitter for the rest of the boot -- `FR` reads `0x39` (`CTS\|BUSY\|RXFE\|TXFF`, `TXFE` clear) and re-initialising the port does not recover it. Modelled behind `PIMU_UART_STRICT_DISABLE=1`, because the stock `start4.elf` clears `UARTCR` that way during its baud-rate change and still boots a board, so the silicon rule has a further condition that is not pinned down yet. |
 | 4 | `RXFE` | r | Receive FIFO empty. |
 | 5 | `TXFF` | r | Transmit FIFO full. The model never is. |
 | 6 | `RXFF` | r | Receive FIFO full. |
@@ -71,6 +71,7 @@ Sources:
 `BUSY` sources:
 
 - datasheet (high): BCM2711 ARM Peripherals, §11.5 (UART): `FR`
+- measured (high): rpi-dev 4B rev 1.5: `FR 0x39` read out over DHCP option 97 before a byte was written; fixed in rpi-unboxed `f7b58e5` by draining `BUSY` first
 
 `RXFE` sources:
 
