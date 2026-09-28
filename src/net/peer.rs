@@ -23,6 +23,10 @@ pub const SERVER_MAC: Mac = [0x02, 0x00, 0x5e, 0x00, 0x53, 0x02];
 pub const SERVER_IP: [u8; 4] = [192, 0, 2, 1];
 pub const CLIENT_IP: [u8; 4] = [192, 0, 2, 100];
 pub const NETMASK: [u8; 4] = [255, 255, 255, 0];
+/// The address server, when the peer runs proxy DHCP: a router that hands out
+/// addresses and knows nothing about booting, with the boot information coming
+/// separately from [`SERVER_IP`]. `PIMU_DHCP_PROXY=1`.
+pub const ROUTER_IP: [u8; 4] = [192, 0, 2, 254];
 const SUBNET_BROADCAST: [u8; 4] = [192, 0, 2, 255];
 const LIMITED_BROADCAST: [u8; 4] = [255; 4];
 const LEASE_SECS: u32 = 86_400;
@@ -148,6 +152,10 @@ pub struct BuiltinPeer {
     conns: BTreeMap<([u8; 4], u16, u16), TcpConn>,
     conn_count: u32,
     io: crate::log::Log,
+    /// Answer a DISCOVER the way a proxy-DHCP rig does: an address from a
+    /// router that says nothing about booting, and the boot information from a
+    /// second offer with no address (`PIMU_DHCP_PROXY=1`).
+    dhcp_proxy: bool,
 }
 
 impl Default for BuiltinPeer {
@@ -169,6 +177,7 @@ impl BuiltinPeer {
             conns: BTreeMap::new(),
             conn_count: 0,
             io: crate::log::Log::default(),
+            dhcp_proxy: std::env::var("PIMU_DHCP_PROXY").is_ok_and(|v| v != "0"),
         }
     }
 
@@ -400,15 +409,27 @@ impl BuiltinPeer {
             r.extend_from_slice(v);
         };
         opt(53, &[reply]);
-        opt(54, &SERVER_IP);
-        opt(51, &LEASE_SECS.to_be_bytes());
-        opt(1, &NETMASK);
-        opt(3, &SERVER_IP);
-        opt(6, &SERVER_IP);
-        opt(66, fmt_ip(SERVER_IP).as_bytes());
-        if pxe {
-            opt(60, b"PXEClient");
-            opt(43, PXE_VENDOR_OPTIONS);
+        if self.dhcp_proxy {
+            // A proxy DHCP rig, as `dnsmasq --dhcp-range=...,proxy` makes one:
+            // the address comes from a router that says nothing about booting,
+            // and the boot information comes from a second server that offers
+            // no address. A client has to put the two together.
+            opt(54, &ROUTER_IP);
+            opt(51, &LEASE_SECS.to_be_bytes());
+            opt(1, &NETMASK);
+            opt(3, &ROUTER_IP);
+            opt(6, &ROUTER_IP);
+        } else {
+            opt(54, &SERVER_IP);
+            opt(51, &LEASE_SECS.to_be_bytes());
+            opt(1, &NETMASK);
+            opt(3, &SERVER_IP);
+            opt(6, &SERVER_IP);
+            opt(66, fmt_ip(SERVER_IP).as_bytes());
+            if pxe {
+                opt(60, b"PXEClient");
+                opt(43, PXE_VENDOR_OPTIONS);
+            }
         }
         r.push(255);
 
@@ -418,6 +439,31 @@ impl BuiltinPeer {
             (chaddr, CLIENT_IP)
         };
         self.udp(mac, ip, DHCP_SERVER_PORT, DHCP_CLIENT_PORT, &r);
+        if self.dhcp_proxy && pxe {
+            // The proxy's own answer: the boot information, and no address.
+            let mut p = vec![0u8; 236];
+            p[0] = 2;
+            p[1] = 1;
+            p[2] = 6;
+            p[4..8].copy_from_slice(&b[4..8]);
+            p[10..12].copy_from_slice(&flags.to_be_bytes());
+            p[20..24].copy_from_slice(&SERVER_IP);
+            p[28..44].copy_from_slice(&b[28..44]);
+            p.extend_from_slice(&DHCP_MAGIC);
+            for (code, v) in [
+                (53u8, &[reply][..]),
+                (54, &SERVER_IP[..]),
+                (60, b"PXEClient"),
+                (43, PXE_VENDOR_OPTIONS),
+            ] {
+                p.push(code);
+                p.push(v.len() as u8);
+                p.extend_from_slice(v);
+            }
+            p.push(255);
+            self.note("dhcp: proxy offer, boot information only".to_string());
+            self.udp(mac, ip, DHCP_SERVER_PORT, DHCP_CLIENT_PORT, &p);
+        }
     }
 
     fn dns(&mut self, mac: Mac, ip: [u8; 4], port: u16, q: &[u8]) {
