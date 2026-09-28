@@ -84,6 +84,11 @@ ref        = "the reference board's bootloader prints `PM_RSTS 00000020` after p
 confidence = "high"
 
 [[register.source]]
+kind       = "measured"
+ref        = "a Raspberry Pi 4B rev 1.5 (`d03115`) prints `PM_RSTS 00001020` on every boot, a reboot out of Linux included -- so bit 5 alone does not tell a watchdog reset from a cold start there, and bit 12 is not identified"
+confidence = "high"
+
+[[register.source]]
 kind       = "trace"
 ref        = "start4: reads `0x20` twice at `0x3ED622BE` / `0x3ED622C0`, writes `0x5A000000` at `0x3ED622CC`"
 confidence = "high"

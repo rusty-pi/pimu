@@ -27,7 +27,7 @@ Sources:
 | Offset | Name | Access | Width | Sources |
 |---|---|---|---|---|
 | `0x01C` | [`RSTC`](#rstc) | rw | 32 | 3, best high |
-| `0x020` | [`RSTS`](#rsts) | rw | 32 | 6, best high |
+| `0x020` | [`RSTS`](#rsts) | rw | 32 | 7, best high |
 | `0x024` | [`WDOG`](#wdog) | rw | 32 | 3, best high |
 | `0x028` | [`PADS0`](#pads0) | rw | 32 | 2, best high |
 | `0x02C` | [`PADS2`](#pads2) | rw | 32 | 4, best high |
@@ -85,6 +85,7 @@ Which reset source fired last. The bootloader also packs the partition to boot i
 Sources:
 
 - measured (high): the reference board's bootloader prints `PM_RSTS 00000020` after power-on
+- measured (high): a Raspberry Pi 4B rev 1.5 (`d03115`) prints `PM_RSTS 00001020` on every boot, a reboot out of Linux included -- so bit 5 alone does not tell a watchdog reset from a cold start there, and bit 12 is not identified
 - trace (high): start4: reads `0x20` twice at `0x3ED622BE` / `0x3ED622C0`, writes `0x5A000000` at `0x3ED622CC`
 - decompile (high): partition field in the even bits (mask `0x555`): `FUN_00000578` / `FUN_00000666` in `firmware/source/pieeprom.bin.c`
 - linux (high): `bcm2835_wdt.c`: `__bcm2835_restart` ORs the partition into `RSTS` before arming a 10-tick full reset, and `bcm2835_power_off` asks for partition 63
