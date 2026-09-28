@@ -88,6 +88,7 @@ knobs rather than behaviour:
 | variable | what it holds the machine to |
 |---|---|
 | `PIMU_SD_STRICT_SPEED=1` | A card answers data transfers only at what it was switched to: above 25 MHz it must have had `CMD6`'s high-speed switch, and the bus width has to match the host's. A refusal is `INT_STATUS.ERR_DATA_CRC`. The stock bootloader reads a real SanDisk card at 50 MHz having only *asked* whether it could, so with this on it does not get past identification. |
+| `PIMU_PHY_SILENT=1` | Every MDIO read completes with data 0 and `READ_FAIL` clear, as a 4B rev 1.5 does under our own EEPROM (`CTL 0000 PHY ID 0000` where the model reads `1140` / `600d 84a2`). Not the same as an absent address, which fails and reads all ones. Why the part goes quiet there is unknown — every register write of the stock sequence matches ours value for value — so this reproduces the symptom for firmware to be hardened against, not its cause. |
 | `PIMU_STRICT_CLOCKS=1` | An access to GENET with `CM +0x1E8` / `+0x210` off faults instead of answering. On silicon it does not fault — it stalls the bus, and the only symptom is a boot watchdog reset a quarter of a minute later with nothing on the console. Such an access is counted and logged once whether or not this is set. |
 
 Both exist because the failures they model are invisible here otherwise: a

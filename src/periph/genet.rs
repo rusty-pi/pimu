@@ -229,6 +229,12 @@ pub struct Genet {
     irq_stat: [u32; 2],
     irq_mask: [u32; 2],
     pub phy: Bcm54213pe,
+    /// Answer every MDIO read with zero and `READ_FAIL` clear, the way a 4B
+    /// rev 1.5 does under our own EEPROM (`PIMU_PHY_SILENT=1`). Why the part
+    /// goes quiet there is not known: every register write of the stock
+    /// sequence matches ours value for value (`specs/genet.toml`,
+    /// `UMAC_MDIO_CMD`), so this reproduces the symptom, not its cause.
+    phy_silent: bool,
     kick: bool,
     tx_frame: Vec<u8>,
     /// The frame being gathered ends in the slot for its FCS (`DMA_TX_OW_CRC`).
@@ -289,6 +295,7 @@ impl Genet {
             irq_stat: [0; 2],
             irq_mask: [u32::MAX; 2],
             phy: Bcm54213pe::new(),
+            phy_silent: std::env::var("PIMU_PHY_SILENT").is_ok_and(|v| v != "0"),
             kick: false,
             tx_frame: Vec::new(),
             tx_ow_crc: false,
@@ -657,7 +664,12 @@ impl Genet {
         match v & MDIO_OP {
             MDIO_RD => {
                 done &= !0xffff;
-                if present {
+                if self.phy_silent {
+                    // What a 4B rev 1.5 does under our own EEPROM: the frame
+                    // completes, `READ_FAIL` stays clear, and the data is zero
+                    // because nothing drove the bus. Not the same as an absent
+                    // address, which fails and reads all ones.
+                } else if present {
                     done |= u32::from(self.phy.read(reg));
                 } else {
                     done |= MDIO_READ_FAIL | 0xffff;
