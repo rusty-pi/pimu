@@ -630,6 +630,11 @@ kind       = "measured"
 ref        = "`MDIO_CMD` `0x0821796d` (last op: read of PHY 1 `BMSR = 0x796d`)"
 confidence = "high"
 
+[[register.source]]
+kind       = "measured"
+ref        = "4B rev 1.5 running our own EEPROM: every read came back 0 with `START_BUSY` cleared and `READ_FAIL` clear -- `CTL 0000 PHY ID 0000` where the model reads `1140` / `600d 84a2`. Not the access sequence: an ordered MMIO trace of stock's bootmain (`0x0009196e`..`0x000919b2`) against ours is identical value for value -- `MDIO_CFG 0xc1`, `EXT_GPHY_CTRL 0x10b` written before the reads, PHY 1, the same write / read-back / `START_BUSY` / poll / `READ_FAIL` / read order, and stock's helper at `0x00091952` carries the same 1000 us timeout at 100 us. Nor the clocks: the writes to `GEN_1E8_CTL` / `GEN_210_CTL` and their dividers match stock write for write. Cause still unidentified."
+confidence = "high"
+
 [[register.field]]
 name  = "DATA"
 bits  = "15:0"

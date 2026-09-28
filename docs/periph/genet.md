@@ -58,7 +58,7 @@ Each level-2 controller drives its own line while an unmasked status bit is set.
 | `0xD80` | [`UMAC_MIB_CTRL`](#umac_mib_ctrl) | rw | 32 | 1, best high |
 | `0xE04` | [`UMAC_604`](#umac_604) | rw | 32 | 2, best high |
 | `0xE08` | [`UMAC_608`](#umac_608) | rw | 32 | 2, best high |
-| `0xE14` | [`UMAC_MDIO_CMD`](#umac_mdio_cmd) | rw | 32 | 2, best high |
+| `0xE14` | [`UMAC_MDIO_CMD`](#umac_mdio_cmd) | rw | 32 | 3, best high |
 | `0xE18` | [`UMAC_MDIO_CFG`](#umac_mdio_cfg) | rw | 32 | 2, best high |
 | `0x2000`–`0x2BFC` (768 × 0x4) | [`RDMA_DESC`](#rdma_desc) | rw | 32 | 1, best high |
 | `0x2C00`–`0x3000` (17 × 0x40) | [`RDMA_RING_WRITE_PTR`](#rdma_ring_write_ptr) | rw | 32 | 1, best high |
@@ -539,6 +539,7 @@ Sources:
 
 - linux (high): `mdio-bcm-unimac.c`: `MDIO_CMD`
 - measured (high): `MDIO_CMD` `0x0821796d` (last op: read of PHY 1 `BMSR = 0x796d`)
+- measured (high): 4B rev 1.5 running our own EEPROM: every read came back 0 with `START_BUSY` cleared and `READ_FAIL` clear -- `CTL 0000 PHY ID 0000` where the model reads `1140` / `600d 84a2`. Not the access sequence: an ordered MMIO trace of stock's bootmain (`0x0009196e`..`0x000919b2`) against ours is identical value for value -- `MDIO_CFG 0xc1`, `EXT_GPHY_CTRL 0x10b` written before the reads, PHY 1, the same write / read-back / `START_BUSY` / poll / `READ_FAIL` / read order, and stock's helper at `0x00091952` carries the same 1000 us timeout at 100 us. Nor the clocks: the writes to `GEN_1E8_CTL` / `GEN_210_CTL` and their dividers match stock write for write. Cause still unidentified.
 
 `DATA` sources:
 
