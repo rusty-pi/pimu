@@ -34,7 +34,9 @@ use crate::bus::{BusResult, MmioDevice, Width};
 
 // `BUSY` is bit 7 of every `CM_*_CTL` register, not only `UARTCTL`'s.
 use crate::spec::cm::{
-    DELAY as CM_DELAY, LOCK as CM_LOCK, UARTCTL, UARTCTL_BUSY_MASK as CTL_BUSY, UARTDIV,
+    DELAY as CM_DELAY, GEN_1E8_CTL, GEN_210_CTL, LOCK as CM_LOCK, UARTCTL,
+    UARTCTL_BUSY_MASK as CTL_BUSY, UARTCTL_ENAB_MASK as CTL_ENAB, UARTCTL_SRC_MASK as CTL_SRC,
+    UARTDIV,
 };
 use crate::spec::Coverage;
 
@@ -55,6 +57,20 @@ pub struct ClockManager {
 impl ClockManager {
     pub fn new() -> ClockManager {
         ClockManager::default()
+    }
+
+    fn generator_running(&self, ctl: u32) -> bool {
+        let v = self.storage.get(&ctl).copied().unwrap_or(0);
+        v & CTL_ENAB != 0 && v & CTL_SRC != 0
+    }
+
+    /// Whether the two generators the Ethernet block runs from are both going.
+    /// The stock bootloader starts them (`0x3000` and `0x6000` off `SRC` 6, i.e.
+    /// 250 and 125 MHz from PLLD's peripheral channel) immediately before its
+    /// first GENET access, and nothing else in a boot writes them, so this says
+    /// whether GENET has a clock at all.
+    pub fn eth_clocks_running(&self) -> bool {
+        self.generator_running(GEN_1E8_CTL) && self.generator_running(GEN_210_CTL)
     }
 }
 

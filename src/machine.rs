@@ -36,6 +36,8 @@ pub struct Machine {
     pub l2: crate::l2::CacheAsRam,
     pub systimer: SysTimer,
     pub uart0: Pl011,
+    /// GENET accesses made with the Ethernet clocks off ([`Machine::eth_clock_check`]).
+    pub genet_unclocked: u64,
     pub aux: Aux,
     /// The ARM property mailbox, idle until an ARM is running.
     pub mbox: Mbox,
@@ -234,6 +236,7 @@ impl Machine {
             l2: Default::default(),
             systimer: SysTimer::new(),
             uart0: Pl011::new(),
+            genet_unclocked: 0,
             aux: Aux::new(),
             mbox: Mbox::new(),
             bell: Bell::new(),
@@ -1100,7 +1103,38 @@ fn dma_irq_source(ch: usize) -> u32 {
 
 impl Machine {
     #[inline(never)]
+    /// GENET with its clocks off: on a board the access stalls the bus, the VPU
+    /// stops in it and the boot watchdog resets the board a quarter of a minute
+    /// later with nothing on the console. The device here answers whatever the
+    /// clock manager says, so the stall is invisible -- `PIMU_STRICT_CLOCKS=1`
+    /// turns it into a fault instead, and without it the access is counted and
+    /// logged once so a report still shows it.
+    fn eth_clock_check(&mut self, addr: u32, width: Width, write: bool) -> BusResult<()> {
+        let genet = (map::GENET_BASE..map::GENET_BASE + map::GENET_SIZE).contains(&addr);
+        if !genet || self.clockman.eth_clocks_running() {
+            return Ok(());
+        }
+        self.genet_unclocked = self.genet_unclocked.wrapping_add(1);
+        if self.genet_unclocked == 1 {
+            crate::log!(
+                self.log,
+                Channel::Emmc,
+                "genet {addr:#010x}: the Ethernet clocks (CM +0x1E8, +0x210) are off;                  a board stalls on this"
+            );
+        }
+        if std::env::var("PIMU_STRICT_CLOCKS").is_ok_and(|v| v != "0") {
+            return Err(crate::bus::BusError::Faulted {
+                addr,
+                width,
+                write,
+                reason: "the Ethernet clocks are off",
+            });
+        }
+        Ok(())
+    }
+
     fn load_device(&mut self, addr: u32, width: Width) -> BusResult<u32> {
+        self.eth_clock_check(addr, width, false)?;
         self.mmio_reads = self.mmio_reads.wrapping_add(1);
         self.advance_hdmi_ddc(addr);
         self.sync_avs_core_rail(addr);
@@ -1205,6 +1239,7 @@ impl Machine {
 
     #[inline(never)]
     fn store_device(&mut self, addr: u32, width: Width, value: u32) -> BusResult<()> {
+        self.eth_clock_check(addr, width, true)?;
         self.recheck = true;
         self.mmio_writes = self.mmio_writes.wrapping_add(1);
         self.dma_win_log("wr", addr, value);
