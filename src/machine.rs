@@ -594,6 +594,9 @@ impl Machine {
 
     /// Advance both receivers to `now_us`; input only ever goes on one line.
     pub fn console_pump(&mut self, now_us: u64) {
+        let live = self.clockman.uart_clock_live();
+        let disturbed = self.clockman.take_uart_disturbance();
+        self.uart0.clock_state(live, disturbed);
         self.uart0.pump(now_us);
         self.aux.pump(now_us);
     }

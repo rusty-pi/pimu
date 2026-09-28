@@ -52,6 +52,7 @@ const PASSWD: u32 = 0x5A00_0000;
 #[derive(Default)]
 pub struct ClockManager {
     storage: BTreeMap<u32, u32>,
+    uart_disturbed: bool,
 }
 
 impl ClockManager {
@@ -71,6 +72,18 @@ impl ClockManager {
     /// whether GENET has a clock at all.
     pub fn eth_clocks_running(&self) -> bool {
         self.generator_running(GEN_1E8_CTL) && self.generator_running(GEN_210_CTL)
+    }
+
+    /// Whether `UARTCLK` is running: a PL011 programmed against a stopped
+    /// generator never transmits. The boot ROM leaves the generator going, so
+    /// an untouched register counts as live rather than as a stopped one.
+    pub fn uart_clock_live(&self) -> bool {
+        self.storage.get(&UARTCTL).is_none_or(|v| v & CTL_ENAB != 0)
+    }
+
+    /// Whether the UART clock has been stopped or retuned since the last call.
+    pub fn take_uart_disturbance(&mut self) -> bool {
+        core::mem::take(&mut self.uart_disturbed)
     }
 }
 
@@ -95,7 +108,15 @@ impl MmioDevice for ClockManager {
     }
 
     fn write(&mut self, offset: u32, _width: Width, value: u32) -> BusResult<()> {
-        self.storage.insert(offset & !3, value);
+        let off = offset & !3;
+        let was = self.storage.get(&off).copied().unwrap_or(0);
+        if off == UARTCTL && was & CTL_ENAB != 0 && (was ^ value) & !PASSWD != 0 {
+            self.uart_disturbed = true;
+        }
+        if off == UARTDIV && self.uart_clock_live() && (was ^ value) & !PASSWD != 0 {
+            self.uart_disturbed = true;
+        }
+        self.storage.insert(off, value);
         Ok(())
     }
 }

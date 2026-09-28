@@ -21,9 +21,10 @@ use crate::bus::{BusResult, MmioDevice, Width};
 
 use crate::spec::uart0::{
     CR, CR_RESET, CR_RXE_MASK as CR_RXE, CR_UARTEN_MASK as CR_UARTEN, DR, FBRD, FR,
-    FR_RXFE_MASK as FR_RXFE, FR_RXFF_MASK as FR_RXFF, FR_TXFE_MASK as FR_TXFE, IBRD, ICR, IFLS,
-    IFLS_RESET, IFLS_RXIFLSEL_MASK, IFLS_RXIFLSEL_SHIFT, IMSC, LCRH, LCRH_FEN_MASK as LCRH_FEN,
-    MIS, RIS, RIS_RT_MASK as INT_RT, RIS_RX_MASK as INT_RX,
+    FR_BUSY_MASK as FR_BUSY, FR_RXFE_MASK as FR_RXFE, FR_RXFF_MASK as FR_RXFF,
+    FR_TXFE_MASK as FR_TXFE, FR_TXFF_MASK as FR_TXFF, IBRD, ICR, IFLS, IFLS_RESET,
+    IFLS_RXIFLSEL_MASK, IFLS_RXIFLSEL_SHIFT, IMSC, LCRH, LCRH_FEN_MASK as LCRH_FEN, MIS, RIS,
+    RIS_RT_MASK as INT_RT, RIS_RX_MASK as INT_RX,
 };
 use crate::spec::Coverage;
 
@@ -53,6 +54,17 @@ pub struct Pl011 {
     line_idle: bool,
     /// Modelled time the last character entered the FIFO, for `RTIS`.
     last_rx_us: u64,
+    clock_live: bool,
+    stalled: bool,
+    /// Whether a character written to `DR` still counts as on the wire. One
+    /// read of `FR` retires it, which is what a `BUSY` drain loop does.
+    transmitting: bool,
+    /// `PIMU_UART_STRICT_DISABLE=1`: wedge the transmitter when `UARTEN` is
+    /// taken away with a character still on the wire, as the TRM warns. Off by
+    /// default, because the stock `start4.elf` clears `UARTCR` that way during
+    /// its baud-rate change and boots a board regardless -- so the silicon rule
+    /// has a condition this does not capture yet.
+    strict_disable: bool,
 }
 
 impl Default for Pl011 {
@@ -77,7 +89,27 @@ impl Pl011 {
             next_rx_us: 0,
             line_idle: true,
             last_rx_us: 0,
+            clock_live: true,
+            stalled: false,
+            transmitting: false,
+            strict_disable: std::env::var("PIMU_UART_STRICT_DISABLE").is_ok_and(|v| v != "0"),
         }
+    }
+
+    /// Couple the port to its clock generator. A 4B rev 1.5 wedges its
+    /// transmitter for the rest of the boot if the port is enabled while
+    /// `UARTCLK` is stopped, or if the generator is stopped or retuned while
+    /// the port is still enabled: `FR` then reads `TXFF` set, `TXFE` clear and
+    /// `BUSY` stuck, and re-initialising the port does not recover it.
+    pub fn clock_state(&mut self, live: bool, disturbed: bool) {
+        self.clock_live = live;
+        if self.cr & CR_UARTEN != 0 && (disturbed || !live) {
+            self.stalled = true;
+        }
+    }
+
+    pub fn transmit_stalled(&self) -> bool {
+        self.stalled
     }
 
     pub fn take_output(&mut self) -> Vec<u8> {
@@ -188,7 +220,17 @@ impl MmioDevice for Pl011 {
                 b
             }
             FR => {
-                let mut fr = FR_TXFE; // transmit never busy or full
+                if self.stalled {
+                    return Ok(FR_TXFF | FR_BUSY);
+                }
+                // Transmit never fills. A character just written counts as on
+                // the wire for one read, so code that drains `BUSY` before it
+                // clears `UARTCR` sees it go by and code that does not stalls.
+                if self.transmitting {
+                    self.transmitting = false;
+                    return Ok(FR_BUSY);
+                }
+                let mut fr = FR_TXFE;
                 if self.rx.is_empty() {
                     fr |= FR_RXFE;
                 }
@@ -211,7 +253,12 @@ impl MmioDevice for Pl011 {
 
     fn write(&mut self, offset: u32, _width: Width, value: u32) -> BusResult<()> {
         match offset {
-            DR => self.out.push(value as u8),
+            DR => {
+                if !self.stalled {
+                    self.out.push(value as u8);
+                    self.transmitting = true;
+                }
+            }
             IBRD => self.ibrd = value & 0xFFFF,
             FBRD => self.fbrd = value & 0x3F,
             LCRH => {
@@ -222,7 +269,23 @@ impl MmioDevice for Pl011 {
                 }
                 self.lcrh = value;
             }
-            CR => self.cr = value,
+            CR => {
+                // The TRM's warning, and what a 4B rev 1.5 does: taking
+                // `UARTEN` away while a character is still on the wire wedges
+                // the transmitter. The stock clock-change callback drains
+                // `BUSY` first for exactly this reason.
+                if self.strict_disable
+                    && value & CR_UARTEN == 0
+                    && self.cr & CR_UARTEN != 0
+                    && self.transmitting
+                {
+                    self.stalled = true;
+                }
+                if value & CR_UARTEN != 0 && !self.clock_live {
+                    self.stalled = true;
+                }
+                self.cr = value;
+            }
             IFLS => self.ifls = value & 0x3F,
             IMSC => self.imsc = value & 0x7FF,
             ICR => self.ris &= !value,
