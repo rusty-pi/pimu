@@ -909,7 +909,7 @@ Sources:
 
 Offset `0x1E8` · access `rw` · 32 bits
 
-A clock generator Linux's clk-bcm2835 does not list, laid out as `UARTCTL`. start4's board set-up starts it on `SRC` 6 at 250 MHz.
+A clock generator Linux's clk-bcm2835 does not list, laid out as `UARTCTL`. start4's board set-up starts it on `SRC` 6 at 250 MHz. **This generator and `GEN_210_CTL` are what the Ethernet block runs from.** The stock bootloader starts both immediately before its first GENET access, and nothing answers in that block until they run: on silicon the access does not fault, it stalls the bus, and the board is reset by the boot watchdog a quarter of a minute later with nothing on the console. `PIMU_STRICT_CLOCKS=1` turns such an access into a fault here.
 
 Sources:
 

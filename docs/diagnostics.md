@@ -79,6 +79,28 @@ it with `SIGPIPE`.
 | `PIMU_TRACE_MMIO=<lo>-<hi>` | The same, restricted to an address range. This is what made enumerating `0x7D5D_0000` practical. |
 | `PIMU_MMIO_FROM=<hex>` | Start the MMIO trace when core 0 reaches this address. |
 
+## Holding the model to what a board does
+
+Two rules a board enforces and the model does not, both off by default because
+the *stock* firmware does not survive them — which is the whole reason they are
+knobs rather than behaviour:
+
+| variable | what it holds the machine to |
+|---|---|
+| `PIMU_SD_STRICT_SPEED=1` | A card answers data transfers only at what it was switched to: above 25 MHz it must have had `CMD6`'s high-speed switch, and the bus width has to match the host's. A refusal is `INT_STATUS.ERR_DATA_CRC`. The stock bootloader reads a real SanDisk card at 50 MHz having only *asked* whether it could, so with this on it does not get past identification. |
+| `PIMU_STRICT_CLOCKS=1` | An access to GENET with `CM +0x1E8` / `+0x210` off faults instead of answering. On silicon it does not fault — it stalls the bus, and the only symptom is a boot watchdog reset a quarter of a minute later with nothing on the console. Such an access is counted and logged once whether or not this is set. |
+
+Both exist because the failures they model are invisible here otherwise: a
+firmware that never switches a card, or never starts the Ethernet clocks, works
+in this emulator and hangs a Raspberry Pi 4B.
+
+Bus *speeds* stay unmodellable either way. The machine does not follow the
+firmware's clock programming (`systimer.rs` keeps 54 MHz for the whole run), so
+an I²C or SPI divider computed against the wrong core clock — 926 kHz at a part
+that stops answering past 400 kHz, or a flash clocked at 125 MHz — reads exactly
+as correct here. The way to catch those is to diff the divider a firmware writes
+against the one the stock firmware writes at the same point.
+
 ## Traps and watchpoints
 
 | Variable | Effect |
