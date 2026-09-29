@@ -21,6 +21,9 @@ on:
 permissions:
   contents: write
   packages: write
+  # The boot-log guard below reads that workflow's runs through the API,
+  # which an explicit permissions block otherwise denies the job's token.
+  actions: read
 
 # One release at a time, and never cancel one: each builds a different tag.
 concurrency:
