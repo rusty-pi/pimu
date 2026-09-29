@@ -238,6 +238,13 @@ self-update, which brings back the image's own):
               does from Linux: the bootloader reads tryboot.txt in place of
               config.txt, and a start_file= in it names the firmware. The
               request is one-shot, so a reset inside the run boots normally.
+    --orderly-reboot
+              Once the run reaches --until, play what Linux's `reboot` does
+              into the mailbox (NOTIFY_REBOOT, SET_GPIO_STATE 134 <- 0 and
+              130 <- 1, NOTIFY_REBOOT) and ask the PM watchdog for a reset, then
+              boot again. The GPIO expander is off the SoC, so it keeps what
+              the firmware left in it across the reset, and a card whose
+              SD_PWR_ON stays low answers nothing. Needs --until.
     --skip-signed-boot
               Set SIGNED_BOOT=0 in bootconf.txt: skip the bootloader's
               SHA-256 + RSA-2048 verify of boot.img, about half a billion
@@ -450,6 +457,7 @@ struct BootOpts {
     control_transfers: bool,
     skip_signed_boot: bool,
     tryboot: bool,
+    orderly_reboot: bool,
     skip_unimpl: bool,
     until: Option<String>,
     sends: Vec<(String, Vec<u8>)>,
@@ -968,6 +976,7 @@ impl BootOpts {
         let mut control_transfers = false;
         let mut skip_signed_boot = false;
         let mut tryboot = false;
+        let mut orderly_reboot = false;
         let mut skip_unimpl = false;
         let mut until: Option<String> = None;
         let mut sends: Vec<(String, Vec<u8>)> = Vec::new();
@@ -1189,6 +1198,7 @@ impl BootOpts {
                 }
                 "--skip-signed-boot" => skip_signed_boot = true,
                 "--tryboot" => tryboot = true,
+                "--orderly-reboot" => orderly_reboot = true,
                 "--skip-unimpl" => skip_unimpl = true,
                 "--check-coherency" => check_coherency = true,
                 "--check-alignment" => check_alignment = true,
@@ -1396,6 +1406,7 @@ impl BootOpts {
             control_transfers,
             skip_signed_boot,
             tryboot,
+            orderly_reboot,
             skip_unimpl,
             until,
             sends,
@@ -1456,6 +1467,9 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
     let mut fuses = load_otp(opts, rig.board)?;
     let mut fuses_at_start = None;
     let mut partition = 0;
+    // Off the SoC: a reset leaves it as the boot before left it.
+    let mut expander = None;
+    let mut rebooted_orderly = false;
     let (report, emu, start) = 'boot: loop {
         let mut machine = rig.machine(&flash)?;
         if let Some(fuses) = &fuses {
@@ -1466,6 +1480,9 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
             machine.config_otp.set(row, value);
         }
         machine.pm.keep_partition_bits(partition);
+        if let Some(expander) = expander.take() {
+            machine.bsc_pmic.fit_expander(expander);
+        }
         // One-shot: the bootcode clears it as it reads it.
         if reboots == 0 && opts.tryboot {
             machine.pm.request_tryboot();
@@ -1477,6 +1494,15 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
         emu.input.host = host_input.take();
         let report = emu.run(&limits);
         host_input = emu.input.host.take();
+        let report = if opts.orderly_reboot
+            && !rebooted_orderly
+            && report.end == pimu::emulator::RunEnd::Until
+        {
+            rebooted_orderly = true;
+            orderly_reboot(&mut emu, &limits)?
+        } else {
+            report
+        };
         rig.dump_segment(&emu, &flash, reboots);
 
         if report.end == pimu::emulator::RunEnd::Reset {
@@ -1488,6 +1514,7 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
             edits.apply(&mut flash, false); // self-update restored SIGNED_BOOT=1
             fuses = Some(emu.machine.config_otp.fuses().clone());
             partition = emu.machine.pm.partition_bits();
+            expander = emu.machine.bsc_pmic.expander().cloned();
             if reboots <= 4 {
                 // The next boot's ARM side starts a profile of its own.
                 if let Some(a) = &mut emu.arm {
@@ -1536,6 +1563,49 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
         reboots,
         fuses_at_start: fuses_at_start.unwrap_or_default(),
     })
+}
+
+/// What Linux's `reboot` does before the watchdog fires: the firmware is told
+/// twice, the card's power is switched off through GPIO 134, then the PM
+/// watchdog is armed for a full reset. Runs on until the reset lands.
+fn orderly_reboot(emu: &mut Emulator, limits: &RunLimits) -> Result<RunReport> {
+    use pimu::bus::{Bus, Width};
+
+    const NOTIFY_REBOOT: u32 = 0x0003_0048;
+    const SET_GPIO_STATE: u32 = 0x0003_8041;
+    const CARD_POWER: u32 = 134;
+    const ACTIVITY_LED: u32 = 130;
+    let set_gpio = |gpio, state| (SET_GPIO_STATE, Some(8), vec![gpio, state]);
+    let notify = || (NOTIFY_REBOOT, None, Vec::new());
+    for tag in [
+        notify(),
+        set_gpio(CARD_POWER, 0),
+        set_gpio(ACTIVITY_LED, 1),
+        notify(),
+    ] {
+        mbox_property_exchange(emu, limits, &MboxRequest::Tags(vec![tag]))?;
+    }
+
+    use pimu::spec::pm::{RSTC, RSTC_WRCFG_SHIFT, WDOG};
+    const PASSWD: u32 = 0x5A00_0000;
+    let base = pimu::soc::bcm2711::PM_BASE;
+    let arm = |emu: &mut Emulator, reg, value| {
+        emu.machine
+            .store(base + reg, Width::Word, value)
+            .map_err(|e| anyhow::anyhow!("arming the PM watchdog: {e}"))
+    };
+    arm(emu, WDOG, PASSWD | 10)?;
+    arm(emu, RSTC, PASSWD | (2 << RSTC_WRCFG_SHIFT))?;
+
+    let slice = RunLimits {
+        until: None,
+        max_wall: Some(std::time::Duration::from_secs(10)),
+        idle_spin_limit: 0,
+        silent_us: u64::MAX,
+        speed: None,
+        ..limits.clone()
+    };
+    Ok(emu.run(&slice))
 }
 
 /// The fuses a run before left. They go over the model's own rows rather than

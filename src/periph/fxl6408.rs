@@ -44,6 +44,9 @@ const INPUT_STATUS: u8 = regs::INPUT_STATUS as u8;
 const INT_MASK: u8 = regs::INT_MASK as u8;
 const INT_STATUS: u8 = regs::INT_STATUS as u8;
 
+/// Pin 6, the card's power switch (GPIO 134).
+const SD_PWR_ON: u8 = 1 << 6;
+
 /// `DEVICE_ID` as it reads: the Fairchild manufacturer field in bits 7..5, the
 /// rest 0 — nothing checks it.
 const ID_VALUE: u8 = regs::DEVICE_ID_RESET as u8;
@@ -114,6 +117,13 @@ impl Fxl6408 {
         let driven = self.io_dir & !self.high_z;
         let pulled = !driven & self.pull_enable;
         (driven & self.output) | (pulled & self.pull_up)
+    }
+
+    /// Whether the card has power: the board pulls `SD_PWR_ON` up, so it is
+    /// off only while the part drives the pin low.
+    pub fn sd_powered(&self) -> bool {
+        let driven_low = self.io_dir & !self.high_z & !self.output;
+        driven_low & SD_PWR_ON == 0
     }
 
     pub fn reg(&self, r: u8) -> u8 {
@@ -230,6 +240,21 @@ mod tests {
         write(&mut x, IO_DIR, 0xFF);
         write(&mut x, OUTPUT, 0x00);
         assert_eq!(read(&mut x, INPUT_STATUS), 0b1000_0001);
+    }
+
+    #[test]
+    fn card_is_powered_unless_the_pin_is_driven_low() {
+        let mut x = Fxl6408::new();
+        assert!(x.sd_powered());
+        write(&mut x, IO_DIR, SD_PWR_ON);
+        write(&mut x, OUTPUT_HIGH_Z, 0x00);
+        write(&mut x, OUTPUT, 0);
+        assert!(!x.sd_powered());
+        write(&mut x, OUTPUT, SD_PWR_ON);
+        assert!(x.sd_powered());
+        write(&mut x, OUTPUT, 0);
+        write(&mut x, DEVICE_ID, SW_RESET);
+        assert!(x.sd_powered());
     }
 
     #[test]

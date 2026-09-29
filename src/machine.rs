@@ -438,6 +438,10 @@ impl Machine {
         let now = self.systimer.now_us();
         self.emmc2.advance_to(now);
         self.emmc.advance_to(now);
+        let card_powered = self.bsc_pmic.expander().is_none_or(|x| x.sd_powered());
+        self.emmc2.set_card_power(card_powered);
+        self.emmc
+            .set_card_power(card_powered || !self.sd_slot_legacy);
     }
 
     fn advance_pcie(&mut self) {

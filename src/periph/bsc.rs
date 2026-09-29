@@ -171,6 +171,13 @@ impl Bsc {
         self.expander.as_ref()
     }
 
+    /// Swap in the expander a run before left, with its log wired up. It is a
+    /// separate part on the board, so an SoC reset does not reach it.
+    pub fn fit_expander(&mut self, mut expander: Fxl6408) {
+        expander.log = self.log.clone();
+        self.expander = Some(expander);
+    }
+
     pub fn attach_eeprom(&mut self, eeprom: super::hat::HatEeprom) {
         self.eeprom = Some(eeprom);
     }

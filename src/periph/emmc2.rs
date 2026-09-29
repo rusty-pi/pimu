@@ -308,6 +308,8 @@ pub struct Emmc2 {
     /// CMD11 accepted: the card holds CMD/DAT low until the clock comes back
     /// at 1.8 V.
     switching_1v8: bool,
+    /// Whether the card has VDD. Unpowered, it answers nothing.
+    card_powered: bool,
     words_out: u64,
     pub log: Log,
 }
@@ -334,6 +336,7 @@ impl Default for Emmc2 {
             dma_pending: false,
             dma_written: Vec::new(),
             switching_1v8: false,
+            card_powered: true,
             words_out: 0,
             log: Log::default(),
         }
@@ -372,6 +375,18 @@ impl Emmc2 {
 
     pub fn put_card(&mut self, card: Option<SdCard>) {
         self.card = card;
+    }
+
+    /// Give the card VDD or take it away. Taking it away resets the card, so
+    /// the next power-up starts its initialisation over.
+    pub fn set_card_power(&mut self, on: bool) {
+        if self.card_powered && !on {
+            if let Some(card) = self.card.as_mut() {
+                card.power_off();
+            }
+            self.switching_1v8 = false;
+        }
+        self.card_powered = on;
     }
 
     pub fn has_card(&self) -> bool {
@@ -569,7 +584,7 @@ impl Emmc2 {
             }
         }
 
-        let response = match self.card.as_mut() {
+        let response = match self.card.as_mut().filter(|_| self.card_powered) {
             Some(card) => card.command(index, arg),
             None => crate::periph::sdcard::SdResponse {
                 no_response: true,
@@ -1872,6 +1887,26 @@ mod tests {
             "lines back at their idle levels"
         );
         assert!(!e.card().unwrap().signal_1v8());
+    }
+
+    #[test]
+    fn an_unpowered_card_times_out_and_starts_over_when_powered_again() {
+        let mut e = host();
+        enumerate(&mut e, 0x40FF_8000);
+        select(&mut e);
+        assert_eq!(
+            e.card().unwrap().state(),
+            crate::periph::sdcard::CardState::Tran
+        );
+        e.set_card_power(false);
+        wr(&mut e, INT_STATUS, 0xFFFF_FFFF);
+        cmd(&mut e, 13, 0x0001_0000, R1, 0);
+        assert_eq!(rd(&mut e, INT_STATUS), INT_ERR_CMD_TIMEOUT | INT_ERROR);
+        e.set_card_power(true);
+        assert_eq!(
+            e.card().unwrap().state(),
+            crate::periph::sdcard::CardState::Idle
+        );
     }
 
     #[test]
