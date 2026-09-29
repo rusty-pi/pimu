@@ -1581,10 +1581,26 @@ fn orderly_reboot(emu: &mut Emulator, limits: &RunLimits) -> Result<RunReport> {
     // The kernel's `mmc_rescan` on an empty slot: three power-up/power-down
     // pulses, so the last request before the notice leaves the card off.
     let rescan = (0..3).flat_map(|_| [set_gpio(CARD_POWER, 1), set_gpio(CARD_POWER, 0)]);
+    const GET_CLOCK_RATE: u32 = 0x0003_0002;
+    const SET_CLOCK_RATE: u32 = 0x0003_8002;
+    const CORE_CLOCK: u32 = 4;
+    let get_rate = || (GET_CLOCK_RATE, Some(8), vec![CORE_CLOCK, 0]);
+    let set_rate = |hz| (SET_CLOCK_RATE, Some(12), vec![CORE_CLOCK, hz, 0]);
+    // Captured on a Raspberry Pi 4B d03115 with a kprobe on
+    // `rpi_firmware_property`, over the serial console, through `reboot`.
     let shutdown = [
         notify(),
         set_gpio(CARD_POWER, 0),
         set_gpio(ACTIVITY_LED, 1),
+        get_rate(),
+        set_rate(500_000_000),
+        get_rate(),
+        get_rate(),
+        get_rate(),
+        get_rate(),
+        set_rate(200_000_000),
+        get_rate(),
+        get_rate(),
         notify(),
     ];
     for tag in rescan.chain(shutdown) {
