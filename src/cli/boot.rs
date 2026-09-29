@@ -246,7 +246,8 @@ self-update, which brings back the image's own):
               NOTIFY_REBOOT) and ask the PM watchdog for a reset, then
               boot again. The GPIO expander is off the SoC, so it keeps what
               the firmware left in it across the reset, and a card whose
-              SD_PWR_ON stays low answers nothing. Needs --until.
+              SD_PWR_ON stays low answers nothing. A reset that leaves it
+              low prints `expander: SD_PWR_ON is driven low across the reset`. Needs --until.
     --skip-signed-boot
               Set SIGNED_BOOT=0 in bootconf.txt: skip the bootloader's
               SHA-256 + RSA-2048 verify of boot.img, about half a billion
@@ -1526,7 +1527,13 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
                         print_arm_prof(prof);
                     }
                 }
-                println!("\n=== RESET (reboot {reboots}) — re-running from updated flash ===\n");
+                println!("\n=== RESET (reboot {reboots}) — re-running from updated flash ===");
+                if expander.as_ref().is_some_and(|x| !x.sd_powered()) {
+                    println!(
+                        "expander: SD_PWR_ON is driven low across the reset, the card has no power"
+                    );
+                }
+                println!();
                 continue 'boot;
             }
             println!("\n=== RESET (reboot {reboots}) — giving up after 4 reboots ===");
