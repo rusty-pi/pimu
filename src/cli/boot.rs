@@ -34,6 +34,7 @@ pimu boot — boot the machine from an EEPROM image, as a Pi 4 does, or
 run a VPU ELF
 
 USAGE:
+    pimu boot
     pimu boot --eeprom <pieeprom.bin> [<options>]
     pimu boot <file.elf> [<options>]
     pimu boot <dir> [<options>]
@@ -1317,11 +1318,10 @@ impl BootOpts {
         zero.file(&mut eeprom_pubkey, "pubkey.bin");
         zero.announce();
 
-        // A medium and nothing to boot it with: neither a firmware checkout nor a
-        // disk image is a bootloader, so fall back to the published EEPROM image.
-        let medium = sd.is_some() || emmc.is_some() || usb.is_some() || otg.is_some();
-        let medium = medium || netboot.is_some();
-        if path.is_none() && medium {
+        // Nothing to boot with: neither a firmware checkout nor a disk image is a
+        // bootloader, and a board boots without any medium too, so fall back to
+        // the published EEPROM image.
+        if path.is_none() {
             path = Some(fallback_eeprom()?);
             eeprom = true;
         }
@@ -3408,12 +3408,12 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_directory_leaves_the_missing_file_an_error() {
+    fn an_empty_directory_boots_the_published_eeprom() {
         let dir = zero_dir("empty");
-        let Err(e) = BootOpts::parse(&args(&[]), &dir) else {
-            panic!("nothing to boot, and nothing beside it")
-        };
-        assert!(e.to_string().contains("missing <file>"), "{e:#}");
+        match BootOpts::parse(&args(&[]), &dir) {
+            Ok(opts) => assert!(opts.unwrap().eeprom),
+            Err(e) => assert!(!e.to_string().contains("missing <file>"), "{e:#}"),
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
