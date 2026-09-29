@@ -1093,6 +1093,9 @@ mod tests {
         let mut mem = crate::periph::xhci::VecMem::default();
         p.mmio_write(usbcmd, Width::Word, 1 << 1, &mut mem); // HCRST
         assert_eq!(p.mmio_read(usbcmd, Width::Word), Some(0));
+        mem.write32(0x1000, 0x2000);
+        mem.write32(0x2000, 0x3000);
+        p.mmio_write(0x6_0200_0050, Width::Word, 0x1000, &mut mem); // DCBAAP
         p.mmio_write(usbcmd, Width::Word, 1, &mut mem); // Run/Stop
         assert_eq!(p.mmio_read(usbsts, Width::Word), Some(0));
         p.mmio_write(usbsts, Width::Word, 0xFFFF_FFFF, &mut mem);

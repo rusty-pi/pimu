@@ -550,7 +550,7 @@ impl Xhci {
             return;
         }
         if word_off == USBCMD {
-            self.write_usbcmd(new);
+            self.write_usbcmd(new, mem);
             return;
         }
         if word_off == IMAN {
@@ -574,7 +574,27 @@ impl Xhci {
         }
     }
 
-    fn write_usbcmd(&mut self, new: u32) {
+    fn scratchpads(&self) -> u32 {
+        let params = self.caps.word(regs::HCSPARAMS2).unwrap_or(0);
+        ((params >> 21) & 0x1F) << 5 | ((params >> 27) & 0x1F)
+    }
+
+    /// The scratchpad array the device context array's entry 0 points at
+    /// has to exist when `MaxScratchpad` asks for one; the VL805 halts
+    /// itself with a host system error otherwise.
+    fn scratchpads_provided(&self, mem: &dyn HostMem) -> bool {
+        if self.scratchpads() == 0 {
+            return true;
+        }
+        let dcbaa = self.reg64(DCBAAP_LO) & !0x3F;
+        if dcbaa == 0 {
+            return false;
+        }
+        let array = mem.read64(dcbaa) & !0x3F;
+        array != 0 && mem.read64(array) != 0
+    }
+
+    fn write_usbcmd(&mut self, new: u32, mem: &dyn HostMem) {
         if new & (USBCMD_HCRST | USBCMD_LHCRST) != 0 {
             self.reset();
             return;
@@ -582,7 +602,18 @@ impl Xhci {
         self.set_reg(USBCMD, new & !(USBCMD_HCRST | USBCMD_LHCRST));
         let run = new & USBCMD_RS != 0;
         if run && !self.running {
-            self.running = true;
+            if self.scratchpads_provided(mem) {
+                self.running = true;
+            } else {
+                self.set_reg(USBCMD, new & !USBCMD_RS);
+                self.set_reg(USBSTS, self.reg(USBSTS) | USBSTS_HSE);
+                crate::log!(
+                    self.log,
+                    Channel::Xhci,
+                    "{}USBCMD.RS with no scratchpad buffers: host system error",
+                    self.caps.tag
+                );
+            }
         } else if !run {
             self.running = false;
         }
@@ -1281,8 +1312,54 @@ mod tests {
         let mut hc = Xhci::new();
         let mut mem = VecMem::default();
         assert_eq!(hc.usbsts() & USBSTS_HCH, USBSTS_HCH);
+        provide_scratchpads(&mut hc, &mut mem);
         hc.write(USBCMD, Width::Word, USBCMD_RS, &mut mem);
         assert_eq!(hc.usbsts() & USBSTS_HCH, 0);
+    }
+
+    #[test]
+    fn vl805_reports_31_scratchpad_pages() {
+        assert_eq!(Xhci::new().scratchpads(), 31);
+    }
+
+    #[test]
+    fn running_without_scratchpads_is_a_host_system_error() {
+        let mut hc = Xhci::new();
+        let mut mem = VecMem::default();
+        hc.write(DCBAAP_LO, Width::Word, DCBAA as u32, &mut mem);
+        hc.write(USBCMD, Width::Word, USBCMD_RS, &mut mem);
+        assert_eq!(
+            hc.usbsts() & (USBSTS_HSE | USBSTS_HCH),
+            USBSTS_HSE | USBSTS_HCH
+        );
+        assert_eq!(hc.read(USBCMD, Width::Word) & USBCMD_RS, 0);
+
+        hc.write(USBSTS, Width::Word, USBSTS_HSE, &mut mem);
+        provide_scratchpads(&mut hc, &mut mem);
+        hc.write(USBCMD, Width::Word, USBCMD_RS, &mut mem);
+        assert_eq!(hc.usbsts() & (USBSTS_HSE | USBSTS_HCH), 0);
+    }
+
+    #[test]
+    fn enable_slot_gets_no_completion_event_without_scratchpads() {
+        let (mut hc, mut mem) = started_with(false);
+        let ev = command(
+            &mut hc,
+            &mut mem,
+            0,
+            0,
+            [0, 0, 0, (TRB_ENABLE_SLOT << 10) | 1],
+        );
+        assert_eq!(ev, [0; 4], "no completion event");
+    }
+
+    const SCRATCHPAD_ARRAY: u64 = 0xB000;
+    const SCRATCHPAD_PAGE: u64 = 0xC000;
+
+    fn provide_scratchpads(hc: &mut Xhci, mem: &mut VecMem) {
+        mem.write32(DCBAA, SCRATCHPAD_ARRAY as u32);
+        mem.write32(SCRATCHPAD_ARRAY, SCRATCHPAD_PAGE as u32);
+        hc.write(DCBAAP_LO, Width::Word, DCBAA as u32, mem);
     }
 
     const ERST: u64 = 0x2000;
@@ -1302,6 +1379,10 @@ mod tests {
     }
 
     fn started() -> (Xhci, VecMem) {
+        started_with(true)
+    }
+
+    fn started_with(scratchpads: bool) -> (Xhci, VecMem) {
         let mut hc = Xhci::new();
         hc.attach(1, Box::new(Hub::new()));
         let mut mem = VecMem::default();
@@ -1315,6 +1396,9 @@ mod tests {
         w(&mut hc, &mut mem, ERDP_LO, EVENT_RING as u32);
         w(&mut hc, &mut mem, ERSTBA_LO, ERST as u32);
         w(&mut hc, &mut mem, DCBAAP_LO, DCBAA as u32);
+        if scratchpads {
+            provide_scratchpads(&mut hc, &mut mem);
+        }
         w(&mut hc, &mut mem, CRCR_LO, CMD_RING as u32 | 1);
         w(&mut hc, &mut mem, USBCMD, USBCMD_RS);
         (hc, mem)
