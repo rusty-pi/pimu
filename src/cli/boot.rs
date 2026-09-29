@@ -240,8 +240,9 @@ self-update, which brings back the image's own):
               request is one-shot, so a reset inside the run boots normally.
     --orderly-reboot
               Once the run reaches --until, play what Linux's `reboot` does
-              into the mailbox (NOTIFY_REBOOT, SET_GPIO_STATE 134 <- 0 and
-              130 <- 1, NOTIFY_REBOOT) and ask the PM watchdog for a reset, then
+              into the mailbox (an mmc rescan's three SET_GPIO_STATE 134
+              pulses, NOTIFY_REBOOT, SET_GPIO_STATE 134 <- 0 and 130 <- 1,
+              NOTIFY_REBOOT) and ask the PM watchdog for a reset, then
               boot again. The GPIO expander is off the SoC, so it keeps what
               the firmware left in it across the reset, and a card whose
               SD_PWR_ON stays low answers nothing. Needs --until.
@@ -1577,12 +1578,16 @@ fn orderly_reboot(emu: &mut Emulator, limits: &RunLimits) -> Result<RunReport> {
     const ACTIVITY_LED: u32 = 130;
     let set_gpio = |gpio, state| (SET_GPIO_STATE, Some(8), vec![gpio, state]);
     let notify = || (NOTIFY_REBOOT, None, Vec::new());
-    for tag in [
+    // The kernel's `mmc_rescan` on an empty slot: three power-up/power-down
+    // pulses, so the last request before the notice leaves the card off.
+    let rescan = (0..3).flat_map(|_| [set_gpio(CARD_POWER, 1), set_gpio(CARD_POWER, 0)]);
+    let shutdown = [
         notify(),
         set_gpio(CARD_POWER, 0),
         set_gpio(ACTIVITY_LED, 1),
         notify(),
-    ] {
+    ];
+    for tag in rescan.chain(shutdown) {
         mbox_property_exchange(emu, limits, &MboxRequest::Tags(vec![tag]))?;
     }
 
