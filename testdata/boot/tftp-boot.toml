@@ -13,6 +13,7 @@ description = "pieeprom.bin network boot over TFTP from the built-in peer, throu
 
 [boot]
 eeprom = "../../firmware/pieeprom.bin"
+bootconf = ["BOOT_UART=1"]
 netboot = "../../firmware/netboot"
 boot_order = "0xf2"
 # ~40 s on a dev box; the runners are ~1.6x slower.

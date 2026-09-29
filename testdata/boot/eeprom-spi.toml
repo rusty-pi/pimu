@@ -30,6 +30,7 @@ description = "Linux with SPI0 remapped onto the bootloader EEPROM's pins, readi
 
 [boot]
 eeprom = "../../firmware/pieeprom.bin"
+bootconf = ["BOOT_UART=1"]
 sd = "../../firmware/sd-eeprom-spi.img"
 until = "/ # "
 wall_secs = 600

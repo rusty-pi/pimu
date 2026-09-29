@@ -26,6 +26,7 @@ description = "pieeprom.bin + start4.elf boot from the SD image, through to the 
 
 [boot]
 eeprom = "../../firmware/pieeprom.bin"
+bootconf = ["BOOT_UART=1"]
 # The card from `KERNEL=halt scripts/make-sd.sh firmware/sd-halt.img`: the same
 # as the Linux boot's, but its kernel8.img parks the ARM, so the run ends where
 # the firmware goes quiet after the handover.

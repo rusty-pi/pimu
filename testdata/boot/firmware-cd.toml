@@ -27,6 +27,7 @@ description = "pieeprom.bin + start4cd.elf boot from the SD image, through to th
 
 [boot]
 eeprom = "../../firmware/pieeprom.bin"
+bootconf = ["BOOT_UART=1"]
 sd = "../../firmware/sd-halt-start4cd.img"
 # The same requests as `firmware.toml`, which explains each one.
 # The model is a board as it leaves the factory, so OTP rows 56-63 - the device

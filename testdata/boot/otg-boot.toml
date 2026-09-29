@@ -20,6 +20,7 @@ description = "pieeprom.bin boot from a USB mass-storage device on the USB-C por
 
 [boot]
 eeprom = "../../firmware/pieeprom.bin"
+bootconf = ["BOOT_UART=1"]
 # The firmware boot's card, whose kernel parks the ARM.
 otg = "../../firmware/sd-halt.img"
 boot_order = "0x5"

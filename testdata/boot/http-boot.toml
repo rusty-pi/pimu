@@ -23,7 +23,7 @@ description = "pieeprom.bin network boot over plain HTTP from the built-in peer,
 eeprom = "../../firmware/pieeprom.bin"
 netboot = "../../firmware/netboot"
 boot_order = "0xf7"
-bootconf = ["HTTP_HOST=netboot.test", "HTTP_PORT=80"]
+bootconf = ["BOOT_UART=1", "HTTP_HOST=netboot.test", "HTTP_PORT=80"]
 eeprom_pubkey = "../../firmware/netboot-pubkey.bin"
 # It stops at the ARM hand-off, as b0-stepping does: what comes after is the
 # same as on an SD boot, and `firmware.toml` covers it. Without this the run

@@ -23,6 +23,7 @@ description = "The stock-config boot: Bluetooth and WiFi enabled, so Linux's con
 
 [boot]
 eeprom = "../../firmware/pieeprom.bin"
+bootconf = ["BOOT_UART=1"]
 sd = "../../firmware/sd-wireless.img"
 until = "/ # "
 wall_secs = 600

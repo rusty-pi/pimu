@@ -29,6 +29,7 @@ description = "pieeprom.bin + start4.elf handing the ARM to the RPi4 UEFI firmwa
 
 [boot]
 eeprom = "../../firmware/pieeprom.bin"
+bootconf = ["BOOT_UART=1"]
 sd = "../../firmware/sd-uefi.img"
 # UEFI prints its menu and then counts down for five seconds before booting
 # something. Nothing past the menu is part of what this pins, so the run ends

@@ -60,11 +60,11 @@ pub struct Pl011 {
     /// read of `FR` retires it, which is what a `BUSY` drain loop does.
     transmitting: bool,
     /// `PIMU_UART_STRICT_DISABLE=1`: wedge the transmitter when `UARTEN` is
-    /// taken away with a character still on the wire, as the TRM warns. Off by
-    /// default, because the stock `start4.elf` clears `UARTCR` that way during
-    /// its baud-rate change and boots a board regardless -- so the silicon rule
-    /// has a condition this does not capture yet.
-    strict_disable: bool,
+    /// taken away with a character still on the wire, or when the port and
+    /// its clock generator are out of step. Off by default, because the stock
+    /// bootloader and `start4.elf` do both and boot a board regardless -- so
+    /// the silicon rule has a condition this does not capture yet.
+    strict: bool,
 }
 
 impl Default for Pl011 {
@@ -92,7 +92,7 @@ impl Pl011 {
             clock_live: true,
             stalled: false,
             transmitting: false,
-            strict_disable: std::env::var("PIMU_UART_STRICT_DISABLE").is_ok_and(|v| v != "0"),
+            strict: std::env::var("PIMU_UART_STRICT_DISABLE").is_ok_and(|v| v != "0"),
         }
     }
 
@@ -103,7 +103,7 @@ impl Pl011 {
     /// `BUSY` stuck, and re-initialising the port does not recover it.
     pub fn clock_state(&mut self, live: bool, disturbed: bool) {
         self.clock_live = live;
-        if self.cr & CR_UARTEN != 0 && (disturbed || !live) {
+        if self.strict && self.cr & CR_UARTEN != 0 && (disturbed || !live) {
             self.stalled = true;
         }
     }
@@ -274,14 +274,14 @@ impl MmioDevice for Pl011 {
                 // `UARTEN` away while a character is still on the wire wedges
                 // the transmitter. The stock clock-change callback drains
                 // `BUSY` first for exactly this reason.
-                if self.strict_disable
+                if self.strict
                     && value & CR_UARTEN == 0
                     && self.cr & CR_UARTEN != 0
                     && self.transmitting
                 {
                     self.stalled = true;
                 }
-                if value & CR_UARTEN != 0 && !self.clock_live {
+                if self.strict && value & CR_UARTEN != 0 && !self.clock_live {
                     self.stalled = true;
                 }
                 self.cr = value;

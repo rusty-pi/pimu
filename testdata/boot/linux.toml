@@ -21,6 +21,7 @@ description = "The firmware boot, then Linux on all four A72 cores to a busybox 
 
 [boot]
 eeprom = "../../firmware/pieeprom.bin"
+bootconf = ["BOOT_UART=1"]
 sd = "../../firmware/sd.img"
 # The prompt after the last line typed below. Nothing prints without input.
 until = "/ # "

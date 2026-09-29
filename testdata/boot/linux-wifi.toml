@@ -82,6 +82,7 @@ description = "The stock-config boot with brcmfmac loaded by hand, up to the net
 
 [boot]
 eeprom = "../../firmware/pieeprom.bin"
+bootconf = ["BOOT_UART=1"]
 sd = "../../firmware/sd-brcmfmac.img"
 until = "/ # "
 wall_secs = 600
