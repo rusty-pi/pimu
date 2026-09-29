@@ -120,7 +120,8 @@ What the firmware answers today:
 | `0x0003000b` `GET_STC` | `0`, then the system timer's low word. |
 | `0x00030021` `GET_CUSTOMER_OTP` | The start and the count, then that many rows from row 36. A start of 8 or more comes back as `0x80000000`. Ask with `0x00030021:16=0.2`. |
 | `0x00030047` `GET_CLOCK_RATE_MEASURED` | `0` for clocks 3 and 4. |
-| `0x00030048` `NOTIFY_REBOOT` | Answered, with no value. |
+| `0x00030048` `NOTIFY_REBOOT` | Answered, with no value. It sets a flag, and on a 4B rev 1.5 clears bit 0 of PMIC `0x1B` register `0x05` (a read-modify-write). It does not touch the GPIO expander. |
+| `0x00038041` `SET_GPIO_STATE` | For `SD_PWR_ON` (GPIO 134) <- 0 after a `NOTIFY_REBOOT`, start4 power-cycles the card: pin low, 2 ms, `BT_ON` and `WL_ON` low, `SIO_1V8_SEL` low, 5 ms, `SD_PWR_ON` high again, all before it answers. A Raspberry Pi 4B d03115 does the same: `GET_GPIO_STATE` 134 reads 1 after the request. |
 | `0x00030064` `GET_REBOOT_FLAGS` | `0`. |
 | `0x00030066` | Not handled. |
 | `0x00050001` `GET_COMMAND_LINE` | The last 256 bytes of `/chosen/bootargs`, without the terminator. |
