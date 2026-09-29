@@ -1,7 +1,7 @@
 
 [t] RPi: BOOTSYS release VERSION:0a7ef05f DATE: 2026/08/04 TIME: 12:38:13
 [t] MFG_VER: 1
-[t] BOOTMODE: 0x00 partition 0 build-ts BUILD_TIMESTAMP=1785847093 serial 1aa2bb31 boardrev d03115 stc [n]
+[t] BOOTMODE: 0x06 partition 0 build-ts BUILD_TIMESTAMP=1785847093 serial 1aa2bb31 boardrev d03115 stc [n]
 [t] PM_RSTS 00000020
 [t] POWER_OFF_ON_HALT: 0 WAIT_FOR_POWER_BUTTON 0 power-on-reset 0
 [t] EEPROM ID 0xef3013
@@ -20,7 +20,7 @@
 
 [t] RPi: BOOTLOADER release VERSION:0a7ef05f DATE: 2026/08/04 TIME: 12:38:13
 [t] MFG_VER: 1
-[t] BOOTMODE: 0x00 partition 0 build-ts BUILD_TIMESTAMP=1785847093 serial 1aa2bb31 boardrev d03115 stc [n]
+[t] BOOTMODE: 0x06 partition 0 build-ts BUILD_TIMESTAMP=1785847093 serial 1aa2bb31 boardrev d03115 stc [n]
 [t] EEPROM ID 0xef3013
 [t] SFDP None
 [t] PCI0 init
@@ -66,6 +66,7 @@ CSD: 400e00325b590000023f7f800a400000
 [t] Read fixup4.dat bytes     5512 hnd 0x467
 [t] 0x00d03115 0x00000000 0x00003fff
 [t] MEM GPU: 76 ARM: 948 TOTAL: 1024
+[t] Firmware: f5e89631afbb7b4db1bb28971eb79d74fcc84c7d Aug 10 2026 18:21:35
 [t] Starting start4.elf @ 0xfec00200 partition 1
 [t] XHCI-STOP
 [t] xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb
@@ -142,7 +143,7 @@ MESS:[t]:0: uart: Baud rate change done...
 [t] Reserved memory: created CMA memory pool at 0x000000000ec00000, size 512 MiB
 [t] OF: reserved mem: initialized node linux,cma, compatible id shared-dma-pool
 [t] OF: reserved mem: 0x000000000ec00000..0x000000002ebfffff (524288 KiB) map reusable linux,cma
-[t] OF: reserved mem: 0x000000003ef735c0..0x000000003ef7360e (0 KiB) nomap non-reusable nvram@0
+[t] OF: reserved mem: 0x000000003ef735c0..0x000000003ef7361a (0 KiB) nomap non-reusable nvram@0
 [t] OF: reserved mem: 0x000000003ef73380..0x000000003ef7357f (0 KiB) nomap non-reusable nvram@1
 [t] NUMA: Faking a node at [mem 0x0000000000000000-0x00000001ffffffff]
 [t] Faking node 0 at [mem 0x0000000000000000-0x0000000103ffffff] (4160MB)
@@ -409,7 +410,7 @@ MESS:[t]:0: uart: Baud rate change done...
 [t] Reserved memory: created CMA memory pool at 0x000000000ec00000, size 512 MiB
 [t] OF: reserved mem: initialized node linux,cma, compatible id shared-dma-pool
 [t] OF: reserved mem: 0x000000000ec00000..0x000000002ebfffff (524288 KiB) map reusable linux,cma
-[t] OF: reserved mem: 0x000000003ef735c0..0x000000003ef7360e (0 KiB) nomap non-reusable nvram@0
+[t] OF: reserved mem: 0x000000003ef735c0..0x000000003ef7361a (0 KiB) nomap non-reusable nvram@0
 [t] OF: reserved mem: 0x000000003ef73380..0x000000003ef7357f (0 KiB) nomap non-reusable nvram@1
 [t] NUMA: Faking a node at [mem 0x0000000000000000-0x00000001ffffffff]
 [t] Faking node 0 at [mem 0x0000000000000000-0x0000000103ffffff] (4160MB)
@@ -714,9 +715,9 @@ Enter 'help' for a list of built-in commands.
 
 / # \x1b[6nM=/lib/modules/$(uname -r)/kernel
 / # \x1b[6ninsmod $M/net/rfkill/rfkill.ko
-/ # \x1b[6ninsmod $[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
 [t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
-M/net/wireless/cfg80211.ko
+[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
+/ # \x1b[6ninsmod $M/net/wireless/cfg80211.ko
 [t] cfg80211: Loading compiled-in X.509 certificates for regulatory database
 [t] cfg80211: Loading compiled-in X.509 certificates for regulatory database
 [t] Loaded X.509 cert 'benh@debian.org: 577e021cb980e0e820821ba7b54b4961b8b4fadf'
@@ -747,10 +748,10 @@ p 9; ip link; dmesg | tail -40
 [t] hub 1-1:1.0: 4 ports detected
 [t] brcmfmac: brcmf_fw_alloc_request: using brcm/brcmfmac43455-sdio for chip BCM4345/6
 [t] brcmfmac: brcmf_fw_alloc_request: using brcm/brcmfmac43455-sdio for chip BCM4345/6
-[t] brcmfmac mmc1:0001:1: Direct firmware load for brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.bin failed with error -2
-[t] brcmfmac mmc1:0001:1: Direct firmware load for brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.bin failed with error -2
 [t] usbcore: registered new interface driver brcmfmac
 [t] usbcore: registered new interface driver brcmfmac
+[t] brcmfmac mmc1:0001:1: Direct firmware load for brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.bin failed with error -2
+[t] brcmfmac mmc1:0001:1: Direct firmware load for brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.bin failed with error -2
 [t] brcmfmac: brcmf_c_process_txcap_blob: no txcap_blob available (err=-2)
 [t] brcmfmac: brcmf_c_process_txcap_blob: no txcap_blob available (err=-2)
 [t] brcmfmac: brcmf_c_preinit_dcmds: Firmware: BCM4345/6 pimu model firmware (no radio) version 0
@@ -797,8 +798,8 @@ p 9; ip link; dmesg | tail -40
 [t] hub 1-1:1.0: 4 ports detected
 [t] brcmfmac: F1 signature read @0x18000000=0x10064345
 [t] brcmfmac: brcmf_fw_alloc_request: using brcm/brcmfmac43455-sdio for chip BCM4345/6
-[t] brcmfmac mmc1:0001:1: Direct firmware load for brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.bin failed with error -2
 [t] usbcore: registered new interface driver brcmfmac
+[t] brcmfmac mmc1:0001:1: Direct firmware load for brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.bin failed with error -2
 [t] brcmfmac: brcmf_c_process_txcap_blob: no txcap_blob available (err=-2)
 [t] brcmfmac: brcmf_c_preinit_dcmds: Firmware: BCM4345/6 pimu model firmware (no radio) version 0
 / # \x1b[6nip link set wlan0 up; sleep 2; ip link show wlan0
@@ -808,7 +809,7 @@ p 9; ip link; dmesg | tail -40
     link/ether 02:00:5e:00:57:01 brd ff:ff:ff:ff:ff:ff
 / # \x1b[6niw dev wlan0 scan
 BSS 02:00:5e:00:53:04(on wlan0)
-	last seen: 13.246s [boottime]
+	last seen: 13.206s [boottime]
 	TSF: 0 usec (0d, 00:00:00)
 	freq: 2412.0
 	beacon interval: 100 TUs
@@ -819,4 +820,4 @@ BSS 02:00:5e:00:53:04(on wlan0)
 	Supported rates: 1.0* 2.0* 5.5* 11.0* 6.0 9.0 12.0 18.0 
 	DS Parameter set: channel 1
 	Extended supported rates: 24.0 36.0 48.0 54.0 
-/ # 
+/ # \x1b

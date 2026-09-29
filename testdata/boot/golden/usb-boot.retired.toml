@@ -1,7 +1,7 @@
 # Instructions each core retired in this boot: vpu0 and vpu1 on the
 # VideoCore, vpu1 only once the firmware woke it, then arm0.. once the ARM
 # is released. `boot-check <scenario> --update` rewrites this file.
-vpu0 = 410_700_139
+vpu0 = 423_240_666
 arm0 = 76
 arm1 = 180_074
 arm2 = 180_074

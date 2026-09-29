@@ -1,7 +1,7 @@
 
 [t] RPi: BOOTSYS release VERSION:0a7ef05f DATE: 2026/08/04 TIME: 12:38:13
 [t] MFG_VER: 1
-[t] BOOTMODE: 0x00 partition 0 build-ts BUILD_TIMESTAMP=1785847093 serial 1aa2bb31 boardrev d03115 stc [n]
+[t] BOOTMODE: 0x06 partition 0 build-ts BUILD_TIMESTAMP=1785847093 serial 1aa2bb31 boardrev d03115 stc [n]
 [t] PM_RSTS 00000020
 [t] POWER_OFF_ON_HALT: 0 WAIT_FOR_POWER_BUTTON 0 power-on-reset 0
 [t] EEPROM ID 0xef3013
@@ -20,7 +20,7 @@
 
 [t] RPi: BOOTLOADER release VERSION:0a7ef05f DATE: 2026/08/04 TIME: 12:38:13
 [t] MFG_VER: 1
-[t] BOOTMODE: 0x00 partition 0 build-ts BUILD_TIMESTAMP=1785847093 serial 1aa2bb31 boardrev d03115 stc [n]
+[t] BOOTMODE: 0x06 partition 0 build-ts BUILD_TIMESTAMP=1785847093 serial 1aa2bb31 boardrev d03115 stc [n]
 [t] EEPROM ID 0xef3013
 [t] SFDP None
 [t] PCI0 init
@@ -52,15 +52,15 @@
 [t] YI_ADDR 192.0.2.100
 [t] SI_ADDR 192.0.2.1
 [t] OPTIONS:-
-	op: 53 len:   1 DHCP recv OFFER (2) expect OFFER  2.80 
-	op: 54 len:   4 192.0.2.1  2.80 
-	op: 51 len:   4   2.80 
-	op:  1 len:   4 255.255.255.0  2.80 
-	op:  3 len:   4 192.0.2.1  2.80 
-	op:  6 len:   4 192.0.2.1  2.80 
-	op: 66 len:   9 192.0.2.1  2.08 [66]: 192.0.2.1
+	op: 53 len:   1 DHCP recv OFFER (2) expect OFFER  2.81 
+	op: 54 len:   4 192.0.2.1  2.81 
+	op: 51 len:   4   2.81 
+	op:  1 len:   4 255.255.255.0  2.81 
+	op:  3 len:   4 192.0.2.1  2.81 
+	op:  6 len:   4 192.0.2.1  2.81 
+	op: 66 len:   9 192.0.2.1  2.16 [66]: 192.0.2.1
 [t] 
-	op: 60 len:   9   2.80 
+	op: 60 len:   9   2.81 
 	op: 43 len:  32 
 		PXE op:  6 len:   1 
 		PXE op: 10 len:   4 
@@ -74,13 +74,13 @@
 [t] YI_ADDR 192.0.2.100
 [t] SI_ADDR 192.0.2.1
 [t] OPTIONS:-
-	op: 53 len:   1 DHCP recv ACK (5) expect ACK  2.80 
+	op: 53 len:   1 DHCP recv ACK (5) expect ACK  2.81 
 	op: 54 len:   4 192.0.2.1  2.81 
 	op: 51 len:   4   2.81 
 	op:  1 len:   4 255.255.255.0  2.81 
 	op:  3 len:   4 192.0.2.1  2.81 
 	op:  6 len:   4 192.0.2.1  2.81 
-	op: 66 len:   9 192.0.2.1  2.10 [66]: 192.0.2.1
+	op: 66 len:   9 192.0.2.1  2.18 [66]: 192.0.2.1
 [t] 
 	op: 60 len:   9   2.81 
 	op: 43 len:  32 
@@ -146,6 +146,7 @@
 [t] Read fixup4.dat bytes     5512 hnd 0x0
 [t] 0x00d03115 0x00000000 0x00003fff
 [t] MEM GPU: 76 ARM: 948 TOTAL: 1024
+[t] Firmware: f5e89631afbb7b4db1bb28971eb79d74fcc84c7d Aug 10 2026 18:21:35
 [t] Starting start4.elf @ 0xfec00200 partition -1
 [t] Stopping network
 [t] RX: 46 IP: 0 IPV4: 45 MAC: 45 UDP: 45 UDP RECV: 45 IP_CSUM_ERR: 0 UDP_CSUM_ERR: 0

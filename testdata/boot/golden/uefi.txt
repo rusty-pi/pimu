@@ -1,7 +1,7 @@
 
 [t] RPi: BOOTSYS release VERSION:0a7ef05f DATE: 2026/08/04 TIME: 12:38:13
 [t] MFG_VER: 1
-[t] BOOTMODE: 0x00 partition 0 build-ts BUILD_TIMESTAMP=1785847093 serial 1aa2bb31 boardrev d03115 stc [n]
+[t] BOOTMODE: 0x06 partition 0 build-ts BUILD_TIMESTAMP=1785847093 serial 1aa2bb31 boardrev d03115 stc [n]
 [t] PM_RSTS 00000020
 [t] POWER_OFF_ON_HALT: 0 WAIT_FOR_POWER_BUTTON 0 power-on-reset 0
 [t] EEPROM ID 0xef3013
@@ -20,7 +20,7 @@
 
 [t] RPi: BOOTLOADER release VERSION:0a7ef05f DATE: 2026/08/04 TIME: 12:38:13
 [t] MFG_VER: 1
-[t] BOOTMODE: 0x00 partition 0 build-ts BUILD_TIMESTAMP=1785847093 serial 1aa2bb31 boardrev d03115 stc [n]
+[t] BOOTMODE: 0x06 partition 0 build-ts BUILD_TIMESTAMP=1785847093 serial 1aa2bb31 boardrev d03115 stc [n]
 [t] EEPROM ID 0xef3013
 [t] SFDP None
 [t] PCI0 init
@@ -66,6 +66,7 @@ CSD: 400e00325b59000001ff7f800a400000
 [t] Read fixup4.dat bytes     5512 hnd 0xc07
 [t] 0x00d03115 0x00000000 0x00003fff
 [t] MEM GPU: 76 ARM: 948 TOTAL: 1024
+[t] Firmware: f5e89631afbb7b4db1bb28971eb79d74fcc84c7d Aug 10 2026 18:21:35
 [t] Starting start4.elf @ 0xfec00200 partition 1
 [t] XHCI-STOP
 [t] xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb
