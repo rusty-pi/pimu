@@ -228,7 +228,8 @@ self-update, which brings back the image's own):
     --boot-order <hex>
               Add a BOOT_ORDER=<hex> line to bootconf.txt. Without one the
               bootloader uses its built-in 0xf4: SD card, then restart, and
-              never USB.
+              never USB — except with --usb, which defaults to 0xf41: SD
+              card, then the stick.
     --bootconf <KEY=VALUE>
               Add any other line to bootconf.txt, e.g. HTTP_HOST=<host> for
               HTTP boot. Repeatable; a later line wins over an earlier one with
@@ -1714,6 +1715,10 @@ fn open_usb_disk(
 
 /// The `bootconf.txt` edits the options ask for. Re-applied after every
 /// self-update reset, which brings back the image's own settings.
+/// SD card, then the USB stick, then restart: what `--usb` boots with when
+/// nothing else says how, since the bootloader's own order never tries USB.
+const USB_BOOT_ORDER: &str = "0xf41";
+
 struct FlashEdits {
     eeprom: bool,
     skip_signed_boot: bool,
@@ -1723,9 +1728,16 @@ struct FlashEdits {
 
 impl FlashEdits {
     fn new(opts: &BootOpts) -> Result<Self> {
+        let ordered = opts.boot_order.is_some()
+            || opts
+                .bootconf
+                .iter()
+                .any(|l| l.trim_start().starts_with("BOOT_ORDER="));
+        let usb_default = (opts.usb.is_some() && !ordered).then(|| USB_BOOT_ORDER.to_string());
         let conf_lines = opts
             .boot_order
             .iter()
+            .chain(usb_default.iter())
             .map(|o| format!("BOOT_ORDER={o}"))
             .chain(opts.bootconf.iter().cloned())
             .collect();

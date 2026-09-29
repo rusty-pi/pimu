@@ -363,6 +363,10 @@ pub struct Xhci {
     cmd_ptr: u64,
     cmd_ccs: bool,
     running: bool,
+    /// The controller has run once with its scratchpad pages provided. What
+    /// start4 does after taking the controller over shows that neither `HCRST`
+    /// nor `PERST#` makes it ask again.
+    scratchpads_ready: bool,
     pub log: Log,
     now_us: u64,
     /// Completion events waiting for their due time: on silicon an event lands
@@ -402,6 +406,7 @@ impl Xhci {
             cmd_ptr: 0,
             cmd_ccs: true,
             running: false,
+            scratchpads_ready: false,
             log: Log::default(),
             now_us: 0,
             deferred: std::collections::VecDeque::new(),
@@ -583,7 +588,7 @@ impl Xhci {
     /// has to exist when `MaxScratchpad` asks for one; the VL805 halts
     /// itself with a host system error otherwise.
     fn scratchpads_provided(&self, mem: &dyn HostMem) -> bool {
-        if self.scratchpads() == 0 {
+        if self.scratchpads() == 0 || self.scratchpads_ready {
             return true;
         }
         let dcbaa = self.reg64(DCBAAP_LO) & !0x3F;
@@ -603,6 +608,7 @@ impl Xhci {
         let run = new & USBCMD_RS != 0;
         if run && !self.running {
             if self.scratchpads_provided(mem) {
+                self.scratchpads_ready = true;
                 self.running = true;
             } else {
                 self.set_reg(USBCMD, new & !USBCMD_RS);
@@ -1338,6 +1344,15 @@ mod tests {
         provide_scratchpads(&mut hc, &mut mem);
         hc.write(USBCMD, Width::Word, USBCMD_RS, &mut mem);
         assert_eq!(hc.usbsts() & (USBSTS_HSE | USBSTS_HCH), 0);
+    }
+
+    #[test]
+    fn a_reset_keeps_the_scratchpads_once_provided() {
+        let (mut hc, mut mem) = started();
+        hc.write(USBCMD, Width::Word, USBCMD_HCRST, &mut mem);
+        hc.write(DCBAAP_LO, Width::Word, 0, &mut mem);
+        hc.write(USBCMD, Width::Word, USBCMD_RS, &mut mem);
+        assert_eq!(hc.usbsts() & USBSTS_HSE, 0);
     }
 
     #[test]
