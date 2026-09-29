@@ -5070,3 +5070,61 @@ fn an_addend_on_a_dash_destination_changes_nothing() {
         assert_eq!(&got, want, "row {row}");
     }
 }
+
+// SR carries N/Z/C/V in its low nibble: `mov rX, sr` reads the live flags and
+// `mov sr, rX` writes them (Raspberry Pi 4B d03115, `vpu-probe/probes/psr` and
+// the flags-restore probe — `cmp` equal reads `...8`, negative `...6`).
+const CMP_R2_R2: u16 = 0x4A22; // Z=1, N=0
+const CMP_R4_R2: u16 = 0x4A24; // r4 - r2
+const MOV_R2_1: u16 = 0x6012;
+const MOV_R4_0: u16 = 0x6004;
+const MOV_R5_8: u16 = 0x6085;
+// 32-bit forms, low halfword first.
+const MOV_R3_SR: [u16; 2] = [0xc003, 0x071e];
+const MOV_SR_R5: [u16; 2] = [0xc01e, 0x0705];
+
+#[test]
+fn sr_read_reflects_live_condition_flags() {
+    let mut m = machine();
+    let mut v = Vpu::new(CODE);
+    v.regs.set(25, STACK_TOP);
+    load_code(&mut m, CODE, &[CMP_R2_R2, MOV_R3_SR[0], MOV_R3_SR[1]]);
+    step(&mut v, &mut m); // cmp r2,r2 -> Z
+    step(&mut v, &mut m); // mov r3,sr
+    let sr = v.regs.get(3);
+    assert_eq!(sr & 0xF, 0x8, "equal compare reads Z in the SR low nibble");
+    assert_eq!(
+        (sr >> 30) & 1,
+        1,
+        "the interrupt-enable bit above the nibble is kept"
+    );
+}
+
+#[test]
+fn mov_sr_writes_the_condition_flags() {
+    let mut m = machine();
+    let mut v = Vpu::new(CODE);
+    v.regs.set(25, STACK_TOP);
+    load_code(
+        &mut m,
+        CODE,
+        &[
+            MOV_R2_1,
+            MOV_R4_0,
+            CMP_R4_R2,
+            MOV_R5_8,
+            MOV_SR_R5[0],
+            MOV_SR_R5[1],
+        ],
+    );
+    step(&mut v, &mut m); // r2 = 1
+    step(&mut v, &mut m); // r4 = 0
+    step(&mut v, &mut m); // cmp r4,r2 -> N, not Z
+    assert!(v.regs.flags.n && !v.regs.flags.z, "0 - 1 is negative");
+    step(&mut v, &mut m); // r5 = 8 (Z bit in the SR nibble)
+    step(&mut v, &mut m); // mov sr,r5
+    assert!(
+        v.regs.flags.z && !v.regs.flags.n,
+        "mov sr loaded Z from the nibble"
+    );
+}

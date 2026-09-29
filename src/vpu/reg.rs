@@ -13,6 +13,11 @@ pub const GP: usize = 24;
 pub const SP: usize = 25;
 /// Link register. `bl`/`jl` write the return address here.
 pub const LR: usize = 26;
+/// Status register. `mov`ing to or from `r30` reads or writes SR: the low
+/// nibble is N/Z/C/V (measured on a 4B d03115, `vpu-probe/`), and the upper
+/// bits carry the interrupt-enable / mode flags. Reading `r30` reflects the
+/// live condition flags; writing it updates them.
+pub const SR: usize = 30;
 
 /// Condition codes, as encoded in the 4-bit `cccc` field of conditional
 /// instructions.
@@ -119,6 +124,22 @@ impl Flags {
             F => false,
         }
     }
+
+    /// Pack N/Z/C/V into the SR low nibble: `V`, `C`, `N`, `Z` from bit 0 up
+    /// (measured on a 4B d03115 — `cmp` equal reads `...8`, negative `...6`).
+    pub fn to_sr_nibble(self) -> u32 {
+        (self.v as u32) | ((self.c as u32) << 1) | ((self.n as u32) << 2) | ((self.z as u32) << 3)
+    }
+
+    /// Inverse of [`Flags::to_sr_nibble`].
+    pub fn from_sr_nibble(sr: u32) -> Flags {
+        Flags {
+            v: sr & 0b0001 != 0,
+            c: sr & 0b0010 != 0,
+            n: sr & 0b0100 != 0,
+            z: sr & 0b1000 != 0,
+        }
+    }
 }
 
 /// The scalar register file plus PC and flags.
@@ -147,12 +168,24 @@ impl Default for Regs {
 impl Regs {
     #[inline]
     pub fn get(&self, i: usize) -> u32 {
-        self.r[i & 31]
+        let i = i & 31;
+        if i == SR {
+            (self.r[SR] & !0xF) | self.flags.to_sr_nibble()
+        } else {
+            self.r[i]
+        }
     }
 
     #[inline]
     pub fn set(&mut self, i: usize, v: u32) {
-        self.r[i & 31] = v;
+        let i = i & 31;
+        self.r[i] = v;
+        if i == SR {
+            // Writing SR (`mov sr, rX`) loads the condition flags from the low
+            // nibble, the way silicon does; `di`/`ei` and the exception path
+            // pass the live nibble straight through, so this is a no-op there.
+            self.flags = Flags::from_sr_nibble(v);
+        }
     }
 
     #[inline]
