@@ -303,6 +303,71 @@ Two things are known to wedge it, both found the hard way:
   exactly what `MAX` did over every vector tried. A lane predicate applies to
   the aggregate as well.
 
+## Exception entry and the interrupt controller
+
+The rest of the probes ask how the core takes an *interrupt*, not what an
+instruction computes. They run the same way — a blob through `EXECUTE_CODE`,
+`vpuprobe5.py` — but with two wrinkles the ISA probes do not have:
+
+- `EXECUTE_CODE` runs on core 0 in a **non-supervisor** context (`SR =
+  0x40000008`), and a write to `IC0_VADDR` (`0x7e002030`) from there is
+  **silently dropped** — even with `SR` bit 29 (supervisor) set. So you cannot
+  install your own vector table. What works is to **redirect one entry of the
+  firmware's own table**: on the firmware these ran under, the runtime table is
+  at `0xfec01e00` (entry `n` at `+ n*4`), and source 71 (JPEG) is unused, so its
+  entry at `0xfec01f1c` can point at a small handler and be put back after.
+  Source 70 (`0xfec01f18`) is the second unused one. Force a source with
+  `IRQ_PENDING_BITS_SET` (`+0x48`), clear it with `+0x50`.
+- These delivery probes return with a mailbox `EINVAL` on the way out but the
+  firmware stays alive; `vpuprobe5.py` prints the page before that. Entering
+  supervisor mode with a software `mov sr` while sharing the firmware's own
+  supervisor stack wedged the mailbox once — the `irqnest` probe reaches
+  supervisor mode by **nesting** instead (an `ei` inside a handler), which does
+  not.
+
+| probe | question it answers |
+|---|---|
+| `irqread.s` | read-only: `SR` on entry, whether `sp`/`r28` alias, the live `IRQ_PRIO` words, and that `VBASE` reads are undecoded |
+| `irqsr.s` | what `mov sr` changes (flags, IE, the supervisor bit) and whether an `sr` read shows live flags |
+| `irqbank.s` | where the core pushes on interrupt entry **from non-supervisor mode**, and what it leaves in `r28` |
+| `irqflags.s` | whether the pushed `SR` low nibble is NZCV and whether `rti` restores the flags (with the XOR-`0xF` flip) |
+| `irqswitch.s` | leaving a handler through a frame planted on another stack (`mov sp, <frame>; rti`) |
+| `irqescape.s` | leaving a handler with no `rti`, an unmatched `rti` from thread context, and the delivery latch after each |
+| `irqnest.s` | nested delivery, and where the core pushes on entry **from supervisor mode** (own stack) |
+| `irquser.s` | entering user mode and getting back, an interrupt taken in user mode, and whether `sr` is writable there |
+
+### What they found (Raspberry Pi 4B d03115, firmware f5e89631)
+
+- **`sp` is banked by mode.** In non-supervisor mode `sp` (r25) and `r28`
+  **alias** — writing one changes the other. On interrupt entry **from
+  non-supervisor mode** the core switches to a separate supervisor stack
+  (`0x3ee31e18`, the firmware's), leaving the interrupted `sp` in `r28`, and the
+  frame lands on the supervisor stack. **From supervisor mode there is no
+  bank** — the handler pushes onto the current `sp` (measured by nesting).
+  **From user mode** it banks to the supervisor stack too, and user mode has its
+  own `sp` bank.
+- **The frame is two words**: `[sp]` = SR, `[sp+4]` = PC. The pushed SR carries
+  **NZCV in its low nibble** (`V`, `C`, `N`, `Z` from bit 0): a `cmp` equal reads
+  `...8`, negative `...6`. **`rti` restores the flags** — a handler that clobbers
+  NZCV before `rti` still returns to the right flags, and XOR-flipping the pushed
+  nibble with `0xF` inverts all four.
+- **`mov sr`** changes the interrupt-enable bit (30), the supervisor bit (29) and
+  the NZCV flags (low nibble); a plain `sr` read reflects **live** NZCV. From
+  **user** mode a `mov sr` does not change the effective privilege — the readback
+  returns the written value, but the SR the next `swi` pushes is still the user
+  SR.
+- **A handler can leave abnormally.** Leaving without `rti`, and an unmatched
+  `rti` from thread context, both leave delivery working afterwards; the delivery
+  latch (`IC +0x04`) reads 0 outside a handler. A `mov sp, <other frame>; rti`
+  arrives at the planted PC with the planted SR.
+- **Nested delivery works** — a source forced inside an open handler is taken.
+
+The `mov sr` flags behaviour and the pushed-SR nibble are pinned in the model by
+`tests/vpu_isa.rs` (`sr_read_reflects_live_condition_flags`,
+`mov_sr_writes_the_condition_flags`). The `sp` banking and the `sp`/`r28` alias
+are **not** modelled: the model only ever runs the core in supervisor mode,
+where there is no bank, so the current no-bank behaviour is already right for it.
+
 ## Still open
 
 The **`indexwritem` whose index comes from a slot** the scatter decode does
