@@ -36,7 +36,7 @@ line = "Boot mode: BCM-USB-MSD (05)"
 
 [[milestone]]
 why = "The bootloader reads the capability registers of the block at 0x7E9C0000 and has to find a controller with one root port: on the catch-all stub it read zeroes and printed `USB xHC init failed`."
-line = "xHC0 ports 1 slots 32 intrs 1"
+line = "xHC0 ports 1 slots 64 intrs 1"
 
 [[milestone]]
 why = "The stick enumerates on the one root port, at high speed: 512-byte bulk endpoints, not the SuperSpeed 1024."
@@ -64,7 +64,7 @@ line = ["MESS:", "Loaded 'kernel8.img'"]
 
 [[milestone]]
 why = "start4 stops the controller through its non-PCIe path (`bfs_xhci_stop`), which reads the same capability values back."
-line = ["MESS:", "xHC0 ver: 256 HCS: 01000120 00000031 00000000 HCC: 00280029"]
+line = ["MESS:", "xHC0 ver: 272 HCS: 01000140 0c0000f1 07ff000a HCC: 0220fe65"]
 
 [[milestone]]
 why = "The goal: the VPU hands the board over to the ARM with the boot medium on the USB-C port."

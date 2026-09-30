@@ -41,8 +41,8 @@
 [t] xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb
 [t] USBSTS 18
 [t] XHCI-STOP
-[t] xHC0 ver: 256 HCS: 01000120 00000031 00000000 HCC: 00280029
-[t] xHC0 ports 1 slots 32 intrs 1
+[t] xHC0 ver: 272 HCS: 01000140 0c0000f1 07ff000a HCC: 0220fe65
+[t] xHC0 ports 1 slots 64 intrs 1
 [t] USB2[1] 400202e1 connected
 [t] USB2 root HUB port 1 init
 [t] DEV [01:00] 2.00 000000:01 class 0 VID 090c PID 1000
@@ -136,7 +136,7 @@ MESS:[t]:0: uart: Baud rate change done...
 MESS:[t]:0: uart: Baud rate change done...
 MESS:[t]:0: bfs_xhci_stop
 MESS:[t]:0: XHCI-STOP
-MESS:[t]:0: xHC0 ver: 256 HCS: 01000120 00000031 00000000 HCC: 00280029
+MESS:[t]:0: xHC0 ver: 272 HCS: 01000140 0c0000f1 07ff000a HCC: 0220fe65
 MESS:[t]:0: USBSTS 18
 MESS:[t]:0: PCI0 reset
 MESS:[t]:0: Watchdog stopped
