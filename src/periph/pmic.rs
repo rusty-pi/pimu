@@ -142,10 +142,13 @@ impl PmicRegs {
         PmicRegs::new(
             ADDR_RAILS,
             RAILS_SETTLED,
-            &[(
-                pmic_rails::SETPOINT_SDRAM as u8,
-                pmic_rails::SETPOINT_SDRAM_RESET as u8,
-            )],
+            &[
+                (pmic_rails::REG_05 as u8, pmic_rails::REG_05_RESET as u8),
+                (
+                    pmic_rails::SETPOINT_SDRAM as u8,
+                    pmic_rails::SETPOINT_SDRAM_RESET as u8,
+                ),
+            ],
         )
     }
 

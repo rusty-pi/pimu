@@ -51,7 +51,7 @@ Sources:
 
 ## `REG_05`
 
-Offset `0x005` · access `rw` · 8 bits
+Offset `0x005` · access `rw` · 8 bits · reset `0x1E`
 
 start4 reads it once more after its init sweep and sets bit 0 of what it read, and writes 1 to register 4. The read is not spare: a running d03115 holds `0x1E` here, and writing a bare `1` clears the four set bits and stops the board dead. The bootloader's power-off (`POWER_OFF_ON_HALT=1` with `WAKE_ON_GPIO=0`, after Linux powers the board off) writes `0x3F` here, after its ten LED blinks, and then sleeps for good: this is what switches a 0x1B board off. So the register gates the rails, one bit each; which bit is which is not known.
 
