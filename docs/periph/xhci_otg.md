@@ -7,7 +7,7 @@
 - Size: `0x100000`
 - Interrupts: GIC id 208 (`GIC_SPI 176`)
 
-One USB2 root port, and the same ring engine as the xHCI behind the VL805 (`src/periph/xhci.rs`), so the register layout is the standard one and only the capability values differ: one port, one interrupter, no streams and no scratchpad buffers. Its DMA reaches memory by CPU-physical address — `/scb dma-ranges` is the identity over 16 GB — and those addresses are 64 bits wide: the firmware builds its rings in the low gigabyte, Linux wherever it allocated them, above 4 GB on a board with that much DRAM. `--otg <img>` plugs a mass-storage device into the port; with nothing plugged in the port reads empty and powered, as the other root ports do. The DWC2 core at `0x7E980000` (`specs/dwc2.toml`) is the *other* controller on the same socket: the two are alternatives, and `otg_mode` picks between them.
+One USB2 root port, and the same ring engine as the xHCI behind the VL805 (`src/periph/xhci.rs`), so the register layout is the standard one and only the capability values differ: one port, one interrupter, 64 slots, no streams and one scratchpad buffer, with the doorbells at `DBOFF` `0x480` and the runtime registers at `RTSOFF` `0x440` rather than the VL805's `0x100` and `0x200`. Its DMA reaches memory by CPU-physical address — `/scb dma-ranges` is the identity over 16 GB — and those addresses are 64 bits wide: the firmware builds its rings in the low gigabyte, Linux wherever it allocated them, above 4 GB on a board with that much DRAM. `--otg <img>` plugs a mass-storage device into the port; with nothing plugged in the port reads empty and powered, as the other root ports do. The DWC2 core at `0x7E980000` (`specs/dwc2.toml`) is the *other* controller on the same socket: the two are alternatives, and `otg_mode` picks between them.
 
 Sources:
 
@@ -27,15 +27,15 @@ Level-triggered, so the line follows interrupter 0's `IMAN.IP` (GIC id 208 — L
 
 | Offset | Name | Access | Width | Sources |
 |---|---|---|---|---|
-| `0x000` | [`CAPLENGTH`](#caplength) | r | 8 | 1, best medium |
-| `0x002` | [`HCIVERSION`](#hciversion) | r | 16 | 1, best medium |
-| `0x004` | [`HCSPARAMS1`](#hcsparams1) | r | 32 | 1, best medium |
-| `0x008` | [`HCSPARAMS2`](#hcsparams2) | r | 32 | 1, best medium |
-| `0x00C` | [`HCSPARAMS3`](#hcsparams3) | r | 32 | 1, best high |
-| `0x010` | [`HCCPARAMS1`](#hccparams1) | r | 32 | 1, best medium |
-| `0x014` | [`DBOFF`](#dboff) | r | 32 | 1, best medium |
-| `0x018` | [`RTSOFF`](#rtsoff) | r | 32 | 1, best medium |
-| `0x01C` | [`HCCPARAMS2`](#hccparams2) | r | 32 | 1, best high |
+| `0x000` | [`CAPLENGTH`](#caplength) | r | 8 | 1, best high |
+| `0x002` | [`HCIVERSION`](#hciversion) | r | 16 | 1, best high |
+| `0x004` | [`HCSPARAMS1`](#hcsparams1) | r | 32 | 1, best high |
+| `0x008` | [`HCSPARAMS2`](#hcsparams2) | r | 32 | 1, best high |
+| `0x00C` | [`HCSPARAMS3`](#hcsparams3) | r | 32 | 2, best high |
+| `0x010` | [`HCCPARAMS1`](#hccparams1) | r | 32 | 1, best high |
+| `0x014` | [`DBOFF`](#dboff) | r | 32 | 1, best high |
+| `0x018` | [`RTSOFF`](#rtsoff) | r | 32 | 1, best high |
+| `0x01C` | [`HCCPARAMS2`](#hccparams2) | r | 32 | 2, best high |
 | `0x020` | [`USBCMD`](#usbcmd) | rw | 32 | 1, best high |
 | `0x024` | [`USBSTS`](#usbsts) | rw | 32 | 1, best high |
 | `0x028` | [`PAGESIZE`](#pagesize) | r | 32 | 1, best high |
@@ -45,19 +45,19 @@ Level-triggered, so the line follows interrupter 0's `IMAN.IP` (GIC id 208 — L
 | `0x050` | [`DCBAAP_LO`](#dcbaap_lo) | rw | 32 | 1, best high |
 | `0x054` | [`DCBAAP_HI`](#dcbaap_hi) | rw | 32 | 1, best high |
 | `0x058` | [`CONFIG`](#config) | rw | 32 | 1, best high |
-| `0x0A0` | [`USBLEGSUP`](#usblegsup) | r | 32 | 1, best high |
-| `0x0B0` | [`SUPPORTED_USB2`](#supported_usb2) | r | 32 | 1, best high |
-| `0x0B4` | [`SUPPORTED_USB2_NAME`](#supported_usb2_name) | r | 32 | 1, best high |
-| `0x0B8` | [`SUPPORTED_USB2_PORTS`](#supported_usb2_ports) | r | 32 | 1, best high |
-| `0x100`–`0x180` (33 × 0x4) | [`DOORBELL`](#doorbell) | rw | 32 | 1, best high |
-| `0x200` | [`MFINDEX`](#mfindex) | r | 32 | 1, best high |
-| `0x220` | [`IMAN`](#iman) | rw | 32 | 1, best high |
-| `0x224` | [`IMOD`](#imod) | rw | 32 | 1, best high |
-| `0x228` | [`ERSTSZ`](#erstsz) | rw | 32 | 1, best high |
-| `0x230` | [`ERSTBA_LO`](#erstba_lo) | rw | 32 | 1, best high |
-| `0x234` | [`ERSTBA_HI`](#erstba_hi) | rw | 32 | 1, best high |
-| `0x238` | [`ERDP_LO`](#erdp_lo) | rw | 32 | 1, best high |
-| `0x23C` | [`ERDP_HI`](#erdp_hi) | rw | 32 | 1, best high |
+| `0x880` | [`USBLEGSUP`](#usblegsup) | r | 32 | 2, best high |
+| `0x890` | [`SUPPORTED_USB2`](#supported_usb2) | r | 32 | 2, best high |
+| `0x894` | [`SUPPORTED_USB2_NAME`](#supported_usb2_name) | r | 32 | 2, best high |
+| `0x898` | [`SUPPORTED_USB2_PORTS`](#supported_usb2_ports) | r | 32 | 2, best high |
+| `0x480`–`0x580` (65 × 0x4) | [`DOORBELL`](#doorbell) | rw | 32 | 2, best high |
+| `0x440` | [`MFINDEX`](#mfindex) | r | 32 | 2, best high |
+| `0x460` | [`IMAN`](#iman) | rw | 32 | 2, best high |
+| `0x464` | [`IMOD`](#imod) | rw | 32 | 2, best high |
+| `0x468` | [`ERSTSZ`](#erstsz) | rw | 32 | 2, best high |
+| `0x470` | [`ERSTBA_LO`](#erstba_lo) | rw | 32 | 2, best high |
+| `0x474` | [`ERSTBA_HI`](#erstba_hi) | rw | 32 | 2, best high |
+| `0x478` | [`ERDP_LO`](#erdp_lo) | rw | 32 | 2, best high |
+| `0x47C` | [`ERDP_HI`](#erdp_hi) | rw | 32 | 2, best high |
 | `0x420` | [`PORTSC`](#portsc) | rw | 32 | 2, best high |
 | `0x424` | [`PORTPMSC`](#portpmsc) | rw | 32 | 1, best high |
 | `0x428` | [`PORTLI`](#portli) | r | 32 | 1, best high |
@@ -71,87 +71,89 @@ Where the operational registers start.
 
 Sources:
 
-- inferred (medium): the standard layout, the same one the VL805's controller uses (`specs/xhci.toml`); the model shares one ring engine between the two, and a driver finds the operational registers through this value whatever it is
+- measured (high): Raspberry Pi 4B d03115, 32-bit `/dev/mem` read of `0xFE9C0000` with the pinned `start4.elf` running and `otg_mode=1` set, so the controller is powered: word `+0x00` reads `0x01100020`, `CAPLENGTH` `0x20` and `HCIVERSION` `0x0110`
 
 ## `HCIVERSION`
 
-Offset `0x002` · access `r` · 16 bits · reset `0x100`
+Offset `0x002` · access `r` · 16 bits · reset `0x110`
 
-xHCI 1.0, the version the bootloader prints as `xHC0 ver: 256`.
+xHCI 1.1, the version the bootloader prints as `xHC0 ver: 272`.
 
 Sources:
 
-- inferred (medium): every xHCI on this board reports 1.0; the bootloader refuses a controller whose capability word reads 0
+- measured (high): Raspberry Pi 4B d03115, 32-bit `/dev/mem` read of `0xFE9C0000` with the pinned `start4.elf` running and `otg_mode=1` set, so the controller is powered: word `+0x00` reads `0x01100020`: `CAPLENGTH` `0x20`, `HCIVERSION` `0x0110`
 
 ## `HCSPARAMS1`
 
-Offset `0x004` · access `r` · 32 bits · reset `0x1000120`
+Offset `0x004` · access `r` · 32 bits · reset `0x1000140`
 
-`MaxSlots` 32, `MaxIntrs` 1, `MaxPorts` 1 — the one USB2 port on the USB-C socket.
+`MaxSlots` 64, `MaxIntrs` 1, `MaxPorts` 1 — the one USB2 port on the USB-C socket.
 
 Sources:
 
-- inferred (medium): the socket has one port and the model uses one interrupter; 32 slots is what the VL805's controller reports and what the bootloader's slot array is sized for
+- measured (high): Raspberry Pi 4B d03115, 32-bit `/dev/mem` read of `0xFE9C0000` with the pinned `start4.elf` running and `otg_mode=1` set, so the controller is powered: `0x01000140`
 
 ## `HCSPARAMS2`
 
-Offset `0x008` · access `r` · 32 bits · reset `0x31`
+Offset `0x008` · access `r` · 32 bits · reset `0xC0000F1`
 
-`IST` 1, `ERSTMax` 3 (8 segments), no scratchpad buffers.
+`IST` 1, `ERSTMax` 15, and one scratchpad buffer (`Max_Scratchpad_Bufs_Lo` 1): a driver has to give the controller that page.
 
 Sources:
 
-- inferred (medium): the model's engine needs no scratchpad (`src/periph/xhci.rs`), so the honest value is zero rather than the VL805's 31
+- measured (high): Raspberry Pi 4B d03115, 32-bit `/dev/mem` read of `0xFE9C0000` with the pinned `start4.elf` running and `otg_mode=1` set, so the controller is powered: `0x0C0000F1`
 
 ## `HCSPARAMS3`
 
-Offset `0x00C` · access `r` · 32 bits · reset `0x0`
+Offset `0x00C` · access `r` · 32 bits · reset `0x7FF000A`
 
-U1 / U2 exit latencies: none, this is a USB 2.0 controller.
+U1 device exit latency 10 us, U2 `0x7FF`.
 
 Sources:
 
 - standard (high): xHCI 1.1, 5.3.4: the latencies describe SuperSpeed link states, which a USB2-only controller has none of
+- measured (high): Raspberry Pi 4B d03115, 32-bit `/dev/mem` read of `0xFE9C0000` with the pinned `start4.elf` running and `otg_mode=1` set, so the controller is powered: `0x07FF000A`
 
 ## `HCCPARAMS1`
 
-Offset `0x010` · access `r` · 32 bits · reset `0x280029`
+Offset `0x010` · access `r` · 32 bits · reset `0x220FE65`
 
-`AC64`, 32-byte contexts, `PPC`, `LHRC`, no streams, `xECP` `0x28` (base + `0xA0`).
+`AC64`, 32-byte contexts, `PPC`, `LHRC`, `xECP` `0x220` (base + `0x880`).
 
 Sources:
 
-- inferred (medium): what the shared ring engine implements: 64-bit pointers, 32-byte contexts, port power control, a light host controller reset, and no stream support
+- measured (high): Raspberry Pi 4B d03115, 32-bit `/dev/mem` read of `0xFE9C0000` with the pinned `start4.elf` running and `otg_mode=1` set, so the controller is powered: `0x0220FE65`
 
 ## `DBOFF`
 
-Offset `0x014` · access `r` · 32 bits · reset `0x100`
+Offset `0x014` · access `r` · 32 bits · reset `0x480`
 
 Doorbell array offset.
 
 Sources:
 
-- inferred (medium): the standard layout, as `specs/xhci.toml`
+- measured (high): Raspberry Pi 4B d03115, 32-bit `/dev/mem` read of `0xFE9C0000` with the pinned `start4.elf` running and `otg_mode=1` set, so the controller is powered: `0x00000480`
 
 ## `RTSOFF`
 
-Offset `0x018` · access `r` · 32 bits · reset `0x200`
+Offset `0x018` · access `r` · 32 bits · reset `0x440`
 
 Runtime register offset.
 
 Sources:
 
-- inferred (medium): the standard layout, as `specs/xhci.toml`
+- measured (high): Raspberry Pi 4B d03115, 32-bit `/dev/mem` read of `0xFE9C0000` with the pinned `start4.elf` running and `otg_mode=1` set, so the controller is powered: `0x00000440`
 
 ## `HCCPARAMS2`
 
-Offset `0x01C` · access `r` · 32 bits · reset `0x0`
+Offset `0x01C` · access `r` · 32 bits · reset `0x2F`
 
-No xHCI 1.1 capabilities.
+Extended capability parameters.
 
 Sources:
 
 - standard (high): xHCI 1.1, 5.3.9: every bit is a 1.1 feature the engine does not implement
+- measured (high): Raspberry Pi 4B d03115, 32-bit `/dev/mem` read of `0xFE9C0000` with the pinned `start4.elf` running and `otg_mode=1` set, so the controller is powered: `0x0000002F`
 
 ## `USBCMD`
 
@@ -245,133 +247,146 @@ Sources:
 
 ## `USBLEGSUP`
 
-Offset `0x0A0` · access `r` · 32 bits · reset `0x401`
+Offset `0x880` · access `r` · 32 bits · reset `0x401`
 
 Extended capability: USB legacy support, next at `+0x10` dwords (`0xB0`).
 
 Sources:
 
 - standard (high): xHCI 1.1, 7.1: capability id 1, with the next pointer in bits 15:8
+- measured (high): Raspberry Pi 4B d03115, 32-bit `/dev/mem` read of `0xFE9C0000` with the pinned `start4.elf` running and `otg_mode=1` set, so the controller is powered: the first extended capability, at `xECP` * 4 = `0x880`, reads `0x00000401`
 
 ## `SUPPORTED_USB2`
 
-Offset `0x0B0` · access `r` · 32 bits · reset `0x2000002`
+Offset `0x890` · access `r` · 32 bits · reset `0x2000002`
 
 Supported protocol: USB 2.0, and the last capability in the list — there is no SuperSpeed half here.
 
 Sources:
 
 - standard (high): xHCI 1.1, 7.2: capability id 2, revision 2.0, next pointer 0
+- measured (high): Raspberry Pi 4B d03115, 32-bit `/dev/mem` read of `0xFE9C0000` with the pinned `start4.elf` running and `otg_mode=1` set, so the controller is powered: the second and last extended capability, at `0x890`, reads `0x02000002`
 
 ## `SUPPORTED_USB2_NAME`
 
-Offset `0x0B4` · access `r` · 32 bits · reset `0x20425355`
+Offset `0x894` · access `r` · 32 bits · reset `0x20425355`
 
 `USB `.
 
 Sources:
 
 - standard (high): xHCI 1.1, 7.2: the name string of a supported-protocol capability
+- measured (high): Raspberry Pi 4B d03115, 32-bit `/dev/mem` read of `0xFE9C0000` with the pinned `start4.elf` running and `otg_mode=1` set, so the controller is powered: `0x20425355`, the string `USB `
 
 ## `SUPPORTED_USB2_PORTS`
 
-Offset `0x0B8` · access `r` · 32 bits · reset `0x101`
+Offset `0x898` · access `r` · 32 bits · reset `0x180101`
 
-Port offset 1, count 1.
+Port offset 1, count 1, and the protocol slot type and speed-ID count the silicon reports in the upper half.
 
 Sources:
 
 - standard (high): xHCI 1.1, 7.2, with the one root port of `HCSPARAMS1`
+- measured (high): Raspberry Pi 4B d03115, 32-bit `/dev/mem` read of `0xFE9C0000` with the pinned `start4.elf` running and `otg_mode=1` set, so the controller is powered: `0x00180101`
 
 ## `DOORBELL`
 
-Offset `0x100`, 33 elements 0x4 apart · access `rw` · 32 bits
+Offset `0x480`, 65 elements 0x4 apart · access `rw` · 32 bits
 
 Doorbell 0 is the command ring, doorbell n slot n; a write runs the ring to completion before it returns.
 
 Sources:
 
 - standard (high): xHCI 1.1, 5.6 Doorbell registers
+- measured (high): Raspberry Pi 4B d03115, 32-bit `/dev/mem` read of `0xFE9C0000` with the pinned `start4.elf` running and `otg_mode=1` set, so the controller is powered: `DBOFF` reads `0x480`, and 64 slots make 65 doorbells
 
 ## `MFINDEX`
 
-Offset `0x200` · access `r` · 32 bits
+Offset `0x440` · access `r` · 32 bits
 
 Microframe index.
 
 Sources:
 
 - standard (high): xHCI 1.1, 5.5.1 `MFINDEX`
+- measured (high): Raspberry Pi 4B d03115, 32-bit `/dev/mem` read of `0xFE9C0000` with the pinned `start4.elf` running and `otg_mode=1` set, so the controller is powered: `RTSOFF` reads `0x440`, and `MFINDEX` is its first register
 
 ## `IMAN`
 
-Offset `0x220` · access `rw` · 32 bits
+Offset `0x460` · access `rw` · 32 bits
 
 Interrupter management. One interrupter, whose `IP` drives GIC SPI 176.
 
 Sources:
 
 - standard (high): xHCI 1.1, 5.5.2.1 `IMAN`
+- measured (high): Raspberry Pi 4B d03115, 32-bit `/dev/mem` read of `0xFE9C0000` with the pinned `start4.elf` running and `otg_mode=1` set, so the controller is powered: `RTSOFF` `0x440` plus the interrupter set at `+0x20`
 
 ## `IMOD`
 
-Offset `0x224` · access `rw` · 32 bits
+Offset `0x464` · access `rw` · 32 bits
 
 Interrupter moderation. Stored.
 
 Sources:
 
 - standard (high): xHCI 1.1, 5.5.2.2 `IMOD`
+- measured (high): Raspberry Pi 4B d03115, 32-bit `/dev/mem` read of `0xFE9C0000` with the pinned `start4.elf` running and `otg_mode=1` set, so the controller is powered: `RTSOFF` `0x440` plus `+0x24`
 
 ## `ERSTSZ`
 
-Offset `0x228` · access `rw` · 32 bits
+Offset `0x468` · access `rw` · 32 bits
 
 Event ring segment table size.
 
 Sources:
 
 - standard (high): xHCI 1.1, 5.5.2.3.1 `ERSTSZ`
+- measured (high): Raspberry Pi 4B d03115, 32-bit `/dev/mem` read of `0xFE9C0000` with the pinned `start4.elf` running and `otg_mode=1` set, so the controller is powered: `RTSOFF` `0x440` plus `+0x28`
 
 ## `ERSTBA_LO`
 
-Offset `0x230` · access `rw` · 32 bits
+Offset `0x470` · access `rw` · 32 bits
 
 Event ring segment table base.
 
 Sources:
 
 - standard (high): xHCI 1.1, 5.5.2.3.2 `ERSTBA`
+- measured (high): Raspberry Pi 4B d03115, 32-bit `/dev/mem` read of `0xFE9C0000` with the pinned `start4.elf` running and `otg_mode=1` set, so the controller is powered: `RTSOFF` `0x440` plus `+0x30`
 
 ## `ERSTBA_HI`
 
-Offset `0x234` · access `rw` · 32 bits
+Offset `0x474` · access `rw` · 32 bits
 
 `ERSTBA`, high word.
 
 Sources:
 
 - standard (high): xHCI 1.1, 5.5.2.3.2 `ERSTBA`
+- measured (high): Raspberry Pi 4B d03115, 32-bit `/dev/mem` read of `0xFE9C0000` with the pinned `start4.elf` running and `otg_mode=1` set, so the controller is powered: `RTSOFF` `0x440` plus `+0x34`
 
 ## `ERDP_LO`
 
-Offset `0x238` · access `rw` · 32 bits
+Offset `0x478` · access `rw` · 32 bits
 
 Event ring dequeue pointer; `EHB` is write-1-to-clear.
 
 Sources:
 
 - standard (high): xHCI 1.1, 5.5.2.3.3 `ERDP`
+- measured (high): Raspberry Pi 4B d03115, 32-bit `/dev/mem` read of `0xFE9C0000` with the pinned `start4.elf` running and `otg_mode=1` set, so the controller is powered: `RTSOFF` `0x440` plus `+0x38`
 
 ## `ERDP_HI`
 
-Offset `0x23C` · access `rw` · 32 bits
+Offset `0x47C` · access `rw` · 32 bits
 
 `ERDP`, high word.
 
 Sources:
 
 - standard (high): xHCI 1.1, 5.5.2.3.3 `ERDP`
+- measured (high): Raspberry Pi 4B d03115, 32-bit `/dev/mem` read of `0xFE9C0000` with the pinned `start4.elf` running and `otg_mode=1` set, so the controller is powered: `RTSOFF` `0x440` plus `+0x3C`
 
 ## `PORTSC`
 

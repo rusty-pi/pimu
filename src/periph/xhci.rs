@@ -22,12 +22,12 @@ use crate::log::{Channel, Log};
 use crate::periph::usb::{Setup, Speed, UsbDevice, Xfer};
 use crate::spec::xhci as regs;
 use crate::spec::xhci::{
-    CRCR_HI, CRCR_LO, DCBAAP_LO, DOORBELL, DOORBELL_COUNT, DOORBELL_STRIDE, ERDP_LO,
-    ERDP_LO_EHB_MASK, ERSTBA_LO, ERSTSZ, IMAN, IMAN_IE_MASK as IMAN_IE, IMAN_IP_MASK as IMAN_IP,
-    PAGESIZE, PAGESIZE_RESET, PORTSC, PORTSC_CCS_MASK as PORTSC_CCS, PORTSC_CEC_MASK as PORTSC_CEC,
-    PORTSC_CSC_MASK as PORTSC_CSC, PORTSC_DR_MASK as PORTSC_DR, PORTSC_OCC_MASK as PORTSC_OCC,
-    PORTSC_PEC_MASK as PORTSC_PEC, PORTSC_PED_MASK as PORTSC_PED, PORTSC_PLC_MASK as PORTSC_PLC,
-    PORTSC_PLS_MASK, PORTSC_PLS_SHIFT, PORTSC_PP_MASK as PORTSC_PP, PORTSC_PRC_MASK as PORTSC_PRC,
+    CRCR_HI, CRCR_LO, DCBAAP_LO, DOORBELL, DOORBELL_COUNT, DOORBELL_STRIDE, ERDP_LO_EHB_MASK, IMAN,
+    IMAN_IE_MASK as IMAN_IE, IMAN_IP_MASK as IMAN_IP, PAGESIZE, PAGESIZE_RESET, PORTSC,
+    PORTSC_CCS_MASK as PORTSC_CCS, PORTSC_CEC_MASK as PORTSC_CEC, PORTSC_CSC_MASK as PORTSC_CSC,
+    PORTSC_DR_MASK as PORTSC_DR, PORTSC_OCC_MASK as PORTSC_OCC, PORTSC_PEC_MASK as PORTSC_PEC,
+    PORTSC_PED_MASK as PORTSC_PED, PORTSC_PLC_MASK as PORTSC_PLC, PORTSC_PLS_MASK,
+    PORTSC_PLS_SHIFT, PORTSC_PP_MASK as PORTSC_PP, PORTSC_PRC_MASK as PORTSC_PRC,
     PORTSC_PR_MASK as PORTSC_PR, PORTSC_SPEED_SHIFT, PORTSC_STRIDE, PORTSC_WPR_MASK as PORTSC_WPR,
     PORTSC_WRC_MASK as PORTSC_WRC, USBCMD, USBCMD_HCRST_MASK as USBCMD_HCRST,
     USBCMD_INTE_MASK as USBCMD_INTE, USBCMD_LHCRST_MASK as USBCMD_LHCRST,
@@ -176,6 +176,10 @@ pub struct Caps {
     /// where a USB3 port trains its link itself.
     pub usb2_ports: &'static [bool],
     pub max_slots: usize,
+    /// Where the runtime registers and the doorbell array sit, as `RTSOFF` and
+    /// `DBOFF` announce: the two controllers do not share a layout.
+    pub runtime: u32,
+    pub doorbell: u32,
     /// Prefixes this controller's [`Channel::Xhci`] lines; empty for the
     /// VL805's.
     pub tag: &'static str,
@@ -215,6 +219,8 @@ pub const VL805: Caps = Caps {
     ],
     usb2_ports: &[true, false, false, false, false],
     max_slots: MAX_SLOTS,
+    runtime: RTSOFF,
+    doorbell: DBOFF,
     tag: "",
 };
 const _: () = assert!(VL805.usb2_ports.len() == PORTS);
@@ -473,6 +479,33 @@ impl Xhci {
         self.reg(lo) as u64 | ((self.reg(lo + 4) as u64) << 32)
     }
 
+    /// Interrupter 0's registers: the runtime registers start with `MFINDEX`,
+    /// and the interrupter set follows it at `+0x20`.
+    /// How big a context is: 32 bytes, or 64 when `HCCPARAMS1.CSZ` says so, as
+    /// the BCM2711's own controller does.
+    fn csz(&self) -> u64 {
+        match self.caps.word(regs::HCCPARAMS1).unwrap_or(0) & 0x4 {
+            0 => 0x20,
+            _ => 0x40,
+        }
+    }
+
+    fn iman(&self) -> u32 {
+        self.caps.runtime + 0x20
+    }
+
+    fn erstsz(&self) -> u32 {
+        self.caps.runtime + 0x28
+    }
+
+    fn erstba_lo(&self) -> u32 {
+        self.caps.runtime + 0x30
+    }
+
+    fn erdp_lo(&self) -> u32 {
+        self.caps.runtime + 0x38
+    }
+
     fn portsc_index(&self, off: u32) -> Option<usize> {
         let rel = off.checked_sub(PORTSC)?;
         (rel % PORTSC_STRIDE == 0 && (rel / PORTSC_STRIDE) < self.ports.len() as u32)
@@ -539,8 +572,10 @@ impl Xhci {
             self.write_portsc(i, value, mask, mem);
             return;
         }
-        if (DOORBELL..DOORBELL + DOORBELL_COUNT * DOORBELL_STRIDE).contains(&word_off) {
-            let target = (word_off - DOORBELL) / DOORBELL_STRIDE;
+        let doorbells = self.caps.doorbell;
+        let doorbell_count = self.caps.max_slots as u32 + 1;
+        if (doorbells..doorbells + doorbell_count * DOORBELL_STRIDE).contains(&word_off) {
+            let target = (word_off - doorbells) / DOORBELL_STRIDE;
             self.set_reg(word_off, value);
             self.ring_doorbell(target, value, mem);
             return;
@@ -558,7 +593,7 @@ impl Xhci {
             self.write_usbcmd(new, mem);
             return;
         }
-        if word_off == IMAN {
+        if word_off == self.iman() {
             // `IP` is write-1-to-clear; only the controller sets it.
             let ip = old & IMAN_IP & !(value & IMAN_IP);
             self.set_reg(word_off, (new & !IMAN_IP) | ip);
@@ -574,7 +609,7 @@ impl Xhci {
             return;
         }
         self.set_reg(word_off, new);
-        if word_off == ERDP_LO {
+        if word_off == self.erdp_lo() {
             self.set_reg(word_off, new & !(ERDP_EHB as u32));
         }
     }
@@ -722,8 +757,8 @@ impl Xhci {
     }
 
     fn post_event(&mut self, mut trb: [u32; 4], mem: &mut dyn HostMem) {
-        let erstba = self.reg64(ERSTBA_LO) & !0x3F;
-        let erstsz = self.reg(ERSTSZ) & 0xFFFF;
+        let erstba = self.reg64(self.erstba_lo()) & !0x3F;
+        let erstsz = self.reg(self.erstsz()) & 0xFFFF;
         if erstba == 0 || erstsz == 0 {
             return; // no event ring yet; the event is simply lost, as on silicon
         }
@@ -767,8 +802,8 @@ impl Xhci {
 
         let sts = self.reg(USBSTS) | USBSTS_EINT;
         self.set_reg(USBSTS, sts);
-        let iman = self.reg(IMAN) | IMAN_IP;
-        self.set_reg(IMAN, iman);
+        let iman = self.reg(self.iman()) | IMAN_IP;
+        self.set_reg(self.iman(), iman);
     }
 
     fn ring_doorbell(&mut self, target: u32, value: u32, mem: &mut dyn HostMem) {
@@ -867,7 +902,7 @@ impl Xhci {
             TRB_SET_TR_DEQUEUE => {
                 let dci = trb[3] >> 16 & 0x1F;
                 if let Some(ctx) = self.device_context(slot_id, mem) {
-                    let ep = ctx + 0x20 * dci as u64;
+                    let ep = ctx + self.csz() * dci as u64;
                     mem.write32(ep + 8, param as u32);
                     mem.write32(ep + 12, (param >> 32) as u32);
                 }
@@ -876,7 +911,7 @@ impl Xhci {
             TRB_RESET_ENDPOINT | TRB_STOP_ENDPOINT => {
                 if let Some(ctx) = self.device_context(slot_id, mem) {
                     let dci = trb[3] >> 16 & 0x1F;
-                    let ep = ctx + 0x20 * dci as u64;
+                    let ep = ctx + self.csz() * dci as u64;
                     let dw0 = mem.read32(ep) & !0x7;
                     mem.write32(ep, dw0 | 1);
                 }
@@ -914,7 +949,8 @@ impl Xhci {
             return CC_SLOT_NOT_ENABLED;
         };
         // Input Control Context, slot context, then endpoint contexts.
-        let in_slot = input + 0x20;
+        let csz = self.csz();
+        let in_slot = input + csz;
         let slot_dw0 = mem.read32(in_slot);
         let slot_dw1 = mem.read32(in_slot + 4);
         let route = slot_dw0 & 0x000F_FFFF;
@@ -925,8 +961,8 @@ impl Xhci {
         };
         let slot_ctx = mem.read_bytes(in_slot, 0x20);
         mem.write_bytes(ctx, &slot_ctx);
-        let ep0 = mem.read_bytes(input + 0x40, 0x20);
-        mem.write_bytes(ctx + 0x20, &ep0);
+        let ep0 = mem.read_bytes(input + 2 * csz, 0x20);
+        mem.write_bytes(ctx + csz, &ep0);
         // Slot Context: speed, state, and the address the controller assigned.
         let dw0 = (mem.read32(ctx) & !(0xF << 20)) | ((speed as u32) << 20);
         mem.write32(ctx, dw0);
@@ -935,8 +971,8 @@ impl Xhci {
         let addr = if bsr { 0 } else { slot };
         mem.write32(ctx + 12, (state << 27) | (addr & 0xFF));
         // Endpoint 0: state Running.
-        let ep_dw0 = (mem.read32(ctx + 0x20) & !0x7) | 1;
-        mem.write32(ctx + 0x20, ep_dw0);
+        let ep_dw0 = (mem.read32(ctx + csz) & !0x7) | 1;
+        mem.write32(ctx + csz, ep_dw0);
         CC_SUCCESS
     }
 
@@ -955,7 +991,7 @@ impl Xhci {
         let drop_flags = mem.read32(input);
         let add_flags = mem.read32(input + 4);
         if add_flags & 1 != 0 {
-            let slot_ctx = mem.read_bytes(input + 0x20, 0x20);
+            let slot_ctx = mem.read_bytes(input + self.csz(), 0x20);
             // Address and slot state are the controller's: only the first
             // three dwords come from the input context.
             mem.write_bytes(ctx, &slot_ctx[..12]);
@@ -963,7 +999,7 @@ impl Xhci {
         for dci in 1..32u32 {
             let bit = 1u32 << dci;
             if drop_flags & bit != 0 && add_flags & bit == 0 {
-                let ep = ctx + 0x20 * dci as u64;
+                let ep = ctx + self.csz() * dci as u64;
                 let dw0 = mem.read32(ep) & !0x7;
                 mem.write32(ep, dw0);
                 continue;
@@ -971,9 +1007,9 @@ impl Xhci {
             if add_flags & bit == 0 {
                 continue;
             }
-            // Endpoint context DCI *n* sits at `0x20 * (n + 1)`.
-            let src = mem.read_bytes(input + 0x20 * (dci as u64 + 1), 0x20);
-            let ep = ctx + 0x20 * dci as u64;
+            // Endpoint context DCI *n* sits at one context size times `n + 1`.
+            let src = mem.read_bytes(input + self.csz() * (dci as u64 + 1), 0x20);
+            let ep = ctx + self.csz() * dci as u64;
             mem.write_bytes(ep, &src);
             // Endpoint State = Running.
             let dw0 = mem.read32(ep) & !0x7;
@@ -1020,7 +1056,7 @@ impl Xhci {
         let Some(ctx) = self.device_context(slot as u32, mem) else {
             return;
         };
-        let ep_ctx = ctx + 0x20 * dci as u64;
+        let ep_ctx = ctx + self.csz() * dci as u64;
         let deq = mem.read64(ep_ctx + 8);
         let mut ptr = deq & !0xF;
         let mut ccs = deq & 1 != 0;
@@ -1219,13 +1255,13 @@ impl Xhci {
     /// Interrupter 0 wants attention: the level the PCI function turns into an
     /// MSI or INTA (xHCI 4.17).
     pub fn interrupt_pending(&self) -> bool {
-        self.reg(IMAN) & (IMAN_IP | IMAN_IE) == IMAN_IP | IMAN_IE
+        self.reg(self.iman()) & (IMAN_IP | IMAN_IE) == IMAN_IP | IMAN_IE
             && self.reg(USBCMD) & USBCMD_INTE != 0
     }
 
     pub fn msi_sent(&mut self) {
-        let iman = self.reg(IMAN) & !IMAN_IP;
-        self.set_reg(IMAN, iman);
+        let iman = self.reg(self.iman()) & !IMAN_IP;
+        self.set_reg(self.iman(), iman);
     }
 
     pub fn portsc(&self, port: usize) -> u32 {
@@ -1247,6 +1283,7 @@ mod tests {
     use super::*;
     use crate::mem::Ram;
     use crate::periph::usb::Hub;
+    use crate::spec::xhci::{ERDP_LO, ERSTBA_LO, ERSTSZ};
 
     /// Ring addresses may sit above 4 GB: nothing may truncate them.
     #[test]

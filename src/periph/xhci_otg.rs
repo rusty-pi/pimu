@@ -112,6 +112,8 @@ pub const CAPS: Caps = Caps {
     ],
     usb2_ports: &[true],
     max_slots: (regs::HCSPARAMS1_RESET & 0xFF) as usize,
+    runtime: regs::RTSOFF_RESET,
+    doorbell: regs::DBOFF_RESET,
     tag: "otg ",
 };
 const _: () = assert!(
@@ -193,6 +195,7 @@ impl MmioDevice for XhciOtg {
 mod tests {
     use super::*;
     use crate::periph::usb::MassStorage;
+    use crate::periph::xhci::HostMem;
 
     fn ram() -> Ram {
         Ram::new(0, 64 * 1024)
@@ -208,7 +211,7 @@ mod tests {
         assert_eq!(word >> 16, regs::HCIVERSION_RESET, "HCIVERSION");
         let hcs1 = d.read(regs::HCSPARAMS1, Width::Word).unwrap();
         assert_eq!(hcs1 >> 24, 1, "one root port");
-        assert_eq!(hcs1 & 0xFF, 32, "32 slots");
+        assert_eq!(hcs1 & 0xFF, 64, "64 slots");
         assert_eq!((hcs1 >> 8) & 0x7FF, 1, "one interrupter");
         assert_eq!(
             d.read(regs::SUPPORTED_USB2, Width::Word).unwrap() >> 8 & 0xFF,
@@ -234,6 +237,12 @@ mod tests {
     fn a_write_waits_for_host_memory() {
         let mut d = XhciOtg::new();
         let mut ram = ram();
+        // The controller wants its one scratchpad buffer before it runs, so
+        // the device context array's entry 0 has to point at an array.
+        ram.write32(0x1000, 0x2000);
+        ram.write32(0x2000, 0x3000);
+        d.write(regs::DCBAAP_LO, Width::Word, 0x1000).unwrap();
+        d.run_pending(&mut ram);
         assert_eq!(d.read(regs::USBSTS, Width::Word).unwrap() & 1, 1, "halted");
         d.write(regs::USBCMD, Width::Word, 1).unwrap();
         assert!(d.write_pending());
