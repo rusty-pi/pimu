@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the network-boot root the built-in peer serves (`boot --tftp-boot <dir> --http-boot <dir>`,
+# Build the network-boot root the built-in peer serves (`boot --tftp <dir> --http <dir>`,
 # src/net/peer.rs) from the SD image scripts/make-sd.sh built:
 #
 #   <out>/                       the SD boot partition's files, for TFTP boot

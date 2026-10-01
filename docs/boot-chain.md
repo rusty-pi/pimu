@@ -114,8 +114,8 @@ What isn't a spec'd register block:
   unimplemented poke becomes a triage note instead of a crash. The run report
   counts the accesses as `stub=`; `boot --stub-log` lists the offsets.
 - **A network peer** on the other end of the GENET cable (`src/net/peer.rs`:
-  DHCP, DNS, TFTP, plain HTTP over a minimal TCP). `--tftp-boot <dir>` and
-  `--http-boot <dir>` each serve a directory (the same one, for these boots):
+  DHCP, DNS, TFTP, plain HTTP over a minimal TCP). `--tftp <dir>` and
+  `--http <dir>` each serve a directory (the same one, for these boots):
   - TFTP (`--boot-order 0xf2`): the bootloader TFTPs `start4.elf` /
     `fixup4.dat`, and start4's own GENET driver fetches `config.txt`, the
     overlays, the dtb and `kernel8.img` through to `arm_loader`;

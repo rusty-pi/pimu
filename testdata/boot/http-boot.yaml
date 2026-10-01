@@ -22,7 +22,7 @@ description: "pieeprom.bin network boot over plain HTTP from the built-in peer, 
 
 boot:
   eeprom: "../../firmware/pieeprom.bin"
-  http_boot: "../../firmware/netboot"
+  http: "../../firmware/netboot"
   boot_order: "0xf7"
   bootconf: ["BOOT_UART=1", "HTTP_HOST=netboot.test", "HTTP_PORT=80"]
   eeprom_pubkey: "../../firmware/netboot-pubkey.bin"

@@ -56,13 +56,13 @@ pub struct BootSpec {
     /// xHCI slot (`boot --otg-dock`).
     #[serde(default)]
     pub otg_dock: bool,
-    /// What the network peer serves over TFTP, as `--tftp-boot` takes it (a
+    /// What the network peer serves over TFTP, as `--tftp` takes it (a
     /// directory or a URL), or listed file by file like a card.
     #[serde(default)]
-    pub tftp_boot: Option<MediumSpec>,
-    /// What the network peer serves over HTTP (`--http-boot`).
+    pub tftp: Option<MediumSpec>,
+    /// What the network peer serves over HTTP (`--http`).
     #[serde(default)]
-    pub http_boot: Option<MediumSpec>,
+    pub http: Option<MediumSpec>,
     #[serde(default)]
     pub boot_order: Option<String>,
     #[serde(default)]
@@ -423,8 +423,8 @@ impl BootScenario {
             ("sd", &mut self.boot.sd),
             ("usb", &mut self.boot.usb),
             ("otg", &mut self.boot.otg),
-            ("tftp-boot", &mut self.boot.tftp_boot),
-            ("http-boot", &mut self.boot.http_boot),
+            ("tftp", &mut self.boot.tftp),
+            ("http", &mut self.boot.http),
         ] {
             let Some(MediumSpec::Files(card)) = medium.as_ref() else {
                 continue;
@@ -539,7 +539,7 @@ impl BootScenario {
         }
         let make_netboot = "KERNEL=halt scripts/make-sd.sh firmware/sd-halt.img \
                             && scripts/make-netboot.sh firmware/sd-halt.img";
-        for root in [&b.tftp_boot, &b.http_boot] {
+        for root in [&b.tftp, &b.http] {
             match root {
                 Some(MediumSpec::Path(p)) => v.push(BootInput {
                     path: self.resolve(p),
@@ -599,8 +599,8 @@ impl BootScenario {
             ("--sd", &b.sd),
             ("--usb", &b.usb),
             ("--otg", &b.otg),
-            ("--tftp-boot", &b.tftp_boot),
-            ("--http-boot", &b.http_boot),
+            ("--tftp", &b.tftp),
+            ("--http", &b.http),
         ] {
             match medium {
                 Some(MediumSpec::Path(p)) => {
@@ -1355,7 +1355,7 @@ boot:
       kernel8.img: { builtin: halt }
       overlays/x.dtbo: part.bin
   sd: card.img
-  tftp_boot:
+  tftp:
     files:
       serial/start4.elf: part.bin
 ";

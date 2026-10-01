@@ -20,7 +20,7 @@ src/
   l2.rs         the VPU's L2 while the bootcode runs out of it
   machine.rs    Machine: owns RAM + peripherals, decodes addresses
   periph/       one file per block, stub.rs = catch-all + log
-  net/          built-in DHCP/DNS/TFTP/HTTP peer for --tftp-boot / --http-boot; passt for --net
+  net/          built-in DHCP/DNS/TFTP/HTTP peer for --tftp / --http; passt for --net
   soc/          BCM2711 memory map, stepping, board
   spec/         register-spec schema (specs/*.toml, via build.rs)
   firmware/     boot ROM stage; ELF32 loader; EEPROM image parse; dt-blob; Payload

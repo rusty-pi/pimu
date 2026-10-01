@@ -85,7 +85,7 @@ COMMANDS:
     boot      Boot the machine from an EEPROM image (--eeprom), as a Pi 4 does,
               or run a VPU ELF. An option left out takes the file of that name
               in the working directory when there is one — `pieeprom.bin`,
-              `sd.img`, `usb.img`, `otg.img`, `tftp-boot/`, `http-boot/`, `otp.json`/`otp.bin`,
+              `sd.img`, `usb.img`, `otg.img`, `tftp/`, `http/`, `otp.json`/`otp.bin`,
               `bootconf.txt`, `pubkey.bin` — so a directory holding those boots
               with a bare `pimu boot`, and `pimu boot <dir>` reads them
               from <dir>. A directory of a boot partition's own files
