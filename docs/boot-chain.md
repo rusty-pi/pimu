@@ -104,7 +104,8 @@ What isn't a spec'd register block:
   `--usb <img>` puts the stick in blue socket A, on the VL805; `--otg <img>`
   puts it in the USB-C socket, on the BCM2711's own xHCI, which is what
   `BOOT_ORDER` digit `0x5` (`BCM-USB-MSD`) boots from and what `otg_mode=1` in
-  `config.txt` hands to Linux.
+  `config.txt` hands to Linux. `--otg-dock` puts that stick behind a dock — two
+  hubs, an Ethernet adapter and an empty card reader, five xHCI slots in all.
 - **The catch-all stub** — any peripheral offset nothing models reads back
   what was last written there (0 otherwise), and every access is logged, so an
   unimplemented poke becomes a triage note instead of a crash. The run report

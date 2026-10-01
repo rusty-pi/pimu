@@ -258,6 +258,21 @@ impl Hub {
         }
     }
 
+    /// A USB-C dock: a hub with a second hub and an Ethernet adapter behind
+    /// it, and behind the second hub a card reader with no card and `stick`.
+    /// Five devices that each need a controller slot. The topology is what a
+    /// dock booted from on a Raspberry Pi 4B d03115 (pi4-firmware `22d26fa`);
+    /// the device identities are not measured.
+    pub fn dock(stick: MassStorage) -> Hub {
+        let mut inner = Hub::new();
+        inner.attach(1, Box::new(MassStorage::empty_card_reader()));
+        inner.attach(2, Box::new(stick));
+        let mut outer = Hub::new();
+        outer.attach(1, Box::new(inner));
+        outer.attach(2, Box::new(EthernetAdapter::new()));
+        outer
+    }
+
     pub fn attach(&mut self, port: u8, device: Box<dyn UsbDevice>) {
         let speed = device.speed();
         let p = &mut self.ports[(port - 1) as usize];
@@ -385,6 +400,63 @@ impl UsbDevice for Hub {
     }
 }
 
+/// A USB Ethernet adapter that only enumerates: vendor-specific class, no
+/// traffic. It holds a controller slot, which is all a dock needs of it.
+pub struct EthernetAdapter {
+    common: CommonState,
+    desc: Descriptors,
+}
+
+impl Default for EthernetAdapter {
+    fn default() -> Self {
+        EthernetAdapter::new()
+    }
+}
+
+impl EthernetAdapter {
+    pub fn new() -> EthernetAdapter {
+        let mut strings = HashMap::new();
+        strings.insert(0, lang_desc());
+        strings.insert(1, string_desc("Realtek"));
+        strings.insert(2, string_desc("USB 10/100/1000 LAN"));
+        EthernetAdapter {
+            common: CommonState::default(),
+            desc: Descriptors {
+                device: vec![
+                    0x12, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x40, 0xda, 0x0b, 0x53, 0x81, 0x00,
+                    0x30, 0x01, 0x02, 0x00, 0x01,
+                ],
+                config: vec![
+                    0x09, 0x02, 0x19, 0x00, 0x01, 0x01, 0x00, 0xa0, 0x32, // configuration
+                    0x09, 0x04, 0x00, 0x00, 0x01, 0xff, 0xff, 0x00, 0x00, // interface
+                    0x07, 0x05, 0x81, 0x03, 0x02, 0x00, 0x08, // interrupt IN 0x81
+                ],
+                bos: None,
+                strings,
+                status: 0x00,
+            },
+        }
+    }
+}
+
+impl UsbDevice for EthernetAdapter {
+    fn speed(&self) -> Speed {
+        Speed::High
+    }
+
+    fn reset(&mut self) {
+        self.common = CommonState::default();
+    }
+
+    fn control(&mut self, setup: &Setup, _data_out: &[u8]) -> Xfer {
+        standard_control(&mut self.common, &self.desc, setup).unwrap_or(Xfer::Stall)
+    }
+
+    fn data_in(&mut self, _ep: u8, _len: usize) -> Xfer {
+        Xfer::Nak
+    }
+}
+
 const CBW_SIGNATURE: u32 = 0x4342_5355;
 const CSW_SIGNATURE: u32 = 0x5342_5355;
 const CBW_LEN: usize = 31;
@@ -432,6 +504,8 @@ pub struct MassStorage {
     phase: BotPhase,
     /// SuperSpeed in a blue socket, high speed in a USB 2.0 one.
     speed: Speed,
+    /// A card reader with no card answers every medium command NOT READY.
+    medium: bool,
 }
 
 impl MassStorage {
@@ -468,7 +542,17 @@ impl MassStorage {
             disk,
             phase: BotPhase::Command,
             speed: Speed::Super,
+            medium: true,
         }
+    }
+
+    /// The card reader of a dock with no card in it: it enumerates like a
+    /// stick and answers TEST UNIT READY with NOT READY, MEDIUM NOT PRESENT.
+    /// Identity is not measured.
+    pub fn empty_card_reader() -> MassStorage {
+        let mut dev = MassStorage::with_disk_hs(Rc::new(RefCell::new(Disk::from_vec(Vec::new()))));
+        dev.medium = false;
+        dev
     }
 
     /// The same stick in a USB 2.0 socket (`--otg`). Not a second capture: a
@@ -497,12 +581,20 @@ impl MassStorage {
     }
 
     fn scsi(&mut self, cdb: &[u8], alloc: usize) -> (Vec<u8>, u8) {
-        match cdb.first().copied().unwrap_or(0) {
+        let op = cdb.first().copied().unwrap_or(0);
+        if !self.medium && matches!(op, 0x00 | 0x25 | 0x28 | 0xA8 | 0x88) {
+            return (Vec::new(), 1);
+        }
+        match op {
             0x00 => (Vec::new(), 0),
             0x03 => {
                 let mut s = vec![0u8; 18];
                 s[0] = 0x70;
                 s[7] = 10;
+                if !self.medium {
+                    s[2] = 0x02;
+                    s[12] = 0x3A;
+                }
                 (s, 0)
             }
             // INQUIRY, fields measured: direct access, removable, SPC-5.
@@ -738,6 +830,36 @@ mod tests {
             Xfer::Nak => panic!("naked"),
             Xfer::Stall => panic!("stalled"),
         }
+    }
+
+    #[test]
+    fn a_dock_puts_the_stick_two_hubs_deep_beside_an_empty_reader() {
+        let mut dock = Hub::dock(MassStorage::new(vec![0; 4096]));
+        assert!(dock.is_hub());
+        assert!(dock.child(1).unwrap().is_hub(), "the second hub");
+        assert_eq!(dock.child(2).unwrap().speed(), Speed::High, "the adapter");
+        let inner = dock.child(1).unwrap();
+        let reader = inner.child(1).unwrap();
+        let ready = cbw(0x00);
+        assert!(matches!(reader.data_out(1, &ready), Xfer::Ok(_)));
+        let Xfer::Ok(csw) = reader.data_in(2, CSW_LEN) else {
+            panic!("no status block");
+        };
+        assert_eq!(csw[12], 1, "no medium: the reader is not ready");
+        let stick = inner.child(2).unwrap();
+        assert!(matches!(stick.data_out(1, &ready), Xfer::Ok(_)));
+        let Xfer::Ok(csw) = stick.data_in(2, CSW_LEN) else {
+            panic!("no status block");
+        };
+        assert_eq!(csw[12], 0, "the stick is ready");
+    }
+
+    fn cbw(op: u8) -> Vec<u8> {
+        let mut v = vec![0u8; CBW_LEN];
+        v[..4].copy_from_slice(&CBW_SIGNATURE.to_le_bytes());
+        v[14] = 6;
+        v[15] = op;
+        v
     }
 
     #[test]

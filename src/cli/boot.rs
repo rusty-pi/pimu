@@ -200,6 +200,10 @@ MEDIA AND NETWORK:
               (BCM-USB-MSD) boots from it. Linux is given that controller when
               the firmware booted from it, and otherwise only when the card's
               config.txt says otg_mode=1 (OTG=1 scripts/make-sd.sh).
+    --otg-dock
+              Put the --otg stick behind a USB-C dock: two hubs, an Ethernet
+              adapter and an empty card reader besides the stick, five
+              devices that each take an xHCI slot.
     --usb-mb <n>
               A stick given by --usb or --otg is <n> MiB, with the image at its
               start, as on a Pi whose first boot uses the rest.
@@ -410,6 +414,7 @@ struct BootOpts {
     path: PathBuf,
     entry: Option<u32>,
     usb_mb: Option<u64>,
+    otg_dock: bool,
     display: bool,
     display_edid: Option<PathBuf>,
     /// No cap by default: the wall clock is the useful bound.
@@ -933,6 +938,7 @@ impl BootOpts {
         let mut url: Option<String> = None;
         let mut entry: Option<u32> = None;
         let mut usb_mb: Option<u64> = None;
+        let mut otg_dock = false;
         let mut display = false;
         let mut display_edid: Option<PathBuf> = None;
         let mut max_steps: Option<u64> = None;
@@ -1131,6 +1137,7 @@ impl BootOpts {
                     ),
                 )?,
                 "--usb-mb" => usb_mb = Some(it.next().context("--usb-mb needs a value")?.parse()?),
+                "--otg-dock" => otg_dock = true,
                 "--display" => display = true,
                 "--display-edid" => {
                     display = true;
@@ -1363,6 +1370,7 @@ impl BootOpts {
             path,
             entry,
             usb_mb,
+            otg_dock,
             display,
             display_edid,
             max_steps,
@@ -2053,11 +2061,13 @@ impl<'a> Rig<'a> {
         // The BCM2711's own xHCI: what `BOOT_ORDER` digit `0x5` boots from and
         // what `otg_mode=1` gives Linux.
         if let Some(disk) = &self.otg_disk {
-            machine
-                .xhci_otg
-                .attach(Box::new(pimu::periph::usb::MassStorage::with_disk_hs(
-                    disk.clone(),
-                )));
+            let stick = pimu::periph::usb::MassStorage::with_disk_hs(disk.clone());
+            let device: Box<dyn pimu::periph::usb::UsbDevice> = if self.opts.otg_dock {
+                Box::new(pimu::periph::usb::Hub::dock(stick))
+            } else {
+                Box::new(stick)
+            };
+            machine.xhci_otg.attach(device);
         }
         // The built-in peer (`src/net/peer.rs`): DHCP, DNS, TFTP and HTTP.
         if let Some(netboot) = &netboot {
