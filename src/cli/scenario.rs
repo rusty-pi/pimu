@@ -190,6 +190,9 @@ fn inputs_present(scn: &harness::BootScenario) -> bool {
             make.push(&i.make);
         }
     }
+    if !Path::new("scripts/make-sd.sh").exists() {
+        return false;
+    }
     let them = if missing.len() == 1 { "it" } else { "them" };
     eprintln!("make {them} with:");
     for m in make {
@@ -292,6 +295,9 @@ fn check_boot(
     })?;
     let transcript = harness::boot::normalise_console(&console_bytes);
 
+    if update && scn.golden.is_none() {
+        bail!("{}: no `golden` to update", scn.name);
+    }
     if update {
         // Never record a bad run as truth: a CPU-starved boot stops at the wall
         // clock and its short transcript still looks like a good boot.
@@ -310,7 +316,7 @@ fn check_boot(
         harness::boot::write_golden(scn, &transcript)?;
         println!(
             "updated golden {} ({} lines)",
-            scn.golden_path().display(),
+            scn.golden_path().unwrap_or_default().display(),
             transcript.lines().count()
         );
         let counts = RetiredCounts::from_log(&log_text)
@@ -320,7 +326,9 @@ fn check_boot(
             _ => String::new(),
         };
         harness::boot::write_retired(scn, &counts)?;
-        println!("updated retired counts {}", scn.retired_path().display());
+        if let Some(path) = scn.retired_path() {
+            println!("updated retired counts {}", path.display());
+        }
         for line in changed.lines() {
             println!("  {line}");
         }

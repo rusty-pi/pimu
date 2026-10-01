@@ -29,7 +29,10 @@ pub struct BootScenario {
     #[serde(default)]
     pub description: String,
     pub boot: BootSpec,
-    pub golden: GoldenSpec,
+    /// The console to diff the run against. Without it only the milestones
+    /// judge the run.
+    #[serde(default)]
+    pub golden: Option<GoldenSpec>,
     #[serde(default)]
     pub milestones: Vec<Milestone>,
 
@@ -141,10 +144,20 @@ pub fn unescape(s: &str) -> Vec<u8> {
     out
 }
 
+fn pin_retired() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GoldenSpec {
+    /// The transcript, relative to the scenario file.
     pub path: String,
+    /// Also pin how many instructions each core retired, in `<path>` with
+    /// `.retired.yaml` for its extension. Exact for one build of the model and
+    /// one set of firmware, so a firmware under development turns it off.
+    #[serde(default = "pin_retired")]
+    pub retired: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -296,6 +309,10 @@ pub struct BootInput {
     pub make: String,
 }
 
+pub fn is_url(p: &str) -> bool {
+    p.starts_with("http://") || p.starts_with("https://")
+}
+
 /// `path` for a message: `..` folded away without touching the filesystem.
 pub fn tidy_path(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
@@ -325,21 +342,33 @@ impl BootScenario {
         Ok(s)
     }
 
+    /// A medium or key as `boot` takes it: a URL as it is, a path relative to
+    /// the scenario file.
+    fn resolve(&self, p: &str) -> PathBuf {
+        if is_url(p) {
+            PathBuf::from(p)
+        } else {
+            self.base_dir.join(p)
+        }
+    }
+
     pub fn eeprom_path(&self) -> PathBuf {
-        self.base_dir.join(&self.boot.eeprom)
+        self.resolve(&self.boot.eeprom)
     }
 
     pub fn sd_path(&self) -> Option<PathBuf> {
-        self.boot.sd.as_ref().map(|p| self.base_dir.join(p))
+        self.boot.sd.as_ref().map(|p| self.resolve(p))
     }
 
-    pub fn golden_path(&self) -> PathBuf {
-        self.base_dir.join(&self.golden.path)
+    pub fn golden_path(&self) -> Option<PathBuf> {
+        let golden = self.golden.as_ref()?;
+        Some(self.base_dir.join(&golden.path))
     }
 
     /// The pinned [`RetiredCounts`], beside the golden transcript.
-    pub fn retired_path(&self) -> PathBuf {
-        self.golden_path().with_extension("retired.yaml")
+    pub fn retired_path(&self) -> Option<PathBuf> {
+        self.golden.as_ref()?.retired.then_some(())?;
+        Some(self.golden_path()?.with_extension("retired.yaml"))
     }
 
     /// Every file the run reads, each with the command that makes it. None is
@@ -352,7 +381,7 @@ impl BootScenario {
             make: "scripts/fetch-firmware.sh".into(),
         }];
         for img in [&b.sd, &b.usb, &b.otg].into_iter().flatten() {
-            let path = self.base_dir.join(img);
+            let path = self.resolve(img);
             // `-halt` is how the repository names the card whose kernel parks
             // the ARM, and a firmware variant's name the card that boots it.
             let start4 = ["start4cd", "start4db"]
@@ -389,7 +418,7 @@ impl BootScenario {
         }
         for p in [&b.netboot, &b.eeprom_pubkey].into_iter().flatten() {
             v.push(BootInput {
-                path: self.base_dir.join(p),
+                path: self.resolve(p),
                 make: "KERNEL=halt scripts/make-sd.sh firmware/sd-halt.img \
                        && scripts/make-netboot.sh firmware/sd-halt.img"
                     .into(),
@@ -401,7 +430,7 @@ impl BootScenario {
     pub fn missing_inputs(&self) -> Vec<BootInput> {
         self.inputs()
             .into_iter()
-            .filter(|i| !i.path.exists())
+            .filter(|i| !is_url(&i.path.to_string_lossy()) && !i.path.exists())
             .collect()
     }
 
@@ -429,7 +458,7 @@ impl BootScenario {
         ] {
             if let Some(p) = path {
                 args.push(flag.into());
-                args.push(self.base_dir.join(p).display().to_string());
+                args.push(self.resolve(p).display().to_string());
             }
         }
         if let Some(order) = &b.boot_order {
@@ -446,7 +475,7 @@ impl BootScenario {
         }
         if let Some(k) = &b.eeprom_pubkey {
             args.push("--eeprom-pubkey".into());
-            args.push(self.base_dir.join(k).display().to_string());
+            args.push(self.resolve(k).display().to_string());
         }
         for (flag, value) in [("--stepping", &b.stepping), ("--board-rev", &b.board_rev)] {
             if let Some(v) = value {
@@ -620,7 +649,9 @@ pub enum GoldenCheck {
 }
 
 pub fn check_golden(scn: &BootScenario, actual: &str) -> Result<GoldenCheck> {
-    let path = scn.golden_path();
+    let Some(path) = scn.golden_path() else {
+        return Ok(GoldenCheck::Match);
+    };
     match std::fs::read_to_string(&path) {
         Ok(expected) if expected == actual => Ok(GoldenCheck::Match),
         Ok(expected) => Ok(GoldenCheck::Mismatch(unified_diff(&expected, actual))),
@@ -630,7 +661,9 @@ pub fn check_golden(scn: &BootScenario, actual: &str) -> Result<GoldenCheck> {
 }
 
 pub fn write_golden(scn: &BootScenario, actual: &str) -> Result<()> {
-    let path = scn.golden_path();
+    let Some(path) = scn.golden_path() else {
+        return Ok(());
+    };
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).ok();
     }
@@ -750,7 +783,9 @@ fn grouped(n: u64) -> String {
 /// Compare a run's counts against the scenario's pinned ones. A mismatch
 /// carries [`RetiredCounts::diff`], a line per count.
 pub fn check_retired(scn: &BootScenario, actual: &RetiredCounts) -> Result<GoldenCheck> {
-    let path = scn.retired_path();
+    let Some(path) = scn.retired_path() else {
+        return Ok(GoldenCheck::Match);
+    };
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(GoldenCheck::Missing),
@@ -767,7 +802,9 @@ pub fn check_retired(scn: &BootScenario, actual: &RetiredCounts) -> Result<Golde
 }
 
 pub fn write_retired(scn: &BootScenario, counts: &RetiredCounts) -> Result<()> {
-    let path = scn.retired_path();
+    let Some(path) = scn.retired_path() else {
+        return Ok(());
+    };
     std::fs::write(&path, counts.render()).with_context(|| format!("writing {}", path.display()))
 }
 
@@ -838,31 +875,32 @@ pub fn check_run(scn: &BootScenario, log: &str, console: &str) -> Result<Vec<Str
             "MISSING: no golden transcript at {}\n         \
              why: the boot has nothing to be compared against; \
              re-run with --update to record one\n",
-            scn.golden_path().display()
+            scn.golden_path().unwrap_or_default().display()
         )),
         GoldenCheck::Mismatch(diff) => failures.push(format!(
             "TRANSCRIPT: the console differs from {}\n\
              {diff}\
              \n         (--update rewrites the golden once the change is \
              understood and wanted)\n",
-            scn.golden_path().display()
+            scn.golden_path().unwrap_or_default().display()
         )),
     }
 
     // Without a report line there is nothing to compare.
-    if let Some(counts) = RetiredCounts::from_log(log) {
+    let counts = RetiredCounts::from_log(log).filter(|_| scn.retired_path().is_some());
+    if let Some(counts) = counts {
         match check_retired(scn, &counts)? {
             GoldenCheck::Match => {}
             GoldenCheck::Missing => failures.push(format!(
                 "MISSING: no retired counts at {}\n         \
                  why: the boot has no instruction counts to be compared against; \
                  re-run with --update to record them\n",
-                scn.retired_path().display()
+                scn.retired_path().unwrap_or_default().display()
             )),
             GoldenCheck::Mismatch(diff) => {
                 let mut f = format!(
                     "RETIRED: the cores ran a different number of instructions than {} says\n",
-                    scn.retired_path().display()
+                    scn.retired_path().unwrap_or_default().display()
                 );
                 for line in diff.lines() {
                     f.push_str(&format!("         {line}\n"));

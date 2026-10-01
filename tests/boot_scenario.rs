@@ -38,8 +38,8 @@ fn fake_log(console: &str) -> String {
 }
 
 fn report(scn: &BootScenario) -> String {
-    let text =
-        std::fs::read_to_string(scn.retired_path()).expect("the retired counts are committed");
+    let text = std::fs::read_to_string(scn.retired_path().unwrap())
+        .expect("the retired counts are committed");
     let counts = RetiredCounts::parse(&text).expect("the retired counts parse");
     let mut out = format!(
         "end        Stuck {{ pc: 0x3ec40014, silent_us: 60001165, retired: 68775692 }}\n\
@@ -68,7 +68,7 @@ fn report(scn: &BootScenario) -> String {
 #[test]
 fn the_fixture_passes_every_assertion() {
     let scn = scenario();
-    let golden = std::fs::read_to_string(scn.golden_path()).expect("read golden");
+    let golden = std::fs::read_to_string(scn.golden_path().unwrap()).expect("read golden");
     let failures = boot::check_run(&scn, &fake_log(&golden), &golden).expect("check");
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
@@ -126,7 +126,8 @@ fn the_run_plan_is_the_only_place_the_workload_is_written_down() {
 #[test]
 fn the_recorded_golden_is_already_normalised() {
     let scn = scenario();
-    let golden = std::fs::read(scn.golden_path()).expect("the golden transcript is committed");
+    let golden =
+        std::fs::read(scn.golden_path().unwrap()).expect("the golden transcript is committed");
     let again = boot::normalise_console(&golden);
     assert_eq!(
         String::from_utf8_lossy(&golden),
@@ -144,7 +145,7 @@ fn the_recorded_golden_is_already_normalised() {
 #[test]
 fn the_recorded_golden_reaches_the_arm_handover() {
     let scn = scenario();
-    let golden = std::fs::read_to_string(scn.golden_path()).expect("read golden");
+    let golden = std::fs::read_to_string(scn.golden_path().unwrap()).expect("read golden");
     for needle in [
         "PM_RSTS 00000020",
         "*** Restart logging",
@@ -166,7 +167,7 @@ fn the_recorded_golden_reaches_the_arm_handover() {
 #[test]
 fn a_changed_transcript_fails_the_golden_check() {
     let scn = scenario();
-    let golden = std::fs::read_to_string(scn.golden_path()).expect("read golden");
+    let golden = std::fs::read_to_string(scn.golden_path().unwrap()).expect("read golden");
 
     let broken = golden.replacen("948MB", "947MB", 1);
     assert_ne!(broken, golden, "the golden should mention the memory split");
@@ -211,7 +212,7 @@ fn a_changed_transcript_fails_the_golden_check() {
 #[test]
 fn a_milestone_fails_when_its_invariant_breaks() {
     let scn = scenario();
-    let golden = std::fs::read_to_string(scn.golden_path()).expect("read golden");
+    let golden = std::fs::read_to_string(scn.golden_path().unwrap()).expect("read golden");
 
     let broken: String = fake_log(&golden)
         .lines()
@@ -251,7 +252,7 @@ fn a_milestone_fails_when_its_invariant_breaks() {
 #[test]
 fn the_skipped_instruction_guard_still_bites() {
     let scn = scenario();
-    let golden = std::fs::read_to_string(scn.golden_path()).expect("read golden");
+    let golden = std::fs::read_to_string(scn.golden_path().unwrap()).expect("read golden");
 
     let skipped = fake_log(&golden).replace("(skipped 0,", "(skipped 7,");
     let f = boot::check_run(&scn, &skipped, &golden).expect("check");
@@ -272,7 +273,7 @@ fn the_skipped_instruction_guard_still_bites() {
 #[test]
 fn a_changed_retired_count_fails_the_check() {
     let scn = scenario();
-    let golden = std::fs::read_to_string(scn.golden_path()).expect("read golden");
+    let golden = std::fs::read_to_string(scn.golden_path().unwrap()).expect("read golden");
     let log = fake_log(&golden);
     let vpu0 = RetiredCounts::from_log(&log)
         .and_then(|c| c.get("vpu0"))
@@ -298,8 +299,8 @@ fn a_changed_retired_count_fails_the_check() {
     std::fs::create_dir_all(&dir).unwrap();
     let mut unpinned = scenario();
     let copy = dir.join("firmware.txt");
-    std::fs::copy(scn.golden_path(), &copy).unwrap();
-    unpinned.golden.path = copy.display().to_string();
+    std::fs::copy(scn.golden_path().unwrap(), &copy).unwrap();
+    unpinned.golden.as_mut().unwrap().path = copy.display().to_string();
     let f = boot::check_run(&unpinned, &log, &golden).expect("check");
     std::fs::remove_dir_all(&dir).unwrap();
     assert_eq!(f.len(), 1, "{f:?}");
@@ -360,8 +361,8 @@ fn every_boot_scenario_loads_and_plans_its_media() {
             "{}",
             path.display()
         );
-        let text = std::fs::read_to_string(scn.retired_path())
-            .unwrap_or_else(|e| panic!("{}: {e}", scn.retired_path().display()));
+        let text = std::fs::read_to_string(scn.retired_path().unwrap())
+            .unwrap_or_else(|e| panic!("{}: {e}", scn.retired_path().unwrap().display()));
         let counts = RetiredCounts::parse(&text).expect("the retired counts parse");
         assert!(counts.get("vpu0").is_some(), "{}", path.display());
         seen.push(scn.name);

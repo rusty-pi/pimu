@@ -146,7 +146,13 @@
       "additionalProperties": false,
       "properties": {
         "path": {
+          "description": "The transcript, relative to the scenario file.",
           "type": "string"
+        },
+        "retired": {
+          "default": true,
+          "description": "Also pin how many instructions each core retired, in `<path>` with\n`.retired.yaml` for its extension. Exact for one build of the model and\none set of firmware, so a firmware under development turns it off.",
+          "type": "boolean"
         }
       },
       "required": [
@@ -219,7 +225,15 @@
       "type": "string"
     },
     "golden": {
-      "$ref": "#/$defs/GoldenSpec"
+      "anyOf": [
+        {
+          "$ref": "#/$defs/GoldenSpec"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The console to diff the run against. Without it only the milestones\njudge the run."
     },
     "milestones": {
       "items": {
@@ -233,8 +247,7 @@
   },
   "required": [
     "name",
-    "boot",
-    "golden"
+    "boot"
   ],
   "title": "BootScenario",
   "type": "object"
