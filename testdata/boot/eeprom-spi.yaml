@@ -1,0 +1,126 @@
+# The Linux boot of linux.yaml on a card whose config.txt remaps SPI0 onto the
+# bootloader EEPROM's own pins, which is the path `rpi-eeprom-update` takes with
+# `RPI_EEPROM_IMMEDIATE_UPDATE=1`: no recovery.bin, no power cycle, the flash
+# read and written from Linux over /dev/spidev0.0 (#161).
+#
+# The card is `EEPROM_SPI=1 scripts/make-sd.sh firmware/sd-eeprom-spi.img`, which
+# adds
+#
+#     dtoverlay=audremap
+#     dtoverlay=spi-gpio40-45
+#
+# to the stock config.txt and puts the `spidev` module on the root filesystem.
+# `spi-gpio40-45` moves the master to GPIO 40..42 and its three chip selects to
+# GPIO 43..45 as plain outputs; `audremap` is what takes PWM audio off 40/41 so
+# the overlay can have them. On a Raspberry Pi 4B d03115 that is enough for
+# `flashrom -p linux_spi:dev=/dev/spidev0.0,spispeed=16000 --flash-name` to
+# answer `vendor="Winbond" name="W25X40"`, and without it to answer
+# `No EEPROM/flash device found`.
+#
+# The image carries no flashrom — it links libpci, libusb and libftdi, none of
+# which is on a busybox root filesystem — so the flash command that proves the
+# bus end to end is driven through the master's own registers with `devmem`:
+# drop the chip select GPIO gpiolib left high, run `RDID` and a `READ`, put it
+# back. What that does not cover is the `spi-bcm2835` driver's own DMA and
+# interrupt paths, which `tests/peripherals.rs` drives at register level
+# instead.
+
+name: "eeprom-spi"
+description: "Linux with SPI0 remapped onto the bootloader EEPROM's pins, reading the flash's id and its first bytes from userspace."
+
+boot:
+  eeprom: "../../firmware/pieeprom.bin"
+  bootconf: ["BOOT_UART=1"]
+  sd: "../../firmware/sd-eeprom-spi.img"
+  until: "/ # "
+  wall_secs: 600
+  max_skipped: 0
+
+# The same invented device key linux.yaml fuses, so the two boots differ only in
+# the card. The real rows are secret (`CLAUDE.md`).
+  otp_row:
+    - "56=0x52504956" # "RPIV"
+    - "57=0x49525446" # "IRTF"
+    - "58=0x574d4f44" # "WMOD"
+    - "59=0x454c4b45" # "ELKE"
+    - "60=0x59303030" # "Y000"
+    - "61=0x30303030" # "0000"
+    - "62=0x30303030" # "0000"
+    - "63=0x30303031" # "0001"
+
+# Both the master's driver and `spidev` are modules in the stock kernel, so
+# nothing is on the SPI bus until they are loaded; the target itself comes from
+# the `spidev@0` node the base device tree already has under `spi@7e204000`.
+# The answers are prefixed so that a milestone cannot be satisfied by the
+# console's echo of the command that asks for them.
+  input:
+    - after: "/ # \u001b[6n"
+      text: "for m in spi-bcm2835 spidev; do insmod /lib/modules/*/kernel/drivers/spi/$m.ko; done; echo target=$(ls -d /sys/bus/spi/devices/spi0.0); echo spidev=$(ls -d /dev/spidev0.0)\n"
+
+# What pinctrl made of the two overlays, read straight out of `GPFSEL4`: three
+# bits a pin from GPIO 40 up, `0b011` for ALT4 and `0b001` for an output. The
+# mask drops GPIO 46..49, which are the board's own and not part of this.
+    - after: "/ # \u001b[6n"
+      text: "printf 'gpfsel4=%#x\\n' $(( $(devmem 0xfe200010 32) & 0x3ffff ))\n"
+
+# `RDID` over the remapped bus. gpiolib holds the chip select high, so the run
+# is: drive GPIO 43 low (`GPCLR1`), set `CS.TA` with the native select parked at
+# the invalid `0b11` the way `spi-bcm2835` does, shift the command, clear the
+# echo out of the receive FIFO, shift three more beats and read the id out.
+    - after: "/ # \u001b[6n"
+      text: "devmem 0xfe20002c 32 0x800; devmem 0xfe204000 32 0x83; devmem 0xfe204004 32 0x9f; devmem 0xfe204000 32 0xa3; for b in 0 0 0; do devmem 0xfe204004 32 $b; done; printf 'rdid=%02x%02x%02x\\n' $(devmem 0xfe204004 32) $(devmem 0xfe204004 32) $(devmem 0xfe204004 32); devmem 0xfe204000 32 0x33; devmem 0xfe200020 32 0x800\n"
+
+# And a `READ 0x000000`: the first four bytes of the image the board booted from,
+# which are the EEPROM's own section magic.
+    - after: "/ # \u001b[6n"
+      text: "devmem 0xfe20002c 32 0x800; devmem 0xfe204000 32 0x83; for b in 0x03 0 0 0; do devmem 0xfe204004 32 $b; done; devmem 0xfe204000 32 0xa3; for b in 0 0 0 0; do devmem 0xfe204004 32 $b; done; printf 'magic=%02x%02x%02x%02x\\n' $(devmem 0xfe204004 32) $(devmem 0xfe204004 32) $(devmem 0xfe204004 32) $(devmem 0xfe204004 32); devmem 0xfe204000 32 0x33; devmem 0xfe200020 32 0x800\n"
+
+golden:
+  path: "golden/eeprom-spi.txt"
+
+milestones:
+  - why: "The firmware reads both overlays off the card and applies them, which is what moves the master's pads and turns the three chip selects into outputs."
+    line: "Loaded overlay 'spi-gpio40-45'"
+
+  - why: "`audremap` goes on first, because PWM audio owns GPIO 40/41 until it does."
+    line: "Loaded overlay 'audremap'"
+
+  - why: "Linux reaches userspace on the remapped card as it does on the stock one: moving SPI0 off the header changes nothing else about the boot."
+    line: ["pimu: userland up, Linux ", ", 4 CPUs"]
+
+  - why: >-
+      The character device `flashrom -p linux_spi:dev=/dev/spidev0.0` opens, and the
+      `spi0.0` target behind it. Both come from the `spidev@0` node the base device
+      tree has under `spi@7e204000`, which `dtparam=spi=on` enables and the overlay
+      re-points at the EEPROM's pins.
+    line: "spidev=/dev/spidev0.0"
+
+  - why: "The controller registered its bus, so the device is a real SPI target and not just a node."
+    line: "target=/sys/bus/spi/devices/spi0.0"
+
+  - why: >-
+      What the overlays' pinctrl groups did: GPIO 40, 41 and 42 on ALT4, which is the
+      only function that puts the master on the flash, and 43, 44 and 45 as outputs,
+      which is how `spi-bcm2835` works a chip select — it parks the native one at an
+      invalid value on purpose (src/periph/spi0.rs).
+    line: "gpfsel4=0x92db"
+
+  - why: >-
+      `RDID` from Linux userspace: the JEDEC id of the Winbond W25X40 a Raspberry Pi
+      4B d03115 has as its boot flash, which is the id `flashrom --flash-name`
+      matches the part by.
+    line: "rdid=ef3013"
+
+  - why: >-
+      A `READ` of the flash's first four bytes gives `55 aa f0 0f`, the magic of the
+      first section of the `pieeprom.bin` the board booted from — so the bytes come
+      off the modelled part and not out of a driver's zeroes.
+    line: "magic=55aaf00f"
+
+  - why: "No panic on the way."
+    line: "Kernel panic"
+    absent: true
+
+  - why: "No oops: a fault here would point at the SPI master or the GPIO block."
+    line: "Unable to handle kernel"
+    absent: true

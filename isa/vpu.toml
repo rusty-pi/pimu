@@ -2469,7 +2469,7 @@ through a jump table produces valid-looking encodings by accident:
 columns = ["Left over", "What it is", "Source"]
 after = """
 None of it is reached on a firmware boot: `boot` stops on an unimplemented
-instruction by default, and `boot-check testdata/boot/firmware.toml`
+instruction by default, and `boot-check testdata/boot/firmware.yaml`
 passes.
 """
 

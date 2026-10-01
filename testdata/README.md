@@ -19,17 +19,17 @@ it.
 
 | Scenario | Boot | Card |
 |---|---|---|
-| `firmware.toml` | SD card, through to `arm_loader` | `sd-halt.img` |
-| `usb-boot.toml` | USB mass storage on the VL805 (`BOOT_ORDER` 0x4), no SD card | `sd-halt.img` |
-| `otg-boot.toml` | USB mass storage on the USB-C port (`BOOT_ORDER` 0x5), no SD card | `sd-halt.img` |
-| `tftp-boot.toml` | Network boot over TFTP | `firmware/netboot/` |
-| `http-boot.toml` | HTTP boot of a signed `boot.img` ramdisk | `firmware/netboot/` |
-| `b0-stepping.toml` | SD card on a B0 Pi 4B rev 1.2, the first BCM2711 stepping | `sd-halt.img` |
-| `firmware-cd.toml` | SD card with the cut-down `start4cd.elf` | `sd-halt-start4cd.img` |
-| `uefi.toml` | SD card, on into the RPi4 UEFI firmware and its boot menu | `sd-uefi.img` |
-| `linux.toml` | SD card, on into Linux: a busybox shell, then a few commands typed into it | `sd.img` |
-| `linux-bt.toml` | The stock-config boot, Bluetooth and WiFi enabled, so Linux's console is the mini-UART | `sd-wireless.img` |
-| `linux-wifi.toml` | The same, with `brcmfmac` loaded by hand against the modelled CYW43455 | `sd-brcmfmac.img` |
+| `firmware.yaml` | SD card, through to `arm_loader` | `sd-halt.img` |
+| `usb-boot.yaml` | USB mass storage on the VL805 (`BOOT_ORDER` 0x4), no SD card | `sd-halt.img` |
+| `otg-boot.yaml` | USB mass storage on the USB-C port (`BOOT_ORDER` 0x5), no SD card | `sd-halt.img` |
+| `tftp-boot.yaml` | Network boot over TFTP | `firmware/netboot/` |
+| `http-boot.yaml` | HTTP boot of a signed `boot.img` ramdisk | `firmware/netboot/` |
+| `b0-stepping.yaml` | SD card on a B0 Pi 4B rev 1.2, the first BCM2711 stepping | `sd-halt.img` |
+| `firmware-cd.yaml` | SD card with the cut-down `start4cd.elf` | `sd-halt-start4cd.img` |
+| `uefi.yaml` | SD card, on into the RPi4 UEFI firmware and its boot menu | `sd-uefi.img` |
+| `linux.yaml` | SD card, on into Linux: a busybox shell, then a few commands typed into it | `sd.img` |
+| `linux-bt.yaml` | The stock-config boot, Bluetooth and WiFi enabled, so Linux's console is the mini-UART | `sd-wireless.img` |
+| `linux-wifi.yaml` | The same, with `brcmfmac` loaded by hand against the modelled CYW43455 | `sd-brcmfmac.img` |
 
 CI runs every one of them, in parallel, on each push and PR to `main`.
 [`docs/running.md`](../docs/running.md) has the `make-sd.sh` command for each
@@ -46,7 +46,7 @@ card; `boot-check <scenario> --plan` prints the flags a scenario boots with.
 - the **milestones**, substring assertions each carrying the reason it exists:
   the commit or issue that made it pass. This is what a raw diff cannot say —
   which invariant broke.
-- the **retired counts** beside the golden (`boot/golden/<name>.retired.toml`):
+- the **retired counts** beside the golden (`boot/golden/<name>.retired.yaml`):
   how many instructions each VPU and ARM core ran. They reproduce
   exactly from one machine to the next, so a change that makes a boot run
   differently without printing anything different fails here instead of going
@@ -59,11 +59,11 @@ so nothing here runs the firmware twice.
 ### Running one
 
 ```bash
-cargo run --release -- boot-check testdata/boot/firmware.toml
-cargo run --release -- boot-check testdata/boot/linux.toml
-cargo run --release -- boot-check testdata/boot/firmware.toml --update          # re-record the golden and counts
-cargo run --release -- boot-check testdata/boot/firmware.toml --max-wall 600    # slower, busier machine
-cargo run --release -- boot-check testdata/boot/usb-boot.toml --from boot-usb-boot.log  # an earlier run's pair
+cargo run --release -- boot-check testdata/boot/firmware.yaml
+cargo run --release -- boot-check testdata/boot/linux.yaml
+cargo run --release -- boot-check testdata/boot/firmware.yaml --update          # re-record the golden and counts
+cargo run --release -- boot-check testdata/boot/firmware.yaml --max-wall 600    # slower, busier machine
+cargo run --release -- boot-check testdata/boot/usb-boot.yaml --from boot-usb-boot.log  # an earlier run's pair
 ```
 
 The combined output goes to `boot-<scenario>.log` (`--output` names another
@@ -78,29 +78,29 @@ counts still needs the re-record, and the diff then documents that it did.
 
 ## The in-process scenarios
 
-`scenarios/*.toml` run a hand-assembled VPU payload (`src/harness/payloads.rs`)
+`scenarios/*.yaml` run a hand-assembled VPU payload (`src/harness/payloads.rs`)
 against a small machine and diff the console with `golden/`. `cargo test` runs
 them through `tests/scenarios.rs`; `pimu run-all -v` runs them all with
-their transcripts, and `pimu run testdata/scenarios/hello-vpu.toml -v`
+their transcripts, and `pimu run testdata/scenarios/hello-vpu.yaml -v`
 runs one.
 
-```toml
-name = "hello-vpu"
-description = "Hand-assembled payload prints a line on the mini-UART, then swi."
+```yaml
+name: "hello-vpu"
+description: "Hand-assembled payload prints a line on the mini-UART, then swi."
 
-[payload]
-kind = "builtin"          # builtin | elf | raw
-source = "hello"          # builtin name, or path for elf/raw
-load_addr = 0x00010000
+payload:
+  kind: "builtin"          # builtin | elf | raw
+  source: "hello"          # builtin name, or path for elf/raw
+  load_addr: 0x00010000
 
-[machine]
-ram_mb = 16
-console = "mini-uart"     # pl011 | mini-uart | pins
+machine:
+  ram_mb: 16
+  console: "mini-uart"     # pl011 | mini-uart | pins
 
-[run]
-max_steps = 10_000
-unimpl = "fault"          # fault | skip  (skip = reconnaissance mode)
+run:
+  max_steps: 10000
+  unimpl: "fault"          # fault | skip  (skip = reconnaissance mode)
 
-[golden]
-path = "../golden/hello-vpu.txt"
+golden:
+  path: "../golden/hello-vpu.txt"
 ```

@@ -62,7 +62,7 @@ dtoverlay=spi-gpio40-45
 `spi-gpio40-45` puts the master on GPIO 40..42 and its three chip selects on GPIO
 43..45 as plain outputs, and `audremap` is what takes PWM audio off 40/41 first.
 `EEPROM_SPI=1 scripts/make-sd.sh firmware/sd-eeprom-spi.img` builds that card,
-and `testdata/boot/eeprom-spi.toml` boots it and reads the flash's JEDEC id and
+and `testdata/boot/eeprom-spi.yaml` boots it and reads the flash's JEDEC id and
 its first bytes from userspace.
 
 Linux drives the master quite differently from the firmware, and

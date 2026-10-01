@@ -121,7 +121,7 @@ queue "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/fixup4.dat" "fixup4.dat"
 queue "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/start4db.elf" "start4db.elf"
 queue "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/fixup4db.dat" "fixup4db.dat"
 # Cut-down build (`gpu_mem=16`): no camera or codecs, and silent on the UART
-# once started. `START4=start4cd make-sd.sh` makes the card for firmware-cd.toml.
+# once started. `START4=start4cd make-sd.sh` makes the card for firmware-cd.yaml.
 queue "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/start4cd.elf" "start4cd.elf"
 queue "$raw/raspberrypi/firmware/$FIRMWARE_REF/boot/fixup4cd.dat" "fixup4cd.dat"
 

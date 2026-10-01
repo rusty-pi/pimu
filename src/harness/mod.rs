@@ -14,12 +14,12 @@ pub use scenario::Scenario;
 
 use std::path::{Path, PathBuf};
 
-/// Collect `*.toml` scenario files under `dir`, sorted by name.
+/// Collect `*.yaml` scenario files under `dir`, sorted by name.
 pub fn discover(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
     let mut out = Vec::new();
     for entry in std::fs::read_dir(dir)? {
         let path = entry?.path();
-        if path.extension().and_then(|e| e.to_str()) == Some("toml") {
+        if path.extension().and_then(|e| e.to_str()) == Some("yaml") {
             out.push(path);
         }
     }

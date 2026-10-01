@@ -530,7 +530,7 @@ through a jump table produces valid-looking encodings by accident:
 | 5 | ordinary instructions objdump names and this decoder refuses, each one of a kind. Three of them objdump cannot spell either — it prints the B operand `r56?bit4??bit5?`, a 48-bit scalar field naming a register past `r31`. The other two carry something on a slot that has no business being there: a `*` on the inert dash of a store that names an address, and a `++` on a gather's inert slot, which is measurably **not** inert — `v8lookupm H(1,0),H(20++,0),H(21,0)` answers `0x04` in every lane where the plain form answers `0x40`, and what it steps is not established | decompile: `binutils-vc4` objdump over the same addresses |
 
 None of it is reached on a firmware boot: `boot` stops on an unimplemented
-instruction by default, and `boot-check testdata/boot/firmware.toml`
+instruction by default, and `boot-check testdata/boot/firmware.yaml`
 passes.
 
 ## Outside the instruction set

@@ -66,9 +66,9 @@ build.
 
 | Command | What it does |
 |---|---|
-| `run <scenario.toml>` | Run one in-process scenario and check it against its golden transcript. |
-| `run-all [<dir>]` | The same for every `*.toml` in `<dir>` (default `testdata/scenarios`). |
-| `boot-check <scenario.toml>` | Run the boot a scenario describes and check its transcript, milestones and retired counts. `--plan` prints the `boot` invocation instead, `--from <log>` checks an earlier run's output without booting. |
+| `run <scenario.yaml>` | Run one in-process scenario and check it against its golden transcript. |
+| `run-all [<dir>]` | The same for every `*.yaml` in `<dir>` (default `testdata/scenarios`). |
+| `boot-check <scenario.yaml>` | Run the boot a scenario describes and check its transcript, milestones and retired counts. `--plan` prints the `boot` invocation instead, `--from <log>` checks an earlier run's output without booting. |
 | `spec-docs [--update]` | Check (or regenerate) `docs/periph/` against `specs/*.toml`, and the dark board sheet against the hand-drawn one. |
 
 `--update` rewrites the golden files instead of failing on a mismatch, and `-v`
@@ -76,7 +76,7 @@ prints the whole transcript.
 
 ```bash
 cargo run -- run-all -v                                       # every in-process scenario, with transcripts
-cargo run --release -- boot-check testdata/boot/firmware.toml # one real boot, checked three ways
+cargo run --release -- boot-check testdata/boot/firmware.yaml # one real boot, checked three ways
 ```
 
 They are the `repo` feature, on by default, and the released binaries leave them

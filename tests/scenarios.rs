@@ -1,6 +1,6 @@
 //! Every scenario in `testdata/scenarios/` must still reproduce its golden
 //! transcript. What this covers is the plumbing behind `pimu run-all` —
-//! discovery, TOML loading, payload building, console capture, golden diff —
+//! discovery, YAML loading, payload building, console capture, golden diff —
 //! rather than the model itself. The firmware boot needs uncommitted blobs and
 //! minutes of CPU, so `pimu boot-check` runs it and `tests/boot_scenario.rs`
 //! covers the rest of it.

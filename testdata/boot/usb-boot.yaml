@@ -1,0 +1,69 @@
+# The firmware boot from USB mass storage (BOOT_ORDER 0x4).
+#
+# The SD image (`firmware.yaml`) as a stick in blue USB socket A (xHCI
+# root port 2, SuperSpeed), with no SD card: the bootloader enumerates it and
+# reads config.txt, start4.elf and fixup4.dat over SCSI READ(10) through the
+# VL805, then start4 takes the xHCI over ("USB boot mode 2") and reads the rest
+# itself — through DMA4 transfers into the PCIe window, started by dmalib's
+# completion interrupt.
+#
+# For this boot the bootloader places start4 1 MiB below its link address
+# (`Starting start4.elf @ 0xfeb00200`), which is why the ARM gets 947 MB rather
+# than 948.
+#
+# Re-record the golden and the retired counts with:
+#   pimu boot-check testdata/boot/usb-boot.yaml --update
+
+name: "usb-boot"
+description: "pieeprom.bin boot from a USB mass-storage device, through to the ARM hand-off."
+
+boot:
+  eeprom: "../../firmware/pieeprom.bin"
+  bootconf: ["BOOT_UART=1"]
+# The firmware boot's card, whose kernel parks the ARM.
+  usb: "../../firmware/sd-halt.img"
+  boot_order: "0xf4"
+  wall_secs: 330
+  max_skipped: 0
+
+golden:
+  path: "golden/usb-boot.txt"
+
+milestones:
+  - why: "BOOT_ORDER 0xf4 reached the bootloader: USB mass storage first."
+    line: "Boot mode: USB-MSD (04)"
+
+  - why: "The stick enumerates on root port 2 with the endpoint descriptors measured on a Raspberry Pi 4B d03115."
+    line: ["MSD device [01:00]", "ep 82#1024 01#1024"]
+
+  - why: "SCSI READ CAPACITY answers with the image's size: the 288 MiB scripts/make-sd.sh image in 512-byte blocks."
+    line: "MSD READ_CAPACITY [01:00] 3.16 000000:02 lun 0 block-count 589824 block-size 512"
+
+  - why: "The bootloader reads all of start4.elf over SCSI."
+    line: "Read start4.elf bytes  2298048"
+
+  - why: "...and fixup4.dat, the last file it loads before handing over."
+    line: "Read fixup4.dat bytes     5512"
+
+  - why: "start4 runs, and knows it came from USB."
+    line: ["MESS:", "USB boot mode 2"]
+
+  - why: "The bootloader relocated start4 1 MiB down for USB boot; core 1 has to follow it there, or the main thread's first inter-core wait never ends."
+    line: "Starting start4.elf @ 0xfeb00200"
+
+  - why: "start4 reads the kernel over USB itself: DMA4 has to start on the CB write to an active channel and raise its completion on source 89, where dmalib registered dma_interrupt for channel 11."
+    line: ["MESS:", "Loaded 'kernel8.img'"]
+
+  - why: "The goal: the VPU hands the board over to the ARM, with no SD card in the machine."
+    line: "arm_loader: Starting ARM with 947MB"
+
+  - why: "The identity is the same however the board booted: same fuses, same pinned serial."
+    line: ["/chosen/rpi-serial64 ", "\"fa1e00231aa2bb31\""]
+
+  - why: "No nop-slides at all."
+    line: "[derail]"
+    absent: true
+
+  - why: "An unknown instruction must be reported as a fault, with its pc and raw bytes."
+    line: "Unimplemented"
+    absent: true

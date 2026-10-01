@@ -184,7 +184,7 @@ I²C masters are modelled and nothing answers the EDID EEPROM's address.
 - **Firmware pipeline** — `pieeprom.bin` self-update trailer, EEPROM config
   parse, GPT/MBR + FAT32 walk, `fixup4.dat`, RSA signature check.
 - **What a booted Linux gets** — the property mailbox, and `start4`'s crypto
-  service through `/dev/vcio_crypto`: `linux.toml` pins the HMAC that
+  service through `/dev/vcio_crypto`: `linux.yaml` pins the HMAC that
   [rpi-mkosi](https://github.com/valtzu/rpi-mkosi)'s root LUKS passphrase is
   derived from, computed by `start4.elf`'s own mbedTLS from the OTP key. USB
   mass storage carries far enough to boot that project's image with `--usb`.
@@ -209,7 +209,7 @@ I²C masters are modelled and nothing answers the EDID EEPROM's address.
   KMS driver loaded.
 - **WiFi has no radio.** `brcmfmac` loads the CYW43455's firmware, brings
   `wlan0` up and scans (finding the model's own `pimu-model-ap`), but the
-  interface stays `NO-CARRIER`; `linux-wifi.toml` pins how far it gets.
+  interface stays `NO-CARRIER`; `linux-wifi.yaml` pins how far it gets.
 - **No camera and no 3D.** The V3D/QPU unit and the CSI-2 camera interface are
   not modelled; nothing on a boot path touches either.
 

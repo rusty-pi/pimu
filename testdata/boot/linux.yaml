@@ -1,0 +1,175 @@
+# The Linux boot: the firmware boot of firmware.yaml,
+# with the four ARM cores modelled, carried on through the armstub into the
+# kernel, off the SD card's ext4 root partition, and into a busybox shell on
+# the serial console, which then gets a few commands typed into it.
+# `pimu boot-check testdata/boot/linux.yaml` runs it, and so does
+# CI.
+#
+# The card is the one scripts/make-sd.sh builds; its root filesystem holds
+# Debian's static busybox (fetched by scripts/fetch-firmware.sh), an inittab
+# that runs /etc/init.d/rcS and a shell on ttyAMA0, and Raspberry Pi's
+# `rpi-fw-crypto` with the shared libraries it needs.
+#
+# The golden transcript carries the firmware's console and then the kernel's.
+# Every kernel line appears twice from `printk: console [ttyAMA0] enabled` on:
+# the harness keeps the early console (`keep_bootcon`, src/armstub.rs) and
+# the kernel replays its log to ttyAMA0 when that registers. The printk
+# timestamps are stripped like the firmware's clocks are.
+
+name: "linux"
+description: "The firmware boot, then Linux on all four A72 cores to a busybox shell on the serial console."
+
+boot:
+  eeprom: "../../firmware/pieeprom.bin"
+  bootconf: ["BOOT_UART=1"]
+  sd: "../../firmware/sd.img"
+# The prompt after the last line typed below. Nothing prints without input.
+  until: "/ # "
+# A dev box reaches the prompt in about three minutes; the runners are roughly
+# 1.6x slower. `boot-check --max-wall` overrides it.
+  wall_secs: 600
+  max_skipped: 0
+
+# The model is a board as it leaves the factory, so OTP rows 56-63 - the device
+# private key - are blank; only `rpi-otp-private-key`, run by an owner, ever
+# fuses them. The HMAC milestone below needs a provisioned part, so this
+# scenario fuses the same invented key `firmware.yaml` does, which is what makes
+# the two digests comparable. The value is **invented and must stay so**: the
+# real rows are secret (`CLAUDE.md`).
+  otp_row:
+    - "56=0x52504956" # "RPIV"
+    - "57=0x49525446" # "IRTF"
+    - "58=0x574d4f44" # "WMOD"
+    - "59=0x454c4b45" # "ELKE"
+    - "60=0x59303030" # "Y000"
+    - "61=0x30303030" # "0000"
+    - "62=0x30303030" # "0000"
+    - "63=0x30303031" # "0001"
+
+# Typed into the serial console (milestone 6), each once ash's line editor is
+# reading: it puts the tty in raw mode, prints the prompt, then asks the
+# terminal where the cursor is (`ESC [6n`, which nothing answers here).
+  input:
+    - after: "/ # \u001b[6n"
+      text: "uname -sm\n"
+
+# Longer than the receive FIFO's half-full trigger, so both the trigger-level
+# and the timeout interrupt carry it in.
+    - after: "/ # \u001b[6n"
+      text: "echo cpus=$(grep -c ^processor /proc/cpuinfo)\n"
+
+# A typo and a DEL: the line editor's backspace handling, not just echo.
+    - after: "/ # \u001b[6n"
+      text: "ecj\u007fho pimu-$((6*7))\n"
+
+# The HMAC firmware.yaml asks the crypto service for, with the same key
+# and the same 16 bytes, this time from Linux userspace: Raspberry Pi's own
+# `rpi-fw-crypto` (scripts/fetch-firmware.sh) through /dev/vcio_crypto. It
+# prints the digest without a newline, hence the `echo`.
+    - after: "/ # \u001b[6n"
+      text: "echo -ne 'Hello, world!\\0\\0\\0' | rpi-fw-crypto hmac --in /proc/self/fd/0 --key-id 1 --outform hex; echo\n"
+
+# The four-port USB2 hub soldered to the VL805's one USB2 root port, read back
+# through sysfs: `USB2.0 Hub` and `4`. Nothing typed earlier depends on USB, so
+# without this the run ended before Linux had finished enumerating it and the
+# host controller could die unnoticed. The `sleep` is for the 100 ms
+# `hub_port_init` spends between the port reset and the first descriptor, which
+# is longer than everything typed above takes; the cores are idle through it.
+    - after: "/ # \u001b[6n"
+      text: "sleep 1; echo usb1-1=$(cat /sys/bus/usb/devices/1-1/product)/$(cat /sys/bus/usb/devices/1-1/maxchild)\n"
+
+golden:
+  path: "golden/linux.txt"
+
+milestones:
+  - why: "The kernel is entered by the firmware's own armstub, at EL2, on the core the SoC starts, and reads the MIDR measured on the reference board (src/aarch64/sysreg.rs)."
+    line: "Booting Linux on physical CPU 0x0000000000 [0x410fd083]"
+
+  - why: "Cores 1..3 come out of the armstub's spin table when Linux releases them, instead of timing out 5 s each. Two nodes: the firmware splits the memory into one fake NUMA node per 4 GB, and the modelled board is the 8 GB one its revision code names."
+    line: "smp: Brought up 2 nodes, 4 CPUs"
+
+  - why: "Every core went through the armstub's EL3 -> EL2 drop, as on the board."
+    line: "CPU: All CPU(s) started at EL2"
+
+  - why: "Linux's SDHCI driver reads the card and its partition table over eMMC2 (ADMA, DDR50)."
+    line: "mmcblk0: p1 p2"
+
+  - why: "pcie-brcmstb reads the root-complex strap with PERST# held, trains the link and sets up spread spectrum over MDIO (src/periph/pcie.rs); the real board prints the same line."
+    line: "brcm-pcie fd500000.pcie: link up, 5.0 GT/s PCIe x1 (SSC)"
+
+  - why: "The port-mode bit is a strap, not link state; reading it clear failed the probe before the root complex was modelled for Linux."
+    line: "PCIe RC controller misconfigured as Endpoint"
+    absent: true
+
+  - why: "The bus scan finds the VL805 behind the root port and gives BAR0 the address the real board's does."
+    line: "pci 0000:01:00.0: BAR 0 [mem 0x600000000-0x600000fff 64bit]: assigned"
+
+  - why: "xhci-pci drives the VL805 through the outbound window: the capability registers read back, and both root hubs register."
+    line: "hub 2-0:1.0: 4 ports detected"
+
+  - why: >-
+      start4 loads the VL805's firmware when Linux asks. `xhci_pci_probe` resets the
+      controller through `reset-raspberrypi`, which sends `NOTIFY_XHCI_RESET`
+      (`0x00030058`), and start4's `XHCI_RESET` (`0x3EDC61F4`) answers with its return
+      value: 0 once it has found the VL805 at `1106:3483` and uploaded and verified
+      the firmware through the vendor port at config `0x78`/`0x7C`, `0xffffffff` when
+      it did not recognise the device. Traps on this path read `MCU FW: 10ffc800
+      3ff20000` and `VLI firmware load complete status 0`, the values the reference
+      board's a Raspberry Pi 4B d03115's start4 log records.
+
+      Linux checks only the buffer's status word, so a failed load would boot the
+      same, and the firmware's own prints go to its message ring, not the UART. The
+      answer is read out of the reply buffer instead (`PropertyLog`,
+      src/periph/mbox.rs).
+    line: ["tag 0x00030058", "unmarked 0 ", "last value 0x00000000"]
+
+  - why: "The root filesystem mounts from the card's second partition."
+    line: "VFS: Mounted root (ext4 filesystem) readonly on device 179:2."
+
+  - why: "Userspace runs: busybox init, then rcS, which reads /proc to count the CPUs."
+    line: ["pimu: userland up, Linux ", ", 4 CPUs"]
+
+  - why: "A shell on the serial console (milestone 5)."
+    line: "built-in shell (ash)"
+
+  - why: "What is typed on the serial console reaches the shell: PL011 receive FIFO and interrupt, through the GIC (milestone 6)."
+    line: "Linux aarch64"
+
+  - why: "A command line longer than the receive FIFO's trigger level arrives whole, and the shell runs it."
+    line: "cpus=4"
+
+  - why: "DEL edits the line: the shell got the keys in order, typo included."
+    line: "pimu-42"
+
+  - why: >-
+      Linux userspace gets the same HMAC-SHA256 out of start4's crypto service that
+      firmware.yaml's mailbox request does, byte for byte (its milestone prints
+      the digest as little-endian words): Raspberry Pi's rpi-fw-crypto, through
+      /dev/vcio_crypto, the kernel's firmware driver and the ARM mailbox, into the
+      VPU's own mbedTLS with the OTP key.
+    line: "0eb6f96f3a97b37bb065eb014f76fd488df48682ed6ab4f14cdae0e8a26e1e9d"
+
+  - why: >-
+      Linux enumerates the VIA Labs hub every Pi 4B has soldered to the VL805's one
+      USB2 root port: Enable Slot and Address Device complete on the command ring and
+      the descriptors read back. The hub's own four ports are what all four type-A
+      sockets are at USB 2.0 speed, so nothing plugged into one works without it.
+    line: "hub 1-1:1.0: 4 ports detected"
+
+  - why: "The hub is on the bus from userspace's side too, with the product string and port count sysfs reports on the real board."
+    line: "usb1-1=USB2.0 Hub/4"
+
+  - why: >-
+      The command ring keeps answering. Reading the Event Ring Segment Table through
+      a truncated 64-bit address sent the hub's first Enable Slot completion into the
+      void, and Linux's abort then timed out and gave the whole USB2 bus up.
+    line: "HC died"
+    absent: true
+
+  - why: "No panic on the way (the last one was the missing root filesystem, before the card had one)."
+    line: "Kernel panic"
+    absent: true
+
+  - why: "No oops: a kernel fault would point at the interpreter or a device model."
+    line: "Unable to handle kernel"
+    absent: true

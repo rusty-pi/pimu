@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use pimu::harness::boot::{self, BootScenario, GoldenCheck, RetiredCounts};
 
 fn scenario_path() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/boot/firmware.toml")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/boot/firmware.yaml")
 }
 
 fn scenario() -> BootScenario {
@@ -306,7 +306,7 @@ fn a_changed_retired_count_fails_the_check() {
     assert!(f[0].contains("MISSING: no retired counts"), "{}", f[0]);
 }
 
-/// Each boot medium's scenario (`testdata/boot/*.toml`) attaches exactly the
+/// Each boot medium's scenario (`testdata/boot/*.yaml`) attaches exactly the
 /// media it names, and pins what its cores retired.
 #[test]
 fn every_boot_scenario_loads_and_plans_its_media() {
@@ -314,7 +314,7 @@ fn every_boot_scenario_loads_and_plans_its_media() {
     let mut seen = Vec::new();
     for entry in std::fs::read_dir(&dir).unwrap() {
         let path = entry.unwrap().path();
-        if path.extension().is_none_or(|e| e != "toml") {
+        if path.extension().is_none_or(|e| e != "yaml") {
             continue;
         }
         let scn = BootScenario::load(&path).expect("scenario parses");

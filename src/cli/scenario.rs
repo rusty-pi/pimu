@@ -11,7 +11,7 @@ use anyhow::{bail, Context, Result};
 use pimu::harness::boot::{GoldenCheck, RetiredCounts};
 use pimu::harness::{self, GoldenOutcome};
 
-/// `run <scenario.toml>`: one in-process scenario against its golden transcript.
+/// `run <scenario.yaml>`: one in-process scenario against its golden transcript.
 pub fn cmd_run(args: &[String]) -> Result<ExitCode> {
     let mut path: Option<PathBuf> = None;
     let mut update = false;
@@ -24,7 +24,7 @@ pub fn cmd_run(args: &[String]) -> Result<ExitCode> {
             s => bail!("unexpected argument '{s}'"),
         }
     }
-    let path = path.context("run: missing <scenario.toml>")?;
+    let path = path.context("run: missing <scenario.yaml>")?;
     let scn = harness::Scenario::load(&path)?;
     let outcome = run_one(&scn, update, verbose)?;
     Ok(if outcome {
@@ -51,7 +51,7 @@ pub fn cmd_run_all(args: &[String]) -> Result<ExitCode> {
     let files = harness::discover(&dir)
         .with_context(|| format!("discovering scenarios in {}", dir.display()))?;
     if files.is_empty() {
-        bail!("no *.toml scenarios in {}", dir.display());
+        bail!("no *.yaml scenarios in {}", dir.display());
     }
 
     let mut failed = 0;
@@ -105,7 +105,7 @@ fn run_one(scn: &harness::Scenario, update: bool, verbose: bool) -> Result<bool>
     Ok(ok)
 }
 
-/// `boot-check <scenario.toml>`: the firmware regression. Boots once — it takes
+/// `boot-check <scenario.yaml>`: the firmware regression. Boots once — it takes
 /// minutes — and checks the console against the golden transcript, the combined
 /// output against the milestones, and the pinned retired counts. `--update`
 /// rewrites the golden and the counts; `--from <log>` checks a pair an earlier
@@ -142,7 +142,7 @@ pub fn cmd_boot_check(args: &[String]) -> Result<ExitCode> {
     if std::env::var_os("PIMU_BOOT_WALL").is_some() {
         eprintln!("warning: PIMU_BOOT_WALL is gone, use boot-check --max-wall <secs>");
     }
-    let path = path.context("boot-check: missing <scenario.toml>")?;
+    let path = path.context("boot-check: missing <scenario.yaml>")?;
     let mut scn = harness::BootScenario::load(&path)?;
     if let Some(secs) = max_wall {
         scn.boot.wall_secs = secs;

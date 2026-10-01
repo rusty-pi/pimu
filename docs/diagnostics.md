@@ -263,7 +263,7 @@ under `--- device state ---`:
 
 A client that asks the firmware for the board's MAC address and does not check
 the answer — or checks it, fails, and carries on — programs `00:00:00:00:00:00`
-into the GENET and boots to exactly the same console bytes. `uefi.toml`
+into the GENET and boots to exactly the same console bytes. `uefi.yaml`
 pins that line for the RPi4 UEFI firmware, which is a second, independent
 client of the property interface.
 
@@ -285,7 +285,7 @@ leave the modem on, so the node is picked by its `status`: with
 `dtoverlay=disable-bt` both are disabled and the line says so, rather than
 reporting the all-zero address the node under the mini-UART carries.
 
-`linux-bt.toml` pins both, because neither ever reaches the console.
+`linux-bt.yaml` pins both, because neither ever reaches the console.
 
 The WiFi chip's address is a third one again, from a third place, and the line
 says which of three it is:
@@ -300,7 +300,7 @@ says which of three it is:
 
 `ip link` prints the address but not the source, and on a boot that never
 loads `brcmfmac` it prints nothing at all — the chip still answers, and this
-line still says what it would have answered. `linux-wifi.toml` pins it.
+line still says what it would have answered. `linux-wifi.yaml` pins it.
 
 A device belongs in this section once it holds a value worth diffing between
 two firmware versions.

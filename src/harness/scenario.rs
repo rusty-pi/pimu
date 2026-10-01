@@ -1,4 +1,4 @@
-//! Scenario files: a TOML description of one bench run.
+//! Scenario files: a YAML description of one bench run.
 
 use std::path::{Path, PathBuf};
 
@@ -141,7 +141,7 @@ impl Scenario {
     pub fn load(path: &Path) -> Result<Scenario> {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("reading scenario {}", path.display()))?;
-        let mut s: Scenario = toml::from_str(&text)
+        let mut s: Scenario = yaml_serde::from_str(&text)
             .with_context(|| format!("parsing scenario {}", path.display()))?;
         s.base_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
 

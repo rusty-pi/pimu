@@ -2,7 +2,7 @@
 //!
 //! `--config <file>` expands in place into the tokens the file stands for, so an
 //! option after it on the command line wins and a repeatable one adds to it. The
-//! file is a JSON object or a TOML table keyed by long option name without the
+//! file is a JSON or YAML object keyed by long option name without the
 //! dashes (a one-letter key is the short form): `true` is a flag, a string or
 //! number is the value, an array repeats the option, a nested array gives one
 //! option several values, and `"file"` is the positional argument.
@@ -45,26 +45,36 @@ fn split_equals(args: &[String]) -> Vec<String> {
 }
 
 fn parse(text: &str) -> Result<Value> {
-    match parse_json(text) {
-        Ok(v) => Ok(v),
-        Err(json) => match toml::from_str::<toml::Table>(text) {
-            Ok(t) => Ok(from_toml(toml::Value::Table(t))),
-            Err(_) => Err(json),
-        },
+    parse_json(text).or_else(|json| match yaml_serde::from_str(text) {
+        Ok(v) => Ok(from_yaml(v)),
+        Err(_) => Err(json),
+    })
+}
+
+fn from_yaml(v: yaml_serde::Value) -> Value {
+    use yaml_serde::Value as Y;
+    match v {
+        Y::Null => Value::Null,
+        Y::Bool(b) => Value::Bool(b),
+        Y::Number(n) => Value::Num(n.to_string()),
+        Y::String(s) => Value::Str(s),
+        Y::Sequence(a) => Value::Arr(a.into_iter().map(from_yaml).collect()),
+        Y::Mapping(m) => Value::Obj(
+            m.into_iter()
+                .map(|(k, v)| (key_name(k), from_yaml(v)))
+                .collect(),
+        ),
+        Y::Tagged(t) => from_yaml(t.value),
     }
 }
 
-fn from_toml(v: toml::Value) -> Value {
-    match v {
-        toml::Value::String(s) => Value::Str(s),
-        toml::Value::Integer(i) => Value::Num(i.to_string()),
-        toml::Value::Float(f) => Value::Num(f.to_string()),
-        toml::Value::Boolean(b) => Value::Bool(b),
-        toml::Value::Datetime(d) => Value::Str(d.to_string()),
-        toml::Value::Array(a) => Value::Arr(a.into_iter().map(from_toml).collect()),
-        toml::Value::Table(t) => {
-            Value::Obj(t.into_iter().map(|(k, v)| (k, from_toml(v))).collect())
-        }
+fn key_name(k: yaml_serde::Value) -> String {
+    match k {
+        yaml_serde::Value::String(s) => s,
+        other => yaml_serde::to_string(&other)
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
     }
 }
 
@@ -168,6 +178,34 @@ mod tests {
         let got = expand_with(
             r#"{"eeprom": "fw/pieeprom.bin", "max-wall": 600, "stdin": true, "verbose": false,
                 "bootconf": ["A=1", "B=2"], "send-after": [["/ # ", "uname\n"]], "v": true}"#,
+            &["boot"],
+        );
+        assert_eq!(
+            got,
+            args(&[
+                "boot",
+                "--eeprom",
+                "fw/pieeprom.bin",
+                "--max-wall",
+                "600",
+                "--stdin",
+                "--bootconf",
+                "A=1",
+                "--bootconf",
+                "B=2",
+                "--send-after",
+                "/ # ",
+                "uname\n",
+                "-v",
+            ])
+        );
+    }
+
+    #[test]
+    fn a_yaml_config_expands_like_the_json_one() {
+        let got = expand_with(
+            "# the firmware under test\neeprom: fw/pieeprom.bin\nmax-wall: 600\nstdin: true\n\
+             verbose: false\nbootconf:\n  - A=1\n  - B=2\nsend-after:\n  - [\"/ # \", \"uname\\n\"]\nv: true\n",
             &["boot"],
         );
         assert_eq!(

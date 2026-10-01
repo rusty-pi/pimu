@@ -21,7 +21,7 @@ needs `sfdisk`, `mtools` and `e2fsprogs`.
 On the `WIRELESS=1` card Linux's console is the mini-UART (`ttyS0`), the PL011
 is the Bluetooth modem's, and the WiFi chip answers on the legacy EMMC host.
 `BRCMFMAC=1` adds
-what `testdata/boot/linux-wifi.toml` loads by hand to pin how far the chip's
+what `testdata/boot/linux-wifi.yaml` loads by hand to pin how far the chip's
 bring-up gets: `brcmfmac` and the modules it needs under `/lib/modules`, a
 `modprobe` for the one the kernel fetches by itself, the CYW43455's own firmware
 under `/lib/firmware/brcm`, and `insmod`/`ip`/`iw`. The network `iw dev wlan0

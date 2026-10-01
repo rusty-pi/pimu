@@ -1,4 +1,4 @@
-//! The firmware boot as a scenario: one TOML file describes the workload and
+//! The firmware boot as a scenario: one YAML file describes the workload and
 //! every assertion made about the run, all checked against a single boot.
 //!
 //! * The **golden transcript** — the whole normalised UART console, diffed line
@@ -28,7 +28,7 @@ pub struct BootScenario {
     pub description: String,
     pub boot: BootSpec,
     pub golden: GoldenSpec,
-    #[serde(default, rename = "milestone")]
+    #[serde(default)]
     pub milestones: Vec<Milestone>,
 
     #[serde(skip)]
@@ -313,7 +313,7 @@ impl BootScenario {
     pub fn load(path: &Path) -> Result<BootScenario> {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("reading boot scenario {}", path.display()))?;
-        let mut s: BootScenario = toml::from_str(&text)
+        let mut s: BootScenario = yaml_serde::from_str(&text)
             .with_context(|| format!("parsing boot scenario {}", path.display()))?;
         s.base_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
         Ok(s)
@@ -333,7 +333,7 @@ impl BootScenario {
 
     /// The pinned [`RetiredCounts`], beside the golden transcript.
     pub fn retired_path(&self) -> PathBuf {
-        self.golden_path().with_extension("retired.toml")
+        self.golden_path().with_extension("retired.yaml")
     }
 
     /// Every file the run reads, each with the command that makes it. None is
@@ -672,12 +672,13 @@ impl RetiredCounts {
     }
 
     pub fn parse(text: &str) -> Result<RetiredCounts> {
-        let table: toml::Table = toml::from_str(text)?;
+        let table: std::collections::BTreeMap<String, yaml_serde::Value> =
+            yaml_serde::from_str(text)?;
         let mut counts = Vec::with_capacity(table.len());
         for (name, value) in table {
-            match value.as_integer().map(u64::try_from) {
-                Some(Ok(n)) => counts.push((name, n)),
-                _ => anyhow::bail!("{name} = {value}: not an instruction count"),
+            match value.as_u64() {
+                Some(n) => counts.push((name, n)),
+                None => anyhow::bail!("{name}: {value:?} is not an instruction count"),
             }
         }
         Ok(RetiredCounts(counts))
@@ -690,7 +691,7 @@ impl RetiredCounts {
              # is released. `boot-check <scenario> --update` rewrites this file.\n",
         );
         for (name, n) in &self.0 {
-            out.push_str(&format!("{name} = {}\n", grouped(*n)));
+            out.push_str(&format!("{name}: {n}\n"));
         }
         out
     }
@@ -1057,7 +1058,7 @@ mod tests {
         assert_eq!(skipped_count("no report here\n"), None);
     }
 
-    /// Cut from a CI run of `linux.toml`, with a diag build's profile lines.
+    /// Cut from a CI run of `linux.yaml`, with a diag build's profile lines.
     const LINUX_REPORT: &str = "\
 end        Until
 final pc   0x3ec40014
@@ -1105,13 +1106,13 @@ core1      pc 0x3ec40014  retired 125  end None
     fn a_counts_file_reads_back_what_was_written() {
         let counts = RetiredCounts::from_log(LINUX_REPORT).expect("counts");
         let text = counts.render();
-        assert!(text.contains("\nvpu0 = 930_349_796\n"), "{text}");
-        assert!(text.contains("\nvpu1 = 125\n"), "{text}");
-        assert!(text.contains("\narm1 = 1_376_195_290\n"), "{text}");
+        assert!(text.contains("\nvpu0: 930349796\n"), "{text}");
+        assert!(text.contains("\nvpu1: 125\n"), "{text}");
+        assert!(text.contains("\narm1: 1376195290\n"), "{text}");
         let back = RetiredCounts::parse(&text).expect("parse");
         assert!(RetiredCounts::diff(&counts, &back).is_empty());
-        assert!(RetiredCounts::parse("vpu0 = -1\n").is_err());
-        assert!(RetiredCounts::parse("vpu0 = \"1\"\n").is_err());
+        assert!(RetiredCounts::parse("vpu0: -1\n").is_err());
+        assert!(RetiredCounts::parse("vpu0: \"1\"\n").is_err());
     }
 
     #[test]
@@ -1133,8 +1134,8 @@ core1      pc 0x3ec40014  retired 125  end None
 
     #[test]
     fn a_run_cut_off_by_the_wall_clock_is_no_baseline() {
-        let scn: BootScenario = toml::from_str(
-            "name = \"x\"\n[boot]\neeprom = \"e\"\nwall_secs = 1\n[golden]\npath = \"g\"\n",
+        let scn: BootScenario = yaml_serde::from_str(
+            "name: x\nboot:\n  eeprom: e\n  wall_secs: 1\ngolden:\n  path: g\n",
         )
         .expect("scenario");
         let log = "end        TimeLimit\nretired    5  (skipped 0, cycles 5)\n";

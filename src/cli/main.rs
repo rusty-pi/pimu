@@ -19,11 +19,11 @@ mod vchiq;
 /// and docs written back through `CARGO_MANIFEST_DIR`, neither of which a
 /// published binary has.
 #[cfg(feature = "repo")]
-const REPO_USAGE: &str = "    pimu run <scenario.toml> [--update] [-v]
+const REPO_USAGE: &str = "    pimu run <scenario.yaml> [--update] [-v]
     pimu run-all [<dir>] [--update] [-v]
-    pimu boot-check <scenario.toml> [--update] [--output <log>] [--max-wall <secs>]
-    pimu boot-check <scenario.toml> --from <log> [--update]
-    pimu boot-check <scenario.toml> --plan [--output <log>] [--max-wall <secs>]
+    pimu boot-check <scenario.yaml> [--update] [--output <log>] [--max-wall <secs>]
+    pimu boot-check <scenario.yaml> --from <log> [--update]
+    pimu boot-check <scenario.yaml> --plan [--output <log>] [--max-wall <secs>]
 ";
 
 #[cfg(not(feature = "repo"))]
@@ -32,7 +32,7 @@ const REPO_USAGE: &str = "";
 #[cfg(feature = "repo")]
 const REPO_COMMANDS: &str =
     "    run       Run one scenario and check it against its golden transcript.
-    run-all   Run every *.toml scenario in <dir> (default: testdata/scenarios).
+    run-all   Run every *.yaml scenario in <dir> (default: testdata/scenarios).
     boot-check
               Run the firmware boot a boot scenario describes and check it:
               the golden console transcript plus every named milestone. The
@@ -118,7 +118,7 @@ FLAGS:
               was not given.
     --config <file>
               Take options from <file> as well, at that point in the command
-              line: a JSON object (or TOML table) keyed by long option name,
+              line: a JSON object (or YAML mapping) keyed by long option name,
               e.g. {\"eeprom\": \"firmware/pieeprom.bin\", \"max-wall\": 600,
               \"v\": true, \"bootconf\": [\"A=1\", \"B=2\"]}. `true` is a flag,
               an array repeats the option, `\"file\"` is the positional argument.

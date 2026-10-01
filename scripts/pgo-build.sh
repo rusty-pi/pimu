@@ -75,7 +75,7 @@ train() {
   # say how it ended and stop the build when it ended badly. Both runs are
   # meant to succeed: an EEPROM boot is `ok` once the firmware starts the ARM,
   # and an `--until` run once the console prints the line.
-  local log="$work/$(basename "$scenario" .toml).log" start=$SECONDS status=0
+  local log="$work/$(basename "$scenario" .yaml).log" start=$SECONDS status=0
   echo "training on $scenario" >&2
   # `--speed max`: the profile must count the run loop's own work, not host sleep,
   # and a paced training run would take the guest's real time to collect it. The
@@ -90,8 +90,8 @@ train() {
     exit 1
   fi
 }
-train testdata/boot/firmware.toml
-train testdata/boot/linux.toml --until "$linux_until"
+train testdata/boot/firmware.yaml
+train testdata/boot/linux.yaml --until "$linux_until"
 
 "$profdata" merge -o "$work/merged.profdata" "$work/raw"
 echo "merged $(find "$work/raw" -name '*.profraw' | wc -l) profraw files into" \

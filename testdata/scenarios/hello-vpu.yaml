@@ -1,0 +1,21 @@
+# M1 smoke test: a hand-assembled VPU payload writes one line to the mini-UART
+# and then executes `swi` to halt the model.
+
+name: "hello-vpu"
+description: "Hand-assembled payload prints a line on the mini-UART, then swi."
+
+payload:
+  kind: "builtin"
+  source: "hello"
+  load_addr: 0x00010000
+
+machine:
+  ram_mb: 16
+  console: "mini-uart"
+
+run:
+  max_steps: 10000
+  unimpl: "fault"
+
+golden:
+  path: "../golden/hello-vpu.txt"

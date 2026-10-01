@@ -1,0 +1,122 @@
+# The Linux boot of linux.yaml on a card whose config.txt leaves
+# Bluetooth and WiFi enabled — what an imager writes.
+# `pimu boot-check testdata/boot/linux-bt.yaml` runs it, and so does CI.
+#
+# Dropping `dtoverlay=disable-bt` changes where the console is. The base
+# device tree gives the PL011 to the Bluetooth modem and keeps
+# `serial0 = &uart1`, so the firmware's command line says `console=ttyS0`, the
+# firmware hands GPIO 14/15 to ALT5 at the ARM handover, and Linux talks to
+# the mini-UART. The harness follows the pins (`Console::Pins`), which is why
+# the transcript below starts as the firmware's PL011 log and continues as the
+# kernel's mini-UART one.
+#
+# Dropping `dtoverlay=disable-wifi` turns the `mmcnr@7e300000` node on, so
+# Linux also finds the WiFi chip's SDIO side on the legacy EMMC host. Nothing
+# drives it further here: `brcmfmac` is not built into the kernel on the card.
+#
+# The card is `WIRELESS=1 scripts/make-sd.sh firmware/sd-wireless.img`: the
+# same image as linux's, with those two overlay lines left out and the
+# shell on `ttyS0` instead of `ttyAMA0`.
+
+name: "linux-bt"
+description: "The stock-config boot: Bluetooth and WiFi enabled, so Linux's console is the mini-UART."
+
+boot:
+  eeprom: "../../firmware/pieeprom.bin"
+  bootconf: ["BOOT_UART=1"]
+  sd: "../../firmware/sd-wireless.img"
+  until: "/ # "
+  wall_secs: 600
+  max_skipped: 0
+
+# Typed into the serial console, now over the mini-UART's receive FIFO.
+  input:
+    - after: "/ # \u001b[6n"
+      text: "uname -sm\n"
+
+# Longer than the eight-byte receive FIFO, so the line arrives in pieces and
+# has to be held on the wire while the shell drains it.
+    - after: "/ # \u001b[6n"
+      text: "echo cpus=$(grep -c ^processor /proc/cpuinfo)\n"
+
+golden:
+  path: "golden/linux-bt.txt"
+
+milestones:
+  - why: "The firmware's own log still comes out of the PL011: GPIO 14/15 are on ALT0 while it runs."
+    line: "uart: Set PL011 baud rate to"
+
+  - why: "With Bluetooth enabled the base device tree keeps `serial0 = &uart1`, so the firmware's command line names the mini-UART and not `ttyAMA0`."
+    line: "console=ttyS0,115200"
+
+  - why: "The kernel's early console is the mini-UART from its first line, which the harness only sees because it follows GPIO 14/15."
+    line: "earlycon: bcm2835aux0 at MMIO32 0x00000000fe215040"
+
+  - why: "`8250_bcm2835aux` binds the block and takes AUX's line, GIC SPI 93. `base_baud` is an eighth of the 500 MHz clock the model divides."
+    line: "fe215040.serial: ttyS0 at MMIO 0xfe215040 (irq = 37, base_baud = 62500000) is a 16550"
+
+  - why: "The full console follows the early one onto the mini-UART."
+    line: "printk: legacy console [ttyS0] enabled"
+
+  - why: "The PL011 is the Bluetooth modem's UART now, so it registers as `ttyAMA1` with the serdev bus waiting on it. Nothing in this kernel drives it: `hci_uart` is not built in."
+    line: "serial serial0: tty port ttyAMA1 registered"
+
+  - why: >-
+      The address the modem answers `Read_BD_ADDR` with, and that it is still the one
+      the chip came up with: this kernel has no `hci_uart` built in, so nothing ever
+      writes the board's address into it with `BCM_WRITE_BD_ADDR`. It is the chip's
+      own, not the board's — `src/machine.rs` says where the value comes from — and
+      HCI carries it least significant octet first, so the wire order is the reverse
+      of what is printed here.
+    line: "bt      chip 02:00:5e:00:53:02, as it came up"
+
+  - why: >-
+      The board's address: what the firmware derived and published as
+      `local-bd-address`, on the node it left enabled. That is the PL011's here,
+      because this card's `config.txt` carries no `dtoverlay=disable-bt`; the node
+      under the mini-UART is disabled and holds all zeroes, so the report picks by
+      `status` rather than taking the first match. The property is least significant
+      octet first (`abf9aa5e0002`), the way the kernel reads it into a `bdaddr_t`
+      before `btbcm_set_bdaddr` writes it into the chip.
+
+      Neither this line nor the one above reaches the console, and the two addresses
+      differ, so a firmware bump that moved the derivation would pass every other
+      assertion in this file unnoticed — which is what the device-state section
+      exists for.
+    line: "device tree 02:00:5e:aa:f9:ab on /soc/serial@7e201000/bluetooth"
+
+  - why: "Without `dtoverlay=disable-wifi` the `mmcnr@7e300000` node is live, and the CYW43455's SDIO side answers on the legacy EMMC host. The reference board prints the same line."
+    line: "mmc1: new high speed SDIO card at address 0001"
+
+  - why: "What that host answered before the WiFi chip was modelled: the node is enabled and nothing was on the bus."
+    line: "Failed to initialize a non-removable card"
+    absent: true
+
+  - why: "The root filesystem mounts as it does in linux.yaml: the console moving does not change the rest of the board."
+    line: "VFS: Mounted root (ext4 filesystem) readonly on device 179:2."
+
+  - why: "Userspace runs, with init's shell on `ttyS0`."
+    line: ["pimu: userland up, Linux ", ", 4 CPUs"]
+
+  - why: "What is typed reaches the shell: the mini-UART's receive FIFO and its 16550 interrupt, through the GIC."
+    line: "Linux aarch64"
+
+  - why: "A line longer than the eight-byte receive FIFO arrives whole."
+    line: "cpus=4"
+
+  - why: >-
+      The mini-UART's `MU_LCR.DLAB` has to switch `MU_IO` and `MU_IER` to the
+      baud-rate counter. Without it the `8250` driver's divisor write left `MU_IER`
+      holding the transmit-interrupt bit the driver did not know about, the line
+      stayed asserted, and the first write to the tty livelocked the CPU in the
+      interrupt handler until RCU noticed.
+    line: "rcu_preempt self-detected stall"
+    absent: true
+
+  - why: "No panic on the way."
+    line: "Kernel panic"
+    absent: true
+
+  - why: "No oops: a kernel fault would point at the interpreter or a device model."
+    line: "Unable to handle kernel"
+    absent: true

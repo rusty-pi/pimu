@@ -28,7 +28,7 @@ Unmarked does not always mean ignored: `SET_GPIO_STATE` and `SET_GPIO_CONFIG`
 come back without the mark but with their status, `0`, in the value, which is
 what Linux's `gpio-raspberrypi-exp` checks. In a Linux boot the section covers
 every request Linux makes, so a value Linux never checks can still be pinned:
-`linux.toml` does this for `NOTIFY_XHCI_RESET`. The report prints before
+`linux.yaml` does this for `NOTIFY_XHCI_RESET`. The report prints before
 an `--mbox-property` exchange runs, so for those requests read the exchange's
 own decode.
 
