@@ -266,6 +266,7 @@ const TRB_PORT_STATUS_CHANGE: u32 = 34;
 /// The Chain bit of a transfer or Link TRB: the next TRB belongs to the same TD.
 const TRB_CHAIN: u32 = 1 << 4;
 const CC_SUCCESS: u32 = 1;
+const CC_TRANSACTION_ERROR: u32 = 4;
 const CC_TRB_ERROR: u32 = 5;
 const CC_STALL: u32 = 6;
 const CC_SLOT_NOT_ENABLED: u32 = 11;
@@ -351,6 +352,8 @@ impl Port {
 #[derive(Clone, Copy, Default)]
 struct Slot {
     enabled: bool,
+    /// When `SET_ADDRESS` went to the device, until the first request after it.
+    addressed_us: Option<u64>,
 }
 
 /// The event ring's producer side; the host owns the dequeue pointer.
@@ -454,6 +457,19 @@ impl Xhci {
     }
 
     #[inline]
+    pub fn advance(&mut self, now_us: u64) {
+        self.now_us = now_us;
+    }
+
+    fn sync_devices(&mut self) {
+        let now = self.now_us;
+        for p in &mut self.ports {
+            if let Some(d) = p.device.as_mut() {
+                d.advance(now);
+            }
+        }
+    }
+
     pub fn link_due(&mut self, now_us: u64) -> bool {
         self.now_us = now_us;
         now_us >= self.link_deadline
@@ -809,6 +825,7 @@ impl Xhci {
     }
 
     fn ring_doorbell(&mut self, target: u32, value: u32, mem: &mut dyn HostMem) {
+        self.sync_devices();
         if target == 0 {
             self.run_command_ring(mem);
         } else {
@@ -961,6 +978,10 @@ impl Xhci {
             Some(d) => d.speed(),
             None => return CC_TRB_ERROR,
         };
+        let bsr = trb[3] & (1 << 9) != 0;
+        if !bsr && self.sibling_at_default(root_port, route) {
+            return CC_TRANSACTION_ERROR;
+        }
         let slot_ctx = mem.read_bytes(in_slot, 0x20);
         mem.write_bytes(ctx, &slot_ctx);
         let ep0 = mem.read_bytes(input + 2 * csz, 0x20);
@@ -968,14 +989,31 @@ impl Xhci {
         // Slot Context: speed, state, and the address the controller assigned.
         let dw0 = (mem.read32(ctx) & !(0xF << 20)) | ((speed as u32) << 20);
         mem.write32(ctx, dw0);
-        let bsr = trb[3] & (1 << 9) != 0;
         let state = if bsr { 1u32 } else { 2 };
         let addr = if bsr { 0 } else { slot };
         mem.write32(ctx + 12, (state << 27) | (addr & 0xFF));
         // Endpoint 0: state Running.
         let ep_dw0 = (mem.read32(ctx + csz) & !0x7) | 1;
         mem.write32(ctx + csz, ep_dw0);
+        if !bsr {
+            if let Some(d) = self.resolve(root_port, route) {
+                d.set_address(slot as u8);
+            }
+            self.slots[slot as usize].addressed_us = Some(self.now_us);
+        }
         CC_SUCCESS
+    }
+
+    /// Another device on the same hub is enabled and still at address 0: it
+    /// would answer this `SET_ADDRESS` too, and the controller sees both.
+    fn sibling_at_default(&mut self, root_port: usize, route: u32) -> bool {
+        let Some(tier) = (0..5).rev().find(|t| (route >> (4 * t)) & 0xF != 0) else {
+            return false;
+        };
+        let port = ((route >> (4 * tier)) & 0xF) as u8;
+        let parent = route & !(0xF << (4 * tier));
+        self.resolve(root_port, parent)
+            .is_some_and(|hub| hub.sibling_at_default(port))
     }
 
     /// `Configure Endpoint` and `Evaluate Context`: copy the contexts the Input
@@ -1113,7 +1151,7 @@ impl Xhci {
             self.transfers += 1;
             let ioc = trb[3] & (1 << 5) != 0;
             let isp = trb[3] & (1 << 2) != 0 && code == CC_SHORT_PACKET;
-            if ioc || isp || code > CC_SHORT_PACKET {
+            if ioc || isp || code > CC_SHORT_PACKET || code == CC_TRANSACTION_ERROR {
                 let ed = kind == TRB_EVENT_DATA;
                 let pointer = if ed {
                     trb[0] as u64 | ((trb[1] as u64) << 32)
@@ -1133,7 +1171,7 @@ impl Xhci {
             }
             td_open = trb[3] & TRB_CHAIN != 0;
             ptr += 16;
-            if code > CC_SHORT_PACKET {
+            if code > CC_SHORT_PACKET || code == CC_TRANSACTION_ERROR {
                 break; // an error halts the endpoint
             }
         }
@@ -1153,6 +1191,15 @@ impl Xhci {
         let buf = trb[0] as u64 | ((trb[1] as u64) << 32);
         let len = (trb[2] & 0x1_FFFF) as usize;
         let idt = trb[3] & (1 << 6) != 0;
+        if kind == TRB_SETUP && dci == 1 {
+            let now = self.now_us;
+            let addressed = self.slots[slot as usize].addressed_us;
+            let recovery = self.slot_device(slot, mem).map_or(0, |d| d.recovery_us());
+            if addressed.is_some_and(|t| now < t + recovery) {
+                return Some((CC_TRANSACTION_ERROR, 0));
+            }
+            self.slots[slot as usize].addressed_us = None;
+        }
         match kind {
             TRB_SETUP => {
                 let mut b = [0u8; 8];
@@ -1545,6 +1592,7 @@ mod tests {
             EP0_RING + 32,
             [0, 0, 0, (TRB_STATUS << 10) | (1 << 5) | 1],
         );
+        recover(&mut hc);
         hc.write(DBOFF + 4, Width::Word, 1, &mut mem);
 
         let got = mem.read_bytes(BUFFER, 18);
@@ -1567,6 +1615,11 @@ mod tests {
     /// Address slot 1 on root port 1 with a transfer ring for `dci`, written by
     /// hand: the endpoint context is all the ring engine reads.
     fn addressed(hc: &mut Xhci, mem: &mut VecMem, dci: u32, ring: u64) {
+        addressed_now(hc, mem, dci, ring);
+        recover(hc);
+    }
+
+    fn addressed_now(hc: &mut Xhci, mem: &mut VecMem, dci: u32, ring: u64) {
         hc.write(PORTSC, Width::Word, PORTSC_PR, mem);
         command(hc, mem, 0, 1, [0, 0, 0, (TRB_ENABLE_SLOT << 10) | 1]);
         mem.write32(DCBAA + 8, DEV_CTX as u32);
@@ -1586,6 +1639,10 @@ mod tests {
             ],
         );
         mem.write32(DEV_CTX + 0x20 * dci as u64 + 8, ring as u32 | 1);
+    }
+
+    fn recover(hc: &mut Xhci) {
+        hc.advance(hc.now_us + 10_000);
     }
 
     fn control_no_data(mem: &mut VecMem, at: u64, setup: [u8; 8]) {
@@ -1628,6 +1685,8 @@ mod tests {
         // Resetting a downstream port gives the parked poll something to say.
         control_no_data(&mut mem, EP0_RING, [0x23, 3, 4, 0, 2, 0, 0, 0]);
         hc.write(DBOFF + 4, Width::Word, 1, &mut mem);
+        hc.advance(hc.now_us + 10_000);
+        hc.write(DBOFF + 4, Width::Word, 1, &mut mem);
         assert_eq!(mem.read_bytes(BUFFER, 1), vec![0b100], "port 2 changed");
         assert_eq!(
             mem.read32(DEV_CTX + 0x68) & !0xF,
@@ -1662,6 +1721,32 @@ mod tests {
                 mem.read32(EVENT_RING + 48 + 8) >> 24,
                 want,
                 "chain={link_chain}"
+            );
+        }
+    }
+
+    /// A dock's hub fails the first request sent sooner than 10 ms after
+    /// `SET_ADDRESS`, with a transaction error; the soldered hub does not.
+    #[test]
+    fn a_dock_hub_needs_a_recovery_time_after_set_address() {
+        use crate::periph::usb::MassStorage;
+        for (dock, wait, want) in [
+            (true, 9_999, CC_TRANSACTION_ERROR),
+            (true, 10_000, CC_SUCCESS),
+            (false, 0, CC_SUCCESS),
+        ] {
+            let (mut hc, mut mem) = started();
+            if dock {
+                hc.attach(1, Box::new(Hub::dock(MassStorage::new(vec![0; 4096]))));
+            }
+            addressed_now(&mut hc, &mut mem, 1, EP0_RING);
+            hc.advance(hc.now_us + wait);
+            control_no_data(&mut mem, EP0_RING, [0x00, 9, 1, 0, 0, 0, 0, 0]);
+            hc.write(DBOFF + 4, Width::Word, 1, &mut mem);
+            assert_eq!(
+                mem.read32(EVENT_RING + 48 + 8) >> 24,
+                want,
+                "dock={dock} after {wait} us"
             );
         }
     }
@@ -1714,6 +1799,7 @@ mod tests {
                 (1 << 16) | (TRB_DATA << 10) | (1 << 5) | 1,
             ],
         );
+        recover(&mut hc);
         hc.write(DBOFF + 4, Width::Word, 1, &mut mem);
         let ev = [0, 1, 2, 3].map(|i| mem.read32(EVENT_RING + 48 + 4 * i));
         assert_eq!(ev[2] >> 24, CC_SHORT_PACKET);

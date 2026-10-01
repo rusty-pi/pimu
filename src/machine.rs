@@ -447,6 +447,7 @@ impl Machine {
     fn advance_pcie(&mut self) {
         let now = self.systimer.now_us();
         self.with_dma_master("the xHCI / VL805", |m| m.pcie.advance_to(now, &mut m.ram));
+        self.xhci_otg.advance(now);
     }
 
     /// Settle the HDMI DDC masters, lazily on the way into their own registers: only

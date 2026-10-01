@@ -116,6 +116,29 @@ pub trait UsbDevice: 'static {
     fn is_hub(&self) -> bool {
         false
     }
+
+    /// How long after `SET_ADDRESS` the device fails a request with a
+    /// transaction error.
+    fn recovery_us(&self) -> u64 {
+        0
+    }
+
+    /// Bring the device's clock to modelled time `now_us`.
+    fn advance(&mut self, _now_us: u64) {}
+
+    /// The device has been given a bus address; one that has not answers at
+    /// address 0, together with everything else in that state.
+    fn addressed(&self) -> bool {
+        true
+    }
+
+    fn set_address(&mut self, _address: u8) {}
+
+    /// For a hub: another port than `port` has an enabled device still at
+    /// address 0, which would answer the same `SET_ADDRESS`.
+    fn sibling_at_default(&self, _port: u8) -> bool {
+        false
+    }
 }
 
 /// The requests every device answers the same way; `None` for anything
@@ -207,7 +230,16 @@ struct HubPort {
     device: Option<Box<dyn UsbDevice>>,
     status: u16,
     change: u16,
+    reset_done_us: Option<u64>,
 }
+
+/// How long a port reset signals for: USB 2.0 `TDRST` is 10 ms at least, and
+/// a hub holds `PORT_RESET` for that long before the port is enabled.
+const PORT_RESET_US: u64 = 10_000;
+
+const PORT_STATUS_ENABLE: u16 = 1 << 1;
+const PORT_STATUS_RESET: u16 = 1 << 4;
+const PORT_CHANGE_RESET: u16 = 1 << 4;
 
 /// The VIA Labs `2109:3431` four-port hub soldered to xHCI root port 1 of every
 /// Pi 4B. Every descriptor byte below is verbatim from a Raspberry Pi 4B
@@ -216,6 +248,8 @@ pub struct Hub {
     common: CommonState,
     desc: Descriptors,
     ports: [HubPort; 4],
+    now_us: u64,
+    recovery_us: u64,
 }
 
 impl Default for Hub {
@@ -255,6 +289,22 @@ impl Hub {
                 status: 0x01,
             },
             ports,
+            now_us: 0,
+            recovery_us: 0,
+        }
+    }
+
+    fn finish_resets(&mut self) {
+        let now = self.now_us;
+        for p in &mut self.ports {
+            if p.reset_done_us.is_some_and(|t| t <= now) {
+                p.reset_done_us = None;
+                p.status &= !PORT_STATUS_RESET;
+                if p.device.is_some() {
+                    p.status |= PORT_STATUS_ENABLE;
+                }
+                p.change |= PORT_CHANGE_RESET;
+            }
         }
     }
 
@@ -264,13 +314,23 @@ impl Hub {
     /// dock booted from on a Raspberry Pi 4B d03115 (pi4-firmware `22d26fa`);
     /// the device identities are not measured.
     pub fn dock(stick: MassStorage) -> Hub {
-        let mut inner = Hub::new();
+        let mut inner = Hub::dock_hub();
         inner.attach(1, Box::new(MassStorage::empty_card_reader()));
         inner.attach(2, Box::new(stick));
-        let mut outer = Hub::new();
+        let mut outer = Hub::dock_hub();
         outer.attach(1, Box::new(inner));
         outer.attach(2, Box::new(EthernetAdapter::new()));
         outer
+    }
+
+    /// A hub that fails the first request sent within 10 ms of `SET_ADDRESS`,
+    /// as the dock's did on a Raspberry Pi 4B d03115 (pi4-firmware `ad9070a`).
+    /// The soldered VIA hub has no such limit on record.
+    fn dock_hub() -> Hub {
+        Hub {
+            recovery_us: 10_000,
+            ..Hub::new()
+        }
     }
 
     pub fn attach(&mut self, port: u8, device: Box<dyn UsbDevice>) {
@@ -315,14 +375,12 @@ impl Hub {
                 match setup.value {
                     HUB_FEAT_PORT_POWER => p.status |= 1 << 8,
                     HUB_FEAT_PORT_RESET => {
-                        // A reset on an occupied port completes at once and
-                        // leaves the port enabled, the only state the
-                        // firmware's poll loop progresses from.
                         if let Some(d) = p.device.as_mut() {
                             d.reset();
-                            p.status |= 1 << 1; // PORT_ENABLE
                         }
-                        p.change |= 1 << 4; // C_PORT_RESET
+                        p.status &= !PORT_STATUS_ENABLE;
+                        p.status |= PORT_STATUS_RESET;
+                        p.reset_done_us = Some(self.now_us + PORT_RESET_US);
                     }
                     _ => {}
                 }
@@ -353,6 +411,36 @@ impl Hub {
 impl UsbDevice for Hub {
     fn speed(&self) -> Speed {
         Speed::High
+    }
+
+    fn advance(&mut self, now_us: u64) {
+        self.now_us = now_us;
+        self.finish_resets();
+        for p in &mut self.ports {
+            if let Some(d) = p.device.as_mut() {
+                d.advance(now_us);
+            }
+        }
+    }
+
+    fn recovery_us(&self) -> u64 {
+        self.recovery_us
+    }
+
+    fn addressed(&self) -> bool {
+        self.common.address != 0
+    }
+
+    fn set_address(&mut self, address: u8) {
+        self.common.address = address;
+    }
+
+    fn sibling_at_default(&self, port: u8) -> bool {
+        self.ports.iter().enumerate().any(|(i, p)| {
+            i + 1 != port as usize
+                && p.status & PORT_STATUS_ENABLE != 0
+                && p.device.as_ref().is_some_and(|d| !d.addressed())
+        })
     }
 
     fn is_hub(&self) -> bool {
@@ -442,6 +530,14 @@ impl EthernetAdapter {
 impl UsbDevice for EthernetAdapter {
     fn speed(&self) -> Speed {
         Speed::High
+    }
+
+    fn addressed(&self) -> bool {
+        self.common.address != 0
+    }
+
+    fn set_address(&mut self, address: u8) {
+        self.common.address = address;
     }
 
     fn reset(&mut self) {
@@ -699,6 +795,14 @@ impl UsbDevice for MassStorage {
         self.speed
     }
 
+    fn addressed(&self) -> bool {
+        self.common.address != 0
+    }
+
+    fn set_address(&mut self, address: u8) {
+        self.common.address = address;
+    }
+
     fn reset(&mut self) {
         self.common = CommonState::default();
         self.phase = BotPhase::Command;
@@ -852,6 +956,63 @@ mod tests {
             panic!("no status block");
         };
         assert_eq!(csw[12], 0, "the stick is ready");
+    }
+
+    fn reset_port(hub: &mut Hub, port: u16) {
+        ctrl(hub, 0x23, REQ_SET_FEATURE, HUB_FEAT_PORT_RESET, port, 0);
+    }
+
+    fn port_status(hub: &mut Hub, port: u16) -> (u16, u16) {
+        let st = ctrl(hub, 0xA3, REQ_GET_STATUS, 0, port, 4);
+        (
+            u16::from_le_bytes([st[0], st[1]]),
+            u16::from_le_bytes([st[2], st[3]]),
+        )
+    }
+
+    #[test]
+    fn a_port_reset_takes_ten_milliseconds() {
+        let mut hub = Hub::new();
+        hub.attach(1, Box::new(MassStorage::new(vec![0; 4096])));
+        hub.advance(1_000);
+        reset_port(&mut hub, 1);
+        hub.advance(1_000 + PORT_RESET_US - 1);
+        let (status, change) = port_status(&mut hub, 1);
+        assert_ne!(status & PORT_STATUS_RESET, 0, "still resetting");
+        assert_eq!(status & PORT_STATUS_ENABLE, 0, "not enabled yet");
+        assert_eq!(change & PORT_CHANGE_RESET, 0);
+        hub.advance(1_000 + PORT_RESET_US);
+        let (status, change) = port_status(&mut hub, 1);
+        assert_eq!(status & PORT_STATUS_RESET, 0);
+        assert_ne!(status & PORT_STATUS_ENABLE, 0, "enabled");
+        assert_ne!(change & PORT_CHANGE_RESET, 0, "C_PORT_RESET");
+    }
+
+    /// Two enabled devices at address 0 answer the same `SET_ADDRESS`.
+    #[test]
+    fn an_enabled_sibling_at_address_zero_is_seen() {
+        let mut hub = Hub::new();
+        hub.attach(1, Box::new(MassStorage::new(vec![0; 4096])));
+        hub.attach(2, Box::new(MassStorage::new(vec![0; 4096])));
+        reset_port(&mut hub, 1);
+        reset_port(&mut hub, 2);
+        hub.advance(PORT_RESET_US);
+        assert!(hub.sibling_at_default(1));
+        assert!(hub.sibling_at_default(2));
+        hub.child(1).unwrap().set_address(1);
+        assert!(hub.sibling_at_default(1), "port 2 is still at 0");
+        assert!(!hub.sibling_at_default(2), "port 1 has its address");
+    }
+
+    #[test]
+    fn a_device_waiting_for_its_reset_is_not_a_sibling_at_address_zero() {
+        let mut hub = Hub::new();
+        hub.attach(1, Box::new(MassStorage::new(vec![0; 4096])));
+        hub.attach(2, Box::new(MassStorage::new(vec![0; 4096])));
+        reset_port(&mut hub, 1);
+        hub.advance(PORT_RESET_US);
+        reset_port(&mut hub, 2);
+        assert!(!hub.sibling_at_default(1));
     }
 
     fn cbw(op: u8) -> Vec<u8> {

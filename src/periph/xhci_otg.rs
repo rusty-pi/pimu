@@ -149,6 +149,10 @@ impl XhciOtg {
         self.hc.attach(PORT, device);
     }
 
+    pub fn advance(&mut self, now_us: u64) {
+        self.hc.advance(now_us);
+    }
+
     pub fn populated(&mut self) -> bool {
         self.hc.port_device(PORT).is_some()
     }
