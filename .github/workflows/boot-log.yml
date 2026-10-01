@@ -192,7 +192,7 @@ jobs:
       - name: Build pimu
         run: cargo build --release
 
-      # Everything downstream — the tar below, the boots, `boot-check` — reads
+      # Everything downstream — the tar below, the boots, `boot --scenario` — reads
       # the binary at target/release, wherever cargo was told to build it.
       - name: Put the binary where the boots look for it
         if: env.CARGO_TARGET_DIR != ''
@@ -300,13 +300,13 @@ jobs:
         run: |
           rc=0
           for s in ${{ matrix.scenarios }}; do
-            target/release/pimu boot-check "testdata/boot/$s.yaml" --output "boot-$s.log" || rc=1
+            target/release/pimu boot --scenario "testdata/boot/$s.yaml" --output "boot-$s.log" || rc=1
           done
           exit $rc
 
       # Nothing is uploaded: a failed boot's output goes to the job log instead.
-      # That includes the console file `boot-check <scenario> --from
-      # boot-<scenario>.log --update` wants, base64 so the escape sequences in a
+      # That includes the console file `boot --scenario <file> --from-log
+      # boot-<scenario>.log` wants, base64 so the escape sequences in a
       # Linux boot's console survive the round trip through this log. Wrapped
       # narrow on purpose: a line of a few hundred characters is dropped from the
       # log altogether, which silently lost the two longest consoles. To decode,

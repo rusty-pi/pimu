@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=../../schemas/boot-scenario.schema.json
 # The Linux boot of linux.yaml on a card whose config.txt leaves
 # Bluetooth and WiFi enabled — what an imager writes.
-# `pimu boot-check testdata/boot/linux-bt.yaml` runs it, and so does CI.
+# `pimu boot --scenario testdata/boot/linux-bt.yaml` runs it, and so does CI.
 #
 # Dropping `dtoverlay=disable-bt` changes where the console is. The base
 # device tree gives the PL011 to the Bluetooth modem and keeps

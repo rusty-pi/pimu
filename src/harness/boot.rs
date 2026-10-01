@@ -98,7 +98,7 @@ pub struct ConsoleLine {
     pub text: String,
 }
 
-/// Make console text one plain line — `boot-check --plan` prints one `boot`
+/// Make console text one plain line — `boot --scenario <file> --plan` prints one `boot`
 /// argument per line — with C-style escapes. [`unescape`] reverses it.
 pub fn escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -372,7 +372,7 @@ impl BootScenario {
     }
 
     /// Every file the run reads, each with the command that makes it. None is
-    /// committed, so `boot-check --plan` names the missing ones instead of
+    /// committed, so `boot --scenario <file> --plan` names the missing ones instead of
     /// planning a boot that cannot open its card.
     pub fn inputs(&self) -> Vec<BootInput> {
         let b = &self.boot;
@@ -434,12 +434,12 @@ impl BootScenario {
             .collect()
     }
 
-    /// The wall budget: `wall_secs`, which `boot-check --max-wall` overrides.
+    /// The wall budget: `wall_secs`, which `--max-wall` overrides.
     pub fn wall_secs(&self) -> u64 {
         self.boot.wall_secs
     }
 
-    /// The `boot` argument vector that runs this scenario: `boot-check` runs
+    /// The `boot` argument vector that runs this scenario: `boot --scenario` runs
     /// exactly this and `--plan` prints it.
     pub fn boot_args(&self, console_log: &Path) -> Vec<String> {
         let mut args: Vec<String> = vec![
@@ -727,7 +727,7 @@ impl RetiredCounts {
         let mut out = String::from(
             "# Instructions each core retired in this boot: vpu0 and vpu1 on the\n\
              # VideoCore, vpu1 only once the firmware woke it, then arm0.. once the ARM\n\
-             # is released. `boot-check <scenario> --update` rewrites this file.\n",
+             # is released. `boot --scenario <file> --record` rewrites this file.\n",
         );
         for (name, n) in &self.0 {
             out.push_str(&format!("{name}: {n}\n"));
@@ -827,7 +827,7 @@ pub fn skipped_count(log: &str) -> Option<u64> {
 }
 
 /// Every milestone, plus the skipped-instruction guard, against the combined
-/// run log. Separate from the golden because `--update` has to know whether the
+/// run log. Separate from the golden because `--record` has to know whether the
 /// run it is about to record was a good one.
 pub fn check_milestones(scn: &BootScenario, log: &str) -> Vec<String> {
     let mut failures = Vec::new();
@@ -874,13 +874,13 @@ pub fn check_run(scn: &BootScenario, log: &str, console: &str) -> Result<Vec<Str
         GoldenCheck::Missing => failures.push(format!(
             "MISSING: no golden transcript at {}\n         \
              why: the boot has nothing to be compared against; \
-             re-run with --update to record one\n",
+             re-run with --record to record one\n",
             scn.golden_path().unwrap_or_default().display()
         )),
         GoldenCheck::Mismatch(diff) => failures.push(format!(
             "TRANSCRIPT: the console differs from {}\n\
              {diff}\
-             \n         (--update rewrites the golden once the change is \
+             \n         (--record rewrites the golden once the change is \
              understood and wanted)\n",
             scn.golden_path().unwrap_or_default().display()
         )),
@@ -894,7 +894,7 @@ pub fn check_run(scn: &BootScenario, log: &str, console: &str) -> Result<Vec<Str
             GoldenCheck::Missing => failures.push(format!(
                 "MISSING: no retired counts at {}\n         \
                  why: the boot has no instruction counts to be compared against; \
-                 re-run with --update to record them\n",
+                 re-run with --record to record them\n",
                 scn.retired_path().unwrap_or_default().display()
             )),
             GoldenCheck::Mismatch(diff) => {
@@ -908,7 +908,7 @@ pub fn check_run(scn: &BootScenario, log: &str, console: &str) -> Result<Vec<Str
                 f.push_str(
                     "         why: the counts reproduce exactly, so the boot ran differently, \
                      even where the console does not show it\n         \
-                     (--update rewrites the counts once the change is understood and wanted)\n",
+                     (--record rewrites the counts once the change is understood and wanted)\n",
                 );
                 failures.push(f);
             }

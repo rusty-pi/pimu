@@ -2,7 +2,7 @@
 //! transcript. What this covers is the plumbing behind `pimu run-all` —
 //! discovery, YAML loading, payload building, console capture, golden diff —
 //! rather than the model itself. The firmware boot needs uncommitted blobs and
-//! minutes of CPU, so `pimu boot-check` runs it and `tests/boot_scenario.rs`
+//! minutes of CPU, so `pimu boot --scenario` runs it and `tests/boot_scenario.rs`
 //! covers the rest of it.
 //!
 //! Regenerate goldens after an intentional change: `cargo run -- run-all --update`.

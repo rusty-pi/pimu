@@ -7,6 +7,7 @@ use std::process::ExitCode;
 use anyhow::{anyhow, bail, Context, Result};
 
 mod boot;
+mod check;
 mod config;
 mod disasm;
 mod mbox;
@@ -21,9 +22,6 @@ mod vchiq;
 #[cfg(feature = "repo")]
 const REPO_USAGE: &str = "    pimu run <scenario.yaml> [--update] [-v]
     pimu run-all [<dir>] [--update] [-v]
-    pimu boot-check <scenario.yaml> [--update] [--output <log>] [--max-wall <secs>]
-    pimu boot-check <scenario.yaml> --from <log> [--update]
-    pimu boot-check <scenario.yaml> --plan [--output <log>] [--max-wall <secs>]
 ";
 
 #[cfg(not(feature = "repo"))]
@@ -33,16 +31,6 @@ const REPO_USAGE: &str = "";
 const REPO_COMMANDS: &str =
     "    run       Run one scenario and check it against its golden transcript.
     run-all   Run every *.yaml scenario in <dir> (default: testdata/scenarios).
-    boot-check
-              Run the firmware boot a boot scenario describes and check it:
-              the golden console transcript plus every named milestone. The
-              combined output goes to --output (boot.log), the console next to
-              it as <log>.console; --from checks such a pair from an earlier
-              run without booting. --update re-records the golden; --max-wall
-              overrides the scenario's wall budget.
-              `--plan` prints the `boot` invocation instead, one argument a
-              line. Both refuse when a file the run reads is missing, naming
-              the command that makes each.
 ";
 
 #[cfg(not(feature = "repo"))]
@@ -179,8 +167,6 @@ fn run(args: &[String]) -> Result<ExitCode> {
         "run-all" => scenario::cmd_run_all(&args[1..]),
         // `recon` is the old name of `boot`, kept for old command lines.
         "boot" | "recon" => boot::cmd_boot(&args[1..]),
-        #[cfg(feature = "repo")]
-        "boot-check" => scenario::cmd_boot_check(&args[1..]),
         "disasm" => disasm::cmd_disasm(&args[1..]),
         #[cfg(feature = "repo")]
         "spec-docs" => cmd_spec_docs(&args[1..]),

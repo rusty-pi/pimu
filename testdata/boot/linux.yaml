@@ -3,7 +3,7 @@
 # with the four ARM cores modelled, carried on through the armstub into the
 # kernel, off the SD card's ext4 root partition, and into a busybox shell on
 # the serial console, which then gets a few commands typed into it.
-# `pimu boot-check testdata/boot/linux.yaml` runs it, and so does
+# `pimu boot --scenario testdata/boot/linux.yaml` runs it, and so does
 # CI.
 #
 # The card is the one scripts/make-sd.sh builds; its root filesystem holds
@@ -27,7 +27,7 @@ boot:
 # The prompt after the last line typed below. Nothing prints without input.
   until: "/ # "
 # A dev box reaches the prompt in about three minutes; the runners are roughly
-# 1.6x slower. `boot-check --max-wall` overrides it.
+# 1.6x slower. `--max-wall` overrides it.
   wall_secs: 600
   max_skipped: 0
 

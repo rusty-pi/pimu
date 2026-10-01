@@ -29,7 +29,7 @@ scan` finds there is invented — `src/periph/sdpcm.rs` says so beside it, and
 the scenario's own header says so again.
 
 Each boot scenario in `testdata/boot/` carries the exact flags and EEPROM
-settings for its medium, and `pimu boot-check <scenario> --plan` prints
+settings for its medium, and `pimu boot --scenario <file> --plan` prints
 them — the shortest way to see how a given boot is set up.
 
 ## Booting a directory
@@ -121,12 +121,65 @@ server on the host's port 69.
 A run over passt follows the host's clock, so it is not deterministic, and CI
 stays on the built-in `--netboot` peer.
 
+## Checking a boot: `--scenario`
+
+A scenario is a YAML file that says what to boot and what the run has to show.
+`pimu boot --scenario <file>` boots it, checks the run and exits 0 on a pass and
+1 on a failure; given a directory it runs every `*.yaml` in it, one after
+another, and ends with a `PASS`/`FAIL` line each.
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/rusty-pi/pimu/<tag>/schemas/boot-scenario.schema.json
+name: "usb-dock"
+description: "Boot from a stick behind a USB-C dock."
+
+boot:
+  eeprom: "out/pieeprom.bin"     # paths are relative to this file; a medium may be a URL
+  otg: "out/sd.img"
+  boot_order: "0x5"
+  wall_secs: 200
+
+milestones:
+  - why: "The stick was found behind both hubs."
+    line: "MSD device"
+  - why: "The firmware reached the ARM hand-off."
+    line: "arm_loader: Starting ARM"
+
+golden:                          # optional: diff the whole console against this
+  path: "golden/usb-dock.txt"
+  retired: false                 # keep the instruction counts out of it
+```
+
+- **`milestones`** are substrings that must (or, with `absent: true`, must not)
+  appear in the run's output, each with the reason it matters, which is quoted
+  when it fails. `line` may be a list: the parts have to appear in that order on
+  one line.
+- **`golden`** is the whole console, normalised (clocks and kernel timestamps
+  stripped), diffed line by line. `retired` pins how many instructions each core
+  ran, which is exact for one build of the model and one firmware, so a firmware
+  that changes often leaves it `false`. With no `golden` only the milestones
+  judge the run.
+- The other options of [`boot`](#boot) in a scenario's `boot:` section are the
+  same as the command line's: `sd`, `usb`, `netboot`, `bootconf`, `otp_row`,
+  `stepping`, `board_rev`, `until`, `input` and the rest are listed in the
+  schema (`schemas/boot-scenario.schema.json`), which an editor reads from the
+  comment on the first line.
+
+Options after `--scenario` go to the boot and override the file's own, so
+`--max-wall 600` gives a slower machine more time. `--record` rewrites the golden
+and the retired counts from the run (and refuses when a milestone failed, so a
+broken run is never recorded as the baseline), `--plan` prints the `boot`
+arguments instead of running, `--from-log <log>` checks the log of an earlier
+run without booting, and `--output <log>` names the combined log
+(`boot-<name>.log` by default; with a directory, the directory the logs go in).
+The console is written beside the log, as `<log>.console`.
+
 ## Wall budgets
 
 `--max-wall` defaults to 140 s (none with `--stdin`), and there is no
 instruction cap unless you pass `--max-steps`. Reaching the last milestone takes
 longer than 140 s, so each boot scenario carries its own budget (`wall_secs`,
-overridable with `boot-check --max-wall`).
+overridable with `--max-wall`).
 
 ## Speed
 
@@ -137,7 +190,7 @@ booting guest is slower than the board it models and so runs unhindered; an idle
 one leaves the host idle too, instead of a core at 100%.
 
 `--speed <factor>` allows that multiple of real time, and `--speed max` runs as
-fast as the host manages, which is what a regression run wants: `boot-check`
+fast as the host manages, which is what a regression run wants: `boot --scenario`
 passes it, so CI is unpaced. Pacing changes nothing the guest sees — same
 instructions, same modelled time — and the time spent asleep does not count
 against `--max-wall`; `-v` reports it.

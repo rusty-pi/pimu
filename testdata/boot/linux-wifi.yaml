@@ -5,7 +5,7 @@
 # firmware, CLM blob and Pi 4B nvram under /lib/firmware/brcm.
 # `scripts/fetch-firmware.sh` fetches both, and
 # `BRCMFMAC=1 scripts/make-sd.sh firmware/sd-brcmfmac.img` writes the card.
-# `pimu boot-check testdata/boot/linux-wifi.yaml` runs it, and so does
+# `pimu boot --scenario testdata/boot/linux-wifi.yaml` runs it, and so does
 # CI.
 #
 # Config and console are linux-bt's: no `dtoverlay=disable-wifi`, so the

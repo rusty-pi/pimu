@@ -34,8 +34,8 @@ default = ["repo"]
 diag = []
 
 # The commands that only mean something inside a checkout of this repository:
-# `run`, `run-all`, `boot-check` and `spec-docs`. They read golden transcripts
-# from `testdata/`, and `spec-docs` rewrites `docs/` through the build-time
+# `run`, `run-all` and `spec-docs`. They read golden transcripts from
+# `testdata/`, and `spec-docs` rewrites `docs/` through the build-time
 # `CARGO_MANIFEST_DIR`, so a published binary cannot run them at all. On by
 # default for repository work; the release build passes
 # `--no-default-features`.

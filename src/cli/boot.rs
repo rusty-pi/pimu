@@ -39,6 +39,7 @@ USAGE:
     pimu boot <file.elf> [<options>]
     pimu boot <dir> [<options>]
     pimu boot <url> [<options>]
+    pimu boot --scenario <file.yaml>|<dir> [--record|--plan|--from-log <log>] [<options>]
 
     `boot <file> --eeprom` is the same as `boot --eeprom <file>`, and with no
     command the options are `boot`'s: `pimu --eeprom <file> ...`.
@@ -204,6 +205,26 @@ MEDIA AND NETWORK:
               Put the --otg stick behind a USB-C dock: two hubs, an Ethernet
               adapter and an empty card reader besides the stick, five
               devices that each take an xHCI slot.
+    --scenario <file.yaml>|<dir>
+              Boot what a scenario file describes and check the run against
+              it: the milestones it names, its golden console transcript and
+              the instruction counts it pins. The files are read relative to
+              the scenario. A directory runs every `*.yaml` in it, one after
+              another. Exits 0 on a pass and 1 on a failure; options after it
+              go to the boot and override the file's (`--max-wall`, ...).
+              The combined output goes to `boot-<name>.log` and the console
+              beside it as `<log>.console`. See docs/running.md.
+    --record  With --scenario: rewrite the golden transcript and the retired
+              counts from this run, once it has passed its milestones.
+    --plan    With --scenario: print the arguments of the boot instead of
+              running it, one a line, and name any file it needs that is
+              missing.
+    --from-log <log>
+              With --scenario: check the log of an earlier run, and the
+              `<log>.console` beside it, without booting.
+    --output <log>
+              With --scenario: where the combined output goes. For a
+              directory of scenarios, the directory the logs go in.
     --usb-mb <n>
               A stick given by --usb or --otg is <n> MiB, with the image at its
               start, as on a Pi whose first boot uses the rest.
@@ -305,7 +326,7 @@ OUTPUT:
               channels are the point, e.g. with --log jsonl:io.
     --console-log <path>
               Write the raw UART bytes of the run to <path>, with none of the
-              run report interleaved. This is what `boot-check` normalises into
+              run report interleaved. This is what `boot --scenario` normalises into
               the golden boot transcript.
     --log [text:|jsonl:]<channel>[,<channel>...]
               Say what these subsystems did, on stderr or to --log-file
@@ -1138,6 +1159,9 @@ impl BootOpts {
                 )?,
                 "--usb-mb" => usb_mb = Some(it.next().context("--usb-mb needs a value")?.parse()?),
                 "--otg-dock" => otg_dock = true,
+                "--scenario" | "--record" | "--plan" | "--from-log" | "--output" => {
+                    bail!("{a} belongs to --scenario, which `boot` takes out before this point")
+                }
                 "--display" => display = true,
                 "--display-edid" => {
                     display = true;
@@ -1443,6 +1467,9 @@ struct Booted {
 }
 
 pub fn cmd_boot(args: &[String]) -> Result<ExitCode> {
+    if let Some((flags, extras)) = crate::check::split(args)? {
+        return crate::check::run(&flags, &extras);
+    }
     let Some(opts) = BootOpts::parse(args, Path::new(""))? else {
         print!("{HELP}");
         return Ok(ExitCode::SUCCESS);
@@ -2531,7 +2558,7 @@ fn print_regs(report: &RunReport) {
     println!();
 }
 
-/// The UART bytes on their own, which `boot-check` normalises into the golden
+/// The UART bytes on their own, which `boot --scenario` normalises into the golden
 /// transcript — picking them out of the combined log afterwards would be
 /// guesswork. On a run that rebooted, the last segment only.
 fn write_console_log(p: &Path, console: &[u8], verbose: bool) -> Result<()> {

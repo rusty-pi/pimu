@@ -6,7 +6,7 @@ Two kinds of scenario live here, plus everything they are checked against.
 |---|---|
 | `scenarios/` | In-process scenarios: a hand-assembled VPU payload each, a millisecond each, run by `cargo test` and `pimu run`. |
 | `golden/` | Their golden transcripts. |
-| `boot/` | The real boots: one file per medium and per firmware variant, run by `pimu boot-check` and by CI. Minutes each, and they need firmware blobs that are never committed. |
+| `boot/` | The real boots: one file per medium and per firmware variant, run by `pimu boot --scenario` and by CI. Minutes each, and they need firmware blobs that are never committed. |
 | `boot/golden/` | Their golden transcripts and retired instruction counts. |
 | `netboot/` | The test-only signing key HTTP boot verifies against ([README](netboot/README.md)). |
 | `arm/` | Fixtures for the ARM tests. |
@@ -33,7 +33,7 @@ it.
 
 CI runs every one of them, in parallel, on each push and PR to `main`.
 [`docs/running.md`](../docs/running.md) has the `make-sd.sh` command for each
-card; `boot-check <scenario> --plan` prints the flags a scenario boots with.
+card; `boot --scenario <file> --plan` prints the flags a scenario boots with.
 
 Every scenario, and every `retired.yaml`, names its JSON Schema on its first
 line (`# yaml-language-server: $schema=...`), so an editor with the YAML
@@ -66,11 +66,11 @@ so nothing here runs the firmware twice.
 ### Running one
 
 ```bash
-cargo run --release -- boot-check testdata/boot/firmware.yaml
-cargo run --release -- boot-check testdata/boot/linux.yaml
-cargo run --release -- boot-check testdata/boot/firmware.yaml --update          # re-record the golden and counts
-cargo run --release -- boot-check testdata/boot/firmware.yaml --max-wall 600    # slower, busier machine
-cargo run --release -- boot-check testdata/boot/usb-boot.yaml --from boot-usb-boot.log  # an earlier run's pair
+cargo run --release -- boot --scenario testdata/boot/firmware.yaml
+cargo run --release -- boot --scenario testdata/boot/linux.yaml
+cargo run --release -- boot --scenario testdata/boot/firmware.yaml --record          # re-record the golden and counts
+cargo run --release -- boot --scenario testdata/boot/firmware.yaml --max-wall 600    # slower, busier machine
+cargo run --release -- boot --scenario testdata/boot/usb-boot.yaml --from-log boot-usb-boot.log  # an earlier run's pair
 ```
 
 The combined output goes to `boot-<scenario>.log` (`--output` names another
@@ -79,7 +79,7 @@ checks again without booting. The name carries the scenario, so two checks
 running at once do not overwrite each other's evidence. CI keeps neither: a
 failed boot prints its log into the job log.
 
-After an intentional change, `--update` and then read the golden and counts diff
+After an intentional change, `--record` and then read the golden and counts diff
 in the commit: it is the change, spelled out. A change that only moves the
 counts still needs the re-record, and the diff then documents that it did.
 

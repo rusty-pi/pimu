@@ -23,7 +23,7 @@
 #
 # The card is `scripts/make-uefi-sd.sh`. Re-record the golden and the retired
 # counts with:
-#   pimu boot-check testdata/boot/uefi.yaml --update
+#   pimu boot --scenario testdata/boot/uefi.yaml --record
 
 name: "uefi"
 description: "pieeprom.bin + start4.elf handing the ARM to the RPi4 UEFI firmware, through to its boot menu."

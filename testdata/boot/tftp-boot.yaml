@@ -7,7 +7,7 @@
 # GENET driver fetches config.txt, the overlays, the dtb and the kernel.
 #
 # Re-record the golden and the retired counts with:
-#   pimu boot-check testdata/boot/tftp-boot.yaml --update
+#   pimu boot --scenario testdata/boot/tftp-boot.yaml --record
 
 name: "tftp-boot"
 description: "pieeprom.bin network boot over TFTP from the built-in peer, through to the ARM hand-off."

@@ -10,12 +10,12 @@
 # An instrumented build runs the firmware boot and the first part of the Linux
 # boot, `llvm-profdata` merges what it counted, and the release build is done
 # again with that profile. Needs the llvm-tools rustup component (added here
-# if it is missing) and what `boot-check` needs: the firmware blobs
+# if it is missing) and what `boot --scenario` needs: the firmware blobs
 # and both SD images scripts/make-sd.sh builds (firmware/sd.img, and
 # firmware/sd-halt.img with KERNEL=halt).
 #
 # The profile only steers code layout and inlining. The guest runs exactly the
-# same instructions either way, which boot-check's retired counts show. A plain
+# same instructions either way, which `--scenario`'s retired counts show. A plain
 # `cargo build --release` afterwards rebuilds without it.
 set -euo pipefail
 
@@ -49,7 +49,7 @@ mkdir -p "$work/raw"
 RUSTFLAGS="-Cprofile-generate=$work/raw" cargo build --release --target-dir "$work/build"
 instr="$work/build/release/pimu"
 
-# A boot scenario's workload as boot-check runs it, minus what it types into
+# A boot scenario's workload as `boot --scenario` runs it, minus what it types into
 # the console, plus any extra arguments (a later `--until` wins). The typed
 # input has to go: `--until` only searches what the console prints after the
 # last scripted line went in.
@@ -57,7 +57,7 @@ train() {
   local scenario="$1"
   shift
   local plan args=() i
-  mapfile -t plan < <("$instr" boot-check "$scenario" --plan --output "$work/boot")
+  mapfile -t plan < <("$instr" boot --scenario "$scenario" --plan --output "$work/boot")
   # `--plan` names any boot medium that is not built yet, on stderr.
   if [ "${#plan[@]}" -lt 2 ]; then
     echo "no plan for $scenario; build what it says is missing" >&2

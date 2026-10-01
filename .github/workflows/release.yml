@@ -108,7 +108,7 @@ jobs:
           fi
 
       # What the PGO training boots: the firmware blobs and the two cards
-      # `scripts/pgo-build.sh` runs `boot-check` against. Public downloads, so
+      # `scripts/pgo-build.sh` runs `boot --scenario` against. Public downloads, so
       # no token — unlike the EEPROM image above.
       - name: Fetch the firmware blobs and build the training cards
         run: |
@@ -119,7 +119,7 @@ jobs:
           KERNEL=halt ./scripts/make-sd.sh firmware/sd-halt.img
 
       # `--no-default-features` drops the `repo` commands — `run`, `run-all`,
-      # `boot-check`, `spec-docs` — which read golden transcripts out of
+      # `spec-docs` — which read golden transcripts out of
       # `testdata/` and write `docs/` through the build-time
       # `CARGO_MANIFEST_DIR`. None of that exists beside a released binary.
       #
@@ -127,8 +127,7 @@ jobs:
       # `-Cprofile-use` keys on function names and CFG hashes rather than on
       # the target, and the alternative — an instrumented interpreter booting
       # Linux under qemu-user — costs hours. The instrumented build keeps the
-      # default features, because the training script asks `boot-check --plan`
-      # for the workload; the profile then names functions the final builds do
+      # default features; the profile then names functions the final builds do
       # not have, which LLVM ignores.
       #
       # Both binaries come out of the builder image: the host's glibc is newer

@@ -1,4 +1,4 @@
-//! The firmware regression, minus the boot itself: `pimu boot-check` runs that,
+//! The firmware regression, minus the boot itself: `pimu boot --scenario` runs that,
 //! in its own CI job. What is testable here is everything around the run — that
 //! the scenario parses, that every milestone says why it exists, and that a
 //! changed transcript is actually *rejected*.
@@ -379,7 +379,7 @@ fn every_boot_scenario_loads_and_plans_its_media() {
     }
 }
 
-/// A fresh checkout has no boot media, so `boot-check --plan` refuses, naming each
+/// A fresh checkout has no boot media, so `boot --scenario <file> --plan` refuses, naming each
 /// missing file and the command that makes it, rather than booting without a card.
 #[test]
 fn missing_boot_media_are_named_with_the_command_that_makes_them() {

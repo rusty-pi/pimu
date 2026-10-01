@@ -126,9 +126,9 @@ pimu boot --sd https://cdimage.ubuntu.com/releases/24.04.3/release/ubuntu-24.04.
 | `boot` | Boot the machine from an EEPROM image, as a Pi 4 does, or run a VPU ELF. |
 | `disasm <file>` | Disassemble a flat binary or ELF with the VPU decoder: `disasm firmware/start4.elf --base 0xcec00200 --count 40`. |
 
-A build from this tree has four more — `run`, `run-all`, `boot-check` and
-`spec-docs`, the regression and documentation checks. They read golden files out
-of the checkout, so a released binary leaves them out;
+A build from this tree has three more — `run`, `run-all` and `spec-docs`, the
+regression and documentation checks. They read golden files out of the
+checkout, so a released binary leaves them out;
 [`building.md`](docs/building.md) describes them.
 
 ## Features

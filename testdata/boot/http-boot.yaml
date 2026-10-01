@@ -15,7 +15,7 @@
 # would put it there).
 #
 # Re-record the golden and the retired counts with:
-#   pimu boot-check testdata/boot/http-boot.yaml --update
+#   pimu boot --scenario testdata/boot/http-boot.yaml --record
 
 name: "http-boot"
 description: "pieeprom.bin network boot over plain HTTP from the built-in peer, through to the ARM hand-off."

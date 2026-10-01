@@ -60,7 +60,7 @@ see each instruction, and it records start4's boot-progress tags (stores to
 
 ## The `repo` feature
 
-Four commands only mean something inside a checkout: they check golden files
+Three commands only mean something inside a checkout: they check golden files
 under `testdata/` and rewrite `docs/` through the `CARGO_MANIFEST_DIR` of the
 build.
 
@@ -68,15 +68,15 @@ build.
 |---|---|
 | `run <scenario.yaml>` | Run one in-process scenario and check it against its golden transcript. |
 | `run-all [<dir>]` | The same for every `*.yaml` in `<dir>` (default `testdata/scenarios`). |
-| `boot-check <scenario.yaml>` | Run the boot a scenario describes and check its transcript, milestones and retired counts. `--plan` prints the `boot` invocation instead, `--from <log>` checks an earlier run's output without booting. |
 | `spec-docs [--update]` | Check (or regenerate) `docs/periph/` against `specs/*.toml`, the dark board sheet against the hand-drawn one, and `schemas/` against the scenario types. |
 
 `--update` rewrites the golden files instead of failing on a mismatch, and `-v`
-prints the whole transcript.
+prints the whole transcript. Firmware boots are checked by `boot --scenario`,
+which every build has: see [`running.md`](running.md).
 
 ```bash
 cargo run -- run-all -v                                       # every in-process scenario, with transcripts
-cargo run --release -- boot-check testdata/boot/firmware.yaml # one real boot, checked three ways
+cargo run --release -- boot --scenario testdata/boot/firmware.yaml  # one real boot, checked three ways
 ```
 
 They are the `repo` feature, on by default, and the released binaries leave them
@@ -86,14 +86,14 @@ out:
 cargo build --release --no-default-features
 ```
 
-Such a build answers `error: unknown command 'boot-check'` and does not list
+Such a build answers `error: unknown command 'run'` and does not list
 them in `--help`.
 
 ## Profile-guided optimisation
 
 `scripts/pgo-build.sh` does the release build with PGO: an instrumented build
 runs the firmware boot and the start of the Linux boot, and the release build is
-redone with what it counted. It needs what `boot-check` needs and takes about
+redone with what it counted. It needs what `boot --scenario` needs and takes about
 10 minutes on a Pi 4, where both boots then run 1.45x faster; the guest runs the
 same instructions either way.
 
@@ -158,7 +158,6 @@ both targets: `-Cprofile-use` keys on function names and CFG hashes rather than
 on the target, and training the aarch64 build honestly would mean an
 instrumented interpreter booting Linux under qemu-user. The job fetches the
 firmware blobs and builds the two training cards first, since that is what
-`boot-check` boots. The instrumented build keeps the default features — the
-training script asks `boot-check --plan` for the workload — so the profile names
-functions the final `--no-default-features` builds do not have, which LLVM
+`boot --scenario` boots. The instrumented build keeps the default features — the
+profile names functions the final `--no-default-features` builds do not have, which LLVM
 ignores.

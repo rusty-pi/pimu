@@ -17,7 +17,7 @@
 //!
 //! The board serial (row 28, and its complement in row 29) is deliberately not
 //! a real board's, only stable: the firmware derives the identity it publishes
-//! from these rows, so `boot-check` pins values that a changed fuse moves.
+//! from these rows, so `boot --scenario` pins values that a changed fuse moves.
 
 use std::collections::BTreeMap;
 
