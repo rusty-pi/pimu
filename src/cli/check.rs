@@ -349,13 +349,20 @@ fn check_boot(
     }
 
     let failures = harness::boot::check_run(scn, &log_text, &transcript)?;
-    println!(
-        "\n{}: {} milestone(s) + golden transcript ({} lines) + retired counts ({} core(s))",
-        scn.name,
-        scn.milestones.len(),
-        transcript.lines().count(),
-        RetiredCounts::from_log(&log_text).map_or(0, |c| c.0.len())
-    );
+    let mut checked = vec![format!("{} milestone(s)", scn.milestones.len())];
+    if scn.golden_path().is_some() {
+        checked.push(format!(
+            "golden transcript ({} lines)",
+            transcript.lines().count()
+        ));
+    }
+    if scn.retired_path().is_some() {
+        checked.push(format!(
+            "retired counts ({} core(s))",
+            RetiredCounts::from_log(&log_text).map_or(0, |c| c.0.len())
+        ));
+    }
+    println!("\n{}: {}", scn.name, checked.join(" + "));
     if failures.is_empty() {
         println!("boot check passed");
         return Ok(ExitCode::SUCCESS);
