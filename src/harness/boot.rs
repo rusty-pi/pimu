@@ -16,12 +16,14 @@
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
+use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::harness::capture::transcript;
 use crate::harness::regression::unified_diff;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct BootScenario {
     pub name: String,
     #[serde(default)]
@@ -35,7 +37,8 @@ pub struct BootScenario {
     pub base_dir: PathBuf,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct BootSpec {
     pub eeprom: String,
     #[serde(default)]
@@ -85,7 +88,8 @@ pub struct BootSpec {
     pub input: Vec<ConsoleLine>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ConsoleLine {
     pub after: String,
     pub text: String,
@@ -137,12 +141,14 @@ pub fn unescape(s: &str) -> Vec<u8> {
     out
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct GoldenSpec {
     pub path: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Milestone {
     /// What this proves — quoted verbatim when it fails, and mandatory: it is
     /// the half of the regression a golden diff cannot carry.
@@ -158,7 +164,7 @@ pub struct Milestone {
     pub max_count: Option<usize>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum Pattern {
     One(String),

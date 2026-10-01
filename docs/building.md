@@ -69,7 +69,7 @@ build.
 | `run <scenario.yaml>` | Run one in-process scenario and check it against its golden transcript. |
 | `run-all [<dir>]` | The same for every `*.yaml` in `<dir>` (default `testdata/scenarios`). |
 | `boot-check <scenario.yaml>` | Run the boot a scenario describes and check its transcript, milestones and retired counts. `--plan` prints the `boot` invocation instead, `--from <log>` checks an earlier run's output without booting. |
-| `spec-docs [--update]` | Check (or regenerate) `docs/periph/` against `specs/*.toml`, and the dark board sheet against the hand-drawn one. |
+| `spec-docs [--update]` | Check (or regenerate) `docs/periph/` against `specs/*.toml`, the dark board sheet against the hand-drawn one, and `schemas/` against the scenario types. |
 
 `--update` rewrites the golden files instead of failing on a mismatch, and `-v`
 prints the whole transcript.

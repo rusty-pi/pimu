@@ -35,6 +35,13 @@ CI runs every one of them, in parallel, on each push and PR to `main`.
 [`docs/running.md`](../docs/running.md) has the `make-sd.sh` command for each
 card; `boot-check <scenario> --plan` prints the flags a scenario boots with.
 
+Every scenario, and every `retired.yaml`, names its JSON Schema on its first
+line (`# yaml-language-server: $schema=...`), so an editor with the YAML
+language server flags a misspelt key or a wrong type as you type. The schemas
+are in [`schemas/`](../schemas/), generated from the Rust types by
+`cargo run -- spec-docs --update`, and `tests/schemas.rs` validates every file
+here against them.
+
 ### What a boot is checked against
 
 - the **golden transcript** in `boot/golden/`, the whole console diffed line by

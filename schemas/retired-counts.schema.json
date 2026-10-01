@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": {
+    "minimum": 0,
+    "type": "integer"
+  },
+  "description": "Instructions each core retired in a pinned boot: `vpu0` and `vpu1` on the VideoCore, then `arm0`.. once the ARM is released.",
+  "propertyNames": {
+    "pattern": "^(vpu|arm)[0-9]+$"
+  },
+  "title": "RetiredCounts",
+  "type": "object"
+}

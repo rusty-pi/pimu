@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../../schemas/boot-scenario.schema.json
 # The firmware boot from a USB stick in the USB-C socket (BOOT_ORDER 0x5).
 #
 # The SD image (`firmware.yaml`) as a stick on the BCM2711's own xHCI

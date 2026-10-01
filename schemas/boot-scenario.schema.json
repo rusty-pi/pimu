@@ -1,0 +1,241 @@
+{
+  "$defs": {
+    "BootSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "arm": {
+          "default": false,
+          "description": "Ignored: the ARM is always modelled. Kept so a scenario file that still\nsays `arm = true` loads.",
+          "type": "boolean"
+        },
+        "board_rev": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "boot_order": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bootconf": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "eeprom": {
+          "type": "string"
+        },
+        "eeprom_pubkey": {
+          "default": null,
+          "description": "RSA public key to put in the EEPROM, for a signed `boot.img`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "input": {
+          "description": "Lines typed into the serial console, each once its prompt has printed.",
+          "items": {
+            "$ref": "#/$defs/ConsoleLine"
+          },
+          "type": "array"
+        },
+        "max_skipped": {
+          "default": 0,
+          "description": "Largest acceptable skipped-instruction count in the run report. `boot`\nstops on an instruction the decoder does not implement rather than\nstepping over it, so nothing in a clean boot should need any leniency.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mbox_property": {
+          "default": [],
+          "description": "Property-interface tags to ask the still-running firmware for once the\nboot has handed over, as `boot --mbox-property` would.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "netboot": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "otg": {
+          "default": null,
+          "description": "Mass-storage image in the USB-C socket, on the BCM2711's own xHCI.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "otp_row": {
+          "default": [],
+          "description": "Fuses to program before the boot, `ROW=VALUE` each, over the model's\nown rows. The model is a board out of the factory, so a scenario that\nneeds a row an owner would have fused says so here.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "sd": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "stepping": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "until": {
+          "default": null,
+          "description": "End the run once the console prints this, after the last input went in.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "usb": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "wall_secs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "eeprom",
+        "wall_secs"
+      ],
+      "type": "object"
+    },
+    "ConsoleLine": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "after",
+        "text"
+      ],
+      "type": "object"
+    },
+    "GoldenSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "Milestone": {
+      "additionalProperties": false,
+      "properties": {
+        "absent": {
+          "default": false,
+          "type": "boolean"
+        },
+        "count": {
+          "default": null,
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "line": {
+          "$ref": "#/$defs/Pattern",
+          "description": "A substring, or substrings that must appear in that order on one line.\nPlain text, never a regex."
+        },
+        "max_count": {
+          "default": null,
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "why": {
+          "description": "What this proves — quoted verbatim when it fails, and mandatory: it is\nthe half of the regression a golden diff cannot carry.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "why",
+        "line"
+      ],
+      "type": "object"
+    },
+    "Pattern": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "boot": {
+      "$ref": "#/$defs/BootSpec"
+    },
+    "description": {
+      "default": "",
+      "type": "string"
+    },
+    "golden": {
+      "$ref": "#/$defs/GoldenSpec"
+    },
+    "milestones": {
+      "items": {
+        "$ref": "#/$defs/Milestone"
+      },
+      "type": "array"
+    },
+    "name": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "name",
+    "boot",
+    "golden"
+  ],
+  "title": "BootScenario",
+  "type": "object"
+}

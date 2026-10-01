@@ -3,12 +3,14 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
+use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::machine::Console;
 use crate::vpu::UnimplPolicy;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Scenario {
     pub name: String,
     #[serde(default)]
@@ -24,7 +26,7 @@ pub struct Scenario {
     pub base_dir: PathBuf,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum PayloadKind {
     Builtin,
@@ -34,7 +36,8 @@ pub enum PayloadKind {
     Eeprom,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct PayloadSpec {
     pub kind: PayloadKind,
     /// Builtin name, or path (relative to the scenario file) for elf/raw.
@@ -45,7 +48,8 @@ pub struct PayloadSpec {
     pub entry: Option<u32>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct MachineSpec {
     #[serde(default = "default_ram_mb")]
     pub ram_mb: u32,
@@ -68,7 +72,7 @@ fn default_ram_mb() -> u32 {
 
 /// Which UART a payload prints on: a payload writes UART registers without
 /// setting GPIO 14/15 up first, so it cannot go by the pins.
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum ConsoleSpec {
     #[default]
@@ -88,7 +92,8 @@ impl From<ConsoleSpec> for Console {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RunSpec {
     #[serde(default = "default_max_steps")]
     pub max_steps: u64,
@@ -115,7 +120,7 @@ fn default_max_steps() -> u64 {
     1_000_000
 }
 
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum UnimplSpec {
     #[default]
@@ -132,7 +137,8 @@ impl From<UnimplSpec> for UnimplPolicy {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct GoldenSpec {
     pub path: String,
 }

@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../../schemas/boot-scenario.schema.json
 # The firmware boot: the regression this project actually exists for.
 #
 # One EEPROM image, one SD card, one wall budget, and every assertion made

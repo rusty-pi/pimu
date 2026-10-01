@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../../schemas/boot-scenario.schema.json
 # The firmware boot with the cut-down firmware: `start4cd.elf` and
 # `fixup4cd.dat`, picked by `gpu_mem=16` in config.txt the way a real card
 # picks them. It is the variant a headless board runs, with no camera or codec

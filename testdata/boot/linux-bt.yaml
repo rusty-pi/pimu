@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../../schemas/boot-scenario.schema.json
 # The Linux boot of linux.yaml on a card whose config.txt leaves
 # Bluetooth and WiFi enabled — what an imager writes.
 # `pimu boot-check testdata/boot/linux-bt.yaml` runs it, and so does CI.

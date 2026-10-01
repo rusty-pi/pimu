@@ -5,6 +5,7 @@ pub mod capture;
 pub mod payloads;
 pub mod regression;
 pub mod scenario;
+pub mod schema;
 
 pub use boot::BootScenario;
 pub use regression::{

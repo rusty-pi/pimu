@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../../schemas/boot-scenario.schema.json
 # The same firmware boot as `firmware.yaml`, on a B0 instead of a C0: the
 # first production BCM2711 stepping, on the Pi 4B rev 1.2 it shipped on.
 # No B0 board was available to check this against, so none of this has been checked

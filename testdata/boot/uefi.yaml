@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../../schemas/boot-scenario.schema.json
 # The firmware boot with the RPi4 UEFI firmware as the armstub: pftf/RPi4's
 # `RPI_EFI.fd` instead of a Linux kernel, run until its boot menu prints.
 #

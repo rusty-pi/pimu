@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../../schemas/boot-scenario.schema.json
 # The linux-bt card with the WiFi driver on it: `brcmfmac` and what it needs
 # (`cfg80211`, `brcmutil`, `rfkill`, and the `cyw` vendor half the kernel
 # fetches by itself) as modules under /lib/modules, and the CYW43455's own

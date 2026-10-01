@@ -1,0 +1,167 @@
+{
+  "$defs": {
+    "ConsoleSpec": {
+      "description": "Which UART a payload prints on: a payload writes UART registers without\nsetting GPIO 14/15 up first, so it cannot go by the pins.",
+      "oneOf": [
+        {
+          "enum": [
+            "pl011",
+            "mini-uart"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "pins",
+          "description": "Follow GPIO 14/15, as a firmware boot does.",
+          "type": "string"
+        }
+      ]
+    },
+    "GoldenSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "MachineSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "console": {
+          "$ref": "#/$defs/ConsoleSpec"
+        },
+        "ram_mb": {
+          "default": 64,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "PayloadKind": {
+      "oneOf": [
+        {
+          "enum": [
+            "builtin",
+            "elf",
+            "raw"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "eeprom",
+          "description": "A `pieeprom.bin` image; the bootcode section is staged at `0x8000_0000`.",
+          "type": "string"
+        }
+      ]
+    },
+    "PayloadSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "entry": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/PayloadKind"
+        },
+        "load_addr": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "source": {
+          "description": "Builtin name, or path (relative to the scenario file) for elf/raw.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "source"
+      ],
+      "type": "object"
+    },
+    "RunSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "idle_spin_limit": {
+          "default": 0,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_steps": {
+          "default": 1000000,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "stop_pc": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "unimpl": {
+          "$ref": "#/$defs/UnimplSpec"
+        }
+      },
+      "type": "object"
+    },
+    "UnimplSpec": {
+      "enum": [
+        "fault",
+        "skip"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "description": {
+      "default": "",
+      "type": "string"
+    },
+    "golden": {
+      "$ref": "#/$defs/GoldenSpec"
+    },
+    "machine": {
+      "$ref": "#/$defs/MachineSpec"
+    },
+    "name": {
+      "type": "string"
+    },
+    "payload": {
+      "$ref": "#/$defs/PayloadSpec"
+    },
+    "run": {
+      "$ref": "#/$defs/RunSpec"
+    }
+  },
+  "required": [
+    "name",
+    "payload",
+    "golden"
+  ],
+  "title": "Scenario",
+  "type": "object"
+}

@@ -229,6 +229,7 @@ fn cmd_spec_docs(args: &[String]) -> Result<ExitCode> {
     );
     stale.extend(pimu::isa::sync_docs(update).map_err(anyhow::Error::msg)?);
     stale.extend(pimu::sheet::sync(update).map_err(anyhow::Error::msg)?);
+    stale.extend(pimu::harness::schema::sync(update).map_err(anyhow::Error::msg)?);
     for path in &stale {
         let verb = if update { "updated" } else { "stale" };
         println!("{verb}: {}", path.display());
