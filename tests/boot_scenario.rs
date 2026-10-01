@@ -329,7 +329,8 @@ fn every_boot_scenario_loads_and_plans_its_media() {
             ("--sd ", scn.boot.sd.is_some()),
             ("--usb ", scn.boot.usb.is_some()),
             ("--otg ", scn.boot.otg.is_some()),
-            ("--netboot ", scn.boot.netboot.is_some()),
+            ("--tftp-boot ", scn.boot.tftp_boot.is_some()),
+            ("--http-boot ", scn.boot.http_boot.is_some()),
         ] {
             assert_eq!(joined.contains(flag), media, "{joined}");
         }
@@ -352,7 +353,8 @@ fn every_boot_scenario_loads_and_plans_its_media() {
             scn.boot.sd.is_some(),
             scn.boot.usb.is_some(),
             scn.boot.otg.is_some(),
-            scn.boot.netboot.is_some(),
+            scn.boot.tftp_boot.is_some(),
+            scn.boot.http_boot.is_some(),
             scn.boot.eeprom_pubkey.is_some(),
         ];
         assert_eq!(

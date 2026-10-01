@@ -9,7 +9,7 @@
 pub mod peer;
 pub mod stream;
 
-pub use peer::BuiltinPeer;
+pub use peer::{BuiltinPeer, PeerRoot};
 pub use stream::StreamBackend;
 
 pub trait NetBackend {

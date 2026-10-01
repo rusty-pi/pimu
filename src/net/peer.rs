@@ -141,8 +141,37 @@ enum Root {
     },
 }
 
+/// Where one protocol of the peer is served from, as the caller names it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PeerRoot {
+    Dir(PathBuf),
+    Url(String),
+}
+
+impl PeerRoot {
+    fn open(&self) -> Root {
+        match self {
+            PeerRoot::Dir(dir) => Root::Dir(dir.clone()),
+            PeerRoot::Url(base) => Root::Url {
+                base: match base.ends_with('/') {
+                    true => base.clone(),
+                    false => format!("{base}/"),
+                },
+                got: RefCell::new(BTreeMap::new()),
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Protocol {
+    Tftp,
+    Http,
+}
+
 pub struct BuiltinPeer {
-    root: Option<Root>,
+    tftp_root: Option<Root>,
+    http_root: Option<Root>,
     files: BTreeMap<String, Vec<u8>>,
     out: VecDeque<Vec<u8>>,
     log: Vec<String>,
@@ -167,7 +196,8 @@ impl Default for BuiltinPeer {
 impl BuiltinPeer {
     pub fn new() -> BuiltinPeer {
         BuiltinPeer {
-            root: None,
+            tftp_root: None,
+            http_root: None,
             files: BTreeMap::new(),
             out: VecDeque::new(),
             log: Vec::new(),
@@ -181,29 +211,30 @@ impl BuiltinPeer {
         }
     }
 
+    /// One root for both protocols.
     pub fn with_root(dir: impl Into<PathBuf>) -> BuiltinPeer {
-        BuiltinPeer {
-            root: Some(Root::Dir(dir.into())),
-            ..BuiltinPeer::new()
-        }
+        let root = PeerRoot::Dir(dir.into());
+        BuiltinPeer::new().tftp_root(&root).http_root(&root)
     }
 
-    /// The netboot directory served over HTTP: every name the guest asks for is
-    /// fetched under `base` the first time, and remembered — misses included,
-    /// since the firmware asks for files that are not there as a matter of
-    /// course.
+    /// One root, a URL, for both: every name the guest asks for is fetched under
+    /// it the first time, and remembered — misses included, since the firmware
+    /// asks for files that are not there as a matter of course.
     pub fn with_root_url(base: impl Into<String>) -> BuiltinPeer {
-        let base = base.into();
-        BuiltinPeer {
-            root: Some(Root::Url {
-                base: match base.ends_with('/') {
-                    true => base,
-                    false => format!("{base}/"),
-                },
-                got: RefCell::new(BTreeMap::new()),
-            }),
-            ..BuiltinPeer::new()
-        }
+        let root = PeerRoot::Url(base.into());
+        BuiltinPeer::new().tftp_root(&root).http_root(&root)
+    }
+
+    /// What TFTP serves.
+    pub fn tftp_root(mut self, root: &PeerRoot) -> BuiltinPeer {
+        self.tftp_root = Some(root.open());
+        self
+    }
+
+    /// What HTTP serves.
+    pub fn http_root(mut self, root: &PeerRoot) -> BuiltinPeer {
+        self.http_root = Some(root.open());
+        self
     }
 
     pub fn with_log(mut self, log: crate::log::Log) -> BuiltinPeer {
@@ -223,7 +254,7 @@ impl BuiltinPeer {
             .insert(name.trim_start_matches('/').to_string(), data);
     }
 
-    fn lookup(&self, name: &str) -> Option<Vec<u8>> {
+    fn lookup(&self, protocol: Protocol, name: &str) -> Option<Vec<u8>> {
         let name = name.trim_start_matches('/');
         if let Some(d) = self.files.get(name) {
             return Some(d.clone());
@@ -233,7 +264,11 @@ impl BuiltinPeer {
         if !rel.components().all(|c| matches!(c, Component::Normal(_))) {
             return None;
         }
-        match self.root.as_ref()? {
+        let root = match protocol {
+            Protocol::Tftp => self.tftp_root.as_ref()?,
+            Protocol::Http => self.http_root.as_ref()?,
+        };
+        match root {
             Root::Dir(dir) => {
                 let path = dir.join(rel);
                 path.is_file().then(|| std::fs::read(path).ok()).flatten()
@@ -784,7 +819,7 @@ impl BuiltinPeer {
                 false,
             );
         }
-        let Some(data) = self.lookup(path) else {
+        let Some(data) = self.lookup(Protocol::Http, path) else {
             self.note(format!("http: {method} {path} -> 404"));
             return reply("404 Not Found", &[], b"not found\n", head_only);
         };
@@ -856,7 +891,7 @@ impl BuiltinPeer {
             return;
         }
         let name = fields[0].clone();
-        let Some(data) = self.lookup(&name) else {
+        let Some(data) = self.lookup(Protocol::Tftp, &name) else {
             self.note(format!("tftp: RRQ {name} -> not found"));
             self.tftp_error(mac, ip, tid, port, 1, "File not found");
             return;

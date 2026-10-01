@@ -56,10 +56,13 @@ pub struct BootSpec {
     /// xHCI slot (`boot --otg-dock`).
     #[serde(default)]
     pub otg_dock: bool,
-    /// The TFTP/HTTP root of a network boot, as `--netboot` takes it (a
+    /// What the network peer serves over TFTP, as `--tftp-boot` takes it (a
     /// directory or a URL), or listed file by file like a card.
     #[serde(default)]
-    pub netboot: Option<MediumSpec>,
+    pub tftp_boot: Option<MediumSpec>,
+    /// What the network peer serves over HTTP (`--http-boot`).
+    #[serde(default)]
+    pub http_boot: Option<MediumSpec>,
     #[serde(default)]
     pub boot_order: Option<String>,
     #[serde(default)]
@@ -420,7 +423,8 @@ impl BootScenario {
             ("sd", &mut self.boot.sd),
             ("usb", &mut self.boot.usb),
             ("otg", &mut self.boot.otg),
-            ("netboot", &mut self.boot.netboot),
+            ("tftp-boot", &mut self.boot.tftp_boot),
+            ("http-boot", &mut self.boot.http_boot),
         ] {
             let Some(MediumSpec::Files(card)) = medium.as_ref() else {
                 continue;
@@ -535,13 +539,15 @@ impl BootScenario {
         }
         let make_netboot = "KERNEL=halt scripts/make-sd.sh firmware/sd-halt.img \
                             && scripts/make-netboot.sh firmware/sd-halt.img";
-        match &b.netboot {
-            Some(MediumSpec::Path(p)) => v.push(BootInput {
-                path: self.resolve(p),
-                make: make_netboot.into(),
-            }),
-            Some(MediumSpec::Files(card)) => v.extend(self.file_inputs(card)),
-            None => {}
+        for root in [&b.tftp_boot, &b.http_boot] {
+            match root {
+                Some(MediumSpec::Path(p)) => v.push(BootInput {
+                    path: self.resolve(p),
+                    make: make_netboot.into(),
+                }),
+                Some(MediumSpec::Files(card)) => v.extend(self.file_inputs(card)),
+                None => {}
+            }
         }
         if let Some(p) = &b.eeprom_pubkey {
             v.push(BootInput {
@@ -593,7 +599,8 @@ impl BootScenario {
             ("--sd", &b.sd),
             ("--usb", &b.usb),
             ("--otg", &b.otg),
-            ("--netboot", &b.netboot),
+            ("--tftp-boot", &b.tftp_boot),
+            ("--http-boot", &b.http_boot),
         ] {
             match medium {
                 Some(MediumSpec::Path(p)) => {
@@ -1348,7 +1355,7 @@ boot:
       kernel8.img: { builtin: halt }
       overlays/x.dtbo: part.bin
   sd: card.img
-  netboot:
+  tftp_boot:
     files:
       serial/start4.elf: part.bin
 ";

@@ -103,7 +103,8 @@ cut-down firmware, a UEFI armstub — are in
 | `--emmc <img>` | An e-MMC part soldered to the same host, as a Compute Module has. |
 | `--usb <img>` | A USB mass-storage device on the VL805 (`BOOT_ORDER` 0x4). |
 | `--otg <img>` | A stick in the USB-C socket, on the BCM2711's own xHCI (`BOOT_ORDER` 0x5). |
-| `--netboot <dir>` | The Ethernet cable, into a built-in DHCP, DNS, TFTP and HTTP peer serving `<dir>` (`scripts/make-netboot.sh` builds one). |
+| `--tftp-boot <dir>` | The Ethernet cable, into a built-in DHCP, DNS and TFTP peer serving `<dir>` (`BOOT_ORDER` 0x2; `scripts/make-netboot.sh` builds one). |
+| `--http-boot <dir>` | The same peer serving `<dir>` over HTTP (`BOOT_ORDER` 0x7): a signed `net_install/boot.img`. |
 | `--net passt` | The host's network, through [passt](https://passt.top/). |
 
 The same image boots from any of them: `--usb firmware/sd-halt.img` is the card
@@ -164,8 +165,9 @@ I²C masters are modelled and nothing answers the EDID EEPROM's address.
   sheet in [`docs/README.md`](docs/README.md) draws all of them and
   [`docs/periph/`](docs/periph/) has a page each; a logging catch-all takes the
   rest.
-- **Network peer** (`src/net/`) — `--netboot <dir>` plugs the Ethernet cable
-  into a built-in DHCP, DNS, TFTP and plain HTTP server serving `<dir>`.
+- **Network peer** (`src/net/`) — `--tftp-boot <dir>` and `--http-boot <dir>` plug
+  the Ethernet cable into a built-in DHCP, DNS, TFTP and plain HTTP server, each
+  protocol serving its own directory.
   `--net passt` plugs it into the host's network through
   [passt](https://passt.top/) instead, for reaching a server on the host such as
   `mkosi serve`; that runs on the host's clock, so it is not deterministic and CI

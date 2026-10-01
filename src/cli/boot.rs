@@ -74,7 +74,7 @@ OVER HTTP:
 
         pimu boot https://raw.githubusercontent.com/raspberrypi/firmware/refs/heads/master/boot/
         pimu boot --eeprom https://example.org/pieeprom.bin --sd https://example.org/sd.img
-        pimu boot --netboot https://example.org/tftp/
+        pimu boot --tftp-boot https://example.org/tftp/
 
     A directory is listed first, since the FAT32 volume is built out of every
     name and length in it: a GitHub URL through the API, any other server
@@ -96,10 +96,11 @@ OVER HTTP:
         sd.img        --sd                otp.bin       --otp binary:<file>
         usb.img       --usb               bootconf.txt  --bootconf, a line each
         otg.img       --otg               pubkey.bin    --eeprom-pubkey
-        netboot/      --netboot
+        tftp-boot/    --tftp-boot
+        http-boot/    --http-boot
 
     An option that rules another one out keeps its file out too: --emmc leaves
-    sd.img alone, --net leaves netboot/. otp.json and otp.bin together say
+    sd.img alone, --net leaves tftp-boot/ and http-boot/. otp.json and otp.bin together say
     nothing about which to read, so that asks for an explicit --otp. The run
     names on stderr what it picked up.
 
@@ -235,11 +236,16 @@ MEDIA AND NETWORK:
     --display-edid <file>
               Serve this EDID blob (128 or 256 bytes) instead of the built-in
               one. Implies --display.
-    --netboot <dir>|<url>
+    --tftp-boot <dir>|<url>
               Plug the Ethernet cable into the built-in network peer: DHCP,
-              DNS, and <dir> over TFTP and HTTP. A URL serves what is under
+              DNS, and what is in <dir> over TFTP — the files `start4.elf`
+              and its own network driver fetch. A URL serves what is under
               it instead, each name fetched the first time the guest asks
               for it.
+    --http-boot <dir>|<url>
+              The same peer, serving <dir> over HTTP: `boot.img` and
+              `boot.sig` under `net_install/` (`HTTP_PATH`). It may be the
+              directory --tftp-boot has. BOOT_ORDER picks the protocol.
     --net passt[:<socket>]
               Plug the Ethernet cable into the host's network instead of the
               built-in peer, through passt: `passt` starts one (from PATH) on a
@@ -472,7 +478,8 @@ struct BootOpts {
     gencmds: Vec<String>,
     usb: Option<Medium>,
     otg: Option<Medium>,
-    netboot: Option<NetRoot>,
+    tftp_boot: Option<NetRoot>,
+    http_boot: Option<NetRoot>,
     host_net: Option<HostNet>,
     boot_order: Option<String>,
     bootconf: Vec<String>,
@@ -602,7 +609,7 @@ impl std::fmt::Display for Medium {
     }
 }
 
-/// `--netboot`: the directory the built-in peer serves over TFTP and HTTP.
+/// `--tftp-boot` and `--http-boot`: what the built-in peer serves over each.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum NetRoot {
     Dir(PathBuf),
@@ -610,23 +617,23 @@ enum NetRoot {
 }
 
 impl NetRoot {
-    fn from_arg(s: &str) -> Result<NetRoot> {
+    fn from_arg(flag: &str, s: &str) -> Result<NetRoot> {
         if pimu::remote::is_url(s) {
             return Ok(NetRoot::Url(s.to_string()));
         }
         let dir = PathBuf::from(s);
         if !dir.is_dir() {
-            bail!("--netboot {s}: not a directory (the peer serves what is in it)");
+            bail!("{flag} {s}: not a directory (the peer serves what is in it)");
         }
         Ok(NetRoot::Dir(dir))
     }
 
-    fn peer(&self) -> pimu::net::BuiltinPeer {
+    fn peer_root(&self, protocol: &str) -> pimu::net::PeerRoot {
         match self {
-            NetRoot::Dir(dir) => pimu::net::BuiltinPeer::with_root(dir.clone()),
+            NetRoot::Dir(dir) => pimu::net::PeerRoot::Dir(dir.clone()),
             NetRoot::Url(url) => {
-                eprintln!("remote: the network peer serves {url}, fetched as the guest asks");
-                pimu::net::BuiltinPeer::with_root_url(url.clone())
+                eprintln!("remote: the network peer serves {url} over {protocol}, fetched as the guest asks");
+                pimu::net::PeerRoot::Url(url.clone())
             }
         }
     }
@@ -755,7 +762,7 @@ fn put_card_file(entries: &mut Vec<pimu::fat::Entry>, name: &str, bytes: Vec<u8>
 /// Zero-config: an option left out takes the file of that name in the working
 /// directory, under the names the Pi's own tooling gives. Only an option the
 /// command line is silent about is filled in, and only when nothing rules it out
-/// (`--emmc` is the same host as `--sd`, `--net` the same cable as `--netboot`).
+/// (`--emmc` is the same host as `--sd`, `--net` the same cable as `--tftp-boot` and `--http-boot`).
 struct ZeroConfig<'a> {
     dir: &'a Path,
     found: Vec<String>,
@@ -991,7 +998,8 @@ impl BootOpts {
         let mut gencmds: Vec<String> = Vec::new();
         let mut usb: Option<Medium> = None;
         let mut otg: Option<Medium> = None;
-        let mut netboot: Option<NetRoot> = None;
+        let mut tftp_boot: Option<NetRoot> = None;
+        let mut http_boot: Option<NetRoot> = None;
         let mut host_net: Option<HostNet> = None;
         let mut boot_order: Option<String> = None;
         let mut bootconf: Vec<String> = Vec::new();
@@ -1184,9 +1192,18 @@ impl BootOpts {
                         HostNet::Socket(PathBuf::from(sock))
                     });
                 }
-                "--netboot" => {
-                    netboot = Some(NetRoot::from_arg(
-                        it.next().context("--netboot needs a directory or a URL")?,
+                "--tftp-boot" => {
+                    tftp_boot = Some(NetRoot::from_arg(
+                        "--tftp-boot",
+                        it.next()
+                            .context("--tftp-boot needs a directory or a URL")?,
+                    )?)
+                }
+                "--http-boot" => {
+                    http_boot = Some(NetRoot::from_arg(
+                        "--http-boot",
+                        it.next()
+                            .context("--http-boot needs a directory or a URL")?,
                     )?)
                 }
                 "--boot-order" => {
@@ -1348,10 +1365,17 @@ impl BootOpts {
         }
         zero.image(&mut usb, "usb.img");
         zero.image(&mut otg, "otg.img");
-        if host_net.is_none() && netboot.is_none() {
-            let mut found = None;
-            zero.dir(&mut found, "netboot");
-            netboot = found.map(NetRoot::Dir);
+        if host_net.is_none() {
+            if tftp_boot.is_none() {
+                let mut found = None;
+                zero.dir(&mut found, "tftp-boot");
+                tftp_boot = found.map(NetRoot::Dir);
+            }
+            if http_boot.is_none() {
+                let mut found = None;
+                zero.dir(&mut found, "http-boot");
+                http_boot = found.map(NetRoot::Dir);
+            }
         }
         if otp.is_none() {
             otp = zero.otp()?;
@@ -1370,8 +1394,8 @@ impl BootOpts {
             eeprom = true;
         }
         let path = path.context("boot: missing <file> (try boot --help)")?;
-        if netboot.is_some() && host_net.is_some() {
-            bail!("--netboot and --net both plug in the Ethernet cable; give one");
+        if (tftp_boot.is_some() || http_boot.is_some()) && host_net.is_some() {
+            bail!("--tftp-boot and --http-boot serve the built-in peer, which --net replaces; give one");
         }
         if log.is_empty() && log_file.is_some() {
             bail!("--log-file needs --log <channel>[,<channel>...]");
@@ -1426,7 +1450,8 @@ impl BootOpts {
             gencmds,
             usb,
             otg,
-            netboot,
+            tftp_boot,
+            http_boot,
             host_net,
             boot_order,
             bootconf,
@@ -2017,7 +2042,8 @@ impl<'a> Rig<'a> {
             check_alignment,
             jitter,
             faults,
-            ref netboot,
+            ref tftp_boot,
+            ref http_boot,
             ref host_net,
             trace_mmio,
             ..
@@ -2097,8 +2123,15 @@ impl<'a> Rig<'a> {
             machine.xhci_otg.attach(device);
         }
         // The built-in peer (`src/net/peer.rs`): DHCP, DNS, TFTP and HTTP.
-        if let Some(netboot) = &netboot {
-            machine.attach_net(Box::new(netboot.peer().with_log(self.log.clone())));
+        if tftp_boot.is_some() || http_boot.is_some() {
+            let mut peer = pimu::net::BuiltinPeer::new().with_log(self.log.clone());
+            if let Some(root) = tftp_boot {
+                peer = peer.tftp_root(&root.peer_root("TFTP"));
+            }
+            if let Some(root) = http_boot {
+                peer = peer.http_root(&root.peer_root("HTTP"));
+            }
+            machine.attach_net(Box::new(peer));
         }
         // A new connection (and a new passt) per boot, like a cable replugged.
         if let Some(host_net) = &host_net {
@@ -3144,7 +3177,8 @@ mod tests {
             "bootconf.txt",
             "# a comment\n\n[all]\nBOOT_ORDER=0xf41  # trailing\n",
         );
-        std::fs::create_dir_all(dir.join("netboot")).unwrap();
+        std::fs::create_dir_all(dir.join("tftp-boot")).unwrap();
+        std::fs::create_dir_all(dir.join("http-boot")).unwrap();
 
         let o = BootOpts::parse(&args(&[]), &dir).unwrap().unwrap();
         assert_eq!(o.path, dir.join("pieeprom.bin"));
@@ -3152,7 +3186,8 @@ mod tests {
         assert_eq!(o.sd, Some(Medium::Image(dir.join("sd.img"))));
         assert_eq!(o.usb, Some(Medium::Image(dir.join("usb.img"))));
         assert_eq!(o.otg, Some(Medium::Image(dir.join("otg.img"))));
-        assert_eq!(o.netboot, Some(NetRoot::Dir(dir.join("netboot"))));
+        assert_eq!(o.tftp_boot, Some(NetRoot::Dir(dir.join("tftp-boot"))));
+        assert_eq!(o.http_boot, Some(NetRoot::Dir(dir.join("http-boot"))));
         assert_eq!(o.eeprom_pubkey, Some(dir.join("pubkey.bin")));
         assert_eq!(
             o.otp,
@@ -3223,13 +3258,13 @@ mod tests {
     fn an_option_keeps_the_one_it_rules_out_from_being_picked_up() {
         let dir = zero_dir("exclusive");
         put(&dir, "sd.img", "");
-        std::fs::create_dir_all(dir.join("netboot")).unwrap();
+        std::fs::create_dir_all(dir.join("tftp-boot")).unwrap();
 
         let o = BootOpts::parse(&args(&["x.elf", "--emmc", "e.img", "--net", "passt"]), &dir)
             .unwrap()
             .unwrap();
         assert_eq!(o.sd, None);
-        assert_eq!(o.netboot, None);
+        assert_eq!(o.tftp_boot, None);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -3314,8 +3349,10 @@ mod tests {
                 "stick.img",
                 "--otg",
                 "https://example.org/otg.img",
-                "--netboot",
+                "--tftp-boot",
                 "https://example.org/tftp/",
+                "--http-boot",
+                "https://example.org/http/",
             ]),
             Path::new(""),
         )
@@ -3328,8 +3365,12 @@ mod tests {
             Some(Medium::RemoteImage("https://example.org/otg.img".into()))
         );
         assert_eq!(
-            o.netboot,
+            o.tftp_boot,
             Some(NetRoot::Url("https://example.org/tftp/".into()))
+        );
+        assert_eq!(
+            o.http_boot,
+            Some(NetRoot::Url("https://example.org/http/".into()))
         );
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -3372,14 +3413,16 @@ mod tests {
     }
 
     #[test]
-    fn netboot_wants_a_directory_that_is_there() {
-        let Err(e) = BootOpts::parse(
-            &args(&["--eeprom", "pieeprom.bin", "--netboot", "no-such-dir"]),
-            Path::new(""),
-        ) else {
-            panic!("the peer would serve nothing")
-        };
-        assert!(e.to_string().contains("not a directory"), "{e:#}");
+    fn the_network_roots_want_a_directory_that_is_there() {
+        for flag in ["--tftp-boot", "--http-boot"] {
+            let Err(e) = BootOpts::parse(
+                &args(&["--eeprom", "pieeprom.bin", flag, "no-such-dir"]),
+                Path::new(""),
+            ) else {
+                panic!("the peer would serve nothing")
+            };
+            assert!(e.to_string().contains("not a directory"), "{e:#}");
+        }
     }
 
     #[test]

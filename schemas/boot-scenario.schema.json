@@ -40,6 +40,17 @@
             "null"
           ]
         },
+        "http_boot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MediumSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What the network peer serves over HTTP (`--http-boot`)."
+        },
         "input": {
           "description": "Lines typed into the serial console, each once its prompt has printed.",
           "items": {
@@ -61,17 +72,6 @@
             "type": "string"
           },
           "type": "array"
-        },
-        "netboot": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/MediumSpec"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "The TFTP/HTTP root of a network boot, as `--netboot` takes it (a\ndirectory or a URL), or listed file by file like a card."
         },
         "otg": {
           "anyOf": [
@@ -113,6 +113,17 @@
             "string",
             "null"
           ]
+        },
+        "tftp_boot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MediumSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What the network peer serves over TFTP, as `--tftp-boot` takes it (a\ndirectory or a URL), or listed file by file like a card."
         },
         "until": {
           "default": null,

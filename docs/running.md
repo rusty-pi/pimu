@@ -36,7 +36,7 @@ them — the shortest way to see how a given boot is set up.
 
 Every option that names a file can be left out when the working directory holds
 that file: `pieeprom.bin` is `--eeprom`, and so are `sd.img`, `usb.img`,
-`otg.img`, `netboot/`, `otp.json` or `otp.bin`, `bootconf.txt` (a `--bootconf`
+`otg.img`, `tftp-boot/`, `http-boot/`, `otp.json` or `otp.bin`, `bootconf.txt` (a `--bootconf`
 line each) and `pubkey.bin`.
 
 ```bash
@@ -69,9 +69,9 @@ lines.) A remote *image* is read in 1 MiB `Range` requests as the guest asks
 for blocks, so a multi-gigabyte image is never downloaded whole — a server that
 answers no `Range` request has its image fetched once into the cache instead.
 
-`--netboot <url>` serves what is under the URL over TFTP and HTTP, fetching each
-name the first time the guest asks for it; no listing is needed, since a netboot
-client asks by name.
+`--tftp-boot <url>` and `--http-boot <url>` serve what is under the URL over TFTP
+or HTTP, fetching each name the first time the guest asks for it; no listing is
+needed, since a network boot client asks by name.
 
 An image compressed with `xz` is read in place, block by block: the stream's own
 index says where each block starts and how much it decodes to, so a
@@ -119,7 +119,7 @@ needs static addresses, since passt's DHCP has no PXE option 43, and a TFTP
 server on the host's port 69.
 
 A run over passt follows the host's clock, so it is not deterministic, and CI
-stays on the built-in `--netboot` peer.
+stays on the built-in peer (`--tftp-boot`, `--http-boot`).
 
 ## Checking a boot: `--scenario`
 
@@ -174,12 +174,12 @@ golden:                          # optional: diff the whole console against this
   ```
 
   The files are copied to `<log>.cards/<medium>/` and booted as a directory.
-  `netboot` takes the same `files:` for the TFTP/HTTP root.
+  `tftp_boot` and `http_boot` take the same `files:` for what the peer serves.
   `uart_2ndstage=1` is what makes `start4.elf` print on the UART, so a
   milestone can match what it says. The `halt` kernel is the one `scripts/make-sd.sh` uses for
   `KERNEL=halt`; a boot that ends at the handover needs nothing more of the ARM.
 - The other options of [`boot`](#boot) in a scenario's `boot:` section are the
-  same as the command line's: `sd`, `usb`, `netboot`, `bootconf`, `otp_row`,
+  same as the command line's: `sd`, `usb`, `tftp_boot`, `http_boot`, `bootconf`, `otp_row`,
   `stepping`, `board_rev`, `until`, `input` and the rest are listed in the
   schema (`schemas/boot-scenario.schema.json`), which an editor reads from the
   comment on the first line.
