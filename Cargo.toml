@@ -46,9 +46,6 @@ repo = []
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 
-[dev-dependencies]
-jsonschema = "0.58"
-
 [profile.release]
 lto = "thin"
 codegen-units = 1

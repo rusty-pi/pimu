@@ -1,104 +1,89 @@
-//! The YAML files under `testdata/` against the JSON Schemas in `schemas/`, the
-//! same check an editor does through the `# yaml-language-server: $schema=`
-//! comment on each file's first line.
+//! The YAML files under `testdata/` and the JSON Schemas in `schemas/`. Each
+//! file names its schema on line 1 (`# yaml-language-server: $schema=`), which
+//! is what an editor reads. The schemas come from the same Rust types the
+//! files are loaded into, whose unknown-key and type checks are what a file has
+//! to pass, so loading every file is the validation.
 
 use std::path::{Path, PathBuf};
 
 use pimu::harness::schema::{schema_dir, schemas};
+use pimu::harness::{BootScenario, Scenario};
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf()
 }
 
-fn yaml_files(dir: &Path) -> Vec<PathBuf> {
-    let mut out: Vec<PathBuf> = std::fs::read_dir(dir)
+fn yaml_files(dir: &str, suffix: &str) -> Vec<PathBuf> {
+    let dir = root().join(dir);
+    let mut out: Vec<PathBuf> = std::fs::read_dir(&dir)
         .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
         .map(|e| e.unwrap().path())
-        .filter(|p| p.extension().is_some_and(|e| e == "yaml"))
+        .filter(|p| p.to_string_lossy().ends_with(suffix))
         .collect();
     out.sort();
+    assert!(!out.is_empty(), "{}: nothing to check", dir.display());
     out
 }
 
-fn schema_named(name: &str) -> jsonschema::Validator {
-    let text = std::fs::read_to_string(schema_dir().join(name)).unwrap();
-    jsonschema::validator_for(&serde_json::from_str(&text).unwrap())
-        .unwrap_or_else(|e| panic!("{name}: {e}"))
-}
-
-fn as_json(path: &Path) -> serde_json::Value {
-    let text = std::fs::read_to_string(path).unwrap();
-    yaml_serde::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
-}
-
-fn declared_schema(path: &Path) -> PathBuf {
+fn assert_names_schema(path: &Path, schema: &str) {
     let text = std::fs::read_to_string(path).unwrap();
     let first = text.lines().next().unwrap_or("");
     let rel = first
         .strip_prefix("# yaml-language-server: $schema=")
         .unwrap_or_else(|| panic!("{}: no schema comment on line 1", path.display()));
-    path.parent().unwrap().join(rel)
+    let named = path.parent().unwrap().join(rel);
+    assert_eq!(
+        named
+            .canonicalize()
+            .unwrap_or_else(|e| panic!("{}: {e}", named.display())),
+        schema_dir().join(schema).canonicalize().unwrap(),
+        "{}: names another schema",
+        path.display()
+    );
 }
 
-fn check_dir(dir: &str, schema: &str, filter: fn(&Path) -> bool) {
-    let validator = schema_named(schema);
-    let files: Vec<_> = yaml_files(&root().join(dir))
-        .into_iter()
-        .filter(|p| filter(p))
-        .collect();
-    assert!(!files.is_empty(), "{dir}: nothing to check");
-    for path in files {
-        let errors: Vec<String> = validator
-            .iter_errors(&as_json(&path))
-            .map(|e| format!("{} at {}", e, e.instance_path()))
-            .collect();
-        assert!(errors.is_empty(), "{}: {errors:#?}", path.display());
-        assert_eq!(
-            declared_schema(&path).canonicalize().unwrap(),
-            schema_dir().join(schema).canonicalize().unwrap(),
-            "{}: names another schema",
-            path.display()
-        );
+#[test]
+fn boot_scenarios_load_and_name_their_schema() {
+    for path in yaml_files("testdata/boot", ".yaml") {
+        BootScenario::load(&path).unwrap_or_else(|e| panic!("{e:#}"));
+        assert_names_schema(&path, "boot-scenario.schema.json");
     }
 }
 
 #[test]
-fn boot_scenarios_match_their_schema() {
-    check_dir("testdata/boot", "boot-scenario.schema.json", |_| true);
+fn in_process_scenarios_load_and_name_their_schema() {
+    for path in yaml_files("testdata/scenarios", ".yaml") {
+        Scenario::load(&path).unwrap_or_else(|e| panic!("{e:#}"));
+        assert_names_schema(&path, "scenario.schema.json");
+    }
 }
 
 #[test]
-fn in_process_scenarios_match_their_schema() {
-    check_dir("testdata/scenarios", "scenario.schema.json", |_| true);
+fn retired_counts_parse_and_name_their_schema() {
+    for path in yaml_files("testdata/boot/golden", ".retired.yaml") {
+        let text = std::fs::read_to_string(&path).unwrap();
+        pimu::harness::boot::RetiredCounts::parse(&text).unwrap_or_else(|e| panic!("{e:#}"));
+        assert_names_schema(&path, "retired-counts.schema.json");
+    }
 }
 
 #[test]
-fn retired_counts_match_their_schema() {
-    check_dir("testdata/boot/golden", "retired-counts.schema.json", |p| {
-        p.to_string_lossy().ends_with(".retired.yaml")
-    });
-}
-
-#[test]
-fn a_misspelt_key_or_a_wrong_type_is_reported() {
-    let validator = schema_named("boot-scenario.schema.json");
-    let good = as_json(&root().join("testdata/boot/firmware.yaml"));
-    assert!(validator.is_valid(&good));
-
-    let mut typo = good.clone();
-    typo["boot"]["wall_sec"] = 1.into();
-    assert!(!validator.is_valid(&typo), "unknown key accepted");
-
-    let mut wrong = good.clone();
-    wrong["boot"]["wall_secs"] = "soon".into();
-    assert!(!validator.is_valid(&wrong), "string for a number accepted");
-
-    let mut bare = good;
-    bare["milestones"][0].as_object_mut().unwrap().remove("why");
-    assert!(
-        !validator.is_valid(&bare),
-        "milestone without a why accepted"
-    );
+fn a_misspelt_key_a_wrong_type_or_a_milestone_without_a_why_is_refused() {
+    let good = std::fs::read_to_string(root().join("testdata/boot/firmware.yaml")).unwrap();
+    assert!(yaml_serde::from_str::<BootScenario>(&good).is_ok());
+    let cases = [
+        ("wall_secs:", "wall_sec:"),
+        ("wall_secs: ", "wall_secs: soon # "),
+        ("  - why:", "  - whom:"),
+    ];
+    for (from, to) in cases {
+        let bad = good.replacen(from, to, 1);
+        assert_ne!(bad, good, "{from} not found");
+        assert!(
+            yaml_serde::from_str::<BootScenario>(&bad).is_err(),
+            "{to} accepted"
+        );
+    }
 }
 
 #[test]

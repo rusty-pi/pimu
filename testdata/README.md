@@ -39,8 +39,8 @@ Every scenario, and every `retired.yaml`, names its JSON Schema on its first
 line (`# yaml-language-server: $schema=...`), so an editor with the YAML
 language server flags a misspelt key or a wrong type as you type. The schemas
 are in [`schemas/`](../schemas/), generated from the Rust types by
-`cargo run -- spec-docs --update`, and `tests/schemas.rs` validates every file
-here against them.
+`cargo run -- spec-docs --update`, and `tests/schemas.rs` loads every file here
+and checks it names the right one.
 
 ### What a boot is checked against
 
