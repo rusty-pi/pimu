@@ -10,6 +10,21 @@ pub mod bootrom;
 pub mod eeprom;
 pub mod elf32;
 
+/// A `kernel8.img` that parks the ARM: an arm64 Image header, then
+/// `msr daifset, #0xf; wfi; b .-4`. The card for a boot that ends at the
+/// handover, since the ARM is always modelled and this gives it nothing to do.
+pub const HALT_KERNEL: [u8; 76] = [
+    0x10, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x00, // b 0x40; code1
+    0, 0, 0, 0, 0, 0, 0, 0, // text_offset 0
+    0x4c, 0, 0, 0, 0, 0, 0, 0, // image_size
+    0x0a, 0, 0, 0, 0, 0, 0, 0, // flags: LE, 4K pages, anywhere
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // res2..res4
+    b'A', b'R', b'M', 0x64, 0, 0, 0, 0, // magic, res5
+    0xdf, 0x4f, 0x03, 0xd5, // msr daifset, #0xf
+    0x7f, 0x20, 0x03, 0xd5, // wfi
+    0xff, 0xff, 0xff, 0x17, // b .-4
+];
+
 use anyhow::{Context, Result};
 
 use crate::machine::Machine;

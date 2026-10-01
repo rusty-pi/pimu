@@ -45,12 +45,12 @@ pub struct BootScenario {
 pub struct BootSpec {
     pub eeprom: String,
     #[serde(default)]
-    pub sd: Option<String>,
+    pub sd: Option<MediumSpec>,
     #[serde(default)]
-    pub usb: Option<String>,
+    pub usb: Option<MediumSpec>,
     /// Mass-storage image in the USB-C socket, on the BCM2711's own xHCI.
     #[serde(default)]
-    pub otg: Option<String>,
+    pub otg: Option<MediumSpec>,
     /// Put the `otg` stick behind a USB-C dock: two hubs, an Ethernet adapter
     /// and an empty card reader beside it, five devices that each need an
     /// xHCI slot (`boot --otg-dock`).
@@ -94,6 +94,57 @@ pub struct BootSpec {
     /// Lines typed into the serial console, each once its prompt has printed.
     #[serde(default)]
     pub input: Vec<ConsoleLine>,
+}
+
+/// A boot medium: a disk image, a directory or a URL as `boot --sd` takes them,
+/// or the files of a boot partition listed here, which become the card.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum MediumSpec {
+    Path(String),
+    Files(CardFiles),
+}
+
+impl From<&str> for MediumSpec {
+    fn from(path: &str) -> MediumSpec {
+        MediumSpec::Path(path.to_string())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CardFiles {
+    /// File name on the card (a `/` makes a directory) and where it comes from.
+    pub files: std::collections::BTreeMap<String, FileSpec>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum FileSpec {
+    /// A file, relative to the scenario, or a URL.
+    From(String),
+    Inline {
+        /// The text of the file.
+        inline: String,
+    },
+    Builtin {
+        /// A file `pimu` carries: `halt` is the kernel that parks the ARM.
+        builtin: Builtin,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum Builtin {
+    Halt,
+}
+
+impl Builtin {
+    fn bytes(self) -> &'static [u8] {
+        match self {
+            Builtin::Halt => &crate::firmware::HALT_KERNEL,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -357,12 +408,63 @@ impl BootScenario {
         }
     }
 
+    /// Build the cards the scenario lists file by file under `dir`, one
+    /// directory each, and have the scenario name those directories instead.
+    /// A file is copied, fetched into the cache or written out, so what `boot`
+    /// is handed is the directory of a boot partition it already takes.
+    pub fn stage(&mut self, dir: &Path) -> Result<()> {
+        let base = self.base_dir.clone();
+        for (name, medium) in [
+            ("sd", &mut self.boot.sd),
+            ("usb", &mut self.boot.usb),
+            ("otg", &mut self.boot.otg),
+        ] {
+            let Some(MediumSpec::Files(card)) = medium.as_ref() else {
+                continue;
+            };
+            let card_dir = dir.join(name);
+            if card_dir.exists() {
+                std::fs::remove_dir_all(&card_dir)
+                    .with_context(|| format!("clearing {}", card_dir.display()))?;
+            }
+            for (file, source) in &card.files {
+                let to = card_dir.join(file);
+                if let Some(parent) = to.parent() {
+                    std::fs::create_dir_all(parent)
+                        .with_context(|| format!("creating {}", parent.display()))?;
+                }
+                let bytes = match source {
+                    FileSpec::From(from) if is_url(from) => {
+                        let cached = crate::remote::fetch_to_cache(from)?;
+                        std::fs::read(&cached)
+                            .with_context(|| format!("reading {}", cached.display()))?
+                    }
+                    FileSpec::From(from) => {
+                        let path = base.join(from);
+                        std::fs::read(&path)
+                            .with_context(|| format!("reading {}", path.display()))?
+                    }
+                    FileSpec::Inline { inline } => inline.clone().into_bytes(),
+                    FileSpec::Builtin { builtin } => builtin.bytes().to_vec(),
+                };
+                std::fs::write(&to, bytes).with_context(|| format!("writing {}", to.display()))?;
+            }
+            let staged = std::path::absolute(&card_dir)
+                .with_context(|| format!("resolving {}", card_dir.display()))?;
+            *medium = Some(MediumSpec::Path(staged.display().to_string()));
+        }
+        Ok(())
+    }
+
     pub fn eeprom_path(&self) -> PathBuf {
         self.resolve(&self.boot.eeprom)
     }
 
     pub fn sd_path(&self) -> Option<PathBuf> {
-        self.boot.sd.as_ref().map(|p| self.resolve(p))
+        match self.boot.sd.as_ref()? {
+            MediumSpec::Path(p) => Some(self.resolve(p)),
+            MediumSpec::Files(_) => None,
+        }
     }
 
     pub fn golden_path(&self) -> Option<PathBuf> {
@@ -385,7 +487,23 @@ impl BootScenario {
             path: self.eeprom_path(),
             make: "scripts/fetch-firmware.sh".into(),
         }];
-        for img in [&b.sd, &b.usb, &b.otg].into_iter().flatten() {
+        for spec in [&b.sd, &b.usb, &b.otg].into_iter().flatten() {
+            let img = match spec {
+                MediumSpec::Path(img) => img,
+                MediumSpec::Files(card) => {
+                    for source in card.files.values() {
+                        if let FileSpec::From(from) = source {
+                            if !is_url(from) {
+                                v.push(BootInput {
+                                    path: self.resolve(from),
+                                    make: String::new(),
+                                });
+                            }
+                        }
+                    }
+                    continue;
+                }
+            };
             let path = self.resolve(img);
             // `-halt` is how the repository names the card whose kernel parks
             // the ARM, and a firmware variant's name the card that boots it.
@@ -455,16 +573,21 @@ impl BootScenario {
             "--verbose".into(),
         ];
         let b = &self.boot;
-        for (flag, path) in [
-            ("--sd", &b.sd),
-            ("--usb", &b.usb),
-            ("--otg", &b.otg),
-            ("--netboot", &b.netboot),
-        ] {
-            if let Some(p) = path {
-                args.push(flag.into());
-                args.push(self.resolve(p).display().to_string());
+        for (flag, medium) in [("--sd", &b.sd), ("--usb", &b.usb), ("--otg", &b.otg)] {
+            match medium {
+                Some(MediumSpec::Path(p)) => {
+                    args.push(flag.into());
+                    args.push(self.resolve(p).display().to_string());
+                }
+                Some(MediumSpec::Files(_)) => {
+                    panic!("{flag}: a card of listed files is staged before the boot's arguments")
+                }
+                None => {}
             }
+        }
+        if let Some(p) = &b.netboot {
+            args.push("--netboot".into());
+            args.push(self.resolve(p).display().to_string());
         }
         if b.otg_dock {
             args.push("--otg-dock".into());
@@ -1195,5 +1318,59 @@ core1      pc 0x3ec40014  retired 125  end None
         assert_eq!(failures.len(), 1, "{failures:?}");
         assert!(failures[0].contains("wall clock"), "{}", failures[0]);
         assert!(check_milestones(&scn, &log.replace("TimeLimit", "Until")).is_empty());
+    }
+
+    const CARD_SCENARIO: &str = "name: x
+boot:
+  eeprom: e
+  wall_secs: 1
+  otg:
+    files:
+      start4.elf: part.bin
+      config.txt: { inline: \"arm_64bit=1\\n\" }
+      kernel8.img: { builtin: halt }
+      overlays/x.dtbo: part.bin
+  sd: card.img
+";
+
+    #[test]
+    fn a_card_of_listed_files_is_staged_into_a_directory_and_named_by_it() {
+        let dir = std::env::temp_dir().join(format!("pimu-stage-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("part.bin"), b"ELF").unwrap();
+        let mut scn: BootScenario = yaml_serde::from_str(CARD_SCENARIO).expect("scenario");
+        scn.base_dir = dir.clone();
+        assert_eq!(
+            scn.inputs().len(),
+            1 + 2 + 1,
+            "eeprom, two files, the image"
+        );
+
+        scn.stage(&dir.join("cards")).expect("stage");
+        let card = dir.join("cards/otg");
+        assert_eq!(std::fs::read(card.join("start4.elf")).unwrap(), b"ELF");
+        assert_eq!(std::fs::read(card.join("overlays/x.dtbo")).unwrap(), b"ELF");
+        assert_eq!(
+            std::fs::read_to_string(card.join("config.txt")).unwrap(),
+            "arm_64bit=1\n"
+        );
+        assert_eq!(
+            std::fs::read(card.join("kernel8.img")).unwrap(),
+            crate::firmware::HALT_KERNEL
+        );
+        let args = scn.boot_args(Path::new("c")).join(" ");
+        assert!(
+            args.contains(&format!("--otg {}", card.display())),
+            "{args}"
+        );
+        assert!(args.contains("--sd "), "{args}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_listed_file_needs_a_source() {
+        let bad = CARD_SCENARIO.replace("{ builtin: halt }", "{ builtn: halt }");
+        assert!(yaml_serde::from_str::<BootScenario>(&bad).is_err());
     }
 }

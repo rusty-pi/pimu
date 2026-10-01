@@ -326,12 +326,12 @@ fn every_boot_scenario_loads_and_plans_its_media() {
         );
         let joined = scn.boot_args(Path::new("/tmp/c")).join(" ");
         for (flag, media) in [
-            ("--sd ", &scn.boot.sd),
-            ("--usb ", &scn.boot.usb),
-            ("--otg ", &scn.boot.otg),
-            ("--netboot ", &scn.boot.netboot),
+            ("--sd ", scn.boot.sd.is_some()),
+            ("--usb ", scn.boot.usb.is_some()),
+            ("--otg ", scn.boot.otg.is_some()),
+            ("--netboot ", scn.boot.netboot.is_some()),
         ] {
-            assert_eq!(joined.contains(flag), media.is_some(), "{joined}");
+            assert_eq!(joined.contains(flag), media, "{joined}");
         }
         if let Some(order) = &scn.boot.boot_order {
             assert!(
@@ -349,15 +349,15 @@ fn every_boot_scenario_loads_and_plans_its_media() {
             }
         }
         let media = [
-            &scn.boot.sd,
-            &scn.boot.usb,
-            &scn.boot.otg,
-            &scn.boot.netboot,
-            &scn.boot.eeprom_pubkey,
+            scn.boot.sd.is_some(),
+            scn.boot.usb.is_some(),
+            scn.boot.otg.is_some(),
+            scn.boot.netboot.is_some(),
+            scn.boot.eeprom_pubkey.is_some(),
         ];
         assert_eq!(
             scn.inputs().len(),
-            1 + media.iter().filter(|m| m.is_some()).count(),
+            1 + media.iter().filter(|m| **m).count(),
             "{}",
             path.display()
         );

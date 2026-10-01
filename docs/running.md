@@ -159,6 +159,24 @@ golden:                          # optional: diff the whole console against this
   ran, which is exact for one build of the model and one firmware, so a firmware
   that changes often leaves it `false`. With no `golden` only the milestones
   judge the run.
+- **A card is a disk image, a directory, a URL — or a list of files.** `sd`,
+  `usb` and `otg` take what `--sd` takes, or `files:`, which builds the boot
+  partition from the files named, so a scenario needs no image built beforehand:
+
+  ```yaml
+  otg:
+    files:
+      start4.elf: "../out/start4.elf"             # a path, relative to the scenario
+      bcm2711-rpi-4-b.dtb: "https://example.org/bcm2711-rpi-4-b.dtb"   # or a URL, cached
+      config.txt: { inline: "arm_64bit=1\nuart_2ndstage=1\n" }
+      kernel8.img: { builtin: halt }              # a kernel that parks the ARM
+      overlays/x.dtbo: "../x.dtbo"                # a `/` makes a directory
+  ```
+
+  The files are copied to `<log>.cards/<medium>/` and booted as a directory.
+  `uart_2ndstage=1` is what makes `start4.elf` print on the UART, so a
+  milestone can match what it says. The `halt` kernel is the one `scripts/make-sd.sh` uses for
+  `KERNEL=halt`; a boot that ends at the handover needs nothing more of the ARM.
 - The other options of [`boot`](#boot) in a scenario's `boot:` section are the
   same as the command line's: `sd`, `usb`, `netboot`, `bootconf`, `otp_row`,
   `stepping`, `board_rev`, `until`, `input` and the rest are listed in the

@@ -170,14 +170,18 @@ fn run_one(
         if !inputs_present(scn) {
             return Ok(ExitCode::FAILURE);
         }
+        let mut staged = scn.clone();
+        let mut cards = log.clone().into_os_string();
+        cards.push(".cards");
+        staged.stage(Path::new(&cards))?;
         if flags.plan {
             println!("wall={}", scn.wall_secs());
-            for a in scn.boot_args(&console).iter().chain(extras) {
+            for a in staged.boot_args(&console).iter().chain(extras) {
                 println!("{a}");
             }
             return Ok(ExitCode::SUCCESS);
         }
-        if let Some(failed) = run_boot(scn, extras, &log, &console)? {
+        if let Some(failed) = run_boot(&staged, extras, &log, &console)? {
             return Ok(failed);
         }
     }

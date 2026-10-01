@@ -70,12 +70,15 @@
           ]
         },
         "otg": {
-          "default": null,
-          "description": "Mass-storage image in the USB-C socket, on the BCM2711's own xHCI.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MediumSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Mass-storage image in the USB-C socket, on the BCM2711's own xHCI."
         },
         "otg_dock": {
           "default": false,
@@ -91,10 +94,13 @@
           "type": "array"
         },
         "sd": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MediumSpec"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "stepping": {
@@ -113,10 +119,13 @@
           ]
         },
         "usb": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MediumSpec"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "wall_secs": {
@@ -128,6 +137,28 @@
       "required": [
         "eeprom",
         "wall_secs"
+      ],
+      "type": "object"
+    },
+    "Builtin": {
+      "enum": [
+        "halt"
+      ],
+      "type": "string"
+    },
+    "CardFiles": {
+      "additionalProperties": false,
+      "properties": {
+        "files": {
+          "additionalProperties": {
+            "$ref": "#/$defs/FileSpec"
+          },
+          "description": "File name on the card (a `/` makes a directory) and where it comes from.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "files"
       ],
       "type": "object"
     },
@@ -147,6 +178,38 @@
       ],
       "type": "object"
     },
+    "FileSpec": {
+      "anyOf": [
+        {
+          "description": "A file, relative to the scenario, or a URL.",
+          "type": "string"
+        },
+        {
+          "properties": {
+            "inline": {
+              "description": "The text of the file.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "inline"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "builtin": {
+              "$ref": "#/$defs/Builtin",
+              "description": "A file `pimu` carries: `halt` is the kernel that parks the ARM."
+            }
+          },
+          "required": [
+            "builtin"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "GoldenSpec": {
       "additionalProperties": false,
       "properties": {
@@ -164,6 +227,17 @@
         "path"
       ],
       "type": "object"
+    },
+    "MediumSpec": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/$defs/CardFiles"
+        }
+      ],
+      "description": "A boot medium: a disk image, a directory or a URL as `boot --sd` takes them,\nor the files of a boot partition listed here, which become the card."
     },
     "Milestone": {
       "additionalProperties": false,
