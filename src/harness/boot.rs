@@ -51,6 +51,11 @@ pub struct BootSpec {
     /// Mass-storage image in the USB-C socket, on the BCM2711's own xHCI.
     #[serde(default)]
     pub otg: Option<String>,
+    /// Put the `otg` stick behind a USB-C dock: two hubs, an Ethernet adapter
+    /// and an empty card reader beside it, five devices that each need an
+    /// xHCI slot (`boot --otg-dock`).
+    #[serde(default)]
+    pub otg_dock: bool,
     #[serde(default)]
     pub netboot: Option<String>,
     #[serde(default)]
@@ -460,6 +465,9 @@ impl BootScenario {
                 args.push(flag.into());
                 args.push(self.resolve(p).display().to_string());
             }
+        }
+        if b.otg_dock {
+            args.push("--otg-dock".into());
         }
         if let Some(order) = &b.boot_order {
             args.push("--boot-order".into());

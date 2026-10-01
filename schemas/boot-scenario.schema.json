@@ -77,6 +77,11 @@
             "null"
           ]
         },
+        "otg_dock": {
+          "default": false,
+          "description": "Put the `otg` stick behind a USB-C dock: two hubs, an Ethernet adapter\nand an empty card reader beside it, five devices that each need an\nxHCI slot (`boot --otg-dock`).",
+          "type": "boolean"
+        },
         "otp_row": {
           "default": [],
           "description": "Fuses to program before the boot, `ROW=VALUE` each, over the model's\nown rows. The model is a board out of the factory, so a scenario that\nneeds a row an owner would have fused says so here.",
