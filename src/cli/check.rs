@@ -198,11 +198,11 @@ fn inputs_present(scn: &harness::BootScenario) -> bool {
     let mut make: Vec<&str> = Vec::new();
     for i in &missing {
         eprintln!("  {}", harness::boot::tidy_path(&i.path).display());
-        if !make.contains(&i.make.as_str()) {
+        if !i.make.is_empty() && !make.contains(&i.make.as_str()) {
             make.push(&i.make);
         }
     }
-    if !Path::new("scripts/make-sd.sh").exists() {
+    if make.is_empty() || !Path::new("scripts/make-sd.sh").exists() {
         return false;
     }
     let them = if missing.len() == 1 { "it" } else { "them" };

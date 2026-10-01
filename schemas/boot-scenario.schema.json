@@ -63,11 +63,15 @@
           "type": "array"
         },
         "netboot": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MediumSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The TFTP/HTTP root of a network boot, as `--netboot` takes it (a\ndirectory or a URL), or listed file by file like a card."
         },
         "otg": {
           "anyOf": [

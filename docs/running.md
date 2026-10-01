@@ -174,6 +174,7 @@ golden:                          # optional: diff the whole console against this
   ```
 
   The files are copied to `<log>.cards/<medium>/` and booted as a directory.
+  `netboot` takes the same `files:` for the TFTP/HTTP root.
   `uart_2ndstage=1` is what makes `start4.elf` print on the UART, so a
   milestone can match what it says. The `halt` kernel is the one `scripts/make-sd.sh` uses for
   `KERNEL=halt`; a boot that ends at the handover needs nothing more of the ARM.

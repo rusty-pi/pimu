@@ -56,8 +56,10 @@ pub struct BootSpec {
     /// xHCI slot (`boot --otg-dock`).
     #[serde(default)]
     pub otg_dock: bool,
+    /// The TFTP/HTTP root of a network boot, as `--netboot` takes it (a
+    /// directory or a URL), or listed file by file like a card.
     #[serde(default)]
-    pub netboot: Option<String>,
+    pub netboot: Option<MediumSpec>,
     #[serde(default)]
     pub boot_order: Option<String>,
     #[serde(default)]
@@ -418,6 +420,7 @@ impl BootScenario {
             ("sd", &mut self.boot.sd),
             ("usb", &mut self.boot.usb),
             ("otg", &mut self.boot.otg),
+            ("netboot", &mut self.boot.netboot),
         ] {
             let Some(MediumSpec::Files(card)) = medium.as_ref() else {
                 continue;
@@ -491,16 +494,7 @@ impl BootScenario {
             let img = match spec {
                 MediumSpec::Path(img) => img,
                 MediumSpec::Files(card) => {
-                    for source in card.files.values() {
-                        if let FileSpec::From(from) = source {
-                            if !is_url(from) {
-                                v.push(BootInput {
-                                    path: self.resolve(from),
-                                    make: String::new(),
-                                });
-                            }
-                        }
-                    }
+                    v.extend(self.file_inputs(card));
                     continue;
                 }
             };
@@ -539,15 +533,37 @@ impl BootScenario {
             );
             v.push(BootInput { path, make });
         }
-        for p in [&b.netboot, &b.eeprom_pubkey].into_iter().flatten() {
+        let make_netboot = "KERNEL=halt scripts/make-sd.sh firmware/sd-halt.img \
+                            && scripts/make-netboot.sh firmware/sd-halt.img";
+        match &b.netboot {
+            Some(MediumSpec::Path(p)) => v.push(BootInput {
+                path: self.resolve(p),
+                make: make_netboot.into(),
+            }),
+            Some(MediumSpec::Files(card)) => v.extend(self.file_inputs(card)),
+            None => {}
+        }
+        if let Some(p) = &b.eeprom_pubkey {
             v.push(BootInput {
                 path: self.resolve(p),
-                make: "KERNEL=halt scripts/make-sd.sh firmware/sd-halt.img \
-                       && scripts/make-netboot.sh firmware/sd-halt.img"
-                    .into(),
+                make: make_netboot.into(),
             });
         }
         v
+    }
+
+    /// The local files a listed card or tree reads.
+    fn file_inputs(&self, card: &CardFiles) -> Vec<BootInput> {
+        card.files
+            .values()
+            .filter_map(|source| match source {
+                FileSpec::From(from) if !is_url(from) => Some(BootInput {
+                    path: self.resolve(from),
+                    make: String::new(),
+                }),
+                _ => None,
+            })
+            .collect()
     }
 
     pub fn missing_inputs(&self) -> Vec<BootInput> {
@@ -573,21 +589,22 @@ impl BootScenario {
             "--verbose".into(),
         ];
         let b = &self.boot;
-        for (flag, medium) in [("--sd", &b.sd), ("--usb", &b.usb), ("--otg", &b.otg)] {
+        for (flag, medium) in [
+            ("--sd", &b.sd),
+            ("--usb", &b.usb),
+            ("--otg", &b.otg),
+            ("--netboot", &b.netboot),
+        ] {
             match medium {
                 Some(MediumSpec::Path(p)) => {
                     args.push(flag.into());
                     args.push(self.resolve(p).display().to_string());
                 }
                 Some(MediumSpec::Files(_)) => {
-                    panic!("{flag}: a card of listed files is staged before the boot's arguments")
+                    panic!("{flag}: listed files are staged before the boot's arguments")
                 }
                 None => {}
             }
-        }
-        if let Some(p) = &b.netboot {
-            args.push("--netboot".into());
-            args.push(self.resolve(p).display().to_string());
         }
         if b.otg_dock {
             args.push("--otg-dock".into());
@@ -1331,6 +1348,9 @@ boot:
       kernel8.img: { builtin: halt }
       overlays/x.dtbo: part.bin
   sd: card.img
+  netboot:
+    files:
+      serial/start4.elf: part.bin
 ";
 
     #[test]
@@ -1343,8 +1363,8 @@ boot:
         scn.base_dir = dir.clone();
         assert_eq!(
             scn.inputs().len(),
-            1 + 2 + 1,
-            "eeprom, two files, the image"
+            1 + 2 + 1 + 1,
+            "eeprom, two files, the image, the tree's one file"
         );
 
         scn.stage(&dir.join("cards")).expect("stage");
