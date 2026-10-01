@@ -263,6 +263,8 @@ const TRB_COMMAND_COMPLETION: u32 = 33;
 const TRB_PORT_STATUS_CHANGE: u32 = 34;
 
 // Completion codes (xHCI 6.4.5).
+/// The Chain bit of a transfer or Link TRB: the next TRB belongs to the same TD.
+const TRB_CHAIN: u32 = 1 << 4;
 const CC_SUCCESS: u32 = 1;
 const CC_TRB_ERROR: u32 = 5;
 const CC_STALL: u32 = 6;
@@ -1064,6 +1066,7 @@ impl Xhci {
             return;
         }
         let mut ctrl = ControlState::default();
+        let mut td_open = false;
         for _ in 0..4096 {
             let trb = Xhci::read_trb(mem, ptr);
             if (trb[3] & 1 != 0) != ccs {
@@ -1071,6 +1074,16 @@ impl Xhci {
             }
             let kind = (trb[3] >> 10) & 0x3F;
             if kind == TRB_LINK {
+                if td_open && trb[3] & TRB_CHAIN == 0 {
+                    let event = [
+                        ptr as u32,
+                        (ptr >> 32) as u32,
+                        CC_TRB_ERROR << 24,
+                        ((slot as u32) << 24) | (dci << 16) | (TRB_TRANSFER_EVENT << 10),
+                    ];
+                    self.post_completion(event, mem);
+                    break;
+                }
                 let next = (trb[0] as u64 | ((trb[1] as u64) << 32)) & !0xF;
                 if trb[3] & 2 != 0 {
                     ccs = !ccs;
@@ -1118,6 +1131,7 @@ impl Xhci {
                 ];
                 self.post_completion(event, mem);
             }
+            td_open = trb[3] & TRB_CHAIN != 0;
             ptr += 16;
             if code > CC_SHORT_PACKET {
                 break; // an error halts the endpoint
@@ -1620,6 +1634,36 @@ mod tests {
             EP1_RING as u32 + 16,
             "the poll was consumed"
         );
+    }
+
+    /// A TD that runs on past a Link TRB needs the Chain bit on the Link too;
+    /// without it the controller loses the TD (a Raspberry Pi 4B d03115 paired
+    /// every later status block with the command before). An idle hub NAKs the
+    /// TRB after the Link, which parks it without an event.
+    #[test]
+    fn a_link_trb_inside_a_td_needs_the_chain_bit() {
+        for (link_chain, want) in [(true, 0), (false, CC_TRB_ERROR)] {
+            let (mut hc, mut mem) = started();
+            addressed(&mut hc, &mut mem, 3, EP1_RING);
+            put_trb(
+                &mut mem,
+                EP1_RING,
+                [0, 0, 0, (TRB_NO_OP << 10) | TRB_CHAIN | 1],
+            );
+            let link = (TRB_LINK << 10) | 1 | if link_chain { TRB_CHAIN } else { 0 };
+            put_trb(&mut mem, EP1_RING + 16, [EP1_RING as u32 + 32, 0, 0, link]);
+            put_trb(
+                &mut mem,
+                EP1_RING + 32,
+                [BUFFER as u32 + 1, 0, 1, (TRB_NORMAL << 10) | (1 << 5) | 1],
+            );
+            hc.write(DBOFF + 4, Width::Word, 3, &mut mem);
+            assert_eq!(
+                mem.read32(EVENT_RING + 48 + 8) >> 24,
+                want,
+                "chain={link_chain}"
+            );
+        }
     }
 
     #[test]
