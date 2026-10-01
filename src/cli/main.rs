@@ -48,15 +48,6 @@ const REPO_COMMANDS: &str =
 #[cfg(not(feature = "repo"))]
 const REPO_COMMANDS: &str = "";
 
-const SCHEMA_USAGE: &str = "    pimu schema [boot-scenario|scenario|retired-counts]\n";
-
-const SCHEMA_COMMAND: &str =
-    "    schema    Print the JSON Schema of a YAML file `pimu` reads, for an editor or a
-              linter: `pimu schema boot-scenario > boot-scenario.schema.json`, then
-              `# yaml-language-server: $schema=boot-scenario.schema.json` on the
-              file's first line. Without a name, lists them.
-";
-
 #[cfg(feature = "repo")]
 const SPEC_DOCS_USAGE: &str = "    pimu spec-docs [--update]\n";
 
@@ -141,12 +132,10 @@ fn usage() -> String {
         BOOT_USAGE,
         REPO_USAGE,
         DISASM_USAGE,
-        SCHEMA_USAGE,
         SPEC_DOCS_USAGE,
         BOOT_COMMAND,
         REPO_COMMANDS,
         DISASM_COMMAND,
-        SCHEMA_COMMAND,
         SPEC_DOCS_COMMAND,
         FLAGS_HEAD,
         UPDATE_FLAG,
@@ -193,7 +182,6 @@ fn run(args: &[String]) -> Result<ExitCode> {
         #[cfg(feature = "repo")]
         "boot-check" => scenario::cmd_boot_check(&args[1..]),
         "disasm" => disasm::cmd_disasm(&args[1..]),
-        "schema" => cmd_schema(&args[1..]),
         #[cfg(feature = "repo")]
         "spec-docs" => cmd_spec_docs(&args[1..]),
         "-h" | "--help" | "help" => {
@@ -219,27 +207,6 @@ fn chdir(args: &[String]) -> Result<Vec<String>> {
         std::env::set_current_dir(dir).with_context(|| format!("-C {dir}"))?;
     }
     Ok(rest)
-}
-
-/// `schema [name]`: a JSON Schema on stdout, or the names there are.
-fn cmd_schema(args: &[String]) -> Result<ExitCode> {
-    let all = pimu::harness::schema::schemas();
-    let name_of = |file: &str| file.trim_end_matches(".schema.json").to_string();
-    match args {
-        [] => {
-            for (file, _) in &all {
-                println!("{}", name_of(file));
-            }
-        }
-        [name] => {
-            let Some((_, text)) = all.iter().find(|(file, _)| name_of(file) == *name) else {
-                bail!("no schema named '{name}' (try `pimu schema`)");
-            };
-            print!("{text}");
-        }
-        _ => bail!("schema takes at most one name"),
-    }
-    Ok(ExitCode::SUCCESS)
 }
 
 /// `spec-docs [--update]`: report (or rewrite) the generated docs that are out of date.
