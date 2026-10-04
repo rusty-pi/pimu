@@ -39,6 +39,7 @@ env:
 
 jobs:
   release:
+    if: github.repository == 'rusty-pi/pimu'
     # Hosted, not the RUNNER_BUILD pool the rest of CI uses: this job needs
     # docker for the image, apt for the aarch64 cross linker, and an old glibc
     # to link against. The NAS runners have none of the three.
