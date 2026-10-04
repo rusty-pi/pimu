@@ -27,7 +27,9 @@
   block, a `parent`, a copy or a new base, draw it, run
   `cargo run -- spec-docs --update` (which rewrites each sheet's dark twin) and
   `cargo test --test board_sheet`. Adding the name to an existing part's
-  `data-block` list is fine for a block with nothing of its own to show. Never
+  `data-block` list is fine for a block with nothing of its own to show. A new
+  `src/periph/*.rs` without a spec goes on a part as `data-model="<file>"`, or
+  in `NOT_BOARD_PARTS` when it is no part of the board. Never
   edit a `*-dark.svg`: it is generated from the sheet beside it.
 - **Never let CI or anything in `scripts/` depend on real hardware.** The
   reference boards are ad-hoc and only sometimes reachable, and CI runs in the
