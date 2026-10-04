@@ -88,7 +88,7 @@ confidence = "high"
 
 [[register.field.source]]
 kind       = "measured"
-ref        = "rpi-dev 4B rev 1.5: `FR 0x39` read out over DHCP option 97 before a byte was written; fixed in rpi-unboxed `f7b58e5` by draining `BUSY` first"
+ref        = "Raspberry Pi 4B d03115: `FR 0x39` read out over DHCP option 97 before a byte was written; fixed by draining `BUSY` first"
 confidence = "high"
 
 [[register.field]]

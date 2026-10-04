@@ -311,7 +311,7 @@ impl Hub {
     /// A USB-C dock: a hub with a second hub and an Ethernet adapter behind
     /// it, and behind the second hub a card reader with no card and `stick`.
     /// Five devices that each need a controller slot. The topology is what a
-    /// dock booted from on a Raspberry Pi 4B d03115 (pi4-firmware `22d26fa`);
+    /// dock booted from on a Raspberry Pi 4B d03115;
     /// the device identities are not measured.
     pub fn dock(stick: MassStorage) -> Hub {
         let mut inner = Hub::dock_hub();
@@ -324,7 +324,7 @@ impl Hub {
     }
 
     /// A hub that fails the first request sent within 10 ms of `SET_ADDRESS`,
-    /// as the dock's did on a Raspberry Pi 4B d03115 (pi4-firmware `ad9070a`).
+    /// as the dock's did on a Raspberry Pi 4B d03115.
     /// The soldered VIA hub has no such limit on record.
     fn dock_hub() -> Hub {
         Hub {

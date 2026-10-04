@@ -89,7 +89,7 @@ golden:
   path: "golden/firmware.txt"
 
 milestones:
-  - why: "The reset cause the bootloader reports; the real board latches HADWRF (1bc5fa1), matching a Raspberry Pi 4B d03115's bootloader log."
+  - why: "The reset cause the bootloader reports; the real board latches HADWRF, matching a Raspberry Pi 4B d03115's bootloader log."
     line: "PM_RSTS 00000020"
 
   - why: "The PCIe link trains and the bus scan finds the VL805 that is soldered to every Pi 4B. Same identity the real board prints, a Raspberry Pi 4B d03115's bootloader log."
@@ -153,7 +153,7 @@ milestones:
   - why: "Same for the second controller (a Raspberry Pi 4B d03115's start4 log)."
     line: "HDMI1:EDID giving up on reading EDID block 0"
 
-  - why: "Bounded, not a retry storm: posting into HDMI1's event-flags group used to re-trigger its EDID fetch on every pass (71bd94a)."
+  - why: "Bounded, not a retry storm: posting into HDMI1's event-flags group used to re-trigger its EDID fetch on every pass."
     line: "EDID giving up"
     max_count: 16
 
@@ -169,22 +169,22 @@ milestones:
   - why: "Past the second config.txt read into the restart-logging phase (a Raspberry Pi 4B d03115's start4 log)."
     line: "*** Restart logging"
 
-  - why: "The file-loading phase, which needed the hardware RNG modelled (e012fad): the ARM device tree (a Raspberry Pi 4B d03115's start4 log onward)."
+  - why: "The file-loading phase, which needed the hardware RNG modelled: the ARM device tree (a Raspberry Pi 4B d03115's start4 log onward)."
     line: "Loaded 'bcm2711-rpi-4-b.dtb'"
 
-  - why: "config.txt dtparam handling in the same file-loading phase (e012fad)."
+  - why: "config.txt dtparam handling in the same file-loading phase."
     line: "dtparam: spi=on"
 
-  - why: "Overlay load in the same file-loading phase (e012fad)."
+  - why: "Overlay load in the same file-loading phase."
     line: "Loaded overlay 'disable-bt'"
 
-  - why: "Kernel command line, same phase (e012fad)."
+  - why: "Kernel command line, same phase."
     line: "Read command line from file 'cmdline.txt'"
 
-  - why: "Kernel load, same phase (e012fad)."
+  - why: "Kernel load, same phase."
     line: "Loaded 'kernel8.img'"
 
-  - why: "Device tree relocation, same phase (e012fad)."
+  - why: "Device tree relocation, same phase."
     line: "Device tree loaded to"
 
   - why: >-
@@ -320,7 +320,7 @@ milestones:
       safe to publish precisely because the key it is derived from is invented.
     line: ["tag 0x00030092", "answered", "0x6ff9b60e 0x7bb3973a 0x01eb65b0 0x48fd764f 0x8286f48d 0xf1b46aed 0xe8e0da4c 0x9d1e6ea2"]
 
-  - why: "No nop-slides at all: the register file must survive preemptive context switches (8d7c27a) and no callback may be null."
+  - why: "No nop-slides at all: the register file must survive preemptive context switches and no callback may be null."
     line: "[derail]"
     absent: true
 

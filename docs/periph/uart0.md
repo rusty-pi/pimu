@@ -71,7 +71,7 @@ Sources:
 `BUSY` sources:
 
 - datasheet (high): BCM2711 ARM Peripherals, §11.5 (UART): `FR`
-- measured (high): rpi-dev 4B rev 1.5: `FR 0x39` read out over DHCP option 97 before a byte was written; fixed in rpi-unboxed `f7b58e5` by draining `BUSY` first
+- measured (high): Raspberry Pi 4B d03115: `FR 0x39` read out over DHCP option 97 before a byte was written; fixed by draining `BUSY` first
 
 `RXFE` sources:
 

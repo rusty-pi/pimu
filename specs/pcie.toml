@@ -719,7 +719,7 @@ confidence = "high"
 
 [[register.source]]
 kind       = "measured"
-ref        = "rpi-dev 4B rev 1.5: after writing `0x00100000` the register reads `0x00000000`, and the VL805 answers through the window at index 0"
+ref        = "Raspberry Pi 4B d03115: after writing `0x00100000` the register reads `0x00000000`, and the VL805 answers through the window at index 0"
 confidence = "high"
 
 [[register.field]]

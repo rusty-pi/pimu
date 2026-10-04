@@ -575,7 +575,7 @@ Selects the function `EXT_CFG_DATA` shows. Modelled as reading back what was wri
 Sources:
 
 - linux (high): `pcie-brcmstb.c`: `PCIE_EXT_CFG_INDEX`, `bus << 20 | slot << 15 | fn << 12`
-- measured (high): rpi-dev 4B rev 1.5: after writing `0x00100000` the register reads `0x00000000`, and the VL805 answers through the window at index 0
+- measured (high): Raspberry Pi 4B d03115: after writing `0x00100000` the register reads `0x00000000`, and the VL805 answers through the window at index 0
 
 `FUNC` sources:
 

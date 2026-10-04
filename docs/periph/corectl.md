@@ -12,7 +12,7 @@ One register bank per VPU core: core 0 at `+0x000`, core 1 at `+0x800`. start4 r
 Sources:
 
 - decompile (high): per-core init `0x3EC3E938` sets `[blk+12] = 0x7E002000 + core * 0x800`
-- trace (high): `--log irqen` and the peripheral stub show core 1 writing `0x7E002810..0x7E002844` — _the window was mapped `0x100` wide until commit 7bd21a3, which hid core 1's bank_
+- trace (high): `--log irqen` and the peripheral stub show core 1 writing `0x7E002810..0x7E002844` — _the window used to be mapped `0x100` wide, which hid core 1's bank_
 - measured (high): Raspberry Pi 4B d03115, `/dev/mem`: `0xFE00203C` and every word from `0xFE002048` to `0xFE0020FF` read `0x494E5445`, and so do the same offsets in core 1's bank from `0xFE002800`. Controlled against the stale-read effect by reading each of them after three different preceding values (`0x101`, `0x05`, the tag): the tag offsets answer the tag whatever precedes them, so they are decoded, and only `+0x30` is not. Read one word at a time — back-to-back 32-bit reads of this window through one `mmap` alias — and never narrower: a 16-bit read of this block is junk, every offset answering `0x494e` in its upper half, `IRQ_PRIO` words included.
 - inferred (medium): size: the system timer starts at `0x7E003000`
 
@@ -93,7 +93,7 @@ Sources:
 - trace (high): `linux`, `PIMU_TRACE_MMIO=0x7e002000-0x7e002060`: the secure service at `0xFEC006CA` writes all eight words, `+0x20 <- 0x10` (source 97, the HVS), `+0x28 <- 0x10000000` (119) and `+0x2c <- 0x100000` (125, the RNG) among them
 - trace (high): start4 calls `enable_irq_source(64, 1)` for its ThreadX tick
 - inferred (medium): hermanhermitage/videocoreiv, VideoCore IV Programmers Manual: 128 vector-table entries indexed by interrupt number, 0-31 exceptions, 32-63 swi, 64-127 external interrupts — _a reverse-engineered manual, not a datasheet_
-- trace (high): vectoring at the field's value reached start4's exception stubs (dbe4e25, b9d53b8); vectoring at 64 + source reaches the per-source handlers (2bdbcbf)
+- trace (high): vectoring at the field's value reached start4's exception stubs; vectoring at 64 + source reaches the per-source handlers
 - datasheet (high): BCM2711 ARM Peripherals, §6.2.4 Table 102 (VC peripheral IRQs) for the 64 names, and §6.3 Figure 7 for where they land on the GIC (SPI ids 96 to 159) — _the datasheet numbers them 0 to 63; every source this model identified from the firmware sits 64 above its number there — 64 the ThreadX tick on `Timer 0`, 66 the clock service on `Timer 2`, 76 / 77 the mcsync doorbell acks on `Multicore Sync 0` / `1`, 78 / 79 the reschedule IPI on `Multicore Sync 2` / `3`, 89 and 95 DMA channels 11 and 15, 94 the ARM mailbox, 97 the HVS, 119 the `PCM/I2S` line Linux enables, 125 the RNG_
 
 ## `VBASE`
@@ -110,7 +110,7 @@ Sources:
 
 - measured (high): Raspberry Pi 4B d03115, `/dev/mem`: a read of `0xFE002030` returns the value of the immediately preceding read -- `0x101` after `IRQ_PRIO` word 0, `0x05` after `IRQ_PROFILE`, `0x494E5445` after the tag at `+0x3C`, `0` after a zero word, and ten reads in a row all stuck on one stale value. Every other offset in the bank, the tag offsets included, answers the same value whatever precedes it. So the register is write-only and its read is undecoded; two earlier readings of `0` and `0x80` here were the preceding read showing through, not the register. That it is live all the same is shown by a forced source vectoring into the firmware's own handler.
 - decompile (high): start4 entry trampoline: `mov r1, #0x7E002030`, then stores the vector base through it
-- trace (high): core-control write trace: `+0x30` and `+0x830` both take `0xFEC01E00`, nothing writes `+0x38` — _replaced an earlier `+0x38` guess for core 1 (commit 06a8447)_
+- trace (high): core-control write trace: `+0x30` and `+0x830` both take `0xFEC01E00`, nothing writes `+0x38` — _replaced an earlier `+0x38` guess for core 1_
 - decompile (high): bootsys halt `0x800005AC`: zeroes both cores' priority words and `+0x30`, sets vector 116 of a table at `0x80000000`, writes `0x80000000` here (`0x8000063A`) around its `sleep`, then 0 (`0x80000654`); after a wake the boot goes on to start4, which writes `0xFEC01E00`
 
 `ADDR` sources:
