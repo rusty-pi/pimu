@@ -230,6 +230,42 @@ mod tests {
     }
 
     #[test]
+    fn the_example_in_running_md_expands_as_documented() {
+        let doc = include_str!("../../docs/running.md");
+        let yaml = doc
+            .split("# machine.yaml\n")
+            .nth(1)
+            .and_then(|r| r.split("```").next())
+            .expect("the --config example");
+        let got = expand_with(yaml, &["boot", "--max-wall", "900"]);
+        assert_eq!(
+            got,
+            args(&[
+                "boot",
+                "--max-wall",
+                "900",
+                "--eeprom",
+                "https://example.org/pieeprom.bin",
+                "--usb",
+                "https://example.org/disk.img",
+                "--boot-order",
+                "0x5",
+                "--max-wall",
+                "600",
+                "--bootconf",
+                "HTTP_HOST=boot.example.org",
+                "--bootconf",
+                "HTTP_PORT=80",
+                "--send-after",
+                "/ # ",
+                "uname -a\n",
+                "--stdin",
+                "-v",
+            ])
+        );
+    }
+
+    #[test]
     fn nested_objects_are_refused() {
         assert!(to_args(&parse_json(r#"{"a": {"b": 1}}"#).unwrap()).is_err());
         assert!(to_args(&parse_json(r#"[1]"#).unwrap()).is_err());
