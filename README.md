@@ -260,6 +260,18 @@ endorsed by Raspberry Pi Ltd. or Broadcom. Everything it says about the
 hardware comes from public documentation, from Linux drivers and device trees,
 from static analysis of published firmware images and from measurements on a
 Raspberry Pi 4B — each statement carries its source, in `specs/*.toml` and
-`isa/vpu.toml`. No Broadcom or Raspberry Pi material is reproduced.
-"Raspberry Pi" is a trademark of Raspberry Pi Ltd., used here only to say which
+`isa/vpu.toml`. No Broadcom or Raspberry Pi code, documentation text or
+firmware image is included. What the repository does keep from them is small
+and factual: a few instruction words and register values as test fixtures, and
+lines of boot-log output as the expected transcripts under `testdata/`.
+
+You supply the firmware. This repository contains none of it and does not
+redistribute any; `scripts/fetch-firmware.sh` fetches the public images, each
+under its own licence. The same goes for the on-chip boot ROM: `--maskrom`
+runs a dump you already have, this project ships none and says nothing about
+how to get one, and the secret that signs the bootcode is read from the
+environment at run time and is not stored anywhere in the repository.
+
+"Raspberry Pi" is a trademark of Raspberry Pi Ltd.; "Broadcom" and
+"VideoCore" are trademarks of Broadcom Inc. They appear here only to say which
 hardware this models.

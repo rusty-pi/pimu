@@ -130,6 +130,10 @@ PIMU_EMBED_EEPROM=firmware/pieeprom.bin cargo build --release
 the same cache directory rather than downloading anything. Unset, the binary
 carries no image and the fetch stays as it was.
 
+Only embed an image you may redistribute: a build that carries one is a
+redistribution of it, and an image that bundles third-party blobs (stock DRAM
+training or VL805 images, say) is under those blobs' licences, not this one.
+
 ## The release builds
 
 Pushing an `X.Y.Z` tag on main runs `.github/workflows/release.yml`, which
