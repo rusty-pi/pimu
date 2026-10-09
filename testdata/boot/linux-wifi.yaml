@@ -22,7 +22,7 @@
 #
 #   brcmfmac: brcmf_c_preinit_dcmds: Firmware: BCM4345/6 pimu model firmware (no radio) version 0
 #   3: wlan0: <BROADCAST,MULTICAST> mtu 1500 qdisc noop qlen 1000
-#       link/ether 02:00:5e:00:57:01 brd ff:ff:ff:ff:ff:ff
+#       link/ether b8:27:eb:74:f2:6c brd ff:ff:ff:ff:ff:ff
 #   3: wlan0: <NO-CARRIER,BROADCAST,MULTICAST,UP> mtu 1500 qdisc pfifo_fast qlen 1000
 #   BSS 02:00:5e:00:53:04(on wlan0)
 #           SSID: pimu-model-ap
@@ -205,7 +205,7 @@ milestones:
       `scripts/fetch-firmware.sh` pins. So this line says the nvram arrived intact
       and the chip's firmware read it: the chip's own address, which it would
       answer with instead, is `02:00:5e:00:53:03`.
-    line: "link/ether 02:00:5e:00:57:01 brd ff:ff:ff:ff:ff:ff"
+    line: "link/ether b8:27:eb:74:f2:6c brd ff:ff:ff:ff:ff:ff"
 
   - why: >-
       The same address in the run report, and beside it where it came from — which
@@ -214,7 +214,7 @@ milestones:
       `02:00:5e:00:53:03`, the nvram's line replaced it, and no host wrote one over
       that (`brcmf_c_set_cur_etheraddr` is only called with an address the platform
       hands down, and nothing here does).
-    line: "cyw43455 MAC 02:00:5e:00:57:01, from the card's nvram"
+    line: "cyw43455 MAC b8:27:eb:74:f2:6c, from the card's nvram"
 
   - why: >-
       The interface came up, and `UP` with `NO-CARRIER` is as far as one with no

@@ -1370,10 +1370,10 @@ mod tests {
         // of hundred entries in.
         chip.start(&nvram(&[
             "sromrev=11",
-            "macaddr=02:00:5e:00:57:01",
+            "macaddr=b8:27:eb:74:f2:6c",
             "boardtype=0x6e4",
         ]));
-        let wanted = [0x02, 0x00, 0x5E, 0x00, 0x57, 0x01];
+        let wanted = [0xB8, 0x27, 0xEB, 0x74, 0xF2, 0x6C];
         assert_eq!(chip.mac(), wanted);
         assert_eq!(chip.mac_source(), MacSource::Nvram);
         assert_eq!(read_mac(&mut chip, 0), wanted);

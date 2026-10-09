@@ -1,7 +1,7 @@
 //! The board sheets under `docs/` against the register specs and the model. A
 //! sheet is drawn by hand, so instead of generating it these tests stop it
 //! drifting: each sheet marks up what it draws with `data-board`, `data-block`,
-//! `data-base`, `data-edge` and `data-block-alt`, and every mark is checked
+//! `data-base`, `data-edge`, `data-block-alt` and `data-model`, and every mark is checked
 //! against `specs/*.toml` and against the board the sheet names. Every
 //! `docs/board-sheet*.svg` is checked, so another board is only another drawing.
 
@@ -56,6 +56,12 @@ impl Sheet {
 
     fn fitted(&self) -> BTreeSet<String> {
         names(&self.svg, "data-block")
+    }
+
+    /// Source files of `src/periph/` a part says model it, for the ones whose
+    /// name is not a spec's: `data-model="sdcard"`.
+    fn modelled_by(&self) -> BTreeSet<String> {
+        names(&self.svg, "data-model")
     }
 
     /// Parts named for contrast, which this board does not have.
@@ -337,4 +343,78 @@ fn the_sheets_and_their_twins_are_in_step() {
             .collect::<Vec<_>>()
             .join(", ")
     );
+}
+
+/// Files in `src/periph/` that are not a part of the board, and why.
+const NOT_BOARD_PARTS: &[(&str, &str)] = &[
+    ("mod", "the module list"),
+    ("stub", "the catch-all for windows nobody models"),
+    (
+        "readystub",
+        "a stand-in that answers `ready` for a block waited on",
+    ),
+    (
+        "disk",
+        "the backing store behind the SD card and the USB stick",
+    ),
+    (
+        "gentimer",
+        "the core's own system registers, not a window on the bus",
+    ),
+    (
+        "hat",
+        "an optional board on the header, not fitted to the Pi itself",
+    ),
+];
+
+fn periph_files() -> BTreeSet<String> {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/periph");
+    std::fs::read_dir(&dir)
+        .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
+        .filter_map(|e| e.ok()?.path().file_stem()?.to_str().map(str::to_string))
+        .collect()
+}
+
+/// What let #135 happen: a peripheral landed with no spec, so no check noticed
+/// the sheet still called it "not modelled".
+#[test]
+fn every_peripheral_source_file_is_on_a_sheet() {
+    let sheets = sheets();
+    let drawn: BTreeSet<String> = sheets
+        .iter()
+        .flat_map(|s| {
+            s.fitted()
+                .into_iter()
+                .chain(s.alternatives())
+                .chain(s.modelled_by())
+        })
+        .collect();
+    for file in periph_files() {
+        assert!(
+            drawn.contains(&file) || NOT_BOARD_PARTS.iter().any(|(n, _)| *n == file),
+            "src/periph/{file}.rs is on no sheet; add `data-model=\"{file}\"` \
+             to the part it models, or to NOT_BOARD_PARTS with the reason it is \
+             not a part of the board"
+        );
+    }
+}
+
+#[test]
+fn every_data_model_is_a_peripheral_source_file() {
+    let files = periph_files();
+    for sheet in sheets() {
+        for name in sheet.modelled_by() {
+            assert!(
+                files.contains(&name),
+                "{}: data-model {name:?} is not a file in src/periph/",
+                sheet.what
+            );
+        }
+    }
+    for (name, _) in NOT_BOARD_PARTS {
+        assert!(
+            files.contains(*name),
+            "NOT_BOARD_PARTS names {name}, which is gone"
+        );
+    }
 }

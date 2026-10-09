@@ -30,21 +30,21 @@ run is deterministic. No off-the-shelf tool does this;
 
 ## Run a boot
 
-Nothing to install and nothing to fetch — this boots Raspberry Pi's own firmware
+Nothing to install — this boots Raspberry Pi's own firmware
 repository straight off GitHub:
 
 ```bash
 docker run --rm ghcr.io/rusty-pi/pimu:latest boot \
   https://raw.githubusercontent.com/raspberrypi/firmware/refs/heads/master/boot/ \
+  --eeprom https://raw.githubusercontent.com/raspberrypi/rpi-eeprom/master/firmware-2711/latest/pieeprom-2026-08-04.bin \
   --config-txt arm_64bit=1 --config-txt enable_uart=1 --config-txt uart_2ndstage=1 \
   --config-txt dtoverlay=disable-bt --cmdline "console=ttyAMA0,115200 earlycon"
 ```
 
 The URL is a boot partition's own files served over HTTP: the MBR and the FAT32
 volume around them are built on the fly, and each file is fetched as the firmware
-reads it. That directory carries no EEPROM bootloader, so the one
-[`rusty-pi/pi4-firmware`](https://github.com/rusty-pi/pi4-firmware) publishes
-stands in, and no `config.txt`, so `--config-txt` and `--cmdline` supply the
+reads it. That directory carries no EEPROM bootloader, hence `--eeprom` (the
+stock image from `raspberrypi/rpi-eeprom`), and no `config.txt`, so `--config-txt` and `--cmdline` supply the
 lines a card would — the firmware's own defaults leave the serial console off,
 exactly as they do on a real board, and `uart_2ndstage=1` is what adds
 `start4.elf`'s own log to the bootloader's. A local directory, or a bare
