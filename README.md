@@ -240,6 +240,7 @@ golden transcripts and the images each boot needs.
 | [`docs/device-tree.md`](docs/device-tree.md) | Getting the patched device tree out of a run |
 | [`docs/diagnostics.md`](docs/diagnostics.md) | The `--log` channels and `PIMU_*` switches that find a wall |
 | [`docs/mailbox.md`](docs/mailbox.md) | Asking the booted firmware a property or a `vcgencmd`, and what it answers |
+| [`docs/github-action.md`](docs/github-action.md) | Installing and running pimu from another repository's workflow |
 | [`docs/building.md`](docs/building.md) | The source layout, build profiles, the `diag` feature, PGO, the release builds |
 | [`docs/periph/`](docs/periph/) | One page per register block, generated from `specs/*.toml` |
 | [`docs/vpu-isa.md`](docs/vpu-isa.md) | The VideoCore IV instruction set, with the evidence for each statement |

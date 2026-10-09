@@ -1,0 +1,59 @@
+name: pimu
+description: Install a released pimu binary, and optionally run it. Boots Raspberry Pi 4 firmware in a model, on Linux runners.
+branding:
+  icon: cpu
+  color: green
+
+inputs:
+  version:
+    description: The release to install, as its tag (`0.6.0`, no `v`). `latest` takes the newest release.
+    default: latest
+  args:
+    description: Arguments for `pimu`, run in `working-directory` after the install (`boot --scenario boot.yaml`). Empty installs only.
+    default: ""
+  working-directory:
+    description: Where `args` runs.
+    default: .
+  token:
+    description: Token that `gh` downloads the release with.
+    default: ${{ github.token }}
+
+outputs:
+  version:
+    description: The release that was installed.
+    value: ${{ steps.install.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - id: install
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        [ "$RUNNER_OS" = Linux ] || { echo "::error::pimu releases are built for Linux only"; exit 1; }
+        case "$RUNNER_ARCH" in
+          X64) arch=x86_64 ;;
+          ARM64) arch=aarch64 ;;
+          *) echo "::error::no pimu release for $RUNNER_ARCH"; exit 1 ;;
+        esac
+        tag="$VERSION"
+        if [ "$tag" = latest ]; then
+          tag=$(gh release view -R rusty-pi/pimu --json tagName --jq .tagName)
+        fi
+        dir="$RUNNER_TEMP/pimu-$tag"
+        mkdir -p "$dir"
+        gh release download "$tag" -R rusty-pi/pimu -p "pimu-$arch-linux.tar.gz" -O - |
+          tar -xz -C "$dir" --strip-components=1
+        echo "$dir" >> "$GITHUB_PATH"
+        echo "version=$tag" >> "$GITHUB_OUTPUT"
+        "$dir/pimu" boot --help > /dev/null
+
+    - if: inputs.args != ''
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        PIMU_ARGS: ${{ inputs.args }}
+      run: eval "pimu $PIMU_ARGS"

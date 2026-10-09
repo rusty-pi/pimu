@@ -1,0 +1,35 @@
+name: action
+
+# The composite action at the repository root (`action.yml`), run the way
+# another repository would use it: installs the newest release on each
+# architecture and boots nothing. Only when the action or this file changes.
+on:
+  pull_request:
+    paths:
+      - action.yml
+      - .github/workflows/action.yml
+  push:
+    branches: [main]
+    paths:
+      - action.yml
+      - .github/workflows/action.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    strategy:
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: pimu
+        uses: ./
+        with:
+          args: boot --help
+      - run: |
+          test -n "${{ steps.pimu.outputs.version }}"
+          command -v pimu
