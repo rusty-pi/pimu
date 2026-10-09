@@ -7,7 +7,6 @@ use std::process::ExitCode;
 use std::rc::Rc;
 
 use anyhow::{bail, Context, Result};
-use sha1::{Digest, Sha1};
 
 use pimu::armstub::Handoff;
 use pimu::emulator::{Emulator, RunLimits, RunReport};
@@ -61,9 +60,8 @@ ZERO CONFIG:
 
     A directory that holds a boot partition's files instead — `start4.elf`,
     `config.txt` — is the card itself: `boot` builds the FAT32 volume around
-    them (--sd-dir), and boots the EEPROM bootloader `rusty-pi/pi4-firmware`
-    publishes when there is no `pieeprom.bin` to boot, since a firmware
-    checkout carries none.
+    them (--sd-dir). A firmware checkout carries no EEPROM bootloader, so
+    give one with --eeprom (a `pieeprom.bin`) or keep it beside the files.
 
 OVER HTTP:
     Wherever a file or a directory is named — the argument above, every
@@ -885,80 +883,6 @@ impl<'a> ZeroConfig<'a> {
     }
 }
 
-include!(concat!(env!("OUT_DIR"), "/embedded_eeprom.rs"));
-
-/// The EEPROM image to boot a directory of firmware files with. A firmware
-/// checkout has no bootloader of its own, and `start4.elf` run from its ELF entry
-/// stalls silently — the bootloader does more than place its segments. So it comes
-/// from `rusty-pi/pi4-firmware`: built into a released binary, and otherwise
-/// fetched once and cached under `$XDG_CACHE_HOME/pimu`.
-fn fallback_eeprom() -> Result<PathBuf> {
-    let cache = pimu::remote::cache_dir()?;
-    if let Some(image) = EMBEDDED_EEPROM {
-        return unpack_eeprom(&cache, image);
-    }
-    let path = cache.join("pieeprom-latest.bin");
-    // Nothing on the command line says what booted the medium, so the run does.
-    eprintln!("zero-config: {REPO}'s EEPROM image, {}", path.display());
-    if path.is_file() {
-        return Ok(path);
-    }
-    std::fs::create_dir_all(&cache).with_context(|| format!("creating {}", cache.display()))?;
-    eprintln!("zero-config: fetching it from the newest release");
-    // No tag, so this follows whatever that repository released last rather
-    // than pinning this build to one of its versions.
-    let out = std::process::Command::new("gh")
-        .args([
-            "release",
-            "download",
-            "-R",
-            REPO,
-            "-p",
-            "pieeprom.bin",
-            "-O",
-        ])
-        .arg(&path)
-        .output();
-    let out = match out {
-        Ok(out) => out,
-        // The repository is private: say what to do, not what failed.
-        Err(e) => bail!(
-            "no EEPROM image to boot with, and gh could not be run to fetch \
-             {REPO}'s ({e}). Give one with --eeprom, or put the `pieeprom.bin` \
-             of that repository's newest release at {}",
-            path.display()
-        ),
-    };
-    if !out.status.success() {
-        let _ = std::fs::remove_file(&path);
-        bail!(
-            "downloading {REPO}'s pieeprom.bin: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    Ok(path)
-}
-
-/// The image the binary carries, written out where the boot can open it. Its name
-/// is its own digest, so a binary built with another image uses another file and
-/// neither goes stale.
-fn unpack_eeprom(cache: &Path, image: &[u8]) -> Result<PathBuf> {
-    let digest: String = Sha1::digest(image)[..5]
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    let path = cache.join(format!("pieeprom-{digest}.bin"));
-    eprintln!("zero-config: the built-in EEPROM image of {REPO}");
-    if path.metadata().is_ok_and(|m| m.len() == image.len() as u64) {
-        return Ok(path);
-    }
-    std::fs::create_dir_all(cache).with_context(|| format!("creating {}", cache.display()))?;
-    std::fs::write(&path, image).with_context(|| format!("writing {}", path.display()))?;
-    Ok(path)
-}
-
-const REPO: &str = "rusty-pi/pi4-firmware";
-
 impl BootOpts {
     /// The options, or `None` for `--help`. `dir` is where [`ZeroConfig`] looks.
     fn parse(args: &[String], dir: &Path) -> Result<Option<Self>> {
@@ -1384,12 +1308,12 @@ impl BootOpts {
         zero.file(&mut eeprom_pubkey, "pubkey.bin");
         zero.announce();
 
-        // Nothing to boot with: neither a firmware checkout nor a disk image is a
-        // bootloader, and a board boots without any medium too, so fall back to
-        // the published EEPROM image.
         if path.is_none() {
-            path = Some(fallback_eeprom()?);
-            eeprom = true;
+            bail!(
+                "no EEPROM image to boot with: neither a firmware checkout nor a disk \
+                 image is a bootloader. Give a pieeprom.bin with --eeprom, or keep one \
+                 beside the files"
+            );
         }
         let path = path.context("boot: missing <file> (try boot --help)")?;
         if (tftp.is_some() || http.is_some()) && host_net.is_some() {
