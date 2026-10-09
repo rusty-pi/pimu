@@ -115,7 +115,7 @@ image. An image is read as the guest asks for blocks either way, `xz`
 compression and all, so a distribution image boots where it is published:
 
 ```bash
-pimu boot --sd https://cdimage.ubuntu.com/releases/24.04.3/release/ubuntu-24.04.3-preinstalled-server-arm64+raspi.img.xz
+pimu boot --eeprom pieeprom.bin --sd https://cdimage.ubuntu.com/releases/24.04.3/release/ubuntu-24.04.3-preinstalled-server-arm64+raspi.img.xz
 ```
 
 [`docs/running.md`](docs/running.md) has the details.

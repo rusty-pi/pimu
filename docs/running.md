@@ -79,8 +79,8 @@ distribution image boots as it is published — neither unpacked on the host nor
 downloaded whole from a server.
 
 ```bash
-pimu boot --sd https://cdimage.ubuntu.com/releases/24.04.3/release/ubuntu-24.04.3-preinstalled-server-arm64+raspi.img.xz
-pimu boot --sd ~/Downloads/ubuntu-24.04.3-preinstalled-server-arm64+raspi.img.xz
+pimu boot --eeprom pieeprom.bin --sd https://cdimage.ubuntu.com/releases/24.04.3/release/ubuntu-24.04.3-preinstalled-server-arm64+raspi.img.xz
+pimu boot --eeprom pieeprom.bin --sd ~/Downloads/ubuntu-24.04.3-preinstalled-server-arm64+raspi.img.xz
 ```
 
 That image is 3850 blocks of 1 MiB, 1.2 GB compressed and 3.76 GiB raw, and a

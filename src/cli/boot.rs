@@ -70,9 +70,9 @@ OVER HTTP:
     that ends in `/` is a directory, as it is in a browser, and anything
     else is a file:
 
-        pimu boot https://raw.githubusercontent.com/raspberrypi/firmware/refs/heads/master/boot/
+        pimu boot --eeprom pieeprom.bin https://raw.githubusercontent.com/raspberrypi/firmware/refs/heads/master/boot/
         pimu boot --eeprom https://example.org/pieeprom.bin --sd https://example.org/sd.img
-        pimu boot --tftp https://example.org/tftp/
+        pimu boot --eeprom pieeprom.bin --tftp https://example.org/tftp/
 
     A directory is listed first, since the FAT32 volume is built out of every
     name and length in it: a GitHub URL through the API, any other server
@@ -88,7 +88,7 @@ OVER HTTP:
     downloaded whole (`xz` has to be installed, and a stream of one block
     has no random access in it):
 
-        pimu boot --sd https://cdimage.ubuntu.com/releases/24.04.3/release/ubuntu-24.04.3-preinstalled-server-arm64+raspi.img.xz
+        pimu boot --eeprom pieeprom.bin --sd https://cdimage.ubuntu.com/releases/24.04.3/release/ubuntu-24.04.3-preinstalled-server-arm64+raspi.img.xz
 
         pieeprom.bin  --eeprom            otp.json      --otp json:<file>
         sd.img        --sd                otp.bin       --otp binary:<file>
