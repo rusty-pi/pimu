@@ -761,7 +761,7 @@ p 9; ip link; dmesg | tail -40
 2: eth0: <BROADCAST,MULTICAST> mtu 1500 qdisc noop qlen 1000
     link/ether 02:00:5e:00:53:01 brd ff:ff:ff:ff:ff:ff
 3: wlan0: <BROADCAST,MULTICAST> mtu 1500 qdisc noop qlen 1000
-    link/ether 02:00:5e:00:57:01 brd ff:ff:ff:ff:ff:ff
+    link/ether b8:27:eb:74:f2:6c brd ff:ff:ff:ff:ff:ff
 [t] of_cfs_init: OK
 [t] clk: Disabling unused clocks
 [t] PM: genpd: Disabling unused power domains
@@ -806,7 +806,7 @@ p 9; ip link; dmesg | tail -40
 [t] brcmfmac: brcmf_cfg80211_set_power_mgmt: power save enabled
 [t] brcmfmac: brcmf_cfg80211_set_power_mgmt: power save enabled
 3: wlan0: <NO-CARRIER,BROADCAST,MULTICAST,UP> mtu 1500 qdisc pfifo_fast qlen 1000
-    link/ether 02:00:5e:00:57:01 brd ff:ff:ff:ff:ff:ff
+    link/ether b8:27:eb:74:f2:6c brd ff:ff:ff:ff:ff:ff
 / # \x1b[6niw dev wlan0 scan
 BSS 02:00:5e:00:53:04(on wlan0)
 	last seen: 13.206s [boottime]

@@ -756,11 +756,11 @@ mod tests {
         let mut chip = Cyw43455::new();
         download_nvram(
             &mut chip,
-            &["sromrev=11", "macaddr=02:00:5e:00:57:01", "boardtype=0x6e4"],
+            &["sromrev=11", "macaddr=b8:27:eb:74:f2:6c", "boardtype=0x6e4"],
         );
         release_arm(&mut chip);
         chip.enable_f2();
-        assert_eq!(chip.sdpcm().mac(), [0x02, 0x00, 0x5E, 0x00, 0x57, 0x01]);
+        assert_eq!(chip.sdpcm().mac(), [0xB8, 0x27, 0xEB, 0x74, 0xF2, 0x6C]);
 
         let top = readl(&mut chip, RAM_BASE + RAM_SIZE - 4);
         assert_eq!(top, RAM_BASE + RAM_SIZE - 4 - SHARED_LEN);

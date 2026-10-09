@@ -258,7 +258,7 @@ under `--- device state ---`:
   genet   MAC 02:00:5e:00:53:01  tx on  rx on  promisc on
   bt      chip 02:00:5e:00:53:02, as it came up
           device tree 02:00:5e:aa:f9:ab on /soc/serial@7e201000/bluetooth
-  cyw43455 MAC 02:00:5e:00:57:01, from the card's nvram
+  cyw43455 MAC b8:27:eb:74:f2:6c, from the card's nvram
 ```
 
 A client that asks the firmware for the board's MAC address and does not check
