@@ -21,8 +21,9 @@ on:
 
 # Every job runs on the hosted runners unless the repository variables
 # RUNNER_BUILD and RUNNER_BOOT name a self-hosted pool instead: the compiles
-# (tests, build) and the boots each get their own, sized for them, from
-# valtzu/gh-action-nas-runner. Deleting the variables brings CI back here.
+# (tests, build) and the boots each get their own, sized for them.
+# Deleting the variables brings CI back here. A pull request from a fork never
+# reaches the self-hosted pools, whatever the variables say.
 # Those runners have no sudo and already carry the packages, so the apt steps
 # only run on the hosted ones.
 #
@@ -35,7 +36,7 @@ jobs:
   # Fast lane: the decoder, peripheral and address-decode tests. No firmware
   # blobs, no boot — if one of these fails the boot check below is noise.
   tests:
-    runs-on: ${{ vars.RUNNER_BUILD || 'ubuntu-26.04' }}
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.RUNNER_BUILD || 'ubuntu-26.04' }}
     timeout-minutes: 15
 
     steps:
@@ -103,7 +104,7 @@ jobs:
 
   # Build once: the binary, the firmware blobs and every boot medium.
   build:
-    runs-on: ${{ vars.RUNNER_BUILD || 'ubuntu-26.04' }}
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.RUNNER_BUILD || 'ubuntu-26.04' }}
     timeout-minutes: 15
 
     steps:
@@ -213,7 +214,7 @@ jobs:
             firmware/
 
       # On the self-hosted runners the cache service is the wrong way round:
-      # the NAS is behind a domestic uplink, and every boot job pulls the whole
+      # the self-hosted host is behind a slow uplink, and every boot job pulls the whole
       # entry back from the cloud — which is what made a run's restores fail
       # with "The operation cannot be completed in timeout." Those runners
       # share one directory instead, and the inputs never leave the host
@@ -242,7 +243,7 @@ jobs:
   boot:
     needs: build
     name: boot (${{ matrix.name }})
-    runs-on: ${{ vars.RUNNER_BOOT || 'ubuntu-26.04' }}
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.RUNNER_BOOT || 'ubuntu-26.04' }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -337,7 +338,7 @@ jobs:
   cleanup:
     needs: [build, boot]
     if: always()
-    runs-on: ${{ vars.RUNNER_BUILD || 'ubuntu-26.04' }}
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.RUNNER_BUILD || 'ubuntu-26.04' }}
     timeout-minutes: 5
     permissions:
       actions: write
