@@ -103,12 +103,12 @@ pimu boot --eeprom https://example.org/pieeprom.bin \
 `[all]` header, and `--cmdline <text>` is its `cmdline.txt`; both are held in
 memory, so a read-only directory or a URL takes them too.
 
-A directory with no EEPROM image of its own boots with the bootloader
-[`rusty-pi/pi4-firmware`](https://github.com/rusty-pi/pi4-firmware) publishes. A
-released binary carries that image; a build from this tree fetches it once with
-`gh` and keeps it in `$XDG_CACHE_HOME/pimu` (`~/.cache/pimu`), so delete it to
-take a newer one. Any boot with a medium and no EEPROM image of its own uses it,
-so `pimu boot --sd card.img` boots too.
+A directory with no EEPROM image of its own needs one named with `--eeprom` — a
+firmware checkout carries no bootloader, and `start4.elf` run from its ELF entry
+stalls silently. Raspberry Pi publishes the stock image in
+[`raspberrypi/rpi-eeprom`](https://github.com/raspberrypi/rpi-eeprom)
+(`firmware-2711/`); `--eeprom` takes a URL too, so nothing has to be downloaded
+first. Without one, `boot` stops and says so.
 
 ## Options from a file: `--config`
 

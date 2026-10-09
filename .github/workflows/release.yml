@@ -91,23 +91,6 @@ jobs:
             exit 1
           fi
 
-      # The EEPROM bootloader the binaries carry (build.rs), so that `pimu boot`
-      # on a firmware directory needs neither `gh` nor an account with access to
-      # that repository. It is private and github.token only reaches this one,
-      # so the fetch uses FIRMWARE_TOKEN — a PAT with read access to it. Without
-      # the secret the binaries are built with no image and fall back to
-      # fetching one themselves, which is what a build from a checkout does.
-      - name: Fetch the EEPROM image to build in
-        env:
-          GH_TOKEN: ${{ secrets.FIRMWARE_TOKEN || github.token }}
-        run: |
-          if gh release download -R rusty-pi/pi4-firmware \
-               -p pieeprom.bin -O pieeprom.bin; then
-            echo "PIMU_EMBED_EEPROM=/work/pieeprom.bin" >> "$GITHUB_ENV"
-          else
-            echo "::warning::no pieeprom.bin built in; set the FIRMWARE_TOKEN secret"
-          fi
-
       # What the PGO training boots: the firmware blobs and the two cards
       # `scripts/pgo-build.sh` runs `boot --scenario` against. Public downloads, so
       # no token — unlike the EEPROM image above.
@@ -138,7 +121,7 @@ jobs:
       - name: Build for x86-64 and aarch64
         run: |
           docker run --rm -v "$PWD:/work" -w /work \
-            -e CI=1 -e PIMU_EMBED_EEPROM -e CARGO_HOME=/work/.cargo \
+            -e CI=1 -e CARGO_HOME=/work/.cargo \
             "$BUILDER" bash -euo pipefail -c '
               apt-get -qq update
               apt-get -qq install -y --no-install-recommends \
@@ -241,9 +224,9 @@ jobs:
           - \`docker run --rm -v "\$PWD:/boot" $IMAGE:$PKG_VERSION boot\` — amd64 and arm64, also tagged \`:latest\`.
 
           Built against Debian 12's glibc 2.36, so they run on that and anything
-          newer. The EEPROM bootloader of
-          [\`rusty-pi/pi4-firmware\`](https://github.com/rusty-pi/pi4-firmware) is
-          built in, so \`pimu boot <a firmware directory>\` needs nothing fetched.
+          newer. No firmware is included: a boot needs an EEPROM image of your own
+          (\`--eeprom\`), e.g. one from
+          [\`raspberrypi/rpi-eeprom\`](https://github.com/raspberrypi/rpi-eeprom).
           EOF
 
           # A re-dispatch on a tag whose release already exists replaces it
