@@ -110,6 +110,36 @@ released binary carries that image; a build from this tree fetches it once with
 take a newer one. Any boot with a medium and no EEPROM image of its own uses it,
 so `pimu boot --sd card.img` boots too.
 
+## Options from a file: `--config`
+
+A long command line can live in a file. `--config <file>` takes a YAML mapping
+(or a JSON object) keyed by long option name, without the dashes, and expands
+in place where it stands on the command line:
+
+```yaml
+# machine.yaml
+eeprom: https://example.org/pieeprom.bin
+usb: https://example.org/disk.img
+boot-order: "0x5"           # a string, so YAML does not read it as a number
+max-wall: 600
+bootconf:                    # an array repeats the option
+  - HTTP_HOST=boot.example.org
+  - HTTP_PORT=80
+send-after:                  # a nested array is one option with several values
+  - ["/ # ", "uname -a\n"]
+stdin: true                  # true is a flag, false leaves it out
+v: true                      # a one-letter key is the short option
+```
+
+```bash
+pimu boot --config machine.yaml --max-wall 900
+```
+
+That is the same as writing every option out. Options after `--config` win over
+the file's, and a repeatable one adds to it, so the `--max-wall 900` above gives
+this run 900 s. `file` is the positional argument, a file cannot name another
+`--config`, and every option also takes the `--option=value` form.
+
 ## The host's network with `--net passt`
 
 `--net passt` plugs the Ethernet cable into the host's network through
