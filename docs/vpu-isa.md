@@ -223,22 +223,11 @@ sixteen ways so that each lane indexes its own 64 bytes.
 
 The sub-ops with no name of their own — 3, 7, 10-23 and 25-31 — are
 **unallocated**, and there is no use for them. Their names are not the
-silicon's: `binutils-vc4` builds its mnemonic table from a CGEN enum over the
-5-bit sub-op field, so the list has to be 32 entries long, and the twenty-two
-Broadcom never documented were filled in from their own numbers —
-
-```scheme
-(define-normal-insn-enum
-  insn-vecmemops "Vector memory ops" () VMEMOP_ f-op9-5
-  (LD LOOKUPM LOOKUPML MEM03 ST INDEXWRITEM INDEXWRITEML MEM07
-   MEMREAD MEMWRITE MEM10 MEM11 MEM12 MEM13 MEM14 MEM15
-   MEM16 MEM17 MEM18 MEM19 MEM20 MEM21 MEM22 MEM23
-   GETACC MEM25 MEM26 MEM27 MEM28 MEM29 MEM30 MEM31)
-)
-```
-
-— which is where `mem31` comes from. The ALU class does the same, and that is
-what `vop62.1` is. This page keeps those names so that it, the model's
+silicon's: `binutils-vc4` builds its mnemonic table from an enumeration over
+the 5-bit sub-op field, so the list has to be 32 entries long, and the twenty-two
+Broadcom never documented are named after their own numbers: `mem03`, `mem07`,
+`mem10` to `mem23` and `mem25` to `mem31`. That is where `mem31` comes from. The
+ALU class does the same, and that is what `vop62.1` is. This page keeps those names so that it, the model's
 disassembler and objdump all print the same thing.
 
 What the silicon does with one is uniform: it **answers a lane of zeros** at
