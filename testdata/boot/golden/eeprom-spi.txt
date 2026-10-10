@@ -722,12 +722,12 @@ ko; done; echo target=$(ls -d /sys/bus/spi/devices/spi0.0); echo spidev=$(ls -d
 target=/sys/bus/spi/devices/spi0.0
 spidev=/dev/spidev0.0
 / # \x1b[6nprintf 'gpfsel4=%#x\n' $(( $(devmem 0xfe200010 32) & 0x3ffff ))
-[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
-[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
 gpfsel4=0x92db
 / # \x1b[6ndevmem 0xfe20002c 32 0x800; devmem 0xfe204000 32 0x83; devmem 0xfe204004 32 
 
-0x9f; devmem 0xfe204000 32 0xa3; for b in 0 0 0; do devmem 0xfe204004 32 $b; don
+0x9f; devmem 0xfe204000 32 0xa3; for b in 0 0 [t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
+[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
+0; do devmem 0xfe204004 32 $b; don
 
 e; printf 'rdid=%02x%02x%02x\n' $(devmem 0xfe204004 32) $(devmem 0xfe204004 32) 
 
@@ -742,15 +742,5 @@ o devmem 0xfe204004 32 $b; done; printf 'magic=%02x%02x%02x%02x\n' $(devmem 0xfe
 204004 32) $(devmem 0xfe204004 32) $(devmem 0xfe204004 32) $(devmem 0xfe204004 3
 
 2); devmem 0xfe204000 32 0x33; devmem 0xfe200020 32 0x800
-[t] usb 1-1: New USB device found, idVendor=2109, idProduct=3431, bcdDevice= 4.21
-[t] usb 1-1: New USB device found, idVendor=2109, idProduct=3431, bcdDevice= 4.21
-[t] usb 1-1: New USB device strings: Mfr=0, Product=1, SerialNumber=0
-[t] usb 1-1: New USB device strings: Mfr=0, Product=1, SerialNumber=0
-[t] usb 1-1: Product: USB2.0 Hub
-[t] usb 1-1: Product: USB2.0 Hub
-[t] hub 1-1:1.0: USB hub found
-[t] hub 1-1:1.0: USB hub found
-[t] hub 1-1:1.0: 4 ports detected
-[t] hub 1-1:1.0: 4 ports detected
 magic=55aaf00f
-/ # 
+/ # \x1b[6n

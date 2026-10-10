@@ -715,9 +715,9 @@ Enter 'help' for a list of built-in commands.
 
 / # \x1b[6nM=/lib/modules/$(uname -r)/kernel
 / # \x1b[6ninsmod $M/net/rfkill/rfkill.ko
+/ # \x1b[6ninsmod $[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
 [t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
-[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
-/ # \x1b[6ninsmod $M/net/wireless/cfg80211.ko
+M/net/wireless/cfg80211.ko
 [t] cfg80211: Loading compiled-in X.509 certificates for regulatory database
 [t] cfg80211: Loading compiled-in X.509 certificates for regulatory database
 [t] Loaded X.509 cert 'benh@debian.org: 577e021cb980e0e820821ba7b54b4961b8b4fadf'
@@ -748,10 +748,10 @@ p 9; ip link; dmesg | tail -40
 [t] hub 1-1:1.0: 4 ports detected
 [t] brcmfmac: brcmf_fw_alloc_request: using brcm/brcmfmac43455-sdio for chip BCM4345/6
 [t] brcmfmac: brcmf_fw_alloc_request: using brcm/brcmfmac43455-sdio for chip BCM4345/6
-[t] usbcore: registered new interface driver brcmfmac
-[t] usbcore: registered new interface driver brcmfmac
 [t] brcmfmac mmc1:0001:1: Direct firmware load for brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.bin failed with error -2
 [t] brcmfmac mmc1:0001:1: Direct firmware load for brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.bin failed with error -2
+[t] usbcore: registered new interface driver brcmfmac
+[t] usbcore: registered new interface driver brcmfmac
 [t] brcmfmac: brcmf_c_process_txcap_blob: no txcap_blob available (err=-2)
 [t] brcmfmac: brcmf_c_process_txcap_blob: no txcap_blob available (err=-2)
 [t] brcmfmac: brcmf_c_preinit_dcmds: Firmware: BCM4345/6 pimu model firmware (no radio) version 0
@@ -798,8 +798,8 @@ p 9; ip link; dmesg | tail -40
 [t] hub 1-1:1.0: 4 ports detected
 [t] brcmfmac: F1 signature read @0x18000000=0x10064345
 [t] brcmfmac: brcmf_fw_alloc_request: using brcm/brcmfmac43455-sdio for chip BCM4345/6
-[t] usbcore: registered new interface driver brcmfmac
 [t] brcmfmac mmc1:0001:1: Direct firmware load for brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.bin failed with error -2
+[t] usbcore: registered new interface driver brcmfmac
 [t] brcmfmac: brcmf_c_process_txcap_blob: no txcap_blob available (err=-2)
 [t] brcmfmac: brcmf_c_preinit_dcmds: Firmware: BCM4345/6 pimu model firmware (no radio) version 0
 / # \x1b[6nip link set wlan0 up; sleep 2; ip link show wlan0
@@ -809,7 +809,7 @@ p 9; ip link; dmesg | tail -40
     link/ether b8:27:eb:74:f2:6c brd ff:ff:ff:ff:ff:ff
 / # \x1b[6niw dev wlan0 scan
 BSS 02:00:5e:00:53:04(on wlan0)
-	last seen: 13.206s [boottime]
+	last seen: 13.146s [boottime]
 	TSF: 0 usec (0d, 00:00:00)
 	freq: 2412.0
 	beacon interval: 100 TUs
@@ -820,4 +820,4 @@ BSS 02:00:5e:00:53:04(on wlan0)
 	Supported rates: 1.0* 2.0* 5.5* 11.0* 6.0 9.0 12.0 18.0 
 	DS Parameter set: channel 1
 	Extended supported rates: 24.0 36.0 48.0 54.0 
-/ # \x1b
+/ # 

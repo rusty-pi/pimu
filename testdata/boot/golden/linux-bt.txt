@@ -715,8 +715,8 @@ Enter 'help' for a list of built-in commands.
 
 / # \x1b[6nuname -sm
 Linux aarch64
-/ # \x1b[6necho cpus=$(grep -c ^processor /proc/cpu[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
+/ # \x1b[6necho cpus=$(grep -c ^processor /proc/cpuinfo)
 [t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
-info)
+[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
 cpus=4
-/ # \x1b[
+/ # \x1b[6n

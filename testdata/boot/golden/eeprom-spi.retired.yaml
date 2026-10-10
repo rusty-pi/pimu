@@ -1,10 +1,9 @@
-# yaml-language-server: $schema=../../../schemas/retired-counts.schema.json
 # Instructions each core retired in this boot: vpu0 and vpu1 on the
 # VideoCore, vpu1 only once the firmware woke it, then arm0.. once the ARM
 # is released. `boot --scenario <file> --record` rewrites this file.
-vpu0: 955462195
+vpu0: 955121842
 vpu1: 125
-arm0: 350607146
-arm1: 1345360962
-arm2: 24037080
-arm3: 188293985
+arm0: 291711819
+arm1: 1413930422
+arm2: 11480999
+arm3: 189740808
