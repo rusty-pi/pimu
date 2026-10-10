@@ -880,7 +880,8 @@ impl RetiredCounts {
 
     pub fn render(&self) -> String {
         let mut out = String::from(
-            "# Instructions each core retired in this boot: vpu0 and vpu1 on the\n\
+            "# yaml-language-server: $schema=../../../schemas/retired-counts.schema.json\n\
+             # Instructions each core retired in this boot: vpu0 and vpu1 on the\n\
              # VideoCore, vpu1 only once the firmware woke it, then arm0.. once the ARM\n\
              # is released. `boot --scenario <file> --record` rewrites this file.\n",
         );
