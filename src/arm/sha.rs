@@ -557,6 +557,37 @@ impl Loop {
         regs_ok && got == want
     }
 
+    /// The passes in `0..=most`, counted from `now`, around which a register
+    /// that steps meets zero or another register: up to two passes before,
+    /// since the pass that leaves may test the value it has stepped on.
+    fn meetings(&self, now: &Regs, most: u64) -> Vec<u64> {
+        let mut out = Vec::new();
+        for (i, role) in self.roles.iter().enumerate() {
+            let Role::Step(s) = *role else { continue };
+            let others = self.roles.iter().enumerate().filter_map(|(j, r)| match *r {
+                Role::Fixed => Some((now.x[j], 0)),
+                Role::Step(t) if j != i => Some((now.x[j], t)),
+                _ => None,
+            });
+            for (c, t) in std::iter::once((0, 0)).chain(others) {
+                // now.x[i] + s n == c + t n, modulo 2^64.
+                let (d, gap) = (c.wrapping_sub(now.x[i]), s.wrapping_sub(t));
+                let n = match gap as i64 {
+                    0 => continue,
+                    g if g > 0 && d % gap == 0 => d / gap,
+                    g if g < 0 && d.wrapping_neg() % gap.wrapping_neg() == 0 => {
+                        d.wrapping_neg() / gap.wrapping_neg()
+                    }
+                    _ => continue,
+                };
+                out.extend((n.saturating_sub(2)..=n).filter(|&r| r <= most));
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
     /// The core is at the loop's entry with `cycles` to spare. Hash all but the
     /// last of the passes that has room for natively and leave one pass to run,
     /// which puts back every register and byte of scratch memory the loop only
@@ -650,6 +681,22 @@ impl Loop {
             self.probe(cpu, m, &from, &st, false)
                 .is_some_and(|(r, s)| self.ends(&r, &s, &from, 1, &next))
         };
+        // A loop that leaves on an equality, a counter reaching zero with
+        // `cbnz` or a pointer meeting the end with `b.ne` after a compare
+        // whose other flags do not tell before from after, strays from its
+        // pass at that one pass alone, which the search below can jump past.
+        // Probe the passes where a stepping register meets zero or another
+        // register first.
+        let mut most = most;
+        for r in self.meetings(&now, most) {
+            if !makes(r) {
+                most = r.saturating_sub(1);
+                break;
+            }
+        }
+        if most < MIN_SKIP {
+            return Ok((gone, 0));
+        }
         let (mut lo, mut hi) = (0, most + 1);
         let mut n = MIN_SKIP;
         while n <= most {
