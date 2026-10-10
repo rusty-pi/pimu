@@ -507,6 +507,15 @@ impl Machine {
         self.advance_i2c();
         self.advance_sd();
         self.advance_pcie();
+        self.raise_device_irqs();
+        self.advance_hvs();
+    }
+
+    /// Queue the source of each device that holds its line. Run from
+    /// [`Self::tick_us`] and from a wake that moves the counter by itself: a
+    /// request stored while the VPU slept raises its line then, and the VPU
+    /// would otherwise sleep on to the next tick before it sees it.
+    fn raise_device_irqs(&mut self) {
         // Each holds its line until acked: keep one delivery outstanding.
         let src = crate::periph::rng::IRQ_SRC;
         if self.rng.irq_asserted() && !self.pending_irqs.contains(&src) {
@@ -525,7 +534,6 @@ impl Machine {
         if self.vce.irq_asserted() && !self.pending_irqs.contains(&src) {
             self.push_pending_irq(src);
         }
-        self.advance_hvs();
     }
 
     /// Hold source 117 while any modelled I²C master holds its share of the
@@ -1213,6 +1221,7 @@ impl Machine {
     pub fn wake_vpu_at(&mut self, us: u64) {
         self.systimer.advance_to(us);
         self.settle_timed();
+        self.raise_device_irqs();
     }
 
     /// Bring everything timed against the counter up to where the counter is.
@@ -1582,6 +1591,26 @@ mod tests {
     use super::dma_irq_source;
     use super::{map, Machine, L2_CTRL, SD_SLOT_MUX};
     use crate::bus::Bus;
+
+    /// A request the ARM stores while the VPU sleeps raises the mailbox line at
+    /// the wake, not at the tick after it: the VPU sleeps on to the next compare
+    /// otherwise, and every mailbox round trip waits out a whole tick.
+    #[test]
+    fn a_wake_by_an_arm_store_queues_the_mailbox_interrupt() {
+        use crate::spec::mbox::{
+            BASE, CONFIG0_CLEAR_MASK, CONFIG0_EN_HAVE_DATA_MASK, CONFIG1, DATA0_STRIDE, IRQ_VPU,
+        };
+        let mut m = Machine::new(1 << 20);
+        let config = BASE + DATA0_STRIDE + CONFIG1;
+        m.store32(config, CONFIG0_CLEAR_MASK).unwrap();
+        m.store32(config, CONFIG0_EN_HAVE_DATA_MASK).unwrap();
+        assert!(m.mbox.post_from_arm(0xC000_1008));
+        assert!(!m.pending_irqs.contains(&IRQ_VPU));
+
+        m.wake_vpu_at(10);
+
+        assert!(m.pending_irqs.contains(&IRQ_VPU));
+    }
 
     /// The mux moves the card between the hosts; the WiFi chip has the legacy one.
     #[test]
