@@ -813,7 +813,16 @@ impl Emulator {
                 if crate::diag::ON {
                     crate::log!(m.log, Channel::Ff, "pc={pc:#x} jump={waited} us");
                 }
-                m.systimer.jump(waited);
+                match self.arm.as_mut() {
+                    // An ARM write that interrupts the VPU must land before the
+                    // counter moves past it, or the request waits out the whole
+                    // jump: the same rule as for `sleep`.
+                    Some(arm) => {
+                        let to = arm.run_until_store(m, now + waited);
+                        m.systimer.advance_to(to.max(now + 1));
+                    }
+                    None => m.systimer.jump(waited),
+                }
                 // The counter moved without a tick behind it, so nothing timed
                 // against it has seen the jump yet.
                 m.settle_timed();

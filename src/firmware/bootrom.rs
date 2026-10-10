@@ -525,7 +525,7 @@ mod tests {
         let image = eeprom_with_bootcode(&body);
 
         let mut machine = Machine::new(1 << 20);
-        machine.spi0.attach_flash(image.clone());
+        machine.spi0.attach_flash(image.clone()).unwrap();
         let rom = BootRom::with_salt(salt);
         let out = rom.boot(&mut machine).expect("verified image boots");
         assert_eq!(out.entry, BOOTCODE_LOAD_ADDR + BOOTCODE_ENTRY_OFFSET);
@@ -534,11 +534,13 @@ mod tests {
         let mut bad_body = body.clone();
         bad_body[0] ^= 1;
         let mut m2 = Machine::new(1 << 20);
-        m2.spi0.attach_flash(eeprom_with_bootcode(&bad_body));
+        m2.spi0
+            .attach_flash(eeprom_with_bootcode(&bad_body))
+            .unwrap();
         assert!(rom.boot(&mut m2).is_err(), "bad signature must refuse");
 
         let mut m3 = Machine::new(1 << 20);
-        m3.spi0.attach_flash(image);
+        m3.spi0.attach_flash(image).unwrap();
         assert!(BootRom::unkeyed().boot(&mut m3).is_ok());
 
         let mut m4 = Machine::new(1 << 20);

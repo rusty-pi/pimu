@@ -129,7 +129,7 @@ const CS_NO_NATIVE: u32 = 0x3;
 #[test]
 fn spi0_done_is_tx_side_only() {
     let mut spi = Spi0::new();
-    spi.attach_flash(vec![0xAA; 0x1000]);
+    spi.attach_flash(vec![0xAA; 0x1000]).unwrap();
 
     spi.write(CS, Width::Word, CS_TA | CS_CLEAR_RX | CS_CLEAR_TX)
         .unwrap();
@@ -156,7 +156,7 @@ fn spi0_done_is_tx_side_only() {
 #[test]
 fn spi0_flash_reports_the_parts_jedec_id() {
     let mut spi = Spi0::new();
-    spi.attach_flash(vec![0xFF; 0x8_0000]);
+    spi.attach_flash(vec![0xFF; 0x8_0000]).unwrap();
 
     spi.write(CS, Width::Word, CS_TA | CS_CLEAR_RX | CS_CLEAR_TX)
         .unwrap();
@@ -222,7 +222,7 @@ fn spi0_gpio_chip_select_spans_several_transfers() {
     let mut m = machine();
     let mut image = vec![0xFF; 0x8_0000];
     image[0x1234] = 0x5A;
-    m.spi0.attach_flash(image);
+    m.spi0.attach_flash(image).unwrap();
     route_flash_pins(&mut m);
 
     // Nothing is selected while the GPIO select is up, whatever `TA` says.
@@ -278,7 +278,7 @@ fn spi0_dma_fifo_is_four_bytes_wide_and_stops_at_dlen() {
     let mut m = machine();
     let mut image = vec![0xFF; 0x8_0000];
     image[..8].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
-    m.spi0.attach_flash(image);
+    m.spi0.attach_flash(image).unwrap();
     route_flash_pins(&mut m);
     m.store32(GPCLR1, CS0_PIN).unwrap();
 
@@ -350,7 +350,7 @@ fn spi0_flash_erases_and_programs_the_way_flashrom_writes() {
     let mut m = machine();
     let mut image = vec![0x00; 0x8_0000];
     image[0x2_0000] = 0x11;
-    m.spi0.attach_flash(image);
+    m.spi0.attach_flash(image).unwrap();
     route_flash_pins(&mut m);
 
     let status = flash_command(&mut m, &[0x05, 0]);
@@ -1294,7 +1294,7 @@ fn the_pmic_bus_does_not_care_what_the_pins_do() {
 fn spi0_reads_the_flash_only_while_its_pins_are_on_alt4() {
     const CS_TA: u32 = 1 << 7;
     let mut m = machine();
-    m.spi0.attach_flash(vec![0xAA; 0x1000]);
+    m.spi0.attach_flash(vec![0xAA; 0x1000]).unwrap();
 
     let read_byte = |m: &mut Machine| {
         let base = map::SPI0_BASE;
@@ -1347,4 +1347,16 @@ fn a_gpio_edge_raises_the_banks_line() {
     m.store32(GPEDS1, LED).unwrap();
     assert_eq!(m.load32(GPEDS1).unwrap(), 0, "write 1 clears it");
     assert_eq!(m.gpio.irq_lines(), [false, false]);
+}
+
+/// The flash is a 512 KiB W25X40 whatever image goes in: a short image leaves
+/// the rest erased, a long one does not fit.
+#[test]
+fn spi0_flash_is_always_512_kib() {
+    let mut spi = Spi0::new();
+    spi.attach_flash(vec![0xAA; 0x1000]).unwrap();
+    assert_eq!(spi.flash_bytes().len(), 512 * 1024);
+    assert_eq!(spi.flash_bytes()[0xFFF], 0xAA);
+    assert_eq!(spi.flash_bytes()[0x1000], 0xFF);
+    assert!(spi.attach_flash(vec![0; 512 * 1024 + 1]).is_err());
 }

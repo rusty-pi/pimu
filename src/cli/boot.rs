@@ -1976,7 +1976,7 @@ impl<'a> Rig<'a> {
         machine.set_board(self.board);
         machine.set_log(self.log.clone());
         if eeprom {
-            machine.spi0.attach_flash(flash.to_vec());
+            machine.spi0.attach_flash(flash.to_vec())?;
         }
         // The card reads its image or its files on demand; each boot after a
         // reset starts from them again, writes forgotten.

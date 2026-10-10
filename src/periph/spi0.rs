@@ -58,6 +58,9 @@ const MISO_IDLE: u8 = 0xFF;
 const FIFO_BYTES: usize = 64;
 const FIFO_BYTES_3_4: usize = 48;
 
+/// Size of the W25X40 the JEDEC id below names: 4 Mbit.
+pub const FLASH_BYTES: usize = 512 * 1024;
+
 /// JEDEC id reported for `RDID`: Winbond W25X40, the 512 KiB part a Raspberry
 /// Pi 4B d03115 carries and the one `flashrom` names in
 /// `flashrom -p linux_spi:dev=/dev/spidev0.0 --flash-name`.
@@ -140,8 +143,17 @@ impl Spi0 {
         }
     }
 
-    pub fn attach_flash(&mut self, image: Vec<u8>) {
+    /// Solder the flash in: the part is [`FLASH_BYTES`] big whatever the image
+    /// is, so a shorter image leaves the rest erased and a longer one does not fit.
+    pub fn attach_flash(&mut self, mut image: Vec<u8>) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            image.len() <= FLASH_BYTES,
+            "EEPROM image is {} bytes, the flash holds {FLASH_BYTES}",
+            image.len()
+        );
+        image.resize(FLASH_BYTES, 0xFF);
         self.flash = image;
+        Ok(())
     }
 
     /// Say where the master's pads and the flash's select are: `pins` is GPIO
