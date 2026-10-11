@@ -22,6 +22,10 @@
 //! Checking is off unless the operator supplies the key at run time
 //! ([`BootRom::from_env`]); without it the bootcode is staged unverified.
 //!
+//! The ROM looks on the SD card first: a `recovery.bin` in its root directory is
+//! staged in place of the EEPROM's bootcode, checked the same way, and the flash
+//! is not read at all.
+//!
 //! Bootcode up to 2020-06-15 calls ROM routines directly, at addresses that
 //! depend on the stepping; see [`RomHelper`].
 
@@ -32,6 +36,7 @@ use sha1::Sha1;
 use crate::bus::Bus;
 use crate::firmware::eeprom::{EepromImage, BOOTCODE_ENTRY_OFFSET, BOOTCODE_LOAD_ADDR};
 use crate::firmware::write_folded;
+use crate::log::fatmap;
 use crate::machine::Machine;
 use crate::periph::configotp::BOARD_IDENTITY;
 use crate::soc::Stepping;
@@ -41,6 +46,9 @@ use crate::spec::otp::{
     DATA as OTP_DATA, KEY as OTP_KEY, PARAM_A as OTP_PARAM_A, PARAM_A_GO_MASK as OTP_GO,
     STATUS as OTP_STATUS, STATUS_DONE_MASK as OTP_DONE,
 };
+
+/// The file the ROM prefers over the EEPROM when the card holds it.
+const RECOVERY_FILE: &str = "recovery.bin";
 
 /// Length of the HMAC-SHA1 signature the ROM appends and checks.
 pub const HMAC_LEN: usize = 20;
@@ -294,7 +302,18 @@ impl BootRom {
         }
     }
 
-    pub fn boot(&self, machine: &mut Machine) -> Result<BootOutcome> {
+    fn recovery_bin(machine: &Machine) -> Option<Vec<u8>> {
+        let disk = machine.emmc2.card()?.disk();
+        fatmap::read_root_file(
+            &|lba| {
+                let mut block = [0u8; 512];
+                disk.peek_block(lba, &mut block).then_some(block)
+            },
+            RECOVERY_FILE,
+        )
+    }
+
+    fn eeprom_bootcode(machine: &Machine) -> Result<Vec<u8>> {
         let image = machine.spi0.flash_bytes().to_vec();
         if image.is_empty() {
             bail!("boot ROM: no SPI flash attached to read the bootloader image from");
@@ -303,10 +322,17 @@ impl BootRom {
         let bc = img
             .bootcode()
             .context("boot ROM: image has no bootcode section")?;
-        let body = bc.body.clone();
+        Ok(bc.body.clone())
+    }
+
+    pub fn boot(&self, machine: &mut Machine) -> Result<BootOutcome> {
+        let (body, from) = match Self::recovery_bin(machine) {
+            Some(body) => (body, "recovery.bin on the SD card"),
+            None => (Self::eeprom_bootcode(machine)?, "SPI flash"),
+        };
 
         let mut log = vec![format!(
-            "boot ROM: read {} bytes bootcode from SPI flash, staging at {:#010x}",
+            "boot ROM: read {} bytes bootcode from {from}, staging at {:#010x}",
             body.len(),
             BOOTCODE_LOAD_ADDR
         )];
@@ -545,6 +571,51 @@ mod tests {
 
         let mut m4 = Machine::new(1 << 20);
         assert!(rom.boot(&mut m4).is_err(), "no flash must refuse");
+    }
+
+    fn card_with_recovery_bin(body: Vec<u8>) -> crate::periph::disk::Disk {
+        let len = body.len() as u64;
+        let card = crate::fat::card_from_entries(vec![crate::fat::Entry {
+            name: "recovery.bin".into(),
+            kind: crate::fat::Kind::File {
+                source: crate::fat::Source::Bytes(body),
+                len,
+            },
+        }])
+        .expect("card builds");
+        crate::periph::disk::Disk::from_card(card).expect("disk opens")
+    }
+
+    /// The SD card is looked at before the flash: `recovery.bin` boots a board
+    /// with no flash image, and wins over one that has it.
+    #[test]
+    fn recovery_bin_on_the_card_is_staged_in_place_of_the_eeprom() {
+        let key = [0x21u8; HMAC_LEN];
+        let recovery = sign(&vec![0xCDu8; 0x400], &key);
+        let rom = BootRom::with_key(key);
+
+        let mut bare = Machine::new(1 << 20);
+        bare.emmc2
+            .insert_disk(card_with_recovery_bin(recovery.clone()));
+        let out = rom.boot(&mut bare).expect("recovery.bin boots");
+        assert_eq!(out.entry, BOOTCODE_LOAD_ADDR + BOOTCODE_ENTRY_OFFSET);
+        assert_eq!(bare.ram.read_slice(0, 4).unwrap(), &[0xCD; 4]);
+        assert!(out.log[0].contains("recovery.bin"));
+
+        let mut both = Machine::new(1 << 20);
+        both.spi0
+            .attach_flash(eeprom_with_bootcode(&sign(&vec![0xABu8; 0x400], &key)))
+            .unwrap();
+        both.emmc2
+            .insert_disk(card_with_recovery_bin(recovery.clone()));
+        rom.boot(&mut both).expect("recovery.bin wins");
+        assert_eq!(both.ram.read_slice(0, 4).unwrap(), &[0xCD; 4]);
+
+        let mut tampered = recovery;
+        tampered[0] ^= 1;
+        let mut bad = Machine::new(1 << 20);
+        bad.emmc2.insert_disk(card_with_recovery_bin(tampered));
+        assert!(rom.boot(&mut bad).is_err(), "bad signature must refuse");
     }
 
     #[test]

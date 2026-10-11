@@ -351,6 +351,9 @@ OUTPUT:
     --disasm <hex>:<count>
               After the run, disassemble <count> VPU instructions at <hex>.
               Repeatable.
+    --dump-eeprom <path>
+              After the run, write the SPI flash to <path>, as the firmware
+              left it. Compare it with the image a recovery run was given.
     --dump-fdt <path>
               After the run, write the flattened device tree `arm_loader` handed
               to the ARM to <path>. Diff two firmware versions with
@@ -468,6 +471,7 @@ struct BootOpts {
     faults: Option<u64>,
     console_log: Option<PathBuf>,
     dump_fdt: Option<PathBuf>,
+    dump_eeprom: Option<PathBuf>,
     print_fdt: bool,
     /// Several exchanges against one booted firmware: a failed crypto tag leaves an
     /// error code only the *next* request can ask for (`0x0003008e`).
@@ -917,6 +921,7 @@ impl BootOpts {
         let mut faults = None;
         let mut console_log: Option<PathBuf> = None;
         let mut dump_fdt: Option<PathBuf> = None;
+        let mut dump_eeprom: Option<PathBuf> = None;
         let mut print_fdt = false;
         let mut mbox_tags: Vec<MboxRequest> = Vec::new();
         let mut gencmds: Vec<String> = Vec::new();
@@ -1237,6 +1242,11 @@ impl BootOpts {
                 "--eeprom-map" => eeprom_map = true,
                 "--stub-log" => stub_log = true,
                 "--control-transfers" => control_transfers = true,
+                "--dump-eeprom" => {
+                    dump_eeprom = Some(PathBuf::from(
+                        it.next().context("--dump-eeprom needs a path")?,
+                    ))
+                }
                 "--dump-fdt" => {
                     dump_fdt = Some(PathBuf::from(it.next().context("--dump-fdt needs a path")?))
                 }
@@ -1367,6 +1377,7 @@ impl BootOpts {
             faults,
             console_log,
             dump_fdt,
+            dump_eeprom,
             print_fdt,
             mbox_tags,
             gencmds,
@@ -2209,6 +2220,10 @@ fn print_report(opts: &BootOpts, booted: Booted) -> Result<ExitCode> {
     // A core parked in a busy-wait loop is behind until it is brought up to date.
     if let Some(a) = &mut emu.arm {
         a.settle(&emu.machine);
+    }
+    if let Some(path) = &opts.dump_eeprom {
+        std::fs::write(path, emu.machine.spi0.flash_bytes())
+            .with_context(|| format!("--dump-eeprom {}", path.display()))?;
     }
     // Located once: the device-state section and `report_fdt` read the same bytes.
     let handoff = emu.arm.as_ref().and_then(|a| a.handoff);

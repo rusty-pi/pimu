@@ -44,6 +44,21 @@ binary plus a text config block (`BOOT_UART`, `BOOT_ORDER`, `BOOT_WATCHDOG_*`,
 that line was the first M2 regression target; the model now runs well past it
 (see `board: boardrev d03115` in a `boot --eeprom` transcript).
 
+## recovery.bin on the card
+
+The modelled boot ROM (`src/firmware/bootrom.rs`) looks at the SD card before the
+flash: a `recovery.bin` in the root directory is staged in place of the EEPROM's
+bootcode, signature check and all. The official `recovery.bin` from
+`raspberrypi/rpi-eeprom` runs as it is. With `pieeprom.upd` and `pieeprom.sig`
+beside it, it erases and programs the flash, then resets; it is still on the card,
+so the run goes round again until `boot` gives up after four resets.
+
+The run prints nothing whatever `BOOT_UART` says, so `boot --dump-eeprom <path>`
+writes the flash as the run left it. It holds `pieeprom.upd` except for the last
+8 bytes, which recovery overwrites with the complement of the `ts:` in
+`pieeprom.sig` and then the `ts` itself, both little-endian words
+(`tests/recovery.rs`). That is read off the model, not off a Raspberry Pi 4B d03115.
+
 ## The EEPROM from Linux
 
 The flash the bootloader came out of is reachable from the booted Linux too, and

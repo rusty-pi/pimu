@@ -212,6 +212,54 @@ impl Fat {
     }
 }
 
+/// The bytes of `name` in the root directory of the first FAT partition that
+/// holds it, as the boot ROM looks for `recovery.bin`: short names only,
+/// matched without regard to case.
+pub fn read_root_file(read: &ReadBlock, name: &str) -> Option<Vec<u8>> {
+    let (parts, _) = partitions(read);
+    let firsts = if parts.is_empty() {
+        vec![0]
+    } else {
+        parts.iter().map(|&(_, first, _)| first).collect()
+    };
+    firsts
+        .into_iter()
+        .find_map(|first| read_root_file_at(read, first, name))
+}
+
+fn read_root_file_at(read: &ReadBlock, first: u64, name: &str) -> Option<Vec<u8>> {
+    let fat = Fat::probe(read, first)?;
+    let root = match fat.root {
+        Some((a, len)) => vec![(a, a + len - 1)],
+        None => fat.chain(read, fat.root_cluster),
+    };
+    for block in fat.blocks_of(read, &root) {
+        for e in block.as_chunks::<32>().0 {
+            if e[0] == 0 {
+                return None;
+            }
+            let plain = e[0] != 0xE5 && e[11] != 0x0F && e[11] & 0x18 == 0;
+            if !plain || !short_name(e).eq_ignore_ascii_case(name) {
+                continue;
+            }
+            let cluster = (le16(e, 20) << 16) | le16(e, 26);
+            let size = le32(e, 28) as usize;
+            let mut bytes: Vec<u8> = fat
+                .blocks_of(read, &fat.chain(read, cluster))
+                .iter()
+                .flatten()
+                .copied()
+                .collect();
+            if bytes.len() < size {
+                return None;
+            }
+            bytes.truncate(size);
+            return Some(bytes);
+        }
+    }
+    None
+}
+
 /// Every file and directory of the FAT file system at `first`, plus its own
 /// metadata, as named extents.
 fn fat_files(read: &ReadBlock, first: u64, part: &str, out: &mut Vec<(u64, u64, String)>) {
@@ -376,6 +424,27 @@ mod tests {
         assert_eq!(map.names(data, 1), ["p1:/boot/"]);
         assert_eq!(map.names(9, 1), ["p1:(FAT)"]);
         assert_eq!(map.names(8, 23), ["p1:(boot sector)", "p1:(FAT)", "p1:/"]);
+    }
+
+    #[test]
+    fn a_root_file_is_read_by_its_short_name() {
+        let mut img = image();
+        let root = 8 + 1 + 20;
+        let mut e = [0u8; 32];
+        e[..11].copy_from_slice(b"RECOVERYBIN");
+        e[11] = 0x20;
+        e[26..28].copy_from_slice(&3u16.to_le_bytes());
+        e[28..32].copy_from_slice(&3000u32.to_le_bytes());
+        img[root][32..64].copy_from_slice(&e);
+        let data = root + 2;
+        img[data + 4][0] = 0xA5;
+        img[data + 12][0] = 0x5A;
+        let read = |lba: u64| img.get(lba as usize).copied();
+        let bytes = read_root_file(&read, "recovery.bin").expect("file is there");
+        assert_eq!(bytes.len(), 3000);
+        assert_eq!(bytes[0], 0xA5);
+        assert_eq!(bytes[2048], 0x5A);
+        assert_eq!(read_root_file(&read, "start4.elf"), None);
     }
 
     #[test]
