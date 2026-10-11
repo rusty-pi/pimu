@@ -226,11 +226,13 @@ impl MmioDevice for Pl011 {
                 // Transmit never fills. A character just written counts as on
                 // the wire for one read, so code that drains `BUSY` before it
                 // clears `UARTCR` sees it go by and code that does not stalls.
+                let mut fr = 0;
                 if self.transmitting {
                     self.transmitting = false;
-                    return Ok(FR_BUSY);
+                    fr |= FR_BUSY;
+                } else {
+                    fr |= FR_TXFE;
                 }
-                let mut fr = FR_TXFE;
                 if self.rx.is_empty() {
                     fr |= FR_RXFE;
                 }
@@ -307,6 +309,19 @@ mod tests {
         u.write(IMSC, Width::Word, INT_RX | INT_RT).unwrap();
         u.write(CR, Width::Word, CR_RESET | CR_UARTEN).unwrap();
         u
+    }
+
+    #[test]
+    fn an_empty_fifo_still_reads_rxfe_right_after_a_write() {
+        let mut u = linux_setup();
+        u.write(DR, Width::Word, u32::from(b'x')).unwrap();
+        let fr = u.read(FR, Width::Word).unwrap();
+        assert_ne!(fr & FR_BUSY, 0);
+        assert_eq!(fr & FR_TXFE, 0);
+        assert_ne!(fr & FR_RXFE, 0);
+        let fr = u.read(FR, Width::Word).unwrap();
+        assert_eq!(fr & FR_BUSY, 0);
+        assert_ne!(fr & FR_TXFE, 0);
     }
 
     #[test]
