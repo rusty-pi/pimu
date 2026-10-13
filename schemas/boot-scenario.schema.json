@@ -58,6 +58,14 @@
           },
           "type": "array"
         },
+        "magic_packet_after": {
+          "default": null,
+          "description": "Once the console prints this, the built-in network peer sends the board\none Wake-on-LAN magic packet: a broadcast frame of six `0xFF` bytes and\n16 copies of the MAC address GENET holds at that moment\n(`boot --magic-packet-after`). Sent once in the whole run: after a reset\nthe boot that follows does not get another, though it looks for `until`\nand `input` again.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "max_skipped": {
           "default": 0,
           "description": "Largest acceptable skipped-instruction count in the run report. `boot`\nstops on an instruction the decoder does not implement rather than\nstepping over it, so nothing in a clean boot should need any leniency.",

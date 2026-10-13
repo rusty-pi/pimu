@@ -172,7 +172,8 @@ I²C masters are modelled and nothing answers the EDID EEPROM's address.
   [passt](https://passt.top/) instead, for reaching a server on the host such as
   `mkosi serve`; that runs on the host's clock, so it is not deterministic and CI
   stays on the built-in peer ([`docs/running.md`](docs/running.md) has the
-  caveats).
+  caveats). `--magic-packet-after <text>` has the built-in peer send the board a
+  Wake-on-LAN magic packet once the console has printed `<text>`.
 - **Serial console input** — `--send-after <prompt> <text>` types into the PL011
   deterministically, keyed to the transcript; `--stdin` makes the host terminal
   the console for an interactive session.
