@@ -164,6 +164,16 @@ ref        = "`bcmgenet.h`: `INTRL2_CPU_STAT`, `UMAC_IRQ_*`"
 confidence = "high"
 
 [[register.field]]
+name  = "MPD_R"
+bits  = "12"
+notes = "`INTRL2_0`: a magic packet was detected. Raw status, set whether or not the bit is unmasked, cleared through `INTRL2_CPU_CLEAR`. Not measured on a board."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "`bcmgenet.h`: `UMAC_IRQ_MPD_R`, part of `UMAC_IRQ_WAKE_EVENT`; `bcmgenet_wol_power_down_cfg` unmasks it"
+confidence = "high"
+
+[[register.field]]
 name  = "RXDMA_MBDONE"
 bits  = "13"
 notes = "`INTRL2_0`: ring 16 received."
@@ -298,6 +308,57 @@ notes = "Two pad bytes before the frame."
 [[register.field.source]]
 kind       = "linux"
 ref        = "`bcmgenet.h`: `RBUF_ALIGN_2B`"
+confidence = "high"
+
+[[register]]
+name   = "RBUF_STATUS"
+offset = 0x030C
+access = "r"
+notes  = "Receive buffer status: whether Wake-on-LAN mode is ready and what woke it. Not measured on a board; the model follows what `bcmgenet_wol.c` waits for."
+
+[[register.source]]
+kind       = "linux"
+ref        = "`bcmgenet.h`: `RBUF_STATUS`; `bcmgenet_poll_wol_status` polls `RBUF_STATUS_WOL` for up to 50 ms after `bcmgenet_wol_power_down_cfg` sets `RBUF_ACPI_EN`"
+confidence = "high"
+
+[[register.field]]
+name  = "WOL"
+bits  = "0"
+notes = "Wake-on-LAN mode is ready. Modelled as `HFB_CTRL.ACPI_EN`, `UMAC_MPD_CTRL.EN` and `UMAC_CMD.RX_EN` all set. `bcmgenet` polls for it before it sets `RX_EN` itself, but only after a normal run that left `RX_EN` on (its suspend never clears it), so whether the hardware needs `RX_EN` for this bit is not known."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "`bcmgenet.h`: `RBUF_STATUS_WOL`"
+confidence = "high"
+
+[[register.field.source]]
+kind       = "inferred"
+ref        = "The dependence on `RX_EN` is the conservative reading of the `bcmgenet_wol_power_down_cfg` comment `Receiver must be enabled for WOL MP detection`; nothing measured says the status bit follows it"
+confidence = "low"
+
+[[register.field]]
+name  = "MPD_INTR_ACTIVE"
+bits  = "1"
+notes = "A magic packet was detected. Set along with `INTRL2_CPU_STAT.MPD_R`, and cleared when `UMAC_MPD_CTRL.EN` or `HFB_CTRL.ACPI_EN` is cleared; clearing `MPD_R` leaves it. Not measured on a board."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "`bcmgenet.h`: `RBUF_STATUS_MPD_INTR_ACTIVE`"
+confidence = "high"
+
+[[register.field.source]]
+kind       = "inferred"
+ref        = "That it lasts until the mode ends is a guess; `bcmgenet` never reads the bit"
+confidence = "low"
+
+[[register.field]]
+name  = "ACPI_INTR_ACTIVE"
+bits  = "2"
+notes = "A hardware filter woke the MAC. Reads 0: the filter wake is not modelled."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "`bcmgenet.h`: `RBUF_STATUS_ACPI_INTR_ACTIVE`"
 confidence = "high"
 
 [[register]]
@@ -711,6 +772,79 @@ confidence = "high"
 [[register.source]]
 kind       = "decompile"
 ref        = "EEPROM bootloader network boot: `0x91B40` writes `0xc1` (divider 12, clause 22) for the BCM54213PE, `0x3f1` (divider 63) for its third PHY kind"
+confidence = "high"
+
+[[register]]
+name   = "UMAC_MPD_CTRL"
+offset = 0x0E20
+access = "rw"
+notes  = "Magic Packet Detection control. With `HFB_CTRL.ACPI_EN` and `UMAC_CMD.RX_EN` set, `EN` diverts every received frame from the DMA rings to the detector: a frame that carries a magic packet raises `INTRL2_CPU_STAT.MPD_R`, any other is dropped. Frames still pass the destination-address filter first. Whether the hardware matches the way the model does, and what the register resets to, have not been measured on a board."
+
+[[register.source]]
+kind       = "linux"
+ref        = "`bcmgenet.h`: `UMAC_MPD_CTRL` at `0x620` in the UniMAC block; `bcmgenet_wol_power_down_cfg` sets `MPD_EN` (and `MPD_PW_EN` for `WAKE_MAGICSECURE`), `bcmgenet_wol_power_up_cfg` clears both"
+confidence = "high"
+
+[[register.source]]
+kind       = "inferred"
+ref        = "The frame is a magic packet when it holds six `0xFF` bytes and then 16 copies of the station address (`UMAC_MAC0` / `UMAC_MAC1`), anywhere in it, followed by the six password bytes with `PW_EN`. That is the Magic Packet format `ethtool`'s `WAKE_MAGIC` names; where the hardware looks for it and what else it requires is not in the driver"
+confidence = "medium"
+
+[[register.field]]
+name  = "EN"
+bits  = "0"
+notes = "Magic Packet Detection on. `bcmgenet.h` calls it `MPD_EN`."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "`bcmgenet.h`: `MPD_EN`"
+confidence = "high"
+
+[[register.field]]
+name  = "MSEQ_LEN"
+bits  = "23:16"
+notes = "Presumably the number of times the station address repeats. `bcmgenet` never writes it; the model always looks for 16 copies."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "`bcmgenet.h`: `MPD_MSEQ_LEN_SHIFT` / `MPD_MSEQ_LEN_MASK`, used nowhere in `bcmgenet`"
+confidence = "high"
+
+[[register.field.source]]
+kind       = "inferred"
+ref        = "The meaning is read from the name"
+confidence = "low"
+
+[[register.field]]
+name  = "PW_EN"
+bits  = "27"
+notes = "The six bytes after the 16 copies must be the password in `UMAC_MPD_PW_MS` / `UMAC_MPD_PW_LS`. `bcmgenet.h` calls it `MPD_PW_EN`."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "`bcmgenet.h`: `MPD_PW_EN`"
+confidence = "high"
+
+[[register]]
+name   = "UMAC_MPD_PW_MS"
+offset = 0x0E24
+access = "rw"
+notes  = "First two bytes of the magic packet password, in 15:0, most significant byte first."
+
+[[register.source]]
+kind       = "linux"
+ref        = "`bcmgenet.h`: `UMAC_MPD_PW_MS`; `bcmgenet_set_mpd_password` writes `get_unaligned_be16(&sopass[0])`"
+confidence = "high"
+
+[[register]]
+name   = "UMAC_MPD_PW_LS"
+offset = 0x0E28
+access = "rw"
+notes  = "Last four bytes of the magic packet password, most significant byte first."
+
+[[register.source]]
+kind       = "linux"
+ref        = "`bcmgenet.h`: `UMAC_MPD_PW_LS`; `bcmgenet_set_mpd_password` writes `get_unaligned_be32(&sopass[2])`"
 confidence = "high"
 
 [[register]]
@@ -1320,6 +1454,16 @@ notes = "Filtering on."
 [[register.field.source]]
 kind       = "linux"
 ref        = "`bcmgenet.h`: `RBUF_HFB_EN`"
+confidence = "high"
+
+[[register.field]]
+name  = "ACPI_EN"
+bits  = "2"
+notes = "ACPI (Wake-on-LAN) mode on: the receive path waits for a wake event instead of filling the rings. The model only acts on it together with `UMAC_MPD_CTRL.EN`. `bcmgenet.h` calls it `RBUF_ACPI_EN`."
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "`bcmgenet.h`: `RBUF_ACPI_EN`; `bcmgenet_wol_power_down_cfg` sets it through `bcmgenet_hfb_reg_writel(priv, reg, HFB_CTRL)`, `hfb_reg_offset` `0xfc00` for GENET v4 and v5"
 confidence = "high"
 
 [[register]]
