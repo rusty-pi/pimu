@@ -848,7 +848,7 @@ impl MmioDevice for Genet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::periph::bcm54213pe::{BMCR, BMCR_RESET, BMSR, PHYSID1, PHYSID2};
+    use crate::periph::bcm54213pe::{BMCR, BMCR_PDOWN, BMCR_RESET, BMSR, PHYSID1, PHYSID2};
 
     fn rd(g: &mut Genet, off: u32) -> u32 {
         g.read(off, Width::Word).unwrap()
@@ -928,6 +928,17 @@ mod tests {
         let bmsr = mdio_read(&mut g, 1, u32::from(BMSR)).unwrap();
         assert_eq!(bmsr, 0x7949);
         assert_eq!(rd(&mut g, UMAC_MODE) & (1 << 5), 0);
+    }
+
+    #[test]
+    fn powering_the_phy_down_takes_the_macs_link_down() {
+        let mut g = Genet::new();
+        g.phy.set_link(true);
+        assert_ne!(rd(&mut g, UMAC_MODE) & (1 << 5), 0);
+        mdio_write(&mut g, 1, u32::from(BMCR), BMCR_PDOWN);
+        assert_eq!(rd(&mut g, UMAC_MODE) & (1 << 5), 0);
+        mdio_write(&mut g, 1, u32::from(BMCR), BMCR_RESET);
+        assert_ne!(rd(&mut g, UMAC_MODE) & (1 << 5), 0);
     }
 
     #[test]
