@@ -19,6 +19,13 @@ pub trait NetBackend {
 
     fn recv(&mut self) -> Option<Vec<u8>>;
 
+    /// Send the board a Wake-on-LAN magic packet for `target`, as a host on the
+    /// segment would. Only a backend that plays the whole far end can say who
+    /// the sender is; the others return `false` and send nothing.
+    fn send_magic_packet(&mut self, _target: Mac) -> bool {
+        false
+    }
+
     fn take_log(&mut self) -> Vec<String> {
         Vec::new()
     }
