@@ -235,7 +235,7 @@ MESS:[t]:0: uart: Baud rate change done...
 [t] CPU features: detected: CRC32 instructions
 [t] CPU features: detected: PMUv3
 [t] alternatives: applying system-wide alternatives
-[t] Memory: 7459816K/8245248K available (14912K kernel code, 2446K rwdata, 5080K rodata, 5632K init, 505K bss, 243288K reserved, 524288K cma-reserved)
+[t] Memory: 7459880K/8245248K available (14912K kernel code, 2446K rwdata, 5080K rodata, 5632K init, 505K bss, 243288K reserved, 524288K cma-reserved)
 [t] devtmpfs: initialized
 [t] Enabled cp15_barrier support
 [t] Enabled setend support
@@ -502,7 +502,7 @@ MESS:[t]:0: uart: Baud rate change done...
 [t] CPU features: detected: CRC32 instructions
 [t] CPU features: detected: PMUv3
 [t] alternatives: applying system-wide alternatives
-[t] Memory: 7459816K/8245248K available (14912K kernel code, 2446K rwdata, 5080K rodata, 5632K init, 505K bss, 243288K reserved, 524288K cma-reserved)
+[t] Memory: 7459880K/8245248K available (14912K kernel code, 2446K rwdata, 5080K rodata, 5632K init, 505K bss, 243288K reserved, 524288K cma-reserved)
 [t] devtmpfs: initialized
 [t] Enabled cp15_barrier support
 [t] Enabled setend support
@@ -716,7 +716,5 @@ Enter 'help' for a list of built-in commands.
 / # \x1b[6nuname -sm
 Linux aarch64
 / # \x1b[6necho cpus=$(grep -c ^processor /proc/cpuinfo)
-[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
-[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
 cpus=4
-/ # \x1b[6n
+/ # 

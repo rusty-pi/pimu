@@ -250,7 +250,7 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] CPU features: detected: CRC32 instructions
 [t] CPU features: detected: PMUv3
 [t] alternatives: applying system-wide alternatives
-[t] Memory: 7459948K/8245248K available (14912K kernel code, 2446K rwdata, 5080K rodata, 5632K init, 505K bss, 243284K reserved, 524288K cma-reserved)
+[t] Memory: 7460124K/8245248K available (14912K kernel code, 2446K rwdata, 5080K rodata, 5632K init, 505K bss, 243284K reserved, 524288K cma-reserved)
 [t] devtmpfs: initialized
 [t] Enabled cp15_barrier support
 [t] Enabled setend support
@@ -515,7 +515,7 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] CPU features: detected: CRC32 instructions
 [t] CPU features: detected: PMUv3
 [t] alternatives: applying system-wide alternatives
-[t] Memory: 7459948K/8245248K available (14912K kernel code, 2446K rwdata, 5080K rodata, 5632K init, 505K bss, 243284K reserved, 524288K cma-reserved)
+[t] Memory: 7460124K/8245248K available (14912K kernel code, 2446K rwdata, 5080K rodata, 5632K init, 505K bss, 243284K reserved, 524288K cma-reserved)
 [t] devtmpfs: initialized
 [t] Enabled cp15_barrier support
 [t] Enabled setend support
@@ -722,10 +722,10 @@ ko; done; echo target=$(ls -d /sys/bus/spi/devices/spi0.0); echo spidev=$(ls -d
 target=/sys/bus/spi/devices/spi0.0
 spidev=/dev/spidev0.0
 / # \x1b[6nprintf 'gpfsel4=%#x\n' $(( $(devmem 0xfe200010 32) & 0x3ffff ))
-gpfsel4=0x92db
-/ # \x1b[6ndevmem 0xfe20002c 32 0x800; devmem 0x[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
 [t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
-fe204000 32 0x83; devmem 0xfe204004 32 
+[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
+gpfsel4=0x92db
+/ # \x1b[6ndevmem 0xfe20002c 32 0x800; devmem 0xfe204000 32 0x83; devmem 0xfe204004 32 
 
 0x9f; devmem 0xfe204000 32 0xa3; for b in 0 0 0; do devmem 0xfe204004 32 $b; don
 
