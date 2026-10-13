@@ -1196,12 +1196,17 @@ confidence = "high"
 [[register.field]]
 name  = "HOLDARM"
 bits  = "1"
-notes = "Hold the ARM channel."
+notes = "Hold the ARM channel. While it is set the model runs no ARM core: time passes for them and nothing executes, and they carry on where they were once it is cleared. start4 sets it for a moment around `PROC` after the ARM release."
 
 [[register.field.source]]
 kind       = "linux"
 ref        = "`clk-bcm2835.c`: `CM_PLLB_HOLDARM`"
 confidence = "high"
+
+[[register.field.source]]
+kind       = "inferred"
+ref        = "A held channel passes no clock to the ARM cores, so they stop. Nothing measured on a board has watched the ARM across a hold"
+confidence = "medium"
 
 [[register.field]]
 name  = "LOADARM"

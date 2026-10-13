@@ -20,6 +20,11 @@
 //! callback, which drains `UART_FR.BUSY` before clearing `UARTCR` — gate on
 //! `ENAB`, not on `BUSY`.
 //!
+//! `CM_PLLB.HOLDARM` is the one bit with an effect outside the block: while it
+//! is set the ARM cores have no clock, and [`ClockManager::arm_held`] tells the
+//! ARM side to leave them be ([`crate::arm::ArmSide::run`]). The register reads
+//! it back like any other.
+//!
 //! `ENAB` and `SRC` are plain read/write state, so the stored-write read-back
 //! reproduces whatever the firmware programs. A Raspberry Pi 4B d03115 reads
 //! `CM_UARTCTL` as `0x296` (`MASH` 1, `BUSY` 1, `ENAB` 1, `SRC` 6 / PLLD) and
@@ -34,17 +39,17 @@ use crate::bus::{BusResult, MmioDevice, Width};
 
 // `BUSY` is bit 7 of every `CM_*_CTL` register, not only `UARTCTL`'s.
 use crate::spec::cm::{
-    DELAY as CM_DELAY, GEN_1E8_CTL, GEN_210_CTL, LOCK as CM_LOCK, UARTCTL,
+    DELAY as CM_DELAY, GEN_1E8_CTL, GEN_210_CTL, LOCK as CM_LOCK, PLLB, PLLB_HOLDARM_MASK, UARTCTL,
     UARTCTL_BUSY_MASK as CTL_BUSY, UARTCTL_ENAB_MASK as CTL_ENAB, UARTCTL_SRC_MASK as CTL_SRC,
     UARTDIV,
 };
 use crate::spec::Coverage;
 
-/// `LOCK` and `DELAY` are modelled; `UARTCTL` / `UARTDIV` get the storage
-/// every `*_CTL` / `*_DIV` register does.
+/// `LOCK`, `DELAY` and `PLLB` are modelled; `UARTCTL` / `UARTDIV` get the
+/// storage every `*_CTL` / `*_DIV` register does.
 pub const COVERAGE: Coverage = Coverage {
     block: "cm",
-    decoded: &[UARTCTL, UARTDIV, CM_DELAY, CM_LOCK],
+    decoded: &[UARTCTL, UARTDIV, CM_DELAY, CM_LOCK, PLLB],
 };
 /// Password byte the firmware ORs into every clock-manager write.
 const PASSWD: u32 = 0x5A00_0000;
@@ -53,6 +58,7 @@ const PASSWD: u32 = 0x5A00_0000;
 pub struct ClockManager {
     storage: BTreeMap<u32, u32>,
     uart_disturbed: bool,
+    arm_held: bool,
 }
 
 impl ClockManager {
@@ -72,6 +78,11 @@ impl ClockManager {
     /// whether GENET has a clock at all.
     pub fn eth_clocks_running(&self) -> bool {
         self.generator_running(GEN_1E8_CTL) && self.generator_running(GEN_210_CTL)
+    }
+
+    /// Whether PLLB's ARM channel is held, so the ARM cores have no clock.
+    pub fn arm_held(&self) -> bool {
+        self.arm_held
     }
 
     /// Whether `UARTCLK` is running: a PL011 programmed against a stopped
@@ -116,7 +127,39 @@ impl MmioDevice for ClockManager {
         if off == UARTDIV && self.uart_clock_live() && (was ^ value) & !PASSWD != 0 {
             self.uart_disturbed = true;
         }
+        if off == PLLB {
+            self.arm_held = value & PLLB_HOLDARM_MASK != 0;
+        }
         self.storage.insert(off, value);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn holding_the_arm_channel_reads_back_and_is_reported() {
+        let mut cm = ClockManager::new();
+        assert!(!cm.arm_held());
+        cm.write(PLLB, Width::Word, PASSWD | PLLB_HOLDARM_MASK)
+            .unwrap();
+        assert!(cm.arm_held());
+        assert_eq!(cm.read(PLLB, Width::Word).unwrap(), PLLB_HOLDARM_MASK);
+        cm.write(PLLB, Width::Word, PASSWD).unwrap();
+        assert!(!cm.arm_held());
+        assert_eq!(cm.read(PLLB, Width::Word).unwrap(), 0);
+    }
+
+    #[test]
+    fn only_holdarm_holds_the_arm() {
+        let mut cm = ClockManager::new();
+        // `ANARST` with `LOADARM`, then with `HOLDARM`: the words start4 writes
+        // while it brings PLLB up.
+        cm.write(PLLB, Width::Word, PASSWD | 0x101).unwrap();
+        assert!(!cm.arm_held());
+        cm.write(PLLB, Width::Word, PASSWD | 0x102).unwrap();
+        assert!(cm.arm_held());
     }
 }
