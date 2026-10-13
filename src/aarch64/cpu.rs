@@ -13,7 +13,7 @@
 use super::exec;
 use super::mmu::Tlb;
 use super::sysreg::{SysRegs, HCR_TGE, HCR_TSC, HCR_VM, SCR_HCE, SCR_NS, SCR_SMD};
-use super::{irq_target, vector_group, VECTOR_FIQ, VECTOR_IRQ, VECTOR_SYNC};
+use super::{irq_target, vector_group, PSTATE_F, PSTATE_I, VECTOR_FIQ, VECTOR_IRQ, VECTOR_SYNC};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Abort {
@@ -341,6 +341,14 @@ impl Cpu {
 
     pub fn can_take_interrupt(&self, fiq: bool) -> bool {
         irq_target(self.sys.scr_el3, self.sys.hcr_el2, self.pstate(), fiq).is_some()
+    }
+
+    /// Whether the interrupt ends a `wfi`: one routed to this EL or a higher
+    /// one wakes it whatever `PSTATE` masks, and one routed to a lower EL
+    /// never does, as it is never taken here either.
+    pub fn interrupt_wakes_wfi(&self, fiq: bool) -> bool {
+        let unmasked = self.pstate() & !(PSTATE_I | PSTATE_F);
+        irq_target(self.sys.scr_el3, self.sys.hcr_el2, unmasked, fiq).is_some()
     }
 
     /// `ERET`; `false` for an AArch32 or illegal target, neither modelled.

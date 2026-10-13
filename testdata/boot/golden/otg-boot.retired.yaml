@@ -4,6 +4,6 @@
 # is released. `boot --scenario <file> --record` rewrites this file.
 vpu0: 429754214
 arm0: 76
-arm1: 180080
-arm2: 180080
-arm3: 180080
+arm1: 74
+arm2: 74
+arm3: 74
