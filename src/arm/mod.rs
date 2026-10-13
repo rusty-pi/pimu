@@ -93,10 +93,11 @@
 //! - TLB maintenance: every `TLBI` flushes all cores' TLBs, which covers the
 //!   broadcast forms; invalidating more is allowed.
 //! - `wfe` (ARM ARM D1.16) ends on `sev`, a cleared monitor mark, an interrupt
-//!   line or an exception return, at the next event-stream event, or after
-//!   [`WFE_BACKSTOP`]. The architecture allows an early completion, so the
-//!   backstop is always safe; treating `wfe` as a no-op instead would leave
-//!   TF-A's and UEFI's holding pens spinning for the whole boot.
+//!   the core takes or an exception return, or at the next event-stream event.
+//!   Nothing else ends it: the architecture allows an early completion, but a
+//!   core does not take one, and firmware that polls after a `wfe` and was never
+//!   signalled has to sleep on as it does on the board. A `wfi` ends on an
+//!   interrupt routed to its EL or a higher one, masked or not.
 //!
 //! Not modelled: stage 2 translation (a core that sets `HCR_EL2.VM` stops with
 //! [`ArmStop::Unsupported`]).
@@ -127,8 +128,8 @@ const PERIPH_TO_BUS: u64 = 0x8000_0000;
 /// The PCIe outbound window; what decodes in it is up to the root complex.
 const PCIE: std::ops::Range<u64> = 0x6_0000_0000..0x8_0000_0000;
 
-/// The longest a `wfe` waits when nothing else ends it: 1 ms of modelled time.
-const WFE_BACKSTOP: u64 = gentimer::ARM_HZ / 1000;
+/// How long a `wfe` waits when no event stream ends it: for good.
+const WFE_FOR_GOOD: u64 = u64::MAX / 2;
 
 /// `CNTKCTL_EL1` / `CNTHCTL_EL2`: the event stream's enable, and which counter
 /// bit it follows.
@@ -205,6 +206,20 @@ impl Core {
             sha_blocks: 0,
             blocks: (crate::diag::ON && std::env::var_os("PIMU_ARM_BLOCKS").is_some())
                 .then(Box::<blocks::Blocks>::default),
+        }
+    }
+
+    /// Whether an interrupt line that is up ends the core's wait: a `wfi` wakes
+    /// for one routed to its EL or higher whatever `PSTATE` masks, and a `wfe`
+    /// only for one the core takes (ARM ARM D1.16).
+    fn line_wakes(&self) -> bool {
+        let cpu = &self.cpu;
+        if self.wfe_until.is_some() {
+            (cpu.irq_line && cpu.can_take_interrupt(false))
+                || (cpu.fiq_line && cpu.can_take_interrupt(true))
+        } else {
+            (cpu.irq_line && cpu.interrupt_wakes_wfi(false))
+                || (cpu.fiq_line && cpu.interrupt_wakes_wfi(true))
         }
     }
 
@@ -527,7 +542,7 @@ impl ArmSide {
     fn refresh_runnable(&mut self, id: usize) {
         let c = &self.cores[id];
         let wfe_done = c.wfe_until.is_some_and(|t| c.cpu.event || t <= self.cycles);
-        if c.park.is_none() && (!c.waiting || c.cpu.irq_line || c.cpu.fiq_line || wfe_done) {
+        if c.park.is_none() && (!c.waiting || c.line_wakes() || wfe_done) {
             self.runnable |= 1 << id;
         } else {
             self.runnable &= !(1 << id);
@@ -1297,20 +1312,20 @@ impl ArmBus<'_> {
 }
 
 /// When a `wfe` on `core` completes on its own: the next event-stream event if
-/// the stream for its EL is on, else [`WFE_BACKSTOP`].
+/// the stream for its EL is on, else never.
 fn wfe_timeout(core: &Core) -> u64 {
     let ctl = match core.cpu.el {
         0 | 1 => CNTKCTL_EL1,
         2 => CNTHCTL_EL2,
-        _ => return WFE_BACKSTOP,
+        _ => return WFE_FOR_GOOD,
     };
     let v = core.cpu.sys.plain.get(&ctl).copied().unwrap_or(0);
     let hz = core.timer.hz();
     if v & EVNTEN == 0 || hz == 0 {
-        return WFE_BACKSTOP;
+        return WFE_FOR_GOOD;
     }
     let ticks = 2u64 << ((v >> 4) & 0xF);
-    (ticks * gentimer::ARM_HZ / hz).clamp(1, WFE_BACKSTOP)
+    (ticks * gentimer::ARM_HZ / hz).max(1)
 }
 
 fn timer_reg(key: u32) -> Option<Reg> {
@@ -1601,15 +1616,46 @@ mod tests {
     const B_SELF: u32 = 0x1400_0000;
 
     #[test]
-    fn an_unsignalled_wfe_sleeps_until_the_backstop() {
+    fn an_unsignalled_wfe_sleeps_on() {
         let mut m = machine_with(&[WFE, B_SELF]);
         let mut arm = ArmSide::with_cores(1);
-        arm.run(&mut m, WFE_BACKSTOP - 1);
+        arm.run(&mut m, 10_000_000);
         assert_eq!(arm.cores[0].insns, 1);
         assert_eq!(arm.cores[0].cpu.pc, 4);
-        assert!(arm.slept >= WFE_BACKSTOP - 2);
-        arm.run(&mut m, 10);
-        assert!(arm.cores[0].insns > 1, "the backstop ends the wait");
+        assert!(arm.slept >= 9_999_998);
+    }
+
+    /// Core 0 at EL2 with an interrupt up, waiting in `wfi` or `wfe`.
+    fn wakes(hcr: u64, masked: bool, wfe: bool) -> bool {
+        use crate::aarch64::{PSTATE_I, SCR_NS};
+        let mut arm = ArmSide::with_cores(1);
+        let core = &mut arm.cores[0];
+        core.cpu.sys.scr_el3 = SCR_NS;
+        core.cpu.sys.hcr_el2 = hcr;
+        core.cpu.el = 2;
+        core.cpu.spsel = true;
+        core.cpu.daif = if masked { PSTATE_I as u32 } else { 0 };
+        core.cpu.irq_line = true;
+        core.waiting = true;
+        core.wfe_until = wfe.then_some(WFE_FOR_GOOD);
+        core.line_wakes()
+    }
+
+    #[test]
+    fn an_interrupt_routed_to_el1_wakes_a_core_at_el2_from_neither_wait() {
+        assert!(!wakes(0, true, false));
+        assert!(!wakes(0, false, false));
+        assert!(!wakes(0, true, true));
+        assert!(!wakes(0, false, true));
+    }
+
+    #[test]
+    fn a_masked_interrupt_routed_to_el2_wakes_wfi_but_not_wfe() {
+        use crate::aarch64::HCR_IMO;
+        assert!(wakes(HCR_IMO, true, false));
+        assert!(!wakes(HCR_IMO, true, true));
+        assert!(wakes(HCR_IMO, false, false));
+        assert!(wakes(HCR_IMO, false, true));
     }
 
     #[test]
