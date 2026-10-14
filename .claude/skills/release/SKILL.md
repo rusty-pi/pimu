@@ -16,11 +16,26 @@ yourself.
 
 ## 1. Check the preconditions
 
+Asking for a release always means the latest `main` on the remote, so a local
+`main` that is merely behind is not a reason to stop. Bring it up to date
+without asking:
+
+```bash
+git fetch origin
+git merge --ff-only origin/main
+```
+
 Stop and report if either of these fails rather than working around it:
 
 - The working tree is clean and the branch is `main`.
-- `git fetch origin` then `git status -sb` shows main level with
-  `origin/main`. Release what is pushed, never a local-only commit.
+- After the fast-forward, `git status -sb` shows main level with
+  `origin/main`. Release what is pushed, never a local-only commit: local
+  commits ahead of `origin/main`, or a history that has diverged so the
+  fast-forward is refused, is a stop.
+
+Every later check — CI status, the range since the last tag, the tag itself —
+applies to the new `HEAD`, not to what `main` pointed at before the
+fast-forward.
 
 Then look at what CI has already said about the commit being released:
 
