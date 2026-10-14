@@ -798,7 +798,7 @@ PLLB, the ARM cores' clock: analogue reset and the ARM channel's hold. start4 br
 | Bits | Field | Access | Notes |
 |---|---|---|---|
 | 8 | `ANARST` | rw | Hold the PLL's analogue side in reset. |
-| 1 | `HOLDARM` | rw | Hold the ARM channel. |
+| 1 | `HOLDARM` | rw | Hold the ARM channel. While it is set the model runs no ARM core: time passes for them and nothing executes, and they carry on where they were once it is cleared. start4 sets it for a moment around `PROC` after the ARM release. |
 | 0 | `LOADARM` | rw | Load the ARM channel's divider. |
 
 Sources:
@@ -813,6 +813,7 @@ Sources:
 `HOLDARM` sources:
 
 - linux (high): `clk-bcm2835.c`: `CM_PLLB_HOLDARM`
+- inferred (medium): A held channel passes no clock to the ARM cores, so they stop. Nothing measured on a board has watched the ARM across a hold
 
 `LOADARM` sources:
 

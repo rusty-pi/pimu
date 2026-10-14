@@ -1005,6 +1005,15 @@ impl NetBackend for BuiltinPeer {
         self.out.pop_front()
     }
 
+    fn send_magic_packet(&mut self, target: Mac) -> bool {
+        self.note(format!(
+            "wake-on-lan: magic packet for {}",
+            fmt_mac(&target)
+        ));
+        self.out.push_back(magic_packet(SERVER_MAC, target));
+        true
+    }
+
     fn take_log(&mut self) -> Vec<String> {
         std::mem::take(&mut self.log)
     }

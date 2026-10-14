@@ -41,6 +41,7 @@ Each level-2 controller drives its own line while an unmasked status bit is set.
 | `0x210`–`0x250` (2 × 0x40) | [`INTRL2_CPU_MASK_SET`](#intrl2_cpu_mask_set) | w | 32 | 1, best high |
 | `0x214`–`0x254` (2 × 0x40) | [`INTRL2_CPU_MASK_CLEAR`](#intrl2_cpu_mask_clear) | w | 32 | 1, best high |
 | `0x300` | [`RBUF_CTRL`](#rbuf_ctrl) | rw | 32 | 1, best high |
+| `0x30C` | [`RBUF_STATUS`](#rbuf_status) | r | 32 | 1, best high |
 | `0x314` | [`RBUF_CHK_CTRL`](#rbuf_chk_ctrl) | rw | 32 | 1, best high |
 | `0x3B4` | [`RBUF_TBUF_SIZE_CTRL`](#rbuf_tbuf_size_ctrl) | rw | 32 | 1, best high |
 | `0x600` | [`TBUF_CTRL`](#tbuf_ctrl) | rw | 32 | 1, best high |
@@ -60,6 +61,9 @@ Each level-2 controller drives its own line while an unmasked status bit is set.
 | `0xE08` | [`UMAC_608`](#umac_608) | rw | 32 | 2, best high |
 | `0xE14` | [`UMAC_MDIO_CMD`](#umac_mdio_cmd) | rw | 32 | 3, best high |
 | `0xE18` | [`UMAC_MDIO_CFG`](#umac_mdio_cfg) | rw | 32 | 2, best high |
+| `0xE20` | [`UMAC_MPD_CTRL`](#umac_mpd_ctrl) | rw | 32 | 2, best high |
+| `0xE24` | [`UMAC_MPD_PW_MS`](#umac_mpd_pw_ms) | rw | 32 | 1, best high |
+| `0xE28` | [`UMAC_MPD_PW_LS`](#umac_mpd_pw_ls) | rw | 32 | 1, best high |
 | `0x2000`–`0x2BFC` (768 × 0x4) | [`RDMA_DESC`](#rdma_desc) | rw | 32 | 1, best high |
 | `0x2C00`–`0x3000` (17 × 0x40) | [`RDMA_RING_WRITE_PTR`](#rdma_ring_write_ptr) | rw | 32 | 1, best high |
 | `0x2C04`–`0x3004` (17 × 0x40) | [`RDMA_RING_WRITE_PTR_HI`](#rdma_ring_write_ptr_hi) | rw | 32 | 2, best high |
@@ -195,6 +199,7 @@ Interrupt status of `INTRL2_0` (ring 16 and MDIO) and `INTRL2_1` (rings 0..15: T
 
 | Bits | Field | Access | Notes |
 |---|---|---|---|
+| 12 | `MPD_R` | r | `INTRL2_0`: a magic packet was detected. Raw status, set whether or not the bit is unmasked, cleared through `INTRL2_CPU_CLEAR`. Not measured on a board. |
 | 13 | `RXDMA_MBDONE` | r | `INTRL2_0`: ring 16 received. |
 | 16 | `TXDMA_MBDONE` | r | `INTRL2_0`: ring 16 sent. |
 | 23 | `MDIO_DONE` | r | `INTRL2_0`: MDIO frame done. |
@@ -203,6 +208,10 @@ Interrupt status of `INTRL2_0` (ring 16 and MDIO) and `INTRL2_1` (rings 0..15: T
 Sources:
 
 - linux (high): `bcmgenet.h`: `INTRL2_CPU_STAT`, `UMAC_IRQ_*`
+
+`MPD_R` sources:
+
+- linux (high): `bcmgenet.h`: `UMAC_IRQ_MPD_R`, part of `UMAC_IRQ_WAKE_EVENT`; `bcmgenet_wol_power_down_cfg` unmasks it
 
 `RXDMA_MBDONE` sources:
 
@@ -292,6 +301,36 @@ Sources:
 `ALIGN_2B` sources:
 
 - linux (high): `bcmgenet.h`: `RBUF_ALIGN_2B`
+
+## `RBUF_STATUS`
+
+Offset `0x30C` · access `r` · 32 bits
+
+Receive buffer status: whether Wake-on-LAN mode is ready and what woke it. Not measured on a board; the model follows what `bcmgenet_wol.c` waits for.
+
+| Bits | Field | Access | Notes |
+|---|---|---|---|
+| 0 | `WOL` | r | Wake-on-LAN mode is ready. Modelled as `HFB_CTRL.ACPI_EN`, `UMAC_MPD_CTRL.EN` and `UMAC_CMD.RX_EN` all set. `bcmgenet` polls for it before it sets `RX_EN` itself, but only after a normal run that left `RX_EN` on (its suspend never clears it), so whether the hardware needs `RX_EN` for this bit is not known. |
+| 1 | `MPD_INTR_ACTIVE` | r | A magic packet was detected. Set along with `INTRL2_CPU_STAT.MPD_R`, and cleared when `UMAC_MPD_CTRL.EN` or `HFB_CTRL.ACPI_EN` is cleared; clearing `MPD_R` leaves it. Not measured on a board. |
+| 2 | `ACPI_INTR_ACTIVE` | r | A hardware filter woke the MAC. Reads 0: the filter wake is not modelled. |
+
+Sources:
+
+- linux (high): `bcmgenet.h`: `RBUF_STATUS`; `bcmgenet_poll_wol_status` polls `RBUF_STATUS_WOL` for up to 50 ms after `bcmgenet_wol_power_down_cfg` sets `RBUF_ACPI_EN`
+
+`WOL` sources:
+
+- linux (high): `bcmgenet.h`: `RBUF_STATUS_WOL`
+- inferred (low): The dependence on `RX_EN` is the conservative reading of the `bcmgenet_wol_power_down_cfg` comment `Receiver must be enabled for WOL MP detection`; nothing measured says the status bit follows it
+
+`MPD_INTR_ACTIVE` sources:
+
+- linux (high): `bcmgenet.h`: `RBUF_STATUS_MPD_INTR_ACTIVE`
+- inferred (low): That it lasts until the mode ends is a guess; `bcmgenet` never reads the bit
+
+`ACPI_INTR_ACTIVE` sources:
+
+- linux (high): `bcmgenet.h`: `RBUF_STATUS_ACPI_INTR_ACTIVE`
 
 ## `RBUF_CHK_CTRL`
 
@@ -575,6 +614,56 @@ Sources:
 
 - measured (high): `MDIO_CFG` `0x00000091`
 - decompile (high): EEPROM bootloader network boot: `0x91B40` writes `0xc1` (divider 12, clause 22) for the BCM54213PE, `0x3f1` (divider 63) for its third PHY kind
+
+## `UMAC_MPD_CTRL`
+
+Offset `0xE20` · access `rw` · 32 bits
+
+Magic Packet Detection control. With `HFB_CTRL.ACPI_EN` and `UMAC_CMD.RX_EN` set, `EN` diverts every received frame from the DMA rings to the detector: a frame that carries a magic packet raises `INTRL2_CPU_STAT.MPD_R`, any other is dropped. Frames still pass the destination-address filter first. Whether the hardware matches the way the model does, and what the register resets to, have not been measured on a board.
+
+| Bits | Field | Access | Notes |
+|---|---|---|---|
+| 0 | `EN` | rw | Magic Packet Detection on. `bcmgenet.h` calls it `MPD_EN`. |
+| 23:16 | `MSEQ_LEN` | rw | Presumably the number of times the station address repeats. `bcmgenet` never writes it; the model always looks for 16 copies. |
+| 27 | `PW_EN` | rw | The six bytes after the 16 copies must be the password in `UMAC_MPD_PW_MS` / `UMAC_MPD_PW_LS`. `bcmgenet.h` calls it `MPD_PW_EN`. |
+
+Sources:
+
+- linux (high): `bcmgenet.h`: `UMAC_MPD_CTRL` at `0x620` in the UniMAC block; `bcmgenet_wol_power_down_cfg` sets `MPD_EN` (and `MPD_PW_EN` for `WAKE_MAGICSECURE`), `bcmgenet_wol_power_up_cfg` clears both
+- inferred (medium): The frame is a magic packet when it holds six `0xFF` bytes and then 16 copies of the station address (`UMAC_MAC0` / `UMAC_MAC1`), anywhere in it, followed by the six password bytes with `PW_EN`. That is the Magic Packet format `ethtool`'s `WAKE_MAGIC` names; where the hardware looks for it and what else it requires is not in the driver
+
+`EN` sources:
+
+- linux (high): `bcmgenet.h`: `MPD_EN`
+
+`MSEQ_LEN` sources:
+
+- linux (high): `bcmgenet.h`: `MPD_MSEQ_LEN_SHIFT` / `MPD_MSEQ_LEN_MASK`, used nowhere in `bcmgenet`
+- inferred (low): The meaning is read from the name
+
+`PW_EN` sources:
+
+- linux (high): `bcmgenet.h`: `MPD_PW_EN`
+
+## `UMAC_MPD_PW_MS`
+
+Offset `0xE24` · access `rw` · 32 bits
+
+First two bytes of the magic packet password, in 15:0, most significant byte first.
+
+Sources:
+
+- linux (high): `bcmgenet.h`: `UMAC_MPD_PW_MS`; `bcmgenet_set_mpd_password` writes `get_unaligned_be16(&sopass[0])`
+
+## `UMAC_MPD_PW_LS`
+
+Offset `0xE28` · access `rw` · 32 bits
+
+Last four bytes of the magic packet password, most significant byte first.
+
+Sources:
+
+- linux (high): `bcmgenet.h`: `UMAC_MPD_PW_LS`; `bcmgenet_set_mpd_password` writes `get_unaligned_be32(&sopass[2])`
 
 ## `RDMA_DESC`
 
@@ -993,6 +1082,7 @@ HFB control. The bootloader and start4 never turn it on; Linux does, with a catc
 | Bits | Field | Access | Notes |
 |---|---|---|---|
 | 0 | `EN` | rw | Filtering on. |
+| 2 | `ACPI_EN` | rw | ACPI (Wake-on-LAN) mode on: the receive path waits for a wake event instead of filling the rings. The model only acts on it together with `UMAC_MPD_CTRL.EN`. `bcmgenet.h` calls it `RBUF_ACPI_EN`. |
 
 Sources:
 
@@ -1001,6 +1091,10 @@ Sources:
 `EN` sources:
 
 - linux (high): `bcmgenet.h`: `RBUF_HFB_EN`
+
+`ACPI_EN` sources:
+
+- linux (high): `bcmgenet.h`: `RBUF_ACPI_EN`; `bcmgenet_wol_power_down_cfg` sets it through `bcmgenet_hfb_reg_writel(priv, reg, HFB_CTRL)`, `hfb_reg_offset` `0xfc00` for GENET v4 and v5
 
 ## `HFB_FLT_ENABLE`
 

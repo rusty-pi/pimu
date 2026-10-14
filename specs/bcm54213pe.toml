@@ -49,6 +49,21 @@ ref        = "`BMCR` `0x1140`"
 confidence = "high"
 
 [[register.field]]
+name  = "PDOWN"
+bits  = "11"
+notes = "Power down. The link drops, so `BMSR` loses link and AN-complete and the partner registers read 0, and writes to every register but `BMCR` are ignored. Clearing it makes the PHY negotiate again. Linux's `bcm54xx_suspend` writes exactly this bit (`0x0800`), which also clears AN enable and the speed select."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "IEEE 802.3 22.2.4.1.5"
+confidence = "high"
+
+[[register.field.source]]
+kind       = "linux"
+ref        = "`broadcom.c`: `bcm54xx_suspend` writes `BMCR_PDOWN` without a read-modify-write; `bcm54xx_resume`: \"Writes to register other than BMCR would be ignored unless we clear the PDOWN bit first\""
+confidence = "high"
+
+[[register.field]]
 name  = "ANRESTART"
 bits  = "9"
 notes = "Restart auto-negotiation; self-clears."
@@ -184,7 +199,7 @@ offset = 0x09
 width  = 16
 access = "rw"
 reset  = 0x0300
-notes  = "Advertise 1000BASE-T half and full."
+notes  = "Advertise 1000BASE-T half and full (bits 9 and 8). With both clear the 1000BASE-T abilities are not exchanged at the next negotiation and `STAT1000` reads 0."
 
 [[register.source]]
 kind       = "measured"
@@ -196,12 +211,17 @@ name   = "STAT1000"
 offset = 0x0A
 width  = 16
 access = "r"
-notes  = "1000BASE-T status: `0x0800` (partner 1000 full) with a partner, 0 without."
+notes  = "1000BASE-T status: `0x0800` (partner 1000 full) with a partner that negotiated with `CTRL1000` advertising 1000BASE-T, 0 otherwise. The measured value is from such a negotiation; the 0 when `CTRL1000` advertises none has not been measured."
 
 [[register.source]]
 kind       = "measured"
 ref        = "`STAT1000` `0x0800`"
 confidence = "high"
+
+[[register.source]]
+kind       = "inferred"
+ref        = "The partner's 1000BASE-T abilities arrive in next pages, which a PHY that advertises no 1000BASE-T has no reason to exchange; the model reads 0 then, and decides when negotiation restarts, not when `CTRL1000` is written"
+confidence = "medium"
 
 [[register]]
 name   = "MMD_CTRL"

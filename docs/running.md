@@ -151,6 +151,26 @@ server on the host's port 69.
 A run over passt follows the host's clock, so it is not deterministic, and CI
 stays on the built-in peer (`--tftp`, `--http`).
 
+## Waking the board: `--magic-packet-after`
+
+`--magic-packet-after <text>` has the built-in network peer send the board a
+Wake-on-LAN magic packet once the console has printed `<text>`: an Ethernet
+broadcast frame from the peer's address (`02:00:5e:00:53:02`), EtherType
+`0x0842`, holding six `0xFF` bytes and 16 copies of the MAC address GENET holds
+when the text appears. The peer is plugged in whether or not `--tftp` or `--http`
+is given; `--net` has no peer to send it.
+
+GENET holds the packet back from the DMA rings and raises its wake interrupt when
+the firmware has set `UMAC_MPD_CTRL.EN`, `HFB_CTRL.ACPI_EN` and `UMAC_CMD.RX_EN`
+([`periph/genet.md`](periph/genet.md)). A board that is not in that mode when the
+text prints gets an ordinary broadcast frame once its receiver is on. The
+detector follows the register use of Linux's `bcmgenet`; how the silicon matches
+a packet has not been checked against a board.
+
+The packet goes out once in the whole run, not once per boot. A reset rebuilds
+the machine and looks for `--until` and `--send-after` again, but not for this, so
+the boot after a wake sees no second packet.
+
 ## Checking a boot: `--scenario`
 
 A scenario is a YAML file that says what to boot and what the run has to show.
@@ -208,6 +228,9 @@ golden:                          # optional: diff the whole console against this
   `uart_2ndstage=1` is what makes `start4.elf` print on the UART, so a
   milestone can match what it says. The `halt` kernel is the one `scripts/make-sd.sh` uses for
   `KERNEL=halt`; a boot that ends at the handover needs nothing more of the ARM.
+- **`magic_packet_after`** is `--magic-packet-after`: the text the console prints
+  before the peer sends the board a magic packet
+  ([above](#waking-the-board---magic-packet-after)).
 - The other options of [`boot`](#boot) in a scenario's `boot:` section are the
   same as the command line's: `sd`, `usb`, `tftp`, `http`, `bootconf`, `otp_row`,
   `stepping`, `board_rev`, `until`, `input` and the rest are listed in the

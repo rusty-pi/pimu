@@ -99,6 +99,14 @@ pub struct BootSpec {
     /// Lines typed into the serial console, each once its prompt has printed.
     #[serde(default)]
     pub input: Vec<ConsoleLine>,
+    /// Once the console prints this, the built-in network peer sends the board
+    /// one Wake-on-LAN magic packet: a broadcast frame of six `0xFF` bytes and
+    /// 16 copies of the MAC address GENET holds at that moment
+    /// (`boot --magic-packet-after`). Sent once in the whole run: after a reset
+    /// the boot that follows does not get another, though it looks for `until`
+    /// and `input` again.
+    #[serde(default)]
+    pub magic_packet_after: Option<String>,
 }
 
 /// A boot medium: a disk image, a directory or a URL as `boot --sd` takes them,
@@ -660,6 +668,10 @@ impl BootScenario {
         if let Some(until) = &self.boot.until {
             args.push("--until".into());
             args.push(until.clone());
+        }
+        if let Some(text) = &self.boot.magic_packet_after {
+            args.push("--magic-packet-after".into());
+            args.push(text.clone());
         }
         args
     }
@@ -1343,6 +1355,29 @@ core1      pc 0x3ec40014  retired 125  end None
         assert_eq!(failures.len(), 1, "{failures:?}");
         assert!(failures[0].contains("wall clock"), "{}", failures[0]);
         assert!(check_milestones(&scn, &log.replace("TimeLimit", "Until")).is_empty());
+    }
+
+    #[test]
+    fn a_scenario_passes_its_magic_packet_text_to_boot() {
+        let scn: BootScenario = yaml_serde::from_str(
+            "name: x\nboot:\n  eeprom: e\n  wall_secs: 1\n  until: done\n  \
+             magic_packet_after: \"WoL armed\"\n",
+        )
+        .expect("scenario");
+        let args = scn.boot_args(Path::new("c"));
+        let at = args.iter().position(|a| a == "--magic-packet-after");
+        assert_eq!(
+            at.map(|i| args[i + 1].as_str()),
+            Some("WoL armed"),
+            "{args:?}"
+        );
+        let plain: BootScenario =
+            yaml_serde::from_str("name: x\nboot:\n  eeprom: e\n  wall_secs: 1\n")
+                .expect("scenario");
+        assert!(!plain
+            .boot_args(Path::new("c"))
+            .iter()
+            .any(|a| a == "--magic-packet-after"));
     }
 
     const CARD_SCENARIO: &str = "name: x

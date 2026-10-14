@@ -309,6 +309,13 @@ RUNNING:
               <prompt>. Repeatable; each prompt is looked for only in what the
               console printed after the previous send. Both take \\n, \\r, \\t,
               \\\\ and \\xHH escapes. Deterministic: keyed to the transcript.
+    --magic-packet-after <text>
+              Once the console prints <text>, have the built-in network peer
+              send the board a Wake-on-LAN magic packet: a broadcast frame of
+              six 0xFF bytes and 16 copies of the MAC address GENET holds at
+              that moment. Sent once in the whole run, however many resets it
+              takes, so the boot that follows a wake sees none. Plugs the peer
+              in even without --tftp or --http; --net has no such peer.
     --stdin   Interactive session: the host's stdin is the serial console's
               input, and no wall-clock or silence limit ends the run. On a
               terminal, keys go to the guest raw (Ctrl-C included); Ctrl-A x
@@ -499,6 +506,7 @@ struct BootOpts {
     skip_unimpl: bool,
     until: Option<String>,
     sends: Vec<(String, Vec<u8>)>,
+    magic_packet_after: Option<String>,
     stdin: bool,
     verbose: bool,
     quiet: bool,
@@ -947,6 +955,7 @@ impl BootOpts {
         let mut skip_unimpl = false;
         let mut until: Option<String> = None;
         let mut sends: Vec<(String, Vec<u8>)> = Vec::new();
+        let mut magic_packet_after: Option<String> = None;
         let mut stdin = false;
         let mut verbose = false;
         let mut quiet = false;
@@ -1015,6 +1024,13 @@ impl BootOpts {
                     let prompt = String::from_utf8(harness::boot::unescape(prompt))
                         .context("--send-after: the prompt must be UTF-8")?;
                     sends.push((prompt, harness::boot::unescape(text)));
+                }
+                "--magic-packet-after" => {
+                    magic_packet_after = Some(
+                        it.next()
+                            .context("--magic-packet-after needs a text")?
+                            .to_string(),
+                    )
                 }
                 "--stdin" => stdin = true,
                 "-v" | "--verbose" => verbose = true,
@@ -1329,6 +1345,11 @@ impl BootOpts {
         if (tftp.is_some() || http.is_some()) && host_net.is_some() {
             bail!("--tftp and --http serve the built-in peer, which --net replaces; give one");
         }
+        if magic_packet_after.is_some() && host_net.is_some() {
+            bail!(
+                "--magic-packet-after is sent by the built-in peer, which --net replaces; give one"
+            );
+        }
         if log.is_empty() && log_file.is_some() {
             bail!("--log-file needs --log <channel>[,<channel>...]");
         }
@@ -1403,6 +1424,7 @@ impl BootOpts {
             skip_unimpl,
             until,
             sends,
+            magic_packet_after,
             stdin,
             verbose,
             quiet,
@@ -1466,6 +1488,8 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
     // Off the SoC: a reset leaves it as the boot before left it.
     let mut expander = None;
     let mut rebooted_orderly = false;
+    // Sent in one boot, it is not owed to the next.
+    let mut magic_packet_after = opts.magic_packet_after.clone();
     let (report, emu, start) = 'boot: loop {
         let mut machine = rig.machine(&flash)?;
         if let Some(fuses) = &fuses {
@@ -1487,9 +1511,13 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
         let start = rig.stage(&mut machine, reboots)?;
         let mut emu = rig.emulator(machine, start);
         emu.input.script = opts.sends.iter().cloned().collect();
+        emu.input.magic_packet_after = magic_packet_after.clone();
         emu.input.host = host_input.take();
         let report = emu.run(&limits);
         host_input = emu.input.host.take();
+        if emu.input.magic_packet_after.is_none() {
+            magic_packet_after = None;
+        }
         let report = if opts.orderly_reboot
             && !rebooted_orderly
             && report.end == pimu::emulator::RunEnd::Until
@@ -2056,7 +2084,7 @@ impl<'a> Rig<'a> {
             machine.xhci_otg.attach(device);
         }
         // The built-in peer (`src/net/peer.rs`): DHCP, DNS, TFTP and HTTP.
-        if tftp.is_some() || http.is_some() {
+        if tftp.is_some() || http.is_some() || self.opts.magic_packet_after.is_some() {
             let mut peer = pimu::net::BuiltinPeer::new().with_log(self.log.clone());
             if let Some(root) = tftp {
                 peer = peer.tftp_root(&root.peer_root("TFTP"));
@@ -2547,6 +2575,9 @@ fn print_network(machine: &mut Machine) {
             "  tx {} (dropped {})  rx {} (filtered {}, dropped {})",
             st.tx, st.tx_dropped, st.rx, st.rx_filtered, st.rx_dropped
         );
+        if st.rx_wake != 0 {
+            println!("  magic packets detected {}", st.rx_wake);
+        }
         for line in net.take_log() {
             println!("  {line}");
         }
@@ -3074,6 +3105,22 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
+    }
+
+    #[test]
+    fn a_magic_packet_is_asked_for_by_the_text_that_precedes_it() {
+        let parse = |v: &[&str]| BootOpts::parse(&args(&[&["x.elf"], v].concat()), Path::new(""));
+        let opts = parse(&["--magic-packet-after", "WoL armed"])
+            .unwrap()
+            .unwrap();
+        assert_eq!(opts.magic_packet_after.as_deref(), Some("WoL armed"));
+        assert!(parse(&[]).unwrap().unwrap().magic_packet_after.is_none());
+        assert!(parse(&["--magic-packet-after"]).is_err());
+        let err = parse(&["--magic-packet-after", "x", "--net", "passt"])
+            .err()
+            .expect("--net has no peer to send it")
+            .to_string();
+        assert!(err.contains("--net"), "{err}");
     }
 
     #[test]

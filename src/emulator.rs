@@ -102,6 +102,9 @@ pub struct ConsoleInput {
     /// the previous send — keyed to the transcript, so it is as deterministic as the
     /// boot it follows.
     pub script: std::collections::VecDeque<(String, Vec<u8>)>,
+    /// Have the network peer send a Wake-on-LAN magic packet once the console
+    /// has printed this text. Taken once it is sent, so it goes out once.
+    pub magic_packet_after: Option<String>,
     pub host: Option<crate::stdio::HostInput>,
 }
 
@@ -629,6 +632,13 @@ impl Emulator {
         }
         st.console.extend_from_slice(&fresh);
         if had_output {
+            if let Some(needle) = &self.input.magic_packet_after {
+                if printed_since(&st.console, st.magic_seen, 0, needle) {
+                    self.input.magic_packet_after = None;
+                    self.machine.send_magic_packet();
+                }
+                st.magic_seen = st.console.len();
+            }
             while let Some((prompt, text)) = self.input.script.front() {
                 if !printed_since(&st.console, st.prompt_seen, st.prompt_floor, prompt) {
                     break;
@@ -1091,6 +1101,8 @@ struct RunState {
     /// How much of the console the prompt / `until` search has covered, and where the output after the last scripted send begins.
     prompt_seen: usize,
     prompt_floor: usize,
+    /// How much of the console the magic packet's text has been looked for in.
+    magic_seen: usize,
     host_poll: u32,
     /// Real-time pacing: the modelled clock and the host clock at the baseline, the
     /// modelled time of the next check, and how long the run has slept so far.
@@ -1162,6 +1174,7 @@ impl RunState {
             console_seen: 0,
             prompt_seen: 0,
             prompt_floor: 0,
+            magic_seen: 0,
             host_poll: 0,
             pace_base_us: m.systimer.now_us(),
             pace_base: start,

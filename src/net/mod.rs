@@ -19,6 +19,13 @@ pub trait NetBackend {
 
     fn recv(&mut self) -> Option<Vec<u8>>;
 
+    /// Send the board a Wake-on-LAN magic packet for `target`, as a host on the
+    /// segment would. Only a backend that plays the whole far end can say who
+    /// the sender is; the others return `false` and send nothing.
+    fn send_magic_packet(&mut self, _target: Mac) -> bool {
+        false
+    }
+
     fn take_log(&mut self) -> Vec<String> {
         Vec::new()
     }
@@ -29,9 +36,25 @@ pub type Mac = [u8; 6];
 pub const BROADCAST: Mac = [0xff; 6];
 pub const ETHERTYPE_IPV4: u16 = 0x0800;
 pub const ETHERTYPE_ARP: u16 = 0x0806;
+/// Wake-on-LAN's own EtherType; the detector in the MAC does not look at it.
+pub const ETHERTYPE_WOL: u16 = 0x0842;
 pub const IPPROTO_ICMP: u8 = 1;
 pub const IPPROTO_TCP: u8 = 6;
 pub const IPPROTO_UDP: u8 = 17;
+
+/// A Wake-on-LAN magic packet from `src` to the whole segment: six `0xFF` bytes
+/// and then 16 copies of `target`, the station address that is to wake.
+pub fn magic_packet(src: Mac, target: Mac) -> Vec<u8> {
+    let mut frame = Vec::with_capacity(14 + 6 + 16 * 6);
+    frame.extend_from_slice(&BROADCAST);
+    frame.extend_from_slice(&src);
+    frame.extend_from_slice(&ETHERTYPE_WOL.to_be_bytes());
+    frame.extend_from_slice(&[0xff; 6]);
+    for _ in 0..16 {
+        frame.extend_from_slice(&target);
+    }
+    frame
+}
 
 /// The one's-complement sum of `data` as big-endian words, not yet inverted.
 fn sum16(data: &[u8], mut acc: u32) -> u32 {
@@ -91,6 +114,19 @@ pub fn fmt_mac(m: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_magic_packet_is_the_sync_stream_and_sixteen_addresses_to_everyone() {
+        let src = [0x02, 0, 0x5e, 0, 0x53, 0x02];
+        let target = [0x02, 0, 0x5e, 0, 0x53, 0x01];
+        let frame = magic_packet(src, target);
+        assert_eq!(frame[..6], BROADCAST);
+        assert_eq!(frame[6..12], src);
+        assert_eq!(be16(&frame, 12), ETHERTYPE_WOL);
+        assert_eq!(frame[14..20], [0xff; 6]);
+        assert_eq!(frame.len(), 14 + 6 + 16 * 6);
+        assert!(frame[20..].chunks(6).all(|m| m == target));
+    }
 
     #[test]
     fn checksum_matches_rfc1071_example() {

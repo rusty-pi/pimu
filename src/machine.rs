@@ -377,6 +377,15 @@ impl Machine {
         self.net = Some(backend);
     }
 
+    /// Have the network peer send a Wake-on-LAN magic packet for the station
+    /// address GENET has programmed now. `false` when there is no peer that can.
+    pub fn send_magic_packet(&mut self) -> bool {
+        let target = self.genet.mac_state().addr;
+        self.net
+            .as_mut()
+            .is_some_and(|net| net.send_magic_packet(target))
+    }
+
     /// Queue an interrupt source for core 0; it waits for that core's CoreCtl enable.
     pub fn push_pending_irq(&mut self, src: u32) {
         self.pending_irqs.push_back(src);

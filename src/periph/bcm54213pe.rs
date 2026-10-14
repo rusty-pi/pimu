@@ -43,6 +43,21 @@
 //! and the IEEE clause-45-over-22 MMD window at `0x0D` / `0x0E`, which
 //! `phylib` uses for the EEE registers.
 //!
+//! # Power-down
+//!
+//! `BMCR.PDOWN` takes the link down whatever the cable does, and while it is set
+//! the registers other than `BMCR` ignore writes, as Linux's `bcm54xx_resume`
+//! says they do. Clearing it makes the PHY negotiate again.
+//!
+//! # Gigabit abilities
+//!
+//! The partner's 1000BASE-T abilities (`STAT1000`) are only there when the
+//! negotiation that produced the link advertised 1000BASE-T itself
+//! (`CTRL1000` bits 9 and 8). Which one it was is decided when negotiation
+//! starts — a soft reset, a restart, a power-up — not when `CTRL1000` is
+//! written, so a client that advertises 10/100 only has to restart
+//! auto-negotiation for the partner to stop looking gigabit-capable.
+//!
 //! Registers with no documented behaviour here read back what was last
 //! written (defaults 0). Everything is deterministic: soft reset, restart of
 //! auto-negotiation and power-down complete immediately.
@@ -114,6 +129,7 @@ pub const COVERAGE: Coverage = Coverage {
 };
 
 pub const BMCR_RESET: u16 = regs::BMCR_SOFT_RESET_MASK as u16;
+pub const BMCR_PDOWN: u16 = regs::BMCR_PDOWN_MASK as u16;
 pub const BMCR_ANRESTART: u16 = regs::BMCR_ANRESTART_MASK as u16;
 /// Reset value: auto-negotiation enabled, full duplex, speed-select 1000.
 const BMCR_DEFAULT: u16 = regs::BMCR_RESET as u16;
@@ -141,6 +157,8 @@ const ANER_NO_PARTNER: u16 = 0x0004;
 const NPTX_DEFAULT: u16 = regs::NPTX_RESET as u16;
 /// Advertise 1000BASE-T half and full.
 const CTRL1000_DEFAULT: u16 = regs::CTRL1000_RESET as u16;
+/// `ADVERTISE_1000FULL` and `ADVERTISE_1000HALF`.
+const CTRL1000_ADVERTISE_1000: u16 = 0x0300;
 /// 1000BASE-T full and half capable.
 const ESTATUS_VALUE: u16 = regs::ESTATUS_RESET as u16;
 /// "Initially all interrupts are masked in IMR" (`bcm54xx_config_init`).
@@ -180,6 +198,9 @@ pub struct Bcm54213pe {
     advertise: u16,
     nptx: u16,
     ctrl1000: u16,
+    /// The last negotiation advertised 1000BASE-T, so the partner's abilities
+    /// came through.
+    gigabit_exchanged: bool,
     ecr: u16,
     imr: u16,
     /// Clause-22 registers with no behaviour of their own: last written value.
@@ -213,6 +234,7 @@ impl Bcm54213pe {
             advertise: ADVERTISE_DEFAULT,
             nptx: NPTX_DEFAULT,
             ctrl1000: CTRL1000_DEFAULT,
+            gigabit_exchanged: CTRL1000_DEFAULT & CTRL1000_ADVERTISE_1000 != 0,
             ecr: 0,
             imr: IMR_DEFAULT,
             plain: [0; 32],
@@ -233,20 +255,31 @@ impl Bcm54213pe {
         self.link = link;
     }
 
-    /// The link is up: a partner is there and auto-negotiation has finished.
+    /// The link is up: a partner is there, the PHY is powered and
+    /// auto-negotiation has finished.
     pub fn link_up(&self) -> bool {
-        self.link
+        self.link && !self.powered_down()
+    }
+
+    fn powered_down(&self) -> bool {
+        self.bmcr & BMCR_PDOWN != 0
+    }
+
+    /// Negotiation starts over: what is advertised now is what the partner
+    /// answers.
+    fn negotiate(&mut self) {
+        self.gigabit_exchanged = self.ctrl1000 & CTRL1000_ADVERTISE_1000 != 0;
     }
 
     /// Clause-22 register read, as the MDIO controller sees it.
     pub fn read(&mut self, reg: u8) -> u16 {
         match reg & 0x1f {
             BMCR => self.bmcr,
-            BMSR if self.link => BMSR_LINK,
+            BMSR if self.link_up() => BMSR_LINK,
             BMSR => BMSR_NO_LINK,
-            LPA if self.link => LPA_LINK,
-            EXPANSION if self.link => ANER_LINK,
-            STAT1000 if self.link => STAT1000_LINK,
+            LPA if self.link_up() => LPA_LINK,
+            EXPANSION if self.link_up() => ANER_LINK,
+            STAT1000 if self.link_up() && self.gigabit_exchanged => STAT1000_LINK,
             PHYSID1 => (PHY_ID >> 16) as u16,
             PHYSID2 => PHY_ID as u16,
             ADVERTISE => self.advertise,
@@ -284,6 +317,9 @@ impl Bcm54213pe {
 
     /// Clause-22 register write.
     pub fn write(&mut self, reg: u8, v: u16) {
+        if reg & 0x1f != BMCR && self.powered_down() {
+            return;
+        }
         match reg & 0x1f {
             BMCR => {
                 if v & BMCR_RESET != 0 {
@@ -298,7 +334,11 @@ impl Bcm54213pe {
                     // Restart-AN self-clears. With no partner the restarted
                     // negotiation never completes; with one it is done by
                     // the next poll.
+                    let was_down = self.powered_down();
                     self.bmcr = v & !BMCR_ANRESTART;
+                    if v & BMCR_ANRESTART != 0 || (was_down && !self.powered_down()) {
+                        self.negotiate();
+                    }
                 }
             }
             ADVERTISE => self.advertise = v,
@@ -447,6 +487,116 @@ mod tests {
         assert_eq!(p.read(STAT1000), 0x0800);
         p.set_link(false);
         assert_eq!(p.read(BMSR) & (1 << 2), 0);
+    }
+
+    const BMSR_LSTATUS: u16 = 1 << 2;
+    const BMSR_ANEGCOMPLETE: u16 = 1 << 5;
+    const ADVERTISE_10_100: u16 = 0x01e1;
+    const FULL_100: u16 = 1 << 8;
+
+    /// What `genphy_read_status` resolves: the best ability both ends have,
+    /// as a speed in Mb/s and whether it is full duplex.
+    fn resolved(p: &mut Bcm54213pe) -> Option<(u32, bool)> {
+        let common = p.read(LPA) & p.read(ADVERTISE);
+        let gigabit = p.read(STAT1000) & (p.read(CTRL1000) << 2);
+        if gigabit & 0x0800 != 0 {
+            Some((1000, true))
+        } else if gigabit & 0x0400 != 0 {
+            Some((1000, false))
+        } else if common & FULL_100 != 0 {
+            Some((100, true))
+        } else if common & 0x0080 != 0 {
+            Some((100, false))
+        } else if common & 0x0040 != 0 {
+            Some((10, true))
+        } else if common & 0x0020 != 0 {
+            Some((10, false))
+        } else {
+            None
+        }
+    }
+
+    #[test]
+    fn a_powered_down_phy_has_no_link_whatever_the_cable_does() {
+        let mut p = Bcm54213pe::new();
+        p.set_link(true);
+        assert!(p.link_up());
+        // `bcm54xx_suspend`: BMCR is written as the power-down bit alone.
+        p.write(BMCR, BMCR_PDOWN);
+        assert!(!p.link_up());
+        assert_eq!(p.read(BMCR), BMCR_PDOWN);
+        let bmsr = p.read(BMSR);
+        assert_eq!(bmsr & (BMSR_LSTATUS | BMSR_ANEGCOMPLETE), 0);
+        assert_ne!(bmsr & (1 << 3), 0, "still AN capable");
+        assert_eq!(p.read(LPA), 0);
+        assert_eq!(p.read(STAT1000), 0);
+        assert_eq!(p.read(EXPANSION), ANER_NO_PARTNER);
+    }
+
+    #[test]
+    fn a_powered_down_phy_ignores_writes_but_to_bmcr() {
+        let mut p = Bcm54213pe::new();
+        p.write(BMCR, BMCR_PDOWN);
+        p.write(ADVERTISE, 0x0de1);
+        p.write(CTRL1000, 0);
+        assert_eq!(p.read(ADVERTISE), ADVERTISE_DEFAULT);
+        assert_eq!(p.read(CTRL1000), CTRL1000_DEFAULT);
+        p.write(BMCR, 0);
+        p.write(ADVERTISE, 0x0de1);
+        assert_eq!(p.read(ADVERTISE), 0x0de1);
+    }
+
+    #[test]
+    fn power_up_then_a_restart_brings_a_10_100_link_back_at_100_full() {
+        let mut p = Bcm54213pe::new();
+        p.set_link(true);
+        p.write(BMCR, BMCR_PDOWN);
+        // The sequence the firmware runs after Linux has closed the port.
+        let bmcr = p.read(BMCR);
+        p.write(BMCR, bmcr & !BMCR_PDOWN);
+        p.write(BMCR, BMCR_RESET);
+        assert_eq!(p.read(BMCR), BMCR_DEFAULT);
+        p.write(ADVERTISE, ADVERTISE_10_100);
+        p.write(CTRL1000, 0);
+        p.write(BMCR, 0x1200);
+        let bmsr = p.read(BMSR);
+        assert_eq!(
+            bmsr & (BMSR_LSTATUS | BMSR_ANEGCOMPLETE),
+            BMSR_LSTATUS | BMSR_ANEGCOMPLETE
+        );
+        assert!(p.link_up());
+        assert_eq!(p.read(LPA), LPA_LINK);
+        assert_eq!(p.read(STAT1000), 0, "no gigabit ability is exchanged");
+        assert_eq!(resolved(&mut p), Some((100, true)));
+    }
+
+    #[test]
+    fn a_gigabit_advertisement_still_resolves_to_gigabit() {
+        let mut p = Bcm54213pe::new();
+        p.set_link(true);
+        p.write(BMCR, BMCR_RESET);
+        p.write(ADVERTISE, 0x0de1);
+        p.write(BMCR, BMCR_DEFAULT | BMCR_ANRESTART);
+        assert_eq!(p.read(STAT1000), STAT1000_LINK);
+        assert_eq!(resolved(&mut p), Some((1000, true)));
+    }
+
+    #[test]
+    fn the_partners_gigabit_ability_is_decided_when_negotiation_starts() {
+        let mut p = Bcm54213pe::new();
+        p.set_link(true);
+        p.write(CTRL1000, 0);
+        assert_eq!(p.read(STAT1000), STAT1000_LINK, "not renegotiated yet");
+        p.write(BMCR, BMCR_DEFAULT | BMCR_ANRESTART);
+        assert_eq!(p.read(STAT1000), 0);
+        p.write(CTRL1000, CTRL1000_DEFAULT);
+        p.write(BMCR, BMCR_DEFAULT | BMCR_ANRESTART);
+        assert_eq!(p.read(STAT1000), STAT1000_LINK);
+        // Powering up negotiates again too.
+        p.write(CTRL1000, 0);
+        p.write(BMCR, BMCR_PDOWN);
+        p.write(BMCR, 0);
+        assert_eq!(p.read(STAT1000), 0);
     }
 
     #[test]

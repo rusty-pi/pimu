@@ -17,6 +17,14 @@
 //! it, against the [`crate::net::NetBackend`] the machine attached; with none
 //! attached there is no cable and the PHY reports no link.
 //!
+//! Wake-on-LAN: with `HFB_CTRL.ACPI_EN`, `UMAC_MPD_CTRL.EN` and `UMAC_CMD.RX_EN`
+//! all set, `RBUF_STATUS.WOL` reads 1 and received frames no longer reach the
+//! rings, whether or not the DMA is on. A frame that passes the destination
+//! filter and holds a magic packet sets `INTRL2_0` bit 12 and
+//! `RBUF_STATUS.MPD_INTR_ACTIVE`; any other is dropped. The register contract is
+//! what `bcmgenet_wol.c` drives; how the hardware matches a packet has not been
+//! measured on a board (`specs/genet.toml`, `UMAC_MPD_CTRL`).
+//!
 //! Two inferences the registers alone do not settle:
 //!
 //! * With `DMA_TX_OW_CRC` *and* `DMA_TX_APPEND_CRC` set — what the bootloader
@@ -63,6 +71,7 @@ pub const COVERAGE: Coverage = Coverage {
         regs::INTRL2_CPU_MASK_SET,
         regs::INTRL2_CPU_MASK_CLEAR,
         regs::RBUF_CTRL,
+        regs::RBUF_STATUS,
         regs::RBUF_CHK_CTRL,
         regs::RBUF_TBUF_SIZE_CTRL,
         regs::TBUF_CTRL,
@@ -82,6 +91,9 @@ pub const COVERAGE: Coverage = Coverage {
         regs::UMAC_608,
         regs::UMAC_MDIO_CMD,
         regs::UMAC_MDIO_CFG,
+        regs::UMAC_MPD_CTRL,
+        regs::UMAC_MPD_PW_MS,
+        regs::UMAC_MPD_PW_LS,
         regs::RDMA_DESC,
         regs::RDMA_RING_WRITE_PTR,
         regs::RDMA_RING_WRITE_PTR_HI,
@@ -141,6 +153,7 @@ pub const UMAC_IRQ_RXDMA_MBDONE: u32 = regs::INTRL2_CPU_STAT_RXDMA_MBDONE_MASK;
 pub const UMAC_IRQ_TXDMA_MBDONE: u32 = regs::INTRL2_CPU_STAT_TXDMA_MBDONE_MASK;
 pub const UMAC_IRQ_MDIO_DONE: u32 = regs::INTRL2_CPU_STAT_MDIO_DONE_MASK;
 pub const UMAC_IRQ_MDIO_ERROR: u32 = regs::INTRL2_CPU_STAT_MDIO_ERROR_MASK;
+pub const UMAC_IRQ_MPD_R: u32 = regs::INTRL2_CPU_STAT_MPD_R_MASK;
 const RBUF_64B_EN: u32 = regs::RBUF_CTRL_STATUS64_MASK;
 const RBUF_ALIGN_2B: u32 = regs::RBUF_CTRL_ALIGN_2B_MASK;
 const TBUF_64B_EN: u32 = regs::TBUF_CTRL_STATUS64_MASK;
@@ -166,6 +179,7 @@ const HFB_RAM: u32 = regs::HFB_RAM;
 const HFB_FILTER_WORDS: usize = 128;
 const HFB_FILTERS: usize = regs::HFB_RAM_COUNT as usize / HFB_FILTER_WORDS;
 const HFB_EN: u32 = regs::HFB_CTRL_EN_MASK;
+const HFB_ACPI_EN: u32 = regs::HFB_CTRL_ACPI_EN_MASK;
 const HFB_FLT_ENABLE: u32 = regs::HFB_FLT_ENABLE;
 const HFB_FLT_LEN: u32 = regs::HFB_FLT_LEN;
 pub const RING_PTR: u32 = regs::RDMA_RING_WRITE_PTR - RDMA_RINGS;
@@ -207,6 +221,14 @@ const CMD_CRC_FWD: u32 = regs::UMAC_CMD_CRC_FWD_MASK;
 const CMD_HD_EN: u32 = regs::UMAC_CMD_HD_EN_MASK;
 const CMD_RX_PAUSE_IGNORE: u32 = regs::UMAC_CMD_RX_PAUSE_IGNORE_MASK;
 const CMD_TX_PAUSE_IGNORE: u32 = regs::UMAC_CMD_TX_PAUSE_IGNORE_MASK;
+const MPD_EN: u32 = regs::UMAC_MPD_CTRL_EN_MASK;
+const MPD_PW_EN: u32 = regs::UMAC_MPD_CTRL_PW_EN_MASK;
+const RBUF_STATUS_WOL: u32 = regs::RBUF_STATUS_WOL_MASK;
+const RBUF_STATUS_MPD_INTR_ACTIVE: u32 = regs::RBUF_STATUS_MPD_INTR_ACTIVE_MASK;
+/// The sync stream of a magic packet: six `0xFF` bytes.
+const MAGIC_SYNC_LEN: usize = 6;
+/// Times the station address repeats after the sync stream.
+const MAGIC_REPEATS: usize = 16;
 pub const MDIO_START_BUSY: u32 = regs::UMAC_MDIO_CMD_START_BUSY_MASK;
 pub const MDIO_READ_FAIL: u32 = regs::UMAC_MDIO_CMD_READ_FAIL_MASK;
 const MDIO_OP: u32 = regs::UMAC_MDIO_CMD_OP_MASK;
@@ -236,6 +258,9 @@ pub struct Genet {
     /// `UMAC_MDIO_CMD`), so this reproduces the symptom, not its cause.
     phy_silent: bool,
     kick: bool,
+    /// A magic packet has been seen since Wake-on-LAN mode was entered:
+    /// `RBUF_STATUS.MPD_INTR_ACTIVE`.
+    mpd_intr_active: bool,
     tx_frame: Vec<u8>,
     /// The frame being gathered ends in the slot for its FCS (`DMA_TX_OW_CRC`).
     tx_ow_crc: bool,
@@ -263,6 +288,8 @@ pub struct Stats {
     pub rx: u64,
     pub rx_filtered: u64,
     pub rx_dropped: u64,
+    /// Magic packets that raised the wake interrupt.
+    pub rx_wake: u64,
 }
 
 impl Default for Genet {
@@ -297,6 +324,7 @@ impl Genet {
             phy: Bcm54213pe::new(),
             phy_silent: std::env::var("PIMU_PHY_SILENT").is_ok_and(|v| v != "0"),
             kick: false,
+            mpd_intr_active: false,
             tx_frame: Vec::new(),
             tx_ow_crc: false,
             rx_pending: None,
@@ -322,6 +350,7 @@ impl Genet {
                 }
             }
             UMAC_MODE => self.umac_mode(),
+            regs::RBUF_STATUS => self.rbuf_status(),
             _ if off == RDMA_REGS + DMA_STATUS || off == TDMA_REGS + DMA_STATUS => {
                 let ctrl = self.reg(off - DMA_STATUS + DMA_CTRL);
                 !ctrl & (DMA_STATUS_RINGS | 1)
@@ -343,7 +372,7 @@ impl Genet {
                     _ => {}
                 }
             }
-            UMAC_MODE => {}
+            UMAC_MODE | regs::RBUF_STATUS => {}
             UMAC_MDIO_CMD => self.mdio_cmd(v),
             UMAC_MIB_CTRL => {
                 if v & 7 != 0 {
@@ -354,6 +383,9 @@ impl Genet {
             }
             _ if off == RDMA_REGS + DMA_STATUS || off == TDMA_REGS + DMA_STATUS => {}
             _ => self.regs[(off / 4) as usize] = v,
+        }
+        if matches!(off, regs::UMAC_MPD_CTRL | HFB_CTRL) && !self.wol_requested() {
+            self.mpd_intr_active = false;
         }
         if (RDMA_RINGS..RDMA_REGS + 0x40).contains(&off)
             || (TDMA_RINGS..TDMA_REGS + 0x40).contains(&off)
@@ -548,10 +580,81 @@ impl Genet {
             })
     }
 
+    /// `HFB_CTRL.ACPI_EN` and `UMAC_MPD_CTRL.EN`: the driver has asked for
+    /// Wake-on-LAN by magic packet.
+    fn wol_requested(&self) -> bool {
+        self.reg(HFB_CTRL) & HFB_ACPI_EN != 0 && self.reg(regs::UMAC_MPD_CTRL) & MPD_EN != 0
+    }
+
+    /// Wake-on-LAN mode is ready: `RBUF_STATUS.WOL`.
+    fn wol_ready(&self) -> bool {
+        self.wol_requested() && self.reg(UMAC_CMD) & CMD_RX_EN != 0
+    }
+
+    fn rbuf_status(&self) -> u32 {
+        let mut status = 0;
+        if self.wol_ready() {
+            status |= RBUF_STATUS_WOL;
+        }
+        if self.mpd_intr_active {
+            status |= RBUF_STATUS_MPD_INTR_ACTIVE;
+        }
+        status
+    }
+
+    /// Past the MAC's address filter: unicast to the station address,
+    /// anything to a group address, or anything at all when promiscuous.
+    fn addressed_to_us(&self, dst: [u8; 6]) -> bool {
+        dst[0] & 1 != 0 || self.reg(UMAC_CMD) & CMD_PROMISC != 0 || dst == self.mac_addr()
+    }
+
+    fn mpd_password(&self) -> [u8; 6] {
+        let [_, _, a, b] = self.reg(regs::UMAC_MPD_PW_MS).to_be_bytes();
+        let [c, d, e, f] = self.reg(regs::UMAC_MPD_PW_LS).to_be_bytes();
+        [a, b, c, d, e, f]
+    }
+
+    /// Six `0xFF` bytes and 16 copies of the station address, then the
+    /// password with `UMAC_MPD_CTRL.PW_EN`, anywhere in the frame.
+    fn is_magic_packet(&self, frame: &[u8]) -> bool {
+        let mut pattern = vec![0xff; MAGIC_SYNC_LEN];
+        for _ in 0..MAGIC_REPEATS {
+            pattern.extend_from_slice(&self.mac_addr());
+        }
+        if self.reg(regs::UMAC_MPD_CTRL) & MPD_PW_EN != 0 {
+            pattern.extend_from_slice(&self.mpd_password());
+        }
+        frame.windows(pattern.len()).any(|w| w == pattern)
+    }
+
+    /// Wake-on-LAN mode: the frames go to the detector, not to a ring.
+    fn run_wol_rx(&mut self, net: &mut Box<dyn NetBackend>) {
+        while let Some(frame) = self.rx_pending.take().or_else(|| self.take_frame(net)) {
+            if frame.len() < 14 {
+                continue;
+            }
+            if !self.addressed_to_us(frame[..6].try_into().unwrap()) {
+                self.stats.rx_filtered += 1;
+            } else if self.is_magic_packet(&frame) {
+                self.irq_stat[0] |= UMAC_IRQ_MPD_R;
+                self.mpd_intr_active = true;
+                self.stats.rx_wake += 1;
+            } else {
+                self.stats.rx_dropped += 1;
+            }
+        }
+    }
+
     fn run_rx(&mut self, ram: &mut Ram, net: &mut Option<Box<dyn NetBackend>>) {
         let Some(net) = net else { return };
+        if !self.link_active(CMD_RX_EN) {
+            return;
+        }
+        if self.wol_ready() {
+            return self.run_wol_rx(net);
+        }
         let rdma_on = self.reg(RDMA_REGS + DMA_CTRL) & DMA_EN != 0;
-        if !rdma_on || !self.link_active(CMD_RX_EN) {
+        if !rdma_on {
             return;
         }
         let rbuf = self.reg(RBUF_CTRL);
@@ -562,7 +665,7 @@ impl Genet {
             }
             let dst: [u8; 6] = frame[..6].try_into().unwrap();
             let group = dst[0] & 1 != 0;
-            if !group && cmd & CMD_PROMISC == 0 && dst != self.mac_addr() {
+            if !self.addressed_to_us(dst) {
                 self.stats.rx_filtered += 1;
                 continue;
             }
@@ -745,7 +848,7 @@ impl MmioDevice for Genet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::periph::bcm54213pe::{BMCR, BMCR_RESET, BMSR, PHYSID1, PHYSID2};
+    use crate::periph::bcm54213pe::{BMCR, BMCR_PDOWN, BMCR_RESET, BMSR, PHYSID1, PHYSID2};
 
     fn rd(g: &mut Genet, off: u32) -> u32 {
         g.read(off, Width::Word).unwrap()
@@ -825,6 +928,17 @@ mod tests {
         let bmsr = mdio_read(&mut g, 1, u32::from(BMSR)).unwrap();
         assert_eq!(bmsr, 0x7949);
         assert_eq!(rd(&mut g, UMAC_MODE) & (1 << 5), 0);
+    }
+
+    #[test]
+    fn powering_the_phy_down_takes_the_macs_link_down() {
+        let mut g = Genet::new();
+        g.phy.set_link(true);
+        assert_ne!(rd(&mut g, UMAC_MODE) & (1 << 5), 0);
+        mdio_write(&mut g, 1, u32::from(BMCR), BMCR_PDOWN);
+        assert_eq!(rd(&mut g, UMAC_MODE) & (1 << 5), 0);
+        mdio_write(&mut g, 1, u32::from(BMCR), BMCR_RESET);
+        assert_ne!(rd(&mut g, UMAC_MODE) & (1 << 5), 0);
     }
 
     #[test]
@@ -1108,6 +1222,249 @@ mod tests {
         assert_eq!(rd(&mut g, RDMA_DESC) >> 16, 68);
         let fcs = ram.read_slice(0x4000 + 64, 4).unwrap();
         assert_eq!(fcs, crc32(&f).to_le_bytes());
+    }
+
+    const UMAC_MPD_CTRL: u32 = regs::UMAC_MPD_CTRL;
+    const RBUF_STATUS: u32 = regs::RBUF_STATUS;
+
+    fn magic(target: [u8; 6]) -> Vec<u8> {
+        crate::net::magic_packet(crate::net::peer::SERVER_MAC, target)
+    }
+
+    fn set_bits(g: &mut Genet, off: u32, bits: u32) {
+        let v = rd(g, off) | bits;
+        wr(g, off, v);
+    }
+
+    /// `bcmgenet_wol_power_down_cfg`: magic packet detection on, then ACPI mode.
+    fn enter_wol(g: &mut Genet) {
+        set_bits(g, UMAC_MPD_CTRL, MPD_EN);
+        set_bits(g, HFB_CTRL, HFB_ACPI_EN);
+    }
+
+    /// A magic packet for `MAC` with the password after it.
+    fn magic_with_password(password: [u8; 6]) -> Vec<u8> {
+        let mut f = magic(MAC);
+        f.extend_from_slice(&password);
+        f
+    }
+
+    fn set_password(g: &mut Genet, password: [u8; 6]) {
+        wr(
+            g,
+            regs::UMAC_MPD_PW_MS,
+            u32::from(password[0]) << 8 | u32::from(password[1]),
+        );
+        wr(
+            g,
+            regs::UMAC_MPD_PW_LS,
+            u32::from_be_bytes(password[2..].try_into().unwrap()),
+        );
+        set_bits(g, UMAC_MPD_CTRL, MPD_PW_EN);
+    }
+
+    #[test]
+    fn wol_status_needs_acpi_mode_detection_and_the_receiver() {
+        let mut g = Genet::new();
+        bring_up(&mut g, 2);
+        assert_eq!(rd(&mut g, RBUF_STATUS), 0);
+        wr(&mut g, UMAC_MPD_CTRL, MPD_EN);
+        assert_eq!(rd(&mut g, RBUF_STATUS), 0, "detection alone");
+        wr(&mut g, HFB_CTRL, HFB_ACPI_EN);
+        assert_eq!(rd(&mut g, RBUF_STATUS), RBUF_STATUS_WOL);
+        wr(&mut g, UMAC_CMD, CMD_TX_EN);
+        assert_eq!(rd(&mut g, RBUF_STATUS), 0, "receiver off");
+        wr(&mut g, UMAC_CMD, CMD_TX_EN | CMD_RX_EN);
+        wr(&mut g, UMAC_MPD_CTRL, 0);
+        assert_eq!(rd(&mut g, RBUF_STATUS), 0, "detection off");
+        wr(&mut g, regs::RBUF_STATUS, u32::MAX);
+        assert_eq!(rd(&mut g, RBUF_STATUS), 0, "read only");
+    }
+
+    #[test]
+    fn a_magic_packet_raises_the_wake_interrupt_and_skips_the_rings() {
+        let mut g = Genet::new();
+        let mut ram = Ram::new(0, 1 << 20);
+        let (mut net, _) = attach(&mut g, vec![magic(MAC)]);
+        bring_up(&mut g, 2);
+        enter_wol(&mut g);
+        wr(&mut g, RDMA_DESC + 4, 0x4000);
+        g.service(0, &mut ram, &mut net);
+        assert_eq!(rd(&mut g, INTRL2_0) & UMAC_IRQ_MPD_R, UMAC_IRQ_MPD_R);
+        assert_eq!(
+            rd(&mut g, RBUF_STATUS),
+            RBUF_STATUS_WOL | RBUF_STATUS_MPD_INTR_ACTIVE
+        );
+        assert_eq!(rd(&mut g, RDMA_RINGS + 16 * 0x40 + RDMA_PROD_INDEX), 0);
+        assert_eq!(rd(&mut g, INTRL2_0) & UMAC_IRQ_RXDMA_MBDONE, 0);
+        assert_eq!((g.stats.rx, g.stats.rx_wake), (0, 1));
+    }
+
+    #[test]
+    fn the_wake_interrupt_follows_its_mask_and_clears_through_the_clear_register() {
+        let mut g = Genet::new();
+        let mut ram = Ram::new(0, 1 << 20);
+        let (mut net, _) = attach(&mut g, vec![magic(MAC)]);
+        bring_up(&mut g, 2);
+        enter_wol(&mut g);
+        g.service(0, &mut ram, &mut net);
+        assert_eq!(
+            g.irq_lines(),
+            [false, false],
+            "masked until a driver unmasks it"
+        );
+        wr(&mut g, INTRL2_0 + INTRL2_CPU_MASK_CLEAR, UMAC_IRQ_MPD_R);
+        assert_eq!(g.irq_lines(), [true, false]);
+        wr(&mut g, INTRL2_0 + INTRL2_CPU_CLEAR, UMAC_IRQ_MPD_R);
+        assert_eq!(g.irq_lines(), [false, false]);
+        assert_eq!(
+            rd(&mut g, RBUF_STATUS) & RBUF_STATUS_MPD_INTR_ACTIVE,
+            RBUF_STATUS_MPD_INTR_ACTIVE,
+            "the mode has not ended"
+        );
+    }
+
+    #[test]
+    fn a_magic_packet_is_found_anywhere_in_the_frame() {
+        let mut g = Genet::new();
+        let mut ram = Ram::new(0, 1 << 20);
+        let mut udp = frame(crate::net::BROADCAST, 42);
+        udp.extend_from_slice(&magic(MAC)[14..]);
+        udp.extend_from_slice(&[0xee; 9]);
+        let (mut net, _) = attach(&mut g, vec![udp, magic(MAC)[..100].to_vec()]);
+        bring_up(&mut g, 2);
+        enter_wol(&mut g);
+        g.service(0, &mut ram, &mut net);
+        assert_eq!(
+            g.stats.rx_wake, 1,
+            "the second frame ends one address short"
+        );
+    }
+
+    #[test]
+    fn frames_without_a_magic_packet_are_dropped() {
+        let mut g = Genet::new();
+        let mut ram = Ram::new(0, 1 << 20);
+        let other = [0x02, 0, 0x5e, 0, 0x53, 0x07];
+        let mut no_sync = magic(MAC);
+        no_sync[14..20].fill(0);
+        let mut one_short = magic(MAC);
+        one_short.truncate(one_short.len() - 6);
+        one_short.resize(one_short.len() + 6, 0);
+        let (mut net, _) = attach(
+            &mut g,
+            vec![
+                frame(MAC, 100),
+                frame(crate::net::BROADCAST, 100),
+                magic(other),
+                no_sync,
+                one_short,
+                magic(MAC)[..14 + 6 + 15 * 6].to_vec(),
+            ],
+        );
+        bring_up(&mut g, 2);
+        enter_wol(&mut g);
+        g.service(0, &mut ram, &mut net);
+        assert_eq!(rd(&mut g, INTRL2_0) & UMAC_IRQ_MPD_R, 0);
+        assert_eq!(rd(&mut g, RBUF_STATUS), RBUF_STATUS_WOL);
+        assert_eq!((g.stats.rx_wake, g.stats.rx_dropped, g.stats.rx), (0, 6, 0));
+    }
+
+    #[test]
+    fn the_address_filter_still_applies() {
+        let mut g = Genet::new();
+        let mut ram = Ram::new(0, 1 << 20);
+        let mut to_other = magic(MAC);
+        to_other[..6].copy_from_slice(&[0x02, 0, 0x5e, 0, 0x53, 0x07]);
+        let mut to_us = to_other.clone();
+        to_us[..6].copy_from_slice(&MAC);
+        let (mut net, _) = attach(&mut g, vec![to_other.clone(), to_us, to_other]);
+        bring_up(&mut g, 2);
+        enter_wol(&mut g);
+        g.service(0, &mut ram, &mut net);
+        assert_eq!((g.stats.rx_filtered, g.stats.rx_wake), (2, 1));
+    }
+
+    #[test]
+    fn a_promiscuous_mac_wakes_for_a_magic_packet_to_another_address() {
+        let mut g = Genet::new();
+        let mut ram = Ram::new(0, 1 << 20);
+        let mut to_other = magic(MAC);
+        to_other[..6].copy_from_slice(&[0x02, 0, 0x5e, 0, 0x53, 0x07]);
+        let (mut net, _) = attach(&mut g, vec![to_other]);
+        bring_up(&mut g, 2);
+        wr(&mut g, UMAC_CMD, CMD_TX_EN | CMD_RX_EN | CMD_PROMISC);
+        enter_wol(&mut g);
+        g.service(0, &mut ram, &mut net);
+        assert_eq!(g.stats.rx_wake, 1);
+    }
+
+    #[test]
+    fn the_password_must_follow_the_addresses() {
+        let password = [0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc];
+        let mut g = Genet::new();
+        let mut ram = Ram::new(0, 1 << 20);
+        let (mut net, _) = attach(
+            &mut g,
+            vec![
+                magic(MAC),
+                magic_with_password([0x12, 0x34, 0x56, 0x78, 0x9a, 0xbd]),
+                magic_with_password(password),
+            ],
+        );
+        bring_up(&mut g, 2);
+        enter_wol(&mut g);
+        set_password(&mut g, password);
+        g.service(0, &mut ram, &mut net);
+        assert_eq!(g.stats.rx_wake, 1, "only the frame with the password");
+        assert_eq!(g.stats.rx_dropped, 2);
+    }
+
+    #[test]
+    fn leaving_wake_on_lan_mode_restores_the_rings() {
+        let mut g = Genet::new();
+        let mut ram = Ram::new(0, 1 << 20);
+        let (mut net, _) = attach(&mut g, vec![magic(MAC)]);
+        bring_up(&mut g, 2);
+        enter_wol(&mut g);
+        g.service(0, &mut ram, &mut net);
+        assert_ne!(rd(&mut g, RBUF_STATUS) & RBUF_STATUS_MPD_INTR_ACTIVE, 0);
+        // `bcmgenet_wol_power_up_cfg`: detection off, then ACPI mode.
+        wr(&mut g, UMAC_MPD_CTRL, 0);
+        assert_eq!(rd(&mut g, RBUF_STATUS), 0);
+        wr(&mut g, HFB_CTRL, 0);
+        wr(&mut g, RDMA_DESC + 4, 0x4000);
+        let (mut net, _) = attach(&mut g, vec![frame(MAC, 100)]);
+        g.service(0, &mut ram, &mut net);
+        assert_eq!(rd(&mut g, RDMA_RINGS + 16 * 0x40 + RDMA_PROD_INDEX), 1);
+        assert_eq!(g.stats.rx, 1);
+    }
+
+    #[test]
+    fn detection_without_acpi_mode_leaves_the_rings_alone() {
+        let mut g = Genet::new();
+        let mut ram = Ram::new(0, 1 << 20);
+        let (mut net, _) = attach(&mut g, vec![magic(MAC)]);
+        bring_up(&mut g, 2);
+        wr(&mut g, UMAC_MPD_CTRL, MPD_EN);
+        wr(&mut g, RDMA_DESC + 4, 0x4000);
+        g.service(0, &mut ram, &mut net);
+        assert_eq!(rd(&mut g, RDMA_RINGS + 16 * 0x40 + RDMA_PROD_INDEX), 1);
+        assert_eq!(rd(&mut g, INTRL2_0) & UMAC_IRQ_MPD_R, 0);
+        assert_eq!(rd(&mut g, RBUF_STATUS), 0);
+    }
+
+    #[test]
+    fn wake_on_lan_mode_needs_no_dma() {
+        let mut g = Genet::new();
+        let mut ram = Ram::new(0, 1 << 20);
+        let (mut net, _) = attach(&mut g, vec![magic(MAC)]);
+        wr(&mut g, UMAC_MAC0, 0x0200_5e00);
+        wr(&mut g, UMAC_MAC1, 0x5301);
+        wr(&mut g, UMAC_CMD, CMD_RX_EN);
+        enter_wol(&mut g);
+        g.service(0, &mut ram, &mut net);
+        assert_eq!(g.stats.rx_wake, 1);
     }
 
     #[test]

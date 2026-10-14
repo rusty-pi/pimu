@@ -619,9 +619,25 @@ impl ArmSide {
         self.unpark_if(m, |_, _| true, t);
     }
 
-    /// Run for `budget` cycles, or until a core stops.
+    /// The clock manager holds PLLB's ARM channel: time passes for the cores
+    /// and none of them runs. A parked core is brought up to date first, so the
+    /// held time is not credited to it as polling.
+    fn hold(&mut self, m: &Machine, end: u64) {
+        let t = self.cycles;
+        self.unpark_if(m, |_, _| true, t);
+        self.slept += end - self.cycles;
+        self.cycles = end;
+        self.dirty = true;
+    }
+
+    /// Run for `budget` cycles, or until a core stops. While the clock manager
+    /// holds the ARM channel (`CM_PLLB.HOLDARM`) the cycles pass without a
+    /// core running.
     pub fn run(&mut self, m: &mut Machine, budget: u64) {
         let end = self.cycles + budget;
+        if m.clockman.arm_held() {
+            return self.hold(m, end);
+        }
         if self.prof_from.is_some_and(|t| m.systimer.now_us() >= t) {
             self.prof = Some(Default::default());
             self.prof_from = None;
@@ -1559,6 +1575,76 @@ mod tests {
         m.systimer.jump(1000);
         arm.catch_up(&mut m);
         assert_eq!(arm.cycles, 1500 + 1_500_000);
+    }
+
+    /// Write the clock manager's `PLLB` the way the firmware does, password
+    /// byte and all.
+    fn write_pllb(m: &mut Machine, v: u32) {
+        use crate::bus::Bus;
+        let addr = crate::soc::bcm2711::CM_BASE + crate::spec::cm::PLLB;
+        m.store32(addr, 0x5A00_0000 | v).unwrap();
+    }
+
+    #[test]
+    fn holding_the_arm_channel_stops_the_cores_until_it_is_released() {
+        // 1: add x1, x1, #1; b 1b — x1 counts the cycles pairwise.
+        let mut m = machine_with(&[0x9100_0421, 0x17FF_FFFF]);
+        let mut arm = ArmSide::with_cores(1);
+        arm.catch_up(&mut m);
+        let us = |m: &mut Machine, arm: &mut ArmSide, us: u64| {
+            m.tick(54 * us);
+            arm.catch_up(m);
+        };
+        us(&mut m, &mut arm, 10);
+        assert_eq!(arm.cores[0].cpu.x[1], 7_500);
+
+        write_pllb(&mut m, crate::spec::cm::PLLB_HOLDARM_MASK);
+        us(&mut m, &mut arm, 10);
+        assert_eq!(arm.cores[0].cpu.x[1], 7_500, "no clock, no progress");
+        assert_eq!(arm.cycles, 30_000, "the time still passed");
+        assert_eq!(
+            arm.cores[0].cpu.pc & !0xFFF,
+            0,
+            "and the core is where it was"
+        );
+
+        write_pllb(&mut m, 0);
+        us(&mut m, &mut arm, 5);
+        assert_eq!(
+            arm.cores[0].cpu.x[1],
+            7_500 + 3_750,
+            "it carries on, not caught up"
+        );
+        assert_eq!(arm.cycles, 37_500);
+    }
+
+    #[test]
+    fn a_held_arm_channel_reads_back_and_a_parked_core_is_not_credited_the_time() {
+        use crate::bus::Bus;
+        // x1 = a RAM word; 1: ldr x2, [x1]; cbz x2, 1b — a poll that parks.
+        let code = [0xF940_0022, 0xB4FF_FFE2, B_SELF];
+        let mut m = machine_with(&code);
+        let mut arm = ArmSide::with_cores(1);
+        arm.cores[0].cpu.x[1] = 0x800;
+        arm.catch_up(&mut m);
+        m.tick(54 * 100);
+        arm.catch_up(&mut m);
+        arm.settle(&m);
+        let before = arm.cores[0].insns;
+        // 100 us of polling, parked and not yet counted, then a held millisecond.
+        m.tick(54 * 100);
+        arm.catch_up(&mut m);
+        write_pllb(&mut m, crate::spec::cm::PLLB_HOLDARM_MASK);
+        let at = crate::soc::bcm2711::CM_BASE + crate::spec::cm::PLLB;
+        assert_eq!(m.load32(at).unwrap(), crate::spec::cm::PLLB_HOLDARM_MASK);
+        m.tick(54 * 1000);
+        arm.catch_up(&mut m);
+        arm.settle(&m);
+        let ran = arm.cores[0].insns - before;
+        assert!(
+            (149_000..=151_000).contains(&ran),
+            "{ran} instructions in 100 us, then a held 1 ms"
+        );
     }
 
     #[test]
