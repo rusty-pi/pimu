@@ -1490,8 +1490,13 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
     let mut rebooted_orderly = false;
     // Sent in one boot, it is not owed to the next.
     let mut magic_packet_after = opts.magic_packet_after.clone();
+    // The DRAM keeps its contents through a reset, as a watchdog reset leaves it.
+    let mut kept_ram: Option<Vec<u8>> = None;
     let (report, emu, start) = 'boot: loop {
         let mut machine = rig.machine(&flash)?;
+        if let Some(ram) = kept_ram.take() {
+            machine.ram.restore_contents(ram);
+        }
         if let Some(fuses) = &fuses {
             machine.config_otp.fuse_rows(fuses);
         }
@@ -1555,6 +1560,7 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
                     );
                 }
                 println!();
+                kept_ram = Some(emu.machine.ram.take_contents());
                 continue 'boot;
             }
             println!("\n=== RESET (reboot {reboots}) — giving up after 4 reboots ===");
