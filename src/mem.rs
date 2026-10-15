@@ -36,7 +36,11 @@ impl Ram {
 
     /// Put back what [`Ram::take_contents`] took, into a RAM of the same size.
     pub fn restore_contents(&mut self, data: Vec<u8>) {
-        assert_eq!(data.len(), self.data.len(), "the DRAM keeps its size across a reset");
+        assert_eq!(
+            data.len(),
+            self.data.len(),
+            "the DRAM keeps its size across a reset"
+        );
         self.data = data;
     }
 
