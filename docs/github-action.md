@@ -4,8 +4,9 @@
 runner from the project's apt repository (see the [README](../README.md)) and,
 if you give it arguments, runs it. It downloads the package with `apt-get` run as
 the runner's own user, unpacks it into the runner's temp directory and adds
-that to `PATH`, so it needs no `sudo` and leaves the system's packages alone. Use it to boot your own
-firmware and compare the serial transcript in CI, without building pimu.
+that to `PATH`, so it needs no `sudo` and leaves the system's packages alone.
+Use it to boot your own firmware and compare the serial transcript in CI,
+without building pimu.
 
 ```yaml
 jobs:
