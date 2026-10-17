@@ -62,8 +62,10 @@ const clean = (list) => list.flat().filter((child) => child != null && child !==
 function h(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(attrs)) {
-    if (value === false || value == null) continue;
-    if (key === "class") node.className = value;
+    if (value == null) continue;
+    if (key.startsWith("aria-") || key.startsWith("data-")) node.setAttribute(key, String(value));
+    else if (value === false) continue;
+    else if (key === "class") node.className = value;
     else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
     else if (key === "value") node.value = value;
     else if (key === "checked" || key === "disabled" || key === "selected") node[key] = !!value;

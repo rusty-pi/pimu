@@ -249,3 +249,4 @@ table.kv td.num { font-family: var(--mono); text-align: right; font-variant-nume
 
 :root { --ch-l: 36%; }
 @media (prefers-color-scheme: dark) { :root { --ch-l: 70%; } }
+.chip-btn[aria-pressed="true"]::before { content: "✓ "; }
