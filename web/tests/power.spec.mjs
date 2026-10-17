@@ -10,7 +10,7 @@ test.describe("powering on", () => {
     expect(request.images).toEqual({});
     expect(request.boot.kind).toBe("download");
     expect(request.boot.files.map((f) => f.path)).toEqual([
-      "start4.elf", "fixup4.dat", "bcm2711-rpi-4-b.dtb", "kernel8.img", "overlays/disable-bt.dtbo", "overlays/overlay_map.dtb",
+      "start4.elf", "fixup4.dat", "bcm2711-rpi-4-b.dtb", "kernel8.img",
     ]);
     expect(request.boot.files[0].url).toBe("https://raw.githubusercontent.com/raspberrypi/firmware/refs/heads/master/boot/start4.elf");
     expect(request.options).toEqual({
@@ -26,7 +26,7 @@ test.describe("powering on", () => {
       checkCoherency: false,
       checkAlignment: false,
       skipUnimpl: false,
-      configTxt: ["arm_64bit=1", "enable_uart=1", "uart_2ndstage=1", "dtoverlay=disable-bt"],
+      configTxt: ["arm_64bit=1", "enable_uart=1", "uart_2ndstage=1"],
       cmdline: "console=ttyAMA0,115200",
     });
   });

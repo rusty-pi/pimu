@@ -11,7 +11,6 @@ import {
 const FIRMWARE = "https://raw.githubusercontent.com/raspberrypi/firmware/refs/heads/master/boot/";
 const OFFICIAL_FILES = [
   "start4.elf", "fixup4.dat", "bcm2711-rpi-4-b.dtb", "kernel8.img",
-  "overlays/disable-bt.dtbo", "overlays/overlay_map.dtb",
 ].map((path) => ({ path, url: FIRMWARE + path }));
 const OFFICIAL_EEPROM =
   "https://raw.githubusercontent.com/raspberrypi/rpi-eeprom/master/firmware-2711/latest/pieeprom-2026-08-04.bin";
@@ -36,7 +35,7 @@ const LOG_CHANNELS = [
 
 const DEFAULT_STATE = {
   sd: { mode: "official", image: { kind: "url", url: "" }, github: { repo: "raspberrypi/firmware", ref: "master", path: "boot" } },
-  configTxt: "arm_64bit=1\nenable_uart=1\nuart_2ndstage=1\ndtoverlay=disable-bt",
+  configTxt: "arm_64bit=1\nenable_uart=1\nuart_2ndstage=1",
   cmdline: "console=ttyAMA0,115200",
   eeprom: { kind: "official", url: OFFICIAL_EEPROM },
   bootconf: { BOOT_UART: "1" },
@@ -773,7 +772,7 @@ const PANELS = {
         h("div", { class: "field" },
           h("label", {}, "Kernel command line (cmdline.txt)"),
           h("input", { type: "text", value: state.cmdline, spellcheck: false, oninput: (e) => { state.cmdline = e.target.value; changed(); } }),
-          h("p", { class: "help" }, "The kernel's messages come out of the PL011 serial port (ttyAMA0). Adding earlycon prints each line twice here: the firmware keeps the boot console, and both end up on the one serial console.")),
+          h("p", { class: "help" }, "The firmware gives the kernel an early console on the serial port and keeps it. With dtoverlay=disable-bt the console= of the PL011 (ttyAMA0) is that same port, and every kernel line then comes out twice.")),
       ] : null);
   },
 
