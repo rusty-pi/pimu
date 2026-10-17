@@ -37,8 +37,3 @@ jobs:
         run: cargo install wasm-bindgen-cli --version "$(scripts/build-wasm.sh --version)" --locked
 
       - run: scripts/build-wasm.sh
-
-      - name: Page scripts
-        run: |
-          for f in web/*.js; do node --check "$f"; done
-          node --test web/*.test.mjs

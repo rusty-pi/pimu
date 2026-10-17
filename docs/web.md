@@ -72,6 +72,30 @@ images have to be decompressed first.
 - **The log channels are chosen at power-on.** After a reset the model clock
   starts from 0 again, as in the command line; a `bench` line marks it.
 
+## Tests
+
+The page is tested in a browser with the emulation mocked, so the suite is quick
+and needs neither the Rust toolchain nor the WebAssembly build:
+
+```bash
+cd web
+npm ci
+npx playwright install chromium     # or PW_CHANNEL=chrome to use an installed Chrome
+npm test                            # the settings form's logic, then the page
+node tests/coverage-report.mjs      # which functions of the page no test ran
+```
+
+- `tests/fixtures.js` replaces `Worker` with a stand-in that records what the page
+  sends and lets a test say what the worker answers, so a test can make the board
+  start, print, log, fault or answer for the inspect tab without running anything.
+- `tests/worker.spec.js` runs the real `worker.js` against a stub of the
+  WebAssembly module (`tests/stub-pimu.js`): downloads and their progress, local
+  files, ranged disk images, errors, pause, keys, the inspect answers.
+- `tests/layout.spec.js` holds the page still: opening a part, switching a tab,
+  a download or a run moves nothing, on a wide screen and on a phone.
+- CI (`.github/workflows/web-ui.yml`) fails when a function of the page's scripts
+  is run by no test.
+
 ## Not done
 
 HTTP- and TFTP-served directories from a URL, `--gencmd` and `--mbox-property`,

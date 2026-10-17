@@ -2,10 +2,10 @@
 // the serial console, the log, and what the machine looks like from inside.
 // Nothing here touches WebAssembly: the machine runs in worker.js.
 
-import { download, githubListing } from "./download.js";
+import { download } from "./download.js";
 import {
   BOOT_DEVICES, BOOT_ORDER_PRESETS, GROUPS, KNOWN_KEYS,
-  conditionalSections, editedLines, imageSettings, parseBootOrder,
+  conditionalSections, editedLines, formatBootOrder, imageSettings, parseBootOrder,
 } from "./bootconf.js";
 
 const FIRMWARE = "https://raw.githubusercontent.com/raspberrypi/firmware/refs/heads/master/boot/";
@@ -143,6 +143,7 @@ function setPhase(next, detail) {
   $("#pause").style.visibility = next === "running" || next === "paused" ? "visible" : "hidden";
   $("#pause").textContent = next === "paused" ? "Resume" : "Pause";
   for (const part of document.querySelectorAll(".part")) part.dataset.locked = on && part.dataset.part !== "soc" ? "true" : "false";
+  if (!$("#tab-log").hidden) renderLog();
   if (!on) {
     setCores(null);
     $("#led-act").dataset.on = false;
@@ -173,6 +174,7 @@ async function powerOn() {
 function powerOff() {
   worker?.terminate();
   worker = null;
+  renderInspect(null);
   setPhase("off");
   $("#downloads").hidden = true;
   lastState = null;
@@ -291,7 +293,7 @@ async function buildRequest() {
   const lines = editedLines(new Map(Object.entries(s.bootconf)), info.settings, null);
   const extra = s.extraBootconf.split("\n").map((l) => l.trim()).filter(Boolean);
   options.bootconf = [...lines, ...extra];
-  if (s.bootOrder) options.bootOrder = "0x" + [...s.bootOrder].reverse().join("");
+  if (s.bootOrder) options.bootOrder = formatBootOrder(s.bootOrder);
   options.skipSignedBoot = s.skipSignedBoot;
   options.tryboot = s.tryboot;
   options.otpRows = parseOtpRows(s.otpRows);
@@ -430,6 +432,7 @@ function showState() {
   const result = $("#result");
   if (st.ended) {
     result.textContent = `${st.ok ? "ok" : "failed"} – ${st.why}`;
+    result.title = result.textContent;
     result.dataset.ok = st.ok;
   } else {
     result.textContent = st.reboots ? `${st.reboots} reset${st.reboots > 1 ? "s" : ""}` : "";
@@ -454,8 +457,14 @@ const terminal = (() => {
     for (const ch of chunk) {
       if (escape) {
         escape += ch;
-        if (escape.length > 2 && /[@-~]/.test(ch)) escape = "";
-        else if (escape.length === 2 && escape[1] !== "[") escape = "";
+        if (escape[1] === "]") {
+          // An operating-system command (a window title): up to BEL or ESC \.
+          if (ch === "\x07" || escape.endsWith("\x1b\\")) escape = "";
+        } else if (escape[1] === "[") {
+          if (escape.length > 2 && /[@-~]/.test(ch)) escape = "";
+        } else {
+          escape = "";
+        }
         continue;
       }
       if (ch === "\x1b") escape = ch;
@@ -491,6 +500,7 @@ const terminal = (() => {
 
 function clearScreen() {
   terminal.clear();
+  renderInspect(null);
   logRows.length = 0;
   logCounts.clear();
   $("#result").textContent = "";
@@ -542,7 +552,11 @@ function addLog(text) {
   }
   if (logRows.length > LOG_KEPT) logRows.splice(0, logRows.length - LOG_KEPT);
   $("#log-count").textContent = logRows.length ? `(${logRows.length})` : "";
-  if (!logTimer && !$("#tab-log").hidden) logTimer = setTimeout(() => ((logTimer = 0), renderLogRows()), 250);
+  if (!logTimer && !$("#tab-log").hidden) logTimer = setTimeout(() => {
+    logTimer = 0;
+    renderFilters();
+    renderLogRows();
+  }, 250);
 }
 
 function describeRow(row) {
@@ -566,14 +580,6 @@ function renderLog() {
         renderLog();
       },
     }, name));
-  const filterButtons = [...logCounts.keys()].sort().map((name) =>
-    h("button", {
-      class: "chip-btn", "aria-pressed": !logOff.has(name),
-      onclick: () => {
-        logOff.has(name) ? logOff.delete(name) : logOff.add(name);
-        renderLog();
-      },
-    }, name, h("span", { class: "n" }, logCounts.get(name))));
   pane.replaceChildren(
     h("details", { open: !logRows.length }, h("summary", {}, `Channels to record (${state.log.length} on)`),
       h("p", { class: "hint" }, powered() ? "Power off to change the channels: they are chosen when the board starts." : "Pick what the machine should log at the next power on. Lines come out in the order things happened, stamped with the model's own clock."),
@@ -585,10 +591,26 @@ function renderLog() {
     h("div", { class: "toolbar" },
       h("input", { type: "search", placeholder: "Filter lines", value: logFilter, "aria-label": "Filter log lines", oninput: (e) => { logFilter = e.target.value; renderLogRows(); } }),
       h("button", { class: "small", onclick: () => { const text = logRows.map((r) => JSON.stringify(r)).join("\n"); saveFile("pimu-log.jsonl", new TextEncoder().encode(text)); } }, "Save .jsonl")),
-    h("div", { class: "channels" }, filterButtons),
+    h("div", { class: "channels", id: "log-filters" }),
     h("div", { class: "logbox", id: "logbox", role: "log" }),
   );
+  renderFilters();
   renderLogRows();
+}
+
+// One chip a channel that has logged, with its line count, to hide or show it.
+function renderFilters() {
+  const box = $("#log-filters");
+  if (!box) return;
+  box.replaceChildren(...[...logCounts.keys()].sort().map((name) =>
+    h("button", {
+      class: "chip-btn", "aria-pressed": !logOff.has(name),
+      onclick: () => {
+        logOff.has(name) ? logOff.delete(name) : logOff.add(name);
+        renderFilters();
+        renderLogRows();
+      },
+    }, name, h("span", { class: "n" }, logCounts.get(name)))));
 }
 
 function renderLogRows() {
@@ -615,9 +637,11 @@ function renderLogRows() {
 // ---- inspect ---------------------------------------------------------------------------
 
 let inspectTimer = 0;
+let inspectShown = false;
 
 function renderInspect(info) {
   const pane = $("#tab-info");
+  inspectShown = !!info;
   if (!info) {
     pane.replaceChildren(h("p", { class: "hint" }, worker ? "Reading the board…" : "Power the board on to look inside it."));
     return;
@@ -653,8 +677,10 @@ function renderInspect(info) {
 function refreshInspect() {
   clearTimeout(inspectTimer);
   if ($("#tab-info").hidden) return;
-  if (worker && phase !== "downloading") worker.postMessage({ type: "info" });
-  else renderInspect(null);
+  if (worker && phase !== "downloading") {
+    if (!inspectShown) renderInspect(null);
+    worker.postMessage({ type: "info" });
+  } else renderInspect(null);
   inspectTimer = setTimeout(refreshInspect, 2500);
 }
 
@@ -784,10 +810,10 @@ const PANELS = {
 
   usbc() {
     const on = powered();
-    return drawerFrame("USB-C",
-      h("div", { class: "field" }, h("span", { class: "label" }, "Power"),
-        h("button", { class: "primary", type: "button", "data-on": on, onclick: () => (on ? powerOff() : powerOn()) }, on ? "Unplug the power" : "Plug in the power"),
-        h("p", { class: "help" }, "The board starts the moment power arrives: the boot ROM reads the EEPROM, the bootloader starts start4.elf, which starts the ARM cores.")),
+    const power = h("div", { class: "field" }, h("span", { class: "label" }, "Power"),
+      h("button", { class: "primary", type: "button", "data-on": on, onclick: () => (on ? powerOff() : powerOn()) }, on ? "Unplug the power" : "Plug in the power"),
+      h("p", { class: "help" }, "The board starts the moment power arrives: the boot ROM reads the EEPROM, the bootloader starts start4.elf, which starts the ARM cores."));
+    const frame = drawerFrame("USB-C",
       h("h3", {}, "A stick on the USB-C port (OTG)"),
       h("p", { class: "hint" }, "The BCM2711’s own USB controller. Boot order digit 5 boots from it; Linux gets it when the firmware booted from it, or with otg_mode=1 in config.txt."),
       h("div", { class: "field" },
@@ -797,10 +823,16 @@ const PANELS = {
         imagePicker("otg", state.otg, "a disk image"),
         h("label", { class: "choice" }, h("input", { type: "checkbox", checked: state.otg.dock, onchange: (e) => { state.otg.dock = e.target.checked; changed(); } }), h("span", {}, "Behind a USB-C dock", h("small", {}, "Two hubs, an Ethernet adapter and an empty card reader besides the stick"))),
       ] : null);
+    // The power button is not part of what is locked while the board runs.
+    frame.splice(frame.length - 1, 0, power);
+    return frame;
   },
 
   eth() {
-    return drawerFrame("Ethernet",
+    const wake = h("div", { class: "field" }, h("span", { class: "label" }, "Wake-on-LAN"),
+      h("button", { class: "small", type: "button", disabled: !worker || phase !== "running", onclick: () => worker?.postMessage({ type: "wake-on-lan" }) }, "Send a magic packet"),
+      h("p", { class: "help" }, "Works while the board runs, and wakes it when the OS armed it."));
+    const frame = drawerFrame("Ethernet",
       h("label", { class: "choice" }, h("input", { type: "checkbox", checked: state.net, onchange: (e) => { state.net = e.target.checked; changed(); renderDrawer(); } }),
         h("span", {}, "Plug the cable into the built-in network peer", h("small", {}, "It answers DHCP and DNS, and serves the files below over TFTP and HTTP. It never reaches the real internet."))),
       state.net ? [
@@ -810,10 +842,10 @@ const PANELS = {
             filePicker("Choose files…", { multiple: true, onPick: (list) => { files.net = list.map((f) => ({ path: f.name, file: f })); renderDrawer(); } })),
           h("p", { class: "filename" }, files.net.length ? `${files.net.length} files` : "nothing chosen"),
           h("p", { class: "help" }, "For a network boot, set the boot order to Network (or HTTP, with HTTP_HOST) in the EEPROM settings.")),
-        h("div", { class: "field" }, h("span", { class: "label" }, "Wake-on-LAN"),
-          h("button", { class: "small", type: "button", disabled: !worker || phase !== "running", onclick: () => worker?.postMessage({ type: "wake-on-lan" }) }, "Send a magic packet"),
-          h("p", { class: "help" }, "Works while the board runs, and wakes it when the OS armed it.")),
       ] : null);
+    // Waking the board only makes sense while it runs, so it is not part of what is locked.
+    if (state.net) frame.splice(frame.length - 1, 0, wake);
+    return frame;
   },
 
   hdmi() {
@@ -876,7 +908,7 @@ function fillBootconf(body, info) {
     orderBox.replaceChildren(...clean([
       h("span", { class: "label" }, "Boot order"),
       h("p", { class: "help" }, "Tried from the top. The bootloader falls to the next step when one fails; Restart starts over."),
-      h("select", { "aria-label": "Boot order preset", onchange: (e) => { state.bootOrder = e.target.value === "default" ? null : BOOT_ORDER_PRESETS[Number(e.target.value)][1]; changed(); renderOrder(); } },
+      h("select", { "aria-label": "Boot order preset", onchange: (e) => { state.bootOrder = e.target.value === "default" ? null : [...BOOT_ORDER_PRESETS[Number(e.target.value)][1]]; changed(); renderOrder(); } },
         h("option", { value: "default", selected: !steps }, `Bootloader default${image.has("BOOT_ORDER") ? ` (${image.get("BOOT_ORDER")} in the image)` : ""}`),
         BOOT_ORDER_PRESETS.map(([label, preset], i) => h("option", { value: i, selected: steps && steps.join() === preset.join() }, label)),
         steps && !BOOT_ORDER_PRESETS.some(([, p]) => p.join() === steps.join()) ? h("option", { value: "custom", selected: true }, "Custom") : null),
@@ -889,7 +921,7 @@ function fillBootconf(body, info) {
             h("button", { class: "small", type: "button", disabled: i === 0, "aria-label": "Move up", onclick: () => { [steps[i - 1], steps[i]] = [steps[i], steps[i - 1]]; changed(); renderOrder(); } }, "↑"),
             h("button", { class: "small", type: "button", disabled: steps.length === 1, "aria-label": "Remove step", onclick: () => { steps.splice(i, 1); changed(); renderOrder(); } }, "✕")))),
         steps.length < 8 ? h("div", {}, h("button", { class: "small", type: "button", onclick: () => { steps.splice(steps.length - 1 > 0 ? steps.length - 1 : 0, 0, "1"); changed(); renderOrder(); } }, "Add a step")) : null,
-        h("p", { class: "help" }, `BOOT_ORDER=0x${[...steps].reverse().join("")}`)) : null,
+        h("p", { class: "help" }, `BOOT_ORDER=${formatBootOrder(steps)}`)) : null,
     ]));
   };
   state.bootOrder = state.bootOrder && state.bootOrder.every((d) => parseBootOrder(d)) ? state.bootOrder : null;
@@ -959,10 +991,17 @@ function renderDrawer() {
   for (const part of document.querySelectorAll(".part")) part.dataset.open = part.dataset.part === openPart;
   if (!openPart) {
     drawer.hidden = !wide.matches;
-    drawer.replaceChildren(h("div", { class: "drawer-body empty" },
-      h("h2", {}, "Plug something in"),
-      h("p", {}, "Click a part of the board to change what is plugged into it: the microSD slot, the EEPROM, the USB sockets, the Ethernet jack, the monitor, the GPIO header, or the processor for the board itself."),
-      h("p", { class: "hint" }, "The plug under the board powers it on.")));
+    drawer.replaceChildren(h("div", { class: "drawer-body empty" }, ...(powered()
+      ? [
+          h("h2", {}, "The board is powered"),
+          h("p", {}, "Click a part of the board to see what is plugged into it. The parts are locked while the board runs: switch the power off to change them."),
+          h("p", { class: "hint" }, "The Power switch at the top of the board switches it off."),
+        ]
+      : [
+          h("h2", {}, "Plug something in"),
+          h("p", {}, "Click a part of the board to change what is plugged into it: the microSD slot, the EEPROM, the USB sockets, the Ethernet jack, the monitor, the GPIO header, or the processor for the board itself."),
+          h("p", { class: "hint" }, "The Power switch at the top of the board starts it."),
+        ])));
     return;
   }
   drawer.hidden = false;

@@ -1,0 +1,58 @@
+name: web-ui
+
+# The page in web/, tested in a browser with the emulation mocked: nothing here
+# builds or boots anything, so it is quick, and a change to the Rust never runs it.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'web/**'
+      - '.github/workflows/web-ui.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'web/**'
+      - '.github/workflows/web-ui.yml'
+  workflow_dispatch:
+
+jobs:
+  ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - run: npm ci
+
+      - name: Syntax
+        run: for f in *.js tests/*.js tests/*.mjs; do node --check "$f"; done
+
+      - name: Logic of the settings form
+        run: npm run test:unit
+
+      - name: Browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Page tests
+        run: npm run test:ui
+
+      - name: Every function of the page ran in some test
+        run: node tests/coverage-report.mjs
+
+      - uses: actions/upload-artifact@v5
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            web/playwright-report/
+            web/test-results/
+          retention-days: 7

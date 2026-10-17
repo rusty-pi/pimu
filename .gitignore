@@ -23,3 +23,8 @@ qemu_*.core
 
 # Built by scripts/build-wasm.sh.
 /web/pkg/
+
+# The page's test tooling.
+/web/node_modules/
+/web/test-results/
+/web/playwright-report/
