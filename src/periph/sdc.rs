@@ -79,7 +79,7 @@ pub struct Dram {
 impl Dram {
     /// The parts a board with `bytes` of memory is fitted with: a die twice
     /// the size past 2 GB, and a second rank past 4 GB.
-    pub fn for_memory(bytes: usize) -> Dram {
+    pub fn for_memory(bytes: u64) -> Dram {
         match bytes {
             n if n >= 8 << 30 => Dram {
                 die_gbit: 32,

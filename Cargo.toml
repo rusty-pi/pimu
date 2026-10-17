@@ -57,3 +57,7 @@ opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+web-time = "1"

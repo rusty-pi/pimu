@@ -20,3 +20,6 @@ docs/*.pdf
 
 # qemu-user core dumps (tests/a64_diff.rs runs with `ulimit -c 0`, but just in case).
 qemu_*.core
+
+# Built by scripts/build-wasm.sh.
+/web/pkg/

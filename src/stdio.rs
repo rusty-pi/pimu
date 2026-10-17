@@ -71,6 +71,19 @@ impl HostInput {
         HostInput { rx, saved_tty }
     }
 
+    /// Input fed by the caller instead of a terminal: no reader thread, no raw
+    /// mode. What a host without a stdin, a browser page, types into.
+    pub fn channel() -> (HostInput, mpsc::Sender<HostEvent>) {
+        let (tx, rx) = mpsc::channel();
+        (
+            HostInput {
+                rx,
+                saved_tty: None,
+            },
+            tx,
+        )
+    }
+
     /// The next thing typed, if any. Never blocks.
     pub fn poll(&mut self) -> Option<HostEvent> {
         self.rx.try_recv().ok()

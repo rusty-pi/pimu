@@ -2017,7 +2017,7 @@ impl<'a> Rig<'a> {
         } = *self.opts;
         // The EEPROM bootloader also touches the `0x6000_0000` L2-SRAM window,
         // which the model folds into DRAM past 512 MiB — room every board has.
-        let mut machine = Machine::new(self.board.memory_bytes());
+        let mut machine = Machine::new(self.board.memory_bytes() as usize);
         machine.set_board(self.board);
         machine.set_log(self.log.clone());
         if eeprom {

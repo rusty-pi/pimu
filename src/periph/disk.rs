@@ -9,7 +9,6 @@
 use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
 use std::fs::File;
-use std::os::unix::fs::FileExt;
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
@@ -74,7 +73,7 @@ impl Compressed {
         match self {
             Compressed::File { file, path } => {
                 let mut buf = vec![0u8; len];
-                file.read_exact_at(&mut buf, at)
+                read_exact_at(file, &mut buf, at)
                     .with_context(|| format!("reading {path} at byte {at}"))?;
                 Ok(buf)
             }
@@ -121,7 +120,7 @@ impl Mapped {
     /// a remote one is read.
     fn read(&self, out: &mut [u8], at: u64) -> std::io::Result<()> {
         let (url, body) = match &self.body {
-            Body::File(file) => return file.read_exact_at(out, at),
+            Body::File(file) => return read_exact_at(file, out, at),
             Body::Mem(bytes) => return copy_from(out, bytes, at, "a card file"),
             Body::Remote { url, body } => (url, body),
         };
@@ -131,6 +130,16 @@ impl Mapped {
         }
         copy_from(out, body.get().expect("just fetched"), at, url)
     }
+}
+
+#[cfg(unix)]
+fn read_exact_at(file: &File, out: &mut [u8], at: u64) -> std::io::Result<()> {
+    std::os::unix::fs::FileExt::read_exact_at(file, out, at)
+}
+
+#[cfg(not(unix))]
+fn read_exact_at(_file: &File, _out: &mut [u8], _at: u64) -> std::io::Result<()> {
+    Err(std::io::ErrorKind::Unsupported.into())
 }
 
 fn copy_from(out: &mut [u8], body: &[u8], at: u64, what: &str) -> std::io::Result<()> {
@@ -315,7 +324,7 @@ impl Disk {
             }
             Backing::File { file, len } if at < *len => {
                 let n = BLOCK_SIZE.min((*len - at) as usize);
-                if let Err(e) = file.read_exact_at(&mut out[..n], at) {
+                if let Err(e) = read_exact_at(file, &mut out[..n], at) {
                     panic!("reading the disk image at byte {at}: {e}");
                 }
             }

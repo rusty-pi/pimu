@@ -41,6 +41,8 @@ pub mod soc;
 pub mod spec;
 pub mod stdio;
 pub mod vpu;
+#[cfg(target_arch = "wasm32")]
+pub mod wasm;
 pub mod xz;
 
 pub use emulator::{Emulator, RunEnd, RunLimits, RunReport};

@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pimu in the browser</title>
+<style>
+  :root { --bg: #fff; --fg: #1b1b1b; --muted: #666; --term-bg: #111; --term-fg: #ddd; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #161616; --fg: #e6e6e6; --muted: #999; }
+  }
+  body { margin: 0 auto; padding: 16px; max-width: 960px; background: var(--bg); color: var(--fg);
+         font: 16px/1.5 system-ui, sans-serif; }
+  button { font: inherit; padding: 4px 16px; }
+  #bar { display: flex; gap: 16px; align-items: center; margin: 16px 0; }
+  #status { color: var(--muted); }
+  #term { height: 60vh; overflow-y: auto; margin: 0; padding: 8px; white-space: pre-wrap;
+          overflow-wrap: anywhere; background: var(--term-bg); color: var(--term-fg);
+          font: 13px/1.35 ui-monospace, monospace; outline: none; }
+  #term:focus { box-shadow: 0 0 0 2px #4a90d9; }
+  p.note { color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+<h1>pimu in the browser</h1>
+<p>A Raspberry Pi 4 (BCM2711) booting its real firmware on the VideoCore VPU and then Linux,
+all emulated in WebAssembly in this tab.</p>
+<div id="bar">
+  <button id="start">Boot</button>
+  <span id="status">idle</span>
+</div>
+<pre id="term" tabindex="0" aria-label="Serial console"></pre>
+<p class="note">Downloads about 13 MB of firmware and a kernel from raspberrypi/firmware on GitHub,
+and needs about 1 GiB of memory. The emulation is slow: expect minutes to the end of the kernel's boot.
+There is no root filesystem, so the boot ends in a kernel panic, as the command-line example does.</p>
+<script type="module">
+  const term = document.getElementById("term");
+  const status = document.getElementById("status");
+  const start = document.getElementById("start");
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  const worker = new Worker("./worker.js", { type: "module" });
+
+  worker.onmessage = ({ data }) => {
+    if (data.status) status.textContent = data.status;
+    if (data.output) {
+      const stick = term.scrollTop + term.clientHeight >= term.scrollHeight - 4;
+      term.textContent += decoder.decode(data.output, { stream: true }).replace(/\r/g, "");
+      if (stick) term.scrollTop = term.scrollHeight;
+    }
+  };
+
+  start.onclick = () => {
+    start.disabled = true;
+    term.focus();
+    worker.postMessage({ start: true });
+  };
+
+  term.addEventListener("keydown", (event) => {
+    let keys = null;
+    if (event.ctrlKey && event.key.length === 1 && /[a-z]/i.test(event.key)) {
+      keys = Uint8Array.of(event.key.toLowerCase().charCodeAt(0) - 96);
+    } else if (event.metaKey || event.altKey) {
+      return;
+    } else if (event.key === "Enter") {
+      keys = Uint8Array.of(13);
+    } else if (event.key === "Backspace") {
+      keys = Uint8Array.of(127);
+    } else if (event.key === "Tab") {
+      keys = Uint8Array.of(9);
+    } else if (event.key.length === 1) {
+      keys = encoder.encode(event.key);
+    }
+    if (keys) {
+      event.preventDefault();
+      worker.postMessage({ keys });
+    }
+  });
+</script>
+</body>
+</html>

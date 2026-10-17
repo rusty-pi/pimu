@@ -1,0 +1,39 @@
+name: wasm
+
+# The emulator builds for the browser (docs/web.md). Nothing here boots it; the
+# job only keeps host-only std (processes, UNIX sockets, `Instant`) from creeping
+# back into the library.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'web/**'
+      - 'scripts/build-wasm.sh'
+      - 'Cargo.*'
+      - '.github/workflows/wasm.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'web/**'
+      - 'scripts/build-wasm.sh'
+      - 'Cargo.*'
+      - '.github/workflows/wasm.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: wasm-bindgen CLI
+        run: cargo install wasm-bindgen-cli --version "$(scripts/build-wasm.sh --version)" --locked
+
+      - run: scripts/build-wasm.sh
