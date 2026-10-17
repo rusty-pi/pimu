@@ -20,8 +20,8 @@ name: pages
 #    the secret the page is deployed without them.
 #
 # `workflow_dispatch` is the re-run path; dispatch it on the tag's ref, as for
-# `release`. The repositories then hold that tag's packages, so dispatching an
-# old tag puts the old version back.
+# `release`. The repositories hold the packages of every release, whichever tag
+# it is dispatched on.
 on:
   workflow_call:
   workflow_dispatch:
@@ -73,8 +73,12 @@ jobs:
           sudo apt-get -qq update
           sudo apt-get -qq install -y apt-utils createrepo-c rpm
           mkdir debs rpms
-          gh release download "$GITHUB_REF_NAME" --dir debs --pattern '*.deb'
-          gh release download "$GITHUB_REF_NAME" --dir rpms --pattern '*.rpm'
+          for tag in $(gh release list --limit 1000 --json tagName --jq '.[].tagName'); do
+            for package in $(gh release view "$tag" --json assets \
+                --jq '.assets[].name | select(endswith(".deb") or endswith(".rpm"))'); do
+              gh release download "$tag" --pattern "$package" --dir "${package##*.}s"
+            done
+          done
           scripts/build-apt-repo.sh debs site/apt
           scripts/build-rpm-repo.sh rpms site/rpm
 

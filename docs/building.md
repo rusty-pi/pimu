@@ -136,7 +136,7 @@ two package repositories made from the release's files: an apt one at
 `https://rusty-pi.github.io/pimu/apt/` (`scripts/build-apt-repo.sh`, one suite,
 `stable`) and a dnf one at `https://rusty-pi.github.io/pimu/rpm/`
 (`scripts/build-rpm-repo.sh`, a directory per architecture). Each holds the
-newest release only, which is all an upgrade needs. `scripts/test-apt-repo.sh`
+packages of every release, so a version can be pinned. `scripts/test-apt-repo.sh`
 and `scripts/test-rpm-repo.sh` check the scripts against a throwaway key. Both
 are signed with the key in the `APT_GPG_PRIVATE_KEY` repository secret (an
 armoured private key without a passphrase), whose public half is published as
