@@ -6,10 +6,10 @@
 # Only these files are needed to serve it, from any static host.
 #
 # The key is the ASCII-armoured private key in $APT_GPG_PRIVATE_KEY, without a
-# passphrase, imported into a throwaway keyring. The packages themselves are not
-# signed: the signed `repomd.xml` names the checksum of every index, and the
-# indexes those of the packages, so a client with `repo_gpgcheck=1` verifies them
-# all the same. Without the key the script refuses.
+# passphrase, imported into a throwaway keyring. It signs every package, in the
+# copies written to $2 (the files in $1 are left as they are), and each
+# `repomd.xml`, so a client can check both `gpgcheck` and `repo_gpgcheck`.
+# Without the key the script refuses.
 set -euo pipefail
 
 rpms="${1:?usage: build-rpm-repo.sh <directory with .rpm files> <output directory>}"
@@ -34,6 +34,8 @@ trap 'gpgconf --kill gpg-agent 2>/dev/null || true; rm -rf "$GNUPGHOME"' EXIT
 printf '%s\n' "$APT_GPG_PRIVATE_KEY" | gpg --batch --quiet --import
 key=$(gpg --batch --list-secret-keys --with-colons | awk -F: '/^fpr/ { print $10; exit }')
 [[ -n $key ]] || { echo "APT_GPG_PRIVATE_KEY holds no secret key" >&2; exit 1; }
+
+rpmsign --addsign --define "_gpg_name $key" --define "__gpg $(command -v gpg)" "$out"/*/*.rpm > /dev/null
 
 for dir in "$out"/*/; do
     createrepo_c --quiet "$dir"

@@ -2,8 +2,9 @@
 #
 # Builds a repository from two throwaway packages with a throwaway key, then
 # checks what a client does: the signature of `repomd.xml` verifies, each
-# architecture's index lists its package, and the package's hash is the one the
-# index promises. Needs rpmbuild, createrepo_c and gpg.
+# package is signed with the key, each architecture's index lists its package,
+# and the package's hash is the one the index promises. Needs rpmbuild,
+# rpmsign, createrepo_c and gpg.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -39,10 +40,14 @@ fi
 APT_GPG_PRIVATE_KEY=$secret scripts/build-rpm-repo.sh "$work/rpms" "$work/repo"
 
 gpg --batch --quiet --dearmor < "$work/repo/pimu.asc" > "$work/pimu.keyring"
+rpm --dbpath "$work/rpmdb" --initdb
+rpm --dbpath "$work/rpmdb" --import "$work/repo/pimu.asc"
 for arch in x86_64 aarch64; do
     repodata="$work/repo/$arch/repodata"
     gpgv --keyring "$work/pimu.keyring" "$repodata/repomd.xml.asc" "$repodata/repomd.xml" 2>/dev/null
     [[ -f $work/repo/$arch/pimu-1.2.3-1.$arch.rpm ]]
+    rpm --dbpath "$work/rpmdb" --checksig "$work/repo/$arch/pimu-1.2.3-1.$arch.rpm" | grep -q 'signatures OK'
+    ! rpm --dbpath "$work/rpmdb" --checksig "$work/rpms/pimu-1.2.3-1.$arch.rpm" | grep -q 'signatures OK'
     [[ $(ls "$work/repo/$arch"/*.rpm | wc -l) -eq 1 ]]
     primary=$(zstd -dc "$repodata"/*-primary.xml.zst 2>/dev/null || gzip -dc "$repodata"/*-primary.xml.gz)
     grep -q "<arch>$arch</arch>" <<<"$primary"
