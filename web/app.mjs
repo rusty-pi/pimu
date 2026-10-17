@@ -785,8 +785,9 @@ function bootFilesFields(spec, key) {
 
 function drawerFrame(title, ...body) {
   return [
-    h("header", {}, h("h2", {}, title), h("button", { class: "small", onclick: () => { openPart = null; renderDrawer(); } }, "Close")),
-    powered() ? h("p", { class: "lock" }, "The board is powered: power off to change what is plugged in.") : null,
+    h("header", {}, h("h2", {}, title),
+      powered() ? h("span", { class: "lock", title: "The board is powered: power off to change what is plugged in." }, "Locked – power off to change") : null,
+      h("button", { class: "small", onclick: () => { openPart = null; renderDrawer(); } }, "Close")),
     h("fieldset", { style: "border:0;padding:0;margin:0", disabled: powered() }, ...body),
   ];
 }
@@ -894,7 +895,7 @@ const PANELS = {
           : null,
         net.http.on ? h("p", { class: "help hint" }, "HTTP boot is slow: the bootloader checks the image’s SHA-256 on the VideoCore, in emulation. The official firmware takes a while.") : null,
       ] : null);
-    if (net.plugged) frame.splice(frame.length - 1, 0, wake);
+    if (net.plugged) frame.push(wake);
     return frame;
   },
 

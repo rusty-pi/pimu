@@ -181,7 +181,7 @@ button:disabled { opacity: .5; cursor: default; }
 .drawer header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
 .drawer header h2 { font-size: 17px; flex: 1; }
 .drawer h3 { font-size: 14px; margin: 16px 0 6px; }
-.drawer .lock { color: var(--warn); font-size: 13px; margin: 0 0 8px; }
+.drawer .lock { color: var(--warn); font-size: 13px; }
 .field { display: grid; gap: 4px; margin: 10px 0; }
 .field > label, .field > .label { font-weight: 600; font-size: 13px; }
 .field .help { color: var(--muted); font-size: 12.5px; margin: 0; }

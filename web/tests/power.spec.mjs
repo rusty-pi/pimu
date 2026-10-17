@@ -276,7 +276,7 @@ test.describe("while the board is powered", () => {
       await expect(app.part(part)).toHaveAttribute("data-locked", "true");
     }
     await expect(app.part("soc")).toHaveAttribute("data-locked", "false");
-    await expect(app.drawer).toContainText("The board is powered: power off to change what is plugged in.");
+    await expect(app.drawer).toContainText("Locked – power off to change");
     await expect(app.drawer.locator("fieldset")).toHaveJSProperty("disabled", true);
     await expect(app.drawer.locator("fieldset input").first()).toBeDisabled();
     await app.powerButton.click();
