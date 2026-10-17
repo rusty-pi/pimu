@@ -43,16 +43,10 @@ jobs:
 
       - run: scripts/build-wasm.sh
 
-      # Only what the page loads: not the tests, not their tooling.
       - name: Assemble the site
         run: |
-          mkdir site
-          cp web/index.html web/style.css site/
-          cp $(ls web/*.mjs | grep -Ev '\.test\.mjs$|^web/playwright\.config\.mjs$') site/
-          cp -r web/pkg site/pkg
-          rm -f site/pkg/.gitignore site/pkg/package.json site/pkg/*.d.ts
+          scripts/assemble-site.sh site
           sed -i "s|built from a checkout|release ${GITHUB_REF_NAME}|" site/index.html
-          touch site/.nojekyll
 
       - uses: actions/configure-pages@v6
 

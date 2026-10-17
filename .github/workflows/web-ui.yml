@@ -7,11 +7,13 @@ on:
     branches: [main]
     paths:
       - 'web/**'
+      - 'scripts/assemble-site.sh'
       - '.github/workflows/web-ui.yml'
   pull_request:
     branches: [main]
     paths:
       - 'web/**'
+      - 'scripts/assemble-site.sh'
       - '.github/workflows/web-ui.yml'
   workflow_dispatch:
 
