@@ -141,9 +141,10 @@ and `scripts/test-rpm-repo.sh` check the scripts against a throwaway key. Both
 are signed with the key in the `APT_GPG_PRIVATE_KEY` repository secret (an
 armoured private key without a passphrase), whose public half is published as
 `apt/pimu.gpg` and `rpm/pimu.asc`; with no secret the site is deployed without
-them. The apt repository signs its `Release`, the dnf one its `repomd.xml`; the
-`.rpm` files themselves are not signed, so a client sets `repo_gpgcheck=1` and
-leaves `gpgcheck` off. Because Pages deploys the whole site at once, the
+them. The apt repository signs its `Release`; the dnf one signs its `repomd.xml`
+and every `.rpm` in it, so a client sets both `gpgcheck=1` and
+`repo_gpgcheck=1`. The `.rpm` files attached to the GitHub release are not
+signed: the signature is added to the copies in the repository. Because Pages deploys the whole site at once, the
 repositories can only be updated by a deploy of the page.
 
 A tag is made by hand rather than on every push to main, because a hosted
