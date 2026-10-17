@@ -17,6 +17,7 @@ pub mod aarch64;
 pub mod align;
 pub mod arm;
 pub mod armstub;
+pub mod boot;
 pub mod bus;
 pub mod coherency;
 pub mod diag;
@@ -41,6 +42,7 @@ pub mod soc;
 pub mod spec;
 pub mod stdio;
 pub mod vpu;
+pub mod web;
 pub mod xz;
 
 pub use emulator::{Emulator, RunEnd, RunLimits, RunReport};

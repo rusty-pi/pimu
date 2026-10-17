@@ -59,6 +59,12 @@ the ARM`), with exit status 1 when it did not. `-v` adds the full run report,
 `--log <channel>` says what a device did
 ([`docs/diagnostics.md`](docs/diagnostics.md)), and `--help` lists every option.
 
+### In the browser
+
+The same boot runs in a tab, compiled to WebAssembly: build it with
+`scripts/build-wasm.sh` and serve `web/`. [`docs/web.md`](docs/web.md) has the
+details and the limits.
+
 ### Install it
 
 Every release carries a binary, a `.deb` and an `.rpm` for x86-64 and for

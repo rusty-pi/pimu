@@ -44,7 +44,7 @@ impl Board {
         Board { stepping, revision }
     }
 
-    pub const fn memory_bytes(self) -> usize {
+    pub const fn memory_bytes(self) -> u64 {
         (256 << 20) << ((self.revision >> 20) & 7)
     }
 

@@ -7,9 +7,11 @@
 //! outside the emulator; [`StreamBackend`] is the host's network, via passt.
 
 pub mod peer;
+#[cfg(unix)]
 pub mod stream;
 
 pub use peer::{BuiltinPeer, PeerRoot};
+#[cfg(unix)]
 pub use stream::StreamBackend;
 
 pub trait NetBackend {

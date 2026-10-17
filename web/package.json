@@ -1,0 +1,14 @@
+{
+  "name": "pimu-web",
+  "private": true,
+  "type": "module",
+  "description": "The page's tests. The emulation is mocked: nothing here loads the WebAssembly build.",
+  "scripts": {
+    "test": "node --test *.test.mjs && playwright test",
+    "test:unit": "node --test *.test.mjs",
+    "test:ui": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1"
+  }
+}
