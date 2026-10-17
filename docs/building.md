@@ -130,6 +130,22 @@ every dependency is pure Rust, so that costs one `gcc` and no emulation. They
 are built `--no-default-features`, without the `repo` commands. They carry no
 firmware of any kind: a boot is given its EEPROM image with `--eeprom`.
 
+Once the release is published, the same tag deploys the Pages site
+(`.github/workflows/pages.yml`, called by `release.yml`), and that site carries
+two package repositories made from the release's files: an apt one at
+`https://rusty-pi.github.io/pimu/apt/` (`scripts/build-apt-repo.sh`, one suite,
+`stable`) and a dnf one at `https://rusty-pi.github.io/pimu/rpm/`
+(`scripts/build-rpm-repo.sh`, a directory per architecture). Each holds the
+packages of every release, so a version can be pinned. `scripts/test-apt-repo.sh`
+and `scripts/test-rpm-repo.sh` check the scripts against a throwaway key. Both
+are signed with the key in the `APT_GPG_PRIVATE_KEY` repository secret (an
+armoured private key without a passphrase), whose public half is published as
+`apt/pimu.gpg` and `rpm/pimu.asc`; with no secret the site is deployed without
+them. The apt repository signs its `Release`, the dnf one its `repomd.xml`; the
+`.rpm` files themselves are not signed, so a client sets `repo_gpgcheck=1` and
+leaves `gpgcheck` off. Because Pages deploys the whole site at once, the
+repositories can only be updated by a deploy of the page.
+
 A tag is made by hand rather than on every push to main, because a hosted
 runner's minutes are billed and the PGO below roughly doubles the job. To rerun
 a release that failed part way, dispatch the workflow on the tag's own ref: the

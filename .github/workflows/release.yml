@@ -240,3 +240,15 @@ jobs:
             gh release create "$PKG_VERSION" --verify-tag --title "$PKG_VERSION" \
               --notes-file notes.md dist/*.tar.gz dist/*.deb dist/*.rpm
           fi
+
+  # After the release job, not beside it: the apt repository on the Pages site
+  # is built from the `.deb` files that job has just attached to the release. A
+  # failure here leaves the published release as it is.
+  pages:
+    needs: release
+    uses: ./.github/workflows/pages.yml
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    secrets: inherit

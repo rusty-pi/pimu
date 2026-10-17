@@ -1,16 +1,29 @@
 name: pages
 
 # Puts the page in web/ on GitHub Pages with every release, built from the
-# commit the `X.Y.Z` tag points at, next to the binaries `release` publishes.
-# It is a workflow of its own: it needs a different token and no docker, and a
-# failure here must not hold a release back.
+# commit the `X.Y.Z` tag points at, together with the apt repository at `/apt/`
+# and the dnf one at `/rpm/` that serve the release's `.deb` and `.rpm` files.
 #
-# One-time setup: Settings > Pages > Source: "GitHub Actions". `workflow_dispatch`
-# is the re-run path; dispatch it on the tag's ref, as for `release`.
+# `release` calls this once it has published the release, since the repository
+# is made of the `.deb` files that job builds. It is a workflow of its own: it
+# needs a different token and no docker, and a failure here must not hold a
+# release back — the release is already out by the time this runs.
+#
+# One-time setup:
+#
+# 1. Settings > Pages > Source: "GitHub Actions".
+# 2. The repository secret `APT_GPG_PRIVATE_KEY`: an ASCII-armoured private key
+#    without a passphrase, made for this alone, e.g.
+#    `gpg --quick-generate-key 'pimu apt <you@example.com>' default default never`
+#    and `gpg --armor --export-secret-keys <fingerprint>`. The public half is
+#    derived from it on every deploy, and it signs both repositories. Without
+#    the secret the page is deployed without them.
+#
+# `workflow_dispatch` is the re-run path; dispatch it on the tag's ref, as for
+# `release`. The repositories hold the packages of every release, whichever tag
+# it is dispatched on.
 on:
-  push:
-    tags:
-      - '[0-9]*.[0-9]*.[0-9]*'
+  workflow_call:
   workflow_dispatch:
 
 permissions:
@@ -28,6 +41,9 @@ jobs:
     if: github.repository == 'rusty-pi/pimu'
     runs-on: ubuntu-26.04
     timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -47,6 +63,24 @@ jobs:
         run: |
           scripts/assemble-site.sh site
           sed -i "s|built from a checkout|release ${GITHUB_REF_NAME}|" site/index.html
+
+      - name: Build the apt and dnf repositories
+        run: |
+          if [ -z "$APT_GPG_PRIVATE_KEY" ]; then
+            echo "::warning::no APT_GPG_PRIVATE_KEY secret, so the site has no package repositories"
+            exit 0
+          fi
+          sudo apt-get -qq update
+          sudo apt-get -qq install -y apt-utils createrepo-c rpm
+          mkdir debs rpms
+          for tag in $(gh release list --limit 1000 --json tagName --jq '.[].tagName'); do
+            for package in $(gh release view "$tag" --json assets \
+                --jq '.assets[].name | select(endswith(".deb") or endswith(".rpm"))'); do
+              gh release download "$tag" --pattern "$package" --dir "${package##*.}s"
+            done
+          done
+          scripts/build-apt-repo.sh debs site/apt
+          scripts/build-rpm-repo.sh rpms site/rpm
 
       - uses: actions/configure-pages@v6
 

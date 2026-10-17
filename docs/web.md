@@ -13,8 +13,11 @@ scripts/build-wasm.sh
 python3 -m http.server -d web
 ```
 
-Every release is also deployed to GitHub Pages (`.github/workflows/pages.yml`),
-at <https://rusty-pi.github.io/pimu/> once Pages is set to deploy from Actions.
+Every release is also deployed to GitHub Pages (`.github/workflows/pages.yml`,
+run by `release.yml` once the release is published), at
+<https://rusty-pi.github.io/pimu/> once Pages is set to deploy from Actions. The
+same site serves the project's apt and dnf repositories under `/apt/` and `/rpm/`
+([`building.md`](building.md)).
 
 Open <http://localhost:8000/>, plug in the power (the plug under the board, or
 **Power on**).

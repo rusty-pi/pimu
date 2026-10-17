@@ -1,5 +1,5 @@
 name: pimu
-description: Install a released pimu binary, and optionally run it. Boots Raspberry Pi 4 firmware in a model, on Linux runners.
+description: Install a released pimu from its apt repository, and optionally run it. Boots Raspberry Pi 4 firmware in a model, on Linux runners.
 branding:
   icon: cpu
   color: green
@@ -14,9 +14,6 @@ inputs:
   working-directory:
     description: Where `args` runs.
     default: .
-  token:
-    description: Token that `gh` downloads the release with.
-    default: ${{ github.token }}
 
 outputs:
   version:
@@ -29,27 +26,30 @@ runs:
     - id: install
       shell: bash
       env:
-        GH_TOKEN: ${{ inputs.token }}
         VERSION: ${{ inputs.version }}
       run: |
         set -euo pipefail
         [ "$RUNNER_OS" = Linux ] || { echo "::error::pimu releases are built for Linux only"; exit 1; }
-        case "$RUNNER_ARCH" in
-          X64) arch=x86_64 ;;
-          ARM64) arch=aarch64 ;;
-          *) echo "::error::no pimu release for $RUNNER_ARCH"; exit 1 ;;
-        esac
-        tag="$VERSION"
-        if [ "$tag" = latest ]; then
-          tag=$(gh release view -R rusty-pi/pimu --json tagName --jq .tagName)
-        fi
-        dir="$RUNNER_TEMP/pimu-$tag"
-        mkdir -p "$dir"
-        gh release download "$tag" -R rusty-pi/pimu -p "pimu-$arch-linux.tar.gz" -O - |
-          tar -xz -C "$dir" --strip-components=1
-        echo "$dir" >> "$GITHUB_PATH"
-        echo "version=$tag" >> "$GITHUB_OUTPUT"
-        "$dir/pimu" boot --help > /dev/null
+        command -v apt-get > /dev/null || { echo "::error::this action installs from pimu's apt repository, which needs apt"; exit 1; }
+        site=https://rusty-pi.github.io/pimu/apt
+        root="$RUNNER_TEMP/pimu-apt"
+        mkdir -p "$root/lists/partial" "$root/cache/archives/partial"
+        curl -fsSL -o "$root/pimu.gpg" "$site/pimu.gpg"
+        echo "deb [signed-by=$root/pimu.gpg] $site stable main" > "$root/pimu.list"
+        user_apt() {
+          apt-get -qq \
+            -o Dir::Etc::sourcelist="$root/pimu.list" -o Dir::Etc::sourceparts=- \
+            -o Dir::State::lists="$root/lists" -o Dir::Cache="$root/cache" \
+            -o Debug::NoLocking=1 -o APT::Sandbox::User= "$@"
+        }
+        package=pimu
+        [ "$VERSION" = latest ] || package="pimu=$VERSION"
+        user_apt update
+        (cd "$root" && user_apt download "$package")
+        dpkg-deb --extract "$root"/pimu_*.deb "$root/package"
+        echo "$root/package/usr/bin" >> "$GITHUB_PATH"
+        echo "version=$(dpkg-deb --field "$root"/pimu_*.deb Version)" >> "$GITHUB_OUTPUT"
+        "$root/package/usr/bin/pimu" boot --help > /dev/null
 
     - if: inputs.args != ''
       shell: bash
