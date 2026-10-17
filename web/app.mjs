@@ -1,12 +1,12 @@
 // The page: a picture of the board whose ports take what is plugged into them,
 // the serial console, the log, and what the machine looks like from inside.
-// Nothing here touches WebAssembly: the machine runs in worker.js.
+// Nothing here touches WebAssembly: the machine runs in worker.mjs.
 
-import { download } from "./download.js";
+import { download } from "./download.mjs";
 import {
   BOOT_DEVICES, BOOT_ORDER_PRESETS, GROUPS, KNOWN_KEYS,
   conditionalSections, editedLines, formatBootOrder, imageSettings, parseBootOrder,
-} from "./bootconf.js";
+} from "./bootconf.mjs";
 
 const FIRMWARE = "https://raw.githubusercontent.com/raspberrypi/firmware/refs/heads/master/boot/";
 const OFFICIAL_FILES = [
@@ -37,9 +37,9 @@ const LOG_CHANNELS = [
 const DEFAULT_STATE = {
   sd: { mode: "official", image: { kind: "url", url: "" }, github: { repo: "raspberrypi/firmware", ref: "master", path: "boot" } },
   configTxt: "arm_64bit=1\nenable_uart=1\nuart_2ndstage=1\ndtoverlay=disable-bt",
-  cmdline: "console=ttyAMA0,115200 earlycon",
+  cmdline: "console=ttyAMA0,115200",
   eeprom: { kind: "official", url: OFFICIAL_EEPROM },
-  bootconf: {},
+  bootconf: { BOOT_UART: "1" },
   bootOrder: null,
   extraBootconf: "",
   skipSignedBoot: false,
@@ -164,7 +164,7 @@ async function powerOn() {
     toast(e.message ?? String(e), true);
     return;
   }
-  worker = new Worker("worker.js", { type: "module" });
+  worker = new Worker("worker.mjs", { type: "module" });
   worker.onmessage = ({ data }) => onWorker(data);
   worker.onerror = (e) => fail(e.message || "the worker stopped");
   worker.postMessage(request);
@@ -345,7 +345,7 @@ let nextId = 1;
 
 function parseBootconf(bytes) {
   tools ??= (() => {
-    const w = new Worker("worker.js", { type: "module" });
+    const w = new Worker("worker.mjs", { type: "module" });
     w.onmessage = ({ data }) => {
       if (data.type === "bootconf") pending.get(data.id)?.(data.entries);
     };
@@ -652,11 +652,11 @@ function renderInspect(info) {
     h("div", { class: "inspect" },
       h("section", {}, h("h3", {}, "Run"),
         h("table", { class: "kv" },
-          h("tr", {}, h("th", {}, "Model time"), h("td", { class: "num" }, `${(st.modelUs / 1e6).toFixed(3)} s`)),
+          h("tr", {}, h("th", {}, "Model time"), h("td", {}, `${(st.modelUs / 1e6).toFixed(3)} s`)),
           h("tr", {}, h("th", {}, "ARM started by the firmware"), h("td", {}, st.armReleased ? "yes" : "not yet")),
-          h("tr", {}, h("th", {}, "Resets so far"), h("td", { class: "num" }, st.reboots)),
+          h("tr", {}, h("th", {}, "Resets so far"), h("td", {}, String(st.reboots))),
           h("tr", {}, h("th", {}, "Outcome"), h("td", {}, st.ended ? `${st.ok ? "ok" : "failed"} – ${st.why}` : "still running")),
-          st.logDropped ? h("tr", {}, h("th", {}, "Log lines dropped"), h("td", { class: "num" }, st.logDropped)) : null)),
+          st.logDropped ? h("tr", {}, h("th", {}, "Log lines dropped"), h("td", {}, String(st.logDropped))) : null)),
       h("section", {}, h("h3", {}, "Cores"),
         h("table", { class: "kv" },
           ...cores.vpu.map((c, i) => h("tr", {}, h("th", {}, `VPU ${i}`), h("td", {}, c.state), h("td", { class: "num" }, `${c.insns.toLocaleString()} instructions`))),
@@ -772,7 +772,8 @@ const PANELS = {
           h("p", { class: "help" }, "Added under [all], after whatever config.txt the files carry. enable_uart=1 is what makes the firmware print on the serial console; uart_2ndstage=1 adds start4.elf's own log.")),
         h("div", { class: "field" },
           h("label", {}, "Kernel command line (cmdline.txt)"),
-          h("input", { type: "text", value: state.cmdline, spellcheck: false, oninput: (e) => { state.cmdline = e.target.value; changed(); } })),
+          h("input", { type: "text", value: state.cmdline, spellcheck: false, oninput: (e) => { state.cmdline = e.target.value; changed(); } }),
+          h("p", { class: "help" }, "The kernel's messages come out of the PL011 serial port (ttyAMA0). Adding earlycon prints each line twice here: the firmware keeps the boot console, and both end up on the one serial console.")),
       ] : null);
   },
 
@@ -1036,7 +1037,7 @@ function refreshBoard() {
   const eepromName = s.eeprom.kind === "official" ? "official 2026-08-04" : s.eeprom.kind === "file" ? (files.eeprom?.name ?? "no file") : tail(s.eeprom.url);
   const parts = {
     sd: { sub: sd[0], filled: sd[1] },
-    eeprom: { sub: edits ? `${short(eepromName, 12)} +${edits}` : eepromName, filled: true },
+    eeprom: { sub: edits ? `${s.eeprom.kind === "official" ? "official" : short(eepromName, 8)} · ${edits} edited` : eepromName, filled: true },
     memory: { sub: `${s.board.memoryMb / 1024} GiB${s.board.boardRev.trim() ? ` · ${s.board.boardRev.trim()}` : ""}` },
     usb: { sub: s.usb.kind === "none" ? "empty" : describeImage(s.usb, files.usb), filled: s.usb.kind !== "none" },
     usbc: { sub: s.otg.kind === "none" ? "empty" : `${describeImage(s.otg, files.otg)}${s.otg.dock ? " · dock" : ""}`, filled: s.otg.kind !== "none" },

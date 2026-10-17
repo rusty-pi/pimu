@@ -3,7 +3,7 @@ import { defineConfig } from "@playwright/test";
 // `PW_CHANNEL=chrome` uses an installed Chrome instead of the downloaded Chromium.
 export default defineConfig({
   testDir: "tests",
-  testMatch: "**/*.spec.js",
+  testMatch: "**/*.spec.mjs",
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",

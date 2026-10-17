@@ -34,7 +34,7 @@ jobs:
       - run: npm ci
 
       - name: Syntax
-        run: for f in *.js tests/*.js tests/*.mjs; do node --check "$f"; done
+        run: for f in *.mjs tests/*.mjs; do node --check "$f"; done
 
       - name: Logic of the settings form
         run: npm run test:unit

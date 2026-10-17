@@ -27,4 +27,6 @@ qemu_*.core
 # The page's test tooling.
 /web/node_modules/
 /web/test-results/
+# Made by the tests when they start (tests/data.mjs); never committed.
+/web/tests/data/
 /web/playwright-report/

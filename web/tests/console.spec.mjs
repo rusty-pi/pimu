@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures.js";
+import { expect, test } from "./fixtures.mjs";
 
 test.describe("the serial console", () => {
   test("what the board prints appears, and a new power-on clears it", async ({ app }) => {

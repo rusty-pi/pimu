@@ -1,0 +1,63 @@
+name: pages
+
+# Puts the page in web/ on GitHub Pages with every release, built from the
+# commit the `X.Y.Z` tag points at, next to the binaries `release` publishes.
+# It is a workflow of its own: it needs a different token and no docker, and a
+# failure here must not hold a release back.
+#
+# One-time setup: Settings > Pages > Source: "GitHub Actions". `workflow_dispatch`
+# is the re-run path; dispatch it on the tag's ref, as for `release`.
+on:
+  push:
+    tags:
+      - '[0-9]*.[0-9]*.[0-9]*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time, and never cancel one half-way.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.repository == 'rusty-pi/pimu'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: wasm-bindgen CLI
+        run: cargo install wasm-bindgen-cli --version "$(scripts/build-wasm.sh --version)" --locked
+
+      - run: scripts/build-wasm.sh
+
+      # Only what the page loads: not the tests, not their tooling.
+      - name: Assemble the site
+        run: |
+          mkdir site
+          cp web/index.html web/style.css web/app.mjs web/bootconf.mjs web/download.mjs web/worker.mjs site/
+          cp -r web/pkg site/pkg
+          rm -f site/pkg/.gitignore site/pkg/package.json site/pkg/*.d.ts
+          sed -i "s|built from a checkout|release ${GITHUB_REF_NAME}|" site/index.html
+          touch site/.nojekyll
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

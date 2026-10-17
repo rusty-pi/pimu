@@ -1,4 +1,4 @@
-// Stands in for pkg/pimu.js, the WebAssembly build, when the real worker.js is
+// Stands in for pkg/pimu.js, the WebAssembly build, when the real worker.mjs is
 // tested: it does what the builder and the machine are asked and reports it,
 // and runs nothing. Every call reaches the page as a { type: "stub" } message.
 

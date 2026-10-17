@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures.js";
+import { expect, test } from "./fixtures.mjs";
 
 test("the board shows its parts, with nothing plugged in beyond the card", async ({ app }) => {
   await expect(app.pill).toHaveText("Off");
@@ -8,7 +8,7 @@ test("the board shows its parts, with nothing plugged in beyond the card", async
   }
   const sub = (key) => app.page.locator(`[data-sub="${key}"]`);
   await expect(sub("sd")).toHaveText("official firmware");
-  await expect(sub("eeprom")).toHaveText("official 2026-08-04");
+  await expect(sub("eeprom")).toHaveText("official · 1 edited");
   await expect(sub("memory")).toHaveText("1 GiB");
   await expect(sub("usb")).toHaveText("empty");
   await expect(sub("usbc")).toHaveText("empty");

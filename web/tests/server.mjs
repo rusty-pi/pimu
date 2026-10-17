@@ -4,6 +4,8 @@
 // It answers HEAD and `Range` requests like a server that hosts disk images
 // does, and `?norange=1` plays one that does not.
 
+import "./data.mjs";
+
 import { createReadStream, existsSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, normalize } from "node:path";

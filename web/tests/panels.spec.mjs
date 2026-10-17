@@ -1,8 +1,5 @@
-import { fileURLToPath } from "node:url";
-
-import { expect, test } from "./fixtures.js";
-
-const data = (name) => fileURLToPath(new URL(`./data/${name}`, import.meta.url));
+import { data } from "./data.mjs";
+import { expect, test } from "./fixtures.mjs";
 
 test.describe("microSD", () => {
   test("official firmware is the default, and GitHub, files and images are the other cards", async ({ app }) => {
@@ -66,7 +63,7 @@ test.describe("microSD", () => {
     await expect(config).toHaveValue(/arm_64bit=1\nenable_uart=1/);
     await config.fill("arm_64bit=1\ngpu_mem=16");
     const cmdline = app.field("Kernel command line").locator("input");
-    await expect(cmdline).toHaveValue("console=ttyAMA0,115200 earlycon");
+    await expect(cmdline).toHaveValue("console=ttyAMA0,115200");
     await cmdline.fill("console=ttyAMA0,115200 quiet");
     const saved = await app.localState();
     expect(saved.configTxt).toBe("arm_64bit=1\ngpu_mem=16");
@@ -78,28 +75,42 @@ test.describe("EEPROM", () => {
   test("the form starts from the image's own settings", async ({ app }) => {
     await app.open("eeprom");
     const serial = async (key) => app.setting(key, "Serial and power");
-    await expect((await serial("BOOT_UART")).locator("select")).toHaveValue("0");
+    await expect((await serial("BOOT_UART")).locator("select")).toHaveValue("1");
+    await expect(await serial("BOOT_UART")).toHaveClass(/changed/);
     await expect((await serial("WAKE_ON_GPIO")).locator("select")).toHaveValue("1");
     await expect((await app.setting("NET_INSTALL_AT_POWER_ON", "HTTP boot")).locator("select")).toHaveValue("1");
     const delay = await app.setting("HDMI_DELAY", "Display");
     await expect(delay.locator("input")).toHaveValue("5");
     await expect(delay).toContainText("(documented default)");
     await expect(await serial("BOOT_UART")).not.toContainText("(documented default)");
+    await expect(await serial("WAKE_ON_GPIO")).not.toHaveClass(/changed/);
     await expect(app.drawer).toContainText("The image also sets SOMETHING_NEW");
     await expect(app.drawer).toContainText("conditional sections too ([gpio4=1])");
   });
 
-  test("a changed setting says so, counts on the chip, and resets", async ({ app }) => {
+  test("the bootloader's serial console is on unless you turn it off", async ({ app }) => {
     await app.open("eeprom");
     const row = await app.setting("BOOT_UART", "Serial and power");
-    await row.locator("select").selectOption("1");
+    await expect(row.locator("select")).toHaveValue("1");
     await expect(row).toHaveClass(/changed/);
-    await expect(app.page.locator('[data-sub="eeprom"]')).toHaveText(/\+1$/);
-    expect((await app.localState()).bootconf).toEqual({ BOOT_UART: "1" });
-    await row.getByRole("button", { name: "Reset Bootloader serial console" }).click();
+    await expect(app.page.locator('[data-sub="eeprom"]')).toHaveText("official · 1 edited");
+    await row.locator("select").selectOption("0");
     await expect(row).not.toHaveClass(/changed/);
     expect((await app.localState()).bootconf).toEqual({});
     await expect(app.page.locator('[data-sub="eeprom"]')).toHaveText("official 2026-08-04");
+  });
+
+  test("a changed setting says so, counts on the chip, and resets", async ({ app }) => {
+    await app.open("eeprom");
+    const row = await app.setting("WAKE_ON_GPIO", "Serial and power");
+    await row.locator("select").selectOption("0");
+    await expect(row).toHaveClass(/changed/);
+    await expect(app.page.locator('[data-sub="eeprom"]')).toHaveText("official · 2 edited");
+    expect((await app.localState()).bootconf).toEqual({ BOOT_UART: "1", WAKE_ON_GPIO: "0" });
+    await row.getByRole("button", { name: "Reset Wake on GPIO" }).click();
+    await expect(row).not.toHaveClass(/changed/);
+    expect((await app.localState()).bootconf).toEqual({ BOOT_UART: "1" });
+    await expect(app.page.locator('[data-sub="eeprom"]')).toHaveText("official · 1 edited");
   });
 
   test("numbers and text are settings too, and an unset one can be set", async ({ app }) => {
@@ -108,7 +119,7 @@ test.describe("EEPROM", () => {
     await delay.locator("input").fill("9");
     await (await app.setting("TFTP_IP", "Network boot")).locator("input").fill("10.0.0.2");
     await (await app.setting("WAIT_FOR_POWER_BUTTON", "Serial and power")).locator("select").selectOption("1");
-    expect((await app.localState()).bootconf).toEqual({ HDMI_DELAY: "9", TFTP_IP: "10.0.0.2", WAIT_FOR_POWER_BUTTON: "1" });
+    expect((await app.localState()).bootconf).toEqual({ BOOT_UART: "1", HDMI_DELAY: "9", TFTP_IP: "10.0.0.2", WAIT_FOR_POWER_BUTTON: "1" });
     await delay.locator("input").fill("5");
     expect((await app.localState()).bootconf).not.toHaveProperty("HDMI_DELAY");
   });
@@ -139,7 +150,7 @@ test.describe("EEPROM", () => {
     await order.getByRole("button", { name: "Add a step" }).click();
     await expect(order.locator(".step")).toHaveCount(3);
     await expect(order).toContainText("BOOT_ORDER=0xf12");
-    await expect(app.page.locator('[data-sub="eeprom"]')).toHaveText(/\+1$/);
+    await expect(app.page.locator('[data-sub="eeprom"]')).toHaveText("official · 2 edited");
 
     await preset.selectOption("default");
     await expect(order.locator(".step")).toHaveCount(0);
@@ -168,7 +179,7 @@ test.describe("EEPROM", () => {
     const saved = await app.localState();
     expect(saved.skipSignedBoot).toBe(true);
     expect(saved.tryboot).toBe(true);
-    await expect(app.page.locator('[data-sub="eeprom"]')).toHaveText(/\+2$/);
+    await expect(app.page.locator('[data-sub="eeprom"]')).toHaveText("official · 3 edited");
   });
 
   test("the image is official, a URL, or a file", async ({ app }) => {
@@ -176,21 +187,21 @@ test.describe("EEPROM", () => {
     await expect(app.drawer.getByRole("radio", { name: /Official pieeprom/ })).toBeChecked();
 
     await app.drawer.getByRole("radio", { name: /An image from a URL/ }).check();
-    await expect(app.page.locator('[data-sub="eeprom"]')).toHaveText(/^pieeprom-2026-08/);
+    await expect(app.page.locator('[data-sub="eeprom"]')).toHaveText("pieepro… · 1 edited");
     await app.page.route("https://example.org/mine.bin", (route) =>
       route.fulfill({ status: 200, headers: { "content-length": "2048" }, body: Buffer.alloc(2048) }));
     await app.drawer.getByLabel("EEPROM image URL").fill("https://example.org/mine.bin");
     await app.drawer.getByLabel("EEPROM image URL").press("Tab");
-    await expect(app.page.locator('[data-sub="eeprom"]')).toHaveText("mine.bin");
+    await expect(app.page.locator('[data-sub="eeprom"]')).toHaveText("mine.bin · 1 edited");
     await expect(app.drawer).toContainText("Settings");
 
     await app.drawer.getByRole("radio", { name: /An image from my computer/ }).check();
     await expect(app.drawer).toContainText("nothing chosen");
     await app.drawer.locator("input[type=file][accept='.bin']").setInputFiles(data("pubkey.bin"));
-    await expect(app.page.locator('[data-sub="eeprom"]')).toHaveText("pubkey.bin");
+    await expect(app.page.locator('[data-sub="eeprom"]')).toHaveText("pubkey.… · 1 edited");
 
     await app.drawer.getByRole("radio", { name: /Official pieeprom/ }).check();
-    await expect(app.page.locator('[data-sub="eeprom"]')).toHaveText("official 2026-08-04");
+    await expect(app.page.locator('[data-sub="eeprom"]')).toHaveText("official · 1 edited");
   });
 
   test("an image that cannot be fetched says so", async ({ app }) => {

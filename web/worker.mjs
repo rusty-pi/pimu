@@ -3,7 +3,7 @@
 // so powering off ends the worker instead of freeing the board's RAM inside it.
 
 import init, { PiBuilder, eeprom_bootconf } from "./pkg/pimu.js";
-import { download as fetchWithProgress, githubListing } from "./download.js";
+import { download as fetchWithProgress, githubListing } from "./download.mjs";
 
 const SLICE_MS = 100;
 const STATE_EVERY_MS = 400;

@@ -1,8 +1,6 @@
-import { fileURLToPath } from "node:url";
+import { data } from "./data.mjs";
+import { EEPROM_URL, expect, test } from "./fixtures.mjs";
 
-import { EEPROM_URL, expect, test } from "./fixtures.js";
-
-const data = (name) => fileURLToPath(new URL(`./data/${name}`, import.meta.url));
 
 test.describe("powering on", () => {
   test("the default board asks for the official firmware, a 1 GiB C0 and the io log", async ({ app }) => {
@@ -18,7 +16,7 @@ test.describe("powering on", () => {
     expect(request.options).toEqual({
       stepping: "c0",
       memoryMb: 1024,
-      bootconf: [],
+      bootconf: ["BOOT_UART=1"],
       skipSignedBoot: false,
       tryboot: false,
       otpRows: [],
@@ -29,7 +27,7 @@ test.describe("powering on", () => {
       checkAlignment: false,
       skipUnimpl: false,
       configTxt: ["arm_64bit=1", "enable_uart=1", "uart_2ndstage=1", "dtoverlay=disable-bt"],
-      cmdline: "console=ttyAMA0,115200 earlycon",
+      cmdline: "console=ttyAMA0,115200",
     });
   });
 
@@ -192,7 +190,7 @@ test.describe("what stops a power-on", () => {
       await expect(app.page.locator("#toast")).toHaveClass(/bad/);
       await expect(app.pill).toHaveText("Off");
       await expect(app.page.locator("#downloads")).toBeHidden();
-      expect(await app.workers()).toEqual([expect.objectContaining({ url: expect.stringContaining("worker.js") })]);
+      expect(await app.workers()).toEqual([expect.objectContaining({ url: expect.stringContaining("worker.mjs") })]);
     });
   }
 

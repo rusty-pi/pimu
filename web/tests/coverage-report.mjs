@@ -16,8 +16,8 @@ if (!existsSync(dir)) {
 
 // Functions that cannot be run in a test, and why.
 const ALLOW = new Set([
-  // Runs in the worker, which this page-side coverage does not see; worker.spec.js tests it.
-  "/download.js:githubListing",
+  // Runs in the worker, which this page-side coverage does not see; worker.spec.mjs tests it.
+  "/download.mjs:githubListing",
 ]);
 
 const seen = new Map();

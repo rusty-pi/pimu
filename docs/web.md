@@ -13,6 +13,9 @@ scripts/build-wasm.sh
 python3 -m http.server -d web
 ```
 
+Every release is also deployed to GitHub Pages (`.github/workflows/pages.yml`),
+at <https://rusty-pi.github.io/pimu/> once Pages is set to deploy from Actions.
+
 Open <http://localhost:8000/>, plug in the power (the plug under the board, or
 **Power on**).
 
@@ -50,7 +53,7 @@ images have to be decompressed first.
 
 ## How it is built
 
-- Everything that runs WebAssembly runs in a Web Worker (`web/worker.js`), a
+- Everything that runs WebAssembly runs in a Web Worker (`web/worker.mjs`), a
   slice of 100 ms of wall time at a time, so the page never waits for the guest.
   A fresh worker per power-on: a WebAssembly memory never shrinks.
 - `src/web/session.rs` is the browser's `run_boot`, built on plain Rust that
@@ -85,13 +88,13 @@ npm test                            # the settings form's logic, then the page
 node tests/coverage-report.mjs      # which functions of the page no test ran
 ```
 
-- `tests/fixtures.js` replaces `Worker` with a stand-in that records what the page
+- `tests/fixtures.mjs` replaces `Worker` with a stand-in that records what the page
   sends and lets a test say what the worker answers, so a test can make the board
   start, print, log, fault or answer for the inspect tab without running anything.
-- `tests/worker.spec.js` runs the real `worker.js` against a stub of the
-  WebAssembly module (`tests/stub-pimu.js`): downloads and their progress, local
+- `tests/worker.spec.mjs` runs the real `worker.mjs` against a stub of the
+  WebAssembly module (`tests/stub-pimu.mjs`): downloads and their progress, local
   files, ranged disk images, errors, pause, keys, the inspect answers.
-- `tests/layout.spec.js` holds the page still: opening a part, switching a tab,
+- `tests/layout.spec.mjs` holds the page still: opening a part, switching a tab,
   a download or a run moves nothing, on a wide screen and on a phone.
 - CI (`.github/workflows/web-ui.yml`) fails when a function of the page's scripts
   is run by no test.

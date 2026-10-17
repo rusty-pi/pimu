@@ -1,4 +1,4 @@
-// The real worker.js, run against a stub of the WebAssembly module (stub-pimu.js).
+// The real worker.mjs, run against a stub of the WebAssembly module (stub-pimu.mjs).
 // What it fetches, reads and hands to the builder is checked here; that the
 // machine boots is not, and nothing boots.
 
@@ -6,12 +6,14 @@ import { readFileSync } from "node:fs";
 
 import { expect, test as base } from "@playwright/test";
 
-const stub = readFileSync(new URL("./stub-pimu.js", import.meta.url), "utf8");
+import { data } from "./data.mjs";
+
+const stub = readFileSync(new URL("./stub-pimu.mjs", import.meta.url), "utf8");
 
 const PAGE_SIDE = String.raw`
   window.__log = [];
   window.startWorker = () => {
-    const worker = new Worker("/worker.js", { type: "module" });
+    const worker = new Worker("/worker.mjs", { type: "module" });
     worker.onmessage = (event) => window.__log.push(event.data);
     worker.onerror = (event) => window.__log.push({ type: "worker-error", message: event.message });
     window.__worker = worker;
@@ -121,7 +123,7 @@ test("it reads local files, and hands the extras to the builder", async ({ talk 
 
 test("a disk image is read in ranges, from a file or from a URL", async ({ talk }) => {
   const origin = await talk.origin();
-  const image = readFileSync(new URL("./data/disk.img", import.meta.url));
+  const image = readFileSync(data("disk.img"));
   await talk.post(request(origin, {
     images: {
       sd: { url: `${origin}/tests/data/disk.img` },

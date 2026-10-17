@@ -3,8 +3,8 @@
 // The page talks to a Web Worker that runs WebAssembly. Here `Worker` is
 // replaced by a stand-in that records what the page sends and lets the test
 // say what the worker answers, so no test boots anything, and every message the
-// real worker.js would send is one a test can send at will. worker.spec.js
-// runs the real worker.js against a stub of the WebAssembly module instead.
+// real worker.mjs would send is one a test can send at will. worker.spec.mjs
+// runs the real worker.mjs against a stub of the WebAssembly module instead.
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { test as base, expect } from "@playwright/test";
@@ -165,7 +165,7 @@ export const test = base.extend({
     const functions = [];
     for (const entry of entries) {
       const name = new URL(entry.url).pathname;
-      if (!["/app.js", "/bootconf.js", "/download.js"].includes(name)) continue;
+      if (!["/app.mjs", "/bootconf.mjs", "/download.mjs"].includes(name)) continue;
       const lines = (offset) => entry.source.slice(0, offset).split("\n").length;
       for (const f of entry.functions) {
         functions.push({ file: name, name: f.functionName || "(anonymous)", line: lines(f.ranges[0].startOffset), count: f.ranges[0].count });

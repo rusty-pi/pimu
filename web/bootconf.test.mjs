@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { BOOT_ORDER_PRESETS, GROUPS, KNOWN_KEYS, editedLines, formatBootOrder, imageSettings, parseBootOrder } from "./bootconf.js";
+import { BOOT_ORDER_PRESETS, GROUPS, KNOWN_KEYS, editedLines, formatBootOrder, imageSettings, parseBootOrder } from "./bootconf.mjs";
 
 test("a boot order reads right to left", () => {
   assert.deepEqual(parseBootOrder("0xf41"), ["1", "4", "f"]);

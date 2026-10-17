@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures.js";
+import { expect, test } from "./fixtures.mjs";
 
 // The page must not jump: opening a part, switching a tab, starting a download
 // or a run changes nothing about where the rest of the page is.
