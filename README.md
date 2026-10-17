@@ -97,6 +97,7 @@ sudo tee /etc/yum.repos.d/pimu.repo <<'EOF'
 [pimu]
 name=pimu
 baseurl=https://rusty-pi.github.io/pimu/rpm/$basearch
+gpgcheck=0
 repo_gpgcheck=1
 gpgkey=https://rusty-pi.github.io/pimu/rpm/pimu.asc
 EOF
