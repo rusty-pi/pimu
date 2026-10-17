@@ -1,0 +1,26 @@
+name: apt-repo
+
+# The script that turns a release's .deb files into the apt repository on the
+# Pages site, run on a throwaway key and two empty packages.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/build-apt-repo.sh'
+      - 'scripts/test-apt-repo.sh'
+      - '.github/workflows/apt-repo.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/build-apt-repo.sh'
+      - 'scripts/test-apt-repo.sh'
+      - '.github/workflows/apt-repo.yml'
+  workflow_dispatch:
+
+jobs:
+  repo:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - run: scripts/test-apt-repo.sh

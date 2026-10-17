@@ -201,7 +201,8 @@ gh run watch "$(gh run list --workflow=release.yml --limit 1 --json databaseId -
 
 The job takes around an hour: it trains a PGO profile by booting the firmware
 before it builds either binary. When it finishes, check the release has the six
-assets (two tarballs, two `.deb`, two `.rpm`) and report the release URL.
+assets (two tarballs, two `.deb`, two `.rpm`), that its `pages` job deployed the
+site with the apt repository, and report the release URL.
 
 If it fails, the tag stays and the release is absent or incomplete. Fix the
 cause on main and cut the next patch version rather than moving the tag — a

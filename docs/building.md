@@ -130,6 +130,18 @@ every dependency is pure Rust, so that costs one `gcc` and no emulation. They
 are built `--no-default-features`, without the `repo` commands. They carry no
 firmware of any kind: a boot is given its EEPROM image with `--eeprom`.
 
+Once the release is published, the same tag deploys the Pages site
+(`.github/workflows/pages.yml`, called by `release.yml`), and that site carries
+an apt repository at `https://rusty-pi.github.io/pimu/apt/` made from the
+release's `.deb` files by `scripts/build-apt-repo.sh`. It has one suite,
+`stable`, and holds the newest release only, which is all `apt upgrade` needs.
+`scripts/test-apt-repo.sh` checks the script against a throwaway key. The
+repository is signed with the key in the `APT_GPG_PRIVATE_KEY` repository secret
+(an armoured private key without a passphrase), and the public half is published
+as `apt/pimu.gpg`; with no secret the site is deployed without the repository.
+Because Pages deploys the whole site at once, the repository can only be updated
+by a deploy of the page.
+
 A tag is made by hand rather than on every push to main, because a hosted
 runner's minutes are billed and the PGO below roughly doubles the job. To rerun
 a release that failed part way, dispatch the workflow on the tag's own ref: the

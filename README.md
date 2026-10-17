@@ -79,6 +79,17 @@ sudo apt install ./pimu_*_amd64.deb    # or the .rpm
 cargo install --path .                 # or build it from a checkout
 ```
 
+On Debian, Ubuntu and Raspberry Pi OS the `.deb` can come from an apt repository
+instead, so `apt upgrade` picks up each release:
+
+```bash
+sudo install -d /etc/apt/keyrings
+sudo curl -fsSLo /etc/apt/keyrings/pimu.gpg https://rusty-pi.github.io/pimu/apt/pimu.gpg
+echo 'deb [signed-by=/etc/apt/keyrings/pimu.gpg] https://rusty-pi.github.io/pimu/apt stable main' |
+  sudo tee /etc/apt/sources.list.d/pimu.list
+sudo apt update && sudo apt install pimu
+```
+
 ### Boot a card of your own
 
 ```bash
