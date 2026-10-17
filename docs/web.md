@@ -18,10 +18,11 @@ Open <http://localhost:8000/>, plug in the power (the plug under the board, or
 
 ## The page
 
-The board is a picture whose parts take what is plugged into them. Click one:
+The board is a block diagram in the style of [`board-sheet.svg`](board-sheet.svg): the SoC in the middle with its controllers on the edges, and the parts that plug into them around it. A wire is dashed while nothing is plugged in and solid once something is. Click a part:
 
 | Part | What it takes |
 |---|---|
+| Power | The switch that powers the board on and off. |
 | microSD | The official firmware files from GitHub, the files of any GitHub directory, a folder from your computer, or a disk image (local file or URL). `config.txt` lines and the kernel command line. |
 | EEPROM | The bootloader image (official, a URL, a file), the boot order as a list of steps, every bootloader setting as a form with drop-downs where the value is one of a few, signed-boot options. |
 | USB 3.0 | A stick: a disk image, local or by URL, and its size. |
@@ -31,7 +32,7 @@ The board is a picture whose parts take what is plugged into them. Click one:
 | GPIO | A HAT's ID EEPROM. |
 | BCM2711 | The silicon (B0 or C0), the memory, a board revision code, fuses to program, jitter and faults, and the checks of the `coherency` and `alignment` logs. |
 
-The cores in the SoC light up as they start, sleep and run. The **Log** tab
+The six cores in the SoC are tiles of one size that light up as they start, sleep and run, and the line under the board counts the VPU and ARM instructions retired. The **Log** tab
 records the channels of `pimu boot --log`, as `jsonl`, and filters them per
 channel and by text; **Inspect** shows the device tree the firmware handed to the
 ARM, the bootloader configuration, the fuses, and downloads the flash as the

@@ -51,7 +51,7 @@ const DEFAULT_STATE = {
   board: { stepping: "c0", memoryMb: 1024, boardRev: "" },
   otpRows: "",
   advanced: { jitter: "", faults: "", checkCoherency: false, checkAlignment: false, skipUnimpl: false },
-  log: [],
+  log: ["io"],
 };
 
 // ---- small helpers -----------------------------------------------------------
@@ -95,6 +95,7 @@ const state = (() => {
 
 let saveTimer = 0;
 function changed() {
+  refreshBoard();
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     try {
@@ -137,7 +138,7 @@ function setPhase(next, detail) {
   $("#power").textContent = on ? "Power off" : "Power on";
   $("#power").dataset.on = on;
   $("#power-plug").dataset.on = on;
-  $("#power-label").textContent = on ? "Unplug" : "Plug in";
+  $("#power-label").textContent = on ? "click to unplug" : "click to plug in";
   $("#led-power").dataset.on = on;
   $("#pause").style.visibility = next === "running" || next === "paused" ? "visible" : "hidden";
   $("#pause").textContent = next === "paused" ? "Resume" : "Pause";
@@ -405,8 +406,14 @@ function renderDownloads(list) {
 
 // ---- cores, clock, LEDs ---------------------------------------------------------------
 
+const CORE_WORDS = { off: "off", sleeping: "asleep", running: "running" };
+
 function setCores(cores) {
-  const set = (id, c) => ($(`[data-core="${id}"]`).dataset.state = c?.state ?? "off");
+  const set = (id, c) => {
+    const state = c?.state ?? "off";
+    $(`[data-core="${id}"]`).dataset.state = state;
+    $(`[data-core-state="${id}"]`).textContent = CORE_WORDS[state];
+  };
   for (let i = 0; i < 4; i++) set(`arm${i}`, cores?.arm[i]);
   for (let i = 0; i < 2; i++) set(`vpu${i}`, cores?.vpu[i]);
 }
@@ -417,7 +424,9 @@ function showState() {
   setCores(st.cores);
   $("#led-act").dataset.on = st.armReleased;
   const seconds = (st.modelUs / 1e6).toFixed(1);
-  $("#clock").textContent = `model time ${seconds} s · ${(st.retired / 1e6).toFixed(0)} M VPU instructions`;
+  const arm = st.cores.arm.reduce((n, c) => n + c.insns, 0);
+  const millions = (n) => `${(n / 1e6).toFixed(0)} M`;
+  $("#clock").textContent = `model time ${seconds} s · VPU ${millions(st.retired)} instructions · ARM ${millions(arm)}`;
   const result = $("#result");
   if (st.ended) {
     result.textContent = `${st.ok ? "ok" : "failed"} – ${st.why}`;
@@ -945,6 +954,7 @@ const wide = matchMedia("(min-width: 980px)");
 wide.addEventListener("change", () => renderDrawer());
 
 function renderDrawer() {
+  refreshBoard();
   const drawer = $("#drawer");
   for (const part of document.querySelectorAll(".part")) part.dataset.open = part.dataset.part === openPart;
   if (!openPart) {
@@ -957,24 +967,51 @@ function renderDrawer() {
   }
   drawer.hidden = false;
   drawer.replaceChildren(h("div", { class: "drawer-body" }, ...PANELS[openPart]().filter(Boolean)));
-  refreshBoard();
+}
+
+const short = (text, n = 18) => (text.length > n ? `${text.slice(0, n - 1)}…` : text);
+
+function tail(url) {
+  try {
+    const u = new URL(url);
+    return u.pathname.split("/").filter(Boolean).pop() ?? u.host;
+  } catch {
+    return url;
+  }
+}
+
+function describeImage(spec, file) {
+  if (spec.kind === "file") return file ? file.name : "no file";
+  return spec.url.trim() ? tail(spec.url.trim()) : "no URL";
 }
 
 function refreshBoard() {
-  const filled = {
-    sd: state.sd.mode !== "image" || state.sd.image.kind === "url" ? true : !!files.sdImage,
-    usb: state.usb.kind !== "none",
-    usbc: state.otg.kind !== "none",
-    eth: state.net,
-    hdmi: state.display,
-    gpio: !!files.hat,
+  const s = state;
+  const sd = {
+    official: ["official firmware", true],
+    github: [s.sd.github.repo, true],
+    files: [files.boot.length ? `${files.boot.length} files` : "no files", files.boot.length > 0],
+    image: [describeImage(s.sd.image, files.sdImage), s.sd.image.kind === "url" ? !!s.sd.image.url.trim() : !!files.sdImage],
+  }[s.sd.mode];
+  const edits = Object.keys(s.bootconf).length + (s.bootOrder ? 1 : 0) + s.extraBootconf.split("\n").filter((l) => l.trim()).length;
+  const eepromName = s.eeprom.kind === "official" ? "official 2026-08-04" : s.eeprom.kind === "file" ? (files.eeprom?.name ?? "no file") : tail(s.eeprom.url);
+  const parts = {
+    sd: { sub: sd[0], filled: sd[1] },
+    eeprom: { sub: edits ? `${short(eepromName, 12)} +${edits}` : eepromName, filled: true },
+    memory: { sub: `${s.board.memoryMb / 1024} GiB${s.board.boardRev.trim() ? ` · ${s.board.boardRev.trim()}` : ""}` },
+    usb: { sub: s.usb.kind === "none" ? "empty" : describeImage(s.usb, files.usb), filled: s.usb.kind !== "none" },
+    usbc: { sub: s.otg.kind === "none" ? "empty" : `${describeImage(s.otg, files.otg)}${s.otg.dock ? " · dock" : ""}`, filled: s.otg.kind !== "none" },
+    eth: { sub: s.net ? (files.net.length ? `peer · ${files.net.length} files` : "built-in peer") : "unplugged", filled: s.net },
+    hdmi: { sub: s.display ? "monitor" : "no monitor", filled: s.display },
+    gpio: { sub: files.hat ? files.hat.name : "no HAT", filled: !!files.hat },
   };
-  for (const part of document.querySelectorAll(".part")) {
-    const on = filled[part.dataset.part];
-    if (on !== undefined) part.dataset.filled = on;
+  for (const [key, { sub, filled }] of Object.entries(parts)) {
+    const text = $(`[data-sub="${key}"]`);
+    text.textContent = short(sub, 19);
+    if (filled !== undefined) text.closest(".part").dataset.filled = filled;
   }
-  $("#eth-led").dataset.on = state.net && powered();
-  $("#sd-label").textContent = state.sd.mode === "image" ? "IMG" : "SD";
+  $("#soc-title").textContent = `BCM2711 ${s.board.stepping.toUpperCase()}`;
+  $("#eth-led").dataset.on = s.net && powered();
 }
 
 for (const part of document.querySelectorAll(".part")) {
@@ -1003,17 +1040,6 @@ plug.addEventListener("keydown", (e) => {
 });
 $("#power").addEventListener("click", togglePower);
 $("#pause").addEventListener("click", () => worker?.postMessage({ type: phase === "paused" ? "resume" : "pause" }));
-
-// The header pins, drawn once.
-$("#pins").append(...Array.from({ length: 40 }, (_, i) =>
-  Object.assign(document.createElementNS("http://www.w3.org/2000/svg", "rect"), {})).map((rect, i) => {
-  rect.setAttribute("class", "pin");
-  rect.setAttribute("x", 150 + Math.floor(i / 2) * 15.2);
-  rect.setAttribute("y", 62 + (i % 2) * 14);
-  rect.setAttribute("width", 7);
-  rect.setAttribute("height", 7);
-  return rect;
-}));
 
 setPhase("off");
 refreshBoard();
