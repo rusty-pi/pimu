@@ -203,7 +203,8 @@ golden:                          # optional: diff the whole console against this
 - **`milestones`** are substrings that must (or, with `absent: true`, must not)
   appear in the run's output, each with the reason it matters, which is quoted
   when it fails. `line` may be a list: the parts have to appear in that order on
-  one line.
+  one line. `model_only: true` marks a line only the model prints, which a run
+  [on a real board](#on-a-real-board) leaves out.
 - **`golden`** is the whole console, normalised (clocks and kernel timestamps
   stripped), diffed line by line. `retired` pins how many instructions each core
   ran, which is exact for one build of the model and one firmware, so a firmware
@@ -245,6 +246,67 @@ arguments instead of running, `--from-log <log>` checks the log of an earlier
 run without booting, and `--output <log>` names the combined log
 (`boot-<name>.log` by default; with a directory, the directory the logs go in).
 The console is written beside the log, as `<log>.console`.
+
+## On a real board
+
+The milestones of a scenario can be checked against a Raspberry Pi as well as
+the model, which is how a `why:` that says "measured on a Raspberry Pi 4B
+d03115" is checked again later. Two ways, both opt-in: nothing in CI or
+`scripts/` runs on hardware.
+
+**A capture you took yourself.** Boot the board with its UART on a serial
+adapter, keep what it prints in a file, and check that:
+
+```bash
+pimu boot --scenario testdata/boot/firmware.yaml --from-capture uart.log
+```
+
+One file: the raw console, no copy as `<log>.console` needed. Only the
+milestones judge it. The golden transcript has the model's serial numbers,
+SDRAM training and attached USB devices in it, and the retired counts are the
+model's, so neither is checked. A milestone whose line only the model prints
+— its invented identity, its network peer, the run report — says
+`model_only: true` and is left out.
+
+**A board pimu restarts for you.** `--on <device>` takes the device from
+`~/.config/pimu/devices.yaml` (`$XDG_CONFIG_HOME/pimu/devices.yaml`, or
+`--devices <file>`):
+
+```yaml
+rpi-4b:
+  board_rev: d03115
+  stepping: c0                    # optional, for scenarios that name one
+  serial: /dev/ttyUSB0
+  baud: 115200                    # the default
+  tftp_dir: ~/src/tftpboot/77778888
+  power_cycle: ["ssh", "smart-plug", "cycle"]
+```
+
+```bash
+pimu boot --scenario testdata/boot/tftp-boot.yaml --on rpi-4b
+```
+
+It copies the scenario's `tftp` files into `tftp_dir` (overwriting, deleting
+nothing), opens the serial line, runs `power_cycle`, reads the UART until the
+scenario's `until` prints or `wall_secs` has passed, then checks the
+milestones. `--plan` prints those steps instead. The board has to boot from
+that TFTP directory with a DHCP and TFTP server on its network: the model's
+built-in peer is not there. A run that ends on the wall budget is not a failure
+by itself, since a board has no modelled clock; a missing milestone is.
+
+`power_cycle` is any command, run without a shell. For a one-shot boot that
+costs a power cycle and no SD write if the firmware wedges, use `tryboot` on
+a board that is up: `["ssh", "pi", "sudo", "reboot", "0 tryboot"]`. pimu does
+not know power switches, and does not write the card or the EEPROM.
+
+A scenario the board cannot be given is skipped, with the reason, and a
+folder of scenarios runs the rest:
+
+- It fuses OTP (`otp_row`), because fuses survive a reset on a real board.
+- It needs the model's mailbox (`mbox_property`), `input`, `magic_packet_after`
+  or `eeprom_pubkey`.
+- It boots from anything but `tftp` (`sd`, `usb`, `otg`, `http`).
+- It names a `board_rev` or `stepping` the device does not have.
 
 ## Wall budgets
 
