@@ -139,7 +139,7 @@ function setPhase(next, detail) {
   $("#power-plug").dataset.on = on;
   $("#power-label").textContent = on ? "Unplug" : "Plug in";
   $("#led-power").dataset.on = on;
-  $("#pause").hidden = !(next === "running" || next === "paused");
+  $("#pause").style.visibility = next === "running" || next === "paused" ? "visible" : "hidden";
   $("#pause").textContent = next === "paused" ? "Resume" : "Pause";
   for (const part of document.querySelectorAll(".part")) part.dataset.locked = on && part.dataset.part !== "soc" ? "true" : "false";
   if (!on) {
@@ -941,15 +941,22 @@ function settingRow(setting, image, edits) {
   return row;
 }
 
+const wide = matchMedia("(min-width: 980px)");
+wide.addEventListener("change", () => renderDrawer());
+
 function renderDrawer() {
   const drawer = $("#drawer");
   for (const part of document.querySelectorAll(".part")) part.dataset.open = part.dataset.part === openPart;
   if (!openPart) {
-    drawer.hidden = true;
+    drawer.hidden = !wide.matches;
+    drawer.replaceChildren(h("div", { class: "drawer-body empty" },
+      h("h2", {}, "Plug something in"),
+      h("p", {}, "Click a part of the board to change what is plugged into it: the microSD slot, the EEPROM, the USB sockets, the Ethernet jack, the monitor, the GPIO header, or the processor for the board itself."),
+      h("p", { class: "hint" }, "The plug under the board powers it on.")));
     return;
   }
   drawer.hidden = false;
-  drawer.replaceChildren(...PANELS[openPart]().filter(Boolean));
+  drawer.replaceChildren(h("div", { class: "drawer-body" }, ...PANELS[openPart]().filter(Boolean)));
   refreshBoard();
 }
 

@@ -12,7 +12,7 @@
   <p class="tag">A Raspberry Pi 4 and its real boot firmware, emulated in this tab.</p>
   <div class="spacer"></div>
   <span id="phase" class="pill" data-phase="off">Off</span>
-  <button id="pause" class="ghost" hidden>Pause</button>
+  <button id="pause" class="ghost" style="visibility:hidden">Pause</button>
   <button id="power" class="primary">Power on</button>
 </header>
 
@@ -158,17 +158,15 @@
 
     <ul class="legend" aria-label="Core states">
       <li><i class="swatch off"></i>off</li><li><i class="swatch sleeping"></i>asleep (wfi / wfe)</li><li><i class="swatch running"></i>running</li>
-      <li class="grow"></li>
-      <li id="clock" class="mono"></li>
     </ul>
+    <p id="clock" class="statusline mono" aria-live="off"></p>
   </section>
 
-  <aside id="drawer" class="drawer" hidden aria-live="polite"></aside>
+  <aside id="drawer" class="drawer" aria-live="polite"></aside>
 </main>
 
-<section id="downloads" class="downloads" hidden aria-live="polite"></section>
-
 <section class="screen">
+  <section id="downloads" class="downloads" hidden aria-live="polite"></section>
   <div class="tabs" role="tablist">
     <button role="tab" data-tab="console" aria-selected="true">Serial console</button>
     <button role="tab" data-tab="log" aria-selected="false">Log <span id="log-count" class="count"></span></button>
