@@ -29,7 +29,7 @@ const MIN_CLUSTERS: u32 = 65525 + 16;
 /// builds the same card.
 const EPOCH_DATE: u16 = (1 << 5) | 1;
 const VOLUME_LABEL: &[u8; 11] = b"PIMU       ";
-const DIR_ENTRY: usize = 32;
+pub(crate) const DIR_ENTRY: usize = 32;
 
 /// Where a card file's bytes are, once the firmware asks for a block of it: a
 /// host file, or a URL fetched on demand ([`crate::remote`]).
@@ -377,7 +377,7 @@ fn volume_label() -> [u8; DIR_ENTRY] {
     e
 }
 
-fn dot_entry(name: &[u8; 11], cluster: u32) -> [u8; DIR_ENTRY] {
+pub(crate) fn dot_entry(name: &[u8; 11], cluster: u32) -> [u8; DIR_ENTRY] {
     let mut e = [0u8; DIR_ENTRY];
     e[..11].copy_from_slice(name);
     e[11] = 0x10;
@@ -387,7 +387,7 @@ fn dot_entry(name: &[u8; 11], cluster: u32) -> [u8; DIR_ENTRY] {
     e
 }
 
-fn stamp(entry: &mut [u8; DIR_ENTRY]) {
+pub(crate) fn stamp(entry: &mut [u8; DIR_ENTRY]) {
     entry[16..18].copy_from_slice(&EPOCH_DATE.to_le_bytes());
     entry[18..20].copy_from_slice(&EPOCH_DATE.to_le_bytes());
     entry[24..26].copy_from_slice(&EPOCH_DATE.to_le_bytes());
@@ -395,13 +395,13 @@ fn stamp(entry: &mut [u8; DIR_ENTRY]) {
 
 /// A name as the directory carries it: the 8.3 entry, whether a long name is
 /// needed beside it, and the case flags that spare `start4.elf` the long ones.
-struct ShortName {
-    short: [u8; 11],
-    case: u8,
-    long: bool,
+pub(crate) struct ShortName {
+    pub(crate) short: [u8; 11],
+    pub(crate) case: u8,
+    pub(crate) long: bool,
 }
 
-fn short_entry(name: &ShortName, cluster: u32, size: u32, attr: u8) -> [u8; DIR_ENTRY] {
+pub(crate) fn short_entry(name: &ShortName, cluster: u32, size: u32, attr: u8) -> [u8; DIR_ENTRY] {
     let mut e = [0u8; DIR_ENTRY];
     e[..11].copy_from_slice(&name.short);
     e[11] = attr;
@@ -414,13 +414,13 @@ fn short_entry(name: &ShortName, cluster: u32, size: u32, attr: u8) -> [u8; DIR_
 }
 
 /// How many long entries a name takes: thirteen UTF-16 code units each.
-fn fragments(name: &str) -> usize {
+pub(crate) fn fragments(name: &str) -> usize {
     (name.encode_utf16().count() + 1).div_ceil(13)
 }
 
 /// The VFAT entries for a name that does not fit 8.3: ahead of the short
 /// entry, last fragment first.
-fn long_entries(name: &str, short: &[u8; 11]) -> Vec<u8> {
+pub(crate) fn long_entries(name: &str, short: &[u8; 11]) -> Vec<u8> {
     let checksum = short.iter().fold(0u8, |sum, &c| {
         (sum >> 1).wrapping_add(sum << 7).wrapping_add(c)
     });
@@ -450,7 +450,7 @@ fn long_entries(name: &str, short: &[u8; 11]) -> Vec<u8> {
     out
 }
 
-fn short_name(name: &str, taken: &mut Vec<[u8; 11]>) -> ShortName {
+pub(crate) fn short_name(name: &str, taken: &mut Vec<[u8; 11]>) -> ShortName {
     let (base, ext) = match name.rfind('.') {
         Some(at) if at > 0 => (&name[..at], &name[at + 1..]),
         _ => (name, ""),

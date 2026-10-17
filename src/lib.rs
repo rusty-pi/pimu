@@ -18,6 +18,7 @@ pub mod align;
 pub mod arm;
 pub mod armstub;
 pub mod boot;
+pub mod bootimg;
 pub mod bus;
 pub mod coherency;
 pub mod diag;

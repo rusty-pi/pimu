@@ -173,6 +173,8 @@ pub struct BuiltinPeer {
     tftp_root: Option<Root>,
     http_root: Option<Root>,
     files: BTreeMap<String, Vec<u8>>,
+    tftp_files: BTreeMap<String, Vec<u8>>,
+    http_files: BTreeMap<String, Vec<u8>>,
     out: VecDeque<Vec<u8>>,
     log: Vec<String>,
     transfers: BTreeMap<u16, Transfer>,
@@ -199,6 +201,8 @@ impl BuiltinPeer {
             tftp_root: None,
             http_root: None,
             files: BTreeMap::new(),
+            tftp_files: BTreeMap::new(),
+            http_files: BTreeMap::new(),
             out: VecDeque::new(),
             log: Vec::new(),
             transfers: BTreeMap::new(),
@@ -254,9 +258,25 @@ impl BuiltinPeer {
             .insert(name.trim_start_matches('/').to_string(), data);
     }
 
+    /// Serve `data` as `name` over TFTP only.
+    pub fn add_tftp_file(&mut self, name: &str, data: Vec<u8>) {
+        self.tftp_files
+            .insert(name.trim_start_matches('/').to_string(), data);
+    }
+
+    /// Serve `data` as `name` over HTTP only.
+    pub fn add_http_file(&mut self, name: &str, data: Vec<u8>) {
+        self.http_files
+            .insert(name.trim_start_matches('/').to_string(), data);
+    }
+
     fn lookup(&self, protocol: Protocol, name: &str) -> Option<Vec<u8>> {
         let name = name.trim_start_matches('/');
-        if let Some(d) = self.files.get(name) {
+        let own = match protocol {
+            Protocol::Tftp => &self.tftp_files,
+            Protocol::Http => &self.http_files,
+        };
+        if let Some(d) = own.get(name).or_else(|| self.files.get(name)) {
             return Some(d.clone());
         }
         let rel = Path::new(name);
@@ -1260,6 +1280,23 @@ mod tests {
         }
         assert!(p.recv().is_none());
         (data, sizes)
+    }
+
+    #[test]
+    fn a_file_can_be_served_over_one_protocol_only() {
+        let mut p = BuiltinPeer::new();
+        p.add_tftp_file("/start4.elf", vec![1]);
+        p.add_http_file("net_install/boot.img", vec![2]);
+        p.add_file("both", vec![3]);
+        assert_eq!(p.lookup(Protocol::Tftp, "start4.elf"), Some(vec![1]));
+        assert_eq!(p.lookup(Protocol::Http, "start4.elf"), None);
+        assert_eq!(
+            p.lookup(Protocol::Http, "/net_install/boot.img"),
+            Some(vec![2])
+        );
+        assert_eq!(p.lookup(Protocol::Tftp, "net_install/boot.img"), None);
+        assert_eq!(p.lookup(Protocol::Tftp, "both"), Some(vec![3]));
+        assert_eq!(p.lookup(Protocol::Http, "both"), Some(vec![3]));
     }
 
     #[test]

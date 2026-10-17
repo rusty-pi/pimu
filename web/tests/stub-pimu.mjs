@@ -8,13 +8,25 @@ export default async function init() {
   record("init");
 }
 
+export class BootImage {
+  constructor() {
+    this.files = [];
+  }
+  add_file(path, bytes) { this.files.push([path, bytes.length]); }
+  build() {
+    record("boot_image", this.files);
+    return new Uint8Array(1024);
+  }
+}
+
 export class PiBuilder {
   constructor(options, eeprom) {
     this.options = JSON.parse(options);
     record("builder", this.options, eeprom.length);
   }
   add_file(path, bytes) { record("add_file", path, bytes.length); }
-  add_net_file(path, bytes) { record("add_net_file", path, bytes.length); }
+  add_tftp_file(path, bytes) { record("add_tftp_file", path, bytes.length); }
+  add_http_file(path, bytes) { record("add_http_file", path, bytes.length); }
   set_pubkey(bytes) { record("set_pubkey", bytes.length); }
   set_hat(bytes) { record("set_hat", bytes.length); }
   set_edid(bytes) { record("set_edid", bytes.length); }

@@ -59,7 +59,9 @@ test.describe("powering on", () => {
     await app.drawer.getByRole("checkbox", { name: /Behind a USB-C dock/ }).check();
 
     await app.open("eth");
-    await app.drawer.getByRole("checkbox", { name: /Plug the cable/ }).check();
+    await app.drawer.getByRole("checkbox", { name: "Plug the cable in" }).check();
+    await app.drawer.getByRole("checkbox", { name: "Boot over TFTP" }).check();
+    await app.drawer.getByRole("radio", { name: /Boot files from my computer/ }).check();
     await app.drawer.locator("input[type=file]:not([webkitdirectory])").setInputFiles([data("boot/start4.elf")]);
 
     await app.open("hdmi");
@@ -117,7 +119,7 @@ test.describe("powering on", () => {
     expect(request.pubkey).toEqual({ __file: "pubkey.bin", size: 264 });
     expect(request.hat).toEqual({ __file: "hat.eep", size: 256 });
     expect(request.edid).toEqual({ __file: "edid.bin", size: 128 });
-    expect(request.netFiles).toEqual([{ path: "start4.elf", file: { __file: "start4.elf", size: 3 } }]);
+    expect(request.net).toEqual({ tftp: { kind: "files", files: [{ path: "start4.elf", file: { __file: "start4.elf", size: 3 } }] } });
   });
 
   test("a card that is an image asks for the image and no config.txt", async ({ app }) => {
@@ -363,7 +365,7 @@ test.describe("what the machine reports", () => {
 
   test("the Wake-on-LAN button works while the board runs with the peer", async ({ app }) => {
     await app.open("eth");
-    await app.drawer.getByRole("checkbox", { name: /Plug the cable/ }).check();
+    await app.drawer.getByRole("checkbox", { name: "Plug the cable in" }).check();
     await app.powerOn();
     await app.emit({ type: "phase", phase: "running" });
     const send = app.drawer.getByRole("button", { name: "Send a magic packet" });
@@ -393,7 +395,7 @@ test.describe("messages", () => {
 
   test("a good message goes sooner", async ({ app }) => {
     await app.open("eth");
-    await app.drawer.getByRole("checkbox", { name: /Plug the cable/ }).check();
+    await app.drawer.getByRole("checkbox", { name: "Plug the cable in" }).check();
     await app.powerOn();
     await app.emit({ type: "phase", phase: "running" });
     await app.page.clock.install();

@@ -26,11 +26,11 @@ The board is a block diagram in the style of [`board-sheet.svg`](board-sheet.svg
 | Part | What it takes |
 |---|---|
 | Power | The switch that powers the board on and off. |
-| microSD | The official firmware files from GitHub, the files of any GitHub directory, a folder from your computer, or a disk image (local file or URL). `config.txt` lines and the kernel command line. |
+| microSD | The official firmware files from GitHub, the files of any GitHub directory, a folder from your computer, a disk image (local file or URL), or no card at all. `config.txt` lines and the kernel command line. |
 | EEPROM | The bootloader image (official, a URL, a file), the boot order as a list of steps, every bootloader setting as a form with drop-downs where the value is one of a few, signed-boot options. |
 | USB 3.0 | A stick: a disk image, local or by URL, and its size. |
 | USB-C | The power, and a stick on the OTG port, optionally behind a dock. |
-| Ethernet | The built-in network peer (DHCP, DNS, TFTP, HTTP) with files to serve, and a Wake-on-LAN packet. |
+| Ethernet | The built-in network peer (DHCP, DNS, TFTP, HTTP) as a boot server over TFTP, HTTP or both, each with its own files, and a Wake-on-LAN packet. |
 | HDMI 0 | A monitor, with its EDID. |
 | GPIO | A HAT's ID EEPROM. |
 | BCM2711 | The silicon (B0 or C0), the memory, a board revision code, fuses to program, jitter and faults, and the checks of the `coherency` and `alignment` logs. |
@@ -42,6 +42,28 @@ ARM, the bootloader configuration, the fuses, and downloads the flash as the
 firmware left it. Whatever is downloaded shows its progress under the board.
 
 Parts are locked while the board is powered: the machine is built at power-on.
+
+## Network boot
+
+The Ethernet panel boots the board from the built-in peer. TFTP and HTTP are
+separate options, and each serves the official firmware, the files of a GitHub
+directory, or a folder from your computer. Choose **No card** in the microSD
+panel to boot from the network alone. Unless the boot order is set in the EEPROM
+panel, the network comes first (TFTP, then HTTP), then the card and the USB
+sticks, and the `config.txt` and `cmdline.txt` lines of the microSD panel are
+applied to the served files as well.
+
+- **TFTP** serves the files one by one, as `BOOT_ORDER` digit `2` fetches them.
+- **HTTP** (digit `7`) only boots a signed image, so the page builds a FAT16
+  `net_install/boot.img` from the files in memory (`src/bootimg.rs`), signs it
+  with an RSA-2048 key that WebCrypto makes for that power-on (`web/signing.mjs`),
+  serves it with its `boot.sig`, and puts the public key in the EEPROM's
+  `pubkey.bin` slot. `HTTP_HOST=netboot.test` and `HTTP_PORT=80` are added to
+  the bootloader settings unless they are set in the EEPROM panel. The key never
+  leaves the page, and a public key picked for secure boot is not used while HTTP
+  boot is on. The bootloader checks the image's SHA-256 in emulated VideoCore
+  code, so it takes longer than TFTP: about a minute with the official firmware
+  in Chrome, against twenty seconds for TFTP.
 
 ## Disk images are never loaded whole
 
