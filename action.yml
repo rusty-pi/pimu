@@ -32,24 +32,18 @@ runs:
         [ "$RUNNER_OS" = Linux ] || { echo "::error::pimu releases are built for Linux only"; exit 1; }
         command -v apt-get > /dev/null || { echo "::error::this action installs from pimu's apt repository, which needs apt"; exit 1; }
         site=https://rusty-pi.github.io/pimu/apt
-        root="$RUNNER_TEMP/pimu-apt"
-        mkdir -p "$root/lists/partial" "$root/cache/archives/partial"
-        curl -fsSL -o "$root/pimu.gpg" "$site/pimu.gpg"
-        echo "deb [signed-by=$root/pimu.gpg] $site stable main" > "$root/pimu.list"
-        user_apt() {
-          apt-get -qq \
-            -o Dir::Etc::sourcelist="$root/pimu.list" -o Dir::Etc::sourceparts=- \
-            -o Dir::State::lists="$root/lists" -o Dir::Cache="$root/cache" \
-            -o Debug::NoLocking=1 -o APT::Sandbox::User= "$@"
-        }
+        keyring=/etc/apt/keyrings/pimu.gpg
+        list=/etc/apt/sources.list.d/pimu.list
+        sudo install -d /etc/apt/keyrings
+        sudo curl -fsSL -o "$keyring" "$site/pimu.gpg"
+        echo "deb [signed-by=$keyring] $site stable main" | sudo tee "$list" > /dev/null
+        sudo apt-get -qq update \
+          -o Dir::Etc::sourcelist="$list" -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0
         package=pimu
         [ "$VERSION" = latest ] || package="pimu=$VERSION"
-        user_apt update
-        (cd "$root" && user_apt download "$package")
-        dpkg-deb --extract "$root"/pimu_*.deb "$root/package"
-        echo "$root/package/usr/bin" >> "$GITHUB_PATH"
-        echo "version=$(dpkg-deb --field "$root"/pimu_*.deb Version)" >> "$GITHUB_OUTPUT"
-        "$root/package/usr/bin/pimu" boot --help > /dev/null
+        sudo apt-get -qq install -y "$package"
+        echo "version=$(dpkg-query --show --showformat '${Version}' pimu)" >> "$GITHUB_OUTPUT"
+        pimu boot --help > /dev/null
 
     - if: inputs.args != ''
       shell: bash

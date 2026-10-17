@@ -1,10 +1,8 @@
 # The GitHub Action
 
 `rusty-pi/pimu` is a composite action: it installs a released `pimu` on a Linux
-runner from the project's apt repository (see the [README](../README.md)) and,
-if you give it arguments, runs it. It downloads the package with `apt-get` run as
-the runner's own user, unpacks it into the runner's temp directory and adds
-that to `PATH`, so it needs no `sudo` and leaves the system's packages alone. Use it to boot your own
+runner from the project's apt repository (`sudo apt-get install pimu`, see the
+[README](../README.md)) and, if you give it arguments, runs it. Use it to boot your own
 firmware and compare the serial transcript in CI, without building pimu.
 
 ```yaml
@@ -40,7 +38,7 @@ The output `version` is the release that was installed.
 ## What it does not do
 
 - It installs Linux binaries only, for x86-64 and aarch64 runners
-  (`ubuntu-24.04` and `ubuntu-24.04-arm`), and needs `apt` and `curl`.
+  (`ubuntu-24.04` and `ubuntu-24.04-arm`), and needs `apt` and `sudo`.
 - It brings no firmware. A boot needs your `pieeprom.bin` (`--eeprom`, a path
   or a URL) and a boot medium; see [`running.md`](running.md).
 - `args` is evaluated by the shell, so quote what needs quoting, and only put
