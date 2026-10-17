@@ -47,7 +47,8 @@ jobs:
       - name: Assemble the site
         run: |
           mkdir site
-          cp web/index.html web/style.css web/app.mjs web/bootconf.mjs web/download.mjs web/worker.mjs site/
+          cp web/index.html web/style.css site/
+          cp $(ls web/*.mjs | grep -Ev '\.test\.mjs$|^web/playwright\.config\.mjs$') site/
           cp -r web/pkg site/pkg
           rm -f site/pkg/.gitignore site/pkg/package.json site/pkg/*.d.ts
           sed -i "s|built from a checkout|release ${GITHUB_REF_NAME}|" site/index.html
