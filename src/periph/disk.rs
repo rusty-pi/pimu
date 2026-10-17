@@ -51,6 +51,15 @@ enum Backing {
         len: u64,
         chunks: RefCell<HashMap<u64, Vec<u8>>>,
     },
+    /// An image something else holds and reads out on request: the file a
+    /// browser page was given, say. Read in [`CHUNK`] pieces like
+    /// [`Backing::Remote`], but only [`SOURCE_CHUNKS`] of them kept, since a
+    /// local read costs little and the image may be bigger than the memory.
+    Source {
+        source: Box<dyn ByteSource>,
+        len: u64,
+        chunks: RefCell<HashMap<u64, Vec<u8>>>,
+    },
     /// An `.img.xz`, read a block at a time through its own index: neither
     /// unpacked on the host nor fetched whole from a server
     /// ([`crate::xz`]).
@@ -90,6 +99,17 @@ impl std::fmt::Display for Compressed {
         }
     }
 }
+
+/// Where an image's bytes come from when the host cannot open a path or reach a
+/// URL: asked for a range at a time, never the whole.
+pub trait ByteSource {
+    fn size(&self) -> u64;
+
+    fn read_at(&self, at: u64, out: &mut [u8]) -> Result<()>;
+}
+
+/// Chunks of a [`ByteSource`] image kept at once: 64 MiB.
+const SOURCE_CHUNKS: usize = 64;
 
 /// What one `Range` request reads. Large enough that a boot costs tens of
 /// requests rather than thousands, small enough not to pull a whole image in.
@@ -140,6 +160,37 @@ fn read_exact_at(file: &File, out: &mut [u8], at: u64) -> std::io::Result<()> {
 #[cfg(not(unix))]
 fn read_exact_at(_file: &File, _out: &mut [u8], _at: u64) -> std::io::Result<()> {
     Err(std::io::ErrorKind::Unsupported.into())
+}
+
+/// `out.len()` bytes at `at` out of the [`CHUNK`] holding them, fetched on the
+/// first read and kept — up to `keep` of them, the whole cache dropped past
+/// that. A block never straddles two chunks: both are powers of two. A chunk
+/// that cannot be fetched stops the run, as a card that fails would.
+fn read_chunked(
+    chunks: &RefCell<HashMap<u64, Vec<u8>>>,
+    len: u64,
+    at: u64,
+    out: &mut [u8],
+    keep: usize,
+    fetch: &dyn Fn(u64, usize) -> Result<Vec<u8>>,
+) {
+    let first = at / CHUNK;
+    let mut chunks = chunks.borrow_mut();
+    if !chunks.contains_key(&first) {
+        let start = first * CHUNK;
+        let want = CHUNK.min(len - start) as usize;
+        match fetch(start, want) {
+            Ok(bytes) => {
+                if chunks.len() >= keep {
+                    chunks.clear();
+                }
+                chunks.insert(first, bytes);
+            }
+            Err(e) => panic!("{e:#}"),
+        }
+    }
+    let from = (at - first * CHUNK) as usize;
+    out.copy_from_slice(&chunks[&first][from..from + out.len()]);
 }
 
 fn copy_from(out: &mut [u8], body: &[u8], at: u64, what: &str) -> std::io::Result<()> {
@@ -225,6 +276,21 @@ impl Disk {
             written: HashMap::new(),
             io: None,
         })
+    }
+
+    /// An image behind `source`, read as the guest asks for blocks.
+    pub fn from_source(source: Box<dyn ByteSource>, min_bytes: u64) -> Disk {
+        let len = source.size();
+        Disk {
+            backing: Backing::Source {
+                source,
+                len,
+                chunks: RefCell::new(HashMap::new()),
+            },
+            blocks: len.max(min_bytes) / BLOCK_SIZE as u64,
+            written: HashMap::new(),
+            io: None,
+        }
     }
 
     /// The disk an xz stream of more than one block makes, or `None` when
@@ -332,22 +398,40 @@ impl Disk {
             Backing::Remote { url, len, chunks } => {
                 if at < *len {
                     let n = BLOCK_SIZE.min((*len - at) as usize);
-                    let first = at / CHUNK;
-                    let mut chunks = chunks.borrow_mut();
-                    let chunk = match chunks.get(&first) {
-                        Some(chunk) => chunk,
-                        None => {
-                            let start = first * CHUNK;
-                            let want = CHUNK.min(*len - start) as usize;
-                            match crate::remote::fetch_range(url, start, want) {
-                                Ok(bytes) => chunks.entry(first).or_insert(bytes),
-                                Err(e) => panic!("reading {url} at byte {start}: {e:#}"),
-                            }
-                        }
-                    };
-                    let from = (at - first * CHUNK) as usize;
-                    // A block never straddles two chunks: both are powers of two.
-                    out[..n].copy_from_slice(&chunk[from..from + n]);
+                    read_chunked(
+                        chunks,
+                        *len,
+                        at,
+                        &mut out[..n],
+                        usize::MAX,
+                        &|start, want| {
+                            crate::remote::fetch_range(url, start, want)
+                                .with_context(|| format!("reading {url} at byte {start}"))
+                        },
+                    );
+                }
+            }
+            Backing::Source {
+                source,
+                len,
+                chunks,
+            } => {
+                if at < *len {
+                    let n = BLOCK_SIZE.min((*len - at) as usize);
+                    read_chunked(
+                        chunks,
+                        *len,
+                        at,
+                        &mut out[..n],
+                        SOURCE_CHUNKS,
+                        &|start, want| {
+                            let mut bytes = vec![0u8; want];
+                            source
+                                .read_at(start, &mut bytes)
+                                .with_context(|| format!("reading the image at byte {start}"))?;
+                            Ok(bytes)
+                        },
+                    );
                 }
             }
             Backing::Xz {
@@ -456,6 +540,41 @@ mod tests {
         assert!(d.read_block(1, &mut b) && b[0] == 0);
         assert!(!d.read_block(4, &mut b));
         assert_eq!(d.written_blocks(), 3);
+    }
+
+    /// An image behind a [`ByteSource`] is read in chunks as blocks are asked
+    /// for, never whole, and what the guest writes overlays it.
+    #[test]
+    fn a_source_is_read_a_chunk_at_a_time() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        struct Counting(Rc<Cell<u32>>);
+        impl ByteSource for Counting {
+            fn size(&self) -> u64 {
+                3 * CHUNK
+            }
+            fn read_at(&self, at: u64, out: &mut [u8]) -> Result<()> {
+                self.0.set(self.0.get() + 1);
+                for (i, b) in out.iter_mut().enumerate() {
+                    *b = ((at + i as u64) / BLOCK_SIZE as u64) as u8;
+                }
+                Ok(())
+            }
+        }
+
+        let reads = Rc::new(Cell::new(0));
+        let mut d = Disk::from_source(Box::new(Counting(reads.clone())), 0);
+        let mut b = [0u8; BLOCK_SIZE];
+        assert!(d.read_block(5, &mut b) && b[0] == 5);
+        assert!(d.read_block(6, &mut b) && b[0] == 6);
+        assert_eq!(reads.get(), 1);
+        let into_second_chunk = CHUNK / BLOCK_SIZE as u64 + 1;
+        assert!(d.read_block(into_second_chunk, &mut b) && b[0] == into_second_chunk as u8);
+        assert_eq!(reads.get(), 2);
+        assert!(d.write(5, &[0x55; BLOCK_SIZE]));
+        assert!(d.read_block(5, &mut b) && b[0] == 0x55);
+        assert_eq!(d.blocks(), 3 * CHUNK / BLOCK_SIZE as u64);
     }
 
     /// A compressed image reads as the image it decodes to, block for block,

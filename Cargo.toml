@@ -59,5 +59,6 @@ opt-level = 1
 opt-level = 3
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
 wasm-bindgen = "0.2"
 web-time = "1"

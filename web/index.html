@@ -3,79 +3,193 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>pimu in the browser</title>
-<style>
-  :root { --bg: #fff; --fg: #1b1b1b; --muted: #666; --term-bg: #111; --term-fg: #ddd; }
-  @media (prefers-color-scheme: dark) {
-    :root { --bg: #161616; --fg: #e6e6e6; --muted: #999; }
-  }
-  body { margin: 0 auto; padding: 16px; max-width: 960px; background: var(--bg); color: var(--fg);
-         font: 16px/1.5 system-ui, sans-serif; }
-  button { font: inherit; padding: 4px 16px; }
-  #bar { display: flex; gap: 16px; align-items: center; margin: 16px 0; }
-  #status { color: var(--muted); }
-  #term { height: 60vh; overflow-y: auto; margin: 0; padding: 8px; white-space: pre-wrap;
-          overflow-wrap: anywhere; background: var(--term-bg); color: var(--term-fg);
-          font: 13px/1.35 ui-monospace, monospace; outline: none; }
-  #term:focus { box-shadow: 0 0 0 2px #4a90d9; }
-  p.note { color: var(--muted); font-size: 14px; }
-</style>
+<title>pimu – a Raspberry Pi 4 in your browser</title>
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
-<h1>pimu in the browser</h1>
-<p>A Raspberry Pi 4 (BCM2711) booting its real firmware on the VideoCore VPU and then Linux,
-all emulated in WebAssembly in this tab.</p>
-<div id="bar">
-  <button id="start">Boot</button>
-  <span id="status">idle</span>
-</div>
-<pre id="term" tabindex="0" aria-label="Serial console"></pre>
-<p class="note">Downloads about 13 MB of firmware and a kernel from raspberrypi/firmware on GitHub,
-and needs about 1 GiB of memory. The emulation is slow: expect minutes to the end of the kernel's boot.
-There is no root filesystem, so the boot ends in a kernel panic, as the command-line example does.</p>
-<script type="module">
-  const term = document.getElementById("term");
-  const status = document.getElementById("status");
-  const start = document.getElementById("start");
-  const decoder = new TextDecoder();
-  const encoder = new TextEncoder();
-  const worker = new Worker("./worker.js", { type: "module" });
+<header class="top">
+  <h1>pimu</h1>
+  <p class="tag">A Raspberry Pi 4 and its real boot firmware, emulated in this tab.</p>
+  <div class="spacer"></div>
+  <span id="phase" class="pill" data-phase="off">Off</span>
+  <button id="pause" class="ghost" hidden>Pause</button>
+  <button id="power" class="primary">Power on</button>
+</header>
 
-  worker.onmessage = ({ data }) => {
-    if (data.status) status.textContent = data.status;
-    if (data.output) {
-      const stick = term.scrollTop + term.clientHeight >= term.scrollHeight - 4;
-      term.textContent += decoder.decode(data.output, { stream: true }).replace(/\r/g, "");
-      if (stick) term.scrollTop = term.scrollHeight;
-    }
-  };
+<main class="layout">
+  <section class="stage" aria-label="The board">
+    <svg id="board" viewBox="-10 0 800 540" role="group" aria-label="Raspberry Pi 4 Model B. Click a part to change what is plugged into it.">
+      <defs>
+        <linearGradient id="chip" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="var(--chip-hi)"/><stop offset="1" stop-color="var(--chip-lo)"/>
+        </linearGradient>
+      </defs>
 
-  start.onclick = () => {
-    start.disabled = true;
-    term.focus();
-    worker.postMessage({ start: true });
-  };
+      <rect class="pcb" x="80" y="40" width="640" height="410" rx="18"/>
+      <g class="holes"><circle cx="106" cy="66" r="7"/><circle cx="694" cy="66" r="7"/><circle cx="106" cy="424" r="7"/><circle cx="694" cy="424" r="7"/></g>
 
-  term.addEventListener("keydown", (event) => {
-    let keys = null;
-    if (event.ctrlKey && event.key.length === 1 && /[a-z]/i.test(event.key)) {
-      keys = Uint8Array.of(event.key.toLowerCase().charCodeAt(0) - 96);
-    } else if (event.metaKey || event.altKey) {
-      return;
-    } else if (event.key === "Enter") {
-      keys = Uint8Array.of(13);
-    } else if (event.key === "Backspace") {
-      keys = Uint8Array.of(127);
-    } else if (event.key === "Tab") {
-      keys = Uint8Array.of(9);
-    } else if (event.key.length === 1) {
-      keys = encoder.encode(event.key);
-    }
-    if (keys) {
-      event.preventDefault();
-      worker.postMessage({ keys });
-    }
-  });
-</script>
+      <!-- GPIO header -->
+      <g class="part" data-part="gpio" tabindex="0" role="button" aria-label="GPIO header: add a HAT">
+        <title>GPIO header – add a HAT</title>
+        <rect class="hit" x="140" y="52" width="320" height="42" rx="4"/>
+        <rect class="plastic" x="144" y="56" width="312" height="34" rx="3"/>
+        <g class="pins" id="pins"></g>
+        <text class="cap" x="300" y="112" text-anchor="middle">GPIO</text>
+      </g>
+
+      <!-- decorative: wireless module, camera and display connectors -->
+      <rect class="shield" x="170" y="150" width="96" height="64" rx="3"/>
+      <text class="cap dim" x="218" y="187" text-anchor="middle">Wi-Fi / BT</text>
+      <rect class="plastic" x="520" y="52" width="110" height="16" rx="2"/>
+      <rect class="plastic" x="520" y="410" width="110" height="16" rx="2"/>
+
+      <!-- SoC with the cores -->
+      <g class="part" data-part="soc" tabindex="0" role="button" aria-label="BCM2711 processor: board, memory and stepping">
+        <title>BCM2711 – board, stepping, memory</title>
+        <rect class="chip" x="288" y="176" width="144" height="150" rx="6"/>
+        <text class="cap on-chip" x="360" y="196" text-anchor="middle">BCM2711</text>
+        <text class="mini on-chip" x="300" y="222">ARM Cortex-A72</text>
+        <g id="arm-cores">
+          <rect class="core" data-core="arm0" x="300" y="230" width="28" height="28" rx="3"><title>ARM core 0</title></rect>
+          <rect class="core" data-core="arm1" x="334" y="230" width="28" height="28" rx="3"><title>ARM core 1</title></rect>
+          <rect class="core" data-core="arm2" x="368" y="230" width="28" height="28" rx="3"><title>ARM core 2</title></rect>
+          <rect class="core" data-core="arm3" x="402" y="230" width="22" height="28" rx="3"><title>ARM core 3</title></rect>
+        </g>
+        <text class="mini on-chip" x="300" y="282">VideoCore VPU</text>
+        <g id="vpu-cores">
+          <rect class="core" data-core="vpu0" x="300" y="288" width="60" height="26" rx="3"><title>VPU core 0</title></rect>
+          <rect class="core" data-core="vpu1" x="366" y="288" width="58" height="26" rx="3"><title>VPU core 1</title></rect>
+        </g>
+      </g>
+
+      <!-- LPDDR4 -->
+      <g class="part" data-part="soc" tabindex="-1" aria-hidden="true">
+        <rect class="ram" x="464" y="210" width="74" height="82" rx="4"/>
+        <text class="mini on-ram" x="501" y="256" text-anchor="middle">LPDDR4</text>
+      </g>
+
+      <!-- EEPROM -->
+      <g class="part" data-part="eeprom" tabindex="0" role="button" aria-label="Boot EEPROM: bootloader image and settings">
+        <title>Boot EEPROM – bootloader image and settings</title>
+        <rect class="hit" x="208" y="338" width="64" height="50" rx="4"/>
+        <rect class="chip small" x="220" y="348" width="40" height="28" rx="3"/>
+        <text class="cap" x="240" y="402" text-anchor="middle">EEPROM</text>
+      </g>
+
+      <!-- microSD slot on the left edge, the card sticks out -->
+      <g class="part" data-part="sd" tabindex="0" role="button" aria-label="microSD slot: insert a card image or boot files">
+        <title>microSD card – boot files or a disk image</title>
+        <rect class="hit" x="-10" y="226" width="130" height="86" rx="6"/>
+        <rect class="slot" x="86" y="238" width="48" height="62" rx="3"/>
+        <g class="plug" id="sd-card">
+          <path class="card" d="M-4 244 H88 V294 H-4 Z"/>
+          <rect class="gold" x="64" y="252" width="16" height="34"/>
+          <text class="mini on-card" x="30" y="274" text-anchor="middle" id="sd-label">SD</text>
+        </g>
+        <path class="ghost-outline" id="sd-ghost" d="M-4 244 H88 V294 H-4 Z"/>
+        <text class="cap" x="30" y="322" text-anchor="middle">microSD</text>
+      </g>
+
+      <!-- right edge: Ethernet and the USB stacks -->
+      <g class="part" data-part="eth" tabindex="0" role="button" aria-label="Ethernet: plug into the built-in network peer">
+        <title>Ethernet – the built-in network peer</title>
+        <rect class="hit" x="640" y="62" width="150" height="116" rx="6"/>
+        <rect class="metal" x="660" y="70" width="104" height="100" rx="4"/>
+        <rect class="socket" x="672" y="84" width="82" height="62" rx="2"/>
+        <g class="plug" id="eth-cable"><rect class="cable" x="684" y="94" width="104" height="42" rx="6"/><rect class="rj" x="700" y="98" width="52" height="34" rx="2"/></g>
+        <circle class="led" id="eth-led" cx="680" cy="158" r="4"/>
+        <text class="cap" x="712" y="196" text-anchor="middle">Ethernet</text>
+      </g>
+
+      <g class="part" data-part="usb" tabindex="0" role="button" aria-label="USB 3.0 socket: plug in a USB stick">
+        <title>USB 3.0 socket (blue) – a USB stick</title>
+        <rect class="hit" x="640" y="204" width="150" height="104" rx="6"/>
+        <rect class="metal" x="660" y="212" width="100" height="88" rx="3"/>
+        <rect class="blue" x="670" y="218" width="82" height="32" rx="2"/>
+        <rect class="blue" x="670" y="258" width="82" height="32" rx="2"/>
+        <g class="plug" id="usb-stick"><rect class="stick" x="690" y="223" width="98" height="22" rx="3"/><rect class="stick-led" x="770" y="230" width="10" height="8" rx="1"/></g>
+        <text class="cap" x="710" y="324" text-anchor="middle">USB 3.0</text>
+      </g>
+
+      <g aria-hidden="true">
+        <rect class="metal" x="660" y="338" width="100" height="88" rx="3"/>
+        <rect class="usb2" x="670" y="344" width="82" height="32" rx="2"/>
+        <rect class="usb2" x="670" y="384" width="82" height="32" rx="2"/>
+        <text class="cap dim" x="710" y="446" text-anchor="middle">USB 2.0</text>
+      </g>
+
+      <!-- bottom edge: USB-C, micro-HDMI, audio -->
+      <g class="part" data-part="usbc" tabindex="0" role="button" aria-label="USB-C: power, and a USB stick on the OTG port">
+        <title>USB-C – power, and a USB stick on the OTG port</title>
+        <rect class="hit" x="124" y="430" width="100" height="100" rx="6"/>
+        <rect class="metal" x="138" y="440" width="72" height="22" rx="6"/>
+        <rect class="socket" x="146" y="446" width="56" height="10" rx="4"/>
+        <g class="plug" id="otg-stick"><rect class="stick" x="150" y="472" width="48" height="52" rx="4"/><rect class="stick-led" x="168" y="508" width="12" height="8" rx="1"/></g>
+      </g>
+
+      <g class="part" data-part="hdmi" tabindex="0" role="button" aria-label="Micro-HDMI 0: plug in a monitor">
+        <title>HDMI 0 – plug in a monitor</title>
+        <rect class="hit" x="262" y="430" width="70" height="70" rx="6"/>
+        <rect class="metal" x="270" y="440" width="54" height="22" rx="3"/>
+        <rect class="socket" x="278" y="446" width="38" height="10" rx="2"/>
+        <g class="plug" id="hdmi-plug"><rect class="cable" x="278" y="466" width="38" height="36" rx="5"/></g>
+        <text class="cap" x="297" y="516" text-anchor="middle">HDMI 0</text>
+      </g>
+      <g aria-hidden="true">
+        <rect class="metal" x="350" y="440" width="54" height="22" rx="3"/>
+        <rect class="socket" x="358" y="446" width="38" height="10" rx="2"/>
+        <rect class="metal" x="440" y="436" width="38" height="26" rx="3"/>
+        <circle class="socket" cx="459" cy="449" r="8"/>
+      </g>
+
+      <!-- power: the plug into the USB-C port -->
+      <g id="power-plug" class="power" tabindex="0" role="button" aria-label="Power plug: power the board on or off">
+        <title>Power on / off</title>
+        <rect class="hit" x="-10" y="452" width="120" height="80" rx="8"/>
+        <path class="wire" d="M40 500 C 70 500, 80 478, 110 470 S 140 466, 150 466" fill="none"/>
+        <rect class="plug-body" x="2" y="484" width="46" height="32" rx="6"/>
+        <rect class="prong" x="-4" y="491" width="12" height="5"/><rect class="prong" x="-4" y="504" width="12" height="5"/>
+        <text class="cap" x="28" y="534" text-anchor="middle" id="power-label">Power</text>
+      </g>
+
+      <circle class="led red" id="led-power" cx="238" cy="436" r="4"/>
+      <circle class="led green" id="led-act" cx="254" cy="436" r="4"/>
+    </svg>
+
+    <ul class="legend" aria-label="Core states">
+      <li><i class="swatch off"></i>off</li><li><i class="swatch sleeping"></i>asleep (wfi / wfe)</li><li><i class="swatch running"></i>running</li>
+      <li class="grow"></li>
+      <li id="clock" class="mono"></li>
+    </ul>
+  </section>
+
+  <aside id="drawer" class="drawer" hidden aria-live="polite"></aside>
+</main>
+
+<section id="downloads" class="downloads" hidden aria-live="polite"></section>
+
+<section class="screen">
+  <div class="tabs" role="tablist">
+    <button role="tab" data-tab="console" aria-selected="true">Serial console</button>
+    <button role="tab" data-tab="log" aria-selected="false">Log <span id="log-count" class="count"></span></button>
+    <button role="tab" data-tab="info" aria-selected="false">Inspect</button>
+    <div class="spacer"></div>
+    <span id="result" class="result"></span>
+  </div>
+  <div id="tab-console" class="tabpane">
+    <pre id="term" tabindex="0" aria-label="Serial console. Typing sends keys to the Pi."></pre>
+    <p class="hint" id="term-hint">Click the console and type: keys go to the board's serial port.</p>
+  </div>
+  <div id="tab-log" class="tabpane" hidden></div>
+  <div id="tab-info" class="tabpane" hidden></div>
+</section>
+
+<footer class="foot">
+  <a href="https://github.com/rusty-pi/pimu">rusty-pi/pimu</a> ·
+  <a href="https://github.com/rusty-pi/pimu/blob/main/docs/web.md">about this page and its limits</a>
+</footer>
+
+<div id="toast" class="toast" role="status" hidden></div>
+<script type="module" src="app.js"></script>
 </body>
 </html>

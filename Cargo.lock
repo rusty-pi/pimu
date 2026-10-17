@@ -177,6 +177,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "hmac",
+ "js-sys",
  "schemars",
  "serde",
  "serde_json",

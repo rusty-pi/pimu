@@ -91,11 +91,13 @@ pub fn card_from_entries(entries: Vec<Entry>) -> Result<Card> {
 
 /// One entry of the card's tree. The order is the order the firmware finds them
 /// in, so it must not depend on the host's readdir order or collation.
+#[derive(Clone)]
 pub struct Entry {
     pub name: String,
     pub kind: Kind,
 }
 
+#[derive(Clone)]
 pub enum Kind {
     File { source: Source, len: u64 },
     Dir(Vec<Entry>),
