@@ -199,8 +199,9 @@ If the user declines, leave the tag in place and say how to undo it
 gh run watch "$(gh run list --workflow=release.yml --limit 1 --json databaseId -q '.[0].databaseId')"
 ```
 
-The job takes around an hour: it trains a PGO profile by booting the firmware
-before it builds either binary. When it finishes, check the release has the six
+The job takes about five minutes (the last releases ran 4 to 6): it trains a PGO
+profile by booting the firmware before it builds either binary, and the `pages`
+job follows it. When it finishes, check the release has the six
 assets (two tarballs, two `.deb`, two `.rpm`), that its `pages` job deployed the
 site with the apt and dnf repositories, and report the release URL.
 

@@ -70,7 +70,7 @@ jobs:
 
       # The tag names a commit that is already on main, so `boot-scenario`
       # has run on it there — on the same SHA, under a different ref. A run
-      # that failed is worth stopping for before an hour of PGO.
+      # that failed is worth stopping for before the PGO training.
       #
       # Absent or still going is not: that workflow skips a commit touching
       # only `**.md` or `docs/`, which would make such a commit unreleasable,
