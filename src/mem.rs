@@ -2,7 +2,111 @@
 
 use crate::bus::{BusError, BusResult, Width};
 
+use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, AtomicU8, Ordering};
+
 const PAGE_SHIFT: u32 = 12;
+
+/// RAM as cores on other threads see it: every access is atomic, so a core
+/// reading what another is writing gets one of the two values, never a mix.
+///
+/// A handle borrows nothing, so the [`Ram`] it came from has to outlive every
+/// copy and must not swap its contents meanwhile; the parallel ARM run
+/// guarantees both by joining its threads before the machine goes.
+#[derive(Clone, Copy)]
+pub struct SharedRam {
+    ptr: *mut u8,
+    len: usize,
+}
+
+unsafe impl Send for SharedRam {}
+unsafe impl Sync for SharedRam {}
+
+impl SharedRam {
+    #[inline]
+    fn span(&self, off: u64, size: u32) -> Option<*mut u8> {
+        let off = usize::try_from(off).ok()?;
+        (off.checked_add(size as usize)? <= self.len).then(|| unsafe { self.ptr.add(off) })
+    }
+
+    /// `size` bytes (1, 2, 4 or 8) at `off`, little-endian. Naturally aligned
+    /// accesses are single atomic operations; the rest go a byte at a time.
+    #[inline]
+    pub fn load(&self, off: u64, size: u32) -> Option<u64> {
+        let p = self.span(off, size)?;
+        Some(unsafe {
+            match size {
+                1 => u64::from((*(p as *const AtomicU8)).load(Ordering::Acquire)),
+                2 if p as usize & 1 == 0 => {
+                    u64::from(AtomicU16::from_ptr(p.cast()).load(Ordering::Acquire))
+                }
+                4 if p as usize & 3 == 0 => {
+                    u64::from(AtomicU32::from_ptr(p.cast()).load(Ordering::Acquire))
+                }
+                8 if p as usize & 7 == 0 => AtomicU64::from_ptr(p.cast()).load(Ordering::Acquire),
+                _ => (0..size as usize).fold(0, |v, i| {
+                    v | u64::from((*(p.add(i) as *const AtomicU8)).load(Ordering::Relaxed))
+                        << (8 * i)
+                }),
+            }
+        })
+    }
+
+    /// The store matching [`Self::load`].
+    #[inline]
+    pub fn store(&self, off: u64, size: u32, value: u64) -> Option<()> {
+        let p = self.span(off, size)?;
+        unsafe {
+            match size {
+                1 => (*(p as *const AtomicU8)).store(value as u8, Ordering::Release),
+                2 if p as usize & 1 == 0 => {
+                    AtomicU16::from_ptr(p.cast()).store(value as u16, Ordering::Release)
+                }
+                4 if p as usize & 3 == 0 => {
+                    AtomicU32::from_ptr(p.cast()).store(value as u32, Ordering::Release)
+                }
+                8 if p as usize & 7 == 0 => {
+                    AtomicU64::from_ptr(p.cast()).store(value, Ordering::Release)
+                }
+                _ => {
+                    for i in 0..size as usize {
+                        (*(p.add(i) as *const AtomicU8))
+                            .store((value >> (8 * i)) as u8, Ordering::Relaxed)
+                    }
+                }
+            }
+        }
+        Some(())
+    }
+
+    /// Store `new` if the location still holds `old`: whether it did. `None`
+    /// if the access is out of range or not naturally aligned, which an
+    /// exclusive access never is.
+    #[inline]
+    pub fn compare_exchange(&self, off: u64, size: u32, old: u64, new: u64) -> Option<bool> {
+        let p = self.span(off, size)?;
+        if p as usize & (size as usize - 1) != 0 {
+            return None;
+        }
+        let (a, r) = (Ordering::AcqRel, Ordering::Acquire);
+        Some(unsafe {
+            match size {
+                1 => (*(p as *const AtomicU8))
+                    .compare_exchange(old as u8, new as u8, a, r)
+                    .is_ok(),
+                2 => AtomicU16::from_ptr(p.cast())
+                    .compare_exchange(old as u16, new as u16, a, r)
+                    .is_ok(),
+                4 => AtomicU32::from_ptr(p.cast())
+                    .compare_exchange(old as u32, new as u32, a, r)
+                    .is_ok(),
+                8 => AtomicU64::from_ptr(p.cast())
+                    .compare_exchange(old, new, a, r)
+                    .is_ok(),
+                _ => return None,
+            }
+        })
+    }
+}
 
 pub struct Ram {
     base: u32,
@@ -63,6 +167,15 @@ impl Ram {
 
     pub fn base(&self) -> u32 {
         self.base
+    }
+
+    /// The same bytes, for cores on other threads. See [`SharedRam`] for what
+    /// the caller promises.
+    pub fn share(&mut self) -> SharedRam {
+        SharedRam {
+            ptr: self.data.as_mut_ptr(),
+            len: self.data.len(),
+        }
     }
 
     pub fn len(&self) -> usize {

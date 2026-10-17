@@ -111,6 +111,8 @@ use crate::periph::gentimer::{self, GenericTimer, Reg, Which};
 use crate::periph::{armlocal, gic};
 
 pub mod blocks;
+#[cfg(not(target_arch = "wasm32"))]
+mod par;
 mod park;
 mod sha;
 
@@ -186,6 +188,10 @@ pub struct Core {
     pub sha_blocks: u64,
     /// `PIMU_ARM_BLOCKS=1`: the straight-line runs this core executed.
     pub blocks: Option<Box<blocks::Blocks>>,
+    /// Where the core's own clock stood when its thread last stopped
+    /// ([`ArmSide::start_parallel`]).
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    par_cycles: u64,
 }
 
 impl Core {
@@ -206,6 +212,7 @@ impl Core {
             sha_blocks: 0,
             blocks: (crate::diag::ON && std::env::var_os("PIMU_ARM_BLOCKS").is_some())
                 .then(Box::<blocks::Blocks>::default),
+            par_cycles: 0,
         }
     }
 
@@ -291,6 +298,11 @@ pub struct ArmSide {
     stored: bool,
     /// Where [`Channel::ArmExc`] goes: the machine's, taken at release.
     log: Log,
+    /// Run the cores on threads of their own ([`par`]) rather than in turn.
+    parallel: bool,
+    /// The threads, while they run; the cores are theirs until [`Self::pause`].
+    #[cfg(not(target_arch = "wasm32"))]
+    par: Option<par::ParHost>,
 }
 
 /// The device interrupt lines wired to the GIC: the mailbox, VCHIQ's
@@ -424,6 +436,9 @@ impl ArmSide {
             stop_on_store: false,
             stored: false,
             log: Log::default(),
+            parallel: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            par: None,
         };
         arm.set_detectors();
         arm
@@ -457,8 +472,37 @@ impl ArmSide {
         arm
     }
 
+    /// Run the cores on a host thread each, from the next [`Self::catch_up`]
+    /// on. The run no longer repeats exactly (`src/arm/par.rs`). Not available
+    /// in the browser, where a call does nothing.
+    pub fn set_parallel(&mut self, on: bool) {
+        self.parallel = on && cfg!(not(target_arch = "wasm32"));
+    }
+
+    /// Whether the cores run on threads of their own.
+    pub fn is_parallel(&self) -> bool {
+        self.parallel
+    }
+
+    /// Stop the cores' threads and take the cores back, so their state can be
+    /// read. The next [`Self::catch_up`] starts the threads again. A run that
+    /// is not parallel has nothing to do.
+    pub fn pause(&mut self, m: &mut Machine) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(par) = self.par.take() {
+            self.cores = par.pause(m);
+            self.cycles = self.cores.iter().map(|c| c.par_cycles).min().unwrap_or(0);
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = m;
+    }
+
     /// Run until the ARM has had every cycle of modelled time since release.
     pub fn catch_up(&mut self, m: &mut Machine) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.parallel {
+            return self.catch_up_parallel(m);
+        }
         let now = m.systimer.cycles_at(gentimer::ARM_HZ);
         let since = now - *self.released_at.get_or_insert(now);
         if since > self.cycles {
@@ -470,6 +514,14 @@ impl ArmSide {
     /// the first cycle in which a core writes a VPU-side peripheral. Returns
     /// the microsecond the VPU wakes in.
     pub fn run_until_store(&mut self, m: &mut Machine, until_us: u64) -> u64 {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.parallel {
+            self.start_parallel(m);
+            return self
+                .par
+                .as_mut()
+                .map_or(until_us, |p| p.run_until_store(m, until_us));
+        }
         const PER_US: u64 = gentimer::ARM_HZ / 1_000_000;
         let now = m.systimer.cycles_at(gentimer::ARM_HZ);
         let released = *self.released_at.get_or_insert(now);
@@ -485,6 +537,29 @@ impl ArmSide {
             return until_us;
         }
         (released + self.cycles).div_ceil(PER_US).min(until_us)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn start_parallel(&mut self, m: &mut Machine) {
+        if self.par.is_some() || self.stopped.is_some() {
+            return;
+        }
+        let now = m.systimer.cycles_at(gentimer::ARM_HZ);
+        let released = *self.released_at.get_or_insert(now);
+        self.unpark_if(m, |_, _| true, 0);
+        let cores = std::mem::take(&mut self.cores);
+        self.par = Some(par::ParHost::start(m, cores, released));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn catch_up_parallel(&mut self, m: &mut Machine) {
+        self.start_parallel(m);
+        if let Some(par) = self.par.as_mut() {
+            par.sync(m);
+            if let Some(stop) = par.take_stop() {
+                self.stopped = Some(stop);
+            }
+        }
     }
 
     /// Bring every core's interrupt inputs up to date, and note when a timer
@@ -1047,7 +1122,7 @@ impl ArmSide {
             Step::Wfe => {
                 core.insns += 1;
                 core.waiting = true;
-                let until = cycles + wfe_timeout(core);
+                let until = cycles + wfe_timeout(&core.cpu, &core.timer);
                 core.wfe_until = Some(until);
                 wfe_until = Some(until);
             }
@@ -1204,28 +1279,92 @@ struct ArmBus<'a> {
     periph_store: bool,
 }
 
+/// Where `size` bytes at ARM physical `addr` land, given `ram_len` bytes of DRAM.
+#[inline]
+fn route(ram_len: usize, addr: u64, size: u32, write: bool) -> Result<Target, Abort> {
+    let abort = Abort { addr, write };
+    let end = addr.checked_add(u64::from(size)).ok_or(abort)?;
+    let within = |base: u32, len: u32| {
+        let base = u64::from(base);
+        (addr >= base && end <= base + u64::from(len)).then(|| (addr - base) as u32)
+    };
+    if end <= ram_len as u64 && (end <= RAM_LOW_END || addr >= RAM_HIGH_BASE) {
+        Ok(Target::Ram(addr))
+    } else if PERIPH.contains(&addr) && end <= PERIPH.end {
+        Ok(Target::Periph((addr - PERIPH_TO_BUS) as u32))
+    } else if let Some(off) = within(armlocal::BASE, armlocal::SIZE) {
+        Ok(Target::Local(off))
+    } else if let Some(off) = within(gic::BASE, gic::SIZE) {
+        Ok(Target::Gic(off))
+    } else if PCIE.contains(&addr) && end <= PCIE.end {
+        Ok(Target::Pcie(addr))
+    } else {
+        Err(abort)
+    }
+}
+
+/// A read of at most 4 bytes outside DRAM, which is not on the cores' side of
+/// the machine: `Err` is a bus abort.
+fn device_read(m: &mut Machine, target: Target, w: Width, acc: gic::Accessor) -> Result<u64, ()> {
+    match target {
+        Target::Ram(_) => unreachable!("DRAM is not a device"),
+        Target::Periph(a) => m.load(a, w).map(u64::from).map_err(|_| ()),
+        Target::Local(o) => m.arm_local.read(o, w).map(u64::from).map_err(|_| ()),
+        Target::Gic(o) => m.gic.read_as(acc, o, w).map(u64::from).map_err(|_| ()),
+        Target::Pcie(a) => m.pcie.mmio_read(a, w).map(u64::from).ok_or(()),
+    }
+}
+
+/// A write of at most 4 bytes outside DRAM. `arm_us` is the ARM's own clock,
+/// for the log line a mailbox request gets. The flag says the write went to a
+/// VPU-side peripheral, which the VPU may wake for.
+fn device_write(
+    m: &mut Machine,
+    target: Target,
+    w: Width,
+    v: u32,
+    acc: gic::Accessor,
+    arm_us: u64,
+) -> (Result<(), ()>, bool) {
+    let r = match target {
+        Target::Ram(_) => unreachable!("DRAM is not a device"),
+        Target::Periph(a) => {
+            // `--log mbox`: name what Linux asks the firmware for — the
+            // first tag of each property request it posts, and its
+            // first value words. The address on the wire is the bus
+            // alias (`0xC000_0000 | phys`, module docs of `mbox`).
+            if a == crate::spec::mbox::BASE + crate::spec::mbox::DATA1 && m.log.on(Channel::Mbox) {
+                let buf = m.ram.base() + (v & 0x3FFF_FFF0);
+                let word = |o: u32| m.ram.load(buf + o, Width::Word).unwrap_or(0);
+                crate::log!(
+                    m.log,
+                    Channel::Mbox,
+                    "ARM request (ARM at {arm_us} us) tag {:#010x} values {:#x} {:#x}",
+                    word(8),
+                    word(20),
+                    word(24)
+                );
+            }
+            return (m.store(a, w, v).map_err(|_| ()), true);
+        }
+        Target::Local(o) => m.arm_local.write(o, w, v).map_err(|_| ()),
+        Target::Gic(o) => m.gic.write_as(acc, o, w, v).map_err(|_| ()),
+        Target::Pcie(a) => {
+            let m = &mut *m;
+            if m.pcie.mmio_write(a, w, v, &mut m.ram) {
+                Ok(())
+            } else {
+                Err(())
+            }
+        }
+    };
+    (r, false)
+}
+
 impl ArmBus<'_> {
     #[inline]
     fn route(&self, addr: u64, size: u32, write: bool) -> Result<Target, Abort> {
-        let abort = Abort { addr, write };
-        let end = addr.checked_add(u64::from(size)).ok_or(abort)?;
-        let within = |base: u32, len: u32| {
-            let base = u64::from(base);
-            (addr >= base && end <= base + u64::from(len)).then(|| (addr - base) as u32)
-        };
-        if end <= self.m.ram.len() as u64 && (end <= RAM_LOW_END || addr >= RAM_HIGH_BASE) {
-            Ok(Target::Ram(addr))
-        } else if PERIPH.contains(&addr) && end <= PERIPH.end {
-            Ok(Target::Periph((addr - PERIPH_TO_BUS) as u32))
-        } else if let Some(off) = within(armlocal::BASE, armlocal::SIZE) {
-            Ok(Target::Local(off))
-        } else if let Some(off) = within(gic::BASE, gic::SIZE) {
-            Ok(Target::Gic(off))
-        } else if PCIE.contains(&addr) && end <= PCIE.end {
-            Ok(Target::Pcie(addr))
-        } else {
-            Err(abort)
-        }
+        route(self.m.ram.len(), addr, size, write)
     }
 
     fn width(size: u32) -> Width {
@@ -1249,33 +1388,22 @@ impl ArmBus<'_> {
         let w = Self::width(size);
         let target = self.route(addr, size, false)?;
         self.io |= !matches!(target, Target::Ram(_));
-        let r = match target {
-            Target::Ram(off) => {
-                if self.m.ram.coherency.is_on() {
-                    self.m.ram.coherency.read_by(
-                        off as u32,
-                        w.bytes(),
-                        crate::coherency::Master::Arm,
-                    );
-                }
-                self.m.ram.load_at(off, w)
+        if let Target::Ram(off) = target {
+            if self.m.ram.coherency.is_on() {
+                self.m
+                    .ram
+                    .coherency
+                    .read_by(off as u32, w.bytes(), crate::coherency::Master::Arm);
             }
-            Target::Periph(a) => self.m.load(a, w),
-            Target::Local(o) => self.m.arm_local.read(o, w),
-            Target::Gic(o) => {
-                let acc = self.accessor();
-                self.m.gic.read_as(acc, o, w)
-            }
-            Target::Pcie(a) => {
-                return self
-                    .m
-                    .pcie
-                    .mmio_read(a, w)
-                    .map(u64::from)
-                    .ok_or(Abort { addr, write: false })
-            }
-        };
-        r.map(u64::from).map_err(|_| Abort { addr, write: false })
+            return self
+                .m
+                .ram
+                .load_at(off, w)
+                .map(u64::from)
+                .map_err(|_| Abort { addr, write: false });
+        }
+        let acc = self.accessor();
+        device_read(self.m, target, w, acc).map_err(|_| Abort { addr, write: false })
     }
 
     #[inline(always)]
@@ -1283,60 +1411,33 @@ impl ArmBus<'_> {
         let (w, v) = (Self::width(size), value as u32);
         let target = self.route(addr, size, true)?;
         self.io |= !matches!(target, Target::Ram(_));
-        let r = match target {
-            Target::Ram(off) => self.m.ram.store_at(off, w, v),
-            Target::Periph(a) => {
-                // `--log mbox`: name what Linux asks the firmware for — the
-                // first tag of each property request it posts, and its
-                // first value words. The address on the wire is the bus
-                // alias (`0xC000_0000 | phys`, module docs of `mbox`).
-                if a == crate::spec::mbox::BASE + crate::spec::mbox::DATA1
-                    && self.m.log.on(Channel::Mbox)
-                {
-                    let buf = self.m.ram.base() + (v & 0x3FFF_FFF0);
-                    let word = |o: u32| self.m.ram.load(buf + o, Width::Word).unwrap_or(0);
-                    // Inside a fast-forward slice the timer is already at the
-                    // slice's end, and so is the ARM's own clock.
-                    let arm_us = (self.released_at + self.cycles) / (gentimer::ARM_HZ / 1_000_000);
-                    crate::log!(
-                        self.m.log,
-                        Channel::Mbox,
-                        "ARM request (ARM at {arm_us} us) tag {:#010x} values {:#x} {:#x}",
-                        word(8),
-                        word(20),
-                        word(24)
-                    );
-                }
-                self.periph_store = true;
-                self.m.store(a, w, v)
-            }
-            Target::Local(o) => self.m.arm_local.write(o, w, v),
-            Target::Gic(o) => {
-                let acc = self.accessor();
-                self.m.gic.write_as(acc, o, w, v)
-            }
-            Target::Pcie(a) => {
-                let m = &mut *self.m;
-                return match m.pcie.mmio_write(a, w, v, &mut m.ram) {
-                    true => Ok(()),
-                    false => Err(Abort { addr, write: true }),
-                };
-            }
-        };
+        if let Target::Ram(off) = target {
+            return self
+                .m
+                .ram
+                .store_at(off, w, v)
+                .map_err(|_| Abort { addr, write: true });
+        }
+        let acc = self.accessor();
+        // Inside a fast-forward slice the timer is already at the slice's end,
+        // and so is the ARM's own clock.
+        let arm_us = (self.released_at + self.cycles) / (gentimer::ARM_HZ / 1_000_000);
+        let (r, periph) = device_write(self.m, target, w, v, acc, arm_us);
+        self.periph_store |= periph;
         r.map_err(|_| Abort { addr, write: true })
     }
 }
 
 /// When a `wfe` on `core` completes on its own: the next event-stream event if
 /// the stream for its EL is on, else never.
-fn wfe_timeout(core: &Core) -> u64 {
-    let ctl = match core.cpu.el {
+fn wfe_timeout(cpu: &Cpu, timer: &GenericTimer) -> u64 {
+    let ctl = match cpu.el {
         0 | 1 => CNTKCTL_EL1,
         2 => CNTHCTL_EL2,
         _ => return WFE_FOR_GOOD,
     };
-    let v = core.cpu.sys.plain.get(&ctl).copied().unwrap_or(0);
-    let hz = core.timer.hz();
+    let v = cpu.sys.plain.get(&ctl).copied().unwrap_or(0);
+    let hz = timer.hz();
     if v & EVNTEN == 0 || hz == 0 {
         return WFE_FOR_GOOD;
     }

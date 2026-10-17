@@ -41,6 +41,23 @@ pub trait Memory {
     fn sysreg_write(&mut self, _key: u32, _value: u64) -> bool {
         false
     }
+
+    /// `dmb` or `dsb`: what this core did before is visible to the others
+    /// before anything it does after. A bus that runs the cores in turn has
+    /// nothing to order.
+    fn barrier(&mut self) {}
+
+    /// The write that follows is a store-exclusive whose location held
+    /// `expected` when the exclusive load read it: a bus whose cores run at
+    /// the same time makes it a compare-exchange, and reports a loss through
+    /// [`Self::exclusive_lost`].
+    fn expect_unchanged(&mut self, _expected: u64) {}
+
+    /// Whether the write after [`Self::expect_unchanged`] found the location
+    /// changed and so did not store.
+    fn exclusive_lost(&mut self) -> bool {
+        false
+    }
 }
 
 /// A synchronous exception, raised by the instruction at [`Cpu::pc`] (which is
@@ -147,6 +164,10 @@ pub struct Cpu {
     pub(super) unprivileged: bool,
     /// The exclusive monitor's mark, as `(virtual, physical)`.
     pub(super) exclusive: Option<(u64, u64)>,
+    /// What the exclusive load read, for a bus that checks the location again
+    /// at the store-exclusive.
+    pub(super) exclusive_value: u64,
+    pub(super) exclusive_size: u32,
     pub(super) last_pa: u64,
     /// Where the last external abort happened; `FAR_ELx` has only the VA.
     pub abort_pa: u64,
@@ -197,6 +218,8 @@ impl Cpu {
             tlb: Tlb::new(),
             unprivileged: false,
             exclusive: None,
+            exclusive_value: 0,
+            exclusive_size: 0,
             last_pa: 0,
             abort_pa: 0,
             next_pc: 0,
@@ -250,6 +273,20 @@ impl Cpu {
 
     pub fn marked(&self) -> bool {
         self.exclusive.is_some()
+    }
+
+    /// The physical location, size and value the exclusive monitor was armed
+    /// with.
+    pub fn exclusive_mark(&self) -> Option<(u64, u32, u64)> {
+        self.exclusive
+            .map(|(_, pa)| (pa, self.exclusive_size, self.exclusive_value))
+    }
+
+    /// Another core changed the marked location: the mark goes, and the Event
+    /// Register is set, which is how a `ldxr; wfe` wait learns of it.
+    pub fn lose_mark(&mut self) {
+        self.exclusive = None;
+        self.event = true;
     }
 
     /// Another core wrote physical `[lo, hi)`: clear this core's mark if it
