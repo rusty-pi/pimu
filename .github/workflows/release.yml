@@ -68,7 +68,7 @@ jobs:
           fi
           echo "PKG_VERSION=$GITHUB_REF_NAME" >> "$GITHUB_ENV"
 
-      # The tag names a commit that is already on main, so `simulated-boot-log`
+      # The tag names a commit that is already on main, so `boot-scenario`
       # has run on it there — on the same SHA, under a different ref. A run
       # that failed is worth stopping for before an hour of PGO.
       #
@@ -82,12 +82,12 @@ jobs:
             --json status,conclusion,url \
             --jq '.[] | select(.status == "completed") | "\(.conclusion) \(.url)"')
           if [ -z "$verdicts" ]; then
-            echo "::warning::no finished simulated-boot-log run on $GITHUB_SHA"
+            echo "::warning::no finished boot-scenario run on $GITHUB_SHA"
             exit 0
           fi
           echo "$verdicts"
           if echo "$verdicts" | grep -qv '^success '; then
-            echo "::error::simulated-boot-log did not pass on $GITHUB_SHA"
+            echo "::error::boot-scenario did not pass on $GITHUB_SHA"
             exit 1
           fi
 

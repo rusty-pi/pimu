@@ -54,7 +54,7 @@ pausing for: name the workflow that failed and ask whether to release anyway.
 Release on a yes — a red run is the user's call, not a veto.
 
 The release job checks the same thing for itself: it refuses a commit
-`simulated-boot-log` has already failed on, and only warns when that workflow has
+`boot-scenario` has already failed on, and only warns when that workflow has
 no finished run for the commit. So a red run you decide to release anyway
 needs the failing workflow re-run green on that commit first, or the release
 job will stop on it.

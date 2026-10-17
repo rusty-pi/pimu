@@ -1,4 +1,4 @@
-name: simulated-boot-log
+name: boot-scenario
 
 # A change to Markdown or docs/ alone runs nothing (#86). docs/periph/ is the
 # exception: it is generated from specs/*.toml, and cargo test checks it.
