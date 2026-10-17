@@ -71,7 +71,7 @@ jobs:
             exit 0
           fi
           sudo apt-get -qq update
-          sudo apt-get -qq install -y createrepo-c rpm
+          sudo apt-get -qq install -y apt-utils createrepo-c rpm
           mkdir debs rpms
           gh release download "$GITHUB_REF_NAME" --dir debs --pattern '*.deb'
           gh release download "$GITHUB_REF_NAME" --dir rpms --pattern '*.rpm'
