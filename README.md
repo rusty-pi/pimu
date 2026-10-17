@@ -90,6 +90,19 @@ echo 'deb [signed-by=/etc/apt/keyrings/pimu.gpg] https://rusty-pi.github.io/pimu
 sudo apt update && sudo apt install pimu
 ```
 
+On Fedora, RHEL and other dnf systems, the same for the `.rpm`:
+
+```bash
+sudo tee /etc/yum.repos.d/pimu.repo <<'EOF'
+[pimu]
+name=pimu
+baseurl=https://rusty-pi.github.io/pimu/rpm/$basearch
+repo_gpgcheck=1
+gpgkey=https://rusty-pi.github.io/pimu/rpm/pimu.asc
+EOF
+sudo dnf install pimu
+```
+
 ### Boot a card of your own
 
 ```bash

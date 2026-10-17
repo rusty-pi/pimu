@@ -2,7 +2,7 @@ name: pages
 
 # Puts the page in web/ on GitHub Pages with every release, built from the
 # commit the `X.Y.Z` tag points at, together with the apt repository at `/apt/`
-# that serves the release's `.deb` files.
+# and the dnf one at `/rpm/` that serve the release's `.deb` and `.rpm` files.
 #
 # `release` calls this once it has published the release, since the repository
 # is made of the `.deb` files that job builds. It is a workflow of its own: it
@@ -16,11 +16,11 @@ name: pages
 #    without a passphrase, made for this alone, e.g.
 #    `gpg --quick-generate-key 'pimu apt <you@example.com>' default default never`
 #    and `gpg --armor --export-secret-keys <fingerprint>`. The public half is
-#    derived from it on every deploy. Without the secret the page is deployed
-#    without the repository.
+#    derived from it on every deploy, and it signs both repositories. Without
+#    the secret the page is deployed without them.
 #
 # `workflow_dispatch` is the re-run path; dispatch it on the tag's ref, as for
-# `release`. The repository then holds that tag's packages, so dispatching an
+# `release`. The repositories then hold that tag's packages, so dispatching an
 # old tag puts the old version back.
 on:
   workflow_call:
@@ -64,15 +64,19 @@ jobs:
           scripts/assemble-site.sh site
           sed -i "s|built from a checkout|release ${GITHUB_REF_NAME}|" site/index.html
 
-      - name: Build the apt repository
+      - name: Build the apt and dnf repositories
         run: |
           if [ -z "$APT_GPG_PRIVATE_KEY" ]; then
-            echo "::warning::no APT_GPG_PRIVATE_KEY secret, so the site has no apt repository"
+            echo "::warning::no APT_GPG_PRIVATE_KEY secret, so the site has no package repositories"
             exit 0
           fi
-          mkdir debs
+          sudo apt-get -qq update
+          sudo apt-get -qq install -y createrepo-c rpm
+          mkdir debs rpms
           gh release download "$GITHUB_REF_NAME" --dir debs --pattern '*.deb'
+          gh release download "$GITHUB_REF_NAME" --dir rpms --pattern '*.rpm'
           scripts/build-apt-repo.sh debs site/apt
+          scripts/build-rpm-repo.sh rpms site/rpm
 
       - uses: actions/configure-pages@v6
 
