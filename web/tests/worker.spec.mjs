@@ -108,17 +108,66 @@ test("it reads local files, and hands the extras to the builder", async ({ talk 
     pubkey: { __file: { name: "pubkey.bin", text: "k".repeat(264) } },
     hat: { __file: { name: "hat.eep", text: "h".repeat(256) } },
     edid: { __file: { name: "edid.bin", text: "e".repeat(128) } },
-    netFiles: [{ path: "boot/start4.elf", file: { __file: { name: "start4.elf", text: "abc" } } }],
+    net: { tftp: { kind: "files", files: [{ path: "boot/start4.elf", file: { __file: { name: "start4.elf", text: "abc" } } }] } },
   }));
   await talk.until("(m) => m.type === 'phase' && m.phase === 'running'");
   const calls = await talk.stubCalls();
   expect(calls).toContainEqual(["add_file", "config.txt", 12]);
-  expect(calls).toContainEqual(["add_net_file", "boot/start4.elf", 3]);
+  expect(calls).toContainEqual(["add_tftp_file", "boot/start4.elf", 3]);
   expect(calls).toContainEqual(["set_pubkey", 264]);
   expect(calls).toContainEqual(["set_hat", 256]);
   expect(calls).toContainEqual(["set_edid", 128]);
   const transfers = (await talk.messages("progress")).at(-1).transfers;
   expect(transfers.map((t) => [t.name, t.local])).toEqual([["config.txt", true], ["pubkey.bin", true], ["hat.eep", true], ["edid.bin", true], ["boot/start4.elf", true]]);
+});
+
+const FIRMWARE_DOWNLOAD = (origin) => ({
+  kind: "download",
+  files: [
+    { path: "start4.elf", url: `${origin}/tests/data/boot/start4.elf` },
+    { path: "fixup4.dat", url: `${origin}/tests/data/boot/fixup4.dat` },
+  ],
+});
+
+test("TFTP serves the files with the page's config.txt and cmdline.txt lines", async ({ talk }) => {
+  const origin = await talk.origin();
+  await talk.post(request(origin, {
+    options: { stepping: "c0", ticks: 3, configTxt: ["enable_uart=1"], cmdline: "console=ttyAMA0,115200" },
+    net: { tftp: FIRMWARE_DOWNLOAD(origin) },
+  }));
+  await talk.until("(m) => m.type === 'phase' && m.phase === 'running'");
+  const served = (await talk.stubCalls()).filter((c) => c[0] === "add_tftp_file").map((c) => c.slice(1)).sort();
+  expect(served).toEqual([["cmdline.txt", 23], ["config.txt", 20], ["fixup4.dat", 3], ["start4.elf", 3]]);
+  expect((await talk.stubCalls()).some((c) => c[0] === "add_http_file" || c[0] === "set_pubkey")).toBe(false);
+});
+
+test("HTTP serves the files as a signed boot.img, and the EEPROM gets the key", async ({ talk }) => {
+  const origin = await talk.origin();
+  await talk.post(request(origin, {
+    options: { stepping: "c0", ticks: 3, cmdline: "console=ttyAMA0,115200" },
+    net: { http: FIRMWARE_DOWNLOAD(origin) },
+  }));
+  await talk.until("(m) => m.type === 'phase' && m.phase === 'running'");
+  const calls = await talk.stubCalls();
+  const [, files] = calls.find((c) => c[0] === "boot_image");
+  expect(files.sort()).toEqual([["cmdline.txt", 23], ["fixup4.dat", 3], ["start4.elf", 3]]);
+  const served = calls.filter((c) => c[0] === "add_http_file").map((c) => c.slice(1));
+  expect(served[0]).toEqual(["net_install/boot.img", 1024]);
+  expect(served[1][0]).toBe("net_install/boot.sig");
+  expect(served[1][1]).toBe(65 + 15 + 9 + 512 + 1);
+  expect(calls).toContainEqual(["set_pubkey", 264]);
+  expect(calls.some((c) => c[0] === "add_tftp_file")).toBe(false);
+});
+
+test("one URL is downloaded once, however many protocols serve it", async ({ talk }) => {
+  const origin = await talk.origin();
+  await talk.post(request(origin, {
+    boot: FIRMWARE_DOWNLOAD(origin),
+    net: { tftp: FIRMWARE_DOWNLOAD(origin), http: FIRMWARE_DOWNLOAD(origin) },
+  }));
+  await talk.until("(m) => m.type === 'phase' && m.phase === 'running'");
+  const transfers = (await talk.messages("progress")).at(-1).transfers;
+  expect(transfers.map((t) => t.name).sort()).toEqual(["fixup4.dat", "start4.elf"]);
 });
 
 test("a disk image is read in ranges, from a file or from a URL", async ({ talk }) => {

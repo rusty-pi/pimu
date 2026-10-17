@@ -32,6 +32,30 @@ pub fn eeprom_bootconf(image: &[u8]) -> String {
     serde_json::to_string(&bootconf_entries(image)).unwrap_or_else(|_| "[]".into())
 }
 
+/// Files as the small FAT16 volume HTTP boot downloads as `boot.img`.
+#[wasm_bindgen]
+#[derive(Default)]
+pub struct BootImage {
+    root: Vec<Entry>,
+}
+
+#[wasm_bindgen]
+impl BootImage {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> BootImage {
+        BootImage::default()
+    }
+
+    /// A file of the volume; a `/` in `path` puts it in a directory.
+    pub fn add_file(&mut self, path: &str, bytes: Vec<u8>) {
+        insert(&mut self.root, path, bytes);
+    }
+
+    pub fn build(self) -> Result<Vec<u8>, JsError> {
+        crate::bootimg::fat16_image(self.root).map_err(js_error)
+    }
+}
+
 /// Everything the machine boots from, collected before it is built.
 #[wasm_bindgen]
 pub struct PiBuilder {
@@ -59,9 +83,14 @@ impl PiBuilder {
         insert(&mut self.inputs.boot_files, path, bytes);
     }
 
-    /// A file the network peer serves over TFTP and HTTP.
-    pub fn add_net_file(&mut self, path: &str, bytes: Vec<u8>) {
-        self.inputs.net_files.push((path.to_string(), bytes));
+    /// A file the network peer serves over TFTP.
+    pub fn add_tftp_file(&mut self, path: &str, bytes: Vec<u8>) {
+        self.inputs.tftp_files.push((path.to_string(), bytes));
+    }
+
+    /// A file the network peer serves over HTTP.
+    pub fn add_http_file(&mut self, path: &str, bytes: Vec<u8>) {
+        self.inputs.http_files.push((path.to_string(), bytes));
     }
 
     /// The RSA-2048 public key for `pubkey.bin` in the EEPROM image.

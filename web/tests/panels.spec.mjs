@@ -259,20 +259,97 @@ test.describe("USB-C", () => {
 });
 
 test.describe("Ethernet", () => {
-  test("the cable goes into the peer, which serves files", async ({ app }) => {
+  test("the cable goes into the peer, which boots the board over TFTP, HTTP or both", async ({ app }) => {
     await app.open("eth");
     await expect(app.drawer.getByRole("button", { name: "Send a magic packet" })).toHaveCount(0);
-    await app.drawer.getByRole("checkbox", { name: /Plug the cable into the built-in network peer/ }).check();
+    await expect(app.drawer.getByRole("checkbox", { name: "Boot over TFTP" })).toHaveCount(0);
+    await app.drawer.getByRole("checkbox", { name: "Plug the cable in" }).check();
     await expect(app.part("eth")).toHaveAttribute("data-filled", "true");
     await expect(app.page.locator('[data-sub="eth"]')).toHaveText("built-in peer");
     await expect(app.drawer.getByRole("button", { name: "Send a magic packet" })).toBeDisabled();
+
+    await app.drawer.getByRole("checkbox", { name: "Boot over TFTP" }).check();
+    await expect(app.page.locator('[data-sub="eth"]')).toHaveText("TFTP");
+    await expect(app.drawer.getByRole("radio", { name: /Official firmware/ })).toBeChecked();
+    await app.drawer.getByRole("checkbox", { name: "Boot over HTTP" }).check();
+    await expect(app.page.locator('[data-sub="eth"]')).toHaveText("TFTP · HTTP");
+    await expect(app.drawer).toContainText("HTTP boot is slow");
+
+    await app.drawer.getByRole("checkbox", { name: "Boot over TFTP" }).uncheck();
+    await expect(app.page.locator('[data-sub="eth"]')).toHaveText("HTTP");
+    await app.drawer.getByRole("checkbox", { name: "Plug the cable in" }).uncheck();
+    await expect(app.page.locator('[data-sub="eth"]')).toHaveText("unplugged");
+  });
+
+  test("each protocol takes its own files", async ({ app }) => {
+    await app.open("eth");
+    await app.drawer.getByRole("checkbox", { name: "Plug the cable in" }).check();
+    await app.drawer.getByRole("checkbox", { name: "Boot over TFTP" }).check();
+    await app.drawer.getByRole("radio", { name: /Boot files from my computer/ }).check();
+    await expect(app.drawer).toContainText("nothing chosen");
     await app.drawer.locator("input[type=file]:not([webkitdirectory])").setInputFiles([data("boot/start4.elf"), data("boot/fixup4.dat")]);
     await expect(app.drawer).toContainText("2 files");
-    await expect(app.page.locator('[data-sub="eth"]')).toHaveText("peer · 2 files");
     await app.drawer.locator("input[type=file][webkitdirectory]").setInputFiles(data("boot"));
     await expect(app.drawer).toContainText("4 files");
-    await app.drawer.getByRole("checkbox", { name: /Plug the cable/ }).uncheck();
-    await expect(app.page.locator('[data-sub="eth"]')).toHaveText("unplugged");
+
+    await app.drawer.getByRole("checkbox", { name: "Boot over HTTP" }).check();
+    await app.drawer.getByRole("radio", { name: /Boot files from a GitHub directory/ }).nth(1).check();
+    await app.drawer.getByLabel("http repository").fill("someone/firmware");
+    await app.drawer.getByLabel("http branch or tag").fill("stable");
+    await app.drawer.getByLabel("http directory").fill("boot");
+    await expect(app.drawer.getByLabel("tftp repository")).toHaveCount(0);
+
+    await app.powerOn();
+    const request = await app.request();
+    expect(request.net.tftp.kind).toBe("files");
+    expect(request.net.tftp.files).toHaveLength(4);
+    expect(request.net.http).toEqual({ kind: "download", github: { repo: "someone/firmware", ref: "stable", path: "boot" } });
+    expect(request.options.network).toBe(true);
+  });
+
+  test("the network comes first in the boot order, and HTTP comes with a host", async ({ app }) => {
+    await app.open("eth");
+    await app.drawer.getByRole("checkbox", { name: "Plug the cable in" }).check();
+    await app.drawer.getByRole("checkbox", { name: "Boot over TFTP" }).check();
+    await app.drawer.getByRole("checkbox", { name: "Boot over HTTP" }).check();
+    await app.powerOn();
+    const request = await app.request();
+    expect(request.options.bootOrder).toBe("0xf172");
+    expect(request.options.bootconf).toEqual(expect.arrayContaining(["HTTP_HOST=netboot.test", "HTTP_PORT=80"]));
+    expect(request.net.tftp.files.map((f) => f.path)).toEqual(["start4.elf", "fixup4.dat", "bcm2711-rpi-4-b.dtb", "kernel8.img"]);
+    expect(request.net.http.files).toEqual(request.net.tftp.files);
+  });
+
+  test("a boot order or HTTP host of one's own is left alone", async ({ app }) => {
+    await app.open("eeprom");
+    await app.field("Other lines").locator("textarea").fill("HTTP_HOST=example.org");
+    await app.open("eth");
+    await app.drawer.getByRole("checkbox", { name: "Plug the cable in" }).check();
+    await app.drawer.getByRole("checkbox", { name: "Boot over HTTP" }).check();
+    await app.powerOn();
+    const bootconf = (await app.request()).options.bootconf;
+    expect(bootconf).toContain("HTTP_HOST=example.org");
+    expect(bootconf).not.toContain("HTTP_HOST=netboot.test");
+    expect(bootconf).toContain("HTTP_PORT=80");
+  });
+
+  test("without a card, nothing is on the slot and the network boots alone", async ({ app }) => {
+    await app.open("sd");
+    await app.drawer.getByRole("radio", { name: /No card/ }).check();
+    await expect(app.page.locator('[data-sub="sd"]')).toHaveText("empty");
+    await expect(app.part("sd")).toHaveAttribute("data-filled", "false");
+    await expect(app.field("Kernel command line")).toHaveCount(0);
+    await app.open("eth");
+    await app.drawer.getByRole("checkbox", { name: "Plug the cable in" }).check();
+    await app.drawer.getByRole("checkbox", { name: "Boot over TFTP" }).check();
+    await app.open("sd");
+    await expect(app.field("Kernel command line")).toBeVisible();
+    await app.powerOn();
+    const request = await app.request();
+    expect(request.options.noSdCard).toBe(true);
+    expect(request.options.bootOrder).toBe("0xf2");
+    expect(request.boot).toEqual({ kind: "none" });
+    expect(request.images).toEqual({});
   });
 });
 

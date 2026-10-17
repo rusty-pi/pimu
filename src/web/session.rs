@@ -61,8 +61,10 @@ pub struct Inputs {
     pub otg: Option<DiskFactory>,
     pub hat: Option<Vec<u8>>,
     pub edid: Option<Vec<u8>>,
-    /// Files the network peer serves over TFTP and HTTP.
-    pub net_files: Vec<(String, Vec<u8>)>,
+    /// Files the network peer serves over TFTP.
+    pub tftp_files: Vec<(String, Vec<u8>)>,
+    /// Files the network peer serves over HTTP.
+    pub http_files: Vec<(String, Vec<u8>)>,
 }
 
 #[derive(Clone, Default)]
@@ -138,7 +140,7 @@ impl Rig {
             machine
                 .emmc2
                 .insert_disk(sd().with_log(self.log.clone(), "sd"));
-        } else {
+        } else if !options.no_sd_card {
             let card = crate::fat::card_from_entries(self.inputs.boot_files.clone())?;
             let disk = Disk::from_card(card).context("building the boot partition")?;
             machine
@@ -188,8 +190,11 @@ impl Rig {
         }
         if options.network {
             let mut peer = crate::net::BuiltinPeer::new().with_log(self.log.clone());
-            for (name, bytes) in &self.inputs.net_files {
-                peer.add_file(name, bytes.clone());
+            for (name, bytes) in &self.inputs.tftp_files {
+                peer.add_tftp_file(name, bytes.clone());
+            }
+            for (name, bytes) in &self.inputs.http_files {
+                peer.add_http_file(name, bytes.clone());
             }
             machine.attach_net(Box::new(peer));
         }

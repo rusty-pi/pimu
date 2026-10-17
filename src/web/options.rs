@@ -38,6 +38,9 @@ pub struct Options {
     pub usb_mb: Option<u64>,
     /// The Ethernet cable goes into the built-in network peer.
     pub network: bool,
+    /// Nothing in the microSD slot: a board that boots over the network, or
+    /// from USB, has no card.
+    pub no_sd_card: bool,
     pub jitter: Option<u64>,
     pub faults: Option<u64>,
     pub check_coherency: bool,

@@ -3,6 +3,7 @@
 // Nothing here touches WebAssembly: the machine runs in worker.mjs.
 
 import { download } from "./download.mjs";
+import { netBootOrder } from "./netboot.mjs";
 import {
   BOOT_DEVICES, BOOT_ORDER_PRESETS, GROUPS, KNOWN_KEYS,
   conditionalSections, editedLines, formatBootOrder, imageSettings, parseBootOrder,
@@ -12,6 +13,7 @@ const FIRMWARE = "https://raw.githubusercontent.com/raspberrypi/firmware/refs/he
 const OFFICIAL_FILES = [
   "start4.elf", "fixup4.dat", "bcm2711-rpi-4-b.dtb", "kernel8.img",
 ].map((path) => ({ path, url: FIRMWARE + path }));
+const HTTP_BOOT_SETTINGS = { HTTP_HOST: "netboot.test", HTTP_PORT: "80" };
 const OFFICIAL_EEPROM =
   "https://raw.githubusercontent.com/raspberrypi/rpi-eeprom/master/firmware-2711/latest/pieeprom-2026-08-04.bin";
 
@@ -33,8 +35,10 @@ const LOG_CHANNELS = [
   ["cmp", "System-timer compare arms"],
 ];
 
+const GITHUB_DIRECTORY = { repo: "raspberrypi/firmware", ref: "master", path: "boot" };
+
 const DEFAULT_STATE = {
-  sd: { mode: "official", image: { kind: "url", url: "" }, github: { repo: "raspberrypi/firmware", ref: "master", path: "boot" } },
+  sd: { mode: "official", image: { kind: "url", url: "" }, github: { ...GITHUB_DIRECTORY } },
   configTxt: "arm_64bit=1\nenable_uart=1\nuart_2ndstage=1",
   cmdline: "console=ttyAMA0,115200",
   eeprom: { kind: "official", url: OFFICIAL_EEPROM },
@@ -45,7 +49,11 @@ const DEFAULT_STATE = {
   tryboot: false,
   usb: { kind: "none", url: "", mb: "" },
   otg: { kind: "none", url: "", dock: false },
-  net: false,
+  net: {
+    plugged: false,
+    tftp: { on: false, mode: "official", github: { ...GITHUB_DIRECTORY } },
+    http: { on: false, mode: "official", github: { ...GITHUB_DIRECTORY } },
+  },
   display: false,
   board: { stepping: "c0", memoryMb: 1024, boardRev: "" },
   otpRows: "",
@@ -70,7 +78,7 @@ function h(tag, attrs = {}, ...children) {
     else if (key === "checked" || key === "disabled" || key === "selected") node[key] = !!value;
     else node.setAttribute(key, value === true ? "" : value);
   }
-  for (const child of children.flat()) {
+  for (const child of children.flat(Infinity)) {
     if (child == null || child === false) continue;
     node.append(child.nodeType ? child : document.createTextNode(String(child)));
   }
@@ -106,7 +114,7 @@ function changed() {
 }
 
 // Files the person picked. They cannot be stored, so they last as long as the tab.
-const files = { boot: [], sdImage: null, eeprom: null, usb: null, otg: null, hat: null, edid: null, pubkey: null, net: [] };
+const files = { boot: [], sdImage: null, eeprom: null, usb: null, otg: null, hat: null, edid: null, pubkey: null, tftp: [], http: [] };
 
 function toast(message, bad = false) {
   const el = $("#toast");
@@ -267,6 +275,13 @@ function imageDescriptor(spec, file, what) {
   return { url: spec.url.trim() };
 }
 
+function bootSource(spec, picked, what) {
+  if (spec.mode === "official") return { kind: "download", files: OFFICIAL_FILES };
+  if (spec.mode === "github") return { kind: "download", github: { ...spec.github } };
+  if (!picked.length) throw new Error(`${what}: no boot files picked`);
+  return { kind: "files", files: picked };
+}
+
 function parseOtpRows(text) {
   return text
     .split("\n")
@@ -291,14 +306,23 @@ async function buildRequest() {
   const info = await eepromInfo();
   const lines = editedLines(new Map(Object.entries(s.bootconf)), info.settings, null);
   const extra = s.extraBootconf.split("\n").map((l) => l.trim()).filter(Boolean);
-  options.bootconf = [...lines, ...extra];
+  const setting = (key) => key in s.bootconf || extra.some((l) => l.startsWith(`${key}=`));
+  const httpBoot = s.net.plugged && s.net.http.on;
+  const tftpBoot = s.net.plugged && s.net.tftp.on;
+  const httpLines = httpBoot ? Object.entries(HTTP_BOOT_SETTINGS).filter(([key]) => !setting(key)).map(([key, value]) => `${key}=${value}`) : [];
+  options.bootconf = [...lines, ...httpLines, ...extra];
   if (s.bootOrder) options.bootOrder = formatBootOrder(s.bootOrder);
+  else if (tftpBoot || httpBoot) {
+    options.bootOrder = formatBootOrder(netBootOrder({
+      tftp: tftpBoot, http: httpBoot, sd: s.sd.mode !== "none", usb: s.usb.kind !== "none", otg: s.otg.kind !== "none",
+    }));
+  }
   options.skipSignedBoot = s.skipSignedBoot;
   options.tryboot = s.tryboot;
   options.otpRows = parseOtpRows(s.otpRows);
   options.log = s.log.join(",");
   options.display = s.display;
-  options.network = s.net;
+  options.network = s.net.plugged;
   options.checkCoherency = s.advanced.checkCoherency;
   options.checkAlignment = s.advanced.checkAlignment;
   options.skipUnimpl = s.advanced.skipUnimpl;
@@ -308,18 +332,18 @@ async function buildRequest() {
   const request = { type: "power-on", options, images: {}, boot: { kind: "none" } };
   request.eeprom = info.bytes;
 
-  if (s.sd.mode === "image") {
-    request.images.sd = imageDescriptor(s.sd.image, files.sdImage, "SD card image");
-  } else {
+  if (s.sd.mode === "none") options.noSdCard = true;
+  if (s.sd.mode === "image") request.images.sd = imageDescriptor(s.sd.image, files.sdImage, "SD card image");
+  else {
     const cfg = s.configTxt.split("\n").map((l) => l.trim()).filter(Boolean);
     if (cfg.length) options.configTxt = cfg;
     if (s.cmdline.trim()) options.cmdline = s.cmdline.trim();
-    if (s.sd.mode === "official") request.boot = { kind: "download", files: OFFICIAL_FILES };
-    else if (s.sd.mode === "github") request.boot = { kind: "download", github: { ...s.sd.github } };
-    else {
-      if (!files.boot.length) throw new Error("SD card: no boot files picked");
-      request.boot = { kind: "files", files: files.boot };
-    }
+    if (s.sd.mode !== "none") request.boot = bootSource(s.sd, files.boot, "SD card");
+  }
+  if (s.net.plugged) {
+    request.net = {};
+    if (s.net.tftp.on) request.net.tftp = bootSource(s.net.tftp, files.tftp, "TFTP");
+    if (s.net.http.on) request.net.http = bootSource(s.net.http, files.http, "HTTP");
   }
   if (s.usb.kind !== "none") {
     request.images.usb = imageDescriptor(s.usb, files.usb, "USB stick");
@@ -332,7 +356,6 @@ async function buildRequest() {
   if (files.pubkey) request.pubkey = files.pubkey;
   if (files.hat) request.hat = files.hat;
   if (s.display && files.edid) request.edid = files.edid;
-  if (s.net) request.netFiles = files.net;
   return request;
 }
 
@@ -730,6 +753,36 @@ function imagePicker(slot, spec, what) {
     h("p", { class: "help hint" }, "Read in pieces as the guest asks for blocks – never loaded whole. What the guest writes stays in memory. A URL needs a server that allows cross-origin Range requests. xz-compressed images must be decompressed first."));
 }
 
+function netServes() {
+  return state.net.plugged && (state.net.tftp.on || state.net.http.on);
+}
+
+const BOOT_FILE_SOURCES = [
+  ["official", "Official firmware", "start4.elf, fixup4.dat, the device tree and kernel from raspberrypi/firmware on GitHub"],
+  ["github", "Boot files from a GitHub directory", "Any repository: its files become the root"],
+  ["files", "Boot files from my computer", "Your own firmware: pick a folder, or the files themselves"],
+];
+
+function bootFilesFields(spec, key) {
+  const picked = files[key];
+  return [
+    spec.mode === "github" ? h("div", { class: "field" },
+      h("label", {}, "Repository"), h("input", { type: "text", value: spec.github.repo, "aria-label": `${key} repository`, oninput: (e) => { spec.github.repo = e.target.value.trim(); changed(); } }),
+      h("div", { class: "row" },
+        h("div", { style: "flex:1" }, h("label", {}, "Branch or tag"), h("input", { type: "text", value: spec.github.ref, "aria-label": `${key} branch or tag`, oninput: (e) => { spec.github.ref = e.target.value.trim(); changed(); } })),
+        h("div", { style: "flex:1" }, h("label", {}, "Directory"), h("input", { type: "text", value: spec.github.path, "aria-label": `${key} directory`, oninput: (e) => { spec.github.path = e.target.value.trim(); changed(); } }))),
+      h("p", { class: "help hint" }, "The files directly in that directory. Listed through the GitHub API, which allows 60 requests an hour.")) : null,
+    spec.mode === "files" ? h("div", { class: "field" },
+      h("div", { class: "row" },
+        filePicker("Choose a folder…", { directory: true, onPick: (list) => { files[key] = list.map((f) => ({ path: f.webkitRelativePath ? f.webkitRelativePath.split("/").slice(1).join("/") : f.name, file: f })); renderDrawer(); } }),
+        filePicker("Choose files…", { multiple: true, onPick: (list) => { files[key] = list.map((f) => ({ path: f.name, file: f })); renderDrawer(); } })),
+      picked.length
+        ? h("p", { class: "filename" }, `${picked.length} files: ${picked.slice(0, 8).map((f) => f.path).join(", ")}${picked.length > 8 ? ", …" : ""}`)
+        : h("p", { class: "filename" }, "nothing chosen"),
+      h("p", { class: "help hint" }, "Read into memory when the board is powered on. Needs start4.elf, fixup4.dat, a kernel and its device tree.")) : null,
+  ];
+}
+
 function drawerFrame(title, ...body) {
   return [
     h("header", {}, h("h2", {}, title), h("button", { class: "small", onclick: () => { openPart = null; renderDrawer(); } }, "Close")),
@@ -744,31 +797,17 @@ const PANELS = {
     const group = "sd-mode";
     return drawerFrame("microSD card",
       h("div", { class: "field" }, h("span", { class: "label" }, "What is on the card"),
-        radio(group, "official", sd.mode === "official", "Official firmware", "start4.elf, fixup4.dat, the device tree and kernel from raspberrypi/firmware on GitHub", () => { sd.mode = "official"; changed(); renderDrawer(); }),
-        radio(group, "github", sd.mode === "github", "Boot files from a GitHub directory", "Any repository: its files become the card's root", () => { sd.mode = "github"; changed(); renderDrawer(); }),
-        radio(group, "files", sd.mode === "files", "Boot files from my computer", "Your own firmware: pick a folder, or the files themselves", () => { sd.mode = "files"; changed(); renderDrawer(); }),
-        radio(group, "image", sd.mode === "image", "A disk image", "A card image, read as the guest asks for blocks", () => { sd.mode = "image"; changed(); renderDrawer(); })),
-      sd.mode === "github" ? h("div", { class: "field" },
-        h("label", {}, "Repository"), h("input", { type: "text", value: sd.github.repo, oninput: (e) => { sd.github.repo = e.target.value.trim(); changed(); } }),
-        h("div", { class: "row" },
-          h("div", { style: "flex:1" }, h("label", {}, "Branch or tag"), h("input", { type: "text", value: sd.github.ref, oninput: (e) => { sd.github.ref = e.target.value.trim(); changed(); } })),
-          h("div", { style: "flex:1" }, h("label", {}, "Directory"), h("input", { type: "text", value: sd.github.path, oninput: (e) => { sd.github.path = e.target.value.trim(); changed(); } }))),
-        h("p", { class: "help hint" }, "The files directly in that directory. Listed through the GitHub API, which allows 60 requests an hour.")) : null,
-      sd.mode === "files" ? h("div", { class: "field" },
-        h("div", { class: "row" },
-          filePicker("Choose a folder…", { directory: true, onPick: (list) => { files.boot = list.map((f) => ({ path: f.webkitRelativePath ? f.webkitRelativePath.split("/").slice(1).join("/") : f.name, file: f })); renderDrawer(); } }),
-          filePicker("Choose files…", { multiple: true, onPick: (list) => { files.boot = list.map((f) => ({ path: f.name, file: f })); renderDrawer(); } })),
-        files.boot.length
-          ? h("p", { class: "filename" }, `${files.boot.length} files: ${files.boot.slice(0, 8).map((f) => f.path).join(", ")}${files.boot.length > 8 ? ", …" : ""}`)
-          : h("p", { class: "filename" }, "nothing chosen"),
-        h("p", { class: "help hint" }, "Read into memory when the board is powered on. Needs start4.elf, fixup4.dat, a kernel and its device tree.")) : null,
+        BOOT_FILE_SOURCES.map(([mode, label, help]) => radio(group, mode, sd.mode === mode, label, help, () => { sd.mode = mode; changed(); renderDrawer(); })),
+        radio(group, "image", sd.mode === "image", "A disk image", "A card image, read as the guest asks for blocks", () => { sd.mode = "image"; changed(); renderDrawer(); }),
+        radio(group, "none", sd.mode === "none", "No card", "The slot is empty: boot from the network, USB or NVMe", () => { sd.mode = "none"; changed(); renderDrawer(); })),
+      bootFilesFields(sd, "boot"),
       sd.mode === "image" ? imagePicker("sd", sd.image, "a card image") : null,
-      sd.mode !== "image" ? [
+      sd.mode !== "image" && (sd.mode !== "none" || netServes()) ? [
         h("h3", {}, "config.txt and cmdline.txt"),
         h("div", { class: "field" },
           h("label", {}, "Lines added to config.txt"),
           h("textarea", { rows: 5, spellcheck: false, oninput: (e) => { state.configTxt = e.target.value; changed(); } }, state.configTxt),
-          h("p", { class: "help" }, "Added under [all], after whatever config.txt the files carry. enable_uart=1 is what makes the firmware print on the serial console; uart_2ndstage=1 adds start4.elf's own log.")),
+          h("p", { class: "help" }, "Added under [all], after whatever config.txt the files carry. Files served over TFTP or HTTP get the same lines. enable_uart=1 is what makes the firmware print on the serial console; uart_2ndstage=1 adds start4.elf's own log.")),
         h("div", { class: "field" },
           h("label", {}, "Kernel command line (cmdline.txt)"),
           h("input", { type: "text", value: state.cmdline, spellcheck: false, oninput: (e) => { state.cmdline = e.target.value; changed(); } }),
@@ -829,22 +868,33 @@ const PANELS = {
   },
 
   eth() {
+    const net = state.net;
     const wake = h("div", { class: "field" }, h("span", { class: "label" }, "Wake-on-LAN"),
       h("button", { class: "small", type: "button", disabled: !worker || phase !== "running", onclick: () => worker?.postMessage({ type: "wake-on-lan" }) }, "Send a magic packet"),
       h("p", { class: "help" }, "Works while the board runs, and wakes it when the OS armed it."));
+    const protocol = (key, title, help) => {
+      const spec = net[key];
+      return h("div", { class: "field" },
+        h("label", { class: "choice" }, h("input", { type: "checkbox", checked: spec.on, "aria-label": `Boot over ${title}`, onchange: (e) => { spec.on = e.target.checked; changed(); renderDrawer(); } }),
+          h("span", {}, `Boot over ${title}`, h("small", {}, help))),
+        spec.on ? [
+          h("div", { class: "field" }, h("span", { class: "label" }, `What the peer serves over ${title}`),
+            BOOT_FILE_SOURCES.map(([mode, label, text]) => radio(`${key}-mode`, mode, spec.mode === mode, label, text, () => { spec.mode = mode; changed(); renderDrawer(); }))),
+          bootFilesFields(spec, key),
+        ] : null);
+    };
     const frame = drawerFrame("Ethernet",
-      h("label", { class: "choice" }, h("input", { type: "checkbox", checked: state.net, onchange: (e) => { state.net = e.target.checked; changed(); renderDrawer(); } }),
-        h("span", {}, "Plug the cable into the built-in network peer", h("small", {}, "It answers DHCP and DNS, and serves the files below over TFTP and HTTP. It never reaches the real internet."))),
-      state.net ? [
-        h("div", { class: "field" }, h("span", { class: "label" }, "Files to serve (TFTP and HTTP)"),
-          h("div", { class: "row" },
-            filePicker("Choose a folder…", { directory: true, onPick: (list) => { files.net = list.map((f) => ({ path: f.webkitRelativePath.split("/").slice(1).join("/"), file: f })); renderDrawer(); } }),
-            filePicker("Choose files…", { multiple: true, onPick: (list) => { files.net = list.map((f) => ({ path: f.name, file: f })); renderDrawer(); } })),
-          h("p", { class: "filename" }, files.net.length ? `${files.net.length} files` : "nothing chosen"),
-          h("p", { class: "help" }, "For a network boot, set the boot order to Network (or HTTP, with HTTP_HOST) in the EEPROM settings.")),
+      h("label", { class: "choice" }, h("input", { type: "checkbox", checked: net.plugged, "aria-label": "Plug the cable in", onchange: (e) => { net.plugged = e.target.checked; changed(); renderDrawer(); } }),
+        h("span", {}, "Plug the cable into the built-in network peer", h("small", {}, "It answers DHCP and DNS, and serves boot files over TFTP and HTTP. It never reaches the real internet."))),
+      net.plugged ? [
+        protocol("tftp", "TFTP", "The bootloader fetches start4.elf, the kernel and the rest, one file at a time"),
+        protocol("http", "HTTP", "The bootloader fetches one signed boot.img. It is built from the files and signed in this page, with a key made for each power-on and put in the EEPROM."),
+        net.tftp.on || net.http.on
+          ? h("p", { class: "help hint" }, "Unless the boot order is set in the EEPROM settings, the network comes first (TFTP, then HTTP), then the card and USB. Choose No card for the microSD slot to boot from the network alone. config.txt and cmdline.txt lines are in the microSD panel.")
+          : null,
+        net.http.on ? h("p", { class: "help hint" }, "HTTP boot is slow: the bootloader checks the image’s SHA-256 on the VideoCore, in emulation. The official firmware takes a while.") : null,
       ] : null);
-    // Waking the board only makes sense while it runs, so it is not part of what is locked.
-    if (state.net) frame.splice(frame.length - 1, 0, wake);
+    if (net.plugged) frame.splice(frame.length - 1, 0, wake);
     return frame;
   },
 
@@ -1031,6 +1081,7 @@ function refreshBoard() {
     github: [s.sd.github.repo, true],
     files: [files.boot.length ? `${files.boot.length} files` : "no files", files.boot.length > 0],
     image: [describeImage(s.sd.image, files.sdImage), s.sd.image.kind === "url" ? !!s.sd.image.url.trim() : !!files.sdImage],
+    none: ["empty", false],
   }[s.sd.mode];
   const edits = Object.keys(s.bootconf).length + (s.bootOrder ? 1 : 0) + s.extraBootconf.split("\n").filter((l) => l.trim()).length;
   const eepromName = s.eeprom.kind === "official" ? "official 2026-08-04" : s.eeprom.kind === "file" ? (files.eeprom?.name ?? "no file") : tail(s.eeprom.url);
@@ -1040,7 +1091,7 @@ function refreshBoard() {
     memory: { sub: `${s.board.memoryMb / 1024} GiB${s.board.boardRev.trim() ? ` · ${s.board.boardRev.trim()}` : ""}` },
     usb: { sub: s.usb.kind === "none" ? "empty" : describeImage(s.usb, files.usb), filled: s.usb.kind !== "none" },
     usbc: { sub: s.otg.kind === "none" ? "empty" : `${describeImage(s.otg, files.otg)}${s.otg.dock ? " · dock" : ""}`, filled: s.otg.kind !== "none" },
-    eth: { sub: s.net ? (files.net.length ? `peer · ${files.net.length} files` : "built-in peer") : "unplugged", filled: s.net },
+    eth: { sub: !s.net.plugged ? "unplugged" : [s.net.tftp.on && "TFTP", s.net.http.on && "HTTP"].filter(Boolean).join(" · ") || "built-in peer", filled: s.net.plugged },
     hdmi: { sub: s.display ? "monitor" : "no monitor", filled: s.display },
     gpio: { sub: files.hat ? files.hat.name : "no HAT", filled: !!files.hat },
   };
@@ -1050,7 +1101,7 @@ function refreshBoard() {
     if (filled !== undefined) text.closest(".part").dataset.filled = filled;
   }
   $("#soc-title").textContent = `BCM2711 ${s.board.stepping.toUpperCase()}`;
-  $("#eth-led").dataset.on = s.net && powered();
+  $("#eth-led").dataset.on = s.net.plugged && powered();
 }
 
 for (const part of document.querySelectorAll(".part")) {
