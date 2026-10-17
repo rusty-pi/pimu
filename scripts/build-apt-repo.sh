@@ -49,7 +49,8 @@ apt-ftparchive \
     -o "APT::FTPArchive::Release::Codename=$suite" \
     -o "APT::FTPArchive::Release::Architectures=${architectures% }" \
     -o "APT::FTPArchive::Release::Components=$component" \
-    release "dists/$suite" > "dists/$suite/Release"
+    release "dists/$suite" > Release.new
+mv Release.new "dists/$suite/Release"
 
 gpg --batch --yes --local-user "$key" --clearsign \
     --output "dists/$suite/InRelease" "dists/$suite/Release"
