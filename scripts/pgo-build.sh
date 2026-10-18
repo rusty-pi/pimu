@@ -8,7 +8,8 @@
 # release workflow builds two targets from the one profile.
 #
 # An instrumented build runs the firmware boot and the first part of the Linux
-# boot, `llvm-profdata` merges what it counted, and the release build is done
+# boot (once with the cores taking turns, once with `--parallel`),
+# `llvm-profdata` merges what it counted, and the release build is done
 # again with that profile. Needs the llvm-tools rustup component (added here
 # if it is missing) and what `boot --scenario` needs: the firmware blobs
 # and both SD images scripts/make-sd.sh builds (firmware/sd.img, and
@@ -92,6 +93,10 @@ train() {
 }
 train testdata/boot/firmware.yaml
 train testdata/boot/linux.yaml --until "$linux_until"
+# `--parallel` runs the cores on threads of their own, a worker loop and a
+# request path the runs above never reach, and code a profile never reaches is
+# laid out as cold. Same stop, so the profile stays reproducible in guest terms.
+train testdata/boot/linux.yaml --until "$linux_until" --parallel
 
 "$profdata" merge -o "$work/merged.profdata" "$work/raw"
 echo "merged $(find "$work/raw" -name '*.profraw' | wc -l) profraw files into" \
