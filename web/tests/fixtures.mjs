@@ -151,9 +151,17 @@ class App {
 export const test = base.extend({
   // The saved settings the page starts from; leave undefined for the defaults.
   state: [undefined, { option: true }],
+  // A page that can have threads: cross-origin isolated, with shared memory.
+  isolated: [false, { option: true }],
 
-  app: async ({ page, state }, use, testInfo) => {
+  app: async ({ page, state, isolated }, use, testInfo) => {
     await page.addInitScript(FAKE_WORKER);
+    if (isolated) {
+      await page.addInitScript(() => {
+        Object.defineProperty(globalThis, "crossOriginIsolated", { value: true });
+        globalThis.SharedArrayBuffer ??= class {};
+      });
+    }
     if (state) await page.addInitScript((s) => localStorage.setItem("pimu-web", JSON.stringify(s)), state);
     await page.addInitScript((bootconf) => (window.__bootconf = bootconf), BOOTCONF);
     await page.route(EEPROM_URL, (route) =>
