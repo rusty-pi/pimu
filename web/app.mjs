@@ -615,7 +615,7 @@ function addLog(text) {
     if (!$("#tab-io").hidden) renderIo();
     if (!$("#tab-net").hidden) renderNet();
   }, 500);
-  if (io.net.length) $("#net-count").textContent = `(${io.net.length})`;
+  if (io.netSeen) $("#net-count").textContent = `(${io.netSeen})`;
 }
 
 function describeRow(row) {
@@ -702,10 +702,11 @@ function renderLogRows() {
 const DISKS = { sd: "microSD card", usb: "USB 3.0 stick", otg: "USB-C stick" };
 const BLOCK = 512;
 const STRIP_BINS = 48;
+const NET_KEPT = 500;
 
 let io;
 function resetIo() {
-  io = { disks: new Map(), otp: new Map(), net: [], lastUs: 0 };
+  io = { disks: new Map(), otp: new Map(), net: [], netSeen: 0, lastUs: 0 };
 }
 resetIo();
 
@@ -734,7 +735,8 @@ function noteIo(row) {
   if (row.dev === "net" && typeof row.event === "string") {
     const m = /^([\w-]+): (.*)$/.exec(row.event);
     io.net.push({ us: row.us, proto: m ? m[1] : "", text: m ? m[2] : row.event });
-    if (io.net.length > 500) io.net.shift();
+    io.netSeen += 1;
+    if (io.net.length > NET_KEPT) io.net.shift();
   } else if (row.dev === "otp") {
     const fuse = io.otp.get(row.row) ?? { row: row.row, value: row.value, meaning: row.meaning ?? "", reads: 0, was: null };
     if (row.op === "write") Object.assign(fuse, { value: row.value, was: fuse.was ?? row.was });
@@ -848,7 +850,7 @@ const FAILED = /-> (5\d\d|416)|refused|reset/;
 const MISSED = /-> (404|not found)|aborted by client/;
 
 function renderNet() {
-  $("#net-count").textContent = io.net.length ? `(${io.net.length})` : "";
+  $("#net-count").textContent = io.netSeen ? `(${io.netSeen})` : "";
   const pane = $("#tab-net");
   if (!io.net.length) {
     pane.replaceChildren(h("p", { class: "hint" }, !state.log.includes("io")
@@ -867,7 +869,8 @@ function renderNet() {
   }));
   const old = pane.querySelector(".io-net");
   const stick = !old || old.scrollTop + old.clientHeight >= old.scrollHeight - 6;
-  pane.replaceChildren(box);
+  const dropped = io.netSeen - io.net.length;
+  pane.replaceChildren(...clean([dropped ? h("p", { class: "hint" }, `The last ${NET_KEPT} of ${io.netSeen.toLocaleString()} events.`) : null, box]));
   if (stick) box.scrollTop = box.scrollHeight;
 }
 
@@ -1342,7 +1345,11 @@ function changeList() {
     if (show === "lines") {
       const before = textLines(was);
       const after = textLines(now);
-      list.push({ part, spot, what, removed: before.filter((l) => !after.includes(l)), added: after.filter((l) => !before.includes(l)), reset });
+      if (before.join("\n") === after.join("\n")) continue;
+      const removed = before.filter((l) => !after.includes(l));
+      const added = after.filter((l) => !before.includes(l));
+      const reordered = !removed.length && !added.length;
+      list.push({ part, spot, what, removed: reordered ? before : removed, added: reordered ? after : added, reset });
     } else {
       list.push({ part, spot, what, before: show(was), after: show(now), reset });
     }
@@ -1439,12 +1446,33 @@ function stateDiff(now, was) {
 
 // What a link says, laid over the defaults: only keys the page knows, and only
 // values of the type the page keeps there.
-function overShared(base, shared, key) {
-  const strings = (list) => list.filter((v) => typeof v === "string");
-  if (key === "bootconf") return isPlain(shared) ? Object.fromEntries(Object.entries(shared).filter(([, v]) => typeof v === "string")) : base;
-  if (isPlain(base)) return Object.fromEntries(Object.keys(base).map((k) => [k, isPlain(shared) && k in shared ? overShared(base[k], shared[k], k) : base[k]]));
-  if (Array.isArray(base) || base === null) return Array.isArray(shared) ? strings(shared) : base;
-  return typeof shared === typeof base ? shared : base;
+// The values a link may set where the page offers a choice; anything else
+// keeps the default.
+const SHARED_CHOICES = {
+  "sd.mode": Object.keys(CARD_CONTENTS),
+  "sd.image.kind": ["file", "url"],
+  "eeprom.kind": Object.keys(EEPROM_FROM),
+  "usb.kind": Object.keys(IMAGE_FROM),
+  "otg.kind": Object.keys(IMAGE_FROM),
+  "net.tftp.mode": BOOT_FILE_SOURCES.map(([mode]) => mode),
+  "net.http.mode": BOOT_FILE_SOURCES.map(([mode]) => mode),
+  "board.stepping": ["b0", "c0"],
+  "board.memoryMb": [1024, 2048],
+  log: LOG_CHANNELS.map(([name]) => name),
+  bootOrder: BOOT_DEVICES.map(([digit]) => digit),
+};
+
+function overShared(base, shared, path = "") {
+  const allowed = SHARED_CHOICES[path];
+  if (path === "bootconf") return isPlain(shared) ? Object.fromEntries(Object.entries(shared).filter(([, v]) => typeof v === "string")) : base;
+  if (isPlain(base)) return Object.fromEntries(Object.keys(base).map((k) => [k, isPlain(shared) && k in shared ? overShared(base[k], shared[k], path ? `${path}.${k}` : k) : base[k]]));
+  if (Array.isArray(base) || base === null) {
+    if (!Array.isArray(shared)) return base;
+    const kept = shared.filter((v) => typeof v === "string" && (!allowed || allowed.includes(v)));
+    return base === null && !kept.length ? base : kept;
+  }
+  if (typeof shared !== typeof base) return base;
+  return allowed && !allowed.includes(shared) ? base : shared;
 }
 
 async function squeeze(bytes, stream) {

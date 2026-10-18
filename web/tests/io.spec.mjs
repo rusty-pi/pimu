@@ -130,6 +130,15 @@ test.describe("the Network tab", () => {
   });
 });
 
+test("the Network tab keeps the last 500 events, and counts them all", async ({ app }) => {
+  await app.running();
+  await app.showTab("net");
+  await app.emit(io(Array.from({ length: 520 }, (_, i) => ({ us: i, dev: "net", event: `dns: host${i} type 1 -> 192.0.2.1` }))));
+  await expect(app.tab("net")).toHaveText("Network (520)");
+  await expect(app.page.locator(".io-net li")).toHaveCount(500);
+  await expect(app.page.locator("#tab-net > .hint")).toHaveText("The last 500 of 520 events.");
+});
+
 test("io lines read as sentences in the log", async ({ app }) => {
   await app.running();
   await app.showTab("log");

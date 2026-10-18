@@ -71,6 +71,16 @@ test("a log channel is a change too, and opens the log", async ({ app }) => {
   await expect(app.page.locator("#tab-log")).toBeVisible();
 });
 
+test("text that only gains blank lines or spaces is no change, lines moved are", async ({ app }) => {
+  await app.open("sd");
+  const box = app.field("Lines added to config.txt").locator("textarea");
+  await box.fill("arm_64bit=1\n\nenable_uart=1  \nuart_2ndstage=1\n");
+  await expect(changes(app)).toHaveCount(0);
+  await expect(badge(app, "sd")).toHaveCount(0);
+  await box.fill("enable_uart=1\narm_64bit=1\nuart_2ndstage=1");
+  await expect(changes(app)).toHaveText(["microSDconfig.txtreset− arm_64bit=1− enable_uart=1− uart_2ndstage=1+ enable_uart=1+ arm_64bit=1+ uart_2ndstage=1"]);
+});
+
 test("the list follows what you change while the part stays open", async ({ app }) => {
   await app.open("hdmi");
   await expect(changes(app)).toHaveCount(0);
@@ -175,6 +185,20 @@ test.describe("sharing", () => {
     await visit(app, "/#board=not-deflate");
     await expect(app.page.locator("#toast")).toHaveText("The board in the link could not be read.");
     await expect(changes(app)).toHaveCount(0);
+  });
+
+  test("what a link sets outside the page's choices keeps the default", async ({ app }) => {
+    const shared = { sd: { mode: "x" }, board: { stepping: "z9", memoryMb: 99999 }, log: ["io", "nope"], bootOrder: ["z"], usb: { kind: "file" } };
+    const link = await app.page.evaluate(async (json) => {
+      const packed = await new Response(new Blob([new TextEncoder().encode(json)]).stream().pipeThrough(new CompressionStream("deflate-raw"))).arrayBuffer();
+      return `#board=${btoa(String.fromCharCode(...new Uint8Array(packed))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}`;
+    }, JSON.stringify(shared));
+    await visit(app, `/${link}`);
+    await expect(app.page.locator("#toast")).toHaveText("Opened the board from the link.");
+    await expect(changes(app)).toHaveText(["USB 3.0Stickresetnothing → a local file"]);
+    await expect(app.page.locator('[data-sub="sd"]')).toHaveText("official firmware");
+    const saved = await app.localState();
+    expect([saved.board, saved.log, saved.bootOrder]).toEqual([{ stepping: "c0", memoryMb: 1024, boardRev: "" }, ["io"], null]);
   });
 
   test("a link opens nothing while the board is powered", async ({ app }) => {
