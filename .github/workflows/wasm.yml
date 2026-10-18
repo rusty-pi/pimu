@@ -1,8 +1,9 @@
 name: wasm
 
-# The emulator builds for the browser (docs/web.md). Nothing here boots it; the
-# job only keeps host-only std (processes, UNIX sockets, `Instant`) from creeping
-# back into the library.
+# The emulator builds for the browser (docs/web.md), plain and for threads (the
+# second on a pinned nightly, which rebuilds std with atomics). Nothing here boots
+# it; the job only keeps host-only std (processes, UNIX sockets, `Instant`) from
+# creeping back into the library.
 on:
   push:
     branches: [main]
@@ -32,6 +33,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+
+      - name: Nightly, for the threaded build
+        run: rustup toolchain install "$(scripts/build-wasm.sh --nightly)" --profile minimal --component rust-src --target wasm32-unknown-unknown
 
       - name: wasm-bindgen CLI
         run: cargo install wasm-bindgen-cli --version "$(scripts/build-wasm.sh --version)" --locked

@@ -1,0 +1,23 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>threads check</title>
+<!-- Needs web/pkg-mt/ (scripts/build-wasm.sh) and a server that isolates the page:
+     PIMU_COI=1 node web/tests/server.mjs, then open /tests/threads-check.html. It prints
+     {"threaded":true,"pool":4,...} when the cores can run on worker threads. -->
+<pre id="out">running</pre>
+<script type="module">
+  import { ThreadPool } from "../threads.mjs";
+  const show = (value) => (document.getElementById("out").textContent = JSON.stringify(value));
+  const pool = new ThreadPool();
+  const worker = new Worker("./threads-check-worker.mjs", { type: "module" });
+  worker.onmessage = async ({ data }) => {
+    if (data.type !== "spawn-threads") return show(data);
+    try {
+      await pool.start(data);
+      worker.postMessage({ type: "threads-spawned" });
+    } catch (error) {
+      worker.postMessage({ type: "threads-spawned", error: String(error) });
+    }
+  };
+  worker.onerror = (e) => show({ error: e.message });
+</script>

@@ -291,9 +291,9 @@ What changes:
 - **Only the cores' own work runs in parallel.** A boot is as fast as its
   busiest core allows: the firmware stage before the ARM is released, and a
   kernel or userspace that keeps one core busy, gain nothing.
-- **Not in the browser.** WebAssembly threads need shared memory and
-  cross-origin isolation, and the page does not have either; the flag does
-  nothing there.
+- **In the browser** the same mode is the "Run the ARM cores on worker threads"
+  option ([`web.md`](web.md#the-cores-on-threads)), which needs a threaded build
+  and a cross-origin isolated page.
 
 ## The OTP fuses
 

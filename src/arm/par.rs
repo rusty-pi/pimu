@@ -43,7 +43,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::thread::{JoinHandle, Thread};
+use std::thread::Thread;
 use std::time::Duration;
 
 use super::{
@@ -189,7 +189,7 @@ impl Shared {
 /// run loop needs.
 pub(super) struct ParHost {
     sh: Arc<Shared>,
-    threads: Vec<JoinHandle<Core>>,
+    threads: Vec<CoreThread>,
     n: usize,
     released_at: u64,
     spis: [bool; SPIS.len()],
@@ -243,10 +243,7 @@ impl ParHost {
         for (id, core) in cores.into_iter().enumerate() {
             let sh = sh.clone();
             let start = core.par_cycles.max(now.saturating_sub(WINDOW));
-            let handle = std::thread::Builder::new()
-                .name(format!("pimu-arm{id}"))
-                .spawn(move || Worker::new(&sh, id, core, start).run())
-                .expect("a host thread for an ARM core");
+            let handle = CoreThread::spawn(id, move || Worker::new(&sh, id, core, start).run());
             host.threads.push(handle);
         }
         host
@@ -524,10 +521,7 @@ impl ParHost {
             self.service(m);
             Self::wait_a_little(&mut spins);
         }
-        threads
-            .into_iter()
-            .map(|t| t.join().expect("an ARM core thread panicked"))
-            .collect()
+        threads.into_iter().map(CoreThread::take).collect()
     }
 }
 
@@ -537,8 +531,85 @@ impl Drop for ParHost {
         self.sh.quit.store(true, Ordering::SeqCst);
         self.sh.wake_all();
         for t in self.threads.drain(..) {
-            let _ = t.join();
+            while !t.is_finished() {
+                std::thread::park_timeout(NAP);
+            }
         }
+    }
+}
+
+/// Whether `n` core threads can start now. On a native host they always can;
+/// in the browser they need worker threads the page has started.
+pub(super) fn can_spawn(n: usize) -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        super::pool::threads() >= n
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = n;
+        true
+    }
+}
+
+/// What a core's thread leaves behind: the core, and that it is done.
+struct Finished {
+    core: Mutex<Option<Core>>,
+    done: AtomicBool,
+}
+
+/// A core's thread, from which the core comes back. Native threads are
+/// `std::thread`s; in the browser they are the page's pool of workers.
+struct CoreThread {
+    fin: Arc<Finished>,
+    #[cfg(not(target_arch = "wasm32"))]
+    handle: std::thread::JoinHandle<()>,
+}
+
+impl CoreThread {
+    fn spawn(id: usize, run: impl FnOnce() -> Core + Send + 'static) -> CoreThread {
+        let fin = Arc::new(Finished {
+            core: Mutex::new(None),
+            done: AtomicBool::new(false),
+        });
+        let theirs = fin.clone();
+        let job = move || {
+            *theirs.core.lock().unwrap() = Some(run());
+            theirs.done.store(true, Ordering::Release);
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let handle = std::thread::Builder::new()
+                .name(format!("pimu-arm{id}"))
+                .spawn(job)
+                .expect("a host thread for an ARM core");
+            CoreThread { fin, handle }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = id;
+            super::pool::submit(Box::new(job));
+            CoreThread { fin }
+        }
+    }
+
+    fn is_finished(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.handle.is_finished() {
+            return true;
+        }
+        self.fin.done.load(Ordering::Acquire)
+    }
+
+    fn take(self) -> Core {
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = self.handle.join();
+        self.fin
+            .core
+            .lock()
+            .unwrap()
+            .take()
+            .expect("an ARM core thread panicked")
     }
 }
 
@@ -1153,6 +1224,65 @@ impl Memory for ParBus<'_> {
     }
 }
 
+/// Whether the cores really run side by side here: four of them increment one
+/// word with `ldxr`/`stxr`, and every increment must be counted. A page runs
+/// this once before it turns parallel cores on, since a browser may refuse the
+/// worker threads they need.
+pub fn probe() -> bool {
+    use super::ArmSide;
+    use crate::bus::Width;
+    #[cfg(not(target_arch = "wasm32"))]
+    use std::time::Instant;
+    #[cfg(target_arch = "wasm32")]
+    use web_time::Instant;
+
+    const PER_CORE: u32 = 2_000;
+    // x1 = 0x800, the counter; x4 = PER_CORE
+    // 10: ldxr x2,[x1]; add x2,x2,#1; stxr w3,x2,[x1]; cbnz w3,10
+    //     sub x4,x4,#1; cbnz x4,10
+    // then a read of the system timer's CLO, which only the machine's thread can
+    // answer, and a flag at 0x808 + 8 * id, and rest.
+    let program = [
+        0xD538_00A0,
+        0x9240_1C00,
+        0xD281_0001,
+        0xD280_0004 | (PER_CORE << 5),
+        0xC85F_7C22,
+        0x9100_0442,
+        0xC803_7C22,
+        0x35FF_FFA3,
+        0xD100_0484,
+        0xB5FF_FF64,
+        0xD2BF_C008,
+        0xF286_0088,
+        0xB940_0107,
+        0xD37D_F005,
+        0x8B01_00A5,
+        0xD280_0026,
+        0xF900_04A6,
+        0x1400_0000,
+    ];
+    let mut m = Machine::new(1 << 20);
+    let base = m.ram.base();
+    for (i, w) in program.iter().enumerate() {
+        let _ = m.ram.store(base + 4 * i as u32, Width::Word, *w);
+    }
+    let word = |m: &Machine, at: u32| m.ram.load(base + at, Width::Word).unwrap_or(0);
+    let mut arm = ArmSide::new();
+    arm.set_parallel(true);
+    let start = Instant::now();
+    let finished = |m: &Machine| (0..CORES as u32).all(|id| word(m, 0x808 + 8 * id) != 0);
+    while !finished(&m) && arm.stopped.is_none() && start.elapsed() < Duration::from_secs(5) {
+        m.tick(54 * 20);
+        for _ in 0..SYNC_STEPS {
+            arm.catch_up(&mut m);
+        }
+    }
+    let threaded = arm.is_parallel();
+    arm.pause(&mut m);
+    threaded && finished(&m) && word(&m, 0x800) == CORES as u32 * PER_CORE
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::ArmSide;
@@ -1214,33 +1344,7 @@ mod tests {
 
     #[test]
     fn exclusive_increments_from_every_core_are_all_counted() {
-        const PER_CORE: u32 = 20_000;
-        // x1 = 0x800, the counter; x4 = PER_CORE
-        // 10: ldxr x2,[x1]; add x2,x2,#1; stxr w3,x2,[x1]; cbnz w3,10
-        //     sub x4,x4,#1; cbnz x4,10
-        // then a flag at 0x808 + 8 * id, and rest.
-        let mut m = machine_with(&[
-            0xD538_00A0,
-            0x9240_1C00,
-            0xD281_0001,
-            0xD280_0004 | (PER_CORE << 5),
-            0xC85F_7C22,
-            0x9100_0442,
-            0xC803_7C22,
-            0x35FF_FFA3,
-            0xD100_0484,
-            0xB5FF_FF64,
-            0xD37D_F005,
-            0x8B01_00A5,
-            0xD280_0026,
-            0xF900_04A6,
-            0x1400_0000,
-        ]);
-        let mut arm = ArmSide::new();
-        drive(&mut m, &mut arm, |m| {
-            (0..4).all(|id| word(m, 0x808 + 8 * id) != 0)
-        });
-        assert_eq!(word(&m, 0x800), 4 * PER_CORE);
+        assert!(super::probe());
     }
 
     #[test]
