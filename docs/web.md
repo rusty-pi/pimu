@@ -42,7 +42,7 @@ The board is a block diagram in the style of [`board-sheet.svg`](board-sheet.svg
 | GPIO | A HAT's ID EEPROM. |
 | BCM2711 | The silicon (B0 or C0), the memory, a board revision code, fuses to program, jitter and faults, and the checks of the `coherency` and `alignment` logs. |
 
-The part opens in the pane beside the board. With no part open, that pane lists
+The part opens in the pane left of the board. With no part open, that pane lists
 **Changes**: everything that differs from the board the page starts with, what it
 was and what it is, each with its own reset; a part with changes carries their
 count. A phone gets the pane as a sheet at the bottom of the screen, and the

@@ -28,11 +28,11 @@ test.describe("on a wide screen", () => {
     }
   });
 
-  test("the panel stands beside the board, as tall as it, whatever is in it", async ({ app }) => {
+  test("the panel stands left of the board, as tall as it, whatever is in it", async ({ app }) => {
     for (const part of [null, "sd", "eeprom", "soc"]) {
       if (part) await app.open(part);
       const [board, drawer] = [await box(app, ".board-pane"), await box(app, "#drawer")];
-      expect(drawer.left, String(part)).toBeGreaterThanOrEqual(board.right);
+      expect(drawer.right, String(part)).toBeLessThanOrEqual(board.left);
       expect(drawer.top, String(part)).toBe(board.top);
       expect(drawer.height, String(part)).toBe(board.height);
     }
@@ -94,12 +94,12 @@ test.describe("on a wide screen", () => {
 test.describe("on a very wide screen", () => {
   test.use({ viewport: { width: 1920, height: 1000 } });
 
-  test("the board, the panel and the log are three columns, and the page does not scroll", async ({ app }) => {
+  test("the panel, the board and the log are three columns, and the page does not scroll", async ({ app }) => {
     const [board, term, drawer, screen] = [await box(app, ".board-pane"), await box(app, ".console-pane"), await box(app, "#drawer"), await box(app, ".screen")];
     expect(term.top).toBeGreaterThanOrEqual(board.bottom);
     expect(term.right).toBe(board.right);
-    expect(drawer.left).toBeGreaterThanOrEqual(board.right);
-    expect(screen.left).toBeGreaterThanOrEqual(drawer.right);
+    expect(drawer.right).toBeLessThanOrEqual(board.left);
+    expect(screen.left).toBeGreaterThanOrEqual(board.right);
     expect(screen.height).toBe(drawer.height);
     const scrolls = await app.page.evaluate(() => ({ down: document.querySelector(".work").getBoundingClientRect().bottom > innerHeight, across: document.documentElement.scrollWidth > innerWidth }));
     expect(scrolls).toEqual({ down: false, across: false });

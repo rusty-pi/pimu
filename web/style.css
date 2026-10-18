@@ -102,26 +102,26 @@ button.switch[aria-checked="true"] .track::after { left: 16px; }
 .board-pane { padding: 10px 14px 8px; }
 .console-pane, .screen { display: flex; flex-direction: column; height: clamp(320px, 60vh, 680px); position: relative; }
 
-/* Medium: the side pane stands beside the board, as tall as it and no taller,
+/* Medium: the side pane stands left of the board, as tall as it and no taller,
    so opening a part moves nothing; console and log share the row under them. */
 @media (min-width: 1180px) {
   .work {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 0.7fr) var(--side);
-    grid-template-areas: "board board side" "console screen screen";
+    grid-template-columns: var(--side) minmax(0, 1fr) minmax(0, 0.7fr);
+    grid-template-areas: "side board board" "console console screen";
   }
   .board-pane { grid-area: board; }
   .drawer { grid-area: side; }
   .console-pane { grid-area: console; }
   .screen { grid-area: screen; }
 }
-/* Wide: three columns of full height – the board with the console under it,
-   the side pane, and the log. */
+/* Wide: three columns of full height – the side pane, the board with the
+   console under it, and the log. */
 @media (min-width: 1760px) {
   :root { --side: 400px; }
   .work {
-    grid-template-columns: minmax(0, 1.2fr) var(--side) minmax(0, 1fr);
+    grid-template-columns: var(--side) minmax(0, 1.2fr) minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr);
-    grid-template-areas: "board side screen" "console side screen";
+    grid-template-areas: "side board screen" "side console screen";
     height: calc(100vh - var(--bar));
     min-height: 720px;
   }
