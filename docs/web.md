@@ -71,6 +71,8 @@ Whatever is downloaded shows its progress over the console. On a screen wide
 enough the page does not scroll.
 
 Parts are locked while the board is powered: the machine is built at power-on.
+The settings are kept in the browser's local storage; **Reset all settings**
+under the changes puts every one back to its default.
 
 ## The cores on threads
 

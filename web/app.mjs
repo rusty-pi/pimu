@@ -1365,11 +1365,14 @@ function changeList() {
 }
 
 function resetAll() {
-  if (!confirm("Put every part back the way the page first sets it up?")) return;
-  for (const key of Object.keys(DEFAULT_STATE)) state[key] = structuredClone(DEFAULT_STATE[key]);
-  for (const [slot] of PICKED_FILES) files[slot] = null;
-  changed();
-  renderDrawer();
+  if (!confirm("Reset every setting to its default? The page reloads: a running board stops, and picked files are dropped.")) return;
+  clearTimeout(saveTimer);
+  try {
+    localStorage.removeItem("pimu-web");
+  } catch {
+    // blocked storage held nothing to reset
+  }
+  location.reload();
 }
 
 function diffNodes(item) {
@@ -1411,7 +1414,7 @@ function changesPane() {
     list.length
       ? h("div", { class: "changes-foot" },
           h("button", { class: "link", type: "button", onclick: share }, "Share as a link"),
-          h("button", { class: "link", type: "button", disabled: locked, onclick: resetAll }, "Reset everything"))
+          h("button", { class: "link", type: "button", onclick: resetAll }, "Reset all settings"))
       : null);
 }
 
@@ -1634,7 +1637,6 @@ plug.addEventListener("keydown", (e) => {
 });
 $("#power").addEventListener("click", togglePower);
 $("#pause").addEventListener("click", () => worker?.postMessage({ type: phase === "paused" ? "resume" : "pause" }));
-
 setPhase("off");
 refreshBoard();
 renderIo();

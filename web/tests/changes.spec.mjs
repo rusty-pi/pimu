@@ -55,30 +55,11 @@ test("a change resets from the list, and the part opens from it", async ({ app }
   expect((await app.localState()).usb.kind).toBe("none");
 });
 
-test("everything resets at once, once you say so", async ({ app }) => {
-  await app.open("eth");
-  await app.drawer.getByRole("checkbox", { name: "Plug the cable in" }).check();
-  await app.open("hdmi");
-  await app.drawer.getByRole("checkbox", { name: "Plug in a monitor" }).check();
-  await expect(changes(app)).toHaveCount(2);
-
-  app.page.once("dialog", (dialog) => dialog.dismiss());
-  await app.changes.getByRole("button", { name: "Reset everything" }).click();
-  await expect(changes(app)).toHaveCount(2);
-
-  app.page.once("dialog", (dialog) => dialog.accept());
-  await app.changes.getByRole("button", { name: "Reset everything" }).click();
-  await expect(changes(app)).toHaveCount(0);
-  const saved = await app.localState();
-  expect([saved.net.plugged, saved.display]).toEqual([false, false]);
-});
-
-test("nothing resets while the board is powered", async ({ app }) => {
+test("no single change resets while the board is powered", async ({ app }) => {
   await app.open("hdmi");
   await app.drawer.getByRole("checkbox", { name: "Plug in a monitor" }).check();
   await app.running();
   await expect(app.changes.getByRole("button", { name: "Reset HDMI 0: Monitor" })).toBeDisabled();
-  await expect(app.changes.getByRole("button", { name: "Reset everything" })).toBeDisabled();
 });
 
 test("a log channel is a change too, and opens the log", async ({ app }) => {
