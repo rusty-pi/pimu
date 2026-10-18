@@ -154,6 +154,7 @@ button.switch[aria-checked="true"] .track::after { left: 16px; }
 #board .t { font-size: 13px; font-weight: 600; }
 #board .ts { font-size: 12px; font-weight: 600; }
 #board .m { font-family: var(--mono); font-size: 9.5px; fill: var(--dim); }
+#board .sub { font-size: 9px; }
 #board .soc { fill: var(--soc); stroke: var(--ink); stroke-width: 1.6; }
 #board .grp { fill: var(--grp); stroke: none; }
 #board .tag rect { fill: var(--sheet); stroke: var(--ink); stroke-width: 1; }
