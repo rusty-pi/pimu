@@ -6,16 +6,16 @@ use serde::Deserialize;
 
 use crate::soc::{Board, Stepping};
 
-/// The biggest board the browser build takes: a tab that is granted more than
-/// this is the exception, and a 32-bit address space tops out at 4 GiB.
-const MAX_MEMORY: u64 = 2 << 30;
+/// The biggest Raspberry Pi 4. A board takes only as much of the tab's memory
+/// as its guest has written to, so a size is no promise that it fits.
+const MAX_MEMORY: u64 = 8 << 30;
 
 #[derive(Deserialize, Default, Debug)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct Options {
     /// `b0` or `c0`; `c0` when left out.
     pub stepping: Option<String>,
-    /// The board's memory, 1024 or 2048; 1024 when left out.
+    /// The board's memory, 1024, 2048, 4096 or 8192; 1024 when left out.
     pub memory_mb: Option<u32>,
     /// The OTP revision code in hex, in place of the one the stepping and
     /// `memory_mb` make.
@@ -71,14 +71,16 @@ impl Options {
                 let size = match mb.unwrap_or(1024) {
                     1024 => 2,
                     2048 => 3,
-                    other => bail!("{other} MB of memory: the browser build takes 1024 or 2048"),
+                    4096 => 4,
+                    8192 => 5,
+                    other => bail!("{other} MB of memory: a Pi 4 has 1024, 2048, 4096 or 8192"),
                 };
                 board.revision = (board.revision & !(7 << 20)) | (size << 20);
             }
         }
         if board.memory_bytes() > MAX_MEMORY {
             bail!(
-                "board revision {:06x} has {} GiB of memory, and the browser build takes up to {}",
+                "board revision {:06x} has {} GiB of memory, and a Pi 4 has up to {}",
                 board.revision,
                 board.memory_bytes() >> 30,
                 MAX_MEMORY >> 30
@@ -113,9 +115,20 @@ mod tests {
     }
 
     #[test]
-    fn a_board_that_does_not_fit_is_refused() {
-        assert!(board(r#"{"boardRev":"d03115"}"#).is_err());
-        assert!(board(r#"{"memoryMb":4096}"#).is_err());
+    fn every_pi_4_size_is_taken() {
+        assert_eq!(
+            board(r#"{"memoryMb":8192}"#).unwrap().memory_bytes(),
+            8 << 30
+        );
+        let d03115 = board(r#"{"boardRev":"d03115"}"#).unwrap();
+        assert_eq!(d03115.memory_bytes(), 8 << 30);
+        assert_eq!(d03115.mismatch(), None);
+    }
+
+    #[test]
+    fn a_board_that_never_was_is_refused() {
+        assert!(board(r#"{"boardRev":"e03115"}"#).is_err());
+        assert!(board(r#"{"memoryMb":3072}"#).is_err());
         assert!(board(r#"{"stepping":"a1"}"#).is_err());
     }
 

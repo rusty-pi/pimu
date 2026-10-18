@@ -111,7 +111,7 @@ struct Carry {
     fuses: Option<BTreeMap<u32, u32>>,
     partition: u32,
     expander: Option<Fxl6408>,
-    ram: Option<Vec<u8>>,
+    ram: Option<crate::mem::Contents>,
 }
 
 struct Rig {
@@ -128,7 +128,7 @@ struct Rig {
 impl Rig {
     fn machine(&self, carry: &mut Carry, reboots: u32) -> Result<Machine> {
         let options = &self.options;
-        let mut machine = Machine::new(self.board.memory_bytes() as usize);
+        let mut machine = Machine::new(self.board.memory_bytes());
         machine.set_board(self.board);
         machine.set_log(self.log.clone());
         machine.spi0.attach_flash(carry.flash.clone())?;

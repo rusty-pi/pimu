@@ -36,17 +36,22 @@ export class PiBuilder {
     record("attach_image", slot, image.size, head, tail);
   }
   build() {
-    return new Pi(this.options.ticks ?? 3);
+    return new Pi(this.options.ticks ?? 3, this.options.panicAt);
   }
 }
 
 class Pi {
-  constructor(ticks) {
+  constructor(ticks, panicAt) {
     this.ticks = ticks;
+    this.panicAt = panicAt;
     this.n = 0;
   }
   run() {
     this.n += 1;
+    if (this.n === this.panicAt) {
+      console.error("panicked at src/mem.rs:1:1:\nthe host gave no more memory");
+      throw new WebAssembly.RuntimeError("unreachable");
+    }
     return new TextEncoder().encode(`tick ${this.n}\n`);
   }
   take_log() {

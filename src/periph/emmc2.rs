@@ -218,8 +218,8 @@ const ADMA_MAX_DESCRIPTORS: usize = 1 << 16;
 /// A DMA address as the RAM sees it: the emmc2bus's `dma-ranges` is 1:1, so an
 /// address inside RAM is physical (Linux's DMA32 buffers live above the first
 /// gigabyte). Only an address past the RAM is a VPU cache alias.
-fn dma_ram_addr(addr: u32, ram_len: usize) -> u32 {
-    if (addr as usize) < ram_len {
+fn dma_ram_addr(addr: u32, ram_len: u64) -> u32 {
+    if u64::from(addr) < ram_len {
         addr
     } else {
         addr & 0x3FFF_FFFF
@@ -766,7 +766,7 @@ impl Emmc2 {
         let ok = if d.write {
             match ram.read_slice(a, n) {
                 Ok(src) => {
-                    d.buf[d.pos..d.pos + n].copy_from_slice(src);
+                    d.buf[d.pos..d.pos + n].copy_from_slice(&src);
                     true
                 }
                 Err(_) => false,

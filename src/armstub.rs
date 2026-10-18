@@ -126,7 +126,7 @@ mod tests {
     use super::*;
 
     const DTB_AT: u32 = 0x10_0000;
-    const RAM: usize = 32 << 20;
+    const RAM: u64 = 32 << 20;
 
     fn dtb(args: &str) -> Vec<u8> {
         fn tok(s: &mut Vec<u8>, v: u32) {

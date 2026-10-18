@@ -213,6 +213,13 @@ test("an image that is not there is reported", async ({ talk }) => {
   expect((await talk.messages("error"))[0].message).toContain("answered 404");
 });
 
+test("a panic is reported with its message, not as a bare trap", async ({ talk }) => {
+  const origin = await talk.origin();
+  await talk.post(request(origin, { options: { stepping: "c0", ticks: 5, panicAt: 2 } }));
+  await talk.until("(m) => m.type === 'error'");
+  expect((await talk.messages("error"))[0].message).toBe("the host gave no more memory");
+});
+
 test("a download that fails is reported with its name", async ({ talk }) => {
   const origin = await talk.origin();
   await talk.post(request(origin, { boot: { kind: "download", files: [{ path: "start4.elf", url: `${origin}/tests/data/boot/missing.elf` }] } }));

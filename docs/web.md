@@ -155,8 +155,13 @@ images have to be decompressed first.
 
 ## Differences from the command line
 
-- **At most 2 GiB.** The default 8 GiB board does not fit a 32-bit address space,
-  and a tab will not grant much more than 1 GiB reliably, so the default is 1 GiB.
+- **The tab holds what the guest has written, not the board's size.** RAM is
+  kept in 1 MiB chunks that only take memory once something other than zeros is
+  written into them (`src/mem.rs`), so a 4 or 8 GiB board fits in the 4 GiB a
+  32-bit WebAssembly memory can have: under Node, the busybox `linux.yaml` boot
+  reaches its shell on an 8 GiB board with about 280 MiB of WebAssembly memory.
+  A guest that writes more than the tab grants stops with `the host gave no more
+  memory for the board's RAM`. The default stays a 1 GiB board.
 - **No host files, processes or sockets.** `--net passt`, the `xz` and `curl`
   helpers and a terminal on stdin are not part of the browser build.
 - **No VPU ELF payload, `--maskrom`, `--patch` or scenarios.** A page boots an

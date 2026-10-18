@@ -19,6 +19,20 @@ let lastState = 0;
 
 const post = (message, transfer) => postMessage(message, transfer ?? []);
 
+// A Rust panic reaches JavaScript as a bare `unreachable` trap; the panic hook
+// logs the reason just before, as `panicked at <file>:<line>:<col>:\n<message>`.
+let panicMessage = null;
+const consoleError = console.error.bind(console);
+console.error = (...args) => {
+  if (typeof args[0] === "string" && args[0].startsWith("panicked at ")) {
+    panicMessage = args[0].slice(args[0].indexOf("\n") + 1) || args[0];
+  }
+  consoleError(...args);
+};
+
+const reason = (e) =>
+  e instanceof WebAssembly.RuntimeError && panicMessage ? panicMessage : e.message ?? String(e);
+
 // ---- downloads -------------------------------------------------------------
 
 const transfers = [];
@@ -183,7 +197,7 @@ function run() {
   try {
     step();
   } catch (e) {
-    post({ type: "error", message: e.message ?? String(e) });
+    post({ type: "error", message: reason(e) });
   }
 }
 
@@ -225,7 +239,7 @@ function save(what) {
 onmessage = ({ data }) => {
   switch (data.type) {
     case "power-on":
-      powerOn(data).catch((e) => post({ type: "error", message: e.message ?? String(e) }));
+      powerOn(data).catch((e) => post({ type: "error", message: reason(e) }));
       break;
     case "bootconf":
       init().then(() => post({ type: "bootconf", id: data.id, entries: JSON.parse(eeprom_bootconf(data.bytes)) }));

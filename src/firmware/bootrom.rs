@@ -555,7 +555,7 @@ mod tests {
         let rom = BootRom::with_salt(salt);
         let out = rom.boot(&mut machine).expect("verified image boots");
         assert_eq!(out.entry, BOOTCODE_LOAD_ADDR + BOOTCODE_ENTRY_OFFSET);
-        assert_eq!(machine.ram.read_slice(0, 4).unwrap(), &[0xAB; 4]);
+        assert_eq!(&*machine.ram.read_slice(0, 4).unwrap(), &[0xAB; 4]);
 
         let mut bad_body = body.clone();
         bad_body[0] ^= 1;
@@ -599,7 +599,7 @@ mod tests {
             .insert_disk(card_with_recovery_bin(recovery.clone()));
         let out = rom.boot(&mut bare).expect("recovery.bin boots");
         assert_eq!(out.entry, BOOTCODE_LOAD_ADDR + BOOTCODE_ENTRY_OFFSET);
-        assert_eq!(bare.ram.read_slice(0, 4).unwrap(), &[0xCD; 4]);
+        assert_eq!(&*bare.ram.read_slice(0, 4).unwrap(), &[0xCD; 4]);
         assert!(out.log[0].contains("recovery.bin"));
 
         let mut both = Machine::new(1 << 20);
@@ -609,7 +609,7 @@ mod tests {
         both.emmc2
             .insert_disk(card_with_recovery_bin(recovery.clone()));
         rom.boot(&mut both).expect("recovery.bin wins");
-        assert_eq!(both.ram.read_slice(0, 4).unwrap(), &[0xCD; 4]);
+        assert_eq!(&*both.ram.read_slice(0, 4).unwrap(), &[0xCD; 4]);
 
         let mut tampered = recovery;
         tampered[0] ^= 1;

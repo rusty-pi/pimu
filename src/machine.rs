@@ -229,7 +229,7 @@ const _: () = {
 };
 
 impl Machine {
-    pub fn new(ram_bytes: usize) -> Machine {
+    pub fn new(ram_bytes: u64) -> Machine {
         Machine {
             ram: Ram::new(map::SDRAM_CACHED_BASE, ram_bytes),
             maskrom: None,
@@ -1072,7 +1072,7 @@ impl Machine {
     /// here. Masking the alias off made every such transfer work.
     fn dma40_dram(&self, addr: u64) -> Option<u32> {
         let at = addr as u32;
-        (addr >> 32 == 0 && (at as usize) < self.ram.len()).then_some(at)
+        (addr >> 32 == 0 && u64::from(at) < self.ram.len()).then_some(at)
     }
 
     /// One word to a 40-bit DMA4 address, from behind the VPU's caches.
@@ -1460,7 +1460,7 @@ impl Bus for Machine {
                 let len = crate::vpu::length::insn_len_bytes(p0);
                 if let Ok(bytes) = self.ram.read_slice(phys, len as usize) {
                     self.ram_reads = self.ram_reads.wrapping_add(1);
-                    out[..len as usize].copy_from_slice(bytes);
+                    out[..len as usize].copy_from_slice(&bytes);
                     return Ok(len);
                 }
             }
