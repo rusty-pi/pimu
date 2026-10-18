@@ -2,7 +2,9 @@
 // the serial console, the log, and what the machine looks like from inside.
 // Nothing here touches WebAssembly: the machine runs in worker.mjs.
 
+import "./coi.mjs";
 import { download } from "./download.mjs";
+import { ThreadPool, canHaveThreads } from "./threads.mjs";
 import { netBootOrder } from "./netboot.mjs";
 import {
   BOOT_DEVICES, BOOT_ORDER_PRESETS, GROUPS, KNOWN_KEYS,
@@ -57,7 +59,7 @@ const DEFAULT_STATE = {
   display: false,
   board: { stepping: "c0", memoryMb: 1024, boardRev: "" },
   otpRows: "",
-  advanced: { jitter: "", faults: "", checkCoherency: false, checkAlignment: false, skipUnimpl: false },
+  advanced: { jitter: "", faults: "", checkCoherency: false, checkAlignment: false, skipUnimpl: false, parallel: false },
   log: ["io"],
 };
 
@@ -181,6 +183,8 @@ async function powerOn() {
 function powerOff() {
   worker?.terminate();
   worker = null;
+  threadPool?.terminate();
+  threadPool = null;
   renderInspect(null);
   setPhase("off");
   $("#downloads").hidden = true;
@@ -191,13 +195,31 @@ function powerOff() {
 function fail(message) {
   worker?.terminate();
   worker = null;
+  threadPool?.terminate();
+  threadPool = null;
   setPhase("error");
   $("#downloads").hidden = true;
   toast(message, true);
 }
 
+let threadPool = null;
+
+// The emulator's worker asks the page for the threads the cores run on; see threads.mjs.
+function spawnThreads(request) {
+  threadPool?.terminate();
+  threadPool = new ThreadPool();
+  const answer = (message) => worker?.postMessage({ type: "threads-spawned", ...message });
+  threadPool.start(request).then(() => answer({}), (e) => answer({ error: String(e) }));
+}
+
 function onWorker(data) {
   switch (data.type) {
+    case "spawn-threads":
+      spawnThreads(data);
+      break;
+    case "notice":
+      toast(data.text, false);
+      break;
     case "phase":
       setPhase(data.phase);
       if (data.phase === "running") setTimeout(() => (phase === "running" ? ($("#downloads").hidden = true) : 0), 1200);
@@ -326,6 +348,7 @@ async function buildRequest() {
   options.checkCoherency = s.advanced.checkCoherency;
   options.checkAlignment = s.advanced.checkAlignment;
   options.skipUnimpl = s.advanced.skipUnimpl;
+  options.parallel = s.advanced.parallel && canHaveThreads();
   if (s.advanced.jitter.trim()) options.jitter = Number(s.advanced.jitter);
   if (s.advanced.faults.trim()) options.faults = Number(s.advanced.faults);
 
@@ -450,7 +473,7 @@ function showState() {
   const seconds = (st.modelUs / 1e6).toFixed(1);
   const arm = st.cores.arm.reduce((n, c) => n + c.insns, 0);
   const millions = (n) => `${(n / 1e6).toFixed(0)} M`;
-  $("#clock").textContent = `model time ${seconds} s · VPU ${millions(st.retired)} instructions · ARM ${millions(arm)}`;
+  $("#clock").textContent = `model time ${seconds} s · VPU ${millions(st.retired)} instructions · ARM ${millions(arm)}${st.parallel ? " · cores on threads" : ""}`;
   const result = $("#result");
   if (st.ended) {
     result.textContent = `${st.ok ? "ok" : "failed"} – ${st.why}`;
@@ -938,12 +961,16 @@ const PANELS = {
           h("p", { class: "help" }, "With a jitter seed, let about one chance in this many go wrong the way a board does: a frame that never arrives.")),
         checkbox("Report stale cache reads (coherency log)", a.checkCoherency, (v) => (a.checkCoherency = v)),
         checkbox("Report misaligned VPU accesses (alignment log)", a.checkAlignment, (v) => (a.checkAlignment = v)),
-        checkbox("Step over instructions the decoder lacks", a.skipUnimpl, (v) => (a.skipUnimpl = v), "Instead of stopping the run.")));
+        checkbox("Step over instructions the decoder lacks", a.skipUnimpl, (v) => (a.skipUnimpl = v), "Instead of stopping the run."),
+        checkbox("Run the ARM cores on worker threads (experimental)", a.parallel && canHaveThreads(), (v) => (a.parallel = v),
+          canHaveThreads()
+            ? "Each core gets a thread of its own, so a Linux boot can use the machine's cores. A run no longer repeats exactly."
+            : "Needs a cross-origin isolated page and the threaded build; this page has neither, so the cores take turns.", !canHaveThreads())));
   },
 };
 
-function checkbox(label, checked, set, help) {
-  return h("label", { class: "choice" }, h("input", { type: "checkbox", checked, onchange: (e) => { set(e.target.checked); changed(); } }), h("span", {}, label, help ? h("small", {}, help) : null));
+function checkbox(label, checked, set, help, disabled = false) {
+  return h("label", { class: "choice" }, h("input", { type: "checkbox", checked, disabled, onchange: (e) => { set(e.target.checked); changed(); } }), h("span", {}, label, help ? h("small", {}, help) : null));
 }
 
 // The EEPROM form: boot order, then every setting the bootloader reads.

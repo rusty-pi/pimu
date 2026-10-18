@@ -46,6 +46,8 @@ pub struct Options {
     pub check_coherency: bool,
     pub check_alignment: bool,
     pub skip_unimpl: bool,
+    /// Run the ARM cores on worker threads, if the page started any.
+    pub parallel: bool,
 }
 
 impl Options {
@@ -115,6 +117,12 @@ mod tests {
         assert!(board(r#"{"boardRev":"d03115"}"#).is_err());
         assert!(board(r#"{"memoryMb":4096}"#).is_err());
         assert!(board(r#"{"stepping":"a1"}"#).is_err());
+    }
+
+    #[test]
+    fn the_cores_take_turns_unless_the_page_asks_for_threads() {
+        assert!(!Options::parse("").unwrap().parallel);
+        assert!(Options::parse(r#"{"parallel":true}"#).unwrap().parallel);
     }
 
     #[test]

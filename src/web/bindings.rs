@@ -216,3 +216,39 @@ impl Pi {
         self.session.otp().to_string()
     }
 }
+
+/// Whether this build can run the ARM cores on threads: it was linked for
+/// shared memory, and the page is cross-origin isolated enough to have given
+/// it any.
+#[wasm_bindgen]
+pub fn threads_built() -> bool {
+    cfg!(pimu_threads)
+}
+
+/// A worker thread's whole life: join the pool the cores run on and serve it
+/// for good. The page calls this once in each worker it starts for the purpose,
+/// after loading this module on the shared memory.
+#[wasm_bindgen]
+pub fn pool_thread() {
+    #[cfg(pimu_threads)]
+    crate::arm::pool::run_forever();
+}
+
+/// How many workers are serving the pool.
+#[wasm_bindgen]
+pub fn pool_threads() -> usize {
+    #[cfg(pimu_threads)]
+    return crate::arm::pool::threads();
+    #[cfg(not(pimu_threads))]
+    0
+}
+
+/// Run four cores side by side on the pool and report whether they counted
+/// every increment. `false` where there are no threads.
+#[wasm_bindgen]
+pub fn parallel_probe() -> bool {
+    #[cfg(pimu_threads)]
+    return crate::arm::parallel_probe();
+    #[cfg(not(pimu_threads))]
+    false
+}

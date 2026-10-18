@@ -6,12 +6,18 @@ import { join } from "node:path";
 import test from "node:test";
 
 const script = new URL("../scripts/assemble-site.sh", import.meta.url).pathname;
-const BUILT_BY_WASM_BINDGEN = /^pkg\//;
+const BUILT_BY_WASM_BINDGEN = /^pkg(-mt)?\//;
 
 const referencesOf = (file, text) => {
   const patterns = file.endsWith(".html")
     ? [/(?:src|href)="([^"#:]+)"/g]
-    : [/\bfrom\s+"(\.\/[^"]+)"/g, /\bimport\("(\.\/[^"]+)"\)/g, /new Worker\("([^"]+)"/g];
+    : [
+        /\bfrom\s+"(\.\/[^"]+)"/g,
+        /\bimport\("(\.\/[^"]+)"\)/g,
+        /\bimport\s+"(\.\/[^"]+)"/g,
+        /new Worker\("([^"]+)"/g,
+        /new URL\("(\.\/[^"]+)", import\.meta\.url\)/g,
+      ];
   return patterns.flatMap((pattern) => [...text.matchAll(pattern)].map((m) => m[1].replace(/^\.\//, "")));
 };
 

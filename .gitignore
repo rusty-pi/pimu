@@ -23,6 +23,7 @@ qemu_*.core
 
 # Built by scripts/build-wasm.sh.
 /web/pkg/
+/web/pkg-mt/
 
 # The page's test tooling.
 /web/node_modules/

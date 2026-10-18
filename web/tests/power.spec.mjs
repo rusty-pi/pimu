@@ -26,6 +26,7 @@ test.describe("powering on", () => {
       checkCoherency: false,
       checkAlignment: false,
       skipUnimpl: false,
+      parallel: false,
       configTxt: ["arm_64bit=1", "enable_uart=1", "uart_2ndstage=1"],
       cmdline: "console=ttyAMA0,115200",
     });
@@ -102,6 +103,7 @@ test.describe("powering on", () => {
       checkCoherency: true,
       checkAlignment: true,
       skipUnimpl: true,
+      parallel: false,
       configTxt: ["arm_64bit=1", "gpu_mem=16"],
       cmdline: "console=tty1",
     });

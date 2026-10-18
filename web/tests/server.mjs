@@ -35,6 +35,13 @@ createServer((request, response) => {
     "cache-control": "no-store",
     "accept-ranges": "bytes",
   };
+  // `PIMU_COI=1` sends what coi-sw.js gives the published page, for trying the
+  // threaded build (tests/threads-check.html); off, so the page tests see the
+  // un-isolated page they were written against.
+  if (process.env.PIMU_COI) {
+    headers["cross-origin-opener-policy"] = "same-origin";
+    headers["cross-origin-embedder-policy"] = "require-corp";
+  }
   const range = /^bytes=(\d+)-(\d*)$/.exec(request.headers.range ?? "");
   if (request.method === "HEAD") {
     response.writeHead(200, { ...headers, "content-length": size }).end();

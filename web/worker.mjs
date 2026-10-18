@@ -6,6 +6,7 @@ import init, { BootImage, PiBuilder, eeprom_bootconf } from "./pkg/pimu.js";
 import { download as fetchWithProgress, githubListing } from "./download.mjs";
 import { withCardEdits } from "./netboot.mjs";
 import { signImage } from "./signing.mjs";
+import { loadThreaded } from "./threads.mjs";
 
 const SLICE_MS = 100;
 const STATE_EVERY_MS = 400;
@@ -120,8 +121,8 @@ async function collect(source) {
 
 const HTTP_BOOT_DIRECTORY = "net_install";
 
-async function httpBootFiles(files) {
-  const volume = new BootImage();
+async function httpBootFiles(files, Boot = BootImage) {
+  const volume = new Boot();
   for (const [path, bytes] of files) volume.add_file(path, bytes);
   const image = volume.build();
   const { sig, pubkey } = await signImage(image);
@@ -136,7 +137,13 @@ async function powerOn(request) {
   transfers.length = 0;
   downloads.clear();
   post({ type: "phase", phase: "downloading" });
-  await init();
+  const threaded = request.options.parallel ? await loadThreaded() : null;
+  if (request.options.parallel && !threaded) {
+    post({ type: "notice", text: "No worker threads for the cores here; they take turns." });
+  }
+  // The threaded build is the same emulator on shared memory; one instance serves the whole run.
+  const { PiBuilder: Builder, BootImage: Boot } = threaded ?? { PiBuilder, BootImage };
+  if (!threaded) await init();
 
   const eeprom = request.eeprom;
 
@@ -151,13 +158,13 @@ async function powerOn(request) {
   const tftpFiles = request.net?.tftp ? withCardEdits(await collect(request.net.tftp), edits) : [];
   let httpFiles = [];
   if (request.net?.http) {
-    const boot = await httpBootFiles(withCardEdits(await collect(request.net.http), edits));
+    const boot = await httpBootFiles(withCardEdits(await collect(request.net.http), edits), Boot);
     httpFiles = boot.served;
     extras.pubkey = boot.pubkey;
   }
 
   post({ type: "phase", phase: "starting" });
-  const builder = new PiBuilder(JSON.stringify(request.options), eeprom);
+  const builder = new Builder(JSON.stringify(request.options), eeprom);
   for (const [path, bytes] of bootFiles) builder.add_file(path, bytes);
   for (const [path, bytes] of tftpFiles) builder.add_tftp_file(path, bytes);
   for (const [path, bytes] of httpFiles) builder.add_http_file(path, bytes);

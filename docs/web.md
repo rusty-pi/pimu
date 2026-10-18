@@ -8,10 +8,14 @@ last message (see [the README](../README.md)).
 
 ```bash
 rustup target add wasm32-unknown-unknown
+rustup toolchain install "$(scripts/build-wasm.sh --nightly)" --component rust-src --target wasm32-unknown-unknown
 cargo install wasm-bindgen-cli --version "$(scripts/build-wasm.sh --version)" --locked
 scripts/build-wasm.sh
 python3 -m http.server -d web
 ```
+
+The nightly is only for the threaded build ([below](#the-cores-on-threads));
+`scripts/build-wasm.sh --no-threads` builds the page without it.
 
 Every release is also deployed to GitHub Pages (`.github/workflows/pages.yml`,
 run by `release.yml` once the release is published), at
@@ -45,6 +49,42 @@ ARM, the bootloader configuration, the fuses, and downloads the flash as the
 firmware left it. Whatever is downloaded shows its progress under the board.
 
 Parts are locked while the board is powered: the machine is built at power-on.
+
+## The cores on threads
+
+**Run the ARM cores on worker threads** (BCM2711 panel, Advanced) gives each
+Cortex-A72 a Web Worker of its own, as `pimu boot --parallel` gives it a host
+thread ([`running.md`](running.md#running-the-arm-cores-in-parallel---parallel)):
+a Linux boot can use the machine's cores, and a run no longer repeats exactly.
+The clock under the board says **cores on threads** when they are.
+
+It needs more than the build:
+
+- **Shared memory.** `web/pkg-mt/` is the same library linked for
+  `SharedArrayBuffer` (`scripts/build-wasm.sh`: atomics, `-Zbuild-std`, up to
+  4 GiB of memory). `web/pkg/` stays the plain build, which is what a page that
+  cannot have threads runs.
+- **A cross-origin isolated page**, because that is the only kind that gets a
+  `SharedArrayBuffer`: documents and workers served with
+  `Cross-Origin-Opener-Policy: same-origin` and
+  `Cross-Origin-Embedder-Policy: require-corp`. GitHub Pages cannot send
+  headers, so the page registers `coi-sw.js`, a service worker that adds them,
+  and reloads once on the first visit. A host that sends the headers itself
+  needs none of that. Everything the page fetches from another origin has to be
+  fetched with CORS, as the downloads already are.
+- **Worker threads for the cores.** WebAssembly has no threads of its own: the
+  page starts four workers that load the threaded module on the same memory and
+  wait for work (`web/threads.mjs`, `web/pool-thread.mjs`). The page starts them
+  rather than the emulator's worker, because not every browser lets a worker
+  start workers.
+- **A check that passes.** Before the first run the emulator runs four cores
+  counting on one word with `ldxr`/`stxr`, one of them reading a device through
+  the machine's thread. If anything above is missing or that count is off, the
+  page says so and the cores take turns as before.
+
+To try it from a checkout: `scripts/build-wasm.sh`, then
+`PIMU_COI=1 node web/tests/server.mjs` (which sends the two headers) and open
+`/tests/threads-check.html` for the check, or `/` for the page itself.
 
 ## Network boot
 

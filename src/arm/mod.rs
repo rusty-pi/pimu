@@ -111,9 +111,13 @@ use crate::periph::gentimer::{self, GenericTimer, Reg, Which};
 use crate::periph::{armlocal, gic};
 
 pub mod blocks;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(pimu_threads)]
 mod par;
 mod park;
+#[cfg(all(pimu_threads, target_arch = "wasm32"))]
+pub mod pool;
+#[cfg(pimu_threads)]
+pub use par::probe as parallel_probe;
 mod sha;
 
 /// The number of cores: BCM2711 has four A72s.
@@ -190,7 +194,7 @@ pub struct Core {
     pub blocks: Option<Box<blocks::Blocks>>,
     /// Where the core's own clock stood when its thread last stopped
     /// ([`ArmSide::start_parallel`]).
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    #[cfg_attr(not(pimu_threads), allow(dead_code))]
     par_cycles: u64,
 }
 
@@ -301,7 +305,7 @@ pub struct ArmSide {
     /// Run the cores on threads of their own ([`par`]) rather than in turn.
     parallel: bool,
     /// The threads, while they run; the cores are theirs until [`Self::pause`].
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(pimu_threads)]
     par: Option<par::ParHost>,
 }
 
@@ -437,7 +441,7 @@ impl ArmSide {
             stored: false,
             log: Log::default(),
             parallel: false,
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(pimu_threads)]
             par: None,
         };
         arm.set_detectors();
@@ -476,7 +480,7 @@ impl ArmSide {
     /// on. The run no longer repeats exactly (`src/arm/par.rs`). Not available
     /// in the browser, where a call does nothing.
     pub fn set_parallel(&mut self, on: bool) {
-        self.parallel = on && cfg!(not(target_arch = "wasm32"));
+        self.parallel = on && cfg!(pimu_threads);
     }
 
     /// Whether the cores run on threads of their own.
@@ -488,19 +492,19 @@ impl ArmSide {
     /// read. The next [`Self::catch_up`] starts the threads again. A run that
     /// is not parallel has nothing to do.
     pub fn pause(&mut self, m: &mut Machine) {
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(pimu_threads)]
         if let Some(par) = self.par.take() {
             self.cores = par.pause(m);
             self.cycles = self.cores.iter().map(|c| c.par_cycles).min().unwrap_or(0);
         }
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(not(pimu_threads))]
         let _ = m;
     }
 
     /// Run until the ARM has had every cycle of modelled time since release.
     pub fn catch_up(&mut self, m: &mut Machine) {
-        #[cfg(not(target_arch = "wasm32"))]
-        if self.parallel {
+        #[cfg(pimu_threads)]
+        if self.parallel && self.start_parallel(m) {
             return self.catch_up_parallel(m);
         }
         let now = m.systimer.cycles_at(gentimer::ARM_HZ);
@@ -514,9 +518,8 @@ impl ArmSide {
     /// the first cycle in which a core writes a VPU-side peripheral. Returns
     /// the microsecond the VPU wakes in.
     pub fn run_until_store(&mut self, m: &mut Machine, until_us: u64) -> u64 {
-        #[cfg(not(target_arch = "wasm32"))]
-        if self.parallel {
-            self.start_parallel(m);
+        #[cfg(pimu_threads)]
+        if self.parallel && self.start_parallel(m) {
             return self
                 .par
                 .as_mut()
@@ -539,21 +542,28 @@ impl ArmSide {
         (released + self.cycles).div_ceil(PER_US).min(until_us)
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    fn start_parallel(&mut self, m: &mut Machine) {
-        if self.par.is_some() || self.stopped.is_some() {
-            return;
+    /// Whether the cores run on their threads now; `false` falls back to
+    /// taking turns, as in the browser when the page has no worker threads
+    /// for them.
+    #[cfg(pimu_threads)]
+    fn start_parallel(&mut self, m: &mut Machine) -> bool {
+        if self.par.is_some() {
+            return true;
+        }
+        if self.stopped.is_some() || !par::can_spawn(self.cores.len()) {
+            self.parallel = false;
+            return false;
         }
         let now = m.systimer.cycles_at(gentimer::ARM_HZ);
         let released = *self.released_at.get_or_insert(now);
         self.unpark_if(m, |_, _| true, 0);
         let cores = std::mem::take(&mut self.cores);
         self.par = Some(par::ParHost::start(m, cores, released));
+        true
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(pimu_threads)]
     fn catch_up_parallel(&mut self, m: &mut Machine) {
-        self.start_parallel(m);
         if let Some(par) = self.par.as_mut() {
             par.sync(m);
             if let Some(stop) = par.take_stop() {

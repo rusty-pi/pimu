@@ -223,6 +223,7 @@ impl Rig {
         let start = self.bootrom.boot(&mut machine)?.entry;
         let mut emu = Emulator::new(machine, start);
         emu.stream_console = false;
+        emu.parallel_arm = self.options.parallel;
         emu.set_unimpl_policy(if self.options.skip_unimpl {
             UnimplPolicy::Skip
         } else {
@@ -471,6 +472,7 @@ impl Session {
             "why": self.ended.as_ref().map(|e| e.1.as_str()),
             "reboots": self.reboots,
             "armReleased": self.emu.machine.armctrl.released(),
+            "parallel": self.emu.arm.as_ref().is_some_and(|a| a.is_parallel()),
             "modelUs": self.emu.machine.systimer.now_us(),
             "retired": self.emu.cpu.retired,
             "logDropped": self.log.dropped(),
