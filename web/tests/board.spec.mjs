@@ -1,8 +1,8 @@
 import { expect, test } from "./fixtures.mjs";
 
 test("the board shows its parts, with nothing plugged in beyond the card", async ({ app }) => {
-  await expect(app.pill).toHaveText("Off");
-  await expect(app.powerButton).toHaveText("Power on");
+  await expect(app.status).toHaveText("Off");
+  await expect(app.powerButton).toHaveAttribute("aria-checked", "false");
   for (const part of ["sd", "eeprom", "usb", "usbc", "eth", "hdmi", "gpio", "soc"]) {
     await expect(app.part(part)).toBeVisible();
   }
@@ -32,12 +32,12 @@ test("the six cores are tiles of one size", async ({ app }) => {
 });
 
 test("a part opens its panel, and the same part closes it", async ({ app }) => {
-  await expect(app.drawer).toContainText("Plug something in");
+  await expect(app.drawer.locator(".changes-pane")).toBeVisible();
   await app.open("sd");
   await expect(app.drawer).toContainText("microSD card");
   await app.part("sd").click();
   await expect(app.part("sd")).toHaveAttribute("data-open", "false");
-  await expect(app.drawer).toContainText("Plug something in");
+  await expect(app.drawer.locator(".changes-pane")).toBeVisible();
 });
 
 test("a part opens from the keyboard", async ({ app }) => {
@@ -55,10 +55,11 @@ test("the memory chip opens the board panel too", async ({ app }) => {
   await expect(app.drawer).toContainText("BCM2711 and the board");
 });
 
-test("a panel's close button closes it", async ({ app }) => {
+test("a panel goes back to the changes", async ({ app }) => {
   await app.open("hdmi");
-  await app.drawer.getByRole("button", { name: "Close" }).click();
-  await expect(app.drawer).toContainText("Plug something in");
+  await app.drawer.getByRole("button", { name: "← Changes" }).click();
+  await expect(app.part("hdmi")).toHaveAttribute("data-open", "false");
+  await expect(app.drawer.locator(".changes-pane")).toBeVisible();
 });
 
 test("every panel is editable while the board is off", async ({ app }) => {

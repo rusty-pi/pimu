@@ -66,7 +66,7 @@ class App {
     this.page = page;
     this.drawer = page.locator("#drawer");
     this.term = page.locator("#term");
-    this.pill = page.locator("#phase");
+    this.status = page.locator("#phase");
     this.powerButton = page.locator("#power");
   }
 
@@ -126,7 +126,7 @@ class App {
   async running() {
     await this.powerOn();
     await this.emit({ type: "phase", phase: "running" });
-    await expect(this.pill).toHaveText("Running");
+    await expect(this.status).toHaveText("Running");
   }
 
   async workers() {

@@ -9,53 +9,54 @@
 <body>
 <header class="top">
   <h1>pimu</h1>
-  <p class="tag">A Raspberry Pi 4 and its real boot firmware, emulated in this tab.</p>
+  <span id="identity" class="identity">Raspberry Pi 4 Model B</span>
   <div class="spacer"></div>
-  <span id="phase" class="pill" data-phase="off">Off</span>
-  <button id="pause" class="ghost" style="visibility:hidden">Pause</button>
-  <button id="power" class="primary">Power on</button>
+  <p id="clock" class="clock mono" aria-live="off"></p>
+  <span id="phase" class="phase" data-phase="off">Off</span>
+  <button id="pause" class="small" style="visibility:hidden">Pause</button>
+  <button id="power" class="switch" role="switch" aria-checked="false"><span class="track" aria-hidden="true"></span>Power</button>
 </header>
 
-<main class="layout">
-  <section class="stage" aria-label="The board">
+<main class="work">
+  <section class="board-pane" aria-label="The board">
     <svg id="board" viewBox="0 0 960 512" role="group" aria-label="Raspberry Pi 4 Model B as a block diagram. Click a part to change what is plugged into it.">
       <defs>
         <marker id="arrow-power" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="arrow-p"/></marker>
         <marker id="arrow-ink" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" class="arrow-i"/></marker>
       </defs>
       <!-- power -->
-      <g id="power-plug" class="power" tabindex="0" role="button" aria-label="Power: switch the board on or off" data-on="false">
+      <g id="power-plug" class="power" tabindex="0" role="button" aria-label="Power: switch the board on or off" data-on="false" data-portrait="125,22">
         <title>Power on / off</title>
         <polyline class="rail" points="480,88 480,118" marker-end="url(#arrow-power)"/>
-        <rect class="box" x="405" y="22" width="150" height="66" rx="3"/>
+        <rect class="box" x="405" y="22" width="150" height="66" rx="2"/>
         <g class="glyph" transform="translate(415 32)"><path d="M9 3v5M15 3v5M6 8h12v4a6 6 0 0 1-12 0z"/><path d="M12 18v3"/></g>
         <text class="ts" x="447" y="46">Power</text>
         <text class="m sub" id="power-label" x="447" y="63">click to plug in</text>
         <g class="switch"><rect class="track" x="504" y="30" width="40" height="20" rx="10"/><circle class="knob" cx="514" cy="40" r="7"/></g>
-        <rect class="hit" x="405" y="22" width="150" height="66" rx="3"/>
+        <rect class="hit" x="405" y="22" width="150" height="66" rx="2"/>
       </g>
       <!-- the SoC -->
-      <g class="part" data-part="soc" tabindex="0" role="button" aria-label="BCM2711: board, memory and silicon">
+      <g class="part" data-part="soc" tabindex="0" role="button" aria-label="BCM2711: board, memory and silicon" data-portrait="20,120">
         <title>BCM2711 – the silicon, the memory and the board</title>
-        <rect class="soc" x="300" y="120" width="360" height="240" rx="4"/>
+        <rect class="soc" x="300" y="120" width="360" height="240" rx="3"/>
         <text class="tb" x="316" y="148" id="soc-title">BCM2711 C0</text>
         <circle class="led red" id="led-power" cx="566" cy="141" r="4"/><text class="m" x="574" y="145">PWR</text>
         <circle class="led green" id="led-act" cx="618" cy="141" r="4"/><text class="m" x="626" y="145">ACT</text>
-        <rect class="grp" x="326" y="164" width="146" height="140" rx="3"/>
+        <rect class="grp" x="326" y="164" width="146" height="140" rx="2"/>
         <text class="t" x="399" y="182" text-anchor="middle">VideoCore VPU ×2</text>
-        <g class="corebox"><rect class="core" data-core="vpu0" x="334" y="192" width="60" height="44" rx="3"><title>VPU core 0</title></rect><text class="ts core-n" x="364" y="211" text-anchor="middle">0</text><text class="m core-s" data-core-state="vpu0" x="364" y="226" text-anchor="middle">off</text></g>
-        <g class="corebox"><rect class="core" data-core="vpu1" x="404" y="192" width="60" height="44" rx="3"><title>VPU core 1</title></rect><text class="ts core-n" x="434" y="211" text-anchor="middle">1</text><text class="m core-s" data-core-state="vpu1" x="434" y="226" text-anchor="middle">off</text></g>
+        <g class="corebox"><rect class="core" data-core="vpu0" x="334" y="192" width="60" height="44" rx="2"><title>VPU core 0</title></rect><text class="ts core-n" x="364" y="211" text-anchor="middle">0</text><text class="m core-s" data-core-state="vpu0" x="364" y="226" text-anchor="middle">off</text></g>
+        <g class="corebox"><rect class="core" data-core="vpu1" x="404" y="192" width="60" height="44" rx="2"><title>VPU core 1</title></rect><text class="ts core-n" x="434" y="211" text-anchor="middle">1</text><text class="m core-s" data-core-state="vpu1" x="434" y="226" text-anchor="middle">off</text></g>
         <text class="m" x="399" y="276" text-anchor="middle">boot ROM · bootcode</text>
         <text class="m" x="399" y="290" text-anchor="middle">start4.elf</text>
-        <rect class="grp" x="488" y="164" width="146" height="140" rx="3"/>
+        <rect class="grp" x="488" y="164" width="146" height="140" rx="2"/>
         <text class="t" x="561" y="182" text-anchor="middle">Cortex-A72 ×4</text>
-        <g class="corebox"><rect class="core" data-core="arm0" x="496" y="192" width="60" height="44" rx="3"><title>ARM core 0</title></rect><text class="ts core-n" x="526" y="211" text-anchor="middle">0</text><text class="m core-s" data-core-state="arm0" x="526" y="226" text-anchor="middle">off</text></g>
-        <g class="corebox"><rect class="core" data-core="arm1" x="566" y="192" width="60" height="44" rx="3"><title>ARM core 1</title></rect><text class="ts core-n" x="596" y="211" text-anchor="middle">1</text><text class="m core-s" data-core-state="arm1" x="596" y="226" text-anchor="middle">off</text></g>
-        <g class="corebox"><rect class="core" data-core="arm2" x="496" y="246" width="60" height="44" rx="3"><title>ARM core 2</title></rect><text class="ts core-n" x="526" y="265" text-anchor="middle">2</text><text class="m core-s" data-core-state="arm2" x="526" y="280" text-anchor="middle">off</text></g>
-        <g class="corebox"><rect class="core" data-core="arm3" x="566" y="246" width="60" height="44" rx="3"><title>ARM core 3</title></rect><text class="ts core-n" x="596" y="265" text-anchor="middle">3</text><text class="m core-s" data-core-state="arm3" x="596" y="280" text-anchor="middle">off</text></g>
+        <g class="corebox"><rect class="core" data-core="arm0" x="496" y="192" width="60" height="44" rx="2"><title>ARM core 0</title></rect><text class="ts core-n" x="526" y="211" text-anchor="middle">0</text><text class="m core-s" data-core-state="arm0" x="526" y="226" text-anchor="middle">off</text></g>
+        <g class="corebox"><rect class="core" data-core="arm1" x="566" y="192" width="60" height="44" rx="2"><title>ARM core 1</title></rect><text class="ts core-n" x="596" y="211" text-anchor="middle">1</text><text class="m core-s" data-core-state="arm1" x="596" y="226" text-anchor="middle">off</text></g>
+        <g class="corebox"><rect class="core" data-core="arm2" x="496" y="246" width="60" height="44" rx="2"><title>ARM core 2</title></rect><text class="ts core-n" x="526" y="265" text-anchor="middle">2</text><text class="m core-s" data-core-state="arm2" x="526" y="280" text-anchor="middle">off</text></g>
+        <g class="corebox"><rect class="core" data-core="arm3" x="566" y="246" width="60" height="44" rx="2"><title>ARM core 3</title></rect><text class="ts core-n" x="596" y="265" text-anchor="middle">3</text><text class="m core-s" data-core-state="arm3" x="596" y="280" text-anchor="middle">off</text></g>
         <line class="ln" x1="475" y1="226" x2="485" y2="226" marker-start="url(#arrow-ink)" marker-end="url(#arrow-ink)"><title>mailbox</title></line>
         <text class="m" x="480" y="334" text-anchor="middle">armstub · kernel · Linux</text>
-        <rect class="hit" x="300" y="120" width="360" height="240" rx="4"/>
+        <rect class="hit" x="300" y="120" width="360" height="240" rx="3"/>
       </g>
       <!-- SoC ports -->
       <g class="tag"><rect x="242" y="160" width="78" height="28" rx="2"/><text class="ts" x="281" y="172" text-anchor="middle">SPI0</text><text class="m" x="281" y="183" text-anchor="middle">0x7E204000</text></g>
@@ -66,118 +67,119 @@
       <g class="tag"><rect x="311" y="346" width="78" height="28" rx="2"/><text class="ts" x="350" y="358" text-anchor="middle">EMMC2</text><text class="m" x="350" y="369" text-anchor="middle">0x7E340000</text></g>
       <g class="tag"><rect x="441" y="346" width="78" height="28" rx="2"/><text class="ts" x="480" y="358" text-anchor="middle">xHCI OTG</text><text class="m" x="480" y="369" text-anchor="middle">0x7E9C0000</text></g>
       <g class="tag"><rect x="571" y="346" width="78" height="28" rx="2"/><text class="ts" x="610" y="358" text-anchor="middle">BSC0</text><text class="m" x="610" y="369" text-anchor="middle">0x7E205000</text></g>
-      <!-- what plugs into them -->
-      <g class="part" data-part="eeprom" tabindex="0" role="button" aria-label="EEPROM: change what is plugged in" data-filled="false">
+      <!-- what plugs into them: every part one size, so a phone can stack them in two columns -->
+      <g class="part" data-part="eeprom" tabindex="0" role="button" aria-label="EEPROM: change what is plugged in" data-filled="false" data-portrait="210,384">
         <title>EEPROM</title>
-        <polyline class="wire" points="180,174 242,174"/>
-        <rect class="box" x="20" y="142" width="160" height="64" rx="3"/>
+        <polyline class="wire" points="170,174 242,174"/>
+        <rect class="box" x="20" y="142" width="150" height="64" rx="2"/>
         <g class="glyph" transform="translate(30 152)"><rect x="6" y="6" width="12" height="12" rx="1"/><path d="M9 3v3M12 3v3M15 3v3M9 18v3M12 18v3M15 18v3M3 9h3M3 12h3M3 15h3M18 9h3M18 12h3M18 15h3"/></g>
         <text class="ts" x="62" y="168">EEPROM</text>
         <text class="m sub" data-sub="eeprom" x="62" y="185"></text>
-        <circle class="state" cx="166" cy="156" r="4"/>
-        <rect class="hit" x="20" y="142" width="160" height="64" rx="3"/>
+        <circle class="state" cx="156" cy="156" r="4"/>
+        <rect class="hit" x="20" y="142" width="150" height="64" rx="2"/>
       </g>
-      <g class="part" data-part="soc" data-filled="true" tabindex="0" role="button" aria-label="LPDDR4: change what is plugged in" data-filled="false">
+      <g class="part" data-part="soc" tabindex="0" role="button" aria-label="LPDDR4: change what is plugged in" data-filled="true" data-portrait="20,460">
         <title>LPDDR4</title>
-        <polyline class="wire" points="180,322 242,322"/>
-        <rect class="box" x="20" y="290" width="160" height="64" rx="3"/>
+        <polyline class="wire" points="170,322 242,322"/>
+        <rect class="box" x="20" y="290" width="150" height="64" rx="2"/>
         <g class="glyph" transform="translate(30 300)"><rect x="3" y="7" width="18" height="10" rx="1"/><path d="M6 17v2M9 17v2M12 17v2M15 17v2M18 17v2"/></g>
         <text class="ts" x="62" y="316">LPDDR4</text>
         <text class="m sub" data-sub="memory" x="62" y="333"></text>
-        <circle class="state" cx="166" cy="304" r="4"/>
-        <rect class="hit" x="20" y="290" width="160" height="64" rx="3"/>
+        <circle class="state" cx="156" cy="304" r="4"/>
+        <rect class="hit" x="20" y="290" width="150" height="64" rx="2"/>
       </g>
-      <g class="part" data-part="eth" tabindex="0" role="button" aria-label="Ethernet: change what is plugged in" data-filled="false">
+      <g class="part" data-part="eth" tabindex="0" role="button" aria-label="Ethernet: change what is plugged in" data-filled="false" data-portrait="20,536">
         <title>Ethernet</title>
-        <polyline class="wire" points="718,174 780,174"/>
-        <rect class="box" x="780" y="142" width="160" height="64" rx="3"/>
-        <g class="glyph" transform="translate(790 152)"><path d="M4 6h16v10h-4v3H8v-3H4z"/><path d="M8 9v3M11 9v3M14 9v3M17 9v3"/></g>
-        <text class="ts" x="822" y="168">Ethernet</text>
-        <text class="m sub" data-sub="eth" x="822" y="185"></text>
+        <polyline class="wire" points="718,174 790,174"/>
+        <rect class="box" x="790" y="142" width="150" height="64" rx="2"/>
+        <g class="glyph" transform="translate(800 152)"><path d="M4 6h16v10h-4v3H8v-3H4z"/><path d="M8 9v3M11 9v3M14 9v3M17 9v3"/></g>
+        <text class="ts" x="832" y="168">Ethernet</text>
+        <text class="m sub" data-sub="eth" x="832" y="185"></text>
         <circle class="state" cx="926" cy="156" r="4"/><circle class="led green" id="eth-led" cx="926" cy="156" r="3"/>
-        <rect class="hit" x="780" y="142" width="160" height="64" rx="3"/>
+        <rect class="hit" x="790" y="142" width="150" height="64" rx="2"/>
       </g>
-      <g class="part" data-part="usb" tabindex="0" role="button" aria-label="USB 3.0: change what is plugged in" data-filled="false">
+      <g class="part" data-part="usb" tabindex="0" role="button" aria-label="USB 3.0: change what is plugged in" data-filled="false" data-portrait="210,536">
         <title>USB 3.0</title>
-        <polyline class="wire" points="718,248 780,248"/>
-        <rect class="box" x="780" y="216" width="160" height="64" rx="3"/>
-        <g class="glyph" transform="translate(790 226)"><rect x="4" y="7" width="16" height="10" rx="1"/><rect x="7" y="10" width="4" height="4"/><rect x="13" y="10" width="4" height="4"/></g>
-        <text class="ts" x="822" y="242">USB 3.0</text>
-        <text class="m sub" data-sub="usb" x="822" y="259"></text>
+        <polyline class="wire" points="718,248 790,248"/>
+        <rect class="box" x="790" y="216" width="150" height="64" rx="2"/>
+        <g class="glyph" transform="translate(800 226)"><rect x="4" y="7" width="16" height="10" rx="1"/><rect x="7" y="10" width="4" height="4"/><rect x="13" y="10" width="4" height="4"/></g>
+        <text class="ts" x="832" y="242">USB 3.0</text>
+        <text class="m sub" data-sub="usb" x="832" y="259"></text>
         <circle class="state" cx="926" cy="230" r="4"/>
-        <rect class="hit" x="780" y="216" width="160" height="64" rx="3"/>
+        <rect class="hit" x="790" y="216" width="150" height="64" rx="2"/>
       </g>
-      <g class="part" data-part="hdmi" tabindex="0" role="button" aria-label="HDMI 0: change what is plugged in" data-filled="false">
+      <g class="part" data-part="hdmi" tabindex="0" role="button" aria-label="HDMI 0: change what is plugged in" data-filled="false" data-portrait="20,612">
         <title>HDMI 0</title>
-        <polyline class="wire" points="718,322 780,322"/>
-        <rect class="box" x="780" y="290" width="160" height="64" rx="3"/>
-        <g class="glyph" transform="translate(790 300)"><path d="M3 8h18v5l-3 4H6l-3-4z"/></g>
-        <text class="ts" x="822" y="316">HDMI 0</text>
-        <text class="m sub" data-sub="hdmi" x="822" y="333"></text>
+        <polyline class="wire" points="718,322 790,322"/>
+        <rect class="box" x="790" y="290" width="150" height="64" rx="2"/>
+        <g class="glyph" transform="translate(800 300)"><path d="M3 8h18v5l-3 4H6l-3-4z"/></g>
+        <text class="ts" x="832" y="316">HDMI 0</text>
+        <text class="m sub" data-sub="hdmi" x="832" y="333"></text>
         <circle class="state" cx="926" cy="304" r="4"/>
-        <rect class="hit" x="780" y="290" width="160" height="64" rx="3"/>
+        <rect class="hit" x="790" y="290" width="150" height="64" rx="2"/>
       </g>
-      <g class="part" data-part="sd" tabindex="0" role="button" aria-label="microSD: change what is plugged in" data-filled="false">
+      <g class="part" data-part="sd" tabindex="0" role="button" aria-label="microSD: change what is plugged in" data-filled="false" data-portrait="20,384">
         <title>microSD</title>
-        <polyline class="wire" points="350,374 350,430"/>
-        <rect class="box" x="290" y="430" width="120" height="68" rx="3"/>
-        <g class="glyph" transform="translate(338 436)"><path d="M5 3h9l5 5v13H5z"/><path d="M8 3v5M11 3v5M14 3v3"/></g>
-        <text class="ts" x="350" y="476" text-anchor="middle">microSD</text>
-        <text class="m sub" data-sub="sd" x="350" y="490" text-anchor="middle"></text>
-        <circle class="state" cx="398" cy="442" r="4"/>
-        <rect class="hit" x="290" y="430" width="120" height="68" rx="3"/>
+        <polyline class="wire" points="350,374 350,402 305,402 305,430"/>
+        <rect class="box" x="230" y="430" width="150" height="64" rx="2"/>
+        <g class="glyph" transform="translate(240 440)"><path d="M5 3h9l5 5v13H5z"/><path d="M8 3v5M11 3v5M14 3v3"/></g>
+        <text class="ts" x="272" y="456">microSD</text>
+        <text class="m sub" data-sub="sd" x="272" y="473"></text>
+        <circle class="state" cx="366" cy="444" r="4"/>
+        <rect class="hit" x="230" y="430" width="150" height="64" rx="2"/>
       </g>
-      <g class="part" data-part="usbc" tabindex="0" role="button" aria-label="USB-C: change what is plugged in" data-filled="false">
+      <g class="part" data-part="usbc" tabindex="0" role="button" aria-label="USB-C: change what is plugged in" data-filled="false" data-portrait="210,460">
         <title>USB-C</title>
         <polyline class="wire" points="480,374 480,430"/>
-        <rect class="box" x="420" y="430" width="120" height="68" rx="3"/>
-        <g class="glyph" transform="translate(468 436)"><rect x="3" y="8" width="18" height="8" rx="4"/><path d="M8 12h8"/></g>
-        <text class="ts" x="480" y="476" text-anchor="middle">USB-C</text>
-        <text class="m sub" data-sub="usbc" x="480" y="490" text-anchor="middle"></text>
-        <circle class="state" cx="528" cy="442" r="4"/>
-        <rect class="hit" x="420" y="430" width="120" height="68" rx="3"/>
+        <rect class="box" x="405" y="430" width="150" height="64" rx="2"/>
+        <g class="glyph" transform="translate(415 440)"><rect x="3" y="8" width="18" height="8" rx="4"/><path d="M8 12h8"/></g>
+        <text class="ts" x="447" y="456">USB-C</text>
+        <text class="m sub" data-sub="usbc" x="447" y="473"></text>
+        <circle class="state" cx="541" cy="444" r="4"/>
+        <rect class="hit" x="405" y="430" width="150" height="64" rx="2"/>
       </g>
-      <g class="part" data-part="gpio" tabindex="0" role="button" aria-label="GPIO: change what is plugged in" data-filled="false">
+      <g class="part" data-part="gpio" tabindex="0" role="button" aria-label="GPIO: change what is plugged in" data-filled="false" data-portrait="210,612">
         <title>GPIO</title>
-        <polyline class="wire" points="610,374 610,430"/>
-        <rect class="box" x="550" y="430" width="120" height="68" rx="3"/>
-        <g class="glyph" transform="translate(598 436)"><path d="M4 9h2m3 0h2m3 0h2m3 0h2M4 15h2m3 0h2m3 0h2m3 0h2" stroke-width="3" stroke-linecap="round"/></g>
-        <text class="ts" x="610" y="476" text-anchor="middle">GPIO</text>
-        <text class="m sub" data-sub="gpio" x="610" y="490" text-anchor="middle"></text>
-        <circle class="state" cx="658" cy="442" r="4"/>
-        <rect class="hit" x="550" y="430" width="120" height="68" rx="3"/>
+        <polyline class="wire" points="610,374 610,402 655,402 655,430"/>
+        <rect class="box" x="580" y="430" width="150" height="64" rx="2"/>
+        <g class="glyph" transform="translate(590 440)"><path d="M4 9h2m3 0h2m3 0h2m3 0h2M4 15h2m3 0h2m3 0h2m3 0h2" stroke-width="3" stroke-linecap="round"/></g>
+        <text class="ts" x="622" y="456">GPIO</text>
+        <text class="m sub" data-sub="gpio" x="622" y="473"></text>
+        <circle class="state" cx="716" cy="444" r="4"/>
+        <rect class="hit" x="580" y="430" width="150" height="64" rx="2"/>
       </g>
     </svg>
 
-    <ul class="legend" aria-label="Core states">
-      <li><i class="swatch off"></i>off</li><li><i class="swatch sleeping"></i>asleep (wfi / wfe)</li><li><i class="swatch running"></i>running</li>
+    <ul class="legend" aria-label="What the colours mean">
+      <li><i class="swatch off"></i>off</li><li><i class="swatch sleeping"></i>asleep (wfi / wfe)</li><li><i class="swatch running"></i>running</li><li><i class="swatch changed"></i>changed</li>
     </ul>
-    <p id="clock" class="statusline mono" aria-live="off"></p>
   </section>
 
+  <aside id="drawer" class="drawer" aria-live="polite" data-sheet="closed"></aside>
+
+  <section class="console-pane" aria-label="Serial console">
+    <div class="panehead">
+      <h2>Serial console</h2>
+      <span id="result" class="result"></span>
+      <div class="spacer"></div>
+      <span class="hint" id="term-hint">click and type: keys go to UART0</span>
+    </div>
+    <section id="downloads" class="downloads" hidden aria-live="polite"></section>
+    <pre id="term" tabindex="0" aria-label="Serial console. Typing sends keys to the Pi."></pre>
+  </section>
+
+  <section class="screen">
+    <div class="tabs panehead" role="tablist">
+      <button role="tab" data-tab="log" aria-selected="true">Log <span id="log-count" class="count"></span></button>
+      <button role="tab" data-tab="info" aria-selected="false">Inspect</button>
+    </div>
+    <div id="tab-log" class="tabpane"></div>
+    <div id="tab-info" class="tabpane" hidden></div>
+  </section>
 </main>
 
-<div class="lower">
-<section class="screen">
-  <section id="downloads" class="downloads" hidden aria-live="polite"></section>
-  <div class="tabs" role="tablist">
-    <button role="tab" data-tab="console" aria-selected="true">Serial console</button>
-    <button role="tab" data-tab="log" aria-selected="false">Log <span id="log-count" class="count"></span></button>
-    <button role="tab" data-tab="info" aria-selected="false">Inspect</button>
-    <div class="spacer"></div>
-    <span id="result" class="result"></span>
-  </div>
-  <div id="tab-console" class="tabpane">
-    <pre id="term" tabindex="0" aria-label="Serial console. Typing sends keys to the Pi."></pre>
-    <p class="hint" id="term-hint">Click the console and type: keys go to the board's serial port.</p>
-  </div>
-  <div id="tab-log" class="tabpane" hidden></div>
-  <div id="tab-info" class="tabpane" hidden></div>
-</section>
-<aside id="drawer" class="drawer" aria-live="polite"></aside>
-</div>
-
 <footer class="foot">
+  A Raspberry Pi 4 and its real boot firmware, emulated in this tab ·
   <a href="https://github.com/rusty-pi/pimu">rusty-pi/pimu</a> ·
   <a href="https://github.com/rusty-pi/pimu/blob/main/docs/web.md">about this page and its limits</a> ·
   <span id="version">built from a checkout</span>

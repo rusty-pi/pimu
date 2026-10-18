@@ -7,9 +7,14 @@ const geometry = (app) =>
     document: document.documentElement.scrollHeight,
     board: Math.round(document.getElementById("board").getBoundingClientRect().height),
     console: Math.round(document.getElementById("term").getBoundingClientRect().top + scrollY),
-    screen: Math.round(document.querySelector(".screen").getBoundingClientRect().height),
+    screen: Math.round(document.querySelector(".console-pane").getBoundingClientRect().height),
     pageOverflow: document.documentElement.scrollWidth > innerWidth,
   }));
+
+const box = (app, selector) => app.page.locator(selector).evaluate((el) => {
+  const r = el.getBoundingClientRect();
+  return { left: Math.round(r.left), top: Math.round(r.top), right: Math.round(r.right), bottom: Math.round(r.bottom), height: Math.round(r.height) };
+});
 
 const PARTS = ["sd", "eeprom", "usb", "usbc", "eth", "hdmi", "gpio", "soc"];
 
@@ -23,13 +28,21 @@ test.describe("on a wide screen", () => {
     }
   });
 
-  test("the panel is a column as tall as the console, whatever is in it", async ({ app }) => {
-    const heights = [];
+  test("the panel stands beside the board, as tall as it, whatever is in it", async ({ app }) => {
     for (const part of [null, "sd", "eeprom", "soc"]) {
       if (part) await app.open(part);
-      heights.push(await app.page.evaluate(() => [document.querySelector(".screen").offsetHeight, document.getElementById("drawer").offsetHeight]));
+      const [board, drawer] = [await box(app, ".board-pane"), await box(app, "#drawer")];
+      expect(drawer.left, String(part)).toBeGreaterThanOrEqual(board.right);
+      expect(drawer.top, String(part)).toBe(board.top);
+      expect(drawer.height, String(part)).toBe(board.height);
     }
-    for (const [screen, drawer] of heights) expect(drawer).toBe(screen);
+  });
+
+  test("the console and the log share the row under the board", async ({ app }) => {
+    const [board, term, screen] = [await box(app, ".board-pane"), await box(app, ".console-pane"), await box(app, ".screen")];
+    expect(term.top).toBeGreaterThan(board.top);
+    expect(screen.top).toBe(term.top);
+    expect(screen.left).toBeGreaterThanOrEqual(term.right);
   });
 
   test("a long panel scrolls inside itself", async ({ app }) => {
@@ -41,10 +54,9 @@ test.describe("on a wide screen", () => {
 
   test("switching tabs moves nothing", async ({ app }) => {
     const before = await geometry(app);
-    for (const tab of ["log", "info", "console"]) {
+    for (const tab of ["info", "log"]) {
       await app.showTab(tab);
-      const now = await geometry(app);
-      expect({ ...now, console: before.console }).toEqual({ ...before, console: before.console });
+      expect(await geometry(app), tab).toEqual(before);
     }
   });
 
@@ -79,16 +91,40 @@ test.describe("on a wide screen", () => {
   });
 });
 
+test.describe("on a very wide screen", () => {
+  test.use({ viewport: { width: 1920, height: 1000 } });
+
+  test("the board, the panel and the log are three columns, and the page does not scroll", async ({ app }) => {
+    const [board, term, drawer, screen] = [await box(app, ".board-pane"), await box(app, ".console-pane"), await box(app, "#drawer"), await box(app, ".screen")];
+    expect(term.top).toBeGreaterThanOrEqual(board.bottom);
+    expect(term.right).toBe(board.right);
+    expect(drawer.left).toBeGreaterThanOrEqual(board.right);
+    expect(screen.left).toBeGreaterThanOrEqual(drawer.right);
+    expect(screen.height).toBe(drawer.height);
+    const scrolls = await app.page.evaluate(() => ({ down: document.querySelector(".work").getBoundingClientRect().bottom > innerHeight, across: document.documentElement.scrollWidth > innerWidth }));
+    expect(scrolls).toEqual({ down: false, across: false });
+  });
+
+  test("opening a part moves nothing", async ({ app }) => {
+    const before = await geometry(app);
+    for (const part of PARTS) {
+      await app.open(part);
+      expect(await geometry(app), part).toEqual(before);
+    }
+  });
+});
+
 test("resizing across the breakpoint turns the column into a sheet and back", async ({ app }) => {
   await app.open("sd");
   await expect(app.drawer).toHaveCSS("position", "relative");
-  await app.page.setViewportSize({ width: 600, height: 800 });
+  await app.page.setViewportSize({ width: 900, height: 800 });
   await expect(app.drawer).toHaveCSS("position", "fixed");
+  await expect(app.drawer).toHaveAttribute("data-sheet", "open");
   await app.part("sd").click();
-  await expect(app.drawer).toBeHidden();
+  await expect(app.drawer).toHaveAttribute("data-sheet", "closed");
   await app.page.setViewportSize({ width: 1280, height: 900 });
-  await expect(app.drawer).toBeVisible();
-  await expect(app.drawer).toContainText("Plug something in");
+  await expect(app.drawer).toHaveCSS("position", "relative");
+  await expect(app.drawer.locator(".changes-pane")).toBeVisible();
 });
 
 test.describe("on a phone", () => {
@@ -104,18 +140,41 @@ test.describe("on a phone", () => {
     }
   });
 
-  test("the board scrolls sideways inside its panel instead of shrinking to nothing", async ({ app }) => {
-    const board = await app.page.locator("#board").evaluate((svg) => svg.getBoundingClientRect().width);
-    expect(board).toBeGreaterThanOrEqual(720);
-    const stage = await app.page.locator(".stage").evaluate((el) => ({ scrolls: el.scrollWidth > el.clientWidth, overflow: getComputedStyle(el).overflowX }));
-    expect(stage).toEqual({ scrolls: true, overflow: "auto" });
+  test("the board stands upright and fits, with the parts in two columns under the SoC", async ({ app }) => {
+    await expect(app.page.locator("#board")).toHaveAttribute("viewBox", /^0 12 400 /);
+    const rect = (sel) => app.page.locator(sel).first().evaluate((el) => el.getBoundingClientRect().toJSON());
+    const board = await rect("#board");
+    expect(board.right).toBeLessThanOrEqual(375);
+    const soc = await rect("#board .soc");
+    const columns = new Set();
+    for (const part of ["sd", "eeprom", "usb", "usbc", "eth", "hdmi", "gpio"]) {
+      const r = await rect(`#board .part[data-part="${part}"] .box`);
+      expect(r.top, part).toBeGreaterThan(soc.bottom);
+      expect(r.right, part).toBeLessThanOrEqual(board.right + 1);
+      columns.add(Math.round(r.left));
+    }
+    expect(columns.size).toBe(2);
+    const core = await rect('#board [data-core="arm0"]');
+    expect(core.width).toBeGreaterThan(40);
     expect((await geometry(app)).pageOverflow).toBe(false);
   });
 
-  test("the panel can be closed", async ({ app }) => {
+  test("the sheet shows its handle, and opens and closes from it", async ({ app }) => {
+    const handle = app.drawer.locator(".sheet-handle");
+    await expect(handle).toBeInViewport();
+    await expect(app.drawer).toHaveAttribute("data-sheet", "closed");
+    await handle.click();
+    await expect(app.drawer).toHaveAttribute("data-sheet", "open");
+    await expect(app.drawer.locator(".changes-pane")).toBeInViewport();
+    await handle.click();
+    await expect(app.drawer).toHaveAttribute("data-sheet", "closed");
+  });
+
+  test("a part opens the sheet, and the same part closes it", async ({ app }) => {
     await app.open("sd");
-    await expect(app.drawer).toBeVisible();
-    await app.drawer.getByRole("button", { name: "Close" }).click();
-    await expect(app.drawer).toBeHidden();
+    await expect(app.drawer).toHaveAttribute("data-sheet", "open");
+    await expect(app.drawer.getByRole("heading", { name: "microSD card" })).toBeInViewport();
+    await app.part("sd").click();
+    await expect(app.drawer).toHaveAttribute("data-sheet", "closed");
   });
 });

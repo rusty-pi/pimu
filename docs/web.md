@@ -23,8 +23,8 @@ run by `release.yml` once the release is published), at
 same site serves the project's apt and dnf repositories under `/apt/` and `/rpm/`
 ([`building.md`](building.md)).
 
-Open <http://localhost:8000/>, plug in the power (the plug under the board, or
-**Power on**).
+Open <http://localhost:8000/>, plug in the power (the plug above the board, or
+the **Power** switch in the top bar).
 
 ## The page
 
@@ -42,11 +42,19 @@ The board is a block diagram in the style of [`board-sheet.svg`](board-sheet.svg
 | GPIO | A HAT's ID EEPROM. |
 | BCM2711 | The silicon (B0 or C0), the memory, a board revision code, fuses to program, jitter and faults, and the checks of the `coherency` and `alignment` logs. |
 
-The six cores in the SoC are tiles of one size that light up as they start, sleep and run, and the line under the board counts the VPU and ARM instructions retired. The **Log** tab
-records the channels of `pimu boot --log`, as `jsonl`, and filters them per
-channel and by text; **Inspect** shows the device tree the firmware handed to the
-ARM, the bootloader configuration, the fuses, and downloads the flash as the
-firmware left it. Whatever is downloaded shows its progress under the board.
+The part opens in the pane beside the board. With no part open, that pane lists
+**Changes**: everything that differs from the board the page starts with, what it
+was and what it is, each with its own reset; a part with changes carries their
+count. A phone gets the pane as a sheet at the bottom of the screen, and the
+board stood upright, its parts in two columns under the SoC.
+
+The six cores in the SoC are tiles of one size that light up as they start, sleep and run, and the top bar counts the VPU and ARM instructions retired. The
+serial console sits under the board, and beside it the **Log** tab records the
+channels of `pimu boot --log`, as `jsonl`, and filters them per channel and by
+text; **Inspect** shows the device tree the firmware handed to the ARM, the
+bootloader configuration, the fuses, and downloads the flash as the firmware left
+it. Whatever is downloaded shows its progress over the console. On a screen wide
+enough, the log is a column of its own and the page does not scroll.
 
 Parts are locked while the board is powered: the machine is built at power-on.
 
@@ -56,7 +64,7 @@ Parts are locked while the board is powered: the machine is built at power-on.
 Cortex-A72 a Web Worker of its own, as `pimu boot --parallel` gives it a host
 thread ([`running.md`](running.md#running-the-arm-cores-in-parallel---parallel)):
 a Linux boot can use the machine's cores, and a run no longer repeats exactly.
-The clock under the board says **cores on threads** when they are.
+The clock in the top bar says **cores on threads** when they are.
 
 It needs more than the build:
 
@@ -160,7 +168,8 @@ node tests/coverage-report.mjs      # which functions of the page no test ran
   WebAssembly module (`tests/stub-pimu.mjs`): downloads and their progress, local
   files, ranged disk images, errors, pause, keys, the inspect answers.
 - `tests/layout.spec.mjs` holds the page still: opening a part, switching a tab,
-  a download or a run moves nothing, on a wide screen and on a phone.
+  a download or a run moves nothing, on a wide screen and on a phone, and checks
+  where the panes stand at each width.
 - CI (`.github/workflows/web-ui.yml`) fails when a function of the page's scripts
   is run by no test.
 

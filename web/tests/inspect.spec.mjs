@@ -104,7 +104,7 @@ test.describe("the inspect tab", () => {
     await app.showTab("info");
     const asks = async () => (await app.sent()).filter((m) => m.type === "info").length;
     await expect.poll(asks, { timeout: 8000 }).toBeGreaterThanOrEqual(2);
-    await app.showTab("console");
+    await app.showTab("log");
     const before = await asks();
     await app.page.waitForTimeout(3000);
     expect(await asks()).toBe(before);
@@ -124,15 +124,15 @@ test.describe("the inspect tab", () => {
 });
 
 test.describe("tabs", () => {
-  test("one is selected at a time", async ({ app }) => {
-    await expect(app.tab("console")).toHaveAttribute("aria-selected", "true");
-    await app.showTab("log");
+  test("one is selected at a time, and the console is beside them, not behind one", async ({ app }) => {
     await expect(app.tab("log")).toHaveAttribute("aria-selected", "true");
-    await expect(app.tab("console")).toHaveAttribute("aria-selected", "false");
-    await expect(app.page.locator("#tab-console")).toBeHidden();
-    await app.showTab("info");
-    await expect(app.page.locator("#tab-log")).toBeHidden();
-    await app.showTab("console");
     await expect(app.page.locator("#tab-info")).toBeHidden();
+    await app.showTab("info");
+    await expect(app.tab("log")).toHaveAttribute("aria-selected", "false");
+    await expect(app.page.locator("#tab-log")).toBeHidden();
+    await expect(app.term).toBeVisible();
+    await app.showTab("log");
+    await expect(app.page.locator("#tab-info")).toBeHidden();
+    await expect(app.term).toBeVisible();
   });
 });

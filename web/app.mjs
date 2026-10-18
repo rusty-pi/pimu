@@ -96,7 +96,7 @@ function mergeDeep(base, extra) {
 
 const state = (() => {
   try {
-    return mergeDeep(DEFAULT_STATE, JSON.parse(localStorage.getItem("pimu-web") ?? "{}"));
+    return mergeDeep(structuredClone(DEFAULT_STATE), JSON.parse(localStorage.getItem("pimu-web") ?? "{}"));
   } catch {
     return structuredClone(DEFAULT_STATE);
   }
@@ -104,7 +104,8 @@ const state = (() => {
 
 let saveTimer = 0;
 function changed() {
-  refreshBoard();
+  if (openPart) refreshBoard();
+  else renderDrawer();
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     try {
@@ -140,12 +141,11 @@ let lastIo = {};
 function setPhase(next, detail) {
   phase = next;
   const labels = { off: "Off", downloading: "Downloading", starting: "Starting", running: "Running", paused: "Paused", ended: "Stopped", error: "Error" };
-  const pill = $("#phase");
-  pill.dataset.phase = next;
-  pill.textContent = labels[next] + (detail ? ` – ${detail}` : "");
+  const status = $("#phase");
+  status.dataset.phase = next;
+  status.textContent = labels[next] + (detail ? ` – ${detail}` : "");
   const on = powered();
-  $("#power").textContent = on ? "Power off" : "Power on";
-  $("#power").dataset.on = on;
+  $("#power").setAttribute("aria-checked", on);
   $("#power-plug").dataset.on = on;
   $("#power-label").textContent = on ? "click to unplug" : "click to plug in";
   $("#led-power").dataset.on = on;
@@ -808,9 +808,9 @@ function bootFilesFields(spec, key) {
 
 function drawerFrame(title, ...body) {
   return [
+    h("div", { class: "crumb" }, h("button", { class: "link", type: "button", id: "changes-back", onclick: () => { openPart = null; renderDrawer(); } }, backLabel())),
     h("header", {}, h("h2", {}, title),
-      powered() ? h("span", { class: "lock", title: "The board is powered: power off to change what is plugged in." }, "Locked – power off to change") : null,
-      h("button", { class: "small", onclick: () => { openPart = null; renderDrawer(); } }, "Close")),
+      powered() ? h("span", { class: "lock", title: "The board is powered: power off to change what is plugged in." }, "Locked – power off to change") : null),
     h("fieldset", { style: "border:0;padding:0;margin:0", disabled: powered() }, ...body),
   ];
 }
@@ -1060,30 +1060,189 @@ function settingRow(setting, image, edits) {
   return row;
 }
 
-const wide = matchMedia("(min-width: 980px)");
-wide.addEventListener("change", () => renderDrawer());
+// ---- the changes: what differs from the board the page starts with ------------------------
+
+const PART_NAMES = { sd: "microSD", eeprom: "EEPROM", usb: "USB 3.0", usbc: "USB-C", eth: "Ethernet", hdmi: "HDMI 0", gpio: "GPIO", soc: "BCM2711", log: "Log" };
+const CARD_CONTENTS = { official: "official firmware", github: "a GitHub directory", files: "files from my computer", image: "a disk image", none: "no card" };
+const IMAGE_FROM = { file: "a local file", url: "a URL", none: "nothing" };
+const EEPROM_FROM = { official: "official image", url: "a URL", file: "a file" };
+
+const notSet = (v) => (v === "" || v == null ? "not set" : String(v));
+const onOff = (v) => (v ? "on" : "off");
+const textLines = (text) => text.split("\n").map((l) => l.trim()).filter(Boolean);
+const at = (root, path) => path.split(".").reduce((o, k) => o?.[k], root);
+function setAt(root, path, value) {
+  const keys = path.split(".");
+  const last = keys.pop();
+  keys.reduce((o, k) => o[k], root)[last] = value;
+}
+
+const sdMode = (mode) => (s) => s.sd.mode === mode;
+const netOn = (key) => (s) => s.net.plugged && s.net[key].on;
+const netMode = (key, mode) => (s) => netOn(key)(s) && s.net[key].mode === mode;
+
+// [path in the state, part, what it is, how a value reads, when it matters,
+//  where on the board it is counted when that is not the part]
+const CHANGE_FIELDS = [
+  ["sd.mode", "sd", "On the card", (v) => CARD_CONTENTS[v]],
+  ["sd.github.repo", "sd", "Repository", notSet, sdMode("github")],
+  ["sd.github.ref", "sd", "Branch or tag", notSet, sdMode("github")],
+  ["sd.github.path", "sd", "Directory", notSet, sdMode("github")],
+  ["sd.image.kind", "sd", "Card image from", (v) => IMAGE_FROM[v], sdMode("image")],
+  ["sd.image.url", "sd", "Card image URL", notSet, (s) => s.sd.mode === "image" && s.sd.image.kind === "url"],
+  ["configTxt", "sd", "config.txt", "lines", (s) => s.sd.mode !== "image"],
+  ["cmdline", "sd", "cmdline.txt", notSet, (s) => s.sd.mode !== "image"],
+  ["eeprom.kind", "eeprom", "Bootloader image", (v) => EEPROM_FROM[v]],
+  ["eeprom.url", "eeprom", "Image URL", notSet, (s) => s.eeprom.kind === "url"],
+  ["bootOrder", "eeprom", "Boot order", (v) => (v ? `BOOT_ORDER=${formatBootOrder(v)}` : "the bootloader's")],
+  ["extraBootconf", "eeprom", "Other lines", "lines"],
+  ["skipSignedBoot", "eeprom", "Skip the signature check of boot.img", onOff],
+  ["tryboot", "eeprom", "Tryboot", onOff],
+  ["usb.kind", "usb", "Stick", (v) => IMAGE_FROM[v]],
+  ["usb.url", "usb", "Stick URL", notSet, (s) => s.usb.kind === "url"],
+  ["usb.mb", "usb", "Stick size (MiB)", notSet, (s) => s.usb.kind !== "none"],
+  ["otg.kind", "usbc", "Stick on the OTG port", (v) => IMAGE_FROM[v]],
+  ["otg.url", "usbc", "Stick URL", notSet, (s) => s.otg.kind === "url"],
+  ["otg.dock", "usbc", "Behind a USB-C dock", onOff, (s) => s.otg.kind !== "none"],
+  ["net.plugged", "eth", "Cable", (v) => (v ? "plugged in" : "unplugged")],
+  ["net.tftp.on", "eth", "Boot over TFTP", onOff, (s) => s.net.plugged],
+  ["net.tftp.mode", "eth", "Served over TFTP", (v) => CARD_CONTENTS[v], netOn("tftp")],
+  ["net.tftp.github.repo", "eth", "TFTP repository", notSet, netMode("tftp", "github")],
+  ["net.tftp.github.ref", "eth", "TFTP branch or tag", notSet, netMode("tftp", "github")],
+  ["net.tftp.github.path", "eth", "TFTP directory", notSet, netMode("tftp", "github")],
+  ["net.http.on", "eth", "Boot over HTTP", onOff, (s) => s.net.plugged],
+  ["net.http.mode", "eth", "Served over HTTP", (v) => CARD_CONTENTS[v], netOn("http")],
+  ["net.http.github.repo", "eth", "HTTP repository", notSet, netMode("http", "github")],
+  ["net.http.github.ref", "eth", "HTTP branch or tag", notSet, netMode("http", "github")],
+  ["net.http.github.path", "eth", "HTTP directory", notSet, netMode("http", "github")],
+  ["display", "hdmi", "Monitor", (v) => (v ? "plugged in" : "none")],
+  ["board.stepping", "soc", "Silicon", (v) => v.toUpperCase()],
+  ["board.memoryMb", "soc", "Memory", (v) => `${v / 1024} GiB`, null, "memory"],
+  ["board.boardRev", "soc", "Board revision code", notSet],
+  ["otpRows", "soc", "OTP fuses", "lines"],
+  ["advanced.jitter", "soc", "Jitter seed", notSet],
+  ["advanced.faults", "soc", "Faults: one chance in", notSet],
+  ["advanced.checkCoherency", "soc", "Report stale cache reads", onOff],
+  ["advanced.checkAlignment", "soc", "Report misaligned VPU accesses", onOff],
+  ["advanced.skipUnimpl", "soc", "Step over instructions the decoder lacks", onOff],
+  ["advanced.parallel", "soc", "ARM cores on worker threads", onOff],
+  ["log", "log", "Channels", (v) => (v.length ? v.join(", ") : "none")],
+];
+
+const PICKED_FILES = [
+  ["hat", "gpio", "HAT ID EEPROM"],
+  ["edid", "hdmi", "EDID"],
+  ["pubkey", "eeprom", "Public key for signed boot"],
+];
+
+// One entry a difference: `before` and `after` read as values, `removed` and
+// `added` as lines of a text, and `reset` puts the default back.
+function changeList() {
+  const list = [];
+  for (const [path, part, what, show, when, spot = part] of CHANGE_FIELDS) {
+    if (when && !when(state)) continue;
+    const now = at(state, path);
+    const was = at(DEFAULT_STATE, path);
+    if (JSON.stringify(now) === JSON.stringify(was)) continue;
+    const reset = () => setAt(state, path, structuredClone(was));
+    if (show === "lines") {
+      const before = textLines(was);
+      const after = textLines(now);
+      list.push({ part, spot, what, removed: before.filter((l) => !after.includes(l)), added: after.filter((l) => !before.includes(l)), reset });
+    } else {
+      list.push({ part, spot, what, before: show(was), after: show(now), reset });
+    }
+  }
+  const keys = new Set([...Object.keys(DEFAULT_STATE.bootconf), ...Object.keys(state.bootconf)]);
+  for (const key of keys) {
+    const was = DEFAULT_STATE.bootconf[key];
+    const now = state.bootconf[key];
+    if (was === now) continue;
+    list.push({
+      part: "eeprom", spot: "eeprom", what: key, code: true, before: was ?? "the image's", after: now ?? "the image's",
+      reset: () => (was === undefined ? delete state.bootconf[key] : (state.bootconf[key] = was)),
+    });
+  }
+  for (const [slot, part, what] of PICKED_FILES) {
+    if (files[slot]) list.push({ part, spot: part, what, before: "none", after: files[slot].name, reset: () => (files[slot] = null) });
+  }
+  const order = Object.keys(PART_NAMES);
+  return list.sort((a, b) => order.indexOf(a.part) - order.indexOf(b.part));
+}
+
+function resetAll() {
+  if (!confirm("Put every part back the way the page first sets it up?")) return;
+  for (const key of Object.keys(DEFAULT_STATE)) state[key] = structuredClone(DEFAULT_STATE[key]);
+  for (const [slot] of PICKED_FILES) files[slot] = null;
+  changed();
+  renderDrawer();
+}
+
+const backLabel = () => {
+  const n = changeList().length;
+  return `← Changes${n ? ` (${n})` : ""}`;
+};
+
+function diffNodes(item) {
+  if (item.removed) {
+    return [
+      ...item.removed.map((l) => h("div", {}, h("del", {}, `− ${l}`))),
+      ...item.added.map((l) => h("div", {}, h("ins", {}, `+ ${l}`))),
+    ];
+  }
+  return [h("del", {}, item.before), " → ", h("ins", {}, item.after)];
+}
+
+function changesPane() {
+  const list = changeList();
+  const locked = powered();
+  const showPart = (part) => {
+    if (part === "log") {
+      $('.tabs [data-tab="log"]').click();
+      return;
+    }
+    openPart = part;
+    renderDrawer();
+  };
+  return h("div", { class: "drawer-body changes-pane" },
+    h("h2", {}, "Changes", h("span", { class: "count" }, list.length ? String(list.length) : "")),
+    h("p", { class: "hint" }, locked
+      ? "The board is powered, so its parts are locked: switch the power off to change them."
+      : "Click a part of the board to change what is plugged into it. What you change from the board this page starts with is listed here."),
+    list.length
+      ? h("ul", { class: "changes" }, list.map((item) => h("li", {},
+          h("button", { class: "link where", type: "button", onclick: () => showPart(item.part) }, PART_NAMES[item.part]),
+          h("span", { class: "what" }, item.code ? h("code", {}, item.what) : item.what),
+          h("button", {
+            class: "link", type: "button", disabled: locked, "aria-label": `Reset ${PART_NAMES[item.part]}: ${item.what}`,
+            onclick: () => { item.reset(); changed(); renderDrawer(); if (item.part === "log") renderLog(); },
+          }, "reset"),
+          h("div", { class: "diff" }, diffNodes(item)))))
+      : h("p", { class: "hint" }, "Nothing changed yet: this is the board as the page sets it up."),
+    list.length
+      ? h("div", { class: "changes-foot" }, h("button", { class: "link", type: "button", disabled: locked, onclick: resetAll }, "Reset everything"))
+      : null);
+}
+
+// ---- the side pane: a column beside the board, or a sheet on a narrow screen -------------
+
+const sheet = matchMedia("(max-width: 1179px)");
+let sheetOpen = false;
+sheet.addEventListener("change", () => {
+  sheetOpen = !!openPart;
+  renderDrawer();
+});
 
 function renderDrawer() {
-  refreshBoard();
   const drawer = $("#drawer");
   for (const part of document.querySelectorAll(".part")) part.dataset.open = part.dataset.part === openPart;
-  if (!openPart) {
-    drawer.hidden = !wide.matches;
-    drawer.replaceChildren(h("div", { class: "drawer-body empty" }, ...(powered()
-      ? [
-          h("h2", {}, "The board is powered"),
-          h("p", {}, "Click a part of the board to see what is plugged into it. The parts are locked while the board runs: switch the power off to change them."),
-          h("p", { class: "hint" }, "The Power switch at the top of the board switches it off."),
-        ]
-      : [
-          h("h2", {}, "Plug something in"),
-          h("p", {}, "Click a part of the board to change what is plugged into it: the microSD slot, the EEPROM, the USB sockets, the Ethernet jack, the monitor, the GPIO header, or the processor for the board itself."),
-          h("p", { class: "hint" }, "The Power switch at the top of the board starts it."),
-        ])));
-    return;
-  }
-  drawer.hidden = false;
-  drawer.replaceChildren(h("div", { class: "drawer-body" }, ...PANELS[openPart]().filter(Boolean)));
+  const handle = h("button", {
+    class: "sheet-handle", type: "button", "aria-expanded": sheetOpen,
+    onclick: () => { sheetOpen = !sheetOpen; drawer.dataset.sheet = sheetOpen ? "open" : "closed"; handle.setAttribute("aria-expanded", sheetOpen); },
+  }, openPart ? PART_NAMES[openPart] : "Changes", h("span", { class: "count", id: "sheet-count" }));
+  drawer.dataset.sheet = sheetOpen ? "open" : "closed";
+  drawer.replaceChildren(handle, openPart ? h("div", { class: "drawer-body" }, ...PANELS[openPart]().filter(Boolean)) : changesPane());
+  refreshBoard();
 }
 
 const short = (text, n = 18) => (text.length > n ? `${text.slice(0, n - 1)}…` : text);
@@ -1129,13 +1288,59 @@ function refreshBoard() {
     if (filled !== undefined) text.closest(".part").dataset.filled = filled;
   }
   $("#soc-title").textContent = `BCM2711 ${s.board.stepping.toUpperCase()}`;
+  $("#identity").textContent = `Raspberry Pi 4 Model B · BCM2711 ${s.board.stepping.toUpperCase()} · ${s.board.boardRev.trim() ? `revision ${s.board.boardRev.trim()}` : `${s.board.memoryMb / 1024} GiB`}`;
+  showChangeCounts(changeList());
   $("#eth-led").dataset.on = s.net.plugged && powered();
 }
+
+// A count on each part of the board that has changes, at the corner of its box.
+function showChangeCounts(list) {
+  for (const part of document.querySelectorAll("#board .part")) {
+    const spot = part.querySelector("[data-sub]")?.dataset.sub ?? part.dataset.part;
+    const n = list.filter((c) => c.spot === spot).length;
+    let badge = part.querySelector(".badge");
+    if (!n) {
+      badge?.remove();
+      continue;
+    }
+    if (!badge) {
+      const box = part.querySelector(".box, .soc");
+      const x = box.x.baseVal.value + box.width.baseVal.value;
+      const y = box.y.baseVal.value;
+      const svg = (tag, attrs) => Object.entries(attrs).reduce((el, [k, v]) => (el.setAttribute(k, v), el), document.createElementNS("http://www.w3.org/2000/svg", tag));
+      badge = svg("g", { class: "badge" });
+      badge.append(svg("circle", { cx: x, cy: y, r: 8 }), svg("text", { x, y: y + 3.5, "text-anchor": "middle" }));
+      part.insertBefore(badge, part.querySelector(".hit"));
+    }
+    badge.querySelector("text").textContent = n;
+  }
+  const back = $("#changes-back");
+  if (back) back.textContent = backLabel();
+  const count = $("#sheet-count");
+  if (count) count.textContent = !openPart && list.length ? String(list.length) : "";
+}
+
+// On a phone the board stands upright: each part moves to its place in two
+// columns under the SoC, given as `data-portrait="x,y"` for the corner of its box.
+const portrait = matchMedia("(max-width: 699px)");
+function layoutBoard() {
+  const board = $("#board");
+  board.classList.toggle("portrait", portrait.matches);
+  board.setAttribute("viewBox", portrait.matches ? "0 12 400 672" : "0 0 960 512");
+  for (const group of board.querySelectorAll("[data-portrait]")) {
+    const [x, y] = group.dataset.portrait.split(",").map(Number);
+    const box = group.querySelector(".box, .soc");
+    group.style.transform = portrait.matches ? `translate(${x - box.x.baseVal.value}px, ${y - box.y.baseVal.value}px)` : "";
+  }
+}
+portrait.addEventListener("change", layoutBoard);
+layoutBoard();
 
 for (const part of document.querySelectorAll(".part")) {
   const choose = () => {
     if (!PANELS[part.dataset.part]) return;
     openPart = openPart === part.dataset.part ? null : part.dataset.part;
+    if (sheet.matches) sheetOpen = !!openPart;
     renderDrawer();
   };
   part.addEventListener("click", choose);
