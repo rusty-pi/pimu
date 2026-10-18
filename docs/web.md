@@ -42,11 +42,12 @@ The board is a block diagram in the style of [`board-sheet.svg`](board-sheet.svg
 | GPIO | A HAT's ID EEPROM. |
 | BCM2711 | The silicon (B0 or C0), the memory, a board revision code, fuses to program, jitter and faults, and the checks of the `coherency` and `alignment` logs. |
 
-The part opens in the pane left of the board. With no part open, that pane lists
-**Changes**: everything that differs from the board the page starts with, what it
-was and what it is, each with its own reset; a part with changes carries their
-count. A phone gets the pane as a sheet at the bottom of the screen, and the
-board stood upright, its parts in two columns under the SoC.
+The part opens in the pane right of the board, over the log. Left of the board,
+**Changes** lists everything that differs from the board the page starts with,
+what it was and what it is, each with its own reset; a part with changes carries
+their count. A phone gets the changes under the board, the open part as a sheet
+at the bottom of the screen, and the board stood upright, its parts in two
+columns under the SoC.
 
 The six cores in the SoC are tiles of one size that light up as they start, sleep and run, and the top bar counts the VPU and ARM instructions retired. The
 serial console sits under the board, and beside it the **Log** tab records the

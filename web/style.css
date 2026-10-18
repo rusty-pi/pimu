@@ -19,7 +19,8 @@
   --term-fg: #d8dedb;
   --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
   --bar: 48px;
-  --side: 380px;
+  --changes: 260px;
+  --part: 380px;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -90,45 +91,45 @@ button.switch .track { position: relative; width: 30px; height: 16px; border-rad
 button.switch .track::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #fff; transition: left .15s; }
 button.switch[aria-checked="true"] .track { background: var(--core-run); }
 button.switch[aria-checked="true"] .track::after { left: 16px; }
+@media (min-width: 900px) {
+  .top { height: var(--bar); flex-wrap: nowrap; }
+}
 @media (max-width: 899px) {
   .clock { order: 10; flex-basis: 100%; max-width: none; }
   .identity { display: none; }
 }
 
 /* the workspace: panes split by hairlines, no cards.
-   Narrow: one column, the side pane a sheet over the page. */
+   Narrow: one column – the board, the changes, the console, the log – and the
+   part that is open a sheet over the page. */
 .work { display: grid; gap: 1px; background: var(--line); grid-template-columns: minmax(0, 1fr); border-bottom: 1px solid var(--line); }
 .work > * { background: var(--panel); min-width: 0; }
 .board-pane { padding: 10px 14px 8px; }
 .console-pane, .screen { display: flex; flex-direction: column; height: clamp(320px, 60vh, 680px); position: relative; }
 
-/* Medium: the side pane stands left of the board, as tall as it and no taller,
-   so opening a part moves nothing; console and log share the row under them. */
-@media (min-width: 1180px) {
+/* Wide: three columns of full height. The changes on the left; the board with
+   the console under it; and on the right the open part, as tall as the board,
+   over the log – so opening a part moves nothing. */
+@media (min-width: 1280px) {
   .work {
-    grid-template-columns: var(--side) minmax(0, 1fr) minmax(0, 0.7fr);
-    grid-template-areas: "side board board" "console console screen";
+    grid-template-columns: var(--changes) minmax(0, 1fr) var(--part);
+    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-areas: "changes board side" "changes console screen";
+    height: calc(100vh - var(--bar));
+    min-height: 720px;
   }
+  .changes-col { grid-area: changes; overflow: auto; }
   .board-pane { grid-area: board; }
   .drawer { grid-area: side; }
   .console-pane { grid-area: console; }
   .screen { grid-area: screen; }
-}
-/* Wide: three columns of full height – the side pane, the board with the
-   console under it, and the log. */
-@media (min-width: 1760px) {
-  :root { --side: 400px; }
-  .work {
-    grid-template-columns: var(--side) minmax(0, 1.2fr) minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr);
-    grid-template-areas: "side board screen" "side console screen";
-    height: calc(100vh - var(--bar));
-    min-height: 720px;
-  }
   .console-pane, .screen { height: auto; min-height: 0; }
 }
+@media (min-width: 1680px) {
+  :root { --changes: 320px; --part: 440px; }
+}
 
-.panehead { display: flex; align-items: center; gap: 12px; min-height: 38px; padding: 0 14px; border-bottom: 1px solid var(--line); flex: none; }
+.panehead { display: flex; align-items: center; gap: 12px; height: 38px; padding: 0 14px; border-bottom: 1px solid var(--line); flex: none; }
 .panehead h2 { font-size: 13px; font-weight: 600; }
 .hint { color: var(--muted); font-size: 12.5px; margin: 6px 2px 0; }
 .panehead .hint { margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -199,40 +200,30 @@ button.switch[aria-checked="true"] .track::after { left: 16px; }
 #board.portrait { max-width: 440px; max-height: none; }
 #board.portrait .tag, #board.portrait .wire { display: none; }
 
-/* the side pane: the list of changes, or the part that is open */
+/* the part that is open */
 .drawer { position: relative; min-height: 0; }
 .drawer-body { padding: 12px 16px 18px; overflow: auto; }
-@media (min-width: 1180px) {
+@media (min-width: 1280px) {
   .drawer-body { position: absolute; inset: 0; }
 }
-@media (max-width: 1179px) {
+@media (max-width: 1279px) {
   .drawer {
     position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; max-height: 72vh; display: flex; flex-direction: column;
     border-top: 1px solid var(--line-strong); border-radius: 10px 10px 0 0; box-shadow: 0 -6px 24px rgba(0, 0, 0, .25);
-    transform: translateY(calc(100% - 44px)); transition: transform .2s;
   }
-  .drawer[data-sheet="open"] { transform: none; }
-  .drawer-body { overflow: auto; }
-  .drawer[data-sheet="closed"] .drawer-body { visibility: hidden; }
-  body { padding-bottom: 44px; }
+  .drawer[data-empty="true"] { display: none; }
 }
-@media (max-width: 1179px) and (prefers-reduced-motion: reduce) { .drawer { transition: none; } }
-.sheet-handle {
-  position: relative; display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; flex: none;
-  padding: 10px 16px 6px; border: 0; border-bottom: 1px solid var(--line); background: none; text-align: left; font-weight: 600; font-size: 13px;
-}
-.sheet-handle::before { content: ""; position: absolute; left: 50%; top: 5px; width: 36px; height: 4px; border-radius: 2px; background: var(--line-strong); transform: translateX(-50%); }
-.sheet-handle .count { font-weight: 400; }
-@media (min-width: 1180px) { .sheet-handle { display: none; } }
 
-.drawer .crumb { margin-bottom: 6px; }
 .drawer header { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
 .drawer header h2 { font-size: 17px; flex: 1; }
 .drawer h3 { font-size: 11.5px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 18px 0 6px; }
 .drawer .lock { color: var(--warn); font-size: 13px; }
 .drawer-body > h2 { font-size: 17px; margin-bottom: 6px; }
-.drawer-body.changes-pane > h2 { display: flex; align-items: baseline; gap: 8px; }
-.drawer-body.changes-pane > h2 .count { font-size: 13px; font-weight: 400; }
+
+/* the changes */
+.changes-col { padding: 12px 16px 16px; }
+.changes-pane > h2 { display: flex; align-items: baseline; gap: 8px; font-size: 15px; }
+.changes-pane > h2 .count { font-size: 13px; font-weight: 400; color: var(--muted); }
 
 .changes { list-style: none; margin: 4px 0 0; padding: 0; }
 .changes li { display: grid; grid-template-columns: minmax(64px, auto) minmax(0, 1fr) auto; gap: 2px 10px; align-items: baseline; padding: 8px 0; border-bottom: 1px solid var(--line); }

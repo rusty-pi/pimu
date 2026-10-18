@@ -65,6 +65,7 @@ class App {
   constructor(page) {
     this.page = page;
     this.drawer = page.locator("#drawer");
+    this.changes = page.locator("#changes");
     this.term = page.locator("#term");
     this.status = page.locator("#phase");
     this.powerButton = page.locator("#power");

@@ -104,8 +104,8 @@ const state = (() => {
 
 let saveTimer = 0;
 function changed() {
-  if (openPart) refreshBoard();
-  else renderDrawer();
+  refreshBoard();
+  renderChanges();
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     try {
@@ -808,9 +808,9 @@ function bootFilesFields(spec, key) {
 
 function drawerFrame(title, ...body) {
   return [
-    h("div", { class: "crumb" }, h("button", { class: "link", type: "button", id: "changes-back", onclick: () => { openPart = null; renderDrawer(); } }, backLabel())),
     h("header", {}, h("h2", {}, title),
-      powered() ? h("span", { class: "lock", title: "The board is powered: power off to change what is plugged in." }, "Locked – power off to change") : null),
+      powered() ? h("span", { class: "lock", title: "The board is powered: power off to change what is plugged in." }, "Locked – power off to change") : null,
+      h("button", { class: "small", type: "button", onclick: () => { openPart = null; renderDrawer(); } }, "Close")),
     h("fieldset", { style: "border:0;padding:0;margin:0", disabled: powered() }, ...body),
   ];
 }
@@ -1178,11 +1178,6 @@ function resetAll() {
   renderDrawer();
 }
 
-const backLabel = () => {
-  const n = changeList().length;
-  return `← Changes${n ? ` (${n})` : ""}`;
-};
-
 function diffNodes(item) {
   if (item.removed) {
     return [
@@ -1204,18 +1199,18 @@ function changesPane() {
     openPart = part;
     renderDrawer();
   };
-  return h("div", { class: "drawer-body changes-pane" },
+  return h("div", { class: "changes-pane" },
     h("h2", {}, "Changes", h("span", { class: "count" }, list.length ? String(list.length) : "")),
     h("p", { class: "hint" }, locked
       ? "The board is powered, so its parts are locked: switch the power off to change them."
-      : "Click a part of the board to change what is plugged into it. What you change from the board this page starts with is listed here."),
+      : "What you change from the board this page starts with."),
     list.length
       ? h("ul", { class: "changes" }, list.map((item) => h("li", {},
           h("button", { class: "link where", type: "button", onclick: () => showPart(item.part) }, PART_NAMES[item.part]),
           h("span", { class: "what" }, item.code ? h("code", {}, item.what) : item.what),
           h("button", {
             class: "link", type: "button", disabled: locked, "aria-label": `Reset ${PART_NAMES[item.part]}: ${item.what}`,
-            onclick: () => { item.reset(); changed(); renderDrawer(); if (item.part === "log") renderLog(); },
+            onclick: () => { item.reset(); changed(); if (openPart) renderDrawer(); if (item.part === "log") renderLog(); },
           }, "reset"),
           h("div", { class: "diff" }, diffNodes(item)))))
       : h("p", { class: "hint" }, "Nothing changed yet: this is the board as the page sets it up."),
@@ -1224,24 +1219,22 @@ function changesPane() {
       : null);
 }
 
-// ---- the side pane: a column beside the board, or a sheet on a narrow screen -------------
+function renderChanges() {
+  $("#changes").replaceChildren(changesPane());
+}
 
-const sheet = matchMedia("(max-width: 1179px)");
-let sheetOpen = false;
-sheet.addEventListener("change", () => {
-  sheetOpen = !!openPart;
-  renderDrawer();
-});
+// ---- the part pane: over the log on a wide screen, a sheet on a narrow one ----------------
 
 function renderDrawer() {
   const drawer = $("#drawer");
   for (const part of document.querySelectorAll(".part")) part.dataset.open = part.dataset.part === openPart;
-  const handle = h("button", {
-    class: "sheet-handle", type: "button", "aria-expanded": sheetOpen,
-    onclick: () => { sheetOpen = !sheetOpen; drawer.dataset.sheet = sheetOpen ? "open" : "closed"; handle.setAttribute("aria-expanded", sheetOpen); },
-  }, openPart ? PART_NAMES[openPart] : "Changes", h("span", { class: "count", id: "sheet-count" }));
-  drawer.dataset.sheet = sheetOpen ? "open" : "closed";
-  drawer.replaceChildren(handle, openPart ? h("div", { class: "drawer-body" }, ...PANELS[openPart]().filter(Boolean)) : changesPane());
+  drawer.dataset.empty = !openPart;
+  drawer.replaceChildren(openPart
+    ? h("div", { class: "drawer-body" }, ...PANELS[openPart]().filter(Boolean))
+    : h("div", { class: "drawer-body empty" }, h("p", { class: "hint" }, powered()
+      ? "Click a part of the board to see what is plugged into it."
+      : "Click a part of the board to change what is plugged into it.")));
+  renderChanges();
   refreshBoard();
 }
 
@@ -1314,10 +1307,6 @@ function showChangeCounts(list) {
     }
     badge.querySelector("text").textContent = n;
   }
-  const back = $("#changes-back");
-  if (back) back.textContent = backLabel();
-  const count = $("#sheet-count");
-  if (count) count.textContent = !openPart && list.length ? String(list.length) : "";
 }
 
 // On a phone the board stands upright: each part moves to its place in two
@@ -1340,7 +1329,6 @@ for (const part of document.querySelectorAll(".part")) {
   const choose = () => {
     if (!PANELS[part.dataset.part]) return;
     openPart = openPart === part.dataset.part ? null : part.dataset.part;
-    if (sheet.matches) sheetOpen = !!openPart;
     renderDrawer();
   };
   part.addEventListener("click", choose);

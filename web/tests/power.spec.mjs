@@ -285,13 +285,14 @@ test.describe("while the board is powered", () => {
     await expect(app.part("sd")).toHaveAttribute("data-locked", "false");
   });
 
-  test("an empty panel says what is true of a powered board", async ({ app }) => {
+  test("the empty panel and the changes say what is true of a powered board", async ({ app }) => {
     await expect(app.drawer).toContainText("Click a part of the board to change what is plugged into it.");
     await app.running();
-    await expect(app.drawer).toContainText("The board is powered, so its parts are locked");
-    await expect(app.drawer).not.toContainText("Click a part of the board");
+    await expect(app.drawer).toContainText("Click a part of the board to see what is plugged into it.");
+    await expect(app.changes).toContainText("The board is powered, so its parts are locked");
     await app.powerButton.click();
     await expect(app.drawer).toContainText("Click a part of the board to change what is plugged into it.");
+    await expect(app.changes).not.toContainText("The board is powered");
   });
 
   test("the Power button in the USB-C panel works while the rest is locked", async ({ app }) => {

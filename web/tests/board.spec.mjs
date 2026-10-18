@@ -32,12 +32,13 @@ test("the six cores are tiles of one size", async ({ app }) => {
 });
 
 test("a part opens its panel, and the same part closes it", async ({ app }) => {
-  await expect(app.drawer.locator(".changes-pane")).toBeVisible();
+  await expect(app.drawer).toHaveAttribute("data-empty", "true");
   await app.open("sd");
   await expect(app.drawer).toContainText("microSD card");
   await app.part("sd").click();
   await expect(app.part("sd")).toHaveAttribute("data-open", "false");
-  await expect(app.drawer.locator(".changes-pane")).toBeVisible();
+  await expect(app.drawer).toHaveAttribute("data-empty", "true");
+  await expect(app.changes.locator(".changes-pane")).toBeVisible();
 });
 
 test("a part opens from the keyboard", async ({ app }) => {
@@ -55,11 +56,11 @@ test("the memory chip opens the board panel too", async ({ app }) => {
   await expect(app.drawer).toContainText("BCM2711 and the board");
 });
 
-test("a panel goes back to the changes", async ({ app }) => {
+test("a panel's close button closes it", async ({ app }) => {
   await app.open("hdmi");
-  await app.drawer.getByRole("button", { name: "← Changes" }).click();
+  await app.drawer.getByRole("button", { name: "Close" }).click();
   await expect(app.part("hdmi")).toHaveAttribute("data-open", "false");
-  await expect(app.drawer.locator(".changes-pane")).toBeVisible();
+  await expect(app.drawer).toContainText("Click a part of the board");
 });
 
 test("every panel is editable while the board is off", async ({ app }) => {
