@@ -117,3 +117,85 @@ test("a picked file is a change, and resets by letting go of it", async ({ app }
   await expect(changes(app)).toHaveCount(0);
   await expect(app.page.locator('[data-sub="gpio"]')).toHaveText("no HAT");
 });
+
+test.describe("sharing", () => {
+  const shareLink = async (app) => {
+    await app.page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    await app.changes.getByRole("button", { name: "Share as a link" }).click();
+    await expect(app.page.locator("#toast")).toContainText("Link copied.");
+    expect(await app.page.evaluate(() => location.hash)).toBe("");
+    return app.page.evaluate(() => navigator.clipboard.readText());
+  };
+
+  // A fresh visit to the link: no saved settings of its own.
+  const visit = async (app, link) => {
+    await app.page.evaluate(() => localStorage.clear());
+    await app.page.goto("about:blank");
+    await app.page.goto(link);
+  };
+
+  test("a link carries the changes to another visit, and the fragment is cleared", async ({ app }) => {
+    await app.open("sd");
+    await app.field("Lines added to config.txt").locator("textarea").fill("arm_64bit=1\ndtoverlay=disable-bt");
+    await app.open("soc");
+    await app.field("Memory").locator("select").selectOption("2048");
+    await app.open("eeprom");
+    await (await app.setting("WAKE_ON_GPIO", "Serial and power")).locator("select").selectOption("0");
+    await app.drawer.getByRole("combobox", { name: "Boot order preset" }).selectOption({ index: 1 });
+    await app.page.locator("#tab-log details .chip-btn", { hasText: /^mbox$/ }).click();
+    const before = await changes(app).allTextContents();
+
+    const link = await shareLink(app);
+    expect(new URL(link).hash).toMatch(/^#board=[\w-]+$/);
+    await visit(app, link);
+    await expect(app.page.locator("#toast")).toHaveText("Opened the board from the link.");
+    await expect(changes(app)).toHaveText(before);
+    expect(await app.page.evaluate(() => location.hash)).toBe("");
+    expect((await app.localState()).board.memoryMb).toBe(2048);
+  });
+
+  test("without the clipboard the link goes to the address bar", async ({ app }) => {
+    await app.open("hdmi");
+    await app.drawer.getByRole("checkbox", { name: "Plug in a monitor" }).check();
+    await app.page.evaluate(() => Object.defineProperty(navigator, "clipboard", { value: { writeText: () => Promise.reject(new Error("denied")) } }));
+    await app.changes.getByRole("button", { name: "Share as a link" }).click();
+    await expect(app.page.locator("#toast")).toHaveText("The link is in the address bar.");
+    expect(await app.page.evaluate(() => location.hash)).toMatch(/^#board=/);
+  });
+
+  test("a link says when the files you picked stay behind", async ({ app }) => {
+    await app.open("gpio");
+    await app.drawer.locator('input[type="file"]').setInputFiles({ name: "hat.eep", mimeType: "application/octet-stream", buffer: Buffer.alloc(64) });
+    await app.changes.getByRole("button", { name: "Share as a link" }).click();
+    await expect(app.page.locator("#toast")).toContainText("The files you picked are not in it");
+  });
+
+  test("a link does not replace your own changes unless you say so", async ({ app }) => {
+    await app.open("hdmi");
+    await app.drawer.getByRole("checkbox", { name: "Plug in a monitor" }).check();
+    const link = await shareLink(app);
+    await app.drawer.getByRole("checkbox", { name: "Plug in a monitor" }).uncheck();
+    await app.open("eth");
+    await app.drawer.getByRole("checkbox", { name: "Plug the cable in" }).check();
+
+    app.page.once("dialog", (dialog) => dialog.dismiss());
+    await app.page.evaluate((url) => (location.href = url), link);
+    await expect(changes(app)).toHaveText(["EthernetCableresetunplugged → plugged in"]);
+
+    app.page.once("dialog", (dialog) => dialog.accept());
+    await app.page.evaluate((url) => (location.href = url), link);
+    await expect(changes(app)).toHaveText(["HDMI 0Monitorresetnone → plugged in"]);
+  });
+
+  test("a link that cannot be read says so, and what it cannot use is left alone", async ({ app }) => {
+    await visit(app, "/#board=not-deflate");
+    await expect(app.page.locator("#toast")).toHaveText("The board in the link could not be read.");
+    await expect(changes(app)).toHaveCount(0);
+  });
+
+  test("a link opens nothing while the board is powered", async ({ app }) => {
+    await app.running();
+    await app.page.evaluate(() => (location.hash = "board=x"));
+    await expect(app.page.locator("#toast")).toHaveText("Power the board off to open the one in the link.");
+  });
+});

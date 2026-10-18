@@ -1215,9 +1215,98 @@ function changesPane() {
           h("div", { class: "diff" }, diffNodes(item)))))
       : h("p", { class: "hint" }, "Nothing changed yet: this is the board as the page sets it up."),
     list.length
-      ? h("div", { class: "changes-foot" }, h("button", { class: "link", type: "button", disabled: locked, onclick: resetAll }, "Reset everything"))
+      ? h("div", { class: "changes-foot" },
+          h("button", { class: "link", type: "button", onclick: share }, "Share as a link"),
+          h("button", { class: "link", type: "button", disabled: locked, onclick: resetAll }, "Reset everything"))
       : null);
 }
+
+// ---- sharing: the changes as a link ------------------------------------------------------
+//
+// The link carries what differs from the defaults, as JSON, deflated and
+// base64url-encoded into the fragment, so it never reaches a server.
+
+const SHARE_PREFIX = "board=";
+const isPlain = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+
+function stateDiff(now, was) {
+  if (JSON.stringify(now) === JSON.stringify(was)) return undefined;
+  if (!isPlain(now) || !isPlain(was) || now === state.bootconf) return now;
+  const out = {};
+  for (const key of Object.keys(now)) {
+    const diff = stateDiff(now[key], was[key]);
+    if (diff !== undefined) out[key] = diff;
+  }
+  return out;
+}
+
+// What a link says, laid over the defaults: only keys the page knows, and only
+// values of the type the page keeps there.
+function overShared(base, shared, key) {
+  const strings = (list) => list.filter((v) => typeof v === "string");
+  if (key === "bootconf") return isPlain(shared) ? Object.fromEntries(Object.entries(shared).filter(([, v]) => typeof v === "string")) : base;
+  if (isPlain(base)) return Object.fromEntries(Object.keys(base).map((k) => [k, isPlain(shared) && k in shared ? overShared(base[k], shared[k], k) : base[k]]));
+  if (Array.isArray(base) || base === null) return Array.isArray(shared) ? strings(shared) : base;
+  return typeof shared === typeof base ? shared : base;
+}
+
+async function squeeze(bytes, stream) {
+  return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(stream)).arrayBuffer());
+}
+
+function toBase64Url(bytes) {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+const fromBase64Url = (text) => Uint8Array.from(atob(text.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
+
+const usesFiles = (s) => [
+  s.sd.mode === "files", s.sd.mode === "image" && s.sd.image.kind === "file", s.eeprom.kind === "file", s.usb.kind === "file", s.otg.kind === "file",
+  s.net.plugged && s.net.tftp.on && s.net.tftp.mode === "files", s.net.plugged && s.net.http.on && s.net.http.mode === "files",
+  ...PICKED_FILES.map(([slot]) => !!files[slot]),
+].some(Boolean);
+
+async function share() {
+  const json = new TextEncoder().encode(JSON.stringify(stateDiff(state, DEFAULT_STATE) ?? {}));
+  const link = `${location.origin}${location.pathname}#${SHARE_PREFIX}${toBase64Url(await squeeze(json, new CompressionStream("deflate-raw")))}`;
+  const note = usesFiles(state) ? " The files you picked are not in it: whoever opens it picks their own." : "";
+  try {
+    await navigator.clipboard.writeText(link);
+    toast(`Link copied.${note}`);
+  } catch {
+    history.replaceState(null, "", link);
+    toast(`The link is in the address bar.${note}`);
+  }
+}
+
+async function loadShared() {
+  const fragment = location.hash.slice(1);
+  if (!fragment.startsWith(SHARE_PREFIX)) return;
+  if (powered()) {
+    toast("Power the board off to open the one in the link.", true);
+    return;
+  }
+  history.replaceState(null, "", location.pathname + location.search);
+  let shared;
+  try {
+    shared = JSON.parse(new TextDecoder().decode(await squeeze(fromBase64Url(fragment.slice(SHARE_PREFIX.length)), new DecompressionStream("deflate-raw"))));
+  } catch {
+    toast("The board in the link could not be read.", true);
+    return;
+  }
+  if (changeList().length && !confirm("Replace your changes with the board in the link?")) return;
+  const next = overShared(DEFAULT_STATE, shared);
+  for (const key of Object.keys(DEFAULT_STATE)) state[key] = structuredClone(next[key]);
+  openPart = null;
+  changed();
+  renderDrawer();
+  if (!$("#tab-log").hidden) renderLog();
+  toast("Opened the board from the link.");
+}
+
+addEventListener("hashchange", loadShared);
 
 function renderChanges() {
   $("#changes").replaceChildren(changesPane());
@@ -1355,3 +1444,4 @@ $("#pause").addEventListener("click", () => worker?.postMessage({ type: phase ==
 setPhase("off");
 refreshBoard();
 renderInspect(null);
+loadShared();

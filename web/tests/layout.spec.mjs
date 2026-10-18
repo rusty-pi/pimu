@@ -40,7 +40,7 @@ for (const viewport of [{ width: 1280, height: 800 }, { width: 1920, height: 108
       expect(log.left).toBe(part.left);
       expect(log.top).toBeGreaterThanOrEqual(part.bottom);
       expect(log.bottom).toBe(term.bottom);
-      const scrolls = await app.page.evaluate(() => ({ down: document.querySelector(".work").getBoundingClientRect().bottom > innerHeight, across: document.documentElement.scrollWidth > innerWidth }));
+      const scrolls = await app.page.evaluate(() => ({ down: document.documentElement.scrollHeight > innerHeight, across: document.documentElement.scrollWidth > innerWidth }));
       expect(scrolls).toEqual({ down: false, across: false });
     });
 
@@ -116,7 +116,7 @@ test.describe("with a long list of changes", () => {
 
   test("it scrolls inside its column, and the page still does not", async ({ app }) => {
     await expect(app.changes.locator(".changes li")).toHaveCount(1);
-    const scroll = await app.changes.evaluate((el) => ({ inside: el.scrollHeight > el.clientHeight, page: document.querySelector(".work").getBoundingClientRect().bottom > innerHeight }));
+    const scroll = await app.changes.evaluate((el) => ({ inside: el.scrollHeight > el.clientHeight, page: document.documentElement.scrollHeight > innerHeight }));
     expect(scroll).toEqual({ inside: true, page: false });
   });
 });

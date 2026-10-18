@@ -45,7 +45,9 @@ The board is a block diagram in the style of [`board-sheet.svg`](board-sheet.svg
 The part opens in the pane right of the board, over the log. Left of the board,
 **Changes** lists everything that differs from the board the page starts with,
 what it was and what it is, each with its own reset; a part with changes carries
-their count. A phone gets the changes under the board, the open part as a sheet
+their count. **Share as a link** copies a link whose fragment holds the changes
+(JSON, deflated, base64url), and opening it sets the board up the same way.
+Files you picked are not in it. A phone gets the changes under the board, the open part as a sheet
 at the bottom of the screen, and the board stood upright, its parts in two
 columns under the SoC.
 
