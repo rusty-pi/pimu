@@ -433,3 +433,13 @@ test("what is chosen is still there after a reload", async ({ app }) => {
   await expect(app.page.locator('[data-sub="hdmi"]')).toHaveText("monitor");
   await expect(app.page.locator('[data-sub="memory"]')).toHaveText("2 GiB");
 });
+
+test("Reset all settings puts every setting back to its default", async ({ app }) => {
+  await app.open("soc");
+  await app.field("Memory").locator("select").selectOption("2048");
+  expect(await app.localState()).toMatchObject({ board: { memoryMb: 2048 } });
+  app.page.once("dialog", (dialog) => dialog.accept());
+  await app.page.getByRole("button", { name: "Reset all settings" }).click();
+  await expect(app.page.locator('[data-sub="memory"]')).toHaveText("1 GiB");
+  expect(await app.page.evaluate(() => localStorage.getItem("pimu-web"))).toBeNull();
+});

@@ -49,6 +49,8 @@ ARM, the bootloader configuration, the fuses, and downloads the flash as the
 firmware left it. Whatever is downloaded shows its progress under the board.
 
 Parts are locked while the board is powered: the machine is built at power-on.
+The settings are kept in the browser's local storage; **Reset all settings**
+under the page puts every one back to its default.
 
 ## The cores on threads
 

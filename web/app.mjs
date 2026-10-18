@@ -1158,6 +1158,16 @@ plug.addEventListener("keydown", (e) => {
 });
 $("#power").addEventListener("click", togglePower);
 $("#pause").addEventListener("click", () => worker?.postMessage({ type: phase === "paused" ? "resume" : "pause" }));
+$("#reset").addEventListener("click", () => {
+  if (!confirm("Reset every setting to its default? The page reloads: a running board stops, and picked files are dropped.")) return;
+  clearTimeout(saveTimer);
+  try {
+    localStorage.removeItem("pimu-web");
+  } catch {
+    // blocked storage held nothing to reset
+  }
+  location.reload();
+});
 
 setPhase("off");
 refreshBoard();
