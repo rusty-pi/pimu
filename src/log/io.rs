@@ -63,11 +63,12 @@ impl Io {
     }
 
     pub(super) fn run_event(&self, run: &Run) -> Event {
-        let names = self
+        let spans = self
             .files
             .get(run.dev)
-            .map(|m| m.names(run.lba, run.count))
+            .map(|m| m.blocks(run.lba, run.count))
             .unwrap_or_default();
+        let names: Vec<&str> = spans.iter().map(|(name, _)| *name).collect();
         let mut text = format!(
             "{:<4} {:<5} lba {:#x}+{}",
             run.dev, run.op, run.lba, run.count
@@ -81,13 +82,15 @@ impl Io {
             }
         }
         let files: Vec<String> = names.iter().map(|n| quote(n)).collect();
+        let held: Vec<String> = spans.iter().map(|(_, n)| n.to_string()).collect();
         let json = format!(
-            "\"dev\":{},\"op\":{},\"lba\":{},\"blocks\":{},\"files\":[{}]",
+            "\"dev\":{},\"op\":{},\"lba\":{},\"blocks\":{},\"files\":[{}],\"file_blocks\":[{}]",
             quote(run.dev),
             quote(run.op),
             run.lba,
             run.count,
-            files.join(",")
+            files.join(","),
+            held.join(",")
         );
         Event { text, json }
     }

@@ -172,10 +172,14 @@
 
   <section class="screen">
     <div class="tabs panehead" role="tablist">
-      <button role="tab" data-tab="log" aria-selected="true">Log <span id="log-count" class="count"></span></button>
+      <button role="tab" data-tab="io" aria-selected="true">I/O</button>
+      <button role="tab" data-tab="net" aria-selected="false">Network <span id="net-count" class="count"></span></button>
+      <button role="tab" data-tab="log" aria-selected="false">Log <span id="log-count" class="count"></span></button>
       <button role="tab" data-tab="info" aria-selected="false">Inspect</button>
     </div>
-    <div id="tab-log" class="tabpane"></div>
+    <div id="tab-io" class="tabpane"></div>
+    <div id="tab-net" class="tabpane" hidden></div>
+    <div id="tab-log" class="tabpane" hidden></div>
     <div id="tab-info" class="tabpane" hidden></div>
   </section>
 </main>

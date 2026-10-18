@@ -35,15 +35,26 @@ impl FileMap {
 
     /// The names everything `[first, first + count)` touches, in block order.
     pub fn names(&self, first: u64, count: u64) -> Vec<&str> {
+        self.blocks(first, count)
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect()
+    }
+
+    /// The names `[first, first + count)` touches, in block order, each with
+    /// how many of those blocks it holds.
+    pub fn blocks(&self, first: u64, count: u64) -> Vec<(&str, u64)> {
         let last = first + count.max(1) - 1;
         let start = self.extents.partition_point(|e| e.1 < first);
-        let mut out: Vec<&str> = Vec::new();
-        for (a, _, name) in &self.extents[start..] {
+        let mut out: Vec<(&str, u64)> = Vec::new();
+        for (a, b, name) in &self.extents[start..] {
             if *a > last {
                 break;
             }
-            if out.last() != Some(&name.as_str()) {
-                out.push(name);
+            let held = (*b).min(last) - (*a).max(first) + 1;
+            match out.last_mut() {
+                Some((prev, n)) if *prev == name.as_str() => *n += held,
+                _ => out.push((name, held)),
             }
         }
         out
@@ -424,6 +435,19 @@ mod tests {
         assert_eq!(map.names(data, 1), ["p1:/boot/"]);
         assert_eq!(map.names(9, 1), ["p1:(FAT)"]);
         assert_eq!(map.names(8, 23), ["p1:(boot sector)", "p1:(FAT)", "p1:/"]);
+    }
+
+    #[test]
+    fn a_run_over_several_files_says_how_much_of_it_each_holds() {
+        let img = image();
+        let read = |lba: u64| img.get(lba as usize).copied();
+        let map = FileMap::build(&read);
+        assert_eq!(
+            map.blocks(8, 23),
+            [("p1:(boot sector)", 1), ("p1:(FAT)", 20), ("p1:/", 2)]
+        );
+        let data = 8 + 1 + 20 + 2;
+        assert_eq!(map.blocks(data + 4, 9), [("p1:/boot/start4.elf", 5)]);
     }
 
     #[test]

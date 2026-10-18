@@ -22,6 +22,7 @@ test("what you change is listed against the default, and counted on its part", a
   await expect(badge(app, "sd")).toHaveText("1");
   await expect(badge(app, "hdmi")).toHaveText("1");
   await expect(badge(app, "usb")).toHaveCount(0);
+  expect(await app.part("sd").evaluate((g) => g.lastElementChild.classList.contains("badge")), "drawn over the outline").toBe(true);
 });
 
 test("memory is counted on the memory chip, a bootloader setting on the EEPROM", async ({ app }) => {
@@ -81,6 +82,7 @@ test("nothing resets while the board is powered", async ({ app }) => {
 });
 
 test("a log channel is a change too, and opens the log", async ({ app }) => {
+  await app.showTab("log");
   await app.page.locator("#tab-log details .chip-btn", { hasText: /^mbox$/ }).click();
   await expect(changes(app)).toHaveText(["LogChannelsresetio → io, mbox"]);
   await app.showTab("info");
@@ -142,6 +144,7 @@ test.describe("sharing", () => {
     await app.open("eeprom");
     await (await app.setting("WAKE_ON_GPIO", "Serial and power")).locator("select").selectOption("0");
     await app.drawer.getByRole("combobox", { name: "Boot order preset" }).selectOption({ index: 1 });
+    await app.showTab("log");
     await app.page.locator("#tab-log details .chip-btn", { hasText: /^mbox$/ }).click();
     const before = await changes(app).allTextContents();
 

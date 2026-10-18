@@ -125,7 +125,10 @@ test.describe("the inspect tab", () => {
 
 test.describe("tabs", () => {
   test("one is selected at a time, and the console is beside them, not behind one", async ({ app }) => {
-    await expect(app.tab("log")).toHaveAttribute("aria-selected", "true");
+    await expect(app.tab("io")).toHaveAttribute("aria-selected", "true");
+    await expect(app.page.locator("#tab-log")).toBeHidden();
+    await app.showTab("log");
+    await expect(app.page.locator("#tab-io")).toBeHidden();
     await expect(app.page.locator("#tab-info")).toBeHidden();
     await app.showTab("info");
     await expect(app.tab("log")).toHaveAttribute("aria-selected", "false");

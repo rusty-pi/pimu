@@ -106,6 +106,7 @@ let saveTimer = 0;
 function changed() {
   refreshBoard();
   renderChanges();
+  if (!$("#tab-net").hidden) renderNet();
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     try {
@@ -153,6 +154,8 @@ function setPhase(next, detail) {
   $("#pause").textContent = next === "paused" ? "Resume" : "Pause";
   for (const part of document.querySelectorAll(".part")) part.dataset.locked = on && part.dataset.part !== "soc" ? "true" : "false";
   if (!$("#tab-log").hidden) renderLog();
+  if (!$("#tab-io").hidden) renderIo();
+  if (!$("#tab-net").hidden) renderNet();
   if (!on) {
     setCores(null);
     $("#led-act").dataset.on = false;
@@ -548,9 +551,12 @@ function clearScreen() {
   renderInspect(null);
   logRows.length = 0;
   logCounts.clear();
+  resetIo();
   $("#result").textContent = "";
   $("#log-count").textContent = "";
   renderLog();
+  renderIo();
+  renderNet();
 }
 
 $("#term").addEventListener("keydown", (event) => {
@@ -581,6 +587,7 @@ const logCounts = new Map();
 const logOff = new Set();
 let logFilter = "";
 let logTimer = 0;
+let ioTimer = 0;
 const LOG_KEPT = 20_000;
 
 function addLog(text) {
@@ -594,6 +601,7 @@ function addLog(text) {
     }
     logRows.push(row);
     logCounts.set(row.channel, (logCounts.get(row.channel) ?? 0) + 1);
+    if (row.channel === "io") noteIo(row);
   }
   if (logRows.length > LOG_KEPT) logRows.splice(0, logRows.length - LOG_KEPT);
   $("#log-count").textContent = logRows.length ? `(${logRows.length})` : "";
@@ -602,10 +610,20 @@ function addLog(text) {
     renderFilters();
     renderLogRows();
   }, 250);
+  if (!ioTimer && (!$("#tab-io").hidden || !$("#tab-net").hidden)) ioTimer = setTimeout(() => {
+    ioTimer = 0;
+    if (!$("#tab-io").hidden) renderIo();
+    if (!$("#tab-net").hidden) renderNet();
+  }, 500);
+  if (io.net.length) $("#net-count").textContent = `(${io.net.length})`;
 }
 
 function describeRow(row) {
   if (typeof row.msg === "string") return row.msg;
+  if (row.channel === "io") {
+    const said = describeIo(row);
+    if (said) return said;
+  }
   return Object.entries(row)
     .filter(([k]) => k !== "us" && k !== "channel")
     .map(([k, v]) => `${k}=${Array.isArray(v) ? v.join(",") : v}`)
@@ -679,6 +697,180 @@ function renderLogRows() {
   if (stick) box.scrollTop = box.scrollHeight;
 }
 
+// ---- I/O: the io channel as what the board read, not as lines -------------------------------
+
+const DISKS = { sd: "microSD card", usb: "USB 3.0 stick", otg: "USB-C stick" };
+const BLOCK = 512;
+const STRIP_BINS = 48;
+
+let io;
+function resetIo() {
+  io = { disks: new Map(), otp: new Map(), net: [], lastUs: 0 };
+}
+resetIo();
+
+const plural = (n, word) => `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
+const bytes = (n) => (n < 1024 ? `${n} B` : n < 1 << 20 ? `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KiB` : `${(n / (1 << 20)).toFixed(1)} MiB`);
+const isMetadata = (name) => /(^|:)\(/.test(name) || name.endsWith("/");
+const fileLabel = (name) => name.replace(/^p\d+:/, "").replace(/^\/(?=.)/, "");
+
+// What a line of the io channel says, as a sentence; null when it is none of
+// the kinds the page knows, so the line shows its fields instead.
+function describeIo(row) {
+  if (row.dev === "net" && typeof row.event === "string") return row.event;
+  if (row.dev === "otp") {
+    const what = row.op === "write" ? `programmed to ${row.value} (was ${row.was})` : `read ${row.value}`;
+    return `OTP row ${row.row} ${what}${row.meaning ? ` · ${row.meaning}` : ""}`;
+  }
+  if (row.dev in DISKS && Number.isFinite(row.blocks)) {
+    const names = (row.files ?? []).map(fileLabel);
+    return `${DISKS[row.dev]}: ${row.op} ${plural(row.blocks, "block")} at ${row.lba}${names.length ? ` – ${names.join(", ")}` : ""}`;
+  }
+  return null;
+}
+
+function noteIo(row) {
+  io.lastUs = Math.max(io.lastUs, row.us);
+  if (row.dev === "net" && typeof row.event === "string") {
+    const m = /^([\w-]+): (.*)$/.exec(row.event);
+    io.net.push({ us: row.us, proto: m ? m[1] : "", text: m ? m[2] : row.event });
+    if (io.net.length > 500) io.net.shift();
+  } else if (row.dev === "otp") {
+    const fuse = io.otp.get(row.row) ?? { row: row.row, value: row.value, meaning: row.meaning ?? "", reads: 0, was: null };
+    if (row.op === "write") Object.assign(fuse, { value: row.value, was: fuse.was ?? row.was });
+    else fuse.reads += 1;
+    io.otp.set(row.row, fuse);
+  } else if (row.dev in DISKS && Number.isFinite(row.blocks)) {
+    const files = io.disks.get(row.dev) ?? new Map();
+    io.disks.set(row.dev, files);
+    const names = row.files?.length ? row.files : ["(blocks no file holds)"];
+    const held = Array.isArray(row.file_blocks) && row.file_blocks.length === names.length ? row.file_blocks : names.map(() => row.blocks / names.length);
+    names.forEach((name, i) => {
+      const file = files.get(name) ?? { name, first: row.us, last: row.us, read: 0, written: 0, runs: 0, bins: new Map() };
+      file.last = row.us;
+      file.runs += 1;
+      file[row.op === "write" ? "written" : "read"] += held[i] * BLOCK;
+      file.bins.set(row.us, (file.bins.get(row.us) ?? 0) + 1);
+      files.set(name, file);
+    });
+  }
+}
+
+// When a file was read, over the whole run so far: a strip of bins, darker
+// where more of it was read.
+function strip(file) {
+  const span = Math.max(io.lastUs, 1);
+  const bins = new Array(STRIP_BINS).fill(0);
+  for (const [us, n] of file.bins) bins[Math.min(STRIP_BINS - 1, Math.floor((us / span) * STRIP_BINS))] += n;
+  const most = Math.max(...bins);
+  return h("span", { class: "strip", "aria-hidden": "true" },
+    bins.map((n) => h("i", { style: n ? `opacity:${0.35 + (0.65 * n) / most}` : "opacity:0" })));
+}
+
+const seconds = (us) => `${(us / 1e6).toFixed(us < 1e7 ? 2 : 1)} s`;
+
+// The partition table, boot sectors, FATs and directories, as one line.
+function filesystem(list) {
+  const parts = list.filter((f) => isMetadata(f.name));
+  if (!parts.length) return [];
+  const bins = new Map();
+  for (const f of parts) for (const [us, n] of f.bins) bins.set(us, (bins.get(us) ?? 0) + n);
+  const dirs = parts.filter((f) => f.name.endsWith("/")).length;
+  const kinds = [...new Set(parts.filter((f) => !f.name.endsWith("/")).map((f) => fileLabel(f.name).replace(/[()]/g, "")))];
+  return [{
+    name: `(${[...kinds, dirs ? (dirs === 1 ? "1 directory" : `${dirs} directories`) : null].filter(Boolean).join(", ")})`,
+    first: Math.min(...parts.map((f) => f.first)), last: Math.max(...parts.map((f) => f.last)),
+    read: parts.reduce((n, f) => n + f.read, 0), written: parts.reduce((n, f) => n + f.written, 0),
+    runs: parts.reduce((n, f) => n + f.runs, 0), bins,
+  }];
+}
+
+function diskSection(dev, files) {
+  const all = [...files.values()];
+  const real = all.filter((f) => !isMetadata(f.name)).sort((a, b) => a.first - b.first);
+  const list = [...real, ...filesystem(all)];
+  const read = list.reduce((n, f) => n + f.read, 0);
+  const written = list.reduce((n, f) => n + f.written, 0);
+  return h("section", { class: "io-disk" },
+    h("h3", {}, DISKS[dev], h("span", { class: "count" }, [plural(real.length, "file"), `${bytes(Math.round(read))} read`, written ? `${bytes(Math.round(written))} written` : null].filter(Boolean).join(" · "))),
+    h("ul", { class: "io-files" }, list.map((f) => h("li", {
+      class: isMetadata(f.name) ? "meta" : null,
+      title: `${f.name}\nfirst read at ${seconds(f.first)}, last at ${seconds(f.last)}, ${plural(f.runs, "run")} of blocks`,
+    },
+      h("button", { class: "link name", type: "button", onclick: () => showLinesFor(fileLabel(f.name)) }, fileLabel(f.name)),
+      strip(f),
+      h("span", { class: "num" }, bytes(Math.round(f.read + f.written)), f.written ? h("span", { class: "wrote" }, " w") : null),
+      h("span", { class: "num when" }, seconds(f.first))))));
+}
+
+const fuseRow = (f) => h("tr", { class: f.was !== null ? "wrote" : isBlank(f) ? "blank" : null },
+  h("th", {}, `row ${f.row}`),
+  h("td", { class: "num" }, f.value, f.was !== null ? h("small", {}, ` was ${f.was}`) : null),
+  h("td", {}, f.meaning));
+const isBlank = (f) => /^0x0+$/.test(f.value);
+const UNDOCUMENTED = "not documented";
+
+// The fuses that say something first; the blank and undocumented rest folded away.
+function otpSection() {
+  const rows = [...io.otp.values()].sort((a, b) => a.row - b.row);
+  const telling = rows.filter((f) => f.was !== null || (!isBlank(f) && f.meaning !== UNDOCUMENTED));
+  const rest = rows.filter((f) => !telling.includes(f));
+  const written = rows.filter((f) => f.was !== null).length;
+  return h("section", {},
+    h("h3", {}, "Fuses (OTP)", h("span", { class: "count" }, [`${plural(rows.length, "row")} read`, written ? `${written} programmed` : null].filter(Boolean).join(" · "))),
+    telling.length ? h("table", { class: "kv io-otp" }, telling.map(fuseRow)) : null,
+    rest.length ? h("details", { class: "io-more" },
+      h("summary", {}, `${plural(rest.length, "more row")}: ${rest.filter(isBlank).length} blank, ${rest.filter((f) => f.meaning === UNDOCUMENTED).length} undocumented`),
+      h("table", { class: "kv io-otp" }, rest.map(fuseRow))) : null);
+}
+
+function showLinesFor(text) {
+  logFilter = text;
+  $('.tabs [data-tab="log"]').click();
+}
+
+function renderIo() {
+  const pane = $("#tab-io");
+  const sections = clean([
+    ...[...io.disks].map(([dev, files]) => diskSection(dev, files)),
+    io.otp.size ? otpSection() : null,
+  ]);
+  pane.replaceChildren(sections.length
+    ? h("div", { class: "io" }, sections)
+    : h("p", { class: "hint" }, state.log.includes("io")
+      ? (worker ? "Nothing read yet." : "Power the board on to see the files it reads and the fuses.")
+      : "The io channel is off: switch it on in Log to see the files the board reads and the fuses."));
+}
+
+// What the network peer did: one line an event, its outcome after the arrow.
+// A file that is not there is how the firmware probes, so it is dimmed, not red.
+const FAILED = /-> (5\d\d|416)|refused|reset/;
+const MISSED = /-> (404|not found)|aborted by client/;
+
+function renderNet() {
+  $("#net-count").textContent = io.net.length ? `(${io.net.length})` : "";
+  const pane = $("#tab-net");
+  if (!io.net.length) {
+    pane.replaceChildren(h("p", { class: "hint" }, !state.log.includes("io")
+      ? "The io channel is off: switch it on in Log to see what goes over the network."
+      : !state.net.plugged
+        ? "The Ethernet cable is unplugged. Plug it into the built-in peer in the Ethernet panel to see DHCP, DNS, TFTP and HTTP here."
+        : worker ? "Nothing on the network yet." : "Power the board on to see what it asks the network for."));
+    return;
+  }
+  const box = h("ul", { class: "io-net" }, io.net.map((e) => {
+    const [what, outcome] = e.text.split(/ -> (.*)/s);
+    return h("li", { class: FAILED.test(e.text) ? "bad" : MISSED.test(e.text) ? "missed" : null },
+      h("span", { class: "num when" }, seconds(e.us)),
+      h("span", { class: "proto" }, e.proto),
+      h("span", { class: "what" }, what, outcome ? h("span", { class: "outcome" }, ` → ${outcome}`) : null));
+  }));
+  const old = pane.querySelector(".io-net");
+  const stick = !old || old.scrollTop + old.clientHeight >= old.scrollHeight - 6;
+  pane.replaceChildren(box);
+  if (stick) box.scrollTop = box.scrollHeight;
+}
+
 // ---- inspect ---------------------------------------------------------------------------
 
 let inspectTimer = 0;
@@ -739,6 +931,8 @@ for (const button of document.querySelectorAll(".tabs [data-tab]")) {
       $(`#tab-${other.dataset.tab}`).hidden = !on;
     }
     if (button.dataset.tab === "log") renderLog();
+    if (button.dataset.tab === "io") renderIo();
+    if (button.dataset.tab === "net") renderNet();
     if (button.dataset.tab === "info") refreshInspect();
   });
 }
@@ -1392,7 +1586,7 @@ function showChangeCounts(list) {
       const svg = (tag, attrs) => Object.entries(attrs).reduce((el, [k, v]) => (el.setAttribute(k, v), el), document.createElementNS("http://www.w3.org/2000/svg", tag));
       badge = svg("g", { class: "badge" });
       badge.append(svg("circle", { cx: x, cy: y, r: 8 }), svg("text", { x, y: y + 3.5, "text-anchor": "middle" }));
-      part.insertBefore(badge, part.querySelector(".hit"));
+      part.append(badge);
     }
     badge.querySelector("text").textContent = n;
   }
@@ -1443,5 +1637,7 @@ $("#pause").addEventListener("click", () => worker?.postMessage({ type: phase ==
 
 setPhase("off");
 refreshBoard();
+renderIo();
+renderNet();
 renderInspect(null);
 loadShared();

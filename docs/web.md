@@ -52,12 +52,23 @@ at the bottom of the screen, and the board stood upright, its parts in two
 columns under the SoC.
 
 The six cores in the SoC are tiles of one size that light up as they start, sleep and run, and the top bar counts the VPU and ARM instructions retired. The
-serial console sits under the board, and beside it the **Log** tab records the
-channels of `pimu boot --log`, as `jsonl`, and filters them per channel and by
-text; **Inspect** shows the device tree the firmware handed to the ARM, the
-bootloader configuration, the fuses, and downloads the flash as the firmware left
-it. Whatever is downloaded shows its progress over the console. On a screen wide
-enough, the log is a column of its own and the page does not scroll.
+serial console sits under the board, and beside it four tabs:
+
+- **I/O** reads the `io` channel as what the board read: the files on each disk
+  in the order it first read them, how much of each and a strip of when, the
+  filesystem's own blocks as one line, and the fuses that say something, the
+  blank and undocumented rest folded away. A file opens the log, filtered to it.
+- **Network** is what the built-in peer did – DHCP, DNS, TFTP, HTTP – a line an
+  event with its outcome; a file the firmware probes for and does not find is
+  dimmed, a failure red.
+- **Log** records the channels of `pimu boot --log`, as `jsonl`, and filters them
+  per channel and by text; `io` lines read as sentences.
+- **Inspect** shows the device tree the firmware handed to the ARM, the
+  bootloader configuration, the fuses, and downloads the flash as the firmware
+  left it.
+
+Whatever is downloaded shows its progress over the console. On a screen wide
+enough the page does not scroll.
 
 Parts are locked while the board is powered: the machine is built at power-on.
 
