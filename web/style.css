@@ -157,11 +157,15 @@ button:disabled { opacity: .5; cursor: default; }
 #board .led.green[data-on="true"] { fill: #2fd16f; opacity: 1; }
 
 #board .part, #board .power { cursor: pointer; }
-#board .part:hover .hit, #board .part:focus-visible .hit, #board .part[data-open="true"] .hit,
-#board .power:hover .hit, #board .power:focus-visible .hit {
-  fill: color-mix(in srgb, var(--focus) 16%, transparent); stroke: var(--focus); stroke-width: 2; stroke-dasharray: 5 4;
+#board .part:hover .hit, #board .power:hover .hit { stroke: var(--focus); stroke-width: 1.7; }
+#board .part:hover .box, #board .power:hover .box { fill: color-mix(in srgb, var(--focus) 6%, var(--sheet)); }
+#board .part:focus-visible .hit, #board .power:focus-visible .hit, #board .part[data-open="true"] .hit {
+  stroke: var(--focus); stroke-width: 2.5; filter: drop-shadow(0 0 4px var(--focus));
 }
-#board .part:focus-visible, #board .power:focus-visible { outline: none; }
+#board .part:focus-visible .box, #board .power:focus-visible .box, #board .part[data-open="true"] .box {
+  fill: color-mix(in srgb, var(--focus) 12%, var(--sheet));
+}
+#board .part:focus, #board .power:focus { outline: none; }
 #board .part[data-locked="true"] { cursor: not-allowed; }
 
 /* drawer */
