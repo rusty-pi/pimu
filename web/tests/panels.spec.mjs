@@ -254,7 +254,7 @@ test.describe("USB-C", () => {
     await app.emit({ type: "phase", phase: "running" });
     await expect(app.drawer.getByRole("button", { name: "Unplug the power" })).toBeVisible();
     await app.drawer.getByRole("button", { name: "Unplug the power" }).click();
-    await expect(app.pill).toHaveText("Off");
+    await expect(app.status).toHaveText("Off");
   });
 });
 

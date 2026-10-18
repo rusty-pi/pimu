@@ -7,31 +7,64 @@ const geometry = (app) =>
     document: document.documentElement.scrollHeight,
     board: Math.round(document.getElementById("board").getBoundingClientRect().height),
     console: Math.round(document.getElementById("term").getBoundingClientRect().top + scrollY),
-    screen: Math.round(document.querySelector(".screen").getBoundingClientRect().height),
+    screen: Math.round(document.querySelector(".console-pane").getBoundingClientRect().height),
     pageOverflow: document.documentElement.scrollWidth > innerWidth,
   }));
 
+const box = (app, selector) => app.page.locator(selector).evaluate((el) => {
+  const r = el.getBoundingClientRect();
+  return { left: Math.round(r.left), top: Math.round(r.top), right: Math.round(r.right), bottom: Math.round(r.bottom), height: Math.round(r.height) };
+});
+
+const panes = async (app) => ({
+  changes: await box(app, "#changes"),
+  board: await box(app, ".board-pane"),
+  term: await box(app, ".console-pane"),
+  part: await box(app, "#drawer"),
+  log: await box(app, ".screen"),
+});
+
 const PARTS = ["sd", "eeprom", "usb", "usbc", "eth", "hdmi", "gpio", "soc"];
 
+for (const viewport of [{ width: 1280, height: 800 }, { width: 1920, height: 1080 }]) {
+  test.describe(`on a ${viewport.width} px screen`, () => {
+    test.use({ viewport });
+
+    test("the changes, the board and the open part are three columns, and the page does not scroll", async ({ app }) => {
+      const { changes, board, term, part, log } = await panes(app);
+      expect(changes.right).toBeLessThanOrEqual(board.left);
+      expect(changes.top).toBe(board.top);
+      expect(changes.bottom).toBe(term.bottom);
+      expect(term.top).toBeGreaterThanOrEqual(board.bottom);
+      expect(part.left).toBeGreaterThanOrEqual(board.right);
+      expect(log.left).toBe(part.left);
+      expect(log.top).toBeGreaterThanOrEqual(part.bottom);
+      expect(log.bottom).toBe(term.bottom);
+      const scrolls = await app.page.evaluate(() => ({ down: document.documentElement.scrollHeight > innerHeight, across: document.documentElement.scrollWidth > innerWidth }));
+      expect(scrolls).toEqual({ down: false, across: false });
+    });
+
+    test("the open part is as tall as the board, whatever is in it", async ({ app }) => {
+      for (const name of [null, "sd", "eeprom", "soc"]) {
+        if (name) await app.open(name);
+        const { board, part } = await panes(app);
+        expect(part.top, String(name)).toBe(board.top);
+        expect(part.height, String(name)).toBe(board.height);
+      }
+    });
+
+    test("opening any part moves nothing", async ({ app }) => {
+      const before = await geometry(app);
+      for (const part of PARTS) {
+        await app.open(part);
+        await app.page.waitForTimeout(150);
+        expect(await geometry(app), part).toEqual(before);
+      }
+    });
+  });
+}
+
 test.describe("on a wide screen", () => {
-  test("opening any part moves nothing", async ({ app }) => {
-    const before = await geometry(app);
-    for (const part of PARTS) {
-      await app.open(part);
-      await app.page.waitForTimeout(150);
-      expect(await geometry(app), part).toEqual(before);
-    }
-  });
-
-  test("the panel is a column as tall as the console, whatever is in it", async ({ app }) => {
-    const heights = [];
-    for (const part of [null, "sd", "eeprom", "soc"]) {
-      if (part) await app.open(part);
-      heights.push(await app.page.evaluate(() => [document.querySelector(".screen").offsetHeight, document.getElementById("drawer").offsetHeight]));
-    }
-    for (const [screen, drawer] of heights) expect(drawer).toBe(screen);
-  });
-
   test("a long panel scrolls inside itself", async ({ app }) => {
     await app.open("eeprom");
     await expect(app.drawer).toContainText("Settings");
@@ -41,10 +74,9 @@ test.describe("on a wide screen", () => {
 
   test("switching tabs moves nothing", async ({ app }) => {
     const before = await geometry(app);
-    for (const tab of ["log", "info", "console"]) {
+    for (const tab of ["info", "log"]) {
       await app.showTab(tab);
-      const now = await geometry(app);
-      expect({ ...now, console: before.console }).toEqual({ ...before, console: before.console });
+      expect(await geometry(app), tab).toEqual(before);
     }
   });
 
@@ -79,24 +111,41 @@ test.describe("on a wide screen", () => {
   });
 });
 
+test.describe("with a long list of changes", () => {
+  test.use({ state: { configTxt: Array.from({ length: 80 }, (_, i) => `dtparam=x${i}=on`).join("\n") } });
+
+  test("it scrolls inside its column, and the page still does not", async ({ app }) => {
+    await expect(app.changes.locator(".changes li")).toHaveCount(1);
+    const scroll = await app.changes.evaluate((el) => ({ inside: el.scrollHeight > el.clientHeight, page: document.documentElement.scrollHeight > innerHeight }));
+    expect(scroll).toEqual({ inside: true, page: false });
+  });
+});
+
 test("resizing across the breakpoint turns the column into a sheet and back", async ({ app }) => {
   await app.open("sd");
   await expect(app.drawer).toHaveCSS("position", "relative");
-  await app.page.setViewportSize({ width: 600, height: 800 });
+  await app.page.setViewportSize({ width: 900, height: 800 });
   await expect(app.drawer).toHaveCSS("position", "fixed");
   await app.part("sd").click();
   await expect(app.drawer).toBeHidden();
   await app.page.setViewportSize({ width: 1280, height: 900 });
   await expect(app.drawer).toBeVisible();
-  await expect(app.drawer).toContainText("Plug something in");
+  await expect(app.drawer).toContainText("Click a part of the board");
 });
 
 test.describe("on a phone", () => {
   test.use({ viewport: { width: 375, height: 812 } });
 
-  test("the panel is a sheet over the page, so opening a part moves nothing", async ({ app }) => {
+  test("the changes stand between the board and the console", async ({ app }) => {
+    const { changes, board, term } = await panes(app);
+    expect(changes.top).toBeGreaterThanOrEqual(board.bottom);
+    expect(term.top).toBeGreaterThanOrEqual(changes.bottom);
+  });
+
+  test("the open part is a sheet over the page, so opening a part moves nothing", async ({ app }) => {
     const before = await geometry(app);
     expect(before.pageOverflow).toBe(false);
+    await expect(app.drawer).toBeHidden();
     for (const part of PARTS) {
       await app.open(part);
       await expect(app.drawer).toHaveCSS("position", "fixed");
@@ -104,17 +153,28 @@ test.describe("on a phone", () => {
     }
   });
 
-  test("the board scrolls sideways inside its panel instead of shrinking to nothing", async ({ app }) => {
-    const board = await app.page.locator("#board").evaluate((svg) => svg.getBoundingClientRect().width);
-    expect(board).toBeGreaterThanOrEqual(720);
-    const stage = await app.page.locator(".stage").evaluate((el) => ({ scrolls: el.scrollWidth > el.clientWidth, overflow: getComputedStyle(el).overflowX }));
-    expect(stage).toEqual({ scrolls: true, overflow: "auto" });
+  test("the board stands upright and fits, with the parts in two columns under the SoC", async ({ app }) => {
+    await expect(app.page.locator("#board")).toHaveAttribute("viewBox", /^0 12 400 /);
+    const rect = (sel) => app.page.locator(sel).first().evaluate((el) => el.getBoundingClientRect().toJSON());
+    const board = await rect("#board");
+    expect(board.right).toBeLessThanOrEqual(375);
+    const soc = await rect("#board .soc");
+    const columns = new Set();
+    for (const part of ["sd", "eeprom", "usb", "usbc", "eth", "hdmi", "gpio"]) {
+      const r = await rect(`#board .part[data-part="${part}"] .box`);
+      expect(r.top, part).toBeGreaterThan(soc.bottom);
+      expect(r.right, part).toBeLessThanOrEqual(board.right + 1);
+      columns.add(Math.round(r.left));
+    }
+    expect(columns.size).toBe(2);
+    const core = await rect('#board [data-core="arm0"]');
+    expect(core.width).toBeGreaterThan(40);
     expect((await geometry(app)).pageOverflow).toBe(false);
   });
 
-  test("the panel can be closed", async ({ app }) => {
+  test("the sheet closes", async ({ app }) => {
     await app.open("sd");
-    await expect(app.drawer).toBeVisible();
+    await expect(app.drawer.getByRole("heading", { name: "microSD card" })).toBeInViewport();
     await app.drawer.getByRole("button", { name: "Close" }).click();
     await expect(app.drawer).toBeHidden();
   });

@@ -646,7 +646,7 @@ mod tests {
         assert_eq!(
             text(&buf),
             "{\"us\":0,\"channel\":\"io\",\"dev\":\"net\",\"event\":\"tftp: RRQ \\\"start4.elf\\\"\"}\n\
-             {\"us\":0,\"channel\":\"io\",\"dev\":\"usb\",\"op\":\"read\",\"lba\":2,\"blocks\":3,\"files\":[]}\n"
+             {\"us\":0,\"channel\":\"io\",\"dev\":\"usb\",\"op\":\"read\",\"lba\":2,\"blocks\":3,\"files\":[],\"file_blocks\":[]}\n"
         );
     }
 

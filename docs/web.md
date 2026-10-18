@@ -23,8 +23,8 @@ run by `release.yml` once the release is published), at
 same site serves the project's apt and dnf repositories under `/apt/` and `/rpm/`
 ([`building.md`](building.md)).
 
-Open <http://localhost:8000/>, plug in the power (the plug under the board, or
-**Power on**).
+Open <http://localhost:8000/>, plug in the power (the plug above the board, or
+the **Power** switch in the top bar).
 
 ## The page
 
@@ -42,15 +42,37 @@ The board is a block diagram in the style of [`board-sheet.svg`](board-sheet.svg
 | GPIO | A HAT's ID EEPROM. |
 | BCM2711 | The silicon (B0 or C0), the memory, a board revision code, fuses to program, jitter and faults, and the checks of the `coherency` and `alignment` logs. |
 
-The six cores in the SoC are tiles of one size that light up as they start, sleep and run, and the line under the board counts the VPU and ARM instructions retired. The **Log** tab
-records the channels of `pimu boot --log`, as `jsonl`, and filters them per
-channel and by text; **Inspect** shows the device tree the firmware handed to the
-ARM, the bootloader configuration, the fuses, and downloads the flash as the
-firmware left it. Whatever is downloaded shows its progress under the board.
+The part opens in the pane right of the board, over the log. Left of the board,
+**Changes** lists everything that differs from the board the page starts with,
+what it was and what it is, each with its own reset; a part with changes carries
+their count. **Share as a link** copies a link whose fragment holds the changes
+(JSON, deflated, base64url), and opening it sets the board up the same way.
+Files you picked are not in it. A phone gets the changes under the board, the open part as a sheet
+at the bottom of the screen, and the board stood upright, its parts in two
+columns under the SoC.
+
+The six cores in the SoC are tiles of one size that light up as they start, sleep and run, and the top bar counts the VPU and ARM instructions retired. The
+serial console sits under the board, and beside it four tabs:
+
+- **I/O** reads the `io` channel as what the board read: the files on each disk
+  in the order it first read them, how much of each and a strip of when, the
+  filesystem's own blocks as one line, and the fuses that say something, the
+  blank and undocumented rest folded away. A file opens the log, filtered to it.
+- **Network** is what the built-in peer did – DHCP, DNS, TFTP, HTTP – a line an
+  event with its outcome; a file the firmware probes for and does not find is
+  dimmed, a failure red.
+- **Log** records the channels of `pimu boot --log`, as `jsonl`, and filters them
+  per channel and by text; `io` lines read as sentences.
+- **Inspect** shows the device tree the firmware handed to the ARM, the
+  bootloader configuration, the fuses, and downloads the flash as the firmware
+  left it.
+
+Whatever is downloaded shows its progress over the console. On a screen wide
+enough the page does not scroll.
 
 Parts are locked while the board is powered: the machine is built at power-on.
 The settings are kept in the browser's local storage; **Reset all settings**
-under the page puts every one back to its default.
+under the changes puts every one back to its default.
 
 ## The cores on threads
 
@@ -58,7 +80,7 @@ under the page puts every one back to its default.
 Cortex-A72 a Web Worker of its own, as `pimu boot --parallel` gives it a host
 thread ([`running.md`](running.md#running-the-arm-cores-in-parallel---parallel)):
 a Linux boot can use the machine's cores, and a run no longer repeats exactly.
-The clock under the board says **cores on threads** when they are.
+The clock in the top bar says **cores on threads** when they are.
 
 It needs more than the build:
 
@@ -162,7 +184,8 @@ node tests/coverage-report.mjs      # which functions of the page no test ran
   WebAssembly module (`tests/stub-pimu.mjs`): downloads and their progress, local
   files, ranged disk images, errors, pause, keys, the inspect answers.
 - `tests/layout.spec.mjs` holds the page still: opening a part, switching a tab,
-  a download or a run moves nothing, on a wide screen and on a phone.
+  a download or a run moves nothing, on a wide screen and on a phone, and checks
+  where the panes stand at each width.
 - CI (`.github/workflows/web-ui.yml`) fails when a function of the page's scripts
   is run by no test.
 

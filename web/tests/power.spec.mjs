@@ -192,7 +192,7 @@ test.describe("what stops a power-on", () => {
       await app.powerButton.click();
       await expect(app.page.locator("#toast")).toHaveText(message);
       await expect(app.page.locator("#toast")).toHaveClass(/bad/);
-      await expect(app.pill).toHaveText("Off");
+      await expect(app.status).toHaveText("Off");
       await expect(app.page.locator("#downloads")).toBeHidden();
       expect(await app.workers()).toEqual([expect.objectContaining({ url: expect.stringContaining("worker.mjs") })]);
     });
@@ -202,29 +202,28 @@ test.describe("what stops a power-on", () => {
     await app.page.route(EEPROM_URL, (route) => route.fulfill({ status: 503, body: "later" }));
     await app.powerButton.click();
     await expect(app.page.locator("#toast")).toContainText("answered 503");
-    await expect(app.pill).toHaveText("Off");
+    await expect(app.status).toHaveText("Off");
   });
 });
 
 test.describe("while the board is powered", () => {
-  test("the phases show in the pill and the buttons follow", async ({ app }) => {
+  test("the phases show in the status and the buttons follow", async ({ app }) => {
     await expect(app.page.locator("#pause")).toHaveCSS("visibility", "hidden");
     await app.powerOn();
-    await expect(app.powerButton).toHaveText("Power off");
-    await expect(app.powerButton).toHaveAttribute("data-on", "true");
+    await expect(app.powerButton).toHaveAttribute("aria-checked", "true");
     await app.emit({ type: "phase", phase: "downloading" });
-    await expect(app.pill).toHaveText("Downloading");
+    await expect(app.status).toHaveText("Downloading");
     await app.emit({ type: "phase", phase: "starting" });
-    await expect(app.pill).toHaveText("Starting");
+    await expect(app.status).toHaveText("Starting");
     await expect(app.page.locator("#pause")).toHaveCSS("visibility", "hidden");
     await app.emit({ type: "phase", phase: "running" });
-    await expect(app.pill).toHaveText("Running");
+    await expect(app.status).toHaveText("Running");
     await expect(app.page.locator("#pause")).toHaveCSS("visibility", "visible");
 
     await app.page.locator("#pause").click();
     expect((await app.sent()).at(-1)).toEqual({ type: "pause" });
     await app.emit({ type: "phase", phase: "paused" });
-    await expect(app.pill).toHaveText("Paused");
+    await expect(app.status).toHaveText("Paused");
     await expect(app.page.locator("#pause")).toHaveText("Resume");
     await app.page.locator("#pause").click();
     expect((await app.sent()).at(-1)).toEqual({ type: "resume" });
@@ -232,7 +231,7 @@ test.describe("while the board is powered", () => {
     await expect(app.page.locator("#pause")).toHaveText("Pause");
 
     await app.emit({ type: "phase", phase: "ended" });
-    await expect(app.pill).toHaveText("Stopped");
+    await expect(app.status).toHaveText("Stopped");
     await expect(app.page.locator("#pause")).toHaveCSS("visibility", "hidden");
   });
 
@@ -250,12 +249,12 @@ test.describe("while the board is powered", () => {
   test("the switch on the board powers it on and off, by mouse and by keyboard", async ({ app }) => {
     await app.page.locator("#power-plug").click();
     await app.page.waitForFunction(() => window.__machine() !== undefined);
-    await expect(app.pill).not.toHaveText("Off");
+    await expect(app.status).not.toHaveText("Off");
     await app.page.locator("#power-plug").focus();
     await app.page.keyboard.press("Enter");
-    await expect(app.pill).toHaveText("Off");
+    await expect(app.status).toHaveText("Off");
     await app.page.keyboard.press("Space");
-    await expect(app.pill).not.toHaveText("Off");
+    await expect(app.status).not.toHaveText("Off");
   });
 
   test("powering off ends the worker and clears the cores and the clock", async ({ app }) => {
@@ -263,7 +262,7 @@ test.describe("while the board is powered", () => {
     await app.emit({ type: "state", io: {}, state: stateOf({ arm: ["running", "sleeping", "off", "off"] }) });
     await expect(app.page.locator("#clock")).not.toBeEmpty();
     await app.powerButton.click();
-    await expect(app.pill).toHaveText("Off");
+    await expect(app.status).toHaveText("Off");
     const [, machine] = [null, ...(await app.workers()).filter((w) => w.sent.some((m) => m.type === "power-on"))];
     expect(machine.terminated).toBe(true);
     await expect(app.page.locator("#clock")).toBeEmpty();
@@ -286,15 +285,14 @@ test.describe("while the board is powered", () => {
     await expect(app.part("sd")).toHaveAttribute("data-locked", "false");
   });
 
-  test("an empty panel says what is true of a powered board", async ({ app }) => {
-    await expect(app.drawer).toContainText("Plug something in");
-    await expect(app.drawer).toContainText("The Power switch at the top of the board starts it.");
+  test("the empty panel and the changes say what is true of a powered board", async ({ app }) => {
+    await expect(app.drawer).toContainText("Click a part of the board to change what is plugged into it.");
     await app.running();
-    await expect(app.drawer).toContainText("The board is powered");
-    await expect(app.drawer).not.toContainText("Plug something in");
-    await expect(app.drawer).toContainText("switches it off");
+    await expect(app.drawer).toContainText("Click a part of the board to see what is plugged into it.");
+    await expect(app.changes).toContainText("The board is powered, so its parts are locked");
     await app.powerButton.click();
-    await expect(app.drawer).toContainText("Plug something in");
+    await expect(app.drawer).toContainText("Click a part of the board to change what is plugged into it.");
+    await expect(app.changes).not.toContainText("The board is powered");
   });
 
   test("the Power button in the USB-C panel works while the rest is locked", async ({ app }) => {
@@ -307,9 +305,9 @@ test.describe("while the board is powered", () => {
   test("a worker that reports an error ends the run", async ({ app }) => {
     await app.running();
     await app.emit({ type: "error", message: "unreachable executed" });
-    await expect(app.pill).toHaveText("Error");
+    await expect(app.status).toHaveText("Error");
     await expect(app.page.locator("#toast")).toHaveText("unreachable executed");
-    await expect(app.powerButton).toHaveText("Power on");
+    await expect(app.powerButton).toHaveAttribute("aria-checked", "false");
     await app.powerOn();
     expect((await app.workers()).filter((w) => w.sent.some((m) => m.type === "power-on"))).toHaveLength(2);
   });
@@ -317,7 +315,7 @@ test.describe("while the board is powered", () => {
   test("a worker that dies is reported", async ({ app }) => {
     await app.running();
     await app.page.evaluate(() => window.__machine().onerror({ message: "out of memory" }));
-    await expect(app.pill).toHaveText("Error");
+    await expect(app.status).toHaveText("Error");
     await expect(app.page.locator("#toast")).toHaveText("out of memory");
     await app.powerOn();
     await app.page.evaluate(() => window.__machine().onerror({ message: "" }));

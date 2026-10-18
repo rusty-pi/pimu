@@ -781,8 +781,7 @@ impl BuiltinPeer {
                 let resp = self.http_response(&head);
                 self.conns.get_mut(&key).unwrap().response = Some(resp);
             } else if c.request.len() > HTTP_MAX_REQUEST || c.fin_received {
-                self.log
-                    .push("http: incomplete request, connection reset".into());
+                self.note("http: incomplete request, connection reset");
                 self.tcp_send(key, TCP_RST | TCP_ACK, None);
                 self.conns.remove(&key);
                 return;
@@ -847,8 +846,7 @@ impl BuiltinPeer {
         let octets = "Content-Type: application/octet-stream".to_string();
         match range.as_deref().map(|r| parse_range(r, total)) {
             None => {
-                self.log
-                    .push(format!("http: {method} {path} -> 200, {total} bytes"));
+                self.note(format!("http: {method} {path} -> 200, {total} bytes"));
                 reply("200 OK", &[octets], &data, head_only)
             }
             Some(Some((first, last))) => {
@@ -864,8 +862,7 @@ impl BuiltinPeer {
                 )
             }
             Some(None) => {
-                self.log
-                    .push(format!("http: {method} {path} unsatisfiable range -> 416"));
+                self.note(format!("http: {method} {path} unsatisfiable range -> 416"));
                 let cr = format!("Content-Range: bytes */{total}");
                 reply("416 Range Not Satisfiable", &[cr], b"", head_only)
             }
@@ -916,8 +913,7 @@ impl BuiltinPeer {
             self.tftp_error(mac, ip, tid, port, 1, "File not found");
             return;
         };
-        self.log
-            .push(format!("tftp: RRQ {name} -> {} bytes", data.len()));
+        self.note(format!("tftp: RRQ {name} -> {} bytes", data.len()));
 
         // Unknown options are left out of the OACK, which is how the client
         // learns they were not taken.
@@ -978,8 +974,7 @@ impl BuiltinPeer {
             TFTP_ACK if be16(p, 2) == t.block as u16 => {
                 if t.block == t.blocks() {
                     let t = self.transfers.remove(&tid).unwrap();
-                    self.log
-                        .push(format!("tftp: {} sent, {} bytes", t.name, t.data.len()));
+                    self.note(format!("tftp: {} sent, {} bytes", t.name, t.data.len()));
                 } else {
                     self.transfers.get_mut(&tid).unwrap().block += 1;
                     self.tftp_send_block(tid);
@@ -1541,6 +1536,37 @@ mod tests {
             .take_log()
             .iter()
             .any(|l| l.contains("-> 200, 10000 bytes")));
+    }
+
+    #[test]
+    fn what_the_peer_serves_reaches_the_io_log() {
+        #[derive(Clone, Default)]
+        struct Buf(std::rc::Rc<std::cell::RefCell<Vec<u8>>>);
+        impl std::io::Write for Buf {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                self.0.borrow_mut().extend_from_slice(b);
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let buf = Buf::default();
+        let spec = crate::log::Spec::parse("io").unwrap();
+        let mut p = BuiltinPeer::new().with_log(crate::log::Log::new(spec, Box::new(buf.clone())));
+        p.add_file("boot.img", vec![0; 100]);
+        p.add_file("boot.sig", b"sig".to_vec());
+        http(&mut p, "GET /boot.img HTTP/1.1\r\n\r\n", 65535);
+        http(&mut p, "GET /boot.sig HTTP/1.1\r\n\r\n", 65535);
+        let out = String::from_utf8(buf.0.borrow().clone()).unwrap();
+        assert!(
+            out.contains("io: net  http: GET /boot.img -> 200, 100 bytes"),
+            "{out}"
+        );
+        assert!(
+            out.contains("io: net  http: GET /boot.sig -> 200, 3 bytes"),
+            "{out}"
+        );
     }
 
     #[test]

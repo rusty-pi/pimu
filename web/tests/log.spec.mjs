@@ -64,7 +64,7 @@ test.describe("reading the log", () => {
     const rows = app.page.locator(".logrow");
     await expect(rows).toHaveCount(3);
     await expect(rows.nth(0)).toHaveText("0.001500mboxVPU read request 0x1");
-    await expect(rows.nth(1)).toHaveText("2.000000iodev=sd  op=read  lba=0x0  blocks=1  files=(partition table)");
+    await expect(rows.nth(1)).toHaveText("2.000000iomicroSD card: read 1 block at 0x0 – (partition table)");
     await expect(rows.nth(2)).toHaveText("2.000100otprow 30");
     await expect(app.page.locator("#log-count")).toHaveText("(3)");
     const colours = await rows.locator(".c").evaluateAll((els) => els.map((e) => e.style.color));

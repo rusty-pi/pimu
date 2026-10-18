@@ -96,7 +96,7 @@ function mergeDeep(base, extra) {
 
 const state = (() => {
   try {
-    return mergeDeep(DEFAULT_STATE, JSON.parse(localStorage.getItem("pimu-web") ?? "{}"));
+    return mergeDeep(structuredClone(DEFAULT_STATE), JSON.parse(localStorage.getItem("pimu-web") ?? "{}"));
   } catch {
     return structuredClone(DEFAULT_STATE);
   }
@@ -105,6 +105,8 @@ const state = (() => {
 let saveTimer = 0;
 function changed() {
   refreshBoard();
+  renderChanges();
+  if (!$("#tab-net").hidden) renderNet();
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     try {
@@ -140,12 +142,11 @@ let lastIo = {};
 function setPhase(next, detail) {
   phase = next;
   const labels = { off: "Off", downloading: "Downloading", starting: "Starting", running: "Running", paused: "Paused", ended: "Stopped", error: "Error" };
-  const pill = $("#phase");
-  pill.dataset.phase = next;
-  pill.textContent = labels[next] + (detail ? ` – ${detail}` : "");
+  const status = $("#phase");
+  status.dataset.phase = next;
+  status.textContent = labels[next] + (detail ? ` – ${detail}` : "");
   const on = powered();
-  $("#power").textContent = on ? "Power off" : "Power on";
-  $("#power").dataset.on = on;
+  $("#power").setAttribute("aria-checked", on);
   $("#power-plug").dataset.on = on;
   $("#power-label").textContent = on ? "click to unplug" : "click to plug in";
   $("#led-power").dataset.on = on;
@@ -153,6 +154,8 @@ function setPhase(next, detail) {
   $("#pause").textContent = next === "paused" ? "Resume" : "Pause";
   for (const part of document.querySelectorAll(".part")) part.dataset.locked = on && part.dataset.part !== "soc" ? "true" : "false";
   if (!$("#tab-log").hidden) renderLog();
+  if (!$("#tab-io").hidden) renderIo();
+  if (!$("#tab-net").hidden) renderNet();
   if (!on) {
     setCores(null);
     $("#led-act").dataset.on = false;
@@ -548,9 +551,12 @@ function clearScreen() {
   renderInspect(null);
   logRows.length = 0;
   logCounts.clear();
+  resetIo();
   $("#result").textContent = "";
   $("#log-count").textContent = "";
   renderLog();
+  renderIo();
+  renderNet();
 }
 
 $("#term").addEventListener("keydown", (event) => {
@@ -581,6 +587,7 @@ const logCounts = new Map();
 const logOff = new Set();
 let logFilter = "";
 let logTimer = 0;
+let ioTimer = 0;
 const LOG_KEPT = 20_000;
 
 function addLog(text) {
@@ -594,6 +601,7 @@ function addLog(text) {
     }
     logRows.push(row);
     logCounts.set(row.channel, (logCounts.get(row.channel) ?? 0) + 1);
+    if (row.channel === "io") noteIo(row);
   }
   if (logRows.length > LOG_KEPT) logRows.splice(0, logRows.length - LOG_KEPT);
   $("#log-count").textContent = logRows.length ? `(${logRows.length})` : "";
@@ -602,10 +610,20 @@ function addLog(text) {
     renderFilters();
     renderLogRows();
   }, 250);
+  if (!ioTimer && (!$("#tab-io").hidden || !$("#tab-net").hidden)) ioTimer = setTimeout(() => {
+    ioTimer = 0;
+    if (!$("#tab-io").hidden) renderIo();
+    if (!$("#tab-net").hidden) renderNet();
+  }, 500);
+  if (io.netSeen) $("#net-count").textContent = `(${io.netSeen})`;
 }
 
 function describeRow(row) {
   if (typeof row.msg === "string") return row.msg;
+  if (row.channel === "io") {
+    const said = describeIo(row);
+    if (said) return said;
+  }
   return Object.entries(row)
     .filter(([k]) => k !== "us" && k !== "channel")
     .map(([k, v]) => `${k}=${Array.isArray(v) ? v.join(",") : v}`)
@@ -679,6 +697,183 @@ function renderLogRows() {
   if (stick) box.scrollTop = box.scrollHeight;
 }
 
+// ---- I/O: the io channel as what the board read, not as lines -------------------------------
+
+const DISKS = { sd: "microSD card", usb: "USB 3.0 stick", otg: "USB-C stick" };
+const BLOCK = 512;
+const STRIP_BINS = 48;
+const NET_KEPT = 500;
+
+let io;
+function resetIo() {
+  io = { disks: new Map(), otp: new Map(), net: [], netSeen: 0, lastUs: 0 };
+}
+resetIo();
+
+const plural = (n, word) => `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
+const bytes = (n) => (n < 1024 ? `${n} B` : n < 1 << 20 ? `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KiB` : `${(n / (1 << 20)).toFixed(1)} MiB`);
+const isMetadata = (name) => /(^|:)\(/.test(name) || name.endsWith("/");
+const fileLabel = (name) => name.replace(/^p\d+:/, "").replace(/^\/(?=.)/, "");
+
+// What a line of the io channel says, as a sentence; null when it is none of
+// the kinds the page knows, so the line shows its fields instead.
+function describeIo(row) {
+  if (row.dev === "net" && typeof row.event === "string") return row.event;
+  if (row.dev === "otp") {
+    const what = row.op === "write" ? `programmed to ${row.value} (was ${row.was})` : `read ${row.value}`;
+    return `OTP row ${row.row} ${what}${row.meaning ? ` · ${row.meaning}` : ""}`;
+  }
+  if (row.dev in DISKS && Number.isFinite(row.blocks)) {
+    const names = (row.files ?? []).map(fileLabel);
+    return `${DISKS[row.dev]}: ${row.op} ${plural(row.blocks, "block")} at ${row.lba}${names.length ? ` – ${names.join(", ")}` : ""}`;
+  }
+  return null;
+}
+
+function noteIo(row) {
+  io.lastUs = Math.max(io.lastUs, row.us);
+  if (row.dev === "net" && typeof row.event === "string") {
+    const m = /^([\w-]+): (.*)$/.exec(row.event);
+    io.net.push({ us: row.us, proto: m ? m[1] : "", text: m ? m[2] : row.event });
+    io.netSeen += 1;
+    if (io.net.length > NET_KEPT) io.net.shift();
+  } else if (row.dev === "otp") {
+    const fuse = io.otp.get(row.row) ?? { row: row.row, value: row.value, meaning: row.meaning ?? "", reads: 0, was: null };
+    if (row.op === "write") Object.assign(fuse, { value: row.value, was: fuse.was ?? row.was });
+    else fuse.reads += 1;
+    io.otp.set(row.row, fuse);
+  } else if (row.dev in DISKS && Number.isFinite(row.blocks)) {
+    const files = io.disks.get(row.dev) ?? new Map();
+    io.disks.set(row.dev, files);
+    const names = row.files?.length ? row.files : ["(blocks no file holds)"];
+    const held = Array.isArray(row.file_blocks) && row.file_blocks.length === names.length ? row.file_blocks : names.map(() => row.blocks / names.length);
+    names.forEach((name, i) => {
+      const file = files.get(name) ?? { name, first: row.us, last: row.us, read: 0, written: 0, runs: 0, bins: new Map() };
+      file.last = row.us;
+      file.runs += 1;
+      file[row.op === "write" ? "written" : "read"] += held[i] * BLOCK;
+      file.bins.set(row.us, (file.bins.get(row.us) ?? 0) + 1);
+      files.set(name, file);
+    });
+  }
+}
+
+// When a file was read, over the whole run so far: a strip of bins, darker
+// where more of it was read.
+function strip(file) {
+  const span = Math.max(io.lastUs, 1);
+  const bins = new Array(STRIP_BINS).fill(0);
+  for (const [us, n] of file.bins) bins[Math.min(STRIP_BINS - 1, Math.floor((us / span) * STRIP_BINS))] += n;
+  const most = Math.max(...bins);
+  return h("span", { class: "strip", "aria-hidden": "true" },
+    bins.map((n) => h("i", { style: n ? `opacity:${0.35 + (0.65 * n) / most}` : "opacity:0" })));
+}
+
+const seconds = (us) => `${(us / 1e6).toFixed(us < 1e7 ? 2 : 1)} s`;
+
+// The partition table, boot sectors, FATs and directories, as one line.
+function filesystem(list) {
+  const parts = list.filter((f) => isMetadata(f.name));
+  if (!parts.length) return [];
+  const bins = new Map();
+  for (const f of parts) for (const [us, n] of f.bins) bins.set(us, (bins.get(us) ?? 0) + n);
+  const dirs = parts.filter((f) => f.name.endsWith("/")).length;
+  const kinds = [...new Set(parts.filter((f) => !f.name.endsWith("/")).map((f) => fileLabel(f.name).replace(/[()]/g, "")))];
+  return [{
+    name: `(${[...kinds, dirs ? (dirs === 1 ? "1 directory" : `${dirs} directories`) : null].filter(Boolean).join(", ")})`,
+    first: Math.min(...parts.map((f) => f.first)), last: Math.max(...parts.map((f) => f.last)),
+    read: parts.reduce((n, f) => n + f.read, 0), written: parts.reduce((n, f) => n + f.written, 0),
+    runs: parts.reduce((n, f) => n + f.runs, 0), bins,
+  }];
+}
+
+function diskSection(dev, files) {
+  const all = [...files.values()];
+  const real = all.filter((f) => !isMetadata(f.name)).sort((a, b) => a.first - b.first);
+  const list = [...real, ...filesystem(all)];
+  const read = list.reduce((n, f) => n + f.read, 0);
+  const written = list.reduce((n, f) => n + f.written, 0);
+  return h("section", { class: "io-disk" },
+    h("h3", {}, DISKS[dev], h("span", { class: "count" }, [plural(real.length, "file"), `${bytes(Math.round(read))} read`, written ? `${bytes(Math.round(written))} written` : null].filter(Boolean).join(" · "))),
+    h("ul", { class: "io-files" }, list.map((f) => h("li", {
+      class: isMetadata(f.name) ? "meta" : null,
+      title: `${f.name}\nfirst read at ${seconds(f.first)}, last at ${seconds(f.last)}, ${plural(f.runs, "run")} of blocks`,
+    },
+      h("button", { class: "link name", type: "button", onclick: () => showLinesFor(fileLabel(f.name)) }, fileLabel(f.name)),
+      strip(f),
+      h("span", { class: "num" }, bytes(Math.round(f.read + f.written)), f.written ? h("span", { class: "wrote" }, " w") : null),
+      h("span", { class: "num when" }, seconds(f.first))))));
+}
+
+const fuseRow = (f) => h("tr", { class: f.was !== null ? "wrote" : isBlank(f) ? "blank" : null },
+  h("th", {}, `row ${f.row}`),
+  h("td", { class: "num" }, f.value, f.was !== null ? h("small", {}, ` was ${f.was}`) : null),
+  h("td", {}, f.meaning));
+const isBlank = (f) => /^0x0+$/.test(f.value);
+const UNDOCUMENTED = "not documented";
+
+// The fuses that say something first; the blank and undocumented rest folded away.
+function otpSection() {
+  const rows = [...io.otp.values()].sort((a, b) => a.row - b.row);
+  const telling = rows.filter((f) => f.was !== null || (!isBlank(f) && f.meaning !== UNDOCUMENTED));
+  const rest = rows.filter((f) => !telling.includes(f));
+  const written = rows.filter((f) => f.was !== null).length;
+  return h("section", {},
+    h("h3", {}, "Fuses (OTP)", h("span", { class: "count" }, [`${plural(rows.length, "row")} read`, written ? `${written} programmed` : null].filter(Boolean).join(" · "))),
+    telling.length ? h("table", { class: "kv io-otp" }, telling.map(fuseRow)) : null,
+    rest.length ? h("details", { class: "io-more" },
+      h("summary", {}, `${plural(rest.length, "more row")}: ${rest.filter(isBlank).length} blank, ${rest.filter((f) => f.meaning === UNDOCUMENTED).length} undocumented`),
+      h("table", { class: "kv io-otp" }, rest.map(fuseRow))) : null);
+}
+
+function showLinesFor(text) {
+  logFilter = text;
+  $('.tabs [data-tab="log"]').click();
+}
+
+function renderIo() {
+  const pane = $("#tab-io");
+  const sections = clean([
+    ...[...io.disks].map(([dev, files]) => diskSection(dev, files)),
+    io.otp.size ? otpSection() : null,
+  ]);
+  pane.replaceChildren(sections.length
+    ? h("div", { class: "io" }, sections)
+    : h("p", { class: "hint" }, state.log.includes("io")
+      ? (worker ? "Nothing read yet." : "Power the board on to see the files it reads and the fuses.")
+      : "The io channel is off: switch it on in Log to see the files the board reads and the fuses."));
+}
+
+// What the network peer did: one line an event, its outcome after the arrow.
+// A file that is not there is how the firmware probes, so it is dimmed, not red.
+const FAILED = /-> (5\d\d|416)|refused|reset/;
+const MISSED = /-> (404|not found)|aborted by client/;
+
+function renderNet() {
+  $("#net-count").textContent = io.netSeen ? `(${io.netSeen})` : "";
+  const pane = $("#tab-net");
+  if (!io.net.length) {
+    pane.replaceChildren(h("p", { class: "hint" }, !state.log.includes("io")
+      ? "The io channel is off: switch it on in Log to see what goes over the network."
+      : !state.net.plugged
+        ? "The Ethernet cable is unplugged. Plug it into the built-in peer in the Ethernet panel to see DHCP, DNS, TFTP and HTTP here."
+        : worker ? "Nothing on the network yet." : "Power the board on to see what it asks the network for."));
+    return;
+  }
+  const box = h("ul", { class: "io-net" }, io.net.map((e) => {
+    const [what, outcome] = e.text.split(/ -> (.*)/s);
+    return h("li", { class: FAILED.test(e.text) ? "bad" : MISSED.test(e.text) ? "missed" : null },
+      h("span", { class: "num when" }, seconds(e.us)),
+      h("span", { class: "proto" }, e.proto),
+      h("span", { class: "what" }, what, outcome ? h("span", { class: "outcome" }, ` → ${outcome}`) : null));
+  }));
+  const old = pane.querySelector(".io-net");
+  const stick = !old || old.scrollTop + old.clientHeight >= old.scrollHeight - 6;
+  const dropped = io.netSeen - io.net.length;
+  pane.replaceChildren(...clean([dropped ? h("p", { class: "hint" }, `The last ${NET_KEPT} of ${io.netSeen.toLocaleString()} events.`) : null, box]));
+  if (stick) box.scrollTop = box.scrollHeight;
+}
+
 // ---- inspect ---------------------------------------------------------------------------
 
 let inspectTimer = 0;
@@ -739,6 +934,8 @@ for (const button of document.querySelectorAll(".tabs [data-tab]")) {
       $(`#tab-${other.dataset.tab}`).hidden = !on;
     }
     if (button.dataset.tab === "log") renderLog();
+    if (button.dataset.tab === "io") renderIo();
+    if (button.dataset.tab === "net") renderNet();
     if (button.dataset.tab === "info") refreshInspect();
   });
 }
@@ -810,7 +1007,7 @@ function drawerFrame(title, ...body) {
   return [
     h("header", {}, h("h2", {}, title),
       powered() ? h("span", { class: "lock", title: "The board is powered: power off to change what is plugged in." }, "Locked – power off to change") : null,
-      h("button", { class: "small", onclick: () => { openPart = null; renderDrawer(); } }, "Close")),
+      h("button", { class: "small", type: "button", onclick: () => { openPart = null; renderDrawer(); } }, "Close")),
     h("fieldset", { style: "border:0;padding:0;margin:0", disabled: powered() }, ...body),
   ];
 }
@@ -1060,30 +1257,299 @@ function settingRow(setting, image, edits) {
   return row;
 }
 
-const wide = matchMedia("(min-width: 980px)");
-wide.addEventListener("change", () => renderDrawer());
+// ---- the changes: what differs from the board the page starts with ------------------------
 
-function renderDrawer() {
-  refreshBoard();
-  const drawer = $("#drawer");
-  for (const part of document.querySelectorAll(".part")) part.dataset.open = part.dataset.part === openPart;
-  if (!openPart) {
-    drawer.hidden = !wide.matches;
-    drawer.replaceChildren(h("div", { class: "drawer-body empty" }, ...(powered()
-      ? [
-          h("h2", {}, "The board is powered"),
-          h("p", {}, "Click a part of the board to see what is plugged into it. The parts are locked while the board runs: switch the power off to change them."),
-          h("p", { class: "hint" }, "The Power switch at the top of the board switches it off."),
-        ]
-      : [
-          h("h2", {}, "Plug something in"),
-          h("p", {}, "Click a part of the board to change what is plugged into it: the microSD slot, the EEPROM, the USB sockets, the Ethernet jack, the monitor, the GPIO header, or the processor for the board itself."),
-          h("p", { class: "hint" }, "The Power switch at the top of the board starts it."),
-        ])));
+const PART_NAMES = { sd: "microSD", eeprom: "EEPROM", usb: "USB 3.0", usbc: "USB-C", eth: "Ethernet", hdmi: "HDMI 0", gpio: "GPIO", soc: "BCM2711", log: "Log" };
+const CARD_CONTENTS = { official: "official firmware", github: "a GitHub directory", files: "files from my computer", image: "a disk image", none: "no card" };
+const IMAGE_FROM = { file: "a local file", url: "a URL", none: "nothing" };
+const EEPROM_FROM = { official: "official image", url: "a URL", file: "a file" };
+
+const notSet = (v) => (v === "" || v == null ? "not set" : String(v));
+const onOff = (v) => (v ? "on" : "off");
+const textLines = (text) => text.split("\n").map((l) => l.trim()).filter(Boolean);
+const at = (root, path) => path.split(".").reduce((o, k) => o?.[k], root);
+function setAt(root, path, value) {
+  const keys = path.split(".");
+  const last = keys.pop();
+  keys.reduce((o, k) => o[k], root)[last] = value;
+}
+
+const sdMode = (mode) => (s) => s.sd.mode === mode;
+const netOn = (key) => (s) => s.net.plugged && s.net[key].on;
+const netMode = (key, mode) => (s) => netOn(key)(s) && s.net[key].mode === mode;
+
+// [path in the state, part, what it is, how a value reads, when it matters,
+//  where on the board it is counted when that is not the part]
+const CHANGE_FIELDS = [
+  ["sd.mode", "sd", "On the card", (v) => CARD_CONTENTS[v]],
+  ["sd.github.repo", "sd", "Repository", notSet, sdMode("github")],
+  ["sd.github.ref", "sd", "Branch or tag", notSet, sdMode("github")],
+  ["sd.github.path", "sd", "Directory", notSet, sdMode("github")],
+  ["sd.image.kind", "sd", "Card image from", (v) => IMAGE_FROM[v], sdMode("image")],
+  ["sd.image.url", "sd", "Card image URL", notSet, (s) => s.sd.mode === "image" && s.sd.image.kind === "url"],
+  ["configTxt", "sd", "config.txt", "lines", (s) => s.sd.mode !== "image"],
+  ["cmdline", "sd", "cmdline.txt", notSet, (s) => s.sd.mode !== "image"],
+  ["eeprom.kind", "eeprom", "Bootloader image", (v) => EEPROM_FROM[v]],
+  ["eeprom.url", "eeprom", "Image URL", notSet, (s) => s.eeprom.kind === "url"],
+  ["bootOrder", "eeprom", "Boot order", (v) => (v ? `BOOT_ORDER=${formatBootOrder(v)}` : "the bootloader's")],
+  ["extraBootconf", "eeprom", "Other lines", "lines"],
+  ["skipSignedBoot", "eeprom", "Skip the signature check of boot.img", onOff],
+  ["tryboot", "eeprom", "Tryboot", onOff],
+  ["usb.kind", "usb", "Stick", (v) => IMAGE_FROM[v]],
+  ["usb.url", "usb", "Stick URL", notSet, (s) => s.usb.kind === "url"],
+  ["usb.mb", "usb", "Stick size (MiB)", notSet, (s) => s.usb.kind !== "none"],
+  ["otg.kind", "usbc", "Stick on the OTG port", (v) => IMAGE_FROM[v]],
+  ["otg.url", "usbc", "Stick URL", notSet, (s) => s.otg.kind === "url"],
+  ["otg.dock", "usbc", "Behind a USB-C dock", onOff, (s) => s.otg.kind !== "none"],
+  ["net.plugged", "eth", "Cable", (v) => (v ? "plugged in" : "unplugged")],
+  ["net.tftp.on", "eth", "Boot over TFTP", onOff, (s) => s.net.plugged],
+  ["net.tftp.mode", "eth", "Served over TFTP", (v) => CARD_CONTENTS[v], netOn("tftp")],
+  ["net.tftp.github.repo", "eth", "TFTP repository", notSet, netMode("tftp", "github")],
+  ["net.tftp.github.ref", "eth", "TFTP branch or tag", notSet, netMode("tftp", "github")],
+  ["net.tftp.github.path", "eth", "TFTP directory", notSet, netMode("tftp", "github")],
+  ["net.http.on", "eth", "Boot over HTTP", onOff, (s) => s.net.plugged],
+  ["net.http.mode", "eth", "Served over HTTP", (v) => CARD_CONTENTS[v], netOn("http")],
+  ["net.http.github.repo", "eth", "HTTP repository", notSet, netMode("http", "github")],
+  ["net.http.github.ref", "eth", "HTTP branch or tag", notSet, netMode("http", "github")],
+  ["net.http.github.path", "eth", "HTTP directory", notSet, netMode("http", "github")],
+  ["display", "hdmi", "Monitor", (v) => (v ? "plugged in" : "none")],
+  ["board.stepping", "soc", "Silicon", (v) => v.toUpperCase()],
+  ["board.memoryMb", "soc", "Memory", (v) => `${v / 1024} GiB`, null, "memory"],
+  ["board.boardRev", "soc", "Board revision code", notSet],
+  ["otpRows", "soc", "OTP fuses", "lines"],
+  ["advanced.jitter", "soc", "Jitter seed", notSet],
+  ["advanced.faults", "soc", "Faults: one chance in", notSet],
+  ["advanced.checkCoherency", "soc", "Report stale cache reads", onOff],
+  ["advanced.checkAlignment", "soc", "Report misaligned VPU accesses", onOff],
+  ["advanced.skipUnimpl", "soc", "Step over instructions the decoder lacks", onOff],
+  ["advanced.parallel", "soc", "ARM cores on worker threads", onOff],
+  ["log", "log", "Channels", (v) => (v.length ? v.join(", ") : "none")],
+];
+
+const PICKED_FILES = [
+  ["hat", "gpio", "HAT ID EEPROM"],
+  ["edid", "hdmi", "EDID"],
+  ["pubkey", "eeprom", "Public key for signed boot"],
+];
+
+// One entry a difference: `before` and `after` read as values, `removed` and
+// `added` as lines of a text, and `reset` puts the default back.
+function changeList() {
+  const list = [];
+  for (const [path, part, what, show, when, spot = part] of CHANGE_FIELDS) {
+    if (when && !when(state)) continue;
+    const now = at(state, path);
+    const was = at(DEFAULT_STATE, path);
+    if (JSON.stringify(now) === JSON.stringify(was)) continue;
+    const reset = () => setAt(state, path, structuredClone(was));
+    if (show === "lines") {
+      const before = textLines(was);
+      const after = textLines(now);
+      if (before.join("\n") === after.join("\n")) continue;
+      const removed = before.filter((l) => !after.includes(l));
+      const added = after.filter((l) => !before.includes(l));
+      const reordered = !removed.length && !added.length;
+      list.push({ part, spot, what, removed: reordered ? before : removed, added: reordered ? after : added, reset });
+    } else {
+      list.push({ part, spot, what, before: show(was), after: show(now), reset });
+    }
+  }
+  const keys = new Set([...Object.keys(DEFAULT_STATE.bootconf), ...Object.keys(state.bootconf)]);
+  for (const key of keys) {
+    const was = DEFAULT_STATE.bootconf[key];
+    const now = state.bootconf[key];
+    if (was === now) continue;
+    list.push({
+      part: "eeprom", spot: "eeprom", what: key, code: true, before: was ?? "the image's", after: now ?? "the image's",
+      reset: () => (was === undefined ? delete state.bootconf[key] : (state.bootconf[key] = was)),
+    });
+  }
+  for (const [slot, part, what] of PICKED_FILES) {
+    if (files[slot]) list.push({ part, spot: part, what, before: "none", after: files[slot].name, reset: () => (files[slot] = null) });
+  }
+  const order = Object.keys(PART_NAMES);
+  return list.sort((a, b) => order.indexOf(a.part) - order.indexOf(b.part));
+}
+
+function resetAll() {
+  if (!confirm("Reset every setting to its default? The page reloads: a running board stops, and picked files are dropped.")) return;
+  clearTimeout(saveTimer);
+  try {
+    localStorage.removeItem("pimu-web");
+  } catch {
+    // blocked storage held nothing to reset
+  }
+  location.reload();
+}
+
+function diffNodes(item) {
+  if (item.removed) {
+    return [
+      ...item.removed.map((l) => h("div", {}, h("del", {}, `− ${l}`))),
+      ...item.added.map((l) => h("div", {}, h("ins", {}, `+ ${l}`))),
+    ];
+  }
+  return [h("del", {}, item.before), " → ", h("ins", {}, item.after)];
+}
+
+function changesPane() {
+  const list = changeList();
+  const locked = powered();
+  const showPart = (part) => {
+    if (part === "log") {
+      $('.tabs [data-tab="log"]').click();
+      return;
+    }
+    openPart = part;
+    renderDrawer();
+  };
+  return h("div", { class: "changes-pane" },
+    h("h2", {}, "Changes", h("span", { class: "count" }, list.length ? String(list.length) : "")),
+    h("p", { class: "hint" }, locked
+      ? "The board is powered, so its parts are locked: switch the power off to change them."
+      : "What you change from the board this page starts with."),
+    list.length
+      ? h("ul", { class: "changes" }, list.map((item) => h("li", {},
+          h("button", { class: "link where", type: "button", onclick: () => showPart(item.part) }, PART_NAMES[item.part]),
+          h("span", { class: "what" }, item.code ? h("code", {}, item.what) : item.what),
+          h("button", {
+            class: "link", type: "button", disabled: locked, "aria-label": `Reset ${PART_NAMES[item.part]}: ${item.what}`,
+            onclick: () => { item.reset(); changed(); if (openPart) renderDrawer(); if (item.part === "log") renderLog(); },
+          }, "reset"),
+          h("div", { class: "diff" }, diffNodes(item)))))
+      : h("p", { class: "hint" }, "Nothing changed yet: this is the board as the page sets it up."),
+    list.length
+      ? h("div", { class: "changes-foot" },
+          h("button", { class: "link", type: "button", onclick: share }, "Share as a link"),
+          h("button", { class: "link", type: "button", onclick: resetAll }, "Reset all settings"))
+      : null);
+}
+
+// ---- sharing: the changes as a link ------------------------------------------------------
+//
+// The link carries what differs from the defaults, as JSON, deflated and
+// base64url-encoded into the fragment, so it never reaches a server.
+
+const SHARE_PREFIX = "board=";
+const isPlain = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+
+function stateDiff(now, was) {
+  if (JSON.stringify(now) === JSON.stringify(was)) return undefined;
+  if (!isPlain(now) || !isPlain(was) || now === state.bootconf) return now;
+  const out = {};
+  for (const key of Object.keys(now)) {
+    const diff = stateDiff(now[key], was[key]);
+    if (diff !== undefined) out[key] = diff;
+  }
+  return out;
+}
+
+// What a link says, laid over the defaults: only keys the page knows, and only
+// values of the type the page keeps there.
+// The values a link may set where the page offers a choice; anything else
+// keeps the default.
+const SHARED_CHOICES = {
+  "sd.mode": Object.keys(CARD_CONTENTS),
+  "sd.image.kind": ["file", "url"],
+  "eeprom.kind": Object.keys(EEPROM_FROM),
+  "usb.kind": Object.keys(IMAGE_FROM),
+  "otg.kind": Object.keys(IMAGE_FROM),
+  "net.tftp.mode": BOOT_FILE_SOURCES.map(([mode]) => mode),
+  "net.http.mode": BOOT_FILE_SOURCES.map(([mode]) => mode),
+  "board.stepping": ["b0", "c0"],
+  "board.memoryMb": [1024, 2048],
+  log: LOG_CHANNELS.map(([name]) => name),
+  bootOrder: BOOT_DEVICES.map(([digit]) => digit),
+};
+
+function overShared(base, shared, path = "") {
+  const allowed = SHARED_CHOICES[path];
+  if (path === "bootconf") return isPlain(shared) ? Object.fromEntries(Object.entries(shared).filter(([, v]) => typeof v === "string")) : base;
+  if (isPlain(base)) return Object.fromEntries(Object.keys(base).map((k) => [k, isPlain(shared) && k in shared ? overShared(base[k], shared[k], path ? `${path}.${k}` : k) : base[k]]));
+  if (Array.isArray(base) || base === null) {
+    if (!Array.isArray(shared)) return base;
+    const kept = shared.filter((v) => typeof v === "string" && (!allowed || allowed.includes(v)));
+    return base === null && !kept.length ? base : kept;
+  }
+  if (typeof shared !== typeof base) return base;
+  return allowed && !allowed.includes(shared) ? base : shared;
+}
+
+async function squeeze(bytes, stream) {
+  return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(stream)).arrayBuffer());
+}
+
+function toBase64Url(bytes) {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+const fromBase64Url = (text) => Uint8Array.from(atob(text.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
+
+const usesFiles = (s) => [
+  s.sd.mode === "files", s.sd.mode === "image" && s.sd.image.kind === "file", s.eeprom.kind === "file", s.usb.kind === "file", s.otg.kind === "file",
+  s.net.plugged && s.net.tftp.on && s.net.tftp.mode === "files", s.net.plugged && s.net.http.on && s.net.http.mode === "files",
+  ...PICKED_FILES.map(([slot]) => !!files[slot]),
+].some(Boolean);
+
+async function share() {
+  const json = new TextEncoder().encode(JSON.stringify(stateDiff(state, DEFAULT_STATE) ?? {}));
+  const link = `${location.origin}${location.pathname}#${SHARE_PREFIX}${toBase64Url(await squeeze(json, new CompressionStream("deflate-raw")))}`;
+  const note = usesFiles(state) ? " The files you picked are not in it: whoever opens it picks their own." : "";
+  try {
+    await navigator.clipboard.writeText(link);
+    toast(`Link copied.${note}`);
+  } catch {
+    history.replaceState(null, "", link);
+    toast(`The link is in the address bar.${note}`);
+  }
+}
+
+async function loadShared() {
+  const fragment = location.hash.slice(1);
+  if (!fragment.startsWith(SHARE_PREFIX)) return;
+  if (powered()) {
+    toast("Power the board off to open the one in the link.", true);
     return;
   }
-  drawer.hidden = false;
-  drawer.replaceChildren(h("div", { class: "drawer-body" }, ...PANELS[openPart]().filter(Boolean)));
+  history.replaceState(null, "", location.pathname + location.search);
+  let shared;
+  try {
+    shared = JSON.parse(new TextDecoder().decode(await squeeze(fromBase64Url(fragment.slice(SHARE_PREFIX.length)), new DecompressionStream("deflate-raw"))));
+  } catch {
+    toast("The board in the link could not be read.", true);
+    return;
+  }
+  if (changeList().length && !confirm("Replace your changes with the board in the link?")) return;
+  const next = overShared(DEFAULT_STATE, shared);
+  for (const key of Object.keys(DEFAULT_STATE)) state[key] = structuredClone(next[key]);
+  openPart = null;
+  changed();
+  renderDrawer();
+  if (!$("#tab-log").hidden) renderLog();
+  toast("Opened the board from the link.");
+}
+
+addEventListener("hashchange", loadShared);
+
+function renderChanges() {
+  $("#changes").replaceChildren(changesPane());
+}
+
+// ---- the part pane: over the log on a wide screen, a sheet on a narrow one ----------------
+
+function renderDrawer() {
+  const drawer = $("#drawer");
+  for (const part of document.querySelectorAll(".part")) part.dataset.open = part.dataset.part === openPart;
+  drawer.dataset.empty = !openPart;
+  drawer.replaceChildren(openPart
+    ? h("div", { class: "drawer-body" }, ...PANELS[openPart]().filter(Boolean))
+    : h("div", { class: "drawer-body empty" }, h("p", { class: "hint" }, powered()
+      ? "Click a part of the board to see what is plugged into it."
+      : "Click a part of the board to change what is plugged into it.")));
+  renderChanges();
+  refreshBoard();
 }
 
 const short = (text, n = 18) => (text.length > n ? `${text.slice(0, n - 1)}…` : text);
@@ -1129,8 +1595,49 @@ function refreshBoard() {
     if (filled !== undefined) text.closest(".part").dataset.filled = filled;
   }
   $("#soc-title").textContent = `BCM2711 ${s.board.stepping.toUpperCase()}`;
+  $("#identity").textContent = `Raspberry Pi 4 Model B · BCM2711 ${s.board.stepping.toUpperCase()} · ${s.board.boardRev.trim() ? `revision ${s.board.boardRev.trim()}` : `${s.board.memoryMb / 1024} GiB`}`;
+  showChangeCounts(changeList());
   $("#eth-led").dataset.on = s.net.plugged && powered();
 }
+
+// A count on each part of the board that has changes, at the corner of its box.
+function showChangeCounts(list) {
+  for (const part of document.querySelectorAll("#board .part")) {
+    const spot = part.querySelector("[data-sub]")?.dataset.sub ?? part.dataset.part;
+    const n = list.filter((c) => c.spot === spot).length;
+    let badge = part.querySelector(".badge");
+    if (!n) {
+      badge?.remove();
+      continue;
+    }
+    if (!badge) {
+      const box = part.querySelector(".box, .soc");
+      const x = box.x.baseVal.value + box.width.baseVal.value;
+      const y = box.y.baseVal.value;
+      const svg = (tag, attrs) => Object.entries(attrs).reduce((el, [k, v]) => (el.setAttribute(k, v), el), document.createElementNS("http://www.w3.org/2000/svg", tag));
+      badge = svg("g", { class: "badge" });
+      badge.append(svg("circle", { cx: x, cy: y, r: 8 }), svg("text", { x, y: y + 3.5, "text-anchor": "middle" }));
+      part.append(badge);
+    }
+    badge.querySelector("text").textContent = n;
+  }
+}
+
+// On a phone the board stands upright: each part moves to its place in two
+// columns under the SoC, given as `data-portrait="x,y"` for the corner of its box.
+const portrait = matchMedia("(max-width: 699px)");
+function layoutBoard() {
+  const board = $("#board");
+  board.classList.toggle("portrait", portrait.matches);
+  board.setAttribute("viewBox", portrait.matches ? "0 12 400 672" : "0 0 960 512");
+  for (const group of board.querySelectorAll("[data-portrait]")) {
+    const [x, y] = group.dataset.portrait.split(",").map(Number);
+    const box = group.querySelector(".box, .soc");
+    group.style.transform = portrait.matches ? `translate(${x - box.x.baseVal.value}px, ${y - box.y.baseVal.value}px)` : "";
+  }
+}
+portrait.addEventListener("change", layoutBoard);
+layoutBoard();
 
 for (const part of document.querySelectorAll(".part")) {
   const choose = () => {
@@ -1158,17 +1665,9 @@ plug.addEventListener("keydown", (e) => {
 });
 $("#power").addEventListener("click", togglePower);
 $("#pause").addEventListener("click", () => worker?.postMessage({ type: phase === "paused" ? "resume" : "pause" }));
-$("#reset").addEventListener("click", () => {
-  if (!confirm("Reset every setting to its default? The page reloads: a running board stops, and picked files are dropped.")) return;
-  clearTimeout(saveTimer);
-  try {
-    localStorage.removeItem("pimu-web");
-  } catch {
-    // blocked storage held nothing to reset
-  }
-  location.reload();
-});
-
 setPhase("off");
 refreshBoard();
+renderIo();
+renderNet();
 renderInspect(null);
+loadShared();

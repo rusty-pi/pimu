@@ -140,7 +140,8 @@ firmware and Linux stamp their own logs:
 
 `jsonl:` gives one JSON object a line instead, with the time in µs:
 `{"us":2959261,"channel":"pcie","msg":"..."}`. `io` keeps its own fields there
-(`dev`, `op`, `lba`, `blocks`, `files`, ...). A reset builds a new machine, so
+(`dev`, `op`, `lba`, `blocks`, `files`, ...); `file_blocks` says how many of a
+run's blocks each of its `files` holds. A reset builds a new machine, so
 the time starts from 0 again, as after a reboot.
 
 ```bash
