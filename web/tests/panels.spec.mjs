@@ -443,3 +443,12 @@ test("Reset all settings puts every setting back to its default", async ({ app }
   await expect(app.page.locator('[data-sub="memory"]')).toHaveText("1 GiB");
   expect(await app.page.evaluate(() => localStorage.getItem("pimu-web"))).toBeNull();
 });
+
+test("Reset all settings changes nothing when cancelled", async ({ app }) => {
+  await app.open("soc");
+  await app.field("Memory").locator("select").selectOption("2048");
+  app.page.once("dialog", (dialog) => dialog.dismiss());
+  await app.page.getByRole("button", { name: "Reset all settings" }).click();
+  await expect(app.page.locator('[data-sub="memory"]')).toHaveText("2 GiB");
+  expect(await app.localState()).toMatchObject({ board: { memoryMb: 2048 } });
+});
