@@ -599,7 +599,11 @@ fn system<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M) -> Exec {
                     cpu.exclusive = None;
                     Ok(())
                 }
-                4..=6 => Ok(()),
+                4 | 5 => {
+                    mem.barrier();
+                    Ok(())
+                }
+                6 => Ok(()),
                 _ => undef(),
             },
             4 if rt == 31 => msr_imm(cpu, op1, op2, crm),
@@ -997,14 +1001,22 @@ fn ld_st_exclusive<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M) ->
             None
         };
         cpu.exclusive = Some((addr, cpu.last_pa));
+        cpu.exclusive_value = v1;
+        cpu.exclusive_size = bytes;
         cpu.set_xr(rt, true, v1);
         if let Some(v2) = v2 {
             cpu.set_xr(rt2, true, v2);
         }
     } else {
-        let ok = cpu.exclusive.map(|(va, _)| va) == Some(addr);
+        let mut ok = cpu.exclusive.map(|(va, _)| va) == Some(addr);
         if ok {
+            if !pair {
+                mem.expect_unchanged(cpu.exclusive_value);
+            }
             cpu.write(mem, addr, bytes, cpu.xr(rt, true))?;
+            if !pair && mem.exclusive_lost() {
+                ok = false;
+            }
             if pair {
                 cpu.write(
                     mem,

@@ -267,6 +267,34 @@ passes it, so CI is unpaced. Pacing changes nothing the guest sees — same
 instructions, same modelled time — and the time spent asleep does not count
 against `--max-wall`; `-v` reports it.
 
+## Running the ARM cores in parallel: `--parallel`
+
+By default every core is interpreted in turn on one host thread, which is what
+makes a run repeat exactly. `--parallel` gives each ARM core a host thread of its
+own, for a person who wants to reach a shell on a host with cores to spare. The
+VPU, the peripherals and the GIC stay on the thread that ran them before; the
+cores read and write DRAM in place with atomic operations, and every access
+outside DRAM is a request to that thread.
+
+What changes:
+
+- **A run no longer repeats.** How two cores' stores interleave depends on the
+  host, so the golden transcripts and retired counts do not apply. Use it to
+  look at a boot, not to check one.
+- **Time still follows instructions.** A core's clock is the instructions it has
+  retired, and the cores and the VPU keep within about 67 µs of guest time of
+  each other, so a guest that moves between cores never sees the counter go
+  back. What does depend on the host is the order other cores' stores arrive in.
+- **The busy-wait shortcuts are off** (parking, SHA-256 skipping): a poll on a
+  device is a round trip each time. After 128 identical reads in a row the core
+  lets guest time pass faster instead, so a polling loop costs the host little.
+- **Only the cores' own work runs in parallel.** A boot is as fast as its
+  busiest core allows: the firmware stage before the ARM is released, and a
+  kernel or userspace that keeps one core busy, gain nothing.
+- **Not in the browser.** WebAssembly threads need shared memory and
+  cross-origin isolation, and the page does not have either; the flag does
+  nothing there.
+
 ## The OTP fuses
 
 A reset keeps the fuses, but the next run starts from the model's own unless

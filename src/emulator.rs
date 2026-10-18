@@ -17,11 +17,16 @@ pub struct Emulator {
     pub cpu: Vpu,
     /// VPU core 1, `None` until the firmware writes its core-control `WAKEUP`.
     pub cpu1: Option<Vpu>,
-    pub machine: Machine,
     /// Release ARM core 0 when `arm_loader` writes the ARM control block, then run it
     /// in lock-step with the VPU ([`crate::arm`]). Always on for a boot.
     pub arm_enabled: bool,
+    /// Declared before [`Self::machine`] so it drops first: threads of a
+    /// parallel run read the machine's DRAM until they are joined.
     pub arm: Option<crate::arm::ArmSide>,
+    /// Run the ARM cores on threads of their own once released, which makes a
+    /// run differ from the next. Off unless asked for.
+    pub parallel_arm: bool,
+    pub machine: Machine,
     pub input: ConsoleInput,
     /// Stream the console to stdout as the run goes (`PIMU_LIVE_CONSOLE=0` to stop).
     pub stream_console: bool,
@@ -154,6 +159,7 @@ impl Emulator {
             machine,
             arm_enabled: true,
             arm: None,
+            parallel_arm: false,
             input: ConsoleInput::default(),
             stream_console: true,
             // `PIMU_SLOW_LOOP=1` puts every step through every check.
@@ -208,6 +214,10 @@ impl Emulator {
                 }
             }
         };
+
+        if let Some(arm) = self.arm.as_mut() {
+            arm.pause(&mut self.machine);
+        }
 
         let RunState {
             diag,
@@ -913,7 +923,9 @@ impl Emulator {
     #[inline]
     fn step_arm(&mut self) -> Option<RunEnd> {
         if self.arm_enabled && self.arm.is_none() && self.machine.armctrl.take_release() {
-            self.arm = Some(crate::arm::ArmSide::released(&mut self.machine));
+            let mut arm = crate::arm::ArmSide::released(&mut self.machine);
+            arm.set_parallel(self.parallel_arm);
+            self.arm = Some(arm);
             self.machine.defer_sleep = true;
         }
         if let Some(arm) = self.arm.as_mut() {

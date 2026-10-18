@@ -294,6 +294,14 @@ RUNNING:
     --max-steps <n>
               Stop after <n> instructions. No cap by default: this is for
               pinning a run to an exact count (bisecting, probes).
+    --parallel
+              Run each ARM core on a host thread of its own instead of taking
+              turns in one. For a person who wants a Linux shell sooner on a
+              host with cores to spare: a run is no longer exactly repeatable
+              (how two cores' stores interleave depends on the host), the
+              busy-wait shortcuts are off, and nothing here has been compared
+              against the golden transcripts. The default stays the repeatable
+              one.
     --speed <factor|max>
               How fast the guest may run against real time: 1 by default, so
               the model sleeps whenever its clock is ahead of the host's and
@@ -464,6 +472,7 @@ struct BootOpts {
     exc_vbase: u32,
     trace_from: u32,
     smp: bool,
+    parallel: bool,
     as_core1: bool,
     patches: Vec<(u32, u32)>,
     dumps: Vec<(u32, u32)>,
@@ -831,6 +840,7 @@ impl BootOpts {
         let mut exc_vbase: u32 = 0;
         let mut trace_from: u32 = 0;
         let mut smp = false;
+        let mut parallel = false;
         let mut as_core1 = false;
         let mut patches: Vec<(u32, u32)> = Vec::new();
         let mut dumps: Vec<(u32, u32)> = Vec::new();
@@ -925,6 +935,7 @@ impl BootOpts {
                     exc_vbase = parse_u32(it.next().context("--exc-vbase needs a value")?)?
                 }
                 "--smp" => smp = true,
+                "--parallel" => parallel = true,
                 "--as-core1" => as_core1 = true,
                 "--trace-from" => {
                     trace = true;
@@ -1300,6 +1311,7 @@ impl BootOpts {
             exc_vbase,
             trace_from,
             smp,
+            parallel,
             as_core1,
             patches,
             dumps,
@@ -2002,11 +2014,13 @@ impl<'a> Rig<'a> {
             trace_from,
             as_core1,
             smp,
+            parallel,
             quiet,
             ..
         } = *self.opts;
         let mut emu = Emulator::new(machine, start);
         emu.stream_console = !quiet;
+        emu.parallel_arm = parallel;
         // Faulting is the default: silently stepping over an unknown instruction
         // makes the firmware quietly not do whatever it was for.
         emu.set_unimpl_policy(if skip_unimpl {
