@@ -1667,7 +1667,8 @@ layoutBoard();
 // Traffic on the io channel makes the SoC reel the part's cord in, the way a
 // vacuum cleaner takes its cord: ripples run from the part to the SoC, widest
 // near the part and pulled taut where the cord goes in, while the marks on it
-// slide inwards. It fades out once the part is quiet.
+// slide inwards. A bent cord is pulled straight, and it falls back into its
+// bend once the part is quiet.
 const WIRE_OF_DEV = { eeprom: "eeprom", sd: "sd", emmc: "sd", usb: "usb", otg: "usbc", net: "eth" };
 const wires = (() => {
   const QUIET_MS = 600;
@@ -1692,14 +1693,22 @@ const wires = (() => {
     const centre = { x: box.x.baseVal.value + box.width.baseVal.value / 2, y: box.y.baseVal.value + box.height.baseVal.value / 2 };
     const away = (p) => Math.hypot(p.x - centre.x, p.y - centre.y);
     const fromPart = away(at(0)) < away(at(total));
+    const [start, intake] = [at(fromPart ? 0 : total), at(fromPart ? total : 0)];
+    const span = Math.hypot(intake.x - start.x, intake.y - start.y) || 1;
+    const [tx, ty] = [(intake.x - start.x) / span, (intake.y - start.y) / span];
     const points = [];
     for (let d = 0; d <= total; d += 2) {
       const s = fromPart ? d : total - d;
       const [before, here, after] = [at(s - 1), at(s), at(s + 1)];
       const length = Math.hypot(after.x - before.x, after.y - before.y) || 1;
-      points.push({ u: d / total, s: d, x: here.x, y: here.y, nx: -(after.y - before.y) / length, ny: (after.x - before.x) / length });
+      const sign = fromPart ? 1 : -1;
+      points.push({
+        u: d / total, s: d, x: here.x, y: here.y,
+        nx: -sign * (after.y - before.y) / length, ny: sign * (after.x - before.x) / length,
+        sx: start.x + tx * span * d / total, sy: start.y + ty * span * d / total, snx: -ty, sny: tx,
+      });
     }
-    points.intake = at(fromPart ? total : 0);
+    points.intake = intake;
     return points;
   };
 
@@ -1716,10 +1725,13 @@ const wires = (() => {
   };
 
   const along = (points, swing, phase) => {
-    const out = points.map(({ u, s, x, y, nx, ny }) => {
+    const mix = (a, b) => a + (b - a) * swing;
+    const out = points.map(({ u, s, x, y, nx, ny, sx, sy, snx, sny }) => {
       const taut = 2.6 * Math.sin(Math.PI * u) * (1 - u);
       const lift = swing * AMPLITUDE * taut * Math.sin(2 * Math.PI * s / WAVELENGTH - phase);
-      return `${(x + nx * lift).toFixed(2)},${(y + ny * lift).toFixed(2)}`;
+      const [mx, my] = [mix(nx, snx), mix(ny, sny)];
+      const norm = Math.hypot(mx, my) || 1;
+      return `${(mix(x, sx) + mx / norm * lift).toFixed(2)},${(mix(y, sy) + my / norm * lift).toFixed(2)}`;
     });
     out.push(`${points.intake.x.toFixed(2)},${points.intake.y.toFixed(2)}`);
     return `M${out.join("L")}`;

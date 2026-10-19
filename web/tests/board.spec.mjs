@@ -92,6 +92,14 @@ test("traffic on the io channel makes the part's wire wobble, and it settles onc
   };
   expect(await ends("eeprom")).toEqual([[170, 174], [242, 174]]);
   expect(await ends("sd")).toEqual([[305, 430], [350, 370]]);
+  const offStraight = async () => {
+    await app.emit({ type: "log", text: JSON.stringify({ us: 2, channel: "io", ...rows[1] }) + "\n" });
+    await app.page.waitForTimeout(500);
+    const d = await app.part("sd").locator(".wave").getAttribute("d");
+    return Math.max(...d.slice(1).split("L").map((p) => p.split(",").map(Number))
+      .map(([x, y]) => Math.abs(45 * (y - 430) + 60 * (x - 305)) / 75));
+  };
+  await expect.poll(offStraight).toBeLessThan(6);
   for (const part of ["eeprom", "sd", "usb", "usbc", "eth"]) {
     await expect(app.part(part)).toHaveAttribute("data-busy", "false");
     await expect(app.part(part)).toHaveAttribute("data-wobbling", "false");
