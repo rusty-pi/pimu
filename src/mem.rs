@@ -729,9 +729,24 @@ impl<S: Store> Ram<S> {
     /// zeros has been written. The pointer holds until the contents are
     /// taken or the RAM dropped.
     #[inline(always)]
+    pub fn page_bytes(&self, off: u64) -> Option<*mut u8> {
+        let p = self.map().byte(off);
+        (!p.is_null()).then_some(p)
+    }
+
+    /// [`Self::page_bytes`] as instruction words.
+    #[inline(always)]
     pub fn page_ptr(&self, off: u64) -> Option<*const u32> {
         let p = self.map().byte(off);
         (!p.is_null()).then_some(p.cast::<u32>().cast_const())
+    }
+
+    /// The write generation of the page holding `off` (inside RAM), where a
+    /// cache of what the page holds can watch it; null where nothing but
+    /// zeros has been written.
+    #[inline(always)]
+    pub fn gen_ptr(&self, off: u64) -> *const u64 {
+        self.map().gen(off).cast_const()
     }
 
     /// A little-endian value of 1, 2, 4 or 8 bytes `off` bytes into RAM, for
@@ -792,11 +807,15 @@ impl<S: Store> Ram<S> {
     }
 
     /// A write that did not come from the VPU leaves the caches out of date.
-    #[inline]
+    #[inline(always)]
     fn note_write(&mut self, off: u64, len: usize) {
-        if !self.coherency.is_on() {
-            return;
+        if self.coherency.is_on() {
+            self.note_write_tracked(off, len);
         }
+    }
+
+    #[inline(never)]
+    fn note_write_tracked(&mut self, off: u64, len: usize) {
         let at = self.base.wrapping_add(off as u32);
         match self.coherency.writer() {
             crate::coherency::Master::Vpu => {}

@@ -13,20 +13,36 @@
 
 use super::cpu::{Cpu, Memory};
 use super::exec::{
-    self, add_with_carry, bit, decode_bit_masks, field, logic_flags, mask, sext, shift_reg,
-    single_access, transfer, Access, Exec,
+    self, add_with_carry, bit, decode_bit_masks, extend_reg, field, logic_flags, mask, ror, sext,
+    shift_reg, single_access, Access, Exec,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub(super) enum Kind {
+    // The last of a straight run (`Op::ends_run`).
     #[default]
     Execute,
-    DpImm,
-    DpReg,
+    BranchReg,
+    B,
+    Bl,
+    BCond,
+    Cbz,
+    Tbz,
+    // Loads and stores (`Op::touches_memory`).
     LdStReg,
     LdStPair,
-    BranchReg,
+    LoadUimm,
+    StoreUimm,
+    LdStRegOff,
+    LdStImm,
+    Pair,
+    // The PC, or an exception at it.
+    DpImm,
+    DpReg,
+    Adr,
+    Adrp,
+    // Registers and flags only (`Op::pure`).
     AddImm,
     SubImm,
     AddsImm,
@@ -34,17 +50,12 @@ pub(super) enum Kind {
     MovConst,
     MovK,
     LogicImm,
-    Adr,
-    Adrp,
     LogicReg,
     AddSubReg,
-    B,
-    Bl,
-    BCond,
-    Cbz,
-    Tbz,
-    LoadUimm,
-    StoreUimm,
+    Bitfield,
+    Ccmp,
+    Csel,
+    Madd,
 }
 
 /// One decoded instruction. What `a`, `b`, `c` and `imm` hold depends on
@@ -57,11 +68,33 @@ pub struct Op {
     b: u8,
     c: u8,
     imm: u64,
+    imm2: u64,
 }
 
 impl Op {
     pub fn insn(&self) -> u32 {
         self.insn
+    }
+
+    /// Whether the instruction loads or stores; the other forms a straight
+    /// run holds before its last touch nothing but registers and flags.
+    #[inline(always)]
+    pub fn touches_memory(&self) -> bool {
+        (Kind::LdStReg as u8..=Kind::Pair as u8).contains(&(self.kind as u8))
+    }
+
+    /// Whether the instruction can move the PC anywhere but on by 4, or do
+    /// anything else [`exec::execute`] does: the last of a straight run.
+    #[inline(always)]
+    pub fn ends_run(&self) -> bool {
+        self.kind as u8 <= Kind::Tbz as u8
+    }
+
+    /// Whether the instruction reads and writes nothing but general
+    /// registers and flags, and cannot raise an exception: it needs no PC.
+    #[inline(always)]
+    pub fn pure(&self) -> bool {
+        self.kind as u8 >= Kind::AddImm as u8
     }
 }
 
@@ -106,6 +139,34 @@ fn op(insn: u32, kind: Kind, a: u32, b: u32, c: u32, imm: u64) -> Op {
         b: b as u8,
         c: c as u8,
         imm,
+        imm2: 0,
+    }
+}
+
+fn op2(insn: u32, kind: Kind, a: u32, b: u32, c: u32, imm: u64, imm2: u64) -> Op {
+    Op {
+        imm2,
+        ..op(insn, kind, a, b, c, imm)
+    }
+}
+
+/// [`Access`] as two bits, and back.
+fn access_bits(a: Access) -> u32 {
+    match a {
+        Access::Store => 0,
+        Access::Load => 1,
+        Access::LoadSigned64 => 2,
+        Access::LoadSigned32 => 3,
+    }
+}
+
+#[inline(always)]
+fn access_of(bits: u32) -> Access {
+    match bits & 3 {
+        0 => Access::Store,
+        1 => Access::Load,
+        2 => Access::LoadSigned64,
+        _ => Access::LoadSigned32,
     }
 }
 
@@ -179,6 +240,18 @@ fn dp_imm(insn: u32) -> Option<Op> {
                 _ => op(insn, Kind::MovK, rd, pos, sf as u32, imm),
             })
         }
+        0b110 => {
+            let opc = field(insn, 29, 2);
+            let n = field(insn, 22, 1);
+            let immr = field(insn, 16, 6);
+            let imms = field(insn, 10, 6);
+            if opc == 3 || n != sf as u32 || (!sf && (immr | imms) & 0x20 != 0) {
+                return None;
+            }
+            let datasize = if sf { 64 } else { 32 };
+            let (wmask, tmask) = decode_bit_masks(n, imms, immr, false, datasize)?;
+            Some(op2(insn, Kind::Bitfield, rd, rn, immr, wmask, tmask))
+        }
         _ => None,
     }
 }
@@ -217,9 +290,9 @@ fn ldst(insn: u32) -> Option<Op> {
     if insn & 0x3F00_0000 == 0x0800_0000 || insn & 0x3B00_0000 == 0x1800_0000 {
         None
     } else if insn & 0x3A00_0000 == 0x2800_0000 {
-        Some(op(insn, Kind::LdStPair, 0, 0, 0, 0))
+        Some(pair(insn).unwrap_or_else(|| op(insn, Kind::LdStPair, 0, 0, 0, 0)))
     } else if insn & 0x3B00_0000 == 0x3800_0000 {
-        Some(op(insn, Kind::LdStReg, 0, 0, 0, 0))
+        Some(ld_st_reg(insn).unwrap_or_else(|| op(insn, Kind::LdStReg, 0, 0, 0, 0)))
     } else if insn & 0x3B00_0000 == 0x3900_0000 {
         if bit(insn, 26) {
             return None;
@@ -238,6 +311,65 @@ fn ldst(insn: u32) -> Option<Op> {
     } else {
         None
     }
+}
+
+fn pair(insn: u32) -> Option<Op> {
+    if bit(insn, 26) {
+        return None;
+    }
+    let opc = field(insn, 30, 2);
+    let mode = field(insn, 23, 2);
+    let load = bit(insn, 22);
+    let (scale, access) = match opc {
+        0 => (2, Access::Load),
+        1 if load && mode != 0 => (2, Access::LoadSigned64),
+        2 => (3, Access::Load),
+        _ => return None,
+    };
+    let access = if load { access } else { Access::Store };
+    let off = sext(field(insn, 15, 7) as u64, 7) << scale;
+    let flags = scale | access_bits(access) << 2 | mode << 4;
+    Some(op2(
+        insn,
+        Kind::Pair,
+        field(insn, 0, 5),
+        field(insn, 5, 5),
+        field(insn, 10, 5),
+        off,
+        flags as u64,
+    ))
+}
+
+fn ld_st_reg(insn: u32) -> Option<Op> {
+    if bit(insn, 26) {
+        return None;
+    }
+    let (rt, rn) = (field(insn, 0, 5), field(insn, 5, 5));
+    let mode = field(insn, 10, 2);
+    let (scale, access) = single_access(field(insn, 30, 2), false, field(insn, 22, 2)).ok()??;
+    let access = access_bits(access);
+    if bit(insn, 21) {
+        let option = field(insn, 13, 3);
+        if mode != 2 || option & 2 == 0 {
+            return None;
+        }
+        let shift = if bit(insn, 12) { scale } else { 0 };
+        let flags = scale | access << 2 | option << 4 | shift << 7;
+        return Some(op(
+            insn,
+            Kind::LdStRegOff,
+            rt,
+            rn,
+            field(insn, 16, 5),
+            flags as u64,
+        ));
+    }
+    if mode == 2 {
+        return None;
+    }
+    let imm = sext(field(insn, 12, 9) as u64, 9);
+    let flags = scale | access << 2 | mode << 4;
+    Some(op2(insn, Kind::LdStImm, rt, rn, 0, imm, flags as u64))
 }
 
 fn dp_reg(insn: u32) -> Option<Op> {
@@ -261,16 +393,110 @@ fn dp_reg(insn: u32) -> Option<Op> {
         let flags = shift | imm6 << 2 | (bit(insn, 30) as u32) << 8;
         let flags = flags | (bit(insn, 29) as u32) << 9 | (sf as u32) << 11;
         Some(op(insn, Kind::AddSubReg, rd, rn, rm, flags as u64))
+    } else if insn & 0x1FE0_0000 == 0x1A40_0000 {
+        if !bit(insn, 29) || bit(insn, 10) || bit(insn, 4) {
+            return None;
+        }
+        let flags = field(insn, 12, 4)
+            | (sf as u32) << 4
+            | (bit(insn, 30) as u32) << 5
+            | (bit(insn, 11) as u32) << 6;
+        Some(op(
+            insn,
+            Kind::Ccmp,
+            rn,
+            rm,
+            flags,
+            u64::from(field(insn, 0, 4) << 28),
+        ))
+    } else if insn & 0x1FE0_0000 == 0x1A80_0000 {
+        let op2 = field(insn, 10, 2);
+        if bit(insn, 29) || op2 > 1 {
+            return None;
+        }
+        let flags = field(insn, 12, 4) | (bit(insn, 30) as u32) << 4 | op2 << 5 | (sf as u32) << 6;
+        Some(op(insn, Kind::Csel, rd, rn, rm, flags as u64))
+    } else if insn & 0x1F00_0000 == 0x1B00_0000 {
+        if field(insn, 29, 2) != 0 || field(insn, 21, 3) != 0 {
+            return None;
+        }
+        let flags = field(insn, 10, 5) | (bit(insn, 15) as u32) << 5 | (sf as u32) << 6;
+        Some(op(insn, Kind::Madd, rd, rn, rm, flags as u64))
     } else {
         None
     }
 }
 
 impl Cpu {
+    /// [`exec::transfer`] for a general register, with the access itself out
+    /// of line: inlined into every handler that loads or stores, it would
+    /// crowd the registers of the loop the handlers are inlined into.
+    #[inline(always)]
+    fn gpr<M: Memory + ?Sized>(
+        &mut self,
+        mem: &mut M,
+        scale: u32,
+        access: Access,
+        rt: u32,
+        addr: u64,
+    ) -> Result<Option<(u64, bool)>, exec::Stop> {
+        let bytes = 1u32 << scale;
+        if let Access::Store = access {
+            let v = self.xr(rt, true);
+            if !self.host_write(mem, addr, bytes, v) && !self.store_out(mem, addr, bytes, v) {
+                return Err(self.take_fault());
+            }
+            return Ok(None);
+        }
+        let v = match self.host_read(mem, addr, bytes) {
+            Some(v) => v,
+            None => match self.load_out(mem, addr, bytes) {
+                Some(v) => v,
+                None => return Err(self.take_fault()),
+            },
+        };
+        Ok(Some(match access {
+            Access::LoadSigned64 => (sext(v, 8 * bytes), true),
+            Access::LoadSigned32 => (sext(v, 8 * bytes), false),
+            _ => (v, true),
+        }))
+    }
+
+    #[inline(never)]
+    fn load_out<M: Memory + ?Sized>(&mut self, mem: &mut M, va: u64, size: u32) -> Option<u64> {
+        match self.read(mem, va, size) {
+            Ok(v) => Some(v),
+            Err(s) => {
+                self.fault = Some(s);
+                None
+            }
+        }
+    }
+
+    #[inline(never)]
+    fn store_out<M: Memory + ?Sized>(&mut self, mem: &mut M, va: u64, size: u32, v: u64) -> bool {
+        match self.write(mem, va, size, v) {
+            Ok(()) => true,
+            Err(s) => {
+                self.fault = Some(s);
+                false
+            }
+        }
+    }
+
+    #[cold]
+    fn take_fault(&mut self) -> exec::Stop {
+        self.fault.take().unwrap_or(exec::UNDEF)
+    }
+
     /// [`exec::execute`] for a decoded instruction.
     #[inline(always)]
     pub(super) fn run_op<M: Memory + ?Sized>(&mut self, o: Op, mem: &mut M) -> Exec {
         let (a, b, c) = (o.a as u32, o.b as u32, o.c as u32);
+        if o.pure() {
+            self.run_pure(o);
+            return Ok(());
+        }
         match o.kind {
             Kind::Execute => exec::execute(self, o.insn, mem),
             Kind::DpImm => exec::dp_imm(self, o.insn),
@@ -278,6 +504,129 @@ impl Cpu {
             Kind::LdStReg => exec::ld_st_reg(self, o.insn, mem),
             Kind::LdStPair => exec::ld_st_pair(self, o.insn, mem),
             Kind::BranchReg => exec::branch_reg(self, o.insn),
+            Kind::Adr => {
+                let v = self.pc.wrapping_add(o.imm);
+                self.set_xr(a, true, v);
+                Ok(())
+            }
+            Kind::Adrp => {
+                let v = (self.pc & !0xFFF).wrapping_add(o.imm);
+                self.set_xr(a, true, v);
+                Ok(())
+            }
+            Kind::B => {
+                self.next_pc = self.pc.wrapping_add(o.imm);
+                Ok(())
+            }
+            Kind::Bl => {
+                self.x[30] = self.pc.wrapping_add(4);
+                self.next_pc = self.pc.wrapping_add(o.imm);
+                Ok(())
+            }
+            Kind::BCond => {
+                if self.cond_holds(a) {
+                    self.next_pc = self.pc.wrapping_add(o.imm);
+                }
+                Ok(())
+            }
+            Kind::Cbz => {
+                let zero = self.xr(a, c & 1 != 0) == 0;
+                if zero != (c & 2 != 0) {
+                    self.next_pc = self.pc.wrapping_add(o.imm);
+                }
+                Ok(())
+            }
+            Kind::Tbz => {
+                let set = (self.xr(a, true) >> b) & 1 != 0;
+                if set == (c != 0) {
+                    self.next_pc = self.pc.wrapping_add(o.imm);
+                }
+                Ok(())
+            }
+            Kind::LoadUimm => {
+                let addr = self.xsp(b).wrapping_add(o.imm);
+                let access = match c >> 2 {
+                    0 => Access::Load,
+                    1 => Access::LoadSigned64,
+                    _ => Access::LoadSigned32,
+                };
+                if let Some((v, sf)) = self.gpr(mem, c & 3, access, a, addr)? {
+                    self.set_xr(a, sf, v);
+                }
+                Ok(())
+            }
+            Kind::StoreUimm => {
+                let addr = self.xsp(b).wrapping_add(o.imm);
+                self.gpr(mem, c, Access::Store, a, addr)?;
+                Ok(())
+            }
+            Kind::LdStRegOff => {
+                let f = o.imm as u32;
+                let scale = f & 3;
+                let off = extend_reg(self.xr(c, true), (f >> 4) & 7, f >> 7, true);
+                let addr = self.xsp(b).wrapping_add(off);
+                let access = access_of(f >> 2);
+                if let Some((v, sf)) = self.gpr(mem, scale, access, a, addr)? {
+                    self.set_xr(a, sf, v);
+                }
+                Ok(())
+            }
+            Kind::LdStImm => {
+                let f = o.imm2 as u32;
+                let base = self.xsp(b);
+                let (addr, wb) = match (f >> 4) & 3 {
+                    0 => (base.wrapping_add(o.imm), None),
+                    1 => (base, Some(base.wrapping_add(o.imm))),
+                    _ => {
+                        let a = base.wrapping_add(o.imm);
+                        (a, Some(a))
+                    }
+                };
+                let loaded = self.gpr(mem, f & 3, access_of(f >> 2), a, addr)?;
+                if let Some(wb) = wb {
+                    self.set_xsp(b, true, wb);
+                }
+                if let Some((v, sf)) = loaded {
+                    self.set_xr(a, sf, v);
+                }
+                Ok(())
+            }
+            Kind::Pair => {
+                let f = o.imm2 as u32;
+                let scale = f & 3;
+                let access = access_of(f >> 2);
+                let base = self.xsp(b);
+                let (addr, wb) = match (f >> 4) & 3 {
+                    0 | 2 => (base.wrapping_add(o.imm), None),
+                    1 => (base, Some(base.wrapping_add(o.imm))),
+                    _ => {
+                        let a = base.wrapping_add(o.imm);
+                        (a, Some(a))
+                    }
+                };
+                let first = self.gpr(mem, scale, access, a, addr)?;
+                let next = addr.wrapping_add(1 << scale);
+                let second = self.gpr(mem, scale, access, c, next)?;
+                if let Some(wb) = wb {
+                    self.set_xsp(b, true, wb);
+                }
+                if let Some((v, sf)) = first {
+                    self.set_xr(a, sf, v);
+                }
+                if let Some((v, sf)) = second {
+                    self.set_xr(c, sf, v);
+                }
+                Ok(())
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    /// [`Self::run_op`] for an [`Op::pure`] instruction.
+    #[inline(always)]
+    pub(super) fn run_pure(&mut self, o: Op) {
+        let (a, b, c) = (o.a as u32, o.b as u32, o.c as u32);
+        let _: Exec = match o.kind {
             Kind::AddImm => {
                 let sf = c != 0;
                 let r = mask(self.xsp(b), sf).wrapping_add(o.imm);
@@ -326,16 +675,6 @@ impl Cpu {
                 }
                 Ok(())
             }
-            Kind::Adr => {
-                let v = self.pc.wrapping_add(o.imm);
-                self.set_xr(a, true, v);
-                Ok(())
-            }
-            Kind::Adrp => {
-                let v = (self.pc & !0xFFF).wrapping_add(o.imm);
-                self.set_xr(a, true, v);
-                Ok(())
-            }
             Kind::LogicReg => {
                 let f = o.imm as u32;
                 let sf = f & (1 << 11) != 0;
@@ -369,53 +708,80 @@ impl Cpu {
                 self.set_xr(a, sf, r);
                 Ok(())
             }
-            Kind::B => {
-                self.next_pc = self.pc.wrapping_add(o.imm);
-                Ok(())
-            }
-            Kind::Bl => {
-                self.x[30] = self.pc.wrapping_add(4);
-                self.next_pc = self.pc.wrapping_add(o.imm);
-                Ok(())
-            }
-            Kind::BCond => {
-                if self.cond_holds(a) {
-                    self.next_pc = self.pc.wrapping_add(o.imm);
-                }
-                Ok(())
-            }
-            Kind::Cbz => {
-                let zero = self.xr(a, c & 1 != 0) == 0;
-                if zero != (c & 2 != 0) {
-                    self.next_pc = self.pc.wrapping_add(o.imm);
-                }
-                Ok(())
-            }
-            Kind::Tbz => {
-                let set = (self.xr(a, true) >> b) & 1 != 0;
-                if set == (c != 0) {
-                    self.next_pc = self.pc.wrapping_add(o.imm);
-                }
-                Ok(())
-            }
-            Kind::LoadUimm => {
-                let addr = self.xsp(b).wrapping_add(o.imm);
-                let access = match c >> 2 {
-                    0 => Access::Load,
-                    1 => Access::LoadSigned64,
-                    _ => Access::LoadSigned32,
+            Kind::Bitfield => {
+                let insn = o.insn;
+                let sf = bit(insn, 31);
+                let (wmask, tmask) = (o.imm, o.imm2);
+                let src = self.xr(b, sf);
+                let bot = ror(src, c, sf) & wmask;
+                let r = match field(insn, 29, 2) {
+                    0 => {
+                        let top = if (src >> field(insn, 10, 6)) & 1 != 0 {
+                            !0
+                        } else {
+                            0
+                        };
+                        (top & !tmask) | (bot & tmask)
+                    }
+                    1 => {
+                        let dst = self.xr(a, sf);
+                        let bot = (dst & !wmask) | bot;
+                        (dst & !tmask) | (bot & tmask)
+                    }
+                    _ => bot & tmask,
                 };
-                if let Some((v, sf)) = transfer(self, mem, false, c & 3, access, a, addr)? {
-                    self.set_xr(a, sf, v);
+                self.set_xr(a, sf, r);
+                Ok(())
+            }
+            Kind::Ccmp => {
+                let f = c;
+                if self.cond_holds(f & 0xF) {
+                    let sf = f & (1 << 4) != 0;
+                    let y = if f & (1 << 6) != 0 {
+                        u64::from(b)
+                    } else {
+                        self.xr(b, sf)
+                    };
+                    let sub = f & (1 << 5) != 0;
+                    let y = if sub { mask(!y, sf) } else { y };
+                    self.nzcv = add_with_carry(self.xr(a, sf), y, sub, sf).1;
+                } else {
+                    self.nzcv = o.imm as u32;
                 }
                 Ok(())
             }
-            Kind::StoreUimm => {
-                let addr = self.xsp(b).wrapping_add(o.imm);
-                transfer(self, mem, false, c, Access::Store, a, addr)?;
+            Kind::Csel => {
+                let f = o.imm as u32;
+                let sf = f & (1 << 6) != 0;
+                let r = if self.cond_holds(f & 0xF) {
+                    self.xr(b, sf)
+                } else {
+                    let y = self.xr(c, sf);
+                    match (f >> 4) & 3 {
+                        0 => y,
+                        2 => y.wrapping_add(1),
+                        1 => !y,
+                        _ => y.wrapping_neg(),
+                    }
+                };
+                self.set_xr(a, sf, r);
                 Ok(())
             }
-        }
+            Kind::Madd => {
+                let f = o.imm as u32;
+                let sf = f & (1 << 6) != 0;
+                let p = self.xr(b, sf).wrapping_mul(self.xr(c, sf));
+                let acc = self.xr(f & 0x1F, sf);
+                let r = if f & (1 << 5) != 0 {
+                    acc.wrapping_sub(p)
+                } else {
+                    acc.wrapping_add(p)
+                };
+                self.set_xr(a, sf, r);
+                Ok(())
+            }
+            _ => unreachable!(),
+        };
     }
 }
 
@@ -501,6 +867,10 @@ mod tests {
         (0x3B00_0000, 0x3900_0000),
         (0x3B00_0000, 0x3800_0000),
         (0x3A00_0000, 0x2800_0000),
+        (0x1FE0_0000, 0x1A40_0000),
+        (0x1FE0_0000, 0x1A80_0000),
+        (0x1F00_0000, 0x1B00_0000),
+        (0x3B20_0C00, 0x3820_0800),
         (0x0000_0000, 0x0000_0000),
     ];
 

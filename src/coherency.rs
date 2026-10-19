@@ -112,7 +112,7 @@ impl Coherency {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn is_on(&self) -> bool {
         self.on
     }

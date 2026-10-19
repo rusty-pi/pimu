@@ -11,6 +11,7 @@
 use super::cpu::{Cpu, Exception, Memory, NZCV_C, NZCV_N, NZCV_V, NZCV_Z};
 
 /// Why an instruction did not simply retire.
+#[derive(Clone, Copy)]
 pub(super) enum Stop {
     Wfi,
     Wfe,
@@ -75,8 +76,8 @@ fn top_bit(v: u64, sf: bool) -> bool {
     (v >> (datasize(sf) - 1)) & 1 != 0
 }
 
-#[inline]
-fn ror(v: u64, amount: u32, sf: bool) -> u64 {
+#[inline(always)]
+pub(super) fn ror(v: u64, amount: u32, sf: bool) -> u64 {
     if sf {
         v.rotate_right(amount)
     } else {
@@ -202,8 +203,8 @@ pub(super) fn shift_reg(v: u64, kind: u32, amount: u32, sf: bool) -> u64 {
 }
 
 /// `ExtendReg`: the `UXTB`..`SXTX` extend, then a left shift.
-#[inline]
-fn extend_reg(v: u64, option: u32, shift: u32, sf: bool) -> u64 {
+#[inline(always)]
+pub(super) fn extend_reg(v: u64, option: u32, shift: u32, sf: bool) -> u64 {
     let len = 8 << (option & 3);
     let e = if option & 4 != 0 {
         sext(v, len)
