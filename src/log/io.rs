@@ -2,8 +2,8 @@
 //! serial console.
 //!
 //! Block runs on the SD card and USB stick with the files they belong to
-//! ([`super::fatmap`]), OTP rows read and programmed, and what the network peer
-//! did — all captured where the data crosses a peripheral, so the firmware
+//! ([`super::fatmap`]), byte runs on the SPI flash, OTP rows read and
+//! programmed, and what the network peer did — all captured where the data crosses a peripheral, so the firmware
 //! stays a black box.
 
 use std::collections::HashMap;
@@ -18,6 +18,14 @@ pub(super) struct Run {
     op: &'static str,
     lba: u64,
     count: u64,
+    unit: Unit,
+}
+
+/// What a run counts: 512-byte blocks on a disk, bytes on the flash.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Unit {
+    Block,
+    Byte,
 }
 
 #[derive(Default)]
@@ -33,18 +41,18 @@ impl Io {
             .or_insert_with(|| FileMap::build(read));
     }
 
-    /// `count` blocks from `lba` on `dev`: joins the pending run when it
+    /// `count` units from `lba` on `dev`: joins the pending run when it
     /// carries on from it, else replaces it and hands the old one back.
-    pub(super) fn blocks(
+    pub(super) fn run(
         &mut self,
         us: u64,
         dev: &'static str,
         op: &'static str,
-        lba: u64,
-        count: u64,
+        (lba, count): (u64, u64),
+        unit: Unit,
     ) -> Option<Run> {
         if let Some(run) = &mut self.pending {
-            if run.dev == dev && run.op == op && run.lba + run.count == lba {
+            if run.dev == dev && run.op == op && run.unit == unit && run.lba + run.count == lba {
                 run.count += count;
                 return None;
             }
@@ -55,6 +63,7 @@ impl Io {
             op,
             lba,
             count,
+            unit,
         })
     }
 
@@ -63,6 +72,9 @@ impl Io {
     }
 
     pub(super) fn run_event(&self, run: &Run) -> Event {
+        if run.unit == Unit::Byte {
+            return byte_run_event(run);
+        }
         let spans = self
             .files
             .get(run.dev)
@@ -93,6 +105,22 @@ impl Io {
             held.join(",")
         );
         Event { text, json }
+    }
+}
+
+fn byte_run_event(run: &Run) -> Event {
+    Event {
+        text: format!(
+            "{:<4} {:<5} {:#x}+{} bytes",
+            run.dev, run.op, run.lba, run.count
+        ),
+        json: format!(
+            "\"dev\":{},\"op\":{},\"addr\":{},\"bytes\":{}",
+            quote(run.dev),
+            quote(run.op),
+            run.lba,
+            run.count
+        ),
     }
 }
 

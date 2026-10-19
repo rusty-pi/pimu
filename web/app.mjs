@@ -20,7 +20,7 @@ const OFFICIAL_EEPROM =
   "https://raw.githubusercontent.com/raspberrypi/rpi-eeprom/master/firmware-2711/latest/pieeprom-2026-08-04.bin";
 
 const LOG_CHANNELS = [
-  ["io", "Blocks read and written, OTP rows, and what the network peer did"],
+  ["io", "Blocks read and written, EEPROM bytes, OTP rows, and what the network peer did"],
   ["mbox", "ARM ↔ VideoCore property mailbox"],
   ["arm-exc", "Exceptions the ARM cores take"],
   ["uart", "The two console UARTs"],
@@ -621,9 +621,12 @@ function addLog(text) {
     } catch {
       continue;
     }
+    if (row.channel === "io") {
+      noteIo(row);
+      if (!state.log.includes("io")) continue;
+    }
     logRows.push(row);
     logCounts.set(row.channel, (logCounts.get(row.channel) ?? 0) + 1);
-    if (row.channel === "io") noteIo(row);
   }
   if (logRows.length > LOG_KEPT) logRows.splice(0, logRows.length - LOG_KEPT);
   $("#log-count").textContent = logRows.length ? `(${logRows.length})` : "";
@@ -745,6 +748,7 @@ function describeIo(row) {
     const what = row.op === "write" ? `programmed to ${row.value} (was ${row.was})` : `read ${row.value}`;
     return `OTP row ${row.row} ${what}${row.meaning ? ` · ${row.meaning}` : ""}`;
   }
+  if (row.dev === "eeprom" && Number.isFinite(row.bytes)) return `EEPROM: ${row.op} ${plural(row.bytes, "byte")} at ${row.addr}`;
   if (row.dev in DISKS && Number.isFinite(row.blocks)) {
     const names = (row.files ?? []).map(fileLabel);
     return `${DISKS[row.dev]}: ${row.op} ${plural(row.blocks, "block")} at ${row.lba}${names.length ? ` – ${names.join(", ")}` : ""}`;
@@ -754,6 +758,7 @@ function describeIo(row) {
 
 function noteIo(row) {
   io.lastUs = Math.max(io.lastUs, row.us);
+  wires.busy(WIRE_OF_DEV[row.dev]);
   if (row.dev === "net" && typeof row.event === "string") {
     const m = /^([\w-]+): (.*)$/.exec(row.event);
     io.net.push({ us: row.us, proto: m ? m[1] : "", text: m ? m[2] : row.event });
@@ -861,9 +866,7 @@ function renderIo() {
   ]);
   pane.replaceChildren(sections.length
     ? h("div", { class: "io" }, sections)
-    : h("p", { class: "hint" }, state.log.includes("io")
-      ? (worker ? "Nothing read yet." : "Power the board on to see the files it reads and the fuses.")
-      : "The io channel is off: switch it on in Log to see the files the board reads and the fuses."));
+    : h("p", { class: "hint" }, worker ? "Nothing read yet." : "Power the board on to see the files it reads and the fuses."));
 }
 
 // What the network peer did: one line an event, its outcome after the arrow.
@@ -875,9 +878,7 @@ function renderNet() {
   $("#net-count").textContent = io.netSeen ? `(${io.netSeen})` : "";
   const pane = $("#tab-net");
   if (!io.net.length) {
-    pane.replaceChildren(h("p", { class: "hint" }, !state.log.includes("io")
-      ? "The io channel is off: switch it on in Log to see what goes over the network."
-      : !state.net.plugged
+    pane.replaceChildren(h("p", { class: "hint" }, !state.net.plugged
         ? "The Ethernet cable is unplugged. Plug it into the built-in peer in the Ethernet panel to see DHCP, DNS, TFTP and HTTP here."
         : worker ? "Nothing on the network yet." : "Power the board on to see what it asks the network for."));
     return;
@@ -1662,6 +1663,105 @@ function layoutBoard() {
 }
 portrait.addEventListener("change", layoutBoard);
 layoutBoard();
+
+// Traffic on the io channel makes the SoC reel the part's cord in, the way a
+// vacuum cleaner takes its cord: ripples run from the part to the SoC, widest
+// near the part and pulled taut where the cord goes in, while the marks on it
+// slide inwards. A bent cord is pulled straight, and it falls back into its
+// bend once the part is quiet.
+const WIRE_OF_DEV = { eeprom: "eeprom", sd: "sd", emmc: "sd", usb: "usb", otg: "usbc", net: "eth" };
+const wires = (() => {
+  const QUIET_MS = 600;
+  const AMPLITUDE = 3.5;
+  const WAVELENGTH = 36;
+  const SPEED = 0.06;
+  const PULL = 0.04;
+  const calm = matchMedia("(prefers-reduced-motion: reduce)");
+  const state = new Map();
+  let frame = 0;
+
+  const svg = (tag, cls) => {
+    const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    el.setAttribute("class", cls);
+    return el;
+  };
+
+  // The cord from the part's end to the SoC's, a point every 2 units.
+  const cord = (line, box) => {
+    const total = line.getTotalLength();
+    const at = (s) => line.getPointAtLength(Math.min(total, Math.max(0, s)));
+    const centre = { x: box.x.baseVal.value + box.width.baseVal.value / 2, y: box.y.baseVal.value + box.height.baseVal.value / 2 };
+    const away = (p) => Math.hypot(p.x - centre.x, p.y - centre.y);
+    const fromPart = away(at(0)) < away(at(total));
+    const [start, intake] = [at(fromPart ? 0 : total), at(fromPart ? total : 0)];
+    const span = Math.hypot(intake.x - start.x, intake.y - start.y) || 1;
+    const [tx, ty] = [(intake.x - start.x) / span, (intake.y - start.y) / span];
+    const points = [];
+    for (let d = 0; d <= total; d += 2) {
+      const s = fromPart ? d : total - d;
+      const [before, here, after] = [at(s - 1), at(s), at(s + 1)];
+      const length = Math.hypot(after.x - before.x, after.y - before.y) || 1;
+      const sign = fromPart ? 1 : -1;
+      points.push({
+        u: d / total, s: d, x: here.x, y: here.y,
+        nx: -sign * (after.y - before.y) / length, ny: sign * (after.x - before.x) / length,
+        sx: start.x + tx * span * d / total, sy: start.y + ty * span * d / total, snx: -ty, sny: tx,
+      });
+    }
+    points.intake = intake;
+    return points;
+  };
+
+  const wire = (part) => {
+    if (!state.has(part)) {
+      const group = $(`.part[data-part="${part}"]`);
+      const line = group.querySelector(".wire");
+      const wave = svg("path", "wave");
+      const ridges = svg("path", "ridges");
+      line.after(wave, ridges);
+      state.set(part, { group, wave, ridges, points: cord(line, group.querySelector(".box")), until: 0, swing: 0 });
+    }
+    return state.get(part);
+  };
+
+  const along = (points, swing, phase) => {
+    const mix = (a, b) => a + (b - a) * swing;
+    const out = points.map(({ u, s, x, y, nx, ny, sx, sy, snx, sny }) => {
+      const taut = 2.6 * Math.sin(Math.PI * u) * (1 - u);
+      const lift = swing * AMPLITUDE * taut * Math.sin(2 * Math.PI * s / WAVELENGTH - phase);
+      const [mx, my] = [mix(nx, snx), mix(ny, sny)];
+      const norm = Math.hypot(mx, my) || 1;
+      return `${(mix(x, sx) + mx / norm * lift).toFixed(2)},${(mix(y, sy) + my / norm * lift).toFixed(2)}`;
+    });
+    out.push(`${points.intake.x.toFixed(2)},${points.intake.y.toFixed(2)}`);
+    return `M${out.join("L")}`;
+  };
+
+  const draw = (now) => {
+    frame = 0;
+    for (const w of state.values()) {
+      const target = now < w.until ? 1 : 0;
+      w.swing += (target - w.swing) * 0.12;
+      if (target === 0 && w.swing < 0.02) w.swing = 0;
+      w.group.dataset.busy = target === 1;
+      const d = w.swing && !calm.matches ? along(w.points, w.swing, now * SPEED) : "";
+      w.wave.setAttribute("d", d);
+      w.ridges.setAttribute("d", d);
+      w.ridges.style.strokeDashoffset = -now * PULL;
+      w.ridges.style.opacity = w.swing;
+      w.group.dataset.wobbling = !!d;
+      if (w.swing) frame ||= requestAnimationFrame(draw);
+    }
+  };
+
+  return {
+    busy(part) {
+      if (!part) return;
+      wire(part).until = performance.now() + QUIET_MS;
+      frame ||= requestAnimationFrame(draw);
+    },
+  };
+})();
 
 for (const part of document.querySelectorAll(".part")) {
   const choose = () => {

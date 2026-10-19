@@ -28,7 +28,7 @@ the **Power** switch in the top bar).
 
 ## The page
 
-The board is a block diagram in the style of [`board-sheet.svg`](board-sheet.svg): the SoC in the middle with its controllers on the edges, and the parts that plug into them around it. A wire is dashed while nothing is plugged in and solid once something is. Click a part:
+The board is a block diagram in the style of [`board-sheet.svg`](board-sheet.svg): the SoC in the middle with its controllers on the edges, and the parts that plug into them around it. A wire is dashed while nothing is plugged in and solid once something is, and while the part has traffic on the `io` channel the SoC reels its cord in, ripples running from the part into the SoC – EEPROM, microSD, USB 3.0, USB-C and Ethernet. The page always records `io` for that; leaving it off in the Log tab only keeps its lines out of the log. Click a part:
 
 | Part | What it takes |
 |---|---|

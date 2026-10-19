@@ -69,3 +69,39 @@ test("every panel is editable while the board is off", async ({ app }) => {
     await expect(app.drawer.locator("fieldset")).toBeEnabled();
   }
 });
+
+test("traffic on the io channel makes the part's wire wobble, and it settles once quiet", async ({ app }) => {
+  await app.running();
+  const rows = [
+    { dev: "eeprom", op: "read", addr: 4096, bytes: 64 },
+    { dev: "sd", op: "read", lba: 0, blocks: 1, files: [] },
+    { dev: "usb", op: "read", lba: 0, blocks: 1, files: [] },
+    { dev: "otg", op: "write", lba: 0, blocks: 1, files: [] },
+    { dev: "net", event: "dhcp: DISCOVER" },
+  ];
+  await app.emit({ type: "log", text: rows.map((row) => JSON.stringify({ us: 1, channel: "io", ...row })).join("\n") + "\n" });
+  for (const part of ["eeprom", "sd", "usb", "usbc", "eth"]) {
+    await expect(app.part(part)).toHaveAttribute("data-busy", "true");
+    await expect(app.part(part).locator(".wave")).toHaveAttribute("d", /^M/);
+  }
+  await expect(app.part("hdmi")).not.toHaveAttribute("data-busy", "true");
+  const ends = async (part) => {
+    const d = await app.part(part).locator(".wave").getAttribute("d");
+    const points = d.slice(1).split("L").map((p) => p.split(",").map(Number));
+    return [points[0], points.at(-1)];
+  };
+  expect(await ends("eeprom")).toEqual([[170, 174], [242, 174]]);
+  expect(await ends("sd")).toEqual([[305, 430], [350, 370]]);
+  const offStraight = async () => {
+    await app.emit({ type: "log", text: JSON.stringify({ us: 2, channel: "io", ...rows[1] }) + "\n" });
+    await app.page.waitForTimeout(500);
+    const d = await app.part("sd").locator(".wave").getAttribute("d");
+    return Math.max(...d.slice(1).split("L").map((p) => p.split(",").map(Number))
+      .map(([x, y]) => Math.abs(45 * (y - 430) + 60 * (x - 305)) / 75));
+  };
+  await expect.poll(offStraight).toBeLessThan(6);
+  for (const part of ["eeprom", "sd", "usb", "usbc", "eth"]) {
+    await expect(app.part(part)).toHaveAttribute("data-busy", "false");
+    await expect(app.part(part)).toHaveAttribute("data-wobbling", "false");
+  }
+});

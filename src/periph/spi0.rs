@@ -117,6 +117,10 @@ pub struct Spi0 {
     /// them; `flashrom` reads them to decide whether it has to unlock first.
     sr: u8,
     rx: VecDeque<u8>,
+    /// Where the bytes this command reads or programs start, and how many so
+    /// far; the `io` channel gets them as the select goes up.
+    moved_from: u32,
+    moved: u32,
     /// `true` once anything wrote to `flash` — a signal to the run loop that an
     /// EEPROM self-update landed and a re-run from the new image is due.
     pub dirty: bool,
@@ -221,6 +225,9 @@ impl Spi0 {
             return;
         }
         self.selected = now;
+        if !now {
+            self.log_moved();
+        }
         if now {
             crate::log!(
                 self.log,
@@ -332,6 +339,7 @@ impl Spi0 {
     /// address wraps inside the 256-byte page, as the part does.
     fn program_byte(&mut self, b: u8) {
         if self.wel {
+            self.note_moved();
             if let Some(cell) = self.flash.get_mut(self.addr as usize) {
                 *cell &= b;
                 self.dirty = true;
@@ -340,7 +348,23 @@ impl Spi0 {
         self.addr = (self.addr & !0xFF) | (self.addr.wrapping_add(1) & 0xFF);
     }
 
+    fn log_moved(&mut self) {
+        if self.moved != 0 {
+            let op = if self.cmd == PP { "write" } else { "read" };
+            self.log.flash(op, self.moved_from, self.moved);
+            self.moved = 0;
+        }
+    }
+
+    fn note_moved(&mut self) {
+        if self.moved == 0 {
+            self.moved_from = self.addr;
+        }
+        self.moved += 1;
+    }
+
     fn read_flash_byte(&mut self) -> u8 {
+        self.note_moved();
         let b = self
             .flash
             .get(self.addr as usize)
