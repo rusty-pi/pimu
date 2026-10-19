@@ -21,6 +21,17 @@ self.addEventListener("fetch", (event) => {
       headers.set("Cross-Origin-Embedder-Policy", "require-corp");
       headers.set("Cross-Origin-Opener-Policy", "same-origin");
       return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+    }, (error) => {
+      if (request.mode !== "navigate") throw error;
+      return giveUp();
     }),
   );
 });
+
+async function giveUp() {
+  await self.registration.unregister();
+  return new Response(
+    '<!doctype html><script>sessionStorage.setItem("pimu-coi-off", "1"); location.reload();</script>',
+    { headers: { "Content-Type": "text/html" } },
+  );
+}
