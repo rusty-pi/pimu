@@ -1,15 +1,15 @@
 //! Plain read/write RAM region.
 //!
-//! The bytes are kept in 1 MiB chunks, and a chunk is only allocated when
-//! something other than zeros is first written into it: a board takes as much
-//! host memory as its guest has used, the way an untouched `calloc` does on a
-//! host that maps pages lazily. A WebAssembly allocator zeroes what it hands
-//! out, and a 32-bit address space has no room for an 8 GiB board, so the
-//! browser build depends on it.
+//! Where the bytes are is a [`Store`]. A 64-bit host takes the whole RAM as one
+//! zeroed allocation ([`Flat`]), whose pages the host only maps as they are
+//! first used, so an 8 GiB board costs what its guest has touched. A 32-bit
+//! host has no room for that, and a WebAssembly allocator zeroes everything it
+//! hands out, so the browser build keeps RAM in 1 MiB [`Chunks`] that are only
+//! allocated when something other than zeros is first written into them.
 
 use std::alloc::Layout;
 use std::borrow::Cow;
-use std::ptr;
+use std::ptr::{self, NonNull};
 use std::sync::atomic::{AtomicPtr, AtomicU16, AtomicU32, AtomicU64, AtomicU8, Ordering};
 
 use crate::bus::{BusError, BusResult, Width};
@@ -20,107 +20,286 @@ const CHUNK: usize = 1 << CHUNK_SHIFT;
 const CHUNK_MASK: u64 = CHUNK as u64 - 1;
 const PAGES: usize = CHUNK >> PAGE_SHIFT;
 
-struct Chunk {
-    bytes: [u8; CHUNK],
-    /// A write generation per 4 KiB page, bumped by every store into it: what
-    /// lets the VPU cache decoded instructions. A page of a chunk not yet
-    /// allocated is at generation 0 and a new chunk starts its pages at 1, so
-    /// allocating one counts as a write.
-    gens: [u64; PAGES],
+#[cfg(target_pointer_width = "64")]
+pub type DefaultStore = Flat;
+#[cfg(not(target_pointer_width = "64"))]
+pub type DefaultStore = Chunks;
+pub type DefaultMap = <DefaultStore as Store>::Map;
+
+/// Where a RAM's bytes are: the allocation, which the RAM owns.
+pub trait Store: Sized {
+    type Map: Map;
+    fn new(len: u64) -> Self;
+    fn map(&self) -> Self::Map;
 }
 
-impl Chunk {
-    const LAYOUT: Layout = Layout::new::<Chunk>();
-
-    fn allocate() -> *mut Chunk {
-        let chunk = unsafe { std::alloc::alloc_zeroed(Self::LAYOUT) }.cast::<Chunk>();
-        if chunk.is_null() {
-            refused();
-        }
-        unsafe { (*chunk).gens = [1; PAGES] };
-        chunk
-    }
-
-    /// # Safety
-    /// `chunk` came from [`Chunk::allocate`] and nothing uses it any more.
-    unsafe fn free(chunk: *mut Chunk) {
-        unsafe { std::alloc::dealloc(chunk.cast(), Self::LAYOUT) }
-    }
-
-    #[inline]
-    fn byte(chunk: *mut Chunk, at: usize) -> *mut u8 {
-        unsafe { ptr::addr_of_mut!((*chunk).bytes).cast::<u8>().add(at) }
-    }
-
-    #[inline]
-    fn bump(chunk: *mut Chunk, at: usize, len: usize) {
-        let gens = unsafe { &mut *ptr::addr_of_mut!((*chunk).gens) };
-        for g in &mut gens[at >> PAGE_SHIFT..=(at + len - 1) >> PAGE_SHIFT] {
-            *g += 1;
-        }
-    }
+/// Where a RAM's bytes are, as an access on any thread finds them. Every
+/// offset handed in is inside the RAM.
+pub trait Map: Copy + Send + Sync {
+    /// Every byte exists from the start: [`Map::byte`] is never null and
+    /// [`Map::room`] never ends.
+    const FLAT: bool;
+    /// How many bytes from `off` on are contiguous with it.
+    fn room(self, off: u64) -> usize;
+    /// The byte at `off`, or null where nothing but zeros has been written.
+    fn byte(self, off: u64) -> *mut u8;
+    /// The byte at `off`, allocated if it was not.
+    fn byte_or_allocate(self, off: u64) -> *mut u8;
+    /// The write generation of the page holding `off`, or null where nothing
+    /// but zeros has been written.
+    fn gen(self, off: u64) -> *mut u64;
 }
 
 #[cold]
 fn refused() -> ! {
-    panic!(
-        "the host gave no more memory for the board's RAM ({} KiB more asked for)",
-        CHUNK >> 10
-    )
+    panic!("the host gave no more memory for the board's RAM")
 }
 
-/// The chunk holding `off`, allocated on the way if `slots` has none for it
-/// yet; another thread allocating the same one at the same time is fine.
-#[cold]
-fn install(slots: &[AtomicPtr<Chunk>], off: u64) -> *mut Chunk {
-    let slot = &slots[(off >> CHUNK_SHIFT) as usize];
-    let chunk = Chunk::allocate();
-    match slot.compare_exchange(ptr::null_mut(), chunk, Ordering::AcqRel, Ordering::Acquire) {
-        Ok(_) => chunk,
-        Err(theirs) => {
-            unsafe { Chunk::free(chunk) };
-            theirs
-        }
+fn zeroed<T>(n: usize) -> *mut T {
+    let layout = Layout::array::<T>(n).unwrap_or_else(|_| refused());
+    if layout.size() == 0 {
+        return NonNull::dangling().as_ptr();
+    }
+    let p = unsafe { std::alloc::alloc_zeroed(layout) }.cast::<T>();
+    if p.is_null() {
+        refused();
+    }
+    p
+}
+
+/// # Safety
+/// `p` came from [`zeroed`] with the same `n`, and nothing uses it any more.
+unsafe fn free<T>(p: *mut T, n: usize) {
+    if n != 0 {
+        unsafe { std::alloc::dealloc(p.cast(), Layout::array::<T>(n).unwrap()) }
     }
 }
 
-#[inline]
-fn chunk_at(slots: &[AtomicPtr<Chunk>], off: u64) -> *mut Chunk {
-    slots[(off >> CHUNK_SHIFT) as usize].load(Ordering::Acquire)
+/// The whole RAM as one zeroed allocation, plus a write generation per page.
+pub struct Flat {
+    bytes: *mut u8,
+    gens: *mut u64,
+    len: usize,
+    pages: usize,
 }
 
-#[inline]
-fn within_chunk(off: u64, len: usize) -> bool {
-    (off & CHUNK_MASK) as usize + len <= CHUNK
+unsafe impl Send for Flat {}
+unsafe impl Sync for Flat {}
+
+#[derive(Clone, Copy)]
+pub struct FlatMap {
+    bytes: *mut u8,
+    gens: *mut u64,
 }
 
-/// What [`Ram`] holds, chunk by chunk, and what [`Ram::take_contents`] hands
-/// over to the RAM of the next boot.
-pub struct Contents {
-    slots: Box<[AtomicPtr<Chunk>]>,
-    len: u64,
-}
+unsafe impl Send for FlatMap {}
+unsafe impl Sync for FlatMap {}
 
-impl Contents {
-    fn new(len: u64) -> Contents {
-        let chunks = usize::try_from(len.div_ceil(CHUNK as u64))
-            .unwrap_or_else(|_| panic!("{len} bytes of RAM do not fit this host"));
-        Contents {
-            slots: (0..chunks).map(|_| AtomicPtr::default()).collect(),
+impl Store for Flat {
+    type Map = FlatMap;
+
+    fn new(len: u64) -> Flat {
+        let len = usize::try_from(len).unwrap_or_else(|_| refused());
+        let pages = len.div_ceil(1 << PAGE_SHIFT);
+        Flat {
+            bytes: zeroed(len),
+            gens: zeroed(pages),
             len,
+            pages,
+        }
+    }
+
+    fn map(&self) -> FlatMap {
+        FlatMap {
+            bytes: self.bytes,
+            gens: self.gens,
         }
     }
 }
 
-impl Drop for Contents {
+impl Drop for Flat {
+    fn drop(&mut self) {
+        unsafe {
+            free(self.bytes, self.len);
+            free(self.gens, self.pages);
+        }
+    }
+}
+
+impl Map for FlatMap {
+    const FLAT: bool = true;
+
+    #[inline]
+    fn room(self, _: u64) -> usize {
+        usize::MAX
+    }
+
+    #[inline]
+    fn byte(self, off: u64) -> *mut u8 {
+        unsafe { self.bytes.add(off as usize) }
+    }
+
+    #[inline]
+    fn byte_or_allocate(self, off: u64) -> *mut u8 {
+        self.byte(off)
+    }
+
+    #[inline]
+    fn gen(self, off: u64) -> *mut u64 {
+        unsafe { self.gens.add((off >> PAGE_SHIFT) as usize) }
+    }
+}
+
+struct Chunk {
+    bytes: [u8; CHUNK],
+    /// A page of a chunk not yet allocated is at generation 0 and a new chunk
+    /// starts its pages at 1, so allocating one counts as a write.
+    gens: [u64; PAGES],
+}
+
+impl Chunk {
+    fn allocate() -> *mut Chunk {
+        let chunk = zeroed::<Chunk>(1);
+        unsafe { (*chunk).gens = [1; PAGES] };
+        chunk
+    }
+}
+
+/// RAM in 1 MiB chunks, each allocated when something other than zeros is
+/// first written into it.
+pub struct Chunks {
+    slots: Box<[AtomicPtr<Chunk>]>,
+}
+
+#[derive(Clone, Copy)]
+pub struct ChunkMap {
+    slots: *const AtomicPtr<Chunk>,
+}
+
+unsafe impl Send for ChunkMap {}
+unsafe impl Sync for ChunkMap {}
+
+impl Store for Chunks {
+    type Map = ChunkMap;
+
+    fn new(len: u64) -> Chunks {
+        let chunks = usize::try_from(len.div_ceil(CHUNK as u64)).unwrap_or_else(|_| refused());
+        Chunks {
+            slots: (0..chunks).map(|_| AtomicPtr::default()).collect(),
+        }
+    }
+
+    fn map(&self) -> ChunkMap {
+        ChunkMap {
+            slots: self.slots.as_ptr(),
+        }
+    }
+}
+
+impl Drop for Chunks {
     fn drop(&mut self) {
         for slot in self.slots.iter_mut() {
             let chunk = *slot.get_mut();
             if !chunk.is_null() {
-                unsafe { Chunk::free(chunk) };
+                unsafe { free(chunk, 1) };
             }
         }
     }
+}
+
+impl ChunkMap {
+    #[inline]
+    fn slot(self, off: u64) -> *const AtomicPtr<Chunk> {
+        unsafe { self.slots.add((off >> CHUNK_SHIFT) as usize) }
+    }
+
+    #[inline]
+    fn chunk(self, off: u64) -> *mut Chunk {
+        unsafe { (*self.slot(off)).load(Ordering::Acquire) }
+    }
+
+    /// Another thread allocating the same chunk at the same time is fine: one
+    /// of the two is kept.
+    #[cold]
+    fn install(self, off: u64) -> *mut Chunk {
+        let chunk = Chunk::allocate();
+        match unsafe { &*self.slot(off) }.compare_exchange(
+            ptr::null_mut(),
+            chunk,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => chunk,
+            Err(theirs) => {
+                unsafe { free(chunk, 1) };
+                theirs
+            }
+        }
+    }
+
+    #[inline]
+    fn at(chunk: *mut Chunk, off: u64) -> *mut u8 {
+        unsafe {
+            ptr::addr_of_mut!((*chunk).bytes)
+                .cast::<u8>()
+                .add((off & CHUNK_MASK) as usize)
+        }
+    }
+}
+
+impl Map for ChunkMap {
+    const FLAT: bool = false;
+
+    #[inline]
+    fn room(self, off: u64) -> usize {
+        CHUNK - (off & CHUNK_MASK) as usize
+    }
+
+    #[inline]
+    fn byte(self, off: u64) -> *mut u8 {
+        let chunk = self.chunk(off);
+        if chunk.is_null() {
+            return ptr::null_mut();
+        }
+        Self::at(chunk, off)
+    }
+
+    #[inline]
+    fn byte_or_allocate(self, off: u64) -> *mut u8 {
+        let mut chunk = self.chunk(off);
+        if chunk.is_null() {
+            chunk = self.install(off);
+        }
+        Self::at(chunk, off)
+    }
+
+    #[inline]
+    fn gen(self, off: u64) -> *mut u64 {
+        let chunk = self.chunk(off);
+        if chunk.is_null() {
+            return ptr::null_mut();
+        }
+        unsafe {
+            ptr::addr_of_mut!((*chunk).gens)
+                .cast::<u64>()
+                .add(((off & CHUNK_MASK) >> PAGE_SHIFT) as usize)
+        }
+    }
+}
+
+/// Bump the write generation of every page in `off..off + len`.
+fn bump<M: Map>(map: M, off: u64, len: usize) {
+    let last = (off + len as u64 - 1) >> PAGE_SHIFT;
+    for page in off >> PAGE_SHIFT..=last {
+        unsafe { *map.gen(page << PAGE_SHIFT) += 1 };
+    }
+}
+
+/// What [`Ram`] holds, and what [`Ram::take_contents`] hands over to the RAM
+/// of the next boot.
+pub struct Contents<S: Store = DefaultStore> {
+    store: S,
+    len: u64,
 }
 
 /// A stretch of RAM, as [`Ram::regions`] walks it.
@@ -150,21 +329,12 @@ impl Region<'_> {
 /// copy and must not swap its contents meanwhile; the parallel ARM run
 /// guarantees both by joining its threads before the machine goes.
 #[derive(Clone, Copy)]
-pub struct SharedRam {
-    slots: *const AtomicPtr<Chunk>,
-    chunks: usize,
+pub struct SharedRam<M: Map = DefaultMap> {
+    map: M,
     len: u64,
 }
 
-unsafe impl Send for SharedRam {}
-unsafe impl Sync for SharedRam {}
-
-impl SharedRam {
-    #[inline]
-    fn slots(&self) -> &[AtomicPtr<Chunk>] {
-        unsafe { std::slice::from_raw_parts(self.slots, self.chunks) }
-    }
-
+impl<M: Map> SharedRam<M> {
     #[inline]
     fn fits(&self, off: u64, size: u32) -> bool {
         off.checked_add(u64::from(size))
@@ -178,15 +348,14 @@ impl SharedRam {
         if !self.fits(off, size) {
             return None;
         }
-        if !within_chunk(off, size as usize) {
+        if self.map.room(off) < size as usize {
             return (0..u64::from(size))
                 .try_fold(0, |v, i| Some(v | self.load(off + i, 1)? << (8 * i)));
         }
-        let chunk = chunk_at(self.slots(), off);
-        if chunk.is_null() {
+        let p = self.map.byte(off);
+        if !M::FLAT && p.is_null() {
             return Some(0);
         }
-        let p = Chunk::byte(chunk, (off & CHUNK_MASK) as usize);
         Some(unsafe {
             match size {
                 1 => u64::from((*(p as *const AtomicU8)).load(Ordering::Acquire)),
@@ -211,20 +380,19 @@ impl SharedRam {
         if !self.fits(off, size) {
             return None;
         }
-        if !within_chunk(off, size as usize) {
+        if self.map.room(off) < size as usize {
             for i in 0..u64::from(size) {
                 self.store(off + i, 1, value >> (8 * i))?;
             }
             return Some(());
         }
-        let mut chunk = chunk_at(self.slots(), off);
-        if chunk.is_null() {
+        let mut p = self.map.byte(off);
+        if !M::FLAT && p.is_null() {
             if value & (u64::MAX >> (64 - 8 * size)) == 0 {
                 return Some(());
             }
-            chunk = install(self.slots(), off);
+            p = self.map.byte_or_allocate(off);
         }
-        let p = Chunk::byte(chunk, (off & CHUNK_MASK) as usize);
         unsafe {
             match size {
                 1 => (*(p as *const AtomicU8)).store(value as u8, Ordering::Release),
@@ -256,17 +424,16 @@ impl SharedRam {
         if !self.fits(off, size) || off & (u64::from(size) - 1) != 0 {
             return None;
         }
-        let mut chunk = chunk_at(self.slots(), off);
-        if chunk.is_null() {
+        let mut p = self.map.byte(off);
+        if !M::FLAT && p.is_null() {
             if old != 0 {
                 return Some(false);
             }
             if new == 0 {
                 return Some(true);
             }
-            chunk = install(self.slots(), off);
+            p = self.map.byte_or_allocate(off);
         }
-        let p = Chunk::byte(chunk, (off & CHUNK_MASK) as usize);
         let (a, r) = (Ordering::AcqRel, Ordering::Acquire);
         Some(unsafe {
             match size {
@@ -288,20 +455,30 @@ impl SharedRam {
     }
 }
 
-pub struct Ram {
+pub struct Ram<S: Store = DefaultStore> {
     base: u32,
     /// Every writer goes through [`Ram::store`], [`Ram::store_at`] or
-    /// [`Ram::write_slice`], so none can get past the write generations.
-    contents: Contents,
+    /// [`Ram::write_slice`], so none can get past the write generations that
+    /// let the VPU cache decoded instructions.
+    contents: Contents<S>,
     /// Cache-coherency tracking (`--check-coherency`); off unless asked for.
     pub coherency: crate::coherency::Coherency,
 }
 
 impl Ram {
     pub fn new(base: u32, size: u64) -> Ram {
+        Ram::new_in(base, size)
+    }
+}
+
+impl<S: Store> Ram<S> {
+    pub fn new_in(base: u32, size: u64) -> Ram<S> {
         Ram {
             base,
-            contents: Contents::new(size),
+            contents: Contents {
+                store: S::new(size),
+                len: size,
+            },
             coherency: crate::coherency::Coherency::off(),
         }
     }
@@ -311,12 +488,18 @@ impl Ram {
     /// overwrites only what it uses (checked on a Raspberry Pi 4B d03115,
     /// where 1 MiB written in the VPU's memory and 1 MiB in the ARM's came
     /// back intact after the bootloader had started the firmware again).
-    pub fn take_contents(&mut self) -> Contents {
-        std::mem::replace(&mut self.contents, Contents::new(0))
+    pub fn take_contents(&mut self) -> Contents<S> {
+        std::mem::replace(
+            &mut self.contents,
+            Contents {
+                store: S::new(0),
+                len: 0,
+            },
+        )
     }
 
     /// Put back what [`Ram::take_contents`] took, into a RAM of the same size.
-    pub fn restore_contents(&mut self, contents: Contents) {
+    pub fn restore_contents(&mut self, contents: Contents<S>) {
         assert_eq!(
             contents.len, self.contents.len,
             "the DRAM keeps its size across a reset"
@@ -325,8 +508,8 @@ impl Ram {
     }
 
     #[inline]
-    fn slots(&self) -> &[AtomicPtr<Chunk>] {
-        &self.contents.slots
+    fn map(&self) -> S::Map {
+        self.contents.store.map()
     }
 
     #[inline]
@@ -342,11 +525,11 @@ impl Ram {
         if off >= self.contents.len {
             return None;
         }
-        let chunk = chunk_at(self.slots(), off);
-        if chunk.is_null() {
+        let gen = self.map().gen(off);
+        if !S::Map::FLAT && gen.is_null() {
             return Some(0);
         }
-        Some(unsafe { (*chunk).gens[(off & CHUNK_MASK) as usize >> PAGE_SHIFT] })
+        Some(unsafe { *gen })
     }
 
     pub fn base(&self) -> u32 {
@@ -355,10 +538,9 @@ impl Ram {
 
     /// The same bytes, for cores on other threads. See [`SharedRam`] for what
     /// the caller promises.
-    pub fn share(&mut self) -> SharedRam {
+    pub fn share(&mut self) -> SharedRam<S::Map> {
         SharedRam {
-            slots: self.contents.slots.as_ptr(),
-            chunks: self.contents.slots.len(),
+            map: self.map(),
             len: self.contents.len,
         }
     }
@@ -371,17 +553,17 @@ impl Ram {
         self.contents.len == 0
     }
 
-    /// The whole RAM from offset 0, a chunk at a time.
+    /// The whole RAM from offset 0, 1 MiB at a time.
     pub fn regions(&self) -> impl Iterator<Item = (u64, Region<'_>)> {
-        let len = self.contents.len;
-        self.slots().iter().enumerate().map(move |(i, slot)| {
-            let off = (i as u64) << CHUNK_SHIFT;
+        let (map, len) = (self.map(), self.contents.len);
+        (0..len.div_ceil(CHUNK as u64)).map(move |i| {
+            let off = i << CHUNK_SHIFT;
             let n = (len - off).min(CHUNK as u64) as usize;
-            let chunk = slot.load(Ordering::Acquire);
-            let region = if chunk.is_null() {
+            let p = map.byte(off);
+            let region = if !S::Map::FLAT && p.is_null() {
                 Region::Zeros(n)
             } else {
-                Region::Bytes(unsafe { std::slice::from_raw_parts(Chunk::byte(chunk, 0), n) })
+                Region::Bytes(unsafe { std::slice::from_raw_parts(p, n) })
             };
             (off, region)
         })
@@ -394,19 +576,19 @@ impl Ram {
 
     pub fn write_slice(&mut self, addr: u32, bytes: &[u8]) -> BusResult<()> {
         let off = self.offset(addr, bytes.len())?;
+        let map = self.map();
         let mut done = 0;
         while done < bytes.len() {
             let at = off + done as u64;
-            let n = (CHUNK - (at & CHUNK_MASK) as usize).min(bytes.len() - done);
+            let n = map.room(at).min(bytes.len() - done);
             let piece = &bytes[done..done + n];
-            let mut chunk = chunk_at(self.slots(), at);
-            if chunk.is_null() && piece.iter().any(|&b| b != 0) {
-                chunk = install(self.slots(), at);
+            let mut p = map.byte(at);
+            if !S::Map::FLAT && p.is_null() && piece.iter().any(|&b| b != 0) {
+                p = map.byte_or_allocate(at);
             }
-            if !chunk.is_null() {
-                let at = (at & CHUNK_MASK) as usize;
-                unsafe { ptr::copy_nonoverlapping(piece.as_ptr(), Chunk::byte(chunk, at), n) };
-                Chunk::bump(chunk, at, n);
+            if S::Map::FLAT || !p.is_null() {
+                unsafe { ptr::copy_nonoverlapping(piece.as_ptr(), p, n) };
+                bump(map, at, n);
             }
             done += n;
         }
@@ -416,17 +598,17 @@ impl Ram {
         Ok(())
     }
 
-    /// `len` bytes from `addr`: in place when they sit in one chunk the guest
-    /// has written to, else a copy.
+    /// `len` bytes from `addr`: in place when they are contiguous and have
+    /// been written to, else a copy.
     pub fn read_slice(&self, addr: u32, len: usize) -> BusResult<Cow<'_, [u8]>> {
         let off = self.offset(addr, len)?;
         self.note_read(off, len);
-        if within_chunk(off, len) {
-            let chunk = chunk_at(self.slots(), off);
-            if chunk.is_null() {
+        let map = self.map();
+        if map.room(off) >= len {
+            let p = map.byte(off);
+            if !S::Map::FLAT && p.is_null() {
                 return Ok(Cow::Owned(vec![0; len]));
             }
-            let p = Chunk::byte(chunk, (off & CHUNK_MASK) as usize);
             return Ok(Cow::Borrowed(unsafe { std::slice::from_raw_parts(p, len) }));
         }
         let mut out = vec![0; len];
@@ -454,14 +636,14 @@ impl Ram {
         if !self.fits(off, N) {
             return None;
         }
-        if !within_chunk(off, N) {
+        let map = self.map();
+        if map.room(off) < N {
             return Some(self.bytes_across(off));
         }
-        let chunk = chunk_at(self.slots(), off);
-        if chunk.is_null() {
+        let p = map.byte(off);
+        if !S::Map::FLAT && p.is_null() {
             return Some([0; N]);
         }
-        let p = Chunk::byte(chunk, (off & CHUNK_MASK) as usize);
         Some(unsafe { ptr::read_unaligned(p.cast::<[u8; N]>()) })
     }
 
@@ -473,19 +655,26 @@ impl Ram {
     /// Write `N` bytes `off` bytes into RAM, which [`Self::fits`] has checked.
     #[inline]
     fn put<const N: usize>(&mut self, off: u64, bytes: [u8; N]) {
-        if !within_chunk(off, N) {
+        let map = self.map();
+        if map.room(off) < N {
             return self.put_across(off, &bytes);
         }
-        let mut chunk = chunk_at(self.slots(), off);
-        if chunk.is_null() {
+        let mut p = map.byte(off);
+        if !S::Map::FLAT && p.is_null() {
             if bytes == [0; N] {
                 return;
             }
-            chunk = install(self.slots(), off);
+            p = map.byte_or_allocate(off);
         }
-        let at = (off & CHUNK_MASK) as usize;
-        unsafe { ptr::write_unaligned(Chunk::byte(chunk, at).cast::<[u8; N]>(), bytes) };
-        Chunk::bump(chunk, at, N);
+        unsafe { ptr::write_unaligned(p.cast::<[u8; N]>(), bytes) };
+        let first = map.gen(off);
+        let last = map.gen(off + N as u64 - 1);
+        unsafe {
+            *first += 1;
+            if last != first {
+                *last += 1;
+            }
+        }
     }
 
     #[cold]
@@ -591,13 +780,11 @@ impl Ram {
 mod tests {
     use super::*;
 
-    impl Ram {
-        fn resident_bytes(&self) -> usize {
-            self.regions()
-                .filter(|(_, r)| matches!(r, Region::Bytes(_)))
-                .count()
-                * CHUNK
-        }
+    fn resident(ram: &Ram<Chunks>) -> usize {
+        ram.regions()
+            .filter(|(_, r)| matches!(r, Region::Bytes(_)))
+            .count()
+            * CHUNK
     }
 
     #[test]
@@ -610,31 +797,14 @@ mod tests {
         assert!(before.is_empty());
     }
 
-    #[test]
-    fn only_what_is_written_takes_host_memory() {
-        let mut ram = Ram::new(0, 8 << 30);
-        assert_eq!(ram.resident_bytes(), 0);
-        assert_eq!(ram.load_at(0x1_8000_0000, Width::Word), Ok(0));
-        ram.store_at(0x1_8000_0000, Width::Word, 0).unwrap();
-        ram.write_slice(0x4000_0000, &[0; 3 << 20]).unwrap();
-        assert_eq!(ram.resident_bytes(), 0, "zeros over zeros change nothing");
-        ram.store_at(0x1_8000_0000, Width::Word, 0xDEAD_BEEF)
-            .unwrap();
-        assert_eq!(ram.load_at(0x1_8000_0000, Width::Word), Ok(0xDEAD_BEEF));
-        assert_eq!(ram.resident_bytes(), 1 << 20);
-        assert!(ram.load_at((8 << 30) - 2, Width::Word).is_err());
-    }
-
-    #[test]
-    fn an_access_across_two_chunks_reaches_both() {
-        let mut ram = Ram::new(0x100, 4 << 20);
+    fn across_two_chunks<S: Store>() {
+        let mut ram = Ram::<S>::new_in(0x100, 4 << 20);
         let edge = 0x100 + (1 << 20) - 2;
         ram.store(edge, Width::Word, 0x1122_3344).unwrap();
         assert_eq!(ram.load(edge, Width::Word), Ok(0x1122_3344));
         assert_eq!(ram.load(edge + 2, Width::Half), Ok(0x1122));
         ram.write_slice(edge - 1, b"abcdef").unwrap();
         assert_eq!(&*ram.read_slice(edge - 1, 6).unwrap(), b"abcdef");
-        assert_eq!(ram.resident_bytes(), 2 << 20);
         let shared = ram.share();
         assert_eq!(shared.load(u64::from(edge - 0x100), 4), Some(0x6564_6362));
         shared
@@ -642,21 +812,74 @@ mod tests {
             .unwrap();
         assert_eq!(shared.load((2 << 20) - 4, 8), Some(0x0102_0304_0506_0708));
         assert_eq!(ram.load_at((2 << 20) - 4, Width::Word), Ok(0x0506_0708));
+        assert!(ram.load_at((4 << 20) - 2, Width::Word).is_err());
     }
 
     #[test]
-    fn a_page_written_for_the_first_time_moves_its_generation() {
-        let mut ram = Ram::new(0, 2 << 20);
+    fn an_access_across_two_chunks_reaches_both() {
+        across_two_chunks::<Flat>();
+        across_two_chunks::<Chunks>();
+    }
+
+    fn page_generations<S: Store>() {
+        let mut ram = Ram::<S>::new_in(0, 2 << 20);
         let before = ram.page_gen(0x1000).unwrap();
-        ram.store(0x1000, Width::Word, 0).unwrap();
-        assert_eq!(ram.page_gen(0x1000), Some(before), "zeros change nothing");
         ram.store(0x1000, Width::Word, 1).unwrap();
         let after = ram.page_gen(0x1000).unwrap();
         assert_ne!(after, before);
+        let neighbour = ram.page_gen(0x2000);
         ram.store(0x1000, Width::Word, 0).unwrap();
         assert_ne!(ram.page_gen(0x1000), Some(after));
+        assert_eq!(ram.page_gen(0x2000), neighbour);
+        assert_eq!(ram.page_gen(2 << 20), None);
+    }
+
+    #[test]
+    fn a_store_moves_its_page_generation_and_only_its_own() {
+        page_generations::<Flat>();
+        page_generations::<Chunks>();
+    }
+
+    fn exclusive<S: Store>() {
+        let mut ram = Ram::<S>::new_in(0, 1 << 20);
         let shared = ram.share();
-        shared.store(0x10_1000, 4, 7).unwrap();
+        assert_eq!(shared.compare_exchange(0x40, 8, 1, 2), Some(false));
+        assert_eq!(shared.compare_exchange(0x40, 8, 0, 0), Some(true));
+        assert_eq!(shared.compare_exchange(0x40, 8, 0, 5), Some(true));
+        assert_eq!(shared.load(0x40, 8), Some(5));
+        assert_eq!(shared.compare_exchange(0x40, 8, 0, 6), Some(false));
+        assert_eq!(shared.compare_exchange(0x44, 8, 0, 6), None, "misaligned");
+    }
+
+    #[test]
+    fn an_exclusive_store_compares_against_what_is_there() {
+        exclusive::<Flat>();
+        exclusive::<Chunks>();
+    }
+
+    #[test]
+    fn chunks_take_host_memory_only_for_what_is_written() {
+        let mut ram = Ram::<Chunks>::new_in(0, 8 << 30);
+        assert_eq!(resident(&ram), 0);
+        assert_eq!(ram.load_at(0x1_8000_0000, Width::Word), Ok(0));
+        ram.store_at(0x1_8000_0000, Width::Word, 0).unwrap();
+        ram.write_slice(0x4000_0000, &[0; 3 << 20]).unwrap();
+        ram.share().store(0x10, 8, 0).unwrap();
+        assert_eq!(resident(&ram), 0, "zeros over zeros change nothing");
+        ram.store_at(0x1_8000_0000, Width::Word, 0xDEAD_BEEF)
+            .unwrap();
+        assert_eq!(ram.load_at(0x1_8000_0000, Width::Word), Ok(0xDEAD_BEEF));
+        assert_eq!(resident(&ram), 1 << 20);
+        assert!(ram.load_at((8 << 30) - 2, Width::Word).is_err());
+    }
+
+    #[test]
+    fn a_chunk_written_for_the_first_time_moves_its_generations() {
+        let mut ram = Ram::<Chunks>::new_in(0, 2 << 20);
+        assert_eq!(ram.page_gen(0x1000), Some(0));
+        ram.store(0x1000, Width::Word, 0).unwrap();
+        assert_eq!(ram.page_gen(0x1000), Some(0), "zeros change nothing");
+        ram.share().store(0x10_1000, 4, 7).unwrap();
         assert_ne!(
             ram.page_gen(0x10_1000),
             Some(0),
@@ -665,19 +888,8 @@ mod tests {
     }
 
     #[test]
-    fn an_exclusive_store_into_untouched_memory_compares_against_zero() {
-        let mut ram = Ram::new(0, 1 << 20);
-        let shared = ram.share();
-        assert_eq!(shared.compare_exchange(0x40, 8, 1, 2), Some(false));
-        assert_eq!(shared.compare_exchange(0x40, 8, 0, 0), Some(true));
-        assert_eq!(ram.resident_bytes(), 0);
-        assert_eq!(shared.compare_exchange(0x40, 8, 0, 5), Some(true));
-        assert_eq!(shared.load(0x40, 8), Some(5));
-    }
-
-    #[test]
     fn regions_walk_the_whole_ram() {
-        let mut ram = Ram::new(0, (2 << 20) + 0x1000);
+        let mut ram = Ram::<Chunks>::new_in(0, (2 << 20) + 0x1000);
         ram.store_at(0x20_0010, Width::Byte, 9).unwrap();
         let regions: Vec<_> = ram.regions().collect();
         assert_eq!(regions.len(), 3);
@@ -685,5 +897,8 @@ mod tests {
         assert!(
             matches!(&regions[2], (0x20_0000, Region::Bytes(b)) if b.len() == 0x1000 && b[0x10] == 9)
         );
+        let flat = Ram::<Flat>::new_in(0, (2 << 20) + 0x1000);
+        let lens: Vec<_> = flat.regions().map(|(_, r)| r.len()).collect();
+        assert_eq!(lens, [1 << 20, 1 << 20, 0x1000]);
     }
 }
