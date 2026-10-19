@@ -37,8 +37,8 @@ pub(super) fn field(insn: u32, lo: u32, len: u32) -> u32 {
     (insn >> lo) & ((1 << len) - 1)
 }
 
-#[inline]
-fn sext(v: u64, bits: u32) -> u64 {
+#[inline(always)]
+pub(super) fn sext(v: u64, bits: u32) -> u64 {
     let s = 64 - bits;
     (((v << s) as i64) >> s) as u64
 }
@@ -61,8 +61,8 @@ fn datasize(sf: bool) -> u32 {
     }
 }
 
-#[inline]
-fn mask(v: u64, sf: bool) -> u64 {
+#[inline(always)]
+pub(super) fn mask(v: u64, sf: bool) -> u64 {
     if sf {
         v
     } else {
@@ -70,7 +70,7 @@ fn mask(v: u64, sf: bool) -> u64 {
     }
 }
 
-#[inline]
+#[inline(always)]
 fn top_bit(v: u64, sf: bool) -> bool {
     (v >> (datasize(sf) - 1)) & 1 != 0
 }
@@ -85,6 +85,7 @@ fn ror(v: u64, amount: u32, sf: bool) -> u64 {
 }
 
 /// `AddWithCarry` (ARM ARM J1): the result and its `NZCV`.
+#[inline(always)]
 pub(super) fn add_with_carry(x: u64, y: u64, carry: bool, sf: bool) -> (u64, u32) {
     let c = carry as u64;
     let (r, carry_out, overflow) = if sf {
@@ -115,8 +116,8 @@ pub(super) fn add_with_carry(x: u64, y: u64, carry: bool, sf: bool) -> (u64, u32
     (r, nzcv)
 }
 
-#[inline]
-fn logic_flags(r: u64, sf: bool) -> u32 {
+#[inline(always)]
+pub(super) fn logic_flags(r: u64, sf: bool) -> u32 {
     let mut nzcv = 0;
     if top_bit(r, sf) {
         nzcv |= NZCV_N;
@@ -177,8 +178,8 @@ pub(super) fn decode_bit_masks(
 }
 
 /// `ShiftReg`: LSL, LSR, ASR, ROR of a `datasize`-bit value.
-#[inline]
-fn shift_reg(v: u64, kind: u32, amount: u32, sf: bool) -> u64 {
+#[inline(always)]
+pub(super) fn shift_reg(v: u64, kind: u32, amount: u32, sf: bool) -> u64 {
     if amount == 0 {
         return v;
     }
@@ -230,7 +231,7 @@ fn crc32(mut acc: u32, val: u64, bytes: u32, castagnoli: bool) -> u32 {
 }
 
 impl Cpu {
-    #[inline]
+    #[inline(always)]
     pub(super) fn xr(&self, r: u32, sf: bool) -> u64 {
         if r == 31 {
             0
@@ -239,7 +240,7 @@ impl Cpu {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub(super) fn xsp(&self, r: u32) -> u64 {
         if r == 31 {
             self.sp()
@@ -248,14 +249,14 @@ impl Cpu {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub(super) fn set_xr(&mut self, r: u32, sf: bool, v: u64) {
         if r != 31 {
             self.x[r as usize] = mask(v, sf);
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub(super) fn set_xsp(&mut self, r: u32, sf: bool, v: u64) {
         if r == 31 {
             self.set_sp(mask(v, sf));
@@ -264,7 +265,7 @@ impl Cpu {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub(super) fn cond_holds(&self, cond: u32) -> bool {
         let f = self.nzcv;
         let (n, z, c, v) = (
@@ -309,7 +310,7 @@ pub(super) fn execute<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M)
 // ---------------------------------------------------------------------------
 // Data processing, immediate (C4.1.86)
 
-fn dp_imm(cpu: &mut Cpu, insn: u32) -> Exec {
+pub(super) fn dp_imm(cpu: &mut Cpu, insn: u32) -> Exec {
     let sf = bit(insn, 31);
     let rd = field(insn, 0, 5);
     let rn = field(insn, 5, 5);
@@ -503,7 +504,7 @@ fn exception_gen(cpu: &mut Cpu, insn: u32) -> Exec {
     Err(Stop::Exception(e))
 }
 
-fn branch_reg(cpu: &mut Cpu, insn: u32) -> Exec {
+pub(super) fn branch_reg(cpu: &mut Cpu, insn: u32) -> Exec {
     let opc = field(insn, 21, 4);
     let rn = field(insn, 5, 5);
     // op2 = 11111, op3 = 000000, op4 = 00000; anything else is pointer
@@ -719,7 +720,7 @@ fn write128<M: Memory + ?Sized>(cpu: &mut Cpu, mem: &mut M, addr: u64, v: u128) 
 /// non-SIMD `opc` (store, load, load signed to 64, load signed to 32); for
 /// a SIMD&FP register it is store/load only.
 #[derive(Clone, Copy)]
-enum Access {
+pub(super) enum Access {
     Store,
     Load,
     LoadSigned64,
@@ -729,7 +730,7 @@ enum Access {
 /// Load or store one register. Returns the loaded value for loads to a
 /// general register so the caller can write it after any base write-back.
 #[inline(always)]
-fn transfer<M: Memory + ?Sized>(
+pub(super) fn transfer<M: Memory + ?Sized>(
     cpu: &mut Cpu,
     mem: &mut M,
     simd: bool,
@@ -773,7 +774,11 @@ fn transfer<M: Memory + ?Sized>(
 
 /// Decode `size`, `V`, `opc` of the single-register forms into the access
 /// scale and kind. `Ok(None)` is a prefetch.
-fn single_access(size: u32, simd: bool, opc: u32) -> Result<Option<(u32, Access)>, Stop> {
+pub(super) fn single_access(
+    size: u32,
+    simd: bool,
+    opc: u32,
+) -> Result<Option<(u32, Access)>, Stop> {
     if simd {
         let scale = if opc & 2 != 0 {
             if size != 0 {
@@ -842,7 +847,7 @@ fn ld_st_reg_uimm<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M) -> 
 
 /// The `bit 21` / `bits 11:10` sub-table: unscaled, post-indexed,
 /// unprivileged, pre-indexed and register-offset forms.
-fn ld_st_reg<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M) -> Exec {
+pub(super) fn ld_st_reg<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M) -> Exec {
     let size = field(insn, 30, 2);
     let simd = bit(insn, 26);
     let opc = field(insn, 22, 2);
@@ -906,7 +911,7 @@ fn ld_st_reg<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M) -> Exec 
     Ok(())
 }
 
-fn ld_st_pair<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M) -> Exec {
+pub(super) fn ld_st_pair<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M) -> Exec {
     let opc = field(insn, 30, 2);
     let simd = bit(insn, 26);
     let mode = field(insn, 23, 2);
@@ -1035,7 +1040,7 @@ fn ld_st_exclusive<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M) ->
 // ---------------------------------------------------------------------------
 // Data processing, register (C4.1.89)
 
-fn dp_reg(cpu: &mut Cpu, insn: u32) -> Exec {
+pub(super) fn dp_reg(cpu: &mut Cpu, insn: u32) -> Exec {
     let sf = bit(insn, 31);
     let rd = field(insn, 0, 5);
     let rn = field(insn, 5, 5);

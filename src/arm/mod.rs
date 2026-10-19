@@ -294,6 +294,8 @@ pub struct ArmSide {
     sha_on: bool,
     /// `PIMU_NO_STRAIGHT=1` steps a burst one instruction at a time.
     straight_on: bool,
+    /// The cores' instructions, decoded (`src/aarch64/predecode.rs`).
+    decoded: crate::aarch64::predecode::Decoded,
     /// `PIMU_ARM_BLOCKS=1` counts straight-line runs; only [`Self::step_core`]
     /// sees them, so it takes the cores off the burst path.
     blocks_on: bool,
@@ -436,6 +438,7 @@ impl ArmSide {
             burst_on: std::env::var_os("PIMU_NO_BURST").is_none(),
             sha_on: std::env::var_os("PIMU_NO_SHA_SKIP").is_none(),
             straight_on: std::env::var_os("PIMU_NO_STRAIGHT").is_none(),
+            decoded: Default::default(),
             blocks_on: crate::diag::ON && std::env::var_os("PIMU_ARM_BLOCKS").is_some(),
             stop_on_store: false,
             stored: false,
@@ -847,7 +850,7 @@ impl ArmSide {
             released_at: self.released_at.unwrap_or(0),
             periph_store: false,
         };
-        let step = core.cpu.step_system(&mut bus);
+        let step = core.cpu.step_system_through(&mut bus, &mut self.decoded);
         let done = Stepped {
             step,
             pc,
@@ -916,6 +919,7 @@ impl ArmSide {
         let track = self.park_on || self.sha_on;
         let released_at = self.released_at.unwrap_or(0);
         let mut cycles = self.cycles;
+        let decoded = &mut self.decoded;
         let core = &mut self.cores[id];
         core.waiting = false;
         if core.wfe_until.take().is_some() {
@@ -955,25 +959,29 @@ impl ArmSide {
                 if let Some((va_page, el, pa_page)) = cpu.tlb.fetch_hint() {
                     // The alignment test is hoisted too: a PC that starts
                     // aligned and only advances by 4 stays aligned.
+                    let code = bus.code_page(pa_page);
                     if el == cpu.el
                         && va_page == cpu.pc & !0xFFF
                         && cpu.pc & 3 == 0
                         && !detect.watching()
+                        && code.is_some()
                     {
+                        let code = code.unwrap_or(std::ptr::null());
                         loop {
                             let pc = cpu.pc;
                             if cycles >= limit || pc & !0xFFF != va_page {
                                 break;
                             }
-                            let Ok(insn) = bus.fetch(pa_page | (pc & 0xFFF)) else {
-                                break;
-                            };
+                            // Inside the page `code` points at, which nothing
+                            // frees or moves while the cores run.
+                            let insn =
+                                unsafe { code.add(((pc & 0xFFF) >> 2) as usize).read_unaligned() };
                             bus.cycles = cycles;
                             bus.written = None;
                             // What `step_system` does with an exception the
                             // instruction raised; the interrupt tests in
                             // front of it are the ones hoisted out.
-                            let step = match cpu.step_fetched(insn, &mut bus) {
+                            let step = match cpu.step_decoded(decoded.get(insn), &mut bus) {
                                 Step::Exception(e) => {
                                     cpu.take_sync(e);
                                     Step::Took(e)
@@ -1016,7 +1024,7 @@ impl ArmSide {
             bus.cycles = cycles;
             bus.written = None;
             let pc = cpu.pc;
-            let step = cpu.step_system(&mut bus);
+            let step = cpu.step_system_through(&mut bus, decoded);
             let wrote = bus.written.is_some();
             if !matches!(step, Step::Retired)
                 || bus.io
@@ -1466,6 +1474,27 @@ fn timer_reg(key: u32) -> Option<Reg> {
 }
 
 impl ArmBus<'_> {
+    /// Whether `size` bytes at `addr` are all DRAM, the test `route` makes
+    /// first, and coherency tracking, which wants the slow path's bookkeeping,
+    /// is off.
+    #[inline(always)]
+    fn in_ram(&self, addr: u64, size: u32) -> bool {
+        let end = addr.saturating_add(u64::from(size));
+        end <= self.m.ram.len()
+            && (end <= RAM_LOW_END || addr >= RAM_HIGH_BASE)
+            && !self.m.ram.coherency.is_on()
+    }
+
+    /// The DRAM page at `pa_page` as host memory, when an instruction fetch
+    /// from it would be a plain read.
+    #[inline(always)]
+    fn code_page(&self, pa_page: u64) -> Option<*const u32> {
+        if !self.in_ram(pa_page, 0x1000) {
+            return None;
+        }
+        self.m.ram.page_ptr(pa_page)
+    }
+
     /// An instruction fetch from outside RAM; out of line to keep the common
     /// step's register pressure down.
     #[inline(never)]
@@ -1492,6 +1521,11 @@ impl Memory for ArmBus<'_> {
 
     #[inline]
     fn read(&mut self, addr: u64, size: u32) -> Result<u64, Abort> {
+        if self.log.is_none() && self.in_ram(addr, size) {
+            if let Some(v) = self.m.ram.read_le(addr, size) {
+                return Ok(v);
+            }
+        }
         let value = if size == 8 {
             let lo = self.read32(addr, 4)?;
             let hi = self.read32(addr.wrapping_add(4), 4)?;
@@ -1515,6 +1549,9 @@ impl Memory for ArmBus<'_> {
             Some((lo, hi)) => (lo.min(addr), hi.max(end)),
             None => (addr, end),
         });
+        if self.in_ram(addr, size) && self.m.ram.write_le(addr, size, value) {
+            return Ok(());
+        }
         if size == 8 {
             self.write32(addr, 4, value)?;
             return self.write32(addr.wrapping_add(4), 4, value >> 32);

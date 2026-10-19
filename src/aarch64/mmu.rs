@@ -76,7 +76,13 @@ pub struct Tlb {
     /// as the translation behind it, so [`Tlb::flush`] drops it too, and the EL
     /// is part of the key because it picks the regime and the permissions.
     fetch: Option<(u64, u32, u64)>,
+    /// The same for data: the last page read and the last page written, as
+    /// `(VA page | EL, PA page)`, each made only by an access that its
+    /// permissions allowed. [`NO_HINT`] matches no key.
+    data: [(u64, u64); 2],
 }
+
+const NO_HINT: (u64, u64) = (u64::MAX, 0);
 
 impl Default for Tlb {
     fn default() -> Self {
@@ -98,11 +104,13 @@ impl Tlb {
             walks: 0,
             broadcast: false,
             fetch: None,
+            data: [NO_HINT; 2],
         }
     }
 
     pub fn flush(&mut self) {
         self.fetch = None;
+        self.data = [NO_HINT; 2];
         self.generation = self.generation.wrapping_add(1);
         if self.generation == 0 {
             self.entries.fill(Entry::default());
@@ -297,6 +305,29 @@ impl Cpu {
     /// Translate `va` for an access of `kind`; errors are fault status codes.
     #[inline(always)]
     fn translate<M: Memory + ?Sized>(
+        &mut self,
+        mem: &mut M,
+        va: u64,
+        kind: Kind,
+    ) -> Result<u64, u8> {
+        let hinted = kind != Kind::Fetch && !self.unprivileged;
+        let key = (va & !0xFFF) | u64::from(self.el);
+        let slot = kind as usize - 1;
+        if hinted {
+            let (k, pa) = self.tlb.data[slot];
+            if k == key {
+                return Ok(pa | (va & 0xFFF));
+            }
+        }
+        let pa = self.translate_slow(mem, va, kind)?;
+        if hinted {
+            self.tlb.data[slot] = (key, pa & !0xFFF);
+        }
+        Ok(pa)
+    }
+
+    #[inline(never)]
+    fn translate_slow<M: Memory + ?Sized>(
         &mut self,
         mem: &mut M,
         va: u64,

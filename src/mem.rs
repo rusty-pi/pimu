@@ -724,6 +724,50 @@ impl<S: Store> Ram<S> {
         Ok(())
     }
 
+    /// The 4 KiB page at `off` (page-aligned, inside RAM) as host memory, for
+    /// fetching instructions straight out of it; `None` where nothing but
+    /// zeros has been written. The pointer holds until the contents are
+    /// taken or the RAM dropped.
+    #[inline(always)]
+    pub fn page_ptr(&self, off: u64) -> Option<*const u32> {
+        let p = self.map().byte(off);
+        (!p.is_null()).then_some(p.cast::<u32>().cast_const())
+    }
+
+    /// A little-endian value of 1, 2, 4 or 8 bytes `off` bytes into RAM, for
+    /// a core's data access; `None` past the end.
+    #[inline(always)]
+    pub fn read_le(&self, off: u64, size: u32) -> Option<u64> {
+        self.note_read(off, size as usize);
+        match size {
+            1 => self.bytes::<1>(off).map(|b| u64::from(b[0])),
+            2 => self
+                .bytes::<2>(off)
+                .map(|b| u64::from(u16::from_le_bytes(b))),
+            4 => self
+                .bytes::<4>(off)
+                .map(|b| u64::from(u32::from_le_bytes(b))),
+            _ => self.bytes::<8>(off).map(u64::from_le_bytes),
+        }
+    }
+
+    /// [`Self::read_le`]'s store; `false` past the end.
+    #[inline(always)]
+    pub fn write_le(&mut self, off: u64, size: u32, value: u64) -> bool {
+        let n = size as usize;
+        if !self.fits(off, n) {
+            return false;
+        }
+        match size {
+            1 => self.put(off, [value as u8]),
+            2 => self.put(off, (value as u16).to_le_bytes()),
+            4 => self.put(off, (value as u32).to_le_bytes()),
+            _ => self.put(off, value.to_le_bytes()),
+        }
+        self.note_write(off, n);
+        true
+    }
+
     #[inline]
     pub fn load(&self, addr: u32, width: Width) -> BusResult<u32> {
         let unmapped = || BusError::Unmapped {
