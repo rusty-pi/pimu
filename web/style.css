@@ -117,7 +117,7 @@ button.switch[aria-checked="true"] .track::after { left: 16px; }
     grid-template-areas: "changes board side" "changes console screen";
     min-height: 0;
   }
-  body { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; height: 100vh; min-height: 720px; }
+  body { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; height: 100vh; min-height: 720px; }
   .changes-col { grid-area: changes; overflow: auto; }
   .board-pane { grid-area: board; }
   .drawer { grid-area: side; }
