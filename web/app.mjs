@@ -141,6 +141,7 @@ let lastIo = {};
 
 function setPhase(next, detail) {
   phase = next;
+  stopwatch.run(next === "running");
   const labels = { off: "Off", downloading: "Downloading", starting: "Starting", running: "Running", paused: "Paused", ended: "Stopped", error: "Error" };
   const status = $("#phase");
   status.dataset.phase = next;
@@ -166,6 +167,7 @@ function setPhase(next, detail) {
 async function powerOn() {
   clearScreen();
   transfers.length = 0;
+  stopwatch.reset();
   setPhase("downloading", "preparing");
   let request;
   try {
@@ -456,6 +458,25 @@ function renderDownloads(list) {
 
 // ---- cores, clock, LEDs ---------------------------------------------------------------
 
+const stopwatch = (() => {
+  let total = 0;
+  let since = null;
+  return {
+    run(on) {
+      if (on && since === null) since = performance.now();
+      if (!on && since !== null) {
+        total += performance.now() - since;
+        since = null;
+      }
+    },
+    reset() {
+      total = 0;
+      since = null;
+    },
+    seconds: () => (total + (since === null ? 0 : performance.now() - since)) / 1e3,
+  };
+})();
+
 const CORE_WORDS = { off: "off", sleeping: "asleep", running: "running" };
 
 function setCores(cores) {
@@ -473,10 +494,11 @@ function showState() {
   if (!st) return;
   setCores(st.cores);
   $("#led-act").dataset.on = st.armReleased;
+  if (st.ended) stopwatch.run(false);
   const seconds = (st.modelUs / 1e6).toFixed(1);
   const arm = st.cores.arm.reduce((n, c) => n + c.insns, 0);
   const millions = (n) => `${(n / 1e6).toFixed(0)} M`;
-  $("#clock").textContent = `model time ${seconds} s · VPU ${millions(st.retired)} instructions · ARM ${millions(arm)}${st.parallel ? " · cores on threads" : ""}`;
+  $("#clock").textContent = `model time ${seconds} s · real ${stopwatch.seconds().toFixed(1)} s · VPU ${millions(st.retired)} instructions · ARM ${millions(arm)}${st.parallel ? " · cores on threads" : ""}`;
   const result = $("#result");
   if (st.ended) {
     result.textContent = `${st.ok ? "ok" : "failed"} – ${st.why}`;

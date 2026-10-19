@@ -340,13 +340,31 @@ test.describe("what the machine reports", () => {
   });
 
   test("the clock counts VPU and ARM instructions and the disk it has read", async ({ app }) => {
+    await app.page.clock.install({ time: 0 });
+    await app.page.clock.pauseAt(1000);
     await app.running();
+    await app.page.clock.runFor(2500);
     await app.emit({
       type: "state",
       io: { sd: { read: 17 << 20, requests: 17 }, usb: { read: 0, requests: 0 } },
       state: stateOf({ arm: ["running", "running", "sleeping", "running"], retired: 845_000_000, insns: 480_000_000, modelUs: 16_300_000 }),
     });
-    await expect(app.page.locator("#clock")).toHaveText("model time 16.3 s · VPU 845 M instructions · ARM 480 M · sd: 17.0 MiB read");
+    await expect(app.page.locator("#clock")).toHaveText("model time 16.3 s · real 2.5 s · VPU 845 M instructions · ARM 480 M · sd: 17.0 MiB read");
+  });
+
+  test("the real time stands still while paused and after the run ends", async ({ app }) => {
+    await app.page.clock.install({ time: 0 });
+    await app.page.clock.pauseAt(1000);
+    await app.running();
+    await app.page.clock.runFor(3000);
+    await app.emit({ type: "phase", phase: "paused" });
+    await app.page.clock.runFor(5000);
+    await app.emit({ type: "phase", phase: "running" });
+    await app.page.clock.runFor(1000);
+    await app.emit({ type: "state", io: {}, state: stateOf({ ended: true, ok: true, why: "done" }) });
+    await app.page.clock.runFor(5000);
+    await app.emit({ type: "state", io: {}, state: stateOf({ ended: true, ok: true, why: "done" }) });
+    await expect(app.page.locator("#clock")).toContainText("· real 4.0 s ·");
   });
 
   test("the result says how the run ended, and how many resets it had", async ({ app }) => {
