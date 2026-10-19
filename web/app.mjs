@@ -1664,47 +1664,64 @@ function layoutBoard() {
 portrait.addEventListener("change", layoutBoard);
 layoutBoard();
 
-// Traffic on the io channel makes the part's wire wobble like a plucked cord:
-// a wave along it, pinned at both ends, that fades out once the part is quiet.
+// Traffic on the io channel makes the SoC reel the part's cord in, the way a
+// vacuum cleaner takes its cord: ripples run from the part to the SoC, widest
+// near the part and pulled taut where the cord goes in, while the marks on it
+// slide inwards. It fades out once the part is quiet.
 const WIRE_OF_DEV = { eeprom: "eeprom", sd: "sd", emmc: "sd", usb: "usb", otg: "usbc", net: "eth" };
 const wires = (() => {
   const QUIET_MS = 600;
   const AMPLITUDE = 3.5;
   const WAVELENGTH = 36;
   const SPEED = 0.06;
+  const PULL = 0.04;
   const calm = matchMedia("(prefers-reduced-motion: reduce)");
   const state = new Map();
   let frame = 0;
+
+  const svg = (tag, cls) => {
+    const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    el.setAttribute("class", cls);
+    return el;
+  };
+
+  // The cord from the part's end to the SoC's, a point every 2 units.
+  const cord = (line, box) => {
+    const total = line.getTotalLength();
+    const at = (s) => line.getPointAtLength(Math.min(total, Math.max(0, s)));
+    const centre = { x: box.x.baseVal.value + box.width.baseVal.value / 2, y: box.y.baseVal.value + box.height.baseVal.value / 2 };
+    const away = (p) => Math.hypot(p.x - centre.x, p.y - centre.y);
+    const fromPart = away(at(0)) < away(at(total));
+    const points = [];
+    for (let d = 0; d <= total; d += 2) {
+      const s = fromPart ? d : total - d;
+      const [before, here, after] = [at(s - 1), at(s), at(s + 1)];
+      const length = Math.hypot(after.x - before.x, after.y - before.y) || 1;
+      points.push({ u: d / total, s: d, x: here.x, y: here.y, nx: -(after.y - before.y) / length, ny: (after.x - before.x) / length });
+    }
+    points.intake = at(fromPart ? total : 0);
+    return points;
+  };
 
   const wire = (part) => {
     if (!state.has(part)) {
       const group = $(`.part[data-part="${part}"]`);
       const line = group.querySelector(".wire");
-      const total = line.getTotalLength();
-      const at = (s) => line.getPointAtLength(Math.min(total, Math.max(0, s)));
-      const points = [];
-      for (let s = 0; s <= total; s += 2) {
-        const [before, here, after] = [at(s - 1), at(s), at(s + 1)];
-        const length = Math.hypot(after.x - before.x, after.y - before.y) || 1;
-        points.push({ s, x: here.x, y: here.y, nx: -(after.y - before.y) / length, ny: (after.x - before.x) / length });
-      }
-      points.at(-1).end = at(total);
-      points.total = total;
-      const wave = document.createElementNS("http://www.w3.org/2000/svg", "path");
-      wave.setAttribute("class", "wave");
-      line.after(wave);
-      state.set(part, { group, wave, points, until: 0, swing: 0 });
+      const wave = svg("path", "wave");
+      const ridges = svg("path", "ridges");
+      line.after(wave, ridges);
+      state.set(part, { group, wave, ridges, points: cord(line, group.querySelector(".box")), until: 0, swing: 0 });
     }
     return state.get(part);
   };
 
   const along = (points, swing, phase) => {
-    const out = points.map(({ s, x, y, nx, ny }) => {
-      const lift = swing * AMPLITUDE * Math.sin(Math.PI * s / points.total) * Math.sin(2 * Math.PI * s / WAVELENGTH - phase);
+    const out = points.map(({ u, s, x, y, nx, ny }) => {
+      const taut = 2.6 * Math.sin(Math.PI * u) * (1 - u);
+      const lift = swing * AMPLITUDE * taut * Math.sin(2 * Math.PI * s / WAVELENGTH - phase);
       return `${(x + nx * lift).toFixed(2)},${(y + ny * lift).toFixed(2)}`;
     });
-    const { end } = points.at(-1);
-    out.push(`${end.x.toFixed(2)},${end.y.toFixed(2)}`);
+    out.push(`${points.intake.x.toFixed(2)},${points.intake.y.toFixed(2)}`);
     return `M${out.join("L")}`;
   };
 
@@ -1717,6 +1734,9 @@ const wires = (() => {
       w.group.dataset.busy = target === 1;
       const d = w.swing && !calm.matches ? along(w.points, w.swing, now * SPEED) : "";
       w.wave.setAttribute("d", d);
+      w.ridges.setAttribute("d", d);
+      w.ridges.style.strokeDashoffset = -now * PULL;
+      w.ridges.style.opacity = w.swing;
       w.group.dataset.wobbling = !!d;
       if (w.swing) frame ||= requestAnimationFrame(draw);
     }

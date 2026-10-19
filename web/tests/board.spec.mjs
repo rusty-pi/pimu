@@ -85,6 +85,13 @@ test("traffic on the io channel makes the part's wire wobble, and it settles onc
     await expect(app.part(part).locator(".wave")).toHaveAttribute("d", /^M/);
   }
   await expect(app.part("hdmi")).not.toHaveAttribute("data-busy", "true");
+  const ends = async (part) => {
+    const d = await app.part(part).locator(".wave").getAttribute("d");
+    const points = d.slice(1).split("L").map((p) => p.split(",").map(Number));
+    return [points[0], points.at(-1)];
+  };
+  expect(await ends("eeprom")).toEqual([[170, 174], [242, 174]]);
+  expect(await ends("sd")).toEqual([[305, 430], [350, 370]]);
   for (const part of ["eeprom", "sd", "usb", "usbc", "eth"]) {
     await expect(app.part(part)).toHaveAttribute("data-busy", "false");
     await expect(app.part(part)).toHaveAttribute("data-wobbling", "false");

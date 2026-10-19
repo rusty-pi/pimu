@@ -165,6 +165,7 @@ button.switch[aria-checked="true"] .track::after { left: 16px; }
 #board .part[data-filled="true"] .wire { stroke: var(--wire); stroke-width: 1.8; stroke-dasharray: none; }
 #board .wave { fill: none; stroke: var(--wire); stroke-width: 1.8; stroke-linejoin: round; pointer-events: none; }
 #board .part[data-wobbling="true"] .wire { visibility: hidden; }
+#board .ridges { fill: none; stroke: var(--sheet); stroke-width: 1; stroke-dasharray: 1.2 5; pointer-events: none; }
 #board .part[data-busy="true"] .state { fill: var(--wire); stroke: var(--wire); animation: busy .3s ease-in-out infinite alternate; }
 @keyframes busy { to { opacity: .35; } }
 @media (prefers-reduced-motion: reduce) {
@@ -208,7 +209,7 @@ button.switch[aria-checked="true"] .track::after { left: 16px; }
 /* Phone: the same board stood upright – the SoC on top, the parts in two
    columns under it. app.mjs moves them; the edge ports and wires go. */
 #board.portrait { max-width: 440px; max-height: none; }
-#board.portrait .tag, #board.portrait .wire, #board.portrait .wave { display: none; }
+#board.portrait .tag, #board.portrait .wire, #board.portrait .wave, #board.portrait .ridges { display: none; }
 
 /* the part that is open */
 .drawer { position: relative; min-height: 0; }
