@@ -69,7 +69,7 @@ pub fn build_payload(scn: &Scenario) -> Result<Payload> {
 pub fn run_scenario(scn: &Scenario) -> Result<ScenarioRun> {
     let payload = build_payload(scn)?;
 
-    let ram_bytes = (scn.machine.ram_mb as usize)
+    let ram_bytes = u64::from(scn.machine.ram_mb)
         .checked_mul(1024 * 1024)
         .context("ram_mb too large")?;
     let mut machine = Machine::new(ram_bytes);

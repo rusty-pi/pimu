@@ -496,7 +496,7 @@ impl Genet {
             }
             if self.reg(d + 8) == 0 {
                 if let Ok(b) = ram.read_slice(dma_addr(self.reg(d + 4), ram.len()), len) {
-                    self.tx_frame.extend_from_slice(b);
+                    self.tx_frame.extend_from_slice(&b);
                 }
             }
             if ls & DESC_EOP != 0 {
@@ -791,8 +791,8 @@ impl Genet {
 /// GENET is a 40-bit master on the SCB, which maps DRAM 1:1, so an address
 /// inside RAM is physical — Linux's buffers can sit above the first gigabyte.
 /// Only an address past the RAM carries the VPU's cache-alias bits.
-fn dma_addr(addr: u32, ram_len: usize) -> u32 {
-    if (addr as usize) < ram_len {
+fn dma_addr(addr: u32, ram_len: u64) -> u32 {
+    if u64::from(addr) < ram_len {
         addr
     } else {
         addr & 0x3FFF_FFFF
@@ -1134,9 +1134,9 @@ mod tests {
         assert_eq!(ls0 >> 16, 64 + 2 + 60);
         assert_eq!(ls0 & 0xffff, DESC_SOP | DESC_EOP | DESC_RX_BRDCAST);
         let status = ram.read_slice(0x4000, 4).unwrap();
-        assert_eq!(u32::from_le_bytes(status.try_into().unwrap()), ls0);
+        assert_eq!(u32::from_le_bytes((*status).try_into().unwrap()), ls0);
         assert_eq!(
-            ram.read_slice(0x4000 + 66, 6).unwrap(),
+            *ram.read_slice(0x4000 + 66, 6).unwrap(),
             crate::net::BROADCAST
         );
         assert_eq!(rd(&mut g, RDMA_DESC + 12) >> 16, 64 + 2 + 200);
@@ -1174,7 +1174,7 @@ mod tests {
         g.service(0, &mut ram, &mut net);
         assert_eq!(rd(&mut g, RDMA_RINGS + RDMA_PROD_INDEX), 1);
         assert_eq!(rd(&mut g, RDMA_DESC) >> 16, 64 + 2 + 100);
-        assert_eq!(ram.read_slice(0x4000 + 66, 6).unwrap(), MAC);
+        assert_eq!(*ram.read_slice(0x4000 + 66, 6).unwrap(), MAC);
         // Ring 0's receive bit in INTRL2_1, not ring 16's in INTRL2_0.
         assert_eq!(rd(&mut g, INTRL2_1), 1 << 16);
         assert_eq!(rd(&mut g, INTRL2_0) & UMAC_IRQ_RXDMA_MBDONE, 0);
@@ -1221,7 +1221,7 @@ mod tests {
         g.service(0, &mut ram, &mut net);
         assert_eq!(rd(&mut g, RDMA_DESC) >> 16, 68);
         let fcs = ram.read_slice(0x4000 + 64, 4).unwrap();
-        assert_eq!(fcs, crc32(&f).to_le_bytes());
+        assert_eq!(*fcs, crc32(&f).to_le_bytes());
     }
 
     const UMAC_MPD_CTRL: u32 = regs::UMAC_MPD_CTRL;

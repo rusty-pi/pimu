@@ -149,7 +149,7 @@ impl Default for PerCore {
 /// What the machine's thread and the cores' threads share.
 struct Shared {
     ram: SharedRam,
-    ram_len: usize,
+    ram_len: u64,
     quit: AtomicBool,
     /// The machine is gone: stop waiting for it.
     abandon: AtomicBool,
@@ -1143,9 +1143,7 @@ impl Memory for ParBus<'_> {
     #[inline]
     fn fetch(&mut self, addr: u64) -> Result<u32, Abort> {
         let end = addr.saturating_add(4);
-        if end <= self.sh.ram_len as u64
-            && (end <= super::RAM_LOW_END || addr >= super::RAM_HIGH_BASE)
-        {
+        if end <= self.sh.ram_len && (end <= super::RAM_LOW_END || addr >= super::RAM_HIGH_BASE) {
             return self
                 .sh
                 .ram

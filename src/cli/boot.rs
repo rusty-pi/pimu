@@ -14,6 +14,7 @@ use pimu::firmware::Payload;
 use pimu::harness;
 use pimu::log::{Log, Spec};
 use pimu::machine::Machine;
+use pimu::mem::Region;
 use pimu::soc::{Board, Stepping};
 use pimu::vpu::decode::decode;
 use pimu::vpu::length::insn_len_bytes;
@@ -1419,7 +1420,7 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
     // Sent in one boot, it is not owed to the next.
     let mut magic_packet_after = opts.magic_packet_after.clone();
     // The DRAM keeps its contents through a reset, as a watchdog reset leaves it.
-    let mut kept_ram: Option<Vec<u8>> = None;
+    let mut kept_ram: Option<pimu::mem::Contents> = None;
     let (report, emu, start) = 'boot: loop {
         let mut machine = rig.machine(&flash)?;
         if let Some(ram) = kept_ram.take() {
@@ -1845,7 +1846,7 @@ impl<'a> Rig<'a> {
         } = *self.opts;
         // The EEPROM bootloader also touches the `0x6000_0000` L2-SRAM window,
         // which the model folds into DRAM past 512 MiB — room every board has.
-        let mut machine = Machine::new(self.board.memory_bytes() as usize);
+        let mut machine = Machine::new(self.board.memory_bytes());
         machine.set_board(self.board);
         machine.set_log(self.log.clone());
         if eeprom {
@@ -2062,9 +2063,10 @@ impl<'a> Rig<'a> {
         // SDRAM the same way, before a reset replaces it: a kernel that dies
         // before its console comes up still has its log buffer in there.
         if let Ok(p) = std::env::var("PIMU_DUMP_RAM") {
-            let ram = emu.machine.ram.as_slice();
-            let _ = std::fs::write(format!("{p}.{}", reboots + 1), ram);
-            eprintln!("wrote {p}.{} ({} bytes)", reboots + 1, ram.len());
+            let ram = &emu.machine.ram;
+            let path = format!("{p}.{}", reboots + 1);
+            let _ = write_ram(ram, &path);
+            eprintln!("wrote {path} ({} bytes)", ram.len());
         }
     }
 }
@@ -2571,29 +2573,45 @@ fn print_stub_log(machine: &Machine) {
     }
 }
 
+/// The whole DRAM into `path`, zeros and all.
+fn write_ram(ram: &pimu::mem::Ram, path: &str) -> std::io::Result<()> {
+    use std::io::{Read, Write};
+    let mut out = std::io::BufWriter::new(std::fs::File::create(path)?);
+    for (_, region) in ram.regions() {
+        match region {
+            Region::Bytes(b) => out.write_all(b)?,
+            Region::Zeros(n) => {
+                std::io::copy(&mut std::io::repeat(0).take(n as u64), &mut out)?;
+            }
+        }
+    }
+    out.flush()
+}
+
 /// Which DRAM pages are non-zero when the run ends: the RAM a snapshot would have
 /// to carry. The model starts RAM zeroed, so "not all zero" is exact for that.
 fn print_dram_map(machine: &Machine) {
     const PAGE: usize = 4096;
     let ram = &machine.ram;
-    let base = ram.base();
-    let mut runs: Vec<(u32, u32)> = Vec::new();
+    let base = u64::from(ram.base());
+    let mut runs: Vec<(u64, u64)> = Vec::new();
     let mut nonzero_pages = 0usize;
-    let total_pages = ram.len() / PAGE;
-    for p in 0..total_pages {
-        let addr = base + (p * PAGE) as u32;
-        let dirty = ram
-            .read_slice(addr, PAGE)
-            .map(|s| s.iter().any(|&b| b != 0))
-            .unwrap_or(false);
-        if !dirty {
+    let total_pages = ram.len() / PAGE as u64;
+    for (off, region) in ram.regions() {
+        let Region::Bytes(bytes) = region else {
             continue;
-        }
-        nonzero_pages += 1;
-        match runs.last_mut() {
-            // Bridge gaps of up to 64 KiB; their zero bytes are counted separately.
-            Some(last) if addr <= last.1 + 0x1_0000 => last.1 = addr + PAGE as u32,
-            _ => runs.push((addr, addr + PAGE as u32)),
+        };
+        for (i, page) in bytes.chunks(PAGE).enumerate() {
+            if page.iter().all(|&b| b == 0) {
+                continue;
+            }
+            let addr = base + off + (i * PAGE) as u64;
+            nonzero_pages += 1;
+            match runs.last_mut() {
+                // Bridge gaps of up to 64 KiB; their zero bytes are counted separately.
+                Some(last) if addr <= last.1 + 0x1_0000 => last.1 = addr + PAGE as u64,
+                _ => runs.push((addr, addr + PAGE as u64)),
+            }
         }
     }
     println!("\n--- DRAM occupancy when the run ended ---");

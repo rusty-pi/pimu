@@ -38,7 +38,7 @@ impl CacheAsRam {
             self.active = true;
             self.held = vec![false; LINES];
             self.diverged = vec![false; LINES];
-            self.behind = Some(Ram::new(0, WINDOW as usize));
+            self.behind = Some(Ram::new(0, WINDOW.into()));
         }
         let end = (phys as u64 + len as u64).min(WINDOW as u64) as u32;
         for line in phys >> LINE_SHIFT..end.div_ceil(LINE) {
@@ -82,7 +82,7 @@ impl CacheAsRam {
         let behind = self.behind.as_mut().expect("armed");
         if !self.diverged[l] {
             let base = phys & !(LINE - 1);
-            behind.write_slice(base, ram.read_slice(base, LINE as usize)?)?;
+            behind.write_slice(base, &ram.read_slice(base, LINE as usize)?)?;
             self.diverged[l] = true;
         }
         behind.store(phys, width, value)

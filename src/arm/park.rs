@@ -543,7 +543,7 @@ impl Park {
 
 pub(super) fn ram(m: &Machine, addr: u64, size: u32) -> Option<u64> {
     let end = addr.checked_add(u64::from(size))?;
-    if size > 8 || end > m.ram.len() as u64 {
+    if size > 8 || end > m.ram.len() {
         return None;
     }
     if end > super::RAM_LOW_END && addr < super::RAM_HIGH_BASE {

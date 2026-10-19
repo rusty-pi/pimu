@@ -1291,14 +1291,14 @@ struct ArmBus<'a> {
 
 /// Where `size` bytes at ARM physical `addr` land, given `ram_len` bytes of DRAM.
 #[inline]
-fn route(ram_len: usize, addr: u64, size: u32, write: bool) -> Result<Target, Abort> {
+fn route(ram_len: u64, addr: u64, size: u32, write: bool) -> Result<Target, Abort> {
     let abort = Abort { addr, write };
     let end = addr.checked_add(u64::from(size)).ok_or(abort)?;
     let within = |base: u32, len: u32| {
         let base = u64::from(base);
         (addr >= base && end <= base + u64::from(len)).then(|| (addr - base) as u32)
     };
-    if end <= ram_len as u64 && (end <= RAM_LOW_END || addr >= RAM_HIGH_BASE) {
+    if end <= ram_len && (end <= RAM_LOW_END || addr >= RAM_HIGH_BASE) {
         Ok(Target::Ram(addr))
     } else if PERIPH.contains(&addr) && end <= PERIPH.end {
         Ok(Target::Periph((addr - PERIPH_TO_BUS) as u32))
@@ -1480,7 +1480,7 @@ impl Memory for ArmBus<'_> {
     #[inline]
     fn fetch(&mut self, addr: u64) -> Result<u32, Abort> {
         let end = addr.saturating_add(4);
-        if end <= self.m.ram.len() as u64 && (end <= RAM_LOW_END || addr >= RAM_HIGH_BASE) {
+        if end <= self.m.ram.len() && (end <= RAM_LOW_END || addr >= RAM_HIGH_BASE) {
             return self
                 .m
                 .ram
@@ -2531,7 +2531,16 @@ mod tests {
         assert_eq!(on.cycles, off.cycles);
         let state = |c: &Core| (c.cpu.pc, c.cpu.x, c.cpu.sp_el, c.cpu.nzcv, c.cpu.v, c.insns);
         assert_eq!(state(&on.cores[0]), state(&off.cores[0]));
-        assert!(m_on.ram.as_slice() == m_off.ram.as_slice(), "RAM differs");
+        let bytes = |m: &Machine| -> Vec<u8> {
+            m.ram
+                .regions()
+                .flat_map(|(_, r)| match r {
+                    crate::mem::Region::Bytes(b) => b.to_vec(),
+                    crate::mem::Region::Zeros(n) => vec![0; n],
+                })
+                .collect()
+        };
+        assert!(bytes(&m_on) == bytes(&m_off), "RAM differs");
         let hash = std::array::from_fn(|i| {
             m_on.ram
                 .load(m_on.ram.base() + 0x8000 + 4 * i as u32, Width::Word)
