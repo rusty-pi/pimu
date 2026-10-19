@@ -34,7 +34,8 @@ macro_rules! log {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Channel {
-    /// Block runs with their files, OTP rows, and what the network peer did.
+    /// Block runs with their files, SPI flash byte runs, OTP rows, and what
+    /// the network peer did.
     Io,
     /// Synchronous ARM exceptions, with the `ESR`/`FAR` the handler sees.
     ArmExc,
@@ -345,10 +346,27 @@ impl Log {
     /// the time of their first block.
     pub fn blocks(&self, dev: &'static str, op: &'static str, lba: u64, count: u64) {
         if let Some(shared) = self.shared_for(Channel::Io) {
-            shared
-                .sink
-                .borrow_mut()
-                .blocks(shared.now_us.get(), dev, op, lba, count);
+            shared.sink.borrow_mut().run(
+                shared.now_us.get(),
+                dev,
+                op,
+                (lba, count),
+                io::Unit::Block,
+            );
+        }
+    }
+
+    /// `io`: `bytes` bytes from `addr` of the SPI flash; contiguous runs
+    /// become one line, as blocks do.
+    pub fn flash(&self, op: &'static str, addr: u32, bytes: u32) {
+        if let Some(shared) = self.shared_for(Channel::Io) {
+            shared.sink.borrow_mut().run(
+                shared.now_us.get(),
+                "eeprom",
+                op,
+                (addr.into(), bytes.into()),
+                io::Unit::Byte,
+            );
         }
     }
 
@@ -400,8 +418,15 @@ struct Sink {
 }
 
 impl Sink {
-    fn blocks(&mut self, us: u64, dev: &'static str, op: &'static str, lba: u64, count: u64) {
-        if let Some(run) = self.io.blocks(us, dev, op, lba, count) {
+    fn run(
+        &mut self,
+        us: u64,
+        dev: &'static str,
+        op: &'static str,
+        span: (u64, u64),
+        unit: io::Unit,
+    ) {
+        if let Some(run) = self.io.run(us, dev, op, span, unit) {
             self.write_run(&run);
         }
     }
@@ -647,6 +672,30 @@ mod tests {
             text(&buf),
             "{\"us\":0,\"channel\":\"io\",\"dev\":\"net\",\"event\":\"tftp: RRQ \\\"start4.elf\\\"\"}\n\
              {\"us\":0,\"channel\":\"io\",\"dev\":\"usb\",\"op\":\"read\",\"lba\":2,\"blocks\":3,\"files\":[],\"file_blocks\":[]}\n"
+        );
+    }
+
+    #[test]
+    fn flash_runs_count_bytes_and_merge_like_blocks() {
+        let (log, buf) = open("io");
+        log.flash("read", 0x1000, 64);
+        log.flash("read", 0x1040, 64);
+        log.blocks("sd", "read", 0x1080, 1);
+        log.flash("write", 0x2000, 256);
+        drop(log);
+        assert_eq!(
+            text(&buf),
+            "   0.000000 io: eeprom read  0x1000+128 bytes\n   \
+             0.000000 io: sd   read  lba 0x1080+1\n   \
+             0.000000 io: eeprom write 0x2000+256 bytes\n"
+        );
+
+        let (log, buf) = open("jsonl:io");
+        log.flash("read", 0x1000, 64);
+        drop(log);
+        assert_eq!(
+            text(&buf),
+            "{\"us\":0,\"channel\":\"io\",\"dev\":\"eeprom\",\"op\":\"read\",\"addr\":4096,\"bytes\":64}\n"
         );
     }
 

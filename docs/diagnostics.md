@@ -156,7 +156,7 @@ still records it.
 
 | Channel | What it prints |
 |---|---|
-| `io` | What crossed the peripherals apart from the console: SD card and USB stick block runs with the files they belong to, OTP rows read and programmed, and what the network peer did — see [what the machine read and wrote](#what-the-machine-read-and-wrote). |
+| `io` | What crossed the peripherals apart from the console: SD card and USB stick block runs with the files they belong to, SPI flash byte runs, OTP rows read and programmed, and what the network peer did — see [what the machine read and wrote](#what-the-machine-read-and-wrote). |
 | `arm-exc` | Every synchronous exception an ARM core takes (not `svc`), with the `ESR`/`FAR` its handler sees, and for an external abort the physical address nothing answered at. |
 | `cmp` | Every system-timer compare arm. |
 | `dwc2` | The DWC2 USB OTG controller (`0x7E98_0000`): every write, and every read that differs from the previous read of the same register, so a poll shows once. |
@@ -195,8 +195,9 @@ that is still set and names the channel that replaced it.
 
 `--log io` writes what crossed the peripherals to stderr (or to `--log-file
 <path>`), apart from the console: block runs on the SD card and the USB stick
-with the files they belong to, the OTP rows the firmware read and programmed,
-and what the network peer did. The file names come
+with the files they belong to, the bytes read from and programmed into the SPI
+flash (`io: eeprom read  0x1000+4096 bytes`), the OTP rows the firmware read and
+programmed, and what the network peer did. The file names come
 from the bench reading the image's partition table and FAT itself, so the
 firmware stays a black box:
 

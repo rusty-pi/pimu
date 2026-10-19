@@ -286,13 +286,12 @@ impl Session {
     pub fn new(options: Options, mut inputs: Inputs) -> Result<Session> {
         let board = options.board()?;
         let buffer = LogBuffer::default();
-        let log = if options.log.trim().is_empty() {
-            Log::default()
-        } else {
-            let spec = Spec::parse(&format!("jsonl:{}", options.log.trim()))
+        let mut spec = Spec::parse("jsonl:io").map_err(anyhow::Error::msg)?;
+        if !options.log.trim().is_empty() {
+            spec.add(Spec::parse(options.log.trim()).map_err(anyhow::Error::msg)?)
                 .map_err(anyhow::Error::msg)?;
-            Log::new(spec, Box::new(buffer.clone()))
-        };
+        }
+        let log = Log::new(spec, Box::new(buffer.clone()));
 
         let card = CardEdits {
             config: options.config_txt.clone(),
@@ -433,8 +432,10 @@ impl Session {
         self.emu.machine.send_magic_packet()
     }
 
-    /// The log lines (JSON, one a line) since the last call.
+    /// The log lines (JSON, one a line) since the last call, the block run
+    /// still being joined included, so a page sees the traffic as it happens.
     pub fn take_log(&self) -> String {
+        self.rig.log.flush();
         self.log.take()
     }
 

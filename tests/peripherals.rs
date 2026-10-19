@@ -382,6 +382,43 @@ fn spi0_flash_erases_and_programs_the_way_flashrom_writes() {
     assert!(m.spi0.dirty, "the run loop is told the image moved");
 }
 
+/// Each read or program command reaches the `io` channel as a byte run once its
+/// select goes up, which is what the page's EEPROM wire moves on.
+#[test]
+fn spi0_flash_transfers_reach_the_io_channel() {
+    #[derive(Clone, Default)]
+    struct Lines(std::rc::Rc<std::cell::RefCell<Vec<u8>>>);
+    impl std::io::Write for Lines {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let lines = Lines::default();
+    let log = pimu::log::Log::new(
+        pimu::log::Spec::parse("io").unwrap(),
+        Box::new(lines.clone()),
+    );
+    let mut m = machine();
+    m.set_log(log.clone());
+    m.spi0.attach_flash(vec![0xFF; 0x8_0000]).unwrap();
+    route_flash_pins(&mut m);
+
+    flash_command(&mut m, &[0x03, 0x00, 0x10, 0x00, 0, 0, 0, 0]);
+    flash_command(&mut m, &[0x05, 0]);
+    flash_command(&mut m, &[0x06]);
+    flash_command(&mut m, &[0x02, 0x02, 0x00, 0x00, 0xA5, 0x5A]);
+    log.flush();
+    assert_eq!(
+        String::from_utf8(lines.0.borrow().clone()).unwrap(),
+        "   0.000000 io: eeprom read  0x1000+4 bytes\n   \
+         0.000000 io: eeprom write 0x20000+2 bytes\n"
+    );
+}
+
 /// Core 1's copies of the core-control registers live at `+0x800`, so too small
 /// a window drops them all on the stub and core 1 enables no interrupts.
 #[test]

@@ -31,7 +31,8 @@ pub struct Options {
     pub cmdline: Option<String>,
     /// Fuses programmed before the boot: `[[row, value], ...]`.
     pub otp_rows: Vec<(u32, u32)>,
-    /// `--log` channels, comma separated.
+    /// `--log` channels, comma separated, on top of `io`, which is always on:
+    /// the page draws the board's traffic from it.
     pub log: String,
     pub display: bool,
     pub otg_dock: bool,

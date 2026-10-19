@@ -163,6 +163,14 @@ button.switch[aria-checked="true"] .track::after { left: 16px; }
 #board .glyph { fill: none; stroke: var(--part); stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
 #board .wire { fill: none; stroke: var(--dim); stroke-width: 1.3; stroke-dasharray: 4 4; }
 #board .part[data-filled="true"] .wire { stroke: var(--wire); stroke-width: 1.8; stroke-dasharray: none; }
+#board .wave { fill: none; stroke: var(--wire); stroke-width: 1.8; stroke-linejoin: round; pointer-events: none; }
+#board .part[data-wobbling="true"] .wire { visibility: hidden; }
+#board .part[data-busy="true"] .state { fill: var(--wire); stroke: var(--wire); animation: busy .3s ease-in-out infinite alternate; }
+@keyframes busy { to { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) {
+  #board .part[data-busy="true"] .state { animation: none; }
+  #board .part[data-busy="true"] .wire { stroke: var(--wire); stroke-width: 2.6; stroke-dasharray: none; }
+}
 #board .state { fill: none; stroke: var(--dim); stroke-width: 1.4; }
 #board .part[data-filled="true"] .state { fill: var(--wire); stroke: var(--wire); }
 #board .ln { stroke: var(--ink); stroke-width: 1.2; fill: none; }
@@ -200,7 +208,7 @@ button.switch[aria-checked="true"] .track::after { left: 16px; }
 /* Phone: the same board stood upright – the SoC on top, the parts in two
    columns under it. app.mjs moves them; the edge ports and wires go. */
 #board.portrait { max-width: 440px; max-height: none; }
-#board.portrait .tag, #board.portrait .wire { display: none; }
+#board.portrait .tag, #board.portrait .wire, #board.portrait .wave { display: none; }
 
 /* the part that is open */
 .drawer { position: relative; min-height: 0; }

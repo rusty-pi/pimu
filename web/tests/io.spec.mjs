@@ -11,11 +11,15 @@ test.describe("the I/O tab", () => {
     await expect(app.page.locator("#tab-io")).toHaveText("Nothing read yet.");
   });
 
-  test("says so when the io channel is off", async ({ app }) => {
+  test("still lists the files with the io channel kept out of the log", async ({ app }) => {
     await app.showTab("log");
     await app.page.locator("#tab-log details .chip-btn", { hasText: /^io$/ }).click();
+    await app.running();
+    await app.emit(io([read(1, 9000, 4, ["p1:/config.txt"])]));
     await app.showTab("io");
-    await expect(app.page.locator("#tab-io")).toContainText("The io channel is off");
+    await expect(app.page.locator(".io-disk li .name")).toHaveText(["config.txt"]);
+    await app.showTab("log");
+    await expect(app.page.locator("#logbox")).toHaveText("Nothing logged yet.");
   });
 
   test("lists the files each disk read, in the order it first read them, with how much of each", async ({ app }) => {
@@ -100,11 +104,6 @@ test.describe("the Network tab", () => {
     await expect(app.page.locator("#tab-net")).toHaveText("Power the board on to see what it asks the network for.");
     await app.running();
     await expect(app.page.locator("#tab-net")).toHaveText("Nothing on the network yet.");
-    await app.powerButton.click();
-    await app.showTab("log");
-    await app.page.locator("#tab-log details .chip-btn", { hasText: /^io$/ }).click();
-    await app.showTab("net");
-    await expect(app.page.locator("#tab-net")).toContainText("The io channel is off");
   });
 
   test("lists what the network peer did, by protocol, with what came of it", async ({ app }) => {

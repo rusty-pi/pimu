@@ -69,3 +69,24 @@ test("every panel is editable while the board is off", async ({ app }) => {
     await expect(app.drawer.locator("fieldset")).toBeEnabled();
   }
 });
+
+test("traffic on the io channel makes the part's wire wobble, and it settles once quiet", async ({ app }) => {
+  await app.running();
+  const rows = [
+    { dev: "eeprom", op: "read", addr: 4096, bytes: 64 },
+    { dev: "sd", op: "read", lba: 0, blocks: 1, files: [] },
+    { dev: "usb", op: "read", lba: 0, blocks: 1, files: [] },
+    { dev: "otg", op: "write", lba: 0, blocks: 1, files: [] },
+    { dev: "net", event: "dhcp: DISCOVER" },
+  ];
+  await app.emit({ type: "log", text: rows.map((row) => JSON.stringify({ us: 1, channel: "io", ...row })).join("\n") + "\n" });
+  for (const part of ["eeprom", "sd", "usb", "usbc", "eth"]) {
+    await expect(app.part(part)).toHaveAttribute("data-busy", "true");
+    await expect(app.part(part).locator(".wave")).toHaveAttribute("d", /^M/);
+  }
+  await expect(app.part("hdmi")).not.toHaveAttribute("data-busy", "true");
+  for (const part of ["eeprom", "sd", "usb", "usbc", "eth"]) {
+    await expect(app.part(part)).toHaveAttribute("data-busy", "false");
+    await expect(app.part(part)).toHaveAttribute("data-wobbling", "false");
+  }
+});
