@@ -122,8 +122,10 @@ test.describe("sharing", () => {
 
   // A fresh visit to the link: no saved settings of its own.
   const visit = async (app, link) => {
+    const blank = new URL("/blank", app.page.url()).href;
+    await app.page.route(blank, (route) => route.fulfill({ contentType: "text/html", body: "" }));
+    await app.page.goto(blank);
     await app.page.evaluate(() => localStorage.clear());
-    await app.page.goto("about:blank");
     await app.page.goto(link);
   };
 
