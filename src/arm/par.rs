@@ -670,7 +670,7 @@ impl<'a> Worker<'a> {
             self.refresh();
             if sh.held.load(Ordering::Relaxed) {
                 self.cycles = self.cycles.max(sh.now.load(Ordering::Acquire));
-                self.nap();
+                self.sit_out_hold();
                 continue;
             }
             if self.core.waiting {
@@ -681,13 +681,13 @@ impl<'a> Worker<'a> {
                 }
                 continue;
             }
+            sh.core[id].idle.store(false, Ordering::SeqCst);
             let limit = self.limit();
             if self.cycles >= limit {
                 sh.core[id].cycles.store(self.cycles, Ordering::Release);
                 self.nap();
                 continue;
             }
-            sh.core[id].idle.store(false, Ordering::SeqCst);
             sh.core[id].running.store(true, Ordering::SeqCst);
             self.batch(limit);
             sh.core[id].running.store(false, Ordering::SeqCst);
@@ -700,6 +700,18 @@ impl<'a> Worker<'a> {
 
     fn nap(&self) {
         std::thread::park_timeout(NAP);
+    }
+
+    /// The ARM channel has no clock: rest as a core asleep with nothing due
+    /// would, so the VPU, which alone can release the hold, never waits on it.
+    fn sit_out_hold(&self) {
+        let rest = &self.sh.core[self.id];
+        rest.wake_at.store(u64::MAX, Ordering::SeqCst);
+        rest.seen_gen
+            .store(rest.line_gen.load(Ordering::SeqCst), Ordering::SeqCst);
+        rest.cycles.store(self.cycles, Ordering::Release);
+        rest.idle.store(true, Ordering::SeqCst);
+        self.nap();
     }
 
     /// How far this core may run now.
@@ -1338,6 +1350,47 @@ mod tests {
         for id in 0..4 {
             assert_eq!(word(&m, 0x108 + 8 * id), id + 1);
         }
+    }
+
+    #[test]
+    fn the_vpu_runs_on_while_the_arm_clock_is_held() {
+        use crate::bus::MmioDevice;
+        use crate::spec::cm::{PLLB, PLLB_HOLDARM_MASK};
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let done = Arc::new(AtomicBool::new(false));
+        let watched = done.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(20));
+            if !watched.load(Ordering::SeqCst) {
+                eprintln!("the VPU waited for cores that had no clock");
+                std::process::abort();
+            }
+        });
+        let step = |m: &mut Machine, arm: &mut ArmSide, rounds: u32| {
+            for _ in 0..rounds {
+                m.tick(54 * 20);
+                for _ in 0..super::SYNC_STEPS {
+                    arm.catch_up(m);
+                }
+            }
+        };
+        // b .
+        let mut m = machine_with(&[0x1400_0000]);
+        let mut arm = ArmSide::new();
+        arm.set_parallel(true);
+        step(&mut m, &mut arm, 50);
+        m.clockman
+            .write(PLLB, Width::Word, 0x5A00_0000 | PLLB_HOLDARM_MASK)
+            .unwrap();
+        step(&mut m, &mut arm, 2_000);
+        m.clockman.write(PLLB, Width::Word, 0x5A00_0000).unwrap();
+        step(&mut m, &mut arm, 50);
+        arm.pause(&mut m);
+        done.store(true, Ordering::SeqCst);
+        assert_eq!(arm.stopped, None);
+        assert_eq!(arm.cores.len(), super::CORES);
     }
 
     #[test]
