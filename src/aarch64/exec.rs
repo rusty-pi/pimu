@@ -89,32 +89,24 @@ pub(super) fn ror(v: u64, amount: u32, sf: bool) -> u64 {
 #[inline(always)]
 pub(super) fn add_with_carry(x: u64, y: u64, carry: bool, sf: bool) -> (u64, u32) {
     let c = carry as u64;
-    let (r, carry_out, overflow) = if sf {
+    if sf {
         let (r1, c1) = x.overflowing_add(y);
         let (r, c2) = r1.overflowing_add(c);
-        let v = ((x ^ r) & (y ^ r)) >> 63 != 0;
-        (r, c1 | c2, v)
+        let v = ((x ^ r) & (y ^ r)) >> 63;
+        let n = r >> 63;
+        let z = (r == 0) as u64;
+        let nzcv = (n << 31) | (z << 30) | (((c1 | c2) as u64) << 29) | (v << 28);
+        (r, nzcv as u32)
     } else {
-        let (x, y) = (x as u32, y as u32);
-        let (r1, c1) = x.overflowing_add(y);
-        let (r, c2) = r1.overflowing_add(c as u32);
-        let v = ((x ^ r) & (y ^ r)) >> 31 != 0;
-        (r as u64, c1 | c2, v)
-    };
-    let mut nzcv = 0;
-    if top_bit(r, sf) {
-        nzcv |= NZCV_N;
+        let (x, y) = (x as u32 as u64, y as u32 as u64);
+        let wide = x + y + c;
+        let r = wide as u32;
+        let v = ((x as u32 ^ r) & (y as u32 ^ r)) >> 31;
+        let n = r >> 31;
+        let z = (r == 0) as u32;
+        let nzcv = (n << 31) | (z << 30) | (((wide >> 32) as u32) << 29) | (v << 28);
+        (u64::from(r), nzcv)
     }
-    if r == 0 {
-        nzcv |= NZCV_Z;
-    }
-    if carry_out {
-        nzcv |= NZCV_C;
-    }
-    if overflow {
-        nzcv |= NZCV_V;
-    }
-    (r, nzcv)
 }
 
 #[inline(always)]
@@ -237,7 +229,7 @@ impl Cpu {
         if r == 31 {
             0
         } else {
-            mask(self.x[r as usize], sf)
+            mask(self.reg(r), sf)
         }
     }
 
@@ -246,14 +238,14 @@ impl Cpu {
         if r == 31 {
             self.sp()
         } else {
-            self.x[r as usize]
+            self.reg(r)
         }
     }
 
     #[inline(always)]
     pub(super) fn set_xr(&mut self, r: u32, sf: bool, v: u64) {
         if r != 31 {
-            self.x[r as usize] = mask(v, sf);
+            self.set_reg(r, mask(v, sf));
         }
     }
 
@@ -262,8 +254,23 @@ impl Cpu {
         if r == 31 {
             self.set_sp(mask(v, sf));
         } else {
-            self.x[r as usize] = mask(v, sf);
+            self.set_reg(r, mask(v, sf));
         }
+    }
+
+    /// `X<r>` for `r` below 31, which every caller has checked; a 5-bit
+    /// register field can be nothing else.
+    #[inline(always)]
+    pub(super) fn reg(&self, r: u32) -> u64 {
+        debug_assert!(r < 31);
+        unsafe { *self.x.get_unchecked(r as usize) }
+    }
+
+    /// [`Self::reg`]'s write.
+    #[inline(always)]
+    pub(super) fn set_reg(&mut self, r: u32, v: u64) {
+        debug_assert!(r < 31);
+        unsafe { *self.x.get_unchecked_mut(r as usize) = v }
     }
 
     #[inline(always)]
@@ -1266,6 +1273,70 @@ fn dp_3src(cpu: &mut Cpu, insn: u32, sf: bool, rd: u32, rn: u32, rm: u32) -> Exe
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn add_with_carry_flags_follow_the_pseudocode() {
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let edges = [
+            0,
+            1,
+            0x7FFF_FFFF,
+            0x8000_0000,
+            0xFFFF_FFFF,
+            i64::MAX as u64,
+            1 << 63,
+            !0,
+        ];
+        for i in 0..200_000 {
+            let pick = |r: u64, k: usize| {
+                if k % 3 == 0 {
+                    edges[(r % 8) as usize]
+                } else {
+                    r
+                }
+            };
+            let (x, y) = (pick(next(), i), pick(next(), i / 2));
+            let (carry, sf) = (next() & 1 != 0, next() & 1 != 0);
+            let bits = if sf { 64 } else { 32 };
+            let m = if sf {
+                u128::from(u64::MAX)
+            } else {
+                u128::from(u32::MAX)
+            };
+            let (ux, uy) = (u128::from(x) & m, u128::from(y) & m);
+            let sum = ux + uy + carry as u128;
+            let r = (sum & m) as u64;
+            let sx = ((ux << (128 - bits)) as i128) >> (128 - bits);
+            let sy = ((uy << (128 - bits)) as i128) >> (128 - bits);
+            let ssum = sx + sy + carry as i128;
+            let sr = (((sum & m) << (128 - bits)) as i128) >> (128 - bits);
+            let n = (r >> (bits - 1)) & 1 != 0;
+            let mut want = 0;
+            if n {
+                want |= NZCV_N;
+            }
+            if r == 0 {
+                want |= NZCV_Z;
+            }
+            if sum > m {
+                want |= NZCV_C;
+            }
+            if ssum != sr {
+                want |= NZCV_V;
+            }
+            assert_eq!(
+                add_with_carry(x, y, carry, sf),
+                (r, want),
+                "{x:#x} {y:#x} {carry} {sf}"
+            );
+        }
+    }
 
     #[test]
     fn bit_masks_match_known_immediates() {

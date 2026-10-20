@@ -16,11 +16,13 @@ use super::exec::{
     self, add_with_carry, bit, decode_bit_masks, extend_reg, field, logic_flags, mask, ror, sext,
     shift_reg, single_access, Access, Exec,
 };
+use super::mmu::{load_le, store_le};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub(super) enum Kind {
-    // The last of a straight run (`Op::ends_run`).
+    // The last of a straight run (`Op::ends_run`), then the conditional
+    // branches it runs through when they are not taken (`Op::cond_branch`).
     #[default]
     Execute,
     BranchReg,
@@ -30,6 +32,15 @@ pub(super) enum Kind {
     Cbz,
     Tbz,
     // Loads and stores (`Op::touches_memory`).
+    LdrX,
+    LdrW,
+    LdrH,
+    LdrB,
+    StrX,
+    StrW,
+    StrH,
+    StrB,
+    Barrier,
     LdStReg,
     LdStPair,
     LoadUimm,
@@ -43,6 +54,7 @@ pub(super) enum Kind {
     Adr,
     Adrp,
     // Registers and flags only (`Op::pure`).
+    Nop,
     AddImm,
     SubImm,
     AddsImm,
@@ -80,14 +92,29 @@ impl Op {
     /// run holds before its last touch nothing but registers and flags.
     #[inline(always)]
     pub fn touches_memory(&self) -> bool {
-        (Kind::LdStReg as u8..=Kind::Pair as u8).contains(&(self.kind as u8))
+        (Kind::LdrX as u8..=Kind::Pair as u8).contains(&(self.kind as u8))
     }
 
-    /// Whether the instruction can move the PC anywhere but on by 4, or do
-    /// anything else [`exec::execute`] does: the last of a straight run.
+    /// Whether the instruction always moves the PC anywhere but on by 4, or
+    /// does anything else [`exec::execute`] does: the last of a straight run.
     #[inline(always)]
     pub fn ends_run(&self) -> bool {
-        self.kind as u8 <= Kind::Tbz as u8
+        self.kind as u8 <= Kind::Bl as u8
+    }
+
+    /// Whether the instruction is a conditional branch: a straight run goes
+    /// on through it when it is not taken.
+    #[inline(always)]
+    pub fn cond_branch(&self) -> bool {
+        (Kind::BCond as u8..=Kind::Tbz as u8).contains(&(self.kind as u8))
+    }
+
+    /// Whether the instruction is a direct or conditional branch: it ends
+    /// its run, reads registers and flags only and cannot raise an
+    /// exception.
+    #[inline(always)]
+    pub fn plain_branch(&self) -> bool {
+        (Kind::B as u8..=Kind::Tbz as u8).contains(&(self.kind as u8))
     }
 
     /// Whether the instruction reads and writes nothing but general
@@ -122,12 +149,18 @@ impl Decoded {
     /// `insn`, decoded.
     #[inline(always)]
     pub fn get(&mut self, insn: u32) -> Op {
+        *self.slot(insn)
+    }
+
+    /// [`Self::get`], in place.
+    #[inline(always)]
+    pub fn slot(&mut self, insn: u32) -> &Op {
         let i = (insn.wrapping_mul(0x9E37_79B1) >> (32 - SLOTS_LOG2)) as usize;
         let slot = &mut self.slots[i];
         if slot.insn != insn {
             *slot = decode(insn);
         }
-        *slot
+        slot
     }
 }
 
@@ -279,6 +312,15 @@ fn branch(insn: u32) -> Option<Op> {
     } else if insn & 0xFF00_0010 == 0x5400_0000 {
         let off = sext(field(insn, 5, 19) as u64, 19) << 2;
         Some(op(insn, Kind::BCond, field(insn, 0, 4), 0, 0, off))
+    } else if insn & 0xFFFF_F01F == 0xD503_201F && !(2..=5).contains(&field(insn, 5, 7)) {
+        // NOP, YIELD and the hints the A72 treats as them.
+        Some(op(insn, Kind::Nop, 0, 0, 0, 0))
+    } else if insn & 0xFFFF_F0FF == 0xD503_30DF {
+        // ISB: nothing in the model is out of date for it to resynchronise.
+        Some(op(insn, Kind::Nop, 0, 0, 0, 0))
+    } else if insn & 0xFFFF_F0DF == 0xD503_309F {
+        // DSB, DMB.
+        Some(op(insn, Kind::Barrier, 0, 0, 0, 0))
     } else if insn & 0xFE00_0000 == 0xD600_0000 {
         Some(op(insn, Kind::BranchReg, 0, 0, 0, 0))
     } else {
@@ -302,9 +344,30 @@ fn ldst(insn: u32) -> Option<Op> {
         let rt = field(insn, 0, 5);
         let rn = field(insn, 5, 5);
         let imm = (field(insn, 10, 12) as u64) << scale;
+        let sized = |kinds: [Kind; 4], k| if rn == 31 { k } else { kinds[scale as usize] };
         Some(match access {
-            Access::Store => op(insn, Kind::StoreUimm, rt, rn, scale, imm),
-            Access::Load => op(insn, Kind::LoadUimm, rt, rn, scale, imm),
+            Access::Store => op(
+                insn,
+                sized(
+                    [Kind::StrB, Kind::StrH, Kind::StrW, Kind::StrX],
+                    Kind::StoreUimm,
+                ),
+                rt,
+                rn,
+                scale,
+                imm,
+            ),
+            Access::Load => op(
+                insn,
+                sized(
+                    [Kind::LdrB, Kind::LdrH, Kind::LdrW, Kind::LdrX],
+                    Kind::LoadUimm,
+                ),
+                rt,
+                rn,
+                scale,
+                imm,
+            ),
             Access::LoadSigned64 => op(insn, Kind::LoadUimm, rt, rn, scale | 4, imm),
             Access::LoadSigned32 => op(insn, Kind::LoadUimm, rt, rn, scale | 8, imm),
         })
@@ -492,297 +555,596 @@ impl Cpu {
     /// [`exec::execute`] for a decoded instruction.
     #[inline(always)]
     pub(super) fn run_op<M: Memory + ?Sized>(&mut self, o: Op, mem: &mut M) -> Exec {
-        let (a, b, c) = (o.a as u32, o.b as u32, o.c as u32);
-        if o.pure() {
-            self.run_pure(o);
-            return Ok(());
-        }
-        match o.kind {
-            Kind::Execute => exec::execute(self, o.insn, mem),
-            Kind::DpImm => exec::dp_imm(self, o.insn),
-            Kind::DpReg => exec::dp_reg(self, o.insn),
-            Kind::LdStReg => exec::ld_st_reg(self, o.insn, mem),
-            Kind::LdStPair => exec::ld_st_pair(self, o.insn, mem),
-            Kind::BranchReg => exec::branch_reg(self, o.insn),
-            Kind::Adr => {
-                let v = self.pc.wrapping_add(o.imm);
-                self.set_xr(a, true, v);
-                Ok(())
-            }
-            Kind::Adrp => {
-                let v = (self.pc & !0xFFF).wrapping_add(o.imm);
-                self.set_xr(a, true, v);
-                Ok(())
-            }
-            Kind::B => {
-                self.next_pc = self.pc.wrapping_add(o.imm);
-                Ok(())
-            }
-            Kind::Bl => {
-                self.x[30] = self.pc.wrapping_add(4);
-                self.next_pc = self.pc.wrapping_add(o.imm);
-                Ok(())
-            }
-            Kind::BCond => {
-                if self.cond_holds(a) {
-                    self.next_pc = self.pc.wrapping_add(o.imm);
-                }
-                Ok(())
-            }
-            Kind::Cbz => {
-                let zero = self.xr(a, c & 1 != 0) == 0;
-                if zero != (c & 2 != 0) {
-                    self.next_pc = self.pc.wrapping_add(o.imm);
-                }
-                Ok(())
-            }
-            Kind::Tbz => {
-                let set = (self.xr(a, true) >> b) & 1 != 0;
-                if set == (c != 0) {
-                    self.next_pc = self.pc.wrapping_add(o.imm);
-                }
-                Ok(())
-            }
-            Kind::LoadUimm => {
-                let addr = self.xsp(b).wrapping_add(o.imm);
-                let access = match c >> 2 {
-                    0 => Access::Load,
-                    1 => Access::LoadSigned64,
-                    _ => Access::LoadSigned32,
-                };
-                if let Some((v, sf)) = self.gpr(mem, c & 3, access, a, addr)? {
-                    self.set_xr(a, sf, v);
-                }
-                Ok(())
-            }
-            Kind::StoreUimm => {
-                let addr = self.xsp(b).wrapping_add(o.imm);
-                self.gpr(mem, c, Access::Store, a, addr)?;
-                Ok(())
-            }
-            Kind::LdStRegOff => {
-                let f = o.imm as u32;
-                let scale = f & 3;
-                let off = extend_reg(self.xr(c, true), (f >> 4) & 7, f >> 7, true);
-                let addr = self.xsp(b).wrapping_add(off);
-                let access = access_of(f >> 2);
-                if let Some((v, sf)) = self.gpr(mem, scale, access, a, addr)? {
-                    self.set_xr(a, sf, v);
-                }
-                Ok(())
-            }
-            Kind::LdStImm => {
-                let f = o.imm2 as u32;
-                let base = self.xsp(b);
-                let (addr, wb) = match (f >> 4) & 3 {
-                    0 => (base.wrapping_add(o.imm), None),
-                    1 => (base, Some(base.wrapping_add(o.imm))),
-                    _ => {
-                        let a = base.wrapping_add(o.imm);
-                        (a, Some(a))
-                    }
-                };
-                let loaded = self.gpr(mem, f & 3, access_of(f >> 2), a, addr)?;
-                if let Some(wb) = wb {
-                    self.set_xsp(b, true, wb);
-                }
-                if let Some((v, sf)) = loaded {
-                    self.set_xr(a, sf, v);
-                }
-                Ok(())
-            }
-            Kind::Pair => {
-                let f = o.imm2 as u32;
-                let scale = f & 3;
-                let access = access_of(f >> 2);
-                let base = self.xsp(b);
-                let (addr, wb) = match (f >> 4) & 3 {
-                    0 | 2 => (base.wrapping_add(o.imm), None),
-                    1 => (base, Some(base.wrapping_add(o.imm))),
-                    _ => {
-                        let a = base.wrapping_add(o.imm);
-                        (a, Some(a))
-                    }
-                };
-                let first = self.gpr(mem, scale, access, a, addr)?;
-                let next = addr.wrapping_add(1 << scale);
-                let second = self.gpr(mem, scale, access, c, next)?;
-                if let Some(wb) = wb {
-                    self.set_xsp(b, true, wb);
-                }
-                if let Some((v, sf)) = first {
-                    self.set_xr(a, sf, v);
-                }
-                if let Some((v, sf)) = second {
-                    self.set_xr(c, sf, v);
-                }
-                Ok(())
-            }
-            _ => unreachable!(),
+        let pc = self.pc;
+        self.next_pc = o.handler::<M>()(self, &o, mem, pc);
+        match self.fault.take() {
+            Some(s) => Err(s),
+            None => Ok(()),
         }
     }
 
     /// [`Self::run_op`] for an [`Op::pure`] instruction.
     #[inline(always)]
     pub(super) fn run_pure(&mut self, o: Op) {
-        let (a, b, c) = (o.a as u32, o.b as u32, o.c as u32);
-        let _: Exec = match o.kind {
-            Kind::AddImm => {
-                let sf = c != 0;
-                let r = mask(self.xsp(b), sf).wrapping_add(o.imm);
-                self.set_xsp(a, sf, r);
-                Ok(())
-            }
-            Kind::SubImm => {
-                let sf = c != 0;
-                let r = mask(self.xsp(b), sf).wrapping_sub(o.imm);
-                self.set_xsp(a, sf, r);
-                Ok(())
-            }
-            Kind::AddsImm | Kind::SubsImm => {
-                let sf = c != 0;
-                let x = mask(self.xsp(b), sf);
-                let sub = o.kind == Kind::SubsImm;
-                let y = if sub { !o.imm } else { o.imm };
-                let (r, nzcv) = add_with_carry(x, y, sub, sf);
-                self.nzcv = nzcv;
-                self.set_xr(a, sf, r);
-                Ok(())
-            }
-            Kind::MovConst => {
-                self.set_xr(a, true, o.imm);
-                Ok(())
-            }
-            Kind::MovK => {
-                let sf = c != 0;
-                let r = (self.xr(a, sf) & !(0xFFFFu64 << b)) | o.imm;
-                self.set_xr(a, sf, r);
-                Ok(())
-            }
-            Kind::LogicImm => {
-                let sf = c & 4 != 0;
-                let x = self.xr(b, sf);
-                let r = match c & 3 {
-                    0 | 3 => x & o.imm,
-                    1 => x | o.imm,
-                    _ => x ^ o.imm,
-                };
-                if c & 3 == 3 {
-                    self.nzcv = logic_flags(r, sf);
-                    self.set_xr(a, sf, r);
-                } else {
-                    self.set_xsp(a, sf, r);
-                }
-                Ok(())
-            }
-            Kind::LogicReg => {
-                let f = o.imm as u32;
-                let sf = f & (1 << 11) != 0;
-                let mut y = shift_reg(self.xr(c, sf), f & 3, (f >> 2) & 0x3F, sf);
-                if f & (1 << 8) != 0 {
-                    y = mask(!y, sf);
-                }
-                let x = self.xr(b, sf);
-                let opc = (f >> 9) & 3;
-                let r = match opc {
-                    0 | 3 => x & y,
-                    1 => x | y,
-                    _ => x ^ y,
-                };
-                if opc == 3 {
-                    self.nzcv = logic_flags(r, sf);
-                }
-                self.set_xr(a, sf, r);
-                Ok(())
-            }
-            Kind::AddSubReg => {
-                let f = o.imm as u32;
-                let sf = f & (1 << 11) != 0;
-                let sub = f & (1 << 8) != 0;
-                let y = shift_reg(self.xr(c, sf), f & 3, (f >> 2) & 0x3F, sf);
-                let y = if sub { mask(!y, sf) } else { y };
-                let (r, nzcv) = add_with_carry(self.xr(b, sf), y, sub, sf);
-                if f & (1 << 9) != 0 {
-                    self.nzcv = nzcv;
-                }
-                self.set_xr(a, sf, r);
-                Ok(())
-            }
-            Kind::Bitfield => {
-                let insn = o.insn;
-                let sf = bit(insn, 31);
-                let (wmask, tmask) = (o.imm, o.imm2);
-                let src = self.xr(b, sf);
-                let bot = ror(src, c, sf) & wmask;
-                let r = match field(insn, 29, 2) {
-                    0 => {
-                        let top = if (src >> field(insn, 10, 6)) & 1 != 0 {
-                            !0
-                        } else {
-                            0
-                        };
-                        (top & !tmask) | (bot & tmask)
-                    }
-                    1 => {
-                        let dst = self.xr(a, sf);
-                        let bot = (dst & !wmask) | bot;
-                        (dst & !tmask) | (bot & tmask)
-                    }
-                    _ => bot & tmask,
-                };
-                self.set_xr(a, sf, r);
-                Ok(())
-            }
-            Kind::Ccmp => {
-                let f = c;
-                if self.cond_holds(f & 0xF) {
-                    let sf = f & (1 << 4) != 0;
-                    let y = if f & (1 << 6) != 0 {
-                        u64::from(b)
-                    } else {
-                        self.xr(b, sf)
-                    };
-                    let sub = f & (1 << 5) != 0;
-                    let y = if sub { mask(!y, sf) } else { y };
-                    self.nzcv = add_with_carry(self.xr(a, sf), y, sub, sf).1;
-                } else {
-                    self.nzcv = o.imm as u32;
-                }
-                Ok(())
-            }
-            Kind::Csel => {
-                let f = o.imm as u32;
-                let sf = f & (1 << 6) != 0;
-                let r = if self.cond_holds(f & 0xF) {
-                    self.xr(b, sf)
-                } else {
-                    let y = self.xr(c, sf);
-                    match (f >> 4) & 3 {
-                        0 => y,
-                        2 => y.wrapping_add(1),
-                        1 => !y,
-                        _ => y.wrapping_neg(),
-                    }
-                };
-                self.set_xr(a, sf, r);
-                Ok(())
-            }
-            Kind::Madd => {
-                let f = o.imm as u32;
-                let sf = f & (1 << 6) != 0;
-                let p = self.xr(b, sf).wrapping_mul(self.xr(c, sf));
-                let acc = self.xr(f & 0x1F, sf);
-                let r = if f & (1 << 5) != 0 {
-                    acc.wrapping_sub(p)
-                } else {
-                    acc.wrapping_add(p)
-                };
-                self.set_xr(a, sf, r);
-                Ok(())
-            }
-            _ => unreachable!(),
-        };
+        o.handler::<NoMem>()(self, &o, &mut NoMem, self.pc);
     }
+
+    /// After a handler that stopped: what [`Self::step_decoded`] makes of
+    /// it, with an exception taken. `pc` is the instruction's, `next` what
+    /// the handler returned.
+    #[cold]
+    #[inline(never)]
+    pub fn stopped_at(&mut self, pc: u64, next: u64, op: &Op) -> super::Step {
+        let stop = self.fault.take().unwrap_or(exec::UNDEF);
+        self.pc = pc;
+        self.next_pc = next;
+        match self.retire(Err(stop), op.insn) {
+            super::Step::Exception(e) => {
+                self.take_sync(e);
+                super::Step::Took(e)
+            }
+            s => s,
+        }
+    }
+}
+
+/// What runs a decoded instruction: given the PC it is at, it returns the
+/// next. One that stops leaves why in [`Cpu::fault`] and returns the PC a
+/// `wfi` or `wfe` would retire to.
+pub type Handler<M> = fn(&mut Cpu, &Op, &mut M, u64) -> u64;
+
+/// A bus for the handlers of [`Op::pure`] instructions, which touch none.
+pub struct NoMem;
+
+impl Memory for NoMem {
+    fn read(&mut self, addr: u64, _: u32) -> Result<u64, super::cpu::Abort> {
+        Err(super::cpu::Abort { addr, write: false })
+    }
+    fn write(&mut self, addr: u64, _: u32, _: u64) -> Result<(), super::cpu::Abort> {
+        Err(super::cpu::Abort { addr, write: true })
+    }
+}
+
+impl Op {
+    /// The handler for this instruction on bus `M`.
+    #[inline(always)]
+    pub fn handler<M: Memory + ?Sized>(&self) -> Handler<M> {
+        match self.kind {
+            Kind::Execute => h_execute::<M>,
+            Kind::BranchReg => h_branch_reg::<M>,
+            Kind::B => h_b::<M>,
+            Kind::Bl => h_bl::<M>,
+            Kind::BCond => h_bcond::<M>,
+            Kind::Cbz => h_cbz::<M>,
+            Kind::Tbz => h_tbz::<M>,
+            Kind::LdrX => h_ldr::<M, 8>,
+            Kind::LdrW => h_ldr::<M, 4>,
+            Kind::LdrH => h_ldr::<M, 2>,
+            Kind::LdrB => h_ldr::<M, 1>,
+            Kind::StrX => h_str::<M, 8>,
+            Kind::StrW => h_str::<M, 4>,
+            Kind::StrH => h_str::<M, 2>,
+            Kind::StrB => h_str::<M, 1>,
+            Kind::Barrier => h_barrier::<M>,
+            Kind::Nop => h_nop::<M>,
+            Kind::LdStReg => h_ld_st_reg::<M>,
+            Kind::LdStPair => h_ld_st_pair::<M>,
+            Kind::LoadUimm => h_load_uimm::<M>,
+            Kind::StoreUimm => h_store_uimm::<M>,
+            Kind::LdStRegOff => h_ld_st_reg_off::<M>,
+            Kind::LdStImm => h_ld_st_imm::<M>,
+            Kind::Pair => h_pair::<M>,
+            Kind::DpImm => h_dp_imm::<M>,
+            Kind::DpReg => h_dp_reg::<M>,
+            Kind::Adr => h_adr::<M>,
+            Kind::Adrp => h_adrp::<M>,
+            Kind::AddImm => h_add_imm::<M>,
+            Kind::SubImm => h_sub_imm::<M>,
+            Kind::AddsImm => h_adds_imm::<M>,
+            Kind::SubsImm => h_subs_imm::<M>,
+            Kind::MovConst => h_mov_const::<M>,
+            Kind::MovK => h_movk::<M>,
+            Kind::LogicImm => h_logic_imm::<M>,
+            Kind::LogicReg => h_logic_reg::<M>,
+            Kind::AddSubReg => h_add_sub_reg::<M>,
+            Kind::Bitfield => h_bitfield::<M>,
+            Kind::Ccmp => h_ccmp::<M>,
+            Kind::Csel => h_csel::<M>,
+            Kind::Madd => h_madd::<M>,
+        }
+    }
+}
+
+/// The next PC after `exec`'s `r`, which ran with `next_pc` at PC + 4.
+#[inline(always)]
+fn settled(cpu: &mut Cpu, r: Exec) -> u64 {
+    if let Err(s) = r {
+        cpu.fault = Some(s);
+    }
+    cpu.next_pc
+}
+
+/// A load or store that faulted.
+#[cold]
+fn faulted(cpu: &mut Cpu, s: exec::Stop, pc: u64) -> u64 {
+    cpu.fault = Some(s);
+    pc.wrapping_add(4)
+}
+
+fn h_execute<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, mem: &mut M, pc: u64) -> u64 {
+    cpu.pc = pc;
+    cpu.next_pc = pc.wrapping_add(4);
+    let r = exec::execute(cpu, o.insn, mem);
+    settled(cpu, r)
+}
+
+fn h_branch_reg<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, _: &mut M, pc: u64) -> u64 {
+    cpu.pc = pc;
+    cpu.next_pc = pc.wrapping_add(4);
+    let r = exec::branch_reg(cpu, o.insn);
+    settled(cpu, r)
+}
+
+fn h_barrier<M: Memory + ?Sized>(_: &mut Cpu, _: &Op, mem: &mut M, pc: u64) -> u64 {
+    mem.barrier();
+    pc.wrapping_add(4)
+}
+
+fn h_nop<M: Memory + ?Sized>(_: &mut Cpu, _: &Op, _: &mut M, pc: u64) -> u64 {
+    pc.wrapping_add(4)
+}
+
+fn h_dp_imm<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, _: &mut M, pc: u64) -> u64 {
+    match exec::dp_imm(cpu, o.insn) {
+        Ok(()) => pc.wrapping_add(4),
+        Err(s) => faulted(cpu, s, pc),
+    }
+}
+
+fn h_dp_reg<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, _: &mut M, pc: u64) -> u64 {
+    match exec::dp_reg(cpu, o.insn) {
+        Ok(()) => pc.wrapping_add(4),
+        Err(s) => faulted(cpu, s, pc),
+    }
+}
+
+fn h_ld_st_reg<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, mem: &mut M, pc: u64) -> u64 {
+    match exec::ld_st_reg(cpu, o.insn, mem) {
+        Ok(()) => pc.wrapping_add(4),
+        Err(s) => faulted(cpu, s, pc),
+    }
+}
+
+fn h_ld_st_pair<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, mem: &mut M, pc: u64) -> u64 {
+    match exec::ld_st_pair(cpu, o.insn, mem) {
+        Ok(()) => pc.wrapping_add(4),
+        Err(s) => faulted(cpu, s, pc),
+    }
+}
+
+fn h_adr<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, _: &mut M, pc: u64) -> u64 {
+    cpu.set_xr(o.a as u32, true, pc.wrapping_add(o.imm));
+    pc.wrapping_add(4)
+}
+
+fn h_adrp<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, _: &mut M, pc: u64) -> u64 {
+    cpu.set_xr(o.a as u32, true, (pc & !0xFFF).wrapping_add(o.imm));
+    pc.wrapping_add(4)
+}
+
+fn h_b<M: Memory + ?Sized>(_: &mut Cpu, o: &Op, _: &mut M, pc: u64) -> u64 {
+    pc.wrapping_add(o.imm)
+}
+
+fn h_bl<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, _: &mut M, pc: u64) -> u64 {
+    cpu.x[30] = pc.wrapping_add(4);
+    pc.wrapping_add(o.imm)
+}
+
+/// `pc` plus the offset when `taken`, else the next instruction.
+#[inline(always)]
+fn branch_if(taken: bool, o: &Op, pc: u64) -> u64 {
+    pc.wrapping_add(if taken { o.imm } else { 4 })
+}
+
+fn h_bcond<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, _: &mut M, pc: u64) -> u64 {
+    branch_if(cpu.cond_holds(o.a as u32), o, pc)
+}
+
+fn h_cbz<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, _: &mut M, pc: u64) -> u64 {
+    let zero = cpu.xr(o.a as u32, o.c & 1 != 0) == 0;
+    branch_if(zero != (o.c & 2 != 0), o, pc)
+}
+
+fn h_tbz<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, _: &mut M, pc: u64) -> u64 {
+    let set = (cpu.xr(o.a as u32, true) >> o.b) & 1 != 0;
+    branch_if(set == (o.c != 0), o, pc)
+}
+
+/// `LDR` of `N` bytes, unsigned offset from a general register: straight
+/// from the host page when the data TLB has it, else [`h_load_uimm`].
+fn h_ldr<M: Memory + ?Sized, const N: u32>(cpu: &mut Cpu, o: &Op, mem: &mut M, pc: u64) -> u64 {
+    let addr = cpu.reg(o.b as u32).wrapping_add(o.imm);
+    match cpu.host_read(mem, addr, N) {
+        Some(v) => {
+            cpu.set_xr(o.a as u32, true, v);
+            pc.wrapping_add(4)
+        }
+        None => h_load_uimm(cpu, o, mem, pc),
+    }
+}
+
+/// [`h_ldr`]'s store.
+fn h_str<M: Memory + ?Sized, const N: u32>(cpu: &mut Cpu, o: &Op, mem: &mut M, pc: u64) -> u64 {
+    let addr = cpu.reg(o.b as u32).wrapping_add(o.imm);
+    if cpu.host_write(mem, addr, N, cpu.xr(o.a as u32, true)) {
+        return pc.wrapping_add(4);
+    }
+    h_store_uimm(cpu, o, mem, pc)
+}
+
+/// [`Cpu::gpr`] when the data TLB has the page: `None` when the access needs
+/// the full path.
+#[inline(always)]
+fn fast_gpr<M: Memory + ?Sized>(
+    cpu: &mut Cpu,
+    mem: &mut M,
+    scale: u32,
+    access: Access,
+    rt: u32,
+    addr: u64,
+) -> Option<Option<(u64, bool)>> {
+    let bytes = 1u32 << scale;
+    match access {
+        Access::Store => cpu
+            .host_write(mem, addr, bytes, cpu.xr(rt, true))
+            .then_some(None),
+        Access::Load => cpu.host_read(mem, addr, bytes).map(|v| Some((v, true))),
+        Access::LoadSigned64 => cpu
+            .host_read(mem, addr, bytes)
+            .map(|v| Some((sext(v, 8 * bytes), true))),
+        Access::LoadSigned32 => cpu
+            .host_read(mem, addr, bytes)
+            .map(|v| Some((sext(v, 8 * bytes), false))),
+    }
+}
+
+fn h_load_uimm<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, mem: &mut M, pc: u64) -> u64 {
+    let (a, b, c) = (o.a as u32, o.b as u32, o.c as u32);
+    let addr = cpu.xsp(b).wrapping_add(o.imm);
+    let access = match c >> 2 {
+        0 => Access::Load,
+        1 => Access::LoadSigned64,
+        _ => Access::LoadSigned32,
+    };
+    match cpu.gpr(mem, c & 3, access, a, addr) {
+        Ok(Some((v, sf))) => cpu.set_xr(a, sf, v),
+        Ok(None) => {}
+        Err(s) => return faulted(cpu, s, pc),
+    }
+    pc.wrapping_add(4)
+}
+
+fn h_store_uimm<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, mem: &mut M, pc: u64) -> u64 {
+    let addr = cpu.xsp(o.b as u32).wrapping_add(o.imm);
+    if let Err(s) = cpu.gpr(mem, o.c as u32, Access::Store, o.a as u32, addr) {
+        return faulted(cpu, s, pc);
+    }
+    pc.wrapping_add(4)
+}
+
+fn h_ld_st_reg_off<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, mem: &mut M, pc: u64) -> u64 {
+    let (a, b, c) = (o.a as u32, o.b as u32, o.c as u32);
+    let f = o.imm as u32;
+    let off = extend_reg(cpu.xr(c, true), (f >> 4) & 7, f >> 7, true);
+    let addr = cpu.xsp(b).wrapping_add(off);
+    match fast_gpr(cpu, mem, f & 3, access_of(f >> 2), a, addr) {
+        Some(Some((v, sf))) => cpu.set_xr(a, sf, v),
+        Some(None) => {}
+        None => return h_ld_st_reg_off_slow(cpu, o, mem, pc),
+    }
+    pc.wrapping_add(4)
+}
+
+#[inline(never)]
+fn h_ld_st_reg_off_slow<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, mem: &mut M, pc: u64) -> u64 {
+    let (a, b, c) = (o.a as u32, o.b as u32, o.c as u32);
+    let f = o.imm as u32;
+    let off = extend_reg(cpu.xr(c, true), (f >> 4) & 7, f >> 7, true);
+    let addr = cpu.xsp(b).wrapping_add(off);
+    match cpu.gpr(mem, f & 3, access_of(f >> 2), a, addr) {
+        Ok(Some((v, sf))) => cpu.set_xr(a, sf, v),
+        Ok(None) => {}
+        Err(s) => return faulted(cpu, s, pc),
+    }
+    pc.wrapping_add(4)
+}
+
+/// The address and any write-back of an index mode: 0 offset, 1
+/// post-index, 3 pre-index (and 2, a pair's non-temporal offset).
+#[inline(always)]
+fn indexed(base: u64, imm: u64, mode: u32) -> (u64, Option<u64>) {
+    match mode {
+        0 | 2 => (base.wrapping_add(imm), None),
+        1 => (base, Some(base.wrapping_add(imm))),
+        _ => {
+            let a = base.wrapping_add(imm);
+            (a, Some(a))
+        }
+    }
+}
+
+fn h_ld_st_imm<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, mem: &mut M, pc: u64) -> u64 {
+    let (a, b) = (o.a as u32, o.b as u32);
+    let f = o.imm2 as u32;
+    let (addr, wb) = indexed(cpu.xsp(b), o.imm, (f >> 4) & 3);
+    let Some(loaded) = fast_gpr(cpu, mem, f & 3, access_of(f >> 2), a, addr) else {
+        return h_ld_st_imm_slow(cpu, o, mem, pc);
+    };
+    if let Some(wb) = wb {
+        cpu.set_xsp(b, true, wb);
+    }
+    if let Some((v, sf)) = loaded {
+        cpu.set_xr(a, sf, v);
+    }
+    pc.wrapping_add(4)
+}
+
+#[inline(never)]
+fn h_ld_st_imm_slow<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, mem: &mut M, pc: u64) -> u64 {
+    let (a, b) = (o.a as u32, o.b as u32);
+    let f = o.imm2 as u32;
+    let (addr, wb) = indexed(cpu.xsp(b), o.imm, (f >> 4) & 3);
+    let loaded = match cpu.gpr(mem, f & 3, access_of(f >> 2), a, addr) {
+        Ok(l) => l,
+        Err(s) => return faulted(cpu, s, pc),
+    };
+    if let Some(wb) = wb {
+        cpu.set_xsp(b, true, wb);
+    }
+    if let Some((v, sf)) = loaded {
+        cpu.set_xr(a, sf, v);
+    }
+    pc.wrapping_add(4)
+}
+
+fn h_pair<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, mem: &mut M, pc: u64) -> u64 {
+    let (a, b, c) = (o.a as u32, o.b as u32, o.c as u32);
+    let f = o.imm2 as u32;
+    let (scale, access) = (f & 3, access_of(f >> 2));
+    let bytes = 1u32 << scale;
+    let (addr, wb) = indexed(cpu.xsp(b), o.imm, (f >> 4) & 3);
+    let store = matches!(access, Access::Store);
+    let (va, vc) = (cpu.xr(a, true), cpu.xr(c, true));
+    // Both halves at once, straight through the data TLB, or neither.
+    let Some(p) = cpu.host_span(mem, addr, 2 * bytes, store) else {
+        return h_pair_slow(cpu, o, mem, pc);
+    };
+    let q = p.wrapping_add(bytes as usize);
+    if store {
+        // Inside the page, which `host_span` vouched for.
+        unsafe {
+            store_le(p, bytes, va);
+            store_le(q, bytes, vc);
+        }
+        if let Some(wb) = wb {
+            cpu.set_xsp(b, true, wb);
+        }
+        return pc.wrapping_add(4);
+    }
+    let (first, second) = unsafe { (load_le(p, bytes), load_le(q, bytes)) };
+    let (first, second, sf) = match access {
+        Access::LoadSigned64 => (sext(first, 8 * bytes), sext(second, 8 * bytes), true),
+        _ => (first, second, true),
+    };
+    if let Some(wb) = wb {
+        cpu.set_xsp(b, true, wb);
+    }
+    cpu.set_xr(a, sf, first);
+    cpu.set_xr(c, sf, second);
+    pc.wrapping_add(4)
+}
+
+#[inline(never)]
+fn h_pair_slow<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, mem: &mut M, pc: u64) -> u64 {
+    let (a, b, c) = (o.a as u32, o.b as u32, o.c as u32);
+    let f = o.imm2 as u32;
+    let (scale, access) = (f & 3, access_of(f >> 2));
+    let (addr, wb) = indexed(cpu.xsp(b), o.imm, (f >> 4) & 3);
+    let first = match cpu.gpr(mem, scale, access, a, addr) {
+        Ok(l) => l,
+        Err(s) => return faulted(cpu, s, pc),
+    };
+    let second = match cpu.gpr(mem, scale, access, c, addr.wrapping_add(1 << scale)) {
+        Ok(l) => l,
+        Err(s) => return faulted(cpu, s, pc),
+    };
+    if let Some(wb) = wb {
+        cpu.set_xsp(b, true, wb);
+    }
+    if let Some((v, sf)) = first {
+        cpu.set_xr(a, sf, v);
+    }
+    if let Some((v, sf)) = second {
+        cpu.set_xr(c, sf, v);
+    }
+    pc.wrapping_add(4)
+}
+
+fn h_add_imm<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, _: &mut M, pc: u64) -> u64 {
+    let sf = o.c != 0;
+    let r = mask(cpu.xsp(o.b as u32), sf).wrapping_add(o.imm);
+    cpu.set_xsp(o.a as u32, sf, r);
+    pc.wrapping_add(4)
+}
+
+fn h_sub_imm<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, _: &mut M, pc: u64) -> u64 {
+    let sf = o.c != 0;
+    let r = mask(cpu.xsp(o.b as u32), sf).wrapping_sub(o.imm);
+    cpu.set_xsp(o.a as u32, sf, r);
+    pc.wrapping_add(4)
+}
+
+/// `ADDS`/`SUBS` (immediate), `CMP`/`CMN`.
+#[inline(always)]
+fn adds_imm(cpu: &mut Cpu, o: &Op, sub: bool) {
+    let sf = o.c != 0;
+    let x = mask(cpu.xsp(o.b as u32), sf);
+    let y = if sub { !o.imm } else { o.imm };
+    let (r, nzcv) = add_with_carry(x, y, sub, sf);
+    cpu.nzcv = nzcv;
+    cpu.set_xr(o.a as u32, sf, r);
+}
+
+fn h_adds_imm<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, _: &mut M, pc: u64) -> u64 {
+    adds_imm(cpu, o, false);
+    pc.wrapping_add(4)
+}
+
+fn h_subs_imm<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, _: &mut M, pc: u64) -> u64 {
+    adds_imm(cpu, o, true);
+    pc.wrapping_add(4)
+}
+
+fn h_mov_const<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, _: &mut M, pc: u64) -> u64 {
+    cpu.set_xr(o.a as u32, true, o.imm);
+    pc.wrapping_add(4)
+}
+
+fn h_movk<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, _: &mut M, pc: u64) -> u64 {
+    let (a, sf) = (o.a as u32, o.c != 0);
+    let r = (cpu.xr(a, sf) & !(0xFFFFu64 << o.b)) | o.imm;
+    cpu.set_xr(a, sf, r);
+    pc.wrapping_add(4)
+}
+
+fn h_logic_imm<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, _: &mut M, pc: u64) -> u64 {
+    let (a, c) = (o.a as u32, o.c as u32);
+    let sf = c & 4 != 0;
+    let x = cpu.xr(o.b as u32, sf);
+    let r = match c & 3 {
+        0 | 3 => x & o.imm,
+        1 => x | o.imm,
+        _ => x ^ o.imm,
+    };
+    if c & 3 == 3 {
+        cpu.nzcv = logic_flags(r, sf);
+        cpu.set_xr(a, sf, r);
+    } else {
+        cpu.set_xsp(a, sf, r);
+    }
+    pc.wrapping_add(4)
+}
+
+fn h_logic_reg<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, _: &mut M, pc: u64) -> u64 {
+    let f = o.imm as u32;
+    let sf = f & (1 << 11) != 0;
+    let mut y = shift_reg(cpu.xr(o.c as u32, sf), f & 3, (f >> 2) & 0x3F, sf);
+    if f & (1 << 8) != 0 {
+        y = mask(!y, sf);
+    }
+    let x = cpu.xr(o.b as u32, sf);
+    let opc = (f >> 9) & 3;
+    let r = match opc {
+        0 | 3 => x & y,
+        1 => x | y,
+        _ => x ^ y,
+    };
+    if opc == 3 {
+        cpu.nzcv = logic_flags(r, sf);
+    }
+    cpu.set_xr(o.a as u32, sf, r);
+    pc.wrapping_add(4)
+}
+
+fn h_add_sub_reg<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, _: &mut M, pc: u64) -> u64 {
+    let f = o.imm as u32;
+    let sf = f & (1 << 11) != 0;
+    let sub = f & (1 << 8) != 0;
+    let y = shift_reg(cpu.xr(o.c as u32, sf), f & 3, (f >> 2) & 0x3F, sf);
+    let y = if sub { mask(!y, sf) } else { y };
+    let (r, nzcv) = add_with_carry(cpu.xr(o.b as u32, sf), y, sub, sf);
+    if f & (1 << 9) != 0 {
+        cpu.nzcv = nzcv;
+    }
+    cpu.set_xr(o.a as u32, sf, r);
+    pc.wrapping_add(4)
+}
+
+fn h_bitfield<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, _: &mut M, pc: u64) -> u64 {
+    let insn = o.insn;
+    let sf = bit(insn, 31);
+    let (wmask, tmask) = (o.imm, o.imm2);
+    let src = cpu.xr(o.b as u32, sf);
+    let bot = ror(src, o.c as u32, sf) & wmask;
+    let r = match field(insn, 29, 2) {
+        0 => {
+            let top = if (src >> field(insn, 10, 6)) & 1 != 0 {
+                !0
+            } else {
+                0
+            };
+            (top & !tmask) | (bot & tmask)
+        }
+        1 => {
+            let dst = cpu.xr(o.a as u32, sf);
+            let bot = (dst & !wmask) | bot;
+            (dst & !tmask) | (bot & tmask)
+        }
+        _ => bot & tmask,
+    };
+    cpu.set_xr(o.a as u32, sf, r);
+    pc.wrapping_add(4)
+}
+
+fn h_ccmp<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, _: &mut M, pc: u64) -> u64 {
+    let f = o.c as u32;
+    if cpu.cond_holds(f & 0xF) {
+        let sf = f & (1 << 4) != 0;
+        let y = if f & (1 << 6) != 0 {
+            u64::from(o.b)
+        } else {
+            cpu.xr(o.b as u32, sf)
+        };
+        let sub = f & (1 << 5) != 0;
+        let y = if sub { mask(!y, sf) } else { y };
+        cpu.nzcv = add_with_carry(cpu.xr(o.a as u32, sf), y, sub, sf).1;
+    } else {
+        cpu.nzcv = o.imm as u32;
+    }
+    pc.wrapping_add(4)
+}
+
+fn h_csel<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, _: &mut M, pc: u64) -> u64 {
+    let f = o.imm as u32;
+    let sf = f & (1 << 6) != 0;
+    let r = if cpu.cond_holds(f & 0xF) {
+        cpu.xr(o.b as u32, sf)
+    } else {
+        let y = cpu.xr(o.c as u32, sf);
+        match (f >> 4) & 3 {
+            0 => y,
+            2 => y.wrapping_add(1),
+            1 => !y,
+            _ => y.wrapping_neg(),
+        }
+    };
+    cpu.set_xr(o.a as u32, sf, r);
+    pc.wrapping_add(4)
+}
+
+fn h_madd<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, _: &mut M, pc: u64) -> u64 {
+    let f = o.imm as u32;
+    let sf = f & (1 << 6) != 0;
+    let p = cpu.xr(o.b as u32, sf).wrapping_mul(cpu.xr(o.c as u32, sf));
+    let acc = cpu.xr(f & 0x1F, sf);
+    let r = if f & (1 << 5) != 0 {
+        acc.wrapping_sub(p)
+    } else {
+        acc.wrapping_add(p)
+    };
+    cpu.set_xr(o.a as u32, sf, r);
+    pc.wrapping_add(4)
 }
 
 #[cfg(test)]
@@ -870,6 +1232,8 @@ mod tests {
         (0x1FE0_0000, 0x1A40_0000),
         (0x1FE0_0000, 0x1A80_0000),
         (0x1F00_0000, 0x1B00_0000),
+        (0xFFFF_F01F, 0xD503_201F),
+        (0xFFFF_F01F, 0xD503_301F),
         (0x3B20_0C00, 0x3820_0800),
         (0x0000_0000, 0x0000_0000),
     ];

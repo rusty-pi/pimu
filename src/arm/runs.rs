@@ -1,6 +1,7 @@
 //! Straight runs, decoded once: the instructions from a physical address up
-//! to and including the first that can move the PC anywhere but on by 4, or
-//! to the end of its page.
+//! to and including the first that always moves the PC anywhere but on by
+//! 4, or to the end of its page. A conditional branch is inside a run: where
+//! it is taken, the run ends there.
 //!
 //! A run is keyed by the physical address of its first instruction and holds
 //! the write generation of its page from when it was decoded. Any write to
@@ -33,7 +34,11 @@ const EMPTY: Slot = Slot {
 
 pub struct Runs {
     slots: Box<[Slot]>,
+    /// Never grown past its capacity, so a run's instructions stay where
+    /// they are until [`Self::epoch`] moves.
     ops: Vec<Op>,
+    /// Counts the times every run was dropped at once.
+    pub epoch: u64,
 }
 
 // The generation pointers point into the board's RAM, which outlives every
@@ -44,7 +49,8 @@ impl Default for Runs {
     fn default() -> Self {
         Runs {
             slots: vec![EMPTY; 1 << SLOTS_LOG2].into_boxed_slice(),
-            ops: Vec::new(),
+            ops: Vec::with_capacity(OPS_MAX),
+            epoch: 0,
         }
     }
 }
@@ -81,6 +87,7 @@ impl Runs {
         if self.ops.len() + 1024 > OPS_MAX {
             self.ops.clear();
             self.slots.fill(EMPTY);
+            self.epoch += 1;
         }
         let start = self.ops.len();
         let gen = unsafe { *genp };

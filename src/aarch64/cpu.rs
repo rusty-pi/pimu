@@ -505,6 +505,12 @@ impl Cpu {
         self.run_pure(op);
     }
 
+    /// Whether the last [`super::predecode::Handler`] stopped.
+    #[inline(always)]
+    pub fn faulted(&self) -> bool {
+        self.fault.is_some()
+    }
+
     /// Whether the step in front of an instruction stops on stage 2, which
     /// is not modelled.
     pub fn stage2_on(&self) -> bool {
@@ -512,7 +518,7 @@ impl Cpu {
     }
 
     #[inline(always)]
-    fn retire(&mut self, r: exec::Exec, insn: u32) -> Step {
+    pub(super) fn retire(&mut self, r: exec::Exec, insn: u32) -> Step {
         match r {
             Ok(()) => {
                 self.pc = self.next_pc;
