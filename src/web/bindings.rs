@@ -252,3 +252,14 @@ pub fn parallel_probe() -> bool {
     #[cfg(not(pimu_threads))]
     false
 }
+
+/// The ARM micro-benchmark (`src/arm/bench.rs`): each core runs about
+/// `per_core` instructions, on threads when `parallel` and this build has
+/// them. `[threaded (0 or 1), instructions, seconds]`, or empty if the cores
+/// did not finish.
+#[wasm_bindgen]
+pub fn arm_speed(parallel: bool, per_core: f64) -> Vec<f64> {
+    crate::arm::bench::speed(parallel, per_core as u64).map_or(Vec::new(), |s| {
+        vec![f64::from(u8::from(s.threaded)), s.insns as f64, s.secs]
+    })
+}

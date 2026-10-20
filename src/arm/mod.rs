@@ -111,6 +111,7 @@ use crate::machine::Machine;
 use crate::periph::gentimer::{self, GenericTimer, Reg, Which};
 use crate::periph::{armlocal, gic};
 
+pub mod bench;
 pub mod blocks;
 #[cfg(pimu_threads)]
 mod par;
