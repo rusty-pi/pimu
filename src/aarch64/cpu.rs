@@ -471,40 +471,6 @@ impl Cpu {
         self.retire(r, op.insn())
     }
 
-    /// Run `op` at [`Self::pc`]: `None` when it retired, else the step it
-    /// made, with any exception already taken the way [`Self::step_system`]
-    /// takes it.
-    #[inline(always)]
-    pub fn run_decoded<M: Memory + ?Sized>(&mut self, op: Op, mem: &mut M) -> Option<Step> {
-        self.next_pc = self.pc.wrapping_add(4);
-        match self.run_op(op, mem) {
-            Ok(()) => {
-                self.pc = self.next_pc;
-                None
-            }
-            r => Some(self.stopped(r, op.insn())),
-        }
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn stopped(&mut self, r: exec::Exec, insn: u32) -> Step {
-        match self.retire(r, insn) {
-            Step::Exception(e) => {
-                self.take_sync(e);
-                Step::Took(e)
-            }
-            s => s,
-        }
-    }
-
-    /// Run an [`Op::pure`] instruction: it touches registers and flags only,
-    /// and neither reads nor moves [`Self::pc`].
-    #[inline(always)]
-    pub fn run_pure_op(&mut self, op: Op) {
-        self.run_pure(op);
-    }
-
     /// Whether the last [`super::predecode::Handler`] stopped.
     #[inline(always)]
     pub fn faulted(&self) -> bool {

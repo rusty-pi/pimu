@@ -17,6 +17,7 @@ use super::exec::{
     shift_reg, single_access, Access, Exec,
 };
 use super::mmu::{load_le, store_le};
+use std::cell::Cell;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
@@ -583,12 +584,6 @@ impl Cpu {
         }
     }
 
-    /// [`Self::run_op`] for an [`Op::pure`] instruction.
-    #[inline(always)]
-    pub(super) fn run_pure(&mut self, o: Op) {
-        o.handler::<NoMem>()(self, &o, &mut NoMem, self.pc);
-    }
-
     /// After a handler that stopped: what [`Self::step_decoded`] makes of
     /// it, with an exception taken. `pc` is the instruction's, `next` what
     /// the handler returned.
@@ -629,57 +624,250 @@ impl Op {
     /// The handler for this instruction on bus `M`.
     #[inline(always)]
     pub fn handler<M: Memory + ?Sized>(&self) -> Handler<M> {
-        match self.kind {
-            Kind::Execute => h_execute::<M>,
-            Kind::BranchReg => h_branch_reg::<M>,
-            Kind::B => h_b::<M>,
-            Kind::Bl => h_bl::<M>,
-            Kind::BCond => h_bcond::<M>,
-            Kind::Cbz => h_cbz::<M>,
-            Kind::Tbz => h_tbz::<M>,
-            Kind::LdrX => h_ldr::<M, 8>,
-            Kind::LdrW => h_ldr::<M, 4>,
-            Kind::LdrH => h_ldr::<M, 2>,
-            Kind::LdrB => h_ldr::<M, 1>,
-            Kind::StrX => h_str::<M, 8>,
-            Kind::StrW => h_str::<M, 4>,
-            Kind::StrH => h_str::<M, 2>,
-            Kind::StrB => h_str::<M, 1>,
-            Kind::Barrier => h_barrier::<M>,
-            Kind::Nop => h_nop::<M>,
-            Kind::CmpImm => h_cmp_imm::<M, true>,
-            Kind::CmpImmW => h_cmp_imm::<M, false>,
-            Kind::CmpReg => h_cmp_reg::<M, true>,
-            Kind::CmpRegW => h_cmp_reg::<M, false>,
-            Kind::AddImmR => h_add_imm_r::<M>,
-            Kind::SubImmR => h_sub_imm_r::<M>,
-            Kind::MovReg => h_mov_reg::<M>,
-            Kind::LdStReg => h_ld_st_reg::<M>,
-            Kind::LdStPair => h_ld_st_pair::<M>,
-            Kind::LoadUimm => h_load_uimm::<M>,
-            Kind::StoreUimm => h_store_uimm::<M>,
-            Kind::LdStRegOff => h_ld_st_reg_off::<M>,
-            Kind::LdStImm => h_ld_st_imm::<M>,
-            Kind::Pair => h_pair::<M>,
-            Kind::DpImm => h_dp_imm::<M>,
-            Kind::DpReg => h_dp_reg::<M>,
-            Kind::Adr => h_adr::<M>,
-            Kind::Adrp => h_adrp::<M>,
-            Kind::AddImm => h_add_imm::<M>,
-            Kind::SubImm => h_sub_imm::<M>,
-            Kind::AddsImm => h_adds_imm::<M>,
-            Kind::SubsImm => h_subs_imm::<M>,
-            Kind::MovConst => h_mov_const::<M>,
-            Kind::MovK => h_movk::<M>,
-            Kind::LogicImm => h_logic_imm::<M>,
-            Kind::LogicReg => h_logic_reg::<M>,
-            Kind::AddSubReg => h_add_sub_reg::<M>,
-            Kind::Bitfield => h_bitfield::<M>,
-            Kind::Ccmp => h_ccmp::<M>,
-            Kind::Csel => h_csel::<M>,
-            Kind::Madd => h_madd::<M>,
+        handler_of(self.kind)
+    }
+
+    /// What runs this instruction inside a straight run on bus `M`.
+    fn go<M: RunBus>(&self) -> Go<M> {
+        macro_rules! go {
+            ($($k:ident),*) => {
+                match self.kind {
+                    $(Kind::$k => go_kind::<M, { Kind::$k as u8 }>,)*
+                }
+            };
+        }
+        go!(
+            Execute, BranchReg, B, Bl, BCond, Cbz, Tbz, LdrX, LdrW, LdrH, LdrB, StrX, StrW, StrH,
+            StrB, Barrier, LdStReg, LdStPair, LoadUimm, StoreUimm, LdStRegOff, LdStImm, Pair,
+            DpImm, DpReg, Adr, Adrp, Nop, CmpImm, CmpImmW, CmpReg, CmpRegW, AddImmR, SubImmR,
+            MovReg, AddImm, SubImm, AddsImm, SubsImm, MovConst, MovK, LogicImm, LogicReg,
+            AddSubReg, Bitfield, Ccmp, Csel, Madd
+        )
+    }
+}
+
+/// The handler for instructions of `kind` on bus `M`.
+#[inline(always)]
+fn handler_of<M: Memory + ?Sized>(kind: Kind) -> Handler<M> {
+    match kind {
+        Kind::Execute => h_execute::<M>,
+        Kind::BranchReg => h_branch_reg::<M>,
+        Kind::B => h_b::<M>,
+        Kind::Bl => h_bl::<M>,
+        Kind::BCond => h_bcond::<M>,
+        Kind::Cbz => h_cbz::<M>,
+        Kind::Tbz => h_tbz::<M>,
+        Kind::LdrX => h_ldr::<M, 8>,
+        Kind::LdrW => h_ldr::<M, 4>,
+        Kind::LdrH => h_ldr::<M, 2>,
+        Kind::LdrB => h_ldr::<M, 1>,
+        Kind::StrX => h_str::<M, 8>,
+        Kind::StrW => h_str::<M, 4>,
+        Kind::StrH => h_str::<M, 2>,
+        Kind::StrB => h_str::<M, 1>,
+        Kind::Barrier => h_barrier::<M>,
+        Kind::Nop => h_nop::<M>,
+        Kind::CmpImm => h_cmp_imm::<M, true>,
+        Kind::CmpImmW => h_cmp_imm::<M, false>,
+        Kind::CmpReg => h_cmp_reg::<M, true>,
+        Kind::CmpRegW => h_cmp_reg::<M, false>,
+        Kind::AddImmR => h_add_imm_r::<M>,
+        Kind::SubImmR => h_sub_imm_r::<M>,
+        Kind::MovReg => h_mov_reg::<M>,
+        Kind::LdStReg => h_ld_st_reg::<M>,
+        Kind::LdStPair => h_ld_st_pair::<M>,
+        Kind::LoadUimm => h_load_uimm::<M>,
+        Kind::StoreUimm => h_store_uimm::<M>,
+        Kind::LdStRegOff => h_ld_st_reg_off::<M>,
+        Kind::LdStImm => h_ld_st_imm::<M>,
+        Kind::Pair => h_pair::<M>,
+        Kind::DpImm => h_dp_imm::<M>,
+        Kind::DpReg => h_dp_reg::<M>,
+        Kind::Adr => h_adr::<M>,
+        Kind::Adrp => h_adrp::<M>,
+        Kind::AddImm => h_add_imm::<M>,
+        Kind::SubImm => h_sub_imm::<M>,
+        Kind::AddsImm => h_adds_imm::<M>,
+        Kind::SubsImm => h_subs_imm::<M>,
+        Kind::MovConst => h_mov_const::<M>,
+        Kind::MovK => h_movk::<M>,
+        Kind::LogicImm => h_logic_imm::<M>,
+        Kind::LogicReg => h_logic_reg::<M>,
+        Kind::AddSubReg => h_add_sub_reg::<M>,
+        Kind::Bitfield => h_bitfield::<M>,
+        Kind::Ccmp => h_ccmp::<M>,
+        Kind::Csel => h_csel::<M>,
+        Kind::Madd => h_madd::<M>,
+    }
+}
+
+/// An instruction of a straight run, with what runs it there: its handler,
+/// and then the next instruction's, for as long as each leaves nothing for
+/// the run loop to look at. A branch out of the run into its own page can be
+/// linked to the run at its target, and goes on into that.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunOp {
+    pub op: Op,
+    go: usize,
+    link: Cell<usize>,
+    link_gen: Cell<u64>,
+}
+
+/// What a straight run needs of the bus it runs on.
+pub trait RunBus: Memory {
+    /// The load or store at hand happens at cycle `c`.
+    fn at(&mut self, c: u64);
+    /// Whether the loads and stores so far left nothing for the run loop to
+    /// look at.
+    fn plain(&self) -> bool;
+    /// The run stopped at `op`, which would go on to `next`: after running,
+    /// or before when it is the last of its run, which the run loop takes
+    /// itself.
+    fn stop(&mut self, op: &RunOp, next: u64, ran: bool);
+    /// Whether a branch `c` cycles in may go on into the run it is linked
+    /// to, which was decoded at its page's generation `gen`.
+    fn chain(&self, c: u64, gen: u64) -> bool;
+}
+
+type Go<M> = fn(&mut Cpu, &RunOp, &mut M, u64, u64) -> (u64, u64);
+
+impl RunOp {
+    /// `op` in a run on bus `M`; `last` when it is the run's last.
+    pub fn new<M: RunBus>(op: Op, last: bool) -> RunOp {
+        let go: Go<M> = if last {
+            op.go_last::<M>()
+        } else {
+            op.go::<M>()
+        };
+        RunOp {
+            op,
+            go: go as usize,
+            link: Cell::new(0),
+            link_gen: Cell::new(0),
         }
     }
+
+    /// Run this instruction at `pc`, `c` cycles in, and those after it while
+    /// they leave nothing to look at: the PC and the cycle of the one that
+    /// stopped, which it told `bus`. `M` is the bus [`Self::new`] was given,
+    /// but for its lifetimes.
+    #[inline(always)]
+    pub fn go<M: RunBus>(&self, cpu: &mut Cpu, bus: &mut M, pc: u64, c: u64) -> (u64, u64) {
+        // A `Go<M>`, which `new` made.
+        let go: Go<M> = unsafe { std::mem::transmute(self.go) };
+        go(cpu, self, bus, pc, c)
+    }
+
+    /// Link this branch to `run`, the run at its target, decoded at its
+    /// page's generation `gen`. `run` has to stay put as long as this does.
+    pub fn link(&self, run: &RunOp, gen: u64) {
+        self.link.set(run as *const RunOp as usize);
+        self.link_gen.set(gen);
+    }
+
+    /// The first instruction of the run this branch was linked to, while its
+    /// page is at generation `gen`.
+    #[inline(always)]
+    pub fn linked(&self, gen: u64) -> Option<*const RunOp> {
+        let link = self.link.get();
+        (link != 0 && self.link_gen.get() == gen).then_some(link as *const RunOp)
+    }
+}
+
+impl Op {
+    /// What runs this instruction as the last of its run on bus `M`: a
+    /// branch goes on into a linked run, anything else is left to the run
+    /// loop.
+    fn go_last<M: RunBus>(&self) -> Go<M> {
+        match self.kind {
+            Kind::B => go_branch::<M, { Kind::B as u8 }>,
+            Kind::Bl => go_branch::<M, { Kind::Bl as u8 }>,
+            Kind::BCond => go_branch::<M, { Kind::BCond as u8 }>,
+            Kind::Cbz => go_branch::<M, { Kind::Cbz as u8 }>,
+            Kind::Tbz => go_branch::<M, { Kind::Tbz as u8 }>,
+            _ => go_stop::<M>,
+        }
+    }
+}
+
+fn go_kind<M: RunBus, const K: u8>(
+    cpu: &mut Cpu,
+    o: &RunOp,
+    bus: &mut M,
+    pc: u64,
+    c: u64,
+) -> (u64, u64) {
+    // `K` is one of `Kind`'s, from `Op::go`.
+    let kind = unsafe { std::mem::transmute::<u8, Kind>(K) };
+    let mem = (Kind::LdrX as u8..=Kind::Pair as u8).contains(&K);
+    if mem {
+        bus.at(c);
+    }
+    let next = handler_of::<M>(kind)(cpu, &o.op, bus, pc);
+    let on = if K >= Kind::Nop as u8 {
+        true
+    } else if (Kind::BCond as u8..=Kind::Tbz as u8).contains(&K) {
+        if next != pc.wrapping_add(4) {
+            return taken(cpu, o, bus, pc, next, c);
+        }
+        true
+    } else if K <= Kind::Bl as u8 {
+        false
+    } else if mem {
+        !cpu.faulted() && bus.plain()
+    } else {
+        !cpu.faulted()
+    };
+    if on {
+        // Not the last of its run, which `go_last` runs.
+        let n = unsafe { &*(o as *const RunOp).add(1) };
+        return n.go(cpu, bus, next, c + 1);
+    }
+    bus.stop(o, next, true);
+    (pc, c)
+}
+
+fn go_branch<M: RunBus, const K: u8>(
+    cpu: &mut Cpu,
+    o: &RunOp,
+    bus: &mut M,
+    pc: u64,
+    c: u64,
+) -> (u64, u64) {
+    // `K` is one of `Kind`'s, from `Op::go_last`.
+    let kind = unsafe { std::mem::transmute::<u8, Kind>(K) };
+    let next = handler_of::<M>(kind)(cpu, &o.op, bus, pc);
+    if next == pc.wrapping_add(4) {
+        bus.stop(o, next, true);
+        return (pc, c);
+    }
+    taken(cpu, o, bus, pc, next, c)
+}
+
+/// The branch `o` at `pc` taken to `next`: on into the run it is linked to
+/// where `bus` lets it.
+#[inline(always)]
+fn taken<M: RunBus>(
+    cpu: &mut Cpu,
+    o: &RunOp,
+    bus: &mut M,
+    pc: u64,
+    next: u64,
+    c: u64,
+) -> (u64, u64) {
+    let link = o.link.get();
+    if link != 0 && bus.chain(c, o.link_gen.get()) {
+        // A run on this page from its current generation, which stays put.
+        let run = unsafe { &*(link as *const RunOp) };
+        return run.go(cpu, bus, next, c + 1);
+    }
+    bus.stop(o, next, true);
+    (pc, c)
+}
+
+fn go_stop<M: RunBus>(_: &mut Cpu, o: &RunOp, bus: &mut M, pc: u64, c: u64) -> (u64, u64) {
+    bus.stop(o, pc, false);
+    (pc, c)
 }
 
 /// The next PC after `exec`'s `r`, which ran with `next_pc` at PC + 4.
@@ -1225,7 +1413,7 @@ mod tests {
             let a = addr as usize;
             let s = self
                 .bytes
-                .get(a..a + size as usize)
+                .get(a..a.saturating_add(size as usize))
                 .ok_or(Abort { addr, write: false })?;
             let mut b = [0u8; 8];
             b[..s.len()].copy_from_slice(s);
@@ -1235,7 +1423,7 @@ mod tests {
             let a = addr as usize;
             let d = self
                 .bytes
-                .get_mut(a..a + size as usize)
+                .get_mut(a..a.saturating_add(size as usize))
                 .ok_or(Abort { addr, write: true })?;
             d.copy_from_slice(&value.to_le_bytes()[..size as usize]);
             self.writes.push((addr, size, value));

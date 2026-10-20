@@ -477,12 +477,10 @@ impl Cpu {
     /// when [`Tlb::host`] has it and the access stays inside it.
     #[inline(always)]
     fn host_entry(&self, va: u64, size: u32, kind: Kind) -> Option<Host> {
-        if self.unprivileged || (va & 0xFFF) + u64::from(size) > 0x1000 {
+        if self.unprivileged {
             return None;
         }
-        let slot = data_slot(va, kind);
-        let h = self.tlb.host[slot];
-        (h.key == (va & !0xFFF) | u64::from(self.el)).then_some(h)
+        self.host_entry_decoded(va, size, kind)
     }
 
     /// [`Self::host_entry`] for a decoded load or store, which is never an
@@ -587,20 +585,7 @@ impl Cpu {
         size: u32,
         v: u64,
     ) -> bool {
-        if !mem.direct() {
-            return false;
-        }
-        let Some(h) = self.host_entry(va, size, Kind::Write) else {
-            return false;
-        };
-        let off = va & 0xFFF;
-        // Inside the page, which `Memory::host_page` vouched for.
-        unsafe {
-            store_le((h.bytes + off as usize) as *mut u8, size, v);
-            *(h.gen as *mut u64) += 1;
-        }
-        mem.wrote(h.pa | off, size);
-        true
+        !self.unprivileged && self.host_store(mem, va, size, v)
     }
 
     /// After an access of `kind` that `va` translated to `pa` for: remember

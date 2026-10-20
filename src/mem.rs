@@ -737,8 +737,7 @@ impl<S: Store> Ram<S> {
     /// [`Self::page_bytes`] as instruction words.
     #[inline(always)]
     pub fn page_ptr(&self, off: u64) -> Option<*const u32> {
-        let p = self.map().byte(off);
-        (!p.is_null()).then_some(p.cast::<u32>().cast_const())
+        self.page_bytes(off).map(|p| p.cast::<u32>().cast_const())
     }
 
     /// The write generation of the page holding `off` (inside RAM), where a

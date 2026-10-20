@@ -1305,7 +1305,7 @@ mod tests {
         ];
         for i in 0..200_000 {
             let pick = |r: u64, k: usize| {
-                if k % 3 == 0 {
+                if k.is_multiple_of(3) {
                     edges[(r % 8) as usize]
                 } else {
                     r
