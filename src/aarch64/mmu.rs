@@ -76,7 +76,56 @@ pub struct Tlb {
     /// as the translation behind it, so [`Tlb::flush`] drops it too, and the EL
     /// is part of the key because it picks the regime and the permissions.
     fetch: Option<(u64, u32, u64)>,
+    /// The same for data, direct-mapped by VA page: for reads in the first
+    /// [`DATA_HINTS`], for writes in the rest, as `(VA page | EL, PA page)`,
+    /// each made only by an access its permissions allowed. [`NO_HINT`]
+    /// matches no key.
+    data: [(u64, u64); 2 * DATA_HINTS],
+    /// Data pages that are plain RAM, laid out like [`Self::data`], with the
+    /// host memory behind them: an access through one is a host load or
+    /// store.
+    host: [Host; 2 * DATA_HINTS],
+    /// Code pages a straight run was fetched from: `(VA page | EL, PA
+    /// page, host words, write generation)`, direct-mapped by VA page, for
+    /// a run loop that wants all of them at once.
+    code: [(u64, u64, usize, usize); CODE_PAGES],
+    /// Counts flushes, so a loop can tell that a translation it looked up is
+    /// still the one in force.
+    pub epoch: u64,
 }
+
+const CODE_PAGES: usize = 64;
+const NO_CODE: (u64, u64, usize, usize) = (u64::MAX, 0, 0, 0);
+
+/// `key` as in [`Tlb::data`]; `bytes` and `gen` from [`Memory::host_page`].
+#[derive(Clone, Copy)]
+struct Host {
+    key: u64,
+    bytes: usize,
+    gen: usize,
+    pa: u64,
+}
+
+const NO_HOST: Host = Host {
+    key: u64::MAX,
+    bytes: 0,
+    gen: 0,
+    pa: 0,
+};
+
+const DATA_HINTS: usize = 32;
+
+/// Where the data hints for an access of `kind` to `va` live: by page, with
+/// higher bits folded in so that regions a power of two apart do not share
+/// a slot.
+#[inline(always)]
+fn data_slot(va: u64, kind: Kind) -> usize {
+    let page = va >> 12;
+    (kind as usize - 1) * DATA_HINTS
+        + ((page ^ (page >> 5) ^ (page >> 10)) as usize & (DATA_HINTS - 1))
+}
+
+const NO_HINT: (u64, u64) = (u64::MAX, 0);
 
 impl Default for Tlb {
     fn default() -> Self {
@@ -90,6 +139,23 @@ impl Tlb {
         self.fetch
     }
 
+    /// The code page `va` is in, as fetched at `el` before: its PA page,
+    /// host words and write generation, from [`Self::remember_code`].
+    #[inline(always)]
+    pub fn code_page(&self, va: u64, el: u32) -> Option<(u64, usize, usize)> {
+        let page = va >> 12;
+        let e = self.code[(page ^ (page >> 4)) as usize & (CODE_PAGES - 1)];
+        (e.0 == (va & !0xFFF) | u64::from(el)).then_some((e.1, e.2, e.3))
+    }
+
+    /// Remember a code page for [`Self::code_page`], for as long as the
+    /// translation behind it holds.
+    pub fn remember_code(&mut self, va: u64, el: u32, pa_page: u64, code: usize, gen: usize) {
+        let page = va >> 12;
+        self.code[(page ^ (page >> 4)) as usize & (CODE_PAGES - 1)] =
+            ((va & !0xFFF) | u64::from(el), pa_page, code, gen);
+    }
+
     pub fn new() -> Tlb {
         Tlb {
             generation: 1,
@@ -98,11 +164,19 @@ impl Tlb {
             walks: 0,
             broadcast: false,
             fetch: None,
+            data: [NO_HINT; 2 * DATA_HINTS],
+            host: [NO_HOST; 2 * DATA_HINTS],
+            code: [NO_CODE; CODE_PAGES],
+            epoch: 0,
         }
     }
 
     pub fn flush(&mut self) {
         self.fetch = None;
+        self.data.fill(NO_HINT);
+        self.host.fill(NO_HOST);
+        self.code.fill(NO_CODE);
+        self.epoch += 1;
         self.generation = self.generation.wrapping_add(1);
         if self.generation == 0 {
             self.entries.fill(Entry::default());
@@ -282,6 +356,28 @@ fn walk<M: Memory + ?Sized>(s: &SysRegs, mem: &mut M, regime: u8, va: u64) -> Re
 
 type Translated = (u64, Option<(u64, u64)>);
 
+/// A little-endian value of 1, 2, 4 or 8 bytes at `p`.
+#[inline(always)]
+pub(super) unsafe fn load_le(p: *const u8, size: u32) -> u64 {
+    match size {
+        1 => u64::from(*p),
+        2 => u64::from(u16::from_le(p.cast::<u16>().read_unaligned())),
+        4 => u64::from(u32::from_le(p.cast::<u32>().read_unaligned())),
+        _ => u64::from_le(p.cast::<u64>().read_unaligned()),
+    }
+}
+
+/// [`load_le`]'s store.
+#[inline(always)]
+pub(super) unsafe fn store_le(p: *mut u8, size: u32, v: u64) {
+    match size {
+        1 => *p = v as u8,
+        2 => p.cast::<u16>().write_unaligned((v as u16).to_le()),
+        4 => p.cast::<u32>().write_unaligned((v as u32).to_le()),
+        _ => p.cast::<u64>().write_unaligned(v.to_le()),
+    }
+}
+
 fn perm_bits(r: bool, w: bool, x: bool) -> u8 {
     let bit = |on: bool, k: Kind| if on { k as u8 } else { 0 };
     bit(r, Kind::Read) | bit(w, Kind::Write) | bit(x, Kind::Fetch)
@@ -297,6 +393,29 @@ impl Cpu {
     /// Translate `va` for an access of `kind`; errors are fault status codes.
     #[inline(always)]
     fn translate<M: Memory + ?Sized>(
+        &mut self,
+        mem: &mut M,
+        va: u64,
+        kind: Kind,
+    ) -> Result<u64, u8> {
+        let hinted = kind != Kind::Fetch && !self.unprivileged;
+        let key = (va & !0xFFF) | u64::from(self.el);
+        let slot = data_slot(va, kind);
+        if hinted {
+            let (k, pa) = self.tlb.data[slot];
+            if k == key {
+                return Ok(pa | (va & 0xFFF));
+            }
+        }
+        let pa = self.translate_slow(mem, va, kind)?;
+        if hinted {
+            self.tlb.data[slot] = (key, pa & !0xFFF);
+        }
+        Ok(pa)
+    }
+
+    #[inline(never)]
+    fn translate_slow<M: Memory + ?Sized>(
         &mut self,
         mem: &mut M,
         va: u64,
@@ -354,6 +473,139 @@ impl Cpu {
         Ok((first, Some((in_page, second))))
     }
 
+    /// The host page behind `va` for an access of `size` bytes and `kind`,
+    /// when [`Tlb::host`] has it and the access stays inside it.
+    #[inline(always)]
+    fn host_entry(&self, va: u64, size: u32, kind: Kind) -> Option<Host> {
+        if self.unprivileged {
+            return None;
+        }
+        self.host_entry_decoded(va, size, kind)
+    }
+
+    /// [`Self::host_entry`] for a decoded load or store, which is never an
+    /// unprivileged one: `LDTR` and `STTR` go through `exec`.
+    #[inline(always)]
+    fn host_entry_decoded(&self, va: u64, size: u32, kind: Kind) -> Option<Host> {
+        debug_assert!(!self.unprivileged);
+        if (va & 0xFFF) + u64::from(size) > 0x1000 {
+            return None;
+        }
+        let h = self.tlb.host[data_slot(va, kind)];
+        (h.key == (va & !0xFFF) | u64::from(self.el)).then_some(h)
+    }
+
+    /// [`Self::host_read`] for a decoded load. It leaves [`Cpu::last_pa`]
+    /// alone: only an exclusive load wants it, and that goes through `exec`.
+    #[inline(always)]
+    pub(super) fn host_load<M: Memory + ?Sized>(&self, mem: &M, va: u64, size: u32) -> Option<u64> {
+        if !mem.direct() {
+            return None;
+        }
+        let h = self.host_entry_decoded(va, size, Kind::Read)?;
+        // Inside the page, which `Memory::host_page` vouched for.
+        Some(unsafe { load_le((h.bytes + (va & 0xFFF) as usize) as *const u8, size) })
+    }
+
+    /// [`Self::host_write`] for a decoded store.
+    #[inline(always)]
+    pub(super) fn host_store<M: Memory + ?Sized>(
+        &self,
+        mem: &mut M,
+        va: u64,
+        size: u32,
+        v: u64,
+    ) -> bool {
+        if !mem.direct() {
+            return false;
+        }
+        let Some(h) = self.host_entry_decoded(va, size, Kind::Write) else {
+            return false;
+        };
+        let off = va & 0xFFF;
+        // Inside the page, which `Memory::host_page` vouched for.
+        unsafe {
+            store_le((h.bytes + off as usize) as *mut u8, size, v);
+            *(h.gen as *mut u64) += 1;
+        }
+        mem.wrote(h.pa | off, size);
+        true
+    }
+
+    /// A read of `va` straight from host memory, when [`Tlb::host`] has its
+    /// page.
+    #[inline(always)]
+    pub(super) fn host_read<M: Memory + ?Sized>(
+        &mut self,
+        mem: &M,
+        va: u64,
+        size: u32,
+    ) -> Option<u64> {
+        if !mem.direct() {
+            return None;
+        }
+        let h = self.host_entry(va, size, Kind::Read)?;
+        let off = va & 0xFFF;
+        self.last_pa = h.pa | off;
+        // Inside the page, which `Memory::host_page` vouched for.
+        Some(unsafe { load_le((h.bytes + off as usize) as *const u8, size) })
+    }
+
+    /// `size` bytes at `va` as host memory, for one decoded access that reads
+    /// or writes all of them, when [`Tlb::host`] has the page: a write's
+    /// generation bump and its range are accounted for here.
+    #[inline(always)]
+    pub(super) fn host_span<M: Memory + ?Sized>(
+        &mut self,
+        mem: &mut M,
+        va: u64,
+        size: u32,
+        write: bool,
+    ) -> Option<*mut u8> {
+        if !mem.direct() {
+            return None;
+        }
+        let kind = if write { Kind::Write } else { Kind::Read };
+        let h = self.host_entry_decoded(va, size, kind)?;
+        let off = va & 0xFFF;
+        if write {
+            // Inside the page, which `Memory::host_page` vouched for.
+            unsafe { *(h.gen as *mut u64) += 1 };
+            mem.wrote(h.pa | off, size);
+        }
+        Some((h.bytes + off as usize) as *mut u8)
+    }
+
+    /// [`Self::host_read`]'s store: whether it was made.
+    #[inline(always)]
+    pub(super) fn host_write<M: Memory + ?Sized>(
+        &self,
+        mem: &mut M,
+        va: u64,
+        size: u32,
+        v: u64,
+    ) -> bool {
+        !self.unprivileged && self.host_store(mem, va, size, v)
+    }
+
+    /// After an access of `kind` that `va` translated to `pa` for: remember
+    /// the host page behind it, if the bus has one.
+    #[inline(never)]
+    fn fill_host<M: Memory + ?Sized>(&mut self, mem: &mut M, va: u64, pa: u64, kind: Kind) {
+        if self.unprivileged {
+            return;
+        }
+        if let Some((bytes, gen)) = mem.host_page(pa & !0xFFF) {
+            let slot = data_slot(va, kind);
+            self.tlb.host[slot] = Host {
+                key: (va & !0xFFF) | u64::from(self.el),
+                bytes,
+                gen,
+                pa: pa & !0xFFF,
+            };
+        }
+    }
+
     #[inline(always)]
     pub(super) fn read<M: Memory + ?Sized>(
         &mut self,
@@ -368,15 +620,22 @@ impl Cpu {
                 fsc,
             })
         };
+        if let Some(v) = self.host_read(mem, va, size) {
+            return Ok(v);
+        }
         let (pa, split) = self
             .translate_access(mem, va, size, Kind::Read)
             .map_err(|(a, f)| abort(a, f))?;
         self.last_pa = pa;
         let Some((in_page, pa2)) = split else {
-            return mem.read(pa, size).map_err(|_| {
+            let v = mem.read(pa, size).map_err(|_| {
                 self.abort_pa = pa;
                 abort(va, FSC_EXTERNAL)
-            });
+            })?;
+            if mem.direct() {
+                self.fill_host(mem, va, pa, Kind::Read);
+            }
+            return Ok(v);
         };
         let mut v = 0;
         for i in 0..u64::from(size) {
@@ -409,14 +668,21 @@ impl Cpu {
                 fsc,
             })
         };
+        if self.host_write(mem, va, size, value) {
+            return Ok(());
+        }
         let (pa, split) = self
             .translate_access(mem, va, size, Kind::Write)
             .map_err(|(a, f)| abort(a, f))?;
         let Some((in_page, pa2)) = split else {
-            return mem.write(pa, size, value).map_err(|_| {
+            mem.write(pa, size, value).map_err(|_| {
                 self.abort_pa = pa;
                 abort(va, FSC_EXTERNAL)
-            });
+            })?;
+            if mem.direct() {
+                self.fill_host(mem, va, pa, Kind::Write);
+            }
+            return Ok(());
         };
         for i in 0..u64::from(size) {
             let p = if i < in_page {
@@ -451,6 +717,17 @@ impl Cpu {
         match mem.fetch(pa) {
             Ok(insn) => Ok(insn),
             Err(_) => Err(self.fetch_abort(pa, va)),
+        }
+    }
+
+    /// The physical address an instruction fetch from `va` reads, through
+    /// the same hint as [`Self::fetch`], which a new page refreshes; `None`
+    /// where the fetch would fault.
+    #[inline(always)]
+    pub fn fetch_pa<M: Memory + ?Sized>(&mut self, mem: &mut M, va: u64) -> Option<u64> {
+        match self.tlb.fetch {
+            Some((v, el, pa)) if v == va & !0xFFF && el == self.el => Some(pa | (va & 0xFFF)),
+            _ => self.fetch_page(mem, va).ok(),
         }
     }
 

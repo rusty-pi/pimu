@@ -18,6 +18,7 @@ mod exec;
 pub mod fp;
 mod fpinsn;
 pub mod mmu;
+pub mod predecode;
 mod simd;
 pub mod sysreg;
 

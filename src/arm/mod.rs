@@ -102,6 +102,7 @@
 //! Not modelled: stage 2 translation (a core that sets `HCR_EL2.VM` stops with
 //! [`ArmStop::Unsupported`]).
 
+use crate::aarch64::predecode::RunOp;
 use crate::aarch64::{sysreg, Abort, Cpu, Exception, Memory, Step};
 use crate::armstub::{self, Handoff};
 use crate::bus::{Bus, MmioDevice, Width};
@@ -116,6 +117,7 @@ mod par;
 mod park;
 #[cfg(all(pimu_threads, target_arch = "wasm32"))]
 pub mod pool;
+mod runs;
 #[cfg(pimu_threads)]
 pub use par::probe as parallel_probe;
 mod sha;
@@ -196,7 +198,49 @@ pub struct Core {
     /// ([`ArmSide::start_parallel`]).
     #[cfg_attr(not(pimu_threads), allow(dead_code))]
     par_cycles: u64,
+    /// The physical page [`ArmSide::lockstep`] last fetched from, and its
+    /// words' host address (0 when it is not plain DRAM).
+    code: (u64, usize),
+    /// The VA page and host words [`lock_step`] may keep fetching from
+    /// without a second look: set by a step that checked everything, kept
+    /// by pure instructions, which change nothing the checks read.
+    fast: Option<(u64, usize)>,
+    /// Where [`ArmSide::lockstep`] is in the core's current straight run.
+    cursor: Cursor,
 }
+
+/// A core's place in one of [`runs::Runs`]' runs, for stepping it an
+/// instruction at a time without looking each one up. Addresses are kept as
+/// integers so a [`Core`] can still move to a thread of its own.
+#[derive(Clone, Copy)]
+struct Cursor {
+    /// The next instruction and the end of the run.
+    op: usize,
+    end: usize,
+    /// The epochs of [`runs::Runs`] and of the core's TLB the run is from.
+    runs_epoch: u64,
+    tlb_epoch: u64,
+    /// The code page the run is on, and its write generation then.
+    va_page: u64,
+    el: u32,
+    pa_page: u64,
+    code: usize,
+    genp: usize,
+    gen: u64,
+}
+
+const NO_CURSOR: Cursor = Cursor {
+    op: 0,
+    end: 0,
+    runs_epoch: 0,
+    tlb_epoch: 0,
+    va_page: u64::MAX,
+    el: 0,
+    pa_page: 0,
+    code: 0,
+    genp: 0,
+    gen: 0,
+};
 
 impl Core {
     fn new(id: usize) -> Core {
@@ -209,6 +253,9 @@ impl Core {
             waiting: false,
             wfe_until: None,
             entered: None,
+            code: (u64::MAX, 0),
+            fast: None,
+            cursor: NO_CURSOR,
             detect: park::Detector::default(),
             park: None,
             sha: None,
@@ -294,6 +341,10 @@ pub struct ArmSide {
     sha_on: bool,
     /// `PIMU_NO_STRAIGHT=1` steps a burst one instruction at a time.
     straight_on: bool,
+    /// The cores' instructions, decoded (`src/aarch64/predecode.rs`), and
+    /// their straight runs (`src/arm/runs.rs`).
+    decoded: crate::aarch64::predecode::Decoded,
+    runs: runs::Runs,
     /// `PIMU_ARM_BLOCKS=1` counts straight-line runs; only [`Self::step_core`]
     /// sees them, so it takes the cores off the burst path.
     blocks_on: bool,
@@ -436,6 +487,8 @@ impl ArmSide {
             burst_on: std::env::var_os("PIMU_NO_BURST").is_none(),
             sha_on: std::env::var_os("PIMU_NO_SHA_SKIP").is_none(),
             straight_on: std::env::var_os("PIMU_NO_STRAIGHT").is_none(),
+            decoded: Default::default(),
+            runs: Default::default(),
             blocks_on: crate::diag::ON && std::env::var_os("PIMU_ARM_BLOCKS").is_some(),
             stop_on_store: false,
             stored: false,
@@ -777,34 +830,24 @@ impl ArmSide {
                     continue;
                 }
             }
-            let mut awake = false;
-            let mut ids = self.runnable;
-            while ids != 0 {
-                let id = ids.trailing_zeros() as usize;
-                ids &= ids - 1;
-                // Runnable and waiting means a line is up, or a `wfe` saw its
-                // event or ran out: it wakes. A `wfe` that completes consumes
-                // the event.
-                let core = &mut self.cores[id];
-                core.waiting = false;
-                if core.wfe_until.take().is_some() {
-                    core.cpu.event = false;
-                }
-                awake = true;
-                match self.step_core(m, id) {
-                    // Nothing changed that the runnable bits or the parked
-                    // cores depend on.
-                    Turn::Plain => {}
-                    Turn::Full => {
-                        self.refresh_runnable(id);
-                        ids |= std::mem::take(&mut self.woke);
-                    }
-                    Turn::Stop(stop) => {
-                        self.stopped = Some(stop);
+            // Several cores take turns: the same, a cycle at a time.
+            if self.burst_on
+                && self.runnable != 0
+                && self.parked == 0
+                && self.prof.is_none()
+                && !self.blocks_on
+            {
+                let limit = end.min(self.timer_due).min(self.park_due);
+                if limit > self.cycles && self.lockstep_ready() {
+                    self.lockstep(m, limit);
+                    if self.stop_on_store && self.stored {
                         break;
                     }
+                    continue;
                 }
             }
+            let awake = self.runnable != 0;
+            self.take_turns(m, self.runnable);
             if !awake {
                 let wake = self.timer_due.min(self.park_due).min(end);
                 let wake = wake.max(self.cycles + 1);
@@ -822,6 +865,176 @@ impl ArmSide {
         }
     }
 
+    /// Step each of `ids` in turn, as one cycle does; the bits of cores a
+    /// step wakes later in core order join in.
+    fn take_turns(&mut self, m: &mut Machine, mut ids: u32) {
+        while ids != 0 {
+            let id = ids.trailing_zeros() as usize;
+            ids &= ids - 1;
+            // Runnable and waiting means a line is up, or a `wfe` saw its
+            // event or ran out: it wakes. A `wfe` that completes consumes
+            // the event.
+            let core = &mut self.cores[id];
+            core.waiting = false;
+            if core.wfe_until.take().is_some() {
+                core.cpu.event = false;
+            }
+            match self.step_core(m, id) {
+                // Nothing changed that the runnable bits or the parked
+                // cores depend on.
+                Turn::Plain => {}
+                Turn::Full => {
+                    self.refresh_runnable(id);
+                    ids |= std::mem::take(&mut self.woke);
+                }
+                Turn::Stop(stop) => {
+                    self.stopped = Some(stop);
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Whether every runnable core's next step can be taken by
+    /// [`Self::lockstep`]: none is watched by its detector or still in the
+    /// armstub.
+    fn lockstep_ready(&self) -> bool {
+        let mut ids = self.runnable;
+        while ids != 0 {
+            let c = &self.cores[ids.trailing_zeros() as usize];
+            ids &= ids - 1;
+            if c.detect.watching() || c.entered.is_none() {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// The runnable cores, nothing parked or due before `limit`: one step of
+    /// each per cycle, in core order, exactly as the cycle loop would take
+    /// them, but without its checks for as long as every step is one
+    /// [`Self::step_core`] would call plain. The first that is not is
+    /// finished the way `step_core` finishes it, and so is the rest of its
+    /// cycle.
+    #[inline(never)]
+    fn lockstep(&mut self, m: &mut Machine, limit: u64) {
+        let track = self.park_on || self.sha_on;
+        let all = self.runnable;
+        let mut ids = all;
+        while ids != 0 {
+            let core = &mut self.cores[ids.trailing_zeros() as usize];
+            ids &= ids - 1;
+            core.waiting = false;
+            if core.wfe_until.take().is_some() {
+                core.cpu.event = false;
+            }
+            core.fast = None;
+            core.cursor = NO_CURSOR;
+        }
+        let released_at = self.released_at.unwrap_or(0);
+        let start = self.cycles;
+        let mut cycles = start;
+        while cycles < limit {
+            let mut ids = all;
+            let mut watching = false;
+            while ids != 0 {
+                let id = ids.trailing_zeros() as usize;
+                ids &= ids - 1;
+                let core = &mut self.cores[id];
+                let effects = core.cpu.shared_effects;
+                let pc = core.cpu.pc;
+                let done = match cursor_step(
+                    core,
+                    &mut self.runs,
+                    &mut self.decoded,
+                    m,
+                    id,
+                    cycles,
+                    released_at,
+                ) {
+                    LockStep::Plain => {
+                        // A taken branch is the one plain step the detector
+                        // can have work for.
+                        if track && core.cpu.pc != pc.wrapping_add(4) {
+                            let park = core.detect.retired(&core.cpu, cycles, pc, false);
+                            debug_assert!(!park);
+                            watching |= core.detect.watching();
+                        }
+                        continue;
+                    }
+                    LockStep::Done(done) => done,
+                };
+                let same_effects = core.cpu.shared_effects == effects;
+                if done.written.is_some() {
+                    self.drop_stale_cursors(all);
+                }
+                let plain = matches!(done.step, Step::Retired)
+                    && !done.io
+                    && same_effects
+                    && (done.written.is_none()
+                        || !self
+                            .cores
+                            .iter()
+                            .enumerate()
+                            .any(|(k, c)| k != id && c.cpu.marked()));
+                let core = &mut self.cores[id];
+                if plain {
+                    if track {
+                        let park =
+                            core.detect
+                                .retired(&core.cpu, cycles, pc, done.written.is_some());
+                        debug_assert!(!park);
+                        watching |= core.detect.watching();
+                    }
+                    continue;
+                }
+                self.count_steps(all, cycles - start, all & !ids & !(1 << id));
+                self.cycles = cycles;
+                match self.after_step(m, id, done) {
+                    Some(stop) => self.stopped = Some(stop),
+                    None => {
+                        self.refresh_runnable(id);
+                        let woke = std::mem::take(&mut self.woke);
+                        self.take_turns(m, ids | woke);
+                    }
+                }
+                self.cycles += 1;
+                return;
+            }
+            cycles += 1;
+            if watching {
+                break;
+            }
+        }
+        self.count_steps(all, cycles - start, 0);
+        self.cycles = cycles;
+    }
+
+    /// Retire `cycles` steps on each of `all` and one more on each of
+    /// `more`, which [`Self::lockstep`] took one at a time.
+    fn count_steps(&mut self, all: u32, cycles: u64, more: u32) {
+        for (id, core) in self.cores.iter_mut().enumerate() {
+            if all & 1 << id != 0 {
+                core.insns += cycles + u64::from(more >> id & 1);
+            }
+        }
+    }
+
+    /// After a store in [`Self::lockstep`]: the cursors of `all` on a page
+    /// it moved the write generation of, which the next step refills.
+    #[inline(never)]
+    fn drop_stale_cursors(&mut self, all: u32) {
+        for (id, core) in self.cores.iter_mut().enumerate() {
+            let cur = &mut core.cursor;
+            if all & 1 << id != 0
+                && cur.op < cur.end
+                && unsafe { *(cur.genp as *const u64) } != cur.gen
+            {
+                cur.end = 0;
+            }
+        }
+    }
+
     /// One instruction, exception or interrupt entry on core `id`.
     fn step_core(&mut self, m: &mut Machine, id: usize) -> Turn {
         let cycles = self.cycles;
@@ -835,19 +1048,18 @@ impl ArmSide {
         let watching = core.detect.watching();
         let effects = core.cpu.shared_effects;
         let mut bus = ArmBus {
-            m: &mut *m,
-            timer: &mut core.timer,
-            cycles,
-            core: id,
-            secure,
-            written: None,
-            io: false,
             log: watching.then_some(&mut core.detect.log),
             stores: watching.then_some(&mut core.detect.stores),
-            released_at: self.released_at.unwrap_or(0),
-            periph_store: false,
+            ..ArmBus::new(
+                &mut *m,
+                &mut core.timer,
+                cycles,
+                id,
+                secure,
+                self.released_at.unwrap_or(0),
+            )
         };
-        let step = core.cpu.step_system(&mut bus);
+        let step = core.cpu.step_system_through(&mut bus, &mut self.decoded);
         let done = Stepped {
             step,
             pc,
@@ -916,6 +1128,8 @@ impl ArmSide {
         let track = self.park_on || self.sha_on;
         let released_at = self.released_at.unwrap_or(0);
         let mut cycles = self.cycles;
+        let decoded = &mut self.decoded;
+        let runs = &mut self.runs;
         let core = &mut self.cores[id];
         core.waiting = false;
         if core.wfe_until.take().is_some() {
@@ -933,90 +1147,45 @@ impl ArmSide {
         // may change what the next step is. A line this core's own `msr daif`
         // unmasks needs no stop: lines only move when a device is touched.
         let effects = cpu.shared_effects;
-        let mut bus = ArmBus {
-            m: &mut *m,
+        let mut bus = ArmBus::new(
+            &mut *m,
             timer,
             cycles,
-            core: id,
-            secure: cpu.el == 3 || cpu.sys.scr_el3 & sysreg::SCR_NS == 0,
-            written: None,
-            io: false,
-            log: None,
-            stores: None,
+            id,
+            cpu.el == 3 || cpu.sys.scr_el3 & sysreg::SCR_NS == 0,
             released_at,
-            periph_store: false,
-        };
-        let last = 'burst: loop {
+        );
+        let last = loop {
             // A straight-line run off one page: the checks around a step are
             // made once instead of once per instruction. The module docs give
             // the invariants that make that sound. Mean run: 5.3 instructions
             // on `linux`, 9.6 on the mkosi boot.
-            if self.straight_on && !cpu.irq_line && !cpu.fiq_line && entered.is_some() {
-                if let Some((va_page, el, pa_page)) = cpu.tlb.fetch_hint() {
-                    // The alignment test is hoisted too: a PC that starts
-                    // aligned and only advances by 4 stays aligned.
-                    if el == cpu.el
-                        && va_page == cpu.pc & !0xFFF
-                        && cpu.pc & 3 == 0
-                        && !detect.watching()
-                    {
-                        loop {
-                            let pc = cpu.pc;
-                            if cycles >= limit || pc & !0xFFF != va_page {
-                                break;
-                            }
-                            let Ok(insn) = bus.fetch(pa_page | (pc & 0xFFF)) else {
-                                break;
-                            };
-                            bus.cycles = cycles;
-                            bus.written = None;
-                            // What `step_system` does with an exception the
-                            // instruction raised; the interrupt tests in
-                            // front of it are the ones hoisted out.
-                            let step = match cpu.step_fetched(insn, &mut bus) {
-                                Step::Exception(e) => {
-                                    cpu.take_sync(e);
-                                    Step::Took(e)
-                                }
-                                s => s,
-                            };
-                            let wrote = bus.written.is_some();
-                            if !matches!(step, Step::Retired)
-                                || bus.io
-                                || cpu.shared_effects != effects
-                                || (wrote && marked)
-                            {
-                                break 'burst Some(Stepped {
-                                    step,
-                                    pc,
-                                    written: bus.written,
-                                    io: bus.io,
-                                    periph_store: bus.periph_store,
-                                });
-                            }
-                            *insns += 1;
-                            cycles += 1;
-                            if cpu.pc != pc.wrapping_add(4) {
-                                // The transfer that ends the run, and the one
-                                // step of it the detector can have work for.
-                                if track {
-                                    let park = detect.retired(cpu, cycles - 1, pc, wrote);
-                                    debug_assert!(!park);
-                                }
-                                break;
-                            }
-                        }
-                        if cycles >= limit || detect.watching() {
-                            break None;
-                        }
-                        continue;
-                    }
+            if self.straight_on
+                && !cpu.irq_line
+                && !cpu.fiq_line
+                && entered.is_some()
+                && !detect.watching()
+            {
+                let mut at = Straight {
+                    cycles,
+                    limit,
+                    marked,
+                    effects,
+                    track,
+                };
+                let end = at.run(cpu, &mut bus, runs, decoded, detect);
+                *insns += at.cycles - cycles;
+                cycles = at.cycles;
+                match end {
+                    StraightEnd::Step(done) => break Some(done),
+                    StraightEnd::Done => break None,
+                    StraightEnd::Slow => {}
                 }
             }
             bus.cycles = cycles;
             bus.written = None;
             let pc = cpu.pc;
-            let step = cpu.step_system(&mut bus);
+            let step = cpu.step_system_through(&mut bus, decoded);
             let wrote = bus.written.is_some();
             if !matches!(step, Step::Retired)
                 || bus.io
@@ -1287,6 +1456,15 @@ struct ArmBus<'a> {
     released_at: u64,
     /// The step wrote a VPU-side peripheral: something the VPU may wake for.
     periph_store: bool,
+    /// The instruction a straight run stopped at, where it would go next,
+    /// and whether it ran.
+    stopped: *const RunOp,
+    next: u64,
+    ran: bool,
+    /// A straight run's page's write generation, and the cycle a branch
+    /// in it may go on into a linked run until: 0 for never.
+    genp: *const u64,
+    chain_until: u64,
 }
 
 /// Where `size` bytes at ARM physical `addr` land, given `ram_len` bytes of DRAM.
@@ -1438,6 +1616,487 @@ impl ArmBus<'_> {
     }
 }
 
+/// Core `id`'s next step in cycle `cycles`, from its [`Cursor`]: the next
+/// instruction of the run it is in, or of the run [`refill`] finds at its PC.
+/// Where neither works, [`lock_step`] takes the step.
+#[inline(always)]
+fn cursor_step(
+    core: &mut Core,
+    runs: &mut runs::Runs,
+    decoded: &mut crate::aarch64::predecode::Decoded,
+    m: &mut Machine,
+    id: usize,
+    cycles: u64,
+    released_at: u64,
+) -> LockStep {
+    let cur = &core.cursor;
+    // A store anywhere on the page, by any core, moves its generation, and
+    // `ArmSide::drop_stale_cursors` ends the run there.
+    let live = cur.op < cur.end && cur.runs_epoch == runs.epoch;
+    if !live && !refill(core, runs, decoded, m) {
+        core.cursor = NO_CURSOR;
+        return lock_step(core, decoded, m, id, cycles, released_at);
+    }
+    let cur = &mut core.cursor;
+    // Inside the run, which stays put until `runs.epoch` moves.
+    let op = unsafe { &(*(cur.op as *const crate::aarch64::predecode::RunOp)).op };
+    cur.op += std::mem::size_of::<crate::aarch64::predecode::RunOp>();
+    let cpu = &mut core.cpu;
+    let pc = cpu.pc;
+    if op.pure() || op.plain_branch() {
+        let next = op.handler()(cpu, op, &mut crate::aarch64::predecode::NoMem, pc);
+        cpu.pc = next;
+        // A branch taken out of the middle of the run.
+        if next != pc.wrapping_add(4) {
+            cur.end = 0;
+        }
+        return LockStep::Plain;
+    }
+    let effects = cpu.shared_effects;
+    let secure = cpu.el == 3 || cpu.sys.scr_el3 & sysreg::SCR_NS == 0;
+    let mut bus = ArmBus::new(m, &mut core.timer, cycles, id, secure, released_at);
+    let next = op.handler()(cpu, op, &mut bus, pc);
+    let step = if cpu.faulted() {
+        cur.va_page = u64::MAX;
+        cur.end = 0;
+        cpu.stopped_at(pc, next, op)
+    } else {
+        cpu.pc = next;
+        // A load from RAM: plain whatever the other cores hold. A store has
+        // their exclusive marks to look at, which the cycle loop does.
+        if !op.ends_run() && !bus.io && bus.written.is_none() && cpu.shared_effects == effects {
+            return LockStep::Plain;
+        }
+        // Anything but a load or store may change the EL, the translation,
+        // or what the interrupt masks let through: the next run is looked
+        // at in full.
+        if op.ends_run() {
+            cur.va_page = u64::MAX;
+            cur.end = 0;
+        }
+        Step::Retired
+    };
+    LockStep::Done(Stepped {
+        step,
+        pc,
+        written: bus.written,
+        io: bus.io,
+        periph_store: bus.periph_store,
+    })
+}
+
+/// Point the core's [`Cursor`] at the run at its PC: within the page it is
+/// on through the translation it had, else through the code page cache or
+/// the fetch hint, after the checks [`lock_step`] makes. False when none of
+/// that holds, and the ordinary step has to go first.
+fn refill(
+    core: &mut Core,
+    runs: &mut runs::Runs,
+    decoded: &mut crate::aarch64::predecode::Decoded,
+    m: &Machine,
+) -> bool {
+    let cpu = &mut core.cpu;
+    let cur = &mut core.cursor;
+    let pc = cpu.pc;
+    if pc & 3 != 0 {
+        return false;
+    }
+    let el = cpu.el;
+    if pc & !0xFFF != cur.va_page || cur.el != el || cur.tlb_epoch != cpu.tlb.epoch {
+        if cpu.irq_line || cpu.fiq_line || cpu.stage2_on() {
+            return false;
+        }
+        let (pa_page, code, genp) = match cpu.tlb.code_page(pc, el) {
+            Some(page) => page,
+            None => match cpu.tlb.fetch_hint() {
+                Some((va_page, hint_el, pa_page)) if va_page == pc & !0xFFF && hint_el == el => {
+                    let code = code_ptr(m, pa_page);
+                    if code == 0 {
+                        return false;
+                    }
+                    let genp = m.ram.gen_ptr(pa_page) as usize;
+                    cpu.tlb.remember_code(pc, el, pa_page, code, genp);
+                    (pa_page, code, genp)
+                }
+                _ => return false,
+            },
+        };
+        *cur = Cursor {
+            va_page: pc & !0xFFF,
+            el,
+            tlb_epoch: cpu.tlb.epoch,
+            pa_page,
+            code,
+            genp,
+            ..*cur
+        };
+    }
+    let ops = runs.get(
+        cur.pa_page | (pc & 0xFFF),
+        cur.code as *const u32,
+        cur.genp as *const u64,
+        decoded,
+    );
+    cur.op = ops.as_ptr() as usize;
+    cur.end = cur.op + std::mem::size_of_val(ops);
+    cur.runs_epoch = runs.epoch;
+    // `get` has checked the run against the page.
+    cur.gen = unsafe { *(cur.genp as *const u64) };
+    true
+}
+
+/// One core's step in [`ArmSide::lockstep`].
+enum LockStep {
+    /// A pure instruction or a plain branch, retired: nothing for anyone
+    /// else to look at.
+    Plain,
+    /// Any other step, for the cycle loop to look at.
+    Done(Stepped),
+}
+
+/// Core `id`'s next step in cycle `cycles`: straight from the decoded form
+/// of a word on a plain DRAM page through its fetch hint, or the full step
+/// when an interrupt line is up, the fetch would need a translation or the
+/// page is not plain DRAM.
+#[inline(always)]
+fn lock_step(
+    core: &mut Core,
+    decoded: &mut crate::aarch64::predecode::Decoded,
+    m: &mut Machine,
+    id: usize,
+    cycles: u64,
+    released_at: u64,
+) -> LockStep {
+    let cpu = &mut core.cpu;
+    let pc = cpu.pc;
+    let mut word = None;
+    if let Some((va_page, code)) = core.fast {
+        if pc & !0xFFF == va_page {
+            // Inside the page `code_ptr` vouched for.
+            word = Some(unsafe { ((code + (pc & 0xFFF) as usize) as *const u32).read_unaligned() });
+        }
+    }
+    if word.is_none() {
+        if let Some((va_page, el, pa_page)) = cpu.tlb.fetch_hint() {
+            if va_page == pc & !0xFFF
+                && el == cpu.el
+                && pc & 3 == 0
+                && !cpu.irq_line
+                && !cpu.fiq_line
+                && !cpu.stage2_on()
+            {
+                if core.code.0 != pa_page || core.code.1 == 0 {
+                    core.code = (pa_page, code_ptr(m, pa_page));
+                }
+                if core.code.1 != 0 {
+                    // Inside the page `code_ptr` vouched for.
+                    word = Some(unsafe {
+                        ((core.code.1 + (pc & 0xFFF) as usize) as *const u32).read_unaligned()
+                    });
+                    core.fast = Some((va_page, core.code.1));
+                }
+            }
+        }
+    }
+    let new_bus = |m, timer, secure| ArmBus::new(m, timer, cycles, id, secure, released_at);
+    let secure = cpu.el == 3 || cpu.sys.scr_el3 & sysreg::SCR_NS == 0;
+    let (step, bus) = match word {
+        Some(w) => {
+            let op = decoded.slot(w);
+            if op.pure() || op.plain_branch() {
+                cpu.pc = op.handler()(cpu, op, &mut crate::aarch64::predecode::NoMem, pc);
+                return LockStep::Plain;
+            }
+            let mut bus = new_bus(m, &mut core.timer, secure);
+            let next = op.handler()(cpu, op, &mut bus, pc);
+            let step = if cpu.faulted() {
+                core.fast = None;
+                cpu.stopped_at(pc, next, op)
+            } else {
+                // A load or store leaves everything the fast fetch state
+                // stands for as it was; anything else may not.
+                if op.ends_run() {
+                    core.fast = None;
+                }
+                cpu.pc = next;
+                Step::Retired
+            };
+            (step, bus)
+        }
+        None => {
+            core.fast = None;
+            let mut bus = new_bus(m, &mut core.timer, secure);
+            (cpu.step_system_through(&mut bus, decoded), bus)
+        }
+    };
+    LockStep::Done(Stepped {
+        step,
+        pc,
+        written: bus.written,
+        io: bus.io,
+        periph_store: bus.periph_store,
+    })
+}
+
+/// The host address of physical page `pa_page`'s words, when an instruction
+/// fetch from it is a plain DRAM read; 0 otherwise.
+fn code_ptr(m: &Machine, pa_page: u64) -> usize {
+    let end = pa_page + 0x1000;
+    let plain = end <= m.ram.len()
+        && (end <= RAM_LOW_END || pa_page >= RAM_HIGH_BASE)
+        && !m.ram.coherency.is_on();
+    plain
+        .then(|| m.ram.page_ptr(pa_page))
+        .flatten()
+        .map_or(0, |p| p as usize)
+}
+
+/// How many instructions a straight run goes on for through linked branches
+/// before it comes back to [`Straight::run`].
+const CHAIN_SPAN: u64 = runs::MAX_LEN;
+
+/// A lone core's straight runs, back to back, until one needs the run loop.
+struct Straight {
+    cycles: u64,
+    limit: u64,
+    /// Another core holds an exclusive mark, which a store may clear.
+    marked: bool,
+    /// [`Cpu::shared_effects`] when the burst began.
+    effects: u64,
+    /// Whether the park detector or the SHA-256 finder are on.
+    track: bool,
+}
+
+enum StraightEnd {
+    /// A step the run loop has to finish.
+    Step(Stepped),
+    /// At the limit, or the detector is watching a loop.
+    Done,
+    /// The next instruction is for the ordinary step: its page is not plain
+    /// DRAM, its fetch faults, or its run does not fit before the limit.
+    Slow,
+}
+
+impl Straight {
+    /// Run straight runs from the core's PC. The checks a burst makes after
+    /// each step are made after loads, stores and the last instruction of a
+    /// run only: the others touch nothing but registers and flags, and move
+    /// the PC on by 4.
+    #[inline(never)]
+    fn run(
+        &mut self,
+        cpu: &mut Cpu,
+        bus: &mut ArmBus<'_>,
+        runs: &mut runs::Runs,
+        decoded: &mut crate::aarch64::predecode::Decoded,
+        detect: &mut park::Detector,
+    ) -> StraightEnd {
+        let mut c = self.cycles;
+        // A linked run fits before the limit from this far before it, and the
+        // detector wants to see every branch taken.
+        let chain_end = if self.track {
+            0
+        } else {
+            self.limit.saturating_sub(runs::MAX_LEN)
+        };
+        let end = 'page: loop {
+            if c >= self.limit || detect.watching() {
+                break StraightEnd::Done;
+            }
+            let pc = cpu.pc;
+            if pc & 3 != 0 || cpu.stage2_on() {
+                break StraightEnd::Slow;
+            }
+            let el = cpu.el;
+            let va_page = pc & !0xFFF;
+            let epoch = cpu.tlb.epoch;
+            let (pa_page, code, genp) = match cpu.tlb.code_page(pc, el) {
+                Some((pa_page, code, genp)) => (pa_page, code as *const u32, genp as *const u64),
+                None => {
+                    let Some(pa) = cpu.fetch_pa(bus, pc) else {
+                        break StraightEnd::Slow;
+                    };
+                    let pa_page = pa & !0xFFF;
+                    let Some(code) = bus.code_page(pa_page) else {
+                        break StraightEnd::Slow;
+                    };
+                    let genp = bus.m.ram.gen_ptr(pa_page);
+                    cpu.tlb
+                        .remember_code(pc, el, pa_page, code as usize, genp as usize);
+                    (pa_page, code, genp)
+                }
+            };
+            bus.genp = genp;
+            // The run a branch was linked to, and the branch to link to the
+            // run looked up next. The runs stay put while `runs.epoch` does,
+            // which only a lookup can move.
+            let mut chained: Option<*const RunOp> = None;
+            let mut unlinked: Option<*const RunOp> = None;
+            'runs: loop {
+                let first = match chained.take() {
+                    Some(run) => run,
+                    None => {
+                        let start = cpu.pc;
+                        if start & !0xFFF != va_page || start & 3 != 0 {
+                            continue 'page;
+                        }
+                        let runs_epoch = runs.epoch;
+                        let ops = runs.get(pa_page | (start & 0xFFF), code, genp, decoded);
+                        if c + ops.len() as u64 > self.limit {
+                            break 'page if c >= self.limit {
+                                StraightEnd::Done
+                            } else {
+                                StraightEnd::Slow
+                            };
+                        }
+                        let Some(first) = ops.first() else {
+                            break 'page StraightEnd::Slow;
+                        };
+                        let first: *const RunOp = first;
+                        if let Some(branch) = unlinked.take() {
+                            if runs.epoch == runs_epoch {
+                                // `get` has checked the run against the page.
+                                unsafe { (*branch).link(&*first, *genp) };
+                            }
+                        }
+                        first
+                    }
+                };
+                let gen = unsafe { *genp };
+                // The PC of the instruction at hand; `cpu.pc` is brought up to
+                // it where a step ends or the run does. The instructions before
+                // the last move it on by 4 and change nothing the burst checks
+                // but what a load or store can, and they run on from one to
+                // the next, and on through linked branches, until one has
+                // something to look at.
+                let mut pc = cpu.pc;
+                let mut from = unsafe { &*first };
+                bus.written = None;
+                let (branch, next) = loop {
+                    // Where tail calls are not made, as on wasm32 without
+                    // `tail-call`, each instruction run nests a call deeper.
+                    bus.chain_until = chain_end.min(c + CHAIN_SPAN);
+                    (pc, c) = from.go(cpu, bus, pc, c);
+                    let op = unsafe { &*bus.stopped };
+                    let next = bus.next;
+                    if !bus.ran {
+                        // The last of the run, which may be anything.
+                        let last = &op.op;
+                        bus.cycles = c;
+                        let next = last.handler()(cpu, last, bus, pc);
+                        if cpu.faulted() {
+                            let step = cpu.stopped_at(pc, next, last);
+                            break 'page StraightEnd::Step(Stepped {
+                                step,
+                                pc,
+                                written: bus.written,
+                                io: bus.io,
+                                periph_store: bus.periph_store,
+                            });
+                        }
+                        cpu.pc = next;
+                        let wrote = bus.written.is_some();
+                        if bus.io || (wrote && self.marked) || cpu.shared_effects != self.effects {
+                            break 'page StraightEnd::Step(Stepped {
+                                step: Step::Retired,
+                                pc,
+                                written: bus.written,
+                                io: bus.io,
+                                periph_store: bus.periph_store,
+                            });
+                        }
+                        c += 1;
+                        if next != pc.wrapping_add(4) {
+                            // The transfer that ends the run, and the one step
+                            // of it the detector can have work for.
+                            if self.track {
+                                let park = detect.retired(cpu, c - 1, pc, wrote);
+                                debug_assert!(!park);
+                            }
+                            if c >= self.limit || detect.watching() {
+                                break 'page StraightEnd::Done;
+                            }
+                            // Into the same page through the same translation:
+                            // the page needs no second look.
+                            if next & !0xFFF == va_page && cpu.el == el && cpu.tlb.epoch == epoch {
+                                continue 'runs;
+                            }
+                            continue 'page;
+                        }
+                        if c >= self.limit {
+                            break 'page StraightEnd::Done;
+                        }
+                        continue 'runs;
+                    }
+                    let mem = op.op.touches_memory();
+                    if cpu.faulted() {
+                        let step = cpu.stopped_at(pc, next, &op.op);
+                        break 'page StraightEnd::Step(Stepped {
+                            step,
+                            pc,
+                            written: if mem { bus.written } else { None },
+                            io: bus.io,
+                            periph_store: bus.periph_store,
+                        });
+                    }
+                    if op.op.plain_branch() {
+                        c += 1;
+                        if next == pc.wrapping_add(4) {
+                            cpu.pc = next;
+                            continue 'runs;
+                        }
+                        break (op, next);
+                    }
+                    let wrote = bus.written.is_some();
+                    if bus.io || (wrote && self.marked) {
+                        cpu.pc = next;
+                        break 'page StraightEnd::Step(Stepped {
+                            step: Step::Retired,
+                            pc,
+                            written: bus.written,
+                            io: bus.io,
+                            periph_store: bus.periph_store,
+                        });
+                    }
+                    // A store into this page: what follows is decoded again.
+                    if wrote && unsafe { *genp } != gen {
+                        c += 1;
+                        cpu.pc = next;
+                        continue 'runs;
+                    }
+                    bus.written = None;
+                    pc = next;
+                    c += 1;
+                    // Not the last of its run, which never stops after running.
+                    from = unsafe { &*(op as *const RunOp).add(1) };
+                };
+                // A branch taken: what a transfer that ends a run is for.
+                cpu.pc = next;
+                if self.track {
+                    let park = detect.retired(cpu, c - 1, pc, false);
+                    debug_assert!(!park);
+                    if detect.watching() {
+                        break 'page StraightEnd::Done;
+                    }
+                }
+                if c >= self.limit {
+                    break 'page StraightEnd::Done;
+                }
+                if next & !0xFFF == va_page && cpu.tlb.epoch == epoch {
+                    match branch.linked(unsafe { *genp }) {
+                        Some(run) if c + runs::MAX_LEN <= self.limit => chained = Some(run),
+                        _ => unlinked = Some(branch),
+                    }
+                    continue 'runs;
+                }
+                continue 'page;
+            }
+        };
+        self.cycles = c;
+        end
+    }
+}
+
 /// When a `wfe` on `core` completes on its own: the next event-stream event if
 /// the stream for its EL is on, else never.
 fn wfe_timeout(cpu: &Cpu, timer: &GenericTimer) -> u64 {
@@ -1465,12 +2124,124 @@ fn timer_reg(key: u32) -> Option<Reg> {
     )
 }
 
-impl ArmBus<'_> {
+impl<'a> ArmBus<'a> {
+    fn new(
+        m: &'a mut Machine,
+        timer: &'a mut GenericTimer,
+        cycles: u64,
+        core: usize,
+        secure: bool,
+        released_at: u64,
+    ) -> Self {
+        ArmBus {
+            m,
+            timer,
+            cycles,
+            core,
+            secure,
+            written: None,
+            io: false,
+            log: None,
+            stores: None,
+            released_at,
+            periph_store: false,
+            stopped: std::ptr::null(),
+            next: 0,
+            ran: false,
+            genp: std::ptr::null(),
+            chain_until: 0,
+        }
+    }
+
+    /// Whether `size` bytes at `addr` are all DRAM, the test `route` makes
+    /// first, and coherency tracking, which wants the slow path's bookkeeping,
+    /// is off.
+    #[inline(always)]
+    fn in_ram(&self, addr: u64, size: u32) -> bool {
+        let end = addr.saturating_add(u64::from(size));
+        end <= self.m.ram.len()
+            && (end <= RAM_LOW_END || addr >= RAM_HIGH_BASE)
+            && !self.m.ram.coherency.is_on()
+    }
+
+    /// [`Memory::read`] past the DRAM fast path: devices, and the park
+    /// detector's log.
+    #[inline(never)]
+    fn read_slow(&mut self, addr: u64, size: u32) -> Result<u64, Abort> {
+        let value = if size == 8 {
+            let lo = self.read32(addr, 4)?;
+            let hi = self.read32(addr.wrapping_add(4), 4)?;
+            lo | (hi << 32)
+        } else {
+            self.read32(addr, size)?
+        };
+        if let Some(log) = &mut self.log {
+            log.push(park::Read { addr, size, value });
+        }
+        Ok(value)
+    }
+
+    /// [`Memory::write`] past the DRAM fast path.
+    #[inline(never)]
+    fn write_slow(&mut self, addr: u64, size: u32, value: u64) -> Result<(), Abort> {
+        if let Some(stores) = &mut self.stores {
+            stores.push(park::Read { addr, size, value });
+        }
+        let end = addr.saturating_add(u64::from(size));
+        self.written = Some(match self.written {
+            Some((lo, hi)) => (lo.min(addr), hi.max(end)),
+            None => (addr, end),
+        });
+        if self.in_ram(addr, size) && self.m.ram.write_le(addr, size, value) {
+            return Ok(());
+        }
+        if size == 8 {
+            self.write32(addr, 4, value)?;
+            return self.write32(addr.wrapping_add(4), 4, value >> 32);
+        }
+        self.write32(addr, size, value)
+    }
+
+    /// The DRAM page at `pa_page` as host memory, when an instruction fetch
+    /// from it would be a plain read.
+    #[inline(always)]
+    fn code_page(&self, pa_page: u64) -> Option<*const u32> {
+        if !self.in_ram(pa_page, 0x1000) {
+            return None;
+        }
+        self.m.ram.page_ptr(pa_page)
+    }
+
     /// An instruction fetch from outside RAM; out of line to keep the common
     /// step's register pressure down.
     #[inline(never)]
     fn fetch_device(&mut self, addr: u64) -> Result<u32, Abort> {
         self.read(addr, 4).map(|v| v as u32)
+    }
+}
+
+impl crate::aarch64::predecode::RunBus for ArmBus<'_> {
+    #[inline(always)]
+    fn at(&mut self, c: u64) {
+        self.cycles = c;
+    }
+
+    #[inline(always)]
+    fn plain(&self) -> bool {
+        !self.io && self.written.is_none()
+    }
+
+    #[inline(always)]
+    fn stop(&mut self, op: &RunOp, next: u64, ran: bool) {
+        self.stopped = op;
+        self.next = next;
+        self.ran = ran;
+    }
+
+    #[inline(always)]
+    fn chain(&self, c: u64, gen: u64) -> bool {
+        // `Straight::run` keeps it at its page's.
+        c < self.chain_until && unsafe { *self.genp } == gen
     }
 }
 
@@ -1490,36 +2261,51 @@ impl Memory for ArmBus<'_> {
         self.fetch_device(addr)
     }
 
-    #[inline]
+    #[inline(always)]
     fn read(&mut self, addr: u64, size: u32) -> Result<u64, Abort> {
-        let value = if size == 8 {
-            let lo = self.read32(addr, 4)?;
-            let hi = self.read32(addr.wrapping_add(4), 4)?;
-            lo | (hi << 32)
-        } else {
-            self.read32(addr, size)?
-        };
-        if let Some(log) = &mut self.log {
-            log.push(park::Read { addr, size, value });
+        if self.log.is_none() && self.in_ram(addr, size) {
+            if let Some(v) = self.m.ram.read_le(addr, size) {
+                return Ok(v);
+            }
         }
-        Ok(value)
+        self.read_slow(addr, size)
     }
 
-    #[inline]
+    #[inline(always)]
     fn write(&mut self, addr: u64, size: u32, value: u64) -> Result<(), Abort> {
-        if let Some(stores) = &mut self.stores {
-            stores.push(park::Read { addr, size, value });
+        if self.stores.is_none() && self.in_ram(addr, size) {
+            let end = addr + u64::from(size);
+            self.written = Some(match self.written {
+                Some((lo, hi)) => (lo.min(addr), hi.max(end)),
+                None => (addr, end),
+            });
+            if self.m.ram.write_le(addr, size, value) {
+                return Ok(());
+            }
         }
-        let end = addr.saturating_add(u64::from(size));
+        self.write_slow(addr, size, value)
+    }
+
+    #[inline(always)]
+    fn direct(&self) -> bool {
+        self.log.is_none() && self.stores.is_none()
+    }
+
+    fn host_page(&mut self, pa_page: u64) -> Option<(usize, usize)> {
+        if !self.in_ram(pa_page, 0x1000) {
+            return None;
+        }
+        let bytes = self.m.ram.page_bytes(pa_page)?;
+        Some((bytes as usize, self.m.ram.gen_ptr(pa_page) as usize))
+    }
+
+    #[inline(always)]
+    fn wrote(&mut self, pa: u64, size: u32) {
+        let end = pa + u64::from(size);
         self.written = Some(match self.written {
-            Some((lo, hi)) => (lo.min(addr), hi.max(end)),
-            None => (addr, end),
+            Some((lo, hi)) => (lo.min(pa), hi.max(end)),
+            None => (pa, end),
         });
-        if size == 8 {
-            self.write32(addr, 4, value)?;
-            return self.write32(addr.wrapping_add(4), 4, value >> 32);
-        }
-        self.write32(addr, size, value)
     }
 
     fn sysreg_read(&mut self, key: u32) -> Option<u64> {
@@ -1596,6 +2382,169 @@ mod tests {
         // at 54 MHz on a 1.5 GHz clock since: ~11 cycles -> 0 ticks, so
         // just check it is not running wild.
         assert!(arm.cores[0].cpu.x[5] < 10);
+    }
+
+    /// `PIMU_SPEED_INSNS` guest instructions of a loop shaped like the Linux
+    /// boot's hottest one, past the armstub so straight runs apply; for
+    /// `perf stat` (host instructions per guest instruction).
+    #[test]
+    #[ignore]
+    fn speed_straight() {
+        let mut m = Machine::new(64 << 20);
+        let base = m.ram.base();
+        m.ram.store(base, Width::Word, 0x1400_4000).unwrap(); // b 0x10000
+                                                              // movz x19/x26/x28/x20; 1: ldrb w3, [x19, #1]!; ldrb w0, [x26, w3, sxtw];
+                                                              // and w0, w0, #3; cmp w3, #0x5f; ccmp w0, #0, #0, ne; add x5, x5, x0;
+                                                              // lsl x6, x5, #2; stp x5, x6, [x28, #-16]!; ldp x5, x6, [x28], #16;
+                                                              // csel x7, x5, x6, eq; subs x20, x20, #1; b.ne 1b; movz x19/x20; b 1b
+        let body = [
+            0xd2a0_0413,
+            0xd2a0_061a,
+            0xd2a0_081c,
+            0xd2a0_0214,
+            0x3840_1e63,
+            0x3863_cb40,
+            0x1200_0400,
+            0x7101_7c7f,
+            0x7a40_1800,
+            0x8b00_00a5,
+            0xd37e_f4a6,
+            0xa9bf_1b85,
+            0xa8c1_1b85,
+            0x9a86_00a7,
+            0xf100_0694,
+            0x54ff_fea1,
+            0xd2a0_0413,
+            0xd2a0_0214,
+            0x17ff_fff2,
+        ];
+        // `PIMU_SPEED_BODY=alu`: add x1, x1, #1 eleven times, then b back;
+        // `load`: ldr x1, [x28] eleven times, then b back.
+        let alu: Vec<u32> = [0xd2a0_081c]
+            .into_iter()
+            .chain([0x9100_0421; 11])
+            .chain([0x17ff_fff5])
+            .collect();
+        let load: Vec<u32> = [0xd2a0_081c]
+            .into_iter()
+            .chain([0xf940_0381; 11])
+            .chain([0x17ff_fff5])
+            .collect();
+        // `alu<n>`: n adds, then b back.
+        let alu_n = |n: u32| -> Vec<u32> {
+            let back = 0x1700_0000 | ((0x0400_0000 - n) & 0x03FF_FFFF);
+            [0xd2a0_081c]
+                .into_iter()
+                .chain(std::iter::repeat_n(0x9100_0421, n as usize))
+                .chain([back])
+                .collect()
+        };
+        // `runs<n>`: 64 runs of four adds and a `b` to the next run, `n` bytes
+        // apart, the last back to the first.
+        let runs_n = |gap: u32| -> Vec<(u32, u32)> {
+            let mut code = vec![(0, 0xd2a0_081c)];
+            for k in 0..64u32 {
+                let at = 4 + k * gap;
+                for i in 0..4 {
+                    code.push((at + 4 * i, 0x9100_0421));
+                }
+                let to = if k == 63 { 4 } else { 4 + (k + 1) * gap };
+                let off = (to as i64 - (at + 16) as i64) / 4;
+                code.push((at + 16, 0x1400_0000 | (off as u32 & 0x03FF_FFFF)));
+            }
+            code
+        };
+        // `printk`: the loop of Linux's `update_event_printk` that the boot
+        // spends most of its ARM instructions in, scanning a string of
+        // spaces over and over.
+        let printk: Vec<(u32, u32)> = [
+            (0x000, 0xd2a0_0413), // movz x19, #0x20, lsl #16
+            (0x004, 0xd2a0_061a), // movz x26, #0x30, lsl #16
+            (0x008, 0x5280_0017), // mov w23, #0
+            (0x00c, 0x3940_0263), // ldrb w3, [x19]
+            (0x010, 0x1400_0118), // b 0x470
+            (0x470, 0x7101_707f), // cmp w3, #0x5c
+            (0x474, 0x5400_0c00), // b.eq 0x5f4
+            (0x478, 0x7100_887f), // cmp w3, #0x22
+            (0x47c, 0x5400_0ca0), // b.eq 0x610
+            (0x480, 0x3500_0c57), // cbnz w23, 0x608
+            (0x484, 0x5100_c060), // sub w0, w3, #0x30
+            (0x488, 0x7100_241f), // cmp w0, #9
+            (0x48c, 0x5400_06e9), // b.ls 0x568
+            (0x490, 0x3863_cb40), // ldrb w0, [x26, w3, sxtw]
+            (0x494, 0x7101_7c7f), // cmp w3, #0x5f
+            (0x498, 0x1200_0400), // and w0, w0, #3
+            (0x49c, 0x7a40_1800), // ccmp w0, #0, #0, ne
+            (0x4a0, 0x5400_0b40), // b.eq 0x608
+            (0x500, 0x9100_0673), // add x19, x19, #1
+            (0x504, 0x35ff_fb63), // cbnz w3, 0x470
+            (0x508, 0xd2a0_0413), // movz x19, #0x20, lsl #16
+            (0x50c, 0x3940_0263), // ldrb w3, [x19]
+            (0x510, 0x17ff_ffd8), // b 0x470
+            (0x608, 0x3940_0663), // ldrb w3, [x19, #1]
+            (0x60c, 0x17ff_ffbd), // b 0x500
+        ]
+        .into();
+        let named = std::env::var("PIMU_SPEED_BODY").unwrap_or_default();
+        if named == "printk" {
+            for (at, w) in &printk {
+                m.ram.store(base + 0x10000 + at, Width::Word, *w).unwrap();
+            }
+            for i in 0..255 {
+                m.ram
+                    .store(base + 0x20_0000 + i, Width::Byte, 0x20)
+                    .unwrap();
+            }
+            m.ram.store(base + 0x30_0020, Width::Byte, 0x20).unwrap();
+        }
+        if let Some(gap) = named.strip_prefix("runs") {
+            for (at, w) in runs_n(gap.parse().unwrap()) {
+                m.ram.store(base + 0x10000 + at, Width::Word, w).unwrap();
+            }
+        }
+        let custom;
+        let body: &[u32] = match named.as_str() {
+            "alu" => &alu,
+            "load" => &load,
+            n if n.starts_with("runs") || n == "printk" => &[],
+            n if n.starts_with("alu") => {
+                custom = alu_n(n[3..].parse().unwrap());
+                &custom
+            }
+            _ => &body,
+        };
+        for (i, w) in body.iter().enumerate() {
+            m.ram
+                .store(base + 0x10000 + 4 * i as u32, Width::Word, *w)
+                .unwrap();
+        }
+        let n = std::env::var("PIMU_SPEED_INSNS").map_or(100_000_000, |v| v.parse().unwrap());
+        // `PIMU_SPEED_CORES=2`: both cores run it, in lockstep.
+        let cores = std::env::var("PIMU_SPEED_CORES").map_or(1, |v| v.parse().unwrap());
+        let mut arm = ArmSide::with_cores(cores);
+        arm.run(&mut m, n / cores as u64);
+        assert_eq!(arm.stopped, None);
+        let insns: u64 = arm.cores.iter().map(|c| c.insns).sum();
+        println!("guest instructions {insns}");
+    }
+
+    #[test]
+    fn a_loop_of_linked_runs_keeps_the_stack_flat() {
+        // 1: add x1, x1, #1; b 1b. Without tail calls, as in a debug build,
+        // each run linked into the next would nest a frame deeper.
+        let mut m = machine_with(&[0x1400_4000]); // b 0x10000, past the armstub
+        let base = m.ram.base() + 0x10000;
+        m.ram.store(base, Width::Word, 0x9100_0421).unwrap();
+        m.ram.store(base + 4, Width::Word, 0x17FF_FFFF).unwrap();
+        let mut arm = ArmSide::with_cores(1);
+        // The detector sees every branch, so with it on nothing is linked.
+        arm.park_on = false;
+        arm.sha_on = false;
+        arm.run(&mut m, 4_000_000);
+        assert_eq!(arm.stopped, None);
+        let core = &arm.cores[0];
+        assert!(core.insns > 3_000_000, "{} instructions", core.insns);
+        assert_eq!(core.cpu.x[1], core.insns / 2);
     }
 
     #[test]

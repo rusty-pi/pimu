@@ -12,6 +12,7 @@
 
 use super::exec;
 use super::mmu::Tlb;
+use super::predecode::{Decoded, Op};
 use super::sysreg::{SysRegs, HCR_TGE, HCR_TSC, HCR_VM, SCR_HCE, SCR_NS, SCR_SMD};
 use super::{irq_target, vector_group, PSTATE_F, PSTATE_I, VECTOR_FIQ, VECTOR_IRQ, VECTOR_SYNC};
 
@@ -52,6 +53,23 @@ pub trait Memory {
     /// the same time makes it a compare-exchange, and reports a loss through
     /// [`Self::exclusive_lost`].
     fn expect_unchanged(&mut self, _expected: u64) {}
+
+    /// Whether the next access may go straight to
+    /// host memory through [`Self::host_page`]: false while every access has
+    /// to be seen by the bus.
+    fn direct(&self) -> bool {
+        false
+    }
+
+    /// The host memory behind a physical page that is plain RAM, as the
+    /// address of its bytes and of its write generation, which a store
+    /// through it bumps.
+    fn host_page(&mut self, _pa_page: u64) -> Option<(usize, usize)> {
+        None
+    }
+
+    /// A store went straight to host memory at physical `pa`.
+    fn wrote(&mut self, _pa: u64, _size: u32) {}
 
     /// Whether the write after [`Self::expect_unchanged`] found the location
     /// changed and so did not store.
@@ -172,6 +190,9 @@ pub struct Cpu {
     /// Where the last external abort happened; `FAR_ELx` has only the VA.
     pub abort_pa: u64,
     pub(super) next_pc: u64,
+    /// What stopped the last load or store a decoded instruction made out of
+    /// line (`src/aarch64/predecode.rs`).
+    pub(super) fault: Option<exec::Stop>,
     /// The Event Register (ARM ARM D1.16.1); a `wfe` that finds it set clears
     /// it and does not wait.
     pub event: bool,
@@ -223,6 +244,7 @@ impl Cpu {
             last_pa: 0,
             abort_pa: 0,
             next_pc: 0,
+            fault: None,
             event: false,
             sev: false,
             effects: 0,
@@ -239,21 +261,21 @@ impl Cpu {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn sp(&self) -> u64 {
         self.sp_el[self.sp_index()]
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn set_sp(&mut self, value: u64) {
         let i = self.sp_index();
         self.sp_el[i] = value;
     }
 
-    #[inline]
+    #[inline(always)]
     fn sp_index(&self) -> usize {
         if self.spsel {
-            self.el as usize
+            self.el as usize & 3
         } else {
             0
         }
@@ -416,13 +438,54 @@ impl Cpu {
         self.step_fetched(insn, mem)
     }
 
+    /// [`Self::step`] through `decoded`.
+    #[inline(always)]
+    pub fn step_through<M: Memory + ?Sized>(&mut self, mem: &mut M, decoded: &mut Decoded) -> Step {
+        let pc = self.pc;
+        if pc & 3 != 0 {
+            return Step::Exception(Exception::PcAlignment);
+        }
+        let insn = match self.fetch(mem, pc) {
+            Ok(i) => i,
+            Err(e) => return Step::Exception(e),
+        };
+        self.step_decoded(decoded.get(insn), mem)
+    }
+
     /// [`Self::step`] with the word already fetched; `self.pc` must be where
     /// `insn` came from.
     #[inline(always)]
     pub fn step_fetched<M: Memory + ?Sized>(&mut self, insn: u32, mem: &mut M) -> Step {
         let pc = self.pc;
         self.next_pc = pc.wrapping_add(4);
-        match exec::execute(self, insn, mem) {
+        let r = exec::execute(self, insn, mem);
+        self.retire(r, insn)
+    }
+
+    /// [`Self::step_fetched`] for an instruction [`Decoded`] already holds.
+    #[inline(always)]
+    pub fn step_decoded<M: Memory + ?Sized>(&mut self, op: Op, mem: &mut M) -> Step {
+        let pc = self.pc;
+        self.next_pc = pc.wrapping_add(4);
+        let r = self.run_op(op, mem);
+        self.retire(r, op.insn())
+    }
+
+    /// Whether the last [`super::predecode::Handler`] stopped.
+    #[inline(always)]
+    pub fn faulted(&self) -> bool {
+        self.fault.is_some()
+    }
+
+    /// Whether the step in front of an instruction stops on stage 2, which
+    /// is not modelled.
+    pub fn stage2_on(&self) -> bool {
+        self.el < 2 && self.sys.scr_el3 & SCR_NS != 0 && self.sys.hcr_el2 & HCR_VM != 0
+    }
+
+    #[inline(always)]
+    pub(super) fn retire(&mut self, r: exec::Exec, insn: u32) -> Step {
+        match r {
             Ok(()) => {
                 self.pc = self.next_pc;
                 Step::Retired
@@ -456,6 +519,31 @@ impl Cpu {
             return Step::Unsupported("stage 2 translation (HCR_EL2.VM = 1)");
         }
         match self.step(mem) {
+            Step::Exception(e) => {
+                self.take_sync(e);
+                Step::Took(e)
+            }
+            s => s,
+        }
+    }
+
+    /// [`Self::step_system`] through `decoded`.
+    #[inline(always)]
+    pub fn step_system_through<M: Memory + ?Sized>(
+        &mut self,
+        mem: &mut M,
+        decoded: &mut Decoded,
+    ) -> Step {
+        if self.fiq_line && self.take_interrupt(true) {
+            return Step::Interrupt { fiq: true };
+        }
+        if self.irq_line && self.take_interrupt(false) {
+            return Step::Interrupt { fiq: false };
+        }
+        if self.el < 2 && self.sys.scr_el3 & SCR_NS != 0 && self.sys.hcr_el2 & HCR_VM != 0 {
+            return Step::Unsupported("stage 2 translation (HCR_EL2.VM = 1)");
+        }
+        match self.step_through(mem, decoded) {
             Step::Exception(e) => {
                 self.take_sync(e);
                 Step::Took(e)

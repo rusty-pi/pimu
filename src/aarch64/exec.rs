@@ -8,9 +8,10 @@
 //! UNDEFINED, which is what the real core and `qemu-aarch64 -cpu cortex-a72`
 //! both do. `tests/a64_diff.rs` holds this file to that.
 
-use super::cpu::{Cpu, Exception, Memory, NZCV_C, NZCV_N, NZCV_V, NZCV_Z};
+use super::cpu::{Cpu, Exception, Memory, NZCV_C, NZCV_N, NZCV_Z};
 
 /// Why an instruction did not simply retire.
+#[derive(Clone, Copy)]
 pub(super) enum Stop {
     Wfi,
     Wfe,
@@ -37,8 +38,8 @@ pub(super) fn field(insn: u32, lo: u32, len: u32) -> u32 {
     (insn >> lo) & ((1 << len) - 1)
 }
 
-#[inline]
-fn sext(v: u64, bits: u32) -> u64 {
+#[inline(always)]
+pub(super) fn sext(v: u64, bits: u32) -> u64 {
     let s = 64 - bits;
     (((v << s) as i64) >> s) as u64
 }
@@ -61,8 +62,8 @@ fn datasize(sf: bool) -> u32 {
     }
 }
 
-#[inline]
-fn mask(v: u64, sf: bool) -> u64 {
+#[inline(always)]
+pub(super) fn mask(v: u64, sf: bool) -> u64 {
     if sf {
         v
     } else {
@@ -70,13 +71,13 @@ fn mask(v: u64, sf: bool) -> u64 {
     }
 }
 
-#[inline]
+#[inline(always)]
 fn top_bit(v: u64, sf: bool) -> bool {
     (v >> (datasize(sf) - 1)) & 1 != 0
 }
 
-#[inline]
-fn ror(v: u64, amount: u32, sf: bool) -> u64 {
+#[inline(always)]
+pub(super) fn ror(v: u64, amount: u32, sf: bool) -> u64 {
     if sf {
         v.rotate_right(amount)
     } else {
@@ -85,38 +86,31 @@ fn ror(v: u64, amount: u32, sf: bool) -> u64 {
 }
 
 /// `AddWithCarry` (ARM ARM J1): the result and its `NZCV`.
+#[inline(always)]
 pub(super) fn add_with_carry(x: u64, y: u64, carry: bool, sf: bool) -> (u64, u32) {
     let c = carry as u64;
-    let (r, carry_out, overflow) = if sf {
+    if sf {
         let (r1, c1) = x.overflowing_add(y);
         let (r, c2) = r1.overflowing_add(c);
-        let v = ((x ^ r) & (y ^ r)) >> 63 != 0;
-        (r, c1 | c2, v)
+        let v = ((x ^ r) & (y ^ r)) >> 63;
+        let n = r >> 63;
+        let z = (r == 0) as u64;
+        let nzcv = (n << 31) | (z << 30) | (((c1 | c2) as u64) << 29) | (v << 28);
+        (r, nzcv as u32)
     } else {
-        let (x, y) = (x as u32, y as u32);
-        let (r1, c1) = x.overflowing_add(y);
-        let (r, c2) = r1.overflowing_add(c as u32);
-        let v = ((x ^ r) & (y ^ r)) >> 31 != 0;
-        (r as u64, c1 | c2, v)
-    };
-    let mut nzcv = 0;
-    if top_bit(r, sf) {
-        nzcv |= NZCV_N;
+        let (x, y) = (x as u32 as u64, y as u32 as u64);
+        let wide = x + y + c;
+        let r = wide as u32;
+        let v = ((x as u32 ^ r) & (y as u32 ^ r)) >> 31;
+        let n = r >> 31;
+        let z = (r == 0) as u32;
+        let nzcv = (n << 31) | (z << 30) | (((wide >> 32) as u32) << 29) | (v << 28);
+        (u64::from(r), nzcv)
     }
-    if r == 0 {
-        nzcv |= NZCV_Z;
-    }
-    if carry_out {
-        nzcv |= NZCV_C;
-    }
-    if overflow {
-        nzcv |= NZCV_V;
-    }
-    (r, nzcv)
 }
 
-#[inline]
-fn logic_flags(r: u64, sf: bool) -> u32 {
+#[inline(always)]
+pub(super) fn logic_flags(r: u64, sf: bool) -> u32 {
     let mut nzcv = 0;
     if top_bit(r, sf) {
         nzcv |= NZCV_N;
@@ -177,8 +171,8 @@ pub(super) fn decode_bit_masks(
 }
 
 /// `ShiftReg`: LSL, LSR, ASR, ROR of a `datasize`-bit value.
-#[inline]
-fn shift_reg(v: u64, kind: u32, amount: u32, sf: bool) -> u64 {
+#[inline(always)]
+pub(super) fn shift_reg(v: u64, kind: u32, amount: u32, sf: bool) -> u64 {
     if amount == 0 {
         return v;
     }
@@ -201,8 +195,8 @@ fn shift_reg(v: u64, kind: u32, amount: u32, sf: bool) -> u64 {
 }
 
 /// `ExtendReg`: the `UXTB`..`SXTX` extend, then a left shift.
-#[inline]
-fn extend_reg(v: u64, option: u32, shift: u32, sf: bool) -> u64 {
+#[inline(always)]
+pub(super) fn extend_reg(v: u64, option: u32, shift: u32, sf: bool) -> u64 {
     let len = 8 << (option & 3);
     let e = if option & 4 != 0 {
         sext(v, len)
@@ -229,65 +223,89 @@ fn crc32(mut acc: u32, val: u64, bytes: u32, castagnoli: bool) -> u32 {
     acc
 }
 
+/// `ConditionHolds` (ARM ARM J1) for each condition, as a truth table over
+/// the 16 values of `NZCV`: bit `nzcv` says whether the condition holds.
+const COND_HOLDS: [u16; 16] = {
+    let mut t = [0u16; 16];
+    let mut cond = 0;
+    while cond < 16 {
+        let mut f = 0;
+        while f < 16 {
+            let (n, z, c, v) = (f & 8 != 0, f & 4 != 0, f & 2 != 0, f & 1 != 0);
+            let r = match cond >> 1 {
+                0 => z,
+                1 => c,
+                2 => n,
+                3 => v,
+                4 => c && !z,
+                5 => n == v,
+                6 => n == v && !z,
+                _ => true,
+            };
+            let r = if cond & 1 != 0 && cond != 0xF { !r } else { r };
+            if r {
+                t[cond] |= 1 << f;
+            }
+            f += 1;
+        }
+        cond += 1;
+    }
+    t
+};
+
 impl Cpu {
-    #[inline]
+    #[inline(always)]
     pub(super) fn xr(&self, r: u32, sf: bool) -> u64 {
         if r == 31 {
             0
         } else {
-            mask(self.x[r as usize], sf)
+            mask(self.reg(r), sf)
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub(super) fn xsp(&self, r: u32) -> u64 {
         if r == 31 {
             self.sp()
         } else {
-            self.x[r as usize]
+            self.reg(r)
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub(super) fn set_xr(&mut self, r: u32, sf: bool, v: u64) {
         if r != 31 {
-            self.x[r as usize] = mask(v, sf);
+            self.set_reg(r, mask(v, sf));
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub(super) fn set_xsp(&mut self, r: u32, sf: bool, v: u64) {
         if r == 31 {
             self.set_sp(mask(v, sf));
         } else {
-            self.x[r as usize] = mask(v, sf);
+            self.set_reg(r, mask(v, sf));
         }
     }
 
-    #[inline]
+    /// `X<r>` for `r` below 31, which every caller has checked; a 5-bit
+    /// register field can be nothing else.
+    #[inline(always)]
+    pub(super) fn reg(&self, r: u32) -> u64 {
+        debug_assert!(r < 31);
+        unsafe { *self.x.get_unchecked(r as usize) }
+    }
+
+    /// [`Self::reg`]'s write.
+    #[inline(always)]
+    pub(super) fn set_reg(&mut self, r: u32, v: u64) {
+        debug_assert!(r < 31);
+        unsafe { *self.x.get_unchecked_mut(r as usize) = v }
+    }
+
+    #[inline(always)]
     pub(super) fn cond_holds(&self, cond: u32) -> bool {
-        let f = self.nzcv;
-        let (n, z, c, v) = (
-            f & NZCV_N != 0,
-            f & NZCV_Z != 0,
-            f & NZCV_C != 0,
-            f & NZCV_V != 0,
-        );
-        let r = match cond >> 1 {
-            0 => z,
-            1 => c,
-            2 => n,
-            3 => v,
-            4 => c && !z,
-            5 => n == v,
-            6 => n == v && !z,
-            _ => true,
-        };
-        if cond & 1 != 0 && cond != 0xF {
-            !r
-        } else {
-            r
-        }
+        (COND_HOLDS[cond as usize & 0xF] >> (self.nzcv >> 28)) & 1 != 0
     }
 
     fn branch_to(&mut self, target: u64) {
@@ -309,7 +327,7 @@ pub(super) fn execute<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M)
 // ---------------------------------------------------------------------------
 // Data processing, immediate (C4.1.86)
 
-fn dp_imm(cpu: &mut Cpu, insn: u32) -> Exec {
+pub(super) fn dp_imm(cpu: &mut Cpu, insn: u32) -> Exec {
     let sf = bit(insn, 31);
     let rd = field(insn, 0, 5);
     let rn = field(insn, 5, 5);
@@ -503,7 +521,7 @@ fn exception_gen(cpu: &mut Cpu, insn: u32) -> Exec {
     Err(Stop::Exception(e))
 }
 
-fn branch_reg(cpu: &mut Cpu, insn: u32) -> Exec {
+pub(super) fn branch_reg(cpu: &mut Cpu, insn: u32) -> Exec {
     let opc = field(insn, 21, 4);
     let rn = field(insn, 5, 5);
     // op2 = 11111, op3 = 000000, op4 = 00000; anything else is pointer
@@ -719,7 +737,7 @@ fn write128<M: Memory + ?Sized>(cpu: &mut Cpu, mem: &mut M, addr: u64, v: u128) 
 /// non-SIMD `opc` (store, load, load signed to 64, load signed to 32); for
 /// a SIMD&FP register it is store/load only.
 #[derive(Clone, Copy)]
-enum Access {
+pub(super) enum Access {
     Store,
     Load,
     LoadSigned64,
@@ -729,7 +747,7 @@ enum Access {
 /// Load or store one register. Returns the loaded value for loads to a
 /// general register so the caller can write it after any base write-back.
 #[inline(always)]
-fn transfer<M: Memory + ?Sized>(
+pub(super) fn transfer<M: Memory + ?Sized>(
     cpu: &mut Cpu,
     mem: &mut M,
     simd: bool,
@@ -773,7 +791,11 @@ fn transfer<M: Memory + ?Sized>(
 
 /// Decode `size`, `V`, `opc` of the single-register forms into the access
 /// scale and kind. `Ok(None)` is a prefetch.
-fn single_access(size: u32, simd: bool, opc: u32) -> Result<Option<(u32, Access)>, Stop> {
+pub(super) fn single_access(
+    size: u32,
+    simd: bool,
+    opc: u32,
+) -> Result<Option<(u32, Access)>, Stop> {
     if simd {
         let scale = if opc & 2 != 0 {
             if size != 0 {
@@ -842,7 +864,7 @@ fn ld_st_reg_uimm<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M) -> 
 
 /// The `bit 21` / `bits 11:10` sub-table: unscaled, post-indexed,
 /// unprivileged, pre-indexed and register-offset forms.
-fn ld_st_reg<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M) -> Exec {
+pub(super) fn ld_st_reg<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M) -> Exec {
     let size = field(insn, 30, 2);
     let simd = bit(insn, 26);
     let opc = field(insn, 22, 2);
@@ -906,7 +928,7 @@ fn ld_st_reg<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M) -> Exec 
     Ok(())
 }
 
-fn ld_st_pair<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M) -> Exec {
+pub(super) fn ld_st_pair<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M) -> Exec {
     let opc = field(insn, 30, 2);
     let simd = bit(insn, 26);
     let mode = field(insn, 23, 2);
@@ -1035,7 +1057,7 @@ fn ld_st_exclusive<M: Memory + ?Sized>(cpu: &mut Cpu, insn: u32, mem: &mut M) ->
 // ---------------------------------------------------------------------------
 // Data processing, register (C4.1.89)
 
-fn dp_reg(cpu: &mut Cpu, insn: u32) -> Exec {
+pub(super) fn dp_reg(cpu: &mut Cpu, insn: u32) -> Exec {
     let sf = bit(insn, 31);
     let rd = field(insn, 0, 5);
     let rn = field(insn, 5, 5);
@@ -1259,7 +1281,72 @@ fn dp_3src(cpu: &mut Cpu, insn: u32, sf: bool, rd: u32, rn: u32, rm: u32) -> Exe
 
 #[cfg(test)]
 mod tests {
+    use super::super::cpu::NZCV_V;
     use super::*;
+
+    #[test]
+    fn add_with_carry_flags_follow_the_pseudocode() {
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let edges = [
+            0,
+            1,
+            0x7FFF_FFFF,
+            0x8000_0000,
+            0xFFFF_FFFF,
+            i64::MAX as u64,
+            1 << 63,
+            !0,
+        ];
+        for i in 0..200_000 {
+            let pick = |r: u64, k: usize| {
+                if k.is_multiple_of(3) {
+                    edges[(r % 8) as usize]
+                } else {
+                    r
+                }
+            };
+            let (x, y) = (pick(next(), i), pick(next(), i / 2));
+            let (carry, sf) = (next() & 1 != 0, next() & 1 != 0);
+            let bits = if sf { 64 } else { 32 };
+            let m = if sf {
+                u128::from(u64::MAX)
+            } else {
+                u128::from(u32::MAX)
+            };
+            let (ux, uy) = (u128::from(x) & m, u128::from(y) & m);
+            let sum = ux + uy + carry as u128;
+            let r = (sum & m) as u64;
+            let sx = ((ux << (128 - bits)) as i128) >> (128 - bits);
+            let sy = ((uy << (128 - bits)) as i128) >> (128 - bits);
+            let ssum = sx + sy + carry as i128;
+            let sr = (((sum & m) << (128 - bits)) as i128) >> (128 - bits);
+            let n = (r >> (bits - 1)) & 1 != 0;
+            let mut want = 0;
+            if n {
+                want |= NZCV_N;
+            }
+            if r == 0 {
+                want |= NZCV_Z;
+            }
+            if sum > m {
+                want |= NZCV_C;
+            }
+            if ssum != sr {
+                want |= NZCV_V;
+            }
+            assert_eq!(
+                add_with_carry(x, y, carry, sf),
+                (r, want),
+                "{x:#x} {y:#x} {carry} {sf}"
+            );
+        }
+    }
 
     #[test]
     fn bit_masks_match_known_immediates() {
