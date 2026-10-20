@@ -55,6 +55,13 @@ pub(super) enum Kind {
     Adrp,
     // Registers and flags only (`Op::pure`).
     Nop,
+    CmpImm,
+    CmpImmW,
+    CmpReg,
+    CmpRegW,
+    AddImmR,
+    SubImmR,
+    MovReg,
     AddImm,
     SubImm,
     AddsImm,
@@ -121,7 +128,7 @@ impl Op {
     /// registers and flags, and cannot raise an exception: it needs no PC.
     #[inline(always)]
     pub fn pure(&self) -> bool {
-        self.kind as u8 >= Kind::AddImm as u8
+        self.kind as u8 >= Kind::Nop as u8
     }
 }
 
@@ -234,9 +241,13 @@ fn dp_imm(insn: u32) -> Option<Op> {
                 imm <<= 12;
             }
             let kind = match (bit(insn, 30), bit(insn, 29)) {
+                (false, false) if rd != 31 && rn != 31 => Kind::AddImmR,
                 (false, false) => Kind::AddImm,
+                (true, false) if rd != 31 && rn != 31 => Kind::SubImmR,
                 (true, false) => Kind::SubImm,
                 (false, true) => Kind::AddsImm,
+                (true, true) if rd == 31 && rn != 31 && sf => Kind::CmpImm,
+                (true, true) if rd == 31 && rn != 31 => Kind::CmpImmW,
                 (true, true) => Kind::SubsImm,
             };
             Some(op(insn, kind, rd, rn, sf as u32, imm))
@@ -448,6 +459,10 @@ fn dp_reg(insn: u32) -> Option<Op> {
         }
         let flags = shift | imm6 << 2 | (bit(insn, 21) as u32) << 8;
         let flags = flags | field(insn, 29, 2) << 9 | (sf as u32) << 11;
+        // ORR from XZR, unshifted: MOV (register).
+        if field(insn, 29, 2) == 1 && rn == 31 && imm6 == 0 && !bit(insn, 21) && rd != 31 {
+            return Some(op(insn, Kind::MovReg, rd, rm, sf as u32, 0));
+        }
         Some(op(insn, Kind::LogicReg, rd, rn, rm, flags as u64))
     } else if insn & 0x1F20_0000 == 0x0B00_0000 {
         if shift == 3 || (!sf && imm6 >= 32) {
@@ -455,6 +470,11 @@ fn dp_reg(insn: u32) -> Option<Op> {
         }
         let flags = shift | imm6 << 2 | (bit(insn, 30) as u32) << 8;
         let flags = flags | (bit(insn, 29) as u32) << 9 | (sf as u32) << 11;
+        // SUBS to XZR, unshifted: CMP (register).
+        if bit(insn, 30) && bit(insn, 29) && rd == 31 && imm6 == 0 {
+            let kind = if sf { Kind::CmpReg } else { Kind::CmpRegW };
+            return Some(op(insn, kind, rn, rm, sf as u32, 0));
+        }
         Some(op(insn, Kind::AddSubReg, rd, rn, rm, flags as u64))
     } else if insn & 0x1FE0_0000 == 0x1A40_0000 {
         if !bit(insn, 29) || bit(insn, 10) || bit(insn, 4) {
@@ -506,12 +526,12 @@ impl Cpu {
         let bytes = 1u32 << scale;
         if let Access::Store = access {
             let v = self.xr(rt, true);
-            if !self.host_write(mem, addr, bytes, v) && !self.store_out(mem, addr, bytes, v) {
+            if !self.host_store(mem, addr, bytes, v) && !self.store_out(mem, addr, bytes, v) {
                 return Err(self.take_fault());
             }
             return Ok(None);
         }
-        let v = match self.host_read(mem, addr, bytes) {
+        let v = match self.host_load(mem, addr, bytes) {
             Some(v) => v,
             None => match self.load_out(mem, addr, bytes) {
                 Some(v) => v,
@@ -627,6 +647,13 @@ impl Op {
             Kind::StrB => h_str::<M, 1>,
             Kind::Barrier => h_barrier::<M>,
             Kind::Nop => h_nop::<M>,
+            Kind::CmpImm => h_cmp_imm::<M, true>,
+            Kind::CmpImmW => h_cmp_imm::<M, false>,
+            Kind::CmpReg => h_cmp_reg::<M, true>,
+            Kind::CmpRegW => h_cmp_reg::<M, false>,
+            Kind::AddImmR => h_add_imm_r::<M>,
+            Kind::SubImmR => h_sub_imm_r::<M>,
+            Kind::MovReg => h_mov_reg::<M>,
             Kind::LdStReg => h_ld_st_reg::<M>,
             Kind::LdStPair => h_ld_st_pair::<M>,
             Kind::LoadUimm => h_load_uimm::<M>,
@@ -765,7 +792,7 @@ fn h_tbz<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, _: &mut M, pc: u64) -> u64 {
 /// from the host page when the data TLB has it, else [`h_load_uimm`].
 fn h_ldr<M: Memory + ?Sized, const N: u32>(cpu: &mut Cpu, o: &Op, mem: &mut M, pc: u64) -> u64 {
     let addr = cpu.reg(o.b as u32).wrapping_add(o.imm);
-    match cpu.host_read(mem, addr, N) {
+    match cpu.host_load(mem, addr, N) {
         Some(v) => {
             cpu.set_xr(o.a as u32, true, v);
             pc.wrapping_add(4)
@@ -777,7 +804,7 @@ fn h_ldr<M: Memory + ?Sized, const N: u32>(cpu: &mut Cpu, o: &Op, mem: &mut M, p
 /// [`h_ldr`]'s store.
 fn h_str<M: Memory + ?Sized, const N: u32>(cpu: &mut Cpu, o: &Op, mem: &mut M, pc: u64) -> u64 {
     let addr = cpu.reg(o.b as u32).wrapping_add(o.imm);
-    if cpu.host_write(mem, addr, N, cpu.xr(o.a as u32, true)) {
+    if cpu.host_store(mem, addr, N, cpu.xr(o.a as u32, true)) {
         return pc.wrapping_add(4);
     }
     h_store_uimm(cpu, o, mem, pc)
@@ -797,14 +824,14 @@ fn fast_gpr<M: Memory + ?Sized>(
     let bytes = 1u32 << scale;
     match access {
         Access::Store => cpu
-            .host_write(mem, addr, bytes, cpu.xr(rt, true))
+            .host_store(mem, addr, bytes, cpu.xr(rt, true))
             .then_some(None),
-        Access::Load => cpu.host_read(mem, addr, bytes).map(|v| Some((v, true))),
+        Access::Load => cpu.host_load(mem, addr, bytes).map(|v| Some((v, true))),
         Access::LoadSigned64 => cpu
-            .host_read(mem, addr, bytes)
+            .host_load(mem, addr, bytes)
             .map(|v| Some((sext(v, 8 * bytes), true))),
         Access::LoadSigned32 => cpu
-            .host_read(mem, addr, bytes)
+            .host_load(mem, addr, bytes)
             .map(|v| Some((sext(v, 8 * bytes), false))),
     }
 }
@@ -968,6 +995,40 @@ fn h_pair_slow<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, mem: &mut M, pc: u64) 
     if let Some((v, sf)) = second {
         cpu.set_xr(c, sf, v);
     }
+    pc.wrapping_add(4)
+}
+
+/// `CMP Xn|Wn, #imm`: the flags of the subtraction, register `n` not SP.
+fn h_cmp_imm<M: Memory + ?Sized, const SF: bool>(cpu: &mut Cpu, o: &Op, _: &mut M, pc: u64) -> u64 {
+    cpu.nzcv = add_with_carry(mask(cpu.reg(o.b as u32), SF), !o.imm, true, SF).1;
+    pc.wrapping_add(4)
+}
+
+/// `CMP Xn|Wn, Xm|Wm` without a shift; `n` and `m` may be XZR.
+fn h_cmp_reg<M: Memory + ?Sized, const SF: bool>(cpu: &mut Cpu, o: &Op, _: &mut M, pc: u64) -> u64 {
+    let (x, y) = (cpu.xr(o.a as u32, SF), cpu.xr(o.b as u32, SF));
+    cpu.nzcv = add_with_carry(x, mask(!y, SF), true, SF).1;
+    pc.wrapping_add(4)
+}
+
+/// `ADD` (immediate), neither register SP.
+fn h_add_imm_r<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, _: &mut M, pc: u64) -> u64 {
+    let r = mask(cpu.reg(o.b as u32).wrapping_add(o.imm), o.c != 0);
+    cpu.set_reg(o.a as u32, r);
+    pc.wrapping_add(4)
+}
+
+/// `SUB` (immediate), neither register SP.
+fn h_sub_imm_r<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, _: &mut M, pc: u64) -> u64 {
+    let r = mask(cpu.reg(o.b as u32).wrapping_sub(o.imm), o.c != 0);
+    cpu.set_reg(o.a as u32, r);
+    pc.wrapping_add(4)
+}
+
+/// `MOV Xd|Wd, Xm|Wm`, `d` not XZR.
+fn h_mov_reg<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, _: &mut M, pc: u64) -> u64 {
+    let v = cpu.xr(o.b as u32, o.c != 0);
+    cpu.set_reg(o.a as u32, v);
     pc.wrapping_add(4)
 }
 
@@ -1280,10 +1341,32 @@ mod tests {
     }
 
     #[test]
+    fn register_only_forms_run_without_the_pc() {
+        // add x2, x2, #1; cmp x20, #1; mov x0, x1; cmp x1, x2; nop; isb;
+        // lsl x6, x5, #2; csel x7, x5, x6, eq
+        for w in [
+            0x9100_0442,
+            0xF100_069F,
+            0xAA01_03E0,
+            0xEB02_003F,
+            0xD503_201F,
+            0xD503_3FDF,
+            0xD37E_F4A6,
+            0x9A86_00A7,
+        ] {
+            let o = decode(w);
+            assert!(
+                o.pure() && !o.touches_memory() && !o.ends_run(),
+                "{w:#010x} {o:?}"
+            );
+        }
+    }
+
+    #[test]
     fn a_slot_follows_the_word_it_holds() {
         let mut d = Decoded::new();
         let add = 0x9100_0442; // add x2, x2, #1
-        assert_eq!(d.get(add).kind, Kind::AddImm);
+        assert_eq!(d.get(add).kind, Kind::AddImmR);
         let colliding = (1u32..)
             .map(|k| add ^ k)
             .find(|&w| {
@@ -1292,6 +1375,6 @@ mod tests {
             })
             .unwrap();
         assert_eq!(d.get(colliding), decode(colliding));
-        assert_eq!(d.get(add).kind, Kind::AddImm);
+        assert_eq!(d.get(add).kind, Kind::AddImmR);
     }
 }

@@ -8,7 +8,7 @@
 //! UNDEFINED, which is what the real core and `qemu-aarch64 -cpu cortex-a72`
 //! both do. `tests/a64_diff.rs` holds this file to that.
 
-use super::cpu::{Cpu, Exception, Memory, NZCV_C, NZCV_N, NZCV_V, NZCV_Z};
+use super::cpu::{Cpu, Exception, Memory, NZCV_C, NZCV_N, NZCV_Z};
 
 /// Why an instruction did not simply retire.
 #[derive(Clone, Copy)]
@@ -223,6 +223,36 @@ fn crc32(mut acc: u32, val: u64, bytes: u32, castagnoli: bool) -> u32 {
     acc
 }
 
+/// `ConditionHolds` (ARM ARM J1) for each condition, as a truth table over
+/// the 16 values of `NZCV`: bit `nzcv` says whether the condition holds.
+const COND_HOLDS: [u16; 16] = {
+    let mut t = [0u16; 16];
+    let mut cond = 0;
+    while cond < 16 {
+        let mut f = 0;
+        while f < 16 {
+            let (n, z, c, v) = (f & 8 != 0, f & 4 != 0, f & 2 != 0, f & 1 != 0);
+            let r = match cond >> 1 {
+                0 => z,
+                1 => c,
+                2 => n,
+                3 => v,
+                4 => c && !z,
+                5 => n == v,
+                6 => n == v && !z,
+                _ => true,
+            };
+            let r = if cond & 1 != 0 && cond != 0xF { !r } else { r };
+            if r {
+                t[cond] |= 1 << f;
+            }
+            f += 1;
+        }
+        cond += 1;
+    }
+    t
+};
+
 impl Cpu {
     #[inline(always)]
     pub(super) fn xr(&self, r: u32, sf: bool) -> u64 {
@@ -275,28 +305,7 @@ impl Cpu {
 
     #[inline(always)]
     pub(super) fn cond_holds(&self, cond: u32) -> bool {
-        let f = self.nzcv;
-        let (n, z, c, v) = (
-            f & NZCV_N != 0,
-            f & NZCV_Z != 0,
-            f & NZCV_C != 0,
-            f & NZCV_V != 0,
-        );
-        let r = match cond >> 1 {
-            0 => z,
-            1 => c,
-            2 => n,
-            3 => v,
-            4 => c && !z,
-            5 => n == v,
-            6 => n == v && !z,
-            _ => true,
-        };
-        if cond & 1 != 0 && cond != 0xF {
-            !r
-        } else {
-            r
-        }
+        (COND_HOLDS[cond as usize & 0xF] >> (self.nzcv >> 28)) & 1 != 0
     }
 
     fn branch_to(&mut self, target: u64) {
@@ -1272,6 +1281,7 @@ fn dp_3src(cpu: &mut Cpu, insn: u32, sf: bool, rd: u32, rn: u32, rm: u32) -> Exe
 
 #[cfg(test)]
 mod tests {
+    use super::super::cpu::NZCV_V;
     use super::*;
 
     #[test]

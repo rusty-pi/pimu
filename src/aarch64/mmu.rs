@@ -485,6 +485,55 @@ impl Cpu {
         (h.key == (va & !0xFFF) | u64::from(self.el)).then_some(h)
     }
 
+    /// [`Self::host_entry`] for a decoded load or store, which is never an
+    /// unprivileged one: `LDTR` and `STTR` go through `exec`.
+    #[inline(always)]
+    fn host_entry_decoded(&self, va: u64, size: u32, kind: Kind) -> Option<Host> {
+        debug_assert!(!self.unprivileged);
+        if (va & 0xFFF) + u64::from(size) > 0x1000 {
+            return None;
+        }
+        let h = self.tlb.host[data_slot(va, kind)];
+        (h.key == (va & !0xFFF) | u64::from(self.el)).then_some(h)
+    }
+
+    /// [`Self::host_read`] for a decoded load. It leaves [`Cpu::last_pa`]
+    /// alone: only an exclusive load wants it, and that goes through `exec`.
+    #[inline(always)]
+    pub(super) fn host_load<M: Memory + ?Sized>(&self, mem: &M, va: u64, size: u32) -> Option<u64> {
+        if !mem.direct() {
+            return None;
+        }
+        let h = self.host_entry_decoded(va, size, Kind::Read)?;
+        // Inside the page, which `Memory::host_page` vouched for.
+        Some(unsafe { load_le((h.bytes + (va & 0xFFF) as usize) as *const u8, size) })
+    }
+
+    /// [`Self::host_write`] for a decoded store.
+    #[inline(always)]
+    pub(super) fn host_store<M: Memory + ?Sized>(
+        &self,
+        mem: &mut M,
+        va: u64,
+        size: u32,
+        v: u64,
+    ) -> bool {
+        if !mem.direct() {
+            return false;
+        }
+        let Some(h) = self.host_entry_decoded(va, size, Kind::Write) else {
+            return false;
+        };
+        let off = va & 0xFFF;
+        // Inside the page, which `Memory::host_page` vouched for.
+        unsafe {
+            store_le((h.bytes + off as usize) as *mut u8, size, v);
+            *(h.gen as *mut u64) += 1;
+        }
+        mem.wrote(h.pa | off, size);
+        true
+    }
+
     /// A read of `va` straight from host memory, when [`Tlb::host`] has its
     /// page.
     #[inline(always)]
@@ -504,8 +553,8 @@ impl Cpu {
         Some(unsafe { load_le((h.bytes + off as usize) as *const u8, size) })
     }
 
-    /// `size` bytes at `va` as host memory, for one access that reads or
-    /// writes all of them, when [`Tlb::host`] has the page: a write's
+    /// `size` bytes at `va` as host memory, for one decoded access that reads
+    /// or writes all of them, when [`Tlb::host`] has the page: a write's
     /// generation bump and its range are accounted for here.
     #[inline(always)]
     pub(super) fn host_span<M: Memory + ?Sized>(
@@ -519,14 +568,12 @@ impl Cpu {
             return None;
         }
         let kind = if write { Kind::Write } else { Kind::Read };
-        let h = self.host_entry(va, size, kind)?;
+        let h = self.host_entry_decoded(va, size, kind)?;
         let off = va & 0xFFF;
         if write {
             // Inside the page, which `Memory::host_page` vouched for.
             unsafe { *(h.gen as *mut u64) += 1 };
             mem.wrote(h.pa | off, size);
-        } else {
-            self.last_pa = h.pa | off;
         }
         Some((h.bytes + off as usize) as *mut u8)
     }

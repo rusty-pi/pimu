@@ -931,7 +931,8 @@ impl ArmSide {
             core.cursor = NO_CURSOR;
         }
         let released_at = self.released_at.unwrap_or(0);
-        let mut cycles = self.cycles;
+        let start = self.cycles;
+        let mut cycles = start;
         while cycles < limit {
             let mut ids = all;
             let mut watching = false;
@@ -951,7 +952,6 @@ impl ArmSide {
                     released_at,
                 ) {
                     LockStep::Plain => {
-                        core.insns += 1;
                         // A taken branch is the one plain step the detector
                         // can have work for.
                         if track && core.cpu.pc != pc.wrapping_add(4) {
@@ -963,9 +963,13 @@ impl ArmSide {
                     }
                     LockStep::Done(done) => done,
                 };
+                let same_effects = core.cpu.shared_effects == effects;
+                if done.written.is_some() {
+                    self.drop_stale_cursors(all);
+                }
                 let plain = matches!(done.step, Step::Retired)
                     && !done.io
-                    && core.cpu.shared_effects == effects
+                    && same_effects
                     && (done.written.is_none()
                         || !self
                             .cores
@@ -974,7 +978,6 @@ impl ArmSide {
                             .any(|(k, c)| k != id && c.cpu.marked()));
                 let core = &mut self.cores[id];
                 if plain {
-                    core.insns += 1;
                     if track {
                         let park =
                             core.detect
@@ -984,6 +987,7 @@ impl ArmSide {
                     }
                     continue;
                 }
+                self.count_steps(all, cycles - start, all & !ids & !(1 << id));
                 self.cycles = cycles;
                 match self.after_step(m, id, done) {
                     Some(stop) => self.stopped = Some(stop),
@@ -1001,7 +1005,33 @@ impl ArmSide {
                 break;
             }
         }
+        self.count_steps(all, cycles - start, 0);
         self.cycles = cycles;
+    }
+
+    /// Retire `cycles` steps on each of `all` and one more on each of
+    /// `more`, which [`Self::lockstep`] took one at a time.
+    fn count_steps(&mut self, all: u32, cycles: u64, more: u32) {
+        for (id, core) in self.cores.iter_mut().enumerate() {
+            if all & 1 << id != 0 {
+                core.insns += cycles + u64::from(more >> id & 1);
+            }
+        }
+    }
+
+    /// After a store in [`Self::lockstep`]: the cursors of `all` on a page
+    /// it moved the write generation of, which the next step refills.
+    #[inline(never)]
+    fn drop_stale_cursors(&mut self, all: u32) {
+        for (id, core) in self.cores.iter_mut().enumerate() {
+            let cur = &mut core.cursor;
+            if all & 1 << id != 0
+                && cur.op < cur.end
+                && unsafe { *(cur.genp as *const u64) } != cur.gen
+            {
+                cur.end = 0;
+            }
+        }
     }
 
     /// One instruction, exception or interrupt entry on core `id`.
@@ -1596,10 +1626,9 @@ fn cursor_step(
     released_at: u64,
 ) -> LockStep {
     let cur = &core.cursor;
-    // A store anywhere on the page, by any core, moves its generation.
-    let live = cur.op < cur.end
-        && cur.runs_epoch == runs.epoch
-        && unsafe { *(cur.genp as *const u64) } == cur.gen;
+    // A store anywhere on the page, by any core, moves its generation, and
+    // `ArmSide::drop_stale_cursors` ends the run there.
+    let live = cur.op < cur.end && cur.runs_epoch == runs.epoch;
     if !live && !refill(core, runs, decoded, m) {
         core.cursor = NO_CURSOR;
         return lock_step(core, decoded, m, id, cycles, released_at);
@@ -1619,6 +1648,7 @@ fn cursor_step(
         }
         return LockStep::Plain;
     }
+    let effects = cpu.shared_effects;
     let mut bus = ArmBus {
         m,
         timer: &mut core.timer,
@@ -1639,6 +1669,11 @@ fn cursor_step(
         cpu.stopped_at(pc, next, op)
     } else {
         cpu.pc = next;
+        // A load from RAM: plain whatever the other cores hold. A store has
+        // their exclusive marks to look at, which the cycle loop does.
+        if !op.ends_run() && !bus.io && bus.written.is_none() && cpu.shared_effects == effects {
+            return LockStep::Plain;
+        }
         // Anything but a load or store may change the EL, the translation,
         // or what the interrupt masks let through: the next run is looked
         // at in full.
