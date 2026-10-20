@@ -1070,8 +1070,8 @@ fn default_cid() -> u128 {
 /// field is what the SD spec fixes for CSD 2.0, which is also what a real
 /// board's card reports.
 fn csd_v2(blocks: u64) -> u128 {
-    // CSD v2: C_SIZE counts (512 KiB) units, minus 1.
-    let c_size = (blocks / 1024).saturating_sub(1) as u128;
+    // CSD v2: C_SIZE counts (512 KiB) units, minus 1, rounded up to cover the image.
+    let c_size = blocks.div_ceil(1024).saturating_sub(1) as u128;
     let mut csd: u128 = 0;
     csd |= 1 << 126; // [127:126] CSD_STRUCTURE = 1
     csd |= 0x0E << 112; // [119:112] TAAC = 1 ms
@@ -1503,6 +1503,15 @@ mod tests {
         let c_size = 0x3F_FFFFu128 << 48;
         let real = 0x400e_0032_5b59_0000_e927_7f80_0a40_0000u128;
         assert_eq!(csd & !c_size, real & !c_size);
+    }
+
+    #[test]
+    fn a_card_covers_an_image_that_is_not_whole_units() {
+        // The Ubuntu 26.04.1 raspi image: 9605693 sectors, its root partition
+        // ending in the last of them.
+        let blocks = 4_918_114_816 / 512;
+        let c_size = (csd_v2(blocks) >> 48) & 0x3F_FFFF;
+        assert!((c_size as u64 + 1) * 1024 >= blocks);
     }
 
     #[test]
