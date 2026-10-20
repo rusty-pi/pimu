@@ -2245,6 +2245,18 @@ fn print_arm_cores(emu: &Emulator, eeprom: bool) {
         if let Some(prof) = &a.prof {
             print_arm_prof(prof);
         }
+        #[cfg(feature = "jit")]
+        if let Some(jit) = &a.jit {
+            println!(
+                "  jit       {} runs compiled in {:.2} s, entered {} times, {} instructions retired in them; of their instructions {} inline, {} through handlers (PIMU_NO_JIT=1 to compare)",
+                jit.runs,
+                jit.compile_ns as f64 / 1e9,
+                jit.entries,
+                jit.retired,
+                jit.inline,
+                jit.called
+            );
+        }
         print_arm_blocks(&a.cores);
     } else if eeprom {
         println!("\n--- ARM cores ---\n  never released");

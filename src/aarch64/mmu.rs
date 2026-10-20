@@ -127,6 +127,33 @@ fn data_slot(va: u64, kind: Kind) -> usize {
 
 const NO_HINT: (u64, u64) = (u64::MAX, 0);
 
+/// Where [`Tlb::host`] and the fields of its entries sit, for compiled code
+/// that probes it (`src/aarch64/jit.rs`): byte offsets, the size of an entry,
+/// and the first slot for reads and for writes.
+#[cfg(feature = "jit")]
+pub(super) struct HostLayout {
+    pub host: usize,
+    pub size: usize,
+    pub key: usize,
+    pub bytes: usize,
+    pub gen: usize,
+    pub hints: usize,
+    pub read: usize,
+    pub write: usize,
+}
+
+#[cfg(feature = "jit")]
+pub(super) const HOST_LAYOUT: HostLayout = HostLayout {
+    host: std::mem::offset_of!(Tlb, host),
+    size: std::mem::size_of::<Host>(),
+    key: std::mem::offset_of!(Host, key),
+    bytes: std::mem::offset_of!(Host, bytes),
+    gen: std::mem::offset_of!(Host, gen),
+    hints: DATA_HINTS,
+    read: (Kind::Read as usize - 1) * DATA_HINTS,
+    write: (Kind::Write as usize - 1) * DATA_HINTS,
+};
+
 impl Default for Tlb {
     fn default() -> Self {
         Self::new()

@@ -82,13 +82,13 @@ pub(super) enum Kind {
 /// [`Kind`]; [`decode`] and [`Cpu::run_op`] are the two sides of it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Op {
-    insn: u32,
-    kind: Kind,
-    a: u8,
-    b: u8,
-    c: u8,
-    imm: u64,
-    imm2: u64,
+    pub(super) insn: u32,
+    pub(super) kind: Kind,
+    pub(super) a: u8,
+    pub(super) b: u8,
+    pub(super) c: u8,
+    pub(super) imm: u64,
+    pub(super) imm2: u64,
 }
 
 impl Op {
@@ -648,7 +648,7 @@ impl Op {
 
 /// The handler for instructions of `kind` on bus `M`.
 #[inline(always)]
-fn handler_of<M: Memory + ?Sized>(kind: Kind) -> Handler<M> {
+pub(super) fn handler_of<M: Memory + ?Sized>(kind: Kind) -> Handler<M> {
     match kind {
         Kind::Execute => h_execute::<M>,
         Kind::BranchReg => h_branch_reg::<M>,
@@ -711,6 +711,12 @@ pub struct RunOp {
     go: usize,
     link: Cell<usize>,
     link_gen: Cell<u64>,
+    /// The run from here compiled (`src/aarch64/jit.rs`), and how often it
+    /// was entered before it was.
+    #[cfg(feature = "jit")]
+    pub(super) jit: Cell<usize>,
+    #[cfg(feature = "jit")]
+    pub(super) hits: Cell<u32>,
 }
 
 /// What a straight run needs of the bus it runs on.
@@ -727,6 +733,12 @@ pub trait RunBus: Memory {
     /// Whether a branch `c` cycles in may go on into the run it is linked
     /// to, which was decoded at its page's generation `gen`.
     fn chain(&self, c: u64, gen: u64) -> bool;
+    /// After a load or store a compiled run made: whether the run may go on
+    /// past it, as `Straight::run` would, forgetting the store if so. `gen`
+    /// is the run's page's write generation when it began, and `marked` that
+    /// another core holds an exclusive mark.
+    #[cfg(feature = "jit")]
+    fn settle(&mut self, gen: u64, marked: bool) -> bool;
 }
 
 type Go<M> = fn(&mut Cpu, &RunOp, &mut M, u64, u64) -> (u64, u64);
@@ -744,6 +756,10 @@ impl RunOp {
             go: go as usize,
             link: Cell::new(0),
             link_gen: Cell::new(0),
+            #[cfg(feature = "jit")]
+            jit: Cell::new(0),
+            #[cfg(feature = "jit")]
+            hits: Cell::new(0),
         }
     }
 
@@ -847,7 +863,7 @@ fn go_branch<M: RunBus, const K: u8>(
 /// The branch `o` at `pc` taken to `next`: on into the run it is linked to
 /// where `bus` lets it.
 #[inline(always)]
-fn taken<M: RunBus>(
+pub(super) fn taken<M: RunBus>(
     cpu: &mut Cpu,
     o: &RunOp,
     bus: &mut M,

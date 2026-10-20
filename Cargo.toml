@@ -41,6 +41,11 @@ diag = []
 # `--no-default-features`.
 repo = []
 
+# A native JIT for the ARM cores' straight runs (`src/arm/jit.rs`), on
+# Cranelift. Off by default while it is young; `PIMU_NO_JIT=1` turns it off in
+# a build that has it.
+jit = ["dep:cranelift-codegen", "dep:cranelift-frontend", "dep:cranelift-jit", "dep:cranelift-module", "dep:cranelift-native"]
+
 [build-dependencies]
 # build.rs generates the register constants in src/spec/ from specs/*.toml.
 serde = { version = "1", features = ["derive"] }
@@ -62,3 +67,10 @@ opt-level = 3
 js-sys = "0.3"
 wasm-bindgen = "0.2"
 web-time = "1"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+cranelift-codegen = { version = "0.137", optional = true }
+cranelift-frontend = { version = "0.137", optional = true }
+cranelift-jit = { version = "0.137", optional = true }
+cranelift-module = { version = "0.137", optional = true }
+cranelift-native = { version = "0.137", optional = true }

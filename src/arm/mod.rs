@@ -346,6 +346,9 @@ pub struct ArmSide {
     /// their straight runs (`src/arm/runs.rs`).
     decoded: crate::aarch64::predecode::Decoded,
     runs: runs::Runs,
+    /// The runs compiled to host code (`src/aarch64/jit.rs`).
+    #[cfg(feature = "jit")]
+    pub jit: Option<Box<crate::aarch64::jit::Jit>>,
     /// `PIMU_ARM_BLOCKS=1` counts straight-line runs; only [`Self::step_core`]
     /// sees them, so it takes the cores off the burst path.
     blocks_on: bool,
@@ -490,6 +493,8 @@ impl ArmSide {
             straight_on: std::env::var_os("PIMU_NO_STRAIGHT").is_none(),
             decoded: Default::default(),
             runs: Default::default(),
+            #[cfg(feature = "jit")]
+            jit: crate::aarch64::jit::Jit::new::<ArmBus<'static>>().map(Box::new),
             blocks_on: crate::diag::ON && std::env::var_os("PIMU_ARM_BLOCKS").is_some(),
             stop_on_store: false,
             stored: false,
@@ -1131,6 +1136,8 @@ impl ArmSide {
         let mut cycles = self.cycles;
         let decoded = &mut self.decoded;
         let runs = &mut self.runs;
+        #[cfg(feature = "jit")]
+        let mut jit = self.jit.as_deref_mut();
         let core = &mut self.cores[id];
         core.waiting = false;
         if core.wfe_until.take().is_some() {
@@ -1174,7 +1181,15 @@ impl ArmSide {
                     effects,
                     track,
                 };
-                let end = at.run(cpu, &mut bus, runs, decoded, detect);
+                let end = at.run(
+                    cpu,
+                    &mut bus,
+                    runs,
+                    decoded,
+                    detect,
+                    #[cfg(feature = "jit")]
+                    jit.as_deref_mut(),
+                );
                 *insns += at.cycles - cycles;
                 cycles = at.cycles;
                 match end {
@@ -1891,6 +1906,7 @@ impl Straight {
         runs: &mut runs::Runs,
         decoded: &mut crate::aarch64::predecode::Decoded,
         detect: &mut park::Detector,
+        #[cfg(feature = "jit")] mut jit: Option<&mut crate::aarch64::jit::Jit>,
     ) -> StraightEnd {
         let mut c = self.cycles;
         // A linked run fits before the limit from this far before it, and the
@@ -1934,6 +1950,8 @@ impl Straight {
             let mut chained: Option<*const RunOp> = None;
             let mut unlinked: Option<*const RunOp> = None;
             'runs: loop {
+                // The whole run when it was looked up rather than chained to.
+                let mut whole: Option<(*const RunOp, usize)> = None;
                 let first = match chained.take() {
                     Some(run) => run,
                     None => {
@@ -1954,6 +1972,7 @@ impl Straight {
                             break 'page StraightEnd::Slow;
                         };
                         let first: *const RunOp = first;
+                        whole = Some((first, ops.len()));
                         if let Some(branch) = unlinked.take() {
                             if runs.epoch == runs_epoch {
                                 // `get` has checked the run against the page.
@@ -1973,11 +1992,42 @@ impl Straight {
                 let mut pc = cpu.pc;
                 let mut from = unsafe { &*first };
                 bus.written = None;
+                // `from` is the start of a run, not an instruction partway
+                // through one.
+                #[cfg(feature = "jit")]
+                let mut entered = true;
                 let (branch, next) = loop {
                     // Where tail calls are not made, as on wasm32 without
                     // `tail-call`, each instruction run nests a call deeper.
                     bus.chain_until = chain_end.min(c + CHAIN_SPAN);
-                    (pc, c) = from.go(cpu, bus, pc, c);
+                    #[cfg(feature = "jit")]
+                    let compiled = match (jit.as_deref_mut(), entered) {
+                        (Some(jit), true) => {
+                            // The run `runs.get` returned or a branch was
+                            // linked to, which stays put while `runs.epoch`
+                            // does.
+                            let ops = whole
+                                .take()
+                                .map(|(ops, len)| unsafe { std::slice::from_raw_parts(ops, len) });
+                            let ctx = crate::aarch64::jit::Ctx {
+                                gen,
+                                marked: u64::from(self.marked),
+                                genp,
+                            };
+                            jit.go(from, ops, runs.epoch, cpu, bus, &ctx, pc, c)
+                        }
+                        _ => None,
+                    };
+                    #[cfg(feature = "jit")]
+                    {
+                        entered = false;
+                    }
+                    #[cfg(not(feature = "jit"))]
+                    let compiled = None;
+                    (pc, c) = match compiled {
+                        Some(stopped) => stopped,
+                        None => from.go(cpu, bus, pc, c),
+                    };
                     let op = unsafe { &*bus.stopped };
                     let next = bus.next;
                     if !bus.ran {
@@ -2243,6 +2293,21 @@ impl crate::aarch64::predecode::RunBus for ArmBus<'_> {
     fn chain(&self, c: u64, gen: u64) -> bool {
         // `Straight::run` keeps it at its page's.
         c < self.chain_until && unsafe { *self.genp } == gen
+    }
+
+    #[cfg(feature = "jit")]
+    #[inline(always)]
+    fn settle(&mut self, gen: u64, marked: bool) -> bool {
+        if self.io {
+            return false;
+        }
+        if self.written.is_some() {
+            if marked || unsafe { *self.genp } != gen {
+                return false;
+            }
+            self.written = None;
+        }
+        true
     }
 }
 

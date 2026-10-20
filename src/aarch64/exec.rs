@@ -225,7 +225,7 @@ fn crc32(mut acc: u32, val: u64, bytes: u32, castagnoli: bool) -> u32 {
 
 /// `ConditionHolds` (ARM ARM J1) for each condition, as a truth table over
 /// the 16 values of `NZCV`: bit `nzcv` says whether the condition holds.
-const COND_HOLDS: [u16; 16] = {
+pub(super) const COND_HOLDS: [u16; 16] = {
     let mut t = [0u16; 16];
     let mut cond = 0;
     while cond < 16 {
