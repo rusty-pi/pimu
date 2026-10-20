@@ -352,6 +352,15 @@ test.describe("what the machine reports", () => {
     await expect(app.page.locator("#clock")).toHaveText("model time 16.3 s · real 2.5 s · VPU 845 M instructions · ARM 480 M · sd: 17.0 MiB read");
   });
 
+  test("the real time moves on while the worker is too busy to send its state", async ({ app }) => {
+    await app.page.clock.install({ time: 0 });
+    await app.page.clock.pauseAt(1000);
+    await app.running();
+    await app.emit({ type: "state", io: {}, state: stateOf({ modelUs: 1_000_000 }) });
+    await app.page.clock.runFor(2300);
+    await expect(app.page.locator("#clock")).toContainText("model time 1.0 s · real 2.3 s ·");
+  });
+
   test("the real time stands still while paused and after the run ends", async ({ app }) => {
     await app.page.clock.install({ time: 0 });
     await app.page.clock.pauseAt(1000);

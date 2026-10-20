@@ -138,10 +138,13 @@ let phase = "off";
 let powered = () => phase !== "off" && phase !== "error";
 let lastState = null;
 let lastIo = {};
+let clockTimer = null;
 
 function setPhase(next, detail) {
   phase = next;
   stopwatch.run(next === "running");
+  clearInterval(clockTimer);
+  clockTimer = next === "running" ? setInterval(showClock, CLOCK_EVERY_MS) : null;
   const labels = { off: "Off", downloading: "Downloading", starting: "Starting", running: "Running", paused: "Paused", ended: "Stopped", error: "Error" };
   const status = $("#phase");
   status.dataset.phase = next;
@@ -458,6 +461,8 @@ function renderDownloads(list) {
 
 // ---- cores, clock, LEDs ---------------------------------------------------------------
 
+const CLOCK_EVERY_MS = 100;
+
 const stopwatch = (() => {
   let total = 0;
   let since = null;
@@ -495,10 +500,7 @@ function showState() {
   setCores(st.cores);
   $("#led-act").dataset.on = st.armReleased;
   if (st.ended) stopwatch.run(false);
-  const seconds = (st.modelUs / 1e6).toFixed(1);
-  const arm = st.cores.arm.reduce((n, c) => n + c.insns, 0);
-  const millions = (n) => `${(n / 1e6).toFixed(0)} M`;
-  $("#clock").textContent = `model time ${seconds} s · real ${stopwatch.seconds().toFixed(1)} s · VPU ${millions(st.retired)} instructions · ARM ${millions(arm)}${st.parallel ? " · cores on threads" : ""}`;
+  showClock();
   const result = $("#result");
   if (st.ended) {
     result.textContent = `${st.ok ? "ok" : "failed"} – ${st.why}`;
@@ -508,9 +510,19 @@ function showState() {
     result.textContent = st.reboots ? `${st.reboots} reset${st.reboots > 1 ? "s" : ""}` : "";
     result.dataset.ok = "";
   }
+}
+
+function showClock() {
+  const st = lastState;
+  if (!st) return;
+  const seconds = (st.modelUs / 1e6).toFixed(1);
+  const arm = st.cores.arm.reduce((n, c) => n + c.insns, 0);
+  const millions = (n) => `${(n / 1e6).toFixed(0)} M`;
   const reading = Object.entries(lastIo).filter(([, v]) => v.requests).map(([slot, v]) => `${slot}: ${mib(v.read)} read`);
-  $("#clock").title = reading.join("\n");
-  if (reading.length) $("#clock").textContent += ` · ${reading.join(", ")}`;
+  const clock = $("#clock");
+  clock.textContent = `model time ${seconds} s · real ${stopwatch.seconds().toFixed(1)} s · VPU ${millions(st.retired)} instructions · ARM ${millions(arm)}${st.parallel ? " · cores on threads" : ""}`;
+  clock.title = reading.join("\n");
+  if (reading.length) clock.textContent += ` · ${reading.join(", ")}`;
 }
 
 // ---- the serial console -----------------------------------------------------------------
