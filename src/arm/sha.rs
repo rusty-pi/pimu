@@ -17,6 +17,11 @@ const MAX_PASS: usize = 1 << 16;
 /// recorded.
 const REPEATS: u8 = 2;
 const MIN_SKIP: u64 = 4;
+const REJECTED_SLOTS: usize = 256;
+
+fn rejected_slot(target: u64) -> usize {
+    ((target >> 2) ^ (target >> 10)) as usize % REJECTED_SLOTS
+}
 const SCRAMBLE: u64 = 0xA5A5_5A5A_A5A5_5A5A;
 
 /// SHA-256's round constants (FIPS 180-4 §4.2.2).
@@ -111,6 +116,9 @@ pub(super) struct Finder {
     /// Backward-jump targets seen lately: `(target, last cycle, distance to the
     /// jump before, times in a row)`; `u8::MAX` marks one already turned down.
     far: [(u64, u64, u64, u8); 8],
+    /// Targets turned down, kept apart from `far` so that a burst of other
+    /// loops does not push them out and have them recorded again.
+    rejected: Vec<u64>,
     rec: Option<Box<Recording>>,
 }
 
@@ -129,6 +137,9 @@ impl Finder {
         let t = cpu.pc;
         let (last, at) = std::mem::replace(&mut self.last, (t, cycle));
         if t == last && cycle.wrapping_sub(at) < MIN_PASS {
+            return false;
+        }
+        if self.rejected.get(rejected_slot(t)) == Some(&t) {
             return false;
         }
         let Some(e) = self.far.iter_mut().find(|e| e.0 == t) else {
@@ -177,6 +188,10 @@ impl Finder {
         if let Some(e) = self.far.iter_mut().find(|e| e.0 == entry) {
             e.3 = u8::MAX;
         }
+        if self.rejected.is_empty() {
+            self.rejected.resize(REJECTED_SLOTS, 0);
+        }
+        self.rejected[rejected_slot(entry)] = entry;
         self.rec = None;
     }
 

@@ -10,6 +10,9 @@ use super::{timer_reg, PERIPH, PERIPH_TO_BUS};
 
 const HOT: i32 = 32;
 const COOLDOWN: i32 = -4096;
+/// A head turned down again waits twice as long, up to this many doublings.
+const MAX_BACKOFF: u8 = 12;
+const HOT_SLOTS: usize = 4096;
 const MAX_PASS: usize = 64;
 const PASSES: usize = 6;
 /// A loop with fewer passes to go than this is left to run: the search for
@@ -97,7 +100,8 @@ struct Watch {
 /// Per core: finds loops worth parking.
 #[derive(Default)]
 pub(super) struct Detector {
-    hot: [(u64, i32); 16],
+    /// Backward-jump targets: `(target, count, times turned down)`.
+    hot: Vec<(u64, i32, u8)>,
     watch: Option<Box<Watch>>,
     pub(super) log: Vec<Read>,
     pub(super) stores: Vec<Read>,
@@ -112,7 +116,7 @@ pub(super) struct Detector {
 }
 
 fn slot(target: u64) -> usize {
-    ((target >> 2) ^ (target >> 7)) as usize & 15
+    ((target >> 2) ^ (target >> 10)) as usize % HOT_SLOTS
 }
 
 impl Detector {
@@ -123,7 +127,9 @@ impl Detector {
     /// The core took an exception or an interrupt, or waited: what was being
     /// watched was not one loop.
     pub(super) fn interrupted(&mut self) {
-        self.watch = None;
+        if let Some(w) = self.watch.take() {
+            self.cool(w.head);
+        }
         self.sha.abandon();
         self.sha_stop = false;
         self.log.clear();
@@ -177,9 +183,18 @@ impl Detector {
         if !self.park_on {
             return;
         }
+        if self.hot.is_empty() {
+            self.hot.resize(HOT_SLOTS, (0, 0, 0));
+        }
         let e = &mut self.hot[slot(t)];
         if e.0 != t {
-            *e = (t, 0);
+            // A head that is cooling down keeps its slot until it has: the
+            // newcomer only ages it.
+            if e.1 < 0 {
+                e.1 += 1;
+                return;
+            }
+            *e = (t, 0, 0);
         }
         e.1 += 1;
         if e.1 < HOT {
@@ -225,9 +240,17 @@ impl Detector {
 
     fn fail(&mut self) -> bool {
         if let Some(w) = self.watch.take() {
-            self.hot[slot(w.head)] = (w.head, COOLDOWN);
+            self.cool(w.head);
         }
         false
+    }
+
+    fn cool(&mut self, head: u64) {
+        let Some(e) = self.hot.get_mut(slot(head)) else {
+            return;
+        };
+        let fails = if e.0 == head { e.2 } else { 0 };
+        *e = (head, COOLDOWN << fails, (fails + 1).min(MAX_BACKOFF));
     }
 
     /// Park the core the watch has been following, which is at the loop's
@@ -246,7 +269,7 @@ impl Detector {
         now.put(cpu);
         cpu.pc = head;
         if park.is_none() {
-            self.hot[slot(head)] = (head, COOLDOWN);
+            self.cool(head);
         }
         park
     }

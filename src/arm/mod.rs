@@ -818,11 +818,10 @@ impl ArmSide {
                     self.sha_skip(m, id, limit);
                 }
             }
-            // One core takes turns and no other is parked: until something is
-            // due, the cycles below would visit just it.
+            // One core takes turns: until something is due, the cycles below
+            // would visit just it. A parked core only needs its stores.
             if self.burst_on
                 && self.runnable.is_power_of_two()
-                && self.parked == 0
                 && self.prof.is_none()
                 && !self.blocks_on
             {
@@ -837,12 +836,7 @@ impl ArmSide {
                 }
             }
             // Several cores take turns: the same, a cycle at a time.
-            if self.burst_on
-                && self.runnable != 0
-                && self.parked == 0
-                && self.prof.is_none()
-                && !self.blocks_on
-            {
+            if self.burst_on && self.runnable != 0 && self.prof.is_none() && !self.blocks_on {
                 let limit = end.min(self.timer_due).min(self.park_due);
                 if limit > self.cycles && self.lockstep_ready() {
                     self.lockstep(m, limit);
@@ -916,7 +910,7 @@ impl ArmSide {
         true
     }
 
-    /// The runnable cores, nothing parked or due before `limit`: one step of
+    /// The runnable cores, nothing due before `limit`: one step of
     /// each per cycle, in core order, exactly as the cycle loop would take
     /// them, but without its checks for as long as every step is one
     /// [`Self::step_core`] would call plain. The first that is not is
@@ -978,11 +972,12 @@ impl ArmSide {
                     && !done.io
                     && same_effects
                     && (done.written.is_none()
-                        || !self
-                            .cores
-                            .iter()
-                            .enumerate()
-                            .any(|(k, c)| k != id && c.cpu.marked()));
+                        || (self.parked == 0
+                            && !self
+                                .cores
+                                .iter()
+                                .enumerate()
+                                .any(|(k, c)| k != id && c.cpu.marked())));
                 let core = &mut self.cores[id];
                 if plain {
                     if track {
@@ -1124,13 +1119,15 @@ impl ArmSide {
     /// interrupt state alone. The first that does not ends the burst and is
     /// finished the ordinary way.
     fn burst(&mut self, m: &mut Machine, id: usize, limit: u64) -> Option<ArmStop> {
-        // Another core's exclusive mark is the one thing a plain store can
-        // change; nobody else runs, so no mark can appear meanwhile.
-        let marked = self
-            .cores
-            .iter()
-            .enumerate()
-            .any(|(k, c)| k != id && c.cpu.marked());
+        // Another core's exclusive mark, or what a parked core waits on, is
+        // what a plain store can change; nobody else runs, so no mark can
+        // appear meanwhile.
+        let marked = self.parked != 0
+            || self
+                .cores
+                .iter()
+                .enumerate()
+                .any(|(k, c)| k != id && c.cpu.marked());
         let track = self.park_on || self.sha_on;
         let released_at = self.released_at.unwrap_or(0);
         let mut cycles = self.cycles;
@@ -1234,8 +1231,12 @@ impl ArmSide {
         let done = last?;
         let stop = self.after_step(m, id, done);
         self.refresh_runnable(id);
+        let woke = std::mem::take(&mut self.woke);
+        if stop.is_none() && woke != 0 {
+            self.take_turns(m, woke);
+        }
         self.cycles += 1;
-        stop
+        stop.or(self.stopped.take())
     }
 
     /// Core `id` back at the head of its SHA-256 loop: skip the passes the
