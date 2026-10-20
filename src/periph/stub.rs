@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StubAccess {
     pub offset: u32,
     pub width: Width,
@@ -17,8 +17,9 @@ pub struct StubAccess {
     pub write: bool,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct StubRegion {
-    name: &'static str,
+    name: crate::snap::Keep<&'static str>,
     storage: BTreeMap<u32, u32>,
     pub log: Vec<StubAccess>,
     pub log_limit: usize,
@@ -27,7 +28,7 @@ pub struct StubRegion {
 impl StubRegion {
     pub fn new(name: &'static str) -> StubRegion {
         StubRegion {
-            name,
+            name: crate::snap::Keep(name),
             storage: BTreeMap::new(),
             log: Vec::new(),
             log_limit: 4096,
@@ -43,7 +44,7 @@ impl StubRegion {
 
 impl MmioDevice for StubRegion {
     fn name(&self) -> &'static str {
-        self.name
+        &self.name
     }
 
     fn read(&mut self, offset: u32, width: Width) -> BusResult<u32> {

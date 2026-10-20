@@ -78,7 +78,7 @@ const CH3_SHIFT: u32 = 13;
 /// Channel 3 is the SoC core rail.
 const CORE_CHANNEL: u32 = 3;
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Avs {
     storage: BTreeMap<u32, u32>,
     /// Core-rail setpoint in microvolts, mirrored from the PMIC. `None` until

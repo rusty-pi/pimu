@@ -50,6 +50,7 @@ pub const IRQ_SRC: u32 = crate::spec::rng::IRQ_VPU;
 /// continuously, so a warmed-up block is never empty for long.
 const FIFO_WORDS: u32 = 16;
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Rng {
     ctrl: u32,
     rng_reset: bool,

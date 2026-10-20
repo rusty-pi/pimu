@@ -17,7 +17,7 @@ use crate::soc::bcm2711 as map;
 /// The serial header is GPIO 14/15, driven by the PL011 on ALT0 and the
 /// mini-UART on ALT5, and a single boot can move between them. [`Console::Pins`]
 /// follows the pins and is what a firmware boot wants.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum Console {
     /// Whichever block GPIO 14/15 carry; the PL011 until something says otherwise.
     #[default]
@@ -26,6 +26,7 @@ pub enum Console {
     MiniUart,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Machine {
     pub ram: Ram,
     /// A real BCM2711 maskROM image overlaid read-only at `0x6000_0000`
@@ -64,7 +65,7 @@ pub struct Machine {
     /// GENET v5 Ethernet MAC with a BCM54213PE PHY on its MDIO bus.
     pub genet: crate::periph::Genet,
     /// What GENET's cable is plugged into, if anything ([`Machine::attach_net`]).
-    pub net: Option<Box<dyn crate::net::NetBackend>>,
+    pub net: crate::snap::Keep<Option<Box<dyn crate::net::NetBackend>>>,
     pub rng: Rng,
     /// The codec licence check launches a program on it and waits for source 68.
     pub vce: Vce,
@@ -105,7 +106,7 @@ pub struct Machine {
     /// [`Self::sd_slot_legacy`] routes the card there.
     pub emmc: Emmc2,
     /// The WiFi chip, parked while the SD slot has its host.
-    wifi: Option<crate::periph::sdcard::SdCard>,
+    wifi: crate::snap::Keep<Option<crate::periph::sdcard::SdCard>>,
     /// Bit 1 of the SD-slot mux word: the card is on the legacy EMMC rather than
     /// EMMC2. See [`Self::route_sd_slot`].
     pub sd_slot_legacy: bool,
@@ -229,6 +230,23 @@ const _: () = {
 };
 
 impl Machine {
+    /// The three places a card can be: EMMC2's slot, the legacy EMMC's, and
+    /// where the WiFi chip waits while the SD card has that host
+    /// ([`crate::snap`]).
+    pub fn card_slots(
+        &mut self,
+    ) -> (
+        &mut Option<crate::periph::sdcard::SdCard>,
+        &mut Option<crate::periph::sdcard::SdCard>,
+        &mut Option<crate::periph::sdcard::SdCard>,
+    ) {
+        (
+            self.emmc2.card_slot(),
+            self.emmc.card_slot(),
+            &mut self.wifi.0,
+        )
+    }
+
     pub fn new(ram_bytes: u64) -> Machine {
         Machine {
             ram: Ram::new(map::SDRAM_CACHED_BASE, ram_bytes),
@@ -253,7 +271,7 @@ impl Machine {
             asb: Asb::new(),
             pcie: crate::periph::pcie::Pcie::new(),
             genet: crate::periph::Genet::new(),
-            net: None,
+            net: crate::snap::Keep(None),
             rng: Rng::new(),
             vce: Vce::new(),
             bsc0: {
@@ -291,7 +309,7 @@ impl Machine {
                 emmc.put_card(Some(crate::periph::sdcard::SdCard::sdio()));
                 emmc
             },
-            wifi: None,
+            wifi: crate::snap::Keep(None),
             sd_slot_legacy: false,
             emmc2: Emmc2::new(),
             hvs: Hvs::new(),
@@ -374,7 +392,7 @@ impl Machine {
     /// Plug GENET's cable into `backend`: the PHY sees a link partner.
     pub fn attach_net(&mut self, backend: Box<dyn crate::net::NetBackend>) {
         self.genet.phy.set_link(true);
-        self.net = Some(backend);
+        self.net = crate::snap::Keep(Some(backend));
     }
 
     /// Have the network peer send a Wake-on-LAN magic packet for the station
@@ -1272,7 +1290,7 @@ impl Machine {
         self.sd_slot_legacy = legacy;
         if legacy {
             // One host, one bus: the WiFi chip steps aside.
-            self.wifi = self.emmc.take_card();
+            self.wifi = crate::snap::Keep(self.emmc.take_card());
             let card = self.emmc2.take_card();
             self.emmc.put_card(card);
         } else {

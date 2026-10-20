@@ -289,6 +289,14 @@ self-update, which brings back the image's own):
               it.
 
 RUNNING:
+    --snapshot-save <file>
+              Run until the firmware releases the ARM, save the machine there
+              and stop. The VPU's boot is most of a Linux boot's time; a run
+              about the ARM side can skip it with --snapshot-load.
+    --snapshot-load <file>
+              Go on from a --snapshot-save file, with the same command line it
+              was saved with otherwise. USB devices start as plugged in, not as
+              the snapshot left them.
     --max-wall <secs>
               Stop after this much wall-clock time: 140 s by default, no limit
               with --stdin.
@@ -456,6 +464,10 @@ enum HostNet {
 
 struct BootOpts {
     path: PathBuf,
+    /// `--snapshot-save`: stop when the ARM is released and save the machine
+    /// there; `--snapshot-load`: go on from such a file (`src/snap.rs`).
+    snapshot_save: Option<PathBuf>,
+    snapshot_load: Option<PathBuf>,
     entry: Option<u32>,
     usb_mb: Option<u64>,
     otg_dock: bool,
@@ -833,6 +845,8 @@ impl BootOpts {
         let mut display_edid: Option<PathBuf> = None;
         let mut max_steps: Option<u64> = None;
         let mut max_wall_secs: u64 = 140;
+        let mut snapshot_save: Option<PathBuf> = None;
+        let mut snapshot_load: Option<PathBuf> = None;
         let mut speed: Option<f64> = Some(1.0);
         let mut eeprom = false;
         let mut trace = false;
@@ -903,6 +917,12 @@ impl BootOpts {
                 }
                 "--max-steps" => {
                     max_steps = Some(it.next().context("--max-steps needs a value")?.parse()?)
+                }
+                "--snapshot-save" => {
+                    snapshot_save = Some(it.next().context("--snapshot-save needs a file")?.into())
+                }
+                "--snapshot-load" => {
+                    snapshot_load = Some(it.next().context("--snapshot-load needs a file")?.into())
                 }
                 "--max-wall" => {
                     max_wall_secs = it.next().context("--max-wall needs seconds")?.parse()?
@@ -1297,6 +1317,8 @@ impl BootOpts {
         }
         Ok(Some(Self {
             path,
+            snapshot_save,
+            snapshot_load,
             entry,
             usb_mb,
             otg_dock,
@@ -1447,7 +1469,22 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
         emu.input.script = opts.sends.iter().cloned().collect();
         emu.input.magic_packet_after = magic_packet_after.clone();
         emu.input.host = host_input.take();
-        let report = emu.run(&limits);
+        let mut loaded_console = Vec::new();
+        if let (0, Some(path)) = (reboots, &opts.snapshot_load) {
+            loaded_console = pimu::snap::load(path, &mut emu)?;
+            if emu.stream_console && !opts.quiet {
+                print!("{}", String::from_utf8_lossy(&loaded_console));
+            }
+        }
+        emu.stop_at_release = opts.snapshot_save.is_some();
+        let mut report = emu.run(&limits);
+        if !loaded_console.is_empty() {
+            loaded_console.extend_from_slice(&report.console);
+            report.console = loaded_console;
+        }
+        if let (pimu::emulator::RunEnd::Released, Some(path)) = (&report.end, &opts.snapshot_save) {
+            pimu::snap::save(path, &mut emu, &report.console)?;
+        }
         host_input = emu.input.host.take();
         if emu.input.magic_packet_after.is_none() {
             magic_packet_after = None;
@@ -1884,7 +1921,7 @@ impl<'a> Rig<'a> {
             machine.hdmi_ddc0 = pimu::periph::HdmiDdc::new("hdmi-ddc0").with_edid(edid);
         }
         if check_coherency {
-            machine.ram.coherency = pimu::coherency::Coherency::on(self.log.clone());
+            *machine.ram.coherency = pimu::coherency::Coherency::on(self.log.clone());
         }
         if check_alignment {
             machine.alignment = pimu::align::Alignment::on(self.log.clone());

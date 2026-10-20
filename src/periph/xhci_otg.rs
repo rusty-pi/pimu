@@ -126,6 +126,7 @@ const _: () = assert!(
 
 pub const PORT: usize = 1;
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct XhciOtg {
     hc: Xhci,
     pending: Option<(u32, Width, u32)>,

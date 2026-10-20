@@ -88,7 +88,7 @@ pub const COVERAGE_1D: Coverage = Coverage {
 
 /// One PMIC: a byte-addressable register file with the auto-incrementing
 /// pointer the firmware's transport assumes.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PmicRegs {
     addr: u8,
     regs: BTreeMap<u8, u8>,
@@ -198,7 +198,7 @@ impl PmicRegs {
 }
 
 /// The board's PMICs: one device, since they share a bus.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Pmic {
     parts: Vec<PmicRegs>,
     /// The transfer in progress.

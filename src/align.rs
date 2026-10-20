@@ -10,6 +10,7 @@ use std::cell::Cell;
 use crate::bus::Width;
 use crate::log::{Channel, Log};
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Alignment {
     on: bool,
     reports: Cell<usize>,

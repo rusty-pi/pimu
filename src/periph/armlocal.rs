@@ -35,7 +35,7 @@ const STUB_CONTROL: u32 = 0;
 const STUB_PRESCALER: u32 = 0x8000_0000;
 pub const CRYSTAL_HZ: u64 = 54_000_000;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct ArmLocal {
     control: u32,
     prescaler: u32,

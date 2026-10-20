@@ -25,7 +25,7 @@ const HEADER: usize = 12;
 const FOOTER: usize = 12;
 
 /// One block of the stream, as the index describes it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Block {
     /// Where its bytes are in the compressed stream, and how many there are.
     pub at: u64,
@@ -36,7 +36,7 @@ pub struct Block {
 }
 
 /// What the stream's own index says about it.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Index {
     /// The stream header, which every block needs in front of it to decode.
     pub header: [u8; HEADER],

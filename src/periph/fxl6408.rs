@@ -68,7 +68,7 @@ pub const COVERAGE: Coverage = Coverage {
     ],
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Fxl6408 {
     io_dir: u8,
     output: u8,

@@ -44,6 +44,7 @@ pub const COVERAGE: Coverage = Coverage {
 /// (module docs).
 const TAGGED_FROM: u32 = 0x24;
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Usbr {
     storage: BTreeMap<u32, u32>,
 }

@@ -220,7 +220,7 @@ const LR_WRITABLE: u32 = gich::LR_VIRTUALID_MASK
 const LR_EOI: u32 = 1 << 19;
 const LR_PENDING: u32 = 1 << LR_STATE_SHIFT;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Accessor {
     pub cpu: usize,
     pub secure: bool,
@@ -236,7 +236,7 @@ pub struct Signal {
 
 /// One interrupt's distributor state; SGIs keep pending per source CPU in
 /// [`Gic::sgi_sources`].
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 struct Irq {
     enabled: bool,
     group1: bool,
@@ -250,7 +250,7 @@ struct Irq {
     active: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 struct CpuIf {
     ctlr: u32,
     pmr: u8,
@@ -272,7 +272,7 @@ impl Default for CpuIf {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 struct VirtIf {
     hcr: u32,
     vmcr: u32,
@@ -355,6 +355,7 @@ impl VirtIf {
     }
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Gic {
     ctlr: u32,
     private: [[Irq; 32]; NUM_CPUS],

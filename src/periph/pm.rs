@@ -54,7 +54,7 @@ const RSTC_WRCFG_FULL_RESET: u32 = 2 << RSTC_WRCFG_SHIFT;
 /// The watchdog counts at 65536 Hz: one `WDOG` tick is 1 s / 65536 ≈ 15.26 µs.
 const WDOG_HZ: u64 = 65_536;
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Pm {
     storage: BTreeMap<u32, u32>,
     now_us: u64,

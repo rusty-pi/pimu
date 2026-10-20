@@ -20,7 +20,7 @@ pub const COVERAGE: Coverage = Coverage {
     decoded: &[CS],
 };
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Pactl {
     spi0: bool,
     i2c0: bool,

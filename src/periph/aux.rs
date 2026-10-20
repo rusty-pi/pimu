@@ -71,7 +71,7 @@ const SYSTEM_CLOCK_HZ: u64 = 500_000_000;
 const IIR_ID_RX: u32 = 0b10;
 const IIR_ID_TX: u32 = 0b01;
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Aux {
     pub out: Vec<u8>,
     pub log: Log,

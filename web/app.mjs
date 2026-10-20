@@ -6,6 +6,7 @@ import "./coi.mjs";
 import { download } from "./download.mjs";
 import { ThreadPool, canHaveThreads } from "./threads.mjs";
 import { netBootOrder } from "./netboot.mjs";
+import { getSnapshot, putSnapshot, snapshotKey } from "./snapshots.mjs";
 import {
   BOOT_DEVICES, BOOT_ORDER_PRESETS, GROUPS, KNOWN_KEYS,
   conditionalSections, editedLines, formatBootOrder, imageSettings, parseBootOrder,
@@ -59,7 +60,7 @@ const DEFAULT_STATE = {
   display: false,
   board: { stepping: "c0", memoryMb: 1024, boardRev: "" },
   otpRows: "",
-  advanced: { jitter: "", faults: "", checkCoherency: false, checkAlignment: false, skipUnimpl: false, parallel: false },
+  advanced: { jitter: "", faults: "", checkCoherency: false, checkAlignment: false, skipUnimpl: false, parallel: false, snapshot: false },
   log: ["io"],
 };
 
@@ -238,6 +239,10 @@ function onWorker(data) {
     case "output":
       terminal.write(data.bytes);
       break;
+    case "snapshot":
+      putSnapshot(data.key, data.bytes).then((ok) =>
+        toast(ok ? "Snapshot kept: the next boot with these settings starts where the ARM is released." : "The snapshot did not fit in this browser's storage.", !ok));
+      break;
     case "log":
       addLog(data.text);
       break;
@@ -387,6 +392,12 @@ async function buildRequest() {
   if (files.pubkey) request.pubkey = files.pubkey;
   if (files.hat) request.hat = files.hat;
   if (s.display && files.edid) request.edid = files.edid;
+  if (s.advanced.snapshot) {
+    request.snapshotKey = await snapshotKey(request);
+    const kept = await getSnapshot(request.snapshotKey);
+    if (kept) request.snapshot = kept.bytes;
+    else options.snapshot = true;
+  }
   return request;
 }
 
@@ -1196,6 +1207,8 @@ const PANELS = {
         checkbox("Report stale cache reads (coherency log)", a.checkCoherency, (v) => (a.checkCoherency = v)),
         checkbox("Report misaligned VPU accesses (alignment log)", a.checkAlignment, (v) => (a.checkAlignment = v)),
         checkbox("Step over instructions the decoder lacks", a.skipUnimpl, (v) => (a.skipUnimpl = v), "Instead of stopping the run."),
+        checkbox("Skip the firmware's boot with a snapshot (experimental)", a.snapshot, (v) => (a.snapshot = v),
+          "The first boot with these settings keeps the machine as it is when the ARM is released, in this browser; the ones after start from there."),
         checkbox("Run the ARM cores on worker threads (experimental)", a.parallel && canHaveThreads(), (v) => (a.parallel = v),
           canHaveThreads()
             ? "Each core gets a thread of its own, so a Linux boot can use the machine's cores. A run no longer repeats exactly."
@@ -1360,6 +1373,7 @@ const CHANGE_FIELDS = [
   ["advanced.checkAlignment", "soc", "Report misaligned VPU accesses", onOff],
   ["advanced.skipUnimpl", "soc", "Step over instructions the decoder lacks", onOff],
   ["advanced.parallel", "soc", "ARM cores on worker threads", onOff],
+  ["advanced.snapshot", "soc", "Start from a snapshot at the ARM's release", onOff],
   ["log", "log", "Channels", (v) => (v.length ? v.join(", ") : "none")],
 ];
 

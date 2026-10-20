@@ -28,12 +28,14 @@ pub const LUT: usize = 1024;
 /// back — so the 1 KiB is sixteen private 64-byte regions, one per lane.
 pub const LUT_LANE: usize = LUT / LANES as usize;
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Vrf {
     /// Boxed, not inline: [`Vpu`](crate::vpu::Vpu) is stepped a billion times a
     /// boot and the hot fields around this one have to stay in a few cache
     /// lines. Inline, the 4 KiB of file costs 75% more wall clock on a whole
     /// firmware boot, measured, for a register file a handful of instructions
     /// touch.
+    #[serde(with = "crate::snap::boxed")]
     bytes: Box<[u8; DIM * DIM]>,
     /// Per-lane zero flag, one bit per lane (bit 0 = lane 0).
     pub lane_z: u16,
@@ -50,6 +52,7 @@ pub struct Vrf {
     /// was written, and a `v16` pair round-trips halfwords at twice the index.
     /// Each lane addresses its own [`LUT_LANE`] bytes of it — lanes that share
     /// an index keep their own value, so the table is banked, not shared.
+    #[serde(with = "crate::snap::boxed")]
     pub lut: Box<[u8; LUT]>,
     /// One accumulator per lane. Wider than an element — four accumulates of
     /// `0xffff` read back as `0x3fffc` — so it is kept as a `u32`; the `SIGN`

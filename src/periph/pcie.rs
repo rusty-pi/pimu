@@ -268,6 +268,7 @@ impl HostMem for Upstream<'_> {
     }
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Pcie {
     storage: BTreeMap<u32, u32>,
     sw_init: u32,

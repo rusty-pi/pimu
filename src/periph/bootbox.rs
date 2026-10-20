@@ -42,7 +42,7 @@ pub const COVERAGE: Coverage = Coverage {
     ],
 };
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct BootBox {
     storage: BTreeMap<u32, u32>,
 }

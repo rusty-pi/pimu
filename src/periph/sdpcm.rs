@@ -244,13 +244,14 @@ const CHIP_MAC: [u8; 6] = [0x02, 0x00, 0x5E, 0x00, 0x53, 0x03];
 
 const VERSION: &str = "pimu model firmware (no radio) version 0";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum MacSource {
     Otp,
     Nvram,
     Host,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Sdpcm {
     rx: VecDeque<Vec<u8>>,
     rx_pos: usize,
@@ -499,13 +500,14 @@ fn parse_header(frame: &[u8], glom: bool) -> Option<Header> {
     })
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum EventMaskSource {
     Firmware,
     EventMsgs,
     EventMsgsExt,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct Firmware {
     mac: [u8; 6],
     mac_source: MacSource,
@@ -759,6 +761,7 @@ impl Firmware {
     }
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct Event {
     code: u32,
     flags: u16,

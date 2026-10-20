@@ -54,7 +54,7 @@ pub const COVERAGE: Coverage = Coverage {
 /// Password byte the firmware ORs into every clock-manager write.
 const PASSWD: u32 = 0x5A00_0000;
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct ClockManager {
     storage: BTreeMap<u32, u32>,
     uart_disturbed: bool,

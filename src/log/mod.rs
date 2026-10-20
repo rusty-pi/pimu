@@ -273,6 +273,7 @@ struct Shared {
     sink: RefCell<Sink>,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct Event {
     text: String,
     json: String,
@@ -522,6 +523,28 @@ fn quote(s: &str) -> String {
     }
     out.push('"');
     out
+}
+
+/// A snapshot leaves where the log goes to the machine it is loaded into.
+impl serde::Serialize for Log {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_unit()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Log {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        <()>::deserialize(d)?;
+        Ok(Log::default())
+    }
+
+    fn deserialize_in_place<D: serde::Deserializer<'de>>(
+        d: D,
+        _: &mut Self,
+    ) -> Result<(), D::Error> {
+        <()>::deserialize(d)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

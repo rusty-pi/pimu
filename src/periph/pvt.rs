@@ -117,7 +117,7 @@ const READINGS: [u32; CHANNELS as usize] = [
     0x0434_07c4, // ch 17
 ];
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Pvt {
     /// Writes to the threshold pairs, and to anything else in the block.
     storage: BTreeMap<u32, u32>,

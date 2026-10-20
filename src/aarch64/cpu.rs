@@ -80,7 +80,7 @@ pub trait Memory {
 
 /// A synchronous exception, raised by the instruction at [`Cpu::pc`] (which is
 /// left pointing at it).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Exception {
     Undefined,
     Svc(u16),

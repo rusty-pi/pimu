@@ -29,7 +29,7 @@ use crate::periph::cyw43455::Cyw43455;
 use crate::periph::disk::Disk;
 
 /// What is on the bus.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum CardKind {
     #[default]
     Sd,
@@ -39,7 +39,7 @@ pub enum CardKind {
     Sdio,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CardState {
     Idle,
     Ready,
@@ -172,7 +172,7 @@ const SDIO_VENDOR: u16 = 0x02d0;
 const SDIO_DEVICE: u16 = 0xa9a6;
 
 /// The CMD53 transfer the last command set up.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 struct IoXfer {
     func: u32,
     addr: u32,
@@ -192,6 +192,7 @@ const TUNING_BLOCK_4BIT: [u8; 64] = [
     0xff, 0xfd, 0xff, 0xfd, 0xdf, 0xff, 0xbf, 0xff, 0xbb, 0xff, 0xf7, 0xff, 0xf7, 0x7f, 0x7b, 0xde,
 ];
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct SdCard {
     disk: Disk,
     kind: CardKind,

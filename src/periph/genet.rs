@@ -244,7 +244,7 @@ pub const REV_CTRL_VALUE: u32 = regs::SYS_REV_CTRL_RESET;
 /// descriptor-RAM init busy — never busy here.
 const DMA_STATUS_RINGS: u32 = 0x3_fffe;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Genet {
     /// The whole window as 32-bit words.
     regs: Vec<u32>,
@@ -281,7 +281,7 @@ pub struct MacState {
     pub promisc: bool,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Stats {
     pub tx: u64,
     pub tx_dropped: u64,

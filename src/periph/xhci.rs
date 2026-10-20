@@ -290,8 +290,9 @@ struct ControlState {
 /// `tReset`).
 pub const LINK_TRAIN_US: u64 = 100_000;
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct Port {
-    device: Option<Box<dyn UsbDevice>>,
+    device: crate::snap::Keep<Option<Box<dyn UsbDevice>>>,
     portsc: u32,
     /// USB2 ports need an explicit reset; USB3 ports train their own link.
     usb2: bool,
@@ -301,7 +302,7 @@ struct Port {
 impl Port {
     fn new(usb2: bool) -> Port {
         Port {
-            device: None,
+            device: crate::snap::Keep(None),
             portsc: PORTSC_EMPTY | if usb2 { PORTSC_DR } else { 0 },
             usb2,
             train_at: None,
@@ -349,7 +350,7 @@ impl Port {
 }
 
 /// A slot the host has enabled; its device context lives in host memory.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 struct Slot {
     enabled: bool,
     /// When `SET_ADDRESS` went to the device, until the first request after it.
@@ -357,7 +358,7 @@ struct Slot {
 }
 
 /// The event ring's producer side; the host owns the dequeue pointer.
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 struct EventRing {
     enqueue: u64,
     segment: u32,
@@ -365,8 +366,9 @@ struct EventRing {
     cycle: bool,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Xhci {
-    caps: &'static Caps,
+    caps: crate::snap::Keep<&'static Caps>,
     regs: BTreeMap<u32, u32>,
     ports: Vec<Port>,
     slots: Vec<Slot>,
@@ -409,7 +411,7 @@ impl Xhci {
     pub fn with_caps(caps: &'static Caps) -> Xhci {
         let ports = caps.usb2_ports.iter().map(|&u| Port::new(u)).collect();
         let mut hc = Xhci {
-            caps,
+            caps: crate::snap::Keep(caps),
             regs: BTreeMap::new(),
             ports,
             slots: vec![Slot::default(); caps.max_slots + 1],
@@ -431,7 +433,7 @@ impl Xhci {
     }
 
     pub fn attach(&mut self, port: usize, device: Box<dyn UsbDevice>) {
-        self.ports[port - 1].device = Some(device);
+        self.ports[port - 1].device = crate::snap::Keep(Some(device));
         self.ports[port - 1].settle(self.now_us);
         self.update_link_deadline();
     }

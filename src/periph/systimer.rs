@@ -30,6 +30,7 @@ pub const VPU_HZ_DEFAULT: u64 = 54_000_000;
 
 const CYCLES_PER_US: u64 = VPU_HZ_DEFAULT / 1_000_000;
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct SysTimer {
     micros: u64,
     frac_cycles: u64,

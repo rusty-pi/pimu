@@ -33,7 +33,7 @@ pub(crate) const DIR_ENTRY: usize = 32;
 
 /// Where a card file's bytes are, once the firmware asks for a block of it: a
 /// host file, or a URL fetched on demand ([`crate::remote`]).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Source {
     Path(PathBuf),
     Url(String),

@@ -18,6 +18,7 @@ use super::bsc::I2cSlave;
 
 pub const HAT_ADDR: u8 = 0x50;
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct HatEeprom {
     bytes: Vec<u8>,
     ptr: usize,

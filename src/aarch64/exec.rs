@@ -11,7 +11,7 @@
 use super::cpu::{Cpu, Exception, Memory, NZCV_C, NZCV_N, NZCV_Z};
 
 /// Why an instruction did not simply retire.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub(super) enum Stop {
     Wfi,
     Wfe,

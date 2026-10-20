@@ -91,7 +91,7 @@ impl Cond {
 
 /// Status register flags. N/Z/C/V carry ARM's meanings, except that the VC4
 /// sets carry to *borrow* on a subtraction — see [`Flags::test`].
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Flags {
     pub n: bool,
     pub z: bool,
@@ -143,7 +143,7 @@ impl Flags {
 }
 
 /// The scalar register file plus PC and flags.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Regs {
     r: [u32; NUM_GPR],
     /// Program counter. Not part of the GPR space; pc-relative forms use

@@ -58,6 +58,7 @@ const CHIP_ID: u8 = 107;
 /// The rate the chip's UART comes up at, before `Set_Baudrate` moves it.
 const DEFAULT_BAUD: u32 = 115_200;
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct BtModem {
     rx: Vec<u8>,
     out: Vec<u8>,

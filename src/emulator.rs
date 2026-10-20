@@ -34,6 +34,11 @@ pub struct Emulator {
     /// every step.
     pub fast_loop: bool,
     pub fast_stepped: u64,
+    /// End the run with [`RunEnd::Released`] once the ARM's release is
+    /// pending, for a snapshot (`src/snap.rs`), and, loaded from one, take
+    /// it before the first VPU step.
+    pub stop_at_release: bool,
+    pub resume_at_release: bool,
 }
 
 /// Stopping conditions for [`Emulator::run`].
@@ -102,6 +107,8 @@ pub enum RunEnd {
     /// Firmware asked the SoC to reset; the caller re-runs from a fresh machine.
     Reset,
     ArmStopped(crate::arm::ArmStop),
+    /// The ARM's release is pending and [`Emulator::stop_at_release`] is set.
+    Released,
     Until,
     Quit,
 }
@@ -165,6 +172,8 @@ impl Emulator {
             // `PIMU_SLOW_LOOP=1` puts every step through every check.
             fast_loop: !crate::diag::ON && std::env::var_os("PIMU_SLOW_LOOP").is_none(),
             fast_stepped: 0,
+            stop_at_release: false,
+            resume_at_release: false,
         }
     }
 
@@ -203,8 +212,13 @@ impl Emulator {
             self.machine.mmio_trace = false;
         }
         let mut st = RunState::new(self, limits, diag, start);
+        let resumed = if std::mem::take(&mut self.resume_at_release) {
+            self.step_arm()
+        } else {
+            None
+        };
 
-        let end = loop {
+        let end = resumed.unwrap_or_else(|| loop {
             if let Some(end) = self.slow_step(&mut st, limits) {
                 break end;
             }
@@ -213,7 +227,7 @@ impl Emulator {
                     break end;
                 }
             }
-        };
+        });
 
         if let Some(arm) = self.arm.as_mut() {
             arm.pause(&mut self.machine);
@@ -922,6 +936,13 @@ impl Emulator {
     /// The ARM: out of reset when `arm_loader` writes the ARM control block.
     #[inline]
     fn step_arm(&mut self) -> Option<RunEnd> {
+        if self.stop_at_release
+            && self.arm_enabled
+            && self.arm.is_none()
+            && self.machine.armctrl.release_pending()
+        {
+            return Some(RunEnd::Released);
+        }
         if self.arm_enabled && self.arm.is_none() && self.machine.armctrl.take_release() {
             let mut arm = crate::arm::ArmSide::released(&mut self.machine);
             arm.set_parallel(self.parallel_arm);

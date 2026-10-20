@@ -83,7 +83,7 @@ const NAK_STATUS: u32 = DCTL_GNPINNAKSTS_MASK | DCTL_GOUTNAKSTS_MASK;
 const NAK_SET_CLEAR: u32 =
     DCTL_SGNPINNAK_MASK | DCTL_CGNPINNAK_MASK | DCTL_SGOUTNAK_MASK | DCTL_CGOUTNAK_MASK;
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Dwc2 {
     storage: BTreeMap<u32, u32>,
     pub log: Log,

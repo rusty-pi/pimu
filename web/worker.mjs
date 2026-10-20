@@ -13,6 +13,7 @@ const STATE_EVERY_MS = 400;
 const XZ_MAGIC = [0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00];
 
 let pi = null;
+let snapshotKey = null;
 let paused = false;
 let stats = {};
 let lastState = 0;
@@ -188,6 +189,11 @@ async function powerOn(request) {
   for (const [slot, descriptor] of Object.entries(request.images)) {
     builder.attach_image(slot, counted(slot, imageOf(descriptor)));
   }
+  if (request.snapshot) {
+    builder.set_snapshot(new Uint8Array(request.snapshot));
+    post({ type: "notice", text: "Starting from the snapshot taken where the ARM is released." });
+  }
+  snapshotKey = request.snapshotKey ?? null;
   pi = builder.build();
   post({ type: "phase", phase: "running" });
   run();
@@ -205,6 +211,8 @@ function step() {
   if (!pi || paused) return;
   const output = pi.run(SLICE_MS);
   if (output.length) post({ type: "output", bytes: output }, [output.buffer]);
+  const snapshot = pi.take_snapshot();
+  if (snapshot && snapshotKey) post({ type: "snapshot", key: snapshotKey, bytes: snapshot }, [snapshot.buffer]);
   const log = pi.take_log();
   if (log) post({ type: "log", text: log });
   const now = performance.now();

@@ -24,13 +24,15 @@ pub const BLOCK_SIZE: usize = 512;
 /// boot uses the rest: the rpi-mkosi initrd's `systemd-repart` creates the
 /// encrypted root partition there. So the disk can be bigger than its image
 /// (`boot --usb-mb`), reading as zeros past it.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Disk {
-    backing: Backing,
+    backing: crate::snap::Keep<Backing>,
     blocks: u64,
+    #[serde(with = "crate::snap::blocks")]
     written: HashMap<u64, Box<[u8; BLOCK_SIZE]>>,
     /// Where its transfers go (the `io` channel), and the name this disk goes
     /// by there.
-    io: Option<(Log, &'static str)>,
+    io: crate::snap::Keep<Option<(Log, &'static str)>>,
 }
 
 enum Backing {
@@ -206,10 +208,10 @@ impl Disk {
     pub fn from_vec(image: Vec<u8>) -> Disk {
         let blocks = (image.len() / BLOCK_SIZE) as u64;
         Disk {
-            backing: Backing::Mem(image),
+            backing: crate::snap::Keep(Backing::Mem(image)),
             blocks,
             written: HashMap::new(),
-            io: None,
+            io: crate::snap::Keep(None),
         }
     }
 
@@ -219,12 +221,12 @@ impl Disk {
             let mut b = [0u8; BLOCK_SIZE];
             self.peek_block(lba, &mut b).then_some(b)
         });
-        self.io = Some((log, name));
+        self.io = crate::snap::Keep(Some((log, name)));
         self
     }
 
     fn log(&self, op: &'static str, lba: u64, count: u64) {
-        if let Some((log, name)) = &self.io {
+        if let Some((log, name)) = &*self.io {
             log.blocks(name, op, lba, count);
         }
     }
@@ -248,13 +250,13 @@ impl Disk {
             });
         }
         Ok(Disk {
-            backing: Backing::Dir {
+            backing: crate::snap::Keep(Backing::Dir {
                 meta: card.meta,
                 files,
-            },
+            }),
             blocks: card.blocks,
             written: HashMap::new(),
-            io: None,
+            io: crate::snap::Keep(None),
         })
     }
 
@@ -267,14 +269,14 @@ impl Disk {
             return Ok(disk);
         }
         Ok(Disk {
-            backing: Backing::Remote {
+            backing: crate::snap::Keep(Backing::Remote {
                 url,
                 len,
                 chunks: RefCell::new(HashMap::new()),
-            },
+            }),
             blocks: len.max(min_bytes) / BLOCK_SIZE as u64,
             written: HashMap::new(),
-            io: None,
+            io: crate::snap::Keep(None),
         })
     }
 
@@ -282,14 +284,14 @@ impl Disk {
     pub fn from_source(source: Box<dyn ByteSource>, min_bytes: u64) -> Disk {
         let len = source.size();
         Disk {
-            backing: Backing::Source {
+            backing: crate::snap::Keep(Backing::Source {
                 source,
                 len,
                 chunks: RefCell::new(HashMap::new()),
-            },
+            }),
             blocks: len.max(min_bytes) / BLOCK_SIZE as u64,
             written: HashMap::new(),
-            io: None,
+            io: crate::snap::Keep(None),
         }
     }
 
@@ -311,14 +313,14 @@ impl Disk {
         }
         let out_len = index.out_len;
         Ok(Some(Disk {
-            backing: Backing::Xz {
+            backing: crate::snap::Keep(Backing::Xz {
                 source,
                 index,
                 blocks: RefCell::new(HashMap::new()),
-            },
+            }),
             blocks: out_len.max(min_bytes) / BLOCK_SIZE as u64,
             written: HashMap::new(),
-            io: None,
+            io: crate::snap::Keep(None),
         }))
     }
 
@@ -342,10 +344,10 @@ impl Disk {
         }
         let file = File::open(path)?;
         Ok(Disk {
-            backing: Backing::File { file, len },
+            backing: crate::snap::Keep(Backing::File { file, len }),
             blocks: len.max(min_bytes) / BLOCK_SIZE as u64,
             written: HashMap::new(),
-            io: None,
+            io: crate::snap::Keep(None),
         })
     }
 
@@ -382,7 +384,7 @@ impl Disk {
             return true;
         }
         let at = lba * BLOCK_SIZE as u64;
-        match &self.backing {
+        match &*self.backing {
             Backing::Mem(image) => {
                 if let Some(src) = image.get(at as usize..at as usize + BLOCK_SIZE) {
                     out.copy_from_slice(src);

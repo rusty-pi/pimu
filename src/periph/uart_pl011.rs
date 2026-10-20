@@ -39,6 +39,7 @@ const FIFO_DEPTH: usize = 32;
 /// `clk-bcm2835` reports for the UART clock the kernel divides.
 const UARTCLK_HZ: u64 = 48_000_000;
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Pl011 {
     pub out: Vec<u8>,
     ibrd: u32,

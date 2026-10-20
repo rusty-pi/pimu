@@ -1951,6 +1951,7 @@ impl Straight {
             let mut unlinked: Option<*const RunOp> = None;
             'runs: loop {
                 // The whole run when it was looked up rather than chained to.
+                #[cfg(feature = "jit")]
                 let mut whole: Option<(*const RunOp, usize)> = None;
                 let first = match chained.take() {
                     Some(run) => run,
@@ -1972,7 +1973,10 @@ impl Straight {
                             break 'page StraightEnd::Slow;
                         };
                         let first: *const RunOp = first;
-                        whole = Some((first, ops.len()));
+                        #[cfg(feature = "jit")]
+                        {
+                            whole = Some((first, ops.len()));
+                        }
                         if let Some(branch) = unlinked.take() {
                             if runs.epoch == runs_epoch {
                                 // `get` has checked the run against the page.

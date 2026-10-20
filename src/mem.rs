@@ -297,6 +297,7 @@ fn bump<M: Map>(map: M, off: u64, len: usize) {
 
 /// What [`Ram`] holds, and what [`Ram::take_contents`] hands over to the RAM
 /// of the next boot.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Contents<S: Store = DefaultStore> {
     store: S,
     len: u64,
@@ -455,14 +456,16 @@ impl<M: Map> SharedRam<M> {
     }
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(bound = "")]
 pub struct Ram<S: Store = DefaultStore> {
     base: u32,
     /// Every writer goes through [`Ram::store`], [`Ram::store_at`] or
     /// [`Ram::write_slice`], so none can get past the write generations that
     /// let the VPU cache decoded instructions.
-    contents: Contents<S>,
+    contents: crate::snap::Keep<Contents<S>>,
     /// Cache-coherency tracking (`--check-coherency`); off unless asked for.
-    pub coherency: crate::coherency::Coherency,
+    pub coherency: crate::snap::Keep<crate::coherency::Coherency>,
 }
 
 impl Ram {
@@ -475,11 +478,11 @@ impl<S: Store> Ram<S> {
     pub fn new_in(base: u32, size: u64) -> Ram<S> {
         Ram {
             base,
-            contents: Contents {
+            contents: crate::snap::Keep(Contents {
                 store: S::new(size),
                 len: size,
-            },
-            coherency: crate::coherency::Coherency::off(),
+            }),
+            coherency: crate::snap::Keep(crate::coherency::Coherency::off()),
         }
     }
 
@@ -504,7 +507,7 @@ impl<S: Store> Ram<S> {
             contents.len, self.contents.len,
             "the DRAM keeps its size across a reset"
         );
-        self.contents = contents;
+        self.contents = crate::snap::Keep(contents);
     }
 
     #[inline]

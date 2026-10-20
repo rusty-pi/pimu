@@ -53,8 +53,9 @@ pub trait I2cSlave {
     fn read_byte(&mut self) -> u8;
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Bsc {
-    name: &'static str,
+    name: crate::snap::Keep<&'static str>,
     c: u32,
     dlen: u32,
     addr: u32,
@@ -109,7 +110,7 @@ impl Bsc {
     /// `0x7E20_5E00` one).
     pub fn new(name: &'static str) -> Bsc {
         Bsc {
-            name,
+            name: crate::snap::Keep(name),
             c: 0,
             dlen: 0,
             addr: 0,
@@ -390,7 +391,7 @@ impl Bsc {
 
 impl MmioDevice for Bsc {
     fn name(&self) -> &'static str {
-        self.name
+        &self.name
     }
 
     fn read(&mut self, offset: u32, _width: Width) -> BusResult<u32> {

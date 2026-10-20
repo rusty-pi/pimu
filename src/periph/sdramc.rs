@@ -51,7 +51,7 @@ pub const COVERAGE: Coverage = Coverage {
 
 const PHY_CMD_REPORT_SIGNATURE: u32 = 0x101;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SdramcAccess {
     pub offset: u32,
     pub width: Width,
@@ -59,6 +59,7 @@ pub struct SdramcAccess {
     pub write: bool,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Sdramc {
     storage: BTreeMap<u32, u32>,
     /// Whether the most recent controller `CMD` has "completed": always true

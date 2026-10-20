@@ -26,7 +26,7 @@ pub(super) struct Read {
 
 /// The state a pass may change: the general registers, the stack pointers
 /// and the flags.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub(super) struct Regs {
     pub(super) x: [u64; 31],
     pub(super) sp: [u64; 4],

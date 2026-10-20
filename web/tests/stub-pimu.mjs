@@ -35,6 +35,7 @@ export class PiBuilder {
     const tail = Array.from(image.read(image.size - 4, 4));
     record("attach_image", slot, image.size, head, tail);
   }
+  set_snapshot(bytes) { record("set_snapshot", bytes.length); }
   build() {
     return new Pi(this.options.ticks ?? 3, this.options.panicAt);
   }
@@ -56,6 +57,9 @@ class Pi {
   }
   take_log() {
     return this.n === 1 ? '{"us":1,"channel":"io","msg":"hello"}\n' : "";
+  }
+  take_snapshot() {
+    return undefined;
   }
   status() {
     const ended = this.n >= this.ticks;

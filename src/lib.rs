@@ -39,6 +39,7 @@ pub mod periph;
 pub mod remote;
 pub mod sched;
 pub mod sheet;
+pub mod snap;
 pub mod soc;
 pub mod spec;
 pub mod stdio;
