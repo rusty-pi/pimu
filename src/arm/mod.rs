@@ -2080,6 +2080,7 @@ impl Straight {
                                 gen,
                                 marked: u64::from(self.marked),
                                 genp,
+                                chain_until: 0,
                             };
                             jit.go(from, ops, runs.epoch, cpu, bus, &ctx, pc, c)
                         }
@@ -2364,12 +2365,13 @@ impl crate::aarch64::predecode::RunBus for ArmBus<'_> {
 
     #[cfg(feature = "jit")]
     #[inline(always)]
-    fn settle(&mut self, gen: u64, marked: bool) -> bool {
+    fn settle(&mut self, gen: u64, genp: *const u64, marked: bool) -> bool {
         if self.io {
             return false;
         }
         if self.written.is_some() {
-            if marked || unsafe { *self.genp } != gen {
+            // The run's page's, which the compiled code was handed.
+            if marked || unsafe { *genp } != gen {
                 return false;
             }
             self.written = None;

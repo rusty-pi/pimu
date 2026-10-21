@@ -150,6 +150,9 @@ impl Default for PerCore {
 /// What the machine's thread and the cores' threads share.
 struct Shared {
     ram: SharedRam,
+    /// The runs compiled for every core.
+    #[cfg(feature = "jit")]
+    jit: Option<crate::aarch64::jit::Shared>,
     ram_len: u64,
     quit: AtomicBool,
     /// The machine is gone: stop waiting for it.
@@ -228,6 +231,8 @@ impl ParHost {
             stop: Mutex::new(None),
             threads: Default::default(),
             main: std::thread::current(),
+            #[cfg(feature = "jit")]
+            jit: crate::aarch64::jit::Shared::new::<ParBus<'static>>(),
         });
         let mut host = ParHost {
             sh: sh.clone(),
@@ -890,15 +895,32 @@ impl<'a> Worker<'a> {
             let mut step = None;
             let n_before = n;
             if !cpu.irq_line && !cpu.fiq_line && entered.is_some() && !cpu.stage2_on() {
-                if let Some((va_page, el, pa_page)) = cpu.tlb.fetch_hint() {
-                    let code = (el == cpu.el && va_page == pc & !0xFFF && pc & 3 == 0)
-                        .then(|| sh.ram.code_page(pa_page))
-                        .flatten();
-                    if let Some((code, genp)) = code {
+                let (el, va_page) = (cpu.el, pc & !0xFFF);
+                let page = cpu
+                    .tlb
+                    .code_page(pc, el)
+                    .map(|(pa, code, gen)| (pa, code as *const u32, gen as *const u64))
+                    .or_else(|| {
+                        let (hint, hint_el, pa) = cpu.tlb.fetch_hint()?;
+                        (hint_el == el && hint == va_page).then_some(())?;
+                        let (code, gen) = sh.ram.code_page(pa)?;
+                        cpu.tlb
+                            .remember_code(pc, el, pa, code as usize, gen as usize);
+                        Some((pa, code, gen))
+                    });
+                if pc & 3 == 0 {
+                    if let Some((pa_page, code, genp)) = page {
                         let effects = cpu.shared_effects;
                         let (runs, decoded) = (&mut *self.runs, &mut *self.decoded);
+                        // Odd while runs are decoded from the page, so that a
+                        // store into it moves it on (`SharedRam::code_page`).
                         let gen_of = || {
-                            unsafe { AtomicU64::from_ptr(genp as *mut u64) }.load(Ordering::Relaxed)
+                            let g = unsafe { AtomicU64::from_ptr(genp as *mut u64) };
+                            let v = g.load(Ordering::Relaxed);
+                            if v & 1 == 0 {
+                                g.store(v + 1, Ordering::Release);
+                            }
+                            v | 1
                         };
                         // A linked run fits before the limit from this far before it.
                         let chain_end = limit.saturating_sub(super::runs::MAX_LEN);
@@ -910,25 +932,69 @@ impl<'a> Worker<'a> {
                             if cycles >= limit || n >= next_poll || pc & !0xFFF != va_page {
                                 break;
                             }
-                            let runs_epoch = runs.epoch;
-                            let ops = runs.get(pa_page | (pc & 0xFFF), code, genp, decoded);
-                            let (len, first) = (ops.len() as u64, ops.as_ptr());
-                            if len == 0 || cycles + len > limit {
-                                break;
-                            }
-                            // Stays put while `runs.epoch` does.
-                            let first = unsafe { &*first };
-                            if let Some(branch) = unlinked.take() {
-                                if runs.epoch == runs_epoch {
-                                    // `get` has checked the run against the page.
-                                    unsafe { (*branch).link(first, gen_of()) };
-                                }
-                            }
+                            let pa = pa_page | (pc & 0xFFF);
                             bus.expect = None;
                             bus.chain_until = chain_end
                                 .min(cycles + super::runs::MAX_LEN)
                                 .min(cycles + (next_poll - n));
-                            let (at, c) = first.go(cpu, &mut bus, pc, cycles);
+                            #[cfg(feature = "jit")]
+                            let compiled = sh
+                                .jit
+                                .as_ref()
+                                .and_then(|jit| Some((jit, jit.find(pa, gen_of())?)));
+                            #[cfg(not(feature = "jit"))]
+                            let compiled: Option<&()> = None;
+                            let (at, c) = match compiled {
+                                #[cfg(feature = "jit")]
+                                Some((jit, t)) => {
+                                    if cycles + t.len > limit {
+                                        break;
+                                    }
+                                    unlinked = None;
+                                    let mut ctx = crate::aarch64::jit::Ctx {
+                                        gen: gen_of(),
+                                        marked: 0,
+                                        genp,
+                                        // Not cut at the next poll, as an
+                                        // interpreted link is: the poll just
+                                        // comes after.
+                                        chain_until: chain_end.min(cycles + super::runs::MAX_LEN),
+                                    };
+                                    t.go(jit.enter(), cpu, &mut bus, &mut ctx, pc, cycles)
+                                }
+                                #[cfg(not(feature = "jit"))]
+                                Some(_) => unreachable!(),
+                                None => {
+                                    let runs_epoch = runs.epoch;
+                                    let ops = runs.get(pa, code, genp, decoded);
+                                    #[cfg(feature = "jit")]
+                                    if let Some(jit) = &sh.jit {
+                                        jit.entered(ops, pa, gen_of());
+                                    }
+                                    let (len, first) = (ops.len() as u64, ops.as_ptr());
+                                    if len == 0 || cycles + len > limit {
+                                        break;
+                                    }
+                                    // Stays put while `runs.epoch` does.
+                                    let first = unsafe { &*first };
+                                    if let Some(branch) = unlinked.take() {
+                                        if runs.epoch == runs_epoch {
+                                            // `get` has checked the run against the page.
+                                            unsafe { (*branch).link(first, gen_of()) };
+                                        }
+                                    }
+                                    let (at, c) = first.go(cpu, &mut bus, pc, cycles);
+                                    if bus.ran
+                                        && !cpu.faulted()
+                                        && unsafe { &*bus.stopped }.op.plain_branch()
+                                        && bus.next != at.wrapping_add(4)
+                                        && bus.next & !0xFFF == va_page
+                                    {
+                                        unlinked = Some(bus.stopped);
+                                    }
+                                    (at, c)
+                                }
+                            };
                             let op: &RunOp = unsafe { &*bus.stopped };
                             *insns += c - cycles;
                             n += c - cycles;
@@ -947,12 +1013,6 @@ impl<'a> Worker<'a> {
                                 cpu.stopped_at(pc, bus.next, &op.op)
                             } else {
                                 cpu.pc = bus.next;
-                                if op.op.plain_branch()
-                                    && bus.next != pc.wrapping_add(4)
-                                    && bus.next & !0xFFF == va_page
-                                {
-                                    unlinked = Some(op);
-                                }
                                 Step::Retired
                             };
                             if !matches!(s, Step::Retired)
@@ -1130,9 +1190,14 @@ impl RunBus for ParBus<'_> {
             && unsafe { AtomicU64::from_ptr(self.genp as *mut u64) }.load(Ordering::Relaxed) == gen
     }
 
+    /// A store-exclusive is never compiled inline, so `marked` has nothing
+    /// to say here: the compare-exchange is the bus's.
     #[cfg(feature = "jit")]
-    fn settle(&mut self, _: u64, _: bool) -> bool {
-        false
+    #[inline(always)]
+    fn settle(&mut self, gen: u64, genp: *const u64, _: bool) -> bool {
+        // The page's generation, from `SharedRam::code_page`.
+        self.plain()
+            && unsafe { AtomicU64::from_ptr(genp as *mut u64) }.load(Ordering::Relaxed) == gen
     }
 }
 

@@ -94,7 +94,7 @@ pub struct Tlb {
     pub epoch: u64,
 }
 
-const CODE_PAGES: usize = 64;
+const CODE_PAGES: usize = 256;
 const NO_CODE: (u64, u64, usize, usize) = (u64::MAX, 0, 0, 0);
 
 /// `key` as in [`Tlb::data`]; `bytes` and `gen` from [`Memory::host_page`].
@@ -141,6 +141,27 @@ pub(super) struct HostLayout {
     pub read: usize,
     pub write: usize,
 }
+
+/// Where [`Tlb::code_page`]'s entries are, for compiled code to look in.
+#[cfg(feature = "jit")]
+pub(super) struct CodeLayout {
+    pub code: usize,
+    pub size: usize,
+    pub pages: usize,
+    pub tag: usize,
+    pub pa: usize,
+    pub gen: usize,
+}
+
+#[cfg(feature = "jit")]
+pub(super) const CODE_LAYOUT: CodeLayout = CodeLayout {
+    code: std::mem::offset_of!(Tlb, code),
+    size: std::mem::size_of::<(u64, u64, usize, usize)>(),
+    pages: CODE_PAGES,
+    tag: std::mem::offset_of!((u64, u64, usize, usize), 0),
+    pa: std::mem::offset_of!((u64, u64, usize, usize), 1),
+    gen: std::mem::offset_of!((u64, u64, usize, usize), 3),
+};
 
 #[cfg(feature = "jit")]
 pub(super) const HOST_LAYOUT: HostLayout = HostLayout {

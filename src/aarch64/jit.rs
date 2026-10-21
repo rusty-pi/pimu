@@ -14,7 +14,7 @@
 
 use std::mem::offset_of;
 
-use cranelift_codegen::ir::condcodes::IntCC;
+use cranelift_codegen::ir::condcodes::{CondCode, IntCC};
 use cranelift_codegen::ir::{
     types, AbiParam, InstBuilder, MemFlagsData, SigRef, Signature, Type, Value,
 };
@@ -43,11 +43,18 @@ pub struct Ctx {
     /// The run's page's write generation: a store into that page stops the
     /// run.
     pub genp: *const u64,
+    /// The cycle a branch may go on into the next translation before
+    /// ([`Shared`]); 0 for none.
+    pub chain_until: u64,
 }
 
 /// `(cpu, bus, ctx, pc, cycles, out)`; `out` gets the PC and the cycle of
 /// the instruction the run stopped at, as [`RunOp::go`] returns them.
 type Code = unsafe extern "C" fn(*mut Cpu, *mut u8, *const Ctx, u64, u64, *mut u64);
+
+/// [`Code`]'s arguments and then the code, which takes them by the
+/// tail-call convention.
+type Enter = unsafe extern "C" fn(*mut Cpu, *mut u8, *const Ctx, u64, u64, *mut u64, usize);
 
 const NEVER: usize = 1;
 const PENDING: usize = 2;
@@ -58,6 +65,8 @@ struct Request {
     epoch: u64,
     first: usize,
     ops: Vec<(Op, usize)>,
+    /// For [`Shared`]: the run's exits go through [`Compiler::stub`].
+    chain: bool,
 }
 
 /// A run compiled: the code, or 0 when it could not be.
@@ -211,6 +220,7 @@ impl Jit {
                 .iter()
                 .map(|o| (o.op, o as *const RunOp as usize))
                 .collect(),
+            chain: false,
         };
         if let Some(c) = &mut self.here {
             let done = c.compile(&r);
@@ -251,6 +261,258 @@ impl Jit {
     }
 }
 
+/// Straight runs compiled once for every core, keyed by the physical address
+/// of their first instruction: the cores on threads share them, so a run hot
+/// on four cores is compiled once. The code takes the PC as an argument, so
+/// one translation serves every address the page is mapped at.
+///
+/// A translation holds its own copy of the run's instructions, which the code
+/// and the stops it reports refer to, and the write generation of its page
+/// when it was decoded: a store into the page moves the generation, and the
+/// translation is not used again. A translation is never freed while the
+/// table lives, since a core may be inside it: one replaced is let go.
+pub struct Shared {
+    table: std::sync::Arc<Table>,
+    to: Sender<Wanted>,
+    hot: u32,
+}
+
+struct Table {
+    slots: Box<[std::sync::atomic::AtomicPtr<Translation>]>,
+    /// What [`Translation::go`] enters a translation through: it calls the
+    /// code by the tail-call convention, which the translations chain by.
+    enter: std::sync::atomic::AtomicUsize,
+    runs: std::sync::atomic::AtomicU64,
+    compile_ns: std::sync::atomic::AtomicU64,
+}
+
+const SHARED_SLOTS: usize = 1 << 18;
+
+/// One run's code, for bus `M` of [`Shared::new`].
+#[repr(C)]
+pub struct Translation {
+    pa: u64,
+    gen: u64,
+    code: usize,
+    /// The instructions the code refers to.
+    _ops: Box<[RunOp]>,
+    pub len: u64,
+}
+
+// Nothing writes a translation's instructions once it is in the table.
+unsafe impl Sync for Translation {}
+unsafe impl Send for Translation {}
+
+struct Wanted {
+    pa: u64,
+    gen: u64,
+    ops: Vec<Op>,
+}
+
+fn shared_slot(pa: u64) -> usize {
+    ((pa >> 2) ^ (pa >> 20)) as usize & (SHARED_SLOTS - 1)
+}
+
+impl Shared {
+    /// `None` where the host has no Cranelift backend, or `PIMU_NO_JIT` is set.
+    pub fn new<M: RunBus + 'static>() -> Option<Shared> {
+        if std::env::var_os("PIMU_NO_JIT").is_some() {
+            return None;
+        }
+        let hot = std::env::var("PIMU_JIT_HOT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(SHARED_HOT);
+        let table = std::sync::Arc::new(Table {
+            slots: (0..SHARED_SLOTS)
+                .map(|_| std::sync::atomic::AtomicPtr::new(std::ptr::null_mut()))
+                .collect(),
+            enter: Default::default(),
+            runs: Default::default(),
+            compile_ns: Default::default(),
+        });
+        let (to, wanted) = channel::<Wanted>();
+        let wanted = std::sync::Arc::new(std::sync::Mutex::new(wanted));
+        let (ready, started) = channel::<bool>();
+        let threads = std::env::var("PIMU_JIT_THREADS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(SHARED_THREADS);
+        for _ in 0..threads {
+            let (t, wanted, ready) = (table.clone(), wanted.clone(), ready.clone());
+            std::thread::Builder::new()
+                .name("pimu-jit".into())
+                .spawn(move || {
+                    let slots = t.slots.as_ptr() as usize;
+                    let enter = Compiler::new::<M>().and_then(|mut c| {
+                        c.stub = c.stub(slots)?;
+                        Some((c.trampoline()?, c))
+                    });
+                    let Some((enter, mut compiler)) = enter else {
+                        let _ = ready.send(false);
+                        return;
+                    };
+                    let _ = t.enter.compare_exchange(
+                        0,
+                        enter,
+                        std::sync::atomic::Ordering::AcqRel,
+                        std::sync::atomic::Ordering::Acquire,
+                    );
+                    let _ = ready.send(true);
+                    loop {
+                        let w = wanted.lock().ok().and_then(|w| w.recv().ok());
+                        let Some(w) = w else {
+                            break;
+                        };
+                        t.compile::<M>(&mut compiler, w);
+                    }
+                    // The cores that ran this code are gone with the channel.
+                    unsafe { compiler.module.free_memory() };
+                })
+                .ok()?;
+        }
+        for _ in 0..threads {
+            if !started.recv().unwrap_or(false) {
+                return None;
+            }
+        }
+        Some(Shared { table, to, hot })
+    }
+
+    /// What [`Translation::go`] needs of the table.
+    #[inline(always)]
+    pub fn enter(&self) -> usize {
+        self.table.enter.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// The translation of the run at `pa`, decoded at its page's current
+    /// generation `gen`.
+    #[inline(always)]
+    pub fn find(&self, pa: u64, gen: u64) -> Option<&Translation> {
+        let t = self.table.slots[shared_slot(pa)].load(std::sync::atomic::Ordering::Acquire);
+        // A translation in the table is never freed while the table lives.
+        let t = unsafe { t.as_ref() }?;
+        (t.pa == pa && t.gen == gen).then_some(t)
+    }
+
+    /// The run `ops`, at `pa`, was entered by the interpreter: ask for it
+    /// to be compiled once it has been often enough.
+    #[inline(always)]
+    pub fn entered(&self, ops: &[RunOp], pa: u64, gen: u64) {
+        let Some(first) = ops.first() else {
+            return;
+        };
+        let hits = first.hits.get();
+        if hits >= self.hot {
+            return;
+        }
+        first.hits.set(hits + 1);
+        if hits + 1 == self.hot {
+            self.want(ops, pa, gen);
+        }
+    }
+
+    #[inline(never)]
+    fn want(&self, ops: &[RunOp], pa: u64, gen: u64) {
+        let ops = ops.iter().map(|o| o.op).collect();
+        let _ = self.to.send(Wanted { pa, gen, ops });
+    }
+
+    /// Runs compiled, and the host time they took.
+    pub fn compiled(&self) -> (u64, u64) {
+        use std::sync::atomic::Ordering::Relaxed;
+        (
+            self.table.runs.load(Relaxed),
+            self.table.compile_ns.load(Relaxed),
+        )
+    }
+}
+
+impl Translation {
+    /// Run it at `pc`, `c` cycles in: what [`RunOp::go`] would return, with
+    /// the stop told to `bus`, which is the `M` it was compiled for.
+    /// `enter` is the table's ([`Shared::enter`]); from here the code may
+    /// go on into other translations while `ctx.chain_until` lets it.
+    #[inline(always)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn go<M: RunBus>(
+        &self,
+        enter: usize,
+        cpu: &mut Cpu,
+        bus: &mut M,
+        ctx: &mut Ctx,
+        pc: u64,
+        c: u64,
+    ) -> (u64, u64) {
+        let mut out = [0u64; 2];
+        // Compiled for bus `M`, from instructions that stay put with it,
+        // and entered through the table's trampoline.
+        unsafe {
+            let enter: Enter = std::mem::transmute(enter);
+            enter(
+                cpu,
+                bus as *mut M as *mut u8,
+                ctx,
+                pc,
+                c,
+                out.as_mut_ptr(),
+                self.code,
+            );
+        }
+        (out[0], out[1])
+    }
+}
+
+impl Table {
+    fn compile<M: RunBus>(&self, compiler: &mut Compiler, w: Wanted) {
+        use std::sync::atomic::Ordering;
+        let slot = &self.slots[shared_slot(w.pa)];
+        if let Some(t) = unsafe { slot.load(Ordering::Acquire).as_ref() } {
+            if t.pa == w.pa && t.gen == w.gen {
+                return;
+            }
+        }
+        let n = w.ops.len();
+        let ops: Box<[RunOp]> = w
+            .ops
+            .iter()
+            .enumerate()
+            .map(|(i, &op)| RunOp::new::<M>(op, i + 1 == n))
+            .collect();
+        let r = Request {
+            epoch: 0,
+            first: ops.as_ptr() as usize,
+            ops: ops
+                .iter()
+                .map(|o| (o.op, o as *const RunOp as usize))
+                .collect(),
+            chain: true,
+        };
+        let done = compiler.compile(&r);
+        self.compile_ns.fetch_add(done.ns, Ordering::Relaxed);
+        if done.code == 0 {
+            return;
+        }
+        self.runs.fetch_add(1, Ordering::Relaxed);
+        let t = Box::into_raw(Box::new(Translation {
+            pa: w.pa,
+            gen: w.gen,
+            code: done.code,
+            len: n as u64,
+            _ops: ops,
+        }));
+        // The one it replaces may still be running on a core: let it go.
+        slot.store(t, Ordering::Release);
+    }
+}
+
+/// Threads compiling for [`Shared`]; `PIMU_JIT_THREADS` overrides it.
+const SHARED_THREADS: usize = 3;
+
+/// Entries on one core before a run is compiled for the cores on threads;
+/// `PIMU_JIT_HOT` overrides it.
+const SHARED_HOT: u32 = 256;
+
 /// Cranelift and what it compiles into, on the thread that compiles.
 struct Compiler {
     module: JITModule,
@@ -260,6 +522,8 @@ struct Compiler {
     fctx: FunctionBuilderContext,
     epoch: u64,
     helpers: Helpers,
+    /// The chain stub of [`Self::stub`], once made.
+    stub: usize,
 }
 
 impl Compiler {
@@ -277,6 +541,7 @@ impl Compiler {
             fctx: FunctionBuilderContext::new(),
             epoch: 0,
             helpers: Helpers::of::<M>(),
+            stub: 0,
         })
     }
 
@@ -305,15 +570,21 @@ impl Compiler {
         let ptr = self.module.target_config().pointer_type();
         let call_conv = self.module.target_config().default_call_conv;
         let mut ctx = self.module.make_context();
-        ctx.func.signature = signature(
-            call_conv,
-            &[ptr, ptr, ptr, types::I64, types::I64, ptr],
-            None,
-        );
+        let own = if r.chain { CallConv::Tail } else { call_conv };
+        ctx.func.signature = signature(own, &[ptr, ptr, ptr, types::I64, types::I64, ptr], None);
         let config = self.module.target_config();
         let (inline, called) = {
             let b = FunctionBuilder::new(&mut ctx.func, &mut self.fctx);
             let mut l = Lower::new(b, ptr, call_conv, &self.helpers);
+            if r.chain {
+                let i = types::I64;
+                let sig = l.b.import_signature(signature(
+                    CallConv::Tail,
+                    &[ptr, ptr, ptr, i, i, ptr, ptr, i, i],
+                    None,
+                ));
+                l.chain = Some((self.stub as i64, sig));
+            }
             l.run(&r.ops);
             let counts = (l.inline, l.called);
             l.b.finalize(config);
@@ -323,8 +594,24 @@ impl Compiler {
             .module
             .declare_anonymous_function(&ctx.func.signature)
             .ok()?;
+        let dump = dump_wanted();
+        ctx.set_disasm(dump);
         self.module.define_function(id, &mut ctx).ok()?;
         let size = ctx.compiled_code().map_or(0, |c| c.code_info().total_size);
+        if dump {
+            let ops: Vec<_> = r
+                .ops
+                .iter()
+                .map(|(o, _)| format!("{:08x}", o.insn))
+                .collect();
+            if let Some(vcode) = ctx.compiled_code().and_then(|c| c.vcode.as_ref()) {
+                eprintln!(
+                    "PIMU_JIT_DUMP {} insns [{}], {size} bytes:\n{vcode}",
+                    ops.len(),
+                    ops.join(" ")
+                );
+            }
+        }
         self.module.clear_context(&mut ctx);
         self.module.finalize_definitions().ok()?;
         let code = self.module.get_finalized_function(id) as usize;
@@ -334,6 +621,173 @@ impl Compiler {
         }
         Some((code, inline, called))
     }
+}
+
+impl Compiler {
+    /// The chain stub every exit of a [`Shared`] translation tail-calls:
+    /// `(cpu, bus, ctx, target, c, out, o, pc, c0)`, after the branch `o` at
+    /// `pc`, `c0` cycles in, which took the core to `target` for cycle `c`.
+    /// While [`Ctx::chain_until`] lets it, it looks the target up in the
+    /// core's code pages ([`Tlb::code_page`](super::mmu::Tlb)) and in the
+    /// table at `slots`, and goes on into the translation there if its
+    /// page is as it was; else it tells the bus the run stopped at `o`.
+    fn stub(&mut self, slots: usize) -> Option<usize> {
+        let ptr = self.module.target_config().pointer_type();
+        let call_conv = self.module.target_config().default_call_conv;
+        let i = types::I64;
+        let mut ctx = self.module.make_context();
+        ctx.func.signature =
+            signature(CallConv::Tail, &[ptr, ptr, ptr, i, i, ptr, ptr, i, i], None);
+        let config = self.module.target_config();
+        let take = self.helpers.take;
+        {
+            let mut b = FunctionBuilder::new(&mut ctx.func, &mut self.fctx);
+            let entry = b.create_block();
+            b.append_block_params_for_function_params(entry);
+            b.switch_to_block(entry);
+            b.seal_block(entry);
+            let p = b.block_params(entry).to_vec();
+            let (cpu, bus, cx, target, c, out, o, pc, c0) =
+                (p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8]);
+            let tail =
+                b.import_signature(signature(CallConv::Tail, &[ptr, ptr, ptr, i, i, ptr], None));
+            let take_sig =
+                b.import_signature(signature(call_conv, &[ptr, ptr, ptr, i, i, i, ptr], None));
+            let l = &super::mmu::CODE_LAYOUT;
+            let (look, look2, check, go, fall) = (
+                b.create_block(),
+                b.create_block(),
+                b.create_block(),
+                b.create_block(),
+                b.create_block(),
+            );
+            let until = b
+                .ins()
+                .load(i, FLAGS, cx, offset_of!(Ctx, chain_until) as i32);
+            let room = b.ins().icmp(IntCC::UnsignedLessThan, c, until);
+            let low = b.ins().band_imm_s(target, 3);
+            let aligned = b.ins().icmp_imm_s(IntCC::Equal, low, 0);
+            let go_on = b.ins().band(room, aligned);
+            b.ins().brif(go_on, look, &[], fall, &[]);
+            b.switch_to_block(look);
+            b.seal_block(look);
+            let el = b
+                .ins()
+                .load(types::I32, FLAGS, cpu, offset_of!(Cpu, el) as i32);
+            let el = b.ins().uextend(i, el);
+            let page = b.ins().ushr_imm_s(target, 12);
+            let mix = b.ins().ushr_imm_s(page, 4);
+            let idx = b.ins().bxor(page, mix);
+            let idx = b.ins().band_imm_s(idx, (l.pages - 1) as i64);
+            let idx = b.ins().imul_imm_s(idx, l.size as i64);
+            let base = b
+                .ins()
+                .iadd_imm_s(cpu, (offset_of!(Cpu, tlb) + l.code) as i64);
+            let entry = b.ins().iadd(base, idx);
+            let tag = b.ins().load(i, FLAGS, entry, l.tag as i32);
+            let va_page = b.ins().band_imm_s(target, !0xFFF);
+            let want = b.ins().bor(va_page, el);
+            let hit = b.ins().icmp(IntCC::Equal, tag, want);
+            b.ins().brif(hit, look2, &[], fall, &[]);
+            b.switch_to_block(look2);
+            b.seal_block(look2);
+            let pa_page = b.ins().load(i, FLAGS, entry, l.pa as i32);
+            let genp = b.ins().load(ptr, FLAGS, entry, l.gen as i32);
+            let off = b.ins().band_imm_s(target, 0xFFF);
+            let pa = b.ins().bor(pa_page, off);
+            let h1 = b.ins().ushr_imm_s(pa, 2);
+            let h2 = b.ins().ushr_imm_s(pa, 20);
+            let h = b.ins().bxor(h1, h2);
+            let h = b.ins().band_imm_s(h, (SHARED_SLOTS - 1) as i64);
+            let h = b.ins().ishl_imm_s(h, 3);
+            let slot = b.ins().iadd_imm_s(h, slots as i64);
+            let t = b.ins().atomic_load(ptr, FLAGS, slot);
+            b.ins().brif(t, check, &[], fall, &[]);
+            b.switch_to_block(check);
+            b.seal_block(check);
+            let tpa = b
+                .ins()
+                .load(i, FLAGS, t, offset_of!(Translation, pa) as i32);
+            let same = b.ins().icmp(IntCC::Equal, tpa, pa);
+            let tgen = b
+                .ins()
+                .load(i, FLAGS, t, offset_of!(Translation, gen) as i32);
+            let gen = b.ins().load(i, FLAGS, genp, 0);
+            let fresh = b.ins().icmp(IntCC::Equal, tgen, gen);
+            let ok = b.ins().band(same, fresh);
+            b.ins().brif(ok, go, &[], fall, &[]);
+            b.switch_to_block(go);
+            b.seal_block(go);
+            b.ins().store(FLAGS, tgen, cx, offset_of!(Ctx, gen) as i32);
+            b.ins().store(FLAGS, genp, cx, offset_of!(Ctx, genp) as i32);
+            let code = b
+                .ins()
+                .load(ptr, FLAGS, t, offset_of!(Translation, code) as i32);
+            b.ins()
+                .return_call_indirect(tail, code, &[cpu, bus, cx, target, c, out]);
+            b.switch_to_block(fall);
+            b.seal_block(fall);
+            let f = b.ins().iconst(ptr, take);
+            b.ins()
+                .call_indirect(take_sig, f, &[cpu, bus, o, pc, target, c0, out]);
+            b.ins().return_(&[]);
+            b.finalize(config);
+        }
+        let id = self
+            .module
+            .declare_anonymous_function(&ctx.func.signature)
+            .ok()?;
+        self.module.define_function(id, &mut ctx).ok()?;
+        self.module.clear_context(&mut ctx);
+        self.module.finalize_definitions().ok()?;
+        Some(self.module.get_finalized_function(id) as usize)
+    }
+}
+
+impl Compiler {
+    /// [`Enter`]: calls the code it is given, by the tail-call convention.
+    fn trampoline(&mut self) -> Option<usize> {
+        let ptr = self.module.target_config().pointer_type();
+        let call_conv = self.module.target_config().default_call_conv;
+        let args = [ptr, ptr, ptr, types::I64, types::I64, ptr];
+        let mut ctx = self.module.make_context();
+        ctx.func.signature = signature(call_conv, &[&args[..], &[ptr]].concat(), None);
+        let config = self.module.target_config();
+        {
+            let mut b = FunctionBuilder::new(&mut ctx.func, &mut self.fctx);
+            let entry = b.create_block();
+            b.append_block_params_for_function_params(entry);
+            b.switch_to_block(entry);
+            b.seal_block(entry);
+            let p = b.block_params(entry).to_vec();
+            let sig = b.import_signature(signature(CallConv::Tail, &args, None));
+            b.ins().call_indirect(sig, p[6], &p[..6]);
+            b.ins().return_(&[]);
+            b.finalize(config);
+        }
+        let id = self
+            .module
+            .declare_anonymous_function(&ctx.func.signature)
+            .ok()?;
+        self.module.define_function(id, &mut ctx).ok()?;
+        self.module.clear_context(&mut ctx);
+        self.module.finalize_definitions().ok()?;
+        Some(self.module.get_finalized_function(id) as usize)
+    }
+}
+
+/// `PIMU_JIT_DUMP=<n>`: the disassembly of the first `n` runs compiled.
+fn dump_wanted() -> bool {
+    static LEFT: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(-1);
+    use std::sync::atomic::Ordering::Relaxed;
+    if LEFT.load(Relaxed) == -1 {
+        let n = std::env::var("PIMU_JIT_DUMP")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        let _ = LEFT.compare_exchange(-1, n, Relaxed, Relaxed);
+    }
+    LEFT.fetch_sub(1, Relaxed) > 0
 }
 
 /// The helpers compiled code calls, for one bus type.
@@ -359,6 +813,9 @@ fn module() -> Option<JITModule> {
     flags.set("opt_level", &opt).ok()?;
     flags.set("is_pic", "false").ok()?;
     flags.set("enable_verifier", "false").ok()?;
+    // The translations of `Shared` tail-call each other, which Cranelift
+    // builds on frame pointers.
+    flags.set("preserve_frame_pointers", "true").ok()?;
     let isa = cranelift_native::builder()
         .ok()?
         .finish(settings::Flags::new(flags))
@@ -428,7 +885,7 @@ unsafe extern "C" fn step<M: RunBus, const K: u8>(
         bus.at(c);
     }
     let next = handler_of::<M>(kind)(cpu, op, bus, pc);
-    if !cpu.faulted() && (!mem || bus.settle(ctx.gen, ctx.marked != 0)) {
+    if !cpu.faulted() && (!mem || bus.settle(ctx.gen, ctx.genp, ctx.marked != 0)) {
         return 0;
     }
     bus.stop(o, next, true);
@@ -473,6 +930,25 @@ const GUEST: MemFlagsData = MemFlagsData::new()
     .with_notrap()
     .with_endianness(cranelift_codegen::ir::Endianness::Little);
 
+/// `NZCV` as the last instruction to set it left it: packed, or still as
+/// the operands of a subtraction or the result of a logical operation, so
+/// that the condition a branch tests is one compare.
+#[derive(Clone, Copy)]
+enum Flags {
+    Packed(Value),
+    /// `x - y` at the width `sf` says, both already masked to it.
+    Sub {
+        x: Value,
+        y: Value,
+        sf: bool,
+    },
+    /// The result of an `ANDS`, `TST` and the like: C and V clear.
+    Logic {
+        r: Value,
+        sf: bool,
+    },
+}
+
 struct Lower<'a> {
     b: FunctionBuilder<'a>,
     ptr: Type,
@@ -484,7 +960,7 @@ struct Lower<'a> {
     out: Value,
     /// A general register's value and whether it is newer than the core's.
     regs: [Option<(Value, bool)>; 31],
-    nzcv: Option<(Value, bool)>,
+    nzcv: Option<(Flags, bool)>,
     step: (SigRef, i64),
     step_of: fn(Kind) -> Step,
     /// The core's EL, where `SP` is, and the run's [`Ctx`] fields, once
@@ -496,6 +972,10 @@ struct Lower<'a> {
     genp: Option<Value>,
     take: (SigRef, i64),
     last: (SigRef, i64),
+    /// For [`Shared`]: the chain stub ([`Compiler::stub`]) every exit
+    /// goes through, and its signature.
+    chain: Option<(i64, SigRef)>,
+    ret: Option<cranelift_codegen::ir::Block>,
     inline: u64,
     called: u64,
 }
@@ -535,8 +1015,24 @@ impl<'a> Lower<'a> {
             genp: None,
             take: (take, h.take),
             last: (last, h.last),
+            chain: None,
+            ret: None,
             inline: 0,
             called: 0,
+        }
+    }
+
+    /// The block a stop returns through: one for the whole run, so its
+    /// epilogue is there once.
+    fn ret(&mut self) -> cranelift_codegen::ir::Block {
+        *self.ret.get_or_insert_with(|| self.b.create_block())
+    }
+
+    fn end(&mut self) {
+        if let Some(ret) = self.ret.take() {
+            self.b.switch_to_block(ret);
+            self.b.seal_block(ret);
+            self.b.ins().return_(&[]);
         }
     }
 
@@ -546,6 +1042,10 @@ impl<'a> Lower<'a> {
             let c = self.b.ins().iadd_imm_s(self.c0, i as i64);
             let at = self.b.ins().iconst(self.ptr, *addr as i64);
             if i + 1 == ops.len() {
+                if self.chain_last(op, pc, c, at) {
+                    self.end();
+                    return;
+                }
                 self.store_dirty();
                 let (sig, f) = self.last;
                 let f = self.b.ins().iconst(self.ptr, f);
@@ -553,6 +1053,7 @@ impl<'a> Lower<'a> {
                 self.b.ins().call_indirect(sig, f, &args);
                 self.b.ins().return_(&[]);
                 self.called += 1;
+                self.end();
                 return;
             }
             if op.cond_branch() {
@@ -563,11 +1064,15 @@ impl<'a> Lower<'a> {
                 self.b.switch_to_block(away);
                 self.b.seal_block(away);
                 self.store_dirty();
-                let (sig, f) = self.take;
-                let f = self.b.ins().iconst(self.ptr, f);
-                let args = [self.cpu, self.bus, at, pc, target, c, self.out];
-                self.b.ins().call_indirect(sig, f, &args);
-                self.b.ins().return_(&[]);
+                if self.chain.is_some() {
+                    self.exit(target, at, pc, c);
+                } else {
+                    let (sig, f) = self.take;
+                    let f = self.b.ins().iconst(self.ptr, f);
+                    let args = [self.cpu, self.bus, at, pc, target, c, self.out];
+                    self.b.ins().call_indirect(sig, f, &args);
+                    self.b.ins().return_(&[]);
+                }
                 self.b.switch_to_block(on);
                 self.b.seal_block(on);
                 self.inline += 1;
@@ -591,15 +1096,84 @@ impl<'a> Lower<'a> {
             let args = [self.cpu, self.bus, self.ctx, at, pc, c, self.out];
             let call = self.b.ins().call_indirect(sig, f, &args);
             let stopped = self.b.inst_results(call)[0];
-            let (away, on) = (self.b.create_block(), self.b.create_block());
-            self.b.ins().brif(stopped, away, &[], on, &[]);
-            self.b.switch_to_block(away);
-            self.b.seal_block(away);
-            self.b.ins().return_(&[]);
+            let (ret, on) = (self.ret(), self.b.create_block());
+            self.b.ins().brif(stopped, ret, &[], on, &[]);
             self.b.switch_to_block(on);
             self.b.seal_block(on);
             self.called += 1;
         }
+    }
+
+    /// Leave the run through the chain stub, for `target` after the branch
+    /// `at` at `pc`, `c` cycles in, which has run: the stub goes on into the
+    /// translation there or tells the bus the run stopped. The registers
+    /// are the core's by now.
+    fn exit(&mut self, target: Value, at: Value, pc: Value, c: Value) {
+        let Some((stub, sig)) = self.chain else {
+            return;
+        };
+        let c1 = self.b.ins().iadd_imm_s(c, 1);
+        let f = self.b.ins().iconst(self.ptr, stub);
+        let args = [
+            self.cpu, self.bus, self.ctx, target, c1, self.out, at, pc, c,
+        ];
+        self.b.ins().return_call_indirect(sig, f, &args);
+    }
+
+    /// The run's last instruction, `op` at `pc`, `c` cycles in and with its
+    /// [`RunOp`] at `at`: a branch runs here and leaves through
+    /// [`Self::exit`], whichever way it goes, `BR`, `BLR` and `RET` too.
+    /// Whether it did; else the handler runs it.
+    fn chain_last(&mut self, op: &Op, pc: Value, c: Value, at: Value) -> bool {
+        if self.chain.is_none() {
+            return false;
+        }
+        match op.kind {
+            Kind::B | Kind::Bl => {
+                let target = self.b.ins().iadd_imm_s(pc, op.imm as i64);
+                if op.kind == Kind::Bl {
+                    let link = self.b.ins().iadd_imm_s(pc, 4);
+                    self.set_reg(30, link);
+                }
+                self.store_dirty();
+                self.exit(target, at, pc, c);
+            }
+            Kind::BCond | Kind::Cbz | Kind::Tbz => {
+                let t = self.branch_taken(op);
+                self.store_dirty();
+                let (away, on) = (self.b.create_block(), self.b.create_block());
+                self.b.ins().brif(t, away, &[], on, &[]);
+                self.b.switch_to_block(away);
+                self.b.seal_block(away);
+                let target = self.b.ins().iadd_imm_s(pc, op.imm as i64);
+                self.exit(target, at, pc, c);
+                self.b.switch_to_block(on);
+                self.b.seal_block(on);
+                let next = self.b.ins().iadd_imm_s(pc, 4);
+                self.exit(next, at, pc, c);
+            }
+            Kind::BranchReg => {
+                // As `exec::branch_reg` takes them; `ERET` and the rest are
+                // the handler's.
+                let insn = op.insn;
+                let opc = (insn >> 21) & 0xF;
+                let plain =
+                    (insn >> 16) & 0x1F == 0x1F && (insn >> 10) & 0x3F == 0 && insn & 0x1F == 0;
+                if !plain || opc > 2 {
+                    return false;
+                }
+                let target = self.xr(((insn >> 5) & 0x1F) as u8, true);
+                if opc == 1 {
+                    let link = self.b.ins().iadd_imm_s(pc, 4);
+                    self.set_reg(30, link);
+                }
+                self.store_dirty();
+                self.exit(target, at, pc, c);
+            }
+            _ => return false,
+        }
+        self.called += 1;
+        true
     }
 
     // ---- the core's registers ----------------------------------------------
@@ -619,19 +1193,102 @@ impl<'a> Lower<'a> {
     }
 
     fn get_nzcv(&mut self) -> Value {
-        if let Some((v, _)) = self.nzcv {
-            return v;
+        match self.nzcv {
+            Some((Flags::Packed(v), _)) => v,
+            Some((f, dirty)) => {
+                let v = self.pack_flags(f);
+                self.nzcv = Some((Flags::Packed(v), dirty));
+                v
+            }
+            None => {
+                let v =
+                    self.b
+                        .ins()
+                        .load(types::I32, FLAGS, self.cpu, offset_of!(Cpu, nzcv) as i32);
+                self.nzcv = Some((Flags::Packed(v), false));
+                v
+            }
         }
-        let v = self
-            .b
-            .ins()
-            .load(types::I32, FLAGS, self.cpu, offset_of!(Cpu, nzcv) as i32);
-        self.nzcv = Some((v, false));
-        v
     }
 
     fn set_nzcv(&mut self, v: Value) {
-        self.nzcv = Some((v, true));
+        self.nzcv = Some((Flags::Packed(v), true));
+    }
+
+    fn set_flags(&mut self, f: Flags) {
+        self.nzcv = Some((f, true));
+    }
+
+    fn pack_flags(&mut self, f: Flags) -> Value {
+        match f {
+            Flags::Packed(v) => v,
+            Flags::Sub { x, y, sf } => {
+                let y = self.b.ins().bnot(y);
+                let y = self.mask(y, sf);
+                self.add_with_carry(x, y, true, sf).1
+            }
+            Flags::Logic { r, sf } => self.logic_flags(r, sf),
+        }
+    }
+
+    /// `ConditionHolds(cond)` straight from what [`Flags`] has, or `None`
+    /// where it needs the packed flags.
+    fn cond_direct(&mut self, cond: u32) -> Option<Value> {
+        let (f, _) = self.nzcv?;
+        let b = &mut self.b;
+        let narrow = |b: &mut FunctionBuilder, v: Value, sf: bool| {
+            if sf {
+                v
+            } else {
+                b.ins().ireduce(types::I32, v)
+            }
+        };
+        let cc = match (f, cond >> 1) {
+            (_, 7) => return Some(b.ins().iconst(types::I8, 1)),
+            (Flags::Sub { .. }, 3) | (Flags::Packed(_), _) => return None,
+            (Flags::Sub { x, y, sf }, k) => {
+                let (cc, signed) = match k {
+                    0 => (IntCC::Equal, false),
+                    1 => (IntCC::UnsignedGreaterThanOrEqual, false),
+                    2 => {
+                        let d = b.ins().isub(x, y);
+                        let d = narrow(b, d, sf);
+                        let neg = b.ins().icmp_imm_s(IntCC::SignedLessThan, d, 0);
+                        return Some(if cond & 1 == 0 {
+                            neg
+                        } else {
+                            b.ins().bxor_imm_s(neg, 1)
+                        });
+                    }
+                    4 => (IntCC::UnsignedGreaterThan, false),
+                    5 => (IntCC::SignedGreaterThanOrEqual, true),
+                    _ => (IntCC::SignedGreaterThan, true),
+                };
+                let (x, y) = if signed {
+                    (narrow(b, x, sf), narrow(b, y, sf))
+                } else {
+                    (x, y)
+                };
+                let cc = if cond & 1 == 0 { cc } else { cc.complement() };
+                return Some(b.ins().icmp(cc, x, y));
+            }
+            (Flags::Logic { r, sf }, k) => {
+                let r = narrow(b, r, sf);
+                let (cc, rhs) = match k {
+                    0 => (IntCC::Equal, 0),
+                    1 => return Some(b.ins().iconst(types::I8, i64::from(cond & 1))),
+                    2 => (IntCC::SignedLessThan, 0),
+                    3 => return Some(b.ins().iconst(types::I8, i64::from(cond & 1))),
+                    4 => return Some(b.ins().iconst(types::I8, i64::from(cond & 1))),
+                    5 => (IntCC::SignedGreaterThanOrEqual, 0),
+                    _ => (IntCC::SignedGreaterThan, 0),
+                };
+                (cc, r, rhs)
+            }
+        };
+        let (cc, v, rhs) = cc;
+        let cc = if cond & 1 == 0 { cc } else { cc.complement() };
+        Some(b.ins().icmp_imm_s(cc, v, rhs))
     }
 
     /// Write back what is newer than the core's, leaving the cache as it is
@@ -643,7 +1300,9 @@ impl<'a> Lower<'a> {
                 self.b.ins().store(FLAGS, v, self.cpu, off);
             }
         }
-        if let Some((v, true)) = self.nzcv {
+        if let Some((f, true)) = self.nzcv {
+            // Not kept: this may be a block other code does not go through.
+            let v = self.pack_flags(f);
             self.b
                 .ins()
                 .store(FLAGS, v, self.cpu, offset_of!(Cpu, nzcv) as i32);
@@ -782,6 +1441,9 @@ impl<'a> Lower<'a> {
 
     /// `ConditionHolds(cond)` as an I8 boolean.
     fn cond_holds(&mut self, cond: u32) -> Value {
+        if let Some(v) = self.cond_direct(cond) {
+            return v;
+        }
         let nzcv = self.get_nzcv();
         let b = &mut self.b;
         let table = b
@@ -874,8 +1536,16 @@ impl<'a> Lower<'a> {
                 let sub = op.kind == Kind::SubsImm;
                 let x = self.reg(b);
                 let x = self.mask(x, sf);
-                let y = self.imm(if sub { !op.imm } else { op.imm });
-                let (r, nzcv) = self.add_with_carry(x, y, sub, sf);
+                if sub {
+                    let y = self.imm(if sf { op.imm } else { op.imm & 0xFFFF_FFFF });
+                    let r = self.b.ins().isub(x, y);
+                    let r = self.mask(r, sf);
+                    self.set_flags(Flags::Sub { x, y, sf });
+                    self.set_xr(a, sf, r);
+                    return true;
+                }
+                let y = self.imm(op.imm);
+                let (r, nzcv) = self.add_with_carry(x, y, false, sf);
                 self.set_nzcv(nzcv);
                 self.set_xr(a, sf, r);
             }
@@ -883,18 +1553,14 @@ impl<'a> Lower<'a> {
                 let sf = op.kind == Kind::CmpImm;
                 let x = self.reg(b);
                 let x = self.mask(x, sf);
-                let y = self.imm(!op.imm);
-                let (_, nzcv) = self.add_with_carry(x, y, true, sf);
-                self.set_nzcv(nzcv);
+                let y = self.imm(if sf { op.imm } else { op.imm & 0xFFFF_FFFF });
+                self.set_flags(Flags::Sub { x, y, sf });
             }
             Kind::CmpReg | Kind::CmpRegW => {
                 let sf = op.kind == Kind::CmpReg;
                 let x = self.xr(a, sf);
                 let y = self.xr(b, sf);
-                let y = self.b.ins().bnot(y);
-                let y = self.mask(y, sf);
-                let (_, nzcv) = self.add_with_carry(x, y, true, sf);
-                self.set_nzcv(nzcv);
+                self.set_flags(Flags::Sub { x, y, sf });
             }
             Kind::LogicImm => {
                 let flags = c & 3 == 3;
@@ -909,8 +1575,8 @@ impl<'a> Lower<'a> {
                     _ => self.b.ins().bxor_imm_s(x, op.imm as i64),
                 };
                 if flags {
-                    let nzcv = self.logic_flags(r, sf);
-                    self.set_nzcv(nzcv);
+                    let r = self.mask(r, sf);
+                    self.set_flags(Flags::Logic { r, sf });
                 }
                 self.set_xr(a, sf, r);
             }
@@ -931,8 +1597,8 @@ impl<'a> Lower<'a> {
                     _ => self.b.ins().bxor(x, y),
                 };
                 if opc == 3 {
-                    let nzcv = self.logic_flags(r, sf);
-                    self.set_nzcv(nzcv);
+                    let r = self.mask(r, sf);
+                    self.set_flags(Flags::Logic { r, sf });
                 }
                 self.set_xr(a, sf, r);
             }
@@ -941,14 +1607,25 @@ impl<'a> Lower<'a> {
                 let sf = f & (1 << 11) != 0;
                 let sub = f & (1 << 8) != 0;
                 let y = self.xr(c, sf);
-                let mut y = self.shift_reg(y, f & 3, (f >> 2) & 0x3F, sf);
-                if sub {
-                    y = self.b.ins().bnot(y);
-                    y = self.mask(y, sf);
-                }
+                let y = self.shift_reg(y, f & 3, (f >> 2) & 0x3F, sf);
+                let y = self.mask(y, sf);
                 let x = self.xr(b, sf);
+                let flags = f & (1 << 9) != 0;
+                if sub && flags {
+                    let r = self.b.ins().isub(x, y);
+                    let r = self.mask(r, sf);
+                    self.set_flags(Flags::Sub { x, y, sf });
+                    self.set_xr(a, sf, r);
+                    return true;
+                }
+                let y = if sub {
+                    let y = self.b.ins().bnot(y);
+                    self.mask(y, sf)
+                } else {
+                    y
+                };
                 let (r, nzcv) = self.add_with_carry(x, y, sub, sf);
-                if f & (1 << 9) != 0 {
+                if flags {
                     self.set_nzcv(nzcv);
                 }
                 self.set_xr(a, sf, r);
@@ -1170,11 +1847,8 @@ impl<'a> Lower<'a> {
         let args = [self.cpu, self.bus, self.ctx, at, pc, c, self.out];
         let call = self.b.ins().call_indirect(sig, f, &args);
         let stopped = self.b.inst_results(call)[0];
-        let away = self.b.create_block();
-        self.b.ins().brif(stopped, away, &[], join, &[]);
-        self.b.switch_to_block(away);
-        self.b.seal_block(away);
-        self.b.ins().return_(&[]);
+        let ret = self.ret();
+        self.b.ins().brif(stopped, ret, &[], join, &[]);
         self.b.switch_to_block(fast);
         self.b.seal_block(fast);
         join

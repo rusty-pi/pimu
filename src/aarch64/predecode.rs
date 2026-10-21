@@ -735,10 +735,11 @@ pub trait RunBus: Memory {
     fn chain(&self, c: u64, gen: u64) -> bool;
     /// After a load or store a compiled run made: whether the run may go on
     /// past it, as `Straight::run` would, forgetting the store if so. `gen`
-    /// is the run's page's write generation when it began, and `marked` that
-    /// another core holds an exclusive mark.
+    /// is the run's page's write generation when it began, `genp` where that
+    /// page's generation is, and `marked` that another core holds an
+    /// exclusive mark.
     #[cfg(feature = "jit")]
-    fn settle(&mut self, gen: u64, marked: bool) -> bool;
+    fn settle(&mut self, gen: u64, genp: *const u64, marked: bool) -> bool;
 }
 
 type Go<M> = fn(&mut Cpu, &RunOp, &mut M, u64, u64) -> (u64, u64);
