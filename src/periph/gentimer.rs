@@ -157,7 +157,12 @@ impl GenericTimer {
     }
 
     pub fn read(&self, reg: Reg, cycles: u64) -> u64 {
-        let now = self.count(cycles);
+        self.read_counting(reg, cycles, self.count(cycles))
+    }
+
+    /// [`Self::read`] with the counter at `now` rather than where `cycles`
+    /// puts it.
+    pub fn read_counting(&self, reg: Reg, cycles: u64, now: u64) -> u64 {
         match reg {
             Reg::Pct => now,
             Reg::Vct => now.wrapping_sub(self.voff),

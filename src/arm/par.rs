@@ -27,6 +27,14 @@
 //! in. A core asleep in `wfi` or `wfe` sits out its time and catches up to the
 //! VPU's clock when it wakes.
 //!
+//! Staying within a window is not enough for the system counter, which is one
+//! counter on the board: a core behind the others would read it lower than one
+//! of them already did, and Linux's arm64 vDSO turns a reading below the
+//! timekeeper's `cycle_last` into a clock minutes ahead. So a read of
+//! `CNTPCT`/`CNTVCT` is never less than the highest any core has read
+//! ([`Shared::counter_read`]); the timers still compare against the core's own
+//! clock, and so fire up to a window late.
+//!
 //! While the VPU sleeps for a long stretch (`sleep`, a `udelay` fast-forward),
 //! [`ParHost::run_until_store`] lets the cores run up to its wake-up and ends
 //! the wait at the first peripheral store, as the lock-step run does.
@@ -175,6 +183,8 @@ struct Shared {
     /// [`ParHost::run_until_store`] began, or `u64::MAX`.
     stored_at: Line<AtomicU64>,
     stopped: AtomicBool,
+    /// The highest `CNTPCT` a core has read ([`Shared::counter_read`]).
+    counted: Line<AtomicU64>,
     stop: Mutex<Option<ArmStop>>,
     threads: [OnceLock<Thread>; CORES],
     main: Thread,
@@ -226,6 +236,17 @@ impl Shared {
             });
         }
     }
+
+    /// What the system counter reads for a core whose own clock puts it at
+    /// `count`: never less than any core has read before.
+    fn counter_read(&self, count: u64) -> u64 {
+        let seen = self.counted.load(Ordering::Acquire);
+        if count <= seen {
+            return seen;
+        }
+        self.counted.fetch_max(count, Ordering::AcqRel).max(count)
+    }
+
     fn wake(&self, id: usize) {
         if let Some(t) = self.threads[id].get() {
             t.unpark();
@@ -260,6 +281,7 @@ impl ParHost {
             .systimer
             .cycles_at(gentimer::ARM_HZ)
             .saturating_sub(released_at);
+        let counted = cores.iter().map(|c| c.par_counted).max().unwrap_or(0);
         let sh = Arc::new(Shared {
             ram,
             ram_len,
@@ -277,6 +299,7 @@ impl ParHost {
             stop_on_store: AtomicBool::new(false),
             stored_at: Line(AtomicU64::new(u64::MAX)),
             stopped: AtomicBool::new(false),
+            counted: Line(AtomicU64::new(counted)),
             stop: Mutex::new(None),
             threads: Default::default(),
             main: std::thread::current(),
@@ -518,9 +541,8 @@ impl ParHost {
 
     /// Move the VPU's clock, and with it the cores' limit, towards `end` as
     /// fast as the slowest awake core and the earliest sleeper's wake-up
-    /// allow, never more than a window past either. The cores stay within a
-    /// window of each other, so a guest that moves from one to another never
-    /// sees the counter go back.
+    /// allow, never more than a window past either, so the cores stay within
+    /// a window of each other.
     fn advance_towards(&mut self, end: u64) {
         let sh = &self.sh;
         let base = (0..self.n)
@@ -756,6 +778,7 @@ impl<'a> Worker<'a> {
         }
         sh.core[id].cycles.store(self.cycles, Ordering::Release);
         self.core.par_cycles = self.cycles;
+        self.core.par_counted = sh.counted.load(Ordering::Acquire);
         self.core
     }
 
@@ -1464,7 +1487,9 @@ impl Memory for ParBus<'_> {
     }
 
     fn sysreg_read(&mut self, key: u32) -> Option<u64> {
-        super::timer_reg(key).map(|r| self.timer.read(r, self.cycles))
+        let r = super::timer_reg(key)?;
+        let now = self.sh.counter_read(self.timer.count(self.cycles));
+        Some(self.timer.read_counting(r, self.cycles, now))
     }
 
     fn sysreg_write(&mut self, key: u32, value: u64) -> bool {

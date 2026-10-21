@@ -199,6 +199,10 @@ pub struct Core {
     /// ([`ArmSide::start_parallel`]).
     #[cfg_attr(not(pimu_threads), allow(dead_code))]
     par_cycles: u64,
+    /// The highest counter reading any core had made by then, which the
+    /// next start reads no lower than.
+    #[cfg_attr(not(pimu_threads), allow(dead_code))]
+    par_counted: u64,
     /// The physical page [`ArmSide::lockstep`] last fetched from, and its
     /// words' host address (0 when it is not plain DRAM).
     code: (u64, usize),
@@ -265,6 +269,7 @@ impl Core {
             blocks: (crate::diag::ON && std::env::var_os("PIMU_ARM_BLOCKS").is_some())
                 .then(Box::<blocks::Blocks>::default),
             par_cycles: 0,
+            par_counted: 0,
         }
     }
 
