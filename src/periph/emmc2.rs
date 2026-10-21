@@ -487,6 +487,24 @@ impl Emmc2 {
         self.dma_pending
     }
 
+    /// The interrupt and transfer state, for a run report.
+    pub fn describe(&self) -> String {
+        format!(
+            "INT_STATUS {:#010x} (as read {:#010x})  STATUS_EN {:#010x}  SIGNAL_EN {:#010x}  irq {}  transfer {}  dma {}  next block {}  at {} us",
+            self.get(INT_STATUS),
+            self.int_status(),
+            self.get(INT_STATUS_EN),
+            self.get(INT_SIGNAL_EN),
+            if self.irq_asserted() { "high" } else { "low" },
+            if self.transfer_active() { "under way" } else { "none" },
+            if self.dma.is_some() || self.dma_pending { "pending" } else { "idle" },
+            self.next_block
+                .as_ref()
+                .map_or("none".to_string(), |n| format!("due {} us", n.due_us)),
+            self.now_us
+        )
+    }
+
     pub fn take_dma_written(&mut self) -> Vec<(u32, u32)> {
         std::mem::take(&mut self.dma_written)
     }

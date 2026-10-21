@@ -2342,6 +2342,7 @@ fn print_device_state(machine: &Machine, fdt: Option<&[u8]>) {
 
     let mac = machine.genet.mac_state();
     println!("\n--- device state ---");
+    println!("  emmc2   {}", machine.emmc2.describe());
     let [a, b, c, d, e, f] = mac.addr;
     println!(
         "  genet   MAC {a:02x}:{b:02x}:{c:02x}:{d:02x}:{e:02x}:{f:02x}  tx {}  rx {}  promisc {}",
